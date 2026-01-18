@@ -24,7 +24,8 @@
     "@google-cloud/vertexai": "^1.9.0",
     "googleapis": "^144.0.0",
     "pdf-lib": "^1.17.1",
-    "date-fns": "^4.1.0"
+    "date-fns": "^4.1.0",
+    "@google-cloud/secret-manager": "^5.6.0"
   },
   "devDependencies": {
     "@typescript-eslint/eslint-plugin": "^8.15.0",

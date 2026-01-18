@@ -9,19 +9,30 @@
  * 3. 新規ファイルのみ → Cloud Storage原本保存
  * 4. Firestore → gmailLogs記録
  * 5. Firestore → documents（status: pending）作成
- * 6. Pub/Sub → OCR処理をトリガー
  */
 
 import { onSchedule } from 'firebase-functions/v2/scheduler';
 import * as admin from 'firebase-admin';
-import { google } from 'googleapis';
+import { gmail_v1 } from 'googleapis';
 import * as crypto from 'crypto';
+import { getGmailClient } from '../utils/gmailAuth';
+import { withRetry, RETRY_CONFIGS } from '../utils/retry';
+import { logError } from '../utils/errorLogger';
 
 const db = admin.firestore();
 const storage = admin.storage();
 
 // 設定
 const SEARCH_MINUTES = 10; // 過去何分のメールを検索するか
+const FUNCTION_NAME = 'checkGmailAttachments';
+
+/** 処理統計 */
+interface ProcessingStats {
+  messagesFound: number;
+  attachmentsProcessed: number;
+  duplicatesSkipped: number;
+  errors: number;
+}
 
 export const checkGmailAttachments = onSchedule(
   {
@@ -32,6 +43,12 @@ export const checkGmailAttachments = onSchedule(
   },
   async () => {
     console.log('Starting Gmail attachment check...');
+    const stats: ProcessingStats = {
+      messagesFound: 0,
+      attachmentsProcessed: 0,
+      duplicatesSkipped: 0,
+      errors: 0,
+    };
 
     try {
       // 設定を取得
@@ -50,39 +67,62 @@ export const checkGmailAttachments = onSchedule(
         return;
       }
 
-      // Gmail API認証（Service Account + Domain-wide Delegation）
-      const auth = new google.auth.GoogleAuth({
-        scopes: ['https://www.googleapis.com/auth/gmail.readonly'],
-      });
-
-      const gmail = google.gmail({ version: 'v1', auth });
+      // Gmail APIクライアント取得（認証方式自動切替）
+      const gmail = await withRetry(
+        () => getGmailClient(),
+        RETRY_CONFIGS.gmail
+      );
 
       // 過去10分のメールを検索
       const query = buildSearchQuery(targetLabels, SEARCH_MINUTES);
       console.log('Search query:', query);
 
-      const response = await gmail.users.messages.list({
-        userId: gmailAccount,
-        q: query,
-        maxResults: 50,
-      });
+      const response = await withRetry(
+        () =>
+          gmail.users.messages.list({
+            userId: gmailAccount,
+            q: query,
+            maxResults: 50,
+          }),
+        RETRY_CONFIGS.gmail
+      );
 
       const messages = response.data.messages || [];
+      stats.messagesFound = messages.length;
       console.log(`Found ${messages.length} messages`);
 
+      // 各メッセージを処理
       for (const message of messages) {
         if (!message.id) continue;
 
         try {
-          await processMessage(gmail, gmailAccount, message.id);
+          const result = await processMessage(gmail, gmailAccount, message.id);
+          stats.attachmentsProcessed += result.processed;
+          stats.duplicatesSkipped += result.skipped;
         } catch (error) {
-          console.error(`Error processing message ${message.id}:`, error);
+          stats.errors++;
+          const err = error instanceof Error ? error : new Error(String(error));
+          console.error(`Error processing message ${message.id}:`, err.message);
+
+          await logError({
+            error: err,
+            source: 'gmail',
+            functionName: FUNCTION_NAME,
+          });
         }
       }
 
-      console.log('Gmail attachment check completed');
+      console.log('Gmail attachment check completed', stats);
     } catch (error) {
-      console.error('Error in checkGmailAttachments:', error);
+      const err = error instanceof Error ? error : new Error(String(error));
+      console.error('Fatal error in checkGmailAttachments:', err.message);
+
+      await logError({
+        error: err,
+        source: 'gmail',
+        functionName: FUNCTION_NAME,
+      });
+
       throw error;
     }
   }
@@ -104,85 +144,168 @@ function buildSearchQuery(labels: string[], minutes: number): string {
  * メッセージを処理して添付ファイルを保存
  */
 async function processMessage(
-  gmail: ReturnType<typeof google.gmail>,
+  gmail: gmail_v1.Gmail,
   userId: string,
   messageId: string
-): Promise<void> {
-  const message = await gmail.users.messages.get({
-    userId,
-    id: messageId,
-    format: 'full',
-  });
+): Promise<{ processed: number; skipped: number }> {
+  let processed = 0;
+  let skipped = 0;
+
+  const message = await withRetry(
+    () =>
+      gmail.users.messages.get({
+        userId,
+        id: messageId,
+        format: 'full',
+      }),
+    RETRY_CONFIGS.gmail
+  );
 
   const payload = message.data.payload;
-  if (!payload?.parts) return;
+  if (!payload) return { processed, skipped };
 
   const subject = getHeader(payload.headers || [], 'Subject') || 'No Subject';
+  const emailBody = message.data.snippet || '';
 
-  for (const part of payload.parts) {
+  // 添付ファイルを再帰的に処理（マルチパート対応）
+  const parts = getAllParts(payload);
+
+  for (const part of parts) {
     if (!part.filename || !part.body?.attachmentId) continue;
 
     // PDF/画像ファイルのみ処理
     const mimeType = part.mimeType || '';
     if (!isTargetMimeType(mimeType)) continue;
 
-    // 添付ファイル取得
-    const attachment = await gmail.users.messages.attachments.get({
-      userId,
-      messageId,
-      id: part.body.attachmentId,
-    });
+    try {
+      const result = await processAttachment(
+        gmail,
+        userId,
+        messageId,
+        part,
+        subject,
+        emailBody
+      );
 
-    const data = attachment.data.data;
-    if (!data) continue;
+      if (result === 'processed') {
+        processed++;
+      } else if (result === 'skipped') {
+        skipped++;
+      }
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      console.error(`Error processing attachment ${part.filename}:`, err.message);
 
-    const buffer = Buffer.from(data, 'base64');
-    const hash = crypto.createHash('md5').update(buffer).digest('hex');
-
-    // 重複チェック
-    const existingLog = await db
-      .collection('gmailLogs')
-      .where('hash', '==', hash)
-      .limit(1)
-      .get();
-
-    if (!existingLog.empty) {
-      console.log(`Skipping duplicate file: ${part.filename}`);
-      continue;
+      await logError({
+        error: err,
+        source: 'gmail',
+        functionName: FUNCTION_NAME,
+        fileId: part.body?.attachmentId,
+      });
     }
+  }
 
-    // Cloud Storageに保存
-    const bucket = storage.bucket();
-    const fileName = `original/${Date.now()}_${part.filename}`;
-    const file = bucket.file(fileName);
+  return { processed, skipped };
+}
 
-    await file.save(buffer, {
-      metadata: {
-        contentType: mimeType,
-      },
-    });
+/**
+ * 添付ファイルを処理
+ */
+async function processAttachment(
+  gmail: gmail_v1.Gmail,
+  userId: string,
+  messageId: string,
+  part: gmail_v1.Schema$MessagePart,
+  subject: string,
+  emailBody: string
+): Promise<'processed' | 'skipped' | 'error'> {
+  const attachmentId = part.body?.attachmentId;
+  const filename = part.filename || 'unknown';
+  const mimeType = part.mimeType || 'application/octet-stream';
 
-    const fileUrl = `gs://${bucket.name}/${fileName}`;
+  if (!attachmentId) return 'error';
 
+  // 添付ファイル取得
+  const attachment = await withRetry(
+    () =>
+      gmail.users.messages.attachments.get({
+        userId,
+        messageId,
+        id: attachmentId,
+      }),
+    RETRY_CONFIGS.gmail
+  );
+
+  const data = attachment.data.data;
+  if (!data) return 'error';
+
+  const buffer = Buffer.from(data, 'base64');
+
+  // ファイルサイズチェック（10MB上限）
+  const fileSizeKB = Math.round(buffer.length / 1024);
+  if (fileSizeKB > 10240) {
+    console.log(`Skipping large file: ${filename} (${fileSizeKB}KB)`);
+    return 'skipped';
+  }
+
+  // MD5ハッシュで重複チェック
+  const hash = crypto.createHash('md5').update(buffer).digest('hex');
+
+  const existingLog = await db
+    .collection('gmailLogs')
+    .where('hash', '==', hash)
+    .limit(1)
+    .get();
+
+  if (!existingLog.empty) {
+    console.log(`Skipping duplicate file: ${filename}`);
+    return 'skipped';
+  }
+
+  // Cloud Storageに保存
+  const bucket = storage.bucket();
+  const storagePath = `original/${Date.now()}_${sanitizeFilename(filename)}`;
+  const file = bucket.file(storagePath);
+
+  await withRetry(
+    () =>
+      file.save(buffer, {
+        metadata: {
+          contentType: mimeType,
+          metadata: {
+            originalFilename: filename,
+            emailSubject: subject,
+            uploadedAt: new Date().toISOString(),
+          },
+        },
+      }),
+    RETRY_CONFIGS.storage
+  );
+
+  const fileUrl = `gs://${bucket.name}/${storagePath}`;
+
+  // トランザクションで gmailLogs と documents を同時作成
+  const logRef = db.collection('gmailLogs').doc();
+  const docRef = db.collection('documents').doc();
+
+  await db.runTransaction(async (transaction) => {
     // gmailLogsに記録
-    const logRef = db.collection('gmailLogs').doc();
-    await logRef.set({
-      fileName: part.filename,
+    transaction.set(logRef, {
+      fileName: filename,
       hash,
-      fileSizeKB: Math.round(buffer.length / 1024),
+      fileSizeKB,
       emailSubject: subject,
       processedAt: admin.firestore.FieldValue.serverTimestamp(),
       fileUrl,
-      emailBody: '', // 必要に応じて本文も保存
+      emailBody,
     });
 
     // documents（status: pending）を作成
-    const docRef = db.collection('documents').doc();
-    await docRef.set({
+    transaction.set(docRef, {
       id: docRef.id,
       processedAt: admin.firestore.FieldValue.serverTimestamp(),
       fileId: logRef.id,
-      fileName: part.filename,
+      fileName: filename,
       mimeType,
       ocrResult: '',
       documentType: '',
@@ -195,9 +318,29 @@ async function processMessage(
       targetPageNumber: 1,
       status: 'pending',
     });
+  });
 
-    console.log(`Saved attachment: ${part.filename}`);
+  console.log(`Saved attachment: ${filename} → ${docRef.id}`);
+  return 'processed';
+}
+
+/**
+ * マルチパートメッセージから全てのパートを再帰的に取得
+ */
+function getAllParts(payload: gmail_v1.Schema$MessagePart): gmail_v1.Schema$MessagePart[] {
+  const parts: gmail_v1.Schema$MessagePart[] = [];
+
+  if (payload.filename && payload.body?.attachmentId) {
+    parts.push(payload);
   }
+
+  if (payload.parts) {
+    for (const part of payload.parts) {
+      parts.push(...getAllParts(part));
+    }
+  }
+
+  return parts;
 }
 
 /**
@@ -225,4 +368,15 @@ function isTargetMimeType(mimeType: string): boolean {
     'image/gif',
   ];
   return targets.includes(mimeType);
+}
+
+/**
+ * ファイル名をサニタイズ
+ */
+function sanitizeFilename(filename: string): string {
+  return filename
+    .replace(/[\\/:*?"<>|]/g, '_')
+    .replace(/\s+/g, '_')
+    .replace(/_+/g, '_')
+    .slice(0, 200); // 長すぎるファイル名を切り詰め
 }

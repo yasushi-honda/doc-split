@@ -1,8 +1,7 @@
 /**
  * OCR処理 Cloud Function
  *
- * トリガー: Cloud Scheduler（checkGmailAttachments後に実行）
- *          または Pub/Sub（ocr-queue）
+ * トリガー: Cloud Scheduler（5分間隔）
  *
  * 処理フロー:
  * 1. Firestore → status: pending のドキュメントを取得
@@ -19,17 +18,46 @@ import { onSchedule } from 'firebase-functions/v2/scheduler';
 import * as admin from 'firebase-admin';
 import { VertexAI } from '@google-cloud/vertexai';
 import { PDFDocument } from 'pdf-lib';
+import { withRetry, RETRY_CONFIGS } from '../utils/retry';
+import { logError } from '../utils/errorLogger';
+import { getRateLimiter, trackGeminiUsage } from '../utils/rateLimiter';
+import {
+  extractDocumentType,
+  extractCustomerName,
+  extractOfficeName,
+  extractDate,
+} from '../utils/similarity';
 
 const db = admin.firestore();
 const storage = admin.storage();
 
 // Vertex AI設定
-const PROJECT_ID = process.env.GCLOUD_PROJECT || '';
+const PROJECT_ID = process.env.GCLOUD_PROJECT || process.env.GCP_PROJECT || '';
 const LOCATION = 'asia-northeast1';
-const MODEL_ID = 'gemini-2.5-flash';
+const MODEL_ID = 'gemini-2.5-flash-preview-05-20';
+
+const FUNCTION_NAME = 'processOCR';
 
 // 定数
-const DOCUMENT_NAME_SEARCH_RANGE_CHARS = 200;
+const BATCH_SIZE = 5; // 同時処理ドキュメント数
+const OCR_RESULT_MAX_LENGTH = 100000; // Firestoreに直接保存する最大長
+
+/** ページ単位OCR結果 */
+interface PageOcrResult {
+  pageNumber: number;
+  text: string;
+  inputTokens: number;
+  outputTokens: number;
+}
+
+/** 処理統計 */
+interface ProcessingStats {
+  documentsProcessed: number;
+  pagesProcessed: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  errors: number;
+}
 
 /**
  * 定期実行: pending状態のドキュメントをOCR処理
@@ -43,30 +71,69 @@ export const processOCR = onSchedule(
   },
   async () => {
     console.log('Starting OCR processing...');
+    const stats: ProcessingStats = {
+      documentsProcessed: 0,
+      pagesProcessed: 0,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      errors: 0,
+    };
 
     try {
-      // pending状態のドキュメントを取得（最大10件）
+      // pending状態のドキュメントを取得
       const pendingDocs = await db
         .collection('documents')
         .where('status', '==', 'pending')
         .orderBy('processedAt', 'asc')
-        .limit(10)
+        .limit(BATCH_SIZE)
         .get();
 
       console.log(`Found ${pendingDocs.size} pending documents`);
 
       for (const docSnapshot of pendingDocs.docs) {
         try {
-          await processDocument(docSnapshot.id, docSnapshot.data());
+          const result = await processDocument(docSnapshot.id, docSnapshot.data());
+          stats.documentsProcessed++;
+          stats.pagesProcessed += result.pagesProcessed;
+          stats.totalInputTokens += result.inputTokens;
+          stats.totalOutputTokens += result.outputTokens;
         } catch (error) {
-          console.error(`Error processing document ${docSnapshot.id}:`, error);
-          await recordError(docSnapshot.id, docSnapshot.data(), error);
+          stats.errors++;
+          const err = error instanceof Error ? error : new Error(String(error));
+          console.error(`Error processing document ${docSnapshot.id}:`, err.message);
+
+          await logError({
+            error: err,
+            source: 'ocr',
+            functionName: FUNCTION_NAME,
+            documentId: docSnapshot.id,
+          });
+
+          // ドキュメントをエラー状態に更新
+          await db.doc(`documents/${docSnapshot.id}`).update({
+            status: 'error',
+            lastErrorMessage: err.message,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
         }
       }
 
-      console.log('OCR processing completed');
+      // 使用量を追跡
+      if (stats.totalInputTokens > 0 || stats.totalOutputTokens > 0) {
+        await trackGeminiUsage(stats.totalInputTokens, stats.totalOutputTokens);
+      }
+
+      console.log('OCR processing completed', stats);
     } catch (error) {
-      console.error('Error in processOCR:', error);
+      const err = error instanceof Error ? error : new Error(String(error));
+      console.error('Fatal error in processOCR:', err.message);
+
+      await logError({
+        error: err,
+        source: 'ocr',
+        functionName: FUNCTION_NAME,
+      });
+
       throw error;
     }
   }
@@ -78,11 +145,14 @@ export const processOCR = onSchedule(
 async function processDocument(
   docId: string,
   docData: FirebaseFirestore.DocumentData
-): Promise<void> {
+): Promise<{ pagesProcessed: number; inputTokens: number; outputTokens: number }> {
   console.log(`Processing document: ${docId}`);
 
   // ステータスを processing に更新
-  await db.doc(`documents/${docId}`).update({ status: 'processing' });
+  await db.doc(`documents/${docId}`).update({
+    status: 'processing',
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
 
   // ファイル取得
   const fileUrl = docData.fileUrl as string;
@@ -90,27 +160,58 @@ async function processDocument(
   const filePath = fileUrl.replace(`gs://${bucket.name}/`, '');
   const file = bucket.file(filePath);
 
-  const [buffer] = await file.download();
+  const [buffer] = await withRetry(
+    () => file.download(),
+    RETRY_CONFIGS.storage
+  );
   const mimeType = docData.mimeType as string;
 
-  let ocrResult = '';
+  let pageResults: PageOcrResult[] = [];
   let totalPages = 1;
+  let totalInputTokens = 0;
+  let totalOutputTokens = 0;
 
   if (mimeType === 'application/pdf') {
-    // PDFの場合は分割してOCR
+    // PDFの場合は各ページをOCR
     const pdfDoc = await PDFDocument.load(buffer);
     totalPages = pdfDoc.getPageCount();
 
-    const results: string[] = [];
+    console.log(`PDF has ${totalPages} pages`);
+
     for (let i = 0; i < totalPages; i++) {
-      const pageResult = await ocrWithGemini(buffer, mimeType, i + 1);
-      results.push(`--- Page ${i + 1} ---\n${pageResult}`);
+      const pageNumber = i + 1;
+      console.log(`Processing page ${pageNumber}/${totalPages}`);
+
+      const pageBuffer = await extractPdfPage(buffer, i);
+      const result = await ocrWithGemini(pageBuffer, 'application/pdf', pageNumber);
+
+      pageResults.push({
+        pageNumber,
+        text: result.text,
+        inputTokens: result.inputTokens,
+        outputTokens: result.outputTokens,
+      });
+
+      totalInputTokens += result.inputTokens;
+      totalOutputTokens += result.outputTokens;
     }
-    ocrResult = results.join('\n\n');
   } else {
     // 画像の場合は直接OCR
-    ocrResult = await ocrWithGemini(buffer, mimeType);
+    const result = await ocrWithGemini(buffer, mimeType);
+    pageResults.push({
+      pageNumber: 1,
+      text: result.text,
+      inputTokens: result.inputTokens,
+      outputTokens: result.outputTokens,
+    });
+    totalInputTokens = result.inputTokens;
+    totalOutputTokens = result.outputTokens;
   }
+
+  // OCR結果を結合
+  const ocrResult = pageResults
+    .map((p) => `--- Page ${p.pageNumber} ---\n${p.text}`)
+    .join('\n\n');
 
   // マスターデータ取得
   const [documentMasters, customerMasters, officeMasters] = await Promise.all([
@@ -119,38 +220,69 @@ async function processDocument(
     db.collection('masters/offices/items').get(),
   ]);
 
-  // 情報抽出
-  const documentType = extractDocumentType(
-    ocrResult,
-    documentMasters.docs.map((d) => d.data())
-  );
-  const { customerName, isDuplicate } = extractCustomerName(
-    ocrResult,
-    customerMasters.docs.map((d) => d.data())
-  );
-  const officeName = extractOfficeName(
-    ocrResult,
-    officeMasters.docs.map((d) => d.data())
-  );
-  const fileDate = extractDate(ocrResult, documentType, documentMasters);
+  // 情報抽出（類似度マッチング）
+  const docMasterData = documentMasters.docs.map((d) => d.data() as { name: string; category?: string; dateMarker?: string });
+  const custMasterData = customerMasters.docs.map((d) => d.data() as { name: string; isDuplicate?: boolean; furigana?: string });
+  const officeMasterData = officeMasters.docs.map((d) => d.data() as { name: string });
+
+  const documentTypeResult = extractDocumentType(ocrResult, docMasterData);
+  const customerResult = extractCustomerName(ocrResult, custMasterData);
+  const officeResult = extractOfficeName(ocrResult, officeMasterData);
+
+  // 日付抽出（書類マスターの dateMarker を使用）
+  const matchedDocMaster = docMasterData.find((d) => d.name === documentTypeResult.documentType);
+  const fileDate = extractDate(ocrResult, matchedDocMaster?.dateMarker);
+
+  // OCR結果が長い場合はCloud Storageに保存
+  let ocrResultUrl: string | null = null;
+  let savedOcrResult = ocrResult;
+
+  if (ocrResult.length > OCR_RESULT_MAX_LENGTH) {
+    ocrResultUrl = await saveOcrResult(docId, ocrResult);
+    savedOcrResult = ''; // Firestoreには保存しない
+  }
 
   // ドキュメント更新
   await db.doc(`documents/${docId}`).update({
-    ocrResult: ocrResult.length > 100000 ? '' : ocrResult, // 長い場合は別途保存
-    ocrResultUrl:
-      ocrResult.length > 100000
-        ? await saveOcrResult(docId, ocrResult)
-        : null,
-    documentType: documentType || '未判定',
-    customerName: customerName || '不明顧客',
-    officeName: officeName || '未判定',
+    ocrResult: savedOcrResult,
+    ocrResultUrl,
+    documentType: documentTypeResult.documentType || '未判定',
+    customerName: customerResult.customerName || '不明顧客',
+    officeName: officeResult.officeName || '未判定',
     fileDate: fileDate || null,
-    isDuplicateCustomer: isDuplicate,
+    isDuplicateCustomer: customerResult.isDuplicate,
+    allCustomerCandidates: customerResult.allCandidates.join(','),
     totalPages,
+    category: documentTypeResult.category || null,
     status: 'processed',
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    // 詳細情報
+    extractionScores: {
+      documentType: documentTypeResult.score,
+      customerName: customerResult.score,
+      officeName: officeResult.score,
+    },
   });
 
-  console.log(`Document ${docId} processed successfully`);
+  console.log(`Document ${docId} processed: ${documentTypeResult.documentType}, ${customerResult.customerName}`);
+
+  return {
+    pagesProcessed: totalPages,
+    inputTokens: totalInputTokens,
+    outputTokens: totalOutputTokens,
+  };
+}
+
+/**
+ * PDFから単一ページを抽出
+ */
+async function extractPdfPage(pdfBuffer: Buffer, pageIndex: number): Promise<Buffer> {
+  const pdfDoc = await PDFDocument.load(pdfBuffer);
+  const newPdf = await PDFDocument.create();
+  const [copiedPage] = await newPdf.copyPages(pdfDoc, [pageIndex]);
+  newPdf.addPage(copiedPage);
+  const pdfBytes = await newPdf.save();
+  return Buffer.from(pdfBytes);
 }
 
 /**
@@ -160,7 +292,12 @@ async function ocrWithGemini(
   buffer: Buffer,
   mimeType: string,
   pageNumber?: number
-): Promise<string> {
+): Promise<{ text: string; inputTokens: number; outputTokens: number }> {
+  const rateLimiter = getRateLimiter();
+
+  // レート制限を待機
+  await rateLimiter.acquire();
+
   const vertexai = new VertexAI({ project: PROJECT_ID, location: LOCATION });
   const model = vertexai.getGenerativeModel({ model: MODEL_ID });
 
@@ -168,131 +305,49 @@ async function ocrWithGemini(
 
   const prompt = `
 この画像/PDFの内容をOCRしてください。
-- テキストをそのまま抽出してください
+
+【指示】
+- テキストをそのまま正確に抽出してください
 - 表がある場合は、構造を保ってテキスト化してください
+- 手書き文字も可能な限り読み取ってください
 - 読み取れない部分は[判読不能]と記載してください
-${pageNumber ? `- これは${pageNumber}ページ目です` : ''}
+- 余計な説明は不要です。抽出したテキストのみを出力してください
+${pageNumber ? `\nこれは${pageNumber}ページ目です。` : ''}
 `;
 
-  const response = await model.generateContent({
-    contents: [
-      {
-        role: 'user',
-        parts: [
+  const response = await withRetry(
+    async () => {
+      return await model.generateContent({
+        contents: [
           {
-            inlineData: {
-              mimeType,
-              data: base64Data,
-            },
+            role: 'user',
+            parts: [
+              {
+                inlineData: {
+                  mimeType,
+                  data: base64Data,
+                },
+              },
+              { text: prompt },
+            ],
           },
-          { text: prompt },
         ],
-      },
-    ],
-  });
+      });
+    },
+    RETRY_CONFIGS.gemini
+  );
 
   const result = response.response;
-  return result.candidates?.[0]?.content?.parts?.[0]?.text || '';
-}
+  const text = result.candidates?.[0]?.content?.parts?.[0]?.text || '';
 
-/**
- * 書類名を抽出
- */
-function extractDocumentType(
-  ocrResult: string,
-  masters: FirebaseFirestore.DocumentData[]
-): string | null {
-  const searchText = ocrResult.slice(0, DOCUMENT_NAME_SEARCH_RANGE_CHARS);
+  // トークン使用量を取得
+  const usageMetadata = result.usageMetadata;
+  const inputTokens = usageMetadata?.promptTokenCount || 0;
+  const outputTokens = usageMetadata?.candidatesTokenCount || 0;
 
-  for (const master of masters) {
-    if (searchText.includes(master.name)) {
-      return master.name;
-    }
-  }
+  console.log(`OCR completed: ${text.length} chars, tokens: ${inputTokens}/${outputTokens}`);
 
-  return null;
-}
-
-/**
- * 顧客名を抽出
- */
-function extractCustomerName(
-  ocrResult: string,
-  masters: FirebaseFirestore.DocumentData[]
-): { customerName: string | null; isDuplicate: boolean } {
-  // 類似度マッチング（簡易版）
-  for (const master of masters) {
-    if (ocrResult.includes(master.name)) {
-      return {
-        customerName: master.name,
-        isDuplicate: master.isDuplicate || false,
-      };
-    }
-  }
-
-  return { customerName: null, isDuplicate: false };
-}
-
-/**
- * 事業所名を抽出
- */
-function extractOfficeName(
-  ocrResult: string,
-  masters: FirebaseFirestore.DocumentData[]
-): string | null {
-  for (const master of masters) {
-    if (ocrResult.includes(master.name)) {
-      return master.name;
-    }
-  }
-
-  return null;
-}
-
-/**
- * 日付を抽出
- */
-function extractDate(
-  ocrResult: string,
-  documentType: string | null,
-  documentMasters: FirebaseFirestore.QuerySnapshot
-): Date | null {
-  // 書類マスターから日付マーカーを取得
-  const masterDoc = documentMasters.docs.find(
-    (d) => d.data().name === documentType
-  );
-  const dateMarker = masterDoc?.data()?.dateMarker;
-
-  if (dateMarker) {
-    const markerIndex = ocrResult.indexOf(dateMarker);
-    if (markerIndex !== -1) {
-      const searchArea = ocrResult.slice(markerIndex, markerIndex + 50);
-      const dateMatch = searchArea.match(
-        /(\d{4})[年\/\-](\d{1,2})[月\/\-](\d{1,2})/
-      );
-      if (dateMatch) {
-        return new Date(
-          parseInt(dateMatch[1]!),
-          parseInt(dateMatch[2]!) - 1,
-          parseInt(dateMatch[3]!)
-        );
-      }
-    }
-  }
-
-  // 一般的な日付パターンを検索
-  const dateMatch = ocrResult.match(
-    /(\d{4})[年\/\-](\d{1,2})[月\/\-](\d{1,2})/
-  );
-  if (dateMatch) {
-    return new Date(
-      parseInt(dateMatch[1]!),
-      parseInt(dateMatch[2]!) - 1,
-      parseInt(dateMatch[3]!)
-    );
-  }
-
-  return null;
+  return { text, inputTokens, outputTokens };
 }
 
 /**
@@ -301,33 +356,18 @@ function extractDate(
 async function saveOcrResult(docId: string, ocrResult: string): Promise<string> {
   const bucket = storage.bucket();
   const file = bucket.file(`ocr-results/${docId}.txt`);
-  await file.save(ocrResult, { contentType: 'text/plain' });
+
+  await withRetry(
+    () =>
+      file.save(ocrResult, {
+        contentType: 'text/plain; charset=utf-8',
+        metadata: {
+          documentId: docId,
+          createdAt: new Date().toISOString(),
+        },
+      }),
+    RETRY_CONFIGS.storage
+  );
+
   return `gs://${bucket.name}/ocr-results/${docId}.txt`;
-}
-
-/**
- * エラーを記録
- */
-async function recordError(
-  docId: string,
-  docData: FirebaseFirestore.DocumentData,
-  error: unknown
-): Promise<void> {
-  const errorMessage = error instanceof Error ? error.message : String(error);
-
-  await db.collection('errors').add({
-    errorDate: admin.firestore.FieldValue.serverTimestamp(),
-    errorType: 'システムエラー',
-    fileName: docData.fileName,
-    fileId: docId,
-    totalPages: docData.totalPages || 0,
-    successPages: 0,
-    failedPages: docData.totalPages || 0,
-    failedPageNumbers: [],
-    errorDetails: errorMessage,
-    fileUrl: docData.fileUrl,
-    status: '未対応',
-  });
-
-  await db.doc(`documents/${docId}`).update({ status: 'error' });
 }
