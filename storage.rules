@@ -7,27 +7,42 @@ service firebase.storage {
       return request.auth != null;
     }
 
+    // ファイルサイズ制限（50MB）
+    function isValidFileSize() {
+      return request.resource.size < 50 * 1024 * 1024;
+    }
+
+    // 許可されたMIMEタイプ（PDF、画像）
+    function isAllowedContentType() {
+      return request.resource.contentType.matches('application/pdf')
+          || request.resource.contentType.matches('image/.*');
+    }
+
     // 原本保存（読み取り専用）
+    // Cloud Functionsのみ書き込み可能
     match /original/{allPaths=**} {
       allow read: if isAuthenticated();
-      allow write: if false; // Cloud Functionsのみ
+      allow write: if false;
     }
 
-    // 処理済みファイル
+    // 処理済みファイル（リネーム後）
+    // Cloud Functionsのみ書き込み可能
     match /processed/{allPaths=**} {
       allow read: if isAuthenticated();
-      allow write: if false; // Cloud Functionsのみ
+      allow write: if false;
     }
 
-    // OCR結果
+    // OCR結果テキスト（長いOCR結果用）
+    // Cloud Functionsのみ書き込み可能
     match /ocr-results/{allPaths=**} {
       allow read: if isAuthenticated();
-      allow write: if false; // Cloud Functionsのみ
+      allow write: if false;
     }
 
-    // 一時ファイル
+    // 一時ファイル（24時間TTL）
+    // Cloud Functionsのみアクセス可能
     match /temp/{allPaths=**} {
-      allow read, write: if false; // Cloud Functionsのみ
+      allow read, write: if false;
     }
   }
 }

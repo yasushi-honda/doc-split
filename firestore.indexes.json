@@ -25,11 +25,41 @@
       ]
     },
     {
+      "collectionGroup": "documents",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "officeName", "order": "ASCENDING" },
+        { "fieldPath": "processedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "documents",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "fileDate", "order": "DESCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "errors",
       "queryScope": "COLLECTION",
       "fields": [
         { "fieldPath": "status", "order": "ASCENDING" },
         { "fieldPath": "errorDate", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "errors",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "errorType", "order": "ASCENDING" },
+        { "fieldPath": "errorDate", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "gmailLogs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "processedAt", "order": "DESCENDING" }
       ]
     }
   ],

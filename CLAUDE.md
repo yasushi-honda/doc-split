@@ -12,7 +12,7 @@ AppSheetで構築された書類管理アプリをGCPでリプレイス開発す
 Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、検索・グルーピング・閲覧が可能な**書類管理ビューアーアプリ**。
 
 ## 現在のステータス
-**フェーズ**: Phase 0完了 → Phase 1開始可能
+**フェーズ**: Phase 1完了 → Phase 2開始可能
 
 ### 環境情報
 | 項目 | 値 |
@@ -31,6 +31,13 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
 - [x] Cloud Storageバケット作成
 - [x] エミュレータ動作確認
 - [x] GitHubリポジトリ作成・初期プッシュ
+
+### Phase 1 完了項目（2026-01-18）
+- [x] Firestoreインデックス定義（複合インデックス8件）
+- [x] Firestoreセキュリティルール実装・テスト（22テストパス）
+- [x] Storageセキュリティルール更新（ファイルサイズ・MIME制限追加）
+- [x] マスターデータインポートスクリプト（顧客・書類・事業所・ケアマネ対応）
+- [x] プロジェクト初期設定スクリプト
 
 ## ドキュメント読込順序（AI向け）
 1. `docs/context/gcp-migration-scope.md` - 移行スコープ ★最重要
@@ -75,10 +82,10 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
 | ストレージ | **Cloud Storage** | Cloud Functions連携がメイン |
 | VPC Service Controls | **不要** | コスト制約、アプリ層で担保 |
 
-## 次のステップ（Phase 1: データ基盤）
-1. **Firestoreスキーマ実装**: `/documents`, `/masters/*`, `/users` 等
-2. **セキュリティルール**: Firestore/Storage ルール実装・テスト
-3. **マスターデータ構造**: 投入スクリプト準備
+## 次のステップ（Phase 2: バックエンド処理）
+1. **Gmail連携 Cloud Function**: `checkGmailAttachments` 実装
+2. **OCR処理 Cloud Function**: `processOCR` 実装（Gemini 2.5 Flash）
+3. **情報抽出ロジック**: 書類名・顧客名・事業所名のマッチング
 
 ## 設計完了済み
 - [x] 移行スコープ定義
@@ -113,6 +120,8 @@ doc-split/
 │   │   ├── gmail/               # checkGmailAttachments
 │   │   ├── ocr/                 # processOCR
 │   │   └── pdf/                 # pdfOperations（分割・回転）
+│   ├── test/                    # テスト
+│   │   └── firestore.rules.test.ts  # セキュリティルールテスト
 │   └── package.json
 ├── scripts/                     # サポート用スクリプト
 │   ├── init-project.sh          # 顧客固有設定の変更

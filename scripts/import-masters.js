@@ -115,6 +115,34 @@ async function importOffices(filePath) {
   console.log(`  ✓ ${count}件の事業所をインポートしました`);
 }
 
+// ケアマネージャーマスターをインポート
+async function importCareManagers(filePath) {
+  console.log(`ケアマネージャーマスターをインポート: ${filePath}`);
+
+  const content = fs.readFileSync(filePath, 'utf8');
+  const rows = parseCSV(content);
+
+  const batch = db.batch();
+  let count = 0;
+
+  for (const row of rows) {
+    // 期待するカラム: name, office, phone, email, notes
+    const name = row['name'] || row['ケアマネ名'] || '';
+    const docRef = db.collection('masters/caremanagers/items').doc(name);
+    batch.set(docRef, {
+      name,
+      office: row['office'] || row['事業所'] || '',
+      phone: row['phone'] || row['電話番号'] || '',
+      email: row['email'] || row['メール'] || '',
+      notes: row['notes'] || row['備考'] || '',
+    });
+    count++;
+  }
+
+  await batch.commit();
+  console.log(`  ✓ ${count}件のケアマネージャーをインポートしました`);
+}
+
 // メイン処理
 async function main() {
   const args = process.argv.slice(2);
@@ -124,6 +152,7 @@ async function main() {
     console.log('  node import-masters.js --customers customers.csv');
     console.log('  node import-masters.js --documents documents.csv');
     console.log('  node import-masters.js --offices offices.csv');
+    console.log('  node import-masters.js --caremanagers caremanagers.csv');
     console.log('  node import-masters.js --all ./data/');
     process.exit(1);
   }
@@ -138,6 +167,8 @@ async function main() {
       await importDocuments(pathArg);
     } else if (option === '--offices') {
       await importOffices(pathArg);
+    } else if (option === '--caremanagers') {
+      await importCareManagers(pathArg);
     } else if (option === '--all') {
       // ディレクトリ内のCSVを全てインポート
       const dir = pathArg;
@@ -151,6 +182,8 @@ async function main() {
           await importDocuments(filePath);
         } else if (file.includes('office')) {
           await importOffices(filePath);
+        } else if (file.includes('caremanager')) {
+          await importCareManagers(filePath);
         }
       }
     } else {
