@@ -14,7 +14,10 @@
     "emulators": "firebase emulators:start",
     "lint": "npm run lint:frontend && npm run lint:functions",
     "lint:frontend": "cd frontend && npm run lint",
-    "lint:functions": "cd functions && npm run lint"
+    "lint:functions": "cd functions && npm run lint",
+    "test": "npm run test:functions",
+    "test:functions": "cd functions && npm run test",
+    "test:rules": "cd functions && npm run test:rules"
   },
   "workspaces": [
     "frontend",

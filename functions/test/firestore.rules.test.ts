@@ -10,13 +10,8 @@ import * as testing from '@firebase/rules-unit-testing';
 import { doc, getDoc, setDoc, deleteDoc } from 'firebase/firestore';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 const { assertFails, assertSucceeds, initializeTestEnvironment } = testing;
-
-// ESモジュール対応: __dirname相当の取得
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 describe('Firestore Security Rules', () => {
   let testEnv: testing.RulesTestEnvironment;
