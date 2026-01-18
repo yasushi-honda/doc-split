@@ -5,17 +5,26 @@
  * - PDF分割（分割位置サジェスト + 実行）
  * - PDF回転（ページ単位）
  * - 分割候補の検出（OCR結果から顧客/書類の変化点を検出）
+ *
+ * Phase 6D: pdfAnalyzer統合
  */
 
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
 import { PDFDocument, degrees } from 'pdf-lib';
+import {
+  analyzePdf,
+  generateSplitSummary,
+  PageOcrData,
+  MasterData,
+} from '../utils/pdfAnalyzer';
+import { CustomerMaster, DocumentMaster, OfficeMaster } from '../utils/extractors';
 
 const db = admin.firestore();
 const storage = admin.storage();
 
 // ============================================
-// 分割候補検出
+// 分割候補検出（Phase 6D: pdfAnalyzer統合）
 // ============================================
 
 interface PageOcrResult {
@@ -27,16 +36,8 @@ interface PageOcrResult {
   matchScore: number;
 }
 
-interface SplitSuggestion {
-  afterPageNumber: number;
-  reason: 'new_customer' | 'new_document_type' | 'content_break';
-  confidence: number;
-  newDocumentType: string | null;
-  newCustomerName: string | null;
-}
-
 /**
- * 分割候補を検出（GASロジックの移植）
+ * 分割候補を検出（強化版 - pdfAnalyzer使用）
  */
 export const detectSplitPoints = onCall(
   {
@@ -44,7 +45,7 @@ export const detectSplitPoints = onCall(
     memory: '512MiB',
   },
   async (request) => {
-    const { documentId } = request.data;
+    const { documentId, useEnhanced = true } = request.data;
 
     if (!documentId) {
       throw new HttpsError('invalid-argument', 'documentId is required');
@@ -62,11 +63,87 @@ export const detectSplitPoints = onCall(
     const pageResults: PageOcrResult[] = docData.pageResults || [];
 
     if (pageResults.length === 0) {
-      return { suggestions: [] };
+      return { suggestions: [], segments: [], shouldSplit: false };
     }
 
-    // 分割候補を検出
-    const suggestions: SplitSuggestion[] = [];
+    // 強化版分析を使用
+    if (useEnhanced) {
+      // マスターデータ取得
+      const [documentMasters, customerMasters, officeMasters] = await Promise.all([
+        db.collection('masters/documents/items').get(),
+        db.collection('masters/customers/items').get(),
+        db.collection('masters/offices/items').get(),
+      ]);
+
+      const masters: MasterData = {
+        documents: documentMasters.docs.map((d) => ({
+          id: d.id,
+          name: d.data().name as string,
+          category: d.data().category as string | undefined,
+          keywords: d.data().keywords as string[] | undefined,
+        })) as DocumentMaster[],
+        customers: customerMasters.docs.map((d) => ({
+          id: d.id,
+          name: d.data().name as string,
+          furigana: d.data().furigana as string | undefined,
+          isDuplicate: d.data().isDuplicate as boolean | undefined,
+        })) as CustomerMaster[],
+        offices: officeMasters.docs.map((d) => ({
+          id: d.id,
+          name: d.data().name as string,
+          shortName: d.data().shortName as string | undefined,
+        })) as OfficeMaster[],
+      };
+
+      // ページデータを変換
+      const pages: PageOcrData[] = pageResults.map((p) => ({
+        pageNumber: p.pageNumber,
+        text: p.text,
+        detectedDocumentType: p.detectedDocumentType,
+        detectedCustomerName: p.detectedCustomerName,
+        detectedOfficeName: p.detectedOfficeName,
+      }));
+
+      // 強化版分析を実行
+      const analysisResult = analyzePdf(pages, masters);
+      const summary = generateSplitSummary(analysisResult);
+
+      // Firestoreに保存
+      await docRef.update({
+        splitSuggestions: analysisResult.splitSuggestions,
+        splitSegments: analysisResult.segments.map((seg) => ({
+          id: seg.id,
+          startPage: seg.startPage,
+          endPage: seg.endPage,
+          documentType: seg.documentType,
+          customerName: seg.customerName,
+          customerId: seg.customerId,
+          officeName: seg.officeName,
+          suggestedFileName: seg.suggestedFileName.fileName,
+          confidence: seg.confidence,
+        })),
+        shouldSplit: analysisResult.shouldSplit,
+        splitReason: analysisResult.splitReason,
+      });
+
+      return {
+        suggestions: analysisResult.splitSuggestions,
+        segments: analysisResult.segments,
+        shouldSplit: analysisResult.shouldSplit,
+        splitReason: analysisResult.splitReason,
+        summary,
+      };
+    }
+
+    // レガシー分析（後方互換性のため維持）
+    const suggestions: Array<{
+      afterPageNumber: number;
+      reason: string;
+      confidence: number;
+      newDocumentType: string | null;
+      newCustomerName: string | null;
+    }> = [];
+
     let prevCustomer = pageResults[0]?.detectedCustomerName;
     let prevDocType = pageResults[0]?.detectedDocumentType;
 
@@ -81,7 +158,7 @@ export const detectSplitPoints = onCall(
 
       if (customerChanged) {
         suggestions.push({
-          afterPageNumber: i, // 前のページの後で分割
+          afterPageNumber: i,
           reason: 'new_customer',
           confidence: current.matchScore,
           newDocumentType: current.detectedDocumentType,
@@ -97,7 +174,6 @@ export const detectSplitPoints = onCall(
         });
       }
 
-      // 次のループ用に更新
       if (current.detectedCustomerName) {
         prevCustomer = current.detectedCustomerName;
       }
@@ -106,10 +182,9 @@ export const detectSplitPoints = onCall(
       }
     }
 
-    // Firestoreに保存
     await docRef.update({ splitSuggestions: suggestions });
 
-    return { suggestions };
+    return { suggestions, segments: [], shouldSplit: suggestions.length > 0 };
   }
 );
 

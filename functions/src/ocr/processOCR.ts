@@ -22,11 +22,14 @@ import { withRetry, RETRY_CONFIGS } from '../utils/retry';
 import { logError } from '../utils/errorLogger';
 import { getRateLimiter, trackGeminiUsage } from '../utils/rateLimiter';
 import {
-  extractDocumentType,
-  extractCustomerName,
-  extractOfficeName,
-  extractDate,
-} from '../utils/similarity';
+  extractDocumentTypeEnhanced,
+  extractCustomerCandidates,
+  extractOfficeNameEnhanced,
+  extractDateEnhanced,
+  CustomerMaster,
+  DocumentMaster,
+  OfficeMaster,
+} from '../utils/extractors';
 
 const db = admin.firestore();
 const storage = admin.storage();
@@ -220,18 +223,36 @@ async function processDocument(
     db.collection('masters/offices/items').get(),
   ]);
 
-  // 情報抽出（類似度マッチング）
-  const docMasterData = documentMasters.docs.map((d) => d.data() as { name: string; category?: string; dateMarker?: string });
-  const custMasterData = customerMasters.docs.map((d) => d.data() as { name: string; isDuplicate?: boolean; furigana?: string });
-  const officeMasterData = officeMasters.docs.map((d) => d.data() as { name: string });
+  // マスターデータを型付きで変換
+  const docMasterData: DocumentMaster[] = documentMasters.docs.map((d) => ({
+    id: d.id,
+    name: d.data().name as string,
+    category: d.data().category as string | undefined,
+    keywords: d.data().keywords as string[] | undefined,
+  }));
 
-  const documentTypeResult = extractDocumentType(ocrResult, docMasterData);
-  const customerResult = extractCustomerName(ocrResult, custMasterData);
-  const officeResult = extractOfficeName(ocrResult, officeMasterData);
+  const custMasterData: CustomerMaster[] = customerMasters.docs.map((d) => ({
+    id: d.id,
+    name: d.data().name as string,
+    furigana: d.data().furigana as string | undefined,
+    isDuplicate: d.data().isDuplicate as boolean | undefined,
+  }));
+
+  const officeMasterData: OfficeMaster[] = officeMasters.docs.map((d) => ({
+    id: d.id,
+    name: d.data().name as string,
+    shortName: d.data().shortName as string | undefined,
+  }));
+
+  // 情報抽出（強化版エクストラクター使用）
+  const documentTypeResult = extractDocumentTypeEnhanced(ocrResult, docMasterData);
+  const customerResult = extractCustomerCandidates(ocrResult, custMasterData);
+  const officeResult = extractOfficeNameEnhanced(ocrResult, officeMasterData);
 
   // 日付抽出（書類マスターの dateMarker を使用）
-  const matchedDocMaster = docMasterData.find((d) => d.name === documentTypeResult.documentType);
-  const fileDate = extractDate(ocrResult, matchedDocMaster?.dateMarker);
+  const matchedDocMaster = documentMasters.docs.find((d) => d.data().name === documentTypeResult.documentType);
+  const dateMarker = matchedDocMaster?.data().dateMarker as string | undefined;
+  const dateResult = extractDateEnhanced(ocrResult, dateMarker);
 
   // OCR結果が長い場合はCloud Storageに保存
   let ocrResultUrl: string | null = null;
@@ -242,29 +263,53 @@ async function processDocument(
     savedOcrResult = ''; // Firestoreには保存しない
   }
 
+  // 顧客候補リスト（最大5件）
+  const customerCandidateNames = customerResult.candidates
+    .slice(0, 5)
+    .map((c) => c.name);
+
   // ドキュメント更新
   await db.doc(`documents/${docId}`).update({
     ocrResult: savedOcrResult,
     ocrResultUrl,
     documentType: documentTypeResult.documentType || '未判定',
-    customerName: customerResult.customerName || '不明顧客',
+    customerName: customerResult.bestMatch?.name || '不明顧客',
+    customerId: customerResult.bestMatch?.id || null,
     officeName: officeResult.officeName || '未判定',
-    fileDate: fileDate || null,
-    isDuplicateCustomer: customerResult.isDuplicate,
-    allCustomerCandidates: customerResult.allCandidates.join(','),
+    officeId: officeResult.officeId || null,
+    fileDate: dateResult.date || null,
+    fileDateFormatted: dateResult.formattedDate || null,
+    isDuplicateCustomer: customerResult.bestMatch?.isDuplicate || false,
+    needsManualCustomerSelection: customerResult.needsManualSelection,
+    allCustomerCandidates: customerCandidateNames.join(','),
+    customerCandidates: customerResult.candidates.slice(0, 5).map((c) => ({
+      id: c.id,
+      name: c.name,
+      score: c.score,
+      matchType: c.matchType,
+    })),
     totalPages,
     category: documentTypeResult.category || null,
     status: 'processed',
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    // 詳細情報
+    // 詳細情報（強化版）
     extractionScores: {
       documentType: documentTypeResult.score,
-      customerName: customerResult.score,
+      customerName: customerResult.bestMatch?.score || 0,
       officeName: officeResult.score,
+      date: dateResult.confidence,
+    },
+    extractionDetails: {
+      documentMatchType: documentTypeResult.matchType,
+      documentKeywords: documentTypeResult.keywords,
+      customerMatchType: customerResult.bestMatch?.matchType || 'none',
+      officeMatchType: officeResult.matchType,
+      datePattern: dateResult.pattern,
+      dateSource: dateResult.source,
     },
   });
 
-  console.log(`Document ${docId} processed: ${documentTypeResult.documentType}, ${customerResult.customerName}`);
+  console.log(`Document ${docId} processed: ${documentTypeResult.documentType}, ${customerResult.bestMatch?.name || '不明'}`);
 
   return {
     pagesProcessed: totalPages,

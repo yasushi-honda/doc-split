@@ -12,7 +12,7 @@ AppSheetで構築された書類管理アプリをGCPでリプレイス開発す
 Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、検索・グルーピング・閲覧が可能な**書類管理ビューアーアプリ**。
 
 ## 現在のステータス
-**フェーズ**: Phase 5完了 - **本番デプロイ完了**
+**フェーズ**: Phase 6完了 - **ビジネスロジック移行完了**
 
 ### 環境情報
 | 項目 | 値 |
@@ -86,6 +86,35 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
   - docs/operation/user-guide.md: ユーザーガイド
   - docs/operation/admin-guide.md: 管理者ガイド
   - docs/operation/setup-guide.md: セットアップ手順書
+
+### Phase 6 完了項目（2026-01-18）- ビジネスロジック移行
+- [x] Phase 6A: 基盤強化
+  - textNormalizer.ts: テキスト正規化（全角半角変換、和暦変換）
+  - 日付候補抽出・最適日付選択ロジック
+  - 27テストパス
+- [x] Phase 6B: 情報抽出精度向上
+  - extractors.ts: 強化版抽出ユーティリティ
+  - 書類タイプ抽出（キーワードマッチング対応）
+  - 顧客候補抽出（複数候補、最大10件）
+  - 事業所抽出（短縮名対応）
+  - 日付抽出（dateMarker対応）
+  - 26テストパス
+- [x] Phase 6C: ファイル名生成ロジック
+  - fileNaming.ts: GAS命名規則準拠
+  - 顧客属性分析（事業所・ケアマネ一致判定）
+  - 最適ファイル名生成（分割推奨判定付き）
+  - ファイル名パース機能
+  - 34テストパス
+- [x] Phase 6D: PDF分割強化
+  - pdfAnalyzer.ts: ページ単位分析・セグメント生成
+  - ページ間変化検出（顧客・書類・事業所）
+  - 分割候補生成（信頼度スコア付き）
+  - detectSplitPoints強化（pdfAnalyzer統合）
+  - 17テストパス
+- [x] 統合作業
+  - processOCR.ts: 新extractors使用に更新
+  - pdfOperations.ts: pdfAnalyzer統合（後方互換性維持）
+- [x] テスト総数: 132テストパス
 
 ## ドキュメント読込順序（AI向け）
 1. `docs/context/gcp-migration-scope.md` - 移行スコープ ★最重要
@@ -197,15 +226,23 @@ doc-split/
 │   │   ├── gmail/               # checkGmailAttachments
 │   │   ├── ocr/                 # processOCR
 │   │   ├── pdf/                 # pdfOperations（分割・回転）
-│   │   └── utils/               # 共通ユーティリティ ★Phase 2
+│   │   └── utils/               # 共通ユーティリティ
 │   │       ├── retry.ts         # リトライ機能
 │   │       ├── errorLogger.ts   # エラーログ
 │   │       ├── gmailAuth.ts     # Gmail認証切替
 │   │       ├── rateLimiter.ts   # Geminiレート制限
-│   │       └── similarity.ts    # 類似度マッチング
+│   │       ├── similarity.ts    # 類似度マッチング
+│   │       ├── textNormalizer.ts    # テキスト正規化 ★Phase 6A
+│   │       ├── extractors.ts        # 情報抽出 ★Phase 6B
+│   │       ├── fileNaming.ts        # ファイル名生成 ★Phase 6C
+│   │       └── pdfAnalyzer.ts       # PDF分析 ★Phase 6D
 │   ├── test/                    # テスト
 │   │   ├── firestore.rules.test.ts  # セキュリティルールテスト
-│   │   └── utils.test.ts        # ユーティリティテスト ★Phase 5
+│   │   ├── similarity.test.ts       # 類似度テスト
+│   │   ├── textNormalizer.test.ts   # テキスト正規化テスト ★Phase 6A
+│   │   ├── extractors.test.ts       # 情報抽出テスト ★Phase 6B
+│   │   ├── fileNaming.test.ts       # ファイル名生成テスト ★Phase 6C
+│   │   └── pdfAnalyzer.test.ts      # PDF分析テスト ★Phase 6D
 │   └── package.json
 ├── scripts/                     # サポート用スクリプト
 │   ├── init-project.sh          # 顧客固有設定の変更
