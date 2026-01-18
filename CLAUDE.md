@@ -69,9 +69,10 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
 - [x] エラー履歴画面（ErrorsPage）- エラー一覧、再処理機能、ステータス管理
 - [x] Firebase Hostingプレビューデプロイ
 
-### Phase 4 未着手
-- [ ] PDF分割機能（OCRベースページ区切り検出）
-- [ ] 分割候補UI表示・分割実行
+### Phase 4 進行中（2026-01-18）
+- [x] PDF分割バックエンド（Cloud Functions: detectSplitPoints, splitPdf, rotatePdfPages）
+- [x] PDF分割フロントエンド（PdfSplitModal: 分割候補表示、手動追加、セグメント編集）
+- [x] DocumentDetailModalに分割ボタン追加
 - [ ] マスターデータ編集画面
 
 ## ドキュメント読込順序（AI向け）
@@ -146,14 +147,16 @@ doc-split/
 ├── frontend/                    # Reactフロントエンド
 │   ├── src/
 │   │   ├── components/          # UIコンポーネント
-│   │   │   ├── ui/              # shadcn/ui ★Phase 3
+│   │   │   ├── ui/              # shadcn/ui
 │   │   │   ├── PdfViewer.tsx    # PDFビューアー
-│   │   │   ├── DocumentDetailModal.tsx  # 詳細モーダル ★Phase 3
+│   │   │   ├── DocumentDetailModal.tsx  # 詳細モーダル
+│   │   │   ├── PdfSplitModal.tsx    # PDF分割モーダル ★Phase 4
 │   │   │   └── Layout.tsx       # レイアウト
-│   │   ├── hooks/               # カスタムフック ★Phase 3
+│   │   ├── hooks/               # カスタムフック
 │   │   │   ├── useDocuments.ts  # Firestore書類連携
 │   │   │   ├── useSettings.ts   # 設定・ユーザー管理
-│   │   │   └── useErrors.ts     # エラー履歴連携
+│   │   │   ├── useErrors.ts     # エラー履歴連携
+│   │   │   └── usePdfSplit.ts   # PDF分割連携 ★Phase 4
 │   │   ├── pages/               # 各画面
 │   │   │   ├── DocumentsPage.tsx    # 書類一覧
 │   │   │   ├── SettingsPage.tsx     # 設定画面 ★Phase 3

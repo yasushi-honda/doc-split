@@ -3,10 +3,11 @@
  * PDFビューアーとメタ情報を表示
  */
 
+import { useState } from 'react'
 import { format } from 'date-fns'
 import { ja } from 'date-fns/locale'
 import { Timestamp } from 'firebase/firestore'
-import { Download, ExternalLink, Loader2, FileText, User, Building, Calendar, Tag, AlertCircle } from 'lucide-react'
+import { Download, ExternalLink, Loader2, FileText, User, Building, Calendar, Tag, AlertCircle, Scissors } from 'lucide-react'
 import {
   Dialog,
   DialogContent,
@@ -16,6 +17,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { PdfViewer } from '@/components/PdfViewer'
+import { PdfSplitModal } from '@/components/PdfSplitModal'
 import { useDocument } from '@/hooks/useDocuments'
 import type { DocumentStatus } from '@shared/types'
 
@@ -57,7 +59,8 @@ function MetaRow({ icon: Icon, label, value }: { icon: React.ElementType; label:
 }
 
 export function DocumentDetailModal({ documentId, open, onOpenChange }: DocumentDetailModalProps) {
-  const { data: document, isLoading, isError, error } = useDocument(documentId)
+  const { data: document, isLoading, isError, error, refetch } = useDocument(documentId)
+  const [isSplitModalOpen, setIsSplitModalOpen] = useState(false)
 
   // ダウンロード処理
   const handleDownload = () => {
@@ -65,6 +68,18 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
       window.open(document.fileUrl, '_blank')
     }
   }
+
+  // 分割成功時
+  const handleSplitSuccess = () => {
+    refetch()
+    setIsSplitModalOpen(false)
+  }
+
+  // 分割可能かどうか（複数ページのPDFで、processed状態）
+  const canSplit = document &&
+    document.totalPages > 1 &&
+    document.mimeType === 'application/pdf' &&
+    document.status === 'processed'
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -96,6 +111,17 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                   </Badge>
                 </div>
                 <div className="flex items-center gap-2">
+                  {canSplit && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setIsSplitModalOpen(true)}
+                      className="text-orange-600 border-orange-300 hover:bg-orange-50"
+                    >
+                      <Scissors className="mr-1 h-4 w-4" />
+                      PDF分割
+                    </Button>
+                  )}
                   <Button variant="outline" size="sm" onClick={handleDownload}>
                     <Download className="mr-1 h-4 w-4" />
                     ダウンロード
@@ -194,6 +220,16 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
           </div>
         )}
       </DialogContent>
+
+      {/* PDF分割モーダル */}
+      {document && (
+        <PdfSplitModal
+          document={document}
+          isOpen={isSplitModalOpen}
+          onClose={() => setIsSplitModalOpen(false)}
+          onSuccess={handleSplitSuccess}
+        />
+      )}
     </Dialog>
   )
 }
