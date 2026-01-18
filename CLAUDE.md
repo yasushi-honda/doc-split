@@ -12,7 +12,7 @@ AppSheetで構築された書類管理アプリをGCPでリプレイス開発す
 Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、検索・グルーピング・閲覧が可能な**書類管理ビューアーアプリ**。
 
 ## 現在のステータス
-**フェーズ**: Phase 3進行中（UI基盤完了）
+**フェーズ**: Phase 3完了、Phase 4準備中
 
 ### 環境情報
 | 項目 | 値 |
@@ -22,6 +22,7 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
 | GitHubリポジトリ | `yasushi-honda/doc-split` |
 | Storageバケット | `doc-split-dev-documents` |
 | Firestoreエミュレータ | ポート `8085` |
+| Hostingプレビュー | `https://doc-split-dev--preview-5fqutx5j.web.app` |
 
 ### Phase 0 完了項目（2026-01-18）
 - [x] GCPプロジェクト作成・請求アカウント設定
@@ -59,14 +60,19 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
   - rateLimiter.ts: Geminiレート制限
   - similarity.ts: 類似度マッチング
 
-### Phase 3 進行中（2026-01-18）
-- [x] shadcn/ui セットアップ（Button, Card, Input, Badge, Dialog, Select）
+### Phase 3 完了項目（2026-01-18）
+- [x] shadcn/ui セットアップ（Button, Card, Input, Badge, Dialog, Select, Table, Tabs等）
 - [x] Firestore連携フック（useDocuments, useDocument, useDocumentStats等）
 - [x] DocumentsPage改善（統計カード、検索・フィルター、書類一覧テーブル）
 - [x] DocumentDetailModal（PDFビューアー統合、メタ情報サイドバー）
-- [ ] 設定画面（SettingsPage）
-- [ ] エラー履歴画面（ErrorsPage）
-- [ ] Firebase Hostingデプロイ
+- [x] 設定画面（SettingsPage）- Gmail監視設定、ユーザー管理、通知設定
+- [x] エラー履歴画面（ErrorsPage）- エラー一覧、再処理機能、ステータス管理
+- [x] Firebase Hostingプレビューデプロイ
+
+### Phase 4 未着手
+- [ ] PDF分割機能（OCRベースページ区切り検出）
+- [ ] 分割候補UI表示・分割実行
+- [ ] マスターデータ編集画面
 
 ## ドキュメント読込順序（AI向け）
 1. `docs/context/gcp-migration-scope.md` - 移行スコープ ★最重要
@@ -111,10 +117,10 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
 | ストレージ | **Cloud Storage** | Cloud Functions連携がメイン |
 | VPC Service Controls | **不要** | コスト制約、アプリ層で担保 |
 
-## 次のステップ（Phase 3残り: フロントエンド）
-1. **設定画面**: Gmail監視設定、ユーザー管理（ホワイトリスト）
-2. **エラー履歴画面**: OCRエラー一覧、再処理機能
-3. **Firebase Hostingデプロイ**: 本番環境構築、環境変数設定
+## 次のステップ（Phase 4: 管理機能）
+1. **PDF分割機能**: OCRベースページ区切り検出、分割候補UI表示
+2. **分割実行**: 新規ドキュメント作成、元ドキュメントのstatus更新
+3. **マスターデータ編集**: 顧客・書類・事業所マスターの追加・編集UI
 
 ## 設計完了済み
 - [x] 移行スコープ定義
@@ -145,8 +151,14 @@ doc-split/
 │   │   │   ├── DocumentDetailModal.tsx  # 詳細モーダル ★Phase 3
 │   │   │   └── Layout.tsx       # レイアウト
 │   │   ├── hooks/               # カスタムフック ★Phase 3
-│   │   │   └── useDocuments.ts  # Firestore連携
+│   │   │   ├── useDocuments.ts  # Firestore書類連携
+│   │   │   ├── useSettings.ts   # 設定・ユーザー管理
+│   │   │   └── useErrors.ts     # エラー履歴連携
 │   │   ├── pages/               # 各画面
+│   │   │   ├── DocumentsPage.tsx    # 書類一覧
+│   │   │   ├── SettingsPage.tsx     # 設定画面 ★Phase 3
+│   │   │   ├── ErrorsPage.tsx       # エラー履歴 ★Phase 3
+│   │   │   └── LoginPage.tsx        # ログイン
 │   │   ├── stores/              # Zustand
 │   │   └── lib/                 # Firebase SDK等
 │   ├── components.json          # shadcn/ui設定 ★Phase 3

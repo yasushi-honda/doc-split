@@ -2,6 +2,8 @@ import { Routes, Route, Navigate } from 'react-router-dom'
 import { useAuthStore } from '@/stores/authStore'
 import { LoginPage } from '@/pages/LoginPage'
 import { DocumentsPage } from '@/pages/DocumentsPage'
+import { SettingsPage } from '@/pages/SettingsPage'
+import { ErrorsPage } from '@/pages/ErrorsPage'
 import { AdminPage } from '@/pages/AdminPage'
 import { Layout } from '@/components/Layout'
 
@@ -46,6 +48,15 @@ export default function App() {
         }
       >
         <Route index element={<DocumentsPage />} />
+        <Route path="errors" element={<ErrorsPage />} />
+        <Route
+          path="settings"
+          element={
+            <AdminRoute>
+              <SettingsPage />
+            </AdminRoute>
+          }
+        />
         <Route
           path="admin"
           element={
