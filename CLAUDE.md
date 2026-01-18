@@ -116,6 +116,15 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
   - pdfOperations.ts: pdfAnalyzer統合（後方互換性維持）
 - [x] テスト総数: 132テストパス
 
+### CI/CD パイプライン追加（2026-01-19）
+- [x] GitHub Actions CI（`.github/workflows/ci.yml`）
+  - PR時: lint → build → test（Firestoreルールテスト含む）
+  - Node.js 20、Java 21（エミュレータ用）
+- [x] GitHub Actions CD（`.github/workflows/deploy.yml`）
+  - mainマージ時: 自動デプロイ（Firebase Hosting + Functions）
+- [x] ESLint v9 flat config移行（frontend/functions）
+- [x] GitHub Secrets設定（Firebase環境変数 + FIREBASE_TOKEN）
+
 ## ドキュメント読込順序（AI向け）
 1. `docs/context/gcp-migration-scope.md` - 移行スコープ ★最重要
 2. `docs/context/functional-requirements.md` - 機能要件
