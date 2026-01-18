@@ -48,6 +48,7 @@ coverage/
 
 # Misc
 *.local
+!.gitconfig.local
 .cache/
 
 # Python (for utility scripts)
@@ -63,3 +64,6 @@ venv/
 **/serviceAccountKey.json
 **/credentials.json
 **/*-credentials.json
+
+# GitHub CLI認証（プロジェクト分離）
+.gh/
