@@ -33,13 +33,6 @@
       ]
     },
     {
-      "collectionGroup": "documents",
-      "queryScope": "COLLECTION",
-      "fields": [
-        { "fieldPath": "fileDate", "order": "DESCENDING" }
-      ]
-    },
-    {
       "collectionGroup": "errors",
       "queryScope": "COLLECTION",
       "fields": [
@@ -53,13 +46,6 @@
       "fields": [
         { "fieldPath": "errorType", "order": "ASCENDING" },
         { "fieldPath": "errorDate", "order": "DESCENDING" }
-      ]
-    },
-    {
-      "collectionGroup": "gmailLogs",
-      "queryScope": "COLLECTION",
-      "fields": [
-        { "fieldPath": "processedAt", "order": "DESCENDING" }
       ]
     }
   ],
