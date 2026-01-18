@@ -1,0 +1,10 @@
+{
+  "name": "@docsplit/shared",
+  "version": "0.1.0",
+  "private": true,
+  "main": "types.ts",
+  "types": "types.ts",
+  "peerDependencies": {
+    "firebase": "^10.0.0"
+  }
+}

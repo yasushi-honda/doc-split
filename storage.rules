@@ -1,0 +1,33 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    // 認証チェック
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // 原本保存（読み取り専用）
+    match /original/{allPaths=**} {
+      allow read: if isAuthenticated();
+      allow write: if false; // Cloud Functionsのみ
+    }
+
+    // 処理済みファイル
+    match /processed/{allPaths=**} {
+      allow read: if isAuthenticated();
+      allow write: if false; // Cloud Functionsのみ
+    }
+
+    // OCR結果
+    match /ocr-results/{allPaths=**} {
+      allow read: if isAuthenticated();
+      allow write: if false; // Cloud Functionsのみ
+    }
+
+    // 一時ファイル
+    match /temp/{allPaths=**} {
+      allow read, write: if false; // Cloud Functionsのみ
+    }
+  }
+}

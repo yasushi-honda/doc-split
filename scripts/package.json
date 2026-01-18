@@ -1,0 +1,16 @@
+{
+  "name": "@docsplit/scripts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "init": "./init-project.sh",
+    "import:customers": "node import-masters.js --customers",
+    "import:documents": "node import-masters.js --documents",
+    "import:offices": "node import-masters.js --offices",
+    "import:all": "node import-masters.js --all"
+  },
+  "dependencies": {
+    "firebase-admin": "^12.7.0"
+  }
+}

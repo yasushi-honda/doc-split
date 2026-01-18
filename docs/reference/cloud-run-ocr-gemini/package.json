@@ -1,0 +1,27 @@
+{
+  "name": "ocr-gemini-drive-2.0",
+  "version": "1.0.0",
+  "description": "OCR processing with Google Drive integration, file splitting, and Gemini 2.0 Flash",
+  "main": "index.js",
+  "scripts": {
+    "start": "functions-framework --target=ocrGeminiNew",
+    "deploy": "gcloud functions deploy ocrGeminiNew --runtime nodejs20 --trigger-http --allow-unauthenticated --memory 4GB --timeout 540s --region us-central1"
+  },
+  "dependencies": {
+    "@google-cloud/functions-framework": "^3.3.0",
+    "google-auth-library": "^9.4.0",
+    "googleapis": "^130.0.0",
+    "pdf-lib": "^1.17.1"
+  },
+  "engines": {
+    "node": "20"
+  },
+  "keywords": [
+    "ocr",
+    "gemini-2.0",
+    "handwriting",
+    "google-drive",
+    "pdf-splitting",
+    "cloud-functions"
+  ]
+}

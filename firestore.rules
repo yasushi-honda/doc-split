@@ -1,0 +1,60 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ユーザー認証チェック
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // ホワイトリスト登録済みユーザーかチェック
+    function isWhitelisted() {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    // 管理者かチェック
+    function isAdmin() {
+      return isWhitelisted() &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    // ドキュメント（書類管理）
+    match /documents/{docId} {
+      allow read: if isWhitelisted();
+      allow create, update: if isWhitelisted();
+      allow delete: if isAdmin();
+    }
+
+    // マスターデータ
+    match /masters/{masterId}/items/{itemId} {
+      allow read: if isWhitelisted();
+      allow write: if isAdmin();
+    }
+
+    // エラー履歴
+    match /errors/{errorId} {
+      allow read: if isWhitelisted();
+      allow write: if isAdmin();
+    }
+
+    // Gmail受信ログ
+    match /gmailLogs/{logId} {
+      allow read: if isWhitelisted();
+      allow write: if false; // Cloud Functionsのみ
+    }
+
+    // ユーザー管理
+    match /users/{userId} {
+      allow read: if isAuthenticated() && request.auth.uid == userId;
+      allow read, write: if isAdmin();
+    }
+
+    // アプリ設定
+    match /settings/{settingId} {
+      allow read: if isWhitelisted();
+      allow write: if isAdmin();
+    }
+  }
+}

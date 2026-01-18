@@ -1,0 +1,36 @@
+{
+  "name": "docsplit",
+  "version": "0.1.0",
+  "private": true,
+  "description": "DocSplit - AI-powered document management system",
+  "scripts": {
+    "dev": "cd frontend && npm run dev",
+    "build": "cd frontend && npm run build",
+    "build:functions": "cd functions && npm run build",
+    "deploy": "firebase deploy",
+    "deploy:hosting": "firebase deploy --only hosting",
+    "deploy:functions": "firebase deploy --only functions",
+    "deploy:rules": "firebase deploy --only firestore:rules,storage",
+    "emulators": "firebase emulators:start",
+    "lint": "npm run lint:frontend && npm run lint:functions",
+    "lint:frontend": "cd frontend && npm run lint",
+    "lint:functions": "cd functions && npm run lint"
+  },
+  "workspaces": [
+    "frontend",
+    "functions",
+    "scripts",
+    "shared"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "keywords": [
+    "document-management",
+    "ocr",
+    "firebase",
+    "gcp"
+  ],
+  "author": "",
+  "license": "UNLICENSED"
+}
