@@ -29,13 +29,25 @@ created_at: "2026-01-17"
 
 ## 参考ドキュメント
 
-- 完全仕様: `docs/Application_Documentation.md`
+- 完全仕様: `docs/reference/appsheet-full-spec.md`
 - セクション別:
-  - `docs/sections/00_overview.md` - 概要
-  - `docs/sections/01_data.md` - データモデル
-  - `docs/sections/02_ux.md` - UI/UX
-  - `docs/sections/03_behavior.md` - ビジネスロジック
+  - `docs/reference/sections/00_overview.md` - 概要
+  - `docs/reference/sections/01_data.md` - データモデル
+  - `docs/reference/sections/02_ux.md` - UI/UX
+  - `docs/reference/sections/03_behavior.md` - ビジネスロジック
 
-## 今後の開発方針
+## 開発方針（確定）
 
-TODO: 開発方針が決まり次第記載
+### 技術スタック
+- **バックエンド**: Cloud Functions (2nd gen) + Firestore + Cloud Storage
+- **フロントエンド**: Firebase Hosting + React + Vite + TypeScript
+- **認証**: Firebase Authentication (Googleログイン + ホワイトリスト)
+- **OCR**: Vertex AI Gemini 2.5 Flash
+
+### 納品形態
+- GCPプロジェクト移譲（シングルテナント）
+- マスタープロジェクトをコピー → 顧客固有設定変更 → 移譲
+
+### 開発完了状況
+全5フェーズ完了（2026-01-18）
+- 本番URL: https://doc-split-dev.web.app

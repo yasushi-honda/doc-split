@@ -1,7 +1,7 @@
 # ADR-0001: 技術スタック選定
 
 ## Status
-**Proposed** - 一部確定、一部要相談
+**Accepted** - 2026-01-18 全項目確定
 
 ## Context
 AppSheetで構築された書類管理アプリをGCPでリプレイス開発する。
@@ -27,13 +27,15 @@ AppSheetで構築された書類管理アプリをGCPでリプレイス開発す
 | ログ | **Cloud Logging** | GCPネイティブ |
 | 監視 | **Cloud Monitoring** | ヘルスチェック、アラート |
 
-### 要相談事項
+### 確定事項（追加）
 
-| レイヤー | 候補 | 現時点の方向性 | 決定基準 |
-|---------|------|---------------|----------|
-| データベース | Firestore / Cloud SQL | Firestore | クエリ要件の詳細確認後 |
-| ストレージ | Cloud Storage / Firebase Storage | Cloud Storage | コストと統合性のバランス |
-| フロントエンド | Cloud Run + React / 別ソリューション | 未定 | 管理UI要件の明確化後 |
+| レイヤー | 選定 | 理由 |
+|---------|------|------|
+| データベース | **Firestore** | 無料枠で十分、Firebase統合 |
+| ストレージ | **Cloud Storage** | Cloud Functions連携がメイン |
+| フロントエンド | **Firebase Hosting + React** | SPAに最適、無料枠内 |
+| UIライブラリ | **shadcn/ui + Tailwind CSS** | 軽量、カスタマイズ性 |
+| 状態管理 | **Zustand + TanStack Query** | シンプル、非同期対応 |
 
 ## Consequences
 
