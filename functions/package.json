@@ -2,7 +2,7 @@
   "name": "@docsplit/functions",
   "version": "0.1.0",
   "private": true,
-  "main": "lib/index.js",
+  "main": "lib/functions/src/index.js",
   "scripts": {
     "build": "tsc",
     "build:watch": "tsc --watch",
@@ -16,7 +16,7 @@
     "test:rules": "mocha --require ts-node/register --timeout 10000 'test/firestore.rules.test.ts'"
   },
   "engines": {
-    "node": ">=20"
+    "node": "22"
   },
   "dependencies": {
     "firebase-admin": "^12.7.0",

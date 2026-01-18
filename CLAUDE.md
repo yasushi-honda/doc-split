@@ -12,7 +12,7 @@ AppSheetで構築された書類管理アプリをGCPでリプレイス開発す
 Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、検索・グルーピング・閲覧が可能な**書類管理ビューアーアプリ**。
 
 ## 現在のステータス
-**フェーズ**: Phase 4完了、Phase 5（テスト・デプロイ）準備中
+**フェーズ**: Phase 5完了 - **本番デプロイ完了**
 
 ### 環境情報
 | 項目 | 値 |
@@ -22,7 +22,7 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
 | GitHubリポジトリ | `yasushi-honda/doc-split` |
 | Storageバケット | `doc-split-dev-documents` |
 | Firestoreエミュレータ | ポート `8085` |
-| Hostingプレビュー | `https://doc-split-dev--preview-5fqutx5j.web.app` |
+| **本番URL** | `https://doc-split-dev.web.app` |
 
 ### Phase 0 完了項目（2026-01-18）
 - [x] GCPプロジェクト作成・請求アカウント設定
@@ -75,11 +75,17 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
 - [x] DocumentDetailModalに分割ボタン追加
 - [x] マスターデータ編集画面（MastersPage: 顧客・書類種別・事業所・ケアマネCRUD）
 
-### Phase 5 未着手
-- [ ] Cloud Functions単体テスト
-- [ ] Firestoreルールテスト
-- [ ] フロントエンドE2Eテスト
-- [ ] 本番デプロイ・運用手順書
+### Phase 5 完了項目（2026-01-18）
+- [x] Firestoreルールテスト（22テストパス）
+- [x] Cloud Functions単体テスト（27テストパス - similarity utilities）
+- [x] 本番デプロイ
+  - Firebase Hosting: `https://doc-split-dev.web.app`
+  - Cloud Functions: 5関数デプロイ完了
+  - Firestoreルール: デプロイ完了
+- [x] 運用手順書作成
+  - docs/operation/user-guide.md: ユーザーガイド
+  - docs/operation/admin-guide.md: 管理者ガイド
+  - docs/operation/setup-guide.md: セットアップ手順書
 
 ## ドキュメント読込順序（AI向け）
 1. `docs/context/gcp-migration-scope.md` - 移行スコープ ★最重要
@@ -124,10 +130,22 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
 | ストレージ | **Cloud Storage** | Cloud Functions連携がメイン |
 | VPC Service Controls | **不要** | コスト制約、アプリ層で担保 |
 
-## 次のステップ（Phase 5: テスト・デプロイ）
-1. **テスト**: Cloud Functions単体テスト、Firestoreルールテスト、E2Eテスト
-2. **本番デプロイ**: Firebase Hosting本番、Cloud Functionsデプロイ
-3. **運用ドキュメント**: ユーザーガイド、管理者ガイド、セットアップ手順書
+## 本番環境情報
+| 項目 | URL/情報 |
+|------|----------|
+| アプリURL | `https://doc-split-dev.web.app` |
+| Firebase Console | `https://console.firebase.google.com/project/doc-split-dev` |
+| GCP Console | `https://console.cloud.google.com/home/dashboard?project=doc-split-dev` |
+| Functions Logs | `https://console.firebase.google.com/project/doc-split-dev/functions/logs` |
+
+### デプロイ済みCloud Functions
+| 関数名 | トリガー | 説明 |
+|--------|----------|------|
+| checkGmailAttachments | Scheduled | Gmail添付ファイル取得 |
+| processOCR | Scheduled | AI OCR処理 |
+| detectSplitPoints | Callable | PDF分割候補検出 |
+| splitPdf | Callable | PDF分割実行 |
+| rotatePdfPages | Callable | PDFページ回転 |
 
 ## 設計完了済み
 - [x] 移行スコープ定義
@@ -186,7 +204,8 @@ doc-split/
 │   │       ├── rateLimiter.ts   # Geminiレート制限
 │   │       └── similarity.ts    # 類似度マッチング
 │   ├── test/                    # テスト
-│   │   └── firestore.rules.test.ts  # セキュリティルールテスト
+│   │   ├── firestore.rules.test.ts  # セキュリティルールテスト
+│   │   └── utils.test.ts        # ユーティリティテスト ★Phase 5
 │   └── package.json
 ├── scripts/                     # サポート用スクリプト
 │   ├── init-project.sh          # 顧客固有設定の変更
@@ -205,12 +224,16 @@ doc-split/
     │   ├── implementation-plan.md      # 完了チェックリスト付き
     │   ├── data-model.md
     │   ├── business-logic.md
-    │   ├── error-handling-policy.md    # ★NEW
-    │   └── gemini-rate-limiting.md     # ★NEW
+    │   ├── error-handling-policy.md
+    │   └── gemini-rate-limiting.md
+    ├── operation/                      # 運用ドキュメント ★Phase 5
+    │   ├── user-guide.md               # ユーザーガイド
+    │   ├── admin-guide.md              # 管理者ガイド
+    │   └── setup-guide.md              # セットアップ手順書
     ├── adr/
     │   ├── 0001-tech-stack-selection.md
     │   ├── 0002-security-design.md
-    │   ├── 0003-authentication-design.md  # 環境切替追加
+    │   ├── 0003-authentication-design.md
     │   └── 0004-frontend-architecture.md
     └── reference/
         ├── gas-source/                 # GASソースコード（要クローン）
