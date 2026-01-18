@@ -11,12 +11,12 @@
     "start": "npm run shell",
     "deploy": "firebase deploy --only functions",
     "logs": "firebase functions:log",
-    "lint": "eslint src --ext .ts",
-    "test": "mocha --require ts-node/register --timeout 10000 'test/**/*.test.ts'",
+    "lint": "eslint src test",
+    "test": "mocha --require ts-node/register --timeout 10000 'test/**/*.test.ts' --ignore 'test/firestore.rules.test.ts'",
     "test:rules": "mocha --require ts-node/register --timeout 10000 'test/firestore.rules.test.ts'"
   },
   "engines": {
-    "node": "22"
+    "node": "20"
   },
   "dependencies": {
     "firebase-admin": "^12.7.0",
@@ -28,9 +28,12 @@
     "@google-cloud/secret-manager": "^5.6.0"
   },
   "devDependencies": {
+    "@eslint/js": "^9.15.0",
     "@typescript-eslint/eslint-plugin": "^8.15.0",
     "@typescript-eslint/parser": "^8.15.0",
     "eslint": "^9.15.0",
+    "globals": "^15.12.0",
+    "typescript-eslint": "^8.15.0",
     "typescript": "~5.6.2",
     "firebase-functions-test": "^3.3.0",
     "@firebase/rules-unit-testing": "^3.0.4",
