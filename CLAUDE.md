@@ -12,7 +12,7 @@ AppSheetで構築された書類管理アプリをGCPでリプレイス開発す
 Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、検索・グルーピング・閲覧が可能な**書類管理ビューアーアプリ**。
 
 ## 現在のステータス
-**フェーズ**: Phase 2完了 → Phase 3開始可能
+**フェーズ**: Phase 3進行中（UI基盤完了）
 
 ### 環境情報
 | 項目 | 値 |
@@ -59,6 +59,15 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
   - rateLimiter.ts: Geminiレート制限
   - similarity.ts: 類似度マッチング
 
+### Phase 3 進行中（2026-01-18）
+- [x] shadcn/ui セットアップ（Button, Card, Input, Badge, Dialog, Select）
+- [x] Firestore連携フック（useDocuments, useDocument, useDocumentStats等）
+- [x] DocumentsPage改善（統計カード、検索・フィルター、書類一覧テーブル）
+- [x] DocumentDetailModal（PDFビューアー統合、メタ情報サイドバー）
+- [ ] 設定画面（SettingsPage）
+- [ ] エラー履歴画面（ErrorsPage）
+- [ ] Firebase Hostingデプロイ
+
 ## ドキュメント読込順序（AI向け）
 1. `docs/context/gcp-migration-scope.md` - 移行スコープ ★最重要
 2. `docs/context/functional-requirements.md` - 機能要件
@@ -102,11 +111,10 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
 | ストレージ | **Cloud Storage** | Cloud Functions連携がメイン |
 | VPC Service Controls | **不要** | コスト制約、アプリ層で担保 |
 
-## 次のステップ（Phase 3: フロントエンド）
-1. **基盤構築**: React + Vite + TypeScript + Tailwind CSS + shadcn/ui
-2. **認証・ルーティング**: Firebase Authentication統合、ホワイトリストチェック
-3. **書類一覧画面**: Firestoreリアルタイム同期、検索・フィルター・グルーピング
-4. **PDFビューアー**: react-pdf (pdf.js)、ページナビゲーション、メタ情報表示
+## 次のステップ（Phase 3残り: フロントエンド）
+1. **設定画面**: Gmail監視設定、ユーザー管理（ホワイトリスト）
+2. **エラー履歴画面**: OCRエラー一覧、再処理機能
+3. **Firebase Hostingデプロイ**: 本番環境構築、環境変数設定
 
 ## 設計完了済み
 - [x] 移行スコープ定義
@@ -131,10 +139,17 @@ doc-split/
 ├── storage.rules                # Storageセキュリティルール
 ├── frontend/                    # Reactフロントエンド
 │   ├── src/
-│   │   ├── components/          # PdfViewer等
+│   │   ├── components/          # UIコンポーネント
+│   │   │   ├── ui/              # shadcn/ui ★Phase 3
+│   │   │   ├── PdfViewer.tsx    # PDFビューアー
+│   │   │   ├── DocumentDetailModal.tsx  # 詳細モーダル ★Phase 3
+│   │   │   └── Layout.tsx       # レイアウト
+│   │   ├── hooks/               # カスタムフック ★Phase 3
+│   │   │   └── useDocuments.ts  # Firestore連携
 │   │   ├── pages/               # 各画面
 │   │   ├── stores/              # Zustand
 │   │   └── lib/                 # Firebase SDK等
+│   ├── components.json          # shadcn/ui設定 ★Phase 3
 │   └── package.json
 ├── functions/                   # Cloud Functions
 │   ├── src/
