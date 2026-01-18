@@ -1,16 +1,10 @@
 import { useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { FileText } from 'lucide-react'
 import { useAuthStore } from '@/stores/authStore'
 
 export function LoginPage() {
   const navigate = useNavigate()
-  const { user, isLoading, signIn, initialize } = useAuthStore()
-
-  useEffect(() => {
-    const unsubscribe = initialize()
-    return unsubscribe
-  }, [initialize])
+  const { user, isLoading, signIn } = useAuthStore()
 
   useEffect(() => {
     if (user && !isLoading) {
@@ -35,23 +29,24 @@ export function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-brand-900 to-brand-950">
-      <div className="w-full max-w-md rounded-lg bg-white p-8 shadow-xl">
-        <div className="mb-8 flex flex-col items-center">
-          <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-brand-900 text-white">
-            <FileText className="h-8 w-8" />
-          </div>
-          <h1 className="text-2xl font-bold text-gray-900">DocSplit</h1>
-          <p className="mt-2 text-center text-gray-600">
+    <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-brand-900 to-brand-950 p-4">
+      <div className="w-full max-w-sm rounded-2xl bg-white px-6 py-8 shadow-xl sm:max-w-md sm:px-8">
+        <div className="mb-6 flex flex-col items-center">
+          <img
+            src="/app-icon.png"
+            alt="DocSplit"
+            className="mb-2 h-28 w-28 object-contain sm:h-32 sm:w-32"
+          />
+          <p className="text-center text-sm text-gray-600 sm:text-base">
             書類管理ビューアー
           </p>
         </div>
 
         <button
           onClick={handleSignIn}
-          className="flex w-full items-center justify-center gap-3 rounded-lg border border-gray-300 bg-white px-4 py-3 text-gray-700 shadow-sm transition-colors hover:bg-gray-50"
+          className="flex w-full items-center justify-center gap-3 rounded-lg border border-gray-300 bg-white px-4 py-3.5 text-base font-medium text-gray-700 shadow-sm transition-colors hover:bg-gray-50 active:bg-gray-100"
         >
-          <svg className="h-5 w-5" viewBox="0 0 24 24">
+          <svg className="h-5 w-5 flex-shrink-0" viewBox="0 0 24 24">
             <path
               fill="#4285F4"
               d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
@@ -72,7 +67,7 @@ export function LoginPage() {
           Googleでログイン
         </button>
 
-        <p className="mt-6 text-center text-xs text-gray-500">
+        <p className="mt-5 text-center text-xs text-gray-500">
           ※ 登録済みユーザーのみログイン可能です
         </p>
       </div>

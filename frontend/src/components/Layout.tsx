@@ -22,39 +22,43 @@ export function Layout() {
       {/* Header */}
       <header className="bg-brand-900 text-white shadow-lg">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-          <div className="flex h-16 items-center justify-between">
-            <div className="flex items-center gap-8">
+          <div className="flex h-14 items-center justify-between">
+            <div className="flex items-center gap-6">
               <Link to="/" className="flex items-center gap-2">
-                <FileText className="h-8 w-8" />
-                <span className="text-xl font-bold">DocSplit</span>
+                <img
+                  src="/app-icon.png"
+                  alt="DocSplit"
+                  className="h-9 w-9 rounded-lg object-contain"
+                />
+                <span className="hidden text-lg font-bold sm:inline">DocSplit</span>
               </Link>
 
-              <nav className="flex gap-4">
+              <nav className="flex gap-1">
                 {navigation.map((item) => (
                   <Link
                     key={item.name}
                     to={item.href}
-                    className={`flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
+                    className={`flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium transition-colors ${
                       location.pathname === item.href
-                        ? 'bg-brand-800 text-white'
-                        : 'text-brand-100 hover:bg-brand-800 hover:text-white'
+                        ? 'bg-brand-700 text-white'
+                        : 'text-brand-200 hover:bg-brand-800 hover:text-white'
                     }`}
                   >
                     <item.icon className="h-4 w-4" />
-                    {item.name}
+                    <span className="hidden sm:inline">{item.name}</span>
                   </Link>
                 ))}
               </nav>
             </div>
 
-            <div className="flex items-center gap-4">
-              <span className="text-sm text-brand-200">{user?.email}</span>
+            <div className="flex items-center gap-2 sm:gap-4">
+              <span className="hidden text-sm text-brand-200 sm:inline">{user?.email}</span>
               <button
                 onClick={() => signOut()}
-                className="flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-brand-100 hover:bg-brand-800 hover:text-white"
+                className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium text-brand-200 hover:bg-brand-800 hover:text-white"
               >
                 <LogOut className="h-4 w-4" />
-                ログアウト
+                <span className="hidden sm:inline">ログアウト</span>
               </button>
             </div>
           </div>
