@@ -12,7 +12,7 @@ AppSheetで構築された書類管理アプリをGCPでリプレイス開発す
 Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、検索・グルーピング・閲覧が可能な**書類管理ビューアーアプリ**。
 
 ## 現在のステータス
-**フェーズ**: Phase 1完了 → Phase 2開始可能
+**フェーズ**: Phase 2完了 → Phase 3開始可能
 
 ### 環境情報
 | 項目 | 値 |
@@ -38,6 +38,26 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
 - [x] Storageセキュリティルール更新（ファイルサイズ・MIME制限追加）
 - [x] マスターデータインポートスクリプト（顧客・書類・事業所・ケアマネ対応）
 - [x] プロジェクト初期設定スクリプト
+
+### Phase 2 完了項目（2026-01-18）
+- [x] Gmail連携 Cloud Function (`checkGmailAttachments`)
+  - OAuth 2.0 / Service Account認証切替対応
+  - Exponential Backoffリトライ機能
+  - エラーログ記録（Firestore /errors）
+  - マルチパートメール対応
+- [x] OCR処理 Cloud Function (`processOCR`)
+  - Gemini 2.5 Flash連携
+  - レート制限（トークンバケットアルゴリズム）
+  - コスト追跡（/stats/gemini/daily）
+  - 類似度マッチング（レーベンシュタイン距離、閾値70%）
+  - ページ単位PDF分割処理
+  - 令和/平成日付パターン対応
+- [x] 共通ユーティリティ（functions/src/utils/）
+  - retry.ts: リトライ機能
+  - errorLogger.ts: エラー分類・記録
+  - gmailAuth.ts: Gmail認証切替
+  - rateLimiter.ts: Geminiレート制限
+  - similarity.ts: 類似度マッチング
 
 ## ドキュメント読込順序（AI向け）
 1. `docs/context/gcp-migration-scope.md` - 移行スコープ ★最重要
@@ -82,10 +102,11 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
 | ストレージ | **Cloud Storage** | Cloud Functions連携がメイン |
 | VPC Service Controls | **不要** | コスト制約、アプリ層で担保 |
 
-## 次のステップ（Phase 2: バックエンド処理）
-1. **Gmail連携 Cloud Function**: `checkGmailAttachments` 実装
-2. **OCR処理 Cloud Function**: `processOCR` 実装（Gemini 2.5 Flash）
-3. **情報抽出ロジック**: 書類名・顧客名・事業所名のマッチング
+## 次のステップ（Phase 3: フロントエンド）
+1. **基盤構築**: React + Vite + TypeScript + Tailwind CSS + shadcn/ui
+2. **認証・ルーティング**: Firebase Authentication統合、ホワイトリストチェック
+3. **書類一覧画面**: Firestoreリアルタイム同期、検索・フィルター・グルーピング
+4. **PDFビューアー**: react-pdf (pdf.js)、ページナビゲーション、メタ情報表示
 
 ## 設計完了済み
 - [x] 移行スコープ定義
@@ -119,7 +140,13 @@ doc-split/
 │   ├── src/
 │   │   ├── gmail/               # checkGmailAttachments
 │   │   ├── ocr/                 # processOCR
-│   │   └── pdf/                 # pdfOperations（分割・回転）
+│   │   ├── pdf/                 # pdfOperations（分割・回転）
+│   │   └── utils/               # 共通ユーティリティ ★Phase 2
+│   │       ├── retry.ts         # リトライ機能
+│   │       ├── errorLogger.ts   # エラーログ
+│   │       ├── gmailAuth.ts     # Gmail認証切替
+│   │       ├── rateLimiter.ts   # Geminiレート制限
+│   │       └── similarity.ts    # 類似度マッチング
 │   ├── test/                    # テスト
 │   │   └── firestore.rules.test.ts  # セキュリティルールテスト
 │   └── package.json
