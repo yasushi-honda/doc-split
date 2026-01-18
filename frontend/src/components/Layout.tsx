@@ -1,5 +1,5 @@
 import { Outlet, Link, useLocation } from 'react-router-dom'
-import { FileText, Settings, LogOut, AlertCircle } from 'lucide-react'
+import { FileText, Settings, LogOut, AlertCircle, Database } from 'lucide-react'
 import { useAuthStore } from '@/stores/authStore'
 
 export function Layout() {
@@ -9,7 +9,12 @@ export function Layout() {
   const navigation = [
     { name: '書類一覧', href: '/', icon: FileText },
     { name: 'エラー履歴', href: '/errors', icon: AlertCircle },
-    ...(isAdmin ? [{ name: '設定', href: '/settings', icon: Settings }] : []),
+    ...(isAdmin
+      ? [
+          { name: 'マスター', href: '/masters', icon: Database },
+          { name: '設定', href: '/settings', icon: Settings },
+        ]
+      : []),
   ]
 
   return (

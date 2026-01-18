@@ -4,6 +4,7 @@ import { LoginPage } from '@/pages/LoginPage'
 import { DocumentsPage } from '@/pages/DocumentsPage'
 import { SettingsPage } from '@/pages/SettingsPage'
 import { ErrorsPage } from '@/pages/ErrorsPage'
+import { MastersPage } from '@/pages/MastersPage'
 import { AdminPage } from '@/pages/AdminPage'
 import { Layout } from '@/components/Layout'
 
@@ -54,6 +55,14 @@ export default function App() {
           element={
             <AdminRoute>
               <SettingsPage />
+            </AdminRoute>
+          }
+        />
+        <Route
+          path="masters"
+          element={
+            <AdminRoute>
+              <MastersPage />
             </AdminRoute>
           }
         />

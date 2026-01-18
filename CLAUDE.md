@@ -12,7 +12,7 @@ AppSheetで構築された書類管理アプリをGCPでリプレイス開発す
 Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、検索・グルーピング・閲覧が可能な**書類管理ビューアーアプリ**。
 
 ## 現在のステータス
-**フェーズ**: Phase 3完了、Phase 4準備中
+**フェーズ**: Phase 4完了、Phase 5（テスト・デプロイ）準備中
 
 ### 環境情報
 | 項目 | 値 |
@@ -69,11 +69,17 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
 - [x] エラー履歴画面（ErrorsPage）- エラー一覧、再処理機能、ステータス管理
 - [x] Firebase Hostingプレビューデプロイ
 
-### Phase 4 進行中（2026-01-18）
+### Phase 4 完了項目（2026-01-18）
 - [x] PDF分割バックエンド（Cloud Functions: detectSplitPoints, splitPdf, rotatePdfPages）
 - [x] PDF分割フロントエンド（PdfSplitModal: 分割候補表示、手動追加、セグメント編集）
 - [x] DocumentDetailModalに分割ボタン追加
-- [ ] マスターデータ編集画面
+- [x] マスターデータ編集画面（MastersPage: 顧客・書類種別・事業所・ケアマネCRUD）
+
+### Phase 5 未着手
+- [ ] Cloud Functions単体テスト
+- [ ] Firestoreルールテスト
+- [ ] フロントエンドE2Eテスト
+- [ ] 本番デプロイ・運用手順書
 
 ## ドキュメント読込順序（AI向け）
 1. `docs/context/gcp-migration-scope.md` - 移行スコープ ★最重要
@@ -118,10 +124,10 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
 | ストレージ | **Cloud Storage** | Cloud Functions連携がメイン |
 | VPC Service Controls | **不要** | コスト制約、アプリ層で担保 |
 
-## 次のステップ（Phase 4: 管理機能）
-1. **PDF分割機能**: OCRベースページ区切り検出、分割候補UI表示
-2. **分割実行**: 新規ドキュメント作成、元ドキュメントのstatus更新
-3. **マスターデータ編集**: 顧客・書類・事業所マスターの追加・編集UI
+## 次のステップ（Phase 5: テスト・デプロイ）
+1. **テスト**: Cloud Functions単体テスト、Firestoreルールテスト、E2Eテスト
+2. **本番デプロイ**: Firebase Hosting本番、Cloud Functionsデプロイ
+3. **運用ドキュメント**: ユーザーガイド、管理者ガイド、セットアップ手順書
 
 ## 設計完了済み
 - [x] 移行スコープ定義
@@ -156,11 +162,13 @@ doc-split/
 │   │   │   ├── useDocuments.ts  # Firestore書類連携
 │   │   │   ├── useSettings.ts   # 設定・ユーザー管理
 │   │   │   ├── useErrors.ts     # エラー履歴連携
-│   │   │   └── usePdfSplit.ts   # PDF分割連携 ★Phase 4
+│   │   │   ├── usePdfSplit.ts   # PDF分割連携
+│   │   │   └── useMasters.ts    # マスターデータCRUD ★Phase 4
 │   │   ├── pages/               # 各画面
 │   │   │   ├── DocumentsPage.tsx    # 書類一覧
-│   │   │   ├── SettingsPage.tsx     # 設定画面 ★Phase 3
-│   │   │   ├── ErrorsPage.tsx       # エラー履歴 ★Phase 3
+│   │   │   ├── SettingsPage.tsx     # 設定画面
+│   │   │   ├── ErrorsPage.tsx       # エラー履歴
+│   │   │   ├── MastersPage.tsx      # マスターデータ編集 ★Phase 4
 │   │   │   └── LoginPage.tsx        # ログイン
 │   │   ├── stores/              # Zustand
 │   │   └── lib/                 # Firebase SDK等
