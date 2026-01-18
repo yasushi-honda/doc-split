@@ -12,14 +12,25 @@ AppSheetで構築された書類管理アプリをGCPでリプレイス開発す
 Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、検索・グルーピング・閲覧が可能な**書類管理ビューアーアプリ**。
 
 ## 現在のステータス
-**フェーズ**: 設計・プラン完了 → 実装開始可能
+**フェーズ**: Phase 0完了 → Phase 1開始可能
 
-### 今セッションで完了
-- [x] Phase 0〜5 完了チェックリスト追加
-- [x] Gmail認証ADR更新（環境切替メカニズム）
-- [x] エラーハンドリングポリシー作成
-- [x] マスターデータCSVサンプル作成
-- [x] Geminiレート制限詳細設計
+### 環境情報
+| 項目 | 値 |
+|------|-----|
+| GCPプロジェクト | `doc-split-dev` |
+| リージョン | `asia-northeast1` |
+| GitHubリポジトリ | `yasushi-honda/doc-split` |
+| Storageバケット | `doc-split-dev-documents` |
+| Firestoreエミュレータ | ポート `8085` |
+
+### Phase 0 完了項目（2026-01-18）
+- [x] GCPプロジェクト作成・請求アカウント設定
+- [x] 必要API有効化（Functions, Firestore, Storage, Pub/Sub, Vertex AI等）
+- [x] Firebase連携・Firestoreデータベース作成
+- [x] Firebase Authentication（Googleプロバイダー）有効化
+- [x] Cloud Storageバケット作成
+- [x] エミュレータ動作確認
+- [x] GitHubリポジトリ作成・初期プッシュ
 
 ## ドキュメント読込順序（AI向け）
 1. `docs/context/gcp-migration-scope.md` - 移行スコープ ★最重要
@@ -64,10 +75,10 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
 | ストレージ | **Cloud Storage** | Cloud Functions連携がメイン |
 | VPC Service Controls | **不要** | コスト制約、アプリ層で担保 |
 
-## 次のステップ
-1. **Git初期化**: プロジェクトをバージョン管理下に置く
-2. **Phase 0開始**: GCPプロジェクト作成、Firebase設定
-3. **GASソース分析**: 改善ポイントの詳細調査（オプション）
+## 次のステップ（Phase 1: データ基盤）
+1. **Firestoreスキーマ実装**: `/documents`, `/masters/*`, `/users` 等
+2. **セキュリティルール**: Firestore/Storage ルール実装・テスト
+3. **マスターデータ構造**: 投入スクリプト準備
 
 ## 設計完了済み
 - [x] 移行スコープ定義
