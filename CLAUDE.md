@@ -162,15 +162,75 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
 - [ ] コスト監視・予算アラート設定
 - [ ] Cloud Monitoring エラー通知設定
 
-## ドキュメント読込順序（AI向け）
+## ドキュメント構成（AI向け）
+
+### 役割別ディレクトリ
+| ディレクトリ | 用途 | 対象 |
+|-------------|------|------|
+| `docs/context/` | **開発用詳細ドキュメント（マスター）** | AI/開発者 |
+| `docs/adr/` | アーキテクチャ決定記録 | AI/開発者 |
+| `docs/operation/` | 運用ドキュメント詳細 | 納品先管理者 |
+| `docs/直下` | GitHub Pages公開用（簡略版） | 外部向け |
+| `docs/reference/` | 旧システム参照資料（アーカイブ） | 必要時のみ |
+
+### 読込優先順序
 1. `docs/context/gcp-migration-scope.md` - 移行スコープ ★最重要
 2. `docs/context/functional-requirements.md` - 機能要件
 3. `docs/context/implementation-plan.md` - 実装計画（各Phase完了条件付き）
 4. `docs/context/data-model.md` - データモデル（Firestoreスキーマ）
-5. `docs/context/error-handling-policy.md` - エラーハンドリング ★NEW
-6. `docs/context/gemini-rate-limiting.md` - Geminiレート制限 ★NEW
+5. `docs/context/error-handling-policy.md` - エラーハンドリング
+6. `docs/context/gemini-rate-limiting.md` - Geminiレート制限
 7. `docs/context/business-logic.md` - ビジネスロジック
 8. `docs/adr/` - アーキテクチャ決定記録
+
+**注意**: `docs/直下`のファイル（data-model.md等）はGitHub Pages用の簡略版。AI開発時は`docs/context/`を参照すること。
+
+## 開発コマンド
+
+### ローカル開発
+```bash
+# フロントエンド開発サーバー
+cd frontend && npm run dev
+
+# Firebaseエミュレータ起動
+firebase emulators:start
+
+# 全体ビルド確認
+npm run build
+```
+
+### テスト
+```bash
+# Functions単体テスト
+cd functions && npm test
+
+# Firestoreルールテスト
+cd functions && npm run test:rules
+
+# フロントエンドテスト
+cd frontend && npm test
+```
+
+### デプロイ
+```bash
+# 全体デプロイ（本番）
+firebase deploy
+
+# Functionsのみ
+firebase deploy --only functions
+
+# Hostingのみ
+firebase deploy --only hosting
+
+# ルールのみ
+firebase deploy --only firestore:rules,storage
+```
+
+### マスターデータ
+```bash
+# マスターデータインポート
+node scripts/import-masters.js --file scripts/samples/customers.csv --type customers
+```
 
 ## 確定事項
 | カテゴリ | 選定 |
