@@ -1,68 +1,66 @@
----
-title: "書類管理アプリ GCP移行プロジェクト"
-description: "AI駆動開発に最適化されたドキュメント構成"
----
+# DocSplit
 
-# 書類管理アプリ GCP移行プロジェクト
+> AI-powered 書類管理ビューアー
 
-AppSheetで構築された書類管理アプリをGCPでリプレイス開発するプロジェクト。
+<div align="center">
+  <img src="https://doc-split-dev.web.app/app-icon.png" alt="DocSplit" width="150">
+</div>
 
-## クイックスタート（AI向け）
+## 概要
 
-**コンテキスト読込順序:**
-1. `context/project-background.md` - プロジェクト背景
-2. `context/data-model.md` - データモデル（ERD図）
-3. `context/business-logic.md` - ビジネスロジック（ワークフロー図）
-4. `context/gcp-migration-scope.md` - 移行スコープ
+**DocSplit**は、Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、検索・グルーピング・閲覧が可能な書類管理ビューアーアプリです。
 
-## ドキュメント構成
+## 主な特徴
 
+| 特徴 | 説明 |
+|------|------|
+| **Gmail自動連携** | 指定したGmailアカウントから添付ファイルを自動取得 |
+| **AI OCR** | Gemini 2.5 Flashでメタ情報（顧客名、日付、書類種別）を自動抽出 |
+| **PDF分割** | 複数書類が結合されたPDFを自動検出・分割 |
+| **検索・フィルター** | 顧客名、書類種別、日付などで柔軟に検索 |
+| **ホワイトリスト認証** | 登録済みユーザーのみアクセス可能 |
+
+## クイックリンク
+
+- [プロジェクト概要](overview.md) - 詳細な機能説明
+- [アーキテクチャ](architecture.md) - システム構成図
+- [納品フロー](deployment-flow.md) - クライアントへの納品手順
+- [セットアップ手順](setup-guide.md) - 初期設定ガイド
+
+## 技術スタック
+
+```mermaid
+graph LR
+    subgraph Frontend
+        A[React + Vite]
+        B[shadcn/ui]
+        C[TanStack Query]
+    end
+
+    subgraph Backend
+        D[Cloud Functions]
+        E[Firestore]
+        F[Cloud Storage]
+    end
+
+    subgraph AI/External
+        G[Gemini 2.5 Flash]
+        H[Gmail API]
+    end
+
+    A --> D
+    D --> E
+    D --> F
+    D --> G
+    D --> H
 ```
-docs/
-├── README.md                    # このファイル
-├── context/                     # AI向け要約（優先読込）
-│   ├── project-background.md    # プロジェクト背景
-│   ├── data-model.md            # ERD + テーブル関係
-│   ├── business-logic.md        # ワークフロー要約
-│   └── gcp-migration-scope.md   # 移行スコープ・要件
-├── adr/                         # アーキテクチャ決定記録
-│   ├── 0001-tech-stack-selection.md   # 技術スタック選定
-│   ├── 0002-security-design.md        # セキュリティ設計
-│   └── 0003-authentication-design.md  # 認証設計
-└── reference/                   # 詳細参照用
-    ├── appsheet-full-spec.md    # 完全版仕様書（595KB）
-    └── sections/                # セクション別
-        ├── 00_overview.md
-        ├── 01_data.md           # テーブル・カラム詳細
-        ├── 02_ux.md             # ビュー詳細
-        └── 03_behavior.md       # アクション詳細
-```
 
-## 用途別ガイド
+## ステータス
 
-### 設計議論時
-```
-読込: context/data-model.md + context/business-logic.md
-```
-
-### 技術選定時
-```
-読込: context/gcp-migration-scope.md
-作成: adr/0001-tech-stack-selection.md
-```
-
-### 詳細仕様確認時
-```
-読込: reference/sections/01_data.md (特定テーブル)
-```
-
-## 元システム概要
-
-| 項目 | 値 |
-|------|-----|
-| プラットフォーム | AppSheet |
-| テーブル数 | 30 |
-| カラム数 | 593 |
-| ビュー数 | 26 |
-| アクション数 | 30 |
-| 主要機能 | OCR書類分類、顧客紐付け |
+| 項目 | 状態 |
+|------|------|
+| Phase 0-5 | ✅ 完了 |
+| Phase 6 (ビジネスロジック) | ✅ 完了 |
+| CI/CD | ✅ 完了 |
+| テスト | ✅ 132テストパス |
+| 本番デプロイ | ✅ 稼働中 |
