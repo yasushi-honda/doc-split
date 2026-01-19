@@ -6,17 +6,32 @@
  *   node import-masters.js --customers customers.csv
  *   node import-masters.js --documents documents.csv
  *   node import-masters.js --offices offices.csv
+ *   node import-masters.js --caremanagers caremanagers.csv
  *   node import-masters.js --all ./data/
+ *
+ * 環境変数:
+ *   GCLOUD_PROJECT または FIREBASE_PROJECT_ID: プロジェクトID（デフォルト: doc-split-dev）
+ *
+ * 事前準備:
+ *   gcloud auth application-default login
  */
 
 const admin = require('firebase-admin');
 const fs = require('fs');
 const path = require('path');
-const readline = require('readline');
 
-// Firebase初期化
+// プロジェクトID取得（環境変数 > デフォルト）
+const projectId = process.env.GCLOUD_PROJECT
+  || process.env.FIREBASE_PROJECT_ID
+  || process.env.CLOUDSDK_CORE_PROJECT
+  || 'doc-split-dev';
+
+// Firebase初期化（ADC使用）
 if (!admin.apps.length) {
-  admin.initializeApp();
+  admin.initializeApp({
+    projectId: projectId,
+  });
+  console.log(`Firebase初期化: プロジェクト=${projectId}`);
 }
 
 const db = admin.firestore();
@@ -65,6 +80,15 @@ async function importCustomers(filePath) {
   console.log(`  ✓ ${count}件の顧客をインポートしました`);
 }
 
+// キーワード文字列を配列に変換（セミコロン区切り、2文字未満除外）
+function parseKeywords(keywordsStr) {
+  if (!keywordsStr) return [];
+  return keywordsStr
+    .split(';')
+    .map((k) => k.trim())
+    .filter((k) => k.length >= 2);
+}
+
 // 書類マスターをインポート
 async function importDocuments(filePath) {
   console.log(`書類マスターをインポート: ${filePath}`);
@@ -76,13 +100,15 @@ async function importDocuments(filePath) {
   let count = 0;
 
   for (const row of rows) {
-    // 期待するカラム: name, dateMarker, category
+    // 期待するカラム: name, dateMarker, category, keywords
     const name = row['name'] || row['書類名'] || '';
     const docRef = db.collection('masters/documents/items').doc(name);
+    const keywords = parseKeywords(row['keywords'] || row['キーワード'] || '');
     batch.set(docRef, {
       name,
       dateMarker: row['dateMarker'] || row['日付位置'] || '',
       category: row['category'] || row['カテゴリー'] || '',
+      keywords,
     });
     count++;
   }

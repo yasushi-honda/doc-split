@@ -184,9 +184,9 @@ const db = getFirestore();
 const auth = getAuth();
 
 async function main() {
-    // アプリ設定を投入
+    // アプリ設定を投入（ラベルは空で初期化、管理者が設定画面で追加）
     await db.doc('settings/app').set({
-        targetLabels: ['INBOX'],
+        targetLabels: [],
         labelSearchOperator: 'OR',
         errorNotificationEmails: ['$ADMIN_EMAIL'],
         gmailAccount: '$GMAIL_ACCOUNT',

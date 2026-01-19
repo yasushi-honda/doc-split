@@ -13,6 +13,8 @@ import {
   Trash2,
   Pencil,
   Search,
+  Download,
+  Upload,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -42,18 +44,26 @@ import {
   useAddCustomer,
   useUpdateCustomer,
   useDeleteCustomer,
+  useBulkImportCustomers,
   useDocumentTypes,
   useAddDocumentType,
   useUpdateDocumentType,
   useDeleteDocumentType,
+  useImportDocumentTypeSeeds,
+  DOCUMENT_TYPE_SEEDS,
   useOffices,
   useAddOffice,
+  useUpdateOffice,
   useDeleteOffice,
+  useBulkImportOffices,
   useCareManagers,
   useAddCareManager,
+  useUpdateCareManager,
   useDeleteCareManager,
 } from '@/hooks/useMasters'
-import type { CustomerMaster, DocumentMaster } from '@shared/types'
+import { CsvImportModal } from '@/components/CsvImportModal'
+import type { CustomerCSVRow, OfficeCSVRow } from '@/lib/csvParser'
+import type { CustomerMaster, DocumentMaster, OfficeMaster, CareManagerMaster } from '@shared/types'
 
 export function MastersPage() {
   return (
@@ -111,9 +121,11 @@ function CustomersMaster() {
   const addCustomer = useAddCustomer()
   const updateCustomer = useUpdateCustomer()
   const deleteCustomer = useDeleteCustomer()
+  const bulkImport = useBulkImportCustomers()
 
   const [searchText, setSearchText] = useState('')
   const [isAddOpen, setIsAddOpen] = useState(false)
+  const [isCsvImportOpen, setIsCsvImportOpen] = useState(false)
   const [editingCustomer, setEditingCustomer] = useState<CustomerMaster | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<CustomerMaster | null>(null)
 
@@ -121,6 +133,10 @@ function CustomersMaster() {
   const [formName, setFormName] = useState('')
   const [formFurigana, setFormFurigana] = useState('')
   const [formIsDuplicate, setFormIsDuplicate] = useState(false)
+
+  const handleCsvImport = async (data: CustomerCSVRow[]) => {
+    return await bulkImport.mutateAsync(data)
+  }
 
   const filteredCustomers = customers?.filter(
     (c) =>
@@ -176,10 +192,16 @@ function CustomersMaster() {
           <CardTitle>顧客マスター</CardTitle>
           <CardDescription>{customers?.length ?? 0}件の顧客</CardDescription>
         </div>
-        <Button onClick={() => { resetForm(); setIsAddOpen(true) }}>
-          <Plus className="h-4 w-4 mr-2" />
-          追加
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => setIsCsvImportOpen(true)}>
+            <Upload className="h-4 w-4 mr-2" />
+            CSVインポート
+          </Button>
+          <Button onClick={() => { resetForm(); setIsAddOpen(true) }}>
+            <Plus className="h-4 w-4 mr-2" />
+            追加
+          </Button>
+        </div>
       </CardHeader>
       <CardContent>
         <div className="mb-4">
@@ -354,6 +376,14 @@ function CustomersMaster() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+
+        {/* CSVインポートモーダル */}
+        <CsvImportModal
+          type="customer"
+          isOpen={isCsvImportOpen}
+          onClose={() => setIsCsvImportOpen(false)}
+          onImport={handleCsvImport}
+        />
       </CardContent>
     </Card>
   )
@@ -368,15 +398,24 @@ function DocumentTypesMaster() {
   const addDocumentType = useAddDocumentType()
   const updateDocumentType = useUpdateDocumentType()
   const deleteDocumentType = useDeleteDocumentType()
+  const importSeeds = useImportDocumentTypeSeeds()
 
   const [searchText, setSearchText] = useState('')
   const [isAddOpen, setIsAddOpen] = useState(false)
   const [editingDoc, setEditingDoc] = useState<DocumentMaster | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<DocumentMaster | null>(null)
+  const [seedResult, setSeedResult] = useState<{ imported: number; skipped: number } | null>(null)
 
   const [formName, setFormName] = useState('')
   const [formDateMarker, setFormDateMarker] = useState('')
   const [formCategory, setFormCategory] = useState('')
+  const [formKeywords, setFormKeywords] = useState('')
+
+  const handleImportSeeds = async () => {
+    const result = await importSeeds.mutateAsync()
+    setSeedResult(result)
+    setTimeout(() => setSeedResult(null), 5000) // 5秒後に消す
+  }
 
   const filteredDocs = documentTypes?.filter(
     (d) =>
@@ -389,6 +428,7 @@ function DocumentTypesMaster() {
       name: formName,
       dateMarker: formDateMarker,
       category: formCategory,
+      keywords: formKeywords,
     })
     resetForm()
     setIsAddOpen(false)
@@ -401,6 +441,7 @@ function DocumentTypesMaster() {
       name: formName,
       dateMarker: formDateMarker,
       category: formCategory,
+      keywords: formKeywords,
     })
     resetForm()
     setEditingDoc(null)
@@ -416,6 +457,7 @@ function DocumentTypesMaster() {
     setFormName(doc.name)
     setFormDateMarker(doc.dateMarker)
     setFormCategory(doc.category)
+    setFormKeywords(doc.keywords?.join(';') || '')
     setEditingDoc(doc)
   }
 
@@ -423,6 +465,7 @@ function DocumentTypesMaster() {
     setFormName('')
     setFormDateMarker('')
     setFormCategory('')
+    setFormKeywords('')
   }
 
   return (
@@ -430,12 +473,30 @@ function DocumentTypesMaster() {
       <CardHeader className="flex flex-row items-center justify-between">
         <div>
           <CardTitle>書類種別マスター</CardTitle>
-          <CardDescription>{documentTypes?.length ?? 0}件の書類種別</CardDescription>
+          <CardDescription>
+            {documentTypes?.length ?? 0}件の書類種別
+            {seedResult && (
+              <span className="ml-2 text-green-600">
+                （{seedResult.imported}件追加、{seedResult.skipped}件スキップ）
+              </span>
+            )}
+          </CardDescription>
         </div>
-        <Button onClick={() => { resetForm(); setIsAddOpen(true) }}>
-          <Plus className="h-4 w-4 mr-2" />
-          追加
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            onClick={handleImportSeeds}
+            disabled={importSeeds.isPending}
+            title={`介護関係の書類種別${DOCUMENT_TYPE_SEEDS.length}種類を追加`}
+          >
+            <Download className="h-4 w-4 mr-2" />
+            {importSeeds.isPending ? '追加中...' : '初期データ追加'}
+          </Button>
+          <Button onClick={() => { resetForm(); setIsAddOpen(true) }}>
+            <Plus className="h-4 w-4 mr-2" />
+            追加
+          </Button>
+        </div>
       </CardHeader>
       <CardContent>
         <div className="mb-4">
@@ -459,13 +520,14 @@ function DocumentTypesMaster() {
                 <TableHead>書類名</TableHead>
                 <TableHead>日付マーカー</TableHead>
                 <TableHead>カテゴリ</TableHead>
+                <TableHead>キーワード</TableHead>
                 <TableHead className="w-[100px]">操作</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {filteredDocs?.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={4} className="text-center text-gray-500">
+                  <TableCell colSpan={5} className="text-center text-gray-500">
                     書類種別がありません
                   </TableCell>
                 </TableRow>
@@ -476,6 +538,16 @@ function DocumentTypesMaster() {
                     <TableCell>{doc.dateMarker || '-'}</TableCell>
                     <TableCell>
                       <Badge variant="outline">{doc.category}</Badge>
+                    </TableCell>
+                    <TableCell className="max-w-[200px]">
+                      {doc.keywords && doc.keywords.length > 0 ? (
+                        <span className="text-xs text-gray-500 truncate block" title={doc.keywords.join('; ')}>
+                          {doc.keywords.slice(0, 3).join('; ')}
+                          {doc.keywords.length > 3 && ` 他${doc.keywords.length - 3}件`}
+                        </span>
+                      ) : (
+                        <span className="text-gray-400">-</span>
+                      )}
                     </TableCell>
                     <TableCell>
                       <div className="flex gap-1">
@@ -537,6 +609,17 @@ function DocumentTypesMaster() {
                   placeholder="介護保険"
                 />
               </div>
+              <div className="space-y-2">
+                <Label>照合用キーワード</Label>
+                <Input
+                  value={formKeywords}
+                  onChange={(e) => setFormKeywords(e.target.value)}
+                  placeholder="被保険者証;介護保険;要介護"
+                />
+                <p className="text-xs text-gray-500">
+                  セミコロン(;)区切りで複数指定可。OCRテキストにキーワードが含まれると書類種別として認識されやすくなります
+                </p>
+              </div>
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setIsAddOpen(false)}>
@@ -576,6 +659,17 @@ function DocumentTypesMaster() {
                   value={formCategory}
                   onChange={(e) => setFormCategory(e.target.value)}
                 />
+              </div>
+              <div className="space-y-2">
+                <Label>照合用キーワード</Label>
+                <Input
+                  value={formKeywords}
+                  onChange={(e) => setFormKeywords(e.target.value)}
+                  placeholder="被保険者証;介護保険;要介護"
+                />
+                <p className="text-xs text-gray-500">
+                  セミコロン(;)区切りで複数指定可
+                </p>
               </div>
             </div>
             <DialogFooter>
@@ -624,64 +718,216 @@ function DocumentTypesMaster() {
 function OfficesMaster() {
   const { data: offices, isLoading } = useOffices()
   const addOffice = useAddOffice()
+  const updateOffice = useUpdateOffice()
   const deleteOffice = useDeleteOffice()
+  const bulkImport = useBulkImportOffices()
 
-  const [newName, setNewName] = useState('')
-  const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
+  const [searchText, setSearchText] = useState('')
+  const [isAddOpen, setIsAddOpen] = useState(false)
+  const [editingOffice, setEditingOffice] = useState<OfficeMaster | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<OfficeMaster | null>(null)
+  const [isCsvImportOpen, setIsCsvImportOpen] = useState(false)
+
+  // フォーム状態
+  const [formName, setFormName] = useState('')
+  const [formShortName, setFormShortName] = useState('')
+
+  const filteredOffices = offices?.filter(
+    (o) =>
+      o.name.includes(searchText) ||
+      (o.shortName?.includes(searchText) ?? false)
+  )
 
   const handleAdd = async () => {
-    if (!newName.trim()) return
-    await addOffice.mutateAsync(newName.trim())
-    setNewName('')
+    if (!formName.trim()) return
+    await addOffice.mutateAsync(formName.trim())
+    resetForm()
+    setIsAddOpen(false)
+  }
+
+  const handleUpdate = async () => {
+    if (!editingOffice) return
+    await updateOffice.mutateAsync({
+      originalName: editingOffice.name,
+      name: formName,
+      shortName: formShortName,
+    })
+    resetForm()
+    setEditingOffice(null)
   }
 
   const handleDelete = async () => {
     if (!deleteTarget) return
-    await deleteOffice.mutateAsync(deleteTarget)
+    await deleteOffice.mutateAsync(deleteTarget.name)
     setDeleteTarget(null)
+  }
+
+  const openEdit = (office: OfficeMaster) => {
+    setFormName(office.name)
+    setFormShortName(office.shortName || '')
+    setEditingOffice(office)
+  }
+
+  const resetForm = () => {
+    setFormName('')
+    setFormShortName('')
+  }
+
+  const handleCsvImport = async (data: OfficeCSVRow[]) => {
+    return await bulkImport.mutateAsync(data)
   }
 
   return (
     <Card>
-      <CardHeader>
-        <CardTitle>事業所マスター</CardTitle>
-        <CardDescription>{offices?.length ?? 0}件の事業所</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <div className="flex gap-2 mb-4">
-          <Input
-            placeholder="事業所名を入力..."
-            value={newName}
-            onChange={(e) => setNewName(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleAdd()}
-          />
-          <Button onClick={handleAdd} disabled={!newName.trim() || addOffice.isPending}>
+      <CardHeader className="flex flex-row items-center justify-between">
+        <div>
+          <CardTitle>事業所マスター</CardTitle>
+          <CardDescription>{offices?.length ?? 0}件の事業所</CardDescription>
+        </div>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => setIsCsvImportOpen(true)}>
+            <Upload className="h-4 w-4 mr-2" />
+            CSVインポート
+          </Button>
+          <Button onClick={() => { resetForm(); setIsAddOpen(true) }}>
             <Plus className="h-4 w-4 mr-2" />
             追加
           </Button>
         </div>
+      </CardHeader>
+      <CardContent>
+        <div className="mb-4">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+            <Input
+              placeholder="事業所名・略称で検索..."
+              value={searchText}
+              onChange={(e) => setSearchText(e.target.value)}
+              className="pl-10"
+            />
+          </div>
+        </div>
 
         {isLoading ? (
           <div className="text-center py-8">読み込み中...</div>
-        ) : offices?.length === 0 ? (
-          <div className="text-center py-8 text-gray-500">
-            事業所がありません
-          </div>
         ) : (
-          <div className="flex flex-wrap gap-2">
-            {offices?.map((office) => (
-              <Badge key={office.name} variant="secondary" className="gap-1 py-1.5 px-3">
-                {office.name}
-                <button
-                  onClick={() => setDeleteTarget(office.name)}
-                  className="ml-1 hover:text-red-500"
-                >
-                  <Trash2 className="h-3 w-3" />
-                </button>
-              </Badge>
-            ))}
-          </div>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>事業所名</TableHead>
+                <TableHead>略称</TableHead>
+                <TableHead className="w-[100px]">操作</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {filteredOffices?.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={3} className="text-center text-gray-500">
+                    事業所がありません
+                  </TableCell>
+                </TableRow>
+              ) : (
+                filteredOffices?.map((office) => (
+                  <TableRow key={office.name}>
+                    <TableCell className="font-medium">{office.name}</TableCell>
+                    <TableCell>{office.shortName || '-'}</TableCell>
+                    <TableCell>
+                      <div className="flex gap-1">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => openEdit(office)}
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="text-red-500"
+                          onClick={() => setDeleteTarget(office)}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
         )}
+
+        {/* 追加ダイアログ */}
+        <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>事業所追加</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4 py-4">
+              <div className="space-y-2">
+                <Label>事業所名</Label>
+                <Input
+                  value={formName}
+                  onChange={(e) => setFormName(e.target.value)}
+                  placeholder="○○介護サービス"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>略称（オプション）</Label>
+                <Input
+                  value={formShortName}
+                  onChange={(e) => setFormShortName(e.target.value)}
+                  placeholder="○○介護"
+                />
+                <p className="text-xs text-gray-500">
+                  OCRで事業所を照合する際に使用する短い名称
+                </p>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setIsAddOpen(false)}>
+                キャンセル
+              </Button>
+              <Button onClick={handleAdd} disabled={!formName.trim() || addOffice.isPending}>
+                追加
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* 編集ダイアログ */}
+        <Dialog open={!!editingOffice} onOpenChange={() => setEditingOffice(null)}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>事業所編集</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4 py-4">
+              <div className="space-y-2">
+                <Label>事業所名</Label>
+                <Input
+                  value={formName}
+                  onChange={(e) => setFormName(e.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>略称（オプション）</Label>
+                <Input
+                  value={formShortName}
+                  onChange={(e) => setFormShortName(e.target.value)}
+                  placeholder="○○介護"
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setEditingOffice(null)}>
+                キャンセル
+              </Button>
+              <Button onClick={handleUpdate} disabled={!formName.trim() || updateOffice.isPending}>
+                保存
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         {/* 削除確認 */}
         <Dialog open={!!deleteTarget} onOpenChange={() => setDeleteTarget(null)}>
@@ -689,7 +935,7 @@ function OfficesMaster() {
             <DialogHeader>
               <DialogTitle>削除確認</DialogTitle>
               <DialogDescription>
-                「{deleteTarget}」を削除しますか？
+                「{deleteTarget?.name}」を削除しますか？
               </DialogDescription>
             </DialogHeader>
             <DialogFooter>
@@ -706,6 +952,14 @@ function OfficesMaster() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+
+        {/* CSVインポートモーダル */}
+        <CsvImportModal
+          type="office"
+          isOpen={isCsvImportOpen}
+          onClose={() => setIsCsvImportOpen(false)}
+          onImport={handleCsvImport}
+        />
       </CardContent>
     </Card>
   )
@@ -718,64 +972,177 @@ function OfficesMaster() {
 function CareManagersMaster() {
   const { data: careManagers, isLoading } = useCareManagers()
   const addCareManager = useAddCareManager()
+  const updateCareManager = useUpdateCareManager()
   const deleteCareManager = useDeleteCareManager()
 
-  const [newName, setNewName] = useState('')
-  const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
+  const [searchText, setSearchText] = useState('')
+  const [isAddOpen, setIsAddOpen] = useState(false)
+  const [editingCM, setEditingCM] = useState<CareManagerMaster | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<CareManagerMaster | null>(null)
+
+  // フォーム状態
+  const [formName, setFormName] = useState('')
+
+  const filteredCMs = careManagers?.filter(
+    (cm) => cm.name.includes(searchText)
+  )
 
   const handleAdd = async () => {
-    if (!newName.trim()) return
-    await addCareManager.mutateAsync(newName.trim())
-    setNewName('')
+    if (!formName.trim()) return
+    await addCareManager.mutateAsync(formName.trim())
+    resetForm()
+    setIsAddOpen(false)
+  }
+
+  const handleUpdate = async () => {
+    if (!editingCM) return
+    await updateCareManager.mutateAsync({
+      originalName: editingCM.name,
+      name: formName,
+    })
+    resetForm()
+    setEditingCM(null)
   }
 
   const handleDelete = async () => {
     if (!deleteTarget) return
-    await deleteCareManager.mutateAsync(deleteTarget)
+    await deleteCareManager.mutateAsync(deleteTarget.name)
     setDeleteTarget(null)
+  }
+
+  const openEdit = (cm: CareManagerMaster) => {
+    setFormName(cm.name)
+    setEditingCM(cm)
+  }
+
+  const resetForm = () => {
+    setFormName('')
   }
 
   return (
     <Card>
-      <CardHeader>
-        <CardTitle>ケアマネージャーマスター</CardTitle>
-        <CardDescription>{careManagers?.length ?? 0}件のケアマネ</CardDescription>
+      <CardHeader className="flex flex-row items-center justify-between">
+        <div>
+          <CardTitle>ケアマネージャーマスター</CardTitle>
+          <CardDescription>{careManagers?.length ?? 0}件のケアマネ</CardDescription>
+        </div>
+        <Button onClick={() => { resetForm(); setIsAddOpen(true) }}>
+          <Plus className="h-4 w-4 mr-2" />
+          追加
+        </Button>
       </CardHeader>
       <CardContent>
-        <div className="flex gap-2 mb-4">
-          <Input
-            placeholder="ケアマネージャー名を入力..."
-            value={newName}
-            onChange={(e) => setNewName(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleAdd()}
-          />
-          <Button onClick={handleAdd} disabled={!newName.trim() || addCareManager.isPending}>
-            <Plus className="h-4 w-4 mr-2" />
-            追加
-          </Button>
+        <div className="mb-4">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+            <Input
+              placeholder="ケアマネ名で検索..."
+              value={searchText}
+              onChange={(e) => setSearchText(e.target.value)}
+              className="pl-10"
+            />
+          </div>
         </div>
 
         {isLoading ? (
           <div className="text-center py-8">読み込み中...</div>
-        ) : careManagers?.length === 0 ? (
-          <div className="text-center py-8 text-gray-500">
-            ケアマネージャーがありません
-          </div>
         ) : (
-          <div className="flex flex-wrap gap-2">
-            {careManagers?.map((cm) => (
-              <Badge key={cm.name} variant="secondary" className="gap-1 py-1.5 px-3">
-                {cm.name}
-                <button
-                  onClick={() => setDeleteTarget(cm.name)}
-                  className="ml-1 hover:text-red-500"
-                >
-                  <Trash2 className="h-3 w-3" />
-                </button>
-              </Badge>
-            ))}
-          </div>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>ケアマネージャー名</TableHead>
+                <TableHead className="w-[100px]">操作</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {filteredCMs?.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={2} className="text-center text-gray-500">
+                    ケアマネージャーがありません
+                  </TableCell>
+                </TableRow>
+              ) : (
+                filteredCMs?.map((cm) => (
+                  <TableRow key={cm.name}>
+                    <TableCell className="font-medium">{cm.name}</TableCell>
+                    <TableCell>
+                      <div className="flex gap-1">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => openEdit(cm)}
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="text-red-500"
+                          onClick={() => setDeleteTarget(cm)}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
         )}
+
+        {/* 追加ダイアログ */}
+        <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>ケアマネージャー追加</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4 py-4">
+              <div className="space-y-2">
+                <Label>ケアマネージャー名</Label>
+                <Input
+                  value={formName}
+                  onChange={(e) => setFormName(e.target.value)}
+                  placeholder="山田 花子"
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setIsAddOpen(false)}>
+                キャンセル
+              </Button>
+              <Button onClick={handleAdd} disabled={!formName.trim() || addCareManager.isPending}>
+                追加
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* 編集ダイアログ */}
+        <Dialog open={!!editingCM} onOpenChange={() => setEditingCM(null)}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>ケアマネージャー編集</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4 py-4">
+              <div className="space-y-2">
+                <Label>ケアマネージャー名</Label>
+                <Input
+                  value={formName}
+                  onChange={(e) => setFormName(e.target.value)}
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setEditingCM(null)}>
+                キャンセル
+              </Button>
+              <Button onClick={handleUpdate} disabled={!formName.trim() || updateCareManager.isPending}>
+                保存
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         {/* 削除確認 */}
         <Dialog open={!!deleteTarget} onOpenChange={() => setDeleteTarget(null)}>
@@ -783,7 +1150,7 @@ function CareManagersMaster() {
             <DialogHeader>
               <DialogTitle>削除確認</DialogTitle>
               <DialogDescription>
-                「{deleteTarget}」を削除しますか？
+                「{deleteTarget?.name}」を削除しますか？
               </DialogDescription>
             </DialogHeader>
             <DialogFooter>

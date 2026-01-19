@@ -37,7 +37,7 @@ const storage = admin.storage();
 // Vertex AI設定
 const PROJECT_ID = process.env.GCLOUD_PROJECT || process.env.GCP_PROJECT || '';
 const LOCATION = 'asia-northeast1';
-const MODEL_ID = 'gemini-2.5-flash-preview-05-20';
+const MODEL_ID = 'gemini-2.5-flash';
 
 const FUNCTION_NAME = 'processOCR';
 

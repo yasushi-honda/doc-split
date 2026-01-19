@@ -3,8 +3,8 @@
  * Gmail監視設定、ユーザー管理（ホワイトリスト）
  */
 
-import { useState } from 'react'
-import { Plus, Trash2, Mail, Users, AlertCircle, Save, X } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { Plus, Trash2, Mail, Users, AlertCircle, Save, X, CheckCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -92,15 +92,26 @@ function GmailSettings() {
   const [gmailAccount, setGmailAccount] = useState('')
   const [isAndOperator, setIsAndOperator] = useState(false)
   const [hasChanges, setHasChanges] = useState(false)
+  const [saveMessage, setSaveMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const [isInitialized, setIsInitialized] = useState(false)
 
-  // 設定読み込み時にローカル状態を更新
-  useState(() => {
-    if (settings) {
-      setLabels(settings.targetLabels)
+  // 初回読み込み時のみローカル状態を設定
+  useEffect(() => {
+    if (settings && !isInitialized) {
+      setLabels(settings.targetLabels || [])
       setGmailAccount(settings.gmailAccount || '')
       setIsAndOperator(settings.labelSearchOperator === 'AND')
+      setIsInitialized(true)
     }
-  })
+  }, [settings, isInitialized])
+
+  // 保存メッセージを3秒後に消す
+  useEffect(() => {
+    if (saveMessage) {
+      const timer = setTimeout(() => setSaveMessage(null), 3000)
+      return () => clearTimeout(timer)
+    }
+  }, [saveMessage])
 
   const handleAddLabel = () => {
     if (newLabel.trim() && !labels.includes(newLabel.trim())) {
@@ -116,12 +127,20 @@ function GmailSettings() {
   }
 
   const handleSave = async () => {
-    await updateSettings.mutateAsync({
-      targetLabels: labels,
-      labelSearchOperator: isAndOperator ? 'AND' : 'OR',
-      gmailAccount,
-    })
-    setHasChanges(false)
+    console.log('Gmail設定を保存中...', { labels, gmailAccount, isAndOperator })
+    try {
+      await updateSettings.mutateAsync({
+        targetLabels: labels,
+        labelSearchOperator: isAndOperator ? 'AND' : 'OR',
+        gmailAccount,
+      })
+      setHasChanges(false)
+      setSaveMessage({ type: 'success', text: '設定を保存しました' })
+      console.log('Gmail設定を保存しました')
+    } catch (error) {
+      console.error('Gmail設定の保存に失敗:', error)
+      setSaveMessage({ type: 'error', text: '保存に失敗しました' })
+    }
   }
 
   if (isLoading) {
@@ -158,17 +177,36 @@ function GmailSettings() {
         {/* ラベル設定 */}
         <div className="space-y-2">
           <Label>監視対象ラベル</Label>
-          <div className="flex gap-2">
-            <Input
-              placeholder="ラベル名を入力"
-              value={newLabel}
-              onChange={(e) => setNewLabel(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleAddLabel()}
-            />
-            <Button onClick={handleAddLabel} size="icon">
-              <Plus className="h-4 w-4" />
-            </Button>
+          <Input
+            placeholder="カスタムラベルを入力してEnterで追加"
+            value={newLabel}
+            onChange={(e) => setNewLabel(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleAddLabel()}
+          />
+          {/* よく使うラベルのプリセット */}
+          <div className="flex flex-wrap gap-2">
+            <span className="text-xs text-gray-500 mr-1">よく使うラベル:</span>
+            {['INBOX', 'STARRED', 'IMPORTANT'].map((preset) => (
+              <button
+                key={preset}
+                onClick={() => {
+                  if (!labels.includes(preset)) {
+                    setLabels([...labels, preset])
+                    setHasChanges(true)
+                  }
+                }}
+                disabled={labels.includes(preset)}
+                className={`text-xs px-2 py-0.5 rounded border transition-colors ${
+                  labels.includes(preset)
+                    ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                    : 'bg-white text-blue-600 border-blue-300 hover:bg-blue-50'
+                }`}
+              >
+                + {preset}
+              </button>
+            ))}
           </div>
+          {/* 追加済みラベル */}
           <div className="flex flex-wrap gap-2 mt-2">
             {labels.length === 0 ? (
               <p className="text-sm text-gray-500">ラベルが設定されていません</p>
@@ -179,6 +217,7 @@ function GmailSettings() {
                   <button
                     onClick={() => handleRemoveLabel(label)}
                     className="ml-1 hover:text-red-500"
+                    title="ラベルを削除"
                   >
                     <X className="h-3 w-3" />
                   </button>
@@ -212,7 +251,19 @@ function GmailSettings() {
         </div>
 
         {/* 保存ボタン */}
-        <div className="flex justify-end">
+        <div className="flex items-center justify-end gap-4">
+          {saveMessage && (
+            <div className={`flex items-center gap-2 text-sm ${
+              saveMessage.type === 'success' ? 'text-green-600' : 'text-red-600'
+            }`}>
+              {saveMessage.type === 'success' ? (
+                <CheckCircle className="h-4 w-4" />
+              ) : (
+                <AlertCircle className="h-4 w-4" />
+              )}
+              {saveMessage.text}
+            </div>
+          )}
           <Button
             onClick={handleSave}
             disabled={!hasChanges || updateSettings.isPending}
@@ -424,13 +475,24 @@ function NotificationSettings() {
   const [emails, setEmails] = useState<string[]>([])
   const [newEmail, setNewEmail] = useState('')
   const [hasChanges, setHasChanges] = useState(false)
+  const [saveMessage, setSaveMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const [isInitialized, setIsInitialized] = useState(false)
 
-  // 設定読み込み時にローカル状態を更新
-  useState(() => {
-    if (settings) {
-      setEmails(settings.errorNotificationEmails)
+  // 初回読み込み時のみローカル状態を設定
+  useEffect(() => {
+    if (settings && !isInitialized) {
+      setEmails(settings.errorNotificationEmails || [])
+      setIsInitialized(true)
     }
-  })
+  }, [settings, isInitialized])
+
+  // 保存メッセージを3秒後に消す
+  useEffect(() => {
+    if (saveMessage) {
+      const timer = setTimeout(() => setSaveMessage(null), 3000)
+      return () => clearTimeout(timer)
+    }
+  }, [saveMessage])
 
   const handleAddEmail = () => {
     if (newEmail.trim() && !emails.includes(newEmail.trim())) {
@@ -446,10 +508,18 @@ function NotificationSettings() {
   }
 
   const handleSave = async () => {
-    await updateSettings.mutateAsync({
-      errorNotificationEmails: emails,
-    })
-    setHasChanges(false)
+    console.log('通知設定を保存中...', { emails })
+    try {
+      await updateSettings.mutateAsync({
+        errorNotificationEmails: emails,
+      })
+      setHasChanges(false)
+      setSaveMessage({ type: 'success', text: '設定を保存しました' })
+      console.log('通知設定を保存しました')
+    } catch (error) {
+      console.error('通知設定の保存に失敗:', error)
+      setSaveMessage({ type: 'error', text: '保存に失敗しました' })
+    }
   }
 
   if (isLoading) {
@@ -503,7 +573,19 @@ function NotificationSettings() {
           </p>
         </div>
 
-        <div className="flex justify-end">
+        <div className="flex items-center justify-end gap-4">
+          {saveMessage && (
+            <div className={`flex items-center gap-2 text-sm ${
+              saveMessage.type === 'success' ? 'text-green-600' : 'text-red-600'
+            }`}>
+              {saveMessage.type === 'success' ? (
+                <CheckCircle className="h-4 w-4" />
+              ) : (
+                <AlertCircle className="h-4 w-4" />
+              )}
+              {saveMessage.text}
+            </div>
+          )}
           <Button
             onClick={handleSave}
             disabled={!hasChanges || updateSettings.isPending}

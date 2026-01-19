@@ -9,7 +9,7 @@ import { Timestamp } from 'firebase/firestore';
 // ドキュメント（書類管理）
 // ============================================
 
-export type DocumentStatus = 'pending' | 'processing' | 'processed' | 'error';
+export type DocumentStatus = 'pending' | 'processing' | 'processed' | 'error' | 'split';
 
 export interface Document {
   id: string;
@@ -50,6 +50,7 @@ export interface DocumentMaster {
   name: string;
   dateMarker: string; // 日付抽出の目印（例: "発行日"）
   category: string;
+  keywords?: string[]; // 照合用キーワード（例: ["被保険者証", "介護保険"]）
 }
 
 export interface CustomerMaster {
@@ -61,6 +62,7 @@ export interface CustomerMaster {
 
 export interface OfficeMaster {
   name: string;
+  shortName?: string;
 }
 
 export interface CareManagerMaster {

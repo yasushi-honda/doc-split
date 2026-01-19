@@ -1,0 +1,146 @@
+/**
+ * CSVパーサーユーティリティ
+ *
+ * - Shift_JIS / UTF-8 対応
+ * - ヘッダー自動検出
+ * - 日本語カラム名対応
+ */
+
+/**
+ * CSVをパースして行オブジェクトの配列を返す
+ */
+export function parseCSV(content: string): Record<string, string>[] {
+  const lines = content.trim().split(/\r?\n/)
+  if (lines.length < 2) return []
+
+  // ヘッダー行を取得
+  const headers = parseCSVLine(lines[0])
+  const rows: Record<string, string>[] = []
+
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i].trim()
+    if (!line) continue
+
+    const values = parseCSVLine(line)
+    const row: Record<string, string> = {}
+
+    headers.forEach((header, index) => {
+      row[header] = values[index]?.trim() || ''
+    })
+
+    rows.push(row)
+  }
+
+  return rows
+}
+
+/**
+ * CSV行をパース（ダブルクォート対応）
+ */
+function parseCSVLine(line: string): string[] {
+  const result: string[] = []
+  let current = ''
+  let inQuotes = false
+
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i]
+    const nextChar = line[i + 1]
+
+    if (inQuotes) {
+      if (char === '"' && nextChar === '"') {
+        // エスケープされたダブルクォート
+        current += '"'
+        i++
+      } else if (char === '"') {
+        // クォート終了
+        inQuotes = false
+      } else {
+        current += char
+      }
+    } else {
+      if (char === '"') {
+        // クォート開始
+        inQuotes = true
+      } else if (char === ',') {
+        // フィールド区切り
+        result.push(current)
+        current = ''
+      } else {
+        current += char
+      }
+    }
+  }
+
+  result.push(current)
+  return result
+}
+
+/**
+ * ファイルからCSVを読み込む（Shift_JIS/UTF-8自動判定）
+ */
+export async function readCSVFile(file: File): Promise<string> {
+  // まずUTF-8で読み込み
+  let content = await file.text()
+
+  // 文字化けチェック（日本語が含まれるはずなのに含まれない、または異常な文字がある）
+  const hasGarbledText = /[\ufffd]/.test(content) ||
+    (!/[\u3040-\u309f\u30a0-\u30ff\u4e00-\u9fff]/.test(content) && file.name.endsWith('.csv'))
+
+  if (hasGarbledText) {
+    // Shift_JISで再読み込み
+    const decoder = new TextDecoder('shift_jis')
+    const buffer = await file.arrayBuffer()
+    content = decoder.decode(buffer)
+  }
+
+  return content
+}
+
+/**
+ * 顧客マスター用のCSVマッピング
+ */
+export interface CustomerCSVRow {
+  name: string
+  furigana: string
+  isDuplicate: boolean
+}
+
+export function mapCustomerCSV(rows: Record<string, string>[]): CustomerCSVRow[] {
+  return rows.map(row => ({
+    name: row['name'] || row['顧客名'] || row['氏名'] || row['利用者名'] || '',
+    furigana: row['furigana'] || row['フリガナ'] || row['ふりがな'] || '',
+    isDuplicate: row['isDuplicate'] === 'true' || row['同姓同名'] === 'true' || row['重複'] === 'true',
+  })).filter(c => c.name) // 名前がない行は除外
+}
+
+/**
+ * 事業所マスター用のCSVマッピング
+ */
+export interface OfficeCSVRow {
+  name: string
+  shortName: string
+}
+
+export function mapOfficeCSV(rows: Record<string, string>[]): OfficeCSVRow[] {
+  return rows.map(row => ({
+    name: row['name'] || row['事業所名'] || row['名称'] || '',
+    shortName: row['shortName'] || row['略称'] || row['短縮名'] || '',
+  })).filter(o => o.name) // 名前がない行は除外
+}
+
+/**
+ * CSVテンプレートを生成
+ */
+export function generateCustomerCSVTemplate(): string {
+  return `name,furigana,isDuplicate
+山田太郎,ヤマダタロウ,false
+田中花子,タナカハナコ,false
+`
+}
+
+export function generateOfficeCSVTemplate(): string {
+  return `name,shortName
+○○介護サービス,○○介護
+△△デイサービス,△△デイ
+`
+}

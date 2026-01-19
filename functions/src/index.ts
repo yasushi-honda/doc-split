@@ -21,3 +21,9 @@ export {
   splitPdf,
   rotatePdfPages,
 } from './pdf/pdfOperations';
+
+// 管理用関数（マスターデータシード等）
+export {
+  seedDocumentMasters,
+  seedAllMasters,
+} from './admin/seedMasters';

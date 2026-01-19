@@ -24,6 +24,7 @@ const STATUS_CONFIG: Record<DocumentStatus, { label: string; variant: 'default' 
   processing: { label: '処理中', variant: 'warning' },
   processed: { label: '完了', variant: 'success' },
   error: { label: 'エラー', variant: 'destructive' },
+  split: { label: '分割済', variant: 'default' },
 }
 
 // Timestampを日付文字列に変換
@@ -38,7 +39,7 @@ function formatTimestamp(timestamp: Timestamp | undefined): string {
 
 // 書類行コンポーネント
 function DocumentRow({ document, onClick }: { document: Document; onClick: () => void }) {
-  const statusConfig = STATUS_CONFIG[document.status]
+  const statusConfig = STATUS_CONFIG[document.status] || { label: '不明', variant: 'secondary' as const }
 
   return (
     <tr
@@ -87,6 +88,7 @@ export function DocumentsPage() {
   const [statusFilter, setStatusFilter] = useState<DocumentStatus | 'all'>('all')
   const [documentTypeFilter, setDocumentTypeFilter] = useState<string>('all')
   const [showFilters, setShowFilters] = useState(false)
+  const [showSplit, setShowSplit] = useState(false) // 分割済み表示フラグ
 
   // モーダル状態
   const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(null)
@@ -103,8 +105,15 @@ export function DocumentsPage() {
   const { data: stats } = useDocumentStats()
   const { data: documentMasters } = useDocumentMasters()
 
-  // ドキュメントリスト
-  const documents = documentsData?.documents ?? []
+  // ドキュメントリスト（デフォルトでsplitを除外、チェックボックスで表示）
+  const documents = useMemo(() => {
+    const docs = documentsData?.documents ?? []
+    // showSplitがfalseの場合は常にsplitを除外
+    if (!showSplit) {
+      return docs.filter(doc => doc.status !== 'split')
+    }
+    return docs
+  }, [documentsData?.documents, showSplit])
 
   return (
     <div className="space-y-6">
@@ -116,7 +125,7 @@ export function DocumentsPage() {
       {/* 統計カード */}
       {stats && (
         <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-          <StatsCard label="全書類" value={stats.total} color="text-gray-900" />
+          <StatsCard label="全書類" value={stats.total - stats.split} color="text-gray-900" />
           <StatsCard label="処理完了" value={stats.processed} color="text-green-600" />
           <StatsCard label="処理中" value={stats.processing} color="text-yellow-600" />
           <StatsCard label="エラー" value={stats.error} color="text-red-600" />
@@ -181,6 +190,17 @@ export function DocumentsPage() {
                     ))}
                   </SelectContent>
                 </Select>
+              </div>
+              <div className="flex items-end pb-1">
+                <label className="flex cursor-pointer items-center gap-2 text-xs text-gray-500">
+                  <input
+                    type="checkbox"
+                    checked={showSplit}
+                    onChange={(e) => setShowSplit(e.target.checked)}
+                    className="h-3.5 w-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                  />
+                  分割元も表示
+                </label>
               </div>
             </CardContent>
           </Card>

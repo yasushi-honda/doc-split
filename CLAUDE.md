@@ -157,13 +157,16 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
   - データモデル、API/Functions、セキュリティ
 
 ## 次のタスク（未実施）
-- [ ] Gmail連携テスト（OAuth設定→E2E動作確認）
 - [ ] 実書類でのOCR精度確認
 
 ## 完了したインフラ設定（2026-01-19）
 - [x] コスト監視・予算アラート設定（月額3,000円、50%/80%/100%閾値）
 - [x] Cloud Monitoring エラー通知設定（Cloud Functions/Vertex AI）
 - [x] メール通知チャネル設定（hy.unimail.11@gmail.com）
+- [x] Gmail連携テスト完了（OAuth 2.0方式）
+  - Secret Manager設定修正（gmail-oauth-client-secret, gmail-oauth-refresh-token）
+  - gmailAuth.ts: Cloud Functions 2nd gen環境変数対応（GOOGLE_CLOUD_PROJECT）
+  - E2E動作確認（checkGmailAttachments正常実行）
 
 ## ドキュメント構成（AI向け）
 

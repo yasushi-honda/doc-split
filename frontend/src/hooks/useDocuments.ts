@@ -279,6 +279,7 @@ export interface DocumentStats {
   processing: number
   processed: number
   error: number
+  split: number
 }
 
 async function fetchDocumentStats(): Promise<DocumentStats> {
@@ -288,9 +289,10 @@ async function fetchDocumentStats(): Promise<DocumentStats> {
     processing: 0,
     processed: 0,
     error: 0,
+    split: 0,
   }
 
-  const statuses: DocumentStatus[] = ['pending', 'processing', 'processed', 'error']
+  const statuses: DocumentStatus[] = ['pending', 'processing', 'processed', 'error', 'split']
 
   await Promise.all(
     statuses.map(async (status) => {

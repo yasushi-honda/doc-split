@@ -13,6 +13,7 @@ import {
   updateDoc,
 } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
+import { normalizeName } from '@/lib/textNormalizer'
 import type {
   CustomerMaster,
   DocumentMaster,
@@ -51,8 +52,8 @@ interface AddCustomerParams {
 async function addCustomer(params: AddCustomerParams): Promise<void> {
   const docRef = doc(collection(db, 'masters/customers/items'))
   await setDoc(docRef, {
-    name: params.name,
-    furigana: params.furigana,
+    name: normalizeName(params.name),
+    furigana: normalizeName(params.furigana),
     isDuplicate: params.isDuplicate || false,
   })
 }
@@ -77,8 +78,8 @@ interface UpdateCustomerParams {
 async function updateCustomer(params: UpdateCustomerParams): Promise<void> {
   const docRef = doc(db, 'masters/customers/items', params.id)
   await updateDoc(docRef, {
-    name: params.name,
-    furigana: params.furigana,
+    name: normalizeName(params.name),
+    furigana: normalizeName(params.furigana),
     isDuplicate: params.isDuplicate,
   })
 }
@@ -107,9 +108,80 @@ export function useDeleteCustomer() {
   })
 }
 
+// 顧客一括インポート
+interface BulkCustomerParams {
+  name: string
+  furigana: string
+  isDuplicate?: boolean
+}
+
+async function bulkImportCustomers(
+  customers: BulkCustomerParams[]
+): Promise<{ imported: number; skipped: number }> {
+  // 既存データを取得
+  const snapshot = await getDocs(collection(db, 'masters/customers/items'))
+  const existingNames = new Set(snapshot.docs.map(d => d.data().name))
+
+  let imported = 0
+  let skipped = 0
+
+  for (const customer of customers) {
+    const normalizedName = normalizeName(customer.name)
+    if (!normalizedName || existingNames.has(normalizedName)) {
+      skipped++
+      continue
+    }
+
+    const docRef = doc(collection(db, 'masters/customers/items'))
+    await setDoc(docRef, {
+      name: normalizedName,
+      furigana: normalizeName(customer.furigana),
+      isDuplicate: customer.isDuplicate || false,
+    })
+    imported++
+    existingNames.add(normalizedName) // 重複を防ぐ
+  }
+
+  return { imported, skipped }
+}
+
+export function useBulkImportCustomers() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: bulkImportCustomers,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['masters', 'customers'] })
+    },
+  })
+}
+
 // ============================================
 // 書類マスター
 // ============================================
+
+/**
+ * keywords フィールドを安全に正規化
+ * - undefined/null → 空配列
+ * - string → セミコロン区切りで分割
+ * - string[] → そのまま
+ * - 2文字未満のキーワードは除外
+ */
+function normalizeKeywords(value: unknown): string[] {
+  if (!value) return []
+  if (Array.isArray(value)) {
+    return value
+      .filter((k): k is string => typeof k === 'string')
+      .map((k) => k.trim())
+      .filter((k) => k.length >= 2)
+  }
+  if (typeof value === 'string') {
+    return value
+      .split(';')
+      .map((k) => k.trim())
+      .filter((k) => k.length >= 2)
+  }
+  return []
+}
 
 async function fetchDocumentTypes(): Promise<DocumentMaster[]> {
   const snapshot = await getDocs(collection(db, 'masters/documents/items'))
@@ -117,6 +189,7 @@ async function fetchDocumentTypes(): Promise<DocumentMaster[]> {
     name: doc.data().name as string,
     dateMarker: doc.data().dateMarker as string,
     category: doc.data().category as string,
+    keywords: normalizeKeywords(doc.data().keywords),
   }))
 }
 
@@ -132,6 +205,7 @@ interface AddDocumentTypeParams {
   name: string
   dateMarker: string
   category: string
+  keywords?: string // セミコロン区切りの文字列
 }
 
 async function addDocumentType(params: AddDocumentTypeParams): Promise<void> {
@@ -141,6 +215,7 @@ async function addDocumentType(params: AddDocumentTypeParams): Promise<void> {
     name: params.name,
     dateMarker: params.dateMarker,
     category: params.category,
+    keywords: normalizeKeywords(params.keywords),
   })
 }
 
@@ -159,6 +234,7 @@ interface UpdateDocumentTypeParams {
   name: string
   dateMarker: string
   category: string
+  keywords?: string // セミコロン区切りの文字列
 }
 
 async function updateDocumentType(params: UpdateDocumentTypeParams): Promise<void> {
@@ -171,6 +247,7 @@ async function updateDocumentType(params: UpdateDocumentTypeParams): Promise<voi
     name: params.name,
     dateMarker: params.dateMarker,
     category: params.category,
+    keywords: normalizeKeywords(params.keywords),
   })
 }
 
@@ -186,6 +263,67 @@ export function useUpdateDocumentType() {
 
 async function deleteDocumentType(name: string): Promise<void> {
   await deleteDoc(doc(db, 'masters/documents/items', name))
+}
+
+// ============================================
+// 書類種別シードデータ
+// ============================================
+
+/** 介護関係の書類種別シードデータ */
+export const DOCUMENT_TYPE_SEEDS = [
+  { name: 'フェースシート', dateMarker: '作成日', category: '基本情報', keywords: ['フェイスシート', '基本情報', '利用者情報'] },
+  { name: '介護保険被保険者証', dateMarker: '有効期限', category: '保険証', keywords: ['被保険者証', '介護保険', '要介護'] },
+  { name: '負担割合証', dateMarker: '適用期間', category: '保険証', keywords: ['負担割合', '利用者負担'] },
+  { name: '居宅サービス計画書（1）', dateMarker: '作成年月日', category: 'ケアプラン', keywords: ['居宅サービス計画', '援助の方針'] },
+  { name: '居宅サービス計画書（2）', dateMarker: '作成年月日', category: 'ケアプラン', keywords: ['週間サービス計画表'] },
+  { name: 'サービス担当者会議の要点', dateMarker: '開催日', category: '会議録', keywords: ['サービス担当者会議', '会議の要点'] },
+  { name: '訪問介護計画書', dateMarker: '作成日', category: 'サービス計画', keywords: ['訪問介護', 'サービス内容'] },
+  { name: '訪問看護計画書', dateMarker: '作成日', category: 'サービス計画', keywords: ['訪問看護', '看護計画'] },
+  { name: '通所介護計画書', dateMarker: '作成日', category: 'サービス計画', keywords: ['通所介護', 'デイサービス'] },
+  { name: '福祉用具貸与計画書', dateMarker: '作成日', category: 'サービス計画', keywords: ['福祉用具', '貸与'] },
+  { name: '住宅改修理由書', dateMarker: '作成日', category: '申請書類', keywords: ['住宅改修', '理由書'] },
+  { name: '主治医意見書', dateMarker: '記載日', category: '医療', keywords: ['主治医', '意見書', '要介護認定'] },
+  { name: '診断書', dateMarker: '発行日', category: '医療', keywords: ['診断書', '診断名'] },
+  { name: '情報提供書', dateMarker: '発行日', category: '医療', keywords: ['情報提供', '病状'] },
+  { name: '同意書', dateMarker: '同意日', category: '契約', keywords: ['同意書', '重要事項説明'] },
+  { name: '契約書', dateMarker: '契約日', category: '契約', keywords: ['契約書', '利用契約'] },
+] as const
+
+async function importDocumentTypeSeeds(): Promise<{ imported: number; skipped: number }> {
+  // 既存データを取得
+  const snapshot = await getDocs(collection(db, 'masters/documents/items'))
+  const existingNames = new Set(snapshot.docs.map(d => d.data().name))
+
+  let imported = 0
+  let skipped = 0
+
+  for (const seed of DOCUMENT_TYPE_SEEDS) {
+    if (existingNames.has(seed.name)) {
+      skipped++
+      continue
+    }
+
+    const docRef = doc(db, 'masters/documents/items', seed.name)
+    await setDoc(docRef, {
+      name: seed.name,
+      dateMarker: seed.dateMarker,
+      category: seed.category,
+      keywords: seed.keywords,
+    })
+    imported++
+  }
+
+  return { imported, skipped }
+}
+
+export function useImportDocumentTypeSeeds() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: importDocumentTypeSeeds,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['masters', 'documents'] })
+    },
+  })
 }
 
 export function useDeleteDocumentType() {
@@ -206,6 +344,7 @@ async function fetchOffices(): Promise<OfficeMaster[]> {
   const snapshot = await getDocs(collection(db, 'masters/offices/items'))
   return snapshot.docs.map((doc) => ({
     name: doc.data().name as string,
+    shortName: doc.data().shortName as string | undefined,
   }))
 }
 
@@ -218,8 +357,9 @@ export function useOffices() {
 }
 
 async function addOffice(name: string): Promise<void> {
-  const docRef = doc(db, 'masters/offices/items', name)
-  await setDoc(docRef, { name })
+  const normalizedName = normalizeName(name)
+  const docRef = doc(db, 'masters/offices/items', normalizedName)
+  await setDoc(docRef, { name: normalizedName })
 }
 
 export function useAddOffice() {
@@ -246,6 +386,83 @@ export function useDeleteOffice() {
   })
 }
 
+interface UpdateOfficeParams {
+  originalName: string
+  name: string
+  shortName?: string
+}
+
+async function updateOffice(params: UpdateOfficeParams): Promise<void> {
+  const normalizedName = normalizeName(params.name)
+  const normalizedShortName = params.shortName ? normalizeName(params.shortName) : ''
+
+  // 名前が変わった場合は削除して再作成
+  if (params.originalName !== normalizedName) {
+    await deleteDoc(doc(db, 'masters/offices/items', params.originalName))
+  }
+
+  const docRef = doc(db, 'masters/offices/items', normalizedName)
+  await setDoc(docRef, {
+    name: normalizedName,
+    shortName: normalizedShortName,
+  })
+}
+
+export function useUpdateOffice() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: updateOffice,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['masters', 'offices'] })
+    },
+  })
+}
+
+// 事業所一括インポート
+interface BulkOfficeParams {
+  name: string
+  shortName?: string
+}
+
+async function bulkImportOffices(
+  offices: BulkOfficeParams[]
+): Promise<{ imported: number; skipped: number }> {
+  // 既存データを取得
+  const snapshot = await getDocs(collection(db, 'masters/offices/items'))
+  const existingNames = new Set(snapshot.docs.map(d => d.data().name))
+
+  let imported = 0
+  let skipped = 0
+
+  for (const office of offices) {
+    const normalizedName = normalizeName(office.name)
+    if (!normalizedName || existingNames.has(normalizedName)) {
+      skipped++
+      continue
+    }
+
+    const docRef = doc(db, 'masters/offices/items', normalizedName)
+    await setDoc(docRef, {
+      name: normalizedName,
+      shortName: office.shortName ? normalizeName(office.shortName) : '',
+    })
+    imported++
+    existingNames.add(normalizedName)
+  }
+
+  return { imported, skipped }
+}
+
+export function useBulkImportOffices() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: bulkImportOffices,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['masters', 'offices'] })
+    },
+  })
+}
+
 // ============================================
 // ケアマネマスター
 // ============================================
@@ -266,8 +483,9 @@ export function useCareManagers() {
 }
 
 async function addCareManager(name: string): Promise<void> {
-  const docRef = doc(db, 'masters/caremanagers/items', name)
-  await setDoc(docRef, { name })
+  const normalizedName = normalizeName(name)
+  const docRef = doc(db, 'masters/caremanagers/items', normalizedName)
+  await setDoc(docRef, { name: normalizedName })
 }
 
 export function useAddCareManager() {
@@ -288,6 +506,33 @@ export function useDeleteCareManager() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: deleteCareManager,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['masters', 'caremanagers'] })
+    },
+  })
+}
+
+interface UpdateCareManagerParams {
+  originalName: string
+  name: string
+}
+
+async function updateCareManager(params: UpdateCareManagerParams): Promise<void> {
+  const normalizedName = normalizeName(params.name)
+
+  // 名前が変わった場合は削除して再作成
+  if (params.originalName !== normalizedName) {
+    await deleteDoc(doc(db, 'masters/caremanagers/items', params.originalName))
+  }
+
+  const docRef = doc(db, 'masters/caremanagers/items', normalizedName)
+  await setDoc(docRef, { name: normalizedName })
+}
+
+export function useUpdateCareManager() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: updateCareManager,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['masters', 'caremanagers'] })
     },

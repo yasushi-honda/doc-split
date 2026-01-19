@@ -39,7 +39,8 @@ const DEFAULT_GMAIL_SETTINGS: GmailSettings = {
  */
 async function getSecretValue(secretName: string): Promise<string> {
   const client = new SecretManagerServiceClient();
-  const projectId = process.env.GCLOUD_PROJECT || process.env.GCP_PROJECT;
+  // Cloud Functions 2nd gen (Cloud Run) uses GOOGLE_CLOUD_PROJECT
+  const projectId = process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || process.env.GCP_PROJECT;
 
   const name = `projects/${projectId}/secrets/${secretName}/versions/latest`;
 
@@ -87,8 +88,8 @@ async function createOAuthClient(settings: GmailSettings): Promise<gmail_v1.Gmai
 
   // Secret Managerからシークレットを取得
   const [clientSecret, refreshToken] = await Promise.all([
-    getSecretValue('gmail-client-secret'),
-    getSecretValue('gmail-refresh-token'),
+    getSecretValue('gmail-oauth-client-secret'),
+    getSecretValue('gmail-oauth-refresh-token'),
   ]);
 
   const oauth2Client = new google.auth.OAuth2(
