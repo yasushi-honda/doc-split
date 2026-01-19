@@ -184,7 +184,7 @@ const db = getFirestore();
 const auth = getAuth();
 
 async function main() {
-    // 設定を投入
+    // アプリ設定を投入
     await db.doc('settings/app').set({
         targetLabels: ['INBOX'],
         labelSearchOperator: 'OR',
@@ -194,6 +194,16 @@ async function main() {
         updatedAt: new Date()
     });
     console.log('✓ settings/app を作成');
+
+    // Gmail認証設定（Service Account方式 - Google Workspace向け）
+    await db.doc('settings/gmail').set({
+        authMode: 'service_account',
+        delegatedUserEmail: '$GMAIL_ACCOUNT',
+        // OAuth方式を使う場合は authMode: 'oauth' に変更
+        createdAt: new Date(),
+        updatedAt: new Date()
+    });
+    console.log('✓ settings/gmail を作成 (Service Account方式)');
 
     // 管理者ユーザー（Firebase Authにユーザーがいれば取得）
     let uid = 'pending_admin';
