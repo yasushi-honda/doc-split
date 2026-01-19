@@ -125,6 +125,43 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
 - [x] ESLint v9 flat config移行（frontend/functions）
 - [x] GitHub Secrets設定（Firebase環境変数 + FIREBASE_TOKEN）
 
+### 本番環境動作確認・改善（2026-01-19）
+- [x] 認証初期化バグ修正（AuthInitializerコンポーネント追加）
+- [x] UI改善
+  - アプリアイコン画像適用（ログイン画面、ヘッダー）
+  - ファビコン設定
+  - ヘッダーレイアウト調整（レスポンシブ対応）
+  - モバイル表示最適化
+- [x] Firestoreインデックス追加（status + processedAt ASC）
+- [x] 管理者ユーザー登録（hy.unimail.11@gmail.com）
+- [x] マスターデータ投入（顧客10件、書類種別15件、事業所10件、ケアマネ3件）
+
+### テナント初期設定自動化（2026-01-19）
+- [x] `scripts/setup-tenant.sh` - 包括的初期設定スクリプト
+  - GCP API有効化（9個）
+  - Firebase設定・環境変数生成
+  - 管理者ユーザー登録
+  - ルール・インデックス・Functions・Hostingデプロイ
+- [x] `scripts/setup-gmail-auth.sh` - Gmail OAuth認証設定
+  - OAuth認証フロー
+  - Secret Manager保存
+  - Cloud Functions権限付与
+
+### GitHub Pagesドキュメント（2026-01-19）
+- [x] Docsifyベースのドキュメントサイト作成
+- [x] URL: `https://yasushi-honda.github.io/doc-split/`
+- [x] ページ構成:
+  - プロジェクト概要、アーキテクチャ図
+  - 納品フロー（Mermaid図付き）
+  - セットアップ手順、運用ガイド
+  - データモデル、API/Functions、セキュリティ
+
+## 次のタスク（未実施）
+- [ ] Gmail連携テスト（OAuth設定→E2E動作確認）
+- [ ] 実書類でのOCR精度確認
+- [ ] コスト監視・予算アラート設定
+- [ ] Cloud Monitoring エラー通知設定
+
 ## ドキュメント読込順序（AI向け）
 1. `docs/context/gcp-migration-scope.md` - 移行スコープ ★最重要
 2. `docs/context/functional-requirements.md` - 機能要件
@@ -172,6 +209,7 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
 | 項目 | URL/情報 |
 |------|----------|
 | アプリURL | `https://doc-split-dev.web.app` |
+| **ドキュメント** | `https://yasushi-honda.github.io/doc-split/` |
 | Firebase Console | `https://console.firebase.google.com/project/doc-split-dev` |
 | GCP Console | `https://console.cloud.google.com/home/dashboard?project=doc-split-dev` |
 | Functions Logs | `https://console.firebase.google.com/project/doc-split-dev/functions/logs` |
