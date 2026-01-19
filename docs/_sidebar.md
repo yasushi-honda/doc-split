@@ -6,6 +6,7 @@
 * **納品・運用**
   * [納品フロー](deployment-flow.md)
   * [セットアップ手順](setup-guide.md)
+  * [Gmail連携設定](operation/gmail-setup-guide.md)
   * [運用ガイド](operation-guide.md)
 * **技術情報**
   * [データモデル](data-model.md)

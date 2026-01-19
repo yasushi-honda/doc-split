@@ -4,10 +4,20 @@ DocSplitのGmail連携には2つの方式があります。クライアント環
 
 ## 方式比較
 
-| 方式 | 対象 | 自動化 | 推奨度 |
-|------|------|--------|--------|
-| **Service Account + Domain-wide Delegation** | Google Workspace | ✅ 高 | ⭐推奨 |
-| **OAuth 2.0** | 個人Gmail | ⚠️ 低 | 開発用 |
+| 方式 | 対象 | 自動化レベル | 手動操作 |
+|------|------|-------------|----------|
+| **Service Account + Domain-wide Delegation** | Google Workspace | ✅ 高 | 管理者の委任設定のみ |
+| **OAuth 2.0** | 個人Gmail | ⚠️ 低 | GCPコンソール + ブラウザ認証 |
+
+```mermaid
+flowchart TD
+    A["クライアントのメール環境"] --> B{"Google Workspace<br/>を利用？"}
+    B -->|はい| C["⭐ Service Account方式"]
+    B -->|いいえ| D["OAuth 2.0方式"]
+
+    C --> C1["完全自動化可能"]
+    D --> D1["初期設定に手動操作必要"]
+```
 
 ---
 

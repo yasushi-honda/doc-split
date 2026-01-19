@@ -127,25 +127,79 @@ flowchart LR
 
 ## 3. Gmail連携設定
 
-### OAuth認証の設定
+### 認証方式の選択
+
+クライアント環境に応じて認証方式を選択します。
+
+```mermaid
+flowchart TD
+    A["クライアントのメール環境は？"] --> B{"Google Workspace<br/>を利用？"}
+    B -->|はい| C["Service Account方式<br/>（推奨）"]
+    B -->|いいえ| D["OAuth 2.0方式"]
+
+    C --> C1["✅ 完全自動化可能"]
+    C --> C2["管理者が委任設定のみ"]
+
+    D --> D1["⚠️ 手動操作あり"]
+    D --> D2["GCPコンソール + ブラウザ認証"]
+```
+
+| 方式 | 対象 | 自動化 | 手動操作 |
+|------|------|--------|----------|
+| **Service Account + 委任** | Google Workspace | ✅ 高 | Workspace管理者の委任設定のみ |
+| **OAuth 2.0** | 個人Gmail | ⚠️ 低 | GCPコンソール + ブラウザ認証 |
+
+---
+
+### 方式A: Service Account（推奨）
+
+**対象**: Google Workspaceを利用しているクライアント
+
+#### 手順
+
+1. **setup-tenant.sh で自動設定済み**
+   - `settings/gmail.authMode = 'service_account'`
+   - `settings/gmail.delegatedUserEmail = <監視Gmail>`
+
+2. **クライアントのWorkspace管理者に委任設定を依頼**
+
+   | 項目 | 値 |
+   |------|-----|
+   | 管理コンソール | https://admin.google.com |
+   | 設定場所 | セキュリティ → APIの制御 → ドメイン全体の委任 |
+   | クライアントID | `<project-number>-compute@developer.gserviceaccount.com` |
+   | スコープ | `https://www.googleapis.com/auth/gmail.readonly` |
+
+3. **動作確認**
+   ```bash
+   gcloud functions call checkGmailAttachments --project <project-id>
+   ```
+
+---
+
+### 方式B: OAuth 2.0
+
+**対象**: 個人Gmail、またはGoogle Workspaceを利用していないクライアント
+
+#### 手順
 
 ```mermaid
 sequenceDiagram
     participant Admin as 設定担当者
     participant GCP as GCP Console
-    participant Script as setup-gmail-auth.sh
+    participant Script as gmail-oauth-cli.py
     participant Google as Google OAuth
     participant Secret as Secret Manager
 
+    Admin->>GCP: OAuth同意画面設定
     Admin->>GCP: OAuth クライアントID作成
     GCP-->>Admin: Client ID / Secret
 
     Admin->>Script: スクリプト実行
-    Script->>Admin: 認証URL表示
-    Admin->>Google: ブラウザでアクセス
-    Google-->>Admin: 認証コード
+    Script->>Admin: ブラウザで認証ページを開く
+    Admin->>Google: Googleアカウントでログイン
+    Google-->>Script: 認証コード（自動取得）
 
-    Admin->>Script: 認証コード入力
     Script->>Google: トークン取得
     Google-->>Script: Refresh Token
 
@@ -153,11 +207,20 @@ sequenceDiagram
     Note over Secret: gmail-oauth-client-id<br/>gmail-oauth-client-secret<br/>gmail-oauth-refresh-token
 ```
 
-### 実行コマンド
+#### 実行コマンド
 
 ```bash
-./scripts/setup-gmail-auth.sh abc-docsplit
+# 1. Firestore設定をOAuthモードに変更
+#    settings/gmail.authMode = 'oauth'
+
+# 2. OAuth認証実行
+python3 scripts/gmail-oauth-cli.py
+
+# 3. Cloud Functions再デプロイ
+firebase deploy --only functions
 ```
+
+詳細は [Gmail設定ガイド](operation/gmail-setup-guide.md) を参照。
 
 ## 4. マスターデータ投入
 
