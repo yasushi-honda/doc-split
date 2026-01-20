@@ -171,8 +171,15 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
   - Firestoreルール: 顧客解決フィールド更新許可
 - [x] テスト: 24テスト（Firestoreルール）+ 108テスト（ユニット）= 132テストパス
 
-## 次のタスク（未実施）
-- [ ] 実書類でのOCR精度確認
+## 次のタスク（クライアント環境で実施）
+- [ ] 実書類でのOCR精度確認（クライアント環境）
+- [ ] 精度改善（フィードバック後）
+
+## 追加完了項目（2026-01-20）
+- [x] Google Workspace向けGmail認証セットアップスクリプト追加
+  - scripts/setup-gmail-service-account.sh: Service Account + Domain-wide Delegation方式
+  - docs/operation/gmail-auth-guide.md: 認証方式選択ガイド
+  - 無料Gmail / Google Workspace 両パターン対応完了
 
 ## 完了したインフラ設定（2026-01-19）
 - [x] コスト監視・予算アラート設定（月額3,000円、50%/80%/100%閾値）
