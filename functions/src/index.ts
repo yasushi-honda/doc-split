@@ -15,6 +15,9 @@ export { checkGmailAttachments } from './gmail/checkGmailAttachments';
 // OCR処理（定期実行）
 export { processOCR } from './ocr/processOCR';
 
+// OCR全文取得（Callable Function - Phase 7）
+export { getOcrText } from './ocr/getOcrText';
+
 // PDF編集操作（Callable Functions）
 export {
   detectSplitPoints,

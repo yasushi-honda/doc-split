@@ -15,7 +15,7 @@ const firebaseConfig = {
 }
 
 // Firebase初期化
-const app = initializeApp(firebaseConfig)
+export const app = initializeApp(firebaseConfig)
 
 // 各サービスをエクスポート
 export const auth = getAuth(app)

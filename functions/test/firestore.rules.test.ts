@@ -96,14 +96,64 @@ describe('Firestore Security Rules', () => {
       await assertSucceeds(getDoc(docRef));
     });
 
-    it('ホワイトリスト登録ユーザーは作成可能', async () => {
+    it('ホワイトリスト登録ユーザーは作成不可（Cloud Functionsのみ）', async () => {
       const normalUser = testEnv.authenticatedContext(normalUid);
       const docRef = doc(normalUser.firestore(), 'documents', 'doc1');
-      await assertSucceeds(
+      await assertFails(
         setDoc(docRef, {
           fileName: 'test.pdf',
           status: 'pending',
         })
+      );
+    });
+
+    it('ホワイトリスト登録ユーザーは顧客解決フィールドのみ更新可能', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      // テストデータを作成
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'documents', 'doc1'), {
+          fileName: 'test.pdf',
+          status: 'pending',
+          customerId: null,
+          customerName: '不明顧客',
+          customerConfirmed: false,
+        });
+      });
+
+      const docRef = doc(normalUser.firestore(), 'documents', 'doc1');
+      // 顧客解決フィールドの更新は許可される
+      await assertSucceeds(
+        setDoc(docRef, {
+          fileName: 'test.pdf',
+          status: 'pending',
+          customerId: 'customer-123',
+          customerName: '山田太郎',
+          customerConfirmed: true,
+          confirmedBy: normalUid,
+          confirmedAt: new Date(),
+        }, { merge: true })
+      );
+    });
+
+    it('ホワイトリスト登録ユーザーは顧客解決以外のフィールドは更新不可', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      // テストデータを作成
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'documents', 'doc1'), {
+          fileName: 'test.pdf',
+          status: 'pending',
+        });
+      });
+
+      const docRef = doc(normalUser.firestore(), 'documents', 'doc1');
+      // statusフィールドの更新は禁止
+      await assertFails(
+        setDoc(docRef, {
+          fileName: 'test.pdf',
+          status: 'processed',
+        }, { merge: true })
       );
     });
 

@@ -3,6 +3,7 @@ import { Routes, Route, Navigate } from 'react-router-dom'
 import { useAuthStore } from '@/stores/authStore'
 import { LoginPage } from '@/pages/LoginPage'
 import { DocumentsPage } from '@/pages/DocumentsPage'
+import { ProcessingHistoryPage } from '@/pages/ProcessingHistoryPage'
 import { SettingsPage } from '@/pages/SettingsPage'
 import { ErrorsPage } from '@/pages/ErrorsPage'
 import { MastersPage } from '@/pages/MastersPage'
@@ -62,6 +63,7 @@ export default function App() {
           }
         >
           <Route index element={<DocumentsPage />} />
+          <Route path="history" element={<ProcessingHistoryPage />} />
           <Route path="errors" element={<ErrorsPage />} />
           <Route
             path="settings"
