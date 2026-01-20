@@ -15,7 +15,6 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogDescription,
 } from '@/components/ui/dialog'
 import { VisuallyHidden } from '@/components/ui/visually-hidden'
 import { Button } from '@/components/ui/button'
@@ -25,7 +24,7 @@ import { PdfSplitModal } from '@/components/PdfSplitModal'
 import { SameNameResolveModal } from '@/components/SameNameResolveModal'
 import { useDocument } from '@/hooks/useDocuments'
 import { isCustomerConfirmed } from '@/hooks/useProcessingHistory'
-import type { DocumentStatus, Document } from '@shared/types'
+import type { DocumentStatus } from '@shared/types'
 
 interface DocumentDetailModalProps {
   documentId: string | null

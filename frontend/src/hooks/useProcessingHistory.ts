@@ -229,7 +229,7 @@ export function useProcessingHistory(filters: ProcessingHistoryFilters): Process
   }, [filters.period, filters.status, filters.confirmed]);
 
   // React Query
-  const { isLoading, error, refetch } = useQuery({
+  const { isLoading, error } = useQuery({
     queryKey: ['processingHistory', filters],
     queryFn: fetchInitialData,
     staleTime: 30000,
@@ -259,7 +259,7 @@ export function useProcessingHistory(filters: ProcessingHistoryFilters): Process
 
     setIsFetchingMore(true);
     try {
-      let currentBuffer = [...buffer];
+      const currentBuffer = [...buffer];
       let currentLastDoc = lastFirestoreDoc;
       let noMore = noMoreFirestoreDocs;
 
