@@ -199,10 +199,11 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
 2. `docs/context/functional-requirements.md` - 機能要件
 3. `docs/context/implementation-plan.md` - 実装計画（各Phase完了条件付き）
 4. `docs/context/data-model.md` - データモデル（Firestoreスキーマ）
-5. `docs/context/error-handling-policy.md` - エラーハンドリング
-6. `docs/context/gemini-rate-limiting.md` - Geminiレート制限
-7. `docs/context/business-logic.md` - ビジネスロジック
-8. `docs/adr/` - アーキテクチャ決定記録
+5. `docs/context/delivery-and-update-guide.md` - 納品・アップデート運用 ★運用時必読
+6. `docs/context/error-handling-policy.md` - エラーハンドリング
+7. `docs/context/gemini-rate-limiting.md` - Geminiレート制限
+8. `docs/context/business-logic.md` - ビジネスロジック
+9. `docs/adr/` - アーキテクチャ決定記録
 
 **注意**: `docs/直下`のファイル（data-model.md等）はGitHub Pages用の簡略版。AI開発時は`docs/context/`を参照すること。
 
@@ -265,9 +266,41 @@ node scripts/import-masters.js --file scripts/samples/customers.csv --type custo
 | UIライブラリ | shadcn/ui + Tailwind CSS |
 | PDFビューアー | react-pdf (pdf.js) |
 | 状態管理 | Zustand + TanStack Query |
-| 納品形態 | GCPプロジェクト移譲 |
+| 納品形態 | セットアップスクリプト方式（雛形なし） |
 
 **Artifact Registryは不要**（Firebase Hosting + Cloud Functionsソースデプロイのため）
+
+## マルチクライアント運用
+
+### アーキテクチャ方針
+
+```
+[doc-split-dev]          [client-a]          [client-b]
+  開発・検証        →      本番A        →      本番B
+  (SEEDあり)             (SEEDなし)          (SEEDなし)
+```
+
+### .firebaserc構成
+
+```json
+{
+  "projects": {
+    "dev": "doc-split-dev",
+    "client-a": "<client-a-project-id>",
+    "client-b": "<client-b-project-id>"
+  }
+}
+```
+
+### 運用フロー
+
+| フロー | 手順 |
+|--------|------|
+| 初期納品 | クライアントGCP作成 → setup-tenant.sh → マスターデータ投入 |
+| アップデート | dev で検証 → `firebase deploy -P client-a` → `-P client-b` |
+| 新規追加 | setup-tenant.sh → .firebasercに追加 |
+
+**詳細**: `docs/context/delivery-and-update-guide.md` 参照
 
 ## 確定した相談事項
 | 項目 | 決定内容 |
@@ -277,7 +310,7 @@ node scripts/import-masters.js --file scripts/samples/customers.csv --type custo
 | Gmail連携 | 開発: OAuth 2.0、本番: Service Account + Delegation |
 | 監視対象メール | 設定画面で指定可能（開発用: `hy.unimail.11@gmail.com`） |
 | ログイン許可ユーザー | ホワイトリスト方式（設定画面で管理、管理アカウントあり） |
-| 納品形態 | マスタープロジェクトをコピー→初期設定→移譲（サポート対応） |
+| 納品形態 | クライアントGCP作成 → セットアップスクリプト実行（雛形なし方式） |
 
 ## 技術選定（全確定）
 | 項目 | 選定 | 理由 |
@@ -388,6 +421,7 @@ doc-split/
     │   ├── functional-requirements.md
     │   ├── implementation-plan.md      # 完了チェックリスト付き
     │   ├── data-model.md
+    │   ├── delivery-and-update-guide.md  # 納品・アップデート運用 ★NEW
     │   ├── business-logic.md
     │   ├── error-handling-policy.md
     │   └── gemini-rate-limiting.md

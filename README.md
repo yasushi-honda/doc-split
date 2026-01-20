@@ -99,6 +99,8 @@ npm run test:rules
 | Phase 3 | ✅ 完了 | フロントエンド |
 | Phase 4 | ✅ 完了 | 管理機能・PDF分割 |
 | Phase 5 | ✅ 完了 | テスト・本番デプロイ |
+| Phase 6 | ✅ 完了 | ビジネスロジック移行 |
+| Phase 7 | ✅ 完了 | 処理履歴・同姓同名解決 |
 
 **本番URL**: https://doc-split-dev.web.app
 

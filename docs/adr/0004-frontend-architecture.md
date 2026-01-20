@@ -1,7 +1,7 @@
 # ADR-0004: フロントエンドアーキテクチャ
 
 ## Status
-**Proposed**
+**Accepted** - 2026-01-18 実装完了
 
 ## Context
 
