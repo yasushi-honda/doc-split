@@ -12,7 +12,7 @@ AppSheetで構築された書類管理アプリをGCPでリプレイス開発す
 Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、検索・グルーピング・閲覧が可能な**書類管理ビューアーアプリ**。
 
 ## 現在のステータス
-**フェーズ**: Phase 6完了 - **ビジネスロジック移行完了**
+**フェーズ**: Phase 7完了 - **処理履歴ビュー・同姓同名解決フロー**
 
 ### 環境情報
 | 項目 | 値 |
@@ -155,6 +155,21 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
   - 納品フロー（Mermaid図付き）
   - セットアップ手順、運用ガイド
   - データモデル、API/Functions、セキュリティ
+
+### Phase 7 完了項目（2026-01-20）
+- [x] 処理履歴ビュー（`/history`）
+  - 日付グルーピング表示
+  - 期間/ステータス/顧客確定フィルター
+  - バッファリングページネーション（FETCH_SIZE=50, PAGE_SIZE=20）
+- [x] 同姓同名解決モーダル（`SameNameResolveModal.tsx`）
+  - 顧客候補選択UI
+  - 「該当なし」オプション
+  - 監査ログ記録（`customerResolutionLogs`コレクション）
+- [x] バックエンド更新
+  - `processOCR`: customerConfirmed/customerCandidates新スキーマ
+  - `getOcrText`: 大容量OCR結果取得Callable Function
+  - Firestoreルール: 顧客解決フィールド更新許可
+- [x] テスト: 24テスト（Firestoreルール）+ 108テスト（ユニット）= 132テストパス
 
 ## 次のタスク（未実施）
 - [ ] 実書類でのOCR精度確認
