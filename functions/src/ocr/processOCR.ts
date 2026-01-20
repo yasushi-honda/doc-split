@@ -281,10 +281,16 @@ async function processDocument(
     fileDateFormatted: dateResult.formattedDate || null,
     isDuplicateCustomer: customerResult.bestMatch?.isDuplicate || false,
     needsManualCustomerSelection: customerResult.needsManualSelection,
+    // Phase 7: 顧客確定フィールド
+    customerConfirmed: !customerResult.needsManualSelection,
+    confirmedBy: null,   // システム自動処理のためnull
+    confirmedAt: null,   // システム自動処理のためnull
     allCustomerCandidates: customerCandidateNames.join(','),
+    // Phase 7: customerCandidates 新スキーマ
     customerCandidates: customerResult.candidates.slice(0, 5).map((c) => ({
-      id: c.id,
-      name: c.name,
+      customerId: c.id,
+      customerName: c.name,
+      isDuplicate: c.isDuplicate || false,
       score: c.score,
       matchType: c.matchType,
     })),

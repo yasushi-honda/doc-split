@@ -40,6 +40,14 @@ export interface Document {
   // 分割元ドキュメントへの参照（分割で生成された場合）
   parentDocumentId?: string;
   splitFromPages?: { start: number; end: number };
+
+  // Phase 7: 顧客確定機能
+  customerId?: string | null;                    // 顧客ID（「該当なし」選択時はnull）
+  customerCandidates?: CustomerCandidateInfo[];  // 構造化された候補リスト
+  customerConfirmed?: boolean;                   // 確定済みフラグ（デフォルト: true）
+  confirmedBy?: string | null;                   // 確定者UID（システム自動確定時はnull）
+  confirmedAt?: Timestamp | null;                // 確定日時（システム自動確定時はnull）
+  needsManualCustomerSelection?: boolean;        // 後方互換用（Phase 6以前）
 }
 
 // ============================================
@@ -67,6 +75,42 @@ export interface OfficeMaster {
 
 export interface CareManagerMaster {
   name: string;
+}
+
+// ============================================
+// Phase 7: 顧客候補情報
+// ============================================
+
+/** 顧客候補のマッチタイプ */
+export type CustomerMatchType = 'exact' | 'partial' | 'fuzzy';
+
+/** 顧客候補情報（processOCRで生成、同姓同名解決モーダルで表示） */
+export interface CustomerCandidateInfo {
+  customerId: string;          // CustomerMaster.id からコピー
+  customerName: string;        // CustomerMaster.name からコピー
+  customerNameKana?: string;   // CustomerMaster.furigana からコピー
+  isDuplicate: boolean;        // CustomerMaster.isDuplicate からコピー
+  officeId?: string;           // 将来拡張用
+  officeName?: string;         // 将来拡張用
+  careManagerName?: string;    // 将来拡張用
+  score: number;               // 類似度スコア (0-100)
+  matchType: CustomerMatchType;
+}
+
+// ============================================
+// Phase 7: 顧客解決監査ログ
+// ============================================
+
+/** 顧客解決監査ログ */
+export interface CustomerResolutionLog {
+  documentId: string;               // 対象書類ID
+  previousCustomerId: string | null; // 変更前の顧客ID（初回確定時はnull）
+  newCustomerId: string | null;     // 変更後の顧客ID（「該当なし」選択時はnull）
+  newCustomerName: string;          // 変更後の顧客名（「該当なし」時は"不明顧客"）
+  resolvedBy: string;               // 確定者UID
+  resolvedByEmail: string;          // 確定者メールアドレス
+  resolvedAt: Timestamp;            // 確定日時
+  reason?: string;                  // 任意のメモ（「該当なし」時は"該当なし選択"）
 }
 
 // ============================================

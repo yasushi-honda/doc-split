@@ -8,7 +8,7 @@ import { format } from 'date-fns'
 import { ja } from 'date-fns/locale'
 import { Timestamp } from 'firebase/firestore'
 import { ref, getDownloadURL } from 'firebase/storage'
-import { Download, ExternalLink, Loader2, FileText, User, Building, Calendar, Tag, AlertCircle, Scissors } from 'lucide-react'
+import { Download, ExternalLink, Loader2, FileText, User, Building, Calendar, Tag, AlertCircle, Scissors, UserCheck } from 'lucide-react'
 import { storage } from '@/lib/firebase'
 import {
   Dialog,
@@ -22,8 +22,10 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { PdfViewer } from '@/components/PdfViewer'
 import { PdfSplitModal } from '@/components/PdfSplitModal'
+import { SameNameResolveModal } from '@/components/SameNameResolveModal'
 import { useDocument } from '@/hooks/useDocuments'
-import type { DocumentStatus } from '@shared/types'
+import { isCustomerConfirmed } from '@/hooks/useProcessingHistory'
+import type { DocumentStatus, Document } from '@shared/types'
 
 interface DocumentDetailModalProps {
   documentId: string | null
@@ -66,8 +68,12 @@ function MetaRow({ icon: Icon, label, value }: { icon: React.ElementType; label:
 export function DocumentDetailModal({ documentId, open, onOpenChange }: DocumentDetailModalProps) {
   const { data: document, isLoading, isError, error, refetch } = useDocument(documentId)
   const [isSplitModalOpen, setIsSplitModalOpen] = useState(false)
+  const [isResolveModalOpen, setIsResolveModalOpen] = useState(false)
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null)
   const [urlLoading, setUrlLoading] = useState(false)
+
+  // 顧客確定状態を判定（Phase 7）
+  const needsCustomerConfirmation = document ? !isCustomerConfirmed(document) : false
 
   // ドキュメントが変わったらdownloadUrlをリセット
   useEffect(() => {
@@ -128,6 +134,12 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
   const handleSplitSuccess = () => {
     refetch()
     setIsSplitModalOpen(false)
+  }
+
+  // 顧客解決成功時（Phase 7）
+  const handleResolveSuccess = () => {
+    refetch()
+    setIsResolveModalOpen(false)
   }
 
   // 分割可能かどうか（複数ページのPDFで、processed状態）
@@ -241,13 +253,41 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                 <h3 className="mb-4 text-sm font-semibold text-gray-900">書類情報</h3>
 
                 <div className="divide-y">
-                  <MetaRow icon={User} label="顧客名" value={document.customerName || '未判定'} />
+                  <MetaRow
+                    icon={User}
+                    label="顧客名"
+                    value={
+                      <div className="flex items-center gap-2">
+                        <span>{document.customerName || '未判定'}</span>
+                        {needsCustomerConfirmation && (
+                          <Badge variant="outline" className="bg-orange-100 text-orange-800 border-orange-300 text-xs">
+                            要確認
+                          </Badge>
+                        )}
+                      </div>
+                    }
+                  />
                   <MetaRow icon={Building} label="事業所" value={document.officeName} />
                   <MetaRow icon={Tag} label="書類種別" value={document.documentType || '未判定'} />
                   <MetaRow icon={Calendar} label="書類日付" value={formatTimestamp(document.fileDate)} />
                   <MetaRow icon={Calendar} label="処理日時" value={formatTimestamp(document.processedAt, 'yyyy/MM/dd HH:mm')} />
                   <MetaRow icon={FileText} label="ページ数" value={`${document.totalPages} ページ`} />
                 </div>
+
+                {/* 顧客確定ボタン（Phase 7） */}
+                {needsCustomerConfirmation && (
+                  <div className="mt-4">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="w-full bg-orange-50 border-orange-300 text-orange-700 hover:bg-orange-100"
+                      onClick={() => setIsResolveModalOpen(true)}
+                    >
+                      <UserCheck className="h-4 w-4 mr-2" />
+                      顧客を確定
+                    </Button>
+                  </div>
+                )}
 
                 {/* 重複警告 */}
                 {document.isDuplicateCustomer && document.allCustomerCandidates && (
@@ -302,6 +342,16 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
           isOpen={isSplitModalOpen}
           onClose={() => setIsSplitModalOpen(false)}
           onSuccess={handleSplitSuccess}
+        />
+      )}
+
+      {/* 顧客解決モーダル（Phase 7） */}
+      {document && (
+        <SameNameResolveModal
+          document={document}
+          isOpen={isResolveModalOpen}
+          onClose={() => setIsResolveModalOpen(false)}
+          onResolved={handleResolveSuccess}
         />
       )}
     </Dialog>
