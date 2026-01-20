@@ -79,29 +79,27 @@ Firebase Console > プロジェクト設定 > アプリ > Firebase SDK snippet �
 
 ### 4.2 Gmail 認証設定
 
-**開発環境（OAuth 2.0）:**
+クライアント環境に応じて適切な認証方式を選択してください。
+詳細は [Gmail認証設定ガイド](./gmail-auth-guide.md) を参照。
 
-1. GCP Console > APIs & Services > Credentials
-2. OAuth 2.0 Client ID を作成
-3. Secret Manager に保存:
+| クライアント環境 | 認証方式 | セットアップスクリプト |
+|----------------|---------|---------------------|
+| 無料Gmail / 個人アカウント | OAuth 2.0 | `setup-gmail-auth.sh` |
+| Google Workspace | Service Account + Delegation | `setup-gmail-service-account.sh` |
+
+**方式1: OAuth 2.0（無料Gmail向け）**
 
 ```bash
-# OAuth クライアント ID
-echo -n "YOUR_CLIENT_ID" | gcloud secrets create gmail-oauth-client-id --data-file=-
-
-# OAuth クライアントシークレット
-echo -n "YOUR_CLIENT_SECRET" | gcloud secrets create gmail-oauth-client-secret --data-file=-
-
-# リフレッシュトークン（OAuth Playground で取得）
-echo -n "YOUR_REFRESH_TOKEN" | gcloud secrets create gmail-oauth-refresh-token --data-file=-
+./scripts/setup-gmail-auth.sh <project-id>
 ```
 
-**本番環境（Service Account + Domain-wide Delegation）:**
+**方式2: Service Account（Google Workspace向け）【本番推奨】**
 
-1. GCP Console > IAM & Admin > Service Accounts
-2. サービスアカウントを作成
-3. Google Workspace 管理コンソールでドメイン全体の委任を設定
-4. Secret Manager にサービスアカウントキーを保存
+```bash
+./scripts/setup-gmail-service-account.sh <project-id> <監視対象メール>
+```
+
+> **注意**: Google Workspaceの場合は Admin Console での Domain-wide Delegation 設定が必要です。
 
 ## 5. Firestore セットアップ
 
