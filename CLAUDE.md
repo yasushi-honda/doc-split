@@ -197,10 +197,18 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
   - `docs/context/duplicate-name-handling.md`
   - GitHub Pages公開済み
 - [x] dev環境・kanameone環境デプロイ完了
+- [x] **事業所同名対応実装（2026-01-22）**
+  - `extractOfficeCandidates`: 事業所候補抽出（複数候補対応）
+  - `processOCR`: officeConfirmed/officeCandidates新スキーマ
+  - `OfficeSameNameResolveModal.tsx`: 事業所解決UI
+  - `useOfficeResolution.ts`: 事業所解決フック
+  - `officeResolutionLogs`: 監査ログコレクション
+  - Firestoreルール: 事業所解決フィールド更新許可
 
 ## 次のタスク
-- [ ] 事業所同名対応実装（顧客パターン流用、努力量: Short 1-4時間）
+- [x] 事業所同名対応実装（顧客パターン流用）**完了 2026-01-22**
 - [ ] 実書類でのOCR精度確認（クライアント環境）
+- [ ] 本番デプロイ（dev/kanameone環境）
 
 ## 未実装（将来対応）
 - [ ] 検索機能（n-gram反転インデックス + Cloud Functions検索API）
