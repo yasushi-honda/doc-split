@@ -49,8 +49,7 @@ import {
   useAddDocumentType,
   useUpdateDocumentType,
   useDeleteDocumentType,
-  useImportDocumentTypeSeeds,
-  DOCUMENT_TYPE_SEEDS,
+  useBulkImportDocumentTypes,
   useOffices,
   useAddOffice,
   useUpdateOffice,
@@ -60,9 +59,12 @@ import {
   useAddCareManager,
   useUpdateCareManager,
   useDeleteCareManager,
+  useBulkImportCareManagers,
+  DuplicateError,
 } from '@/hooks/useMasters'
 import { CsvImportModal } from '@/components/CsvImportModal'
-import type { CustomerCSVRow, OfficeCSVRow } from '@/lib/csvParser'
+import type { CustomerCSVRow, OfficeCSVRow, CareManagerCSVRow, DocumentTypeCSVRow } from '@/lib/csvParser'
+import { downloadCsvTemplate } from '@/lib/csvTemplates'
 import type { CustomerMaster, DocumentMaster, OfficeMaster, CareManagerMaster } from '@shared/types'
 
 export function MastersPage() {
@@ -133,6 +135,7 @@ function CustomersMaster() {
   const [formName, setFormName] = useState('')
   const [formFurigana, setFormFurigana] = useState('')
   const [formIsDuplicate, setFormIsDuplicate] = useState(false)
+  const [formError, setFormError] = useState<string | null>(null)
 
   const handleCsvImport = async (data: CustomerCSVRow[]) => {
     return await bulkImport.mutateAsync(data)
@@ -145,13 +148,22 @@ function CustomersMaster() {
   )
 
   const handleAdd = async () => {
-    await addCustomer.mutateAsync({
-      name: formName,
-      furigana: formFurigana,
-      isDuplicate: formIsDuplicate,
-    })
-    resetForm()
-    setIsAddOpen(false)
+    setFormError(null)
+    try {
+      await addCustomer.mutateAsync({
+        name: formName,
+        furigana: formFurigana,
+        isDuplicate: formIsDuplicate,
+      })
+      resetForm()
+      setIsAddOpen(false)
+    } catch (error) {
+      if (error instanceof DuplicateError) {
+        setFormError(error.message)
+      } else {
+        setFormError('追加に失敗しました')
+      }
+    }
   }
 
   const handleUpdate = async () => {
@@ -183,6 +195,7 @@ function CustomersMaster() {
     setFormName('')
     setFormFurigana('')
     setFormIsDuplicate(false)
+    setFormError(null)
   }
 
   return (
@@ -193,6 +206,10 @@ function CustomersMaster() {
           <CardDescription>{customers?.length ?? 0}件の顧客</CardDescription>
         </div>
         <div className="flex gap-2">
+          <Button variant="ghost" size="sm" onClick={() => downloadCsvTemplate('customers')}>
+            <Download className="h-4 w-4 mr-1" />
+            テンプレート
+          </Button>
           <Button variant="outline" onClick={() => setIsCsvImportOpen(true)}>
             <Upload className="h-4 w-4 mr-2" />
             CSVインポート
@@ -272,12 +289,17 @@ function CustomersMaster() {
         )}
 
         {/* 追加ダイアログ */}
-        <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
+        <Dialog open={isAddOpen} onOpenChange={(open) => { setIsAddOpen(open); if (!open) resetForm() }}>
           <DialogContent>
             <DialogHeader>
               <DialogTitle>顧客追加</DialogTitle>
             </DialogHeader>
             <div className="space-y-4 py-4">
+              {formError && (
+                <div className="text-sm text-red-600 bg-red-50 p-3 rounded-md">
+                  {formError}
+                </div>
+              )}
               <div className="space-y-2">
                 <Label>顧客名</Label>
                 <Input
@@ -398,23 +420,22 @@ function DocumentTypesMaster() {
   const addDocumentType = useAddDocumentType()
   const updateDocumentType = useUpdateDocumentType()
   const deleteDocumentType = useDeleteDocumentType()
-  const importSeeds = useImportDocumentTypeSeeds()
+  const bulkImport = useBulkImportDocumentTypes()
 
   const [searchText, setSearchText] = useState('')
   const [isAddOpen, setIsAddOpen] = useState(false)
+  const [isCsvImportOpen, setIsCsvImportOpen] = useState(false)
   const [editingDoc, setEditingDoc] = useState<DocumentMaster | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<DocumentMaster | null>(null)
-  const [seedResult, setSeedResult] = useState<{ imported: number; skipped: number } | null>(null)
 
   const [formName, setFormName] = useState('')
   const [formDateMarker, setFormDateMarker] = useState('')
   const [formCategory, setFormCategory] = useState('')
   const [formKeywords, setFormKeywords] = useState('')
+  const [formError, setFormError] = useState<string | null>(null)
 
-  const handleImportSeeds = async () => {
-    const result = await importSeeds.mutateAsync()
-    setSeedResult(result)
-    setTimeout(() => setSeedResult(null), 5000) // 5秒後に消す
+  const handleCsvImport = async (data: DocumentTypeCSVRow[]) => {
+    return await bulkImport.mutateAsync(data)
   }
 
   const filteredDocs = documentTypes?.filter(
@@ -424,14 +445,23 @@ function DocumentTypesMaster() {
   )
 
   const handleAdd = async () => {
-    await addDocumentType.mutateAsync({
-      name: formName,
-      dateMarker: formDateMarker,
-      category: formCategory,
-      keywords: formKeywords,
-    })
-    resetForm()
-    setIsAddOpen(false)
+    setFormError(null)
+    try {
+      await addDocumentType.mutateAsync({
+        name: formName,
+        dateMarker: formDateMarker,
+        category: formCategory,
+        keywords: formKeywords,
+      })
+      resetForm()
+      setIsAddOpen(false)
+    } catch (error) {
+      if (error instanceof DuplicateError) {
+        setFormError(error.message)
+      } else {
+        setFormError('追加に失敗しました')
+      }
+    }
   }
 
   const handleUpdate = async () => {
@@ -466,6 +496,7 @@ function DocumentTypesMaster() {
     setFormDateMarker('')
     setFormCategory('')
     setFormKeywords('')
+    setFormError(null)
   }
 
   return (
@@ -475,22 +506,16 @@ function DocumentTypesMaster() {
           <CardTitle>書類種別マスター</CardTitle>
           <CardDescription>
             {documentTypes?.length ?? 0}件の書類種別
-            {seedResult && (
-              <span className="ml-2 text-green-600">
-                （{seedResult.imported}件追加、{seedResult.skipped}件スキップ）
-              </span>
-            )}
           </CardDescription>
         </div>
         <div className="flex gap-2">
-          <Button
-            variant="outline"
-            onClick={handleImportSeeds}
-            disabled={importSeeds.isPending}
-            title={`介護関係の書類種別${DOCUMENT_TYPE_SEEDS.length}種類を追加`}
-          >
-            <Download className="h-4 w-4 mr-2" />
-            {importSeeds.isPending ? '追加中...' : '初期データ追加'}
+          <Button variant="ghost" size="sm" onClick={() => downloadCsvTemplate('documents')}>
+            <Download className="h-4 w-4 mr-1" />
+            テンプレート
+          </Button>
+          <Button variant="outline" onClick={() => setIsCsvImportOpen(true)}>
+            <Upload className="h-4 w-4 mr-2" />
+            CSVインポート
           </Button>
           <Button onClick={() => { resetForm(); setIsAddOpen(true) }}>
             <Plus className="h-4 w-4 mr-2" />
@@ -576,12 +601,17 @@ function DocumentTypesMaster() {
         )}
 
         {/* 追加ダイアログ */}
-        <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
+        <Dialog open={isAddOpen} onOpenChange={(open) => { setIsAddOpen(open); if (!open) resetForm() }}>
           <DialogContent>
             <DialogHeader>
               <DialogTitle>書類種別追加</DialogTitle>
             </DialogHeader>
             <div className="space-y-4 py-4">
+              {formError && (
+                <div className="text-sm text-red-600 bg-red-50 p-3 rounded-md">
+                  {formError}
+                </div>
+              )}
               <div className="space-y-2">
                 <Label>書類名</Label>
                 <Input
@@ -706,6 +736,14 @@ function DocumentTypesMaster() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+
+        {/* CSVインポートモーダル */}
+        <CsvImportModal
+          type="documenttype"
+          isOpen={isCsvImportOpen}
+          onClose={() => setIsCsvImportOpen(false)}
+          onImport={handleCsvImport}
+        />
       </CardContent>
     </Card>
   )
@@ -731,6 +769,7 @@ function OfficesMaster() {
   // フォーム状態
   const [formName, setFormName] = useState('')
   const [formShortName, setFormShortName] = useState('')
+  const [formError, setFormError] = useState<string | null>(null)
 
   const filteredOffices = offices?.filter(
     (o) =>
@@ -740,9 +779,18 @@ function OfficesMaster() {
 
   const handleAdd = async () => {
     if (!formName.trim()) return
-    await addOffice.mutateAsync(formName.trim())
-    resetForm()
-    setIsAddOpen(false)
+    setFormError(null)
+    try {
+      await addOffice.mutateAsync(formName.trim())
+      resetForm()
+      setIsAddOpen(false)
+    } catch (error) {
+      if (error instanceof DuplicateError) {
+        setFormError(error.message)
+      } else {
+        setFormError('追加に失敗しました')
+      }
+    }
   }
 
   const handleUpdate = async () => {
@@ -771,6 +819,7 @@ function OfficesMaster() {
   const resetForm = () => {
     setFormName('')
     setFormShortName('')
+    setFormError(null)
   }
 
   const handleCsvImport = async (data: OfficeCSVRow[]) => {
@@ -785,6 +834,10 @@ function OfficesMaster() {
           <CardDescription>{offices?.length ?? 0}件の事業所</CardDescription>
         </div>
         <div className="flex gap-2">
+          <Button variant="ghost" size="sm" onClick={() => downloadCsvTemplate('offices')}>
+            <Download className="h-4 w-4 mr-1" />
+            テンプレート
+          </Button>
           <Button variant="outline" onClick={() => setIsCsvImportOpen(true)}>
             <Upload className="h-4 w-4 mr-2" />
             CSVインポート
@@ -858,12 +911,17 @@ function OfficesMaster() {
         )}
 
         {/* 追加ダイアログ */}
-        <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
+        <Dialog open={isAddOpen} onOpenChange={(open) => { setIsAddOpen(open); if (!open) resetForm() }}>
           <DialogContent>
             <DialogHeader>
               <DialogTitle>事業所追加</DialogTitle>
             </DialogHeader>
             <div className="space-y-4 py-4">
+              {formError && (
+                <div className="text-sm text-red-600 bg-red-50 p-3 rounded-md">
+                  {formError}
+                </div>
+              )}
               <div className="space-y-2">
                 <Label>事業所名</Label>
                 <Input
@@ -974,14 +1032,17 @@ function CareManagersMaster() {
   const addCareManager = useAddCareManager()
   const updateCareManager = useUpdateCareManager()
   const deleteCareManager = useDeleteCareManager()
+  const bulkImport = useBulkImportCareManagers()
 
   const [searchText, setSearchText] = useState('')
   const [isAddOpen, setIsAddOpen] = useState(false)
   const [editingCM, setEditingCM] = useState<CareManagerMaster | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<CareManagerMaster | null>(null)
+  const [isCsvImportOpen, setIsCsvImportOpen] = useState(false)
 
   // フォーム状態
   const [formName, setFormName] = useState('')
+  const [formError, setFormError] = useState<string | null>(null)
 
   const filteredCMs = careManagers?.filter(
     (cm) => cm.name.includes(searchText)
@@ -989,9 +1050,18 @@ function CareManagersMaster() {
 
   const handleAdd = async () => {
     if (!formName.trim()) return
-    await addCareManager.mutateAsync(formName.trim())
-    resetForm()
-    setIsAddOpen(false)
+    setFormError(null)
+    try {
+      await addCareManager.mutateAsync(formName.trim())
+      resetForm()
+      setIsAddOpen(false)
+    } catch (error) {
+      if (error instanceof DuplicateError) {
+        setFormError(error.message)
+      } else {
+        setFormError('追加に失敗しました')
+      }
+    }
   }
 
   const handleUpdate = async () => {
@@ -1017,6 +1087,11 @@ function CareManagersMaster() {
 
   const resetForm = () => {
     setFormName('')
+    setFormError(null)
+  }
+
+  const handleCsvImport = async (data: CareManagerCSVRow[]) => {
+    return await bulkImport.mutateAsync(data)
   }
 
   return (
@@ -1026,10 +1101,20 @@ function CareManagersMaster() {
           <CardTitle>ケアマネージャーマスター</CardTitle>
           <CardDescription>{careManagers?.length ?? 0}件のケアマネ</CardDescription>
         </div>
-        <Button onClick={() => { resetForm(); setIsAddOpen(true) }}>
-          <Plus className="h-4 w-4 mr-2" />
-          追加
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="ghost" size="sm" onClick={() => downloadCsvTemplate('caremanagers')}>
+            <Download className="h-4 w-4 mr-1" />
+            テンプレート
+          </Button>
+          <Button variant="outline" onClick={() => setIsCsvImportOpen(true)}>
+            <Upload className="h-4 w-4 mr-2" />
+            CSVインポート
+          </Button>
+          <Button onClick={() => { resetForm(); setIsAddOpen(true) }}>
+            <Plus className="h-4 w-4 mr-2" />
+            追加
+          </Button>
+        </div>
       </CardHeader>
       <CardContent>
         <div className="mb-4">
@@ -1092,12 +1177,17 @@ function CareManagersMaster() {
         )}
 
         {/* 追加ダイアログ */}
-        <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
+        <Dialog open={isAddOpen} onOpenChange={(open) => { setIsAddOpen(open); if (!open) resetForm() }}>
           <DialogContent>
             <DialogHeader>
               <DialogTitle>ケアマネージャー追加</DialogTitle>
             </DialogHeader>
             <div className="space-y-4 py-4">
+              {formError && (
+                <div className="text-sm text-red-600 bg-red-50 p-3 rounded-md">
+                  {formError}
+                </div>
+              )}
               <div className="space-y-2">
                 <Label>ケアマネージャー名</Label>
                 <Input
@@ -1167,6 +1257,14 @@ function CareManagersMaster() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+
+        {/* CSVインポートモーダル */}
+        <CsvImportModal
+          type="caremanager"
+          isOpen={isCsvImportOpen}
+          onClose={() => setIsCsvImportOpen(false)}
+          onImport={handleCsvImport}
+        />
       </CardContent>
     </Card>
   )

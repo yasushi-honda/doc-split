@@ -144,3 +144,49 @@ export function generateOfficeCSVTemplate(): string {
 △△デイサービス,△△デイ
 `
 }
+
+/**
+ * 書類種別マスター用のCSVマッピング
+ */
+export interface DocumentTypeCSVRow {
+  name: string
+  dateMarker: string
+  category: string
+  keywords: string
+}
+
+export function mapDocumentTypeCSV(rows: Record<string, string>[]): DocumentTypeCSVRow[] {
+  return rows.map(row => ({
+    name: row['name'] || row['書類名'] || row['書類種別'] || row['名称'] || '',
+    dateMarker: row['dateMarker'] || row['日付マーカー'] || row['日付'] || '',
+    category: row['category'] || row['カテゴリ'] || row['分類'] || '',
+    keywords: row['keywords'] || row['キーワード'] || row['照合キーワード'] || '',
+  })).filter(d => d.name) // 名前がない行は除外
+}
+
+export function generateDocumentTypeCSVTemplate(): string {
+  return `name,dateMarker,category,keywords
+介護保険被保険者証,有効期限,保険証,被保険者証;介護保険;要介護
+訪問介護計画書,作成日,サービス計画,訪問介護;サービス内容
+`
+}
+
+/**
+ * ケアマネマスター用のCSVマッピング
+ */
+export interface CareManagerCSVRow {
+  name: string
+}
+
+export function mapCareManagerCSV(rows: Record<string, string>[]): CareManagerCSVRow[] {
+  return rows.map(row => ({
+    name: row['name'] || row['ケアマネ名'] || row['氏名'] || row['名前'] || '',
+  })).filter(c => c.name) // 名前がない行は除外
+}
+
+export function generateCareManagerCSVTemplate(): string {
+  return `name
+佐藤花子
+田中次郎
+`
+}

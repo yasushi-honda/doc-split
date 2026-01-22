@@ -8,9 +8,11 @@ import {
   collection,
   doc,
   getDocs,
+  getDoc,
   setDoc,
   deleteDoc,
   updateDoc,
+  serverTimestamp,
 } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import { normalizeName } from '@/lib/textNormalizer'
@@ -20,6 +22,14 @@ import type {
   OfficeMaster,
   CareManagerMaster,
 } from '@shared/types'
+
+// 重複エラークラス
+export class DuplicateError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'DuplicateError'
+  }
+}
 
 // ============================================
 // 顧客マスター
@@ -50,9 +60,18 @@ interface AddCustomerParams {
 }
 
 async function addCustomer(params: AddCustomerParams): Promise<void> {
+  const normalizedName = normalizeName(params.name)
+
+  // 重複チェック
+  const snapshot = await getDocs(collection(db, 'masters/customers/items'))
+  const existingNames = new Set(snapshot.docs.map(d => d.data().name))
+  if (existingNames.has(normalizedName)) {
+    throw new DuplicateError(`「${normalizedName}」は既に登録されています`)
+  }
+
   const docRef = doc(collection(db, 'masters/customers/items'))
   await setDoc(docRef, {
-    name: normalizeName(params.name),
+    name: normalizedName,
     furigana: normalizeName(params.furigana),
     isDuplicate: params.isDuplicate || false,
   })
@@ -209,8 +228,13 @@ interface AddDocumentTypeParams {
 }
 
 async function addDocumentType(params: AddDocumentTypeParams): Promise<void> {
-  // 書類名をIDとして使用
+  // 重複チェック
   const docRef = doc(db, 'masters/documents/items', params.name)
+  const existingDoc = await getDoc(docRef)
+  if (existingDoc.exists()) {
+    throw new DuplicateError(`「${params.name}」は既に登録されています`)
+  }
+
   await setDoc(docRef, {
     name: params.name,
     dateMarker: params.dateMarker,
@@ -326,6 +350,56 @@ export function useImportDocumentTypeSeeds() {
   })
 }
 
+// 書類種別一括インポート
+interface BulkDocumentTypeParams {
+  name: string
+  dateMarker: string
+  category: string
+  keywords: string
+}
+
+async function bulkImportDocumentTypes(
+  documentTypes: BulkDocumentTypeParams[]
+): Promise<{ imported: number; skipped: number }> {
+  // 既存データを取得
+  const snapshot = await getDocs(collection(db, 'masters/documents/items'))
+  const existingNames = new Set(snapshot.docs.map(d => d.data().name))
+
+  let imported = 0
+  let skipped = 0
+
+  for (const docType of documentTypes) {
+    if (!docType.name || existingNames.has(docType.name)) {
+      skipped++
+      continue
+    }
+
+    const docRef = doc(db, 'masters/documents/items', docType.name)
+    await setDoc(docRef, {
+      name: docType.name,
+      dateMarker: docType.dateMarker || '',
+      category: docType.category || '',
+      keywords: docType.keywords
+        ? docType.keywords.split(';').map(k => k.trim()).filter(k => k.length >= 2)
+        : [],
+    })
+    imported++
+    existingNames.add(docType.name)
+  }
+
+  return { imported, skipped }
+}
+
+export function useBulkImportDocumentTypes() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: bulkImportDocumentTypes,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['masters', 'documents'] })
+    },
+  })
+}
+
 export function useDeleteDocumentType() {
   const queryClient = useQueryClient()
   return useMutation({
@@ -358,7 +432,14 @@ export function useOffices() {
 
 async function addOffice(name: string): Promise<void> {
   const normalizedName = normalizeName(name)
+
+  // 重複チェック
   const docRef = doc(db, 'masters/offices/items', normalizedName)
+  const existingDoc = await getDoc(docRef)
+  if (existingDoc.exists()) {
+    throw new DuplicateError(`「${normalizedName}」は既に登録されています`)
+  }
+
   await setDoc(docRef, { name: normalizedName })
 }
 
@@ -484,7 +565,14 @@ export function useCareManagers() {
 
 async function addCareManager(name: string): Promise<void> {
   const normalizedName = normalizeName(name)
+
+  // 重複チェック
   const docRef = doc(db, 'masters/caremanagers/items', normalizedName)
+  const existingDoc = await getDoc(docRef)
+  if (existingDoc.exists()) {
+    throw new DuplicateError(`「${normalizedName}」は既に登録されています`)
+  }
+
   await setDoc(docRef, { name: normalizedName })
 }
 
@@ -533,6 +621,53 @@ export function useUpdateCareManager() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: updateCareManager,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['masters', 'caremanagers'] })
+    },
+  })
+}
+
+// ============================================
+// ケアマネ一括インポート
+// ============================================
+
+interface BulkCareManagerParams {
+  name: string
+}
+
+async function bulkImportCareManagers(
+  params: BulkCareManagerParams[]
+): Promise<{ imported: number; skipped: number }> {
+  // 既存データを取得
+  const snapshot = await getDocs(collection(db, 'masters/caremanagers/items'))
+  const existing = new Set(snapshot.docs.map((doc) => doc.id))
+
+  let imported = 0
+  let skipped = 0
+
+  for (const cm of params) {
+    if (!cm.name || existing.has(cm.name)) {
+      skipped++
+      continue
+    }
+
+    const docRef = doc(db, 'masters/caremanagers/items', cm.name)
+    await setDoc(docRef, {
+      name: cm.name,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    })
+    imported++
+    existing.add(cm.name)
+  }
+
+  return { imported, skipped }
+}
+
+export function useBulkImportCareManagers() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: bulkImportCareManagers,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['masters', 'caremanagers'] })
     },

@@ -22,6 +22,7 @@ pubsub-debug.log
 .env
 .env.local
 .env.*.local
+.env.*
 *.env
 
 # IDE

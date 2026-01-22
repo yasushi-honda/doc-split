@@ -1,5 +1,7 @@
 {
   "projects": {
-    "default": "doc-split-dev"
+    "default": "doc-split-dev",
+    "dev": "doc-split-dev",
+    "kanameone": "docsplit-kanameone"
   }
 }

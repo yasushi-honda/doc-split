@@ -181,6 +181,17 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
   - docs/operation/gmail-auth-guide.md: 認証方式選択ガイド
   - 無料Gmail / Google Workspace 両パターン対応完了
 
+## クライアント環境（2026-01-22）
+### kanameone（検証用）
+| 項目 | 値 |
+|------|-----|
+| GCPプロジェクト | `docsplit-kanameone` |
+| Firebase Alias | `kanameone` |
+| 本番URL | `https://docsplit-kanameone.web.app` |
+| 管理者 | `systemkaname@kanameone.com` |
+| Gmail認証 | OAuth 2.0 |
+| 設定ファイル | `frontend/.env.kanameone` |
+
 ## 完了したインフラ設定（2026-01-19）
 - [x] コスト監視・予算アラート設定（月額3,000円、50%/80%/100%閾値）
 - [x] Cloud Monitoring エラー通知設定（Cloud Functions/Vertex AI）
@@ -241,19 +252,35 @@ cd frontend && npm test
 ```
 
 ### デプロイ
+
+**重要**: マルチ環境デプロイ時は必ずスクリプトを使用すること。
+手動で`firebase deploy`を実行すると、`.env.local`の設定が使われて誤った環境にデプロイされる危険がある。
+
 ```bash
-# 全体デプロイ（本番）
-firebase deploy
+# マルチ環境Hostingデプロイ（推奨）
+./scripts/deploy-to-project.sh dev        # 開発環境
+./scripts/deploy-to-project.sh kanameone  # クライアント環境
 
-# Functionsのみ
-firebase deploy --only functions
+# Functionsのみ（環境変数に依存しないため直接実行OK）
+firebase deploy --only functions -P dev
+firebase deploy --only functions -P kanameone
 
-# Hostingのみ
-firebase deploy --only hosting
-
-# ルールのみ
-firebase deploy --only firestore:rules,storage
+# ルールのみ（同上）
+firebase deploy --only firestore:rules,storage -P dev
+firebase deploy --only firestore:rules,storage -P kanameone
 ```
+
+### 環境変数ファイル構成
+
+```
+frontend/
+├── .env.dev          # dev環境設定（固定）
+├── .env.kanameone    # kanameone環境設定（固定）
+├── .env.local        # ローカル開発用（通常dev設定）
+└── .env.example      # テンプレート
+```
+
+**注意**: Viteは`.env.local`を最優先で読み込む。デプロイスクリプトは自動で正しい設定に切り替える。
 
 ### マスターデータ
 ```bash
@@ -308,6 +335,44 @@ node scripts/import-masters.js --file scripts/samples/customers.csv --type custo
 | 新規追加 | setup-tenant.sh → .firebasercに追加 |
 
 **詳細**: `docs/context/delivery-and-update-guide.md` 参照
+
+### ⚠️ クライアントデプロイ時の重要注意点
+
+**根本原因パターン（2026-01-22 kanameone移行時の教訓）**:
+- 仕様の「唯一の参照元」がなく手作業で推測
+- 環境差分（本番/検証）のガード不足
+- 実装仕様と運用手順の乖離
+
+1. **`.env.local` の優先順位問題**
+   - Viteは `.env.local` を `.env` より優先
+   - クライアント環境へデプロイ時は必ず `.env.local` を切り替える
+   ```bash
+   cp frontend/.env.<環境名> frontend/.env.local
+   rm -rf frontend/dist && npm run build
+   firebase deploy -P <環境名> --only hosting
+   cp frontend/.env.dev frontend/.env.local  # 復元
+   ```
+
+2. **管理者ユーザー登録**
+   - 登録先: `users` コレクション（`allowedUsers` ではない）
+   - ドキュメントID: Firebase Auth UID（emailではない）
+   - ユーザーが一度ログイン試行後に登録可能（Auth UIDが必要なため）
+
+3. **auth/unauthorized-domain 対応**
+   - Firebase Console → Authentication → Authorized domains
+   - GCP Console → OAuth 2.0 Client → JavaScript origins + Redirect URIs
+
+4. **本番環境へのサンプルデータ投入禁止**
+   - 本番セットアップ時は「マスターデータなし」を選択
+   - クライアントから実際のCSVを受領してから投入
+   - 開発/検証環境のみサンプルデータ使用可
+   - **注意**: マスターデータは `masters/{type}/items` サブコレクションに保存
+     - `masters/customers/items` - 顧客
+     - `masters/documents/items` - 書類種別（documentTypesではない）
+     - `masters/offices/items` - 事業所
+     - `masters/caremanagers/items` - ケアマネ（小文字）
+
+**トラブルシュート詳細**: `docs/operation/setup-guide.md` 参照
 
 ## 確定した相談事項
 | 項目 | 決定内容 |
