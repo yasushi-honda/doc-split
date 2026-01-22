@@ -69,6 +69,25 @@ export interface CustomerExtractionResult {
   needsManualSelection: boolean;
 }
 
+/** 事業所候補 */
+export interface OfficeCandidate {
+  id: string;
+  name: string;
+  shortName?: string;
+  score: number;
+  matchType: MatchType;
+  isDuplicate: boolean;
+  pageNumbers?: number[];
+}
+
+/** 事業所抽出結果（複数候補対応） */
+export interface OfficeExtractionResultWithCandidates {
+  bestMatch: OfficeCandidate | null;
+  candidates: OfficeCandidate[];
+  hasMultipleCandidates: boolean;
+  needsManualSelection: boolean;
+}
+
 /** 日付抽出結果 */
 export interface DateExtractionResult {
   date: Date | null;
@@ -93,6 +112,7 @@ export interface OfficeMaster {
   id: string;
   name: string;
   shortName?: string;
+  isDuplicate?: boolean;
 }
 
 export interface DocumentMaster {
@@ -484,6 +504,131 @@ export function aggregateCustomerCandidates(
   const bestMatch = limitedCandidates.length > 0 ? limitedCandidates[0]! : null;
   const hasMultipleCandidates = limitedCandidates.length > 1;
 
+  let needsManualSelection = false;
+  if (bestMatch?.isDuplicate) {
+    needsManualSelection = true;
+  } else if (hasMultipleCandidates && limitedCandidates[1]) {
+    const scoreDiff = bestMatch!.score - limitedCandidates[1].score;
+    if (scoreDiff <= 10) {
+      needsManualSelection = true;
+    }
+  }
+
+  return {
+    bestMatch,
+    candidates: limitedCandidates,
+    hasMultipleCandidates,
+    needsManualSelection,
+  };
+}
+
+/**
+ * 事業所候補を抽出（複数候補対応）
+ *
+ * 顧客同姓同名対応と同じパターンで事業所同名を処理
+ *
+ * @param ocrText OCR結果テキスト
+ * @param officeMasters 事業所マスターリスト
+ * @param options オプション
+ */
+export function extractOfficeCandidates(
+  ocrText: string,
+  officeMasters: OfficeMaster[],
+  options: {
+    minScore?: number;
+    maxCandidates?: number;
+    pageNumber?: number;
+  } = {}
+): OfficeExtractionResultWithCandidates {
+  const {
+    minScore = SIMILARITY_THRESHOLDS.OFFICE_THRESHOLD,
+    maxCandidates = MAX_CANDIDATES,
+    pageNumber,
+  } = options;
+
+  if (!ocrText || officeMasters.length === 0) {
+    return {
+      bestMatch: null,
+      candidates: [],
+      hasMultipleCandidates: false,
+      needsManualSelection: false,
+    };
+  }
+
+  // 前処理
+  const normalizedText = normalizeTextEnhanced(ocrText);
+  const matchingText = normalizeForMatching(normalizedText);
+
+  const candidates: OfficeCandidate[] = [];
+
+  for (const office of officeMasters) {
+    const normalizedOfficeName = normalizeForMatching(office.name);
+    let score = 0;
+    let matchType: MatchType = 'none';
+
+    // 1. 完全一致（正式名称）
+    if (matchingText.includes(normalizedOfficeName)) {
+      score = 100;
+      matchType = 'exact';
+    }
+    // 2. 短縮名での一致
+    else if (office.shortName) {
+      const normalizedShortName = normalizeForMatching(office.shortName);
+      if (matchingText.includes(normalizedShortName)) {
+        score = 95;
+        matchType = 'exact';
+      }
+    }
+
+    // 3. 部分一致（事業所名が4文字以上の場合）
+    if (matchType === 'none' && normalizedOfficeName.length >= 4) {
+      const prefixLength = Math.floor(normalizedOfficeName.length * 0.75);
+      if (matchingText.includes(normalizedOfficeName.slice(0, prefixLength))) {
+        score = 85;
+        matchType = 'partial';
+      }
+    }
+
+    // 4. ファジーマッチ
+    if (matchType === 'none') {
+      const windowSize = Math.min(normalizedOfficeName.length + 5, matchingText.length);
+      for (let i = 0; i <= matchingText.length - windowSize; i++) {
+        const window = matchingText.slice(i, i + windowSize);
+        const fuzzyScore = similarityScore(window, normalizedOfficeName);
+        if (fuzzyScore > score) {
+          score = fuzzyScore;
+          matchType = 'fuzzy';
+        }
+      }
+    }
+
+    // 閾値以上の場合、候補に追加
+    if (score >= minScore) {
+      candidates.push({
+        id: office.id,
+        name: office.name,
+        shortName: office.shortName,
+        score,
+        matchType,
+        isDuplicate: office.isDuplicate || false,
+        pageNumbers: pageNumber !== undefined ? [pageNumber] : undefined,
+      });
+    }
+  }
+
+  // スコア順にソート
+  candidates.sort((a, b) => b.score - a.score);
+
+  // 候補数制限
+  const limitedCandidates = candidates.slice(0, maxCandidates);
+
+  // 結果を構築
+  const bestMatch = limitedCandidates.length > 0 ? limitedCandidates[0]! : null;
+  const hasMultipleCandidates = limitedCandidates.length > 1;
+
+  // 手動選択が必要かどうかの判定
+  // - 同名フラグがある場合
+  // - 上位2件のスコア差が小さい場合（10ポイント以内）
   let needsManualSelection = false;
   if (bestMatch?.isDuplicate) {
     needsManualSelection = true;

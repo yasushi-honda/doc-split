@@ -25,6 +25,7 @@ import {
   extractDocumentTypeEnhanced,
   extractCustomerCandidates,
   extractOfficeNameEnhanced,
+  extractOfficeCandidates,
   extractDateEnhanced,
   CustomerMaster,
   DocumentMaster,
@@ -242,12 +243,16 @@ async function processDocument(
     id: d.id,
     name: d.data().name as string,
     shortName: d.data().shortName as string | undefined,
+    isDuplicate: d.data().isDuplicate as boolean | undefined,
   }));
 
   // 情報抽出（強化版エクストラクター使用）
   const documentTypeResult = extractDocumentTypeEnhanced(ocrResult, docMasterData);
   const customerResult = extractCustomerCandidates(ocrResult, custMasterData);
-  const officeResult = extractOfficeNameEnhanced(ocrResult, officeMasterData);
+  // 事業所候補抽出（同名対応）
+  const officeResult = extractOfficeCandidates(ocrResult, officeMasterData);
+  // 後方互換: 単一事業所抽出（extractionScores用）
+  const officeResultLegacy = extractOfficeNameEnhanced(ocrResult, officeMasterData);
 
   // 日付抽出（書類マスターの dateMarker を使用）
   const matchedDocMaster = documentMasters.docs.find((d) => d.data().name === documentTypeResult.documentType);
@@ -275,8 +280,8 @@ async function processDocument(
     documentType: documentTypeResult.documentType || '未判定',
     customerName: customerResult.bestMatch?.name || '不明顧客',
     customerId: customerResult.bestMatch?.id || null,
-    officeName: officeResult.officeName || '未判定',
-    officeId: officeResult.officeId || null,
+    officeName: officeResult.bestMatch?.name || '未判定',
+    officeId: officeResult.bestMatch?.id || null,
     fileDate: dateResult.date || null,
     fileDateFormatted: dateResult.formattedDate || null,
     isDuplicateCustomer: customerResult.bestMatch?.isDuplicate || false,
@@ -294,6 +299,19 @@ async function processDocument(
       score: c.score,
       matchType: c.matchType,
     })),
+    // 事業所確定フィールド
+    officeConfirmed: !officeResult.needsManualSelection,
+    officeConfirmedBy: null,   // システム自動処理のためnull
+    officeConfirmedAt: null,   // システム自動処理のためnull
+    // officeCandidates 新スキーマ
+    officeCandidates: officeResult.candidates.slice(0, 5).map((o) => ({
+      officeId: o.id,
+      officeName: o.name,
+      shortName: o.shortName,
+      isDuplicate: o.isDuplicate || false,
+      score: o.score,
+      matchType: o.matchType,
+    })),
     totalPages,
     category: documentTypeResult.category || null,
     status: 'processed',
@@ -302,14 +320,14 @@ async function processDocument(
     extractionScores: {
       documentType: documentTypeResult.score,
       customerName: customerResult.bestMatch?.score || 0,
-      officeName: officeResult.score,
+      officeName: officeResultLegacy.score,
       date: dateResult.confidence,
     },
     extractionDetails: {
       documentMatchType: documentTypeResult.matchType,
       documentKeywords: documentTypeResult.keywords,
       customerMatchType: customerResult.bestMatch?.matchType || 'none',
-      officeMatchType: officeResult.matchType,
+      officeMatchType: officeResultLegacy.matchType,
       datePattern: dateResult.pattern,
       dateSource: dateResult.source,
     },

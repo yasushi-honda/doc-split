@@ -49,6 +49,13 @@ export interface Document {
   confirmedAt?: Timestamp | null;                // 確定日時（システム自動確定時はnull）
   needsManualCustomerSelection?: boolean;        // 後方互換用（Phase 6以前）
 
+  // 事業所確定機能
+  officeId?: string | null;                      // 事業所ID（「該当なし」選択時はnull）
+  officeCandidates?: OfficeCandidateInfo[];      // 構造化された候補リスト
+  officeConfirmed?: boolean;                     // 確定済みフラグ（デフォルト: true）
+  officeConfirmedBy?: string | null;             // 確定者UID（システム自動確定時はnull）
+  officeConfirmedAt?: Timestamp | null;          // 確定日時（システム自動確定時はnull）
+
   // Phase 8: グループ化用正規化キー（Cloud Functionsで自動設定）
   customerKey?: string;       // customerName正規化版
   officeKey?: string;         // officeName正規化版
@@ -103,8 +110,11 @@ export interface CustomerMaster {
 }
 
 export interface OfficeMaster {
+  id: string;              // ドキュメントID
   name: string;
+  nameKey?: string;        // 正規化キー（検索用）
   shortName?: string;
+  isDuplicate: boolean;    // 同名フラグ
 }
 
 export interface CareManagerMaster {
@@ -132,6 +142,23 @@ export interface CustomerCandidateInfo {
 }
 
 // ============================================
+// 事業所候補情報
+// ============================================
+
+/** 事業所候補のマッチタイプ */
+export type OfficeMatchType = 'exact' | 'partial' | 'fuzzy';
+
+/** 事業所候補情報（processOCRで生成、同名解決モーダルで表示） */
+export interface OfficeCandidateInfo {
+  officeId: string;            // OfficeMaster.id からコピー
+  officeName: string;          // OfficeMaster.name からコピー
+  shortName?: string;          // OfficeMaster.shortName からコピー
+  isDuplicate: boolean;        // OfficeMaster.isDuplicate からコピー
+  score: number;               // 類似度スコア (0-100)
+  matchType: OfficeMatchType;
+}
+
+// ============================================
 // Phase 7: 顧客解決監査ログ
 // ============================================
 
@@ -141,6 +168,18 @@ export interface CustomerResolutionLog {
   previousCustomerId: string | null; // 変更前の顧客ID（初回確定時はnull）
   newCustomerId: string | null;     // 変更後の顧客ID（「該当なし」選択時はnull）
   newCustomerName: string;          // 変更後の顧客名（「該当なし」時は"不明顧客"）
+  resolvedBy: string;               // 確定者UID
+  resolvedByEmail: string;          // 確定者メールアドレス
+  resolvedAt: Timestamp;            // 確定日時
+  reason?: string;                  // 任意のメモ（「該当なし」時は"該当なし選択"）
+}
+
+/** 事業所解決監査ログ */
+export interface OfficeResolutionLog {
+  documentId: string;               // 対象書類ID
+  previousOfficeId: string | null;  // 変更前の事業所ID（初回確定時はnull）
+  newOfficeId: string | null;       // 変更後の事業所ID（「該当なし」選択時はnull）
+  newOfficeName: string;            // 変更後の事業所名（「該当なし」時は"不明事業所"）
   resolvedBy: string;               // 確定者UID
   resolvedByEmail: string;          // 確定者メールアドレス
   resolvedAt: Timestamp;            // 確定日時
