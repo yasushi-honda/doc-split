@@ -225,9 +225,18 @@ export function PendingConfirmationList() {
                   {doc.pendingType === 'both' && `${doc.customerName || '-'} / ${doc.officeName || '-'}`}
                 </TableCell>
                 <TableCell>
-                  <CandidateCountBadge
-                    count={doc.customerCandidates?.length || 0}
-                  />
+                  {doc.pendingType === 'customer' && (
+                    <CandidateCountBadge count={doc.customerCandidates?.length || 0} />
+                  )}
+                  {doc.pendingType === 'office' && (
+                    <CandidateCountBadge count={doc.officeCandidates?.length || 0} />
+                  )}
+                  {doc.pendingType === 'both' && (
+                    <div className="flex flex-col gap-1">
+                      <span className="text-xs text-orange-600">顧客: {doc.customerCandidates?.length || 0}件</span>
+                      <span className="text-xs text-blue-600">事業所: {doc.officeCandidates?.length || 0}件</span>
+                    </div>
+                  )}
                 </TableCell>
                 <TableCell className="text-gray-500 text-sm">
                   {formatTimestamp(doc.processedAt)}
@@ -243,7 +252,7 @@ export function PendingConfirmationList() {
         <DocumentDetailModal
           documentId={selectedDocumentId}
           open={true}
-          onClose={handleModalClose}
+          onOpenChange={(open) => !open && handleModalClose()}
         />
       )}
     </div>

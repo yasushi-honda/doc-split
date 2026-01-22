@@ -46,15 +46,14 @@ async function fetchPendingStats(): Promise<PendingConfirmationStats> {
   const customerSnapshot = await getCountFromServer(customerQuery);
   const customerUnconfirmed = customerSnapshot.data().count;
 
-  // 事業所未確定件数（将来用 - 現在は0）
-  // const officeQuery = query(
-  //   collection(db, 'documents'),
-  //   where('status', '==', 'processed'),
-  //   where('officeConfirmed', '==', false)
-  // );
-  // const officeSnapshot = await getCountFromServer(officeQuery);
-  // const officeUnconfirmed = officeSnapshot.data().count;
-  const officeUnconfirmed = 0;
+  // 事業所未確定件数
+  const officeQuery = query(
+    collection(db, 'documents'),
+    where('status', '==', 'processed'),
+    where('officeConfirmed', '==', false)
+  );
+  const officeSnapshot = await getCountFromServer(officeQuery);
+  const officeUnconfirmed = officeSnapshot.data().count;
 
   return {
     customerUnconfirmed,
@@ -83,7 +82,7 @@ async function fetchPendingDocuments(
   limitCount: number = 50
 ): Promise<PendingConfirmationDocument[]> {
   // 顧客未確定ドキュメントを取得
-  const q = query(
+  const customerQuery = query(
     collection(db, 'documents'),
     where('status', '==', 'processed'),
     where('customerConfirmed', '==', false),
@@ -91,13 +90,56 @@ async function fetchPendingDocuments(
     limit(limitCount)
   );
 
-  const snapshot = await getDocs(q);
+  // 事業所未確定ドキュメントを取得
+  const officeQuery = query(
+    collection(db, 'documents'),
+    where('status', '==', 'processed'),
+    where('officeConfirmed', '==', false),
+    orderBy('processedAt', 'desc'),
+    limit(limitCount)
+  );
 
-  return snapshot.docs.map((doc) => ({
-    id: doc.id,
-    ...doc.data(),
-    pendingType: 'customer' as const,
-  })) as PendingConfirmationDocument[];
+  const [customerSnapshot, officeSnapshot] = await Promise.all([
+    getDocs(customerQuery),
+    getDocs(officeQuery),
+  ]);
+
+  // 結果をマージ（重複を除去）
+  const documentsMap = new Map<string, PendingConfirmationDocument>();
+
+  // 顧客未確定を追加
+  customerSnapshot.docs.forEach((doc) => {
+    const data = doc.data() as Document;
+    documentsMap.set(doc.id, {
+      id: doc.id,
+      ...data,
+      pendingType: 'customer',
+    });
+  });
+
+  // 事業所未確定を追加（重複の場合は'both'に更新）
+  officeSnapshot.docs.forEach((doc) => {
+    const existing = documentsMap.get(doc.id);
+    if (existing) {
+      existing.pendingType = 'both';
+    } else {
+      const data = doc.data() as Document;
+      documentsMap.set(doc.id, {
+        id: doc.id,
+        ...data,
+        pendingType: 'office',
+      });
+    }
+  });
+
+  // processedAtで降順ソートして返す
+  return Array.from(documentsMap.values())
+    .sort((a, b) => {
+      const aTime = a.processedAt?.toMillis?.() || 0;
+      const bTime = b.processedAt?.toMillis?.() || 0;
+      return bTime - aTime;
+    })
+    .slice(0, limitCount);
 }
 
 /**

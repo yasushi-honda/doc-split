@@ -8,7 +8,7 @@ import { format } from 'date-fns'
 import { ja } from 'date-fns/locale'
 import { Timestamp } from 'firebase/firestore'
 import { ref, getDownloadURL } from 'firebase/storage'
-import { Download, ExternalLink, Loader2, FileText, User, Building, Calendar, Tag, AlertCircle, Scissors, UserCheck } from 'lucide-react'
+import { Download, ExternalLink, Loader2, FileText, User, Building, Building2, Calendar, Tag, AlertCircle, Scissors, UserCheck } from 'lucide-react'
 import { storage } from '@/lib/firebase'
 import {
   Dialog,
@@ -22,6 +22,7 @@ import { Badge } from '@/components/ui/badge'
 import { PdfViewer } from '@/components/PdfViewer'
 import { PdfSplitModal } from '@/components/PdfSplitModal'
 import { SameNameResolveModal } from '@/components/SameNameResolveModal'
+import { OfficeSameNameResolveModal } from '@/components/OfficeSameNameResolveModal'
 import { useDocument } from '@/hooks/useDocuments'
 import { isCustomerConfirmed } from '@/hooks/useProcessingHistory'
 import type { DocumentStatus } from '@shared/types'
@@ -68,11 +69,17 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
   const { data: document, isLoading, isError, error, refetch } = useDocument(documentId)
   const [isSplitModalOpen, setIsSplitModalOpen] = useState(false)
   const [isResolveModalOpen, setIsResolveModalOpen] = useState(false)
+  const [isOfficeResolveModalOpen, setIsOfficeResolveModalOpen] = useState(false)
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null)
   const [urlLoading, setUrlLoading] = useState(false)
 
   // 顧客確定状態を判定（Phase 7）
   const needsCustomerConfirmation = document ? !isCustomerConfirmed(document) : false
+
+  // 事業所確定状態を判定（Phase 8 同名対応）
+  const needsOfficeConfirmation = document
+    ? document.officeConfirmed === false && document.officeCandidates && document.officeCandidates.length > 0
+    : false
 
   // ドキュメントが変わったらdownloadUrlをリセット
   useEffect(() => {
@@ -139,6 +146,12 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
   const handleResolveSuccess = () => {
     refetch()
     setIsResolveModalOpen(false)
+  }
+
+  // 事業所解決成功時（Phase 8 同名対応）
+  const handleOfficeResolveSuccess = () => {
+    refetch()
+    setIsOfficeResolveModalOpen(false)
   }
 
   // 分割可能かどうか（複数ページのPDFで、processed状態）
@@ -266,7 +279,20 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                       </div>
                     }
                   />
-                  <MetaRow icon={Building} label="事業所" value={document.officeName} />
+                  <MetaRow
+                    icon={Building}
+                    label="事業所"
+                    value={
+                      <div className="flex items-center gap-2">
+                        <span>{document.officeName || '未判定'}</span>
+                        {needsOfficeConfirmation && (
+                          <Badge variant="outline" className="bg-orange-100 text-orange-800 border-orange-300 text-xs">
+                            要確認
+                          </Badge>
+                        )}
+                      </div>
+                    }
+                  />
                   <MetaRow icon={Tag} label="書類種別" value={document.documentType || '未判定'} />
                   <MetaRow icon={Calendar} label="書類日付" value={formatTimestamp(document.fileDate)} />
                   <MetaRow icon={Calendar} label="処理日時" value={formatTimestamp(document.processedAt, 'yyyy/MM/dd HH:mm')} />
@@ -284,6 +310,21 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                     >
                       <UserCheck className="h-4 w-4 mr-2" />
                       顧客を確定
+                    </Button>
+                  </div>
+                )}
+
+                {/* 事業所確定ボタン（Phase 8 同名対応） */}
+                {needsOfficeConfirmation && (
+                  <div className="mt-4">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="w-full bg-blue-50 border-blue-300 text-blue-700 hover:bg-blue-100"
+                      onClick={() => setIsOfficeResolveModalOpen(true)}
+                    >
+                      <Building2 className="h-4 w-4 mr-2" />
+                      事業所を確定
                     </Button>
                   </div>
                 )}
@@ -351,6 +392,16 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
           isOpen={isResolveModalOpen}
           onClose={() => setIsResolveModalOpen(false)}
           onResolved={handleResolveSuccess}
+        />
+      )}
+
+      {/* 事業所解決モーダル（Phase 8 同名対応） */}
+      {document && (
+        <OfficeSameNameResolveModal
+          document={document}
+          isOpen={isOfficeResolveModalOpen}
+          onClose={() => setIsOfficeResolveModalOpen(false)}
+          onResolved={handleOfficeResolveSuccess}
         />
       )}
     </Dialog>
