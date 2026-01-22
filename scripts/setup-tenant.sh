@@ -223,6 +223,37 @@ async function main() {
         updatedAt: new Date()
     }, { merge: true });
     console.log('✓ 管理者ユーザーを登録: $ADMIN_EMAIL');
+
+    // 書類種別シードデータを投入
+    const documentTypeSeeds = [
+        { name: 'フェースシート', dateMarker: '作成日', category: '基本情報', keywords: ['フェイスシート', '基本情報', '利用者情報'] },
+        { name: '介護保険被保険者証', dateMarker: '有効期限', category: '保険証', keywords: ['被保険者証', '介護保険', '要介護'] },
+        { name: '負担割合証', dateMarker: '適用期間', category: '保険証', keywords: ['負担割合', '利用者負担'] },
+        { name: '居宅サービス計画書（1）', dateMarker: '作成年月日', category: 'ケアプラン', keywords: ['居宅サービス計画', '援助の方針'] },
+        { name: '居宅サービス計画書（2）', dateMarker: '作成年月日', category: 'ケアプラン', keywords: ['週間サービス計画表'] },
+        { name: 'サービス担当者会議の要点', dateMarker: '開催日', category: '会議録', keywords: ['サービス担当者会議', '会議の要点'] },
+        { name: '訪問介護計画書', dateMarker: '作成日', category: 'サービス計画', keywords: ['訪問介護', 'サービス内容'] },
+        { name: '訪問看護計画書', dateMarker: '作成日', category: 'サービス計画', keywords: ['訪問看護', '看護計画'] },
+        { name: '通所介護計画書', dateMarker: '作成日', category: 'サービス計画', keywords: ['通所介護', 'デイサービス'] },
+        { name: '福祉用具貸与計画書', dateMarker: '作成日', category: 'サービス計画', keywords: ['福祉用具', '貸与'] },
+        { name: '住宅改修理由書', dateMarker: '作成日', category: '申請書類', keywords: ['住宅改修', '理由書'] },
+        { name: '主治医意見書', dateMarker: '記載日', category: '医療', keywords: ['主治医', '意見書', '要介護認定'] },
+        { name: '診断書', dateMarker: '発行日', category: '医療', keywords: ['診断書', '診断名'] },
+        { name: '情報提供書', dateMarker: '発行日', category: '医療', keywords: ['情報提供', '病状'] },
+        { name: '同意書', dateMarker: '同意日', category: '契約', keywords: ['同意書', '重要事項説明'] },
+        { name: '契約書', dateMarker: '契約日', category: '契約', keywords: ['契約書', '利用契約'] },
+    ];
+
+    let imported = 0;
+    for (const seed of documentTypeSeeds) {
+        const docRef = db.doc('masters/documents/items/' + seed.name);
+        const existing = await docRef.get();
+        if (!existing.exists) {
+            await docRef.set(seed);
+            imported++;
+        }
+    }
+    console.log('✓ 書類種別マスター: ' + imported + '件追加 (シード ' + documentTypeSeeds.length + '件中)');
 }
 
 main().catch(console.error);

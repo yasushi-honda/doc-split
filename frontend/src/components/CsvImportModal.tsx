@@ -29,25 +29,31 @@ import {
   readCSVFile,
   mapCustomerCSV,
   mapOfficeCSV,
+  mapCareManagerCSV,
+  mapDocumentTypeCSV,
   generateCustomerCSVTemplate,
   generateOfficeCSVTemplate,
+  generateCareManagerCSVTemplate,
+  generateDocumentTypeCSVTemplate,
   type CustomerCSVRow,
   type OfficeCSVRow,
+  type CareManagerCSVRow,
+  type DocumentTypeCSVRow,
 } from '@/lib/csvParser'
 
-type ImportType = 'customer' | 'office'
+type ImportType = 'customer' | 'office' | 'caremanager' | 'documenttype'
 
 interface CsvImportModalProps {
   type: ImportType
   isOpen: boolean
   onClose: () => void
-  onImport: (data: CustomerCSVRow[] | OfficeCSVRow[]) => Promise<{ imported: number; skipped: number }>
+  onImport: (data: CustomerCSVRow[] | OfficeCSVRow[] | CareManagerCSVRow[] | DocumentTypeCSVRow[]) => Promise<{ imported: number; skipped: number }>
 }
 
 export function CsvImportModal({ type, isOpen, onClose, onImport }: CsvImportModalProps) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [fileName, setFileName] = useState<string | null>(null)
-  const [previewData, setPreviewData] = useState<CustomerCSVRow[] | OfficeCSVRow[]>([])
+  const [previewData, setPreviewData] = useState<CustomerCSVRow[] | OfficeCSVRow[] | CareManagerCSVRow[] | DocumentTypeCSVRow[]>([])
   const [error, setError] = useState<string | null>(null)
   const [importing, setImporting] = useState(false)
   const [result, setResult] = useState<{ imported: number; skipped: number } | null>(null)
@@ -55,6 +61,8 @@ export function CsvImportModal({ type, isOpen, onClose, onImport }: CsvImportMod
   const typeLabels = {
     customer: { name: '顧客', fields: ['顧客名', 'フリガナ', '同姓同名'] },
     office: { name: '事業所', fields: ['事業所名', '略称'] },
+    caremanager: { name: 'ケアマネ', fields: ['ケアマネ名'] },
+    documenttype: { name: '書類種別', fields: ['書類名', '日付マーカー', 'カテゴリ', 'キーワード'] },
   }
 
   const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -75,11 +83,15 @@ export function CsvImportModal({ type, isOpen, onClose, onImport }: CsvImportMod
         return
       }
 
-      let mapped: CustomerCSVRow[] | OfficeCSVRow[]
+      let mapped: CustomerCSVRow[] | OfficeCSVRow[] | CareManagerCSVRow[] | DocumentTypeCSVRow[]
       if (type === 'customer') {
         mapped = mapCustomerCSV(rows)
-      } else {
+      } else if (type === 'office') {
         mapped = mapOfficeCSV(rows)
+      } else if (type === 'caremanager') {
+        mapped = mapCareManagerCSV(rows)
+      } else {
+        mapped = mapDocumentTypeCSV(rows)
       }
 
       if (mapped.length === 0) {
@@ -112,15 +124,27 @@ export function CsvImportModal({ type, isOpen, onClose, onImport }: CsvImportMod
   }
 
   const handleDownloadTemplate = () => {
-    const template = type === 'customer'
-      ? generateCustomerCSVTemplate()
-      : generateOfficeCSVTemplate()
+    let template: string
+    let filename: string
+    if (type === 'customer') {
+      template = generateCustomerCSVTemplate()
+      filename = 'customers_template.csv'
+    } else if (type === 'office') {
+      template = generateOfficeCSVTemplate()
+      filename = 'offices_template.csv'
+    } else if (type === 'caremanager') {
+      template = generateCareManagerCSVTemplate()
+      filename = 'caremanagers_template.csv'
+    } else {
+      template = generateDocumentTypeCSVTemplate()
+      filename = 'documenttypes_template.csv'
+    }
 
     const blob = new Blob([template], { type: 'text/csv;charset=utf-8' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = type === 'customer' ? 'customers_template.csv' : 'offices_template.csv'
+    a.download = filename
     a.click()
     URL.revokeObjectURL(url)
   }
@@ -222,10 +246,21 @@ export function CsvImportModal({ type, isOpen, onClose, onImport }: CsvImportMod
                             <TableCell>{(row as CustomerCSVRow).furigana || '-'}</TableCell>
                             <TableCell>{(row as CustomerCSVRow).isDuplicate ? 'はい' : '-'}</TableCell>
                           </>
-                        ) : (
+                        ) : type === 'office' ? (
                           <>
                             <TableCell>{(row as OfficeCSVRow).name}</TableCell>
                             <TableCell>{(row as OfficeCSVRow).shortName || '-'}</TableCell>
+                          </>
+                        ) : type === 'caremanager' ? (
+                          <>
+                            <TableCell>{(row as CareManagerCSVRow).name}</TableCell>
+                          </>
+                        ) : (
+                          <>
+                            <TableCell>{(row as DocumentTypeCSVRow).name}</TableCell>
+                            <TableCell>{(row as DocumentTypeCSVRow).dateMarker || '-'}</TableCell>
+                            <TableCell>{(row as DocumentTypeCSVRow).category || '-'}</TableCell>
+                            <TableCell className="max-w-[150px] truncate">{(row as DocumentTypeCSVRow).keywords || '-'}</TableCell>
                           </>
                         )}
                       </TableRow>
@@ -251,10 +286,21 @@ export function CsvImportModal({ type, isOpen, onClose, onImport }: CsvImportMod
                   <li>フリガナ: <code>furigana</code>, <code>フリガナ</code>, <code>ふりがな</code></li>
                   <li>同姓同名: <code>isDuplicate</code>, <code>同姓同名</code>, <code>重複</code> (true/false)</li>
                 </ul>
-              ) : (
+              ) : type === 'office' ? (
                 <ul className="list-disc list-inside text-xs space-y-1">
                   <li>事業所名: <code>name</code>, <code>事業所名</code>, <code>名称</code></li>
                   <li>略称: <code>shortName</code>, <code>略称</code>, <code>短縮名</code></li>
+                </ul>
+              ) : type === 'caremanager' ? (
+                <ul className="list-disc list-inside text-xs space-y-1">
+                  <li>ケアマネ名: <code>name</code>, <code>ケアマネ名</code>, <code>氏名</code>, <code>名前</code></li>
+                </ul>
+              ) : (
+                <ul className="list-disc list-inside text-xs space-y-1">
+                  <li>書類名: <code>name</code>, <code>書類名</code>, <code>書類種別</code>, <code>名称</code></li>
+                  <li>日付マーカー: <code>dateMarker</code>, <code>日付マーカー</code>, <code>日付</code></li>
+                  <li>カテゴリ: <code>category</code>, <code>カテゴリ</code>, <code>分類</code></li>
+                  <li>キーワード: <code>keywords</code>, <code>キーワード</code>, <code>照合キーワード</code> (セミコロン区切り)</li>
                 </ul>
               )}
             </div>
