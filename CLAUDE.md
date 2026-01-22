@@ -186,18 +186,24 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
   - `GroupList.tsx`: アコーディオン形式グループ表示
   - `GroupDocumentList.tsx`: グループ内ドキュメント一覧
 - [x] UI拡張
-  - `DocumentsPage.tsx`: 5タブ切替（書類一覧、顧客別、事業所別、書類種別、担当CM別）
+  - `DocumentsPage.tsx`: 6タブ切替（書類一覧、顧客別、事業所別、書類種別、担当CM別、確認待ち）
 - [x] Firestoreセキュリティルール更新
 - [x] 全132テストパス
+- [x] **UX改善: 確認待ち通知バナー・専用タブ**
+  - `PendingConfirmationBanner.tsx`: 確認待ち件数通知バナー
+  - `PendingConfirmationList.tsx`: 確認待ちドキュメント一覧
+  - `usePendingConfirmations.ts`: 確認待ち件数/一覧取得フック
+- [x] 同名/同姓同名対応設計ドキュメント作成（Codexアーキテクトレビュー済み）
+  - `docs/context/duplicate-name-handling.md`
+  - GitHub Pages公開済み
+- [x] dev環境・kanameone環境デプロイ完了
 
 ## 次のタスク
-- [ ] dev環境デプロイ・動作確認
-- [ ] マイグレーションスクリプト実行（`node scripts/migrate-document-groups.js`）
-- [ ] kanameone環境へ反映
+- [ ] 事業所同名対応実装（顧客パターン流用、努力量: Short 1-4時間）
+- [ ] 実書類でのOCR精度確認（クライアント環境）
 
 ## 未実装（将来対応）
 - [ ] 検索機能（n-gram反転インデックス + Cloud Functions検索API）
-- [ ] 実書類でのOCR精度確認（クライアント環境）
 - [ ] 精度改善（フィードバック後）
 
 ## 追加完了項目（2026-01-20）
