@@ -65,14 +65,20 @@ async function importCustomers(filePath) {
   let count = 0;
 
   for (const row of rows) {
-    // 期待するカラム: name, furigana, isDuplicate
+    // 期待するカラム: name, furigana, isDuplicate, careManagerName
     const docRef = db.collection('masters/customers/items').doc();
-    batch.set(docRef, {
+    const data = {
       id: docRef.id,
       name: row['name'] || row['顧客氏名'] || '',
       furigana: row['furigana'] || row['フリガナ'] || '',
       isDuplicate: row['isDuplicate'] === 'true' || row['同姓同名'] === 'true',
-    });
+    };
+    // 担当ケアマネがある場合のみ追加
+    const careManagerName = row['careManagerName'] || row['担当ケアマネ'] || row['担当CM'] || '';
+    if (careManagerName) {
+      data.careManagerName = careManagerName;
+    }
+    batch.set(docRef, data);
     count++;
   }
 
@@ -128,12 +134,16 @@ async function importOffices(filePath) {
   let count = 0;
 
   for (const row of rows) {
-    // 期待するカラム: name
+    // 期待するカラム: name, shortName (optional)
     const name = row['name'] || row['事業所名'] || '';
     const docRef = db.collection('masters/offices/items').doc(name);
-    batch.set(docRef, {
-      name,
-    });
+    const data = { name };
+    // 短縮名がある場合のみ追加
+    const shortName = row['shortName'] || row['短縮名'] || '';
+    if (shortName) {
+      data.shortName = shortName;
+    }
+    batch.set(docRef, data);
     count++;
   }
 

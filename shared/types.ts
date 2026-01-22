@@ -66,6 +66,7 @@ export interface CustomerMaster {
   name: string;
   isDuplicate: boolean; // 同姓同名フラグ
   furigana: string;
+  careManagerName?: string; // 担当ケアマネージャー名
 }
 
 export interface OfficeMaster {

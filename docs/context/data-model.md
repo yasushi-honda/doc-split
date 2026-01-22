@@ -53,6 +53,7 @@ erDiagram
         string 顧客氏名 PK
         boolean 同姓同名
         string フリガナ
+        string 担当ケアマネ
     }
 
     書類M {
@@ -63,6 +64,7 @@ erDiagram
 
     事業所M {
         string 事業所名 PK
+        string 短縮名
     }
 
     ケアマネM {
@@ -118,6 +120,7 @@ OCR処理結果を格納するトランザクションテーブル。
 | 顧客氏名 | Text | 主キー（氏名） |
 | 同姓同名 | Boolean | 同姓同名が存在するか |
 | フリガナ | Text | カナ表記（照合用） |
+| 担当ケアマネ | Text | 担当ケアマネージャー名（optional） |
 
 ### 書類M（書類マスタ）
 書類種別のマスタ。OCR結果から書類名を判定する際の参照先。
@@ -173,9 +176,11 @@ OCR処理結果を格納するトランザクションテーブル。
   - name: string
   - isDuplicate: boolean              # 同姓同名フラグ
   - furigana: string
+  - careManagerName: string           # 担当ケアマネージャー名（optional）
 
 /masters/offices/items/{name}         # 事業所M
   - name: string
+  - shortName: string                 # 短縮名（optional、OCRマッチング用）
 
 /errors/{errorId}                     # エラー履歴T
   - errorId: string
