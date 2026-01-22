@@ -76,7 +76,7 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
 - [x] マスターデータ編集画面（MastersPage: 顧客・書類種別・事業所・ケアマネCRUD）
 
 ### Phase 5 完了項目（2026-01-18）
-- [x] Firestoreルールテスト（22テストパス）
+- [x] Firestoreルールテスト（35テストパス）
 - [x] Cloud Functions単体テスト（27テストパス - similarity utilities）
 - [x] 本番デプロイ
   - Firebase Hosting: `https://doc-split-dev.web.app`
@@ -188,7 +188,7 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
 - [x] UI拡張
   - `DocumentsPage.tsx`: 6タブ切替（書類一覧、顧客別、事業所別、書類種別、担当CM別、確認待ち）
 - [x] Firestoreセキュリティルール更新
-- [x] 全132テストパス
+- [x] 全154テストパス（Firestoreルール35件 + フロントエンド11件 + Functions108件）
 - [x] **UX改善: 確認待ち通知バナー・専用タブ**
   - `PendingConfirmationBanner.tsx`: 確認待ち件数通知バナー
   - `PendingConfirmationList.tsx`: 確認待ちドキュメント一覧
@@ -207,8 +207,8 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
 
 ## 次のタスク
 - [x] 事業所同名対応実装（顧客パターン流用）**完了 2026-01-22**
+- [x] 本番デプロイ（dev/kanameone環境）**完了 2026-01-22**
 - [ ] 実書類でのOCR精度確認（クライアント環境）
-- [ ] 本番デプロイ（dev/kanameone環境）
 
 ## 未実装（将来対応）
 - [ ] 検索機能（n-gram反転インデックス + Cloud Functions検索API）
