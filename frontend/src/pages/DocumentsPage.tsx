@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useCallback } from 'react'
 import {
   Search,
   Filter,
@@ -12,6 +12,7 @@ import {
   Building2,
   FolderOpen,
   UserCheck,
+  AlertTriangle,
 } from 'lucide-react'
 import { format } from 'date-fns'
 import { ja } from 'date-fns/locale'
@@ -30,7 +31,9 @@ import {
 } from '@/components/ui/select'
 import { useDocuments, useDocumentStats, useDocumentMasters, type DocumentFilters } from '@/hooks/useDocuments'
 import { DocumentDetailModal } from '@/components/DocumentDetailModal'
-import { GroupList } from '@/components/views/GroupList'
+import { GroupList, PendingConfirmationList } from '@/components/views'
+import { PendingConfirmationBanner } from '@/components/PendingConfirmationBanner'
+import { usePendingConfirmationStats } from '@/hooks/usePendingConfirmations'
 import type { Document, DocumentStatus } from '@shared/types'
 import type { GroupType } from '@/hooks/useDocumentGroups'
 
@@ -99,12 +102,13 @@ function StatsCard({ label, value, color }: { label: string; value: number; colo
 }
 
 // ビュータブの定義
-type ViewTab = 'list' | GroupType
+type ViewTab = 'list' | GroupType | 'pending'
 
 interface TabConfig {
   value: ViewTab
   label: string
   icon: React.ComponentType<{ className?: string }>
+  showBadge?: boolean
 }
 
 const VIEW_TABS: TabConfig[] = [
@@ -113,6 +117,7 @@ const VIEW_TABS: TabConfig[] = [
   { value: 'office', label: '事業所別', icon: Building2 },
   { value: 'documentType', label: '書類種別', icon: FolderOpen },
   { value: 'careManager', label: '担当CM別', icon: UserCheck },
+  { value: 'pending', label: '確認待ち', icon: AlertTriangle, showBadge: true },
 ]
 
 export function DocumentsPage() {
@@ -140,6 +145,12 @@ export function DocumentsPage() {
   const { data: documentsData, isLoading, isError, error } = useDocuments({ filters })
   const { data: stats } = useDocumentStats()
   const { data: documentMasters } = useDocumentMasters()
+  const { data: pendingStats } = usePendingConfirmationStats()
+
+  // 確認待ちタブへ遷移
+  const navigateToPendingTab = useCallback(() => {
+    setActiveTab('pending')
+  }, [])
 
   // ドキュメントリスト（デフォルトでsplitを除外、チェックボックスで表示）
   const documents = useMemo(() => {
@@ -168,6 +179,9 @@ export function DocumentsPage() {
         </div>
       )}
 
+      {/* 確認待ち通知バナー */}
+      <PendingConfirmationBanner onNavigateToTab={navigateToPendingTab} />
+
       {/* ビュー切替タブ */}
       <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as ViewTab)}>
         <TabsList className="mb-4 flex-wrap h-auto">
@@ -175,10 +189,15 @@ export function DocumentsPage() {
             <TabsTrigger
               key={tab.value}
               value={tab.value}
-              className="flex items-center gap-1.5"
+              className={`flex items-center gap-1.5 ${tab.value === 'pending' && pendingStats && pendingStats.total > 0 ? 'text-amber-600' : ''}`}
             >
               <tab.icon className="h-4 w-4" />
               <span className="hidden sm:inline">{tab.label}</span>
+              {tab.showBadge && pendingStats && pendingStats.total > 0 && (
+                <Badge variant="destructive" className="ml-1 h-5 min-w-5 px-1.5 text-xs">
+                  {pendingStats.total}
+                </Badge>
+              )}
             </TabsTrigger>
           ))}
         </TabsList>
@@ -320,6 +339,11 @@ export function DocumentsPage() {
             />
           </TabsContent>
         ))}
+
+        {/* 確認待ちタブ */}
+        <TabsContent value="pending">
+          <PendingConfirmationList />
+        </TabsContent>
       </Tabs>
 
       {/* 詳細モーダル */}
