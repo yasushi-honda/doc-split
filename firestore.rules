@@ -25,21 +25,33 @@ service cloud.firestore {
       allow read: if isWhitelisted();
       // 作成: Cloud Functionsのみ（サービスアカウント経由、ルール適用外）
       allow create: if false;
-      // 更新: 顧客解決フィールドのみ許可（Phase 7）
+      // 更新: 顧客解決・事業所解決フィールドのみ許可
       allow update: if isWhitelisted()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          // 顧客解決フィールド（Phase 7）
           'customerId',
           'customerName',
           'customerConfirmed',
           'needsManualCustomerSelection',
           'confirmedBy',
           'confirmedAt',
-          'isDuplicateCustomer'
+          'isDuplicateCustomer',
+          // 事業所解決フィールド
+          'officeId',
+          'officeName',
+          'officeConfirmed',
+          'officeConfirmedBy',
+          'officeConfirmedAt'
         ])
         // confirmedBy は自分のUIDのみ設定可能
         && (request.resource.data.confirmedBy == request.auth.uid
             || request.resource.data.confirmedBy == resource.data.confirmedBy
-            || request.resource.data.confirmedBy == null);
+            || request.resource.data.confirmedBy == null)
+        // officeConfirmedBy は自分のUIDのみ設定可能
+        && (request.resource.data.officeConfirmedBy == request.auth.uid
+            || request.resource.data.officeConfirmedBy == resource.data.officeConfirmedBy
+            || request.resource.data.officeConfirmedBy == null
+            || !('officeConfirmedBy' in request.resource.data));
       allow delete: if isAdmin();
     }
 
@@ -55,6 +67,24 @@ service cloud.firestore {
         && (request.resource.data.newCustomerId == null || request.resource.data.newCustomerId is string)
         && request.resource.data.newCustomerName is string
         && request.resource.data.newCustomerName.size() > 0
+        && request.resource.data.resolvedByEmail is string
+        && request.resource.data.resolvedAt is timestamp;
+      // 更新・削除は禁止（監査ログは不変）
+      allow update, delete: if false;
+    }
+
+    // 事業所解決監査ログ
+    match /officeResolutionLogs/{logId} {
+      allow read: if isWhitelisted();
+      // 作成: 認証済みユーザー、必須フィールドチェック
+      allow create: if isWhitelisted()
+        && request.resource.data.resolvedBy == request.auth.uid
+        && request.resource.data.documentId is string
+        && request.resource.data.documentId.size() > 0
+        // newOfficeIdはstringまたはnull（該当なし選択時）
+        && (request.resource.data.newOfficeId == null || request.resource.data.newOfficeId is string)
+        && request.resource.data.newOfficeName is string
+        && request.resource.data.newOfficeName.size() > 0
         && request.resource.data.resolvedByEmail is string
         && request.resource.data.resolvedAt is timestamp;
       // 更新・削除は禁止（監査ログは不変）

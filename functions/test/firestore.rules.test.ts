@@ -22,8 +22,8 @@ describe('Firestore Security Rules', () => {
   const unknownUid = 'unknown-user-789';
 
   before(async () => {
-    // ルールファイルを読み込み
-    const rulesPath = path.join(__dirname, '../../firestore.rules');
+    // ルールファイルを読み込み（functionsディレクトリから実行される想定）
+    const rulesPath = path.resolve(process.cwd(), '../firestore.rules');
     const rules = fs.readFileSync(rulesPath, 'utf8');
 
     testEnv = await initializeTestEnvironment({
