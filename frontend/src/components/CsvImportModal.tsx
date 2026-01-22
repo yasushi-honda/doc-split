@@ -101,7 +101,7 @@ export function CsvImportModal({ type, isOpen, onClose, onImport }: CsvImportMod
       }
 
       setPreviewData(mapped)
-    } catch (err) {
+    } catch {
       setError('ファイルの読み込みに失敗しました')
       setPreviewData([])
     }
@@ -116,7 +116,7 @@ export function CsvImportModal({ type, isOpen, onClose, onImport }: CsvImportMod
     try {
       const result = await onImport(previewData)
       setResult(result)
-    } catch (err) {
+    } catch {
       setError('インポートに失敗しました')
     } finally {
       setImporting(false)

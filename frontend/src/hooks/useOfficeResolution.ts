@@ -7,7 +7,7 @@
  * - Firestoreトランザクションによる更新 + 監査ログ作成
  */
 
-import { useState, useCallback } from 'react';
+import { useCallback } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   doc,
@@ -44,7 +44,7 @@ async function resolveOffice({
   documentId,
   selectedOfficeId,
   selectedOfficeName,
-  selectedOfficeIsDuplicate,
+  selectedOfficeIsDuplicate: _selectedOfficeIsDuplicate,
 }: ResolveOfficeParams): Promise<void> {
   const user = auth.currentUser;
   if (!user) throw new Error('Not authenticated');

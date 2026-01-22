@@ -78,7 +78,7 @@ test.describe('事業所同名解決機能 - 基本', () => {
 test.describe('事業所同名解決機能 @emulator', () => {
   // Emulator環境でのみ実行
   test.skip(
-    ({ }, testInfo) => !testInfo.project.name.includes('emulator'),
+    (_fixtures, testInfo) => !testInfo.project.name.includes('emulator'),
     'Emulator環境でのみ実行'
   );
 
