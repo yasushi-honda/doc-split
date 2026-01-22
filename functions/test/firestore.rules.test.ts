@@ -10,13 +10,8 @@ import * as testing from '@firebase/rules-unit-testing';
 import { doc, getDoc, setDoc, deleteDoc } from 'firebase/firestore';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 const { assertFails, assertSucceeds, initializeTestEnvironment } = testing;
-
-// ESMでの__dirname相当
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 describe('Firestore Security Rules', () => {
   let testEnv: testing.RulesTestEnvironment;
@@ -27,8 +22,8 @@ describe('Firestore Security Rules', () => {
   const unknownUid = 'unknown-user-789';
 
   before(async () => {
-    // ルールファイルを読み込み
-    const rulesPath = path.join(__dirname, '../../firestore.rules');
+    // ルールファイルを読み込み（functionsディレクトリから実行される想定）
+    const rulesPath = path.resolve(process.cwd(), '../firestore.rules');
     const rules = fs.readFileSync(rulesPath, 'utf8');
 
     testEnv = await initializeTestEnvironment({
