@@ -51,7 +51,8 @@ interface UseDocumentsOptions {
 // Firestore → Document 変換
 // ============================================
 
-function firestoreToDocument(id: string, data: Record<string, unknown>): Document {
+/** Firestore DocumentData → Document 型変換（テスト用にエクスポート） */
+export function firestoreToDocument(id: string, data: Record<string, unknown>): Document {
   return {
     id,
     processedAt: data.processedAt as Timestamp,
@@ -77,6 +78,18 @@ function firestoreToDocument(id: string, data: Record<string, unknown>): Documen
     pageRotations: data.pageRotations as Document['pageRotations'],
     parentDocumentId: data.parentDocumentId as string | undefined,
     splitFromPages: data.splitFromPages as Document['splitFromPages'],
+    // 顧客確定フィールド（Phase 7）
+    customerId: data.customerId as string | null | undefined,
+    customerConfirmed: data.customerConfirmed as boolean | undefined,
+    customerCandidates: data.customerCandidates as Document['customerCandidates'],
+    customerConfirmedBy: data.customerConfirmedBy as string | null | undefined,
+    customerConfirmedAt: data.customerConfirmedAt as Timestamp | null | undefined,
+    // 事業所確定フィールド（Phase 8 同名対応）
+    officeId: data.officeId as string | null | undefined,
+    officeConfirmed: data.officeConfirmed as boolean | undefined,
+    officeCandidates: data.officeCandidates as Document['officeCandidates'],
+    officeConfirmedBy: data.officeConfirmedBy as string | null | undefined,
+    officeConfirmedAt: data.officeConfirmedAt as Timestamp | null | undefined,
   }
 }
 

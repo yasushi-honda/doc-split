@@ -184,6 +184,65 @@ describe('Firestore Security Rules', () => {
       const docRef = doc(adminUser.firestore(), 'documents', 'doc1');
       await assertSucceeds(deleteDoc(docRef));
     });
+
+    // ============================================
+    // 事業所解決フィールド更新テスト（Phase 8 同名対応）
+    // ============================================
+    it('ホワイトリスト登録ユーザーは事業所解決フィールドを更新可能', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      // テストデータを作成
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'documents', 'doc-office'), {
+          fileName: 'test.pdf',
+          status: 'processed',
+          officeId: null,
+          officeName: '○○事業所',
+          officeConfirmed: false,
+        });
+      });
+
+      const docRef = doc(normalUser.firestore(), 'documents', 'doc-office');
+      await assertSucceeds(
+        setDoc(docRef, {
+          fileName: 'test.pdf',
+          status: 'processed',
+          officeId: 'office-001',
+          officeName: '○○第一事業所',
+          officeConfirmed: true,
+          officeConfirmedBy: normalUid,
+          officeConfirmedAt: new Date(),
+        }, { merge: true })
+      );
+    });
+
+    it('事業所解決時にofficeConfirmedByは自分のUIDのみ設定可能', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      // テストデータを作成
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'documents', 'doc-office-fake'), {
+          fileName: 'test.pdf',
+          status: 'processed',
+          officeId: null,
+          officeName: '○○事業所',
+          officeConfirmed: false,
+        });
+      });
+
+      const docRef = doc(normalUser.firestore(), 'documents', 'doc-office-fake');
+      await assertFails(
+        setDoc(docRef, {
+          fileName: 'test.pdf',
+          status: 'processed',
+          officeId: 'office-001',
+          officeName: '○○第一事業所',
+          officeConfirmed: true,
+          officeConfirmedBy: 'other-user-id', // 他人のUID
+          officeConfirmedAt: new Date(),
+        }, { merge: true })
+      );
+    });
   });
 
   // ============================================
@@ -347,6 +406,188 @@ describe('Firestore Security Rules', () => {
           lastLoginAt: null,
         })
       );
+    });
+  });
+
+  // ============================================
+  // /officeResolutionLogs コレクション（事業所解決監査ログ）
+  // ============================================
+  describe('/officeResolutionLogs collection', () => {
+    it('ホワイトリスト登録ユーザーは監査ログを読み取り可能', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      // テストデータを作成
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'officeResolutionLogs', 'log1'), {
+          documentId: 'doc-001',
+          previousOfficeId: null,
+          newOfficeId: 'office-001',
+          newOfficeName: 'テスト事業所',
+          resolvedBy: normalUid,
+          resolvedByEmail: 'user@example.com',
+          resolvedAt: new Date(),
+        });
+      });
+
+      const docRef = doc(normalUser.firestore(), 'officeResolutionLogs', 'log1');
+      await assertSucceeds(getDoc(docRef));
+    });
+
+    it('ホワイトリスト登録ユーザーは監査ログを作成可能（正常ケース）', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+      const db = normalUser.firestore();
+
+      const logRef = doc(db, 'officeResolutionLogs', 'log-new');
+      await assertSucceeds(
+        setDoc(logRef, {
+          documentId: 'doc-001',
+          previousOfficeId: null,
+          newOfficeId: 'office-001',
+          newOfficeName: 'テスト事業所',
+          resolvedBy: normalUid,
+          resolvedByEmail: 'user@example.com',
+          resolvedAt: new Date(),
+        })
+      );
+    });
+
+    it('ホワイトリスト登録ユーザーは「該当なし」選択時もログ作成可能（newOfficeId=null）', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+      const db = normalUser.firestore();
+
+      const logRef = doc(db, 'officeResolutionLogs', 'log-none');
+      await assertSucceeds(
+        setDoc(logRef, {
+          documentId: 'doc-002',
+          previousOfficeId: 'office-old',
+          newOfficeId: null,
+          newOfficeName: '該当なし',
+          resolvedBy: normalUid,
+          resolvedByEmail: 'user@example.com',
+          resolvedAt: new Date(),
+        })
+      );
+    });
+
+    it('他人のUIDでresolvedByを設定するのは禁止', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+      const db = normalUser.firestore();
+
+      const logRef = doc(db, 'officeResolutionLogs', 'log-fake');
+      await assertFails(
+        setDoc(logRef, {
+          documentId: 'doc-001',
+          previousOfficeId: null,
+          newOfficeId: 'office-001',
+          newOfficeName: 'テスト事業所',
+          resolvedBy: 'other-user-id', // 他人のUID
+          resolvedByEmail: 'user@example.com',
+          resolvedAt: new Date(),
+        })
+      );
+    });
+
+    it('documentIdが空の場合は作成不可', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+      const db = normalUser.firestore();
+
+      const logRef = doc(db, 'officeResolutionLogs', 'log-invalid');
+      await assertFails(
+        setDoc(logRef, {
+          documentId: '', // 空文字
+          previousOfficeId: null,
+          newOfficeId: 'office-001',
+          newOfficeName: 'テスト事業所',
+          resolvedBy: normalUid,
+          resolvedByEmail: 'user@example.com',
+          resolvedAt: new Date(),
+        })
+      );
+    });
+
+    it('newOfficeNameが空の場合は作成不可', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+      const db = normalUser.firestore();
+
+      const logRef = doc(db, 'officeResolutionLogs', 'log-invalid-name');
+      await assertFails(
+        setDoc(logRef, {
+          documentId: 'doc-001',
+          previousOfficeId: null,
+          newOfficeId: 'office-001',
+          newOfficeName: '', // 空文字
+          resolvedBy: normalUid,
+          resolvedByEmail: 'user@example.com',
+          resolvedAt: new Date(),
+        })
+      );
+    });
+
+    it('ホワイトリスト未登録ユーザーは作成不可', async () => {
+      const unknownUser = testEnv.authenticatedContext(unknownUid);
+      const db = unknownUser.firestore();
+
+      const logRef = doc(db, 'officeResolutionLogs', 'log-unauth');
+      await assertFails(
+        setDoc(logRef, {
+          documentId: 'doc-001',
+          previousOfficeId: null,
+          newOfficeId: 'office-001',
+          newOfficeName: 'テスト事業所',
+          resolvedBy: unknownUid,
+          resolvedByEmail: 'unknown@example.com',
+          resolvedAt: new Date(),
+        })
+      );
+    });
+
+    it('監査ログは更新不可（不変性）', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      // テストデータを作成
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'officeResolutionLogs', 'log-immutable'), {
+          documentId: 'doc-001',
+          newOfficeId: 'office-001',
+          newOfficeName: 'テスト事業所',
+          resolvedBy: normalUid,
+          resolvedByEmail: 'user@example.com',
+          resolvedAt: new Date(),
+        });
+      });
+
+      const db = normalUser.firestore();
+      const logRef = doc(db, 'officeResolutionLogs', 'log-immutable');
+      await assertFails(
+        setDoc(logRef, {
+          documentId: 'doc-001',
+          newOfficeId: 'office-002', // 変更しようとする
+          newOfficeName: '別の事業所',
+          resolvedBy: normalUid,
+          resolvedByEmail: 'user@example.com',
+          resolvedAt: new Date(),
+        })
+      );
+    });
+
+    it('監査ログは削除不可（不変性）', async () => {
+      const adminUser = testEnv.authenticatedContext(adminUid);
+
+      // テストデータを作成
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'officeResolutionLogs', 'log-nodelete'), {
+          documentId: 'doc-001',
+          newOfficeId: 'office-001',
+          newOfficeName: 'テスト事業所',
+          resolvedBy: normalUid,
+          resolvedByEmail: 'user@example.com',
+          resolvedAt: new Date(),
+        });
+      });
+
+      const db = adminUser.firestore();
+      const logRef = doc(db, 'officeResolutionLogs', 'log-nodelete');
+      await assertFails(deleteDoc(logRef));
     });
   });
 

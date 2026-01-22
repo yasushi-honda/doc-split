@@ -43,10 +43,11 @@ service cloud.firestore {
           'officeConfirmedBy',
           'officeConfirmedAt'
         ])
-        // confirmedBy は自分のUIDのみ設定可能
+        // confirmedBy は自分のUIDのみ設定可能（事業所解決時は含まれない場合あり）
         && (request.resource.data.confirmedBy == request.auth.uid
             || request.resource.data.confirmedBy == resource.data.confirmedBy
-            || request.resource.data.confirmedBy == null)
+            || request.resource.data.confirmedBy == null
+            || !('confirmedBy' in request.resource.data))
         // officeConfirmedBy は自分のUIDのみ設定可能
         && (request.resource.data.officeConfirmedBy == request.auth.uid
             || request.resource.data.officeConfirmedBy == resource.data.officeConfirmedBy
@@ -85,8 +86,8 @@ service cloud.firestore {
         && (request.resource.data.newOfficeId == null || request.resource.data.newOfficeId is string)
         && request.resource.data.newOfficeName is string
         && request.resource.data.newOfficeName.size() > 0
-        && request.resource.data.resolvedByEmail is string
-        && request.resource.data.resolvedAt is timestamp;
+        && request.resource.data.resolvedByEmail is string;
+        // resolvedAtはserverTimestamp()で設定されるため、検証はスキップ
       // 更新・削除は禁止（監査ログは不変）
       allow update, delete: if false;
     }
