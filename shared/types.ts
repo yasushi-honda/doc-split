@@ -48,6 +48,39 @@ export interface Document {
   confirmedBy?: string | null;                   // 確定者UID（システム自動確定時はnull）
   confirmedAt?: Timestamp | null;                // 確定日時（システム自動確定時はnull）
   needsManualCustomerSelection?: boolean;        // 後方互換用（Phase 6以前）
+
+  // Phase 8: グループ化用正規化キー（Cloud Functionsで自動設定）
+  customerKey?: string;       // customerName正規化版
+  officeKey?: string;         // officeName正規化版
+  documentTypeKey?: string;   // documentType正規化版
+  careManagerKey?: string;    // careManager正規化版
+}
+
+// ============================================
+// Phase 8: グループ化ビュー
+// ============================================
+
+/** グループ化タイプ */
+export type GroupType = 'customer' | 'office' | 'documentType' | 'careManager';
+
+/** グループ内のプレビュードキュメント */
+export interface GroupPreviewDoc {
+  id: string;
+  fileName: string;
+  documentType: string;
+  processedAt: Timestamp;
+}
+
+/** ドキュメントグループ（サマリー情報） */
+export interface DocumentGroup {
+  id: string;                   // グループID: {groupType}_{groupKey}
+  groupType: GroupType;         // グループ化タイプ
+  groupKey: string;             // グループキー（正規化された値）
+  displayName: string;          // 表示名（元の値）
+  count: number;                // グループ内ドキュメント数
+  latestAt: Timestamp;          // 最新処理日時
+  latestDocs: GroupPreviewDoc[]; // プレビュー用（最新3件）
+  updatedAt: Timestamp;         // 集計更新日時
 }
 
 // ============================================

@@ -12,3 +12,4 @@
   * [データモデル](data-model.md)
   * [API/Functions](api-reference.md)
   * [セキュリティ](security.md)
+  * [同名/同姓同名対応](duplicate-name-handling.md)

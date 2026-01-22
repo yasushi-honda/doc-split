@@ -12,7 +12,7 @@ AppSheetで構築された書類管理アプリをGCPでリプレイス開発す
 Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、検索・グルーピング・閲覧が可能な**書類管理ビューアーアプリ**。
 
 ## 現在のステータス
-**フェーズ**: Phase 7完了 - **処理履歴ビュー・同姓同名解決フロー**
+**フェーズ**: Phase 8完了 - **グループ化ビュー（1万件対応）**
 
 ### 環境情報
 | 項目 | 値 |
@@ -171,7 +171,32 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
   - Firestoreルール: 顧客解決フィールド更新許可
 - [x] テスト: 24テスト（Firestoreルール）+ 108テスト（ユニット）= 132テストパス
 
-## 次のタスク（クライアント環境で実施）
+### Phase 8 完了項目（2026-01-22）- グループ化ビュー（1万件対応）
+- [x] データモデル拡張
+  - `documentGroups`コレクション: グループ別集計キャッシュ
+  - `Document`型: グループキーフィールド追加（customerKey, officeKey等）
+  - Firestoreインデックス追加（グループ化クエリ用）
+- [x] Cloud Functions
+  - `onDocumentWrite`: ドキュメント変更時の自動グループ集計更新
+  - `groupAggregation.ts`: 集計ユーティリティ
+- [x] マイグレーションスクリプト
+  - `scripts/migrate-document-groups.js`: 既存データへのグループキー付与・初期集計
+- [x] フロントエンド
+  - `useDocumentGroups.ts`: グループ一覧/グループ内ドキュメント取得フック（無限スクロール対応）
+  - `GroupList.tsx`: アコーディオン形式グループ表示
+  - `GroupDocumentList.tsx`: グループ内ドキュメント一覧
+- [x] UI拡張
+  - `DocumentsPage.tsx`: 5タブ切替（書類一覧、顧客別、事業所別、書類種別、担当CM別）
+- [x] Firestoreセキュリティルール更新
+- [x] 全132テストパス
+
+## 次のタスク
+- [ ] dev環境デプロイ・動作確認
+- [ ] マイグレーションスクリプト実行（`node scripts/migrate-document-groups.js`）
+- [ ] kanameone環境へ反映
+
+## 未実装（将来対応）
+- [ ] 検索機能（n-gram反転インデックス + Cloud Functions検索API）
 - [ ] 実書類でのOCR精度確認（クライアント環境）
 - [ ] 精度改善（フィードバック後）
 

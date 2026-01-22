@@ -30,3 +30,6 @@ export {
   seedDocumentMasters,
   seedAllMasters,
 } from './admin/seedMasters';
+
+// Phase 8: ドキュメントグループ集計トリガー
+export { onDocumentWrite } from './triggers/updateDocumentGroups';

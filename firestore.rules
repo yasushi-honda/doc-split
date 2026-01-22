@@ -90,5 +90,12 @@ service cloud.firestore {
       allow read: if isWhitelisted();
       allow write: if isAdmin();
     }
+
+    // Phase 8: ドキュメントグループ（サマリー集計）
+    match /documentGroups/{groupId} {
+      allow read: if isWhitelisted();
+      // 書き込みはCloud Functionsのみ（onDocumentWriteトリガー）
+      allow write: if false;
+    }
   }
 }

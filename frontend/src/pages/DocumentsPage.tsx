@@ -1,5 +1,18 @@
 import { useState, useMemo } from 'react'
-import { Search, Filter, FileText, ChevronDown, Loader2, AlertCircle, Eye } from 'lucide-react'
+import {
+  Search,
+  Filter,
+  FileText,
+  ChevronDown,
+  Loader2,
+  AlertCircle,
+  Eye,
+  LayoutList,
+  Users,
+  Building2,
+  FolderOpen,
+  UserCheck,
+} from 'lucide-react'
 import { format } from 'date-fns'
 import { ja } from 'date-fns/locale'
 import { Timestamp } from 'firebase/firestore'
@@ -7,6 +20,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
   Select,
   SelectContent,
@@ -16,7 +30,9 @@ import {
 } from '@/components/ui/select'
 import { useDocuments, useDocumentStats, useDocumentMasters, type DocumentFilters } from '@/hooks/useDocuments'
 import { DocumentDetailModal } from '@/components/DocumentDetailModal'
+import { GroupList } from '@/components/views/GroupList'
 import type { Document, DocumentStatus } from '@shared/types'
+import type { GroupType } from '@/hooks/useDocumentGroups'
 
 // ステータスのラベルとバッジVariant
 const STATUS_CONFIG: Record<DocumentStatus, { label: string; variant: 'default' | 'secondary' | 'success' | 'warning' | 'destructive' }> = {
@@ -82,8 +98,28 @@ function StatsCard({ label, value, color }: { label: string; value: number; colo
   )
 }
 
+// ビュータブの定義
+type ViewTab = 'list' | GroupType
+
+interface TabConfig {
+  value: ViewTab
+  label: string
+  icon: React.ComponentType<{ className?: string }>
+}
+
+const VIEW_TABS: TabConfig[] = [
+  { value: 'list', label: '書類一覧', icon: LayoutList },
+  { value: 'customer', label: '顧客別', icon: Users },
+  { value: 'office', label: '事業所別', icon: Building2 },
+  { value: 'documentType', label: '書類種別', icon: FolderOpen },
+  { value: 'careManager', label: '担当CM別', icon: UserCheck },
+]
+
 export function DocumentsPage() {
-  // フィルター状態
+  // タブ状態
+  const [activeTab, setActiveTab] = useState<ViewTab>('list')
+
+  // フィルター状態（一覧ビュー用）
   const [searchQuery, setSearchQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<DocumentStatus | 'all'>('all')
   const [documentTypeFilter, setDocumentTypeFilter] = useState<string>('all')
@@ -119,7 +155,7 @@ export function DocumentsPage() {
     <div className="space-y-6">
       {/* ヘッダー */}
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900">書類一覧</h1>
+        <h1 className="text-2xl font-bold text-gray-900">書類管理</h1>
       </div>
 
       {/* 統計カード */}
@@ -132,130 +168,159 @@ export function DocumentsPage() {
         </div>
       )}
 
-      {/* 検索・フィルターバー */}
-      <div className="space-y-4">
-        <div className="flex gap-4">
-          <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-400" />
-            <Input
-              type="text"
-              placeholder="書類名、顧客名で検索..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-10"
-            />
-          </div>
-          <Button
-            variant="outline"
-            onClick={() => setShowFilters(!showFilters)}
-            className="flex items-center gap-2"
-          >
-            <Filter className="h-5 w-5" />
-            フィルター
-            <ChevronDown className={`h-4 w-4 transition-transform ${showFilters ? 'rotate-180' : ''}`} />
-          </Button>
-        </div>
+      {/* ビュー切替タブ */}
+      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as ViewTab)}>
+        <TabsList className="mb-4 flex-wrap h-auto">
+          {VIEW_TABS.map((tab) => (
+            <TabsTrigger
+              key={tab.value}
+              value={tab.value}
+              className="flex items-center gap-1.5"
+            >
+              <tab.icon className="h-4 w-4" />
+              <span className="hidden sm:inline">{tab.label}</span>
+            </TabsTrigger>
+          ))}
+        </TabsList>
 
-        {/* 展開フィルター */}
-        {showFilters && (
+        {/* 書類一覧タブ */}
+        <TabsContent value="list" className="space-y-4">
+          {/* 検索・フィルターバー */}
+          <div className="space-y-4">
+            <div className="flex gap-4">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-400" />
+                <Input
+                  type="text"
+                  placeholder="書類名、顧客名で検索..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="pl-10"
+                />
+              </div>
+              <Button
+                variant="outline"
+                onClick={() => setShowFilters(!showFilters)}
+                className="flex items-center gap-2"
+              >
+                <Filter className="h-5 w-5" />
+                フィルター
+                <ChevronDown className={`h-4 w-4 transition-transform ${showFilters ? 'rotate-180' : ''}`} />
+              </Button>
+            </div>
+
+            {/* 展開フィルター */}
+            {showFilters && (
+              <Card>
+                <CardContent className="flex flex-wrap gap-4 p-4">
+                  <div className="min-w-[200px] flex-1">
+                    <label className="mb-1 block text-sm font-medium text-gray-700">ステータス</label>
+                    <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as DocumentStatus | 'all')}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="すべて" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">すべて</SelectItem>
+                        <SelectItem value="pending">待機中</SelectItem>
+                        <SelectItem value="processing">処理中</SelectItem>
+                        <SelectItem value="processed">完了</SelectItem>
+                        <SelectItem value="error">エラー</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="min-w-[200px] flex-1">
+                    <label className="mb-1 block text-sm font-medium text-gray-700">書類種別</label>
+                    <Select value={documentTypeFilter} onValueChange={setDocumentTypeFilter}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="すべて" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">すべて</SelectItem>
+                        {documentMasters?.map((master) => (
+                          <SelectItem key={master.name} value={master.name}>
+                            {master.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="flex items-end pb-1">
+                    <label className="flex cursor-pointer items-center gap-2 text-xs text-gray-500">
+                      <input
+                        type="checkbox"
+                        checked={showSplit}
+                        onChange={(e) => setShowSplit(e.target.checked)}
+                        className="h-3.5 w-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                      />
+                      分割元も表示
+                    </label>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+          </div>
+
+          {/* 書類リスト */}
           <Card>
-            <CardContent className="flex flex-wrap gap-4 p-4">
-              <div className="min-w-[200px] flex-1">
-                <label className="mb-1 block text-sm font-medium text-gray-700">ステータス</label>
-                <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as DocumentStatus | 'all')}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="すべて" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">すべて</SelectItem>
-                    <SelectItem value="pending">待機中</SelectItem>
-                    <SelectItem value="processing">処理中</SelectItem>
-                    <SelectItem value="processed">完了</SelectItem>
-                    <SelectItem value="error">エラー</SelectItem>
-                  </SelectContent>
-                </Select>
+            {isLoading ? (
+              <div className="flex items-center justify-center py-16">
+                <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
+                <span className="ml-2 text-gray-500">読み込み中...</span>
               </div>
-              <div className="min-w-[200px] flex-1">
-                <label className="mb-1 block text-sm font-medium text-gray-700">書類種別</label>
-                <Select value={documentTypeFilter} onValueChange={setDocumentTypeFilter}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="すべて" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">すべて</SelectItem>
-                    {documentMasters?.map((master) => (
-                      <SelectItem key={master.name} value={master.name}>
-                        {master.name}
-                      </SelectItem>
+            ) : isError ? (
+              <div className="flex flex-col items-center justify-center py-16 text-red-500">
+                <AlertCircle className="mb-2 h-8 w-8" />
+                <p>データの読み込みに失敗しました</p>
+                <p className="text-sm text-gray-500">{error?.message}</p>
+              </div>
+            ) : documents.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-16 text-gray-500">
+                <FileText className="mb-4 h-12 w-12 text-gray-300" />
+                <p className="text-lg font-medium">書類がありません</p>
+                <p className="mt-1 text-sm">
+                  {searchQuery || statusFilter !== 'all' || documentTypeFilter !== 'all'
+                    ? '条件に一致する書類がありません'
+                    : 'Gmailから添付ファイルが取得されると、ここに表示されます'}
+                </p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead className="border-b border-gray-200 bg-gray-50">
+                    <tr>
+                      <th className="px-4 py-3 text-left text-sm font-medium text-gray-700">ファイル名</th>
+                      <th className="px-4 py-3 text-left text-sm font-medium text-gray-700">顧客名</th>
+                      <th className="px-4 py-3 text-left text-sm font-medium text-gray-700">事業所</th>
+                      <th className="px-4 py-3 text-left text-sm font-medium text-gray-700">日付</th>
+                      <th className="px-4 py-3 text-left text-sm font-medium text-gray-700">ステータス</th>
+                      <th className="px-4 py-3 text-left text-sm font-medium text-gray-700"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {documents.map((doc) => (
+                      <DocumentRow
+                        key={doc.id}
+                        document={doc}
+                        onClick={() => setSelectedDocumentId(doc.id)}
+                      />
                     ))}
-                  </SelectContent>
-                </Select>
+                  </tbody>
+                </table>
               </div>
-              <div className="flex items-end pb-1">
-                <label className="flex cursor-pointer items-center gap-2 text-xs text-gray-500">
-                  <input
-                    type="checkbox"
-                    checked={showSplit}
-                    onChange={(e) => setShowSplit(e.target.checked)}
-                    className="h-3.5 w-3.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                  />
-                  分割元も表示
-                </label>
-              </div>
-            </CardContent>
+            )}
           </Card>
-        )}
-      </div>
+        </TabsContent>
 
-      {/* 書類リスト */}
-      <Card>
-        {isLoading ? (
-          <div className="flex items-center justify-center py-16">
-            <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
-            <span className="ml-2 text-gray-500">読み込み中...</span>
-          </div>
-        ) : isError ? (
-          <div className="flex flex-col items-center justify-center py-16 text-red-500">
-            <AlertCircle className="mb-2 h-8 w-8" />
-            <p>データの読み込みに失敗しました</p>
-            <p className="text-sm text-gray-500">{error?.message}</p>
-          </div>
-        ) : documents.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-16 text-gray-500">
-            <FileText className="mb-4 h-12 w-12 text-gray-300" />
-            <p className="text-lg font-medium">書類がありません</p>
-            <p className="mt-1 text-sm">
-              {searchQuery || statusFilter !== 'all' || documentTypeFilter !== 'all'
-                ? '条件に一致する書類がありません'
-                : 'Gmailから添付ファイルが取得されると、ここに表示されます'}
-            </p>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead className="border-b border-gray-200 bg-gray-50">
-                <tr>
-                  <th className="px-4 py-3 text-left text-sm font-medium text-gray-700">ファイル名</th>
-                  <th className="px-4 py-3 text-left text-sm font-medium text-gray-700">顧客名</th>
-                  <th className="px-4 py-3 text-left text-sm font-medium text-gray-700">事業所</th>
-                  <th className="px-4 py-3 text-left text-sm font-medium text-gray-700">日付</th>
-                  <th className="px-4 py-3 text-left text-sm font-medium text-gray-700">ステータス</th>
-                  <th className="px-4 py-3 text-left text-sm font-medium text-gray-700"></th>
-                </tr>
-              </thead>
-              <tbody>
-                {documents.map((doc) => (
-                  <DocumentRow
-                    key={doc.id}
-                    document={doc}
-                    onClick={() => setSelectedDocumentId(doc.id)}
-                  />
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </Card>
+        {/* グループ化ビュータブ */}
+        {(['customer', 'office', 'documentType', 'careManager'] as const).map((groupType) => (
+          <TabsContent key={groupType} value={groupType}>
+            <GroupList
+              groupType={groupType}
+              onDocumentSelect={(docId) => setSelectedDocumentId(docId)}
+            />
+          </TabsContent>
+        ))}
+      </Tabs>
 
       {/* 詳細モーダル */}
       <DocumentDetailModal

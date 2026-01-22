@@ -61,22 +61,44 @@ async function importCustomers(filePath) {
   const content = fs.readFileSync(filePath, 'utf8');
   const rows = parseCSV(content);
 
+  // 同姓同名を自動検知：名前の出現回数をカウント
+  const nameCounts = {};
+  for (const row of rows) {
+    const name = row['name'] || row['顧客氏名'] || '';
+    if (name) {
+      nameCounts[name] = (nameCounts[name] || 0) + 1;
+    }
+  }
+
+  // 同姓同名の名前リスト
+  const duplicateNames = Object.keys(nameCounts).filter((name) => nameCounts[name] > 1);
+  if (duplicateNames.length > 0) {
+    console.log(`  同姓同名を検知: ${duplicateNames.join(', ')}`);
+  }
+
   const batch = db.batch();
   let count = 0;
 
   for (const row of rows) {
-    // 期待するカラム: name, furigana, isDuplicate, careManagerName
+    // 期待するカラム: name, furigana, careManagerName, notes
+    const name = row['name'] || row['顧客氏名'] || '';
     const docRef = db.collection('masters/customers/items').doc();
     const data = {
       id: docRef.id,
-      name: row['name'] || row['顧客氏名'] || '',
+      name,
       furigana: row['furigana'] || row['フリガナ'] || '',
-      isDuplicate: row['isDuplicate'] === 'true' || row['同姓同名'] === 'true',
+      // 同姓同名フラグは自動検知（手動入力は後方互換性のため残す）
+      isDuplicate: duplicateNames.includes(name) || row['isDuplicate'] === 'true' || row['同姓同名'] === 'true',
     };
     // 担当ケアマネがある場合のみ追加
     const careManagerName = row['careManagerName'] || row['担当ケアマネ'] || row['担当CM'] || '';
     if (careManagerName) {
       data.careManagerName = careManagerName;
+    }
+    // 備考がある場合のみ追加
+    const notes = row['notes'] || row['備考'] || '';
+    if (notes) {
+      data.notes = notes;
     }
     batch.set(docRef, data);
     count++;
