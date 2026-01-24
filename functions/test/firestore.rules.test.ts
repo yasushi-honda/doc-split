@@ -592,6 +592,279 @@ describe('Firestore Security Rules', () => {
   });
 
   // ============================================
+  // /documents コレクション（OCR結果編集）
+  // ============================================
+  describe('/documents collection - OCR edit fields', () => {
+    it('ホワイトリスト登録ユーザーはOCR編集フィールドを更新可能', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      // テストデータを作成
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'documents', 'doc-edit'), {
+          fileName: 'test.pdf',
+          status: 'processed',
+          documentType: '請求書',
+          customerName: '山田太郎',
+        });
+      });
+
+      const docRef = doc(normalUser.firestore(), 'documents', 'doc-edit');
+      await assertSucceeds(
+        setDoc(docRef, {
+          fileName: 'updated.pdf',
+          status: 'processed',
+          documentType: '領収書',
+          customerName: '田中花子',
+          editedBy: normalUid,
+          editedAt: new Date(),
+          updatedAt: new Date(),
+        }, { merge: true })
+      );
+    });
+
+    it('editedByは自分のUIDのみ設定可能', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      // テストデータを作成
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'documents', 'doc-edit-fake'), {
+          fileName: 'test.pdf',
+          status: 'processed',
+        });
+      });
+
+      const docRef = doc(normalUser.firestore(), 'documents', 'doc-edit-fake');
+      await assertFails(
+        setDoc(docRef, {
+          fileName: 'updated.pdf',
+          status: 'processed',
+          editedBy: 'other-user-id', // 他人のUID
+          editedAt: new Date(),
+        }, { merge: true })
+      );
+    });
+
+    it('careManagerKeyの更新が可能', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      // テストデータを作成
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'documents', 'doc-cm'), {
+          fileName: 'test.pdf',
+          status: 'processed',
+          careManagerKey: '',
+        });
+      });
+
+      const docRef = doc(normalUser.firestore(), 'documents', 'doc-cm');
+      await assertSucceeds(
+        setDoc(docRef, {
+          fileName: 'test.pdf',
+          status: 'processed',
+          careManagerKey: '担当ケアマネA',
+          editedBy: normalUid,
+          editedAt: new Date(),
+          updatedAt: new Date(),
+        }, { merge: true })
+      );
+    });
+
+    it('fileDateの更新が可能', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      // テストデータを作成
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'documents', 'doc-date'), {
+          fileName: 'test.pdf',
+          status: 'processed',
+          fileDate: null,
+        });
+      });
+
+      const docRef = doc(normalUser.firestore(), 'documents', 'doc-date');
+      await assertSucceeds(
+        setDoc(docRef, {
+          fileName: 'test.pdf',
+          status: 'processed',
+          fileDate: new Date('2026-01-20'),
+          editedBy: normalUid,
+          editedAt: new Date(),
+          updatedAt: new Date(),
+        }, { merge: true })
+      );
+    });
+
+    it('statusの更新は許可されない', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      // テストデータを作成
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'documents', 'doc-status'), {
+          fileName: 'test.pdf',
+          status: 'pending',
+        });
+      });
+
+      const docRef = doc(normalUser.firestore(), 'documents', 'doc-status');
+      await assertFails(
+        setDoc(docRef, {
+          fileName: 'test.pdf',
+          status: 'processed', // statusは更新不可
+        }, { merge: true })
+      );
+    });
+  });
+
+  // ============================================
+  // /editLogs コレクション（編集監査ログ）
+  // ============================================
+  describe('/editLogs collection', () => {
+    it('ホワイトリスト登録ユーザーは編集ログを読み取り可能', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      // テストデータを作成
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'editLogs', 'edit1'), {
+          documentId: 'doc-001',
+          fieldName: 'customerName',
+          oldValue: '山田太郎',
+          newValue: '田中花子',
+          editedBy: normalUid,
+          editedByEmail: 'user@example.com',
+          editedAt: new Date(),
+        });
+      });
+
+      const docRef = doc(normalUser.firestore(), 'editLogs', 'edit1');
+      await assertSucceeds(getDoc(docRef));
+    });
+
+    it('ホワイトリスト登録ユーザーは編集ログを作成可能', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+      const db = normalUser.firestore();
+
+      const logRef = doc(db, 'editLogs', 'edit-new');
+      await assertSucceeds(
+        setDoc(logRef, {
+          documentId: 'doc-001',
+          fieldName: 'documentType',
+          oldValue: '請求書',
+          newValue: '領収書',
+          editedBy: normalUid,
+          editedByEmail: 'user@example.com',
+          editedAt: new Date(),
+        })
+      );
+    });
+
+    it('他人のUIDでeditedByを設定するのは禁止', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+      const db = normalUser.firestore();
+
+      const logRef = doc(db, 'editLogs', 'edit-fake');
+      await assertFails(
+        setDoc(logRef, {
+          documentId: 'doc-001',
+          fieldName: 'customerName',
+          oldValue: '山田太郎',
+          newValue: '田中花子',
+          editedBy: 'other-user-id', // 他人のUID
+          editedByEmail: 'user@example.com',
+          editedAt: new Date(),
+        })
+      );
+    });
+
+    it('documentIdが空の場合は作成不可', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+      const db = normalUser.firestore();
+
+      const logRef = doc(db, 'editLogs', 'edit-invalid');
+      await assertFails(
+        setDoc(logRef, {
+          documentId: '', // 空文字
+          fieldName: 'customerName',
+          oldValue: '山田太郎',
+          newValue: '田中花子',
+          editedBy: normalUid,
+          editedByEmail: 'user@example.com',
+          editedAt: new Date(),
+        })
+      );
+    });
+
+    it('fieldNameが空の場合は作成不可', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+      const db = normalUser.firestore();
+
+      const logRef = doc(db, 'editLogs', 'edit-invalid-field');
+      await assertFails(
+        setDoc(logRef, {
+          documentId: 'doc-001',
+          fieldName: '', // 空文字
+          oldValue: '山田太郎',
+          newValue: '田中花子',
+          editedBy: normalUid,
+          editedByEmail: 'user@example.com',
+          editedAt: new Date(),
+        })
+      );
+    });
+
+    it('編集ログは更新不可（不変性）', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      // テストデータを作成
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'editLogs', 'edit-immutable'), {
+          documentId: 'doc-001',
+          fieldName: 'customerName',
+          oldValue: '山田太郎',
+          newValue: '田中花子',
+          editedBy: normalUid,
+          editedByEmail: 'user@example.com',
+          editedAt: new Date(),
+        });
+      });
+
+      const db = normalUser.firestore();
+      const logRef = doc(db, 'editLogs', 'edit-immutable');
+      await assertFails(
+        setDoc(logRef, {
+          documentId: 'doc-001',
+          fieldName: 'customerName',
+          oldValue: '山田太郎',
+          newValue: '佐藤三郎', // 変更しようとする
+          editedBy: normalUid,
+          editedByEmail: 'user@example.com',
+          editedAt: new Date(),
+        })
+      );
+    });
+
+    it('編集ログは削除不可（不変性）', async () => {
+      const adminUser = testEnv.authenticatedContext(adminUid);
+
+      // テストデータを作成
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'editLogs', 'edit-nodelete'), {
+          documentId: 'doc-001',
+          fieldName: 'customerName',
+          oldValue: '山田太郎',
+          newValue: '田中花子',
+          editedBy: normalUid,
+          editedByEmail: 'user@example.com',
+          editedAt: new Date(),
+        });
+      });
+
+      const db = adminUser.firestore();
+      const logRef = doc(db, 'editLogs', 'edit-nodelete');
+      await assertFails(deleteDoc(logRef));
+    });
+  });
+
+  // ============================================
   // /settings コレクション
   // ============================================
   describe('/settings collection', () => {

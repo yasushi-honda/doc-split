@@ -8,7 +8,7 @@ import { format } from 'date-fns'
 import { ja } from 'date-fns/locale'
 import { Timestamp } from 'firebase/firestore'
 import { ref, getDownloadURL } from 'firebase/storage'
-import { Download, ExternalLink, Loader2, FileText, User, Building, Building2, Calendar, Tag, AlertCircle, Scissors, UserCheck } from 'lucide-react'
+import { Download, ExternalLink, Loader2, FileText, User, Building, Building2, Calendar, Tag, AlertCircle, Scissors, UserCheck, Pencil, Save, X } from 'lucide-react'
 import { storage } from '@/lib/firebase'
 import {
   Dialog,
@@ -19,11 +19,13 @@ import {
 import { VisuallyHidden } from '@/components/ui/visually-hidden'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Input } from '@/components/ui/input'
 import { PdfViewer } from '@/components/PdfViewer'
 import { PdfSplitModal } from '@/components/PdfSplitModal'
 import { SameNameResolveModal } from '@/components/SameNameResolveModal'
 import { OfficeSameNameResolveModal } from '@/components/OfficeSameNameResolveModal'
 import { useDocument } from '@/hooks/useDocuments'
+import { useDocumentEdit } from '@/hooks/useDocumentEdit'
 import { isCustomerConfirmed } from '@/hooks/useProcessingHistory'
 import type { DocumentStatus } from '@shared/types'
 
@@ -65,6 +67,44 @@ function MetaRow({ icon: Icon, label, value }: { icon: React.ElementType; label:
   )
 }
 
+// 編集可能メタ情報行
+function EditableMetaRow({
+  icon: Icon,
+  label,
+  value,
+  editValue,
+  isEditing,
+  onChange,
+  type = 'text',
+}: {
+  icon: React.ElementType
+  label: string
+  value: React.ReactNode
+  editValue?: string
+  isEditing: boolean
+  onChange?: (value: string) => void
+  type?: 'text' | 'date'
+}) {
+  return (
+    <div className="flex items-start gap-3 py-2">
+      <Icon className="mt-0.5 h-4 w-4 flex-shrink-0 text-gray-400" />
+      <div className="min-w-0 flex-1">
+        <p className="text-xs text-gray-500">{label}</p>
+        {isEditing && onChange ? (
+          <Input
+            type={type}
+            value={editValue || ''}
+            onChange={(e) => onChange(e.target.value)}
+            className="mt-1 h-8 text-sm"
+          />
+        ) : (
+          <p className="truncate text-sm text-gray-900">{value || '-'}</p>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export function DocumentDetailModal({ documentId, open, onOpenChange }: DocumentDetailModalProps) {
   const { data: document, isLoading, isError, error, refetch } = useDocument(documentId)
   const [isSplitModalOpen, setIsSplitModalOpen] = useState(false)
@@ -72,6 +112,26 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
   const [isOfficeResolveModalOpen, setIsOfficeResolveModalOpen] = useState(false)
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null)
   const [urlLoading, setUrlLoading] = useState(false)
+
+  // 編集機能
+  const {
+    isEditing,
+    isSaving,
+    editedFields,
+    startEditing,
+    cancelEditing,
+    updateField,
+    saveChanges,
+    error: editError,
+  } = useDocumentEdit(document)
+
+  // 編集保存成功時
+  const handleSave = async () => {
+    const success = await saveChanges()
+    if (success) {
+      refetch()
+    }
+  }
 
   // 顧客確定状態を判定（Phase 7）
   const needsCustomerConfirmation = document ? !isCustomerConfirmed(document) : false
@@ -262,10 +322,48 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
 
               {/* メタ情報サイドバー（モバイルでは非表示） */}
               <div className="hidden w-80 flex-shrink-0 overflow-y-auto border-l bg-white p-4 md:block">
-                <h3 className="mb-4 text-sm font-semibold text-gray-900">書類情報</h3>
+                <div className="mb-4 flex items-center justify-between">
+                  <h3 className="text-sm font-semibold text-gray-900">書類情報</h3>
+                  {!isEditing ? (
+                    <Button variant="ghost" size="sm" onClick={startEditing}>
+                      <Pencil className="h-4 w-4 mr-1" />
+                      編集
+                    </Button>
+                  ) : (
+                    <div className="flex gap-1">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={cancelEditing}
+                        disabled={isSaving}
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="default"
+                        size="sm"
+                        onClick={handleSave}
+                        disabled={isSaving}
+                      >
+                        {isSaving ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Save className="h-4 w-4 mr-1" />
+                        )}
+                        保存
+                      </Button>
+                    </div>
+                  )}
+                </div>
+
+                {editError && (
+                  <div className="mb-4 rounded bg-red-50 p-2 text-xs text-red-600">
+                    {editError}
+                  </div>
+                )}
 
                 <div className="divide-y">
-                  <MetaRow
+                  <EditableMetaRow
                     icon={User}
                     label="顧客名"
                     value={
@@ -278,8 +376,11 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                         )}
                       </div>
                     }
+                    editValue={editedFields.customerName}
+                    isEditing={isEditing}
+                    onChange={(v) => updateField('customerName', v)}
                   />
-                  <MetaRow
+                  <EditableMetaRow
                     icon={Building}
                     label="事業所"
                     value={
@@ -292,9 +393,27 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                         )}
                       </div>
                     }
+                    editValue={editedFields.officeName}
+                    isEditing={isEditing}
+                    onChange={(v) => updateField('officeName', v)}
                   />
-                  <MetaRow icon={Tag} label="書類種別" value={document.documentType || '未判定'} />
-                  <MetaRow icon={Calendar} label="書類日付" value={formatTimestamp(document.fileDate)} />
+                  <EditableMetaRow
+                    icon={Tag}
+                    label="書類種別"
+                    value={document.documentType || '未判定'}
+                    editValue={editedFields.documentType}
+                    isEditing={isEditing}
+                    onChange={(v) => updateField('documentType', v)}
+                  />
+                  <EditableMetaRow
+                    icon={Calendar}
+                    label="書類日付"
+                    value={formatTimestamp(document.fileDate)}
+                    editValue={editedFields.fileDate ? format(editedFields.fileDate, 'yyyy-MM-dd') : ''}
+                    isEditing={isEditing}
+                    onChange={(v) => updateField('fileDate', v ? new Date(v) : null)}
+                    type="date"
+                  />
                   <MetaRow icon={Calendar} label="処理日時" value={formatTimestamp(document.processedAt, 'yyyy/MM/dd HH:mm')} />
                   <MetaRow icon={FileText} label="ページ数" value={`${document.totalPages} ページ`} />
                 </div>
