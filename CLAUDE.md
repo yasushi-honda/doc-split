@@ -230,8 +230,11 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
   - `DocumentDetailModal.tsx`: 編集モードUI（顧客名、事業所、書類種別、日付、ファイル名）
   - `editLogs`コレクション: 編集履歴の監査ログ
   - Firestoreルール: 47テストパス
-- [ ] マスター未登録時の登録提案UI ← 次のステップ
-- [ ] 本番運用開始（checkGmailAttachments定期実行）
+- [x] マスター未登録時の登録提案UI **完了 2026-01-25**
+  - RegisterNewMasterModal: 新規マスター登録モーダル（顧客/事業所共通）
+  - SameNameResolveModal/OfficeSameNameResolveModal: 登録提案機能追加
+  - 「該当なし」選択時にマスター登録を提案、登録後は自動紐付け
+- [ ] 本番運用開始（checkGmailAttachments定期実行） ← 次のステップ
 
 ## 未実装（将来対応）
 - [ ] 検索機能（n-gram反転インデックス + Cloud Functions検索API）
