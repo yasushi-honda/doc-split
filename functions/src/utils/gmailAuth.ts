@@ -20,9 +20,7 @@ export interface GmailSettings {
   authMode: 'oauth' | 'service_account';
 
   // OAuth用（開発環境）
-  oauthClientId?: string;
-  // oauthClientSecret は Secret Manager に保存
-  // refreshToken は Secret Manager に保存
+  // oauthClientId, oauthClientSecret, refreshToken は全て Secret Manager に保存
 
   // Service Account用（本番環境）
   serviceAccountEmail?: string;
@@ -80,22 +78,17 @@ export async function getGmailSettings(): Promise<GmailSettings> {
 
 /**
  * OAuth 2.0 クライアントを作成（開発環境用）
+ * 認証情報は全てSecret Managerから取得
  */
-async function createOAuthClient(settings: GmailSettings): Promise<gmail_v1.Gmail> {
-  if (!settings.oauthClientId) {
-    throw new Error('OAuth client ID not configured');
-  }
-
-  // Secret Managerからシークレットを取得
-  const [clientSecret, refreshToken] = await Promise.all([
+async function createOAuthClient(_settings: GmailSettings): Promise<gmail_v1.Gmail> {
+  // Secret Managerから全ての認証情報を取得
+  const [clientId, clientSecret, refreshToken] = await Promise.all([
+    getSecretValue('gmail-oauth-client-id'),
     getSecretValue('gmail-oauth-client-secret'),
     getSecretValue('gmail-oauth-refresh-token'),
   ]);
 
-  const oauth2Client = new google.auth.OAuth2(
-    settings.oauthClientId,
-    clientSecret
-  );
+  const oauth2Client = new google.auth.OAuth2(clientId, clientSecret);
 
   oauth2Client.setCredentials({
     refresh_token: refreshToken,
