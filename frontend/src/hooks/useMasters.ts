@@ -31,12 +31,20 @@ export class DuplicateError extends Error {
   }
 }
 
+// マスターデータのコレクションパス
+const COLLECTION_PATHS = {
+  customers: 'masters/customers/items',
+  documents: 'masters/documents/items',
+  offices: 'masters/offices/items',
+  caremanagers: 'masters/caremanagers/items',
+} as const
+
 // ============================================
 // 顧客マスター
 // ============================================
 
 async function fetchCustomers(): Promise<CustomerMaster[]> {
-  const snapshot = await getDocs(collection(db, 'masters/customers/items'))
+  const snapshot = await getDocs(collection(db, COLLECTION_PATHS.customers))
   return snapshot.docs.map((doc) => ({
     id: doc.id,
     name: doc.data().name as string,
@@ -57,23 +65,34 @@ interface AddCustomerParams {
   name: string
   furigana: string
   isDuplicate?: boolean
+  force?: boolean // 同名が存在しても強制追加
+}
+
+// 同名顧客の存在チェック（UIでの確認用）
+export async function checkCustomerDuplicate(name: string): Promise<boolean> {
+  const normalizedName = normalizeName(name)
+  const snapshot = await getDocs(collection(db, COLLECTION_PATHS.customers))
+  const existingNames = new Set(snapshot.docs.map(d => d.data().name))
+  return existingNames.has(normalizedName)
 }
 
 async function addCustomer(params: AddCustomerParams): Promise<void> {
   const normalizedName = normalizeName(params.name)
 
-  // 重複チェック
-  const snapshot = await getDocs(collection(db, 'masters/customers/items'))
-  const existingNames = new Set(snapshot.docs.map(d => d.data().name))
-  if (existingNames.has(normalizedName)) {
-    throw new DuplicateError(`「${normalizedName}」は既に登録されています`)
+  // 重複チェック（force=trueの場合はスキップ）
+  if (!params.force) {
+    const snapshot = await getDocs(collection(db, COLLECTION_PATHS.customers))
+    const existingNames = new Set(snapshot.docs.map(d => d.data().name))
+    if (existingNames.has(normalizedName)) {
+      throw new DuplicateError(`「${normalizedName}」は既に登録されています`)
+    }
   }
 
-  const docRef = doc(collection(db, 'masters/customers/items'))
+  const docRef = doc(collection(db, COLLECTION_PATHS.customers))
   await setDoc(docRef, {
     name: normalizedName,
     furigana: normalizeName(params.furigana),
-    isDuplicate: params.isDuplicate || false,
+    isDuplicate: params.isDuplicate ?? true, // 同名追加時はデフォルトtrue
   })
 }
 
@@ -95,7 +114,7 @@ interface UpdateCustomerParams {
 }
 
 async function updateCustomer(params: UpdateCustomerParams): Promise<void> {
-  const docRef = doc(db, 'masters/customers/items', params.id)
+  const docRef = doc(db, COLLECTION_PATHS.customers, params.id)
   await updateDoc(docRef, {
     name: normalizeName(params.name),
     furigana: normalizeName(params.furigana),
@@ -114,7 +133,7 @@ export function useUpdateCustomer() {
 }
 
 async function deleteCustomer(id: string): Promise<void> {
-  await deleteDoc(doc(db, 'masters/customers/items', id))
+  await deleteDoc(doc(db, COLLECTION_PATHS.customers, id))
 }
 
 export function useDeleteCustomer() {
@@ -134,34 +153,58 @@ interface BulkCustomerParams {
   isDuplicate?: boolean
 }
 
+// CSVデータの同名チェック（プレビュー用）
+export async function checkCustomerDuplicatesInBulk(
+  customers: BulkCustomerParams[]
+): Promise<{ name: string; furigana: string; isDuplicate: boolean }[]> {
+  const snapshot = await getDocs(collection(db, COLLECTION_PATHS.customers))
+  const existingNames = new Set(snapshot.docs.map(d => d.data().name))
+
+  return customers.map(c => {
+    const normalizedName = normalizeName(c.name)
+    return {
+      name: normalizedName,
+      furigana: c.furigana,
+      isDuplicate: existingNames.has(normalizedName),
+    }
+  })
+}
+
 async function bulkImportCustomers(
   customers: BulkCustomerParams[]
-): Promise<{ imported: number; skipped: number }> {
+): Promise<{ imported: number; skipped: number; duplicateImported: number }> {
   // 既存データを取得
-  const snapshot = await getDocs(collection(db, 'masters/customers/items'))
+  const snapshot = await getDocs(collection(db, COLLECTION_PATHS.customers))
   const existingNames = new Set(snapshot.docs.map(d => d.data().name))
 
   let imported = 0
   let skipped = 0
+  let duplicateImported = 0
 
   for (const customer of customers) {
     const normalizedName = normalizeName(customer.name)
-    if (!normalizedName || existingNames.has(normalizedName)) {
+    if (!normalizedName) {
       skipped++
       continue
     }
 
-    const docRef = doc(collection(db, 'masters/customers/items'))
+    const isDuplicateInDb = existingNames.has(normalizedName)
+
+    const docRef = doc(collection(db, COLLECTION_PATHS.customers))
     await setDoc(docRef, {
       name: normalizedName,
       furigana: normalizeName(customer.furigana),
-      isDuplicate: customer.isDuplicate || false,
+      isDuplicate: isDuplicateInDb ? true : (customer.isDuplicate || false),
     })
+
+    if (isDuplicateInDb) {
+      duplicateImported++
+    }
     imported++
-    existingNames.add(normalizedName) // 重複を防ぐ
+    existingNames.add(normalizedName)
   }
 
-  return { imported, skipped }
+  return { imported, skipped, duplicateImported }
 }
 
 export function useBulkImportCustomers() {
@@ -203,7 +246,7 @@ function normalizeKeywords(value: unknown): string[] {
 }
 
 async function fetchDocumentTypes(): Promise<DocumentMaster[]> {
-  const snapshot = await getDocs(collection(db, 'masters/documents/items'))
+  const snapshot = await getDocs(collection(db, COLLECTION_PATHS.documents))
   return snapshot.docs.map((doc) => ({
     name: doc.data().name as string,
     dateMarker: doc.data().dateMarker as string,
@@ -229,7 +272,7 @@ interface AddDocumentTypeParams {
 
 async function addDocumentType(params: AddDocumentTypeParams): Promise<void> {
   // 重複チェック
-  const docRef = doc(db, 'masters/documents/items', params.name)
+  const docRef = doc(db, COLLECTION_PATHS.documents, params.name)
   const existingDoc = await getDoc(docRef)
   if (existingDoc.exists()) {
     throw new DuplicateError(`「${params.name}」は既に登録されています`)
@@ -264,9 +307,9 @@ interface UpdateDocumentTypeParams {
 async function updateDocumentType(params: UpdateDocumentTypeParams): Promise<void> {
   // 名前が変わった場合は削除して再作成
   if (params.originalName !== params.name) {
-    await deleteDoc(doc(db, 'masters/documents/items', params.originalName))
+    await deleteDoc(doc(db, COLLECTION_PATHS.documents, params.originalName))
   }
-  const docRef = doc(db, 'masters/documents/items', params.name)
+  const docRef = doc(db, COLLECTION_PATHS.documents, params.name)
   await setDoc(docRef, {
     name: params.name,
     dateMarker: params.dateMarker,
@@ -286,7 +329,7 @@ export function useUpdateDocumentType() {
 }
 
 async function deleteDocumentType(name: string): Promise<void> {
-  await deleteDoc(doc(db, 'masters/documents/items', name))
+  await deleteDoc(doc(db, COLLECTION_PATHS.documents, name))
 }
 
 // ============================================
@@ -315,7 +358,7 @@ export const DOCUMENT_TYPE_SEEDS = [
 
 async function importDocumentTypeSeeds(): Promise<{ imported: number; skipped: number }> {
   // 既存データを取得
-  const snapshot = await getDocs(collection(db, 'masters/documents/items'))
+  const snapshot = await getDocs(collection(db, COLLECTION_PATHS.documents))
   const existingNames = new Set(snapshot.docs.map(d => d.data().name))
 
   let imported = 0
@@ -327,7 +370,7 @@ async function importDocumentTypeSeeds(): Promise<{ imported: number; skipped: n
       continue
     }
 
-    const docRef = doc(db, 'masters/documents/items', seed.name)
+    const docRef = doc(db, COLLECTION_PATHS.documents, seed.name)
     await setDoc(docRef, {
       name: seed.name,
       dateMarker: seed.dateMarker,
@@ -362,7 +405,7 @@ async function bulkImportDocumentTypes(
   documentTypes: BulkDocumentTypeParams[]
 ): Promise<{ imported: number; skipped: number }> {
   // 既存データを取得
-  const snapshot = await getDocs(collection(db, 'masters/documents/items'))
+  const snapshot = await getDocs(collection(db, COLLECTION_PATHS.documents))
   const existingNames = new Set(snapshot.docs.map(d => d.data().name))
 
   let imported = 0
@@ -374,7 +417,7 @@ async function bulkImportDocumentTypes(
       continue
     }
 
-    const docRef = doc(db, 'masters/documents/items', docType.name)
+    const docRef = doc(db, COLLECTION_PATHS.documents, docType.name)
     await setDoc(docRef, {
       name: docType.name,
       dateMarker: docType.dateMarker || '',
@@ -415,7 +458,7 @@ export function useDeleteDocumentType() {
 // ============================================
 
 async function fetchOffices(): Promise<OfficeMaster[]> {
-  const snapshot = await getDocs(collection(db, 'masters/offices/items'))
+  const snapshot = await getDocs(collection(db, COLLECTION_PATHS.offices))
   return snapshot.docs.map((doc) => ({
     name: doc.data().name as string,
     shortName: doc.data().shortName as string | undefined,
@@ -430,17 +473,45 @@ export function useOffices() {
   })
 }
 
-async function addOffice(name: string): Promise<void> {
+interface AddOfficeParams {
+  name: string
+  shortName?: string
+  force?: boolean // 同名が存在しても強制追加
+}
+
+// 同名事業所の存在チェック（UIでの確認用）
+export async function checkOfficeDuplicate(name: string): Promise<boolean> {
+  const normalizedName = normalizeName(name)
+  const snapshot = await getDocs(collection(db, COLLECTION_PATHS.offices))
+  const existingNames = new Set(snapshot.docs.map(d => d.data().name))
+  return existingNames.has(normalizedName)
+}
+
+async function addOffice(params: AddOfficeParams | string): Promise<void> {
+  // 後方互換性: 文字列の場合は従来の動作
+  const name = typeof params === 'string' ? params : params.name
+  const shortName = typeof params === 'string' ? undefined : params.shortName
+  const force = typeof params === 'string' ? false : params.force
+
   const normalizedName = normalizeName(name)
 
-  // 重複チェック
-  const docRef = doc(db, 'masters/offices/items', normalizedName)
-  const existingDoc = await getDoc(docRef)
-  if (existingDoc.exists()) {
-    throw new DuplicateError(`「${normalizedName}」は既に登録されています`)
+  // 重複チェック（force=trueの場合はスキップ）
+  if (!force) {
+    const docRef = doc(db, COLLECTION_PATHS.offices, normalizedName)
+    const existingDoc = await getDoc(docRef)
+    if (existingDoc.exists()) {
+      throw new DuplicateError(`「${normalizedName}」は既に登録されています`)
+    }
   }
 
-  await setDoc(docRef, { name: normalizedName })
+  // 同名追加時は別のIDで作成
+  const docRef = force
+    ? doc(collection(db, COLLECTION_PATHS.offices))
+    : doc(db, COLLECTION_PATHS.offices, normalizedName)
+  await setDoc(docRef, {
+    name: normalizedName,
+    shortName: shortName ? normalizeName(shortName) : '',
+  })
 }
 
 export function useAddOffice() {
@@ -454,7 +525,7 @@ export function useAddOffice() {
 }
 
 async function deleteOffice(name: string): Promise<void> {
-  await deleteDoc(doc(db, 'masters/offices/items', name))
+  await deleteDoc(doc(db, COLLECTION_PATHS.offices, name))
 }
 
 export function useDeleteOffice() {
@@ -479,10 +550,10 @@ async function updateOffice(params: UpdateOfficeParams): Promise<void> {
 
   // 名前が変わった場合は削除して再作成
   if (params.originalName !== normalizedName) {
-    await deleteDoc(doc(db, 'masters/offices/items', params.originalName))
+    await deleteDoc(doc(db, COLLECTION_PATHS.offices, params.originalName))
   }
 
-  const docRef = doc(db, 'masters/offices/items', normalizedName)
+  const docRef = doc(db, COLLECTION_PATHS.offices, normalizedName)
   await setDoc(docRef, {
     name: normalizedName,
     shortName: normalizedShortName,
@@ -505,33 +576,58 @@ interface BulkOfficeParams {
   shortName?: string
 }
 
+// CSVデータの同名チェック（プレビュー用）
+export async function checkOfficeDuplicatesInBulk(
+  offices: BulkOfficeParams[]
+): Promise<{ name: string; shortName: string; isDuplicate: boolean }[]> {
+  const snapshot = await getDocs(collection(db, COLLECTION_PATHS.offices))
+  const existingNames = new Set(snapshot.docs.map(d => d.data().name))
+
+  return offices.map(o => {
+    const normalizedName = normalizeName(o.name)
+    return {
+      name: normalizedName,
+      shortName: o.shortName || '',
+      isDuplicate: existingNames.has(normalizedName),
+    }
+  })
+}
+
 async function bulkImportOffices(
   offices: BulkOfficeParams[]
-): Promise<{ imported: number; skipped: number }> {
+): Promise<{ imported: number; skipped: number; duplicateImported: number }> {
   // 既存データを取得
-  const snapshot = await getDocs(collection(db, 'masters/offices/items'))
+  const snapshot = await getDocs(collection(db, COLLECTION_PATHS.offices))
   const existingNames = new Set(snapshot.docs.map(d => d.data().name))
 
   let imported = 0
   let skipped = 0
+  let duplicateImported = 0
 
   for (const office of offices) {
     const normalizedName = normalizeName(office.name)
-    if (!normalizedName || existingNames.has(normalizedName)) {
+    if (!normalizedName) {
       skipped++
       continue
     }
 
-    const docRef = doc(db, 'masters/offices/items', normalizedName)
+    const isDuplicateInDb = existingNames.has(normalizedName)
+
+    // 同名でも別IDで作成
+    const docRef = doc(collection(db, COLLECTION_PATHS.offices))
     await setDoc(docRef, {
       name: normalizedName,
       shortName: office.shortName ? normalizeName(office.shortName) : '',
     })
+
+    if (isDuplicateInDb) {
+      duplicateImported++
+    }
     imported++
     existingNames.add(normalizedName)
   }
 
-  return { imported, skipped }
+  return { imported, skipped, duplicateImported }
 }
 
 export function useBulkImportOffices() {
@@ -549,7 +645,7 @@ export function useBulkImportOffices() {
 // ============================================
 
 async function fetchCareManagers(): Promise<CareManagerMaster[]> {
-  const snapshot = await getDocs(collection(db, 'masters/caremanagers/items'))
+  const snapshot = await getDocs(collection(db, COLLECTION_PATHS.caremanagers))
   return snapshot.docs.map((doc) => ({
     name: doc.data().name as string,
   }))
@@ -567,7 +663,7 @@ async function addCareManager(name: string): Promise<void> {
   const normalizedName = normalizeName(name)
 
   // 重複チェック
-  const docRef = doc(db, 'masters/caremanagers/items', normalizedName)
+  const docRef = doc(db, COLLECTION_PATHS.caremanagers, normalizedName)
   const existingDoc = await getDoc(docRef)
   if (existingDoc.exists()) {
     throw new DuplicateError(`「${normalizedName}」は既に登録されています`)
@@ -587,7 +683,7 @@ export function useAddCareManager() {
 }
 
 async function deleteCareManager(name: string): Promise<void> {
-  await deleteDoc(doc(db, 'masters/caremanagers/items', name))
+  await deleteDoc(doc(db, COLLECTION_PATHS.caremanagers, name))
 }
 
 export function useDeleteCareManager() {
@@ -610,10 +706,10 @@ async function updateCareManager(params: UpdateCareManagerParams): Promise<void>
 
   // 名前が変わった場合は削除して再作成
   if (params.originalName !== normalizedName) {
-    await deleteDoc(doc(db, 'masters/caremanagers/items', params.originalName))
+    await deleteDoc(doc(db, COLLECTION_PATHS.caremanagers, params.originalName))
   }
 
-  const docRef = doc(db, 'masters/caremanagers/items', normalizedName)
+  const docRef = doc(db, COLLECTION_PATHS.caremanagers, normalizedName)
   await setDoc(docRef, { name: normalizedName })
 }
 
@@ -639,7 +735,7 @@ async function bulkImportCareManagers(
   params: BulkCareManagerParams[]
 ): Promise<{ imported: number; skipped: number }> {
   // 既存データを取得
-  const snapshot = await getDocs(collection(db, 'masters/caremanagers/items'))
+  const snapshot = await getDocs(collection(db, COLLECTION_PATHS.caremanagers))
   const existing = new Set(snapshot.docs.map((doc) => doc.id))
 
   let imported = 0
@@ -651,7 +747,7 @@ async function bulkImportCareManagers(
       continue
     }
 
-    const docRef = doc(db, 'masters/caremanagers/items', cm.name)
+    const docRef = doc(db, COLLECTION_PATHS.caremanagers, cm.name)
     await setDoc(docRef, {
       name: cm.name,
       createdAt: serverTimestamp(),

@@ -1,11 +1,12 @@
 /**
  * CSVインポートモーダル
  *
- * 顧客・事業所マスターの一括インポートUI
+ * 顧客・事業所・ケアマネ・書類種別マスターの一括インポートUI
+ * 顧客・事業所は同名も許可（警告表示あり）
  */
 
-import { useState, useRef } from 'react'
-import { Upload, FileText, AlertCircle, CheckCircle2, Download } from 'lucide-react'
+import { useState, useRef, useEffect } from 'react'
+import { Upload, FileText, AlertCircle, CheckCircle2, Download, AlertTriangle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -40,29 +41,108 @@ import {
   type CareManagerCSVRow,
   type DocumentTypeCSVRow,
 } from '@/lib/csvParser'
+import {
+  checkCustomerDuplicatesInBulk,
+  checkOfficeDuplicatesInBulk,
+} from '@/hooks/useMasters'
 
 type ImportType = 'customer' | 'office' | 'caremanager' | 'documenttype'
+
+interface ImportResult {
+  imported: number
+  skipped: number
+  duplicateImported?: number
+}
 
 interface CsvImportModalProps {
   type: ImportType
   isOpen: boolean
   onClose: () => void
-  onImport: (data: CustomerCSVRow[] | OfficeCSVRow[] | CareManagerCSVRow[] | DocumentTypeCSVRow[]) => Promise<{ imported: number; skipped: number }>
+  onImport: (data: CustomerCSVRow[] | OfficeCSVRow[] | CareManagerCSVRow[] | DocumentTypeCSVRow[]) => Promise<ImportResult>
+}
+
+// 同名チェック結果付きのプレビューデータ
+interface PreviewRowWithDuplicate {
+  data: CustomerCSVRow | OfficeCSVRow | CareManagerCSVRow | DocumentTypeCSVRow
+  isDuplicateInDb: boolean
+}
+
+// プレビュー行のセルをレンダリング
+function renderPreviewCells(
+  type: ImportType,
+  row: PreviewRowWithDuplicate
+): React.ReactNode {
+  const duplicateBadge = row.isDuplicateInDb && (
+    <span className="text-yellow-600 text-xs font-medium">同名あり</span>
+  )
+
+  switch (type) {
+    case 'customer': {
+      const data = row.data as CustomerCSVRow
+      return (
+        <>
+          <TableCell>{data.name}</TableCell>
+          <TableCell>{data.furigana || '-'}</TableCell>
+          <TableCell>{duplicateBadge}</TableCell>
+        </>
+      )
+    }
+    case 'office': {
+      const data = row.data as OfficeCSVRow
+      return (
+        <>
+          <TableCell>{data.name}</TableCell>
+          <TableCell>{data.shortName || '-'}</TableCell>
+          <TableCell>{duplicateBadge}</TableCell>
+        </>
+      )
+    }
+    case 'caremanager': {
+      const data = row.data as CareManagerCSVRow
+      return <TableCell>{data.name}</TableCell>
+    }
+    case 'documenttype': {
+      const data = row.data as DocumentTypeCSVRow
+      return (
+        <>
+          <TableCell>{data.name}</TableCell>
+          <TableCell>{data.dateMarker || '-'}</TableCell>
+          <TableCell>{data.category || '-'}</TableCell>
+          <TableCell className="max-w-[150px] truncate">
+            {data.keywords || '-'}
+          </TableCell>
+        </>
+      )
+    }
+  }
 }
 
 export function CsvImportModal({ type, isOpen, onClose, onImport }: CsvImportModalProps) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [fileName, setFileName] = useState<string | null>(null)
-  const [previewData, setPreviewData] = useState<CustomerCSVRow[] | OfficeCSVRow[] | CareManagerCSVRow[] | DocumentTypeCSVRow[]>([])
+  const [previewData, setPreviewData] = useState<PreviewRowWithDuplicate[]>([])
   const [error, setError] = useState<string | null>(null)
   const [importing, setImporting] = useState(false)
-  const [result, setResult] = useState<{ imported: number; skipped: number } | null>(null)
+  const [checkingDuplicates, setCheckingDuplicates] = useState(false)
+  const [result, setResult] = useState<ImportResult | null>(null)
 
   const typeLabels = {
-    customer: { name: '顧客', fields: ['顧客名', 'フリガナ', '同姓同名'] },
-    office: { name: '事業所', fields: ['事業所名', '略称'] },
+    customer: { name: '顧客', fields: ['顧客名', 'フリガナ', '既存同名'] },
+    office: { name: '事業所', fields: ['事業所名', '略称', '既存同名'] },
     caremanager: { name: 'ケアマネ', fields: ['ケアマネ名'] },
     documenttype: { name: '書類種別', fields: ['書類名', '日付マーカー', 'カテゴリ', 'キーワード'] },
+  }
+
+  // 顧客・事業所は同名許可（警告付き）、ケアマネ・書類は同名スキップ
+  const allowsDuplicates = type === 'customer' || type === 'office'
+  const duplicateCount = previewData.filter(row => row.isDuplicateInDb).length
+
+  // 説明文をtypeに応じて変更
+  const getDescription = () => {
+    if (allowsDuplicates) {
+      return `CSVファイルから${typeLabels[type].name}データを一括インポートします。同名データは警告表示されますが、確認の上インポートできます。`
+    }
+    return `CSVファイルから${typeLabels[type].name}データを一括インポートします。既存データと同名のものはスキップされます。`
   }
 
   const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -100,7 +180,36 @@ export function CsvImportModal({ type, isOpen, onClose, onImport }: CsvImportMod
         return
       }
 
-      setPreviewData(mapped)
+      // 顧客・事業所の場合は同名チェックを実行
+      if (type === 'customer') {
+        setCheckingDuplicates(true)
+        try {
+          const checked = await checkCustomerDuplicatesInBulk(mapped as CustomerCSVRow[])
+          setPreviewData(mapped.map((data, i) => ({
+            data,
+            isDuplicateInDb: checked[i].isDuplicate,
+          })))
+        } finally {
+          setCheckingDuplicates(false)
+        }
+      } else if (type === 'office') {
+        setCheckingDuplicates(true)
+        try {
+          const checked = await checkOfficeDuplicatesInBulk(mapped as OfficeCSVRow[])
+          setPreviewData(mapped.map((data, i) => ({
+            data,
+            isDuplicateInDb: checked[i].isDuplicate,
+          })))
+        } finally {
+          setCheckingDuplicates(false)
+        }
+      } else {
+        // ケアマネ・書類は同名チェックなし
+        setPreviewData(mapped.map(data => ({
+          data,
+          isDuplicateInDb: false,
+        })))
+      }
     } catch {
       setError('ファイルの読み込みに失敗しました')
       setPreviewData([])
@@ -114,7 +223,8 @@ export function CsvImportModal({ type, isOpen, onClose, onImport }: CsvImportMod
     setError(null)
 
     try {
-      const result = await onImport(previewData)
+      const dataToImport = previewData.map(row => row.data)
+      const result = await onImport(dataToImport as CustomerCSVRow[] | OfficeCSVRow[] | CareManagerCSVRow[] | DocumentTypeCSVRow[])
       setResult(result)
     } catch {
       setError('インポートに失敗しました')
@@ -157,14 +267,20 @@ export function CsvImportModal({ type, isOpen, onClose, onImport }: CsvImportMod
     onClose()
   }
 
+  // モーダルを閉じた時にファイル入力をリセット
+  useEffect(() => {
+    if (!isOpen && fileInputRef.current) {
+      fileInputRef.current.value = ''
+    }
+  }, [isOpen])
+
   return (
     <Dialog open={isOpen} onOpenChange={handleClose}>
       <DialogContent className="max-w-3xl max-h-[80vh] flex flex-col">
         <DialogHeader>
           <DialogTitle>{typeLabels[type].name}マスター CSVインポート</DialogTitle>
           <DialogDescription>
-            CSVファイルから{typeLabels[type].name}データを一括インポートします。
-            既存データと同名のものはスキップされます。
+            {getDescription()}
           </DialogDescription>
         </DialogHeader>
 
@@ -181,7 +297,7 @@ export function CsvImportModal({ type, isOpen, onClose, onImport }: CsvImportMod
             <Button
               variant="outline"
               onClick={() => fileInputRef.current?.click()}
-              disabled={importing}
+              disabled={importing || checkingDuplicates}
             >
               <Upload className="h-4 w-4 mr-2" />
               CSVファイルを選択
@@ -202,6 +318,13 @@ export function CsvImportModal({ type, isOpen, onClose, onImport }: CsvImportMod
             )}
           </div>
 
+          {/* チェック中表示 */}
+          {checkingDuplicates && (
+            <div className="text-sm text-gray-500">
+              同名データをチェック中...
+            </div>
+          )}
+
           {/* エラー表示 */}
           {error && (
             <Alert variant="destructive">
@@ -211,19 +334,35 @@ export function CsvImportModal({ type, isOpen, onClose, onImport }: CsvImportMod
             </Alert>
           )}
 
+          {/* 同名警告（顧客・事業所のみ） */}
+          {allowsDuplicates && duplicateCount > 0 && !result && (
+            <Alert className="border-yellow-300 bg-yellow-50">
+              <AlertTriangle className="h-4 w-4 text-yellow-600" />
+              <AlertTitle className="text-yellow-800">同名データあり</AlertTitle>
+              <AlertDescription className="text-yellow-700">
+                {duplicateCount}件の同名データが既に登録されています。
+                OCR照合で区別が必要になります。確認の上インポートしてください。
+              </AlertDescription>
+            </Alert>
+          )}
+
           {/* 成功メッセージ */}
           {result && (
             <Alert className="border-green-200 bg-green-50">
               <CheckCircle2 className="h-4 w-4 text-green-600" />
               <AlertTitle className="text-green-800">インポート完了</AlertTitle>
               <AlertDescription className="text-green-700">
-                {result.imported}件追加、{result.skipped}件スキップ（既存または無効）
+                {result.imported}件追加
+                {result.skipped > 0 && `、${result.skipped}件スキップ（無効データ）`}
+                {result.duplicateImported && result.duplicateImported > 0 && (
+                  <span className="text-yellow-700">（うち{result.duplicateImported}件は同名追加）</span>
+                )}
               </AlertDescription>
             </Alert>
           )}
 
           {/* プレビュー */}
-          {previewData.length > 0 && !result && (
+          {previewData.length > 0 && !result && !checkingDuplicates && (
             <div>
               <p className="text-sm text-gray-500 mb-2">
                 プレビュー（{previewData.length}件）
@@ -239,30 +378,11 @@ export function CsvImportModal({ type, isOpen, onClose, onImport }: CsvImportMod
                   </TableHeader>
                   <TableBody>
                     {previewData.slice(0, 10).map((row, index) => (
-                      <TableRow key={index}>
-                        {type === 'customer' ? (
-                          <>
-                            <TableCell>{(row as CustomerCSVRow).name}</TableCell>
-                            <TableCell>{(row as CustomerCSVRow).furigana || '-'}</TableCell>
-                            <TableCell>{(row as CustomerCSVRow).isDuplicate ? 'はい' : '-'}</TableCell>
-                          </>
-                        ) : type === 'office' ? (
-                          <>
-                            <TableCell>{(row as OfficeCSVRow).name}</TableCell>
-                            <TableCell>{(row as OfficeCSVRow).shortName || '-'}</TableCell>
-                          </>
-                        ) : type === 'caremanager' ? (
-                          <>
-                            <TableCell>{(row as CareManagerCSVRow).name}</TableCell>
-                          </>
-                        ) : (
-                          <>
-                            <TableCell>{(row as DocumentTypeCSVRow).name}</TableCell>
-                            <TableCell>{(row as DocumentTypeCSVRow).dateMarker || '-'}</TableCell>
-                            <TableCell>{(row as DocumentTypeCSVRow).category || '-'}</TableCell>
-                            <TableCell className="max-w-[150px] truncate">{(row as DocumentTypeCSVRow).keywords || '-'}</TableCell>
-                          </>
-                        )}
+                      <TableRow
+                        key={index}
+                        className={row.isDuplicateInDb ? 'bg-yellow-50' : ''}
+                      >
+                        {renderPreviewCells(type, row)}
                       </TableRow>
                     ))}
                   </TableBody>
@@ -284,7 +404,6 @@ export function CsvImportModal({ type, isOpen, onClose, onImport }: CsvImportMod
                 <ul className="list-disc list-inside text-xs space-y-1">
                   <li>顧客名: <code>name</code>, <code>顧客名</code>, <code>氏名</code>, <code>利用者名</code></li>
                   <li>フリガナ: <code>furigana</code>, <code>フリガナ</code>, <code>ふりがな</code></li>
-                  <li>同姓同名: <code>isDuplicate</code>, <code>同姓同名</code>, <code>重複</code> (true/false)</li>
                 </ul>
               ) : type === 'office' ? (
                 <ul className="list-disc list-inside text-xs space-y-1">
@@ -314,7 +433,7 @@ export function CsvImportModal({ type, isOpen, onClose, onImport }: CsvImportMod
           {!result && (
             <Button
               onClick={handleImport}
-              disabled={previewData.length === 0 || importing}
+              disabled={previewData.length === 0 || importing || checkingDuplicates}
             >
               {importing ? 'インポート中...' : `${previewData.length}件をインポート`}
             </Button>

@@ -45,6 +45,7 @@ import {
   useUpdateCustomer,
   useDeleteCustomer,
   useBulkImportCustomers,
+  checkCustomerDuplicate,
   useDocumentTypes,
   useAddDocumentType,
   useUpdateDocumentType,
@@ -55,6 +56,7 @@ import {
   useUpdateOffice,
   useDeleteOffice,
   useBulkImportOffices,
+  checkOfficeDuplicate,
   useCareManagers,
   useAddCareManager,
   useUpdateCareManager,
@@ -130,6 +132,8 @@ function CustomersMaster() {
   const [isCsvImportOpen, setIsCsvImportOpen] = useState(false)
   const [editingCustomer, setEditingCustomer] = useState<CustomerMaster | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<CustomerMaster | null>(null)
+  const [duplicateConfirmOpen, setDuplicateConfirmOpen] = useState(false)
+  const [checkingDuplicate, setCheckingDuplicate] = useState(false)
 
   // フォーム状態
   const [formName, setFormName] = useState('')
@@ -147,22 +151,47 @@ function CustomersMaster() {
       c.furigana.includes(searchText)
   )
 
+  // 同名チェック → 確認ダイアログ or 直接追加
   const handleAdd = async () => {
+    setFormError(null)
+    setCheckingDuplicate(true)
+    try {
+      const isDuplicate = await checkCustomerDuplicate(formName)
+      if (isDuplicate) {
+        // 同名が存在する場合は確認ダイアログを表示
+        setDuplicateConfirmOpen(true)
+      } else {
+        // 同名がなければ直接追加
+        await addCustomer.mutateAsync({
+          name: formName,
+          furigana: formFurigana,
+          isDuplicate: false,
+        })
+        resetForm()
+        setIsAddOpen(false)
+      }
+    } catch {
+      setFormError('追加に失敗しました')
+    } finally {
+      setCheckingDuplicate(false)
+    }
+  }
+
+  // 同名確認後に強制追加
+  const handleForceAdd = async () => {
     setFormError(null)
     try {
       await addCustomer.mutateAsync({
         name: formName,
         furigana: formFurigana,
-        isDuplicate: formIsDuplicate,
+        isDuplicate: true,
+        force: true,
       })
       resetForm()
       setIsAddOpen(false)
-    } catch (error) {
-      if (error instanceof DuplicateError) {
-        setFormError(error.message)
-      } else {
-        setFormError('追加に失敗しました')
-      }
+      setDuplicateConfirmOpen(false)
+    } catch {
+      setFormError('追加に失敗しました')
     }
   }
 
@@ -316,20 +345,13 @@ function CustomersMaster() {
                   placeholder="ヤマダ タロウ"
                 />
               </div>
-              <div className="flex items-center justify-between">
-                <Label>同姓同名あり</Label>
-                <Switch
-                  checked={formIsDuplicate}
-                  onCheckedChange={setFormIsDuplicate}
-                />
-              </div>
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setIsAddOpen(false)}>
                 キャンセル
               </Button>
-              <Button onClick={handleAdd} disabled={!formName || addCustomer.isPending}>
-                追加
+              <Button onClick={handleAdd} disabled={!formName || addCustomer.isPending || checkingDuplicate}>
+                {checkingDuplicate ? 'チェック中...' : '追加'}
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -394,6 +416,28 @@ function CustomersMaster() {
                 disabled={deleteCustomer.isPending}
               >
                 削除
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* 同名確認ダイアログ */}
+        <Dialog open={duplicateConfirmOpen} onOpenChange={setDuplicateConfirmOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>同名の顧客が存在します</DialogTitle>
+              <DialogDescription>
+                「{formName}」という名前の顧客は既に登録されています。
+                同名の顧客を追加すると、OCR照合時に候補として表示されます。
+                それでも追加しますか？
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setDuplicateConfirmOpen(false)}>
+                キャンセル
+              </Button>
+              <Button onClick={handleForceAdd} disabled={addCustomer.isPending}>
+                追加する
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -765,6 +809,8 @@ function OfficesMaster() {
   const [editingOffice, setEditingOffice] = useState<OfficeMaster | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<OfficeMaster | null>(null)
   const [isCsvImportOpen, setIsCsvImportOpen] = useState(false)
+  const [duplicateConfirmOpen, setDuplicateConfirmOpen] = useState(false)
+  const [checkingDuplicate, setCheckingDuplicate] = useState(false)
 
   // フォーム状態
   const [formName, setFormName] = useState('')
@@ -777,19 +823,46 @@ function OfficesMaster() {
       (o.shortName?.includes(searchText) ?? false)
   )
 
+  // 同名チェック → 確認ダイアログ or 直接追加
   const handleAdd = async () => {
     if (!formName.trim()) return
     setFormError(null)
+    setCheckingDuplicate(true)
     try {
-      await addOffice.mutateAsync(formName.trim())
+      const isDuplicate = await checkOfficeDuplicate(formName.trim())
+      if (isDuplicate) {
+        // 同名が存在する場合は確認ダイアログを表示
+        setDuplicateConfirmOpen(true)
+      } else {
+        // 同名がなければ直接追加
+        await addOffice.mutateAsync({
+          name: formName.trim(),
+          shortName: formShortName.trim(),
+        })
+        resetForm()
+        setIsAddOpen(false)
+      }
+    } catch {
+      setFormError('追加に失敗しました')
+    } finally {
+      setCheckingDuplicate(false)
+    }
+  }
+
+  // 同名確認後に強制追加
+  const handleForceAdd = async () => {
+    setFormError(null)
+    try {
+      await addOffice.mutateAsync({
+        name: formName.trim(),
+        shortName: formShortName.trim(),
+        force: true,
+      })
       resetForm()
       setIsAddOpen(false)
-    } catch (error) {
-      if (error instanceof DuplicateError) {
-        setFormError(error.message)
-      } else {
-        setFormError('追加に失敗しました')
-      }
+      setDuplicateConfirmOpen(false)
+    } catch {
+      setFormError('追加に失敗しました')
     }
   }
 
@@ -946,8 +1019,30 @@ function OfficesMaster() {
               <Button variant="outline" onClick={() => setIsAddOpen(false)}>
                 キャンセル
               </Button>
-              <Button onClick={handleAdd} disabled={!formName.trim() || addOffice.isPending}>
-                追加
+              <Button onClick={handleAdd} disabled={!formName.trim() || addOffice.isPending || checkingDuplicate}>
+                {checkingDuplicate ? 'チェック中...' : '追加'}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* 同名確認ダイアログ */}
+        <Dialog open={duplicateConfirmOpen} onOpenChange={setDuplicateConfirmOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>同名の事業所が存在します</DialogTitle>
+              <DialogDescription>
+                「{formName}」という名前の事業所は既に登録されています。
+                同名の事業所を追加すると、OCR照合時に候補として表示されます。
+                それでも追加しますか？
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setDuplicateConfirmOpen(false)}>
+                キャンセル
+              </Button>
+              <Button onClick={handleForceAdd} disabled={addOffice.isPending}>
+                追加する
               </Button>
             </DialogFooter>
           </DialogContent>
