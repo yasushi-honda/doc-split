@@ -302,6 +302,85 @@ gcloud projects remove-iam-policy-binding abc-docsplit \
 | 動作確認・説明 | 30分 |
 | **合計** | **約1時間** |
 
+## アップデート配信
+
+納品後のクライアント環境へのアップデート（機能追加・バグ修正）は、開発プロジェクトを雛形として配信します。
+
+### アーキテクチャ
+
+```mermaid
+flowchart TD
+    subgraph DevProject["開発プロジェクト（雛形）"]
+        DEV["doc-split-dev<br/>hy.unimail.11@gmail.com"]
+        CODE["ソースコード<br/>mainブランチ"]
+    end
+
+    subgraph Clients["クライアント環境"]
+        C1["クライアントA<br/>(独自GCPプロジェクト)"]
+        C2["クライアントB<br/>(独自GCPプロジェクト)"]
+        C3["クライアントC<br/>(将来)"]
+    end
+
+    CODE -->|"deploy-to-project.sh"| C1
+    CODE -->|"deploy-to-project.sh"| C2
+    CODE -->|"deploy-to-project.sh"| C3
+```
+
+### アップデート手順
+
+```bash
+# 1. 開発環境で機能追加・修正
+#    （ソースコード編集）
+
+# 2. 開発環境でテスト・確認
+./scripts/deploy-to-project.sh dev
+# https://doc-split-dev.web.app で動作確認
+
+# 3. クライアント環境へ配信
+./scripts/deploy-to-project.sh <client-alias>
+# 例: ./scripts/deploy-to-project.sh kanameone
+```
+
+### deploy-to-project.sh の動作
+
+| ステップ | 内容 |
+|---------|------|
+| 1 | `.firebaserc` からプロジェクトID取得 |
+| 2 | `frontend/.env.<alias>` を `.env.local` にコピー |
+| 3 | フロントエンドビルド |
+| 4 | Firebase Hostingデプロイ |
+| 5 | `.env.local` を元に戻す |
+
+### .firebaserc の管理
+
+```json
+{
+  "projects": {
+    "dev": "doc-split-dev",
+    "kanameone": "docsplit-kanameone",
+    "client-b": "client-b-project-id"
+  }
+}
+```
+
+新規クライアント納品時、`setup-tenant.sh` が自動でエイリアスを追加します。
+
+### Cloud Functions のアップデート
+
+Hostingとは別にデプロイが必要です：
+
+```bash
+firebase deploy --only functions -P <alias>
+```
+
+### セキュリティルールのアップデート
+
+```bash
+firebase deploy --only firestore:rules,storage -P <alias>
+```
+
+---
+
 ## トラブルシューティング
 
 ### よくある問題
