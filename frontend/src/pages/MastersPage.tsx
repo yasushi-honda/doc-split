@@ -44,28 +44,33 @@ import {
   useAddCustomer,
   useUpdateCustomer,
   useDeleteCustomer,
-  useBulkImportCustomers,
+  useBulkImportCustomersWithActions,
   checkCustomerDuplicate,
   useDocumentTypes,
   useAddDocumentType,
   useUpdateDocumentType,
   useDeleteDocumentType,
-  useBulkImportDocumentTypes,
+  useBulkImportDocumentTypesWithActions,
   useOffices,
   useAddOffice,
   useUpdateOffice,
   useDeleteOffice,
-  useBulkImportOffices,
+  useBulkImportOfficesWithActions,
   checkOfficeDuplicate,
   useCareManagers,
   useAddCareManager,
   useUpdateCareManager,
   useDeleteCareManager,
-  useBulkImportCareManagers,
+  useBulkImportCareManagersWithActions,
   DuplicateError,
+  type ImportAction,
+  type BulkImportResultDetailed,
 } from '@/hooks/useMasters'
 import { CsvImportModal } from '@/components/CsvImportModal'
 import type { CustomerCSVRow, OfficeCSVRow, CareManagerCSVRow, DocumentTypeCSVRow } from '@/lib/csvParser'
+
+// 汎用データ型
+type AnyCSVData = CustomerCSVRow | OfficeCSVRow | CareManagerCSVRow | DocumentTypeCSVRow
 import { downloadCsvTemplate } from '@/lib/csvTemplates'
 import type { CustomerMaster, DocumentMaster, OfficeMaster, CareManagerMaster } from '@shared/types'
 
@@ -125,7 +130,7 @@ function CustomersMaster() {
   const addCustomer = useAddCustomer()
   const updateCustomer = useUpdateCustomer()
   const deleteCustomer = useDeleteCustomer()
-  const bulkImport = useBulkImportCustomers()
+  const bulkImport = useBulkImportCustomersWithActions()
 
   const [searchText, setSearchText] = useState('')
   const [isAddOpen, setIsAddOpen] = useState(false)
@@ -141,8 +146,16 @@ function CustomersMaster() {
   const [formIsDuplicate, setFormIsDuplicate] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
 
-  const handleCsvImport = async (data: CustomerCSVRow[]) => {
-    return await bulkImport.mutateAsync(data)
+  const handleCsvImport = async (
+    items: { data: AnyCSVData; existingId?: string; action: ImportAction }[]
+  ): Promise<BulkImportResultDetailed> => {
+    return await bulkImport.mutateAsync(
+      items.map(item => ({
+        data: { name: (item.data as CustomerCSVRow).name, furigana: (item.data as CustomerCSVRow).furigana },
+        existingId: item.existingId,
+        action: item.action,
+      }))
+    )
   }
 
   const filteredCustomers = customers?.filter(
@@ -464,7 +477,7 @@ function DocumentTypesMaster() {
   const addDocumentType = useAddDocumentType()
   const updateDocumentType = useUpdateDocumentType()
   const deleteDocumentType = useDeleteDocumentType()
-  const bulkImport = useBulkImportDocumentTypes()
+  const bulkImport = useBulkImportDocumentTypesWithActions()
 
   const [searchText, setSearchText] = useState('')
   const [isAddOpen, setIsAddOpen] = useState(false)
@@ -478,8 +491,20 @@ function DocumentTypesMaster() {
   const [formKeywords, setFormKeywords] = useState('')
   const [formError, setFormError] = useState<string | null>(null)
 
-  const handleCsvImport = async (data: DocumentTypeCSVRow[]) => {
-    return await bulkImport.mutateAsync(data)
+  const handleCsvImport = async (
+    items: { data: AnyCSVData; existingId?: string; action: ImportAction }[]
+  ): Promise<BulkImportResultDetailed> => {
+    return await bulkImport.mutateAsync(
+      items.map(item => ({
+        data: {
+          name: (item.data as DocumentTypeCSVRow).name,
+          dateMarker: (item.data as DocumentTypeCSVRow).dateMarker,
+          category: (item.data as DocumentTypeCSVRow).category,
+          keywords: (item.data as DocumentTypeCSVRow).keywords,
+        },
+        action: item.action,
+      }))
+    )
   }
 
   const filteredDocs = documentTypes?.filter(
@@ -802,7 +827,7 @@ function OfficesMaster() {
   const addOffice = useAddOffice()
   const updateOffice = useUpdateOffice()
   const deleteOffice = useDeleteOffice()
-  const bulkImport = useBulkImportOffices()
+  const bulkImport = useBulkImportOfficesWithActions()
 
   const [searchText, setSearchText] = useState('')
   const [isAddOpen, setIsAddOpen] = useState(false)
@@ -895,8 +920,16 @@ function OfficesMaster() {
     setFormError(null)
   }
 
-  const handleCsvImport = async (data: OfficeCSVRow[]) => {
-    return await bulkImport.mutateAsync(data)
+  const handleCsvImport = async (
+    items: { data: AnyCSVData; existingId?: string; action: ImportAction }[]
+  ): Promise<BulkImportResultDetailed> => {
+    return await bulkImport.mutateAsync(
+      items.map(item => ({
+        data: { name: (item.data as OfficeCSVRow).name, shortName: (item.data as OfficeCSVRow).shortName },
+        existingId: item.existingId,
+        action: item.action,
+      }))
+    )
   }
 
   return (
@@ -1127,7 +1160,7 @@ function CareManagersMaster() {
   const addCareManager = useAddCareManager()
   const updateCareManager = useUpdateCareManager()
   const deleteCareManager = useDeleteCareManager()
-  const bulkImport = useBulkImportCareManagers()
+  const bulkImport = useBulkImportCareManagersWithActions()
 
   const [searchText, setSearchText] = useState('')
   const [isAddOpen, setIsAddOpen] = useState(false)
@@ -1185,8 +1218,15 @@ function CareManagersMaster() {
     setFormError(null)
   }
 
-  const handleCsvImport = async (data: CareManagerCSVRow[]) => {
-    return await bulkImport.mutateAsync(data)
+  const handleCsvImport = async (
+    items: { data: AnyCSVData; existingId?: string; action: ImportAction }[]
+  ): Promise<BulkImportResultDetailed> => {
+    return await bulkImport.mutateAsync(
+      items.map(item => ({
+        data: { name: (item.data as CareManagerCSVRow).name },
+        action: item.action,
+      }))
+    )
   }
 
   return (
