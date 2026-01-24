@@ -94,6 +94,7 @@ function GmailSettings() {
   const [hasChanges, setHasChanges] = useState(false)
   const [saveMessage, setSaveMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [isInitialized, setIsInitialized] = useState(false)
+  const [showLabelConfirmDialog, setShowLabelConfirmDialog] = useState(false)
 
   // 初回読み込み時のみローカル状態を設定
   useEffect(() => {
@@ -126,21 +127,45 @@ function GmailSettings() {
     setHasChanges(true)
   }
 
-  const handleSave = async () => {
-    console.log('Gmail設定を保存中...', { labels, gmailAccount, isAndOperator })
+  const handleSaveClick = () => {
+    // 未追加のラベルがある場合は確認ダイアログを表示
+    const pendingLabel = newLabel.trim()
+    if (pendingLabel && !labels.includes(pendingLabel)) {
+      setShowLabelConfirmDialog(true)
+      return
+    }
+    handleSave(labels)
+  }
+
+  const handleSave = async (labelsToSave: string[]) => {
+    console.log('Gmail設定を保存中...', { labels: labelsToSave, gmailAccount, isAndOperator })
     try {
       await updateSettings.mutateAsync({
-        targetLabels: labels,
+        targetLabels: labelsToSave,
         labelSearchOperator: isAndOperator ? 'AND' : 'OR',
         gmailAccount,
       })
       setHasChanges(false)
+      setNewLabel('')
       setSaveMessage({ type: 'success', text: '設定を保存しました' })
       console.log('Gmail設定を保存しました')
     } catch (error) {
       console.error('Gmail設定の保存に失敗:', error)
       setSaveMessage({ type: 'error', text: '保存に失敗しました' })
     }
+  }
+
+  const handleConfirmAddLabel = () => {
+    const pendingLabel = newLabel.trim()
+    const updatedLabels = [...labels, pendingLabel]
+    setLabels(updatedLabels)
+    setShowLabelConfirmDialog(false)
+    handleSave(updatedLabels)
+  }
+
+  const handleConfirmSkipLabel = () => {
+    setShowLabelConfirmDialog(false)
+    handleSave(labels)
   }
 
   if (isLoading) {
@@ -177,12 +202,22 @@ function GmailSettings() {
         {/* ラベル設定 */}
         <div className="space-y-2">
           <Label>監視対象ラベル</Label>
-          <Input
-            placeholder="カスタムラベルを入力してEnterで追加"
-            value={newLabel}
-            onChange={(e) => setNewLabel(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleAddLabel()}
-          />
+          <div className="flex gap-2">
+            <Input
+              placeholder="カスタムラベルを入力"
+              value={newLabel}
+              onChange={(e) => setNewLabel(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleAddLabel()}
+            />
+            <Button
+              onClick={handleAddLabel}
+              size="icon"
+              disabled={!newLabel.trim()}
+              title="ラベルを追加"
+            >
+              <Plus className="h-4 w-4" />
+            </Button>
+          </div>
           {/* よく使うラベルのプリセット */}
           <div className="flex flex-wrap gap-2">
             <span className="text-xs text-gray-500 mr-1">よく使うラベル:</span>
@@ -265,13 +300,36 @@ function GmailSettings() {
             </div>
           )}
           <Button
-            onClick={handleSave}
+            onClick={handleSaveClick}
             disabled={!hasChanges || updateSettings.isPending}
           >
             <Save className="h-4 w-4 mr-2" />
             {updateSettings.isPending ? '保存中...' : '設定を保存'}
           </Button>
         </div>
+
+        {/* 未追加ラベル確認ダイアログ */}
+        <Dialog open={showLabelConfirmDialog} onOpenChange={setShowLabelConfirmDialog}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>入力中のラベルがあります</DialogTitle>
+              <DialogDescription>
+                入力中のラベル「{newLabel.trim()}」を追加しますか？
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter className="flex gap-2 sm:gap-0">
+              <Button variant="outline" onClick={() => setShowLabelConfirmDialog(false)}>
+                キャンセル
+              </Button>
+              <Button variant="secondary" onClick={handleConfirmSkipLabel}>
+                追加せず保存
+              </Button>
+              <Button onClick={handleConfirmAddLabel}>
+                追加して保存
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </CardContent>
     </Card>
   )
