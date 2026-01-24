@@ -10,6 +10,27 @@
  * 例:
  *   node import-historical-gmail.js docsplit-kanameone --after 2026-01-01 --before 2026-01-20
  *   node import-historical-gmail.js docsplit-kanameone --after 2026-01-01 --before 2026-01-20 --dry-run
+ *
+ * 注意: Firebase Storageへの書き込みでエラーが発生する場合、サービスアカウントキーを使用してください:
+ *
+ *   # 1. firebase-adminsdkサービスアカウントのキーを作成
+ *   gcloud iam service-accounts keys create /tmp/sa-key.json \
+ *     --iam-account=firebase-adminsdk-fbsvc@<project-id>.iam.gserviceaccount.com \
+ *     --project=<project-id>
+ *
+ *   # 2. Secret Managerアクセス権を付与（初回のみ）
+ *   for secret in gmail-oauth-client-id gmail-oauth-client-secret gmail-oauth-refresh-token; do
+ *     gcloud secrets add-iam-policy-binding $secret \
+ *       --project=<project-id> \
+ *       --member="serviceAccount:firebase-adminsdk-fbsvc@<project-id>.iam.gserviceaccount.com" \
+ *       --role="roles/secretmanager.secretAccessor" --quiet
+ *   done
+ *
+ *   # 3. キーを使用して実行
+ *   GOOGLE_APPLICATION_CREDENTIALS=/tmp/sa-key.json node import-historical-gmail.js <project-id> ...
+ *
+ *   # 4. 終了後、キーを削除（セキュリティのため）
+ *   rm /tmp/sa-key.json
  */
 
 const admin = require('firebase-admin');
