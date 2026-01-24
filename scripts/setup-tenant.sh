@@ -66,9 +66,22 @@ echo "Admin Email:   $ADMIN_EMAIL"
 echo "Gmail Account: $GMAIL_ACCOUNT"
 echo ""
 
-# 確認
+# ===========================================
+# 認証アカウント確認
+# ===========================================
+CURRENT_ACCOUNT=$(gcloud config get-value account 2>/dev/null)
+echo -e "${YELLOW}現在のgcloud認証アカウント: ${CURRENT_ACCOUNT}${NC}"
+echo ""
+echo "このアカウントがプロジェクト '$PROJECT_ID' のオーナーまたは編集者である必要があります。"
+echo ""
+
 read -p "この設定で続行しますか？ (y/n): " CONFIRM
 if [ "$CONFIRM" != "y" ]; then
+    echo ""
+    echo -e "${YELLOW}別アカウントで認証する場合:${NC}"
+    echo "  gcloud auth login"
+    echo "  gcloud config set account <owner-email>"
+    echo ""
     echo "キャンセルしました"
     exit 0
 fi
@@ -97,6 +110,38 @@ for api in "${APIS[@]}"; do
     gcloud services enable "$api" --project="$PROJECT_ID" 2>/dev/null && \
         log_success "  $api" || log_warn "  $api (既に有効または権限なし)"
 done
+
+# ===========================================
+# Step 1.5: Cloud Functions SA に Vertex AI 権限付与
+# ===========================================
+echo ""
+log_info "Step 1.5: Vertex AI 権限設定..."
+
+PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format="value(projectNumber)" 2>/dev/null)
+FUNCTIONS_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+
+log_info "Cloud Functions SA: $FUNCTIONS_SA"
+
+# Vertex AI User ロール付与
+if gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+    --member="serviceAccount:$FUNCTIONS_SA" \
+    --role="roles/aiplatform.user" \
+    --condition=None 2>/dev/null; then
+    log_success "Vertex AI User 権限を付与しました"
+else
+    log_warn "Vertex AI 権限付与に失敗しました（既に設定済み、または権限不足）"
+    echo ""
+    echo -e "${YELLOW}権限不足の場合、プロジェクトオーナーで以下を実行してください:${NC}"
+    echo "  gcloud projects add-iam-policy-binding $PROJECT_ID \\"
+    echo "    --member=\"serviceAccount:$FUNCTIONS_SA\" \\"
+    echo "    --role=\"roles/aiplatform.user\""
+    echo ""
+    read -p "続行しますか？ (y/n): " CONTINUE_IAM
+    if [ "$CONTINUE_IAM" != "y" ]; then
+        echo "キャンセルしました"
+        exit 1
+    fi
+fi
 
 # ===========================================
 # Step 2: Firebase設定
