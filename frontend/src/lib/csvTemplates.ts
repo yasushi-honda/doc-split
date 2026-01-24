@@ -5,9 +5,9 @@
 // テンプレート定義
 export const CSV_TEMPLATES = {
   customers: {
-    headers: ['name', 'furigana', 'isDuplicate', 'careManagerName', 'notes'],
-    headerLabels: ['顧客名', 'フリガナ', '同姓同名フラグ', '担当ケアマネ名', '備考'],
-    example: ['山田太郎', 'ヤマダタロウ', 'false', '佐藤花子', ''],
+    headers: ['name', 'furigana', 'careManagerName', 'notes'],
+    headerLabels: ['顧客名', 'フリガナ', '担当ケアマネ名', '備考'],
+    example: ['山田太郎', 'ヤマダタロウ', '佐藤花子', ''],
     filename: 'customers_template.csv',
   },
   documents: {
