@@ -24,8 +24,10 @@ import { PdfViewer } from '@/components/PdfViewer'
 import { PdfSplitModal } from '@/components/PdfSplitModal'
 import { SameNameResolveModal } from '@/components/SameNameResolveModal'
 import { OfficeSameNameResolveModal } from '@/components/OfficeSameNameResolveModal'
+import { MasterSelectField } from '@/components/MasterSelectField'
 import { useDocument } from '@/hooks/useDocuments'
 import { useDocumentEdit } from '@/hooks/useDocumentEdit'
+import { useCustomers, useOffices, useDocumentTypes } from '@/hooks/useMasters'
 import { isCustomerConfirmed } from '@/hooks/useProcessingHistory'
 import type { DocumentStatus } from '@shared/types'
 
@@ -124,6 +126,27 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
     saveChanges,
     error: editError,
   } = useDocumentEdit(document)
+
+  // マスターデータ取得（編集時のドロップダウン用）
+  const { data: customers } = useCustomers()
+  const { data: offices } = useOffices()
+  const { data: documentTypes } = useDocumentTypes()
+
+  // マスターデータをMasterSelectField用に変換
+  const customerItems = (customers || []).map(c => ({
+    id: c.id,
+    name: c.name,
+    subText: c.furigana,
+  }))
+  const officeItems = (offices || []).map(o => ({
+    id: o.id,
+    name: o.name,
+    subText: o.shortName,
+  }))
+  const documentTypeItems = (documentTypes || []).map(d => ({
+    id: d.id,
+    name: d.name,
+  }))
 
   // 編集保存成功時
   const handleSave = async () => {
@@ -363,48 +386,77 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                 )}
 
                 <div className="divide-y">
-                  <EditableMetaRow
-                    icon={User}
-                    label="顧客名"
-                    value={
-                      <div className="flex items-center gap-2">
-                        <span>{document.customerName || '未判定'}</span>
-                        {needsCustomerConfirmation && (
-                          <Badge variant="outline" className="bg-orange-100 text-orange-800 border-orange-300 text-xs">
-                            要確認
-                          </Badge>
-                        )}
-                      </div>
-                    }
-                    editValue={editedFields.customerName}
-                    isEditing={isEditing}
-                    onChange={(v) => updateField('customerName', v)}
-                  />
-                  <EditableMetaRow
-                    icon={Building}
-                    label="事業所"
-                    value={
-                      <div className="flex items-center gap-2">
-                        <span>{document.officeName || '未判定'}</span>
-                        {needsOfficeConfirmation && (
-                          <Badge variant="outline" className="bg-orange-100 text-orange-800 border-orange-300 text-xs">
-                            要確認
-                          </Badge>
-                        )}
-                      </div>
-                    }
-                    editValue={editedFields.officeName}
-                    isEditing={isEditing}
-                    onChange={(v) => updateField('officeName', v)}
-                  />
-                  <EditableMetaRow
-                    icon={Tag}
-                    label="書類種別"
-                    value={document.documentType || '未判定'}
-                    editValue={editedFields.documentType}
-                    isEditing={isEditing}
-                    onChange={(v) => updateField('documentType', v)}
-                  />
+                  {/* 顧客名 */}
+                  <div className="flex items-start gap-3 py-2">
+                    <User className="mt-0.5 h-4 w-4 flex-shrink-0 text-gray-400" />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs text-gray-500">顧客名</p>
+                      {isEditing ? (
+                        <div className="mt-1">
+                          <MasterSelectField
+                            type="customer"
+                            value={editedFields.customerName || ''}
+                            items={customerItems}
+                            onChange={(v) => updateField('customerName', v)}
+                          />
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2">
+                          <span className="truncate text-sm text-gray-900">{document.customerName || '未判定'}</span>
+                          {needsCustomerConfirmation && (
+                            <Badge variant="outline" className="bg-orange-100 text-orange-800 border-orange-300 text-xs">
+                              要確認
+                            </Badge>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  {/* 事業所 */}
+                  <div className="flex items-start gap-3 py-2">
+                    <Building className="mt-0.5 h-4 w-4 flex-shrink-0 text-gray-400" />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs text-gray-500">事業所</p>
+                      {isEditing ? (
+                        <div className="mt-1">
+                          <MasterSelectField
+                            type="office"
+                            value={editedFields.officeName || ''}
+                            items={officeItems}
+                            onChange={(v) => updateField('officeName', v)}
+                          />
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2">
+                          <span className="truncate text-sm text-gray-900">{document.officeName || '未判定'}</span>
+                          {needsOfficeConfirmation && (
+                            <Badge variant="outline" className="bg-orange-100 text-orange-800 border-orange-300 text-xs">
+                              要確認
+                            </Badge>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  {/* 書類種別 */}
+                  <div className="flex items-start gap-3 py-2">
+                    <Tag className="mt-0.5 h-4 w-4 flex-shrink-0 text-gray-400" />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs text-gray-500">書類種別</p>
+                      {isEditing ? (
+                        <div className="mt-1">
+                          <MasterSelectField
+                            type="documentType"
+                            value={editedFields.documentType || ''}
+                            items={documentTypeItems}
+                            onChange={(v) => updateField('documentType', v)}
+                          />
+                        </div>
+                      ) : (
+                        <p className="truncate text-sm text-gray-900">{document.documentType || '未判定'}</p>
+                      )}
+                    </div>
+                  </div>
                   <EditableMetaRow
                     icon={Calendar}
                     label="書類日付"
