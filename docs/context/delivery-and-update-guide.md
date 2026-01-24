@@ -312,6 +312,31 @@ node scripts/import-historical-gmail.js docsplit-kanameone --after 2026-01-01 --
 3. 正規スキーマでFirestoreにドキュメント作成（`status: pending`）
 4. 次回の`processOCR`実行時にOCR処理される
 
+**トラブルシューティング: Storage書き込みエラー**
+
+Application Default Credentials使用時に `billing account disabled` エラーが発生する場合、サービスアカウントキーを使用する：
+
+```bash
+# 1. firebase-adminsdkサービスアカウントのキーを作成
+gcloud iam service-accounts keys create /tmp/sa-key.json \
+  --iam-account=firebase-adminsdk-fbsvc@<project-id>.iam.gserviceaccount.com \
+  --project=<project-id>
+
+# 2. Secret Managerアクセス権を付与（初回のみ）
+for secret in gmail-oauth-client-id gmail-oauth-client-secret gmail-oauth-refresh-token; do
+  gcloud secrets add-iam-policy-binding $secret \
+    --project=<project-id> \
+    --member="serviceAccount:firebase-adminsdk-fbsvc@<project-id>.iam.gserviceaccount.com" \
+    --role="roles/secretmanager.secretAccessor" --quiet
+done
+
+# 3. キーを使用して実行
+GOOGLE_APPLICATION_CREDENTIALS=/tmp/sa-key.json node scripts/import-historical-gmail.js <project-id> ...
+
+# 4. 終了後、キーを削除（セキュリティのため）
+rm /tmp/sa-key.json
+```
+
 ### 必須設定: Storage CORS
 
 **重要**: Storage バケットに CORS 設定がないと、ブラウザから PDF を閲覧できない。
