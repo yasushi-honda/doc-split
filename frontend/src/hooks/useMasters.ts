@@ -460,8 +460,10 @@ export function useDeleteDocumentType() {
 async function fetchOffices(): Promise<OfficeMaster[]> {
   const snapshot = await getDocs(collection(db, COLLECTION_PATHS.offices))
   return snapshot.docs.map((doc) => ({
+    id: doc.id,
     name: doc.data().name as string,
     shortName: doc.data().shortName as string | undefined,
+    isDuplicate: doc.data().isDuplicate ?? false,
   }))
 }
 
