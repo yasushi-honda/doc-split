@@ -287,7 +287,30 @@ firebase functions:log -P client-a
 ### 概要
 
 クライアント納品時に、Gmail連携開始前の過去受信分を一括インポートする場合がある。
-この際、以下の点に注意が必要。
+**正式な巻取りスクリプト（`import-historical-gmail.js`）を使用すること。**
+
+### 巻取りスクリプト（推奨）
+
+```bash
+# 使用方法
+node scripts/import-historical-gmail.js <project-id> --after YYYY-MM-DD --before YYYY-MM-DD [--dry-run]
+
+# 例: 2026年1月のメールを取得（dry-runで確認）
+node scripts/import-historical-gmail.js docsplit-kanameone --after 2026-01-01 --before 2026-01-31 --dry-run
+
+# 実行
+node scripts/import-historical-gmail.js docsplit-kanameone --after 2026-01-01 --before 2026-01-31
+```
+
+**前提条件**:
+- `setup-gmail-auth.sh` が完了していること
+- アプリ設定画面でGmailアカウントとラベルが設定済みであること
+
+**処理内容**:
+1. 指定期間・ラベルのGmailを検索
+2. 添付PDFをCloud Storageに保存
+3. 正規スキーマでFirestoreにドキュメント作成（`status: pending`）
+4. 次回の`processOCR`実行時にOCR処理される
 
 ### 必須設定: Storage CORS
 

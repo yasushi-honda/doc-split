@@ -221,6 +221,10 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
   - ドキュメントフィールドマイグレーションスクリプト追加
   - setup-tenant.shにCORS設定を組み込み
   - 納品ガイドに「過去受信分の巻取り対応」セクション追加
+- [x] Gmail過去受信分巻取りスクリプト追加 **完了 2026-01-25**
+  - `import-historical-gmail.js`: 期間指定でGmailから添付PDF取得
+  - 正規スキーマでFirestoreに登録（マイグレーション不要）
+  - dry-runモード対応
 - [ ] 本番運用開始（checkGmailAttachments定期実行）← 次のステップ
 
 ## 未実装（将来対応）
