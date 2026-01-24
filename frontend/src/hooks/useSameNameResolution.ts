@@ -30,6 +30,7 @@ export interface ResolveCustomerParams {
   selectedCustomerId: string;
   selectedCustomerName: string;
   selectedCustomerIsDuplicate: boolean;
+  selectedCareManagerName?: string | null;
 }
 
 export interface ResolveAsUnknownParams {
@@ -75,6 +76,7 @@ async function resolveCustomer({
   selectedCustomerId,
   selectedCustomerName,
   selectedCustomerIsDuplicate,
+  selectedCareManagerName,
 }: ResolveCustomerParams): Promise<void> {
   const user = auth.currentUser;
   if (!user) throw new Error('Not authenticated');
@@ -87,7 +89,7 @@ async function resolveCustomer({
 
     const previousCustomerId = docSnap.data().customerId ?? null;
 
-    // 1. documentsを更新
+    // 1. documentsを更新（careManagerも設定）
     transaction.update(docRef, {
       customerId: selectedCustomerId,
       customerName: selectedCustomerName,
@@ -96,6 +98,7 @@ async function resolveCustomer({
       confirmedBy: user.uid,
       confirmedAt: serverTimestamp(),
       isDuplicateCustomer: selectedCustomerIsDuplicate,
+      careManager: selectedCareManagerName || null,
     });
 
     // 2. 監査ログを作成

@@ -182,6 +182,7 @@ export function SameNameResolveModal({
           selectedCustomerId: selection.candidate.customerId,
           selectedCustomerName: selection.candidate.customerName,
           selectedCustomerIsDuplicate: selection.candidate.isDuplicate,
+          selectedCareManagerName: selection.candidate.careManagerName,
         });
         onResolved?.();
         onClose();
@@ -209,13 +210,14 @@ export function SameNameResolveModal({
   // 新規登録後のコールバック
   const handleMasterRegistered = useCallback(
     async (result: RegisteredMasterInfo) => {
-      // 登録後、その顧客で確定する
+      // 登録後、その顧客で確定する（新規顧客なのでcareManagerはなし）
       try {
         await resolveCustomer({
           documentId: document.id,
           selectedCustomerId: result.id || result.name, // IDがない場合は名前で代用
           selectedCustomerName: result.name,
           selectedCustomerIsDuplicate: false,
+          selectedCareManagerName: null, // 新規登録時はケアマネ未設定
         });
         onResolved?.();
         onClose();
