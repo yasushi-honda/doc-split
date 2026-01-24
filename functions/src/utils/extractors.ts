@@ -42,6 +42,7 @@ export interface CustomerCandidate {
   matchType: MatchType;
   isDuplicate: boolean;
   pageNumbers?: number[];
+  careManagerName?: string;
 }
 
 /** 書類抽出結果 */
@@ -106,6 +107,7 @@ export interface CustomerMaster {
   name: string;
   furigana?: string;
   isDuplicate?: boolean;
+  careManagerName?: string;
 }
 
 export interface OfficeMaster {
@@ -426,6 +428,7 @@ export function extractCustomerCandidates(
         matchType,
         isDuplicate: customer.isDuplicate || false,
         pageNumbers: pageNumber !== undefined ? [pageNumber] : undefined,
+        careManagerName: customer.careManagerName,
       });
     }
   }

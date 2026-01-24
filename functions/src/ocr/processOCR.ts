@@ -237,6 +237,7 @@ async function processDocument(
     name: d.data().name as string,
     furigana: d.data().furigana as string | undefined,
     isDuplicate: d.data().isDuplicate as boolean | undefined,
+    careManagerName: d.data().careManagerName as string | undefined,
   }));
 
   const officeMasterData: OfficeMaster[] = officeMasters.docs.map((d) => ({
@@ -280,6 +281,8 @@ async function processDocument(
     documentType: documentTypeResult.documentType || '未判定',
     customerName: customerResult.bestMatch?.name || '不明顧客',
     customerId: customerResult.bestMatch?.id || null,
+    // 顧客に紐づくケアマネを設定
+    careManager: customerResult.bestMatch?.careManagerName || null,
     officeName: officeResult.bestMatch?.name || '未判定',
     officeId: officeResult.bestMatch?.id || null,
     fileDate: dateResult.date || null,
@@ -298,6 +301,7 @@ async function processDocument(
       isDuplicate: c.isDuplicate || false,
       score: c.score,
       matchType: c.matchType,
+      careManagerName: c.careManagerName || null,
     })),
     // 事業所確定フィールド
     officeConfirmed: !officeResult.needsManualSelection,
