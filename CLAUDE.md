@@ -56,7 +56,7 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
 - [x] 共通ユーティリティ（functions/src/utils/）
   - retry.ts: リトライ機能
   - errorLogger.ts: エラー分類・記録
-  - gmailAuth.ts: Gmail認証切替
+  - gmailAuth.ts: Gmail認証切替（OAuth認証情報はSecret Manager一元管理）
   - rateLimiter.ts: Geminiレート制限
   - similarity.ts: 類似度マッチング
 
@@ -212,6 +212,7 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
 - [x] Gmail監視ラベル設定UX改善（#9）**完了 2026-01-24**
 - [x] kanameone環境マスターデータ取り込み **完了 2026-01-24**
 - [x] kanameone環境Gmail監視ラベル設定（AI_OCR）**完了 2026-01-24**
+- [x] Gmail OAuth認証をSecret Manager一元管理に変更（#10）**完了 2026-01-24**
 - [ ] 実書類でのOCR精度確認（クライアント環境）← 次のステップ
 
 ## 未実装（将来対応）
