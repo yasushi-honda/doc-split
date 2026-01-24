@@ -853,16 +853,17 @@ export async function checkCareManagerDuplicatesWithDetails(
 
 // --- 顧客の重複チェック（詳細付き） ---
 export async function checkCustomerDuplicatesWithDetails(
-  items: { name: string; furigana: string }[]
-): Promise<DuplicateCheckResultWithDetails<{ name: string; furigana: string; id?: string }>[]> {
+  items: { name: string; furigana: string; careManagerName?: string }[]
+): Promise<DuplicateCheckResultWithDetails<{ name: string; furigana: string; careManagerName?: string; id?: string }>[]> {
   const snapshot = await getDocs(collection(db, COLLECTION_PATHS.customers))
-  const existingMap = new Map<string, { name: string; furigana: string; id: string }>()
+  const existingMap = new Map<string, { name: string; furigana: string; careManagerName?: string; id: string }>()
 
   snapshot.docs.forEach(d => {
     const data = d.data()
     existingMap.set(data.name, {
       name: data.name,
       furigana: data.furigana || '',
+      careManagerName: data.careManagerName || '',
       id: d.id,
     })
   })
@@ -871,7 +872,7 @@ export async function checkCustomerDuplicatesWithDetails(
     const normalizedName = normalizeName(item.name)
     const existing = existingMap.get(normalizedName)
     return {
-      csvData: { name: normalizedName, furigana: item.furigana },
+      csvData: { name: normalizedName, furigana: item.furigana, careManagerName: item.careManagerName || '' },
       existingData: existing || null,
       isDuplicate: !!existing,
     }

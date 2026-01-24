@@ -97,6 +97,7 @@ const TYPE_CONFIG = {
     columns: [
       { key: 'name', label: '顧客名' },
       { key: 'furigana', label: 'フリガナ' },
+      { key: 'careManagerName', label: '担当ケアマネ' },
     ],
     defaultAction: 'add' as ImportAction,
     description: '同名は別人として追加されます。上書きを選択すると既存データを更新します。',
@@ -239,7 +240,11 @@ export function CsvImportModal({ type, isOpen, onClose, onImport }: CsvImportMod
 
         if (type === 'customer') {
           const result = await checkCustomerDuplicatesWithDetails(
-            mapped.map(m => ({ name: (m as CustomerCSVRow).name, furigana: (m as CustomerCSVRow).furigana }))
+            mapped.map(m => ({
+              name: (m as CustomerCSVRow).name,
+              furigana: (m as CustomerCSVRow).furigana,
+              careManagerName: (m as CustomerCSVRow).careManagerName,
+            }))
           )
           checked = result as DuplicateCheckResultWithDetails<AnyCSVData>[]
         } else if (type === 'office') {
