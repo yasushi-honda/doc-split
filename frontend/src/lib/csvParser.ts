@@ -103,6 +103,8 @@ export interface CustomerCSVRow {
   name: string
   furigana: string
   isDuplicate: boolean
+  careManagerName?: string
+  notes?: string
 }
 
 export function mapCustomerCSV(rows: Record<string, string>[]): CustomerCSVRow[] {
@@ -110,6 +112,8 @@ export function mapCustomerCSV(rows: Record<string, string>[]): CustomerCSVRow[]
     name: row['name'] || row['顧客名'] || row['氏名'] || row['利用者名'] || '',
     furigana: row['furigana'] || row['フリガナ'] || row['ふりがな'] || '',
     isDuplicate: row['isDuplicate'] === 'true' || row['同姓同名'] === 'true' || row['重複'] === 'true',
+    careManagerName: row['careManagerName'] || row['担当ケアマネ名'] || row['担当ケアマネ'] || row['担当CM'] || '',
+    notes: row['notes'] || row['備考'] || '',
   })).filter(c => c.name) // 名前がない行は除外
 }
 

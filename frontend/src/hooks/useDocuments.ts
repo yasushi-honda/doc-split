@@ -256,6 +256,7 @@ async function fetchCustomerMasters(): Promise<CustomerMaster[]> {
     name: doc.data().name as string,
     isDuplicate: doc.data().isDuplicate as boolean,
     furigana: doc.data().furigana as string,
+    careManagerName: doc.data().careManagerName as string | undefined,
   }))
 }
 

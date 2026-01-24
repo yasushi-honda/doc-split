@@ -143,6 +143,7 @@ function CustomersMaster() {
   // フォーム状態
   const [formName, setFormName] = useState('')
   const [formFurigana, setFormFurigana] = useState('')
+  const [formCareManagerName, setFormCareManagerName] = useState('')
   const [formIsDuplicate, setFormIsDuplicate] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
 
@@ -150,11 +151,18 @@ function CustomersMaster() {
     items: { data: AnyCSVData; existingId?: string; action: ImportAction }[]
   ): Promise<BulkImportResultDetailed> => {
     return await bulkImport.mutateAsync(
-      items.map(item => ({
-        data: { name: (item.data as CustomerCSVRow).name, furigana: (item.data as CustomerCSVRow).furigana },
-        existingId: item.existingId,
-        action: item.action,
-      }))
+      items.map(item => {
+        const csvRow = item.data as CustomerCSVRow
+        return {
+          data: {
+            name: csvRow.name,
+            furigana: csvRow.furigana,
+            careManagerName: csvRow.careManagerName,
+          },
+          existingId: item.existingId,
+          action: item.action,
+        }
+      })
     )
   }
 
@@ -178,6 +186,7 @@ function CustomersMaster() {
         await addCustomer.mutateAsync({
           name: formName,
           furigana: formFurigana,
+          careManagerName: formCareManagerName || undefined,
           isDuplicate: false,
         })
         resetForm()
@@ -197,6 +206,7 @@ function CustomersMaster() {
       await addCustomer.mutateAsync({
         name: formName,
         furigana: formFurigana,
+        careManagerName: formCareManagerName || undefined,
         isDuplicate: true,
         force: true,
       })
@@ -214,6 +224,7 @@ function CustomersMaster() {
       id: editingCustomer.id,
       name: formName,
       furigana: formFurigana,
+      careManagerName: formCareManagerName,
       isDuplicate: formIsDuplicate,
     })
     resetForm()
@@ -229,6 +240,7 @@ function CustomersMaster() {
   const openEdit = (customer: CustomerMaster) => {
     setFormName(customer.name)
     setFormFurigana(customer.furigana)
+    setFormCareManagerName(customer.careManagerName || '')
     setFormIsDuplicate(customer.isDuplicate)
     setEditingCustomer(customer)
   }
@@ -236,6 +248,7 @@ function CustomersMaster() {
   const resetForm = () => {
     setFormName('')
     setFormFurigana('')
+    setFormCareManagerName('')
     setFormIsDuplicate(false)
     setFormError(null)
   }
@@ -283,6 +296,7 @@ function CustomersMaster() {
               <TableRow>
                 <TableHead>顧客名</TableHead>
                 <TableHead>フリガナ</TableHead>
+                <TableHead>担当ケアマネ</TableHead>
                 <TableHead>同姓同名</TableHead>
                 <TableHead className="w-[100px]">操作</TableHead>
               </TableRow>
@@ -290,7 +304,7 @@ function CustomersMaster() {
             <TableBody>
               {filteredCustomers?.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={4} className="text-center text-gray-500">
+                  <TableCell colSpan={5} className="text-center text-gray-500">
                     顧客がありません
                   </TableCell>
                 </TableRow>
@@ -299,6 +313,7 @@ function CustomersMaster() {
                   <TableRow key={customer.id}>
                     <TableCell className="font-medium">{customer.name}</TableCell>
                     <TableCell>{customer.furigana}</TableCell>
+                    <TableCell>{customer.careManagerName || '-'}</TableCell>
                     <TableCell>
                       {customer.isDuplicate && (
                         <Badge variant="secondary">同姓同名あり</Badge>
@@ -358,6 +373,14 @@ function CustomersMaster() {
                   placeholder="ヤマダ タロウ"
                 />
               </div>
+              <div className="space-y-2">
+                <Label>担当ケアマネ</Label>
+                <Input
+                  value={formCareManagerName}
+                  onChange={(e) => setFormCareManagerName(e.target.value)}
+                  placeholder="佐藤 花子"
+                />
+              </div>
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setIsAddOpen(false)}>
@@ -389,6 +412,14 @@ function CustomersMaster() {
                 <Input
                   value={formFurigana}
                   onChange={(e) => setFormFurigana(e.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>担当ケアマネ</Label>
+                <Input
+                  value={formCareManagerName}
+                  onChange={(e) => setFormCareManagerName(e.target.value)}
+                  placeholder="佐藤 花子"
                 />
               </div>
               <div className="flex items-center justify-between">

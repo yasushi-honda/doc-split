@@ -50,6 +50,7 @@ async function fetchCustomers(): Promise<CustomerMaster[]> {
     name: doc.data().name as string,
     isDuplicate: doc.data().isDuplicate as boolean,
     furigana: doc.data().furigana as string,
+    careManagerName: doc.data().careManagerName as string | undefined,
   }))
 }
 
@@ -65,6 +66,7 @@ interface AddCustomerParams {
   name: string
   furigana: string
   isDuplicate?: boolean
+  careManagerName?: string
   force?: boolean // 同名が存在しても強制追加
 }
 
@@ -89,11 +91,15 @@ async function addCustomer(params: AddCustomerParams): Promise<void> {
   }
 
   const docRef = doc(collection(db, COLLECTION_PATHS.customers))
-  await setDoc(docRef, {
+  const data: Record<string, unknown> = {
     name: normalizedName,
     furigana: normalizeName(params.furigana),
     isDuplicate: params.isDuplicate ?? true, // 同名追加時はデフォルトtrue
-  })
+  }
+  if (params.careManagerName) {
+    data.careManagerName = params.careManagerName
+  }
+  await setDoc(docRef, data)
 }
 
 export function useAddCustomer() {
@@ -111,15 +117,21 @@ interface UpdateCustomerParams {
   name: string
   furigana: string
   isDuplicate: boolean
+  careManagerName?: string
 }
 
 async function updateCustomer(params: UpdateCustomerParams): Promise<void> {
   const docRef = doc(db, COLLECTION_PATHS.customers, params.id)
-  await updateDoc(docRef, {
+  const data: Record<string, unknown> = {
     name: normalizeName(params.name),
     furigana: normalizeName(params.furigana),
     isDuplicate: params.isDuplicate,
-  })
+  }
+  // careManagerName は空文字の場合も保存（削除のため）
+  if (params.careManagerName !== undefined) {
+    data.careManagerName = params.careManagerName || null
+  }
+  await updateDoc(docRef, data)
 }
 
 export function useUpdateCustomer() {
@@ -1006,7 +1018,7 @@ export function useBulkImportCareManagersWithActions() {
 
 // --- 顧客の上書き対応インポート ---
 interface CustomerImportItem {
-  data: { name: string; furigana: string }
+  data: { name: string; furigana: string; careManagerName?: string }
   existingId?: string
   action: ImportAction
 }
@@ -1040,20 +1052,25 @@ async function bulkImportCustomersWithActions(
       continue
     }
 
+    // 共通のデータオブジェクトを作成
+    const baseData: Record<string, unknown> = {
+      name: normalizedName,
+      furigana: normalizeName(item.data.furigana),
+    }
+    if (item.data.careManagerName) {
+      baseData.careManagerName = item.data.careManagerName
+    }
+
     if (item.action === 'overwrite' && item.existingId) {
       // 上書き: 既存ドキュメントを更新
       const docRef = doc(db, COLLECTION_PATHS.customers, item.existingId)
-      await updateDoc(docRef, {
-        name: normalizedName,
-        furigana: normalizeName(item.data.furigana),
-      })
+      await updateDoc(docRef, baseData)
       overwritten++
     } else {
       // 新規追加
       const docRef = doc(collection(db, COLLECTION_PATHS.customers))
       await setDoc(docRef, {
-        name: normalizedName,
-        furigana: normalizeName(item.data.furigana),
+        ...baseData,
         isDuplicate: existingByName.has(normalizedName),
       })
       added++
