@@ -460,8 +460,10 @@ export function useDeleteDocumentType() {
 async function fetchOffices(): Promise<OfficeMaster[]> {
   const snapshot = await getDocs(collection(db, COLLECTION_PATHS.offices))
   return snapshot.docs.map((doc) => ({
+    id: doc.id,
     name: doc.data().name as string,
     shortName: doc.data().shortName as string | undefined,
+    isDuplicate: doc.data().isDuplicate ?? false,
   }))
 }
 
@@ -766,6 +768,377 @@ export function useBulkImportCareManagers() {
     mutationFn: bulkImportCareManagers,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['masters', 'caremanagers'] })
+    },
+  })
+}
+
+// ============================================
+// 共通: 重複チェック・上書きインポート
+// ============================================
+
+/**
+ * 重複チェック結果（既存データ詳細付き）
+ */
+export interface DuplicateCheckResultWithDetails<T> {
+  csvData: T
+  existingData: T | null
+  isDuplicate: boolean
+}
+
+/**
+ * インポートアクション
+ */
+export type ImportAction = 'add' | 'overwrite' | 'skip'
+
+/**
+ * インポート結果（詳細版）
+ */
+export interface BulkImportResultDetailed {
+  added: number
+  overwritten: number
+  skipped: number
+  skippedNames: string[]
+}
+
+// --- 書類種別の重複チェック（詳細付き） ---
+export async function checkDocumentTypeDuplicatesWithDetails(
+  items: { name: string; dateMarker: string; category: string; keywords: string }[]
+): Promise<DuplicateCheckResultWithDetails<{ name: string; dateMarker: string; category: string; keywords: string }>[]> {
+  const snapshot = await getDocs(collection(db, COLLECTION_PATHS.documents))
+  const existingMap = new Map<string, { name: string; dateMarker: string; category: string; keywords: string }>()
+
+  snapshot.docs.forEach(d => {
+    const data = d.data()
+    const keywords = Array.isArray(data.keywords) ? data.keywords.join(';') : ''
+    existingMap.set(data.name, {
+      name: data.name,
+      dateMarker: data.dateMarker || '',
+      category: data.category || '',
+      keywords,
+    })
+  })
+
+  return items.map(item => ({
+    csvData: item,
+    existingData: existingMap.get(item.name) || null,
+    isDuplicate: existingMap.has(item.name),
+  }))
+}
+
+// --- ケアマネの重複チェック（詳細付き） ---
+export async function checkCareManagerDuplicatesWithDetails(
+  items: { name: string }[]
+): Promise<DuplicateCheckResultWithDetails<{ name: string }>[]> {
+  const snapshot = await getDocs(collection(db, COLLECTION_PATHS.caremanagers))
+  const existingNames = new Set(snapshot.docs.map(d => d.data().name))
+
+  return items.map(item => ({
+    csvData: item,
+    existingData: existingNames.has(item.name) ? { name: item.name } : null,
+    isDuplicate: existingNames.has(item.name),
+  }))
+}
+
+// --- 顧客の重複チェック（詳細付き） ---
+export async function checkCustomerDuplicatesWithDetails(
+  items: { name: string; furigana: string }[]
+): Promise<DuplicateCheckResultWithDetails<{ name: string; furigana: string; id?: string }>[]> {
+  const snapshot = await getDocs(collection(db, COLLECTION_PATHS.customers))
+  const existingMap = new Map<string, { name: string; furigana: string; id: string }>()
+
+  snapshot.docs.forEach(d => {
+    const data = d.data()
+    existingMap.set(data.name, {
+      name: data.name,
+      furigana: data.furigana || '',
+      id: d.id,
+    })
+  })
+
+  return items.map(item => {
+    const normalizedName = normalizeName(item.name)
+    const existing = existingMap.get(normalizedName)
+    return {
+      csvData: { name: normalizedName, furigana: item.furigana },
+      existingData: existing || null,
+      isDuplicate: !!existing,
+    }
+  })
+}
+
+// --- 事業所の重複チェック（詳細付き） ---
+export async function checkOfficeDuplicatesWithDetails(
+  items: { name: string; shortName: string }[]
+): Promise<DuplicateCheckResultWithDetails<{ name: string; shortName: string; id?: string }>[]> {
+  const snapshot = await getDocs(collection(db, COLLECTION_PATHS.offices))
+  const existingMap = new Map<string, { name: string; shortName: string; id: string }>()
+
+  snapshot.docs.forEach(d => {
+    const data = d.data()
+    existingMap.set(data.name, {
+      name: data.name,
+      shortName: data.shortName || '',
+      id: d.id,
+    })
+  })
+
+  return items.map(item => {
+    const normalizedName = normalizeName(item.name)
+    const existing = existingMap.get(normalizedName)
+    return {
+      csvData: { name: normalizedName, shortName: item.shortName || '' },
+      existingData: existing || null,
+      isDuplicate: !!existing,
+    }
+  })
+}
+
+// --- 書類種別の上書き対応インポート ---
+interface DocumentTypeImportItem {
+  data: { name: string; dateMarker: string; category: string; keywords: string }
+  action: ImportAction
+}
+
+async function bulkImportDocumentTypesWithActions(
+  items: DocumentTypeImportItem[]
+): Promise<BulkImportResultDetailed> {
+  let added = 0
+  let overwritten = 0
+  let skipped = 0
+  const skippedNames: string[] = []
+
+  for (const item of items) {
+    if (!item.data.name) {
+      skipped++
+      skippedNames.push('(空)')
+      continue
+    }
+
+    if (item.action === 'skip') {
+      skipped++
+      skippedNames.push(item.data.name)
+      continue
+    }
+
+    const docRef = doc(db, COLLECTION_PATHS.documents, item.data.name)
+    await setDoc(docRef, {
+      name: item.data.name,
+      dateMarker: item.data.dateMarker || '',
+      category: item.data.category || '',
+      keywords: item.data.keywords
+        ? item.data.keywords.split(';').map(k => k.trim()).filter(k => k.length >= 2)
+        : [],
+    })
+
+    if (item.action === 'overwrite') {
+      overwritten++
+    } else {
+      added++
+    }
+  }
+
+  return { added, overwritten, skipped, skippedNames }
+}
+
+export function useBulkImportDocumentTypesWithActions() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: bulkImportDocumentTypesWithActions,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['masters', 'documents'] })
+    },
+  })
+}
+
+// --- ケアマネの上書き対応インポート ---
+interface CareManagerImportItem {
+  data: { name: string }
+  action: ImportAction
+}
+
+async function bulkImportCareManagersWithActions(
+  items: CareManagerImportItem[]
+): Promise<BulkImportResultDetailed> {
+  let added = 0
+  let overwritten = 0
+  let skipped = 0
+  const skippedNames: string[] = []
+
+  for (const item of items) {
+    if (!item.data.name) {
+      skipped++
+      skippedNames.push('(空)')
+      continue
+    }
+
+    if (item.action === 'skip') {
+      skipped++
+      skippedNames.push(item.data.name)
+      continue
+    }
+
+    const docRef = doc(db, COLLECTION_PATHS.caremanagers, item.data.name)
+    await setDoc(docRef, {
+      name: item.data.name,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    })
+
+    if (item.action === 'overwrite') {
+      overwritten++
+    } else {
+      added++
+    }
+  }
+
+  return { added, overwritten, skipped, skippedNames }
+}
+
+export function useBulkImportCareManagersWithActions() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: bulkImportCareManagersWithActions,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['masters', 'caremanagers'] })
+    },
+  })
+}
+
+// --- 顧客の上書き対応インポート ---
+interface CustomerImportItem {
+  data: { name: string; furigana: string }
+  existingId?: string
+  action: ImportAction
+}
+
+async function bulkImportCustomersWithActions(
+  items: CustomerImportItem[]
+): Promise<BulkImportResultDetailed> {
+  // 既存データを取得してマップ作成
+  const snapshot = await getDocs(collection(db, COLLECTION_PATHS.customers))
+  const existingByName = new Map<string, string>() // name -> docId
+  snapshot.docs.forEach(d => {
+    existingByName.set(d.data().name, d.id)
+  })
+
+  let added = 0
+  let overwritten = 0
+  let skipped = 0
+  const skippedNames: string[] = []
+
+  for (const item of items) {
+    const normalizedName = normalizeName(item.data.name)
+    if (!normalizedName) {
+      skipped++
+      skippedNames.push('(空)')
+      continue
+    }
+
+    if (item.action === 'skip') {
+      skipped++
+      skippedNames.push(normalizedName)
+      continue
+    }
+
+    if (item.action === 'overwrite' && item.existingId) {
+      // 上書き: 既存ドキュメントを更新
+      const docRef = doc(db, COLLECTION_PATHS.customers, item.existingId)
+      await updateDoc(docRef, {
+        name: normalizedName,
+        furigana: normalizeName(item.data.furigana),
+      })
+      overwritten++
+    } else {
+      // 新規追加
+      const docRef = doc(collection(db, COLLECTION_PATHS.customers))
+      await setDoc(docRef, {
+        name: normalizedName,
+        furigana: normalizeName(item.data.furigana),
+        isDuplicate: existingByName.has(normalizedName),
+      })
+      added++
+      existingByName.set(normalizedName, docRef.id)
+    }
+  }
+
+  return { added, overwritten, skipped, skippedNames }
+}
+
+export function useBulkImportCustomersWithActions() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: bulkImportCustomersWithActions,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['masters', 'customers'] })
+    },
+  })
+}
+
+// --- 事業所の上書き対応インポート ---
+interface OfficeImportItem {
+  data: { name: string; shortName: string }
+  existingId?: string
+  action: ImportAction
+}
+
+async function bulkImportOfficesWithActions(
+  items: OfficeImportItem[]
+): Promise<BulkImportResultDetailed> {
+  // 既存データを取得
+  const snapshot = await getDocs(collection(db, COLLECTION_PATHS.offices))
+  const existingByName = new Map<string, string>()
+  snapshot.docs.forEach(d => {
+    existingByName.set(d.data().name, d.id)
+  })
+
+  let added = 0
+  let overwritten = 0
+  let skipped = 0
+  const skippedNames: string[] = []
+
+  for (const item of items) {
+    const normalizedName = normalizeName(item.data.name)
+    if (!normalizedName) {
+      skipped++
+      skippedNames.push('(空)')
+      continue
+    }
+
+    if (item.action === 'skip') {
+      skipped++
+      skippedNames.push(normalizedName)
+      continue
+    }
+
+    if (item.action === 'overwrite' && item.existingId) {
+      // 上書き: 既存ドキュメントを更新
+      const docRef = doc(db, COLLECTION_PATHS.offices, item.existingId)
+      await setDoc(docRef, {
+        name: normalizedName,
+        shortName: item.data.shortName ? normalizeName(item.data.shortName) : '',
+      })
+      overwritten++
+    } else {
+      // 新規追加
+      const docRef = doc(collection(db, COLLECTION_PATHS.offices))
+      await setDoc(docRef, {
+        name: normalizedName,
+        shortName: item.data.shortName ? normalizeName(item.data.shortName) : '',
+      })
+      added++
+      existingByName.set(normalizedName, docRef.id)
+    }
+  }
+
+  return { added, overwritten, skipped, skippedNames }
+}
+
+export function useBulkImportOfficesWithActions() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: bulkImportOfficesWithActions,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['masters', 'offices'] })
     },
   })
 }
