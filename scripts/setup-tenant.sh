@@ -156,6 +156,25 @@ firebase use "$PROJECT_ID" 2>/dev/null || {
 }
 log_success "Firebaseプロジェクト: $PROJECT_ID"
 
+# .firebasercにエイリアス追加（deploy-to-project.sh用）
+ALIAS_NAME=$(echo "$PROJECT_ID" | sed 's/docsplit-//' | sed 's/-docsplit//')
+if [ -f "$ROOT_DIR/.firebaserc" ]; then
+    if ! grep -q "\"$ALIAS_NAME\"" "$ROOT_DIR/.firebaserc"; then
+        log_info ".firebasercにエイリアス '$ALIAS_NAME' を追加中..."
+        # jqがあれば使用、なければ手動追加の案内
+        if command -v jq &> /dev/null; then
+            jq ".projects.\"$ALIAS_NAME\" = \"$PROJECT_ID\"" "$ROOT_DIR/.firebaserc" > "$ROOT_DIR/.firebaserc.tmp" && \
+                mv "$ROOT_DIR/.firebaserc.tmp" "$ROOT_DIR/.firebaserc"
+            log_success "エイリアス追加完了: $ALIAS_NAME → $PROJECT_ID"
+        else
+            log_warn ".firebasercに手動でエイリアスを追加してください:"
+            echo "  \"$ALIAS_NAME\": \"$PROJECT_ID\""
+        fi
+    else
+        log_success "エイリアス '$ALIAS_NAME' は既に存在します"
+    fi
+fi
+
 # ===========================================
 # Step 3: 環境変数生成
 # ===========================================
@@ -178,7 +197,8 @@ else
 fi
 
 if [ -n "$API_KEY" ]; then
-    cat > "$ROOT_DIR/frontend/.env" << EOF
+    # プロジェクト別の.envファイルを作成
+    cat > "$ROOT_DIR/frontend/.env.$PROJECT_ID" << EOF
 VITE_FIREBASE_API_KEY=$API_KEY
 VITE_FIREBASE_AUTH_DOMAIN=$AUTH_DOMAIN
 VITE_FIREBASE_PROJECT_ID=$PROJECT_ID
@@ -186,9 +206,11 @@ VITE_FIREBASE_STORAGE_BUCKET=$STORAGE_BUCKET
 VITE_FIREBASE_MESSAGING_SENDER_ID=$MESSAGING_SENDER_ID
 VITE_FIREBASE_APP_ID=$APP_ID
 EOF
-    log_success "frontend/.env を生成しました"
+    # ローカル開発用にもコピー
+    cp "$ROOT_DIR/frontend/.env.$PROJECT_ID" "$ROOT_DIR/frontend/.env.local"
+    log_success "frontend/.env.$PROJECT_ID を生成しました"
 else
-    log_warn "frontend/.env の手動設定が必要です"
+    log_warn "frontend/.env.<project-id> の手動設定が必要です"
 fi
 
 # ===========================================
@@ -320,6 +342,25 @@ firebase deploy --only firestore:rules,firestore:indexes,storage --project "$PRO
     grep -E "(✔|Error|Warning)" || true
 log_success "ルール & インデックス デプロイ完了"
 
+# インデックスビルド待機
+log_info "インデックスのビルドを待機中..."
+MAX_WAIT=180  # 最大3分待機
+WAITED=0
+while [ $WAITED -lt $MAX_WAIT ]; do
+    CREATING=$(gcloud firestore indexes composite list --project="$PROJECT_ID" --filter="state=CREATING" --format="value(name)" 2>/dev/null | wc -l | tr -d ' ')
+    if [ "$CREATING" -eq 0 ]; then
+        log_success "全インデックスがREADY状態です"
+        break
+    fi
+    echo "  ビルド中のインデックス: ${CREATING}件 (${WAITED}秒経過)"
+    sleep 10
+    WAITED=$((WAITED + 10))
+done
+
+if [ $WAITED -ge $MAX_WAIT ]; then
+    log_warn "インデックスのビルドに時間がかかっています。バックグラウンドで継続中です。"
+fi
+
 # ===========================================
 # Step 6: Cloud Functionsデプロイ
 # ===========================================
@@ -361,9 +402,14 @@ echo -e "${YELLOW}残りの手順:${NC}"
 echo "  1. Gmail API認証設定（OAuth or Service Account）"
 echo "     → scripts/setup-gmail-auth.sh $PROJECT_ID"
 echo ""
-echo "  2. マスターデータ投入（任意）"
-echo "     → node scripts/import-masters.js --all scripts/samples/"
+echo "  2. Gmail監視ラベル設定（重要）"
+echo "     → アプリにログイン後、設定画面で監視対象ラベルを追加"
+echo "     → 例: AI_OCR, 書類管理 など"
 echo ""
-echo "  3. 管理者が初回ログイン"
+echo "  3. マスターデータ投入（任意）"
+echo "     → node scripts/import-masters.js --all scripts/samples/"
+echo "     → または管理画面からCSVインポート"
+echo ""
+echo "  4. 管理者が初回ログイン"
 echo "     → $ADMIN_EMAIL でGoogleログイン"
 echo ""
