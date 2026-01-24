@@ -224,7 +224,7 @@ export function OfficeSameNameResolveModal({
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto" aria-describedby={undefined}>
         <DialogHeader>
           <DialogTitle>事業所の確定</DialogTitle>
         </DialogHeader>
@@ -350,7 +350,7 @@ export function OfficeSameNameResolveModal({
       {/* 登録提案ダイアログ */}
       {registrationPrompt === 'prompt' && (
         <Dialog open={true} onOpenChange={() => setRegistrationPrompt('none')}>
-          <DialogContent className="max-w-md">
+          <DialogContent className="max-w-md" aria-describedby={undefined}>
             <DialogHeader>
               <DialogTitle>新規事業所の登録</DialogTitle>
             </DialogHeader>

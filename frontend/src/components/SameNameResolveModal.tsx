@@ -238,7 +238,7 @@ export function SameNameResolveModal({
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto" aria-describedby={undefined}>
         <DialogHeader>
           <DialogTitle>顧客の確定</DialogTitle>
         </DialogHeader>
@@ -387,7 +387,7 @@ export function SameNameResolveModal({
       {/* 登録提案ダイアログ */}
       {registrationPrompt === 'prompt' && (
         <Dialog open={true} onOpenChange={() => setRegistrationPrompt('none')}>
-          <DialogContent className="max-w-md">
+          <DialogContent className="max-w-md" aria-describedby={undefined}>
             <DialogHeader>
               <DialogTitle>新規顧客の登録</DialogTitle>
             </DialogHeader>
