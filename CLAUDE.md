@@ -196,7 +196,7 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
 - [x] 同名/同姓同名対応設計ドキュメント作成（Codexアーキテクトレビュー済み）
   - `docs/context/duplicate-name-handling.md`
   - GitHub Pages公開済み
-- [x] dev環境・kanameone環境デプロイ完了
+- [x] dev環境・クライアント環境デプロイ完了
 - [x] **事業所同名対応実装（2026-01-22）**
   - `extractOfficeCandidates`: 事業所候補抽出（複数候補対応）
   - `processOCR`: officeConfirmed/officeCandidates新スキーマ
@@ -207,14 +207,12 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
 
 ## 次のタスク
 - [x] 事業所同名対応実装（顧客パターン流用）**完了 2026-01-22**
-- [x] 本番デプロイ（dev/kanameone環境）**完了 2026-01-22**
+- [x] 本番デプロイ（dev環境 + クライアント環境）**完了 2026-01-22**
 - [x] CSVインポート時の同名確認機能追加 **完了 2026-01-24**
 - [x] Gmail監視ラベル設定UX改善（#9）**完了 2026-01-24**
-- [x] kanameone環境マスターデータ取り込み **完了 2026-01-24**
-- [x] kanameone環境Gmail監視ラベル設定（AI_OCR）**完了 2026-01-24**
 - [x] Gmail OAuth認証をSecret Manager一元管理に変更（#10）**完了 2026-01-24**
-- [x] kanameone環境Vertex AI有効化・権限設定 **完了 2026-01-25**
-- [x] 実書類でのOCR精度確認（AI_OCRラベル5件テスト）**完了 2026-01-25**
+- [x] クライアント環境セットアップ完了（マスターデータ・Gmail・Vertex AI）**完了 2026-01-25**
+- [x] 実書類でのOCR精度確認（5件テスト・精度良好）**完了 2026-01-25**
 - [ ] 本番運用開始（checkGmailAttachments定期実行）← 次のステップ
 
 ## 未実装（将来対応）
@@ -227,16 +225,20 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
   - docs/operation/gmail-auth-guide.md: 認証方式選択ガイド
   - 無料Gmail / Google Workspace 両パターン対応完了
 
-## クライアント環境（2026-01-22）
-### kanameone（検証用）
-| 項目 | 値 |
-|------|-----|
-| GCPプロジェクト | `docsplit-kanameone` |
-| Firebase Alias | `kanameone` |
-| 本番URL | `https://docsplit-kanameone.web.app` |
-| 管理者 | `systemkaname@kanameone.com` |
-| Gmail認証 | OAuth 2.0 |
-| 設定ファイル | `frontend/.env.kanameone` |
+## クライアント環境
+
+クライアント環境は `.firebaserc` にエイリアスとして登録されています。
+
+### セットアップ手順
+1. `scripts/setup-tenant.sh <project-id> <admin-email>` でテナント初期設定
+2. `scripts/setup-gmail-auth.sh <project-id>` でGmail認証設定
+3. `scripts/deploy-to-project.sh <alias>` でデプロイ
+
+詳細は `docs/context/delivery-and-update-guide.md` 参照。
+
+### 環境ファイル構成
+- `.firebaserc`: プロジェクトエイリアス定義
+- `frontend/.env.<alias>`: 各環境のFirebase設定
 
 ## 完了したインフラ設定（2026-01-19）
 - [x] コスト監視・予算アラート設定（月額3,000円、50%/80%/100%閾値）
@@ -304,16 +306,16 @@ cd frontend && npm test
 
 ```bash
 # マルチ環境Hostingデプロイ（推奨）
-./scripts/deploy-to-project.sh dev        # 開発環境
-./scripts/deploy-to-project.sh kanameone  # クライアント環境
+./scripts/deploy-to-project.sh dev         # 開発環境
+./scripts/deploy-to-project.sh <alias>     # クライアント環境（.firebasercのエイリアス）
 
 # Functionsのみ（環境変数に依存しないため直接実行OK）
 firebase deploy --only functions -P dev
-firebase deploy --only functions -P kanameone
+firebase deploy --only functions -P <alias>
 
 # ルールのみ（同上）
 firebase deploy --only firestore:rules,storage -P dev
-firebase deploy --only firestore:rules,storage -P kanameone
+firebase deploy --only firestore:rules,storage -P <alias>
 ```
 
 ### 環境変数ファイル構成
@@ -321,7 +323,7 @@ firebase deploy --only firestore:rules,storage -P kanameone
 ```
 frontend/
 ├── .env.dev          # dev環境設定（固定）
-├── .env.kanameone    # kanameone環境設定（固定）
+├── .env.<alias>      # クライアント環境設定（エイリアスごとに作成）
 ├── .env.local        # ローカル開発用（通常dev設定）
 └── .env.example      # テンプレート
 ```
@@ -384,7 +386,7 @@ node scripts/import-masters.js --file scripts/samples/customers.csv --type custo
 
 ### ⚠️ クライアントデプロイ時の重要注意点
 
-**根本原因パターン（2026-01-22 kanameone移行時の教訓）**:
+**根本原因パターン（クライアント移行時の教訓）**:
 - 仕様の「唯一の参照元」がなく手作業で推測
 - 環境差分（本番/検証）のガード不足
 - 実装仕様と運用手順の乖離
