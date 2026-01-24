@@ -395,17 +395,8 @@ export function extractCustomerCandidates(
       }
     }
 
-    // 3. 部分一致（名前が2文字以上の場合）
-    if (matchType === 'none' && normalizedName.length >= 2) {
-      // 姓のみでの一致（最初の2文字）
-      const lastName = normalizedName.slice(0, 2);
-      if (matchingText.includes(lastName)) {
-        score = 75;
-        matchType = 'partial';
-      }
-    }
-
-    // 4. ファジーマッチ
+    // 3. ファジーマッチ（類似度検索）
+    // GAS版と同様：完全一致・ふりがな一致がない場合のみ類似度で判定
     if (matchType === 'none') {
       const windowSize = Math.min(normalizedName.length + 3, matchingText.length);
       for (let i = 0; i <= matchingText.length - windowSize; i++) {
