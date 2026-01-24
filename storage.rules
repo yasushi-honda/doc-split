@@ -44,5 +44,12 @@ service firebase.storage {
     match /temp/{allPaths=**} {
       allow read, write: if false;
     }
+
+    // テストインポート用（documents/）
+    // Cloud Functionsのみ書き込み可能
+    match /documents/{allPaths=**} {
+      allow read: if isAuthenticated();
+      allow write: if false;
+    }
   }
 }

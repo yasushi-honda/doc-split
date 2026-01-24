@@ -68,3 +68,6 @@ venv/
 
 # GitHub CLI認証（プロジェクト分離）
 .gh/
+
+# Storage CORS設定（setup-tenant.shが自動生成）
+cors-*.json
