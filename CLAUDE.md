@@ -213,7 +213,9 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
 - [x] kanameone環境マスターデータ取り込み **完了 2026-01-24**
 - [x] kanameone環境Gmail監視ラベル設定（AI_OCR）**完了 2026-01-24**
 - [x] Gmail OAuth認証をSecret Manager一元管理に変更（#10）**完了 2026-01-24**
-- [ ] 実書類でのOCR精度確認（クライアント環境）← 次のステップ
+- [x] kanameone環境Vertex AI有効化・権限設定 **完了 2026-01-25**
+- [x] 実書類でのOCR精度確認（AI_OCRラベル5件テスト）**完了 2026-01-25**
+- [ ] 本番運用開始（checkGmailAttachments定期実行）← 次のステップ
 
 ## 未実装（将来対応）
 - [ ] 検索機能（n-gram反転インデックス + Cloud Functions検索API）
