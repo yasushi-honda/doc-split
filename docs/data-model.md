@@ -56,6 +56,7 @@ erDiagram
         string name "事業所名"
         string shortName "略称"
         string type "種別"
+        boolean isDuplicate "同名フラグ"
     }
 
     careManagers {
@@ -160,6 +161,7 @@ stateDiagram-v2
 | name | string | ✓ | 正式名称 |
 | shortName | string | | 略称 |
 | type | string | | 事業所種別 |
+| isDuplicate | boolean | | 同名フラグ（自動検知） |
 
 ### errors
 
