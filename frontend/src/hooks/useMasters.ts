@@ -78,7 +78,7 @@ export async function checkCustomerDuplicate(name: string): Promise<boolean> {
   return existingNames.has(normalizedName)
 }
 
-async function addCustomer(params: AddCustomerParams): Promise<void> {
+async function addCustomer(params: AddCustomerParams): Promise<string> {
   const normalizedName = normalizeName(params.name)
 
   // 重複チェック（force=trueの場合はスキップ）
@@ -100,6 +100,7 @@ async function addCustomer(params: AddCustomerParams): Promise<void> {
     data.careManagerName = params.careManagerName
   }
   await setDoc(docRef, data)
+  return docRef.id
 }
 
 export function useAddCustomer() {
@@ -501,7 +502,7 @@ export async function checkOfficeDuplicate(name: string): Promise<boolean> {
   return existingNames.has(normalizedName)
 }
 
-async function addOffice(params: AddOfficeParams | string): Promise<void> {
+async function addOffice(params: AddOfficeParams | string): Promise<string> {
   // 後方互換性: 文字列の場合は従来の動作
   const name = typeof params === 'string' ? params : params.name
   const shortName = typeof params === 'string' ? undefined : params.shortName
@@ -526,6 +527,7 @@ async function addOffice(params: AddOfficeParams | string): Promise<void> {
     name: normalizedName,
     shortName: shortName ? normalizeName(shortName) : '',
   })
+  return docRef.id
 }
 
 export function useAddOffice() {

@@ -126,25 +126,26 @@ export function RegisterNewMasterModal({
           }
         }
 
+        let createdId: string;
         if (type === 'customer') {
-          await addCustomer.mutateAsync({
+          createdId = await addCustomer.mutateAsync({
             name: name.trim(),
             furigana: furigana.trim(),
             isDuplicate: force,
             force,
           });
         } else {
-          await addOffice.mutateAsync({
+          createdId = await addOffice.mutateAsync({
             name: name.trim(),
             shortName: shortName.trim() || undefined,
             force,
           });
         }
 
-        // 成功時のコールバック
+        // 成功時のコールバック（作成されたIDを渡す）
         onRegistered?.({
           type,
-          id: '', // 新規登録時はIDは取得できないが、名前で検索可能
+          id: createdId,
           name: name.trim(),
         });
 
