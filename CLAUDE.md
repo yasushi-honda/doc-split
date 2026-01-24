@@ -225,7 +225,13 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
   - `import-historical-gmail.js`: 期間指定でGmailから添付PDF取得
   - 正規スキーマでFirestoreに登録（マイグレーション不要）
   - dry-runモード対応
-- [ ] 本番運用開始（checkGmailAttachments定期実行）← 次のステップ
+- [x] OCR結果編集機能追加 **完了 2026-01-25**
+  - `useDocumentEdit.ts`: ドキュメント編集フック（監査ログ記録付き）
+  - `DocumentDetailModal.tsx`: 編集モードUI（顧客名、事業所、書類種別、日付、ファイル名）
+  - `editLogs`コレクション: 編集履歴の監査ログ
+  - Firestoreルール: 47テストパス
+- [ ] マスター未登録時の登録提案UI ← 次のステップ
+- [ ] 本番運用開始（checkGmailAttachments定期実行）
 
 ## 未実装（将来対応）
 - [ ] 検索機能（n-gram反転インデックス + Cloud Functions検索API）
