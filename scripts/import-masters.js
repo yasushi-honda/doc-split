@@ -54,6 +54,23 @@ function parseCSV(content) {
   return rows;
 }
 
+/**
+ * 重複する名前を検出
+ * @param {Array<Object>} rows - CSVパース結果
+ * @param {string[]} nameFields - 名前フィールドの候補（優先順）
+ * @returns {string[]} 重複している名前のリスト
+ */
+function detectDuplicateNames(rows, nameFields) {
+  const nameCounts = {};
+  for (const row of rows) {
+    const name = nameFields.map((f) => row[f]).find((v) => v) || '';
+    if (name) {
+      nameCounts[name] = (nameCounts[name] || 0) + 1;
+    }
+  }
+  return Object.keys(nameCounts).filter((name) => nameCounts[name] > 1);
+}
+
 // 顧客マスターをインポート
 async function importCustomers(filePath) {
   console.log(`顧客マスターをインポート: ${filePath}`);
@@ -61,17 +78,8 @@ async function importCustomers(filePath) {
   const content = fs.readFileSync(filePath, 'utf8');
   const rows = parseCSV(content);
 
-  // 同姓同名を自動検知：名前の出現回数をカウント
-  const nameCounts = {};
-  for (const row of rows) {
-    const name = row['name'] || row['顧客氏名'] || '';
-    if (name) {
-      nameCounts[name] = (nameCounts[name] || 0) + 1;
-    }
-  }
-
-  // 同姓同名の名前リスト
-  const duplicateNames = Object.keys(nameCounts).filter((name) => nameCounts[name] > 1);
+  // 同姓同名を自動検知
+  const duplicateNames = detectDuplicateNames(rows, ['name', '顧客氏名']);
   if (duplicateNames.length > 0) {
     console.log(`  同姓同名を検知: ${duplicateNames.join(', ')}`);
   }
@@ -87,8 +95,8 @@ async function importCustomers(filePath) {
       id: docRef.id,
       name,
       furigana: row['furigana'] || row['フリガナ'] || '',
-      // 同姓同名フラグは自動検知（手動入力は後方互換性のため残す）
-      isDuplicate: duplicateNames.includes(name) || row['isDuplicate'] === 'true' || row['同姓同名'] === 'true',
+      // 同姓同名フラグはシステムが自動検知（CSV入力は不要）
+      isDuplicate: duplicateNames.includes(name),
     };
     // 担当ケアマネがある場合のみ追加
     const careManagerName = row['careManagerName'] || row['担当ケアマネ'] || row['担当CM'] || '';
@@ -152,14 +160,25 @@ async function importOffices(filePath) {
   const content = fs.readFileSync(filePath, 'utf8');
   const rows = parseCSV(content);
 
+  // 同名事業所の検出
+  const duplicateNames = detectDuplicateNames(rows, ['name', '事業所名']);
+  if (duplicateNames.length > 0) {
+    console.log(`  同名事業所を検出: ${duplicateNames.join(', ')}`);
+  }
+
   const batch = db.batch();
   let count = 0;
 
   for (const row of rows) {
     // 期待するカラム: name, shortName (optional)
     const name = row['name'] || row['事業所名'] || '';
-    const docRef = db.collection('masters/offices/items').doc(name);
-    const data = { name };
+    const docRef = db.collection('masters/offices/items').doc();
+    const data = {
+      id: docRef.id,
+      name,
+      // 同名フラグはシステムが自動検知（CSV入力は不要）
+      isDuplicate: duplicateNames.includes(name),
+    };
     // 短縮名がある場合のみ追加
     const shortName = row['shortName'] || row['短縮名'] || '';
     if (shortName) {
