@@ -10,9 +10,11 @@
 #   2. Firebase設定
 #   3. 環境変数生成
 #   4. 管理者ユーザー登録
-#   5. Firestore/Storageルールデプロイ
+#   5. Firestore/Storageルールデプロイ + CORS設定
 #   6. Cloud Functionsデプロイ
 #   7. Hostingデプロイ
+#
+# ※ CORS設定: ブラウザからPDFを閲覧するために必須
 #
 
 set -e
@@ -359,6 +361,29 @@ done
 
 if [ $WAITED -ge $MAX_WAIT ]; then
     log_warn "インデックスのビルドに時間がかかっています。バックグラウンドで継続中です。"
+fi
+
+# Storage CORS設定
+log_info "Storage CORS設定中..."
+STORAGE_BUCKET="${PROJECT_ID}.firebasestorage.app"
+CORS_FILE="$ROOT_DIR/cors-${PROJECT_ID}.json"
+
+cat > "$CORS_FILE" << EOF
+[
+  {
+    "origin": ["https://${PROJECT_ID}.web.app", "http://localhost:5173", "http://localhost:4173"],
+    "method": ["GET", "HEAD"],
+    "maxAgeSeconds": 3600,
+    "responseHeader": ["Content-Type", "Content-Length", "Content-Disposition"]
+  }
+]
+EOF
+
+if gsutil cors set "$CORS_FILE" "gs://${STORAGE_BUCKET}" 2>/dev/null; then
+    log_success "Storage CORS設定完了（ブラウザからPDF閲覧可能）"
+else
+    log_warn "CORS設定に失敗しました。手動で設定してください:"
+    log_warn "  gsutil cors set $CORS_FILE gs://${STORAGE_BUCKET}"
 fi
 
 # ===========================================

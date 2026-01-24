@@ -282,8 +282,88 @@ firebase functions:log -P client-a
 
 ---
 
+## 過去受信分の巻取り対応
+
+### 概要
+
+クライアント納品時に、Gmail連携開始前の過去受信分を一括インポートする場合がある。
+この際、以下の点に注意が必要。
+
+### 必須設定: Storage CORS
+
+**重要**: Storage バケットに CORS 設定がないと、ブラウザから PDF を閲覧できない。
+
+```bash
+# CORS設定ファイル作成（プロジェクトルートに cors-<alias>.json）
+cat > cors-<alias>.json << 'EOF'
+[
+  {
+    "origin": ["https://<project-id>.web.app", "http://localhost:5173", "http://localhost:4173"],
+    "method": ["GET", "HEAD"],
+    "maxAgeSeconds": 3600,
+    "responseHeader": ["Content-Type", "Content-Length", "Content-Disposition"]
+  }
+]
+EOF
+
+# CORS設定を適用
+gsutil cors set cors-<alias>.json gs://<project-id>.firebasestorage.app
+```
+
+### ドキュメントスキーマの注意点
+
+Firestoreの `documents` コレクションには、以下のフィールドが必須：
+
+| フィールド | 説明 | 例 |
+|-----------|------|-----|
+| `fileUrl` | Storage URL（gs://形式） | `gs://bucket/path/file.pdf` |
+| `fileName` | 表示用ファイル名 | `書類名.pdf` |
+| `totalPages` | 総ページ数 | `1` |
+| `mimeType` | MIMEタイプ | `application/pdf` |
+| `status` | 処理ステータス | `pending`, `completed` |
+
+**よくある問題**: 巻取りスクリプトで以下の別名フィールドを使用すると、フロントエンドで表示できない。
+
+| 誤ったフィールド名 | 正しいフィールド名 |
+|-------------------|-------------------|
+| `storagePath` | `fileUrl`（gs://形式で保存） |
+| `originalFileName` | `fileName` |
+| `pageCount` | `totalPages` |
+
+### マイグレーションスクリプト
+
+既存データのフィールド名を修正する場合：
+
+```bash
+# dry-run で確認
+node scripts/migrate-document-fields.js <project-id> --dry-run
+
+# 実行
+node scripts/migrate-document-fields.js <project-id>
+```
+
+### Storage パス
+
+ファイルの保存先パスによって、Storage ルールでの許可が必要：
+
+| パス | 用途 | ルールで許可 |
+|------|------|-------------|
+| `original/` | Gmail取得時の原本 | ✅ |
+| `processed/` | OCR処理後 | ✅ |
+| `documents/` | 巻取り対応用 | ✅（2026-01-25追加） |
+
+### 巻取り対応チェックリスト
+
+- [ ] Storage CORS 設定完了
+- [ ] ドキュメントスキーマ確認（fileUrl, fileName, totalPages）
+- [ ] Storage ルールでパス許可確認
+- [ ] ブラウザでPDF閲覧テスト
+
+---
+
 ## 変更履歴
 
 | 日付 | 内容 |
 |------|------|
+| 2026-01-25 | 過去受信分の巻取り対応セクション追加 |
 | 2026-01-20 | 初版作成 - 納品・アップデートフロー確定 |
