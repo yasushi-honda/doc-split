@@ -234,6 +234,10 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
   - RegisterNewMasterModal: 新規マスター登録モーダル（顧客/事業所共通）
   - SameNameResolveModal/OfficeSameNameResolveModal: 登録提案機能追加
   - 「該当なし」選択時にマスター登録を提案、登録後は自動紐付け
+- [x] 編集モーダルでマスター新規追加機能（#16）**完了 2026-01-25**
+  - MasterSelectField: 検索可能ドロップダウン + 「新規追加」ボタン
+  - DocumentDetailModal: 顧客・事業所・書類種別でMasterSelectField使用
+  - shadcn/ui: Command, Popoverコンポーネント追加
 - [ ] 本番運用開始（checkGmailAttachments定期実行） ← 次のステップ
 
 ## 未実装（将来対応）
