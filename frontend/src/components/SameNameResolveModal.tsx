@@ -21,8 +21,9 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
-import { Loader2, AlertCircle, FileText, User, Calendar, Check } from 'lucide-react';
+import { Loader2, AlertCircle, FileText, User, Calendar, Check, UserPlus } from 'lucide-react';
 import { useSameNameResolution } from '@/hooks/useSameNameResolution';
+import { RegisterNewMasterModal, type RegisteredMasterInfo } from '@/components/RegisterNewMasterModal';
 import type { Document, CustomerCandidateInfo } from '@shared/types';
 
 // ============================================
@@ -42,6 +43,9 @@ interface Selection {
   type: SelectionType;
   candidate?: CustomerCandidateInfo;
 }
+
+// 登録提案ダイアログの状態
+type RegistrationPromptState = 'none' | 'prompt' | 'registering';
 
 // ============================================
 // マッチタイプ表示
@@ -137,14 +141,21 @@ export function SameNameResolveModal({
   // 選択状態
   const [selection, setSelection] = useState<Selection>({ type: null });
 
+  // 登録提案ダイアログの状態
+  const [registrationPrompt, setRegistrationPrompt] = useState<RegistrationPromptState>('none');
+
   // 候補リスト
   const candidates = getCandidates(document);
+
+  // OCRから抽出された顧客名（初期値として提案）
+  const suggestedCustomerName = document.customerName || '';
 
   // モーダル開閉時にOCR取得・リセット
   useEffect(() => {
     if (isOpen) {
       loadOcrText(document);
       setSelection({ type: null });
+      setRegistrationPrompt('none');
     } else {
       resetOcrText();
     }
@@ -172,17 +183,48 @@ export function SameNameResolveModal({
           selectedCustomerName: selection.candidate.customerName,
           selectedCustomerIsDuplicate: selection.candidate.isDuplicate,
         });
+        onResolved?.();
+        onClose();
       } else if (selection.type === 'unknown') {
-        await resolveAsUnknown({ documentId: document.id });
+        // 「該当なし」選択時は登録提案ダイアログを表示
+        setRegistrationPrompt('prompt');
       }
-
-      onResolved?.();
-      onClose();
     } catch (err) {
       // エラーはresolveErrorで表示
       console.error('Resolution failed:', err);
     }
-  }, [selection, document.id, resolveCustomer, resolveAsUnknown, onResolved, onClose]);
+  }, [selection, document.id, resolveCustomer, onResolved, onClose]);
+
+  // 登録せずに確定（不明顧客として登録）
+  const handleSkipRegistration = useCallback(async () => {
+    try {
+      await resolveAsUnknown({ documentId: document.id });
+      onResolved?.();
+      onClose();
+    } catch (err) {
+      console.error('Resolution failed:', err);
+    }
+  }, [document.id, resolveAsUnknown, onResolved, onClose]);
+
+  // 新規登録後のコールバック
+  const handleMasterRegistered = useCallback(
+    async (result: RegisteredMasterInfo) => {
+      // 登録後、その顧客で確定する
+      try {
+        await resolveCustomer({
+          documentId: document.id,
+          selectedCustomerId: result.id || result.name, // IDがない場合は名前で代用
+          selectedCustomerName: result.name,
+          selectedCustomerIsDuplicate: false,
+        });
+        onResolved?.();
+        onClose();
+      } catch (err) {
+        console.error('Resolution after registration failed:', err);
+      }
+    },
+    [document.id, resolveCustomer, onResolved, onClose]
+  );
 
   // 書類日付フォーマット
   const formattedDate = document.fileDate
@@ -339,6 +381,69 @@ export function SameNameResolveModal({
           </Button>
         </DialogFooter>
       </DialogContent>
+
+      {/* 登録提案ダイアログ */}
+      {registrationPrompt === 'prompt' && (
+        <Dialog open={true} onOpenChange={() => setRegistrationPrompt('none')}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>新規顧客の登録</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                該当する顧客がマスターに登録されていない可能性があります。
+                新しい顧客として登録しますか？
+              </p>
+              {suggestedCustomerName && suggestedCustomerName !== '不明顧客' && (
+                <Card className="bg-muted/50">
+                  <CardContent className="p-3">
+                    <div className="flex items-center gap-2">
+                      <User className="h-4 w-4 text-muted-foreground" />
+                      <span className="text-sm">
+                        OCR抽出値: <strong>{suggestedCustomerName}</strong>
+                      </span>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+            </div>
+            <DialogFooter className="flex-col sm:flex-row gap-2">
+              <Button
+                variant="outline"
+                onClick={handleSkipRegistration}
+                disabled={isResolving}
+                className="w-full sm:w-auto"
+              >
+                {isResolving ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    処理中...
+                  </>
+                ) : (
+                  '登録せずに確定'
+                )}
+              </Button>
+              <Button
+                onClick={() => setRegistrationPrompt('registering')}
+                disabled={isResolving}
+                className="w-full sm:w-auto"
+              >
+                <UserPlus className="h-4 w-4 mr-2" />
+                新規登録する
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {/* 新規マスター登録モーダル */}
+      <RegisterNewMasterModal
+        type="customer"
+        isOpen={registrationPrompt === 'registering'}
+        onClose={() => setRegistrationPrompt('prompt')}
+        suggestedName={suggestedCustomerName !== '不明顧客' ? suggestedCustomerName : ''}
+        onRegistered={handleMasterRegistered}
+      />
     </Dialog>
   );
 }
