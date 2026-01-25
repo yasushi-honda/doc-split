@@ -100,6 +100,7 @@ export interface DocumentMaster {
   dateMarker: string; // 日付抽出の目印（例: "発行日"）
   category: string;
   keywords?: string[]; // 照合用キーワード（例: ["被保険者証", "介護保険"]）
+  aliases?: string[];  // 許容される別表記（例: ["介護保険被保険者証", "被保険者証明書"]）
 }
 
 export interface CustomerMaster {
@@ -108,6 +109,7 @@ export interface CustomerMaster {
   isDuplicate: boolean; // 同姓同名フラグ
   furigana: string;
   careManagerName?: string; // 担当ケアマネージャー名
+  aliases?: string[];  // 許容される別表記（例: ["田中　太郎", "たなか太郎"]）
 }
 
 export interface OfficeMaster {
@@ -116,6 +118,7 @@ export interface OfficeMaster {
   nameKey?: string;        // 正規化キー（検索用）
   shortName?: string;
   isDuplicate: boolean;    // 同名フラグ
+  aliases?: string[];      // 許容される別表記（例: ["北名古屋市東部地域包括支援センター"]）
 }
 
 export interface CareManagerMaster {

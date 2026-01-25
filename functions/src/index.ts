@@ -31,5 +31,11 @@ export {
   seedAllMasters,
 } from './admin/seedMasters';
 
+// マスターデータ操作（エイリアス追加・削除）
+export {
+  addMasterAlias,
+  removeMasterAlias,
+} from './admin/masterOperations';
+
 // Phase 8: ドキュメントグループ集計トリガー
 export { onDocumentWrite } from './triggers/updateDocumentGroups';

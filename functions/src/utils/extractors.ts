@@ -123,6 +123,7 @@ export interface CustomerMaster {
   furigana?: string;
   isDuplicate?: boolean;
   careManagerName?: string;
+  aliases?: string[];  // 許容される別表記
 }
 
 export interface OfficeMaster {
@@ -130,6 +131,7 @@ export interface OfficeMaster {
   name: string;
   shortName?: string;
   isDuplicate?: boolean;
+  aliases?: string[];  // 許容される別表記
 }
 
 export interface DocumentMaster {
@@ -137,6 +139,7 @@ export interface DocumentMaster {
   name: string;
   category?: string;
   keywords?: string[];
+  aliases?: string[];  // 許容される別表記
 }
 
 /**
@@ -253,6 +256,18 @@ export function extractDocumentTypeEnhanced(
       if (matchingText.includes(normalizedDocName.slice(0, prefixLength))) {
         score = 90;
         matchType = 'partial';
+      }
+    }
+
+    // 2.5. エイリアス（許容表記）での一致
+    if (matchType === 'none' && doc.aliases && doc.aliases.length > 0) {
+      for (const alias of doc.aliases) {
+        const normalizedAlias = normalizeForMatching(alias);
+        if (matchingText.includes(normalizedAlias)) {
+          score = 98; // 正式名称一致に近いスコア
+          matchType = 'exact';
+          break;
+        }
       }
     }
 
@@ -465,6 +480,18 @@ export function extractCustomerCandidates(
       }
     }
 
+    // 2.5. エイリアス（許容表記）での一致
+    if (matchType === 'none' && customer.aliases && customer.aliases.length > 0) {
+      for (const alias of customer.aliases) {
+        const normalizedAlias = normalizeForMatching(alias);
+        if (matchingText.includes(normalizedAlias)) {
+          score = 98; // 正式名称一致に近いスコア
+          matchType = 'exact';
+          break;
+        }
+      }
+    }
+
     // 3. ファジーマッチ（類似度検索）
     // GAS版と同様：完全一致・ふりがな一致がない場合のみ類似度で判定
     if (matchType === 'none') {
@@ -671,6 +698,18 @@ export function extractOfficeCandidates(
       if (matchingText.includes(normalizedShortName)) {
         score = 95;
         matchType = 'exact';
+      }
+    }
+
+    // 2.5. エイリアス（許容表記）での一致
+    if (matchType === 'none' && office.aliases && office.aliases.length > 0) {
+      for (const alias of office.aliases) {
+        const normalizedAlias = normalizeForMatching(alias);
+        if (matchingText.includes(normalizedAlias)) {
+          score = 98; // 正式名称一致に近いスコア
+          matchType = 'exact';
+          break;
+        }
       }
     }
 
