@@ -70,6 +70,7 @@ interface CustomerMaster {
   furigana: string;        // フリガナ
   isDuplicate: boolean;    // 同姓同名フラグ（自動検知）
   careManagerName?: string; // 担当ケアマネージャー
+  aliases?: string[];      // 許容される別表記（学習機能）
   notes?: string;          // 備考
 }
 ```
@@ -83,9 +84,28 @@ interface OfficeMaster {
   nameKey: string;         // 正規化キー（追加）
   shortName?: string;      // 短縮名
   isDuplicate: boolean;    // 同名フラグ（追加）
+  aliases?: string[];      // 許容される別表記（学習機能）
   notes?: string;          // 備考
 }
 ```
+
+### 許容表記（aliases）学習機能
+
+マスターに登録されている正式名称以外に、OCRで検出される可能性のある別表記を登録できます。
+
+```
+【例】事業所マスター
+正式名称: 北名古屋東部地域包括
+aliases: ["北名古屋市東部地域包括支援センター", "東部地域包括"]
+
+→ OCRで「北名古屋市東部地域包括支援センター」を検出した場合も自動マッチ
+```
+
+**学習フロー:**
+1. ユーザーが手動で事業所を選択
+2. 「この表記を記憶する」チェックボックスをON
+3. OCRで検出された表記がaliasesに追加
+4. 次回以降は自動マッチ
 
 ### 候補情報
 

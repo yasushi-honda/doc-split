@@ -238,17 +238,19 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
   - MasterSelectField: 検索可能ドロップダウン + 「新規追加」ボタン
   - DocumentDetailModal: 顧客・事業所・書類種別でMasterSelectField使用
   - shadcn/ui: Command, Popoverコンポーネント追加
+- [x] マスターエイリアス（許容表記）学習機能 **完了 2026-01-25**
+  - 全マスター（事業所/顧客/書類）にaliasesフィールド追加
+  - OCRマッチング時にaliasesも照合対象
+  - 事業所確定時「この表記を記憶する」チェックボックス
+  - addMasterAlias / removeMasterAlias Callable Functions
 - [ ] 本番運用開始（checkGmailAttachments定期実行） ← 次のステップ
 
 ## 未実装（将来対応）
 - [ ] 検索機能（n-gram反転インデックス + Cloud Functions検索API）
 - [ ] 精度改善（フィードバック後）
-- [ ] **OCRフィードバック学習機能**（アイデアストック）
-  - 手動修正時に「今後のOCR処理の参考にしますか？」ダイアログ表示
-  - `ocrLearning`コレクションにパターン保存（ファイル名→事業所、OCRキーワード→顧客など）
-  - 将来のOCR処理時に学習データを参照してマッチング精度向上
-  - 同じパターンの確認回数で信頼度を上げる仕組み
-  - GAS/CloudRun時代より高精度を目指す
+- [ ] **顧客・書類種別のエイリアス学習UI**
+  - 事業所は実装済み、顧客・書類種別にも同様のUIを追加
+  - OCR検出テキストを保存する仕組みが必要
 
 ## 追加完了項目（2026-01-20）
 - [x] Google Workspace向けGmail認証セットアップスクリプト追加
