@@ -141,8 +141,9 @@ export function OfficeSameNameResolveModal({
   // 候補リスト
   const candidates = getCandidates(document);
 
-  // OCRから抽出された事業所名（初期値として提案）
-  const suggestedOfficeName = document.officeName || '';
+  // ファイル名から抽出された事業所名（優先）またはOCRから抽出された事業所名
+  const suggestedNewOffice = document.suggestedNewOffice;
+  const suggestedOfficeName = suggestedNewOffice || document.officeName || '';
 
   // モーダル開閉時にリセット
   useEffect(() => {
@@ -359,7 +360,22 @@ export function OfficeSameNameResolveModal({
                 該当する事業所がマスターに登録されていない可能性があります。
                 新しい事業所として登録しますか？
               </p>
-              {suggestedOfficeName && suggestedOfficeName !== '不明事業所' && (
+              {suggestedNewOffice && (
+                <Card className="bg-green-50 border-green-200">
+                  <CardContent className="p-3">
+                    <div className="flex items-center gap-2">
+                      <Building2 className="h-4 w-4 text-green-600" />
+                      <span className="text-sm">
+                        ファイル名から抽出: <strong className="text-green-700">{suggestedNewOffice}</strong>
+                      </span>
+                    </div>
+                    <p className="text-xs text-green-600 mt-1">
+                      ※ファイル名とOCRテキスト両方に存在を確認済み
+                    </p>
+                  </CardContent>
+                </Card>
+              )}
+              {!suggestedNewOffice && suggestedOfficeName && suggestedOfficeName !== '不明事業所' && suggestedOfficeName !== '未判定' && (
                 <Card className="bg-muted/50">
                   <CardContent className="p-3">
                     <div className="flex items-center gap-2">
@@ -406,7 +422,7 @@ export function OfficeSameNameResolveModal({
         type="office"
         isOpen={registrationPrompt === 'registering'}
         onClose={() => setRegistrationPrompt('prompt')}
-        suggestedName={suggestedOfficeName !== '不明事業所' ? suggestedOfficeName : ''}
+        suggestedName={suggestedNewOffice || (suggestedOfficeName !== '不明事業所' && suggestedOfficeName !== '未判定' ? suggestedOfficeName : '')}
         onRegistered={handleMasterRegistered}
       />
     </Dialog>

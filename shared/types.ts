@@ -55,6 +55,7 @@ export interface Document {
   officeConfirmed?: boolean;                     // 確定済みフラグ（デフォルト: true）
   officeConfirmedBy?: string | null;             // 確定者UID（システム自動確定時はnull）
   officeConfirmedAt?: Timestamp | null;          // 確定日時（システム自動確定時はnull）
+  suggestedNewOffice?: string | null;            // ファイル名から抽出された事業所名（登録提案用）
 
   // Phase 8: グループ化用正規化キー（Cloud Functionsで自動設定）
   customerKey?: string;       // customerName正規化版

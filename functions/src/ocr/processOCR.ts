@@ -28,6 +28,7 @@ import {
   extractOfficeCandidates,
   extractDateEnhanced,
   extractFilenameInfo,
+  normalizeForMatching,
   CustomerMaster,
   DocumentMaster,
   OfficeMaster,
@@ -262,6 +263,20 @@ async function processDocument(
   // 後方互換: 単一事業所抽出（extractionScores用）
   const officeResultLegacy = extractOfficeNameEnhanced(ocrResult, officeMasterData);
 
+  // ファイル名からの事業所登録提案
+  // 条件: ファイル名が事業所名タイプ + OCRテキストにも存在 + マスター未登録
+  let suggestedNewOffice: string | null = null;
+  if (filenameInfo?.prefixType === 'office_name' && filenameInfo.normalizedPrefix) {
+    const ocrTextNormalized = normalizeForMatching(ocrResult);
+    const existsInOcrText = ocrTextNormalized.includes(filenameInfo.normalizedPrefix);
+    const noGoodMatch = !officeResult.bestMatch || officeResult.bestMatch.score < 80;
+
+    if (existsInOcrText && noGoodMatch) {
+      suggestedNewOffice = filenameInfo.prefix;
+      console.log(`Suggested new office from filename: ${suggestedNewOffice}`);
+    }
+  }
+
   // 日付抽出（書類マスターの dateMarker を使用）
   const matchedDocMaster = documentMasters.docs.find((d) => d.data().name === documentTypeResult.documentType);
   const dateMarker = matchedDocMaster?.data().dateMarker as string | undefined;
@@ -323,6 +338,8 @@ async function processDocument(
       score: o.score,
       matchType: o.matchType,
     })),
+    // ファイル名から抽出された事業所名（マスター未登録時の登録提案用）
+    suggestedNewOffice,
     totalPages,
     category: documentTypeResult.category || null,
     status: 'processed',
