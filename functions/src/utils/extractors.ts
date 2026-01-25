@@ -24,6 +24,9 @@ import {
 } from './textNormalizer';
 import { similarityScore, SIMILARITY_THRESHOLDS } from './similarity';
 
+// Re-export for use in other modules
+export { normalizeForMatching } from './textNormalizer';
+
 /** 候補の最大数 */
 const MAX_CANDIDATES = 10;
 
