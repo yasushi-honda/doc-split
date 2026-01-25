@@ -27,6 +27,7 @@ import {
   extractOfficeNameEnhanced,
   extractOfficeCandidates,
   extractDateEnhanced,
+  extractFilenameInfo,
   CustomerMaster,
   DocumentMaster,
   OfficeMaster,
@@ -250,8 +251,14 @@ async function processDocument(
   // 情報抽出（強化版エクストラクター使用）
   const documentTypeResult = extractDocumentTypeEnhanced(ocrResult, docMasterData);
   const customerResult = extractCustomerCandidates(ocrResult, custMasterData);
-  // 事業所候補抽出（同名対応）
-  const officeResult = extractOfficeCandidates(ocrResult, officeMasterData);
+
+  // ファイル名から事業所情報を抽出（OCRマッチング精度向上のため）
+  const fileName = docData.fileName as string | undefined;
+  const filenameInfo = fileName ? extractFilenameInfo(fileName) : undefined;
+  console.log(`Filename info: ${JSON.stringify(filenameInfo)}`);
+
+  // 事業所候補抽出（同名対応 + ファイル名参照）
+  const officeResult = extractOfficeCandidates(ocrResult, officeMasterData, { filenameInfo });
   // 後方互換: 単一事業所抽出（extractionScores用）
   const officeResultLegacy = extractOfficeNameEnhanced(ocrResult, officeMasterData);
 

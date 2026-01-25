@@ -99,6 +99,18 @@ export interface DateExtractionResult {
   allCandidates: DateCandidate[];
 }
 
+/** ファイル名から抽出した情報 */
+export interface FilenameInfo {
+  /** ファイル名のプレフィックス部分（-L1-などの前） */
+  prefix: string;
+  /** プレフィックスの種別 */
+  prefixType: 'office_name' | 'phone_number' | 'document_id' | 'unknown';
+  /** 正規化済みプレフィックス（マッチング用） */
+  normalizedPrefix: string;
+  /** 元のファイル名 */
+  originalFilename: string;
+}
+
 /**
  * マスターデータ型定義
  */
@@ -122,6 +134,61 @@ export interface DocumentMaster {
   name: string;
   category?: string;
   keywords?: string[];
+}
+
+/**
+ * ファイル名から情報を抽出
+ *
+ * ファイル名パターン例:
+ * - 西春内科在宅クリニック-L1-20260122101727.pdf → 事業所名
+ * - 0529088423-L1-20260122104653.pdf → 電話/FAX番号
+ * - DOC260122-L1-20260122101412.pdf → ドキュメントID
+ *
+ * @param filename ファイル名
+ * @returns 抽出されたファイル名情報
+ */
+export function extractFilenameInfo(filename: string): FilenameInfo {
+  if (!filename) {
+    return {
+      prefix: '',
+      prefixType: 'unknown',
+      normalizedPrefix: '',
+      originalFilename: filename,
+    };
+  }
+
+  // 拡張子を除去
+  const baseName = filename.replace(/\.[^.]+$/, '');
+
+  // -L1-, -L2- などのパターンを検出してプレフィックスを抽出
+  const match = baseName.match(/^(.+?)-L\d+-/);
+  let prefix = match ? match[1] : baseName;
+
+  // 半角カナを全角に、全角数字を半角に正規化
+  const normalizedPrefix = normalizeForMatching(prefix);
+
+  // プレフィックスの種別を判定
+  let prefixType: FilenameInfo['prefixType'] = 'unknown';
+
+  // 数字のみの場合は電話/FAX番号
+  if (/^[0-9]+$/.test(normalizedPrefix)) {
+    prefixType = 'phone_number';
+  }
+  // DOCで始まる場合はドキュメントID
+  else if (/^doc\d/i.test(normalizedPrefix)) {
+    prefixType = 'document_id';
+  }
+  // 日本語を含む場合は事業所名
+  else if (/[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/.test(prefix)) {
+    prefixType = 'office_name';
+  }
+
+  return {
+    prefix,
+    prefixType,
+    normalizedPrefix,
+    originalFilename: filename,
+  };
 }
 
 /**
@@ -520,6 +587,7 @@ export function aggregateCustomerCandidates(
  * 事業所候補を抽出（複数候補対応）
  *
  * 顧客同姓同名対応と同じパターンで事業所同名を処理
+ * ファイル名情報も参考にしてマッチング精度を向上
  *
  * @param ocrText OCR結果テキスト
  * @param officeMasters 事業所マスターリスト
@@ -532,12 +600,14 @@ export function extractOfficeCandidates(
     minScore?: number;
     maxCandidates?: number;
     pageNumber?: number;
+    filenameInfo?: FilenameInfo;
   } = {}
 ): OfficeExtractionResultWithCandidates {
   const {
     minScore = SIMILARITY_THRESHOLDS.OFFICE_THRESHOLD,
     maxCandidates = MAX_CANDIDATES,
     pageNumber,
+    filenameInfo,
   } = options;
 
   if (!ocrText || officeMasters.length === 0) {
@@ -553,12 +623,39 @@ export function extractOfficeCandidates(
   const normalizedText = normalizeTextEnhanced(ocrText);
   const matchingText = normalizeForMatching(normalizedText);
 
+  // ファイル名プレフィックスの正規化（事業所名タイプの場合のみ使用）
+  const useFilenameForMatching = filenameInfo && filenameInfo.prefixType === 'office_name';
+  const filenamePrefix = useFilenameForMatching ? filenameInfo.normalizedPrefix : '';
+
   const candidates: OfficeCandidate[] = [];
 
   for (const office of officeMasters) {
     const normalizedOfficeName = normalizeForMatching(office.name);
     let score = 0;
     let matchType: MatchType = 'none';
+    let filenameBoost = 0;
+
+    // ファイル名マッチング（事業所名がファイル名に含まれる場合にボーナス）
+    if (useFilenameForMatching && filenamePrefix) {
+      // ファイル名プレフィックスと事業所名の類似度をチェック
+      const filenameSimilarity = similarityScore(filenamePrefix, normalizedOfficeName);
+
+      // ファイル名に事業所名が完全一致
+      if (filenamePrefix.includes(normalizedOfficeName) || normalizedOfficeName.includes(filenamePrefix)) {
+        filenameBoost = 15; // 大きなボーナス
+      }
+      // ファイル名と事業所名が高い類似度
+      else if (filenameSimilarity >= 80) {
+        filenameBoost = 10;
+      }
+      // 短縮名がファイル名に含まれる
+      else if (office.shortName) {
+        const normalizedShortName = normalizeForMatching(office.shortName);
+        if (filenamePrefix.includes(normalizedShortName) || normalizedShortName.includes(filenamePrefix)) {
+          filenameBoost = 12;
+        }
+      }
+    }
 
     // 1. 完全一致（正式名称）
     if (matchingText.includes(normalizedOfficeName)) {
@@ -594,6 +691,13 @@ export function extractOfficeCandidates(
           matchType = 'fuzzy';
         }
       }
+    }
+
+    // ファイル名ボーナスを適用（スコアが閾値以上の場合のみ）
+    // ファイル名だけでのマッチは避け、OCRでもある程度マッチした場合にブーストする
+    if (score >= minScore - 10 && filenameBoost > 0) {
+      score = Math.min(100, score + filenameBoost);
+      // ファイル名ブーストでスコアが閾値を超えた場合のみ候補に
     }
 
     // 閾値以上の場合、候補に追加
