@@ -264,9 +264,10 @@ async function migrateSearchIndex() {
 
   while (true) {
     // status === 'processed' のドキュメントのみ対象（オンライン処理と統一）
+    // 既存インデックス（status + processedAt）を使用
     let query = db.collection('documents')
       .where('status', '==', 'processed')
-      .orderBy('createdAt', 'desc')
+      .orderBy('processedAt', 'desc')
       .limit(batchSize);
 
     if (lastDoc) {
