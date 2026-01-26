@@ -137,6 +137,7 @@ async function addDocumentToIndex(docId: string, tokens: TokenInfo[]): Promise<v
       indexRef,
       {
         updatedAt: now,
+        df: FieldValue.increment(1),
         [`postings.${docId}`]: {
           score: data.score,
           fieldsMask: data.fieldsMask,

@@ -3,11 +3,15 @@
 # DocSplit マルチ環境デプロイスクリプト
 #
 # 使用方法:
-#   ./deploy-to-project.sh <project-alias>
+#   ./deploy-to-project.sh <project-alias> [--full]
+#
+# オプション:
+#   --full          Hosting + Functions + Rules を全てデプロイ
+#   (デフォルト)    Hosting のみデプロイ
 #
 # 例:
-#   ./deploy-to-project.sh dev         # 開発環境へデプロイ
-#   ./deploy-to-project.sh kanameone   # kanameone環境へデプロイ
+#   ./deploy-to-project.sh dev              # Hostingのみデプロイ
+#   ./deploy-to-project.sh kanameone --full # 全コンポーネントをデプロイ
 #
 
 set -e
@@ -27,14 +31,18 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 # 使用方法
 usage() {
-    echo "Usage: $0 <project-alias>"
+    echo "Usage: $0 <project-alias> [--full]"
     echo ""
     echo "Arguments:"
     echo "  project-alias   デプロイ先プロジェクト (dev, kanameone, etc.)"
     echo ""
+    echo "Options:"
+    echo "  --full          Hosting + Functions + Rules を全てデプロイ"
+    echo "  (デフォルト)    Hosting のみデプロイ"
+    echo ""
     echo "Example:"
-    echo "  $0 dev         # 開発環境へデプロイ"
-    echo "  $0 kanameone   # kanameone環境へデプロイ"
+    echo "  $0 dev              # Hostingのみデプロイ"
+    echo "  $0 kanameone --full # 全コンポーネントをデプロイ"
     exit 1
 }
 
@@ -44,6 +52,16 @@ if [ $# -lt 1 ]; then
 fi
 
 PROJECT_ALIAS=$1
+FULL_DEPLOY=false
+
+# オプション解析
+for arg in "$@"; do
+    case $arg in
+        --full)
+            FULL_DEPLOY=true
+            ;;
+    esac
+done
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 FRONTEND_DIR="$ROOT_DIR/frontend"
@@ -79,6 +97,7 @@ echo -e "${GREEN}║   DocSplit デプロイ                        ║${NC}"
 echo -e "${GREEN}╚════════════════════════════════════════════╝${NC}"
 echo ""
 echo "Target: $PROJECT_ALIAS ($PROJECT_ID)"
+echo "Mode:   $( [ "$FULL_DEPLOY" = true ] && echo "Full (Hosting + Functions + Rules)" || echo "Hosting only" )"
 echo ""
 
 # 環境変数ファイルの存在確認
@@ -132,9 +151,30 @@ npm run build
 log_success "ビルド完了"
 
 # デプロイ
-echo ""
-log_info "Firebase Hostingへデプロイ中..."
 cd "$ROOT_DIR"
+
+# --full オプション時は Functions + Rules もデプロイ
+if [ "$FULL_DEPLOY" = true ]; then
+    echo ""
+    log_info "Cloud Functions ビルド中..."
+    cd "$ROOT_DIR/functions"
+    npm run build
+    log_success "Functions ビルド完了"
+
+    echo ""
+    log_info "Cloud Functions デプロイ中..."
+    cd "$ROOT_DIR"
+    firebase deploy --only functions -P "$PROJECT_ALIAS"
+    log_success "Functions デプロイ完了"
+
+    echo ""
+    log_info "Firestore/Storage ルール デプロイ中..."
+    firebase deploy --only firestore:rules,storage -P "$PROJECT_ALIAS"
+    log_success "ルール デプロイ完了"
+fi
+
+echo ""
+log_info "Firebase Hosting デプロイ中..."
 firebase deploy --only hosting -P "$PROJECT_ALIAS"
 
 echo ""
@@ -143,4 +183,9 @@ echo -e "${GREEN}║   デプロイ完了！                           ║${NC}"
 echo -e "${GREEN}╚════════════════════════════════════════════╝${NC}"
 echo ""
 echo "URL: https://${PROJECT_ID}.web.app"
+if [ "$FULL_DEPLOY" = true ]; then
+    echo ""
+    echo -e "${YELLOW}注意: 検索機能の新規追加・更新時は、既存ドキュメントにマイグレーションが必要です:${NC}"
+    echo "  node scripts/migrate-search-index.js --project $PROJECT_ID"
+fi
 echo ""

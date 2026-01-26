@@ -141,6 +141,17 @@ const FIELD_WEIGHTS = {
 };
 
 /**
+ * フィールドからマスクへの変換（オンライン処理と統一）
+ */
+const FIELD_TO_MASK = {
+  customerName: 1,  // customer
+  officeName: 2,    // office
+  documentType: 4,  // documentType
+  fileName: 8,      // fileName
+  fileDate: 16,     // date
+};
+
+/**
  * ドキュメントから検索トークンを生成
  */
 function generateDocumentTokens(doc) {
@@ -152,10 +163,11 @@ function generateDocumentTokens(doc) {
     const keywords = generateKeywords(doc.customerName);
     [...bigrams, ...keywords].forEach(token => {
       if (!tokens[token]) {
-        tokens[token] = { fields: [], weight: 0 };
+        tokens[token] = { score: 0, fieldsMask: 0, fields: [] };
       }
+      tokens[token].score += FIELD_WEIGHTS.customerName;
+      tokens[token].fieldsMask |= FIELD_TO_MASK.customerName;
       tokens[token].fields.push('customerName');
-      tokens[token].weight = Math.max(tokens[token].weight, FIELD_WEIGHTS.customerName);
     });
   }
 
@@ -165,10 +177,11 @@ function generateDocumentTokens(doc) {
     const keywords = generateKeywords(doc.officeName);
     [...bigrams, ...keywords].forEach(token => {
       if (!tokens[token]) {
-        tokens[token] = { fields: [], weight: 0 };
+        tokens[token] = { score: 0, fieldsMask: 0, fields: [] };
       }
+      tokens[token].score += FIELD_WEIGHTS.officeName;
+      tokens[token].fieldsMask |= FIELD_TO_MASK.officeName;
       tokens[token].fields.push('officeName');
-      tokens[token].weight = Math.max(tokens[token].weight, FIELD_WEIGHTS.officeName);
     });
   }
 
@@ -178,10 +191,11 @@ function generateDocumentTokens(doc) {
     const keywords = generateKeywords(doc.documentType);
     [...bigrams, ...keywords].forEach(token => {
       if (!tokens[token]) {
-        tokens[token] = { fields: [], weight: 0 };
+        tokens[token] = { score: 0, fieldsMask: 0, fields: [] };
       }
+      tokens[token].score += FIELD_WEIGHTS.documentType;
+      tokens[token].fieldsMask |= FIELD_TO_MASK.documentType;
       tokens[token].fields.push('documentType');
-      tokens[token].weight = Math.max(tokens[token].weight, FIELD_WEIGHTS.documentType);
     });
   }
 
@@ -190,10 +204,11 @@ function generateDocumentTokens(doc) {
     const dateTokens = generateDateTokens(doc.fileDate);
     dateTokens.forEach(token => {
       if (!tokens[token]) {
-        tokens[token] = { fields: [], weight: 0 };
+        tokens[token] = { score: 0, fieldsMask: 0, fields: [] };
       }
+      tokens[token].score += FIELD_WEIGHTS.fileDate;
+      tokens[token].fieldsMask |= FIELD_TO_MASK.fileDate;
       tokens[token].fields.push('fileDate');
-      tokens[token].weight = Math.max(tokens[token].weight, FIELD_WEIGHTS.fileDate);
     });
   }
 
@@ -203,10 +218,11 @@ function generateDocumentTokens(doc) {
     const keywords = generateKeywords(doc.fileName);
     [...bigrams, ...keywords].forEach(token => {
       if (!tokens[token]) {
-        tokens[token] = { fields: [], weight: 0 };
+        tokens[token] = { score: 0, fieldsMask: 0, fields: [] };
       }
+      tokens[token].score += FIELD_WEIGHTS.fileName;
+      tokens[token].fieldsMask |= FIELD_TO_MASK.fileName;
       tokens[token].fields.push('fileName');
-      tokens[token].weight = Math.max(tokens[token].weight, FIELD_WEIGHTS.fileName);
     });
   }
 
@@ -243,9 +259,13 @@ async function migrateSearchIndex() {
   let errorCount = 0;
   let lastDoc = null;
 
+  // インデックス更新のキャッシュ（df重複更新防止）
+  const indexUpdates = new Map();
+
   while (true) {
-    // ドキュメント取得
+    // status === 'processed' のドキュメントのみ対象（オンライン処理と統一）
     let query = db.collection('documents')
+      .where('status', '==', 'processed')
       .orderBy('createdAt', 'desc')
       .limit(batchSize);
 
@@ -266,6 +286,13 @@ async function migrateSearchIndex() {
       const docData = docSnapshot.data();
 
       try {
+        // 既にインデックス済みの場合はスキップ
+        if (docData.search?.tokenHash) {
+          console.log(`  [SKIP] ${docId}: インデックス済み`);
+          skippedCount++;
+          continue;
+        }
+
         // トークン生成
         const tokens = generateDocumentTokens(docData);
         const tokenCount = Object.keys(tokens).length;
@@ -285,54 +312,41 @@ async function migrateSearchIndex() {
           continue;
         }
 
-        // search_indexに書き込み
+        // search_indexに書き込み（postings形式 - オンライン処理と統一）
         const batch = db.batch();
+        const now = admin.firestore.Timestamp.now();
 
         for (const [token, data] of Object.entries(tokens)) {
           const tokenId = generateTokenId(token);
           const indexRef = db.collection('search_index').doc(tokenId);
 
-          // 既存のドキュメントを取得
-          const existingDoc = await indexRef.get();
+          // df更新を集約（同一tokenIdへの複数回更新を防止）
+          const prevDelta = indexUpdates.get(tokenId) || 0;
+          indexUpdates.set(tokenId, prevDelta + 1);
 
-          if (existingDoc.exists) {
-            // 既存トークンに追加
-            const existingData = existingDoc.data();
-            const existingDocs = existingData.documents || [];
-
-            // 重複チェック
-            const alreadyExists = existingDocs.some(d => d.docId === docId);
-            if (!alreadyExists) {
-              batch.update(indexRef, {
-                documents: admin.firestore.FieldValue.arrayUnion({
-                  docId,
-                  weight: data.weight,
-                  fields: data.fields,
-                }),
-                documentCount: admin.firestore.FieldValue.increment(1),
-                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-              });
-            }
-          } else {
-            // 新規トークン作成
-            batch.set(indexRef, {
-              token,
-              documents: [{
-                docId,
-                weight: data.weight,
-                fields: data.fields,
-              }],
-              documentCount: 1,
-              createdAt: admin.firestore.FieldValue.serverTimestamp(),
-              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-            });
-          }
+          batch.set(
+            indexRef,
+            {
+              updatedAt: now,
+              df: admin.firestore.FieldValue.increment(1),
+              [`postings.${docId}`]: {
+                score: data.score,
+                fieldsMask: data.fieldsMask,
+                updatedAt: now,
+              },
+            },
+            { merge: true }
+          );
         }
 
-        // ドキュメントにハッシュを記録（冪等性用）
+        // ドキュメントに検索メタデータを記録（オンライン処理と統一）
         batch.update(db.collection('documents').doc(docId), {
-          searchTokensHash: tokensHash,
-          searchIndexedAt: admin.firestore.FieldValue.serverTimestamp(),
+          search: {
+            version: 1,
+            tokens: Object.keys(tokens),
+            tokenHash: tokensHash,
+            indexedAt: admin.firestore.Timestamp.now(),
+          },
         });
 
         await batch.commit();
@@ -354,6 +368,7 @@ async function migrateSearchIndex() {
   console.log(`処理済み: ${processedCount}件`);
   console.log(`スキップ: ${skippedCount}件`);
   console.log(`エラー: ${errorCount}件`);
+  console.log(`ユニークトークン数: ${indexUpdates.size}件`);
 
   // マイグレーション状態を記録
   if (!dryRun) {
@@ -362,6 +377,7 @@ async function migrateSearchIndex() {
       processedCount,
       skippedCount,
       errorCount,
+      uniqueTokens: indexUpdates.size,
       completedAt: admin.firestore.FieldValue.serverTimestamp(),
     }, { merge: true });
     console.log('マイグレーション状態を _migrations/search_index に記録しました');
