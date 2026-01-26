@@ -8,7 +8,7 @@ import { format } from 'date-fns'
 import { ja } from 'date-fns/locale'
 import { Timestamp } from 'firebase/firestore'
 import { ref, getDownloadURL } from 'firebase/storage'
-import { Download, ExternalLink, Loader2, FileText, User, Building, Building2, Calendar, Tag, AlertCircle, Scissors, UserCheck, Pencil, Save, X } from 'lucide-react'
+import { Download, ExternalLink, Loader2, FileText, User, Building, Building2, Calendar, Tag, AlertCircle, Scissors, UserCheck, Pencil, Save, X, BookMarked } from 'lucide-react'
 import { storage } from '@/lib/firebase'
 import {
   Dialog,
@@ -20,6 +20,7 @@ import { VisuallyHidden } from '@/components/ui/visually-hidden'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
+import { Checkbox } from '@/components/ui/checkbox'
 import { PdfViewer } from '@/components/PdfViewer'
 import { PdfSplitModal } from '@/components/PdfSplitModal'
 import { SameNameResolveModal } from '@/components/SameNameResolveModal'
@@ -28,6 +29,7 @@ import { MasterSelectField } from '@/components/MasterSelectField'
 import { useDocument } from '@/hooks/useDocuments'
 import { useDocumentEdit } from '@/hooks/useDocumentEdit'
 import { useCustomers, useOffices, useDocumentTypes } from '@/hooks/useMasters'
+import { useMasterAlias } from '@/hooks/useMasterAlias'
 import { isCustomerConfirmed } from '@/hooks/useProcessingHistory'
 import type { DocumentStatus } from '@shared/types'
 
@@ -132,6 +134,10 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
   const { data: offices } = useOffices()
   const { data: documentTypes } = useDocumentTypes()
 
+  // エイリアス登録
+  const { addAlias, isAdding: isAddingAlias } = useMasterAlias()
+  const [rememberDocTypeNotation, setRememberDocTypeNotation] = useState(false)
+
   // マスターデータをMasterSelectField用に変換
   const customerItems = (customers || []).map(c => ({
     id: c.id,
@@ -150,8 +156,24 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
 
   // 編集保存成功時
   const handleSave = async () => {
+    // 書類種別エイリアス登録（チェックが入っている場合）
+    if (rememberDocTypeNotation && document && editedFields.documentType) {
+      const originalDocType = document.documentType || ''
+      const newDocType = editedFields.documentType
+      // 新しい書類種別のマスターIDを取得
+      const selectedDocType = documentTypes?.find(d => d.name === newDocType)
+      if (selectedDocType && originalDocType !== newDocType && originalDocType !== '不明文書' && originalDocType !== '未判定') {
+        try {
+          await addAlias('document', selectedDocType.id, originalDocType)
+        } catch (err) {
+          console.error('Failed to add document type alias:', err)
+        }
+      }
+    }
+
     const success = await saveChanges()
     if (success) {
+      setRememberDocTypeNotation(false)
       refetch()
     }
   }
@@ -358,7 +380,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                         variant="ghost"
                         size="sm"
                         onClick={cancelEditing}
-                        disabled={isSaving}
+                        disabled={isSaving || isAddingAlias}
                       >
                         <X className="h-4 w-4" />
                       </Button>
@@ -366,9 +388,9 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                         variant="default"
                         size="sm"
                         onClick={handleSave}
-                        disabled={isSaving}
+                        disabled={isSaving || isAddingAlias}
                       >
-                        {isSaving ? (
+                        {isSaving || isAddingAlias ? (
                           <Loader2 className="h-4 w-4 animate-spin" />
                         ) : (
                           <Save className="h-4 w-4 mr-1" />
@@ -451,6 +473,35 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                             items={documentTypeItems}
                             onChange={(v) => updateField('documentType', v)}
                           />
+                          {/* 書類種別エイリアス学習オプション */}
+                          {editedFields.documentType &&
+                           document.documentType &&
+                           editedFields.documentType !== document.documentType &&
+                           document.documentType !== '不明文書' &&
+                           document.documentType !== '未判定' && (
+                            <div className="mt-2 rounded bg-blue-50 p-2 border border-blue-200">
+                              <div className="flex items-start gap-2">
+                                <Checkbox
+                                  id="remember-doctype-notation"
+                                  checked={rememberDocTypeNotation}
+                                  onCheckedChange={(checked) => setRememberDocTypeNotation(checked === true)}
+                                  className="mt-0.5"
+                                />
+                                <div className="flex-1">
+                                  <label
+                                    htmlFor="remember-doctype-notation"
+                                    className="text-xs font-medium cursor-pointer flex items-center gap-1"
+                                  >
+                                    <BookMarked className="h-3 w-3 text-blue-600" />
+                                    この表記を記憶する
+                                  </label>
+                                  <p className="text-xs text-muted-foreground mt-0.5">
+                                    「{document.documentType}」を「{editedFields.documentType}」の許容表記として登録
+                                  </p>
+                                </div>
+                              </div>
+                            </div>
+                          )}
                         </div>
                       ) : (
                         <p className="truncate text-sm text-gray-900">{document.documentType || '未判定'}</p>

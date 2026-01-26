@@ -21,8 +21,10 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
-import { Loader2, AlertCircle, FileText, User, Calendar, Check, UserPlus } from 'lucide-react';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Loader2, AlertCircle, FileText, User, Calendar, Check, UserPlus, BookMarked } from 'lucide-react';
 import { useSameNameResolution } from '@/hooks/useSameNameResolution';
+import { useMasterAlias } from '@/hooks/useMasterAlias';
 import { RegisterNewMasterModal, type RegisteredMasterInfo } from '@/components/RegisterNewMasterModal';
 import type { Document, CustomerCandidateInfo } from '@shared/types';
 
@@ -138,8 +140,13 @@ export function SameNameResolveModal({
     getCandidates,
   } = useSameNameResolution();
 
+  const { addAlias, isAdding } = useMasterAlias();
+
   // 選択状態
   const [selection, setSelection] = useState<Selection>({ type: null });
+
+  // 「この表記を記憶する」チェック状態
+  const [rememberNotation, setRememberNotation] = useState(false);
 
   // 登録提案ダイアログの状態
   const [registrationPrompt, setRegistrationPrompt] = useState<RegistrationPromptState>('none');
@@ -156,6 +163,7 @@ export function SameNameResolveModal({
       loadOcrText(document);
       setSelection({ type: null });
       setRegistrationPrompt('none');
+      setRememberNotation(false);
     } else {
       resetOcrText();
     }
@@ -177,6 +185,11 @@ export function SameNameResolveModal({
 
     try {
       if (selection.type === 'candidate' && selection.candidate) {
+        // 「この表記を記憶する」がチェックされている場合、エイリアスを追加
+        if (rememberNotation && suggestedCustomerName && suggestedCustomerName !== selection.candidate.customerName) {
+          await addAlias('customer', selection.candidate.customerId, suggestedCustomerName);
+        }
+
         await resolveCustomer({
           documentId: document.id,
           selectedCustomerId: selection.candidate.customerId,
@@ -194,7 +207,7 @@ export function SameNameResolveModal({
       // エラーはresolveErrorで表示
       console.error('Resolution failed:', err);
     }
-  }, [selection, document.id, resolveCustomer, onResolved, onClose]);
+  }, [selection, document.id, resolveCustomer, onResolved, onClose, rememberNotation, suggestedCustomerName, addAlias]);
 
   // 登録せずに確定（不明顧客として登録）
   const handleSkipRegistration = useCallback(async () => {
@@ -346,6 +359,37 @@ export function SameNameResolveModal({
             </RadioGroup>
           </div>
 
+          {/* 表記記憶オプション */}
+          {selection.type === 'candidate' && suggestedCustomerName && selection.candidate &&
+           suggestedCustomerName !== selection.candidate.customerName &&
+           suggestedCustomerName !== '不明顧客' && (
+            <Card className="bg-blue-50 border-blue-200">
+              <CardContent className="p-4">
+                <div className="flex items-start gap-3">
+                  <Checkbox
+                    id="remember-notation"
+                    checked={rememberNotation}
+                    onCheckedChange={(checked) => setRememberNotation(checked === true)}
+                    className="mt-0.5"
+                  />
+                  <div className="flex-1">
+                    <label
+                      htmlFor="remember-notation"
+                      className="text-sm font-medium cursor-pointer flex items-center gap-2"
+                    >
+                      <BookMarked className="h-4 w-4 text-blue-600" />
+                      この表記を記憶する
+                    </label>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      「{suggestedCustomerName}」を「{selection.candidate.customerName}」の
+                      許容表記として登録します。次回から自動的にマッチします。
+                    </p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
           {/* エラー表示 */}
           {resolveError && (
             <Card className="border-destructive">
@@ -367,9 +411,9 @@ export function SameNameResolveModal({
           </Button>
           <Button
             onClick={handleConfirm}
-            disabled={!selection.type || isResolving}
+            disabled={!selection.type || isResolving || isAdding}
           >
-            {isResolving ? (
+            {isResolving || isAdding ? (
               <>
                 <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                 処理中...

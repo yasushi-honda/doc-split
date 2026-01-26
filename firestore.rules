@@ -159,5 +159,19 @@ service cloud.firestore {
       // 書き込みはCloud Functionsのみ（onDocumentWriteトリガー）
       allow write: if false;
     }
+
+    // 検索インデックス
+    match /search_index/{tokenId} {
+      allow read: if isWhitelisted();
+      // 書き込みはCloud Functionsのみ（onDocumentWriteSearchIndexトリガー）
+      allow write: if false;
+    }
+
+    // 検索マイグレーション状態
+    match /_migrations/{migrationId} {
+      allow read: if isAdmin();
+      // 書き込みはCloud Functions/管理スクリプトのみ
+      allow write: if false;
+    }
   }
 }

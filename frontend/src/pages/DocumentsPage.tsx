@@ -33,6 +33,7 @@ import { useDocuments, useDocumentStats, useDocumentMasters, type DocumentFilter
 import { DocumentDetailModal } from '@/components/DocumentDetailModal'
 import { GroupList, PendingConfirmationList } from '@/components/views'
 import { PendingConfirmationBanner } from '@/components/PendingConfirmationBanner'
+import { SearchBar } from '@/components/SearchBar'
 import { usePendingConfirmationStats } from '@/hooks/usePendingConfirmations'
 import type { Document, DocumentStatus } from '@shared/types'
 import type { GroupType } from '@/hooks/useDocumentGroups'
@@ -165,8 +166,10 @@ export function DocumentsPage() {
   return (
     <div className="space-y-6">
       {/* ヘッダー */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="text-2xl font-bold text-gray-900">書類管理</h1>
+        {/* グローバル検索バー */}
+        <SearchBar onResultClick={(docId) => setSelectedDocumentId(docId)} />
       </div>
 
       {/* 統計カード */}

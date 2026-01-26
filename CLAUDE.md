@@ -243,14 +243,22 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
   - OCRマッチング時にaliasesも照合対象
   - 事業所確定時「この表記を記憶する」チェックボックス
   - addMasterAlias / removeMasterAlias Callable Functions
+- [x] 顧客・書類種別エイリアス学習UI拡張 **完了 2026-01-26**
+  - `SameNameResolveModal.tsx`: 顧客確定時「この表記を記憶する」チェックボックス
+  - `DocumentDetailModal.tsx`: 書類種別編集時「この表記を記憶する」チェックボックス
+- [x] 検索機能実装 **完了 2026-01-26**
+  - `functions/src/utils/tokenizer.ts`: bi-gram + キーワードトークナイザー（37テスト）
+  - `functions/src/search/searchDocuments.ts`: Callable Function（トークンマッチング+IDFスコアリング）
+  - `functions/src/search/searchIndexer.ts`: Firestoreトリガーで自動インデックス更新
+  - `frontend/src/hooks/useSearch.ts`: debounce対応検索フック
+  - `frontend/src/components/SearchBar.tsx`: 検索バーUI
+  - `scripts/migrate-search-index.js`: 既存ドキュメントへのインデックス付与
+  - `search_index`コレクション: 反転インデックス（トークン→docId）
+  - Firestoreルール: search_index, _migrations追加
 - [ ] 本番運用開始（checkGmailAttachments定期実行） ← 次のステップ
 
 ## 未実装（将来対応）
-- [ ] 検索機能（n-gram反転インデックス + Cloud Functions検索API）
 - [ ] 精度改善（フィードバック後）
-- [ ] **顧客・書類種別のエイリアス学習UI**
-  - 事業所は実装済み、顧客・書類種別にも同様のUIを追加
-  - OCR検出テキストを保存する仕組みが必要
 
 ## 追加完了項目（2026-01-20）
 - [x] Google Workspace向けGmail認証セットアップスクリプト追加

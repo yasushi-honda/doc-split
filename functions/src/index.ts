@@ -39,3 +39,7 @@ export {
 
 // Phase 8: ドキュメントグループ集計トリガー
 export { onDocumentWrite } from './triggers/updateDocumentGroups';
+
+// 検索機能
+export { searchDocuments } from './search/searchDocuments';
+export { onDocumentWriteSearchIndex } from './search/searchIndexer';

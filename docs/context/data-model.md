@@ -215,6 +215,23 @@ OCR処理結果を格納するトランザクションテーブル。
   - role: string                      # admin | user
   - createdAt: timestamp
   - lastLoginAt: timestamp
+
+/search_index/{tokenId}               # 検索インデックス（反転インデックス）
+  - token: string                     # 検索トークン（bi-gram or キーワード）
+  - documents: array                  # マッチするドキュメント配列
+    - docId: string
+    - weight: number                  # フィールド重み（customerName=3, officeName=2等）
+    - fields: string[]                # マッチしたフィールド名
+  - documentCount: number             # ドキュメント数（IDF計算用）
+  - createdAt: timestamp
+  - updatedAt: timestamp
+
+/_migrations/{migrationId}            # マイグレーション状態
+  - status: string                    # pending | running | completed | failed
+  - processedCount: number
+  - skippedCount: number
+  - errorCount: number
+  - completedAt: timestamp
 ```
 
 ## エラー種別定数
