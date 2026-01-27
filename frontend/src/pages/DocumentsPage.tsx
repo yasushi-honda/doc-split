@@ -1,4 +1,5 @@
-import { useState, useMemo, useCallback } from 'react'
+import { useState, useMemo, useCallback, useEffect } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import {
   Filter,
   FileText,
@@ -120,6 +121,9 @@ const VIEW_TABS: TabConfig[] = [
 ]
 
 export function DocumentsPage() {
+  // URLパラメータ
+  const [searchParams, setSearchParams] = useSearchParams()
+
   // タブ状態
   const [activeTab, setActiveTab] = useState<ViewTab>('list')
 
@@ -129,8 +133,17 @@ export function DocumentsPage() {
   const [showFilters, setShowFilters] = useState(false)
   const [showSplit, setShowSplit] = useState(false) // 分割済み表示フラグ
 
-  // モーダル状態
-  const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(null)
+  // モーダル状態（URLパラメータと同期）
+  const selectedDocumentId = searchParams.get('doc')
+
+  // モーダルを閉じる時はURLパラメータを削除
+  const setSelectedDocumentId = useCallback((id: string | null) => {
+    if (id) {
+      setSearchParams({ doc: id })
+    } else {
+      setSearchParams({})
+    }
+  }, [setSearchParams])
 
   // フィルターをDocumentFilters型に変換
   const filters: DocumentFilters = useMemo(() => ({
@@ -164,8 +177,6 @@ export function DocumentsPage() {
       {/* ヘッダー */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="text-2xl font-bold text-gray-900">書類管理</h1>
-        {/* グローバル検索バー */}
-        <SearchBar onResultClick={(docId) => setSelectedDocumentId(docId)} />
       </div>
 
       {/* 統計カード */}
@@ -201,24 +212,26 @@ export function DocumentsPage() {
           ))}
         </TabsList>
 
+        {/* 検索バー＆フィルター（同一行） */}
+        <div className="mb-4 flex items-center gap-3">
+          <div className="flex-1">
+            <SearchBar onResultClick={(docId) => setSelectedDocumentId(docId)} />
+          </div>
+          <Button
+            variant="outline"
+            onClick={() => setShowFilters(!showFilters)}
+            className="flex shrink-0 items-center gap-2"
+          >
+            <Filter className="h-4 w-4" />
+            <span className="hidden sm:inline">フィルター</span>
+            <ChevronDown className={`h-4 w-4 transition-transform ${showFilters ? 'rotate-180' : ''}`} />
+          </Button>
+        </div>
+
         {/* 書類一覧タブ */}
         <TabsContent value="list" className="space-y-4">
-          {/* フィルターバー */}
-          <div className="space-y-4">
-            <div className="flex justify-end">
-              <Button
-                variant="outline"
-                onClick={() => setShowFilters(!showFilters)}
-                className="flex items-center gap-2"
-              >
-                <Filter className="h-5 w-5" />
-                フィルター
-                <ChevronDown className={`h-4 w-4 transition-transform ${showFilters ? 'rotate-180' : ''}`} />
-              </Button>
-            </div>
-
-            {/* 展開フィルター */}
-            {showFilters && (
+          {/* 展開フィルター */}
+          {showFilters && (
               <Card>
                 <CardContent className="flex flex-wrap gap-4 p-4">
                   <div className="min-w-[200px] flex-1">
@@ -265,8 +278,7 @@ export function DocumentsPage() {
                   </div>
                 </CardContent>
               </Card>
-            )}
-          </div>
+          )}
 
           {/* 書類リスト */}
           <Card>

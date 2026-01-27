@@ -299,6 +299,50 @@ export function tokenizeQuery(query: string): string[] {
 }
 
 /**
+ * 検索クエリを単語ごとにトークン化（AND検索用）
+ *
+ * @param query 検索クエリ
+ * @returns 単語ごとのトークン配列（外側配列=単語、内側配列=その単語のトークン）
+ */
+export function tokenizeQueryByWords(query: string): string[][] {
+  if (!query) return [];
+
+  const normalized = normalizeForSearch(query);
+  if (!normalized) return [];
+
+  // スペースで分割して単語を取得
+  const words = normalized.split(/\s+/).filter(w => w.length > 0);
+  if (words.length === 0) return [];
+
+  const result: string[][] = [];
+
+  for (const word of words) {
+    const wordTokens: string[] = [];
+
+    // 単語自体（2文字以上）
+    if (word.length >= MIN_TOKEN_LENGTH && !STOP_WORDS.has(word)) {
+      wordTokens.push(word);
+    }
+
+    // bi-gramトークン
+    const bigrams = generateBigrams(word);
+    wordTokens.push(...bigrams);
+
+    // 日付トークン（単語が日付形式の場合）
+    const dateTokens = generateDateTokensFromString(word);
+    wordTokens.push(...dateTokens);
+
+    // 重複除去
+    const uniqueTokens = [...new Set(wordTokens)];
+    if (uniqueTokens.length > 0) {
+      result.push(uniqueTokens);
+    }
+  }
+
+  return result;
+}
+
+/**
  * トークンIDを生成（FirestoreドキュメントID用）
  *
  * @param token トークン文字列

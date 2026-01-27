@@ -10,7 +10,7 @@
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { getFirestore, Timestamp, FieldValue } from 'firebase-admin/firestore';
 import {
-  tokenizeQuery,
+  tokenizeQueryByWords,
   generateTokenId,
   FIELD_WEIGHTS,
   type TokenField,
@@ -158,21 +158,39 @@ export const searchDocuments = onCall<SearchRequest>(
       return cached;
     }
 
-    // クエリをトークン化
-    const queryTokens = tokenizeQuery(query);
-    if (queryTokens.length === 0) {
+    // クエリを単語ごとにトークン化（AND検索用）
+    const wordTokenGroups = tokenizeQueryByWords(query);
+    if (wordTokenGroups.length === 0) {
       return { documents: [], total: 0, hasMore: false };
     }
 
-    // トークンIDを生成
-    const tokenIds = queryTokens.map(t => generateTokenId(t));
+    // 全トークンのIDを収集
+    const allTokenIds: string[] = [];
+    const tokenIdToWordIndex = new Map<string, number[]>(); // tokenId -> どの単語に属するか
+
+    for (let wordIndex = 0; wordIndex < wordTokenGroups.length; wordIndex++) {
+      const tokens = wordTokenGroups[wordIndex]!;
+      for (const token of tokens) {
+        const tokenId = generateTokenId(token);
+        allTokenIds.push(tokenId);
+        const existing = tokenIdToWordIndex.get(tokenId) || [];
+        existing.push(wordIndex);
+        tokenIdToWordIndex.set(tokenId, existing);
+      }
+    }
+
+    // 重複除去
+    const uniqueTokenIds = [...new Set(allTokenIds)];
 
     // 逆引きインデックスを取得
-    const indexRefs = tokenIds.map(id => db.collection('search_index').doc(id));
+    const indexRefs = uniqueTokenIds.map(id => db.collection('search_index').doc(id));
     const indexSnapshots = await db.getAll(...indexRefs);
 
-    // スコア集計
-    const scoreMap = new Map<string, { score: number; matchedTokens: number }>();
+    // ドキュメントごとにマッチした単語とスコアを追跡
+    const docMatchInfo = new Map<string, {
+      score: number;
+      matchedWords: Set<number>; // マッチした単語のインデックス
+    }>();
     let totalDocs = 0;
 
     for (let i = 0; i < indexSnapshots.length; i++) {
@@ -181,23 +199,37 @@ export const searchDocuments = onCall<SearchRequest>(
 
       const indexData = snapshot.data() as SearchIndex;
       totalDocs = Math.max(totalDocs, indexData.df);
-
       const idf = calculateIdf(indexData.df, totalDocs || 1000);
+
+      // このトークンがどの単語に属するか
+      const tokenId = uniqueTokenIds[i]!;
+      const wordIndices = tokenIdToWordIndex.get(tokenId) || [];
+
+      // postingsを処理する関数
+      const processPosting = (docId: string, posting: Posting) => {
+        const fields = getFieldsFromMask(posting.fieldsMask);
+        const fieldWeight = Math.max(...fields.map(f => FIELD_WEIGHTS[f]));
+        const tokenScore = posting.score * idf * fieldWeight;
+
+        const existing = docMatchInfo.get(docId);
+        if (existing) {
+          existing.score += tokenScore;
+          for (const wi of wordIndices) {
+            existing.matchedWords.add(wi);
+          }
+        } else {
+          const matchedWords = new Set<number>();
+          for (const wi of wordIndices) {
+            matchedWords.add(wi);
+          }
+          docMatchInfo.set(docId, { score: tokenScore, matchedWords });
+        }
+      };
 
       // postingsオブジェクトがある場合（正規のフォーマット）
       if (indexData.postings) {
         for (const [docId, posting] of Object.entries(indexData.postings)) {
-          const fields = getFieldsFromMask(posting.fieldsMask);
-          const fieldWeight = Math.max(...fields.map(f => FIELD_WEIGHTS[f]));
-          const tokenScore = posting.score * idf * fieldWeight;
-
-          const existing = scoreMap.get(docId);
-          if (existing) {
-            existing.score += tokenScore;
-            existing.matchedTokens++;
-          } else {
-            scoreMap.set(docId, { score: tokenScore, matchedTokens: 1 });
-          }
+          processPosting(docId, posting);
         }
       }
 
@@ -206,26 +238,15 @@ export const searchDocuments = onCall<SearchRequest>(
       for (const [key, value] of Object.entries(rawData)) {
         if (key.startsWith('postings.') && typeof value === 'object' && value !== null) {
           const docId = key.replace('postings.', '');
-          const posting = value as Posting;
-          const fields = getFieldsFromMask(posting.fieldsMask);
-          const fieldWeight = Math.max(...fields.map(f => FIELD_WEIGHTS[f]));
-          const tokenScore = posting.score * idf * fieldWeight;
-
-          const existing = scoreMap.get(docId);
-          if (existing) {
-            existing.score += tokenScore;
-            existing.matchedTokens++;
-          } else {
-            scoreMap.set(docId, { score: tokenScore, matchedTokens: 1 });
-          }
+          processPosting(docId, value as Posting);
         }
       }
     }
 
-    // マッチしたトークン数でフィルタリング（2トークン以上のクエリは2トークン以上マッチ必須）
-    const minMatchedTokens = queryTokens.length >= 2 ? 2 : 1;
-    const filteredDocs = Array.from(scoreMap.entries())
-      .filter(([, data]) => data.matchedTokens >= minMatchedTokens)
+    // AND検索: すべての単語にマッチしたドキュメントのみを結果に含める
+    const requiredWordCount = wordTokenGroups.length;
+    const filteredDocs = Array.from(docMatchInfo.entries())
+      .filter(([, data]) => data.matchedWords.size === requiredWordCount)
       .map(([docId, data]) => ({ docId, score: data.score }));
 
     // スコア順にソート

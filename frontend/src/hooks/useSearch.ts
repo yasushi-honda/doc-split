@@ -157,9 +157,19 @@ export function useDebouncedSearch(debounceMs: number = 300): UseSearchResult {
     setTimeoutId(id);
   }, [searchHook, debounceMs, timeoutId]);
 
+  // リセット（debouncedQueryもクリア）
+  const reset = useCallback(() => {
+    setDebouncedQuery('');
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+    searchHook.reset();
+  }, [searchHook, timeoutId]);
+
   return {
     ...searchHook,
     query: debouncedQuery,
     setQuery,
+    reset,
   };
 }
