@@ -316,7 +316,6 @@ async function migrateSearchIndex() {
         }
 
         // search_indexに書き込み（postings形式 - オンライン処理と統一）
-        const batch = db.batch();
         const now = admin.firestore.Timestamp.now();
 
         for (const [token, data] of Object.entries(tokens)) {
@@ -327,23 +326,33 @@ async function migrateSearchIndex() {
           const prevDelta = indexUpdates.get(tokenId) || 0;
           indexUpdates.set(tokenId, prevDelta + 1);
 
-          batch.set(
-            indexRef,
-            {
+          // ドキュメントの存在確認して適切な方法で書き込み
+          const indexDoc = await indexRef.get();
+          const posting = {
+            score: data.score,
+            fieldsMask: data.fieldsMask,
+            updatedAt: now,
+          };
+
+          if (!indexDoc.exists) {
+            // 新規作成: postingsをネストされたオブジェクトとして設定
+            await indexRef.set({
+              updatedAt: now,
+              df: 1,
+              postings: { [docId]: posting },
+            });
+          } else {
+            // 更新: updateメソッドでドット表記を使用（ネストとして解釈される）
+            await indexRef.update({
               updatedAt: now,
               df: admin.firestore.FieldValue.increment(1),
-              [`postings.${docId}`]: {
-                score: data.score,
-                fieldsMask: data.fieldsMask,
-                updatedAt: now,
-              },
-            },
-            { merge: true }
-          );
+              [`postings.${docId}`]: posting,
+            });
+          }
         }
 
         // ドキュメントに検索メタデータを記録（オンライン処理と統一）
-        batch.update(db.collection('documents').doc(docId), {
+        await db.collection('documents').doc(docId).update({
           search: {
             version: 1,
             tokens: Object.keys(tokens),
@@ -351,8 +360,6 @@ async function migrateSearchIndex() {
             indexedAt: admin.firestore.Timestamp.now(),
           },
         });
-
-        await batch.commit();
 
         console.log(`  [OK] ${docId}: ${tokenCount}トークン登録`);
         processedCount++;

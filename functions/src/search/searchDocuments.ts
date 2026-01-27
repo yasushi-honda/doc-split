@@ -184,17 +184,40 @@ export const searchDocuments = onCall<SearchRequest>(
 
       const idf = calculateIdf(indexData.df, totalDocs || 1000);
 
-      for (const [docId, posting] of Object.entries(indexData.postings)) {
-        const fields = getFieldsFromMask(posting.fieldsMask);
-        const fieldWeight = Math.max(...fields.map(f => FIELD_WEIGHTS[f]));
-        const tokenScore = posting.score * idf * fieldWeight;
+      // postingsオブジェクトがある場合（正規のフォーマット）
+      if (indexData.postings) {
+        for (const [docId, posting] of Object.entries(indexData.postings)) {
+          const fields = getFieldsFromMask(posting.fieldsMask);
+          const fieldWeight = Math.max(...fields.map(f => FIELD_WEIGHTS[f]));
+          const tokenScore = posting.score * idf * fieldWeight;
 
-        const existing = scoreMap.get(docId);
-        if (existing) {
-          existing.score += tokenScore;
-          existing.matchedTokens++;
-        } else {
-          scoreMap.set(docId, { score: tokenScore, matchedTokens: 1 });
+          const existing = scoreMap.get(docId);
+          if (existing) {
+            existing.score += tokenScore;
+            existing.matchedTokens++;
+          } else {
+            scoreMap.set(docId, { score: tokenScore, matchedTokens: 1 });
+          }
+        }
+      }
+
+      // ルートレベルの postings.docId 形式にも対応（互換性対応）
+      const rawData = snapshot.data() as Record<string, unknown>;
+      for (const [key, value] of Object.entries(rawData)) {
+        if (key.startsWith('postings.') && typeof value === 'object' && value !== null) {
+          const docId = key.replace('postings.', '');
+          const posting = value as Posting;
+          const fields = getFieldsFromMask(posting.fieldsMask);
+          const fieldWeight = Math.max(...fields.map(f => FIELD_WEIGHTS[f]));
+          const tokenScore = posting.score * idf * fieldWeight;
+
+          const existing = scoreMap.get(docId);
+          if (existing) {
+            existing.score += tokenScore;
+            existing.matchedTokens++;
+          } else {
+            scoreMap.set(docId, { score: tokenScore, matchedTokens: 1 });
+          }
         }
       }
     }

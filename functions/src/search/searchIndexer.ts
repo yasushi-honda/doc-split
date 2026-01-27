@@ -110,7 +110,6 @@ export const onDocumentWriteSearchIndex = onDocumentWritten(
  * ドキュメントを検索インデックスに追加
  */
 async function addDocumentToIndex(docId: string, tokens: TokenInfo[]): Promise<void> {
-  const batch = db.batch();
   const now = Timestamp.now();
 
   // トークンごとに集約
@@ -130,22 +129,38 @@ async function addDocumentToIndex(docId: string, tokens: TokenInfo[]): Promise<v
     }
   }
 
-  // バッチ書き込み
+  // 既存ドキュメントを一括取得
+  const tokenIds = Array.from(tokenMap.keys());
+  const indexRefs = tokenIds.map(id => db.collection('search_index').doc(id));
+  const existingDocs = await db.getAll(...indexRefs);
+  const existingSet = new Set(existingDocs.filter(d => d.exists).map(d => d.id));
+
+  // バッチ書き込み（新規と既存を分けて処理）
+  const batch = db.batch();
+
   for (const [tokenId, data] of tokenMap) {
     const indexRef = db.collection('search_index').doc(tokenId);
-    batch.set(
-      indexRef,
-      {
+    const posting = {
+      score: data.score,
+      fieldsMask: data.fieldsMask,
+      updatedAt: now,
+    };
+
+    if (existingSet.has(tokenId)) {
+      // 既存: updateでドット表記を使用（ネストとして解釈される）
+      batch.update(indexRef, {
         updatedAt: now,
         df: FieldValue.increment(1),
-        [`postings.${docId}`]: {
-          score: data.score,
-          fieldsMask: data.fieldsMask,
-          updatedAt: now,
-        },
-      },
-      { merge: true }
-    );
+        [`postings.${docId}`]: posting,
+      });
+    } else {
+      // 新規: setでpostingsをネストされたオブジェクトとして設定
+      batch.set(indexRef, {
+        updatedAt: now,
+        df: 1,
+        postings: { [docId]: posting },
+      });
+    }
   }
 
   await batch.commit();
