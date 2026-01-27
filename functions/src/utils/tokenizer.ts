@@ -135,7 +135,7 @@ export function generateDateTokens(date: Date | null): string[] {
 /**
  * 日付文字列からトークンを生成
  *
- * @param dateStr 日付文字列（YYYY/MM/DD, YYYY-MM-DD など）
+ * @param dateStr 日付文字列（YYYY/MM/DD, YYYY-MM-DD, YYYY年MM月, YYYY年MM月DD日 など）
  * @returns 日付トークン配列
  */
 export function generateDateTokensFromString(dateStr: string | null): string[] {
@@ -151,12 +151,37 @@ export function generateDateTokensFromString(dateStr: string | null): string[] {
   }
 
   // YYYY年MM月DD日 形式
-  const jpMatch = dateStr.match(/(\d{4})年(\d{1,2})月(\d{1,2})日/);
-  if (jpMatch) {
-    const year = parseInt(jpMatch[1]!, 10);
-    const month = parseInt(jpMatch[2]!, 10);
-    const day = parseInt(jpMatch[3]!, 10);
+  const jpFullMatch = dateStr.match(/(\d{4})年(\d{1,2})月(\d{1,2})日/);
+  if (jpFullMatch) {
+    const year = parseInt(jpFullMatch[1]!, 10);
+    const month = parseInt(jpFullMatch[2]!, 10);
+    const day = parseInt(jpFullMatch[3]!, 10);
     return generateDateTokens(new Date(year, month - 1, day));
+  }
+
+  // YYYY年MM月 形式（日なし）- 月の最初の日として扱う
+  const jpMonthMatch = dateStr.match(/(\d{4})年(\d{1,2})月/);
+  if (jpMonthMatch) {
+    const year = parseInt(jpMonthMatch[1]!, 10);
+    const month = parseInt(jpMonthMatch[2]!, 10);
+    // 年月トークンを直接生成（日は含まない）
+    const monthStr = String(month).padStart(2, '0');
+    return [
+      String(year),  // YYYY
+      `${year}-${monthStr}`,  // YYYY-MM
+    ];
+  }
+
+  // YYYY/MM 形式（日なし）
+  const slashMonthMatch = dateStr.match(/(\d{4})\/(\d{1,2})(?!\/\d)/);
+  if (slashMonthMatch) {
+    const year = parseInt(slashMonthMatch[1]!, 10);
+    const month = parseInt(slashMonthMatch[2]!, 10);
+    const monthStr = String(month).padStart(2, '0');
+    return [
+      String(year),  // YYYY
+      `${year}-${monthStr}`,  // YYYY-MM
+    ];
   }
 
   return [];

@@ -1,6 +1,5 @@
 import { useState, useMemo, useCallback } from 'react'
 import {
-  Search,
   Filter,
   FileText,
   ChevronDown,
@@ -18,7 +17,6 @@ import { format } from 'date-fns'
 import { ja } from 'date-fns/locale'
 import { Timestamp } from 'firebase/firestore'
 import { Card, CardContent } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -126,7 +124,6 @@ export function DocumentsPage() {
   const [activeTab, setActiveTab] = useState<ViewTab>('list')
 
   // フィルター状態（一覧ビュー用）
-  const [searchQuery, setSearchQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<DocumentStatus | 'all'>('all')
   const [documentTypeFilter, setDocumentTypeFilter] = useState<string>('all')
   const [showFilters, setShowFilters] = useState(false)
@@ -139,8 +136,7 @@ export function DocumentsPage() {
   const filters: DocumentFilters = useMemo(() => ({
     status: statusFilter === 'all' ? undefined : statusFilter,
     documentType: documentTypeFilter === 'all' ? undefined : documentTypeFilter,
-    searchText: searchQuery || undefined,
-  }), [statusFilter, documentTypeFilter, searchQuery])
+  }), [statusFilter, documentTypeFilter])
 
   // データ取得
   const { data: documentsData, isLoading, isError, error } = useDocuments({ filters })
@@ -207,19 +203,9 @@ export function DocumentsPage() {
 
         {/* 書類一覧タブ */}
         <TabsContent value="list" className="space-y-4">
-          {/* 検索・フィルターバー */}
+          {/* フィルターバー */}
           <div className="space-y-4">
-            <div className="flex gap-4">
-              <div className="relative flex-1">
-                <Search className="absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-400" />
-                <Input
-                  type="text"
-                  placeholder="書類名、顧客名で検索..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="pl-10"
-                />
-              </div>
+            <div className="flex justify-end">
               <Button
                 variant="outline"
                 onClick={() => setShowFilters(!showFilters)}
@@ -300,7 +286,7 @@ export function DocumentsPage() {
                 <FileText className="mb-4 h-12 w-12 text-gray-300" />
                 <p className="text-lg font-medium">書類がありません</p>
                 <p className="mt-1 text-sm">
-                  {searchQuery || statusFilter !== 'all' || documentTypeFilter !== 'all'
+                  {statusFilter !== 'all' || documentTypeFilter !== 'all'
                     ? '条件に一致する書類がありません'
                     : 'Gmailから添付ファイルが取得されると、ここに表示されます'}
                 </p>
