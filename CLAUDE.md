@@ -255,7 +255,9 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
   - `scripts/migrate-search-index.js`: 既存ドキュメントへのインデックス付与
   - `search_index`コレクション: 反転インデックス（トークン→docId）
   - Firestoreルール: search_index, _migrations追加
-- [ ] 本番運用開始（checkGmailAttachments定期実行） ← 次のステップ
+- [x] 本番運用開始（checkGmailAttachments定期実行）**完了 2026-01-27**
+  - クライアント環境: スケジューラーENABLED（5分間隔で正常稼働）
+  - dev環境: スケジューラーPAUSED（Gmail未設定のため停止）
 
 ## 未実装（将来対応）
 - [ ] 精度改善（フィードバック後）
