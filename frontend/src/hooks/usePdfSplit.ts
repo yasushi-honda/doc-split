@@ -16,16 +16,43 @@ interface DetectSplitPointsResponse {
   suggestions: SplitSuggestion[]
 }
 
+interface SplitPdfSegment {
+  startPage: number
+  endPage: number
+  documentType: string
+  customerName: string
+  customerId?: string | null
+  officeName: string
+  officeId?: string | null
+  /** 顧客候補リスト */
+  customerCandidates?: Array<{
+    id: string
+    name: string
+    score: number
+    isDuplicate: boolean
+    careManagerName?: string
+  }>
+  /** 事業所候補リスト */
+  officeCandidates?: Array<{
+    id: string
+    name: string
+    score: number
+    isDuplicate: boolean
+  }>
+  /** 手動選択が必要か（顧客） */
+  needsManualCustomerSelection?: boolean
+  /** 手動選択が必要か（事業所） */
+  needsManualOfficeSelection?: boolean
+  /** 同姓同名の顧客か */
+  isDuplicateCustomer?: boolean
+  /** 担当ケアマネ名 */
+  careManagerName?: string | null
+}
+
 interface SplitPdfRequest {
   documentId: string
   splitPoints: number[]
-  segments: Array<{
-    startPage: number
-    endPage: number
-    documentType: string
-    customerName: string
-    officeName: string
-  }>
+  segments: SplitPdfSegment[]
 }
 
 interface SplitPdfResponse {

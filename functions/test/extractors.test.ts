@@ -7,13 +7,16 @@ import {
   extractDocumentTypeEnhanced,
   extractOfficeNameEnhanced,
   extractCustomerCandidates,
+  extractOfficeCandidates,
   aggregateCustomerCandidates,
+  aggregateOfficeCandidates,
   extractDateEnhanced,
   ensureCustomerEntry,
   extractAllInformation,
   DocumentMaster,
   OfficeMaster,
   CustomerMaster,
+  OfficeExtractionResultWithCandidates,
 } from '../src/utils/extractors';
 
 // テスト用マスターデータ
@@ -25,9 +28,11 @@ const documentMasters: DocumentMaster[] = [
 ];
 
 const officeMasters: OfficeMaster[] = [
-  { id: 'off1', name: '株式会社テストケア', shortName: 'テストケア' },
-  { id: 'off2', name: '医療法人社団あおぞら会', shortName: 'あおぞら会' },
-  { id: 'off3', name: 'デイサービスさくら' },
+  { id: 'off1', name: '株式会社テストケア', shortName: 'テストケア', isDuplicate: false },
+  { id: 'off2', name: '医療法人社団あおぞら会', shortName: 'あおぞら会', isDuplicate: false },
+  { id: 'off3', name: 'デイサービスさくら', isDuplicate: false },
+  { id: 'off4', name: '訪問介護センター北', isDuplicate: true },
+  { id: 'off5', name: '訪問介護センター北', isDuplicate: true },
 ];
 
 const customerMasters: CustomerMaster[] = [
@@ -285,5 +290,134 @@ describe('extractAllInformation', () => {
     expect(result.office.officeName).to.equal('株式会社テストケア');
     expect(result.customer.bestMatch!.name).to.equal('山田太郎');
     expect(result.date.formattedDate).to.equal('2025/01/18');
+  });
+});
+
+describe('extractOfficeCandidates', () => {
+  it('事業所候補を複数抽出', () => {
+    const ocrText = '株式会社テストケア様 送付先: デイサービスさくら';
+    const result = extractOfficeCandidates(ocrText, officeMasters);
+
+    expect(result.candidates.length).to.be.greaterThanOrEqual(2);
+    expect(result.bestMatch).to.not.be.null;
+    expect(result.bestMatch!.name).to.equal('株式会社テストケア');
+  });
+
+  it('同名事業所でneedsManualSelectionがtrue', () => {
+    const ocrText = '訪問介護センター北';
+    const result = extractOfficeCandidates(ocrText, officeMasters);
+
+    expect(result.bestMatch).to.not.be.null;
+    expect(result.bestMatch!.isDuplicate).to.be.true;
+    expect(result.needsManualSelection).to.be.true;
+  });
+
+  it('短縮名でも検出', () => {
+    const ocrText = 'テストケア　担当: 佐藤';
+    const result = extractOfficeCandidates(ocrText, officeMasters);
+
+    expect(result.bestMatch).to.not.be.null;
+    expect(result.bestMatch!.name).to.equal('株式会社テストケア');
+  });
+
+  it('マッチなしの場合は空の候補', () => {
+    const ocrText = '該当する事業所なし';
+    const result = extractOfficeCandidates(ocrText, officeMasters);
+
+    expect(result.candidates.length).to.equal(0);
+    expect(result.bestMatch).to.be.null;
+  });
+});
+
+describe('aggregateOfficeCandidates', () => {
+  it('複数ページの事業所候補を集約', () => {
+    const pageResults: Array<{ pageNumber: number; result: OfficeExtractionResultWithCandidates }> = [
+      {
+        pageNumber: 1,
+        result: {
+          bestMatch: { id: 'off1', name: '株式会社テストケア', score: 90, matchType: 'exact', isDuplicate: false },
+          candidates: [
+            { id: 'off1', name: '株式会社テストケア', score: 90, matchType: 'exact', isDuplicate: false },
+            { id: 'off3', name: 'デイサービスさくら', score: 75, matchType: 'fuzzy', isDuplicate: false },
+          ],
+          hasMultipleCandidates: true,
+          needsManualSelection: false,
+        },
+      },
+      {
+        pageNumber: 2,
+        result: {
+          bestMatch: { id: 'off1', name: '株式会社テストケア', score: 100, matchType: 'exact', isDuplicate: false },
+          candidates: [
+            { id: 'off1', name: '株式会社テストケア', score: 100, matchType: 'exact', isDuplicate: false },
+          ],
+          hasMultipleCandidates: false,
+          needsManualSelection: false,
+        },
+      },
+    ];
+
+    const result = aggregateOfficeCandidates(pageResults);
+
+    // 最高スコアが採用される
+    expect(result.bestMatch!.score).to.equal(100);
+    expect(result.bestMatch!.name).to.equal('株式会社テストケア');
+    // 複数の候補が集約される
+    expect(result.candidates.length).to.equal(2);
+    // ページ番号が集約される
+    const off1 = result.candidates.find((c) => c.id === 'off1');
+    expect(off1!.pageNumbers).to.deep.equal([1, 2]);
+  });
+
+  it('同名事業所がある場合needsManualSelection=true', () => {
+    const pageResults: Array<{ pageNumber: number; result: OfficeExtractionResultWithCandidates }> = [
+      {
+        pageNumber: 1,
+        result: {
+          bestMatch: { id: 'off4', name: '訪問介護センター北', score: 100, matchType: 'exact', isDuplicate: true },
+          candidates: [
+            { id: 'off4', name: '訪問介護センター北', score: 100, matchType: 'exact', isDuplicate: true },
+          ],
+          hasMultipleCandidates: false,
+          needsManualSelection: true,
+        },
+      },
+    ];
+
+    const result = aggregateOfficeCandidates(pageResults);
+
+    expect(result.needsManualSelection).to.be.true;
+  });
+
+  it('スコア差が小さい場合needsManualSelection=true', () => {
+    const pageResults: Array<{ pageNumber: number; result: OfficeExtractionResultWithCandidates }> = [
+      {
+        pageNumber: 1,
+        result: {
+          bestMatch: { id: 'off1', name: '株式会社テストケア', score: 85, matchType: 'partial', isDuplicate: false },
+          candidates: [
+            { id: 'off1', name: '株式会社テストケア', score: 85, matchType: 'partial', isDuplicate: false },
+            { id: 'off3', name: 'デイサービスさくら', score: 80, matchType: 'partial', isDuplicate: false },
+          ],
+          hasMultipleCandidates: true,
+          needsManualSelection: false,
+        },
+      },
+    ];
+
+    const result = aggregateOfficeCandidates(pageResults);
+
+    // スコア差が10以内なのでneedsManualSelection=true
+    expect(result.needsManualSelection).to.be.true;
+  });
+
+  it('空の結果を処理', () => {
+    const pageResults: Array<{ pageNumber: number; result: OfficeExtractionResultWithCandidates }> = [];
+
+    const result = aggregateOfficeCandidates(pageResults);
+
+    expect(result.bestMatch).to.be.null;
+    expect(result.candidates.length).to.equal(0);
+    expect(result.needsManualSelection).to.be.false;
   });
 });

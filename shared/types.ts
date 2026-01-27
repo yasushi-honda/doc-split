@@ -347,8 +347,33 @@ export interface SplitSegment {
   suggestedFileName: string;
   documentType: string;
   customerName: string;
+  customerId?: string | null;
   officeName: string;
+  officeId?: string | null;
   fileDate: Date | null;
+  /** 顧客候補リスト */
+  customerCandidates?: Array<{
+    id: string;
+    name: string;
+    score: number;
+    isDuplicate: boolean;
+    careManagerName?: string;
+  }>;
+  /** 事業所候補リスト */
+  officeCandidates?: Array<{
+    id: string;
+    name: string;
+    score: number;
+    isDuplicate: boolean;
+  }>;
+  /** 手動選択が必要か（顧客） */
+  needsManualCustomerSelection?: boolean;
+  /** 手動選択が必要か（事業所） */
+  needsManualOfficeSelection?: boolean;
+  /** 同姓同名の顧客か */
+  isDuplicateCustomer?: boolean;
+  /** 担当ケアマネ名 */
+  careManagerName?: string | null;
 }
 
 // ============================================

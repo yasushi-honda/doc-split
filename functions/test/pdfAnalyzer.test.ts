@@ -18,9 +18,9 @@ import {
 // テスト用マスターデータ
 const masterData: MasterData = {
   customers: [
-    { id: 'cust1', name: '山田太郎', furigana: 'やまだたろう' },
-    { id: 'cust2', name: '鈴木花子', furigana: 'すずきはなこ' },
-    { id: 'cust3', name: '田中一郎', furigana: 'たなかいちろう' },
+    { id: 'cust1', name: '山田太郎', furigana: 'やまだたろう', isDuplicate: false },
+    { id: 'cust2', name: '鈴木花子', furigana: 'すずきはなこ', isDuplicate: false },
+    { id: 'cust3', name: '田中一郎', furigana: 'たなかいちろう', isDuplicate: true, careManagerName: '佐藤一郎' },
   ],
   documents: [
     { id: 'doc1', name: '介護保険被保険者証', category: '保険証' },
@@ -28,8 +28,9 @@ const masterData: MasterData = {
     { id: 'doc3', name: '居宅サービス計画書', category: '計画書' },
   ],
   offices: [
-    { id: 'off1', name: '株式会社テストケア', shortName: 'テストケア' },
-    { id: 'off2', name: 'デイサービスさくら' },
+    { id: 'off1', name: '株式会社テストケア', shortName: 'テストケア', isDuplicate: false },
+    { id: 'off2', name: 'デイサービスさくら', isDuplicate: false },
+    { id: 'off3', name: '訪問介護センター北', isDuplicate: true },
   ],
 };
 
@@ -76,6 +77,32 @@ describe('analyzePageOcr', () => {
     expect(result.customerCandidates.length).to.be.greaterThan(1);
   });
 
+  it('事業所候補を正しく検出', () => {
+    const pageWithOffice: PageOcrData = {
+      pageNumber: 1,
+      text: '株式会社テストケア\nデイサービスさくら',
+    };
+    const result = analyzePageOcr(pageWithOffice, masterData);
+
+    // 事業所候補が検出される
+    expect(result.officeCandidates.length).to.be.greaterThan(0);
+    // primaryOfficeが設定される
+    expect(result.primaryOffice).to.not.be.null;
+    // officeNameがprimaryOfficeと一致
+    expect(result.officeName).to.equal(result.primaryOffice?.name);
+  });
+
+  it('事業所候補に複数の候補がある場合', () => {
+    const pageWithMultipleOffices: PageOcrData = {
+      pageNumber: 1,
+      text: '株式会社テストケア様\n送付先: デイサービスさくら',
+    };
+    const result = analyzePageOcr(pageWithMultipleOffices, masterData);
+
+    // 複数の事業所候補が検出される
+    expect(result.officeCandidates.length).to.be.greaterThanOrEqual(2);
+  });
+
   it('情報がないページも処理', () => {
     const emptyPage: PageOcrData = {
       pageNumber: 1,
@@ -85,6 +112,8 @@ describe('analyzePageOcr', () => {
 
     expect(result.documentType).to.be.null;
     expect(result.primaryCustomer).to.be.null;
+    expect(result.primaryOffice).to.be.null;
+    expect(result.officeCandidates.length).to.equal(0);
   });
 });
 
@@ -96,6 +125,8 @@ describe('detectPageChanges', () => {
       documentTypeScore: 100,
       customerCandidates: [],
       primaryCustomer: { id: 'cust1', name: '山田太郎', score: 100, matchType: 'exact', isDuplicate: false },
+      officeCandidates: [],
+      primaryOffice: null,
       officeName: 'テストケア',
       officeScore: 100,
       date: null,
@@ -108,6 +139,8 @@ describe('detectPageChanges', () => {
       documentTypeScore: 100,
       customerCandidates: [],
       primaryCustomer: { id: 'cust2', name: '鈴木花子', score: 95, matchType: 'exact', isDuplicate: false },
+      officeCandidates: [],
+      primaryOffice: null,
       officeName: 'テストケア',
       officeScore: 100,
       date: null,
@@ -129,6 +162,8 @@ describe('detectPageChanges', () => {
       documentTypeScore: 100,
       customerCandidates: [],
       primaryCustomer: { id: 'cust1', name: '山田太郎', score: 100, matchType: 'exact', isDuplicate: false },
+      officeCandidates: [],
+      primaryOffice: null,
       officeName: null,
       officeScore: 0,
       date: null,
@@ -141,6 +176,8 @@ describe('detectPageChanges', () => {
       documentTypeScore: 90,
       customerCandidates: [],
       primaryCustomer: { id: 'cust1', name: '山田太郎', score: 100, matchType: 'exact', isDuplicate: false },
+      officeCandidates: [],
+      primaryOffice: null,
       officeName: null,
       officeScore: 0,
       date: null,
@@ -160,6 +197,8 @@ describe('detectPageChanges', () => {
       documentTypeScore: 100,
       customerCandidates: [],
       primaryCustomer: { id: 'cust1', name: '山田太郎', score: 100, matchType: 'exact', isDuplicate: false },
+      officeCandidates: [],
+      primaryOffice: null,
       officeName: 'テストケア',
       officeScore: 100,
       date: null,
@@ -172,6 +211,8 @@ describe('detectPageChanges', () => {
       documentTypeScore: 90,
       customerCandidates: [],
       primaryCustomer: { id: 'cust2', name: '鈴木花子', score: 95, matchType: 'exact', isDuplicate: false },
+      officeCandidates: [],
+      primaryOffice: null,
       officeName: 'デイサービスさくら',
       officeScore: 100,
       date: null,
@@ -193,6 +234,8 @@ describe('detectPageChanges', () => {
       documentTypeScore: 100,
       customerCandidates: [],
       primaryCustomer: { id: 'cust1', name: '山田太郎', score: 100, matchType: 'exact', isDuplicate: false },
+      officeCandidates: [],
+      primaryOffice: null,
       officeName: null,
       officeScore: 0,
       date: null,
@@ -205,6 +248,8 @@ describe('detectPageChanges', () => {
       documentTypeScore: 100,
       customerCandidates: [],
       primaryCustomer: { id: 'cust1', name: '山田太郎', score: 100, matchType: 'exact', isDuplicate: false },
+      officeCandidates: [],
+      primaryOffice: null,
       officeName: null,
       officeScore: 0,
       date: null,
@@ -222,6 +267,8 @@ describe('detectPageChanges', () => {
       documentTypeScore: 100,
       customerCandidates: [],
       primaryCustomer: null,
+      officeCandidates: [],
+      primaryOffice: null,
       officeName: null,
       officeScore: 0,
       date: null,
@@ -242,6 +289,8 @@ describe('generateSplitSuggestions', () => {
         documentTypeScore: 100,
         customerCandidates: [],
         primaryCustomer: { id: 'cust1', name: '山田太郎', score: 100, matchType: 'exact', isDuplicate: false },
+        officeCandidates: [],
+        primaryOffice: null,
         officeName: null,
         officeScore: 0,
         date: null,
@@ -253,6 +302,8 @@ describe('generateSplitSuggestions', () => {
         documentTypeScore: 100,
         customerCandidates: [],
         primaryCustomer: { id: 'cust2', name: '鈴木花子', score: 95, matchType: 'exact', isDuplicate: false },
+        officeCandidates: [],
+        primaryOffice: null,
         officeName: null,
         officeScore: 0,
         date: null,
@@ -276,6 +327,8 @@ describe('generateSplitSuggestions', () => {
         documentTypeScore: 0,
         customerCandidates: [],
         primaryCustomer: { id: 'cust1', name: '山田太郎', score: 50, matchType: 'fuzzy', isDuplicate: false },
+        officeCandidates: [],
+        primaryOffice: null,
         officeName: null,
         officeScore: 0,
         date: null,
@@ -287,6 +340,8 @@ describe('generateSplitSuggestions', () => {
         documentTypeScore: 0,
         customerCandidates: [],
         primaryCustomer: { id: 'cust2', name: '鈴木花子', score: 50, matchType: 'fuzzy', isDuplicate: false },
+        officeCandidates: [],
+        primaryOffice: null,
         officeName: null,
         officeScore: 0,
         date: null,
@@ -309,6 +364,8 @@ describe('generateSegments', () => {
         documentTypeScore: 100,
         customerCandidates: [{ id: 'cust1', name: '山田太郎', score: 100, matchType: 'exact', isDuplicate: false }],
         primaryCustomer: { id: 'cust1', name: '山田太郎', score: 100, matchType: 'exact', isDuplicate: false },
+        officeCandidates: [{ id: 'off1', name: '株式会社テストケア', score: 100, matchType: 'exact', isDuplicate: false }],
+        primaryOffice: { id: 'off1', name: '株式会社テストケア', score: 100, matchType: 'exact', isDuplicate: false },
         officeName: 'テストケア',
         officeScore: 100,
         date: '2025/01/18',
@@ -320,6 +377,8 @@ describe('generateSegments', () => {
         documentTypeScore: 100,
         customerCandidates: [{ id: 'cust1', name: '山田太郎', score: 100, matchType: 'exact', isDuplicate: false }],
         primaryCustomer: { id: 'cust1', name: '山田太郎', score: 100, matchType: 'exact', isDuplicate: false },
+        officeCandidates: [{ id: 'off1', name: '株式会社テストケア', score: 100, matchType: 'exact', isDuplicate: false }],
+        primaryOffice: { id: 'off1', name: '株式会社テストケア', score: 100, matchType: 'exact', isDuplicate: false },
         officeName: 'テストケア',
         officeScore: 100,
         date: null,
@@ -331,6 +390,8 @@ describe('generateSegments', () => {
         documentTypeScore: 90,
         customerCandidates: [{ id: 'cust2', name: '鈴木花子', score: 95, matchType: 'exact', isDuplicate: false }],
         primaryCustomer: { id: 'cust2', name: '鈴木花子', score: 95, matchType: 'exact', isDuplicate: false },
+        officeCandidates: [{ id: 'off2', name: 'デイサービスさくら', score: 100, matchType: 'exact', isDuplicate: false }],
+        primaryOffice: { id: 'off2', name: 'デイサービスさくら', score: 100, matchType: 'exact', isDuplicate: false },
         officeName: 'デイサービスさくら',
         officeScore: 100,
         date: null,
@@ -356,13 +417,21 @@ describe('generateSegments', () => {
     expect(segments[0]!.startPage).to.equal(1);
     expect(segments[0]!.endPage).to.equal(2);
     expect(segments[0]!.customerName).to.equal('山田太郎');
+    expect(segments[0]!.customerId).to.equal('cust1');
     expect(segments[0]!.documentType).to.equal('介護保険被保険者証');
+    expect(segments[0]!.officeName).to.equal('株式会社テストケア');
+    expect(segments[0]!.officeId).to.equal('off1');
+    expect(segments[0]!.officeCandidates.length).to.be.greaterThan(0);
 
     // 2番目のセグメント
     expect(segments[1]!.startPage).to.equal(3);
     expect(segments[1]!.endPage).to.equal(3);
     expect(segments[1]!.customerName).to.equal('鈴木花子');
+    expect(segments[1]!.customerId).to.equal('cust2');
     expect(segments[1]!.documentType).to.equal('請求書');
+    expect(segments[1]!.officeName).to.equal('デイサービスさくら');
+    expect(segments[1]!.officeId).to.equal('off2');
+    expect(segments[1]!.officeCandidates.length).to.be.greaterThan(0);
   });
 
   it('分割なしの場合は1セグメント', () => {
@@ -373,6 +442,8 @@ describe('generateSegments', () => {
         documentTypeScore: 100,
         customerCandidates: [{ id: 'cust1', name: '山田太郎', score: 100, matchType: 'exact', isDuplicate: false }],
         primaryCustomer: { id: 'cust1', name: '山田太郎', score: 100, matchType: 'exact', isDuplicate: false },
+        officeCandidates: [],
+        primaryOffice: null,
         officeName: null,
         officeScore: 0,
         date: null,
@@ -384,6 +455,8 @@ describe('generateSegments', () => {
         documentTypeScore: 100,
         customerCandidates: [{ id: 'cust1', name: '山田太郎', score: 100, matchType: 'exact', isDuplicate: false }],
         primaryCustomer: { id: 'cust1', name: '山田太郎', score: 100, matchType: 'exact', isDuplicate: false },
+        officeCandidates: [],
+        primaryOffice: null,
         officeName: null,
         officeScore: 0,
         date: null,
@@ -397,6 +470,88 @@ describe('generateSegments', () => {
     expect(segments[0]!.startPage).to.equal(1);
     expect(segments[0]!.endPage).to.equal(2);
     expect(segments[0]!.pageCount).to.equal(2);
+  });
+
+  it('事業所候補と顧客候補が正しく集約される', () => {
+    const pageAnalysis: PageAnalysisResult[] = [
+      {
+        pageNumber: 1,
+        documentType: '請求書',
+        documentTypeScore: 100,
+        customerCandidates: [
+          { id: 'cust1', name: '山田太郎', score: 100, matchType: 'exact', isDuplicate: false },
+          { id: 'cust2', name: '鈴木花子', score: 80, matchType: 'fuzzy', isDuplicate: false },
+        ],
+        primaryCustomer: { id: 'cust1', name: '山田太郎', score: 100, matchType: 'exact', isDuplicate: false },
+        officeCandidates: [
+          { id: 'off1', name: '株式会社テストケア', score: 95, matchType: 'exact', isDuplicate: false },
+          { id: 'off2', name: 'デイサービスさくら', score: 75, matchType: 'fuzzy', isDuplicate: false },
+        ],
+        primaryOffice: { id: 'off1', name: '株式会社テストケア', score: 95, matchType: 'exact', isDuplicate: false },
+        officeName: '株式会社テストケア',
+        officeScore: 95,
+        date: null,
+        changes: [],
+      },
+      {
+        pageNumber: 2,
+        documentType: '請求書',
+        documentTypeScore: 100,
+        customerCandidates: [
+          { id: 'cust1', name: '山田太郎', score: 90, matchType: 'exact', isDuplicate: false },
+        ],
+        primaryCustomer: { id: 'cust1', name: '山田太郎', score: 90, matchType: 'exact', isDuplicate: false },
+        officeCandidates: [
+          { id: 'off1', name: '株式会社テストケア', score: 100, matchType: 'exact', isDuplicate: false },
+        ],
+        primaryOffice: { id: 'off1', name: '株式会社テストケア', score: 100, matchType: 'exact', isDuplicate: false },
+        officeName: '株式会社テストケア',
+        officeScore: 100,
+        date: null,
+        changes: [],
+      },
+    ];
+
+    const segments = generateSegments(pageAnalysis, []);
+
+    expect(segments.length).to.equal(1);
+    // 顧客候補が集約されている
+    expect(segments[0]!.customerCandidates.length).to.equal(2);
+    expect(segments[0]!.customerCandidates[0]!.name).to.equal('山田太郎');
+    expect(segments[0]!.customerCandidates[0]!.score).to.equal(100); // 最高スコアが採用される
+    // 事業所候補が集約されている
+    expect(segments[0]!.officeCandidates.length).to.equal(2);
+    expect(segments[0]!.officeCandidates[0]!.name).to.equal('株式会社テストケア');
+    expect(segments[0]!.officeCandidates[0]!.score).to.equal(100); // 最高スコアが採用される
+    // officeIdが設定されている
+    expect(segments[0]!.officeId).to.equal('off1');
+  });
+
+  it('同姓同名の顧客でneedsManualCustomerSelectionが設定される', () => {
+    const pageAnalysis: PageAnalysisResult[] = [
+      {
+        pageNumber: 1,
+        documentType: '請求書',
+        documentTypeScore: 100,
+        customerCandidates: [
+          { id: 'cust3', name: '田中一郎', score: 100, matchType: 'exact', isDuplicate: true, careManagerName: '佐藤一郎' },
+        ],
+        primaryCustomer: { id: 'cust3', name: '田中一郎', score: 100, matchType: 'exact', isDuplicate: true, careManagerName: '佐藤一郎' },
+        officeCandidates: [],
+        primaryOffice: null,
+        officeName: null,
+        officeScore: 0,
+        date: null,
+        changes: [],
+      },
+    ];
+
+    const segments = generateSegments(pageAnalysis, []);
+
+    expect(segments.length).to.equal(1);
+    expect(segments[0]!.needsManualCustomerSelection).to.be.true;
+    expect(segments[0]!.isDuplicateCustomer).to.be.true;
+    expect(segments[0]!.careManagerName).to.equal('佐藤一郎');
   });
 });
 
