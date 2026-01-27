@@ -137,6 +137,8 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
   // エイリアス登録
   const { addAlias, isAdding: isAddingAlias } = useMasterAlias()
   const [rememberDocTypeNotation, setRememberDocTypeNotation] = useState(false)
+  const [rememberCustomerNotation, setRememberCustomerNotation] = useState(false)
+  const [rememberOfficeNotation, setRememberOfficeNotation] = useState(false)
 
   // マスターデータをMasterSelectField用に変換
   const customerItems = (customers || []).map(c => ({
@@ -156,6 +158,34 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
 
   // 編集保存成功時
   const handleSave = async () => {
+    // 顧客エイリアス登録（チェックが入っている場合）
+    if (rememberCustomerNotation && document && editedFields.customerName) {
+      const originalCustomer = document.customerName || ''
+      const newCustomerName = editedFields.customerName
+      const selectedCustomer = customers?.find(c => c.name === newCustomerName)
+      if (selectedCustomer && originalCustomer !== newCustomerName) {
+        try {
+          await addAlias('customer', selectedCustomer.id, originalCustomer)
+        } catch (err) {
+          console.error('Failed to add customer alias:', err)
+        }
+      }
+    }
+
+    // 事業所エイリアス登録（チェックが入っている場合）
+    if (rememberOfficeNotation && document && editedFields.officeName) {
+      const originalOffice = document.officeName || ''
+      const newOfficeName = editedFields.officeName
+      const selectedOffice = offices?.find(o => o.name === newOfficeName)
+      if (selectedOffice && originalOffice !== newOfficeName) {
+        try {
+          await addAlias('office', selectedOffice.id, originalOffice)
+        } catch (err) {
+          console.error('Failed to add office alias:', err)
+        }
+      }
+    }
+
     // 書類種別エイリアス登録（チェックが入っている場合）
     if (rememberDocTypeNotation && document && editedFields.documentType) {
       const originalDocType = document.documentType || ''
@@ -174,6 +204,8 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
     const success = await saveChanges()
     if (success) {
       setRememberDocTypeNotation(false)
+      setRememberCustomerNotation(false)
+      setRememberOfficeNotation(false)
       refetch()
     }
   }
@@ -421,6 +453,35 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                             items={customerItems}
                             onChange={(v) => updateField('customerName', v)}
                           />
+                          {/* 顧客名エイリアス学習オプション */}
+                          {editedFields.customerName &&
+                           document.customerName &&
+                           editedFields.customerName !== document.customerName &&
+                           document.customerName !== '不明顧客' &&
+                           document.customerName !== '未判定' && (
+                            <div className="mt-2 rounded bg-blue-50 p-2 border border-blue-200">
+                              <div className="flex items-start gap-2">
+                                <Checkbox
+                                  id="remember-customer-notation"
+                                  checked={rememberCustomerNotation}
+                                  onCheckedChange={(checked) => setRememberCustomerNotation(checked === true)}
+                                  className="mt-0.5"
+                                />
+                                <div className="flex-1">
+                                  <label
+                                    htmlFor="remember-customer-notation"
+                                    className="text-xs font-medium cursor-pointer flex items-center gap-1"
+                                  >
+                                    <BookMarked className="h-3 w-3 text-blue-600" />
+                                    この表記を記憶する
+                                  </label>
+                                  <p className="text-xs text-muted-foreground mt-0.5">
+                                    「{document.customerName}」を「{editedFields.customerName}」の許容表記として登録
+                                  </p>
+                                </div>
+                              </div>
+                            </div>
+                          )}
                         </div>
                       ) : (
                         <div className="flex items-center gap-2">
@@ -447,6 +508,34 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                             items={officeItems}
                             onChange={(v) => updateField('officeName', v)}
                           />
+                          {/* 事業所エイリアス学習オプション */}
+                          {editedFields.officeName &&
+                           document.officeName &&
+                           editedFields.officeName !== document.officeName &&
+                           document.officeName !== '未判定' && (
+                            <div className="mt-2 rounded bg-blue-50 p-2 border border-blue-200">
+                              <div className="flex items-start gap-2">
+                                <Checkbox
+                                  id="remember-office-notation"
+                                  checked={rememberOfficeNotation}
+                                  onCheckedChange={(checked) => setRememberOfficeNotation(checked === true)}
+                                  className="mt-0.5"
+                                />
+                                <div className="flex-1">
+                                  <label
+                                    htmlFor="remember-office-notation"
+                                    className="text-xs font-medium cursor-pointer flex items-center gap-1"
+                                  >
+                                    <BookMarked className="h-3 w-3 text-blue-600" />
+                                    この表記を記憶する
+                                  </label>
+                                  <p className="text-xs text-muted-foreground mt-0.5">
+                                    「{document.officeName}」を「{editedFields.officeName}」の許容表記として登録
+                                  </p>
+                                </div>
+                              </div>
+                            </div>
+                          )}
                         </div>
                       ) : (
                         <div className="flex items-center gap-2">
