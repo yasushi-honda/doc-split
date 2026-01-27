@@ -359,6 +359,29 @@ async function processDocument(
       datePattern: dateResult.pattern,
       dateSource: dateResult.source,
     },
+    // Phase 9: OCR抽出スナップショット（正解フィードバック用）
+    ocrExtraction: {
+      version: MODEL_ID,  // "gemini-2.5-flash"
+      extractedAt: admin.firestore.FieldValue.serverTimestamp(),
+      customer: {
+        suggestedValue: customerResult.bestMatch?.name || '不明顧客',
+        suggestedId: customerResult.bestMatch?.id || null,
+        confidence: customerResult.bestMatch?.score || 0,
+        matchType: customerResult.bestMatch?.matchType || 'none',
+      },
+      office: {
+        suggestedValue: officeResult.bestMatch?.name || '未判定',
+        suggestedId: officeResult.bestMatch?.id || null,
+        confidence: officeResult.bestMatch?.score || 0,
+        matchType: officeResult.bestMatch?.matchType || 'none',
+      },
+      documentType: {
+        suggestedValue: documentTypeResult.documentType || '未判定',
+        suggestedId: null,  // 書類種別はID不要
+        confidence: documentTypeResult.score,
+        matchType: documentTypeResult.matchType,
+      },
+    },
   });
 
   console.log(`Document ${docId} processed: ${documentTypeResult.documentType}, ${customerResult.bestMatch?.name || '不明'}`);
