@@ -62,6 +62,30 @@ export interface Document {
   officeKey?: string;         // officeName正規化版
   documentTypeKey?: string;   // documentType正規化版
   careManagerKey?: string;    // careManager正規化版
+
+  // Phase 9: OCR抽出スナップショット（正解フィードバック用）
+  ocrExtraction?: OcrExtraction;
+}
+
+// ============================================
+// Phase 9: OCR抽出スナップショット
+// ============================================
+
+/** OCRフィールド単位の抽出情報 */
+export interface OcrFieldExtraction {
+  suggestedValue: string;      // OCRが提案した値
+  suggestedId?: string | null; // マッチしたマスターID（あれば）
+  confidence: number;          // 信頼度スコア (0-100)
+  matchType: string;           // マッチタイプ (exact/partial/fuzzy/none)
+}
+
+/** OCR抽出スナップショット（正解フィードバック用） */
+export interface OcrExtraction {
+  version: string;             // OCRモデルバージョン (例: "gemini-2.5-flash")
+  extractedAt: Timestamp;      // 抽出日時
+  customer?: OcrFieldExtraction;
+  office?: OcrFieldExtraction;
+  documentType?: OcrFieldExtraction;
 }
 
 // ============================================
