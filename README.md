@@ -101,6 +101,7 @@ npm run test:rules
 | Phase 5 | ✅ 完了 | テスト・本番デプロイ |
 | Phase 6 | ✅ 完了 | ビジネスロジック移行 |
 | Phase 7 | ✅ 完了 | 処理履歴・同姓同名解決 |
+| Phase 8 | ✅ 完了 | グループ化ビュー・検索機能 |
 
 **本番URL**: https://doc-split-dev.web.app
 

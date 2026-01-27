@@ -1,5 +1,7 @@
 # 同名/同姓同名対応設計
 
+> **Note**: これはGitHub Pages用の簡略版です。開発時は [docs/context/duplicate-name-handling.md](context/duplicate-name-handling.md) を参照してください。
+
 ## 概要
 
 DocSplitでは、マスターデータ（顧客・事業所）において同じ名前のエントリが複数存在する場合があります。OCR処理で抽出した名前をマスターデータと照合する際、同名/同姓同名を適切に処理する必要があります。

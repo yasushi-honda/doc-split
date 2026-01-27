@@ -1,5 +1,7 @@
 # セットアップ手順
 
+> **Note**: これはGitHub Pages用の簡略版です。詳細は [docs/operation/setup-guide.md](operation/setup-guide.md) を参照してください。
+
 ## 前提条件
 
 - GCPアカウント（請求アカウント設定済み）

@@ -1,5 +1,7 @@
 # データモデル
 
+> **Note**: これはGitHub Pages用の簡略版です。開発時は [docs/context/data-model.md](context/data-model.md) を参照してください。
+
 ## Firestore コレクション構成
 
 ```mermaid
