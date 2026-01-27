@@ -253,6 +253,9 @@ const db = getFirestore();
 const auth = getAuth();
 
 async function main() {
+    // 許可ドメインを管理者メールアドレスから抽出
+    const adminDomain = '$ADMIN_EMAIL'.split('@')[1];
+
     // アプリ設定を投入（ラベルは空で初期化、管理者が設定画面で追加）
     await db.doc('settings/app').set({
         targetLabels: [],
@@ -263,6 +266,14 @@ async function main() {
         updatedAt: new Date()
     });
     console.log('✓ settings/app を作成');
+
+    // 認証設定（許可ドメインリスト）
+    await db.doc('settings/auth').set({
+        allowedDomains: [adminDomain],
+        createdAt: new Date(),
+        updatedAt: new Date()
+    });
+    console.log('✓ settings/auth を作成 (許可ドメイン: ' + adminDomain + ')');
 
     // Gmail認証設定（Service Account方式 - Google Workspace向け）
     await db.doc('settings/gmail').set({

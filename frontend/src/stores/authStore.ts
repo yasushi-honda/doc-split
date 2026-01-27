@@ -5,7 +5,7 @@ import {
   signOut as firebaseSignOut,
   onAuthStateChanged,
 } from 'firebase/auth'
-import { doc, getDoc } from 'firebase/firestore'
+import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore'
 import { auth, db, googleProvider } from '@/lib/firebase'
 import type { User } from '@shared/types'
 
@@ -17,6 +17,11 @@ interface AuthState {
   signIn: () => Promise<void>
   signOut: () => Promise<void>
   initialize: () => () => void
+}
+
+// メールアドレスからドメインを抽出
+function extractDomain(email: string): string {
+  return email.split('@')[1]?.toLowerCase() || ''
 }
 
 export const useAuthStore = create<AuthState>((set) => ({
@@ -47,10 +52,14 @@ export const useAuthStore = create<AuthState>((set) => ({
   initialize: () => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
-        // ホワイトリストチェック
+        const userEmail = firebaseUser.email || ''
+        const userDomain = extractDomain(userEmail)
+
+        // 1. usersコレクションをチェック（既存ユーザー）
         const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid))
 
         if (userDoc.exists()) {
+          // 既存ユーザー → そのままログイン
           const userProfile = userDoc.data() as User
           set({
             user: firebaseUser,
@@ -58,12 +67,45 @@ export const useAuthStore = create<AuthState>((set) => ({
             isAdmin: userProfile.role === 'admin',
             isLoading: false,
           })
-        } else {
-          // ホワイトリストに未登録
-          console.warn('User not whitelisted:', firebaseUser.email)
-          await firebaseSignOut(auth)
-          set({ user: null, userProfile: null, isAdmin: false, isLoading: false })
+          return
         }
+
+        // 2. 許可ドメインをチェック
+        const authSettingsDoc = await getDoc(doc(db, 'settings', 'auth'))
+        const allowedDomains: string[] = authSettingsDoc.exists()
+          ? (authSettingsDoc.data()?.allowedDomains || [])
+          : []
+
+        if (allowedDomains.length > 0 && allowedDomains.includes(userDomain)) {
+          // 許可ドメイン → 自動登録
+          const newUserProfile: User = {
+            email: userEmail,
+            name: firebaseUser.displayName || userEmail.split('@')[0],
+            role: 'user',
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          }
+
+          await setDoc(doc(db, 'users', firebaseUser.uid), {
+            ...newUserProfile,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          })
+
+          console.log('User auto-registered via domain allowlist:', userEmail)
+          set({
+            user: firebaseUser,
+            userProfile: newUserProfile,
+            isAdmin: false,
+            isLoading: false,
+          })
+          return
+        }
+
+        // 3. どちらにも該当しない → 拒否
+        console.warn('User not authorized:', userEmail)
+        await firebaseSignOut(auth)
+        set({ user: null, userProfile: null, isAdmin: false, isLoading: false })
       } else {
         set({ user: null, userProfile: null, isAdmin: false, isLoading: false })
       }
