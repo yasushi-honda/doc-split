@@ -788,6 +788,68 @@ export function extractOfficeCandidates(
 }
 
 /**
+ * ページごとの事業所候補を集約
+ *
+ * 複数ページからの候補を統合し、重複を除去
+ * aggregateCustomerCandidatesと同じパターン
+ *
+ * @param pageResults ページごとの抽出結果
+ */
+export function aggregateOfficeCandidates(
+  pageResults: Array<{ pageNumber: number; result: OfficeExtractionResultWithCandidates }>
+): OfficeExtractionResultWithCandidates {
+  const aggregated = new Map<string, OfficeCandidate>();
+
+  for (const { pageNumber, result } of pageResults) {
+    for (const candidate of result.candidates) {
+      const existing = aggregated.get(candidate.id);
+
+      if (existing) {
+        // 既存候補がある場合、スコアを比較して更新
+        if (candidate.score > existing.score) {
+          existing.score = candidate.score;
+          existing.matchType = candidate.matchType;
+        }
+        // ページ番号を追加
+        if (existing.pageNumbers && !existing.pageNumbers.includes(pageNumber)) {
+          existing.pageNumbers.push(pageNumber);
+        }
+      } else {
+        // 新規候補
+        aggregated.set(candidate.id, {
+          ...candidate,
+          pageNumbers: [pageNumber],
+        });
+      }
+    }
+  }
+
+  // スコア順にソート
+  const candidates = Array.from(aggregated.values()).sort((a, b) => b.score - a.score);
+  const limitedCandidates = candidates.slice(0, MAX_CANDIDATES);
+
+  const bestMatch = limitedCandidates.length > 0 ? limitedCandidates[0]! : null;
+  const hasMultipleCandidates = limitedCandidates.length > 1;
+
+  let needsManualSelection = false;
+  if (bestMatch?.isDuplicate) {
+    needsManualSelection = true;
+  } else if (hasMultipleCandidates && limitedCandidates[1]) {
+    const scoreDiff = bestMatch!.score - limitedCandidates[1].score;
+    if (scoreDiff <= 10) {
+      needsManualSelection = true;
+    }
+  }
+
+  return {
+    bestMatch,
+    candidates: limitedCandidates,
+    hasMultipleCandidates,
+    needsManualSelection,
+  };
+}
+
+/**
  * 日付を抽出（強化版）
  *
  * Phase 6Aで実装したtextNormalizerを活用
@@ -884,7 +946,7 @@ export interface CustomerEntry {
  */
 export function ensureCustomerEntry(
   extractionResult: CustomerExtractionResult,
-  documentId: string
+  _documentId: string
 ): CustomerEntry | null {
   const { bestMatch } = extractionResult;
 

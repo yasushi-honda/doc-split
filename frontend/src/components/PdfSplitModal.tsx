@@ -147,13 +147,43 @@ export function PdfSplitModal({
 
   // 分割実行
   const handleSplit = async () => {
-    const segmentsData = segments.map((segment) => ({
-      startPage: segment.startPage,
-      endPage: segment.endPage,
-      documentType: segment.documentType,
-      customerName: segment.customerName,
-      officeName: segment.officeName,
-    }))
+    const segmentsData = segments.map((segment) => {
+      // マスターデータからIDを解決
+      const customerMaster = customerMasters?.find(
+        (c) => c.name === segment.customerName
+      )
+      const officeMaster = officeMasters?.find(
+        (o) => o.name === segment.officeName
+      )
+
+      return {
+        startPage: segment.startPage,
+        endPage: segment.endPage,
+        documentType: segment.documentType,
+        customerName: segment.customerName,
+        customerId: segment.customerId || customerMaster?.id || null,
+        officeName: segment.officeName,
+        officeId: segment.officeId || officeMaster?.id || null,
+        // 候補情報（既存のセグメント情報があれば引き継ぐ）
+        customerCandidates: segment.customerCandidates || (customerMaster ? [{
+          id: customerMaster.id,
+          name: customerMaster.name,
+          score: 100,
+          isDuplicate: customerMaster.isDuplicate || false,
+          careManagerName: customerMaster.careManagerName,
+        }] : []),
+        officeCandidates: segment.officeCandidates || (officeMaster ? [{
+          id: officeMaster.id,
+          name: officeMaster.name,
+          score: 100,
+          isDuplicate: officeMaster.isDuplicate || false,
+        }] : []),
+        needsManualCustomerSelection: segment.needsManualCustomerSelection || false,
+        needsManualOfficeSelection: segment.needsManualOfficeSelection || false,
+        isDuplicateCustomer: segment.isDuplicateCustomer || customerMaster?.isDuplicate || false,
+        careManagerName: segment.careManagerName || customerMaster?.careManagerName || null,
+      }
+    })
 
     await splitPdf.mutateAsync({
       documentId: document.id,

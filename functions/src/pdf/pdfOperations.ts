@@ -81,17 +81,22 @@ export const detectSplitPoints = onCall(
           name: d.data().name as string,
           category: d.data().category as string | undefined,
           keywords: d.data().keywords as string[] | undefined,
+          aliases: d.data().aliases as string[] | undefined,
         })) as DocumentMaster[],
         customers: customerMasters.docs.map((d) => ({
           id: d.id,
           name: d.data().name as string,
           furigana: d.data().furigana as string | undefined,
           isDuplicate: d.data().isDuplicate as boolean | undefined,
+          aliases: d.data().aliases as string[] | undefined,
+          careManagerName: d.data().careManagerName as string | undefined,
         })) as CustomerMaster[],
         offices: officeMasters.docs.map((d) => ({
           id: d.id,
           name: d.data().name as string,
           shortName: d.data().shortName as string | undefined,
+          isDuplicate: d.data().isDuplicate as boolean | undefined,
+          aliases: d.data().aliases as string[] | undefined,
         })) as OfficeMaster[],
       };
 
@@ -192,16 +197,43 @@ export const detectSplitPoints = onCall(
 // PDF分割実行
 // ============================================
 
+interface SplitSegment {
+  startPage: number;
+  endPage: number;
+  documentType: string;
+  customerName: string;
+  customerId?: string | null;
+  officeName: string;
+  officeId?: string | null;
+  /** 顧客候補リスト */
+  customerCandidates?: Array<{
+    id: string;
+    name: string;
+    score: number;
+    isDuplicate: boolean;
+    careManagerName?: string;
+  }>;
+  /** 事業所候補リスト */
+  officeCandidates?: Array<{
+    id: string;
+    name: string;
+    score: number;
+    isDuplicate: boolean;
+  }>;
+  /** 手動選択が必要か（顧客） */
+  needsManualCustomerSelection?: boolean;
+  /** 手動選択が必要か（事業所） */
+  needsManualOfficeSelection?: boolean;
+  /** 同姓同名の顧客か */
+  isDuplicateCustomer?: boolean;
+  /** 担当ケアマネ名 */
+  careManagerName?: string | null;
+}
+
 interface SplitRequest {
   documentId: string;
   splitPoints: number[]; // 分割位置（ページ番号の配列）
-  segments: Array<{
-    startPage: number;
-    endPage: number;
-    documentType: string;
-    customerName: string;
-    officeName: string;
-  }>;
+  segments: SplitSegment[];
 }
 
 /**
@@ -244,8 +276,21 @@ export const splitPdf = onCall(
 
     // 各セグメントを分割
     for (const segment of segments) {
-      const { startPage, endPage, documentType, customerName, officeName } =
-        segment;
+      const {
+        startPage,
+        endPage,
+        documentType,
+        customerName,
+        customerId,
+        officeName,
+        officeId,
+        customerCandidates,
+        officeCandidates,
+        // needsManualCustomerSelection, needsManualOfficeSelectionは
+        // 分割UIで選択済みのため常にfalseになる
+        isDuplicateCustomer,
+        careManagerName,
+      } = segment;
 
       // 新しいPDFを作成
       const newPdf = await PDFDocument.create();
@@ -276,7 +321,46 @@ export const splitPdf = onCall(
         metadata: { contentType: 'application/pdf' },
       });
 
+      // 分割後のページ結果を抽出
+      const segmentPageResults = (docData.pageResults || []).filter(
+        (p: PageOcrResult) => p.pageNumber >= startPage && p.pageNumber <= endPage
+      );
+
+      // ocrExtractionスナップショットを構築
+      // 元ドキュメントのocrExtractionがあれば継承、なければsplit-legacyとして生成
+      const parentOcrExtraction = docData.ocrExtraction;
+      const ocrExtraction = parentOcrExtraction
+        ? {
+            ...parentOcrExtraction,
+            splitFrom: {
+              documentId,
+              pages: { start: startPage, end: endPage },
+            },
+          }
+        : {
+            version: 'split-legacy',
+            extractedAt: admin.firestore.FieldValue.serverTimestamp(),
+            customer: {
+              name: customerName,
+              id: customerId || null,
+              candidates: customerCandidates || [],
+            },
+            office: {
+              name: officeName,
+              id: officeId || null,
+              candidates: officeCandidates || [],
+            },
+            documentType: {
+              name: documentType,
+            },
+            splitFrom: {
+              documentId,
+              pages: { start: startPage, end: endPage },
+            },
+          };
+
       // 新しいドキュメントをFirestoreに作成
+      // ユーザーが分割UIで選択した値は常にconfirmed=true
       const newDocRef = db.collection('documents').doc();
       await newDocRef.set({
         id: newDocRef.id,
@@ -289,12 +373,36 @@ export const splitPdf = onCall(
           startPage,
           endPage
         ),
+        // 書類種別
         documentType,
+        // 顧客関連
         customerName,
+        customerId: customerId || null,
+        customerCandidates: customerCandidates || [],
+        customerConfirmed: true, // 分割UIで選択したため確定済み
+        needsManualCustomerSelection: false, // 分割UIで確定したため手動選択不要
+        isDuplicateCustomer: isDuplicateCustomer || false,
+        careManagerName: careManagerName || null,
+        confirmedBy: request.auth?.uid || null,
+        confirmedAt: admin.firestore.FieldValue.serverTimestamp(),
+        // 事業所関連
         officeName,
+        officeId: officeId || null,
+        officeCandidates: officeCandidates || [],
+        officeConfirmed: true, // 分割UIで選択したため確定済み
+        officeConfirmedBy: request.auth?.uid || null,
+        officeConfirmedAt: admin.firestore.FieldValue.serverTimestamp(),
+        // OCR抽出スナップショット
+        ocrExtraction,
+        // ページ結果（再OCR不要にするため保存）
+        pageResults: segmentPageResults.map((p: PageOcrResult, index: number) => ({
+          ...p,
+          pageNumber: index + 1, // 分割後の新しいページ番号
+          originalPageNumber: p.pageNumber, // 元のページ番号
+        })),
+        // ファイル情報
         fileUrl: `gs://${bucket.name}/${newFilePath}`,
         fileDate: docData.fileDate,
-        isDuplicateCustomer: false,
         totalPages: endPage - startPage + 1,
         targetPageNumber: 1,
         status: 'processed',

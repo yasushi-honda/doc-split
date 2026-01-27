@@ -14,14 +14,17 @@
 import {
   extractCustomerCandidates,
   extractDocumentTypeEnhanced,
-  extractOfficeNameEnhanced,
+  extractOfficeCandidates,
   extractDateEnhanced,
   aggregateCustomerCandidates,
+  aggregateOfficeCandidates,
   CustomerMaster,
   DocumentMaster,
   OfficeMaster,
   CustomerCandidate,
+  OfficeCandidate,
   CustomerExtractionResult,
+  OfficeExtractionResultWithCandidates,
 } from './extractors';
 import {
   generateOptimalFileName,
@@ -49,7 +52,10 @@ export interface PageAnalysisResult {
   /** 検出された顧客候補 */
   customerCandidates: CustomerCandidate[];
   primaryCustomer: CustomerCandidate | null;
-  /** 検出された事業所 */
+  /** 検出された事業所候補 */
+  officeCandidates: OfficeCandidate[];
+  primaryOffice: OfficeCandidate | null;
+  /** 検出された事業所（後方互換用） */
   officeName: string | null;
   officeScore: number;
   /** 検出された日付 */
@@ -100,9 +106,20 @@ export interface PdfSegment {
   customerName: string | null;
   customerId: string | null;
   officeName: string | null;
+  officeId: string | null;
   date: string | null;
   /** 顧客候補（複数） */
   customerCandidates: CustomerCandidate[];
+  /** 事業所候補（複数） */
+  officeCandidates: OfficeCandidate[];
+  /** 手動選択が必要か（顧客） */
+  needsManualCustomerSelection: boolean;
+  /** 手動選択が必要か（事業所） */
+  needsManualOfficeSelection: boolean;
+  /** 同姓同名の顧客か */
+  isDuplicateCustomer: boolean;
+  /** 担当ケアマネ名 */
+  careManagerName: string | null;
   /** 推奨ファイル名 */
   suggestedFileName: FileNameResult;
   /** 信頼度 */
@@ -152,8 +169,10 @@ export function analyzePageOcr(
     pageNumber,
   });
 
-  // 事業所抽出
-  const officeResult = extractOfficeNameEnhanced(text, masters.offices);
+  // 事業所候補抽出（複数候補対応）
+  const officeResult = extractOfficeCandidates(text, masters.offices, {
+    pageNumber,
+  });
 
   // 日付抽出
   const dateResult = extractDateEnhanced(text);
@@ -164,8 +183,10 @@ export function analyzePageOcr(
     documentTypeScore: docResult.score,
     customerCandidates: customerResult.candidates,
     primaryCustomer: customerResult.bestMatch,
-    officeName: officeResult.officeName,
-    officeScore: officeResult.score,
+    officeCandidates: officeResult.candidates,
+    primaryOffice: officeResult.bestMatch,
+    officeName: officeResult.bestMatch?.name || null,
+    officeScore: officeResult.bestMatch?.score || 0,
     date: dateResult.formattedDate,
     changes: [], // 後で計算
   };
@@ -311,7 +332,6 @@ export function generateSegments(
 
     // セグメント内で最も信頼度の高い情報を採用
     const bestDocType = findBestValue(segmentPages, 'documentType', 'documentTypeScore');
-    const bestOffice = findBestValue(segmentPages, 'officeName', 'officeScore');
 
     // 顧客候補を集約
     const customerResults: Array<{ pageNumber: number; result: CustomerExtractionResult }> =
@@ -321,11 +341,25 @@ export function generateSegments(
           bestMatch: p.primaryCustomer,
           candidates: p.customerCandidates,
           hasMultipleCandidates: p.customerCandidates.length > 1,
-          needsManualSelection: false,
+          needsManualSelection: p.primaryCustomer?.isDuplicate || false,
         },
       }));
 
     const aggregatedCustomers = aggregateCustomerCandidates(customerResults);
+
+    // 事業所候補を集約
+    const officeResults: Array<{ pageNumber: number; result: OfficeExtractionResultWithCandidates }> =
+      segmentPages.map((p) => ({
+        pageNumber: p.pageNumber,
+        result: {
+          bestMatch: p.primaryOffice,
+          candidates: p.officeCandidates,
+          hasMultipleCandidates: p.officeCandidates.length > 1,
+          needsManualSelection: p.primaryOffice?.isDuplicate || false,
+        },
+      }));
+
+    const aggregatedOffices = aggregateOfficeCandidates(officeResults);
 
     // 日付（最初に見つかったものを採用）
     const firstDate = segmentPages.find((p) => p.date)?.date || null;
@@ -339,14 +373,16 @@ export function generateSegments(
     // ファイル名を生成
     const fileNameResult = generateOptimalFileName({
       documentType: bestDocType.value || undefined,
-      officeName: bestOffice.value || undefined,
+      officeName: aggregatedOffices.bestMatch?.name || undefined,
       date: firstDate || undefined,
       customers: customerAttributes,
     });
 
     // 信頼度の計算
     const confidence = Math.round(
-      (bestDocType.score + bestOffice.score + (aggregatedCustomers.bestMatch?.score || 0)) / 3
+      (bestDocType.score +
+        (aggregatedOffices.bestMatch?.score || 0) +
+        (aggregatedCustomers.bestMatch?.score || 0)) / 3
     );
 
     segments.push({
@@ -357,9 +393,15 @@ export function generateSegments(
       documentType: bestDocType.value,
       customerName: aggregatedCustomers.bestMatch?.name || null,
       customerId: aggregatedCustomers.bestMatch?.id || null,
-      officeName: bestOffice.value,
+      officeName: aggregatedOffices.bestMatch?.name || null,
+      officeId: aggregatedOffices.bestMatch?.id || null,
       date: firstDate,
       customerCandidates: aggregatedCustomers.candidates,
+      officeCandidates: aggregatedOffices.candidates,
+      needsManualCustomerSelection: aggregatedCustomers.needsManualSelection,
+      needsManualOfficeSelection: aggregatedOffices.needsManualSelection,
+      isDuplicateCustomer: aggregatedCustomers.bestMatch?.isDuplicate || false,
+      careManagerName: aggregatedCustomers.bestMatch?.careManagerName || null,
       suggestedFileName: fileNameResult,
       confidence,
     });
