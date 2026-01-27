@@ -118,8 +118,10 @@ function generateDateTokens(date) {
   const month = String(dateObj.getMonth() + 1).padStart(2, '0');
   const day = String(dateObj.getDate()).padStart(2, '0');
 
-  // 各種形式のトークン
+  // 各種形式のトークン（検索クエリとマッチするように複数形式を生成）
   tokens.push(`${year}`);               // 2024
+  tokens.push(`${year}-${month}`);      // 2024-01（YYYY-MM形式）
+  tokens.push(`${year}-${month}-${day}`); // 2024-01-15（YYYY-MM-DD形式）
   tokens.push(`${year}${month}`);       // 202401
   tokens.push(`${year}${month}${day}`); // 20240115
   tokens.push(`${year}/${month}`);      // 2024/01
