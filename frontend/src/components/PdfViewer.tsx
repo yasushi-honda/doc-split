@@ -5,7 +5,7 @@
  * - PDFプレビュー表示
  * - ページナビゲーション
  * - ズーム（スケール値で直接管理）
- * - ページ回転（表示のみ、90度単位）
+ * - ページ回転（表示のみ + 永続保存対応）
  */
 
 import { useState, useCallback, useRef, useEffect } from 'react'
@@ -17,7 +17,16 @@ import {
   ZoomOut,
   RotateCw,
   Maximize,
+  Save,
+  Loader2,
 } from 'lucide-react'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { useRotatePdfPages } from '@/hooks/usePdfSplit'
 
 // PDF.js worker設定
 pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`
@@ -25,16 +34,21 @@ pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/b
 interface PdfViewerProps {
   fileUrl: string
   totalPages: number
+  documentId?: string
+  onRotationSaved?: () => void
 }
 
 // スケール値（パーセント表示用）
 const SCALE_OPTIONS = [50, 75, 100, 125, 150, 200]
 
-export function PdfViewer({ fileUrl, totalPages }: PdfViewerProps) {
+export function PdfViewer({ fileUrl, totalPages, documentId, onRotationSaved }: PdfViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [currentPage, setCurrentPage] = useState(1)
   const [numPages, setNumPages] = useState<number | null>(null)
   const [rotation, setRotation] = useState(0)
+
+  // 回転保存
+  const { mutate: saveRotation, isPending: isSaving } = useRotatePdfPages()
 
   // PDFページの元サイズ
   const [pageSize, setPageSize] = useState<{ width: number; height: number } | null>(null)
@@ -128,6 +142,42 @@ export function PdfViewer({ fileUrl, totalPages }: PdfViewerProps) {
   const handleRotate = () => {
     setRotation((prev) => (prev + 90) % 360)
   }
+
+  // 回転を保存（全ページ）
+  const handleSaveRotationAll = useCallback(() => {
+    if (!documentId || rotation === 0) return
+    const pages = numPages || totalPages
+    const rotations = Array.from({ length: pages }, (_, i) => ({
+      pageNumber: i + 1,
+      degrees: rotation as 90 | 180 | 270,
+    }))
+    saveRotation(
+      { documentId, rotations },
+      {
+        onSuccess: () => {
+          setRotation(0) // 保存後はリセット（PDFが回転済みになるため）
+          onRotationSaved?.()
+        },
+      }
+    )
+  }, [documentId, rotation, numPages, totalPages, saveRotation, onRotationSaved])
+
+  // 回転を保存（現在ページのみ）
+  const handleSaveRotationCurrentPage = useCallback(() => {
+    if (!documentId || rotation === 0) return
+    saveRotation(
+      {
+        documentId,
+        rotations: [{ pageNumber: currentPage, degrees: rotation as 90 | 180 | 270 }],
+      },
+      {
+        onSuccess: () => {
+          setRotation(0)
+          onRotationSaved?.()
+        },
+      }
+    )
+  }, [documentId, rotation, currentPage, saveRotation, onRotationSaved])
 
   // フィットスケールを計算（幅にフィット）
   const calculateFitScale = useCallback(() => {
@@ -249,6 +299,33 @@ export function PdfViewer({ fileUrl, totalPages }: PdfViewerProps) {
               <span className="text-xs text-gray-400">({rotation}°)</span>
             )}
           </button>
+
+          {/* 回転を保存（documentIdがある場合のみ表示） */}
+          {documentId && rotation > 0 && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  className="flex items-center gap-1 rounded bg-blue-600 px-2 py-1 text-sm text-white hover:bg-blue-700 disabled:opacity-50"
+                  disabled={isSaving}
+                >
+                  {isSaving ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Save className="h-4 w-4" />
+                  )}
+                  <span className="hidden sm:inline">保存</span>
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={handleSaveRotationAll}>
+                  全ページに適用して保存
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={handleSaveRotationCurrentPage}>
+                  このページのみ保存
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
         </div>
       </div>
 
