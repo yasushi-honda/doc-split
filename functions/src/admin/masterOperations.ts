@@ -77,6 +77,18 @@ export const addMasterAlias = onCall(
     const updatedAliases = [...currentAliases, trimmedAlias];
     console.log(`Added alias "${trimmedAlias}" to ${masterType}/${masterId}`);
 
+    // 6. 学習履歴を保存
+    const masterName = data.name as string || masterId;
+    await db.collection('aliasLearningLogs').add({
+      masterType,
+      masterId,
+      masterName,
+      alias: trimmedAlias,
+      learnedBy: request.auth.uid,
+      learnedByEmail: request.auth.token.email || '',
+      learnedAt: FieldValue.serverTimestamp(),
+    });
+
     return { success: true, aliases: updatedAliases };
   }
 );

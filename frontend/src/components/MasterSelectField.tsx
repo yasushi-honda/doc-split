@@ -22,6 +22,7 @@ import {
   PopoverTrigger,
 } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
+import { getDisplayName } from '@/utils/displayName';
 import { RegisterNewMasterModal, type MasterType, type RegisteredMasterInfo } from './RegisterNewMasterModal';
 
 // ============================================
@@ -30,10 +31,11 @@ import { RegisterNewMasterModal, type MasterType, type RegisteredMasterInfo } fr
 
 export type MasterFieldType = 'customer' | 'office' | 'documentType';
 
-interface MasterItem {
+export interface MasterItem {
   id: string;
   name: string;
   subText?: string; // フリガナ、短縮名など
+  notes?: string;   // 区別用補足情報
 }
 
 interface MasterSelectFieldProps {
@@ -105,29 +107,32 @@ export function MasterSelectField({
             <CommandList>
               <CommandEmpty>該当なし</CommandEmpty>
               <CommandGroup>
-                {items.map((item) => (
-                  <CommandItem
-                    key={item.id}
-                    value={item.name}
-                    onSelect={() => {
-                      onChange(item.name, item);
-                      setOpen(false);
-                    }}
-                  >
-                    <Check
-                      className={cn(
-                        "mr-2 h-4 w-4",
-                        value === item.name ? "opacity-100" : "opacity-0"
-                      )}
-                    />
-                    <div className="flex flex-col">
-                      <span>{item.name}</span>
-                      {item.subText && (
-                        <span className="text-xs text-muted-foreground">{item.subText}</span>
-                      )}
-                    </div>
-                  </CommandItem>
-                ))}
+                {items.map((item) => {
+                  const displayText = getDisplayName(item.name, item.notes);
+                  return (
+                    <CommandItem
+                      key={item.id}
+                      value={displayText}
+                      onSelect={() => {
+                        onChange(item.name, item);
+                        setOpen(false);
+                      }}
+                    >
+                      <Check
+                        className={cn(
+                          "mr-2 h-4 w-4",
+                          value === item.name ? "opacity-100" : "opacity-0"
+                        )}
+                      />
+                      <div className="flex flex-col">
+                        <span>{displayText}</span>
+                        {item.subText && (
+                          <span className="text-xs text-muted-foreground">{item.subText}</span>
+                        )}
+                      </div>
+                    </CommandItem>
+                  );
+                })}
               </CommandGroup>
               {canAddNew && (
                 <>

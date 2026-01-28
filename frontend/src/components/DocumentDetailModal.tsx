@@ -8,7 +8,7 @@ import { format } from 'date-fns'
 import { ja } from 'date-fns/locale'
 import { Timestamp } from 'firebase/firestore'
 import { ref, getDownloadURL } from 'firebase/storage'
-import { Download, ExternalLink, Loader2, FileText, User, Building, Building2, Calendar, Tag, AlertCircle, Scissors, UserCheck, Pencil, Save, X, BookMarked } from 'lucide-react'
+import { Download, ExternalLink, Loader2, FileText, User, Building, Calendar, Tag, AlertCircle, Scissors, Pencil, Save, X, BookMarked, History } from 'lucide-react'
 import { storage } from '@/lib/firebase'
 import {
   Dialog,
@@ -23,13 +23,12 @@ import { Input } from '@/components/ui/input'
 import { Checkbox } from '@/components/ui/checkbox'
 import { PdfViewer } from '@/components/PdfViewer'
 import { PdfSplitModal } from '@/components/PdfSplitModal'
-import { SameNameResolveModal } from '@/components/SameNameResolveModal'
-import { OfficeSameNameResolveModal } from '@/components/OfficeSameNameResolveModal'
 import { MasterSelectField } from '@/components/MasterSelectField'
 import { useDocument } from '@/hooks/useDocuments'
 import { useDocumentEdit } from '@/hooks/useDocumentEdit'
 import { useCustomers, useOffices, useDocumentTypes } from '@/hooks/useMasters'
 import { useMasterAlias } from '@/hooks/useMasterAlias'
+import { useAliasLearningHistory, useInvalidateAliasLearningHistory } from '@/hooks/useAliasLearningHistory'
 import { isCustomerConfirmed } from '@/hooks/useProcessingHistory'
 import type { DocumentStatus } from '@shared/types'
 
@@ -112,8 +111,6 @@ function EditableMetaRow({
 export function DocumentDetailModal({ documentId, open, onOpenChange }: DocumentDetailModalProps) {
   const { data: document, isLoading, isError, error, refetch } = useDocument(documentId)
   const [isSplitModalOpen, setIsSplitModalOpen] = useState(false)
-  const [isResolveModalOpen, setIsResolveModalOpen] = useState(false)
-  const [isOfficeResolveModalOpen, setIsOfficeResolveModalOpen] = useState(false)
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null)
   const [urlLoading, setUrlLoading] = useState(false)
 
@@ -140,16 +137,22 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
   const [rememberCustomerNotation, setRememberCustomerNotation] = useState(false)
   const [rememberOfficeNotation, setRememberOfficeNotation] = useState(false)
 
+  // 学習履歴
+  const { data: historyData } = useAliasLearningHistory({ pageSize: 3 })
+  const { invalidate: invalidateHistory } = useInvalidateAliasLearningHistory()
+
   // マスターデータをMasterSelectField用に変換
   const customerItems = (customers || []).map(c => ({
     id: c.id,
     name: c.name,
     subText: c.furigana,
+    notes: c.notes,
   }))
   const officeItems = (offices || []).map(o => ({
     id: o.id,
     name: o.name,
     subText: o.shortName,
+    notes: o.notes,
   }))
   const documentTypeItems = (documentTypes || []).map(d => ({
     id: d.id,
@@ -207,6 +210,10 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
       setRememberCustomerNotation(false)
       setRememberOfficeNotation(false)
       refetch()
+      // 学習履歴を更新
+      if (rememberCustomerNotation || rememberOfficeNotation || rememberDocTypeNotation) {
+        invalidateHistory()
+      }
     }
   }
 
@@ -277,18 +284,6 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
   const handleSplitSuccess = () => {
     refetch()
     setIsSplitModalOpen(false)
-  }
-
-  // 顧客解決成功時（Phase 7）
-  const handleResolveSuccess = () => {
-    refetch()
-    setIsResolveModalOpen(false)
-  }
-
-  // 事業所解決成功時（Phase 8 同名対応）
-  const handleOfficeResolveSuccess = () => {
-    refetch()
-    setIsOfficeResolveModalOpen(false)
   }
 
   // 分割可能かどうか（複数ページのPDFで、processed状態）
@@ -447,6 +442,15 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                       <p className="text-xs text-gray-500">顧客名</p>
                       {isEditing ? (
                         <div className="mt-1">
+                          {/* 編集時の警告（複数候補がある場合） */}
+                          {needsCustomerConfirmation && document.customerCandidates && document.customerCandidates.length > 1 && (
+                            <div className="mb-2 rounded bg-amber-50 px-2 py-1.5 border border-amber-200">
+                              <p className="text-xs text-amber-800">
+                                <AlertCircle className="inline h-3 w-3 mr-1" />
+                                {document.customerCandidates.length}件の候補があります。確認してください
+                              </p>
+                            </div>
+                          )}
                           <MasterSelectField
                             type="customer"
                             value={editedFields.customerName || ''}
@@ -502,6 +506,15 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                       <p className="text-xs text-gray-500">事業所</p>
                       {isEditing ? (
                         <div className="mt-1">
+                          {/* 編集時の警告（複数候補がある場合） */}
+                          {needsOfficeConfirmation && document.officeCandidates && document.officeCandidates.length > 1 && (
+                            <div className="mb-2 rounded bg-amber-50 px-2 py-1.5 border border-amber-200">
+                              <p className="text-xs text-amber-800">
+                                <AlertCircle className="inline h-3 w-3 mr-1" />
+                                {document.officeCandidates.length}件の候補があります。確認してください
+                              </p>
+                            </div>
+                          )}
                           <MasterSelectField
                             type="office"
                             value={editedFields.officeName || ''}
@@ -610,36 +623,6 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                   <MetaRow icon={FileText} label="ページ数" value={`${document.totalPages} ページ`} />
                 </div>
 
-                {/* 顧客確定ボタン（Phase 7） */}
-                {needsCustomerConfirmation && (
-                  <div className="mt-4">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="w-full bg-orange-50 border-orange-300 text-orange-700 hover:bg-orange-100"
-                      onClick={() => setIsResolveModalOpen(true)}
-                    >
-                      <UserCheck className="h-4 w-4 mr-2" />
-                      顧客を確定
-                    </Button>
-                  </div>
-                )}
-
-                {/* 事業所確定ボタン（Phase 8 同名対応） */}
-                {needsOfficeConfirmation && (
-                  <div className="mt-4">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="w-full bg-blue-50 border-blue-300 text-blue-700 hover:bg-blue-100"
-                      onClick={() => setIsOfficeResolveModalOpen(true)}
-                    >
-                      <Building2 className="h-4 w-4 mr-2" />
-                      事業所を確定
-                    </Button>
-                  </div>
-                )}
-
                 {/* 重複警告 */}
                 {document.isDuplicateCustomer && document.allCustomerCandidates && (
                   <div className="mt-4 rounded-lg bg-yellow-50 p-3">
@@ -671,6 +654,25 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                     <Badge variant="outline">{document.category}</Badge>
                   </div>
                 )}
+
+                {/* 直近の学習履歴 */}
+                {historyData && historyData.logs.length > 0 && (
+                  <div className="mt-6">
+                    <h4 className="mb-2 text-xs font-medium text-gray-500 flex items-center gap-1">
+                      <History className="h-3 w-3" />
+                      最近の学習
+                    </h4>
+                    <div className="space-y-1.5">
+                      {historyData.logs.map((log) => (
+                        <div key={log.id} className="text-xs text-gray-600 bg-gray-50 rounded px-2 py-1.5">
+                          <span className="font-medium">{log.masterName}</span>
+                          <span className="text-gray-400 mx-1">←</span>
+                          <span className="text-gray-500">「{log.alias}」</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           </>
@@ -693,26 +695,6 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
           isOpen={isSplitModalOpen}
           onClose={() => setIsSplitModalOpen(false)}
           onSuccess={handleSplitSuccess}
-        />
-      )}
-
-      {/* 顧客解決モーダル（Phase 7） */}
-      {document && (
-        <SameNameResolveModal
-          document={document}
-          isOpen={isResolveModalOpen}
-          onClose={() => setIsResolveModalOpen(false)}
-          onResolved={handleResolveSuccess}
-        />
-      )}
-
-      {/* 事業所解決モーダル（Phase 8 同名対応） */}
-      {document && (
-        <OfficeSameNameResolveModal
-          document={document}
-          isOpen={isOfficeResolveModalOpen}
-          onClose={() => setIsOfficeResolveModalOpen(false)}
-          onResolved={handleOfficeResolveSuccess}
         />
       )}
     </Dialog>

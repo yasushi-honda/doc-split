@@ -145,6 +145,7 @@ function CustomersMaster() {
   const [formFurigana, setFormFurigana] = useState('')
   const [formCareManagerName, setFormCareManagerName] = useState('')
   const [formIsDuplicate, setFormIsDuplicate] = useState(false)
+  const [formNotes, setFormNotes] = useState('')
   const [formError, setFormError] = useState<string | null>(null)
 
   const handleCsvImport = async (
@@ -188,6 +189,7 @@ function CustomersMaster() {
           furigana: formFurigana,
           careManagerName: formCareManagerName || undefined,
           isDuplicate: false,
+          notes: formNotes || undefined,
         })
         resetForm()
         setIsAddOpen(false)
@@ -209,6 +211,7 @@ function CustomersMaster() {
         careManagerName: formCareManagerName || undefined,
         isDuplicate: true,
         force: true,
+        notes: formNotes || undefined,
       })
       resetForm()
       setIsAddOpen(false)
@@ -226,6 +229,7 @@ function CustomersMaster() {
       furigana: formFurigana,
       careManagerName: formCareManagerName,
       isDuplicate: formIsDuplicate,
+      notes: formNotes || undefined,
     })
     resetForm()
     setEditingCustomer(null)
@@ -242,6 +246,7 @@ function CustomersMaster() {
     setFormFurigana(customer.furigana)
     setFormCareManagerName(customer.careManagerName || '')
     setFormIsDuplicate(customer.isDuplicate)
+    setFormNotes(customer.notes || '')
     setEditingCustomer(customer)
   }
 
@@ -250,6 +255,7 @@ function CustomersMaster() {
     setFormFurigana('')
     setFormCareManagerName('')
     setFormIsDuplicate(false)
+    setFormNotes('')
     setFormError(null)
   }
 
@@ -381,6 +387,17 @@ function CustomersMaster() {
                   placeholder="佐藤 花子"
                 />
               </div>
+              <div className="space-y-2">
+                <Label>区別用メモ（同姓同名対策）</Label>
+                <Input
+                  value={formNotes}
+                  onChange={(e) => setFormNotes(e.target.value)}
+                  placeholder="北名古屋在住"
+                />
+                <p className="text-xs text-gray-500">
+                  同姓同名の顧客を区別するための補足情報
+                </p>
+              </div>
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setIsAddOpen(false)}>
@@ -421,6 +438,17 @@ function CustomersMaster() {
                   onChange={(e) => setFormCareManagerName(e.target.value)}
                   placeholder="佐藤 花子"
                 />
+              </div>
+              <div className="space-y-2">
+                <Label>区別用メモ（同姓同名対策）</Label>
+                <Input
+                  value={formNotes}
+                  onChange={(e) => setFormNotes(e.target.value)}
+                  placeholder="北名古屋在住"
+                />
+                <p className="text-xs text-gray-500">
+                  同姓同名の顧客を区別するための補足情報。選択肢に「名前（メモ）」形式で表示されます
+                </p>
               </div>
               <div className="flex items-center justify-between">
                 <Label>同姓同名あり</Label>
@@ -871,6 +899,7 @@ function OfficesMaster() {
   // フォーム状態
   const [formName, setFormName] = useState('')
   const [formShortName, setFormShortName] = useState('')
+  const [formNotes, setFormNotes] = useState('')
   const [formError, setFormError] = useState<string | null>(null)
 
   const filteredOffices = offices?.filter(
@@ -894,6 +923,7 @@ function OfficesMaster() {
         await addOffice.mutateAsync({
           name: formName.trim(),
           shortName: formShortName.trim(),
+          notes: formNotes.trim() || undefined,
         })
         resetForm()
         setIsAddOpen(false)
@@ -912,6 +942,7 @@ function OfficesMaster() {
       await addOffice.mutateAsync({
         name: formName.trim(),
         shortName: formShortName.trim(),
+        notes: formNotes.trim() || undefined,
         force: true,
       })
       resetForm()
@@ -928,6 +959,7 @@ function OfficesMaster() {
       originalName: editingOffice.name,
       name: formName,
       shortName: formShortName,
+      notes: formNotes.trim() || undefined,
     })
     resetForm()
     setEditingOffice(null)
@@ -942,12 +974,14 @@ function OfficesMaster() {
   const openEdit = (office: OfficeMaster) => {
     setFormName(office.name)
     setFormShortName(office.shortName || '')
+    setFormNotes(office.notes || '')
     setEditingOffice(office)
   }
 
   const resetForm = () => {
     setFormName('')
     setFormShortName('')
+    setFormNotes('')
     setFormError(null)
   }
 
@@ -1078,6 +1112,17 @@ function OfficesMaster() {
                   OCRで事業所を照合する際に使用する短い名称
                 </p>
               </div>
+              <div className="space-y-2">
+                <Label>区別用メモ（同名対策）</Label>
+                <Input
+                  value={formNotes}
+                  onChange={(e) => setFormNotes(e.target.value)}
+                  placeholder="東部"
+                />
+                <p className="text-xs text-gray-500">
+                  同名の事業所を区別するための補足情報
+                </p>
+              </div>
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setIsAddOpen(false)}>
@@ -1133,6 +1178,17 @@ function OfficesMaster() {
                   onChange={(e) => setFormShortName(e.target.value)}
                   placeholder="○○介護"
                 />
+              </div>
+              <div className="space-y-2">
+                <Label>区別用メモ（同名対策）</Label>
+                <Input
+                  value={formNotes}
+                  onChange={(e) => setFormNotes(e.target.value)}
+                  placeholder="東部"
+                />
+                <p className="text-xs text-gray-500">
+                  同名の事業所を区別するための補足情報。選択肢に「名前（メモ）」形式で表示されます
+                </p>
               </div>
             </div>
             <DialogFooter>

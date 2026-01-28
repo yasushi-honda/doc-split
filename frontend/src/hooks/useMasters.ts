@@ -51,6 +51,7 @@ async function fetchCustomers(): Promise<CustomerMaster[]> {
     isDuplicate: doc.data().isDuplicate as boolean,
     furigana: doc.data().furigana as string,
     careManagerName: doc.data().careManagerName as string | undefined,
+    notes: doc.data().notes as string | undefined,
   }))
 }
 
@@ -67,6 +68,7 @@ interface AddCustomerParams {
   furigana: string
   isDuplicate?: boolean
   careManagerName?: string
+  notes?: string
   force?: boolean // 同名が存在しても強制追加
 }
 
@@ -99,6 +101,9 @@ async function addCustomer(params: AddCustomerParams): Promise<string> {
   if (params.careManagerName) {
     data.careManagerName = params.careManagerName
   }
+  if (params.notes) {
+    data.notes = params.notes
+  }
   await setDoc(docRef, data)
   return docRef.id
 }
@@ -119,6 +124,7 @@ interface UpdateCustomerParams {
   furigana: string
   isDuplicate: boolean
   careManagerName?: string
+  notes?: string
 }
 
 async function updateCustomer(params: UpdateCustomerParams): Promise<void> {
@@ -131,6 +137,10 @@ async function updateCustomer(params: UpdateCustomerParams): Promise<void> {
   // careManagerName は空文字の場合も保存（削除のため）
   if (params.careManagerName !== undefined) {
     data.careManagerName = params.careManagerName || null
+  }
+  // notes は空文字の場合も保存（削除のため）
+  if (params.notes !== undefined) {
+    data.notes = params.notes || null
   }
   await updateDoc(docRef, data)
 }
@@ -477,6 +487,7 @@ async function fetchOffices(): Promise<OfficeMaster[]> {
     name: doc.data().name as string,
     shortName: doc.data().shortName as string | undefined,
     isDuplicate: doc.data().isDuplicate ?? false,
+    notes: doc.data().notes as string | undefined,
   }))
 }
 
@@ -491,6 +502,7 @@ export function useOffices() {
 interface AddOfficeParams {
   name: string
   shortName?: string
+  notes?: string
   force?: boolean // 同名が存在しても強制追加
 }
 
@@ -506,6 +518,7 @@ async function addOffice(params: AddOfficeParams | string): Promise<string> {
   // 後方互換性: 文字列の場合は従来の動作
   const name = typeof params === 'string' ? params : params.name
   const shortName = typeof params === 'string' ? undefined : params.shortName
+  const notes = typeof params === 'string' ? undefined : params.notes
   const force = typeof params === 'string' ? false : params.force
 
   const normalizedName = normalizeName(name)
@@ -523,10 +536,14 @@ async function addOffice(params: AddOfficeParams | string): Promise<string> {
   const docRef = force
     ? doc(collection(db, COLLECTION_PATHS.offices))
     : doc(db, COLLECTION_PATHS.offices, normalizedName)
-  await setDoc(docRef, {
+  const data: Record<string, unknown> = {
     name: normalizedName,
     shortName: shortName ? normalizeName(shortName) : '',
-  })
+  }
+  if (notes) {
+    data.notes = notes
+  }
+  await setDoc(docRef, data)
   return docRef.id
 }
 
@@ -558,6 +575,7 @@ interface UpdateOfficeParams {
   originalName: string
   name: string
   shortName?: string
+  notes?: string
 }
 
 async function updateOffice(params: UpdateOfficeParams): Promise<void> {
@@ -570,10 +588,15 @@ async function updateOffice(params: UpdateOfficeParams): Promise<void> {
   }
 
   const docRef = doc(db, COLLECTION_PATHS.offices, normalizedName)
-  await setDoc(docRef, {
+  const data: Record<string, unknown> = {
     name: normalizedName,
     shortName: normalizedShortName,
-  })
+  }
+  // notes は空文字の場合も保存（削除のため）
+  if (params.notes !== undefined) {
+    data.notes = params.notes || null
+  }
+  await setDoc(docRef, data)
 }
 
 export function useUpdateOffice() {
