@@ -374,6 +374,12 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                   <PdfViewer
                     fileUrl={downloadUrl}
                     totalPages={document.totalPages}
+                    documentId={document.id}
+                    onRotationSaved={() => {
+                      // 回転保存後、URLキャッシュをクリアしてリフレッシュ
+                      setDownloadUrl(null)
+                      refetch()
+                    }}
                   />
                 ) : downloadUrl ? (
                   // PDF以外のファイル（画像など）
