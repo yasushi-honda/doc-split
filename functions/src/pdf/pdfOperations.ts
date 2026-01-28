@@ -450,6 +450,7 @@ export const rotatePdfPages = onCall(
   },
   async (request) => {
     const { documentId, rotations } = request.data as RotateRequest;
+    console.log('rotatePdfPages called:', { documentId, rotations });
 
     if (!documentId || !rotations) {
       throw new HttpsError('invalid-argument', 'Missing required fields');
@@ -465,28 +466,67 @@ export const rotatePdfPages = onCall(
 
     const docData = docSnapshot.data()!;
     const fileUrl = docData.fileUrl as string;
+    console.log('Processing file:', fileUrl);
 
     // PDFファイルをダウンロード
     const bucket = storage.bucket();
     const filePath = fileUrl.replace(`gs://${bucket.name}/`, '');
     const file = bucket.file(filePath);
     const [buffer] = await file.download();
+    console.log('Downloaded PDF, size:', buffer.length);
 
     // PDFを読み込み
     const pdfDoc = await PDFDocument.load(buffer);
+    console.log('PDF loaded, pages:', pdfDoc.getPageCount());
 
     // 各ページを回転
     for (const { pageNumber, degrees: deg } of rotations) {
+      if (pageNumber < 1 || pageNumber > pdfDoc.getPageCount()) {
+        console.error(`Invalid page number: ${pageNumber}, total pages: ${pdfDoc.getPageCount()}`);
+        continue;
+      }
       const page = pdfDoc.getPage(pageNumber - 1); // 0-indexed
       const currentRotation = page.getRotation().angle;
-      page.setRotation(degrees(currentRotation + deg));
+      const newRotation = (currentRotation + deg) % 360;
+      console.log(`Page ${pageNumber}: current rotation ${currentRotation}, adding ${deg}, new rotation ${newRotation}`);
+      page.setRotation(degrees(newRotation));
+      // 検証
+      const afterRotation = page.getRotation().angle;
+      console.log(`Page ${pageNumber}: rotation after setRotation: ${afterRotation}`);
     }
 
     // 保存
     const newPdfBytes = await pdfDoc.save();
-    await file.save(Buffer.from(newPdfBytes), {
-      metadata: { contentType: 'application/pdf' },
+    console.log('PDF saved in memory, size:', newPdfBytes.length);
+
+    // 元のファイルサイズを記録
+    const originalSize = buffer.length;
+    console.log('Original file size:', originalSize, 'New file size:', newPdfBytes.length);
+
+    // CDNキャッシュを完全に回避するため、新しいパスに保存
+    const timestamp = Date.now();
+    const newFilePath = filePath.replace(/\.pdf$/i, `_r${timestamp}.pdf`);
+    const newFile = bucket.file(newFilePath);
+
+    await newFile.save(Buffer.from(newPdfBytes), {
+      metadata: {
+        contentType: 'application/pdf',
+        cacheControl: 'no-cache, no-store, must-revalidate',
+      },
     });
+    console.log('PDF uploaded to new path:', newFilePath);
+
+    // 古いファイルを削除（エラーは無視）
+    try {
+      await file.delete();
+      console.log('Old file deleted:', filePath);
+    } catch (deleteErr) {
+      console.log('Could not delete old file (may not exist):', deleteErr);
+    }
+
+    // 新しいファイルURLを構築
+    const newFileUrl = `gs://${bucket.name}/${newFilePath}`;
+    console.log('New file URL:', newFileUrl);
 
     // 回転情報をFirestoreに記録
     const existingRotations = docData.pageRotations || [];
@@ -503,7 +543,12 @@ export const rotatePdfPages = onCall(
       }
     }
 
-    await docRef.update({ pageRotations: updatedRotations });
+    await docRef.update({
+      fileUrl: newFileUrl, // 新しいファイルURLに更新
+      pageRotations: updatedRotations,
+      rotatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    console.log('Firestore updated');
 
     return { success: true };
   }

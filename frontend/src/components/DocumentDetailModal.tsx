@@ -377,14 +377,18 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                   </div>
                 ) : downloadUrl && document.mimeType === 'application/pdf' ? (
                   <PdfViewer
+                    key={`pdf-${urlRefreshKey}`} // キャッシュ回避のため強制再マウント
                     fileUrl={downloadUrl}
                     totalPages={document.totalPages}
                     documentId={document.id}
-                    onRotationSaved={() => {
-                      // 回転保存後、URLキャッシュをクリアしてリフレッシュ
+                    onRotationSaved={async () => {
+                      // 回転保存後、URLキャッシュをクリア
                       setDownloadUrl(null)
+                      setUrlLoading(true)
+                      // まずrefetchを待ってから新しいURLを取得
+                      await refetch()
+                      // refetch完了後にURLリフレッシュキーを更新
                       setUrlRefreshKey((prev) => prev + 1)
-                      refetch()
                     }}
                   />
                 ) : downloadUrl ? (

@@ -363,7 +363,7 @@ export function PdfViewer({ fileUrl, totalPages, documentId, onRotationSaved }: 
           <Page
             pageNumber={currentPage}
             width={getDisplayWidth()}
-            rotate={rotation}
+            rotate={rotation || undefined} // 0の時はundefinedでPDFの内部回転を使用
             renderTextLayer={false}
             renderAnnotationLayer={false}
             className="shadow-xl"
