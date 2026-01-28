@@ -16,6 +16,7 @@ import {
   useGroupDocuments,
   type GroupType,
 } from '@/hooks/useDocumentGroups';
+import { isCustomerConfirmed } from '@/hooks/useProcessingHistory';
 import type { Document, DocumentStatus } from '@shared/types';
 
 // ============================================
@@ -72,6 +73,14 @@ function DocumentRow({ document, groupType, onClick }: DocumentRowProps) {
     variant: 'secondary' as const,
   };
 
+  // 要確認判定（顧客・事業所）
+  const needsCustomerConfirmation = !isCustomerConfirmed(document);
+  const needsOfficeConfirmation =
+    document.officeConfirmed === false &&
+    document.officeCandidates &&
+    document.officeCandidates.length > 0;
+  const needsReview = needsCustomerConfirmation || needsOfficeConfirmation;
+
   // グループタイプに応じて表示するサブ情報を変更
   const getSubInfo = () => {
     switch (groupType) {
@@ -104,9 +113,15 @@ function DocumentRow({ document, groupType, onClick }: DocumentRowProps) {
         <span className="text-xs text-gray-500 hidden sm:inline">
           {formatTimestamp(document.fileDate)}
         </span>
-        <Badge variant={statusConfig.variant} className="text-xs">
-          {statusConfig.label}
-        </Badge>
+        {needsReview ? (
+          <Badge variant="outline" className="bg-orange-100 text-orange-800 border-orange-300 text-xs">
+            要確認
+          </Badge>
+        ) : (
+          <Badge variant={statusConfig.variant} className="text-xs">
+            {statusConfig.label}
+          </Badge>
+        )}
         <Button
           variant="ghost"
           size="sm"
