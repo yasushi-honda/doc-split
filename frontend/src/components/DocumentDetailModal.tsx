@@ -113,6 +113,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
   const [isSplitModalOpen, setIsSplitModalOpen] = useState(false)
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null)
   const [urlLoading, setUrlLoading] = useState(false)
+  const [urlRefreshKey, setUrlRefreshKey] = useState(0) // URL強制リフレッシュ用
 
   // 編集機能
   const {
@@ -241,7 +242,9 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
 
       // 既にHTTPS URLの場合はそのまま使用
       if (document.fileUrl.startsWith('https://')) {
-        setDownloadUrl(document.fileUrl)
+        // キャッシュバスト用にタイムスタンプを追加
+        const separator = document.fileUrl.includes('?') ? '&' : '?'
+        setDownloadUrl(`${document.fileUrl}${separator}t=${urlRefreshKey}`)
         return
       }
 
@@ -256,7 +259,9 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
             const filePath = match[1]
             const fileRef = ref(storage, filePath)
             const url = await getDownloadURL(fileRef)
-            setDownloadUrl(url)
+            // キャッシュバスト用にタイムスタンプを追加
+            const separator = url.includes('?') ? '&' : '?'
+            setDownloadUrl(`${url}${separator}t=${urlRefreshKey}`)
           } else {
             console.error('Invalid gs:// URL format:', gsUrl)
             setDownloadUrl(null)
@@ -271,7 +276,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
     }
 
     convertGsUrl()
-  }, [document?.fileUrl])
+  }, [document?.fileUrl, urlRefreshKey])
 
   // ダウンロード処理
   const handleDownload = () => {
@@ -378,6 +383,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                     onRotationSaved={() => {
                       // 回転保存後、URLキャッシュをクリアしてリフレッシュ
                       setDownloadUrl(null)
+                      setUrlRefreshKey((prev) => prev + 1)
                       refetch()
                     }}
                   />
