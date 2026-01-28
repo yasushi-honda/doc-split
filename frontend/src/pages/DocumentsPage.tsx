@@ -6,7 +6,6 @@ import {
   ChevronDown,
   Loader2,
   AlertCircle,
-  Eye,
   LayoutList,
   Users,
   Building2,
@@ -29,6 +28,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { useDocuments, useDocumentStats, useDocumentMasters, type DocumentFilters } from '@/hooks/useDocuments'
+import { isCustomerConfirmed } from '@/hooks/useProcessingHistory'
 import { DocumentDetailModal } from '@/components/DocumentDetailModal'
 import { AliasLearningHistoryModal } from '@/components/AliasLearningHistoryModal'
 import { GroupList } from '@/components/views'
@@ -59,6 +59,14 @@ function formatTimestamp(timestamp: Timestamp | undefined): string {
 function DocumentRow({ document, onClick }: { document: Document; onClick: () => void }) {
   const statusConfig = STATUS_CONFIG[document.status] || { label: '不明', variant: 'secondary' as const }
 
+  // 要確認判定（顧客・事業所）
+  const needsCustomerConfirmation = !isCustomerConfirmed(document)
+  const needsOfficeConfirmation =
+    document.officeConfirmed === false &&
+    document.officeCandidates &&
+    document.officeCandidates.length > 0
+  const needsReview = needsCustomerConfirmation || needsOfficeConfirmation
+
   return (
     <tr
       className="cursor-pointer border-b border-gray-100 transition-colors hover:bg-gray-50"
@@ -77,12 +85,13 @@ function DocumentRow({ document, onClick }: { document: Document; onClick: () =>
       <td className="px-4 py-3 text-gray-700">{document.officeName || '-'}</td>
       <td className="px-4 py-3 text-gray-700">{formatTimestamp(document.fileDate)}</td>
       <td className="px-4 py-3">
-        <Badge variant={statusConfig.variant}>{statusConfig.label}</Badge>
-      </td>
-      <td className="px-4 py-3">
-        <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); onClick(); }}>
-          <Eye className="h-4 w-4" />
-        </Button>
+        {needsReview ? (
+          <Badge variant="outline" className="bg-orange-100 text-orange-800 border-orange-300">
+            要確認
+          </Badge>
+        ) : (
+          <Badge variant={statusConfig.variant}>{statusConfig.label}</Badge>
+        )}
       </td>
     </tr>
   )
@@ -308,7 +317,6 @@ export function DocumentsPage() {
                       <th className="px-4 py-3 text-left text-sm font-medium text-gray-700">事業所</th>
                       <th className="px-4 py-3 text-left text-sm font-medium text-gray-700">日付</th>
                       <th className="px-4 py-3 text-left text-sm font-medium text-gray-700">ステータス</th>
-                      <th className="px-4 py-3 text-left text-sm font-medium text-gray-700"></th>
                     </tr>
                   </thead>
                   <tbody>

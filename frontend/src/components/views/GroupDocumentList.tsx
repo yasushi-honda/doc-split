@@ -6,7 +6,7 @@
  */
 
 import { useRef, useEffect, useCallback } from 'react';
-import { FileText, Loader2, Eye, ChevronDown } from 'lucide-react';
+import { FileText, Loader2, ChevronDown } from 'lucide-react';
 import { format } from 'date-fns';
 import { ja } from 'date-fns/locale';
 import { Timestamp } from 'firebase/firestore';
@@ -122,17 +122,6 @@ function DocumentRow({ document, groupType, onClick }: DocumentRowProps) {
             {statusConfig.label}
           </Badge>
         )}
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-7 w-7 p-0"
-          onClick={(e) => {
-            e.stopPropagation();
-            onClick();
-          }}
-        >
-          <Eye className="h-3.5 w-3.5" />
-        </Button>
       </div>
     </div>
   );
