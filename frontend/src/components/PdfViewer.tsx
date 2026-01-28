@@ -151,12 +151,18 @@ export function PdfViewer({ fileUrl, totalPages, documentId, onRotationSaved }: 
       pageNumber: i + 1,
       degrees: rotation as 90 | 180 | 270,
     }))
+    console.log('Saving rotation for all pages:', { documentId, rotations })
     saveRotation(
       { documentId, rotations },
       {
         onSuccess: () => {
+          console.log('Rotation saved successfully')
           setRotation(0) // 保存後はリセット（PDFが回転済みになるため）
           onRotationSaved?.()
+        },
+        onError: (error) => {
+          console.error('Failed to save rotation:', error)
+          alert('回転の保存に失敗しました: ' + (error as Error).message)
         },
       }
     )
@@ -165,6 +171,7 @@ export function PdfViewer({ fileUrl, totalPages, documentId, onRotationSaved }: 
   // 回転を保存（現在ページのみ）
   const handleSaveRotationCurrentPage = useCallback(() => {
     if (!documentId || rotation === 0) return
+    console.log('Saving rotation for current page:', { documentId, currentPage, rotation })
     saveRotation(
       {
         documentId,
@@ -172,8 +179,13 @@ export function PdfViewer({ fileUrl, totalPages, documentId, onRotationSaved }: 
       },
       {
         onSuccess: () => {
+          console.log('Rotation saved successfully')
           setRotation(0)
           onRotationSaved?.()
+        },
+        onError: (error) => {
+          console.error('Failed to save rotation:', error)
+          alert('回転の保存に失敗しました: ' + (error as Error).message)
         },
       }
     )
@@ -317,10 +329,10 @@ export function PdfViewer({ fileUrl, totalPages, documentId, onRotationSaved }: 
                 </button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
-                <DropdownMenuItem onClick={handleSaveRotationAll}>
+                <DropdownMenuItem onSelect={handleSaveRotationAll}>
                   全ページに適用して保存
                 </DropdownMenuItem>
-                <DropdownMenuItem onClick={handleSaveRotationCurrentPage}>
+                <DropdownMenuItem onSelect={handleSaveRotationCurrentPage}>
                   このページのみ保存
                 </DropdownMenuItem>
               </DropdownMenuContent>
