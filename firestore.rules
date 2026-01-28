@@ -173,5 +173,12 @@ service cloud.firestore {
       // 書き込みはCloud Functions/管理スクリプトのみ
       allow write: if false;
     }
+
+    // エイリアス学習履歴
+    match /aliasLearningLogs/{logId} {
+      allow read: if isWhitelisted();
+      // 書き込みはCloud Functions（addMasterAlias）のみ
+      allow write: if false;
+    }
   }
 }

@@ -240,6 +240,7 @@ async function processDocument(
     furigana: d.data().furigana as string | undefined,
     isDuplicate: d.data().isDuplicate as boolean | undefined,
     careManagerName: d.data().careManagerName as string | undefined,
+    notes: d.data().notes as string | undefined,
   }));
 
   const officeMasterData: OfficeMaster[] = officeMasters.docs.map((d) => ({
@@ -247,6 +248,7 @@ async function processDocument(
     name: d.data().name as string,
     shortName: d.data().shortName as string | undefined,
     isDuplicate: d.data().isDuplicate as boolean | undefined,
+    notes: d.data().notes as string | undefined,
   }));
 
   // 情報抽出（強化版エクストラクター使用）

@@ -90,6 +90,7 @@ export const detectSplitPoints = onCall(
           isDuplicate: d.data().isDuplicate as boolean | undefined,
           aliases: d.data().aliases as string[] | undefined,
           careManagerName: d.data().careManagerName as string | undefined,
+          notes: d.data().notes as string | undefined,
         })) as CustomerMaster[],
         offices: officeMasters.docs.map((d) => ({
           id: d.id,
@@ -97,6 +98,7 @@ export const detectSplitPoints = onCall(
           shortName: d.data().shortName as string | undefined,
           isDuplicate: d.data().isDuplicate as boolean | undefined,
           aliases: d.data().aliases as string[] | undefined,
+          notes: d.data().notes as string | undefined,
         })) as OfficeMaster[],
       };
 

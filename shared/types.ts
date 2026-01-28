@@ -134,6 +134,7 @@ export interface CustomerMaster {
   furigana: string;
   careManagerName?: string; // 担当ケアマネージャー名
   aliases?: string[];  // 許容される別表記（例: ["田中　太郎", "たなか太郎"]）
+  notes?: string;      // 区別用補足情報（例: "北名古屋在住"）
 }
 
 export interface OfficeMaster {
@@ -143,6 +144,7 @@ export interface OfficeMaster {
   shortName?: string;
   isDuplicate: boolean;    // 同名フラグ
   aliases?: string[];      // 許容される別表記（例: ["北名古屋市東部地域包括支援センター"]）
+  notes?: string;          // 区別用補足情報（例: "東部"）
 }
 
 export interface CareManagerMaster {
@@ -212,6 +214,23 @@ export interface OfficeResolutionLog {
   resolvedByEmail: string;          // 確定者メールアドレス
   resolvedAt: Timestamp;            // 確定日時
   reason?: string;                  // 任意のメモ（「該当なし」時は"該当なし選択"）
+}
+
+// ============================================
+// エイリアス学習履歴
+// ============================================
+
+export type AliasLearningMasterType = 'office' | 'customer' | 'document';
+
+export interface AliasLearningLog {
+  id: string;
+  masterType: AliasLearningMasterType;
+  masterId: string;
+  masterName: string;
+  alias: string;
+  learnedBy: string;
+  learnedByEmail: string;
+  learnedAt: Timestamp;
 }
 
 // ============================================
