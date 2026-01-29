@@ -1,9 +1,11 @@
 import { useState, useMemo, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
+import { useQueryClient } from '@tanstack/react-query'
 import {
   Filter,
   FileText,
   ChevronDown,
+  ChevronUp,
   Loader2,
   AlertCircle,
   LayoutList,
@@ -13,6 +15,7 @@ import {
   UserCheck,
   History,
   Upload,
+  ArrowUpDown,
 } from 'lucide-react'
 import { format } from 'date-fns'
 import { ja } from 'date-fns/locale'
@@ -37,6 +40,47 @@ import { GroupList } from '@/components/views'
 import { SearchBar } from '@/components/SearchBar'
 import type { Document, DocumentStatus } from '@shared/types'
 import type { GroupType } from '@/hooks/useDocumentGroups'
+
+// ソート可能なカラム
+type SortField = 'fileName' | 'customerName' | 'officeName' | 'fileDate' | 'status'
+type SortOrder = 'asc' | 'desc'
+
+// ソートヘッダーコンポーネント
+function SortableHeader({
+  label,
+  field,
+  currentField,
+  currentOrder,
+  onClick,
+}: {
+  label: string
+  field: SortField
+  currentField: SortField
+  currentOrder: SortOrder
+  onClick: (field: SortField) => void
+}) {
+  const isActive = currentField === field
+
+  return (
+    <th
+      className="px-4 py-3 text-left text-sm font-medium text-gray-700 cursor-pointer hover:bg-gray-100 select-none"
+      onClick={() => onClick(field)}
+    >
+      <div className="flex items-center gap-1">
+        {label}
+        {isActive ? (
+          currentOrder === 'asc' ? (
+            <ChevronUp className="h-4 w-4 text-blue-600" />
+          ) : (
+            <ChevronDown className="h-4 w-4 text-blue-600" />
+          )
+        ) : (
+          <ArrowUpDown className="h-3 w-3 text-gray-400" />
+        )}
+      </div>
+    </th>
+  )
+}
 
 // ステータスのラベルとバッジVariant
 const STATUS_CONFIG: Record<DocumentStatus, { label: string; variant: 'default' | 'secondary' | 'success' | 'warning' | 'destructive' }> = {
@@ -131,6 +175,7 @@ const VIEW_TABS: TabConfig[] = [
 export function DocumentsPage() {
   // URLパラメータ
   const [searchParams, setSearchParams] = useSearchParams()
+  const queryClient = useQueryClient()
 
   // タブ状態
   const [activeTab, setActiveTab] = useState<ViewTab>('list')
@@ -140,6 +185,10 @@ export function DocumentsPage() {
   const [documentTypeFilter, setDocumentTypeFilter] = useState<string>('all')
   const [showFilters, setShowFilters] = useState(false)
   const [showSplit, setShowSplit] = useState(false) // 分割済み表示フラグ
+
+  // ソート状態
+  const [sortField, setSortField] = useState<SortField>('fileDate')
+  const [sortOrder, setSortOrder] = useState<SortOrder>('desc')
 
   // 履歴モーダル
   const [showHistoryModal, setShowHistoryModal] = useState(false)
@@ -170,15 +219,60 @@ export function DocumentsPage() {
   const { data: stats } = useDocumentStats()
   const { data: documentMasters } = useDocumentMasters()
 
-  // ドキュメントリスト（デフォルトでsplitを除外、チェックボックスで表示）
+  // ソートハンドラ
+  const handleSort = useCallback((field: SortField) => {
+    if (sortField === field) {
+      setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc')
+    } else {
+      setSortField(field)
+      setSortOrder('asc')
+    }
+  }, [sortField])
+
+  // アップロード成功時のハンドラ
+  const handleUploadSuccess = useCallback(() => {
+    // ドキュメント一覧と統計をリフレッシュ
+    queryClient.invalidateQueries({ queryKey: ['documents'] })
+    queryClient.invalidateQueries({ queryKey: ['documentStats'] })
+  }, [queryClient])
+
+  // ドキュメントリスト（フィルター + ソート）
   const documents = useMemo(() => {
-    const docs = documentsData?.documents ?? []
+    let docs = documentsData?.documents ?? []
+
     // showSplitがfalseの場合は常にsplitを除外
     if (!showSplit) {
-      return docs.filter(doc => doc.status !== 'split')
+      docs = docs.filter(doc => doc.status !== 'split')
     }
-    return docs
-  }, [documentsData?.documents, showSplit])
+
+    // ソート
+    return [...docs].sort((a, b) => {
+      let comparison = 0
+
+      switch (sortField) {
+        case 'fileName':
+          comparison = (a.fileName || '').localeCompare(b.fileName || '', 'ja')
+          break
+        case 'customerName':
+          comparison = (a.customerName || '').localeCompare(b.customerName || '', 'ja')
+          break
+        case 'officeName':
+          comparison = (a.officeName || '').localeCompare(b.officeName || '', 'ja')
+          break
+        case 'fileDate': {
+          const dateA = a.fileDate?.toMillis() ?? 0
+          const dateB = b.fileDate?.toMillis() ?? 0
+          comparison = dateA - dateB
+          break
+        }
+        case 'status':
+          comparison = (a.status || '').localeCompare(b.status || '', 'ja')
+          break
+      }
+
+      return sortOrder === 'asc' ? comparison : -comparison
+    })
+  }, [documentsData?.documents, showSplit, sortField, sortOrder])
 
   return (
     <div className="space-y-6">
@@ -328,11 +422,11 @@ export function DocumentsPage() {
                 <table className="w-full">
                   <thead className="border-b border-gray-200 bg-gray-50">
                     <tr>
-                      <th className="px-4 py-3 text-left text-sm font-medium text-gray-700">ファイル名</th>
-                      <th className="px-4 py-3 text-left text-sm font-medium text-gray-700">顧客名</th>
-                      <th className="px-4 py-3 text-left text-sm font-medium text-gray-700">事業所</th>
-                      <th className="px-4 py-3 text-left text-sm font-medium text-gray-700">日付</th>
-                      <th className="px-4 py-3 text-left text-sm font-medium text-gray-700">ステータス</th>
+                      <SortableHeader label="ファイル名" field="fileName" currentField={sortField} currentOrder={sortOrder} onClick={handleSort} />
+                      <SortableHeader label="顧客名" field="customerName" currentField={sortField} currentOrder={sortOrder} onClick={handleSort} />
+                      <SortableHeader label="事業所" field="officeName" currentField={sortField} currentOrder={sortOrder} onClick={handleSort} />
+                      <SortableHeader label="日付" field="fileDate" currentField={sortField} currentOrder={sortOrder} onClick={handleSort} />
+                      <SortableHeader label="ステータス" field="status" currentField={sortField} currentOrder={sortOrder} onClick={handleSort} />
                     </tr>
                   </thead>
                   <tbody>
@@ -378,6 +472,7 @@ export function DocumentsPage() {
       <PdfUploadModal
         open={showUploadModal}
         onOpenChange={setShowUploadModal}
+        onSuccess={handleUploadSuccess}
       />
     </div>
   )
