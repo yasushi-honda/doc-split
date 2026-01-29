@@ -56,7 +56,7 @@ import type { Document, DocumentStatus } from '@shared/types'
 import type { GroupType } from '@/hooks/useDocumentGroups'
 
 // ソート可能なカラム
-type SortField = 'fileName' | 'customerName' | 'officeName' | 'fileDate' | 'status'
+type SortField = 'fileName' | 'customerName' | 'officeName' | 'processedAt' | 'fileDate' | 'status'
 type SortOrder = 'asc' | 'desc'
 
 // ソートヘッダーコンポーネント
@@ -115,6 +115,16 @@ function formatTimestamp(timestamp: Timestamp | undefined): string {
   }
 }
 
+// Timestampを日時文字列に変換（登録日用）
+function formatDateTime(timestamp: Timestamp | undefined): string {
+  if (!timestamp) return '-'
+  try {
+    return format(timestamp.toDate(), 'MM/dd HH:mm', { locale: ja })
+  } catch {
+    return '-'
+  }
+}
+
 // 書類行コンポーネント
 function DocumentRow({
   document,
@@ -153,6 +163,7 @@ function DocumentRow({
       </td>
       <td className="px-4 py-3 text-gray-700">{document.customerName || '未判定'}</td>
       <td className="px-4 py-3 text-gray-700">{document.officeName || '-'}</td>
+      <td className="px-4 py-3 text-gray-700 text-sm">{formatDateTime(document.processedAt)}</td>
       <td className="px-4 py-3 text-gray-700">{formatTimestamp(document.fileDate)}</td>
       <td className="px-4 py-3">
         {needsReview ? (
@@ -224,8 +235,8 @@ export function DocumentsPage() {
   const [showFilters, setShowFilters] = useState(false)
   const [showSplit, setShowSplit] = useState(false) // 分割済み表示フラグ
 
-  // ソート状態
-  const [sortField, setSortField] = useState<SortField>('fileDate')
+  // ソート状態（デフォルト: 登録日の新しい順）
+  const [sortField, setSortField] = useState<SortField>('processedAt')
   const [sortOrder, setSortOrder] = useState<SortOrder>('desc')
 
   // 履歴モーダル
@@ -327,6 +338,12 @@ export function DocumentsPage() {
         case 'officeName':
           comparison = (a.officeName || '').localeCompare(b.officeName || '', 'ja')
           break
+        case 'processedAt': {
+          const procA = a.processedAt?.toMillis() ?? 0
+          const procB = b.processedAt?.toMillis() ?? 0
+          comparison = procA - procB
+          break
+        }
         case 'fileDate': {
           const dateA = a.fileDate?.toMillis() ?? 0
           const dateB = b.fileDate?.toMillis() ?? 0
@@ -493,7 +510,8 @@ export function DocumentsPage() {
                       <SortableHeader label="ファイル名" field="fileName" currentField={sortField} currentOrder={sortOrder} onClick={handleSort} />
                       <SortableHeader label="顧客名" field="customerName" currentField={sortField} currentOrder={sortOrder} onClick={handleSort} />
                       <SortableHeader label="事業所" field="officeName" currentField={sortField} currentOrder={sortOrder} onClick={handleSort} />
-                      <SortableHeader label="日付" field="fileDate" currentField={sortField} currentOrder={sortOrder} onClick={handleSort} />
+                      <SortableHeader label="登録日" field="processedAt" currentField={sortField} currentOrder={sortOrder} onClick={handleSort} />
+                      <SortableHeader label="書類日付" field="fileDate" currentField={sortField} currentOrder={sortOrder} onClick={handleSort} />
                       <SortableHeader label="ステータス" field="status" currentField={sortField} currentOrder={sortOrder} onClick={handleSort} />
                       {isAdmin && <th className="w-12 px-2 py-3"></th>}
                     </tr>
