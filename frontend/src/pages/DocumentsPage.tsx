@@ -17,7 +17,6 @@ import {
   History,
   Upload,
   ArrowUpDown,
-  MoreHorizontal,
   Trash2,
 } from 'lucide-react'
 import { format } from 'date-fns'
@@ -34,12 +33,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -171,26 +164,16 @@ function DocumentRow({
         )}
       </td>
       {isAdmin && (
-        <td className="px-2 py-3">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
-              <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
-                <MoreHorizontal className="h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem
-                className="text-red-600 focus:text-red-600"
-                onSelect={(e) => {
-                  e.preventDefault()
-                  onDeleteClick(document)
-                }}
-              >
-                <Trash2 className="mr-2 h-4 w-4" />
-                削除
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+        <td className="px-2 py-3" onClick={(e) => e.stopPropagation()}>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8 px-2 text-red-600 hover:text-red-700 hover:bg-red-50"
+            onClick={() => onDeleteClick(document)}
+          >
+            <Trash2 className="h-4 w-4 mr-1" />
+            <span className="text-xs">削除</span>
+          </Button>
         </td>
       )}
     </tr>
