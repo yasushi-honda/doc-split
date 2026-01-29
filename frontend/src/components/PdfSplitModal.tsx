@@ -8,8 +8,6 @@ import {
   Scissors,
   Plus,
   Trash2,
-  ChevronLeft,
-  ChevronRight,
   RotateCw,
   AlertCircle,
   CheckCircle2,
@@ -17,7 +15,6 @@ import {
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
   Dialog,
@@ -43,6 +40,7 @@ import {
   generateSplitPreview,
 } from '@/hooks/usePdfSplit'
 import { useDocumentMasters, useCustomerMasters, useOfficeMasters } from '@/hooks/useDocuments'
+import { PdfSplitPreview } from './PdfSplitPreview'
 import type { Document, SplitSuggestion, SplitSegment } from '@shared/types'
 
 interface PdfSplitModalProps {
@@ -209,7 +207,7 @@ export function PdfSplitModal({
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="max-w-5xl max-h-[90vh] overflow-hidden flex flex-col">
+      <DialogContent className="max-w-6xl max-h-[90vh] overflow-hidden flex flex-col">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Scissors className="h-5 w-5" />
@@ -223,68 +221,34 @@ export function PdfSplitModal({
         {!isConfirmStep ? (
           // ステップ1: 分割ポイント設定
           <div className="flex-1 overflow-hidden flex gap-4">
-            {/* 左側: ページプレビュー */}
-            <div className="w-1/2 flex flex-col">
+            {/* 左側: PDFプレビュー */}
+            <div className="w-1/2 flex flex-col min-h-[400px]">
+              {/* 回転ボタン */}
               <div className="flex items-center justify-between mb-2">
-                <span className="text-sm font-medium">
-                  ページ {currentPage} / {document.totalPages}
+                <span className="text-sm font-medium text-gray-600">
+                  サムネイルをクリックでページ選択
                 </span>
-                <div className="flex gap-1">
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    onClick={() => handleRotatePage(90)}
-                    disabled={rotatePdf.isPending}
-                    title="90度回転"
-                  >
-                    <RotateCw className="h-4 w-4" />
-                  </Button>
-                </div>
-              </div>
-
-              {/* ページサムネイル表示エリア */}
-              <div className="flex-1 bg-gray-100 rounded-lg flex items-center justify-center min-h-[300px]">
-                <div className="text-gray-500 text-center">
-                  <p>ページ {currentPage}</p>
-                  <p className="text-xs mt-1">
-                    (プレビューは実装予定)
-                  </p>
-                </div>
-              </div>
-
-              {/* ページナビゲーション */}
-              <div className="flex items-center justify-center gap-2 mt-2">
                 <Button
                   variant="outline"
-                  size="icon"
-                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                  disabled={currentPage === 1}
+                  size="sm"
+                  onClick={() => handleRotatePage(90)}
+                  disabled={rotatePdf.isPending}
+                  title="選択中のページを90度回転"
                 >
-                  <ChevronLeft className="h-4 w-4" />
+                  <RotateCw className="h-4 w-4 mr-1" />
+                  回転
                 </Button>
-                <Input
-                  type="number"
-                  min={1}
-                  max={document.totalPages}
-                  value={currentPage}
-                  onChange={(e) => {
-                    const val = parseInt(e.target.value)
-                    if (val >= 1 && val <= document.totalPages) {
-                      setCurrentPage(val)
-                    }
-                  }}
-                  className="w-20 text-center"
+              </div>
+
+              {/* PDFプレビュー（サムネイル一覧 + 拡大表示） */}
+              <div className="flex-1 border rounded-lg overflow-hidden">
+                <PdfSplitPreview
+                  fileUrl={document.fileUrl}
+                  totalPages={document.totalPages}
+                  currentPage={currentPage}
+                  splitPoints={splitPoints}
+                  onPageSelect={setCurrentPage}
                 />
-                <Button
-                  variant="outline"
-                  size="icon"
-                  onClick={() =>
-                    setCurrentPage((p) => Math.min(document.totalPages, p + 1))
-                  }
-                  disabled={currentPage === document.totalPages}
-                >
-                  <ChevronRight className="h-4 w-4" />
-                </Button>
               </div>
 
               {/* 現在ページの後に分割ポイント追加 */}
