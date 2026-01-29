@@ -189,6 +189,22 @@ stateDiagram-v2
 | gmailAccount | string | | 監視Gmailアカウント |
 | errorNotificationEmails | array | | エラー通知先 |
 
+### search_index
+
+反転インデックス（全文検索用）。
+
+| フィールド | 型 | 必須 | 説明 |
+|------------|-----|------|------|
+| df | number | ✓ | Document Frequency（IDF計算用） |
+| updatedAt | timestamp | ✓ | 更新日時 |
+| postings | map | ✓ | ドキュメントIDをキーとしたポスティング |
+| postings.{docId}.score | number | | TF-IDFスコア |
+| postings.{docId}.fieldsMask | number | | フィールドビットマスク |
+| postings.{docId}.updatedAt | timestamp | | 更新日時 |
+
+**検索対象フィールド（重み）:**
+- customerName: 3, officeName: 2, documentType: 2, careManager: 1, fileName: 1
+
 ## インデックス
 
 ### 複合インデックス

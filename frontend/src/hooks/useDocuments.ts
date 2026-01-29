@@ -90,6 +90,13 @@ export function firestoreToDocument(id: string, data: Record<string, unknown>): 
     officeCandidates: data.officeCandidates as Document['officeCandidates'],
     officeConfirmedBy: data.officeConfirmedBy as string | null | undefined,
     officeConfirmedAt: data.officeConfirmedAt as Timestamp | null | undefined,
+    // ソースタイプ（gmail/upload）
+    sourceType: data.sourceType as Document['sourceType'],
+    // エイリアス学習用キーフィールド
+    customerKey: data.customerKey as string | undefined,
+    officeKey: data.officeKey as string | undefined,
+    documentTypeKey: data.documentTypeKey as string | undefined,
+    careManagerKey: data.careManagerKey as string | undefined,
   }
 }
 

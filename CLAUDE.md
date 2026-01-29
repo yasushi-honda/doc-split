@@ -289,9 +289,26 @@ node scripts/import-masters.js --file scripts/samples/customers.csv --type custo
 |--------|----------|------|
 | checkGmailAttachments | Scheduled | Gmail添付ファイル取得 |
 | processOCR | Scheduled | AI OCR処理 |
+| getOcrText | Callable | OCR全文取得 |
 | detectSplitPoints | Callable | PDF分割候補検出 |
 | splitPdf | Callable | PDF分割実行 |
 | rotatePdfPages | Callable | PDFページ回転 |
+| uploadPdf | Callable | ローカルPDFアップロード |
+| deleteDocument | Callable | ドキュメント削除（管理者のみ） |
+| searchDocuments | Callable | 全文検索 |
+| onDocumentWriteSearchIndex | Trigger | 検索インデックス自動更新 |
+
+### 検索機能仕様
+- **検索方式**: 反転インデックス + TF-IDF スコアリング
+- **検索対象フィールド**（FIELD_WEIGHTS）:
+  - customerName（顧客名）: 重み3
+  - officeName（事業所名）: 重み2
+  - documentType（書類種別）: 重み2
+  - careManager（ケアマネ）: 重み1
+  - fileName（ファイル名）: 重み1
+- **検索対象外**: processedAt（登録日）、fileDate（書類日付）、ocrResult（OCR結果）
+- **日付検索**: 「2024/1」「R6.1」などの日付パースで fileDate を検索可能
+- **トークナイズ**: bi-gram + キーワード抽出
 
 ## 設計完了済み
 - [x] 移行スコープ定義

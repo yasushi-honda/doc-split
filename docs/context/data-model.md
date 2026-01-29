@@ -217,14 +217,17 @@ OCR処理結果を格納するトランザクションテーブル。
   - lastLoginAt: timestamp
 
 /search_index/{tokenId}               # 検索インデックス（反転インデックス）
-  - token: string                     # 検索トークン（bi-gram or キーワード）
-  - documents: array                  # マッチするドキュメント配列
-    - docId: string
-    - weight: number                  # フィールド重み（customerName=3, officeName=2等）
-    - fields: string[]                # マッチしたフィールド名
-  - documentCount: number             # ドキュメント数（IDF計算用）
-  - createdAt: timestamp
+  - df: number                        # Document Frequency（IDF計算用）
   - updatedAt: timestamp
+  - postings: map                     # ドキュメントIDをキーとしたマップ
+    - {docId}:
+      - score: number                 # TF-IDF計算用スコア
+      - fieldsMask: number            # フィールドビットマスク（customerName=1, officeName=2等）
+      - updatedAt: timestamp
+
+  # フィールド重み（FIELD_WEIGHTS）:
+  # customerName: 3, officeName: 2, documentType: 2, careManager: 1, fileName: 1
+  # 検索対象外: processedAt, fileDate（日付パースで検索可能）
 
 /_migrations/{migrationId}            # マイグレーション状態
   - status: string                    # pending | running | completed | failed
