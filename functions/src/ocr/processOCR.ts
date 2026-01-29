@@ -302,6 +302,8 @@ async function processDocument(
   await db.doc(`documents/${docId}`).update({
     ocrResult: savedOcrResult,
     ocrResultUrl,
+    // ページごとのOCR結果（PDF分割時の自動検出で使用）
+    pageResults,
     documentType: documentTypeResult.documentType || '未判定',
     customerName: customerResult.bestMatch?.name || '不明顧客',
     customerId: customerResult.bestMatch?.id || null,

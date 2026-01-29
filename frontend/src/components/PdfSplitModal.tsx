@@ -71,6 +71,16 @@ export function PdfSplitModal({
   // PDFダウンロードURL（gs:// URLを変換）
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null)
   const [urlLoading, setUrlLoading] = useState(false)
+  // 自動検出されたセグメント
+  const [detectedSegments, setDetectedSegments] = useState<Array<{
+    startPage: number
+    endPage: number
+    documentType: string
+    customerName: string
+    customerId: string | null
+    officeName: string
+    officeId?: string | null
+  }> | null>(null)
 
   // マスターデータ
   const { data: documentMasters } = useDocumentMasters()
@@ -133,6 +143,14 @@ export function PdfSplitModal({
 
   // 分割プレビューを生成
   const segments = useMemo(() => {
+    // 自動検出されたセグメントがあればそれを使用
+    if (detectedSegments && detectedSegments.length > 0) {
+      return detectedSegments.map((segment, index) => {
+        const edits = segmentEdits.get(index)
+        return edits ? { ...segment, ...edits } : segment
+      })
+    }
+    // なければgenerateSplitPreviewで生成
     const preview = generateSplitPreview(
       document.totalPages,
       splitPoints,
@@ -143,13 +161,25 @@ export function PdfSplitModal({
       const edits = segmentEdits.get(index)
       return edits ? { ...segment, ...edits } : segment
     })
-  }, [document.totalPages, splitPoints, document.pageResults, segmentEdits])
+  }, [document.totalPages, splitPoints, document.pageResults, segmentEdits, detectedSegments])
 
   // 分割候補を自動検出
   const handleDetectSplitPoints = async () => {
-    const suggestions = await detectSplitPoints.mutateAsync(document.id)
-    const points = suggestions.map((s) => s.afterPageNumber)
+    const result = await detectSplitPoints.mutateAsync(document.id)
+    const points = result.suggestions.map((s) => s.afterPageNumber)
     setSplitPoints(points)
+    // 検出されたセグメントを保存
+    if (result.segments && result.segments.length > 0) {
+      setDetectedSegments(result.segments.map(seg => ({
+        startPage: seg.startPage,
+        endPage: seg.endPage,
+        documentType: seg.documentType || '未判定',
+        customerName: seg.customerName || '未判定',
+        customerId: seg.customerId,
+        officeName: seg.officeName || '未判定',
+        officeId: seg.officeId,
+      })))
+    }
   }
 
   // 分割ポイントを追加

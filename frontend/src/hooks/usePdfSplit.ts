@@ -14,6 +14,20 @@ import type { SplitSuggestion, SplitSegment } from '@shared/types'
 
 interface DetectSplitPointsResponse {
   suggestions: SplitSuggestion[]
+  segments: Array<{
+    id: string
+    startPage: number
+    endPage: number
+    documentType: string
+    customerName: string
+    customerId: string | null
+    officeName: string
+    officeId?: string | null
+    confidence: number
+    suggestedFileName?: string
+  }>
+  shouldSplit: boolean
+  splitReason?: string
 }
 
 interface SplitPdfSegment {
@@ -72,13 +86,13 @@ interface RotatePdfRequest {
 // 分割候補検出
 // ============================================
 
-async function detectSplitPoints(documentId: string): Promise<SplitSuggestion[]> {
+async function detectSplitPoints(documentId: string): Promise<DetectSplitPointsResponse> {
   const callable = httpsCallable<{ documentId: string }, DetectSplitPointsResponse>(
     functions,
     'detectSplitPoints'
   )
   const result = await callable({ documentId })
-  return result.data.suggestions
+  return result.data
 }
 
 export function useDetectSplitPoints() {
