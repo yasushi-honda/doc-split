@@ -43,3 +43,6 @@ export { onDocumentWrite } from './triggers/updateDocumentGroups';
 // 検索機能
 export { searchDocuments } from './search/searchDocuments';
 export { onDocumentWriteSearchIndex } from './search/searchIndexer';
+
+// PDFアップロード
+export { uploadPdf } from './upload/uploadPdf';

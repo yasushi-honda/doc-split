@@ -6,6 +6,7 @@ import { expect } from 'chai';
 import {
   analyzeCustomerEntries,
   sanitizeFileName,
+  sanitizeFilenameForStorage,
   formatDateForFileName,
   shortenDocumentId,
   generateOptimalFileName,
@@ -97,6 +98,41 @@ describe('analyzeCustomerEntries', () => {
     const result = analyzeCustomerEntries(customers);
     expect(result.shouldSplit).to.be.true;
     expect(result.splitReason).to.include('3名を超えています');
+  });
+});
+
+describe('sanitizeFilenameForStorage', () => {
+  it('禁止文字をアンダースコアに置換', () => {
+    expect(sanitizeFilenameForStorage('file<test>.pdf')).to.equal('file_test_.pdf');
+    expect(sanitizeFilenameForStorage('path/to\\file')).to.equal('path_to_file');
+  });
+
+  it('空白をアンダースコアに置換', () => {
+    expect(sanitizeFilenameForStorage('test file name.pdf')).to.equal('test_file_name.pdf');
+  });
+
+  it('連続アンダースコアを統一', () => {
+    expect(sanitizeFilenameForStorage('test___file')).to.equal('test_file');
+  });
+
+  it('デフォルト200文字で切り詰め', () => {
+    const longName = 'a'.repeat(250);
+    const result = sanitizeFilenameForStorage(longName);
+    expect(result.length).to.equal(200);
+  });
+
+  it('カスタム長で切り詰め', () => {
+    const longName = 'a'.repeat(100);
+    const result = sanitizeFilenameForStorage(longName, 50);
+    expect(result.length).to.equal(50);
+  });
+
+  it('日本語ファイル名を保持', () => {
+    expect(sanitizeFilenameForStorage('介護保険被保険者証.pdf')).to.equal('介護保険被保険者証.pdf');
+  });
+
+  it('空文字列を処理', () => {
+    expect(sanitizeFilenameForStorage('')).to.equal('');
   });
 });
 

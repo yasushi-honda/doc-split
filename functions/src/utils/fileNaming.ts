@@ -182,6 +182,26 @@ export function analyzeCustomerEntries(customers: CustomerAttribute[]): Customer
 }
 
 /**
+ * ファイル名を簡易サニタイズ（ストレージパス用）
+ *
+ * Cloud Storage保存時のファイル名サニタイズに使用
+ * - 禁止文字をアンダースコアに置換
+ * - 空白をアンダースコアに置換
+ * - 連続アンダースコアを統一
+ * - 最大200文字に切り詰め
+ *
+ * @param filename ファイル名
+ * @param maxLength 最大長（デフォルト: 200）
+ */
+export function sanitizeFilenameForStorage(filename: string, maxLength: number = 200): string {
+  return filename
+    .replace(/[\\/:*?"<>|]/g, '_')
+    .replace(/\s+/g, '_')
+    .replace(/_+/g, '_')
+    .slice(0, maxLength);
+}
+
+/**
  * ファイル名をサニタイズ
  *
  * 元GAS: sanitizeFileName_()
