@@ -126,7 +126,7 @@ describe('deleteDocument バリデーション', () => {
     });
 
     it('undefinedは管理者ではない', () => {
-      const userData: { role?: string } | undefined = undefined;
+      const userData = undefined as { role?: string } | undefined;
       expect(userData?.role === 'admin').to.be.false;
     });
   });
