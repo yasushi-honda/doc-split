@@ -46,3 +46,6 @@ export { onDocumentWriteSearchIndex } from './search/searchIndexer';
 
 // PDFアップロード
 export { uploadPdf } from './upload/uploadPdf';
+
+// ドキュメント削除
+export { deleteDocument } from './documents/deleteDocument';
