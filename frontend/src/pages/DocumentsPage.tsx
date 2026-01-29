@@ -1,6 +1,7 @@
 import { useState, useMemo, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
+import { httpsCallable } from 'firebase/functions'
 import {
   Filter,
   FileText,
@@ -16,6 +17,8 @@ import {
   History,
   Upload,
   ArrowUpDown,
+  MoreHorizontal,
+  Trash2,
 } from 'lucide-react'
 import { format } from 'date-fns'
 import { ja } from 'date-fns/locale'
@@ -31,6 +34,24 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
+import { useAuthStore } from '@/stores/authStore'
+import { functions } from '@/lib/firebase'
 import { useDocuments, useDocumentStats, useDocumentMasters, type DocumentFilters } from '@/hooks/useDocuments'
 import { isCustomerConfirmed } from '@/hooks/useProcessingHistory'
 import { DocumentDetailModal } from '@/components/DocumentDetailModal'
@@ -102,7 +123,17 @@ function formatTimestamp(timestamp: Timestamp | undefined): string {
 }
 
 // 書類行コンポーネント
-function DocumentRow({ document, onClick }: { document: Document; onClick: () => void }) {
+function DocumentRow({
+  document,
+  onClick,
+  isAdmin,
+  onDeleteClick,
+}: {
+  document: Document
+  onClick: () => void
+  isAdmin: boolean
+  onDeleteClick: (doc: Document) => void
+}) {
   const statusConfig = STATUS_CONFIG[document.status] || { label: '不明', variant: 'secondary' as const }
 
   // 要確認判定（顧客・事業所）
@@ -139,6 +170,29 @@ function DocumentRow({ document, onClick }: { document: Document; onClick: () =>
           <Badge variant={statusConfig.variant}>{statusConfig.label}</Badge>
         )}
       </td>
+      {isAdmin && (
+        <td className="px-2 py-3">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
+              <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
+                <MoreHorizontal className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem
+                className="text-red-600 focus:text-red-600"
+                onSelect={(e) => {
+                  e.preventDefault()
+                  onDeleteClick(document)
+                }}
+              >
+                <Trash2 className="mr-2 h-4 w-4" />
+                削除
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </td>
+      )}
     </tr>
   )
 }
@@ -176,6 +230,7 @@ export function DocumentsPage() {
   // URLパラメータ
   const [searchParams, setSearchParams] = useSearchParams()
   const queryClient = useQueryClient()
+  const { isAdmin } = useAuthStore()
 
   // タブ状態
   const [activeTab, setActiveTab] = useState<ViewTab>('list')
@@ -195,6 +250,10 @@ export function DocumentsPage() {
 
   // アップロードモーダル
   const [showUploadModal, setShowUploadModal] = useState(false)
+
+  // 削除確認ダイアログ
+  const [deleteTarget, setDeleteTarget] = useState<Document | null>(null)
+  const [isDeleting, setIsDeleting] = useState(false)
 
   // モーダル状態（URLパラメータと同期）
   const selectedDocumentId = searchParams.get('doc')
@@ -235,6 +294,32 @@ export function DocumentsPage() {
     queryClient.invalidateQueries({ queryKey: ['documents'] })
     queryClient.invalidateQueries({ queryKey: ['documentStats'] })
   }, [queryClient])
+
+  // 削除実行ハンドラ
+  const handleDelete = useCallback(async () => {
+    if (!deleteTarget) return
+
+    setIsDeleting(true)
+    try {
+      const deleteDocument = httpsCallable<{ documentId: string }, { success: boolean }>(
+        functions,
+        'deleteDocument'
+      )
+      await deleteDocument({ documentId: deleteTarget.id })
+
+      // 一覧をリフレッシュ
+      queryClient.invalidateQueries({ queryKey: ['documents'] })
+      queryClient.invalidateQueries({ queryKey: ['documentStats'] })
+      queryClient.invalidateQueries({ queryKey: ['documentGroups'] })
+
+      setDeleteTarget(null)
+    } catch (error) {
+      console.error('Delete error:', error)
+      alert('削除に失敗しました')
+    } finally {
+      setIsDeleting(false)
+    }
+  }, [deleteTarget, queryClient])
 
   // ドキュメントリスト（フィルター + ソート）
   const documents = useMemo(() => {
@@ -427,6 +512,7 @@ export function DocumentsPage() {
                       <SortableHeader label="事業所" field="officeName" currentField={sortField} currentOrder={sortOrder} onClick={handleSort} />
                       <SortableHeader label="日付" field="fileDate" currentField={sortField} currentOrder={sortOrder} onClick={handleSort} />
                       <SortableHeader label="ステータス" field="status" currentField={sortField} currentOrder={sortOrder} onClick={handleSort} />
+                      {isAdmin && <th className="w-12 px-2 py-3"></th>}
                     </tr>
                   </thead>
                   <tbody>
@@ -435,6 +521,8 @@ export function DocumentsPage() {
                         key={doc.id}
                         document={doc}
                         onClick={() => setSelectedDocumentId(doc.id)}
+                        isAdmin={isAdmin}
+                        onDeleteClick={setDeleteTarget}
                       />
                     ))}
                   </tbody>
@@ -474,6 +562,30 @@ export function DocumentsPage() {
         onOpenChange={setShowUploadModal}
         onSuccess={handleUploadSuccess}
       />
+
+      {/* 削除確認ダイアログ */}
+      <AlertDialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>書類を削除しますか？</AlertDialogTitle>
+            <AlertDialogDescription>
+              「{deleteTarget?.fileName}」を削除します。
+              <br />
+              この操作は元に戻せません。関連するファイルとログも同時に削除されます。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isDeleting}>キャンセル</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleDelete}
+              disabled={isDeleting}
+              className="bg-red-600 hover:bg-red-700 focus:ring-red-600"
+            >
+              {isDeleting ? '削除中...' : '削除する'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }
