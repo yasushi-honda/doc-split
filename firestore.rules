@@ -180,5 +180,12 @@ service cloud.firestore {
       // 書き込みはCloud Functions（addMasterAlias）のみ
       allow write: if false;
     }
+
+    // アップロードログ
+    match /uploadLogs/{logId} {
+      allow read: if isWhitelisted();
+      // 書き込みはCloud Functions（uploadPdf）のみ
+      allow write: if false;
+    }
   }
 }

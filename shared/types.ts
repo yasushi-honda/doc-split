@@ -11,6 +11,9 @@ import { Timestamp } from 'firebase/firestore';
 
 export type DocumentStatus = 'pending' | 'processing' | 'processed' | 'error' | 'split';
 
+/** ドキュメントのソースタイプ */
+export type SourceType = 'gmail' | 'upload';
+
 export interface Document {
   id: string;
   processedAt: Timestamp;
@@ -29,6 +32,7 @@ export interface Document {
   totalPages: number;
   targetPageNumber: number;
   status: DocumentStatus;
+  sourceType?: SourceType;
   careManager?: string;
   category?: string;
 
@@ -273,6 +277,20 @@ export interface GmailLog {
   processedAt: Timestamp;
   fileUrl: string;
   emailBody: string;
+}
+
+// ============================================
+// アップロードログ
+// ============================================
+
+export interface UploadLog {
+  fileName: string;
+  hash: string; // MD5ハッシュ（重複検知用）
+  fileSizeKB: number;
+  uploadedAt: Timestamp;
+  uploadedBy: string; // UID
+  uploadedByEmail: string;
+  fileUrl: string;
 }
 
 // ============================================

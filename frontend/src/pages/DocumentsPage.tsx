@@ -12,6 +12,7 @@ import {
   FolderOpen,
   UserCheck,
   History,
+  Upload,
 } from 'lucide-react'
 import { format } from 'date-fns'
 import { ja } from 'date-fns/locale'
@@ -31,6 +32,7 @@ import { useDocuments, useDocumentStats, useDocumentMasters, type DocumentFilter
 import { isCustomerConfirmed } from '@/hooks/useProcessingHistory'
 import { DocumentDetailModal } from '@/components/DocumentDetailModal'
 import { AliasLearningHistoryModal } from '@/components/AliasLearningHistoryModal'
+import { PdfUploadModal } from '@/components/PdfUploadModal'
 import { GroupList } from '@/components/views'
 import { SearchBar } from '@/components/SearchBar'
 import type { Document, DocumentStatus } from '@shared/types'
@@ -142,6 +144,9 @@ export function DocumentsPage() {
   // 履歴モーダル
   const [showHistoryModal, setShowHistoryModal] = useState(false)
 
+  // アップロードモーダル
+  const [showUploadModal, setShowUploadModal] = useState(false)
+
   // モーダル状態（URLパラメータと同期）
   const selectedDocumentId = searchParams.get('doc')
 
@@ -180,15 +185,26 @@ export function DocumentsPage() {
       {/* ヘッダー */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="text-2xl font-bold text-gray-900">書類管理</h1>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => setShowHistoryModal(true)}
-          className="flex items-center gap-2"
-        >
-          <History className="h-4 w-4" />
-          学習履歴
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="default"
+            size="sm"
+            onClick={() => setShowUploadModal(true)}
+            className="flex items-center gap-2"
+          >
+            <Upload className="h-4 w-4" />
+            PDFアップロード
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setShowHistoryModal(true)}
+            className="flex items-center gap-2"
+          >
+            <History className="h-4 w-4" />
+            学習履歴
+          </Button>
+        </div>
       </div>
 
       {/* 統計カード */}
@@ -356,6 +372,12 @@ export function DocumentsPage() {
       <AliasLearningHistoryModal
         open={showHistoryModal}
         onOpenChange={setShowHistoryModal}
+      />
+
+      {/* PDFアップロードモーダル */}
+      <PdfUploadModal
+        open={showUploadModal}
+        onOpenChange={setShowUploadModal}
       />
     </div>
   )

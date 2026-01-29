@@ -18,6 +18,7 @@ import * as crypto from 'crypto';
 import { getGmailClient } from '../utils/gmailAuth';
 import { withRetry, RETRY_CONFIGS } from '../utils/retry';
 import { logError } from '../utils/errorLogger';
+import { sanitizeFilenameForStorage } from '../utils/fileNaming';
 
 const db = admin.firestore();
 const storage = admin.storage();
@@ -264,7 +265,7 @@ async function processAttachment(
 
   // Cloud Storageに保存
   const bucket = storage.bucket();
-  const storagePath = `original/${Date.now()}_${sanitizeFilename(filename)}`;
+  const storagePath = `original/${Date.now()}_${sanitizeFilenameForStorage(filename)}`;
   const file = bucket.file(storagePath);
 
   await withRetry(
@@ -317,6 +318,7 @@ async function processAttachment(
       totalPages: 0,
       targetPageNumber: 1,
       status: 'pending',
+      sourceType: 'gmail',
     });
   });
 
@@ -370,13 +372,3 @@ function isTargetMimeType(mimeType: string): boolean {
   return targets.includes(mimeType);
 }
 
-/**
- * ファイル名をサニタイズ
- */
-function sanitizeFilename(filename: string): string {
-  return filename
-    .replace(/[\\/:*?"<>|]/g, '_')
-    .replace(/\s+/g, '_')
-    .replace(/_+/g, '_')
-    .slice(0, 200); // 長すぎるファイル名を切り詰め
-}
