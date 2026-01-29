@@ -167,9 +167,9 @@ export function PdfUploadModal({ open, onOpenChange, onSuccess }: PdfUploadModal
       if (err instanceof Error) {
         // Firebase Functions のエラーメッセージを解析
         const message = err.message
-        if (message.includes('already-exists')) {
+        if (message.includes('already-exists') || message.includes('already been uploaded')) {
           errorMessage = 'このファイルは既にアップロードされています'
-        } else if (message.includes('permission-denied')) {
+        } else if (message.includes('permission-denied') || message.includes('not in whitelist')) {
           errorMessage = 'アップロード権限がありません'
         } else if (message.includes('invalid-argument')) {
           // メッセージから詳細を抽出
