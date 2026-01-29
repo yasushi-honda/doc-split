@@ -4,6 +4,8 @@
  */
 
 import { useState, useEffect, useMemo } from 'react'
+import { ref, getDownloadURL } from 'firebase/storage'
+import { storage } from '@/lib/firebase'
 import {
   Scissors,
   Plus,
@@ -66,6 +68,9 @@ export function PdfSplitModal({
   const [currentPage, setCurrentPage] = useState(1)
   // 確認ステップ
   const [isConfirmStep, setIsConfirmStep] = useState(false)
+  // PDFダウンロードURL（gs:// URLを変換）
+  const [downloadUrl, setDownloadUrl] = useState<string | null>(null)
+  const [urlLoading, setUrlLoading] = useState(false)
 
   // マスターデータ
   const { data: documentMasters } = useDocumentMasters()
@@ -84,6 +89,47 @@ export function PdfSplitModal({
       setSplitPoints(points)
     }
   }, [document.splitSuggestions])
+
+  // gs:// URL を HTTPS ダウンロードURLに変換
+  useEffect(() => {
+    async function convertGsUrl() {
+      if (!document?.fileUrl) {
+        setDownloadUrl(null)
+        return
+      }
+
+      // 既にHTTPS URLの場合はそのまま使用
+      if (document.fileUrl.startsWith('https://')) {
+        setDownloadUrl(document.fileUrl)
+        return
+      }
+
+      // gs:// URLの場合は変換
+      if (document.fileUrl.startsWith('gs://')) {
+        setUrlLoading(true)
+        try {
+          const gsUrl = document.fileUrl
+          const match = gsUrl.match(/^gs:\/\/[^/]+\/(.+)$/)
+          if (match) {
+            const filePath = match[1]
+            const fileRef = ref(storage, filePath)
+            const url = await getDownloadURL(fileRef)
+            setDownloadUrl(url)
+          } else {
+            console.error('Invalid gs:// URL format:', gsUrl)
+            setDownloadUrl(null)
+          }
+        } catch (err) {
+          console.error('Failed to get download URL:', err)
+          setDownloadUrl(null)
+        } finally {
+          setUrlLoading(false)
+        }
+      }
+    }
+
+    convertGsUrl()
+  }, [document?.fileUrl])
 
   // 分割プレビューを生成
   const segments = useMemo(() => {
@@ -242,13 +288,24 @@ export function PdfSplitModal({
 
               {/* PDFプレビュー（サムネイル一覧 + 拡大表示） */}
               <div className="flex-1 border rounded-lg overflow-hidden">
-                <PdfSplitPreview
-                  fileUrl={document.fileUrl}
-                  totalPages={document.totalPages}
-                  currentPage={currentPage}
-                  splitPoints={splitPoints}
-                  onPageSelect={setCurrentPage}
-                />
+                {urlLoading ? (
+                  <div className="flex h-full items-center justify-center">
+                    <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
+                    <span className="ml-2 text-gray-500">PDFを準備中...</span>
+                  </div>
+                ) : downloadUrl ? (
+                  <PdfSplitPreview
+                    fileUrl={downloadUrl}
+                    totalPages={document.totalPages}
+                    currentPage={currentPage}
+                    splitPoints={splitPoints}
+                    onPageSelect={setCurrentPage}
+                  />
+                ) : (
+                  <div className="flex h-full items-center justify-center text-red-500">
+                    PDFのURLを取得できませんでした
+                  </div>
+                )}
               </div>
 
               {/* 現在ページの後に分割ポイント追加 */}
