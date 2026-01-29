@@ -119,7 +119,7 @@ function formatTimestamp(timestamp: Timestamp | undefined): string {
 function formatDateTime(timestamp: Timestamp | undefined): string {
   if (!timestamp) return '-'
   try {
-    return format(timestamp.toDate(), 'MM/dd HH:mm', { locale: ja })
+    return format(timestamp.toDate(), 'yyyy/MM/dd HH:mm', { locale: ja })
   } catch {
     return '-'
   }
