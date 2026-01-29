@@ -31,7 +31,7 @@ describe('normalizeForSearch', () => {
   });
 
   it('ハイフン・長音を除去する', () => {
-    expect(normalizeForSearch('ケアマネージャー')).to.equal('ケアマネジャ');
+    expect(normalizeForSearch('ケアマネジャー')).to.equal('ケアマネジャ');
   });
 
   it('小文字に変換する', () => {

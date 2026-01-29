@@ -192,9 +192,9 @@ async function importOffices(filePath) {
   console.log(`  ✓ ${count}件の事業所をインポートしました`);
 }
 
-// ケアマネージャーマスターをインポート
+// ケアマネジャーマスターをインポート
 async function importCareManagers(filePath) {
-  console.log(`ケアマネージャーマスターをインポート: ${filePath}`);
+  console.log(`ケアマネジャーマスターをインポート: ${filePath}`);
 
   const content = fs.readFileSync(filePath, 'utf8');
   const rows = parseCSV(content);
@@ -217,7 +217,7 @@ async function importCareManagers(filePath) {
   }
 
   await batch.commit();
-  console.log(`  ✓ ${count}件のケアマネージャーをインポートしました`);
+  console.log(`  ✓ ${count}件のケアマネジャーをインポートしました`);
 }
 
 // メイン処理

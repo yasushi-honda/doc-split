@@ -650,7 +650,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                 {/* ケアマネ情報 */}
                 {document.careManager && (
                   <div className="mt-4">
-                    <h4 className="mb-2 text-xs font-medium text-gray-500">担当ケアマネージャー</h4>
+                    <h4 className="mb-2 text-xs font-medium text-gray-500">担当ケアマネジャー</h4>
                     <p className="text-sm text-gray-900">{document.careManager}</p>
                   </div>
                 )}

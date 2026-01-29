@@ -69,7 +69,7 @@ interface CustomerMaster {
   nameKey: string;         // 正規化キー（検索用）
   furigana: string;        // フリガナ
   isDuplicate: boolean;    // 同姓同名フラグ（自動検知）
-  careManagerName?: string; // 担当ケアマネージャー
+  careManagerName?: string; // 担当ケアマネジャー
   aliases?: string[];      // 許容される別表記（学習機能）
   notes?: string;          // 備考
 }

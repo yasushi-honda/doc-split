@@ -110,7 +110,7 @@ OCR処理結果を格納するトランザクションテーブル。
 | 顧客名 | Text | 紐付けられた顧客 | 顧客M |
 | 事業所名 | Text | 紐付けられた事業所 | 事業所M |
 | 同姓同名フラグ | Boolean | 顧客名が同姓同名の場合True | - |
-| 担当CM | Text | 担当ケアマネージャー | ケアマネM |
+| 担当CM | Text | 担当ケアマネジャー | ケアマネM |
 
 ### 顧客M（顧客マスタ）
 顧客情報を管理。OCR結果との照合に使用。
@@ -120,7 +120,7 @@ OCR処理結果を格納するトランザクションテーブル。
 | 顧客氏名 | Text | 主キー（氏名） |
 | 同姓同名 | Boolean | 同姓同名が存在するか |
 | フリガナ | Text | カナ表記（照合用） |
-| 担当ケアマネ | Text | 担当ケアマネージャー名（optional） |
+| 担当ケアマネ | Text | 担当ケアマネジャー名（optional） |
 
 ### 書類M（書類マスタ）
 書類種別のマスタ。OCR結果から書類名を判定する際の参照先。
@@ -176,7 +176,7 @@ OCR処理結果を格納するトランザクションテーブル。
   - name: string
   - isDuplicate: boolean              # 同姓同名フラグ
   - furigana: string
-  - careManagerName: string           # 担当ケアマネージャー名（optional）
+  - careManagerName: string           # 担当ケアマネジャー名（optional）
 
 /masters/offices/items/{name}         # 事業所M
   - name: string

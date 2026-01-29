@@ -80,7 +80,7 @@ export function MastersPage() {
       <div>
         <h1 className="text-2xl font-bold text-gray-900">マスターデータ管理</h1>
         <p className="mt-1 text-sm text-gray-500">
-          顧客・書類種別・事業所・ケアマネージャーのマスターデータを管理します
+          顧客・書類種別・事業所・ケアマネジャーのマスターデータを管理します
         </p>
       </div>
 
@@ -1320,7 +1320,7 @@ function CareManagersMaster() {
     <Card>
       <CardHeader className="flex flex-row items-center justify-between">
         <div>
-          <CardTitle>ケアマネージャーマスター</CardTitle>
+          <CardTitle>ケアマネジャーマスター</CardTitle>
           <CardDescription>{careManagers?.length ?? 0}件のケアマネ</CardDescription>
         </div>
         <div className="flex gap-2">
@@ -1357,7 +1357,7 @@ function CareManagersMaster() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>ケアマネージャー名</TableHead>
+                <TableHead>ケアマネジャー名</TableHead>
                 <TableHead className="w-[100px]">操作</TableHead>
               </TableRow>
             </TableHeader>
@@ -1365,7 +1365,7 @@ function CareManagersMaster() {
               {filteredCMs?.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={2} className="text-center text-gray-500">
-                    ケアマネージャーがありません
+                    ケアマネジャーがありません
                   </TableCell>
                 </TableRow>
               ) : (
@@ -1402,7 +1402,7 @@ function CareManagersMaster() {
         <Dialog open={isAddOpen} onOpenChange={(open) => { setIsAddOpen(open); if (!open) resetForm() }}>
           <DialogContent>
             <DialogHeader>
-              <DialogTitle>ケアマネージャー追加</DialogTitle>
+              <DialogTitle>ケアマネジャー追加</DialogTitle>
             </DialogHeader>
             <div className="space-y-4 py-4">
               {formError && (
@@ -1411,7 +1411,7 @@ function CareManagersMaster() {
                 </div>
               )}
               <div className="space-y-2">
-                <Label>ケアマネージャー名</Label>
+                <Label>ケアマネジャー名</Label>
                 <Input
                   value={formName}
                   onChange={(e) => setFormName(e.target.value)}
@@ -1434,11 +1434,11 @@ function CareManagersMaster() {
         <Dialog open={!!editingCM} onOpenChange={() => setEditingCM(null)}>
           <DialogContent>
             <DialogHeader>
-              <DialogTitle>ケアマネージャー編集</DialogTitle>
+              <DialogTitle>ケアマネジャー編集</DialogTitle>
             </DialogHeader>
             <div className="space-y-4 py-4">
               <div className="space-y-2">
-                <Label>ケアマネージャー名</Label>
+                <Label>ケアマネジャー名</Label>
                 <Input
                   value={formName}
                   onChange={(e) => setFormName(e.target.value)}

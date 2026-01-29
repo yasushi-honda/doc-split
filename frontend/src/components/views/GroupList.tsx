@@ -65,7 +65,7 @@ const GROUP_TYPE_CONFIG: Record<
   careManager: {
     label: '担当CM別',
     icon: UserCheck,
-    emptyMessage: 'ケアマネージャーデータがありません',
+    emptyMessage: 'ケアマネジャーデータがありません',
   },
 };
 

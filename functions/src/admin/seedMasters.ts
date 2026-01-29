@@ -58,7 +58,7 @@ const OFFICE_MASTERS = [
   { name: '訪問看護ステーションひまわり' },
 ]
 
-// ケアマネージャーマスターサンプルデータ
+// ケアマネジャーマスターサンプルデータ
 const CAREMANAGER_MASTERS = [
   { name: '高橋和子', office: '居宅介護支援事業所あおば', phone: '03-1234-5678', email: '', notes: '' },
   { name: '渡辺誠', office: 'ケアステーション山田', phone: '03-2345-6789', email: '', notes: '' },
@@ -143,7 +143,7 @@ export const seedAllMasters = onRequest(
       await officeBatch.commit()
       results.offices = OFFICE_MASTERS.length
 
-      // ケアマネージャー
+      // ケアマネジャー
       const cmBatch = db.batch()
       for (const cm of CAREMANAGER_MASTERS) {
         const ref = db.collection('masters/caremanagers/items').doc(cm.name)

@@ -136,7 +136,7 @@ export interface CustomerMaster {
   name: string;
   isDuplicate: boolean; // 同姓同名フラグ
   furigana: string;
-  careManagerName?: string; // 担当ケアマネージャー名
+  careManagerName?: string; // 担当ケアマネジャー名
   aliases?: string[];  // 許容される別表記（例: ["田中　太郎", "たなか太郎"]）
   notes?: string;      // 区別用補足情報（例: "北名古屋在住"）
 }

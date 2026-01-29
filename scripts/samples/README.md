@@ -11,7 +11,7 @@
 | `customers.csv` | 顧客マスター | ○ |
 | `documents.csv` | 書類種別マスター | ○ |
 | `offices.csv` | 事業所マスター | ○ |
-| `caremanagers.csv` | ケアマネージャーマスター | △ |
+| `caremanagers.csv` | ケアマネジャーマスター | △ |
 
 ## 使用方法
 
