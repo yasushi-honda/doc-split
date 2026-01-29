@@ -175,6 +175,7 @@ export function useDocuments(options: UseDocumentsOptions = {}) {
     queryFn: () => fetchDocuments(filters, pageSize),
     enabled,
     staleTime: 30000, // 30秒間はキャッシュを使用
+    refetchInterval: 30000, // 30秒ごとに自動再取得（ステータス更新反映）
   })
 }
 
@@ -324,6 +325,7 @@ export function useDocumentStats() {
   return useQuery({
     queryKey: ['documentStats'],
     queryFn: fetchDocumentStats,
-    staleTime: 60000, // 1分間キャッシュ
+    staleTime: 30000, // 30秒間キャッシュ
+    refetchInterval: 30000, // 30秒ごとに自動再取得
   })
 }
