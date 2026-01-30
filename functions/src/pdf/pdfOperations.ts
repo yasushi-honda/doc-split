@@ -46,6 +46,7 @@ export const detectSplitPoints = onCall(
   },
   async (request) => {
     const { documentId, useEnhanced = true } = request.data;
+    console.log(`detectSplitPoints called: documentId=${documentId}, useEnhanced=${useEnhanced}`);
 
     if (!documentId) {
       throw new HttpsError('invalid-argument', 'documentId is required');
@@ -56,13 +57,16 @@ export const detectSplitPoints = onCall(
     const docSnapshot = await docRef.get();
 
     if (!docSnapshot.exists) {
+      console.log(`Document not found: ${documentId}`);
       throw new HttpsError('not-found', 'Document not found');
     }
 
     const docData = docSnapshot.data()!;
     const pageResults: PageOcrResult[] = docData.pageResults || [];
+    console.log(`pageResults count: ${pageResults.length}`);
 
     if (pageResults.length === 0) {
+      console.log('No pageResults, returning empty');
       return { suggestions: [], segments: [], shouldSplit: false };
     }
 
@@ -112,10 +116,13 @@ export const detectSplitPoints = onCall(
       }));
 
       // 強化版分析を実行
+      console.log('Running analyzePdf...');
       const analysisResult = analyzePdf(pages, masters);
+      console.log(`Analysis result: suggestions=${analysisResult.splitSuggestions.length}, segments=${analysisResult.segments.length}, shouldSplit=${analysisResult.shouldSplit}`);
       const summary = generateSplitSummary(analysisResult);
 
-      // Firestoreに保存
+      // Firestoreに保存（undefinedを除外）
+      console.log('Saving to Firestore...');
       await docRef.update({
         splitSuggestions: analysisResult.splitSuggestions,
         splitSegments: analysisResult.segments.map((seg) => ({
@@ -130,14 +137,15 @@ export const detectSplitPoints = onCall(
           confidence: seg.confidence,
         })),
         shouldSplit: analysisResult.shouldSplit,
-        splitReason: analysisResult.splitReason,
+        splitReason: analysisResult.splitReason || null,
       });
+      console.log('Firestore update complete, returning result');
 
       return {
         suggestions: analysisResult.splitSuggestions,
         segments: analysisResult.segments,
         shouldSplit: analysisResult.shouldSplit,
-        splitReason: analysisResult.splitReason,
+        splitReason: analysisResult.splitReason || null,
         summary,
       };
     }
