@@ -287,8 +287,8 @@ node scripts/import-masters.js --file scripts/samples/customers.csv --type custo
 ### デプロイ済みCloud Functions
 | 関数名 | トリガー | 説明 |
 |--------|----------|------|
-| checkGmailAttachments | Scheduled | Gmail添付ファイル取得 |
-| processOCR | Scheduled | AI OCR処理 |
+| checkGmailAttachments | Scheduled (5分間隔) | Gmail添付ファイル取得 |
+| processOCR | Scheduled (1分間隔) | AI OCR処理 |
 | getOcrText | Callable | OCR全文取得 |
 | detectSplitPoints | Callable | PDF分割候補検出 |
 | splitPdf | Callable | PDF分割実行 |
@@ -297,6 +297,12 @@ node scripts/import-masters.js --file scripts/samples/customers.csv --type custo
 | deleteDocument | Callable | ドキュメント削除（管理者のみ） |
 | searchDocuments | Callable | 全文検索 |
 | onDocumentWriteSearchIndex | Trigger | 検索インデックス自動更新 |
+
+### アップロード重複チェック仕様
+- **チェック方式**: ファイル名ベース（同名ファイルが存在するか）
+- **重複検出時**: ダイアログで別名保存を提案（例: `file.pdf` → `file_2.pdf`）
+- **分割元の扱い**: `isSplitSource=true` のファイルは重複チェックから除外
+- **Gmail取り込み**: MD5ハッシュで重複チェック（自動処理のため）
 
 ### 検索機能仕様
 - **検索方式**: 反転インデックス + TF-IDF スコアリング
