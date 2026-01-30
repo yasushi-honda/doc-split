@@ -8,7 +8,7 @@ import { format } from 'date-fns'
 import { ja } from 'date-fns/locale'
 import { Timestamp } from 'firebase/firestore'
 import { ref, getDownloadURL } from 'firebase/storage'
-import { Download, ExternalLink, Loader2, FileText, User, Building, Calendar, Tag, AlertCircle, Scissors, Pencil, Save, X, BookMarked, History } from 'lucide-react'
+import { Download, ExternalLink, Loader2, FileText, User, Building, Calendar, Tag, AlertCircle, Scissors, Pencil, Save, X, BookMarked, History, ChevronUp, ChevronDown } from 'lucide-react'
 import { storage } from '@/lib/firebase'
 import {
   Dialog,
@@ -114,6 +114,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null)
   const [urlLoading, setUrlLoading] = useState(false)
   const [urlRefreshKey, setUrlRefreshKey] = useState(0) // URL強制リフレッシュ用
+  const [isMetadataCollapsed, setIsMetadataCollapsed] = useState(false) // モバイルでメタ情報を折りたたみ
 
   // 編集機能
   const {
@@ -426,17 +427,31 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                 )}
               </div>
 
-              {/* メタ情報サイドバー（モバイル: 下部表示、デスクトップ: サイドバー） */}
-              <div className="h-[40vh] w-full flex-shrink-0 overflow-y-auto border-t bg-white p-3 md:h-auto md:w-80 md:border-l md:border-t-0 md:p-4">
-                <div className="mb-4 flex items-center justify-between">
-                  <h3 className="text-sm font-semibold text-gray-900">書類情報</h3>
+              {/* メタ情報サイドバー（モバイル: 下部表示・折りたたみ可、デスクトップ: サイドバー） */}
+              <div className={`w-full flex-shrink-0 border-t bg-white transition-all duration-200 md:h-auto md:w-80 md:border-l md:border-t-0 md:overflow-y-auto ${isMetadataCollapsed ? 'h-12' : 'h-[40vh] overflow-y-auto'} md:p-4 ${isMetadataCollapsed ? 'p-2' : 'p-3'}`}>
+                <div className={`flex items-center justify-between ${isMetadataCollapsed ? '' : 'mb-4'}`}>
+                  {/* モバイル用折りたたみボタン */}
+                  <button
+                    type="button"
+                    onClick={() => setIsMetadataCollapsed(!isMetadataCollapsed)}
+                    className="flex items-center gap-2 md:hidden"
+                  >
+                    {isMetadataCollapsed ? (
+                      <ChevronUp className="h-4 w-4 text-gray-500" />
+                    ) : (
+                      <ChevronDown className="h-4 w-4 text-gray-500" />
+                    )}
+                    <h3 className="text-sm font-semibold text-gray-900">書類情報</h3>
+                  </button>
+                  {/* デスクトップ用タイトル */}
+                  <h3 className="hidden text-sm font-semibold text-gray-900 md:block">書類情報</h3>
                   {!isEditing ? (
-                    <Button variant="ghost" size="sm" onClick={startEditing}>
+                    <Button variant="ghost" size="sm" onClick={startEditing} className={isMetadataCollapsed ? 'md:flex hidden' : ''}>
                       <Pencil className="h-4 w-4 mr-1" />
                       編集
                     </Button>
                   ) : (
-                    <div className="flex gap-1">
+                    <div className={`flex gap-1 ${isMetadataCollapsed ? 'md:flex hidden' : ''}`}>
                       <Button
                         variant="ghost"
                         size="sm"
@@ -462,6 +477,8 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                   )}
                 </div>
 
+                {/* 折りたたみコンテンツ（モバイルで折りたたみ可能、デスクトップは常時表示） */}
+                <div className={`${isMetadataCollapsed ? 'hidden md:block' : 'block'}`}>
                 {editError && (
                   <div className="mb-4 rounded bg-red-50 p-2 text-xs text-red-600">
                     {editError}
@@ -707,6 +724,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                     </div>
                   </div>
                 )}
+                </div>{/* 折りたたみコンテンツ終了 */}
               </div>
             </div>
           </>
