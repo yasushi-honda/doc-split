@@ -235,9 +235,9 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
         'regenerateSummary'
       )
       await callable({ docId: documentId })
-      // データを再取得
-      queryClient.invalidateQueries({ queryKey: ['document', documentId] })
-      refetch()
+      // キャッシュを無効化して再取得
+      await queryClient.invalidateQueries({ queryKey: ['document', documentId] })
+      await refetch()
     } catch (err) {
       console.error('Failed to generate summary:', err)
     } finally {

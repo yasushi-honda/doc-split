@@ -61,6 +61,7 @@ export function firestoreToDocument(id: string, data: Record<string, unknown>): 
     mimeType: data.mimeType as string,
     ocrResult: data.ocrResult as string,
     ocrResultUrl: data.ocrResultUrl as string | undefined,
+    summary: data.summary as string | undefined,
     documentType: data.documentType as string,
     customerName: data.customerName as string,
     officeName: data.officeName as string,
