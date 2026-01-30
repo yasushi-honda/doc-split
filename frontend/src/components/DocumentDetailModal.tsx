@@ -118,8 +118,8 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
   const [urlRefreshKey, setUrlRefreshKey] = useState(0) // URL強制リフレッシュ用
   const [isMetadataCollapsed, setIsMetadataCollapsed] = useState(true) // モバイルでメタ情報を折りたたみ（初期は折りたたみ）
   const [isGeneratingSummary, setIsGeneratingSummary] = useState(false) // AI要約生成中
-  const [isSummaryExpanded, setIsSummaryExpanded] = useState(true) // AI要約アコーディオン
-  const [isOcrExpanded, setIsOcrExpanded] = useState(false) // OCR結果アコーディオン（初期は折りたたみ）
+  // 排他的アコーディオン: 'summary' | 'ocr' | null（同時に1つだけ開く）
+  const [expandedSection, setExpandedSection] = useState<'summary' | 'ocr' | null>('summary')
 
   const queryClient = useQueryClient()
 
@@ -724,11 +724,15 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                   </div>
                 )}
 
-                {/* AI要約（アコーディオン） */}
+                {/* AI要約（排他的アコーディオン） */}
                 <div className="mt-4 border border-gray-200 rounded-lg flex flex-col">
                   <button
-                    onClick={() => setIsSummaryExpanded(!isSummaryExpanded)}
-                    className="w-full flex items-center justify-between px-3 py-2.5 bg-gradient-to-r from-purple-50 to-violet-50 hover:from-purple-100 hover:to-violet-100 transition-colors flex-shrink-0 border-b border-purple-100"
+                    onClick={() => setExpandedSection(expandedSection === 'summary' ? null : 'summary')}
+                    className={`w-full flex items-center justify-between px-3 py-2.5 transition-colors flex-shrink-0 ${
+                      expandedSection === 'summary'
+                        ? 'bg-gradient-to-r from-purple-100 to-violet-100 border-b border-purple-200'
+                        : 'bg-gradient-to-r from-purple-50 to-violet-50 hover:from-purple-100 hover:to-violet-100'
+                    }`}
                   >
                     <span className="flex items-center gap-2 text-xs font-medium text-gray-700">
                       <Sparkles className="h-3.5 w-3.5 text-purple-500" />
@@ -737,14 +741,10 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                         <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-purple-500 text-white text-[10px]">✓</span>
                       )}
                     </span>
-                    <ChevronDown className={`h-4 w-4 text-purple-400 transition-transform duration-200 ${isSummaryExpanded ? 'rotate-180' : ''}`} />
+                    <ChevronDown className={`h-4 w-4 text-purple-400 transition-transform duration-200 ${expandedSection === 'summary' ? 'rotate-180' : ''}`} />
                   </button>
-                  <div
-                    className={`transition-all duration-200 ease-in-out overflow-hidden ${
-                      isSummaryExpanded ? 'max-h-[200px]' : 'max-h-0'
-                    }`}
-                  >
-                    <div className="p-3 overflow-y-auto max-h-[200px] bg-white">
+                  {expandedSection === 'summary' && (
+                    <div className="p-3 overflow-y-auto max-h-[180px] bg-white border-t border-purple-100">
                       {document.summary ? (
                         <div className="text-sm text-gray-700 leading-relaxed">
                           {document.summary}
@@ -773,14 +773,18 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                         <p className="text-xs text-gray-400">OCR結果が短いため要約を生成できません</p>
                       )}
                     </div>
-                  </div>
+                  )}
                 </div>
 
-                {/* OCR結果（アコーディオン） */}
+                {/* OCR結果（排他的アコーディオン） */}
                 <div className="mt-2 border border-gray-200 rounded-lg flex flex-col">
                   <button
-                    onClick={() => setIsOcrExpanded(!isOcrExpanded)}
-                    className="w-full flex items-center justify-between px-3 py-2.5 bg-gradient-to-r from-slate-50 to-gray-50 hover:from-slate-100 hover:to-gray-100 transition-colors flex-shrink-0 border-b border-gray-100"
+                    onClick={() => setExpandedSection(expandedSection === 'ocr' ? null : 'ocr')}
+                    className={`w-full flex items-center justify-between px-3 py-2.5 transition-colors flex-shrink-0 ${
+                      expandedSection === 'ocr'
+                        ? 'bg-gradient-to-r from-slate-100 to-gray-100 border-b border-gray-200'
+                        : 'bg-gradient-to-r from-slate-50 to-gray-50 hover:from-slate-100 hover:to-gray-100'
+                    }`}
                   >
                     <span className="flex items-center gap-2 text-xs font-medium text-gray-700">
                       <FileText className="h-3.5 w-3.5 text-slate-500" />
@@ -791,19 +795,15 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                         </span>
                       )}
                     </span>
-                    <ChevronDown className={`h-4 w-4 text-gray-400 transition-transform duration-200 ${isOcrExpanded ? 'rotate-180' : ''}`} />
+                    <ChevronDown className={`h-4 w-4 text-gray-400 transition-transform duration-200 ${expandedSection === 'ocr' ? 'rotate-180' : ''}`} />
                   </button>
-                  <div
-                    className={`transition-all duration-200 ease-in-out overflow-hidden ${
-                      isOcrExpanded ? 'max-h-[250px]' : 'max-h-0'
-                    }`}
-                  >
-                    <div className="p-3 overflow-y-auto max-h-[250px] bg-white">
+                  {expandedSection === 'ocr' && (
+                    <div className="p-3 overflow-y-auto max-h-[220px] bg-white border-t border-gray-100">
                       <div className="text-xs text-gray-600 whitespace-pre-wrap font-mono leading-relaxed">
                         {document.ocrResult || 'OCR結果なし'}
                       </div>
                     </div>
-                  </div>
+                  )}
                 </div>
 
                 {/* カテゴリ */}
