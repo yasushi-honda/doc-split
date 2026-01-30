@@ -19,10 +19,18 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { Loader2, AlertCircle, Plus, UserPlus, Building2 } from 'lucide-react';
 import {
   useAddCustomer,
   useAddOffice,
+  useCareManagers,
   checkCustomerDuplicate,
   checkOfficeDuplicate,
   DuplicateError,
@@ -65,6 +73,8 @@ export function RegisterNewMasterModal({
   const [name, setName] = useState(suggestedName);
   const [furigana, setFurigana] = useState('');
   const [shortName, setShortName] = useState('');
+  const [careManagerName, setCareManagerName] = useState('');
+  const [notes, setNotes] = useState('');
 
   // 同名チェック状態
   const [isDuplicateChecking, setIsDuplicateChecking] = useState(false);
@@ -72,6 +82,9 @@ export function RegisterNewMasterModal({
 
   // エラー状態
   const [error, setError] = useState<string | null>(null);
+
+  // ケアマネ一覧取得
+  const { data: careManagers } = useCareManagers();
 
   // ミューテーション
   const addCustomer = useAddCustomer();
@@ -85,6 +98,8 @@ export function RegisterNewMasterModal({
       setName(suggestedName);
       setFurigana('');
       setShortName('');
+      setCareManagerName('');
+      setNotes('');
       setError(null);
       setShowDuplicateConfirm(false);
     }
@@ -132,6 +147,8 @@ export function RegisterNewMasterModal({
             name: name.trim(),
             furigana: furigana.trim(),
             isDuplicate: force,
+            careManagerName: careManagerName || undefined,
+            notes: notes.trim() || undefined,
             force,
           });
         } else {
@@ -158,7 +175,7 @@ export function RegisterNewMasterModal({
         }
       }
     },
-    [name, furigana, shortName, type, checkDuplicate, addCustomer, addOffice, onRegistered, onClose]
+    [name, furigana, shortName, careManagerName, notes, type, checkDuplicate, addCustomer, addOffice, onRegistered, onClose]
   );
 
   // 同名確認後の強制登録
@@ -260,21 +277,70 @@ export function RegisterNewMasterModal({
 
             {/* 顧客の場合: フリガナ入力 */}
             {type === 'customer' && (
-              <div className="space-y-2">
-                <Label htmlFor="furigana">
-                  フリガナ
-                  <Badge variant="secondary" className="ml-2 text-xs">
-                    任意
-                  </Badge>
-                </Label>
-                <Input
-                  id="furigana"
-                  value={furigana}
-                  onChange={(e) => setFurigana(e.target.value)}
-                  placeholder="フリガナを入力"
-                  disabled={isLoading}
-                />
-              </div>
+              <>
+                <div className="space-y-2">
+                  <Label htmlFor="furigana">
+                    フリガナ
+                    <Badge variant="secondary" className="ml-2 text-xs">
+                      任意
+                    </Badge>
+                  </Label>
+                  <Input
+                    id="furigana"
+                    value={furigana}
+                    onChange={(e) => setFurigana(e.target.value)}
+                    placeholder="フリガナを入力"
+                    disabled={isLoading}
+                  />
+                </div>
+
+                {/* 担当ケアマネ選択 */}
+                <div className="space-y-2">
+                  <Label htmlFor="careManager">
+                    担当ケアマネ
+                    <Badge variant="secondary" className="ml-2 text-xs">
+                      任意
+                    </Badge>
+                  </Label>
+                  <Select
+                    value={careManagerName}
+                    onValueChange={setCareManagerName}
+                    disabled={isLoading}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="ケアマネを選択" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="">（未設定）</SelectItem>
+                      {careManagers?.map((cm) => (
+                        <SelectItem key={cm.id} value={cm.name}>
+                          {cm.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {/* 区別用メモ */}
+                <div className="space-y-2">
+                  <Label htmlFor="notes">
+                    区別用メモ（同姓同名対策）
+                    <Badge variant="secondary" className="ml-2 text-xs">
+                      任意
+                    </Badge>
+                  </Label>
+                  <Input
+                    id="notes"
+                    value={notes}
+                    onChange={(e) => setNotes(e.target.value)}
+                    placeholder="例: 北名古屋在住"
+                    disabled={isLoading}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    同姓同名の顧客を区別するための補足情報
+                  </p>
+                </div>
+              </>
             )}
 
             {/* 事業所の場合: 短縮名入力 */}
