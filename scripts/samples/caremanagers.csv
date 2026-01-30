@@ -1,4 +1,4 @@
-name,office,phone,email,notes
-佐藤花子,さくらケアセンター,03-1234-5678,sato@sakura-care.example.com,主任ケアマネ
-田中次郎,みどり居宅介護支援センター,03-6789-0123,tanaka@midori-care.example.com,
-山本三郎,さくらケアセンター,03-1234-5679,yamamoto@sakura-care.example.com,
+name,email,aliases
+佐藤花子,sato@example.com,佐藤 花子|さとう花子
+田中次郎,tanaka@example.com,田中 次郎
+山本三郎,yamamoto@example.com,

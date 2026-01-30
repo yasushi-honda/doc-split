@@ -23,9 +23,9 @@ export const CSV_TEMPLATES = {
     filename: 'offices_template.csv',
   },
   caremanagers: {
-    headers: ['name', 'office', 'phone', 'email', 'notes'],
-    headerLabels: ['ケアマネ名', '所属事業所', '電話番号', 'メール', '備考'],
-    example: ['佐藤花子', '〇〇居宅介護支援事業所', '03-1234-5678', 'sato@example.com', ''],
+    headers: ['name', 'email', 'aliases'],
+    headerLabels: ['ケアマネ名', 'メールアドレス', '別表記（|区切り）'],
+    example: ['佐藤花子', 'sato@example.com', '佐藤 花子|さとう花子'],
     filename: 'caremanagers_template.csv',
   },
 } as const

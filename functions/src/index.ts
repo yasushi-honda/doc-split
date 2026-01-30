@@ -49,3 +49,6 @@ export { uploadPdf } from './upload/uploadPdf';
 
 // ドキュメント削除
 export { deleteDocument } from './documents/deleteDocument';
+
+// テナント初期化（一時的）
+export { initTenantSettings, registerAdminUser } from './admin/initTenant';

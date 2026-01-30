@@ -1257,17 +1257,26 @@ function CareManagersMaster() {
 
   // フォーム状態
   const [formName, setFormName] = useState('')
+  const [formEmail, setFormEmail] = useState('')
+  const [formAliases, setFormAliases] = useState('')
   const [formError, setFormError] = useState<string | null>(null)
 
   const filteredCMs = careManagers?.filter(
-    (cm) => cm.name.includes(searchText)
+    (cm) => cm.name.includes(searchText) || cm.email?.includes(searchText)
   )
 
   const handleAdd = async () => {
     if (!formName.trim()) return
     setFormError(null)
     try {
-      await addCareManager.mutateAsync(formName.trim())
+      const aliases = formAliases.trim()
+        ? formAliases.split(/[,|]/).map(a => a.trim()).filter(a => a)
+        : []
+      await addCareManager.mutateAsync({
+        name: formName.trim(),
+        email: formEmail.trim() || undefined,
+        aliases: aliases.length > 0 ? aliases : undefined,
+      })
       resetForm()
       setIsAddOpen(false)
     } catch (error) {
@@ -1281,9 +1290,14 @@ function CareManagersMaster() {
 
   const handleUpdate = async () => {
     if (!editingCM) return
+    const aliases = formAliases.trim()
+      ? formAliases.split(/[,|]/).map(a => a.trim()).filter(a => a)
+      : []
     await updateCareManager.mutateAsync({
       originalName: editingCM.name,
       name: formName,
+      email: formEmail.trim() || undefined,
+      aliases: aliases.length > 0 ? aliases : undefined,
     })
     resetForm()
     setEditingCM(null)
@@ -1297,11 +1311,15 @@ function CareManagersMaster() {
 
   const openEdit = (cm: CareManagerMaster) => {
     setFormName(cm.name)
+    setFormEmail(cm.email || '')
+    setFormAliases(cm.aliases?.join(', ') || '')
     setEditingCM(cm)
   }
 
   const resetForm = () => {
     setFormName('')
+    setFormEmail('')
+    setFormAliases('')
     setFormError(null)
   }
 
@@ -1358,13 +1376,14 @@ function CareManagersMaster() {
             <TableHeader>
               <TableRow>
                 <TableHead>ケアマネジャー名</TableHead>
+                <TableHead>メールアドレス</TableHead>
                 <TableHead className="w-[100px]">操作</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {filteredCMs?.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={2} className="text-center text-gray-500">
+                  <TableCell colSpan={3} className="text-center text-gray-500">
                     ケアマネジャーがありません
                   </TableCell>
                 </TableRow>
@@ -1372,6 +1391,7 @@ function CareManagersMaster() {
                 filteredCMs?.map((cm) => (
                   <TableRow key={cm.name}>
                     <TableCell className="font-medium">{cm.name}</TableCell>
+                    <TableCell className="text-gray-500">{cm.email || '-'}</TableCell>
                     <TableCell>
                       <div className="flex gap-1">
                         <Button
@@ -1418,6 +1438,24 @@ function CareManagersMaster() {
                   placeholder="山田 花子"
                 />
               </div>
+              <div className="space-y-2">
+                <Label>メールアドレス</Label>
+                <Input
+                  type="email"
+                  value={formEmail}
+                  onChange={(e) => setFormEmail(e.target.value)}
+                  placeholder="yamada@example.com"
+                />
+                <p className="text-xs text-gray-500">Google Workspaceアカウント推奨</p>
+              </div>
+              <div className="space-y-2">
+                <Label>別表記（カンマ区切り）</Label>
+                <Input
+                  value={formAliases}
+                  onChange={(e) => setFormAliases(e.target.value)}
+                  placeholder="山田花子, やまだ花子"
+                />
+              </div>
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setIsAddOpen(false)}>
@@ -1442,6 +1480,24 @@ function CareManagersMaster() {
                 <Input
                   value={formName}
                   onChange={(e) => setFormName(e.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>メールアドレス</Label>
+                <Input
+                  type="email"
+                  value={formEmail}
+                  onChange={(e) => setFormEmail(e.target.value)}
+                  placeholder="yamada@example.com"
+                />
+                <p className="text-xs text-gray-500">Google Workspaceアカウント推奨</p>
+              </div>
+              <div className="space-y-2">
+                <Label>別表記（カンマ区切り）</Label>
+                <Input
+                  value={formAliases}
+                  onChange={(e) => setFormAliases(e.target.value)}
+                  placeholder="山田花子, やまだ花子"
                 />
               </div>
             </div>

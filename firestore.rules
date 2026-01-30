@@ -144,6 +144,8 @@ service cloud.firestore {
     // ユーザー管理
     match /users/{userId} {
       allow read: if isAuthenticated() && request.auth.uid == userId;
+      // 自分自身のドキュメント作成を許可（ドメイン許可リストによる自動登録用）
+      allow create: if isAuthenticated() && request.auth.uid == userId;
       allow read, write: if isAdmin();
     }
 

@@ -267,6 +267,23 @@ node scripts/import-masters.js --file scripts/samples/customers.csv --type custo
      ```
    - **2026-01-30修正**: Firestoreルールのバグで新規ドメインユーザーがログインできない問題を修正済み
 
+6. **🚨 Firestoreデータ削除の絶対禁止事項（ADR-0008）**
+   - **絶対に実行してはいけないコマンド**:
+     ```bash
+     # 本番環境で以下は絶対禁止
+     firebase firestore:delete --all-collections
+     firebase firestore:delete / --recursive
+     ```
+   - **許可される削除操作**（特定コレクションのみ）:
+     ```bash
+     firebase firestore:delete documents --recursive -P <alias>
+     ```
+   - **削除前の必須確認**:
+     - [ ] 削除対象コレクション名を3回確認
+     - [ ] `--all-collections` は絶対に使わない
+     - [ ] 本番環境であることを認識
+   - **2026-01-30教訓**: 本番環境で `--all-collections` を誤実行し、マスターデータを含む全データを喪失。バックアップ・PITR未設定のため復元不可能となった。
+
 **トラブルシュート詳細**: `docs/operation/setup-guide.md` 参照
 
 ## 確定した相談事項

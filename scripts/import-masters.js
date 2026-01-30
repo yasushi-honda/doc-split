@@ -192,6 +192,15 @@ async function importOffices(filePath) {
   console.log(`  ✓ ${count}件の事業所をインポートしました`);
 }
 
+// エイリアス文字列を配列に変換（パイプ区切り）
+function parseAliases(aliasesStr) {
+  if (!aliasesStr) return [];
+  return aliasesStr
+    .split('|')
+    .map((a) => a.trim())
+    .filter((a) => a.length > 0);
+}
+
 // ケアマネジャーマスターをインポート
 async function importCareManagers(filePath) {
   console.log(`ケアマネジャーマスターをインポート: ${filePath}`);
@@ -203,16 +212,24 @@ async function importCareManagers(filePath) {
   let count = 0;
 
   for (const row of rows) {
-    // 期待するカラム: name, office, phone, email, notes
+    // 期待するカラム: name, email, aliases (パイプ区切り)
     const name = row['name'] || row['ケアマネ名'] || '';
-    const docRef = db.collection('masters/caremanagers/items').doc(name);
-    batch.set(docRef, {
+    const docRef = db.collection('masters/caremanagers/items').doc();
+    const data = {
+      id: docRef.id,
       name,
-      office: row['office'] || row['事業所'] || '',
-      phone: row['phone'] || row['電話番号'] || '',
-      email: row['email'] || row['メール'] || '',
-      notes: row['notes'] || row['備考'] || '',
-    });
+    };
+    // メールアドレスがある場合のみ追加
+    const email = row['email'] || row['メール'] || row['メールアドレス'] || '';
+    if (email) {
+      data.email = email;
+    }
+    // エイリアスがある場合のみ追加
+    const aliases = parseAliases(row['aliases'] || row['別表記'] || '');
+    if (aliases.length > 0) {
+      data.aliases = aliases;
+    }
+    batch.set(docRef, data);
     count++;
   }
 

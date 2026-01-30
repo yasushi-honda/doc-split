@@ -685,9 +685,15 @@ export function useBulkImportOffices() {
 
 async function fetchCareManagers(): Promise<CareManagerMaster[]> {
   const snapshot = await getDocs(collection(db, COLLECTION_PATHS.caremanagers))
-  return snapshot.docs.map((doc) => ({
-    name: doc.data().name as string,
-  }))
+  return snapshot.docs.map((doc) => {
+    const data = doc.data()
+    return {
+      id: doc.id,
+      name: data.name as string,
+      email: data.email as string | undefined,
+      aliases: data.aliases as string[] | undefined,
+    }
+  })
 }
 
 export function useCareManagers() {
@@ -698,8 +704,14 @@ export function useCareManagers() {
   })
 }
 
-async function addCareManager(name: string): Promise<void> {
-  const normalizedName = normalizeName(name)
+interface AddCareManagerParams {
+  name: string
+  email?: string
+  aliases?: string[]
+}
+
+async function addCareManager(params: AddCareManagerParams): Promise<void> {
+  const normalizedName = normalizeName(params.name)
 
   // 重複チェック
   const docRef = doc(db, COLLECTION_PATHS.caremanagers, normalizedName)
@@ -708,7 +720,17 @@ async function addCareManager(name: string): Promise<void> {
     throw new DuplicateError(`「${normalizedName}」は既に登録されています`)
   }
 
-  await setDoc(docRef, { name: normalizedName })
+  const data: Record<string, unknown> = {
+    id: docRef.id,
+    name: normalizedName,
+  }
+  if (params.email) {
+    data.email = params.email
+  }
+  if (params.aliases && params.aliases.length > 0) {
+    data.aliases = params.aliases
+  }
+  await setDoc(docRef, data)
 }
 
 export function useAddCareManager() {
@@ -738,6 +760,8 @@ export function useDeleteCareManager() {
 interface UpdateCareManagerParams {
   originalName: string
   name: string
+  email?: string
+  aliases?: string[]
 }
 
 async function updateCareManager(params: UpdateCareManagerParams): Promise<void> {
@@ -749,7 +773,17 @@ async function updateCareManager(params: UpdateCareManagerParams): Promise<void>
   }
 
   const docRef = doc(db, COLLECTION_PATHS.caremanagers, normalizedName)
-  await setDoc(docRef, { name: normalizedName })
+  const data: Record<string, unknown> = {
+    id: docRef.id,
+    name: normalizedName,
+  }
+  if (params.email !== undefined) {
+    data.email = params.email || null // 空文字の場合はnullに
+  }
+  if (params.aliases !== undefined) {
+    data.aliases = params.aliases.length > 0 ? params.aliases : null
+  }
+  await setDoc(docRef, data, { merge: true })
 }
 
 export function useUpdateCareManager() {

@@ -152,7 +152,10 @@ export interface OfficeMaster {
 }
 
 export interface CareManagerMaster {
-  name: string;
+  id?: string;           // ドキュメントID
+  name: string;          // 氏名
+  email?: string;        // メールアドレス（Google Workspace）
+  aliases?: string[];    // 別表記（例: ["田中 太郎", "たなか太郎"]）
 }
 
 // ============================================
