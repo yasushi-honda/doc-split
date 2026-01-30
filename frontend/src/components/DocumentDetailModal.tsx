@@ -8,7 +8,7 @@ import { format } from 'date-fns'
 import { ja } from 'date-fns/locale'
 import { Timestamp } from 'firebase/firestore'
 import { ref, getDownloadURL } from 'firebase/storage'
-import { Download, ExternalLink, Loader2, FileText, User, Building, Calendar, Tag, AlertCircle, Scissors, Pencil, Save, X, BookMarked, History, ChevronUp, ChevronDown } from 'lucide-react'
+import { Download, ExternalLink, Loader2, FileText, User, Building, Calendar, Tag, AlertCircle, Scissors, Pencil, Save, X, BookMarked, History, ChevronUp, ChevronDown, Sparkles } from 'lucide-react'
 import { storage } from '@/lib/firebase'
 import {
   Dialog,
@@ -114,7 +114,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null)
   const [urlLoading, setUrlLoading] = useState(false)
   const [urlRefreshKey, setUrlRefreshKey] = useState(0) // URL強制リフレッシュ用
-  const [isMetadataCollapsed, setIsMetadataCollapsed] = useState(false) // モバイルでメタ情報を折りたたみ
+  const [isMetadataCollapsed, setIsMetadataCollapsed] = useState(true) // モバイルでメタ情報を折りたたみ（初期は折りたたみ）
 
   // 編集機能
   const {
@@ -386,9 +386,9 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
             </DialogHeader>
 
             {/* コンテンツエリア */}
-            <div className="flex flex-1 flex-col overflow-hidden md:flex-row">
-              {/* PDFビューアー（モバイル: 上部60%、デスクトップ: flex-1） */}
-              <div className="h-[60vh] min-w-0 bg-gray-100 md:h-auto md:flex-1">
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden md:flex-row">
+              {/* PDFビューアー（モバイル: 上部、デスクトップ: flex-1） */}
+              <div className={`min-w-0 bg-gray-100 md:h-auto md:flex-1 ${isMetadataCollapsed ? 'flex-1' : 'flex-1 min-h-[45vh]'}`}>
                 {urlLoading ? (
                   <div className="flex h-full items-center justify-center">
                     <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
@@ -429,10 +429,10 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
 
               {/* メタ情報サイドバー（モバイル: 下部表示・折りたたみ可、デスクトップ: サイドバー） */}
               <div
-                className={`w-full flex-shrink-0 border-t bg-white transition-all duration-200 md:h-auto md:w-80 md:border-l md:border-t-0 md:overflow-y-auto md:p-4 ${
+                className={`w-full border-t bg-white transition-all duration-200 md:flex md:h-auto md:w-80 md:flex-col md:flex-shrink-0 md:border-l md:border-t-0 md:p-4 ${
                   isMetadataCollapsed
-                    ? 'h-10 overflow-hidden p-2'
-                    : 'h-[40vh] overflow-y-auto p-3'
+                    ? 'h-11 flex-shrink-0 overflow-hidden p-2 px-3'
+                    : 'flex-shrink-0 max-h-[40vh] overflow-y-auto p-3 md:max-h-none md:overflow-visible'
                 }`}
               >
                 <div className={`flex items-center justify-between ${isMetadataCollapsed ? '' : 'mb-4'}`}>
@@ -484,7 +484,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                 </div>
 
                 {/* 折りたたみコンテンツ（モバイルで折りたたみ可能、デスクトップは常時表示） */}
-                <div className={`${isMetadataCollapsed ? 'hidden md:block' : 'block'}`}>
+                <div className={`md:flex md:flex-col md:flex-1 md:min-h-0 ${isMetadataCollapsed ? 'hidden md:flex' : 'block'}`}>
                 {editError && (
                   <div className="mb-4 rounded bg-red-50 p-2 text-xs text-red-600">
                     {editError}
@@ -696,12 +696,24 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                   </div>
                 )}
 
-                {/* OCR結果プレビュー */}
-                <div className="mt-6">
-                  <h4 className="mb-2 text-xs font-medium text-gray-500">OCR結果（抜粋）</h4>
-                  <div className="max-h-40 overflow-y-auto rounded bg-gray-50 p-2 text-xs text-gray-600">
-                    {document.ocrResult?.slice(0, 500) || 'OCR結果なし'}
-                    {document.ocrResult && document.ocrResult.length > 500 && '...'}
+                {/* AI要約 */}
+                {document.summary && (
+                  <div className="mt-6">
+                    <h4 className="mb-2 text-xs font-medium text-gray-500 flex items-center gap-1">
+                      <Sparkles className="h-3 w-3 text-purple-500" />
+                      AI要約
+                    </h4>
+                    <div className="rounded bg-purple-50 border border-purple-100 p-3 text-sm text-gray-700 leading-relaxed">
+                      {document.summary}
+                    </div>
+                  </div>
+                )}
+
+                {/* OCR結果プレビュー（デスクトップで残りスペースを使用） */}
+                <div className="mt-6 flex flex-col md:flex-1 md:min-h-0">
+                  <h4 className="mb-2 text-xs font-medium text-gray-500 flex-shrink-0">OCR結果</h4>
+                  <div className="flex-1 min-h-[100px] max-h-[200px] md:max-h-none overflow-y-auto rounded bg-gray-50 p-2 text-xs text-gray-600 whitespace-pre-wrap">
+                    {document.ocrResult || 'OCR結果なし'}
                   </div>
                 </div>
 

@@ -22,6 +22,7 @@ export interface Document {
   mimeType: string;
   ocrResult: string;
   ocrResultUrl?: string; // 長い場合はCloud Storage参照
+  summary?: string; // AI生成の要約
   documentType: string;
   customerName: string;
   officeName: string;

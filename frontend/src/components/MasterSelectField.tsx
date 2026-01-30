@@ -79,9 +79,9 @@ export function MasterSelectField({
     setIsRegisterModalOpen(false);
   };
 
-  // documentTypeはRegisterNewMasterModalに対応していないので、新規追加は無効
-  const canAddNew = type === 'customer' || type === 'office';
-  const masterType: MasterType | null = type === 'customer' ? 'customer' : type === 'office' ? 'office' : null;
+  // すべてのタイプで新規追加可能
+  const canAddNew = true;
+  const masterType: MasterType = type === 'customer' ? 'customer' : type === 'office' ? 'office' : 'documentType';
 
   return (
     <>
@@ -155,12 +155,12 @@ export function MasterSelectField({
       </Popover>
 
       {/* 新規マスター登録モーダル */}
-      {canAddNew && masterType && (
+      {canAddNew && (
         <RegisterNewMasterModal
           type={masterType}
           isOpen={isRegisterModalOpen}
           onClose={() => setIsRegisterModalOpen(false)}
-          suggestedName={value !== '未判定' && value !== '不明顧客' ? value : ''}
+          suggestedName={value !== '未判定' && value !== '不明顧客' && value !== '不明文書' ? value : ''}
           onRegistered={handleRegistered}
         />
       )}

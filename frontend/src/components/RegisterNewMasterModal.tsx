@@ -26,11 +26,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Loader2, AlertCircle, Plus, UserPlus, Building2 } from 'lucide-react';
+import { Loader2, AlertCircle, Plus, UserPlus, Building2, FileText } from 'lucide-react';
 import {
   useAddCustomer,
   useAddOffice,
+  useAddDocumentType,
   useCareManagers,
+  useDocumentTypes,
   checkCustomerDuplicate,
   checkOfficeDuplicate,
   DuplicateError,
@@ -40,7 +42,7 @@ import {
 // 型定義
 // ============================================
 
-export type MasterType = 'customer' | 'office';
+export type MasterType = 'customer' | 'office' | 'documentType';
 
 interface RegisterNewMasterModalProps {
   type: MasterType;
@@ -75,6 +77,9 @@ export function RegisterNewMasterModal({
   const [shortName, setShortName] = useState('');
   const [careManagerName, setCareManagerName] = useState('');
   const [notes, setNotes] = useState('');
+  // 書類種別用
+  const [dateMarker, setDateMarker] = useState('');
+  const [category, setCategory] = useState('');
 
   // 同名チェック状態
   const [isDuplicateChecking, setIsDuplicateChecking] = useState(false);
@@ -85,12 +90,20 @@ export function RegisterNewMasterModal({
 
   // ケアマネ一覧取得
   const { data: careManagers } = useCareManagers();
+  // 書類種別一覧取得（カテゴリ抽出用）
+  const { data: existingDocTypes } = useDocumentTypes();
 
   // ミューテーション
   const addCustomer = useAddCustomer();
   const addOffice = useAddOffice();
+  const addDocumentType = useAddDocumentType();
 
-  const isLoading = addCustomer.isPending || addOffice.isPending;
+  const isLoading = addCustomer.isPending || addOffice.isPending || addDocumentType.isPending;
+
+  // 既存カテゴリの一覧を抽出
+  const existingCategories = Array.from(
+    new Set((existingDocTypes || []).map((d) => d.category).filter(Boolean))
+  );
 
   // モーダル開閉時に初期化
   useEffect(() => {
@@ -100,6 +113,8 @@ export function RegisterNewMasterModal({
       setShortName('');
       setCareManagerName('');
       setNotes('');
+      setDateMarker('');
+      setCategory('');
       setError(null);
       setShowDuplicateConfirm(false);
     }
@@ -113,13 +128,16 @@ export function RegisterNewMasterModal({
     try {
       if (type === 'customer') {
         return await checkCustomerDuplicate(name);
-      } else {
+      } else if (type === 'office') {
         return await checkOfficeDuplicate(name);
+      } else {
+        // 書類種別は同名チェックを既存データから確認
+        return (existingDocTypes || []).some((d) => d.name === name.trim());
       }
     } finally {
       setIsDuplicateChecking(false);
     }
-  }, [name, type]);
+  }, [name, type, existingDocTypes]);
 
   // 登録処理
   const handleRegister = useCallback(
@@ -151,12 +169,20 @@ export function RegisterNewMasterModal({
             notes: notes.trim() || undefined,
             force,
           });
-        } else {
+        } else if (type === 'office') {
           createdId = await addOffice.mutateAsync({
             name: name.trim(),
             shortName: shortName.trim() || undefined,
             force,
           });
+        } else {
+          // 書類種別
+          await addDocumentType.mutateAsync({
+            name: name.trim(),
+            dateMarker: dateMarker.trim() || '日付',
+            category: category.trim() || 'その他',
+          });
+          createdId = name.trim(); // 書類種別はnameがID
         }
 
         // 成功時のコールバック（作成されたIDを渡す）
@@ -175,7 +201,7 @@ export function RegisterNewMasterModal({
         }
       }
     },
-    [name, furigana, shortName, careManagerName, notes, type, checkDuplicate, addCustomer, addOffice, onRegistered, onClose]
+    [name, furigana, shortName, careManagerName, notes, dateMarker, category, type, checkDuplicate, addCustomer, addOffice, addDocumentType, onRegistered, onClose]
   );
 
   // 同名確認後の強制登録
@@ -185,8 +211,8 @@ export function RegisterNewMasterModal({
   }, [handleRegister]);
 
   // タイプに応じたラベル
-  const typeLabel = type === 'customer' ? '顧客' : '事業所';
-  const TypeIcon = type === 'customer' ? UserPlus : Building2;
+  const typeLabel = type === 'customer' ? '顧客' : type === 'office' ? '事業所' : '書類種別';
+  const TypeIcon = type === 'customer' ? UserPlus : type === 'office' ? Building2 : FileText;
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
@@ -360,6 +386,63 @@ export function RegisterNewMasterModal({
                   disabled={isLoading}
                 />
               </div>
+            )}
+
+            {/* 書類種別の場合: カテゴリ・日付マーカー入力 */}
+            {type === 'documentType' && (
+              <>
+                <div className="space-y-2">
+                  <Label htmlFor="category">
+                    カテゴリ
+                    <Badge variant="secondary" className="ml-2 text-xs">
+                      任意
+                    </Badge>
+                  </Label>
+                  <Select
+                    value={category}
+                    onValueChange={(v) => setCategory(v === '__custom__' ? '' : v)}
+                    disabled={isLoading}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="カテゴリを選択または入力" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">（未設定 → その他）</SelectItem>
+                      {existingCategories.map((cat) => (
+                        <SelectItem key={cat} value={cat}>
+                          {cat}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Input
+                    id="category-custom"
+                    value={category}
+                    onChange={(e) => setCategory(e.target.value)}
+                    placeholder="新しいカテゴリを入力"
+                    disabled={isLoading}
+                    className="mt-1"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="dateMarker">
+                    日付マーカー
+                    <Badge variant="secondary" className="ml-2 text-xs">
+                      任意
+                    </Badge>
+                  </Label>
+                  <Input
+                    id="dateMarker"
+                    value={dateMarker}
+                    onChange={(e) => setDateMarker(e.target.value)}
+                    placeholder="例: 作成日、発行日（未入力時は「日付」）"
+                    disabled={isLoading}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    書類の日付を表すラベル
+                  </p>
+                </div>
+              </>
             )}
 
             {/* エラー表示 */}

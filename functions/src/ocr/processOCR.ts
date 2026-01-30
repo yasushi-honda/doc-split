@@ -219,6 +219,12 @@ async function processDocument(
     .map((p) => `--- Page ${p.pageNumber} ---\n${p.text}`)
     .join('\n\n');
 
+  // マスターデータ取得（要約生成と並列実行）
+  const summaryPromise = generateSummary(ocrResult, '').catch((err) => {
+    console.error('Summary generation failed:', err);
+    return '';
+  });
+
   // マスターデータ取得
   const [documentMasters, customerMasters, officeMasters] = await Promise.all([
     db.collection('masters/documents/items').get(),
@@ -298,10 +304,14 @@ async function processDocument(
     .slice(0, 5)
     .map((c) => c.name);
 
+  // 要約生成を待機
+  const summary = await summaryPromise;
+
   // ドキュメント更新
   await db.doc(`documents/${docId}`).update({
     ocrResult: savedOcrResult,
     ocrResultUrl,
+    summary, // AI生成の要約
     // ページごとのOCR結果（PDF分割時の自動検出で使用）
     pageResults,
     documentType: documentTypeResult.documentType || '未判定',
@@ -472,6 +482,78 @@ ${pageNumber ? `\nこれは${pageNumber}ページ目です。` : ''}
   console.log(`OCR completed: ${text.length} chars, tokens: ${inputTokens}/${outputTokens}`);
 
   return { text, inputTokens, outputTokens };
+}
+
+/**
+ * OCR結果からAI要約を生成
+ */
+async function generateSummary(
+  ocrResult: string,
+  documentType: string
+): Promise<string> {
+  // 短いテキストや失敗時は要約なし
+  if (!ocrResult || ocrResult.length < 100) {
+    return '';
+  }
+
+  const rateLimiter = getRateLimiter();
+  await rateLimiter.acquire();
+
+  const vertexai = new VertexAI({ project: PROJECT_ID, location: LOCATION });
+  const model = vertexai.getGenerativeModel({ model: MODEL_ID });
+
+  // 入力が長すぎる場合は切り詰め
+  const maxInputLength = 8000;
+  const truncatedText = ocrResult.length > maxInputLength
+    ? ocrResult.slice(0, maxInputLength) + '...(以下省略)'
+    : ocrResult;
+
+  const prompt = `
+以下は「${documentType || '書類'}」のOCR結果です。この書類の内容を3〜5行で要約してください。
+
+【要約のポイント】
+- 書類の主な目的・内容
+- 重要な日付や金額があれば含める
+- 関係者（顧客名、事業所名など）の記載があれば含める
+- 専門用語は平易に言い換える
+
+【OCR結果】
+${truncatedText}
+
+【要約】
+`;
+
+  try {
+    const response = await withRetry(
+      async () => {
+        return await model.generateContent({
+          contents: [
+            {
+              role: 'user',
+              parts: [{ text: prompt }],
+            },
+          ],
+        });
+      },
+      RETRY_CONFIGS.gemini
+    );
+
+    const result = response.response;
+    const summary = result.candidates?.[0]?.content?.parts?.[0]?.text || '';
+
+    // トークン使用量を記録
+    const usageMetadata = result.usageMetadata;
+    trackGeminiUsage(
+      usageMetadata?.promptTokenCount || 0,
+      usageMetadata?.candidatesTokenCount || 0
+    );
+
+    console.log(`Summary generated: ${summary.length} chars`);
+    return summary.trim();
+  } catch (error) {
+    console.error('Failed to generate summary:', error);
+    return ''; // 要約生成失敗時は空文字
+  }
 }
 
 /**
