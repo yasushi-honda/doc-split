@@ -414,7 +414,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
             </DialogHeader>
 
             {/* コンテンツエリア */}
-            <div className="flex min-h-0 flex-1 flex-col overflow-hidden md:flex-row">
+            <div className="flex min-h-0 flex-1 flex-col overflow-y-auto md:overflow-hidden md:flex-row">
               {/* PDFビューアー（モバイル: 上部、デスクトップ: flex-1） */}
               <div className={`min-w-0 bg-gray-100 md:h-auto md:flex-1 ${isMetadataCollapsed ? 'flex-1' : 'flex-1 min-h-[45vh]'}`}>
                 {urlLoading ? (
@@ -460,7 +460,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                 className={`w-full border-t bg-white transition-all duration-200 md:flex md:h-auto md:w-80 md:flex-col md:flex-shrink-0 md:border-l md:border-t-0 md:p-4 ${
                   isMetadataCollapsed
                     ? 'h-11 flex-shrink-0 overflow-hidden p-2 px-3'
-                    : 'flex-shrink-0 max-h-[60vh] overflow-y-auto p-3 md:max-h-none md:overflow-y-auto'
+                    : 'flex-shrink-0 p-3 md:max-h-none md:overflow-y-auto'
                 }`}
               >
                 <div className={`flex items-center justify-between ${isMetadataCollapsed ? '' : 'mb-4'}`}>
