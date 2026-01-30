@@ -8,8 +8,10 @@ import { format } from 'date-fns'
 import { ja } from 'date-fns/locale'
 import { Timestamp } from 'firebase/firestore'
 import { ref, getDownloadURL } from 'firebase/storage'
-import { Download, ExternalLink, Loader2, FileText, User, Building, Calendar, Tag, AlertCircle, Scissors, Pencil, Save, X, BookMarked, History, ChevronUp, ChevronDown, Sparkles } from 'lucide-react'
-import { storage } from '@/lib/firebase'
+import { Download, ExternalLink, Loader2, FileText, User, Building, Calendar, Tag, AlertCircle, Scissors, Pencil, Save, X, BookMarked, History, ChevronUp, ChevronDown, Sparkles, RefreshCw } from 'lucide-react'
+import { httpsCallable } from 'firebase/functions'
+import { storage, functions } from '@/lib/firebase'
+import { useQueryClient } from '@tanstack/react-query'
 import {
   Dialog,
   DialogContent,
@@ -115,6 +117,9 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
   const [urlLoading, setUrlLoading] = useState(false)
   const [urlRefreshKey, setUrlRefreshKey] = useState(0) // URL強制リフレッシュ用
   const [isMetadataCollapsed, setIsMetadataCollapsed] = useState(true) // モバイルでメタ情報を折りたたみ（初期は折りたたみ）
+  const [isGeneratingSummary, setIsGeneratingSummary] = useState(false) // AI要約生成中
+
+  const queryClient = useQueryClient()
 
   // 編集機能
   const {
@@ -216,6 +221,27 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
       if (rememberCustomerNotation || rememberOfficeNotation || rememberDocTypeNotation) {
         invalidateHistory()
       }
+    }
+  }
+
+  // AI要約を生成
+  const handleGenerateSummary = async () => {
+    if (!documentId || isGeneratingSummary) return
+
+    setIsGeneratingSummary(true)
+    try {
+      const callable = httpsCallable<{ docId: string }, { success: boolean; summary: string }>(
+        functions,
+        'regenerateSummary'
+      )
+      await callable({ docId: documentId })
+      // データを再取得
+      queryClient.invalidateQueries({ queryKey: ['document', documentId] })
+      refetch()
+    } catch (err) {
+      console.error('Failed to generate summary:', err)
+    } finally {
+      setIsGeneratingSummary(false)
     }
   }
 
@@ -697,17 +723,39 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                 )}
 
                 {/* AI要約 */}
-                {document.summary && (
-                  <div className="mt-6">
-                    <h4 className="mb-2 text-xs font-medium text-gray-500 flex items-center gap-1">
-                      <Sparkles className="h-3 w-3 text-purple-500" />
-                      AI要約
-                    </h4>
+                <div className="mt-6">
+                  <h4 className="mb-2 text-xs font-medium text-gray-500 flex items-center gap-1">
+                    <Sparkles className="h-3 w-3 text-purple-500" />
+                    AI要約
+                  </h4>
+                  {document.summary ? (
                     <div className="rounded bg-purple-50 border border-purple-100 p-3 text-sm text-gray-700 leading-relaxed">
                       {document.summary}
                     </div>
-                  </div>
-                )}
+                  ) : document.ocrResult && document.ocrResult.length >= 100 ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleGenerateSummary}
+                      disabled={isGeneratingSummary}
+                      className="text-purple-600 border-purple-200 hover:bg-purple-50"
+                    >
+                      {isGeneratingSummary ? (
+                        <>
+                          <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                          生成中...
+                        </>
+                      ) : (
+                        <>
+                          <RefreshCw className="mr-1 h-3 w-3" />
+                          AI要約を生成
+                        </>
+                      )}
+                    </Button>
+                  ) : (
+                    <p className="text-xs text-gray-400">OCR結果が短いため要約を生成できません</p>
+                  )}
+                </div>
 
                 {/* OCR結果プレビュー（デスクトップで残りスペースを使用） */}
                 <div className="mt-6 flex flex-col md:flex-1 md:min-h-0">

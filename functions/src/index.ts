@@ -18,6 +18,9 @@ export { processOCR } from './ocr/processOCR';
 // OCR全文取得（Callable Function - Phase 7）
 export { getOcrText } from './ocr/getOcrText';
 
+// AI要約再生成（Callable Function）
+export { regenerateSummary } from './ocr/regenerateSummary';
+
 // PDF編集操作（Callable Functions）
 export {
   detectSplitPoints,
