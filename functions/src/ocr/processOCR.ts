@@ -1,7 +1,7 @@
 /**
  * OCR処理 Cloud Function
  *
- * トリガー: Cloud Scheduler（5分間隔）
+ * トリガー: Cloud Scheduler（1分間隔）
  *
  * 処理フロー:
  * 1. Firestore → status: pending のドキュメントを取得
@@ -70,7 +70,7 @@ interface ProcessingStats {
  */
 export const processOCR = onSchedule(
   {
-    schedule: 'every 5 minutes',
+    schedule: 'every 1 minutes',
     region: 'asia-northeast1',
     timeoutSeconds: 540,
     memory: '1GiB',

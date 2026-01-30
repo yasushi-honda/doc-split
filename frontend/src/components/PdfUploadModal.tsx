@@ -42,7 +42,12 @@ interface PdfUploadModalProps {
 
 interface UploadResult {
   success: boolean
-  documentId: string
+  documentId?: string
+  // 重複検出時のレスポンス
+  duplicate?: boolean
+  existingFileName?: string
+  suggestedFileName?: string
+  existingDocumentId?: string
 }
 
 export function PdfUploadModal({ open, onOpenChange, onSuccess }: PdfUploadModalProps) {
@@ -52,11 +57,17 @@ export function PdfUploadModal({ open, onOpenChange, onSuccess }: PdfUploadModal
   const [uploading, setUploading] = useState(false)
   const [result, setResult] = useState<UploadResult | null>(null)
   const [dragActive, setDragActive] = useState(false)
+  // 重複確認ダイアログ
+  const [duplicateInfo, setDuplicateInfo] = useState<{
+    existingFileName: string
+    suggestedFileName: string
+  } | null>(null)
 
   const resetState = useCallback(() => {
     setSelectedFile(null)
     setError(null)
     setResult(null)
+    setDuplicateInfo(null)
     if (fileInputRef.current) {
       fileInputRef.current.value = ''
     }
@@ -125,11 +136,12 @@ export function PdfUploadModal({ open, onOpenChange, onSuccess }: PdfUploadModal
     }
   }, [handleFileSelect])
 
-  const handleUpload = useCallback(async () => {
+  const handleUpload = useCallback(async (options?: { confirmDuplicate?: boolean; alternativeFileName?: string }) => {
     if (!selectedFile) return
 
     setUploading(true)
     setError(null)
+    setDuplicateInfo(null)
 
     try {
       // ファイルをbase64に変換
@@ -147,7 +159,7 @@ export function PdfUploadModal({ open, onOpenChange, onSuccess }: PdfUploadModal
 
       // Cloud Function呼び出し
       const uploadPdf = httpsCallable<
-        { fileName: string; mimeType: string; data: string },
+        { fileName: string; mimeType: string; data: string; confirmDuplicate?: boolean; alternativeFileName?: string },
         UploadResult
       >(functions, 'uploadPdf')
 
@@ -155,10 +167,24 @@ export function PdfUploadModal({ open, onOpenChange, onSuccess }: PdfUploadModal
         fileName: selectedFile.name,
         mimeType: selectedFile.type,
         data: base64Data,
+        confirmDuplicate: options?.confirmDuplicate,
+        alternativeFileName: options?.alternativeFileName,
       })
 
+      // 重複検出の場合
+      if (response.data.duplicate && response.data.suggestedFileName) {
+        setDuplicateInfo({
+          existingFileName: response.data.existingFileName || selectedFile.name,
+          suggestedFileName: response.data.suggestedFileName,
+        })
+        setUploading(false)
+        return
+      }
+
       setResult(response.data)
-      onSuccess?.(response.data.documentId)
+      if (response.data.documentId) {
+        onSuccess?.(response.data.documentId)
+      }
     } catch (err) {
       console.error('Upload error:', err)
 
@@ -186,6 +212,13 @@ export function PdfUploadModal({ open, onOpenChange, onSuccess }: PdfUploadModal
       setUploading(false)
     }
   }, [selectedFile, onSuccess])
+
+  // 別名で保存を確定
+  const handleConfirmAlternativeName = useCallback(() => {
+    if (duplicateInfo) {
+      handleUpload({ confirmDuplicate: true, alternativeFileName: duplicateInfo.suggestedFileName })
+    }
+  }, [duplicateInfo, handleUpload])
 
   const formatFileSize = (bytes: number): string => {
     if (bytes < 1024) return `${bytes} B`
@@ -261,6 +294,18 @@ export function PdfUploadModal({ open, onOpenChange, onSuccess }: PdfUploadModal
             )}
           </div>
 
+          {/* 重複確認 */}
+          {duplicateInfo && (
+            <Alert className="border-yellow-200 bg-yellow-50">
+              <AlertCircle className="h-4 w-4 text-yellow-600" />
+              <AlertTitle className="text-yellow-800">同名ファイルが存在します</AlertTitle>
+              <AlertDescription className="text-yellow-700">
+                <p className="mb-2">「{duplicateInfo.existingFileName}」は既に登録されています。</p>
+                <p>別名「{duplicateInfo.suggestedFileName}」で保存しますか？</p>
+              </AlertDescription>
+            </Alert>
+          )}
+
           {/* エラー表示 */}
           {error && (
             <Alert variant="destructive">
@@ -286,9 +331,9 @@ export function PdfUploadModal({ open, onOpenChange, onSuccess }: PdfUploadModal
           <Button variant="outline" onClick={handleClose} disabled={uploading}>
             {result ? '閉じる' : 'キャンセル'}
           </Button>
-          {!result && (
+          {!result && !duplicateInfo && (
             <Button
-              onClick={handleUpload}
+              onClick={() => handleUpload()}
               disabled={!selectedFile || uploading}
             >
               {uploading ? (
@@ -300,6 +345,21 @@ export function PdfUploadModal({ open, onOpenChange, onSuccess }: PdfUploadModal
                 <>
                   <Upload className="mr-2 h-4 w-4" />
                   アップロード
+                </>
+              )}
+            </Button>
+          )}
+          {duplicateInfo && (
+            <Button onClick={handleConfirmAlternativeName} disabled={uploading}>
+              {uploading ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  保存中...
+                </>
+              ) : (
+                <>
+                  <Upload className="mr-2 h-4 w-4" />
+                  別名で保存
                 </>
               )}
             </Button>

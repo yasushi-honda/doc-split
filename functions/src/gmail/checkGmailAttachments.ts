@@ -249,18 +249,48 @@ async function processAttachment(
     return 'skipped';
   }
 
-  // MD5ハッシュで重複チェック
+  // MD5ハッシュで重複チェック（gmailLogs + uploadLogs両方）
   const hash = crypto.createHash('md5').update(buffer).digest('hex');
 
-  const existingLog = await db
-    .collection('gmailLogs')
-    .where('hash', '==', hash)
-    .limit(1)
-    .get();
+  const [existingGmailLog, existingUploadLog] = await Promise.all([
+    db.collection('gmailLogs').where('hash', '==', hash).limit(1).get(),
+    db.collection('uploadLogs').where('hash', '==', hash).limit(1).get(),
+  ]);
 
-  if (!existingLog.empty) {
-    console.log(`Skipping duplicate file: ${filename}`);
-    return 'skipped';
+  if (!existingGmailLog.empty || !existingUploadLog.empty) {
+    // 該当するファイルURLを取得
+    const existingLog = !existingGmailLog.empty
+      ? existingGmailLog.docs[0]
+      : existingUploadLog.docs[0];
+    const existingFileUrl = existingLog?.data().fileUrl as string | undefined;
+
+    if (existingFileUrl) {
+      // 関連するドキュメントを確認
+      const relatedDocs = await db
+        .collection('documents')
+        .where('fileUrl', '==', existingFileUrl)
+        .get();
+
+      // 全てのドキュメントが分割元（isSplitSource=true）かどうかを確認
+      const hasActiveDocs = relatedDocs.docs.some(
+        (doc) => !doc.data().isSplitSource
+      );
+
+      // アクティブなドキュメントがある場合のみ重複スキップ
+      if (hasActiveDocs) {
+        console.log(`Skipping duplicate file: ${filename}`);
+        return 'skipped';
+      }
+
+      // 全て分割元の場合は再取り込みを許可
+      console.log(
+        `Re-import allowed: all existing documents are split sources (fileUrl: ${existingFileUrl})`
+      );
+    } else {
+      // fileUrlがない場合は従来通りスキップ
+      console.log(`Skipping duplicate file: ${filename}`);
+      return 'skipped';
+    }
   }
 
   // Cloud Storageに保存

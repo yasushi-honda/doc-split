@@ -278,9 +278,27 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
     convertGsUrl()
   }, [document?.fileUrl, urlRefreshKey])
 
-  // ダウンロード処理
-  const handleDownload = () => {
-    if (downloadUrl) {
+  // ダウンロード処理（ファイルとしてダウンロード）
+  const handleDownload = async () => {
+    if (!downloadUrl || !document) return
+
+    try {
+      // ファイルをfetchしてBlobとして取得
+      const response = await fetch(downloadUrl)
+      const blob = await response.blob()
+
+      // ダウンロードリンクを作成
+      const url = URL.createObjectURL(blob)
+      const link = window.document.createElement('a')
+      link.href = url
+      link.download = document.fileName || 'document.pdf'
+      window.document.body.appendChild(link)
+      link.click()
+      window.document.body.removeChild(link)
+      URL.revokeObjectURL(url)
+    } catch (error) {
+      console.error('Download failed:', error)
+      // フォールバック: 新しいタブで開く
       window.open(downloadUrl, '_blank')
     }
   }
