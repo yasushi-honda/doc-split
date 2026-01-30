@@ -7,9 +7,6 @@
 
 import { useRef, useEffect, useCallback } from 'react';
 import { FileText, Loader2, ChevronDown } from 'lucide-react';
-import { format } from 'date-fns';
-import { ja } from 'date-fns/locale';
-import { Timestamp } from 'firebase/firestore';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -17,7 +14,9 @@ import {
   type GroupType,
 } from '@/hooks/useDocumentGroups';
 import { isCustomerConfirmed } from '@/hooks/useProcessingHistory';
-import type { Document, DocumentStatus } from '@shared/types';
+import { CustomerSubGroup } from './CustomerSubGroup';
+import { getStatusConfig, formatTimestamp } from '@/lib/documentUtils';
+import type { Document } from '@shared/types';
 
 // ============================================
 // 型定義
@@ -29,33 +28,6 @@ interface GroupDocumentListProps {
   onDocumentSelect?: (documentId: string) => void;
 }
 
-// ============================================
-// ステータス設定
-// ============================================
-
-const STATUS_CONFIG: Record<
-  DocumentStatus,
-  { label: string; variant: 'default' | 'secondary' | 'success' | 'warning' | 'destructive' }
-> = {
-  pending: { label: '待機中', variant: 'secondary' },
-  processing: { label: '処理中', variant: 'warning' },
-  processed: { label: '完了', variant: 'success' },
-  error: { label: 'エラー', variant: 'destructive' },
-  split: { label: '分割済', variant: 'default' },
-};
-
-// ============================================
-// Timestampフォーマット
-// ============================================
-
-function formatTimestamp(timestamp: Timestamp | undefined): string {
-  if (!timestamp) return '-';
-  try {
-    return format(timestamp.toDate(), 'yyyy/MM/dd', { locale: ja });
-  } catch {
-    return '-';
-  }
-}
 
 // ============================================
 // ドキュメント行コンポーネント
@@ -68,10 +40,7 @@ interface DocumentRowProps {
 }
 
 function DocumentRow({ document, groupType, onClick }: DocumentRowProps) {
-  const statusConfig = STATUS_CONFIG[document.status] || {
-    label: '不明',
-    variant: 'secondary' as const,
-  };
+  const statusConfig = getStatusConfig(document.status);
 
   // 要確認判定（顧客・事業所）
   const needsCustomerConfirmation = !isCustomerConfirmed(document);
@@ -211,6 +180,44 @@ export function GroupDocumentList({
     );
   }
 
+  // 担当CM別の場合は顧客サブグループで表示
+  if (groupType === 'careManager') {
+    return (
+      <div className="max-h-[500px] overflow-y-auto">
+        <CustomerSubGroup
+          documents={allDocuments}
+          onDocumentSelect={onDocumentSelect}
+        />
+
+        {/* さらに読み込む */}
+        {hasNextPage && (
+          <div
+            ref={loadMoreRef}
+            className="flex items-center justify-center py-4 border-t border-gray-100"
+          >
+            {isFetchingNextPage ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin text-gray-400" />
+                <span className="ml-2 text-xs text-gray-500">読み込み中...</span>
+              </>
+            ) : (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleLoadMore}
+                className="text-xs text-gray-500"
+              >
+                <ChevronDown className="h-4 w-4 mr-1" />
+                さらに表示
+              </Button>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // その他のグループタイプは従来のフラット表示
   return (
     <div className="max-h-96 overflow-y-auto">
       {/* ドキュメント一覧 */}
