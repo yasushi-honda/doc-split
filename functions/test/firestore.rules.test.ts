@@ -901,7 +901,7 @@ describe('Firestore Security Rules', () => {
       await assertSucceeds(getDoc(docRef));
     });
 
-    it('未登録ユーザーはsettings/app等その他の設定は読み取り不可', async () => {
+    it('未登録ユーザーはsettings/appは読み取り不可', async () => {
       const unknownUser = testEnv.authenticatedContext(unknownUid);
 
       // テストデータを作成
@@ -909,17 +909,27 @@ describe('Firestore Security Rules', () => {
         await setDoc(doc(context.firestore(), 'settings', 'app'), {
           targetLabels: ['請求書'],
         });
+      });
+
+      // settings/appは読み取り不可
+      const db = unknownUser.firestore();
+      const appRef = doc(db, 'settings', 'app');
+      await assertFails(getDoc(appRef));
+    });
+
+    it('未登録ユーザーはsettings/gmailは読み取り不可', async () => {
+      const unknownUser = testEnv.authenticatedContext(unknownUid);
+
+      // テストデータを作成
+      await testEnv.withSecurityRulesDisabled(async (context) => {
         await setDoc(doc(context.firestore(), 'settings', 'gmail'), {
           authMode: 'oauth',
         });
       });
 
-      // settings/appは読み取り不可
-      const appRef = doc(unknownUser.firestore(), 'settings', 'app');
-      await assertFails(getDoc(appRef));
-
-      // settings/gmailも読み取り不可
-      const gmailRef = doc(unknownUser.firestore(), 'settings', 'gmail');
+      // settings/gmailは読み取り不可
+      const db = unknownUser.firestore();
+      const gmailRef = doc(db, 'settings', 'gmail');
       await assertFails(getDoc(gmailRef));
     });
 
