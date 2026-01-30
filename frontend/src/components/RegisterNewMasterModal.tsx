@@ -304,14 +304,14 @@ export function RegisterNewMasterModal({
                   </Label>
                   <Select
                     value={careManagerName}
-                    onValueChange={setCareManagerName}
+                    onValueChange={(v) => setCareManagerName(v === '__none__' ? '' : v)}
                     disabled={isLoading}
                   >
                     <SelectTrigger>
                       <SelectValue placeholder="ケアマネを選択" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="">（未設定）</SelectItem>
+                      <SelectItem value="__none__">（未設定）</SelectItem>
                       {careManagers?.map((cm) => (
                         <SelectItem key={cm.id} value={cm.name}>
                           {cm.name}
