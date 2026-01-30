@@ -118,6 +118,8 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
   const [urlRefreshKey, setUrlRefreshKey] = useState(0) // URL強制リフレッシュ用
   const [isMetadataCollapsed, setIsMetadataCollapsed] = useState(true) // モバイルでメタ情報を折りたたみ（初期は折りたたみ）
   const [isGeneratingSummary, setIsGeneratingSummary] = useState(false) // AI要約生成中
+  const [isSummaryExpanded, setIsSummaryExpanded] = useState(true) // AI要約アコーディオン
+  const [isOcrExpanded, setIsOcrExpanded] = useState(false) // OCR結果アコーディオン（初期は折りたたみ）
 
   const queryClient = useQueryClient()
 
@@ -722,47 +724,82 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                   </div>
                 )}
 
-                {/* AI要約 */}
-                <div className="mt-6">
-                  <h4 className="mb-2 text-xs font-medium text-gray-500 flex items-center gap-1">
-                    <Sparkles className="h-3 w-3 text-purple-500" />
-                    AI要約
-                  </h4>
-                  {document.summary ? (
-                    <div className="rounded bg-purple-50 border border-purple-100 p-3 text-sm text-gray-700 leading-relaxed">
-                      {document.summary}
-                    </div>
-                  ) : document.ocrResult && document.ocrResult.length >= 100 ? (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={handleGenerateSummary}
-                      disabled={isGeneratingSummary}
-                      className="text-purple-600 border-purple-200 hover:bg-purple-50"
-                    >
-                      {isGeneratingSummary ? (
-                        <>
-                          <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-                          生成中...
-                        </>
+                {/* AI要約（アコーディオン） */}
+                <div className="mt-4 border border-gray-200 rounded-lg overflow-hidden">
+                  <button
+                    onClick={() => setIsSummaryExpanded(!isSummaryExpanded)}
+                    className="w-full flex items-center justify-between px-3 py-2 bg-purple-50 hover:bg-purple-100 transition-colors"
+                  >
+                    <span className="flex items-center gap-1 text-xs font-medium text-gray-600">
+                      <Sparkles className="h-3 w-3 text-purple-500" />
+                      AI要約
+                      {document.summary && <span className="text-purple-500 ml-1">✓</span>}
+                    </span>
+                    {isSummaryExpanded ? (
+                      <ChevronUp className="h-4 w-4 text-gray-400" />
+                    ) : (
+                      <ChevronDown className="h-4 w-4 text-gray-400" />
+                    )}
+                  </button>
+                  {isSummaryExpanded && (
+                    <div className="p-3 bg-white">
+                      {document.summary ? (
+                        <div className="text-sm text-gray-700 leading-relaxed">
+                          {document.summary}
+                        </div>
+                      ) : document.ocrResult && document.ocrResult.length >= 100 ? (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={handleGenerateSummary}
+                          disabled={isGeneratingSummary}
+                          className="text-purple-600 border-purple-200 hover:bg-purple-50"
+                        >
+                          {isGeneratingSummary ? (
+                            <>
+                              <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                              生成中...
+                            </>
+                          ) : (
+                            <>
+                              <RefreshCw className="mr-1 h-3 w-3" />
+                              AI要約を生成
+                            </>
+                          )}
+                        </Button>
                       ) : (
-                        <>
-                          <RefreshCw className="mr-1 h-3 w-3" />
-                          AI要約を生成
-                        </>
+                        <p className="text-xs text-gray-400">OCR結果が短いため要約を生成できません</p>
                       )}
-                    </Button>
-                  ) : (
-                    <p className="text-xs text-gray-400">OCR結果が短いため要約を生成できません</p>
+                    </div>
                   )}
                 </div>
 
-                {/* OCR結果プレビュー（デスクトップで残りスペースを使用） */}
-                <div className="mt-6 flex flex-col md:flex-1 md:min-h-0">
-                  <h4 className="mb-2 text-xs font-medium text-gray-500 flex-shrink-0">OCR結果</h4>
-                  <div className="flex-1 min-h-[100px] max-h-[200px] md:max-h-none overflow-y-auto rounded bg-gray-50 p-2 text-xs text-gray-600 whitespace-pre-wrap">
-                    {document.ocrResult || 'OCR結果なし'}
-                  </div>
+                {/* OCR結果（アコーディオン） */}
+                <div className="mt-2 border border-gray-200 rounded-lg overflow-hidden">
+                  <button
+                    onClick={() => setIsOcrExpanded(!isOcrExpanded)}
+                    className="w-full flex items-center justify-between px-3 py-2 bg-gray-50 hover:bg-gray-100 transition-colors"
+                  >
+                    <span className="flex items-center gap-1 text-xs font-medium text-gray-600">
+                      <FileText className="h-3 w-3 text-gray-400" />
+                      OCR結果
+                      {document.ocrResult && (
+                        <span className="text-gray-400 ml-1">({document.ocrResult.length.toLocaleString()}文字)</span>
+                      )}
+                    </span>
+                    {isOcrExpanded ? (
+                      <ChevronUp className="h-4 w-4 text-gray-400" />
+                    ) : (
+                      <ChevronDown className="h-4 w-4 text-gray-400" />
+                    )}
+                  </button>
+                  {isOcrExpanded && (
+                    <div className="p-3 bg-white max-h-[300px] overflow-y-auto">
+                      <div className="text-xs text-gray-600 whitespace-pre-wrap">
+                        {document.ocrResult || 'OCR結果なし'}
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {/* カテゴリ */}
