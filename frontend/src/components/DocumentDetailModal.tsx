@@ -317,7 +317,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex h-[90vh] max-w-7xl flex-col p-0" aria-describedby={undefined}>
+      <DialogContent className="flex h-[90vh] w-[95vw] max-w-7xl flex-col p-0 md:w-auto" aria-describedby={undefined}>
         {isLoading ? (
           <>
             <VisuallyHidden>
@@ -385,9 +385,9 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
             </DialogHeader>
 
             {/* コンテンツエリア */}
-            <div className="flex flex-1 overflow-hidden">
-              {/* PDFビューアー */}
-              <div className="min-w-0 flex-1 bg-gray-100">
+            <div className="flex flex-1 flex-col overflow-hidden md:flex-row">
+              {/* PDFビューアー（モバイル: 上部60%、デスクトップ: flex-1） */}
+              <div className="h-[60vh] min-w-0 bg-gray-100 md:h-auto md:flex-1">
                 {urlLoading ? (
                   <div className="flex h-full items-center justify-center">
                     <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
@@ -426,8 +426,8 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                 )}
               </div>
 
-              {/* メタ情報サイドバー（モバイルでは非表示） */}
-              <div className="hidden w-80 flex-shrink-0 overflow-y-auto border-l bg-white p-4 md:block">
+              {/* メタ情報サイドバー（モバイル: 下部表示、デスクトップ: サイドバー） */}
+              <div className="h-[40vh] w-full flex-shrink-0 overflow-y-auto border-t bg-white p-3 md:h-auto md:w-80 md:border-l md:border-t-0 md:p-4">
                 <div className="mb-4 flex items-center justify-between">
                   <h3 className="text-sm font-semibold text-gray-900">書類情報</h3>
                   {!isEditing ? (

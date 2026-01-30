@@ -66,27 +66,29 @@ function SortableHeader({
   currentField,
   currentOrder,
   onClick,
+  hideOnMobile = false,
 }: {
   label: string
   field: SortField
   currentField: SortField
   currentOrder: SortOrder
   onClick: (field: SortField) => void
+  hideOnMobile?: boolean
 }) {
   const isActive = currentField === field
 
   return (
     <th
-      className="px-4 py-3 text-left text-sm font-medium text-gray-700 cursor-pointer hover:bg-gray-100 select-none"
+      className={`px-2 py-2 text-left text-xs font-medium text-gray-700 cursor-pointer hover:bg-gray-100 select-none sm:px-4 sm:py-3 sm:text-sm ${hideOnMobile ? 'hidden md:table-cell' : ''}`}
       onClick={() => onClick(field)}
     >
       <div className="flex items-center gap-1">
-        {label}
+        <span className="truncate">{label}</span>
         {isActive ? (
           currentOrder === 'asc' ? (
-            <ChevronUp className="h-4 w-4 text-blue-600" />
+            <ChevronUp className="h-3 w-3 text-blue-600 sm:h-4 sm:w-4" />
           ) : (
-            <ChevronDown className="h-4 w-4 text-blue-600" />
+            <ChevronDown className="h-3 w-3 text-blue-600 sm:h-4 sm:w-4" />
           )
         ) : (
           <ArrowUpDown className="h-3 w-3 text-gray-400" />
@@ -152,38 +154,38 @@ function DocumentRow({
       className="cursor-pointer border-b border-gray-100 transition-colors hover:bg-gray-50"
       onClick={onClick}
     >
-      <td className="px-4 py-3">
-        <div className="flex items-center gap-3">
-          <FileText className="h-5 w-5 flex-shrink-0 text-gray-400" />
+      <td className="px-2 py-2 sm:px-4 sm:py-3">
+        <div className="flex items-center gap-2 sm:gap-3">
+          <FileText className="h-4 w-4 flex-shrink-0 text-gray-400 sm:h-5 sm:w-5" />
           <div className="min-w-0">
-            <p className="truncate font-medium text-gray-900">{document.fileName}</p>
-            <p className="truncate text-sm text-gray-500">{document.documentType || '未判定'}</p>
+            <p className="truncate text-sm font-medium text-gray-900 sm:text-base">{document.fileName}</p>
+            <p className="truncate text-xs text-gray-500 sm:text-sm">{document.documentType || '未判定'}</p>
           </div>
         </div>
       </td>
-      <td className="px-4 py-3 text-gray-700">{document.customerName || '未判定'}</td>
-      <td className="px-4 py-3 text-gray-700">{document.officeName || '-'}</td>
-      <td className="px-4 py-3 text-gray-700 text-sm">{formatDateTime(document.processedAt)}</td>
-      <td className="px-4 py-3 text-gray-700">{formatTimestamp(document.fileDate)}</td>
-      <td className="px-4 py-3">
+      <td className="px-2 py-2 text-xs text-gray-700 sm:px-4 sm:py-3 sm:text-sm">{document.customerName || '未判定'}</td>
+      <td className="hidden px-4 py-3 text-gray-700 md:table-cell">{document.officeName || '-'}</td>
+      <td className="px-2 py-2 text-xs text-gray-700 sm:px-4 sm:py-3 sm:text-sm">{formatDateTime(document.processedAt)}</td>
+      <td className="hidden px-4 py-3 text-gray-700 md:table-cell">{formatTimestamp(document.fileDate)}</td>
+      <td className="px-2 py-2 sm:px-4 sm:py-3">
         {needsReview ? (
-          <Badge variant="outline" className="bg-orange-100 text-orange-800 border-orange-300">
+          <Badge variant="outline" className="bg-orange-100 text-orange-800 border-orange-300 text-xs">
             要確認
           </Badge>
         ) : (
-          <Badge variant={statusConfig.variant}>{statusConfig.label}</Badge>
+          <Badge variant={statusConfig.variant} className="text-xs sm:text-sm">{statusConfig.label}</Badge>
         )}
       </td>
       {isAdmin && (
-        <td className="px-2 py-3" onClick={(e) => e.stopPropagation()}>
+        <td className="px-1 py-2 sm:px-2 sm:py-3" onClick={(e) => e.stopPropagation()}>
           <Button
             variant="ghost"
             size="sm"
-            className="h-8 px-2 text-red-600 hover:text-red-700 hover:bg-red-50"
+            className="h-7 px-1 text-red-600 hover:text-red-700 hover:bg-red-50 sm:h-8 sm:px-2"
             onClick={() => onDeleteClick(document)}
           >
-            <Trash2 className="h-4 w-4 mr-1" />
-            <span className="text-xs">削除</span>
+            <Trash2 className="h-4 w-4" />
+            <span className="hidden text-xs sm:inline sm:ml-1">削除</span>
           </Button>
         </td>
       )}
@@ -191,13 +193,13 @@ function DocumentRow({
   )
 }
 
-// 統計カード
+// 統計カード（モバイル対応）
 function StatsCard({ label, value, color }: { label: string; value: number; color: string }) {
   return (
     <Card>
-      <CardContent className="p-4">
-        <p className="text-sm text-gray-500">{label}</p>
-        <p className={`text-2xl font-bold ${color}`}>{value}</p>
+      <CardContent className="p-2 sm:p-4">
+        <p className="text-xs text-gray-500 sm:text-sm">{label}</p>
+        <p className={`text-xl font-bold sm:text-2xl ${color}`}>{value}</p>
       </CardContent>
     </Card>
   )
@@ -403,6 +405,7 @@ export function DocumentsPage() {
             <TabsTrigger
               key={tab.value}
               value={tab.value}
+              title={tab.label}
               className="flex items-center gap-1.5"
             >
               <tab.icon className="h-4 w-4" />
@@ -509,11 +512,11 @@ export function DocumentsPage() {
                     <tr>
                       <SortableHeader label="ファイル名" field="fileName" currentField={sortField} currentOrder={sortOrder} onClick={handleSort} />
                       <SortableHeader label="顧客名" field="customerName" currentField={sortField} currentOrder={sortOrder} onClick={handleSort} />
-                      <SortableHeader label="事業所" field="officeName" currentField={sortField} currentOrder={sortOrder} onClick={handleSort} />
+                      <SortableHeader label="事業所" field="officeName" currentField={sortField} currentOrder={sortOrder} onClick={handleSort} hideOnMobile />
                       <SortableHeader label="登録日" field="processedAt" currentField={sortField} currentOrder={sortOrder} onClick={handleSort} />
-                      <SortableHeader label="書類日付" field="fileDate" currentField={sortField} currentOrder={sortOrder} onClick={handleSort} />
+                      <SortableHeader label="書類日付" field="fileDate" currentField={sortField} currentOrder={sortOrder} onClick={handleSort} hideOnMobile />
                       <SortableHeader label="ステータス" field="status" currentField={sortField} currentOrder={sortOrder} onClick={handleSort} />
-                      {isAdmin && <th className="w-12 px-2 py-3"></th>}
+                      {isAdmin && <th className="w-8 px-1 py-2 sm:w-12 sm:px-2 sm:py-3"></th>}
                     </tr>
                   </thead>
                   <tbody>
