@@ -81,6 +81,11 @@ export function PdfSplitModal({
     officeName: string
     officeId?: string | null
   }> | null>(null)
+  // 自動検出結果メッセージ
+  const [detectResultMessage, setDetectResultMessage] = useState<{
+    type: 'success' | 'info' | 'error'
+    message: string
+  } | null>(null)
 
   // マスターデータ
   const { data: documentMasters } = useDocumentMasters()
@@ -165,20 +170,48 @@ export function PdfSplitModal({
 
   // 分割候補を自動検出
   const handleDetectSplitPoints = async () => {
-    const result = await detectSplitPoints.mutateAsync(document.id)
-    const points = result.suggestions.map((s) => s.afterPageNumber)
-    setSplitPoints(points)
-    // 検出されたセグメントを保存
-    if (result.segments && result.segments.length > 0) {
-      setDetectedSegments(result.segments.map(seg => ({
-        startPage: seg.startPage,
-        endPage: seg.endPage,
-        documentType: seg.documentType || '未判定',
-        customerName: seg.customerName || '未判定',
-        customerId: seg.customerId,
-        officeName: seg.officeName || '未判定',
-        officeId: seg.officeId,
-      })))
+    setDetectResultMessage(null)
+    try {
+      const result = await detectSplitPoints.mutateAsync(document.id)
+      const points = result.suggestions.map((s) => s.afterPageNumber)
+      setSplitPoints(points)
+
+      // 検出されたセグメントを保存
+      if (result.segments && result.segments.length > 0) {
+        setDetectedSegments(result.segments.map(seg => ({
+          startPage: seg.startPage,
+          endPage: seg.endPage,
+          documentType: seg.documentType || '未判定',
+          customerName: seg.customerName || '未判定',
+          customerId: seg.customerId,
+          officeName: seg.officeName || '未判定',
+          officeId: seg.officeId,
+        })))
+      }
+
+      // 結果メッセージを設定
+      if (points.length > 0) {
+        setDetectResultMessage({
+          type: 'success',
+          message: `${points.length}件の分割ポイントを検出しました`,
+        })
+      } else if (result.shouldSplit === false) {
+        setDetectResultMessage({
+          type: 'info',
+          message: '分割の必要はありません（1つの書類として認識）',
+        })
+      } else {
+        setDetectResultMessage({
+          type: 'info',
+          message: '分割ポイントは検出されませんでした',
+        })
+      }
+    } catch (error) {
+      console.error('Detection error:', error)
+      setDetectResultMessage({
+        type: 'error',
+        message: '検出に失敗しました。再度お試しください。',
+      })
     }
   }
 
@@ -384,6 +417,21 @@ export function PdfSplitModal({
                   自動検出
                 </Button>
               </div>
+
+              {/* 自動検出結果メッセージ */}
+              {detectResultMessage && (
+                <div
+                  className={`mb-2 p-2 rounded text-sm ${
+                    detectResultMessage.type === 'success'
+                      ? 'bg-green-50 text-green-700 border border-green-200'
+                      : detectResultMessage.type === 'error'
+                        ? 'bg-red-50 text-red-700 border border-red-200'
+                        : 'bg-blue-50 text-blue-700 border border-blue-200'
+                  }`}
+                >
+                  {detectResultMessage.message}
+                </div>
+              )}
 
               <div className="flex-1 overflow-y-auto space-y-2">
                 {splitPoints.length === 0 ? (
