@@ -14,7 +14,6 @@ import {
   CommandInput,
   CommandItem,
   CommandList,
-  CommandSeparator,
 } from '@/components/ui/command';
 import {
   Popover,
@@ -104,7 +103,7 @@ export function MasterSelectField({
         <PopoverContent className="w-[300px] p-0" align="start">
           <Command>
             <CommandInput placeholder={`${config.label}を検索...`} />
-            <CommandList>
+            <CommandList className="max-h-[200px] overflow-y-auto">
               <CommandEmpty>該当なし</CommandEmpty>
               <CommandGroup>
                 {items.map((item) => {
@@ -134,24 +133,23 @@ export function MasterSelectField({
                   );
                 })}
               </CommandGroup>
-              {canAddNew && (
-                <>
-                  <CommandSeparator />
-                  <CommandGroup>
-                    <CommandItem
-                      onSelect={() => {
-                        setOpen(false);
-                        setIsRegisterModalOpen(true);
-                      }}
-                      className="text-primary"
-                    >
-                      <Plus className="mr-2 h-4 w-4" />
-                      {config.addLabel}
-                    </CommandItem>
-                  </CommandGroup>
-                </>
-              )}
             </CommandList>
+            {/* 新規追加ボタン（常に表示） */}
+            {canAddNew && (
+              <div className="border-t p-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setOpen(false);
+                    setIsRegisterModalOpen(true);
+                  }}
+                  className="w-full flex items-center px-2 py-1.5 text-sm text-primary hover:bg-accent rounded-sm cursor-pointer"
+                >
+                  <Plus className="mr-2 h-4 w-4" />
+                  {config.addLabel}
+                </button>
+              </div>
+            )}
           </Command>
         </PopoverContent>
       </Popover>
