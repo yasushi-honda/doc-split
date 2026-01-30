@@ -118,8 +118,10 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
   const [urlRefreshKey, setUrlRefreshKey] = useState(0) // URL強制リフレッシュ用
   const [isMetadataCollapsed, setIsMetadataCollapsed] = useState(true) // モバイルでメタ情報を折りたたみ（初期は折りたたみ）
   const [isGeneratingSummary, setIsGeneratingSummary] = useState(false) // AI要約生成中
-  // 排他的アコーディオン: 'summary' | 'ocr' | null（同時に1つだけ開く）
+  // デスクトップ用: 排他的アコーディオン
   const [expandedSection, setExpandedSection] = useState<'summary' | 'ocr' | null>('summary')
+  // モバイル用: ポップアップ表示
+  const [mobilePopup, setMobilePopup] = useState<'summary' | 'ocr' | null>(null)
 
   const queryClient = useQueryClient()
 
@@ -414,7 +416,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
             </DialogHeader>
 
             {/* コンテンツエリア */}
-            <div className="flex min-h-0 flex-1 flex-col overflow-y-auto md:overflow-hidden md:flex-row">
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden md:flex-row">
               {/* PDFビューアー（モバイル: 上部、デスクトップ: flex-1） */}
               <div className={`min-w-0 bg-gray-100 md:h-auto md:flex-1 ${isMetadataCollapsed ? 'flex-1' : 'flex-1 min-h-[45vh]'}`}>
                 {urlLoading ? (
@@ -460,7 +462,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                 className={`w-full border-t bg-white transition-all duration-200 md:flex md:h-auto md:w-80 md:flex-col md:flex-shrink-0 md:border-l md:border-t-0 md:p-4 ${
                   isMetadataCollapsed
                     ? 'h-11 flex-shrink-0 overflow-hidden p-2 px-3'
-                    : 'flex-shrink-0 p-3 md:max-h-none md:overflow-y-auto'
+                    : 'flex-shrink-0 max-h-[50vh] overflow-y-auto p-3 md:max-h-none md:overflow-y-auto'
                 }`}
               >
                 <div className={`flex items-center justify-between ${isMetadataCollapsed ? '' : 'mb-4'}`}>
@@ -724,86 +726,112 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                   </div>
                 )}
 
-                {/* AI要約（排他的アコーディオン） */}
-                <div className="mt-4 border border-gray-200 rounded-lg flex flex-col">
-                  <button
-                    onClick={() => setExpandedSection(expandedSection === 'summary' ? null : 'summary')}
-                    className={`w-full flex items-center justify-between px-3 py-2.5 transition-colors flex-shrink-0 ${
-                      expandedSection === 'summary'
-                        ? 'bg-gradient-to-r from-purple-100 to-violet-100 border-b border-purple-200'
-                        : 'bg-gradient-to-r from-purple-50 to-violet-50 hover:from-purple-100 hover:to-violet-100'
-                    }`}
+                {/* モバイル: ボタンでポップアップ表示 */}
+                <div className="mt-4 flex gap-2 md:hidden">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setMobilePopup('summary')}
+                    className="flex-1 text-purple-600 border-purple-200 hover:bg-purple-50"
                   >
-                    <span className="flex items-center gap-2 text-xs font-medium text-gray-700">
-                      <Sparkles className="h-3.5 w-3.5 text-purple-500" />
-                      AI要約
-                      {document.summary && (
-                        <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-purple-500 text-white text-[10px]">✓</span>
-                      )}
-                    </span>
-                    <ChevronDown className={`h-4 w-4 text-purple-400 transition-transform duration-200 ${expandedSection === 'summary' ? 'rotate-180' : ''}`} />
-                  </button>
-                  {expandedSection === 'summary' && (
-                    <div className="p-3 overflow-y-auto max-h-[180px] bg-white border-t border-purple-100">
-                      {document.summary ? (
-                        <div className="text-sm text-gray-700 leading-relaxed">
-                          {document.summary}
-                        </div>
-                      ) : document.ocrResult && document.ocrResult.length >= 100 ? (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={handleGenerateSummary}
-                          disabled={isGeneratingSummary}
-                          className="text-purple-600 border-purple-200 hover:bg-purple-50"
-                        >
-                          {isGeneratingSummary ? (
-                            <>
-                              <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-                              生成中...
-                            </>
-                          ) : (
-                            <>
-                              <RefreshCw className="mr-1 h-3 w-3" />
-                              AI要約を生成
-                            </>
-                          )}
-                        </Button>
-                      ) : (
-                        <p className="text-xs text-gray-400">OCR結果が短いため要約を生成できません</p>
-                      )}
-                    </div>
-                  )}
+                    <Sparkles className="h-3.5 w-3.5 mr-1" />
+                    AI要約
+                    {document.summary && <span className="ml-1 text-[10px]">✓</span>}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setMobilePopup('ocr')}
+                    className="flex-1 text-slate-600 border-slate-200 hover:bg-slate-50"
+                  >
+                    <FileText className="h-3.5 w-3.5 mr-1" />
+                    OCR
+                  </Button>
                 </div>
 
-                {/* OCR結果（排他的アコーディオン） */}
-                <div className="mt-2 border border-gray-200 rounded-lg flex flex-col">
-                  <button
-                    onClick={() => setExpandedSection(expandedSection === 'ocr' ? null : 'ocr')}
-                    className={`w-full flex items-center justify-between px-3 py-2.5 transition-colors flex-shrink-0 ${
-                      expandedSection === 'ocr'
-                        ? 'bg-gradient-to-r from-slate-100 to-gray-100 border-b border-gray-200'
-                        : 'bg-gradient-to-r from-slate-50 to-gray-50 hover:from-slate-100 hover:to-gray-100'
-                    }`}
-                  >
-                    <span className="flex items-center gap-2 text-xs font-medium text-gray-700">
-                      <FileText className="h-3.5 w-3.5 text-slate-500" />
-                      OCR結果
-                      {document.ocrResult && (
-                        <span className="text-[10px] text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded">
-                          {document.ocrResult.length.toLocaleString()}文字
-                        </span>
-                      )}
-                    </span>
-                    <ChevronDown className={`h-4 w-4 text-gray-400 transition-transform duration-200 ${expandedSection === 'ocr' ? 'rotate-180' : ''}`} />
-                  </button>
-                  {expandedSection === 'ocr' && (
-                    <div className="p-3 overflow-y-auto max-h-[220px] bg-white border-t border-gray-100">
-                      <div className="text-xs text-gray-600 whitespace-pre-wrap font-mono leading-relaxed">
-                        {document.ocrResult || 'OCR結果なし'}
+                {/* デスクトップ: アコーディオン */}
+                <div className="hidden md:block">
+                  {/* AI要約（排他的アコーディオン） */}
+                  <div className="mt-4 border border-gray-200 rounded-lg flex flex-col">
+                    <button
+                      onClick={() => setExpandedSection(expandedSection === 'summary' ? null : 'summary')}
+                      className={`w-full flex items-center justify-between px-3 py-2.5 transition-colors flex-shrink-0 ${
+                        expandedSection === 'summary'
+                          ? 'bg-gradient-to-r from-purple-100 to-violet-100 border-b border-purple-200'
+                          : 'bg-gradient-to-r from-purple-50 to-violet-50 hover:from-purple-100 hover:to-violet-100'
+                      }`}
+                    >
+                      <span className="flex items-center gap-2 text-xs font-medium text-gray-700">
+                        <Sparkles className="h-3.5 w-3.5 text-purple-500" />
+                        AI要約
+                        {document.summary && (
+                          <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-purple-500 text-white text-[10px]">✓</span>
+                        )}
+                      </span>
+                      <ChevronDown className={`h-4 w-4 text-purple-400 transition-transform duration-200 ${expandedSection === 'summary' ? 'rotate-180' : ''}`} />
+                    </button>
+                    {expandedSection === 'summary' && (
+                      <div className="p-3 overflow-y-auto max-h-[180px] bg-white border-t border-purple-100">
+                        {document.summary ? (
+                          <div className="text-sm text-gray-700 leading-relaxed">
+                            {document.summary}
+                          </div>
+                        ) : document.ocrResult && document.ocrResult.length >= 100 ? (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={handleGenerateSummary}
+                            disabled={isGeneratingSummary}
+                            className="text-purple-600 border-purple-200 hover:bg-purple-50"
+                          >
+                            {isGeneratingSummary ? (
+                              <>
+                                <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                                生成中...
+                              </>
+                            ) : (
+                              <>
+                                <RefreshCw className="mr-1 h-3 w-3" />
+                                AI要約を生成
+                              </>
+                            )}
+                          </Button>
+                        ) : (
+                          <p className="text-xs text-gray-400">OCR結果が短いため要約を生成できません</p>
+                        )}
                       </div>
-                    </div>
-                  )}
+                    )}
+                  </div>
+
+                  {/* OCR結果（排他的アコーディオン） */}
+                  <div className="mt-2 border border-gray-200 rounded-lg flex flex-col">
+                    <button
+                      onClick={() => setExpandedSection(expandedSection === 'ocr' ? null : 'ocr')}
+                      className={`w-full flex items-center justify-between px-3 py-2.5 transition-colors flex-shrink-0 ${
+                        expandedSection === 'ocr'
+                          ? 'bg-gradient-to-r from-slate-100 to-gray-100 border-b border-gray-200'
+                          : 'bg-gradient-to-r from-slate-50 to-gray-50 hover:from-slate-100 hover:to-gray-100'
+                      }`}
+                    >
+                      <span className="flex items-center gap-2 text-xs font-medium text-gray-700">
+                        <FileText className="h-3.5 w-3.5 text-slate-500" />
+                        OCR結果
+                        {document.ocrResult && (
+                          <span className="text-[10px] text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded">
+                            {document.ocrResult.length.toLocaleString()}文字
+                          </span>
+                        )}
+                      </span>
+                      <ChevronDown className={`h-4 w-4 text-gray-400 transition-transform duration-200 ${expandedSection === 'ocr' ? 'rotate-180' : ''}`} />
+                    </button>
+                    {expandedSection === 'ocr' && (
+                      <div className="p-3 overflow-y-auto max-h-[220px] bg-white border-t border-gray-100">
+                        <div className="text-xs text-gray-600 whitespace-pre-wrap font-mono leading-relaxed">
+                          {document.ocrResult || 'OCR結果なし'}
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 {/* カテゴリ */}
@@ -855,6 +883,87 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
           onClose={() => setIsSplitModalOpen(false)}
           onSuccess={handleSplitSuccess}
         />
+      )}
+
+      {/* モバイル用ポップアップ */}
+      {mobilePopup && document && (
+        <div
+          className="fixed inset-0 z-[100] flex items-end justify-center bg-black/50 md:hidden"
+          onClick={() => setMobilePopup(null)}
+        >
+          <div
+            className="w-full max-h-[70vh] bg-white rounded-t-2xl shadow-xl animate-in slide-in-from-bottom duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* ヘッダー */}
+            <div className={`flex items-center justify-between px-4 py-3 border-b ${
+              mobilePopup === 'summary' ? 'bg-purple-50' : 'bg-slate-50'
+            }`}>
+              <div className="flex items-center gap-2">
+                {mobilePopup === 'summary' ? (
+                  <>
+                    <Sparkles className="h-4 w-4 text-purple-500" />
+                    <span className="font-medium text-gray-900">AI要約</span>
+                  </>
+                ) : (
+                  <>
+                    <FileText className="h-4 w-4 text-slate-500" />
+                    <span className="font-medium text-gray-900">OCR結果</span>
+                    {document.ocrResult && (
+                      <span className="text-xs text-gray-400">({document.ocrResult.length.toLocaleString()}文字)</span>
+                    )}
+                  </>
+                )}
+              </div>
+              <button
+                onClick={() => setMobilePopup(null)}
+                className="p-1 rounded-full hover:bg-gray-200"
+              >
+                <X className="h-5 w-5 text-gray-500" />
+              </button>
+            </div>
+
+            {/* コンテンツ */}
+            <div className="p-4 overflow-y-auto max-h-[calc(70vh-56px)]">
+              {mobilePopup === 'summary' ? (
+                document.summary ? (
+                  <div className="text-sm text-gray-700 leading-relaxed">
+                    {document.summary}
+                  </div>
+                ) : document.ocrResult && document.ocrResult.length >= 100 ? (
+                  <div className="text-center py-4">
+                    <Button
+                      variant="outline"
+                      onClick={handleGenerateSummary}
+                      disabled={isGeneratingSummary}
+                      className="text-purple-600 border-purple-200 hover:bg-purple-50"
+                    >
+                      {isGeneratingSummary ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          生成中...
+                        </>
+                      ) : (
+                        <>
+                          <RefreshCw className="mr-2 h-4 w-4" />
+                          AI要約を生成
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                ) : (
+                  <p className="text-sm text-gray-400 text-center py-4">
+                    OCR結果が短いため要約を生成できません
+                  </p>
+                )
+              ) : (
+                <div className="text-xs text-gray-600 whitespace-pre-wrap font-mono leading-relaxed">
+                  {document.ocrResult || 'OCR結果なし'}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
       )}
     </Dialog>
   )
