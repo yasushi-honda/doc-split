@@ -256,6 +256,16 @@ node scripts/import-masters.js --file scripts/samples/customers.csv --type custo
      - `masters/offices/items` - 事業所
      - `masters/caremanagers/items` - ケアマネ（小文字）
 
+5. **ドメイン許可リストによる自動ログイン**
+   - `settings/auth.allowedDomains` に許可ドメインを設定
+   - `setup-tenant.sh` は管理者メールのドメインのみ自動設定
+   - 追加ドメインが必要な場合:
+     ```bash
+     node scripts/check-allowed-domains.js <project-id> --add <domain>
+     # 例: node scripts/check-allowed-domains.js docsplit-kanameone --add kanameone.com
+     ```
+   - **2026-01-30修正**: Firestoreルールのバグで新規ドメインユーザーがログインできない問題を修正済み
+
 **トラブルシュート詳細**: `docs/operation/setup-guide.md` 参照
 
 ## 確定した相談事項

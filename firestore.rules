@@ -149,7 +149,11 @@ service cloud.firestore {
 
     // アプリ設定
     match /settings/{settingId} {
-      allow read: if isWhitelisted();
+      // settings/authは認証済みユーザーなら読める（ドメイン許可チェック用）
+      // 新規ドメインユーザーがusersコレクションに未登録の状態でallowedDomainsを確認する必要があるため
+      allow read: if settingId == 'auth' && isAuthenticated();
+      // その他の設定はホワイトリスト登録済みユーザーのみ
+      allow read: if settingId != 'auth' && isWhitelisted();
       allow write: if isAdmin();
     }
 

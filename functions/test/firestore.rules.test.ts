@@ -883,6 +883,60 @@ describe('Firestore Security Rules', () => {
       await assertSucceeds(getDoc(docRef));
     });
 
+    // ============================================
+    // ドメイン許可リストログインバグ修正テスト
+    // ホワイトリスト未登録ユーザーがsettings/authを読めないとログインできない問題の修正確認
+    // ============================================
+    it('未登録ユーザーはsettings/authを読み取り可能（ドメインチェック用）', async () => {
+      const unknownUser = testEnv.authenticatedContext(unknownUid);
+
+      // テストデータを作成
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'settings', 'auth'), {
+          allowedDomains: ['example.com', 'kanameone.com'],
+        });
+      });
+
+      const docRef = doc(unknownUser.firestore(), 'settings', 'auth');
+      await assertSucceeds(getDoc(docRef));
+    });
+
+    it('未登録ユーザーはsettings/app等その他の設定は読み取り不可', async () => {
+      const unknownUser = testEnv.authenticatedContext(unknownUid);
+
+      // テストデータを作成
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'settings', 'app'), {
+          targetLabels: ['請求書'],
+        });
+        await setDoc(doc(context.firestore(), 'settings', 'gmail'), {
+          authMode: 'oauth',
+        });
+      });
+
+      // settings/appは読み取り不可
+      const appRef = doc(unknownUser.firestore(), 'settings', 'app');
+      await assertFails(getDoc(appRef));
+
+      // settings/gmailも読み取り不可
+      const gmailRef = doc(unknownUser.firestore(), 'settings', 'gmail');
+      await assertFails(getDoc(gmailRef));
+    });
+
+    it('未認証ユーザーはsettings/authも読み取り不可', async () => {
+      const unauthed = testEnv.unauthenticatedContext();
+
+      // テストデータを作成
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'settings', 'auth'), {
+          allowedDomains: ['example.com'],
+        });
+      });
+
+      const docRef = doc(unauthed.firestore(), 'settings', 'auth');
+      await assertFails(getDoc(docRef));
+    });
+
     it('一般ユーザーは設定を編集不可', async () => {
       const normalUser = testEnv.authenticatedContext(normalUid);
       const docRef = doc(normalUser.firestore(), 'settings', 'app');
