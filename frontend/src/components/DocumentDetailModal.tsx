@@ -428,7 +428,13 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
               </div>
 
               {/* メタ情報サイドバー（モバイル: 下部表示・折りたたみ可、デスクトップ: サイドバー） */}
-              <div className={`w-full flex-shrink-0 border-t bg-white transition-all duration-200 md:h-auto md:w-80 md:border-l md:border-t-0 md:overflow-y-auto ${isMetadataCollapsed ? 'h-12' : 'h-[40vh] overflow-y-auto'} md:p-4 ${isMetadataCollapsed ? 'p-2' : 'p-3'}`}>
+              <div
+                className={`w-full flex-shrink-0 border-t bg-white transition-all duration-200 md:h-auto md:w-80 md:border-l md:border-t-0 md:overflow-y-auto md:p-4 ${
+                  isMetadataCollapsed
+                    ? 'h-10 overflow-hidden p-2'
+                    : 'h-[40vh] overflow-y-auto p-3'
+                }`}
+              >
                 <div className={`flex items-center justify-between ${isMetadataCollapsed ? '' : 'mb-4'}`}>
                   {/* モバイル用折りたたみボタン */}
                   <button
@@ -437,9 +443,9 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                     className="flex items-center gap-2 md:hidden"
                   >
                     {isMetadataCollapsed ? (
-                      <ChevronUp className="h-4 w-4 text-gray-500" />
-                    ) : (
                       <ChevronDown className="h-4 w-4 text-gray-500" />
+                    ) : (
+                      <ChevronUp className="h-4 w-4 text-gray-500" />
                     )}
                     <h3 className="text-sm font-semibold text-gray-900">書類情報</h3>
                   </button>
