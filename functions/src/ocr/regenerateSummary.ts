@@ -9,10 +9,11 @@ import * as admin from 'firebase-admin';
 import { VertexAI } from '@google-cloud/vertexai';
 import { getRateLimiter, trackGeminiUsage } from '../utils/rateLimiter';
 import { withRetry, RETRY_CONFIGS } from '../utils/retry';
+import { GCP_CONFIG, GEMINI_CONFIG } from '../utils/config';
 
-const PROJECT_ID = process.env.GCLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT;
-const LOCATION = 'asia-northeast1';
-const MODEL_ID = 'gemini-2.5-flash-preview-05-20';
+const PROJECT_ID = GCP_CONFIG.projectId;
+const LOCATION = GCP_CONFIG.location;
+const MODEL_ID = GEMINI_CONFIG.modelId;
 
 const db = admin.firestore();
 

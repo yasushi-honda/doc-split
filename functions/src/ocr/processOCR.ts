@@ -21,6 +21,7 @@ import { PDFDocument } from 'pdf-lib';
 import { withRetry, RETRY_CONFIGS } from '../utils/retry';
 import { logError } from '../utils/errorLogger';
 import { getRateLimiter, trackGeminiUsage } from '../utils/rateLimiter';
+import { GCP_CONFIG, GEMINI_CONFIG } from '../utils/config';
 import {
   extractDocumentTypeEnhanced,
   extractCustomerCandidates,
@@ -37,10 +38,10 @@ import {
 const db = admin.firestore();
 const storage = admin.storage();
 
-// Vertex AI設定
-const PROJECT_ID = process.env.GCLOUD_PROJECT || process.env.GCP_PROJECT || '';
-const LOCATION = 'asia-northeast1';
-const MODEL_ID = 'gemini-2.5-flash';
+// Vertex AI設定（共通設定から取得）
+const PROJECT_ID = GCP_CONFIG.projectId;
+const LOCATION = GCP_CONFIG.location;
+const MODEL_ID = GEMINI_CONFIG.modelId;
 
 const FUNCTION_NAME = 'processOCR';
 
