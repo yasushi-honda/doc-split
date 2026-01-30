@@ -30,9 +30,11 @@ export const initTenantSettings = onRequest(
       console.log('✅ settings/app created');
 
       // settings/gmail（Gmail認証設定 - gmailAuth.tsが参照）
+      // 注意: authModeは環境に応じて設定画面から変更すること
+      // - Secret Managerにgmail-oauth-*がある場合: 'oauth'
+      // - Domain-wide Delegation設定済みの場合: 'service_account'
       await db.doc('settings/gmail').set({
-        authMode: 'service_account',
-        delegatedUserEmail: 'docsplit@kanameone.com'
+        authMode: 'oauth'  // デフォルトはOAuth（Secret Managerに認証情報がある前提）
       });
       console.log('✅ settings/gmail created');
 

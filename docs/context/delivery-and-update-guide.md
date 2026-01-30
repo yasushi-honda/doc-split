@@ -270,6 +270,83 @@ firebase functions:log -P client-a
 
 ---
 
+## 🚨 重要: データ削除の禁止事項（ADR-0008）
+
+### 絶対に実行してはいけないコマンド
+
+```bash
+# 本番環境で以下は絶対禁止
+firebase firestore:delete --all-collections -P <client-alias>
+firebase firestore:delete / --recursive -P <client-alias>
+```
+
+**2026-01-30教訓**: 本番環境で `--all-collections` を誤実行し、settings, users, mastersを含む全データを喪失。PITR/バックアップ未設定のため復元不可能となった。
+
+### 許可される削除操作（特定コレクションのみ）
+
+```bash
+# テストデータの削除（documentsコレクションのみ）
+firebase firestore:delete documents --recursive -P <client-alias>
+```
+
+### 削除前の必須確認チェックリスト
+
+- [ ] 削除対象コレクション名を**3回確認**
+- [ ] `--all-collections` は**絶対に使わない**
+- [ ] 本番環境であることを認識
+
+---
+
+## 🔧 障害復旧: Firestore設定消失時の手順
+
+### 復旧が必要な設定
+
+| 設定 | パス | 説明 |
+|------|------|------|
+| 認証設定 | `settings/auth` | allowedDomains |
+| アプリ設定 | `settings/app` | gmailAccount, targetLabels等 |
+| Gmail認証設定 | `settings/gmail` | authMode（**重要**） |
+| ユーザー | `users/{uid}` | 管理者権限 |
+| マスターデータ | `masters/*/items` | 顧客・書類種別・事業所・ケアマネ |
+
+### settings/gmail の正しい設定
+
+**重要**: `authMode` は環境に合わせて設定する。
+
+```javascript
+// OAuth認証の場合（Secret Managerに gmail-oauth-* がある場合）
+{
+  authMode: "oauth"
+}
+
+// Service Account認証の場合（Domain-wide Delegation設定済みの場合）
+{
+  authMode: "service_account",
+  delegatedUserEmail: "<監視対象Gmailと同じアカウント>"
+}
+```
+
+**確認方法**:
+```bash
+# Secret Managerにgmail-oauth-*があるか確認
+gcloud secrets list --project=<project-id> | grep gmail-oauth
+
+# あれば authMode: "oauth" を使用
+# なければ authMode: "service_account" を使用
+```
+
+### 復旧用Cloud Function（initTenantSettings）
+
+緊急時は以下の関数を使用:
+```bash
+curl "https://asia-northeast1-<project-id>.cloudfunctions.net/initTenantSettings"
+curl "https://asia-northeast1-<project-id>.cloudfunctions.net/registerAdminUser?uid=<UID>&email=<EMAIL>"
+```
+
+**注意**: initTenantSettingsはデフォルト値で設定を作成するため、クライアント固有の設定（ラベル、Gmailアカウント等）は**設定画面から手動で再設定**が必要。
+
+---
+
 ## 関連ドキュメント
 
 | ドキュメント | 用途 |
