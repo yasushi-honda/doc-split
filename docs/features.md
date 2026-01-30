@@ -113,7 +113,7 @@
 
 | 関数 | 間隔 | 説明 |
 |------|------|------|
-| `checkGmailAttachments` | 5分 | Gmail添付ファイル取得 |
+| `checkGmailAttachments` | 5分 | Gmail添付ファイル取得（MD5重複チェック付き） |
 | `processOCR` | 5分 | OCR処理実行 |
 
 ### Callable Functions（オンデマンド）
