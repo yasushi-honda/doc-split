@@ -710,11 +710,11 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
 
                   {/* 右側のボタン群 */}
                   <div className="flex items-center gap-2">
-                    {/* AI要約/OCRボタン（常に表示） */}
+                    {/* AI要約/OCRボタン（モバイルのみ表示） */}
                     <button
                       type="button"
                       onClick={() => setMobilePopup('summary')}
-                      className="flex items-center gap-1 px-2 py-1 rounded bg-purple-100 text-purple-700 text-xs font-medium hover:bg-purple-200 transition-colors"
+                      className="flex md:hidden items-center gap-1 px-2 py-1 rounded bg-purple-100 text-purple-700 text-xs font-medium hover:bg-purple-200 transition-colors"
                     >
                       <Sparkles className="h-3.5 w-3.5" />
                       <span className="hidden sm:inline">AI</span>要約
@@ -722,7 +722,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                     <button
                       type="button"
                       onClick={() => setMobilePopup('ocr')}
-                      className="flex items-center gap-1 px-2 py-1 rounded bg-slate-100 text-slate-700 text-xs font-medium hover:bg-slate-200 transition-colors"
+                      className="flex md:hidden items-center gap-1 px-2 py-1 rounded bg-slate-100 text-slate-700 text-xs font-medium hover:bg-slate-200 transition-colors"
                     >
                       <FileText className="h-3.5 w-3.5" />
                       OCR
