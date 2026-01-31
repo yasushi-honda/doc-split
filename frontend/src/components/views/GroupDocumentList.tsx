@@ -50,6 +50,9 @@ function DocumentRow({ document, groupType, onClick }: DocumentRowProps) {
     document.officeCandidates.length > 0;
   const needsReview = needsCustomerConfirmation || needsOfficeConfirmation;
 
+  // OCR未確認
+  const isUnverified = !document.verified;
+
   // グループタイプに応じて表示するサブ情報を変更
   const getSubInfo = () => {
     switch (groupType) {
@@ -89,6 +92,11 @@ function DocumentRow({ document, groupType, onClick }: DocumentRowProps) {
         ) : (
           <Badge variant={statusConfig.variant} className="text-xs">
             {statusConfig.label}
+          </Badge>
+        )}
+        {isUnverified && (
+          <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-300 text-xs">
+            未確認
           </Badge>
         )}
       </div>

@@ -85,6 +85,9 @@ function DocumentRow({ document, onClick }: DocumentRowProps) {
     document.officeCandidates.length > 0;
   const needsReview = needsCustomerConfirmation || needsOfficeConfirmation;
 
+  // OCR未確認
+  const isUnverified = !document.verified;
+
   return (
     <div
       className="flex items-center gap-3 px-4 py-2 cursor-pointer transition-colors hover:bg-gray-100"
@@ -110,6 +113,11 @@ function DocumentRow({ document, onClick }: DocumentRowProps) {
         ) : (
           <Badge variant={statusConfig.variant} className="text-xs">
             {statusConfig.label}
+          </Badge>
+        )}
+        {isUnverified && (
+          <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-300 text-xs">
+            未確認
           </Badge>
         )}
       </div>
