@@ -3,15 +3,21 @@
 # DocSplit マルチ環境デプロイスクリプト
 #
 # 使用方法:
-#   ./deploy-to-project.sh <project-alias> [--full]
+#   ./deploy-to-project.sh <project-alias> [OPTIONS]
 #
 # オプション:
 #   --full          Hosting + Functions + Rules を全てデプロイ
+#   --rules         Hosting + Firestore/Storage ルール をデプロイ
+#                   ★ Firestoreスキーマ変更時（新フィールド追加等）は必須
 #   (デフォルト)    Hosting のみデプロイ
 #
 # 例:
 #   ./deploy-to-project.sh dev              # Hostingのみデプロイ
+#   ./deploy-to-project.sh kanameone --rules # Hosting + ルール（スキーマ変更時）
 #   ./deploy-to-project.sh kanameone --full # 全コンポーネントをデプロイ
+#
+# ⚠️ 重要: Firestoreに新フィールドを追加した場合は --rules または --full を使用すること
+#    （ルールをデプロイしないとパーミッションエラーになる）
 #
 
 set -e
@@ -31,18 +37,23 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 # 使用方法
 usage() {
-    echo "Usage: $0 <project-alias> [--full]"
+    echo "Usage: $0 <project-alias> [OPTIONS]"
     echo ""
     echo "Arguments:"
     echo "  project-alias   デプロイ先プロジェクト (dev, kanameone, etc.)"
     echo ""
     echo "Options:"
     echo "  --full          Hosting + Functions + Rules を全てデプロイ"
+    echo "  --rules         Hosting + Firestore/Storage ルール をデプロイ"
+    echo "                  ★ Firestoreスキーマ変更時は必須"
     echo "  (デフォルト)    Hosting のみデプロイ"
     echo ""
     echo "Example:"
-    echo "  $0 dev              # Hostingのみデプロイ"
-    echo "  $0 kanameone --full # 全コンポーネントをデプロイ"
+    echo "  $0 dev                  # Hostingのみデプロイ"
+    echo "  $0 kanameone --rules    # Hosting + ルール（スキーマ変更時）"
+    echo "  $0 kanameone --full     # 全コンポーネントをデプロイ"
+    echo ""
+    echo "⚠️  Firestoreに新フィールドを追加した場合は --rules または --full を使用"
     exit 1
 }
 
@@ -53,12 +64,16 @@ fi
 
 PROJECT_ALIAS=$1
 FULL_DEPLOY=false
+RULES_DEPLOY=false
 
 # オプション解析
 for arg in "$@"; do
     case $arg in
         --full)
             FULL_DEPLOY=true
+            ;;
+        --rules)
+            RULES_DEPLOY=true
             ;;
     esac
 done
@@ -97,7 +112,13 @@ echo -e "${GREEN}║   DocSplit デプロイ                        ║${NC}"
 echo -e "${GREEN}╚════════════════════════════════════════════╝${NC}"
 echo ""
 echo "Target: $PROJECT_ALIAS ($PROJECT_ID)"
-echo "Mode:   $( [ "$FULL_DEPLOY" = true ] && echo "Full (Hosting + Functions + Rules)" || echo "Hosting only" )"
+if [ "$FULL_DEPLOY" = true ]; then
+    echo "Mode:   Full (Hosting + Functions + Rules)"
+elif [ "$RULES_DEPLOY" = true ]; then
+    echo "Mode:   Hosting + Rules (スキーマ変更対応)"
+else
+    echo "Mode:   Hosting only"
+fi
 echo ""
 
 # 環境変数ファイルの存在確認
@@ -169,6 +190,15 @@ if [ "$FULL_DEPLOY" = true ]; then
 
     echo ""
     log_info "Firestore/Storage ルール デプロイ中..."
+    firebase deploy --only firestore:rules,storage -P "$PROJECT_ALIAS"
+    log_success "ルール デプロイ完了"
+fi
+
+# --rules オプション時はルールのみデプロイ（Functionsなし）
+if [ "$RULES_DEPLOY" = true ] && [ "$FULL_DEPLOY" = false ]; then
+    echo ""
+    log_info "Firestore/Storage ルール デプロイ中..."
+    cd "$ROOT_DIR"
     firebase deploy --only firestore:rules,storage -P "$PROJECT_ALIAS"
     log_success "ルール デプロイ完了"
 fi

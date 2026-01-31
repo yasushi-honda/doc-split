@@ -169,12 +169,34 @@ firebase deploy -P client-b
 # Functionsのみ
 firebase deploy --only functions -P client-a
 
-# Hostingのみ
-firebase deploy --only hosting -P client-a
+# Hostingのみ（deploy-to-project.sh推奨）
+./scripts/deploy-to-project.sh client-a
 
-# ルールのみ
+# Hosting + ルール（スキーマ変更時）
+./scripts/deploy-to-project.sh client-a --rules
+
+# 全コンポーネント
+./scripts/deploy-to-project.sh client-a --full
+
+# ルールのみ（手動）
 firebase deploy --only firestore:rules,storage -P client-a
 ```
+
+### ⚠️ デプロイ対象の判断基準（AI向け必読）
+
+| 変更内容 | 必要なデプロイ | コマンド |
+|---------|---------------|---------|
+| フロントエンドのみ | Hosting | `./scripts/deploy-to-project.sh <alias>` |
+| **Firestoreスキーマ変更** | **Hosting + Rules** | `./scripts/deploy-to-project.sh <alias> --rules` |
+| Functions追加/変更 | Full | `./scripts/deploy-to-project.sh <alias> --full` |
+| 全て | Full | `./scripts/deploy-to-project.sh <alias> --full` |
+
+**Firestoreスキーマ変更の例**:
+- 新フィールド追加（例: `verified`, `verifiedBy`, `verifiedAt`）
+- フィールドの書き込み権限変更
+- 新コレクション追加
+
+**2026-01-31教訓**: 新フィールド（verified等）追加後、Firestoreルールをクライアント環境にデプロイし忘れ、パーミッションエラーが発生。**スキーマ変更時は必ず `--rules` を使用すること。**
 
 ### 緊急修正（Hotfix）
 

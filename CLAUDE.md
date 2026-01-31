@@ -143,9 +143,11 @@ cd frontend && npm test
 手動で`firebase deploy`を実行すると、`.env.local`の設定が使われて誤った環境にデプロイされる危険がある。
 
 ```bash
-# マルチ環境Hostingデプロイ（推奨）
-./scripts/deploy-to-project.sh dev         # 開発環境
-./scripts/deploy-to-project.sh <alias>     # クライアント環境（.firebasercのエイリアス）
+# マルチ環境デプロイ（推奨）
+./scripts/deploy-to-project.sh dev           # Hostingのみ
+./scripts/deploy-to-project.sh <alias>       # Hostingのみ
+./scripts/deploy-to-project.sh <alias> --rules  # Hosting + ルール（★スキーマ変更時必須）
+./scripts/deploy-to-project.sh <alias> --full   # 全コンポーネント
 
 # Functionsのみ（環境変数に依存しないため直接実行OK）
 firebase deploy --only functions -P dev
@@ -155,6 +157,15 @@ firebase deploy --only functions -P <alias>
 firebase deploy --only firestore:rules,storage -P dev
 firebase deploy --only firestore:rules,storage -P <alias>
 ```
+
+**⚠️ デプロイ対象の判断（AI向け必読）**:
+| 変更内容 | コマンド |
+|---------|---------|
+| フロントエンドのみ | `./scripts/deploy-to-project.sh <alias>` |
+| **Firestoreスキーマ変更** | `./scripts/deploy-to-project.sh <alias> --rules` |
+| Functions変更 | `./scripts/deploy-to-project.sh <alias> --full` |
+
+**スキーマ変更の例**: 新フィールド追加（verified等）、フィールド権限変更、新コレクション追加
 
 ### 環境変数ファイル構成
 
