@@ -768,18 +768,9 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                         disabled={isVerifying || isEditing}
                         className="data-[state=checked]:bg-green-500"
                       />
-                      <label className={`text-xs font-medium ${document.verified ? 'text-green-700' : 'text-gray-500'}`}>
-                        {isVerifying ? (
-                          <span className="flex items-center gap-1">
-                            <Loader2 className="h-3 w-3 animate-spin" />
-                            処理中
-                          </span>
-                        ) : document.verified ? (
-                          '確認済み'
-                        ) : (
-                          '未確認'
-                        )}
-                      </label>
+                      <span className={`text-xs font-medium ${document.verified ? 'text-green-700' : 'text-gray-500'}`}>
+                        {document.verified ? '確認済み' : '未確認'}
+                      </span>
                     </div>
                   </div>
 
