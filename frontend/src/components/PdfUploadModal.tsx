@@ -125,7 +125,7 @@ export function PdfUploadModal({ open, onOpenChange, onSuccess }: PdfUploadModal
       }, AUTO_CLOSE_DELAY_MS)
       return () => clearTimeout(timer)
     }
-  }, [currentStep, onOpenChange])
+  }, [currentStep, onOpenChange, resetState])
 
   const resetState = useCallback(() => {
     setSelectedFile(null)
