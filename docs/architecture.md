@@ -110,6 +110,9 @@ sequenceDiagram
 | `detectSplitPoints` | Callable | PDF分割候補検出 |
 | `splitPdf` | Callable | PDF分割実行 |
 | `rotatePdfPages` | Callable | PDFページ回転 |
+| `regenerateSummary` | Callable | AI要約再生成 |
+| `searchDocuments` | Callable | 全文検索（日付パース対応） |
+| `onDocumentWriteSearchIndex` | Trigger | 検索インデックス自動更新 |
 
 ### Firestore コレクション
 
