@@ -750,8 +750,31 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                     )}
                     <h3 className="text-sm font-semibold text-gray-900">書類情報</h3>
                   </button>
-                  {/* デスクトップ用タイトル */}
-                  <h3 className="hidden text-sm font-semibold text-gray-900 md:block">書類情報</h3>
+                  {/* デスクトップ用タイトル + 確認ステータス */}
+                  <div className="hidden md:flex items-center gap-3">
+                    <h3 className="text-sm font-semibold text-gray-900">書類情報</h3>
+                    {/* OCR確認トグル（デスクトップ：インライン表示） */}
+                    <button
+                      type="button"
+                      onClick={document.verified ? markAsUnverified : markAsVerified}
+                      disabled={isVerifying || isEditing}
+                      className={`flex items-center gap-1.5 px-2 py-1 rounded-full text-xs font-medium transition-all ${
+                        document.verified
+                          ? 'bg-green-100 text-green-700 hover:bg-green-200'
+                          : 'bg-amber-100 text-amber-700 hover:bg-amber-200'
+                      } ${(isVerifying || isEditing) ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+                      title={document.verified ? '確認済み（クリックで取り消し）' : '未確認（クリックで確認済みにする）'}
+                    >
+                      {isVerifying ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : document.verified ? (
+                        <CheckCircle className="h-3 w-3" />
+                      ) : (
+                        <AlertCircle className="h-3 w-3" />
+                      )}
+                      <span>{document.verified ? '確認済' : '未確認'}</span>
+                    </button>
+                  </div>
 
                   {/* 右側のボタン群 */}
                   <div className="flex items-center gap-2">
@@ -811,6 +834,11 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                 {editError && (
                   <div className="mb-4 rounded bg-red-50 p-2 text-xs text-red-600">
                     {editError}
+                  </div>
+                )}
+                {verifyError && (
+                  <div className="mb-4 hidden md:block rounded bg-red-50 p-2 text-xs text-red-600">
+                    {verifyError}
                   </div>
                 )}
 
@@ -1019,8 +1047,8 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                   </div>
                 )}
 
-                {/* OCR確認ステータス */}
-                <div className="mt-4 rounded-lg border p-3">
+                {/* OCR確認ステータス（モバイルのみ表示） */}
+                <div className="mt-4 rounded-lg border p-3 md:hidden">
                   <h4 className="mb-2 text-xs font-medium text-gray-500">OCR確認ステータス</h4>
                   {verifyError && (
                     <div className="mb-2 rounded bg-red-50 p-2 text-xs text-red-600">
@@ -1033,13 +1061,6 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                         <CheckCircle className="h-4 w-4 text-green-600" />
                         <span className="text-sm font-medium text-green-800">確認済み</span>
                       </div>
-                      <p className="text-xs text-gray-500">
-                        {document.verifiedAt && (
-                          <>
-                            {formatTimestamp(document.verifiedAt, 'yyyy/MM/dd HH:mm')} に確認
-                          </>
-                        )}
-                      </p>
                       <Button
                         variant="outline"
                         size="sm"
