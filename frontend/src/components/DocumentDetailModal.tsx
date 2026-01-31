@@ -651,7 +651,12 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                   <FileText className="hidden h-6 w-6 text-gray-400 sm:block" />
                   <div className="min-w-0 flex-1">
                     <DialogTitle className="truncate text-base sm:text-lg">{document.fileName}</DialogTitle>
-                    <p className="text-xs text-gray-500 sm:text-sm">{document.documentType || '未判定'}</p>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <p className="text-xs text-gray-500 sm:text-sm">{document.documentType || '未判定'}</p>
+                      {document.category && (
+                        <Badge variant="outline" className="text-xs">{document.category}</Badge>
+                      )}
+                    </div>
                   </div>
                   <Badge variant={(STATUS_CONFIG[document.status] || STATUS_CONFIG.pending).variant}>
                     {(STATUS_CONFIG[document.status] || STATUS_CONFIG.pending).label}
@@ -1184,12 +1189,6 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                   </div>
                 </div>
 
-                {/* カテゴリ */}
-                {document.category && (
-                  <div className="mt-4">
-                    <Badge variant="outline">{document.category}</Badge>
-                  </div>
-                )}
 
                 {/* 直近の学習履歴 */}
                 {historyData && historyData.logs.length > 0 && (

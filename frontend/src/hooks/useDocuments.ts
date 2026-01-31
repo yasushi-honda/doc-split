@@ -3,7 +3,7 @@
  * TanStack Queryを使用したリアクティブなデータ取得
  */
 
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   collection,
   query,
@@ -188,6 +188,23 @@ export function useDocuments(options: UseDocumentsOptions = {}) {
     enabled,
     staleTime: 30000, // 30秒間はキャッシュを使用
     refetchInterval: 30000, // 30秒ごとに自動再取得（ステータス更新反映）
+  })
+}
+
+/**
+ * 無限スクロール対応版の書類一覧取得
+ */
+export function useInfiniteDocuments(options: UseDocumentsOptions = {}) {
+  const { filters = {}, pageSize = 50, enabled = true } = options
+
+  return useInfiniteQuery({
+    queryKey: ['documentsInfinite', filters, pageSize],
+    queryFn: ({ pageParam }) => fetchDocuments(filters, pageSize, pageParam as DocumentSnapshot | undefined),
+    initialPageParam: undefined as DocumentSnapshot | undefined,
+    getNextPageParam: (lastPage) => lastPage.hasMore ? lastPage.lastDoc : undefined,
+    enabled,
+    staleTime: 30000,
+    refetchInterval: 30000,
   })
 }
 
