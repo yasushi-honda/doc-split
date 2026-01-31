@@ -82,6 +82,18 @@ export function PdfUploadModal({ open, onOpenChange, onSuccess }: PdfUploadModal
     suggestedFileName: string
   } | null>(null)
 
+  // 状態リセット関数（useEffectより前に定義）
+  const resetState = useCallback(() => {
+    setSelectedFile(null)
+    setError(null)
+    setCurrentStep('idle')
+    setDocumentId(null)
+    setDuplicateInfo(null)
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''
+    }
+  }, [])
+
   // OCR処理完了を監視
   useEffect(() => {
     if (!documentId || currentStep === 'processed' || currentStep === 'error') {
@@ -126,17 +138,6 @@ export function PdfUploadModal({ open, onOpenChange, onSuccess }: PdfUploadModal
       return () => clearTimeout(timer)
     }
   }, [currentStep, onOpenChange, resetState])
-
-  const resetState = useCallback(() => {
-    setSelectedFile(null)
-    setError(null)
-    setCurrentStep('idle')
-    setDocumentId(null)
-    setDuplicateInfo(null)
-    if (fileInputRef.current) {
-      fileInputRef.current.value = ''
-    }
-  }, [])
 
   const handleClose = useCallback(() => {
     if (currentStep !== 'uploading') {
