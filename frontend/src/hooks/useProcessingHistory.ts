@@ -7,7 +7,7 @@
  * - バッファリング方式ページネーション
  */
 
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   collection,
@@ -229,11 +229,26 @@ export function useProcessingHistory(filters: ProcessingHistoryFilters): Process
   }, [filters.period, filters.status, filters.confirmed]);
 
   // React Query
-  const { isLoading, error } = useQuery({
+  const { data: queryData, isLoading, error } = useQuery({
     queryKey: ['processingHistory', filters],
     queryFn: fetchInitialData,
     staleTime: 30000,
   });
+
+  // React Query のデータが変更されたら displayedDocs を同期
+  // (キャッシュヒット時やフィルター変更時に確実にデータを反映)
+  useEffect(() => {
+    if (queryData !== undefined) {
+      setDisplayedDocs(queryData);
+    }
+  }, [queryData]);
+
+  // フィルター変更時に内部状態をリセット
+  useEffect(() => {
+    setBuffer([]);
+    setLastFirestoreDoc(null);
+    setNoMoreFirestoreDocs(false);
+  }, [filters.period, filters.status, filters.confirmed]);
 
   // 次ページ取得
   const fetchNextPage = useCallback(async () => {
