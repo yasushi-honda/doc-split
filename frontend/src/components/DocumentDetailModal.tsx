@@ -338,6 +338,8 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
   const [mobilePopup, setMobilePopup] = useState<'summary' | 'ocr' | null>(null)
   // 閉じる確認ダイアログ
   const [showCloseDialog, setShowCloseDialog] = useState(false)
+  // 編集モードで閉じる確認ダイアログ
+  const [showEditCloseDialog, setShowEditCloseDialog] = useState(false)
 
   const queryClient = useQueryClient()
 
@@ -393,6 +395,23 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
     id: d.id,
     name: d.name,
   }))
+
+  // OCR候補をMasterSelectField用に変換（優先表示用）
+  const suggestedCustomerItems = document?.customerCandidates?.map(c => ({
+    id: c.customerId || '',
+    name: c.customerName || '',
+    subText: c.furigana,
+    notes: c.notes,
+    score: c.score,
+  })).filter(c => c.id && c.name) || []
+
+  const suggestedOfficeItems = document?.officeCandidates?.map(o => ({
+    id: o.officeId || '',
+    name: o.officeName || '',
+    subText: o.shortName,
+    notes: o.notes,
+    score: o.score,
+  })).filter(o => o.id && o.name) || []
 
   // 編集保存成功時
   const handleSave = async () => {
@@ -570,11 +589,19 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
     document.mimeType === 'application/pdf' &&
     document.status === 'processed'
 
-  // 閉じる時のハンドラ（未確認の場合はダイアログを表示）
+  // 閉じる時のハンドラ（編集中または未確認の場合はダイアログを表示）
   const handleOpenChange = (newOpen: boolean) => {
-    if (!newOpen && document && !document.verified) {
-      // 閉じようとしていて、未確認の場合はダイアログを表示
-      setShowCloseDialog(true)
+    if (!newOpen) {
+      // 閉じようとしている
+      if (isEditing) {
+        // 編集モードの場合は編集破棄の確認ダイアログを表示
+        setShowEditCloseDialog(true)
+      } else if (document && !document.verified) {
+        // 未確認の場合はOCR確認ダイアログを表示
+        setShowCloseDialog(true)
+      } else {
+        onOpenChange(newOpen)
+      }
     } else {
       onOpenChange(newOpen)
     }
@@ -591,6 +618,23 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
   const handleCloseWithoutVerify = () => {
     setShowCloseDialog(false)
     onOpenChange(false)
+  }
+
+  // 編集を破棄して閉じる
+  const handleDiscardAndClose = () => {
+    cancelEditing()
+    setShowEditCloseDialog(false)
+    // 編集キャンセル後、未確認の場合はOCR確認ダイアログを表示
+    if (document && !document.verified) {
+      setShowCloseDialog(true)
+    } else {
+      onOpenChange(false)
+    }
+  }
+
+  // 編集を続ける（閉じない）
+  const handleContinueEditing = () => {
+    setShowEditCloseDialog(false)
   }
 
   return (
@@ -867,6 +911,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                             type="customer"
                             value={editedFields.customerName || ''}
                             items={customerItems}
+                            suggestedItems={suggestedCustomerItems.length > 0 ? suggestedCustomerItems : undefined}
                             onChange={(v) => updateField('customerName', v)}
                           />
                           {/* 顧客名エイリアス学習オプション */}
@@ -931,6 +976,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                             type="office"
                             value={editedFields.officeName || ''}
                             items={officeItems}
+                            suggestedItems={suggestedOfficeItems.length > 0 ? suggestedOfficeItems : undefined}
                             onChange={(v) => updateField('officeName', v)}
                           />
                           {/* 事業所エイリアス学習オプション */}
@@ -1266,6 +1312,29 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
           >
             <CheckCircle className="mr-1 h-4 w-4" />
             確認済みにして閉じる
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+
+    {/* 編集モードで閉じる確認ダイアログ */}
+    <AlertDialog open={showEditCloseDialog} onOpenChange={setShowEditCloseDialog}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>編集内容を破棄しますか？</AlertDialogTitle>
+          <AlertDialogDescription>
+            編集中の変更があります。保存せずに閉じると、変更内容は破棄されます。
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter className="flex-col gap-2 sm:flex-row">
+          <AlertDialogCancel onClick={handleContinueEditing}>
+            編集を続ける
+          </AlertDialogCancel>
+          <AlertDialogAction
+            onClick={handleDiscardAndClose}
+            className="bg-red-600 hover:bg-red-700"
+          >
+            破棄して閉じる
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

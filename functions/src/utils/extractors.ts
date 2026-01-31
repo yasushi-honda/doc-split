@@ -623,6 +623,128 @@ export function aggregateCustomerCandidates(
  * @param officeMasters 事業所マスターリスト
  * @param options オプション
  */
+
+/**
+ * テキストからキーワードを抽出
+ * 事業所名のマッチングに使用
+ *
+ * @param text 対象テキスト
+ * @returns キーワード配列
+ */
+function extractKeywordsForMatching(text: string): string[] {
+  // 正規化
+  const normalized = normalizeForMatching(text);
+
+  // ノイズワードを除去
+  const noiseWords = [
+    '株式会社',
+    '有限会社',
+    '合同会社',
+    '社会福祉法人',
+    '医療法人',
+    '一般社団法人',
+    'npo法人',
+    'ケアセンター',
+    'センター',
+    'サービス',
+  ];
+
+  let cleaned = normalized;
+  for (const noise of noiseWords) {
+    cleaned = cleaned.replace(new RegExp(noise, 'g'), '');
+  }
+
+  // キーワードに分割（連続する漢字・カタカナ・ひらがなを抽出）
+  const keywords: string[] = [];
+
+  // 地名パターン（〇〇市、〇〇区、〇〇町など）
+  const locationPattern = /[一-龯ぁ-んァ-ヶ]+[市区町村]/g;
+  const locations = cleaned.match(locationPattern) || [];
+  keywords.push(...locations);
+
+  // 施設タイプ（デイサービス、ショートステイ、訪問介護など）
+  const facilityTypes = [
+    'デイサービス',
+    'ショートステイ',
+    '訪問介護',
+    '訪問看護',
+    'グループホーム',
+    '特別養護老人ホーム',
+    '介護老人保健施設',
+    '小規模多機能',
+    '通所介護',
+    '居宅介護支援',
+  ];
+  for (const ft of facilityTypes) {
+    if (normalized.includes(normalizeForMatching(ft))) {
+      keywords.push(normalizeForMatching(ft));
+    }
+  }
+
+  // ブランド名・固有名詞（3文字以上の連続するカタカナ）
+  const katakanaPattern = /[ァ-ヶー]{3,}/g;
+  const katakanaMatches = normalized.match(katakanaPattern) || [];
+  keywords.push(...katakanaMatches);
+
+  // 地名（連続する漢字で3文字以上）
+  const kanjiPattern = /[一-龯]{3,}/g;
+  const kanjiMatches = cleaned.match(kanjiPattern) || [];
+  keywords.push(...kanjiMatches);
+
+  // 重複除去して返す
+  return [...new Set(keywords)].filter((k) => k.length >= 2);
+}
+
+/**
+ * キーワードベースの類似度スコアを計算
+ * マッチ率とマッチした文字数の両方を考慮
+ *
+ * @param ocrText OCRテキスト
+ * @param officeName 事業所名
+ * @returns スコアオブジェクト
+ */
+function calculateKeywordMatchScore(
+  ocrText: string,
+  officeName: string
+): { score: number; matchedLength: number } {
+  const ocrKeywords = extractKeywordsForMatching(ocrText);
+  const officeKeywords = extractKeywordsForMatching(officeName);
+
+  if (officeKeywords.length === 0) {
+    return { score: 0, matchedLength: 0 };
+  }
+
+  let matchedWeight = 0;
+  let totalWeight = 0;
+  let matchedLength = 0;
+
+  const normalizedOcrText = normalizeForMatching(ocrText);
+
+  for (const officeKw of officeKeywords) {
+    // キーワードの長さに応じた重み（長いキーワードほど重要）
+    const weight = Math.min(officeKw.length, 10);
+    totalWeight += weight;
+
+    // OCRテキストにキーワードが含まれるか
+    if (normalizedOcrText.includes(officeKw)) {
+      matchedWeight += weight;
+      matchedLength += officeKw.length;
+    } else {
+      // 部分一致チェック
+      for (const ocrKw of ocrKeywords) {
+        if (ocrKw.includes(officeKw) || officeKw.includes(ocrKw)) {
+          matchedWeight += weight * 0.8;
+          matchedLength += Math.min(ocrKw.length, officeKw.length);
+          break;
+        }
+      }
+    }
+  }
+
+  const score = totalWeight > 0 ? Math.round((matchedWeight / totalWeight) * 100) : 0;
+  return { score, matchedLength };
+}
+
 export function extractOfficeCandidates(
   ocrText: string,
   officeMasters: OfficeMaster[],
@@ -713,16 +835,35 @@ export function extractOfficeCandidates(
       }
     }
 
-    // 3. 部分一致（事業所名が4文字以上の場合）
-    if (matchType === 'none' && normalizedOfficeName.length >= 4) {
-      const prefixLength = Math.floor(normalizedOfficeName.length * 0.75);
-      if (matchingText.includes(normalizedOfficeName.slice(0, prefixLength))) {
-        score = 85;
+    // 3. キーワードマッチング（事業所名の構成要素で照合）
+    if (matchType === 'none') {
+      const keywordResult = calculateKeywordMatchScore(ocrText, office.name);
+      if (keywordResult.score >= 70) {
+        // キーワードマッチスコアをベースにして、マッチした文字数でボーナス
+        // マッチした文字数が多いほど信頼度が高い
+        const baseScore = 80 + Math.floor((keywordResult.score - 70) / 5);
+        // マッチ文字数ボーナス: 10文字ごとに1ポイント（最大10ポイント）
+        const lengthBonus = Math.min(10, Math.floor(keywordResult.matchedLength / 3));
+        score = Math.min(95, baseScore + lengthBonus);
         matchType = 'partial';
       }
     }
 
-    // 4. ファジーマッチ
+    // 4. 部分一致（事業所名が4文字以上の場合）
+    // キーワードマッチングより低い優先度
+    if (matchType === 'none' && normalizedOfficeName.length >= 4) {
+      const prefixLength = Math.floor(normalizedOfficeName.length * 0.75);
+      const prefix = normalizedOfficeName.slice(0, prefixLength);
+      if (matchingText.includes(prefix)) {
+        // マッチした文字数に応じてスコアを調整
+        // 短いプレフィックスマッチは低いスコア
+        const matchLengthRatio = prefix.length / normalizedOfficeName.length;
+        score = Math.min(80, Math.floor(70 + matchLengthRatio * 10));
+        matchType = 'partial';
+      }
+    }
+
+    // 5. ファジーマッチ
     if (matchType === 'none') {
       const windowSize = Math.min(normalizedOfficeName.length + 5, matchingText.length);
       for (let i = 0; i <= matchingText.length - windowSize; i++) {
