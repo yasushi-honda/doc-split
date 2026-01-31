@@ -2,10 +2,11 @@
  * マスター選択フィールド（新規追加機能付き）
  *
  * 編集モード時にマスターデータからの選択と新規追加を提供
+ * OCR候補がある場合は優先表示
  */
 
 import { useState } from 'react';
-import { Plus, ChevronDown, Check, User, Building2, FileText } from 'lucide-react';
+import { Plus, ChevronDown, Check, User, Building2, FileText, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Command,
@@ -14,6 +15,7 @@ import {
   CommandInput,
   CommandItem,
   CommandList,
+  CommandSeparator,
 } from '@/components/ui/command';
 import {
   Popover,
@@ -35,12 +37,14 @@ export interface MasterItem {
   name: string;
   subText?: string; // フリガナ、短縮名など
   notes?: string;   // 区別用補足情報
+  score?: number;   // OCRマッチスコア（候補表示用）
 }
 
 interface MasterSelectFieldProps {
   type: MasterFieldType;
   value: string;
   items: MasterItem[];
+  suggestedItems?: MasterItem[]; // OCR候補（優先表示）
   onChange: (value: string, item?: MasterItem) => void;
   placeholder?: string;
   disabled?: boolean;
@@ -50,10 +54,10 @@ interface MasterSelectFieldProps {
 // アイコン設定
 // ============================================
 
-const typeConfig: Record<MasterFieldType, { icon: typeof User; label: string; addLabel: string }> = {
-  customer: { icon: User, label: '顧客', addLabel: '新規顧客を追加' },
-  office: { icon: Building2, label: '事業所', addLabel: '新規事業所を追加' },
-  documentType: { icon: FileText, label: '書類種別', addLabel: '新規書類種別を追加' },
+const typeConfig: Record<MasterFieldType, { icon: typeof User; label: string; addLabel: string; suggestedLabel: string }> = {
+  customer: { icon: User, label: '顧客', addLabel: '新規顧客を追加', suggestedLabel: 'OCR候補' },
+  office: { icon: Building2, label: '事業所', addLabel: '新規事業所を追加', suggestedLabel: 'OCR候補' },
+  documentType: { icon: FileText, label: '書類種別', addLabel: '新規書類種別を追加', suggestedLabel: 'OCR候補' },
 };
 
 // ============================================
@@ -64,6 +68,7 @@ export function MasterSelectField({
   type,
   value,
   items,
+  suggestedItems,
   onChange,
   placeholder = '選択してください',
   disabled = false,
@@ -82,6 +87,45 @@ export function MasterSelectField({
   // すべてのタイプで新規追加可能
   const canAddNew = true;
   const masterType: MasterType = type === 'customer' ? 'customer' : type === 'office' ? 'office' : 'documentType';
+
+  // OCR候補のIDセット（重複除外用）
+  const suggestedIds = new Set(suggestedItems?.map(item => item.id) || []);
+
+  // OCR候補以外のアイテム
+  const otherItems = items.filter(item => !suggestedIds.has(item.id));
+
+  // 候補アイテムをレンダリング
+  const renderItem = (item: MasterItem, showScore?: boolean) => {
+    const displayText = getDisplayName(item.name, item.notes);
+    return (
+      <CommandItem
+        key={item.id}
+        value={displayText}
+        onSelect={() => {
+          onChange(item.name, item);
+          setOpen(false);
+        }}
+      >
+        <Check
+          className={cn(
+            "mr-2 h-4 w-4",
+            value === item.name ? "opacity-100" : "opacity-0"
+          )}
+        />
+        <div className="flex flex-col flex-1">
+          <span>{displayText}</span>
+          {item.subText && (
+            <span className="text-xs text-muted-foreground">{item.subText}</span>
+          )}
+        </div>
+        {showScore && item.score !== undefined && (
+          <span className="text-xs text-muted-foreground ml-2">
+            {item.score}%
+          </span>
+        )}
+      </CommandItem>
+    );
+  };
 
   return (
     <>
@@ -103,35 +147,27 @@ export function MasterSelectField({
         <PopoverContent className="w-[300px] p-0" align="start">
           <Command>
             <CommandInput placeholder={`${config.label}を検索...`} />
-            <CommandList className="max-h-[200px] overflow-y-auto">
+            <CommandList className="max-h-[250px] overflow-y-auto">
               <CommandEmpty>該当なし</CommandEmpty>
-              <CommandGroup>
-                {items.map((item) => {
-                  const displayText = getDisplayName(item.name, item.notes);
-                  return (
-                    <CommandItem
-                      key={item.id}
-                      value={displayText}
-                      onSelect={() => {
-                        onChange(item.name, item);
-                        setOpen(false);
-                      }}
-                    >
-                      <Check
-                        className={cn(
-                          "mr-2 h-4 w-4",
-                          value === item.name ? "opacity-100" : "opacity-0"
-                        )}
-                      />
-                      <div className="flex flex-col">
-                        <span>{displayText}</span>
-                        {item.subText && (
-                          <span className="text-xs text-muted-foreground">{item.subText}</span>
-                        )}
-                      </div>
-                    </CommandItem>
-                  );
-                })}
+
+              {/* OCR候補グループ（ある場合のみ表示） */}
+              {suggestedItems && suggestedItems.length > 0 && (
+                <>
+                  <CommandGroup heading={
+                    <span className="flex items-center gap-1 text-amber-600">
+                      <Sparkles className="h-3 w-3" />
+                      {config.suggestedLabel}
+                    </span>
+                  }>
+                    {suggestedItems.map((item) => renderItem(item, true))}
+                  </CommandGroup>
+                  <CommandSeparator />
+                </>
+              )}
+
+              {/* すべてのマスター（または候補以外） */}
+              <CommandGroup heading={suggestedItems && suggestedItems.length > 0 ? "すべて" : undefined}>
+                {otherItems.map((item) => renderItem(item, false))}
               </CommandGroup>
             </CommandList>
             {/* 新規追加ボタン（常に表示） */}
