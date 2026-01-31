@@ -759,14 +759,15 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                       <Switch
                         checked={document.verified || false}
                         onCheckedChange={(checked) => {
+                          if (isVerifying) return // 連打防止
                           if (checked) {
                             markAsVerified()
                           } else {
                             markAsUnverified()
                           }
                         }}
-                        disabled={isVerifying || isEditing}
-                        className="data-[state=checked]:bg-green-500"
+                        disabled={isEditing}
+                        className="data-[state=checked]:bg-green-500 cursor-pointer"
                       />
                       <span className={`text-xs font-medium ${document.verified ? 'text-green-700' : 'text-gray-500'}`}>
                         {document.verified ? '確認済み' : '未確認'}
