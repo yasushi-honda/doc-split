@@ -45,7 +45,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { useAuthStore } from '@/stores/authStore'
 import { functions } from '@/lib/firebase'
-import { useDocuments, useDocumentStats, useDocumentMasters, type DocumentFilters } from '@/hooks/useDocuments'
+import { useInfiniteDocuments, useDocumentStats, useDocumentMasters, type DocumentFilters } from '@/hooks/useDocuments'
 import { isCustomerConfirmed } from '@/hooks/useProcessingHistory'
 import { DocumentDetailModal } from '@/components/DocumentDetailModal'
 import { AliasLearningHistoryModal } from '@/components/AliasLearningHistoryModal'
@@ -280,8 +280,16 @@ export function DocumentsPage() {
     documentType: documentTypeFilter === 'all' ? undefined : documentTypeFilter,
   }), [statusFilter, documentTypeFilter])
 
-  // データ取得
-  const { data: documentsData, isLoading, isError, error } = useDocuments({ filters })
+  // データ取得（無限スクロール対応）
+  const {
+    data: documentsData,
+    isLoading,
+    isError,
+    error,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useInfiniteDocuments({ filters })
   const { data: stats } = useDocumentStats()
   const { data: documentMasters } = useDocumentMasters()
 
@@ -328,9 +336,15 @@ export function DocumentsPage() {
     }
   }, [deleteTarget, queryClient])
 
+  // 全ページのドキュメントをフラット化
+  const allDocuments = useMemo(() => {
+    if (!documentsData?.pages) return []
+    return documentsData.pages.flatMap(page => page.documents)
+  }, [documentsData?.pages])
+
   // ドキュメントリスト（フィルター + ソート）
   const documents = useMemo(() => {
-    let docs = documentsData?.documents ?? []
+    let docs = allDocuments
 
     // showSplitがfalseの場合は常にsplitを除外
     if (!showSplit) {
@@ -375,7 +389,7 @@ export function DocumentsPage() {
 
       return sortOrder === 'asc' ? comparison : -comparison
     })
-  }, [documentsData?.documents, showSplit, showUnverifiedOnly, sortField, sortOrder])
+  }, [allDocuments, showSplit, showUnverifiedOnly, sortField, sortOrder])
 
   return (
     <div className="space-y-6">
@@ -531,6 +545,7 @@ export function DocumentsPage() {
                 </p>
               </div>
             ) : (
+              <>
               <div className="overflow-x-auto">
                 <table className="w-full">
                   <thead className="border-b border-gray-200 bg-gray-50">
@@ -557,6 +572,32 @@ export function DocumentsPage() {
                   </tbody>
                 </table>
               </div>
+
+              {/* さらに表示ボタン */}
+              {hasNextPage && (
+                <div className="flex items-center justify-center py-4 border-t border-gray-100">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => fetchNextPage()}
+                    disabled={isFetchingNextPage}
+                    className="text-sm text-gray-600"
+                  >
+                    {isFetchingNextPage ? (
+                      <>
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        読み込み中...
+                      </>
+                    ) : (
+                      <>
+                        <ChevronDown className="h-4 w-4 mr-2" />
+                        さらに表示（{documents.length}件表示中）
+                      </>
+                    )}
+                  </Button>
+                </div>
+              )}
+            </>
             )}
           </Card>
         </TabsContent>
