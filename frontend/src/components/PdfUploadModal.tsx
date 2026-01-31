@@ -2,11 +2,13 @@
  * PDFアップロードモーダル
  *
  * ローカルファイルからPDF/画像をアップロードしてOCR処理キューに追加
+ * OCR処理の進捗を監視し、完了後に自動クローズ
  */
 
-import { useState, useRef, useCallback } from 'react'
-import { Upload, FileText, AlertCircle, CheckCircle2, Loader2 } from 'lucide-react'
+import { useState, useRef, useCallback, useEffect } from 'react'
+import { Upload, FileText, AlertCircle, CheckCircle2, Loader2, Clock, Sparkles } from 'lucide-react'
 import { httpsCallable } from 'firebase/functions'
+import { doc, onSnapshot } from 'firebase/firestore'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -17,11 +19,13 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import { functions } from '@/lib/firebase'
+import { functions, db } from '@/lib/firebase'
+import type { DocumentStatus } from '@shared/types'
 
 // 設定
 const MAX_FILE_SIZE_MB = 10
 const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
+const AUTO_CLOSE_DELAY_MS = 2000 // 完了後2秒で自動クローズ
 
 // 対象MIMEタイプ
 const ALLOWED_MIME_TYPES = [
@@ -34,6 +38,23 @@ const ALLOWED_MIME_TYPES = [
 
 const ALLOWED_EXTENSIONS = '.pdf,.jpg,.jpeg,.png,.tiff,.tif,.gif'
 
+// 処理ステップ定義
+type ProcessingStep = 'idle' | 'uploading' | 'pending' | 'processing' | 'processed' | 'error'
+
+const STEP_CONFIG: Record<ProcessingStep, {
+  label: string
+  icon: React.ElementType
+  progress: number
+  color: string
+}> = {
+  idle: { label: '待機中', icon: Clock, progress: 0, color: 'text-gray-400' },
+  uploading: { label: 'アップロード中...', icon: Loader2, progress: 20, color: 'text-blue-500' },
+  pending: { label: 'OCR処理待機中...', icon: Clock, progress: 40, color: 'text-yellow-500' },
+  processing: { label: 'OCR処理中...', icon: Sparkles, progress: 70, color: 'text-blue-500' },
+  processed: { label: '処理完了!', icon: CheckCircle2, progress: 100, color: 'text-green-500' },
+  error: { label: 'エラー', icon: AlertCircle, progress: 0, color: 'text-red-500' },
+}
+
 interface PdfUploadModalProps {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -43,7 +64,6 @@ interface PdfUploadModalProps {
 interface UploadResult {
   success: boolean
   documentId?: string
-  // 重複検出時のレスポンス
   duplicate?: boolean
   existingFileName?: string
   suggestedFileName?: string
@@ -54,19 +74,64 @@ export function PdfUploadModal({ open, onOpenChange, onSuccess }: PdfUploadModal
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [uploading, setUploading] = useState(false)
-  const [result, setResult] = useState<UploadResult | null>(null)
+  const [currentStep, setCurrentStep] = useState<ProcessingStep>('idle')
+  const [documentId, setDocumentId] = useState<string | null>(null)
   const [dragActive, setDragActive] = useState(false)
-  // 重複確認ダイアログ
   const [duplicateInfo, setDuplicateInfo] = useState<{
     existingFileName: string
     suggestedFileName: string
   } | null>(null)
 
+  // OCR処理完了を監視
+  useEffect(() => {
+    if (!documentId || currentStep === 'processed' || currentStep === 'error') {
+      return
+    }
+
+    const unsubscribe = onSnapshot(
+      doc(db, 'documents', documentId),
+      (snapshot) => {
+        const data = snapshot.data()
+        if (!data) return
+
+        const status = data.status as DocumentStatus
+
+        if (status === 'pending') {
+          setCurrentStep('pending')
+        } else if (status === 'processing') {
+          setCurrentStep('processing')
+        } else if (status === 'processed') {
+          setCurrentStep('processed')
+          onSuccess?.(documentId)
+        } else if (status === 'error') {
+          setCurrentStep('error')
+          setError(data.lastErrorMessage || 'OCR処理に失敗しました')
+        }
+      },
+      (err) => {
+        console.error('Snapshot error:', err)
+      }
+    )
+
+    return () => unsubscribe()
+  }, [documentId, currentStep, onSuccess])
+
+  // 処理完了後の自動クローズ
+  useEffect(() => {
+    if (currentStep === 'processed') {
+      const timer = setTimeout(() => {
+        resetState()
+        onOpenChange(false)
+      }, AUTO_CLOSE_DELAY_MS)
+      return () => clearTimeout(timer)
+    }
+  }, [currentStep, onOpenChange])
+
   const resetState = useCallback(() => {
     setSelectedFile(null)
     setError(null)
-    setResult(null)
+    setCurrentStep('idle')
+    setDocumentId(null)
     setDuplicateInfo(null)
     if (fileInputRef.current) {
       fileInputRef.current.value = ''
@@ -74,29 +139,25 @@ export function PdfUploadModal({ open, onOpenChange, onSuccess }: PdfUploadModal
   }, [])
 
   const handleClose = useCallback(() => {
-    if (!uploading) {
+    if (currentStep !== 'uploading') {
       resetState()
       onOpenChange(false)
     }
-  }, [uploading, resetState, onOpenChange])
+  }, [currentStep, resetState, onOpenChange])
 
   const validateFile = useCallback((file: File): string | null => {
-    // MIMEタイプチェック
     if (!ALLOWED_MIME_TYPES.includes(file.type)) {
       return `対応していないファイル形式です: ${file.type || '不明'}。PDF/JPEG/PNG/TIFF/GIF形式のファイルを選択してください。`
     }
-
-    // ファイルサイズチェック
     if (file.size > MAX_FILE_SIZE_BYTES) {
       return `ファイルサイズが大きすぎます: ${Math.round(file.size / 1024 / 1024)}MB。最大${MAX_FILE_SIZE_MB}MBまでです。`
     }
-
     return null
   }, [])
 
   const handleFileSelect = useCallback((file: File) => {
     setError(null)
-    setResult(null)
+    setCurrentStep('idle')
 
     const validationError = validateFile(file)
     if (validationError) {
@@ -139,17 +200,15 @@ export function PdfUploadModal({ open, onOpenChange, onSuccess }: PdfUploadModal
   const handleUpload = useCallback(async (options?: { confirmDuplicate?: boolean; alternativeFileName?: string }) => {
     if (!selectedFile) return
 
-    setUploading(true)
+    setCurrentStep('uploading')
     setError(null)
     setDuplicateInfo(null)
 
     try {
-      // ファイルをbase64に変換
       const base64Data = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader()
         reader.onload = () => {
           const result = reader.result as string
-          // data:application/pdf;base64, の部分を除去
           const base64 = result.split(',')[1]
           resolve(base64)
         }
@@ -157,7 +216,6 @@ export function PdfUploadModal({ open, onOpenChange, onSuccess }: PdfUploadModal
         reader.readAsDataURL(selectedFile)
       })
 
-      // Cloud Function呼び出し
       const uploadPdf = httpsCallable<
         { fileName: string; mimeType: string; data: string; confirmDuplicate?: boolean; alternativeFileName?: string },
         UploadResult
@@ -177,28 +235,27 @@ export function PdfUploadModal({ open, onOpenChange, onSuccess }: PdfUploadModal
           existingFileName: response.data.existingFileName || selectedFile.name,
           suggestedFileName: response.data.suggestedFileName,
         })
-        setUploading(false)
+        setCurrentStep('idle')
         return
       }
 
-      setResult(response.data)
+      // アップロード成功 → documentIdを設定してOCR処理監視開始
       if (response.data.documentId) {
-        onSuccess?.(response.data.documentId)
+        setDocumentId(response.data.documentId)
+        setCurrentStep('pending')
       }
     } catch (err) {
       console.error('Upload error:', err)
+      setCurrentStep('error')
 
-      // エラーメッセージの抽出
       let errorMessage = 'アップロードに失敗しました'
       if (err instanceof Error) {
-        // Firebase Functions のエラーメッセージを解析
         const message = err.message
         if (message.includes('already-exists') || message.includes('already been uploaded')) {
           errorMessage = 'このファイルは既にアップロードされています'
         } else if (message.includes('permission-denied') || message.includes('not in whitelist')) {
           errorMessage = 'アップロード権限がありません'
         } else if (message.includes('invalid-argument')) {
-          // メッセージから詳細を抽出
           const match = message.match(/: (.+)$/)
           errorMessage = match ? match[1] : message
         } else if (message.includes('unauthenticated')) {
@@ -208,12 +265,9 @@ export function PdfUploadModal({ open, onOpenChange, onSuccess }: PdfUploadModal
         }
       }
       setError(errorMessage)
-    } finally {
-      setUploading(false)
     }
-  }, [selectedFile, onSuccess])
+  }, [selectedFile])
 
-  // 別名で保存を確定
   const handleConfirmAlternativeName = useCallback(() => {
     if (duplicateInfo) {
       handleUpload({ confirmDuplicate: true, alternativeFileName: duplicateInfo.suggestedFileName })
@@ -225,6 +279,10 @@ export function PdfUploadModal({ open, onOpenChange, onSuccess }: PdfUploadModal
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
     return `${(bytes / 1024 / 1024).toFixed(1)} MB`
   }
+
+  const isProcessing = ['uploading', 'pending', 'processing'].includes(currentStep)
+  const stepConfig = STEP_CONFIG[currentStep]
+  const StepIcon = stepConfig.icon
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
@@ -242,9 +300,9 @@ export function PdfUploadModal({ open, onOpenChange, onSuccess }: PdfUploadModal
             className={`
               relative border-2 border-dashed rounded-lg p-8 text-center transition-colors
               ${dragActive ? 'border-blue-500 bg-blue-50' : 'border-gray-300'}
-              ${uploading ? 'opacity-50 pointer-events-none' : 'cursor-pointer hover:border-gray-400'}
+              ${isProcessing ? 'opacity-50 pointer-events-none' : 'cursor-pointer hover:border-gray-400'}
             `}
-            onClick={() => !uploading && fileInputRef.current?.click()}
+            onClick={() => !isProcessing && fileInputRef.current?.click()}
             onDragEnter={handleDrag}
             onDragLeave={handleDrag}
             onDragOver={handleDrag}
@@ -256,7 +314,7 @@ export function PdfUploadModal({ open, onOpenChange, onSuccess }: PdfUploadModal
               accept={ALLOWED_EXTENSIONS}
               onChange={handleInputChange}
               className="hidden"
-              disabled={uploading}
+              disabled={isProcessing}
             />
 
             {selectedFile ? (
@@ -268,7 +326,7 @@ export function PdfUploadModal({ open, onOpenChange, onSuccess }: PdfUploadModal
                 <p className="text-sm text-gray-500">
                   {formatFileSize(selectedFile.size)}
                 </p>
-                {!uploading && !result && (
+                {currentStep === 'idle' && !duplicateInfo && (
                   <Button
                     variant="ghost"
                     size="sm"
@@ -294,6 +352,39 @@ export function PdfUploadModal({ open, onOpenChange, onSuccess }: PdfUploadModal
             )}
           </div>
 
+          {/* 処理ステップ表示 */}
+          {isProcessing && (
+            <div className="space-y-3">
+              <div className="flex items-center gap-3">
+                <StepIcon className={`h-5 w-5 ${stepConfig.color} ${currentStep === 'uploading' || currentStep === 'processing' ? 'animate-spin' : ''}`} />
+                <span className={`text-sm font-medium ${stepConfig.color}`}>
+                  {stepConfig.label}
+                </span>
+              </div>
+              <div className="h-2 w-full bg-gray-200 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-blue-500 transition-all duration-500 ease-out"
+                  style={{ width: `${stepConfig.progress}%` }}
+                />
+              </div>
+              <p className="text-xs text-gray-500 text-center">
+                {currentStep === 'pending' && 'まもなくOCR処理が開始されます...'}
+                {currentStep === 'processing' && 'AIがドキュメントを解析しています...'}
+              </p>
+            </div>
+          )}
+
+          {/* 処理完了 */}
+          {currentStep === 'processed' && (
+            <Alert className="border-green-200 bg-green-50">
+              <CheckCircle2 className="h-4 w-4 text-green-600" />
+              <AlertTitle className="text-green-800">処理完了!</AlertTitle>
+              <AlertDescription className="text-green-700">
+                OCR処理が完了しました。まもなくこのダイアログは閉じます。
+              </AlertDescription>
+            </Alert>
+          )}
+
           {/* 重複確認 */}
           {duplicateInfo && (
             <Alert className="border-yellow-200 bg-yellow-50">
@@ -314,44 +405,24 @@ export function PdfUploadModal({ open, onOpenChange, onSuccess }: PdfUploadModal
               <AlertDescription>{error}</AlertDescription>
             </Alert>
           )}
-
-          {/* 成功メッセージ */}
-          {result && (
-            <Alert className="border-green-200 bg-green-50">
-              <CheckCircle2 className="h-4 w-4 text-green-600" />
-              <AlertTitle className="text-green-800">アップロード完了</AlertTitle>
-              <AlertDescription className="text-green-700">
-                ファイルがアップロードされました。OCR処理は数分後に自動実行されます。
-              </AlertDescription>
-            </Alert>
-          )}
         </div>
 
         <DialogFooter className="gap-2 sm:gap-0">
-          <Button variant="outline" onClick={handleClose} disabled={uploading}>
-            {result ? '閉じる' : 'キャンセル'}
+          <Button variant="outline" onClick={handleClose} disabled={currentStep === 'uploading'}>
+            {currentStep === 'processed' ? '閉じる' : 'キャンセル'}
           </Button>
-          {!result && !duplicateInfo && (
+          {currentStep === 'idle' && !duplicateInfo && (
             <Button
               onClick={() => handleUpload()}
-              disabled={!selectedFile || uploading}
+              disabled={!selectedFile}
             >
-              {uploading ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  アップロード中...
-                </>
-              ) : (
-                <>
-                  <Upload className="mr-2 h-4 w-4" />
-                  アップロード
-                </>
-              )}
+              <Upload className="mr-2 h-4 w-4" />
+              アップロード
             </Button>
           )}
           {duplicateInfo && (
-            <Button onClick={handleConfirmAlternativeName} disabled={uploading}>
-              {uploading ? (
+            <Button onClick={handleConfirmAlternativeName} disabled={isProcessing}>
+              {isProcessing ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                   保存中...

@@ -12,8 +12,11 @@ admin.initializeApp();
 // Gmail添付ファイル取得（Cloud Scheduler: 5分間隔）
 export { checkGmailAttachments } from './gmail/checkGmailAttachments';
 
-// OCR処理（定期実行）
+// OCR処理（定期実行 - リカバリー用）
 export { processOCR } from './ocr/processOCR';
+
+// OCR処理（Firestoreトリガー - メイン処理）
+export { processOCROnCreate } from './ocr/processOCROnCreate';
 
 // OCR全文取得（Callable Function - Phase 7）
 export { getOcrText } from './ocr/getOcrText';

@@ -242,7 +242,8 @@ export function DocumentsPage() {
   const [activeTab, setActiveTab] = useState<ViewTab>('list')
 
   // フィルター状態（一覧ビュー用）
-  const [statusFilter, setStatusFilter] = useState<DocumentStatus | 'all'>('all')
+  const [statusFilter, setStatusFilter] = useState<DocumentStatus | 'all'>('processed')
+  const [showPendingProcessing, setShowPendingProcessing] = useState(false) // 処理中を含む
   const [documentTypeFilter, setDocumentTypeFilter] = useState<string>('all')
   const [showFilters, setShowFilters] = useState(false)
   const [showSplit, setShowSplit] = useState(false) // 分割済み表示フラグ
@@ -275,10 +276,12 @@ export function DocumentsPage() {
   }, [setSearchParams])
 
   // フィルターをDocumentFilters型に変換
+  // showPendingProcessing=trueの場合はステータスフィルタを解除
+  const effectiveStatusFilter = showPendingProcessing ? 'all' : statusFilter
   const filters: DocumentFilters = useMemo(() => ({
-    status: statusFilter === 'all' ? undefined : statusFilter,
+    status: effectiveStatusFilter === 'all' ? undefined : effectiveStatusFilter,
     documentType: documentTypeFilter === 'all' ? undefined : documentTypeFilter,
-  }), [statusFilter, documentTypeFilter])
+  }), [effectiveStatusFilter, documentTypeFilter])
 
   // データ取得（無限スクロール対応）
   const {
@@ -497,7 +500,16 @@ export function DocumentsPage() {
                       </SelectContent>
                     </Select>
                   </div>
-                  <div className="flex items-end gap-4 pb-1">
+                  <div className="flex flex-wrap items-end gap-4 pb-1">
+                    <label className="flex cursor-pointer items-center gap-2 text-xs text-gray-500">
+                      <input
+                        type="checkbox"
+                        checked={showPendingProcessing}
+                        onChange={(e) => setShowPendingProcessing(e.target.checked)}
+                        className="h-3.5 w-3.5 rounded border-gray-300 text-gray-600 focus:ring-gray-500"
+                      />
+                      処理中を含む
+                    </label>
                     <label className="flex cursor-pointer items-center gap-2 text-xs text-gray-500">
                       <input
                         type="checkbox"
