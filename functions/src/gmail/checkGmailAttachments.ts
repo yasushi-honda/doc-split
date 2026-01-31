@@ -61,10 +61,11 @@ export const checkGmailAttachments = onSchedule(
 
       const settings = settingsDoc.data();
       const targetLabels = settings?.targetLabels || [];
+      const targetSenders = settings?.targetSenders || [];
       const gmailAccount = settings?.gmailAccount;
 
-      if (!gmailAccount || targetLabels.length === 0) {
-        console.log('Gmail account or labels not configured, skipping...');
+      if (!gmailAccount || (targetLabels.length === 0 && targetSenders.length === 0)) {
+        console.log('Gmail account or filter conditions (labels/senders) not configured, skipping...');
         return;
       }
 
@@ -75,7 +76,7 @@ export const checkGmailAttachments = onSchedule(
       );
 
       // 過去10分のメールを検索
-      const query = buildSearchQuery(targetLabels, SEARCH_MINUTES);
+      const query = buildSearchQuery(targetLabels, targetSenders, SEARCH_MINUTES);
       console.log('Search query:', query);
 
       const response = await withRetry(
@@ -131,14 +132,33 @@ export const checkGmailAttachments = onSchedule(
 
 /**
  * Gmail検索クエリを構築
+ * ラベルと送信元メールアドレスの両方をサポート（OR条件で併用）
  */
-function buildSearchQuery(labels: string[], minutes: number): string {
+function buildSearchQuery(labels: string[], senders: string[], minutes: number): string {
   const now = new Date();
   const past = new Date(now.getTime() - minutes * 60 * 1000);
   const afterDate = past.toISOString().split('T')[0];
 
-  const labelQuery = labels.map((l: string) => `label:${l}`).join(' OR ');
-  return `(${labelQuery}) has:attachment after:${afterDate}`;
+  const conditions: string[] = [];
+
+  // ラベル条件
+  if (labels.length > 0) {
+    const labelQuery = labels.map((l: string) => `label:${l}`).join(' OR ');
+    conditions.push(`(${labelQuery})`);
+  }
+
+  // 送信元条件
+  if (senders.length > 0) {
+    const senderQuery = senders.map((s: string) => `from:${s}`).join(' OR ');
+    conditions.push(`(${senderQuery})`);
+  }
+
+  // ラベルと送信元をOR条件で結合
+  const filterQuery = conditions.length > 1
+    ? `(${conditions.join(' OR ')})`
+    : conditions[0] || '';
+
+  return `${filterQuery} has:attachment after:${afterDate}`;
 }
 
 /**

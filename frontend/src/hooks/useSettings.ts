@@ -21,6 +21,7 @@ import type { AppSettings, User, UserRole } from '@shared/types'
 
 const DEFAULT_SETTINGS: AppSettings = {
   targetLabels: [],
+  targetSenders: [],
   labelSearchOperator: 'OR',
   errorNotificationEmails: [],
   gmailAccount: '',
@@ -37,6 +38,7 @@ async function fetchSettings(): Promise<AppSettings> {
   const data = docSnap.data()
   return {
     targetLabels: data.targetLabels || [],
+    targetSenders: data.targetSenders || [],
     labelSearchOperator: data.labelSearchOperator || 'OR',
     errorNotificationEmails: data.errorNotificationEmails || [],
     gmailAccount: data.gmailAccount || '',

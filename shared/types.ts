@@ -310,6 +310,7 @@ export type LabelSearchOperator = 'AND' | 'OR';
 
 export interface AppSettings {
   targetLabels: string[]; // 監視対象Gmailラベル
+  targetSenders: string[]; // 監視対象送信元メールアドレス
   labelSearchOperator: LabelSearchOperator;
   errorNotificationEmails: string[];
   gmailAccount?: string; // 監視対象Gmailアカウント

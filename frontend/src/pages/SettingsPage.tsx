@@ -89,17 +89,21 @@ function GmailSettings() {
   const updateSettings = useUpdateSettings()
   const [labels, setLabels] = useState<string[]>([])
   const [newLabel, setNewLabel] = useState('')
+  const [senders, setSenders] = useState<string[]>([])
+  const [newSender, setNewSender] = useState('')
   const [gmailAccount, setGmailAccount] = useState('')
   const [isAndOperator, setIsAndOperator] = useState(false)
   const [hasChanges, setHasChanges] = useState(false)
   const [saveMessage, setSaveMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [isInitialized, setIsInitialized] = useState(false)
   const [showLabelConfirmDialog, setShowLabelConfirmDialog] = useState(false)
+  const [showSenderConfirmDialog, setShowSenderConfirmDialog] = useState(false)
 
   // 初回読み込み時のみローカル状態を設定
   useEffect(() => {
     if (settings && !isInitialized) {
       setLabels(settings.targetLabels || [])
+      setSenders(settings.targetSenders || [])
       setGmailAccount(settings.gmailAccount || '')
       setIsAndOperator(settings.labelSearchOperator === 'AND')
       setIsInitialized(true)
@@ -127,6 +131,19 @@ function GmailSettings() {
     setHasChanges(true)
   }
 
+  const handleAddSender = () => {
+    if (newSender.trim() && !senders.includes(newSender.trim())) {
+      setSenders([...senders, newSender.trim()])
+      setNewSender('')
+      setHasChanges(true)
+    }
+  }
+
+  const handleRemoveSender = (sender: string) => {
+    setSenders(senders.filter((s) => s !== sender))
+    setHasChanges(true)
+  }
+
   const handleSaveClick = () => {
     // 未追加のラベルがある場合は確認ダイアログを表示
     const pendingLabel = newLabel.trim()
@@ -134,19 +151,27 @@ function GmailSettings() {
       setShowLabelConfirmDialog(true)
       return
     }
-    handleSave(labels)
+    // 未追加の送信元がある場合は確認ダイアログを表示
+    const pendingSender = newSender.trim()
+    if (pendingSender && !senders.includes(pendingSender)) {
+      setShowSenderConfirmDialog(true)
+      return
+    }
+    handleSave(labels, senders)
   }
 
-  const handleSave = async (labelsToSave: string[]) => {
-    console.log('Gmail設定を保存中...', { labels: labelsToSave, gmailAccount, isAndOperator })
+  const handleSave = async (labelsToSave: string[], sendersToSave: string[]) => {
+    console.log('Gmail設定を保存中...', { labels: labelsToSave, senders: sendersToSave, gmailAccount, isAndOperator })
     try {
       await updateSettings.mutateAsync({
         targetLabels: labelsToSave,
+        targetSenders: sendersToSave,
         labelSearchOperator: isAndOperator ? 'AND' : 'OR',
         gmailAccount,
       })
       setHasChanges(false)
       setNewLabel('')
+      setNewSender('')
       setSaveMessage({ type: 'success', text: '設定を保存しました' })
       console.log('Gmail設定を保存しました')
     } catch (error) {
@@ -160,12 +185,37 @@ function GmailSettings() {
     const updatedLabels = [...labels, pendingLabel]
     setLabels(updatedLabels)
     setShowLabelConfirmDialog(false)
-    handleSave(updatedLabels)
+    // 送信元の未追加もチェック
+    const pendingSender = newSender.trim()
+    if (pendingSender && !senders.includes(pendingSender)) {
+      setShowSenderConfirmDialog(true)
+      return
+    }
+    handleSave(updatedLabels, senders)
   }
 
   const handleConfirmSkipLabel = () => {
     setShowLabelConfirmDialog(false)
-    handleSave(labels)
+    // 送信元の未追加もチェック
+    const pendingSender = newSender.trim()
+    if (pendingSender && !senders.includes(pendingSender)) {
+      setShowSenderConfirmDialog(true)
+      return
+    }
+    handleSave(labels, senders)
+  }
+
+  const handleConfirmAddSender = () => {
+    const pendingSender = newSender.trim()
+    const updatedSenders = [...senders, pendingSender]
+    setSenders(updatedSenders)
+    setShowSenderConfirmDialog(false)
+    handleSave(labels, updatedSenders)
+  }
+
+  const handleConfirmSkipSender = () => {
+    setShowSenderConfirmDialog(false)
+    handleSave(labels, senders)
   }
 
   if (isLoading) {
@@ -262,28 +312,88 @@ function GmailSettings() {
           </div>
         </div>
 
-        {/* AND/OR切替 */}
-        <div className="flex items-center justify-between">
-          <div className="space-y-0.5">
-            <Label>ラベル検索条件</Label>
-            <p className="text-xs text-gray-500">
-              {isAndOperator
-                ? '全てのラベルに一致するメールを取得（AND）'
-                : 'いずれかのラベルに一致するメールを取得（OR）'}
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="text-sm">OR</span>
-            <Switch
-              checked={isAndOperator}
-              onCheckedChange={(checked) => {
-                setIsAndOperator(checked)
-                setHasChanges(true)
-              }}
+        {/* 送信元メールアドレス設定 */}
+        <div className="space-y-2">
+          <Label>監視対象送信元</Label>
+          <div className="flex gap-2">
+            <Input
+              type="email"
+              placeholder="sender@example.com"
+              value={newSender}
+              onChange={(e) => setNewSender(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleAddSender()}
             />
-            <span className="text-sm">AND</span>
+            <Button
+              onClick={handleAddSender}
+              size="icon"
+              disabled={!newSender.trim()}
+              title="送信元を追加"
+            >
+              <Plus className="h-4 w-4" />
+            </Button>
           </div>
+          {/* 追加済み送信元 */}
+          <div className="flex flex-wrap gap-2 mt-2">
+            {senders.length === 0 ? (
+              <p className="text-sm text-gray-500">送信元が設定されていません</p>
+            ) : (
+              senders.map((sender) => (
+                <Badge key={sender} variant="secondary" className="gap-1">
+                  {sender}
+                  <button
+                    onClick={() => handleRemoveSender(sender)}
+                    className="ml-1 hover:text-red-500"
+                    title="送信元を削除"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </Badge>
+              ))
+            )}
+          </div>
+          <p className="text-xs text-gray-500">
+            指定したメールアドレスから届いたメールの添付ファイルを取得します
+          </p>
         </div>
+
+        {/* フィルター条件の説明 */}
+        <div className="rounded-lg bg-blue-50 p-4 text-sm text-blue-700">
+          <p className="font-medium mb-1">フィルター条件</p>
+          <p>
+            {labels.length > 0 && senders.length > 0
+              ? 'ラベルまたは送信元のいずれかに該当するメールから添付ファイルを取得します'
+              : labels.length > 0
+                ? '指定したラベルのメールから添付ファイルを取得します'
+                : senders.length > 0
+                  ? '指定した送信元からのメールの添付ファイルを取得します'
+                  : 'ラベルまたは送信元を設定してください'}
+          </p>
+        </div>
+
+        {/* AND/OR切替（ラベルが複数ある場合のみ表示） */}
+        {labels.length > 1 && (
+          <div className="flex items-center justify-between">
+            <div className="space-y-0.5">
+              <Label>ラベル検索条件</Label>
+              <p className="text-xs text-gray-500">
+                {isAndOperator
+                  ? '全てのラベルに一致するメールを取得（AND）'
+                  : 'いずれかのラベルに一致するメールを取得（OR）'}
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-sm">OR</span>
+              <Switch
+                checked={isAndOperator}
+                onCheckedChange={(checked) => {
+                  setIsAndOperator(checked)
+                  setHasChanges(true)
+                }}
+              />
+              <span className="text-sm">AND</span>
+            </div>
+          </div>
+        )}
 
         {/* 保存ボタン */}
         <div className="flex items-center justify-end gap-4">
@@ -325,6 +435,29 @@ function GmailSettings() {
                 追加せず保存
               </Button>
               <Button onClick={handleConfirmAddLabel}>
+                追加して保存
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* 未追加送信元確認ダイアログ */}
+        <Dialog open={showSenderConfirmDialog} onOpenChange={setShowSenderConfirmDialog}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>入力中の送信元があります</DialogTitle>
+              <DialogDescription>
+                入力中の送信元「{newSender.trim()}」を追加しますか？
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter className="flex gap-2 sm:gap-0">
+              <Button variant="outline" onClick={() => setShowSenderConfirmDialog(false)}>
+                キャンセル
+              </Button>
+              <Button variant="secondary" onClick={handleConfirmSkipSender}>
+                追加せず保存
+              </Button>
+              <Button onClick={handleConfirmAddSender}>
                 追加して保存
               </Button>
             </DialogFooter>
