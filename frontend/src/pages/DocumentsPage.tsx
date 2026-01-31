@@ -546,9 +546,9 @@ export function DocumentsPage() {
               </div>
             ) : (
               <>
-              <div className="overflow-x-auto">
+              <div className="overflow-auto max-h-[calc(100vh-280px)]">
                 <table className="w-full">
-                  <thead className="border-b border-gray-200 bg-gray-50">
+                  <thead className="border-b border-gray-200 bg-gray-50 sticky top-0 z-10">
                     <tr>
                       <SortableHeader label="ファイル名" field="fileName" currentField={sortField} currentOrder={sortOrder} onClick={handleSort} />
                       <SortableHeader label="顧客名" field="customerName" currentField={sortField} currentOrder={sortOrder} onClick={handleSort} />
