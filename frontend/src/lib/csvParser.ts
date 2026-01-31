@@ -122,13 +122,15 @@ export function mapCustomerCSV(rows: Record<string, string>[]): CustomerCSVRow[]
  */
 export interface OfficeCSVRow {
   name: string
-  shortName: string
+  shortName?: string  // 後方互換（将来廃止予定）
+  notes?: string
 }
 
 export function mapOfficeCSV(rows: Record<string, string>[]): OfficeCSVRow[] {
   return rows.map(row => ({
     name: row['name'] || row['事業所名'] || row['名称'] || '',
-    shortName: row['shortName'] || row['略称'] || row['短縮名'] || '',
+    shortName: row['shortName'] || row['略称'] || row['短縮名'] || '',  // 後方互換
+    notes: row['notes'] || row['備考'] || row['メモ'] || '',
   })).filter(o => o.name) // 名前がない行は除外
 }
 
@@ -136,16 +138,16 @@ export function mapOfficeCSV(rows: Record<string, string>[]): OfficeCSVRow[] {
  * CSVテンプレートを生成
  */
 export function generateCustomerCSVTemplate(): string {
-  return `name,furigana,isDuplicate
-山田太郎,ヤマダタロウ,false
-田中花子,タナカハナコ,false
+  return `name,furigana,careManagerName,notes
+山田太郎,ヤマダタロウ,佐藤花子,
+田中花子,タナカハナコ,田中次郎,北区在住
 `
 }
 
 export function generateOfficeCSVTemplate(): string {
-  return `name,shortName
-○○介護サービス,○○介護
-△△デイサービス,△△デイ
+  return `name,notes
+○○介護サービス,
+△△デイサービス,東部地区担当
 `
 }
 
@@ -180,17 +182,19 @@ export function generateDocumentTypeCSVTemplate(): string {
  */
 export interface CareManagerCSVRow {
   name: string
+  email?: string
 }
 
 export function mapCareManagerCSV(rows: Record<string, string>[]): CareManagerCSVRow[] {
   return rows.map(row => ({
     name: row['name'] || row['ケアマネ名'] || row['氏名'] || row['名前'] || '',
+    email: row['email'] || row['メールアドレス'] || row['メール'] || '',
   })).filter(c => c.name) // 名前がない行は除外
 }
 
 export function generateCareManagerCSVTemplate(): string {
-  return `name
-佐藤花子
-田中次郎
+  return `name,email
+佐藤花子,sato@example.com
+田中次郎,tanaka@example.com
 `
 }

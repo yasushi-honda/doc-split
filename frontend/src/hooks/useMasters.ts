@@ -290,7 +290,7 @@ interface AddDocumentTypeParams {
   name: string
   dateMarker: string
   category: string
-  keywords?: string // セミコロン区切りの文字列
+  keywords?: string | string[] // セミコロン区切りの文字列または配列
 }
 
 async function addDocumentType(params: AddDocumentTypeParams): Promise<void> {

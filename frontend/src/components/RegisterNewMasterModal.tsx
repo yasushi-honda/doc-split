@@ -80,6 +80,7 @@ export function RegisterNewMasterModal({
   // 書類種別用
   const [dateMarker, setDateMarker] = useState('');
   const [category, setCategory] = useState('');
+  const [keywords, setKeywords] = useState('');
 
   // 同名チェック状態
   const [isDuplicateChecking, setIsDuplicateChecking] = useState(false);
@@ -115,6 +116,7 @@ export function RegisterNewMasterModal({
       setNotes('');
       setDateMarker('');
       setCategory('');
+      setKeywords('');
       setError(null);
       setShowDuplicateConfirm(false);
     }
@@ -177,10 +179,14 @@ export function RegisterNewMasterModal({
           });
         } else {
           // 書類種別
+          const keywordsArray = keywords.trim()
+            ? keywords.split(/[;；]/).map(k => k.trim()).filter(Boolean)
+            : undefined;
           await addDocumentType.mutateAsync({
             name: name.trim(),
             dateMarker: dateMarker.trim() || '日付',
             category: category.trim() || 'その他',
+            keywords: keywordsArray,
           });
           createdId = name.trim(); // 書類種別はnameがID
         }
@@ -201,7 +207,7 @@ export function RegisterNewMasterModal({
         }
       }
     },
-    [name, furigana, shortName, careManagerName, notes, dateMarker, category, type, checkDuplicate, addCustomer, addOffice, addDocumentType, onRegistered, onClose]
+    [name, furigana, shortName, careManagerName, notes, dateMarker, category, keywords, type, checkDuplicate, addCustomer, addOffice, addDocumentType, onRegistered, onClose]
   );
 
   // 同名確認後の強制登録
@@ -440,6 +446,24 @@ export function RegisterNewMasterModal({
                   />
                   <p className="text-xs text-muted-foreground">
                     書類の日付を表すラベル
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="keywords">
+                    キーワード
+                    <Badge variant="secondary" className="ml-2 text-xs">
+                      任意
+                    </Badge>
+                  </Label>
+                  <Input
+                    id="keywords"
+                    value={keywords}
+                    onChange={(e) => setKeywords(e.target.value)}
+                    placeholder="例: 被保険者証;介護保険;要介護"
+                    disabled={isLoading}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    セミコロン(;)区切りで複数指定可。OCRでの書類種別判定に使用
                   </p>
                 </div>
               </>

@@ -7,7 +7,7 @@ export const CSV_TEMPLATES = {
   customers: {
     headers: ['name', 'furigana', 'careManagerName', 'notes'],
     headerLabels: ['顧客名', 'フリガナ', '担当ケアマネ名', '備考'],
-    example: ['山田太郎', 'ヤマダタロウ', '佐藤花子', ''],
+    example: ['山田太郎', 'ヤマダタロウ', '佐藤花子', '北区在住'],
     filename: 'customers_template.csv',
   },
   documents: {
@@ -17,15 +17,15 @@ export const CSV_TEMPLATES = {
     filename: 'documents_template.csv',
   },
   offices: {
-    headers: ['name', 'type', 'address', 'phone', 'notes'],
-    headerLabels: ['事業所名', '種別', '住所', '電話番号', '備考'],
-    example: ['〇〇訪問介護ステーション', '訪問介護', '東京都新宿区...', '03-1234-5678', ''],
+    headers: ['name', 'notes'],
+    headerLabels: ['事業所名', '備考'],
+    example: ['〇〇訪問介護ステーション', '東部地区担当'],
     filename: 'offices_template.csv',
   },
   caremanagers: {
-    headers: ['name', 'email', 'aliases'],
-    headerLabels: ['ケアマネ名', 'メールアドレス', '別表記（|区切り）'],
-    example: ['佐藤花子', 'sato@example.com', '佐藤 花子|さとう花子'],
+    headers: ['name', 'email'],
+    headerLabels: ['ケアマネ名', 'メールアドレス'],
+    example: ['佐藤花子', 'sato@example.com'],
     filename: 'caremanagers_template.csv',
   },
 } as const
