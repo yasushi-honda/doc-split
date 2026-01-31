@@ -340,6 +340,8 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
   const [showCloseDialog, setShowCloseDialog] = useState(false)
   // 編集モードで閉じる確認ダイアログ
   const [showEditCloseDialog, setShowEditCloseDialog] = useState(false)
+  // ダウンロード確認ダイアログ
+  const [showDownloadDialog, setShowDownloadDialog] = useState(false)
 
   const queryClient = useQueryClient()
 
@@ -552,8 +554,8 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
     convertGsUrl()
   }, [document?.fileUrl, urlRefreshKey])
 
-  // ダウンロード処理（ファイルとしてダウンロード）
-  const handleDownload = async () => {
+  // 実際のダウンロード処理
+  const executeDownload = async () => {
     if (!downloadUrl || !document) return
 
     try {
@@ -575,6 +577,32 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
       // フォールバック: 新しいタブで開く
       window.open(downloadUrl, '_blank')
     }
+  }
+
+  // ダウンロードボタンクリック時（未確認なら確認ダイアログを表示）
+  const handleDownload = () => {
+    if (!downloadUrl || !document) return
+
+    if (!document.verified) {
+      // 未確認の場合は確認ダイアログを表示
+      setShowDownloadDialog(true)
+    } else {
+      // 確認済みの場合は直接ダウンロード
+      executeDownload()
+    }
+  }
+
+  // 確認済みにしてダウンロード
+  const handleVerifyAndDownload = async () => {
+    await markAsVerified()
+    setShowDownloadDialog(false)
+    executeDownload()
+  }
+
+  // 確認なしでダウンロード
+  const handleDownloadWithoutVerify = () => {
+    setShowDownloadDialog(false)
+    executeDownload()
   }
 
   // 分割成功時
@@ -1334,6 +1362,43 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
             className="bg-red-600 hover:bg-red-700"
           >
             破棄して閉じる
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+
+    {/* ダウンロード確認ダイアログ（未確認時） */}
+    <AlertDialog open={showDownloadDialog} onOpenChange={setShowDownloadDialog}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>OCR結果を確認しましたか？</AlertDialogTitle>
+          <AlertDialogDescription>
+            この書類のOCR結果はまだ確認されていません。
+            確認済みにしてからダウンロードすることをお勧めします。
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter className="flex-col gap-2 sm:flex-row">
+          <AlertDialogCancel>
+            キャンセル
+          </AlertDialogCancel>
+          <Button
+            variant="outline"
+            onClick={handleDownloadWithoutVerify}
+          >
+            <Download className="mr-1 h-4 w-4" />
+            確認なしでダウンロード
+          </Button>
+          <AlertDialogAction
+            onClick={handleVerifyAndDownload}
+            disabled={isVerifying}
+            className="bg-green-600 hover:bg-green-700"
+          >
+            {isVerifying ? (
+              <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+            ) : (
+              <CheckCircle className="mr-1 h-4 w-4" />
+            )}
+            確認済みにしてダウンロード
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
