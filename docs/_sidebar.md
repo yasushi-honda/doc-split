@@ -9,7 +9,5 @@
   * [Gmail連携設定](operation/gmail-setup-guide.md)
   * [運用ガイド](operation-guide.md)
 * **技術情報**
-  * [データモデル](data-model.md)
   * [API/Functions](api-reference.md)
   * [セキュリティ](security.md)
-  * [同名/同姓同名対応](duplicate-name-handling.md)
