@@ -5,6 +5,7 @@
 
 import { useState, useCallback } from 'react'
 import { doc, updateDoc, serverTimestamp } from 'firebase/firestore'
+import { useQueryClient } from '@tanstack/react-query'
 import { db, auth } from '../lib/firebase'
 import type { Document } from '../../../shared/types'
 
@@ -21,6 +22,7 @@ export function useDocumentVerification(
 ): UseDocumentVerificationResult {
   const [isUpdating, setIsUpdating] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const queryClient = useQueryClient()
 
   const markAsVerified = useCallback(async (): Promise<boolean> => {
     if (!document || !auth.currentUser) {
@@ -39,6 +41,8 @@ export function useDocumentVerification(
         verifiedAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       })
+      // 一覧画面のキャッシュも無効化
+      queryClient.invalidateQueries({ queryKey: ['documents'] })
       onSuccess?.()
       return true
     } catch (err) {
@@ -48,7 +52,7 @@ export function useDocumentVerification(
     } finally {
       setIsUpdating(false)
     }
-  }, [document, onSuccess])
+  }, [document, onSuccess, queryClient])
 
   const markAsUnverified = useCallback(async (): Promise<boolean> => {
     if (!document || !auth.currentUser) {
@@ -67,6 +71,8 @@ export function useDocumentVerification(
         verifiedAt: null,
         updatedAt: serverTimestamp(),
       })
+      // 一覧画面のキャッシュも無効化
+      queryClient.invalidateQueries({ queryKey: ['documents'] })
       onSuccess?.()
       return true
     } catch (err) {
@@ -76,7 +82,7 @@ export function useDocumentVerification(
     } finally {
       setIsUpdating(false)
     }
-  }, [document, onSuccess])
+  }, [document, onSuccess, queryClient])
 
   return {
     isUpdating,
