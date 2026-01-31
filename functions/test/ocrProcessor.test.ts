@@ -140,7 +140,7 @@ describe('ocrProcessor', () => {
 
     it('処理完了後は再処理できない', () => {
       // Given: 処理が完了したドキュメント
-      const currentStatus = 'processed';
+      const currentStatus: string = 'processed';
 
       // 新しいリクエストが来た場合
       const canProcess = currentStatus === 'pending';
