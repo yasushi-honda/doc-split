@@ -3,7 +3,8 @@
  * PDFビューアーとメタ情報を表示
  */
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { format } from 'date-fns'
 import { ja } from 'date-fns/locale'
 import { Timestamp } from 'firebase/firestore'
@@ -39,6 +40,206 @@ interface DocumentDetailModalProps {
   open: boolean
   onOpenChange: (open: boolean) => void
 }
+
+// モバイル用ポップアップコンポーネント（Vanilla JS DOM操作でRadix UIを完全にバイパス）
+function MobileContentPopup({
+  type,
+  document: doc,
+  onClose,
+  onGenerateSummary,
+  isGeneratingSummary,
+}: {
+  type: 'summary' | 'ocr'
+  document: { summary?: string; ocrResult?: string }
+  onClose: () => void
+  onGenerateSummary: () => void
+  isGeneratingSummary: boolean
+}) {
+  const containerRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    // Vanilla JSでDOM要素を作成（Reactのイベントシステムをバイパス）
+    const container = globalThis.document.createElement('div')
+    container.id = 'mobile-popup-container'
+    container.style.cssText = `
+      position: fixed;
+      inset: 0;
+      z-index: 99999;
+      display: flex;
+      align-items: flex-end;
+      justify-content: center;
+      background: rgba(0,0,0,0.5);
+      pointer-events: auto !important;
+    `
+    containerRef.current = container
+
+    const content = globalThis.document.createElement('div')
+    content.style.cssText = `
+      width: 100%;
+      height: 70vh;
+      background: white;
+      border-radius: 16px 16px 0 0;
+      box-shadow: 0 -4px 20px rgba(0,0,0,0.15);
+      display: flex;
+      flex-direction: column;
+      pointer-events: auto !important;
+      overflow: hidden;
+    `
+    // コンテンツ部分のクリックは背景に伝播させない
+    content.onclick = (e) => {
+      e.stopPropagation()
+    }
+
+    // ヘッダー
+    const header = globalThis.document.createElement('div')
+    header.style.cssText = `
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      border-bottom: 1px solid #e5e7eb;
+      background: ${type === 'summary' ? '#faf5ff' : '#f8fafc'};
+      flex-shrink: 0;
+      pointer-events: auto;
+    `
+
+    const title = globalThis.document.createElement('span')
+    title.style.cssText = 'font-weight: 500; color: #111827;'
+    title.textContent = type === 'summary' ? '✨ AI要約' : '📄 OCR結果'
+    if (type === 'ocr' && doc.ocrResult) {
+      title.textContent += ` (${doc.ocrResult.length.toLocaleString()}文字)`
+    }
+
+    const closeBtn = globalThis.document.createElement('button')
+    closeBtn.style.cssText = `
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      background: #e5e7eb;
+      border: none;
+      font-size: 24px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      pointer-events: auto !important;
+    `
+    closeBtn.textContent = '✕'
+    closeBtn.onclick = (e) => {
+      e.preventDefault()
+      e.stopPropagation()
+      onClose()
+    }
+
+    header.appendChild(title)
+    header.appendChild(closeBtn)
+
+    // スクロールコンテナ（高さ固定）
+    const scrollContainer = globalThis.document.createElement('div')
+    scrollContainer.id = 'mobile-popup-scroll-container'
+    scrollContainer.style.cssText = `
+      flex: 1;
+      overflow: hidden;
+      position: relative;
+      pointer-events: auto;
+    `
+
+    // コンテンツエリア（スクロール可能）
+    const contentArea = globalThis.document.createElement('div')
+    contentArea.id = 'mobile-popup-content-area'
+    contentArea.style.cssText = `
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      padding: 16px;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+      pointer-events: auto;
+    `
+
+    // modal={false} により Radix のイベントキャプチャが無効化されるため
+    // ネイティブスクロールがそのまま動作する
+
+    scrollContainer.appendChild(contentArea)
+
+    if (type === 'summary') {
+      if (doc.summary) {
+        contentArea.innerHTML = `<div style="font-size: 14px; color: #374151; line-height: 1.6;">${doc.summary}</div>`
+      } else if (doc.ocrResult && doc.ocrResult.length >= 100) {
+        contentArea.innerHTML = `<div style="text-align: center; padding: 16px;">
+          <button id="generate-summary-btn" style="padding: 8px 16px; background: #f3e8ff; color: #7c3aed; border: 1px solid #c4b5fd; border-radius: 6px; cursor: pointer;">
+            🔄 AI要約を生成
+          </button>
+        </div>`
+      } else {
+        contentArea.innerHTML = `<p style="font-size: 14px; color: #9ca3af; text-align: center; padding: 16px;">OCR結果が短いため要約を生成できません</p>`
+      }
+    } else {
+      contentArea.innerHTML = `<pre style="font-size: 12px; color: #4b5563; white-space: pre-wrap; font-family: monospace; line-height: 1.5; margin: 0;">${doc.ocrResult || 'OCR結果なし'}</pre>`
+    }
+
+    content.appendChild(header)
+    content.appendChild(scrollContainer)
+    container.appendChild(content)
+
+    // 背景クリックで閉じる（イベント伝播は必ず止める）
+    container.onclick = (e) => {
+      e.stopPropagation()
+      e.preventDefault()
+      if (e.target === container) {
+        onClose()
+      }
+    }
+    container.onmousedown = (e) => {
+      e.stopPropagation()
+    }
+    container.ontouchstart = (e) => {
+      // 背景タッチの場合のみ閉じる
+      if (e.target === container) {
+        e.preventDefault()
+        onClose()
+      }
+    }
+
+    // AI要約生成ボタン
+    const generateBtn = contentArea.querySelector('#generate-summary-btn')
+    if (generateBtn) {
+      generateBtn.onclick = (e) => {
+        e.preventDefault()
+        e.stopPropagation()
+        onGenerateSummary()
+      }
+    }
+
+    // body に追加
+    globalThis.document.body.appendChild(container)
+
+    // body スクロール防止
+    const originalOverflow = globalThis.document.body.style.overflow
+    globalThis.document.body.style.overflow = 'hidden'
+
+    return () => {
+      globalThis.document.body.style.overflow = originalOverflow
+      if (container.parentNode) {
+        container.parentNode.removeChild(container)
+      }
+    }
+  }, [type, doc.summary, doc.ocrResult, onClose, onGenerateSummary])
+
+  // isGeneratingSummary の変更を反映
+  useEffect(() => {
+    const btn = globalThis.document.querySelector('#generate-summary-btn') as HTMLButtonElement
+    if (btn) {
+      btn.disabled = isGeneratingSummary
+      btn.textContent = isGeneratingSummary ? '⏳ 生成中...' : '🔄 AI要約を生成'
+    }
+  }, [isGeneratingSummary])
+
+  return null // DOMはuseEffectで直接操作
+}
+
 
 // ステータス設定
 const STATUS_CONFIG: Record<DocumentStatus, { label: string; variant: 'default' | 'secondary' | 'success' | 'warning' | 'destructive' }> = {
@@ -347,8 +548,33 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
     document.status === 'processed'
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex h-[90vh] w-[95vw] max-w-7xl flex-col p-0 md:w-auto" aria-describedby={undefined}>
+    <>
+    <Dialog open={open} onOpenChange={onOpenChange} modal={false}>
+      <DialogContent
+        className="flex h-[90vh] w-[95vw] max-w-7xl flex-col p-0 md:w-auto"
+        aria-describedby={undefined}
+        onInteractOutside={(e) => {
+          // ポップアップ表示中は外側クリックでDialogを閉じない
+          // ポップアップ非表示時は閉じる
+          if (mobilePopup !== null) {
+            e.preventDefault()
+          } else {
+            onOpenChange(false)
+          }
+        }}
+        onPointerDownOutside={(e) => {
+          if (mobilePopup !== null) {
+            e.preventDefault()
+          }
+        }}
+        onEscapeKeyDown={(e) => {
+          // ポップアップ表示中はESCでポップアップを閉じる
+          if (mobilePopup !== null) {
+            e.preventDefault()
+            setMobilePopup(null)
+          }
+        }}
+      >
         {isLoading ? (
           <>
             <VisuallyHidden>
@@ -417,8 +643,8 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
 
             {/* コンテンツエリア */}
             <div className="flex min-h-0 flex-1 flex-col overflow-hidden md:flex-row">
-              {/* PDFビューアー（モバイル: 上部、デスクトップ: flex-1） */}
-              <div className={`min-w-0 bg-gray-100 md:h-auto md:flex-1 ${isMetadataCollapsed ? 'flex-1' : 'flex-1 min-h-[45vh]'}`}>
+              {/* PDFビューアー（モバイル: flex-1で残り領域、デスクトップ: flex-1） */}
+              <div className={`min-w-0 min-h-0 flex-1 bg-gray-100 md:h-auto`}>
                 {urlLoading ? (
                   <div className="flex h-full items-center justify-center">
                     <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
@@ -461,8 +687,8 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
               <div
                 className={`w-full border-t bg-white transition-all duration-200 md:flex md:h-auto md:w-80 md:flex-col md:flex-shrink-0 md:border-l md:border-t-0 md:p-4 ${
                   isMetadataCollapsed
-                    ? 'h-11 flex-shrink-0 overflow-hidden p-2 px-3'
-                    : 'flex-shrink-0 max-h-[50vh] overflow-y-auto p-3 md:max-h-none md:overflow-y-auto'
+                    ? 'h-12 flex-shrink-0 overflow-hidden px-3 py-2'
+                    : 'min-h-0 max-h-[45vh] flex-shrink-0 overflow-y-auto overscroll-contain p-3 [-webkit-overflow-scrolling:touch] md:max-h-none'
                 }`}
               >
                 <div className={`flex items-center justify-between ${isMetadataCollapsed ? '' : 'mb-4'}`}>
@@ -481,12 +707,33 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                   </button>
                   {/* デスクトップ用タイトル */}
                   <h3 className="hidden text-sm font-semibold text-gray-900 md:block">書類情報</h3>
-                  {!isEditing ? (
-                    <Button variant="ghost" size="sm" onClick={startEditing} className={isMetadataCollapsed ? 'md:flex hidden' : ''}>
-                      <Pencil className="h-4 w-4 mr-1" />
-                      編集
-                    </Button>
-                  ) : (
+
+                  {/* 右側のボタン群 */}
+                  <div className="flex items-center gap-2">
+                    {/* AI要約/OCRボタン（常に表示） */}
+                    <button
+                      type="button"
+                      onClick={() => setMobilePopup('summary')}
+                      className="flex items-center gap-1 px-2 py-1 rounded bg-purple-100 text-purple-700 text-xs font-medium hover:bg-purple-200 transition-colors"
+                    >
+                      <Sparkles className="h-3.5 w-3.5" />
+                      <span className="hidden sm:inline">AI</span>要約
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setMobilePopup('ocr')}
+                      className="flex items-center gap-1 px-2 py-1 rounded bg-slate-100 text-slate-700 text-xs font-medium hover:bg-slate-200 transition-colors"
+                    >
+                      <FileText className="h-3.5 w-3.5" />
+                      OCR
+                    </button>
+
+                    {!isEditing ? (
+                      <Button variant="ghost" size="sm" onClick={startEditing} className={isMetadataCollapsed ? 'md:flex hidden' : ''}>
+                        <Pencil className="h-4 w-4 mr-1" />
+                        編集
+                      </Button>
+                    ) : (
                     <div className={`flex gap-1 ${isMetadataCollapsed ? 'md:flex hidden' : ''}`}>
                       <Button
                         variant="ghost"
@@ -510,7 +757,8 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                         保存
                       </Button>
                     </div>
-                  )}
+                    )}
+                  </div>{/* 右側ボタン群終了 */}
                 </div>
 
                 {/* 折りたたみコンテンツ（モバイルで折りたたみ可能、デスクトップは常時表示） */}
@@ -726,29 +974,6 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                   </div>
                 )}
 
-                {/* モバイル: ボタンでポップアップ表示 */}
-                <div className="mt-4 flex gap-2 md:hidden">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setMobilePopup('summary')}
-                    className="flex-1 text-purple-600 border-purple-200 hover:bg-purple-50"
-                  >
-                    <Sparkles className="h-3.5 w-3.5 mr-1" />
-                    AI要約
-                    {document.summary && <span className="ml-1 text-[10px]">✓</span>}
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setMobilePopup('ocr')}
-                    className="flex-1 text-slate-600 border-slate-200 hover:bg-slate-50"
-                  >
-                    <FileText className="h-3.5 w-3.5 mr-1" />
-                    OCR
-                  </Button>
-                </div>
-
                 {/* デスクトップ: アコーディオン */}
                 <div className="hidden md:block">
                   {/* AI要約（排他的アコーディオン） */}
@@ -884,87 +1109,18 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
           onSuccess={handleSplitSuccess}
         />
       )}
-
-      {/* モバイル用ポップアップ */}
-      {mobilePopup && document && (
-        <div
-          className="fixed inset-0 z-[100] flex items-end justify-center bg-black/50 md:hidden"
-          onClick={() => setMobilePopup(null)}
-        >
-          <div
-            className="w-full max-h-[70vh] bg-white rounded-t-2xl shadow-xl animate-in slide-in-from-bottom duration-200"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* ヘッダー */}
-            <div className={`flex items-center justify-between px-4 py-3 border-b ${
-              mobilePopup === 'summary' ? 'bg-purple-50' : 'bg-slate-50'
-            }`}>
-              <div className="flex items-center gap-2">
-                {mobilePopup === 'summary' ? (
-                  <>
-                    <Sparkles className="h-4 w-4 text-purple-500" />
-                    <span className="font-medium text-gray-900">AI要約</span>
-                  </>
-                ) : (
-                  <>
-                    <FileText className="h-4 w-4 text-slate-500" />
-                    <span className="font-medium text-gray-900">OCR結果</span>
-                    {document.ocrResult && (
-                      <span className="text-xs text-gray-400">({document.ocrResult.length.toLocaleString()}文字)</span>
-                    )}
-                  </>
-                )}
-              </div>
-              <button
-                onClick={() => setMobilePopup(null)}
-                className="p-1 rounded-full hover:bg-gray-200"
-              >
-                <X className="h-5 w-5 text-gray-500" />
-              </button>
-            </div>
-
-            {/* コンテンツ */}
-            <div className="p-4 overflow-y-auto max-h-[calc(70vh-56px)]">
-              {mobilePopup === 'summary' ? (
-                document.summary ? (
-                  <div className="text-sm text-gray-700 leading-relaxed">
-                    {document.summary}
-                  </div>
-                ) : document.ocrResult && document.ocrResult.length >= 100 ? (
-                  <div className="text-center py-4">
-                    <Button
-                      variant="outline"
-                      onClick={handleGenerateSummary}
-                      disabled={isGeneratingSummary}
-                      className="text-purple-600 border-purple-200 hover:bg-purple-50"
-                    >
-                      {isGeneratingSummary ? (
-                        <>
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                          生成中...
-                        </>
-                      ) : (
-                        <>
-                          <RefreshCw className="mr-2 h-4 w-4" />
-                          AI要約を生成
-                        </>
-                      )}
-                    </Button>
-                  </div>
-                ) : (
-                  <p className="text-sm text-gray-400 text-center py-4">
-                    OCR結果が短いため要約を生成できません
-                  </p>
-                )
-              ) : (
-                <div className="text-xs text-gray-600 whitespace-pre-wrap font-mono leading-relaxed">
-                  {document.ocrResult || 'OCR結果なし'}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
     </Dialog>
+
+    {/* モバイル用ポップアップ */}
+    {mobilePopup && document && (
+      <MobileContentPopup
+        type={mobilePopup}
+        document={document}
+        onClose={() => setMobilePopup(null)}
+        onGenerateSummary={handleGenerateSummary}
+        isGeneratingSummary={isGeneratingSummary}
+      />
+    )}
+    </>
   )
 }
