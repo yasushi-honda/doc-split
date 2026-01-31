@@ -644,16 +644,15 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
         className="flex h-[90vh] w-[95vw] max-w-7xl flex-col p-0 md:w-auto"
         aria-describedby={undefined}
         onInteractOutside={(e) => {
-          // ポップアップ表示中は外側クリックでDialogを閉じない
-          // ポップアップ非表示時は閉じる
-          if (mobilePopup !== null) {
+          // ポップアップ表示中やPDF分割モーダル表示中は外側クリックでDialogを閉じない
+          if (mobilePopup !== null || isSplitModalOpen) {
             e.preventDefault()
           } else {
             handleOpenChange(false)
           }
         }}
         onPointerDownOutside={(e) => {
-          if (mobilePopup !== null) {
+          if (mobilePopup !== null || isSplitModalOpen) {
             e.preventDefault()
           }
         }}
