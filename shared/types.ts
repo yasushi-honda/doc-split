@@ -70,6 +70,11 @@ export interface Document {
 
   // Phase 9: OCR抽出スナップショット（正解フィードバック用）
   ocrExtraction?: OcrExtraction;
+
+  // OCR結果確認ステータス（人によるチェック状態）
+  verified?: boolean;           // 確認済みフラグ（デフォルト: false）
+  verifiedBy?: string | null;   // 確認者UID
+  verifiedAt?: Timestamp | null; // 確認日時
 }
 
 // ============================================

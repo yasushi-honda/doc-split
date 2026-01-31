@@ -52,7 +52,11 @@ service cloud.firestore {
           'fileName',
           'editedBy',
           'editedAt',
-          'updatedAt'
+          'updatedAt',
+          // OCR結果確認ステータスフィールド
+          'verified',
+          'verifiedBy',
+          'verifiedAt'
         ])
         // confirmedBy は自分のUIDのみ設定可能（事業所解決時は含まれない場合あり）
         && (request.resource.data.confirmedBy == request.auth.uid
@@ -68,7 +72,12 @@ service cloud.firestore {
         && (request.resource.data.editedBy == request.auth.uid
             || request.resource.data.editedBy == resource.data.editedBy
             || request.resource.data.editedBy == null
-            || !('editedBy' in request.resource.data));
+            || !('editedBy' in request.resource.data))
+        // verifiedBy は自分のUIDのみ設定可能
+        && (request.resource.data.verifiedBy == request.auth.uid
+            || request.resource.data.verifiedBy == resource.data.verifiedBy
+            || request.resource.data.verifiedBy == null
+            || !('verifiedBy' in request.resource.data));
       allow delete: if isAdmin();
     }
 

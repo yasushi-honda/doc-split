@@ -4,12 +4,11 @@
  */
 
 import { useState, useEffect, useRef } from 'react'
-import { createPortal } from 'react-dom'
 import { format } from 'date-fns'
 import { ja } from 'date-fns/locale'
 import { Timestamp } from 'firebase/firestore'
 import { ref, getDownloadURL } from 'firebase/storage'
-import { Download, ExternalLink, Loader2, FileText, User, Building, Calendar, Tag, AlertCircle, Scissors, Pencil, Save, X, BookMarked, History, ChevronUp, ChevronDown, Sparkles, RefreshCw } from 'lucide-react'
+import { Download, ExternalLink, Loader2, FileText, User, Building, Calendar, Tag, AlertCircle, Scissors, Pencil, Save, X, BookMarked, History, ChevronUp, ChevronDown, Sparkles, RefreshCw, CheckCircle, XCircle } from 'lucide-react'
 import { httpsCallable } from 'firebase/functions'
 import { storage, functions } from '@/lib/firebase'
 import { useQueryClient } from '@tanstack/react-query'
@@ -33,7 +32,20 @@ import { useCustomers, useOffices, useDocumentTypes } from '@/hooks/useMasters'
 import { useMasterAlias } from '@/hooks/useMasterAlias'
 import { useAliasLearningHistory, useInvalidateAliasLearningHistory } from '@/hooks/useAliasLearningHistory'
 import { isCustomerConfirmed } from '@/hooks/useProcessingHistory'
+import { useDocumentVerification } from '@/hooks/useDocumentVerification'
 import type { DocumentStatus } from '@shared/types'
+
+// 閉じる確認ダイアログ用のAlertDialog
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 
 interface DocumentDetailModalProps {
   documentId: string | null
@@ -323,8 +335,18 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
   const [expandedSection, setExpandedSection] = useState<'summary' | 'ocr' | null>('summary')
   // モバイル用: ポップアップ表示
   const [mobilePopup, setMobilePopup] = useState<'summary' | 'ocr' | null>(null)
+  // 閉じる確認ダイアログ
+  const [showCloseDialog, setShowCloseDialog] = useState(false)
 
   const queryClient = useQueryClient()
+
+  // 確認ステータス管理
+  const {
+    isUpdating: isVerifying,
+    error: verifyError,
+    markAsVerified,
+    markAsUnverified,
+  } = useDocumentVerification(document, refetch)
 
   // 編集機能
   const {
@@ -547,9 +569,32 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
     document.mimeType === 'application/pdf' &&
     document.status === 'processed'
 
+  // 閉じる時のハンドラ（未確認の場合はダイアログを表示）
+  const handleOpenChange = (newOpen: boolean) => {
+    if (!newOpen && document && !document.verified) {
+      // 閉じようとしていて、未確認の場合はダイアログを表示
+      setShowCloseDialog(true)
+    } else {
+      onOpenChange(newOpen)
+    }
+  }
+
+  // 確認済みにして閉じる
+  const handleVerifyAndClose = async () => {
+    await markAsVerified()
+    setShowCloseDialog(false)
+    onOpenChange(false)
+  }
+
+  // 未確認のまま閉じる
+  const handleCloseWithoutVerify = () => {
+    setShowCloseDialog(false)
+    onOpenChange(false)
+  }
+
   return (
     <>
-    <Dialog open={open} onOpenChange={onOpenChange} modal={false}>
+    <Dialog open={open} onOpenChange={handleOpenChange} modal={false}>
       <DialogContent
         className="flex h-[90vh] w-[95vw] max-w-7xl flex-col p-0 md:w-auto"
         aria-describedby={undefined}
@@ -559,7 +604,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
           if (mobilePopup !== null) {
             e.preventDefault()
           } else {
-            onOpenChange(false)
+            handleOpenChange(false)
           }
         }}
         onPointerDownOutside={(e) => {
@@ -974,6 +1019,66 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                   </div>
                 )}
 
+                {/* OCR確認ステータス */}
+                <div className="mt-4 rounded-lg border p-3">
+                  <h4 className="mb-2 text-xs font-medium text-gray-500">OCR確認ステータス</h4>
+                  {verifyError && (
+                    <div className="mb-2 rounded bg-red-50 p-2 text-xs text-red-600">
+                      {verifyError}
+                    </div>
+                  )}
+                  {document.verified ? (
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2 rounded-lg bg-green-50 p-2">
+                        <CheckCircle className="h-4 w-4 text-green-600" />
+                        <span className="text-sm font-medium text-green-800">確認済み</span>
+                      </div>
+                      <p className="text-xs text-gray-500">
+                        {document.verifiedAt && (
+                          <>
+                            {formatTimestamp(document.verifiedAt, 'yyyy/MM/dd HH:mm')} に確認
+                          </>
+                        )}
+                      </p>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={markAsUnverified}
+                        disabled={isVerifying || isEditing}
+                        className="w-full text-gray-600 border-gray-300 hover:bg-gray-50"
+                      >
+                        {isVerifying ? (
+                          <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                        ) : (
+                          <XCircle className="mr-1 h-3 w-3" />
+                        )}
+                        取り消し
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2 rounded-lg bg-amber-50 p-2">
+                        <AlertCircle className="h-4 w-4 text-amber-600" />
+                        <span className="text-sm font-medium text-amber-800">未確認</span>
+                      </div>
+                      <Button
+                        variant="default"
+                        size="sm"
+                        onClick={markAsVerified}
+                        disabled={isVerifying || isEditing}
+                        className="w-full bg-green-600 hover:bg-green-700"
+                      >
+                        {isVerifying ? (
+                          <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                        ) : (
+                          <CheckCircle className="mr-1 h-3 w-3" />
+                        )}
+                        確認済みにする
+                      </Button>
+                    </div>
+                  )}
+                </div>
+
                 {/* デスクトップ: アコーディオン */}
                 <div className="hidden md:block">
                   {/* AI要約（排他的アコーディオン） */}
@@ -1121,6 +1226,31 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
         isGeneratingSummary={isGeneratingSummary}
       />
     )}
+
+    {/* 閉じる確認ダイアログ（未確認時のみ） */}
+    <AlertDialog open={showCloseDialog} onOpenChange={setShowCloseDialog}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>OCR結果を確認しましたか？</AlertDialogTitle>
+          <AlertDialogDescription>
+            この書類のOCR結果はまだ確認されていません。
+            確認済みとしてマークするか、未確認のまま閉じるかを選択してください。
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter className="flex-col gap-2 sm:flex-row">
+          <AlertDialogCancel onClick={handleCloseWithoutVerify}>
+            未確認のまま閉じる
+          </AlertDialogCancel>
+          <AlertDialogAction
+            onClick={handleVerifyAndClose}
+            className="bg-green-600 hover:bg-green-700"
+          >
+            <CheckCircle className="mr-1 h-4 w-4" />
+            確認済みにして閉じる
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
     </>
   )
 }

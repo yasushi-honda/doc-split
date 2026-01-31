@@ -149,6 +149,9 @@ function DocumentRow({
     document.officeCandidates.length > 0
   const needsReview = needsCustomerConfirmation || needsOfficeConfirmation
 
+  // OCR未確認
+  const isUnverified = !document.verified
+
   return (
     <tr
       className="cursor-pointer border-b border-gray-100 transition-colors hover:bg-gray-50"
@@ -168,13 +171,20 @@ function DocumentRow({
       <td className="px-2 py-2 text-xs text-gray-700 sm:px-4 sm:py-3 sm:text-sm">{formatDateTime(document.processedAt)}</td>
       <td className="hidden px-4 py-3 text-gray-700 md:table-cell">{formatTimestamp(document.fileDate)}</td>
       <td className="px-2 py-2 sm:px-4 sm:py-3">
-        {needsReview ? (
-          <Badge variant="outline" className="bg-orange-100 text-orange-800 border-orange-300 text-xs">
-            要確認
-          </Badge>
-        ) : (
-          <Badge variant={statusConfig.variant} className="text-xs sm:text-sm">{statusConfig.label}</Badge>
-        )}
+        <div className="flex items-center gap-1 flex-wrap">
+          {needsReview ? (
+            <Badge variant="outline" className="bg-orange-100 text-orange-800 border-orange-300 text-xs">
+              要確認
+            </Badge>
+          ) : (
+            <Badge variant={statusConfig.variant} className="text-xs sm:text-sm">{statusConfig.label}</Badge>
+          )}
+          {isUnverified && (
+            <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-300 text-xs">
+              未確認
+            </Badge>
+          )}
+        </div>
       </td>
       {isAdmin && (
         <td className="px-1 py-2 sm:px-2 sm:py-3" onClick={(e) => e.stopPropagation()}>
@@ -236,6 +246,7 @@ export function DocumentsPage() {
   const [documentTypeFilter, setDocumentTypeFilter] = useState<string>('all')
   const [showFilters, setShowFilters] = useState(false)
   const [showSplit, setShowSplit] = useState(false) // 分割済み表示フラグ
+  const [showUnverifiedOnly, setShowUnverifiedOnly] = useState(false) // 未確認のみ表示フラグ
 
   // ソート状態（デフォルト: 登録日の新しい順）
   const [sortField, setSortField] = useState<SortField>('processedAt')
@@ -326,6 +337,11 @@ export function DocumentsPage() {
       docs = docs.filter(doc => doc.status !== 'split')
     }
 
+    // 未確認のみ表示
+    if (showUnverifiedOnly) {
+      docs = docs.filter(doc => !doc.verified)
+    }
+
     // ソート
     return [...docs].sort((a, b) => {
       let comparison = 0
@@ -359,7 +375,7 @@ export function DocumentsPage() {
 
       return sortOrder === 'asc' ? comparison : -comparison
     })
-  }, [documentsData?.documents, showSplit, sortField, sortOrder])
+  }, [documentsData?.documents, showSplit, showUnverifiedOnly, sortField, sortOrder])
 
   return (
     <div className="space-y-6">
@@ -467,7 +483,16 @@ export function DocumentsPage() {
                       </SelectContent>
                     </Select>
                   </div>
-                  <div className="flex items-end pb-1">
+                  <div className="flex items-end gap-4 pb-1">
+                    <label className="flex cursor-pointer items-center gap-2 text-xs text-gray-500">
+                      <input
+                        type="checkbox"
+                        checked={showUnverifiedOnly}
+                        onChange={(e) => setShowUnverifiedOnly(e.target.checked)}
+                        className="h-3.5 w-3.5 rounded border-gray-300 text-amber-600 focus:ring-amber-500"
+                      />
+                      未確認のみ表示
+                    </label>
                     <label className="flex cursor-pointer items-center gap-2 text-xs text-gray-500">
                       <input
                         type="checkbox"
