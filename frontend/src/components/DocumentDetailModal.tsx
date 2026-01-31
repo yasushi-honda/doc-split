@@ -23,6 +23,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Checkbox } from '@/components/ui/checkbox'
+import { Switch } from '@/components/ui/switch'
 import { PdfViewer } from '@/components/PdfViewer'
 import { PdfSplitModal } from '@/components/PdfSplitModal'
 import { MasterSelectField } from '@/components/MasterSelectField'
@@ -753,27 +754,33 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                   {/* デスクトップ用タイトル + 確認ステータス */}
                   <div className="hidden md:flex items-center gap-3">
                     <h3 className="text-sm font-semibold text-gray-900">書類情報</h3>
-                    {/* OCR確認トグル（デスクトップ：インライン表示） */}
-                    <button
-                      type="button"
-                      onClick={document.verified ? markAsUnverified : markAsVerified}
-                      disabled={isVerifying || isEditing}
-                      className={`flex items-center gap-1.5 px-2 py-1 rounded-full text-xs font-medium transition-all ${
-                        document.verified
-                          ? 'bg-green-100 text-green-700 hover:bg-green-200'
-                          : 'bg-amber-100 text-amber-700 hover:bg-amber-200'
-                      } ${(isVerifying || isEditing) ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
-                      title={document.verified ? '確認済み（クリックで取り消し）' : '未確認（クリックで確認済みにする）'}
-                    >
-                      {isVerifying ? (
-                        <Loader2 className="h-3 w-3 animate-spin" />
-                      ) : document.verified ? (
-                        <CheckCircle className="h-3 w-3" />
-                      ) : (
-                        <AlertCircle className="h-3 w-3" />
-                      )}
-                      <span>{document.verified ? '確認済' : '未確認'}</span>
-                    </button>
+                    {/* OCR確認トグルスイッチ（デスクトップ：インライン表示） */}
+                    <div className="flex items-center gap-2">
+                      <Switch
+                        checked={document.verified || false}
+                        onCheckedChange={(checked) => {
+                          if (checked) {
+                            markAsVerified()
+                          } else {
+                            markAsUnverified()
+                          }
+                        }}
+                        disabled={isVerifying || isEditing}
+                        className="data-[state=checked]:bg-green-500"
+                      />
+                      <label className={`text-xs font-medium ${document.verified ? 'text-green-700' : 'text-gray-500'}`}>
+                        {isVerifying ? (
+                          <span className="flex items-center gap-1">
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                            処理中
+                          </span>
+                        ) : document.verified ? (
+                          '確認済み'
+                        ) : (
+                          '未確認'
+                        )}
+                      </label>
+                    </div>
                   </div>
 
                   {/* 右側のボタン群 */}
