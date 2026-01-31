@@ -994,13 +994,16 @@ export function aggregateOfficeCandidates(
  * 日付を抽出（強化版）
  *
  * Phase 6Aで実装したtextNormalizerを活用
+ * 1ページ目のテキストがある場合は、そこから「○年○月○日」形式を優先的に探す
  *
- * @param ocrText OCR結果テキスト
+ * @param ocrText OCR結果テキスト（全体）
  * @param dateMarker 日付マーカー（例: "発行日"）
+ * @param firstPageText 1ページ目のテキスト（オプション、指定時は優先）
  */
 export function extractDateEnhanced(
   ocrText: string,
-  dateMarker?: string
+  dateMarker?: string,
+  firstPageText?: string
 ): DateExtractionResult {
   if (!ocrText) {
     return {
@@ -1011,6 +1014,39 @@ export function extractDateEnhanced(
       confidence: 0,
       allCandidates: [],
     };
+  }
+
+  // 1ページ目のテキストがある場合、そこから「○年○月○日」形式を優先的に探す
+  if (firstPageText) {
+    const normalizedFirstPage = convertFullWidthToHalfWidth(firstPageText);
+    const firstPageCandidates = extractDateCandidates(normalizedFirstPage);
+
+    // 1ページ目で「○年○月○日」形式（日まで指定）の日付を探す
+    const fullDateCandidate = firstPageCandidates.find(
+      (c) =>
+        c.pattern === '令和年月日' ||
+        c.pattern === '西暦年月日' ||
+        c.pattern === '西暦スラッシュ' ||
+        c.pattern === 'R略記' ||
+        (c.pattern?.includes('年月日') && !c.pattern?.includes('年月分'))
+    );
+
+    if (fullDateCandidate) {
+      // 1ページ目で完全な日付が見つかった場合、それを採用（ボーナス付き）
+      const year = fullDateCandidate.date.getFullYear();
+      const month = String(fullDateCandidate.date.getMonth() + 1).padStart(2, '0');
+      const day = String(fullDateCandidate.date.getDate()).padStart(2, '0');
+      const formattedDate = `${year}/${month}/${day}`;
+
+      return {
+        date: fullDateCandidate.date,
+        formattedDate,
+        source: fullDateCandidate.source,
+        pattern: `${fullDateCandidate.pattern}(1頁目)`,
+        confidence: Math.min(100, fullDateCandidate.confidence + 5), // 1ページ目ボーナス
+        allCandidates: firstPageCandidates,
+      };
+    }
   }
 
   // 前処理

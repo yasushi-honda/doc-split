@@ -182,7 +182,7 @@ export function extractDateCandidates(text: string, maxCandidates: number = 10):
 
   // === Phase 1: 元号パターン（最優先） ===
 
-  // 令和X年Y月分（対象期間を示す - 発行日ではないので優先度を下げる）
+  // 令和X年Y月分（対象期間を示す - 「○年○月○日」より少し低め）
   const reiwaMonthlyPattern = /令和(\d{1,2})年(\d{1,2})月分/g;
   let match: RegExpExecArray | null;
 
@@ -196,7 +196,7 @@ export function extractDateCandidates(text: string, maxCandidates: number = 10):
         date: new Date(adYear, month - 1, 1),
         source: match[0],
         pattern: '令和年月分',
-        confidence: 70, // 対象期間なので発行日より優先度を下げる
+        confidence: 85, // 対象期間だが、1ページ目優先ロジックでバランスを取る
       });
     }
   }

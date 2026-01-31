@@ -223,10 +223,11 @@ export async function processDocument(
     }
   }
 
-  // 日付抽出
+  // 日付抽出（1ページ目を優先）
   const matchedDocMaster = documentMasters.docs.find((d) => d.data().name === documentTypeResult.documentType);
   const dateMarker = matchedDocMaster?.data().dateMarker as string | undefined;
-  const dateResult = extractDateEnhanced(ocrResult, dateMarker);
+  const firstPageText = pageResults.length > 0 ? pageResults[0]?.text : undefined;
+  const dateResult = extractDateEnhanced(ocrResult, dateMarker, firstPageText);
 
   // OCR結果が長い場合はCloud Storageに保存
   let ocrResultUrl: string | null = null;
