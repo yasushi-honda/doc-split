@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * マスター照合の再実行スクリプト
- * 既存のOCR結果を使って、マスター照合のみを再実行する
+ * マスター照合・日付抽出の再実行スクリプト
+ * 既存のOCR結果を使って、マスター照合と日付抽出を再実行する
  */
 
 const admin = require('firebase-admin');
@@ -256,8 +256,193 @@ function extractDocumentTypeCandidates(ocrText, documentTypeMasters) {
   };
 }
 
+// ============================================
+// 日付抽出ロジック
+// ============================================
+
+function convertFullWidthToHalfWidth(text) {
+  if (!text) return '';
+  return text
+    .replace(/[０-９]/g, (s) => String.fromCharCode(s.charCodeAt(0) - 0xfee0))
+    .replace(/[Ａ-Ｚａ-ｚ]/g, (s) => String.fromCharCode(s.charCodeAt(0) - 0xfee0));
+}
+
+function isValidDate(year, month, day) {
+  if (year < 1900 || year > new Date().getFullYear() + 10) return false;
+  if (month < 1 || month > 12) return false;
+  if (day < 1 || day > 31) return false;
+  const daysInMonth = new Date(year, month, 0).getDate();
+  return day <= daysInMonth;
+}
+
+function extractDateCandidates(text, maxCandidates = 10) {
+  if (!text) return [];
+  const candidates = [];
+
+  // 令和X年Y月分（対象期間）
+  const reiwaMonthlyPattern = /令和(\d{1,2})年(\d{1,2})月分/g;
+  let match;
+  while ((match = reiwaMonthlyPattern.exec(text)) !== null) {
+    const eraYear = parseInt(match[1], 10);
+    const month = parseInt(match[2], 10);
+    const adYear = eraYear + 2018;
+    if (isValidDate(adYear, month, 1)) {
+      candidates.push({
+        date: new Date(adYear, month - 1, 1),
+        source: match[0],
+        pattern: '令和年月分',
+        confidence: 85,
+      });
+    }
+  }
+
+  // 令和X年Y月Z日
+  const reiwaFullPattern = /令和(\d{1,2})年(\d{1,2})月(\d{1,2})日/g;
+  while ((match = reiwaFullPattern.exec(text)) !== null) {
+    const eraYear = parseInt(match[1], 10);
+    const month = parseInt(match[2], 10);
+    const day = parseInt(match[3], 10);
+    const adYear = eraYear + 2018;
+    if (isValidDate(adYear, month, day)) {
+      candidates.push({
+        date: new Date(adYear, month - 1, day),
+        source: match[0],
+        pattern: '令和年月日',
+        confidence: 90,
+      });
+    }
+  }
+
+  // 令和X年Y月
+  const reiwaMonthPattern = /令和(\d{1,2})年(\d{1,2})月(?!分)/g;
+  while ((match = reiwaMonthPattern.exec(text)) !== null) {
+    const eraYear = parseInt(match[1], 10);
+    const month = parseInt(match[2], 10);
+    const adYear = eraYear + 2018;
+    if (isValidDate(adYear, month, 1)) {
+      candidates.push({
+        date: new Date(adYear, month - 1, 1),
+        source: match[0],
+        pattern: '令和年月',
+        confidence: 85,
+      });
+    }
+  }
+
+  // YYYY年MM月DD日
+  const fullDatePattern = /(\d{4})年(\d{1,2})月(\d{1,2})日/g;
+  while ((match = fullDatePattern.exec(text)) !== null) {
+    const year = parseInt(match[1], 10);
+    const month = parseInt(match[2], 10);
+    const day = parseInt(match[3], 10);
+    if (isValidDate(year, month, day)) {
+      candidates.push({
+        date: new Date(year, month - 1, day),
+        source: match[0],
+        pattern: '西暦年月日',
+        confidence: 90,
+      });
+    }
+  }
+
+  // YYYY/MM/DD or YYYY-MM-DD
+  const slashDatePattern = /(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/g;
+  while ((match = slashDatePattern.exec(text)) !== null) {
+    const year = parseInt(match[1], 10);
+    const month = parseInt(match[2], 10);
+    const day = parseInt(match[3], 10);
+    if (isValidDate(year, month, day)) {
+      candidates.push({
+        date: new Date(year, month - 1, day),
+        source: match[0],
+        pattern: '西暦スラッシュ',
+        confidence: 85,
+      });
+    }
+  }
+
+  // R7.5.1 形式
+  const correctedText = convertFullWidthToHalfWidth(text).replace(/[｜Il]/g, '1').replace(/\s+/g, '');
+  const shortEraPattern = /[Rr](\d{1,2})\.(\d{1,2})\.(\d{1,2})/g;
+  while ((match = shortEraPattern.exec(correctedText)) !== null) {
+    const eraYear = parseInt(match[1], 10);
+    const month = parseInt(match[2], 10);
+    const day = parseInt(match[3], 10);
+    const adYear = eraYear + 2018;
+    if (isValidDate(adYear, month, day)) {
+      candidates.push({
+        date: new Date(adYear, month - 1, day),
+        source: match[0],
+        pattern: 'R略記',
+        confidence: 75,
+      });
+    }
+  }
+
+  // 重複除去
+  const seen = new Map();
+  for (const c of candidates) {
+    const key = c.date.toISOString().split('T')[0];
+    if (!seen.has(key) || seen.get(key).confidence < c.confidence) {
+      seen.set(key, c);
+    }
+  }
+  const unique = Array.from(seen.values());
+  unique.sort((a, b) => b.confidence - a.confidence);
+  return unique.slice(0, maxCandidates);
+}
+
+function extractDateEnhanced(ocrText, firstPageText) {
+  if (!ocrText) return { date: null, formattedDate: null, pattern: null };
+
+  // 1ページ目から「○年○月○日」形式を優先的に探す
+  if (firstPageText) {
+    const normalizedFirstPage = convertFullWidthToHalfWidth(firstPageText);
+    const firstPageCandidates = extractDateCandidates(normalizedFirstPage);
+    const fullDateCandidate = firstPageCandidates.find(c =>
+      c.pattern === '令和年月日' ||
+      c.pattern === '西暦年月日' ||
+      c.pattern === '西暦スラッシュ' ||
+      c.pattern === 'R略記'
+    );
+    if (fullDateCandidate) {
+      const year = fullDateCandidate.date.getFullYear();
+      const month = String(fullDateCandidate.date.getMonth() + 1).padStart(2, '0');
+      const day = String(fullDateCandidate.date.getDate()).padStart(2, '0');
+      return {
+        date: fullDateCandidate.date,
+        formattedDate: `${year}/${month}/${day}`,
+        pattern: `${fullDateCandidate.pattern}(1頁目)`,
+        confidence: Math.min(100, fullDateCandidate.confidence + 5),
+      };
+    }
+  }
+
+  // 全体から探す
+  const normalizedText = convertFullWidthToHalfWidth(ocrText);
+  const candidates = extractDateCandidates(normalizedText);
+  if (candidates.length === 0) return { date: null, formattedDate: null, pattern: null };
+
+  // 未来日付を除外
+  const now = new Date();
+  const validCandidates = candidates.filter(c => c.date <= now);
+  const best = validCandidates.length > 0 ? validCandidates[0] : candidates[0];
+
+  if (!best) return { date: null, formattedDate: null, pattern: null };
+
+  const year = best.date.getFullYear();
+  const month = String(best.date.getMonth() + 1).padStart(2, '0');
+  const day = String(best.date.getDate()).padStart(2, '0');
+  return {
+    date: best.date,
+    formattedDate: `${year}/${month}/${day}`,
+    pattern: best.pattern,
+    confidence: best.confidence,
+  };
+}
+
 async function main() {
-  console.log(`\n🔄 マスター照合の再実行を開始します (${projectId})\n`);
+  console.log(`\n🔄 マスター照合・日付抽出の再実行を開始します (${projectId})\n`);
 
   // マスターデータ取得
   console.log('📚 マスターデータを取得中...');
@@ -303,10 +488,21 @@ async function main() {
     const officeResult = extractOfficeCandidates(ocrText, officeMasters);
     const docTypeResult = extractDocumentTypeCandidates(ocrText, documentTypeMasters);
 
+    // 日付抽出を再実行（1ページ目優先）
+    const pageResults = doc.pageResults || [];
+    const firstPageText = pageResults.length > 0 ? pageResults[0]?.text : undefined;
+    const dateResult = extractDateEnhanced(ocrText, firstPageText);
+
     // 変更があるか確認
     const newCustomerName = customerResult.bestMatch?.name || '不明顧客';
     const newOfficeName = officeResult.bestMatch?.name || null;
     const newDocumentType = docTypeResult.bestMatch?.name || '未判定';
+    const newFileDate = dateResult.date || null;
+    const newFileDateFormatted = dateResult.formattedDate || null;
+
+    // 既存の日付を取得
+    const oldFileDate = doc.fileDate?.toDate?.() || doc.fileDate || null;
+    const oldFileDateStr = oldFileDate ? `${oldFileDate.getFullYear()}/${String(oldFileDate.getMonth()+1).padStart(2,'0')}/${String(oldFileDate.getDate()).padStart(2,'0')}` : null;
 
     const changes = [];
     if (doc.customerName !== newCustomerName) {
@@ -317,6 +513,9 @@ async function main() {
     }
     if (doc.documentType !== newDocumentType) {
       changes.push(`書類種別: "${doc.documentType}" → "${newDocumentType}"`);
+    }
+    if (oldFileDateStr !== newFileDateFormatted) {
+      changes.push(`書類日付: "${oldFileDateStr}" → "${newFileDateFormatted}" (${dateResult.pattern || 'N/A'})`);
     }
 
     // 更新データ
@@ -345,6 +544,8 @@ async function main() {
         score: c.score,
         matchType: c.matchType,
       })),
+      fileDate: newFileDate,
+      fileDateFormatted: newFileDateFormatted,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     };
 
