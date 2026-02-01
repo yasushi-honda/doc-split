@@ -669,7 +669,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
     <>
     <Dialog open={open} onOpenChange={handleOpenChange} modal={false}>
       <DialogContent
-        className="flex h-[90vh] w-[95vw] max-w-7xl flex-col p-0 md:w-auto"
+        className="flex h-[90vh] w-[95vw] max-w-[1600px] flex-col p-0 md:w-auto"
         aria-describedby={undefined}
         onInteractOutside={(e) => {
           // ポップアップ表示中やPDF分割モーダル表示中は外側クリックでDialogを閉じない
@@ -807,7 +807,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
 
               {/* メタ情報サイドバー（モバイル: 下部表示・折りたたみ可、デスクトップ: サイドバー） */}
               <div
-                className={`w-full border-t bg-white transition-all duration-200 md:flex md:h-auto md:w-80 md:flex-col md:flex-shrink-0 md:border-l md:border-t-0 md:p-4 ${
+                className={`w-full border-t bg-white transition-all duration-200 md:flex md:h-auto md:w-72 md:flex-col md:flex-shrink-0 md:border-l md:border-t-0 md:p-4 ${
                   isMetadataCollapsed
                     ? 'h-12 flex-shrink-0 overflow-hidden px-3 py-2'
                     : 'min-h-0 max-h-[45vh] flex-shrink-0 overflow-y-auto overscroll-contain p-3 [-webkit-overflow-scrolling:touch] md:max-h-none'
