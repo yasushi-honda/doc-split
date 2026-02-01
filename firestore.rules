@@ -56,7 +56,11 @@ service cloud.firestore {
           // OCR結果確認ステータスフィールド
           'verified',
           'verifiedBy',
-          'verifiedAt'
+          'verifiedAt',
+          // 再処理用フィールド（一括再処理）
+          'status',
+          'ocrResult',
+          'error'
         ])
         // confirmedBy は自分のUIDのみ設定可能（事業所解決時は含まれない場合あり）
         && (request.resource.data.confirmedBy == request.auth.uid

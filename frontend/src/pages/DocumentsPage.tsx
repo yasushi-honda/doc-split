@@ -2,6 +2,7 @@ import { useState, useMemo, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { httpsCallable } from 'firebase/functions'
+import { doc, writeBatch, serverTimestamp, deleteField } from 'firebase/firestore'
 import {
   Filter,
   FileText,
@@ -18,6 +19,9 @@ import {
   Upload,
   ArrowUpDown,
   Trash2,
+  RotateCcw,
+  CheckCircle2,
+  X,
 } from 'lucide-react'
 import { format } from 'date-fns'
 import { ja } from 'date-fns/locale'
@@ -44,7 +48,8 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { useAuthStore } from '@/stores/authStore'
-import { functions } from '@/lib/firebase'
+import { functions, db } from '@/lib/firebase'
+import { Checkbox } from '@/components/ui/checkbox'
 import { useInfiniteDocuments, useDocumentStats, useDocumentMasters, type DocumentFilters } from '@/hooks/useDocuments'
 import { isCustomerConfirmed } from '@/hooks/useProcessingHistory'
 import { DocumentDetailModal } from '@/components/DocumentDetailModal'
@@ -133,11 +138,17 @@ function DocumentRow({
   onClick,
   isAdmin,
   onDeleteClick,
+  isSelected,
+  onSelectChange,
+  showCheckbox,
 }: {
   document: Document
   onClick: () => void
   isAdmin: boolean
   onDeleteClick: (doc: Document) => void
+  isSelected: boolean
+  onSelectChange: (checked: boolean) => void
+  showCheckbox: boolean
 }) {
   const statusConfig = STATUS_CONFIG[document.status] || { label: '不明', variant: 'secondary' as const }
 
@@ -154,9 +165,17 @@ function DocumentRow({
 
   return (
     <tr
-      className="cursor-pointer border-b border-gray-100 transition-colors hover:bg-gray-50"
+      className={`cursor-pointer border-b border-gray-100 transition-colors hover:bg-gray-50 ${isSelected ? 'bg-blue-50' : ''}`}
       onClick={onClick}
     >
+      {showCheckbox && (
+        <td className="px-2 py-2 sm:px-3 sm:py-3" onClick={(e) => e.stopPropagation()}>
+          <Checkbox
+            checked={isSelected}
+            onCheckedChange={(checked) => onSelectChange(checked === true)}
+          />
+        </td>
+      )}
       <td className="px-2 py-2 sm:px-4 sm:py-3">
         <div className="flex items-center gap-2 sm:gap-3">
           <FileText className="h-4 w-4 flex-shrink-0 text-gray-400 sm:h-5 sm:w-5" />
@@ -236,7 +255,7 @@ export function DocumentsPage() {
   // URLパラメータ
   const [searchParams, setSearchParams] = useSearchParams()
   const queryClient = useQueryClient()
-  const { isAdmin } = useAuthStore()
+  const { isAdmin, user } = useAuthStore()
 
   // タブ状態
   const [activeTab, setActiveTab] = useState<ViewTab>('list')
@@ -262,6 +281,11 @@ export function DocumentsPage() {
   // 削除確認ダイアログ
   const [deleteTarget, setDeleteTarget] = useState<Document | null>(null)
   const [isDeleting, setIsDeleting] = useState(false)
+
+  // 一括選択
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [isBulkOperating, setIsBulkOperating] = useState(false)
+  const [bulkOperation, setBulkOperation] = useState<'delete' | 'verify' | 'reprocess' | null>(null)
 
   // モーダル状態（URLパラメータと同期）
   const selectedDocumentId = searchParams.get('doc')
@@ -338,6 +362,128 @@ export function DocumentsPage() {
       setIsDeleting(false)
     }
   }, [deleteTarget, queryClient])
+
+  // 一括選択のトグル
+  const handleSelectToggle = useCallback((docId: string, checked: boolean) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev)
+      if (checked) {
+        next.add(docId)
+      } else {
+        next.delete(docId)
+      }
+      return next
+    })
+  }, [])
+
+  // 全選択/全解除
+  const handleSelectAll = useCallback((checked: boolean) => {
+    if (checked) {
+      setSelectedIds(new Set(documents.map(doc => doc.id)))
+    } else {
+      setSelectedIds(new Set())
+    }
+  }, [documents])
+
+  // 選択クリア
+  const clearSelection = useCallback(() => {
+    setSelectedIds(new Set())
+  }, [])
+
+  // 一括確認済み
+  const handleBulkVerify = useCallback(async () => {
+    if (selectedIds.size === 0 || !user) return
+
+    setIsBulkOperating(true)
+    try {
+      const batch = writeBatch(db)
+      for (const docId of selectedIds) {
+        const docRef = doc(db, 'documents', docId)
+        batch.update(docRef, {
+          verified: true,
+          verifiedBy: user.uid,
+          verifiedAt: serverTimestamp(),
+        })
+      }
+      await batch.commit()
+
+      // 一覧をリフレッシュ
+      queryClient.invalidateQueries({ queryKey: ['documents'] })
+      queryClient.invalidateQueries({ queryKey: ['documentStats'] })
+      clearSelection()
+      setBulkOperation(null)
+    } catch (error) {
+      console.error('Bulk verify error:', error)
+      alert('一括確認に失敗しました')
+    } finally {
+      setIsBulkOperating(false)
+    }
+  }, [selectedIds, user, queryClient, clearSelection])
+
+  // 一括再処理
+  const handleBulkReprocess = useCallback(async () => {
+    if (selectedIds.size === 0) return
+
+    setIsBulkOperating(true)
+    try {
+      const batch = writeBatch(db)
+      for (const docId of selectedIds) {
+        const docRef = doc(db, 'documents', docId)
+        batch.update(docRef, {
+          status: 'pending',
+          ocrResult: deleteField(),
+          error: deleteField(),
+        })
+      }
+      await batch.commit()
+
+      // 一覧をリフレッシュ
+      queryClient.invalidateQueries({ queryKey: ['documents'] })
+      queryClient.invalidateQueries({ queryKey: ['documentStats'] })
+      clearSelection()
+      setBulkOperation(null)
+    } catch (error) {
+      console.error('Bulk reprocess error:', error)
+      alert('一括再処理に失敗しました')
+    } finally {
+      setIsBulkOperating(false)
+    }
+  }, [selectedIds, queryClient, clearSelection])
+
+  // 一括削除
+  const handleBulkDelete = useCallback(async () => {
+    if (selectedIds.size === 0) return
+
+    setIsBulkOperating(true)
+    try {
+      const deleteDocument = httpsCallable<{ documentId: string }, { success: boolean }>(
+        functions,
+        'deleteDocument'
+      )
+      const results = await Promise.allSettled(
+        Array.from(selectedIds).map(id => deleteDocument({ documentId: id }))
+      )
+
+      const succeeded = results.filter(r => r.status === 'fulfilled').length
+      const failed = results.filter(r => r.status === 'rejected').length
+
+      if (failed > 0) {
+        alert(`${succeeded}件削除、${failed}件失敗しました`)
+      }
+
+      // 一覧をリフレッシュ
+      queryClient.invalidateQueries({ queryKey: ['documents'] })
+      queryClient.invalidateQueries({ queryKey: ['documentStats'] })
+      queryClient.invalidateQueries({ queryKey: ['documentGroups'] })
+      clearSelection()
+      setBulkOperation(null)
+    } catch (error) {
+      console.error('Bulk delete error:', error)
+      alert('一括削除に失敗しました')
+    } finally {
+      setIsBulkOperating(false)
+    }
+  }, [selectedIds, queryClient, clearSelection])
 
   // 全ページのドキュメントをフラット化
   const allDocuments = useMemo(() => {
@@ -420,6 +566,57 @@ export function DocumentsPage() {
           </Button>
         </div>
       </div>
+
+      {/* 一括操作ツールバー（選択時のみ表示） */}
+      {selectedIds.size > 0 && (
+        <div className="flex items-center gap-3 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+          <span className="text-sm font-medium text-blue-800">
+            {selectedIds.size}件選択中
+          </span>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setBulkOperation('reprocess')}
+              disabled={isBulkOperating}
+              className="flex items-center gap-1"
+            >
+              <RotateCcw className="h-4 w-4" />
+              再処理
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setBulkOperation('verify')}
+              disabled={isBulkOperating}
+              className="flex items-center gap-1"
+            >
+              <CheckCircle2 className="h-4 w-4" />
+              確認済み
+            </Button>
+            {isAdmin && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setBulkOperation('delete')}
+                disabled={isBulkOperating}
+                className="flex items-center gap-1 text-red-600 hover:text-red-700 hover:bg-red-50 border-red-200"
+              >
+                <Trash2 className="h-4 w-4" />
+                削除
+              </Button>
+            )}
+          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={clearSelection}
+            className="ml-auto"
+          >
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
+      )}
 
       {/* 統計カード */}
       {stats && (
@@ -562,6 +759,14 @@ export function DocumentsPage() {
                 <table className="w-full">
                   <thead className="border-b border-gray-200 bg-gray-50 sticky top-0 z-10">
                     <tr>
+                      {isAdmin && (
+                        <th className="px-2 py-2 sm:px-3 sm:py-3 w-10">
+                          <Checkbox
+                            checked={documents.length > 0 && selectedIds.size === documents.length}
+                            onCheckedChange={(checked) => handleSelectAll(checked === true)}
+                          />
+                        </th>
+                      )}
                       <SortableHeader label="ファイル名" field="fileName" currentField={sortField} currentOrder={sortOrder} onClick={handleSort} />
                       <SortableHeader label="顧客名" field="customerName" currentField={sortField} currentOrder={sortOrder} onClick={handleSort} />
                       <SortableHeader label="事業所" field="officeName" currentField={sortField} currentOrder={sortOrder} onClick={handleSort} hideOnMobile />
@@ -579,6 +784,9 @@ export function DocumentsPage() {
                         onClick={() => setSelectedDocumentId(doc.id)}
                         isAdmin={isAdmin}
                         onDeleteClick={setDeleteTarget}
+                        isSelected={selectedIds.has(doc.id)}
+                        onSelectChange={(checked) => handleSelectToggle(doc.id, checked)}
+                        showCheckbox={isAdmin}
                       />
                     ))}
                   </tbody>
@@ -664,6 +872,54 @@ export function DocumentsPage() {
               className="bg-red-600 hover:bg-red-700 focus:ring-red-600"
             >
               {isDeleting ? '削除中...' : '削除する'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* 一括操作確認ダイアログ */}
+      <AlertDialog open={!!bulkOperation} onOpenChange={(open) => !open && setBulkOperation(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {bulkOperation === 'delete' && '一括削除しますか？'}
+              {bulkOperation === 'verify' && '一括確認済みにしますか？'}
+              {bulkOperation === 'reprocess' && '一括再処理しますか？'}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {bulkOperation === 'delete' && (
+                <>
+                  選択した{selectedIds.size}件の書類を削除します。
+                  <br />
+                  この操作は元に戻せません。関連するファイルとログも同時に削除されます。
+                </>
+              )}
+              {bulkOperation === 'verify' && (
+                <>
+                  選択した{selectedIds.size}件の書類を確認済みにします。
+                </>
+              )}
+              {bulkOperation === 'reprocess' && (
+                <>
+                  選択した{selectedIds.size}件の書類を再処理します。
+                  <br />
+                  OCR処理が再実行されます。
+                </>
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isBulkOperating}>キャンセル</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (bulkOperation === 'delete') handleBulkDelete()
+                else if (bulkOperation === 'verify') handleBulkVerify()
+                else if (bulkOperation === 'reprocess') handleBulkReprocess()
+              }}
+              disabled={isBulkOperating}
+              className={bulkOperation === 'delete' ? 'bg-red-600 hover:bg-red-700 focus:ring-red-600' : ''}
+            >
+              {isBulkOperating ? '処理中...' : '実行する'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
