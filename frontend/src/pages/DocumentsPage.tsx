@@ -141,6 +141,7 @@ function DocumentRow({
   isSelected,
   onSelectChange,
   showCheckbox,
+  isProcessing,
 }: {
   document: Document
   onClick: () => void
@@ -149,6 +150,7 @@ function DocumentRow({
   isSelected: boolean
   onSelectChange: (checked: boolean) => void
   showCheckbox: boolean
+  isProcessing: boolean
 }) {
   const statusConfig = STATUS_CONFIG[document.status] || { label: '不明', variant: 'secondary' as const }
 
@@ -163,16 +165,23 @@ function DocumentRow({
   // OCR未確認
   const isUnverified = !document.verified
 
+  // 行のスタイル
+  const rowClassName = `cursor-pointer border-b border-gray-100 transition-all duration-300 ${
+    isProcessing && isSelected
+      ? 'bg-blue-100 animate-pulse'
+      : isSelected
+        ? 'bg-blue-50 hover:bg-blue-100'
+        : 'hover:bg-gray-50'
+  }`
+
   return (
-    <tr
-      className={`cursor-pointer border-b border-gray-100 transition-colors hover:bg-gray-50 ${isSelected ? 'bg-blue-50' : ''}`}
-      onClick={onClick}
-    >
+    <tr className={rowClassName} onClick={onClick}>
       {showCheckbox && (
         <td className="px-2 py-2 sm:px-3 sm:py-3" onClick={(e) => e.stopPropagation()}>
           <Checkbox
             checked={isSelected}
             onCheckedChange={(checked) => onSelectChange(checked === true)}
+            disabled={isProcessing}
           />
         </td>
       )}
@@ -569,10 +578,22 @@ export function DocumentsPage() {
 
       {/* 一括操作ツールバー（選択時のみ表示） */}
       {selectedIds.size > 0 && (
-        <div className="flex items-center gap-3 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-          <span className="text-sm font-medium text-blue-800">
-            {selectedIds.size}件選択中
-          </span>
+        <div className={`flex items-center gap-3 p-3 rounded-lg transition-all duration-300 ${
+          isBulkOperating 
+            ? 'bg-blue-100 border-2 border-blue-400 animate-pulse' 
+            : 'bg-blue-50 border border-blue-200'
+        }`}>
+          <div className="flex items-center gap-2">
+            {isBulkOperating && (
+              <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
+            )}
+            <span className={`text-sm font-medium ${isBulkOperating ? 'text-blue-700' : 'text-blue-800'}`}>
+              {isBulkOperating 
+                ? `${selectedIds.size}件を処理中...` 
+                : `${selectedIds.size}件選択中`
+              }
+            </span>
+          </div>
           <div className="flex items-center gap-2">
             <Button
               variant="outline"
@@ -581,7 +602,7 @@ export function DocumentsPage() {
               disabled={isBulkOperating}
               className="flex items-center gap-1"
             >
-              <RotateCcw className="h-4 w-4" />
+              <RotateCcw className={`h-4 w-4 ${isBulkOperating && bulkOperation === 'reprocess' ? 'animate-spin' : ''}`} />
               再処理
             </Button>
             <Button
@@ -611,6 +632,7 @@ export function DocumentsPage() {
             variant="ghost"
             size="sm"
             onClick={clearSelection}
+            disabled={isBulkOperating}
             className="ml-auto"
           >
             <X className="h-4 w-4" />
@@ -787,6 +809,7 @@ export function DocumentsPage() {
                         isSelected={selectedIds.has(doc.id)}
                         onSelectChange={(checked) => handleSelectToggle(doc.id, checked)}
                         showCheckbox={isAdmin}
+                        isProcessing={isBulkOperating}
                       />
                     ))}
                   </tbody>
@@ -878,32 +901,41 @@ export function DocumentsPage() {
       </AlertDialog>
 
       {/* 一括操作確認ダイアログ */}
-      <AlertDialog open={!!bulkOperation} onOpenChange={(open) => !open && setBulkOperation(null)}>
+      <AlertDialog open={!!bulkOperation} onOpenChange={(open) => !open && !isBulkOperating && setBulkOperation(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>
-              {bulkOperation === 'delete' && '一括削除しますか？'}
-              {bulkOperation === 'verify' && '一括確認済みにしますか？'}
-              {bulkOperation === 'reprocess' && '一括再処理しますか？'}
+            <AlertDialogTitle className="flex items-center gap-2">
+              {isBulkOperating && <Loader2 className="h-5 w-5 animate-spin text-blue-600" />}
+              {bulkOperation === 'delete' && (isBulkOperating ? '削除中...' : '一括削除しますか？')}
+              {bulkOperation === 'verify' && (isBulkOperating ? '確認処理中...' : '一括確認済みにしますか？')}
+              {bulkOperation === 'reprocess' && (isBulkOperating ? '再処理中...' : '一括再処理しますか？')}
             </AlertDialogTitle>
             <AlertDialogDescription>
-              {bulkOperation === 'delete' && (
+              {isBulkOperating ? (
+                <div className="flex items-center gap-2 text-blue-600">
+                  <span>{selectedIds.size}件の書類を処理しています。しばらくお待ちください...</span>
+                </div>
+              ) : (
                 <>
-                  選択した{selectedIds.size}件の書類を削除します。
-                  <br />
-                  この操作は元に戻せません。関連するファイルとログも同時に削除されます。
-                </>
-              )}
-              {bulkOperation === 'verify' && (
-                <>
-                  選択した{selectedIds.size}件の書類を確認済みにします。
-                </>
-              )}
-              {bulkOperation === 'reprocess' && (
-                <>
-                  選択した{selectedIds.size}件の書類を再処理します。
-                  <br />
-                  OCR処理が再実行されます。
+                  {bulkOperation === 'delete' && (
+                    <>
+                      選択した{selectedIds.size}件の書類を削除します。
+                      <br />
+                      この操作は元に戻せません。関連するファイルとログも同時に削除されます。
+                    </>
+                  )}
+                  {bulkOperation === 'verify' && (
+                    <>
+                      選択した{selectedIds.size}件の書類を確認済みにします。
+                    </>
+                  )}
+                  {bulkOperation === 'reprocess' && (
+                    <>
+                      選択した{selectedIds.size}件の書類を再処理します。
+                      <br />
+                      OCR処理が再実行されます。
+                    </>
+                  )}
                 </>
               )}
             </AlertDialogDescription>
@@ -917,8 +949,9 @@ export function DocumentsPage() {
                 else if (bulkOperation === 'reprocess') handleBulkReprocess()
               }}
               disabled={isBulkOperating}
-              className={bulkOperation === 'delete' ? 'bg-red-600 hover:bg-red-700 focus:ring-red-600' : ''}
+              className={`flex items-center gap-2 ${bulkOperation === 'delete' ? 'bg-red-600 hover:bg-red-700 focus:ring-red-600' : ''}`}
             >
+              {isBulkOperating && <Loader2 className="h-4 w-4 animate-spin" />}
               {isBulkOperating ? '処理中...' : '実行する'}
             </AlertDialogAction>
           </AlertDialogFooter>
