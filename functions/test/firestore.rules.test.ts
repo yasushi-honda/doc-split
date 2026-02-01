@@ -148,11 +148,11 @@ describe('Firestore Security Rules', () => {
       });
 
       const docRef = doc(normalUser.firestore(), 'documents', 'doc1');
-      // statusフィールドの更新は禁止
+      // storagePathフィールドの更新は禁止（許可リスト外）
       await assertFails(
         setDoc(docRef, {
           fileName: 'test.pdf',
-          status: 'processed',
+          storagePath: '/new/path',
         }, { merge: true })
       );
     });

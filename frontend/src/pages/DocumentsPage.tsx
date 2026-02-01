@@ -136,8 +136,6 @@ function formatDateTime(timestamp: Timestamp | undefined): string {
 function DocumentRow({
   document,
   onClick,
-  isAdmin,
-  onDeleteClick,
   isSelected,
   onSelectChange,
   showCheckbox,
@@ -145,8 +143,6 @@ function DocumentRow({
 }: {
   document: Document
   onClick: () => void
-  isAdmin: boolean
-  onDeleteClick: (doc: Document) => void
   isSelected: boolean
   onSelectChange: (checked: boolean) => void
   showCheckbox: boolean
@@ -214,19 +210,6 @@ function DocumentRow({
           )}
         </div>
       </td>
-      {isAdmin && (
-        <td className="px-1 py-2 sm:px-2 sm:py-3" onClick={(e) => e.stopPropagation()}>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 px-1 text-red-600 hover:text-red-700 hover:bg-red-50 sm:h-8 sm:px-2"
-            onClick={() => onDeleteClick(document)}
-          >
-            <Trash2 className="h-4 w-4" />
-            <span className="hidden text-xs sm:inline sm:ml-1">削除</span>
-          </Button>
-        </td>
-      )}
     </tr>
   )
 }
@@ -287,10 +270,6 @@ export function DocumentsPage() {
   // アップロードモーダル
   const [showUploadModal, setShowUploadModal] = useState(false)
 
-  // 削除確認ダイアログ
-  const [deleteTarget, setDeleteTarget] = useState<Document | null>(null)
-  const [isDeleting, setIsDeleting] = useState(false)
-
   // 一括選択
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [isBulkOperating, setIsBulkOperating] = useState(false)
@@ -345,32 +324,6 @@ export function DocumentsPage() {
     queryClient.invalidateQueries({ queryKey: ['documents'] })
     queryClient.invalidateQueries({ queryKey: ['documentStats'] })
   }, [queryClient])
-
-  // 削除実行ハンドラ
-  const handleDelete = useCallback(async () => {
-    if (!deleteTarget) return
-
-    setIsDeleting(true)
-    try {
-      const deleteDocument = httpsCallable<{ documentId: string }, { success: boolean }>(
-        functions,
-        'deleteDocument'
-      )
-      await deleteDocument({ documentId: deleteTarget.id })
-
-      // 一覧をリフレッシュ
-      queryClient.invalidateQueries({ queryKey: ['documents'] })
-      queryClient.invalidateQueries({ queryKey: ['documentStats'] })
-      queryClient.invalidateQueries({ queryKey: ['documentGroups'] })
-
-      setDeleteTarget(null)
-    } catch (error) {
-      console.error('Delete error:', error)
-      alert('削除に失敗しました')
-    } finally {
-      setIsDeleting(false)
-    }
-  }, [deleteTarget, queryClient])
 
   // 一括選択のトグル
   const handleSelectToggle = useCallback((docId: string, checked: boolean) => {
@@ -795,7 +748,6 @@ export function DocumentsPage() {
                       <SortableHeader label="登録日" field="processedAt" currentField={sortField} currentOrder={sortOrder} onClick={handleSort} />
                       <SortableHeader label="書類日付" field="fileDate" currentField={sortField} currentOrder={sortOrder} onClick={handleSort} hideOnMobile />
                       <SortableHeader label="ステータス" field="status" currentField={sortField} currentOrder={sortOrder} onClick={handleSort} />
-                      {isAdmin && <th className="w-8 px-1 py-2 sm:w-12 sm:px-2 sm:py-3"></th>}
                     </tr>
                   </thead>
                   <tbody>
@@ -804,8 +756,6 @@ export function DocumentsPage() {
                         key={doc.id}
                         document={doc}
                         onClick={() => setSelectedDocumentId(doc.id)}
-                        isAdmin={isAdmin}
-                        onDeleteClick={setDeleteTarget}
                         isSelected={selectedIds.has(doc.id)}
                         onSelectChange={(checked) => handleSelectToggle(doc.id, checked)}
                         showCheckbox={isAdmin}
@@ -875,30 +825,6 @@ export function DocumentsPage() {
         onOpenChange={setShowUploadModal}
         onSuccess={handleUploadSuccess}
       />
-
-      {/* 削除確認ダイアログ */}
-      <AlertDialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>書類を削除しますか？</AlertDialogTitle>
-            <AlertDialogDescription>
-              「{deleteTarget?.fileName}」を削除します。
-              <br />
-              この操作は元に戻せません。関連するファイルとログも同時に削除されます。
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={isDeleting}>キャンセル</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={handleDelete}
-              disabled={isDeleting}
-              className="bg-red-600 hover:bg-red-700 focus:ring-red-600"
-            >
-              {isDeleting ? '削除中...' : '削除する'}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
 
       {/* 一括操作確認ダイアログ */}
       <AlertDialog open={!!bulkOperation} onOpenChange={(open) => !open && !isBulkOperating && setBulkOperation(null)}>
