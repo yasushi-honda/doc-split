@@ -43,6 +43,7 @@ export function useDocumentVerification(
       })
       // 一覧画面のキャッシュも無効化
       queryClient.invalidateQueries({ queryKey: ['documents'] })
+      queryClient.invalidateQueries({ queryKey: ['documentsInfinite'] })
       onSuccess?.()
       return true
     } catch (err) {
@@ -73,6 +74,7 @@ export function useDocumentVerification(
       })
       // 一覧画面のキャッシュも無効化
       queryClient.invalidateQueries({ queryKey: ['documents'] })
+      queryClient.invalidateQueries({ queryKey: ['documentsInfinite'] })
       onSuccess?.()
       return true
     } catch (err) {
