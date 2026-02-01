@@ -191,7 +191,7 @@ export function PdfViewer({ fileUrl, totalPages, documentId, onRotationSaved }: 
     )
   }, [documentId, rotation, currentPage, saveRotation, onRotationSaved])
 
-  // フィットスケールを計算（幅にフィット、最大130%）
+  // フィットスケールを計算（幅にフィット、最大125%）
   const calculateFitScale = useCallback(() => {
     if (!pageSize) return 1
 
@@ -206,7 +206,11 @@ export function PdfViewer({ fileUrl, totalPages, documentId, onRotationSaved }: 
 
   // 実際の表示幅を計算
   const getDisplayWidth = useCallback(() => {
-    if (!pageSize) return containerSize.width
+    if (!pageSize) {
+      // ページサイズ未取得時も125%上限を適用（A4幅595ptを基準に推定）
+      const estimatedMaxWidth = Math.round(595 * 1.25) // ~744px
+      return Math.min(containerSize.width, estimatedMaxWidth)
+    }
 
     if (zoomMode === 'fit') {
       const fitScale = calculateFitScale()
