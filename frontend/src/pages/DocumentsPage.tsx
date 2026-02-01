@@ -195,20 +195,18 @@ function DocumentRow({
       <td className="px-2 py-2 text-xs text-gray-700 sm:px-4 sm:py-3 sm:text-sm">{formatDateTime(document.processedAt)}</td>
       <td className="hidden px-4 py-3 text-gray-700 md:table-cell">{formatTimestamp(document.fileDate)}</td>
       <td className="px-2 py-2 sm:px-4 sm:py-3">
-        <div className="flex items-center gap-1 flex-wrap">
-          {needsReview ? (
-            <Badge variant="outline" className="bg-orange-100 text-orange-800 border-orange-300 text-xs">
-              要確認
-            </Badge>
-          ) : (
-            <Badge variant={statusConfig.variant} className="text-xs sm:text-sm">{statusConfig.label}</Badge>
-          )}
-          {isUnverified && (
-            <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-300 text-xs">
-              未確認
-            </Badge>
-          )}
-        </div>
+        {needsReview ? (
+          <Badge variant="outline" className="bg-orange-100 text-orange-800 border-orange-300 text-xs">
+            要確認
+          </Badge>
+        ) : (
+          <Badge variant={statusConfig.variant} className="text-xs sm:text-sm">{statusConfig.label}</Badge>
+        )}
+      </td>
+      <td className="px-2 py-2 sm:px-3 sm:py-3 text-center">
+        {!isUnverified && (
+          <CheckCircle2 className="h-5 w-5 text-green-500 inline-block" />
+        )}
       </td>
     </tr>
   )
@@ -748,6 +746,9 @@ export function DocumentsPage() {
                       <SortableHeader label="登録日" field="processedAt" currentField={sortField} currentOrder={sortOrder} onClick={handleSort} />
                       <SortableHeader label="書類日付" field="fileDate" currentField={sortField} currentOrder={sortOrder} onClick={handleSort} hideOnMobile />
                       <SortableHeader label="ステータス" field="status" currentField={sortField} currentOrder={sortOrder} onClick={handleSort} />
+                      <th className="px-2 py-2 text-center text-xs font-medium text-gray-700 sm:px-3 sm:py-3 sm:text-sm w-12">
+                        <CheckCircle2 className="h-4 w-4 text-gray-400 inline-block" />
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
