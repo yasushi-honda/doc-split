@@ -199,9 +199,9 @@ export function PdfViewer({ fileUrl, totalPages, documentId, onRotationSaved }: 
     const isRotated = rotation === 90 || rotation === 270
     const pageWidth = isRotated ? pageSize.height : pageSize.width
 
-    // 幅にフィット（最大130%に制限）
+    // 幅にフィット（最大125%に制限 - ズーム単位と合わせる）
     const fitScale = containerSize.width / pageWidth
-    return Math.min(fitScale, 1.3)
+    return Math.min(fitScale, 1.25)
   }, [pageSize, containerSize, rotation])
 
   // 実際の表示幅を計算
