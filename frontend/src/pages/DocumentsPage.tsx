@@ -376,15 +376,6 @@ export function DocumentsPage() {
     })
   }, [])
 
-  // 全選択/全解除
-  const handleSelectAll = useCallback((checked: boolean) => {
-    if (checked) {
-      setSelectedIds(new Set(documents.map(doc => doc.id)))
-    } else {
-      setSelectedIds(new Set())
-    }
-  }, [documents])
-
   // 選択クリア
   const clearSelection = useCallback(() => {
     setSelectedIds(new Set())
@@ -539,6 +530,15 @@ export function DocumentsPage() {
       return sortOrder === 'asc' ? comparison : -comparison
     })
   }, [allDocuments, showSplit, showUnverifiedOnly, sortField, sortOrder])
+
+  // 全選択/全解除（documentsの後に定義する必要あり）
+  const handleSelectAll = useCallback((checked: boolean) => {
+    if (checked) {
+      setSelectedIds(new Set(documents.map(doc => doc.id)))
+    } else {
+      setSelectedIds(new Set())
+    }
+  }, [documents])
 
   return (
     <div className="space-y-6">
