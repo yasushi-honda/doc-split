@@ -669,7 +669,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
     <>
     <Dialog open={open} onOpenChange={handleOpenChange} modal={false}>
       <DialogContent
-        className="flex h-[90vh] w-[95vw] max-w-[1600px] flex-col p-0 md:w-auto [&>button.absolute]:hidden"
+        className="flex h-[90vh] w-[95vw] max-w-[1100px] flex-col p-0 [&>button.absolute]:hidden"
         aria-describedby={undefined}
         onInteractOutside={(e) => {
           // ポップアップ表示中やPDF分割モーダル表示中は外側クリックでDialogを閉じない
