@@ -669,7 +669,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
     <>
     <Dialog open={open} onOpenChange={handleOpenChange} modal={false}>
       <DialogContent
-        className="flex h-[90vh] w-[95vw] max-w-[1600px] flex-col p-0 md:w-auto"
+        className="flex h-[90vh] w-[95vw] max-w-[1600px] flex-col p-0 md:w-auto [&>button.absolute]:hidden"
         aria-describedby={undefined}
         onInteractOutside={(e) => {
           // ポップアップ表示中やPDF分割モーダル表示中は外側クリックでDialogを閉じない
@@ -759,6 +759,15 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                       <span className="hidden sm:inline">新しいタブで開く</span>
                     </Button>
                   )}
+                  {/* 閉じるボタン（独立・明確に表示） */}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => handleOpenChange(false)}
+                    className="ml-2 h-8 w-8 rounded-full p-0 hover:bg-gray-200"
+                  >
+                    <X className="h-5 w-5" />
+                  </Button>
                 </div>
               </div>
             </DialogHeader>
