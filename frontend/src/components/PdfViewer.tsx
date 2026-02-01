@@ -191,7 +191,7 @@ export function PdfViewer({ fileUrl, totalPages, documentId, onRotationSaved }: 
     )
   }, [documentId, rotation, currentPage, saveRotation, onRotationSaved])
 
-  // フィットスケールを計算（幅にフィット）
+  // フィットスケールを計算（幅にフィット、最大130%）
   const calculateFitScale = useCallback(() => {
     if (!pageSize) return 1
 
@@ -199,8 +199,9 @@ export function PdfViewer({ fileUrl, totalPages, documentId, onRotationSaved }: 
     const isRotated = rotation === 90 || rotation === 270
     const pageWidth = isRotated ? pageSize.height : pageSize.width
 
-    // 幅にフィット（モバイルでも横幅いっぱいに表示）
-    return containerSize.width / pageWidth
+    // 幅にフィット（最大130%に制限）
+    const fitScale = containerSize.width / pageWidth
+    return Math.min(fitScale, 1.3)
   }, [pageSize, containerSize, rotation])
 
   // 実際の表示幅を計算
