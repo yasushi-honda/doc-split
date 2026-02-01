@@ -694,22 +694,94 @@ describe('Firestore Security Rules', () => {
       );
     });
 
-    it('statusの更新は許可されない', async () => {
+    it('status/ocrResult/errorの更新は許可される（一括再処理用）', async () => {
       const normalUser = testEnv.authenticatedContext(normalUid);
 
       // テストデータを作成
       await testEnv.withSecurityRulesDisabled(async (context) => {
         await setDoc(doc(context.firestore(), 'documents', 'doc-status'), {
           fileName: 'test.pdf',
-          status: 'pending',
+          status: 'processed',
+          ocrResult: { text: 'test' },
         });
       });
 
       const docRef = doc(normalUser.firestore(), 'documents', 'doc-status');
+      await assertSucceeds(
+        setDoc(docRef, {
+          fileName: 'test.pdf',
+          status: 'pending', // 再処理用にpendingに戻す
+          ocrResult: null,   // ocrResultをクリア
+        }, { merge: true })
+      );
+    });
+
+    it('許可されていないフィールドの更新は禁止', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      // テストデータを作成
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'documents', 'doc-forbidden'), {
+          fileName: 'test.pdf',
+          status: 'pending',
+          storagePath: '/path/to/file',
+        });
+      });
+
+      const docRef = doc(normalUser.firestore(), 'documents', 'doc-forbidden');
       await assertFails(
         setDoc(docRef, {
           fileName: 'test.pdf',
-          status: 'processed', // statusは更新不可
+          status: 'pending',
+          storagePath: '/new/path', // storagePathは更新不可
+        }, { merge: true })
+      );
+    });
+
+    it('verified/verifiedBy/verifiedAtの更新が可能（一括確認用）', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      // テストデータを作成
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'documents', 'doc-verify'), {
+          fileName: 'test.pdf',
+          status: 'processed',
+          verified: false,
+        });
+      });
+
+      const docRef = doc(normalUser.firestore(), 'documents', 'doc-verify');
+      await assertSucceeds(
+        setDoc(docRef, {
+          fileName: 'test.pdf',
+          status: 'processed',
+          verified: true,
+          verifiedBy: normalUid,
+          verifiedAt: new Date(),
+        }, { merge: true })
+      );
+    });
+
+    it('verifiedByは自分のUIDのみ設定可能', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      // テストデータを作成
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'documents', 'doc-verify-fake'), {
+          fileName: 'test.pdf',
+          status: 'processed',
+          verified: false,
+        });
+      });
+
+      const docRef = doc(normalUser.firestore(), 'documents', 'doc-verify-fake');
+      await assertFails(
+        setDoc(docRef, {
+          fileName: 'test.pdf',
+          status: 'processed',
+          verified: true,
+          verifiedBy: 'other-user-id', // 他人のUID
+          verifiedAt: new Date(),
         }, { merge: true })
       );
     });
