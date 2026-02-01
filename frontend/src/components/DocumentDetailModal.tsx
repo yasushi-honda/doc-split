@@ -345,13 +345,13 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
 
   const queryClient = useQueryClient()
 
-  // 確認ステータス管理
+  // 確認ステータス管理（楽観的更新で即時反映）
   const {
     isUpdating: isVerifying,
     error: verifyError,
     markAsVerified,
     markAsUnverified,
-  } = useDocumentVerification(document, refetch)
+  } = useDocumentVerification(document)
 
   // 編集機能
   const {
@@ -851,8 +851,8 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                             markAsUnverified()
                           }
                         }}
-                        disabled={isEditing}
-                        className="data-[state=checked]:bg-green-500 cursor-pointer"
+                        disabled={isEditing || isVerifying}
+                        className={`data-[state=checked]:bg-green-500 cursor-pointer ${isVerifying ? 'opacity-50' : ''}`}
                       />
                       <span className={`text-xs font-medium ${document.verified ? 'text-green-700' : 'text-gray-500'}`}>
                         {document.verified ? '確認済み' : '未確認'}
