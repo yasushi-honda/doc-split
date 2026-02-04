@@ -38,11 +38,13 @@ const PAGE_SIZE = 20;   // 画面に表示する件数
 export type PeriodFilter = '7days' | '30days' | 'all';
 export type StatusFilter = 'all' | DocumentStatus;
 export type ConfirmedFilter = 'all' | 'confirmed' | 'unconfirmed';
+export type SortOrder = 'asc' | 'desc';
 
 export interface ProcessingHistoryFilters {
   period: PeriodFilter;
   status: StatusFilter;
   confirmed: ConfirmedFilter;
+  sortOrder?: SortOrder;  // デフォルト: desc（新しい順）
 }
 
 export interface ProcessingHistoryResult {
@@ -184,8 +186,9 @@ export function useProcessingHistory(filters: ProcessingHistoryFilters): Process
 
   // 初期データ取得
   const fetchInitialData = useCallback(async () => {
+    const sortOrder = filters.sortOrder || 'desc';
     const constraints: QueryConstraint[] = [
-      orderBy('processedAt', 'desc'),
+      orderBy('processedAt', sortOrder),
     ];
 
     // 期間フィルター
@@ -226,7 +229,7 @@ export function useProcessingHistory(filters: ProcessingHistoryFilters): Process
     setBuffer(remainingDocs);
 
     return displayDocs;
-  }, [filters.period, filters.status, filters.confirmed]);
+  }, [filters.period, filters.status, filters.confirmed, filters.sortOrder]);
 
   // React Query
   const { data: queryData, isLoading, error } = useQuery({
@@ -248,7 +251,7 @@ export function useProcessingHistory(filters: ProcessingHistoryFilters): Process
     setBuffer([]);
     setLastFirestoreDoc(null);
     setNoMoreFirestoreDocs(false);
-  }, [filters.period, filters.status, filters.confirmed]);
+  }, [filters.period, filters.status, filters.confirmed, filters.sortOrder]);
 
   // 次ページ取得
   const fetchNextPage = useCallback(async () => {
@@ -280,8 +283,9 @@ export function useProcessingHistory(filters: ProcessingHistoryFilters): Process
 
       // バッファがPAGE_SIZE未満の間、追加フェッチ
       while (currentBuffer.length < PAGE_SIZE && !noMore) {
+        const sortOrder = filters.sortOrder || 'desc';
         const constraints: QueryConstraint[] = [
-          orderBy('processedAt', 'desc'),
+          orderBy('processedAt', sortOrder),
         ];
 
         const periodDate = getPeriodDate(filters.period);

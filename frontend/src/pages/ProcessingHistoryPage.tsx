@@ -35,11 +35,12 @@ import {
   type PeriodFilter,
   type StatusFilter,
   type ConfirmedFilter,
+  type SortOrder,
   type ProcessingHistoryFilters,
 } from '@/hooks/useProcessingHistory';
 import { DocumentDetailModal } from '@/components/DocumentDetailModal';
 import type { Document as DocType, DocumentStatus } from '@shared/types';
-import { Loader2, RefreshCw, ChevronDown, AlertCircle } from 'lucide-react';
+import { Loader2, RefreshCw, ChevronDown, ChevronUp, AlertCircle, ArrowUpDown } from 'lucide-react';
 
 // ============================================
 // ステータスバッジコンポーネント
@@ -81,6 +82,7 @@ export function ProcessingHistoryPage() {
     period: '7days',
     status: 'all',
     confirmed: 'all',
+    sortOrder: 'desc',
   });
 
   // 選択中のドキュメントID（詳細モーダル用）
@@ -111,6 +113,14 @@ export function ProcessingHistoryPage() {
 
   const handleConfirmedChange = useCallback((value: string) => {
     setFilters(prev => ({ ...prev, confirmed: value as ConfirmedFilter }));
+  }, []);
+
+  // ソート切り替えハンドラー
+  const handleSortToggle = useCallback(() => {
+    setFilters(prev => ({
+      ...prev,
+      sortOrder: prev.sortOrder === 'desc' ? 'asc' : 'desc',
+    }));
   }, []);
 
   // 行クリックハンドラー
@@ -218,7 +228,19 @@ export function ProcessingHistoryPage() {
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead className="w-[180px]">処理日時</TableHead>
+                        <TableHead
+                          className="w-[180px] cursor-pointer hover:bg-muted/50 select-none"
+                          onClick={handleSortToggle}
+                        >
+                          <div className="flex items-center gap-1">
+                            <span>処理日時</span>
+                            {filters.sortOrder === 'asc' ? (
+                              <ChevronUp className="h-4 w-4 text-blue-600" />
+                            ) : (
+                              <ChevronDown className="h-4 w-4 text-blue-600" />
+                            )}
+                          </div>
+                        </TableHead>
                         <TableHead>ファイル名</TableHead>
                         <TableHead className="w-[150px]">顧客名</TableHead>
                         <TableHead className="w-[120px]">書類種別</TableHead>
