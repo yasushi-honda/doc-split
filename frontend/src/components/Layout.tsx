@@ -1,5 +1,5 @@
 import { Outlet, Link, useLocation } from 'react-router-dom'
-import { FileText, Settings, LogOut, AlertCircle, Database, History } from 'lucide-react'
+import { FileText, Settings, LogOut, AlertCircle, Database, History, HelpCircle } from 'lucide-react'
 import { useAuthStore } from '@/stores/authStore'
 
 export function Layout() {
@@ -16,6 +16,7 @@ export function Layout() {
           { name: '設定', href: '/settings', icon: Settings },
         ]
       : []),
+    { name: 'ヘルプ', href: '/help', icon: HelpCircle },
   ]
 
   return (

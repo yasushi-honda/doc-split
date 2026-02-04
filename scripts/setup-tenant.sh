@@ -442,6 +442,27 @@ async function main() {
         }
     }
     console.log('✓ 書類種別マスター: ' + imported + '件追加 (シード ' + documentTypeSeeds.length + '件中)');
+
+    // セットアップ記録を保存
+    await db.doc('settings/setup').set({
+        projectId: '$PROJECT_ID',
+        adminEmail: '$ADMIN_EMAIL',
+        gmailAccount: '$GMAIL_ACCOUNT',
+        withGmail: '$WITH_GMAIL' === 'true',
+        setupDate: new Date(),
+        setupVersion: '1.0.0',
+        setupBy: process.env.USER || 'unknown',
+        options: {
+            skipFunctions: '$SKIP_FUNCTIONS' === 'true',
+            skipHosting: '$SKIP_HOSTING' === 'true'
+        },
+        urls: {
+            app: 'https://$PROJECT_ID.web.app',
+            firebaseConsole: 'https://console.firebase.google.com/project/$PROJECT_ID',
+            gcpConsole: 'https://console.cloud.google.com/home/dashboard?project=$PROJECT_ID'
+        }
+    });
+    console.log('✓ セットアップ記録を保存: settings/setup');
 }
 
 main().catch(console.error);

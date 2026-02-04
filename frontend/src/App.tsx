@@ -8,6 +8,7 @@ import { SettingsPage } from '@/pages/SettingsPage'
 import { ErrorsPage } from '@/pages/ErrorsPage'
 import { MastersPage } from '@/pages/MastersPage'
 import { AdminPage } from '@/pages/AdminPage'
+import { HelpPage } from '@/pages/HelpPage'
 import { Layout } from '@/components/Layout'
 
 function AuthInitializer({ children }: { children: React.ReactNode }) {
@@ -89,6 +90,7 @@ export default function App() {
               </AdminRoute>
             }
           />
+          <Route path="help" element={<HelpPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

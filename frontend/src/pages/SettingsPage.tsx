@@ -4,7 +4,7 @@
  */
 
 import { useState, useEffect } from 'react'
-import { Plus, Trash2, Mail, Users, AlertCircle, Save, X, CheckCircle } from 'lucide-react'
+import { Plus, Trash2, Mail, Users, AlertCircle, Save, X, CheckCircle, Server } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -62,6 +62,10 @@ export function SettingsPage() {
             <AlertCircle className="h-4 w-4" />
             通知設定
           </TabsTrigger>
+          <TabsTrigger value="setup" className="gap-2">
+            <Server className="h-4 w-4" />
+            セットアップ情報
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="gmail">
@@ -74,6 +78,10 @@ export function SettingsPage() {
 
         <TabsContent value="notifications">
           <NotificationSettings />
+        </TabsContent>
+
+        <TabsContent value="setup">
+          <SetupInfo />
         </TabsContent>
       </Tabs>
     </div>
@@ -784,6 +792,163 @@ function NotificationSettings() {
             <Save className="h-4 w-4 mr-2" />
             {updateSettings.isPending ? '保存中...' : '設定を保存'}
           </Button>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+// ============================================
+// セットアップ情報
+// ============================================
+
+import { doc, getDoc } from 'firebase/firestore'
+import { db } from '@/lib/firebase'
+
+interface SetupData {
+  projectId: string
+  adminEmail: string
+  gmailAccount: string
+  withGmail: boolean
+  setupDate: Date
+  setupVersion: string
+  setupBy: string
+  options: {
+    skipFunctions: boolean
+    skipHosting: boolean
+  }
+  urls: {
+    app: string
+    firebaseConsole: string
+    gcpConsole: string
+  }
+}
+
+function SetupInfo() {
+  const [setupData, setSetupData] = useState<SetupData | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+
+  useEffect(() => {
+    const fetchSetupData = async () => {
+      try {
+        const docRef = doc(db, 'settings', 'setup')
+        const docSnap = await getDoc(docRef)
+        if (docSnap.exists()) {
+          const data = docSnap.data()
+          setSetupData({
+            ...data,
+            setupDate: data.setupDate?.toDate?.() || new Date(data.setupDate),
+          } as SetupData)
+        }
+      } catch (error) {
+        console.error('Failed to fetch setup data:', error)
+      } finally {
+        setIsLoading(false)
+      }
+    }
+    fetchSetupData()
+  }, [])
+
+  if (isLoading) {
+    return (
+      <Card>
+        <CardContent className="py-8 text-center text-muted-foreground">
+          読み込み中...
+        </CardContent>
+      </Card>
+    )
+  }
+
+  if (!setupData) {
+    return (
+      <Card>
+        <CardContent className="py-8 text-center text-muted-foreground">
+          セットアップ情報が見つかりません
+        </CardContent>
+      </Card>
+    )
+  }
+
+  const formatDate = (date: Date) => {
+    return new Intl.DateTimeFormat('ja-JP', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(date)
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Server className="h-5 w-5" />
+          セットアップ情報
+        </CardTitle>
+        <CardDescription>
+          このテナントの初期設定情報
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-6">
+        {/* 基本情報 */}
+        <div className="grid gap-4 md:grid-cols-2">
+          <div className="space-y-2">
+            <Label className="text-muted-foreground">プロジェクトID</Label>
+            <div className="font-mono text-sm bg-muted px-3 py-2 rounded">
+              {setupData.projectId}
+            </div>
+          </div>
+          <div className="space-y-2">
+            <Label className="text-muted-foreground">セットアップ日時</Label>
+            <div className="text-sm bg-muted px-3 py-2 rounded">
+              {formatDate(setupData.setupDate)}
+            </div>
+          </div>
+          <div className="space-y-2">
+            <Label className="text-muted-foreground">初期管理者</Label>
+            <div className="text-sm bg-muted px-3 py-2 rounded">
+              {setupData.adminEmail}
+            </div>
+          </div>
+          <div className="space-y-2">
+            <Label className="text-muted-foreground">Gmail監視アカウント</Label>
+            <div className="text-sm bg-muted px-3 py-2 rounded">
+              {setupData.gmailAccount}
+            </div>
+          </div>
+        </div>
+
+        {/* セットアップオプション */}
+        <div>
+          <Label className="text-muted-foreground mb-2 block">セットアップオプション</Label>
+          <div className="flex flex-wrap gap-2">
+            <Badge variant={setupData.withGmail ? 'default' : 'secondary'}>
+              Gmail OAuth: {setupData.withGmail ? '有効' : '無効'}
+            </Badge>
+            <Badge variant="outline">
+              バージョン: {setupData.setupVersion}
+            </Badge>
+            {setupData.setupBy && (
+              <Badge variant="outline">
+                実行者: {setupData.setupBy}
+              </Badge>
+            )}
+          </div>
+        </div>
+
+        {/* アプリURL */}
+        <div className="space-y-2">
+          <Label className="text-muted-foreground">アプリURL</Label>
+          <div className="font-mono text-sm bg-muted px-3 py-2 rounded break-all">
+            {setupData.urls.app}
+          </div>
+        </div>
+
+        {/* 注意書き */}
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-sm text-amber-800">
+          <p className="font-medium mb-1">この情報は変更できません</p>
+          <p>セットアップ情報は初期設定時に自動的に記録されます。変更が必要な場合は、システム管理者にお問い合わせください。</p>
         </div>
       </CardContent>
     </Card>
