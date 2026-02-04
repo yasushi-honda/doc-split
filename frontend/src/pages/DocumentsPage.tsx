@@ -50,7 +50,7 @@ import {
 import { useAuthStore } from '@/stores/authStore'
 import { functions, db } from '@/lib/firebase'
 import { Checkbox } from '@/components/ui/checkbox'
-import { useInfiniteDocuments, useDocumentStats, useDocumentMasters, type DocumentFilters } from '@/hooks/useDocuments'
+import { useInfiniteDocuments, useDocumentStats, useDocumentMasters, type DocumentFilters, type SortField, type SortOrder } from '@/hooks/useDocuments'
 import { isCustomerConfirmed } from '@/hooks/useProcessingHistory'
 import { DocumentDetailModal } from '@/components/DocumentDetailModal'
 import { AliasLearningHistoryModal } from '@/components/AliasLearningHistoryModal'
@@ -59,10 +59,6 @@ import { GroupList } from '@/components/views'
 import { SearchBar } from '@/components/SearchBar'
 import type { Document, DocumentStatus } from '@shared/types'
 import type { GroupType } from '@/hooks/useDocumentGroups'
-
-// ソート可能なカラム
-type SortField = 'fileName' | 'customerName' | 'officeName' | 'processedAt' | 'fileDate' | 'status'
-type SortOrder = 'asc' | 'desc'
 
 // ソートヘッダーコンポーネント
 function SortableHeader({
@@ -291,7 +287,9 @@ export function DocumentsPage() {
   const filters: DocumentFilters = useMemo(() => ({
     status: effectiveStatusFilter === 'all' ? undefined : effectiveStatusFilter,
     documentType: documentTypeFilter === 'all' ? undefined : documentTypeFilter,
-  }), [effectiveStatusFilter, documentTypeFilter])
+    sortField,
+    sortOrder,
+  }), [effectiveStatusFilter, documentTypeFilter, sortField, sortOrder])
 
   // データ取得（無限スクロール対応）
   const {
@@ -442,7 +440,7 @@ export function DocumentsPage() {
     return documentsData.pages.flatMap(page => page.documents)
   }, [documentsData?.pages])
 
-  // ドキュメントリスト（フィルター + ソート）
+  // ドキュメントリスト（フィルターのみ、ソートはFirestoreで実行済み）
   const documents = useMemo(() => {
     let docs = allDocuments
 
@@ -456,40 +454,8 @@ export function DocumentsPage() {
       docs = docs.filter(doc => !doc.verified)
     }
 
-    // ソート
-    return [...docs].sort((a, b) => {
-      let comparison = 0
-
-      switch (sortField) {
-        case 'fileName':
-          comparison = (a.fileName || '').localeCompare(b.fileName || '', 'ja')
-          break
-        case 'customerName':
-          comparison = (a.customerName || '').localeCompare(b.customerName || '', 'ja')
-          break
-        case 'officeName':
-          comparison = (a.officeName || '').localeCompare(b.officeName || '', 'ja')
-          break
-        case 'processedAt': {
-          const procA = a.processedAt?.toMillis() ?? 0
-          const procB = b.processedAt?.toMillis() ?? 0
-          comparison = procA - procB
-          break
-        }
-        case 'fileDate': {
-          const dateA = a.fileDate?.toMillis() ?? 0
-          const dateB = b.fileDate?.toMillis() ?? 0
-          comparison = dateA - dateB
-          break
-        }
-        case 'status':
-          comparison = (a.status || '').localeCompare(b.status || '', 'ja')
-          break
-      }
-
-      return sortOrder === 'asc' ? comparison : -comparison
-    })
-  }, [allDocuments, showSplit, showUnverifiedOnly, sortField, sortOrder])
+    return docs
+  }, [allDocuments, showSplit, showUnverifiedOnly])
 
   // 全選択/全解除（documentsの後に定義する必要あり）
   const handleSelectAll = useCallback((checked: boolean) => {

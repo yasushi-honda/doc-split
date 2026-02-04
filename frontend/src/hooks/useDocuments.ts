@@ -26,6 +26,10 @@ import type { Document, DocumentStatus, DocumentMaster, CustomerMaster, OfficeMa
 // 型定義
 // ============================================
 
+// ソート可能なフィールド
+export type SortField = 'fileName' | 'customerName' | 'officeName' | 'processedAt' | 'fileDate' | 'status'
+export type SortOrder = 'asc' | 'desc'
+
 export interface DocumentFilters {
   status?: DocumentStatus
   customerName?: string
@@ -33,6 +37,9 @@ export interface DocumentFilters {
   dateFrom?: Date
   dateTo?: Date
   searchText?: string
+  // ソート設定
+  sortField?: SortField
+  sortOrder?: SortOrder
 }
 
 export interface DocumentListResult {
@@ -139,8 +146,10 @@ async function fetchDocuments(
     constraints.push(where('fileDate', '<=', Timestamp.fromDate(filters.dateTo)))
   }
 
-  // ソート（処理日時降順）
-  constraints.push(orderBy('processedAt', 'desc'))
+  // ソート（デフォルト: 処理日時降順）
+  const sortField = filters.sortField || 'processedAt'
+  const sortOrder = filters.sortOrder || 'desc'
+  constraints.push(orderBy(sortField, sortOrder))
 
   // ページネーション
   if (afterDoc) {
