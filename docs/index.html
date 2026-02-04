@@ -258,16 +258,25 @@
   <script src="https://cdn.jsdelivr.net/npm/docsify/lib/plugins/search.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/docsify-pagination/dist/docsify-pagination.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/docsify/lib/plugins/zoom-image.min.js"></script>
-  <!-- Mermaid (v9系を使用 - v10+はAPI変更あり) -->
-  <script src="https://cdn.jsdelivr.net/npm/mermaid@9/dist/mermaid.min.js"></script>
+  <!-- Mermaid -->
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
   <script>
+    // Mermaid v10+ 対応
+    var defined = false;
     mermaid.initialize({ startOnLoad: false, theme: 'default' });
-    window.$docsify.plugins = [].concat(function(hook) {
-      hook.afterEach(function(html) {
-        return html.replace(/<pre><code class="lang-mermaid">([\s\S]*?)<\/code><\/pre>/g, '<div class="mermaid">$1</div>');
+
+    window.$docsify.plugins = [].concat(function(hook, vm) {
+      hook.afterEach(function(html, next) {
+        // mermaidコードブロックをdivに変換
+        html = html.replace(/<pre data-lang="mermaid"><code class="lang-mermaid">([\s\S]*?)<\/code><\/pre>/gm,
+          '<div class="mermaid">$1</div>');
+        next(html);
       });
       hook.doneEach(function() {
-        mermaid.init(undefined, '.mermaid');
+        // Mermaid v10+ の run() を使用
+        mermaid.run({
+          querySelector: '.mermaid'
+        });
       });
     }, window.$docsify.plugins || []);
   </script>
