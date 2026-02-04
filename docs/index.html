@@ -50,6 +50,154 @@
     tr:nth-child(even) {
       background-color: #f8fafc;
     }
+
+    /* 納品フロー用アニメーション */
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.7; }
+    }
+    @keyframes bounce {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(5px); }
+    }
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    /* フェーズカード */
+    .phase-card {
+      background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
+      border-radius: 12px;
+      padding: 20px;
+      margin: 20px 0;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+      transition: transform 0.3s ease, box-shadow 0.3s ease;
+      border-left: 4px solid #1a365d;
+    }
+    .phase-card:hover {
+      transform: translateY(-5px);
+      box-shadow: 0 8px 15px rgba(0,0,0,0.15);
+    }
+    .phase-card h3 {
+      margin-top: 0;
+      color: #1a365d;
+    }
+    .phase-number {
+      background: #1a365d;
+      color: white;
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: bold;
+      margin-right: 10px;
+    }
+
+    /* バッジ */
+    .badge-auto {
+      background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+      color: white;
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: bold;
+      animation: pulse 2s infinite;
+      margin-left: 10px;
+    }
+    .badge-manual {
+      background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+      color: white;
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: bold;
+      margin-left: 10px;
+    }
+
+    /* コマンドボックス */
+    .command-box {
+      background: #1e293b;
+      border-radius: 8px;
+      padding: 15px 20px;
+      margin: 15px 0;
+      color: #e2e8f0;
+      font-family: 'Fira Code', 'Consolas', monospace;
+    }
+    .command-box::before {
+      content: "$ ";
+      color: #10b981;
+      font-weight: bold;
+    }
+
+    /* タイムライン */
+    .timeline {
+      position: relative;
+      padding-left: 30px;
+      margin: 20px 0;
+    }
+    .timeline::before {
+      content: '';
+      position: absolute;
+      left: 10px;
+      top: 0;
+      bottom: 0;
+      width: 2px;
+      background: linear-gradient(to bottom, #1a365d, #3b82f6, #10b981);
+    }
+    .timeline-item {
+      position: relative;
+      padding: 15px 0;
+    }
+    .timeline-item::before {
+      content: '';
+      position: absolute;
+      left: -24px;
+      top: 20px;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: #1a365d;
+      border: 3px solid white;
+      box-shadow: 0 0 0 2px #1a365d;
+    }
+
+    /* チェックリスト */
+    .checklist {
+      list-style: none;
+      padding: 0;
+    }
+    .checklist li {
+      padding: 10px 0 10px 35px;
+      position: relative;
+      border-bottom: 1px solid #e2e8f0;
+    }
+    .checklist li::before {
+      content: '✓';
+      position: absolute;
+      left: 0;
+      color: #10b981;
+      font-weight: bold;
+      font-size: 18px;
+    }
+
+    /* 通知ボックス */
+    .notice-box {
+      background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+      border-radius: 8px;
+      padding: 15px 20px;
+      margin: 15px 0;
+      border-left: 4px solid #f59e0b;
+    }
+    .success-box {
+      background: linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%);
+      border-radius: 8px;
+      padding: 15px 20px;
+      margin: 15px 0;
+      border-left: 4px solid #10b981;
+    }
   </style>
 </head>
 <body>
