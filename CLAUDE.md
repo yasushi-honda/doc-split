@@ -48,7 +48,7 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
 ## Phase 8以降の追加実装（2026-01-22〜30）
 
 <details>
-<summary>クリックして展開（24項目完了）</summary>
+<summary>クリックして展開（25項目完了）</summary>
 
 | 日付 | 実装内容 |
 |------|----------|
@@ -61,7 +61,7 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
 | 01-30 | **担当CM別ビューに顧客サブグループ表示**、ケアマネにemail/aliases追加、**⚠️本番データ障害復旧**、PITR/バックアップ有効化（ADR-0008）、**モバイルUI改善（メタ情報折りたたみ）**、**書類種別新規追加機能**、**AI要約機能** |
 | 01-31 | **OCR結果確認ステータス機能**（verified/verifiedBy/verifiedAt）、一覧画面に未確認バッジ・フィルター、閉じる確認ダイアログ、**OCR処理フロー改善**（Firestoreトリガー即時処理、アップロードUX改善）、**書類日付抽出の1ページ目優先ロジック**、**ダウンロード確認ダイアログ**、**デプロイ手順改善**（--rulesオプション追加） |
 | 02-01 | **PDFビューワUI改善**（モーダルサイズ固定、フィットモード125%、閉じるボタン明確化）、**確認ステータス楽観的更新**（トグル即時反映）、**一覧チェックマーク列追加** |
-| 02-05 | **キャッシュヘッダー設定追加**（古いビルド問題の根本対策）- index.htmlはno-cache、assetsはimmutable、**ソート機能改善**（書類一覧・処理履歴）- Firestoreクエリベースに変更、全データ対象のソート |
+| 02-05 | **キャッシュヘッダー設定追加**（古いビルド問題の根本対策）- index.htmlはno-cache、assetsはimmutable、**ソート機能改善**（書類一覧・処理履歴）- Firestoreクエリベースに変更、全データ対象のソート、**納品プロセス改善**（Authorized Domains自動設定、--with-gmailオプション、verify-setup.sh検証スクリプト） |
 
 </details>
 
@@ -70,9 +70,20 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
 クライアント環境は `.firebaserc` にエイリアスとして登録されています。
 
 ### セットアップ手順
-1. `scripts/setup-tenant.sh <project-id> <admin-email>` でテナント初期設定
-2. `scripts/setup-gmail-auth.sh <project-id>` でGmail認証設定
-3. `scripts/deploy-to-project.sh <alias>` でデプロイ
+```bash
+# 一括セットアップ（Gmail OAuth込み）※推奨
+./scripts/setup-tenant.sh <project-id> <admin-email> --with-gmail
+
+# 段階的セットアップ
+./scripts/setup-tenant.sh <project-id> <admin-email>
+./scripts/setup-gmail-auth.sh <project-id>
+
+# セットアップ検証
+./scripts/verify-setup.sh <project-id>
+
+# 追加デプロイ
+./scripts/deploy-to-project.sh <alias>
+```
 
 詳細は `docs/context/delivery-and-update-guide.md` 参照。
 

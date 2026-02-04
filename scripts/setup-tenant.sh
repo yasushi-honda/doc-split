@@ -3,16 +3,23 @@
 # DocSplit テナント初期設定スクリプト
 #
 # 使用方法:
-#   ./setup-tenant.sh <project-id> <admin-email> [gmail-account]
+#   ./setup-tenant.sh <project-id> <admin-email> [OPTIONS]
+#
+# オプション:
+#   --with-gmail       Gmail OAuth認証も一括設定（対話式）
+#   --gmail-account=X  監視対象Gmailアカウント（省略時はadmin-emailを使用）
+#   --skip-functions   Cloud Functionsデプロイをスキップ
+#   --skip-hosting     Hostingデプロイをスキップ
 #
 # 実行内容:
 #   1. GCP API有効化
-#   2. Firebase設定
+#   2. Firebase設定 + Authorized Domains自動設定
 #   3. 環境変数生成
 #   4. 管理者ユーザー登録
 #   5. Firestore/Storageルールデプロイ + CORS設定
 #   6. Cloud Functionsデプロイ
 #   7. Hostingデプロイ
+#   8. Gmail OAuth設定（--with-gmail指定時）
 #
 # ※ CORS設定: ブラウザからPDFを閲覧するために必須
 #
@@ -34,15 +41,22 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 # 使用方法
 usage() {
-    echo "Usage: $0 <project-id> <admin-email> [gmail-account]"
+    echo "Usage: $0 <project-id> <admin-email> [OPTIONS]"
     echo ""
     echo "Arguments:"
     echo "  project-id    GCP/Firebase プロジェクトID"
     echo "  admin-email   初期管理者のメールアドレス"
-    echo "  gmail-account 監視対象Gmailアカウント（省略可）"
     echo ""
-    echo "Example:"
-    echo "  $0 client-docsplit admin@client.com support@client.com"
+    echo "Options:"
+    echo "  --with-gmail        Gmail OAuth認証も一括設定（対話式）"
+    echo "  --gmail-account=X   監視対象Gmailアカウント（省略時はadmin-email）"
+    echo "  --skip-functions    Cloud Functionsデプロイをスキップ"
+    echo "  --skip-hosting      Hostingデプロイをスキップ"
+    echo ""
+    echo "Examples:"
+    echo "  $0 client-docsplit admin@client.com"
+    echo "  $0 client-docsplit admin@client.com --with-gmail"
+    echo "  $0 client-docsplit admin@client.com --gmail-account=support@client.com"
     exit 1
 }
 
@@ -53,7 +67,38 @@ fi
 
 PROJECT_ID=$1
 ADMIN_EMAIL=$2
-GMAIL_ACCOUNT=${3:-$ADMIN_EMAIL}
+
+# オプションのデフォルト値
+GMAIL_ACCOUNT="$ADMIN_EMAIL"
+WITH_GMAIL=false
+SKIP_FUNCTIONS=false
+SKIP_HOSTING=false
+
+# オプション解析
+shift 2
+for arg in "$@"; do
+    case $arg in
+        --with-gmail)
+            WITH_GMAIL=true
+            ;;
+        --gmail-account=*)
+            GMAIL_ACCOUNT="${arg#*=}"
+            ;;
+        --skip-functions)
+            SKIP_FUNCTIONS=true
+            ;;
+        --skip-hosting)
+            SKIP_HOSTING=true
+            ;;
+        *)
+            # 位置引数として扱う（後方互換性のため）
+            if [ -z "${GMAIL_ACCOUNT_SET:-}" ]; then
+                GMAIL_ACCOUNT="$arg"
+                GMAIL_ACCOUNT_SET=true
+            fi
+            ;;
+    esac
+done
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
@@ -106,6 +151,7 @@ APIS=(
     "gmail.googleapis.com"
     "cloudscheduler.googleapis.com"
     "cloudbuild.googleapis.com"
+    "identitytoolkit.googleapis.com"
 )
 
 for api in "${APIS[@]}"; do
@@ -175,6 +221,68 @@ if [ -f "$ROOT_DIR/.firebaserc" ]; then
     else
         log_success "エイリアス '$ALIAS_NAME' は既に存在します"
     fi
+fi
+
+# ===========================================
+# Step 2.5: Firebase Authorized Domains自動設定
+# ===========================================
+echo ""
+log_info "Step 2.5: Firebase Authorized Domains設定..."
+
+AUTH_DOMAINS_OK=false
+
+# Identity Toolkit APIで現在の設定を取得・更新
+ACCESS_TOKEN=$(gcloud auth print-access-token 2>/dev/null)
+
+if [ -n "$ACCESS_TOKEN" ]; then
+    # 現在の設定を取得
+    CURRENT_CONFIG=$(curl -s \
+        -H "Authorization: Bearer $ACCESS_TOKEN" \
+        -H "X-Goog-User-Project: $PROJECT_ID" \
+        "https://identitytoolkit.googleapis.com/admin/v2/projects/$PROJECT_ID/config" 2>/dev/null)
+
+    if echo "$CURRENT_CONFIG" | grep -q "authorizedDomains"; then
+        # 必要なドメインリスト
+        REQUIRED_DOMAINS="localhost,${PROJECT_ID}.web.app,${PROJECT_ID}.firebaseapp.com"
+
+        # 既存ドメインを取得してマージ（jqがある場合）
+        if command -v jq &> /dev/null; then
+            EXISTING_DOMAINS=$(echo "$CURRENT_CONFIG" | jq -r '.authorizedDomains // [] | join(",")')
+            ALL_DOMAINS=$(echo "$EXISTING_DOMAINS,$REQUIRED_DOMAINS" | tr ',' '\n' | sort -u | grep -v '^$' | tr '\n' ',' | sed 's/,$//')
+            DOMAINS_JSON=$(echo "$ALL_DOMAINS" | tr ',' '\n' | jq -R . | jq -s .)
+
+            # 更新リクエスト
+            UPDATE_RESULT=$(curl -s -X PATCH \
+                -H "Authorization: Bearer $ACCESS_TOKEN" \
+                -H "X-Goog-User-Project: $PROJECT_ID" \
+                -H "Content-Type: application/json" \
+                "https://identitytoolkit.googleapis.com/admin/v2/projects/$PROJECT_ID/config?updateMask=authorizedDomains" \
+                -d "{\"authorizedDomains\": $DOMAINS_JSON}" 2>/dev/null)
+
+            if echo "$UPDATE_RESULT" | grep -q "authorizedDomains"; then
+                log_success "Authorized Domains設定完了: ${PROJECT_ID}.web.app, ${PROJECT_ID}.firebaseapp.com"
+                AUTH_DOMAINS_OK=true
+            else
+                log_warn "Authorized Domains自動設定に失敗しました"
+            fi
+        else
+            log_warn "jqがインストールされていないため、Authorized Domainsは手動設定が必要です"
+        fi
+    else
+        log_warn "Identity Toolkit API応答が不正です（Firebase Authenticationが未設定の可能性）"
+    fi
+else
+    log_warn "gcloudアクセストークン取得に失敗しました"
+fi
+
+# 設定失敗時のガイダンス
+if [ "$AUTH_DOMAINS_OK" = false ]; then
+    echo ""
+    echo -e "${YELLOW}手動設定が必要な場合:${NC}"
+    echo "  1. Firebase Console → Authentication → Settings → Authorized domains"
+    echo "  2. 以下を追加:"
+    echo "     - ${PROJECT_ID}.web.app"
+    echo "     - ${PROJECT_ID}.firebaseapp.com"
 fi
 
 # ===========================================
@@ -401,28 +509,47 @@ fi
 # Step 6: Cloud Functionsデプロイ
 # ===========================================
 echo ""
-log_info "Step 6/7: Cloud Functionsデプロイ..."
+if [ "$SKIP_FUNCTIONS" = true ]; then
+    log_warn "Step 6/7: Cloud Functionsデプロイ (スキップ)"
+else
+    log_info "Step 6/7: Cloud Functionsデプロイ..."
 
-cd "$ROOT_DIR/functions"
-npm run build 2>/dev/null || npm run build
+    cd "$ROOT_DIR/functions"
+    npm run build 2>/dev/null || npm run build
 
-cd "$ROOT_DIR"
-firebase deploy --only functions --project "$PROJECT_ID" 2>&1 | \
-    grep -E "(✔|Error|Warning|functions\[)" || true
-log_success "Cloud Functions デプロイ完了"
+    cd "$ROOT_DIR"
+    firebase deploy --only functions --project "$PROJECT_ID" 2>&1 | \
+        grep -E "(✔|Error|Warning|functions\[)" || true
+    log_success "Cloud Functions デプロイ完了"
+fi
 
 # ===========================================
 # Step 7: Hostingデプロイ
 # ===========================================
 echo ""
-log_info "Step 7/7: フロントエンドビルド & デプロイ..."
+if [ "$SKIP_HOSTING" = true ]; then
+    log_warn "Step 7/7: Hostingデプロイ (スキップ)"
+else
+    log_info "Step 7/7: フロントエンドビルド & デプロイ..."
 
-cd "$ROOT_DIR"
-npm run build 2>/dev/null || (cd frontend && npm run build)
+    cd "$ROOT_DIR"
+    npm run build 2>/dev/null || (cd frontend && npm run build)
 
-firebase deploy --only hosting --project "$PROJECT_ID" 2>&1 | \
-    grep -E "(✔|Error|Hosting URL)" || true
-log_success "Hosting デプロイ完了"
+    firebase deploy --only hosting --project "$PROJECT_ID" 2>&1 | \
+        grep -E "(✔|Error|Hosting URL)" || true
+    log_success "Hosting デプロイ完了"
+fi
+
+# ===========================================
+# Step 8: Gmail OAuth設定（--with-gmail指定時）
+# ===========================================
+if [ "$WITH_GMAIL" = true ]; then
+    echo ""
+    log_info "Step 8: Gmail OAuth認証設定..."
+    echo ""
+    "$SCRIPT_DIR/setup-gmail-auth.sh" "$PROJECT_ID"
+    log_success "Gmail OAuth認証設定完了"
+fi
 
 # ===========================================
 # 完了
@@ -434,18 +561,40 @@ echo -e "${GREEN}╚════════════════════
 echo ""
 echo "アプリURL: https://${PROJECT_ID}.web.app"
 echo ""
+
+# 残りの手順（--with-gmailを使った場合は一部省略）
 echo -e "${YELLOW}残りの手順:${NC}"
-echo "  1. Gmail API認証設定（OAuth or Service Account）"
-echo "     → scripts/setup-gmail-auth.sh $PROJECT_ID"
-echo ""
-echo "  2. Gmail監視ラベル設定（重要）"
+
+if [ "$WITH_GMAIL" = false ]; then
+    echo "  1. Gmail API認証設定（OAuth or Service Account）"
+    echo "     → scripts/setup-gmail-auth.sh $PROJECT_ID"
+    echo ""
+    echo "  2. Gmail監視ラベル設定（重要）"
+else
+    echo "  1. Gmail監視ラベル設定（重要）"
+fi
 echo "     → アプリにログイン後、設定画面で監視対象ラベルを追加"
 echo "     → 例: AI_OCR, 書類管理 など"
 echo ""
-echo "  3. マスターデータ投入（任意）"
+
+if [ "$WITH_GMAIL" = false ]; then
+    echo "  3. マスターデータ投入（任意）"
+else
+    echo "  2. マスターデータ投入（任意）"
+fi
 echo "     → node scripts/import-masters.js --all scripts/samples/"
 echo "     → または管理画面からCSVインポート"
 echo ""
-echo "  4. 管理者が初回ログイン"
+
+if [ "$WITH_GMAIL" = false ]; then
+    echo "  4. 管理者が初回ログイン"
+else
+    echo "  3. 管理者が初回ログイン"
+fi
 echo "     → $ADMIN_EMAIL でGoogleログイン"
+echo ""
+
+# 検証スクリプトの案内
+echo -e "${BLUE}セットアップ検証:${NC}"
+echo "  → ./scripts/verify-setup.sh $PROJECT_ID"
 echo ""

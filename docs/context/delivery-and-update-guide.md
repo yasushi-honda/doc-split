@@ -81,14 +81,14 @@ AI駆動開発において、このドキュメントを参照することで一
 # 2-1. クライアントのGCPプロジェクトに切替
 gcloud config set project <client-project-id>
 
-# 2-2. セットアップスクリプト実行
+# 2-2. セットアップスクリプト実行（Gmail OAuth込みで一括）
+./scripts/setup-tenant.sh <client-project-id> <admin-email> --with-gmail
+
+# または、Gmail設定を後から行う場合
 ./scripts/setup-tenant.sh <client-project-id> <admin-email>
+./scripts/setup-gmail-auth.sh <client-project-id>
 
-# 2-3. Gmail OAuth設定
-./scripts/setup-gmail-auth.sh
-
-# 2-4. .firebasercにクライアント追加
-# "client-x": "<client-project-id>" を追加
+# ※ .firebasercへのエイリアス追加は自動で行われます
 
 # ========================================
 # Step 3: クライアント側作業 - データ準備
@@ -107,13 +107,18 @@ node scripts/import-masters.js --file <documents.csv> --type documents -P client
 node scripts/import-masters.js --file <offices.csv> --type offices -P client-x
 
 # ========================================
-# Step 5: 動作確認
+# Step 5: 検証 & 動作確認
 # ========================================
+# 自動検証スクリプトで設定状態を確認
+./scripts/verify-setup.sh <client-project-id>
+
 # クライアントと共に本番環境で動作確認
 # 問題なければ運用開始
 ```
 
 ### 納品チェックリスト
+
+手動確認用のチェックリスト:
 
 - [ ] GCPプロジェクト作成完了
 - [ ] 課金アカウント紐付け完了
@@ -126,6 +131,8 @@ node scripts/import-masters.js --file <offices.csv> --type offices -P client-x
 - [ ] 管理者ユーザー登録完了
 - [ ] マスターデータ投入完了
 - [ ] 動作確認完了
+
+**自動検証**: `./scripts/verify-setup.sh <project-id>` で上記の多くを自動確認できます。
 
 ---
 
