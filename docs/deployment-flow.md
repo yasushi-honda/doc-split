@@ -10,6 +10,7 @@
   box-shadow: 0 4px 6px rgba(0,0,0,0.1);
   transition: transform 0.3s ease, box-shadow 0.3s ease;
   border-left: 4px solid #1a365d;
+  color: #1e293b !important;
 }
 .phase-card:hover {
   transform: translateY(-5px);
@@ -17,14 +18,20 @@
 }
 .phase-card h3 {
   margin-top: 0;
-  color: #1a365d;
+  color: #1a365d !important;
   display: flex;
   align-items: center;
   gap: 10px;
 }
+.phase-card p, .phase-card li, .phase-card td {
+  color: #1e293b !important;
+}
+.phase-card th {
+  color: white !important;
+}
 .phase-number {
   background: #1a365d;
-  color: white;
+  color: white !important;
   width: 32px;
   height: 32px;
   border-radius: 50%;
@@ -59,21 +66,24 @@
 
 /* コマンドボックス */
 .command-box {
-  background: #1e293b;
+  background: #1e293b !important;
   border-radius: 8px;
   padding: 15px 20px;
   margin: 15px 0;
   position: relative;
   overflow: hidden;
+  color: #f1f5f9 !important;
 }
 .command-box::before {
   content: "$ ";
-  color: #10b981;
+  color: #10b981 !important;
   font-weight: bold;
 }
 .command-box code {
-  color: #e2e8f0;
+  color: #f1f5f9 !important;
+  background: transparent !important;
   font-family: 'Fira Code', monospace;
+  padding: 0 !important;
 }
 
 /* タイムライン */
@@ -81,6 +91,7 @@
   position: relative;
   padding-left: 30px;
   margin: 20px 0;
+  color: #1e293b !important;
 }
 .timeline::before {
   content: '';
@@ -94,6 +105,7 @@
 .timeline-item {
   position: relative;
   padding: 15px 0;
+  color: #1e293b !important;
 }
 .timeline-item::before {
   content: '';
@@ -117,12 +129,13 @@
   padding: 10px 0 10px 35px;
   position: relative;
   border-bottom: 1px solid #e2e8f0;
+  color: #1e293b !important;
 }
 .checklist li::before {
   content: '✓';
   position: absolute;
   left: 0;
-  color: #10b981;
+  color: #10b981 !important;
   font-weight: bold;
   font-size: 18px;
 }
@@ -166,6 +179,14 @@
   padding: 15px 20px;
   margin: 15px 0;
   border-left: 4px solid #f59e0b;
+  color: #78350f !important;
+}
+.notice-box strong {
+  color: #92400e !important;
+}
+.notice-box code {
+  background: rgba(120, 53, 15, 0.1) !important;
+  color: #78350f !important;
 }
 .success-box {
   background: linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%);
@@ -173,6 +194,14 @@
   padding: 15px 20px;
   margin: 15px 0;
   border-left: 4px solid #10b981;
+  color: #064e3b !important;
+}
+.success-box strong {
+  color: #065f46 !important;
+}
+.success-box code {
+  background: rgba(6, 78, 59, 0.1) !important;
+  color: #064e3b !important;
 }
 </style>
 
