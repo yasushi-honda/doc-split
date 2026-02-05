@@ -938,12 +938,14 @@ function SetupInfo() {
         </div>
 
         {/* アプリURL */}
-        <div className="space-y-2">
-          <Label className="text-muted-foreground">アプリURL</Label>
-          <div className="font-mono text-sm bg-muted px-3 py-2 rounded break-all">
-            {setupData.urls.app}
+        {setupData.urls?.app && (
+          <div className="space-y-2">
+            <Label className="text-muted-foreground">アプリURL</Label>
+            <div className="font-mono text-sm bg-muted px-3 py-2 rounded break-all">
+              {setupData.urls.app}
+            </div>
           </div>
-        </div>
+        )}
 
         {/* 注意書き */}
         <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-sm text-amber-800">
