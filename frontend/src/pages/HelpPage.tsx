@@ -10,7 +10,7 @@ import { useAuthStore } from '@/stores/authStore'
 function UserGuide() {
   return (
     <div className="guide-content">
-      <section className="guide-section">
+      <section id="user-section-1" className="guide-section">
         <h2><span className="section-number">1</span>概要</h2>
         <p>
           DocSplitは、Gmailに届く書類（PDF）を自動的に取得し、AI OCRでメタ情報を抽出・管理するアプリケーションです。
@@ -28,7 +28,7 @@ function UserGuide() {
         </div>
       </section>
 
-      <section className="guide-section">
+      <section id="user-section-2" className="guide-section">
         <h2><span className="section-number">2</span>ログイン</h2>
         <ol className="steps-list">
           <li>アプリにアクセス</li>
@@ -38,7 +38,7 @@ function UserGuide() {
         <p className="note">※ログインできるのは管理者が許可したアカウントのみです。</p>
       </section>
 
-      <section className="guide-section">
+      <section id="user-section-3" className="guide-section">
         <h2><span className="section-number">3</span>書類一覧画面</h2>
 
         <h3>3.1 統計情報</h3>
@@ -84,7 +84,7 @@ function UserGuide() {
         </ul>
       </section>
 
-      <section className="guide-section">
+      <section id="user-section-4" className="guide-section">
         <h2><span className="section-number">4</span>書類詳細画面</h2>
 
         <h3>4.1 PDFビューアー</h3>
@@ -117,7 +117,7 @@ function UserGuide() {
         </ul>
       </section>
 
-      <section className="guide-section">
+      <section id="user-section-5" className="guide-section">
         <h2><span className="section-number">5</span>PDFアップロード</h2>
 
         <h3>5.1 ローカルファイルのアップロード</h3>
@@ -135,7 +135,7 @@ function UserGuide() {
         </ul>
       </section>
 
-      <section className="guide-section">
+      <section id="user-section-6" className="guide-section">
         <h2><span className="section-number">6</span>選択待ち対応</h2>
         <p>OCR処理で顧客名や事業所名が複数の候補に一致した場合、「選択待ち」となります。</p>
 
@@ -153,7 +153,7 @@ function UserGuide() {
         </div>
       </section>
 
-      <section className="guide-section">
+      <section id="user-section-7" className="guide-section">
         <h2><span className="section-number">7</span>よくある質問</h2>
 
         <div className="faq-item">
@@ -191,7 +191,7 @@ function UserGuide() {
 function AdminGuide() {
   return (
     <div className="guide-content">
-      <section className="guide-section">
+      <section id="admin-section-1" className="guide-section">
         <h2><span className="section-number">1</span>管理者機能</h2>
         <p>管理者は以下の追加機能にアクセスできます：</p>
         <ul>
@@ -201,7 +201,7 @@ function AdminGuide() {
         </ul>
       </section>
 
-      <section className="guide-section">
+      <section id="admin-section-2" className="guide-section">
         <h2><span className="section-number">2</span>設定画面</h2>
 
         <h3>2.1 Gmail設定</h3>
@@ -237,7 +237,7 @@ function AdminGuide() {
         </ol>
       </section>
 
-      <section className="guide-section">
+      <section id="admin-section-3" className="guide-section">
         <h2><span className="section-number">3</span>マスターデータ管理</h2>
 
         <h3>3.1 顧客マスター</h3>
@@ -309,7 +309,7 @@ function AdminGuide() {
         </table>
       </section>
 
-      <section className="guide-section">
+      <section id="admin-section-4" className="guide-section">
         <h2><span className="section-number">4</span>自動処理スケジュール</h2>
         <table className="guide-table">
           <thead>
@@ -327,7 +327,7 @@ function AdminGuide() {
         <p className="note">※書類アップロード後1〜2分でOCR処理が完了します。</p>
       </section>
 
-      <section className="guide-section">
+      <section id="admin-section-5" className="guide-section">
         <h2><span className="section-number">5</span>トラブルシューティング</h2>
 
         <h3>5.1 Gmail API エラー</h3>
@@ -367,7 +367,7 @@ function AdminGuide() {
         <p><strong>対処:</strong> マスターデータを確認・追加するか、書類詳細から手動で修正してください。</p>
       </section>
 
-      <section className="guide-section">
+      <section id="admin-section-6" className="guide-section">
         <h2><span className="section-number">6</span>定期メンテナンス</h2>
         <table className="guide-table">
           <thead>
@@ -755,25 +755,33 @@ export function HelpPage() {
 // 目次コンポーネント
 function TableOfContents({ activeTab }: { activeTab: string }) {
   const userToc = [
-    { id: '1', title: '概要' },
-    { id: '2', title: 'ログイン' },
-    { id: '3', title: '書類一覧画面' },
-    { id: '4', title: '書類詳細画面' },
-    { id: '5', title: 'PDFアップロード' },
-    { id: '6', title: '選択待ち対応' },
-    { id: '7', title: 'よくある質問' },
+    { id: 'user-section-1', title: '概要' },
+    { id: 'user-section-2', title: 'ログイン' },
+    { id: 'user-section-3', title: '書類一覧画面' },
+    { id: 'user-section-4', title: '書類詳細画面' },
+    { id: 'user-section-5', title: 'PDFアップロード' },
+    { id: 'user-section-6', title: '選択待ち対応' },
+    { id: 'user-section-7', title: 'よくある質問' },
   ]
 
   const adminToc = [
-    { id: '1', title: '管理者機能' },
-    { id: '2', title: '設定画面' },
-    { id: '3', title: 'マスターデータ管理' },
-    { id: '4', title: '自動処理スケジュール' },
-    { id: '5', title: 'トラブルシューティング' },
-    { id: '6', title: '定期メンテナンス' },
+    { id: 'admin-section-1', title: '管理者機能' },
+    { id: 'admin-section-2', title: '設定画面' },
+    { id: 'admin-section-3', title: 'マスターデータ管理' },
+    { id: 'admin-section-4', title: '自動処理スケジュール' },
+    { id: 'admin-section-5', title: 'トラブルシューティング' },
+    { id: 'admin-section-6', title: '定期メンテナンス' },
   ]
 
   const toc = activeTab === 'user' ? userToc : adminToc
+
+  const handleClick = (e: React.MouseEvent<HTMLAnchorElement>, id: string) => {
+    e.preventDefault()
+    const element = document.getElementById(id)
+    if (element) {
+      element.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }
+  }
 
   return (
     <nav className="toc-sidebar print:hidden">
@@ -781,7 +789,10 @@ function TableOfContents({ activeTab }: { activeTab: string }) {
       <ul>
         {toc.map((item) => (
           <li key={item.id}>
-            <a href={`#section-${item.id}`}>
+            <a
+              href={`#${item.id}`}
+              onClick={(e) => handleClick(e, item.id)}
+            >
               <ChevronRight className="h-3 w-3" />
               {item.title}
             </a>
