@@ -477,9 +477,9 @@ flowchart LR
 | 提供物 | 形式 | URL/場所 |
 |--------|------|---------|
 | アプリURL | Web | `https://<project-id>.web.app` |
-| ユーザーガイド | MD | `docs/operation/user-guide.md` |
-| 管理者ガイド | MD | `docs/operation/admin-guide.md` |
-| セットアップ記録 | ログ | `verify-setup.sh` の実行結果 |
+| ユーザーガイド | アプリ内 | ヘッダー「ヘルプ」からアクセス |
+| 管理者ガイド | アプリ内 | ヘルプ画面のタブ切替（管理者のみ） |
+| セットアップ記録 | アプリ内 | 設定画面「セットアップ情報」タブ |
 
 ---
 
