@@ -377,9 +377,9 @@ function AdminGuide() {
             </tr>
           </thead>
           <tbody>
-            <tr><td>週次</td><td>エラー履歴の確認・対応</td></tr>
-            <tr><td>月次</td><td>API コストの確認</td></tr>
-            <tr><td>月次</td><td>Storage 使用量の確認</td></tr>
+            <tr><td>週次</td><td>エラー履歴の確認・対応（エラー履歴画面から）</td></tr>
+            <tr><td>随時</td><td>マスターデータの追加・更新</td></tr>
+            <tr><td>随時</td><td>ユーザーの追加・削除</td></tr>
           </tbody>
         </table>
       </section>
