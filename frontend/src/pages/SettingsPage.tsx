@@ -4,7 +4,7 @@
  */
 
 import { useState, useEffect } from 'react'
-import { Plus, Trash2, Mail, Users, AlertCircle, Save, X, CheckCircle, Server } from 'lucide-react'
+import { Plus, Trash2, Mail, Users, AlertCircle, Save, X, CheckCircle, Server, Copy, Check } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -879,6 +879,41 @@ function SetupInfo() {
     }).format(date)
   }
 
+  // コピー状態管理
+  const [copiedField, setCopiedField] = useState<string | null>(null)
+
+  const handleCopy = async (value: string, fieldName: string) => {
+    await navigator.clipboard.writeText(value)
+    setCopiedField(fieldName)
+    setTimeout(() => setCopiedField(null), 2000)
+  }
+
+  // コピー可能フィールドコンポーネント
+  const CopyableField = ({ label, value, fieldName, mono = false }: {
+    label: string
+    value: string
+    fieldName: string
+    mono?: boolean
+  }) => (
+    <div className="space-y-2">
+      <Label className="text-muted-foreground">{label}</Label>
+      <div className={`flex items-center gap-2 bg-muted px-3 py-2 rounded ${mono ? 'font-mono' : ''} text-sm`}>
+        <span className="flex-1 break-all">{value}</span>
+        <button
+          onClick={() => handleCopy(value, fieldName)}
+          className="flex-shrink-0 p-1 hover:bg-gray-200 rounded transition-colors"
+          title="コピー"
+        >
+          {copiedField === fieldName ? (
+            <Check className="h-4 w-4 text-green-600" />
+          ) : (
+            <Copy className="h-4 w-4 text-gray-500" />
+          )}
+        </button>
+      </div>
+    </div>
+  )
+
   return (
     <Card>
       <CardHeader>
@@ -893,30 +928,28 @@ function SetupInfo() {
       <CardContent className="space-y-6">
         {/* 基本情報 */}
         <div className="grid gap-4 md:grid-cols-2">
-          <div className="space-y-2">
-            <Label className="text-muted-foreground">プロジェクトID</Label>
-            <div className="font-mono text-sm bg-muted px-3 py-2 rounded">
-              {setupData.projectId}
-            </div>
-          </div>
+          <CopyableField
+            label="プロジェクトID"
+            value={setupData.projectId}
+            fieldName="projectId"
+            mono
+          />
           <div className="space-y-2">
             <Label className="text-muted-foreground">セットアップ日時</Label>
             <div className="text-sm bg-muted px-3 py-2 rounded">
               {formatDate(setupData.setupDate)}
             </div>
           </div>
-          <div className="space-y-2">
-            <Label className="text-muted-foreground">初期管理者</Label>
-            <div className="text-sm bg-muted px-3 py-2 rounded">
-              {setupData.adminEmail}
-            </div>
-          </div>
-          <div className="space-y-2">
-            <Label className="text-muted-foreground">Gmail監視アカウント</Label>
-            <div className="text-sm bg-muted px-3 py-2 rounded">
-              {setupData.gmailAccount}
-            </div>
-          </div>
+          <CopyableField
+            label="初期管理者"
+            value={setupData.adminEmail}
+            fieldName="adminEmail"
+          />
+          <CopyableField
+            label="Gmail監視アカウント"
+            value={setupData.gmailAccount}
+            fieldName="gmailAccount"
+          />
         </div>
 
         {/* セットアップオプション */}
@@ -939,12 +972,12 @@ function SetupInfo() {
 
         {/* アプリURL */}
         {setupData.urls?.app && (
-          <div className="space-y-2">
-            <Label className="text-muted-foreground">アプリURL</Label>
-            <div className="font-mono text-sm bg-muted px-3 py-2 rounded break-all">
-              {setupData.urls.app}
-            </div>
-          </div>
+          <CopyableField
+            label="アプリURL"
+            value={setupData.urls.app}
+            fieldName="appUrl"
+            mono
+          />
         )}
 
         {/* 注意書き */}
