@@ -827,6 +827,7 @@ interface SetupData {
 function SetupInfo() {
   const [setupData, setSetupData] = useState<SetupData | null>(null)
   const [isLoading, setIsLoading] = useState(true)
+  const [copiedField, setCopiedField] = useState<string | null>(null)
 
   useEffect(() => {
     const fetchSetupData = async () => {
@@ -878,9 +879,6 @@ function SetupInfo() {
       minute: '2-digit',
     }).format(date)
   }
-
-  // コピー状態管理
-  const [copiedField, setCopiedField] = useState<string | null>(null)
 
   const handleCopy = async (value: string, fieldName: string) => {
     await navigator.clipboard.writeText(value)
