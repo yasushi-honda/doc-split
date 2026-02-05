@@ -49,22 +49,22 @@ export function SettingsPage() {
       </div>
 
       <Tabs defaultValue="gmail" className="space-y-4">
-        <TabsList>
-          <TabsTrigger value="gmail" className="gap-2">
+        <TabsList className="w-full justify-start overflow-x-auto flex-nowrap">
+          <TabsTrigger value="gmail" className="gap-2 flex-shrink-0">
             <Mail className="h-4 w-4" />
-            Gmail設定
+            <span className="hidden sm:inline">Gmail設定</span>
           </TabsTrigger>
-          <TabsTrigger value="users" className="gap-2">
+          <TabsTrigger value="users" className="gap-2 flex-shrink-0">
             <Users className="h-4 w-4" />
-            ユーザー管理
+            <span className="hidden sm:inline">ユーザー管理</span>
           </TabsTrigger>
-          <TabsTrigger value="notifications" className="gap-2">
+          <TabsTrigger value="notifications" className="gap-2 flex-shrink-0">
             <AlertCircle className="h-4 w-4" />
-            通知設定
+            <span className="hidden sm:inline">通知設定</span>
           </TabsTrigger>
-          <TabsTrigger value="setup" className="gap-2">
+          <TabsTrigger value="setup" className="gap-2 flex-shrink-0">
             <Server className="h-4 w-4" />
-            セットアップ情報
+            <span className="hidden sm:inline">セットアップ情報</span>
           </TabsTrigger>
         </TabsList>
 
