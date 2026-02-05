@@ -148,7 +148,7 @@ node scripts/import-masters.js --file <offices.csv> --type offices -P client-x
 git checkout -b feature/xxx
 
 # 開発環境にデプロイしてテスト
-firebase deploy -P dev
+./scripts/deploy-to-project.sh dev
 
 # テスト完了後、mainにマージ
 git checkout main
@@ -156,13 +156,25 @@ git merge feature/xxx
 git push origin main
 
 # ========================================
-# Step 2: 各クライアントにデプロイ
+# Step 2: 全クライアントに一括デプロイ（推奨）
 # ========================================
-# クライアントAにデプロイ
-firebase deploy -P client-a
+# Hostingのみ
+./scripts/deploy-all-clients.sh
 
-# クライアントBにデプロイ
-firebase deploy -P client-b
+# Hosting + ルール（スキーマ変更時）
+./scripts/deploy-all-clients.sh --rules
+
+# 全コンポーネント
+./scripts/deploy-all-clients.sh --full
+
+# dry-runで対象確認
+./scripts/deploy-all-clients.sh --dry-run
+
+# ========================================
+# Step 2': 個別クライアントにデプロイ（必要な場合）
+# ========================================
+./scripts/deploy-to-project.sh client-a
+./scripts/deploy-to-project.sh client-b
 
 # ========================================
 # Step 3: 動作確認
@@ -519,5 +531,6 @@ node scripts/migrate-document-fields.js <project-id>
 
 | 日付 | 内容 |
 |------|------|
+| 2026-02-05 | ヘルプページ追加、セットアップ情報タブ追加 |
 | 2026-01-25 | 過去受信分の巻取り対応セクション追加 |
 | 2026-01-20 | 初版作成 - 納品・アップデートフロー確定 |
