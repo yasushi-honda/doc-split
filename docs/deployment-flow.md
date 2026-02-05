@@ -526,6 +526,22 @@ flowchart TD
 
 ### アップデートコマンド
 
+#### 全クライアント一括デプロイ（推奨）
+
+<div class="command-box">
+<code>./scripts/deploy-all-clients.sh</code> <!-- 全クライアントにHostingデプロイ -->
+</div>
+
+<div class="command-box">
+<code>./scripts/deploy-all-clients.sh --rules</code> <!-- スキーマ変更時 -->
+</div>
+
+<div class="command-box">
+<code>./scripts/deploy-all-clients.sh --dry-run</code> <!-- 対象確認（実行せず） -->
+</div>
+
+#### 個別クライアントデプロイ
+
 <div class="command-box">
 <code>./scripts/deploy-to-project.sh &lt;alias&gt;</code> <!-- Hostingのみ -->
 </div>
