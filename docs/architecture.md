@@ -16,10 +16,11 @@ flowchart TB
     subgraph GCP["Google Cloud Platform"]
         subgraph Functions["Cloud Functions"]
             CheckGmail["checkGmailAttachments<br/>(5分間隔)"]
-            ProcessOCR["processOCR<br/>(5分間隔)"]
+            ProcessOCR["processOCR<br/>(1分間隔+即時トリガー)"]
             DetectSplit["detectSplitPoints<br/>(Callable)"]
             SplitPdf["splitPdf<br/>(Callable)"]
             RotatePdf["rotatePdfPages<br/>(Callable)"]
+            UploadPdf["uploadPdf<br/>(Callable)"]
         end
 
         Firestore["Firestore<br/>(データベース)"]
@@ -81,19 +82,20 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    participant Scheduler as Cloud Scheduler
+    participant Trigger as Firestoreトリガー
     participant ProcessOCR as processOCR
     participant Storage as Cloud Storage
     participant Gemini as Gemini 2.5 Flash
     participant Firestore as Firestore
 
-    Scheduler->>ProcessOCR: 5分間隔でトリガー
+    Note over Trigger,ProcessOCR: 書類登録時に即時実行（スケジューラは1分間隔でバックアップ）
+    Trigger->>ProcessOCR: ドキュメント作成でトリガー
     ProcessOCR->>Firestore: pending書類取得
 
     loop 各書類
         ProcessOCR->>Storage: PDF取得
         ProcessOCR->>Gemini: OCR実行
-        Gemini-->>ProcessOCR: 抽出結果(顧客名,日付,書類種別)
+        Gemini-->>ProcessOCR: 抽出結果(顧客名,日付,書類種別,要約)
         ProcessOCR->>Firestore: マスターデータ照合
         ProcessOCR->>Firestore: 書類更新(status: completed)
     end
@@ -106,13 +108,18 @@ sequenceDiagram
 | 関数名 | トリガー | 説明 |
 |--------|----------|------|
 | `checkGmailAttachments` | Scheduled (5分) | Gmail添付ファイル取得 |
-| `processOCR` | Scheduled (5分) | AI OCR処理 |
+| `processOCR` | Scheduled (1分) | AI OCR処理（バックアップ） |
+| `processOCROnCreate` | Firestore Trigger | AI OCR処理（即時実行） |
 | `detectSplitPoints` | Callable | PDF分割候補検出 |
 | `splitPdf` | Callable | PDF分割実行 |
-| `rotatePdfPages` | Callable | PDFページ回転 |
+| `rotatePdfPages` | Callable | PDFページ回転（永続保存） |
+| `uploadPdf` | Callable | ローカルPDFアップロード |
+| `deleteDocument` | Callable | ドキュメント削除（管理者のみ） |
+| `getOcrText` | Callable | OCR全文取得 |
 | `regenerateSummary` | Callable | AI要約再生成 |
 | `searchDocuments` | Callable | 全文検索（日付パース対応） |
-| `onDocumentWriteSearchIndex` | Trigger | 検索インデックス自動更新 |
+| `onDocumentWriteSearchIndex` | Firestore Trigger | 検索インデックス自動更新 |
+| `onDocumentWrite` | Firestore Trigger | ドキュメントグループ更新 |
 
 ### Firestore コレクション
 
@@ -131,6 +138,10 @@ erDiagram
         date fileDate
         string storagePath
         timestamp processedAt
+        string summary "AI要約"
+        boolean verified "確認済みフラグ"
+        string verifiedBy "確認者UID"
+        timestamp verifiedAt "確認日時"
     }
 
     customers {
