@@ -34,10 +34,12 @@ flowchart TD
 
 | 項目 | 値 |
 |------|-----|
-| トリガー | Cloud Scheduler (5分間隔) |
+| トリガー | Cloud Scheduler (1分間隔) + Firestoreトリガー（即時処理） |
 | リージョン | asia-northeast1 |
 | タイムアウト | 540秒 |
 | メモリ | 1GB |
+
+**即時処理**: 書類アップロード時にFirestoreトリガーが発火し、即座にOCR処理を開始します。スケジューラは取りこぼし防止のバックアップとして機能します。
 
 **処理フロー:**
 ```mermaid
@@ -128,6 +130,52 @@ PDFページを回転する。
   success: boolean;
 }
 ```
+
+#### uploadPdf
+
+ローカルPDFファイルをアップロードする。
+
+**リクエスト:**
+```typescript
+{
+  fileName: string;      // ファイル名
+  fileData: string;      // Base64エンコードされたPDFデータ
+  fileSize: number;      // ファイルサイズ（バイト）
+}
+```
+
+**レスポンス:**
+```typescript
+{
+  success: boolean;
+  documentId: string;    // 作成されたドキュメントID
+}
+```
+
+**重複チェック:**
+- ファイル名ベースで重複を検出
+- 重複時は別名保存を提案（例: `file.pdf` → `file_2.pdf`）
+- `isSplitSource=true` のファイルは重複チェック対象外
+
+#### deleteDocument
+
+ドキュメントを削除する（管理者のみ）。
+
+**リクエスト:**
+```typescript
+{
+  documentId: string;    // 削除対象のドキュメントID
+}
+```
+
+**レスポンス:**
+```typescript
+{
+  success: boolean;
+}
+```
+
+**権限:** `admin` ロールのユーザーのみ実行可能
 
 ## ユーティリティ関数
 
