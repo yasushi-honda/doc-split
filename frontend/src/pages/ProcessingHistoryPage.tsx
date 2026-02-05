@@ -5,7 +5,7 @@
  * - 処理済みドキュメントの履歴表示
  * - 期間・ステータス・顧客確定状態フィルター
  * - 日付グルーピング表示
- * - 要確認バッジ表示
+ * - 選択待ちバッジ表示
  */
 
 import { useState, useCallback } from 'react';
@@ -60,14 +60,14 @@ function StatusBadge({ status }: { status: DocumentStatus }) {
 }
 
 // ============================================
-// 要確認バッジコンポーネント
+// 選択待ちバッジコンポーネント
 // ============================================
 
 function UnconfirmedBadge({ doc }: { doc: DocType }) {
   if (isCustomerConfirmed(doc)) return null;
   return (
     <Badge variant="outline" className="bg-orange-100 text-orange-800 border-orange-300">
-      要確認
+      選択待ち
     </Badge>
   );
 }
@@ -189,7 +189,7 @@ export function ProcessingHistoryPage() {
                   <SelectContent>
                     <SelectItem value="all">全て</SelectItem>
                     <SelectItem value="confirmed">確定済み</SelectItem>
-                    <SelectItem value="unconfirmed">要確認</SelectItem>
+                    <SelectItem value="unconfirmed">選択待ち</SelectItem>
                   </SelectContent>
                 </Select>
               </div>

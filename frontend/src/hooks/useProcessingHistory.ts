@@ -73,7 +73,7 @@ export function isCustomerConfirmed(doc: Document): boolean {
 
   // 2. needsManualCustomerSelection が設定されている場合（現行データ）
   if (doc.needsManualCustomerSelection !== undefined) {
-    return !doc.needsManualCustomerSelection;  // 反転: 要確認→未確定
+    return !doc.needsManualCustomerSelection;  // 反転: 選択待ち→未確定
   }
 
   // 3. どちらも undefined（Phase 6以前のデータ）

@@ -77,7 +77,7 @@ interface DocumentRowProps {
 function DocumentRow({ document, onClick }: DocumentRowProps) {
   const statusConfig = getStatusConfig(document.status);
 
-  // 要確認判定
+  // 選択待ち判定
   const needsCustomerConfirmation = !isCustomerConfirmed(document);
   const needsOfficeConfirmation =
     document.officeConfirmed === false &&
@@ -108,7 +108,7 @@ function DocumentRow({ document, onClick }: DocumentRowProps) {
         </span>
         {needsReview ? (
           <Badge variant="outline" className="bg-orange-100 text-orange-800 border-orange-300 text-xs">
-            要確認
+            選択待ち
           </Badge>
         ) : (
           <Badge variant={statusConfig.variant} className="text-xs">

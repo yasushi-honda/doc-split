@@ -42,7 +42,7 @@ interface DocumentRowProps {
 function DocumentRow({ document, groupType, onClick }: DocumentRowProps) {
   const statusConfig = getStatusConfig(document.status);
 
-  // 要確認判定（顧客・事業所）
+  // 選択待ち判定（顧客・事業所）
   const needsCustomerConfirmation = !isCustomerConfirmed(document);
   const needsOfficeConfirmation =
     document.officeConfirmed === false &&
@@ -87,7 +87,7 @@ function DocumentRow({ document, groupType, onClick }: DocumentRowProps) {
         </span>
         {needsReview ? (
           <Badge variant="outline" className="bg-orange-100 text-orange-800 border-orange-300 text-xs">
-            要確認
+            選択待ち
           </Badge>
         ) : (
           <Badge variant={statusConfig.variant} className="text-xs">

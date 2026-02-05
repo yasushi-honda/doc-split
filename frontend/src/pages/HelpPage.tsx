@@ -136,8 +136,8 @@ function UserGuide() {
       </section>
 
       <section className="guide-section">
-        <h2><span className="section-number">6</span>確認待ち対応</h2>
-        <p>OCR処理で顧客名や事業所名が複数の候補に一致した場合、確認待ちになります。</p>
+        <h2><span className="section-number">6</span>選択待ち対応</h2>
+        <p>OCR処理で顧客名や事業所名が複数の候補に一致した場合、「選択待ち」となります。</p>
 
         <h3>対応手順</h3>
         <ol className="steps-list">
@@ -760,7 +760,7 @@ function TableOfContents({ activeTab }: { activeTab: string }) {
     { id: '3', title: '書類一覧画面' },
     { id: '4', title: '書類詳細画面' },
     { id: '5', title: 'PDFアップロード' },
-    { id: '6', title: '確認待ち対応' },
+    { id: '6', title: '選択待ち対応' },
     { id: '7', title: 'よくある質問' },
   ]
 

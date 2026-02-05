@@ -985,7 +985,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                           <span className="truncate text-sm text-gray-900">{document.customerName || '未判定'}</span>
                           {needsCustomerConfirmation && (
                             <Badge variant="outline" className="bg-orange-100 text-orange-800 border-orange-300 text-xs">
-                              要確認
+                              選択待ち
                             </Badge>
                           )}
                         </div>
@@ -1049,7 +1049,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                           <span className="truncate text-sm text-gray-900">{document.officeName || '未判定'}</span>
                           {needsOfficeConfirmation && (
                             <Badge variant="outline" className="bg-orange-100 text-orange-800 border-orange-300 text-xs">
-                              要確認
+                              選択待ち
                             </Badge>
                           )}
                         </div>

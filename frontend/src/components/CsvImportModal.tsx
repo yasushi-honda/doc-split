@@ -468,7 +468,7 @@ export function CsvImportModal({ type, isOpen, onClose, onImport }: CsvImportMod
                     {(type === 'customer' || type === 'office') ? (
                       exactMatchAddCount > 0
                         ? <span className="text-blue-600">（{exactMatchAddCount}件同名追加）</span>
-                        : '（要確認）'
+                        : '（選択待ち）'
                     ) : (
                       '（スキップ）'
                     )}

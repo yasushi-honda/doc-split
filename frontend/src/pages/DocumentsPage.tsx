@@ -146,7 +146,7 @@ function DocumentRow({
 }) {
   const statusConfig = STATUS_CONFIG[document.status] || { label: '不明', variant: 'secondary' as const }
 
-  // 要確認判定（顧客・事業所）
+  // 選択待ち判定（顧客・事業所）
   const needsCustomerConfirmation = !isCustomerConfirmed(document)
   const needsOfficeConfirmation =
     document.officeConfirmed === false &&
@@ -193,7 +193,7 @@ function DocumentRow({
       <td className="px-2 py-2 sm:px-4 sm:py-3">
         {needsReview ? (
           <Badge variant="outline" className="bg-orange-100 text-orange-800 border-orange-300 text-xs">
-            要確認
+            選択待ち
           </Badge>
         ) : (
           <Badge variant={statusConfig.variant} className="text-xs sm:text-sm">{statusConfig.label}</Badge>
