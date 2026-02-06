@@ -6,8 +6,10 @@
 
 ## 直近の変更（02-06〜07）
 
-| PR | 内容 |
+| PR/コミット | 内容 |
 |----|------|
+| 7ea4e65 | **Claude Code自動納品プロンプトジェネレーターページ追加**（GitHub Pages） |
+| 59a027f | **deploy-all-clients.shに非対話モード(--yes)追加**＋Node.js v24互換修正 |
 | #65 | **setup-tenant.sh/setup-gmail-auth.shに非対話モード追加**（`--yes`, `--client-id/secret/auth-code`） |
 | #64 | **納品フロードキュメントのコマンド記載を実スクリプト引数に修正**（5ファイル） |
 | e554641 | ヘルプページに期間指定フィルター・あかさたなフィルターの説明追加 |
@@ -17,15 +19,17 @@
 | #61 | 顧客別あいうえお順ソート＋あかさたなフィルター対応 |
 | #57-60 | 一覧系画面の初期表示100件化＋無限スクロール対応＋テスト |
 
-### 技術的なポイント（#64, #65 納品フロー改善）
+### 技術的なポイント（納品フロー自動化 #64, #65, 59a027f, 7ea4e65）
 
-- **#64**: ドキュメント5ファイル（CLAUDE.md, deployment-flow.md, delivery-and-update-guide.md, setup-guide.md, operation/setup-guide.md）のコマンド記載を実スクリプトの引数仕様に修正
-  - import-masters.jsの`--file/--type`→`--customers/--documents/--offices`+`FIREBASE_PROJECT_ID`
-  - setup-tenant.shの引数形式修正、verify-setup.sh追加、Storage bucket名更新
-- **#65**: Claude Code自動納品のため非対話モード追加
-  - `setup-tenant.sh`: `--yes`フラグで`read -p`確認2箇所をスキップ、`--client-id/secret/auth-code`パススルー
-  - `setup-gmail-auth.sh`: 3引数全指定で`NON_INTERACTIVE=true`（`read -p`3箇所スキップ）
-  - **Claude Code納品フロー**: 人間はOAuth認証コード取得のみ、他は全自動
+- **7ea4e65 GitHub Pages自動納品ページ**: `docs/claude-code-delivery.md` + `docs/index.html` にJS追加
+  - フォーム入力→プロンプト自動生成→コピーボタンでClaude Codeに貼付け
+  - 最小版/フル版の2パターン、OAuth認証URL自動生成機能付き
+  - Docsifyの制約でJSは `index.html` にグローバル配置（markdown内`<script>`は実行タイミング問題）
+  - DRY: `_buildMinimal(fmt)` / `_buildFull(fmt)` でフォーマッター関数切替（raw/html）
+- **59a027f deploy-all-clients.sh**: `--yes`/`-y`非対話モード追加 + Node.js v24で`require('.json')`不可の互換修正
+- **#65**: setup-tenant.sh/setup-gmail-auth.sh非対話モード
+- **#64**: ドキュメント5ファイルのコマンド記載を実スクリプト引数仕様に修正
+- **Claude Code納品フロー**: 人間はOAuth認証コード取得のみ、他は全自動
 
 ### 技術的なポイント（#63 フィルターパネル＋期間指定）
 
@@ -57,7 +61,7 @@
 
 | 環境 | 状態 |
 |------|------|
-| dev | デプロイ済み（02-06、e554641反映）※#64,#65はスクリプト/ドキュメントのみ、再デプロイ不要 |
+| dev | デプロイ済み（02-06、e554641反映）※#64,#65,59a027f,7ea4e65はスクリプト/ドキュメントのみ、再デプロイ不要 |
 | kanameone | デプロイ済み（02-06、e554641反映） |
 
 ## 未解決の既知バグ
