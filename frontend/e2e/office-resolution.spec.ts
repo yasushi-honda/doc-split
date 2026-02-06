@@ -36,10 +36,8 @@ async function loginWithTestUser(page: Page) {
   // ここではページ内でFirebase認証を直接実行
   await page.evaluate(
     async ({ email, password }) => {
-      // @ts-expect-error - Firebase SDKはグローバルに存在
-      const { auth } = await import('/src/lib/firebase.ts');
-      // @ts-expect-error - Firebase SDKはグローバルに存在
-      const { signInWithEmailAndPassword } = await import('firebase/auth');
+      // @ts-expect-error - Vite devサーバー経由でモジュール解決
+      const { auth, signInWithEmailAndPassword } = await import('/src/lib/firebase.ts');
       await signInWithEmailAndPassword(auth, email, password);
     },
     { email: TEST_USER.email, password: TEST_USER.password }

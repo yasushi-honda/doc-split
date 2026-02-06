@@ -1,5 +1,5 @@
 import { initializeApp } from 'firebase/app'
-import { getAuth, GoogleAuthProvider, connectAuthEmulator } from 'firebase/auth'
+import { getAuth, GoogleAuthProvider, connectAuthEmulator, signInWithEmailAndPassword } from 'firebase/auth'
 import { getFirestore, connectFirestoreEmulator } from 'firebase/firestore'
 import { getStorage, connectStorageEmulator } from 'firebase/storage'
 import { getFunctions, connectFunctionsEmulator } from 'firebase/functions'
@@ -23,6 +23,9 @@ export const db = getFirestore(app)
 export const storage = getStorage(app)
 export const functions = getFunctions(app, 'asia-northeast1')
 export const googleProvider = new GoogleAuthProvider()
+
+// E2Eテスト用（page.evaluate内でベアモジュール指定子が使えないため再エクスポート）
+export { signInWithEmailAndPassword }
 
 // Emulator接続（E2Eテスト用）
 const useEmulator = import.meta.env.VITE_USE_FIREBASE_EMULATOR === 'true'
