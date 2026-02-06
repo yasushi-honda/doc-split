@@ -36,6 +36,7 @@ export interface DocumentFilters {
   documentType?: string
   dateFrom?: Date
   dateTo?: Date
+  dateField?: 'fileDate' | 'processedAt'
   searchText?: string
   // ソート設定
   sortField?: SortField
@@ -138,12 +139,13 @@ async function fetchDocuments(
     constraints.push(where('documentType', '==', filters.documentType))
   }
 
-  // 日付範囲フィルター
+  // 日付範囲フィルター（dateFieldで対象フィールドを切替）
+  const dateField = filters.dateField || 'fileDate'
   if (filters.dateFrom) {
-    constraints.push(where('fileDate', '>=', Timestamp.fromDate(filters.dateFrom)))
+    constraints.push(where(dateField, '>=', Timestamp.fromDate(filters.dateFrom)))
   }
   if (filters.dateTo) {
-    constraints.push(where('fileDate', '<=', Timestamp.fromDate(filters.dateTo)))
+    constraints.push(where(dateField, '<=', Timestamp.fromDate(filters.dateTo)))
   }
 
   // ソート（デフォルト: 処理日時降順）

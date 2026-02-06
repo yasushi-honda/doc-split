@@ -40,6 +40,7 @@ import {
   type KanaRow,
 } from '@/lib/kanaUtils';
 import { GroupDocumentList } from './GroupDocumentList';
+import type { DateRange } from '@/components/DateRangeFilter';
 
 // ============================================
 // 型定義
@@ -47,6 +48,7 @@ import { GroupDocumentList } from './GroupDocumentList';
 
 interface GroupListProps {
   groupType: GroupType;
+  dateFilter?: DateRange;
   onDocumentSelect?: (documentId: string) => void;
 }
 
@@ -101,11 +103,12 @@ interface GroupItemProps {
   group: DocumentGroup;
   isExpanded: boolean;
   furiganaMap?: Map<string, string>;
+  dateFilter?: DateRange;
   onToggle: () => void;
   onDocumentSelect?: (documentId: string) => void;
 }
 
-function GroupItem({ group, isExpanded, furiganaMap, onToggle, onDocumentSelect }: GroupItemProps) {
+function GroupItem({ group, isExpanded, furiganaMap, dateFilter, onToggle, onDocumentSelect }: GroupItemProps) {
   const config = GROUP_TYPE_CONFIG[group.groupType];
   const Icon = config.icon;
 
@@ -144,6 +147,7 @@ function GroupItem({ group, isExpanded, furiganaMap, onToggle, onDocumentSelect 
             groupType={group.groupType}
             groupKey={group.groupKey}
             furiganaMap={furiganaMap}
+            dateFilter={dateFilter}
             onDocumentSelect={onDocumentSelect}
           />
         </div>
@@ -156,7 +160,7 @@ function GroupItem({ group, isExpanded, furiganaMap, onToggle, onDocumentSelect 
 // メインコンポーネント
 // ============================================
 
-export function GroupList({ groupType, onDocumentSelect }: GroupListProps) {
+export function GroupList({ groupType, dateFilter, onDocumentSelect }: GroupListProps) {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [selectedKanaRow, setSelectedKanaRow] = useState<KanaRow | null>(null);
 
@@ -290,6 +294,7 @@ export function GroupList({ groupType, onDocumentSelect }: GroupListProps) {
               group={group}
               isExpanded={expandedGroups.has(group.id)}
               furiganaMap={needsFurigana ? furiganaMap : undefined}
+              dateFilter={dateFilter}
               onToggle={() => toggleGroup(group.id)}
               onDocumentSelect={onDocumentSelect}
             />

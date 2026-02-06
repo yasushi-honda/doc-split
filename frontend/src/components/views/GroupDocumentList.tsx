@@ -5,6 +5,7 @@
  * 無限スクロール対応
  */
 
+import { useMemo } from 'react';
 import { FileText, Loader2 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { LoadMoreIndicator } from '@/components/LoadMoreIndicator';
@@ -17,6 +18,7 @@ import { isCustomerConfirmed } from '@/hooks/useProcessingHistory';
 import { CustomerSubGroup } from './CustomerSubGroup';
 import { getStatusConfig, formatTimestamp } from '@/lib/documentUtils';
 import type { Document } from '@shared/types';
+import type { DateRange } from '@/components/DateRangeFilter';
 
 // ============================================
 // 型定義
@@ -26,6 +28,7 @@ interface GroupDocumentListProps {
   groupType: GroupType;
   groupKey: string;
   furiganaMap?: Map<string, string>;
+  dateFilter?: DateRange;
   onDocumentSelect?: (documentId: string) => void;
 }
 
@@ -109,10 +112,31 @@ function DocumentRow({ document, groupType, onClick }: DocumentRowProps) {
 // メインコンポーネント
 // ============================================
 
+// 日付フィルタリング関数
+function filterByDate(docs: Document[], dateFilter?: DateRange): Document[] {
+  if (!dateFilter?.dateFrom && !dateFilter?.dateTo) return docs;
+
+  return docs.filter((doc) => {
+    try {
+      const ts = dateFilter.dateField === 'processedAt'
+        ? doc.processedAt
+        : doc.fileDate;
+      if (!ts) return false;
+      const date = ts.toDate();
+      if (dateFilter.dateFrom && date < dateFilter.dateFrom) return false;
+      if (dateFilter.dateTo && date > dateFilter.dateTo) return false;
+      return true;
+    } catch {
+      return false;
+    }
+  });
+}
+
 export function GroupDocumentList({
   groupType,
   groupKey,
   furiganaMap,
+  dateFilter,
   onDocumentSelect,
 }: GroupDocumentListProps) {
   const {
@@ -129,8 +153,12 @@ export function GroupDocumentList({
   });
   const { loadMoreRef } = useInfiniteScroll({ hasNextPage: !!hasNextPage, isFetchingNextPage, fetchNextPage });
 
-  // 全ページのドキュメントを結合
-  const allDocuments = data?.pages.flatMap((page) => page.documents) ?? [];
+  // 全ページのドキュメントを結合 + 日付フィルター適用
+  const rawDocuments = data?.pages.flatMap((page) => page.documents) ?? [];
+  const allDocuments = useMemo(
+    () => filterByDate(rawDocuments, dateFilter),
+    [rawDocuments, dateFilter]
+  );
 
   // ローディング（初回）
   if (isLoading) {
