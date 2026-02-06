@@ -1,21 +1,31 @@
 # ハンドオフメモ
 
-**更新日**: 2026-02-06
+**更新日**: 2026-02-07
 **ブランチ**: main（クリーン）
 **フェーズ**: Phase 8完了 + 追加実装
 
-## 直近の変更（02-06）
+## 直近の変更（02-06〜07）
 
 | PR | 内容 |
 |----|------|
+| #65 | **setup-tenant.sh/setup-gmail-auth.shに非対話モード追加**（`--yes`, `--client-id/secret/auth-code`） |
+| #64 | **納品フロードキュメントのコマンド記載を実スクリプト引数に修正**（5ファイル） |
 | e554641 | ヘルプページに期間指定フィルター・あかさたなフィルターの説明追加 |
 | d7b8bd9 | ドキュメント監査に基づく整合性・品質改善（CLAUDE.md/data-model.md等） |
-| e90fad3 | overview.mdに02-06の追加実装を追記（GitHub Pages） |
-| a4634ba | 学習履歴モーダルのaria-describedby警告修正 |
 | #63 | フィルターパネル全タブ共通化＋期間指定フィルター追加 |
 | #62 | あかさたなフィルターの顧客マスター未ロード時の空結果バグ修正＋E2Eテスト追加 |
 | #61 | 顧客別あいうえお順ソート＋あかさたなフィルター対応 |
 | #57-60 | 一覧系画面の初期表示100件化＋無限スクロール対応＋テスト |
+
+### 技術的なポイント（#64, #65 納品フロー改善）
+
+- **#64**: ドキュメント5ファイル（CLAUDE.md, deployment-flow.md, delivery-and-update-guide.md, setup-guide.md, operation/setup-guide.md）のコマンド記載を実スクリプトの引数仕様に修正
+  - import-masters.jsの`--file/--type`→`--customers/--documents/--offices`+`FIREBASE_PROJECT_ID`
+  - setup-tenant.shの引数形式修正、verify-setup.sh追加、Storage bucket名更新
+- **#65**: Claude Code自動納品のため非対話モード追加
+  - `setup-tenant.sh`: `--yes`フラグで`read -p`確認2箇所をスキップ、`--client-id/secret/auth-code`パススルー
+  - `setup-gmail-auth.sh`: 3引数全指定で`NON_INTERACTIVE=true`（`read -p`3箇所スキップ）
+  - **Claude Code納品フロー**: 人間はOAuth認証コード取得のみ、他は全自動
 
 ### 技術的なポイント（#63 フィルターパネル＋期間指定）
 
@@ -47,7 +57,7 @@
 
 | 環境 | 状態 |
 |------|------|
-| dev | デプロイ済み（02-06、e554641反映） |
+| dev | デプロイ済み（02-06、e554641反映）※#64,#65はスクリプト/ドキュメントのみ、再デプロイ不要 |
 | kanameone | デプロイ済み（02-06、e554641反映） |
 
 ## 未解決の既知バグ
