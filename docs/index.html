@@ -302,26 +302,25 @@
       var csvDoc = _cdVal('csv-documents');
       var csvOff = _cdVal('csv-offices');
       var csvCm = _cdVal('csv-caremanagers');
+      var p = fmt(pid, '<project-id>');
 
-      return 'DocSplitの新規納品を実施してください。\n\n'
-        + '■ クライアント情報\n'
-        + '- プロジェクトID: ' + fmt(pid, '<project-id>') + '\n'
-        + '- 管理者メール: ' + fmt(email, '<admin-email>') + '\n\n'
-        + '■ Gmail OAuth認証情報\n'
-        + '- Client ID: ' + fmt(cid, '<client-id>') + '\n'
-        + '- Client Secret: ' + fmt(csec, '<client-secret>') + '\n'
-        + '- 認証コード: ' + fmt(code, '<auth-code>') + '\n\n'
-        + '■ マスターデータCSV\n'
-        + '- 顧客: ' + fmt(csvCust, '<path/to/customers.csv>') + '\n'
-        + '- 書類種別: ' + fmt(csvDoc, '<path/to/documents.csv>') + '\n'
-        + '- 事業所: ' + fmt(csvOff, '<path/to/offices.csv>') + '\n'
-        + (csvCm ? '- ケアマネ: ' + fmt(csvCm, '') + '\n' : '')
-        + '\n■ 手順\n'
-        + '1. setup-tenant.sh を --with-gmail --yes で実行\n'
-        + '2. verify-setup.sh で検証\n'
-        + '3. import-masters.js でマスターデータ投入\n'
-        + '4. verify-setup.sh で最終確認\n'
+      var lines = 'DocSplitの新規納品を実施してください。\n\n'
+        + '■ 手順（以下のコマンドを順番に実行）\n\n'
+        + '1. セットアップ実行:\n'
+        + '   ./scripts/setup-tenant.sh ' + p + ' ' + fmt(email, '<admin-email>') + ' --with-gmail --client-id=' + fmt(cid, '<client-id>') + ' --client-secret=' + fmt(csec, '<client-secret>') + ' --auth-code=' + fmt(code, '<auth-code>') + ' --yes\n\n'
+        + '2. 中間検証:\n'
+        + '   ./scripts/verify-setup.sh ' + p + '\n\n'
+        + '3. マスターデータ投入:\n'
+        + '   FIREBASE_PROJECT_ID=' + p + ' node scripts/import-masters.js --customers ' + fmt(csvCust, '<customers.csv>') + '\n'
+        + '   FIREBASE_PROJECT_ID=' + p + ' node scripts/import-masters.js --documents ' + fmt(csvDoc, '<documents.csv>') + '\n'
+        + '   FIREBASE_PROJECT_ID=' + p + ' node scripts/import-masters.js --offices ' + fmt(csvOff, '<offices.csv>') + '\n';
+      if (csvCm) {
+        lines += '   FIREBASE_PROJECT_ID=' + p + ' node scripts/import-masters.js --caremanagers ' + fmt(csvCm, '') + '\n';
+      }
+      lines += '\n4. 最終検証:\n'
+        + '   ./scripts/verify-setup.sh ' + p + '\n\n'
         + '5. 結果をサマリーで報告';
+      return lines;
     }
 
     function _buildFull(fmt) {
@@ -335,53 +334,46 @@
       var csvOff = _cdVal('csv-offices');
       var csvCm = _cdVal('csv-caremanagers');
       var domain = _cdVal('extra-domain');
+      var p = fmt(pid, '<project-id>');
 
-      var stepNum = 4;
-      var extraSteps = '';
-      if (domain) extraSteps += (stepNum++) + '. check-allowed-domains.js --add で許可ドメイン追加\n';
-      extraSteps += (stepNum++) + '. verify-setup.sh で最終検証（全項目合格を確認）\n'
-        + stepNum + '. 結果をサマリーで報告';
+      var stepNum = 1;
+      var lines = 'DocSplitの新規納品を実施してください。\n\n'
+        + '■ 手順（以下のコマンドを順番厳守で実行）\n\n';
 
-      return 'DocSplitの新規納品を実施してください。\n\n'
-        + '■ クライアント情報\n'
-        + '- プロジェクトID: ' + fmt(pid, '<project-id>') + '\n'
-        + '- 管理者メール: ' + fmt(email, '<admin-email>') + '\n'
-        + (domain ? '- 追加許可ドメイン: ' + fmt(domain, '') + '\n' : '')
-        + '\n■ Gmail OAuth認証情報\n'
-        + '- Client ID: ' + fmt(cid, '<client-id>') + '\n'
-        + '- Client Secret: ' + fmt(csec, '<client-secret>') + '\n'
-        + '- 認証コード: ' + fmt(code, '<auth-code>') + '\n\n'
-        + '■ マスターデータCSV\n'
-        + '- 顧客: ' + fmt(csvCust, '<path/to/customers.csv>') + '\n'
-        + '- 書類種別: ' + fmt(csvDoc, '<path/to/documents.csv>') + '\n'
-        + '- 事業所: ' + fmt(csvOff, '<path/to/offices.csv>') + '\n'
-        + (csvCm ? '- ケアマネ: ' + fmt(csvCm, '') + '\n' : '')
-        + '\n■ 手順（順番厳守）\n'
-        + '1. setup-tenant.sh --with-gmail --yes で環境構築\n'
-        + '2. verify-setup.sh で中間検証\n'
-        + '3. import-masters.js でマスターデータ投入\n'
-        + extraSteps + '\n\n'
-        + '■ 禁止事項\n'
+      lines += (stepNum++) + '. セットアップ実行:\n'
+        + '   ./scripts/setup-tenant.sh ' + p + ' ' + fmt(email, '<admin-email>') + ' --with-gmail --client-id=' + fmt(cid, '<client-id>') + ' --client-secret=' + fmt(csec, '<client-secret>') + ' --auth-code=' + fmt(code, '<auth-code>') + ' --yes\n\n';
+
+      lines += (stepNum++) + '. 中間検証:\n'
+        + '   ./scripts/verify-setup.sh ' + p + '\n\n';
+
+      lines += (stepNum++) + '. マスターデータ投入:\n'
+        + '   FIREBASE_PROJECT_ID=' + p + ' node scripts/import-masters.js --customers ' + fmt(csvCust, '<customers.csv>') + '\n'
+        + '   FIREBASE_PROJECT_ID=' + p + ' node scripts/import-masters.js --documents ' + fmt(csvDoc, '<documents.csv>') + '\n'
+        + '   FIREBASE_PROJECT_ID=' + p + ' node scripts/import-masters.js --offices ' + fmt(csvOff, '<offices.csv>') + '\n';
+      if (csvCm) {
+        lines += '   FIREBASE_PROJECT_ID=' + p + ' node scripts/import-masters.js --caremanagers ' + fmt(csvCm, '') + '\n';
+      }
+      lines += '\n';
+
+      if (domain) {
+        lines += (stepNum++) + '. 許可ドメイン追加:\n'
+          + '   node scripts/check-allowed-domains.js ' + p + ' --add ' + fmt(domain, '<domain>') + '\n\n';
+      }
+
+      lines += (stepNum++) + '. 最終検証（全項目合格を確認）:\n'
+        + '   ./scripts/verify-setup.sh ' + p + '\n\n';
+
+      lines += stepNum + '. 結果をサマリーで報告\n\n';
+
+      lines += '■ 禁止事項\n'
         + '- firebase firestore:delete --all-collections は絶対禁止\n'
         + '- 本番環境にサンプルデータを投入しない\n'
         + '- 失敗時は3回まで再試行、それ以上は報告して停止';
+      return lines;
     }
 
     function updatePrompts() {
       if (!document.getElementById('project-id')) return;
-      var cid = _cdVal('client-id');
-
-      // 認証URL生成
-      var urlBox = document.getElementById('auth-url-box');
-      if (urlBox) {
-        if (cid) {
-          var authUrl = 'https://accounts.google.com/o/oauth2/v2/auth?client_id=' + encodeURIComponent(cid) + '&redirect_uri=urn:ietf:wg:oauth:2.0:oob&response_type=code&scope=https://www.googleapis.com/auth/gmail.readonly&access_type=offline';
-          document.getElementById('auth-url-text').textContent = authUrl;
-          urlBox.style.display = 'block';
-        } else {
-          urlBox.style.display = 'none';
-        }
-      }
 
       var elMin = document.getElementById('prompt-minimal');
       if (elMin) {
@@ -408,15 +400,6 @@
       });
     }
 
-    function copyAuthUrl() {
-      var text = document.getElementById('auth-url-text').textContent;
-      navigator.clipboard.writeText(text).then(function() {
-        var btn = document.getElementById('auth-url-copy-btn');
-        btn.textContent = 'コピーしました!';
-        btn.classList.add('copied');
-        setTimeout(function() { btn.textContent = 'URL をコピー'; btn.classList.remove('copied'); }, 2000);
-      });
-    }
   </script>
 </body>
 </html>
