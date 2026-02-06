@@ -172,7 +172,7 @@ export function useGroupDocuments(options: UseGroupDocumentsOptions) {
   const {
     groupType,
     groupKey,
-    pageSize = 20,
+    pageSize = 100,
     enabled = true,
   } = options;
 

@@ -5,10 +5,10 @@
  * 無限スクロール対応
  */
 
-import { useRef, useEffect, useCallback } from 'react';
-import { FileText, Loader2, ChevronDown } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { FileText, Loader2 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
+import { LoadMoreIndicator } from '@/components/LoadMoreIndicator';
+import { useInfiniteScroll } from '@/hooks/useInfiniteScroll';
 import {
   useGroupDocuments,
   type GroupType,
@@ -113,8 +113,6 @@ export function GroupDocumentList({
   groupKey,
   onDocumentSelect,
 }: GroupDocumentListProps) {
-  const loadMoreRef = useRef<HTMLDivElement>(null);
-
   const {
     data,
     fetchNextPage,
@@ -125,37 +123,9 @@ export function GroupDocumentList({
   } = useGroupDocuments({
     groupType,
     groupKey,
-    pageSize: 20,
+    pageSize: 100,
   });
-
-  // 無限スクロール用のIntersectionObserver
-  const handleLoadMore = useCallback(() => {
-    if (hasNextPage && !isFetchingNextPage) {
-      fetchNextPage();
-    }
-  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
-
-  useEffect(() => {
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries[0].isIntersecting) {
-          handleLoadMore();
-        }
-      },
-      { threshold: 0.1 }
-    );
-
-    const current = loadMoreRef.current;
-    if (current) {
-      observer.observe(current);
-    }
-
-    return () => {
-      if (current) {
-        observer.unobserve(current);
-      }
-    };
-  }, [handleLoadMore]);
+  const { loadMoreRef } = useInfiniteScroll({ hasNextPage: !!hasNextPage, isFetchingNextPage, fetchNextPage });
 
   // 全ページのドキュメントを結合
   const allDocuments = data?.pages.flatMap((page) => page.documents) ?? [];
@@ -197,30 +167,12 @@ export function GroupDocumentList({
           onDocumentSelect={onDocumentSelect}
         />
 
-        {/* さらに読み込む */}
-        {hasNextPage && (
-          <div
-            ref={loadMoreRef}
-            className="flex items-center justify-center py-4 border-t border-gray-100"
-          >
-            {isFetchingNextPage ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin text-gray-400" />
-                <span className="ml-2 text-xs text-gray-500">読み込み中...</span>
-              </>
-            ) : (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={handleLoadMore}
-                className="text-xs text-gray-500"
-              >
-                <ChevronDown className="h-4 w-4 mr-1" />
-                さらに表示
-              </Button>
-            )}
-          </div>
-        )}
+        <LoadMoreIndicator
+          ref={loadMoreRef}
+          hasNextPage={hasNextPage}
+          isFetchingNextPage={isFetchingNextPage}
+          className="border-t border-gray-100"
+        />
       </div>
     );
   }
@@ -240,30 +192,11 @@ export function GroupDocumentList({
         ))}
       </div>
 
-      {/* さらに読み込む */}
-      {hasNextPage && (
-        <div
-          ref={loadMoreRef}
-          className="flex items-center justify-center py-4"
-        >
-          {isFetchingNextPage ? (
-            <>
-              <Loader2 className="h-4 w-4 animate-spin text-gray-400" />
-              <span className="ml-2 text-xs text-gray-500">読み込み中...</span>
-            </>
-          ) : (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleLoadMore}
-              className="text-xs text-gray-500"
-            >
-              <ChevronDown className="h-4 w-4 mr-1" />
-              さらに表示
-            </Button>
-          )}
-        </div>
-      )}
+      <LoadMoreIndicator
+        ref={loadMoreRef}
+        hasNextPage={hasNextPage}
+        isFetchingNextPage={isFetchingNextPage}
+      />
     </div>
   );
 }

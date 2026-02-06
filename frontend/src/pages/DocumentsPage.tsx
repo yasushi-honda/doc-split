@@ -57,6 +57,8 @@ import { AliasLearningHistoryModal } from '@/components/AliasLearningHistoryModa
 import { PdfUploadModal } from '@/components/PdfUploadModal'
 import { GroupList } from '@/components/views'
 import { SearchBar } from '@/components/SearchBar'
+import { LoadMoreIndicator } from '@/components/LoadMoreIndicator'
+import { useInfiniteScroll } from '@/hooks/useInfiniteScroll'
 import type { Document, DocumentStatus } from '@shared/types'
 import type { GroupType } from '@/hooks/useDocumentGroups'
 
@@ -301,6 +303,7 @@ export function DocumentsPage() {
     hasNextPage,
     isFetchingNextPage,
   } = useInfiniteDocuments({ filters })
+  const { loadMoreRef } = useInfiniteScroll({ hasNextPage: !!hasNextPage, isFetchingNextPage, fetchNextPage })
   const { data: stats } = useDocumentStats()
   const { data: documentMasters } = useDocumentMasters()
 
@@ -733,30 +736,13 @@ export function DocumentsPage() {
                 </table>
               </div>
 
-              {/* さらに表示ボタン */}
-              {hasNextPage && (
-                <div className="flex items-center justify-center py-4 border-t border-gray-100">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => fetchNextPage()}
-                    disabled={isFetchingNextPage}
-                    className="text-sm text-gray-600"
-                  >
-                    {isFetchingNextPage ? (
-                      <>
-                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                        読み込み中...
-                      </>
-                    ) : (
-                      <>
-                        <ChevronDown className="h-4 w-4 mr-2" />
-                        さらに表示（{documents.length}件表示中）
-                      </>
-                    )}
-                  </Button>
-                </div>
-              )}
+              {/* 無限スクロール読み込みインジケーター */}
+              <LoadMoreIndicator
+                ref={loadMoreRef}
+                hasNextPage={hasNextPage}
+                isFetchingNextPage={isFetchingNextPage}
+                className="border-t border-gray-100"
+              />
             </>
             )}
           </Card>
