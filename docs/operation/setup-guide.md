@@ -57,7 +57,10 @@ gcloud services enable \
   pubsub.googleapis.com \
   aiplatform.googleapis.com \
   secretmanager.googleapis.com \
-  gmail.googleapis.com
+  gmail.googleapis.com \
+  cloudscheduler.googleapis.com \
+  cloudbuild.googleapis.com \
+  identitytoolkit.googleapis.com
 ```
 
 ## 4. 環境設定
@@ -70,7 +73,7 @@ gcloud services enable \
 VITE_FIREBASE_API_KEY=<your-api-key>
 VITE_FIREBASE_AUTH_DOMAIN=<your-project-id>.firebaseapp.com
 VITE_FIREBASE_PROJECT_ID=<your-project-id>
-VITE_FIREBASE_STORAGE_BUCKET=<your-project-id>.appspot.com
+VITE_FIREBASE_STORAGE_BUCKET=<your-project-id>.firebasestorage.app
 VITE_FIREBASE_MESSAGING_SENDER_ID=<your-sender-id>
 VITE_FIREBASE_APP_ID=<your-app-id>
 ```
@@ -125,7 +128,14 @@ CSVファイルを `scripts/samples/` に配置:
 - `caremanagers.csv`: ケアマネマスター
 
 ```bash
-node scripts/import-masters.js
+# 一括インポート（ディレクトリ内のCSVを自動検出）
+FIREBASE_PROJECT_ID=<project-id> node scripts/import-masters.js --all scripts/samples/
+
+# 個別インポート
+FIREBASE_PROJECT_ID=<project-id> node scripts/import-masters.js --customers scripts/samples/customers.csv
+FIREBASE_PROJECT_ID=<project-id> node scripts/import-masters.js --documents scripts/samples/documents.csv
+FIREBASE_PROJECT_ID=<project-id> node scripts/import-masters.js --offices scripts/samples/offices.csv
+FIREBASE_PROJECT_ID=<project-id> node scripts/import-masters.js --caremanagers scripts/samples/caremanagers.csv
 ```
 
 ## 6. Storage セットアップ

@@ -102,9 +102,11 @@ gcloud config set project <client-project-id>
 # ========================================
 # Step 4: 開発者側作業 - データ投入
 # ========================================
-node scripts/import-masters.js --file <customers.csv> --type customers -P client-x
-node scripts/import-masters.js --file <documents.csv> --type documents -P client-x
-node scripts/import-masters.js --file <offices.csv> --type offices -P client-x
+FIREBASE_PROJECT_ID=<client-project-id> node scripts/import-masters.js --customers <customers.csv>
+FIREBASE_PROJECT_ID=<client-project-id> node scripts/import-masters.js --documents <documents.csv>
+FIREBASE_PROJECT_ID=<client-project-id> node scripts/import-masters.js --offices <offices.csv>
+# ケアマネ（任意）
+# FIREBASE_PROJECT_ID=<client-project-id> node scripts/import-masters.js --caremanagers <caremanagers.csv>
 
 # ========================================
 # Step 5: 検証 & 動作確認
@@ -245,15 +247,20 @@ git push origin main
 ```bash
 # 1. クライアントがGCPプロジェクト作成・課金設定
 
-# 2. セットアップ実行
-./scripts/setup-tenant.sh <new-client-project-id> <admin-email>
-./scripts/setup-gmail-auth.sh
+# 2. セットアップ実行（--with-gmail推奨、.firebasercへのエイリアス追加も自動）
+./scripts/setup-tenant.sh <new-client-project-id> <admin-email> --with-gmail
 
-# 3. .firebasercに追加
-# エディタで .firebaserc を編集し、新クライアントを追加
+# Gmail設定を後から行う場合
+# ./scripts/setup-tenant.sh <new-client-project-id> <admin-email>
+# ./scripts/setup-gmail-auth.sh <new-client-project-id>
 
-# 4. マスターデータ投入
-node scripts/import-masters.js --file <data.csv> --type <type> -P new-client
+# 3. マスターデータ投入
+FIREBASE_PROJECT_ID=<new-client-project-id> node scripts/import-masters.js --customers <customers.csv>
+FIREBASE_PROJECT_ID=<new-client-project-id> node scripts/import-masters.js --documents <documents.csv>
+FIREBASE_PROJECT_ID=<new-client-project-id> node scripts/import-masters.js --offices <offices.csv>
+
+# 4. セットアップ検証
+./scripts/verify-setup.sh <new-client-project-id>
 
 # 5. 動作確認
 ```

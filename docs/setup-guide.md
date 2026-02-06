@@ -32,27 +32,39 @@ gcloud billing projects link <project-id> --billing-account=<billing-account-id>
 firebase projects:addfirebase <project-id>
 ```
 
-### Step 3: テナントセットアップ実行
+### Step 3: テナントセットアップ実行（Gmail込みで一括）
 
 ```bash
-./scripts/setup-tenant.sh <project-id> <admin-email> [gmail-account]
+./scripts/setup-tenant.sh <project-id> <admin-email> --with-gmail
 ```
 
 **例:**
 ```bash
-./scripts/setup-tenant.sh my-docsplit admin@example.com docs@example.com
+./scripts/setup-tenant.sh my-docsplit admin@example.com --with-gmail
 ```
 
-### Step 4: Gmail認証設定
+Gmail設定を後から行う場合:
+```bash
+./scripts/setup-tenant.sh <project-id> <admin-email>
+./scripts/setup-gmail-auth.sh <project-id>
+```
+
+### Step 4: セットアップ検証
 
 ```bash
-./scripts/setup-gmail-auth.sh <project-id>
+./scripts/verify-setup.sh <project-id>
 ```
 
 ### Step 5: マスターデータ投入（任意）
 
 ```bash
-node scripts/import-masters.js --all scripts/samples/
+# 一括インポート（ディレクトリ内のCSVを自動検出）
+FIREBASE_PROJECT_ID=<project-id> node scripts/import-masters.js --all scripts/samples/
+
+# 個別インポート
+FIREBASE_PROJECT_ID=<project-id> node scripts/import-masters.js --customers customers.csv
+FIREBASE_PROJECT_ID=<project-id> node scripts/import-masters.js --documents documents.csv
+FIREBASE_PROJECT_ID=<project-id> node scripts/import-masters.js --offices offices.csv
 ```
 
 ## 手動セットアップ
@@ -72,6 +84,7 @@ gcloud services enable \
   gmail.googleapis.com \
   cloudscheduler.googleapis.com \
   cloudbuild.googleapis.com \
+  identitytoolkit.googleapis.com \
   --project=<project-id>
 ```
 
@@ -94,7 +107,7 @@ Firebase Consoleで以下を有効化:
 VITE_FIREBASE_API_KEY=<api-key>
 VITE_FIREBASE_AUTH_DOMAIN=<project-id>.firebaseapp.com
 VITE_FIREBASE_PROJECT_ID=<project-id>
-VITE_FIREBASE_STORAGE_BUCKET=<project-id>.appspot.com
+VITE_FIREBASE_STORAGE_BUCKET=<project-id>.firebasestorage.app
 VITE_FIREBASE_MESSAGING_SENDER_ID=<sender-id>
 VITE_FIREBASE_APP_ID=<app-id>
 ```
