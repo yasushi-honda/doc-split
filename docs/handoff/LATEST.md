@@ -8,6 +8,7 @@
 
 | PR/コミット | 内容 |
 |----|------|
+| bd66bfe | **納品ページの前提条件にOS要件（macOS/Linux/WSL）追加** |
 | #66 | **OAuth OOB→loopback方式移行+納品ページ改善**（setup-gmail-auth.sh/docs） |
 | 7ea4e65 | **Claude Code自動納品プロンプトジェネレーターページ追加**（GitHub Pages） |
 | 59a027f | **deploy-all-clients.shに非対話モード(--yes)追加**＋Node.js v24互換修正 |
