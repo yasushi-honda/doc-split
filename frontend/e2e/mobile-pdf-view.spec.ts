@@ -3,7 +3,7 @@
  * エミュレータ環境でモバイルUIの動作を確認
  */
 
-import { test, expect, devices } from '@playwright/test';
+import { test, expect, devices, Page } from '@playwright/test';
 
 // モバイルデバイス設定（test.useはdescribe外で設定）
 const mobileDevice = devices['iPhone 14'];
@@ -13,18 +13,27 @@ test.use({
   baseURL: process.env.E2E_BASE_URL || 'http://localhost:5173',
 });
 
+const TEST_USER = {
+  email: 'test@example.com',
+  password: 'testpassword123',
+};
+
+async function loginWithTestUser(page: Page) {
+  await page.goto('/');
+  await page.evaluate(
+    async ({ email, password }) => {
+      // @ts-expect-error - Vite devサーバー経由でモジュール解決
+      const { auth, signInWithEmailAndPassword } = await import('/src/lib/firebase.ts');
+      await signInWithEmailAndPassword(auth, email, password);
+    },
+    { email: TEST_USER.email, password: TEST_USER.password }
+  );
+  await page.waitForSelector('text=書類一覧', { timeout: 10000 });
+}
+
 test.describe('モバイルPDFビュー @emulator', () => {
   test.beforeEach(async ({ page }) => {
-    // エミュレータのAuth UIにアクセス
-    await page.goto('/');
-
-    // ログインページが表示されたら、エミュレータ認証を使用
-    const loginButton = page.locator('text=Googleでログイン');
-    if (await loginButton.isVisible({ timeout: 3000 }).catch(() => false)) {
-      // エミュレータモードでは自動ログインをシミュレート
-      // または、テスト用ユーザーでログイン
-      console.log('ログインページが表示されました');
-    }
+    await loginWithTestUser(page);
   });
 
   test('書類詳細モーダルが開く', async ({ page }) => {

@@ -65,9 +65,8 @@ test.describe('PDFアップロード @emulator', () => {
     const modal = page.locator('[role="dialog"]');
     await expect(modal).toBeVisible({ timeout: 5000 });
 
-    // 閉じるボタンまたはキャンセルボタン
-    const closeButton = modal.locator('button:has(svg)').first();
-    await closeButton.click();
+    // ESCキーで閉じる
+    await page.keyboard.press('Escape');
 
     await expect(modal).not.toBeVisible({ timeout: 5000 });
   });

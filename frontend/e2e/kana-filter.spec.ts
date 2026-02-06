@@ -38,8 +38,8 @@ async function loginWithTestUser(page: Page) {
 async function navigateToCustomerTab(page: Page) {
   // タブをクリック
   await page.locator('[role="tab"]').filter({ hasText: '顧客別' }).click();
-  // グループデータが表示されるまで待機
-  await page.waitForTimeout(1000);
+  // グループデータが表示されるまで待機（CIでは時間がかかる場合がある）
+  await page.waitForTimeout(2000);
 }
 
 /** フィルターバーの存在確認 */

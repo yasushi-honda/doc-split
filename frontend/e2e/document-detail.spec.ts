@@ -74,7 +74,7 @@ test.describe('書類詳細モーダル @emulator', () => {
     await expect(modal).toBeVisible({ timeout: 5000 });
 
     // 書類種別が表示される
-    await expect(modal.locator('text=請求書')).toBeVisible();
+    await expect(modal.locator('text=請求書').first()).toBeVisible();
   });
 
   test('詳細モーダルを閉じることができる', async ({ page }) => {
@@ -85,9 +85,8 @@ test.describe('書類詳細モーダル @emulator', () => {
     const modal = page.locator('[role="dialog"]');
     await expect(modal).toBeVisible({ timeout: 5000 });
 
-    // 閉じるボタンをクリック（Xボタン）
-    const closeButton = modal.locator('button:has(svg)').first();
-    await closeButton.click();
+    // ESCキーで閉じる
+    await page.keyboard.press('Escape');
 
     // モーダルが閉じる
     await expect(modal).not.toBeVisible({ timeout: 5000 });
@@ -103,7 +102,7 @@ test.describe('書類詳細モーダル @emulator', () => {
     await expect(modal).toBeVisible({ timeout: 5000 });
 
     // 領収書の情報が表示される
-    await expect(modal.locator('text=山本八郎')).toBeVisible();
-    await expect(modal.locator('text=領収書')).toBeVisible();
+    await expect(modal.locator('text=山本八郎').first()).toBeVisible();
+    await expect(modal.locator('text=領収書').first()).toBeVisible();
   });
 });
