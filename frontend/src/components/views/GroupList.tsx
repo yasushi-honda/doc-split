@@ -179,18 +179,21 @@ export function GroupList({ groupType, onDocumentSelect }: GroupListProps) {
 
   // 顧客マスター（顧客別・担当CM別のみ取得）
   const { data: customers } = useCustomers();
+  const isFuriganaReady = needsFurigana ? !!customers : true;
   const furiganaMap = useMemo(
     () => (needsFurigana && customers ? buildFuriganaMap(customers) : new Map<string, string>()),
     [needsFurigana, customers]
   );
 
   // 顧客別: あいうえお順ソート + フィルター
+  // furiganaMap未準備時はソート・フィルターをスキップ（空結果防止）
   const displayGroups = useMemo(() => {
     if (!groups) return [];
     if (!isCustomerView) return groups;
+    if (!isFuriganaReady) return groups;
     const sorted = sortGroupsByFurigana(groups, furiganaMap);
     return filterGroupsByKanaRow(sorted, selectedKanaRow, furiganaMap);
-  }, [groups, isCustomerView, furiganaMap, selectedKanaRow]);
+  }, [groups, isCustomerView, isFuriganaReady, furiganaMap, selectedKanaRow]);
 
   const config = GROUP_TYPE_CONFIG[groupType];
 
@@ -265,7 +268,11 @@ export function GroupList({ groupType, onDocumentSelect }: GroupListProps) {
 
       {/* あかさたなフィルター（顧客別のみ） */}
       {isCustomerView && (
-        <KanaFilterBar selected={selectedKanaRow} onSelect={setSelectedKanaRow} />
+        <KanaFilterBar
+          selected={selectedKanaRow}
+          onSelect={setSelectedKanaRow}
+          disabled={!isFuriganaReady}
+        />
       )}
 
       {/* グループ一覧 */}
