@@ -734,15 +734,14 @@ export function DocumentsPage() {
                     ))}
                   </tbody>
                 </table>
+                {/* 無限スクロール読み込みインジケーター（スクロールコンテナ内に配置） */}
+                <LoadMoreIndicator
+                  ref={loadMoreRef}
+                  hasNextPage={hasNextPage}
+                  isFetchingNextPage={isFetchingNextPage}
+                  className="border-t border-gray-100"
+                />
               </div>
-
-              {/* 無限スクロール読み込みインジケーター */}
-              <LoadMoreIndicator
-                ref={loadMoreRef}
-                hasNextPage={hasNextPage}
-                isFetchingNextPage={isFetchingNextPage}
-                className="border-t border-gray-100"
-              />
             </>
             )}
           </Card>
