@@ -8,77 +8,53 @@
 
 | PR | 内容 |
 |----|------|
+| #63 | フィルターパネル全タブ共通化＋期間指定フィルター追加 |
 | #62 | あかさたなフィルターの顧客マスター未ロード時の空結果バグ修正＋E2Eテスト追加 |
 | #61 | 顧客別あいうえお順ソート＋あかさたなフィルター対応 |
-| #60 | 書類一覧をページ全体スクロール化し無限スクロールを正常動作させる |
-| #59 | 書類一覧のLoadMoreIndicatorをスクロールコンテナ内に移動 |
-| #57-58 | 一覧系画面の初期表示100件化＋無限スクロール対応＋テスト |
+| #57-60 | 一覧系画面の初期表示100件化＋無限スクロール対応＋テスト |
 
-### 技術的なポイント（#62 KanaFilterBarバグ修正）
+### 技術的なポイント（#63 フィルターパネル＋期間指定）
 
-- **問題**: 顧客マスター（useCustomers）が未ロードの状態でfuriganaMapが空→全グループがフィルター結果0件になる
-- **修正**: `isFuriganaReady` ガードを追加し、マスター未ロード時はソート・フィルターをスキップ
-- **KanaFilterBar**: `disabled` prop追加（マスターロード完了までボタン無効化）
-- **E2Eテスト**: Playwright 11ケース追加（`frontend/e2e/kana-filter.spec.ts`）
-- **シードデータ**: 顧客マスター11件＋書類11件追加（`scripts/seed-e2e-data.js`）
+- **バグ修正**: フィルターパネルを `<TabsContent value="list">` 外に移動し全タブで展開可能に
+- **DateRangeFilter.tsx (NEW)**: 期間指定フィルターコンポーネント
+  - プリセット: 今月/今年/過去3ヶ月/カスタム
+  - 日付種別切替: 書類日付(fileDate) / 登録日(processedAt)
+  - 同じプリセット再クリックでクリア、クリアボタンあり
+- **書類一覧タブ**: Firestoreクエリでサーバーサイドフィルター（`useDocuments.ts` の `dateField` 動的切替対応）
+- **グループビュー**: クライアントサイドで日付フィルター（`GroupDocumentList.tsx` の `filterByDate` 関数）
+- **DateRange型を共通型として統一**: GroupList/GroupDocumentList は DateRangeFilter.tsx から import
+- **テスト**: DateRangeFilter 10件追加（全71テスト通過）
+- **レビュー修正**: 型安全性（明示的フィールドアクセス）、try-catch、useMemo依存配列の.getTime()安定化
 
-### 技術的なポイント（#61 あいうえお対応）
+### 変更ファイル（#63）
 
-- **対象タブ**: 顧客別（あいうえお順+フィルター）、担当CM別（顧客サブグループのあいうえお順）
-- **事業所別・書類種別は変更なし**（furiganaフィールドがCustomerMasterにしかないため）
-- **`kanaUtils.ts`**: ひらがな/カタカナ→あかさたな行の分類、濁音・半濁音・小文字対応
-- **`KanaFilterBar.tsx`**: 横スクロールフィルターバー（全|あ|か|さ|た|な|は|ま|や|ら|わ）
-- **顧客別**: Firestoreから全件取得（`sortBy='none'`）→ クライアントサイドでふりがなソート＋フィルター
-- **担当CM別**: `CustomerSubGroup`にfuriganaMapを渡してサブグループをあいうえお順ソート
+- `frontend/src/components/DateRangeFilter.tsx` (NEW) - 期間指定フィルターコンポーネント
+- `frontend/src/components/__tests__/DateRangeFilter.test.tsx` (NEW) - 10テスト
+- `frontend/src/pages/DocumentsPage.tsx` - フィルターパネル共通化＋DateRangeFilter統合
+- `frontend/src/hooks/useDocuments.ts` - dateField動的切替対応
+- `frontend/src/components/views/GroupList.tsx` - dateFilter props追加
+- `frontend/src/components/views/GroupDocumentList.tsx` - クライアントサイド日付フィルタリング
 
-### 変更ファイル（#61）
+### Firestore インデックス注意（#63 関連）
 
-- `frontend/src/lib/kanaUtils.ts` (NEW) - かな分類・ソート・フィルター共通関数
-- `frontend/src/lib/__tests__/kanaUtils.test.ts` (NEW) - 30テスト
-- `frontend/src/components/KanaFilterBar.tsx` (NEW) - あかさたなフィルターバーUI
-- `frontend/src/components/__tests__/KanaFilterBar.test.tsx` (NEW) - 6テスト
-- `frontend/src/hooks/useDocumentGroups.ts` - sortBy='none'オプション追加
-- `frontend/src/components/views/GroupList.tsx` - ソート・フィルター統合
-- `frontend/src/components/views/GroupDocumentList.tsx` - furiganaMap prop追加
-- `frontend/src/components/views/CustomerSubGroup.tsx` - あいうえお順ソート対応
-
-### 技術的なポイント（#57-60 無限スクロール）
-
-- **共通フック `useInfiniteScroll`**: IntersectionObserver APIで自動読み込み（3画面共通）
-- **共通コンポーネント `LoadMoreIndicator`**: forwardRefでref転送対応
-- **スクロールコンテナの注意点**: `overflow-auto max-h-[...]` があるとページレベルのIntersectionObserverが動かない。書類一覧は `overflow-x-auto` のみに変更してページ全体スクロールで解決。
+`processedAt`での日付範囲フィルター使用時、status等との複合クエリでインデックスが必要になる可能性あり。エラーが出た場合はFirestoreコンソールのリンクからインデックスを作成すること。
 
 ## デプロイ状況
 
 | 環境 | 状態 |
 |------|------|
-| dev | デプロイ済み（02-06） |
-| kanameone | デプロイ済み（02-06） |
+| dev | デプロイ済み（02-06、#63反映） |
+| kanameone | デプロイ済み（02-06、#63反映） |
 
 ## 未解決の既知バグ
 
-- **フィルターパネルが書類一覧タブ以外で開かない**: `DocumentsPage.tsx` のフィルターパネル展開部分（showFilters）が `<TabsContent value="list">` 内にのみ配置されている。タブ共通化が必要。
+なし（#63でフィルターパネルのバグは修正済み）
 
 ## 次のアクション候補（優先度順）
 
-### 1. フィルターパネルのバグ修正＋期間指定フィルター追加（ユーザー要望済み）
-
-`/impl-plan` で計画済み。主要タスク:
-
-| タスク | 概要 | 影響ファイル |
-|--------|------|-------------|
-| A | フィルターパネルをタブ共通化 | `DocumentsPage.tsx`（showFiltersパネルをTabsContentの外に移動） |
-| B | 期間指定UIコンポーネント追加 | 新規: `DateRangeFilter.tsx` |
-| C | dateFrom/dateToをFirestoreクエリに接続 | `useDocuments.ts`（型・クエリ対応済み、UIのみ未実装） |
-| D | グループビューへのフィルター適用 | `useDocumentGroups.ts`, `GroupList.tsx` |
-| E | テスト・ビルド確認 | 各テストファイル |
-
-**ユーザー決定事項**:
-- フィルター範囲: 全タブ共通
-- 期間プリセット: 今年/今月/過去3ヶ月/カスタム
-- 日付種別: 書類日付（fileDate）/ 登録日（processedAt）を切替可能
-- `DocumentFilters.dateFrom/dateTo` は型定義・Firestoreクエリ対応済み（UIのみ未実装）
-
-### 2. その他
-- 精度改善（フィードバック後）
-- Playwright E2Eテスト拡充（認証フロー含むEmulator環境テスト基盤は構築済み）
+1. **手動確認**: #63の期間指定フィルターが本番環境で正常動作するか確認
+   - 書類一覧タブで期間プリセット選択→結果がフィルターされる
+   - グループビュータブでフィルターパネルが開き、期間フィルターが動作する
+   - 日付種別切替（書類日付↔登録日）で結果が変わる
+2. 精度改善（フィードバック後）
+3. Playwright E2Eテスト拡充（認証フロー含むEmulator環境テスト基盤は構築済み）
