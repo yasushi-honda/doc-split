@@ -39,6 +39,8 @@ import {
   type ProcessingHistoryFilters,
 } from '@/hooks/useProcessingHistory';
 import { DocumentDetailModal } from '@/components/DocumentDetailModal';
+import { LoadMoreIndicator } from '@/components/LoadMoreIndicator';
+import { useInfiniteScroll } from '@/hooks/useInfiniteScroll';
 import type { Document as DocType, DocumentStatus } from '@shared/types';
 import { Loader2, RefreshCw, ChevronDown, ChevronUp, AlertCircle, ArrowUpDown } from 'lucide-react';
 
@@ -98,6 +100,7 @@ export function ProcessingHistoryPage() {
     fetchNextPage,
     refetch,
   } = useProcessingHistory(filters);
+  const { loadMoreRef } = useInfiniteScroll({ hasNextPage: hasMore, isFetchingNextPage: isFetchingMore, fetchNextPage });
 
   // 日付グルーピング
   const groupedDocs = groupDocumentsByDate(documents);
@@ -282,28 +285,12 @@ export function ProcessingHistoryPage() {
               </Card>
             ))}
 
-            {/* 次ページ読み込みボタン */}
-            {hasMore && (
-              <div className="flex justify-center py-4">
-                <Button
-                  variant="outline"
-                  onClick={fetchNextPage}
-                  disabled={isFetchingMore}
-                >
-                  {isFetchingMore ? (
-                    <>
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                      読み込み中...
-                    </>
-                  ) : (
-                    <>
-                      <ChevronDown className="h-4 w-4 mr-2" />
-                      さらに読み込む
-                    </>
-                  )}
-                </Button>
-              </div>
-            )}
+            {/* 無限スクロール読み込みインジケーター */}
+            <LoadMoreIndicator
+              ref={loadMoreRef}
+              hasNextPage={hasMore}
+              isFetchingNextPage={isFetchingMore}
+            />
           </div>
         )}
 

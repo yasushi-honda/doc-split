@@ -28,8 +28,8 @@ import type { Document, DocumentStatus, CustomerCandidateInfo } from '@shared/ty
 // 定数
 // ============================================
 
-const FETCH_SIZE = 50;  // Firestoreから取得する件数
-const PAGE_SIZE = 20;   // 画面に表示する件数
+const FETCH_SIZE = 200; // Firestoreから取得する件数
+const PAGE_SIZE = 100;  // 画面に表示する件数
 
 // ============================================
 // 型定義

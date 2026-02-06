@@ -204,7 +204,7 @@ export function useDocuments(options: UseDocumentsOptions = {}) {
  * 無限スクロール対応版の書類一覧取得
  */
 export function useInfiniteDocuments(options: UseDocumentsOptions = {}) {
-  const { filters = {}, pageSize = 50, enabled = true } = options
+  const { filters = {}, pageSize = 100, enabled = true } = options
 
   return useInfiniteQuery({
     queryKey: ['documentsInfinite', filters, pageSize],
