@@ -241,6 +241,7 @@
       loadSidebar: true,
       subMaxLevel: 3,
       auto2top: true,
+      executeScript: true,
       search: {
         placeholder: '検索...',
         noData: '見つかりませんでした',
@@ -249,7 +250,17 @@
       pagination: {
         previousText: '前へ',
         nextText: '次へ'
-      }
+      },
+      plugins: [
+        function(hook) {
+          hook.doneEach(function() {
+            // Claude Code自動納品ページのプロンプト初期化
+            if (typeof updatePrompts === 'function' && document.getElementById('project-id')) {
+              updatePrompts();
+            }
+          });
+        }
+      ]
     }
   </script>
   <!-- Docsify -->
@@ -263,6 +274,149 @@
   <script src="https://unpkg.com/docsify-mermaid@2.0.1/dist/docsify-mermaid.js"></script>
   <script>
     mermaid.initialize({ startOnLoad: false, theme: 'default' });
+  </script>
+  <!-- Claude Code自動納品ページ用スクリプト -->
+  <script>
+    function _cdVal(id) {
+      var el = document.getElementById(id);
+      return el ? el.value.trim() : '';
+    }
+    function _cdHl(value, placeholder) {
+      if (value) return '<span class="filled">' + _cdEsc(value) + '</span>';
+      return '<span class="placeholder">' + _cdEsc(placeholder) + '</span>';
+    }
+    function _cdRaw(value, placeholder) { return value || placeholder; }
+    function _cdEsc(text) {
+      var d = document.createElement('div');
+      d.textContent = text;
+      return d.innerHTML;
+    }
+
+    function _buildMinimal(fmt) {
+      var pid = _cdVal('project-id');
+      var email = _cdVal('admin-email');
+      var cid = _cdVal('client-id');
+      var csec = _cdVal('client-secret');
+      var code = _cdVal('auth-code');
+      var csvCust = _cdVal('csv-customers');
+      var csvDoc = _cdVal('csv-documents');
+      var csvOff = _cdVal('csv-offices');
+      var csvCm = _cdVal('csv-caremanagers');
+
+      return 'DocSplitの新規納品を実施してください。\n\n'
+        + '■ クライアント情報\n'
+        + '- プロジェクトID: ' + fmt(pid, '<project-id>') + '\n'
+        + '- 管理者メール: ' + fmt(email, '<admin-email>') + '\n\n'
+        + '■ Gmail OAuth認証情報\n'
+        + '- Client ID: ' + fmt(cid, '<client-id>') + '\n'
+        + '- Client Secret: ' + fmt(csec, '<client-secret>') + '\n'
+        + '- 認証コード: ' + fmt(code, '<auth-code>') + '\n\n'
+        + '■ マスターデータCSV\n'
+        + '- 顧客: ' + fmt(csvCust, '<path/to/customers.csv>') + '\n'
+        + '- 書類種別: ' + fmt(csvDoc, '<path/to/documents.csv>') + '\n'
+        + '- 事業所: ' + fmt(csvOff, '<path/to/offices.csv>') + '\n'
+        + (csvCm ? '- ケアマネ: ' + fmt(csvCm, '') + '\n' : '')
+        + '\n■ 手順\n'
+        + '1. setup-tenant.sh を --with-gmail --yes で実行\n'
+        + '2. verify-setup.sh で検証\n'
+        + '3. import-masters.js でマスターデータ投入\n'
+        + '4. verify-setup.sh で最終確認\n'
+        + '5. 結果をサマリーで報告';
+    }
+
+    function _buildFull(fmt) {
+      var pid = _cdVal('project-id');
+      var email = _cdVal('admin-email');
+      var cid = _cdVal('client-id');
+      var csec = _cdVal('client-secret');
+      var code = _cdVal('auth-code');
+      var csvCust = _cdVal('csv-customers');
+      var csvDoc = _cdVal('csv-documents');
+      var csvOff = _cdVal('csv-offices');
+      var csvCm = _cdVal('csv-caremanagers');
+      var domain = _cdVal('extra-domain');
+
+      var stepNum = 4;
+      var extraSteps = '';
+      if (domain) extraSteps += (stepNum++) + '. check-allowed-domains.js --add で許可ドメイン追加\n';
+      extraSteps += (stepNum++) + '. verify-setup.sh で最終検証（全項目合格を確認）\n'
+        + stepNum + '. 結果をサマリーで報告';
+
+      return 'DocSplitの新規納品を実施してください。\n\n'
+        + '■ クライアント情報\n'
+        + '- プロジェクトID: ' + fmt(pid, '<project-id>') + '\n'
+        + '- 管理者メール: ' + fmt(email, '<admin-email>') + '\n'
+        + (domain ? '- 追加許可ドメイン: ' + fmt(domain, '') + '\n' : '')
+        + '\n■ Gmail OAuth認証情報\n'
+        + '- Client ID: ' + fmt(cid, '<client-id>') + '\n'
+        + '- Client Secret: ' + fmt(csec, '<client-secret>') + '\n'
+        + '- 認証コード: ' + fmt(code, '<auth-code>') + '\n\n'
+        + '■ マスターデータCSV\n'
+        + '- 顧客: ' + fmt(csvCust, '<path/to/customers.csv>') + '\n'
+        + '- 書類種別: ' + fmt(csvDoc, '<path/to/documents.csv>') + '\n'
+        + '- 事業所: ' + fmt(csvOff, '<path/to/offices.csv>') + '\n'
+        + (csvCm ? '- ケアマネ: ' + fmt(csvCm, '') + '\n' : '')
+        + '\n■ 手順（順番厳守）\n'
+        + '1. setup-tenant.sh --with-gmail --yes で環境構築\n'
+        + '2. verify-setup.sh で中間検証\n'
+        + '3. import-masters.js でマスターデータ投入\n'
+        + extraSteps + '\n\n'
+        + '■ 禁止事項\n'
+        + '- firebase firestore:delete --all-collections は絶対禁止\n'
+        + '- 本番環境にサンプルデータを投入しない\n'
+        + '- 失敗時は3回まで再試行、それ以上は報告して停止';
+    }
+
+    function updatePrompts() {
+      if (!document.getElementById('project-id')) return;
+      var cid = _cdVal('client-id');
+
+      // 認証URL生成
+      var urlBox = document.getElementById('auth-url-box');
+      if (urlBox) {
+        if (cid) {
+          var authUrl = 'https://accounts.google.com/o/oauth2/v2/auth?client_id=' + encodeURIComponent(cid) + '&redirect_uri=urn:ietf:wg:oauth:2.0:oob&response_type=code&scope=https://www.googleapis.com/auth/gmail.readonly&access_type=offline';
+          document.getElementById('auth-url-text').textContent = authUrl;
+          urlBox.style.display = 'block';
+        } else {
+          urlBox.style.display = 'none';
+        }
+      }
+
+      var elMin = document.getElementById('prompt-minimal');
+      if (elMin) {
+        elMin.innerHTML = _buildMinimal(_cdHl);
+        elMin.setAttribute('data-raw', _buildMinimal(_cdRaw));
+      }
+
+      var elFull = document.getElementById('prompt-full');
+      if (elFull) {
+        elFull.innerHTML = _buildFull(_cdHl);
+        elFull.setAttribute('data-raw', _buildFull(_cdRaw));
+      }
+    }
+
+    function copyPrompt(type) {
+      var el = document.getElementById('prompt-' + type);
+      if (!el) return;
+      var text = el.getAttribute('data-raw');
+      navigator.clipboard.writeText(text).then(function() {
+        var btn = document.getElementById('copy-' + type);
+        btn.textContent = 'コピーしました!';
+        btn.classList.add('copied');
+        setTimeout(function() { btn.textContent = 'コピー'; btn.classList.remove('copied'); }, 2000);
+      });
+    }
+
+    function copyAuthUrl() {
+      var text = document.getElementById('auth-url-text').textContent;
+      navigator.clipboard.writeText(text).then(function() {
+        var btn = document.getElementById('auth-url-copy-btn');
+        btn.textContent = 'コピーしました!';
+        btn.classList.add('copied');
+        setTimeout(function() { btn.textContent = 'URL をコピー'; btn.classList.remove('copied'); }, 2000);
+      });
+    }
   </script>
 </body>
 </html>
