@@ -5,12 +5,13 @@
 # ============================================
 #
 # 使用方法:
-#   ./scripts/deploy-all-clients.sh [--rules] [--full] [--dry-run]
+#   ./scripts/deploy-all-clients.sh [--rules] [--full] [--dry-run] [--yes]
 #
 # オプション:
 #   --rules    Hosting + Firestoreルール
 #   --full     全コンポーネント（Hosting + Rules + Functions）
 #   --dry-run  実行せずに対象を表示
+#   --yes / -y 確認プロンプトを自動承認（CI/Claude Code用）
 #
 # 注意:
 #   - devは除外（開発環境のため）
@@ -37,6 +38,7 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 # 引数解析
 DEPLOY_MODE=""
 DRY_RUN=false
+ASSUME_YES=false
 
 for arg in "$@"; do
     case $arg in
@@ -49,6 +51,9 @@ for arg in "$@"; do
         --dry-run)
             DRY_RUN=true
             ;;
+        --yes|-y)
+            ASSUME_YES=true
+            ;;
         *)
             ;;
     esac
@@ -57,7 +62,8 @@ done
 # .firebasercからクライアント一覧を取得（dev, default除外）
 get_clients() {
     node -e "
-        const rc = require('./.firebaserc');
+        const fs = require('fs');
+        const rc = JSON.parse(fs.readFileSync('./.firebaserc', 'utf8'));
         const clients = Object.keys(rc.projects)
             .filter(k => k !== 'dev' && k !== 'default');
         console.log(clients.join('\n'));
@@ -100,11 +106,15 @@ if [ "$DRY_RUN" = true ]; then
 fi
 
 # 確認プロンプト
-echo -n "全クライアントにデプロイしますか？ (y/N): "
-read -r confirm
-if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
-    log_info "キャンセルしました"
-    exit 0
+if [ "$ASSUME_YES" = true ]; then
+    log_info "自動承認モード: 確認をスキップします"
+else
+    echo -n "全クライアントにデプロイしますか？ (y/N): "
+    read -r confirm
+    if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
+        log_info "キャンセルしました"
+        exit 0
+    fi
 fi
 
 echo ""
