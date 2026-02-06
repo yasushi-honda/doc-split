@@ -194,6 +194,7 @@
 
 | 条件 | 確認方法 |
 |------|---------|
+| macOS / Linux / WSL 環境 | `uname` |
 | doc-split リポジトリをクローン済み | `ls CLAUDE.md` |
 | `gcloud` CLI 認証済み | `gcloud auth list` |
 | ADC（Application Default Credentials）設定済み | `gcloud auth application-default login` |
