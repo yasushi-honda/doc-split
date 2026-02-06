@@ -145,96 +145,194 @@ OCR処理結果を格納するトランザクションテーブル。
    - Firestoreのドキュメントサイズ制限: 1MB
    - 大きなOCR結果はCloud Storageに保存し、URLを参照
 
-## Firestore コレクション設計（案）
+## Firestore コレクション設計（実装済み）
+
+### コレクション一覧
+
+| コレクション | 説明 |
+|-------------|------|
+| `documents` | 書類管理（メインテーブル） |
+| `masters/{type}/items` | マスターデータ（documents/customers/offices/caremanagers） |
+| `documentGroups` | グループ別集計キャッシュ |
+| `errors` | エラー履歴 |
+| `gmailLogs` | Gmail受信ログ |
+| `users` | ユーザー管理 |
+| `settings` | アプリ設定 |
+| `search_index` | 検索インデックス（反転インデックス） |
+| `customerResolutionLogs` | 顧客解決監査ログ |
+| `officeResolutionLogs` | 事業所解決監査ログ |
+| `editLogs` | ドキュメント編集監査ログ |
+| `aliasLearningLogs` | エイリアス学習履歴 |
+| `uploadLogs` | アップロードログ |
+| `_migrations` | マイグレーション状態 |
+
+### /documents/{docId}（メインテーブル）
 
 ```
-/documents/{docId}                    # 書類管理T
+基本情報:
   - id: string
-  - processedAt: timestamp
-  - fileId: string
   - fileName: string
+  - fileId: string
   - mimeType: string
-  - ocrResult: string                 # 短い場合は直接保存
-  - ocrResultUrl: string              # 長い場合はCloud Storage参照
-  - documentType: string              # → /masters/documents参照
-  - customerName: string              # → /masters/customers参照
-  - officeName: string                # → /masters/offices参照
-  - fileUrl: string
-  - fileDate: timestamp
-  - isDuplicateCustomer: boolean
-  - allCustomerCandidates: string
+  - fileUrl: string                      # Cloud StorageプレビューURL
+  - sourceType: string                   # gmail | upload
+  - status: string                       # pending | processing | processed | error | split
+  - processedAt: timestamp
+  - updatedAt: timestamp
+
+OCR結果:
+  - ocrResult: string                    # OCR全文（短い場合）
+  - ocrResultUrl?: string                # Cloud Storage参照（長い場合）
+  - summary?: string                     # AI生成要約
+  - ocrExtraction?: object               # OCRフィールド抽出スナップショット
+  - pageResults?: array                  # ページ単位OCR結果
+
+書類情報:
+  - documentType: string                 # 書類種別 → /masters/documents参照
+  - fileDate: timestamp                  # 書類日付（抽出）
   - totalPages: number
   - targetPageNumber: number
-  - status: string                    # pending | processed | error
+  - category?: string
 
-/masters/documents/items/{name}       # 書類M
-  - name: string
-  - dateMarker: string                # 日付抽出の目印（例: "発行日"）
-  - category: string
+顧客確定:
+  - customerName: string                 # 顧客名（表示用）
+  - customerId?: string | null           # 顧客マスターID（該当なし=null）
+  - customerCandidates?: array           # 候補リスト（{id, name, score, furigana}）
+  - customerConfirmed?: boolean          # 確定済みフラグ（デフォルト: true）
+  - confirmedBy?: string | null          # 確定者UID
+  - confirmedAt?: timestamp | null
+  - isDuplicateCustomer: boolean         # 同姓同名フラグ
 
-/masters/customers/items/{id}         # 顧客M
-  - name: string
-  - isDuplicate: boolean              # 同姓同名フラグ
-  - furigana: string
-  - careManagerName: string           # 担当ケアマネジャー名（optional）
+事業所確定:
+  - officeName: string                   # 事業所名（表示用）
+  - officeId?: string | null             # 事業所マスターID
+  - officeCandidates?: array             # 候補リスト
+  - officeConfirmed?: boolean
+  - officeConfirmedBy?: string | null
+  - officeConfirmedAt?: timestamp | null
+  - suggestedNewOffice?: string | null   # 登録提案用
 
-/masters/offices/items/{name}         # 事業所M
-  - name: string
-  - shortName: string                 # 短縮名（optional、OCRマッチング用）
+ケアマネ:
+  - careManager?: string                 # ケアマネ名（顧客マスターから取得）
 
-/errors/{errorId}                     # エラー履歴T
-  - errorId: string
-  - errorDate: timestamp
-  - errorType: string                 # OCR完全失敗 | OCR部分失敗 | 情報抽出エラー | ファイル処理エラー | システムエラー
-  - fileName: string
-  - fileId: string
-  - totalPages: number
-  - successPages: number
-  - failedPages: number
-  - failedPageNumbers: string[]
-  - errorDetails: string
-  - fileUrl: string
-  - status: string                    # 未対応 | 対応中 | 完了
+グループ化キー（正規化版、onDocumentWriteトリガーで自動設定）:
+  - customerKey?: string
+  - officeKey?: string
+  - documentTypeKey?: string
+  - careManagerKey?: string
 
-/gmailLogs/{logId}                    # Gmail受信管理T
-  - fileName: string
-  - hash: string                      # MD5ハッシュ（重複検知用）
-  - fileSizeKB: number
-  - emailSubject: string
-  - processedAt: timestamp
-  - fileUrl: string
-  - emailBody: string
+OCR確認ステータス:
+  - verified?: boolean                   # 確認済みフラグ（デフォルト: false）
+  - verifiedBy?: string | null           # 確認者UID
+  - verifiedAt?: timestamp | null
 
-/settings/app                         # アプリ設定
-  - targetLabels: string[]            # 監視対象Gmailラベル
-  - labelSearchOperator: string       # AND | OR
-  - errorNotificationEmails: string[]
+PDF分割・回転:
+  - splitSuggestions?: array             # 分割候補
+  - pageRotations?: array               # ページ回転情報（永続保存）
+  - parentDocumentId?: string            # 分割元ドキュメントID
+  - splitFromPages?: object              # {start, end}
 
-/users/{uid}                          # ユーザー管理
-  - email: string
-  - role: string                      # admin | user
-  - createdAt: timestamp
-  - lastLoginAt: timestamp
+編集:
+  - editedBy?: string | null
+  - editedAt?: timestamp | null
 
-/search_index/{tokenId}               # 検索インデックス（反転インデックス）
-  - df: number                        # Document Frequency（IDF計算用）
+検索メタデータ（トリガー自動設定）:
+  - search?.version: number
+  - search?.tokens: string[]
+  - search?.tokenHash: string
+  - search?.indexedAt: timestamp
+```
+
+### /masters/{type}/items/{id}
+
+**type**: documents | customers | offices | caremanagers
+
+```
+共通:
+  - name: string                         # 名称
+  - aliases?: string[]                   # 許容される別表記（エイリアス学習）
+  - createdAt?: timestamp
+  - updatedAt?: timestamp
+
+documents（書類種別）:
+  - dateMarker: string                   # 日付抽出の目印（例: "発行日"）
+  - category: string                     # 書類カテゴリ
+  - keywords?: string[]                  # 照合用キーワード
+
+customers（顧客）:
+  - isDuplicate: boolean                 # 同姓同名フラグ
+  - furigana: string                     # ふりがな（照合用）
+  - careManagerName?: string             # 担当ケアマネジャー名
+  - notes?: string                       # 区別用補足情報
+
+offices（事業所）:
+  - shortName?: string                   # 短縮名（OCR照合用）
+  - isDuplicate: boolean                 # 同名フラグ
+  - nameKey?: string                     # 正規化キー
+  - notes?: string                       # 区別用補足情報
+
+caremanagers（ケアマネ）:
+  - email?: string                       # メールアドレス（Google Workspace）
+  - notes?: string
+```
+
+### /documentGroups/{groupId}
+
+groupId = `{groupType}_{groupKey}`（例: `customer_やまだたろう`）
+
+```
+  - id: string                           # {groupType}_{groupKey}
+  - groupType: string                    # customer | office | documentType | careManager
+  - groupKey: string                     # 正規化キー
+  - displayName: string                  # 表示名（元の値）
+  - count: number                        # グループ内ドキュメント数
+  - latestAt: timestamp                  # 最新処理日時
+  - latestDocs: array                    # プレビュー用（最新3件）
   - updatedAt: timestamp
-  - postings: map                     # ドキュメントIDをキーとしたマップ
-    - {docId}:
-      - score: number                 # TF-IDF計算用スコア
-      - fieldsMask: number            # フィールドビットマスク（customerName=1, officeName=2等）
-      - updatedAt: timestamp
+```
 
-  # フィールド重み（FIELD_WEIGHTS）:
-  # customerName: 3, officeName: 2, documentType: 2, careManager: 1, fileName: 1
-  # 検索対象外: processedAt, fileDate（日付パースで検索可能）
+### その他コレクション
 
-/_migrations/{migrationId}            # マイグレーション状態
-  - status: string                    # pending | running | completed | failed
-  - processedCount: number
-  - skippedCount: number
-  - errorCount: number
-  - completedAt: timestamp
+```
+/errors/{errorId}
+  - errorType: string                    # OCR完全失敗 | OCR部分失敗 | 情報抽出エラー | ファイル処理エラー | システムエラー
+  - fileName, fileId, errorDetails, fileUrl, status（未対応|対応中|完了）
+
+/gmailLogs/{logId}
+  - fileName, hash（MD5）, emailSubject, processedAt, fileUrl
+
+/users/{uid}
+  - email, role（admin|user）, createdAt, lastLoginAt
+
+/settings/app
+  - targetLabels: string[], labelSearchOperator（AND|OR）, errorNotificationEmails
+/settings/auth
+  - allowedDomains: string[]             # 自動ログイン許可ドメイン
+
+/search_index/{tokenId}                  # 反転インデックス + TF-IDF
+  - df: number, updatedAt: timestamp
+  - postings: map<docId, {score, fieldsMask, updatedAt}>
+  # fieldsMask: customerName=1, officeName=2, documentType=4, fileName=8, date=16
+
+/customerResolutionLogs/{logId}          # 顧客解決監査ログ
+  - documentId, previousCustomerId, newCustomerId, newCustomerName
+  - resolvedBy, resolvedByEmail, resolvedAt, reason?
+
+/officeResolutionLogs/{logId}            # 事業所解決監査ログ
+  - documentId, previousOfficeId, newOfficeId, newOfficeName
+  - resolvedBy, resolvedByEmail, resolvedAt, reason?
+
+/editLogs/{logId}                        # 編集監査ログ
+  - documentId, fieldName, editedBy, editedByEmail
+
+/aliasLearningLogs/{logId}               # エイリアス学習履歴
+  - masterType（office|customer|document）, masterId, masterName, alias
+  - learnedBy, learnedByEmail, learnedAt
+
+/uploadLogs/{logId}                      # アップロードログ
+
+/_migrations/{migrationId}               # マイグレーション状態
+  - status（pending|running|completed|failed）, processedCount, errorCount
 ```
 
 ## エラー種別定数

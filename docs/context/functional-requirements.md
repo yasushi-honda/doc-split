@@ -1,8 +1,8 @@
 ---
 title: "機能要件"
 description: "書類管理ビューアーアプリの機能要件定義"
-status: draft
-updated: "2026-01-17"
+status: completed
+updated: "2026-02-06"
 ---
 
 # 機能要件

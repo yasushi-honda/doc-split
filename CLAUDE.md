@@ -45,27 +45,6 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
 ## 今後の予定
 - [ ] 精度改善（フィードバック後）
 
-## Phase 8以降の追加実装（2026-01-22〜30）
-
-<details>
-<summary>クリックして展開（27項目完了）</summary>
-
-| 日付 | 実装内容 |
-|------|----------|
-| 01-22 | 事業所同名対応、本番デプロイ |
-| 01-24 | CSVインポート同名確認、Gmail監視UX改善、Secret Manager一元管理 |
-| 01-25 | クライアント環境セットアップ、OCR精度確認、担当ケアマネ追加、CORS設定、巻取りスクリプト、OCR編集機能、マスター登録提案UI、マスター新規追加機能、エイリアス学習機能 |
-| 01-26 | エイリアス学習UI拡張、検索機能実装 |
-| 01-27 | 本番運用開始、エイリアス学習UI（顧客・事業所追加）、ドメイン許可リストによる自動ログイン機能、**検索UI統一・日付パース強化** |
-| 01-28 | **PDF分割時のOCRマスター照合対応**、**UI簡素化（確認待ち機能削除→学習履歴機能に統合）**、**同姓同名対策（notes表示）**、**PDF回転の永続保存機能** |
-| 01-30 | **担当CM別ビューに顧客サブグループ表示**、ケアマネにemail/aliases追加、**⚠️本番データ障害復旧**、PITR/バックアップ有効化（ADR-0008）、**モバイルUI改善（メタ情報折りたたみ）**、**書類種別新規追加機能**、**AI要約機能** |
-| 01-31 | **OCR結果確認ステータス機能**（verified/verifiedBy/verifiedAt）、一覧画面に未確認バッジ・フィルター、閉じる確認ダイアログ、**OCR処理フロー改善**（Firestoreトリガー即時処理、アップロードUX改善）、**書類日付抽出の1ページ目優先ロジック**、**ダウンロード確認ダイアログ**、**デプロイ手順改善**（--rulesオプション追加） |
-| 02-01 | **PDFビューワUI改善**（モーダルサイズ固定、フィットモード125%、閉じるボタン明確化）、**確認ステータス楽観的更新**（トグル即時反映）、**一覧チェックマーク列追加** |
-| 02-05 | **キャッシュヘッダー設定追加**（古いビルド問題の根本対策）- index.htmlはno-cache、assetsはimmutable、**ソート機能改善**（書類一覧・処理履歴）- Firestoreクエリベースに変更、全データ対象のソート、**納品プロセス改善**（Authorized Domains自動設定、--with-gmailオプション、verify-setup.sh検証スクリプト）、**アプリ内ヘルプページ**（ユーザーガイド・管理者ガイド、印刷対応、目次クリック）、**セットアップ記録機能**（Firestore保存、設定画面で確認可能、コピーボタン）、**GitHub Pagesダークモード対応・Mermaid修正**、**全クライアント一括デプロイ**（deploy-all-clients.sh）、**設定画面モバイル対応** |
-| 02-06 | **一覧系画面の初期表示100件化＋無限スクロール対応**（書類一覧・処理履歴・グループビュー）、共通フック`useInfiniteScroll`/コンポーネント`LoadMoreIndicator`抽出（DRY）、ユニットテスト追加、**書類一覧ページレベルスクロール修正**、**顧客別あいうえお順ソート＋あかさたなフィルター**（kanaUtils共通関数、KanaFilterBarコンポーネント）、担当CM別顧客サブグループあいうえお順ソート、**フィルターパネル全タブ共通化＋期間指定フィルター追加**（DateRangeFilterコンポーネント、プリセット4種＋カスタム日付＋日付種別切替） |
-
-</details>
-
 ## クライアント環境
 
 クライアント環境は `.firebaserc` にエイリアスとして登録されています。
@@ -91,15 +70,6 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
 ### 環境ファイル構成
 - `.firebaserc`: プロジェクトエイリアス定義
 - `frontend/.env.<alias>`: 各環境のFirebase設定
-
-## 完了したインフラ設定（2026-01-19）
-- [x] コスト監視・予算アラート設定（月額3,000円、50%/80%/100%閾値）
-- [x] Cloud Monitoring エラー通知設定（Cloud Functions/Vertex AI）
-- [x] メール通知チャネル設定（hy.unimail.11@gmail.com）
-- [x] Gmail連携テスト完了（OAuth 2.0方式）
-  - Secret Manager設定修正（gmail-oauth-client-secret, gmail-oauth-refresh-token）
-  - gmailAuth.ts: Cloud Functions 2nd gen環境変数対応（GOOGLE_CLOUD_PROJECT）
-  - E2E動作確認（checkGmailAttachments正常実行）
 
 ## ドキュメント構成（AI向け）
 
@@ -312,22 +282,14 @@ node scripts/import-masters.js --file scripts/samples/customers.csv --type custo
 
 **トラブルシュート詳細**: `docs/operation/setup-guide.md` 参照
 
-## 確定した相談事項
-| 項目 | 決定内容 |
-|------|----------|
-| フロントエンドUI | Firebase Hosting + React SPA |
-| コスト上限 | 月額3,000円以下 |
-| Gmail連携 | 開発: OAuth 2.0、本番: Service Account + Delegation |
-| 監視対象メール | 設定画面で指定可能（開発用: `hy.unimail.11@gmail.com`） |
-| ログイン許可ユーザー | ホワイトリスト方式（設定画面で管理、管理アカウントあり） |
-| 納品形態 | クライアントGCP作成 → セットアップスクリプト実行（雛形なし方式） |
-
 ## 技術選定（全確定）
 | 項目 | 選定 | 理由 |
 |------|------|------|
 | データベース | **Firestore** | 無料枠で十分、Firebase統合 |
 | ストレージ | **Cloud Storage** | Cloud Functions連携がメイン |
 | VPC Service Controls | **不要** | コスト制約、アプリ層で担保 |
+| コスト上限 | **月額3,000円以下** | 予算アラート設定済み |
+| Gmail連携 | **開発: OAuth 2.0、本番: Service Account + Delegation** | 環境で切替 |
 
 ## 本番環境情報
 | 項目 | URL/情報 |
@@ -342,15 +304,18 @@ node scripts/import-masters.js --file scripts/samples/customers.csv --type custo
 | 関数名 | トリガー | 説明 |
 |--------|----------|------|
 | checkGmailAttachments | Scheduled (5分間隔) | Gmail添付ファイル取得 |
-| processOCR | Scheduled (1分間隔) | AI OCR処理 |
+| processOCR | Scheduled (1分間隔) | AI OCR処理（バックアップ） |
+| processOCROnCreate | Firestore Trigger | AI OCR処理（即時実行） |
 | getOcrText | Callable | OCR全文取得 |
 | detectSplitPoints | Callable | PDF分割候補検出 |
 | splitPdf | Callable | PDF分割実行 |
-| rotatePdfPages | Callable | PDFページ回転 |
+| rotatePdfPages | Callable | PDFページ回転（永続保存） |
 | uploadPdf | Callable | ローカルPDFアップロード |
 | deleteDocument | Callable | ドキュメント削除（管理者のみ） |
-| searchDocuments | Callable | 全文検索 |
-| onDocumentWriteSearchIndex | Trigger | 検索インデックス自動更新 |
+| regenerateSummary | Callable | AI要約再生成 |
+| searchDocuments | Callable | 全文検索（日付パース対応） |
+| onDocumentWriteSearchIndex | Firestore Trigger | 検索インデックス自動更新 |
+| onDocumentWrite | Firestore Trigger | グループキー設定・集計更新 |
 
 ### アップロード重複チェック仕様
 - **チェック方式**: ファイル名ベース（同名ファイルが存在するか）
@@ -370,19 +335,6 @@ node scripts/import-masters.js --file scripts/samples/customers.csv --type custo
 - **日付検索**: 「2024/1」「R6.1」などの日付パースで fileDate を検索可能
 - **トークナイズ**: bi-gram + キーワード抽出
 
-## 設計完了済み
-- [x] 移行スコープ定義
-- [x] 機能要件定義（P0/P1/P2）
-- [x] データモデル（Firestoreスキーマ）
-- [x] 認証設計（Firebase Auth + ホワイトリスト + Gmail環境切替）
-- [x] フロントエンド設計（React + shadcn/ui）
-- [x] 実装計画（5フェーズ + 完了チェックリスト）
-- [x] 元システム知見の反映
-- [x] 納品準備設計（スクリプト・ドキュメント構成）
-- [x] エラーハンドリングポリシー
-- [x] Geminiレート制限設計
-- [x] マスターデータCSVサンプル
-
 ## ファイル構成
 ```
 doc-split/
@@ -395,79 +347,78 @@ doc-split/
 │   ├── src/
 │   │   ├── components/          # UIコンポーネント
 │   │   │   ├── ui/              # shadcn/ui
-│   │   │   ├── PdfViewer.tsx    # PDFビューアー
+│   │   │   ├── views/           # ビュー系（GroupList, GroupDocumentList等）
 │   │   │   ├── DocumentDetailModal.tsx  # 詳細モーダル
-│   │   │   ├── PdfSplitModal.tsx    # PDF分割モーダル ★Phase 4
-│   │   │   └── Layout.tsx       # レイアウト
+│   │   │   ├── PdfViewer.tsx    # PDFビューアー
+│   │   │   ├── PdfSplitModal.tsx       # PDF分割モーダル
+│   │   │   ├── PdfUploadModal.tsx      # PDFアップロード
+│   │   │   ├── SearchBar.tsx           # 検索バー
+│   │   │   ├── DateRangeFilter.tsx     # 期間指定フィルター
+│   │   │   ├── KanaFilterBar.tsx       # あかさたなフィルター
+│   │   │   ├── LoadMoreIndicator.tsx   # 無限スクロール
+│   │   │   ├── AliasLearningHistoryModal.tsx  # エイリアス学習履歴
+│   │   │   ├── RegisterNewMasterModal.tsx     # マスター新規登録提案
+│   │   │   ├── Layout.tsx       # レイアウト
+│   │   │   └── __tests__/       # コンポーネントテスト
 │   │   ├── hooks/               # カスタムフック
-│   │   │   ├── useDocuments.ts  # Firestore書類連携
+│   │   │   ├── useDocuments.ts  # Firestore書類連携（日付フィルター対応）
+│   │   │   ├── useDocumentGroups.ts   # グループビュー連携
+│   │   │   ├── useDocumentEdit.ts     # 書類メタ情報編集
+│   │   │   ├── useDocumentVerification.ts  # OCR確認ステータス
+│   │   │   ├── useInfiniteScroll.ts   # 無限スクロール共通フック
+│   │   │   ├── useSearch.ts           # 全文検索
+│   │   │   ├── useMasters.ts          # マスターデータCRUD
+│   │   │   ├── useMasterAlias.ts      # エイリアス学習
+│   │   │   ├── useAliasLearningHistory.ts  # 学習履歴
+│   │   │   ├── useProcessingHistory.ts     # 処理履歴
 │   │   │   ├── useSettings.ts   # 設定・ユーザー管理
 │   │   │   ├── useErrors.ts     # エラー履歴連携
 │   │   │   ├── usePdfSplit.ts   # PDF分割連携
-│   │   │   └── useMasters.ts    # マスターデータCRUD ★Phase 4
+│   │   │   └── __tests__/       # フックテスト
 │   │   ├── pages/               # 各画面
-│   │   │   ├── DocumentsPage.tsx    # 書類一覧
-│   │   │   ├── SettingsPage.tsx     # 設定画面
-│   │   │   ├── ErrorsPage.tsx       # エラー履歴
-│   │   │   ├── MastersPage.tsx      # マスターデータ編集 ★Phase 4
-│   │   │   └── LoginPage.tsx        # ログイン
+│   │   │   ├── DocumentsPage.tsx       # 書類一覧（タブ切替・フィルター）
+│   │   │   ├── ProcessingHistoryPage.tsx  # 処理履歴
+│   │   │   ├── HelpPage.tsx            # アプリ内ヘルプ
+│   │   │   ├── AdminPage.tsx           # 管理者ページ
+│   │   │   ├── SettingsPage.tsx        # 設定画面
+│   │   │   ├── ErrorsPage.tsx          # エラー履歴
+│   │   │   ├── MastersPage.tsx         # マスターデータ編集
+│   │   │   └── LoginPage.tsx           # ログイン
 │   │   ├── stores/              # Zustand
 │   │   └── lib/                 # Firebase SDK等
-│   ├── components.json          # shadcn/ui設定 ★Phase 3
 │   └── package.json
 ├── functions/                   # Cloud Functions
 │   ├── src/
+│   │   ├── index.ts             # エントリポイント（全関数エクスポート）
 │   │   ├── gmail/               # checkGmailAttachments
-│   │   ├── ocr/                 # processOCR
-│   │   ├── pdf/                 # pdfOperations（分割・回転）
+│   │   ├── ocr/                 # processOCR, processOCROnCreate
+│   │   ├── pdf/                 # splitPdf, rotatePdfPages, detectSplitPoints
+│   │   ├── search/              # searchDocuments
+│   │   ├── upload/              # uploadPdf
+│   │   ├── documents/           # deleteDocument, getOcrText, regenerateSummary
+│   │   ├── admin/               # 管理者向け操作
+│   │   ├── triggers/            # onDocumentWrite, onDocumentWriteSearchIndex
 │   │   └── utils/               # 共通ユーティリティ
-│   │       ├── retry.ts         # リトライ機能
-│   │       ├── errorLogger.ts   # エラーログ
-│   │       ├── gmailAuth.ts     # Gmail認証切替
-│   │       ├── rateLimiter.ts   # Geminiレート制限
-│   │       ├── similarity.ts    # 類似度マッチング
-│   │       ├── textNormalizer.ts    # テキスト正規化 ★Phase 6A
-│   │       ├── extractors.ts        # 情報抽出 ★Phase 6B
-│   │       ├── fileNaming.ts        # ファイル名生成 ★Phase 6C
-│   │       └── pdfAnalyzer.ts       # PDF分析 ★Phase 6D
 │   ├── test/                    # テスト
-│   │   ├── firestore.rules.test.ts  # セキュリティルールテスト
-│   │   ├── similarity.test.ts       # 類似度テスト
-│   │   ├── textNormalizer.test.ts   # テキスト正規化テスト ★Phase 6A
-│   │   ├── extractors.test.ts       # 情報抽出テスト ★Phase 6B
-│   │   ├── fileNaming.test.ts       # ファイル名生成テスト ★Phase 6C
-│   │   └── pdfAnalyzer.test.ts      # PDF分析テスト ★Phase 6D
 │   └── package.json
-├── scripts/                     # サポート用スクリプト
-│   ├── init-project.sh          # 顧客固有設定の変更
+├── scripts/                     # 運用・セットアップスクリプト
+│   ├── setup-tenant.sh          # テナント初期設定（推奨: --with-gmail）
+│   ├── setup-gmail-auth.sh      # Gmail OAuth認証設定
+│   ├── verify-setup.sh          # セットアップ検証
+│   ├── deploy-to-project.sh     # マルチ環境デプロイ
+│   ├── deploy-all-clients.sh    # 全クライアント一括デプロイ
 │   ├── import-masters.js        # マスターデータ投入（CLI）
-│   └── samples/                 # CSVサンプル ★NEW
-│       ├── customers.csv
-│       ├── documents.csv
-│       ├── offices.csv
-│       └── caremanagers.csv
+│   ├── check-allowed-domains.js # ドメイン許可リスト管理
+│   ├── migrate-*.js             # マイグレーションスクリプト群
+│   └── samples/                 # CSVサンプル
 ├── shared/                      # 共通型定義
 │   └── types.ts
 └── docs/
-    ├── context/
-    │   ├── gcp-migration-scope.md
-    │   ├── functional-requirements.md
-    │   ├── implementation-plan.md      # 完了チェックリスト付き
-    │   ├── data-model.md
-    │   ├── delivery-and-update-guide.md  # 納品・アップデート運用 ★NEW
-    │   ├── business-logic.md
-    │   ├── error-handling-policy.md
-    │   └── gemini-rate-limiting.md
-    ├── operation/                      # 運用ドキュメント ★Phase 5
-    │   ├── user-guide.md               # ユーザーガイド
-    │   ├── admin-guide.md              # 管理者ガイド
-    │   └── setup-guide.md              # セットアップ手順書
-    ├── adr/
-    │   ├── 0001-tech-stack-selection.md
-    │   ├── 0002-security-design.md
-    │   ├── 0003-authentication-design.md
-    │   └── 0004-frontend-architecture.md
-    └── reference/
-        ├── gas-source/                 # GASソースコード（要クローン）
-        └── *.md                        # 技術ドキュメント
+    ├── context/                 # 開発用詳細（マスター）
+    ├── operation/               # 運用ドキュメント
+    ├── adr/                     # ADR（0001〜0008）
+    ├── audit/                   # 監査レポート
+    ├── handoff/                 # ハンドオフメモ
+    └── reference/               # 旧システム参照（アーカイブ）
+```
 ```

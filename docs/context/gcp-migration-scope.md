@@ -2,8 +2,8 @@
 title: "GCP移行スコープ"
 description: "AppSheet→GCP移行の対象範囲と要件定義"
 purpose: "AI駆動開発時のコンテキストとして優先読込"
-status: draft
-updated: "2026-01-17"
+status: completed
+updated: "2026-02-06"
 ---
 
 # GCP移行スコープ
