@@ -8,6 +8,7 @@
 
 | PR/コミット | 内容 |
 |----|------|
+| #66 | **OAuth OOB→loopback方式移行+納品ページ改善**（setup-gmail-auth.sh/docs） |
 | 7ea4e65 | **Claude Code自動納品プロンプトジェネレーターページ追加**（GitHub Pages） |
 | 59a027f | **deploy-all-clients.shに非対話モード(--yes)追加**＋Node.js v24互換修正 |
 | #65 | **setup-tenant.sh/setup-gmail-auth.shに非対話モード追加**（`--yes`, `--client-id/secret/auth-code`） |
@@ -23,13 +24,17 @@
 
 - **7ea4e65 GitHub Pages自動納品ページ**: `docs/claude-code-delivery.md` + `docs/index.html` にJS追加
   - フォーム入力→プロンプト自動生成→コピーボタンでClaude Codeに貼付け
-  - 最小版/フル版の2パターン、OAuth認証URL自動生成機能付き
+  - 最小版/フル版の2パターン
   - Docsifyの制約でJSは `index.html` にグローバル配置（markdown内`<script>`は実行タイミング問題）
   - DRY: `_buildMinimal(fmt)` / `_buildFull(fmt)` でフォーマッター関数切替（raw/html）
 - **59a027f deploy-all-clients.sh**: `--yes`/`-y`非対話モード追加 + Node.js v24で`require('.json')`不可の互換修正
 - **#65**: setup-tenant.sh/setup-gmail-auth.sh非対話モード
 - **#64**: ドキュメント5ファイルのコマンド記載を実スクリプト引数仕様に修正
-- **Claude Code納品フロー**: 人間はOAuth認証コード取得のみ、他は全自動
+- **#66 OAuth loopback移行**: OOB方式(2023年Google廃止済み)→loopback(`localhost:18234`)に移行
+  - `setup-gmail-auth.sh`: Python HTTPサーバーで認証コード自動取得、`--get-code`モード追加
+  - `docs/claude-code-delivery.md`: 開発者の前提条件セクション追加、Step 3をloopbackコマンドに更新
+  - `docs/index.html`: プロンプト生成を正確なコマンド形式（値埋め込み）に改善、OOB関連JS削除
+- **Claude Code納品フロー**: 人間はOAuth認証コード取得（loopback方式）のみ、他は全自動
 
 ### 技術的なポイント（#63 フィルターパネル＋期間指定）
 
