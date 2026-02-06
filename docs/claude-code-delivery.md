@@ -186,6 +186,22 @@
 
 ---
 
+## 開発者の前提条件
+
+<div class="warn-box">
+以下がすべて満たされていることを確認してから作業を開始してください。
+</div>
+
+| 条件 | 確認方法 |
+|------|---------|
+| doc-split リポジトリをクローン済み | `ls CLAUDE.md` |
+| `gcloud` CLI 認証済み | `gcloud auth list` |
+| ADC（Application Default Credentials）設定済み | `gcloud auth application-default login` |
+| クライアントGCPプロジェクトのオーナー/編集者権限 | クライアントから招待済み |
+| Python 3 インストール済み | `python3 --version` |
+
+---
+
 ## 事前準備（人間が行う作業）
 
 <div class="step-card">
@@ -200,7 +216,7 @@
   <div class="step-num">2</div>
   <div class="step-content">
     <strong>GCP Console で OAuth クライアントID作成</strong><br>
-    <a href="https://console.cloud.google.com/apis/credentials" target="_blank">認証情報ページ</a> → 「認証情報を作成」→「OAuth クライアント ID」→ 種類: <code>デスクトップアプリ</code><br>
+    <a href="https://console.cloud.google.com/apis/credentials" target="_blank">認証情報ページ</a>（クライアントのプロジェクトを選択）→ 「認証情報を作成」→「OAuth クライアント ID」→ 種類: <code>デスクトップアプリ</code><br>
     → <strong>Client ID</strong> と <strong>Client Secret</strong> をメモ
   </div>
 </div>
@@ -209,8 +225,9 @@
   <div class="step-num">3</div>
   <div class="step-content">
     <strong>OAuth 認証コードを取得</strong><br>
-    下のフォームにClient IDを入力すると認証URLが自動生成されます。<br>
-    ブラウザで開く → Googleログイン → 表示された<strong>認証コード</strong>をコピー
+    doc-split ディレクトリで以下のコマンドを実行:<br>
+    <code>./scripts/setup-gmail-auth.sh --get-code --client-id=&lt;上で取得したClient ID&gt;</code><br>
+    ブラウザが自動で開く → Googleログイン → ターミナルに表示された<strong>認証コード</strong>をコピー
   </div>
 </div>
 
@@ -242,19 +259,8 @@
     <input type="text" id="client-secret" placeholder="GOCSPX-xxxx" oninput="updatePrompts()">
   </div>
   <div class="form-group full-width">
-    <label>認証コード *（上のClient IDを入力すると認証URLが表示されます）</label>
+    <label>認証コード *（<code>./scripts/setup-gmail-auth.sh --get-code --client-id=X</code> で取得）</label>
     <input type="text" id="auth-code" placeholder="4/0AY-xxxx" oninput="updatePrompts()">
-  </div>
-</div>
-<div id="auth-url-box" style="display:none; margin-top:8px;">
-  <div class="info-box">
-    <strong>認証URL:</strong> 以下のURLをブラウザで開いて認証コードを取得してください<br>
-    <div style="margin-top:8px; position:relative;">
-      <code id="auth-url-text" style="word-break:break-all; font-size:12px;"></code>
-      <button onclick="copyAuthUrl()" class="copy-btn" id="auth-url-copy-btn" style="margin-top:8px; font-size:12px; padding:4px 10px;">
-        URL をコピー
-      </button>
-    </div>
   </div>
 </div>
 
