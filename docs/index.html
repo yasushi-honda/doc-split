@@ -319,7 +319,11 @@
       }
       lines += '\n4. 最終検証:\n'
         + '   ./scripts/verify-setup.sh ' + p + '\n\n'
-        + '5. 結果をサマリーで報告';
+        + '5. 結果をサマリーで報告\n\n'
+        + '■ 禁止事項\n'
+        + '- firebase firestore:delete --all-collections は絶対禁止\n'
+        + '- 本番環境にサンプルデータを投入しない\n'
+        + '- 失敗時は3回まで再試行、それ以上は報告して停止';
       return lines;
     }
 

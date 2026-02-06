@@ -348,5 +348,21 @@
 
 ---
 
+## 次回以降のアップデート
+
+`setup-tenant.sh` により `.firebaserc` にエイリアスが自動登録されます。以降のアップデートは以下で実行できます:
+
+```bash
+# フロントエンドのみ（通常のアップデート）
+./scripts/deploy-to-project.sh <project-id>
+
+# 全クライアント一括
+./scripts/deploy-all-clients.sh
+```
+
+詳細は [納品・アップデートガイド](context/delivery-and-update-guide.md) を参照してください。
+
+---
+
 > **関連ドキュメント**: [納品フロー詳細](deployment-flow.md) | [セットアップ手順](setup-guide.md) | [Gmail設定ガイド](operation/gmail-setup-guide.md)
 
