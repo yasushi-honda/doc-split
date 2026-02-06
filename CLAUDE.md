@@ -165,8 +165,13 @@ frontend/
 
 ### マスターデータ
 ```bash
-# マスターデータインポート
-node scripts/import-masters.js --file scripts/samples/customers.csv --type customers
+# マスターデータインポート（個別）
+FIREBASE_PROJECT_ID=<project-id> node scripts/import-masters.js --customers scripts/samples/customers.csv
+FIREBASE_PROJECT_ID=<project-id> node scripts/import-masters.js --documents scripts/samples/documents.csv
+FIREBASE_PROJECT_ID=<project-id> node scripts/import-masters.js --offices scripts/samples/offices.csv
+
+# 一括インポート（ディレクトリ内のCSVを自動検出）
+FIREBASE_PROJECT_ID=<project-id> node scripts/import-masters.js --all scripts/samples/
 ```
 
 ## 確定事項

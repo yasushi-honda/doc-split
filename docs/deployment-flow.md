@@ -385,11 +385,19 @@
 ### マスターデータ投入
 
 <div class="command-box">
-<code>node scripts/import-masters.js --file customers.csv --type customers -P &lt;alias&gt;</code>
+<code>FIREBASE_PROJECT_ID=&lt;project-id&gt; node scripts/import-masters.js --customers customers.csv</code>
 </div>
 
 <div class="command-box">
-<code>node scripts/import-masters.js --file documents.csv --type documents -P &lt;alias&gt;</code>
+<code>FIREBASE_PROJECT_ID=&lt;project-id&gt; node scripts/import-masters.js --documents documents.csv</code>
+</div>
+
+<div class="command-box">
+<code>FIREBASE_PROJECT_ID=&lt;project-id&gt; node scripts/import-masters.js --offices offices.csv</code>
+</div>
+
+<div class="command-box">
+<code>FIREBASE_PROJECT_ID=&lt;project-id&gt; node scripts/import-masters.js --all ./data/</code>
 </div>
 
 </div>
