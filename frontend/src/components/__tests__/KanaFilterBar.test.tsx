@@ -60,4 +60,30 @@ describe('KanaFilterBar', () => {
     fireEvent.click(screen.getByRole('button', { name: 'た' }));
     expect(onSelect).toHaveBeenCalledWith(null);
   });
+
+  it('disabled=trueのとき全ボタンが無効化される', () => {
+    const onSelect = vi.fn();
+    render(<KanaFilterBar selected={null} onSelect={onSelect} disabled={true} />);
+
+    const allButton = screen.getByRole('button', { name: '全' });
+    expect(allButton.hasAttribute('disabled')).toBe(true);
+
+    const kaButton = screen.getByRole('button', { name: 'か' });
+    expect(kaButton.hasAttribute('disabled')).toBe(true);
+
+    // クリックしてもonSelectが呼ばれない
+    fireEvent.click(kaButton);
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it('disabled=falseのとき通常動作する', () => {
+    const onSelect = vi.fn();
+    render(<KanaFilterBar selected={null} onSelect={onSelect} disabled={false} />);
+
+    const kaButton = screen.getByRole('button', { name: 'か' });
+    expect(kaButton.hasAttribute('disabled')).toBe(false);
+
+    fireEvent.click(kaButton);
+    expect(onSelect).toHaveBeenCalledWith('か');
+  });
 });
