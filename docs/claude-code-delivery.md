@@ -195,7 +195,9 @@
 | 条件 | 確認方法 |
 |------|---------|
 | macOS / Linux / WSL 環境 | `uname` |
-| doc-split リポジトリをクローン済み | `ls CLAUDE.md` |
+| Node.js >= 20 インストール済み | `node --version` |
+| Firebase CLI インストール済み | `firebase --version`（未導入時: `npm install -g firebase-tools`） |
+| doc-split リポジトリをクローン済み＋依存インストール済み | `ls CLAUDE.md && ls frontend/node_modules` （未実行時: `npm install`） |
 | `gcloud` CLI 認証済み | `gcloud auth list` |
 | ADC（Application Default Credentials）設定済み | `gcloud auth application-default login` |
 | クライアントGCPプロジェクトのオーナー/編集者権限 | クライアントから招待済み |
@@ -216,19 +218,27 @@
 <div class="step-card">
   <div class="step-num">2</div>
   <div class="step-content">
-    <strong>GCP Console で OAuth クライアントID作成</strong><br>
-    <a href="https://console.cloud.google.com/apis/credentials" target="_blank">認証情報ページ</a>（クライアントのプロジェクトを選択）→ 「認証情報を作成」→「OAuth クライアント ID」→ 種類: <code>デスクトップアプリ</code><br>
-    → <strong>Client ID</strong> と <strong>Client Secret</strong> をメモ
+    <strong>GCP Console で OAuth 同意画面を設定</strong><br>
+    <a href="https://console.cloud.google.com/apis/credentials/consent" target="_blank">OAuth同意画面</a>（クライアントのプロジェクトを選択）→ User Type: <code>外部</code> → アプリ名: <code>DocSplit</code>、サポートメール入力 → スコープ追加: <code>gmail.readonly</code> → テストユーザーに<strong>監視対象のGmailアドレス</strong>を追加
   </div>
 </div>
 
 <div class="step-card">
   <div class="step-num">3</div>
   <div class="step-content">
+    <strong>GCP Console で OAuth クライアントID作成</strong><br>
+    <a href="https://console.cloud.google.com/apis/credentials" target="_blank">認証情報ページ</a>（同じプロジェクト）→ 「認証情報を作成」→「OAuth クライアント ID」→ 種類: <code>デスクトップアプリ</code><br>
+    → <strong>Client ID</strong> と <strong>Client Secret</strong> をメモ
+  </div>
+</div>
+
+<div class="step-card">
+  <div class="step-num">4</div>
+  <div class="step-content">
     <strong>OAuth 認証コードを取得</strong><br>
     doc-split ディレクトリで以下のコマンドを実行:<br>
     <code>./scripts/setup-gmail-auth.sh --get-code --client-id=&lt;上で取得したClient ID&gt;</code><br>
-    ブラウザが自動で開く → Googleログイン → ターミナルに表示された<strong>認証コード</strong>をコピー
+    ブラウザが自動で開く → Googleログイン（Step 2で追加したテストユーザーでログイン） → ターミナルに表示された<strong>認証コード</strong>をコピー
   </div>
 </div>
 

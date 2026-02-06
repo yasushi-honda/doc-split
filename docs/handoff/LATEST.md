@@ -8,6 +8,7 @@
 
 | PR/コミット | 内容 |
 |----|------|
+| (未push) | **納品ページの前提条件・事前準備手順を補完**（Node.js/Firebase CLI/npm install追加、OAuth同意画面ステップ追加） |
 | bd66bfe | **納品ページの前提条件にOS要件（macOS/Linux/WSL）追加** |
 | #66 | **OAuth OOB→loopback方式移行+納品ページ改善**（setup-gmail-auth.sh/docs） |
 | 7ea4e65 | **Claude Code自動納品プロンプトジェネレーターページ追加**（GitHub Pages） |
