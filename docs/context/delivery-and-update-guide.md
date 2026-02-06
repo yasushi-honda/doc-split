@@ -84,9 +84,14 @@ gcloud config set project <client-project-id>
 # 2-2. セットアップスクリプト実行（Gmail OAuth込みで一括）
 ./scripts/setup-tenant.sh <client-project-id> <admin-email> --with-gmail
 
+# Claude Code / CI用（非対話モード）
+./scripts/setup-tenant.sh <client-project-id> <admin-email> --yes
+./scripts/setup-tenant.sh <client-project-id> <admin-email> --with-gmail --client-id=X --client-secret=Y --auth-code=Z --yes
+
 # または、Gmail設定を後から行う場合
 ./scripts/setup-tenant.sh <client-project-id> <admin-email>
 ./scripts/setup-gmail-auth.sh <client-project-id>
+./scripts/setup-gmail-auth.sh <client-project-id> --client-id=X --client-secret=Y --auth-code=Z
 
 # ※ .firebasercへのエイリアス追加は自動で行われます
 
@@ -250,9 +255,13 @@ git push origin main
 # 2. セットアップ実行（--with-gmail推奨、.firebasercへのエイリアス追加も自動）
 ./scripts/setup-tenant.sh <new-client-project-id> <admin-email> --with-gmail
 
+# Claude Code / CI用（非対話モード）
+./scripts/setup-tenant.sh <new-client-project-id> <admin-email> --with-gmail --client-id=X --client-secret=Y --auth-code=Z --yes
+
 # Gmail設定を後から行う場合
 # ./scripts/setup-tenant.sh <new-client-project-id> <admin-email>
 # ./scripts/setup-gmail-auth.sh <new-client-project-id>
+# ./scripts/setup-gmail-auth.sh <new-client-project-id> --client-id=X --client-secret=Y --auth-code=Z
 
 # 3. マスターデータ投入
 FIREBASE_PROJECT_ID=<new-client-project-id> node scripts/import-masters.js --customers <customers.csv>

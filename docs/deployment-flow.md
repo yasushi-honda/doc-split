@@ -325,6 +325,12 @@
 <code>./scripts/setup-tenant.sh &lt;project-id&gt; &lt;admin-email&gt; --with-gmail</code>
 </div>
 
+Claude Code / CI用（非対話モード）:
+
+<div class="command-box">
+<code>./scripts/setup-tenant.sh &lt;project-id&gt; &lt;admin-email&gt; --with-gmail --client-id=X --client-secret=Y --auth-code=Z --yes</code>
+</div>
+
 このコマンド1つで以下が**すべて自動実行**されます：
 
 <div class="timeline">
