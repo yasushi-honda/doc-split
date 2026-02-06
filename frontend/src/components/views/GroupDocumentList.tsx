@@ -7,7 +7,6 @@
 
 import { useMemo } from 'react';
 import { FileText, Loader2 } from 'lucide-react';
-import { Timestamp } from 'firebase/firestore';
 import { Badge } from '@/components/ui/badge';
 import { LoadMoreIndicator } from '@/components/LoadMoreIndicator';
 import { useInfiniteScroll } from '@/hooks/useInfiniteScroll';
@@ -117,14 +116,19 @@ function DocumentRow({ document, groupType, onClick }: DocumentRowProps) {
 function filterByDate(docs: Document[], dateFilter?: DateRange): Document[] {
   if (!dateFilter?.dateFrom && !dateFilter?.dateTo) return docs;
 
-  const field = dateFilter.dateField || 'fileDate';
   return docs.filter((doc) => {
-    const ts = doc[field] as Timestamp | undefined;
-    if (!ts) return false;
-    const date = ts.toDate();
-    if (dateFilter.dateFrom && date < dateFilter.dateFrom) return false;
-    if (dateFilter.dateTo && date > dateFilter.dateTo) return false;
-    return true;
+    try {
+      const ts = dateFilter.dateField === 'processedAt'
+        ? doc.processedAt
+        : doc.fileDate;
+      if (!ts) return false;
+      const date = ts.toDate();
+      if (dateFilter.dateFrom && date < dateFilter.dateFrom) return false;
+      if (dateFilter.dateTo && date > dateFilter.dateTo) return false;
+      return true;
+    } catch {
+      return false;
+    }
   });
 }
 

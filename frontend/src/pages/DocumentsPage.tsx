@@ -300,7 +300,7 @@ export function DocumentsPage() {
     dateField: dateRange.dateField,
     sortField,
     sortOrder,
-  }), [effectiveStatusFilter, documentTypeFilter, dateRange.dateFrom, dateRange.dateTo, dateRange.dateField, sortField, sortOrder])
+  }), [effectiveStatusFilter, documentTypeFilter, dateRange.dateFrom?.getTime(), dateRange.dateTo?.getTime(), dateRange.dateField, sortField, sortOrder])
 
   // データ取得（無限スクロール対応）
   const {
