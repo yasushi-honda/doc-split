@@ -59,3 +59,31 @@ jobs:
 
       - name: Run unit tests
         run: npm run test:functions
+
+      - name: Install Playwright browsers
+        run: cd frontend && npx playwright install --with-deps chromium
+
+      - name: Run E2E tests
+        run: |
+          firebase emulators:exec --only auth,firestore \
+            'FIRESTORE_EMULATOR_HOST=localhost:8085 node scripts/seed-e2e-data.js && \
+             cd frontend && \
+             npx vite --port 5173 & sleep 5 && \
+             E2E_BASE_URL=http://localhost:5173 CI=true npx playwright test --grep @emulator'
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+          VITE_USE_FIREBASE_EMULATOR: 'true'
+          VITE_FIREBASE_API_KEY: 'fake-api-key-for-emulator'
+          VITE_FIREBASE_AUTH_DOMAIN: 'localhost'
+          VITE_FIREBASE_PROJECT_ID: 'doc-split-dev'
+          VITE_FIREBASE_STORAGE_BUCKET: 'doc-split-dev.appspot.com'
+          VITE_FIREBASE_MESSAGING_SENDER_ID: '000000000000'
+          VITE_FIREBASE_APP_ID: '1:000:web:fake'
+
+      - name: Upload Playwright report
+        uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: playwright-report
+          path: frontend/playwright-report/
+          retention-days: 7

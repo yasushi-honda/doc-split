@@ -5,15 +5,15 @@
 
 import { test, expect, devices } from '@playwright/test';
 
-// モバイルデバイス設定
+// モバイルデバイス設定（test.useはdescribe外で設定）
 const mobileDevice = devices['iPhone 14'];
 
-test.describe('モバイルPDFビュー @emulator', () => {
-  test.use({
-    ...mobileDevice,
-    baseURL: process.env.E2E_BASE_URL || 'http://localhost:5173',
-  });
+test.use({
+  ...mobileDevice,
+  baseURL: process.env.E2E_BASE_URL || 'http://localhost:5173',
+});
 
+test.describe('モバイルPDFビュー @emulator', () => {
   test.beforeEach(async ({ page }) => {
     // エミュレータのAuth UIにアクセス
     await page.goto('/');

@@ -5,6 +5,7 @@
  * - テストユーザー作成
  * - 事業所未確定テストドキュメント作成
  * - あかさたなフィルターテスト用の顧客マスター・書類データ作成
+ * - 主要フローテスト用（ステータス別・書類種別別ドキュメント）
  *
  * 使用方法:
  *   FIRESTORE_EMULATOR_HOST=localhost:8085 node scripts/seed-e2e-data.js
@@ -213,6 +214,106 @@ async function seedFilterTestDocuments(customers) {
   console.log(`✅ フィルターテスト用書類 ${docs.length}件作成`);
 }
 
+/**
+ * 主要フローテスト用書類データ作成
+ * - 各ステータスの書類（統計カード・フィルター検証用）
+ * - 詳細メタ情報付き書類（詳細モーダル検証用）
+ * - 異なる書類種別（領収書等）
+ */
+async function seedMainFlowTestDocuments() {
+  console.log('\n📄 主要フローテスト用書類を作成中...');
+
+  const docs = [
+    {
+      id: 'e2e-detail-001',
+      data: {
+        fileName: 'E2E_テスト請求書_詳細確認用.pdf',
+        fileUrl: 'gs://doc-split-dev-documents/test/e2e-detail-001.pdf',
+        mimeType: 'application/pdf',
+        totalPages: 3,
+        status: 'processed',
+        customerId: 'e2e-cust-a',
+        customerName: '阿部太郎',
+        customerConfirmed: true,
+        officeId: 'office-001',
+        officeName: 'テスト第一事業所',
+        officeConfirmed: true,
+        documentType: '請求書',
+        fileDate: Timestamp.fromDate(new Date('2026-01-15')),
+        processedAt: Timestamp.now(),
+        createdAt: Timestamp.now(),
+        summary: 'テスト請求書のAI要約です。金額10,000円。',
+        verified: false,
+      },
+    },
+    {
+      id: 'e2e-pending-001',
+      data: {
+        fileName: 'E2E_テスト_待機中.pdf',
+        fileUrl: 'gs://doc-split-dev-documents/test/e2e-pending-001.pdf',
+        mimeType: 'application/pdf',
+        totalPages: 1,
+        status: 'pending',
+        customerName: '',
+        documentType: '',
+        createdAt: Timestamp.now(),
+      },
+    },
+    {
+      id: 'e2e-processing-001',
+      data: {
+        fileName: 'E2E_テスト_処理中.pdf',
+        fileUrl: 'gs://doc-split-dev-documents/test/e2e-processing-001.pdf',
+        mimeType: 'application/pdf',
+        totalPages: 1,
+        status: 'processing',
+        customerName: '',
+        documentType: '',
+        createdAt: Timestamp.now(),
+      },
+    },
+    {
+      id: 'e2e-error-001',
+      data: {
+        fileName: 'E2E_テスト_エラー.pdf',
+        fileUrl: 'gs://doc-split-dev-documents/test/e2e-error-001.pdf',
+        mimeType: 'application/pdf',
+        totalPages: 1,
+        status: 'error',
+        customerName: '',
+        documentType: '',
+        errorMessage: 'OCR処理に失敗しました',
+        createdAt: Timestamp.now(),
+      },
+    },
+    {
+      id: 'e2e-receipt-001',
+      data: {
+        fileName: 'E2E_テスト領収書_山本八郎.pdf',
+        fileUrl: 'gs://doc-split-dev-documents/test/e2e-receipt-001.pdf',
+        mimeType: 'application/pdf',
+        totalPages: 1,
+        status: 'processed',
+        customerId: 'e2e-cust-ya',
+        customerName: '山本八郎',
+        customerConfirmed: true,
+        officeId: 'office-001',
+        officeName: 'テスト第一事業所',
+        officeConfirmed: true,
+        documentType: '領収書',
+        fileDate: Timestamp.fromDate(new Date('2026-01-20')),
+        processedAt: Timestamp.now(),
+        createdAt: Timestamp.now(),
+      },
+    },
+  ];
+
+  for (const doc of docs) {
+    await db.collection('documents').doc(doc.id).set(doc.data);
+  }
+  console.log(`✅ 主要フローテスト用書類 ${docs.length}件作成`);
+}
+
 async function main() {
   console.log('🚀 E2Eテスト用シードデータ作成開始');
   console.log(`プロジェクト: ${projectId}\n`);
@@ -221,6 +322,7 @@ async function main() {
   await seedTestDocuments();
   const customers = await seedCustomerMasters();
   await seedFilterTestDocuments(customers);
+  await seedMainFlowTestDocuments();
 
   console.log('\n✅ シードデータ作成完了');
   console.log('\nテストユーザー情報:');
