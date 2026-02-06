@@ -88,15 +88,15 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
 | `docs/reference/` | 旧システム参照資料（アーカイブ） | 必要時のみ |
 
 ### 読込優先順序
-1. `docs/context/gcp-migration-scope.md` - 移行スコープ ★最重要
-2. `docs/context/functional-requirements.md` - 機能要件
-3. `docs/context/implementation-plan.md` - 実装計画（各Phase完了条件付き）
-4. `docs/context/data-model.md` - データモデル（Firestoreスキーマ）
-5. `docs/context/delivery-and-update-guide.md` - 納品・アップデート運用 ★運用時必読
-6. `docs/context/error-handling-policy.md` - エラーハンドリング
-7. `docs/context/gemini-rate-limiting.md` - Geminiレート制限
-8. `docs/context/business-logic.md` - ビジネスロジック
-9. `docs/adr/` - アーキテクチャ決定記録
+1. [移行スコープ](docs/context/gcp-migration-scope.md) ★最重要
+2. [機能要件](docs/context/functional-requirements.md)
+3. [実装計画](docs/context/implementation-plan.md)（各Phase完了条件付き）
+4. [データモデル](docs/context/data-model.md)（Firestoreスキーマ）
+5. [納品・アップデート運用](docs/context/delivery-and-update-guide.md) ★運用時必読
+6. [エラーハンドリング](docs/context/error-handling-policy.md)
+7. [Geminiレート制限](docs/context/gemini-rate-limiting.md)
+8. [ビジネスロジック](docs/context/business-logic.md)
+9. [アーキテクチャ決定記録](docs/adr/)
 
 **注意**: `docs/直下`のファイル（data-model.md等）はGitHub Pages用の簡略版。AI開発時は`docs/context/`を参照すること。
 
@@ -182,40 +182,24 @@ FIREBASE_PROJECT_ID=<project-id> node scripts/import-masters.js --all scripts/sa
 ## 確定事項
 | カテゴリ | 選定 |
 |---------|------|
+| データベース | Firestore（無料枠、Firebase統合） |
+| ストレージ | Cloud Storage（Functions連携） |
 | OCRエンジン | Vertex AI Gemini 2.5 Flash (asia-northeast1) |
-| サービス間認証 | Workload Identity |
 | コンピュート | Cloud Functions (2nd gen) |
 | ユーザー認証 | Firebase Authentication (Google Login) |
-| Gmail連携 | Service Account + Domain-wide Delegation |
+| Gmail連携 | 開発: OAuth 2.0 / 本番: Service Account + Delegation |
 | フロントエンド | Firebase Hosting + React + Vite + TypeScript |
 | UIライブラリ | shadcn/ui + Tailwind CSS |
 | PDFビューアー | react-pdf (pdf.js) |
 | 状態管理 | Zustand + TanStack Query |
 | 納品形態 | セットアップスクリプト方式（雛形なし） |
-
-**Artifact Registryは不要**（Firebase Hosting + Cloud Functionsソースデプロイのため）
+| コスト上限 | 月額3,000円以下（予算アラート設定済み） |
 
 ## マルチクライアント運用
 
 ### アーキテクチャ方針
 
-```
-[doc-split-dev]          [client-a]          [client-b]
-  開発・検証        →      本番A        →      本番B
-  (SEEDあり)             (SEEDなし)          (SEEDなし)
-```
-
-### .firebaserc構成
-
-```json
-{
-  "projects": {
-    "dev": "doc-split-dev",
-    "client-a": "<client-a-project-id>",
-    "client-b": "<client-b-project-id>"
-  }
-}
-```
+doc-split-dev（開発・検証、SEEDあり） → 各クライアント本番（SEEDなし）。`.firebaserc` にエイリアスとして全環境を定義。
 
 ### 運用フロー
 
@@ -292,15 +276,6 @@ FIREBASE_PROJECT_ID=<project-id> node scripts/import-masters.js --all scripts/sa
 
 **トラブルシュート詳細**: `docs/operation/setup-guide.md` 参照
 
-## 技術選定（全確定）
-| 項目 | 選定 | 理由 |
-|------|------|------|
-| データベース | **Firestore** | 無料枠で十分、Firebase統合 |
-| ストレージ | **Cloud Storage** | Cloud Functions連携がメイン |
-| VPC Service Controls | **不要** | コスト制約、アプリ層で担保 |
-| コスト上限 | **月額3,000円以下** | 予算アラート設定済み |
-| Gmail連携 | **開発: OAuth 2.0、本番: Service Account + Delegation** | 環境で切替 |
-
 ## 本番環境情報
 | 項目 | URL/情報 |
 |------|----------|
@@ -351,84 +326,55 @@ doc-split/
 ├── CLAUDE.md                    # このファイル
 ├── package.json                 # モノレポルート
 ├── firebase.json                # Firebase設定
-├── firestore.rules              # Firestoreセキュリティルール
-├── storage.rules                # Storageセキュリティルール
+├── firestore.rules / storage.rules  # セキュリティルール
+├── .github/workflows/           # CI/CD（ci.yml, deploy.yml）
 ├── frontend/                    # Reactフロントエンド
 │   ├── src/
-│   │   ├── components/          # UIコンポーネント
+│   │   ├── components/          # UIコンポーネント（15+ファイル）
 │   │   │   ├── ui/              # shadcn/ui
 │   │   │   ├── views/           # ビュー系（GroupList, GroupDocumentList等）
-│   │   │   ├── DocumentDetailModal.tsx  # 詳細モーダル
-│   │   │   ├── PdfViewer.tsx    # PDFビューアー
-│   │   │   ├── PdfSplitModal.tsx       # PDF分割モーダル
-│   │   │   ├── PdfUploadModal.tsx      # PDFアップロード
-│   │   │   ├── SearchBar.tsx           # 検索バー
-│   │   │   ├── DateRangeFilter.tsx     # 期間指定フィルター
-│   │   │   ├── KanaFilterBar.tsx       # あかさたなフィルター
-│   │   │   ├── LoadMoreIndicator.tsx   # 無限スクロール
-│   │   │   ├── AliasLearningHistoryModal.tsx  # エイリアス学習履歴
-│   │   │   ├── RegisterNewMasterModal.tsx     # マスター新規登録提案
-│   │   │   ├── Layout.tsx       # レイアウト
+│   │   │   ├── DocumentDetailModal / PdfViewer / PdfSplitModal  # 詳細・PDF系
+│   │   │   ├── CsvImportModal / MasterSelectField  # マスター・CSV系
+│   │   │   ├── PdfPageThumbnail / PdfSplitPreview   # PDFサムネイル・プレビュー
+│   │   │   ├── SearchBar / DateRangeFilter / KanaFilterBar  # 検索・フィルター系
 │   │   │   └── __tests__/       # コンポーネントテスト
-│   │   ├── hooks/               # カスタムフック
-│   │   │   ├── useDocuments.ts  # Firestore書類連携（日付フィルター対応）
-│   │   │   ├── useDocumentGroups.ts   # グループビュー連携
-│   │   │   ├── useDocumentEdit.ts     # 書類メタ情報編集
-│   │   │   ├── useDocumentVerification.ts  # OCR確認ステータス
-│   │   │   ├── useInfiniteScroll.ts   # 無限スクロール共通フック
-│   │   │   ├── useSearch.ts           # 全文検索
-│   │   │   ├── useMasters.ts          # マスターデータCRUD
-│   │   │   ├── useMasterAlias.ts      # エイリアス学習
-│   │   │   ├── useAliasLearningHistory.ts  # 学習履歴
-│   │   │   ├── useProcessingHistory.ts     # 処理履歴
-│   │   │   ├── useSettings.ts   # 設定・ユーザー管理
-│   │   │   ├── useErrors.ts     # エラー履歴連携
-│   │   │   ├── usePdfSplit.ts   # PDF分割連携
+│   │   ├── hooks/               # カスタムフック（13ファイル）
+│   │   │   ├── useDocuments / useDocumentGroups / useDocumentEdit  # 書類系
+│   │   │   ├── useSearch / useMasters / useMasterAlias  # 検索・マスター系
 │   │   │   └── __tests__/       # フックテスト
-│   │   ├── pages/               # 各画面
-│   │   │   ├── DocumentsPage.tsx       # 書類一覧（タブ切替・フィルター）
-│   │   │   ├── ProcessingHistoryPage.tsx  # 処理履歴
-│   │   │   ├── HelpPage.tsx            # アプリ内ヘルプ
-│   │   │   ├── AdminPage.tsx           # 管理者ページ
-│   │   │   ├── SettingsPage.tsx        # 設定画面
-│   │   │   ├── ErrorsPage.tsx          # エラー履歴
-│   │   │   ├── MastersPage.tsx         # マスターデータ編集
-│   │   │   └── LoginPage.tsx           # ログイン
-│   │   ├── stores/              # Zustand
-│   │   └── lib/                 # Firebase SDK等
+│   │   ├── pages/               # 各画面（8ファイル）
+│   │   │   └── DocumentsPage / MastersPage / AdminPage / LoginPage 等
+│   │   ├── stores/              # Zustand（authStore.ts）
+│   │   ├── lib/                 # ユーティリティ
+│   │   │   ├── firebase.ts / csvParser.ts / csvTemplates.ts
+│   │   │   └── documentUtils.ts / kanaUtils.ts / textNormalizer.ts / utils.ts
+│   │   └── utils/               # 表示ヘルパー（displayName.ts）
 │   └── package.json
 ├── functions/                   # Cloud Functions
 │   ├── src/
 │   │   ├── index.ts             # エントリポイント（全関数エクスポート）
-│   │   ├── gmail/               # checkGmailAttachments
-│   │   ├── ocr/                 # processOCR, processOCROnCreate
-│   │   ├── pdf/                 # splitPdf, rotatePdfPages, detectSplitPoints
-│   │   ├── search/              # searchDocuments
-│   │   ├── upload/              # uploadPdf
-│   │   ├── documents/           # deleteDocument, getOcrText, regenerateSummary
-│   │   ├── admin/               # 管理者向け操作
+│   │   ├── gmail/ ocr/ pdf/ search/ upload/  # 各機能モジュール
+│   │   ├── documents/ admin/    # ドキュメント操作・管理者向け
 │   │   ├── triggers/            # onDocumentWrite, onDocumentWriteSearchIndex
 │   │   └── utils/               # 共通ユーティリティ
 │   ├── test/                    # テスト
 │   └── package.json
 ├── scripts/                     # 運用・セットアップスクリプト
 │   ├── setup-tenant.sh          # テナント初期設定（推奨: --with-gmail --yes）
-│   ├── setup-gmail-auth.sh      # Gmail OAuth認証設定（--client-id/secret/auth-code で非対話モード）
-│   ├── verify-setup.sh          # セットアップ検証
-│   ├── deploy-to-project.sh     # マルチ環境デプロイ
-│   ├── deploy-all-clients.sh    # 全クライアント一括デプロイ
+│   ├── setup-gmail-auth.sh      # Gmail OAuth認証設定
+│   ├── init-project.sh          # プロジェクト初期化
+│   ├── deploy-to-project.sh / deploy-all-clients.sh  # デプロイ
 │   ├── import-masters.js        # マスターデータ投入（CLI）
-│   ├── check-allowed-domains.js # ドメイン許可リスト管理
+│   ├── add-admin-user.js        # 管理者ユーザー追加
+│   ├── seed-e2e-data.js         # E2Eテストデータ投入
+│   ├── gmail-oauth-cli.py       # Gmail OAuth CLIツール
+│   ├── check-allowed-domains.js / verify-setup.sh  # 検証・管理
 │   ├── migrate-*.js             # マイグレーションスクリプト群
 │   └── samples/                 # CSVサンプル
-├── shared/                      # 共通型定義
-│   └── types.ts
+├── shared/                      # 共通型定義（types.ts）
 └── docs/
     ├── context/                 # 開発用詳細（マスター）
     ├── operation/               # 運用ドキュメント
-    ├── adr/                     # ADR（0001〜0008）
-    ├── audit/                   # 監査レポート
-    ├── handoff/                 # ハンドオフメモ
-    └── reference/               # 旧システム参照（アーカイブ）
-```
+    ├── adr/                     # ADR（0001〜0009）
+    ├── audit/ handoff/ reference/  # 監査・ハンドオフ・旧システム参照
 ```

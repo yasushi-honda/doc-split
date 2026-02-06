@@ -1,21 +1,680 @@
 ---
 title: "データモデル概要"
-description: "書類管理アプリの30テーブル構造とリレーションを可視化"
+description: "DocSplit Firestoreスキーマ定義（実装準拠）"
 purpose: "AI駆動開発時のコンテキストとして優先読込"
+status: completed
+updated: 2026-02-07
 ---
 
 # データモデル概要
 
-## テーブル分類
+DocSplitのデータはすべてCloud Firestoreに格納される。
+本ドキュメントは実装コード（`shared/types.ts`、`firestore.rules`、Cloud Functions）を参照元とした正確なスキーマ定義である。
 
-| 分類 | テーブル数 | 説明 |
-|------|-----------|------|
-| マスタ（M） | 4 | 書類・顧客・事業所・ケアマネ |
-| トランザクション（T） | 5 | 書類管理・Gmail受信・エラー・保守・担当CM |
-| システム | 2 | ユーザー設定・利用者情報 |
-| 処理用（Process/Output） | 19 | AppSheet自動化用の中間テーブル |
+## コレクション一覧
 
-## ER図（主要テーブル）
+| コレクション | 説明 | 書き込み元 |
+|-------------|------|-----------|
+| `documents` | 書類管理（メインテーブル） | Cloud Functions / フロントエンド（一部フィールド） |
+| `masters/{type}/items` | マスターデータ（documents/customers/offices/caremanagers） | 管理者 |
+| `documentGroups` | グループ別集計キャッシュ | Cloud Functions（onDocumentWriteトリガー） |
+| `errors` | エラーログ（構造化） | Cloud Functions |
+| `notifications` | エラー通知 | Cloud Functions |
+| `gmailLogs` | Gmail受信ログ | Cloud Functions |
+| `uploadLogs` | アップロードログ | Cloud Functions |
+| `users` | ユーザー管理 | Firebase Auth連携 / 管理者 |
+| `settings` | アプリ設定（app / auth / gmail） | 管理者 |
+| `search_index` | 検索インデックス（反転インデックス + TF-IDF） | Cloud Functions（onDocumentWriteSearchIndexトリガー） |
+| `customerResolutionLogs` | 顧客解決監査ログ | フロントエンド |
+| `officeResolutionLogs` | 事業所解決監査ログ | フロントエンド |
+| `editLogs` | ドキュメント編集監査ログ | フロントエンド |
+| `aliasLearningLogs` | エイリアス学習履歴 | Cloud Functions |
+| `stats/gemini/daily/{YYYY-MM-DD}` | Gemini API使用量追跡 | Cloud Functions |
+| `_migrations` | マイグレーション状態 | Cloud Functions / 管理スクリプト |
+
+---
+
+## /documents/{docId}
+
+書類管理のメインコレクション。Gmail取得またはアップロードで作成され、OCR処理後にメタ情報が付与される。
+
+### 基本情報
+
+| フィールド | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| id | string | Yes | ドキュメントID |
+| fileName | string | Yes | ファイル名 |
+| fileId | string | Yes | Cloud Storageファイル識別子 |
+| mimeType | string | Yes | MIMEタイプ |
+| fileUrl | string | Yes | Cloud StorageプレビューURL |
+| sourceType | SourceType | No | `gmail` \| `upload` |
+| status | DocumentStatus | Yes | `pending` \| `processing` \| `processed` \| `error` \| `split` |
+| processedAt | timestamp | Yes | 処理日時 |
+| updatedAt | timestamp | No | 最終更新日時 |
+
+### OCR結果
+
+| フィールド | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| ocrResult | string | Yes | OCR全文テキスト（短い場合） |
+| ocrResultUrl | string | No | Cloud Storage参照URL（長い場合） |
+| summary | string | No | AI生成の要約 |
+| ocrExtraction | OcrExtraction | No | OCRフィールド抽出スナップショット（正解フィードバック用） |
+| pageResults | PageOcrResult[] | No | ページ単位OCR結果（PDF分割用） |
+
+### 書類情報
+
+| フィールド | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| documentType | string | Yes | 書類種別（`/masters/documents`参照） |
+| fileDate | timestamp | Yes | 書類日付（OCR抽出） |
+| totalPages | number | Yes | 総ページ数 |
+| targetPageNumber | number | Yes | 対象ページ番号 |
+| category | string | No | 書類カテゴリ |
+
+### 顧客確定（Phase 7）
+
+| フィールド | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| customerName | string | Yes | 顧客名（表示用） |
+| customerId | string \| null | No | 顧客マスターID（「該当なし」選択時はnull） |
+| customerCandidates | CustomerCandidateInfo[] | No | 構造化された候補リスト |
+| customerConfirmed | boolean | No | 確定済みフラグ（デフォルト: true） |
+| confirmedBy | string \| null | No | 確定者UID（システム自動確定時はnull） |
+| confirmedAt | timestamp \| null | No | 確定日時（システム自動確定時はnull） |
+| isDuplicateCustomer | boolean | Yes | 同姓同名フラグ |
+| needsManualCustomerSelection | boolean | No | 後方互換用（Phase 6以前） |
+
+### 事業所確定
+
+| フィールド | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| officeName | string | Yes | 事業所名（表示用） |
+| officeId | string \| null | No | 事業所マスターID（「該当なし」選択時はnull） |
+| officeCandidates | OfficeCandidateInfo[] | No | 構造化された候補リスト |
+| officeConfirmed | boolean | No | 確定済みフラグ（デフォルト: true） |
+| officeConfirmedBy | string \| null | No | 確定者UID（システム自動確定時はnull） |
+| officeConfirmedAt | timestamp \| null | No | 確定日時（システム自動確定時はnull） |
+| suggestedNewOffice | string \| null | No | ファイル名から抽出された事業所名（登録提案用） |
+
+### ケアマネ
+
+| フィールド | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| careManager | string | No | ケアマネ名（顧客マスターから取得） |
+
+### グループ化キー（Phase 8、onDocumentWriteトリガーで自動設定）
+
+| フィールド | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| customerKey | string | No | customerName正規化版 |
+| officeKey | string | No | officeName正規化版 |
+| documentTypeKey | string | No | documentType正規化版 |
+| careManagerKey | string | No | careManager正規化版 |
+
+### OCR確認ステータス
+
+| フィールド | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| verified | boolean | No | 確認済みフラグ（デフォルト: false） |
+| verifiedBy | string \| null | No | 確認者UID |
+| verifiedAt | timestamp \| null | No | 確認日時 |
+
+### PDF分割・回転
+
+| フィールド | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| splitSuggestions | SplitSuggestion[] | No | 分割候補 |
+| splitInto | string[] | No | 分割で生成されたドキュメントIDリスト（元ドキュメントに設定） |
+| isSplitSource | boolean | No | 分割元フラグ（重複チェック除外用） |
+| parentDocumentId | string | No | 分割元ドキュメントID（子に設定） |
+| splitFromPages | {start: number, end: number} | No | 分割元のページ範囲（子に設定） |
+| pageRotations | PageRotation[] | No | ページ回転情報（永続保存） |
+
+### エラー情報
+
+| フィールド | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| lastErrorId | string | No | 最新のエラーログID |
+| lastErrorMessage | string | No | 最新のエラーメッセージ |
+
+### 編集
+
+| フィールド | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| editedBy | string \| null | No | 編集者UID |
+| editedAt | timestamp \| null | No | 編集日時 |
+
+### 検索メタデータ（onDocumentWriteSearchIndexトリガーで自動設定）
+
+| フィールド | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| search.version | number | No | インデックスバージョン |
+| search.tokens | string[] | No | トークンリスト |
+| search.tokenHash | string | No | トークンハッシュ（変更検知用） |
+| search.indexedAt | timestamp | No | インデックス日時 |
+
+### Firestoreセキュリティルール
+
+- **read**: ホワイトリスト登録ユーザー
+- **create**: Cloud Functionsのみ（サービスアカウント経由、ルール適用外）
+- **update**: ホワイトリスト登録ユーザー（許可フィールドのみ: 顧客/事業所解決、OCR編集、確認ステータス、再処理）
+- **delete**: 管理者のみ
+
+---
+
+## /masters/{type}/items/{id}
+
+マスターデータ。`type` は `documents` | `customers` | `offices` | `caremanagers` の4種。
+
+### 共通フィールド
+
+| フィールド | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| name | string | Yes | 名称 |
+| aliases | string[] | No | 許容される別表記（エイリアス学習で追加） |
+| createdAt | timestamp | No | 作成日時 |
+| updatedAt | timestamp | No | 更新日時 |
+
+### documents（書類種別）
+
+| フィールド | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| dateMarker | string | Yes | 日付抽出の目印（例: "発行日"） |
+| category | string | Yes | 書類カテゴリ |
+| keywords | string[] | No | 照合用キーワード（例: ["被保険者証", "介護保険"]） |
+
+### customers（顧客）
+
+| フィールド | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| isDuplicate | boolean | Yes | 同姓同名フラグ |
+| furigana | string | Yes | ふりがな（照合用） |
+| careManagerName | string | No | 担当ケアマネジャー名 |
+| notes | string | No | 区別用補足情報（例: "北名古屋在住"） |
+
+### offices（事業所）
+
+| フィールド | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| isDuplicate | boolean | Yes | 同名フラグ |
+| shortName | string | No | 短縮名（OCR照合用） |
+| nameKey | string | No | 正規化キー（検索用） |
+| notes | string | No | 区別用補足情報（例: "東部"） |
+
+### caremanagers（ケアマネ）
+
+| フィールド | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| email | string | No | メールアドレス（Google Workspace） |
+| notes | string | No | 補足情報 |
+
+### Firestoreセキュリティルール
+
+- **read**: ホワイトリスト登録ユーザー
+- **write**: 管理者のみ
+
+---
+
+## /documentGroups/{groupId}
+
+グループ別集計キャッシュ。`onDocumentWrite` トリガーで自動更新される。
+
+groupId = `{groupType}_{groupKey}`（例: `customer_やまだたろう`）
+
+| フィールド | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| id | string | Yes | `{groupType}_{groupKey}` |
+| groupType | GroupType | Yes | `customer` \| `office` \| `documentType` \| `careManager` |
+| groupKey | string | Yes | 正規化キー |
+| displayName | string | Yes | 表示名（元の値） |
+| count | number | Yes | グループ内ドキュメント数 |
+| latestAt | timestamp | Yes | 最新処理日時 |
+| latestDocs | GroupPreviewDoc[] | Yes | プレビュー用（最新3件: {id, fileName, documentType, processedAt}） |
+| updatedAt | timestamp | Yes | 集計更新日時 |
+
+### Firestoreセキュリティルール
+
+- **read**: ホワイトリスト登録ユーザー
+- **write**: Cloud Functionsのみ
+
+---
+
+## /errors/{errorId}
+
+構造化されたエラーログ。`errorLogger.ts` で記録される。
+
+| フィールド | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| id | string | Yes | エラーログID |
+| createdAt | timestamp | Yes | 発生日時 |
+| category | ErrorCategory | Yes | `transient` \| `recoverable` \| `fatal` \| `data` |
+| severity | ErrorSeverity | Yes | `info` \| `warning` \| `error` \| `critical` |
+| source | ErrorSource | Yes | `gmail` \| `ocr` \| `pdf` \| `storage` \| `auth` |
+| functionName | string | Yes | 発生した関数名 |
+| documentId | string | No | 関連ドキュメントID |
+| fileId | string | No | 関連ファイルID |
+| errorCode | string | Yes | エラーコード |
+| errorMessage | string | Yes | エラーメッセージ |
+| stackTrace | string | No | スタックトレース（開発環境のみ） |
+| retryCount | number | Yes | リトライ回数 |
+| status | string | Yes | `pending` \| `resolved` \| `ignored` |
+| resolution | string | No | 解決方法 |
+| resolvedBy | string | No | 解決者 |
+| resolvedAt | timestamp | No | 解決日時 |
+
+### Firestoreセキュリティルール
+
+- **read**: ホワイトリスト登録ユーザー
+- **write**: 管理者のみ
+
+---
+
+## /notifications/{notificationId}
+
+エラー通知。致命的エラー発生時に `errorLogger.ts` の `sendNotification` で自動作成される。
+
+| フィールド | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| type | string | Yes | 通知タイプ（現在は `error` のみ） |
+| errorId | string | Yes | 関連エラーログID |
+| source | ErrorSource | Yes | エラー発生源 |
+| severity | ErrorSeverity | Yes | 重要度 |
+| message | string | Yes | 通知メッセージ |
+| createdAt | timestamp | Yes | 作成日時 |
+| read | boolean | Yes | 既読フラグ（デフォルト: false） |
+
+---
+
+## /gmailLogs/{logId}
+
+Gmail添付ファイル取得ログ。重複検知用のMD5ハッシュを含む。
+
+| フィールド | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| fileName | string | Yes | ファイル名 |
+| hash | string | Yes | MD5ハッシュ（重複検知用） |
+| fileSizeKB | number | Yes | ファイルサイズ（KB） |
+| emailSubject | string | Yes | メール件名 |
+| processedAt | timestamp | Yes | 処理日時 |
+| fileUrl | string | Yes | Cloud Storage URL |
+| emailBody | string | Yes | メール本文 |
+
+### Firestoreセキュリティルール
+
+- **read**: ホワイトリスト登録ユーザー
+- **write**: Cloud Functionsのみ
+
+---
+
+## /uploadLogs/{logId}
+
+手動アップロードのログ。Cloud Functions（`uploadPdf`）で記録される。
+
+| フィールド | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| fileName | string | Yes | 最終ファイル名 |
+| originalFileName | string | Yes | 元のファイル名（リネーム前） |
+| hash | string | Yes | MD5ハッシュ（重複検知用） |
+| fileSizeKB | number | Yes | ファイルサイズ（KB） |
+| uploadedAt | timestamp | Yes | アップロード日時 |
+| uploadedBy | string | Yes | アップロード者UID |
+| uploadedByEmail | string | Yes | アップロード者メールアドレス |
+| fileUrl | string | Yes | Cloud Storage URL |
+
+### Firestoreセキュリティルール
+
+- **read**: ホワイトリスト登録ユーザー
+- **write**: Cloud Functionsのみ
+
+---
+
+## /users/{uid}
+
+ユーザー管理。ドキュメントIDはFirebase Auth UID。
+
+| フィールド | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| uid | string | Yes | Firebase Auth UID |
+| email | string | Yes | メールアドレス |
+| displayName | string | No | 表示名 |
+| role | UserRole | Yes | `admin` \| `user` |
+| createdAt | timestamp | Yes | 作成日時 |
+| lastLoginAt | timestamp | Yes | 最終ログイン日時 |
+
+### Firestoreセキュリティルール
+
+- **read（自分）**: 認証済みユーザー（`request.auth.uid == userId`）
+- **create（自分）**: 認証済みユーザー（ドメイン許可リストによる自動登録用）
+- **read/write（全体）**: 管理者のみ
+
+---
+
+## /settings/{settingId}
+
+アプリケーション設定。3つのサブドキュメントで構成される。
+
+### /settings/app
+
+| フィールド | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| targetLabels | string[] | Yes | 監視対象Gmailラベル |
+| targetSenders | string[] | Yes | 監視対象送信元メールアドレス |
+| labelSearchOperator | LabelSearchOperator | Yes | `AND` \| `OR` |
+| errorNotificationEmails | string[] | Yes | エラー通知先メールアドレス |
+| gmailAccount | string | No | 監視対象Gmailアカウント |
+| delegatedUserEmail | string | No | Gmail委任対象メールアドレス |
+
+### /settings/auth
+
+| フィールド | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| allowedDomains | string[] | Yes | 自動ログイン許可ドメイン |
+
+### /settings/gmail
+
+Gmail認証方式の設定。`gmailAuth.ts` が参照する。
+
+| フィールド | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| authMode | string | Yes | `oauth` \| `service_account` |
+| serviceAccountEmail | string | No | Service Accountメールアドレス（本番環境用） |
+| delegatedUserEmail | string | No | 対象Gmailアドレス（本番環境用） |
+
+> OAuth認証情報（clientId, clientSecret, refreshToken）はSecret Managerに保存。Firestoreには格納しない。
+
+### Firestoreセキュリティルール
+
+- **read（settings/auth）**: 認証済みユーザー（ドメイン許可チェック用、users未登録でも可）
+- **read（settings/auth以外）**: ホワイトリスト登録ユーザー
+- **write**: 管理者のみ
+
+---
+
+## /search_index/{tokenId}
+
+反転インデックス + TF-IDFスコアリング。`onDocumentWriteSearchIndex` トリガーで自動更新。
+
+| フィールド | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| df | number | Yes | ドキュメント頻度（Document Frequency） |
+| updatedAt | timestamp | Yes | 最終更新日時 |
+| postings | map | Yes | `map<docId, {score, fieldsMask, updatedAt}>` |
+
+**fieldsMask ビットフラグ**:
+| ビット | フィールド |
+|--------|-----------|
+| 1 | customerName |
+| 2 | officeName |
+| 4 | documentType |
+| 8 | fileName |
+| 16 | date |
+
+### Firestoreセキュリティルール
+
+- **read**: ホワイトリスト登録ユーザー
+- **write**: Cloud Functionsのみ
+
+---
+
+## /customerResolutionLogs/{logId}
+
+顧客解決の監査ログ。フロントエンドで作成され、更新・削除は不可（イミュータブル）。
+
+| フィールド | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| documentId | string | Yes | 対象書類ID |
+| previousCustomerId | string \| null | Yes | 変更前の顧客ID（初回確定時はnull） |
+| newCustomerId | string \| null | Yes | 変更後の顧客ID（「該当なし」選択時はnull） |
+| newCustomerName | string | Yes | 変更後の顧客名（「該当なし」時は"不明顧客"） |
+| resolvedBy | string | Yes | 確定者UID |
+| resolvedByEmail | string | Yes | 確定者メールアドレス |
+| resolvedAt | timestamp | Yes | 確定日時 |
+| reason | string | No | 任意のメモ（「該当なし」時は"該当なし選択"） |
+
+### Firestoreセキュリティルール
+
+- **read**: ホワイトリスト登録ユーザー
+- **create**: ホワイトリスト登録ユーザー（resolvedBy == 自分のUID）
+- **update/delete**: 禁止（監査ログは不変）
+
+---
+
+## /officeResolutionLogs/{logId}
+
+事業所解決の監査ログ。構造は customerResolutionLogs と同等。
+
+| フィールド | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| documentId | string | Yes | 対象書類ID |
+| previousOfficeId | string \| null | Yes | 変更前の事業所ID（初回確定時はnull） |
+| newOfficeId | string \| null | Yes | 変更後の事業所ID（「該当なし」選択時はnull） |
+| newOfficeName | string | Yes | 変更後の事業所名（「該当なし」時は"不明事業所"） |
+| resolvedBy | string | Yes | 確定者UID |
+| resolvedByEmail | string | Yes | 確定者メールアドレス |
+| resolvedAt | timestamp | Yes | 確定日時 |
+| reason | string | No | 任意のメモ |
+
+### Firestoreセキュリティルール
+
+- **read**: ホワイトリスト登録ユーザー
+- **create**: ホワイトリスト登録ユーザー（resolvedBy == 自分のUID）
+- **update/delete**: 禁止（監査ログは不変）
+
+---
+
+## /editLogs/{logId}
+
+ドキュメント編集の監査ログ。フロントエンド（`useDocumentEdit.ts`）で作成。
+
+| フィールド | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| documentId | string | Yes | 対象書類ID |
+| fieldName | string | Yes | 編集されたフィールド名 |
+| oldValue | string \| null | Yes | 変更前の値 |
+| newValue | string \| null | Yes | 変更後の値 |
+| editedBy | string | Yes | 編集者UID |
+| editedByEmail | string | Yes | 編集者メールアドレス |
+| editedAt | timestamp | Yes | 編集日時 |
+
+### Firestoreセキュリティルール
+
+- **read**: ホワイトリスト登録ユーザー
+- **create**: ホワイトリスト登録ユーザー（editedBy == 自分のUID）
+- **update/delete**: 禁止（監査ログは不変）
+
+---
+
+## /aliasLearningLogs/{logId}
+
+エイリアス学習の履歴ログ。Cloud Functions（`addMasterAlias`）で記録。
+
+| フィールド | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| id | string | Yes | ログID |
+| masterType | AliasLearningMasterType | Yes | `office` \| `customer` \| `document` |
+| masterId | string | Yes | マスターデータID |
+| masterName | string | Yes | マスターデータ名称 |
+| alias | string | Yes | 学習されたエイリアス |
+| learnedBy | string | Yes | 学習者UID |
+| learnedByEmail | string | Yes | 学習者メールアドレス |
+| learnedAt | timestamp | Yes | 学習日時 |
+
+### Firestoreセキュリティルール
+
+- **read**: ホワイトリスト登録ユーザー
+- **write**: Cloud Functionsのみ
+
+---
+
+## /stats/gemini/daily/{YYYY-MM-DD}
+
+Gemini API使用量の日次追跡。`rateLimiter.ts` の `trackGeminiUsage` で更新（`set` with `merge: true`）。
+
+| フィールド | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| date | string | Yes | 日付（YYYY-MM-DD形式） |
+| inputTokens | number | Yes | 入力トークン数（累積） |
+| outputTokens | number | Yes | 出力トークン数（累積） |
+| requestCount | number | Yes | リクエスト回数（累積） |
+| estimatedCostUsd | number | Yes | 推定コスト（USD、累積） |
+| updatedAt | timestamp | Yes | 最終更新日時 |
+
+---
+
+## /_migrations/{migrationId}
+
+マイグレーション状態管理。
+
+| フィールド | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| status | string | Yes | `pending` \| `running` \| `completed` \| `failed` |
+| processedCount | number | Yes | 処理済み件数 |
+| errorCount | number | Yes | エラー件数 |
+
+### Firestoreセキュリティルール
+
+- **read**: 管理者のみ
+- **write**: Cloud Functions / 管理スクリプトのみ
+
+---
+
+## 埋め込み型定義
+
+`shared/types.ts` で定義されている主要な埋め込み型。
+
+### OcrExtraction
+
+OCRフィールド抽出スナップショット。正解フィードバック用にOCR処理時の推定結果を保存する。
+
+```typescript
+interface OcrExtraction {
+  version: string;             // OCRモデルバージョン (例: "gemini-2.5-flash")
+  extractedAt: Timestamp;      // 抽出日時
+  customer?: OcrFieldExtraction;
+  office?: OcrFieldExtraction;
+  documentType?: OcrFieldExtraction;
+}
+
+interface OcrFieldExtraction {
+  suggestedValue: string;      // OCRが提案した値
+  suggestedId?: string | null; // マッチしたマスターID
+  confidence: number;          // 信頼度スコア (0-100)
+  matchType: string;           // exact | partial | fuzzy | none
+}
+```
+
+### CustomerCandidateInfo
+
+顧客候補情報。processOCRで生成され、同姓同名解決モーダルで表示。
+
+```typescript
+interface CustomerCandidateInfo {
+  customerId: string;
+  customerName: string;
+  customerNameKana?: string;
+  isDuplicate: boolean;
+  officeId?: string;
+  officeName?: string;
+  careManagerName?: string;
+  score: number;               // 類似度スコア (0-100)
+  matchType: 'exact' | 'partial' | 'fuzzy';
+}
+```
+
+### OfficeCandidateInfo
+
+事業所候補情報。processOCRで生成され、同名解決モーダルで表示。
+
+```typescript
+interface OfficeCandidateInfo {
+  officeId: string;
+  officeName: string;
+  shortName?: string;
+  isDuplicate: boolean;
+  score: number;               // 類似度スコア (0-100)
+  matchType: 'exact' | 'partial' | 'fuzzy';
+}
+```
+
+### PageOcrResult / SplitSuggestion / PageRotation
+
+PDF分割・回転に関する型。
+
+```typescript
+interface PageOcrResult {
+  pageNumber: number;
+  text: string;
+  detectedDocumentType: string | null;
+  detectedCustomerName: string | null;
+  detectedOfficeName: string | null;
+  detectedDate: Date | null;
+  matchScore: number;          // 0-100
+  matchType: 'exact' | 'partial' | 'none';
+}
+
+interface SplitSuggestion {
+  afterPageNumber: number;     // このページの後で分割
+  reason: 'new_customer' | 'new_document_type' | 'content_break' | 'manual';
+  confidence: number;          // 0-100
+  newDocumentType: string | null;
+  newCustomerName: string | null;
+}
+
+interface PageRotation {
+  pageNumber: number;
+  rotation: 0 | 90 | 180 | 270;
+}
+```
+
+---
+
+## 定数（ビジネスロジック設定値）
+
+`shared/types.ts` の `CONSTANTS` で定義。
+
+| 定数名 | 値 | 説明 |
+|--------|-----|------|
+| CUSTOMER_SIMILARITY_THRESHOLD | 70 | 顧客名・事業所名の類似度閾値（0-100） |
+| DOCUMENT_NAME_SEARCH_RANGE_CHARS | 200 | 書類名検索時のOCRテキスト先頭文字数 |
+| DATE_MARKER_SEARCH_RANGE_CHARS | 50 | 日付マーカー後の検索文字数 |
+| STATUS_UNDETERMINED | '未判定' | 未識別情報の代替文字列 |
+| FILE_NAME_UNKNOWN_DOCUMENT | '不明文書' | 不明書類の代替文字列 |
+| FILE_NAME_UNKNOWN_CUSTOMER | '不明顧客' | 不明顧客の代替文字列 |
+
+---
+
+## GCP移行時の考慮点
+
+1. **AppSheet Process/Outputテーブル（旧19個）**
+   - AppSheet自動化専用のため、GCPでは不要
+   - Cloud Functionsの処理ロジックとして再実装済み
+
+2. **外部キー制約**
+   - Firestoreでは参照整合性を持たない
+   - アプリケーション層（OCR処理・フロントエンド）でマスターデータとの照合を実行
+
+3. **OCR結果（LongText）**
+   - Firestoreのドキュメントサイズ制限: 1MB
+   - 大きなOCR結果は Cloud Storage に保存し、`ocrResultUrl` で参照
+
+---
+
+## 参照
+
+- 型定義: `shared/types.ts`
+- セキュリティルール: `firestore.rules`
+- エラーハンドリング: `docs/context/error-handling-policy.md`
+- Geminiレート制限: `docs/context/gemini-rate-limiting.md`
+
+---
+
+## AppSheet旧データモデル（アーカイブ）
+
+以下はAppSheet時代のER図。GCPリプレイスにより Firestore スキーマに移行済み。参考資料として残す。
+
+<details>
+<summary>AppSheet ER図（クリックで展開）</summary>
 
 ```mermaid
 erDiagram
@@ -96,255 +755,4 @@ erDiagram
     }
 ```
 
-## 主要テーブル詳細
-
-### 書類管理T（メインテーブル）
-OCR処理結果を格納するトランザクションテーブル。
-
-| カラム | 型 | 説明 | FK先 |
-|--------|-----|------|------|
-| ID | Text | 主キー | - |
-| ファイルID | Text | Google Driveファイル識別子 | - |
-| OCR結果 | LongText | OCR読み取りテキスト全文 | - |
-| 書類名 | Text | 判定された書類種別 | 書類M |
-| 顧客名 | Text | 紐付けられた顧客 | 顧客M |
-| 事業所名 | Text | 紐付けられた事業所 | 事業所M |
-| 同姓同名フラグ | Boolean | 顧客名が同姓同名の場合True | - |
-| 担当CM | Text | 担当ケアマネジャー | ケアマネM |
-
-### 顧客M（顧客マスタ）
-顧客情報を管理。OCR結果との照合に使用。
-
-| カラム | 型 | 説明 |
-|--------|-----|------|
-| 顧客氏名 | Text | 主キー（氏名） |
-| 同姓同名 | Boolean | 同姓同名が存在するか |
-| フリガナ | Text | カナ表記（照合用） |
-| 担当ケアマネ | Text | 担当ケアマネジャー名（optional） |
-
-### 書類M（書類マスタ）
-書類種別のマスタ。OCR結果から書類名を判定する際の参照先。
-
-| カラム | 型 | 説明 |
-|--------|-----|------|
-| 書類名 | Text | 主キー（書類種別名） |
-| 日付位置 | Text | 書類内の日付記載位置 |
-| カテゴリー | Text | 書類カテゴリ |
-
-## GCP移行時の考慮点
-
-1. **Process/Outputテーブル（19個）**
-   - AppSheet自動化専用のため、GCPでは不要
-   - Cloud Functions等で処理ロジックとして再実装
-
-2. **外部キー制約**
-   - AppSheetは参照整合性が緩い
-   - Firestoreではサブコレクションまたはドキュメント参照で実装
-
-3. **OCR結果（LongText）**
-   - Firestoreのドキュメントサイズ制限: 1MB
-   - 大きなOCR結果はCloud Storageに保存し、URLを参照
-
-## Firestore コレクション設計（実装済み）
-
-### コレクション一覧
-
-| コレクション | 説明 |
-|-------------|------|
-| `documents` | 書類管理（メインテーブル） |
-| `masters/{type}/items` | マスターデータ（documents/customers/offices/caremanagers） |
-| `documentGroups` | グループ別集計キャッシュ |
-| `errors` | エラー履歴 |
-| `gmailLogs` | Gmail受信ログ |
-| `users` | ユーザー管理 |
-| `settings` | アプリ設定 |
-| `search_index` | 検索インデックス（反転インデックス） |
-| `customerResolutionLogs` | 顧客解決監査ログ |
-| `officeResolutionLogs` | 事業所解決監査ログ |
-| `editLogs` | ドキュメント編集監査ログ |
-| `aliasLearningLogs` | エイリアス学習履歴 |
-| `uploadLogs` | アップロードログ |
-| `_migrations` | マイグレーション状態 |
-
-### /documents/{docId}（メインテーブル）
-
-```
-基本情報:
-  - id: string
-  - fileName: string
-  - fileId: string
-  - mimeType: string
-  - fileUrl: string                      # Cloud StorageプレビューURL
-  - sourceType: string                   # gmail | upload
-  - status: string                       # pending | processing | processed | error | split
-  - processedAt: timestamp
-  - updatedAt: timestamp
-
-OCR結果:
-  - ocrResult: string                    # OCR全文（短い場合）
-  - ocrResultUrl?: string                # Cloud Storage参照（長い場合）
-  - summary?: string                     # AI生成要約
-  - ocrExtraction?: object               # OCRフィールド抽出スナップショット
-  - pageResults?: array                  # ページ単位OCR結果
-
-書類情報:
-  - documentType: string                 # 書類種別 → /masters/documents参照
-  - fileDate: timestamp                  # 書類日付（抽出）
-  - totalPages: number
-  - targetPageNumber: number
-  - category?: string
-
-顧客確定:
-  - customerName: string                 # 顧客名（表示用）
-  - customerId?: string | null           # 顧客マスターID（該当なし=null）
-  - customerCandidates?: array           # 候補リスト（{id, name, score, furigana}）
-  - customerConfirmed?: boolean          # 確定済みフラグ（デフォルト: true）
-  - confirmedBy?: string | null          # 確定者UID
-  - confirmedAt?: timestamp | null
-  - isDuplicateCustomer: boolean         # 同姓同名フラグ
-
-事業所確定:
-  - officeName: string                   # 事業所名（表示用）
-  - officeId?: string | null             # 事業所マスターID
-  - officeCandidates?: array             # 候補リスト
-  - officeConfirmed?: boolean
-  - officeConfirmedBy?: string | null
-  - officeConfirmedAt?: timestamp | null
-  - suggestedNewOffice?: string | null   # 登録提案用
-
-ケアマネ:
-  - careManager?: string                 # ケアマネ名（顧客マスターから取得）
-
-グループ化キー（正規化版、onDocumentWriteトリガーで自動設定）:
-  - customerKey?: string
-  - officeKey?: string
-  - documentTypeKey?: string
-  - careManagerKey?: string
-
-OCR確認ステータス:
-  - verified?: boolean                   # 確認済みフラグ（デフォルト: false）
-  - verifiedBy?: string | null           # 確認者UID
-  - verifiedAt?: timestamp | null
-
-PDF分割・回転:
-  - splitSuggestions?: array             # 分割候補
-  - pageRotations?: array               # ページ回転情報（永続保存）
-  - parentDocumentId?: string            # 分割元ドキュメントID
-  - splitFromPages?: object              # {start, end}
-
-編集:
-  - editedBy?: string | null
-  - editedAt?: timestamp | null
-
-検索メタデータ（トリガー自動設定）:
-  - search?.version: number
-  - search?.tokens: string[]
-  - search?.tokenHash: string
-  - search?.indexedAt: timestamp
-```
-
-### /masters/{type}/items/{id}
-
-**type**: documents | customers | offices | caremanagers
-
-```
-共通:
-  - name: string                         # 名称
-  - aliases?: string[]                   # 許容される別表記（エイリアス学習）
-  - createdAt?: timestamp
-  - updatedAt?: timestamp
-
-documents（書類種別）:
-  - dateMarker: string                   # 日付抽出の目印（例: "発行日"）
-  - category: string                     # 書類カテゴリ
-  - keywords?: string[]                  # 照合用キーワード
-
-customers（顧客）:
-  - isDuplicate: boolean                 # 同姓同名フラグ
-  - furigana: string                     # ふりがな（照合用）
-  - careManagerName?: string             # 担当ケアマネジャー名
-  - notes?: string                       # 区別用補足情報
-
-offices（事業所）:
-  - shortName?: string                   # 短縮名（OCR照合用）
-  - isDuplicate: boolean                 # 同名フラグ
-  - nameKey?: string                     # 正規化キー
-  - notes?: string                       # 区別用補足情報
-
-caremanagers（ケアマネ）:
-  - email?: string                       # メールアドレス（Google Workspace）
-  - notes?: string
-```
-
-### /documentGroups/{groupId}
-
-groupId = `{groupType}_{groupKey}`（例: `customer_やまだたろう`）
-
-```
-  - id: string                           # {groupType}_{groupKey}
-  - groupType: string                    # customer | office | documentType | careManager
-  - groupKey: string                     # 正規化キー
-  - displayName: string                  # 表示名（元の値）
-  - count: number                        # グループ内ドキュメント数
-  - latestAt: timestamp                  # 最新処理日時
-  - latestDocs: array                    # プレビュー用（最新3件）
-  - updatedAt: timestamp
-```
-
-### その他コレクション
-
-```
-/errors/{errorId}
-  - errorType: string                    # OCR完全失敗 | OCR部分失敗 | 情報抽出エラー | ファイル処理エラー | システムエラー
-  - fileName, fileId, errorDetails, fileUrl, status（未対応|対応中|完了）
-
-/gmailLogs/{logId}
-  - fileName, hash（MD5）, emailSubject, processedAt, fileUrl
-
-/users/{uid}
-  - email, role（admin|user）, createdAt, lastLoginAt
-
-/settings/app
-  - targetLabels: string[], labelSearchOperator（AND|OR）, errorNotificationEmails
-/settings/auth
-  - allowedDomains: string[]             # 自動ログイン許可ドメイン
-
-/search_index/{tokenId}                  # 反転インデックス + TF-IDF
-  - df: number, updatedAt: timestamp
-  - postings: map<docId, {score, fieldsMask, updatedAt}>
-  # fieldsMask: customerName=1, officeName=2, documentType=4, fileName=8, date=16
-
-/customerResolutionLogs/{logId}          # 顧客解決監査ログ
-  - documentId, previousCustomerId, newCustomerId, newCustomerName
-  - resolvedBy, resolvedByEmail, resolvedAt, reason?
-
-/officeResolutionLogs/{logId}            # 事業所解決監査ログ
-  - documentId, previousOfficeId, newOfficeId, newOfficeName
-  - resolvedBy, resolvedByEmail, resolvedAt, reason?
-
-/editLogs/{logId}                        # 編集監査ログ
-  - documentId, fieldName, editedBy, editedByEmail
-
-/aliasLearningLogs/{logId}               # エイリアス学習履歴
-  - masterType（office|customer|document）, masterId, masterName, alias
-  - learnedBy, learnedByEmail, learnedAt
-
-/uploadLogs/{logId}                      # アップロードログ
-
-/_migrations/{migrationId}               # マイグレーション状態
-  - status（pending|running|completed|failed）, processedCount, errorCount
-```
-
-## エラー種別定数
-
-| 種別 | 説明 |
-|------|------|
-| OCR完全失敗 | OCR処理が全ページで失敗 |
-| OCR部分失敗 | 一部ページのみ失敗 |
-| 情報抽出エラー | OCR成功だが書類名・顧客名抽出失敗 |
-| ファイル処理エラー | ファイル移動・リネーム失敗 |
-| システムエラー | API障害、認証エラー等 |
-
-## 参照
-- 詳細カラム定義: `reference/sections/01_data.md`
-- GASソースコード: `reference/gas-source/main-ocr-processor/config.js`
+</details>

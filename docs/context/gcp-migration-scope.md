@@ -3,7 +3,7 @@ title: "GCP移行スコープ"
 description: "AppSheet→GCP移行の対象範囲と要件定義"
 purpose: "AI駆動開発時のコンテキストとして優先読込"
 status: completed
-updated: "2026-02-06"
+updated: "2026-02-07"
 ---
 
 # GCP移行スコープ
@@ -34,21 +34,15 @@ updated: "2026-02-06"
 | APIキー排除 | Workload Identity Federation採用 |
 | データ保護 | VPC Service Controls検討 |
 
-### データベース（要相談）
-| 候補 | メリット | デメリット |
-|------|----------|------------|
-| **Firestore** | サーバーレス、従量課金、コスト最適 | 複雑なクエリに制限 |
-| Cloud SQL | RDB、柔軟なクエリ | 固定費発生 |
+### データベース（確定）
+| 選定 | 理由 |
+|------|------|
+| **Firestore** | サーバーレス、従量課金、無料枠で十分、Firebase統合 |
 
-**現時点の方向性**: Firestore（コスト圧縮優先）
-
-### ストレージ（要相談）
-| 候補 | メリット | デメリット |
-|------|----------|------------|
-| **Cloud Storage** | コスパ良好、柔軟なライフサイクル | Firebase統合なし |
-| Firebase Storage | Firestore連携容易 | 若干コスト高 |
-
-**現時点の方向性**: Cloud Storage（コストパフォーマンス優先）
+### ストレージ（確定）
+| 選定 | 理由 |
+|------|------|
+| **Cloud Storage** | コスパ良好、Cloud Functions連携がメイン |
 
 ### 認証
 | 項目 | 選定 | 備考 |
@@ -110,7 +104,7 @@ flowchart TD
         C -->|リネーム後| J[Cloud Storage<br/>永続保存]
     end
 
-    subgraph UI["フロントエンド（要相談）"]
+    subgraph UI["フロントエンド"]
         FA --> W[Web UI]
         I --> W
     end
@@ -181,19 +175,18 @@ flowchart TD
 | Google Workspace | Gmail APIのみ使用（OAuth）|
 | GAS | Cloud Functions |
 
-## 相談事項（TODO）
+## 相談事項（全件確定済み）
 
-### 解決済み
-1. [x] **フロントエンドUI**: Firebase Hosting + React SPAで確定
-2. [x] **コスト上限**: 月額3,000円以下
-3. [x] **Google Workspace使用有無**: 開発はOAuth 2.0（個人Gmail）、本番はWorkspace想定で両対応
-4. [x] **監視対象メールアドレス**: 設定画面で指定可能（開発用: `hy.unimail.11@gmail.com`）
-5. [x] **ログイン許可ユーザー**: ホワイトリスト方式（設定画面で管理、管理アカウントあり）
-
-### 確定（2026-01-17）
-6. [x] **Firestore vs Cloud SQL**: **Firestore**（無料枠で十分、Firebase統合）
-7. [x] **Cloud Storage vs Firebase Storage**: **Cloud Storage**（Cloud Functions連携がメイン）
-8. [x] **VPC Service Controls**: **不要**（コスト制約、アプリ層セキュリティで担保）
+| # | 事項 | 決定 |
+|---|------|------|
+| 1 | フロントエンドUI | Firebase Hosting + React SPA |
+| 2 | コスト上限 | 月額3,000円以下 |
+| 3 | Google Workspace使用有無 | 開発: OAuth 2.0、本番: Workspace両対応 |
+| 4 | 監視対象メールアドレス | 設定画面で指定可能 |
+| 5 | ログイン許可ユーザー | ホワイトリスト方式（設定画面管理） |
+| 6 | Firestore vs Cloud SQL | **Firestore**（無料枠、Firebase統合） |
+| 7 | Cloud Storage vs Firebase Storage | **Cloud Storage**（Functions連携） |
+| 8 | VPC Service Controls | **不要**（コスト制約、アプリ層で担保） |
 
 ## 参照
 - データモデル: `context/data-model.md`
