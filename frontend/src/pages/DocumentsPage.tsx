@@ -697,9 +697,9 @@ export function DocumentsPage() {
               </div>
             ) : (
               <>
-              <div className="overflow-auto max-h-[calc(100vh-280px)]">
+              <div className="overflow-x-auto">
                 <table className="w-full">
-                  <thead className="border-b border-gray-200 bg-gray-50 sticky top-0 z-10">
+                  <thead className="border-b border-gray-200 bg-gray-50">
                     <tr>
                       {isAdmin && (
                         <th className="px-2 py-2 sm:px-3 sm:py-3 w-10">
@@ -734,14 +734,14 @@ export function DocumentsPage() {
                     ))}
                   </tbody>
                 </table>
-                {/* 無限スクロール読み込みインジケーター（スクロールコンテナ内に配置） */}
-                <LoadMoreIndicator
-                  ref={loadMoreRef}
-                  hasNextPage={hasNextPage}
-                  isFetchingNextPage={isFetchingNextPage}
-                  className="border-t border-gray-100"
-                />
               </div>
+              {/* 無限スクロール読み込みインジケーター（ページスクロールで検知） */}
+              <LoadMoreIndicator
+                ref={loadMoreRef}
+                hasNextPage={hasNextPage}
+                isFetchingNextPage={isFetchingNextPage}
+                className="border-t border-gray-100"
+              />
             </>
             )}
           </Card>
