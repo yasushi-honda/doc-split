@@ -51,6 +51,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { functions, db } from '@/lib/firebase'
 import { Checkbox } from '@/components/ui/checkbox'
 import { useInfiniteDocuments, useDocumentStats, useDocumentMasters, type DocumentFilters, type SortField, type SortOrder } from '@/hooks/useDocuments'
+import { DateRangeFilter, type DateRange } from '@/components/DateRangeFilter'
 import { isCustomerConfirmed } from '@/hooks/useProcessingHistory'
 import { DocumentDetailModal } from '@/components/DocumentDetailModal'
 import { AliasLearningHistoryModal } from '@/components/AliasLearningHistoryModal'
@@ -255,6 +256,11 @@ export function DocumentsPage() {
   const [showFilters, setShowFilters] = useState(false)
   const [showSplit, setShowSplit] = useState(false) // 分割済み表示フラグ
   const [showUnverifiedOnly, setShowUnverifiedOnly] = useState(false) // 未確認のみ表示フラグ
+  const [dateRange, setDateRange] = useState<DateRange>({
+    dateFrom: undefined,
+    dateTo: undefined,
+    dateField: 'fileDate',
+  })
 
   // ソート状態（デフォルト: 登録日の新しい順）
   const [sortField, setSortField] = useState<SortField>('processedAt')
@@ -289,9 +295,12 @@ export function DocumentsPage() {
   const filters: DocumentFilters = useMemo(() => ({
     status: effectiveStatusFilter === 'all' ? undefined : effectiveStatusFilter,
     documentType: documentTypeFilter === 'all' ? undefined : documentTypeFilter,
+    dateFrom: dateRange.dateFrom,
+    dateTo: dateRange.dateTo,
+    dateField: dateRange.dateField,
     sortField,
     sortOrder,
-  }), [effectiveStatusFilter, documentTypeFilter, sortField, sortOrder])
+  }), [effectiveStatusFilter, documentTypeFilter, dateRange.dateFrom, dateRange.dateTo, dateRange.dateField, sortField, sortOrder])
 
   // データ取得（無限スクロール対応）
   const {
@@ -602,12 +611,13 @@ export function DocumentsPage() {
           </Button>
         </div>
 
-        {/* 書類一覧タブ */}
-        <TabsContent value="list" className="space-y-4">
-          {/* 展開フィルター */}
-          {showFilters && (
-              <Card>
-                <CardContent className="flex flex-wrap gap-4 p-4">
+        {/* 展開フィルター（全タブ共通） */}
+        {showFilters && (
+          <Card className="mb-4">
+            <CardContent className="space-y-3 p-4">
+              {/* 上段: ステータス・書類種別（書類一覧タブのみ） */}
+              {activeTab === 'list' && (
+                <div className="flex flex-wrap gap-4">
                   <div className="min-w-[200px] flex-1">
                     <label className="mb-1 block text-sm font-medium text-gray-700">ステータス</label>
                     <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as DocumentStatus | 'all')}>
@@ -668,10 +678,17 @@ export function DocumentsPage() {
                       分割元も表示
                     </label>
                   </div>
-                </CardContent>
-              </Card>
-          )}
+                </div>
+              )}
 
+              {/* 期間指定フィルター（全タブ共通） */}
+              <DateRangeFilter value={dateRange} onChange={setDateRange} />
+            </CardContent>
+          </Card>
+        )}
+
+        {/* 書類一覧タブ */}
+        <TabsContent value="list" className="space-y-4">
           {/* 書類リスト */}
           <Card>
             {isLoading ? (
@@ -752,6 +769,7 @@ export function DocumentsPage() {
           <TabsContent key={groupType} value={groupType}>
             <GroupList
               groupType={groupType}
+              dateFilter={dateRange}
               onDocumentSelect={(docId) => setSelectedDocumentId(docId)}
             />
           </TabsContent>
