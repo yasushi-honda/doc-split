@@ -69,6 +69,7 @@ jobs:
             'FIRESTORE_EMULATOR_HOST=localhost:8085 node scripts/seed-e2e-data.js && \
              cd frontend && \
              npx vite --port 5173 & sleep 5 && \
+             cd frontend && \
              E2E_BASE_URL=http://localhost:5173 CI=true npx playwright test --grep @emulator'
         env:
           FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
