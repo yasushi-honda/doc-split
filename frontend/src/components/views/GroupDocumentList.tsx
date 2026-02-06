@@ -25,6 +25,7 @@ import type { Document } from '@shared/types';
 interface GroupDocumentListProps {
   groupType: GroupType;
   groupKey: string;
+  furiganaMap?: Map<string, string>;
   onDocumentSelect?: (documentId: string) => void;
 }
 
@@ -111,6 +112,7 @@ function DocumentRow({ document, groupType, onClick }: DocumentRowProps) {
 export function GroupDocumentList({
   groupType,
   groupKey,
+  furiganaMap,
   onDocumentSelect,
 }: GroupDocumentListProps) {
   const {
@@ -164,6 +166,7 @@ export function GroupDocumentList({
       <div className="max-h-[500px] overflow-y-auto">
         <CustomerSubGroup
           documents={allDocuments}
+          furiganaMap={furiganaMap}
           onDocumentSelect={onDocumentSelect}
         />
 

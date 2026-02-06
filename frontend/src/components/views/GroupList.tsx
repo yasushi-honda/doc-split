@@ -3,9 +3,12 @@
  *
  * ドキュメントグループをアコーディオン形式で表示
  * 展開時にグループ内ドキュメントを取得・表示
+ * 顧客別: あいうえお順ソート + あかさたなフィルター
+ * 担当CM別: 顧客サブグループをあいうえお順
+ * 他タブ: 件数順（従来通り）
  */
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import {
   ChevronRight,
   ChevronDown,
@@ -28,6 +31,14 @@ import {
   type GroupType,
   type DocumentGroup,
 } from '@/hooks/useDocumentGroups';
+import { useCustomers } from '@/hooks/useMasters';
+import { KanaFilterBar } from '@/components/KanaFilterBar';
+import {
+  buildFuriganaMap,
+  sortGroupsByFurigana,
+  filterGroupsByKanaRow,
+  type KanaRow,
+} from '@/lib/kanaUtils';
 import { GroupDocumentList } from './GroupDocumentList';
 
 // ============================================
@@ -89,11 +100,12 @@ function formatTimestamp(timestamp: Timestamp | undefined): string {
 interface GroupItemProps {
   group: DocumentGroup;
   isExpanded: boolean;
+  furiganaMap?: Map<string, string>;
   onToggle: () => void;
   onDocumentSelect?: (documentId: string) => void;
 }
 
-function GroupItem({ group, isExpanded, onToggle, onDocumentSelect }: GroupItemProps) {
+function GroupItem({ group, isExpanded, furiganaMap, onToggle, onDocumentSelect }: GroupItemProps) {
   const config = GROUP_TYPE_CONFIG[group.groupType];
   const Icon = config.icon;
 
@@ -131,6 +143,7 @@ function GroupItem({ group, isExpanded, onToggle, onDocumentSelect }: GroupItemP
           <GroupDocumentList
             groupType={group.groupType}
             groupKey={group.groupKey}
+            furiganaMap={furiganaMap}
             onDocumentSelect={onDocumentSelect}
           />
         </div>
@@ -145,6 +158,10 @@ function GroupItem({ group, isExpanded, onToggle, onDocumentSelect }: GroupItemP
 
 export function GroupList({ groupType, onDocumentSelect }: GroupListProps) {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [selectedKanaRow, setSelectedKanaRow] = useState<KanaRow | null>(null);
+
+  const isCustomerView = groupType === 'customer';
+  const needsFurigana = groupType === 'customer' || groupType === 'careManager';
 
   const {
     data: groups,
@@ -153,11 +170,27 @@ export function GroupList({ groupType, onDocumentSelect }: GroupListProps) {
     error,
   } = useDocumentGroups({
     groupType,
-    sortBy: 'count',
-    limitCount: 100,
+    // 顧客別: クライアントソートのためorderBy/limitなし
+    sortBy: isCustomerView ? 'none' : 'count',
+    limitCount: isCustomerView ? undefined : 100,
   });
 
   const { data: stats } = useGroupStats(groupType);
+
+  // 顧客マスター（顧客別・担当CM別のみ取得）
+  const { data: customers } = useCustomers();
+  const furiganaMap = useMemo(
+    () => (needsFurigana && customers ? buildFuriganaMap(customers) : new Map<string, string>()),
+    [needsFurigana, customers]
+  );
+
+  // 顧客別: あいうえお順ソート + フィルター
+  const displayGroups = useMemo(() => {
+    if (!groups) return [];
+    if (!isCustomerView) return groups;
+    const sorted = sortGroupsByFurigana(groups, furiganaMap);
+    return filterGroupsByKanaRow(sorted, selectedKanaRow, furiganaMap);
+  }, [groups, isCustomerView, furiganaMap, selectedKanaRow]);
 
   const config = GROUP_TYPE_CONFIG[groupType];
 
@@ -230,19 +263,37 @@ export function GroupList({ groupType, onDocumentSelect }: GroupListProps) {
         </div>
       )}
 
+      {/* あかさたなフィルター（顧客別のみ） */}
+      {isCustomerView && (
+        <KanaFilterBar selected={selectedKanaRow} onSelect={setSelectedKanaRow} />
+      )}
+
       {/* グループ一覧 */}
       <Card>
+        {/* フィルター適用時の件数表示 */}
+        {isCustomerView && selectedKanaRow && (
+          <div className="px-4 py-2 text-xs text-gray-500 border-b border-gray-100">
+            {displayGroups.length}件 / {groups.length}件
+          </div>
+        )}
         <div className="divide-y divide-gray-100">
-          {groups.map((group) => (
+          {displayGroups.map((group) => (
             <GroupItem
               key={group.id}
               group={group}
               isExpanded={expandedGroups.has(group.id)}
+              furiganaMap={needsFurigana ? furiganaMap : undefined}
               onToggle={() => toggleGroup(group.id)}
               onDocumentSelect={onDocumentSelect}
             />
           ))}
         </div>
+        {/* フィルターで結果0件の場合 */}
+        {isCustomerView && selectedKanaRow && displayGroups.length === 0 && (
+          <div className="py-8 text-center text-sm text-gray-500">
+            「{selectedKanaRow}」行の顧客はいません
+          </div>
+        )}
       </Card>
     </div>
   );

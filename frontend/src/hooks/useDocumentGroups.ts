@@ -46,7 +46,7 @@ export interface DocumentGroup {
 
 export interface UseDocumentGroupsOptions {
   groupType: GroupType;
-  sortBy?: 'count' | 'latestAt';
+  sortBy?: 'count' | 'latestAt' | 'none';
   limitCount?: number;
   enabled?: boolean;
 }
@@ -75,15 +75,21 @@ const GROUP_KEY_FIELD: Record<GroupType, string> = {
 
 async function fetchDocumentGroups(
   groupType: GroupType,
-  sortBy: 'count' | 'latestAt',
+  sortBy: 'count' | 'latestAt' | 'none',
   limitCount: number
 ): Promise<DocumentGroup[]> {
-  const q = query(
-    collection(db, 'documentGroups'),
-    where('groupType', '==', groupType),
-    orderBy(sortBy, 'desc'),
-    limit(limitCount)
-  );
+  // 顧客別はクライアントソート（あいうえお順）のため orderBy/limit なしで全件取得
+  const q = sortBy === 'none'
+    ? query(
+        collection(db, 'documentGroups'),
+        where('groupType', '==', groupType)
+      )
+    : query(
+        collection(db, 'documentGroups'),
+        where('groupType', '==', groupType),
+        orderBy(sortBy, 'desc'),
+        limit(limitCount)
+      );
 
   const snapshot = await getDocs(q);
 

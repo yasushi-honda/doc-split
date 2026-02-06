@@ -23,6 +23,7 @@ import type { Document } from '@shared/types';
 
 interface CustomerSubGroupProps {
   documents: Document[];
+  furiganaMap?: Map<string, string>;
   onDocumentSelect?: (documentId: string) => void;
 }
 
@@ -34,7 +35,10 @@ interface CustomerGroup {
 }
 
 
-function groupByCustomer(documents: Document[]): CustomerGroup[] {
+function groupByCustomer(
+  documents: Document[],
+  furiganaMap?: Map<string, string>
+): CustomerGroup[] {
   const groupMap = new Map<string, CustomerGroup>();
 
   for (const doc of documents) {
@@ -61,8 +65,20 @@ function groupByCustomer(documents: Document[]): CustomerGroup[] {
     }
   }
 
-  // 件数の多い順にソート
-  return Array.from(groupMap.values()).sort((a, b) => b.documents.length - a.documents.length);
+  const groups = Array.from(groupMap.values());
+
+  // ふりがなマップがある場合はあいうえお順、なければ件数順
+  if (furiganaMap && furiganaMap.size > 0) {
+    return groups.sort((a, b) => {
+      const readingA = furiganaMap.get(a.customerName) ?? '';
+      const readingB = furiganaMap.get(b.customerName) ?? '';
+      if (readingA && !readingB) return -1;
+      if (!readingA && readingB) return 1;
+      if (!readingA && !readingB) return a.customerName.localeCompare(b.customerName, 'ja');
+      return readingA.localeCompare(readingB, 'ja');
+    });
+  }
+  return groups.sort((a, b) => b.documents.length - a.documents.length);
 }
 
 // ============================================
@@ -192,12 +208,16 @@ function CustomerGroupItem({
 
 export function CustomerSubGroup({
   documents,
+  furiganaMap,
   onDocumentSelect,
 }: CustomerSubGroupProps) {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
 
-  // ドキュメントを顧客ごとにグループ化
-  const customerGroups = useMemo(() => groupByCustomer(documents), [documents]);
+  // ドキュメントを顧客ごとにグループ化（ふりがなマップがあればあいうえお順）
+  const customerGroups = useMemo(
+    () => groupByCustomer(documents, furiganaMap),
+    [documents, furiganaMap]
+  );
 
   const toggleGroup = (customerKey: string) => {
     setExpandedGroups((prev) => {
