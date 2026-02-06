@@ -88,18 +88,25 @@ test.describe('認証・書類一覧 @emulator', () => {
   });
 
   test('顧客別タブに切り替えられる', async ({ page }) => {
-    await page.locator('[role="tab"]').filter({ hasText: '顧客別' }).click();
+    const tab = page.locator('[role="tab"]').filter({ hasText: '顧客別' });
+    await tab.click();
 
-    // グループビューがレンダリングされるまで待機（テーブルではなくカード/リストが表示される）
-    // シードデータの顧客名が表示される
-    await expect(page.locator('text=阿部太郎').first()).toBeVisible({ timeout: 15000 });
+    // タブがアクティブになる
+    await expect(tab).toHaveAttribute('data-state', 'active', { timeout: 5000 });
+
+    // グループビューがレンダリングされるまで待機
+    await expect(page.locator('text=阿部太郎').first()).toBeVisible({ timeout: 20000 });
   });
 
   test('事業所別タブに切り替えられる', async ({ page }) => {
-    await page.locator('[role="tab"]').filter({ hasText: '事業所別' }).click();
+    const tab = page.locator('[role="tab"]').filter({ hasText: '事業所別' });
+    await tab.click();
 
-    // 事業所名が表示される
-    await expect(page.locator('text=テスト第一事業所').first()).toBeVisible({ timeout: 15000 });
+    // タブがアクティブになる
+    await expect(tab).toHaveAttribute('data-state', 'active', { timeout: 5000 });
+
+    // グループビューがレンダリングされるまで待機
+    await expect(page.locator('text=テスト第一事業所').first()).toBeVisible({ timeout: 20000 });
   });
 
   test('書類一覧タブに戻れる', async ({ page }) => {

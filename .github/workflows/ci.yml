@@ -65,8 +65,9 @@ jobs:
 
       - name: Run E2E tests
         run: |
-          firebase emulators:exec --only auth,firestore \
+          firebase emulators:exec --only auth,firestore,functions \
             'FIRESTORE_EMULATOR_HOST=localhost:8085 node scripts/seed-e2e-data.js && \
+             sleep 5 && \
              cd frontend && \
              npx vite --port 5173 & sleep 5 && \
              cd frontend && \

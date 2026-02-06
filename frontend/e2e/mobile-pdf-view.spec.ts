@@ -3,13 +3,15 @@
  * エミュレータ環境でモバイルUIの動作を確認
  */
 
-import { test, expect, devices, Page } from '@playwright/test';
+import { test, expect, Page } from '@playwright/test';
 
-// モバイルデバイス設定（test.useはdescribe外で設定）
-const mobileDevice = devices['iPhone 14'];
-
+// モバイルViewport設定（CIではChromiumのみのため、devices[]ではなくviewport直指定）
 test.use({
-  ...mobileDevice,
+  viewport: { width: 390, height: 844 },
+  userAgent:
+    'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1',
+  isMobile: true,
+  hasTouch: true,
   baseURL: process.env.E2E_BASE_URL || 'http://localhost:5173',
 });
 
