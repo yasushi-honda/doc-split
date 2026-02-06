@@ -43,10 +43,17 @@ firebase projects:addfirebase <project-id>
 ./scripts/setup-tenant.sh my-docsplit admin@example.com --with-gmail
 ```
 
+Claude Code / CI用（非対話モード）:
+```bash
+./scripts/setup-tenant.sh <project-id> <admin-email> --yes
+./scripts/setup-tenant.sh <project-id> <admin-email> --with-gmail --client-id=X --client-secret=Y --auth-code=Z --yes
+```
+
 Gmail設定を後から行う場合:
 ```bash
 ./scripts/setup-tenant.sh <project-id> <admin-email>
 ./scripts/setup-gmail-auth.sh <project-id>
+./scripts/setup-gmail-auth.sh <project-id> --client-id=X --client-secret=Y --auth-code=Z
 ```
 
 ### Step 4: セットアップ検証

@@ -54,9 +54,14 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
 # 一括セットアップ（Gmail OAuth込み）※推奨
 ./scripts/setup-tenant.sh <project-id> <admin-email> --with-gmail
 
+# Claude Code / CI用（非対話モード）
+./scripts/setup-tenant.sh <project-id> <admin-email> --yes
+./scripts/setup-tenant.sh <project-id> <admin-email> --with-gmail --client-id=X --client-secret=Y --auth-code=Z --yes
+
 # 段階的セットアップ
 ./scripts/setup-tenant.sh <project-id> <admin-email>
 ./scripts/setup-gmail-auth.sh <project-id>
+./scripts/setup-gmail-auth.sh <project-id> --client-id=X --client-secret=Y --auth-code=Z
 
 # セットアップ検証
 ./scripts/verify-setup.sh <project-id>
@@ -407,8 +412,8 @@ doc-split/
 │   ├── test/                    # テスト
 │   └── package.json
 ├── scripts/                     # 運用・セットアップスクリプト
-│   ├── setup-tenant.sh          # テナント初期設定（推奨: --with-gmail）
-│   ├── setup-gmail-auth.sh      # Gmail OAuth認証設定
+│   ├── setup-tenant.sh          # テナント初期設定（推奨: --with-gmail --yes）
+│   ├── setup-gmail-auth.sh      # Gmail OAuth認証設定（--client-id/secret/auth-code で非対話モード）
 │   ├── verify-setup.sh          # セットアップ検証
 │   ├── deploy-to-project.sh     # マルチ環境デプロイ
 │   ├── deploy-all-clients.sh    # 全クライアント一括デプロイ

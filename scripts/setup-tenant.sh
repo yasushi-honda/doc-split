@@ -6,10 +6,14 @@
 #   ./setup-tenant.sh <project-id> <admin-email> [OPTIONS]
 #
 # オプション:
-#   --with-gmail       Gmail OAuth認証も一括設定（対話式）
+#   --with-gmail       Gmail OAuth認証も一括設定
 #   --gmail-account=X  監視対象Gmailアカウント（省略時はadmin-emailを使用）
 #   --skip-functions   Cloud Functionsデプロイをスキップ
 #   --skip-hosting     Hostingデプロイをスキップ
+#   --yes / -y         確認プロンプトをすべて自動承認（CI/Claude Code用）
+#   --client-id=X      Gmail OAuth Client ID（--with-gmailと併用）
+#   --client-secret=X  Gmail OAuth Client Secret（--with-gmailと併用）
+#   --auth-code=X      Gmail OAuth 認証コード（--with-gmailと併用）
 #
 # 実行内容:
 #   1. GCP API有効化
@@ -48,14 +52,20 @@ usage() {
     echo "  admin-email   初期管理者のメールアドレス"
     echo ""
     echo "Options:"
-    echo "  --with-gmail        Gmail OAuth認証も一括設定（対話式）"
+    echo "  --with-gmail        Gmail OAuth認証も一括設定"
     echo "  --gmail-account=X   監視対象Gmailアカウント（省略時はadmin-email）"
     echo "  --skip-functions    Cloud Functionsデプロイをスキップ"
     echo "  --skip-hosting      Hostingデプロイをスキップ"
+    echo "  --yes, -y           確認プロンプトを自動承認（CI/Claude Code用）"
+    echo "  --client-id=X       Gmail OAuth Client ID（--with-gmailと併用）"
+    echo "  --client-secret=X   Gmail OAuth Client Secret（--with-gmailと併用）"
+    echo "  --auth-code=X       Gmail OAuth 認証コード（--with-gmailと併用）"
     echo ""
     echo "Examples:"
     echo "  $0 client-docsplit admin@client.com"
     echo "  $0 client-docsplit admin@client.com --with-gmail"
+    echo "  $0 client-docsplit admin@client.com --with-gmail --yes"
+    echo "  $0 client-docsplit admin@client.com --with-gmail --client-id=XXX --client-secret=YYY --auth-code=ZZZ --yes"
     echo "  $0 client-docsplit admin@client.com --gmail-account=support@client.com"
     exit 1
 }
@@ -73,6 +83,10 @@ GMAIL_ACCOUNT="$ADMIN_EMAIL"
 WITH_GMAIL=false
 SKIP_FUNCTIONS=false
 SKIP_HOSTING=false
+ASSUME_YES=false
+GMAIL_CLIENT_ID=""
+GMAIL_CLIENT_SECRET=""
+GMAIL_AUTH_CODE=""
 
 # オプション解析
 shift 2
@@ -89,6 +103,18 @@ for arg in "$@"; do
             ;;
         --skip-hosting)
             SKIP_HOSTING=true
+            ;;
+        --yes|-y)
+            ASSUME_YES=true
+            ;;
+        --client-id=*)
+            GMAIL_CLIENT_ID="${arg#*=}"
+            ;;
+        --client-secret=*)
+            GMAIL_CLIENT_SECRET="${arg#*=}"
+            ;;
+        --auth-code=*)
+            GMAIL_AUTH_CODE="${arg#*=}"
             ;;
         *)
             # 位置引数として扱う（後方互換性のため）
@@ -122,7 +148,12 @@ echo ""
 echo "このアカウントがプロジェクト '$PROJECT_ID' のオーナーまたは編集者である必要があります。"
 echo ""
 
-read -p "この設定で続行しますか？ (y/n): " CONFIRM
+if [ "$ASSUME_YES" = true ]; then
+    CONFIRM="y"
+    log_info "自動承認モード: 続行します"
+else
+    read -p "この設定で続行しますか？ (y/n): " CONFIRM
+fi
 if [ "$CONFIRM" != "y" ]; then
     echo ""
     echo -e "${YELLOW}別アカウントで認証する場合:${NC}"
@@ -184,7 +215,12 @@ else
     echo "    --member=\"serviceAccount:$FUNCTIONS_SA\" \\"
     echo "    --role=\"roles/aiplatform.user\""
     echo ""
-    read -p "続行しますか？ (y/n): " CONTINUE_IAM
+    if [ "$ASSUME_YES" = true ]; then
+        CONTINUE_IAM="y"
+        log_info "自動承認モード: 続行します"
+    else
+        read -p "続行しますか？ (y/n): " CONTINUE_IAM
+    fi
     if [ "$CONTINUE_IAM" != "y" ]; then
         echo "キャンセルしました"
         exit 1
@@ -568,7 +604,11 @@ if [ "$WITH_GMAIL" = true ]; then
     echo ""
     log_info "Step 8: Gmail OAuth認証設定..."
     echo ""
-    "$SCRIPT_DIR/setup-gmail-auth.sh" "$PROJECT_ID"
+    GMAIL_ARGS="$PROJECT_ID"
+    [ -n "$GMAIL_CLIENT_ID" ] && GMAIL_ARGS="$GMAIL_ARGS --client-id=$GMAIL_CLIENT_ID"
+    [ -n "$GMAIL_CLIENT_SECRET" ] && GMAIL_ARGS="$GMAIL_ARGS --client-secret=$GMAIL_CLIENT_SECRET"
+    [ -n "$GMAIL_AUTH_CODE" ] && GMAIL_ARGS="$GMAIL_ARGS --auth-code=$GMAIL_AUTH_CODE"
+    "$SCRIPT_DIR/setup-gmail-auth.sh" $GMAIL_ARGS
     log_success "Gmail OAuth認証設定完了"
 fi
 
