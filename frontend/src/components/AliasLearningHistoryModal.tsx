@@ -9,6 +9,7 @@ import { History, User, Building, FileText, Loader2, ChevronDown } from 'lucide-
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
@@ -90,6 +91,9 @@ export function AliasLearningHistoryModal({ open, onOpenChange }: AliasLearningH
             <History className="h-5 w-5 text-gray-600" />
             学習履歴
           </DialogTitle>
+          <DialogDescription className="sr-only">
+            エイリアス学習の履歴一覧
+          </DialogDescription>
         </DialogHeader>
 
         <Tabs value={filterType} onValueChange={(v) => setFilterType(v as AliasLearningMasterType | 'all')} className="flex-1 flex flex-col">
