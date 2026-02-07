@@ -560,89 +560,101 @@ export function DocumentsPage() {
           {/* 一括操作ボタン（管理者のみ） */}
           {isAdmin && (
             <div className="flex items-center gap-1.5 ml-auto">
-              {/* 選択モード中: 件数表示（モバイル:バッジ / デスクトップ:テキスト） */}
-              {selectionMode && (
-                <>
-                  {isBulkOperating && (
-                    <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
-                  )}
-                  {/* モバイル: コンパクトなバッジ */}
-                  <span className="sm:hidden inline-flex items-center justify-center h-5 min-w-[1.25rem] rounded-full bg-blue-600 text-white text-xs font-bold px-1">
-                    {selectedIds.size}
-                  </span>
-                  {/* デスクトップ: フルテキスト */}
-                  <span className={`hidden sm:inline text-sm font-medium whitespace-nowrap mr-1 ${isBulkOperating ? 'text-blue-700' : 'text-blue-800'}`}>
-                    {isBulkOperating
-                      ? `${selectedIds.size}件を処理中...`
-                      : `${selectedIds.size}件選択中`
-                    }
-                  </span>
-                </>
+              {/* 処理中スピナー */}
+              {selectionMode && isBulkOperating && (
+                <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
               )}
 
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  if (selectionMode === 'reprocess' && selectedIds.size > 0) {
-                    setBulkOperation('reprocess')
-                  } else {
-                    setSelectionMode(selectionMode === 'reprocess' ? null : 'reprocess')
-                    setSelectedIds(new Set())
-                  }
-                }}
-                disabled={isBulkOperating || (!!selectionMode && selectionMode !== 'reprocess')}
-                className={`flex items-center gap-1 h-7 text-xs transition-all ${
-                  selectionMode === 'reprocess'
-                    ? 'bg-blue-100 border-blue-400 text-blue-700 ring-1 ring-blue-400'
-                    : selectionMode ? 'opacity-40' : ''
-                }`}
-              >
-                <RotateCcw className={`h-3.5 w-3.5 ${isBulkOperating && bulkOperation === 'reprocess' ? 'animate-spin' : ''}`} />
-                <span className="hidden sm:inline">再処理</span>
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  if (selectionMode === 'verify' && selectedIds.size > 0) {
-                    setBulkOperation('verify')
-                  } else {
-                    setSelectionMode(selectionMode === 'verify' ? null : 'verify')
-                    setSelectedIds(new Set())
-                  }
-                }}
-                disabled={isBulkOperating || (!!selectionMode && selectionMode !== 'verify')}
-                className={`flex items-center gap-1 h-7 text-xs transition-all ${
-                  selectionMode === 'verify'
-                    ? 'bg-blue-100 border-blue-400 text-blue-700 ring-1 ring-blue-400'
-                    : selectionMode ? 'opacity-40' : ''
-                }`}
-              >
-                <CheckCircle2 className="h-3.5 w-3.5" />
-                <span className="hidden sm:inline">確認済み</span>
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  if (selectionMode === 'delete' && selectedIds.size > 0) {
-                    setBulkOperation('delete')
-                  } else {
-                    setSelectionMode(selectionMode === 'delete' ? null : 'delete')
-                    setSelectedIds(new Set())
-                  }
-                }}
-                disabled={isBulkOperating || (!!selectionMode && selectionMode !== 'delete')}
-                className={`flex items-center gap-1 h-7 text-xs transition-all ${
-                  selectionMode === 'delete'
-                    ? 'bg-red-100 border-red-400 text-red-700 ring-1 ring-red-400'
-                    : selectionMode ? 'opacity-40' : 'text-red-600 hover:text-red-700 hover:bg-red-50 border-red-200'
-                }`}
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-                <span className="hidden sm:inline">削除</span>
-              </Button>
+              {/* 再処理ボタン */}
+              <div className="relative">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    if (selectionMode === 'reprocess' && selectedIds.size > 0) {
+                      setBulkOperation('reprocess')
+                    } else {
+                      setSelectionMode(selectionMode === 'reprocess' ? null : 'reprocess')
+                      setSelectedIds(new Set())
+                    }
+                  }}
+                  disabled={isBulkOperating || (!!selectionMode && selectionMode !== 'reprocess')}
+                  className={`flex items-center gap-1 h-7 text-xs transition-all ${
+                    selectionMode === 'reprocess'
+                      ? 'bg-blue-100 border-blue-400 text-blue-700 ring-1 ring-blue-400'
+                      : selectionMode ? 'opacity-40' : ''
+                  }`}
+                >
+                  <RotateCcw className={`h-3.5 w-3.5 ${isBulkOperating && bulkOperation === 'reprocess' ? 'animate-spin' : ''}`} />
+                  <span className="hidden sm:inline">再処理</span>
+                </Button>
+                {/* フローティングバッジ（アクティブ時） */}
+                {selectionMode === 'reprocess' && (
+                  <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 inline-flex items-center rounded-full bg-blue-600 text-white text-[10px] font-bold px-1.5 py-0 leading-4 shadow-sm whitespace-nowrap pointer-events-none">
+                    {selectedIds.size}<span className="hidden sm:inline">件選択中</span>
+                  </span>
+                )}
+              </div>
+
+              {/* 確認済みボタン */}
+              <div className="relative">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    if (selectionMode === 'verify' && selectedIds.size > 0) {
+                      setBulkOperation('verify')
+                    } else {
+                      setSelectionMode(selectionMode === 'verify' ? null : 'verify')
+                      setSelectedIds(new Set())
+                    }
+                  }}
+                  disabled={isBulkOperating || (!!selectionMode && selectionMode !== 'verify')}
+                  className={`flex items-center gap-1 h-7 text-xs transition-all ${
+                    selectionMode === 'verify'
+                      ? 'bg-blue-100 border-blue-400 text-blue-700 ring-1 ring-blue-400'
+                      : selectionMode ? 'opacity-40' : ''
+                  }`}
+                >
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline">確認済み</span>
+                </Button>
+                {selectionMode === 'verify' && (
+                  <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 inline-flex items-center rounded-full bg-blue-600 text-white text-[10px] font-bold px-1.5 py-0 leading-4 shadow-sm whitespace-nowrap pointer-events-none">
+                    {selectedIds.size}<span className="hidden sm:inline">件選択中</span>
+                  </span>
+                )}
+              </div>
+
+              {/* 削除ボタン */}
+              <div className="relative">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    if (selectionMode === 'delete' && selectedIds.size > 0) {
+                      setBulkOperation('delete')
+                    } else {
+                      setSelectionMode(selectionMode === 'delete' ? null : 'delete')
+                      setSelectedIds(new Set())
+                    }
+                  }}
+                  disabled={isBulkOperating || (!!selectionMode && selectionMode !== 'delete')}
+                  className={`flex items-center gap-1 h-7 text-xs transition-all ${
+                    selectionMode === 'delete'
+                      ? 'bg-red-100 border-red-400 text-red-700 ring-1 ring-red-400'
+                      : selectionMode ? 'opacity-40' : 'text-red-600 hover:text-red-700 hover:bg-red-50 border-red-200'
+                  }`}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline">削除</span>
+                </Button>
+                {selectionMode === 'delete' && (
+                  <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 inline-flex items-center rounded-full bg-red-600 text-white text-[10px] font-bold px-1.5 py-0 leading-4 shadow-sm whitespace-nowrap pointer-events-none">
+                    {selectedIds.size}<span className="hidden sm:inline">件選択中</span>
+                  </span>
+                )}
+              </div>
 
               {/* 選択モード終了ボタン */}
               {selectionMode && (
