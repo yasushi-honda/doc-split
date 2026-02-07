@@ -8,6 +8,9 @@
 
 | PR/コミット | 内容 |
 |----|------|
+| **#73** | **invalidateQueries queryKeyミスマッチ全箇所修正**（アップロード/編集/分割/エラー再処理の4箇所） |
+| **#72** | **一括確認・再処理のqueryKey修正**（2箇所） |
+| **#71** | **ネットワーク状態バナー＋一括削除の楽観的UI更新＋queryKeyバグ修正** |
 | **#70** | **E2Eテスト「詳細モーダルを閉じる」CI失敗修正** + `.gitignore`に`.serena/`・`*.png`追加 |
 | 09856eb | **CLAUDE.md最適化**（395行→87行、公式ベストプラクティス準拠） |
 | c36d58e | **OCRバグ修正：processingスタック対応**（errorLogger undefinedフィルタ、handleProcessingError status優先更新、fix-stuck-documents.js追加）|
@@ -60,14 +63,26 @@
 
 | 環境 | 状態 |
 |------|------|
-| dev | デプロイ済み（02-07、fed81fe反映） |
-| kanameone | デプロイ済み（02-07、09856eb反映、スタック21件復旧済み） |
+| dev | デプロイ済み（02-07、5de949c反映） |
+| kanameone | デプロイ済み（02-07、5de949c反映） |
 
 ## 未解決の既知バグ
 
 なし（02-07: processingスタックバグは修正・復旧済み）
 
+## Codexレビュー指摘事項（バックログ）
+
+PR #71対応時にCodex（GPT）レビューで検出。今後の改善候補:
+
+| 重要度 | 指摘 | 箇所 |
+|--------|------|------|
+| Medium | PDF系Callable（detectSplitPoints等）にwhitelist/adminチェックなし | `pdfOperations.ts` |
+| Medium | `useSearch`でレンダー中にsetState | `useSearch.ts:113-121` |
+| Medium | Geminiレート制限がインスタンス内のみ | `rateLimiter.ts` |
+| Medium | Gmail検索が日単位（`after:YYYY-MM-DD`） | `checkGmailAttachments.ts:137` |
+
 ## 次のアクション候補（優先度順）
 
 1. **クライアント別オプション機能の実装**（最初の具体的要望確定時）→ ADR-0009参照
-2. 精度改善（フィードバック後）
+2. Codexレビュー指摘対応（上記バックログ）
+3. 精度改善（フィードバック後）
