@@ -1,6 +1,7 @@
 import { Outlet, Link, useLocation } from 'react-router-dom'
 import { FileText, Settings, LogOut, AlertCircle, Database, History, HelpCircle } from 'lucide-react'
 import { useAuthStore } from '@/stores/authStore'
+import { NetworkStatusBar } from '@/components/NetworkStatusBar'
 
 export function Layout() {
   const location = useLocation()
@@ -66,6 +67,8 @@ export function Layout() {
           </div>
         </div>
       </header>
+
+      <NetworkStatusBar />
 
       {/* Main content */}
       <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
