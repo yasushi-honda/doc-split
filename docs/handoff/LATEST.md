@@ -8,6 +8,8 @@
 
 | PR/コミット | 内容 |
 |----|------|
+| 15c9cd3 | **setup-tenant.shで--with-gmail時にauthModeをoauthに設定**（新規クライアントGmail取得失敗バグ修正） |
+| a49219e | **API仕様に認証・権限一覧追加、納品ガイドのinitTenant記述修正** |
 | **#87** | **全Callable関数の認証・権限チェック統一**（PDF系3関数に認証+WL追加、OCR/検索系にWL追加、マスター操作にadmin確認追加、initTenantに初回限定ガード追加） |
 | **#86** | **一括操作の操作手順をヘルプ・管理者ガイドに追加**（HelpPage セクション6新設、admin-guide更新） |
 | **#85** | **一括操作ボタンのDRY違反解消**（BulkActionButton共通コンポーネント抽出） |
@@ -77,8 +79,9 @@
 
 | 環境 | 状態 |
 |------|------|
-| dev | デプロイ済み（02-07、bf9f991反映、PR #87含む） |
-| kanameone | デプロイ済み（02-07、bf9f991反映、PR #87含む） |
+| dev | デプロイ済み（02-07、Functions: PR #87反映、Hosting: PR #86反映） |
+| kanameone | デプロイ済み（02-07、Functions: PR #87反映、Hosting: PR #86反映） |
+| setup-tenant.sh | 15c9cd3で--with-gmail時authModeバグ修正済み（スクリプト変更、デプロイ不要） |
 
 ## 未解決の既知バグ
 
