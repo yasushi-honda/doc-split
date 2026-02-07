@@ -38,6 +38,38 @@ function UserGuide() {
         <p className="note">※ログインできるのは管理者が許可したアカウントのみです。</p>
       </section>
 
+      <section id="user-section-2b" className="guide-section">
+        <h2><span className="section-number">&#x1f4f1;</span>ホーム画面への追加</h2>
+        <p>DocSplitはスマートフォンやタブレットのホーム画面に追加して、アプリのように利用できます。</p>
+
+        <h3>iPhone / iPad（Safari）</h3>
+        <ol className="steps-list">
+          <li>DocSplitをSafariで開く</li>
+          <li>画面下部の共有ボタン（□↑）をタップ</li>
+          <li>「ホーム画面に追加」をタップ</li>
+          <li>「追加」をタップ</li>
+        </ol>
+
+        <h3>Android（Chrome）</h3>
+        <ol className="steps-list">
+          <li>DocSplitをChromeで開く</li>
+          <li>画面上部の「インストール」バナー、または右上メニュー（⋮）→「ホーム画面に追加」をタップ</li>
+          <li>「インストール」をタップ</li>
+        </ol>
+
+        <h3>PC（Chrome / Edge）</h3>
+        <ol className="steps-list">
+          <li>DocSplitをブラウザで開く</li>
+          <li>アドレスバー右側のインストールアイコン（⊕）をクリック</li>
+          <li>「インストール」をクリック</li>
+        </ol>
+
+        <div className="info-box">
+          <h4>スタンドアロン表示</h4>
+          <p>ホーム画面から起動すると、アドレスバーなしの全画面表示になり、通常のアプリと同じ感覚で利用できます。</p>
+        </div>
+      </section>
+
       <section id="user-section-3" className="guide-section">
         <h2><span className="section-number">3</span>書類一覧画面</h2>
 
@@ -785,6 +817,7 @@ function TableOfContents({ activeTab }: { activeTab: string }) {
   const userToc = [
     { id: 'user-section-1', title: '概要' },
     { id: 'user-section-2', title: 'ログイン' },
+    { id: 'user-section-2b', title: 'ホーム画面への追加' },
     { id: 'user-section-3', title: '書類一覧画面' },
     { id: 'user-section-4', title: '書類詳細画面' },
     { id: 'user-section-5', title: 'PDFアップロード' },
