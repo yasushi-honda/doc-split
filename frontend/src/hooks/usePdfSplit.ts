@@ -125,7 +125,7 @@ export function useSplitPdf() {
   return useMutation({
     mutationFn: splitPdf,
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['documents'] })
+      queryClient.invalidateQueries({ queryKey: ['documentsInfinite'] })
       queryClient.invalidateQueries({ queryKey: ['document'] })
     },
   })

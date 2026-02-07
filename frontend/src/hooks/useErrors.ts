@@ -172,7 +172,7 @@ export function useReprocessError() {
     mutationFn: requestReprocess,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['errors'] })
-      queryClient.invalidateQueries({ queryKey: ['documents'] })
+      queryClient.invalidateQueries({ queryKey: ['documentsInfinite'] })
     },
   })
 }

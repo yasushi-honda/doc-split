@@ -329,7 +329,7 @@ export function DocumentsPage() {
   // アップロード成功時のハンドラ
   const handleUploadSuccess = useCallback(() => {
     // ドキュメント一覧と統計をリフレッシュ
-    queryClient.invalidateQueries({ queryKey: ['documents'] })
+    queryClient.invalidateQueries({ queryKey: ['documentsInfinite'] })
     queryClient.invalidateQueries({ queryKey: ['documentStats'] })
   }, [queryClient])
 
