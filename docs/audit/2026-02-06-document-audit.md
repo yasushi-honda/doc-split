@@ -165,9 +165,9 @@ docs/
 
 ### 5.1 現状
 
-- ADR数: 7件（テンプレート除く）
-- 最新: 0008-firestore-data-protection.md（2026-01-30）
-- 欠番: ADR-0007
+- ADR数: 9件（テンプレート除く）
+- 最新: 0009-feature-flags-per-client.md（2026-02-07）
+- 欠番: なし
 
 | ADR | ステータス | 判定 |
 |-----|-----------|------|
@@ -177,15 +177,15 @@ docs/
 | 0004-frontend-architecture | Accepted | ✅（前回から改善） |
 | 0005-multi-client-deployment | **空欄** | ❌ 前回指摘から未対応 |
 | 0006-search-implementation | Accepted | ✅ |
-| 0007 | **欠番** | ⚠️ |
+| 0007-infinite-scroll-strategy | Accepted | ✅（02-07追加） |
 | 0008-firestore-data-protection | Accepted | ✅ |
 
 ### 5.2 作成推奨ADR
 
-| 対象 | 理由 |
-|------|------|
-| ADR-0007: 欠番の解消 | 番号の連続性。削除されたADRがあれば記録として残す |
-| 無限スクロール戦略 | クライアントサイド vs Firestoreカーソルベースの判断（#57-60で実装） |
+| 対象 | 理由 | 状態 |
+|------|------|------|
+| ~~ADR-0007: 欠番の解消~~ | ~~番号の連続性~~ | ✅ 02-07対応（無限スクロール戦略） |
+| ~~無限スクロール戦略~~ | ~~カーソルベースの判断~~ | ✅ ADR-0007として作成済み |
 
 ---
 
@@ -193,24 +193,24 @@ docs/
 
 ### 優先度: 高
 
-- [ ] CLAUDE.md: ファイル構成ツリーを実態に合わせて更新（30+件の未記載ファイル）
-- [ ] CLAUDE.md: Cloud Functions一覧に `processOCROnCreate`, `regenerateSummary`, `onDocumentWrite` を追加
-- [ ] docs/context/data-model.md: Firestoreスキーマを実装に合わせて更新（`documentGroups`, `aliasLearning`, verified系フィールド等）
+- [x] CLAUDE.md: ファイル構成ツリーを実態に合わせて更新 → 02-07対応（components/hooks/scripts更新）
+- [x] CLAUDE.md: Cloud Functions一覧に `processOCROnCreate`, `regenerateSummary`, `onDocumentWrite` を追加 → 02-06対応済み
+- [x] docs/context/data-model.md: Firestoreスキーマを実装に合わせて更新 → 02-06対応済み（759行、16コレクション）
 - [x] ~~docs/adr/0005: ステータスに `Accepted` を追記~~ → 確認済み（既にAccepted記載あり）
 
 ### 優先度: 中
 
-- [ ] CLAUDE.md: 行数削減（「Phase 8以降の追加実装」「完了したインフラ設定」「確定した相談事項」の整理で目標400行以下）
-- [ ] docs/context/gcp-migration-scope.md: `status: draft` → `status: completed`、「要相談」→確定済みに更新
-- [ ] docs/context/functional-requirements.md: `status: draft` → `status: completed`、追加機能反映
-- [ ] docs/context/phase7-requirements.md: docs/reference/に移動
-- [ ] CLAUDE.md: 「読込優先順序」セクションのドキュメント名をリンク化
+- [x] CLAUDE.md: 行数削減 → 385行（目標400行以下達成）
+- [x] docs/context/gcp-migration-scope.md: `status: completed` に更新 → 02-06対応済み
+- [x] docs/context/functional-requirements.md: `status: completed`、F24-F35追記 → 02-06対応済み
+- [x] docs/context/phase7-requirements.md: docs/reference/に移動 → 02-06対応済み
+- [x] CLAUDE.md: 「読込優先順序」セクションのドキュメント名をリンク化 → 02-06対応済み
 
 ### 優先度: 低
 
-- [ ] docs/setup-guide.md と docs/operation/setup-guide.md の関係を明確化（前回から継続）
-- [ ] ADR-0007 欠番の整理
-- [ ] docs/overview.md: 02-05, 02-06の追加実装を追記
+- [x] docs/setup-guide.md と docs/operation/setup-guide.md の関係明確化 → 簡略版に参照リンク記載済み
+- [x] ADR-0007 欠番の整理 → 02-07対応（無限スクロール戦略ADR作成）
+- [x] docs/overview.md: 追加実装を追記 → 02-06対応済み
 
 ---
 

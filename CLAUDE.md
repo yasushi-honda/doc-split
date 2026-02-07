@@ -330,17 +330,20 @@ doc-split/
 ├── .github/workflows/           # CI/CD（ci.yml, deploy.yml）
 ├── frontend/                    # Reactフロントエンド
 │   ├── src/
-│   │   ├── components/          # UIコンポーネント（15+ファイル）
-│   │   │   ├── ui/              # shadcn/ui
-│   │   │   ├── views/           # ビュー系（GroupList, GroupDocumentList等）
+│   │   ├── components/          # UIコンポーネント（19ファイル）
+│   │   │   ├── ui/              # shadcn/ui（21コンポーネント）
+│   │   │   ├── views/           # ビュー系（GroupList, GroupDocumentList, CustomerSubGroup）
 │   │   │   ├── DocumentDetailModal / PdfViewer / PdfSplitModal  # 詳細・PDF系
-│   │   │   ├── CsvImportModal / MasterSelectField  # マスター・CSV系
-│   │   │   ├── PdfPageThumbnail / PdfSplitPreview   # PDFサムネイル・プレビュー
+│   │   │   ├── PdfPageThumbnail / PdfSplitPreview / PdfUploadModal  # PDF操作系
+│   │   │   ├── CsvImportModal / MasterSelectField / RegisterNewMasterModal  # マスター系
 │   │   │   ├── SearchBar / DateRangeFilter / KanaFilterBar  # 検索・フィルター系
+│   │   │   ├── Layout / LoadMoreIndicator / AliasLearningHistoryModal  # 共通UI
 │   │   │   └── __tests__/       # コンポーネントテスト
 │   │   ├── hooks/               # カスタムフック（13ファイル）
 │   │   │   ├── useDocuments / useDocumentGroups / useDocumentEdit  # 書類系
-│   │   │   ├── useSearch / useMasters / useMasterAlias  # 検索・マスター系
+│   │   │   ├── useDocumentVerification / useInfiniteScroll  # 確認・スクロール
+│   │   │   ├── useSearch / useMasters / useMasterAlias / useAliasLearningHistory  # 検索・マスター系
+│   │   │   ├── useErrors / useProcessingHistory / useSettings  # 管理・設定系
 │   │   │   └── __tests__/       # フックテスト
 │   │   ├── pages/               # 各画面（8ファイル）
 │   │   │   └── DocumentsPage / MastersPage / AdminPage / LoginPage 等
@@ -359,9 +362,9 @@ doc-split/
 │   │   └── utils/               # 共通ユーティリティ
 │   ├── test/                    # テスト
 │   └── package.json
-├── scripts/                     # 運用・セットアップスクリプト
+├── scripts/                     # 運用・セットアップスクリプト（19ファイル）
 │   ├── setup-tenant.sh          # テナント初期設定（推奨: --with-gmail --yes）
-│   ├── setup-gmail-auth.sh      # Gmail OAuth認証設定
+│   ├── setup-gmail-auth.sh / setup-gmail-service-account.sh  # Gmail認証設定
 │   ├── init-project.sh          # プロジェクト初期化
 │   ├── deploy-to-project.sh / deploy-all-clients.sh  # デプロイ
 │   ├── import-masters.js        # マスターデータ投入（CLI）
@@ -369,6 +372,8 @@ doc-split/
 │   ├── seed-e2e-data.js         # E2Eテストデータ投入
 │   ├── gmail-oauth-cli.py       # Gmail OAuth CLIツール
 │   ├── check-allowed-domains.js / verify-setup.sh  # 検証・管理
+│   ├── run-e2e-tests.sh         # E2Eテスト実行
+│   ├── reprocess-master-matching.js  # マスター再マッチング
 │   ├── migrate-*.js             # マイグレーションスクリプト群
 │   └── samples/                 # CSVサンプル
 ├── shared/                      # 共通型定義（types.ts）
