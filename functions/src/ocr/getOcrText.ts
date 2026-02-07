@@ -23,6 +23,10 @@ export const getOcrText = onCall(
     if (!request.auth) {
       throw new HttpsError('unauthenticated', 'Authentication required');
     }
+    const userDoc = await getFirestore().doc(`users/${request.auth.uid}`).get();
+    if (!userDoc.exists) {
+      throw new HttpsError('permission-denied', 'User not in whitelist');
+    }
 
     const { documentId } = request.data;
     if (!documentId || typeof documentId !== 'string') {

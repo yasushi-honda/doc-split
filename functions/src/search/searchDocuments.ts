@@ -135,6 +135,10 @@ export const searchDocuments = onCall<SearchRequest>(
     if (!request.auth) {
       throw new HttpsError('unauthenticated', '認証が必要です');
     }
+    const userDoc = await db.doc(`users/${request.auth.uid}`).get();
+    if (!userDoc.exists) {
+      throw new HttpsError('permission-denied', 'User not in whitelist');
+    }
 
     const { query, limit = 20, offset = 0 } = request.data;
 
