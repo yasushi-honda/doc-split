@@ -71,3 +71,9 @@ venv/
 
 # Storage CORS設定（setup-tenant.shが自動生成）
 cors-*.json
+
+# Serena
+.serena/
+
+# Screenshots（開発用スクリーンショット）
+*.png
