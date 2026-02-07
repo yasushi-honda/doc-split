@@ -560,13 +560,18 @@ export function DocumentsPage() {
           {/* 一括操作ボタン（管理者のみ） */}
           {isAdmin && (
             <div className="flex items-center gap-1.5 ml-auto">
-              {/* 選択モード中: 件数表示 */}
+              {/* 選択モード中: 件数表示（モバイル:バッジ / デスクトップ:テキスト） */}
               {selectionMode && (
                 <>
                   {isBulkOperating && (
                     <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
                   )}
-                  <span className={`text-sm font-medium whitespace-nowrap mr-1 ${isBulkOperating ? 'text-blue-700' : 'text-blue-800'}`}>
+                  {/* モバイル: コンパクトなバッジ */}
+                  <span className="sm:hidden inline-flex items-center justify-center h-5 min-w-[1.25rem] rounded-full bg-blue-600 text-white text-xs font-bold px-1">
+                    {selectedIds.size}
+                  </span>
+                  {/* デスクトップ: フルテキスト */}
+                  <span className={`hidden sm:inline text-sm font-medium whitespace-nowrap mr-1 ${isBulkOperating ? 'text-blue-700' : 'text-blue-800'}`}>
                     {isBulkOperating
                       ? `${selectedIds.size}件を処理中...`
                       : `${selectedIds.size}件選択中`
