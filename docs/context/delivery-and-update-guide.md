@@ -356,6 +356,8 @@ firebase firestore:delete documents --recursive -P <client-alias>
 
 ## 🔧 障害復旧: Firestore設定消失時の手順
 
+> **注意**: initTenantSettings関数は初回セットアップ限定のため、設定消失時の復旧にはFirestoreコンソールでの手動復旧が必要です。
+
 ### 復旧が必要な設定
 
 | 設定 | パス | 説明 |
@@ -392,15 +394,19 @@ gcloud secrets list --project=<project-id> | grep gmail-oauth
 # なければ authMode: "service_account" を使用
 ```
 
-### 復旧用Cloud Function（initTenantSettings）
+### 初回セットアップ用Cloud Function（initTenantSettings）
 
-緊急時は以下の関数を使用:
+**⚠️ 初回セットアップ限定**: これらの関数は初回のみ実行可能です。設定やadminユーザーが既に存在する場合は403エラーを返します。
+
 ```bash
+# 初回セットアップ時のみ（既に設定が存在する場合は実行不可）
 curl "https://asia-northeast1-<project-id>.cloudfunctions.net/initTenantSettings"
 curl "https://asia-northeast1-<project-id>.cloudfunctions.net/registerAdminUser?uid=<UID>&email=<EMAIL>"
 ```
 
 **注意**: initTenantSettingsはデフォルト値で設定を作成するため、クライアント固有の設定（ラベル、Gmailアカウント等）は**設定画面から手動で再設定**が必要。
+
+**設定消失時の復旧**: 既存設定がある場合はこの関数では復旧できません。Firestoreコンソールから直接`settings/auth`、`settings/app`、`settings/gmail`を再作成してください。
 
 ---
 

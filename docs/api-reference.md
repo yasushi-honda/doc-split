@@ -59,9 +59,30 @@ flowchart TD
 
 ### Callable Functions
 
+#### 認証・権限レベル一覧
+
+| 関数 | 認証 | ホワイトリスト | adminロール |
+|------|:----:|:----:|:----:|
+| detectSplitPoints | ✅ | ✅ | - |
+| splitPdf | ✅ | ✅ | - |
+| rotatePdfPages | ✅ | ✅ | - |
+| uploadPdf | ✅ | ✅ | - |
+| getOcrText | ✅ | ✅ | - |
+| regenerateSummary | ✅ | ✅ | - |
+| searchDocuments | ✅ | ✅ | - |
+| addMasterAlias | ✅ | ✅ | ✅ |
+| removeMasterAlias | ✅ | ✅ | ✅ |
+| deleteDocument | ✅ | ✅ | ✅ |
+
+- **認証**: Firebase Authentication（`request.auth`チェック）
+- **ホワイトリスト**: `users/{uid}`ドキュメント存在確認
+- **adminロール**: `users/{uid}.role === 'admin'`確認
+
 #### detectSplitPoints
 
 PDF分割候補を検出する。
+
+**権限:** ホワイトリスト登録ユーザー
 
 **リクエスト:**
 ```typescript
@@ -88,6 +109,8 @@ PDF分割候補を検出する。
 
 PDFを分割する。
 
+**権限:** ホワイトリスト登録ユーザー
+
 **リクエスト:**
 ```typescript
 {
@@ -113,6 +136,8 @@ PDFを分割する。
 
 PDFページを回転する。
 
+**権限:** ホワイトリスト登録ユーザー
+
 **リクエスト:**
 ```typescript
 {
@@ -134,6 +159,8 @@ PDFページを回転する。
 #### uploadPdf
 
 ローカルPDFファイルをアップロードする。
+
+**権限:** ホワイトリスト登録ユーザー
 
 **リクエスト:**
 ```typescript
