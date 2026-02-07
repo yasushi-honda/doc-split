@@ -419,15 +419,15 @@ async function main() {
     });
     console.log('✓ settings/auth を作成 (許可ドメイン: ' + adminDomain + ')');
 
-    // Gmail認証設定（Service Account方式 - Google Workspace向け）
+    // Gmail認証設定（--with-gmail指定時はOAuth、それ以外はService Account）
+    const gmailAuthMode = '$WITH_GMAIL' === 'true' ? 'oauth' : 'service_account';
     await db.doc('settings/gmail').set({
-        authMode: 'service_account',
+        authMode: gmailAuthMode,
         delegatedUserEmail: '$GMAIL_ACCOUNT',
-        // OAuth方式を使う場合は authMode: 'oauth' に変更
         createdAt: new Date(),
         updatedAt: new Date()
     });
-    console.log('✓ settings/gmail を作成 (Service Account方式)');
+    console.log('✓ settings/gmail を作成 (' + gmailAuthMode + '方式)');
 
     // 管理者ユーザー（Firebase Authにユーザーがいれば取得）
     let uid = 'pending_admin';
