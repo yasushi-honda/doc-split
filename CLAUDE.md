@@ -38,7 +38,7 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
 | 7 | 01-20 | 処理履歴、同姓同名解決 |
 | 8 | 01-22 | グループ化ビュー、検索機能 |
 
-**追加実装（01-22〜27）**: CI/CD、テナント自動化、エイリアス学習（書類種別・顧客・事業所）、ドメイン許可リスト自動ログイン、本番運用開始
+**追加実装（01-22〜02-07）**: CI/CD、テナント自動化、エイリアス学習（書類種別・顧客・事業所）、ドメイン許可リスト自動ログイン、本番運用開始、PWA対応
 
 > 詳細は [docs/context/phase-history.md](docs/context/phase-history.md) を参照
 
@@ -352,6 +352,7 @@ doc-split/
 │   │   │   ├── firebase.ts / csvParser.ts / csvTemplates.ts
 │   │   │   └── documentUtils.ts / kanaUtils.ts / textNormalizer.ts / utils.ts
 │   │   └── utils/               # 表示ヘルパー（displayName.ts）
+│   ├── public/                  # 静的ファイル（PWAアイコン、favicon等）
 │   └── package.json
 ├── functions/                   # Cloud Functions
 │   ├── src/

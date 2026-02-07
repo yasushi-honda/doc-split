@@ -458,6 +458,7 @@ flowchart LR
   <li>担当CM別ビュー</li>
   <li>エイリアス学習機能（表記揺れ対応）</li>
   <li>AI要約機能</li>
+  <li>ホーム画面への追加（PWA対応）</li>
 </ul>
 
 </div>
