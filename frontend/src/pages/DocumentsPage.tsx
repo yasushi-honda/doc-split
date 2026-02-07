@@ -21,6 +21,7 @@ import {
   Trash2,
   RotateCcw,
   CheckCircle2,
+  X,
 } from 'lucide-react'
 import { format } from 'date-fns'
 import { ja } from 'date-fns/locale'
@@ -590,7 +591,7 @@ export function DocumentsPage() {
                   <span className="hidden sm:inline">再処理</span>
                 </Button>
                 {selectionMode === 'reprocess' && selectedIds.size > 0 && (
-                  <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 inline-flex items-center rounded-full bg-white text-blue-700 border border-blue-300 text-[10px] font-bold px-1.5 py-0 leading-4 shadow-sm whitespace-nowrap pointer-events-none">
+                  <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 sm:hidden inline-flex items-center rounded-full bg-white text-blue-700 border border-blue-300 text-[10px] font-bold px-1.5 py-0 leading-4 shadow-sm whitespace-nowrap pointer-events-none">
                     {selectedIds.size}<span className="hidden sm:inline">件</span>
                   </span>
                 )}
@@ -622,7 +623,7 @@ export function DocumentsPage() {
                   <span className="hidden sm:inline">確認済み</span>
                 </Button>
                 {selectionMode === 'verify' && selectedIds.size > 0 && (
-                  <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 inline-flex items-center rounded-full bg-white text-blue-700 border border-blue-300 text-[10px] font-bold px-1.5 py-0 leading-4 shadow-sm whitespace-nowrap pointer-events-none">
+                  <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 sm:hidden inline-flex items-center rounded-full bg-white text-blue-700 border border-blue-300 text-[10px] font-bold px-1.5 py-0 leading-4 shadow-sm whitespace-nowrap pointer-events-none">
                     {selectedIds.size}<span className="hidden sm:inline">件</span>
                   </span>
                 )}
@@ -654,13 +655,31 @@ export function DocumentsPage() {
                   <span className="hidden sm:inline">削除</span>
                 </Button>
                 {selectionMode === 'delete' && selectedIds.size > 0 && (
-                  <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 inline-flex items-center rounded-full bg-white text-red-700 border border-red-300 text-[10px] font-bold px-1.5 py-0 leading-4 shadow-sm whitespace-nowrap pointer-events-none">
+                  <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 sm:hidden inline-flex items-center rounded-full bg-white text-red-700 border border-red-300 text-[10px] font-bold px-1.5 py-0 leading-4 shadow-sm whitespace-nowrap pointer-events-none">
                     {selectedIds.size}<span className="hidden sm:inline">件</span>
                   </span>
                 )}
               </div>
 
-              {/* 選択モード終了: 同じボタン再クリックでトグル解除 */}
+              {/* デスクトップ: 件数テキスト＋×ボタン */}
+              {selectionMode && (
+                <>
+                  <span className={`hidden sm:inline text-sm font-medium whitespace-nowrap ${
+                    selectedIds.size > 0 ? 'text-blue-800' : 'text-gray-500'
+                  }`}>
+                    {selectedIds.size}件選択中
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={clearSelection}
+                    disabled={isBulkOperating}
+                    className="hidden sm:flex h-7 w-7 p-0"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </Button>
+                </>
+              )}
             </div>
           )}
         </div>
