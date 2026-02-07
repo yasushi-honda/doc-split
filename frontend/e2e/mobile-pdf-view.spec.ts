@@ -30,7 +30,8 @@ async function loginWithTestUser(page: Page) {
     },
     { email: TEST_USER.email, password: TEST_USER.password }
   );
-  await page.waitForSelector('text=書類一覧', { timeout: 10000 });
+  // モバイルではタブラベルが hidden sm:inline で非表示のため、h1ヘッダーで判定
+  await page.waitForSelector('h1:has-text("書類管理")', { timeout: 10000 });
 }
 
 test.describe('モバイルPDFビュー @emulator', () => {

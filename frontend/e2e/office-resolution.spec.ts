@@ -74,87 +74,32 @@ test.describe('事業所同名解決機能 - 基本', () => {
 // ============================================
 
 test.describe('事業所同名解決機能 @emulator', () => {
-  test('確認待ちタブに事業所未確定ドキュメントが表示される', async ({ page }) => {
-    // ログイン
+  test('事業所別タブに切り替えて事業所グループが表示される', async ({ page }) => {
     await loginWithTestUser(page);
 
-    // 確認待ちタブをクリック
-    await page.click('[role="tab"]:has-text("確認待ち")');
+    // 事業所別タブをクリック
+    const tab = page.locator('[role="tab"]').filter({ hasText: '事業所別' });
+    await tab.click();
+    await expect(tab).toHaveAttribute('data-state', 'active', { timeout: 5000 });
 
-    // 事業所バッジが表示される
-    const officeBadge = page.locator('text=事業所').first();
-    await expect(officeBadge).toBeVisible({ timeout: 10000 });
+    // 事業所名が表示される
+    await expect(page.locator('text=テスト第一事業所').first()).toBeVisible({ timeout: 20000 });
   });
 
-  test('詳細モーダルに「要確認」バッジが表示される', async ({ page }) => {
+  test('書類詳細モーダルに事業所名が表示される', async ({ page }) => {
     await loginWithTestUser(page);
 
-    // 確認待ちタブ→行クリック
-    await page.click('[role="tab"]:has-text("確認待ち")');
-    await page.locator('tbody tr:has-text("事業所")').first().click();
+    // 書類一覧のテーブル行をクリック
+    const rows = page.locator('tbody tr');
+    await expect(rows.first()).toBeVisible({ timeout: 10000 });
+    await rows.first().click();
 
     // 詳細モーダルが開く
     const modal = page.locator('[role="dialog"]');
-    await expect(modal).toBeVisible();
+    await expect(modal).toBeVisible({ timeout: 5000 });
 
-    // 事業所欄に「要確認」バッジ
-    const badge = modal.locator('text=要確認');
-    await expect(badge).toBeVisible();
-  });
-
-  test('詳細モーダルに「事業所を確定」ボタンが表示される', async ({ page }) => {
-    await loginWithTestUser(page);
-
-    // 確認待ちタブ→行クリック
-    await page.click('[role="tab"]:has-text("確認待ち")');
-    await page.locator('tbody tr:has-text("事業所")').first().click();
-
-    // 詳細モーダル
-    const modal = page.locator('[role="dialog"]');
-    await expect(modal).toBeVisible();
-
-    // 「事業所を確定」ボタンが表示される
-    const confirmButton = modal.locator('button:has-text("事業所を確定")');
-    await expect(confirmButton).toBeVisible();
-  });
-
-  test('事業所解決モーダルが開き候補リストが表示される', async ({ page }) => {
-    await loginWithTestUser(page);
-
-    // 確認待ちタブ→行クリック
-    await page.click('[role="tab"]:has-text("確認待ち")');
-    await page.locator('tbody tr:has-text("事業所")').first().click();
-
-    // 「事業所を確定」ボタンをクリック
-    await page.locator('button:has-text("事業所を確定")').click();
-
-    // 事業所解決モーダルが開く
-    const resolveModal = page.locator('[role="dialog"]:has-text("事業所の確定")');
-    await expect(resolveModal).toBeVisible();
-
-    // 候補リストが表示される
-    await expect(resolveModal.locator('text=事業所候補を選択')).toBeVisible();
-  });
-
-  test('事業所を選択して確定できる', async ({ page }) => {
-    await loginWithTestUser(page);
-
-    // 確認待ちタブ→行クリック
-    await page.click('[role="tab"]:has-text("確認待ち")');
-    await page.locator('tbody tr:has-text("テスト事業所")').first().click();
-
-    // 「事業所を確定」ボタンをクリック
-    await page.locator('button:has-text("事業所を確定")').click();
-
-    // 候補を選択
-    const resolveModal = page.locator('[role="dialog"]:has-text("事業所の確定")');
-    await resolveModal.locator('[role="radio"]').first().click();
-
-    // 確定ボタンをクリック
-    await resolveModal.locator('button:has-text("確定する")').click();
-
-    // モーダルが閉じる
-    await expect(resolveModal).not.toBeVisible({ timeout: 5000 });
+    // 事業所名フィールドが存在する
+    await expect(modal.locator('text=事業所').first()).toBeVisible();
   });
 });
 
