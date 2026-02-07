@@ -542,8 +542,8 @@ export function DocumentsPage() {
 
       {/* ビュー切替タブ */}
       <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as ViewTab)}>
-        <div className="mb-4 flex items-center gap-3">
-          <TabsList className="flex-wrap h-auto">
+        <div className="mb-4 flex items-center gap-2 overflow-x-auto">
+          <TabsList className="shrink-0">
             {VIEW_TABS.map((tab) => (
               <TabsTrigger
                 key={tab.value}
