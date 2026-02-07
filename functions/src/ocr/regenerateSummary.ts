@@ -36,6 +36,10 @@ export const regenerateSummary = functions.https.onCall(
     if (!request.auth) {
       throw new functions.https.HttpsError('unauthenticated', '認証が必要です');
     }
+    const userDoc = await db.doc(`users/${request.auth.uid}`).get();
+    if (!userDoc.exists) {
+      throw new functions.https.HttpsError('permission-denied', 'User not in whitelist');
+    }
 
     const { docId } = request.data as RegenerateSummaryRequest;
 

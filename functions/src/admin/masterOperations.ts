@@ -34,10 +34,18 @@ export const addMasterAlias = onCall(
     if (!request.auth) {
       throw new HttpsError('unauthenticated', 'Authentication required');
     }
+    // 2. ホワイトリスト + adminロール確認
+    const userDoc = await getFirestore().doc(`users/${request.auth.uid}`).get();
+    if (!userDoc.exists) {
+      throw new HttpsError('permission-denied', 'User not in whitelist');
+    }
+    if (userDoc.data()?.role !== 'admin') {
+      throw new HttpsError('permission-denied', 'Admin permission required');
+    }
 
     const { masterType, masterId, alias } = request.data;
 
-    // 2. パラメータ検証
+    // 3. パラメータ検証
     if (!masterType || !['office', 'customer', 'document'].includes(masterType)) {
       throw new HttpsError('invalid-argument', 'Invalid masterType. Must be office, customer, or document');
     }
@@ -110,10 +118,18 @@ export const removeMasterAlias = onCall(
     if (!request.auth) {
       throw new HttpsError('unauthenticated', 'Authentication required');
     }
+    // 2. ホワイトリスト + adminロール確認
+    const userDoc = await getFirestore().doc(`users/${request.auth.uid}`).get();
+    if (!userDoc.exists) {
+      throw new HttpsError('permission-denied', 'User not in whitelist');
+    }
+    if (userDoc.data()?.role !== 'admin') {
+      throw new HttpsError('permission-denied', 'Admin permission required');
+    }
 
     const { masterType, masterId, alias } = request.data;
 
-    // 2. パラメータ検証
+    // 3. パラメータ検証
     if (!masterType || !['office', 'customer', 'document'].includes(masterType)) {
       throw new HttpsError('invalid-argument', 'Invalid masterType');
     }

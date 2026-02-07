@@ -1,7 +1,7 @@
 /**
- * テナント初期化用一時関数
+ * テナント初期化用関数
  *
- * 設定復旧後に削除すること
+ * 初回セットアップ時のみ動作（既存設定がある場合は拒否）
  */
 
 import { onRequest } from 'firebase-functions/v2/https';
@@ -13,6 +13,16 @@ export const initTenantSettings = onRequest(
   { region: 'asia-northeast1', cors: true },
   async (req, res) => {
     try {
+      // 初回セットアップガード: settings/authが既に存在する場合は拒否
+      const existingAuth = await db.doc('settings/auth').get();
+      if (existingAuth.exists) {
+        res.status(403).json({
+          success: false,
+          error: 'Settings already initialized. This function is for first-time setup only.',
+        });
+        return;
+      }
+
       // settings/auth
       await db.doc('settings/auth').set({
         allowedDomains: ['kanameone.com']
@@ -54,7 +64,7 @@ export const initTenantSettings = onRequest(
   }
 );
 
-// 管理者ユーザー登録用関数
+// 管理者ユーザー登録用関数（初回セットアップ限定）
 export const registerAdminUser = onRequest(
   { region: 'asia-northeast1', cors: true },
   async (req, res) => {
@@ -63,6 +73,19 @@ export const registerAdminUser = onRequest(
 
       if (!uid || !email) {
         res.status(400).json({ success: false, error: 'uid and email are required' });
+        return;
+      }
+
+      // 初回セットアップガード: 既にadminユーザーが存在する場合は拒否
+      const existingAdmins = await db.collection('users')
+        .where('role', '==', 'admin')
+        .limit(1)
+        .get();
+      if (!existingAdmins.empty) {
+        res.status(403).json({
+          success: false,
+          error: 'Admin user already exists. Use the admin panel to manage users.',
+        });
         return;
       }
 

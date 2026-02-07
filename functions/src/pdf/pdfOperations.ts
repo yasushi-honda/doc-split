@@ -45,6 +45,15 @@ export const detectSplitPoints = onCall(
     memory: '512MiB',
   },
   async (request) => {
+    // 認証チェック
+    if (!request.auth) {
+      throw new HttpsError('unauthenticated', 'Authentication required');
+    }
+    const userDoc = await db.doc(`users/${request.auth.uid}`).get();
+    if (!userDoc.exists) {
+      throw new HttpsError('permission-denied', 'User not in whitelist');
+    }
+
     const { documentId, useEnhanced = true } = request.data;
     console.log(`detectSplitPoints called: documentId=${documentId}, useEnhanced=${useEnhanced}`);
 
@@ -256,6 +265,15 @@ export const splitPdf = onCall(
     timeoutSeconds: 300,
   },
   async (request) => {
+    // 認証チェック
+    if (!request.auth) {
+      throw new HttpsError('unauthenticated', 'Authentication required');
+    }
+    const userDoc = await db.doc(`users/${request.auth.uid}`).get();
+    if (!userDoc.exists) {
+      throw new HttpsError('permission-denied', 'User not in whitelist');
+    }
+
     const { documentId, splitPoints, segments } = request.data as SplitRequest;
 
     if (!documentId || !splitPoints || !segments) {
@@ -457,6 +475,15 @@ export const rotatePdfPages = onCall(
     memory: '512MiB',
   },
   async (request) => {
+    // 認証チェック
+    if (!request.auth) {
+      throw new HttpsError('unauthenticated', 'Authentication required');
+    }
+    const userDoc = await db.doc(`users/${request.auth.uid}`).get();
+    if (!userDoc.exists) {
+      throw new HttpsError('permission-denied', 'User not in whitelist');
+    }
+
     const { documentId, rotations } = request.data as RotateRequest;
     console.log('rotatePdfPages called:', { documentId, rotations });
 
