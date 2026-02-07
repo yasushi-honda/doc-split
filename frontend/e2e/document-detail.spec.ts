@@ -70,6 +70,14 @@ test.describe('書類詳細モーダル @emulator', () => {
 
     // ESCキーで閉じる
     await page.keyboard.press('Escape');
+    await page.waitForTimeout(500);
+
+    // 未確認書類の場合、OCR確認ダイアログが表示される
+    const closeWithoutVerify = page.locator('button:has-text("未確認のまま閉じる")');
+    if (await closeWithoutVerify.isVisible({ timeout: 2000 }).catch(() => false)) {
+      await closeWithoutVerify.click();
+      await page.waitForTimeout(500);
+    }
 
     // モーダルが閉じる
     await expect(modal).not.toBeVisible({ timeout: 5000 });
