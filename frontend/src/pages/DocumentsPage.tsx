@@ -594,7 +594,7 @@ export function DocumentsPage() {
                 }`}
               >
                 <RotateCcw className={`h-3.5 w-3.5 ${isBulkOperating && bulkOperation === 'reprocess' ? 'animate-spin' : ''}`} />
-                再処理
+                <span className="hidden sm:inline">再処理</span>
               </Button>
               <Button
                 variant="outline"
@@ -615,7 +615,7 @@ export function DocumentsPage() {
                 }`}
               >
                 <CheckCircle2 className="h-3.5 w-3.5" />
-                確認済み
+                <span className="hidden sm:inline">確認済み</span>
               </Button>
               <Button
                 variant="outline"
@@ -636,7 +636,7 @@ export function DocumentsPage() {
                 }`}
               >
                 <Trash2 className="h-3.5 w-3.5" />
-                削除
+                <span className="hidden sm:inline">削除</span>
               </Button>
 
               {/* 選択モード終了ボタン */}
