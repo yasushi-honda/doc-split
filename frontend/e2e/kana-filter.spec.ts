@@ -10,34 +10,15 @@
  */
 
 import { test, expect, Page } from '@playwright/test';
-
-// テストユーザー情報（seed-e2e-data.jsと同じ）
-const TEST_USER = {
-  email: 'test@example.com',
-  password: 'testpassword123',
-};
+import { loginWithTestUser, clickTab } from './helpers';
 
 // ============================================
 // ヘルパー
 // ============================================
 
-async function loginWithTestUser(page: Page) {
-  await page.goto('/');
-  await page.evaluate(
-    async ({ email, password }) => {
-      // @ts-expect-error - Vite devサーバー経由でモジュール解決
-      const { auth, signInWithEmailAndPassword } = await import('/src/lib/firebase.ts');
-      await signInWithEmailAndPassword(auth, email, password);
-    },
-    { email: TEST_USER.email, password: TEST_USER.password }
-  );
-  await page.waitForSelector('text=書類一覧', { timeout: 10000 });
-}
-
 /** 「顧客別」タブに移動 */
 async function navigateToCustomerTab(page: Page) {
-  // タブをクリック
-  await page.locator('[role="tab"]').filter({ hasText: '顧客別' }).click();
+  await clickTab(page, '顧客別');
   // グループデータが表示されるまで待機（CIでは時間がかかる場合がある）
   await page.waitForTimeout(2000);
 }

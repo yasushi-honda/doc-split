@@ -11,25 +11,8 @@
  *   3. テスト実行: cd frontend && npx playwright test e2e/pdf-upload.spec.ts
  */
 
-import { test, expect, Page } from '@playwright/test';
-
-const TEST_USER = {
-  email: 'test@example.com',
-  password: 'testpassword123',
-};
-
-async function loginWithTestUser(page: Page) {
-  await page.goto('/');
-  await page.evaluate(
-    async ({ email, password }) => {
-      // @ts-expect-error - Vite devサーバー経由でモジュール解決
-      const { auth, signInWithEmailAndPassword } = await import('/src/lib/firebase.ts');
-      await signInWithEmailAndPassword(auth, email, password);
-    },
-    { email: TEST_USER.email, password: TEST_USER.password }
-  );
-  await page.waitForSelector('text=書類一覧', { timeout: 10000 });
-}
+import { test, expect } from '@playwright/test';
+import { loginWithTestUser } from './helpers';
 
 // ============================================
 // Emulator環境テスト（認証必要）

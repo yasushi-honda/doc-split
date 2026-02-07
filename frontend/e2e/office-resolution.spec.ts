@@ -9,43 +9,8 @@
  *   3. テスト実行: npm run test:e2e:emulator
  */
 
-import { test, expect, Page } from '@playwright/test';
-
-// テストユーザー情報（seed-e2e-data.jsと同じ）
-const TEST_USER = {
-  email: 'test@example.com',
-  password: 'testpassword123',
-};
-
-// ============================================
-// 認証ヘルパー
-// ============================================
-
-/**
- * Emulator環境でメール/パスワードログイン
- * Firebase Auth Emulatorではメール/パスワード認証が使用可能
- */
-async function loginWithTestUser(page: Page) {
-  // ログインページにアクセス
-  await page.goto('/');
-
-  // Emulator環境ではGoogleログインの代わりに
-  // Firebase UIのメール/パスワードフォームを使用するか、
-  // または直接FirebaseのsignInWithEmailAndPassword APIを呼び出す
-
-  // ここではページ内でFirebase認証を直接実行
-  await page.evaluate(
-    async ({ email, password }) => {
-      // @ts-expect-error - Vite devサーバー経由でモジュール解決
-      const { auth, signInWithEmailAndPassword } = await import('/src/lib/firebase.ts');
-      await signInWithEmailAndPassword(auth, email, password);
-    },
-    { email: TEST_USER.email, password: TEST_USER.password }
-  );
-
-  // ログイン後、書類一覧ページが表示されるまで待機
-  await page.waitForSelector('text=書類一覧', { timeout: 10000 });
-}
+import { test, expect } from '@playwright/test';
+import { loginWithTestUser } from './helpers';
 
 // ============================================
 // 基本テスト（認証不要）
