@@ -249,81 +249,81 @@ export async function processDocument(
   // ドキュメント更新
   await db.doc(`documents/${docId}`).update({
     ocrResult: savedOcrResult,
-    ocrResultUrl,
-    summary,
+    ocrResultUrl: ocrResultUrl ?? null,
+    summary: summary || '',
     pageResults,
     documentType: documentTypeResult.documentType || '未判定',
     customerName: customerResult.bestMatch?.name || '不明顧客',
-    customerId: customerResult.bestMatch?.id || null,
-    careManager: customerResult.bestMatch?.careManagerName || null,
+    customerId: customerResult.bestMatch?.id ?? null,
+    careManager: customerResult.bestMatch?.careManagerName ?? null,
     officeName: officeResult.bestMatch?.name || '未判定',
-    officeId: officeResult.bestMatch?.id || null,
-    fileDate: dateResult.date || null,
-    fileDateFormatted: dateResult.formattedDate || null,
+    officeId: officeResult.bestMatch?.id ?? null,
+    fileDate: dateResult.date ?? null,
+    fileDateFormatted: dateResult.formattedDate ?? null,
     isDuplicateCustomer: customerResult.bestMatch?.isDuplicate || false,
-    needsManualCustomerSelection: customerResult.needsManualSelection,
+    needsManualCustomerSelection: customerResult.needsManualSelection ?? false,
     customerConfirmed: !customerResult.needsManualSelection,
     confirmedBy: null,
     confirmedAt: null,
     allCustomerCandidates: customerCandidateNames.join(','),
     customerCandidates: customerResult.candidates.slice(0, 5).map((c) => ({
-      customerId: c.id,
-      customerName: c.name,
+      customerId: c.id ?? null,
+      customerName: c.name ?? '',
       isDuplicate: c.isDuplicate || false,
-      score: c.score,
-      matchType: c.matchType,
-      careManagerName: c.careManagerName || null,
+      score: c.score ?? 0,
+      matchType: c.matchType ?? 'none',
+      careManagerName: c.careManagerName ?? null,
     })),
     officeConfirmed: !officeResult.needsManualSelection,
     officeConfirmedBy: null,
     officeConfirmedAt: null,
     officeCandidates: officeResult.candidates.slice(0, 5).map((o) => ({
-      officeId: o.id,
-      officeName: o.name,
-      shortName: o.shortName,
+      officeId: o.id ?? null,
+      officeName: o.name ?? '',
+      shortName: o.shortName ?? null,
       isDuplicate: o.isDuplicate || false,
-      score: o.score,
-      matchType: o.matchType,
+      score: o.score ?? 0,
+      matchType: o.matchType ?? 'none',
     })),
-    suggestedNewOffice,
+    suggestedNewOffice: suggestedNewOffice ?? null,
     totalPages,
-    category: documentTypeResult.category || null,
+    category: documentTypeResult.category ?? null,
     status: 'processed',
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     extractionScores: {
-      documentType: documentTypeResult.score,
-      customerName: customerResult.bestMatch?.score || 0,
-      officeName: officeResultLegacy.score,
-      date: dateResult.confidence,
+      documentType: documentTypeResult.score ?? 0,
+      customerName: customerResult.bestMatch?.score ?? 0,
+      officeName: officeResultLegacy.score ?? 0,
+      date: dateResult.confidence ?? 0,
     },
     extractionDetails: {
-      documentMatchType: documentTypeResult.matchType,
-      documentKeywords: documentTypeResult.keywords,
-      customerMatchType: customerResult.bestMatch?.matchType || 'none',
-      officeMatchType: officeResultLegacy.matchType,
-      datePattern: dateResult.pattern,
-      dateSource: dateResult.source,
+      documentMatchType: documentTypeResult.matchType ?? 'none',
+      documentKeywords: documentTypeResult.keywords ?? [],
+      customerMatchType: customerResult.bestMatch?.matchType ?? 'none',
+      officeMatchType: officeResultLegacy.matchType ?? 'none',
+      datePattern: dateResult.pattern ?? null,
+      dateSource: dateResult.source ?? null,
     },
     ocrExtraction: {
       version: MODEL_ID,
       extractedAt: admin.firestore.FieldValue.serverTimestamp(),
       customer: {
         suggestedValue: customerResult.bestMatch?.name || '不明顧客',
-        suggestedId: customerResult.bestMatch?.id || null,
-        confidence: customerResult.bestMatch?.score || 0,
-        matchType: customerResult.bestMatch?.matchType || 'none',
+        suggestedId: customerResult.bestMatch?.id ?? null,
+        confidence: customerResult.bestMatch?.score ?? 0,
+        matchType: customerResult.bestMatch?.matchType ?? 'none',
       },
       office: {
         suggestedValue: officeResult.bestMatch?.name || '未判定',
-        suggestedId: officeResult.bestMatch?.id || null,
-        confidence: officeResult.bestMatch?.score || 0,
-        matchType: officeResult.bestMatch?.matchType || 'none',
+        suggestedId: officeResult.bestMatch?.id ?? null,
+        confidence: officeResult.bestMatch?.score ?? 0,
+        matchType: officeResult.bestMatch?.matchType ?? 'none',
       },
       documentType: {
         suggestedValue: documentTypeResult.documentType || '未判定',
         suggestedId: null,
-        confidence: documentTypeResult.score,
-        matchType: documentTypeResult.matchType,
+        confidence: documentTypeResult.score ?? 0,
+        matchType: documentTypeResult.matchType ?? 'none',
       },
     },
   });
@@ -347,18 +347,27 @@ export async function handleProcessingError(
 ): Promise<void> {
   console.error(`Error processing document ${docId}:`, error.message);
 
-  await logError({
-    error,
-    source: 'ocr',
-    functionName,
-    documentId: docId,
-  });
+  // status: errorへの更新を最優先で実行（logError失敗時もスタックしないように）
+  try {
+    await db.doc(`documents/${docId}`).update({
+      status: 'error',
+      lastErrorMessage: error.message.slice(0, 500),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  } catch (updateErr) {
+    console.error(`Failed to update document ${docId} status to error:`, updateErr);
+  }
 
-  await db.doc(`documents/${docId}`).update({
-    status: 'error',
-    lastErrorMessage: error.message,
-    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-  });
+  try {
+    await logError({
+      error,
+      source: 'ocr',
+      functionName,
+      documentId: docId,
+    });
+  } catch (logErr) {
+    console.error(`Failed to log error for document ${docId}:`, logErr);
+  }
 }
 
 /**

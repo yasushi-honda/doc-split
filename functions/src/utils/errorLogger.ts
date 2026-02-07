@@ -160,7 +160,11 @@ export async function logError(params: LogErrorParams): Promise<string> {
     errorDoc.stackTrace = params.error.stack;
   }
 
-  await db.doc(`errors/${errorDoc.id}`).set(errorDoc);
+  // undefinedフィールドを除去してからFirestoreに保存（FieldValue等を保持）
+  const cleanDoc = Object.fromEntries(
+    Object.entries(errorDoc).filter(([, v]) => v !== undefined)
+  );
+  await db.doc(`errors/${errorDoc.id}`).set(cleanDoc);
 
   // コンソールにも出力
   console.error(`[${severity.toUpperCase()}] ${params.source}/${params.functionName}:`, {
