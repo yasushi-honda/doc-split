@@ -369,7 +369,7 @@ export function DocumentsPage() {
       await batch.commit()
 
       // 一覧をリフレッシュ
-      queryClient.invalidateQueries({ queryKey: ['documents'] })
+      queryClient.invalidateQueries({ queryKey: ['documentsInfinite'] })
       queryClient.invalidateQueries({ queryKey: ['documentStats'] })
       clearSelection()
       setBulkOperation(null)
@@ -399,7 +399,7 @@ export function DocumentsPage() {
       await batch.commit()
 
       // 一覧をリフレッシュ
-      queryClient.invalidateQueries({ queryKey: ['documents'] })
+      queryClient.invalidateQueries({ queryKey: ['documentsInfinite'] })
       queryClient.invalidateQueries({ queryKey: ['documentStats'] })
       clearSelection()
       setBulkOperation(null)
