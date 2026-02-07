@@ -560,6 +560,26 @@ export function DocumentsPage() {
           {/* 一括操作ボタン（管理者のみ） */}
           {isAdmin && (
             <div className="flex items-center gap-1.5 ml-auto">
+              {/* デスクトップ: 件数テキスト＋×ボタン（操作ボタンの左側に配置） */}
+              {selectionMode && (
+                <>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={clearSelection}
+                    disabled={isBulkOperating}
+                    className="hidden sm:flex h-7 w-7 p-0"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </Button>
+                  <span className={`hidden sm:inline text-sm font-medium whitespace-nowrap ${
+                    selectedIds.size > 0 ? 'text-blue-800' : 'text-gray-500'
+                  }`}>
+                    {selectedIds.size}件選択中
+                  </span>
+                </>
+              )}
+
               {/* 処理中スピナー */}
               {selectionMode && isBulkOperating && (
                 <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
@@ -661,25 +681,6 @@ export function DocumentsPage() {
                 )}
               </div>
 
-              {/* デスクトップ: 件数テキスト＋×ボタン */}
-              {selectionMode && (
-                <>
-                  <span className={`hidden sm:inline text-sm font-medium whitespace-nowrap ${
-                    selectedIds.size > 0 ? 'text-blue-800' : 'text-gray-500'
-                  }`}>
-                    {selectedIds.size}件選択中
-                  </span>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={clearSelection}
-                    disabled={isBulkOperating}
-                    className="hidden sm:flex h-7 w-7 p-0"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </Button>
-                </>
-              )}
             </div>
           )}
         </div>
