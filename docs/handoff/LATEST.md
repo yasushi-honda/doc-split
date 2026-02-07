@@ -8,6 +8,8 @@
 
 | PR/コミット | 内容 |
 |----|------|
+| 09856eb | **CLAUDE.md最適化**（395行→87行、公式ベストプラクティス準拠） |
+| c36d58e | **OCRバグ修正：processingスタック対応**（errorLogger undefinedフィルタ、handleProcessingError status優先更新、fix-stuck-documents.js追加）|
 | 33a271a | **PWAメタタグ非推奨警告修正**（`apple-mobile-web-app-capable` → `mobile-web-app-capable`） |
 | 47d63ad | **PWA記載の残漏れ対応**（CLAUDE.md開発完了サマリー+ファイル構成+GitHub Pages 3ファイル） |
 | 39f098c | **アプリ内ヘルプにPWAホーム画面追加手順を追記**（iOS/Android/PC対応） |
@@ -57,12 +59,12 @@
 
 | 環境 | 状態 |
 |------|------|
-| dev | デプロイ済み（02-07、33a271a反映） |
-| kanameone | デプロイ済み（02-07、33a271a反映） |
+| dev | デプロイ済み（02-07、09856eb反映） |
+| kanameone | デプロイ済み（02-07、09856eb反映、スタック21件復旧済み） |
 
 ## 未解決の既知バグ
 
-なし
+なし（02-07: processingスタックバグは修正・復旧済み）
 
 ## 次のアクション候補（優先度順）
 

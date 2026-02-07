@@ -182,6 +182,21 @@ error_type: ocr_failed
 2. レート制限の場合は時間をおいて再試行
 3. PDFが破損している場合は手動で対応
 
+#### ドキュメントが「処理中」のまま進まない
+
+**症状:** ドキュメントが `processing`（処理中）のまま長時間停滞し、「再処理」ボタンも表示されない。
+
+**原因:** OCR処理中の内部エラーでステータスが `error` に遷移できなかったケース（2026-02-07修正済み）。
+
+**対処:**
+```bash
+# 1. 状況確認（変更なし）
+FIREBASE_PROJECT_ID=<project-id> node scripts/fix-stuck-documents.js --dry-run
+
+# 2. pendingにリセット（OCRポーリングが自動で再処理）
+FIREBASE_PROJECT_ID=<project-id> node scripts/fix-stuck-documents.js
+```
+
 #### マッチング失敗
 
 ```

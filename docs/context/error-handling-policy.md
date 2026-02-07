@@ -244,11 +244,23 @@ stateDiagram-v2
 | ステータス | 説明 | 次のアクション |
 |-----------|------|--------------|
 | `pending` | OCR待ち | 自動処理 |
-| `processing` | OCR処理中 | 待機 |
+| `processing` | OCR処理中 | 待機（長時間停滞時は下記参照） |
 | `processed` | OCR完了 | 閲覧可能 |
 | `error` | 処理失敗 | 再処理 or 無視 |
 | `split` | 分割済み | 子ドキュメント参照 |
 | `ignored` | 無視 | 非表示 |
+
+### 5.2 processingスタック（2026-02-07修正）
+
+エラーハンドラ内の障害で `processing` → `error` 遷移に失敗し、ドキュメントが停滞するケース。
+UI上の「再処理」ボタンは `error` 状態のみ対応のため、スクリプトで復旧する。
+
+```bash
+FIREBASE_PROJECT_ID=<project-id> node scripts/fix-stuck-documents.js --dry-run
+FIREBASE_PROJECT_ID=<project-id> node scripts/fix-stuck-documents.js
+```
+
+**修正内容**: `handleProcessingError` でステータス更新をログ記録より先に実行し、各ステップを独立した try-catch で囲む設計に変更。
 
 ## 6. 再処理フロー
 
