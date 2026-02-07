@@ -415,34 +415,57 @@ export function DocumentsPage() {
   const handleBulkDelete = useCallback(async () => {
     if (selectedIds.size === 0) return
 
-    setIsBulkOperating(true)
+    const deletingIds = new Set(selectedIds)
+
+    // 楽観的UI更新: 即座にリストから削除
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const previousPages = queryClient.getQueriesData<any>({ queryKey: ['documentsInfinite'] })
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    queryClient.setQueriesData<any>(
+      { queryKey: ['documentsInfinite'] },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (oldData: any) => {
+        if (!oldData?.pages) return oldData
+        return {
+          ...oldData,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          pages: oldData.pages.map((page: any) => ({
+            ...page,
+            documents: page.documents.filter((doc: { id: string }) => !deletingIds.has(doc.id)),
+          })),
+        }
+      }
+    )
+    clearSelection()
+    setBulkOperation(null)
+
+    // バックエンド削除（バックグラウンド）
     try {
       const deleteDocument = httpsCallable<{ documentId: string }, { success: boolean }>(
         functions,
         'deleteDocument'
       )
       const results = await Promise.allSettled(
-        Array.from(selectedIds).map(id => deleteDocument({ documentId: id }))
+        Array.from(deletingIds).map(id => deleteDocument({ documentId: id }))
       )
 
-      const succeeded = results.filter(r => r.status === 'fulfilled').length
       const failed = results.filter(r => r.status === 'rejected').length
 
       if (failed > 0) {
-        alert(`${succeeded}件削除、${failed}件失敗しました`)
+        // 部分失敗: サーバーの実際の状態で一覧を更新
+        alert(`${results.length - failed}件削除、${failed}件失敗しました`)
+        queryClient.invalidateQueries({ queryKey: ['documentsInfinite'] })
       }
 
-      // 一覧をリフレッシュ
-      queryClient.invalidateQueries({ queryKey: ['documents'] })
       queryClient.invalidateQueries({ queryKey: ['documentStats'] })
       queryClient.invalidateQueries({ queryKey: ['documentGroups'] })
-      clearSelection()
-      setBulkOperation(null)
     } catch (error) {
       console.error('Bulk delete error:', error)
       alert('一括削除に失敗しました')
-    } finally {
-      setIsBulkOperating(false)
+      // ロールバック: 元のデータを復元
+      previousPages.forEach(([queryKey, data]) => {
+        queryClient.setQueryData(queryKey, data)
+      })
     }
   }, [selectedIds, queryClient, clearSelection])
 
