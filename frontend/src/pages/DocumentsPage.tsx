@@ -21,7 +21,6 @@ import {
   Trash2,
   RotateCcw,
   CheckCircle2,
-  X,
 } from 'lucide-react'
 import { format } from 'date-fns'
 import { ja } from 'date-fns/locale'
@@ -542,7 +541,7 @@ export function DocumentsPage() {
 
       {/* ビュー切替タブ */}
       <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as ViewTab)}>
-        <div className="mb-4 flex items-center gap-2 overflow-x-auto">
+        <div className="mb-4 flex items-center gap-2 pt-3">
           <TabsList className="shrink-0">
             {VIEW_TABS.map((tab) => (
               <TabsTrigger
@@ -656,18 +655,7 @@ export function DocumentsPage() {
                 )}
               </div>
 
-              {/* 選択モード終了ボタン */}
-              {selectionMode && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={clearSelection}
-                  disabled={isBulkOperating}
-                  className="h-7 w-7 p-0"
-                >
-                  <X className="h-3.5 w-3.5" />
-                </Button>
-              )}
+              {/* 選択モード終了: 同じボタン再クリックでトグル解除 */}
             </div>
           )}
         </div>
