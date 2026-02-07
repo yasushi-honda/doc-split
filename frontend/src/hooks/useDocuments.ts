@@ -263,7 +263,7 @@ export function useUpdateDocument() {
     mutationFn: updateDocument,
     onSuccess: (_, { documentId }) => {
       // 関連キャッシュを無効化
-      queryClient.invalidateQueries({ queryKey: ['documents'] })
+      queryClient.invalidateQueries({ queryKey: ['documentsInfinite'] })
       queryClient.invalidateQueries({ queryKey: ['document', documentId] })
     },
   })
