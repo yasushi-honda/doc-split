@@ -102,6 +102,74 @@ function SortableHeader({
   )
 }
 
+// 一括操作モードの型
+type BulkActionMode = 'delete' | 'verify' | 'reprocess'
+
+// 一括操作ボタンの色スキーム
+const BULK_COLORS = {
+  blue: {
+    solid: 'bg-blue-600 border-blue-600 text-white shadow-md hover:bg-blue-700',
+    light: 'bg-blue-100 border-blue-400 text-blue-700 ring-1 ring-blue-400',
+    badgeText: 'text-blue-700',
+    badgeBorder: 'border-blue-300',
+  },
+  red: {
+    solid: 'bg-red-600 border-red-600 text-white shadow-md hover:bg-red-700',
+    light: 'bg-red-100 border-red-400 text-red-700 ring-1 ring-red-400',
+    badgeText: 'text-red-700',
+    badgeBorder: 'border-red-300',
+    defaultStyle: 'text-red-600 hover:text-red-700 hover:bg-red-50 border-red-200',
+  },
+} as const
+
+type BulkColorScheme = typeof BULK_COLORS[keyof typeof BULK_COLORS]
+
+// 一括操作ボタン共通コンポーネント
+function BulkActionButton({
+  mode, icon: Icon, label, colors, selectionMode, selectedCount,
+  isBulkOperating, isSpinning, onToggle, onExecute,
+}: {
+  mode: BulkActionMode
+  icon: React.ComponentType<{ className?: string }>
+  label: string
+  colors: BulkColorScheme
+  selectionMode: BulkActionMode | null
+  selectedCount: number
+  isBulkOperating: boolean
+  isSpinning: boolean
+  onToggle: () => void
+  onExecute: () => void
+}) {
+  const isActive = selectionMode === mode
+  const hasSelection = selectedCount > 0
+
+  return (
+    <div className="relative">
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={isActive && hasSelection ? onExecute : onToggle}
+        disabled={isBulkOperating || (!!selectionMode && !isActive && hasSelection)}
+        className={`flex items-center gap-1 h-7 text-xs transition-all duration-200 ${
+          isActive && hasSelection
+            ? colors.solid
+            : isActive
+              ? colors.light
+              : selectionMode ? 'opacity-40' : ('defaultStyle' in colors ? colors.defaultStyle : '')
+        }`}
+      >
+        <Icon className={`h-3.5 w-3.5 ${isSpinning ? 'animate-spin' : ''}`} />
+        <span className="hidden sm:inline">{label}</span>
+      </Button>
+      {isActive && hasSelection && (
+        <span className={`absolute -top-2.5 left-1/2 -translate-x-1/2 sm:hidden inline-flex items-center rounded-full bg-white ${colors.badgeText} border ${colors.badgeBorder} text-[10px] font-bold px-1.5 py-0 leading-4 shadow-sm whitespace-nowrap pointer-events-none`}>
+          {selectedCount}
+        </span>
+      )}
+    </div>
+  )
+}
+
 // ステータスのラベルとバッジVariant
 const STATUS_CONFIG: Record<DocumentStatus, { label: string; variant: 'default' | 'secondary' | 'success' | 'warning' | 'destructive' }> = {
   pending: { label: '待機中', variant: 'secondary' },
@@ -275,8 +343,8 @@ export function DocumentsPage() {
   // 一括選択
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [isBulkOperating, setIsBulkOperating] = useState(false)
-  const [bulkOperation, setBulkOperation] = useState<'delete' | 'verify' | 'reprocess' | null>(null)
-  const [selectionMode, setSelectionMode] = useState<'delete' | 'verify' | 'reprocess' | null>(null)
+  const [bulkOperation, setBulkOperation] = useState<BulkActionMode | null>(null)
+  const [selectionMode, setSelectionMode] = useState<BulkActionMode | null>(null)
 
   // モーダル状態（URLパラメータと同期）
   const selectedDocumentId = searchParams.get('doc')
@@ -351,6 +419,12 @@ export function DocumentsPage() {
   const clearSelection = useCallback(() => {
     setSelectedIds(new Set())
     setSelectionMode(null)
+  }, [])
+
+  // 操作モード切替（トグル）
+  const handleModeToggle = useCallback((mode: BulkActionMode) => {
+    setSelectionMode(prev => prev === mode ? null : mode)
+    setSelectedIds(new Set())
   }, [])
 
   // 一括確認済み
@@ -585,101 +659,42 @@ export function DocumentsPage() {
                 <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
               )}
 
-              {/* 再処理ボタン */}
-              <div className="relative">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    if (selectionMode === 'reprocess' && selectedIds.size > 0) {
-                      setBulkOperation('reprocess')
-                    } else {
-                      setSelectionMode(selectionMode === 'reprocess' ? null : 'reprocess')
-                      setSelectedIds(new Set())
-                    }
-                  }}
-                  disabled={isBulkOperating || (!!selectionMode && selectionMode !== 'reprocess' && selectedIds.size > 0)}
-                  className={`flex items-center gap-1 h-7 text-xs transition-all duration-200 ${
-                    selectionMode === 'reprocess' && selectedIds.size > 0
-                      ? 'bg-blue-600 border-blue-600 text-white shadow-md hover:bg-blue-700'
-                      : selectionMode === 'reprocess'
-                        ? 'bg-blue-100 border-blue-400 text-blue-700 ring-1 ring-blue-400'
-                        : selectionMode ? 'opacity-40' : ''
-                  }`}
-                >
-                  <RotateCcw className={`h-3.5 w-3.5 ${isBulkOperating && bulkOperation === 'reprocess' ? 'animate-spin' : ''}`} />
-                  <span className="hidden sm:inline">再処理</span>
-                </Button>
-                {selectionMode === 'reprocess' && selectedIds.size > 0 && (
-                  <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 sm:hidden inline-flex items-center rounded-full bg-white text-blue-700 border border-blue-300 text-[10px] font-bold px-1.5 py-0 leading-4 shadow-sm whitespace-nowrap pointer-events-none">
-                    {selectedIds.size}<span className="hidden sm:inline">件</span>
-                  </span>
-                )}
-              </div>
-
-              {/* 確認済みボタン */}
-              <div className="relative">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    if (selectionMode === 'verify' && selectedIds.size > 0) {
-                      setBulkOperation('verify')
-                    } else {
-                      setSelectionMode(selectionMode === 'verify' ? null : 'verify')
-                      setSelectedIds(new Set())
-                    }
-                  }}
-                  disabled={isBulkOperating || (!!selectionMode && selectionMode !== 'verify' && selectedIds.size > 0)}
-                  className={`flex items-center gap-1 h-7 text-xs transition-all duration-200 ${
-                    selectionMode === 'verify' && selectedIds.size > 0
-                      ? 'bg-blue-600 border-blue-600 text-white shadow-md hover:bg-blue-700'
-                      : selectionMode === 'verify'
-                        ? 'bg-blue-100 border-blue-400 text-blue-700 ring-1 ring-blue-400'
-                        : selectionMode ? 'opacity-40' : ''
-                  }`}
-                >
-                  <CheckCircle2 className="h-3.5 w-3.5" />
-                  <span className="hidden sm:inline">確認済み</span>
-                </Button>
-                {selectionMode === 'verify' && selectedIds.size > 0 && (
-                  <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 sm:hidden inline-flex items-center rounded-full bg-white text-blue-700 border border-blue-300 text-[10px] font-bold px-1.5 py-0 leading-4 shadow-sm whitespace-nowrap pointer-events-none">
-                    {selectedIds.size}<span className="hidden sm:inline">件</span>
-                  </span>
-                )}
-              </div>
-
-              {/* 削除ボタン */}
-              <div className="relative">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    if (selectionMode === 'delete' && selectedIds.size > 0) {
-                      setBulkOperation('delete')
-                    } else {
-                      setSelectionMode(selectionMode === 'delete' ? null : 'delete')
-                      setSelectedIds(new Set())
-                    }
-                  }}
-                  disabled={isBulkOperating || (!!selectionMode && selectionMode !== 'delete' && selectedIds.size > 0)}
-                  className={`flex items-center gap-1 h-7 text-xs transition-all duration-200 ${
-                    selectionMode === 'delete' && selectedIds.size > 0
-                      ? 'bg-red-600 border-red-600 text-white shadow-md hover:bg-red-700'
-                      : selectionMode === 'delete'
-                        ? 'bg-red-100 border-red-400 text-red-700 ring-1 ring-red-400'
-                        : selectionMode ? 'opacity-40' : 'text-red-600 hover:text-red-700 hover:bg-red-50 border-red-200'
-                  }`}
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                  <span className="hidden sm:inline">削除</span>
-                </Button>
-                {selectionMode === 'delete' && selectedIds.size > 0 && (
-                  <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 sm:hidden inline-flex items-center rounded-full bg-white text-red-700 border border-red-300 text-[10px] font-bold px-1.5 py-0 leading-4 shadow-sm whitespace-nowrap pointer-events-none">
-                    {selectedIds.size}<span className="hidden sm:inline">件</span>
-                  </span>
-                )}
-              </div>
+              <BulkActionButton
+                mode="reprocess"
+                icon={RotateCcw}
+                label="再処理"
+                colors={BULK_COLORS.blue}
+                selectionMode={selectionMode}
+                selectedCount={selectedIds.size}
+                isBulkOperating={isBulkOperating}
+                isSpinning={isBulkOperating && bulkOperation === 'reprocess'}
+                onToggle={() => handleModeToggle('reprocess')}
+                onExecute={() => setBulkOperation('reprocess')}
+              />
+              <BulkActionButton
+                mode="verify"
+                icon={CheckCircle2}
+                label="確認済み"
+                colors={BULK_COLORS.blue}
+                selectionMode={selectionMode}
+                selectedCount={selectedIds.size}
+                isBulkOperating={isBulkOperating}
+                isSpinning={false}
+                onToggle={() => handleModeToggle('verify')}
+                onExecute={() => setBulkOperation('verify')}
+              />
+              <BulkActionButton
+                mode="delete"
+                icon={Trash2}
+                label="削除"
+                colors={BULK_COLORS.red}
+                selectionMode={selectionMode}
+                selectedCount={selectedIds.size}
+                isBulkOperating={isBulkOperating}
+                isSpinning={false}
+                onToggle={() => handleModeToggle('delete')}
+                onExecute={() => setBulkOperation('delete')}
+              />
 
             </div>
           )}
