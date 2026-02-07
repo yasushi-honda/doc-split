@@ -412,7 +412,7 @@ function AdminGuide() {
           <li>画像品質の問題</li>
           <li>PDFの破損</li>
         </ul>
-        <p><strong>対処:</strong> エラー履歴画面から「再処理」を実行してください。</p>
+        <p><strong>対処:</strong> 書類一覧画面の「再処理」ボタンから一括再AI OCR処理を実行してください（下記セクション6参照）。</p>
 
         <h3>5.3 マッチング失敗</h3>
         <div className="error-box">
@@ -428,7 +428,52 @@ function AdminGuide() {
       </section>
 
       <section id="admin-section-6" className="guide-section">
-        <h2><span className="section-number">6</span>定期メンテナンス</h2>
+        <h2><span className="section-number">6</span>一括操作（削除・確認済み・再処理）</h2>
+        <p>書類一覧画面の上部に、管理者専用の一括操作ボタンが常時表示されています。</p>
+
+        <h3>6.1 操作手順</h3>
+        <table className="guide-table">
+          <thead>
+            <tr>
+              <th>ステップ</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>1</td><td>実行したい操作のボタン（再処理 / 確認済み / 削除）をクリック</td></tr>
+            <tr><td>2</td><td>選択モードが開始され、各書類にチェックボックスが表示される</td></tr>
+            <tr><td>3</td><td>対象の書類にチェックを入れる（複数選択可）</td></tr>
+            <tr><td>4</td><td>同じボタンをもう一度クリックして実行（ボタンの色が変わります）</td></tr>
+          </tbody>
+        </table>
+        <p>選択モードを解除するには、デスクトップでは×ボタン、モバイルでは同じボタンを再度クリックします。</p>
+
+        <h3>6.2 各操作の説明</h3>
+        <table className="guide-table">
+          <thead>
+            <tr>
+              <th>操作</th>
+              <th>内容</th>
+              <th>用途</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>再処理</strong></td><td>AI OCRを再実行</td><td>OCRエラーの書類、精度が低い書類の再読み取り</td></tr>
+            <tr><td><strong>確認済み</strong></td><td>書類を確認済みとしてマーク</td><td>内容を目視確認した書類の記録</td></tr>
+            <tr><td><strong>削除</strong></td><td>書類を完全に削除</td><td>不要な書類、重複書類の整理</td></tr>
+          </tbody>
+        </table>
+
+        <h3>6.3 ボタンの状態</h3>
+        <ul>
+          <li><strong>枠線のみ（通常）</strong>：クリックで選択モードを開始</li>
+          <li><strong>薄い背景色</strong>：選択モード中（書類を選んでください）</li>
+          <li><strong>塗りつぶし</strong>：1件以上選択済み（クリックで実行）</li>
+        </ul>
+      </section>
+
+      <section id="admin-section-7" className="guide-section">
+        <h2><span className="section-number">7</span>定期メンテナンス</h2>
         <table className="guide-table">
           <thead>
             <tr>
@@ -831,7 +876,8 @@ function TableOfContents({ activeTab }: { activeTab: string }) {
     { id: 'admin-section-3', title: 'マスターデータ管理' },
     { id: 'admin-section-4', title: '自動処理スケジュール' },
     { id: 'admin-section-5', title: 'トラブルシューティング' },
-    { id: 'admin-section-6', title: '定期メンテナンス' },
+    { id: 'admin-section-6', title: '一括操作' },
+    { id: 'admin-section-7', title: '定期メンテナンス' },
   ]
 
   const toc = activeTab === 'user' ? userToc : adminToc
