@@ -276,6 +276,7 @@ export function DocumentsPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [isBulkOperating, setIsBulkOperating] = useState(false)
   const [bulkOperation, setBulkOperation] = useState<'delete' | 'verify' | 'reprocess' | null>(null)
+  const [selectionMode, setSelectionMode] = useState<'delete' | 'verify' | 'reprocess' | null>(null)
 
   // モーダル状態（URLパラメータと同期）
   const selectedDocumentId = searchParams.get('doc')
@@ -346,9 +347,10 @@ export function DocumentsPage() {
     })
   }, [])
 
-  // 選択クリア
+  // 選択クリア（選択モードも終了）
   const clearSelection = useCallback(() => {
     setSelectedIds(new Set())
+    setSelectionMode(null)
   }, [])
 
   // 一括確認済み
@@ -528,70 +530,6 @@ export function DocumentsPage() {
         </div>
       </div>
 
-      {/* 一括操作ツールバー（選択時のみ表示） */}
-      {selectedIds.size > 0 && (
-        <div className={`flex items-center gap-3 p-3 rounded-lg transition-all duration-300 ${
-          isBulkOperating 
-            ? 'bg-blue-100 border-2 border-blue-400 animate-pulse' 
-            : 'bg-blue-50 border border-blue-200'
-        }`}>
-          <div className="flex items-center gap-2">
-            {isBulkOperating && (
-              <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
-            )}
-            <span className={`text-sm font-medium ${isBulkOperating ? 'text-blue-700' : 'text-blue-800'}`}>
-              {isBulkOperating 
-                ? `${selectedIds.size}件を処理中...` 
-                : `${selectedIds.size}件選択中`
-              }
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setBulkOperation('reprocess')}
-              disabled={isBulkOperating}
-              className="flex items-center gap-1"
-            >
-              <RotateCcw className={`h-4 w-4 ${isBulkOperating && bulkOperation === 'reprocess' ? 'animate-spin' : ''}`} />
-              再処理
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setBulkOperation('verify')}
-              disabled={isBulkOperating}
-              className="flex items-center gap-1"
-            >
-              <CheckCircle2 className="h-4 w-4" />
-              確認済み
-            </Button>
-            {isAdmin && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setBulkOperation('delete')}
-                disabled={isBulkOperating}
-                className="flex items-center gap-1 text-red-600 hover:text-red-700 hover:bg-red-50 border-red-200"
-              >
-                <Trash2 className="h-4 w-4" />
-                削除
-              </Button>
-            )}
-          </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={clearSelection}
-            disabled={isBulkOperating}
-            className="ml-auto"
-          >
-            <X className="h-4 w-4" />
-          </Button>
-        </div>
-      )}
-
       {/* 統計カード */}
       {stats && (
         <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
@@ -604,19 +542,118 @@ export function DocumentsPage() {
 
       {/* ビュー切替タブ */}
       <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as ViewTab)}>
-        <TabsList className="mb-4 flex-wrap h-auto">
-          {VIEW_TABS.map((tab) => (
-            <TabsTrigger
-              key={tab.value}
-              value={tab.value}
-              title={tab.label}
-              className="flex items-center gap-1.5"
-            >
-              <tab.icon className="h-4 w-4" />
-              <span className="hidden sm:inline">{tab.label}</span>
-            </TabsTrigger>
-          ))}
-        </TabsList>
+        <div className="mb-4 flex items-center gap-3 flex-wrap">
+          <TabsList className="flex-wrap h-auto">
+            {VIEW_TABS.map((tab) => (
+              <TabsTrigger
+                key={tab.value}
+                value={tab.value}
+                title={tab.label}
+                className="flex items-center gap-1.5"
+              >
+                <tab.icon className="h-4 w-4" />
+                <span className="hidden sm:inline">{tab.label}</span>
+              </TabsTrigger>
+            ))}
+          </TabsList>
+
+          {/* 一括操作ボタン（管理者のみ） */}
+          {isAdmin && (
+            <div className="flex items-center gap-1.5 ml-auto">
+              {/* 選択モード中: 件数表示 */}
+              {selectionMode && (
+                <>
+                  {isBulkOperating && (
+                    <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
+                  )}
+                  <span className={`text-sm font-medium whitespace-nowrap mr-1 ${isBulkOperating ? 'text-blue-700' : 'text-blue-800'}`}>
+                    {isBulkOperating
+                      ? `${selectedIds.size}件を処理中...`
+                      : `${selectedIds.size}件選択中`
+                    }
+                  </span>
+                </>
+              )}
+
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  if (selectionMode === 'reprocess' && selectedIds.size > 0) {
+                    setBulkOperation('reprocess')
+                  } else {
+                    setSelectionMode(selectionMode === 'reprocess' ? null : 'reprocess')
+                    setSelectedIds(new Set())
+                  }
+                }}
+                disabled={isBulkOperating || (!!selectionMode && selectionMode !== 'reprocess')}
+                className={`flex items-center gap-1 h-7 text-xs transition-all ${
+                  selectionMode === 'reprocess'
+                    ? 'bg-blue-100 border-blue-400 text-blue-700 ring-1 ring-blue-400'
+                    : selectionMode ? 'opacity-40' : ''
+                }`}
+              >
+                <RotateCcw className={`h-3.5 w-3.5 ${isBulkOperating && bulkOperation === 'reprocess' ? 'animate-spin' : ''}`} />
+                再処理
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  if (selectionMode === 'verify' && selectedIds.size > 0) {
+                    setBulkOperation('verify')
+                  } else {
+                    setSelectionMode(selectionMode === 'verify' ? null : 'verify')
+                    setSelectedIds(new Set())
+                  }
+                }}
+                disabled={isBulkOperating || (!!selectionMode && selectionMode !== 'verify')}
+                className={`flex items-center gap-1 h-7 text-xs transition-all ${
+                  selectionMode === 'verify'
+                    ? 'bg-blue-100 border-blue-400 text-blue-700 ring-1 ring-blue-400'
+                    : selectionMode ? 'opacity-40' : ''
+                }`}
+              >
+                <CheckCircle2 className="h-3.5 w-3.5" />
+                確認済み
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  if (selectionMode === 'delete' && selectedIds.size > 0) {
+                    setBulkOperation('delete')
+                  } else {
+                    setSelectionMode(selectionMode === 'delete' ? null : 'delete')
+                    setSelectedIds(new Set())
+                  }
+                }}
+                disabled={isBulkOperating || (!!selectionMode && selectionMode !== 'delete')}
+                className={`flex items-center gap-1 h-7 text-xs transition-all ${
+                  selectionMode === 'delete'
+                    ? 'bg-red-100 border-red-400 text-red-700 ring-1 ring-red-400'
+                    : selectionMode ? 'opacity-40' : 'text-red-600 hover:text-red-700 hover:bg-red-50 border-red-200'
+                }`}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                削除
+              </Button>
+
+              {/* 選択モード終了ボタン */}
+              {selectionMode && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={clearSelection}
+                  disabled={isBulkOperating}
+                  className="h-7 w-7 p-0"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </Button>
+              )}
+            </div>
+          )}
+        </div>
 
         {/* 検索バー＆フィルター（同一行） */}
         <div className="mb-4 flex items-center gap-3">
@@ -741,7 +778,7 @@ export function DocumentsPage() {
                 <table className="w-full">
                   <thead className="border-b border-gray-200 bg-gray-50">
                     <tr>
-                      {isAdmin && (
+                      {selectionMode && (
                         <th className="px-2 py-2 sm:px-3 sm:py-3 w-10">
                           <Checkbox
                             checked={documents.length > 0 && selectedIds.size === documents.length}
@@ -768,7 +805,7 @@ export function DocumentsPage() {
                         onClick={() => setSelectedDocumentId(doc.id)}
                         isSelected={selectedIds.has(doc.id)}
                         onSelectChange={(checked) => handleSelectToggle(doc.id, checked)}
-                        showCheckbox={isAdmin}
+                        showCheckbox={!!selectionMode}
                         isProcessing={isBulkOperating}
                       />
                     ))}
