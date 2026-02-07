@@ -577,7 +577,7 @@ export function DocumentsPage() {
                       setSelectedIds(new Set())
                     }
                   }}
-                  disabled={isBulkOperating || (!!selectionMode && selectionMode !== 'reprocess')}
+                  disabled={isBulkOperating || (!!selectionMode && selectionMode !== 'reprocess' && selectedIds.size > 0)}
                   className={`flex items-center gap-1 h-7 text-xs transition-all duration-200 ${
                     selectionMode === 'reprocess' && selectedIds.size > 0
                       ? 'bg-blue-600 border-blue-600 text-white shadow-md hover:bg-blue-700'
@@ -609,7 +609,7 @@ export function DocumentsPage() {
                       setSelectedIds(new Set())
                     }
                   }}
-                  disabled={isBulkOperating || (!!selectionMode && selectionMode !== 'verify')}
+                  disabled={isBulkOperating || (!!selectionMode && selectionMode !== 'verify' && selectedIds.size > 0)}
                   className={`flex items-center gap-1 h-7 text-xs transition-all duration-200 ${
                     selectionMode === 'verify' && selectedIds.size > 0
                       ? 'bg-blue-600 border-blue-600 text-white shadow-md hover:bg-blue-700'
@@ -641,7 +641,7 @@ export function DocumentsPage() {
                       setSelectedIds(new Set())
                     }
                   }}
-                  disabled={isBulkOperating || (!!selectionMode && selectionMode !== 'delete')}
+                  disabled={isBulkOperating || (!!selectionMode && selectionMode !== 'delete' && selectedIds.size > 0)}
                   className={`flex items-center gap-1 h-7 text-xs transition-all duration-200 ${
                     selectionMode === 'delete' && selectedIds.size > 0
                       ? 'bg-red-600 border-red-600 text-white shadow-md hover:bg-red-700'
