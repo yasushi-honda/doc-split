@@ -8,6 +8,7 @@
 
 | PR/コミット | 内容 |
 |----|------|
+| **#87** | **全Callable関数の認証・権限チェック統一**（PDF系3関数に認証+WL追加、OCR/検索系にWL追加、マスター操作にadmin確認追加、initTenantに初回限定ガード追加） |
 | **#86** | **一括操作の操作手順をヘルプ・管理者ガイドに追加**（HelpPage セクション6新設、admin-guide更新） |
 | **#85** | **一括操作ボタンのDRY違反解消**（BulkActionButton共通コンポーネント抽出） |
 | **#84** | **デスクトップの件数テキスト・×ボタンを左側に移動**（レイアウト安定化） |
@@ -76,8 +77,8 @@
 
 | 環境 | 状態 |
 |------|------|
-| dev | デプロイ済み（02-07、53387ce反映） |
-| kanameone | デプロイ済み（02-07、53387ce反映） |
+| dev | デプロイ済み（02-07、bf9f991反映、PR #87含む） |
+| kanameone | デプロイ済み（02-07、bf9f991反映、PR #87含む） |
 
 ## 未解決の既知バグ
 
@@ -89,7 +90,7 @@ PR #71対応時にCodex（GPT）レビューで検出。今後の改善候補:
 
 | 重要度 | 指摘 | 箇所 |
 |--------|------|------|
-| Medium | PDF系Callable（detectSplitPoints等）にwhitelist/adminチェックなし | `pdfOperations.ts` |
+| ~~Medium~~ | ~~PDF系Callable（detectSplitPoints等）にwhitelist/adminチェックなし~~ | ~~`pdfOperations.ts`~~ **→ PR #87で解決** |
 | Medium | `useSearch`でレンダー中にsetState | `useSearch.ts:113-121` |
 | Medium | Geminiレート制限がインスタンス内のみ | `rateLimiter.ts` |
 | Medium | Gmail検索が日単位（`after:YYYY-MM-DD`） | `checkGmailAttachments.ts:137` |
@@ -97,5 +98,5 @@ PR #71対応時にCodex（GPT）レビューで検出。今後の改善候補:
 ## 次のアクション候補（優先度順）
 
 1. **クライアント別オプション機能の実装**（最初の具体的要望確定時）→ ADR-0009参照
-2. Codexレビュー指摘対応（上記バックログ）
+2. Codexレビュー指摘対応（上記バックログ、PDF系Callable権限は解決済み）
 3. 精度改善（フィードバック後）
