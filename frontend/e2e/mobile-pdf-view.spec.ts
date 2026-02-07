@@ -4,6 +4,7 @@
  */
 
 import { test, expect, Page } from '@playwright/test';
+import { loginWithTestUser as _loginWithTestUser } from './helpers';
 
 // モバイルViewport設定（CIではChromiumのみのため、devices[]ではなくviewport直指定）
 test.use({
@@ -15,23 +16,9 @@ test.use({
   baseURL: process.env.E2E_BASE_URL || 'http://localhost:5173',
 });
 
-const TEST_USER = {
-  email: 'test@example.com',
-  password: 'testpassword123',
-};
-
+/** モバイルではタブラベルが hidden sm:inline で非表示のため、h1ヘッダーで判定 */
 async function loginWithTestUser(page: Page) {
-  await page.goto('/');
-  await page.evaluate(
-    async ({ email, password }) => {
-      // @ts-expect-error - Vite devサーバー経由でモジュール解決
-      const { auth, signInWithEmailAndPassword } = await import('/src/lib/firebase.ts');
-      await signInWithEmailAndPassword(auth, email, password);
-    },
-    { email: TEST_USER.email, password: TEST_USER.password }
-  );
-  // モバイルではタブラベルが hidden sm:inline で非表示のため、h1ヘッダーで判定
-  await page.waitForSelector('h1:has-text("書類管理")', { timeout: 10000 });
+  await _loginWithTestUser(page, 'h1:has-text("書類管理")');
 }
 
 test.describe('モバイルPDFビュー @emulator', () => {
