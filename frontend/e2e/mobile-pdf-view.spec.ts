@@ -177,16 +177,19 @@ test.describe('モバイルPDFビュー @emulator', () => {
       const modal = page.locator('[role="dialog"]');
       await expect(modal).toBeVisible({ timeout: 5000 });
 
-      // ESCキーで閉じる
+      // ESCキーで閉じる（未確認書類の場合、確認ダイアログが表示される）
       await page.keyboard.press('Escape');
       await page.waitForTimeout(500);
 
+      // OCR確認ダイアログが表示された場合は「未確認のまま閉じる」をクリック
+      const closeWithoutVerify = page.locator('button:has-text("未確認のまま閉じる")');
+      if (await closeWithoutVerify.isVisible({ timeout: 2000 }).catch(() => false)) {
+        await closeWithoutVerify.click();
+        await page.waitForTimeout(500);
+      }
+
       // モーダルが閉じたか確認
-      const isStillVisible = await modal.isVisible().catch(() => false);
-
-      await page.screenshot({ path: 'test-results/mobile-7-closed.png', fullPage: true });
-
-      expect(isStillVisible).toBeFalsy();
+      await expect(modal).not.toBeVisible({ timeout: 5000 });
     }
   });
 });
