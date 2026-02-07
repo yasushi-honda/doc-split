@@ -188,7 +188,7 @@ FIREBASE_PROJECT_ID=<project-id> node scripts/import-masters.js --all scripts/sa
 | コンピュート | Cloud Functions (2nd gen) |
 | ユーザー認証 | Firebase Authentication (Google Login) |
 | Gmail連携 | 開発: OAuth 2.0 / 本番: Service Account + Delegation |
-| フロントエンド | Firebase Hosting + React + Vite + TypeScript |
+| フロントエンド | Firebase Hosting + React + Vite + TypeScript + PWA |
 | UIライブラリ | shadcn/ui + Tailwind CSS |
 | PDFビューアー | react-pdf (pdf.js) |
 | 状態管理 | Zustand + TanStack Query |

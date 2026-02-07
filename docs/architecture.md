@@ -214,4 +214,4 @@ flowchart LR
 | Functions | 2nd gen, Node.js 22 |
 | Firestore | Native mode |
 | Storage | Standard |
-| Hosting | Firebase Hosting |
+| Hosting | Firebase Hosting (PWA対応) |
