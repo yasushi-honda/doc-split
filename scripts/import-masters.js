@@ -21,8 +21,9 @@ const fs = require('fs');
 const path = require('path');
 
 // プロジェクトID取得（環境変数 > デフォルト）
-const projectId = process.env.GCLOUD_PROJECT
-  || process.env.FIREBASE_PROJECT_ID
+// FIREBASE_PROJECT_IDを最優先（.envrcのGCLOUD_PROJECTより優先させるため）
+const projectId = process.env.FIREBASE_PROJECT_ID
+  || process.env.GCLOUD_PROJECT
   || process.env.CLOUDSDK_CORE_PROJECT
   || 'doc-split-dev';
 
