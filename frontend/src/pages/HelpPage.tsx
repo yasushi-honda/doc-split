@@ -264,7 +264,7 @@ function UserGuide() {
             </tr>
           </thead>
           <tbody>
-            <tr><td>顧客</td><td className="alias-badge-yes">対応</td><td>「山田 太郎」↔「山田　太郎」</td></tr>
+            <tr><td>顧客</td><td className="alias-badge-yes">対応</td><td>「山田太郎」↔「やまだ太郎」（漢字↔ひらがな）</td></tr>
             <tr><td>書類種別</td><td className="alias-badge-yes">対応</td><td>「訪問介護計画書」↔「訪問介護サービス計画書」</td></tr>
             <tr><td>事業所</td><td className="alias-badge-yes">対応</td><td>「さくらケアセンター」↔「桜ケアセンター」</td></tr>
             <tr><td>ケアマネジャー</td><td className="alias-badge-na">対象外</td><td>-</td></tr>
@@ -392,7 +392,7 @@ function AdminGuide() {
         <div className="info-box">
           <h4>許容表記（エイリアス）について</h4>
           <ul>
-            <li>「山田 太郎」と「山田 太郎」（全角スペース）など、表記ゆれを登録</li>
+            <li>「山田太郎」と「やまだ太郎」（漢字↔ひらがな）など、正規化で吸収できない表記ゆれを登録</li>
             <li>確定時に「この表記を記憶する」にチェックすると自動追加</li>
             <li>マスター管理画面の追加・編集ダイアログからも直接登録可能</li>
             <li>一度登録すると、次回から同じ表記が自動マッチ</li>
