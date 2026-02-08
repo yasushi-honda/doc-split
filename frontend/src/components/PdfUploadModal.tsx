@@ -19,7 +19,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import { functions, db } from '@/lib/firebase'
+import { functions, db, auth } from '@/lib/firebase'
 import type { DocumentStatus } from '@shared/types'
 
 // 設定
@@ -198,7 +198,7 @@ export function PdfUploadModal({ open, onOpenChange, onSuccess }: PdfUploadModal
     }
   }, [handleFileSelect])
 
-  const handleUpload = useCallback(async (options?: { confirmDuplicate?: boolean; alternativeFileName?: string }) => {
+  const handleUpload = useCallback(async (options?: { confirmDuplicate?: boolean; alternativeFileName?: string; isRetry?: boolean }) => {
     if (!selectedFile) return
 
     setCurrentStep('uploading')
@@ -247,6 +247,17 @@ export function PdfUploadModal({ open, onOpenChange, onSuccess }: PdfUploadModal
       }
     } catch (err) {
       console.error('Upload error:', err)
+
+      // unauthenticatedエラー時: トークンリフレッシュして1回リトライ
+      if (err instanceof Error && err.message.includes('unauthenticated') && !options?.isRetry && auth.currentUser) {
+        try {
+          await auth.currentUser.getIdToken(true)
+          return handleUpload({ ...options, isRetry: true })
+        } catch {
+          // リフレッシュ失敗 → 通常のエラー処理へ
+        }
+      }
+
       setCurrentStep('error')
 
       let errorMessage = 'アップロードに失敗しました'
@@ -260,7 +271,7 @@ export function PdfUploadModal({ open, onOpenChange, onSuccess }: PdfUploadModal
           const match = message.match(/: (.+)$/)
           errorMessage = match ? match[1] : message
         } else if (message.includes('unauthenticated')) {
-          errorMessage = 'ログインが必要です'
+          errorMessage = 'ログインセッションが切れました。ページを再読み込みしてください。'
         } else {
           errorMessage = message
         }
