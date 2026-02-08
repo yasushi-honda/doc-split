@@ -227,7 +227,7 @@ describe('sortGroupsByFurigana', () => {
       { id: '6', displayName: '未登録者' },
     ];
     const sorted = sortGroupsByFurigana(groupsWithUnknown, furiganaMap);
-    expect(sorted[sorted.length - 1].displayName).toBe('未登録者');
+    expect(sorted[sorted.length - 1]!.displayName).toBe('未登録者');
   });
 
   it('元の配列を変更しない（イミュータブル）', () => {

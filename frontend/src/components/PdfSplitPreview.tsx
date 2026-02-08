@@ -37,7 +37,7 @@ export function PdfSplitPreview({
 }: PdfSplitPreviewProps) {
   const [numPages, setNumPages] = useState<number | null>(null)
   const [isLoading, setIsLoading] = useState(true)
-  const [previewWidth, setPreviewWidth] = useState(PREVIEW_SCALES[1])
+  const [previewWidth, setPreviewWidth] = useState(PREVIEW_SCALES[1]!)
   const thumbnailContainerRef = useRef<HTMLDivElement>(null)
   const selectedThumbnailRef = useRef<HTMLDivElement>(null)
 
@@ -69,7 +69,7 @@ export function PdfSplitPreview({
   const handleZoomIn = () => {
     const currentIndex = PREVIEW_SCALES.indexOf(previewWidth)
     if (currentIndex < PREVIEW_SCALES.length - 1) {
-      setPreviewWidth(PREVIEW_SCALES[currentIndex + 1])
+      setPreviewWidth(PREVIEW_SCALES[currentIndex + 1]!)
     }
   }
 
@@ -77,7 +77,7 @@ export function PdfSplitPreview({
   const handleZoomOut = () => {
     const currentIndex = PREVIEW_SCALES.indexOf(previewWidth)
     if (currentIndex > 0) {
-      setPreviewWidth(PREVIEW_SCALES[currentIndex - 1])
+      setPreviewWidth(PREVIEW_SCALES[currentIndex - 1]!)
     }
   }
 
@@ -169,7 +169,7 @@ export function PdfSplitPreview({
                     loading={
                       <div
                         className="flex items-center justify-center bg-white"
-                        style={{ width: previewWidth, height: previewWidth * 1.4 }}
+                        style={{ width: previewWidth ?? 200, height: (previewWidth ?? 200) * 1.4 }}
                       >
                         <Loader2 className="h-6 w-6 animate-spin text-gray-400" />
                       </div>

@@ -181,7 +181,7 @@ export function useProcessingHistory(filters: ProcessingHistoryFilters): Process
   const [displayedDocs, setDisplayedDocs] = useState<Document[]>([]);
   const [buffer, setBuffer] = useState<Document[]>([]);
   const [lastFirestoreDoc, setLastFirestoreDoc] = useState<DocumentSnapshot | null>(null);
-  const [noMoreFirestoreDocs, setNoMoreFirestoreDocs] = useState(false);
+  const [noMoreFirestoreDocs, setNoMoreFirestoreDocs] = useState<boolean>(false);
   const [isFetchingMore, setIsFetchingMore] = useState(false);
 
   // 初期データ取得
@@ -213,7 +213,7 @@ export function useProcessingHistory(filters: ProcessingHistoryFilters): Process
 
     // Firestore カーソル更新
     const lastDoc = snapshot.docs.length > 0
-      ? snapshot.docs[snapshot.docs.length - 1]
+      ? snapshot.docs[snapshot.docs.length - 1] ?? null
       : null;
     setLastFirestoreDoc(lastDoc);
     setNoMoreFirestoreDocs(snapshot.docs.length < FETCH_SIZE);
@@ -279,7 +279,7 @@ export function useProcessingHistory(filters: ProcessingHistoryFilters): Process
     try {
       const currentBuffer = [...buffer];
       let currentLastDoc = lastFirestoreDoc;
-      let noMore = noMoreFirestoreDocs;
+      let noMore: boolean = noMoreFirestoreDocs;
 
       // バッファがPAGE_SIZE未満の間、追加フェッチ
       while (currentBuffer.length < PAGE_SIZE && !noMore) {
@@ -309,7 +309,7 @@ export function useProcessingHistory(filters: ProcessingHistoryFilters): Process
           noMore = true;
         }
         if (snapshot.docs.length > 0) {
-          currentLastDoc = snapshot.docs[snapshot.docs.length - 1];
+          currentLastDoc = snapshot.docs[snapshot.docs.length - 1] ?? null;
         }
 
         const fetchedDocs: Document[] = snapshot.docs.map(docSnap =>

@@ -35,14 +35,13 @@ import {
   type PeriodFilter,
   type StatusFilter,
   type ConfirmedFilter,
-  type SortOrder,
   type ProcessingHistoryFilters,
 } from '@/hooks/useProcessingHistory';
 import { DocumentDetailModal } from '@/components/DocumentDetailModal';
 import { LoadMoreIndicator } from '@/components/LoadMoreIndicator';
 import { useInfiniteScroll } from '@/hooks/useInfiniteScroll';
 import type { Document as DocType, DocumentStatus } from '@shared/types';
-import { Loader2, RefreshCw, ChevronDown, ChevronUp, AlertCircle, ArrowUpDown } from 'lucide-react';
+import { Loader2, RefreshCw, ChevronDown, ChevronUp, AlertCircle } from 'lucide-react';
 
 // ============================================
 // ステータスバッジコンポーネント

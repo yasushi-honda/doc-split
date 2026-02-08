@@ -143,7 +143,8 @@ async function updateCustomer(params: UpdateCustomerParams): Promise<void> {
   if (params.notes !== undefined) {
     data.notes = params.notes || null
   }
-  await updateDoc(docRef, data)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  await updateDoc(docRef, data as any)
 }
 
 export function useUpdateCustomer() {
@@ -1118,7 +1119,8 @@ async function bulkImportCustomersWithActions(
     if (item.action === 'overwrite' && item.existingId) {
       // 上書き: 既存ドキュメントを更新
       const docRef = doc(db, COLLECTION_PATHS.customers, item.existingId)
-      await updateDoc(docRef, baseData)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await updateDoc(docRef, baseData as any)
       overwritten++
     } else {
       // 新規追加

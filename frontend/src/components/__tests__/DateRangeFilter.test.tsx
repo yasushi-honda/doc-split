@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { DateRangeFilter, type DateRange } from '../DateRangeFilter'
 
@@ -8,10 +8,10 @@ describe('DateRangeFilter', () => {
     dateTo: undefined,
     dateField: 'fileDate',
   }
-  let onChange: ReturnType<typeof vi.fn>
+  let onChange: Mock<(range: DateRange) => void>
 
   beforeEach(() => {
-    onChange = vi.fn()
+    onChange = vi.fn<(range: DateRange) => void>()
     // 時刻を固定
     vi.useFakeTimers()
     vi.setSystemTime(new Date(2026, 1, 6)) // 2026-02-06
@@ -45,28 +45,28 @@ describe('DateRangeFilter', () => {
       dateField: 'fileDate',
     })
     // dateTo は今日の23:59:59
-    const call = onChange.mock.calls[0][0]
-    expect(call.dateTo.getFullYear()).toBe(2026)
-    expect(call.dateTo.getMonth()).toBe(1)
-    expect(call.dateTo.getDate()).toBe(6)
+    const call = onChange.mock.calls[0]![0]!
+    expect(call.dateTo!.getFullYear()).toBe(2026)
+    expect(call.dateTo!.getMonth()).toBe(1)
+    expect(call.dateTo!.getDate()).toBe(6)
   })
 
   it('今年プリセットをクリックすると年初〜今日の範囲が設定される', () => {
     render(<DateRangeFilter value={defaultValue} onChange={onChange} />)
     fireEvent.click(screen.getByText('今年'))
 
-    const call = onChange.mock.calls[0][0]
+    const call = onChange.mock.calls[0]![0]!
     expect(call.dateFrom).toEqual(new Date(2026, 0, 1)) // 1月1日
-    expect(call.dateTo.getFullYear()).toBe(2026)
+    expect(call.dateTo!.getFullYear()).toBe(2026)
   })
 
   it('過去3ヶ月プリセットをクリックすると3ヶ月前の月初〜今日の範囲が設定される', () => {
     render(<DateRangeFilter value={defaultValue} onChange={onChange} />)
     fireEvent.click(screen.getByText('過去3ヶ月'))
 
-    const call = onChange.mock.calls[0][0]
+    const call = onChange.mock.calls[0]![0]!
     expect(call.dateFrom).toEqual(new Date(2025, 10, 1)) // 11月1日
-    expect(call.dateTo.getFullYear()).toBe(2026)
+    expect(call.dateTo!.getFullYear()).toBe(2026)
   })
 
   it('カスタムボタンをクリックすると日付入力が表示される', () => {

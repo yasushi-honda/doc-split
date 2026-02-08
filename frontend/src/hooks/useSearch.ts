@@ -76,7 +76,6 @@ export function useSearch(): UseSearchResult {
     isLoading,
     isError,
     error,
-    refetch,
   } = useQuery({
     queryKey: ['search', query, offset],
     queryFn: () => searchDocumentsApi({ query, limit, offset }),

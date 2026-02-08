@@ -144,10 +144,10 @@ export function useDocumentEdit(document: Document | null | undefined): UseDocum
 
       // 日付（比較が複雑なため文字列化して比較）
       const oldDate = document.fileDate instanceof Timestamp
-        ? document.fileDate.toDate().toISOString().split('T')[0]
-        : document.fileDate ? new Date(document.fileDate).toISOString().split('T')[0] : null
+        ? document.fileDate.toDate().toISOString().split('T')[0] ?? null
+        : document.fileDate ? new Date(document.fileDate).toISOString().split('T')[0] ?? null : null
       const newDate = editedFields.fileDate
-        ? editedFields.fileDate.toISOString().split('T')[0]
+        ? editedFields.fileDate.toISOString().split('T')[0] ?? null
         : null
       if (oldDate !== newDate) {
         changes.push({
@@ -216,7 +216,8 @@ export function useDocumentEdit(document: Document | null | undefined): UseDocum
       updateDocumentInListCache(queryClient, document.id, optimisticData)
 
       try {
-        await updateDoc(docRef, updateData)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await updateDoc(docRef, updateData as any)
       } catch (writeErr) {
         // Firestore書き込み失敗時: ロールバック
         const rollbackData: Partial<Document> = {}

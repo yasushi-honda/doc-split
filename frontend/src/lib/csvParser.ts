@@ -14,11 +14,11 @@ export function parseCSV(content: string): Record<string, string>[] {
   if (lines.length < 2) return []
 
   // ヘッダー行を取得
-  const headers = parseCSVLine(lines[0])
+  const headers = parseCSVLine(lines[0]!)
   const rows: Record<string, string>[] = []
 
   for (let i = 1; i < lines.length; i++) {
-    const line = lines[i].trim()
+    const line = lines[i]!.trim()
     if (!line) continue
 
     const values = parseCSVLine(line)

@@ -35,6 +35,9 @@ jobs:
       - name: Lint functions
         run: npm run lint:functions
 
+      - name: Type check frontend
+        run: cd frontend && npx tsc --noEmit
+
       - name: Build frontend
         run: npm run build
         env:

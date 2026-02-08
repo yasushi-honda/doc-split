@@ -91,8 +91,8 @@ export function firestoreToDocument(id: string, data: Record<string, unknown>): 
     customerId: data.customerId as string | null | undefined,
     customerConfirmed: data.customerConfirmed as boolean | undefined,
     customerCandidates: data.customerCandidates as Document['customerCandidates'],
-    customerConfirmedBy: data.customerConfirmedBy as string | null | undefined,
-    customerConfirmedAt: data.customerConfirmedAt as Timestamp | null | undefined,
+    confirmedBy: data.confirmedBy as string | null | undefined,
+    confirmedAt: data.confirmedAt as Timestamp | null | undefined,
     // 事業所確定フィールド（Phase 8 同名対応）
     officeId: data.officeId as string | null | undefined,
     officeConfirmed: data.officeConfirmed as boolean | undefined,
@@ -313,6 +313,7 @@ export function useUpdateDocument() {
 async function fetchDocumentMasters(): Promise<DocumentMaster[]> {
   const snapshot = await getDocs(collection(db, 'masters/documents/items'))
   return snapshot.docs.map((doc) => ({
+    id: doc.id,
     name: doc.data().name as string,
     dateMarker: doc.data().dateMarker as string,
     category: doc.data().category as string,
@@ -349,7 +350,10 @@ export function useCustomerMasters() {
 async function fetchOfficeMasters(): Promise<OfficeMaster[]> {
   const snapshot = await getDocs(collection(db, 'masters/offices/items'))
   return snapshot.docs.map((doc) => ({
+    id: doc.id,
     name: doc.data().name as string,
+    isDuplicate: (doc.data().isDuplicate as boolean) ?? false,
+    shortName: doc.data().shortName as string | undefined,
   }))
 }
 

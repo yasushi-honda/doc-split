@@ -4,6 +4,7 @@
  * 無限スクロール用ローディングインジケーターの表示ロジック
  */
 
+import React from 'react'
 import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { LoadMoreIndicator } from '../LoadMoreIndicator'
@@ -58,7 +59,7 @@ describe('LoadMoreIndicator', () => {
   })
 
   it('refが正しく転送される', () => {
-    const ref = { current: null } as React.RefObject<HTMLDivElement | null>
+    const ref = React.createRef<HTMLDivElement>()
 
     render(
       <LoadMoreIndicator
