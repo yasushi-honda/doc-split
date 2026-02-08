@@ -8,6 +8,7 @@
 
 | PR/コミット | 内容 |
 |----|------|
+| **#102** | **セレクションモードで行全体タップ可能に**（モバイルUX改善、チェックボックスだけでなく行クリック/タップで選択トグル） |
 | **#101** | **納品フロー成功率改善**（jq依存除去→Node.jsヘルパー、CSV解析RFC 4180準拠、Gmail OAuth事前チェック、フォームバリデーション追加。scripts/helpers/新設、import-masters.js --dry-run対応） |
 | **#100** | **OCR処理ポーリング一本化+transientエラー自動リトライ（ADR-0010）**（processOCROnCreate廃止、429等は自動リトライ(上限3回)、processingスタック10分救済、fix-stuck-documents.js `--include-errors`追加、Firestoreインデックス`status+updatedAt`作成） |
 | e31a718 | **ドキュメント監査対応**（architecture.md Node.js版修正+Functions追加、gemini-rate-limiting.md料金表更新、context/配下6ファイルのフロントメタ統一、監査レポート追加） |
@@ -106,8 +107,8 @@
 
 | 環境 | 状態 |
 |------|------|
-| dev | デプロイ済み（02-08、Functions: PR #100反映、エラードキュメント復旧確認済み） |
-| kanameone | デプロイ済み（02-08、Functions: PR #100反映、インデックス作成済み） |
+| dev | デプロイ済み（02-09、Hosting: PR #102反映） |
+| kanameone | デプロイ済み（02-09、Hosting: PR #102反映） |
 | setup-tenant.sh | PR #101でjq依存除去+Gmail OAuth事前チェック追加（スクリプト変更、デプロイ不要） |
 | deploy-to-project.sh | PR #101でjq依存除去（スクリプト変更、デプロイ不要） |
 | import-masters.js | PR #101でCSV解析RFC 4180準拠+--dry-run追加（スクリプト変更、デプロイ不要） |
