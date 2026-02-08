@@ -8,6 +8,7 @@
 
 | PR/コミット | 内容 |
 |----|------|
+| **#103** | **processOCRに必要なFirestore複合インデックス追加**（PR #100で`rescueStuckProcessingDocs()`追加時に`firestore.indexes.json`への`status+updatedAt`定義が漏れていた。processOCRが毎分Fatal errorで全停止→PDFが永久pending。dev/kanameone両環境にデプロイ済み） |
 | **#102** | **セレクションモードで行全体タップ可能に**（モバイルUX改善、チェックボックスだけでなく行クリック/タップで選択トグル） |
 | **#101** | **納品フロー成功率改善**（jq依存除去→Node.jsヘルパー、CSV解析RFC 4180準拠、Gmail OAuth事前チェック、フォームバリデーション追加。scripts/helpers/新設、import-masters.js --dry-run対応） |
 | **#100** | **OCR処理ポーリング一本化+transientエラー自動リトライ（ADR-0010）**（processOCROnCreate廃止、429等は自動リトライ(上限3回)、processingスタック10分救済、fix-stuck-documents.js `--include-errors`追加、Firestoreインデックス`status+updatedAt`作成） |
@@ -107,8 +108,8 @@
 
 | 環境 | 状態 |
 |------|------|
-| dev | デプロイ済み（02-09、Hosting: PR #102反映） |
-| kanameone | デプロイ済み（02-09、Hosting: PR #102反映） |
+| dev | デプロイ済み（02-09、Hosting: PR #102反映、Firestoreインデックス: PR #103反映） |
+| kanameone | デプロイ済み（02-09、Hosting: PR #102反映、Firestoreインデックス: PR #103反映） |
 | setup-tenant.sh | PR #101でjq依存除去+Gmail OAuth事前チェック追加（スクリプト変更、デプロイ不要） |
 | deploy-to-project.sh | PR #101でjq依存除去（スクリプト変更、デプロイ不要） |
 | import-masters.js | PR #101でCSV解析RFC 4180準拠+--dry-run追加（スクリプト変更、デプロイ不要） |
@@ -117,7 +118,14 @@
 
 なし（02-09時点）
 
+## 見送り事項（納品後に検討）
+
+| 項目 | 理由 |
+|------|------|
+| 手動PDFアップロードのOCR即時実行（ポーリング待ち最大60秒の短縮） | 納品直前のリスク回避。手動アップロードは利用頻度低い。実装する場合はuploadPdf成功後にFEからfire-and-forgetで新callable呼び出し |
+
 ## 次のアクション候補（優先度順）
 
 1. **クライアント別オプション機能の実装**（最初の具体的要望確定時）→ ADR-0009参照
 2. 精度改善（フィードバック後）
+3. 手動PDFアップロードのOCR即時実行（クライアントから要望があれば）
