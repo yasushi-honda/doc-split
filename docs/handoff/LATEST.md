@@ -8,6 +8,7 @@
 
 | PR/コミット | 内容 |
 |----|------|
+| **#99** | **import-masters.jsの環境変数優先順位修正**（`FIREBASE_PROJECT_ID`を`GCLOUD_PROJECT`より優先に変更。.envrcのGCLOUD_PROJECTが常に優先され納品時にマスターデータがdev環境に投入されるバグを修正） |
 | **#98** | **TypeScript strict型エラー63件を全修正 + CIに型チェック追加**（26ファイル、tsconfig lib ES2023化、shared/types.ts型補完、strict null修正、テスト型修正、CI `tsc --noEmit` ガード追加） |
 | **#97** | **メタ情報編集時の楽観的UI更新**（編集保存→一覧即反映、エラー時ロールバック、`updateDocumentInListCache`共通ユーティリティでDRY化） |
 | **#96** | **エイリアス機能ドキュメント整備**（GitHub Pages専用ページ新設、HelpPageビジュアルフロー図追加、admin-guide/user-guide/features.md更新） |
@@ -74,10 +75,12 @@
 
 **プロダクションコード変更**: `firebase.ts`に1行追加のみ（再エクスポート）。アプリ動作への影響なし。
 
-### Claude Code納品フロー（完成状態）
+### Claude Code納品フロー（検証済み 02-08）
 
 - GitHub Pages: `https://yasushi-honda.github.io/doc-split/#/claude-code-delivery`
 - フォーム入力→プロンプト自動生成→コピー→Claude Codeに貼付けで全自動納品
+- 全スクリプト（7本）の存在・実行権限・引数整合性を検証済み
+- PR #99で`import-masters.js`の環境変数優先順位バグを修正済み
 
 ## E2Eテスト状況
 
@@ -94,6 +97,7 @@
 | dev | デプロイ済み（02-08、Hosting: useSearch修正反映済み） |
 | kanameone | デプロイ済み（02-08、Hosting: useSearch修正反映済み） |
 | setup-tenant.sh | 15c9cd3で--with-gmail時authModeバグ修正済み（スクリプト変更、デプロイ不要） |
+| import-masters.js | PR #99で環境変数優先順位修正済み（スクリプト変更、デプロイ不要） |
 
 ## 未解決の既知バグ
 
