@@ -8,6 +8,7 @@
 
 | PR/コミット | 内容 |
 |----|------|
+| **#100** | **OCR処理ポーリング一本化+transientエラー自動リトライ（ADR-0010）**（processOCROnCreate廃止、429等は自動リトライ(上限3回)、processingスタック10分救済、fix-stuck-documents.js `--include-errors`追加、Firestoreインデックス`status+updatedAt`作成） |
 | e31a718 | **ドキュメント監査対応**（architecture.md Node.js版修正+Functions追加、gemini-rate-limiting.md料金表更新、context/配下6ファイルのフロントメタ統一、監査レポート追加） |
 | **#99** | **import-masters.jsの環境変数優先順位修正**（`FIREBASE_PROJECT_ID`を`GCLOUD_PROJECT`より優先に変更。.envrcのGCLOUD_PROJECTが常に優先され納品時にマスターデータがdev環境に投入されるバグを修正） |
 | **#98** | **TypeScript strict型エラー63件を全修正 + CIに型チェック追加**（26ファイル、tsconfig lib ES2023化、shared/types.ts型補完、strict null修正、テスト型修正、CI `tsc --noEmit` ガード追加） |
@@ -103,25 +104,14 @@
 
 | 環境 | 状態 |
 |------|------|
-| dev | デプロイ済み（02-08、Hosting: useSearch修正反映済み） |
-| kanameone | デプロイ済み（02-08、Hosting: useSearch修正反映済み） |
+| dev | デプロイ済み（02-08、Functions: PR #100反映、エラードキュメント復旧確認済み） |
+| kanameone | デプロイ済み（02-08、Functions: PR #100反映、インデックス作成済み） |
 | setup-tenant.sh | 15c9cd3で--with-gmail時authModeバグ修正済み（スクリプト変更、デプロイ不要） |
 | import-masters.js | PR #99で環境変数優先順位修正済み（スクリプト変更、デプロイ不要） |
 
 ## 未解決の既知バグ
 
-なし（02-07: processingスタックバグは修正・復旧済み）
-
-## Codexレビュー指摘事項（バックログ）
-
-PR #71対応時にCodex（GPT）レビューで検出。今後の改善候補:
-
-| 重要度 | 指摘 | 箇所 |
-|--------|------|------|
-| ~~Medium~~ | ~~PDF系Callable（detectSplitPoints等）にwhitelist/adminチェックなし~~ | ~~`pdfOperations.ts`~~ **→ PR #87で解決** |
-| ~~Medium~~ | ~~`useSearch`でレンダー中にsetState~~ | ~~`useSearch.ts:113-121`~~ **→ useEffectに移行で解決** |
-| Low | Geminiレート制限がインスタンス内のみ（安全マージン10倍で実害なし） | `rateLimiter.ts` |
-| Low | Gmail検索が日単位（dedup実装済みで実害なし） | `checkGmailAttachments.ts:137` |
+なし（02-08: OCRポーリング一本化+自動リトライでtransientエラー再発リスクゼロに）
 
 ## 次のアクション候補（優先度順）
 
