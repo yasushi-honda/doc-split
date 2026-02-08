@@ -91,8 +91,8 @@
 
 | 環境 | 状態 |
 |------|------|
-| dev | デプロイ済み（02-08、Hosting: PR #98反映済み） |
-| kanameone | デプロイ済み（02-08、Hosting: PR #98反映済み） |
+| dev | デプロイ済み（02-08、Hosting: useSearch修正反映済み） |
+| kanameone | デプロイ済み（02-08、Hosting: useSearch修正反映済み） |
 | setup-tenant.sh | 15c9cd3で--with-gmail時authModeバグ修正済み（スクリプト変更、デプロイ不要） |
 
 ## 未解決の既知バグ
