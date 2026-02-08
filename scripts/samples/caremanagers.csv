@@ -1,4 +1,4 @@
-name,email,aliases
-佐藤花子,sato@example.com,佐藤 花子|さとう花子
-田中次郎,tanaka@example.com,田中 次郎
-山本三郎,yamamoto@example.com,
+name,email
+佐藤花子,sato@example.com
+田中次郎,tanaka@example.com
+山本三郎,yamamoto@example.com

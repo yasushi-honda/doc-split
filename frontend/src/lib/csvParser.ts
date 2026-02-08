@@ -105,6 +105,7 @@ export interface CustomerCSVRow {
   isDuplicate: boolean
   careManagerName?: string
   notes?: string
+  aliases?: string
 }
 
 export function mapCustomerCSV(rows: Record<string, string>[]): CustomerCSVRow[] {
@@ -114,6 +115,7 @@ export function mapCustomerCSV(rows: Record<string, string>[]): CustomerCSVRow[]
     isDuplicate: row['isDuplicate'] === 'true' || row['同姓同名'] === 'true' || row['重複'] === 'true',
     careManagerName: row['careManagerName'] || row['担当ケアマネ名'] || row['担当ケアマネ'] || row['担当CM'] || '',
     notes: row['notes'] || row['備考'] || '',
+    aliases: row['aliases'] || row['別表記'] || '',
   })).filter(c => c.name) // 名前がない行は除外
 }
 
@@ -124,6 +126,7 @@ export interface OfficeCSVRow {
   name: string
   shortName?: string  // 後方互換（将来廃止予定）
   notes?: string
+  aliases?: string
 }
 
 export function mapOfficeCSV(rows: Record<string, string>[]): OfficeCSVRow[] {
@@ -131,6 +134,7 @@ export function mapOfficeCSV(rows: Record<string, string>[]): OfficeCSVRow[] {
     name: row['name'] || row['事業所名'] || row['名称'] || '',
     shortName: row['shortName'] || row['略称'] || row['短縮名'] || '',  // 後方互換
     notes: row['notes'] || row['備考'] || row['メモ'] || '',
+    aliases: row['aliases'] || row['別表記'] || '',
   })).filter(o => o.name) // 名前がない行は除外
 }
 
@@ -159,6 +163,7 @@ export interface DocumentTypeCSVRow {
   dateMarker: string
   category: string
   keywords: string
+  aliases?: string
 }
 
 export function mapDocumentTypeCSV(rows: Record<string, string>[]): DocumentTypeCSVRow[] {
@@ -167,6 +172,7 @@ export function mapDocumentTypeCSV(rows: Record<string, string>[]): DocumentType
     dateMarker: row['dateMarker'] || row['日付マーカー'] || row['日付'] || '',
     category: row['category'] || row['カテゴリ'] || row['分類'] || '',
     keywords: row['keywords'] || row['キーワード'] || row['照合キーワード'] || '',
+    aliases: row['aliases'] || row['別表記'] || '',
   })).filter(d => d.name) // 名前がない行は除外
 }
 

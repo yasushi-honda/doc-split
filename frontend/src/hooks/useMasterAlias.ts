@@ -17,16 +17,11 @@ interface AddAliasResult {
 }
 
 export function useMasterAlias() {
-  const [isAdding, setIsAdding] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<Error | null>(null);
 
   /**
    * マスターにエイリアスを追加
-   *
-   * @param masterType マスタータイプ
-   * @param masterId マスターID
-   * @param alias 追加するエイリアス
-   * @returns 成功時true
    */
   const addAlias = useCallback(
     async (
@@ -34,7 +29,7 @@ export function useMasterAlias() {
       masterId: string,
       alias: string
     ): Promise<boolean> => {
-      setIsAdding(true);
+      setIsProcessing(true);
       setError(null);
 
       try {
@@ -48,7 +43,80 @@ export function useMasterAlias() {
         setError(err instanceof Error ? err : new Error('Failed to add alias'));
         return false;
       } finally {
-        setIsAdding(false);
+        setIsProcessing(false);
+      }
+    },
+    []
+  );
+
+  /**
+   * マスターからエイリアスを削除
+   */
+  const removeAlias = useCallback(
+    async (
+      masterType: MasterType,
+      masterId: string,
+      alias: string
+    ): Promise<boolean> => {
+      setIsProcessing(true);
+      setError(null);
+
+      try {
+        const result = await callFunction<
+          { masterType: MasterType; masterId: string; alias: string },
+          AddAliasResult
+        >('removeMasterAlias', { masterType, masterId, alias }, { timeout: 60_000 });
+        return result.success;
+      } catch (err) {
+        console.error('Failed to remove alias:', err);
+        setError(err instanceof Error ? err : new Error('Failed to remove alias'));
+        return false;
+      } finally {
+        setIsProcessing(false);
+      }
+    },
+    []
+  );
+
+  /**
+   * エイリアスの差分を計算してAPI経由で同期
+   * addAlias/removeAliasを経由せず直接callFunctionを呼び、isProcessingの競合を防ぐ
+   */
+  const syncAliases = useCallback(
+    async (
+      masterType: MasterType,
+      masterId: string,
+      oldAliases: string[],
+      newAliases: string[]
+    ): Promise<boolean> => {
+      const toAdd = newAliases.filter(a => !oldAliases.includes(a));
+      const toRemove = oldAliases.filter(a => !newAliases.includes(a));
+
+      if (toAdd.length === 0 && toRemove.length === 0) return true;
+
+      setIsProcessing(true);
+      setError(null);
+
+      try {
+        for (const alias of toAdd) {
+          await callFunction<
+            { masterType: MasterType; masterId: string; alias: string },
+            AddAliasResult
+          >('addMasterAlias', { masterType, masterId, alias }, { timeout: 60_000 });
+        }
+        for (const alias of toRemove) {
+          await callFunction<
+            { masterType: MasterType; masterId: string; alias: string },
+            AddAliasResult
+          >('removeMasterAlias', { masterType, masterId, alias }, { timeout: 60_000 });
+        }
+        return true;
+      } catch (err) {
+        console.error('Failed to sync aliases:', err);
+        setError(err instanceof Error ? err : new Error('Failed to sync aliases'));
+        return false;
+      } finally {
+        setIsProcessing(false);
       }
     },
     []
@@ -56,7 +124,12 @@ export function useMasterAlias() {
 
   return {
     addAlias,
-    isAdding,
+    removeAlias,
+    syncAliases,
+    isAdding: isProcessing,
+    isProcessing,
     error,
   };
 }
+
+export type { MasterType };
