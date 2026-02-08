@@ -2,7 +2,7 @@
 title: "エラーハンドリングポリシー"
 description: "DocSplitのエラー処理・リトライ・通知に関するポリシー定義"
 status: draft
-updated: "2026-01-18"
+updated: "2026-02-08"
 ---
 
 # エラーハンドリングポリシー
@@ -87,7 +87,7 @@ async function withRetry<T>(
 }
 ```
 
-### 2.2 処理別リトライ設定
+### 2.2 処理別リトライ設定（サーバーサイド）
 
 | 処理 | 最大リトライ | 初期遅延 | 備考 |
 |------|------------|---------|------|
@@ -95,6 +95,42 @@ async function withRetry<T>(
 | Gemini OCR | 2 | 2秒 | コスト考慮で控えめ |
 | Storage操作 | 3 | 500ms | 高速リトライ |
 | Firestore書込 | 3 | 500ms | 高速リトライ |
+
+### 2.3 クライアントサイドリトライ（callFunction共通ヘルパー）
+
+モバイルブラウザのバックグラウンド復帰時などに発生する一時的エラーへの対策として、
+全Callable Function呼び出しに共通ヘルパー `callFunction` を適用（PR #92）。
+
+**実装**: `frontend/src/lib/callFunction.ts`
+
+#### リトライ対象エラー
+
+| エラーコード | 発生ケース |
+|------------|-----------|
+| `unauthenticated` | バックグラウンド復帰時のトークン期限切れ |
+| `deadline-exceeded` | ネットワーク一時停止によるタイムアウト |
+| `internal` | ネットワーク断→復帰時のコネクション異常 |
+
+#### リトライフロー
+
+1. Callable Function呼び出しが上記エラーで失敗
+2. `auth.currentUser.getIdToken(true)` でトークンを強制リフレッシュ
+3. 同じリクエストを1回だけ再実行
+4. 再実行も失敗した場合はオリジナルエラーをthrow
+
+#### 関数別タイムアウト設定
+
+| 関数名 | クライアント側タイムアウト | 備考 |
+|--------|----------------------|------|
+| uploadPdf | 120秒 | CF側timeoutSeconds: 120に合わせる |
+| detectSplitPoints | 300秒 | CF側timeoutSeconds: 300に合わせる |
+| splitPdf | 300秒 | CF側timeoutSeconds: 300に合わせる |
+| rotatePdfPages | 300秒 | CF側timeoutSeconds: 300に合わせる |
+| deleteDocument | 60秒 | |
+| regenerateSummary | 60秒 | |
+| addMasterAlias | 60秒 | |
+| searchDocuments | 30秒 | |
+| デフォルト | 70秒 | 未指定時 |
 
 ## 3. エラーログ記録
 
