@@ -169,7 +169,6 @@ function GmailSettings() {
   }
 
   const handleSave = async (labelsToSave: string[], sendersToSave: string[]) => {
-    console.log('Gmail設定を保存中...', { labels: labelsToSave, senders: sendersToSave, gmailAccount, isAndOperator })
     try {
       await updateSettings.mutateAsync({
         targetLabels: labelsToSave,
@@ -181,7 +180,6 @@ function GmailSettings() {
       setNewLabel('')
       setNewSender('')
       setSaveMessage({ type: 'success', text: '設定を保存しました' })
-      console.log('Gmail設定を保存しました')
     } catch (error) {
       console.error('Gmail設定の保存に失敗:', error)
       setSaveMessage({ type: 'error', text: '保存に失敗しました' })
@@ -707,14 +705,12 @@ function NotificationSettings() {
   }
 
   const handleSave = async () => {
-    console.log('通知設定を保存中...', { emails })
     try {
       await updateSettings.mutateAsync({
         errorNotificationEmails: emails,
       })
       setHasChanges(false)
       setSaveMessage({ type: 'success', text: '設定を保存しました' })
-      console.log('通知設定を保存しました')
     } catch (error) {
       console.error('通知設定の保存に失敗:', error)
       setSaveMessage({ type: 'error', text: '保存に失敗しました' })
