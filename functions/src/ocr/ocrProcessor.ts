@@ -178,6 +178,7 @@ export async function processDocument(
     name: d.data().name as string,
     category: d.data().category as string | undefined,
     keywords: d.data().keywords as string[] | undefined,
+    aliases: d.data().aliases as string[] | undefined,
   }));
 
   const custMasterData: CustomerMaster[] = customerMasters.docs.map((d) => ({
@@ -187,6 +188,7 @@ export async function processDocument(
     isDuplicate: d.data().isDuplicate as boolean | undefined,
     careManagerName: d.data().careManagerName as string | undefined,
     notes: d.data().notes as string | undefined,
+    aliases: d.data().aliases as string[] | undefined,
   }));
 
   const officeMasterData: OfficeMaster[] = officeMasters.docs.map((d) => ({
@@ -195,6 +197,7 @@ export async function processDocument(
     shortName: d.data().shortName as string | undefined,
     isDuplicate: d.data().isDuplicate as boolean | undefined,
     notes: d.data().notes as string | undefined,
+    aliases: d.data().aliases as string[] | undefined,
   }));
 
   // 情報抽出（強化版エクストラクター使用）
