@@ -220,7 +220,7 @@ export function PdfUploadModal({ open, onOpenChange, onSuccess }: PdfUploadModal
       const uploadPdf = httpsCallable<
         { fileName: string; mimeType: string; data: string; confirmDuplicate?: boolean; alternativeFileName?: string },
         UploadResult
-      >(functions, 'uploadPdf')
+      >(functions, 'uploadPdf', { timeout: 120_000 })
 
       const response = await uploadPdf({
         fileName: selectedFile.name,
@@ -248,8 +248,12 @@ export function PdfUploadModal({ open, onOpenChange, onSuccess }: PdfUploadModal
     } catch (err) {
       console.error('Upload error:', err)
 
-      // unauthenticatedエラー時: トークンリフレッシュして1回リトライ
-      if (err instanceof Error && err.message.includes('unauthenticated') && !options?.isRetry && auth.currentUser) {
+      // unauthenticated / deadline-exceeded エラー時: トークンリフレッシュして1回リトライ
+      // deadline-exceeded: モバイルバックグラウンド中にネットワーク中断→タイムアウト
+      // サーバー側で処理完了済みの場合、リトライ時に重複検出されるので安全
+      if (err instanceof Error &&
+          (err.message.includes('unauthenticated') || err.message.includes('deadline-exceeded')) &&
+          !options?.isRetry && auth.currentUser) {
         try {
           await auth.currentUser.getIdToken(true)
           return handleUpload({ ...options, isRetry: true })
@@ -272,6 +276,8 @@ export function PdfUploadModal({ open, onOpenChange, onSuccess }: PdfUploadModal
           errorMessage = match ? match[1] : message
         } else if (message.includes('unauthenticated')) {
           errorMessage = 'ログインセッションが切れました。ページを再読み込みしてください。'
+        } else if (message.includes('deadline-exceeded')) {
+          errorMessage = '通信がタイムアウトしました。電波状況を確認して再度お試しください。'
         } else {
           errorMessage = message
         }
