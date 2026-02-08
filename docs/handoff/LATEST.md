@@ -8,6 +8,7 @@
 
 | PR/コミット | 内容 |
 |----|------|
+| **#97** | **メタ情報編集時の楽観的UI更新**（編集保存→一覧即反映、エラー時ロールバック、`updateDocumentInListCache`共通ユーティリティでDRY化） |
 | **#96** | **エイリアス機能ドキュメント整備**（GitHub Pages専用ページ新設、HelpPageビジュアルフロー図追加、admin-guide/user-guide/features.md更新） |
 | **#95** | **OCRマスター照合エイリアス読み込みバグ修正**（ocrProcessor.tsでaliasesフィールド未読み込み→3マスター全てに追加） |
 | **#94** | **未判定時エイリアス登録ヒント表示**（DocumentDetailModal、顧客/書類/事業所の3箇所） |
@@ -89,8 +90,8 @@
 
 | 環境 | 状態 |
 |------|------|
-| dev | デプロイ済み（02-08、Hosting+Functions+Rules: PR #93〜#96全反映） |
-| kanameone | デプロイ済み（02-08、Hosting+Functions+Rules: PR #93〜#96全反映） |
+| dev | デプロイ済み（02-08、Hosting: PR #97反映済み） |
+| kanameone | デプロイ済み（02-08、Hosting: PR #97反映済み） |
 | setup-tenant.sh | 15c9cd3で--with-gmail時authModeバグ修正済み（スクリプト変更、デプロイ不要） |
 
 ## 未解決の既知バグ
