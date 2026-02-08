@@ -1,13 +1,14 @@
 # ハンドオフメモ
 
-**更新日**: 2026-02-07
+**更新日**: 2026-02-08
 **ブランチ**: main（クリーン）
 **フェーズ**: Phase 8完了 + 追加実装
 
-## 直近の変更（02-06〜07）
+## 直近の変更（02-06〜08）
 
 | PR/コミット | 内容 |
 |----|------|
+| **#88** | **モバイルバックグラウンド復帰時の認証エラー対策+Pull-to-Refresh**（visibilitychangeトークンリフレッシュ、unauthenticatedリトライ、Pull-to-Refresh UI） |
 | 15c9cd3 | **setup-tenant.shで--with-gmail時にauthModeをoauthに設定**（新規クライアントGmail取得失敗バグ修正） |
 | a49219e | **API仕様に認証・権限一覧追加、納品ガイドのinitTenant記述修正** |
 | **#87** | **全Callable関数の認証・権限チェック統一**（PDF系3関数に認証+WL追加、OCR/検索系にWL追加、マスター操作にadmin確認追加、initTenantに初回限定ガード追加） |
@@ -79,7 +80,7 @@
 
 | 環境 | 状態 |
 |------|------|
-| dev | デプロイ済み（02-07、Functions: PR #87反映、Hosting: PR #86反映） |
+| dev | デプロイ済み（02-08、Hosting: PR #88反映、Functions: PR #87反映） |
 | kanameone | デプロイ済み（02-07、Functions: PR #87反映、Hosting: PR #86反映） |
 | setup-tenant.sh | 15c9cd3で--with-gmail時authModeバグ修正済み（スクリプト変更、デプロイ不要） |
 
