@@ -12,11 +12,11 @@ admin.initializeApp();
 // Gmail添付ファイル取得（Cloud Scheduler: 5分間隔）
 export { checkGmailAttachments } from './gmail/checkGmailAttachments';
 
-// OCR処理（定期実行 - リカバリー用）
+// OCR処理（定期実行 - メイン処理パス）
 export { processOCR } from './ocr/processOCR';
 
-// OCR処理（Firestoreトリガー - メイン処理）
-export { processOCROnCreate } from './ocr/processOCROnCreate';
+// processOCROnCreate は廃止（ADR-0010）。ポーリング（processOCR）に一本化。
+// ファイルはロールバック用に保持: './ocr/processOCROnCreate'
 
 // OCR全文取得（Callable Function - Phase 7）
 export { getOcrText } from './ocr/getOcrText';

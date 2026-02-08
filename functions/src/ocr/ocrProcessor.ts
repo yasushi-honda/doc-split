@@ -1,13 +1,13 @@
 /**
  * OCR処理共通モジュール
  *
- * processOCR（ポーリング）とprocessOCROnCreate（トリガー）の両方から使用
+ * processOCR（ポーリング）から使用。processOCROnCreateは廃止（ADR-0010）。
  */
 
 import * as admin from 'firebase-admin';
 import { VertexAI } from '@google-cloud/vertexai';
 import { PDFDocument } from 'pdf-lib';
-import { withRetry, RETRY_CONFIGS } from '../utils/retry';
+import { withRetry, RETRY_CONFIGS, isTransientError } from '../utils/retry';
 import { logError } from '../utils/errorLogger';
 import { getRateLimiter, trackGeminiUsage } from '../utils/rateLimiter';
 import { GCP_CONFIG, GEMINI_CONFIG } from '../utils/config';
@@ -340,8 +340,14 @@ export async function processDocument(
   };
 }
 
+/** リトライ上限 */
+const MAX_RETRY_COUNT = 3;
+
 /**
  * エラー時の処理
+ *
+ * transientエラー（429等）の場合はstatus:pendingに戻して自動リトライ。
+ * リトライ上限（MAX_RETRY_COUNT）超過時のみstatus:errorに設定。
  */
 export async function handleProcessingError(
   docId: string,
@@ -350,15 +356,48 @@ export async function handleProcessingError(
 ): Promise<void> {
   console.error(`Error processing document ${docId}:`, error.message);
 
-  // status: errorへの更新を最優先で実行（logError失敗時もスタックしないように）
+  const transient = isTransientError(error);
+
+  // ステータス更新を最優先（トランザクションでretryCountをアトミックに管理）
   try {
-    await db.doc(`documents/${docId}`).update({
-      status: 'error',
-      lastErrorMessage: error.message.slice(0, 500),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    const docRef = db.doc(`documents/${docId}`);
+    await db.runTransaction(async (tx) => {
+      const doc = await tx.get(docRef);
+      const currentRetryCount = (doc.data()?.retryCount as number) || 0;
+      const newRetryCount = currentRetryCount + 1;
+
+      if (transient && newRetryCount < MAX_RETRY_COUNT) {
+        // transientエラーかつ上限未満 → pendingに戻して自動リトライ
+        console.log(`Transient error for ${docId}, retrying (${newRetryCount}/${MAX_RETRY_COUNT})`);
+        tx.update(docRef, {
+          status: 'pending',
+          retryCount: newRetryCount,
+          lastErrorMessage: error.message.slice(0, 500),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      } else {
+        // 非transientエラーまたはリトライ上限超過 → error確定
+        console.error(`Fatal/max-retry error for ${docId} (retryCount: ${newRetryCount}, transient: ${transient})`);
+        tx.update(docRef, {
+          status: 'error',
+          retryCount: newRetryCount,
+          lastErrorMessage: error.message.slice(0, 500),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      }
     });
   } catch (updateErr) {
-    console.error(`Failed to update document ${docId} status to error:`, updateErr);
+    console.error(`Failed to update document ${docId} status:`, updateErr);
+    // トランザクション失敗時のフォールバック
+    try {
+      await db.doc(`documents/${docId}`).update({
+        status: 'error',
+        lastErrorMessage: error.message.slice(0, 500),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    } catch (fallbackErr) {
+      console.error(`Fallback update also failed for ${docId}:`, fallbackErr);
+    }
   }
 
   try {
