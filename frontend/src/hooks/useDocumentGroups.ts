@@ -166,7 +166,7 @@ async function fetchGroupDocuments(
 
   return {
     documents,
-    lastDoc: docs.length > 0 ? docs[docs.length - 1] : null,
+    lastDoc: docs.length > 0 ? docs[docs.length - 1] ?? null : null,
     hasMore,
   };
 }

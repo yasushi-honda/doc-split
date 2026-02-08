@@ -217,7 +217,7 @@ function MobileContentPopup({
     }
 
     // AI要約生成ボタン
-    const generateBtn = contentArea.querySelector('#generate-summary-btn')
+    const generateBtn = contentArea.querySelector<HTMLElement>('#generate-summary-btn')
     if (generateBtn) {
       generateBtn.onclick = (e) => {
         e.preventDefault()
@@ -394,7 +394,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
     notes: o.notes,
   }))
   const documentTypeItems = (documentTypes || []).map(d => ({
-    id: d.id,
+    id: d.id ?? d.name,
     name: d.name,
   }))
 
@@ -402,7 +402,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
   const suggestedCustomerItems = document?.customerCandidates?.map(c => ({
     id: c.customerId || '',
     name: c.customerName || '',
-    subText: c.furigana,
+    subText: c.customerNameKana,
     notes: c.notes,
     score: c.score,
   })).filter(c => c.id && c.name) || []
@@ -451,7 +451,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
       const newDocType = editedFields.documentType
       // 新しい書類種別のマスターIDを取得
       const selectedDocType = documentTypes?.find(d => d.name === newDocType)
-      if (selectedDocType && originalDocType !== newDocType && originalDocType !== '不明文書' && originalDocType !== '未判定') {
+      if (selectedDocType?.id && originalDocType !== newDocType && originalDocType !== '不明文書' && originalDocType !== '未判定') {
         try {
           await addAlias('document', selectedDocType.id, originalDocType)
         } catch (err) {

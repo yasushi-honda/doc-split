@@ -210,7 +210,7 @@ export function PdfUploadModal({ open, onOpenChange, onSuccess }: PdfUploadModal
         const reader = new FileReader()
         reader.onload = () => {
           const result = reader.result as string
-          const base64 = result.split(',')[1]
+          const base64 = result.split(',')[1] ?? ''
           resolve(base64)
         }
         reader.onerror = () => reject(new Error('ファイルの読み込みに失敗しました'))
@@ -255,7 +255,7 @@ export function PdfUploadModal({ open, onOpenChange, onSuccess }: PdfUploadModal
           errorMessage = 'このファイルは既にアップロードされています'
         } else if (message.includes('invalid-argument')) {
           const match = message.match(/: (.+)$/)
-          errorMessage = match ? match[1] : message
+          errorMessage = match ? match[1] ?? message : message
         } else {
           errorMessage = getCallableErrorMessage(err, 'アップロードに失敗しました')
         }

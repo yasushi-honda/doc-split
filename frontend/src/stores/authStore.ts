@@ -5,7 +5,7 @@ import {
   signOut as firebaseSignOut,
   onAuthStateChanged,
 } from 'firebase/auth'
-import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore'
+import { doc, getDoc, setDoc, serverTimestamp, Timestamp } from 'firebase/firestore'
 import { auth, db, googleProvider } from '@/lib/firebase'
 import type { User } from '@shared/types'
 
@@ -79,17 +79,18 @@ export const useAuthStore = create<AuthState>((set) => ({
         if (allowedDomains.length > 0 && allowedDomains.includes(userDomain)) {
           // 許可ドメイン → 自動登録
           const newUserProfile: User = {
+            uid: firebaseUser.uid,
             email: userEmail,
-            name: firebaseUser.displayName || userEmail.split('@')[0],
+            displayName: firebaseUser.displayName || userEmail.split('@')[0]!,
             role: 'user',
-            createdAt: new Date(),
-            updatedAt: new Date(),
+            createdAt: Timestamp.now(),
+            lastLoginAt: Timestamp.now(),
           }
 
           await setDoc(doc(db, 'users', firebaseUser.uid), {
             ...newUserProfile,
             createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
+            lastLoginAt: serverTimestamp(),
           })
 
           console.log('User auto-registered via domain allowlist:', userEmail)

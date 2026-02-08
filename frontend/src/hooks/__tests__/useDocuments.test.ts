@@ -46,15 +46,15 @@ describe('firestoreToDocument', () => {
         ...baseFirestoreData,
         customerId: 'customer-001',
         customerConfirmed: true,
-        customerConfirmedBy: 'user-001',
-        customerConfirmedAt: Timestamp.now(),
+        confirmedBy: 'user-001',
+        confirmedAt: Timestamp.now(),
       }
 
       const result = firestoreToDocument('doc-001', data)
 
       expect(result.customerConfirmed).toBe(true)
       expect(result.customerId).toBe('customer-001')
-      expect(result.customerConfirmedBy).toBe('user-001')
+      expect(result.confirmedBy).toBe('user-001')
     })
 
     it('customerConfirmed: false を正しく変換する', () => {

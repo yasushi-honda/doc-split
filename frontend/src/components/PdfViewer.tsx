@@ -112,11 +112,11 @@ export function PdfViewer({ fileUrl, totalPages, documentId, onRotationSaved }: 
       // フィットから次のスケールへ
       const currentScale = calculateFitScale()
       const nextIndex = SCALE_OPTIONS.findIndex((s) => s > currentScale * 100)
-      setZoomMode(nextIndex >= 0 ? SCALE_OPTIONS[nextIndex] : SCALE_OPTIONS[SCALE_OPTIONS.length - 1])
+      setZoomMode(nextIndex >= 0 ? SCALE_OPTIONS[nextIndex]! : SCALE_OPTIONS[SCALE_OPTIONS.length - 1]!)
     } else {
       const currentIndex = SCALE_OPTIONS.indexOf(zoomMode)
       if (currentIndex < SCALE_OPTIONS.length - 1) {
-        setZoomMode(SCALE_OPTIONS[currentIndex + 1])
+        setZoomMode(SCALE_OPTIONS[currentIndex + 1]!)
       }
     }
   }
@@ -126,11 +126,11 @@ export function PdfViewer({ fileUrl, totalPages, documentId, onRotationSaved }: 
       // フィットから前のスケールへ
       const currentScale = calculateFitScale()
       const prevIndex = SCALE_OPTIONS.findLastIndex((s) => s < currentScale * 100)
-      setZoomMode(prevIndex >= 0 ? SCALE_OPTIONS[prevIndex] : SCALE_OPTIONS[0])
+      setZoomMode(prevIndex >= 0 ? SCALE_OPTIONS[prevIndex]! : SCALE_OPTIONS[0]!)
     } else {
       const currentIndex = SCALE_OPTIONS.indexOf(zoomMode)
       if (currentIndex > 0) {
-        setZoomMode(SCALE_OPTIONS[currentIndex - 1])
+        setZoomMode(SCALE_OPTIONS[currentIndex - 1]!)
       }
     }
   }
@@ -236,12 +236,12 @@ export function PdfViewer({ fileUrl, totalPages, documentId, onRotationSaved }: 
 
   // ズームイン可能かどうか
   const canZoomIn = zoomMode === 'fit'
-    ? calculateFitScale() * 100 < SCALE_OPTIONS[SCALE_OPTIONS.length - 1]
+    ? calculateFitScale() * 100 < SCALE_OPTIONS[SCALE_OPTIONS.length - 1]!
     : SCALE_OPTIONS.indexOf(zoomMode) < SCALE_OPTIONS.length - 1
 
   // ズームアウト可能かどうか
   const canZoomOut = zoomMode === 'fit'
-    ? calculateFitScale() * 100 > SCALE_OPTIONS[0]
+    ? calculateFitScale() * 100 > SCALE_OPTIONS[0]!
     : SCALE_OPTIONS.indexOf(zoomMode) > 0
 
   return (

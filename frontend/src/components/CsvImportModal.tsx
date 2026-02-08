@@ -249,7 +249,7 @@ export function CsvImportModal({ type, isOpen, onClose, onImport }: CsvImportMod
           checked = result as DuplicateCheckResultWithDetails<AnyCSVData>[]
         } else if (type === 'office') {
           const result = await checkOfficeDuplicatesWithDetails(
-            mapped.map(m => ({ name: (m as OfficeCSVRow).name, shortName: (m as OfficeCSVRow).shortName }))
+            mapped.map(m => ({ name: (m as OfficeCSVRow).name, shortName: (m as OfficeCSVRow).shortName ?? '' }))
           )
           checked = result as DuplicateCheckResultWithDetails<AnyCSVData>[]
         } else if (type === 'caremanager') {

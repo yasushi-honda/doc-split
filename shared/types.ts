@@ -130,6 +130,7 @@ export interface DocumentGroup {
 // ============================================
 
 export interface DocumentMaster {
+  id?: string;        // FirestoreドキュメントID（フロントエンド取得時に設定）
   name: string;
   dateMarker: string; // 日付抽出の目印（例: "発行日"）
   category: string;
@@ -180,6 +181,7 @@ export interface CustomerCandidateInfo {
   officeId?: string;           // 将来拡張用
   officeName?: string;         // 将来拡張用
   careManagerName?: string;    // 将来拡張用
+  notes?: string;              // 区別用補足情報
   score: number;               // 類似度スコア (0-100)
   matchType: CustomerMatchType;
 }
@@ -197,6 +199,7 @@ export interface OfficeCandidateInfo {
   officeName: string;          // OfficeMaster.name からコピー
   shortName?: string;          // OfficeMaster.shortName からコピー
   isDuplicate: boolean;        // OfficeMaster.isDuplicate からコピー
+  notes?: string;              // 区別用補足情報
   score: number;               // 類似度スコア (0-100)
   matchType: OfficeMatchType;
 }

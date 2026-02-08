@@ -1076,7 +1076,7 @@ function OfficesMaster() {
   ): Promise<BulkImportResultDetailed> => {
     return await bulkImport.mutateAsync(
       items.map(item => ({
-        data: { name: (item.data as OfficeCSVRow).name, shortName: (item.data as OfficeCSVRow).shortName },
+        data: { name: (item.data as OfficeCSVRow).name, shortName: (item.data as OfficeCSVRow).shortName ?? '' },
         existingId: item.existingId,
         action: item.action,
       }))

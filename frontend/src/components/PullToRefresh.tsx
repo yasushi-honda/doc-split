@@ -18,14 +18,14 @@ export function PullToRefresh({ children }: { children: React.ReactNode }) {
 
   const handleTouchStart = useCallback((e: TouchEvent) => {
     if (window.scrollY === 0) {
-      startY.current = e.touches[0].clientY
+      startY.current = e.touches[0]!.clientY
       pulling.current = true
     }
   }, [])
 
   const handleTouchMove = useCallback((e: TouchEvent) => {
     if (!pulling.current) return
-    const delta = e.touches[0].clientY - startY.current
+    const delta = e.touches[0]!.clientY - startY.current
     if (delta > 0) {
       // 抵抗感: 実際のドラッグ距離の40%だけ移動
       setPullDistance(Math.min(delta * 0.4, THRESHOLD * 1.5))

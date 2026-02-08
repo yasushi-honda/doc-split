@@ -272,23 +272,23 @@ export function PdfSplitModal({
         officeName: segment.officeName,
         officeId: segment.officeId || officeMaster?.id || null,
         // 候補情報（既存のセグメント情報があれば引き継ぐ）
-        customerCandidates: segment.customerCandidates || (customerMaster ? [{
+        customerCandidates: ('customerCandidates' in segment && segment.customerCandidates) || (customerMaster ? [{
           id: customerMaster.id,
           name: customerMaster.name,
           score: 100,
           isDuplicate: customerMaster.isDuplicate || false,
           careManagerName: customerMaster.careManagerName,
         }] : []),
-        officeCandidates: segment.officeCandidates || (officeMaster ? [{
+        officeCandidates: ('officeCandidates' in segment && segment.officeCandidates) || (officeMaster ? [{
           id: officeMaster.id,
           name: officeMaster.name,
           score: 100,
           isDuplicate: officeMaster.isDuplicate || false,
         }] : []),
-        needsManualCustomerSelection: segment.needsManualCustomerSelection || false,
-        needsManualOfficeSelection: segment.needsManualOfficeSelection || false,
-        isDuplicateCustomer: segment.isDuplicateCustomer || customerMaster?.isDuplicate || false,
-        careManagerName: segment.careManagerName || customerMaster?.careManagerName || null,
+        needsManualCustomerSelection: ('needsManualCustomerSelection' in segment && segment.needsManualCustomerSelection) || false,
+        needsManualOfficeSelection: ('needsManualOfficeSelection' in segment && segment.needsManualOfficeSelection) || false,
+        isDuplicateCustomer: ('isDuplicateCustomer' in segment && segment.isDuplicateCustomer) || customerMaster?.isDuplicate || false,
+        careManagerName: ('careManagerName' in segment ? segment.careManagerName : null) || customerMaster?.careManagerName || null,
       }
     })
 

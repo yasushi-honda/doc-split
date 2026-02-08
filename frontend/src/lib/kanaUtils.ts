@@ -88,7 +88,7 @@ function katakanaToHiragana(char: string): string {
  */
 export function getKanaRow(text: string): KanaRow | null {
   if (!text) return null;
-  const firstChar = text[0];
+  const firstChar = text[0]!;
   // ひらがなチェック
   const row = HIRAGANA_TO_ROW[firstChar];
   if (row) return row;

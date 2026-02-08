@@ -64,8 +64,8 @@ function toDateInputValue(date: Date | undefined): string {
 // input[type=date] の value → Date
 function fromDateInputValue(value: string): Date | undefined {
   if (!value) return undefined
-  const [y, m, d] = value.split('-').map(Number)
-  return new Date(y, m - 1, d)
+  const parts = value.split('-').map(Number)
+  return new Date(parts[0] ?? 0, (parts[1] ?? 1) - 1, parts[2] ?? 1)
 }
 
 // ============================================
