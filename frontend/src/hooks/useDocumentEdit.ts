@@ -1,6 +1,8 @@
 import { useState, useCallback } from 'react'
 import { doc, updateDoc, collection, addDoc, serverTimestamp, Timestamp } from 'firebase/firestore'
+import { useQueryClient } from '@tanstack/react-query'
 import { db, auth } from '../lib/firebase'
+import { updateDocumentInListCache } from './useDocuments'
 import type { Document } from '../../../shared/types'
 
 export interface EditLogEntry {
@@ -43,6 +45,7 @@ export function useDocumentEdit(document: Document | null | undefined): UseDocum
   const [isSaving, setIsSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [editedFields, setEditedFields] = useState<EditableFields>({})
+  const queryClient = useQueryClient()
 
   const startEditing = useCallback(() => {
     if (!document) return
@@ -159,43 +162,84 @@ export function useDocumentEdit(document: Document | null | undefined): UseDocum
         return true
       }
 
-      // ドキュメント更新
+      // ドキュメント更新データを構築
       const updateData: Record<string, unknown> = {
         editedBy: auth.currentUser.uid,
         editedAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       }
 
+      // キャッシュ楽観的更新用データ（serverTimestampはクライアント値で代替）
+      const optimisticData: Partial<Document> = {}
+
       // 変更されたフィールドを追加
       if (editedFields.customerName !== undefined) {
         updateData.customerName = editedFields.customerName
-        updateData.customerKey = editedFields.customerName // グループキーも更新
+        updateData.customerKey = editedFields.customerName
+        optimisticData.customerName = editedFields.customerName
+        optimisticData.customerKey = editedFields.customerName
       }
       if (editedFields.customerId !== undefined) {
         updateData.customerId = editedFields.customerId
+        optimisticData.customerId = editedFields.customerId
       }
       if (editedFields.officeName !== undefined) {
         updateData.officeName = editedFields.officeName
-        updateData.officeKey = editedFields.officeName // グループキーも更新
+        updateData.officeKey = editedFields.officeName
+        optimisticData.officeName = editedFields.officeName
+        optimisticData.officeKey = editedFields.officeName
       }
       if (editedFields.officeId !== undefined) {
         updateData.officeId = editedFields.officeId
+        optimisticData.officeId = editedFields.officeId
       }
       if (editedFields.documentType !== undefined) {
         updateData.documentType = editedFields.documentType
-        updateData.documentTypeKey = editedFields.documentType // グループキーも更新
+        updateData.documentTypeKey = editedFields.documentType
+        optimisticData.documentType = editedFields.documentType
+        optimisticData.documentTypeKey = editedFields.documentType
       }
       if (editedFields.careManagerKey !== undefined) {
         updateData.careManagerKey = editedFields.careManagerKey
+        optimisticData.careManagerKey = editedFields.careManagerKey
       }
       if (editedFields.fileName !== undefined) {
         updateData.fileName = editedFields.fileName
+        optimisticData.fileName = editedFields.fileName
       }
       if (editedFields.fileDate !== undefined) {
         updateData.fileDate = editedFields.fileDate
+        optimisticData.fileDate = editedFields.fileDate as unknown as Timestamp
       }
 
-      await updateDoc(docRef, updateData)
+      // 楽観的更新: 保存前にキャッシュを即座に反映
+      updateDocumentInListCache(queryClient, document.id, optimisticData)
+
+      try {
+        await updateDoc(docRef, updateData)
+      } catch (writeErr) {
+        // Firestore書き込み失敗時: ロールバック
+        const rollbackData: Partial<Document> = {}
+        if (editedFields.customerName !== undefined) {
+          rollbackData.customerName = document.customerName
+          rollbackData.customerKey = document.customerKey
+        }
+        if (editedFields.customerId !== undefined) rollbackData.customerId = document.customerId
+        if (editedFields.officeName !== undefined) {
+          rollbackData.officeName = document.officeName
+          rollbackData.officeKey = document.officeKey
+        }
+        if (editedFields.officeId !== undefined) rollbackData.officeId = document.officeId
+        if (editedFields.documentType !== undefined) {
+          rollbackData.documentType = document.documentType
+          rollbackData.documentTypeKey = document.documentTypeKey
+        }
+        if (editedFields.careManagerKey !== undefined) rollbackData.careManagerKey = document.careManagerKey
+        if (editedFields.fileName !== undefined) rollbackData.fileName = document.fileName
+        if (editedFields.fileDate !== undefined) rollbackData.fileDate = document.fileDate
+        updateDocumentInListCache(queryClient, document.id, rollbackData)
+        throw writeErr
+      }
 
       // 監査ログを記録
       for (const change of changes) {
@@ -210,6 +254,10 @@ export function useDocumentEdit(document: Document | null | undefined): UseDocum
         })
       }
 
+      // サーバー確定値で同期
+      queryClient.invalidateQueries({ queryKey: ['documentsInfinite'] })
+      queryClient.invalidateQueries({ queryKey: ['document', document.id] })
+
       setIsEditing(false)
       setEditedFields({})
       return true
@@ -220,7 +268,7 @@ export function useDocumentEdit(document: Document | null | undefined): UseDocum
     } finally {
       setIsSaving(false)
     }
-  }, [document, editedFields])
+  }, [document, editedFields, queryClient])
 
   return {
     isEditing,

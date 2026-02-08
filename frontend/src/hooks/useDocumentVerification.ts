@@ -8,6 +8,7 @@ import { useState, useCallback } from 'react'
 import { doc, updateDoc, serverTimestamp, Timestamp } from 'firebase/firestore'
 import { useQueryClient } from '@tanstack/react-query'
 import { db, auth } from '../lib/firebase'
+import { updateDocumentInListCache } from './useDocuments'
 import type { Document } from '../../../shared/types'
 
 interface UseDocumentVerificationResult {
@@ -28,34 +29,11 @@ export function useDocumentVerification(
   const optimisticUpdate = useCallback((verified: boolean) => {
     if (!document) return
 
-    const newData = {
+    updateDocumentInListCache(queryClient, document.id, {
       verified,
       verifiedBy: verified ? auth.currentUser?.uid : null,
       verifiedAt: verified ? Timestamp.now() : null,
-    }
-
-    // 個別ドキュメントのキャッシュを更新
-    queryClient.setQueryData(['document', document.id], (old: Document | undefined) => {
-      if (!old) return old
-      return { ...old, ...newData }
     })
-
-    // 一覧のキャッシュも更新（無限スクロール）
-    queryClient.setQueriesData<{ pages: { documents: Document[] }[] }>(
-      { queryKey: ['documentsInfinite'] },
-      (old) => {
-        if (!old) return old
-        return {
-          ...old,
-          pages: old.pages.map(page => ({
-            ...page,
-            documents: page.documents.map(doc =>
-              doc.id === document.id ? { ...doc, ...newData } : doc
-            ),
-          })),
-        }
-      }
-    )
   }, [document, queryClient])
 
   const markAsVerified = useCallback(async (): Promise<boolean> => {
