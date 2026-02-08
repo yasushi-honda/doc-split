@@ -8,6 +8,11 @@
 
 | PR/コミット | 内容 |
 |----|------|
+| **#96** | **エイリアス機能ドキュメント整備**（GitHub Pages専用ページ新設、HelpPageビジュアルフロー図追加、admin-guide/user-guide/features.md更新） |
+| **#95** | **OCRマスター照合エイリアス読み込みバグ修正**（ocrProcessor.tsでaliasesフィールド未読み込み→3マスター全てに追加） |
+| **#94** | **未判定時エイリアス登録ヒント表示**（DocumentDetailModal、顧客/書類/事業所の3箇所） |
+| **#93** | **エイリアスUI整備**（MastersPage: 顧客/書類/事業所にエイリアスUI追加、ケアマネから除外、CSV/インポート対応、useMasterAlias拡張） |
+| 7b69fbc | **ドキュメントのエイリアス例修正**（正規化で吸収される例→漢字↔ひらがな・法人格有無等に統一） |
 | **#92** | **httpsCallable共通ヘルパー導入**（`callFunction.ts`新設、全8箇所にタイムアウト+自動リトライ適用、DRY違反解消） |
 | **#91** | **モバイルバックグラウンド復帰時`internal`エラー対策**（リトライ条件に`internal`追加） |
 | **#90** | **モバイルバックグラウンド復帰時`deadline-exceeded`対策**（uploadPdfに120sタイムアウト+リトライ追加） |
@@ -84,8 +89,8 @@
 
 | 環境 | 状態 |
 |------|------|
-| dev | デプロイ済み（02-08、Hosting: PR #92反映、Functions: PR #87反映） |
-| kanameone | デプロイ済み（02-08、Hosting: PR #92反映、Functions: PR #87反映） |
+| dev | デプロイ済み（02-08、Hosting+Functions+Rules: PR #93〜#96全反映） |
+| kanameone | デプロイ済み（02-08、Hosting+Functions+Rules: PR #93〜#96全反映） |
 | setup-tenant.sh | 15c9cd3で--with-gmail時authModeバグ修正済み（スクリプト変更、デプロイ不要） |
 
 ## 未解決の既知バグ
