@@ -8,6 +8,10 @@
 
 | PR/コミット | 内容 |
 |----|------|
+| **#92** | **httpsCallable共通ヘルパー導入**（`callFunction.ts`新設、全8箇所にタイムアウト+自動リトライ適用、DRY違反解消） |
+| **#91** | **モバイルバックグラウンド復帰時`internal`エラー対策**（リトライ条件に`internal`追加） |
+| **#90** | **モバイルバックグラウンド復帰時`deadline-exceeded`対策**（uploadPdfに120sタイムアウト+リトライ追加） |
+| **#89** | **一括操作完了トースト通知追加**（sonnerライブラリ導入、削除/確認/再処理の完了件数表示） |
 | **#88** | **モバイルバックグラウンド復帰時の認証エラー対策+Pull-to-Refresh**（visibilitychangeトークンリフレッシュ、unauthenticatedリトライ、Pull-to-Refresh UI） |
 | 15c9cd3 | **setup-tenant.shで--with-gmail時にauthModeをoauthに設定**（新規クライアントGmail取得失敗バグ修正） |
 | a49219e | **API仕様に認証・権限一覧追加、納品ガイドのinitTenant記述修正** |
@@ -80,8 +84,8 @@
 
 | 環境 | 状態 |
 |------|------|
-| dev | デプロイ済み（02-08、Hosting: PR #88反映、Functions: PR #87反映） |
-| kanameone | デプロイ済み（02-07、Functions: PR #87反映、Hosting: PR #86反映） |
+| dev | デプロイ済み（02-08、Hosting: PR #92反映、Functions: PR #87反映） |
+| kanameone | デプロイ済み（02-08、Hosting: PR #92反映、Functions: PR #87反映） |
 | setup-tenant.sh | 15c9cd3で--with-gmail時authModeバグ修正済み（スクリプト変更、デプロイ不要） |
 
 ## 未解決の既知バグ
