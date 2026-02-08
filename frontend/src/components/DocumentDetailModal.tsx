@@ -465,7 +465,6 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
       setRememberDocTypeNotation(false)
       setRememberCustomerNotation(false)
       setRememberOfficeNotation(false)
-      refetch()
       // 学習履歴を更新
       if (rememberCustomerNotation || rememberOfficeNotation || rememberDocTypeNotation) {
         invalidateHistory()

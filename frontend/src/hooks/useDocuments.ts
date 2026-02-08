@@ -3,7 +3,7 @@
  * TanStack Queryを使用したリアクティブなデータ取得
  */
 
-import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useInfiniteQuery, useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import {
   collection,
   query,
@@ -111,6 +111,43 @@ export function firestoreToDocument(id: string, data: Record<string, unknown>): 
     verifiedBy: data.verifiedBy as string | null | undefined,
     verifiedAt: data.verifiedAt as Timestamp | null | undefined,
   }
+}
+
+// ============================================
+// キャッシュ楽観的更新ユーティリティ
+// ============================================
+
+/**
+ * ドキュメントの詳細キャッシュと一覧キャッシュを同時に楽観的更新する
+ * useDocumentVerification, useDocumentEdit で共通利用（DRY）
+ */
+export function updateDocumentInListCache(
+  queryClient: QueryClient,
+  documentId: string,
+  updates: Partial<Document>
+) {
+  // 個別ドキュメントのキャッシュを更新
+  queryClient.setQueryData(['document', documentId], (old: Document | undefined) => {
+    if (!old) return old
+    return { ...old, ...updates }
+  })
+
+  // 一覧のキャッシュも更新（無限スクロール）
+  queryClient.setQueriesData<{ pages: { documents: Document[] }[] }>(
+    { queryKey: ['documentsInfinite'] },
+    (old) => {
+      if (!old) return old
+      return {
+        ...old,
+        pages: old.pages.map(page => ({
+          ...page,
+          documents: page.documents.map(doc =>
+            doc.id === documentId ? { ...doc, ...updates } : doc
+          ),
+        })),
+      }
+    }
+  )
 }
 
 // ============================================
