@@ -1217,7 +1217,7 @@ function OfficesMaster() {
                 </p>
               </div>
               <div className="space-y-2">
-                <Label>別表記（カンマ区切り）</Label>
+                <Label>別表記（カンマまたは|区切り）</Label>
                 <Input
                   value={formAliases}
                   onChange={(e) => setFormAliases(e.target.value)}
@@ -1295,7 +1295,7 @@ function OfficesMaster() {
                 </p>
               </div>
               <div className="space-y-2">
-                <Label>別表記（カンマ区切り）</Label>
+                <Label>別表記（カンマまたは|区切り）</Label>
                 <Input
                   value={formAliases}
                   onChange={(e) => setFormAliases(e.target.value)}

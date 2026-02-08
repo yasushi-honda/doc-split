@@ -80,6 +80,7 @@ export function useMasterAlias() {
 
   /**
    * エイリアスの差分を計算してAPI経由で同期
+   * addAlias/removeAliasを経由せず直接callFunctionを呼び、isProcessingの競合を防ぐ
    */
   const syncAliases = useCallback(
     async (
@@ -98,10 +99,16 @@ export function useMasterAlias() {
 
       try {
         for (const alias of toAdd) {
-          await addAlias(masterType, masterId, alias);
+          await callFunction<
+            { masterType: MasterType; masterId: string; alias: string },
+            AddAliasResult
+          >('addMasterAlias', { masterType, masterId, alias }, { timeout: 60_000 });
         }
         for (const alias of toRemove) {
-          await removeAlias(masterType, masterId, alias);
+          await callFunction<
+            { masterType: MasterType; masterId: string; alias: string },
+            AddAliasResult
+          >('removeMasterAlias', { masterType, masterId, alias }, { timeout: 60_000 });
         }
         return true;
       } catch (err) {
@@ -112,7 +119,7 @@ export function useMasterAlias() {
         setIsProcessing(false);
       }
     },
-    [addAlias, removeAlias]
+    []
   );
 
   return {
