@@ -137,7 +137,7 @@
 | 関数 | 間隔 | 説明 |
 |------|------|------|
 | `checkGmailAttachments` | 5分 | Gmail添付ファイル取得（MD5重複チェック付き） |
-| `processOCR` | 1分 | OCR処理実行（Firestoreトリガーで即時処理も併用） |
+| `processOCR` | 1分 | OCR処理実行（ポーリング一本化、ADR-0010） |
 
 ### Callable Functions（オンデマンド）
 
