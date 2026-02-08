@@ -108,6 +108,11 @@ async function importCustomers(filePath) {
     if (notes) {
       data.notes = notes;
     }
+    // エイリアスがある場合のみ追加
+    const aliases = parseAliases(row['aliases'] || row['別表記'] || '');
+    if (aliases.length > 0) {
+      data.aliases = aliases;
+    }
     batch.set(docRef, data);
     count++;
   }
@@ -140,12 +145,18 @@ async function importDocuments(filePath) {
     const name = row['name'] || row['書類名'] || '';
     const docRef = db.collection('masters/documents/items').doc(name);
     const keywords = parseKeywords(row['keywords'] || row['キーワード'] || '');
-    batch.set(docRef, {
+    const docData = {
       name,
       dateMarker: row['dateMarker'] || row['日付位置'] || '',
       category: row['category'] || row['カテゴリー'] || '',
       keywords,
-    });
+    };
+    // エイリアスがある場合のみ追加
+    const aliases = parseAliases(row['aliases'] || row['別表記'] || '');
+    if (aliases.length > 0) {
+      docData.aliases = aliases;
+    }
+    batch.set(docRef, docData);
     count++;
   }
 
@@ -184,6 +195,11 @@ async function importOffices(filePath) {
     if (shortName) {
       data.shortName = shortName;
     }
+    // エイリアスがある場合のみ追加
+    const aliases = parseAliases(row['aliases'] || row['別表記'] || '');
+    if (aliases.length > 0) {
+      data.aliases = aliases;
+    }
     batch.set(docRef, data);
     count++;
   }
@@ -212,7 +228,7 @@ async function importCareManagers(filePath) {
   let count = 0;
 
   for (const row of rows) {
-    // 期待するカラム: name, email, aliases (パイプ区切り)
+    // 期待するカラム: name, email
     const name = row['name'] || row['ケアマネ名'] || '';
     const docRef = db.collection('masters/caremanagers/items').doc();
     const data = {
@@ -223,11 +239,6 @@ async function importCareManagers(filePath) {
     const email = row['email'] || row['メール'] || row['メールアドレス'] || '';
     if (email) {
       data.email = email;
-    }
-    // エイリアスがある場合のみ追加
-    const aliases = parseAliases(row['aliases'] || row['別表記'] || '');
-    if (aliases.length > 0) {
-      data.aliases = aliases;
     }
     batch.set(docRef, data);
     count++;

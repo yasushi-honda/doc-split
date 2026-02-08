@@ -73,6 +73,7 @@ import type { CustomerCSVRow, OfficeCSVRow, CareManagerCSVRow, DocumentTypeCSVRo
 type AnyCSVData = CustomerCSVRow | OfficeCSVRow | CareManagerCSVRow | DocumentTypeCSVRow
 import { downloadCsvTemplate } from '@/lib/csvTemplates'
 import type { CustomerMaster, DocumentMaster, OfficeMaster, CareManagerMaster } from '@shared/types'
+import { useMasterAlias } from '@/hooks/useMasterAlias'
 
 export function MastersPage() {
   return (
@@ -131,6 +132,7 @@ function CustomersMaster() {
   const updateCustomer = useUpdateCustomer()
   const deleteCustomer = useDeleteCustomer()
   const bulkImport = useBulkImportCustomersWithActions()
+  const { syncAliases, isProcessing: isAliasSyncing } = useMasterAlias()
 
   const [searchText, setSearchText] = useState('')
   const [isAddOpen, setIsAddOpen] = useState(false)
@@ -146,6 +148,7 @@ function CustomersMaster() {
   const [formCareManagerName, setFormCareManagerName] = useState('')
   const [formIsDuplicate, setFormIsDuplicate] = useState(false)
   const [formNotes, setFormNotes] = useState('')
+  const [formAliases, setFormAliases] = useState('')
   const [formError, setFormError] = useState<string | null>(null)
 
   const handleCsvImport = async (
@@ -231,6 +234,11 @@ function CustomersMaster() {
       isDuplicate: formIsDuplicate,
       notes: formNotes || undefined,
     })
+    // エイリアス差分をAPI経由で同期
+    const newAliases = formAliases.trim()
+      ? formAliases.split(/[,|]/).map(a => a.trim()).filter(a => a)
+      : []
+    await syncAliases('customer', editingCustomer.id, editingCustomer.aliases || [], newAliases)
     resetForm()
     setEditingCustomer(null)
   }
@@ -247,6 +255,7 @@ function CustomersMaster() {
     setFormCareManagerName(customer.careManagerName || '')
     setFormIsDuplicate(customer.isDuplicate)
     setFormNotes(customer.notes || '')
+    setFormAliases(customer.aliases?.join(', ') || '')
     setEditingCustomer(customer)
   }
 
@@ -256,6 +265,7 @@ function CustomersMaster() {
     setFormCareManagerName('')
     setFormIsDuplicate(false)
     setFormNotes('')
+    setFormAliases('')
     setFormError(null)
   }
 
@@ -303,6 +313,7 @@ function CustomersMaster() {
                 <TableHead>顧客名</TableHead>
                 <TableHead>フリガナ</TableHead>
                 <TableHead>担当ケアマネ</TableHead>
+                <TableHead>別表記</TableHead>
                 <TableHead>同姓同名</TableHead>
                 <TableHead className="w-[100px]">操作</TableHead>
               </TableRow>
@@ -310,7 +321,7 @@ function CustomersMaster() {
             <TableBody>
               {filteredCustomers?.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={5} className="text-center text-gray-500">
+                  <TableCell colSpan={6} className="text-center text-gray-500">
                     顧客がありません
                   </TableCell>
                 </TableRow>
@@ -320,6 +331,12 @@ function CustomersMaster() {
                     <TableCell className="font-medium">{customer.name}</TableCell>
                     <TableCell>{customer.furigana}</TableCell>
                     <TableCell>{customer.careManagerName || '-'}</TableCell>
+                    <TableCell className="max-w-[200px]">
+                      {customer.aliases && customer.aliases.length > 0
+                        ? <span className="text-xs text-gray-600">{customer.aliases.join(', ')}</span>
+                        : <span className="text-gray-400">-</span>
+                      }
+                    </TableCell>
                     <TableCell>
                       {customer.isDuplicate && (
                         <Badge variant="secondary">同姓同名あり</Badge>
@@ -398,6 +415,17 @@ function CustomersMaster() {
                   同姓同名の顧客を区別するための補足情報
                 </p>
               </div>
+              <div className="space-y-2">
+                <Label>別表記（カンマまたは|区切り）</Label>
+                <Input
+                  value={formAliases}
+                  onChange={(e) => setFormAliases(e.target.value)}
+                  placeholder="やまだ太郎, 山田 太郎"
+                />
+                <p className="text-xs text-gray-500">
+                  OCRで読み取られる可能性のある表記揺れを登録
+                </p>
+              </div>
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setIsAddOpen(false)}>
@@ -450,6 +478,17 @@ function CustomersMaster() {
                   同姓同名の顧客を区別するための補足情報。選択肢に「名前（メモ）」形式で表示されます
                 </p>
               </div>
+              <div className="space-y-2">
+                <Label>別表記（カンマまたは|区切り）</Label>
+                <Input
+                  value={formAliases}
+                  onChange={(e) => setFormAliases(e.target.value)}
+                  placeholder="やまだ太郎, 山田 太郎"
+                />
+                <p className="text-xs text-gray-500">
+                  OCRで読み取られる可能性のある表記揺れを登録
+                </p>
+              </div>
               <div className="flex items-center justify-between">
                 <Label>同姓同名あり</Label>
                 <Switch
@@ -462,7 +501,7 @@ function CustomersMaster() {
               <Button variant="outline" onClick={() => setEditingCustomer(null)}>
                 キャンセル
               </Button>
-              <Button onClick={handleUpdate} disabled={!formName || updateCustomer.isPending}>
+              <Button onClick={handleUpdate} disabled={!formName || updateCustomer.isPending || isAliasSyncing}>
                 保存
               </Button>
             </DialogFooter>
@@ -537,6 +576,7 @@ function DocumentTypesMaster() {
   const updateDocumentType = useUpdateDocumentType()
   const deleteDocumentType = useDeleteDocumentType()
   const bulkImport = useBulkImportDocumentTypesWithActions()
+  const { syncAliases, isProcessing: isAliasSyncing } = useMasterAlias()
 
   const [searchText, setSearchText] = useState('')
   const [isAddOpen, setIsAddOpen] = useState(false)
@@ -548,6 +588,7 @@ function DocumentTypesMaster() {
   const [formDateMarker, setFormDateMarker] = useState('')
   const [formCategory, setFormCategory] = useState('')
   const [formKeywords, setFormKeywords] = useState('')
+  const [formAliases, setFormAliases] = useState('')
   const [formError, setFormError] = useState<string | null>(null)
 
   const handleCsvImport = async (
@@ -601,6 +642,11 @@ function DocumentTypesMaster() {
       category: formCategory,
       keywords: formKeywords,
     })
+    // エイリアス差分をAPI経由で同期（書類種別はnameがID）
+    const newAliases = formAliases.trim()
+      ? formAliases.split(/[,|]/).map(a => a.trim()).filter(a => a)
+      : []
+    await syncAliases('document', editingDoc.name, editingDoc.aliases || [], newAliases)
     resetForm()
     setEditingDoc(null)
   }
@@ -616,6 +662,7 @@ function DocumentTypesMaster() {
     setFormDateMarker(doc.dateMarker)
     setFormCategory(doc.category)
     setFormKeywords(doc.keywords?.join(';') || '')
+    setFormAliases(doc.aliases?.join(', ') || '')
     setEditingDoc(doc)
   }
 
@@ -624,6 +671,7 @@ function DocumentTypesMaster() {
     setFormDateMarker('')
     setFormCategory('')
     setFormKeywords('')
+    setFormAliases('')
     setFormError(null)
   }
 
@@ -674,13 +722,14 @@ function DocumentTypesMaster() {
                 <TableHead>日付マーカー</TableHead>
                 <TableHead>カテゴリ</TableHead>
                 <TableHead>キーワード</TableHead>
+                <TableHead>別表記</TableHead>
                 <TableHead className="w-[100px]">操作</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {filteredDocs?.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={5} className="text-center text-gray-500">
+                  <TableCell colSpan={6} className="text-center text-gray-500">
                     書類種別がありません
                   </TableCell>
                 </TableRow>
@@ -701,6 +750,12 @@ function DocumentTypesMaster() {
                       ) : (
                         <span className="text-gray-400">-</span>
                       )}
+                    </TableCell>
+                    <TableCell className="max-w-[200px]">
+                      {doc.aliases && doc.aliases.length > 0
+                        ? <span className="text-xs text-gray-600">{doc.aliases.join(', ')}</span>
+                        : <span className="text-gray-400">-</span>
+                      }
                     </TableCell>
                     <TableCell>
                       <div className="flex gap-1">
@@ -778,6 +833,17 @@ function DocumentTypesMaster() {
                   セミコロン(;)区切りで複数指定可。OCRテキストにキーワードが含まれると書類種別として認識されやすくなります
                 </p>
               </div>
+              <div className="space-y-2">
+                <Label>別表記（カンマまたは|区切り）</Label>
+                <Input
+                  value={formAliases}
+                  onChange={(e) => setFormAliases(e.target.value)}
+                  placeholder="被保険者証, 介護保険証"
+                />
+                <p className="text-xs text-gray-500">
+                  OCRで読み取られる可能性のある表記揺れを登録
+                </p>
+              </div>
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setIsAddOpen(false)}>
@@ -829,12 +895,23 @@ function DocumentTypesMaster() {
                   セミコロン(;)区切りで複数指定可
                 </p>
               </div>
+              <div className="space-y-2">
+                <Label>別表記（カンマまたは|区切り）</Label>
+                <Input
+                  value={formAliases}
+                  onChange={(e) => setFormAliases(e.target.value)}
+                  placeholder="被保険者証, 介護保険証"
+                />
+                <p className="text-xs text-gray-500">
+                  OCRで読み取られる可能性のある表記揺れを登録
+                </p>
+              </div>
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setEditingDoc(null)}>
                 キャンセル
               </Button>
-              <Button onClick={handleUpdate} disabled={!formName || updateDocumentType.isPending}>
+              <Button onClick={handleUpdate} disabled={!formName || updateDocumentType.isPending || isAliasSyncing}>
                 保存
               </Button>
             </DialogFooter>
@@ -887,6 +964,7 @@ function OfficesMaster() {
   const updateOffice = useUpdateOffice()
   const deleteOffice = useDeleteOffice()
   const bulkImport = useBulkImportOfficesWithActions()
+  const { syncAliases, isProcessing: isAliasSyncing } = useMasterAlias()
 
   const [searchText, setSearchText] = useState('')
   const [isAddOpen, setIsAddOpen] = useState(false)
@@ -900,6 +978,7 @@ function OfficesMaster() {
   const [formName, setFormName] = useState('')
   const [formShortName, setFormShortName] = useState('')
   const [formNotes, setFormNotes] = useState('')
+  const [formAliases, setFormAliases] = useState('')
   const [formError, setFormError] = useState<string | null>(null)
 
   const filteredOffices = offices?.filter(
@@ -961,6 +1040,11 @@ function OfficesMaster() {
       shortName: formShortName,
       notes: formNotes.trim() || undefined,
     })
+    // エイリアス差分をAPI経由で同期
+    const newAliases = formAliases.trim()
+      ? formAliases.split(/[,|]/).map(a => a.trim()).filter(a => a)
+      : []
+    await syncAliases('office', editingOffice.id, editingOffice.aliases || [], newAliases)
     resetForm()
     setEditingOffice(null)
   }
@@ -975,6 +1059,7 @@ function OfficesMaster() {
     setFormName(office.name)
     setFormShortName(office.shortName || '')
     setFormNotes(office.notes || '')
+    setFormAliases(office.aliases?.join(', ') || '')
     setEditingOffice(office)
   }
 
@@ -982,6 +1067,7 @@ function OfficesMaster() {
     setFormName('')
     setFormShortName('')
     setFormNotes('')
+    setFormAliases('')
     setFormError(null)
   }
 
@@ -1040,13 +1126,14 @@ function OfficesMaster() {
               <TableRow>
                 <TableHead>事業所名</TableHead>
                 <TableHead>略称</TableHead>
+                <TableHead>別表記</TableHead>
                 <TableHead className="w-[100px]">操作</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {filteredOffices?.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={3} className="text-center text-gray-500">
+                  <TableCell colSpan={4} className="text-center text-gray-500">
                     事業所がありません
                   </TableCell>
                 </TableRow>
@@ -1055,6 +1142,12 @@ function OfficesMaster() {
                   <TableRow key={office.name}>
                     <TableCell className="font-medium">{office.name}</TableCell>
                     <TableCell>{office.shortName || '-'}</TableCell>
+                    <TableCell className="max-w-[200px]">
+                      {office.aliases && office.aliases.length > 0
+                        ? <span className="text-xs text-gray-600">{office.aliases.join(', ')}</span>
+                        : <span className="text-gray-400">-</span>
+                      }
+                    </TableCell>
                     <TableCell>
                       <div className="flex gap-1">
                         <Button
@@ -1121,6 +1214,17 @@ function OfficesMaster() {
                 />
                 <p className="text-xs text-gray-500">
                   同名の事業所を区別するための補足情報
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label>別表記（カンマ区切り）</Label>
+                <Input
+                  value={formAliases}
+                  onChange={(e) => setFormAliases(e.target.value)}
+                  placeholder="○○介護サービスセンター, ○○介護SC"
+                />
+                <p className="text-xs text-gray-500">
+                  OCRで異なる表記が検出された場合のマッチング用
                 </p>
               </div>
             </div>
@@ -1190,12 +1294,23 @@ function OfficesMaster() {
                   同名の事業所を区別するための補足情報。選択肢に「名前（メモ）」形式で表示されます
                 </p>
               </div>
+              <div className="space-y-2">
+                <Label>別表記（カンマ区切り）</Label>
+                <Input
+                  value={formAliases}
+                  onChange={(e) => setFormAliases(e.target.value)}
+                  placeholder="○○介護サービスセンター, ○○介護SC"
+                />
+                <p className="text-xs text-gray-500">
+                  OCRで異なる表記が検出された場合のマッチング用
+                </p>
+              </div>
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setEditingOffice(null)}>
                 キャンセル
               </Button>
-              <Button onClick={handleUpdate} disabled={!formName.trim() || updateOffice.isPending}>
+              <Button onClick={handleUpdate} disabled={!formName.trim() || updateOffice.isPending || isAliasSyncing}>
                 保存
               </Button>
             </DialogFooter>
@@ -1258,7 +1373,6 @@ function CareManagersMaster() {
   // フォーム状態
   const [formName, setFormName] = useState('')
   const [formEmail, setFormEmail] = useState('')
-  const [formAliases, setFormAliases] = useState('')
   const [formError, setFormError] = useState<string | null>(null)
 
   const filteredCMs = careManagers?.filter(
@@ -1269,13 +1383,9 @@ function CareManagersMaster() {
     if (!formName.trim()) return
     setFormError(null)
     try {
-      const aliases = formAliases.trim()
-        ? formAliases.split(/[,|]/).map(a => a.trim()).filter(a => a)
-        : []
       await addCareManager.mutateAsync({
         name: formName.trim(),
         email: formEmail.trim() || undefined,
-        aliases: aliases.length > 0 ? aliases : undefined,
       })
       resetForm()
       setIsAddOpen(false)
@@ -1290,14 +1400,10 @@ function CareManagersMaster() {
 
   const handleUpdate = async () => {
     if (!editingCM) return
-    const aliases = formAliases.trim()
-      ? formAliases.split(/[,|]/).map(a => a.trim()).filter(a => a)
-      : []
     await updateCareManager.mutateAsync({
       originalName: editingCM.name,
       name: formName,
       email: formEmail.trim() || undefined,
-      aliases: aliases.length > 0 ? aliases : undefined,
     })
     resetForm()
     setEditingCM(null)
@@ -1312,14 +1418,12 @@ function CareManagersMaster() {
   const openEdit = (cm: CareManagerMaster) => {
     setFormName(cm.name)
     setFormEmail(cm.email || '')
-    setFormAliases(cm.aliases?.join(', ') || '')
     setEditingCM(cm)
   }
 
   const resetForm = () => {
     setFormName('')
     setFormEmail('')
-    setFormAliases('')
     setFormError(null)
   }
 
@@ -1448,14 +1552,6 @@ function CareManagersMaster() {
                 />
                 <p className="text-xs text-gray-500">Google Workspaceアカウント推奨</p>
               </div>
-              <div className="space-y-2">
-                <Label>別表記（カンマ区切り）</Label>
-                <Input
-                  value={formAliases}
-                  onChange={(e) => setFormAliases(e.target.value)}
-                  placeholder="山田花子, やまだ花子"
-                />
-              </div>
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setIsAddOpen(false)}>
@@ -1491,14 +1587,6 @@ function CareManagersMaster() {
                   placeholder="yamada@example.com"
                 />
                 <p className="text-xs text-gray-500">Google Workspaceアカウント推奨</p>
-              </div>
-              <div className="space-y-2">
-                <Label>別表記（カンマ区切り）</Label>
-                <Input
-                  value={formAliases}
-                  onChange={(e) => setFormAliases(e.target.value)}
-                  placeholder="山田花子, やまだ花子"
-                />
               </div>
             </div>
             <DialogFooter>

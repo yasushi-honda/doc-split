@@ -5,21 +5,21 @@
 // テンプレート定義
 export const CSV_TEMPLATES = {
   customers: {
-    headers: ['name', 'furigana', 'careManagerName', 'notes'],
-    headerLabels: ['顧客名', 'フリガナ', '担当ケアマネ名', '備考'],
-    example: ['山田太郎', 'ヤマダタロウ', '佐藤花子', '北区在住'],
+    headers: ['name', 'furigana', 'careManagerName', 'notes', 'aliases'],
+    headerLabels: ['顧客名', 'フリガナ', '担当ケアマネ名', '備考', '別表記（|区切り）'],
+    example: ['山田太郎', 'ヤマダタロウ', '佐藤花子', '北区在住', 'やまだ太郎|山田 太郎'],
     filename: 'customers_template.csv',
   },
   documents: {
-    headers: ['name', 'dateMarker', 'category', 'keywords'],
-    headerLabels: ['書類種別名', '日付マーカー', 'カテゴリ', 'キーワード（;区切り）'],
-    example: ['介護保険被保険者証', '有効期限', '保険証', '被保険者証;介護保険;要介護'],
+    headers: ['name', 'dateMarker', 'category', 'keywords', 'aliases'],
+    headerLabels: ['書類種別名', '日付マーカー', 'カテゴリ', 'キーワード（;区切り）', '別表記（|区切り）'],
+    example: ['介護保険被保険者証', '有効期限', '保険証', '被保険者証;介護保険;要介護', '被保険者証|介護保険証'],
     filename: 'documents_template.csv',
   },
   offices: {
-    headers: ['name', 'notes'],
-    headerLabels: ['事業所名', '備考'],
-    example: ['〇〇訪問介護ステーション', '東部地区担当'],
+    headers: ['name', 'notes', 'aliases'],
+    headerLabels: ['事業所名', '備考', '別表記（|区切り）'],
+    example: ['〇〇訪問介護ステーション', '東部地区担当', '〇〇訪問介護|○○訪問介護'],
     filename: 'offices_template.csv',
   },
   caremanagers: {

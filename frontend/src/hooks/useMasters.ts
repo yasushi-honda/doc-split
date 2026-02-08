@@ -52,6 +52,7 @@ async function fetchCustomers(): Promise<CustomerMaster[]> {
     furigana: doc.data().furigana as string,
     careManagerName: doc.data().careManagerName as string | undefined,
     notes: doc.data().notes as string | undefined,
+    aliases: doc.data().aliases as string[] | undefined,
   }))
 }
 
@@ -275,6 +276,7 @@ async function fetchDocumentTypes(): Promise<DocumentMaster[]> {
     dateMarker: doc.data().dateMarker as string,
     category: doc.data().category as string,
     keywords: normalizeKeywords(doc.data().keywords),
+    aliases: doc.data().aliases as string[] | undefined,
   }))
 }
 
@@ -488,6 +490,7 @@ async function fetchOffices(): Promise<OfficeMaster[]> {
     shortName: doc.data().shortName as string | undefined,
     isDuplicate: doc.data().isDuplicate ?? false,
     notes: doc.data().notes as string | undefined,
+    aliases: doc.data().aliases as string[] | undefined,
   }))
 }
 
@@ -691,7 +694,6 @@ async function fetchCareManagers(): Promise<CareManagerMaster[]> {
       id: doc.id,
       name: data.name as string,
       email: data.email as string | undefined,
-      aliases: data.aliases as string[] | undefined,
     }
   })
 }
@@ -707,7 +709,6 @@ export function useCareManagers() {
 interface AddCareManagerParams {
   name: string
   email?: string
-  aliases?: string[]
 }
 
 async function addCareManager(params: AddCareManagerParams): Promise<void> {
@@ -726,9 +727,6 @@ async function addCareManager(params: AddCareManagerParams): Promise<void> {
   }
   if (params.email) {
     data.email = params.email
-  }
-  if (params.aliases && params.aliases.length > 0) {
-    data.aliases = params.aliases
   }
   await setDoc(docRef, data)
 }
@@ -761,7 +759,6 @@ interface UpdateCareManagerParams {
   originalName: string
   name: string
   email?: string
-  aliases?: string[]
 }
 
 async function updateCareManager(params: UpdateCareManagerParams): Promise<void> {
@@ -779,9 +776,6 @@ async function updateCareManager(params: UpdateCareManagerParams): Promise<void>
   }
   if (params.email !== undefined) {
     data.email = params.email || null // 空文字の場合はnullに
-  }
-  if (params.aliases !== undefined) {
-    data.aliases = params.aliases.length > 0 ? params.aliases : null
   }
   await setDoc(docRef, data, { merge: true })
 }
