@@ -7,7 +7,6 @@
 
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { Upload, FileText, AlertCircle, CheckCircle2, Loader2, Clock, Sparkles } from 'lucide-react'
-import { httpsCallable } from 'firebase/functions'
 import { doc, onSnapshot } from 'firebase/firestore'
 import { Button } from '@/components/ui/button'
 import {
@@ -19,7 +18,8 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import { functions, db, auth } from '@/lib/firebase'
+import { db } from '@/lib/firebase'
+import { callFunction, getCallableErrorMessage } from '@/lib/callFunction'
 import type { DocumentStatus } from '@shared/types'
 
 // 設定
@@ -198,7 +198,7 @@ export function PdfUploadModal({ open, onOpenChange, onSuccess }: PdfUploadModal
     }
   }, [handleFileSelect])
 
-  const handleUpload = useCallback(async (options?: { confirmDuplicate?: boolean; alternativeFileName?: string; isRetry?: boolean }) => {
+  const handleUpload = useCallback(async (options?: { confirmDuplicate?: boolean; alternativeFileName?: string }) => {
     if (!selectedFile) return
 
     setCurrentStep('uploading')
@@ -217,69 +217,47 @@ export function PdfUploadModal({ open, onOpenChange, onSuccess }: PdfUploadModal
         reader.readAsDataURL(selectedFile)
       })
 
-      const uploadPdf = httpsCallable<
+      const response = await callFunction<
         { fileName: string; mimeType: string; data: string; confirmDuplicate?: boolean; alternativeFileName?: string },
         UploadResult
-      >(functions, 'uploadPdf', { timeout: 120_000 })
-
-      const response = await uploadPdf({
+      >('uploadPdf', {
         fileName: selectedFile.name,
         mimeType: selectedFile.type,
         data: base64Data,
         confirmDuplicate: options?.confirmDuplicate,
         alternativeFileName: options?.alternativeFileName,
-      })
+      }, { timeout: 120_000 })
 
       // 重複検出の場合
-      if (response.data.duplicate && response.data.suggestedFileName) {
+      if (response.duplicate && response.suggestedFileName) {
         setDuplicateInfo({
-          existingFileName: response.data.existingFileName || selectedFile.name,
-          suggestedFileName: response.data.suggestedFileName,
+          existingFileName: response.existingFileName || selectedFile.name,
+          suggestedFileName: response.suggestedFileName,
         })
         setCurrentStep('idle')
         return
       }
 
       // アップロード成功 → documentIdを設定してOCR処理監視開始
-      if (response.data.documentId) {
-        setDocumentId(response.data.documentId)
+      if (response.documentId) {
+        setDocumentId(response.documentId)
         setCurrentStep('pending')
       }
     } catch (err) {
       console.error('Upload error:', err)
-
-      // モバイルバックグラウンド復帰時の一時的エラー: トークンリフレッシュして1回リトライ
-      // unauthenticated: トークン失効、deadline-exceeded: タイムアウト、internal: ネットワーク切断
-      // サーバー側で処理完了済みの場合、リトライ時に重複検出されるので安全
-      const isRetryable = err instanceof Error &&
-        (err.message.includes('unauthenticated') || err.message.includes('deadline-exceeded') || err.message.includes('internal'))
-      if (isRetryable && !options?.isRetry && auth.currentUser) {
-        try {
-          await auth.currentUser.getIdToken(true)
-          return handleUpload({ ...options, isRetry: true })
-        } catch {
-          // リフレッシュ失敗 → 通常のエラー処理へ
-        }
-      }
-
       setCurrentStep('error')
 
+      // アップロード固有のエラーメッセージ
       let errorMessage = 'アップロードに失敗しました'
       if (err instanceof Error) {
         const message = err.message
         if (message.includes('already-exists') || message.includes('already been uploaded')) {
           errorMessage = 'このファイルは既にアップロードされています'
-        } else if (message.includes('permission-denied') || message.includes('not in whitelist')) {
-          errorMessage = 'アップロード権限がありません'
         } else if (message.includes('invalid-argument')) {
           const match = message.match(/: (.+)$/)
           errorMessage = match ? match[1] : message
-        } else if (message.includes('unauthenticated')) {
-          errorMessage = 'ログインセッションが切れました。ページを再読み込みしてください。'
-        } else if (message.includes('deadline-exceeded') || message.includes('internal')) {
-          errorMessage = '通信エラーが発生しました。電波状況を確認して再度お試しください。'
         } else {
-          errorMessage = message
+          errorMessage = getCallableErrorMessage(err, 'アップロードに失敗しました')
         }
       }
       setError(errorMessage)

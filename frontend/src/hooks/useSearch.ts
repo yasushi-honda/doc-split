@@ -9,11 +9,7 @@
 
 import { useState, useCallback } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { getFunctions, httpsCallable } from 'firebase/functions';
-import { app } from '@/lib/firebase';
-
-// Cloud Functions インスタンス
-const functions = getFunctions(app, 'asia-northeast1');
+import { callFunction } from '@/lib/callFunction';
 
 /** 検索結果ドキュメント */
 export interface SearchResultDocument {
@@ -59,9 +55,9 @@ interface UseSearchResult {
  * 検索API呼び出し
  */
 async function searchDocumentsApi(request: SearchRequest): Promise<SearchResult> {
-  const searchFn = httpsCallable<SearchRequest, SearchResult>(functions, 'searchDocuments');
-  const result = await searchFn(request);
-  return result.data;
+  return callFunction<SearchRequest, SearchResult>(
+    'searchDocuments', request, { timeout: 30_000 }
+  );
 }
 
 /**

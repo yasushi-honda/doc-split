@@ -1,7 +1,6 @@
 import { useState, useMemo, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
-import { httpsCallable } from 'firebase/functions'
 import { doc, writeBatch, serverTimestamp, deleteField } from 'firebase/firestore'
 import {
   Filter,
@@ -49,7 +48,8 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { useAuthStore } from '@/stores/authStore'
-import { functions, db } from '@/lib/firebase'
+import { db } from '@/lib/firebase'
+import { callFunction } from '@/lib/callFunction'
 import { Checkbox } from '@/components/ui/checkbox'
 import { useInfiniteDocuments, useDocumentStats, useDocumentMasters, type DocumentFilters, type SortField, type SortOrder } from '@/hooks/useDocuments'
 import { DateRangeFilter, type DateRange } from '@/components/DateRangeFilter'
@@ -522,12 +522,12 @@ export function DocumentsPage() {
 
     // バックエンド削除（バックグラウンド）
     try {
-      const deleteDocument = httpsCallable<{ documentId: string }, { success: boolean }>(
-        functions,
-        'deleteDocument'
-      )
       const results = await Promise.allSettled(
-        Array.from(deletingIds).map(id => deleteDocument({ documentId: id }))
+        Array.from(deletingIds).map(id =>
+          callFunction<{ documentId: string }, { success: boolean }>(
+            'deleteDocument', { documentId: id }, { timeout: 60_000 }
+          )
+        )
       )
 
       const failed = results.filter(r => r.status === 'rejected').length
