@@ -1,13 +1,14 @@
 /**
- * OCR処理 Cloud Function（ポーリング版）
+ * OCR処理 Cloud Function（メイン処理パス）
  *
  * トリガー: Cloud Scheduler（1分間隔）
- * 用途: Firestoreトリガーのリカバリー網として機能
+ * 用途: OCR処理の唯一のエントリーポイント（ADR-0010）
  *
  * 処理フロー:
  * 1. Firestore → status: pending のドキュメントを取得
- * 2. 排他制御（status: processingに更新）
- * 3. 共通OCR処理を呼び出し
+ * 2. processing状態で長時間スタックしたドキュメントを救済
+ * 3. 排他制御（status: processingに更新）
+ * 4. 共通OCR処理を呼び出し
  */
 
 import { onSchedule } from 'firebase-functions/v2/scheduler';
@@ -25,6 +26,8 @@ const db = admin.firestore();
 
 const FUNCTION_NAME = 'processOCR';
 const BATCH_SIZE = 5;
+/** processingスタック救済: この時間（ms）を超えてprocessing状態のドキュメントをpendingに戻す */
+const STUCK_PROCESSING_THRESHOLD_MS = 10 * 60 * 1000; // 10分
 
 /** 処理統計 */
 interface ProcessingStats {
@@ -37,8 +40,10 @@ interface ProcessingStats {
 }
 
 /**
- * 定期実行: pending状態のドキュメントをOCR処理
- * Firestoreトリガーのリカバリー網として機能
+ * 定期実行: pending状態のドキュメントをOCR処理（メイン処理パス）
+ *
+ * processOCROnCreate廃止後の唯一のOCR処理エントリーポイント。
+ * processing状態で長時間スタックしたドキュメントも救済する。
  */
 export const processOCR = onSchedule(
   {
@@ -59,6 +64,9 @@ export const processOCR = onSchedule(
     };
 
     try {
+      // processing状態で長時間スタックしたドキュメントを救済
+      await rescueStuckProcessingDocs();
+
       // pending状態のドキュメントを取得
       const pendingDocs = await db
         .collection('documents')
@@ -118,3 +126,39 @@ export const processOCR = onSchedule(
     }
   }
 );
+
+/**
+ * processing状態で長時間スタックしたドキュメントをpendingに戻す
+ *
+ * Functionタイムアウト（540秒）等でprocessing状態のまま放置されたドキュメントを救済。
+ * updatedAtが10分以上前のprocessingドキュメントを対象とする。
+ */
+async function rescueStuckProcessingDocs(): Promise<void> {
+  const threshold = new Date(Date.now() - STUCK_PROCESSING_THRESHOLD_MS);
+
+  const stuckDocs = await db
+    .collection('documents')
+    .where('status', '==', 'processing')
+    .where('updatedAt', '<', admin.firestore.Timestamp.fromDate(threshold))
+    .limit(BATCH_SIZE)
+    .get();
+
+  if (stuckDocs.empty) return;
+
+  console.log(`Found ${stuckDocs.size} stuck processing documents, resetting to pending`);
+
+  for (const docSnapshot of stuckDocs.docs) {
+    try {
+      const currentRetryCount = (docSnapshot.data().retryCount as number) || 0;
+      await db.doc(`documents/${docSnapshot.id}`).update({
+        status: 'pending',
+        retryCount: currentRetryCount + 1,
+        lastErrorMessage: 'Processing timed out, retrying',
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      console.log(`Reset stuck document ${docSnapshot.id} to pending (retryCount: ${currentRetryCount + 1})`);
+    } catch (err) {
+      console.error(`Failed to reset stuck document ${docSnapshot.id}:`, err);
+    }
+  }
+}
