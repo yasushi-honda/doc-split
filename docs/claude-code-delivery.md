@@ -177,6 +177,16 @@
   color: #1e3a5f;
 }
 .info-box strong { color: #1e40af; }
+/* バリデーションエラー */
+.input-error {
+  border-color: #ef4444 !important;
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.15) !important;
+}
+.copy-btn:disabled, .copy-btn-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none;
+}
 </style>
 
 <div class="success-box">
@@ -302,6 +312,8 @@
     <input type="text" id="extra-domain" placeholder="example.com" oninput="updatePrompts()">
   </div>
 </div>
+
+<div id="validation-errors"></div>
 </div>
 
 ---

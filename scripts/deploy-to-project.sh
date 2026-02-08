@@ -87,22 +87,13 @@ if [ ! -f "$ROOT_DIR/.firebaserc" ]; then
     exit 1
 fi
 
-# jqがなければgrep/sedで代用
-if command -v jq &> /dev/null; then
-    PROJECT_ID=$(jq -r ".projects.\"$PROJECT_ALIAS\"" "$ROOT_DIR/.firebaserc")
-else
-    PROJECT_ID=$(grep -A 20 '"projects"' "$ROOT_DIR/.firebaserc" | grep "\"$PROJECT_ALIAS\"" | sed 's/.*: *"\([^"]*\)".*/\1/')
-fi
+PROJECT_ID=$(node "$SCRIPT_DIR/helpers/firebaserc-helper.js" get-project "$PROJECT_ALIAS" 2>/dev/null)
 
-if [ -z "$PROJECT_ID" ] || [ "$PROJECT_ID" = "null" ]; then
+if [ -z "$PROJECT_ID" ]; then
     log_error "プロジェクト '$PROJECT_ALIAS' が .firebaserc に見つかりません"
     echo ""
     echo "利用可能なプロジェクト:"
-    if command -v jq &> /dev/null; then
-        jq -r '.projects | keys[]' "$ROOT_DIR/.firebaserc"
-    else
-        grep -E '^\s+"[a-z]' "$ROOT_DIR/.firebaserc" | sed 's/.*"\([^"]*\)".*/  \1/'
-    fi
+    node "$SCRIPT_DIR/helpers/firebaserc-helper.js" list-aliases 2>/dev/null | sed 's/^/  /'
     exit 1
 fi
 
