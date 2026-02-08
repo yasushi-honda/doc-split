@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
+import { Toaster } from 'sonner'
 import { useAuthStore } from '@/stores/authStore'
 import { LoginPage } from '@/pages/LoginPage'
 import { DocumentsPage } from '@/pages/DocumentsPage'
@@ -53,6 +54,7 @@ function AdminRoute({ children }: { children: React.ReactNode }) {
 export default function App() {
   return (
     <AuthInitializer>
+      <Toaster position="top-center" richColors />
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route

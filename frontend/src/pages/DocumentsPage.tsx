@@ -23,6 +23,7 @@ import {
   CheckCircle2,
   X,
 } from 'lucide-react'
+import { toast } from 'sonner'
 import { format } from 'date-fns'
 import { ja } from 'date-fns/locale'
 import { Timestamp } from 'firebase/firestore'
@@ -442,6 +443,7 @@ export function DocumentsPage() {
           verifiedAt: serverTimestamp(),
         })
       }
+      const count = selectedIds.size
       await batch.commit()
 
       // 一覧をリフレッシュ
@@ -449,9 +451,10 @@ export function DocumentsPage() {
       queryClient.invalidateQueries({ queryKey: ['documentStats'] })
       clearSelection()
       setBulkOperation(null)
+      toast.success(`${count}件を確認済みにしました`)
     } catch (error) {
       console.error('Bulk verify error:', error)
-      alert('一括確認に失敗しました')
+      toast.error('一括確認に失敗しました')
     } finally {
       setIsBulkOperating(false)
     }
@@ -472,6 +475,7 @@ export function DocumentsPage() {
           error: deleteField(),
         })
       }
+      const count = selectedIds.size
       await batch.commit()
 
       // 一覧をリフレッシュ
@@ -479,9 +483,10 @@ export function DocumentsPage() {
       queryClient.invalidateQueries({ queryKey: ['documentStats'] })
       clearSelection()
       setBulkOperation(null)
+      toast.success(`${count}件を再処理キューに追加しました`)
     } catch (error) {
       console.error('Bulk reprocess error:', error)
-      alert('一括再処理に失敗しました')
+      toast.error('一括再処理に失敗しました')
     } finally {
       setIsBulkOperating(false)
     }
@@ -529,15 +534,17 @@ export function DocumentsPage() {
 
       if (failed > 0) {
         // 部分失敗: サーバーの実際の状態で一覧を更新
-        alert(`${results.length - failed}件削除、${failed}件失敗しました`)
+        toast.warning(`${results.length - failed}件削除、${failed}件失敗しました`)
         queryClient.invalidateQueries({ queryKey: ['documentsInfinite'] })
+      } else {
+        toast.success(`${results.length}件を削除しました`)
       }
 
       queryClient.invalidateQueries({ queryKey: ['documentStats'] })
       queryClient.invalidateQueries({ queryKey: ['documentGroups'] })
     } catch (error) {
       console.error('Bulk delete error:', error)
-      alert('一括削除に失敗しました')
+      toast.error('一括削除に失敗しました')
       // ロールバック: 元のデータを復元
       previousPages.forEach(([queryKey, data]) => {
         queryClient.setQueryData(queryKey, data)
