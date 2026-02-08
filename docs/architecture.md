@@ -16,7 +16,7 @@ flowchart TB
     subgraph GCP["Google Cloud Platform"]
         subgraph Functions["Cloud Functions"]
             CheckGmail["checkGmailAttachments<br/>(5分間隔)"]
-            ProcessOCR["processOCR<br/>(1分間隔+即時トリガー)"]
+            ProcessOCR["processOCR<br/>(1分間隔ポーリング)"]
             DetectSplit["detectSplitPoints<br/>(Callable)"]
             SplitPdf["splitPdf<br/>(Callable)"]
             RotatePdf["rotatePdfPages<br/>(Callable)"]
@@ -82,15 +82,15 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    participant Trigger as Firestoreトリガー
+    participant Scheduler as Cloud Scheduler
     participant ProcessOCR as processOCR
     participant Storage as Cloud Storage
     participant Gemini as Gemini 2.5 Flash
     participant Firestore as Firestore
 
-    Note over Trigger,ProcessOCR: 書類登録時に即時実行（スケジューラは1分間隔でバックアップ）
-    Trigger->>ProcessOCR: ドキュメント作成でトリガー
-    ProcessOCR->>Firestore: pending書類取得
+    Note over Scheduler,ProcessOCR: 1分間隔ポーリング（ADR-0010: processOCROnCreate廃止）
+    Scheduler->>ProcessOCR: 1分間隔でトリガー
+    ProcessOCR->>Firestore: pending書類取得 + processingスタック救済
 
     loop 各書類
         ProcessOCR->>Storage: PDF取得
@@ -108,8 +108,7 @@ sequenceDiagram
 | 関数名 | トリガー | 説明 |
 |--------|----------|------|
 | `checkGmailAttachments` | Scheduled (5分) | Gmail添付ファイル取得 |
-| `processOCR` | Scheduled (1分) | AI OCR処理（バックアップ） |
-| `processOCROnCreate` | Firestore Trigger | AI OCR処理（即時実行） |
+| `processOCR` | Scheduled (1分) | AI OCR処理（ポーリング一本化、ADR-0010） |
 | `detectSplitPoints` | Callable | PDF分割候補検出 |
 | `splitPdf` | Callable | PDF分割実行 |
 | `rotatePdfPages` | Callable | PDFページ回転（永続保存） |
