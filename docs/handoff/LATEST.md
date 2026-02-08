@@ -1,13 +1,14 @@
 # ハンドオフメモ
 
-**更新日**: 2026-02-08
+**更新日**: 2026-02-09
 **ブランチ**: main（クリーン）
 **フェーズ**: Phase 8完了 + 追加実装
 
-## 直近の変更（02-06〜08）
+## 直近の変更（02-06〜09）
 
 | PR/コミット | 内容 |
 |----|------|
+| **#101** | **納品フロー成功率改善**（jq依存除去→Node.jsヘルパー、CSV解析RFC 4180準拠、Gmail OAuth事前チェック、フォームバリデーション追加。scripts/helpers/新設、import-masters.js --dry-run対応） |
 | **#100** | **OCR処理ポーリング一本化+transientエラー自動リトライ（ADR-0010）**（processOCROnCreate廃止、429等は自動リトライ(上限3回)、processingスタック10分救済、fix-stuck-documents.js `--include-errors`追加、Firestoreインデックス`status+updatedAt`作成） |
 | e31a718 | **ドキュメント監査対応**（architecture.md Node.js版修正+Functions追加、gemini-rate-limiting.md料金表更新、context/配下6ファイルのフロントメタ統一、監査レポート追加） |
 | **#99** | **import-masters.jsの環境変数優先順位修正**（`FIREBASE_PROJECT_ID`を`GCLOUD_PROJECT`より優先に変更。.envrcのGCLOUD_PROJECTが常に優先され納品時にマスターデータがdev環境に投入されるバグを修正） |
@@ -77,12 +78,13 @@
 
 **プロダクションコード変更**: `firebase.ts`に1行追加のみ（再エクスポート）。アプリ動作への影響なし。
 
-### Claude Code納品フロー（検証済み 02-08）
+### Claude Code納品フロー（改善済み 02-09）
 
 - GitHub Pages: `https://yasushi-honda.github.io/doc-split/#/claude-code-delivery`
 - フォーム入力→プロンプト自動生成→コピー→Claude Codeに貼付けで全自動納品
-- 全スクリプト（7本）の存在・実行権限・引数整合性を検証済み
-- PR #99で`import-masters.js`の環境変数優先順位バグを修正済み
+- PR #101で成功率改善: jq依存除去、CSV解析堅牢化、Gmail OAuth事前チェック、フォームバリデーション追加
+- `scripts/helpers/`ディレクトリ新設（firebaserc-helper.js, json-helper.js）
+- `import-masters.js --dry-run`で事前検証可能に
 
 ### ドキュメント監査（02-08）
 
@@ -106,12 +108,13 @@
 |------|------|
 | dev | デプロイ済み（02-08、Functions: PR #100反映、エラードキュメント復旧確認済み） |
 | kanameone | デプロイ済み（02-08、Functions: PR #100反映、インデックス作成済み） |
-| setup-tenant.sh | 15c9cd3で--with-gmail時authModeバグ修正済み（スクリプト変更、デプロイ不要） |
-| import-masters.js | PR #99で環境変数優先順位修正済み（スクリプト変更、デプロイ不要） |
+| setup-tenant.sh | PR #101でjq依存除去+Gmail OAuth事前チェック追加（スクリプト変更、デプロイ不要） |
+| deploy-to-project.sh | PR #101でjq依存除去（スクリプト変更、デプロイ不要） |
+| import-masters.js | PR #101でCSV解析RFC 4180準拠+--dry-run追加（スクリプト変更、デプロイ不要） |
 
 ## 未解決の既知バグ
 
-なし（02-08: OCRポーリング一本化+自動リトライでtransientエラー再発リスクゼロに）
+なし（02-09時点）
 
 ## 次のアクション候補（優先度順）
 
