@@ -7,7 +7,7 @@
  * - キャッシュ対応（TanStack Query）
  */
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { callFunction } from '@/lib/callFunction';
 
@@ -111,9 +111,16 @@ export function useSearch(): UseSearchResult {
     : [...allResults, ...(data?.documents || [])];
 
   // offsetが変わった時に結果を蓄積
-  if (offset > 0 && data?.documents && !allResults.includes(data.documents[0] as SearchResultDocument)) {
-    setAllResults(results);
-  }
+  useEffect(() => {
+    if (offset > 0 && data?.documents && data.documents.length > 0) {
+      setAllResults((prev) => {
+        if (prev.includes(data.documents[0] as SearchResultDocument)) {
+          return prev;
+        }
+        return [...prev, ...data.documents];
+      });
+    }
+  }, [offset, data]);
 
   return {
     query,

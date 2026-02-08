@@ -106,12 +106,11 @@ PR #71対応時にCodex（GPT）レビューで検出。今後の改善候補:
 | 重要度 | 指摘 | 箇所 |
 |--------|------|------|
 | ~~Medium~~ | ~~PDF系Callable（detectSplitPoints等）にwhitelist/adminチェックなし~~ | ~~`pdfOperations.ts`~~ **→ PR #87で解決** |
-| Medium | `useSearch`でレンダー中にsetState | `useSearch.ts:113-121` |
-| Medium | Geminiレート制限がインスタンス内のみ | `rateLimiter.ts` |
-| Medium | Gmail検索が日単位（`after:YYYY-MM-DD`） | `checkGmailAttachments.ts:137` |
+| ~~Medium~~ | ~~`useSearch`でレンダー中にsetState~~ | ~~`useSearch.ts:113-121`~~ **→ useEffectに移行で解決** |
+| Low | Geminiレート制限がインスタンス内のみ（安全マージン10倍で実害なし） | `rateLimiter.ts` |
+| Low | Gmail検索が日単位（dedup実装済みで実害なし） | `checkGmailAttachments.ts:137` |
 
 ## 次のアクション候補（優先度順）
 
 1. **クライアント別オプション機能の実装**（最初の具体的要望確定時）→ ADR-0009参照
-2. Codexレビュー指摘対応（上記バックログ、PDF系Callable権限は解決済み）
-3. 精度改善（フィードバック後）
+2. 精度改善（フィードバック後）
