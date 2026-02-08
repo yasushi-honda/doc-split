@@ -239,7 +239,13 @@ function DocumentRow({
   }`
 
   return (
-    <tr className={rowClassName} onClick={onClick}>
+    <tr className={rowClassName} onClick={() => {
+      if (showCheckbox && !isProcessing) {
+        onSelectChange(!isSelected)
+      } else {
+        onClick()
+      }
+    }}>
       {showCheckbox && (
         <td className="px-2 py-2 sm:px-3 sm:py-3" onClick={(e) => e.stopPropagation()}>
           <Checkbox
