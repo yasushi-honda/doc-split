@@ -230,6 +230,30 @@
       background: rgba(6, 78, 59, 0.1) !important;
       color: #064e3b !important;
     }
+    /* バリデーションエラー */
+    .input-error {
+      border-color: #ef4444 !important;
+      box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.15) !important;
+    }
+    #validation-errors {
+      display: none;
+      background: linear-gradient(135deg, #fee2e2 0%, #fecaca 100%);
+      border-radius: 8px;
+      padding: 12px 16px;
+      margin: 12px 0;
+      border-left: 4px solid #ef4444;
+      color: #991b1b;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+    #validation-errors strong {
+      color: #7f1d1d;
+    }
+    .copy-btn-disabled {
+      opacity: 0.5 !important;
+      cursor: not-allowed !important;
+      pointer-events: none;
+    }
   </style>
 </head>
 <body>
@@ -376,8 +400,69 @@
       return lines;
     }
 
+    function _validateForm() {
+      var required = [
+        { id: 'project-id', label: 'プロジェクトID' },
+        { id: 'admin-email', label: '管理者メール', type: 'email' },
+        { id: 'client-id', label: 'Client ID' },
+        { id: 'client-secret', label: 'Client Secret' },
+        { id: 'auth-code', label: '認証コード' },
+        { id: 'csv-customers', label: '顧客CSV' },
+        { id: 'csv-documents', label: '書類種別CSV' },
+        { id: 'csv-offices', label: '事業所CSV' }
+      ];
+      var errors = [];
+      var emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+      for (var i = 0; i < required.length; i++) {
+        var el = document.getElementById(required[i].id);
+        if (!el) continue;
+        var val = el.value.trim();
+        if (!val) {
+          errors.push(required[i].label + ' を入力してください');
+          el.classList.add('input-error');
+        } else if (required[i].type === 'email' && !emailRe.test(val)) {
+          errors.push(required[i].label + ' の形式が正しくありません');
+          el.classList.add('input-error');
+        } else {
+          el.classList.remove('input-error');
+        }
+      }
+
+      var errDiv = document.getElementById('validation-errors');
+      if (errDiv) {
+        if (errors.length > 0) {
+          errDiv.innerHTML = '<strong>未入力の項目があります:</strong><br>' + errors.join('<br>');
+          errDiv.style.display = 'block';
+        } else {
+          errDiv.innerHTML = '';
+          errDiv.style.display = 'none';
+        }
+      }
+
+      return errors.length === 0;
+    }
+
+    function _setCopyBtnsDisabled(disabled) {
+      var btns = ['copy-minimal', 'copy-full'];
+      for (var i = 0; i < btns.length; i++) {
+        var btn = document.getElementById(btns[i]);
+        if (btn) {
+          btn.disabled = disabled;
+          if (disabled) {
+            btn.classList.add('copy-btn-disabled');
+          } else {
+            btn.classList.remove('copy-btn-disabled');
+          }
+        }
+      }
+    }
+
     function updatePrompts() {
       if (!document.getElementById('project-id')) return;
+
+      var isValid = _validateForm();
+      _setCopyBtnsDisabled(!isValid);
 
       var elMin = document.getElementById('prompt-minimal');
       if (elMin) {
@@ -393,6 +478,7 @@
     }
 
     function copyPrompt(type) {
+      if (!_validateForm()) return;
       var el = document.getElementById('prompt-' + type);
       if (!el) return;
       var text = el.getAttribute('data-raw');

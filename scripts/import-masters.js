@@ -8,6 +8,7 @@
  *   node import-masters.js --offices offices.csv
  *   node import-masters.js --caremanagers caremanagers.csv
  *   node import-masters.js --all ./data/
+ *   node import-masters.js --dry-run --all ./data/    # 解析+バリデーションのみ
  *
  * 環境変数:
  *   GCLOUD_PROJECT または FIREBASE_PROJECT_ID: プロジェクトID（デフォルト: doc-split-dev）
@@ -37,14 +38,94 @@ if (!admin.apps.length) {
 
 const db = admin.firestore();
 
-// CSV解析（シンプル版）
-function parseCSV(content) {
-  const lines = content.trim().split('\n');
-  const headers = lines[0].split(',').map((h) => h.trim());
+// BOM除去
+function removeBOM(content) {
+  if (content.charCodeAt(0) === 0xFEFF) {
+    return content.slice(1);
+  }
+  // UTF-8 BOM as decoded string
+  if (content.startsWith('\xEF\xBB\xBF')) {
+    return content.slice(3);
+  }
+  return content;
+}
+
+// RFC 4180準拠のCSV行パーサー（クォートフィールド対応）
+function parseCSVLine(line) {
+  const fields = [];
+  let current = '';
+  let inQuotes = false;
+  let i = 0;
+
+  while (i < line.length) {
+    const ch = line[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (i + 1 < line.length && line[i + 1] === '"') {
+          // エスケープされたダブルクォート
+          current += '"';
+          i += 2;
+        } else {
+          // クォート終了
+          inQuotes = false;
+          i++;
+        }
+      } else {
+        current += ch;
+        i++;
+      }
+    } else {
+      if (ch === '"') {
+        inQuotes = true;
+        i++;
+      } else if (ch === ',') {
+        fields.push(current.trim());
+        current = '';
+        i++;
+      } else {
+        current += ch;
+        i++;
+      }
+    }
+  }
+  if (inQuotes) {
+    return null; // クォート未閉じ
+  }
+  fields.push(current.trim());
+  return fields;
+}
+
+// CSV解析（RFC 4180準拠）
+function parseCSV(content, filePath) {
+  content = removeBOM(content);
+  const lines = content.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+
+  // 空行をフィルタ（ヘッダー行は保持）
+  if (lines.length === 0) {
+    console.error(`ERROR: CSVファイルが空です: ${filePath || '(unknown)'}`);
+    process.exit(1);
+  }
+
+  const headers = parseCSVLine(lines[0]);
   const rows = [];
+  const warnings = [];
 
   for (let i = 1; i < lines.length; i++) {
-    const values = lines[i].split(',').map((v) => v.trim());
+    const line = lines[i].trim();
+    if (!line) continue; // 空行スキップ
+
+    const values = parseCSVLine(lines[i]);
+
+    if (values === null) {
+      warnings.push(`  警告: 行${i + 1} クォートが閉じられていません → スキップ`);
+      continue;
+    }
+
+    if (values.length !== headers.length) {
+      warnings.push(`  警告: 行${i + 1} カラム数不一致（期待${headers.length}, 実際${values.length}）→ スキップ`);
+      continue;
+    }
+
     const row = {};
     headers.forEach((header, index) => {
       row[header] = values[index] || '';
@@ -52,7 +133,31 @@ function parseCSV(content) {
     rows.push(row);
   }
 
+  if (warnings.length > 0) {
+    warnings.forEach((w) => console.warn(w));
+  }
+
   return rows;
+}
+
+// バリデーション: 必須フィールドの空チェック
+function validateRows(rows, requiredFields, filePath) {
+  const errors = [];
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    for (const fieldGroup of requiredFields) {
+      // fieldGroupは候補の配列（例: ['name', '顧客氏名']）
+      const value = fieldGroup.map((f) => row[f]).find((v) => v);
+      if (!value) {
+        errors.push(`  行${i + 2}: 必須フィールド（${fieldGroup.join(' / ')}）が空です`);
+      }
+    }
+  }
+  if (errors.length > 0) {
+    console.error(`バリデーションエラー (${filePath}):`);
+    errors.forEach((e) => console.error(e));
+    process.exit(1);
+  }
 }
 
 /**
@@ -73,17 +178,21 @@ function detectDuplicateNames(rows, nameFields) {
 }
 
 // 顧客マスターをインポート
-async function importCustomers(filePath) {
-  console.log(`顧客マスターをインポート: ${filePath}`);
+async function importCustomers(filePath, dryRun) {
+  console.log(`顧客マスター${dryRun ? '（検証のみ）' : 'をインポート'}: ${filePath}`);
 
   const content = fs.readFileSync(filePath, 'utf8');
-  const rows = parseCSV(content);
+  const rows = parseCSV(content, filePath);
+  validateRows(rows, [['name', '顧客氏名']], filePath);
 
   // 同姓同名を自動検知
   const duplicateNames = detectDuplicateNames(rows, ['name', '顧客氏名']);
   if (duplicateNames.length > 0) {
     console.log(`  同姓同名を検知: ${duplicateNames.join(', ')}`);
   }
+
+  console.log(`  ✓ ${rows.length}件の顧客を解析しました`);
+  if (dryRun) return;
 
   const batch = db.batch();
   let count = 0;
@@ -132,11 +241,15 @@ function parseKeywords(keywordsStr) {
 }
 
 // 書類マスターをインポート
-async function importDocuments(filePath) {
-  console.log(`書類マスターをインポート: ${filePath}`);
+async function importDocuments(filePath, dryRun) {
+  console.log(`書類マスター${dryRun ? '（検証のみ）' : 'をインポート'}: ${filePath}`);
 
   const content = fs.readFileSync(filePath, 'utf8');
-  const rows = parseCSV(content);
+  const rows = parseCSV(content, filePath);
+  validateRows(rows, [['name', '書類名']], filePath);
+
+  console.log(`  ✓ ${rows.length}件の書類を解析しました`);
+  if (dryRun) return;
 
   const batch = db.batch();
   let count = 0;
@@ -166,17 +279,21 @@ async function importDocuments(filePath) {
 }
 
 // 事業所マスターをインポート
-async function importOffices(filePath) {
-  console.log(`事業所マスターをインポート: ${filePath}`);
+async function importOffices(filePath, dryRun) {
+  console.log(`事業所マスター${dryRun ? '（検証のみ）' : 'をインポート'}: ${filePath}`);
 
   const content = fs.readFileSync(filePath, 'utf8');
-  const rows = parseCSV(content);
+  const rows = parseCSV(content, filePath);
+  validateRows(rows, [['name', '事業所名']], filePath);
 
   // 同名事業所の検出
   const duplicateNames = detectDuplicateNames(rows, ['name', '事業所名']);
   if (duplicateNames.length > 0) {
     console.log(`  同名事業所を検出: ${duplicateNames.join(', ')}`);
   }
+
+  console.log(`  ✓ ${rows.length}件の事業所を解析しました`);
+  if (dryRun) return;
 
   const batch = db.batch();
   let count = 0;
@@ -219,11 +336,15 @@ function parseAliases(aliasesStr) {
 }
 
 // ケアマネジャーマスターをインポート
-async function importCareManagers(filePath) {
-  console.log(`ケアマネジャーマスターをインポート: ${filePath}`);
+async function importCareManagers(filePath, dryRun) {
+  console.log(`ケアマネジャーマスター${dryRun ? '（検証のみ）' : 'をインポート'}: ${filePath}`);
 
   const content = fs.readFileSync(filePath, 'utf8');
-  const rows = parseCSV(content);
+  const rows = parseCSV(content, filePath);
+  validateRows(rows, [['name', 'ケアマネ名']], filePath);
+
+  console.log(`  ✓ ${rows.length}件のケアマネジャーを解析しました`);
+  if (dryRun) return;
 
   const batch = db.batch();
   let count = 0;
@@ -251,7 +372,11 @@ async function importCareManagers(filePath) {
 
 // メイン処理
 async function main() {
-  const args = process.argv.slice(2);
+  const rawArgs = process.argv.slice(2);
+
+  // --dry-run フラグの抽出
+  const dryRun = rawArgs.includes('--dry-run');
+  const args = rawArgs.filter((a) => a !== '--dry-run');
 
   if (args.length < 2) {
     console.log('使用方法:');
@@ -260,7 +385,12 @@ async function main() {
     console.log('  node import-masters.js --offices offices.csv');
     console.log('  node import-masters.js --caremanagers caremanagers.csv');
     console.log('  node import-masters.js --all ./data/');
+    console.log('  node import-masters.js --dry-run --all ./data/  # 解析+バリデーションのみ');
     process.exit(1);
+  }
+
+  if (dryRun) {
+    console.log('[DRY-RUN] DB投入は行いません（解析+バリデーションのみ）\n');
   }
 
   const option = args[0];
@@ -268,13 +398,13 @@ async function main() {
 
   try {
     if (option === '--customers') {
-      await importCustomers(pathArg);
+      await importCustomers(pathArg, dryRun);
     } else if (option === '--documents') {
-      await importDocuments(pathArg);
+      await importDocuments(pathArg, dryRun);
     } else if (option === '--offices') {
-      await importOffices(pathArg);
+      await importOffices(pathArg, dryRun);
     } else if (option === '--caremanagers') {
-      await importCareManagers(pathArg);
+      await importCareManagers(pathArg, dryRun);
     } else if (option === '--all') {
       // ディレクトリ内のCSVを全てインポート
       const dir = pathArg;
@@ -283,13 +413,13 @@ async function main() {
       for (const file of files) {
         const filePath = path.join(dir, file);
         if (file.includes('customer')) {
-          await importCustomers(filePath);
+          await importCustomers(filePath, dryRun);
         } else if (file.includes('document')) {
-          await importDocuments(filePath);
+          await importDocuments(filePath, dryRun);
         } else if (file.includes('office')) {
-          await importOffices(filePath);
+          await importOffices(filePath, dryRun);
         } else if (file.includes('caremanager')) {
-          await importCareManagers(filePath);
+          await importCareManagers(filePath, dryRun);
         }
       }
     } else {
@@ -297,7 +427,7 @@ async function main() {
       process.exit(1);
     }
 
-    console.log('\nインポート完了！');
+    console.log(dryRun ? '\n検証完了！（問題なし）' : '\nインポート完了！');
     process.exit(0);
   } catch (error) {
     console.error('エラー:', error.message);

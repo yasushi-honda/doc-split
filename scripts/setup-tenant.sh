@@ -245,15 +245,8 @@ ALIAS_NAME=$(echo "$PROJECT_ID" | sed 's/docsplit-//' | sed 's/-docsplit//')
 if [ -f "$ROOT_DIR/.firebaserc" ]; then
     if ! grep -q "\"$ALIAS_NAME\"" "$ROOT_DIR/.firebaserc"; then
         log_info ".firebasercにエイリアス '$ALIAS_NAME' を追加中..."
-        # jqがあれば使用、なければ手動追加の案内
-        if command -v jq &> /dev/null; then
-            jq ".projects.\"$ALIAS_NAME\" = \"$PROJECT_ID\"" "$ROOT_DIR/.firebaserc" > "$ROOT_DIR/.firebaserc.tmp" && \
-                mv "$ROOT_DIR/.firebaserc.tmp" "$ROOT_DIR/.firebaserc"
-            log_success "エイリアス追加完了: $ALIAS_NAME → $PROJECT_ID"
-        else
-            log_warn ".firebasercに手動でエイリアスを追加してください:"
-            echo "  \"$ALIAS_NAME\": \"$PROJECT_ID\""
-        fi
+        node "$SCRIPT_DIR/helpers/firebaserc-helper.js" add-alias "$ALIAS_NAME" "$PROJECT_ID"
+        log_success "エイリアス追加完了: $ALIAS_NAME → $PROJECT_ID"
     else
         log_success "エイリアス '$ALIAS_NAME' は既に存在します"
     fi
@@ -281,28 +274,27 @@ if [ -n "$ACCESS_TOKEN" ]; then
         # 必要なドメインリスト
         REQUIRED_DOMAINS="localhost,${PROJECT_ID}.web.app,${PROJECT_ID}.firebaseapp.com"
 
-        # 既存ドメインを取得してマージ（jqがある場合）
-        if command -v jq &> /dev/null; then
-            EXISTING_DOMAINS=$(echo "$CURRENT_CONFIG" | jq -r '.authorizedDomains // [] | join(",")')
-            ALL_DOMAINS=$(echo "$EXISTING_DOMAINS,$REQUIRED_DOMAINS" | tr ',' '\n' | sort -u | grep -v '^$' | tr '\n' ',' | sed 's/,$//')
-            DOMAINS_JSON=$(echo "$ALL_DOMAINS" | tr ',' '\n' | jq -R . | jq -s .)
+        # 既存ドメインを取得してマージ（Node.jsヘルパー使用）
+        EXISTING_DOMAINS=$(node -e "
+            var c = JSON.parse(process.argv[1]);
+            console.log((c.authorizedDomains || []).join(','));
+        " "$CURRENT_CONFIG" 2>/dev/null || echo "")
+        ALL_DOMAINS=$(echo "$EXISTING_DOMAINS,$REQUIRED_DOMAINS" | tr ',' '\n' | sort -u | grep -v '^$' | tr '\n' ',' | sed 's/,$//')
+        DOMAINS_JSON=$(node "$SCRIPT_DIR/helpers/json-helper.js" array-from-csv "$ALL_DOMAINS")
 
-            # 更新リクエスト
-            UPDATE_RESULT=$(curl -s -X PATCH \
-                -H "Authorization: Bearer $ACCESS_TOKEN" \
-                -H "X-Goog-User-Project: $PROJECT_ID" \
-                -H "Content-Type: application/json" \
-                "https://identitytoolkit.googleapis.com/admin/v2/projects/$PROJECT_ID/config?updateMask=authorizedDomains" \
-                -d "{\"authorizedDomains\": $DOMAINS_JSON}" 2>/dev/null)
+        # 更新リクエスト
+        UPDATE_RESULT=$(curl -s -X PATCH \
+            -H "Authorization: Bearer $ACCESS_TOKEN" \
+            -H "X-Goog-User-Project: $PROJECT_ID" \
+            -H "Content-Type: application/json" \
+            "https://identitytoolkit.googleapis.com/admin/v2/projects/$PROJECT_ID/config?updateMask=authorizedDomains" \
+            -d "{\"authorizedDomains\": $DOMAINS_JSON}" 2>/dev/null)
 
-            if echo "$UPDATE_RESULT" | grep -q "authorizedDomains"; then
-                log_success "Authorized Domains設定完了: ${PROJECT_ID}.web.app, ${PROJECT_ID}.firebaseapp.com"
-                AUTH_DOMAINS_OK=true
-            else
-                log_warn "Authorized Domains自動設定に失敗しました"
-            fi
+        if echo "$UPDATE_RESULT" | grep -q "authorizedDomains"; then
+            log_success "Authorized Domains設定完了: ${PROJECT_ID}.web.app, ${PROJECT_ID}.firebaseapp.com"
+            AUTH_DOMAINS_OK=true
         else
-            log_warn "jqがインストールされていないため、Authorized Domainsは手動設定が必要です"
+            log_warn "Authorized Domains自動設定に失敗しました"
         fi
     else
         log_warn "Identity Toolkit API応答が不正です（Firebase Authenticationが未設定の可能性）"
@@ -604,11 +596,64 @@ if [ "$WITH_GMAIL" = true ]; then
     echo ""
     log_info "Step 8: Gmail OAuth認証設定..."
     echo ""
-    GMAIL_ARGS="$PROJECT_ID"
-    [ -n "$GMAIL_CLIENT_ID" ] && GMAIL_ARGS="$GMAIL_ARGS --client-id=$GMAIL_CLIENT_ID"
-    [ -n "$GMAIL_CLIENT_SECRET" ] && GMAIL_ARGS="$GMAIL_ARGS --client-secret=$GMAIL_CLIENT_SECRET"
-    [ -n "$GMAIL_AUTH_CODE" ] && GMAIL_ARGS="$GMAIL_ARGS --auth-code=$GMAIL_AUTH_CODE"
-    "$SCRIPT_DIR/setup-gmail-auth.sh" $GMAIL_ARGS
+
+    # === Gmail OAuth 事前チェック ===
+    GMAIL_CHECK_OK=true
+
+    # Client IDの形式チェック
+    if [ -n "$GMAIL_CLIENT_ID" ]; then
+        if ! echo "$GMAIL_CLIENT_ID" | grep -qiE '^[0-9]+-[a-z0-9]+\.apps\.googleusercontent\.com$'; then
+            log_error "Client IDの形式が不正です: $GMAIL_CLIENT_ID"
+            echo "  期待される形式: <数値>-<英数字>.apps.googleusercontent.com"
+            echo "  確認先: https://console.cloud.google.com/apis/credentials?project=$PROJECT_ID"
+            GMAIL_CHECK_OK=false
+        fi
+    else
+        log_error "Client IDが指定されていません（--client-id=X）"
+        echo "  作成手順: https://console.cloud.google.com/apis/credentials?project=$PROJECT_ID"
+        echo "  → 「認証情報を作成」→「OAuth クライアント ID」→ 種類: デスクトップアプリ"
+        GMAIL_CHECK_OK=false
+    fi
+
+    # Client Secretの空チェック
+    if [ -z "$GMAIL_CLIENT_SECRET" ]; then
+        log_error "Client Secretが指定されていません（--client-secret=X）"
+        echo "  OAuth クライアントIDのページからコピーしてください"
+        GMAIL_CHECK_OK=false
+    fi
+
+    # 認証コードの空チェック
+    if [ -z "$GMAIL_AUTH_CODE" ]; then
+        log_error "認証コードが指定されていません（--auth-code=X）"
+        echo "  取得方法: ./scripts/setup-gmail-auth.sh --get-code --client-id=<Client ID>"
+        GMAIL_CHECK_OK=false
+    fi
+
+    # Secret Manager APIの有効化確認
+    SM_ENABLED=$(gcloud services list --enabled --project="$PROJECT_ID" --filter="config.name:secretmanager.googleapis.com" --format="value(config.name)" 2>/dev/null)
+    if [ -z "$SM_ENABLED" ]; then
+        log_warn "Secret Manager APIが有効化されていません。有効化を試みます..."
+        if ! gcloud services enable secretmanager.googleapis.com --project="$PROJECT_ID" 2>/dev/null; then
+            log_error "Secret Manager APIの有効化に失敗しました"
+            echo "  手動で有効化: https://console.cloud.google.com/apis/library/secretmanager.googleapis.com?project=$PROJECT_ID"
+            GMAIL_CHECK_OK=false
+        else
+            log_success "Secret Manager APIを有効化しました"
+        fi
+    fi
+
+    if [ "$GMAIL_CHECK_OK" = false ]; then
+        log_error "Gmail OAuth事前チェックに失敗しました。上記のエラーを修正してから再実行してください。"
+        exit 1
+    fi
+
+    log_success "Gmail OAuth事前チェック通過"
+
+    GMAIL_CMD=("$SCRIPT_DIR/setup-gmail-auth.sh" "$PROJECT_ID")
+    [ -n "$GMAIL_CLIENT_ID" ] && GMAIL_CMD+=("--client-id=$GMAIL_CLIENT_ID")
+    [ -n "$GMAIL_CLIENT_SECRET" ] && GMAIL_CMD+=("--client-secret=$GMAIL_CLIENT_SECRET")
+    [ -n "$GMAIL_AUTH_CODE" ] && GMAIL_CMD+=("--auth-code=$GMAIL_AUTH_CODE")
+    "${GMAIL_CMD[@]}"
     log_success "Gmail OAuth認証設定完了"
 fi
 
