@@ -9,8 +9,8 @@ import { ja } from 'date-fns/locale'
 import { Timestamp } from 'firebase/firestore'
 import { ref, getDownloadURL } from 'firebase/storage'
 import { Download, ExternalLink, Loader2, FileText, User, Building, Calendar, Tag, AlertCircle, Scissors, Pencil, Save, X, BookMarked, History, ChevronUp, ChevronDown, Sparkles, RefreshCw, CheckCircle, XCircle } from 'lucide-react'
-import { httpsCallable } from 'firebase/functions'
-import { storage, functions } from '@/lib/firebase'
+import { storage } from '@/lib/firebase'
+import { callFunction } from '@/lib/callFunction'
 import { useQueryClient } from '@tanstack/react-query'
 import {
   Dialog,
@@ -479,11 +479,9 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
 
     setIsGeneratingSummary(true)
     try {
-      const callable = httpsCallable<{ docId: string }, { success: boolean; summary: string }>(
-        functions,
-        'regenerateSummary'
+      await callFunction<{ docId: string }, { success: boolean; summary: string }>(
+        'regenerateSummary', { docId: documentId }, { timeout: 60_000 }
       )
-      await callable({ docId: documentId })
       // キャッシュを無効化して再取得
       await queryClient.invalidateQueries({ queryKey: ['document', documentId] })
       await refetch()

@@ -6,7 +6,7 @@
  */
 
 import { useState, useCallback } from 'react';
-import { getFunctions, httpsCallable } from 'firebase/functions';
+import { callFunction } from '@/lib/callFunction';
 
 type MasterType = 'office' | 'customer' | 'document';
 
@@ -38,14 +38,11 @@ export function useMasterAlias() {
       setError(null);
 
       try {
-        const functions = getFunctions(undefined, 'asia-northeast1');
-        const addMasterAlias = httpsCallable<
+        const result = await callFunction<
           { masterType: MasterType; masterId: string; alias: string },
           AddAliasResult
-        >(functions, 'addMasterAlias');
-
-        const result = await addMasterAlias({ masterType, masterId, alias });
-        return result.data.success;
+        >('addMasterAlias', { masterType, masterId, alias }, { timeout: 60_000 });
+        return result.success;
       } catch (err) {
         console.error('Failed to add alias:', err);
         setError(err instanceof Error ? err : new Error('Failed to add alias'));

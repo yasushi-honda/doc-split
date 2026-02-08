@@ -4,8 +4,7 @@
  */
 
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { httpsCallable } from 'firebase/functions'
-import { functions } from '@/lib/firebase'
+import { callFunction } from '@/lib/callFunction'
 import type { SplitSuggestion, SplitSegment } from '@shared/types'
 
 // ============================================
@@ -87,12 +86,9 @@ interface RotatePdfRequest {
 // ============================================
 
 async function detectSplitPoints(documentId: string): Promise<DetectSplitPointsResponse> {
-  const callable = httpsCallable<{ documentId: string }, DetectSplitPointsResponse>(
-    functions,
-    'detectSplitPoints'
+  return callFunction<{ documentId: string }, DetectSplitPointsResponse>(
+    'detectSplitPoints', { documentId }, { timeout: 300_000 }
   )
-  const result = await callable({ documentId })
-  return result.data
 }
 
 export function useDetectSplitPoints() {
@@ -111,12 +107,9 @@ export function useDetectSplitPoints() {
 // ============================================
 
 async function splitPdf(request: SplitPdfRequest): Promise<SplitPdfResponse> {
-  const callable = httpsCallable<SplitPdfRequest, SplitPdfResponse>(
-    functions,
-    'splitPdf'
+  return callFunction<SplitPdfRequest, SplitPdfResponse>(
+    'splitPdf', request, { timeout: 300_000 }
   )
-  const result = await callable(request)
-  return result.data
 }
 
 export function useSplitPdf() {
@@ -136,11 +129,9 @@ export function useSplitPdf() {
 // ============================================
 
 async function rotatePdfPages(request: RotatePdfRequest): Promise<void> {
-  const callable = httpsCallable<RotatePdfRequest, { success: boolean }>(
-    functions,
-    'rotatePdfPages'
+  await callFunction<RotatePdfRequest, { success: boolean }>(
+    'rotatePdfPages', request, { timeout: 300_000 }
   )
-  await callable(request)
 }
 
 export function useRotatePdfPages() {
