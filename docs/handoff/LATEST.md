@@ -8,6 +8,7 @@
 
 | PR/コミット | 内容 |
 |----|------|
+| e31a718 | **ドキュメント監査対応**（architecture.md Node.js版修正+Functions追加、gemini-rate-limiting.md料金表更新、context/配下6ファイルのフロントメタ統一、監査レポート追加） |
 | **#99** | **import-masters.jsの環境変数優先順位修正**（`FIREBASE_PROJECT_ID`を`GCLOUD_PROJECT`より優先に変更。.envrcのGCLOUD_PROJECTが常に優先され納品時にマスターデータがdev環境に投入されるバグを修正） |
 | **#98** | **TypeScript strict型エラー63件を全修正 + CIに型チェック追加**（26ファイル、tsconfig lib ES2023化、shared/types.ts型補完、strict null修正、テスト型修正、CI `tsc --noEmit` ガード追加） |
 | **#97** | **メタ情報編集時の楽観的UI更新**（編集保存→一覧即反映、エラー時ロールバック、`updateDocumentInListCache`共通ユーティリティでDRY化） |
@@ -81,6 +82,14 @@
 - フォーム入力→プロンプト自動生成→コピー→Claude Codeに貼付けで全自動納品
 - 全スクリプト（7本）の存在・実行権限・引数整合性を検証済み
 - PR #99で`import-masters.js`の環境変数優先順位バグを修正済み
+
+### ドキュメント監査（02-08）
+
+- 3回目の監査実施。全カテゴリA評価達成（前回B→A）
+- architecture.md: Node.js 22→20修正、Cloud Functions 6関数追加
+- gemini-rate-limiting.md: 料金表を2026年2月時点に更新（入力$0.30、出力$2.50）
+- docs/context/配下6ファイル: フロントメタ統一（status: completed）
+- 次回監査推奨日: 2026-02-22
 
 ## E2Eテスト状況
 
