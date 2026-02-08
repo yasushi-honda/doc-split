@@ -977,6 +977,13 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                               </div>
                             </div>
                           )}
+                          {/* 未判定時のエイリアス登録ヒント */}
+                          {editedFields.customerName &&
+                           document.customerName === '未判定' && (
+                            <p className="mt-1.5 text-xs text-muted-foreground">
+                              表記揺れで未判定になる場合は、<a href="/masters" className="text-blue-600 underline">マスター管理</a>で別表記を登録すると次回から自動マッチします
+                            </p>
+                          )}
                         </div>
                       ) : (
                         <div className="flex items-center gap-2">
@@ -1041,6 +1048,13 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                               </div>
                             </div>
                           )}
+                          {/* 未判定時のエイリアス登録ヒント */}
+                          {editedFields.officeName &&
+                           document.officeName === '未判定' && (
+                            <p className="mt-1.5 text-xs text-muted-foreground">
+                              表記揺れで未判定になる場合は、<a href="/masters" className="text-blue-600 underline">マスター管理</a>で別表記を登録すると次回から自動マッチします
+                            </p>
+                          )}
                         </div>
                       ) : (
                         <div className="flex items-center gap-2">
@@ -1095,6 +1109,13 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                                 </div>
                               </div>
                             </div>
+                          )}
+                          {/* 未判定時のエイリアス登録ヒント */}
+                          {editedFields.documentType &&
+                           document.documentType === '未判定' && (
+                            <p className="mt-1.5 text-xs text-muted-foreground">
+                              表記揺れで未判定になる場合は、<a href="/masters" className="text-blue-600 underline">マスター管理</a>で別表記を登録すると次回から自動マッチします
+                            </p>
                           )}
                         </div>
                       ) : (
