@@ -214,7 +214,80 @@ function UserGuide() {
       </section>
 
       <section id="user-section-7" className="guide-section">
-        <h2><span className="section-number">7</span>よくある質問</h2>
+        <h2><span className="section-number">7</span>表記ゆれ対応（エイリアス学習）</h2>
+        <p>
+          同じ顧客・事業所・書類種別でも、書類によって表記が微妙に異なることがあります。
+          DocSplitはこの「表記ゆれ」を学習し、次回以降の自動マッチング精度を向上させます。
+        </p>
+
+        <div className="alias-flow-container">
+          <div className="alias-flow-step">
+            <div className="alias-flow-icon alias-flow-icon-1">1</div>
+            <div className="alias-flow-content">
+              <strong>OCRが表記を検出</strong>
+              <span>「訪問介護ひまわり」</span>
+            </div>
+          </div>
+          <div className="alias-flow-arrow">&darr;</div>
+          <div className="alias-flow-step">
+            <div className="alias-flow-icon alias-flow-icon-2">2</div>
+            <div className="alias-flow-content">
+              <strong>マスターと照合</strong>
+              <span>登録名「ひまわり訪問介護ステーション」と不一致 → 未判定</span>
+            </div>
+          </div>
+          <div className="alias-flow-arrow">&darr;</div>
+          <div className="alias-flow-step">
+            <div className="alias-flow-icon alias-flow-icon-3">3</div>
+            <div className="alias-flow-content">
+              <strong>ユーザーが手動で選択＋「この表記を記憶する」</strong>
+              <span>「訪問介護ひまわり」がエイリアスとして自動登録</span>
+            </div>
+          </div>
+          <div className="alias-flow-arrow">&darr;</div>
+          <div className="alias-flow-step alias-flow-step-success">
+            <div className="alias-flow-icon alias-flow-icon-4">&#10003;</div>
+            <div className="alias-flow-content">
+              <strong>次回以降は自動マッチ</strong>
+              <span>同じ表記の書類が届いたら、手動対応不要で自動マッチングされます</span>
+            </div>
+          </div>
+        </div>
+
+        <h3>対象マスター</h3>
+        <table className="guide-table">
+          <thead>
+            <tr>
+              <th>マスター種別</th>
+              <th>エイリアス対応</th>
+              <th>表記ゆれの例</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>顧客</td><td className="alias-badge-yes">対応</td><td>「山田 太郎」↔「山田　太郎」</td></tr>
+            <tr><td>書類種別</td><td className="alias-badge-yes">対応</td><td>「訪問介護計画書」↔「訪問介護サービス計画書」</td></tr>
+            <tr><td>事業所</td><td className="alias-badge-yes">対応</td><td>「さくらケアセンター」↔「桜ケアセンター」</td></tr>
+            <tr><td>ケアマネジャー</td><td className="alias-badge-na">対象外</td><td>-</td></tr>
+          </tbody>
+        </table>
+
+        <h3>3つの登録方法</h3>
+        <div className="info-box">
+          <h4>方法1: 書類確定時に自動学習</h4>
+          <p>書類詳細画面でマスターを選択 → 「この表記を記憶する」にチェック → 保存</p>
+        </div>
+        <div className="info-box">
+          <h4>方法2: マスター管理画面から直接登録</h4>
+          <p>マスター管理画面（/masters）の追加・編集ダイアログで「許容表記」欄に入力</p>
+        </div>
+        <div className="info-box">
+          <h4>方法3: CSV一括インポート</h4>
+          <p>CSVファイルの <code>aliases</code> 列に <code>|</code> 区切りでエイリアスを指定</p>
+        </div>
+      </section>
+
+      <section id="user-section-8" className="guide-section">
+        <h2><span className="section-number">8</span>よくある質問</h2>
 
         <div className="faq-item">
           <h4>Q: 書類が表示されない</h4>
@@ -755,6 +828,92 @@ export function HelpPage() {
           font-style: italic;
         }
 
+        /* エイリアスフロー図 */
+        .alias-flow-container {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          gap: 0;
+          margin: 1.5rem 0;
+          padding: 1.5rem;
+          background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+          border-radius: 12px;
+          border: 1px solid #e2e8f0;
+        }
+
+        .alias-flow-step {
+          display: flex;
+          align-items: center;
+          gap: 1rem;
+          width: 100%;
+          max-width: 500px;
+          padding: 0.75rem 1rem;
+          background: white;
+          border-radius: 8px;
+          border: 1px solid #e2e8f0;
+          transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .alias-flow-step:hover {
+          transform: translateX(4px);
+          box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+        }
+
+        .alias-flow-step-success {
+          background: linear-gradient(135deg, #f0fff4 0%, #e6fffa 100%);
+          border-color: #68d391;
+        }
+
+        .alias-flow-icon {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          width: 32px;
+          height: 32px;
+          border-radius: 50%;
+          color: white;
+          font-weight: 700;
+          font-size: 0.875rem;
+          flex-shrink: 0;
+        }
+
+        .alias-flow-icon-1 { background: #3182ce; }
+        .alias-flow-icon-2 { background: #dd6b20; }
+        .alias-flow-icon-3 { background: #805ad5; }
+        .alias-flow-icon-4 { background: #38a169; }
+
+        .alias-flow-content {
+          display: flex;
+          flex-direction: column;
+          gap: 0.125rem;
+        }
+
+        .alias-flow-content strong {
+          font-size: 0.875rem;
+          color: #1a202c;
+        }
+
+        .alias-flow-content span {
+          font-size: 0.8rem;
+          color: #718096;
+        }
+
+        .alias-flow-arrow {
+          color: #a0aec0;
+          font-size: 1.25rem;
+          line-height: 1;
+          padding: 0.25rem 0;
+        }
+
+        .alias-badge-yes {
+          color: #276749;
+          font-weight: 600;
+        }
+
+        .alias-badge-na {
+          color: #a0aec0;
+        }
+
         /* 目次サイドバー */
         .toc-sidebar {
           position: fixed;
@@ -868,7 +1027,8 @@ function TableOfContents({ activeTab }: { activeTab: string }) {
     { id: 'user-section-4', title: '書類詳細画面' },
     { id: 'user-section-5', title: 'PDFアップロード' },
     { id: 'user-section-6', title: '選択待ち対応' },
-    { id: 'user-section-7', title: 'よくある質問' },
+    { id: 'user-section-7', title: '表記ゆれ対応' },
+    { id: 'user-section-8', title: 'よくある質問' },
   ]
 
   const adminToc = [

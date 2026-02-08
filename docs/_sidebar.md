@@ -3,6 +3,7 @@
   * [プロジェクト概要](overview.md)
   * [アーキテクチャ](architecture.md)
   * [機能一覧](features.md)
+  * [表記ゆれ対応（エイリアス）](alias-feature.md)
 * **納品・運用**
   * [納品フロー](deployment-flow.md)
   * [Claude Code 自動納品](claude-code-delivery.md)
