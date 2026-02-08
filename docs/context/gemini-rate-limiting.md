@@ -1,15 +1,15 @@
 ---
 title: "Gemini APIレート制限設計"
 description: "Vertex AI Gemini 2.5 Flashのレート制限対策とコスト管理"
-status: draft
-updated: "2026-01-18"
+status: completed
+updated: "2026-02-08"
 ---
 
 # Gemini APIレート制限設計
 
 ## 1. Gemini 2.5 Flash レート制限
 
-### 1.1 制限値（2026年1月時点）
+### 1.1 制限値（2026年2月時点）
 
 | リソース | 制限 | 備考 |
 |---------|------|------|
@@ -190,11 +190,13 @@ async function callGeminiWithRetry(
 
 ## 4. コスト管理
 
-### 4.1 料金体系（2026年1月時点）
+### 4.1 料金体系（2026年2月時点）
 
 | モデル | 入力（/1M tokens） | 出力（/1M tokens） |
 |--------|------------------|------------------|
-| Gemini 2.5 Flash | $0.075 | $0.30 |
+| Gemini 2.5 Flash | $0.30 | $2.50 |
+
+> **注**: 料金は [Vertex AI Pricing](https://cloud.google.com/vertex-ai/generative-ai/pricing) を参照。Batch利用で50%割引あり。
 
 ### 4.2 月額コスト試算
 
@@ -206,9 +208,9 @@ async function callGeminiWithRetry(
 - 出力: 5,000 × 2,000 = 10,000,000 tokens (10M)
 
 コスト:
-- 入力: 30M × $0.075 / 1M = $2.25
-- 出力: 10M × $0.30 / 1M = $3.00
-- 合計: $5.25/月 ≈ ¥800/月（1USD=150円）
+- 入力: 30M × $0.30 / 1M = $9.00
+- 出力: 10M × $2.50 / 1M = $25.00
+- 合計: $34.00/月 ≈ ¥5,100/月（1USD=150円）
 ```
 
 ### 4.3 コスト監視

@@ -1,8 +1,8 @@
 ---
 title: "実装計画"
 description: "DocSplit GCP移行の実装順序と依存関係"
-status: draft
-updated: "2026-01-18"
+status: completed
+updated: "2026-02-08"
 ---
 
 # 実装計画

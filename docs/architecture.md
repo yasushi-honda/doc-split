@@ -120,6 +120,12 @@ sequenceDiagram
 | `searchDocuments` | Callable | 全文検索（日付パース対応） |
 | `onDocumentWriteSearchIndex` | Firestore Trigger | 検索インデックス自動更新 |
 | `onDocumentWrite` | Firestore Trigger | ドキュメントグループ更新 |
+| `addMasterAlias` | Callable | マスターエイリアス追加 |
+| `removeMasterAlias` | Callable | マスターエイリアス削除 |
+| `seedDocumentMasters` | Callable | マスターデータ初期投入 |
+| `seedAllMasters` | Callable | 全マスターデータ初期投入 |
+| `initTenantSettings` | Callable | テナント初期設定 |
+| `registerAdminUser` | Callable | 管理者ユーザー登録 |
 
 ### Firestore コレクション
 
@@ -211,7 +217,7 @@ flowchart LR
 | リソース | 設定 |
 |----------|------|
 | リージョン | `asia-northeast1` (東京) |
-| Functions | 2nd gen, Node.js 22 |
+| Functions | 2nd gen, Node.js 20 |
 | Firestore | Native mode |
 | Storage | Standard |
 | Hosting | Firebase Hosting (PWA対応) |

@@ -2,6 +2,8 @@
 title: "ビジネスロジック概要"
 description: "書類管理アプリの主要ワークフローとアクションを要約"
 purpose: "AI駆動開発時のコンテキストとして優先読込"
+status: completed
+updated: "2026-02-08"
 ---
 
 # ビジネスロジック概要

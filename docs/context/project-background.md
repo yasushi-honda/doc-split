@@ -1,5 +1,8 @@
 ---
 title: "プロジェクト背景"
+description: "DocSplitプロジェクトの背景と元システム概要"
+status: completed
+updated: "2026-02-08"
 created_at: "2026-01-17"
 ---
 
