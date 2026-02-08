@@ -266,7 +266,7 @@ function UserGuide() {
           <tbody>
             <tr><td>顧客</td><td className="alias-badge-yes">対応</td><td>「山田太郎」↔「やまだ太郎」（漢字↔ひらがな）</td></tr>
             <tr><td>書類種別</td><td className="alias-badge-yes">対応</td><td>「訪問介護計画書」↔「訪問介護サービス計画書」</td></tr>
-            <tr><td>事業所</td><td className="alias-badge-yes">対応</td><td>「さくらケアセンター」↔「桜ケアセンター」</td></tr>
+            <tr><td>事業所</td><td className="alias-badge-yes">対応</td><td>「さくらケアセンター」↔「(株)さくらケアセンター」（法人格の有無）</td></tr>
             <tr><td>ケアマネジャー</td><td className="alias-badge-na">対象外</td><td>-</td></tr>
           </tbody>
         </table>
