@@ -204,6 +204,95 @@ PDFページを回転する。
 
 **権限:** `admin` ロールのユーザーのみ実行可能
 
+### Firestore Trigger Functions
+
+#### onDocumentWrite
+
+ドキュメント変更時にグループキーを自動設定し、`documentGroups` コレクションの集計を更新する。
+
+| 項目 | 値 |
+|------|-----|
+| トリガー | Firestore `onDocumentWritten` (`documents/{docId}`) |
+| 認証 | 不要（内部トリガー） |
+
+**処理内容:**
+- ドキュメントの `customerKey` / `officeKey` / `documentTypeKey` / `careManagerKey` を正規化・自動設定
+- `documentGroups` コレクションのカウント・プレビューを再集計
+
+#### onDocumentWriteSearchIndex
+
+ドキュメント変更時に検索インデックスを自動更新する。
+
+| 項目 | 値 |
+|------|-----|
+| トリガー | Firestore `onDocumentWritten` (`documents/{docId}`) |
+| 認証 | 不要（内部トリガー） |
+
+**処理内容:**
+- ドキュメント作成/更新時: `search_index` コレクションの反転インデックスを更新
+- ドキュメント削除時: 該当インデックスエントリを削除
+
+### セットアップ用 HTTP Functions
+
+初回テナントセットアップ時に `setup-tenant.sh` から呼び出される関数群。通常運用では使用しない。
+
+#### initTenantSettings
+
+テナント初期設定を作成する。
+
+| 項目 | 値 |
+|------|-----|
+| トリガー | HTTP (`onRequest`) |
+| 認証 | なし（初回限定ガード: `settings/auth` 存在時は403拒否） |
+
+**レスポンス:**
+```typescript
+{ success: boolean; message: string; settings: object }
+```
+
+#### registerAdminUser
+
+管理者ユーザーを登録する。
+
+| 項目 | 値 |
+|------|-----|
+| トリガー | HTTP (`onRequest`) |
+| 認証 | なし（初回限定ガード: 既存adminユーザー存在時は403拒否） |
+| パラメータ | `?uid=<string>&email=<string>` (クエリ) |
+
+**レスポンス:**
+```typescript
+{ success: boolean; message: string }
+```
+
+#### seedDocumentMasters
+
+書類種別マスターデータをシードする（開発/デモ用）。
+
+| 項目 | 値 |
+|------|-----|
+| トリガー | HTTP (`onRequest`) |
+| 認証 | HTTP認証（Identity Token） |
+
+**レスポンス:**
+```typescript
+{ success: boolean; message: string; count: number }
+```
+
+#### seedAllMasters
+
+全マスターデータ（書類種別/顧客/事業所/ケアマネ）をシードする（開発/デモ用）。
+
+| 項目 | 値 |
+|------|-----|
+| トリガー | HTTP (`onRequest`) |
+| 認証 | HTTP認証（Identity Token） |
+
+**レスポンス:**
+```typescript
+{ success: boolean; results: { documents: number; customers: number; offices: number; caremanagers: number } }
+```
+
 ## ユーティリティ関数
 
 ### textNormalizer.ts

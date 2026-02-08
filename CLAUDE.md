@@ -41,6 +41,7 @@ npm run build                    # 全体ビルド
 ./scripts/deploy-to-project.sh <alias>          # Hostingのみ
 ./scripts/deploy-to-project.sh <alias> --rules   # Hosting + ルール（スキーマ変更時）
 ./scripts/deploy-to-project.sh <alias> --full    # 全コンポーネント
+./scripts/deploy-all-clients.sh [--rules|--full] [--dry-run]  # 全クライアント一括デプロイ
 firebase deploy --only functions -P <alias>      # Functionsのみ（直接実行OK）
 ```
 
@@ -49,6 +50,7 @@ firebase deploy --only functions -P <alias>      # Functionsのみ（直接実�
 | フロントエンドのみ | `deploy-to-project.sh <alias>` |
 | Firestoreスキーマ変更 | `deploy-to-project.sh <alias> --rules` |
 | Functions変更 | `deploy-to-project.sh <alias> --full` |
+| 全クライアント一括 | `deploy-all-clients.sh [--rules\|--full]` |
 
 ### クライアント環境セットアップ
 ```bash
