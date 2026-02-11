@@ -15,14 +15,26 @@
 #   --client-secret=X  Gmail OAuth Client Secret（--with-gmailと併用）
 #   --auth-code=X      Gmail OAuth 認証コード（--with-gmailと併用）
 #
+# 認証モード:
+#   このスクリプトは認証タイプを自動判定し、処理を分岐します:
+#
+#   【個人アカウントモード】(推奨)
+#     gcloud auth login で認証された個人アカウントで実行
+#     → Firebase CLI を使用して全ステップを自動実行
+#
+#   【サービスアカウントモード】
+#     gcloud auth activate-service-account で認証されたSAで実行
+#     → Firebase Management API を使用（一部ステップは手動実行が必要）
+#     → ルール/Functions/Hostingデプロイは個人アカウントで別途実行
+#
 # 実行内容:
 #   1. GCP API有効化
 #   2. Firebase設定 + Authorized Domains自動設定
-#   3. 環境変数生成
+#   3. 環境変数生成（個人: CLI / SA: API）
 #   4. 管理者ユーザー登録
-#   5. Firestore/Storageルールデプロイ + CORS設定
-#   6. Cloud Functionsデプロイ
-#   7. Hostingデプロイ
+#   5. Firestore/Storageルールデプロイ + CORS設定（個人: CLI / SA: 手動）
+#   6. Cloud Functionsデプロイ（個人: CLI / SA: 手動）
+#   7. Hostingデプロイ（個人: CLI / SA: 手動）
 #   8. Gmail OAuth設定（--with-gmail指定時）
 #
 # ※ CORS設定: ブラウザからPDFを閲覧するために必須
@@ -42,6 +54,56 @@ log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
 log_success() { echo -e "${GREEN}[OK]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+
+# ===========================================
+# Firebase Management API ヘルパー関数
+# ===========================================
+
+# Firebase Management API 呼び出し
+firebase_api_call() {
+    local method=$1
+    local endpoint=$2
+    local data=${3:-}
+
+    local url="https://firebase.googleapis.com/v1beta1${endpoint}"
+    local token=$(gcloud auth print-access-token 2>/dev/null)
+
+    if [ -z "$token" ]; then
+        log_error "gcloud アクセストークン取得に失敗しました"
+        return 1
+    fi
+
+    if [ -n "$data" ]; then
+        curl -s -X "$method" \
+            -H "Authorization: Bearer $token" \
+            -H "Content-Type: application/json" \
+            -d "$data" \
+            "$url"
+    else
+        curl -s -X "$method" \
+            -H "Authorization: Bearer $token" \
+            "$url"
+    fi
+}
+
+# Firebase 非同期オペレーション完了待機
+wait_firebase_operation() {
+    local operation_name=$1
+    local max_wait=${2:-60}  # デフォルト60秒
+    local waited=0
+
+    while [ $waited -lt $max_wait ]; do
+        local status=$(firebase_api_call GET "/operations/${operation_name}" | jq -r '.done // false' 2>/dev/null)
+        if [ "$status" = "true" ]; then
+            return 0
+        fi
+        sleep 2
+        waited=$((waited + 2))
+    done
+
+    log_warn "オペレーション完了待機がタイムアウトしました"
+    return 1
+}
 
 # 使用方法
 usage() {
@@ -140,10 +202,21 @@ echo "Gmail Account: $GMAIL_ACCOUNT"
 echo ""
 
 # ===========================================
-# 認証アカウント確認
+# 認証アカウント確認 & 認証タイプ判定
 # ===========================================
 CURRENT_ACCOUNT=$(gcloud config get-value account 2>/dev/null)
+
+# サービスアカウントかどうか判定
+if [[ "$CURRENT_ACCOUNT" =~ \.iam\.gserviceaccount\.com$ ]]; then
+    USE_SERVICE_ACCOUNT=true
+    AUTH_MODE="サービスアカウント"
+else
+    USE_SERVICE_ACCOUNT=false
+    AUTH_MODE="個人アカウント"
+fi
+
 echo -e "${YELLOW}現在のgcloud認証アカウント: ${CURRENT_ACCOUNT}${NC}"
+echo -e "${BLUE}認証モード: ${AUTH_MODE}${NC}"
 echo ""
 echo "このアカウントがプロジェクト '$PROJECT_ID' のオーナーまたは編集者である必要があります。"
 echo ""
@@ -233,12 +306,37 @@ fi
 echo ""
 log_info "Step 2/7: Firebase設定..."
 
-firebase use "$PROJECT_ID" 2>/dev/null || {
-    log_warn "Firebaseプロジェクトが見つかりません。追加します..."
-    firebase projects:addfirebase "$PROJECT_ID" 2>/dev/null || true
-    firebase use "$PROJECT_ID"
-}
-log_success "Firebaseプロジェクト: $PROJECT_ID"
+# Firebase プロジェクト確認・追加（認証モードで分岐）
+if [ "$USE_SERVICE_ACCOUNT" = true ]; then
+    # サービスアカウントモード: API経由
+    log_info "Firebase プロジェクト確認（API）..."
+    PROJECT_INFO=$(firebase_api_call GET "/projects/$PROJECT_ID" 2>/dev/null)
+
+    if echo "$PROJECT_INFO" | grep -q "projectId"; then
+        log_success "Firebaseプロジェクト確認完了: $PROJECT_ID"
+    else
+        log_warn "Firebaseプロジェクトが見つかりません。追加します..."
+        ADD_RESULT=$(firebase_api_call POST "/projects/${PROJECT_ID}:addFirebase" '{}')
+
+        # 非同期オペレーション待機
+        OPERATION_NAME=$(echo "$ADD_RESULT" | jq -r '.name' 2>/dev/null | sed 's|operations/workflows/||')
+        if [ -n "$OPERATION_NAME" ] && [ "$OPERATION_NAME" != "null" ]; then
+            if wait_firebase_operation "workflows/$OPERATION_NAME"; then
+                log_success "Firebaseプロジェクト追加完了: $PROJECT_ID"
+            else
+                log_warn "Firebaseプロジェクト追加を確認できませんでした（続行します）"
+            fi
+        fi
+    fi
+else
+    # 個人アカウントモード: Firebase CLI
+    firebase use "$PROJECT_ID" 2>/dev/null || {
+        log_warn "Firebaseプロジェクトが見つかりません。追加します..."
+        firebase projects:addfirebase "$PROJECT_ID" 2>/dev/null || true
+        firebase use "$PROJECT_ID"
+    }
+    log_success "Firebaseプロジェクト: $PROJECT_ID"
+fi
 
 # .firebasercにエイリアス追加（deploy-to-project.sh用）
 ALIAS_NAME=$(echo "$PROJECT_ID" | sed 's/docsplit-//' | sed 's/-docsplit//')
@@ -319,19 +417,60 @@ fi
 echo ""
 log_info "Step 3/7: フロントエンド環境変数生成..."
 
-# Firebase設定を取得
-FIREBASE_CONFIG=$(firebase apps:sdkconfig web --project "$PROJECT_ID" 2>/dev/null || echo "")
+# Firebase Webアプリ設定取得（認証モードで分岐）
+API_KEY=""
 
-if [ -n "$FIREBASE_CONFIG" ]; then
-    # 既存のWebアプリがある場合
-    API_KEY=$(echo "$FIREBASE_CONFIG" | grep -o '"apiKey": "[^"]*"' | cut -d'"' -f4)
-    AUTH_DOMAIN=$(echo "$FIREBASE_CONFIG" | grep -o '"authDomain": "[^"]*"' | cut -d'"' -f4)
-    STORAGE_BUCKET=$(echo "$FIREBASE_CONFIG" | grep -o '"storageBucket": "[^"]*"' | cut -d'"' -f4)
-    MESSAGING_SENDER_ID=$(echo "$FIREBASE_CONFIG" | grep -o '"messagingSenderId": "[^"]*"' | cut -d'"' -f4)
-    APP_ID=$(echo "$FIREBASE_CONFIG" | grep -o '"appId": "[^"]*"' | cut -d'"' -f4)
+if [ "$USE_SERVICE_ACCOUNT" = true ]; then
+    # サービスアカウントモード: API経由
+    log_info "Firebase Webアプリ確認（API）..."
+
+    # 既存Webアプリを取得
+    WEB_APPS=$(firebase_api_call GET "/projects/$PROJECT_ID/webApps")
+    APP_ID=$(echo "$WEB_APPS" | jq -r '.apps[0].appId // ""' 2>/dev/null)
+
+    if [ -z "$APP_ID" ] || [ "$APP_ID" = "null" ]; then
+        # Webアプリが存在しない場合は作成
+        log_info "Webアプリを作成中..."
+        CREATE_RESULT=$(firebase_api_call POST "/projects/$PROJECT_ID/webApps" '{"displayName": "DocSplit Web App"}')
+
+        OPERATION_NAME=$(echo "$CREATE_RESULT" | jq -r '.name' 2>/dev/null | sed 's|operations/workflows/||')
+        if [ -n "$OPERATION_NAME" ] && [ "$OPERATION_NAME" != "null" ]; then
+            wait_firebase_operation "workflows/$OPERATION_NAME"
+
+            # 作成後に再取得
+            WEB_APPS=$(firebase_api_call GET "/projects/$PROJECT_ID/webApps")
+            APP_ID=$(echo "$WEB_APPS" | jq -r '.apps[0].appId // ""' 2>/dev/null)
+        fi
+    fi
+
+    if [ -n "$APP_ID" ] && [ "$APP_ID" != "null" ]; then
+        # Webアプリ設定を取得
+        WEB_APP_NAME=$(echo "$WEB_APPS" | jq -r '.apps[0].name' 2>/dev/null)
+        CONFIG=$(firebase_api_call GET "/${WEB_APP_NAME}/config")
+
+        API_KEY=$(echo "$CONFIG" | jq -r '.apiKey // ""' 2>/dev/null)
+        AUTH_DOMAIN=$(echo "$CONFIG" | jq -r '.authDomain // ""' 2>/dev/null)
+        STORAGE_BUCKET=$(echo "$CONFIG" | jq -r '.storageBucket // ""' 2>/dev/null)
+        MESSAGING_SENDER_ID=$(echo "$CONFIG" | jq -r '.messagingSenderId // ""' 2>/dev/null)
+
+        log_success "Webアプリ設定取得完了"
+    else
+        log_warn "Webアプリの作成に失敗しました。手動で作成してください"
+    fi
 else
-    log_warn "Webアプリが見つかりません。Firebase Consoleで作成後、手動で.envを設定してください"
-    API_KEY=""
+    # 個人アカウントモード: Firebase CLI
+    FIREBASE_CONFIG=$(firebase apps:sdkconfig web --project "$PROJECT_ID" 2>/dev/null || echo "")
+
+    if [ -n "$FIREBASE_CONFIG" ]; then
+        # 既存のWebアプリがある場合
+        API_KEY=$(echo "$FIREBASE_CONFIG" | grep -o '"apiKey": "[^"]*"' | cut -d'"' -f4)
+        AUTH_DOMAIN=$(echo "$FIREBASE_CONFIG" | grep -o '"authDomain": "[^"]*"' | cut -d'"' -f4)
+        STORAGE_BUCKET=$(echo "$FIREBASE_CONFIG" | grep -o '"storageBucket": "[^"]*"' | cut -d'"' -f4)
+        MESSAGING_SENDER_ID=$(echo "$FIREBASE_CONFIG" | grep -o '"messagingSenderId": "[^"]*"' | cut -d'"' -f4)
+        APP_ID=$(echo "$FIREBASE_CONFIG" | grep -o '"appId": "[^"]*"' | cut -d'"' -f4)
+    else
+        log_warn "Webアプリが見つかりません。Firebase Consoleで作成後、手動で.envを設定してください"
+    fi
 fi
 
 if [ -n "$API_KEY" ]; then
@@ -508,9 +647,19 @@ echo ""
 log_info "Step 5/7: セキュリティルール & インデックスデプロイ..."
 
 cd "$ROOT_DIR"
-firebase deploy --only firestore:rules,firestore:indexes,storage --project "$PROJECT_ID" 2>&1 | \
-    grep -E "(✔|Error|Warning)" || true
-log_success "ルール & インデックス デプロイ完了"
+
+if [ "$USE_SERVICE_ACCOUNT" = true ]; then
+    # サービスアカウントモード: gcloud/APIで実行
+    log_warn "サービスアカウントモードでは、ルールデプロイは手動で実行してください"
+    log_info "コマンド:"
+    log_info "  firebase deploy --only firestore:rules,firestore:indexes,storage -P <alias>"
+    log_warn "（個人アカウントで firebase login 後に実行）"
+else
+    # 個人アカウントモード: Firebase CLI
+    firebase deploy --only firestore:rules,firestore:indexes,storage --project "$PROJECT_ID" 2>&1 | \
+        grep -E "(✔|Error|Warning)" || true
+    log_success "ルール & インデックス デプロイ完了"
+fi
 
 # インデックスビルド待機
 log_info "インデックスのビルドを待機中..."
@@ -567,9 +716,19 @@ else
     npm run build 2>/dev/null || npm run build
 
     cd "$ROOT_DIR"
-    firebase deploy --only functions --project "$PROJECT_ID" 2>&1 | \
-        grep -E "(✔|Error|Warning|functions\[)" || true
-    log_success "Cloud Functions デプロイ完了"
+
+    if [ "$USE_SERVICE_ACCOUNT" = true ]; then
+        # サービスアカウントモード: 警告を出して手動実行を促す
+        log_warn "サービスアカウントモードでは、Functionsデプロイは手動で実行してください"
+        log_info "コマンド:"
+        log_info "  firebase deploy --only functions -P <alias>"
+        log_warn "（個人アカウントで firebase login 後に実行、または組織管理者がCloud Buildの権限を確認）"
+    else
+        # 個人アカウントモード: Firebase CLI
+        firebase deploy --only functions --project "$PROJECT_ID" 2>&1 | \
+            grep -E "(✔|Error|Warning|functions\[)" || true
+        log_success "Cloud Functions デプロイ完了"
+    fi
 fi
 
 # ===========================================
@@ -584,9 +743,18 @@ else
     cd "$ROOT_DIR"
     npm run build 2>/dev/null || (cd frontend && npm run build)
 
-    firebase deploy --only hosting --project "$PROJECT_ID" 2>&1 | \
-        grep -E "(✔|Error|Hosting URL)" || true
-    log_success "Hosting デプロイ完了"
+    if [ "$USE_SERVICE_ACCOUNT" = true ]; then
+        # サービスアカウントモード: 警告を出して手動実行を促す
+        log_warn "サービスアカウントモードでは、Hostingデプロイは手動で実行してください"
+        log_info "コマンド:"
+        log_info "  firebase deploy --only hosting -P <alias>"
+        log_warn "（個人アカウントで firebase login 後に実行）"
+    else
+        # 個人アカウントモード: Firebase CLI
+        firebase deploy --only hosting --project "$PROJECT_ID" 2>&1 | \
+            grep -E "(✔|Error|Hosting URL)" || true
+        log_success "Hosting デプロイ完了"
+    fi
 fi
 
 # ===========================================

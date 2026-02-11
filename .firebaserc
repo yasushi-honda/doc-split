@@ -2,6 +2,7 @@
   "projects": {
     "default": "doc-split-dev",
     "dev": "doc-split-dev",
-    "kanameone": "docsplit-kanameone"
+    "kanameone": "docsplit-kanameone",
+    "cocoro": "docsplit-cocoro"
   }
 }
