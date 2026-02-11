@@ -210,7 +210,7 @@
 | doc-split リポジトリをクローン済み＋依存インストール済み | `ls CLAUDE.md && ls frontend/node_modules` （未実行時: `npm install`） |
 | `gcloud` CLI 認証済み | `gcloud auth list` |
 | ADC（Application Default Credentials）設定済み | `gcloud auth application-default login` |
-| **GCPで新規プロジェクトを作成する権限** | 組織管理者から付与、または個人アカウント |
+| **クライアントのGCPプロジェクトへのオーナー権限** | クライアントから招待済み（[クライアント向けガイド](client-setup.md)参照） |
 | Python 3 インストール済み | `python3 --version` |
 
 ---
@@ -220,23 +220,33 @@
 <div class="step-card">
   <div class="step-num">1</div>
   <div class="step-content">
-    <strong>クライアントから受領</strong><br>
-    クライアント名（例: "ABC介護"）、管理者メールアドレス、マスターデータCSV<br>
-    <small>※ GCPプロジェクトは Claude Code が自動作成します（プロジェクトID形式: <code>docsplit-&lt;client-name&gt;</code>）</small>
+    <strong>クライアントにGCPプロジェクト作成を依頼</strong><br>
+    <a href="client-setup.md" target="_blank">クライアント向けセットアップガイド</a>を共有し、以下を依頼:<br>
+    • <code>client-setup-gcp</code> スクリプトを実行してもらう<br>
+    • プロジェクトID（例: <code>docsplit-abc-kaigo</code>）を受領<br>
+    • 開発者（あなた）がオーナー権限で招待されていることを確認<br>
+    <small>※ クライアントがスクリプトを実行すると、GCPプロジェクト作成・課金設定・権限付与が自動で完了します</small>
   </div>
 </div>
 
 <div class="step-card">
   <div class="step-num">2</div>
   <div class="step-content">
-    <strong>GCP Console で OAuth 同意画面を設定</strong><br>
-    <small>※ Claude Code がGCPプロジェクトを作成した後に実行してください</small><br>
-    <a href="https://console.cloud.google.com/apis/credentials/consent" target="_blank">OAuth同意画面</a>（作成されたプロジェクトを選択）→ User Type: <code>外部</code> → アプリ名: <code>DocSplit</code>、サポートメール入力 → スコープ追加: <code>gmail.readonly</code> → テストユーザーに<strong>監視対象のGmailアドレス</strong>を追加
+    <strong>クライアントから受領</strong><br>
+    管理者メールアドレス、マスターデータCSV
   </div>
 </div>
 
 <div class="step-card">
   <div class="step-num">3</div>
+  <div class="step-content">
+    <strong>GCP Console で OAuth 同意画面を設定</strong><br>
+    <a href="https://console.cloud.google.com/apis/credentials/consent" target="_blank">OAuth同意画面</a>（クライアントのプロジェクトを選択）→ User Type: <code>外部</code> → アプリ名: <code>DocSplit</code>、サポートメール入力 → スコープ追加: <code>gmail.readonly</code> → テストユーザーに<strong>監視対象のGmailアドレス</strong>を追加
+  </div>
+</div>
+
+<div class="step-card">
+  <div class="step-num">4</div>
   <div class="step-content">
     <strong>GCP Console で OAuth クライアントID作成</strong><br>
     <a href="https://console.cloud.google.com/apis/credentials" target="_blank">認証情報ページ</a>（同じプロジェクト）→ 「認証情報を作成」→「OAuth クライアント ID」→ 種類: <code>デスクトップアプリ</code><br>
@@ -245,12 +255,12 @@
 </div>
 
 <div class="step-card">
-  <div class="step-num">4</div>
+  <div class="step-num">5</div>
   <div class="step-content">
     <strong>OAuth 認証コードを取得</strong><br>
     doc-split ディレクトリで以下のコマンドを実行:<br>
     <code>./scripts/setup-gmail-auth.sh --get-code --client-id=&lt;上で取得したClient ID&gt;</code><br>
-    ブラウザが自動で開く → Googleログイン（Step 2で追加したテストユーザーでログイン） → ターミナルに表示された<strong>認証コード</strong>をコピー
+    ブラウザが自動で開く → Googleログイン（Step 3で追加したテストユーザーでログイン） → ターミナルに表示された<strong>認証コード</strong>をコピー
   </div>
 </div>
 
