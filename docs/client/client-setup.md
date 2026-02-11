@@ -147,23 +147,13 @@ GUIから手動でセットアップしたい方向けです。画面の指示�
 
 **Mac の方:**
 
-<a href="https://raw.githubusercontent.com/yasushi-honda/doc-split/main/scripts/client-setup-gcp.command" class="download-btn">
-📥 client-setup-gcp.command をダウンロード
-</a>
-
-<small>**ダウンロード方法:** リンクを**右クリック** → **「名前を付けてリンク先を保存」** を選択</small>
-
-<details>
-<summary>または、ターミナルでダウンロード（クリックして展開）</summary>
+ターミナルを開いて、以下をコピー&ペーストして Enter キーを押してください：
 
 ```bash
-curl -o ~/Downloads/client-setup-gcp.command https://raw.githubusercontent.com/yasushi-honda/doc-split/main/scripts/client-setup-gcp.command
-chmod +x ~/Downloads/client-setup-gcp.command
+curl -sSL https://raw.githubusercontent.com/yasushi-honda/doc-split/main/scripts/client-setup-gcp.sh | bash
 ```
 
-ダウンロード後、Finderで `ダウンロード` フォルダを開き、`client-setup-gcp.command` をダブルクリックしてください。
-
-</details>
+<small>**ターミナルの開き方:** `アプリケーション` → `ユーティリティ` → `ターミナル`</small>
 
 <br><br>
 
@@ -172,29 +162,27 @@ chmod +x ~/Downloads/client-setup-gcp.command
 ターミナルで以下を実行:
 
 ```bash
-curl -o ~/client-setup-gcp.sh https://raw.githubusercontent.com/yasushi-honda/doc-split/main/scripts/client-setup-gcp.sh
-chmod +x ~/client-setup-gcp.sh
-~/client-setup-gcp.sh
+curl -sSL https://raw.githubusercontent.com/yasushi-honda/doc-split/main/scripts/client-setup-gcp.sh | bash
 ```
 
 <br>
 
 **Windows の方:**
 
-<a href="https://raw.githubusercontent.com/yasushi-honda/doc-split/main/scripts/client-setup-gcp.bat" class="download-btn">
-📥 client-setup-gcp.bat をダウンロード
-</a>
-
-<small>**ダウンロード方法:** リンクを**右クリック** → **「名前を付けてリンク先を保存」** を選択</small>
-
-<details>
-<summary>または、PowerShellでダウンロード（クリックして展開）</summary>
+PowerShellを開いて、以下をコピー&ペーストして Enter キーを押してください：
 
 ```powershell
-Invoke-WebRequest -Uri "https://raw.githubusercontent.com/yasushi-honda/doc-split/main/scripts/client-setup-gcp.bat" -OutFile "$env:USERPROFILE\Downloads\client-setup-gcp.bat"
+irm https://raw.githubusercontent.com/yasushi-honda/doc-split/main/scripts/client-setup-gcp.bat | iex
 ```
 
-ダウンロード後、エクスプローラーで `ダウンロード` フォルダを開き、`client-setup-gcp.bat` をダブルクリックしてください。
+<small>**PowerShellの開き方:** `スタートメニュー` で「PowerShell」と検索</small>
+
+<details>
+<summary>または、ファイルをダウンロードして実行（クリックして展開）</summary>
+
+1. <a href="https://raw.githubusercontent.com/yasushi-honda/doc-split/main/scripts/client-setup-gcp.bat">このリンク</a>を**右クリック** → **「名前を付けてリンク先を保存」**
+2. エクスプローラーで `ダウンロード` フォルダを開く
+3. `client-setup-gcp.bat` をダブルクリック
 
 </details>
 
@@ -203,20 +191,9 @@ Invoke-WebRequest -Uri "https://raw.githubusercontent.com/yasushi-honda/doc-spli
 </div>
 
 <div class="timeline-item" data-step="3">
-<h3>スクリプトの実行</h3>
+<h3>セットアップの開始</h3>
 
-**Mac の方:**
-1. Finderで `ダウンロード` フォルダを開く
-2. `client-setup-gcp.command` をダブルクリック
-3. ターミナルが自動で開き、セットアップが開始されます
-
-**Linux の方:**
-前のステップでターミナルコマンドを実行済みの場合は、このステップは不要です。
-
-**Windows の方:**
-1. エクスプローラーで `ダウンロード` フォルダを開く
-2. `client-setup-gcp.bat` をダブルクリック
-3. コマンドプロンプトが自動で開き、セットアップが開始されます
+前のステップ（Step 2）でターミナルコマンドを実行すると、自動的にセットアップが開始されます。
 
 <div class="info-box">
 <strong>自動で実行される内容:</strong><br>
@@ -224,6 +201,8 @@ Invoke-WebRequest -Uri "https://raw.githubusercontent.com/yasushi-honda/doc-spli
 2. Google Cloud への認証（ブラウザが開きます）<br>
 3. プロジェクト情報の入力（次のステップ）
 </div>
+
+**画面の指示に従って進めてください。**
 
 </div>
 
