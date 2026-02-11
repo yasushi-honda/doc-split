@@ -417,19 +417,16 @@
     }
 
     function _validateForm() {
+      // 必須フィールド: プロジェクトIDと管理者メールのみ
+      // OAuth認証情報とCSVは段階的に入力可能（空欄の場合はプレースホルダー表示）
       var required = [
         { id: 'project-id', label: 'プロジェクトID' },
-        { id: 'admin-email', label: '管理者メール', type: 'email' },
-        { id: 'client-id', label: 'Client ID' },
-        { id: 'client-secret', label: 'Client Secret' },
-        { id: 'auth-code', label: '認証コード' },
-        { id: 'csv-customers', label: '顧客CSV' },
-        { id: 'csv-documents', label: '書類種別CSV' },
-        { id: 'csv-offices', label: '事業所CSV' }
+        { id: 'admin-email', label: '管理者メール', type: 'email' }
       ];
       var errors = [];
       var emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+      // 必須フィールドのチェック
       for (var i = 0; i < required.length; i++) {
         var el = document.getElementById(required[i].id);
         if (!el) continue;
@@ -445,10 +442,18 @@
         }
       }
 
+      // 任意フィールドのエラー状態をクリア
+      var optional = ['client-id', 'client-secret', 'auth-code', 'csv-customers', 'csv-documents', 'csv-offices'];
+      for (var j = 0; j < optional.length; j++) {
+        var optEl = document.getElementById(optional[j]);
+        if (optEl) optEl.classList.remove('input-error');
+      }
+
       var errDiv = document.getElementById('validation-errors');
       if (errDiv) {
         if (errors.length > 0) {
-          errDiv.innerHTML = '<strong>未入力の項目があります:</strong><br>' + errors.join('<br>');
+          errDiv.innerHTML = '<strong>必須項目を入力してください:</strong><br>' + errors.join('<br>')
+            + '<br><br><small>※ OAuth認証情報とCSVは後から入力できます（空欄の場合はプレースホルダーが表示されます）</small>';
           errDiv.style.display = 'block';
         } else {
           errDiv.innerHTML = '';

@@ -258,6 +258,11 @@
 
 ## プロンプト生成フォーム
 
+<div class="info-box">
+<strong>段階的な入力が可能です</strong><br>
+OAuth認証情報やCSVは空欄でもプロンプト生成できます。空欄の場合はプレースホルダー（<code>&lt;client-id&gt;</code>等）が表示されるので、後から手動で置き換えてください。
+</div>
+
 <div class="delivery-form">
 <h3>クライアント情報</h3>
 <div class="form-grid">
@@ -271,34 +276,34 @@
   </div>
 </div>
 
-<h3>Gmail OAuth 認証情報</h3>
+<h3>Gmail OAuth 認証情報 <span class="optional-tag">（OAuth設定後に入力）</span></h3>
 <div class="form-grid">
   <div class="form-group">
-    <label>Client ID *</label>
+    <label>Client ID <span class="optional-tag">任意</span></label>
     <input type="text" id="client-id" placeholder="123456789.apps.googleusercontent.com" oninput="updatePrompts()">
   </div>
   <div class="form-group">
-    <label>Client Secret *</label>
+    <label>Client Secret <span class="optional-tag">任意</span></label>
     <input type="text" id="client-secret" placeholder="GOCSPX-xxxx" oninput="updatePrompts()">
   </div>
   <div class="form-group full-width">
-    <label>認証コード *（<code>./scripts/setup-gmail-auth.sh --get-code --client-id=X</code> で取得）</label>
+    <label>認証コード <span class="optional-tag">任意</span>（<code>./scripts/setup-gmail-auth.sh --get-code --client-id=X</code> で取得）</label>
     <input type="text" id="auth-code" placeholder="4/0AY-xxxx" oninput="updatePrompts()">
   </div>
 </div>
 
-<h3>マスターデータCSV</h3>
+<h3>マスターデータCSV <span class="optional-tag">（クライアントから受領後に入力）</span></h3>
 <div class="form-grid">
   <div class="form-group">
-    <label>顧客CSV *</label>
+    <label>顧客CSV <span class="optional-tag">任意</span></label>
     <input type="text" id="csv-customers" placeholder="path/to/customers.csv" oninput="updatePrompts()">
   </div>
   <div class="form-group">
-    <label>書類種別CSV *</label>
+    <label>書類種別CSV <span class="optional-tag">任意</span></label>
     <input type="text" id="csv-documents" placeholder="path/to/documents.csv" oninput="updatePrompts()">
   </div>
   <div class="form-group">
-    <label>事業所CSV *</label>
+    <label>事業所CSV <span class="optional-tag">任意</span></label>
     <input type="text" id="csv-offices" placeholder="path/to/offices.csv" oninput="updatePrompts()">
   </div>
   <div class="form-group">
