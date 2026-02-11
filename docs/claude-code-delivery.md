@@ -196,6 +196,46 @@
 
 ---
 
+## 納品シナリオ
+
+### シナリオ1: 基本納品（Gmail連携なし）
+
+**必要な情報:**
+- ✅ プロジェクトID（クライアントから受領）
+- ✅ 管理者メールアドレス（クライアントから受領）
+
+**Claude Codeで自動実行される内容:**
+- Firebase Hosting デプロイ
+- Firestore/Storage ルール設定
+- 管理者ユーザー登録
+- Cloud Functions デプロイ
+- マスターデータ投入（CSV受領時）
+
+**所要時間:** 約10分（Claude Code実行のみ）
+
+---
+
+### シナリオ2: 完全納品（Gmail自動取得含む）
+
+**必要な情報:**
+- ✅ プロジェクトID（クライアントから受領）
+- ✅ 管理者メールアドレス（クライアントから受領）
+- ✅ **OAuth認証情報**（開発者が事前にGCP Consoleで設定）
+  - Client ID
+  - Client Secret
+  - 認証コード
+
+**Claude Codeで自動実行される内容:**
+- シナリオ1の内容すべて
+- **Gmail OAuth設定** ← 追加
+- Gmail自動取得の有効化
+
+**所要時間:** 約5分（OAuth設定） + 約10分（Claude Code実行） = 約15分
+
+**推奨:** 実運用ではGmail連携が必須のため、シナリオ2を推奨します。
+
+---
+
 ## 開発者の前提条件
 
 <div class="warn-box">
@@ -217,6 +257,8 @@
 
 ## 事前準備（人間が行う作業）
 
+### 共通（シナリオ1・2両方で必要）
+
 <div class="step-card">
   <div class="step-num">1</div>
   <div class="step-content">
@@ -235,6 +277,15 @@
     <strong>クライアントから受領</strong><br>
     管理者メールアドレス、マスターデータCSV
   </div>
+</div>
+
+---
+
+### Gmail連携時のみ（シナリオ2で必要）
+
+<div class="info-box">
+<strong>シナリオ1（Gmail連携なし）の場合は、このセクションをスキップしてください。</strong><br>
+以下はGmail自動取得を有効化する場合のみ必要です（約5分）。
 </div>
 
 <div class="step-card">

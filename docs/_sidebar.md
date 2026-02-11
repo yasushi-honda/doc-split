@@ -7,6 +7,7 @@
 * **納品・運用**
   * [納品フロー](deployment-flow.md)
   * [Claude Code 自動納品](claude-code-delivery.md)
+  * [クライアント向けセットアップ](client/) ⭐
   * [セットアップ手順](setup-guide.md)
   * [Gmail連携設定](operation/gmail-setup-guide.md)
   * [運用ガイド](operation-guide.md)

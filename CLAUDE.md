@@ -53,11 +53,31 @@ firebase deploy --only functions -P <alias>      # Functionsのみ（直接実�
 | 全クライアント一括 | `deploy-all-clients.sh [--rules\|--full]` |
 
 ### クライアント環境セットアップ
+
+**推奨フロー**: クライアント側でGCPプロジェクト作成 → Claude Codeで自動納品
+
+**Step 1 (クライアント側・約5分)**:
+```bash
+# Mac: client-setup-gcp.command をダブルクリック
+# Linux: ./scripts/client-setup-gcp.sh
+# Windows: client-setup-gcp.bat をダブルクリック
+```
+
+**Step 2 (開発者側・約10分)**:
+1. GitHub Pages納品フォーム: https://yasushi-honda.github.io/doc-split/#/claude-code-delivery
+2. プロジェクトID + 管理者メールを入力 → プロンプト生成
+3. Claude Codeに貼り付け → 自動実行
+
+**手動実行（スクリプト直接実行時）**:
 ```bash
 ./scripts/setup-tenant.sh <project-id> <admin-email> --with-gmail  # 推奨
 ./scripts/setup-tenant.sh <project-id> <admin-email> --with-gmail --client-id=X --client-secret=Y --auth-code=Z --yes  # CI用
 ```
-詳細は `docs/context/delivery-and-update-guide.md` 参照。
+
+詳細:
+- [Claude Code自動納品](https://yasushi-honda.github.io/doc-split/#/claude-code-delivery)（GitHub Pages）
+- [クライアント向けガイド](https://yasushi-honda.github.io/doc-split/client/)（GitHub Pages）
+- [納品・アップデート運用](docs/context/delivery-and-update-guide.md)（リポジトリ内）
 
 ### マスターデータ
 ```bash

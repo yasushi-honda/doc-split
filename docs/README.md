@@ -70,8 +70,21 @@ graph LR
 
 ## 納品方式
 
-**セットアップスクリプト方式（雛形なし）** を採用しています。
+**クライアント主導 + Claude Code自動化方式** を採用しています。
 
-- 各クライアントが独立したGCPプロジェクトを所有
-- `setup-tenant.sh` で初期設定を自動化
-- 詳細は[納品フロー](deployment-flow.md)を参照
+### フロー概要
+
+1. **クライアント**: [client-setup-gcp スクリプト](client/)でGCPプロジェクト作成（約5分）
+2. **開発者**: [Claude Code自動納品](claude-code-delivery.md)でFirebase設定・デプロイ（約10分）
+
+### 特徴
+
+- ✅ 各クライアントが独立したGCPプロジェクトを所有
+- ✅ クライアント側スクリプトで課金設定・権限付与を自動化
+- ✅ Claude Codeでセットアップ・デプロイを完全自動化
+- ✅ Gmail連携の有無を選択可能（シナリオ1/2）
+
+詳細は以下を参照：
+- [Claude Code 自動納品](claude-code-delivery.md)（開発者向け）
+- [クライアント向けセットアップガイド](client/)（クライアント向け）
+- [納品フロー詳細](deployment-flow.md)
