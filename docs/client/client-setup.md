@@ -145,27 +145,37 @@ gcloud auth login
 
 <div class="download-card">
 
-**Mac / Linux 向け:**
+**お使いのOSを選んでください:**
 
-<a href="https://raw.githubusercontent.com/yasushi-honda/doc-split/main/scripts/client-setup-gcp.sh" class="download-btn" download>
-📥 client-setup-gcp.sh をダウンロード
-</a>
+<br>
 
-<br><br>
-
-**Mac（ダブルクリック実行）向け:**
+**Mac の方:**
 
 <a href="https://raw.githubusercontent.com/yasushi-honda/doc-split/main/scripts/client-setup-gcp.command" class="download-btn" download>
 📥 client-setup-gcp.command をダウンロード
 </a>
 
+<small>※ ダウンロード後、ダブルクリックで実行できます。ターミナルの知識は不要です。</small>
+
 <br><br>
 
-**Windows 向け:**
+**Linux の方:**
+
+<a href="https://raw.githubusercontent.com/yasushi-honda/doc-split/main/scripts/client-setup-gcp.sh" class="download-btn" download>
+📥 client-setup-gcp.sh をダウンロード
+</a>
+
+<small>※ ターミナルで実行します（下記の「スクリプトの実行」を参照）。</small>
+
+<br><br>
+
+**Windows の方:**
 
 <a href="https://raw.githubusercontent.com/yasushi-honda/doc-split/main/scripts/client-setup-gcp.bat" class="download-btn" download>
 📥 client-setup-gcp.bat をダウンロード
 </a>
+
+<small>※ ダウンロード後、ダブルクリックで実行できます。</small>
 
 </div>
 
@@ -174,19 +184,19 @@ gcloud auth login
 <div class="timeline-item" data-step="3">
 <h3>スクリプトの実行</h3>
 
-**Mac（ダブルクリック）の場合:**
+**Mac の方:**
 1. ダウンロードした `client-setup-gcp.command` をFinderでダブルクリック
-2. ターミナルが自動で開きます
+2. ターミナルが自動で開き、セットアップが開始されます
 
-**Mac / Linux（ターミナル）の場合:**
+**Linux の方:**
 ```bash
 chmod +x client-setup-gcp.sh
 ./client-setup-gcp.sh
 ```
 
-**Windows の場合:**
+**Windows の方:**
 1. ダウンロードした `client-setup-gcp.bat` をダブルクリック
-2. コマンドプロンプトが開きます
+2. コマンドプロンプトが自動で開き、セットアップが開始されます
 
 </div>
 
