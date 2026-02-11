@@ -64,6 +64,108 @@ AI駆動開発において、このドキュメントを参照することで一
 - クライアントが課金アカウントを設定できる
 - クライアントのGmail（監視対象）にアクセス可能
 
+### 組織アカウント環境での対応（重要）
+
+**クライアントがGoogle Workspace組織アカウントの場合、以下の制約に注意が必要です。**
+
+#### 「Secure by Default Organizations」の影響
+
+2024年以降、新規にGCPアカウントを作成したクライアントには、Googleの「Secure by Default Organizations」機能が**自動適用**されます。
+
+**適用されるタイミング**:
+- 納品日にクライアントが初めてGCPアカウントを作成
+- 同時に課金アカウントを初めて設定
+
+**発生する制約**:
+1. **別ドメインへのIAMロール付与が不可** (`constraints/iam.allowedPolicyMemberDomains`)
+   - 開発者（gmail.com等の外部ドメイン）をプロジェクトオーナーに追加できない
+
+2. **サービスアカウントキーの作成が不可** (`constraints/iam.disableServiceAccountKeyCreation`)
+   - サービスアカウントのJSONキーを作成できない
+
+#### 対応方法: サービスアカウント方式（推奨）
+
+組織アカウント環境では、**サービスアカウント + JSONキー**方式を採用します。
+
+**手順概要**:
+1. クライアントがGCPプロジェクト作成
+2. プロジェクトレベルで組織ポリシーを緩和（下記参照）
+3. サービスアカウント作成 + Ownerロール付与
+4. JSONキー作成 → 開発者に共有
+5. 開発者がサービスアカウントで納品・メンテナンス実施
+
+**詳細手順は ADR-0011 を参照**: `docs/adr/0011-service-account-delivery-for-org-accounts.md`
+
+#### クライアント側作業: 組織ポリシーの緩和（GCPコンソール）
+
+**Step 1**: GCPコンソール > 該当プロジェクト >「IAMと管理」>「組織のポリシー」
+
+**Step 2**: `iam.allowedPolicyMemberDomains` を緩和
+1. 検索バーで `iam.allowedPolicyMemberDomains` を検索
+2. 「ポリシーを管理」→「親をオーバーライド」を選択
+3. 「すべてのドメインを許可」を選択
+4. 「ポリシーの適用」: **「交換」**を選択
+5. 「ポリシーを設定」をクリック
+
+**Step 3**: `iam.disableServiceAccountKeyCreation` を緩和
+1. 検索バーで `iam.disableServiceAccountKeyCreation` を検索
+2. 「ポリシーを管理」→「親をオーバーライド」を選択
+3. **「オフ」**を選択
+4. 「ポリシーを設定」をクリック
+
+**Step 4**: サービスアカウント作成
+1. 「IAMと管理」>「サービスアカウント」>「サービスアカウントを作成」
+2. 名前: `docsplit-deployer`
+3. ロール: **「オーナー」**を選択
+4. 完了後、「キー」タブ →「鍵を追加」→「新しい鍵を作成」
+5. 形式: **JSON**
+6. ダウンロードしたJSONキーファイルを開発者に安全に共有
+
+**重要**: プロジェクトレベルでのポリシー緩和のため、組織全体への影響はありません。
+
+#### 開発者側作業: サービスアカウントで納品
+
+```bash
+# Step 1: キーファイルを安全な場所に配置
+mkdir -p ~/.gcp-keys
+mv ~/Downloads/<project-id>-xxxxx.json ~/.gcp-keys/<project-id>-key.json
+chmod 600 ~/.gcp-keys/<project-id>-key.json
+
+# Step 2: 環境変数設定
+export GOOGLE_APPLICATION_CREDENTIALS=~/.gcp-keys/<project-id>-key.json
+
+# Step 3: 初回デプロイ実行（以降は通常フロー）
+./scripts/setup-tenant.sh <project-id> <admin-email> --with-gmail
+```
+
+#### セキュリティ強化（初回デプロイ後・推奨）
+
+初回デプロイ完了後、Ownerロールから最小権限の6ロールに縮小：
+
+```bash
+# Ownerを削除
+gcloud projects remove-iam-policy-binding <project-id> \
+  --member="serviceAccount:docsplit-deployer@<project-id>.iam.gserviceaccount.com" \
+  --role="roles/owner"
+
+# 最小権限6ロールを付与
+for role in \
+  roles/firebase.admin \
+  roles/cloudfunctions.developer \
+  roles/iam.serviceAccountUser \
+  roles/storage.admin \
+  roles/datastore.owner \
+  roles/serviceusage.serviceUsageAdmin; do
+  gcloud projects add-iam-policy-binding <project-id> \
+    --member="serviceAccount:docsplit-deployer@<project-id>.iam.gserviceaccount.com" \
+    --role="$role"
+done
+```
+
+**参考**: https://cloud.google.com/resource-manager/docs/secure-by-default-organizations
+
+---
+
 ### 納品シナリオ
 
 **シナリオ1（Gmail連携なし）**: プロジェクトID + 管理者メールのみで基本納品（約10分）
@@ -593,6 +695,7 @@ node scripts/migrate-document-fields.js <project-id>
 
 | 日付 | 内容 |
 |------|------|
+| 2026-02-11 | 組織アカウント環境での対応セクション追加（ADR-0011参照） |
 | 2026-02-05 | ヘルプページ追加、セットアップ情報タブ追加 |
 | 2026-01-25 | 過去受信分の巻取り対応セクション追加 |
 | 2026-01-20 | 初版作成 - 納品・アップデートフロー確定 |
