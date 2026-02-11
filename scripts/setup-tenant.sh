@@ -24,8 +24,14 @@
 #
 #   【サービスアカウントモード】
 #     gcloud auth activate-service-account で認証されたSAで実行
-#     → Firebase Management API を使用（一部ステップは手動実行が必要）
-#     → ルール/Functions/Hostingデプロイは個人アカウントで別途実行
+#     → Firebase Management API を使用
+#     → GOOGLE_APPLICATION_CREDENTIALS設定でFirebase CLIのdeploy系も実行可能
+#     → 未設定の場合、ルール/Functions/Hostingデプロイは手動実行が必要
+#
+#   サービスアカウントで完全自動化する場合:
+#     export GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account-key.json
+#     gcloud auth activate-service-account --key-file=$GOOGLE_APPLICATION_CREDENTIALS
+#     ./setup-tenant.sh <project-id> <admin-email> --yes
 #
 # 実行内容:
 #   1. GCP API有効化
@@ -217,6 +223,19 @@ fi
 
 echo -e "${YELLOW}現在のgcloud認証アカウント: ${CURRENT_ACCOUNT}${NC}"
 echo -e "${BLUE}認証モード: ${AUTH_MODE}${NC}"
+
+# サービスアカウントモードの場合、GOOGLE_APPLICATION_CREDENTIALSを確認
+if [ "$USE_SERVICE_ACCOUNT" = true ]; then
+    if [ -n "$GOOGLE_APPLICATION_CREDENTIALS" ]; then
+        echo -e "${GREEN}✓ GOOGLE_APPLICATION_CREDENTIALS: $GOOGLE_APPLICATION_CREDENTIALS${NC}"
+        FIREBASE_CLI_SA_ENABLED=true
+    else
+        echo -e "${YELLOW}⚠ GOOGLE_APPLICATION_CREDENTIALS が未設定${NC}"
+        echo -e "${YELLOW}  → Firebase CLIのdeploy系コマンドは手動実行が必要です${NC}"
+        FIREBASE_CLI_SA_ENABLED=false
+    fi
+fi
+
 echo ""
 echo "このアカウントがプロジェクト '$PROJECT_ID' のオーナーまたは編集者である必要があります。"
 echo ""
@@ -648,14 +667,15 @@ log_info "Step 5/7: セキュリティルール & インデックスデプロイ
 
 cd "$ROOT_DIR"
 
-if [ "$USE_SERVICE_ACCOUNT" = true ]; then
-    # サービスアカウントモード: gcloud/APIで実行
-    log_warn "サービスアカウントモードでは、ルールデプロイは手動で実行してください"
-    log_info "コマンド:"
-    log_info "  firebase deploy --only firestore:rules,firestore:indexes,storage -P <alias>"
-    log_warn "（個人アカウントで firebase login 後に実行）"
+if [ "$USE_SERVICE_ACCOUNT" = true ] && [ "$FIREBASE_CLI_SA_ENABLED" != true ]; then
+    # サービスアカウントモード + GOOGLE_APPLICATION_CREDENTIALS未設定
+    log_warn "GOOGLE_APPLICATION_CREDENTIALS が未設定のため、ルールデプロイは手動で実行してください"
+    log_info "手順:"
+    log_info "  1. export GOOGLE_APPLICATION_CREDENTIALS=/path/to/key.json"
+    log_info "  2. firebase deploy --only firestore:rules,firestore:indexes,storage -P <alias>"
+    log_info "または個人アカウントで firebase login 後に実行"
 else
-    # 個人アカウントモード: Firebase CLI
+    # 個人アカウントモード または SA + GOOGLE_APPLICATION_CREDENTIALS設定済み
     firebase deploy --only firestore:rules,firestore:indexes,storage --project "$PROJECT_ID" 2>&1 | \
         grep -E "(✔|Error|Warning)" || true
     log_success "ルール & インデックス デプロイ完了"
@@ -717,14 +737,16 @@ else
 
     cd "$ROOT_DIR"
 
-    if [ "$USE_SERVICE_ACCOUNT" = true ]; then
-        # サービスアカウントモード: 警告を出して手動実行を促す
-        log_warn "サービスアカウントモードでは、Functionsデプロイは手動で実行してください"
-        log_info "コマンド:"
-        log_info "  firebase deploy --only functions -P <alias>"
-        log_warn "（個人アカウントで firebase login 後に実行、または組織管理者がCloud Buildの権限を確認）"
+    if [ "$USE_SERVICE_ACCOUNT" = true ] && [ "$FIREBASE_CLI_SA_ENABLED" != true ]; then
+        # サービスアカウントモード + GOOGLE_APPLICATION_CREDENTIALS未設定
+        log_warn "GOOGLE_APPLICATION_CREDENTIALS が未設定のため、Functionsデプロイは手動で実行してください"
+        log_info "手順:"
+        log_info "  1. export GOOGLE_APPLICATION_CREDENTIALS=/path/to/key.json"
+        log_info "  2. firebase deploy --only functions -P <alias>"
+        log_info "または個人アカウントで firebase login 後に実行"
+        log_warn "（組織ポリシーでCloud Buildの権限エラーが出る場合は、組織管理者に確認）"
     else
-        # 個人アカウントモード: Firebase CLI
+        # 個人アカウントモード または SA + GOOGLE_APPLICATION_CREDENTIALS設定済み
         firebase deploy --only functions --project "$PROJECT_ID" 2>&1 | \
             grep -E "(✔|Error|Warning|functions\[)" || true
         log_success "Cloud Functions デプロイ完了"
@@ -743,14 +765,15 @@ else
     cd "$ROOT_DIR"
     npm run build 2>/dev/null || (cd frontend && npm run build)
 
-    if [ "$USE_SERVICE_ACCOUNT" = true ]; then
-        # サービスアカウントモード: 警告を出して手動実行を促す
-        log_warn "サービスアカウントモードでは、Hostingデプロイは手動で実行してください"
-        log_info "コマンド:"
-        log_info "  firebase deploy --only hosting -P <alias>"
-        log_warn "（個人アカウントで firebase login 後に実行）"
+    if [ "$USE_SERVICE_ACCOUNT" = true ] && [ "$FIREBASE_CLI_SA_ENABLED" != true ]; then
+        # サービスアカウントモード + GOOGLE_APPLICATION_CREDENTIALS未設定
+        log_warn "GOOGLE_APPLICATION_CREDENTIALS が未設定のため、Hostingデプロイは手動で実行してください"
+        log_info "手順:"
+        log_info "  1. export GOOGLE_APPLICATION_CREDENTIALS=/path/to/key.json"
+        log_info "  2. firebase deploy --only hosting -P <alias>"
+        log_info "または個人アカウントで firebase login 後に実行"
     else
-        # 個人アカウントモード: Firebase CLI
+        # 個人アカウントモード または SA + GOOGLE_APPLICATION_CREDENTIALS設定済み
         firebase deploy --only hosting --project "$PROJECT_ID" 2>&1 | \
             grep -E "(✔|Error|Hosting URL)" || true
         log_success "Hosting デプロイ完了"
