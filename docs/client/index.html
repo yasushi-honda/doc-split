@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>DocSplit - クライアント様向けセットアップガイド</title>
+  <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1" />
+  <meta name="description" content="DocSplit - クライアント様向けセットアップガイド">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, minimum-scale=1.0">
+  <link rel="icon" href="https://doc-split-dev.web.app/favicon.png">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsify@4/lib/themes/vue.css">
+  <style>
+    :root {
+      --theme-color: #667eea;
+    }
+    .sidebar {
+      background-color: #f8fafc;
+    }
+    .sidebar-nav > ul > li > a {
+      font-weight: bold;
+    }
+    .markdown-section h1 {
+      color: #667eea;
+    }
+    .markdown-section h2 {
+      border-bottom: 2px solid #667eea;
+      padding-bottom: 0.3em;
+    }
+    .app-name-link img {
+      max-width: 40px;
+      margin-right: 10px;
+    }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <script>
+    window.$docsify = {
+      name: '<img src="https://doc-split-dev.web.app/app-icon.png" alt="DocSplit">DocSplit セットアップガイド',
+      repo: '',  // リポジトリリンクを非表示
+      loadSidebar: true,
+      subMaxLevel: 2,
+      auto2top: true,
+      homepage: 'client-setup.md',
+      search: {
+        placeholder: '検索...',
+        noData: '見つかりませんでした',
+        paths: 'auto',
+        depth: 2
+      },
+      pagination: {
+        previousText: '前へ',
+        nextText: '次へ'
+      }
+    }
+  </script>
+  <!-- Docsify -->
+  <script src="https://cdn.jsdelivr.net/npm/docsify@4"></script>
+  <!-- プラグイン -->
+  <script src="https://cdn.jsdelivr.net/npm/docsify/lib/plugins/search.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/docsify-pagination/dist/docsify-pagination.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/docsify/lib/plugins/zoom-image.min.js"></script>
+</body>
+</html>

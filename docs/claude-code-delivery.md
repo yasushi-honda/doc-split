@@ -210,7 +210,7 @@
 | doc-split リポジトリをクローン済み＋依存インストール済み | `ls CLAUDE.md && ls frontend/node_modules` （未実行時: `npm install`） |
 | `gcloud` CLI 認証済み | `gcloud auth list` |
 | ADC（Application Default Credentials）設定済み | `gcloud auth application-default login` |
-| **クライアントのGCPプロジェクトへのオーナー権限** | クライアントから招待済み（[クライアント向けガイド](client-setup.md)参照） |
+| **クライアントのGCPプロジェクトへのオーナー権限** | クライアントから招待済み（[クライアント向けガイド](client/)参照） |
 | Python 3 インストール済み | `python3 --version` |
 
 ---
@@ -221,7 +221,7 @@
   <div class="step-num">1</div>
   <div class="step-content">
     <strong>クライアントにGCPプロジェクト作成を依頼</strong><br>
-    <a href="client-setup.md" target="_blank">クライアント向けセットアップガイド</a>を共有し、以下を依頼:<br>
+    <a href="client/" target="_blank">クライアント向けセットアップガイド</a>を共有し、以下を依頼:<br>
     • <code>client-setup-gcp</code> スクリプトを実行してもらう<br>
     • プロジェクトID（例: <code>docsplit-abc-kaigo</code>）を受領<br>
     • 開発者（あなた）がオーナー権限で招待されていることを確認<br>

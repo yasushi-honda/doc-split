@@ -299,7 +299,3 @@ chmod +x client-setup-gcp.sh
 ## サポート
 
 ご不明な点がございましたら、開発者にお問い合わせください。
-
----
-
-> **関連ドキュメント**: [開発者向け納品ガイド](claude-code-delivery.md)
