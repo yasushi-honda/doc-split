@@ -249,8 +249,8 @@
 | Firebase CLI インストール済み | `firebase --version`（未導入時: `npm install -g firebase-tools`） |
 | doc-split リポジトリをクローン済み＋依存インストール済み | `ls CLAUDE.md && ls frontend/node_modules` （未実行時: `npm install`） |
 | `gcloud` CLI 認証済み | `gcloud auth list` |
-| ADC（Application Default Credentials）設定済み | `gcloud auth application-default login` |
-| **クライアントのGCPプロジェクトへのオーナー権限** | クライアントから招待済み（[クライアント向けガイド](client/)参照） |
+| ADC（Application Default Credentials）設定済み **または** サービスアカウントJSONキー受領済み | `gcloud auth application-default login` **または** `export GOOGLE_APPLICATION_CREDENTIALS=/path/to/key.json` |
+| **クライアントのGCPプロジェクトへのオーナー権限 または JSONキー** | クライアントから招待済み、または組織アカウント環境の場合はJSONキー受領済み（[クライアント向けガイド](client/)参照） |
 | Python 3 インストール済み | `python3 --version` |
 
 ---
@@ -266,8 +266,15 @@
     <a href="client/" target="_blank">クライアント向けセットアップガイド</a>を共有し、以下を依頼:<br>
     • <code>client-setup-gcp</code> スクリプトを実行してもらう<br>
     • プロジェクトID（例: <code>docsplit-abc-kaigo</code>）を受領<br>
+    <br>
+    <strong>パターンA: 通常環境（外部ドメイン権限付与成功）</strong><br>
     • 開発者（あなた）がオーナー権限で招待されていることを確認<br>
-    <small>※ クライアントがスクリプトを実行すると、GCPプロジェクト作成・課金設定・権限付与が自動で完了します</small>
+    <br>
+    <strong>パターンB: 組織アカウント環境（自動的にサービスアカウント方式に切替）</strong><br>
+    • プロジェクトID + <strong>JSONキーファイル</strong>を受領<br>
+    • 環境変数設定: <code>export GOOGLE_APPLICATION_CREDENTIALS=/path/to/key.json</code><br>
+    <br>
+    <small>※ クライアントがスクリプトを実行すると、GCPプロジェクト作成・課金設定・権限付与（または サービスアカウント作成）が自動で完了します</small>
   </div>
 </div>
 

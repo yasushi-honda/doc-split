@@ -241,9 +241,27 @@ Invoke-WebRequest -Uri $url -OutFile $output
 <div class="timeline-item" data-step="5">
 <h3>完了</h3>
 
-セットアップが完了すると、プロジェクトIDが表示されます。
+セットアップが完了すると、以下のいずれかが表示されます：
 
-このプロジェクトIDを**開発者に連絡**してください。開発者が引き続きセットアップを進めます。
+#### パターン1: 通常の完了（外部ドメイン権限付与成功）
+```
+プロジェクトID: your-project-id
+```
+→ このプロジェクトIDを**開発者に連絡**してください。
+
+#### パターン2: 組織アカウント環境（サービスアカウント方式）
+```
+プロジェクトID: your-project-id
+JSONキー: /Users/xxx/docsplit-deployer-your-project-id.json
+```
+→ **プロジェクトIDとJSONキーファイルの両方を開発者に安全に送付**してください。
+
+<div class="info-box" style="background: #fef3c7; border-left: 4px solid #f59e0b; padding: 12px; margin-top: 12px;">
+<strong>⚠️ 組織アカウント環境の方へ:</strong><br>
+Google Workspace組織アカウントをご利用の場合、スクリプトが自動的にサービスアカウント方式に切り替わります。JSONキーファイルは暗号化（1Password、パスワード付きZIP等）して送信してください。
+</div>
+
+開発者が引き続きセットアップを進めます。
 
 </div>
 
@@ -322,8 +340,25 @@ Invoke-WebRequest -Uri $url -OutFile $output
 </div>
 
 <div class="faq-item">
+<h4>Q. 「組織ポリシーにより権限付与が制限されています」と表示されました</h4>
+<p>A. Google Workspace組織アカウントをご利用の場合に表示されます。<strong>心配不要です。</strong></p>
+<p>スクリプトが自動的にサービスアカウント方式に切り替わり、セットアップを続行します。完了後、JSONキーファイルが生成されますので、プロジェクトIDと一緒に開発者に送付してください。</p>
+</div>
+
+<div class="faq-item">
+<h4>Q. JSONキーファイルとは何ですか？</h4>
+<p>A. 組織アカウント環境で必要となる認証情報ファイルです。</p>
+<p>開発者がお客様のGCPプロジェクトにアクセスするための鍵となります。以下の点に注意してください：</p>
+<ul>
+  <li>暗号化して送信（1Password、パスワード付きZIP等）</li>
+  <li>メールやチャットで平文送信しない</li>
+  <li>送付後、開発者が受領したことを確認</li>
+</ul>
+</div>
+
+<div class="faq-item">
 <h4>Q. セットアップ後、何をすればよいですか？</h4>
-<p>A. プロジェクトIDを開発者に連絡してください。開発者が引き続きセットアップを進めます。お客様側での作業は完了です。</p>
+<p>A. プロジェクトIDを開発者に連絡してください。組織アカウント環境の場合はJSONキーファイルも一緒に送付してください。開発者が引き続きセットアップを進めます。お客様側での作業は完了です。</p>
 </div>
 
 ---
