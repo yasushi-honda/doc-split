@@ -1,13 +1,14 @@
 # ハンドオフメモ
 
-**更新日**: 2026-02-09
+**更新日**: 2026-02-11
 **ブランチ**: main（クリーン）
 **フェーズ**: Phase 8完了 + 追加実装
 
-## 直近の変更（02-06〜09）
+## 直近の変更（02-06〜11）
 
 | PR/コミット | 内容 |
 |----|------|
+| 91563b4 | **GitHub Pages納品プロンプトにGCPプロジェクト作成ステップを追加**（`docs/claude-code-delivery.md`と`docs/index.html`を更新。クライアントがGCPプロジェクト未作成の状態から納品開始可能に。プロンプトに「1. GCPプロジェクト作成」「2. 課金アカウント紐付け確認」ステップを追加） |
 | **#103** | **processOCRに必要なFirestore複合インデックス追加**（PR #100で`rescueStuckProcessingDocs()`追加時に`firestore.indexes.json`への`status+updatedAt`定義が漏れていた。processOCRが毎分Fatal errorで全停止→PDFが永久pending。dev/kanameone両環境にデプロイ済み） |
 | **#102** | **セレクションモードで行全体タップ可能に**（モバイルUX改善、チェックボックスだけでなく行クリック/タップで選択トグル） |
 | **#101** | **納品フロー成功率改善**（jq依存除去→Node.jsヘルパー、CSV解析RFC 4180準拠、Gmail OAuth事前チェック、フォームバリデーション追加。scripts/helpers/新設、import-masters.js --dry-run対応） |
@@ -80,10 +81,13 @@
 
 **プロダクションコード変更**: `firebase.ts`に1行追加のみ（再エクスポート）。アプリ動作への影響なし。
 
-### Claude Code納品フロー（改善済み 02-09）
+### Claude Code納品フロー（改善済み 02-11）
 
 - GitHub Pages: `https://yasushi-honda.github.io/doc-split/#/claude-code-delivery`
 - フォーム入力→プロンプト自動生成→コピー→Claude Codeに貼付けで全自動納品
+- **02-11**: GCPプロジェクト作成ステップを追加。クライアントがGCPプロジェクト未作成の状態から納品開始可能に
+  - プロンプトに「1. GCPプロジェクト作成」「2. 課金アカウント紐付け確認」ステップを追加
+  - 事前準備で「クライアント名」のみ受領（プロジェクトIDは自動生成: `docsplit-<client-name>`）
 - PR #101で成功率改善: jq依存除去、CSV解析堅牢化、Gmail OAuth事前チェック、フォームバリデーション追加
 - `scripts/helpers/`ディレクトリ新設（firebaserc-helper.js, json-helper.js）
 - `import-masters.js --dry-run`で事前検証可能に
@@ -110,6 +114,7 @@
 |------|------|
 | dev | デプロイ済み（02-09、Hosting: PR #102反映、Firestoreインデックス: PR #103反映） |
 | kanameone | デプロイ済み（02-09、Hosting: PR #102反映、Firestoreインデックス: PR #103反映） |
+| GitHub Pages | デプロイ済み（02-11、GCPプロジェクト作成ステップ追加） |
 | setup-tenant.sh | PR #101でjq依存除去+Gmail OAuth事前チェック追加（スクリプト変更、デプロイ不要） |
 | deploy-to-project.sh | PR #101でjq依存除去（スクリプト変更、デプロイ不要） |
 | import-masters.js | PR #101でCSV解析RFC 4180準拠+--dry-run追加（スクリプト変更、デプロイ不要） |
