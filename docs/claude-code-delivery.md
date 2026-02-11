@@ -210,7 +210,7 @@
 | doc-split リポジトリをクローン済み＋依存インストール済み | `ls CLAUDE.md && ls frontend/node_modules` （未実行時: `npm install`） |
 | `gcloud` CLI 認証済み | `gcloud auth list` |
 | ADC（Application Default Credentials）設定済み | `gcloud auth application-default login` |
-| クライアントGCPプロジェクトのオーナー/編集者権限 | クライアントから招待済み |
+| **GCPで新規プロジェクトを作成する権限** | 組織管理者から付与、または個人アカウント |
 | Python 3 インストール済み | `python3 --version` |
 
 ---
@@ -221,7 +221,8 @@
   <div class="step-num">1</div>
   <div class="step-content">
     <strong>クライアントから受領</strong><br>
-    GCPプロジェクトID、管理者メールアドレス、マスターデータCSV
+    クライアント名（例: "ABC介護"）、管理者メールアドレス、マスターデータCSV<br>
+    <small>※ GCPプロジェクトは Claude Code が自動作成します（プロジェクトID形式: <code>docsplit-&lt;client-name&gt;</code>）</small>
   </div>
 </div>
 
@@ -229,7 +230,8 @@
   <div class="step-num">2</div>
   <div class="step-content">
     <strong>GCP Console で OAuth 同意画面を設定</strong><br>
-    <a href="https://console.cloud.google.com/apis/credentials/consent" target="_blank">OAuth同意画面</a>（クライアントのプロジェクトを選択）→ User Type: <code>外部</code> → アプリ名: <code>DocSplit</code>、サポートメール入力 → スコープ追加: <code>gmail.readonly</code> → テストユーザーに<strong>監視対象のGmailアドレス</strong>を追加
+    <small>※ Claude Code がGCPプロジェクトを作成した後に実行してください</small><br>
+    <a href="https://console.cloud.google.com/apis/credentials/consent" target="_blank">OAuth同意画面</a>（作成されたプロジェクトを選択）→ User Type: <code>外部</code> → アプリ名: <code>DocSplit</code>、サポートメール入力 → スコープ追加: <code>gmail.readonly</code> → テストユーザーに<strong>監視対象のGmailアドレス</strong>を追加
   </div>
 </div>
 

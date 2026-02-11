@@ -328,22 +328,29 @@
       var csvCm = _cdVal('csv-caremanagers');
       var p = fmt(pid, '<project-id>');
 
-      var lines = 'DocSplitの新規納品を実施してください。\n\n'
+      var lines = 'DocSplitの新規納品を実施してください（GCPプロジェクト作成から自動実行）。\n\n'
         + '■ 手順（以下のコマンドを順番に実行）\n\n'
-        + '1. セットアップ実行:\n'
+        + '1. GCPプロジェクト作成:\n'
+        + '   gcloud projects create ' + p + ' --name="DocSplit"\n'
+        + '   gcloud config set project ' + p + '\n\n'
+        + '2. 課金アカウント紐付け確認:\n'
+        + '   以下のURLをブラウザで開き、課金アカウントが設定されているか確認してください:\n'
+        + '   https://console.cloud.google.com/billing/linkedaccount?project=' + p + '\n'
+        + '   ※ 未設定の場合、設定してから次のステップに進んでください。\n\n'
+        + '3. セットアップ実行:\n'
         + '   ./scripts/setup-tenant.sh ' + p + ' ' + fmt(email, '<admin-email>') + ' --with-gmail --client-id=' + fmt(cid, '<client-id>') + ' --client-secret=' + fmt(csec, '<client-secret>') + ' --auth-code=' + fmt(code, '<auth-code>') + ' --yes\n\n'
-        + '2. 中間検証:\n'
+        + '4. 中間検証:\n'
         + '   ./scripts/verify-setup.sh ' + p + '\n\n'
-        + '3. マスターデータ投入:\n'
+        + '5. マスターデータ投入:\n'
         + '   FIREBASE_PROJECT_ID=' + p + ' node scripts/import-masters.js --customers ' + fmt(csvCust, '<customers.csv>') + '\n'
         + '   FIREBASE_PROJECT_ID=' + p + ' node scripts/import-masters.js --documents ' + fmt(csvDoc, '<documents.csv>') + '\n'
         + '   FIREBASE_PROJECT_ID=' + p + ' node scripts/import-masters.js --offices ' + fmt(csvOff, '<offices.csv>') + '\n';
       if (csvCm) {
         lines += '   FIREBASE_PROJECT_ID=' + p + ' node scripts/import-masters.js --caremanagers ' + fmt(csvCm, '') + '\n';
       }
-      lines += '\n4. 最終検証:\n'
+      lines += '\n6. 最終検証:\n'
         + '   ./scripts/verify-setup.sh ' + p + '\n\n'
-        + '5. 結果をサマリーで報告\n\n'
+        + '7. 結果をサマリーで報告\n\n'
         + '■ 禁止事項\n'
         + '- firebase firestore:delete --all-collections は絶対禁止\n'
         + '- 本番環境にサンプルデータを投入しない\n'
@@ -365,8 +372,17 @@
       var p = fmt(pid, '<project-id>');
 
       var stepNum = 1;
-      var lines = 'DocSplitの新規納品を実施してください。\n\n'
+      var lines = 'DocSplitの新規納品を実施してください（GCPプロジェクト作成から自動実行）。\n\n'
         + '■ 手順（以下のコマンドを順番厳守で実行）\n\n';
+
+      lines += (stepNum++) + '. GCPプロジェクト作成:\n'
+        + '   gcloud projects create ' + p + ' --name="DocSplit"\n'
+        + '   gcloud config set project ' + p + '\n\n';
+
+      lines += (stepNum++) + '. 課金アカウント紐付け確認:\n'
+        + '   以下のURLをブラウザで開き、課金アカウントが設定されているか確認してください:\n'
+        + '   https://console.cloud.google.com/billing/linkedaccount?project=' + p + '\n'
+        + '   ※ 未設定の場合、設定してから次のステップに進んでください。\n\n';
 
       lines += (stepNum++) + '. セットアップ実行:\n'
         + '   ./scripts/setup-tenant.sh ' + p + ' ' + fmt(email, '<admin-email>') + ' --with-gmail --client-id=' + fmt(cid, '<client-id>') + ' --client-secret=' + fmt(csec, '<client-secret>') + ' --auth-code=' + fmt(code, '<auth-code>') + ' --yes\n\n';
