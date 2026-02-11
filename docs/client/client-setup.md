@@ -147,23 +147,45 @@ GUIから手動でセットアップしたい方向けです。画面の指示�
 
 **Mac の方:**
 
-ターミナルを開いて、以下をコピー&ペーストして Enter キーを押してください：
+ターミナルを開いて、以下の3行をコピー&ペーストして Enter キーを押してください：
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/yasushi-honda/doc-split/main/scripts/client-setup-gcp.sh | bash
+curl -o ~/client-setup.sh https://raw.githubusercontent.com/yasushi-honda/doc-split/main/scripts/client-setup-gcp.sh
+chmod +x ~/client-setup.sh
+~/client-setup.sh
 ```
 
 <small>**ターミナルの開き方:** `アプリケーション` → `ユーティリティ` → `ターミナル`</small>
 
-<br><br>
-
-**Linux の方:**
-
-ターミナルで以下を実行:
+<details>
+<summary>または、1行で実行（上級者向け・クリックして展開）</summary>
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/yasushi-honda/doc-split/main/scripts/client-setup-gcp.sh | bash
 ```
+
+</details>
+
+<br>
+
+**Linux の方:**
+
+ターミナルで以下の3行を実行:
+
+```bash
+curl -o ~/client-setup.sh https://raw.githubusercontent.com/yasushi-honda/doc-split/main/scripts/client-setup-gcp.sh
+chmod +x ~/client-setup.sh
+~/client-setup.sh
+```
+
+<details>
+<summary>または、1行で実行（クリックして展開）</summary>
+
+```bash
+curl -sSL https://raw.githubusercontent.com/yasushi-honda/doc-split/main/scripts/client-setup-gcp.sh | bash
+```
+
+</details>
 
 <br>
 
@@ -172,19 +194,13 @@ curl -sSL https://raw.githubusercontent.com/yasushi-honda/doc-split/main/scripts
 PowerShellを開いて、以下をコピー&ペーストして Enter キーを押してください：
 
 ```powershell
-irm https://raw.githubusercontent.com/yasushi-honda/doc-split/main/scripts/client-setup-gcp.bat | iex
+$url = "https://raw.githubusercontent.com/yasushi-honda/doc-split/main/scripts/client-setup-gcp.bat"
+$output = "$env:USERPROFILE\client-setup.bat"
+Invoke-WebRequest -Uri $url -OutFile $output
+& $output
 ```
 
 <small>**PowerShellの開き方:** `スタートメニュー` で「PowerShell」と検索</small>
-
-<details>
-<summary>または、ファイルをダウンロードして実行（クリックして展開）</summary>
-
-1. <a href="https://raw.githubusercontent.com/yasushi-honda/doc-split/main/scripts/client-setup-gcp.bat">このリンク</a>を**右クリック** → **「名前を付けてリンク先を保存」**
-2. エクスプローラーで `ダウンロード` フォルダを開く
-3. `client-setup-gcp.bat` をダブルクリック
-
-</details>
 
 </div>
 
