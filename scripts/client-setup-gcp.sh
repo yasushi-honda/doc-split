@@ -262,21 +262,151 @@ echo ""
 log_info "Step 4/4: 開発者にオーナー権限を付与中..."
 echo ""
 
-if gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+# 外部ドメインへの権限付与を試行
+IAM_ERROR=$(gcloud projects add-iam-policy-binding "$PROJECT_ID" \
     --member="user:$DEVELOPER_EMAIL" \
     --role="roles/owner" \
-    --condition=None 2>/dev/null; then
+    --condition=None 2>&1)
+
+if [ $? -eq 0 ]; then
+    # 従来フロー: 成功
     log_success "権限付与完了"
+    USE_SERVICE_ACCOUNT=false
 else
-    log_error "権限付与に失敗しました"
-    echo ""
-    echo "手動で設定する場合、以下の手順で実行してください:"
-    echo "  1. https://console.cloud.google.com/iam-admin/iam?project=$PROJECT_ID"
-    echo "  2. 「アクセスを許可」ボタンをクリック"
-    echo "  3. 新しいプリンシパル: $DEVELOPER_EMAIL"
-    echo "  4. ロール: オーナー"
-    echo "  5. 保存"
-    exit 1
+    # 組織ポリシーによる制限を検出
+    if echo "$IAM_ERROR" | grep -q "constraints/iam.allowedPolicyMemberDomains"; then
+        log_warn "組織ポリシーにより外部ドメインへの権限付与が制限されています"
+        echo ""
+        log_info "サービスアカウント方式に自動切替します..."
+        echo ""
+
+        USE_SERVICE_ACCOUNT=true
+
+        # ===========================================
+        # Step 4a: 組織ポリシー緩和
+        # ===========================================
+
+        log_info "Step 4a: 組織ポリシーを緩和中..."
+        echo ""
+
+        # 組織ポリシーYAMLを一時ファイルに作成
+        cat > /tmp/allow-all-domains.yaml << 'EOF'
+name: projects/$PROJECT_ID/policies/iam.allowedPolicyMemberDomains
+spec:
+  rules:
+  - allowAll: true
+EOF
+
+        cat > /tmp/disable-key-creation-off.yaml << 'EOF'
+name: projects/$PROJECT_ID/policies/iam.disableServiceAccountKeyCreation
+spec:
+  rules:
+  - enforce: false
+EOF
+
+        # プロジェクトIDを置換
+        sed -i.bak "s/\$PROJECT_ID/$PROJECT_ID/g" /tmp/allow-all-domains.yaml
+        sed -i.bak "s/\$PROJECT_ID/$PROJECT_ID/g" /tmp/disable-key-creation-off.yaml
+
+        # ポリシー適用
+        if ! gcloud org-policies set-policy /tmp/allow-all-domains.yaml --project="$PROJECT_ID" 2>/dev/null; then
+            log_error "組織ポリシーの緩和に失敗しました"
+            echo ""
+            echo "手動で設定する場合、ADR-0011の手順を参照してください:"
+            echo "  docs/adr/0011-service-account-delivery-for-org-accounts.md"
+            rm -f /tmp/allow-all-domains.yaml* /tmp/disable-key-creation-off.yaml*
+            exit 1
+        fi
+
+        if ! gcloud org-policies set-policy /tmp/disable-key-creation-off.yaml --project="$PROJECT_ID" 2>/dev/null; then
+            log_error "組織ポリシーの緩和に失敗しました"
+            echo ""
+            echo "手動で設定する場合、ADR-0011の手順を参照してください:"
+            echo "  docs/adr/0011-service-account-delivery-for-org-accounts.md"
+            rm -f /tmp/allow-all-domains.yaml* /tmp/disable-key-creation-off.yaml*
+            exit 1
+        fi
+
+        log_success "組織ポリシー緩和完了"
+        echo ""
+
+        # クリーンアップ
+        rm -f /tmp/allow-all-domains.yaml* /tmp/disable-key-creation-off.yaml*
+
+        # ===========================================
+        # Step 4b: サービスアカウント作成
+        # ===========================================
+
+        log_info "Step 4b: サービスアカウント作成中..."
+        echo ""
+
+        SA_EMAIL="docsplit-deployer@$PROJECT_ID.iam.gserviceaccount.com"
+
+        if ! gcloud iam service-accounts create docsplit-deployer \
+            --display-name="DocSplit Deployer" \
+            --description="DocSplit deployment and maintenance" \
+            --project="$PROJECT_ID" 2>/dev/null; then
+            log_error "サービスアカウント作成に失敗しました"
+            exit 1
+        fi
+
+        log_success "サービスアカウント作成完了: $SA_EMAIL"
+        echo ""
+
+        # ===========================================
+        # Step 4c: Ownerロール付与
+        # ===========================================
+
+        log_info "Step 4c: サービスアカウントにOwnerロールを付与中..."
+        echo ""
+
+        if ! gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+            --member="serviceAccount:$SA_EMAIL" \
+            --role="roles/owner" \
+            --condition=None 2>/dev/null; then
+            log_error "Ownerロール付与に失敗しました"
+            exit 1
+        fi
+
+        log_success "Ownerロール付与完了"
+        echo ""
+
+        # ===========================================
+        # Step 4d: JSONキー生成
+        # ===========================================
+
+        log_info "Step 4d: JSONキー生成中..."
+        echo ""
+
+        KEY_FILE="$HOME/docsplit-deployer-$PROJECT_ID.json"
+
+        if ! gcloud iam service-accounts keys create "$KEY_FILE" \
+            --iam-account="$SA_EMAIL" \
+            --project="$PROJECT_ID" 2>/dev/null; then
+            log_error "JSONキー生成に失敗しました"
+            exit 1
+        fi
+
+        # 権限設定
+        chmod 600 "$KEY_FILE"
+
+        log_success "JSONキー生成完了: $KEY_FILE"
+        echo ""
+    else
+        # 組織ポリシー以外のエラー
+        log_error "権限付与に失敗しました"
+        echo ""
+        echo "エラー詳細:"
+        echo "$IAM_ERROR"
+        echo ""
+        echo "手動で設定する場合、以下の手順で実行してください:"
+        echo "  1. https://console.cloud.google.com/iam-admin/iam?project=$PROJECT_ID"
+        echo "  2. 「アクセスを許可」ボタンをクリック"
+        echo "  3. 新しいプリンシパル: $DEVELOPER_EMAIL"
+        echo "  4. ロール: オーナー"
+        echo "  5. 保存"
+        exit 1
+    fi
 fi
 echo ""
 
@@ -293,7 +423,28 @@ echo "プロジェクト情報:"
 echo "  プロジェクトID: $PROJECT_ID"
 echo "  コンソールURL: https://console.cloud.google.com/home/dashboard?project=$PROJECT_ID"
 echo ""
-echo -e "${YELLOW}次のステップ:${NC}"
-echo "  1. 開発者にプロジェクトID「$PROJECT_ID」を連絡してください"
-echo "  2. 開発者が setup-tenant.sh スクリプトを実行します"
-echo ""
+
+if [ "$USE_SERVICE_ACCOUNT" = true ]; then
+    # サービスアカウント方式の場合
+    echo -e "${YELLOW}次のステップ:${NC}"
+    echo "  1. 以下のファイルを開発者に安全に送付してください:"
+    echo "     - プロジェクトID: $PROJECT_ID"
+    echo "     - JSONキー: $KEY_FILE"
+    echo ""
+    echo "  2. 開発者が以下のコマンドで環境設定します:"
+    echo "     export GOOGLE_APPLICATION_CREDENTIALS=\"$KEY_FILE\""
+    echo ""
+    echo "  3. 開発者が setup-tenant.sh スクリプトを実行します"
+    echo ""
+    echo -e "${YELLOW}セキュリティ推奨事項:${NC}"
+    echo "  - JSONキーは暗号化して送信してください（例: 1Password, パスワード付きZIP）"
+    echo "  - 初回デプロイ後、Ownerロールを最小権限に縮小することを推奨します"
+    echo "    詳細: docs/adr/0011-service-account-delivery-for-org-accounts.md"
+    echo ""
+else
+    # 従来フロー（外部ドメイン直接付与成功）
+    echo -e "${YELLOW}次のステップ:${NC}"
+    echo "  1. 開発者にプロジェクトID「$PROJECT_ID」を連絡してください"
+    echo "  2. 開発者が setup-tenant.sh スクリプトを実行します"
+    echo ""
+fi
