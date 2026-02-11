@@ -81,21 +81,17 @@ if ! command -v gcloud &> /dev/null; then
         # インストール
         "$HOME/google-cloud-sdk/install.sh" --quiet --path-update true
 
-        # PATHを更新
-        if [ -f "$HOME/.bash_profile" ]; then
-            source "$HOME/.bash_profile"
-        fi
-        if [ -f "$HOME/.zshrc" ]; then
-            source "$HOME/.zshrc"
-        fi
+        # PATHを更新（即座に反映）
+        export PATH="$HOME/google-cloud-sdk/bin:$PATH"
 
         # クリーンアップ
         rm "/tmp/$GCLOUD_FILE"
 
         log_success "gcloud CLIのインストールが完了しました"
         echo ""
-        log_info "このスクリプトを終了します。新しいターミナルウィンドウで再度実行してください。"
-        exit 0
+        log_info "セットアップを続行します..."
+        echo ""
+        # exit 0 を削除 → そのまま続行
     else
         # Linux
         log_info "Linux環境を検出しました"
@@ -103,15 +99,14 @@ if ! command -v gcloud &> /dev/null; then
         # 公式インストールスクリプトを使用
         curl https://sdk.cloud.google.com | bash
 
-        # PATHを更新
-        if [ -f "$HOME/.bashrc" ]; then
-            source "$HOME/.bashrc"
-        fi
+        # PATHを更新（即座に反映）
+        export PATH="$HOME/google-cloud-sdk/bin:$PATH"
 
         log_success "gcloud CLIのインストールが完了しました"
         echo ""
-        log_info "このスクリプトを終了します。新しいターミナルウィンドウで再度実行してください。"
-        exit 0
+        log_info "セットアップを続行します..."
+        echo ""
+        # exit 0 を削除 → そのまま続行
     fi
 fi
 log_success "gcloud CLI: インストール済み"
