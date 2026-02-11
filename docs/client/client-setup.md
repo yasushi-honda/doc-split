@@ -124,19 +124,15 @@ GUIから手動でセットアップしたい方向けです。画面の指示�
 <div class="timeline-item" data-step="1">
 <h3>事前準備</h3>
 
-以下をインストール・設定してください：
+**事前準備は不要です！**
 
-**gcloud CLI のインストール:**
-- **Mac**: [インストール手順](https://cloud.google.com/sdk/docs/install-sdk#mac)
-- **Windows**: [インストーラーをダウンロード](https://cloud.google.com/sdk/docs/install-sdk#windows)
-- **Linux**: [インストール手順](https://cloud.google.com/sdk/docs/install-sdk#linux)
+以下はスクリプトが自動で対応します：
+- ✅ gcloud CLI のインストール（未インストール時）
+- ✅ Google Cloud への認証（ブラウザが自動で開きます）
 
-**認証:**
-```bash
-gcloud auth login
-```
-
-ブラウザが開くので、お客様のGoogleアカウントでログインしてください。
+**お客様がご用意いただくもの:**
+- Googleアカウント（GCPプロジェクトを作成するアカウント）
+- 課金アカウント（すでにお持ちの場合）
 
 </div>
 
@@ -197,6 +193,13 @@ chmod +x client-setup-gcp.sh
 **Windows の方:**
 1. ダウンロードした `client-setup-gcp.bat` をダブルクリック
 2. コマンドプロンプトが自動で開き、セットアップが開始されます
+
+<div class="info-box">
+<strong>自動で実行される内容:</strong><br>
+1. gcloud CLI のインストール確認（未インストール時は自動インストール）<br>
+2. Google Cloud への認証（ブラウザが開きます）<br>
+3. プロジェクト情報の入力（次のステップ）
+</div>
 
 </div>
 

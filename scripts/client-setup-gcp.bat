@@ -25,13 +25,19 @@ echo.
 REM gcloud CLIがインストールされているか確認
 where gcloud > nul 2>&1
 if %ERRORLEVEL% neq 0 (
-    echo [ERROR] gcloud CLIがインストールされていません
+    echo [WARN] gcloud CLIがインストールされていません
     echo.
-    echo 以下のURLからインストールしてください:
-    echo   https://cloud.google.com/sdk/docs/install
+    echo gcloud CLIのインストールが必要です。
     echo.
-    echo インストール後、以下のコマンドで認証してください:
-    echo   gcloud auth login
+    echo 以下のURLからインストーラーをダウンロードして実行してください:
+    echo   https://cloud.google.com/sdk/docs/install-sdk#windows
+    echo.
+    echo インストール完了後、このスクリプトを再度実行してください。
+    echo.
+    set /p OPEN_URL="インストールページを開きますか？ (y/n): "
+    if /i "!OPEN_URL!"=="y" (
+        start https://cloud.google.com/sdk/docs/install-sdk#windows
+    )
     pause
     exit /b 1
 )
@@ -40,12 +46,22 @@ echo [OK] gcloud CLI: インストール済み
 REM 認証済みか確認
 for /f "delims=" %%i in ('gcloud auth list --filter=status:ACTIVE --format="value(account)" 2^>nul') do set CURRENT_ACCOUNT=%%i
 if "!CURRENT_ACCOUNT!"=="" (
-    echo [ERROR] Google Cloudに認証していません
+    echo [WARN] Google Cloudに認証していません
     echo.
-    echo 以下のコマンドを実行してから、再度このスクリプトを実行してください:
-    echo   gcloud auth login
-    pause
-    exit /b 1
+    echo [INFO] ブラウザが開きますので、Googleアカウントでログインしてください...
+    echo.
+
+    REM 認証を実行
+    gcloud auth login
+    if %ERRORLEVEL% neq 0 (
+        echo [ERROR] 認証に失敗しました
+        pause
+        exit /b 1
+    )
+
+    REM 認証後のアカウントを取得
+    for /f "delims=" %%i in ('gcloud auth list --filter=status:ACTIVE --format="value(account)" 2^>nul') do set CURRENT_ACCOUNT=%%i
+    echo [OK] 認証が完了しました
 )
 echo [OK] 認証済みアカウント: !CURRENT_ACCOUNT!
 echo.

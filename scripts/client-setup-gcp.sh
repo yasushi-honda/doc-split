@@ -43,25 +43,95 @@ echo ""
 
 # gcloud CLIがインストールされているか確認
 if ! command -v gcloud &> /dev/null; then
-    log_error "gcloud CLIがインストールされていません"
+    log_warn "gcloud CLIがインストールされていません"
     echo ""
-    echo "以下のURLからインストールしてください:"
-    echo "  https://cloud.google.com/sdk/docs/install"
+    echo "gcloud CLIを自動インストールします。"
     echo ""
-    echo "インストール後、以下のコマンドで認証してください:"
-    echo "  gcloud auth login"
-    exit 1
+    read -p "続行しますか？ (y/n): " INSTALL_CONFIRM
+    if [ "$INSTALL_CONFIRM" != "y" ]; then
+        echo ""
+        echo "手動でインストールする場合は以下のURLからダウンロードしてください:"
+        echo "  https://cloud.google.com/sdk/docs/install"
+        exit 0
+    fi
+
+    log_info "gcloud CLIをインストール中..."
+    echo ""
+
+    # OS判定してインストール
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        # Mac
+        log_info "Mac環境を検出しました"
+
+        # アーキテクチャ判定
+        if [[ $(uname -m) == "arm64" ]]; then
+            GCLOUD_URL="https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-darwin-arm.tar.gz"
+            GCLOUD_FILE="google-cloud-cli-darwin-arm.tar.gz"
+        else
+            GCLOUD_URL="https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/google-cloud-cli-darwin-x86_64.tar.gz"
+            GCLOUD_FILE="google-cloud-cli-darwin-x86_64.tar.gz"
+        fi
+
+        # ダウンロード
+        curl -o "/tmp/$GCLOUD_FILE" "$GCLOUD_URL"
+
+        # 展開
+        tar -xzf "/tmp/$GCLOUD_FILE" -C "$HOME"
+
+        # インストール
+        "$HOME/google-cloud-sdk/install.sh" --quiet --path-update true
+
+        # PATHを更新
+        if [ -f "$HOME/.bash_profile" ]; then
+            source "$HOME/.bash_profile"
+        fi
+        if [ -f "$HOME/.zshrc" ]; then
+            source "$HOME/.zshrc"
+        fi
+
+        # クリーンアップ
+        rm "/tmp/$GCLOUD_FILE"
+
+        log_success "gcloud CLIのインストールが完了しました"
+        echo ""
+        log_info "このスクリプトを終了します。新しいターミナルウィンドウで再度実行してください。"
+        exit 0
+    else
+        # Linux
+        log_info "Linux環境を検出しました"
+
+        # 公式インストールスクリプトを使用
+        curl https://sdk.cloud.google.com | bash
+
+        # PATHを更新
+        if [ -f "$HOME/.bashrc" ]; then
+            source "$HOME/.bashrc"
+        fi
+
+        log_success "gcloud CLIのインストールが完了しました"
+        echo ""
+        log_info "このスクリプトを終了します。新しいターミナルウィンドウで再度実行してください。"
+        exit 0
+    fi
 fi
 log_success "gcloud CLI: インストール済み"
 
 # 認証済みか確認
 CURRENT_ACCOUNT=$(gcloud auth list --filter=status:ACTIVE --format="value(account)" 2>/dev/null || echo "")
 if [ -z "$CURRENT_ACCOUNT" ]; then
-    log_error "Google Cloudに認証していません"
+    log_warn "Google Cloudに認証していません"
     echo ""
-    echo "以下のコマンドを実行してから、再度このスクリプトを実行してください:"
-    echo "  gcloud auth login"
-    exit 1
+    log_info "ブラウザが開きますので、Googleアカウントでログインしてください..."
+    echo ""
+
+    # 認証を実行
+    if gcloud auth login; then
+        CURRENT_ACCOUNT=$(gcloud auth list --filter=status:ACTIVE --format="value(account)" 2>/dev/null || echo "")
+        log_success "認証が完了しました"
+    else
+        log_error "認証に失敗しました"
+        exit 1
+    fi
 fi
 log_success "認証済みアカウント: $CURRENT_ACCOUNT"
 echo ""
