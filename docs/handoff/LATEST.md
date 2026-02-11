@@ -8,7 +8,9 @@
 
 | PR/コミット | 内容 |
 |----|------|
-| 91563b4 | **GitHub Pages納品プロンプトにGCPプロジェクト作成ステップを追加**（`docs/claude-code-delivery.md`と`docs/index.html`を更新。クライアントがGCPプロジェクト未作成の状態から納品開始可能に。プロンプトに「1. GCPプロジェクト作成」「2. 課金アカウント紐付け確認」ステップを追加） |
+| 0b06e61 | **クライアント向けGCPプロジェクトセットアップスクリプト追加**（完全対話型スクリプト: `client-setup-gcp.sh`（Mac/Linux）, `client-setup-gcp.command`（Mac ダブルクリック）, `client-setup-gcp.bat`（Windows）。GitHub Pages専用ページ`client-setup.md`を追加。納品フローを修正: クライアント側でGCPプロジェクト作成 → 開発者がClaude Codeで自動納品。プロンプトからGCPプロジェクト作成ステップを削除） |
+| 8c90360 | **GitHub Pages納品フォームのバリデーションを緩和**（必須フィールドをプロジェクトID・管理者メールのみに変更。OAuth認証情報・CSVは任意に。空欄の場合はプレースホルダー表示。段階的な入力が可能に） |
+| 91563b4 | **GitHub Pages納品プロンプトにGCPプロジェクト作成ステップを追加**（初版）|
 | **#103** | **processOCRに必要なFirestore複合インデックス追加**（PR #100で`rescueStuckProcessingDocs()`追加時に`firestore.indexes.json`への`status+updatedAt`定義が漏れていた。processOCRが毎分Fatal errorで全停止→PDFが永久pending。dev/kanameone両環境にデプロイ済み） |
 | **#102** | **セレクションモードで行全体タップ可能に**（モバイルUX改善、チェックボックスだけでなく行クリック/タップで選択トグル） |
 | **#101** | **納品フロー成功率改善**（jq依存除去→Node.jsヘルパー、CSV解析RFC 4180準拠、Gmail OAuth事前チェック、フォームバリデーション追加。scripts/helpers/新設、import-masters.js --dry-run対応） |
@@ -81,16 +83,31 @@
 
 **プロダクションコード変更**: `firebase.ts`に1行追加のみ（再エクスポート）。アプリ動作への影響なし。
 
-### Claude Code納品フロー（改善済み 02-11）
+### Claude Code納品フロー（完成版 02-11）
 
+**推奨フロー**: クライアントがGCPプロジェクト作成 → 開発者がClaude Codeで自動納品
+
+#### クライアント側（約5分）
+- `client-setup-gcp` スクリプト実行（Mac/Windows/Linux対応）
+  - `scripts/client-setup-gcp.sh` (Mac/Linux)
+  - `scripts/client-setup-gcp.command` (Mac ダブルクリック)
+  - `scripts/client-setup-gcp.bat` (Windows)
+- 対話型で入力: プロジェクトID、管理者メール、課金アカウント
+- スクリプトが自動実行: GCPプロジェクト作成 → 課金設定 → 開発者に権限付与
+- GitHub Pages: `https://yasushi-honda.github.io/doc-split/#/client-setup`
+
+#### 開発者側（Claude Code完全自動化）
+- `gcloud auth login` で認証
 - GitHub Pages: `https://yasushi-honda.github.io/doc-split/#/claude-code-delivery`
-- フォーム入力→プロンプト自動生成→コピー→Claude Codeに貼付けで全自動納品
-- **02-11**: GCPプロジェクト作成ステップを追加。クライアントがGCPプロジェクト未作成の状態から納品開始可能に
-  - プロンプトに「1. GCPプロジェクト作成」「2. 課金アカウント紐付け確認」ステップを追加
-  - 事前準備で「クライアント名」のみ受領（プロジェクトIDは自動生成: `docsplit-<client-name>`）
-- PR #101で成功率改善: jq依存除去、CSV解析堅牢化、Gmail OAuth事前チェック、フォームバリデーション追加
-- `scripts/helpers/`ディレクトリ新設（firebaserc-helper.js, json-helper.js）
-- `import-masters.js --dry-run`で事前検証可能に
+  - プロジェクトID（クライアントから受領）を入力
+  - プロンプト自動生成 → コピー
+- Claude Codeに貼り付け → `setup-tenant.sh` が自動実行
+  - GCPプロジェクト作成ステップは削除済み（クライアント側で実行済み前提）
+
+#### フォーム改善
+- バリデーション緩和: 必須フィールド = プロジェクトID・管理者メール
+- OAuth認証情報・CSV: 任意（空欄の場合はプレースホルダー表示）
+- 段階的な入力が可能に
 
 ### ドキュメント監査（02-08）
 
@@ -114,10 +131,11 @@
 |------|------|
 | dev | デプロイ済み（02-09、Hosting: PR #102反映、Firestoreインデックス: PR #103反映） |
 | kanameone | デプロイ済み（02-09、Hosting: PR #102反映、Firestoreインデックス: PR #103反映） |
-| GitHub Pages | デプロイ済み（02-11、GCPプロジェクト作成ステップ追加） |
-| setup-tenant.sh | PR #101でjq依存除去+Gmail OAuth事前チェック追加（スクリプト変更、デプロイ不要） |
-| deploy-to-project.sh | PR #101でjq依存除去（スクリプト変更、デプロイ不要） |
-| import-masters.js | PR #101でCSV解析RFC 4180準拠+--dry-run追加（スクリプト変更、デプロイ不要） |
+| GitHub Pages | デプロイ済み（02-11、クライアント向けセットアップページ追加 + 開発者向けプロンプト修正） |
+| client-setup スクリプト | 新規作成完了（02-11）：Mac/Windows/Linux対応、対話型 |
+| setup-tenant.sh | PR #101でjq依存除去+Gmail OAuth事前チェック追加 |
+| deploy-to-project.sh | PR #101でjq依存除去 |
+| import-masters.js | PR #101でCSV解析RFC 4180準拠+--dry-run追加 |
 
 ## 未解決の既知バグ
 
@@ -131,6 +149,10 @@
 
 ## 次のアクション候補（優先度順）
 
-1. **クライアント別オプション機能の実装**（最初の具体的要望確定時）→ ADR-0009参照
-2. 精度改善（フィードバック後）
-3. 手動PDFアップロードのOCR即時実行（クライアントから要望があれば）
+1. **納品フローの実運用テスト**（実クライアントで検証）
+   - client-setup スクリプト実行テスト（Mac/Windows/Linux各OS）
+   - Claude Code プロンプト実行テスト
+   - エラーハンドリング・ドキュメント改善（フィードバック反映）
+2. **クライアント別オプション機能の実装**（最初の具体的要望確定時）→ ADR-0009参照
+3. 精度改善（フィードバック後）
+4. 手動PDFアップロードのOCR即時実行（クライアントから要望があれば）
