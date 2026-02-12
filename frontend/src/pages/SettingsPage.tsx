@@ -3,8 +3,8 @@
  * Gmail監視設定、ユーザー管理（ホワイトリスト）
  */
 
-import { useState, useEffect } from 'react'
-import { Plus, Trash2, Mail, Users, AlertCircle, Save, X, CheckCircle, Server, Copy, Check } from 'lucide-react'
+import { useState, useEffect, useCallback } from 'react'
+import { Plus, Trash2, Mail, Users, AlertCircle, Save, X, CheckCircle, Server, Copy, Check, Link2, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -36,6 +36,10 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { useSettings, useUpdateSettings, useUsers, useAddUser, useDeleteUser, useUpdateUserRole } from '@/hooks/useSettings'
+import { doc, getDoc } from 'firebase/firestore'
+import { db } from '@/lib/firebase'
+import { callFunction } from '@/lib/callFunction'
+import { useQueryClient } from '@tanstack/react-query'
 import type { UserRole } from '@shared/types'
 
 export function SettingsPage() {
@@ -401,6 +405,9 @@ function GmailSettings() {
           </div>
         )}
 
+        {/* Gmail連携 */}
+        <GmailOAuthConnect />
+
         {/* 保存ボタン */}
         <div className="flex items-center justify-end gap-4">
           {saveMessage && (
@@ -471,6 +478,201 @@ function GmailSettings() {
         </Dialog>
       </CardContent>
     </Card>
+  )
+}
+
+// ============================================
+// Gmail OAuth連携
+// ============================================
+
+/** Google Identity Services スクリプトをロード */
+function useGisScript() {
+  const [loaded, setLoaded] = useState(false)
+  useEffect(() => {
+    if (document.querySelector('script[src*="accounts.google.com/gsi/client"]')) {
+      setLoaded(true)
+      return
+    }
+    const script = document.createElement('script')
+    script.src = 'https://accounts.google.com/gsi/client'
+    script.async = true
+    script.onload = () => setLoaded(true)
+    document.head.appendChild(script)
+  }, [])
+  return loaded
+}
+
+/** settings/gmail ドキュメントを取得 */
+function useGmailAuthSettings() {
+  const [data, setData] = useState<{ authMode: string; oauthClientId?: string } | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+
+  const refetch = useCallback(async () => {
+    try {
+      const docSnap = await getDoc(doc(db, 'settings', 'gmail'))
+      if (docSnap.exists()) {
+        setData(docSnap.data() as { authMode: string; oauthClientId?: string })
+      } else {
+        setData({ authMode: 'service_account' })
+      }
+    } catch {
+      setData({ authMode: 'service_account' })
+    } finally {
+      setIsLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { refetch() }, [refetch])
+
+  return { data, isLoading, refetch }
+}
+
+function GmailOAuthConnect() {
+  const gisLoaded = useGisScript()
+  const { data: gmailAuth, isLoading, refetch } = useGmailAuthSettings()
+  const [connecting, setConnecting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [successEmail, setSuccessEmail] = useState<string | null>(null)
+  const queryClient = useQueryClient()
+
+  const isConnected = gmailAuth?.authMode === 'oauth'
+  const clientId = gmailAuth?.oauthClientId
+
+  const handleConnect = useCallback(() => {
+    if (!gisLoaded || !clientId) return
+
+    setError(null)
+    setSuccessEmail(null)
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const google = (window as any).google
+    if (!google?.accounts?.oauth2) {
+      setError('Google認証ライブラリの読み込みに失敗しました')
+      return
+    }
+
+    const client = google.accounts.oauth2.initCodeClient({
+      client_id: clientId,
+      scope: 'https://www.googleapis.com/auth/gmail.readonly',
+      ux_mode: 'popup',
+      callback: async (response: { code?: string; error?: string }) => {
+        if (response.error || !response.code) {
+          setError(response.error || '認証がキャンセルされました')
+          return
+        }
+
+        setConnecting(true)
+        try {
+          const result = await callFunction<
+            { code: string },
+            { success: boolean; email: string }
+          >('exchangeGmailAuthCode', { code: response.code })
+
+          setSuccessEmail(result.email)
+          await refetch()
+          queryClient.invalidateQueries({ queryKey: ['settings'] })
+        } catch (err) {
+          const message = err instanceof Error ? err.message : '連携に失敗しました'
+          setError(message)
+        } finally {
+          setConnecting(false)
+        }
+      },
+    })
+
+    client.requestCode()
+  }, [gisLoaded, clientId, refetch, queryClient])
+
+  if (isLoading) {
+    return null
+  }
+
+  // oauthClientIdが未設定の場合は連携UIを表示しない
+  if (!clientId) {
+    return null
+  }
+
+  return (
+    <div className="rounded-lg border p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <div className="space-y-0.5">
+          <Label className="text-base font-medium">Gmail連携</Label>
+          <p className="text-xs text-gray-500">
+            Gmailの添付ファイルを自動取得するための認証設定
+          </p>
+        </div>
+        {isConnected ? (
+          <Badge className="bg-green-100 text-green-800 border-green-200">
+            <CheckCircle className="h-3 w-3 mr-1" />
+            連携済み
+          </Badge>
+        ) : (
+          <Badge variant="secondary">
+            未連携
+          </Badge>
+        )}
+      </div>
+
+      {!isConnected && (
+        <Button
+          onClick={handleConnect}
+          disabled={connecting || !gisLoaded}
+          variant="outline"
+          className="w-full"
+        >
+          {connecting ? (
+            <>
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              連携中...
+            </>
+          ) : (
+            <>
+              <Link2 className="h-4 w-4 mr-2" />
+              Gmailと連携する
+            </>
+          )}
+        </Button>
+      )}
+
+      {isConnected && (
+        <div className="text-sm text-gray-600">
+          Gmailアカウントと連携済みです。添付ファイルの自動取得が有効になっています。
+        </div>
+      )}
+
+      {isConnected && (
+        <Button
+          onClick={handleConnect}
+          disabled={connecting || !gisLoaded}
+          variant="ghost"
+          size="sm"
+          className="text-gray-500"
+        >
+          {connecting ? (
+            <>
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              再連携中...
+            </>
+          ) : (
+            '再連携する'
+          )}
+        </Button>
+      )}
+
+      {error && (
+        <div className="flex items-center gap-2 text-sm text-red-600 bg-red-50 rounded p-2">
+          <AlertCircle className="h-4 w-4 flex-shrink-0" />
+          {error}
+        </div>
+      )}
+
+      {successEmail && (
+        <div className="flex items-center gap-2 text-sm text-green-600 bg-green-50 rounded p-2">
+          <CheckCircle className="h-4 w-4 flex-shrink-0" />
+          {successEmail} との連携が完了しました
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -797,9 +999,6 @@ function NotificationSettings() {
 // ============================================
 // セットアップ情報
 // ============================================
-
-import { doc, getDoc } from 'firebase/firestore'
-import { db } from '@/lib/firebase'
 
 interface SetupData {
   projectId: string

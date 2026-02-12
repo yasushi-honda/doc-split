@@ -12,6 +12,9 @@ admin.initializeApp();
 // Gmail添付ファイル取得（Cloud Scheduler: 5分間隔）
 export { checkGmailAttachments } from './gmail/checkGmailAttachments';
 
+// Gmail OAuth認証コード交換（Callable Function）
+export { exchangeGmailAuthCode } from './gmail/exchangeGmailAuthCode';
+
 // OCR処理（定期実行 - メイン処理パス）
 export { processOCR } from './ocr/processOCR';
 
