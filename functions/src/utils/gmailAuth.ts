@@ -35,7 +35,7 @@ const DEFAULT_GMAIL_SETTINGS: GmailSettings = {
 /**
  * Secret Managerから値を取得
  */
-async function getSecretValue(secretName: string): Promise<string> {
+export async function getSecretValue(secretName: string): Promise<string> {
   const client = new SecretManagerServiceClient();
   // Cloud Functions 2nd gen (Cloud Run) uses GOOGLE_CLOUD_PROJECT
   const projectId = process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || process.env.GCP_PROJECT;
@@ -55,6 +55,22 @@ async function getSecretValue(secretName: string): Promise<string> {
     console.error(`Failed to access secret ${secretName}:`, error);
     throw error;
   }
+}
+
+/**
+ * Secret Managerにバージョンを追加（上書き保存）
+ */
+export async function setSecretValue(secretName: string, value: string): Promise<void> {
+  const client = new SecretManagerServiceClient();
+  const projectId = process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || process.env.GCP_PROJECT;
+  const parent = `projects/${projectId}/secrets/${secretName}`;
+
+  await client.addSecretVersion({
+    parent,
+    payload: {
+      data: Buffer.from(value, 'utf8'),
+    },
+  });
 }
 
 /**
