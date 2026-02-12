@@ -80,6 +80,42 @@ done
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 FRONTEND_DIR="$ROOT_DIR/frontend"
+CLIENTS_DIR="$SCRIPT_DIR/clients"
+
+# ===========================================
+# 認証安全チェック
+# ===========================================
+CLIENT_ENV="$CLIENTS_DIR/${PROJECT_ALIAS}.env"
+if [ -f "$CLIENT_ENV" ]; then
+    source "$CLIENT_ENV"
+
+    # gcloud構成の一致確認
+    CURRENT_CONFIG=$(gcloud config configurations list --filter="is_active=true" --format="value(name)" 2>/dev/null)
+    if [ -n "$GCLOUD_CONFIG" ] && [ "$CURRENT_CONFIG" != "$GCLOUD_CONFIG" ]; then
+        log_error "gcloud構成が不一致です"
+        echo "  期待: $GCLOUD_CONFIG"
+        echo "  実際: $CURRENT_CONFIG"
+        echo ""
+        echo "修正: ./scripts/switch-client.sh $PROJECT_ALIAS"
+        exit 1
+    fi
+
+    # アカウント一致確認
+    CURRENT_ACCOUNT=$(gcloud config get-value account 2>/dev/null)
+    if [ -n "$EXPECTED_ACCOUNT" ] && [ "$CURRENT_ACCOUNT" != "$EXPECTED_ACCOUNT" ]; then
+        log_error "gcloudアカウントが不一致です"
+        echo "  期待: $EXPECTED_ACCOUNT"
+        echo "  実際: $CURRENT_ACCOUNT"
+        echo ""
+        echo "修正: ./scripts/switch-client.sh $PROJECT_ALIAS"
+        exit 1
+    fi
+
+    log_success "認証チェック通過 ($CLIENT_NAME: $CURRENT_ACCOUNT)"
+else
+    log_warn "クライアント定義なし: $CLIENTS_DIR/${PROJECT_ALIAS}.env"
+    log_warn "認証チェックをスキップします"
+fi
 
 # .firebasercからプロジェクトIDを取得
 if [ ! -f "$ROOT_DIR/.firebaserc" ]; then

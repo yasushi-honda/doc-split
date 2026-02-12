@@ -1052,6 +1052,28 @@ if [ "$WITH_GMAIL" = true ]; then
 fi
 
 # ===========================================
+# Step 9: Firestore PITR有効化（本番環境のみ）
+# ===========================================
+echo ""
+log_info "Step 9: Firestore PITR (Point-in-Time Recovery) 有効化..."
+
+if [ "$PROJECT_ID" = "doc-split-dev" ]; then
+    log_info "開発環境のためPITRをスキップします"
+else
+    CURRENT_PITR=$(gcloud firestore databases describe --project="$PROJECT_ID" --format="value(pointInTimeRecoveryEnablement)" 2>/dev/null || echo "")
+    if [ "$CURRENT_PITR" = "POINT_IN_TIME_RECOVERY_ENABLED" ]; then
+        log_success "PITR は既に有効です"
+    else
+        if gcloud firestore databases update --project="$PROJECT_ID" --enable-pitr 2>/dev/null; then
+            log_success "PITR を有効化しました（7日間のポイントインタイムリカバリ）"
+        else
+            log_warn "PITR有効化に失敗しました。手動で有効化してください:"
+            log_warn "  gcloud firestore databases update --project=$PROJECT_ID --enable-pitr"
+        fi
+    fi
+fi
+
+# ===========================================
 # 完了
 # ===========================================
 echo ""
