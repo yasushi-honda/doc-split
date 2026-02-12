@@ -1,15 +1,17 @@
 # ハンドオフメモ
 
-**更新日**: 2026-02-13（クライアントドキュメント刷新完了）
+**更新日**: 2026-02-13（マルチクライアント安全運用機構完成）
 **ブランチ**: main（クリーン）
-**フェーズ**: Phase 8完了 + 追加実装（納品プロセス自動化 + クライアントドキュメント刷新）
+**フェーズ**: Phase 8完了 + 追加実装（納品プロセス自動化 + クライアントドキュメント刷新 + マルチクライアント安全運用）
 
-## 直近の変更（02-13・本セッション）
+## 直近の変更（02-13・本セッション後半）
 
 | コミット | 内容 |
 |----|------|
-| a51c277 | **ASCIIアート図をMermaidフロー図に置き換え**（PR #107）docs/client/client-setup.mdの2つのASCII図をMermaid flowchartに変換。index.htmlにMermaid@10 + docsify-mermaid@2プラグインを追加。可読性向上・モバイル対応・メンテナンス性改善 |
-| d4cce9e | **クライアントページを導入作業者向け詳細ガイドに刷新**（PR #106）チェックリスト型（137行）→ 4ページ構成の技術手順書に刷新。client-setup.md（トップ）+ setup-automated.md（自動）+ setup-manual.md（手動）+ troubleshooting.md（トラブルシューティング）。Docsifyサイドバー整備、共通CSS（warning/info/success/errorボックス）追加 |
+| **4e0172b** | **docs: マルチクライアント安全運用機構をドキュメントに反映**（PR #109）deployment-flow.md・delivery-and-update-guide.mdにswitch-client.sh、認証安全チェック、PITR自動有効化、クライアント定義ファイル説明を追加。E2Eフロー・トラブルシュート・新規クライアント追加手順に反映 |
+| **6f1ac3a** | **feat: マルチクライアント環境の安全運用機構**（PR #108）scripts/clients/{dev,kanameone,cocoro}.env、switch-client.sh、deploy-to-project.sh認証安全チェック、setup-tenant.sh PITR Step 9、verify-setup.sh強化（PITR・authMode・refresh-token確認）、.envrc・.gitignore更新。複数クライアント環境での誤操作防止と安全ガバナンス |
+| a51c277 | **ASCIIアート図をMermaidフロー図に置き換え**（PR #107）docs/client/client-setup.mdの2つのASCII図をMermaid flowchartに変換。可読性向上・モバイル対応・メンテナンス性改善 |
+| d4cce9e | **クライアントページを導入作業者向け詳細ガイドに刷新**（PR #106）チェックリスト型（137行）→ 4ページ構成の技術手順書に刷新。 |
 
 ## 直近の変更（02-11・前セッション）
 
@@ -170,12 +172,49 @@
 |------|------|
 | 手動PDFアップロードのOCR即時実行（ポーリング待ち最大60秒の短縮） | 納品直前のリスク回避。手動アップロードは利用頻度低い。実装する場合はuploadPdf成功後にFEからfire-and-forgetで新callable呼び出し |
 
+## マルチクライアント安全運用機構（02-13）
+
+**実装完了**: 複数クライアント環境（dev, kanameone, cocoro）での誤操作防止と安全ガバナンス
+
+### 実装内容
+
+1. **クライアント定義ファイル** (`scripts/clients/*.env`)
+   - 環境ごとのgcloud構成、期待アカウント、認証方式を宣言的に管理
+   - dev/kanameone: 個人アカウント（gmail.com）
+   - cocoro: サービスアカウント（サービスアカウント + JSONキー）
+
+2. **環境切替スクリプト** (`switch-client.sh`)
+   - gcloud構成とアカウントの自動切替
+   - `--list` で登録済みクライアント一覧表示
+   - エラー時にガイダンス表示
+
+3. **デプロイ前認証チェック** (`deploy-to-project.sh`)
+   - gcloud構成とアカウント一致を自動検証
+   - 不一致時は即座にデプロイ中止→修正案提示
+
+4. **PITR自動有効化** (`setup-tenant.sh` Step 9)
+   - Firestore 7日間ポイントインタイムリカバリを本番環境で自動有効化
+   - dev環境はスキップ
+
+5. **拡張検証** (`verify-setup.sh`)
+   - PITR確認（本番環境: 必須、開発環境: スキップ）
+   - authMode整合性確認（OAuth時はrefresh-token存在確認）
+   - authModeの値に応じた検証（`oauth` vs `service_account`）
+
+### ドキュメント反映（02-13後半）
+
+- **deployment-flow.md**: Step 9追加、verify-setup出力サンプル更新、環境切替手順追加
+- **delivery-and-update-guide.md**: アップデートフロー・新規クライアント追加フローに手順追加
+
 ## 次のアクション候補（優先度順）
 
-1. **納品フローの実運用テスト**（実クライアントで検証）
-   - ✅ Phase 1完了（02-11）: コード・ドキュメント検証（シンタックス、ロジック、整合性チェック）
-   - ⏳ Phase 2: 実環境テスト（Mac/Windows/Linux各OSでのスクリプト実行、GitHub Pagesフォーム動作確認、Claude Code実行テスト）
+1. **マルチクライアント安全運用機構の実運用テスト**（実クライアントで検証）
+   - switch-client.sh動作確認（各環境への切替）
+   - deploy-to-project.sh認証チェック（不一致検出テスト）
+   - PITR有効化・検証確認
    - フィードバック反映後のドキュメント改善
-2. **クライアント別オプション機能の実装**（最初の具体的要望確定時）→ ADR-0009参照
-3. 精度改善（フィードバック後）
-4. 手動PDFアップロードのOCR即時実行（クライアントから要望があれば）
+2. **納品フローの実運用テスト**（実クライアントで検証）
+   - ✅ Phase 1完了（02-11）: コード・ドキュメント検証
+   - ⏳ Phase 2: 実環境テスト（Mac/Windows/Linux各OSでのスクリプト実行、GitHub Pagesフォーム動作確認、Claude Code実行テスト）
+3. **クライアント別オプション機能の実装**（最初の具体的要望確定時）→ ADR-0009参照
+4. 精度改善（フィードバック後）

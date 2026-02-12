@@ -275,7 +275,7 @@
 | doc-split リポジトリをクローン済み＋依存インストール済み | `ls CLAUDE.md && ls frontend/node_modules` （未実行時: `npm install`） |
 | `gcloud` CLI 認証済み | `gcloud auth list` |
 | ADC（Application Default Credentials）設定済み **または** サービスアカウントJSONキー受領済み | `gcloud auth application-default login` **または** `export GOOGLE_APPLICATION_CREDENTIALS=/path/to/key.json` |
-| **クライアントのGCPプロジェクトへのオーナー権限 または JSONキー** | クライアントから招待済み、または組織アカウント環境の場合はJSONキー受領済み（[クライアント向けガイド](client/)参照） |
+| **クライアントのGCPプロジェクトへのオーナー権限 または JSONキー** | クライアントから招待済み、または組織アカウント環境の場合はJSONキー受領済み（[クライアント向けガイド](client/ ':ignore')参照） |
 | Python 3 インストール済み | `python3 --version` |
 
 ---
