@@ -139,6 +139,47 @@ firebase deploy --only functions
 
 ---
 
+## 方式3: アプリ内OAuth連携（IAP API自動作成）
+
+Google Workspaceを利用しているが、Workspace管理者のAdmin Console操作が得られない場合。
+IAP APIでOAuth clientを自動作成し、クライアントがアプリUIで承認するだけで完了します。
+
+> **注意**: IAP OAuth Admin APIは2026年3月に廃止予定。作成済みclientは永続的に動作しますが、廃止後の新規作成は手動フォールバックが必要です。詳細: [ADR-0013](../adr/0013-iap-oauth-api-gmail-setup.md)
+
+### 手順
+
+#### Step 1: setup-tenant.sh実行（開発者）
+
+```bash
+./scripts/setup-tenant.sh <project-id> <admin-email> --gmail-iap --yes
+```
+
+これにより以下が自動設定されます:
+- IAP APIでOAuth Brand/Client作成
+- Secret Managerにclient-id/client-secret保存
+- Firestore `settings/gmail.authMode = 'oauth'`
+- Firestore `settings/gmail.oauthClientId = <自動作成されたclient-id>`
+
+#### Step 2: クライアントがアプリでGmail連携（クライアント）
+
+1. `https://<project-id>.web.app` にログイン
+2. 設定画面 → 「Gmail連携」ボタンを押下
+3. Googleアカウント選択 → 権限承認
+4. 完了（refresh-tokenはCloud Functionが自動保存）
+
+#### Step 3: 動作確認
+
+```bash
+gcloud functions call checkGmailAttachments --project <project-id>
+```
+
+### 制約
+
+- IAP APIで作成したOAuth clientは`orgInternalOnly=true`のため、同一Workspaceドメインのユーザーのみ承認可能
+- 個人Gmail（@gmail.com）では利用不可 → 方式1を使用
+
+---
+
 ## トラブルシューティング
 
 ### エラー: "Delegation not authorized"

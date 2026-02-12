@@ -232,7 +232,32 @@
 
 **所要時間:** 約5分（OAuth設定） + 約10分（Claude Code実行） = 約15分
 
-**推奨:** 実運用ではGmail連携が必須のため、シナリオ2を推奨します。
+---
+
+### シナリオ3: 完全自動納品（IAP API + アプリ内OAuth）
+
+**必要な情報:**
+- ✅ プロジェクトID（クライアントから受領）
+- ✅ 管理者メールアドレス（クライアントから受領）
+- OAuth認証情報は**不要**（IAP APIで自動作成）
+
+**Claude Codeで自動実行される内容:**
+- シナリオ1の内容すべて
+- **IAP APIでOAuth client自動作成** ← 追加
+- Secret Managerにclient-id/secret保存
+- Firestore設定にoauthClientId保存
+
+**クライアント操作:**
+- アプリにログイン → 設定画面 → 「Gmail連携」ボタン押下のみ
+
+**所要時間:** 約12分（Claude Code実行のみ）
+
+<div class="warn-box">
+<strong>IAP API廃止予定</strong>: IAP OAuth Admin APIは2026年3月に廃止予定です。作成済みOAuth clientは永続的に動作しますが、廃止後の新規作成はGCPコンソール手動操作（シナリオ2相当）にフォールバックが必要です。<br>
+詳細: <a href="context/delivery-and-update-guide.md">納品・アップデートガイド</a>
+</div>
+
+**推奨:** Workspace管理者の協力が得られない場合はシナリオ3、得られる場合はService Account + DWD方式を推奨します。
 
 ---
 
@@ -344,6 +369,25 @@ OAuth認証情報やCSVは空欄でもプロンプト生成できます。空欄
   </div>
 </div>
 
+<h3>Gmail連携方式</h3>
+<div class="form-grid">
+  <div class="form-group full-width">
+    <label>Gmail連携の方式を選択</label>
+    <div style="display: flex; gap: 16px; margin-top: 8px;">
+      <label style="font-weight: normal; cursor: pointer;">
+        <input type="radio" name="gmail-mode" value="none" checked onchange="updatePrompts()"> Gmail連携なし
+      </label>
+      <label style="font-weight: normal; cursor: pointer;">
+        <input type="radio" name="gmail-mode" value="manual" onchange="updatePrompts()"> 手動OAuth（シナリオ2）
+      </label>
+      <label style="font-weight: normal; cursor: pointer;">
+        <input type="radio" name="gmail-mode" value="iap" onchange="updatePrompts()"> IAP自動作成（シナリオ3）★推奨
+      </label>
+    </div>
+  </div>
+</div>
+
+<div id="gmail-oauth-section">
 <h3>Gmail OAuth 認証情報 <span class="optional-tag">（OAuth設定後に入力）</span></h3>
 <div class="form-grid">
   <div class="form-group">
@@ -358,6 +402,13 @@ OAuth認証情報やCSVは空欄でもプロンプト生成できます。空欄
     <label>認証コード <span class="optional-tag">任意</span>（<code>./scripts/setup-gmail-auth.sh --get-code --client-id=X</code> で取得）</label>
     <input type="text" id="auth-code" placeholder="4/0AY-xxxx" oninput="updatePrompts()">
   </div>
+</div>
+
+</div>
+
+<div id="iap-notice" style="display:none; background: #fef3c7; border-radius: 8px; padding: 12px 16px; margin: 12px 0; border-left: 4px solid #f59e0b; color: #78350f;">
+  <strong>IAP自動作成モード:</strong> OAuth認証情報の入力は不要です。IAP APIがOAuth clientを自動作成し、クライアントはアプリ内で「Gmail連携」ボタンを押すだけで完了します。<br>
+  <small>注意: IAP OAuth Admin APIは2026年3月に廃止予定。作成済みclientは永続動作。</small>
 </div>
 
 <h3>マスターデータCSV <span class="optional-tag">（クライアントから受領後に入力）</span></h3>

@@ -315,6 +315,26 @@
       d.textContent = text;
       return d.innerHTML;
     }
+    function _getGmailMode() {
+      var radios = document.getElementsByName('gmail-mode');
+      for (var i = 0; i < radios.length; i++) {
+        if (radios[i].checked) return radios[i].value;
+      }
+      return 'none';
+    }
+
+    function _buildSetupCmd(fmt, pid, email, cid, csec, code) {
+      var mode = _getGmailMode();
+      var cmd = '   ./scripts/setup-tenant.sh ' + pid + ' ' + fmt(email, '<admin-email>');
+      if (mode === 'iap') {
+        cmd += ' --gmail-iap --yes';
+      } else if (mode === 'manual') {
+        cmd += ' --with-gmail --client-id=' + fmt(cid, '<client-id>') + ' --client-secret=' + fmt(csec, '<client-secret>') + ' --auth-code=' + fmt(code, '<auth-code>') + ' --yes';
+      } else {
+        cmd += ' --yes';
+      }
+      return cmd;
+    }
 
     function _buildMinimal(fmt) {
       var pid = _cdVal('project-id');
@@ -327,12 +347,13 @@
       var csvOff = _cdVal('csv-offices');
       var csvCm = _cdVal('csv-caremanagers');
       var p = fmt(pid, '<project-id>');
+      var mode = _getGmailMode();
 
       var lines = 'DocSplitの新規納品を実施してください。\n\n'
         + '前提: クライアントが client-setup-gcp スクリプトでGCPプロジェクトを作成済み\n\n'
         + '■ 手順（以下のコマンドを順番に実行）\n\n'
         + '1. セットアップ実行:\n'
-        + '   ./scripts/setup-tenant.sh ' + p + ' ' + fmt(email, '<admin-email>') + ' --with-gmail --client-id=' + fmt(cid, '<client-id>') + ' --client-secret=' + fmt(csec, '<client-secret>') + ' --auth-code=' + fmt(code, '<auth-code>') + ' --yes\n\n'
+        + _buildSetupCmd(fmt, p, email, cid, csec, code) + '\n\n'
         + '2. 中間検証:\n'
         + '   ./scripts/verify-setup.sh ' + p + '\n\n'
         + '3. マスターデータ投入:\n'
@@ -344,8 +365,12 @@
       }
       lines += '\n4. 最終検証:\n'
         + '   ./scripts/verify-setup.sh ' + p + '\n\n'
-        + '5. 結果をサマリーで報告\n\n'
-        + '■ 禁止事項\n'
+        + '5. 結果をサマリーで報告\n\n';
+      if (mode === 'iap') {
+        lines += '■ クライアントへの案内\n'
+          + '- アプリにログイン → 設定画面 → 「Gmail連携」ボタンを押下してもらう\n\n';
+      }
+      lines += '■ 禁止事項\n'
         + '- firebase firestore:delete --all-collections は絶対禁止\n'
         + '- 本番環境にサンプルデータを投入しない\n'
         + '- 失敗時は3回まで再試行、それ以上は報告して停止';
@@ -364,6 +389,7 @@
       var csvCm = _cdVal('csv-caremanagers');
       var domain = _cdVal('extra-domain');
       var p = fmt(pid, '<project-id>');
+      var mode = _getGmailMode();
 
       var stepNum = 1;
       var lines = 'DocSplitの新規納品を実施してください。\n\n'
@@ -371,7 +397,7 @@
         + '■ 手順（以下のコマンドを順番厳守で実行）\n\n';
 
       lines += (stepNum++) + '. セットアップ実行:\n'
-        + '   ./scripts/setup-tenant.sh ' + p + ' ' + fmt(email, '<admin-email>') + ' --with-gmail --client-id=' + fmt(cid, '<client-id>') + ' --client-secret=' + fmt(csec, '<client-secret>') + ' --auth-code=' + fmt(code, '<auth-code>') + ' --yes\n\n';
+        + _buildSetupCmd(fmt, p, email, cid, csec, code) + '\n\n';
 
       lines += (stepNum++) + '. 中間検証:\n'
         + '   ./scripts/verify-setup.sh ' + p + '\n\n';
@@ -394,6 +420,11 @@
         + '   ./scripts/verify-setup.sh ' + p + '\n\n';
 
       lines += stepNum + '. 結果をサマリーで報告\n\n';
+
+      if (mode === 'iap') {
+        lines += '■ クライアントへの案内\n'
+          + '- アプリにログイン → 設定画面 → 「Gmail連携」ボタンを押下してもらう\n\n';
+      }
 
       lines += '■ 禁止事項\n'
         + '- firebase firestore:delete --all-collections は絶対禁止\n'
@@ -467,6 +498,17 @@
 
     function updatePrompts() {
       if (!document.getElementById('project-id')) return;
+
+      // Gmail方式に応じてOAuth入力欄の表示/非表示を切替
+      var mode = _getGmailMode();
+      var oauthSection = document.getElementById('gmail-oauth-section');
+      var iapNotice = document.getElementById('iap-notice');
+      if (oauthSection) {
+        oauthSection.style.display = (mode === 'manual') ? 'block' : 'none';
+      }
+      if (iapNotice) {
+        iapNotice.style.display = (mode === 'iap') ? 'block' : 'none';
+      }
 
       var isValid = _validateForm();
       _setCopyBtnsDisabled(!isValid);
