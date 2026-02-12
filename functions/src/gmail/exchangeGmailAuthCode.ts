@@ -16,41 +16,9 @@
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
 import { google } from 'googleapis';
-import { SecretManagerServiceClient } from '@google-cloud/secret-manager';
+import { getSecretValue, setSecretValue } from '../utils/gmailAuth';
 
 const db = admin.firestore();
-
-/**
- * Secret Managerから値を取得
- */
-async function getSecretValue(secretName: string): Promise<string> {
-  const client = new SecretManagerServiceClient();
-  const projectId = process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT;
-  const name = `projects/${projectId}/secrets/${secretName}/versions/latest`;
-
-  const [version] = await client.accessSecretVersion({ name });
-  const payload = version.payload?.data;
-  if (!payload) {
-    throw new Error(`Secret ${secretName} has no data`);
-  }
-  return payload.toString();
-}
-
-/**
- * Secret Managerにバージョンを追加（上書き保存）
- */
-async function setSecretValue(secretName: string, value: string): Promise<void> {
-  const client = new SecretManagerServiceClient();
-  const projectId = process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT;
-  const parent = `projects/${projectId}/secrets/${secretName}`;
-
-  await client.addSecretVersion({
-    parent,
-    payload: {
-      data: Buffer.from(value, 'utf8'),
-    },
-  });
-}
 
 export const exchangeGmailAuthCode = onCall(
   { region: 'asia-northeast1', timeoutSeconds: 60 },
@@ -71,7 +39,7 @@ export const exchangeGmailAuthCode = onCall(
 
     // 3. パラメータ検証
     const { code } = request.data as { code?: string };
-    if (!code || typeof code !== 'string') {
+    if (!code || typeof code !== 'string' || !code.trim()) {
       throw new HttpsError('invalid-argument', 'Authorization code is required');
     }
 
@@ -120,7 +88,8 @@ export const exchangeGmailAuthCode = onCall(
         { merge: true }
       );
 
-      console.log(`Gmail OAuth connected successfully for: ${email} by user: ${request.auth.token.email}`);
+      const callerEmail = request.auth.token.email || request.auth.uid;
+      console.log(`Gmail OAuth connected successfully for: ${email} by user: ${callerEmail}`);
 
       return {
         success: true,

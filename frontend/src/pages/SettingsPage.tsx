@@ -38,7 +38,7 @@ import {
 import { useSettings, useUpdateSettings, useUsers, useAddUser, useDeleteUser, useUpdateUserRole } from '@/hooks/useSettings'
 import { doc, getDoc } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
-import { callFunction } from '@/lib/callFunction'
+import { callFunction, getCallableErrorMessage } from '@/lib/callFunction'
 import { useQueryClient } from '@tanstack/react-query'
 import type { UserRole } from '@shared/types'
 
@@ -515,7 +515,8 @@ function useGmailAuthSettings() {
       } else {
         setData({ authMode: 'service_account' })
       }
-    } catch {
+    } catch (error) {
+      console.warn('Failed to fetch Gmail auth settings:', error)
       setData({ authMode: 'service_account' })
     } finally {
       setIsLoading(false)
@@ -572,8 +573,7 @@ function GmailOAuthConnect() {
           await refetch()
           queryClient.invalidateQueries({ queryKey: ['settings'] })
         } catch (err) {
-          const message = err instanceof Error ? err.message : '連携に失敗しました'
-          setError(message)
+          setError(getCallableErrorMessage(err, 'Gmail連携に失敗しました'))
         } finally {
           setConnecting(false)
         }
