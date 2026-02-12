@@ -178,10 +178,31 @@ done
 
 ---
 
+### Gmail連携方式の選択ガイド
+
+Gmail連携を設定する場合、クライアント環境に応じて最適な方式を選択します。
+
+```
+クライアントはGoogle Workspaceを利用？
+  ├─ YES → Workspace管理者の協力が得られる？
+  │          ├─ YES → 方式2: SA + DWD（--with-gmail相当、最も安全）
+  │          └─ NO  → 方式3: IAP + アプリ内OAuth（--gmail-iap）★推奨
+  └─ NO（個人Gmail） → 方式1: OAuth CLI（--with-gmail）
+```
+
+| 方式 | コマンド | 事前準備 | クライアント操作 |
+|------|---------|---------|----------------|
+| 方式1: OAuth CLI | `--with-gmail` | GCPコンソールでOAuth client手動作成 + auth-code取得 | なし |
+| 方式2: SA + DWD | setup-gmail-service-account.sh | Workspace管理者にDWD設定依頼 | Admin Console操作 |
+| 方式3: IAP + アプリ内OAuth | `--gmail-iap` | なし（全自動） | アプリで「Gmail連携」ボタン押下 |
+
+> **方式3の注意**: IAP OAuth Admin APIは2026年3月に廃止予定。作成済みclientは永続的に動作するが、新規作成は手動フォールバックが必要になる。詳細: [ADR-0013](../adr/0013-iap-oauth-api-gmail-setup.md)
+
 ### 納品シナリオ
 
 **シナリオ1（Gmail連携なし）**: プロジェクトID + 管理者メールのみで基本納品（約10分）
-**シナリオ2（Gmail連携あり）**: OAuth設定 + Claude Code自動納品（約15分） ← 推奨
+**シナリオ2（Gmail連携・手動OAuth）**: OAuth設定 + Claude Code自動納品（約15分）
+**シナリオ3（Gmail連携・IAP自動作成）**: プロジェクトID + 管理者メールのみで完全自動（約12分） ★推奨
 
 ### 手順
 
@@ -240,12 +261,16 @@ done
 # 2-1. クライアントのGCPプロジェクトに切替
 gcloud config set project <client-project-id>
 
-# 2-2. セットアップスクリプト実行（Gmail OAuth込みで一括）
-./scripts/setup-tenant.sh <client-project-id> <admin-email> --with-gmail
+# 2-2. セットアップスクリプト実行
 
-# Claude Code / CI用（非対話モード）
-./scripts/setup-tenant.sh <client-project-id> <admin-email> --yes
+# シナリオ2: Gmail OAuth込みで一括（手動OAuth方式）
 ./scripts/setup-tenant.sh <client-project-id> <admin-email> --with-gmail --client-id=X --client-secret=Y --auth-code=Z --yes
+
+# シナリオ3: Gmail IAP自動作成（Workspace管理者非協力時）★推奨
+./scripts/setup-tenant.sh <client-project-id> <admin-email> --gmail-iap --yes
+
+# Claude Code / CI用（非対話モード、Gmail連携なし）
+./scripts/setup-tenant.sh <client-project-id> <admin-email> --yes
 
 # または、Gmail設定を後から行う場合
 ./scripts/setup-tenant.sh <client-project-id> <admin-email>
@@ -411,16 +436,17 @@ git push origin main
 ```bash
 # 1. クライアントがGCPプロジェクト作成・課金設定
 
-# 2. セットアップ実行（--with-gmail推奨、.firebasercへのエイリアス追加も自動）
-./scripts/setup-tenant.sh <new-client-project-id> <admin-email> --with-gmail
+# 2. セットアップ実行（.firebasercへのエイリアス追加も自動）
 
-# Claude Code / CI用（非対話モード）
+# シナリオ3: IAP自動作成 ★推奨（Workspace管理者非協力時）
+./scripts/setup-tenant.sh <new-client-project-id> <admin-email> --gmail-iap --yes
+
+# シナリオ2: 手動OAuth方式
 ./scripts/setup-tenant.sh <new-client-project-id> <admin-email> --with-gmail --client-id=X --client-secret=Y --auth-code=Z --yes
 
 # Gmail設定を後から行う場合
 # ./scripts/setup-tenant.sh <new-client-project-id> <admin-email>
 # ./scripts/setup-gmail-auth.sh <new-client-project-id>
-# ./scripts/setup-gmail-auth.sh <new-client-project-id> --client-id=X --client-secret=Y --auth-code=Z
 
 # 3. マスターデータ投入
 FIREBASE_PROJECT_ID=<new-client-project-id> node scripts/import-masters.js --customers <customers.csv>
@@ -712,6 +738,7 @@ node scripts/migrate-document-fields.js <project-id>
 
 | 日付 | 内容 |
 |------|------|
+| 2026-02-13 | Gmail連携方式3（IAP API自動作成）追加、方式選択ガイド追加（ADR-0013参照） |
 | 2026-02-11 | 組織アカウント環境での対応セクション追加（ADR-0011参照） |
 | 2026-02-05 | ヘルプページ追加、セットアップ情報タブ追加 |
 | 2026-01-25 | 過去受信分の巻取り対応セクション追加 |

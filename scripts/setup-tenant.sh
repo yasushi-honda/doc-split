@@ -6,7 +6,8 @@
 #   ./setup-tenant.sh <project-id> <admin-email> [OPTIONS]
 #
 # オプション:
-#   --with-gmail       Gmail OAuth認証も一括設定
+#   --with-gmail       Gmail OAuth認証も一括設定（手動OAuth方式）
+#   --gmail-iap        Gmail連携をIAP APIで自動設定（Workspace管理者非協力時）
 #   --gmail-account=X  監視対象Gmailアカウント（省略時はadmin-emailを使用）
 #   --skip-functions   Cloud Functionsデプロイをスキップ
 #   --skip-hosting     Hostingデプロイをスキップ
@@ -41,7 +42,8 @@
 #   5. Firestore/Storageルールデプロイ + CORS設定（個人: CLI / SA: 手動）
 #   6. Cloud Functionsデプロイ（個人: CLI / SA: 手動）
 #   7. Hostingデプロイ（個人: CLI / SA: 手動）
-#   8. Gmail OAuth設定（--with-gmail指定時）
+#   8a. Gmail IAP自動設定（--gmail-iap指定時）
+#   8b. Gmail OAuth設定（--with-gmail指定時）
 #
 # ※ CORS設定: ブラウザからPDFを閲覧するために必須
 #
@@ -120,7 +122,8 @@ usage() {
     echo "  admin-email   初期管理者のメールアドレス"
     echo ""
     echo "Options:"
-    echo "  --with-gmail        Gmail OAuth認証も一括設定"
+    echo "  --with-gmail        Gmail OAuth認証も一括設定（手動OAuth方式）"
+    echo "  --gmail-iap         Gmail連携をIAP APIで自動設定（Workspace管理者非協力時）"
     echo "  --gmail-account=X   監視対象Gmailアカウント（省略時はadmin-email）"
     echo "  --skip-functions    Cloud Functionsデプロイをスキップ"
     echo "  --skip-hosting      Hostingデプロイをスキップ"
@@ -134,6 +137,7 @@ usage() {
     echo "  $0 client-docsplit admin@client.com --with-gmail"
     echo "  $0 client-docsplit admin@client.com --with-gmail --yes"
     echo "  $0 client-docsplit admin@client.com --with-gmail --client-id=XXX --client-secret=YYY --auth-code=ZZZ --yes"
+    echo "  $0 client-docsplit admin@client.com --gmail-iap --yes"
     echo "  $0 client-docsplit admin@client.com --gmail-account=support@client.com"
     exit 1
 }
@@ -149,6 +153,7 @@ ADMIN_EMAIL=$2
 # オプションのデフォルト値
 GMAIL_ACCOUNT="$ADMIN_EMAIL"
 WITH_GMAIL=false
+GMAIL_IAP=false
 SKIP_FUNCTIONS=false
 SKIP_HOSTING=false
 ASSUME_YES=false
@@ -162,6 +167,9 @@ for arg in "$@"; do
     case $arg in
         --with-gmail)
             WITH_GMAIL=true
+            ;;
+        --gmail-iap)
+            GMAIL_IAP=true
             ;;
         --gmail-account=*)
             GMAIL_ACCOUNT="${arg#*=}"
@@ -569,8 +577,8 @@ async function main() {
     });
     console.log('✓ settings/auth を作成 (許可ドメイン: ' + adminDomain + ')');
 
-    // Gmail認証設定（--with-gmail指定時はOAuth、それ以外はService Account）
-    const gmailAuthMode = '$WITH_GMAIL' === 'true' ? 'oauth' : 'service_account';
+    // Gmail認証設定（--with-gmail / --gmail-iap 指定時はOAuth、それ以外はService Account）
+    const gmailAuthMode = ('$WITH_GMAIL' === 'true' || '$GMAIL_IAP' === 'true') ? 'oauth' : 'service_account';
     await db.doc('settings/gmail').set({
         authMode: gmailAuthMode,
         delegatedUserEmail: '$GMAIL_ACCOUNT',
@@ -781,7 +789,194 @@ else
 fi
 
 # ===========================================
-# Step 8: Gmail OAuth設定（--with-gmail指定時）
+# Step 8a: Gmail IAP自動設定（--gmail-iap指定時）
+# ===========================================
+if [ "$GMAIL_IAP" = true ]; then
+    echo ""
+    log_info "Step 8: Gmail連携設定（IAP API自動作成）..."
+    echo ""
+
+    # IAP API廃止警告
+    log_warn "注意: IAP OAuth Admin APIは2026年3月に廃止予定です"
+    log_warn "作成済みOAuth clientは永続的に動作しますが、新規作成は廃止後に手動フォールバックが必要です"
+    log_warn "詳細: docs/adr/0013-iap-oauth-api-gmail-setup.md"
+    echo ""
+
+    # 1. IAP API有効化
+    log_info "IAP API有効化..."
+    if gcloud services enable iap.googleapis.com --project="$PROJECT_ID" 2>/dev/null; then
+        log_success "IAP API有効化完了"
+    else
+        log_warn "IAP API有効化に失敗しました（既に有効、または権限なし）"
+    fi
+
+    # 2. Secret Manager API有効化確認
+    log_info "Secret Manager API確認..."
+    gcloud services enable secretmanager.googleapis.com --project="$PROJECT_ID" 2>/dev/null || true
+    log_success "Secret Manager API有効化確認完了"
+
+    # 3. OAuth Brand作成（既存あれば再利用）
+    log_info "OAuth Brand確認..."
+    EXISTING_BRAND=$(gcloud iap oauth-brands list --project="$PROJECT_ID" --format="value(name)" 2>/dev/null | head -1)
+
+    if [ -n "$EXISTING_BRAND" ]; then
+        log_success "既存のOAuth Brand発見: $EXISTING_BRAND"
+        BRAND_NAME="$EXISTING_BRAND"
+    else
+        log_info "OAuth Brand作成中..."
+        BRAND_RESULT=$(gcloud iap oauth-brands create \
+            --application_title="DocSplit" \
+            --support_email="$ADMIN_EMAIL" \
+            --project="$PROJECT_ID" \
+            --format="value(name)" 2>/dev/null)
+        if [ -n "$BRAND_RESULT" ]; then
+            BRAND_NAME="$BRAND_RESULT"
+            log_success "OAuth Brand作成完了: $BRAND_NAME"
+        else
+            log_error "OAuth Brand作成に失敗しました"
+            log_warn "手動で作成する場合:"
+            log_warn "  gcloud iap oauth-brands create --application_title=DocSplit --support_email=$ADMIN_EMAIL --project=$PROJECT_ID"
+            exit 1
+        fi
+    fi
+
+    # 4. OAuth Client作成（既存あれば再利用）
+    log_info "OAuth Client確認..."
+    EXISTING_CLIENT=$(gcloud iap oauth-clients list "$BRAND_NAME" --format="json" 2>/dev/null)
+    EXISTING_CLIENT_NAME=$(echo "$EXISTING_CLIENT" | jq -r '.[0].name // ""' 2>/dev/null)
+
+    if [ -n "$EXISTING_CLIENT_NAME" ] && [ "$EXISTING_CLIENT_NAME" != "" ] && [ "$EXISTING_CLIENT_NAME" != "null" ]; then
+        IAP_CLIENT_ID=$(echo "$EXISTING_CLIENT" | jq -r '.[0].name' 2>/dev/null | sed 's|.*/||')
+        IAP_CLIENT_SECRET=$(echo "$EXISTING_CLIENT" | jq -r '.[0].secret // ""' 2>/dev/null)
+        log_success "既存のOAuth Client発見: $IAP_CLIENT_ID"
+
+        # secretが取得できない場合は新規作成
+        if [ -z "$IAP_CLIENT_SECRET" ] || [ "$IAP_CLIENT_SECRET" = "null" ]; then
+            log_warn "既存clientのsecretが取得できないため、新規作成します"
+            EXISTING_CLIENT_NAME=""
+        fi
+    fi
+
+    if [ -z "$EXISTING_CLIENT_NAME" ] || [ "$EXISTING_CLIENT_NAME" = "null" ]; then
+        log_info "OAuth Client作成中..."
+        CLIENT_RESULT=$(gcloud iap oauth-clients create "$BRAND_NAME" \
+            --display_name="DocSplit Gmail" \
+            --format="json" 2>/dev/null)
+        if [ -n "$CLIENT_RESULT" ]; then
+            IAP_CLIENT_ID=$(echo "$CLIENT_RESULT" | jq -r '.name' 2>/dev/null | sed 's|.*/||')
+            IAP_CLIENT_SECRET=$(echo "$CLIENT_RESULT" | jq -r '.secret' 2>/dev/null)
+            log_success "OAuth Client作成完了: $IAP_CLIENT_ID"
+        else
+            log_error "OAuth Client作成に失敗しました"
+            log_warn "IAP API廃止済みの可能性があります。GCPコンソールで手動作成してください:"
+            log_warn "  https://console.cloud.google.com/apis/credentials?project=$PROJECT_ID"
+            exit 1
+        fi
+    fi
+
+    # 5. Secret Manager保存（client-id, client-secret）
+    log_info "Secret Managerに認証情報を保存中..."
+
+    for secret_name in gmail-oauth-client-id gmail-oauth-client-secret gmail-oauth-refresh-token; do
+        if ! gcloud secrets describe "$secret_name" --project="$PROJECT_ID" 2>/dev/null; then
+            gcloud secrets create "$secret_name" --replication-policy="automatic" --project="$PROJECT_ID" 2>/dev/null
+            log_success "  Secret作成: $secret_name"
+        fi
+    done
+
+    # client-id保存
+    echo -n "$IAP_CLIENT_ID" | gcloud secrets versions add gmail-oauth-client-id \
+        --data-file=- --project="$PROJECT_ID" 2>/dev/null
+    log_success "  gmail-oauth-client-id 保存完了"
+
+    # client-secret保存
+    echo -n "$IAP_CLIENT_SECRET" | gcloud secrets versions add gmail-oauth-client-secret \
+        --data-file=- --project="$PROJECT_ID" 2>/dev/null
+    log_success "  gmail-oauth-client-secret 保存完了"
+
+    # 6. refresh-token用の空Secret（ユーザーがアプリで承認時にCloud Functionが書き込む）
+    # 初期値として空文字を設定
+    EXISTING_RT_VERSION=$(gcloud secrets versions list gmail-oauth-refresh-token --project="$PROJECT_ID" --format="value(name)" --limit=1 2>/dev/null)
+    if [ -z "$EXISTING_RT_VERSION" ]; then
+        echo -n "" | gcloud secrets versions add gmail-oauth-refresh-token \
+            --data-file=- --project="$PROJECT_ID" 2>/dev/null
+        log_success "  gmail-oauth-refresh-token 空Secretを準備"
+    else
+        log_success "  gmail-oauth-refresh-token 既存バージョンあり"
+    fi
+
+    # 7. Cloud Functions SAに権限付与
+    log_info "Cloud Functions SAにSecret Manager読み取り権限を付与中..."
+    for secret_name in gmail-oauth-client-id gmail-oauth-client-secret gmail-oauth-refresh-token; do
+        gcloud secrets add-iam-policy-binding "$secret_name" \
+            --project="$PROJECT_ID" \
+            --member="serviceAccount:$FUNCTIONS_SA" \
+            --role="roles/secretmanager.secretAccessor" --quiet 2>/dev/null || true
+    done
+
+    # Secret Manager書き込み権限（refresh-tokenの保存用）
+    gcloud secrets add-iam-policy-binding gmail-oauth-refresh-token \
+        --project="$PROJECT_ID" \
+        --member="serviceAccount:$FUNCTIONS_SA" \
+        --role="roles/secretmanager.secretVersionAdder" --quiet 2>/dev/null || true
+
+    log_success "Secret Manager権限付与完了"
+
+    # 8. Firestore settings/gmail にoauthClientId保存
+    log_info "Firestore設定を更新中..."
+    TMP_KEY_IAP="/tmp/firebase-admin-key-iap-$PROJECT_ID.json"
+    SA_EMAIL_IAP="firebase-adminsdk-fbsvc@${PROJECT_ID}.iam.gserviceaccount.com"
+
+    # SAメール取得（既にStep 4で取得済みの場合はスキップ）
+    if [ -z "$SA_EMAIL_IAP" ]; then
+        SA_EMAIL_IAP=$(gcloud iam service-accounts list --project="$PROJECT_ID" --filter="displayName:firebase-adminsdk" --format="value(email)" 2>/dev/null | head -1)
+    fi
+
+    if [ -n "$SA_EMAIL_IAP" ]; then
+        gcloud iam service-accounts keys create "$TMP_KEY_IAP" \
+            --iam-account="$SA_EMAIL_IAP" \
+            --project="$PROJECT_ID" 2>/dev/null
+
+        GOOGLE_APPLICATION_CREDENTIALS="$TMP_KEY_IAP" node << NODEJS_IAP_SCRIPT
+const { initializeApp, cert } = require('firebase-admin/app');
+const { getFirestore } = require('firebase-admin/firestore');
+
+const serviceAccount = require('$TMP_KEY_IAP');
+initializeApp({ credential: cert(serviceAccount), projectId: '$PROJECT_ID' });
+
+const db = getFirestore();
+
+async function main() {
+    await db.doc('settings/gmail').set({
+        authMode: 'oauth',
+        oauthClientId: '$IAP_CLIENT_ID',
+        updatedAt: new Date()
+    }, { merge: true });
+    console.log('✓ settings/gmail にoauthClientIdを設定');
+}
+
+main().catch(console.error);
+NODEJS_IAP_SCRIPT
+
+        rm -f "$TMP_KEY_IAP"
+        log_success "Firestore設定更新完了"
+    else
+        log_warn "Firebase Admin SDKサービスアカウントが見つかりません。手動で設定してください"
+    fi
+
+    echo ""
+    log_success "Gmail連携設定（IAP API自動作成）完了"
+    echo ""
+    log_info "クライアントに以下を案内してください:"
+    echo "  1. https://${PROJECT_ID}.web.app にログイン"
+    echo "  2. 設定画面 → 「Gmail連携」ボタンを押下"
+    echo "  3. Googleアカウント選択 → 権限承認"
+    echo "  4. 完了（Gmail自動取得が開始されます）"
+    echo ""
+fi
+
+# ===========================================
+# Step 8b: Gmail OAuth設定（--with-gmail指定時）
 # ===========================================
 if [ "$WITH_GMAIL" = true ]; then
     echo ""
@@ -859,35 +1054,38 @@ echo ""
 echo "アプリURL: https://${PROJECT_ID}.web.app"
 echo ""
 
-# 残りの手順（--with-gmailを使った場合は一部省略）
+# 残りの手順（--with-gmail / --gmail-iap を使った場合は一部省略）
 echo -e "${YELLOW}残りの手順:${NC}"
 
-if [ "$WITH_GMAIL" = false ]; then
-    echo "  1. Gmail API認証設定（OAuth or Service Account）"
+STEP_NUM=1
+
+if [ "$WITH_GMAIL" = false ] && [ "$GMAIL_IAP" = false ]; then
+    echo "  ${STEP_NUM}. Gmail API認証設定（OAuth or Service Account）"
     echo "     → scripts/setup-gmail-auth.sh $PROJECT_ID"
     echo ""
-    echo "  2. Gmail監視ラベル設定（重要）"
-else
-    echo "  1. Gmail監視ラベル設定（重要）"
+    STEP_NUM=$((STEP_NUM + 1))
 fi
+
+if [ "$GMAIL_IAP" = true ]; then
+    echo "  ${STEP_NUM}. クライアントにGmail連携を案内（重要）"
+    echo "     → アプリにログイン → 設定画面 → 「Gmail連携」ボタン押下"
+    echo ""
+    STEP_NUM=$((STEP_NUM + 1))
+fi
+
+echo "  ${STEP_NUM}. Gmail監視ラベル設定（重要）"
 echo "     → アプリにログイン後、設定画面で監視対象ラベルを追加"
 echo "     → 例: AI_OCR, 書類管理 など"
 echo ""
+STEP_NUM=$((STEP_NUM + 1))
 
-if [ "$WITH_GMAIL" = false ]; then
-    echo "  3. マスターデータ投入（任意）"
-else
-    echo "  2. マスターデータ投入（任意）"
-fi
+echo "  ${STEP_NUM}. マスターデータ投入（任意）"
 echo "     → node scripts/import-masters.js --all scripts/samples/"
 echo "     → または管理画面からCSVインポート"
 echo ""
+STEP_NUM=$((STEP_NUM + 1))
 
-if [ "$WITH_GMAIL" = false ]; then
-    echo "  4. 管理者が初回ログイン"
-else
-    echo "  3. 管理者が初回ログイン"
-fi
+echo "  ${STEP_NUM}. 管理者が初回ログイン"
 echo "     → $ADMIN_EMAIL でGoogleログイン"
 echo ""
 
