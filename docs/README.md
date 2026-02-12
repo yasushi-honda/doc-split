@@ -74,7 +74,7 @@ graph LR
 
 ### フロー概要
 
-1. **クライアント**: [client-setup-gcp スクリプト](client/)でGCPプロジェクト作成（約5分）
+1. **クライアント**: [client-setup-gcp スクリプト](client/ ':ignore')でGCPプロジェクト作成（約5分）
 2. **開発者**: [Claude Code自動納品](claude-code-delivery.md)でFirebase設定・デプロイ（約10分）
 
 ### 特徴
@@ -86,5 +86,5 @@ graph LR
 
 詳細は以下を参照：
 - [Claude Code 自動納品](claude-code-delivery.md)（開発者向け）
-- [クライアント向けセットアップガイド](client/)（クライアント向け）
+- [クライアント向けセットアップガイド](client/ ':ignore')（クライアント向け）
 - [納品フロー詳細](deployment-flow.md)
