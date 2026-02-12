@@ -207,6 +207,7 @@ async function main() {
         settingsApp: false,
         settingsAuth: false,
         settingsGmail: false,
+        settingsGmailAuthMode: '',
         adminUser: false,
         masterCustomers: 0,
         masterDocuments: 0,
@@ -228,6 +229,9 @@ async function main() {
 
         const gmailDoc = await db.doc('settings/gmail').get();
         result.settingsGmail = gmailDoc.exists;
+        if (gmailDoc.exists) {
+            result.settingsGmailAuthMode = gmailDoc.data().authMode || '';
+        }
 
         // 管理者ユーザー確認
         const users = await db.collection('users').where('role', '==', 'admin').limit(1).get();
@@ -320,7 +324,50 @@ else
 fi
 
 # ===========================================
-# 12. Storage CORS確認
+# 12. Firestore PITR確認
+# ===========================================
+if [ "$PROJECT_ID" = "doc-split-dev" ]; then
+    check_pass "PITR (開発環境のためスキップ)"
+else
+    PITR_STATUS=$(gcloud firestore databases describe --project="$PROJECT_ID" --format="value(pointInTimeRecoveryEnablement)" 2>/dev/null || echo "")
+    if [ "$PITR_STATUS" = "POINT_IN_TIME_RECOVERY_ENABLED" ]; then
+        check_pass "Firestore PITR有効"
+    else
+        check_fail "Firestore PITRが無効（本番環境では必須）"
+    fi
+fi
+
+# ===========================================
+# 13. authMode整合性・refresh-token確認
+# ===========================================
+if [ -n "$FIRESTORE_CHECK" ]; then
+    GMAIL_AUTH_MODE=$(echo "$FIRESTORE_CHECK" | grep -o '"settingsGmailAuthMode":"[^"]*"' | cut -d'"' -f4)
+
+    if [ "$GMAIL_AUTH_MODE" = "oauth" ]; then
+        check_pass "Gmail authMode: oauth"
+
+        # OAuth方式の場合、refresh-tokenが設定されているか確認
+        RT_VERSION=$(gcloud secrets versions list gmail-oauth-refresh-token --project="$PROJECT_ID" --format="value(name)" --limit=1 --filter="state=enabled" 2>/dev/null || echo "")
+        if [ -n "$RT_VERSION" ]; then
+            # refresh-tokenの値が空でないか確認
+            RT_VALUE=$(gcloud secrets versions access "$RT_VERSION" --secret=gmail-oauth-refresh-token --project="$PROJECT_ID" 2>/dev/null || echo "")
+            if [ -n "$RT_VALUE" ]; then
+                check_pass "Gmail refresh-token 設定済み (v${RT_VERSION})"
+            else
+                check_warn "Gmail refresh-token が空（クライアントのGmail連携ボタン押下が必要）"
+            fi
+        else
+            check_warn "Gmail refresh-token Secret未設定"
+        fi
+    elif [ "$GMAIL_AUTH_MODE" = "service_account" ]; then
+        check_pass "Gmail authMode: service_account"
+    elif [ -n "$SETTINGS_GMAIL" ]; then
+        check_warn "Gmail authModeが未設定（oauth or service_account を設定してください）"
+    fi
+fi
+
+# ===========================================
+# 14. Storage CORS確認
 # ===========================================
 STORAGE_BUCKET="${PROJECT_ID}.firebasestorage.app"
 CORS_CONFIG=$(gsutil cors get "gs://${STORAGE_BUCKET}" 2>/dev/null || echo "")
