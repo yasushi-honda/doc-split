@@ -208,7 +208,7 @@
 クライアントへの納品は、**セットアップスクリプト方式** を採用しています。各クライアントが独立したGCPプロジェクトを作成し、セットアップスクリプトで初期設定を行います。
 
 <div class="success-box">
-<strong>2026年2月更新:</strong> Authorized Domains自動設定、<code>--with-gmail</code>オプション、<code>verify-setup.sh</code>検証スクリプトを追加し、納品プロセスを大幅に効率化しました。
+<strong>2026年2月更新:</strong> マルチクライアント安全運用機構（<code>switch-client.sh</code>環境切替、認証安全チェック、PITR自動有効化）、Authorized Domains自動設定、<code>--with-gmail</code>オプション、<code>verify-setup.sh</code>検証スクリプトを追加し、納品プロセスを大幅に効率化しました。
 </div>
 
 ---
@@ -364,6 +364,9 @@ Claude Code / CI用（非対話モード）:
   <div class="timeline-item">
     <strong>Step 8:</strong> Gmail OAuth設定（対話式）
   </div>
+  <div class="timeline-item">
+    <strong>Step 9:</strong> <span style="color:#10b981;font-weight:bold;">Firestore PITR自動有効化 ✨NEW</span>（本番環境のみ）
+  </div>
 </div>
 
 ### セットアップ検証
@@ -383,9 +386,11 @@ Claude Code / CI用（非対話モード）:
 [✓] settings/app 設定済み
 [✓] settings/auth 設定済み
 [✓] Storage CORS設定済み
+[✓] Firestore PITR有効 (7日間)
+[✓] authMode整合性OK (oauth + refresh-token確認済み)
 [⚠] マスターデータ (顧客: 0件)
 
-結果: 10/11 チェック合格
+結果: 12/13 チェック合格
 ```
 
 ### マスターデータ投入
@@ -539,6 +544,30 @@ flowchart TD
     style C3 fill:#10b981,color:white
 ```
 
+### 環境切り替え（デプロイ前の必須手順）
+
+複数クライアント環境を管理する場合、デプロイ前に対象環境に切り替えます。
+
+<div class="command-box">
+<code>./scripts/switch-client.sh &lt;alias&gt;</code> <!-- gcloud構成・認証を切替 -->
+</div>
+
+<div class="command-box">
+<code>./scripts/switch-client.sh --list</code> <!-- 登録済みクライアント一覧 -->
+</div>
+
+<div class="notice-box">
+<strong>安全機構:</strong> <code>deploy-to-project.sh</code> はデプロイ前にgcloud構成とアカウントの一致を自動検証します。不一致の場合はデプロイを中止し、<code>switch-client.sh</code> での修正を案内します。
+</div>
+
+クライアント定義ファイル（`scripts/clients/*.env`）で各環境の認証情報を宣言的に管理:
+
+| ファイル | プロジェクト | 認証方式 |
+|---------|------------|---------|
+| `dev.env` | doc-split-dev | 個人アカウント |
+| `kanameone.env` | docsplit-kanameone | 個人アカウント |
+| `cocoro.env` | docsplit-cocoro | サービスアカウント |
+
 ### アップデートコマンド
 
 #### 全クライアント一括デプロイ（推奨）
@@ -580,6 +609,8 @@ flowchart TD
 | OCRエラー | Gemini API制限 | しばらく待って再実行 |
 | デプロイ失敗 | 権限不足 | IAMロール確認 |
 | auth/unauthorized-domain | Authorized Domains未設定 | setup-tenant.shで自動設定済み（手動の場合はFirebase Console） |
+| デプロイ時「gcloud構成が不一致」 | 別クライアントのgcloud構成が有効 | `./scripts/switch-client.sh <alias>` で切替 |
+| デプロイ時「gcloudアカウントが不一致」 | 別アカウントでログイン中 | `switch-client.sh` で正しいアカウントに切替 |
 
 ---
 

@@ -329,6 +329,28 @@ FIREBASE_PROJECT_ID=<client-project-id> node scripts/import-masters.js --offices
 
 ## アップデートフロー
 
+### 環境切り替え（デプロイ前の必須手順）
+
+複数クライアント環境を管理する場合、デプロイ前に対象環境に切り替えます。
+
+```bash
+# クライアント一覧を確認
+./scripts/switch-client.sh --list
+
+# 対象クライアントに切替
+./scripts/switch-client.sh <alias>
+```
+
+**安全機構**: `deploy-to-project.sh` はデプロイ前にgcloud構成とアカウントの一致を自動検証します。不一致の場合はデプロイを中止し、`switch-client.sh` での修正を案内します。
+
+クライアント定義ファイル（`scripts/clients/*.env`）で各環境の認証情報を宣言的に管理:
+
+| ファイル | プロジェクト | gcloud構成 | 認証方式 |
+|---------|------------|-----------|---------|
+| `dev.env` | doc-split-dev | doc-split | 個人アカウント |
+| `kanameone.env` | docsplit-kanameone | doc-split | 個人アカウント |
+| `cocoro.env` | docsplit-cocoro | doc-split-cocoro | サービスアカウント |
+
 ### 通常のアップデート（バグフィックス・機能追加）
 
 ```bash
@@ -345,6 +367,11 @@ git checkout -b feature/xxx
 git checkout main
 git merge feature/xxx
 git push origin main
+
+# ========================================
+# Step 1.5: 対象クライアントに環境切替
+# ========================================
+./scripts/switch-client.sh <alias>
 
 # ========================================
 # Step 2: 全クライアントに一括デプロイ（推奨）
@@ -436,7 +463,11 @@ git push origin main
 ```bash
 # 1. クライアントがGCPプロジェクト作成・課金設定
 
-# 2. セットアップ実行（.firebasercへのエイリアス追加も自動）
+# 2. クライアント定義ファイルを作成
+# scripts/clients/<alias>.env を新規作成（既存ファイルを参考に）
+# 必須項目: CLIENT_NAME, PROJECT_ID, GCLOUD_CONFIG, EXPECTED_ACCOUNT, AUTH_TYPE
+
+# 3. セットアップ実行（.firebasercへのエイリアス追加も自動、PITR自動有効化含む）
 
 # シナリオ3: IAP自動作成 ★推奨（Workspace管理者非協力時）
 ./scripts/setup-tenant.sh <new-client-project-id> <admin-email> --gmail-iap --yes
@@ -448,15 +479,15 @@ git push origin main
 # ./scripts/setup-tenant.sh <new-client-project-id> <admin-email>
 # ./scripts/setup-gmail-auth.sh <new-client-project-id>
 
-# 3. マスターデータ投入
+# 4. マスターデータ投入
 FIREBASE_PROJECT_ID=<new-client-project-id> node scripts/import-masters.js --customers <customers.csv>
 FIREBASE_PROJECT_ID=<new-client-project-id> node scripts/import-masters.js --documents <documents.csv>
 FIREBASE_PROJECT_ID=<new-client-project-id> node scripts/import-masters.js --offices <offices.csv>
 
-# 4. セットアップ検証
+# 5. セットアップ検証（PITR・authMode整合性チェック含む）
 ./scripts/verify-setup.sh <new-client-project-id>
 
-# 5. 動作確認
+# 6. 動作確認
 ```
 
 ---
@@ -738,6 +769,7 @@ node scripts/migrate-document-fields.js <project-id>
 
 | 日付 | 内容 |
 |------|------|
+| 2026-02-13 | マルチクライアント安全運用機構追加（switch-client.sh、認証安全チェック、PITR自動有効化、クライアント定義ファイル） |
 | 2026-02-13 | Gmail連携方式3（IAP API自動作成）追加、方式選択ガイド追加（ADR-0013参照） |
 | 2026-02-11 | 組織アカウント環境での対応セクション追加（ADR-0011参照） |
 | 2026-02-05 | ヘルプページ追加、セットアップ情報タブ追加 |
