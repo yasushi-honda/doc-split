@@ -202,6 +202,14 @@ for arg in "$@"; do
     esac
 done
 
+# --with-gmail と --gmail-iap の排他チェック
+if [ "$WITH_GMAIL" = true ] && [ "$GMAIL_IAP" = true ]; then
+    echo -e "${RED}エラー: --with-gmail と --gmail-iap は同時に指定できません${NC}"
+    echo "  --with-gmail: 手動OAuth方式（client-id/secret/auth-code必須）"
+    echo "  --gmail-iap:  IAP API自動作成方式（認証情報不要）"
+    exit 1
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 
