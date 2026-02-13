@@ -109,12 +109,31 @@ if ! echo "$EXISTING_CONFIGS" | grep -q "^${GCLOUD_CONFIG}$"; then
     exit 1
 fi
 
-# gcloud構成を切り替え
+# .envrc.client を更新（direnvの環境変数を切り替え）
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+ENVRC_CLIENT="$PROJECT_ROOT/.envrc.client"
+
+cat > "$ENVRC_CLIENT" <<EOF
+# switch-client.sh により自動生成 ($(date '+%Y-%m-%d %H:%M:%S'))
+# クライアント: $CLIENT_NAME
+export CLOUDSDK_ACTIVE_CONFIG_NAME="$GCLOUD_CONFIG"
+export GCLOUD_PROJECT="$PROJECT_ID"
+export FIREBASE_PROJECT="$PROJECT_ID"
+export _expected_gcp_account="$EXPECTED_ACCOUNT"
+EOF
+
+# direnvに再読み込みを許可
+if command -v direnv &>/dev/null; then
+    direnv allow "$PROJECT_ROOT" 2>/dev/null
+fi
+
+# gcloud構成を切り替え（現シェルにも即時反映）
+export CLOUDSDK_ACTIVE_CONFIG_NAME="$GCLOUD_CONFIG"
 gcloud config configurations activate "$GCLOUD_CONFIG" 2>/dev/null
 
 # 認証アカウント確認
-CURRENT_ACCOUNT=$(gcloud config get-value account 2>/dev/null)
-CURRENT_PROJECT=$(gcloud config get-value project 2>/dev/null)
+CURRENT_ACCOUNT=$(gcloud --configuration="$GCLOUD_CONFIG" config get-value account 2>/dev/null)
+CURRENT_PROJECT=$(gcloud --configuration="$GCLOUD_CONFIG" config get-value project 2>/dev/null)
 
 echo -e "${BLUE}認証状態:${NC}"
 echo "  アカウント: $CURRENT_ACCOUNT"
