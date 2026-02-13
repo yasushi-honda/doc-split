@@ -89,8 +89,14 @@ CLIENT_ENV="$CLIENTS_DIR/${PROJECT_ALIAS}.env"
 if [ -f "$CLIENT_ENV" ]; then
     source "$CLIENT_ENV"
 
-    # gcloud構成の一致確認
-    CURRENT_CONFIG=$(gcloud config configurations list --filter="is_active=true" --format="value(name)" 2>/dev/null)
+    # .envrc.client から現在のクライアント設定を読み込み（direnv未発火時の対策）
+    ENVRC_CLIENT="$ROOT_DIR/.envrc.client"
+    if [ -f "$ENVRC_CLIENT" ]; then
+        source "$ENVRC_CLIENT"
+    fi
+
+    # gcloud構成の一致確認（環境変数 > active構成）
+    CURRENT_CONFIG="${CLOUDSDK_ACTIVE_CONFIG_NAME:-$(gcloud config configurations list --filter="is_active=true" --format="value(name)" 2>/dev/null)}"
     if [ -n "$GCLOUD_CONFIG" ] && [ "$CURRENT_CONFIG" != "$GCLOUD_CONFIG" ]; then
         log_error "gcloud構成が不一致です"
         echo "  期待: $GCLOUD_CONFIG"
@@ -101,7 +107,7 @@ if [ -f "$CLIENT_ENV" ]; then
     fi
 
     # アカウント一致確認
-    CURRENT_ACCOUNT=$(gcloud config get-value account 2>/dev/null)
+    CURRENT_ACCOUNT=$(gcloud --configuration="$GCLOUD_CONFIG" config get-value account 2>/dev/null)
     if [ -n "$EXPECTED_ACCOUNT" ] && [ "$CURRENT_ACCOUNT" != "$EXPECTED_ACCOUNT" ]; then
         log_error "gcloudアカウントが不一致です"
         echo "  期待: $EXPECTED_ACCOUNT"

@@ -67,6 +67,12 @@ PROJECT_ID=$1
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 
+# .envrc.client からクライアント設定を読み込み（direnv未発火時の対策）
+ENVRC_CLIENT="$ROOT_DIR/.envrc.client"
+if [ -f "$ENVRC_CLIENT" ]; then
+    source "$ENVRC_CLIENT"
+fi
+
 echo ""
 echo -e "${GREEN}╔════════════════════════════════════════════╗${NC}"
 echo -e "${GREEN}║   DocSplit 納品検証                        ║${NC}"

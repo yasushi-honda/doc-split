@@ -70,6 +70,9 @@ venv/
 # GitHub CLI認証（プロジェクト分離）
 .gh/
 
+# クライアント切替設定（switch-client.shが生成）
+.envrc.client
+
 # Storage CORS設定（setup-tenant.shが自動生成）
 cors-*.json
 
