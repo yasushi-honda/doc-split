@@ -41,6 +41,12 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
+import {
   useErrors,
   useErrorStats,
   useUpdateErrorStatus,
@@ -291,35 +297,58 @@ function ErrorRow({ error }: ErrorRowProps) {
           </Badge>
         </TableCell>
         <TableCell>
-          <div className="flex gap-1">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setIsDetailOpen(true)}
-            >
-              <FileText className="h-4 w-4" />
-            </Button>
-            {error.status !== '完了' && (
-              <>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setIsReprocessConfirmOpen(true)}
-                  disabled={reprocess.isPending}
-                >
-                  <RefreshCw className="h-4 w-4" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={handleMarkComplete}
-                  disabled={updateStatus.isPending}
-                >
-                  <CheckCircle2 className="h-4 w-4" />
-                </Button>
-              </>
-            )}
-          </div>
+          <TooltipProvider delayDuration={300}>
+            <div className="flex gap-1">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setIsDetailOpen(true)}
+                  >
+                    <FileText className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p>詳細を表示</p>
+                </TooltipContent>
+              </Tooltip>
+              {error.status !== '完了' && (
+                <>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setIsReprocessConfirmOpen(true)}
+                        disabled={reprocess.isPending}
+                      >
+                        <RefreshCw className="h-4 w-4" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>再処理</p>
+                    </TooltipContent>
+                  </Tooltip>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={handleMarkComplete}
+                        disabled={updateStatus.isPending}
+                      >
+                        <CheckCircle2 className="h-4 w-4" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>対応完了にする</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </>
+              )}
+            </div>
+          </TooltipProvider>
         </TableCell>
       </TableRow>
 
