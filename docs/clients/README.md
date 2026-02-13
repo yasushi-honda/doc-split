@@ -8,7 +8,7 @@ DocSplitの全クライアント環境の一覧と現在のステータス。
 |-------------|--------------|---------|---------|------|
 | dev | doc-split-dev | 個人アカウント | 開発環境 | [dev.md](dev.md) |
 | kanameone | docsplit-kanameone | 個人アカウント | 運用中 | [kanameone.md](kanameone.md) |
-| cocoro | docsplit-cocoro | サービスアカウント | セットアップ完了・認証待ち | [cocoro.md](cocoro.md) |
+| cocoro | docsplit-cocoro | ハイブリッド（SA+開発者） | ログイン確認済み・Gmail認証待ち | [cocoro.md](cocoro.md) |
 
 ## 関連ドキュメント
 
