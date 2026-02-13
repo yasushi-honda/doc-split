@@ -625,9 +625,9 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
       })
       queryClient.invalidateQueries({ queryKey: ['document', documentId] })
       queryClient.invalidateQueries({ queryKey: ['documentsInfinite'] })
-      toast.success('再処理をリクエストしました')
       setShowReprocessDialog(false)
-      onOpenChange(false)
+      toast.success('再処理をリクエストしました。ステータスが「処理待ち」に変わります。')
+      setTimeout(() => onOpenChange(false), 1500)
     } catch (err) {
       console.error('Failed to reprocess:', err)
       toast.error('再処理リクエストに失敗しました')
@@ -1484,7 +1484,10 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
             キャンセル
           </AlertDialogCancel>
           <AlertDialogAction
-            onClick={handleReprocess}
+            onClick={(e) => {
+              e.preventDefault()
+              handleReprocess()
+            }}
             disabled={isReprocessing}
             className="bg-blue-600 hover:bg-blue-700"
           >
