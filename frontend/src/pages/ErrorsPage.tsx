@@ -419,7 +419,7 @@ function ErrorRow({ error }: ErrorRowProps) {
 
             <div>
               <p className="text-sm text-gray-500">エラー詳細</p>
-              <pre className="mt-1 p-3 bg-gray-100 rounded-md text-sm overflow-auto max-h-48">
+              <pre className="mt-1 p-3 bg-gray-100 rounded-md text-sm overflow-auto max-h-48 whitespace-pre-wrap break-all">
                 {error.errorDetails}
               </pre>
             </div>
