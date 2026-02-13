@@ -8,7 +8,7 @@
 
 | PR | コミット | 内容 |
 |----|------|------|
-| **#113** | **(未マージ)** | **docs: cocoro Google Sign-in修正・ハイブリッド運用体制を反映** OAuth Web Client作成、開発者editor権限付与、Gmail OAuth client統一 |
+| **#113** | **1a948f7** | **fix: setup-tenant.shにGoogle Sign-inプロバイダー有効化を追加** Identity Toolkit APIでGoogle Sign-inを自動設定 |
 | **#112** | **f0a436c** | **docs: クライアント別ステータス管理ドキュメントを追加** `docs/clients/` に dev/kanameone/cocoro の基本情報・セットアップ状態・履歴を記録。全クライアント一覧サマリーREADME配置 |
 | **#111** | **fc028a8** | **fix: switch-client.shのdirenv環境変数上書き問題を修正** `.envrc.client`で動的切替に変更。全3環境テスト済み |
 | **#110** | **4a58fd1** | **fix: GitHub Pages #/client/ の404エラー修正** Docsifyハッシュルーティング問題 |
