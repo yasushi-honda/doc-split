@@ -1483,11 +1483,8 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
           <AlertDialogCancel disabled={isReprocessing}>
             キャンセル
           </AlertDialogCancel>
-          <AlertDialogAction
-            onClick={(e) => {
-              e.preventDefault()
-              handleReprocess()
-            }}
+          <Button
+            onClick={handleReprocess}
             disabled={isReprocessing}
             className="bg-blue-600 hover:bg-blue-700"
           >
@@ -1497,7 +1494,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
               <RefreshCw className="mr-1 h-4 w-4" />
             )}
             {isReprocessing ? '処理中...' : '再処理を実行'}
-          </AlertDialogAction>
+          </Button>
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
