@@ -6,10 +6,11 @@
 import { useState, useEffect, useRef } from 'react'
 import { format } from 'date-fns'
 import { ja } from 'date-fns/locale'
-import { Timestamp } from 'firebase/firestore'
+import { Timestamp, doc as firestoreDoc, updateDoc, deleteField } from 'firebase/firestore'
 import { ref, getDownloadURL } from 'firebase/storage'
 import { Download, ExternalLink, Loader2, FileText, User, Building, Calendar, Tag, AlertCircle, Scissors, Pencil, Save, X, BookMarked, History, ChevronUp, ChevronDown, Sparkles, RefreshCw, CheckCircle, XCircle } from 'lucide-react'
-import { storage } from '@/lib/firebase'
+import { toast } from 'sonner'
+import { db, storage } from '@/lib/firebase'
 import { callFunction } from '@/lib/callFunction'
 import { useQueryClient } from '@tanstack/react-query'
 import {
@@ -342,6 +343,9 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
   const [showEditCloseDialog, setShowEditCloseDialog] = useState(false)
   // ダウンロード確認ダイアログ
   const [showDownloadDialog, setShowDownloadDialog] = useState(false)
+  // 再処理確認ダイアログ
+  const [showReprocessDialog, setShowReprocessDialog] = useState(false)
+  const [isReprocessing, setIsReprocessing] = useState(false)
 
   const queryClient = useQueryClient()
 
@@ -608,6 +612,30 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
     setIsSplitModalOpen(false)
   }
 
+  // 再処理ハンドラ
+  const handleReprocess = async () => {
+    if (!documentId || isReprocessing) return
+    setIsReprocessing(true)
+    try {
+      const docRef = firestoreDoc(db, 'documents', documentId)
+      await updateDoc(docRef, {
+        status: 'pending',
+        ocrResult: deleteField(),
+        error: deleteField(),
+      })
+      queryClient.invalidateQueries({ queryKey: ['document', documentId] })
+      queryClient.invalidateQueries({ queryKey: ['documentsInfinite'] })
+      toast.success('再処理をリクエストしました')
+      setShowReprocessDialog(false)
+      onOpenChange(false)
+    } catch (err) {
+      console.error('Failed to reprocess:', err)
+      toast.error('再処理リクエストに失敗しました')
+    } finally {
+      setIsReprocessing(false)
+    }
+  }
+
   // 分割可能かどうか（複数ページのPDFで、processed状態）
   const canSplit = document &&
     document.totalPages > 1 &&
@@ -731,6 +759,17 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                   </Badge>
                 </div>
                 <div className="flex items-center gap-1 sm:gap-2">
+                  {document.status === 'error' && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setShowReprocessDialog(true)}
+                      className="text-blue-600 border-blue-300 hover:bg-blue-50"
+                    >
+                      <RefreshCw className="h-4 w-4 sm:mr-1" />
+                      <span className="hidden sm:inline">再処理</span>
+                    </Button>
+                  )}
                   {canSplit && (
                     <Button
                       variant="outline"
@@ -1426,6 +1465,35 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
               <CheckCircle className="mr-1 h-4 w-4" />
             )}
             確認済みにしてダウンロード
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+
+    {/* 再処理確認ダイアログ */}
+    <AlertDialog open={showReprocessDialog} onOpenChange={setShowReprocessDialog}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>再処理を実行しますか？</AlertDialogTitle>
+          <AlertDialogDescription>
+            この書類のOCR処理を再実行します。現在のOCR結果は削除されます。
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={isReprocessing}>
+            キャンセル
+          </AlertDialogCancel>
+          <AlertDialogAction
+            onClick={handleReprocess}
+            disabled={isReprocessing}
+            className="bg-blue-600 hover:bg-blue-700"
+          >
+            {isReprocessing ? (
+              <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCw className="mr-1 h-4 w-4" />
+            )}
+            {isReprocessing ? '処理中...' : '再処理を実行'}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

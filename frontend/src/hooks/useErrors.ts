@@ -1,5 +1,9 @@
 /**
  * エラー履歴管理フック
+ *
+ * バックエンド(ErrorLog)とフロントエンド(ErrorRecord)のスキーマ変換を行う
+ * BE: createdAt, category, source, status('pending'/'resolved'/'ignored'), errorMessage
+ * FE: errorDate, errorType(日本語), status('未対応'/'対応中'/'完了'), errorDetails
  */
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
@@ -10,6 +14,7 @@ import {
   orderBy,
   limit,
   getDocs,
+  getDoc,
   doc,
   updateDoc,
   Timestamp,
@@ -36,24 +41,41 @@ interface UseErrorsOptions {
 }
 
 // ============================================
-// Firestore → ErrorRecord 変換
+// BE → FE スキーマ変換ヘルパー
 // ============================================
 
-function firestoreToErrorRecord(id: string, data: Record<string, unknown>): ErrorRecord {
-  return {
-    errorId: id,
-    errorDate: data.errorDate as Timestamp,
-    errorType: data.errorType as ErrorType,
-    fileName: data.fileName as string,
-    fileId: data.fileId as string,
-    totalPages: data.totalPages as number,
-    successPages: data.successPages as number,
-    failedPages: data.failedPages as number,
-    failedPageNumbers: data.failedPageNumbers as string[],
-    errorDetails: data.errorDetails as string,
-    fileUrl: data.fileUrl as string,
-    status: data.status as ErrorStatus,
+/** BE category + source → FE ErrorType(日本語) */
+function convertToErrorType(category: string, source: string): ErrorType {
+  if (source === 'ocr') {
+    if (category === 'fatal') return 'OCR完全失敗'
+    if (category === 'data') return '情報抽出エラー'
+    return 'OCR部分失敗'
   }
+  if (source === 'pdf') return 'ファイル処理エラー'
+  return 'システムエラー'
+}
+
+/** BE status → FE ErrorStatus(日本語) */
+function convertToErrorStatus(status: string): ErrorStatus {
+  if (status === 'pending') return '未対応'
+  if (status === 'resolved' || status === 'ignored') return '完了'
+  return '未対応'
+}
+
+/** FE ErrorStatus(日本語) → BE status値の配列(クエリ用) */
+function convertFromErrorStatus(status: ErrorStatus): string[] {
+  if (status === '未対応') return ['pending']
+  if (status === '完了') return ['resolved', 'ignored']
+  if (status === '対応中') return [] // BEに該当なし
+  return []
+}
+
+/** FE ErrorStatus(日本語) → BE status値(更新用) */
+function convertFromErrorStatusSingle(status: ErrorStatus): string {
+  if (status === '未対応') return 'pending'
+  if (status === '完了') return 'resolved'
+  if (status === '対応中') return 'pending'
+  return 'pending'
 }
 
 // ============================================
@@ -66,34 +88,84 @@ async function fetchErrors(
 ): Promise<ErrorRecord[]> {
   const constraints: QueryConstraint[] = []
 
-  // ステータスフィルター
+  // ステータスフィルター（BE値に変換してクエリ）
   if (filters.status) {
-    constraints.push(where('status', '==', filters.status))
+    const beStatuses = convertFromErrorStatus(filters.status)
+    if (beStatuses.length === 0) return [] // '対応中'はBEに該当なし
+    if (beStatuses.length === 1) {
+      constraints.push(where('status', '==', beStatuses[0]))
+    } else {
+      constraints.push(where('status', 'in', beStatuses))
+    }
   }
 
-  // エラー種別フィルター
-  if (filters.errorType) {
-    constraints.push(where('errorType', '==', filters.errorType))
-  }
-
-  // 日付範囲フィルター
+  // 日付範囲フィルター（BE: createdAt）
   if (filters.dateFrom) {
-    constraints.push(where('errorDate', '>=', Timestamp.fromDate(filters.dateFrom)))
+    constraints.push(where('createdAt', '>=', Timestamp.fromDate(filters.dateFrom)))
   }
   if (filters.dateTo) {
-    constraints.push(where('errorDate', '<=', Timestamp.fromDate(filters.dateTo)))
+    constraints.push(where('createdAt', '<=', Timestamp.fromDate(filters.dateTo)))
   }
 
-  // ソート（エラー日時降順）
-  constraints.push(orderBy('errorDate', 'desc'))
+  // ソート（BE: createdAt 降順）
+  constraints.push(orderBy('createdAt', 'desc'))
   constraints.push(limit(pageSize))
 
   const q = query(collection(db, 'errors'), ...constraints)
   const snapshot = await getDocs(q)
 
-  return snapshot.docs.map((docSnap) =>
-    firestoreToErrorRecord(docSnap.id, docSnap.data())
-  )
+  // documentIdを収集してバッチ取得
+  const docIds = new Set<string>()
+  const errorDocs = snapshot.docs.map((d) => {
+    const data = d.data()
+    if (data.documentId) docIds.add(data.documentId as string)
+    return { id: d.id, data }
+  })
+
+  // 関連ドキュメントをバッチ取得
+  const docMap = new Map<string, Record<string, unknown>>()
+  const docFetches = Array.from(docIds).map(async (docId) => {
+    try {
+      const docSnap = await getDoc(doc(db, 'documents', docId))
+      if (docSnap.exists()) {
+        docMap.set(docId, docSnap.data())
+      }
+    } catch (e) {
+      console.error('Failed to fetch document:', docId, e)
+    }
+  })
+  await Promise.all(docFetches)
+
+  // ErrorLog → ErrorRecord に変換
+  let records = errorDocs.map(({ id, data }) => {
+    const docData = data.documentId ? docMap.get(data.documentId as string) : undefined
+    const totalPages = (docData?.totalPages as number) || 0
+
+    return {
+      errorId: id,
+      errorDate: data.createdAt as Timestamp,
+      errorType: convertToErrorType(
+        (data.category as string) || '',
+        (data.source as string) || ''
+      ),
+      fileName: (docData?.fileName as string) || (data.documentId as string) || '不明',
+      fileId: (data.fileId as string) || '',
+      totalPages,
+      successPages: 0,
+      failedPages: totalPages,
+      failedPageNumbers: [],
+      errorDetails: (data.errorMessage as string) || '',
+      fileUrl: (docData?.fileUrl as string) || '',
+      status: convertToErrorStatus((data.status as string) || ''),
+    } as ErrorRecord
+  })
+
+  // errorTypeフィルターはメモリフィルタ（category+sourceの組み合わせのため）
+  if (filters.errorType) {
+    records = records.filter((r) => r.errorType === filters.errorType)
+  }
+
+  return records
 }
 
 export function useErrors(options: UseErrorsOptions = {}) {
@@ -121,7 +193,7 @@ async function updateErrorStatus({
   status,
 }: UpdateErrorStatusParams): Promise<void> {
   const docRef = doc(db, 'errors', errorId)
-  await updateDoc(docRef, { status })
+  await updateDoc(docRef, { status: convertFromErrorStatusSingle(status) })
 }
 
 export function useUpdateErrorStatus() {
@@ -131,6 +203,7 @@ export function useUpdateErrorStatus() {
     mutationFn: updateErrorStatus,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['errors'] })
+      queryClient.invalidateQueries({ queryKey: ['errorStats'] })
     },
   })
 }
@@ -145,12 +218,11 @@ interface ReprocessParams {
 }
 
 async function requestReprocess({ errorId, fileId }: ReprocessParams): Promise<void> {
-  // 1. エラーステータスを「対応中」に更新
+  // 1. エラーステータスを「pending」に更新（BE値）
   const errorRef = doc(db, 'errors', errorId)
-  await updateDoc(errorRef, { status: '対応中' as ErrorStatus })
+  await updateDoc(errorRef, { status: 'pending' })
 
   // 2. 対応するドキュメントのステータスを「pending」に戻す
-  // fileIdで検索してドキュメントを特定
   const docsQuery = query(
     collection(db, 'documents'),
     where('fileId', '==', fileId),
@@ -172,6 +244,7 @@ export function useReprocessError() {
     mutationFn: requestReprocess,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['errors'] })
+      queryClient.invalidateQueries({ queryKey: ['errorStats'] })
       queryClient.invalidateQueries({ queryKey: ['documentsInfinite'] })
     },
   })
@@ -189,29 +262,22 @@ export interface ErrorStats {
 }
 
 async function fetchErrorStats(): Promise<ErrorStats> {
-  const stats: ErrorStats = {
-    total: 0,
-    unhandled: 0,
-    inProgress: 0,
-    completed: 0,
+  // BE status値でクエリ
+  const [pendingSnapshot, resolvedSnapshot, ignoredSnapshot] = await Promise.all([
+    getDocs(query(collection(db, 'errors'), where('status', '==', 'pending'))),
+    getDocs(query(collection(db, 'errors'), where('status', '==', 'resolved'))),
+    getDocs(query(collection(db, 'errors'), where('status', '==', 'ignored'))),
+  ])
+
+  const unhandled = pendingSnapshot.size
+  const completed = resolvedSnapshot.size + ignoredSnapshot.size
+
+  return {
+    total: unhandled + completed,
+    unhandled,
+    inProgress: 0, // BEに「対応中」ステータスなし
+    completed,
   }
-
-  const statuses: { key: keyof Omit<ErrorStats, 'total'>; value: ErrorStatus }[] = [
-    { key: 'unhandled', value: '未対応' },
-    { key: 'inProgress', value: '対応中' },
-    { key: 'completed', value: '完了' },
-  ]
-
-  await Promise.all(
-    statuses.map(async ({ key, value }) => {
-      const q = query(collection(db, 'errors'), where('status', '==', value))
-      const snapshot = await getDocs(q)
-      stats[key] = snapshot.size
-      stats.total += snapshot.size
-    })
-  )
-
-  return stats
 }
 
 export function useErrorStats() {
