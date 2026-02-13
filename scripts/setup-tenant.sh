@@ -42,8 +42,8 @@
 #   5. Firestore/Storageルールデプロイ + CORS設定（個人: CLI / SA: 手動）
 #   6. Cloud Functionsデプロイ（個人: CLI / SA: 手動）
 #   7. Hostingデプロイ（個人: CLI / SA: 手動）
-#   8a. Gmail IAP自動設定（--gmail-iap指定時）
-#   8b. Gmail OAuth設定（--with-gmail指定時）
+#   8a. Gmail IAP自動設定（--gmail-iap指定時）+ Google Sign-in有効化
+#   8b. Gmail OAuth設定（--with-gmail指定時）+ Google Sign-in有効化
 #
 # ※ CORS設定: ブラウザからPDFを閲覧するために必須
 #
@@ -111,6 +111,42 @@ wait_firebase_operation() {
 
     log_warn "オペレーション完了待機がタイムアウトしました"
     return 1
+}
+
+# Google Sign-in プロバイダー有効化
+setup_google_signin_provider() {
+    local project_id=$1
+    local client_id=$2
+    local client_secret=$3
+
+    local token=$(gcloud auth print-access-token 2>/dev/null)
+
+    # 既に設定済みか確認
+    local existing=$(curl -s \
+        -H "Authorization: Bearer $token" \
+        "https://identitytoolkit.googleapis.com/admin/v2/projects/$project_id/defaultSupportedIdpConfigs/google.com" 2>/dev/null)
+
+    if echo "$existing" | grep -q '"enabled"'; then
+        log_success "Google Sign-in プロバイダーは既に設定済みです"
+        return 0
+    fi
+
+    # 新規設定
+    local result=$(curl -s -X POST \
+        -H "Authorization: Bearer $token" \
+        -H "Content-Type: application/json" \
+        "https://identitytoolkit.googleapis.com/admin/v2/projects/$project_id/defaultSupportedIdpConfigs?idpId=google.com" \
+        -d "{\"enabled\": true, \"clientId\": \"$client_id\", \"clientSecret\": \"$client_secret\"}" 2>/dev/null)
+
+    if echo "$result" | grep -q '"enabled"'; then
+        log_success "Google Sign-in プロバイダーを有効化しました"
+        return 0
+    else
+        log_warn "Google Sign-in プロバイダーの有効化に失敗しました"
+        log_warn "Firebase Console で手動設定してください:"
+        log_warn "  https://console.firebase.google.com/project/$project_id/authentication/providers"
+        return 1
+    fi
 }
 
 # 使用方法
@@ -972,6 +1008,11 @@ NODEJS_IAP_SCRIPT
         log_warn "Firebase Admin SDKサービスアカウントが見つかりません。手動で設定してください"
     fi
 
+    # Google Sign-in プロバイダー有効化（IAP OAuth credentialsを流用）
+    echo ""
+    log_info "Google Sign-in プロバイダー設定中..."
+    setup_google_signin_provider "$PROJECT_ID" "$IAP_CLIENT_ID" "$IAP_CLIENT_SECRET"
+
     echo ""
     log_success "Gmail連携設定（IAP API自動作成）完了"
     echo ""
@@ -1049,6 +1090,33 @@ if [ "$WITH_GMAIL" = true ]; then
     [ -n "$GMAIL_AUTH_CODE" ] && GMAIL_CMD+=("--auth-code=$GMAIL_AUTH_CODE")
     "${GMAIL_CMD[@]}"
     log_success "Gmail OAuth認証設定完了"
+
+    # Google Sign-in プロバイダー有効化（Gmail OAuth credentialsを流用）
+    log_info "Google Sign-in プロバイダー設定中..."
+    setup_google_signin_provider "$PROJECT_ID" "$GMAIL_CLIENT_ID" "$GMAIL_CLIENT_SECRET"
+fi
+
+# ===========================================
+# Google Sign-in プロバイダー確認（Gmail設定なしの場合）
+# ===========================================
+if [ "$WITH_GMAIL" = false ] && [ "$GMAIL_IAP" = false ]; then
+    echo ""
+    log_info "Google Sign-in プロバイダー確認..."
+
+    ACCESS_TOKEN=$(gcloud auth print-access-token 2>/dev/null)
+    EXISTING_PROVIDER=$(curl -s \
+        -H "Authorization: Bearer $ACCESS_TOKEN" \
+        "https://identitytoolkit.googleapis.com/admin/v2/projects/$PROJECT_ID/defaultSupportedIdpConfigs/google.com" 2>/dev/null)
+
+    if echo "$EXISTING_PROVIDER" | grep -q '"enabled"'; then
+        log_success "Google Sign-in プロバイダーは設定済みです"
+    else
+        log_warn "Google Sign-in プロバイダーが未設定です"
+        log_warn "Googleログインを有効にするには、以下のいずれかを実行してください:"
+        log_warn "  1. Firebase Console → Authentication → Sign-in method → Google → 有効にする"
+        log_warn "     https://console.firebase.google.com/project/$PROJECT_ID/authentication/providers"
+        log_warn "  2. setup-tenant.sh を --with-gmail または --gmail-iap オプション付きで再実行"
+    fi
 fi
 
 # ===========================================
