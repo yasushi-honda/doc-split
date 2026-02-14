@@ -32,27 +32,27 @@ export function Layout() {
           <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
             <div className="flex h-14 items-center justify-between">
               <div className="flex items-center gap-3 md:gap-6">
-                <Link to="/" className="flex items-center gap-2">
+                <Link to="/" className="flex items-center gap-2 flex-shrink-0">
                   <img
                     src="/app-icon.png"
                     alt="DocSplit"
                     className="h-9 w-9 rounded-lg object-contain"
                   />
-                  <span className="hidden text-lg font-bold md:inline">DocSplit</span>
+                  <span className="hidden text-lg font-bold lg:inline">DocSplit</span>
                 </Link>
 
-                <nav className="flex gap-1">
+                <nav className="flex gap-0.5 lg:gap-1">
                   {navigation.map((item) => (
                     <Link
                       key={item.name}
                       to={item.href}
-                      className={`flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium transition-colors ${
+                      className={`flex items-center gap-1 whitespace-nowrap rounded-md px-1.5 py-1.5 text-xs font-medium transition-colors lg:gap-1.5 lg:px-2.5 lg:text-sm ${
                         location.pathname === item.href
                           ? 'bg-brand-700 text-white'
                           : 'text-brand-200 hover:bg-brand-800 hover:text-white'
                       }`}
                     >
-                      <item.icon className="h-4 w-4" />
+                      <item.icon className="h-4 w-4 flex-shrink-0" />
                       <span className="hidden md:inline">{item.name}</span>
                     </Link>
                   ))}
@@ -63,9 +63,9 @@ export function Layout() {
                 <span className="hidden text-sm text-brand-200 lg:inline">{user?.email}</span>
                 <button
                   onClick={() => signOut()}
-                  className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium text-brand-200 hover:bg-brand-800 hover:text-white"
+                  className="flex items-center gap-1 whitespace-nowrap rounded-md px-1.5 py-1.5 text-xs font-medium text-brand-200 hover:bg-brand-800 hover:text-white lg:gap-1.5 lg:px-2.5 lg:text-sm"
                 >
-                  <LogOut className="h-4 w-4" />
+                  <LogOut className="h-4 w-4 flex-shrink-0" />
                   <span className="hidden md:inline">ログアウト</span>
                 </button>
               </div>
