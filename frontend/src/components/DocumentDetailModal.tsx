@@ -697,15 +697,15 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
         className="flex h-[90vh] w-[95vw] max-w-[1100px] flex-col p-0 [&>button.absolute]:hidden"
         aria-describedby={undefined}
         onInteractOutside={(e) => {
-          // ポップアップ表示中やPDF分割モーダル表示中は外側クリックでDialogを閉じない
-          if (mobilePopup !== null || isSplitModalOpen) {
+          // ポップアップ・モーダル・確認ダイアログ表示中は外側クリックでDialogを閉じない
+          if (mobilePopup !== null || isSplitModalOpen || showReprocessDialog || showCloseDialog || showEditCloseDialog || showDownloadDialog) {
             e.preventDefault()
           } else {
             handleOpenChange(false)
           }
         }}
         onPointerDownOutside={(e) => {
-          if (mobilePopup !== null || isSplitModalOpen) {
+          if (mobilePopup !== null || isSplitModalOpen || showReprocessDialog || showCloseDialog || showEditCloseDialog || showDownloadDialog) {
             e.preventDefault()
           }
         }}
