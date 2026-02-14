@@ -1,15 +1,16 @@
 # ハンドオフメモ
 
-**更新日**: 2026-02-14（キーワードマッチング精度改善・E2E自動化修正）
+**更新日**: 2026-02-14（再処理機能修正・Firestoreルール補完・E2Eテスト修正）
 **ブランチ**: main
-**フェーズ**: Phase 8完了 + マルチクライアント安全運用機構 + OCR品質改善（PR #127-128）
+**フェーズ**: Phase 8完了 + マルチクライアント安全運用機構 + 再処理機能バグ修正（PR #129-131）
 
 ## 直近の変更（02-14）
 
 | PR | コミット | 内容 |
 |----|------|------|
-| **#128** | **3954399** | **fix: CIのE2Eテストをchromiumプロジェクトに限定** PR #121で追加されたdevプロジェクト(本番ビルド向け)がCIでも実行され、Viteソースファイル未存在により全38テスト失敗。`--project=chromium`追加でローカルサーバー向けのみ実行に修正 |
-| **#127** | **2ad43ec** | **fix: 事業所キーワードマッチングで施設タイプ汎用語が誤判定** ひらがなキーワード抽出追加、施設タイプのみマッチ時のペナルティ(50%減衰)、`.every()`空配列バグ修正、12テストケース追加。マスタデータから完全な事業所名なしで汎用表現「居宅介護支援」だけでマッチしスコア88の誤判定を防止 |
+| **#131** | **9d99407** | **fix: 再処理E2Eテストを#129仕様変更に合わせて修正** PR #129でモーダル自動クローズ削除後、テストが旧仕様（自動クローズ）を期待していたため失敗。モーダルが開いたままステータス「待機中」に変わることを検証するよう修正 |
+| **#130** | **c96d116** | **fix: Firestoreルールに再処理用フィールドを追加** `getReprocessClearFields()`が使用する15フィールド(ocrResultUrl, summary, ocrExtraction, pageResults, fileDateFormatted, careManager, category, customerCandidates, officeCandidates, extractionScores, extractionDetails, allCustomerCandidates, suggestedNewOffice, lastErrorMessage, lastErrorId)がルールのaffectedKeys().hasOnly()に不足していた。フロント→Firestore updateで PERMISSION_DENIED 回避 |
+| **#129** | **48e869e** | **fix: 再処理機能の4つのバグを修正** ①確認済み→未確認リセット漏れ ②メタ情報クリア漏れ ③モーダルポーリング未対応 ④処理中UI未実装。`getReprocessClearFields()`ファクトリ追加、`useDocument()`にconditional polling、processing overlayUI実装。モーダル自動クローズ削除し進捗表示対応 |
 
 ## 実運用テスト結果（8 Phase 全完了・02-13）
 
@@ -71,7 +72,8 @@
 | 項目 | 値 |
 |------|-----|
 | 総テスト数 | **98件**（9ファイル）※PR #121追加分含む |
-| CI結果 | **全パス** - chromiumプロジェクトのみ実行（PR #128修正後） |
+| CI結果 | **全パス** - chromiumプロジェクトのみ実行（PR #131修正で再処理テストも成功） |
+| 最新修正 | PR #131 でreprocess-button.spec.ts テスト4を仕様に合わせて修正 |
 
 ## デプロイ環境
 
@@ -106,7 +108,8 @@
 
 ## Git状態
 
-- ブランチ: main
+- ブランチ: main（PR #129-131 マージ済み）
 - 未コミット変更: なし
 - 未プッシュ: なし
 - CI: すべて成功（✅ Deploy & CI）
+- 最新コミット: `9d99407` (fix: 再処理E2Eテストを#129仕様変更に合わせて修正)
