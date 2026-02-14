@@ -24,6 +24,13 @@ export default defineConfig({
       name: 'chromium',
       use: { ...devices['Desktop Chrome'] },
     },
+    {
+      name: 'dev',
+      use: {
+        ...devices['Desktop Chrome'],
+        baseURL: 'https://doc-split-dev.web.app',
+      },
+    },
   ],
 
   // ローカル開発サーバー起動（CI以外）

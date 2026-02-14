@@ -13,6 +13,7 @@
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:headed": "playwright test --headed",
     "test:e2e:emulator": "playwright test --grep @emulator",
+    "test:e2e:dev": "E2E_BASE_URL=https://doc-split-dev.web.app playwright test --grep @emulator --project=dev",
     "test": "vitest run",
     "test:watch": "vitest"
   },
