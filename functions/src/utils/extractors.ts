@@ -33,6 +33,20 @@ const MAX_CANDIDATES = 10;
 /** 最小スコア閾値 */
 const MIN_SCORE_THRESHOLD = 70;
 
+/** 施設タイプキーワード（汎用語判定にも使用） */
+const FACILITY_TYPES = [
+  'デイサービス',
+  'ショートステイ',
+  '訪問介護',
+  '訪問看護',
+  'グループホーム',
+  '特別養護老人ホーム',
+  '介護老人保健施設',
+  '小規模多機能',
+  '通所介護',
+  '居宅介護支援',
+];
+
 /** マッチタイプ */
 export type MatchType = 'exact' | 'partial' | 'fuzzy' | 'none';
 
@@ -664,19 +678,8 @@ function extractKeywordsForMatching(text: string): string[] {
   const locations = cleaned.match(locationPattern) || [];
   keywords.push(...locations);
 
-  // 施設タイプ（デイサービス、ショートステイ、訪問介護など）
-  const facilityTypes = [
-    'デイサービス',
-    'ショートステイ',
-    '訪問介護',
-    '訪問看護',
-    'グループホーム',
-    '特別養護老人ホーム',
-    '介護老人保健施設',
-    '小規模多機能',
-    '通所介護',
-    '居宅介護支援',
-  ];
+  // 施設タイプ（モジュールレベル定数を参照）
+  const facilityTypes = FACILITY_TYPES;
   for (const ft of facilityTypes) {
     if (normalized.includes(normalizeForMatching(ft))) {
       keywords.push(normalizeForMatching(ft));
@@ -693,6 +696,11 @@ function extractKeywordsForMatching(text: string): string[] {
   const kanjiPattern = /[一-龯]{3,}/g;
   const kanjiMatches = cleaned.match(kanjiPattern) || [];
   keywords.push(...kanjiMatches);
+
+  // ひらがなの固有名詞（3文字以上の連続するひらがな）
+  const hiraganaPattern = /[ぁ-ん]{3,}/g;
+  const hiraganaMatches = cleaned.match(hiraganaPattern) || [];
+  keywords.push(...hiraganaMatches);
 
   // 重複除去して返す
   return [...new Set(keywords)].filter((k) => k.length >= 2);
@@ -744,6 +752,16 @@ function calculateKeywordMatchScore(
           break;
         }
       }
+    }
+  }
+
+  // 施設タイプのみでマッチした場合はペナルティ（汎用語による誤判定防止）
+  // 注意: [].every()はtrueを返すため、空配列チェックが必須
+  if (matchedWeight > 0) {
+    const facilityTypeSet = new Set(FACILITY_TYPES.map(normalizeForMatching));
+    const matchedKeywordsInOcr = officeKeywords.filter(kw => normalizedOcrText.includes(kw));
+    if (matchedKeywordsInOcr.length > 0 && matchedKeywordsInOcr.every(kw => facilityTypeSet.has(kw))) {
+      matchedWeight = matchedWeight * 0.5;
     }
   }
 

@@ -14,7 +14,6 @@ import { GCP_CONFIG, GEMINI_CONFIG } from '../utils/config';
 import {
   extractDocumentTypeEnhanced,
   extractCustomerCandidates,
-  extractOfficeNameEnhanced,
   extractOfficeCandidates,
   extractDateEnhanced,
   extractFilenameInfo,
@@ -211,7 +210,6 @@ export async function processDocument(
 
   // 事業所候補抽出
   const officeResult = extractOfficeCandidates(ocrResult, officeMasterData, { filenameInfo });
-  const officeResultLegacy = extractOfficeNameEnhanced(ocrResult, officeMasterData);
 
   // ファイル名からの事業所登録提案
   let suggestedNewOffice: string | null = null;
@@ -296,14 +294,14 @@ export async function processDocument(
     extractionScores: {
       documentType: documentTypeResult.score ?? 0,
       customerName: customerResult.bestMatch?.score ?? 0,
-      officeName: officeResultLegacy.score ?? 0,
+      officeName: officeResult.bestMatch?.score ?? 0,
       date: dateResult.confidence ?? 0,
     },
     extractionDetails: {
       documentMatchType: documentTypeResult.matchType ?? 'none',
       documentKeywords: documentTypeResult.keywords ?? [],
       customerMatchType: customerResult.bestMatch?.matchType ?? 'none',
-      officeMatchType: officeResultLegacy.matchType ?? 'none',
+      officeMatchType: officeResult.bestMatch?.matchType ?? 'none',
       datePattern: dateResult.pattern ?? null,
       dateSource: dateResult.source ?? null,
     },
