@@ -31,14 +31,14 @@ export function Layout() {
         <header className="bg-brand-900 text-white shadow-lg">
           <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
             <div className="flex h-14 items-center justify-between">
-              <div className="flex items-center gap-6">
+              <div className="flex items-center gap-3 md:gap-6">
                 <Link to="/" className="flex items-center gap-2">
                   <img
                     src="/app-icon.png"
                     alt="DocSplit"
                     className="h-9 w-9 rounded-lg object-contain"
                   />
-                  <span className="hidden text-lg font-bold sm:inline">DocSplit</span>
+                  <span className="hidden text-lg font-bold md:inline">DocSplit</span>
                 </Link>
 
                 <nav className="flex gap-1">
@@ -53,20 +53,20 @@ export function Layout() {
                       }`}
                     >
                       <item.icon className="h-4 w-4" />
-                      <span className="hidden sm:inline">{item.name}</span>
+                      <span className="hidden md:inline">{item.name}</span>
                     </Link>
                   ))}
                 </nav>
               </div>
 
-              <div className="flex items-center gap-2 sm:gap-4">
-                <span className="hidden text-sm text-brand-200 sm:inline">{user?.email}</span>
+              <div className="flex items-center gap-2 md:gap-4">
+                <span className="hidden text-sm text-brand-200 lg:inline">{user?.email}</span>
                 <button
                   onClick={() => signOut()}
                   className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium text-brand-200 hover:bg-brand-800 hover:text-white"
                 >
                   <LogOut className="h-4 w-4" />
-                  <span className="hidden sm:inline">ログアウト</span>
+                  <span className="hidden md:inline">ログアウト</span>
                 </button>
               </div>
             </div>
