@@ -1,7 +1,7 @@
 import { useState, useMemo, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
-import { doc, writeBatch, serverTimestamp, deleteField } from 'firebase/firestore'
+import { doc, writeBatch, serverTimestamp } from 'firebase/firestore'
 import {
   Filter,
   FileText,
@@ -51,7 +51,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { db } from '@/lib/firebase'
 import { callFunction } from '@/lib/callFunction'
 import { Checkbox } from '@/components/ui/checkbox'
-import { useInfiniteDocuments, useDocumentStats, useDocumentMasters, type DocumentFilters, type SortField, type SortOrder } from '@/hooks/useDocuments'
+import { useInfiniteDocuments, useDocumentStats, useDocumentMasters, getReprocessClearFields, type DocumentFilters, type SortField, type SortOrder } from '@/hooks/useDocuments'
 import { DateRangeFilter, type DateRange } from '@/components/DateRangeFilter'
 import { isCustomerConfirmed } from '@/hooks/useProcessingHistory'
 import { DocumentDetailModal } from '@/components/DocumentDetailModal'
@@ -472,13 +472,13 @@ export function DocumentsPage() {
 
     setIsBulkOperating(true)
     try {
+      const clearFields = getReprocessClearFields()
       const batch = writeBatch(db)
       for (const docId of selectedIds) {
         const docRef = doc(db, 'documents', docId)
         batch.update(docRef, {
           status: 'pending',
-          ocrResult: deleteField(),
-          error: deleteField(),
+          ...clearFields,
         })
       }
       const count = selectedIds.size

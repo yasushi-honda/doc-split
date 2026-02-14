@@ -14,6 +14,7 @@ import {
   doc,
   getDoc,
   updateDoc,
+  deleteField,
   Timestamp,
   QueryConstraint,
   startAfter,
@@ -156,6 +157,62 @@ export function updateDocumentInListCache(
 }
 
 // ============================================
+// 再処理時クリアフィールド
+// ============================================
+
+/**
+ * 再処理時にリセットすべき全フィールドを返すファクトリ関数
+ * DocumentDetailModal, DocumentsPage, useErrors の3箇所で共通利用（DRY）
+ * deleteField() はファクトリ関数内で毎回生成（安全性）
+ */
+export function getReprocessClearFields() {
+  const df = deleteField()
+  return {
+    // OCR結果
+    ocrResult: df,
+    ocrResultUrl: df,
+    summary: df,
+    ocrExtraction: df,
+    pageResults: df,
+    // メタ情報
+    customerName: df,
+    customerId: df,
+    officeName: df,
+    officeId: df,
+    documentType: df,
+    fileDate: df,
+    fileDateFormatted: df,
+    careManager: df,
+    category: df,
+    // 候補・スコア
+    customerCandidates: df,
+    officeCandidates: df,
+    extractionScores: df,
+    extractionDetails: df,
+    // フラグ
+    isDuplicateCustomer: df,
+    needsManualCustomerSelection: df,
+    allCustomerCandidates: df,
+    suggestedNewOffice: df,
+    // 確認ステータス
+    customerConfirmed: false,
+    confirmedBy: null,
+    confirmedAt: null,
+    officeConfirmed: false,
+    officeConfirmedBy: null,
+    officeConfirmedAt: null,
+    // OCR確認ステータス
+    verified: false,
+    verifiedBy: null,
+    verifiedAt: null,
+    // エラー
+    error: df,
+    lastErrorMessage: df,
+    lastErrorId: df,
+  }
+}
+
+// ============================================
 // 書類一覧取得
 // ============================================
 
@@ -281,6 +338,13 @@ export function useDocument(documentId: string | null) {
     queryKey: ['document', documentId],
     queryFn: () => (documentId ? fetchDocument(documentId) : null),
     enabled: !!documentId,
+    refetchInterval: (query) => {
+      const doc = query.state.data as Document | null
+      if (doc && (doc.status === 'pending' || doc.status === 'processing')) {
+        return 3000 // 3秒ごとにポーリング（処理中のみ）
+      }
+      return false
+    },
   })
 }
 

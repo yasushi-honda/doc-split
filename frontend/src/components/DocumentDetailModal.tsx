@@ -6,7 +6,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { format } from 'date-fns'
 import { ja } from 'date-fns/locale'
-import { Timestamp, doc as firestoreDoc, updateDoc, deleteField } from 'firebase/firestore'
+import { Timestamp, doc as firestoreDoc, updateDoc } from 'firebase/firestore'
 import { ref, getDownloadURL } from 'firebase/storage'
 import { Download, ExternalLink, Loader2, FileText, User, Building, Calendar, Tag, AlertCircle, Scissors, Pencil, Save, X, BookMarked, History, ChevronUp, ChevronDown, Sparkles, RefreshCw, CheckCircle, XCircle } from 'lucide-react'
 import { toast } from 'sonner'
@@ -29,7 +29,7 @@ import { PdfViewer } from '@/components/PdfViewer'
 import { PdfSplitModal } from '@/components/PdfSplitModal'
 import { MasterSelectField } from '@/components/MasterSelectField'
 import { ExtractionInfoPopover } from '@/components/ExtractionInfoPopover'
-import { useDocument } from '@/hooks/useDocuments'
+import { useDocument, getReprocessClearFields, updateDocumentInListCache } from '@/hooks/useDocuments'
 import { useDocumentEdit } from '@/hooks/useDocumentEdit'
 import { useCustomers, useOffices, useDocumentTypes } from '@/hooks/useMasters'
 import { useMasterAlias } from '@/hooks/useMasterAlias'
@@ -618,24 +618,27 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
     if (!documentId || isReprocessing) return
     setIsReprocessing(true)
     try {
+      const clearFields = getReprocessClearFields()
       const docRef = firestoreDoc(db, 'documents', documentId)
       await updateDoc(docRef, {
         status: 'pending',
-        ocrResult: deleteField(),
-        error: deleteField(),
-        // 確認ステータスをリセット（OCR再実行で抽出結果が変わるため）
+        ...clearFields,
+      })
+      // 楽観的更新（即時UI反映）
+      updateDocumentInListCache(queryClient, documentId, {
+        status: 'pending',
+        ocrResult: '',
+        customerName: '',
+        officeName: '',
+        documentType: '',
         customerConfirmed: false,
-        confirmedBy: null,
-        confirmedAt: null,
         officeConfirmed: false,
-        officeConfirmedBy: null,
-        officeConfirmedAt: null,
+        verified: false,
       })
       queryClient.invalidateQueries({ queryKey: ['document', documentId] })
       queryClient.invalidateQueries({ queryKey: ['documentsInfinite'] })
       setShowReprocessDialog(false)
-      toast.success('再処理をリクエストしました。ステータスが「処理待ち」に変わります。', { duration: 5000 })
-      setTimeout(() => onOpenChange(false), 3000)
+      toast.success('再処理をリクエストしました。処理完了まで画面が自動更新されます。', { duration: 5000 })
     } catch (err) {
       console.error('Failed to reprocess:', err)
       toast.error('再処理リクエストに失敗しました')
@@ -763,6 +766,9 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                     </div>
                   </div>
                   <Badge variant={(STATUS_CONFIG[document.status] || STATUS_CONFIG.pending).variant}>
+                    {(document.status === 'pending' || document.status === 'processing') && (
+                      <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                    )}
                     {(STATUS_CONFIG[document.status] || STATUS_CONFIG.pending).label}
                   </Badge>
                 </div>
@@ -958,7 +964,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                 </div>
 
                 {/* 折りたたみコンテンツ（モバイルで折りたたみ可能、デスクトップは常時表示） */}
-                <div className={`md:flex md:flex-col md:flex-1 md:min-h-0 ${isMetadataCollapsed ? 'hidden md:flex' : 'block'}`}>
+                <div className={`relative md:flex md:flex-col md:flex-1 md:min-h-0 ${isMetadataCollapsed ? 'hidden md:flex' : 'block'}`}>
                 {editError && (
                   <div className="mb-4 rounded bg-red-50 p-2 text-xs text-red-600">
                     {editError}
@@ -1357,6 +1363,17 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                           <span className="text-gray-500">「{log.alias}」</span>
                         </div>
                       ))}
+                    </div>
+                  </div>
+                )}
+                {/* 処理中オーバーレイ */}
+                {(document.status === 'pending' || document.status === 'processing') && (
+                  <div className="absolute inset-0 flex items-center justify-center bg-white/80 z-10">
+                    <div className="flex flex-col items-center gap-2">
+                      <Loader2 className="h-6 w-6 animate-spin text-blue-500" />
+                      <span className="text-sm text-blue-600 font-medium">
+                        {document.status === 'pending' ? 'OCR処理待ち...' : 'OCR処理中...'}
+                      </span>
                     </div>
                   </div>
                 )}
