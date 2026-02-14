@@ -21,6 +21,7 @@ import {
   QueryConstraint,
 } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
+import { getReprocessClearFields } from './useDocuments'
 import type { ErrorRecord, ErrorStatus, ErrorType } from '@shared/types'
 
 // ============================================
@@ -222,7 +223,8 @@ async function requestReprocess({ errorId, fileId }: ReprocessParams): Promise<v
   const errorRef = doc(db, 'errors', errorId)
   await updateDoc(errorRef, { status: 'pending' })
 
-  // 2. 対応するドキュメントのステータスを「pending」に戻す
+  // 2. 対応するドキュメントのステータスを「pending」に戻す + メタ情報・確認フラグをクリア
+  const clearFields = getReprocessClearFields()
   const docsQuery = query(
     collection(db, 'documents'),
     where('fileId', '==', fileId),
@@ -233,7 +235,10 @@ async function requestReprocess({ errorId, fileId }: ReprocessParams): Promise<v
   const firstDoc = snapshot.docs[0]
   if (firstDoc) {
     const docRef = doc(db, 'documents', firstDoc.id)
-    await updateDoc(docRef, { status: 'pending' })
+    await updateDoc(docRef, {
+      status: 'pending',
+      ...clearFields,
+    })
   }
 }
 
