@@ -27,7 +27,7 @@ function matchTypeLabel(matchType: string | undefined): string {
     case 'exact': return '完全一致'
     case 'partial': return '部分一致'
     case 'fuzzy': return 'あいまい一致'
-    case 'none': return '一致なし'
+    case 'none': return 'マスター未登録'
     default: return '不明'
   }
 }
@@ -115,10 +115,16 @@ function getReasonMessage(info: ReturnType<typeof getFieldInfo>): string {
     }
   } else if (matchType === 'fuzzy') {
     parts.push(`OCRテキストの表記がマスターデータの「${currentValue}」と類似していると判定されました（あいまい一致）。`)
+  } else if (matchType === 'none') {
+    parts.push(`OCRテキストから「${currentValue}」を読み取りましたが、マスターデータに一致する候補が見つかりませんでした。マスターへの登録をご検討ください。`)
   }
 
   if (score !== undefined && score > 0) {
     parts.push(`確信度: ${score}点`)
+  }
+
+  if (parts.length === 0) {
+    parts.push(`OCRテキストから「${currentValue}」が抽出されました。`)
   }
 
   return parts.join(' ')
