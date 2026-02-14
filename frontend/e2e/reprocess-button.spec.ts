@@ -103,7 +103,8 @@ test.describe('再処理ボタン @emulator', () => {
     // 成功トーストが表示される
     await expect(page.locator('text=再処理をリクエストしました')).toBeVisible({ timeout: 5000 });
 
-    // モーダルが自動で閉じる（1.5秒後）
-    await expect(modal).not.toBeVisible({ timeout: 5000 });
+    // モーダルは開いたまま、ステータスが「待機中」に変わる（#129: 自動クローズ削除、進捗表示対応）
+    await expect(modal).toBeVisible();
+    await expect(modal.locator('text=待機中')).toBeVisible({ timeout: 5000 });
   });
 });
