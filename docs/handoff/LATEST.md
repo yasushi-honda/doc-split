@@ -79,9 +79,9 @@
 
 | 項目 | 値 |
 |------|-----|
-| 総テスト数 | **101件**（10ファイル）※PR #133-135で3件追加（tablet-landscape-sidebar.spec.ts） |
+| 総テスト数 | **104件**（10ファイル）※PR #133-135で3件追加（tablet-landscape-sidebar.spec.ts）→ PR #136での検証でさらに3件追加 |
 | CI結果 | **全パス** - chromiumプロジェクトのみ実行（Lint/Build/Rules/Unit/E2E全て成功） |
-| 最新修正 | PR #135 でヘッダーナビレスポンシブE2Eテストが全パス |
+| 最新修正 | PR #136 で verify-setup.sh Storageバケット名フォールバック追加・cocoro検証完了 |
 
 ## デプロイ環境（全3環境完全同期）
 
