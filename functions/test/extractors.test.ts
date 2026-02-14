@@ -384,6 +384,31 @@ TEL: 052-509-2292
     expect(off2!.score).to.be.greaterThanOrEqual(85);
   });
 
+  it('施設タイプ汎用語「居宅介護支援」による誤マッチを防ぐ（ひらがな固有名詞）', () => {
+    // 実際の問題ケース: 「みどり居宅介護支援センター」→キーワード["居宅介護支援","みどり"]
+    // OCRに「居宅介護支援事業所」のみ含まれ「みどり」が含まれない場合は低スコアであるべき
+    const testOfficeMasters: OfficeMaster[] = [
+      { id: 'off1', name: 'みどり居宅介護支援センター', isDuplicate: false },
+      { id: 'off2', name: 'さくら訪問看護ステーション', isDuplicate: false },
+    ];
+
+    const ocrText = `居宅介護支援事業所
+サービス提供票
+利用者: 山田太郎`;
+
+    const result = extractOfficeCandidates(ocrText, testOfficeMasters);
+
+    // 「みどり」がOCRに含まれないため、スコアは閾値(70)未満であるべき
+    const midori = result.candidates.find(c => c.id === 'off1');
+    if (midori) {
+      expect(midori.score).to.be.lessThan(70);
+    }
+    // bestMatchがみどり居宅介護支援センターであってはならない
+    if (result.bestMatch) {
+      expect(result.bestMatch.id).to.not.equal('off1');
+    }
+  });
+
   it('汎用語「サービス」による誤マッチを防ぐ', () => {
     // 実際の問題ケース: OCRに「居宅サービス事業所」のみ含まれるが
     // 「あおぞらデイサービス」がpartialマッチ(score=83)で選ばれてしまう
@@ -408,6 +433,194 @@ TEL: 052-509-2292
     // bestMatchがあおぞらデイサービスであってはならない
     if (result.bestMatch) {
       expect(result.bestMatch.id).to.not.equal('off1');
+    }
+  });
+
+  // === 真陽性テスト（正しいマッチが壊れていないことの確認） ===
+
+  it('真陽性: OCRに完全な事業所名が含まれる場合はスコア100', () => {
+    const testOfficeMasters: OfficeMaster[] = [
+      { id: 'off1', name: 'みどり居宅介護支援センター', isDuplicate: false },
+    ];
+
+    const ocrText = 'みどり居宅介護支援センター ご利用者: 山田太郎';
+    const result = extractOfficeCandidates(ocrText, testOfficeMasters);
+
+    expect(result.bestMatch).to.not.be.null;
+    expect(result.bestMatch!.name).to.equal('みどり居宅介護支援センター');
+    expect(result.bestMatch!.score).to.equal(100);
+    expect(result.bestMatch!.matchType).to.equal('exact');
+  });
+
+  it('真陽性: ひらがな+施設タイプの事業所名、OCRに両方含まれる場合は高スコア', () => {
+    const testOfficeMasters: OfficeMaster[] = [
+      { id: 'off1', name: 'ひかり通所介護', isDuplicate: false },
+      { id: 'off2', name: 'あさひ通所介護', isDuplicate: false },
+    ];
+
+    // OCRに「ひかり」も「通所介護」も含まれる
+    const ocrText = 'ひかり通所介護 サービス提供票 令和7年2月';
+    const result = extractOfficeCandidates(ocrText, testOfficeMasters);
+
+    expect(result.bestMatch).to.not.be.null;
+    expect(result.bestMatch!.id).to.equal('off1');
+    expect(result.bestMatch!.score).to.equal(100); // 完全一致
+  });
+
+  // === 施設タイプ汎用語ペナルティの網羅的テスト ===
+
+  it('施設タイプペナルティ: 「ひかり通所介護」、OCRに「通所介護」のみ → 低スコア', () => {
+    const testOfficeMasters: OfficeMaster[] = [
+      { id: 'off1', name: 'ひかり通所介護', isDuplicate: false },
+    ];
+
+    const ocrText = '通所介護利用明細 令和7年2月分';
+    const result = extractOfficeCandidates(ocrText, testOfficeMasters);
+
+    const hikari = result.candidates.find(c => c.id === 'off1');
+    if (hikari) {
+      expect(hikari.score).to.be.lessThan(70);
+    }
+    if (result.bestMatch) {
+      expect(result.bestMatch.id).to.not.equal('off1');
+    }
+  });
+
+  it('施設タイプペナルティ: 「あさひ訪問介護ステーション」、OCRに「訪問介護」のみ → 低スコア', () => {
+    const testOfficeMasters: OfficeMaster[] = [
+      { id: 'off1', name: 'あさひ訪問介護ステーション', isDuplicate: false },
+    ];
+
+    const ocrText = '訪問介護サービス提供票 利用者: 鈴木一郎';
+    const result = extractOfficeCandidates(ocrText, testOfficeMasters);
+
+    const asahi = result.candidates.find(c => c.id === 'off1');
+    if (asahi) {
+      expect(asahi.score).to.be.lessThan(70);
+    }
+    if (result.bestMatch) {
+      expect(result.bestMatch.id).to.not.equal('off1');
+    }
+  });
+
+  // === 同施設タイプの事業所の識別（高リスク） ===
+
+  it('識別: 「さくらデイサービス」vs「たんぽぽデイサービス」、OCRに「さくら」あり → 正しく識別', () => {
+    const testOfficeMasters: OfficeMaster[] = [
+      { id: 'off1', name: 'さくらデイサービス', isDuplicate: false },
+      { id: 'off2', name: 'たんぽぽデイサービス', isDuplicate: false },
+    ];
+
+    const ocrText = 'さくらデイサービス 利用明細書 令和7年2月分';
+    const result = extractOfficeCandidates(ocrText, testOfficeMasters);
+
+    expect(result.bestMatch).to.not.be.null;
+    expect(result.bestMatch!.id).to.equal('off1');
+    expect(result.bestMatch!.score).to.equal(100); // 完全一致
+
+    // たんぽぽはbestMatchであってはならない
+    const tanpopo = result.candidates.find(c => c.id === 'off2');
+    if (tanpopo) {
+      expect(tanpopo.score).to.be.lessThan(result.bestMatch!.score);
+    }
+  });
+
+  it('識別: 同施設タイプで片方のひらがなのみOCRに含まれる場合の区別', () => {
+    const testOfficeMasters: OfficeMaster[] = [
+      { id: 'off1', name: 'さくらデイサービス', isDuplicate: false },
+      { id: 'off2', name: 'たんぽぽデイサービス', isDuplicate: false },
+    ];
+
+    // OCRに「デイサービス」と「さくら」は含まれるが「たんぽぽ」は含まれない
+    const ocrText = 'デイサービス さくら 利用明細書';
+    const result = extractOfficeCandidates(ocrText, testOfficeMasters);
+
+    // さくらの方が高いスコアであるべき
+    const sakura = result.candidates.find(c => c.id === 'off1');
+    const tanpopo = result.candidates.find(c => c.id === 'off2');
+    if (sakura && tanpopo) {
+      expect(sakura.score).to.be.greaterThan(tanpopo.score);
+    }
+  });
+
+  // === ひらがなキーワード抽出の境界条件 ===
+
+  it('境界: ひらがな3文字はキーワードとして抽出される', () => {
+    const testOfficeMasters: OfficeMaster[] = [
+      { id: 'off1', name: 'あいう通所介護', isDuplicate: false },
+    ];
+
+    // OCRに「通所介護」はあるが「あいう」はない
+    const ocrText = '通所介護サービス提供票';
+    const result = extractOfficeCandidates(ocrText, testOfficeMasters);
+
+    // 「あいう」(3文字)が抽出されるため、施設タイプだけのマッチにはならず
+    // totalWeightが増えてスコアが下がる
+    const aiu = result.candidates.find(c => c.id === 'off1');
+    if (aiu) {
+      expect(aiu.score).to.be.lessThan(70);
+    }
+  });
+
+  it('境界: ひらがな2文字はキーワードとして抽出されない', () => {
+    const testOfficeMasters: OfficeMaster[] = [
+      { id: 'off1', name: 'あい通所介護', isDuplicate: false },
+    ];
+
+    // 「あい」(2文字)はキーワードとして抽出されないため
+    // 施設タイプのみがキーワードとなり、ペナルティが適用される
+    const ocrText = '通所介護サービス提供票';
+    const result = extractOfficeCandidates(ocrText, testOfficeMasters);
+
+    const ai = result.candidates.find(c => c.id === 'off1');
+    if (ai) {
+      expect(ai.score).to.be.lessThan(70);
+    }
+  });
+
+  // === 全ひらがな事業所名 ===
+
+  it('全ひらがな事業所名: OCRに含まれる場合は完全一致', () => {
+    const testOfficeMasters: OfficeMaster[] = [
+      { id: 'off1', name: 'あさひ', isDuplicate: false },
+    ];
+
+    const ocrText = 'あさひ 訪問介護サービス提供票';
+    const result = extractOfficeCandidates(ocrText, testOfficeMasters);
+
+    expect(result.bestMatch).to.not.be.null;
+    expect(result.bestMatch!.id).to.equal('off1');
+    expect(result.bestMatch!.score).to.equal(100);
+  });
+
+  // === 混合キーワード（施設タイプ + 非施設タイプ）の検証 ===
+
+  it('混合キーワード: 非施設タイプキーワードもマッチすればペナルティなし', () => {
+    const testOfficeMasters: OfficeMaster[] = [
+      { id: 'off1', name: 'みどりデイサービス', isDuplicate: false },
+    ];
+
+    // 「デイサービス」(施設タイプ)と「みどり」(ひらがな固有名詞)の両方がOCRに含まれる
+    const ocrText = 'みどりデイサービス利用明細';
+    const result = extractOfficeCandidates(ocrText, testOfficeMasters);
+
+    expect(result.bestMatch).to.not.be.null;
+    expect(result.bestMatch!.id).to.equal('off1');
+    expect(result.bestMatch!.score).to.equal(100); // 完全一致
+  });
+
+  it('混合キーワード: 施設タイプのみOCRに含まれ固有名詞がない場合はペナルティ', () => {
+    const testOfficeMasters: OfficeMaster[] = [
+      { id: 'off1', name: 'みどりデイサービス', isDuplicate: false },
+    ];
+
+    // 「デイサービス」はあるが「みどり」がない
+    const ocrText = 'デイサービス利用明細 令和7年';
+    const result = extractOfficeCandidates(ocrText, testOfficeMasters);
+
+    const midori = result.candidates.find(c => c.id === 'off1');
+    if (midori) {
+      expect(midori.score).to.be.lessThan(70);
     }
   });
 });
