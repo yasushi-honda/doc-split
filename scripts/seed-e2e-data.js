@@ -284,6 +284,7 @@ async function seedMainFlowTestDocuments() {
         documentType: '',
         errorMessage: 'OCR処理に失敗しました',
         createdAt: Timestamp.now(),
+        processedAt: Timestamp.now(),
       },
     },
     {
