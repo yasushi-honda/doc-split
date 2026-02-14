@@ -71,6 +71,11 @@ export interface Document {
   // Phase 9: OCR抽出スナップショット（正解フィードバック用）
   ocrExtraction?: OcrExtraction;
 
+  // 抽出スコア（各フィールドの信頼度）
+  extractionScores?: ExtractionScores;
+  // 抽出詳細（マッチ方法・キーワード等）
+  extractionDetails?: ExtractionDetails;
+
   // OCR結果確認ステータス（人によるチェック状態）
   verified?: boolean;           // 確認済みフラグ（デフォルト: false）
   verifiedBy?: string | null;   // 確認者UID
@@ -96,6 +101,28 @@ export interface OcrExtraction {
   customer?: OcrFieldExtraction;
   office?: OcrFieldExtraction;
   documentType?: OcrFieldExtraction;
+}
+
+// ============================================
+// 抽出スコア・詳細情報
+// ============================================
+
+/** 各フィールドの抽出信頼度スコア */
+export interface ExtractionScores {
+  documentType: number;   // 書類種別スコア (0-100)
+  customerName: number;   // 顧客名スコア (0-100)
+  officeName: number;     // 事業所名スコア (0-100)
+  date: number;           // 日付スコア (0-100)
+}
+
+/** 抽出方法の詳細情報 */
+export interface ExtractionDetails {
+  documentMatchType: string;     // 書類種別のマッチタイプ
+  documentKeywords?: string[];   // マッチしたキーワード
+  customerMatchType: string;     // 顧客名のマッチタイプ
+  officeMatchType: string;       // 事業所名のマッチタイプ
+  datePattern?: string | null;   // 日付の抽出パターン
+  dateSource?: string | null;    // 日付の抽出元
 }
 
 // ============================================

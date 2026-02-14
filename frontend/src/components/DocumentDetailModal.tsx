@@ -28,6 +28,7 @@ import { Switch } from '@/components/ui/switch'
 import { PdfViewer } from '@/components/PdfViewer'
 import { PdfSplitModal } from '@/components/PdfSplitModal'
 import { MasterSelectField } from '@/components/MasterSelectField'
+import { ExtractionInfoPopover } from '@/components/ExtractionInfoPopover'
 import { useDocument } from '@/hooks/useDocuments'
 import { useDocumentEdit } from '@/hooks/useDocumentEdit'
 import { useCustomers, useOffices, useDocumentTypes } from '@/hooks/useMasters'
@@ -1033,6 +1034,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                       ) : (
                         <div className="flex items-center gap-2">
                           <span className="truncate text-sm text-gray-900">{document.customerName || '未判定'}</span>
+                          <ExtractionInfoPopover fieldType="customer" document={document} />
                           {needsCustomerConfirmation && (
                             <Badge variant="outline" className="bg-orange-100 text-orange-800 border-orange-300 text-xs">
                               選択待ち
@@ -1104,6 +1106,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                       ) : (
                         <div className="flex items-center gap-2">
                           <span className="truncate text-sm text-gray-900">{document.officeName || '未判定'}</span>
+                          <ExtractionInfoPopover fieldType="office" document={document} />
                           {needsOfficeConfirmation && (
                             <Badge variant="outline" className="bg-orange-100 text-orange-800 border-orange-300 text-xs">
                               選択待ち
@@ -1164,7 +1167,10 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                           )}
                         </div>
                       ) : (
-                        <p className="truncate text-sm text-gray-900">{document.documentType || '未判定'}</p>
+                        <div className="flex items-center gap-2">
+                          <span className="truncate text-sm text-gray-900">{document.documentType || '未判定'}</span>
+                          <ExtractionInfoPopover fieldType="documentType" document={document} />
+                        </div>
                       )}
                     </div>
                   </div>
