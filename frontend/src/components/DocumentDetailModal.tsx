@@ -622,6 +622,13 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
         status: 'pending',
         ocrResult: deleteField(),
         error: deleteField(),
+        // 確認ステータスをリセット（OCR再実行で抽出結果が変わるため）
+        customerConfirmed: false,
+        confirmedBy: null,
+        confirmedAt: null,
+        officeConfirmed: false,
+        officeConfirmedBy: null,
+        officeConfirmedAt: null,
       })
       queryClient.invalidateQueries({ queryKey: ['document', documentId] })
       queryClient.invalidateQueries({ queryKey: ['documentsInfinite'] })
