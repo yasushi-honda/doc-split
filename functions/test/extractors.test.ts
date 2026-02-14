@@ -383,6 +383,33 @@ TEL: 052-509-2292
     // 完全一致でoff1がスコア100になるが、off2も高いスコアになるはず
     expect(off2!.score).to.be.greaterThanOrEqual(85);
   });
+
+  it('汎用語「サービス」による誤マッチを防ぐ', () => {
+    // 実際の問題ケース: OCRに「居宅サービス事業所」のみ含まれるが
+    // 「あおぞらデイサービス」がpartialマッチ(score=83)で選ばれてしまう
+    const testOfficeMasters: OfficeMaster[] = [
+      { id: 'off1', name: 'あおぞらデイサービス', isDuplicate: false },
+      { id: 'off2', name: 'さくら訪問介護', isDuplicate: false },
+    ];
+
+    const ocrText = `居宅介護支援事業所
+居宅サービス事業所
+ケアプランデータ連携システム
+介護を つなぐ。心をつなげる。`;
+
+    const result = extractOfficeCandidates(ocrText, testOfficeMasters);
+
+    // 「サービス」という汎用語だけでは「あおぞらデイサービス」にマッチすべきでない
+    const aozora = result.candidates.find(c => c.id === 'off1');
+    if (aozora) {
+      // マッチしたとしても閾値(70)未満のスコアであるべき
+      expect(aozora.score).to.be.lessThan(70);
+    }
+    // bestMatchがあおぞらデイサービスであってはならない
+    if (result.bestMatch) {
+      expect(result.bestMatch.id).to.not.equal('off1');
+    }
+  });
 });
 
 describe('aggregateOfficeCandidates', () => {

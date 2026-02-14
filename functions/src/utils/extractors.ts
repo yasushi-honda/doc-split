@@ -651,7 +651,9 @@ function extractKeywordsForMatching(text: string): string[] {
 
   let cleaned = normalized;
   for (const noise of noiseWords) {
-    cleaned = cleaned.replace(new RegExp(noise, 'g'), '');
+    // normalizeForMatchingがー（長音）を除去するため、ノイズワードも同様に正規化してマッチさせる
+    const normalizedNoise = normalizeForMatching(noise);
+    cleaned = cleaned.replace(new RegExp(normalizedNoise.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), '');
   }
 
   // キーワードに分割（連続する漢字・カタカナ・ひらがなを抽出）
@@ -682,8 +684,9 @@ function extractKeywordsForMatching(text: string): string[] {
   }
 
   // ブランド名・固有名詞（3文字以上の連続するカタカナ）
+  // ノイズ除去後のテキストから抽出（「サービス」等の汎用語がキーワードになるのを防ぐ）
   const katakanaPattern = /[ァ-ヶー]{3,}/g;
-  const katakanaMatches = normalized.match(katakanaPattern) || [];
+  const katakanaMatches = cleaned.match(katakanaPattern) || [];
   keywords.push(...katakanaMatches);
 
   // 地名（連続する漢字で3文字以上）
@@ -730,9 +733,12 @@ function calculateKeywordMatchScore(
       matchedWeight += weight;
       matchedLength += officeKw.length;
     } else {
-      // 部分一致チェック
+      // 部分一致チェック（短すぎるサブストリングマッチを防ぐ）
       for (const ocrKw of ocrKeywords) {
-        if (ocrKw.includes(officeKw) || officeKw.includes(ocrKw)) {
+        const shorter = Math.min(ocrKw.length, officeKw.length);
+        const longer = Math.max(ocrKw.length, officeKw.length);
+        const overlapRatio = shorter / longer;
+        if ((ocrKw.includes(officeKw) || officeKw.includes(ocrKw)) && overlapRatio >= 0.65) {
           matchedWeight += weight * 0.8;
           matchedLength += Math.min(ocrKw.length, officeKw.length);
           break;
