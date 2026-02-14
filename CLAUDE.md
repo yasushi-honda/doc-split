@@ -4,9 +4,12 @@
 Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、検索・グルーピング・閲覧が可能な書類管理ビューアー。Phase 8完了 + 追加実装（CI/CD、PWA、テナント自動化等）。
 
 ## 環境情報
+
+**マルチクライアント運用**: 複数環境対応。現在のGCP設定は `switch-client.sh` で切替可能
+
 | 項目 | 値 |
 |------|-----|
-| GCPプロジェクト | `doc-split-dev` |
+| GCPプロジェクト | `doc-split-dev` (開発環境の参照値) |
 | リージョン | `asia-northeast1` |
 | 本番URL | `https://doc-split-dev.web.app` |
 | ドキュメント | `https://yasushi-honda.github.io/doc-split/` |
@@ -23,6 +26,12 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
 - [ADR](docs/adr/)
 
 ## 開発コマンド
+
+### マルチクライアント環境切替
+```bash
+./scripts/switch-client.sh <client-name>  # 環境切替（dev/kanameone/cocoro）
+./scripts/switch-client.sh --list         # 利用可能なクライアント一覧
+```
 
 ### ビルド・テスト
 ```bash
