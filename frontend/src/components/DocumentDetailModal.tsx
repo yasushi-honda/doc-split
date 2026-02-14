@@ -868,8 +868,8 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
               <div
                 className={`w-full border-t bg-white transition-all duration-200 md:flex md:h-auto md:w-72 md:flex-col md:flex-shrink-0 md:border-l md:border-t-0 md:p-4 ${
                   isMetadataCollapsed
-                    ? 'h-12 flex-shrink-0 overflow-hidden px-3 py-2'
-                    : 'min-h-0 max-h-[45vh] flex-shrink-0 overflow-y-auto overscroll-contain p-3 [-webkit-overflow-scrolling:touch] md:max-h-none'
+                    ? 'h-12 flex-shrink-0 overflow-hidden px-3 py-2 md:h-auto md:overflow-y-auto'
+                    : 'min-h-0 max-h-[45vh] flex-shrink-0 overflow-y-auto overscroll-contain p-3 [-webkit-overflow-scrolling:touch] md:max-h-none md:overflow-y-auto'
                 }`}
               >
                 <div className={`flex items-center justify-between ${isMetadataCollapsed ? '' : 'mb-4'}`}>
@@ -964,7 +964,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                 </div>
 
                 {/* 折りたたみコンテンツ（モバイルで折りたたみ可能、デスクトップは常時表示） */}
-                <div className={`relative md:flex md:flex-col md:flex-1 md:min-h-0 ${isMetadataCollapsed ? 'hidden md:flex' : 'block'}`}>
+                <div className={`relative md:flex md:flex-col md:flex-1 md:min-h-0 md:overflow-y-auto ${isMetadataCollapsed ? 'hidden md:flex' : 'block'}`}>
                 {editError && (
                   <div className="mb-4 rounded bg-red-50 p-2 text-xs text-red-600">
                     {editError}
