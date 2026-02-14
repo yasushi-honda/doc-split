@@ -106,6 +106,11 @@ export function firestoreToDocument(id: string, data: Record<string, unknown>): 
     officeKey: data.officeKey as string | undefined,
     documentTypeKey: data.documentTypeKey as string | undefined,
     careManagerKey: data.careManagerKey as string | undefined,
+    // OCR抽出スナップショット
+    ocrExtraction: data.ocrExtraction as Document['ocrExtraction'],
+    // 抽出スコア・詳細
+    extractionScores: data.extractionScores as Document['extractionScores'],
+    extractionDetails: data.extractionDetails as Document['extractionDetails'],
     // OCR結果確認ステータス
     verified: data.verified as boolean | undefined,
     verifiedBy: data.verifiedBy as string | null | undefined,
