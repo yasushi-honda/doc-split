@@ -57,10 +57,25 @@ service cloud.firestore {
           'verified',
           'verifiedBy',
           'verifiedAt',
-          // 再処理用フィールド（一括再処理）
+          // 再処理用フィールド（getReprocessClearFields対応）
           'status',
           'ocrResult',
-          'error'
+          'ocrResultUrl',
+          'summary',
+          'ocrExtraction',
+          'pageResults',
+          'fileDateFormatted',
+          'careManager',
+          'category',
+          'customerCandidates',
+          'officeCandidates',
+          'extractionScores',
+          'extractionDetails',
+          'allCustomerCandidates',
+          'suggestedNewOffice',
+          'error',
+          'lastErrorMessage',
+          'lastErrorId'
         ])
         // confirmedBy は自分のUIDのみ設定可能（事業所解決時は含まれない場合あり）
         && (request.resource.data.confirmedBy == request.auth.uid

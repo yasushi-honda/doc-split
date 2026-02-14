@@ -7,7 +7,7 @@
  */
 
 import * as testing from '@firebase/rules-unit-testing';
-import { doc, getDoc, setDoc, deleteDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, deleteDoc, updateDoc, deleteField } from 'firebase/firestore';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
@@ -713,6 +713,84 @@ describe('Firestore Security Rules', () => {
           status: 'pending', // 再処理用にpendingに戻す
           ocrResult: null,   // ocrResultをクリア
         }, { merge: true })
+      );
+    });
+
+    it('getReprocessClearFieldsの全フィールド更新が許可される（再処理用）', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      // テストデータを作成（再処理前の状態）
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'documents', 'doc-reprocess-full'), {
+          fileName: 'test.pdf',
+          status: 'error',
+          ocrResult: 'some text',
+          ocrResultUrl: 'gs://bucket/ocr.json',
+          summary: 'summary text',
+          customerName: '山田太郎',
+          customerId: 'cust-001',
+          officeName: 'テスト事業所',
+          officeId: 'office-001',
+          documentType: '請求書',
+          fileDate: new Date(),
+          fileDateFormatted: '2026-01-15',
+          careManager: 'ケアマネA',
+          category: '介護',
+          customerConfirmed: true,
+          confirmedBy: normalUid,
+          confirmedAt: new Date(),
+          officeConfirmed: true,
+          officeConfirmedBy: normalUid,
+          officeConfirmedAt: new Date(),
+          verified: true,
+          verifiedBy: normalUid,
+          verifiedAt: new Date(),
+          error: 'some error',
+        });
+      });
+
+      const docRef = doc(normalUser.firestore(), 'documents', 'doc-reprocess-full');
+      // getReprocessClearFields() と同等のフィールドセットで更新
+      await assertSucceeds(
+        updateDoc(docRef, {
+          status: 'pending',
+          // deleteField() でフィールド削除
+          ocrResult: deleteField(),
+          ocrResultUrl: deleteField(),
+          summary: deleteField(),
+          ocrExtraction: deleteField(),
+          pageResults: deleteField(),
+          customerName: deleteField(),
+          customerId: deleteField(),
+          officeName: deleteField(),
+          officeId: deleteField(),
+          documentType: deleteField(),
+          fileDate: deleteField(),
+          fileDateFormatted: deleteField(),
+          careManager: deleteField(),
+          category: deleteField(),
+          customerCandidates: deleteField(),
+          officeCandidates: deleteField(),
+          extractionScores: deleteField(),
+          extractionDetails: deleteField(),
+          isDuplicateCustomer: deleteField(),
+          needsManualCustomerSelection: deleteField(),
+          allCustomerCandidates: deleteField(),
+          suggestedNewOffice: deleteField(),
+          error: deleteField(),
+          lastErrorMessage: deleteField(),
+          lastErrorId: deleteField(),
+          // 値をリセット
+          customerConfirmed: false,
+          confirmedBy: null,
+          confirmedAt: null,
+          officeConfirmed: false,
+          officeConfirmedBy: null,
+          officeConfirmedAt: null,
+          verified: false,
+          verifiedBy: null,
+          verifiedAt: null,
+        })
       );
     });
 
