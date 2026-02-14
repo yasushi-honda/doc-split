@@ -1,6 +1,6 @@
 # ハンドオフメモ
 
-**更新日**: 2026-02-15（ドキュメント監査実施・CLAUDE.md改善）
+**更新日**: 2026-02-15（verify-setup.sh Storageバケット名バグ修正）
 **ブランチ**: main
 **フェーズ**: Phase 8完了 + マルチクライアント安全運用機構 + 再処理バグ修正 + UI/UX改善（PR #129-135）
 
@@ -8,6 +8,7 @@
 
 | 項目 | 内容 |
 |------|------|
+| **verify-setup.shバグ修正** | Storage CORS確認でバケット名が`.firebasestorage.app`固定だった問題を修正。`.appspot.com`へのフォールバック追加。cocoro環境のCORS判定が正常化（8/14→14/16相当） |
 | **ドキュメント監査** | docs/audit/2026-02-15-document-audit.md 作成。総合評価 A- (90%)。軽微改善を CLAUDE.md に反映 |
 | **CLAUDE.md改善** | switch-client.sh 追記、環境情報に「開発環境参照値」と注釈追加、マルチクライアント運用対応 |
 
@@ -26,7 +27,7 @@
 | 1 | ベースライン記録 | ✅ 完了 |
 | 2 | switch-client.sh全3環境切替 | ✅ 通過（dev↔kanameone↔cocoro） |
 | 3 | deploy-to-project.sh認証チェック | ✅ 通過（正常系3件、異常系ブロック） |
-| 4 | verify-setup.sh環境検証 | ✅ 通過（dev 9/10, kanameone 16/16, cocoro 8/14） |
+| 4 | verify-setup.sh環境検証 | ✅ 通過（dev 9/10, kanameone 16/16, cocoro 14/16 ※旧値8/14はStorageバケット名バグ起因） |
 | 5 | PITR確認 | ✅ 通過（dev:DISABLED, kanameone/cocoro:ENABLED） |
 | 6 | GitHub Pages納品フォーム | ✅ 通過（表示・生成OK）|
 | 7 | client-setup-gcp.sh構造確認 | ✅ 通過（Step 0-4確認）|

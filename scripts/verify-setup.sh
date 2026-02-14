@@ -375,12 +375,18 @@ fi
 # ===========================================
 # 14. Storage CORS確認
 # ===========================================
+# Firebaseプロジェクト作成時期により .firebasestorage.app または .appspot.com
 STORAGE_BUCKET="${PROJECT_ID}.firebasestorage.app"
 CORS_CONFIG=$(gsutil cors get "gs://${STORAGE_BUCKET}" 2>/dev/null || echo "")
+if [ -z "$CORS_CONFIG" ] || [ "$CORS_CONFIG" = "[]" ]; then
+    # フォールバック: 旧形式のバケット名を試行
+    STORAGE_BUCKET="${PROJECT_ID}.appspot.com"
+    CORS_CONFIG=$(gsutil cors get "gs://${STORAGE_BUCKET}" 2>/dev/null || echo "")
+fi
 if echo "$CORS_CONFIG" | grep -q "web.app"; then
-    check_pass "Storage CORS設定済み"
+    check_pass "Storage CORS設定済み (${STORAGE_BUCKET})"
 elif [ -n "$CORS_CONFIG" ] && [ "$CORS_CONFIG" != "[]" ]; then
-    check_warn "Storage CORS設定を確認してください"
+    check_warn "Storage CORS設定を確認してください (${STORAGE_BUCKET})"
 else
     check_fail "Storage CORS未設定（ブラウザからPDF閲覧不可）"
 fi
