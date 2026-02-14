@@ -626,8 +626,8 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
       queryClient.invalidateQueries({ queryKey: ['document', documentId] })
       queryClient.invalidateQueries({ queryKey: ['documentsInfinite'] })
       setShowReprocessDialog(false)
-      toast.success('再処理をリクエストしました。ステータスが「処理待ち」に変わります。')
-      setTimeout(() => onOpenChange(false), 1500)
+      toast.success('再処理をリクエストしました。ステータスが「処理待ち」に変わります。', { duration: 5000 })
+      setTimeout(() => onOpenChange(false), 3000)
     } catch (err) {
       console.error('Failed to reprocess:', err)
       toast.error('再処理リクエストに失敗しました')
