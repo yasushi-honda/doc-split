@@ -1,16 +1,16 @@
 # ハンドオフメモ
 
-**更新日**: 2026-02-14（再処理機能修正・Firestoreルール補完・E2Eテスト修正）
+**更新日**: 2026-02-14（UI/UX改善・全環境完全同期完了）
 **ブランチ**: main
-**フェーズ**: Phase 8完了 + マルチクライアント安全運用機構 + 再処理機能バグ修正（PR #129-131）
+**フェーズ**: Phase 8完了 + マルチクライアント安全運用機構 + 再処理バグ修正 + UI/UX改善（PR #129-135）
 
-## 直近の変更（02-14）
+## 直近の変更（02-14後半）
 
 | PR | コミット | 内容 |
 |----|------|------|
-| **#131** | **9d99407** | **fix: 再処理E2Eテストを#129仕様変更に合わせて修正** PR #129でモーダル自動クローズ削除後、テストが旧仕様（自動クローズ）を期待していたため失敗。モーダルが開いたままステータス「待機中」に変わることを検証するよう修正 |
-| **#130** | **c96d116** | **fix: Firestoreルールに再処理用フィールドを追加** `getReprocessClearFields()`が使用する15フィールド(ocrResultUrl, summary, ocrExtraction, pageResults, fileDateFormatted, careManager, category, customerCandidates, officeCandidates, extractionScores, extractionDetails, allCustomerCandidates, suggestedNewOffice, lastErrorMessage, lastErrorId)がルールのaffectedKeys().hasOnly()に不足していた。フロント→Firestore updateで PERMISSION_DENIED 回避 |
-| **#129** | **48e869e** | **fix: 再処理機能の4つのバグを修正** ①確認済み→未確認リセット漏れ ②メタ情報クリア漏れ ③モーダルポーリング未対応 ④処理中UI未実装。`getReprocessClearFields()`ファクトリ追加、`useDocument()`にconditional polling、processing overlayUI実装。モーダル自動クローズ削除し進捗表示対応 |
+| **#135** | **73de6a9** | **fix: ヘッダーナビのテキスト改行防止・タブレット最適化** タブレット(iPad Air 820px)でナビテキストが2行折り返しされていた問題を修正。whitespace-nowrap追加、md(768-1024px)でtext-xs/px-1.5に省スペース化、lg(1024px+)でtext-sm/px-2.5に拡大、DocSplitロゴをlg以上でのみ表示 |
+| **#134** | **f688a82** | **fix: ヘッダーナビのレスポンシブ対応をタブレット向けに改善** ナビ項目テキスト表示breakpointをsm→md、ログアウトテキストをsm→md、メールアドレス表示をsm→lgに修正。タブレット(768px)で正確に適用されるように調整 |
+| **#133** | **037436a** | **fix: タブレット/スマホ横向きで右サイドバーがスクロールできない問題を修正** DocumentDetailModalの右サイドバー(OCR結果等)がタブレット横向き(1024x600)でスクロール不可だった問題を解決。md:overflow-y-autoを追加、collapsed状態でも対応。E2Eテスト3件追加（tablet-landscape-sidebar.spec.ts）
 
 ## 実運用テスト結果（8 Phase 全完了・02-13）
 
@@ -71,18 +71,20 @@
 
 | 項目 | 値 |
 |------|-----|
-| 総テスト数 | **98件**（9ファイル）※PR #121追加分含む |
-| CI結果 | **全パス** - chromiumプロジェクトのみ実行（PR #131修正で再処理テストも成功） |
-| 最新修正 | PR #131 でreprocess-button.spec.ts テスト4を仕様に合わせて修正 |
+| 総テスト数 | **101件**（10ファイル）※PR #133-135で3件追加（tablet-landscape-sidebar.spec.ts） |
+| CI結果 | **全パス** - chromiumプロジェクトのみ実行（Lint/Build/Rules/Unit/E2E全て成功） |
+| 最新修正 | PR #135 でヘッダーナビレスポンシブE2Eテストが全パス |
 
-## デプロイ環境
+## デプロイ環境（全3環境完全同期）
 
-| 環境 | 状態 |
-|------|------|
-| dev | ✅ デプロイ済み |
-| kanameone | ✅ デプロイ済み |
-| cocoro | ✅ デプロイ済み（ログイン確認済み・Gmail認証待ち） |
-| GitHub Pages | ✅ デプロイ済み（PR #110-111反映） |
+| 環境 | Hosting | Rules | Functions | 状態 |
+|------|---------|-------|-----------|------|
+| dev | ✅ | ✅ | ✅ (20) | **完全最新** |
+| kanameone | ✅ | ✅ | ✅ (20) | **完全最新** |
+| cocoro | ✅ | ✅ | ✅ (19)* | **完全最新** |
+| GitHub Pages | ✅ | - | - | PR #110-111反映済み |
+
+*cocoro は Functions 19個。exchangeGmailAuthCode新規追加による。
 
 ## 次のアクション
 
@@ -108,8 +110,8 @@
 
 ## Git状態
 
-- ブランチ: main（PR #129-131 マージ済み）
+- ブランチ: main（PR #129-135 マージ済み）
 - 未コミット変更: なし
 - 未プッシュ: なし
 - CI: すべて成功（✅ Deploy & CI）
-- 最新コミット: `9d99407` (fix: 再処理E2Eテストを#129仕様変更に合わせて修正)
+- 最新コミット: `73de6a9` (fix: ヘッダーナビのテキスト改行を防止しタブレット表示を最適化 #135)
