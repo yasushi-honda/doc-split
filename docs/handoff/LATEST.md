@@ -8,6 +8,7 @@
 
 | PR | コミット | 内容 |
 |----|------|------|
+| - | **a0ef38d** | **fix: deploy-functions.yml の push トリガーを削除し workflow_dispatch のみに変更** push 時に inputs.environment が空になり dev にフォールバック → cocoro SA が actAs 権限なしで失敗していた問題を修正（Issue #143 対応） |
 | - | **9cbd17c** | **fix: PDF分割エラーハンドリング追加・StorageBucket明示初期化** PdfSplitModal に try-catch 追加・成功/失敗 toast 通知。functions/index.ts の initializeApp() に storageBucket 明示指定（Issues #141 #137 対応） |
 
 ## 直近の変更（02-15）
@@ -128,4 +129,4 @@
 - 未コミット変更: `.serena/project.yml`（Serena設定、無害）
 - 未プッシュ: なし（プッシュ済み）
 - CI: 最新CI成功（main, 2026-02-14）※ `9cbd17c` は直接mainへコミット
-- 最新コミット: `9cbd17c` (fix: PDF分割エラーハンドリング追加・StorageBucket明示初期化)
+- 最新コミット: `a0ef38d` (fix: deploy-functions.yml pushトリガー削除・workflow_dispatchのみに変更)
