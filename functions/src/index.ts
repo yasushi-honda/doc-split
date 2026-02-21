@@ -7,7 +7,9 @@
 import * as admin from 'firebase-admin';
 
 // Firebase Admin初期化
-admin.initializeApp();
+admin.initializeApp({
+  storageBucket: process.env.STORAGE_BUCKET,
+});
 
 // Gmail添付ファイル取得（Cloud Scheduler: 5分間隔）
 export { checkGmailAttachments } from './gmail/checkGmailAttachments';

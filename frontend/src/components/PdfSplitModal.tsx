@@ -6,6 +6,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { ref, getDownloadURL } from 'firebase/storage'
 import { storage } from '@/lib/firebase'
+import { toast } from 'sonner'
 import {
   Scissors,
   Plus,
@@ -292,14 +293,20 @@ export function PdfSplitModal({
       }
     })
 
-    await splitPdf.mutateAsync({
-      documentId: document.id,
-      splitPoints,
-      segments: segmentsData,
-    })
-
-    onSuccess()
-    onClose()
+    try {
+      await splitPdf.mutateAsync({
+        documentId: document.id,
+        splitPoints,
+        segments: segmentsData,
+      })
+      toast.success('PDF分割が完了しました')
+      onSuccess()
+      onClose()
+    } catch (error) {
+      console.error('Split error:', error)
+      const message = error instanceof Error ? error.message : '分割処理に失敗しました'
+      toast.error(`分割エラー: ${message}`)
+    }
   }
 
   // 分割ポイントの理由を取得
