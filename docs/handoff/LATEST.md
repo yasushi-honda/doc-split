@@ -76,9 +76,9 @@
 | Gmail API | ✅ **ENABLED** | Secret Manager に client-id/secret 保存済み（v2: Web Client統一） |
 | PITR | ✅ **ENABLED** | 7日間ポイントインタイムリカバリ有効 |
 | 管理者ユーザー | ✅ **登録済み** | a.itagaki@cocoro-mgnt.com (admin) |
-| **Gmail OAuth認証** | ⏳ **先方操作待ち** | OAuthポップアップ認証 → ラベル設定 → 運用開始 |
+| **Gmail OAuth認証** | ✅ **完了** | 2026-02-21 認証完了。Secret Managerにrefresh token保存済み。Gmail監視稼働中 |
 
-**開発者側作業: 100%完了。先方はブラウザUI操作のみ（3ステップ）**
+**開発者側作業: 100%完了。Gmail OAuth認証: 完了。cocoro環境は運用開始状態。**
 
 **技術メモ**: 標準OAuth 2.0 Web Application ClientはGCPコンソールUIからのみ作成可能（パブリックAPI非対応）。IAP/WIF APIでは代替不可。
 
@@ -103,11 +103,7 @@
 
 ## 次のアクション
 
-1. **cocoro Gmail OAuth認証（先方操作待ち）**
-   - 設定画面 → Gmail連携ボタン → OAuthポップアップ認証 → ラベル設定 → 運用開始
-   - docs/clients/cocoro.md の「運用開始に必要な先方操作」を参照
-
-2. **実クライアント納品テスト**（Phase 2）
+1. **実クライアント納品テスト**（Phase 2）
    - Mac/Windows/Linux各OSでのclient-setup-gcp実行
    - Claude Code納品プロンプト検証
 
