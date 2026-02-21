@@ -1,6 +1,6 @@
 # ハンドオフメモ
 
-**更新日**: 2026-02-15（verify-setup.sh Storageバケット名バグ修正）
+**更新日**: 2026-02-22（deploy-functions.yml pushトリガー削除・PDF分割エラーハンドリング追加）
 **ブランチ**: main
 **フェーズ**: Phase 8完了 + マルチクライアント安全運用機構 + 再処理バグ修正 + UI/UX改善（PR #129-135）
 
@@ -129,4 +129,4 @@
 - 未コミット変更: `.serena/project.yml`（Serena設定、無害）
 - 未プッシュ: なし（プッシュ済み）
 - CI: 最新CI成功（main, 2026-02-14）※ `9cbd17c` は直接mainへコミット
-- 最新コミット: `a0ef38d` (fix: deploy-functions.yml pushトリガー削除・workflow_dispatchのみに変更)
+- 最新コミット: `c1b0fa0` (docs: ハンドオフメモにa0ef38d追記)
