@@ -4,6 +4,12 @@
 **ブランチ**: main
 **フェーズ**: Phase 8完了 + マルチクライアント安全運用機構 + 再処理バグ修正 + UI/UX改善（PR #129-135）
 
+## 直近の変更（02-21）
+
+| PR | コミット | 内容 |
+|----|------|------|
+| - | **9cbd17c** | **fix: PDF分割エラーハンドリング追加・StorageBucket明示初期化** PdfSplitModal に try-catch 追加・成功/失敗 toast 通知。functions/index.ts の initializeApp() に storageBucket 明示指定（Issues #141 #137 対応） |
+
 ## 直近の変更（02-15）
 
 | 項目 | 内容 |
@@ -118,8 +124,8 @@
 
 ## Git状態
 
-- ブランチ: main（PR #129-135 マージ済み）
-- 未コミット変更: なし
-- 未プッシュ: なし
-- CI: すべて成功（✅ Deploy & CI）
-- 最新コミット: `73de6a9` (fix: ヘッダーナビのテキスト改行を防止しタブレット表示を最適化 #135)
+- ブランチ: main（PR #129-135 マージ済み + 直接コミット `9cbd17c`）
+- 未コミット変更: `.serena/project.yml`（Serena設定、無害）
+- 未プッシュ: なし（プッシュ済み）
+- CI: 最新CI成功（main, 2026-02-14）※ `9cbd17c` は直接mainへコミット
+- 最新コミット: `9cbd17c` (fix: PDF分割エラーハンドリング追加・StorageBucket明示初期化)
