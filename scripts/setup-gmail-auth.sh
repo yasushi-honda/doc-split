@@ -343,6 +343,55 @@ done
 log_success "権限付与完了"
 
 # ===========================================
+# Firestore: settings/gmail.authMode を 'oauth' に更新
+# ===========================================
+echo ""
+log_info "Firestore settings/gmail を更新中 (authMode: oauth)..."
+
+SA_EMAIL_GMAIL="firebase-adminsdk-fbsvc@${PROJECT_ID}.iam.gserviceaccount.com"
+SA_EXISTS_GMAIL=$(gcloud iam service-accounts list --project="$PROJECT_ID" \
+    --filter="email:$SA_EMAIL_GMAIL" --format="value(email)" 2>/dev/null || echo "")
+if [ -z "$SA_EXISTS_GMAIL" ]; then
+    SA_EMAIL_GMAIL=$(gcloud iam service-accounts list --project="$PROJECT_ID" \
+        --filter="displayName:firebase-adminsdk" --format="value(email)" 2>/dev/null | head -1)
+fi
+
+if [ -n "$SA_EMAIL_GMAIL" ]; then
+    TMP_KEY_GMAIL="/tmp/firebase-admin-key-gmail-${PROJECT_ID}.json"
+    gcloud iam service-accounts keys create "$TMP_KEY_GMAIL" \
+        --iam-account="$SA_EMAIL_GMAIL" \
+        --project="$PROJECT_ID" 2>/dev/null
+
+    SCRIPT_DIR_GMAIL="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    ROOT_DIR_GMAIL="$(cd "$SCRIPT_DIR_GMAIL/.." && pwd)"
+
+    GOOGLE_APPLICATION_CREDENTIALS="$TMP_KEY_GMAIL" node << NODEJS_GMAIL_AUTH_SCRIPT
+const { initializeApp, cert } = require('firebase-admin/app');
+const { getFirestore } = require('firebase-admin/firestore');
+
+const serviceAccount = require('$TMP_KEY_GMAIL');
+initializeApp({ credential: cert(serviceAccount), projectId: '$PROJECT_ID' });
+
+const db = getFirestore();
+
+async function main() {
+    await db.doc('settings/gmail').set({
+        authMode: 'oauth',
+        updatedAt: new Date()
+    }, { merge: true });
+    console.log('✓ settings/gmail.authMode を oauth に更新しました');
+}
+
+main().catch(console.error);
+NODEJS_GMAIL_AUTH_SCRIPT
+
+    rm -f "$TMP_KEY_GMAIL"
+    log_success "Firestore 更新完了 (authMode: oauth)"
+else
+    log_warn "Firebase Admin SDK SA が見つかりません。手動で settings/gmail.authMode を 'oauth' に更新してください"
+fi
+
+# ===========================================
 # 完了
 # ===========================================
 echo ""
