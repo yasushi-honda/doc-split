@@ -44,8 +44,8 @@ usage() {
     echo ""
     echo "Options:"
     echo "  --full          Hosting + Functions + Rules を全てデプロイ"
-    echo "  --rules         Hosting + Firestore/Storage ルール をデプロイ"
-    echo "                  ★ Firestoreスキーマ変更時は必須"
+    echo "  --rules         Hosting + Firestore/Storage ルール + インデックス をデプロイ"
+    echo "                  ★ Firestoreスキーマ変更・インデックス変更時は必須"
     echo "  (デフォルト)    Hosting のみデプロイ"
     echo ""
     echo "Example:"
@@ -222,18 +222,18 @@ if [ "$FULL_DEPLOY" = true ]; then
     log_success "Functions デプロイ完了"
 
     echo ""
-    log_info "Firestore/Storage ルール デプロイ中..."
-    firebase deploy --only firestore:rules,storage -P "$PROJECT_ALIAS"
-    log_success "ルール デプロイ完了"
+    log_info "Firestore/Storage ルール + インデックス デプロイ中..."
+    firebase deploy --only firestore:rules,firestore:indexes,storage -P "$PROJECT_ALIAS"
+    log_success "ルール + インデックス デプロイ完了"
 fi
 
 # --rules オプション時はルールのみデプロイ（Functionsなし）
 if [ "$RULES_DEPLOY" = true ] && [ "$FULL_DEPLOY" = false ]; then
     echo ""
-    log_info "Firestore/Storage ルール デプロイ中..."
+    log_info "Firestore/Storage ルール + インデックス デプロイ中..."
     cd "$ROOT_DIR"
-    firebase deploy --only firestore:rules,storage -P "$PROJECT_ALIAS"
-    log_success "ルール デプロイ完了"
+    firebase deploy --only firestore:rules,firestore:indexes,storage -P "$PROJECT_ALIAS"
+    log_success "ルール + インデックス デプロイ完了"
 fi
 
 echo ""
