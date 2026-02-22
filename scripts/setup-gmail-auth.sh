@@ -362,9 +362,6 @@ if [ -n "$SA_EMAIL_GMAIL" ]; then
         --iam-account="$SA_EMAIL_GMAIL" \
         --project="$PROJECT_ID" 2>/dev/null
 
-    SCRIPT_DIR_GMAIL="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    ROOT_DIR_GMAIL="$(cd "$SCRIPT_DIR_GMAIL/.." && pwd)"
-
     GOOGLE_APPLICATION_CREDENTIALS="$TMP_KEY_GMAIL" node << NODEJS_GMAIL_AUTH_SCRIPT
 const { initializeApp, cert } = require('firebase-admin/app');
 const { getFirestore } = require('firebase-admin/firestore');
