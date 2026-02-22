@@ -22,8 +22,6 @@ AppSheetで構築された書類管理アプリをGCP/Firebaseでリプレイス
 | カテゴリ | 技術 |
 |---------|------|
 | フロントエンド | React + Vite + TypeScript |
-| UIライブラリ | shadcn/ui + Tailwind CSS |
-| 状態管理 | Zustand + TanStack Query |
 | バックエンド | Cloud Functions (2nd gen) |
 | データベース | Firestore |
 | ストレージ | Cloud Storage |
