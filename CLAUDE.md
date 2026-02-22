@@ -88,6 +88,16 @@ firebase deploy --only functions -P <alias>      # Functionsのみ（直接実�
 - [クライアント向けガイド](https://yasushi-honda.github.io/doc-split/client/)（GitHub Pages）
 - [納品・アップデート運用](docs/context/delivery-and-update-guide.md)（リポジトリ内）
 
+### 運用スクリプト
+```bash
+# error状態ドキュメントをpendingにリセット（再処理）
+FIREBASE_PROJECT_ID=<project-id> node scripts/fix-stuck-documents.js --include-errors --dry-run  # 確認
+FIREBASE_PROJECT_ID=<project-id> node scripts/fix-stuck-documents.js --include-errors            # 実行
+
+# processing状態でスタックしたドキュメントのみリセット（errorは除外）
+FIREBASE_PROJECT_ID=<project-id> node scripts/fix-stuck-documents.js
+```
+
 ### マスターデータ
 ```bash
 FIREBASE_PROJECT_ID=<project-id> node scripts/import-masters.js --all scripts/samples/
