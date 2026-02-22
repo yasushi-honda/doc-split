@@ -1,8 +1,14 @@
 # ハンドオフメモ
 
-**更新日**: 2026-02-22（deploy-functions.yml pushトリガー削除・PDF分割エラーハンドリング追加）
+**更新日**: 2026-02-22（deploy-to-project.sh --rules/--full に firestore:indexes 追加）
 **ブランチ**: main
 **フェーズ**: Phase 8完了 + マルチクライアント安全運用機構 + 再処理バグ修正 + UI/UX改善（PR #129-135）
+
+## 直近の変更（02-22）
+
+| PR | コミット | 内容 |
+|----|------|------|
+| - | **9fc4cda** | **fix: deploy-to-project.sh --rules/--full に firestore:indexes 追加** --rules/--full デプロイ時に Firestore インデックスが含まれていなかった問題を修正 |
 
 ## 直近の変更（02-21）
 
@@ -117,7 +123,7 @@
 - [クライアント管理ドキュメント](docs/clients/)
   - [dev](docs/clients/dev.md) - 開発環境（verify 9/10）
   - [kanameone](docs/clients/kanameone.md) - カナメワン（verify 16/16、運用中）
-  - [cocoro](docs/clients/cocoro.md) - ココロ（ハイブリッド運用、ログイン確認済み・Gmail認証待ち）
+  - [cocoro](docs/clients/cocoro.md) - ココロ（ハイブリッド運用、Gmail OAuth認証完了・運用開始済み）
 
 ## Git状態
 
