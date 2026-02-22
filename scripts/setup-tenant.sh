@@ -371,6 +371,37 @@ else
     fi
 fi
 
+# Firestore書き込み権限（OCR結果・メタデータ保存）
+if gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+    --member="serviceAccount:$FUNCTIONS_SA" \
+    --role="roles/datastore.user" \
+    --condition=None 2>/dev/null; then
+    log_success "Firestore datastore.user 権限を付与しました"
+else
+    log_warn "Firestore datastore.user 権限付与に失敗しました（既に設定済み、または権限不足）"
+fi
+
+# Storage書き込み権限（PDF保存・OCR結果保存）- .appspot.com バケット
+if gcloud storage buckets add-iam-policy-binding "gs://${PROJECT_ID}.appspot.com" \
+    --member="serviceAccount:${FUNCTIONS_SA}" \
+    --role="roles/storage.objectAdmin" 2>/dev/null; then
+    log_success "Storage objectAdmin 権限を付与しました (${PROJECT_ID}.appspot.com)"
+else
+    log_warn "Storage objectAdmin 権限付与に失敗しました（バケット未作成または既に設定済み）"
+fi
+
+# Functionsデプロイに必要な actAs 権限付与（ADMIN_EMAILユーザー → App Engine SA）
+AE_SA="${PROJECT_ID}@appspot.gserviceaccount.com"
+if gcloud iam service-accounts add-iam-policy-binding "$AE_SA" \
+    --member="user:${ADMIN_EMAIL}" \
+    --role="roles/iam.serviceAccountUser" \
+    --project="$PROJECT_ID" 2>/dev/null; then
+    log_success "iam.serviceAccountUser 権限を付与しました ($ADMIN_EMAIL)"
+else
+    log_warn "iam.serviceAccountUser 権限付与に失敗しました（既に設定済み、または App Engine SA 未作成）"
+    echo "  ※ Functions を初回デプロイする前にこの権限が必要です"
+fi
+
 # ===========================================
 # Step 2: Firebase設定
 # ===========================================
@@ -545,6 +576,15 @@ else
 fi
 
 if [ -n "$API_KEY" ]; then
+    # バケット名正規化: .firebasestorage.app より .appspot.com を優先（#139）
+    if [[ "$STORAGE_BUCKET" == *".firebasestorage.app" ]]; then
+        APPSPOT_BUCKET="${PROJECT_ID}.appspot.com"
+        if gsutil ls "gs://${APPSPOT_BUCKET}" &>/dev/null 2>&1; then
+            log_info "バケット名を正規化: ${STORAGE_BUCKET} → ${APPSPOT_BUCKET}"
+            STORAGE_BUCKET="$APPSPOT_BUCKET"
+        fi
+    fi
+
     # プロジェクト別の.envファイルを作成
     cat > "$ROOT_DIR/frontend/.env.$PROJECT_ID" << EOF
 VITE_FIREBASE_API_KEY=$API_KEY
@@ -621,15 +661,16 @@ async function main() {
     });
     console.log('✓ settings/auth を作成 (許可ドメイン: ' + adminDomain + ')');
 
-    // Gmail認証設定（--with-gmail / --gmail-iap 指定時はOAuth、それ以外はService Account）
-    const gmailAuthMode = ('$WITH_GMAIL' === 'true' || '$GMAIL_IAP' === 'true') ? 'oauth' : 'service_account';
+    // Gmail認証設定: 初期は常に service_account（実際のOAuth完了後に oauth に更新される）
+    // --with-gmail: setup-gmail-auth.sh が成功後に authMode: 'oauth' へ更新
+    // --gmail-iap: Step 8a が oauthClientId 設定と同時に authMode: 'oauth' へ更新
     await db.doc('settings/gmail').set({
-        authMode: gmailAuthMode,
+        authMode: 'service_account',
         delegatedUserEmail: '$GMAIL_ACCOUNT',
         createdAt: new Date(),
         updatedAt: new Date()
     });
-    console.log('✓ settings/gmail を作成 (' + gmailAuthMode + '方式)');
+    console.log('✓ settings/gmail を作成 (service_account 初期値)');
 
     // 管理者ユーザー（Firebase Authにユーザーがいれば取得）
     let uid = 'pending_admin';
@@ -754,7 +795,28 @@ fi
 
 # Storage CORS設定
 log_info "Storage CORS設定中..."
-STORAGE_BUCKET="${PROJECT_ID}.firebasestorage.app"
+# .appspot.com バケットを優先（#139）
+if gsutil ls "gs://${PROJECT_ID}.appspot.com" &>/dev/null 2>&1; then
+    STORAGE_BUCKET="${PROJECT_ID}.appspot.com"
+else
+    STORAGE_BUCKET="${PROJECT_ID}.firebasestorage.app"
+fi
+log_info "使用バケット: ${STORAGE_BUCKET}"
+
+# Firebase Storage への登録（クライアントSDKの getDownloadURL が動作するために必要）
+log_info "Firebase Storage 登録を確認中..."
+ACCESS_TOKEN_STORAGE=$(gcloud auth print-access-token 2>/dev/null)
+FB_STORAGE_RESULT=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+    "https://firebasestorage.googleapis.com/v1beta/projects/${PROJECT_ID}/buckets/${STORAGE_BUCKET}:addFirebase" \
+    -H "Authorization: Bearer $ACCESS_TOKEN_STORAGE" \
+    -H "Content-Type: application/json" \
+    -d '{}' 2>/dev/null)
+if [ "$FB_STORAGE_RESULT" = "200" ] || [ "$FB_STORAGE_RESULT" = "409" ]; then
+    log_success "Firebase Storage 登録完了 (HTTP $FB_STORAGE_RESULT)"
+else
+    log_warn "Firebase Storage 登録に失敗しました (HTTP $FB_STORAGE_RESULT)。手動で確認してください"
+fi
+
 CORS_FILE="$ROOT_DIR/cors-${PROJECT_ID}.json"
 
 cat > "$CORS_FILE" << EOF
@@ -804,6 +866,30 @@ else
         log_success "Cloud Functions デプロイ完了"
     fi
 fi
+
+# ===========================================
+# Step 6.5: Cloud Run サービスに STORAGE_BUCKET 設定
+# ===========================================
+echo ""
+log_info "Step 6.5: Cloud Run サービスに STORAGE_BUCKET を設定..."
+CR_BUCKET="${PROJECT_ID}.appspot.com"
+CLOUD_RUN_SERVICES=(splitpdf rotatepdfpages uploadpdf detectsplitpoints processocr checkgmailattachments regeneratesummary deletedocument getocrtext)
+CR_SUCCESS=0
+CR_FAIL=0
+
+for svc in "${CLOUD_RUN_SERVICES[@]}"; do
+    if gcloud run services update "$svc" \
+        --project="$PROJECT_ID" \
+        --region=asia-northeast1 \
+        --update-env-vars "STORAGE_BUCKET=${CR_BUCKET}" \
+        --quiet 2>/dev/null; then
+        CR_SUCCESS=$((CR_SUCCESS + 1))
+    else
+        CR_FAIL=$((CR_FAIL + 1))
+        log_warn "  $svc: 設定スキップ（サービス未デプロイの可能性）"
+    fi
+done
+log_success "STORAGE_BUCKET 設定: ${CR_SUCCESS}件完了, ${CR_FAIL}件スキップ"
 
 # ===========================================
 # Step 7: Hostingデプロイ
