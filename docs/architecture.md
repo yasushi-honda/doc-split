@@ -125,6 +125,7 @@ sequenceDiagram
 | `seedAllMasters` | Callable | 全マスターデータ初期投入 |
 | `initTenantSettings` | Callable | テナント初期設定 |
 | `registerAdminUser` | Callable | 管理者ユーザー登録 |
+| `exchangeGmailAuthCode` | Callable | Gmail OAuth認証コード交換 |
 
 ### Firestore コレクション
 
@@ -137,7 +138,7 @@ erDiagram
 
     documents {
         string id PK
-        string status "pending/processing/completed/error"
+        string status "pending/processing/processed/error/split"
         string customerName
         string documentType
         date fileDate
