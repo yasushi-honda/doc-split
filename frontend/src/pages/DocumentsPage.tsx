@@ -530,13 +530,16 @@ export function DocumentsPage() {
     try {
       const results = await Promise.allSettled(
         Array.from(deletingIds).map(id =>
-          callFunction<{ documentId: string }, { success: boolean }>(
+          callFunction<{ documentId: string }, { success: boolean; warnings?: string[] }>(
             'deleteDocument', { documentId: id }, { timeout: 60_000 }
           )
         )
       )
 
       const failed = results.filter(r => r.status === 'rejected').length
+      const allWarnings = results
+        .filter((r): r is PromiseFulfilledResult<{ success: boolean; warnings?: string[] }> => r.status === 'fulfilled')
+        .flatMap(r => r.value.warnings ?? [])
 
       if (failed > 0) {
         // 部分失敗: サーバーの実際の状態で一覧を更新
@@ -544,6 +547,11 @@ export function DocumentsPage() {
         queryClient.invalidateQueries({ queryKey: ['documentsInfinite'] })
       } else {
         toast.success(`${results.length}件を削除しました`)
+      }
+
+      if (allWarnings.length > 0) {
+        console.warn('deleteDocument warnings (Storage cleanup failures):', allWarnings)
+        toast.warning('一部のStorageファイル削除に失敗しました（動作への影響はありません）')
       }
 
       queryClient.invalidateQueries({ queryKey: ['documentStats'] })
