@@ -1,13 +1,16 @@
 # ハンドオフメモ
 
-**更新日**: 2026-02-22（deploy-to-project.sh --rules/--full に firestore:indexes 追加）
+**更新日**: 2026-02-22（deleteDocumentのwarningsレスポンスをFE側で処理・通知 他）
 **ブランチ**: main
-**フェーズ**: Phase 8完了 + マルチクライアント安全運用機構 + 再処理バグ修正 + UI/UX改善（PR #129-135）
+**フェーズ**: Phase 8完了 + マルチクライアント安全運用機構 + 再処理バグ修正 + UI/UX改善（PR #129-135, #150）
 
 ## 直近の変更（02-22）
 
 | PR | コミット | 内容 |
 |----|------|------|
+| - | **554770a** | **fix: deleteDocumentのwarningsレスポンスをFE側で処理・通知** BE側が返すwarnings配列をFEで受け取りトースト通知するよう対応 |
+| - | **662db58** | **docs: fix-stuck-documents.jsの運用手順をCLAUDE.mdに追記** スタック書類の手動修正スクリプト実行手順をドキュメント化 |
+| **#150** | **9ae0338** | **fix: setup-tenant.sh の新規クライアント環境設定漏れを一括修正** Compute SAへのdatastore.user/storage.objectAdmin権限追加、ADMIN_EMAILへのApp Engine SA iam.serviceAccountUser追加、Storageバケット名正規化（.firebasestorage.app→.appspot.com） |
 | - | **9fc4cda** | **fix: deploy-to-project.sh --rules/--full に firestore:indexes 追加** --rules/--full デプロイ時に Firestore インデックスが含まれていなかった問題を修正 |
 
 ## 直近の変更（02-21）
