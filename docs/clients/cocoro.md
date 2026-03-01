@@ -31,16 +31,9 @@
 - [x] マスターデータ投入（顧客5, 書類種別5, 事業所5, ケアマネ2）
 - [x] 管理者ユーザー登録（a.itagaki@cocoro-mgnt.com）
 - [x] PITR有効化
-- [ ] **Gmail OAuth認証（先方操作待ち）**
-- [ ] **Gmail監視ラベル設定（先方操作待ち）**
-
-## 運用開始に必要な先方操作
-
-1. `https://docsplit-cocoro.web.app` にアクセス
-2. Googleアカウント（`a.itagaki@cocoro-mgnt.com`）でログイン
-3. 設定画面 → Gmail連携ボタン → OAuthポップアップで認証
-4. Gmail監視対象ラベルを設定
-5. → 運用開始
+- [x] Gmail OAuth認証（2026-02-21完了、refresh token保存済み）
+- [x] Gmail監視設定（eFAX自動取込稼働中）
+- [x] **運用開始済み**（2026-03-01時点で日常利用を確認）
 
 ## 運用体制
 
