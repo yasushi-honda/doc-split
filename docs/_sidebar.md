@@ -11,6 +11,7 @@
   * [セットアップ手順](setup-guide.md)
   * [Gmail連携設定](operation/gmail-setup-guide.md)
   * [運用ガイド](operation-guide.md)
+  * [健全性レポート](health-report.md)
 * **技術情報**
   * [API/Functions](api-reference.md)
   * [セキュリティ](security.md)
