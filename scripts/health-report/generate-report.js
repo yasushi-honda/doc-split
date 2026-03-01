@@ -100,7 +100,7 @@ async function main() {
     }
     console.log('[DRY_RUN] Email config not set, skipping.');
   } else {
-    const subject = `[DocSplit] Health Report - ${dateStr}`;
+    const subject = `[DocSplit] 健全性レポート - ${dateStr}`;
     await sendReport(html, { smtpUser, smtpPass, from, to, subject, dryRun });
   }
 
