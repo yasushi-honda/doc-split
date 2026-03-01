@@ -1,0 +1,65 @@
+name: Health Report
+
+on:
+  schedule:
+    - cron: '0 0 * * *' # UTC 00:00 = JST 09:00
+
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Skip email sending (report saved as artifact only)'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        working-directory: ./scripts/health-report
+        run: npm ci
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Generate and send report
+        working-directory: ./scripts/health-report
+        env:
+          CLIENT_PROJECTS: 'cocoro:docsplit-cocoro,kanameone:docsplit-kanameone'
+          HEALTH_REPORT_SMTP_USER: ${{ secrets.HEALTH_REPORT_SMTP_USER }}
+          HEALTH_REPORT_SMTP_PASS: ${{ secrets.HEALTH_REPORT_SMTP_PASS }}
+          HEALTH_REPORT_TO: ${{ secrets.HEALTH_REPORT_TO }}
+          HEALTH_REPORT_FROM: ${{ secrets.HEALTH_REPORT_FROM }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+          REPORT_OUTPUT_DIR: ${{ github.workspace }}/report-output
+        run: node generate-report.js
+
+      - name: Upload report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: health-report-${{ github.run_id }}
+          path: report-output/
+          retention-days: 30
