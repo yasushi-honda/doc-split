@@ -126,7 +126,7 @@ function renderScheduler(data) {
 }
 
 function renderDocumentStats(stats) {
-  if (stats.error) {
+  if (typeof stats.error === 'string') {
     return `<h3>Documents</h3><div class="env-error">${escapeHtml(stats.error)}</div>`;
   }
 
