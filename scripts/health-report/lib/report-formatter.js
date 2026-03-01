@@ -141,7 +141,11 @@ function renderDocumentStats(stats) {
   let html = `<h3>Documents</h3><div class="card-row">`;
   for (const entry of entries) {
     const value = stats[entry.key] ?? '?';
-    const cardClass = entry.type === 'error' && value > 0 ? 'error' : entry.type === 'warn' && value > 0 ? 'warn' : 'ok';
+    const isUnknown = typeof value !== 'number';
+    const cardClass = isUnknown ? 'warn'
+      : (entry.type === 'error' && value > 0) ? 'error'
+      : (entry.type === 'warn' && value > 0) ? 'warn'
+      : 'ok';
     html += `<div class="card ${cardClass}">
       <div class="label">${entry.label}</div>
       <div class="value">${value}</div>
@@ -182,9 +186,10 @@ function renderStorage(size) {
 function formatDateTime(isoString) {
   try {
     const d = new Date(isoString);
+    if (isNaN(d.getTime())) return '-';
     return d.toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
   } catch {
-    return isoString;
+    return '-';
   }
 }
 
@@ -194,7 +199,8 @@ function escapeHtml(str) {
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 module.exports = { generateReport };

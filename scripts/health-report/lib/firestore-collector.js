@@ -22,7 +22,8 @@ async function collectDocumentStats(projectId) {
       try {
         const snapshot = await db.collection('documents').where('status', '==', status).count().get();
         counts[status] = snapshot.data().count;
-      } catch {
+      } catch (err) {
+        console.warn(`Failed to count status="${status}" for ${projectId}:`, err.message);
         counts[status] = '?';
       }
     })
@@ -51,7 +52,8 @@ async function collectErrorDocuments(projectId, limit = 5) {
         errorMessage: data.lastErrorMessage || data.errorMessage || '-',
       };
     });
-  } catch {
+  } catch (err) {
+    console.warn(`Failed to collect error documents for ${projectId}:`, err.message);
     return [];
   }
 }

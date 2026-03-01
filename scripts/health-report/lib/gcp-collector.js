@@ -1,11 +1,11 @@
-const { execSync } = require('child_process');
+const { execFileSync } = require('child_process');
 
-function execGcloud(cmd) {
+function execCommand(cmd, args) {
   try {
-    const output = execSync(cmd, { encoding: 'utf8', timeout: 30000 });
+    const output = execFileSync(cmd, args, { encoding: 'utf8', timeout: 30000 });
     return output.trim();
   } catch (err) {
-    throw new Error(`gcloud command failed: ${cmd}\n${err.stderr || err.message}`);
+    throw new Error(`Command failed: ${cmd} ${args.join(' ')}\n${err.stderr || err.message}`);
   }
 }
 
@@ -13,14 +13,14 @@ function parseJson(output) {
   if (!output) return [];
   try {
     return JSON.parse(output);
-  } catch {
+  } catch (err) {
+    console.warn(`JSON parse failed: ${err.message}\nRaw output: ${output.substring(0, 200)}`);
     return [];
   }
 }
 
 async function collectFunctions(projectId) {
-  const cmd = `gcloud functions list --project=${projectId} --format=json 2>/dev/null`;
-  const raw = execGcloud(cmd);
+  const raw = execCommand('gcloud', ['functions', 'list', `--project=${projectId}`, '--format=json']);
   const functions = parseJson(raw);
 
   const results = functions.map((fn) => {
@@ -37,8 +37,7 @@ async function collectFunctions(projectId) {
 }
 
 async function collectSchedulerJobs(projectId, location = 'asia-northeast1') {
-  const cmd = `gcloud scheduler jobs list --project=${projectId} --location=${location} --format=json 2>/dev/null`;
-  const raw = execGcloud(cmd);
+  const raw = execCommand('gcloud', ['scheduler', 'jobs', 'list', `--project=${projectId}`, `--location=${location}`, '--format=json']);
   const jobs = parseJson(raw);
 
   return jobs.map((job) => {
@@ -54,8 +53,7 @@ async function collectSchedulerJobs(projectId, location = 'asia-northeast1') {
 
 async function collectStorageSize(projectId) {
   try {
-    const cmd = `gsutil du -s gs://${projectId}.appspot.com/ 2>/dev/null`;
-    const raw = execGcloud(cmd);
+    const raw = execCommand('gsutil', ['du', '-s', `gs://${projectId}.appspot.com/`]);
     const match = raw.match(/^(\d+)/);
     if (match) {
       const bytes = parseInt(match[1], 10);

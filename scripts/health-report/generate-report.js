@@ -95,6 +95,7 @@ async function main() {
   if (!smtpUser || !smtpPass || !to || !from) {
     if (!dryRun) {
       console.error('Missing email configuration. Set HEALTH_REPORT_SMTP_USER, HEALTH_REPORT_SMTP_PASS, HEALTH_REPORT_TO, HEALTH_REPORT_FROM.');
+      firestoreCollector.cleanup();
       process.exit(1);
     }
     console.log('[DRY_RUN] Email config not set, skipping.');
@@ -110,6 +111,7 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error('Fatal error:', err.message);
+  console.error('Fatal error:', err);
+  firestoreCollector.cleanup();
   process.exit(1);
 });
