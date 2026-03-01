@@ -872,7 +872,9 @@ fi
 # ===========================================
 echo ""
 log_info "Step 6.5: Cloud Run サービスに STORAGE_BUCKET を設定..."
-CR_BUCKET="${PROJECT_ID}.appspot.com"
+# 実在するバケットを検出（Step 5 の STORAGE_BUCKET を再利用）
+CR_BUCKET="${STORAGE_BUCKET}"
+log_info "Cloud Run STORAGE_BUCKET: ${CR_BUCKET}"
 CLOUD_RUN_SERVICES=(splitpdf rotatepdfpages uploadpdf detectsplitpoints processocr checkgmailattachments regeneratesummary deletedocument getocrtext)
 CR_SUCCESS=0
 CR_FAIL=0

@@ -63,12 +63,18 @@ if (!dateRegex.test(afterDate) || !dateRegex.test(beforeDate)) {
   process.exit(1);
 }
 
+if (!process.env.STORAGE_BUCKET) {
+  console.error('Error: STORAGE_BUCKET 環境変数が必要です');
+  console.error('Example: STORAGE_BUCKET=docsplit-kanameone.firebasestorage.app node import-historical-gmail.js ...');
+  process.exit(1);
+}
+
 // 環境設定
 process.env.GOOGLE_CLOUD_PROJECT = projectId;
 
 admin.initializeApp({
   projectId: projectId,
-  storageBucket: `${projectId}.firebasestorage.app`
+  storageBucket: process.env.STORAGE_BUCKET
 });
 
 const db = admin.firestore();
