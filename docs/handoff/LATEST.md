@@ -1,8 +1,18 @@
 # ハンドオフメモ
 
-**更新日**: 2026-02-22（deleteDocumentのwarningsレスポンスをFE側で処理・通知 他）
+**更新日**: 2026-03-01（健全性レポート定期メール配信追加 + バグ修正 他）
 **ブランチ**: main
-**フェーズ**: Phase 8完了 + マルチクライアント安全運用機構 + 再処理バグ修正 + UI/UX改善（PR #129-135, #150）
+**フェーズ**: Phase 8完了 + マルチクライアント安全運用機構 + 健全性レポート（PR #153-156）
+
+## 直近の変更（03-01）
+
+| PR | コミット | 内容 |
+|----|------|------|
+| **#156** | **3e35f14** | **fix: health-reportのDocuments表示でerrorカウントが収集エラーと誤判定されるバグを修正** `stats.error`がnumber（件数）でもtruthyとなりenv-errorパスに入る問題。`typeof === 'string'`で判別するよう修正 |
+| **#155** | **2fb74d6** | **fix: Storageバケット名ハードコードを動的検出に変更** setup-tenant.sh Step 6.5が`.appspot.com`固定 → `.firebasestorage.app`環境で再実行時に誤動作していた問題を修正 |
+| - | **75657db** | **chore: Firestoreに status+updatedAt DESC 複合インデックスを追加** 健全性レポートのerrorドキュメント取得クエリに必要。cocoro/kanameone両環境にgcloud経由で作成済み |
+| - | **835cb49** | **fix: health-report認証をdev専用監視SAに変更** クライアント環境SAではなくdev専用監視SA（`HEALTH_REPORT_SA_KEY`）を使用するよう変更 |
+| **#153** | **468ac1b** | **feat: 健全性レポート定期メール配信を追加** GitHub Actions cronで毎日JST 09:00にCloud Functions/Scheduler/Firestore/Storageの稼働状況をHTML形式で集計・メール配信。workflow_dispatchでdry_runテスト可能 |
 
 ## 直近の変更（02-22）
 
@@ -133,5 +143,5 @@
 - ブランチ: main
 - 未コミット変更: `.serena/project.yml`（Serena設定、無害）
 - 未プッシュ: なし
-- CI: success（2026-02-22T04:34 CI/Deploy/pages-build-deployment 全て完了）
-- 最新コミット: `259a678` docs: LATEST.mdを02-22最新コミット（554770a, 662db58）に更新
+- CI: success（2026-03-01T13:45 Health Report workflow_dispatch 完了）
+- 最新コミット: `3e35f14` fix: health-reportのDocuments表示でerrorカウントが収集エラーと誤判定されるバグを修正 (#156)
