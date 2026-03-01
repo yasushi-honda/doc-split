@@ -11,8 +11,14 @@ const projectId = process.argv[2];
 const dryRun = process.argv.includes('--dry-run');
 
 if (!projectId) {
-  console.error('Usage: node migrate-document-fields.js <project-id> [--dry-run]');
-  console.error('Example: node migrate-document-fields.js docsplit-kanameone');
+  console.error('Usage: STORAGE_BUCKET=<bucket> node migrate-document-fields.js <project-id> [--dry-run]');
+  console.error('Example: STORAGE_BUCKET=docsplit-kanameone.firebasestorage.app node migrate-document-fields.js docsplit-kanameone');
+  process.exit(1);
+}
+
+if (!process.env.STORAGE_BUCKET) {
+  console.error('Error: STORAGE_BUCKET 環境変数が必要です');
+  console.error('Example: STORAGE_BUCKET=docsplit-kanameone.firebasestorage.app node migrate-document-fields.js docsplit-kanameone');
   process.exit(1);
 }
 
@@ -41,7 +47,7 @@ async function migrateDocuments() {
 
     // storagePath → fileUrl (gs:// URL形式に変換)
     if (!data.fileUrl && data.storagePath) {
-      const bucket = process.env.STORAGE_BUCKET || `${projectId}.firebasestorage.app`;
+      const bucket = process.env.STORAGE_BUCKET;
       updates.fileUrl = `gs://${bucket}/${data.storagePath}`;
     }
 
