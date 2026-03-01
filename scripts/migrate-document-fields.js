@@ -41,7 +41,7 @@ async function migrateDocuments() {
 
     // storagePath → fileUrl (gs:// URL形式に変換)
     if (!data.fileUrl && data.storagePath) {
-      const bucket = `${projectId}.firebasestorage.app`;
+      const bucket = process.env.STORAGE_BUCKET || `${projectId}.firebasestorage.app`;
       updates.fileUrl = `gs://${bucket}/${data.storagePath}`;
     }
 

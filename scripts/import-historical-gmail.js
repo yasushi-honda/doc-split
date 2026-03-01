@@ -68,7 +68,7 @@ process.env.GOOGLE_CLOUD_PROJECT = projectId;
 
 admin.initializeApp({
   projectId: projectId,
-  storageBucket: `${projectId}.firebasestorage.app`
+  storageBucket: process.env.STORAGE_BUCKET || `${projectId}.firebasestorage.app`
 });
 
 const db = admin.firestore();

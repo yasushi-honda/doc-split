@@ -872,7 +872,13 @@ fi
 # ===========================================
 echo ""
 log_info "Step 6.5: Cloud Run サービスに STORAGE_BUCKET を設定..."
-CR_BUCKET="${PROJECT_ID}.appspot.com"
+# 実在するバケットを検出（L798-802 と同じパターン）
+if gsutil ls "gs://${PROJECT_ID}.appspot.com" &>/dev/null 2>&1; then
+    CR_BUCKET="${PROJECT_ID}.appspot.com"
+else
+    CR_BUCKET="${PROJECT_ID}.firebasestorage.app"
+fi
+log_info "Cloud Run STORAGE_BUCKET: ${CR_BUCKET}"
 CLOUD_RUN_SERVICES=(splitpdf rotatepdfpages uploadpdf detectsplitpoints processocr checkgmailattachments regeneratesummary deletedocument getocrtext)
 CR_SUCCESS=0
 CR_FAIL=0

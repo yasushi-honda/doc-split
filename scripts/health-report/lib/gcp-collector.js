@@ -52,17 +52,23 @@ async function collectSchedulerJobs(projectId, location = 'asia-northeast1') {
 }
 
 async function collectStorageSize(projectId) {
-  try {
-    const raw = execCommand('gsutil', ['du', '-s', `gs://${projectId}.appspot.com/`]);
-    const match = raw.match(/^(\d+)/);
-    if (match) {
-      const bytes = parseInt(match[1], 10);
-      return formatBytes(bytes);
+  const buckets = [
+    `${projectId}.appspot.com`,
+    `${projectId}.firebasestorage.app`,
+  ];
+  for (const bucket of buckets) {
+    try {
+      const raw = execCommand('gsutil', ['du', '-s', `gs://${bucket}/`]);
+      const match = raw.match(/^(\d+)/);
+      if (match) {
+        const bytes = parseInt(match[1], 10);
+        return formatBytes(bytes);
+      }
+    } catch {
+      // try next bucket
     }
-    return 'N/A';
-  } catch {
-    return 'N/A';
   }
+  return 'N/A';
 }
 
 function formatBytes(bytes) {
