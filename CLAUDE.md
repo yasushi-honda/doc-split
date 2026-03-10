@@ -44,6 +44,8 @@ npm run build                    # 全体ビルド
 
 ### デプロイ
 
+**MUST**: デプロイ順序は必ず **dev → クライアント環境（kanameone/cocoro等）**。dev環境で動作確認が完了するまでクライアント本番環境へのデプロイは禁止。
+
 **IMPORTANT**: マルチ環境デプロイ時は必ずスクリプトを使用。手動`firebase deploy`は`.env.local`の設定で誤った環境にデプロイされる危険がある。
 
 ```bash
