@@ -61,6 +61,33 @@ npm run build                    # 全体ビルド
 firebase deploy --only functions -P <alias>      # Functionsのみ（直接実行OK）
 ```
 
+### 認証体系（3層構造）
+
+Firebase/GCP操作には3つの独立した認証があり、混同しないこと。
+
+| 認証 | 用途 | 切替方法 | Claude Codeで実行 |
+|------|------|---------|-------------------|
+| **Firebase CLI** | `firebase deploy` | `firebase login:use <email>` | ❌ `login:add`はブラウザ必要（別ターミナル） |
+| **gcloud構成** | `gcloud`コマンド | `switch-client.sh` / `.envrc.client` | ✅ |
+| **ADC** | firebase-admin SDK（運用スクリプト） | `gcloud auth application-default login` | ❌ ブラウザ必要（別ターミナル） |
+
+**IMPORTANT**: クライアント環境のFirestoreを操作する運用スクリプト（`fix-stuck-documents.js`等）はADCを使う。対象環境のADCに切替えてから実行すること。ADCはグローバル設定のため、**作業後に元の環境に戻す必要はない**（次回使用時に切替える運用）。
+
+#### 各環境のFirebase CLIアカウント
+
+| 環境 | Firebase CLIアカウント | 備考 |
+|------|----------------------|------|
+| dev | `hy.unimail.11@gmail.com` | Owner |
+| kanameone | `systemkaname@kanameone.com` | Workspace Owner |
+| cocoro | GitHub Actions（`GCP_SA_KEY`） | ローカルデプロイ不要 |
+
+**Functionsデプロイ手順**（クライアント環境）:
+```bash
+firebase login:use <対象アカウント>       # Firebase CLI切替
+firebase deploy --only functions -P <alias>  # デプロイ
+firebase login:use hy.unimail.11@gmail.com   # dev用に戻す
+```
+
 | 変更内容 | コマンド |
 |---------|---------|
 | フロントエンドのみ | `deploy-to-project.sh <alias>` |
