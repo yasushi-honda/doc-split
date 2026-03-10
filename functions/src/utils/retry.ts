@@ -23,7 +23,7 @@ export const DEFAULT_RETRY_CONFIG: RetryConfig = {
 /** 処理別のリトライ設定 */
 export const RETRY_CONFIGS = {
   gmail: { ...DEFAULT_RETRY_CONFIG, initialDelayMs: 1000 },
-  gemini: { ...DEFAULT_RETRY_CONFIG, maxRetries: 2, initialDelayMs: 2000 },
+  gemini: { ...DEFAULT_RETRY_CONFIG, maxRetries: 3, initialDelayMs: 5000 },
   storage: { ...DEFAULT_RETRY_CONFIG, initialDelayMs: 500 },
   firestore: { ...DEFAULT_RETRY_CONFIG, initialDelayMs: 500 },
 } as const;

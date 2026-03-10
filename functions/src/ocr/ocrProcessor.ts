@@ -339,7 +339,7 @@ export async function processDocument(
 }
 
 /** リトライ上限 */
-const MAX_RETRY_COUNT = 3;
+const MAX_RETRY_COUNT = 5;
 
 /**
  * エラー時の処理

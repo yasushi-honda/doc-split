@@ -51,6 +51,7 @@ export const processOCR = onSchedule(
     region: 'asia-northeast1',
     timeoutSeconds: 540,
     memory: '1GiB',
+    maxInstances: 1,
   },
   async () => {
     console.log('Starting OCR processing (polling)...');
