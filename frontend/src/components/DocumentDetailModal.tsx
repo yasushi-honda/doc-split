@@ -852,13 +852,14 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                       <span className="hidden sm:inline">新しいタブで開く</span>
                     </Button>
                   )}
-                  {/* 削除ボタン（管理者のみ） */}
+                  {/* 削除ボタン（管理者のみ、編集中は無効） */}
                   {isAdmin && (
                     <Button
                       variant="outline"
                       size="sm"
                       onClick={() => setShowDeleteDialog(true)}
-                      className="text-red-600 border-red-300 hover:bg-red-50"
+                      disabled={isEditing}
+                      className="text-red-600 border-red-300 hover:bg-red-50 disabled:opacity-40"
                     >
                       <Trash2 className="h-4 w-4 sm:mr-1" />
                       <span className="hidden sm:inline">削除</span>
