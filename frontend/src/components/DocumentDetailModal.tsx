@@ -8,10 +8,11 @@ import { format } from 'date-fns'
 import { ja } from 'date-fns/locale'
 import { Timestamp, doc as firestoreDoc, updateDoc } from 'firebase/firestore'
 import { ref, getDownloadURL } from 'firebase/storage'
-import { Download, ExternalLink, Loader2, FileText, User, Building, Calendar, Tag, AlertCircle, Scissors, Pencil, Save, X, BookMarked, History, ChevronUp, ChevronDown, Sparkles, RefreshCw, CheckCircle, XCircle } from 'lucide-react'
+import { Download, ExternalLink, Loader2, FileText, User, Building, Calendar, Tag, AlertCircle, Scissors, Pencil, Save, X, BookMarked, History, ChevronUp, ChevronDown, Sparkles, RefreshCw, CheckCircle, XCircle, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { db, storage } from '@/lib/firebase'
 import { callFunction } from '@/lib/callFunction'
+import { useAuthStore } from '@/stores/authStore'
 import { useQueryClient } from '@tanstack/react-query'
 import {
   Dialog,
@@ -347,8 +348,12 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
   // 再処理確認ダイアログ
   const [showReprocessDialog, setShowReprocessDialog] = useState(false)
   const [isReprocessing, setIsReprocessing] = useState(false)
+  // 削除確認ダイアログ
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false)
+  const [isDeleting, setIsDeleting] = useState(false)
 
   const queryClient = useQueryClient()
+  const { isAdmin } = useAuthStore()
 
   // 確認ステータス管理（楽観的更新で即時反映）
   const {
@@ -647,6 +652,44 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
     }
   }
 
+  // 個別削除
+  const handleDelete = async () => {
+    if (!documentId || isDeleting) return
+    setIsDeleting(true)
+    try {
+      await callFunction<{ documentId: string }, { success: boolean; warnings?: string[] }>(
+        'deleteDocument', { documentId }, { timeout: 60_000 }
+      )
+      // 一覧キャッシュから削除
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      queryClient.setQueriesData<any>(
+        { queryKey: ['documentsInfinite'] },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (oldData: any) => {
+          if (!oldData?.pages) return oldData
+          return {
+            ...oldData,
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            pages: oldData.pages.map((page: any) => ({
+              ...page,
+              documents: page.documents.filter((doc: { id: string }) => doc.id !== documentId),
+            })),
+          }
+        }
+      )
+      queryClient.invalidateQueries({ queryKey: ['documentStats'] })
+      queryClient.invalidateQueries({ queryKey: ['documentGroups'] })
+      setShowDeleteDialog(false)
+      onOpenChange(false)
+      toast.success('書類を削除しました')
+    } catch (err) {
+      console.error('Failed to delete document:', err)
+      toast.error('書類の削除に失敗しました')
+    } finally {
+      setIsDeleting(false)
+    }
+  }
+
   // 分割可能かどうか（複数ページのPDFで、processed状態）
   const canSplit = document &&
     document.totalPages > 1 &&
@@ -807,6 +850,18 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                     >
                       <ExternalLink className="h-4 w-4 sm:mr-1" />
                       <span className="hidden sm:inline">新しいタブで開く</span>
+                    </Button>
+                  )}
+                  {/* 削除ボタン（管理者のみ） */}
+                  {isAdmin && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setShowDeleteDialog(true)}
+                      className="text-red-600 border-red-300 hover:bg-red-50"
+                    >
+                      <Trash2 className="h-4 w-4 sm:mr-1" />
+                      <span className="hidden sm:inline">削除</span>
                     </Button>
                   )}
                   {/* 閉じるボタン（独立・明確に表示） */}
@@ -1524,6 +1579,45 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
               <RefreshCw className="mr-1 h-4 w-4" />
             )}
             {isReprocessing ? '処理中...' : '再処理を実行'}
+          </Button>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+
+    {/* 削除確認ダイアログ */}
+    <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle className="flex items-center gap-2">
+            {isDeleting && <Loader2 className="h-5 w-5 animate-spin" />}
+            {isDeleting ? '削除中...' : 'この書類を削除しますか？'}
+          </AlertDialogTitle>
+          <AlertDialogDescription>
+            {isDeleting ? (
+              <span className="text-blue-600">書類を削除しています。しばらくお待ちください...</span>
+            ) : (
+              <>
+                「{document?.fileName}」を削除します。<br />
+                この操作は元に戻せません。関連するファイルとログも同時に削除されます。
+              </>
+            )}
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={isDeleting}>
+            キャンセル
+          </AlertDialogCancel>
+          <Button
+            onClick={handleDelete}
+            disabled={isDeleting}
+            className="bg-red-600 hover:bg-red-700 focus:ring-red-600"
+          >
+            {isDeleting ? (
+              <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+            ) : (
+              <Trash2 className="mr-1 h-4 w-4" />
+            )}
+            {isDeleting ? '処理中...' : '削除する'}
           </Button>
         </AlertDialogFooter>
       </AlertDialogContent>
