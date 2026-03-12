@@ -114,6 +114,9 @@ firebase firestore:delete / --recursive        # 絶対禁止
 
 **教訓**: 本番で`--all-collections`誤実行→全データ喪失、復元不可能（2026-01-30）
 
+### Storage バケット名（ADR-0008教訓の延長）
+**YOU MUST NEVER** バケット名をプロジェクトIDから推測してはいけない。`.appspot.com`と`.firebasestorage.app`の2形式が混在しており、間違えると全ファイルアクセス不能になる。正解は `scripts/clients/<client>.env` の `STORAGE_BUCKET` を参照。
+
 ### .env.local の優先順位
 Viteは`.env.local`を最優先で読み込む。デプロイスクリプトは自動で正しい設定に切り替えるが、手動デプロイ時は注意。
 
