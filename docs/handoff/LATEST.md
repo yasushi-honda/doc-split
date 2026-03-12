@@ -1,13 +1,37 @@
 # ハンドオフメモ
 
-**更新日**: 2026-03-01（健全性レポート定期メール配信追加 + バグ修正 他）
+**更新日**: 2026-03-12（デプロイ手順をCLAUDE.mdから/deployスキルに移行）
 **ブランチ**: main
-**フェーズ**: Phase 8完了 + マルチクライアント安全運用機構 + 健全性レポート（PR #153-156）
+**フェーズ**: Phase 8完了 + マルチクライアント安全運用機構 + 健全性レポート（PR #153-166）
 
-## 直近の変更（03-01）
+## 直近の変更（03-12）
 
 | PR | コミット | 内容 |
 |----|------|------|
+| - | **a5e5f4e** | **refactor: デプロイ手順をCLAUDE.mdから/deployスキルに移行** デプロイ手順の詳細をCLAUDE.mdから/deployスキルへ移動し、CLAUDE.mdをスリム化 |
+
+## 直近の変更（03-11）
+
+| PR | コミット | 内容 |
+|----|------|------|
+| **#166** | **f17a31c** | **fix: 編集モード中は削除ボタンを無効化** 編集中に削除操作ができないよう削除ボタンをdisabledに変更 |
+| **#165** | **f0ec652** | **feat: ドキュメント詳細モーダルに個別削除ボタンを追加** DocumentDetailModalに個別削除ボタンを追加し、確認ダイアログ表示後に削除実行 |
+
+## 直近の変更（03-10）
+
+| PR | コミット | 内容 |
+|----|------|------|
+| **#162** | **e7c5108** | **docs: CLAUDE.mdに認証体系（3層構造）とクライアント別アカウント対応表を追記** gcloud/Firebase/ADCの3層構造と各クライアントのアカウント設定を明記 |
+| - | **78ac680** | **fix: kanameone.envのgcloud構成とアカウントを実態に合わせて修正** gcloud構成・アカウント設定を実際の状態に合わせて修正 |
+| - | **946ce11** | **docs: CLAUDE.mdにdev/クライアント環境の役割と確認範囲を明記** dev→クライアント環境のデプロイ順序ルールを追加 |
+| **#160** | **0ce29bd** | **fix: Vertex AI 429レートリミットエラーの根本対策** processOCRにmaxInstances:1を設定し複数インスタンス同時起動を防止。Geminiリトライを強化（初期遅延5s、最大4回）、ドキュメントリトライ上限を5に引き上げ |
+
+## 直近の変更（03-01〜03-02）
+
+| PR | コミット | 内容 |
+|----|------|------|
+| **#158** | **10f658f** | **docs: GitHub Pagesに健全性レポートページを追加** 納品・運用セクションに健全性レポートの説明ページを新設。配信スケジュール、レポート内容の読み方、異常時の対応、手動実行方法を記載 |
+| **#157** | **1eaf0a1** | **feat: 健全性レポートのメール表示を日本語化** 英語ラベル（Documents/Functions/Scheduler/Storage）を日本語化。docs/clients/cocoro.md のGmail OAuth認証完了・運用開始済みに更新 |
 | **#156** | **3e35f14** | **fix: health-reportのDocuments表示でerrorカウントが収集エラーと誤判定されるバグを修正** `stats.error`がnumber（件数）でもtruthyとなりenv-errorパスに入る問題。`typeof === 'string'`で判別するよう修正 |
 | **#155** | **2fb74d6** | **fix: Storageバケット名ハードコードを動的検出に変更** setup-tenant.sh Step 6.5が`.appspot.com`固定 → `.firebasestorage.app`環境で再実行時に誤動作していた問題を修正 |
 | - | **75657db** | **chore: Firestoreに status+updatedAt DESC 複合インデックスを追加** 健全性レポートのerrorドキュメント取得クエリに必要。cocoro/kanameone両環境にgcloud経由で作成済み |
@@ -143,5 +167,5 @@
 - ブランチ: main
 - 未コミット変更: `.serena/project.yml`（Serena設定、無害）
 - 未プッシュ: なし
-- CI: success（2026-03-01T13:45 Health Report workflow_dispatch 完了）
-- 最新コミット: `3e35f14` fix: health-reportのDocuments表示でerrorカウントが収集エラーと誤判定されるバグを修正 (#156)
+- CI: in_progress（2026-03-12 refactor: デプロイ手順をCLAUDE.mdから/deployスキルに移行）
+- 最新コミット: `a5e5f4e` refactor: デプロイ手順をCLAUDE.mdから/deployスキルに移行
