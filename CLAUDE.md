@@ -49,51 +49,10 @@ npm run build                    # 全体ビルド
 
 ### デプロイ
 
-**MUST**: デプロイ順序は必ず **dev → クライアント環境（kanameone/cocoro等）**。ただしdev環境は実運用データがないため、確認範囲は「デプロイが通ること＋基本動作」で十分。実運用での動作確認はクライアント環境で行う。
-
-**IMPORTANT**: マルチ環境デプロイ時は必ずスクリプトを使用。手動`firebase deploy`は`.env.local`の設定で誤った環境にデプロイされる危険がある。
-
+**デプロイ手順は `/deploy` スキルを使用。** 環境別の認証差異・手順・後片付けが含まれる。
 ```bash
-./scripts/deploy-to-project.sh <alias>          # Hostingのみ
-./scripts/deploy-to-project.sh <alias> --rules   # Hosting + ルール（スキーマ変更時）
-./scripts/deploy-to-project.sh <alias> --full    # 全コンポーネント
-./scripts/deploy-all-clients.sh [--rules|--full] [--dry-run]  # 全クライアント一括デプロイ
-firebase deploy --only functions -P <alias>      # Functionsのみ（直接実行OK）
+# 使用例: /deploy kanameone --rules
 ```
-
-### 認証体系（3層構造）
-
-Firebase/GCP操作には3つの独立した認証があり、混同しないこと。
-
-| 認証 | 用途 | 切替方法 | Claude Codeで実行 |
-|------|------|---------|-------------------|
-| **Firebase CLI** | `firebase deploy` | `firebase login:use <email>` | ❌ `login:add`はブラウザ必要（別ターミナル） |
-| **gcloud構成** | `gcloud`コマンド | `switch-client.sh` / `.envrc.client` | ✅ |
-| **ADC** | firebase-admin SDK（運用スクリプト） | `gcloud auth application-default login` | ❌ ブラウザ必要（別ターミナル） |
-
-**IMPORTANT**: クライアント環境のFirestoreを操作する運用スクリプト（`fix-stuck-documents.js`等）はADCを使う。対象環境のADCに切替えてから実行すること。ADCはグローバル設定のため、**作業後に元の環境に戻す必要はない**（次回使用時に切替える運用）。
-
-#### 各環境のFirebase CLIアカウント
-
-| 環境 | Firebase CLIアカウント | 備考 |
-|------|----------------------|------|
-| dev | `hy.unimail.11@gmail.com` | Owner |
-| kanameone | `systemkaname@kanameone.com` | Workspace Owner |
-| cocoro | GitHub Actions（`GCP_SA_KEY`） | ローカルデプロイ不要 |
-
-**Functionsデプロイ手順**（クライアント環境）:
-```bash
-firebase login:use <対象アカウント>       # Firebase CLI切替
-firebase deploy --only functions -P <alias>  # デプロイ
-firebase login:use hy.unimail.11@gmail.com   # dev用に戻す
-```
-
-| 変更内容 | コマンド |
-|---------|---------|
-| フロントエンドのみ | `deploy-to-project.sh <alias>` |
-| Firestoreスキーマ変更 | `deploy-to-project.sh <alias> --rules` |
-| Functions変更 | `deploy-to-project.sh <alias> --full` |
-| 全クライアント一括 | `deploy-all-clients.sh [--rules\|--full]` |
 
 ### クライアント環境セットアップ
 

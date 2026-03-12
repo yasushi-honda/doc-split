@@ -1,0 +1,114 @@
+---
+name: deploy
+description: |
+  Deploy DocSplit to target environment (dev/kanameone/cocoro).
+  Each client has different auth and deploy procedures.
+  Use when deploying frontend, functions, or rules to any environment.
+disable-model-invocation: true
+argument-hint: "<alias> [--rules|--full|--all]"
+allowed-tools: Bash(./scripts/*), Bash(firebase *), Bash(gcloud *), Bash(npm *), Bash(cp *), Bash(rm *), Bash(cat *), Read, Glob, Grep
+---
+
+# DocSplit デプロイ手順
+
+Deploy to: $ARGUMENTS
+
+## デプロイ順序（MUST）
+
+**dev → クライアント環境（kanameone/cocoro等）** の順で実施。
+- dev: 実運用データなし → 「デプロイが通ること＋基本動作」の確認で十分
+- クライアント環境: 実運用データあり → 実動作確認はここで行う
+
+## 環境別デプロイ方法
+
+### 環境差異テーブル
+
+| | dev | kanameone | cocoro |
+|---|---|---|---|
+| プロジェクトID | `doc-split-dev` | `docsplit-kanameone` | `docsplit-cocoro` |
+| 認証方式 | Firebase CLI（個人） | Firebase CLI（Workspace） | editor権限（個人）|
+| Firebase CLIアカウント | `hy.unimail.11@gmail.com` | `systemkaname@kanameone.com` | `hy.unimail.11@gmail.com` |
+| gcloud構成 | `doc-split` | `kanameone` | `doc-split-cocoro` |
+| AUTH_TYPE | personal | personal | **service_account** |
+| 組織制約 | なし | なし | Google Workspace（`cocoro-mgnt.com`）|
+| CI自動デプロイ | ✅ mainへのpush時 | ❌ | ❌ |
+| `deploy-to-project.sh` | ✅ | ✅ | ⚠️ SA認証チェックで弾かれる場合あり |
+
+### dev（自動 or 手動）
+
+mainへのpush時にCI（`.github/workflows/deploy.yml`）が自動デプロイ。手動実行も可能：
+```bash
+./scripts/deploy-to-project.sh dev
+```
+
+### kanameone（`deploy-to-project.sh`）
+
+```bash
+firebase login:use systemkaname@kanameone.com
+./scripts/deploy-to-project.sh kanameone          # Hostingのみ
+./scripts/deploy-to-project.sh kanameone --rules   # + ルール
+./scripts/deploy-to-project.sh kanameone --full    # + Functions
+firebase login:use hy.unimail.11@gmail.com         # dev用に戻す
+```
+
+### cocoro（手動手順）
+
+cocoro環境は`deploy-to-project.sh`の認証チェックがSA（`docsplit-deployer@...`）を期待するため、
+editorアカウントでは認証チェックで弾かれる場合がある。その場合は手動で実施：
+
+```bash
+# 1. 環境変数を設定してビルド
+cp frontend/.env.cocoro frontend/.env.local
+npm run build
+
+# 2. Firebase CLIでデプロイ（editorアカウントで実行可能）
+firebase deploy --only hosting -P cocoro
+
+# 3. 後片付け（MUST）
+rm frontend/.env.local
+```
+
+Functionsデプロイ：
+```bash
+firebase deploy --only functions -P cocoro
+```
+
+### 全クライアント一括
+
+```bash
+./scripts/deploy-all-clients.sh [--rules|--full] [--dry-run]
+```
+
+## 変更内容別コマンド早見表
+
+| 変更内容 | コマンド |
+|---------|---------|
+| フロントエンドのみ | `deploy-to-project.sh <alias>` |
+| Firestoreスキーマ変更 | `deploy-to-project.sh <alias> --rules` |
+| Functions変更 | `deploy-to-project.sh <alias> --full` |
+| Functionsのみ | `firebase deploy --only functions -P <alias>` |
+| 全クライアント一括 | `deploy-all-clients.sh [--rules|--full]` |
+
+## 認証体系（3層構造）
+
+Firebase/GCP操作には3つの独立した認証があり、混同しないこと。
+
+| 認証 | 用途 | 切替方法 | Claude Codeで実行 |
+|------|------|---------|-------------------|
+| **Firebase CLI** | `firebase deploy` | `firebase login:use <email>` | ❌ `login:add`はブラウザ必要 |
+| **gcloud構成** | `gcloud`コマンド | `switch-client.sh` / `.envrc.client` | ✅ |
+| **ADC** | firebase-admin SDK（運用スクリプト） | `gcloud auth application-default login` | ❌ ブラウザ必要 |
+
+**IMPORTANT**: 運用スクリプト（`fix-stuck-documents.js`等）はADCを使用。対象環境のADCに切替えてから実行すること。
+
+## 後片付けチェックリスト（MUST）
+
+デプロイ完了後、必ず以下を確認：
+1. `frontend/.env.local` が削除されていること（手動デプロイ時）
+2. Firebase CLIが `hy.unimail.11@gmail.com`（dev用）に戻っていること
+3. gcloud構成が作業前の状態に戻っていること
+
+## 注意事項
+
+- **IMPORTANT**: マルチ環境デプロイ時は可能な限りスクリプトを使用。手動`firebase deploy`は`.env.local`の設定で誤った環境にデプロイされる危険がある
+- cocoro環境の`deploy-to-project.sh`対応は今後の改善候補（SA認証チェックの柔軟化）
