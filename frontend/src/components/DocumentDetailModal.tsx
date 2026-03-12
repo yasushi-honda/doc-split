@@ -752,14 +752,14 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
         aria-describedby={undefined}
         onInteractOutside={(e) => {
           // ポップアップ・モーダル・確認ダイアログ表示中は外側クリックでDialogを閉じない
-          if (mobilePopup !== null || isSplitModalOpen || showReprocessDialog || showCloseDialog || showEditCloseDialog || showDownloadDialog) {
+          if (mobilePopup !== null || isSplitModalOpen || showReprocessDialog || showCloseDialog || showEditCloseDialog || showDownloadDialog || showDeleteDialog) {
             e.preventDefault()
           } else {
             handleOpenChange(false)
           }
         }}
         onPointerDownOutside={(e) => {
-          if (mobilePopup !== null || isSplitModalOpen || showReprocessDialog || showCloseDialog || showEditCloseDialog || showDownloadDialog) {
+          if (mobilePopup !== null || isSplitModalOpen || showReprocessDialog || showCloseDialog || showEditCloseDialog || showDownloadDialog || showDeleteDialog) {
             e.preventDefault()
           }
         }}
