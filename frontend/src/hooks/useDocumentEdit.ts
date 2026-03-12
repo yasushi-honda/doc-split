@@ -201,15 +201,14 @@ export function useDocumentEdit(document: Document | null | undefined): UseDocum
         optimisticData.documentType = editedFields.documentType
         optimisticData.documentTypeKey = editedFields.documentType
       }
-      if (editedFields.careManagerKey !== undefined) {
-        updateData.careManagerKey = editedFields.careManagerKey
-        optimisticData.careManagerKey = editedFields.careManagerKey
-      }
       if (editedFields.careManager !== undefined && editedFields.careManager !== (document.careManager || '')) {
         updateData.careManager = editedFields.careManager
-        updateData.careManagerKey = editedFields.careManager
+        updateData.careManagerKey = editedFields.careManager  // careManagerKeyはcareManagerから派生
         optimisticData.careManager = editedFields.careManager
         optimisticData.careManagerKey = editedFields.careManager
+      } else if (editedFields.careManagerKey !== undefined) {
+        updateData.careManagerKey = editedFields.careManagerKey
+        optimisticData.careManagerKey = editedFields.careManagerKey
       }
       if (editedFields.fileName !== undefined) {
         updateData.fileName = editedFields.fileName
@@ -243,9 +242,10 @@ export function useDocumentEdit(document: Document | null | undefined): UseDocum
           rollbackData.documentType = document.documentType
           rollbackData.documentTypeKey = document.documentTypeKey
         }
-        if (editedFields.careManagerKey !== undefined) rollbackData.careManagerKey = document.careManagerKey
         if (editedFields.careManager !== undefined) {
           rollbackData.careManager = document.careManager
+          rollbackData.careManagerKey = document.careManagerKey
+        } else if (editedFields.careManagerKey !== undefined) {
           rollbackData.careManagerKey = document.careManagerKey
         }
         if (editedFields.fileName !== undefined) rollbackData.fileName = document.fileName

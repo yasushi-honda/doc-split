@@ -1057,9 +1057,9 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                             onChange={(v) => {
                               updateField('customerName', v)
                               // 顧客選択時にcareManagerを自動補完
-                              const selectedCustomer = (customers || []).find(c => c.name === v)
-                              if (selectedCustomer?.careManagerName) {
-                                updateField('careManager', selectedCustomer.careManagerName)
+                              const matched = (customers || []).filter(c => c.name === v)
+                              if (matched.length === 1 && matched[0]) {
+                                updateField('careManager', matched[0].careManagerName ?? '')
                               }
                             }}
                           />
