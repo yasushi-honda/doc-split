@@ -1054,7 +1054,14 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                             value={editedFields.customerName || ''}
                             items={customerItems}
                             suggestedItems={suggestedCustomerItems.length > 0 ? suggestedCustomerItems : undefined}
-                            onChange={(v) => updateField('customerName', v)}
+                            onChange={(v) => {
+                              updateField('customerName', v)
+                              // 顧客選択時にcareManagerを自動補完
+                              const matched = (customers || []).filter(c => c.name === v)
+                              if (matched.length === 1 && matched[0]) {
+                                updateField('careManager', matched[0].careManagerName ?? '')
+                              }
+                            }}
                           />
                           {/* 顧客名エイリアス学習オプション */}
                           {editedFields.customerName &&

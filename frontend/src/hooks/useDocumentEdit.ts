@@ -25,6 +25,7 @@ export interface EditableFields {
   documentType?: string
   documentTypeKey?: string
   careManagerKey?: string
+  careManager?: string
   fileDate?: Date | null
   fileName?: string
 }
@@ -59,6 +60,7 @@ export function useDocumentEdit(document: Document | null | undefined): UseDocum
       documentType: document.documentType || '',
       documentTypeKey: document.documentTypeKey || '',
       careManagerKey: document.careManagerKey || '',
+      careManager: document.careManager || '',
       fileDate: document.fileDate instanceof Timestamp
         ? document.fileDate.toDate()
         : document.fileDate ? new Date(document.fileDate) : null,
@@ -125,11 +127,11 @@ export function useDocumentEdit(document: Document | null | undefined): UseDocum
       }
 
       // 担当ケアマネ
-      if (editedFields.careManagerKey !== (document.careManagerKey || '')) {
+      if (editedFields.careManager !== (document.careManager || '')) {
         changes.push({
-          field: 'careManagerKey',
-          oldValue: document.careManagerKey || null,
-          newValue: editedFields.careManagerKey || null,
+          field: 'careManager',
+          oldValue: document.careManager || null,
+          newValue: editedFields.careManager || null,
         })
       }
 
@@ -199,7 +201,12 @@ export function useDocumentEdit(document: Document | null | undefined): UseDocum
         optimisticData.documentType = editedFields.documentType
         optimisticData.documentTypeKey = editedFields.documentType
       }
-      if (editedFields.careManagerKey !== undefined) {
+      if (editedFields.careManager !== undefined && editedFields.careManager !== (document.careManager || '')) {
+        updateData.careManager = editedFields.careManager
+        updateData.careManagerKey = editedFields.careManager  // careManagerKeyはcareManagerから派生
+        optimisticData.careManager = editedFields.careManager
+        optimisticData.careManagerKey = editedFields.careManager
+      } else if (editedFields.careManagerKey !== undefined) {
         updateData.careManagerKey = editedFields.careManagerKey
         optimisticData.careManagerKey = editedFields.careManagerKey
       }
@@ -235,7 +242,12 @@ export function useDocumentEdit(document: Document | null | undefined): UseDocum
           rollbackData.documentType = document.documentType
           rollbackData.documentTypeKey = document.documentTypeKey
         }
-        if (editedFields.careManagerKey !== undefined) rollbackData.careManagerKey = document.careManagerKey
+        if (editedFields.careManager !== undefined) {
+          rollbackData.careManager = document.careManager
+          rollbackData.careManagerKey = document.careManagerKey
+        } else if (editedFields.careManagerKey !== undefined) {
+          rollbackData.careManagerKey = document.careManagerKey
+        }
         if (editedFields.fileName !== undefined) rollbackData.fileName = document.fileName
         if (editedFields.fileDate !== undefined) rollbackData.fileDate = document.fileDate
         updateDocumentInListCache(queryClient, document.id, rollbackData)
