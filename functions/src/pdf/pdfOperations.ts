@@ -19,6 +19,7 @@ import {
   MasterData,
 } from '../utils/pdfAnalyzer';
 import { CustomerMaster, DocumentMaster, OfficeMaster } from '../utils/extractors';
+import { buildSplitDocumentData } from './splitDocumentBuilder';
 
 const db = admin.firestore();
 const storage = admin.storage();
@@ -316,8 +317,7 @@ export const splitPdf = onCall(
         officeCandidates,
         // needsManualCustomerSelection, needsManualOfficeSelectionは
         // 分割UIで選択済みのため常にfalseになる
-        isDuplicateCustomer,
-        careManagerName,
+        // isDuplicateCustomer, careManagerName は buildSplitDocumentData(segment) で処理
       } = segment;
 
       // 新しいPDFを作成
@@ -390,6 +390,7 @@ export const splitPdf = onCall(
       // 新しいドキュメントをFirestoreに作成
       // ユーザーが分割UIで選択した値は常にconfirmed=true
       const newDocRef = db.collection('documents').doc();
+      const splitDocFields = buildSplitDocumentData(segment);
       await newDocRef.set({
         id: newDocRef.id,
         processedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -401,23 +402,11 @@ export const splitPdf = onCall(
           startPage,
           endPage
         ),
-        // 書類種別
-        documentType,
-        // 顧客関連
-        customerName,
-        customerId: customerId || null,
-        customerCandidates: customerCandidates || [],
-        customerConfirmed: true, // 分割UIで選択したため確定済み
-        needsManualCustomerSelection: false, // 分割UIで確定したため手動選択不要
-        isDuplicateCustomer: isDuplicateCustomer || false,
-        careManagerName: careManagerName || null,
+        // セグメントから構築したフィールド（careManager/careManagerKey含む）
+        ...splitDocFields,
         confirmedBy: request.auth?.uid || null,
         confirmedAt: admin.firestore.FieldValue.serverTimestamp(),
-        // 事業所関連
-        officeName,
-        officeId: officeId || null,
-        officeCandidates: officeCandidates || [],
-        officeConfirmed: true, // 分割UIで選択したため確定済み
+        // 事業所確定
         officeConfirmedBy: request.auth?.uid || null,
         officeConfirmedAt: admin.firestore.FieldValue.serverTimestamp(),
         // OCR抽出スナップショット
