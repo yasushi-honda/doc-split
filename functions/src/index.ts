@@ -51,6 +51,9 @@ export {
 // Phase 8: ドキュメントグループ集計トリガー
 export { onDocumentWrite } from './triggers/updateDocumentGroups';
 
+// 顧客マスターcareManagerName変更同期トリガー (#173)
+export { onCustomerMasterWrite } from './triggers/syncCareManager';
+
 // 検索機能
 export { searchDocuments } from './search/searchDocuments';
 export { onDocumentWriteSearchIndex } from './search/searchIndexer';
