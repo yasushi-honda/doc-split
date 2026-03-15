@@ -1,8 +1,9 @@
 import { useState, useCallback } from 'react'
-import { doc, updateDoc, collection, addDoc, serverTimestamp, Timestamp } from 'firebase/firestore'
+import { doc, updateDoc, collection, addDoc, serverTimestamp, Timestamp, deleteField } from 'firebase/firestore'
 import { useQueryClient } from '@tanstack/react-query'
 import { db, auth } from '../lib/firebase'
 import { updateDocumentInListCache } from './useDocuments'
+import { generateDisplayFileName } from '../utils/generateDisplayFileName'
 import type { Document } from '../../../shared/types'
 
 export interface EditLogEntry {
@@ -217,6 +218,46 @@ export function useDocumentEdit(document: Document | null | undefined): UseDocum
       if (editedFields.fileDate !== undefined) {
         updateData.fileDate = editedFields.fileDate
         optimisticData.fileDate = editedFields.fileDate as unknown as Timestamp
+      }
+
+      // displayFileName 再生成 (#178 Stage 3)
+      // changes配列で実際に変更があったフィールドのみ検知（startEditingの初期化値に惑わされない）
+      const displayNameFields = new Set(['documentType', 'customerName', 'officeName', 'fileDate'])
+      const metaChanged = changes.some((c) => displayNameFields.has(c.field))
+      if (metaChanged) {
+        const finalDocType = (editedFields.documentType ?? document.documentType) || undefined
+        const finalCustomer = (editedFields.customerName ?? document.customerName) || undefined
+        const finalOffice = (editedFields.officeName ?? document.officeName) || undefined
+        // fileDate: editedFieldsはDate|null、既存はTimestamp → 文字列に変換
+        let fileDateStr: string | undefined
+        if (editedFields.fileDate !== undefined) {
+          if (editedFields.fileDate) {
+            const d = editedFields.fileDate
+            fileDateStr = `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`
+          }
+        } else if (document.fileDate) {
+          try {
+            // Firestoreキャッシュ復元時にプレーンオブジェクトになる場合があるためガード
+            const d = document.fileDate instanceof Timestamp
+              ? document.fileDate.toDate()
+              : new Date((document.fileDate as unknown as { seconds: number }).seconds * 1000)
+            fileDateStr = `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`
+          } catch { /* fileDate変換失敗時は省略 */ }
+        }
+        const newDisplayFileName = generateDisplayFileName({
+          documentType: finalDocType,
+          customerName: finalCustomer,
+          officeName: finalOffice,
+          fileDate: fileDateStr,
+        })
+        if (newDisplayFileName) {
+          updateData.displayFileName = newDisplayFileName
+          optimisticData.displayFileName = newDisplayFileName
+        } else {
+          // メタ情報が有効でなくなった場合、古い displayFileName を削除
+          updateData.displayFileName = deleteField()
+          optimisticData.displayFileName = undefined as unknown as string
+        }
       }
 
       // 楽観的更新: 保存前にキャッシュを即座に反映

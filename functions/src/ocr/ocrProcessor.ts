@@ -22,6 +22,7 @@ import {
   DocumentMaster,
   OfficeMaster,
 } from '../utils/extractors';
+import { generateDisplayFileName } from '../utils/displayFileNameGenerator';
 
 const db = admin.firestore();
 const storage = admin.storage();
@@ -247,8 +248,19 @@ export async function processDocument(
   // 要約生成を待機
   const summary = await summaryPromise;
 
+  // displayFileName 生成 (#178 Stage 1)
+  // デフォルト値（未判定/不明顧客）は渡さない。generateDisplayFileNameが除外するが、
+  // 日付だけで「20260315.pdf」のような識別不能な名前を防ぐため
+  const displayFileName = generateDisplayFileName({
+    documentType: documentTypeResult.documentType || undefined,
+    customerName: customerResult.bestMatch?.name || undefined,
+    officeName: officeResult.bestMatch?.name || undefined,
+    fileDate: dateResult.formattedDate ?? undefined,
+  });
+
   // ドキュメント更新
   await db.doc(`documents/${docId}`).update({
+    ...(displayFileName ? { displayFileName } : {}),
     ocrResult: savedOcrResult,
     ocrResultUrl: ocrResultUrl ?? null,
     summary: summary || '',
