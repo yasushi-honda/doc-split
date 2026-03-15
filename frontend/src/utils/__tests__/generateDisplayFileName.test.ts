@@ -44,6 +44,15 @@ describe('generateDisplayFileName (#178 Stage 3)', () => {
     expect(result).toBe('介護保険証_20260315.pdf');
   });
 
+  it('日付のみの場合は識別不能なためnullを返す', () => {
+    const result = generateDisplayFileName({
+      documentType: '未判定',
+      customerName: '不明顧客',
+      fileDate: '2026/03/15',
+    });
+    expect(result).toBeNull();
+  });
+
   it('8文字未満の日付文字列は無視される', () => {
     const result = generateDisplayFileName({ documentType: '介護保険証', fileDate: '202603' });
     expect(result).toBe('介護保険証.pdf');

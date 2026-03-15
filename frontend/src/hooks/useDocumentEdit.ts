@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react'
-import { doc, updateDoc, collection, addDoc, serverTimestamp, Timestamp } from 'firebase/firestore'
+import { doc, updateDoc, collection, addDoc, serverTimestamp, Timestamp, deleteField } from 'firebase/firestore'
 import { useQueryClient } from '@tanstack/react-query'
 import { db, auth } from '../lib/firebase'
 import { updateDocumentInListCache } from './useDocuments'
@@ -253,6 +253,10 @@ export function useDocumentEdit(document: Document | null | undefined): UseDocum
         if (newDisplayFileName) {
           updateData.displayFileName = newDisplayFileName
           optimisticData.displayFileName = newDisplayFileName
+        } else {
+          // メタ情報が有効でなくなった場合、古い displayFileName を削除
+          updateData.displayFileName = deleteField()
+          optimisticData.displayFileName = undefined as unknown as string
         }
       }
 

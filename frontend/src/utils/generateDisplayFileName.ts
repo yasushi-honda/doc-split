@@ -55,5 +55,11 @@ export function generateDisplayFileName(input: DisplayFileNameInput): string | n
     return null;
   }
 
+  // 日付のみでは識別不能（例: 20260315.pdf）なので null を返す
+  const hasNonDatePart = parts.some((p) => !/^\d{8}$/.test(p));
+  if (!hasNonDatePart) {
+    return null;
+  }
+
   return parts.join('_') + ext;
 }

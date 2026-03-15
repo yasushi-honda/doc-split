@@ -73,6 +73,15 @@ describe('displayFileName 自動生成 (#178 Stage 1)', () => {
       expect(result).to.be.null;
     });
 
+    it('日付のみの場合は識別不能なためnullを返す', () => {
+      const result = generateDisplayFileName({
+        documentType: '未判定',
+        customerName: '不明顧客',
+        fileDate: '2026/03/15',
+      });
+      expect(result).to.be.null;
+    });
+
     it('拡張子をカスタマイズ可能', () => {
       const result = generateDisplayFileName({
         documentType: '介護保険証',
