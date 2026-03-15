@@ -221,9 +221,9 @@ export function useDocumentEdit(document: Document | null | undefined): UseDocum
       }
 
       // displayFileName 再生成 (#178 Stage 3)
-      // メタ情報の最終値（編集値 > 既存値）でdisplayFileNameを更新
-      const displayNameFields = ['documentType', 'customerName', 'officeName', 'fileDate'] as const
-      const metaChanged = displayNameFields.some((f) => editedFields[f] !== undefined)
+      // changes配列で実際に変更があったフィールドのみ検知（startEditingの初期化値に惑わされない）
+      const displayNameFields = new Set(['documentType', 'customerName', 'officeName', 'fileDate'])
+      const metaChanged = changes.some((c) => displayNameFields.has(c.field))
       if (metaChanged) {
         const finalDocType = (editedFields.documentType ?? document.documentType) || undefined
         const finalCustomer = (editedFields.customerName ?? document.customerName) || undefined

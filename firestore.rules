@@ -45,6 +45,7 @@ service cloud.firestore {
           'officeConfirmedBy',
           'officeConfirmedAt',
           // OCR結果編集フィールド
+          'displayFileName',
           'documentType',
           'documentTypeKey',
           'careManagerKey',
