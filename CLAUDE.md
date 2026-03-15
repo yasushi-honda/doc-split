@@ -102,9 +102,14 @@ FIREBASE_PROJECT_ID=<project-id> node scripts/import-masters.js --all scripts/sa
 - `masters/offices/items`（事業所）
 - `masters/caremanagers/items`（ケアマネ。小文字）
 
-## 派生フィールド追加時の注意
+## 派生フィールド追加時の注意（#178教訓）
 
-新しい派生フィールドを追加した場合、`getReprocessClearFields()`（`frontend/src/hooks/useDocuments.ts`）に `deleteField()` を追加すること。再処理時に古い値が残存する。
+新しいフィールドを追加したら、以下を **すべて** 確認すること（3回連続で漏れが発生した実績あり）:
+
+1. **`firestoreToDocument()`のマッピング**（`frontend/src/hooks/useDocuments.ts`）← 最優先。ここが抜けるとFEで読めない
+2. 書き込みパス（生成・更新する箇所）
+3. **`getReprocessClearFields()`に`deleteField()`追加**（同ファイル）← 再処理時に古い値が残存する
+4. 型定義（`shared/types.ts`）との整合性
 
 ## 危険な操作の禁止事項
 
