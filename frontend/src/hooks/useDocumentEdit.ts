@@ -3,6 +3,7 @@ import { doc, updateDoc, collection, addDoc, serverTimestamp, Timestamp } from '
 import { useQueryClient } from '@tanstack/react-query'
 import { db, auth } from '../lib/firebase'
 import { updateDocumentInListCache } from './useDocuments'
+import { generateDisplayFileName } from '../utils/generateDisplayFileName'
 import type { Document } from '../../../shared/types'
 
 export interface EditLogEntry {
@@ -217,6 +218,39 @@ export function useDocumentEdit(document: Document | null | undefined): UseDocum
       if (editedFields.fileDate !== undefined) {
         updateData.fileDate = editedFields.fileDate
         optimisticData.fileDate = editedFields.fileDate as unknown as Timestamp
+      }
+
+      // displayFileName 再生成 (#178 Stage 3)
+      // メタ情報の最終値（編集値 > 既存値）でdisplayFileNameを更新
+      const displayNameFields = ['documentType', 'customerName', 'officeName', 'fileDate'] as const
+      const metaChanged = displayNameFields.some((f) => editedFields[f] !== undefined)
+      if (metaChanged) {
+        const finalDocType = (editedFields.documentType ?? document.documentType) || undefined
+        const finalCustomer = (editedFields.customerName ?? document.customerName) || undefined
+        const finalOffice = (editedFields.officeName ?? document.officeName) || undefined
+        // fileDate: editedFieldsはDate|null、既存はTimestamp → 文字列に変換
+        let fileDateStr: string | undefined
+        if (editedFields.fileDate !== undefined) {
+          if (editedFields.fileDate) {
+            const d = editedFields.fileDate
+            fileDateStr = `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`
+          }
+        } else if (document.fileDate) {
+          try {
+            const d = document.fileDate.toDate()
+            fileDateStr = `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`
+          } catch { /* fileDate変換失敗時は省略 */ }
+        }
+        const newDisplayFileName = generateDisplayFileName({
+          documentType: finalDocType,
+          customerName: finalCustomer,
+          officeName: finalOffice,
+          fileDate: fileDateStr,
+        })
+        if (newDisplayFileName) {
+          updateData.displayFileName = newDisplayFileName
+          optimisticData.displayFileName = newDisplayFileName
+        }
       }
 
       // 楽観的更新: 保存前にキャッシュを即座に反映
