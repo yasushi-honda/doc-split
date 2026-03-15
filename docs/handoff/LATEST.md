@@ -1,6 +1,6 @@
 # ハンドオフメモ
 
-**更新日**: 2026-03-16（displayFileName自動生成 Stage 0-3 完了）
+**更新日**: 2026-03-16（displayFileName #178 E2Eテスト完了）
 **ブランチ**: main
 **フェーズ**: Phase 8完了 + マルチクライアント安全運用機構 + displayFileName自動生成（#178）
 
@@ -8,9 +8,20 @@
 
 | PR | コミット | 内容 |
 |----|------|------|
+| **#185** | **bcb5ca6** | **fix: firestoreToDocumentにdisplayFileNameマッピング追加 (#178)** Firestore→Document型変換でdisplayFileNameが読み取れなかった漏れを修正 |
 | **#180** | **d574fc9** | **feat: displayFileName自動生成 Stage 1-3 (#178)** OCR完了時・PDF分割時・FEメタ編集時にメタ情報から表示用ファイル名を自動生成。命名規則: 書類名_事業所_日付_顧客名.pdf。日付のみの場合はnull、deleteField()で古い値削除対応 |
 | **#184** | **d3530bd** | **fix: 再処理時にdisplayFileNameをクリア (#178)** getReprocessClearFields()にdisplayFileName削除を追加。再処理時に古い値が残存する漏れを修正 |
 | - | **240bce2** | **docs: 派生フィールド追加時のreprocessクリア注意事項をCLAUDE.mdに追加** |
+
+### dev環境 E2Eテスト結果（2026-03-16）
+
+| テスト項目 | 結果 |
+|---|---|
+| OCR処理後のdisplayFileName（Stage 1） | ✅ メタ全デフォルト値→null→fileName表示 |
+| メタ編集後のdisplayFileName再生成（Stage 3） | ✅ `診断書_20260315.pdf` 正しく生成・表示 |
+| firestoreToDocument読み取り（PR #185） | ✅ リロード後もdisplayFileName正しく表示 |
+| デフォルト値の除外（不明顧客/未判定） | ✅ 正しく省略 |
+| PDF分割後のdisplayFileName（Stage 2） | ⏭️ ユニットテストでカバー済み |
 
 ### displayFileName機能の構成
 
