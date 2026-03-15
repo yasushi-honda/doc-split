@@ -19,6 +19,7 @@ export interface Document {
   processedAt: Timestamp;
   fileId: string;
   fileName: string;
+  displayFileName?: string;
   mimeType: string;
   ocrResult: string;
   ocrResultUrl?: string; // 長い場合はCloud Storage参照

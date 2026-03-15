@@ -44,6 +44,7 @@ import {
 } from '@/hooks/usePdfSplit'
 import { useDocumentMasters, useCustomerMasters, useOfficeMasters } from '@/hooks/useDocuments'
 import { PdfSplitPreview } from './PdfSplitPreview'
+import { getDisplayFileName } from '@/utils/getDisplayFileName'
 import type { Document, SplitSuggestion, SplitSegment } from '@shared/types'
 
 interface PdfSplitModalProps {
@@ -330,7 +331,7 @@ export function PdfSplitModal({
             PDF分割
           </DialogTitle>
           <DialogDescription>
-            {document.fileName} ({document.totalPages}ページ)
+            {getDisplayFileName(document)} ({document.totalPages}ページ)
           </DialogDescription>
         </DialogHeader>
 
