@@ -1,21 +1,46 @@
 # ハンドオフメモ
 
-**更新日**: 2026-03-12（デプロイ手順をCLAUDE.mdから/deployスキルに移行）
+**更新日**: 2026-03-16（displayFileName自動生成 Stage 0-3 完了）
 **ブランチ**: main
-**フェーズ**: Phase 8完了 + マルチクライアント安全運用機構 + 健全性レポート（PR #153-166）
+**フェーズ**: Phase 8完了 + マルチクライアント安全運用機構 + displayFileName自動生成（#178）
+
+## 直近の変更（03-15〜03-16）
+
+| PR | コミット | 内容 |
+|----|------|------|
+| **#180** | **d574fc9** | **feat: displayFileName自動生成 Stage 1-3 (#178)** OCR完了時・PDF分割時・FEメタ編集時にメタ情報から表示用ファイル名を自動生成。命名規則: 書類名_事業所_日付_顧客名.pdf。日付のみの場合はnull、deleteField()で古い値削除対応 |
+| **#184** | **d3530bd** | **fix: 再処理時にdisplayFileNameをクリア (#178)** getReprocessClearFields()にdisplayFileName削除を追加。再処理時に古い値が残存する漏れを修正 |
+| - | **240bce2** | **docs: 派生フィールド追加時のreprocessクリア注意事項をCLAUDE.mdに追加** |
+
+### displayFileName機能の構成
+
+| Stage | 箇所 | ファイル |
+|-------|------|---------|
+| 0 | 表示フォールバック | `frontend/src/utils/getDisplayFileName.ts` |
+| 1 | OCR完了時生成 | `functions/src/ocr/ocrProcessor.ts` |
+| 2 | PDF分割時生成 | `functions/src/pdf/pdfOperations.ts` |
+| 3 | FEメタ編集時再生成 | `frontend/src/hooks/useDocumentEdit.ts` |
+| - | 再処理時クリア | `frontend/src/hooks/useDocuments.ts` |
+| - | 純粋関数(BE) | `functions/src/utils/displayFileNameGenerator.ts` |
+| - | 純粋関数(FE) | `frontend/src/utils/generateDisplayFileName.ts` |
+
+### 技術的負債（Issue起票済み）
+
+| Issue | 内容 | 優先度 |
+|-------|------|--------|
+| #181 | generateDisplayFileNameをsharedモジュールに統合 | P2 |
+| #182 | pdfOperationsのfileDateFormattedフォールバック | P2 |
+| #183 | displayFileNameのファイル名サニタイズ | P2 |
 
 ## 直近の変更（03-12）
 
 | PR | コミット | 内容 |
 |----|------|------|
-| - | **a5e5f4e** | **refactor: デプロイ手順をCLAUDE.mdから/deployスキルに移行** デプロイ手順の詳細をCLAUDE.mdから/deployスキルへ移動し、CLAUDE.mdをスリム化 |
-
-## 直近の変更（03-11）
-
-| PR | コミット | 内容 |
-|----|------|------|
-| **#166** | **f17a31c** | **fix: 編集モード中は削除ボタンを無効化** 編集中に削除操作ができないよう削除ボタンをdisabledに変更 |
-| **#165** | **f0ec652** | **feat: ドキュメント詳細モーダルに個別削除ボタンを追加** DocumentDetailModalに個別削除ボタンを追加し、確認ダイアログ表示後に削除実行 |
+| - | **a5e5f4e** | **refactor: デプロイ手順をCLAUDE.mdから/deployスキルに移行** |
+| **#170** | **2bec73b** | **fix: dev環境STORAGE_BUCKETを正しいバケット名に修正** |
+| **#168** | **4614788** | **fix: 削除ボタンクリック時にOCR確認ダイアログが表示される不具合を修正** |
+| **#166** | **f17a31c** | **fix: 編集モード中は削除ボタンを無効化** |
+| **#165** | **f0ec652** | **feat: ドキュメント詳細モーダルに個別削除ボタンを追加** |
 
 ## 直近の変更（03-10）
 
@@ -165,7 +190,6 @@
 ## Git状態
 
 - ブランチ: main
-- 未コミット変更: `.serena/project.yml`（Serena設定、無害）
+- 未コミット変更: `.serena/project.yml`, `.playwright-mcp/`（いずれも無害）
 - 未プッシュ: なし
-- CI: in_progress（2026-03-12 refactor: デプロイ手順をCLAUDE.mdから/deployスキルに移行）
-- 最新コミット: `a5e5f4e` refactor: デプロイ手順をCLAUDE.mdから/deployスキルに移行
+- 最新コミット: `240bce2` docs: 派生フィールド追加時のreprocessクリア注意事項をCLAUDE.mdに追加
