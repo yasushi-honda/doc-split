@@ -155,10 +155,9 @@ export function GroupDocumentList({
   const { loadMoreRef } = useInfiniteScroll({ hasNextPage: !!hasNextPage, isFetchingNextPage, fetchNextPage });
 
   // 全ページのドキュメントを結合 + 日付フィルター適用
-  const rawDocuments = data?.pages.flatMap((page) => page.documents) ?? [];
   const allDocuments = useMemo(
-    () => filterByDate(rawDocuments, dateFilter),
-    [rawDocuments, dateFilter]
+    () => filterByDate(data?.pages.flatMap((page) => page.documents) ?? [], dateFilter),
+    [data?.pages, dateFilter]
   );
 
   // ローディング（初回）

@@ -369,15 +369,16 @@ export function DocumentsPage() {
   // フィルターをDocumentFilters型に変換
   // showPendingProcessing=trueの場合はステータスフィルタを解除
   const effectiveStatusFilter = showPendingProcessing ? 'all' : statusFilter
+  const { dateFrom, dateTo, dateField } = dateRange
   const filters: DocumentFilters = useMemo(() => ({
     status: effectiveStatusFilter === 'all' ? undefined : effectiveStatusFilter,
     documentType: documentTypeFilter === 'all' ? undefined : documentTypeFilter,
-    dateFrom: dateRange.dateFrom,
-    dateTo: dateRange.dateTo,
-    dateField: dateRange.dateField,
+    dateFrom,
+    dateTo,
+    dateField,
     sortField,
     sortOrder,
-  }), [effectiveStatusFilter, documentTypeFilter, dateRange.dateFrom?.getTime(), dateRange.dateTo?.getTime(), dateRange.dateField, sortField, sortOrder])
+  }), [effectiveStatusFilter, documentTypeFilter, dateFrom, dateTo, dateField, sortField, sortOrder])
 
   // データ取得（無限スクロール対応）
   const {
