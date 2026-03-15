@@ -61,6 +61,7 @@ import { GroupList } from '@/components/views'
 import { SearchBar } from '@/components/SearchBar'
 import { LoadMoreIndicator } from '@/components/LoadMoreIndicator'
 import { useInfiniteScroll } from '@/hooks/useInfiniteScroll'
+import { getDisplayFileName } from '@/utils/getDisplayFileName'
 import type { Document, DocumentStatus } from '@shared/types'
 import type { GroupType } from '@/hooks/useDocumentGroups'
 
@@ -259,7 +260,7 @@ function DocumentRow({
         <div className="flex items-center gap-2 sm:gap-3">
           <FileText className="h-4 w-4 flex-shrink-0 text-gray-400 sm:h-5 sm:w-5" />
           <div className="min-w-0">
-            <p className="truncate text-sm font-medium text-gray-900 sm:text-base">{document.fileName}</p>
+            <p className="truncate text-sm font-medium text-gray-900 sm:text-base">{getDisplayFileName(document)}</p>
             <p className="truncate text-xs text-gray-500 sm:text-sm">{document.documentType || '未判定'}</p>
           </div>
         </div>

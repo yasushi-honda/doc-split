@@ -38,6 +38,7 @@ import { useAliasLearningHistory, useInvalidateAliasLearningHistory } from '@/ho
 import { isCustomerConfirmed } from '@/hooks/useProcessingHistory'
 import { useDocumentVerification } from '@/hooks/useDocumentVerification'
 import { resolveCareManager } from '@/utils/resolveCareManager'
+import { getDisplayFileName } from '@/utils/getDisplayFileName'
 import type { DocumentStatus } from '@shared/types'
 
 // 閉じる確認ダイアログ用のAlertDialog
@@ -575,7 +576,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
       const url = URL.createObjectURL(blob)
       const link = window.document.createElement('a')
       link.href = url
-      link.download = document.fileName || 'document.pdf'
+      link.download = getDisplayFileName(document) || 'document.pdf'
       window.document.body.appendChild(link)
       link.click()
       window.document.body.removeChild(link)
@@ -801,7 +802,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                 <div className="flex items-center gap-2 sm:gap-3">
                   <FileText className="hidden h-6 w-6 text-gray-400 sm:block" />
                   <div className="min-w-0 flex-1">
-                    <DialogTitle className="truncate text-base sm:text-lg">{document.fileName}</DialogTitle>
+                    <DialogTitle className="truncate text-base sm:text-lg">{getDisplayFileName(document)}</DialogTitle>
                     <div className="flex items-center gap-2 mt-0.5">
                       <p className="text-xs text-gray-500 sm:text-sm">{document.documentType || '未判定'}</p>
                       {document.category && (
@@ -1605,7 +1606,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
               <span className="text-blue-600">書類を削除しています。しばらくお待ちください...</span>
             ) : (
               <>
-                「{document?.fileName}」を削除します。<br />
+                「{document ? getDisplayFileName(document) : ''}」を削除します。<br />
                 この操作は元に戻せません。関連するファイルとログも同時に削除されます。
               </>
             )}
