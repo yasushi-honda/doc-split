@@ -40,7 +40,7 @@ export function generateDisplayFileName(input: DisplayFileNameInput): string | n
 
   // 日付（スラッシュ・ハイフン除去して YYYYMMDD 形式に）
   if (input.fileDate) {
-    const dateStr = input.fileDate.replace(/[\/-]/g, '');
+    const dateStr = input.fileDate.replace(/[/-]/g, '');
     if (dateStr.length >= 8) {
       parts.push(dateStr.slice(0, 8));
     }
