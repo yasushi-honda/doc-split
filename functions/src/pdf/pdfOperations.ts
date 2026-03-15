@@ -20,6 +20,7 @@ import {
 } from '../utils/pdfAnalyzer';
 import { CustomerMaster, DocumentMaster, OfficeMaster } from '../utils/extractors';
 import { buildSplitDocumentData } from './splitDocumentBuilder';
+import { generateDisplayFileName } from '../utils/displayFileNameGenerator';
 
 const db = admin.firestore();
 const storage = admin.storage();
@@ -387,11 +388,20 @@ export const splitPdf = onCall(
             },
           };
 
+      // displayFileName 生成 (#178 Stage 2)
+      const displayFileName = generateDisplayFileName({
+        documentType,
+        customerName,
+        officeName,
+        fileDate: docData.fileDateFormatted ?? undefined,
+      });
+
       // 新しいドキュメントをFirestoreに作成
       // ユーザーが分割UIで選択した値は常にconfirmed=true
       const newDocRef = db.collection('documents').doc();
       const splitDocFields = buildSplitDocumentData(segment);
       await newDocRef.set({
+        ...(displayFileName ? { displayFileName } : {}),
         id: newDocRef.id,
         processedAt: admin.firestore.FieldValue.serverTimestamp(),
         fileId: newDocRef.id,
