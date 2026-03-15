@@ -38,4 +38,14 @@ describe('generateDisplayFileName (#178 Stage 3)', () => {
   it('全てundefinedの場合はnullを返す', () => {
     expect(generateDisplayFileName({})).toBeNull();
   });
+
+  it('日付がハイフン区切りでも正規化される', () => {
+    const result = generateDisplayFileName({ documentType: '介護保険証', fileDate: '2026-03-15' });
+    expect(result).toBe('介護保険証_20260315.pdf');
+  });
+
+  it('8文字未満の日付文字列は無視される', () => {
+    const result = generateDisplayFileName({ documentType: '介護保険証', fileDate: '202603' });
+    expect(result).toBe('介護保険証.pdf');
+  });
 });

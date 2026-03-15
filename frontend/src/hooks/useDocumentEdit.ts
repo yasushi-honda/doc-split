@@ -237,7 +237,10 @@ export function useDocumentEdit(document: Document | null | undefined): UseDocum
           }
         } else if (document.fileDate) {
           try {
-            const d = document.fileDate.toDate()
+            // Firestoreキャッシュ復元時にプレーンオブジェクトになる場合があるためガード
+            const d = document.fileDate instanceof Timestamp
+              ? document.fileDate.toDate()
+              : new Date((document.fileDate as unknown as { seconds: number }).seconds * 1000)
             fileDateStr = `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`
           } catch { /* fileDate変換失敗時は省略 */ }
         }
