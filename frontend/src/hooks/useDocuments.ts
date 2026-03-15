@@ -67,6 +67,7 @@ export function firestoreToDocument(id: string, data: Record<string, unknown>): 
     processedAt: data.processedAt as Timestamp,
     fileId: data.fileId as string,
     fileName: data.fileName as string,
+    displayFileName: data.displayFileName as string | undefined,
     mimeType: data.mimeType as string,
     ocrResult: data.ocrResult as string,
     ocrResultUrl: data.ocrResultUrl as string | undefined,
