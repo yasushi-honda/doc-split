@@ -22,6 +22,7 @@ import {
   DocumentMaster,
   OfficeMaster,
 } from '../utils/extractors';
+import { generateDisplayFileName } from '../utils/displayFileNameGenerator';
 
 const db = admin.firestore();
 const storage = admin.storage();
@@ -247,8 +248,17 @@ export async function processDocument(
   // 要約生成を待機
   const summary = await summaryPromise;
 
+  // displayFileName 生成 (#178 Stage 1)
+  const displayFileName = generateDisplayFileName({
+    documentType: documentTypeResult.documentType || '未判定',
+    customerName: customerResult.bestMatch?.name || '不明顧客',
+    officeName: officeResult.bestMatch?.name || '未判定',
+    fileDate: dateResult.formattedDate ?? undefined,
+  });
+
   // ドキュメント更新
   await db.doc(`documents/${docId}`).update({
+    ...(displayFileName ? { displayFileName } : {}),
     ocrResult: savedOcrResult,
     ocrResultUrl: ocrResultUrl ?? null,
     summary: summary || '',
