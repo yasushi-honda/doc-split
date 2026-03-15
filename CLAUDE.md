@@ -102,6 +102,10 @@ FIREBASE_PROJECT_ID=<project-id> node scripts/import-masters.js --all scripts/sa
 - `masters/offices/items`（事業所）
 - `masters/caremanagers/items`（ケアマネ。小文字）
 
+## 派生フィールド追加時の注意
+
+新しい派生フィールドを追加した場合、`getReprocessClearFields()`（`frontend/src/hooks/useDocuments.ts`）に `deleteField()` を追加すること。再処理時に古い値が残存する。
+
 ## 危険な操作の禁止事項
 
 ### Firestoreデータ削除（ADR-0008）
