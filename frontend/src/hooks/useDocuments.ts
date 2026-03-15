@@ -174,6 +174,8 @@ export function getReprocessClearFields() {
     summary: df,
     ocrExtraction: df,
     pageResults: df,
+    // 表示用ファイル名（#178 displayFileName自動生成）
+    displayFileName: df,
     // メタ情報
     customerName: df,
     customerId: df,
