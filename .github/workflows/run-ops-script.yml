@@ -1,0 +1,91 @@
+name: Run Operations Script
+
+# 運用スクリプト汎用ワークフロー
+# check-master-data, fix-stuck-documents 等のFirestoreアクセスが必要なスクリプトを
+# GitHub Actions経由で実行する。ローカルADC不要。
+#
+# GCP_SA_KEY: docsplit-cocoro の SA (docsplit-cloud-build@docsplit-cocoro.iam.gserviceaccount.com)
+# 2026-03-16: kanameone, dev にも roles/datastore.user を付与済み → 全3環境で実行可能
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - kanameone
+          - cocoro
+      script:
+        description: 'Script to run'
+        required: true
+        type: choice
+        options:
+          - check-master-data
+          - check-master-data --fix
+          - fix-stuck-documents --dry-run
+          - fix-stuck-documents
+          - fix-stuck-documents --include-errors --dry-run
+          - fix-stuck-documents --include-errors
+          - backfill-display-filename --dry-run
+          - backfill-display-filename
+          - backfill-display-filename --force
+
+jobs:
+  run-script:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies (firebase-admin)
+        working-directory: ./functions
+        run: npm ci
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Resolve project ID from .firebaserc
+        id: resolve
+        run: |
+          PROJECT_ID=$(node scripts/helpers/firebaserc-helper.js get-project "${{ github.event.inputs.environment }}")
+          echo "project_id=$PROJECT_ID" >> "$GITHUB_OUTPUT"
+          echo "Resolved: ${{ github.event.inputs.environment }} → $PROJECT_ID"
+
+      - name: Parse script and args
+        id: parse
+        run: |
+          INPUT="${{ github.event.inputs.script }}"
+          SCRIPT_NAME=$(echo "$INPUT" | awk '{print $1}')
+          SCRIPT_ARGS=$(echo "$INPUT" | sed 's/^[^ ]* *//')
+          if [ "$SCRIPT_ARGS" = "$SCRIPT_NAME" ]; then
+            SCRIPT_ARGS=""
+          fi
+          echo "script_name=$SCRIPT_NAME" >> "$GITHUB_OUTPUT"
+          echo "script_args=$SCRIPT_ARGS" >> "$GITHUB_OUTPUT"
+          echo "Script: $SCRIPT_NAME"
+          echo "Args: $SCRIPT_ARGS"
+
+      - name: Run script
+        run: |
+          echo "=== Operations Script ==="
+          echo "Environment: ${{ github.event.inputs.environment }}"
+          echo "Project ID: ${{ steps.resolve.outputs.project_id }}"
+          echo "Script: ${{ steps.parse.outputs.script_name }}"
+          echo "Args: ${{ steps.parse.outputs.script_args }}"
+          echo "========================="
+
+          NODE_PATH=./functions/node_modules \
+            FIREBASE_PROJECT_ID=${{ steps.resolve.outputs.project_id }} \
+            node scripts/${{ steps.parse.outputs.script_name }}.js ${{ steps.parse.outputs.script_args }}

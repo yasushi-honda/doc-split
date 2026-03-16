@@ -1,8 +1,8 @@
 name: Backfill displayFileName
 
 # NOTE: GCP_SA_KEY は docsplit-cocoro の SA (docsplit-cloud-build@docsplit-cocoro.iam.gserviceaccount.com)。
-# 他環境で使うには、環境別SAキーの追加登録が必要。
-# 現状は一度きりのマイグレーションにはローカルADC実行を推奨（CLAUDE.md参照）。
+# 2026-03-16: kanameone, dev にも roles/datastore.user 付与済み → 全3環境で実行可能
+# 汎用版: .github/workflows/run-ops-script.yml（このワークフローの機能を含む）
 
 on:
   workflow_dispatch:

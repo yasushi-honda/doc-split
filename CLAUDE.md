@@ -83,9 +83,16 @@ npm run build                    # 全体ビルド
 
 ### 運用スクリプト
 
-**ADC認証**: 運用スクリプトはfirebase-admin SDK（ADC）を使用。`hy.unimail.11@gmail.com` が全環境のFirestoreにIAM権限を持つため、ADC1回の発行で全環境実行可能。Firebase CLIアカウント（kanameoneは `systemkaname@kanameone.com`）とは別物なので混同しないこと。
+**推奨: GitHub Actions経由で実行**（ADC不要）。Actions → "Run Operations Script" → 環境とスクリプトを選択して実行。
+SA: `docsplit-cloud-build@docsplit-cocoro.iam.gserviceaccount.com`（全3環境に`roles/datastore.user`付与済み）
 
 ```bash
+# GitHub Actions (推奨): https://github.com/yasushi-honda/doc-split/actions/workflows/run-ops-script.yml
+
+# ローカル実行（ADC認証が必要な場合）:
+# gcloud auth application-default login → hy.unimail.11@gmail.com で全環境対応可
+# 実行後: gcloud auth application-default revoke
+
 # error状態ドキュメントをpendingにリセット（再処理）
 FIREBASE_PROJECT_ID=<project-id> node scripts/fix-stuck-documents.js --include-errors --dry-run  # 確認
 FIREBASE_PROJECT_ID=<project-id> node scripts/fix-stuck-documents.js --include-errors            # 実行
@@ -93,9 +100,11 @@ FIREBASE_PROJECT_ID=<project-id> node scripts/fix-stuck-documents.js --include-e
 # processing状態でスタックしたドキュメントのみリセット（errorは除外）
 FIREBASE_PROJECT_ID=<project-id> node scripts/fix-stuck-documents.js
 
-# displayFileName一括設定（既存ドキュメントにメタ情報から表示用ファイル名を付与）
-# 事前にADC認証が必要: gcloud auth application-default login（hy.unimail.11@gmail.com で全環境対応可）
-# 実行後は revoke で後片付け: gcloud auth application-default revoke
+# マスターデータ健全性チェック・修正
+FIREBASE_PROJECT_ID=<project-id> node scripts/check-master-data.js            # dry-run
+FIREBASE_PROJECT_ID=<project-id> node scripts/check-master-data.js --fix      # 修正実行
+
+# displayFileName一括設定
 FIREBASE_PROJECT_ID=<project-id> node scripts/backfill-display-filename.js --dry-run  # プレビュー
 FIREBASE_PROJECT_ID=<project-id> node scripts/backfill-display-filename.js             # 実行
 FIREBASE_PROJECT_ID=<project-id> node scripts/backfill-display-filename.js --force     # 既存値も上書き
