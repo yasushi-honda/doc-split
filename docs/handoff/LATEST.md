@@ -9,14 +9,7 @@
 | PR | コミット | 内容 |
 |----|------|------|
 | **#193** | **92f6193** | **feat: PDF分割画面の選択UIを検索付きコンボボックスに統一** PdfSplitModalのSelect→MasterSelectField置き換え。DRY原則で書類詳細画面と同じコンポーネントを共有。検索・ふりがな表示・新規追加機能が利用可能に |
-
-### プロセス改善（03-17）
-
-| 対応 | 内容 |
-|------|------|
-| CLAUDE.md `#193教訓` 追記 | UIコンポーネント変更時のブラウザ確認手順を明文化 |
-| `.claude/hooks/ui-change-merge-check.sh` 追加 | .tsx/.css変更を含むPRマージ時にexit 2でハードブロック。ブラウザ確認を強制 |
-| `.claude/settings.json` 追加 | プロジェクトスコープでhookを有効化 |
+| - | **58fc71f** | **chore: UI変更マージ前のブラウザ確認をhookで強制化（#193教訓）** CLAUDE.md教訓追記、`.claude/hooks/ui-change-merge-check.sh`追加（.tsx/.css変更PRマージをexit 2でブロック）、`.claude/settings.json`でプロジェクトスコープhook有効化 |
 
 ## 直近の変更（03-16）
 
@@ -247,6 +240,6 @@
 ## Git状態
 
 - ブランチ: main
-- 未コミット変更: `CLAUDE.md`（#193教訓追記）, `.claude/hooks/`（UIマージチェックhook）, `.claude/settings.json`（hook設定）, `docs/handoff/LATEST.md`, `.serena/project.yml`, `.playwright-mcp/`, `docs/audit/2026-03-16-document-audit.md`
+- 未コミット変更: `.serena/project.yml`, `.playwright-mcp/`, `docs/audit/2026-03-16-document-audit.md`（いずれも無害）
 - 未プッシュ: なし
-- 最新コミット: `92f6193` feat: PDF分割画面の選択UIを検索付きコンボボックスに統一（PR #193）
+- 最新コミット: `58fc71f` chore: UI変更マージ前のブラウザ確認をhookで強制化（#193教訓）
