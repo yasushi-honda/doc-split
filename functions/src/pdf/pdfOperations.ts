@@ -18,7 +18,6 @@ import {
   PageOcrData,
   MasterData,
 } from '../utils/pdfAnalyzer';
-import { CustomerMaster, DocumentMaster, OfficeMaster } from '../utils/extractors';
 import { buildSplitDocumentData } from './splitDocumentBuilder';
 import { generateDisplayFileName } from '../utils/displayFileNameGenerator';
 import { sanitizeCustomerMasters, sanitizeOfficeMasters, sanitizeDocumentMasters } from '../utils/sanitizeMasterData';
