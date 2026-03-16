@@ -27,13 +27,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
+import { MasterSelectField } from '@/components/MasterSelectField'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
 import {
@@ -93,6 +87,22 @@ export function PdfSplitModal({
   const { data: documentMasters } = useDocumentMasters()
   const { data: customerMasters } = useCustomerMasters()
   const { data: officeMasters } = useOfficeMasters()
+
+  // MasterSelectField用に変換
+  const customerItems = useMemo(() => (customerMasters || []).map(c => ({
+    id: c.id,
+    name: c.name,
+    subText: c.furigana,
+  })), [customerMasters])
+  const officeItems = useMemo(() => (officeMasters || []).map(o => ({
+    id: o.id,
+    name: o.name,
+    subText: o.shortName,
+  })), [officeMasters])
+  const documentTypeItems = useMemo(() => (documentMasters || []).map(d => ({
+    id: d.id ?? d.name,
+    name: d.name,
+  })), [documentMasters])
 
   // Mutations
   const detectSplitPoints = useDetectSplitPoints()
@@ -533,66 +543,30 @@ export function PdfSplitModal({
                     <div className="grid grid-cols-3 gap-3">
                       <div>
                         <Label className="text-xs">顧客名</Label>
-                        <Select
+                        <MasterSelectField
+                          type="customer"
                           value={segment.customerName}
-                          onValueChange={(v) =>
-                            handleSegmentEdit(index, 'customerName', v)
-                          }
-                        >
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="未判定">未判定</SelectItem>
-                            {customerMasters?.map((c) => (
-                              <SelectItem key={c.id} value={c.name}>
-                                {c.name}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
+                          items={customerItems}
+                          onChange={(v) => handleSegmentEdit(index, 'customerName', v)}
+                        />
                       </div>
                       <div>
                         <Label className="text-xs">書類種別</Label>
-                        <Select
+                        <MasterSelectField
+                          type="documentType"
                           value={segment.documentType}
-                          onValueChange={(v) =>
-                            handleSegmentEdit(index, 'documentType', v)
-                          }
-                        >
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="未判定">未判定</SelectItem>
-                            {documentMasters?.map((d) => (
-                              <SelectItem key={d.name} value={d.name}>
-                                {d.name}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
+                          items={documentTypeItems}
+                          onChange={(v) => handleSegmentEdit(index, 'documentType', v)}
+                        />
                       </div>
                       <div>
                         <Label className="text-xs">事業所</Label>
-                        <Select
+                        <MasterSelectField
+                          type="office"
                           value={segment.officeName}
-                          onValueChange={(v) =>
-                            handleSegmentEdit(index, 'officeName', v)
-                          }
-                        >
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="未判定">未判定</SelectItem>
-                            {officeMasters?.map((o) => (
-                              <SelectItem key={o.name} value={o.name}>
-                                {o.name}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
+                          items={officeItems}
+                          onChange={(v) => handleSegmentEdit(index, 'officeName', v)}
+                        />
                       </div>
                     </div>
                   </CardContent>
