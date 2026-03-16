@@ -1,0 +1,78 @@
+name: Backfill displayFileName
+
+# NOTE: GCP_SA_KEY は docsplit-cocoro の SA (docsplit-cloud-build@docsplit-cocoro.iam.gserviceaccount.com)。
+# 他環境で使うには、環境別SAキーの追加登録が必要。
+# 現状は一度きりのマイグレーションにはローカルADC実行を推奨（CLAUDE.md参照）。
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - kanameone
+          - cocoro
+      dry_run:
+        description: 'Dry run (preview only, no changes)'
+        required: true
+        default: true
+        type: boolean
+      force:
+        description: 'Force overwrite existing displayFileName'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies (firebase-admin)
+        working-directory: ./functions
+        run: npm ci
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Resolve project ID from .firebaserc
+        id: resolve
+        run: |
+          PROJECT_ID=$(node scripts/helpers/firebaserc-helper.js get-project "${{ github.event.inputs.environment }}")
+          echo "project_id=$PROJECT_ID" >> "$GITHUB_OUTPUT"
+          echo "Resolved: ${{ github.event.inputs.environment }} → $PROJECT_ID"
+
+      - name: Run backfill script
+        run: |
+          ARGS=""
+          if [ "${{ github.event.inputs.dry_run }}" == "true" ]; then
+            ARGS="$ARGS --dry-run"
+          fi
+          if [ "${{ github.event.inputs.force }}" == "true" ]; then
+            ARGS="$ARGS --force"
+          fi
+
+          echo "=== Backfill displayFileName ==="
+          echo "Environment: ${{ github.event.inputs.environment }}"
+          echo "Project ID: ${{ steps.resolve.outputs.project_id }}"
+          echo "Dry run: ${{ github.event.inputs.dry_run }}"
+          echo "Force: ${{ github.event.inputs.force }}"
+          echo "================================"
+
+          NODE_PATH=./functions/node_modules \
+            FIREBASE_PROJECT_ID=${{ steps.resolve.outputs.project_id }} \
+            node scripts/backfill-display-filename.js $ARGS

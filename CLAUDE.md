@@ -89,6 +89,13 @@ FIREBASE_PROJECT_ID=<project-id> node scripts/fix-stuck-documents.js --include-e
 
 # processing状態でスタックしたドキュメントのみリセット（errorは除外）
 FIREBASE_PROJECT_ID=<project-id> node scripts/fix-stuck-documents.js
+
+# displayFileName一括設定（既存ドキュメントにメタ情報から表示用ファイル名を付与）
+# 事前にADC認証が必要: gcloud auth application-default login
+# 実行後は revoke で後片付け: gcloud auth application-default revoke
+FIREBASE_PROJECT_ID=<project-id> node scripts/backfill-display-filename.js --dry-run  # プレビュー
+FIREBASE_PROJECT_ID=<project-id> node scripts/backfill-display-filename.js             # 実行
+FIREBASE_PROJECT_ID=<project-id> node scripts/backfill-display-filename.js --force     # 既存値も上書き
 ```
 
 ### マスターデータ
