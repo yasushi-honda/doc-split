@@ -97,7 +97,7 @@ sequenceDiagram
         ProcessOCR->>Gemini: OCR実行
         Gemini-->>ProcessOCR: 抽出結果(顧客名,日付,書類種別,要約)
         ProcessOCR->>Firestore: マスターデータ照合
-        ProcessOCR->>Firestore: 書類更新(status: completed)
+        ProcessOCR->>Firestore: 書類更新(status: processed)
     end
 ```
 
@@ -125,6 +125,7 @@ sequenceDiagram
 | `seedAllMasters` | Callable | 全マスターデータ初期投入 |
 | `initTenantSettings` | Callable | テナント初期設定 |
 | `registerAdminUser` | Callable | 管理者ユーザー登録 |
+| `onCustomerMasterWrite` | Firestore Trigger | 顧客マスター変更時にドキュメント再照合 |
 | `exchangeGmailAuthCode` | Callable | Gmail OAuth認証コード交換 |
 
 ### Firestore コレクション
@@ -144,6 +145,7 @@ erDiagram
         date fileDate
         string storagePath
         timestamp processedAt
+        string displayFileName "表示用ファイル名(自動生成)"
         string summary "AI要約"
         boolean verified "確認済みフラグ"
         string verifiedBy "確認者UID"

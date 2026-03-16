@@ -3,7 +3,7 @@ title: "データモデル概要"
 description: "DocSplit Firestoreスキーマ定義（実装準拠）"
 purpose: "AI駆動開発時のコンテキストとして優先読込"
 status: completed
-updated: 2026-02-07
+updated: 2026-03-16
 ---
 
 # データモデル概要
@@ -44,6 +44,7 @@ DocSplitのデータはすべてCloud Firestoreに格納される。
 |-----------|-----|------|------|
 | id | string | Yes | ドキュメントID |
 | fileName | string | Yes | ファイル名 |
+| displayFileName | string | No | 表示用ファイル名（メタ情報から自動生成、ADR-0014） |
 | fileId | string | Yes | Cloud Storageファイル識別子 |
 | mimeType | string | Yes | MIMEタイプ |
 | fileUrl | string | Yes | Cloud StorageプレビューURL |
