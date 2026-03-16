@@ -1,6 +1,6 @@
 # ハンドオフメモ
 
-**更新日**: 2026-03-16（displayFileName #178 E2Eテスト完了）
+**更新日**: 2026-03-16（displayFileName #178 全環境デプロイ完了）
 **ブランチ**: main
 **フェーズ**: Phase 8完了 + マルチクライアント安全運用機構 + displayFileName自動生成（#178）
 
@@ -175,10 +175,10 @@
 |------|---------|-------|-----------|------|
 | dev | ✅ | ✅ | ✅ (20) | **完全最新** |
 | kanameone | ✅ | ✅ | ✅ (20) | **完全最新** |
-| cocoro | ✅ | ✅ | ✅ (19)* | **完全最新** |
+| cocoro | ✅ | ✅ | ✅ (20) | **完全最新** |
 | GitHub Pages | ✅ | - | - | PR #110-111反映済み |
 
-*cocoro は Functions 19個。exchangeGmailAuthCode新規追加による。
+全3環境でFunctions 20個に統一（deleteDocument追加済み）。
 
 ## 次のアクション
 
@@ -203,4 +203,4 @@
 - ブランチ: main
 - 未コミット変更: `.serena/project.yml`, `.playwright-mcp/`（いずれも無害）
 - 未プッシュ: なし
-- 最新コミット: `240bce2` docs: 派生フィールド追加時のreprocessクリア注意事項をCLAUDE.mdに追加
+- 最新コミット: `d50660a` fix: ESLint warnings 6件を修正
