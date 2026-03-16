@@ -130,6 +130,14 @@ FIREBASE_PROJECT_ID=<project-id> node scripts/import-masters.js --all scripts/sa
 3. **`getReprocessClearFields()`に`deleteField()`追加**（同ファイル）← 再処理時に古い値が残存する
 4. 型定義（`shared/types.ts`）との整合性
 
+## UIコンポーネント変更時の確認（#193教訓）
+
+Select、Combobox、Modal、Popover等のUIコンポーネントを変更・置き換えた場合、**マージ前に**dev環境（`doc-split-dev.web.app`）でブラウザ確認すること。
+
+- tsc・テスト・ビルドのpassだけでは不十分（Popover位置、レイアウト崩れ、スクロール挙動は検出できない）
+- Playwright MCPまたは手動で、変更箇所を最低1回操作してスクリーンショットを残す
+- devはmainへのpush時にCI自動デプロイされるため、push後すぐに確認可能
+
 ## 危険な操作の禁止事項
 
 ### Firestoreデータ削除（ADR-0008）

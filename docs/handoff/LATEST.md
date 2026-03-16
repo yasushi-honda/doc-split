@@ -1,17 +1,63 @@
 # ハンドオフメモ
 
-**更新日**: 2026-03-16（displayFileName #178 全環境デプロイ完了）
+**更新日**: 2026-03-17（PDF分割画面コンボボックス統一・UIコンポーネント変更確認ルール追加）
 **ブランチ**: main
 **フェーズ**: Phase 8完了 + マルチクライアント安全運用機構 + displayFileName自動生成（#178）
 
-## 直近の変更（03-15〜03-16）
+## 直近の変更（03-17 最新）
 
 | PR | コミット | 内容 |
 |----|------|------|
-| **#185** | **bcb5ca6** | **fix: firestoreToDocumentにdisplayFileNameマッピング追加 (#178)** Firestore→Document型変換でdisplayFileNameが読み取れなかった漏れを修正 |
-| **#180** | **d574fc9** | **feat: displayFileName自動生成 Stage 1-3 (#178)** OCR完了時・PDF分割時・FEメタ編集時にメタ情報から表示用ファイル名を自動生成。命名規則: 書類名_事業所_日付_顧客名.pdf。日付のみの場合はnull、deleteField()で古い値削除対応 |
-| **#184** | **d3530bd** | **fix: 再処理時にdisplayFileNameをクリア (#178)** getReprocessClearFields()にdisplayFileName削除を追加。再処理時に古い値が残存する漏れを修正 |
-| - | **240bce2** | **docs: 派生フィールド追加時のreprocessクリア注意事項をCLAUDE.mdに追加** |
+| **#193** | **92f6193** | **feat: PDF分割画面の選択UIを検索付きコンボボックスに統一** PdfSplitModalのSelect→MasterSelectField置き換え。DRY原則で書類詳細画面と同じコンポーネントを共有。検索・ふりがな表示・新規追加機能が利用可能に |
+
+### プロセス改善（03-17）
+
+| 対応 | 内容 |
+|------|------|
+| CLAUDE.md `#193教訓` 追記 | UIコンポーネント変更時のブラウザ確認手順を明文化 |
+| `.claude/hooks/ui-change-merge-check.sh` 追加 | .tsx/.css変更を含むPRマージ時にexit 2でハードブロック。ブラウザ確認を強制 |
+| `.claude/settings.json` 追加 | プロジェクトスコープでhookを有効化 |
+
+## 直近の変更（03-16）
+
+| PR | コミット | 内容 |
+|----|------|------|
+| **#191** | **c9d0bb3** | **feat: 運用スクリプト汎用GitHub Actionsワークフロー追加** ADC不要で全3環境のcheck-master-data/fix-stuck-documents/backfill-display-filenameを実行可能に。GCP_SA_KEYにkanameone/devへのroles/datastore.user付与済み |
+| **#187** | **4d3a3c7** | **fix: マスターデータ型崩れによるFirestore INVALID_ARGUMENTエラーを防止** sanitizeMasterData.ts追加。マスター読み込み直後にサニタイズ適用。check-master-data.js追加 |
+
+### kanameone本番検証（2026-03-16）
+
+| 検証項目 | 結果 |
+|---|---|
+| マスターデータ健全性（check-master-data） | 1,432件チェック、0件の型崩れ |
+| エラードキュメント再処理（pl9P2EqDiZJHLV3lXeI4, 20p） | **成功** errors:0、INVALID_ARGUMENTなし |
+| 新規ドキュメント処理（15mgcPXAjysqbKtzxx9G, 2p） | **成功** errors:0 |
+
+### 技術的負債（Issue起票済み）
+
+| Issue | 内容 | 優先度 |
+|-------|------|--------|
+| #188 | マスターデータ読み込みを共通関数に抽出 | P2 |
+| #189 | dateMarkerがサニタイズ境界外で直接読み取り | P2 |
+| #190 | check-master-data.js --fixバッチが500件上限未考慮 | P2 |
+
+## 直近の変更（03-16 前半）
+
+| PR | コミット | 内容 |
+|----|------|------|
+| - | **f36b1b1** | **docs: ADCとFirebase CLIアカウントの混同防止を明記** CLAUDE.md に gcloud/Firebase CLI/ADC 3層構造の区別・注意事項を追記 |
+| - | **d8d1513** | **feat: displayFileNameバックフィル用ワークフロー追加・CLAUDE.md更新** GitHub Actions workflow (backfill-display-filename.yml) 追加 |
+| - | **ac9298d** | **feat: displayFileName バックフィルスクリプト追加** 既存ドキュメントに displayFileName を遡及生成するスクリプト |
+
+## 直近の変更（03-15〜03-16 前半）
+
+| PR | コミット | 内容 |
+|----|------|------|
+| - | **0fd81c5** | **docs: 監査指摘対応 - architecture.md/data-model.md更新** onCustomerMasterWrite欠落・displayFileNameフィールド未反映・status:completed残存の3件を修正 |
+| - | **d50660a** | **fix: ESLint warnings 6件を修正** |
+| **#185** | **bcb5ca6** | **fix: firestoreToDocumentにdisplayFileNameマッピング追加 (#178)** |
+| **#180** | **d574fc9** | **feat: displayFileName自動生成 Stage 1-3 (#178)** |
+| **#184** | **d3530bd** | **fix: 再処理時にdisplayFileNameをクリア (#178)** |
 
 ### dev環境 E2Eテスト結果（2026-03-16）
 
@@ -150,7 +196,7 @@
 | 運用体制 | ✅ **ハイブリッド確立** | SA (owner) + 開発者 hy.unimail.11@gmail.com (editor) |
 | Firestore settings | ✅ **設定済み** | app/auth/gmail全て投入済み（02-11） |
 | マスターデータ | ✅ **投入済み** | 顧客5, 書類種別5, 事業所5, ケアマネ2 |
-| Cloud Functions | ✅ **ACTIVE** | 19関数全て稼働 |
+| Cloud Functions | ✅ **ACTIVE** | 20関数全て稼働 |
 | Storage CORS | ✅ **設定済み** | https://docsplit-cocoro.web.app でアクセス可能 |
 | Gmail API | ✅ **ENABLED** | Secret Manager に client-id/secret 保存済み（v2: Web Client統一） |
 | PITR | ✅ **ENABLED** | 7日間ポイントインタイムリカバリ有効 |
@@ -201,6 +247,6 @@
 ## Git状態
 
 - ブランチ: main
-- 未コミット変更: `.serena/project.yml`, `.playwright-mcp/`（いずれも無害）
+- 未コミット変更: `CLAUDE.md`（#193教訓追記）, `.claude/hooks/`（UIマージチェックhook）, `.claude/settings.json`（hook設定）, `docs/handoff/LATEST.md`, `.serena/project.yml`, `.playwright-mcp/`, `docs/audit/2026-03-16-document-audit.md`
 - 未プッシュ: なし
-- 最新コミット: `d50660a` fix: ESLint warnings 6件を修正
+- 最新コミット: `92f6193` feat: PDF分割画面の選択UIを検索付きコンボボックスに統一（PR #193）
