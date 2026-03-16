@@ -23,6 +23,7 @@ import {
   OfficeMaster,
 } from '../utils/extractors';
 import { generateDisplayFileName } from '../utils/displayFileNameGenerator';
+import { sanitizeCustomerMasters, sanitizeOfficeMasters, sanitizeDocumentMasters } from '../utils/sanitizeMasterData';
 
 const db = admin.firestore();
 const storage = admin.storage();
@@ -173,32 +174,30 @@ export async function processDocument(
   ]);
 
   // マスターデータを型付きで変換
-  const docMasterData: DocumentMaster[] = documentMasters.docs.map((d) => ({
+  const docMasterData = sanitizeDocumentMasters(documentMasters.docs.map((d) => ({
     id: d.id,
     name: d.data().name as string,
     category: d.data().category as string | undefined,
     keywords: d.data().keywords as string[] | undefined,
     aliases: d.data().aliases as string[] | undefined,
-  }));
+  })));
 
-  const custMasterData: CustomerMaster[] = customerMasters.docs.map((d) => ({
+  const custMasterData = sanitizeCustomerMasters(customerMasters.docs.map((d) => ({
     id: d.id,
     name: d.data().name as string,
     furigana: d.data().furigana as string | undefined,
     isDuplicate: d.data().isDuplicate as boolean | undefined,
     careManagerName: d.data().careManagerName as string | undefined,
-    notes: d.data().notes as string | undefined,
     aliases: d.data().aliases as string[] | undefined,
-  }));
+  })));
 
-  const officeMasterData: OfficeMaster[] = officeMasters.docs.map((d) => ({
+  const officeMasterData = sanitizeOfficeMasters(officeMasters.docs.map((d) => ({
     id: d.id,
     name: d.data().name as string,
     shortName: d.data().shortName as string | undefined,
     isDuplicate: d.data().isDuplicate as boolean | undefined,
-    notes: d.data().notes as string | undefined,
     aliases: d.data().aliases as string[] | undefined,
-  }));
+  })));
 
   // 情報抽出（強化版エクストラクター使用）
   const documentTypeResult = extractDocumentTypeEnhanced(ocrResult, docMasterData);
