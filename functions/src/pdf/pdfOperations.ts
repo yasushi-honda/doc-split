@@ -18,9 +18,9 @@ import {
   PageOcrData,
   MasterData,
 } from '../utils/pdfAnalyzer';
-import { CustomerMaster, DocumentMaster, OfficeMaster } from '../utils/extractors';
 import { buildSplitDocumentData } from './splitDocumentBuilder';
 import { generateDisplayFileName } from '../utils/displayFileNameGenerator';
+import { sanitizeCustomerMasters, sanitizeOfficeMasters, sanitizeDocumentMasters } from '../utils/sanitizeMasterData';
 
 const db = admin.firestore();
 const storage = admin.storage();
@@ -91,30 +91,28 @@ export const detectSplitPoints = onCall(
       ]);
 
       const masters: MasterData = {
-        documents: documentMasters.docs.map((d) => ({
+        documents: sanitizeDocumentMasters(documentMasters.docs.map((d) => ({
           id: d.id,
           name: d.data().name as string,
           category: d.data().category as string | undefined,
           keywords: d.data().keywords as string[] | undefined,
           aliases: d.data().aliases as string[] | undefined,
-        })) as DocumentMaster[],
-        customers: customerMasters.docs.map((d) => ({
+        }))),
+        customers: sanitizeCustomerMasters(customerMasters.docs.map((d) => ({
           id: d.id,
           name: d.data().name as string,
           furigana: d.data().furigana as string | undefined,
           isDuplicate: d.data().isDuplicate as boolean | undefined,
           aliases: d.data().aliases as string[] | undefined,
           careManagerName: d.data().careManagerName as string | undefined,
-          notes: d.data().notes as string | undefined,
-        })) as CustomerMaster[],
-        offices: officeMasters.docs.map((d) => ({
+        }))),
+        offices: sanitizeOfficeMasters(officeMasters.docs.map((d) => ({
           id: d.id,
           name: d.data().name as string,
           shortName: d.data().shortName as string | undefined,
           isDuplicate: d.data().isDuplicate as boolean | undefined,
           aliases: d.data().aliases as string[] | undefined,
-          notes: d.data().notes as string | undefined,
-        })) as OfficeMaster[],
+        }))),
       };
 
       // ページデータを変換
