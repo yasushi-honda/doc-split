@@ -82,6 +82,9 @@ npm run build                    # 全体ビルド
 - [納品・アップデート運用](docs/context/delivery-and-update-guide.md)（リポジトリ内）
 
 ### 運用スクリプト
+
+**ADC認証**: 運用スクリプトはfirebase-admin SDK（ADC）を使用。`hy.unimail.11@gmail.com` が全環境のFirestoreにIAM権限を持つため、ADC1回の発行で全環境実行可能。Firebase CLIアカウント（kanameoneは `systemkaname@kanameone.com`）とは別物なので混同しないこと。
+
 ```bash
 # error状態ドキュメントをpendingにリセット（再処理）
 FIREBASE_PROJECT_ID=<project-id> node scripts/fix-stuck-documents.js --include-errors --dry-run  # 確認
@@ -91,7 +94,7 @@ FIREBASE_PROJECT_ID=<project-id> node scripts/fix-stuck-documents.js --include-e
 FIREBASE_PROJECT_ID=<project-id> node scripts/fix-stuck-documents.js
 
 # displayFileName一括設定（既存ドキュメントにメタ情報から表示用ファイル名を付与）
-# 事前にADC認証が必要: gcloud auth application-default login
+# 事前にADC認証が必要: gcloud auth application-default login（hy.unimail.11@gmail.com で全環境対応可）
 # 実行後は revoke で後片付け: gcloud auth application-default revoke
 FIREBASE_PROJECT_ID=<project-id> node scripts/backfill-display-filename.js --dry-run  # プレビュー
 FIREBASE_PROJECT_ID=<project-id> node scripts/backfill-display-filename.js             # 実行
