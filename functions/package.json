@@ -12,8 +12,9 @@
     "deploy": "firebase deploy --only functions",
     "logs": "firebase functions:log",
     "lint": "eslint src test",
-    "test": "mocha --require ts-node/register --timeout 10000 'test/**/*.test.ts' --ignore 'test/firestore.rules.test.ts'",
-    "test:rules": "mocha --require ts-node/register --timeout 10000 'test/firestore.rules.test.ts'"
+    "test": "mocha --require ts-node/register --timeout 10000 'test/**/*.test.ts' --ignore 'test/firestore.rules.test.ts' --ignore 'test/ocrRetryIntegration.test.ts'",
+    "test:rules": "mocha --require ts-node/register --timeout 10000 'test/firestore.rules.test.ts'",
+    "test:integration": "mocha --require ts-node/register --timeout 10000 'test/ocrRetryIntegration.test.ts'"
   },
   "engines": {
     "node": "20"
