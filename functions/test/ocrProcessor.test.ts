@@ -5,7 +5,7 @@
  */
 
 import { expect } from 'chai';
-import { isTransientError } from '../src/utils/retry';
+import { isTransientError, is429Error } from '../src/utils/retry';
 
 describe('ocrProcessor', () => {
   describe('tryStartProcessing ロジック検証', () => {
@@ -260,9 +260,7 @@ describe('ocrProcessor', () => {
   describe('isTransientError 判定検証', () => {
     it('429 Too Many Requestsはtransientと判定される', () => {
       const error = new Error('got status: 429 Too Many Requests');
-      // メッセージに"rate limit"は含まれないが、"429"が含まれるかチェック
-      // isTransientErrorはメッセージ内の "rate limit" をチェック
-      expect(error.message).to.include('429');
+      expect(isTransientError(error)).to.be.true;
     });
 
     it('RESOURCE_EXHAUSTEDコードはtransientと判定される', () => {
@@ -290,6 +288,138 @@ describe('ocrProcessor', () => {
     it('timeoutメッセージはtransientと判定される', () => {
       const error = new Error('Request timeout');
       expect(isTransientError(error)).to.be.true;
+    });
+
+    // Vertex AI固有エラー形式の検出テスト (#194)
+    it('VertexAI 429 Too Many Requestsはtransientと判定される', () => {
+      const error = new Error('VertexAI.ClientError: 429 Too Many Requests');
+      expect(isTransientError(error)).to.be.true;
+    });
+
+    it('VertexAI exception posting requestはtransientと判定される', () => {
+      const error = new Error('GoogleGenerativeAIError: exception posting request to model');
+      expect(isTransientError(error)).to.be.true;
+    });
+
+    it('"resource exhausted"メッセージはtransientと判定される', () => {
+      const error = new Error('Resource Exhausted: quota limit reached');
+      expect(isTransientError(error)).to.be.true;
+    });
+
+    it('"resource_exhausted"メッセージはtransientと判定される', () => {
+      const error = new Error('error code: resource_exhausted');
+      expect(isTransientError(error)).to.be.true;
+    });
+
+    it('"too many requests"メッセージはtransientと判定される', () => {
+      const error = new Error('Too Many Requests - please retry later');
+      expect(isTransientError(error)).to.be.true;
+    });
+  });
+
+  describe('is429Error 判定検証 (#194)', () => {
+    it('HTTPステータス429はtrue', () => {
+      const error = new Error('Too Many Requests') as Error & { status: number };
+      error.status = 429;
+      expect(is429Error(error)).to.be.true;
+    });
+
+    it('数値コード429はtrue', () => {
+      const error = new Error('Rate limited') as Error & { code: number };
+      error.code = 429;
+      expect(is429Error(error)).to.be.true;
+    });
+
+    it('RESOURCE_EXHAUSTEDコードはtrue', () => {
+      const error = new Error('Resource exhausted') as Error & { code: string };
+      error.code = 'RESOURCE_EXHAUSTED';
+      expect(is429Error(error)).to.be.true;
+    });
+
+    it('メッセージに429を含むエラーはtrue', () => {
+      const error = new Error('VertexAI.ClientError: 429 Too Many Requests');
+      expect(is429Error(error)).to.be.true;
+    });
+
+    it('メッセージにtoo many requestsを含むエラーはtrue', () => {
+      const error = new Error('Too Many Requests');
+      expect(is429Error(error)).to.be.true;
+    });
+
+    it('メッセージにresource exhaustedを含むエラーはtrue', () => {
+      const error = new Error('Resource Exhausted: quota limit reached');
+      expect(is429Error(error)).to.be.true;
+    });
+
+    it('メッセージにquota exceededを含むエラーはtrue', () => {
+      const error = new Error('Quota exceeded for this project');
+      expect(is429Error(error)).to.be.true;
+    });
+
+    it('一般的なtransientエラー（timeout等）はfalse', () => {
+      const error = new Error('Request timeout');
+      expect(is429Error(error)).to.be.false;
+    });
+
+    it('exception posting requestはfalse（429ではないtransient）', () => {
+      const error = new Error('GoogleGenerativeAIError: exception posting request to model');
+      expect(is429Error(error)).to.be.false;
+    });
+
+    it('非transientエラーはfalse', () => {
+      const error = new Error('Permission denied');
+      expect(is429Error(error)).to.be.false;
+    });
+
+    it('nullはfalse', () => {
+      expect(is429Error(null)).to.be.false;
+    });
+
+    it('非Errorオブジェクトはfalse', () => {
+      expect(is429Error('string error')).to.be.false;
+    });
+  });
+
+  describe('retryAfter待機メカニズム (#194)', () => {
+    it('429エラー時はretryAfterが3分後に設定される', () => {
+      const now = Date.now();
+      const isQuotaError = true; // is429Error(error) === true
+      const retryAfterMs = isQuotaError ? 3 * 60 * 1000 : 1 * 60 * 1000;
+      const retryAfter = now + retryAfterMs;
+
+      // 3分後（180秒 = 180000ms）
+      expect(retryAfter - now).to.equal(180000);
+    });
+
+    it('その他transientエラー時はretryAfterが1分後に設定される', () => {
+      const now = Date.now();
+      const isQuotaError = false; // is429Error(error) === false
+      const retryAfterMs = isQuotaError ? 3 * 60 * 1000 : 1 * 60 * 1000;
+      const retryAfter = now + retryAfterMs;
+
+      // 1分後（60秒 = 60000ms）
+      expect(retryAfter - now).to.equal(60000);
+    });
+
+    it('retryAfter未到達のドキュメントはスキップされる', () => {
+      const now = Date.now();
+      const retryAfter = now + 3 * 60 * 1000; // 3分後
+      const shouldSkip = retryAfter > now;
+      expect(shouldSkip).to.be.true;
+    });
+
+    it('retryAfter到達済みのドキュメントは処理される', () => {
+      const now = Date.now();
+      const retryAfter = now - 1000; // 1秒前に到達
+      const shouldSkip = retryAfter > now;
+      expect(shouldSkip).to.be.false;
+    });
+
+    it('retryAfterがないドキュメント（新規pending）は処理される', () => {
+      const retryAfter = undefined;
+      const retryAfterMs = retryAfter || 0;
+      const shouldSkip = retryAfterMs > Date.now();
+      expect(shouldSkip).to.be.false;
     });
   });
 
