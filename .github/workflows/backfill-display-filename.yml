@@ -1,7 +1,6 @@
 name: Backfill displayFileName
 
-# NOTE: GCP_SA_KEY は docsplit-cocoro の SA (docsplit-cloud-build@docsplit-cocoro.iam.gserviceaccount.com)。
-# 2026-03-16: kanameone, dev にも roles/datastore.user 付与済み → 全3環境で実行可能
+# 環境別SA: GCP_SA_KEY_KANAMEONE / GCP_SA_KEY_DEV / GCP_SA_KEY(cocoro、将来GCP_SA_KEY_COCOROに移行)
 # 汎用版: .github/workflows/run-ops-script.yml（このワークフローの機能を含む）
 
 on:
@@ -47,7 +46,10 @@ jobs:
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          credentials_json: |-
+            ${{ github.event.inputs.environment == 'kanameone' && secrets.GCP_SA_KEY_KANAMEONE ||
+                github.event.inputs.environment == 'dev' && secrets.GCP_SA_KEY_DEV ||
+                secrets.GCP_SA_KEY }}
 
       - name: Resolve project ID from .firebaserc
         id: resolve
