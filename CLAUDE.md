@@ -84,7 +84,7 @@ npm run build                    # 全体ビルド
 ### 運用スクリプト
 
 **推奨: GitHub Actions経由で実行**（ADC不要）。Actions → "Run Operations Script" → 環境とスクリプトを選択して実行。
-SA: `docsplit-cloud-build@docsplit-cocoro.iam.gserviceaccount.com`（全3環境に`roles/datastore.user`付与済み）
+SA: 環境別（`docsplit-cloud-build@{project-id}`）。GitHub Secrets: `GCP_SA_KEY_KANAMEONE` / `GCP_SA_KEY_DEV` / `GCP_SA_KEY`(cocoro)
 
 ```bash
 # GitHub Actions (推奨): https://github.com/yasushi-honda/doc-split/actions/workflows/run-ops-script.yml

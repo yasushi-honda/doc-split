@@ -4,8 +4,7 @@ name: Run Operations Script
 # check-master-data, fix-stuck-documents 等のFirestoreアクセスが必要なスクリプトを
 # GitHub Actions経由で実行する。ローカルADC不要。
 #
-# GCP_SA_KEY: docsplit-cocoro の SA (docsplit-cloud-build@docsplit-cocoro.iam.gserviceaccount.com)
-# 2026-03-16: kanameone, dev にも roles/datastore.user を付与済み → 全3環境で実行可能
+# 環境別SA: GCP_SA_KEY_KANAMEONE / GCP_SA_KEY_DEV / GCP_SA_KEY(cocoro、将来GCP_SA_KEY_COCOROに移行)
 
 on:
   workflow_dispatch:
@@ -54,7 +53,10 @@ jobs:
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          credentials_json: |-
+            ${{ github.event.inputs.environment == 'kanameone' && secrets.GCP_SA_KEY_KANAMEONE ||
+                github.event.inputs.environment == 'dev' && secrets.GCP_SA_KEY_DEV ||
+                secrets.GCP_SA_KEY }}
 
       - name: Resolve project ID from .firebaserc
         id: resolve
