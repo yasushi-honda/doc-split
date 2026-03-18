@@ -82,13 +82,34 @@ firebase deploy --only functions -P cocoro
 
 ## 変更内容別コマンド早見表
 
-| 変更内容 | コマンド |
-|---------|---------|
-| フロントエンドのみ | `deploy-to-project.sh <alias>` |
-| Firestoreスキーマ変更 | `deploy-to-project.sh <alias> --rules` |
-| Functions変更 | `deploy-to-project.sh <alias> --full` |
-| Functionsのみ | `firebase deploy --only functions -P <alias>` |
-| 全クライアント一括 | `deploy-all-clients.sh [--rules|--full]` |
+| 変更内容 | ローカル | GitHub Actions |
+|---------|---------|----------------|
+| フロントエンドのみ | `deploy-to-project.sh <alias>` | — |
+| Firestoreルール | `deploy-to-project.sh <alias> --rules` | — |
+| Functions変更 | `deploy-to-project.sh <alias> --full` | **Deploy Cloud Functions**（推奨） |
+| Functionsのみ | `firebase deploy --only functions -P <alias>` | **Deploy Cloud Functions**（推奨） |
+| 全クライアント一括 | `deploy-all-clients.sh [--rules|--full]` | — |
+
+## GitHub Actions経由のFunctionsデプロイ（推奨）
+
+組織ポリシー制約下ではローカルデプロイが失敗しやすいため、**Functionsデプロイは原則GitHub Actions経由**で実施する。
+
+### 実行方法
+```bash
+gh workflow run "Deploy Cloud Functions" -f environment=<dev|kanameone|cocoro>
+gh run list --workflow="Deploy Cloud Functions" --limit=3   # 結果確認
+gh run view <run-id> --log-failed                            # 失敗時のログ
+```
+
+### SA構成（環境別）
+
+| 環境 | GitHub Secret | SA |
+|------|--------------|-----|
+| dev | `GCP_SA_KEY_DEV` | `docsplit-cloud-build@doc-split-dev` |
+| kanameone | `GCP_SA_KEY_KANAMEONE` | `docsplit-cloud-build@docsplit-kanameone` |
+| cocoro | `GCP_SA_KEY` | `docsplit-cloud-build@docsplit-cocoro` |
+
+各SAは自環境のみに権限を持つ（最小権限の原則）。
 
 ## 認証体系（3層構造）
 
