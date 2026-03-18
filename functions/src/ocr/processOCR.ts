@@ -80,6 +80,20 @@ export const processOCR = onSchedule(
 
       for (const docSnapshot of pendingDocs.docs) {
         const docId = docSnapshot.id;
+        const data = docSnapshot.data();
+
+        // retryAfter未到達のドキュメントはスキップ（配額リセット待ち）
+        const retryAfter = data.retryAfter?.toMillis?.() || 0;
+        if (retryAfter > Date.now()) {
+          console.log(`Skipping ${docId}: retryAfter not reached (${new Date(retryAfter).toISOString()})`);
+          stats.skipped++;
+          continue;
+        }
+
+        // ドキュメント間遅延（Vertex AI配額消費を分散）
+        if (stats.documentsProcessed > 0) {
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        }
 
         try {
           // 排他制御: 既に処理中ならスキップ
@@ -92,7 +106,7 @@ export const processOCR = onSchedule(
           // OCR処理実行
           const result: OcrProcessingResult = await processDocument(
             docId,
-            docSnapshot.data(),
+            data,
             FUNCTION_NAME
           );
 

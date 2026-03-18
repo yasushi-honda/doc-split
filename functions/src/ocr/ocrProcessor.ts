@@ -7,7 +7,7 @@
 import * as admin from 'firebase-admin';
 import { VertexAI } from '@google-cloud/vertexai';
 import { PDFDocument } from 'pdf-lib';
-import { withRetry, RETRY_CONFIGS, isTransientError } from '../utils/retry';
+import { withRetry, RETRY_CONFIGS, isTransientError, is429Error } from '../utils/retry';
 import { logError } from '../utils/errorLogger';
 import { getRateLimiter, trackGeminiUsage } from '../utils/rateLimiter';
 import { GCP_CONFIG, GEMINI_CONFIG } from '../utils/config';
@@ -374,10 +374,14 @@ export async function handleProcessingError(
 
       if (transient && newRetryCount < MAX_RETRY_COUNT) {
         // transientエラーかつ上限未満 → pendingに戻して自動リトライ
-        console.log(`Transient error for ${docId}, retrying (${newRetryCount}/${MAX_RETRY_COUNT})`);
+        // 429/RESOURCE_EXHAUSTEDは3分、その他transientは1分待機
+        const isQuotaError = is429Error(error);
+        const retryAfterMs = isQuotaError ? 3 * 60 * 1000 : 1 * 60 * 1000;
+        console.log(`Transient error for ${docId}, retrying (${newRetryCount}/${MAX_RETRY_COUNT}), retryAfter: ${retryAfterMs / 1000}s (quota: ${isQuotaError})`);
         tx.update(docRef, {
           status: 'pending',
           retryCount: newRetryCount,
+          retryAfter: admin.firestore.Timestamp.fromMillis(Date.now() + retryAfterMs),
           lastErrorMessage: error.message.slice(0, 500),
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         });

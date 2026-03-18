@@ -74,10 +74,46 @@ export function isTransientError(error: unknown): boolean {
       message.includes('rate limit') ||
       message.includes('quota exceeded') ||
       message.includes('timeout') ||
-      message.includes('temporarily unavailable')
+      message.includes('temporarily unavailable') ||
+      message.includes('too many requests') ||
+      message.includes('resource exhausted') ||
+      message.includes('resource_exhausted') ||
+      message.includes('exception posting request')
     ) {
       return true;
     }
+  }
+
+  return false;
+}
+
+/**
+ * 429/RESOURCE_EXHAUSTEDエラー（配額超過）かどうか判定
+ *
+ * retryAfter待機時間の決定に使用（429系は長めに待機）
+ */
+export function is429Error(error: unknown): boolean {
+  if (!error || !(error instanceof Error)) return false;
+
+  const errorWithCode = error as Error & { code?: string | number; status?: number };
+  const message = error.message.toLowerCase();
+
+  // HTTPステータス429
+  if (errorWithCode.status === 429) return true;
+  if (errorWithCode.code === 429) return true;
+
+  // gRPCコード RESOURCE_EXHAUSTED
+  if (errorWithCode.code === 'RESOURCE_EXHAUSTED') return true;
+
+  // メッセージベース検出
+  if (
+    message.includes('429') ||
+    message.includes('too many requests') ||
+    message.includes('resource exhausted') ||
+    message.includes('resource_exhausted') ||
+    message.includes('quota exceeded')
+  ) {
+    return true;
   }
 
   return false;
