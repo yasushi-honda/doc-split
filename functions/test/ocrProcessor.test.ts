@@ -81,7 +81,8 @@ describe('ocrProcessor', () => {
      * - 非transientエラー → status: 'error'（即座に確定）
      */
 
-    const MAX_RETRY_COUNT = 3;
+    // 実装側（ocrProcessor.ts）の MAX_RETRY_COUNT = 5 と一致させること
+    const MAX_RETRY_COUNT = 5;
 
     it('transientエラー + リトライ上限未満 → pendingに戻す', () => {
       const currentRetryCount = 0;
@@ -95,13 +96,13 @@ describe('ocrProcessor', () => {
     });
 
     it('transientエラー + リトライ上限到達 → errorに確定', () => {
-      const currentRetryCount = 2; // 既に2回リトライ済み
+      const currentRetryCount = 4; // 既に4回リトライ済み（MAX_RETRY_COUNT=5）
       const transient = true;
       const newRetryCount = currentRetryCount + 1;
 
       const expectedStatus = (transient && newRetryCount < MAX_RETRY_COUNT) ? 'pending' : 'error';
       expect(expectedStatus).to.equal('error');
-      expect(newRetryCount).to.equal(3);
+      expect(newRetryCount).to.equal(5);
     });
 
     it('非transientエラー → 即座にerror', () => {
