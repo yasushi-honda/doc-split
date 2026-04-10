@@ -35,6 +35,7 @@ export interface Document {
   targetPageNumber: number;
   status: DocumentStatus;
   sourceType?: SourceType;
+  messageId?: string;            // Gmail messageId（重複チェック用）
   careManager?: string;
   category?: string;
 
@@ -46,6 +47,9 @@ export interface Document {
   // 分割元ドキュメントへの参照（分割で生成された場合）
   parentDocumentId?: string;
   splitFromPages?: { start: number; end: number };
+  // 分割元としてのフラグ・分割先ドキュメントID
+  isSplitSource?: boolean;
+  splitInto?: string[];
 
   // Phase 7: 顧客確定機能
   customerId?: string | null;                    // 顧客ID（「該当なし」選択時はnull）

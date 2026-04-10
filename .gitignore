@@ -81,3 +81,12 @@ cors-*.json
 
 # Screenshots（開発用スクリーンショット）
 *.png
+
+# Claude Code settings（認証情報を含む）
+.claude/settings.local.json
+
+# Playwright トレース（テスト実行時の記録）
+.playwright-mcp/
+
+# バックアップファイル（スクリプト出力）
+backups/
