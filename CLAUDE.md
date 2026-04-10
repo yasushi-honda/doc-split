@@ -108,6 +108,10 @@ FIREBASE_PROJECT_ID=<project-id> node scripts/check-master-data.js --fix      # 
 FIREBASE_PROJECT_ID=<project-id> node scripts/backfill-display-filename.js --dry-run  # プレビュー
 FIREBASE_PROJECT_ID=<project-id> node scripts/backfill-display-filename.js             # 実行
 FIREBASE_PROJECT_ID=<project-id> node scripts/backfill-display-filename.js --force     # 既存値も上書き
+
+# 重複ドキュメント検出・削除（同一fileNameのGmail添付ファイル重複を整理）
+FIREBASE_PROJECT_ID=<project-id> node scripts/cleanup-duplicates.js                # dry-run（デフォルト）
+FIREBASE_PROJECT_ID=<project-id> node scripts/cleanup-duplicates.js --execute      # 実行（バックアップJSON自動保存）
 ```
 
 ### Firestoreバックアップ（ネイティブ）
