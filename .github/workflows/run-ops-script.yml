@@ -32,6 +32,8 @@ on:
           - backfill-display-filename --dry-run
           - backfill-display-filename
           - backfill-display-filename --force
+          - cleanup-duplicates
+          - cleanup-duplicates --execute
 
 jobs:
   run-script:
