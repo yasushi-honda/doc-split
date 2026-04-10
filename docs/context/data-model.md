@@ -49,6 +49,7 @@ DocSplitのデータはすべてCloud Firestoreに格納される。
 | mimeType | string | Yes | MIMEタイプ |
 | fileUrl | string | Yes | Cloud StorageプレビューURL |
 | sourceType | SourceType | No | `gmail` \| `upload` |
+| messageId | string | No | GmailメッセージID（重複チェック用、sourceType=gmail時に設定） |
 | status | DocumentStatus | Yes | `pending` \| `processing` \| `processed` \| `error` \| `split` |
 | processedAt | timestamp | Yes | 処理日時 |
 | updatedAt | timestamp | No | 最終更新日時 |
