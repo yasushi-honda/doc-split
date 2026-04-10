@@ -1,13 +1,68 @@
 # ハンドオフメモ
 
-**更新日**: 2026-03-17（PDF分割画面コンボボックス統一・UIコンポーネント変更確認ルール追加）
+**更新日**: 2026-04-11（Gmail重複取得根本対策・Firestoreネイティブバックアップ・運用スクリプト統合）
 **ブランチ**: main
-**フェーズ**: Phase 8完了 + マルチクライアント安全運用機構 + displayFileName自動生成（#178）
+**フェーズ**: Phase 8完了 + マルチクライアント安全運用機構 + displayFileName自動生成 + 重複対策・バックアップ完成
 
-## 直近の変更（03-17 最新）
+## 直近の変更（04-11 最新）
 
 | PR | コミット | 内容 |
 |----|------|------|
+| **#202** | **6240f09** | **chore: 運用スクリプトにcleanup-duplicatesを追加** cleanup-duplicates（重複ドキュメント削除）をGitHub Actions運用スクリプトに統合 |
+| **#201** | **f90cbac** | **feat: Firestoreネイティブバックアップ設定スクリプト・ワークフロー追加** 月数円未満で日次(7日保持)+週次(8週保持)バックアップ自動設定 |
+| **#199** | **17a675a** | **fix: Gmail添付ファイル重複取得の根本対策** maxInstances:1・messageId保存・重複チェック3層防御、cocoro/kanameone環境の既存重複を削除済み |
+
+### Gmail重複取得問題（04-10 完全解決）
+
+| 環境 | 状態 | 重複ドキュメント | 削除対象 | 結果 |
+|------|------|---------|--------|------|
+| **cocoro** | ✅ 完全解決 | 0件（既に削除済み） | - | 重複なし |
+| **kanameone** | ✅ 完全解決 | 6件（2グループ） | 7件Firestore削除 | dry-run確認→execute実行済み |
+| **dev** | ✅ 防止機構 | 0件（テストのみ） | - | 3層防御で新規重複なし |
+
+**根本対策の3層防御:**
+1. `maxInstances: 1` で同時実行制御（並行処理による重複生成防止）
+2. `messageId`ベース重複チェック（gmailLogsで既処理確認、MD5チェック前の早期リターン）
+3. MD5ハッシュチェック（ファイルレベルの最終フェイルセーフ）
+
+**実装ファイル:**
+- `functions/src/gmail/checkGmailAttachments.ts`: maxInstances:1 追加・messageId保存・重複チェック実装
+- `functions/src/pdf/pdfOperations.ts`: isSplitSource:true 設定
+- `shared/types.ts`: messageId・isSplitSource・splitInto型定義追加
+- `frontend/src/hooks/useDocuments.ts`: 新フィールドのfirestoreToDocumentマッピング追加
+- `scripts/fix-stuck-documents.js`: status='split' 除外追加
+
+**運用スクリプト統合 (#202):**
+- GitHub Actions「Run Operations Script」に cleanup-duplicates を選択肢に追加
+- dry-run（デフォルト）・--execute（実行）・バックアップJSON自動保存
+
+### Firestoreネイティブバックアップ設定（04-10 全環境実装）
+
+| 環境 | バックアップ | 保持期間 | 月額コスト | 実装 |
+|------|---------|--------|--------|------|
+| **cocoro** | 日次+週次 | 7日+8週 | 約¥1-2 | ✅ 完了 |
+| **kanameone** | 日次+週次 | 7日+8週 | 約¥1-2 | ✅ 完了 |
+| **dev** | 未設定 | - | $0 | ⏭️ 開発環境のため不要 |
+
+**実装:**
+- `scripts/setup-firestore-backup.sh`: 日次(7d保持)+週次(8w保持)自動設定スクリプト
+- `.github/workflows/setup-firestore-backup.yml`: GitHub Actions設定ワークフロー
+- 初回セットアップのみ。以降は自動スケジュール実行
+
+## 直近の変更（03-18）
+
+| PR | コミット | 内容 |
+|----|------|------|
+| - | **7c0d89d** | **docs: デプロイSkillにGitHub Actions Functionsデプロイ手順を追加** |
+| **#198** | **f02a58e** | **feat: プロジェクトごとのSAでGitHub Actions全環境デプロイ対応** 環境別SAキーを使った全3環境へのデプロイがGitHub Actions経由で可能に |
+| **#197** | **e9e43f8** | **test: Vertex AI 429リトライのFirestoreエミュレータ統合テスト追加** #194の再発防止テスト |
+| **#195** | **1f10c56** | **fix: Vertex AI 429エラー再発対策 (#194)** |
+
+## 直近の変更（03-17）
+
+| PR | コミット | 内容 |
+|----|------|------|
+| - | **9c1fb67** | **chore: 運用スクリプトのGitHub Actions誘導hookを追加** ローカル実行時にGitHub Actions経由を推奨するhookを追加 |
 | **#193** | **92f6193** | **feat: PDF分割画面の選択UIを検索付きコンボボックスに統一** PdfSplitModalのSelect→MasterSelectField置き換え。DRY原則で書類詳細画面と同じコンポーネントを共有。検索・ふりがな表示・新規追加機能が利用可能に |
 | - | **58fc71f** | **chore: UI変更マージ前のブラウザ確認をhookで強制化（#193教訓）** CLAUDE.md教訓追記、`.claude/hooks/ui-change-merge-check.sh`追加（.tsx/.css変更PRマージをexit 2でブロック）、`.claude/settings.json`でプロジェクトスコープhook有効化 |
 
@@ -219,16 +274,35 @@
 
 全3環境でFunctions 20個に統一（deleteDocument追加済み）。
 
+## 運用監視フェーズ（04-11 開始）
+
+**重複対策・バックアップ完成後の検証と運用維持:**
+
+| 項目 | 期間 | 確認内容 | 状態 |
+|------|------|--------|------|
+| **新規重複監視** | 04-11～04-18（1週間） | Cloud Functionsログで新規重複なし確認 | ⏳ 進行中 |
+| **バックアップ動作** | 初回実行後 | gcloud firestore backups list で日次/週次スケジュール確認 | ⏳ 初回待機中 |
+| **cleanup-duplicates運用** | 随時 | GitHub Actions「Run Operations Script」の動作確認 | ✅ 基本動作確認済み |
+
+**固定監視項目 (定期実施):**
+- Cloud Functions ログで重複エラー/警告なし
+- Firestore ストレージ消費量（圧縮状況の確認）
+- GitHub Actions 運用スクリプト実行ログ
+
 ## 次のアクション
 
-1. **実クライアント納品テスト**（Phase 2）
+1. **技術的負債解決**（Issue #200）
+   - checkGmailAttachments/splitPdf の統合テスト追加（Firestoreエミュレータ必要）
+   - P2優先度
+
+2. **クライアント納品テスト**（Phase 2・要時間）
    - Mac/Windows/Linux各OSでのclient-setup-gcp実行
    - Claude Code納品プロンプト検証
 
-2. **SAキーファイル管理**
+3. **SAキーファイル管理**
    - cocoro SAキーの安全管理確認
 
-3. **クライアント別オプション機能**（要望確定後）
+4. **クライアント別オプション機能**（要望確定後）
 
 ## 参考リンク
 
@@ -240,6 +314,6 @@
 ## Git状態
 
 - ブランチ: main
-- 未コミット変更: `.serena/project.yml`, `.playwright-mcp/`, `docs/audit/2026-03-16-document-audit.md`（いずれも無害）
+- 未コミット変更: docs/handoff/LATEST.md (このセッションで更新)
 - 未プッシュ: なし
-- 最新コミット: `58fc71f` chore: UI変更マージ前のブラウザ確認をhookで強制化（#193教訓）
+- 最新コミット（マージ済み）: `6240f09` chore: 運用スクリプトにcleanup-duplicatesを追加 (#202)
