@@ -442,6 +442,7 @@ export const splitPdf = onCall(
     await docRef.update({
       splitInto: createdDocIds,
       status: 'split',
+      isSplitSource: true,
     });
 
     return {

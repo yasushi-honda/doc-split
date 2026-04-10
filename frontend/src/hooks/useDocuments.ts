@@ -103,6 +103,10 @@ export function firestoreToDocument(id: string, data: Record<string, unknown>): 
     officeConfirmedAt: data.officeConfirmedAt as Timestamp | null | undefined,
     // ソースタイプ（gmail/upload）
     sourceType: data.sourceType as Document['sourceType'],
+    messageId: data.messageId as string | undefined,
+    // 分割元フラグ・分割先
+    isSplitSource: data.isSplitSource as boolean | undefined,
+    splitInto: data.splitInto as string[] | undefined,
     // エイリアス学習用キーフィールド
     customerKey: data.customerKey as string | undefined,
     officeKey: data.officeKey as string | undefined,

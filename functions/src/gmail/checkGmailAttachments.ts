@@ -41,6 +41,7 @@ export const checkGmailAttachments = onSchedule(
     region: 'asia-northeast1',
     timeoutSeconds: 300,
     memory: '512MiB',
+    maxInstances: 1,
   },
   async () => {
     console.log('Starting Gmail attachment check...');
@@ -96,6 +97,17 @@ export const checkGmailAttachments = onSchedule(
       // 各メッセージを処理
       for (const message of messages) {
         if (!message.id) continue;
+
+        // messageIdベースの重複チェック（MD5チェック前の早期リターン）
+        const existingByMessageId = await db
+          .collection('gmailLogs')
+          .where('messageId', '==', message.id)
+          .limit(1)
+          .get();
+        if (!existingByMessageId.empty) {
+          console.log(`Skipping already processed message: ${message.id}`);
+          continue;
+        }
 
         try {
           const result = await processMessage(gmail, gmailAccount, message.id);
@@ -342,6 +354,7 @@ async function processAttachment(
   await db.runTransaction(async (transaction) => {
     // gmailLogsに記録
     transaction.set(logRef, {
+      messageId,
       fileName: filename,
       hash,
       fileSizeKB,
@@ -354,6 +367,7 @@ async function processAttachment(
     // documents（status: pending）を作成
     transaction.set(docRef, {
       id: docRef.id,
+      messageId,
       processedAt: admin.firestore.FieldValue.serverTimestamp(),
       fileId: logRef.id,
       fileName: filename,

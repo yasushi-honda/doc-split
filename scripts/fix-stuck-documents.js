@@ -41,9 +41,17 @@ async function main() {
     process.exit(0);
   }
 
-  console.log(`${snapshot.size}件のドキュメントを検出:`);
+  // status: 'split' のドキュメントは除外（分割済みドキュメントを誤ってリセットしない）
+  const docs = snapshot.docs.filter((doc) => doc.data().status !== 'split');
 
-  for (const doc of snapshot.docs) {
+  if (docs.length === 0) {
+    console.log('対象のドキュメントはありません（split除外後）');
+    process.exit(0);
+  }
+
+  console.log(`${docs.length}件のドキュメントを検出:`);
+
+  for (const doc of docs) {
     const data = doc.data();
     console.log(`  - ${doc.id}: ${data.fileName || '(no name)'} [${data.status}]`);
 
@@ -61,7 +69,7 @@ async function main() {
   if (dryRun) {
     console.log('\n--dry-run モードのため変更なし。実行するには --dry-run を外してください。');
   } else {
-    console.log(`\n${snapshot.size}件をpendingに変更しました。OCRポーリングが自動で再処理します。`);
+    console.log(`\n${docs.length}件をpendingに変更しました。OCRポーリングが自動で再処理します。`);
   }
 
   process.exit(0);
