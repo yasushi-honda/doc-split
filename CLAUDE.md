@@ -110,6 +110,14 @@ FIREBASE_PROJECT_ID=<project-id> node scripts/backfill-display-filename.js      
 FIREBASE_PROJECT_ID=<project-id> node scripts/backfill-display-filename.js --force     # 既存値も上書き
 ```
 
+### Firestoreバックアップ（ネイティブ）
+```bash
+# GitHub Actions (推奨): Actions → "Setup Firestore Backup" → 環境選択 → 実行（初回のみ）
+# ローカル: ./scripts/setup-firestore-backup.sh <project-id>
+# 確認: gcloud firestore backups schedules list --database='(default)' --project=<project-id>
+# 日次(7日保持) + 週次(8週保持)。月数円未満。
+```
+
 ### マスターデータ
 ```bash
 FIREBASE_PROJECT_ID=<project-id> node scripts/import-masters.js --all scripts/samples/
