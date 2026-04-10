@@ -1,0 +1,44 @@
+name: Setup Firestore Backup
+
+# Firestoreネイティブバックアップの初回設定。
+# 日次(7日保持) + 週次(8週保持)。一度実行すれば自動スケジュール。
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        type: choice
+        options:
+          - kanameone
+          - cocoro
+
+jobs:
+  setup-backup:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: |-
+            ${{ github.event.inputs.environment == 'kanameone' && secrets.GCP_SA_KEY_KANAMEONE ||
+                secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Resolve project ID
+        id: resolve
+        run: |
+          PROJECT_ID=$(node scripts/helpers/firebaserc-helper.js get-project "${{ github.event.inputs.environment }}")
+          echo "project_id=$PROJECT_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Firestore backup schedules
+        env:
+          PROJECT_ID: ${{ steps.resolve.outputs.project_id }}
+        run: bash scripts/setup-firestore-backup.sh "$PROJECT_ID"
