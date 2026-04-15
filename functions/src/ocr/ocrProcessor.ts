@@ -533,6 +533,10 @@ ${pageNumber ? `\nこれは${pageNumber}ページ目です。` : ''}
 /**
  * OCR結果からAI要約を生成
  */
+/**
+ * OCR結果からAI要約を生成 (Issue #209)
+ * @returns CappedText - text(切り詰め後summary), originalLength(元文字数), truncated(切り詰めフラグ)
+ */
 async function generateSummary(
   ocrResult: string,
   documentType: string

@@ -15,6 +15,7 @@ import { capPageText, MAX_SUMMARY_LENGTH, type CappedText } from '../utils/pageT
 const PROJECT_ID = GCP_CONFIG.projectId;
 const LOCATION = GCP_CONFIG.location;
 const MODEL_ID = GEMINI_CONFIG.modelId;
+// Vertex AI暴走時の出力トークン上限（Issue #205, #209）。8192tokens ≈ 25K chars Japanese
 const GEMINI_MAX_OUTPUT_TOKENS = GEMINI_CONFIG.maxOutputTokens;
 
 const db = admin.firestore();
@@ -89,7 +90,8 @@ export const regenerateSummary = functions.https.onCall(
 );
 
 /**
- * OCR結果からAI要約を生成（内部関数）
+ * OCR結果からAI要約を生成（内部関数, Issue #209）
+ * @returns CappedText - text(切り詰め後summary), originalLength(元文字数), truncated(切り詰めフラグ)
  */
 async function generateSummaryInternal(
   ocrResult: string,

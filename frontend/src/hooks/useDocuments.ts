@@ -72,6 +72,7 @@ export function firestoreToDocument(id: string, data: Record<string, unknown>): 
     ocrResult: data.ocrResult as string,
     ocrResultUrl: data.ocrResultUrl as string | undefined,
     summary: data.summary as string | undefined,
+    // Issue #209: Vertex AI暴走時の切り詰め検出メタ
     summaryTruncated: data.summaryTruncated as boolean | undefined,
     summaryOriginalLength: data.summaryOriginalLength as number | undefined,
     documentType: data.documentType as string,
