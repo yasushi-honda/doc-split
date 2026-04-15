@@ -29,11 +29,18 @@ on:
           - fix-stuck-documents
           - fix-stuck-documents --include-errors --dry-run
           - fix-stuck-documents --include-errors
+          - fix-stuck-documents --doc-id --dry-run
+          - fix-stuck-documents --doc-id
           - backfill-display-filename --dry-run
           - backfill-display-filename
           - backfill-display-filename --force
           - cleanup-duplicates
           - cleanup-duplicates --execute
+      doc_id:
+        description: 'Document ID (required when script contains --doc-id; ignored otherwise)'
+        required: false
+        type: string
+        default: ''
 
 jobs:
   run-script:
@@ -69,27 +76,49 @@ jobs:
 
       - name: Parse script and args
         id: parse
+        env:
+          INPUT: ${{ github.event.inputs.script }}
+          DOC_ID: ${{ github.event.inputs.doc_id }}
         run: |
-          INPUT="${{ github.event.inputs.script }}"
           SCRIPT_NAME=$(echo "$INPUT" | awk '{print $1}')
           SCRIPT_ARGS=$(echo "$INPUT" | sed 's/^[^ ]* *//')
           if [ "$SCRIPT_ARGS" = "$SCRIPT_NAME" ]; then
             SCRIPT_ARGS=""
           fi
+
+          # --doc-id 指定スクリプトには doc_id 入力を必須化
+          if echo "$SCRIPT_ARGS" | grep -q -- '--doc-id'; then
+            if [ -z "$DOC_ID" ]; then
+              echo "ERROR: doc_id input is required when script contains --doc-id" >&2
+              exit 1
+            fi
+            # ドキュメントIDは英数字のみ許可（コマンドインジェクション対策）
+            if ! echo "$DOC_ID" | grep -qE '^[A-Za-z0-9_-]+$'; then
+              echo "ERROR: doc_id must contain only alphanumeric, underscore, hyphen characters" >&2
+              exit 1
+            fi
+            SCRIPT_ARGS=$(echo "$SCRIPT_ARGS" | sed "s/--doc-id/--doc-id $DOC_ID/")
+          fi
+
           echo "script_name=$SCRIPT_NAME" >> "$GITHUB_OUTPUT"
           echo "script_args=$SCRIPT_ARGS" >> "$GITHUB_OUTPUT"
           echo "Script: $SCRIPT_NAME"
           echo "Args: $SCRIPT_ARGS"
 
       - name: Run script
+        env:
+          ENVIRONMENT: ${{ github.event.inputs.environment }}
+          PROJECT_ID: ${{ steps.resolve.outputs.project_id }}
+          SCRIPT_NAME: ${{ steps.parse.outputs.script_name }}
+          SCRIPT_ARGS: ${{ steps.parse.outputs.script_args }}
         run: |
           echo "=== Operations Script ==="
-          echo "Environment: ${{ github.event.inputs.environment }}"
-          echo "Project ID: ${{ steps.resolve.outputs.project_id }}"
-          echo "Script: ${{ steps.parse.outputs.script_name }}"
-          echo "Args: ${{ steps.parse.outputs.script_args }}"
+          echo "Environment: $ENVIRONMENT"
+          echo "Project ID: $PROJECT_ID"
+          echo "Script: $SCRIPT_NAME"
+          echo "Args: $SCRIPT_ARGS"
           echo "========================="
 
           NODE_PATH=./functions/node_modules \
-            FIREBASE_PROJECT_ID=${{ steps.resolve.outputs.project_id }} \
-            node scripts/${{ steps.parse.outputs.script_name }}.js ${{ steps.parse.outputs.script_args }}
+            FIREBASE_PROJECT_ID="$PROJECT_ID" \
+            node "scripts/${SCRIPT_NAME}.js" $SCRIPT_ARGS

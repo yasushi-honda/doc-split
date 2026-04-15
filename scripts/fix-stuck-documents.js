@@ -7,6 +7,8 @@
  *   FIREBASE_PROJECT_ID=doc-split-dev node scripts/fix-stuck-documents.js --dry-run
  *   FIREBASE_PROJECT_ID=doc-split-dev node scripts/fix-stuck-documents.js --include-errors
  *   FIREBASE_PROJECT_ID=doc-split-dev node scripts/fix-stuck-documents.js --include-errors --dry-run
+ *   FIREBASE_PROJECT_ID=doc-split-dev node scripts/fix-stuck-documents.js --doc-id <id>
+ *   FIREBASE_PROJECT_ID=doc-split-dev node scripts/fix-stuck-documents.js --doc-id <id> --dry-run
  */
 
 const admin = require('firebase-admin');
@@ -19,11 +21,59 @@ if (!projectId) {
 
 const dryRun = process.argv.includes('--dry-run');
 const includeErrors = process.argv.includes('--include-errors');
+const docIdIndex = process.argv.indexOf('--doc-id');
+const targetDocId = docIdIndex >= 0 ? process.argv[docIdIndex + 1] : null;
+
+if (docIdIndex >= 0 && !targetDocId) {
+  console.error('--doc-id にはドキュメントIDを指定してください');
+  process.exit(1);
+}
 
 admin.initializeApp({ projectId });
 const db = admin.firestore();
 
+async function resetDoc(docRef, data) {
+  console.log(`  - ${docRef.id}: ${data.fileName || '(no name)'} [${data.status}]`);
+  if (dryRun) return;
+  await docRef.update({
+    status: 'pending',
+    retryCount: 0,
+    lastErrorMessage: null,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+  console.log(`    → pendingに変更（retryCount: 0）`);
+}
+
+async function runSingle() {
+  console.log(`プロジェクト: ${projectId}`);
+  console.log(`モード: ${dryRun ? 'DRY RUN（変更なし）' : '実行'}`);
+  console.log(`対象: 単一指定 (${targetDocId})`);
+  console.log('---');
+
+  const docRef = db.collection('documents').doc(targetDocId);
+  const docSnap = await docRef.get();
+
+  if (!docSnap.exists) {
+    console.warn(`⚠️ 書類が見つかりません: ${targetDocId}`);
+    process.exit(1);
+  }
+
+  await resetDoc(docRef, docSnap.data());
+
+  if (dryRun) {
+    console.log('\n--dry-run モードのため変更なし。実行するには --dry-run を外してください。');
+  } else {
+    console.log('\n対象書類をpendingに変更しました。OCRポーリングが自動で再処理します。');
+  }
+  process.exit(0);
+}
+
 async function main() {
+  if (targetDocId) {
+    await runSingle();
+    return;
+  }
+
   console.log(`プロジェクト: ${projectId}`);
   console.log(`モード: ${dryRun ? 'DRY RUN（変更なし）' : '実行'}`);
   console.log(`対象: processing${includeErrors ? ' + error' : ''}`);
@@ -52,18 +102,7 @@ async function main() {
   console.log(`${docs.length}件のドキュメントを検出:`);
 
   for (const doc of docs) {
-    const data = doc.data();
-    console.log(`  - ${doc.id}: ${data.fileName || '(no name)'} [${data.status}]`);
-
-    if (!dryRun) {
-      await db.doc(`documents/${doc.id}`).update({
-        status: 'pending',
-        retryCount: 0,
-        lastErrorMessage: null,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
-      console.log(`    → pendingに変更（retryCount: 0）`);
-    }
+    await resetDoc(doc.ref, doc.data());
   }
 
   if (dryRun) {
