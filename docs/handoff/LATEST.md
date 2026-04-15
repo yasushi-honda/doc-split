@@ -1,10 +1,52 @@
 # ハンドオフメモ
 
-**更新日**: 2026-04-15（PR #212 マージ - generateSummary 防御層追加完了）
+**更新日**: 2026-04-16（PR #218 マージ - searchIndexer OOM 応急対処、3環境デプロイ完了）
 **ブランチ**: main
-**フェーズ**: Phase 8完了 + マルチクライアント安全運用機構 + displayFileName自動生成 + 重複対策・バックアップ完成 + OCR/summary 二重防御層
+**フェーズ**: Phase 8完了 + マルチクライアント安全運用機構 + OCR/summary 二重防御層 + searchIndexer メモリ増強
 
-## ✅ 今セッション完了サマリー（Issue #209 generateSummary 防御層）
+## ✅ 今セッション完了サマリー（Issue #217 searchIndexer OOM 応急対処）
+
+| 順 | タスク | 結果 |
+|---|---|---|
+| 1 | kanameone ダッシュボード error=1 の原因特定（岩倉病院書類） | ✅ 04-15 04:08 に復旧済の残像と判明。health-report が 01:16 UTC の snapshot を保持していただけ |
+| 2 | **新規発見**: `ondocumentwritesearchindex` OOM（kanameone 04-14 12件+, 04-15 5件） | ✅ Memory 256MiB 境界越え、silent failure で検索インデックス欠落 |
+| 3 | Issue #217 起票 (bug, P1) | ✅ |
+| 4 | feature branch + memory 256→512MiB 修正 | ✅ `fix/search-index-memory-217` |
+| 5 | functions ビルド・テスト (345 passing) | ✅ |
+| 6 | PR #218 作成 | ✅ |
+| 7 | /review-pr 6エージェント並列レビュー | ✅ ブロッカーなし (副次発見: `removeTokensFromIndex` 握潰し→#219) |
+| 8 | PR #218 Squash merge → branch削除 | ✅ commit `27a2626` |
+| 9 | dev 自動デプロイ | ✅ CI + Deploy success |
+| 10 | kanameone 手動デプロイ (GitHub Actions) | ✅ revision `00029-fad` / 512Mi / ERROR 0 |
+| 11 | cocoro 手動デプロイ (GitHub Actions) | ✅ revision `00013-tov` / 512Mi / ERROR 0 |
+| 12 | フォローアップ Issue 起票 | ✅ #219 (removeTokensFromIndex握潰し), #220 (OOM log-based metric) |
+
+**変更規模**: 1 file (searchIndexer.ts), +3/-1 lines
+
+### 🌅 明朝の残タスク（次セッション最優先）
+
+**24h OOM観察**: kanameone は朝時間帯 (JST 8〜16時) にOOM集中発生 (04-15 00:51〜08:26 UTC に5回)。deploy は 04-15 16:00 UTC 頃で観察が夜時間帯となり **実動作ログが cold**。明朝 JST 10:00 以降に以下を確認:
+
+```bash
+gcloud logging read 'resource.labels.function_name="ondocumentwritesearchindex" severity>=ERROR timestamp>="2026-04-16T00:00:00Z"' --project=docsplit-kanameone --limit=20 --format="value(timestamp,textPayload)"
+```
+
+- ERROR 0 件継続 → 応急対処成功、#217 真クローズ
+- OOM 再発 → `db.getAll` chunk化 (本質対応) を別Issueで起票
+
+## 🔴 今セッション判明した前提変更（重要）
+
+### ダッシュボード画像の読み方
+
+`scripts/health-report/` の output は **毎日 01:16 UTC に自動生成** (`.github/workflows/health-report.yml` schedule)。日中に復旧された書類は **翌日まで反映されない**。
+
+- 04-15 10:16 JST = 01:16 UTC 撮影 → error=1 表示
+- 04-15 13:08 JST = 04:08 UTC 復旧完了 → Firestore は error=0
+- ダッシュボード画像には **復旧前の情報が残る**
+
+**判断フロー**: ダッシュボード error>0 のとき、`gh workflow run run-ops-script.yml -f environment=<env> -f script="fix-stuck-documents --include-errors --dry-run"` で **Firestore 実態を必ず確認**。
+
+## 前セッション完了（Issue #209 generateSummary 防御層）
 
 | 順 | タスク | 結果 |
 |---|---|---|
@@ -38,7 +80,16 @@
 
 **復旧対象書類**: kanameone `uUm2JJi5o9CgyQ9r4bIJ` (`岩倉病院通所ﾘﾊﾋﾞﾘﾃｰｼｮﾝ-L1-20260414155319.pdf`、3ページPDF) → status=processed
 
-## 直近の変更（04-15 最新セッション）
+## 直近の変更（04-16 最新セッション）
+
+| PR/Issue | 内容 |
+|----|------|
+| **PR #218** ✅マージ済み (commit `27a2626`) | **fix: ondocumentwritesearchindex のメモリを256→512MiBに増強 (#217)** OOM 応急対処。dev/kanameone/cocoro 3環境デプロイ完了 (revision 00070-hab / 00029-fad / 00013-tov) |
+| **#217** ✅クローズ | searchIndexer OOM 応急対処 (PR #218 で完了、24h観察は明朝) |
+| **#219** 🆕 P1 | `removeTokensFromIndex` catch 全エラー握潰し (silent failure)。PR #218 review silent-failure-hunter 指摘 (HIGH) |
+| **#220** 🆕 P2 | OOM + truncated 用 log-based metric + alert。#210 統合対象 |
+
+## 直近の変更（04-15）
 
 | PR/Issue | 内容 |
 |----|------|
@@ -50,7 +101,7 @@
 | #205 ✅クローズ | OCR防御層 (PR #208 で完了、kanameone 本番復旧確認) |
 | #206 ✅クローズ | ops script `--doc-id` (PR #207 でクローズ) |
 | #209 ✅クローズ | generateSummary 防御層 (PR #212 で完了) |
-| #210 P2 | OCR 切り詰め (truncated=true) メトリクス監視（log-based metric + アラート） |
+| #210 P2 | OCR 切り詰め (truncated=true) メトリクス監視（log-based metric + アラート）**→ #220 で統合対応予定** |
 | **#213** 🆕 P1 | generateSummary maxOutputTokens regression テスト追加（PR #212 review pr-test-analyzer 指摘） |
 | **#214** 🆕 P2 | generateSummary 共通化 (ocrProcessor / regenerateSummary 重複解消、code-simplifier 指摘) |
 | **#215** 🆕 P2 | summary 切り詰めメタの型不変条件強化 (discriminated union化、type-design-analyzer 指摘) |
@@ -101,9 +152,13 @@
 
 | # | タイトル | ラベル | 優先 |
 |---|---|---|---|
-| #209 | generateSummary に maxOutputTokens 追加 | bug, P1 | 🆕 Codex M1 後追い、要対応 |
-| #210 | OCR 切り詰めメトリクス監視 | enhancement, P2 | 🆕 Codex 推奨観点 |
-| #196 | rescueStuckProcessingDocsにMAX_RETRY_COUNTチェックとretryAfter追加 | bug, P2 | 高 |
+| **#219** | `removeTokensFromIndex` catch 全エラー握潰し (silent failure) | bug, P1 | 🆕 最優先 |
+| **#213** | generateSummary maxOutputTokens regression テスト | enhancement, P1 | 高 |
+| **#220** | OOM + truncated 用 log-based metric + alert (#210統合) | enhancement, P2 | 中 |
+| #214 | generateSummary 共通化 | enhancement, P2 | 中 |
+| #215 | summary 切り詰めメタ 型不変条件強化 | enhancement, P2 | 中 |
+| #210 | OCR 切り詰めメトリクス監視 **→ #220 で統合** | enhancement, P2 | (統合) |
+| #196 | rescueStuckProcessingDocsにMAX_RETRY_COUNTチェックとretryAfter追加 | bug, P2 | 中 |
 | #190 | check-master-data.js --fix バッチ500件上限考慮 | bug, P2 | 中 |
 | #189 | ocrProcessorのdateMarkerサニタイズ境界外 | bug, P2 | 中 |
 | #183 | displayFileNameのファイル名サニタイズ | bug, P2 | 中 |
