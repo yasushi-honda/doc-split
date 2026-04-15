@@ -1,21 +1,26 @@
 /**
- * 検索インデックス: silent failure 防止テスト
+ * 検索インデックス: NOT_FOUND判定テスト
  *
- * Issue #219: removeTokensFromIndex の catch で全エラー握潰し対策
- * NOT_FOUND (gRPC code 5) のみ無視可、それ以外は明示的にログを残す。
+ * 削除トリガーでインデックスエントリ不在を冪等削除として許容するため、
+ * gRPC/REST/Firebase admin SDK の3形式の code を識別する必要がある。
  */
 
 import { expect } from 'chai';
 import { isFirestoreNotFoundError } from '../src/search/errors';
 
 describe('searchIndexer: isFirestoreNotFoundError', () => {
-  it('gRPC code 5 (NOT_FOUND) を true と判定', () => {
+  it('gRPC code 5 (数値) を true と判定', () => {
     const error = Object.assign(new Error('Document not found'), { code: 5 });
     expect(isFirestoreNotFoundError(error)).to.be.true;
   });
 
-  it('文字列 "NOT_FOUND" を含む code を true と判定', () => {
+  it('REST/gcloud形式 "NOT_FOUND" (UPPER) を true と判定', () => {
     const error = Object.assign(new Error('Document not found'), { code: 'NOT_FOUND' });
+    expect(isFirestoreNotFoundError(error)).to.be.true;
+  });
+
+  it('Firebase admin SDK形式 "not-found" (kebab-case) を true と判定', () => {
+    const error = Object.assign(new Error('Document not found'), { code: 'not-found' });
     expect(isFirestoreNotFoundError(error)).to.be.true;
   });
 

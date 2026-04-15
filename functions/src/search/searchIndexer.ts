@@ -195,11 +195,11 @@ async function removeTokensFromIndex(docId: string, tokens: string[]): Promise<v
     await batch.commit();
   } catch (error) {
     if (isFirestoreNotFoundError(error)) {
-      // インデックスエントリが既に削除済み (正常系)
-      console.warn(`Search index entry not found while removing tokens for ${docId} (already deleted)`);
+      // インデックスエントリ不在は冪等な削除として正常扱い (既削除/未作成いずれも該当)
+      console.warn(`Search index entry not found while removing tokens for ${docId} (idempotent skip)`);
       return;
     }
-    // Issue #219: NOT_FOUND以外は握潰さずERROR として残し監視可能にする
+    // Firestore権限/ネットワーク/クォータ等の障害は ERROR として残し監視/アラート対象化する
     console.error(`Failed to remove tokens from search index for ${docId}:`, error);
   }
 }
