@@ -25,7 +25,7 @@
 
 ### 🌅 明朝の残タスク（次セッション最優先）
 
-**24h OOM観察**: kanameone は朝時間帯 (JST 8〜16時) にOOM集中発生 (04-15 00:51〜08:26 UTC に5回)。deploy は 04-15 16:00 UTC 頃で観察が夜時間帯となり **実動作ログが cold**。明朝 JST 10:00 以降に以下を確認:
+**24h OOM観察**: kanameone は日中時間帯 (04-15 JST 09:51〜17:26 = 00:51〜08:26 UTC) に OOM 5回集中発生。deploy は 04-15 JST 25:00 (= 16:00 UTC) で観察が深夜時間帯となり **実動作ログが cold**。次セッション開始時に以下を確認:
 
 ```bash
 gcloud logging read 'resource.labels.function_name="ondocumentwritesearchindex" severity>=ERROR timestamp>="2026-04-16T00:00:00Z"' --project=docsplit-kanameone --limit=20 --format="value(timestamp,textPayload)"
