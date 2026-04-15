@@ -403,6 +403,10 @@ export interface PageOcrResult {
   detectedDate: Date | null;
   matchScore: number; // マッチ精度スコア（0-100）
   matchType: 'exact' | 'partial' | 'none';
+  /** OCR応答長制限により切り詰められた場合の元文字数 (Issue #205) */
+  originalLength?: number;
+  /** 切り詰めが発生したか (Issue #205) */
+  truncated?: boolean;
 }
 
 export interface SplitSuggestion {
