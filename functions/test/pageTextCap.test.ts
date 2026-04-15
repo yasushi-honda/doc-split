@@ -11,6 +11,7 @@ import {
   capPageResultsAggregate,
   MAX_PAGE_TEXT_LENGTH,
   MAX_AGGREGATE_PAGE_CHARS,
+  MAX_SUMMARY_LENGTH,
 } from '../src/utils/pageTextCap';
 
 describe('pageTextCap', () => {
@@ -173,6 +174,46 @@ describe('pageTextCap', () => {
 
     it('空配列は空配列を返す', () => {
       expect(capPageResultsAggregate([])).to.deep.equal([]);
+    });
+  });
+
+  describe('MAX_SUMMARY_LENGTH (Issue #209)', () => {
+    it('サマリー上限定数が想定値である', () => {
+      expect(MAX_SUMMARY_LENGTH).to.equal(30_000);
+    });
+
+    it('境界値: text.length === MAX_SUMMARY_LENGTH は切り詰めない', () => {
+      const input = 'a'.repeat(MAX_SUMMARY_LENGTH);
+      const result = capPageText(input, MAX_SUMMARY_LENGTH);
+
+      expect(result.text.length).to.equal(MAX_SUMMARY_LENGTH);
+      expect(result.truncated).to.be.false;
+    });
+
+    it('境界値: text.length === MAX_SUMMARY_LENGTH + 1 は切り詰める', () => {
+      const input = 'a'.repeat(MAX_SUMMARY_LENGTH + 1);
+      const result = capPageText(input, MAX_SUMMARY_LENGTH);
+
+      expect(result.truncated).to.be.true;
+      expect(result.originalLength).to.equal(MAX_SUMMARY_LENGTH + 1);
+      expect(result.text.length).to.be.at.most(MAX_SUMMARY_LENGTH);
+    });
+
+    it('巨大サマリー (1.1M chars 暴走相当) でも cap 内に収まる', () => {
+      const input = 'x'.repeat(1_100_000);
+      const result = capPageText(input, MAX_SUMMARY_LENGTH);
+
+      expect(result.truncated).to.be.true;
+      expect(result.originalLength).to.equal(1_100_000);
+      expect(result.text.length).to.be.at.most(MAX_SUMMARY_LENGTH);
+    });
+
+    it('cap適用後のsummary は Firestore 1 MiB 制限内に余裕で収まる', () => {
+      const input = 'あ'.repeat(MAX_SUMMARY_LENGTH * 2);
+      const result = capPageText(input, MAX_SUMMARY_LENGTH);
+      const bytesSize = Buffer.byteLength(result.text, 'utf8');
+
+      expect(bytesSize).to.be.at.most(1_048_576);
     });
   });
 

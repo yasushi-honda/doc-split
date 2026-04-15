@@ -10,10 +10,12 @@ import { VertexAI } from '@google-cloud/vertexai';
 import { getRateLimiter, trackGeminiUsage } from '../utils/rateLimiter';
 import { withRetry, RETRY_CONFIGS } from '../utils/retry';
 import { GCP_CONFIG, GEMINI_CONFIG } from '../utils/config';
+import { capPageText, MAX_SUMMARY_LENGTH, type CappedText } from '../utils/pageTextCap';
 
 const PROJECT_ID = GCP_CONFIG.projectId;
 const LOCATION = GCP_CONFIG.location;
 const MODEL_ID = GEMINI_CONFIG.modelId;
+const GEMINI_MAX_OUTPUT_TOKENS = GEMINI_CONFIG.maxOutputTokens;
 
 const db = admin.firestore();
 
@@ -69,16 +71,20 @@ export const regenerateSummary = functions.https.onCall(
     // 要約生成
     const summary = await generateSummaryInternal(ocrResult, documentType);
 
-    if (!summary) {
+    if (!summary.text) {
       throw new functions.https.HttpsError('internal', '要約の生成に失敗しました');
     }
 
-    // ドキュメント更新
-    await docRef.update({ summary });
+    // ドキュメント更新（Issue #209: 切り詰めメタデータも保存し後追い検出を可能にする）
+    await docRef.update({
+      summary: summary.text,
+      summaryTruncated: summary.truncated,
+      summaryOriginalLength: summary.originalLength,
+    });
 
-    console.log(`Summary regenerated for ${docId}: ${summary.length} chars`);
+    console.log(`Summary regenerated for ${docId}: ${summary.text.length} chars`);
 
-    return { success: true, summary };
+    return { success: true, summary: summary.text };
   }
 );
 
@@ -88,7 +94,7 @@ export const regenerateSummary = functions.https.onCall(
 async function generateSummaryInternal(
   ocrResult: string,
   documentType: string
-): Promise<string> {
+): Promise<CappedText> {
   const rateLimiter = getRateLimiter();
   await rateLimiter.acquire();
 
@@ -127,13 +133,17 @@ ${truncatedText}
               parts: [{ text: prompt }],
             },
           ],
+          // Issue #209: Vertex AI 暴走対策。summary 経路でも maxOutputTokens を必ず設定。
+          generationConfig: {
+            maxOutputTokens: GEMINI_MAX_OUTPUT_TOKENS,
+          },
         });
       },
       RETRY_CONFIGS.gemini
     );
 
     const result = response.response;
-    const summary = result.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    const rawSummary = (result.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
 
     // トークン使用量を記録
     const usageMetadata = result.usageMetadata;
@@ -142,8 +152,16 @@ ${truncatedText}
       usageMetadata?.candidatesTokenCount || 0
     );
 
-    console.log(`Summary generated: ${summary.length} chars`);
-    return summary.trim();
+    // Issue #209: 二重防御。maxOutputTokens を抜けた異常応答も Firestore 1 MiB 超過前に切り詰め。
+    const capped = capPageText(rawSummary, MAX_SUMMARY_LENGTH);
+    if (capped.truncated) {
+      console.warn(
+        `[Summary] truncated: ${capped.originalLength} → ${capped.text.length} chars (cap=${MAX_SUMMARY_LENGTH})`
+      );
+    } else {
+      console.log(`Summary generated: ${capped.text.length} chars`);
+    }
+    return capped;
   } catch (error) {
     console.error('Failed to generate summary:', error);
     throw error;

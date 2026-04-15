@@ -24,6 +24,8 @@ export interface Document {
   ocrResult: string;
   ocrResultUrl?: string; // 長い場合はCloud Storage参照
   summary?: string; // AI生成の要約
+  summaryTruncated?: boolean; // Vertex AI暴走時に切り詰めが発生したか (Issue #209)
+  summaryOriginalLength?: number; // 切り詰め前の元文字数 (Issue #209)
   documentType: string;
   customerName: string;
   officeName: string;
