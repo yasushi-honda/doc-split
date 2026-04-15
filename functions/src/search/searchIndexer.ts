@@ -15,6 +15,7 @@ import {
   type TokenField,
   type TokenInfo,
 } from '../utils/tokenizer';
+import { isFirestoreNotFoundError } from './errors';
 
 const db = getFirestore();
 
@@ -193,8 +194,13 @@ async function removeTokensFromIndex(docId: string, tokens: string[]): Promise<v
   try {
     await batch.commit();
   } catch (error) {
-    // ドキュメントが存在しない場合は無視
-    console.warn(`Failed to remove tokens from index for ${docId}:`, error);
+    if (isFirestoreNotFoundError(error)) {
+      // インデックスエントリ不在は冪等な削除として正常扱い (既削除/未作成いずれも該当)
+      console.warn(`Search index entry not found while removing tokens for ${docId} (idempotent skip)`);
+      return;
+    }
+    // Firestore権限/ネットワーク/クォータ等の障害は ERROR として残し監視/アラート対象化する
+    console.error(`Failed to remove tokens from search index for ${docId}:`, error);
   }
 }
 
