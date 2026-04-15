@@ -11,12 +11,11 @@ import { getRateLimiter, trackGeminiUsage } from '../utils/rateLimiter';
 import { withRetry, RETRY_CONFIGS } from '../utils/retry';
 import { GCP_CONFIG, GEMINI_CONFIG } from '../utils/config';
 import { capPageText, MAX_SUMMARY_LENGTH, type CappedText } from '../utils/pageTextCap';
+import { buildSummaryGenerationRequest, buildSummaryFields } from './summaryRequestBuilder';
 
 const PROJECT_ID = GCP_CONFIG.projectId;
 const LOCATION = GCP_CONFIG.location;
 const MODEL_ID = GEMINI_CONFIG.modelId;
-// Vertex AI暴走時の出力トークン上限（Issue #205, #209）。8192tokens ≈ 25K chars Japanese
-const GEMINI_MAX_OUTPUT_TOKENS = GEMINI_CONFIG.maxOutputTokens;
 
 const db = admin.firestore();
 
@@ -77,11 +76,7 @@ export const regenerateSummary = functions.https.onCall(
     }
 
     // ドキュメント更新（Issue #209: 切り詰めメタデータも保存し後追い検出を可能にする）
-    await docRef.update({
-      summary: summary.text,
-      summaryTruncated: summary.truncated,
-      summaryOriginalLength: summary.originalLength,
-    });
+    await docRef.update(buildSummaryFields(summary));
 
     console.log(`Summary regenerated for ${docId}: ${summary.text.length} chars`);
 
@@ -128,18 +123,7 @@ ${truncatedText}
   try {
     const response = await withRetry(
       async () => {
-        return await model.generateContent({
-          contents: [
-            {
-              role: 'user',
-              parts: [{ text: prompt }],
-            },
-          ],
-          // Issue #209: Vertex AI 暴走対策。summary 経路でも maxOutputTokens を必ず設定。
-          generationConfig: {
-            maxOutputTokens: GEMINI_MAX_OUTPUT_TOKENS,
-          },
-        });
+        return await model.generateContent(buildSummaryGenerationRequest(prompt));
       },
       RETRY_CONFIGS.gemini
     );
