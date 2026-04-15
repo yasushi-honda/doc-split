@@ -20,7 +20,9 @@ describe('summaryRequestBuilder: buildSummaryGenerationRequest', () => {
     expect(req.generationConfig.maxOutputTokens).to.equal(GEMINI_CONFIG.maxOutputTokens);
   });
 
-  it('Issue #209 再発防止: maxOutputTokens は 8192 で固定 (config整合性)', () => {
+  // canary: GEMINI_CONFIG.maxOutputTokens を意図せず緩和した場合の安全網。
+  // 値変更が必要なら #205/#209 の防御目的を再評価し、本テストも明示的に更新すること。
+  it('canary: maxOutputTokens は 8192 で固定 (#205で導入、#209でsummary適用)', () => {
     const req = buildSummaryGenerationRequest('test prompt');
     expect(req.generationConfig.maxOutputTokens).to.equal(8192);
   });
@@ -85,8 +87,10 @@ describe('summaryRequestBuilder: buildSummaryFields', () => {
   });
 });
 
-describe('GEMINI_CONFIG: maxOutputTokens 不変条件', () => {
-  it('Issue #205, #209 防御: maxOutputTokens は 8192 で固定', () => {
+describe('GEMINI_CONFIG: maxOutputTokens 不変条件 (canary)', () => {
+  // builder 側 canary と二重で固定。値変更時は #205 (定数導入) と #209 (summary適用) の
+  // 防御目的を再評価し、両テストを明示的に更新すること。
+  it('GEMINI_CONFIG.maxOutputTokens は 8192 で固定', () => {
     expect(GEMINI_CONFIG.maxOutputTokens).to.equal(8192);
   });
 });

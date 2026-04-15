@@ -76,7 +76,7 @@ export const regenerateSummary = functions.https.onCall(
     }
 
     // ドキュメント更新（Issue #209: 切り詰めメタデータも保存し後追い検出を可能にする）
-    await docRef.update(buildSummaryFields(summary));
+    await docRef.update({ ...buildSummaryFields(summary) });
 
     console.log(`Summary regenerated for ${docId}: ${summary.text.length} chars`);
 
