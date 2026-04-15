@@ -14,6 +14,10 @@ export const MAX_PAGE_TEXT_LENGTH = 50_000;
 // 200K chars × 3 bytes/char (UTF-8 Japanese) ≈ 600KB。Firestore 1 MiB制限内に余裕を残す。
 export const MAX_AGGREGATE_PAGE_CHARS = 200_000;
 
+// summary は1書類あたり1フィールドのみ。30K chars × 3 bytes/char ≈ 90KB で1 MiB制限に十分余裕。
+// (Issue #209) Vertex AI 暴走で summary が1.1M chars 等を返した場合の Firestore INVALID_ARGUMENT 防御。
+export const MAX_SUMMARY_LENGTH = 30_000;
+
 const TRUNCATION_MARKER = '\n[TRUNCATED]';
 
 export interface CappedText {

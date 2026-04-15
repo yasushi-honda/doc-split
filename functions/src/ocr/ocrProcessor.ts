@@ -21,7 +21,13 @@ import {
 } from '../utils/extractors';
 import { generateDisplayFileName } from '../utils/displayFileNameGenerator';
 import { sanitizeCustomerMasters, sanitizeOfficeMasters, sanitizeDocumentMasters } from '../utils/sanitizeMasterData';
-import { capPageText, capPageResultsAggregate, MAX_PAGE_TEXT_LENGTH } from '../utils/pageTextCap';
+import {
+  capPageText,
+  capPageResultsAggregate,
+  MAX_PAGE_TEXT_LENGTH,
+  MAX_SUMMARY_LENGTH,
+  type CappedText,
+} from '../utils/pageTextCap';
 
 const db = admin.firestore();
 const storage = admin.storage();
@@ -34,7 +40,7 @@ const MODEL_ID = GEMINI_CONFIG.modelId;
 // 定数
 const OCR_RESULT_MAX_LENGTH = 100000;
 // Vertex AI暴走時の出力トークン上限（Issue #205）。8192tokens ≈ 25K chars Japanese、通常OCRには十分
-const GEMINI_MAX_OUTPUT_TOKENS = 8192;
+const GEMINI_MAX_OUTPUT_TOKENS = GEMINI_CONFIG.maxOutputTokens;
 
 /** ページ単位OCR結果 */
 export interface PageOcrResult {
@@ -182,7 +188,7 @@ export async function processDocument(
   // マスターデータ取得（要約生成と並列実行）
   const summaryPromise = generateSummary(ocrResult, '').catch((err) => {
     console.error('Summary generation failed:', err);
-    return '';
+    return { text: '', originalLength: 0, truncated: false };
   });
 
   // マスターデータ取得
@@ -281,7 +287,9 @@ export async function processDocument(
     ...(displayFileName ? { displayFileName } : {}),
     ocrResult: savedOcrResult,
     ocrResultUrl: ocrResultUrl ?? null,
-    summary: summary || '',
+    summary: summary.text,
+    summaryTruncated: summary.truncated,
+    summaryOriginalLength: summary.originalLength,
     pageResults,
     documentType: documentTypeResult.documentType || '未判定',
     customerName: customerResult.bestMatch?.name || '不明顧客',
@@ -525,12 +533,16 @@ ${pageNumber ? `\nこれは${pageNumber}ページ目です。` : ''}
 /**
  * OCR結果からAI要約を生成
  */
+/**
+ * OCR結果からAI要約を生成 (Issue #209)
+ * @returns CappedText - text(切り詰め後summary), originalLength(元文字数), truncated(切り詰めフラグ)
+ */
 async function generateSummary(
   ocrResult: string,
   documentType: string
-): Promise<string> {
+): Promise<CappedText> {
   if (!ocrResult || ocrResult.length < 100) {
-    return '';
+    return { text: '', originalLength: 0, truncated: false };
   }
 
   const rateLimiter = getRateLimiter();
@@ -569,13 +581,17 @@ ${truncatedText}
               parts: [{ text: prompt }],
             },
           ],
+          // Issue #209: Vertex AI 暴走対策。summary 経路でも maxOutputTokens を必ず設定。
+          generationConfig: {
+            maxOutputTokens: GEMINI_MAX_OUTPUT_TOKENS,
+          },
         });
       },
       RETRY_CONFIGS.gemini
     );
 
     const result = response.response;
-    const summary = result.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    const rawSummary = (result.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
 
     const usageMetadata = result.usageMetadata;
     trackGeminiUsage(
@@ -583,11 +599,19 @@ ${truncatedText}
       usageMetadata?.candidatesTokenCount || 0
     );
 
-    console.log(`Summary generated: ${summary.length} chars`);
-    return summary.trim();
+    // Issue #209: 二重防御。maxOutputTokens を抜けた異常応答も Firestore 1 MiB 超過前に切り詰め。
+    const capped = capPageText(rawSummary, MAX_SUMMARY_LENGTH);
+    if (capped.truncated) {
+      console.warn(
+        `[Summary] truncated: ${capped.originalLength} → ${capped.text.length} chars (cap=${MAX_SUMMARY_LENGTH})`
+      );
+    } else {
+      console.log(`Summary generated: ${capped.text.length} chars`);
+    }
+    return capped;
   } catch (error) {
     console.error('Failed to generate summary:', error);
-    return '';
+    return { text: '', originalLength: 0, truncated: false };
   }
 }
 

@@ -18,4 +18,10 @@ export const GEMINI_CONFIG = {
   modelId: 'gemini-2.5-flash',
   /** モデルのリージョン */
   location: GCP_CONFIG.location,
+  /**
+   * generateContent の maxOutputTokens 上限 (Issue #205, #209)
+   * Vertex AI のハルシネーション/暴走で1.1M chars を返す事故への根本対策。
+   * OCR 経路・summary 経路の両方で必須設定。
+   */
+  maxOutputTokens: 8192,
 } as const;

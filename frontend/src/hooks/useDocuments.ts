@@ -72,6 +72,9 @@ export function firestoreToDocument(id: string, data: Record<string, unknown>): 
     ocrResult: data.ocrResult as string,
     ocrResultUrl: data.ocrResultUrl as string | undefined,
     summary: data.summary as string | undefined,
+    // Issue #209: Vertex AI暴走時の切り詰め検出メタ
+    summaryTruncated: data.summaryTruncated as boolean | undefined,
+    summaryOriginalLength: data.summaryOriginalLength as number | undefined,
     documentType: data.documentType as string,
     customerName: data.customerName as string,
     officeName: data.officeName as string,
@@ -177,6 +180,8 @@ export function getReprocessClearFields() {
     ocrResult: df,
     ocrResultUrl: df,
     summary: df,
+    summaryTruncated: df,
+    summaryOriginalLength: df,
     ocrExtraction: df,
     pageResults: df,
     // 表示用ファイル名（#178 displayFileName自動生成）
