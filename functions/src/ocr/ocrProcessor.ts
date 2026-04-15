@@ -21,6 +21,7 @@ import {
 } from '../utils/extractors';
 import { generateDisplayFileName } from '../utils/displayFileNameGenerator';
 import { sanitizeCustomerMasters, sanitizeOfficeMasters, sanitizeDocumentMasters } from '../utils/sanitizeMasterData';
+import { buildSummaryGenerationRequest, buildSummaryFields } from './summaryRequestBuilder';
 import {
   capPageText,
   capPageResultsAggregate,
@@ -287,9 +288,7 @@ export async function processDocument(
     ...(displayFileName ? { displayFileName } : {}),
     ocrResult: savedOcrResult,
     ocrResultUrl: ocrResultUrl ?? null,
-    summary: summary.text,
-    summaryTruncated: summary.truncated,
-    summaryOriginalLength: summary.originalLength,
+    ...buildSummaryFields(summary),
     pageResults,
     documentType: documentTypeResult.documentType || '未判定',
     customerName: customerResult.bestMatch?.name || '不明顧客',
@@ -574,18 +573,7 @@ ${truncatedText}
   try {
     const response = await withRetry(
       async () => {
-        return await model.generateContent({
-          contents: [
-            {
-              role: 'user',
-              parts: [{ text: prompt }],
-            },
-          ],
-          // Issue #209: Vertex AI 暴走対策。summary 経路でも maxOutputTokens を必ず設定。
-          generationConfig: {
-            maxOutputTokens: GEMINI_MAX_OUTPUT_TOKENS,
-          },
-        });
+        return await model.generateContent(buildSummaryGenerationRequest(prompt));
       },
       RETRY_CONFIGS.gemini
     );
