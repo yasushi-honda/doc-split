@@ -1,10 +1,27 @@
 # ハンドオフメモ
 
-**更新日**: 2026-04-15（kanameone本番障害復旧完了・OCR防御層全環境展開）
+**更新日**: 2026-04-15（PR #212 マージ - generateSummary 防御層追加完了）
 **ブランチ**: main
-**フェーズ**: Phase 8完了 + マルチクライアント安全運用機構 + displayFileName自動生成 + 重複対策・バックアップ完成 + OCR防御層（全環境稼働）
+**フェーズ**: Phase 8完了 + マルチクライアント安全運用機構 + displayFileName自動生成 + 重複対策・バックアップ完成 + OCR/summary 二重防御層
 
-## ✅ 今セッション完了サマリー（kanameone本番障害復旧）
+## ✅ 今セッション完了サマリー（Issue #209 generateSummary 防御層）
+
+| 順 | タスク | 結果 |
+|---|---|---|
+| 1 | Issue #209 着手（branch `fix/generate-summary-cap-209`） | ✅ |
+| 2 | TDD: pageTextCap.ts に MAX_SUMMARY_LENGTH=30_000 追加 + 境界値テスト5件 | ✅ 21 passing |
+| 3 | generateSummary() / generateSummaryInternal() に maxOutputTokens=8192 + capPageText 適用 | ✅ |
+| 4 | summaryTruncated/summaryOriginalLength を Firestore 保存・FE側マッピング (#178教訓) | ✅ |
+| 5 | /simplify 3並列レビュー → High指摘対応（GEMINI_CONFIG.maxOutputTokens 統一、CappedText interface 統合） | ✅ |
+| 6 | PR #212 作成 | ✅ |
+| 7 | /review-pr 6エージェント並列レビュー → Medium指摘対応（JSDoc・コメント追加） | ✅ commit 77635b9 |
+| 8 | フォローアップ Issue 起票 | ✅ #213 (regression test), #214 (関数共通化), #215 (型不変条件強化) |
+| 9 | CI green → Squash merge → branch削除 | ✅ commit `8e218a1` |
+| 10 | Issue #209 自動クローズ | ✅ |
+
+**変更規模**: 7 files, +122/-20 lines (test 21件 / functions 345件 / frontend 94件 すべて pass)
+
+## 前セッション完了（kanameone本番障害復旧）
 
 | 順 | タスク | 結果 |
 |---|---|---|
@@ -28,10 +45,15 @@
 | **PR #204** ✅マージ済み | **chore: .envrcでGH_TOKENを自動exportしClaude Code Bashから利用可能に** Claude Code Bash sessionで gh CLI/git 操作を確実に動作させる |
 | **PR #207** ✅マージ済み | **feat: fix-stuck-documents.jsに--doc-id単一指定オプション追加 (#206)** 単一書類リセット用、本番運用安全性向上。GitHub Actions UI に doc_id 入力欄追加、command injection 対策（env var化、英数字+_-のみ許可） |
 | **PR #208** ✅マージ済み | **fix: Vertex AI暴走時のOCRページ巨大応答に対するFirestore書き込み防御 (#205)** kanameone 本番障害（INVALID_ARGUMENT）に対する三段防御。kanameone/cocoro 両環境にデプロイ済み |
+| **PR #211** ✅マージ済み | **docs: kanameone本番復旧完了をハンドオフメモに記録** |
+| **PR #212** ✅マージ済み | **fix: generateSummaryにmaxOutputTokens追加とsummary cap適用 (#209)** Codex M1 後追い対応。summary 経路の同等防御層追加。`/review-pr` 6エージェント並列レビューpass |
 | #205 ✅クローズ | OCR防御層 (PR #208 で完了、kanameone 本番復旧確認) |
 | #206 ✅クローズ | ops script `--doc-id` (PR #207 でクローズ) |
-| **#209** 🆕 P1 | generateSummary に maxOutputTokens 追加（Codex M1 後追い、summary 経路の同種防御） |
-| **#210** 🆕 P2 | OCR 切り詰め (truncated=true) メトリクス監視（log-based metric + アラート） |
+| #209 ✅クローズ | generateSummary 防御層 (PR #212 で完了) |
+| #210 P2 | OCR 切り詰め (truncated=true) メトリクス監視（log-based metric + アラート） |
+| **#213** 🆕 P1 | generateSummary maxOutputTokens regression テスト追加（PR #212 review pr-test-analyzer 指摘） |
+| **#214** 🆕 P2 | generateSummary 共通化 (ocrProcessor / regenerateSummary 重複解消、code-simplifier 指摘) |
+| **#215** 🆕 P2 | summary 切り詰めメタの型不変条件強化 (discriminated union化、type-design-analyzer 指摘) |
 
 ### kanameone本番障害（2026-04-14 07:03 UTC）
 
