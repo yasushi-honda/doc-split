@@ -1,23 +1,25 @@
 # ハンドオフメモ
 
-**更新日**: 2026-04-15（Vertex AI暴走時のOCRページ巨大応答防御・運用スクリプト単一doc-id化）
-**ブランチ**: main + open PR #208
-**フェーズ**: Phase 8完了 + マルチクライアント安全運用機構 + displayFileName自動生成 + 重複対策・バックアップ完成 + OCR防御層
+**更新日**: 2026-04-15（kanameone本番障害復旧完了・OCR防御層全環境展開）
+**ブランチ**: main
+**フェーズ**: Phase 8完了 + マルチクライアント安全運用機構 + displayFileName自動生成 + 重複対策・バックアップ完成 + OCR防御層（全環境稼働）
 
-## 🚨 次セッション最優先タスク（kanameone本番障害復旧）
+## ✅ 今セッション完了サマリー（kanameone本番障害復旧）
 
-| 順 | タスク | コマンド | 確認 |
-|---|---|---|---|
-| 1 | **PR #208 状況確認** | `gh pr view 208` / `gh pr checks 208` | CI all PASS |
-| 2 | **PR #208 マージ** | `gh pr merge 208 --squash --delete-branch` | mainに反映 |
-| 3 | dev 自動デプロイ確認 | `gh run list --workflow=deploy-functions.yml -L 3` | `processocr` revision UP |
-| 4 | kanameone デプロイ | `/deploy kanameone --functions` | `processocr` revision UP |
-| 5 | **本番障害書類の復旧** | GitHub Actions: `Run Operations Script` → `fix-stuck-documents --doc-id` → `doc_id: uUm2JJi5o9CgyQ9r4bIJ` | 1件pendingリセット |
-| 6 | OCR再処理確認 | `gcloud logging read` で `uUm2JJi5o9CgyQ9r4bIJ` を追跡 | `status: processed` |
-| 7 | cocoro 予防デプロイ | `/deploy cocoro --functions` | `processocr` revision UP |
-| 8 | LATEST.md 復旧記録 + Issue #205 close | `gh issue close 205 --comment "..."` | Issue closed |
+| 順 | タスク | 結果 |
+|---|---|---|
+| 1 | PR #208 マージ | ✅ commit `08031c9` for #205 |
+| 2 | dev 自動デプロイ | ✅ CI success |
+| 3 | kanameone Go確認（dry-run） | ✅ 対象 doc 存在・status=error 確認 |
+| 4 | kanameone functions デプロイ | ✅ 04:04 UTC、新 revision 起動 |
+| 5 | kanameone 短時間観察 | ✅ 04:05 scheduler 正常、WARNING+ なし |
+| 6 | スタック書類 pending リセット | ✅ 04:07 UTC |
+| 7 | OCR 再処理確認 | ✅ 04:08:40 完了、`リハビリテーション計画書`、INVALID_ARGUMENT 再発なし、TRUNCATED warning なし（今回は Vertex AI 正常応答） |
+| 8 | cocoro 予防デプロイ + 観察 | ✅ 04:18 UTC、04:19 scheduler 正常 |
+| 9 | Issue #205 クローズ | ✅ 自動クローズ（PR #208 Closes #205） |
+| 10 | 後追い Issue 作成 | ✅ #209 (generateSummary maxOutputTokens), #210 (truncated メトリクス監視) |
 
-**復旧対象書類**: kanameone `uUm2JJi5o9CgyQ9r4bIJ` (`岩倉病院通所ﾘﾊﾋﾞﾘﾃｰｼｮﾝ-L1-20260414155319.pdf`、3ページPDF)
+**復旧対象書類**: kanameone `uUm2JJi5o9CgyQ9r4bIJ` (`岩倉病院通所ﾘﾊﾋﾞﾘﾃｰｼｮﾝ-L1-20260414155319.pdf`、3ページPDF) → status=processed
 
 ## 直近の変更（04-15 最新セッション）
 
@@ -25,9 +27,11 @@
 |----|------|
 | **PR #204** ✅マージ済み | **chore: .envrcでGH_TOKENを自動exportしClaude Code Bashから利用可能に** Claude Code Bash sessionで gh CLI/git 操作を確実に動作させる |
 | **PR #207** ✅マージ済み | **feat: fix-stuck-documents.jsに--doc-id単一指定オプション追加 (#206)** 単一書類リセット用、本番運用安全性向上。GitHub Actions UI に doc_id 入力欄追加、command injection 対策（env var化、英数字+_-のみ許可） |
-| **PR #208** 🔄 提出済み・マージ待ち | **fix: Vertex AI暴走時のOCRページ巨大応答に対するFirestore書き込み防御 (#205)** kanameone 本番障害（INVALID_ARGUMENT）に対する三段防御 |
-| #205 | OCR防御層 (PR #208 で対応中) |
+| **PR #208** ✅マージ済み | **fix: Vertex AI暴走時のOCRページ巨大応答に対するFirestore書き込み防御 (#205)** kanameone 本番障害（INVALID_ARGUMENT）に対する三段防御。kanameone/cocoro 両環境にデプロイ済み |
+| #205 ✅クローズ | OCR防御層 (PR #208 で完了、kanameone 本番復旧確認) |
 | #206 ✅クローズ | ops script `--doc-id` (PR #207 でクローズ) |
+| **#209** 🆕 P1 | generateSummary に maxOutputTokens 追加（Codex M1 後追い、summary 経路の同種防御） |
+| **#210** 🆕 P2 | OCR 切り詰め (truncated=true) メトリクス監視（log-based metric + アラート） |
 
 ### kanameone本番障害（2026-04-14 07:03 UTC）
 
@@ -75,7 +79,8 @@
 
 | # | タイトル | ラベル | 優先 |
 |---|---|---|---|
-| #205 | Vertex AI 暴走時のOCR防御 | bug, P1 | ⏳ PR #208 でデプロイ・復旧待ち |
+| #209 | generateSummary に maxOutputTokens 追加 | bug, P1 | 🆕 Codex M1 後追い、要対応 |
+| #210 | OCR 切り詰めメトリクス監視 | enhancement, P2 | 🆕 Codex 推奨観点 |
 | #196 | rescueStuckProcessingDocsにMAX_RETRY_COUNTチェックとretryAfter追加 | bug, P2 | 高 |
 | #190 | check-master-data.js --fix バッチ500件上限考慮 | bug, P2 | 中 |
 | #189 | ocrProcessorのdateMarkerサニタイズ境界外 | bug, P2 | 中 |
