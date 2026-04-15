@@ -1,10 +1,92 @@
 # ハンドオフメモ
 
-**更新日**: 2026-04-11（Gmail重複取得根本対策・Firestoreネイティブバックアップ・運用スクリプト統合）
-**ブランチ**: main
-**フェーズ**: Phase 8完了 + マルチクライアント安全運用機構 + displayFileName自動生成 + 重複対策・バックアップ完成
+**更新日**: 2026-04-15（Vertex AI暴走時のOCRページ巨大応答防御・運用スクリプト単一doc-id化）
+**ブランチ**: main + open PR #208
+**フェーズ**: Phase 8完了 + マルチクライアント安全運用機構 + displayFileName自動生成 + 重複対策・バックアップ完成 + OCR防御層
 
-## 直近の変更（04-11 最新）
+## 🚨 次セッション最優先タスク（kanameone本番障害復旧）
+
+| 順 | タスク | コマンド | 確認 |
+|---|---|---|---|
+| 1 | **PR #208 状況確認** | `gh pr view 208` / `gh pr checks 208` | CI all PASS |
+| 2 | **PR #208 マージ** | `gh pr merge 208 --squash --delete-branch` | mainに反映 |
+| 3 | dev 自動デプロイ確認 | `gh run list --workflow=deploy-functions.yml -L 3` | `processocr` revision UP |
+| 4 | kanameone デプロイ | `/deploy kanameone --functions` | `processocr` revision UP |
+| 5 | **本番障害書類の復旧** | GitHub Actions: `Run Operations Script` → `fix-stuck-documents --doc-id` → `doc_id: uUm2JJi5o9CgyQ9r4bIJ` | 1件pendingリセット |
+| 6 | OCR再処理確認 | `gcloud logging read` で `uUm2JJi5o9CgyQ9r4bIJ` を追跡 | `status: processed` |
+| 7 | cocoro 予防デプロイ | `/deploy cocoro --functions` | `processocr` revision UP |
+| 8 | LATEST.md 復旧記録 + Issue #205 close | `gh issue close 205 --comment "..."` | Issue closed |
+
+**復旧対象書類**: kanameone `uUm2JJi5o9CgyQ9r4bIJ` (`岩倉病院通所ﾘﾊﾋﾞﾘﾃｰｼｮﾝ-L1-20260414155319.pdf`、3ページPDF)
+
+## 直近の変更（04-15 最新セッション）
+
+| PR/Issue | 内容 |
+|----|------|
+| **PR #204** ✅マージ済み | **chore: .envrcでGH_TOKENを自動exportしClaude Code Bashから利用可能に** Claude Code Bash sessionで gh CLI/git 操作を確実に動作させる |
+| **PR #207** ✅マージ済み | **feat: fix-stuck-documents.jsに--doc-id単一指定オプション追加 (#206)** 単一書類リセット用、本番運用安全性向上。GitHub Actions UI に doc_id 入力欄追加、command injection 対策（env var化、英数字+_-のみ許可） |
+| **PR #208** 🔄 提出済み・マージ待ち | **fix: Vertex AI暴走時のOCRページ巨大応答に対するFirestore書き込み防御 (#205)** kanameone 本番障害（INVALID_ARGUMENT）に対する三段防御 |
+| #205 | OCR防御層 (PR #208 で対応中) |
+| #206 ✅クローズ | ops script `--doc-id` (PR #207 でクローズ) |
+
+### kanameone本番障害（2026-04-14 07:03 UTC）
+
+| 項目 | 値 |
+|---|---|
+| Document ID | `uUm2JJi5o9CgyQ9r4bIJ` |
+| ファイル | `岩倉病院通所ﾘﾊﾋﾞﾘﾃｰｼｮﾝ-L1-20260414155319.pdf` (3ページPDF) |
+| エラー | `3 INVALID_ARGUMENT: Property array contains an invalid nested entity` |
+| 真因 | Vertex AI Gemini が **Page 3 で 1,102,788文字** のOCR応答を返した（通常 711〜2,855 chars の400倍超）。`pageResults` 配列内の1要素が Firestore per-field 1 MiB 制限に違反 |
+| マスター破損 | **無関係** (kanameone master 1,467件 全クリーン) |
+| 影響範囲 | 1件のみ。サービス健全（4214件処理済み中） |
+
+### 三段防御の設計（PR #208）
+
+| 層 | 実装 | 値 |
+|---|---|---|
+| 1. per-page cap | `capPageText()` in `pageTextCap.ts` | `MAX_PAGE_TEXT_LENGTH = 50_000` chars |
+| 2. aggregate cap | `capPageResultsAggregate()` in `pageTextCap.ts` | `MAX_AGGREGATE_PAGE_CHARS = 200_000` chars (UTF-8 Japanese で約600KB) |
+| 3. Vertex AI出力上限 | `generationConfig.maxOutputTokens` in `ocrProcessor.ts:ocrWithGemini` | `GEMINI_MAX_OUTPUT_TOKENS = 8192` (≈25K chars Japanese) |
+| メタデータ | `PageOcrResult.originalLength`, `PageOcrResult.truncated` 追加 | shared/types.ts と functions側 PageOcrResult 両方 |
+
+### Codex セカンドオピニオン反映（High指摘）
+
+| ID | 指摘 | 対応 |
+|----|---|---|
+| H1 | per-page cap だけでは多ページで合計1MiB超 | aggregate cap 追加 ✅ |
+| H2 | テストが弱い、payload直接検証必要 | Firestore 1MiB制限内 serialized size 検証テスト追加 ✅ |
+| H3 | `--include-errors` は対象が広すぎる | `--doc-id` 単一指定追加 (PR #207) ✅ |
+| M1 | `maxOutputTokens` を別Issueでなく同PRで | 同PR内で対応 ✅ |
+| M2 | 切り詰めメタデータ保存 | `originalLength`, `truncated` 追加 ✅ |
+| M3 | 切り詰めはGemini直後で | 切り詰め位置: ocrProcessor.ts page loop直後 ✅ |
+| L1 | raw全文Storage退避方針 | 別Issue化候補（次セッション以降） |
+
+### 影響範囲とリスク
+
+| 観点 | 内容 |
+|---|---|
+| 既存4214件 | マイグレーションしない限り影響なし |
+| 新規ドキュメント | per-page/aggregate cap適用、`maxOutputTokens` で Gemini 暴走抑止 |
+| 既存split書類の再処理 | parentOcrExtraction経由は影響軽微（ocrExtractionに candidates なし） |
+| FE pageResults表示 | `pageResults[i].text` は cap 後の値、`originalLength`/`truncated` でメタ取得可能 |
+| PdfSplitModal | 切り詰めページのプレビュー不完全（ハルシネーション時のみ）→ 期待動作 |
+
+### 積み残しIssue（次セッション以降の優先順）
+
+| # | タイトル | ラベル | 優先 |
+|---|---|---|---|
+| #205 | Vertex AI 暴走時のOCR防御 | bug, P1 | ⏳ PR #208 でデプロイ・復旧待ち |
+| #196 | rescueStuckProcessingDocsにMAX_RETRY_COUNTチェックとretryAfter追加 | bug, P2 | 高 |
+| #190 | check-master-data.js --fix バッチ500件上限考慮 | bug, P2 | 中 |
+| #189 | ocrProcessorのdateMarkerサニタイズ境界外 | bug, P2 | 中 |
+| #183 | displayFileNameのファイル名サニタイズ | bug, P2 | 中 |
+| #182 | pdfOperationsのfileDateFormattedフォールバック | bug, P2 | 中 |
+| #200 | checkGmailAttachments/splitPdf統合テスト | enhancement, P2 | 低 |
+| #188 | マスターデータ読み込み共通関数化 | enhancement | 低 |
+| #181 | generateDisplayFileName を shared 統合 | enhancement, P2 | 低 |
+| #152 | dev 環境 Firestore 初期設定 | enhancement, P2 | 低 |
+
+## 直近の変更（04-11）
 
 | PR | コミット | 内容 |
 |----|------|------|
