@@ -21,6 +21,7 @@ import {
 } from '../utils/extractors';
 import { generateDisplayFileName } from '../utils/displayFileNameGenerator';
 import { sanitizeCustomerMasters, sanitizeOfficeMasters, sanitizeDocumentMasters } from '../utils/sanitizeMasterData';
+import { capPageText, capPageResultsAggregate, MAX_PAGE_TEXT_LENGTH } from '../utils/pageTextCap';
 
 const db = admin.firestore();
 const storage = admin.storage();
@@ -32,6 +33,8 @@ const MODEL_ID = GEMINI_CONFIG.modelId;
 
 // 定数
 const OCR_RESULT_MAX_LENGTH = 100000;
+// Vertex AI暴走時の出力トークン上限（Issue #205）。8192tokens ≈ 25K chars Japanese、通常OCRには十分
+const GEMINI_MAX_OUTPUT_TOKENS = 8192;
 
 /** ページ単位OCR結果 */
 export interface PageOcrResult {
@@ -39,6 +42,10 @@ export interface PageOcrResult {
   text: string;
   inputTokens: number;
   outputTokens: number;
+  /** OCR応答が MAX_PAGE_TEXT_LENGTH または aggregate cap で切り詰められた場合の元の文字数 (Issue #205) */
+  originalLength?: number;
+  /** 切り詰めが発生したか (Issue #205) */
+  truncated?: boolean;
 }
 
 /** OCR処理結果 */
@@ -115,8 +122,26 @@ export async function processDocument(
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
 
+  const buildPageResult = (
+    result: { text: string; inputTokens: number; outputTokens: number },
+    pageNumber: number,
+    label: string
+  ): PageOcrResult => {
+    const capped = capPageText(result.text);
+    if (capped.truncated) {
+      console.warn(`[OCR] ${label} text truncated: ${capped.originalLength} → ${capped.text.length} chars (cap=${MAX_PAGE_TEXT_LENGTH})`);
+    }
+    return {
+      pageNumber,
+      text: capped.text,
+      inputTokens: result.inputTokens,
+      outputTokens: result.outputTokens,
+      originalLength: capped.originalLength,
+      truncated: capped.truncated,
+    };
+  };
+
   if (mimeType === 'application/pdf') {
-    // PDFの場合は各ページをOCR
     const pdfDoc = await PDFDocument.load(buffer);
     totalPages = pdfDoc.getPageCount();
 
@@ -129,27 +154,24 @@ export async function processDocument(
       const pageBuffer = await extractPdfPage(buffer, i);
       const result = await ocrWithGemini(pageBuffer, 'application/pdf', pageNumber);
 
-      pageResults.push({
-        pageNumber,
-        text: result.text,
-        inputTokens: result.inputTokens,
-        outputTokens: result.outputTokens,
-      });
+      pageResults.push(buildPageResult(result, pageNumber, `Page ${pageNumber}/${totalPages}`));
 
       totalInputTokens += result.inputTokens;
       totalOutputTokens += result.outputTokens;
     }
   } else {
-    // 画像の場合は直接OCR
     const result = await ocrWithGemini(buffer, mimeType);
-    pageResults.push({
-      pageNumber: 1,
-      text: result.text,
-      inputTokens: result.inputTokens,
-      outputTokens: result.outputTokens,
-    });
+    pageResults.push(buildPageResult(result, 1, 'Image'));
     totalInputTokens = result.inputTokens;
     totalOutputTokens = result.outputTokens;
+  }
+
+  // aggregate cap (Issue #205): per-page後にも合計サイズで二段防御
+  const beforeAggregateChars = pageResults.reduce((sum, p) => sum + p.text.length, 0);
+  pageResults = capPageResultsAggregate(pageResults);
+  const afterAggregateChars = pageResults.reduce((sum, p) => sum + p.text.length, 0);
+  if (afterAggregateChars < beforeAggregateChars) {
+    console.warn(`[OCR] Aggregate pageResults truncated: ${beforeAggregateChars} → ${afterAggregateChars} chars`);
   }
 
   // OCR結果を結合
@@ -479,6 +501,10 @@ ${pageNumber ? `\nこれは${pageNumber}ページ目です。` : ''}
             ],
           },
         ],
+        // Issue #205: ハルシネーション/暴走による1.1M chars応答を防止する根本対策
+        generationConfig: {
+          maxOutputTokens: GEMINI_MAX_OUTPUT_TOKENS,
+        },
       });
     },
     RETRY_CONFIGS.gemini
