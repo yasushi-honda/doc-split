@@ -34,7 +34,9 @@ export const onDocumentWriteSearchIndex = onDocumentWritten(
   {
     document: 'documents/{docId}',
     region: 'asia-northeast1',
-    memory: '256MiB',
+    // Issue #217: 256MiB では db.getAll(...indexRefs) 時に境界を越えOOM頻発 (kanameone 04-14 12回+, 04-15 5回)。
+    // 応急で 512MiB に増強。本質対応 (getAll chunk化) は再発時に別Issueで検討。
+    memory: '512MiB',
     timeoutSeconds: 60,
   },
   async (event) => {
