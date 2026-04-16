@@ -155,10 +155,12 @@ PR #224 効果監視:
 
 ### 積み残しIssue（次セッション以降の優先順）
 
+> 注: #219 (PR #222), #213 (PR #224) は本セッションで完了済み。下記は2026-04-16時点の OPEN のみ。
+
 | # | タイトル | ラベル | 優先 |
 |---|---|---|---|
-| **#219** | `removeTokensFromIndex` catch 全エラー握潰し (silent failure) | bug, P1 | 🆕 最優先 |
-| **#213** | generateSummary maxOutputTokens regression テスト | enhancement, P1 | 高 |
+| **#225** 🆕 | generateSummary builder bypass 検出 (PR #224 後追い) | enhancement, P2 | 中 |
+| **#223** 🆕 | removeTokensFromIndex throw vs log 設計 (PR #222 後追い) | bug, P2 | 中 |
 | **#220** | OOM + truncated 用 log-based metric + alert (#210統合) | enhancement, P2 | 中 |
 | #214 | generateSummary 共通化 | enhancement, P2 | 中 |
 | #215 | summary 切り詰めメタ 型不変条件強化 | enhancement, P2 | 中 |
