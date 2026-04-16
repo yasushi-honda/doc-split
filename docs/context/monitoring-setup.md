@@ -28,7 +28,7 @@ Issue #220 + ADR-0015 Follow-up で構築した log-based metric + Cloud Monitor
 
 - `duration`: 0s (閾値超過で即発火)
 - `autoClose`: 24h 無発火で自動クローズ
-- `notificationRateLimit`: 1h (通知暴走抑制)
+- `notificationRateLimit`: **未設定**。Cloud Monitoring API の仕様により metric-based alert policy では指定不可（log-based policy 限定）。metric alert は incident オープン時 1 通のみ送信、`autoClose` (24h) まで再通知されないため通知暴走リスクは元々低い
 - **検出遅延**:
   - `searchindex_oom` (alignment 1h): 約 3-5 分
   - `ocr_*_truncated` / `summary_truncated` (alignment 24h): 数分〜最大数時間 (Cloud Monitoring の rolling 評価依存)
