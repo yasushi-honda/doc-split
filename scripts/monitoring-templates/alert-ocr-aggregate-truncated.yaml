@@ -1,0 +1,24 @@
+displayName: "[__ENV__] ocr_aggregate_truncated: OCR aggregate pageResults truncated 日次 1件以上"
+documentation:
+  content: |
+    OCR 集約後の pageResults が切り詰められました (per-page の二段目防御が発動)。
+    通常発生しないため即異常扱い。
+    Issue #205 (aggregate cap=200,000 chars) / PR #208 / #220 参照。
+  mimeType: "text/markdown"
+combiner: OR
+conditions:
+  - displayName: "ocr_aggregate_truncated > 0 in 24h"
+    conditionThreshold:
+      filter: 'metric.type="logging.googleapis.com/user/ocr_aggregate_truncated" AND resource.type="cloud_function"'
+      aggregations:
+        - alignmentPeriod: 86400s
+          perSeriesAligner: ALIGN_SUM
+      comparison: COMPARISON_GT
+      thresholdValue: 0
+      duration: 0s
+alertStrategy:
+  autoClose: 86400s
+  notificationRateLimit:
+    period: 3600s
+notificationChannels:
+  - __NOTIFICATION_CHANNEL__

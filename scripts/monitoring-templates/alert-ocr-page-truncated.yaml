@@ -1,0 +1,24 @@
+displayName: "[__ENV__] ocr_page_truncated: OCR per-page text truncated 日次 3件以上"
+documentation:
+  content: |
+    OCR ページ単位で "text truncated" が日次 3 件以上発生しました。
+    過去30日実績 0.067件/日 を大幅に超える異常値。
+    Issue #205 (per-page cap=50,000 chars) / PR #208 / #220 参照。
+  mimeType: "text/markdown"
+combiner: OR
+conditions:
+  - displayName: "ocr_page_truncated > 2 in 24h"
+    conditionThreshold:
+      filter: 'metric.type="logging.googleapis.com/user/ocr_page_truncated" AND resource.type="cloud_function"'
+      aggregations:
+        - alignmentPeriod: 86400s
+          perSeriesAligner: ALIGN_SUM
+      comparison: COMPARISON_GT
+      thresholdValue: 2
+      duration: 0s
+alertStrategy:
+  autoClose: 86400s
+  notificationRateLimit:
+    period: 3600s
+notificationChannels:
+  - __NOTIFICATION_CHANNEL__

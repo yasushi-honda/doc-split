@@ -145,6 +145,21 @@ gcloud logging read \
 3. 手動での force reindex が必要になった
 4. 検索機能にユーザー報告 (削除済み書類がヒット) があった
 
+### dead letter pattern 移行時のメトリクス置換条件
+
+将来 dead letter pattern (failed_index_operations collection + 復旧 batch) が実装された場合、本 ADR Follow-up の `search_index_silent_failure` metric は **意味を失う** (失敗が dead letter queue に記録されるため ERROR ログは発生しなくなる)。
+
+dead letter pattern 昇格時の移行手順:
+
+1. `search_index_silent_failure` metric + alert policy を `teardown-log-based-metrics.sh` で削除
+2. 代わりに以下を新設:
+   - `dead_letter_queue_depth`: `failed_index_operations` collection のドキュメント数 (Firestore export or custom metric)
+   - `dead_letter_queue_age`: 最古エントリの経過時間
+3. dead letter pattern 実装 Issue の Follow-up セクションに本置換条件を記載
+4. 本 ADR を **Superseded** ステータスに変更し、新規 ADR で dead letter 方針を記述
+
+この置換条件を明示しないと、二重検知 (ERROR ログ alert + dead letter queue alert 両方から通知) が発生する。
+
 ## References
 
 - Issue #223 (本 ADR)
