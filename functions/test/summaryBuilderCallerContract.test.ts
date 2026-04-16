@@ -1,11 +1,17 @@
 /**
  * generateSummary caller-side 契約テスト (Issue #225)
  *
- * summaryRequestBuilder.test.ts の canary は builder 側の契約を固定するが、
- * caller 側で builder を経由しなくなると canary は PASS のまま Issue #209 が再発する。
+ * builder 側 canary は builder の契約を固定するが、caller 側で builder を経由
+ * しなくなると canary は PASS のまま Issue #209 (Vertex AI summary 暴走) が再発する。
  * 本テストは caller 側の呼び出しパターンを構文検証して bypass を検出する。
  *
- * 方式: grep-based (静的検証)。flaky/擦り抜けが発生したら sinon spy 化を検討。
+ * 方式: grep-based (静的検証)。
+ *
+ * 既知の limitation:
+ * - 型 alias 経由 (const gen = model.generateContent; gen(...)) や分割代入の呼び出しは未検出
+ * - caller 追加時は CALLER_FILES への手動追記が必要 (grep 動的検出は未導入)
+ *
+ * 昇格条件: false negative が 1 件でも実発生した時点で sinon spy (案A) へ切替。
  */
 
 import { expect } from 'chai';
@@ -32,7 +38,7 @@ function countMatches(source: string): number {
   return source.match(BUILDER_CALL_PATTERN)?.length ?? 0;
 }
 
-describe('generateSummary caller contract (Issue #225)', () => {
+describe('generateSummary caller contract', () => {
   for (const relPath of CALLER_FILES) {
     it(`${relPath} は buildSummaryGenerationRequest 経由で model.generateContent を呼ぶ`, () => {
       const absPath = resolve(process.cwd(), relPath);
