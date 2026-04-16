@@ -22,19 +22,22 @@ Issue #220 + ADR-0015 Follow-up で構築した log-based metric + Cloud Monitor
 | `ocr_page_truncated` | `[OCR] ... text truncated` (WARN) | 24h 以内に 3 件以上 | 過去30日実績 0.067件/日の約45倍 |
 | `ocr_aggregate_truncated` | `[OCR] Aggregate pageResults truncated` (WARN) | 24h 以内に 1 件以上 | per-page 二段目発動は異常 |
 | `summary_truncated` | `[Summary] truncated` (WARN) | 24h 以内に 1 件以上 | Issue #209 再発指標 |
-| `search_index_silent_failure` | `Failed to remove tokens` (severity=ERROR) | 7 日以内に 1 件以上 | ADR-0015 再評価トリガー条件1 (`#220 metric で severity=ERROR ログが 7日間に 1件以上発生`) と一致 |
+| `search_index_silent_failure` | `Failed to remove tokens` (severity=ERROR) | 24 時間窓で 1 件以上 (incident は 7 日間可視化) | ADR-0015 再評価トリガー条件1 (`#220 metric で severity=ERROR ログが 7日間に 1件以上発生`) を反映。GCP API 制約 (alignmentPeriod 最大 25h) のため厳密な 7 日 rolling ではなく、`autoClose: 7d` で incident 可視性を 7 日担保 |
 
 ### アラートポリシー共通パラメータ
 
 - `duration`: 0s (閾値超過で即発火)
-- `autoClose`: 24h 無発火で自動クローズ
-- `notificationRateLimit`: **未設定**。Cloud Monitoring API の仕様により metric-based alert policy では指定不可（log-based policy 限定）。metric alert は incident オープン時 1 通のみ送信、`autoClose` (24h) まで再通知されないため通知暴走リスクは元々低い
+- `autoClose`:
+  - 標準 (`searchindex_oom` / `ocr_*_truncated` / `summary_truncated`): 86400s (24h 無発火で自動クローズ)
+  - `search_index_silent_failure` のみ: 604800s (7 日間) — ADR-0015 の 7 日間監視要件を担保
+- `notificationRateLimit`: **未設定**。Cloud Monitoring API の仕様により metric-based alert policy では指定不可（log-based policy 限定）。metric alert は incident オープン時 1 通のみ送信、`autoClose` まで再通知されないため通知暴走リスクは元々低い
 - **検出遅延**:
   - `searchindex_oom` (alignment 1h): 約 3-5 分
   - `ocr_*_truncated` / `summary_truncated` (alignment 24h): 数分〜最大数時間 (Cloud Monitoring の rolling 評価依存)
-  - `search_index_silent_failure` (alignment 7日): 同上、即時検知には向かない
+  - `search_index_silent_failure` (alignment 24h): 同上、即時検知には向かない
 
-ADR-0015 要件「5 分以内」は `searchindex_oom` のみ厳密に満たす。他は「日次〜週次で必ず検出」を目標とする。
+ADR-0015 要件「5 分以内」は `searchindex_oom` のみ厳密に満たす。他は「日次で必ず検出」を目標とする。
+ADR-0015 要件「7 日間に 1 件以上」は metric alignment では厳密には表現できないため、`autoClose: 7d` による incident 継続可視化で実運用上の監査表現を代替する。より厳密な weekly 集計が必要な場合は scheduled query / health-report 等で別途担保する。
 
 ## 運用手順
 
