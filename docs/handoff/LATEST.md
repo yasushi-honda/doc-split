@@ -1,38 +1,43 @@
 # ハンドオフメモ
 
-**更新日**: 2026-04-16（PR #218 マージ - searchIndexer OOM 応急対処、3環境デプロイ完了）
+**更新日**: 2026-04-16（#217 真クローズ + PR #222 (#219) + PR #224 (#213) 3環境反映完了）
 **ブランチ**: main
-**フェーズ**: Phase 8完了 + マルチクライアント安全運用機構 + OCR/summary 二重防御層 + searchIndexer メモリ増強
+**フェーズ**: Phase 8完了 + マルチクライアント安全運用機構 + 検索インデックス信頼性向上 + summary regression test 整備
 
-## ✅ 今セッション完了サマリー（Issue #217 searchIndexer OOM 応急対処）
+## ✅ 今セッション完了サマリー（3 PR 連続マージ・全3環境反映）
 
-| 順 | タスク | 結果 |
+| 順 | Issue/PR | 結果 |
 |---|---|---|
-| 1 | kanameone ダッシュボード error=1 の原因特定（岩倉病院書類） | ✅ 04-15 04:08 に復旧済の残像と判明。health-report が 01:16 UTC の snapshot を保持していただけ |
-| 2 | **新規発見**: `ondocumentwritesearchindex` OOM（kanameone 04-14 12件+, 04-15 5件） | ✅ Memory 256MiB 境界越え、silent failure で検索インデックス欠落 |
-| 3 | Issue #217 起票 (bug, P1) | ✅ |
-| 4 | feature branch + memory 256→512MiB 修正 | ✅ `fix/search-index-memory-217` |
-| 5 | functions ビルド・テスト (345 passing) | ✅ |
-| 6 | PR #218 作成 | ✅ |
-| 7 | /review-pr 6エージェント並列レビュー | ✅ ブロッカーなし (副次発見: `removeTokensFromIndex` 握潰し→#219) |
-| 8 | PR #218 Squash merge → branch削除 | ✅ commit `27a2626` |
-| 9 | dev 自動デプロイ | ✅ CI + Deploy success |
-| 10 | kanameone 手動デプロイ (GitHub Actions) | ✅ revision `00029-fad` / 512Mi / ERROR 0 |
-| 11 | cocoro 手動デプロイ (GitHub Actions) | ✅ revision `00013-tov` / 512Mi / ERROR 0 |
-| 12 | フォローアップ Issue 起票 | ✅ #219 (removeTokensFromIndex握潰し), #220 (OOM log-based metric) |
+| 1 | **#217 24h OOM観察** (前セッション応急対処の検証) | ✅ **真クローズ判定** — 12.7h観察, ピーク時間帯 (JST 10:00〜15:31) 0件 |
+| 2 | **#219 removeTokensFromIndex silent failure** | ✅ PR #222 マージ (commit `84f0318`) — NOT_FOUND/その他を分岐、ERROR severity で監視可能化 |
+| 3 | PR #222 全3環境デプロイ (dev → kanameone → cocoro) | ✅ 全success |
+| 4 | **#213 generateSummary maxOutputTokens regression test** | ✅ PR #224 マージ (commit `184ed67`) — pure builder抽出 + 10件のregression test |
+| 5 | PR #224 全3環境デプロイ (dev → kanameone → cocoro) | ✅ 全success (QA Codex Go判定済み) |
+| 6 | **後追い Issue 起票** | ✅ #223 (P2, throw vs log設計), #225 (P2, builder bypass検出) |
+| 7 | kanameone 本番ダッシュボード確認 | ✅ **エラー 0件** / 処理済み 4,260件 / 20/20 Functions稼働中 |
 
-**変更規模**: 1 file (searchIndexer.ts), +3/-1 lines
+### 達成効果
 
-### 🌅 明朝の残タスク（次セッション最優先）
+| 効果 | 内容 |
+|------|------|
+| 🛡️ 検索インデックス信頼性 | OOM 12件+/日 → 0件。silent failure (全エラー握潰し) → NOT_FOUND以外はERROR監視可能 |
+| 🧪 リグレッション防止 | `maxOutputTokens=8192` (#205/#209) を canary testで固定、3フィールド同梱 (#178教訓) を pure builder で構造的強制 |
+| 📊 運用可視性 | 権限/ネットワーク/クォータ障害が Cloud Logging で検出可能 → #220 (log-based metric) の基盤 |
+| 🧾 負債可視化 | Issue #223, #225 で暗黙の負債を明示化 |
 
-**24h OOM観察**: kanameone は日中時間帯 (04-15 JST 09:51〜17:26 = 00:51〜08:26 UTC) に OOM 5回集中発生。deploy は 04-15 JST 25:00 (= 16:00 UTC) で観察が深夜時間帯となり **実動作ログが cold**。次セッション開始時に以下を確認:
+### 24h 継続監視項目（次セッション以降）
 
+PR #222 効果監視:
 ```bash
 gcloud logging read 'resource.labels.function_name="ondocumentwritesearchindex" severity>=ERROR timestamp>="2026-04-16T00:00:00Z"' --project=docsplit-kanameone --limit=20 --format="value(timestamp,textPayload)"
 ```
+- ERROR件数 0維持 → 健全
+- `Search index entry not found` WARN頻度とdocId偏り確認
+- 削除済み書類が検索ヒットしないか手動抽出確認
 
-- ERROR 0 件継続 → 応急対処成功、#217 真クローズ
-- OOM 再発 → `db.getAll` chunk化 (本質対応) を別Issueで起票
+PR #224 効果監視:
+- summary 生成失敗率、Cloud Function error rate
+- Firestore 3フィールド (summary/summaryTruncated/summaryOriginalLength) 欠損の有無
 
 ## 🔴 今セッション判明した前提変更（重要）
 
@@ -150,10 +155,12 @@ gcloud logging read 'resource.labels.function_name="ondocumentwritesearchindex" 
 
 ### 積み残しIssue（次セッション以降の優先順）
 
+> 注: #219 (PR #222), #213 (PR #224) は本セッションで完了済み。下記は2026-04-16時点の OPEN のみ。
+
 | # | タイトル | ラベル | 優先 |
 |---|---|---|---|
-| **#219** | `removeTokensFromIndex` catch 全エラー握潰し (silent failure) | bug, P1 | 🆕 最優先 |
-| **#213** | generateSummary maxOutputTokens regression テスト | enhancement, P1 | 高 |
+| **#225** 🆕 | generateSummary builder bypass 検出 (PR #224 後追い) | enhancement, P2 | 中 |
+| **#223** 🆕 | removeTokensFromIndex throw vs log 設計 (PR #222 後追い) | bug, P2 | 中 |
 | **#220** | OOM + truncated 用 log-based metric + alert (#210統合) | enhancement, P2 | 中 |
 | #214 | generateSummary 共通化 | enhancement, P2 | 中 |
 | #215 | summary 切り詰めメタ 型不変条件強化 | enhancement, P2 | 中 |
@@ -480,4 +487,16 @@ gcloud logging read 'resource.labels.function_name="ondocumentwritesearchindex" 
 - ブランチ: main
 - 未コミット変更: docs/handoff/LATEST.md (このセッションで更新)
 - 未プッシュ: なし
-- 最新コミット（マージ済み）: `6240f09` chore: 運用スクリプトにcleanup-duplicatesを追加 (#202)
+- 最新コミット: `184ed67` test: generateSummary maxOutputTokens regression test 追加 (#213) (#224)
+- 直前: `84f0318` fix: removeTokensFromIndex の silent failure 防止 (#219) (#222)
+
+## 次セッション候補タスク (P1/P2)
+
+| 優先度 | Issue | 内容 |
+|--------|-------|------|
+| P2 | #223 | removeTokensFromIndex throw vs log 設計検討 (PR #222後追い) |
+| P2 | #225 | builder bypass 検出 (PR #224後追い、案A sinon/B grep/C ESLint) |
+| P2 | #220 | OOM/truncated log-based metric + alert |
+| P2 | #214/#215 | generateSummary 共通化 / discriminated union化 |
+| P2 | #210 | OCR切り詰めメトリクス (#220 と統合検討) |
+| P2 | 他 older | #196/#190/#189/#188/#183/#182/#181/#200/#152 |
