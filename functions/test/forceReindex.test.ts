@@ -10,13 +10,14 @@
 import { expect } from 'chai';
 import * as path from 'path';
 import { createRequire } from 'module';
-import { fileURLToPath } from 'url';
 
-// ESM スコープ配下でも CommonJS script を読めるよう createRequire を使用。
-// NodeNext module では __dirname が未定義のため import.meta.url から解決する。
-const requireCjs = createRequire(import.meta.url);
-const testDir = path.dirname(fileURLToPath(import.meta.url));
-const forceReindex = requireCjs(path.resolve(testDir, '../../scripts/force-reindex.js'));
+// ts-node の CommonJS / ESM 両モードに対応:
+// - CommonJS モード (CI 環境): __dirname 等が使えるが require は直接利用可
+// - ESM モード (ローカル mocha の ES module 自動判定時): createRequire で CJS 読込
+// import.meta.url は CommonJS 出力でエラー (TS1470) のため使用不可。
+// 代わりに process.cwd() + package.json 基点で createRequire を作る。
+const requireCjs = createRequire(`${process.cwd()}/package.json`);
+const forceReindex = requireCjs(path.resolve(process.cwd(), '../scripts/force-reindex.js'));
 
 describe('force-reindex: parseArgs', () => {
   it('--doc-id のみで値が設定される', () => {
