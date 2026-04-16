@@ -99,8 +99,8 @@ Issue #223 で方針を確定させる必要がある。
 
 ### Negative
 
-- 削除経路の drift 発生時、**自動復旧手段がない** (手動復旧は Issue #229 で整備済)
-- ~~手動復旧スクリプトも未整備~~ → **2026-04-16: `scripts/force-reindex.js` + `docs/context/search-index-recovery.md` で整備完了**
+- 削除経路の drift 発生時、**自動復旧手段がない** (手動復旧手段は Issue #229 で整備済)
+- ~~手動復旧スクリプトも未整備~~ → **2026-04-16: `scripts/force-reindex.js` + `docs/context/search-index-recovery.md` で整備完了。dev 環境での初回執行による動作確認は Follow-up として残存**
 - 検出は #220 実装後となり、それまでは Cloud Logging の手動監視のみ
 
 ### Risk Acceptance
@@ -109,9 +109,9 @@ Issue #223 で方針を確定させる必要がある。
 
 1. **drift 未検証**: kanameone 4,260件処理済で「報告なし」だが、drift 検出手段がないため「発生なし」の証明ではない
 2. **3分岐監視未達**: #178 教訓の「NOT_FOUND / transient / permanent の 3 分岐」要件は、現実装 (NOT_FOUND + その他の 2 分岐) では未達。3 分岐化は #220 の受け入れ条件として扱う
-3. ~~**復旧 SOP 未整備**~~: **2026-04-16 に Issue #229 で解消**。`scripts/force-reindex.js` で `--doc-id` / `--all-drift` の両モード、`docs/context/search-index-recovery.md` に Runbook を整備済
+3. **復旧 SOP**: **2026-04-16 に Issue #229 でスクリプト (`scripts/force-reindex.js`) と Runbook (`docs/context/search-index-recovery.md`) を整備。** 初回の dev 実行による動作検証は次セッションで実施予定 (Follow-up 残存)
 
-これらのうち 1, 2 は Follow-up (#220) で継続、3 は解消済。
+これらのうち 1, 2 は Follow-up (#220) で継続、3 はスクリプト/Runbook 整備完了、dev 検証のみ残存。
 
 ## Follow-up
 

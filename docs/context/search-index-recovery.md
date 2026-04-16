@@ -103,8 +103,8 @@ alert から docId が特定できている場合:
 
 ```bash
 # Step 1: dry-run で変更予定を確認
-# GitHub Actions: script=force-reindex --doc-id --dry-run, doc_id=<DOC_ID>
-# ローカル:
+# GitHub Actions: script=force-reindex --doc-id, doc_id=<DOC_ID>
+# ローカル (デフォルトが dry-run のため --execute 省略時は書き込みなし):
 FIREBASE_PROJECT_ID=<env> node scripts/force-reindex.js --doc-id <DOC_ID>
 ```
 

@@ -18,7 +18,8 @@
  *
  * production tokenizer (functions/src/utils/tokenizer.ts) と同一のロジックを使用する
  * ため、事前に `cd functions && npm run build` で lib/ を生成しておく必要がある。
- * lib/ が存在しない場合、スクリプトは自動的に build を試みる。
+ * CLI 起動時は自動 build を試みるが、テストから require する場合は事前に
+ * build しておくこと (test は `loadTokenizer()` のデフォルト引数で間接的に lib/ を要求する)。
  */
 
 const path = require('path');
@@ -94,7 +95,7 @@ function parseArgs(argv) {
     } else if (arg === '--help' || arg === '-h') {
       args.help = true;
     } else if (arg === '--dry-run') {
-      // 互換性: --dry-run はデフォルト動作。--execute が指定されない限り書き込まない。
+      // 明示目的のみの受付。デフォルトが dry-run のため動作には影響しない。
     } else {
       throw new Error(`未知のオプション: ${arg}`);
     }
@@ -190,8 +191,18 @@ const FIELD_TO_MASK = {
  * 指定 docId の search_index を強制再構築する。
  * tokenHash 無視で以下を実行:
  *   1. 既存 posting (search.tokens が示す位置) を削除
- *   2. 新 posting を書き込み (冪等: 既存 posting 存在時は df 加算しない)
- *   3. documents.search を更新
+ *   2. 新 posting を書き込み (再実行安全: 既存 posting 存在時は df 加算しない)
+ *   3. documents.search を dot 記法で Partial Update
+ *
+ * エラーポリシー:
+ *   - NOT_FOUND: 冪等な無視 (旧 posting が既に削除済み)
+ *   - その他の永続/一時エラー: throw して呼び出し元の failedCount に集計
+ *     (silent に続行すると tokenHash だけ更新され次回 scan で検出不能になる
+ *      ため、本 PR の目的と逆行する。PR #235 review 指摘対応)
+ *
+ * 厳密な冪等ではない境界:
+ *   - 手動で search_index から posting を削除した状態で 2 回実行すると df が負になる
+ *   - 並列実行は未対応 (Runbook で禁止明記)
  */
 async function reindexDocument(db, docId, docData, { execute }, tokenizer = loadTokenizer()) {
   const { tokens, tokenHash } = computeExpectedIndex(docData, tokenizer);
@@ -212,28 +223,32 @@ async function reindexDocument(db, docId, docData, { execute }, tokenizer = load
 
   const now = admin.firestore.Timestamp.now();
 
-  // 1. 旧 posting 削除 (search.tokens から差分のみ)
+  // 1. 旧 posting 削除: NOT_FOUND を事前 filter で除外してから batch。
+  //    事前 filter にすることで「1 件 NOT_FOUND → batch 全体ロールバック」を回避する
+  //    (PR #235 review evaluator HIGH 指摘対応)。
   if (tokensToRemove.length > 0) {
+    const removeTokenIds = tokensToRemove.map(t => tokenizer.generateTokenId(t));
+    const removeRefs = removeTokenIds.map(id => db.collection('search_index').doc(id));
+    const removeSnaps = await db.getAll(...removeRefs);
     const removeBatch = db.batch();
-    for (const token of tokensToRemove) {
-      const tokenId = tokenizer.generateTokenId(token);
-      const indexRef = db.collection('search_index').doc(tokenId);
-      removeBatch.update(indexRef, {
+    let removeCount = 0;
+    for (let i = 0; i < removeSnaps.length; i++) {
+      const snap = removeSnaps[i];
+      // 既に posting が無い (NOT_FOUND 相当) なら skip
+      if (!snap.exists || snap.data()?.postings?.[docId] === undefined) continue;
+      removeBatch.update(snap.ref, {
         [`postings.${docId}`]: admin.firestore.FieldValue.delete(),
         df: admin.firestore.FieldValue.increment(-1),
       });
+      removeCount++;
     }
-    try {
+    if (removeCount > 0) {
+      // 事前 filter 後の batch 失敗は permanent error の可能性大 → throw で呼び出し元へ
       await removeBatch.commit();
-    } catch (error) {
-      // NOT_FOUND は冪等 (既に削除済み)、その他は記録だけして続行
-      if (error.code !== 5 && error.code !== 'NOT_FOUND' && error.code !== 'not-found') {
-        console.warn(`  [WARN] ${docId}: 旧 posting 削除失敗 (code=${error.code}): ${error.message}`);
-      }
     }
   }
 
-  // 2. 新 posting 書き込み (冪等性のため posting を完全置換)
+  // 2. 新 posting 書き込み (同一 docId 再実行時は df を加算しない)
   const tokenMap = new Map();
   for (const { token, field, weight } of tokens) {
     const tokenId = tokenizer.generateTokenId(token);
@@ -255,7 +270,7 @@ async function reindexDocument(db, docId, docData, { execute }, tokenizer = load
   for (const [tokenId, data] of tokenMap) {
     const indexRef = db.collection('search_index').doc(tokenId);
     const posting = { score: data.score, fieldsMask: data.fieldsMask, updatedAt: now };
-    // 冪等性: 既に posting が存在するなら df 加算しない
+    // 再実行安全: 既に posting が存在するなら df 加算しない
     const existingDoc = existingDocs.find(d => d.id === tokenId);
     const hadPosting = existingDoc?.data()?.postings?.[docId] !== undefined;
 
@@ -275,14 +290,14 @@ async function reindexDocument(db, docId, docData, { execute }, tokenizer = load
   }
   await writeBatch.commit();
 
-  // 3. documents.search 更新
+  // 3. documents.search を dot 記法で Partial Update
+  //    search オブジェクト全体置換にすると将来追加フィールドが消える
+  //    (CLAUDE.md MUST: Partial Update は対象外フィールド不変)。
   await db.collection('documents').doc(docId).update({
-    search: {
-      version: 1,
-      tokens: newTokenStrings,
-      tokenHash,
-      indexedAt: admin.firestore.Timestamp.now(),
-    },
+    'search.version': 1,
+    'search.tokens': newTokenStrings,
+    'search.tokenHash': tokenHash,
+    'search.indexedAt': admin.firestore.Timestamp.now(),
   });
 
   return {
@@ -297,26 +312,45 @@ async function reindexDocument(db, docId, docData, { execute }, tokenizer = load
 
 // ========== Step 5: モード実行 ==========
 
+/** exit code: 0=成功、1=事前検証エラー、2=部分失敗あり。main() で process.exit に反映。 */
+const EXIT_OK = 0;
+const EXIT_PRECONDITION = 1;
+const EXIT_PARTIAL_FAILURE = 2;
+
 async function runSingleDocId(db, args) {
   const docRef = db.collection('documents').doc(args.docId);
   const snap = await docRef.get();
   if (!snap.exists) {
     console.error(`[ERROR] ドキュメントが見つかりません: ${args.docId}`);
-    process.exit(1);
+    return EXIT_PRECONDITION;
   }
   const data = snap.data();
   if (data.status !== 'processed') {
     console.warn(`[WARN] ${args.docId}: status=${data.status}。processed 以外はインデックス対象外のため中止`);
-    process.exit(1);
+    return EXIT_PRECONDITION;
   }
 
   console.log(`[MODE] 単一 docId (${args.execute ? '実行' : 'dry-run'}): ${args.docId}`);
-  const result = await reindexDocument(db, args.docId, data, { execute: args.execute });
-  console.log(
-    `  [${args.execute ? 'OK' : 'DRY'}] ${result.docId}: ` +
-    `+${result.tokensToAdd} / -${result.tokensToRemove} tokens, ` +
-    `hash ${result.actualHash || '(none)'} → ${result.expectedHash}`
-  );
+  try {
+    const result = await reindexDocument(db, args.docId, data, { execute: args.execute });
+    console.log(
+      `  [${args.execute ? 'OK' : 'DRY'}] ${result.docId}: ` +
+      `+${result.tokensToAdd} / -${result.tokensToRemove} tokens, ` +
+      `hash ${result.actualHash || '(none)'} → ${result.expectedHash}`
+    );
+    return EXIT_OK;
+  } catch (error) {
+    // 構造化ログ (GitHub Actions 経由 Cloud Logging 取込用)
+    console.error(JSON.stringify({
+      severity: 'ERROR',
+      event: 'force_reindex_failed',
+      docId: args.docId,
+      errorCode: error.code ?? null,
+      errorMessage: error.message,
+      stack: error.stack,
+    }));
+    return EXIT_PARTIAL_FAILURE;
+  }
 }
 
 async function runAllDrift(db, args) {
@@ -326,12 +360,16 @@ async function runAllDrift(db, args) {
   let processed = 0;
   let drifted = 0;
   let reindexed = 0;
+  let failed = 0;
   let lastDoc = null;
   const maxDocs = args.sample ?? Infinity;
 
   while (processed < maxDocs) {
     const remaining = maxDocs - processed;
     const limit = Math.min(args.batchSize, remaining);
+    // 注: processedAt 欠如ドキュメントはこのクエリから除外される (Firestore 仕様)。
+    // 既存運用で processedAt は書込必須のため許容。未設定が発生した場合は
+    // 別途 `--doc-id` で個別復旧する。
     let query = db.collection('documents')
       .where('status', '==', 'processed')
       .orderBy('processedAt', 'desc')
@@ -358,7 +396,16 @@ async function runAllDrift(db, args) {
           reindexed++;
           console.log(`    [OK] 再 index 完了`);
         } catch (error) {
-          console.error(`    [ERROR] 再 index 失敗: ${error.message}`);
+          failed++;
+          // 構造化ログで呼出元が個別失敗を監査可能にする (PR #235 review silent-failure-hunter 指摘対応)
+          console.error(JSON.stringify({
+            severity: 'ERROR',
+            event: 'force_reindex_failed',
+            docId: docSnap.id,
+            errorCode: error.code ?? null,
+            errorMessage: error.message,
+            stack: error.stack,
+          }));
         }
       }
     }
@@ -368,7 +415,8 @@ async function runAllDrift(db, args) {
   }
 
   console.log('---');
-  console.log(`走査: ${processed} 件 / drift: ${drifted} 件 / 再 index: ${reindexed} 件`);
+  console.log(`走査: ${processed} 件 / drift: ${drifted} 件 / 再 index: ${reindexed} 件 / 失敗: ${failed} 件`);
+  return failed > 0 ? EXIT_PARTIAL_FAILURE : EXIT_OK;
 }
 
 // ========== Step 6: main ==========
@@ -400,22 +448,30 @@ async function main() {
   console.log(`プロジェクト: ${projectId}`);
   console.log(`モード: ${args.execute ? '実行 (書き込みあり)' : 'dry-run (書き込みなし)'}`);
 
+  let exitCode = EXIT_OK;
   if (args.docId) {
-    await runSingleDocId(db, args);
+    exitCode = await runSingleDocId(db, args);
   } else if (args.allDrift) {
-    await runAllDrift(db, args);
+    exitCode = await runAllDrift(db, args);
   }
+  return exitCode;
 }
 
 // テスト時は main 呼び出しをスキップ
 if (require.main === module) {
   main()
-    .then(() => {
-      console.log('完了');
-      process.exit(0);
+    .then((exitCode) => {
+      console.log(exitCode === EXIT_OK ? '完了' : `部分失敗で終了 (exit code=${exitCode})`);
+      process.exit(exitCode);
     })
     .catch((error) => {
-      console.error('[FATAL]', error);
+      console.error(JSON.stringify({
+        severity: 'CRITICAL',
+        event: 'force_reindex_fatal',
+        errorCode: error.code ?? null,
+        errorMessage: error.message,
+        stack: error.stack,
+      }));
       process.exit(1);
     });
 }

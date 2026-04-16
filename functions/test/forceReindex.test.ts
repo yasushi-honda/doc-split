@@ -93,6 +93,36 @@ describe('force-reindex: parseArgs', () => {
     );
   });
 
+  it('--sample に非数値はエラー', () => {
+    expect(() => forceReindex.parseArgs(['--all-drift', '--sample=abc'])).to.throw(
+      '--sample には正の整数を指定してください'
+    );
+  });
+
+  it('--batch-size に負数はエラー (pr-test-analyzer 指摘)', () => {
+    expect(() => forceReindex.parseArgs(['--all-drift', '--batch-size=-1'])).to.throw(
+      '--batch-size には正の整数を指定してください'
+    );
+  });
+
+  it('--batch-size に 0 はエラー', () => {
+    expect(() => forceReindex.parseArgs(['--all-drift', '--batch-size=0'])).to.throw(
+      '--batch-size には正の整数を指定してください'
+    );
+  });
+
+  it('--batch-size に非数値はエラー', () => {
+    expect(() => forceReindex.parseArgs(['--all-drift', '--batch-size=abc'])).to.throw(
+      '--batch-size には正の整数を指定してください'
+    );
+  });
+
+  it('--doc-id に空文字はエラー', () => {
+    expect(() => forceReindex.parseArgs(['--doc-id', ''])).to.throw(
+      '--doc-id には値が必要です'
+    );
+  });
+
   it('--help はエラーなしで args.help=true', () => {
     const args = forceReindex.parseArgs(['--help']);
     expect(args.help).to.equal(true);
@@ -184,6 +214,24 @@ describe('force-reindex: reindexDocument (dry-run)', () => {
     expect(result.tokensToRemove).to.equal(0);
     expect(result.expectedHash).to.be.a('string');
     expect(result.skipped).to.equal(false);
+  });
+
+  it('execute=false で db の任意メソッド呼出は throw する Proxy でも成功 (ADR-0008 準拠の明示検証)', async () => {
+    // pr-test-analyzer 指摘対応: dry-run パスで db が一切呼ばれないことを Proxy で検証。
+    // 将来 dry-run パスに書き込みが混入すると本テストで検出される。
+    const throwingDb = new Proxy({}, {
+      get(_target, prop: string) {
+        throw new Error(`dry-run で db.${prop} が呼ばれてはいけない (ADR-0008 違反)`);
+      },
+    }) as Parameters<typeof forceReindex.reindexDocument>[0];
+    const result = await forceReindex.reindexDocument(
+      throwingDb,
+      'test-doc-id',
+      { customerName: 'A社', fileName: 'test.pdf' },
+      { execute: false }
+    );
+    expect(result.skipped).to.equal(false);
+    expect(result.tokensToAdd).to.be.greaterThan(0);
   });
 
   it('execute=false で search.tokens がある場合 tokensToRemove を計算', async () => {
