@@ -43,7 +43,7 @@ Issue #223 で方針を確定させる必要がある。
 | 経路 | 呼び出し元 | 後続処理 | 失敗時の drift |
 |---|---|---|---|
 | **削除経路** | `removeDocumentFromIndex` (searchIndexer.ts:175-177) → documents 削除 trigger 経由 | **なし** (関数で完結) | 削除済みドキュメントが検索にヒットし続ける |
-| **更新経路** | `onDocumentWriteSearchIndex` handler 内 (searchIndexer.ts:85-92) | `tokenHash` 更新 (L99-106) | 古いトークンが search_index に残留 + `tokenHash` との整合性崩壊 |
+| **更新経路** | `ondocumentwritesearchindex` handler (`onDocumentWritten` trigger) 内 (searchIndexer.ts:85-92) | `tokenHash` 更新 (L99-106) | 古いトークンが search_index に残留 + `tokenHash` との整合性崩壊 |
 
 ### 案 A: 現状維持 (採用)
 
@@ -63,7 +63,7 @@ Issue #223 で方針を確定させる必要がある。
 
 ### 案 B': 削除経路のみ throw + `retry: true` (経路別ハイブリッド)
 
-- **前提**: 現状単一の `onDocumentWriteSearchIndex` (`onDocumentWritten`) を、**削除専用 trigger (`onDocumentDeleted`) と更新専用 trigger (`onDocumentUpdated`/`onDocumentCreated`) に分離する実装** が必要
+- **前提**: 現状単一の `ondocumentwritesearchindex` (`onDocumentWritten` trigger) を、**削除専用 trigger (`onDocumentDeleted`) と更新専用 trigger (`onDocumentUpdated`/`onDocumentCreated`) に分離する実装** が必要
 - **変更**:
   - 削除専用 trigger 内の `removeDocumentFromIndex` で throw
   - 削除専用 trigger のみオプションに `retry: true`
@@ -100,7 +100,7 @@ Issue #223 で方針を確定させる必要がある。
 ### Negative
 
 - 削除経路の drift 発生時、**自動復旧手段がない**
-- 手動復旧スクリプトも未整備 (`scripts/migrate-search-index.js:291` は `tokenHash` 済みドキュメントをスキップするため、今回の drift パターンは修復対象外)
+- 手動復旧スクリプトも未整備 (`scripts/migrate-search-index.js:293-297` は `tokenHash` 済みドキュメントをスキップするため、今回の drift パターンは修復対象外)
 - 検出は #220 実装後となり、それまでは Cloud Logging の手動監視のみ
 
 ### Risk Acceptance
@@ -155,10 +155,10 @@ gcloud logging read \
 - Issue #178 / ADR-0008 (データ保護ポリシー、drift = データ喪失と同型リスク)
 - Issue #217 / PR #218 (OOM 応急対処、12.7h 観察で 0 件維持)
 - `functions/src/search/searchIndexer.ts:182-205` (対象コード、2026-04-16 確認)
-- `scripts/migrate-search-index.js:291` (tokenHash スキップ仕様、2026-04-16 確認)
+- `scripts/migrate-search-index.js:293-297` (tokenHash スキップ仕様、2026-04-16 確認)
 
 ### 外部仕様 (2026-04-16 確認)
 
 - Firebase Cloud Functions v2 retry policy: https://firebase.google.com/docs/functions/manage-functions?gen=2nd#set_retry_policy
-- `firebase-functions` v6.6.0 型定義 (`lib/v2/options.d.ts:154-155`): `retry?: boolean | Expression<boolean> | ResetValue` (デフォルト false)
+- `firebase-functions` v6.6.0 型定義 (v2 trigger options の `retry` プロパティ): `retry?: boolean | Expression<boolean> | ResetValue` (デフォルト false)
 - GCP Eventarc Standard 仕様 (retry: true 時): 初期 10秒 / 最大 600秒 指数バックオフ / 24時間以内 / retryConfig 非対応
