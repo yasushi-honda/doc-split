@@ -52,15 +52,38 @@ Run ID `24519045429` (GitHub Actions run-ops-script.yml, environment=dev, script
   workflow choice 拡張は #238 (orphan-scan) / #239 (audit log) 対応時に合わせて追加する方針。
   本番 (kanameone/cocoro) 初回展開時に走査件数が大きいタイミングで実体検証可能。
 
-### B. #220 関連: 監視基盤 dev/本番展開 (前セッション Follow-up 継続中)
+### B. #220 関連: 監視基盤 dev/本番展開 — dev 土台 80% 完了 (2026-04-17 session5)
 
-前セッション (session3) で PR #231 により監視基盤 (log-based metric + alert policy) の枠組み整備完了。本セッションは触らなかったが **SA 権限付与 → dev 展開 → 本番展開** は依然として未実施:
+session5 で **dev 環境の SA + Secret + workflow 切り替え + dry-run 動作検証** を完了。実リソース作成 (setup) のみ次セッション持ち越し。
 
-- **Option 2 (Codex 推奨)**: 専用 SA `docsplit-monitoring-admin@*` 作成 (3 roles 付与)
-- GitHub Actions → "Setup Monitoring" で dev 実行 → AC3b/AC4 通過確認
-- kanameone / cocoro 順次展開
+**session5 完了内容** (PR #241 マージ commit `6d0fbc2`):
 
-詳細は `docs/context/monitoring-setup.md` 参照。
+- ✅ 専用 SA 作成: `docsplit-monitoring-admin@doc-split-dev.iam.gserviceaccount.com` (Option 2 採用、最小権限)
+- ✅ 3 roles 付与: `roles/logging.configWriter`, `roles/monitoring.alertPolicyEditor`, `roles/monitoring.notificationChannelEditor`
+- ✅ GitHub Secret `MONITORING_SA_KEY_DEV` 登録 (stdin リダイレクトで鍵内容を conversation context 未露出)
+- ✅ `.github/workflows/setup-monitoring.yml` の `credentials_json` を `MONITORING_SA_KEY_{DEV,KANAMEONE,COCORO}` に切り替え
+- ✅ `docs/context/monitoring-setup.md` に採用方針 + 展開状況 + セットアップコマンド追記
+- ✅ **dry-run dispatch 成功** (Run ID `24535367804`, action=dry-run): notification channel 1 + 5 metrics + 5 alert policies の既存確認スキーム通過
+
+**次セッションで実施する残作業**:
+
+1. **dev で setup 実行** (~5 分): HEALTH_REPORT_TO と同メールアドレスを `notification_email` に渡して dispatch
+   ```
+   GitHub Actions → "Setup Monitoring (log-based metrics + alerts)"
+     environment: dev
+     action: setup
+     notification_email: <HEALTH_REPORT_TO と同一>
+   ```
+   AC3b: 5 metrics + 5 alert policies + 1 channel が実体作成されること
+   AC4: `gcloud alpha monitoring policies list --filter='userLabels.source="docsplit-monitoring-setup"'` で 5 件確認
+
+2. **kanameone / cocoro 展開** (~各 10 分): dev と同じ順序 (SA 作成 → 3 roles → キー発行 → `MONITORING_SA_KEY_{KANAMEONE,COCORO}` 登録 → setup dispatch)
+   手順は `docs/context/monitoring-setup.md` のセットアップ手順セクション参照
+
+**展開状況テーブル** (`docs/context/monitoring-setup.md` 参照):
+- ✅ dev: SA + Secret 登録済み、dry-run 検証済み
+- ⏳ kanameone: 未セットアップ
+- ⏳ cocoro: 未セットアップ
 
 ### C. 本セッションで起票した Follow-up Issue (PR #235 スコープ外として分離)
 
@@ -106,11 +129,11 @@ Run ID `24519045429` (GitHub Actions run-ops-script.yml, environment=dev, script
 
 ### Sprint 2 推奨 (次セッション)
 
-WBS 計画に基づき、直前 Sprint 1 の文脈延長線上にある:
-- **Sprint 2 (Summary リファクタ集約)**: #214 (generateSummary 共通化) → #215 (discriminated union 化)
+優先度高い順:
 
-または優先度次第で:
-- **Follow-up A + B**: #229 dev 検証 (~15分) + #220 監視展開 (~1時間)
+1. **Follow-up B 残件 (~10 分)**: dev 環境 setup dispatch 実行 (AC3b/AC4) → kanameone/cocoro 展開開始
+2. **Sprint 2 (Summary リファクタ集約、1.5 日)**: #214 (generateSummary 共通化) → #215 (discriminated union 化)
+3. **Phase 2 (古い bug 消化、1 日)**: #189/#190/#196/#182/#183
 
 ---
 
@@ -120,11 +143,12 @@ WBS 計画に基づき、直前 Sprint 1 の文脈延長線上にある:
 
 - [docs/handoff/archive/2026-04-history.md](archive/2026-04-history.md) — session1-3 詳細、Issue #217/#219/#213 系、04-14 以前の変更履歴
 
-## Git状態 (2026-04-16 session4 終了時)
+## Git状態 (2026-04-17 session5 終了時)
 
 - ブランチ: main
 - 未コミット変更: なし
 - 未プッシュ: なし
-- 最新コミット: `1e2b751` feat(ops): search_index drift 復旧 SOP + force-reindex スクリプト (#229) (#235)
-- CI: ✅ 成功 (CI + Deploy 通過)
-- ADR 数: 16 本 (session4 では ADR-0015 を Risk #3 解消表記で更新、新規なし)
+- 最新コミット: `6d0fbc2` feat(monitoring): workflow credentials を専用 SA 用 Secret に切り替え + dev セットアップ完了記録 (#241)
+- session5 マージ済 PR: #240 (handoff 更新), #241 (監視 SA/Secret/workflow 切替)
+- CI: ✅ 成功 (PR #240/#241 両方で lint-build-test + CodeRabbit pass)
+- ADR 数: 16 本 (session5 では新規 ADR なし、monitoring-setup.md のみ更新)
