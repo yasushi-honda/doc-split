@@ -13,7 +13,7 @@ PM/PL 視点で 15 件の open issue を WBS 化し、Phase 0 (棚卸し) + Phas
 | 1 | **Phase 0 棚卸し** | 15 件精査、#210 を #220 に統合 close、14 件を有効判定 |
 | 2 | **#225 generateSummary builder bypass test** | ✅ PR #227 マージ (commit `3052d73`) — grep-based caller contract test、過去 PR #224 Critical 指摘の構造的穴を塞ぐ |
 | 3 | **#223 search_index silent failure 方針** | ✅ PR #230 マージ (commit `ad68ec6`) — **ADR-0015 起草 + Accepted OK (Codex 2 ラウンド)** |
-| 4 | **#220 log-based metric + alert 基盤** | ✅ PR #231 マージ (commit `5c77574`) — setup/teardown script + workflow + 5 YAML + 運用手順ドキュメント (11 files, +715 lines) |
+| 4 | **#220 log-based metric + alert 基盤** | ✅ PR #231 マージ (commit `5c77574`) — setup/teardown script + workflow + 5 YAML + 運用手順ドキュメント (11 files, +715 lines)。**#220 Issue は OPEN のまま追跡中** (SA 権限付与・dev 実行・本番展開が残るため) |
 | 5 | **新規 Issue 起票** | ✅ #228 (builder bypass 型alias 後追い), #229 (search_index drift 復旧 SOP) |
 | 6 | **グローバル改善 (メタ)** | memory feedback + `rules/workflow.md §0` に「観測なしの推測は根拠にしない」明文化 |
 
