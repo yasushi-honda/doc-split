@@ -288,17 +288,31 @@ async function reindexDocument(db, docId, docData, { execute }, tokenizer = load
       });
     }
   }
-  await writeBatch.commit();
+  // step 2/3 の失敗時に呼出元が stage を特定できるよう error を wrap する。
+  // 半端状態 (postings 新しいが tokenHash 古い) 発生時は
+  // Runbook §4.5 に基づき手動クリーンアップする (silent-failure-hunter MEDIUM 指摘対応)。
+  try {
+    await writeBatch.commit();
+  } catch (error) {
+    error.reindexStage = 'search_index_postings_write';
+    throw error;
+  }
 
   // 3. documents.search を dot 記法で Partial Update
   //    search オブジェクト全体置換にすると将来追加フィールドが消える
   //    (CLAUDE.md MUST: Partial Update は対象外フィールド不変)。
-  await db.collection('documents').doc(docId).update({
-    'search.version': 1,
-    'search.tokens': newTokenStrings,
-    'search.tokenHash': tokenHash,
-    'search.indexedAt': admin.firestore.Timestamp.now(),
-  });
+  try {
+    await db.collection('documents').doc(docId).update({
+      'search.version': 1,
+      'search.tokens': newTokenStrings,
+      'search.tokenHash': tokenHash,
+      'search.indexedAt': admin.firestore.Timestamp.now(),
+    });
+  } catch (error) {
+    // step 2 成功後に step 3 が失敗 → postings 新しいが tokenHash 古い半端状態
+    error.reindexStage = 'documents_search_update';
+    throw error;
+  }
 
   return {
     docId,
@@ -345,6 +359,7 @@ async function runSingleDocId(db, args) {
       severity: 'ERROR',
       event: 'force_reindex_failed',
       docId: args.docId,
+      stage: error.reindexStage ?? null,
       errorCode: error.code ?? null,
       errorMessage: error.message,
       stack: error.stack,
@@ -402,6 +417,7 @@ async function runAllDrift(db, args) {
             severity: 'ERROR',
             event: 'force_reindex_failed',
             docId: docSnap.id,
+            stage: error.reindexStage ?? null,
             errorCode: error.code ?? null,
             errorMessage: error.message,
             stack: error.stack,

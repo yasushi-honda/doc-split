@@ -203,6 +203,22 @@ gcloud logging read \
 → 旧 posting 削除時の NOT_FOUND は冪等な無視として扱われるため停止しない。
    もし停止した場合はログを添付して Escalation。
 
+### 4.5 `stage: documents_search_update` で失敗した場合 (半端状態)
+
+構造化ログ (JSON) に `stage: "documents_search_update"` が含まれる失敗は、
+**search_index 側は更新済みだが documents.search.tokenHash が古いまま**の半端状態。
+次回 drift scan でも検出可能 (hash 不一致のため)。
+
+復旧手順:
+
+1. 該当 docId に対して再度 `--doc-id <id> --execute` を実行
+2. reindexDocument は再実行安全なので search_index 側は冪等に更新される
+3. step 3 の documents.search 更新が今度は成功すれば tokenHash も同期
+
+step 3 が連続失敗する場合: `documents/<docId>` への書き込み権限 (SA の
+`datastore.entities.update`) を確認。Firestore セキュリティルールのサーバサイド
+側条件も確認する。
+
 ---
 
 ## 5. Escalation 基準
