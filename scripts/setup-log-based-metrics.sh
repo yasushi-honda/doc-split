@@ -29,12 +29,28 @@ if [ -z "$PROJECT_ID" ] || [ -z "$NOTIFICATION_EMAIL" ]; then
   exit 1
 fi
 
+# 未知の 3rd 引数を reject して typo による silent 作成を防ぐ
+case "$DRY_RUN" in
+  ""|--dry-run) ;;
+  *)
+    echo "ERROR: 未知の 3rd 引数 '$DRY_RUN' (指定可能: --dry-run または省略)"
+    exit 2
+    ;;
+esac
+
 DRY=""
 if [ "$DRY_RUN" = "--dry-run" ]; then
   DRY="[DRY-RUN] "
-  echo "=== DRY-RUN モード: 実際には作成しません ==="
+  echo "=== DRY-RUN モード: リソース作成をスキップしますが、既存確認の gcloud 呼び出しは実行されます (権限エラー時は dry-run でも失敗します) ==="
   echo ""
 fi
+
+# ENV_NAME: ".firebaserc" の alias 命名不統一に対応
+# - docsplit-kanameone → kanameone
+# - docsplit-cocoro → cocoro
+# - doc-split-dev → dev (alias 命名の歴史的経緯でハイフン位置が違う)
+ENV_NAME="${PROJECT_ID#docsplit-}"
+ENV_NAME="${ENV_NAME#doc-split-}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEMPLATE_DIR="$SCRIPT_DIR/monitoring-templates"
@@ -111,7 +127,6 @@ echo ""
 # 4. Alert policy 作成
 # ==================================================
 echo "--- Alert policies ---"
-ENV_NAME="${PROJECT_ID#docsplit-}"
 TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"' EXIT
 
@@ -160,9 +175,10 @@ if [ -z "$DRY" ]; then
     --format="table(name,description.segment(0,60))"
   echo ""
   echo "アラートポリシー:"
+  # user_labels で本 script が作成したポリシーのみ識別 (teardown と整合)
   gcloud alpha monitoring policies list \
     --project="$PROJECT_ID" \
-    --filter="displayName:\"[$ENV_NAME]\"" \
+    --filter="userLabels.source=\"docsplit-monitoring-setup\"" \
     --format="table(displayName.segment(0,80),enabled)"
   echo ""
   echo "通知チャネル:"

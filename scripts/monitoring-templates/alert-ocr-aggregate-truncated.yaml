@@ -20,5 +20,7 @@ alertStrategy:
   autoClose: 86400s
   notificationRateLimit:
     period: 3600s
+userLabels:
+  source: docsplit-monitoring-setup
 notificationChannels:
   - __NOTIFICATION_CHANNEL__

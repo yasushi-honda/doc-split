@@ -19,7 +19,18 @@ if [ -z "$PROJECT_ID" ]; then
   exit 1
 fi
 
+# 未知の 2nd 引数を reject して typo で確認プロンプトが silent skip されるのを防ぐ
+case "$AUTO_YES" in
+  ""|--yes) ;;
+  *)
+    echo "ERROR: 未知の 2nd 引数 '$AUTO_YES' (指定可能: --yes または省略)"
+    exit 2
+    ;;
+esac
+
+# ENV_NAME: setup 側と同じ strip ロジック (dev の alias 命名不統一に対応)
 ENV_NAME="${PROJECT_ID#docsplit-}"
+ENV_NAME="${ENV_NAME#doc-split-}"
 CHANNEL_DISPLAY_NAME="DocSplit Monitoring Alerts - $ENV_NAME"
 
 echo "=== Log-based metric + Alert policy 削除 ==="
@@ -32,10 +43,11 @@ if [ "$AUTO_YES" != "--yes" ]; then
 fi
 
 # 1. Alert policies 削除 (最初に削除しないと metric/channel が使用中になる)
+# user_labels で本 script が作成したポリシーのみ識別 (他用途の "[env]" displayName を誤削除しない)
 echo "--- Alert policies 削除 ---"
 POLICIES=$(gcloud alpha monitoring policies list \
   --project="$PROJECT_ID" \
-  --filter="displayName:\"[$ENV_NAME]\"" \
+  --filter="userLabels.source=\"docsplit-monitoring-setup\"" \
   --format="value(name)" 2>/dev/null || true)
 
 if [ -n "$POLICIES" ]; then

@@ -115,9 +115,11 @@ Issue #223 で方針を確定させる必要がある。
 
 ## Follow-up
 
-### 暫定運用 (#220 実装まで)
+### 暫定運用 (#220 実装まで) — **DEPRECATED (PR #231 で自動化)**
 
-Cloud Logging で以下のクエリを週次で手動確認:
+> ⚠️ **本セクションは PR #231 merge + 権限付与 + `setup-log-based-metrics.sh` 実行で役割を終える。** 以降は `search_index_silent_failure` metric + alert policy が自動検出する。本セクションは履歴として残す。
+
+Cloud Logging で以下のクエリを週次で手動確認 (PR #231 展開前の暫定運用):
 
 ```bash
 gcloud logging read \
@@ -157,6 +159,8 @@ dead letter pattern 昇格時の移行手順:
    - `dead_letter_queue_age`: 最古エントリの経過時間
 3. dead letter pattern 実装 Issue の Follow-up セクションに本置換条件を記載
 4. 本 ADR を **Superseded** ステータスに変更し、新規 ADR で dead letter 方針を記述
+
+dead letter pattern 移行後は **原則 ERROR ログは発生しなくなる想定** (失敗が dead letter queue に記録されるため) だが、catch 前の例外経路や dead letter 書込み失敗で ERROR が残存する可能性はある。完全移行時には log-based metric ベースの監視と DLQ ベースの監視を一時的に並行稼働させ、差分を観測してから旧 metric を撤去する運用を推奨。
 
 この置換条件を明示しないと、二重検知 (ERROR ログ alert + dead letter queue alert 両方から通知) が発生する。
 
