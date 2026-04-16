@@ -1,0 +1,26 @@
+displayName: "[__ENV__] searchindex_oom: ondocumentwritesearchindex Memory limit exceeded"
+documentation:
+  content: |
+    `ondocumentwritesearchindex` で "Memory limit exceeded" が検出されました。
+    PR #218 で 512MiB に増強済み。再発は追加調査が必要です。
+    Issue #217 / PR #218 / #220 参照。
+  mimeType: "text/markdown"
+combiner: OR
+conditions:
+  - displayName: "searchindex_oom > 0 in 1h"
+    conditionThreshold:
+      filter: 'metric.type="logging.googleapis.com/user/searchindex_oom" AND resource.type="cloud_function"'
+      aggregations:
+        - alignmentPeriod: 3600s
+          perSeriesAligner: ALIGN_SUM
+      comparison: COMPARISON_GT
+      thresholdValue: 0
+      duration: 0s
+alertStrategy:
+  autoClose: 86400s
+  notificationRateLimit:
+    period: 3600s
+userLabels:
+  source: docsplit-monitoring-setup
+notificationChannels:
+  - __NOTIFICATION_CHANNEL__

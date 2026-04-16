@@ -1,0 +1,26 @@
+displayName: "[__ENV__] summary_truncated: Summary generation truncated 日次 1件以上"
+documentation:
+  content: |
+    summary 生成時の切り詰めが発生しました。
+    Issue #209 (Vertex AI summary maxOutputTokens=8192, cap=30,000 chars) 再発指標。
+    通常発生しないため即異常扱い。PR #212 / #220 参照。
+  mimeType: "text/markdown"
+combiner: OR
+conditions:
+  - displayName: "summary_truncated > 0 in 24h"
+    conditionThreshold:
+      filter: 'metric.type="logging.googleapis.com/user/summary_truncated" AND resource.type="cloud_function"'
+      aggregations:
+        - alignmentPeriod: 86400s
+          perSeriesAligner: ALIGN_SUM
+      comparison: COMPARISON_GT
+      thresholdValue: 0
+      duration: 0s
+alertStrategy:
+  autoClose: 86400s
+  notificationRateLimit:
+    period: 3600s
+userLabels:
+  source: docsplit-monitoring-setup
+notificationChannels:
+  - __NOTIFICATION_CHANNEL__

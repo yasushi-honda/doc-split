@@ -1,0 +1,27 @@
+displayName: "[__ENV__] search_index_silent_failure: removeTokensFromIndex ERROR 7日以内"
+documentation:
+  content: |
+    `removeTokensFromIndex` で permanent error (PERMISSION_DENIED 等) が発生しました。
+    ADR-0015 の再評価トリガー「ERROR ログ 7日間に 1件以上」に該当します。
+    search_index drift が残存する可能性があるため、Issue #229 の復旧 SOP を確認してください。
+    PR #222 / ADR-0015 / #220 / #229 参照。
+  mimeType: "text/markdown"
+combiner: OR
+conditions:
+  - displayName: "search_index_silent_failure > 0 in 7d"
+    conditionThreshold:
+      filter: 'metric.type="logging.googleapis.com/user/search_index_silent_failure" AND resource.type="cloud_function"'
+      aggregations:
+        - alignmentPeriod: 604800s
+          perSeriesAligner: ALIGN_SUM
+      comparison: COMPARISON_GT
+      thresholdValue: 0
+      duration: 0s
+alertStrategy:
+  autoClose: 86400s
+  notificationRateLimit:
+    period: 3600s
+userLabels:
+  source: docsplit-monitoring-setup
+notificationChannels:
+  - __NOTIFICATION_CHANNEL__

@@ -1,0 +1,84 @@
+name: Setup Monitoring (log-based metrics + alerts)
+
+# Issue #220 + ADR-0015 Follow-up の監視基盤セットアップ。
+# 一度実行すれば自動監視が開始される。冪等 (既存があれば skip)。
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        type: choice
+        options:
+          - kanameone
+          - cocoro
+          - dev
+      action:
+        description: 'Action'
+        required: true
+        type: choice
+        default: 'setup'
+        options:
+          - setup
+          - teardown
+          - dry-run
+      notification_email:
+        description: 'Notification email (setup のみ必須)'
+        required: false
+        type: string
+        default: ''
+
+jobs:
+  setup-monitoring:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: |-
+            ${{ github.event.inputs.environment == 'kanameone' && secrets.GCP_SA_KEY_KANAMEONE ||
+                github.event.inputs.environment == 'dev' && secrets.GCP_SA_KEY_DEV ||
+                secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Resolve project ID
+        id: resolve
+        env:
+          ENVIRONMENT: ${{ github.event.inputs.environment }}
+        run: |
+          PROJECT_ID=$(node scripts/helpers/firebaserc-helper.js get-project "$ENVIRONMENT")
+          echo "project_id=$PROJECT_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Setup monitoring (setup)
+        if: github.event.inputs.action == 'setup'
+        env:
+          PROJECT_ID: ${{ steps.resolve.outputs.project_id }}
+          NOTIFICATION_EMAIL: ${{ github.event.inputs.notification_email }}
+        run: |
+          if [ -z "$NOTIFICATION_EMAIL" ]; then
+            echo "::error::notification_email が必須です (setup の場合)"
+            exit 1
+          fi
+          bash scripts/setup-log-based-metrics.sh "$PROJECT_ID" "$NOTIFICATION_EMAIL"
+
+      - name: Setup monitoring (dry-run)
+        if: github.event.inputs.action == 'dry-run'
+        env:
+          PROJECT_ID: ${{ steps.resolve.outputs.project_id }}
+          NOTIFICATION_EMAIL: ${{ github.event.inputs.notification_email }}
+        run: |
+          EMAIL="${NOTIFICATION_EMAIL:-dry-run@example.com}"
+          bash scripts/setup-log-based-metrics.sh "$PROJECT_ID" "$EMAIL" --dry-run
+
+      - name: Teardown monitoring
+        if: github.event.inputs.action == 'teardown'
+        env:
+          PROJECT_ID: ${{ steps.resolve.outputs.project_id }}
+        run: bash scripts/teardown-log-based-metrics.sh "$PROJECT_ID" --yes
