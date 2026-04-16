@@ -17,7 +17,7 @@ Cloud Monitoring アラートポリシーの YAML テンプレート。
 
 - `duration`: `0s` (閾値超過で即発火)
 - `autoClose`: `86400s` (24h 無発火で自動クローズ)
-- `notificationRateLimit.period`: `3600s` (通知の暴走抑制)
+- `notificationRateLimit`: **未設定**。GCP API 仕様により metric-based alert policy では指定不可（log-based policy 限定）。metric alert は incident オープン時 1 通、`autoClose` まで再通知されない
 - 検出遅延: alignment 1h 以内なら約 3-5 分 (ADR-0015 「5分以内」要件を満たす)
 
 ## テンプレートの変数
