@@ -125,13 +125,46 @@ for role in \
 done
 ```
 
-**オプション 2: 専用 SA 新規作成** (最小権限原則、Codex 推奨、要 Secret 登録):
-- SA 名: `docsplit-monitoring-admin@<project>`
-- 上記 3 roles のみ付与
-- キー発行 → GitHub Secrets に `MONITORING_SA_KEY_<ENV>` として登録
-- workflow の `credentials_json` を SA 別に差し替え
+**オプション 2: 専用 SA 新規作成** (最小権限原則、採用方針):
+- SA 名: `docsplit-monitoring-admin@<project>.iam.gserviceaccount.com`
+- 上記 3 roles のみ付与 (`roles/logging.configWriter`, `roles/monitoring.alertPolicyEditor`, `roles/monitoring.notificationChannelEditor`)
+- キー発行 → GitHub Secrets に登録
+- `setup-monitoring.yml` の `credentials_json` は以下の Secret を参照する:
+  - `MONITORING_SA_KEY_DEV` (dev)
+  - `MONITORING_SA_KEY_KANAMEONE` (kanameone)
+  - `MONITORING_SA_KEY_COCORO` (cocoro)
 
-本 PR では script と workflow の枠組みのみを提供し、**権限付与はフォローアップタスクとして別 PR で実施**する。
+### セットアップ手順 (環境ごとに 1 回)
+
+```bash
+# 1. SA 作成
+gcloud iam service-accounts create docsplit-monitoring-admin \
+  --display-name="DocSplit Monitoring Admin (log-based metrics + alerts)" \
+  --project=<project-id>
+
+# 2. 3 roles 付与
+SA="docsplit-monitoring-admin@<project-id>.iam.gserviceaccount.com"
+for role in \
+  roles/logging.configWriter \
+  roles/monitoring.alertPolicyEditor \
+  roles/monitoring.notificationChannelEditor; do
+  gcloud projects add-iam-policy-binding <project-id> \
+    --member="serviceAccount:$SA" --role="$role" --condition=None --quiet
+done
+
+# 3. キー発行 → Secret 登録 → 鍵ファイル削除
+gcloud iam service-accounts keys create /tmp/monitoring-sa.json \
+  --iam-account=$SA --project=<project-id>
+gh secret set MONITORING_SA_KEY_<ENV> --repo yasushi-honda/doc-split \
+  < /tmp/monitoring-sa.json
+rm /tmp/monitoring-sa.json
+```
+
+### 展開状況
+
+- ✅ dev: SA + Secret 登録済み (2026-04-17)
+- ⏳ kanameone: 未セットアップ
+- ⏳ cocoro: 未セットアップ
 
 ## 通知先の調整
 
