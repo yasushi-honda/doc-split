@@ -1,37 +1,47 @@
 /**
  * generateSummary caller-side 契約テスト (Issue #225)
  *
- * 目的:
- * - summaryRequestBuilder.test.ts (#213/PR #224) の canary は builder 側の契約を固定するが、
- *   caller 側で builder を経由しなくなる (bypass) と canary は PASS のまま Issue #209 が再発する。
- * - 本テストで caller 側の契約 `model.generateContent(buildSummaryGenerationRequest(...))` を
- *   構文レベルで固定し、将来のインライン展開 (`model.generateContent({ contents: [...] })`) を検出する。
+ * summaryRequestBuilder.test.ts の canary は builder 側の契約を固定するが、
+ * caller 側で builder を経由しなくなると canary は PASS のまま Issue #209 が再発する。
+ * 本テストは caller 側の呼び出しパターンを構文検証して bypass を検出する。
  *
- * 方式: 案B (grep-based、Issue #225 推奨)
- * - 最小コストの静的検証。頻発時は sinon spy (案A) / ESLint rule (案C) へ昇格を検討。
+ * 方式: grep-based (静的検証)。flaky/擦り抜けが発生したら sinon spy 化を検討。
  */
 
 import { expect } from 'chai';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
 
-const BUILDER_CALL_PATTERN = /model\.generateContent\s*\(\s*buildSummaryGenerationRequest\s*\(/;
+const BUILDER_CALL_PATTERN = /model\.generateContent\s*\(\s*buildSummaryGenerationRequest\s*\(/g;
 
-// functions/ ディレクトリからの相対パス。mocha は package.json のあるディレクトリで実行される。
+// package.json のあるディレクトリから resolve。IDE/CI 間の cwd 差異を吸収。
 const CALLER_FILES = [
   'src/ocr/ocrProcessor.ts',
   'src/ocr/regenerateSummary.ts',
 ];
 
+/**
+ * 行頭 `//` コメント行を除去。コメントアウトされた呼び出しを「存在する」と
+ * 誤検出する false positive を防ぐ。
+ */
+function stripLineComments(source: string): string {
+  return source.replace(/^\s*\/\/.*$/gm, '');
+}
+
+function countMatches(source: string): number {
+  return source.match(BUILDER_CALL_PATTERN)?.length ?? 0;
+}
+
 describe('generateSummary caller contract (Issue #225)', () => {
   for (const relPath of CALLER_FILES) {
     it(`${relPath} は buildSummaryGenerationRequest 経由で model.generateContent を呼ぶ`, () => {
       const absPath = resolve(process.cwd(), relPath);
-      const source = readFileSync(absPath, 'utf-8');
-      expect(BUILDER_CALL_PATTERN.test(source)).to.equal(
-        true,
+      const source = stripLineComments(readFileSync(absPath, 'utf-8'));
+      const count = countMatches(source);
+      expect(count).to.be.at.least(
+        1,
         `${relPath} で builder bypass を検出。` +
-          'model.generateContent(buildSummaryGenerationRequest(...)) パターンが消滅している。' +
+          `パターン ${BUILDER_CALL_PATTERN.source} が消滅している。` +
           'Issue #209 再発防止のため、summaryRequestBuilder 経由で呼び出してください。'
       );
     });
@@ -41,16 +51,29 @@ describe('generateSummary caller contract (Issue #225)', () => {
 describe('BUILDER_CALL_PATTERN sanity (regex が bypass を正しく検出するか)', () => {
   it('正例: buildSummaryGenerationRequest 経由の呼び出しはマッチする', () => {
     const src = 'return await model.generateContent(buildSummaryGenerationRequest(prompt));';
-    expect(BUILDER_CALL_PATTERN.test(src)).to.equal(true);
+    expect(countMatches(src)).to.equal(1);
   });
 
-  it('負例: インライン展開 ({ contents: [...] }) はマッチしない (bypass 検出)', () => {
+  it('負例: インライン展開 ({ contents: [...] }) はマッチしない', () => {
     const src = 'return await model.generateContent({ contents: [{ role: "user", parts: [{ text: prompt }] }] });';
-    expect(BUILDER_CALL_PATTERN.test(src)).to.equal(false);
+    expect(countMatches(src)).to.equal(0);
   });
 
-  it('負例: 事前組み立て req オブジェクトもマッチしない (builder未経由)', () => {
+  it('負例: 事前組み立て req オブジェクトもマッチしない', () => {
     const src = 'const req = { contents, generationConfig }; await model.generateContent(req);';
-    expect(BUILDER_CALL_PATTERN.test(src)).to.equal(false);
+    expect(countMatches(src)).to.equal(0);
+  });
+
+  it('負例: 行頭コメントアウトされた呼び出しは stripLineComments で除外される', () => {
+    const src = '  // return await model.generateContent(buildSummaryGenerationRequest(prompt));';
+    expect(countMatches(stripLineComments(src))).to.equal(0);
+  });
+
+  it('複数回呼び出しも正しくカウント', () => {
+    const src = [
+      'await model.generateContent(buildSummaryGenerationRequest(p1));',
+      'await model.generateContent(buildSummaryGenerationRequest(p2));',
+    ].join('\n');
+    expect(countMatches(src)).to.equal(2);
   });
 });
