@@ -39,7 +39,7 @@ import { isCustomerConfirmed } from '@/hooks/useProcessingHistory'
 import { useDocumentVerification } from '@/hooks/useDocumentVerification'
 import { resolveCareManager } from '@/utils/resolveCareManager'
 import { getDisplayFileName } from '@/utils/getDisplayFileName'
-import type { DocumentStatus } from '@shared/types'
+import type { DocumentStatus, SummaryField } from '@shared/types'
 
 // 閉じる確認ダイアログ用のAlertDialog
 import {
@@ -68,7 +68,7 @@ function MobileContentPopup({
   isGeneratingSummary,
 }: {
   type: 'summary' | 'ocr'
-  document: { summary?: string; ocrResult?: string }
+  document: { summary?: SummaryField; ocrResult?: string }
   onClose: () => void
   onGenerateSummary: () => void
   isGeneratingSummary: boolean
@@ -183,8 +183,15 @@ function MobileContentPopup({
     scrollContainer.appendChild(contentArea)
 
     if (type === 'summary') {
-      if (doc.summary) {
-        contentArea.innerHTML = `<div style="font-size: 14px; color: #374151; line-height: 1.6;">${doc.summary}</div>`
+      if (doc.summary?.text) {
+        // #215: summary が discriminated union 化されたため .text プロパティ参照に変更。
+        // 併せて innerHTML → createElement + textContent で XSS 経路を排除。
+        const summaryDiv = globalThis.document.createElement('div')
+        summaryDiv.style.fontSize = '14px'
+        summaryDiv.style.color = '#374151'
+        summaryDiv.style.lineHeight = '1.6'
+        summaryDiv.textContent = doc.summary.text
+        contentArea.replaceChildren(summaryDiv)
       } else if (doc.ocrResult && doc.ocrResult.length >= 100) {
         contentArea.innerHTML = `<div style="text-align: center; padding: 16px;">
           <button id="generate-summary-btn" style="padding: 8px 16px; background: #f3e8ff; color: #7c3aed; border: 1px solid #c4b5fd; border-radius: 6px; cursor: pointer;">
@@ -195,7 +202,17 @@ function MobileContentPopup({
         contentArea.innerHTML = `<p style="font-size: 14px; color: #9ca3af; text-align: center; padding: 16px;">OCR結果が短いため要約を生成できません</p>`
       }
     } else {
-      contentArea.innerHTML = `<pre style="font-size: 12px; color: #4b5563; white-space: pre-wrap; font-family: monospace; line-height: 1.5; margin: 0;">${doc.ocrResult || 'OCR結果なし'}</pre>`
+      // #215: XSS 経路排除のため innerHTML → createElement + textContent (summary 修正と整合)。
+      // OCR 結果は改行や文字制御を保持する必要があるため <pre> を使用。
+      const ocrPre = globalThis.document.createElement('pre')
+      ocrPre.style.fontSize = '12px'
+      ocrPre.style.color = '#4b5563'
+      ocrPre.style.whiteSpace = 'pre-wrap'
+      ocrPre.style.fontFamily = 'monospace'
+      ocrPre.style.lineHeight = '1.5'
+      ocrPre.style.margin = '0'
+      ocrPre.textContent = doc.ocrResult || 'OCR結果なし'
+      contentArea.replaceChildren(ocrPre)
     }
 
     content.appendChild(header)
@@ -244,7 +261,7 @@ function MobileContentPopup({
         container.parentNode.removeChild(container)
       }
     }
-  }, [type, doc.summary, doc.ocrResult, onClose, onGenerateSummary])
+  }, [type, doc.summary?.text, doc.ocrResult, onClose, onGenerateSummary])
 
   // isGeneratingSummary の変更を反映
   useEffect(() => {
@@ -1341,7 +1358,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                       <span className="flex items-center gap-2 text-xs font-medium text-gray-700">
                         <Sparkles className="h-3.5 w-3.5 text-purple-500" />
                         AI要約
-                        {document.summary && (
+                        {document.summary?.text && (
                           <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-purple-500 text-white text-[10px]">✓</span>
                         )}
                       </span>
@@ -1349,9 +1366,9 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                     </button>
                     {expandedSection === 'summary' && (
                       <div className="p-3 overflow-y-auto max-h-[180px] bg-white border-t border-purple-100">
-                        {document.summary ? (
+                        {document.summary?.text ? (
                           <div className="text-sm text-gray-700 leading-relaxed">
-                            {document.summary}
+                            {document.summary.text}
                           </div>
                         ) : document.ocrResult && document.ocrResult.length >= 100 ? (
                           <Button

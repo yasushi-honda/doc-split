@@ -17,7 +17,7 @@ import { VertexAI } from '@google-cloud/vertexai';
 import { GCP_CONFIG, GEMINI_CONFIG } from '../utils/config';
 import { getRateLimiter, trackGeminiUsage } from '../utils/rateLimiter';
 import { withRetry, RETRY_CONFIGS } from '../utils/retry';
-import { capPageText, MAX_SUMMARY_LENGTH, type CappedText } from '../utils/pageTextCap';
+import { capPageText, MAX_SUMMARY_LENGTH, type CappedText } from '../utils/textCap';
 import { buildSummaryGenerationRequest } from './summaryRequestBuilder';
 
 const PROJECT_ID = GCP_CONFIG.projectId;

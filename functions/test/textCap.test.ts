@@ -1,5 +1,5 @@
 /**
- * OCRページテキスト長さ制限ユーティリティのテスト (Issue #205)
+ * テキスト長さ制限ユーティリティのテスト (Issue #205, #209, #215)
  *
  * 背景: Vertex AI Geminiのハルシネーション/暴走により異常に長い応答が
  * Firestoreの per-field 1 MiB 制限を超え INVALID_ARGUMENT を引き起こす問題への防御。
@@ -12,9 +12,9 @@ import {
   MAX_PAGE_TEXT_LENGTH,
   MAX_AGGREGATE_PAGE_CHARS,
   MAX_SUMMARY_LENGTH,
-} from '../src/utils/pageTextCap';
+} from '../src/utils/textCap';
 
-describe('pageTextCap', () => {
+describe('textCap', () => {
   describe('capPageText (per-page cap)', () => {
     it('短いテキストはそのまま返される', () => {
       const input = 'これはテストです。';

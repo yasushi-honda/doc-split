@@ -23,6 +23,7 @@ import {
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import type { Document, DocumentStatus, CustomerCandidateInfo } from '@shared/types';
+import { normalizeSummary } from './useDocuments';
 
 // ============================================
 // 定数
@@ -117,6 +118,8 @@ function firestoreToDocument(id: string, data: Record<string, unknown>): Documen
     mimeType: data.mimeType as string,
     ocrResult: data.ocrResult as string,
     ocrResultUrl: data.ocrResultUrl as string | undefined,
+    // Issue #209/#215: 切り詰めメタ込みの discriminated union (旧フラット形式も互換読込)
+    summary: normalizeSummary(data),
     documentType: data.documentType as string,
     customerName: data.customerName as string,
     officeName: data.officeName as string,

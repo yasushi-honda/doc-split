@@ -12,17 +12,12 @@
 
 import type { GenerateContentRequest } from '@google-cloud/vertexai';
 import { GEMINI_CONFIG } from '../utils/config';
-import type { CappedText } from '../utils/pageTextCap';
+import type { CappedText } from '../utils/textCap';
+import type { SummaryField } from '../../../shared/types';
 
 export interface SummaryGenerationRequest {
   contents: Array<{ role: 'user'; parts: Array<{ text: string }> }>;
   generationConfig: { maxOutputTokens: number };
-}
-
-export interface SummaryUpdatePayload {
-  summary: string;
-  summaryTruncated: boolean;
-  summaryOriginalLength: number;
 }
 
 /**
@@ -39,14 +34,20 @@ export function buildSummaryGenerationRequest(prompt: string): SummaryGeneration
 }
 
 /**
- * Firestore documents/{docId} の summary 関連フィールド更新ペイロード。
- * truncated / originalLength を併せて書き込まないと FE で切り詰めバナーが
- * 表示できないため (#178 教訓)、3フィールドをセットで構築する。
+ * Firestore documents/{docId}.summary に書き込む discriminated union ペイロード。
+ *
+ * #215 で旧フラット3フィールド (summary / summaryTruncated / summaryOriginalLength) を
+ * 廃止し、不変条件 (truncated=true ⟹ originalLength 必須) を型レベル保証する
+ * SummaryField ネスト型に統一。#178 教訓の「派生フィールドの書き込み漏れで
+ * FE 表示が壊れる」問題は union の tag (truncated) で構造的に排除される。
  */
-export function buildSummaryFields(summary: CappedText): SummaryUpdatePayload {
-  return {
-    summary: summary.text,
-    summaryTruncated: summary.truncated,
-    summaryOriginalLength: summary.originalLength,
-  };
+export function buildSummaryFields(summary: CappedText): SummaryField {
+  if (summary.truncated) {
+    return {
+      text: summary.text,
+      truncated: true,
+      originalLength: summary.originalLength,
+    };
+  }
+  return { text: summary.text, truncated: false };
 }
