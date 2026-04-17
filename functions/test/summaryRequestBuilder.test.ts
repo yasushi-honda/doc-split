@@ -12,7 +12,7 @@ import {
   buildSummaryFields,
 } from '../src/ocr/summaryRequestBuilder';
 import { GEMINI_CONFIG } from '../src/utils/config';
-import type { CappedText } from '../src/utils/pageTextCap';
+import type { CappedText } from '../src/utils/textCap';
 
 describe('summaryRequestBuilder: buildSummaryGenerationRequest', () => {
   it('generationConfig.maxOutputTokens に GEMINI_CONFIG.maxOutputTokens を必ず設定する', () => {
@@ -49,41 +49,56 @@ describe('summaryRequestBuilder: buildSummaryGenerationRequest', () => {
   });
 });
 
-describe('summaryRequestBuilder: buildSummaryFields', () => {
-  it('truncated=false の通常ケースで3フィールド全てを返す (#178 教訓)', () => {
+describe('summaryRequestBuilder: buildSummaryFields (Issue #215 discriminated union)', () => {
+  it('truncated=false で { text, truncated:false } のみ返す (originalLength は型レベルで不在)', () => {
     const summary: CappedText = {
       text: '通常の要約テキスト',
       originalLength: 100,
       truncated: false,
     };
     expect(buildSummaryFields(summary)).to.deep.equal({
-      summary: '通常の要約テキスト',
-      summaryTruncated: false,
-      summaryOriginalLength: 100,
+      text: '通常の要約テキスト',
+      truncated: false,
     });
   });
 
-  it('truncated=true の切り詰めケースでも3フィールド全てを返す', () => {
+  it('truncated=true で { text, truncated:true, originalLength } を返す', () => {
     const summary: CappedText = {
       text: '切り詰め後\n[TRUNCATED]',
       originalLength: 1_100_000,
       truncated: true,
     };
     expect(buildSummaryFields(summary)).to.deep.equal({
-      summary: '切り詰め後\n[TRUNCATED]',
-      summaryTruncated: true,
-      summaryOriginalLength: 1_100_000,
+      text: '切り詰め後\n[TRUNCATED]',
+      truncated: true,
+      originalLength: 1_100_000,
     });
   });
 
-  it('空 summary でも 3 フィールドが必ず含まれる (FE側マッピングを破壊しない)', () => {
+  it('空テキスト (truncated=false) でも { text:"", truncated:false } が返る', () => {
     const summary: CappedText = { text: '', originalLength: 0, truncated: false };
     const fields = buildSummaryFields(summary);
+    expect(fields).to.deep.equal({ text: '', truncated: false });
+    // 不変条件の保証: truncated=false の分岐で originalLength キーが含まれない
+    expect(Object.keys(fields).sort()).to.deep.equal(['text', 'truncated']);
+  });
+
+  it('discriminated union: truncated=true の場合に必ず originalLength を含む (#215 型不変条件)', () => {
+    const summary: CappedText = {
+      text: 'a'.repeat(30_000),
+      originalLength: 50_000,
+      truncated: true,
+    };
+    const fields = buildSummaryFields(summary);
     expect(Object.keys(fields).sort()).to.deep.equal([
-      'summary',
-      'summaryOriginalLength',
-      'summaryTruncated',
+      'originalLength',
+      'text',
+      'truncated',
     ]);
+    // 型 narrowing で originalLength が number と保証される
+    if (fields.truncated) {
+      expect(fields.originalLength).to.equal(50_000);
+    }
   });
 });
 

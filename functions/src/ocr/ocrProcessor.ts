@@ -28,7 +28,7 @@ import {
   capPageResultsAggregate,
   MAX_PAGE_TEXT_LENGTH,
   type CappedText,
-} from '../utils/pageTextCap';
+} from '../utils/textCap';
 
 const db = admin.firestore();
 const storage = admin.storage();
@@ -284,11 +284,16 @@ export async function processDocument(
   });
 
   // ドキュメント更新
+  // Issue #215: summary を discriminated union ネスト型で書き込み、
+  // 旧フラット3フィールド (summaryTruncated / summaryOriginalLength) は削除。
+  // 旧 summary (string型) は新 summary (object型) で上書きされる。
   await db.doc(`documents/${docId}`).update({
     ...(displayFileName ? { displayFileName } : {}),
     ocrResult: savedOcrResult,
     ocrResultUrl: ocrResultUrl ?? null,
-    ...buildSummaryFields(summary),
+    summary: buildSummaryFields(summary),
+    summaryTruncated: admin.firestore.FieldValue.delete(),
+    summaryOriginalLength: admin.firestore.FieldValue.delete(),
     pageResults,
     documentType: documentTypeResult.documentType || '未判定',
     customerName: customerResult.bestMatch?.name || '不明顧客',

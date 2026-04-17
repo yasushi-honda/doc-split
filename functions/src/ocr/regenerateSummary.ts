@@ -8,7 +8,7 @@
 import * as functions from 'firebase-functions/v2';
 import * as admin from 'firebase-admin';
 import { GCP_CONFIG } from '../utils/config';
-import type { CappedText } from '../utils/pageTextCap';
+import type { CappedText } from '../utils/textCap';
 import { buildSummaryFields } from './summaryRequestBuilder';
 import { generateSummaryCore, MIN_OCR_LENGTH_FOR_SUMMARY } from './summaryGenerator';
 
@@ -80,7 +80,13 @@ export const regenerateSummary = functions.https.onCall(
     }
 
     // ドキュメント更新（Issue #209: 切り詰めメタデータも保存し後追い検出を可能にする）
-    await docRef.update({ ...buildSummaryFields(summary) });
+    // Issue #215: summary は discriminated union ネスト型で書き込み、
+    // 旧フラット3フィールド (summaryTruncated / summaryOriginalLength) は削除。
+    await docRef.update({
+      summary: buildSummaryFields(summary),
+      summaryTruncated: admin.firestore.FieldValue.delete(),
+      summaryOriginalLength: admin.firestore.FieldValue.delete(),
+    });
 
     console.log(`Summary regenerated for ${docId}: ${summary.text.length} chars`);
 

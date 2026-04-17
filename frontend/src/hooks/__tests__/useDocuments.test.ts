@@ -7,7 +7,7 @@
 
 import { describe, it, expect } from 'vitest'
 import { Timestamp } from 'firebase/firestore'
-import { firestoreToDocument } from '../useDocuments'
+import { firestoreToDocument, normalizeSummary, getReprocessClearFields } from '../useDocuments'
 
 describe('firestoreToDocument', () => {
   // 基本フィールドのモックデータ
@@ -221,5 +221,165 @@ describe('firestoreToDocument', () => {
       expect(result.customerCandidates).toHaveLength(1)
       expect(result.officeCandidates).toHaveLength(1)
     })
+  })
+
+  describe('summary フィールド (Issue #215 discriminated union + 後方互換読込)', () => {
+    it('summary が存在しない場合は undefined を返す', () => {
+      const result = firestoreToDocument('doc-001', baseFirestoreData)
+      expect(result.summary).toBeUndefined()
+    })
+
+    it('新ネスト形式 (truncated=false) をそのまま SummaryField として返す', () => {
+      const data = {
+        ...baseFirestoreData,
+        summary: { text: '要約テキスト', truncated: false },
+      }
+      const result = firestoreToDocument('doc-001', data)
+      expect(result.summary).toEqual({ text: '要約テキスト', truncated: false })
+    })
+
+    it('新ネスト形式 (truncated=true) で originalLength を保持する', () => {
+      const data = {
+        ...baseFirestoreData,
+        summary: { text: '切り詰め後', truncated: true, originalLength: 1_100_000 },
+      }
+      const result = firestoreToDocument('doc-001', data)
+      expect(result.summary).toEqual({
+        text: '切り詰め後',
+        truncated: true,
+        originalLength: 1_100_000,
+      })
+    })
+
+    it('旧フラット形式 (summary: string + summaryTruncated: false) を新ネスト型に変換する', () => {
+      const data = {
+        ...baseFirestoreData,
+        summary: '旧形式の要約',
+        summaryTruncated: false,
+        summaryOriginalLength: 50,
+      }
+      const result = firestoreToDocument('doc-001', data)
+      // truncated=false では originalLength は不在 (型不変条件)
+      expect(result.summary).toEqual({ text: '旧形式の要約', truncated: false })
+    })
+
+    it('旧フラット形式 (summary: string + summaryTruncated: true) を新ネスト型に変換し originalLength を保持する', () => {
+      const data = {
+        ...baseFirestoreData,
+        summary: '旧形式の切り詰め要約',
+        summaryTruncated: true,
+        summaryOriginalLength: 1_100_000,
+      }
+      const result = firestoreToDocument('doc-001', data)
+      expect(result.summary).toEqual({
+        text: '旧形式の切り詰め要約',
+        truncated: true,
+        originalLength: 1_100_000,
+      })
+    })
+
+    it('旧フラット形式で truncated=true だが originalLength 欠落の場合は truncated=false 扱いでフォールバック', () => {
+      // 過去データ不整合への防御: truncated=true だが originalLength が無ければ非切り詰め扱いとする
+      const data = {
+        ...baseFirestoreData,
+        summary: '不整合データ',
+        summaryTruncated: true,
+        // summaryOriginalLength は欠落
+      }
+      const result = firestoreToDocument('doc-001', data)
+      expect(result.summary).toEqual({ text: '不整合データ', truncated: false })
+    })
+
+    it('不正な形式 (summary がオブジェクトだが text キー欠落) は undefined を返す', () => {
+      const data = {
+        ...baseFirestoreData,
+        summary: { truncated: false },
+      }
+      const result = firestoreToDocument('doc-001', data)
+      expect(result.summary).toBeUndefined()
+    })
+  })
+})
+
+describe('normalizeSummary (Issue #215 単体)', () => {
+  it('summary フィールド欠落は undefined', () => {
+    expect(normalizeSummary({})).toBeUndefined()
+  })
+
+  it('summary=null は undefined', () => {
+    expect(normalizeSummary({ summary: null })).toBeUndefined()
+  })
+
+  it('新形式 truncated=false', () => {
+    expect(normalizeSummary({ summary: { text: 'x', truncated: false } })).toEqual({
+      text: 'x',
+      truncated: false,
+    })
+  })
+
+  it('新形式 truncated=true + originalLength', () => {
+    expect(
+      normalizeSummary({ summary: { text: 'x', truncated: true, originalLength: 100 } })
+    ).toEqual({ text: 'x', truncated: true, originalLength: 100 })
+  })
+
+  it('新形式 truncated=true だが originalLength 欠落は undefined (illegal state)', () => {
+    expect(normalizeSummary({ summary: { text: 'x', truncated: true } })).toBeUndefined()
+  })
+
+  it('旧形式 string + truncated メタなし → truncated=false', () => {
+    expect(normalizeSummary({ summary: '旧要約' })).toEqual({
+      text: '旧要約',
+      truncated: false,
+    })
+  })
+
+  it('旧形式 string + summaryTruncated=true + originalLength → truncated=true', () => {
+    expect(
+      normalizeSummary({
+        summary: '旧要約',
+        summaryTruncated: true,
+        summaryOriginalLength: 500,
+      })
+    ).toEqual({ text: '旧要約', truncated: true, originalLength: 500 })
+  })
+
+  it('新形式で truncated が文字列 "true" の場合は undefined (型防御)', () => {
+    // Firestore は型安全でないため、誤った書込で summary.truncated が文字列になるケースを想定
+    expect(
+      normalizeSummary({ summary: { text: 'x', truncated: 'true' } })
+    ).toBeUndefined()
+  })
+
+  it('summary が数値の場合は undefined (不正型防御)', () => {
+    expect(normalizeSummary({ summary: 42 })).toBeUndefined()
+  })
+})
+
+describe('getReprocessClearFields (Issue #215: 旧3キー + 新summary 全て delete)', () => {
+  it('summary + 旧 summaryTruncated + 旧 summaryOriginalLength を含む', () => {
+    const fields = getReprocessClearFields()
+    // Issue #215: 新ネスト summary と旧フラット3キーを同時にクリア
+    // (再処理時に Firestore に残存する旧フィールドも明示削除)
+    expect(fields).toHaveProperty('summary')
+    expect(fields).toHaveProperty('summaryTruncated')
+    expect(fields).toHaveProperty('summaryOriginalLength')
+  })
+
+  it('OCR結果 / ocrResult / pageResults / ocrExtraction も含む', () => {
+    const fields = getReprocessClearFields()
+    expect(fields).toHaveProperty('ocrResult')
+    expect(fields).toHaveProperty('ocrResultUrl')
+    expect(fields).toHaveProperty('pageResults')
+    expect(fields).toHaveProperty('ocrExtraction')
+  })
+
+  it('確認ステータスのリセット値 (customerConfirmed=false, verified=false 等) を含む', () => {
+    const fields = getReprocessClearFields()
+    expect(fields.customerConfirmed).toBe(false)
+    expect(fields.officeConfirmed).toBe(false)
+    expect(fields.verified).toBe(false)
+    expect(fields.confirmedBy).toBeNull()
+    expect(fields.verifiedBy).toBeNull()
   })
 })

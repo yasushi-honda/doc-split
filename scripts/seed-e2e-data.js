@@ -242,7 +242,8 @@ async function seedMainFlowTestDocuments() {
         fileDate: Timestamp.fromDate(new Date('2026-01-15')),
         processedAt: Timestamp.now(),
         createdAt: Timestamp.now(),
-        summary: 'テスト請求書のAI要約です。金額10,000円。',
+        // Issue #215: discriminated union ネスト型
+        summary: { text: 'テスト請求書のAI要約です。金額10,000円。', truncated: false },
         verified: false,
       },
     },

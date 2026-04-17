@@ -21,7 +21,80 @@ import {
   DocumentSnapshot,
 } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
-import type { Document, DocumentStatus, DocumentMaster, CustomerMaster, OfficeMaster } from '@shared/types'
+import type { Document, DocumentStatus, DocumentMaster, CustomerMaster, OfficeMaster, SummaryField } from '@shared/types'
+
+// ============================================
+// Summary 後方互換読込 (Issue #215)
+// ============================================
+
+/**
+ * 旧フラット形式 (summary:string + summaryTruncated + summaryOriginalLength) の既存
+ * Firestore ドキュメントを新 discriminated union 型 SummaryField に変換する。
+ *
+ * 新形式: data.summary = { text, truncated, originalLength? }
+ * 旧形式: data.summary = string, data.summaryTruncated = boolean, data.summaryOriginalLength = number
+ *
+ * 書込経路は常に新形式で保存するため、再処理されたドキュメントから順に自然にクリーン化される。
+ * ただし **未再処理のドキュメントは旧フラット形式のまま残留** するため、後方互換読込は
+ * 旧形式が実運用から消えるまで (最低 1-2 リリース) 維持が必要。
+ * 旧フィールドは再処理時に FieldValue.delete() で明示削除される (ocrProcessor / regenerateSummary)。
+ *
+ * ## 旧データ不整合 (illegal state) への防御仕様
+ *
+ * 本来、新型 SummaryField では「truncated=true ⟹ originalLength 必須」が型レベル保証される。
+ * しかし Firestore データには下記 3 通りの不整合が残存しうる:
+ *
+ * 1. 新形式で truncated=true だが originalLength 欠落 → undefined (summary 欠落扱い)
+ * 2. 旧形式で summaryTruncated=true だが summaryOriginalLength 欠落
+ *    → { text, truncated:false } にフォールバック (要約テキスト自体は保持)
+ * 3. 新形式で text 欠落 / 型違い → undefined
+ *
+ * ケース 2 のみフォールバック挙動とする根拠: 旧形式は「3 フィールドの書込漏れ」が #178 教訓の
+ * 元になった実害。要約本文を表示する方が無表示より実害が小さく、切り詰めメタは失われても
+ * 要約本文は保持すべき、という仕様判断。ケース 1/3 の新形式は書込経路で型保証されるため到達不能
+ * (防衛的コード)。
+ */
+export function normalizeSummary(data: Record<string, unknown>): SummaryField | undefined {
+  const summary = data.summary
+
+  // 新形式: オブジェクト
+  if (summary && typeof summary === 'object' && 'text' in summary && 'truncated' in summary) {
+    const obj = summary as { text: unknown; truncated: unknown; originalLength?: unknown }
+    if (typeof obj.text === 'string' && typeof obj.truncated === 'boolean') {
+      if (obj.truncated && typeof obj.originalLength === 'number') {
+        return { text: obj.text, truncated: true, originalLength: obj.originalLength }
+      }
+      if (!obj.truncated) {
+        return { text: obj.text, truncated: false }
+      }
+    }
+    // illegal state: 新形式だが型違反 (手動編集 / 未来のスキーマドリフト等で到達可能)
+    console.warn('[normalizeSummary] illegal state: new-format summary with invalid types', {
+      truncated: obj.truncated,
+      originalLengthType: typeof obj.originalLength,
+    })
+    return undefined
+  }
+
+  // 旧形式: string + サイドカー
+  if (typeof summary === 'string') {
+    const truncated = data.summaryTruncated === true
+    const originalLength = data.summaryOriginalLength
+    if (truncated && typeof originalLength === 'number') {
+      return { text: summary, truncated: true, originalLength }
+    }
+    // 旧形式で truncated=true だが originalLength 欠落: 切り詰めバナーが表示できなくなる
+    // (#209 切り詰め検出要件に対する silent degradation)。要約本文は保持して表示する。
+    if (truncated) {
+      console.warn(
+        '[normalizeSummary] legacy-format summary with truncated=true but missing originalLength; truncation badge will not be shown'
+      )
+    }
+    return { text: summary, truncated: false }
+  }
+
+  return undefined
+}
 
 // ============================================
 // 型定義
@@ -71,10 +144,8 @@ export function firestoreToDocument(id: string, data: Record<string, unknown>): 
     mimeType: data.mimeType as string,
     ocrResult: data.ocrResult as string,
     ocrResultUrl: data.ocrResultUrl as string | undefined,
-    summary: data.summary as string | undefined,
-    // Issue #209: Vertex AI暴走時の切り詰め検出メタ
-    summaryTruncated: data.summaryTruncated as boolean | undefined,
-    summaryOriginalLength: data.summaryOriginalLength as number | undefined,
+    // Issue #209/#215: 切り詰めメタ込みの discriminated union (旧フラット形式も互換読込)
+    summary: normalizeSummary(data),
     documentType: data.documentType as string,
     customerName: data.customerName as string,
     officeName: data.officeName as string,
@@ -179,6 +250,9 @@ export function getReprocessClearFields() {
     // OCR結果
     ocrResult: df,
     ocrResultUrl: df,
+    // Issue #215: summary は discriminated union ネスト型に統一。旧フラット3フィールド
+    // (summaryTruncated / summaryOriginalLength) は後方互換のため同時に delete し、
+    // 既存 Firestore ドキュメントに残存する旧フィールドも再処理時にクリーン化する。
     summary: df,
     summaryTruncated: df,
     summaryOriginalLength: df,

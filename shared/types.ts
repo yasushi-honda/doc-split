@@ -14,6 +14,23 @@ export type DocumentStatus = 'pending' | 'processing' | 'processed' | 'error' | 
 /** ドキュメントのソースタイプ */
 export type SourceType = 'gmail' | 'upload';
 
+/**
+ * Summary フィールド (Issue #215)
+ *
+ * discriminated union で「truncated=true ⟹ originalLength 必須」を型レベル保証。
+ * illegal state (truncated=true だが originalLength 欠落) を代入不可能にする。
+ *
+ * - 判別タグ: `truncated: boolean` (TypeScript の narrowing で分岐判定)
+ * - truncated=false: `{ text, truncated }` のみ (originalLength は型に存在しない)
+ * - truncated=true: `{ text, truncated, originalLength }` (originalLength 必須)
+ *
+ * 旧フラット形式 (summary/summaryTruncated/summaryOriginalLength) の既存 Firestore ドキュメントは
+ * FE firestoreToDocument 側で後方互換読込 (フラット→ネスト変換) する。書込は常に本型。
+ */
+export type SummaryField =
+  | { text: string; truncated: false }
+  | { text: string; truncated: true; originalLength: number };
+
 export interface Document {
   id: string;
   processedAt: Timestamp;
@@ -23,9 +40,7 @@ export interface Document {
   mimeType: string;
   ocrResult: string;
   ocrResultUrl?: string; // 長い場合はCloud Storage参照
-  summary?: string; // AI生成の要約
-  summaryTruncated?: boolean; // Vertex AI暴走時に切り詰めが発生したか (Issue #209)
-  summaryOriginalLength?: number; // 切り詰め前の元文字数 (Issue #209)
+  summary?: SummaryField; // AI生成の要約 (Issue #209/#215)
   documentType: string;
   customerName: string;
   officeName: string;
