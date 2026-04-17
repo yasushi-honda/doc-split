@@ -532,8 +532,9 @@ ${pageNumber ? `\nこれは${pageNumber}ページ目です。` : ''}
 /**
  * OCR結果からAI要約を生成 (Issue #209, Issue #214)
  *
- * 短文ガードで空 CappedText を返したあと、要約生成は `generateSummaryCore` に委譲。
- * 本経路では Vertex AI エラーを catch して empty 返却し、後続処理 (Firestore 更新) を継続する。
+ * Precondition: core の `generateSummaryCore` は `length < MIN_OCR_LENGTH_FOR_SUMMARY` を許容しない。
+ * 本 helper はその precondition を先に消化し、短文時は empty CappedText を返して後続処理を継続する。
+ * Vertex AI エラーは catch → empty 返却で best-effort (呼出元 `summaryPromise` の `.catch(empty)` と二重防御)。
  * @returns CappedText - text(切り詰め後summary), originalLength(元文字数), truncated(切り詰めフラグ)
  */
 async function generateSummary(

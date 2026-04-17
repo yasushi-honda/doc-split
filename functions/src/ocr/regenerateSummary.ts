@@ -10,11 +10,7 @@ import * as admin from 'firebase-admin';
 import { GCP_CONFIG } from '../utils/config';
 import type { CappedText } from '../utils/pageTextCap';
 import { buildSummaryFields } from './summaryRequestBuilder';
-import {
-  generateSummaryCore,
-  MIN_OCR_LENGTH_FOR_SUMMARY,
-  DEFAULT_DOCUMENT_TYPE_LABEL,
-} from './summaryGenerator';
+import { generateSummaryCore, MIN_OCR_LENGTH_FOR_SUMMARY } from './summaryGenerator';
 
 const LOCATION = GCP_CONFIG.location;
 
@@ -60,7 +56,8 @@ export const regenerateSummary = functions.https.onCall(
 
     const docData = docSnap.data()!;
     const ocrResult = docData.ocrResult as string | undefined;
-    const documentType = (docData.documentType as string) || DEFAULT_DOCUMENT_TYPE_LABEL;
+    // 空/未定義はそのまま core に渡し、core 内の DEFAULT_DOCUMENT_TYPE_LABEL で一本化。
+    const documentType = (docData.documentType as string | undefined) ?? '';
 
     if (!ocrResult || ocrResult.length < MIN_OCR_LENGTH_FOR_SUMMARY) {
       throw new functions.https.HttpsError(

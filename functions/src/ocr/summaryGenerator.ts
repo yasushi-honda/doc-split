@@ -31,7 +31,9 @@ const MAX_SUMMARY_INPUT_LENGTH = 8000;
 export const MIN_OCR_LENGTH_FOR_SUMMARY = 100;
 
 // documentType が空の場合のフォールバック表示名 (prompt 文言に差し込まれる)。
-export const DEFAULT_DOCUMENT_TYPE_LABEL = '書類';
+// 非 export: fallback の single source of truth を core 内に閉じ込め、caller 側での
+// 二重 fallback (type-design-analyzer 指摘) を構造的に防止する。
+const DEFAULT_DOCUMENT_TYPE_LABEL = '書類';
 
 function buildSummaryPrompt(ocrResult: string, documentType: string): string {
   const truncatedText =
@@ -67,6 +69,14 @@ export async function generateSummaryCore(
   ocrResult: string,
   documentType: string
 ): Promise<CappedText> {
+  // 新 caller が短文ガードを忘れた場合の safety net (type-design-analyzer 指摘)。
+  // 既存 caller (ocrProcessor / regenerateSummary) は手前で同じ閾値チェック済のため到達しない。
+  if (ocrResult.length < MIN_OCR_LENGTH_FOR_SUMMARY) {
+    throw new Error(
+      `generateSummaryCore: ocrResult must be at least ${MIN_OCR_LENGTH_FOR_SUMMARY} chars (actual=${ocrResult.length})`
+    );
+  }
+
   const rateLimiter = getRateLimiter();
   await rateLimiter.acquire();
 
