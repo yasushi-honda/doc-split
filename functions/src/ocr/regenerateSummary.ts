@@ -1,21 +1,18 @@
 /**
  * AI要約の再生成
  *
- * 既存ドキュメントに対してAI要約を再生成するCallable関数
+ * 既存ドキュメントに対してAI要約を再生成するCallable関数。
+ * Issue #214 で Vertex AI 呼び出しロジックは summaryGenerator.generateSummaryCore に集約。
  */
 
 import * as functions from 'firebase-functions/v2';
 import * as admin from 'firebase-admin';
-import { VertexAI } from '@google-cloud/vertexai';
-import { getRateLimiter, trackGeminiUsage } from '../utils/rateLimiter';
-import { withRetry, RETRY_CONFIGS } from '../utils/retry';
-import { GCP_CONFIG, GEMINI_CONFIG } from '../utils/config';
-import { capPageText, MAX_SUMMARY_LENGTH, type CappedText } from '../utils/pageTextCap';
-import { buildSummaryGenerationRequest, buildSummaryFields } from './summaryRequestBuilder';
+import { GCP_CONFIG } from '../utils/config';
+import type { CappedText } from '../utils/pageTextCap';
+import { buildSummaryFields } from './summaryRequestBuilder';
+import { generateSummaryCore, MIN_OCR_LENGTH_FOR_SUMMARY } from './summaryGenerator';
 
-const PROJECT_ID = GCP_CONFIG.projectId;
 const LOCATION = GCP_CONFIG.location;
-const MODEL_ID = GEMINI_CONFIG.modelId;
 
 const db = admin.firestore();
 
@@ -59,17 +56,24 @@ export const regenerateSummary = functions.https.onCall(
 
     const docData = docSnap.data()!;
     const ocrResult = docData.ocrResult as string | undefined;
-    const documentType = docData.documentType as string || '書類';
+    // 空/未定義はそのまま core に渡し、core 内の DEFAULT_DOCUMENT_TYPE_LABEL で一本化。
+    const documentType = (docData.documentType as string | undefined) ?? '';
 
-    if (!ocrResult || ocrResult.length < 100) {
+    if (!ocrResult || ocrResult.length < MIN_OCR_LENGTH_FOR_SUMMARY) {
       throw new functions.https.HttpsError(
         'failed-precondition',
         'OCR結果が短すぎるため要約を生成できません'
       );
     }
 
-    // 要約生成
-    const summary = await generateSummaryInternal(ocrResult, documentType);
+    // 要約生成 (Issue #214: 共通コアに委譲。本経路は error を rethrow して onCall の internal error 化)
+    let summary: CappedText;
+    try {
+      summary = await generateSummaryCore(ocrResult, documentType);
+    } catch (error) {
+      console.error('Failed to generate summary:', error);
+      throw error;
+    }
 
     if (!summary.text) {
       throw new functions.https.HttpsError('internal', '要約の生成に失敗しました');
@@ -83,73 +87,3 @@ export const regenerateSummary = functions.https.onCall(
     return { success: true, summary: summary.text };
   }
 );
-
-/**
- * OCR結果からAI要約を生成（内部関数, Issue #209）
- * @returns CappedText - text(切り詰め後summary), originalLength(元文字数), truncated(切り詰めフラグ)
- */
-async function generateSummaryInternal(
-  ocrResult: string,
-  documentType: string
-): Promise<CappedText> {
-  const rateLimiter = getRateLimiter();
-  await rateLimiter.acquire();
-
-  const vertexai = new VertexAI({ project: PROJECT_ID, location: LOCATION });
-  const model = vertexai.getGenerativeModel({ model: MODEL_ID });
-
-  // 入力が長すぎる場合は切り詰め
-  const maxInputLength = 8000;
-  const truncatedText =
-    ocrResult.length > maxInputLength
-      ? ocrResult.slice(0, maxInputLength) + '...(以下省略)'
-      : ocrResult;
-
-  const prompt = `
-以下は「${documentType || '書類'}」のOCR結果です。この書類の内容を3〜5行で要約してください。
-
-【要約のポイント】
-- 書類の主な目的・内容
-- 重要な日付や金額があれば含める
-- 関係者（顧客名、事業所名など）の記載があれば含める
-- 専門用語は平易に言い換える
-
-【OCR結果】
-${truncatedText}
-
-【要約】
-`;
-
-  try {
-    const response = await withRetry(
-      async () => {
-        return await model.generateContent(buildSummaryGenerationRequest(prompt));
-      },
-      RETRY_CONFIGS.gemini
-    );
-
-    const result = response.response;
-    const rawSummary = (result.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
-
-    // トークン使用量を記録
-    const usageMetadata = result.usageMetadata;
-    trackGeminiUsage(
-      usageMetadata?.promptTokenCount || 0,
-      usageMetadata?.candidatesTokenCount || 0
-    );
-
-    // Issue #209: 二重防御。maxOutputTokens を抜けた異常応答も Firestore 1 MiB 超過前に切り詰め。
-    const capped = capPageText(rawSummary, MAX_SUMMARY_LENGTH);
-    if (capped.truncated) {
-      console.warn(
-        `[Summary] truncated: ${capped.originalLength} → ${capped.text.length} chars (cap=${MAX_SUMMARY_LENGTH})`
-      );
-    } else {
-      console.log(`Summary generated: ${capped.text.length} chars`);
-    }
-    return capped;
-  } catch (error) {
-    console.error('Failed to generate summary:', error);
-    throw error;
-  }
-}

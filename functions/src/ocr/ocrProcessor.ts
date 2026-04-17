@@ -9,7 +9,7 @@ import { VertexAI } from '@google-cloud/vertexai';
 import { PDFDocument } from 'pdf-lib';
 import { withRetry, RETRY_CONFIGS, isTransientError, is429Error } from '../utils/retry';
 import { logError } from '../utils/errorLogger';
-import { getRateLimiter, trackGeminiUsage } from '../utils/rateLimiter';
+import { getRateLimiter } from '../utils/rateLimiter';
 import { GCP_CONFIG, GEMINI_CONFIG } from '../utils/config';
 import {
   extractDocumentTypeEnhanced,
@@ -21,12 +21,12 @@ import {
 } from '../utils/extractors';
 import { generateDisplayFileName } from '../utils/displayFileNameGenerator';
 import { sanitizeCustomerMasters, sanitizeOfficeMasters, sanitizeDocumentMasters } from '../utils/sanitizeMasterData';
-import { buildSummaryGenerationRequest, buildSummaryFields } from './summaryRequestBuilder';
+import { buildSummaryFields } from './summaryRequestBuilder';
+import { generateSummaryCore, MIN_OCR_LENGTH_FOR_SUMMARY } from './summaryGenerator';
 import {
   capPageText,
   capPageResultsAggregate,
   MAX_PAGE_TEXT_LENGTH,
-  MAX_SUMMARY_LENGTH,
   type CappedText,
 } from '../utils/pageTextCap';
 
@@ -530,73 +530,22 @@ ${pageNumber ? `\nこれは${pageNumber}ページ目です。` : ''}
 }
 
 /**
- * OCR結果からAI要約を生成
- */
-/**
- * OCR結果からAI要約を生成 (Issue #209)
+ * OCR結果からAI要約を生成 (Issue #209, Issue #214)
+ *
+ * Precondition: core の `generateSummaryCore` は `length < MIN_OCR_LENGTH_FOR_SUMMARY` を許容しない。
+ * 本 helper はその precondition を先に消化し、短文時は empty CappedText を返して後続処理を継続する。
+ * Vertex AI エラーは catch → empty 返却で best-effort (呼出元 `summaryPromise` の `.catch(empty)` と二重防御)。
  * @returns CappedText - text(切り詰め後summary), originalLength(元文字数), truncated(切り詰めフラグ)
  */
 async function generateSummary(
   ocrResult: string,
   documentType: string
 ): Promise<CappedText> {
-  if (!ocrResult || ocrResult.length < 100) {
+  if (!ocrResult || ocrResult.length < MIN_OCR_LENGTH_FOR_SUMMARY) {
     return { text: '', originalLength: 0, truncated: false };
   }
-
-  const rateLimiter = getRateLimiter();
-  await rateLimiter.acquire();
-
-  const vertexai = new VertexAI({ project: PROJECT_ID, location: LOCATION });
-  const model = vertexai.getGenerativeModel({ model: MODEL_ID });
-
-  const maxInputLength = 8000;
-  const truncatedText = ocrResult.length > maxInputLength
-    ? ocrResult.slice(0, maxInputLength) + '...(以下省略)'
-    : ocrResult;
-
-  const prompt = `
-以下は「${documentType || '書類'}」のOCR結果です。この書類の内容を3〜5行で要約してください。
-
-【要約のポイント】
-- 書類の主な目的・内容
-- 重要な日付や金額があれば含める
-- 関係者（顧客名、事業所名など）の記載があれば含める
-- 専門用語は平易に言い換える
-
-【OCR結果】
-${truncatedText}
-
-【要約】
-`;
-
   try {
-    const response = await withRetry(
-      async () => {
-        return await model.generateContent(buildSummaryGenerationRequest(prompt));
-      },
-      RETRY_CONFIGS.gemini
-    );
-
-    const result = response.response;
-    const rawSummary = (result.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
-
-    const usageMetadata = result.usageMetadata;
-    trackGeminiUsage(
-      usageMetadata?.promptTokenCount || 0,
-      usageMetadata?.candidatesTokenCount || 0
-    );
-
-    // Issue #209: 二重防御。maxOutputTokens を抜けた異常応答も Firestore 1 MiB 超過前に切り詰め。
-    const capped = capPageText(rawSummary, MAX_SUMMARY_LENGTH);
-    if (capped.truncated) {
-      console.warn(
-        `[Summary] truncated: ${capped.originalLength} → ${capped.text.length} chars (cap=${MAX_SUMMARY_LENGTH})`
-      );
-    } else {
-      console.log(`Summary generated: ${capped.text.length} chars`);
-    }
-    return capped;
+    return await generateSummaryCore(ocrResult, documentType);
   } catch (error) {
     console.error('Failed to generate summary:', error);
     return { text: '', originalLength: 0, truncated: false };
