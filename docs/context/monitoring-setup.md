@@ -166,8 +166,8 @@ rm /tmp/monitoring-sa.json
 ### 展開状況
 
 - ✅ dev: SA + Secret + setup 完了 (2026-04-17 session6, 5 metrics + 5 alert policies + 1 channel 稼働中)
-- ⏳ kanameone: 未セットアップ (`./scripts/switch-client.sh kanameone` で named config 切替後に SA 作成〜setup dispatch を実施。事前整備済 Owner 認証 `systemkaname@kanameone.com`)
-- ⏳ cocoro: 未セットアップ (`./scripts/switch-client.sh cocoro` で named config 切替。SA 方式 `docsplit-deployer@...`、setIamPolicy 権限の事前確認必要)
+- ✅ kanameone: SA + Secret + setup 完了 (2026-04-17 session7, Run ID `24547741800`, 5 metrics + 5 alert policies + 1 channel 稼働中、通知先 `hy.unimail.11@gmail.com`)
+- ✅ cocoro: SA + Secret + setup 完了 (2026-04-17 session7, Run ID `24548562806`, 5 metrics + 5 alert policies + 1 channel 稼働中、通知先 `hy.unimail.11@gmail.com`)
 
 ## 通知先の調整
 
