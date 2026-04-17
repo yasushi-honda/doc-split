@@ -1,8 +1,59 @@
 # ハンドオフメモ
 
-**更新日**: 2026-04-17 session7 (Sprint 1 Follow-up B 完遂: A2 kanameone + A3 cocoro 本番監視展開完了)
+**更新日**: 2026-04-17 session8 (Sprint 2-1 完遂: #214 generateSummary 共通化)
 **ブランチ**: main
-**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 (dev/kanameone/cocoro)
+**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + Summary リファクタ集約 1/2 完了
+
+## ✅ session8 完了サマリー (Sprint 2-1 完遂: #214 generateSummary 共通化)
+
+catchup から PM/PL 視点で積み残し 14 件を WBS 化し、Sprint 2-1 に着手。文脈温かい Summary リファクタ集約の前半 (#214) を完遂。Quality Gate 3 段 (`/simplify` → `/safe-refactor` → `/review-pr` 6 並列) を順に通過し、Important 指摘 3 件を PR review フォローアップ commit で対応。
+
+| 順 | Issue/PR | 結果 |
+|---|---|---|
+| 1 | **WBS 計画** | ✅ 14 件を Sprint 2/Phase 2-5 + 条件付き待機 3 件に分類、依存関係・並列可否・想定工数・Quality Gate レベルを整理 |
+| 2 | **#214 generateSummary 共通化** | ✅ PR #250 マージ (commit `27017dd`) — 新設 `functions/src/ocr/summaryGenerator.ts` の `generateSummaryCore()` に集約、caller 2 箇所は try/catch の形 (empty 返却 / rethrow) のみ差別化 |
+| 3 | **follow-up 起票** | ✅ Issue #251 (generateSummaryCore unit test + buildSummaryPrompt 別モジュール分離 + silent-failure-hunter 指摘の error handling 改善) |
+
+### 達成効果 (Sprint 2-1 完遂)
+
+| 効果 | 内容 |
+|---|---|
+| 🛡️ 重複排除 | `ocrProcessor.generateSummary` と `regenerateSummary.generateSummaryInternal` のほぼ完全同一実装を 1 関数に集約、prompt 改変が 1 ファイル編集で両経路反映 |
+| 🎯 閾値単一化 | `MIN_OCR_LENGTH_FOR_SUMMARY=100` 定数を core から export、caller 同期漏れを構造的に防止 |
+| 🔒 fallback 一本化 | `DEFAULT_DOCUMENT_TYPE_LABEL='書類'` を非 export でコア内に閉じ込め、type-design-analyzer 指摘の double fallback を解消 |
+| 🚨 precondition safety net | `generateSummaryCore` 冒頭に短文ガード assertion を追加、将来 caller が precondition を忘れた場合の silent bug を throw に変換 |
+| 📑 契約テスト拡張 | `summaryBuilderCallerContract.test.ts` に CORE_DELEGATE_PATTERN を追加、「caller は generateSummaryCore 経由」「builder bypass 不在」を grep で対称に検証、sanity も BUILDER と対称化 |
+
+### Sprint 2-1 Quality Gate 実施記録
+
+| 段階 | 結果 | 指摘 |
+|---|---|---|
+| `/simplify` 3 並列 (reuse/quality/efficiency) | Critical 0 | Minor 2 件採用 (閾値・fallback 定数化 + CORE sanity 拡張)、1 件見送り (buildSummaryPrompt export: firebase-admin 依存チェーンで test 実行不可、別 Issue 化) |
+| `/safe-refactor` | HIGH/MEDIUM/LOW すべて 0 件 | 修正不要判定 |
+| `/review-pr` 6 エージェント並列 | Critical 0 | Important 3 件採用 (precondition assertion + fallback 一本化 + JSDoc 対称性)、4 件見送り→ #251 |
+
+### CI / マージ結果
+
+- `npm test`: 407 passing (元 406 + CORE sanity 複数回呼出 1 件)
+- `npm run lint`: 0 errors (既存 19 warnings は別ファイルの no-useless-escape、本 PR 影響外)
+- `npm run build`: PASS
+- PR #250 CI: lint-build-test 4m55s ✅、CodeRabbit ✅、GitGuardian ✅ → squash merge
+
+### 次セッション: Sprint 2-2 (#215) 着手予定
+
+**Sprint 2-2 概要**: `Summary` フィールドの discriminated union 化 + `pageTextCap.ts` → `textCap.ts` rename。
+
+- 5-7 ファイル変更想定 (shared/types.ts / summaryGenerator.ts / FE useDocuments.ts の firestoreToDocument + getReprocessClearFields / textCap 周辺) → **Evaluator 分離プロトコル発動ライン**
+- #178 教訓 4 点チェック必須 (firestoreToDocument / 書込パス / getReprocessClearFields / shared/types.ts)
+- API 境界 FE↔BE 確認必須 (cross-layer.md)
+- `/trace-dataflow` で summary 全レイヤー到達確認
+
+**残り WBS** (ハンドオフ session8 時点):
+- Sprint 2-2: #215 (1 日、Evaluator 発動)
+- Sprint 3 bug 一括: #189/#190/#196 (1 日、並列可)
+- Sprint 4 displayFileName + リファクタ: #183/#182/#181/#188 (2 日)
+- Sprint 5 テスト + 雛形: #200/#152 (1 日、並列可)
+- Sprint 6 条件付き待機: #237/#238/#239/#251 (稼働実績・監査要件・false negative 発生で昇格)
 
 ## ✅ session7 完了サマリー (Sprint 1 Follow-up B 完遂: 本番 2 環境 A2/A3 展開)
 
