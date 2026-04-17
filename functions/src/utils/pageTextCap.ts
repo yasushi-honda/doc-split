@@ -1,13 +1,12 @@
 /**
- * テキスト長さ制限ユーティリティ (Issue #205, #209, #215)
+ * OCRページテキスト長さ制限ユーティリティ (Issue #205)
  *
  * 背景: Vertex AI Geminiのハルシネーション/暴走による異常に長い応答（実害事例: 1.1M chars）が
  * Firestoreの per-field 1 MiB 制限を超え INVALID_ARGUMENT を引き起こす問題への防御。
  *
- * 対象用途:
- * 1. per-page cap (capPageText + MAX_PAGE_TEXT_LENGTH): OCRページ単独の切り詰め
- * 2. aggregate cap (capPageResultsAggregate + MAX_AGGREGATE_PAGE_CHARS): 全ページ合計の切り詰め
- * 3. summary cap (capPageText + MAX_SUMMARY_LENGTH): AI要約の切り詰め (#215 で統合)
+ * 二段防御:
+ * 1. per-page cap (capPageText): 各ページ単独で MAX_PAGE_TEXT_LENGTH に切り詰め
+ * 2. aggregate cap (capPageResultsAggregate): 全ページ合計で MAX_AGGREGATE_PAGE_CHARS に切り詰め
  */
 
 export const MAX_PAGE_TEXT_LENGTH = 50_000;

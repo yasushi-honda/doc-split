@@ -35,6 +35,8 @@ import type { Document, DocumentStatus, DocumentMaster, CustomerMaster, OfficeMa
  * 旧形式: data.summary = string, data.summaryTruncated = boolean, data.summaryOriginalLength = number
  *
  * 書込経路は常に新形式で保存するため、再処理されたドキュメントから順に自然にクリーン化される。
+ * ただし **未再処理のドキュメントは旧フラット形式のまま残留** するため、後方互換読込は
+ * 旧形式が実運用から消えるまで (最低 1-2 リリース) 維持が必要。
  * 旧フィールドは再処理時に FieldValue.delete() で明示削除される (ocrProcessor / regenerateSummary)。
  *
  * ## 旧データ不整合 (illegal state) への防御仕様
@@ -66,6 +68,11 @@ export function normalizeSummary(data: Record<string, unknown>): SummaryField | 
         return { text: obj.text, truncated: false }
       }
     }
+    // illegal state: 新形式だが型違反 (手動編集 / 未来のスキーマドリフト等で到達可能)
+    console.warn('[normalizeSummary] illegal state: new-format summary with invalid types', {
+      truncated: obj.truncated,
+      originalLengthType: typeof obj.originalLength,
+    })
     return undefined
   }
 
@@ -75,6 +82,13 @@ export function normalizeSummary(data: Record<string, unknown>): SummaryField | 
     const originalLength = data.summaryOriginalLength
     if (truncated && typeof originalLength === 'number') {
       return { text: summary, truncated: true, originalLength }
+    }
+    // 旧形式で truncated=true だが originalLength 欠落: 切り詰めバナーが表示できなくなる
+    // (#209 切り詰め検出要件に対する silent degradation)。要約本文は保持して表示する。
+    if (truncated) {
+      console.warn(
+        '[normalizeSummary] legacy-format summary with truncated=true but missing originalLength; truncation badge will not be shown'
+      )
     }
     return { text: summary, truncated: false }
   }
