@@ -1,8 +1,87 @@
 # ハンドオフメモ
 
-**更新日**: 2026-04-19 session14 (Phase 1A + 1B 完遂: #271 + #267 + #273、follow-up 3 Issue 起票)
-**ブランチ**: main (PR #275 / #277 / #280 マージ済、clean)
-**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + Summary リファクタ集約 3/3 + Phase 3 #258 + follow-up 消化 Phase A (2/2) + session14 follow-up Phase 1A/1B (3/3) 完遂
+**更新日**: 2026-04-19 session15 (Phase 2 #264 完遂: capPageResultsAggregate SummaryField generic 化、follow-up 2 Issue 起票)
+**ブランチ**: main (PR #282 マージ済、clean)
+**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + Summary リファクタ集約 3/3 + Phase 3 #258 + follow-up 消化 Phase A (2/2) + session14 follow-up Phase 1A/1B (3/3) + session15 follow-up Phase 2 (1/1) 完遂
+
+<a id="session15"></a>
+## ✅ session15 完了サマリー (Phase 2 #264 完遂: capPageResultsAggregate SummaryField generic 化、follow-up 2 Issue 起票)
+
+session14 の WBS Phase 2 として handoff に明記されていた **#264 (capPageResultsAggregate generic を新 PageOcrResult discriminated union に対応)** を本セッションで完遂。#258 Evaluator MEDIUM 指摘のクリーン化で、discriminated union 不変条件 (truncated=false ⟹ originalLength 不在) を型レベル + runtime + test の三段防御で lock-in。5 並列レビュー (session12 の 3→4 並列構成を hook 要件で 5 並列に拡張) + Codex GO 判定 + regression 1 件発見/修正で session 内 1 PR 完遂。
+
+| 順 | フェーズ | 結果 |
+|---|---|---|
+| 1 | **WBS 策定 (PM/PL 視点、10 タスク分解)** | ✅ 本セッション Must = Phase 2 #264 単独、余力は follow-up 消化、残は次セッション持越 |
+| 2 | **Phase 2-A (/impl-plan)** | ✅ AC 7 項目定義、Option A (generic SummaryField 化 + stripSummaryFields helper) 固定 |
+| 3 | **Phase 2-B (TDD Red)** | ✅ 既存 fixture を SummaryField 準拠化 (6 箇所) + #264 不変条件テスト 3 件追加 |
+| 4 | **Phase 2-C (TDD Green + Refactor)** | ✅ generic `<T extends SummaryField>` + stripSummaryFields + 明示分岐、TODO コメント削除 |
+| 5 | **Phase 2-D (全 Quality 確認)** | ✅ BE 464 passing / tsc / lint / type-check:test / FE 134 回帰なし |
+| 6 | **Phase 2-E (/review-pr 3 並列 → 5 並列)** | ✅ pr-test-analyzer が regression 発見 + 修正、hook 要件で silent-failure-hunter + comment-analyzer 追加 |
+| 7 | **regression 修正 + 再 cap 経路テスト追加** | ✅ `isTruncated = page.truncated \|\| capped.truncated` で input truncated 情報保存挙動を復元 |
+| 8 | **Phase 2-F (/codex review MCP 版)** | ✅ **GO 判定、必須対応なし** |
+| 9 | **Phase 2-G (PR #282 作成 → CI SUCCESS → squash merge)** | ✅ `dcce086`、Issue #264 自動クローズ |
+| 10 | **Follow-up 起票** | ✅ #283 (observability) + #284 (as T cast 排除) |
+
+### 達成効果 (Phase 2 完遂)
+
+| 効果 | 内容 |
+|---|---|
+| 📐 discriminated union 不変条件の 3 段防御 | 型レベル (`<T extends SummaryField>`) + runtime (stripSummaryFields で originalLength 排除 + 明示分岐構築) + test (hasOwnProperty + typeof lock-in) の三段で truncated=false ⟹ originalLength 不在を強制 |
+| 🛡️ regression 発見/修正 | pr-test-analyzer Important #1 (入力 truncated=true 再 cap 経路テスト) 追加で、`if (capped.truncated)` 単独分岐では input truncated=true + text cap 内のケースで truncated 情報 + originalLength が消失する regression を発見、`\|\|` 合成で修正 |
+| 🧪 idempotent + 情報保存 | 4 ケース (T,T)(T,F)(F,T)(F,F) 全てで情報保存を Codex が GO 判定で検証 |
+| 📊 type-design-analyzer スコア | Invariant Expression 3/5 → 4/5、他軸維持 (Encapsulation 4/5 / Usefulness 5/5 / Enforcement 4/5 / Blast radius 4/5) |
+
+### Phase 2 Quality Gate 実施記録
+
+| 段階 | 結果 | 指摘・対応 |
+|---|---|---|
+| `/impl-plan` | ✅ AC 7 項目定義、Option A 固定 | 既存 fixture の SummaryField 準拠化必要を impl-plan で事前発見 |
+| `/simplify` / `/safe-refactor` | ⏭️ スキップ | 実質 2 ファイル変更 (ocrProcessor.ts はコメント 1 語削除のみ)、3+ 基準未満 |
+| Evaluator 分離 | ⏭️ スキップ | 5+ ファイル未満、新機能なし |
+| `/review-pr` 3 並列 (type-design + pr-test + code-reviewer) | type-design APPROVE / pr-test Important 2 採用 + regression 発見 / code-reviewer issues なし | Invariant Expression 3→4 改善確認、regression 修正コミット |
+| hook 要件で追加 2 並列 (silent-failure-hunter + comment-analyzer) | Important 5 件 (本 PR 2 対応 + 3 follow-up 起票) | SF-1/CA-1/CA-2/S2 JSDoc 精度向上、SF-2 → #283、SF-3 + Codex → #284 |
+| `/codex review` MCP 版 | ✅ **GO 判定、必須対応なし** | 4 ケース (T,T)(T,F)(F,T)(F,F) idempotent + 情報保存確認、戻り値型改善は follow-up 候補 (#284 に集約) |
+
+### CI / マージ結果
+
+- BE: `npm test` 461 → **465 passing** (+4 = 不変条件 3 + 再 cap 経路 1)
+- FE: `npm test` 134 passing 回帰なし
+- PR #282 CI: lint-build-test SUCCESS (5m44s) / CodeRabbit pass / GitGuardian pass → MERGED `dcce086`
+- 本 PR は型表現 + runtime 分岐変更のみ、Firestore 書込 shape 完全互換 → kanameone / cocoro 本番環境への影響ゼロ
+
+### 教訓 (PM/PL 視点)
+
+| 教訓 | 内容 |
+|---|---|
+| **pr-test-analyzer Important は regression 検知装置として機能** | 入力 truncated=true の再 cap 経路テスト提案 (rating 7) がそのまま regression を炙り出した。「新実装での挙動変化点 (if 分岐 → 合成) 近傍に lock-in テストを書く」という観点は bug 直前検知の典型パターン |
+| **hook 要件 (PR 作成後) と /review-pr の両立** | CLAUDE.md `/review-pr` 3 並列 + hook 要件の 5 並列を両立。PR 作成前に type-design/pr-test/code-reviewer、作成後に silent-failure/comment-analyzer を追加することで重複回避と完全カバレッジを両立。Important 5 件中 2 件本 PR 対応 + 3 件 follow-up 起票で scope 明確化 |
+| **Codex GO 判定の補強効果** | /review-pr 5 並列が複数の Important 指摘を出した状態で Codex が GO 判定 (必須対応なし) を出したことで「Important は scope 内か scope 外か」の判断が構造化。scope 外 (observability / 将来 misuse 防御) を follow-up 化する採用判定に根拠を持たせられた |
+| **WBS 策定 + Must/Should 区分の価値** | session 開始時に「本セッション Must = Phase 2 単独」「余力 Should = #276/#279」「次回持越 = 5+ ファイル規模」と明示したことで、PR マージ後のコンテキスト温存判断 (余力タスク次セッション送り) が機械的に可能に。最後の 20% でエラー発生 (公式データ) の回避 |
+| **docstring と実装の乖離は silent failure の温床** | silent-failure-hunter I1 で「JSDoc が "robustness 担保" と主張しているのに実装は値バリデーションなし」を指摘。今後は JSDoc の claim を実装の実能力に一致させる、または明示的に不足を記述する運用で対応 |
+
+### 次セッション着手予定 (session16)
+
+**最優先タスク** (余力消化 + Phase 3):
+- **#276 (scope 小、~30min)**: handleProcessingError の safeLogError 呼出契約テスト (test 1 ファイル追加、既存 summaryCatchLogErrorContract の grep-based パターン再利用)
+- **#279 (scope 小、~30min)**: buildPageResult の console.warn 副作用検証テスト (sinon.spy)
+- **#262 (Phase 3、~1h)**: summaryWritePayloadContract grep-based 既知制限 + diagnostics 強化
+
+**Phase 4 以降 (WBS 優先度順)**:
+- **#251 (Phase 4、~1.5h、2-3 ファイル)**: generateSummaryCore unit test + buildSummaryPrompt 別モジュール分離
+- **#278 (Phase 4 併走、3-5 ファイル想定、/simplify + /safe-refactor 必要)**: PageOcrResult 型 3 重定義解消 (#284 統合候補)
+- **#237 (Phase 5、大規模、Codex + Evaluator 必須)**: search tokenizer FE/BE/script 3 箇所重複共通化 (別セッション集中)
+- **#220 / #239 / #238 (Phase 6)**: 運用監視拡充 (#283 統合候補で再編)
+
+**session15 起票 follow-up Issue**:
+- **#283**: capPageResultsAggregate truncation 発動時の warn log + errors collection 記録 (silent-failure-hunter I2、observability、#220 統合候補)
+- **#284**: `as T` cast 排除 (戻り値型を `Omit<T, ...> & SummaryField` 化 + dev-assert) (Codex + silent-failure-hunter I3 + comment-analyzer I2 複合、#278 統合候補)
+
+**session14 起票 follow-up Issue** (未着手、session16 の余力消化対象):
+- **#276**: handleProcessingError の safeLogError 呼出契約テスト
+- **#278**: PageOcrResult 型 3 重定義解消 (shared / buildPageResult / pdfOperations)
+- **#279**: buildPageResult の console.warn 副作用検証
+
+---
 
 <a id="session14"></a>
 ## ✅ session14 完了サマリー (Phase 1A + 1B 完遂: #271 + #267 + #273、follow-up 3 Issue 起票)
