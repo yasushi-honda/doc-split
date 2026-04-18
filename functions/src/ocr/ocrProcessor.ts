@@ -8,7 +8,7 @@ import * as admin from 'firebase-admin';
 import { VertexAI } from '@google-cloud/vertexai';
 import { PDFDocument } from 'pdf-lib';
 import { withRetry, RETRY_CONFIGS, isTransientError, is429Error } from '../utils/retry';
-import { logError } from '../utils/errorLogger';
+import { logError, safeLogError } from '../utils/errorLogger';
 import { getRateLimiter } from '../utils/rateLimiter';
 import { GCP_CONFIG, GEMINI_CONFIG } from '../utils/config';
 import {
@@ -187,10 +187,21 @@ export async function processDocument(
     .join('\n\n');
 
   // マスターデータ取得（要約生成と並列実行）
-  const summaryPromise = generateSummary(ocrResult, '').catch((err): SummaryField => {
-    console.error('Summary generation failed:', err);
-    return { text: '', truncated: false };
-  });
+  // Issue #266: 通常は generateSummary 内部 catch で吸収されるため本 catch には到達しない。
+  // inner catch の regression や Promise 化されていない throw 経路に対する二重防御として残置。
+  // safeLogError 経由で silent failure を防ぎ、errors collection から検知可能にする。
+  const summaryPromise = generateSummary(ocrResult, '', { docId, functionName }).catch(
+    async (err) => {
+      console.error('Summary generation failed:', err);
+      await safeLogError({
+        error: err instanceof Error ? err : new Error(String(err)),
+        source: 'ocr',
+        functionName: `${functionName}:summaryPromise`,
+        documentId: docId,
+      });
+      return { text: '', truncated: false } satisfies SummaryField;
+    }
+  );
 
   // マスターデータ取得
   const [documentMasters, customerMasters, officeMasters] = await Promise.all([
@@ -535,16 +546,18 @@ ${pageNumber ? `\nこれは${pageNumber}ページ目です。` : ''}
 }
 
 /**
- * OCR結果からAI要約を生成 (Issue #209, Issue #214, #258)
+ * OCR結果からAI要約を生成 (Issue #209, Issue #214, #258, #266)
  *
  * Precondition: core の `generateSummaryCore` は `length < MIN_OCR_LENGTH_FOR_SUMMARY` を許容しない。
  * 本 helper はその precondition を先に消化し、短文時は empty SummaryField を返して後続処理を継続する。
  * Vertex AI エラーは catch → empty 返却で best-effort (呼出元 `summaryPromise` の `.catch(empty)` と二重防御)。
+ * Issue #266: catch 句で logError 呼出を追加し、silent failure を防ぐ。
  * @returns SummaryField - text(切り詰め後summary), truncated(切り詰めフラグ), originalLength(truncated=true 時のみ)
  */
 async function generateSummary(
   ocrResult: string,
-  documentType: string
+  documentType: string,
+  logContext: { docId: string; functionName: string }
 ): Promise<SummaryField> {
   if (!ocrResult || ocrResult.length < MIN_OCR_LENGTH_FOR_SUMMARY) {
     return { text: '', truncated: false };
@@ -553,6 +566,12 @@ async function generateSummary(
     return await generateSummaryCore(ocrResult, documentType);
   } catch (error) {
     console.error('Failed to generate summary:', error);
+    await safeLogError({
+      error: error instanceof Error ? error : new Error(String(error)),
+      source: 'ocr',
+      functionName: `${logContext.functionName}:generateSummary`,
+      documentId: logContext.docId,
+    });
     return { text: '', truncated: false };
   }
 }

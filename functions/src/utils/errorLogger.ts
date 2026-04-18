@@ -130,6 +130,28 @@ export interface LogErrorParams {
 }
 
 /**
+ * logError を安全に呼び出すラッパ (Issue #266)
+ *
+ * logError 自体が Firestore 書込で throw した場合に console.error で fallback し、
+ * caller の主処理を中断させない。catch 句 / best-effort error path で使用する。
+ *
+ * 既存 `handleProcessingError` の fallback パターンは当 helper 移行対象 (follow-up: #271)。
+ */
+export async function safeLogError(params: LogErrorParams): Promise<void> {
+  try {
+    await logError(params);
+  } catch (logErr) {
+    // fallback に source/functionName を含めることで、logError 失敗時も発生箇所を特定可能にする。
+    const docRef = params.documentId ?? params.fileId ?? 'unknown';
+    console.error(
+      `Failed to record error for ${params.source}/${params.functionName} (${docRef}):`,
+      logErr,
+      { originalError: params.error.message }
+    );
+  }
+}
+
+/**
  * エラーをFirestoreに記録
  *
  * @returns 作成されたエラーログID
