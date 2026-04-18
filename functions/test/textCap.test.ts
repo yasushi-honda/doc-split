@@ -204,8 +204,9 @@ describe('textCap', () => {
 
     // #283: aggregate cap 発動時の可視性を per-page 粒度で確保する契約。
     // Issue #209 型実害 (Vertex AI 暴走で 1.1M chars 応答) が aggregate cap で切り詰められた
-    // 場合、ocrProcessor.ts:152-154 の単発 console.warn (後続で safeLogError に格上げ予定) だけ
-    // では per-page 粒度の原因追跡ができなかった。本契約はアラート信号として console.warn 発動を lock-in する。
+    // 場合、ocrProcessor.ts 側は aggregate サマリを safeLogError で errors collection に記録する
+    // (本 PR Option B) が、per-page 粒度の原因追跡には不足。本契約はアラート信号として
+    // console.warn 発動を lock-in する (Option A)。
     describe('aggregate cap truncation log (#283)', () => {
       /** console.warn を一時的に差し替えて呼出を捕捉するヘルパ */
       function withWarnSpy<T>(fn: () => T): { calls: unknown[][]; result: T } {
