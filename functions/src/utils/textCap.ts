@@ -54,9 +54,11 @@ export function capPageText(rawText: string, maxLength: number = MAX_PAGE_TEXT_L
  * caller が追加フィールド (pageNumber/inputTokens/outputTokens 等) を持つ場合に、
  * SummaryField を再構築する際の meta 保持のため使用。
  *
- * 用途は cap path (text 再生成経路) 限定。short path (L91 `return page;`) は入力が型準拠している
- * 前提でそのまま返すため、本 helper は経由しない。型違反入力 (例: truncated=false に originalLength
- * が混入) の robustness は cap path 内でのみ担保される。
+ * 用途は cap path (text 再生成経路) 限定。short path (perPageBudget 内かつ !page.truncated の
+ * early return 分岐) は入力が型準拠している前提でそのまま返すため、本 helper は経由しない。
+ * cap path 内では truncated=false 経路から originalLength を確実に落とす (delete) ことで
+ * discriminated union 不変条件を維持するが、値の型バリデーション (例: originalLength が number か)
+ * は行わない — 入力 T が SummaryField 型契約に準拠していることを前提とする。
  */
 function stripSummaryFields<T extends SummaryField>(
   page: T,
@@ -72,9 +74,11 @@ function stripSummaryFields<T extends SummaryField>(
  * ページ配列の合計文字数を MAX_AGGREGATE_PAGE_CHARS 以下に収めるよう切り詰める。
  *
  * #264: generic を `<T extends SummaryField>` に制約することで、caller (PageOcrResult 等) の
- * discriminated union 不変条件 (truncated=false ⟹ originalLength 不在) を型レベル + runtime で
- * 両面保証する。`stripSummaryFields` で meta 部を抽出後、truncated=false/true を明示分岐して
- * SummaryField を再構築する。
+ * discriminated union 不変条件 (truncated=false ⟹ originalLength 不在) を型レベルで強制。
+ * runtime では truncated=false 経路で originalLength を出力しない分岐を明示し、テスト
+ * (textCap.test.ts describe 'discriminated union 不変条件 (#264)') で lock-in する。
+ * `stripSummaryFields` で meta 部を抽出後、truncated=false/true を明示分岐して SummaryField
+ * を再構築する。
  *
  * T は `SummaryField` フル union を期待する。narrow された T (例: truncated=true 固定型) を
  * 渡すと、cap 結果が truncated=false になる経路で型契約違反になるため、caller は union 型を保つこと。
@@ -109,13 +113,13 @@ export function capPageResultsAggregate<T extends SummaryField>(pages: T[]): T[]
         text: capped.text,
         truncated: true,
         originalLength: Math.max(originalFromPage, cappedOriginal),
-      } as T;  // T は SummaryField union を保つ前提 (JSDoc 参照)
+      } as T;  // narrow 型 T (truncated=false 固定等) を渡すと runtime 契約違反 — caller は union を保つこと
     }
-    // truncated=false ⟹ originalLength 不在 (discriminated union 不変条件)
+    // 意図的に originalLength 省略 (stripSummaryFields で除去済み、SummaryField 不変条件維持)
     return {
       ...meta,
       text: capped.text,
       truncated: false,
-    } as T;  // T は SummaryField union を保つ前提 (JSDoc 参照)
+    } as T;  // narrow 型 T (truncated=true 固定等) を渡すと runtime 契約違反 — caller は union を保つこと
   });
 }
