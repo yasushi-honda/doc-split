@@ -103,6 +103,17 @@ export function capPageResultsAggregate<T extends SummaryField>(pages: T[]): T[]
     // truncated=false + originalLength 消失という regression が発生する。
     const isTruncated = page.truncated || capped.truncated;
 
+    // #283: 実テキスト長さが縮んだ時のみ per-page 粒度で警告。
+    // - 新規 truncation (input truncated=false → capped truncated=true) は検知対象
+    // - 既 truncated=true 入力でも aggregate budget でさらに短縮された場合は検知対象 (真の追加データロス)
+    // - 同じ長さで返る idempotent 再 cap (text.length 不変) は重複アラート抑制
+    // ocrProcessor 側の aggregate サマリ safeLogError (#283 Option B) と二段で観測性を確保。
+    if (capped.text.length < page.text.length) {
+      console.warn(
+        `[textCap] aggregate cap truncated page: ${page.text.length} → ${capped.text.length} chars (runningTotal=${runningTotal})`
+      );
+    }
+
     if (isTruncated) {
       // 再 cap 時は元の originalLength を優先保持 (idempotent + 過去情報保存)。
       // page.truncated=false の場合、text 未切り詰めなので text.length が原本の長さ。

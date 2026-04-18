@@ -202,6 +202,102 @@ describe('textCap', () => {
       expect(capPageResultsAggregate([])).to.deep.equal([]);
     });
 
+    // #283: aggregate cap 発動時の可視性を per-page 粒度で確保する契約。
+    // Issue #209 型実害 (Vertex AI 暴走で 1.1M chars 応答) が aggregate cap で切り詰められた
+    // 場合、ocrProcessor.ts 側は aggregate サマリを safeLogError で errors collection に記録する
+    // (本 PR Option B) が、per-page 粒度の原因追跡には不足。本契約はアラート信号として
+    // console.warn 発動を lock-in する (Option A)。
+    describe('aggregate cap truncation log (#283)', () => {
+      /** console.warn を一時的に差し替えて呼出を捕捉するヘルパ */
+      function withWarnSpy<T>(fn: () => T): { calls: unknown[][]; result: T } {
+        const original = console.warn;
+        const calls: unknown[][] = [];
+        console.warn = (...args: unknown[]) => {
+          calls.push(args);
+        };
+        try {
+          const result = fn();
+          return { calls, result };
+        } finally {
+          console.warn = original;
+        }
+      }
+
+      it('per-page cap 新規発動時 (input truncated=false → output truncated=true) に warn が呼ばれる', () => {
+        const pages: SummaryField[] = [
+          { text: 'a'.repeat(MAX_PAGE_TEXT_LENGTH + 10), truncated: false },
+        ];
+        const { calls } = withWarnSpy(() => capPageResultsAggregate(pages));
+
+        expect(calls.length).to.be.at.least(1);
+        const firstMessage = String(calls[0]?.[0] ?? '');
+        expect(firstMessage).to.match(/textCap|aggregate|truncat/i);
+        // #283 Codex review Suggestion: observability 強化のため runningTotal を message に残す契約。
+        expect(firstMessage).to.match(/runningTotal=\d+/);
+      });
+
+      it('複数ページ cap 発動で発動ページ数と同じ回数の warn が呼ばれる', () => {
+        const pages: SummaryField[] = Array.from({ length: 10 }, () => ({
+          text: 'a'.repeat(MAX_PAGE_TEXT_LENGTH),
+          truncated: false,
+        }));
+        const { calls, result } = withWarnSpy(() => capPageResultsAggregate(pages));
+
+        const truncatedCount = result.filter((p) => p.truncated).length;
+        expect(truncatedCount).to.be.at.least(1);
+        expect(calls.length).to.equal(truncatedCount);
+      });
+
+      it('cap 非発動 (全ページ budget 内) の場合は warn が呼ばれない', () => {
+        const pages: SummaryField[] = [
+          { text: 'short1', truncated: false },
+          { text: 'short2', truncated: false },
+        ];
+        const { calls } = withWarnSpy(() => capPageResultsAggregate(pages));
+        expect(calls.length).to.equal(0);
+      });
+
+      it('既に truncated=true の入力 idempotent 再 cap (text.length 不変) では warn が呼ばれない', () => {
+        // 前回実行で既に truncated=true に変換済みかつ budget 内 (text.length 不変) のケース。
+        // 新規データロスはないため重複アラートを抑制すべき (運用側で重複通知を避ける)。
+        const pages: SummaryField[] = [
+          {
+            text: 'a'.repeat(MAX_PAGE_TEXT_LENGTH),
+            truncated: true,
+            originalLength: 1_000_000,
+          },
+        ];
+        const { calls } = withWarnSpy(() => capPageResultsAggregate(pages));
+        expect(calls.length).to.equal(0);
+      });
+
+      // #283 Codex / silent-failure-hunter 指摘対応: truncated=true + budget でさらに短縮される
+      // 追加データロスケースを warn で検知する契約。旧実装 `!page.truncated` gate では silent に通過していた。
+      it('既 truncated=true でも aggregate budget でさらに短縮される場合は warn が呼ばれる', () => {
+        // 4 pages 50k each fill 200k aggregate budget → 5th page (既 truncated=true) の budget 残 0
+        // → capped.text.length=0 < page.text.length=50k で真の追加データロス発生
+        const pages: SummaryField[] = [
+          { text: 'a'.repeat(MAX_PAGE_TEXT_LENGTH), truncated: false },
+          { text: 'b'.repeat(MAX_PAGE_TEXT_LENGTH), truncated: false },
+          { text: 'c'.repeat(MAX_PAGE_TEXT_LENGTH), truncated: false },
+          { text: 'd'.repeat(MAX_PAGE_TEXT_LENGTH), truncated: false },
+          {
+            text: 'e'.repeat(MAX_PAGE_TEXT_LENGTH),
+            truncated: true,
+            originalLength: 1_000_000,
+          },
+        ];
+        const { calls, result } = withWarnSpy(() => capPageResultsAggregate(pages));
+
+        const lastPage = result[4];
+        expect(lastPage?.text.length).to.equal(0);
+        // 5 ページ目の追加短縮で warn が呼ばれる (加えて他 page の cap があれば + その数)
+        expect(calls.length).to.be.at.least(1);
+        const messages = calls.map((c) => String(c[0] ?? '')).join('\n');
+        expect(messages).to.match(/50000 → 0/);
+      });
+    });
+
     // #264: discriminated union 不変条件の runtime lock-in。
     // 型レベルでは `<T extends SummaryField>` で truncated=false ⟹ originalLength 不在を保証するが、
     // 実装バグで false path に originalLength を付与しないことを runtime でも明示検証する。
