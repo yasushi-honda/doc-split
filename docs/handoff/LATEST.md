@@ -1,8 +1,87 @@
 # ハンドオフメモ
 
-**更新日**: 2026-04-19 session15 (Phase 2 #264 完遂: capPageResultsAggregate SummaryField generic 化、follow-up 2 Issue 起票)
-**ブランチ**: main (PR #282 マージ済、clean)
-**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + Summary リファクタ集約 3/3 + Phase 3 #258 + follow-up 消化 Phase A (2/2) + session14 follow-up Phase 1A/1B (3/3) + session15 follow-up Phase 2 (1/1) 完遂
+**更新日**: 2026-04-19 session16 (Phase 1 #276 + Phase 2 #283 完遂、セカンドオピニオン ROI 実証、follow-up Issue 起票)
+**ブランチ**: main (PR #286 + #287 マージ済、clean)
+**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + Summary リファクタ集約 3/3 + Phase 3 #258 + follow-up 消化 Phase A (2/2) + session14 follow-up Phase 1A/1B (3/3) + session15 follow-up Phase 2 (1/1) + session16 follow-up Phase 1+2 (2/2) 完遂
+
+<a id="session16"></a>
+## ✅ session16 完了サマリー (Phase 1 #276 + Phase 2 #283 完遂、セカンドオピニオン ROI 実証)
+
+session15 の WBS で予定されていた follow-up 消化を PM/PL 視点で 4 Phase に分解 (#276 → #283 → #284+#278 → #279)、**Phase 1 + 2 を 1 セッションで完遂**。特筆は Phase 2 で `/codex` セカンドオピニオンと silent-failure-hunter が独立に同じ設計バグ (re-cap degradation gate の検知漏れ) を発見し、merge 前に修正できた点。ROI 明確。
+
+| 順 | フェーズ | 結果 |
+|---|---|---|
+| 1 | **WBS 策定 (4 Phase 分解)** | ✅ #276 (scope 小) → #283 (中) → #284+#278 (大, evaluator 発動) → #279 (小) 順に確定 |
+| 2 | **Phase 1 (#276): handleProcessingError safeLogError 契約テスト** | ✅ PR #286 MERGED (`358f021`) |
+| 3 | **Phase 2 (#283): aggregate cap observability 強化 (Option A+B)** | ✅ PR #287 MERGED (`2f915ea`) |
+| 4 | **Phase 2 の設計バグ修正** | ✅ re-cap degradation gate を `text.length` 比較へ変更 (Codex + silent-failure-hunter 独立発見) |
+| 5 | **Follow-up 起票** | ✅ #288 (observability follow-up bundle) |
+
+### 達成効果 (Phase 1 + 2 完遂)
+
+| 効果 | 内容 |
+|---|---|
+| 🛡️ silent failure lock-in 契約群の拡張 | Phase 1 #276 と Phase 2 #283 で grep-based 契約 (brace/paren-nesting 抽出) を 2 箇所に拡張。handleProcessingError 末尾 + aggregate cap ブロックの safeLogError 呼出 + params を static lock-in |
+| 🐛 設計バグ merge 前発見 | Phase 2 の `if (capped.truncated && !page.truncated)` gate は `page.truncated=true` の再 cap 時にさらに短縮される「追加データロス」を silent に通過させる欠陥。`capped.text.length < page.text.length` へ修正し、実際の text 長さ変化を基準化 |
+| 🔍 セカンドオピニオン ROI 実証 | `/review-pr` 3 並列 + `/codex review` (MCP) が同じバグを独立発見。CLAUDE.md「3 ファイル+または 200 行+で /codex review」ルールの具体的価値を検証 |
+| 📋 Rule-of-Three 保守性 | `extractSafeLogErrorArgs` が Phase 1+2 で 2 箇所に複製。rule-of-three 未達で現状維持、Phase 3/4 第 3 契約テスト追加時に共通 helper へ抽出予定と明示 |
+
+### Phase 1 (#276) Quality Gate 実施記録
+
+| 段階 | 結果 | 指摘・対応 |
+|---|---|---|
+| `/impl-plan` | ✅ 2 option 比較 → Option B (関数スコープ grep) 選定 | console.error と safeLogError が 50 行離れているため ANCHOR_WINDOW_LINES=8 適用不可 |
+| 実装 (1 テストファイル、149 → 261 行) | ✅ extractFunctionBody + extractSafeLogErrorArgs + params 4 項目 | lock-in: safeLogError 一時削除 → 6 件 fail 確認 |
+| `/review-pr` 4 並列 (code-reviewer + pr-test + comment + silent-failure) | Critical 0 / Important 4 採用 | functionName regex 緩さ + error param 未検証 + 行番号 rot + #178/#209 analogy 不正確 → 全件反映 (scope 縮約 + error 追加 + 行番号削除 + issue 参照修正) |
+| `/simplify` + `/safe-refactor` | ⏭️ 1 ファイルにつきスキップ | 3 ファイル基準未満 |
+
+### Phase 2 (#283) Quality Gate 実施記録
+
+| 段階 | 結果 | 指摘・対応 |
+|---|---|---|
+| `/impl-plan` | ✅ AC 5 項目 + Option A+B 併用 + 4 ファイル分解 | TDD: B (warn log test) → A (textCap 実装) → D (contract test) → C (ocrProcessor 格上げ) |
+| 実装 (4 ファイル、+292/-1) | ✅ textCap per-page warn + ocrProcessor safeLogError 格上げ + contract test | lock-in: safeLogError 削除 → 6 件 fail 確認 |
+| `/simplify` 3 並列 (reuse + quality + efficiency) | 1 件採用 | 冗長 console.warn(error.message) 削除 (safeLogError 内部で logError が console.error 出すため) |
+| `/safe-refactor` | ✅ 型安全性・エラー処理問題なし | DRY 1 件受諾 (Rule-of-Three 未達) |
+| `/review-pr` 3 並列 + `/codex review` | Critical 0 / Important 3 採用 | re-cap degradation gate 設計バグ (Codex + silent-failure-hunter 独立一致) + await 契約未化 + runningTotal assertion 不足 → 全件反映 |
+| CodeRabbit 自動レビュー | Nitpick 2 件 | await lock-in は既対応、stale comment 1 件修正 |
+
+### CI / マージ結果
+
+- BE: `npm test` 465 → **496 passing** (+31 = Phase 1 #276 contract 14 + Phase 2 textCap warn 4 + Phase 2 contract 12 + 追加テスト 1)
+- FE: 回帰なし
+- PR #286 CI: lint-build-test SUCCESS (~4m) / CodeRabbit pass / GitGuardian pass → MERGED `358f021`
+- PR #287 CI: lint-build-test SUCCESS (5m27s) / CodeRabbit pass / GitGuardian pass → MERGED `2f915ea`
+- 本 PR 群は observability 強化 + test 追加のみ、Firestore 書込 shape 完全互換 → kanameone / cocoro 本番環境への影響ゼロ
+
+### 教訓 (PM/PL 視点)
+
+| 教訓 | 内容 |
+|---|---|
+| **セカンドオピニオン ROI は大規模ほど顕著** | Phase 2 (4 ファイル/292 行) で Codex が silent-failure-hunter と独立に同じ設計バグを発見。4 レビュアー (内部 3 + Codex) で 1 つの重要バグに収束したことは CLAUDE.md「大規模 PR → /codex review」ルールの有効性を実証。今後も 3+ ファイル規模は必ず取得推奨 |
+| **TDD 順序の設計判断** | Phase 2 で B (test) → A (src) → D (contract) → C (src 格上げ) の 4 段 TDD を採用。各ステップで RED 確認 → GREEN 実装 → lock-in 再確認の循環が bug-free progress を保証。contract test の lock-in は一時的 src 破壊での RED 検証で実効性担保 |
+| **Rule-of-Three の明示採用** | Phase 1+2 で `extractSafeLogErrorArgs` が 2 箇所複製。DRY 原理主義ではなく「3 箇所目で抽出」と明示することで、Phase 3/4 (#278/#279) での共通 helper 化 (functions/test/helpers/sourceExtractors.ts) への自然な発展経路を確保 |
+| **gate 設計は実際の挙動基準で記述** | Phase 2 re-cap degradation の原因は `page.truncated` フラグのみで gate を組んだこと。`text.length` という「実際の変化」基準へ移行することで silent failure を解消。一般則: 状態フラグだけでなく実際の副作用の有無を gate 条件に含める |
+| **CodeRabbit の rate limit を踏まえた PR 管理** | session 内で PR を連続作成すると CodeRabbit rate limit 到達 (54 分待機)。commit まとめ粒度を意識し、小修正は後続 commit として既存 PR に追加する方が CodeRabbit の活用効率が良い |
+
+### 次セッション着手予定 (session17)
+
+**最優先タスク** (Phase 3 - evaluator 発動対象):
+- **#284 + #278 (Phase 3、5-6 ファイル、/impl-plan → evaluator 分離プロトコル発動)**: `capPageResultsAggregate` の `as T` cast 排除 (#284) + `PageOcrResult` 型 3 重定義解消 (#278) の統合実装。型変更が広範囲に波及するため `rules/quality-gate.md` evaluator 起動必須
+
+**Phase 4 (小規模、Phase 3 後)**:
+- **#279 (小、~30min)**: buildPageResult の console.warn 副作用検証テスト (sinon.spy 代替の manual spy、Phase 2 `withWarnSpy` helper 再利用検討)
+
+**session16 起票 follow-up Issue**:
+- **#288**: aggregate cap observability follow-up bundle (動的 safeLogError invocation test / warn log に pageNumber 追加 / extractAggregateCapBlock refactor 耐性 / capPageResultsAggregate caller enforcement / mutation meta-test 自動化)
+
+**session15 起票 follow-up Issue** (継続):
+- **#262 (Phase 4、~1h)**: summaryWritePayloadContract grep-based 既知制限 + diagnostics 強化
+- **#251 (Phase 4、~1.5h、2-3 ファイル)**: generateSummaryCore unit test + buildSummaryPrompt 別モジュール分離
+- **#237 (Phase 5、大規模、Codex + Evaluator 必須)**: search tokenizer FE/BE/script 3 箇所重複共通化
+- **#220 / #239 / #238 (Phase 6)**: 運用監視拡充
+
+---
 
 <a id="session15"></a>
 ## ✅ session15 完了サマリー (Phase 2 #264 完遂: capPageResultsAggregate SummaryField generic 化、follow-up 2 Issue 起票)
@@ -403,71 +482,6 @@ session10 で完遂した #255 (CappedText discriminated union 化) の follow-u
 
 ---
 
-## ✅ session10 完了サマリー (Phase 0.5 マージ修復 + Phase 1.2 #255 完遂)
-
-session9 終了時の handoff 誤記録（PR #256 が PR #254 より先にマージされ、handoff は「#215 完遂」と記録しつつ実装は未マージという矛盾状態）を **catchup で発見・修復**。Phase 0.5 として PR #254 をマージし、続けて #255 follow-up を Phase 1.2 として完遂。
-
-| 順 | フェーズ | 結果 |
-|---|---|---|
-| 1 | **Phase 0.5: PR #254 マージ修復** | ✅ Codex セカンドオピニオン取得 → PR #254 マージ (`8bfafae`) → dev 環境で AI要約/OCR表示の回帰検証 PASS（baseline / post-merge スクリーンショット完全一致） |
-| 2 | **Phase 1.2: #255 CappedText discriminated union 化** | ✅ PR #257 MERGED (`60b70f5`)。Quality Gate 全段通過 (impl-plan → simplify → safe-refactor → evaluator → review-pr 6並列) |
-| 3 | **Follow-up 起票** | ✅ Issue #258 (CappedText/SummaryField/PageOcrResult 型設計統合) + Issue #259 (直接書込 caller 検知強化) |
-
-### 達成効果 (Phase 1.2 完遂)
-
-| 効果 | 内容 |
-|---|---|
-| 🛡️ 上流型安全 | `CappedText` を discriminated union 化 (`{text, truncated:false}` または `{text, truncated:true, originalLength}`)。`truncated=false` 時の `originalLength` アクセスは tsc エラーになり、#178/#209 系の silent failure を構造的に排除 |
-| 📦 契約テスト | `summaryWritePayloadContract.test.ts` 新設 (grep-based)。同一 `update()` ブロック近接保証 (≤30 行) + paths 実在検証 + caller 増加検知の 3 重防御 |
-| 🧪 テスト品質 | `assertTruncated` 型述語ヘルパー追加で `if (result.truncated) { ... }` の if-guard を排除 → バグ時にアサート群がスキップされる false negative リスクを構造的に解消 |
-
-### Phase 1.2 Quality Gate 実施記録
-
-| 段階 | 結果 | 指摘・対応 |
-|---|---|---|
-| `/impl-plan` | ✅ AC 7 項目定義 | 5+ ファイル → Evaluator 発動確定 |
-| `/simplify` 3 並列 (reuse/quality/efficiency) | Reuse 1 件指摘 | false positive 判定で skip (利用箇所 1 箇所のみ、Premature abstraction) |
-| `/safe-refactor` | LOW 1 件のみ | 型 narrowing 都合の if-guard 反復、後段 evaluator で根本解決 |
-| **Evaluator 分離** (5+ファイル発動) | REQUEST_CHANGES MEDIUM 1 件 | `assertTruncated` 型述語ヘルパー化で if-guard 排除、false negative リスク解消 |
-| `/review-pr` 6 エージェント並列 | Critical 1 / MEDIUM 1 / Suggestion 多数 | Critical (同一 update() ブロック保証) + MEDIUM (paths 実在検証) を本 PR で対応、Suggestion は #258/#259 で follow-up |
-
-### CI / マージ結果
-
-- BE: `npm run build` PASS / `npm test` 418 passing (元 408 + #255 規模 10) / `npm run lint` 0 errors (既存 19 warnings)
-- PR #257 CI: lint-build-test 5m13s ✅ / CodeRabbit ✅ / GitGuardian ✅ → MERGED `60b70f5`
-- PR #254 CI: lint-build-test 5m20s ✅ / CodeRabbit ✅ / GitGuardian ✅ → MERGED `8bfafae`
-- dev 環境回帰検証: AI要約「この書類は、田中太郎さんの介護保険被保険者証...」+ OCR結果 107文字 が baseline と完全一致
-
-### 教訓 (handoff PR 運用規約の改善)
-
-前セッションで「handoff docs (PR #256) が実装 PR (#254) より先にマージされる」事故が発生。本セッションで Codex セカンドオピニオンを介して修復したが、再発防止のため以下を今後の規約に組み込むべき:
-
-| 規約 | 内容 |
-|---|---|
-| 依存先明記 | handoff PR 説明に `Depends on #xxx` を必ず記載 |
-| Draft / blocked label | 依存先未マージなら Draft または `blocked` label でブロック |
-| マージ順序 | handoff 更新は実装 PR 内に同梱 or 実装 merge 後に限定 |
-| 未実装確認 | CLAUDE.md「未実装確認プロトコル」を handoff レビュー時にも適用 (`[ ]` 発見 → ソース実在 + git log 確認) |
-
-### 次セッション着手予定: Phase 1.1 (#251)
-
-**最優先タスク**:
-- **#251**: `generateSummaryCore` の unit test 追加 + `buildSummaryPrompt` 別モジュール分離
-  - rateLimiter.acquire() 順序検証
-  - trackGeminiUsage の両値呼出検証
-  - capPageText wiring 検証
-  - malformed Vertex response の silent failure 検出
-  - `summaryPromptBuilder.ts` 新設で firebase-admin 依存切り離し → pure function unit test 可能化
-
-**残り WBS**:
-- **Sprint 3 (#253)**: `useProcessingHistory.firestoreToDocument` 重複を `useDocuments` 側に集約 — 文脈新鮮、FE リファクタ
-- **Sprint 4 (#237)**: search tokenizer の FE/BE/script 3 箇所重複共通化 — 大粒、要 `/impl-plan` + `/check-api-impact`
-- **Sprint 5**: 運用監視拡充 (#220 OOM/truncated metric / #239 force-reindex audit log / #238 force-reindex 孤児 posting 検出) — 独立 3 件、並列可
-- **Sprint 6**: テスト補強 (#200 統合テスト) + bug 消化 (#196 rescueStuckProcessingDocs)
-- **新規 follow-up**: #258 (型設計統合) / #259 (contract test 強化) — 条件付き待機
-
----
-
 ## 過去のセッション
 
-session8 以前は [archive/2026-04-history.md](./archive/2026-04-history.md) を参照。
+session10 以前は [archive/2026-04-history.md](./archive/2026-04-history.md) を参照 (2026-04-19 session16 で session10 を追加アーカイブ)。
