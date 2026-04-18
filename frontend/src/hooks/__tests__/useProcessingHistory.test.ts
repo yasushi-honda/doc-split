@@ -63,6 +63,18 @@ describe('isCustomerConfirmed (デュアルリード #273)', () => {
     const doc = makeDoc({ customerConfirmed: undefined, needsManualCustomerSelection: undefined });
     expect(isCustomerConfirmed(doc)).to.equal(true);
   });
+
+  // #273 review 対応: 矛盾状態で customerConfirmed が needsManualCustomerSelection に優先されることを
+  // 独立テストとして明示的に lock-in する。将来「needs を優先する」誤リファクタで fail するテスト intent を明確化。
+  it('矛盾: customerConfirmed=true + needs=true → true (customerConfirmed が優先)', () => {
+    const doc = makeDoc({ customerConfirmed: true, needsManualCustomerSelection: true });
+    expect(isCustomerConfirmed(doc)).to.equal(true);
+  });
+
+  it('矛盾: customerConfirmed=false + needs=false → false (customerConfirmed が優先)', () => {
+    const doc = makeDoc({ customerConfirmed: false, needsManualCustomerSelection: false });
+    expect(isCustomerConfirmed(doc)).to.equal(false);
+  });
 });
 
 describe('normalizeCandidate (新旧スキーマ互換 #273)', () => {
@@ -125,11 +137,17 @@ describe('applyConfirmedFilter (#273)', () => {
   const confirmedDoc = makeDoc({ id: 'c1', customerConfirmed: true });
   const unconfirmedDoc = makeDoc({ id: 'u1', customerConfirmed: false });
   const phase6Doc = makeDoc({ id: 'p6' }); // 両方 undefined → confirmed 扱い
-  const docs = [confirmedDoc, unconfirmedDoc, phase6Doc];
+  // #273 review 対応: migration 期の mixed state (Phase 6 needs=true と Phase 7 customerConfirmed=false が混在)
+  const phase6UnconfirmedDoc = makeDoc({
+    id: 'p6u',
+    customerConfirmed: undefined,
+    needsManualCustomerSelection: true,
+  });
+  const docs = [confirmedDoc, unconfirmedDoc, phase6Doc, phase6UnconfirmedDoc];
 
   it("filter='all' → 全件返す", () => {
     const result = applyConfirmedFilter(docs, 'all');
-    expect(result).to.have.length(3);
+    expect(result).to.have.length(4);
   });
 
   it("filter='confirmed' → customerConfirmed=true + Phase 6 デフォルトのみ返す", () => {
@@ -137,9 +155,9 @@ describe('applyConfirmedFilter (#273)', () => {
     expect(result.map(d => d.id)).to.deep.equal(['c1', 'p6']);
   });
 
-  it("filter='unconfirmed' → customerConfirmed=false のみ返す", () => {
+  it("filter='unconfirmed' → customerConfirmed=false + Phase 6 needs=true を返す", () => {
     const result = applyConfirmedFilter(docs, 'unconfirmed');
-    expect(result.map(d => d.id)).to.deep.equal(['u1']);
+    expect(result.map(d => d.id)).to.deep.equal(['u1', 'p6u']);
   });
 
   it('空配列は filter に関わらず空配列を返す', () => {
