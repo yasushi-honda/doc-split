@@ -195,6 +195,8 @@ export function firestoreToDocument(id: string, data: Record<string, unknown>): 
     verified: data.verified as boolean | undefined,
     verifiedBy: data.verifiedBy as string | null | undefined,
     verifiedAt: data.verifiedAt as Timestamp | null | undefined,
+    // Phase 6 以前の後方互換 (isCustomerConfirmed のデュアルリード経路で使用)
+    needsManualCustomerSelection: data.needsManualCustomerSelection as boolean | undefined,
   }
 }
 

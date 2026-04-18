@@ -23,7 +23,7 @@ import {
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import type { Document, DocumentStatus, CustomerCandidateInfo } from '@shared/types';
-import { normalizeSummary } from './useDocuments';
+import { firestoreToDocument } from './useDocuments';
 
 // ============================================
 // 定数
@@ -106,46 +106,7 @@ export function normalizeCandidate(raw: Record<string, unknown>): CustomerCandid
   };
 }
 
-/**
- * Firestore → Document 変換
- */
-function firestoreToDocument(id: string, data: Record<string, unknown>): Document {
-  return {
-    id,
-    processedAt: data.processedAt as Timestamp,
-    fileId: data.fileId as string,
-    fileName: data.fileName as string,
-    mimeType: data.mimeType as string,
-    ocrResult: data.ocrResult as string,
-    ocrResultUrl: data.ocrResultUrl as string | undefined,
-    // Issue #209/#215: 切り詰めメタ込みの discriminated union (旧フラット形式も互換読込)
-    summary: normalizeSummary(data),
-    documentType: data.documentType as string,
-    customerName: data.customerName as string,
-    officeName: data.officeName as string,
-    fileUrl: data.fileUrl as string,
-    fileDate: data.fileDate as Timestamp,
-    isDuplicateCustomer: data.isDuplicateCustomer as boolean,
-    allCustomerCandidates: data.allCustomerCandidates as string | undefined,
-    totalPages: data.totalPages as number,
-    targetPageNumber: data.targetPageNumber as number,
-    status: data.status as DocumentStatus,
-    careManager: data.careManager as string | undefined,
-    category: data.category as string | undefined,
-    pageResults: data.pageResults as Document['pageResults'],
-    splitSuggestions: data.splitSuggestions as Document['splitSuggestions'],
-    pageRotations: data.pageRotations as Document['pageRotations'],
-    parentDocumentId: data.parentDocumentId as string | undefined,
-    splitFromPages: data.splitFromPages as Document['splitFromPages'],
-    // Phase 7 fields
-    customerId: data.customerId as string | null | undefined,
-    customerCandidates: data.customerCandidates as CustomerCandidateInfo[] | undefined,
-    customerConfirmed: data.customerConfirmed as boolean | undefined,
-    confirmedBy: data.confirmedBy as string | null | undefined,
-    confirmedAt: data.confirmedAt as Timestamp | null | undefined,
-    needsManualCustomerSelection: data.needsManualCustomerSelection as boolean | undefined,
-  };
-}
+// Issue #253: firestoreToDocument は useDocuments から import (#178 教訓の構造的解消)
 
 /**
  * 期間フィルターから日付を計算
