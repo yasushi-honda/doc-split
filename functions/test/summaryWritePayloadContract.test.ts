@@ -17,7 +17,7 @@
  */
 
 import { expect } from 'chai';
-import { readdirSync, readFileSync } from 'fs';
+import { existsSync, readdirSync, readFileSync } from 'fs';
 import { join, resolve } from 'path';
 
 // summary 書込 3 要素を検出するパターン。
@@ -35,7 +35,46 @@ const WRITE_PAYLOAD_CALLERS = [
   'src/ocr/regenerateSummary.ts',
 ] as const;
 
+// 同一 update() ブロック近接性の検証ウィンドウ。ocrProcessor の update は spread 含む
+// 大ブロック (~20 行)、regenerateSummary は ~4 行。30 行で両 caller を吸収。
+const ADJACENCY_WINDOW_LINES = 30;
+
+/**
+ * 3 要素 (buildSummaryFields / summaryTruncated.delete / summaryOriginalLength.delete) が
+ * 同一 update() ブロック内 (ADJACENCY_WINDOW_LINES 行以内) に共存するかを検証。
+ * ファイル全体で 3 要素が散在する false positive (review-pr Critical 指摘) を防ぐ。
+ */
+function hasThreeElementsAdjacent(source: string): boolean {
+  const lines = source.split('\n');
+  for (let i = 0; i <= lines.length - 1; i++) {
+    const window = lines.slice(i, i + ADJACENCY_WINDOW_LINES).join('\n');
+    if (
+      BUILD_SUMMARY_FIELDS_CALL.test(window) &&
+      SUMMARY_TRUNCATED_DELETE.test(window) &&
+      SUMMARY_ORIGINAL_LENGTH_DELETE.test(window)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 describe('summary write-payload contract (#255)', () => {
+  // silent-failure-hunter 指摘対応: パス実在を describe 評価時に明示的に確認。
+  // 旧来は readFileSync の ENOENT で suite 起動失敗となり「テスト未実行」が
+  // 「ファイル不在 = caller 削除/リネーム」のシグナルとして埋もれていた。
+  before(() => {
+    for (const relPath of WRITE_PAYLOAD_CALLERS) {
+      const absPath = resolve(process.cwd(), relPath);
+      if (!existsSync(absPath)) {
+        throw new Error(
+          `WRITE_PAYLOAD_CALLERS に登録された ${relPath} が存在しない。` +
+            `caller がリネーム/削除された場合は本契約の見直しが必要。`
+        );
+      }
+    }
+  });
+
   for (const relPath of WRITE_PAYLOAD_CALLERS) {
     describe(relPath, () => {
       const absPath = resolve(process.cwd(), relPath);
@@ -51,6 +90,15 @@ describe('summary write-payload contract (#255)', () => {
 
       it('`summaryOriginalLength: FieldValue.delete()` で旧フィールドを削除する', () => {
         expect(source).to.match(SUMMARY_ORIGINAL_LENGTH_DELETE);
+      });
+
+      // review-pr Critical 指摘対応: 3 要素がファイル内に分散していないこと
+      // (同一 update() ブロックでの隣接性) を保証。
+      it('3 要素が同一 update() ブロック近接 (≤30 行) に共存する', () => {
+        expect(hasThreeElementsAdjacent(source)).to.equal(
+          true,
+          '3 要素が散在している。同一 update() で書き込まれていない可能性あり (#178 違反)'
+        );
       });
     });
   }
