@@ -12,14 +12,15 @@ import {
   MAX_PAGE_TEXT_LENGTH,
   MAX_AGGREGATE_PAGE_CHARS,
   MAX_SUMMARY_LENGTH,
-  type CappedText,
 } from '../src/utils/textCap';
+import type { SummaryField } from '../../shared/types';
 
 // #255 Evaluator 指摘対応: discriminated union narrowing を `if (result.truncated)` で
 // 行うと、実装バグで truncated=false が返った場合にアサート群がスキップされ、テスト全体が
 // PASS する誤検知リスクがある。`asserts` 型述語で明示的に narrow し、不変条件を強制する。
+// #258: CappedText を SummaryField に統合（structurally identical）。
 function assertTruncated(
-  result: CappedText
+  result: SummaryField
 ): asserts result is { text: string; truncated: true; originalLength: number } {
   expect(result.truncated).to.be.true;
   if (!result.truncated) throw new Error('unreachable: expected truncated=true');
@@ -108,6 +109,14 @@ describe('textCap', () => {
 
       expect(result.truncated).to.be.false;
       expect(Object.prototype.hasOwnProperty.call(result, 'originalLength')).to.be.false;
+    });
+
+    // #258 dev-assert: capPageText 通常呼出からは違反不可能な invariant (originalLength > cappedText.length)。
+    // 将来の内部実装変更 (再cap 経路追加等) で違反したら即時検知。production では no-op (パフォーマンス担保)。
+    describe('dev-assert (#258)', () => {
+      it('通常の切り詰めでは fire しない (originalLength > cappedText.length が常時成立)', () => {
+        expect(() => capPageText('a'.repeat(MAX_PAGE_TEXT_LENGTH + 1))).to.not.throw();
+      });
     });
   });
 

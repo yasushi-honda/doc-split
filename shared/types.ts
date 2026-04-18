@@ -411,20 +411,23 @@ export const CONSTANTS = {
 // ページ単位OCR結果（PDF分割用）
 // ============================================
 
-export interface PageOcrResult {
+/**
+ * ページ単位OCR結果のメタ情報（分割判定用）。
+ * #258: SummaryField (text/truncated/originalLength) を合成して discriminated union 化することで、
+ * truncated=true ⟹ originalLength 必須を型レベル保証。
+ * meta 部のみを参照したい caller (split 判定など) のために export。
+ */
+export type PageOcrMeta = {
   pageNumber: number;
-  text: string;
   detectedDocumentType: string | null;
   detectedCustomerName: string | null;
   detectedOfficeName: string | null;
   detectedDate: Date | null;
   matchScore: number; // マッチ精度スコア（0-100）
   matchType: 'exact' | 'partial' | 'none';
-  /** OCR応答長制限により切り詰められた場合の元文字数 (Issue #205) */
-  originalLength?: number;
-  /** 切り詰めが発生したか (Issue #205) */
-  truncated?: boolean;
-}
+};
+
+export type PageOcrResult = PageOcrMeta & SummaryField;
 
 export interface SplitSuggestion {
   afterPageNumber: number; // このページの後で分割

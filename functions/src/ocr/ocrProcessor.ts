@@ -27,8 +27,8 @@ import {
   capPageText,
   capPageResultsAggregate,
   MAX_PAGE_TEXT_LENGTH,
-  type CappedText,
 } from '../utils/textCap';
+import type { SummaryField } from '../../../shared/types';
 
 const db = admin.firestore();
 const storage = admin.storage();
@@ -43,17 +43,18 @@ const OCR_RESULT_MAX_LENGTH = 100000;
 // Vertex AI暴走時の出力トークン上限（Issue #205）。8192tokens ≈ 25K chars Japanese、通常OCRには十分
 const GEMINI_MAX_OUTPUT_TOKENS = GEMINI_CONFIG.maxOutputTokens;
 
-/** ページ単位OCR結果 */
-export interface PageOcrResult {
+/**
+ * ページ単位OCR結果 (Issue #258 で discriminated union 化)
+ *
+ * SummaryField (text/truncated/originalLength) + OCR メタ (pageNumber/inputTokens/outputTokens) の合成。
+ * 不変条件: truncated=true ⟹ originalLength 必須（型レベル保証）。
+ * truncated=false の場合 page.originalLength は型に存在しない（access で tsc エラー）。
+ */
+export type PageOcrResult = SummaryField & {
   pageNumber: number;
-  text: string;
   inputTokens: number;
   outputTokens: number;
-  /** OCR応答が MAX_PAGE_TEXT_LENGTH または aggregate cap で切り詰められた場合の元の文字数 (Issue #205) */
-  originalLength?: number;
-  /** 切り詰めが発生したか (Issue #205) */
-  truncated?: boolean;
-}
+};
 
 /** OCR処理結果 */
 export interface OcrProcessingResult {
@@ -138,15 +139,12 @@ export async function processDocument(
     if (capped.truncated) {
       console.warn(`[OCR] ${label} text truncated: ${capped.originalLength} → ${capped.text.length} chars (cap=${MAX_PAGE_TEXT_LENGTH})`);
     }
+    // #258: `...capped` で discriminated union の不変条件 (truncated tag + originalLength) が caller に伝播。
     return {
+      ...capped,
       pageNumber,
-      text: capped.text,
       inputTokens: result.inputTokens,
       outputTokens: result.outputTokens,
-      // #255: discriminated union 化により truncated=false 時は capped.originalLength 不在。
-      // 切り詰めなしの場合は原文長 = result.text.length なのでフォールバック。
-      originalLength: capped.truncated ? capped.originalLength : result.text.length,
-      truncated: capped.truncated,
     };
   };
 
@@ -175,7 +173,7 @@ export async function processDocument(
     totalOutputTokens = result.outputTokens;
   }
 
-  // aggregate cap (Issue #205): per-page後にも合計サイズで二段防御
+  // aggregate cap (Issue #205): per-page後にも合計サイズで二段防御。#264 follow-up: 型レベル不変条件は textCap.ts 内コメント参照。
   const beforeAggregateChars = pageResults.reduce((sum, p) => sum + p.text.length, 0);
   pageResults = capPageResultsAggregate(pageResults);
   const afterAggregateChars = pageResults.reduce((sum, p) => sum + p.text.length, 0);
@@ -189,7 +187,7 @@ export async function processDocument(
     .join('\n\n');
 
   // マスターデータ取得（要約生成と並列実行）
-  const summaryPromise = generateSummary(ocrResult, '').catch((err): CappedText => {
+  const summaryPromise = generateSummary(ocrResult, '').catch((err): SummaryField => {
     console.error('Summary generation failed:', err);
     return { text: '', truncated: false };
   });
@@ -537,17 +535,17 @@ ${pageNumber ? `\nこれは${pageNumber}ページ目です。` : ''}
 }
 
 /**
- * OCR結果からAI要約を生成 (Issue #209, Issue #214)
+ * OCR結果からAI要約を生成 (Issue #209, Issue #214, #258)
  *
  * Precondition: core の `generateSummaryCore` は `length < MIN_OCR_LENGTH_FOR_SUMMARY` を許容しない。
- * 本 helper はその precondition を先に消化し、短文時は empty CappedText を返して後続処理を継続する。
+ * 本 helper はその precondition を先に消化し、短文時は empty SummaryField を返して後続処理を継続する。
  * Vertex AI エラーは catch → empty 返却で best-effort (呼出元 `summaryPromise` の `.catch(empty)` と二重防御)。
- * @returns CappedText - text(切り詰め後summary), originalLength(元文字数), truncated(切り詰めフラグ)
+ * @returns SummaryField - text(切り詰め後summary), truncated(切り詰めフラグ), originalLength(truncated=true 時のみ)
  */
 async function generateSummary(
   ocrResult: string,
   documentType: string
-): Promise<CappedText> {
+): Promise<SummaryField> {
   if (!ocrResult || ocrResult.length < MIN_OCR_LENGTH_FOR_SUMMARY) {
     return { text: '', truncated: false };
   }

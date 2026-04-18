@@ -8,7 +8,7 @@
 import * as functions from 'firebase-functions/v2';
 import * as admin from 'firebase-admin';
 import { GCP_CONFIG } from '../utils/config';
-import type { CappedText } from '../utils/textCap';
+import type { SummaryField } from '../../../shared/types';
 import { buildSummaryFields } from './summaryRequestBuilder';
 import { generateSummaryCore, MIN_OCR_LENGTH_FOR_SUMMARY } from './summaryGenerator';
 
@@ -67,7 +67,7 @@ export const regenerateSummary = functions.https.onCall(
     }
 
     // 要約生成 (Issue #214: 共通コアに委譲。本経路は error を rethrow して onCall の internal error 化)
-    let summary: CappedText;
+    let summary: SummaryField;
     try {
       summary = await generateSummaryCore(ocrResult, documentType);
     } catch (error) {
