@@ -32,8 +32,8 @@ session10 で完遂した #255 (CappedText discriminated union 化) の follow-u
 |---|---|---|
 | `/impl-plan` | ✅ AC 5 項目定義 | 1 ファイル想定 → Evaluator / safe-refactor 不発動 |
 | `/simplify` 3 並列 | Reuse HIGH 1 / Quality HIGH 1 | 共通ヘルパー抽出 + `\b` 追加で即時対応、word boundary lock-in fixture 追加 |
-| `/safe-refactor` | ⏭️ スキップ (1 ファイル、3+ 基準未満) | — |
-| **Evaluator 分離** | ⏭️ スキップ (1 ファイル、5+ 基準未満) | — |
+| `/safe-refactor` | ⏭️ スキップ (test 1 ファイル変更、production code 無変更、3+ 基準未満) | — |
+| **Evaluator 分離** | ⏭️ スキップ (test 1 ファイル変更、5+ 基準未満) | — |
 | `/review-pr` 6 エージェント並列 | Critical 3 / Important 4 / Suggestion 8+ | Critical (set/create バイパス + 空 patterns + identity vs count) + Important (境界 fixture + regression fixture + magic number + コメント 3 箇所) を全て同 PR で対応、Suggestion 系は Issue #262 に集約 |
 
 ### CI / マージ結果

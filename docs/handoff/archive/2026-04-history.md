@@ -2,7 +2,7 @@
 
 `docs/handoff/LATEST.md` の肥大化に伴い、
 2026-04-16 session3 で過去履歴を本ファイルへ初回アーカイブ。
-2026-04-18 session11 でさらに session9 セクションを末尾追記。
+2026-04-18 session11 で session9 セクションを LATEST から archive へ移管 (cut & append)。
 
 最新状況は `docs/handoff/LATEST.md` 参照。
 
