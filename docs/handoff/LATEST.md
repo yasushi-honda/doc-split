@@ -4,6 +4,7 @@
 **ブランチ**: main (PR #270 / #272 マージ済、clean)
 **フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + Summary リファクタ集約 3/3 + Phase 3 #258 + follow-up 消化 Phase A (2/2) 完遂
 
+<a id="session13"></a>
 ## ✅ session13 完了サマリー (Phase A 完遂: #266 + #253、follow-up 2 Issue 起票)
 
 session12 で完遂した Phase 3 (#258) + Phase 1 (#259) の follow-up 消化スプリントとして計画。
@@ -49,7 +50,7 @@ CLAUDE.md (#178 教訓チェックリスト) を多層適用、各 PR で Critic
 
 ### CI / マージ結果
 
-- BE: `npm test` 435 → 450 passing (+15 = 12 契約テスト + 3 params shape)
+- BE: `npm test` 435 → 450 passing (+15 = 12 初期 grep 契約テスト + 3 `/review-pr` 指摘対応で追加した params shape 検証)
 - FE: `npm test` 113 → 116 passing (+3 needsManualCustomerSelection 検証)
 - PR #270 CI: lint-build-test SUCCESS / CodeRabbit SUCCESS / GitGuardian SUCCESS → MERGED `46a3f2d`
 - PR #272 CI: lint-build-test SUCCESS / CodeRabbit SUCCESS / GitGuardian SUCCESS → MERGED `d9187b8`
