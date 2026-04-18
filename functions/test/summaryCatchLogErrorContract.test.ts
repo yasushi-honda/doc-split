@@ -128,6 +128,90 @@ describe('summary catch logError contract (#266)', () => {
     });
   }
 
+  // #266 review-pr (pr-test-analyzer I2) 対応: logError/safeLogError 呼出の params shape を
+  // 静的検証。grep-based のため値の実行時検証はできないが、source: 'ocr' と
+  // 適切な functionName suffix が記述されていることで「呼出コードが正しい shape で書かれている」
+  // ことを契約化する。動的 mock 検証は #251 (summaryGenerator unit test) で補完予定。
+  describe('logError/safeLogError params shape contract (#266)', () => {
+    const ocrProcessorSource = readFileSync(
+      resolve(process.cwd(), 'src/ocr/ocrProcessor.ts'),
+      'utf-8'
+    );
+    const regenerateSummarySource = readFileSync(
+      resolve(process.cwd(), 'src/ocr/regenerateSummary.ts'),
+      'utf-8'
+    );
+
+    it('ocrProcessor.ts の safeLogError 呼出に source: \'ocr\' が含まれる', () => {
+      // safeLogError( ... source: 'ocr' ... ) の近接パターン検証
+      // ANCHOR_WINDOW_LINES=8 内で両要素が共存することを確認
+      const SAFE_LOG_ERROR_CALL = /safeLogError\s*\(/;
+      const SOURCE_OCR = /source:\s*['"]ocr['"]/;
+      const lines = ocrProcessorSource.split('\n');
+      const safeLogLines = lines
+        .map((line, idx) => ({ line, idx }))
+        .filter(({ line }) => SAFE_LOG_ERROR_CALL.test(line))
+        .map(({ idx }) => idx);
+
+      expect(safeLogLines.length).to.be.greaterThanOrEqual(
+        2,
+        'ocrProcessor.ts で safeLogError 呼出が 2 箇所以上あることを想定 (summaryPromise + generateSummary inner)'
+      );
+
+      for (const idx of safeLogLines) {
+        const end = Math.min(lines.length, idx + ANCHOR_WINDOW_LINES + 1);
+        const window = lines.slice(idx, end).join('\n');
+        expect(SOURCE_OCR.test(window)).to.equal(
+          true,
+          `safeLogError 呼出 (line ${idx + 1}) の近傍に source: 'ocr' が見つからない`
+        );
+      }
+    });
+
+    it('regenerateSummary.ts の safeLogError 呼出に functionName: \'regenerateSummary\' が含まれる', () => {
+      const SAFE_LOG_ERROR_CALL = /safeLogError\s*\(/;
+      const FUNCTION_NAME_REGENERATE = /functionName:\s*['"]regenerateSummary['"]/;
+      const lines = regenerateSummarySource.split('\n');
+      const safeLogLines = lines
+        .map((line, idx) => ({ line, idx }))
+        .filter(({ line }) => SAFE_LOG_ERROR_CALL.test(line))
+        .map(({ idx }) => idx);
+
+      expect(safeLogLines.length).to.be.greaterThanOrEqual(
+        1,
+        'regenerateSummary.ts で safeLogError 呼出が 1 箇所以上あることを想定'
+      );
+
+      for (const idx of safeLogLines) {
+        const end = Math.min(lines.length, idx + ANCHOR_WINDOW_LINES + 1);
+        const window = lines.slice(idx, end).join('\n');
+        expect(FUNCTION_NAME_REGENERATE.test(window)).to.equal(
+          true,
+          `safeLogError 呼出 (line ${idx + 1}) の近傍に functionName: 'regenerateSummary' が見つからない`
+        );
+      }
+    });
+
+    it('ocrProcessor.ts の safeLogError 呼出で documentId が渡されている', () => {
+      const SAFE_LOG_ERROR_CALL = /safeLogError\s*\(/;
+      const DOCUMENT_ID_PARAM = /documentId:/;
+      const lines = ocrProcessorSource.split('\n');
+      const safeLogLines = lines
+        .map((line, idx) => ({ line, idx }))
+        .filter(({ line }) => SAFE_LOG_ERROR_CALL.test(line))
+        .map(({ idx }) => idx);
+
+      for (const idx of safeLogLines) {
+        const end = Math.min(lines.length, idx + ANCHOR_WINDOW_LINES + 1);
+        const window = lines.slice(idx, end).join('\n');
+        expect(DOCUMENT_ID_PARAM.test(window)).to.equal(
+          true,
+          `safeLogError 呼出 (line ${idx + 1}) の近傍に documentId: が見つからない`
+        );
+      }
+    });
+  });
+
   describe('everyAnchorHasLogErrorNearby detection logic', () => {
     it('positive: catch 句直後に logError 呼出がある場合は PASS', () => {
       const fixture = `

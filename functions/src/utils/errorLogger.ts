@@ -135,8 +135,7 @@ export interface LogErrorParams {
  * logError 自体が Firestore 書込で throw した場合に console.error で fallback し、
  * caller の主処理を中断させない。catch 句 / best-effort error path で使用する。
  *
- * 既存 `handleProcessingError` の fallback パターンは当 helper 移行対象だが、
- * 本 PR scope 外 (follow-up で統合予定)。
+ * 既存 `handleProcessingError` の fallback パターンは当 helper 移行対象 (follow-up: #271)。
  */
 export async function safeLogError(params: LogErrorParams): Promise<void> {
   try {

@@ -187,8 +187,8 @@ export async function processDocument(
     .join('\n\n');
 
   // マスターデータ取得（要約生成と並列実行）
-  // Issue #266: generateSummary 内部 catch で empty 返却するため本 catch は通常 dead code だが、
-  // 将来の signature 変更で throw 経路が生じた場合の edge case safety net として残置。
+  // Issue #266: 通常は generateSummary 内部 catch で吸収されるため本 catch には到達しない。
+  // inner catch の regression や Promise 化されていない throw 経路に対する二重防御として残置。
   // safeLogError 経由で silent failure を防ぎ、errors collection から検知可能にする。
   const summaryPromise = generateSummary(ocrResult, '', { docId, functionName }).catch(
     async (err) => {

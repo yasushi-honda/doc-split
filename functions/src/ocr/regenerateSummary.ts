@@ -69,6 +69,9 @@ export const regenerateSummary = functions.https.onCall(
 
     // 要約生成 (Issue #214: 共通コアに委譲。本経路は error を rethrow して onCall の internal error 化)
     // Issue #266: rethrow 前に safeLogError で errors collection + 通知による検知を確保。
+    // 順序根拠 (rules/error-handling.md § 1): 本経路は "状態復旧なし + 即 rethrow" のため、
+    // ログ記録 → rethrow の順を採る。safeLogError は内部で try/catch 済、caller に波及しない。
+    // onCall 呼出の client 側タイムアウトは Firebase 標準 70s、logError Firestore 書込 ~500ms で影響軽微。
     let summary: SummaryField;
     try {
       summary = await generateSummaryCore(ocrResult, documentType);
