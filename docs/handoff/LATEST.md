@@ -1,8 +1,76 @@
 # ハンドオフメモ
 
-**更新日**: 2026-04-18 session10 (Phase 0.5 マージ修復 + Phase 1.2 完遂: #255 CappedText discriminated union 化)
-**ブランチ**: main (PR #254 / #257 マージ済、clean)
-**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + Summary リファクタ集約 3/3 完了 (#214 / #215 / #255)
+**更新日**: 2026-04-18 session11 (Phase 1 完遂: #259 summaryWritePayloadContract 直接書込検知強化)
+**ブランチ**: main (PR #261 マージ済、clean)
+**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + Summary リファクタ集約 3/3 完了 + #255 follow-up #259 完遂
+
+## ✅ session11 完了サマリー (Phase 1 完遂: #259 直接書込パターン caller 検知)
+
+session10 で完遂した #255 (CappedText discriminated union 化) の follow-up Issue #259 を本セッションで完遂。`/review-pr` 6 並列で検出された Critical 3 + Important 4 を全て同 PR で対応。Suggestion 系は #262 に集約 follow-up 化。
+
+| 順 | フェーズ | 結果 |
+|---|---|---|
+| 1 | **Phase 1 (#259) 着手 — 計画策定** | ✅ `/impl-plan` AC 5 項目定義、案 A (代替パターン併用) 採用 |
+| 2 | **TDD 実装 → /simplify HIGH 2 件即時対応** | ✅ 共通ヘルパー `hasPatternsAdjacent` 抽出 + `\b` word boundary 追加 |
+| 3 | **PR #261 作成 → /review-pr 6 並列** | ✅ Critical 3 / Important 4 / Suggestion 多数 検出 |
+| 4 | **Critical + Important 全 7 件を同 PR で対応** | ✅ commit `e1cfc48` |
+| 5 | **Follow-up #262 起票 + CI SUCCESS → squash merge** | ✅ commit `8ca9da5`、Issue #259 自動クローズ |
+
+### 達成効果 (Phase 1 完遂)
+
+| 効果 | 内容 |
+|---|---|
+| 🛡️ バイパス検知 | `.update()` のみ → `.update/.set/.create` 全 Firestore 書込呼出に拡張。`set({ summary }, { merge: true })` 経路で派生フィールド整合をバイパスする anti-pattern も caller として検知 |
+| 🚨 silent universal-true 防御 | `hasPatternsAdjacent` 空配列で `Array.prototype.every` の vacuous truth により全 source を caller 誤分類する silent failure を明示 throw で阻止 |
+| 🔍 identity 比較 | caller 集計を count → identity (deep.equal sorted) 比較に強化。rename + 別ファイル新規追加で count 維持されたまま identity 乖離する silent drift を検知 |
+| 🧪 lock-in 強化 | 16 fixture テスト (positive 5 / negative 4 / 境界 3 / regression 3 / 防御 2) で grep-based 検知の挙動を多層 lock-in。ADJACENCY_WINDOW_LINES 境界 / OR 合成 / word boundary を全て regression 保護 |
+| 📦 共通化 | `hasPatternsAdjacent(source, ...patterns)` を抽出。3 つ目のコピペ発生前に抑止、将来の追加契約 (#258 等) でも再利用可能 |
+
+### Phase 1 Quality Gate 実施記録
+
+| 段階 | 結果 | 指摘・対応 |
+|---|---|---|
+| `/impl-plan` | ✅ AC 5 項目定義 | 1 ファイル想定 → Evaluator / safe-refactor 不発動 |
+| `/simplify` 3 並列 | Reuse HIGH 1 / Quality HIGH 1 | 共通ヘルパー抽出 + `\b` 追加で即時対応、word boundary lock-in fixture 追加 |
+| `/safe-refactor` | ⏭️ スキップ (test 1 ファイル変更、production code 無変更、3+ 基準未満) | — |
+| **Evaluator 分離** | ⏭️ スキップ (test 1 ファイル変更、5+ 基準未満) | — |
+| `/review-pr` 6 エージェント並列 | Critical 3 / Important 4 / Suggestion 8+ | Critical (set/create バイパス + 空 patterns + identity vs count) + Important (境界 fixture + regression fixture + magic number + コメント 3 箇所) を全て同 PR で対応、Suggestion 系は Issue #262 に集約 |
+
+### CI / マージ結果
+
+- BE: `npm run build` PASS / `npm test` 434 passing (元 423 + #259 規模 11) / `npm run lint` 0 errors (既存 19 warnings 別ファイル)
+- PR #261 CI: lint-build-test SUCCESS / GitGuardian SUCCESS → MERGED `8ca9da5`
+- 本 PR は test ファイルのみ、production code 変更なし → kanameone / cocoro 本番環境への影響ゼロ
+
+### 教訓 (PM/PL 視点)
+
+| 教訓 | 内容 |
+|---|---|
+| `/review-pr` の高 ROI | 6 並列で Critical 3 + Important 4 を一発検出。pr-test-analyzer の C1 (`.set()` バイパス) は契約の盲点を的確に発見 → #178 教訓カバーが厚くなった |
+| 共通化のタイミング | 3 つ目のコピペ発生前 (= 2 関数共通) で抽出するのが最適。Reuse HIGH 指摘を即時対応で抑止 |
+| Critical 対応の機械性 | agent 指摘がコード例付きの場合、設計判断追加なしの機械的修正で済む → セカンドオピニオン不要、再 review-pr も軽量で十分 |
+| 1 セッション 1 PR | 中規模 follow-up は context 温存しつつ完遂可能。Phase 2 (#251) 着手は次セッションで安全マージン確保 |
+
+### 次セッション着手予定: Phase 2 (#251) — handoff 計画本命
+
+**最優先タスク** (session10 から継続):
+- **#251**: `generateSummaryCore` の unit test 追加 + `buildSummaryPrompt` 別モジュール分離
+  - rateLimiter.acquire() 順序検証
+  - trackGeminiUsage の両値呼出検証
+  - capPageText wiring 検証
+  - malformed Vertex response の silent failure 検出
+  - `summaryPromptBuilder.ts` 新設で firebase-admin 依存切り離し → pure function unit test 可能化
+  - 規模: 中 (3-5 ファイル)、TDD + Quality Gate 標準フロー、所要 ~1.5h 想定
+
+**残り WBS** (session10 から継続):
+- **Phase 3 (#258)**: CappedText / SummaryField / PageOcrResult 型統合 — 大 (5+ ファイル)、Evaluator 分離プロトコル必須
+- **Sprint 3 (#253)**: useProcessingHistory.firestoreToDocument 重複を useDocuments 側に集約
+- **Sprint 4 (#237)**: search tokenizer FE/BE/script 3 箇所重複共通化
+- **Sprint 5**: 運用監視拡充 (#220 / #239 / #238)
+- **Sprint 6**: テスト補強 (#200) + bug 消化 (#196)
+- **新規 follow-up**: #262 (grep-based 既知制限 + diagnostics 強化、本セッション起票)
+
+---
 
 ## ✅ session10 完了サマリー (Phase 0.5 マージ修復 + Phase 1.2 #255 完遂)
 
@@ -68,70 +136,6 @@ session9 終了時の handoff 誤記録（PR #256 が PR #254 より先にマー
 - **新規 follow-up**: #258 (型設計統合) / #259 (contract test 強化) — 条件付き待機
 
 ---
-
-## ✅ session9 完了サマリー (Sprint 2-2 完遂: #215 Summary discriminated union 化)
-
-session8 で整理した WBS の Sprint 2-2 (Evaluator 分離発動ライン) を PM/PL 視点で完遂。Quality Gate 全段 (`/impl-plan` → `/simplify` → `/safe-refactor` → `/trace-dataflow` → **Evaluator分離** → `/review-pr` 6並列) を順に通過し、Critical 指摘 4 件に対応。13 ファイル変更、347+/61-。
-
-| 順 | Issue/PR | 結果 |
-|---|---|---|
-| 1 | **`/impl-plan` 策定** | ✅ Acceptance Criteria 8 項目を定義、#178 教訓 4 点 + API 境界 + 後方互換戦略を明文化 |
-| 2 | **#215 Summary discriminated union 化 + textCap rename** | ✅ PR #254 (CI success: lint-build-test 5m20s ✅ / CodeRabbit ✅ / GitGuardian ✅、MERGEABLE) |
-| 3 | **follow-up 起票** | ✅ Issue #253 (useProcessingHistory.firestoreToDocument 重複解消) + Issue #255 (write-payload regression test + CappedText discriminated union 化) |
-
-### 達成効果 (Sprint 2-2 完遂)
-
-| 効果 | 内容 |
-|---|---|
-| 🛡️ 型不変条件 | `SummaryField` discriminated union で「truncated=true ⟹ originalLength 必須」を型レベル保証。illegal state が代入不可能 |
-| 🔒 XSS 経路排除 | summary + OCR 結果の innerHTML → createElement + textContent 化。`DocumentDetailModal.tsx` で 2 箇所修正 |
-| 📑 後方互換 | `normalizeSummary()` で旧フラット形式 (Issue #209 時代) を新ネスト型に自動変換。illegal state は `console.warn` で検知可能化 (silent degradation 解消) |
-| 🧹 再処理クリア | `getReprocessClearFields()` で新 summary + 旧 3 キー全て `deleteField()`。再処理時に Firestore 旧フィールドが自然クリーン化 |
-| 🏷️ 命名整合性 | `pageTextCap.ts` → `textCap.ts` rename + `MAX_SUMMARY_LENGTH` 用途をファイル命名に反映 |
-
-### Sprint 2-2 Quality Gate 実施記録
-
-| 段階 | 結果 | 指摘・対応 |
-|---|---|---|
-| `/impl-plan` | ✅ AC 8 項目定義 | 13 ファイル想定 → Evaluator 発動確定 |
-| `/simplify` 3 並列 (reuse/quality/efficiency) | Critical 2 件 | JSDoc 強化 2 件採用 (SummaryField 判別タグ + normalizeSummary illegal state 仕様明記)、残 1 件は Follow-up #253 起票で対応 |
-| `/safe-refactor` | HIGH/MEDIUM 0 件 | LOW 3 件は対応済 or 別 Issue |
-| `/trace-dataflow` (summary 12 レイヤー) | 全 OK | Vertex AI → Firestore → FE → UI のラウンドトリップ完全性確認、マッピング欠落なし |
-| **Evaluator 分離** (5+ファイル発動) | REQUEST_CHANGES 3 件 | 4 件修正で対応 (OCR innerHTML→textContent 併修 + getReprocessClearFields unit test + 不正型防御 test + seed-e2e-data.js 新型化) |
-| `/review-pr` 6 エージェント並列 | Critical 2 / Important 3 | Critical 2 対応 (silent failure に console.warn 追加 + JSDoc 未再処理残留注記)、Important 3 件は Follow-up #255 起票 |
-
-### CI / マージ結果
-
-- BE: `npm run build` PASS / `npm test` 408 passing / `npm run lint` 0 errors (既存 19 warnings 別ファイル)
-- FE: `npm run typecheck` PASS / `npm test` 113 passing (元 99 + 新規 14) / `npm run lint` 0 errors
-- PR #254 CI: lint-build-test 5m20s ✅ / CodeRabbit ✅ / GitGuardian ✅ → **次セッション冒頭でマージ予定**
-
-### #178 教訓 4 点チェックリスト (全更新済)
-
-- [x] `shared/types.ts`: `SummaryField` discriminated union 追加、Document 型更新
-- [x] 書込パス: `ocrProcessor.ts:287-296` / `regenerateSummary.ts:83-89` で新ネスト書込 + 旧 2 キー delete
-- [x] firestoreToDocument: `useDocuments.ts:119` / `useProcessingHistory.ts:122` で `normalizeSummary()` 呼出
-- [x] `getReprocessClearFields`: `useDocuments.ts:222-229` で新 summary + 旧 3 キー全 delete
-
-### 次セッション: Sprint 3 (古い bug 消化) 着手予定
-
-**最優先タスク (セッション冒頭)**:
-1. **PR #254 マージ** (destructive 操作、ユーザー確認必須): `gh pr merge 254 --squash --repo yasushi-honda/doc-split`
-2. マージ後 `git checkout main && git pull` で同期
-3. ハンドオフ PR (本 PR) もマージ
-
-**残り WBS**:
-- **Sprint 3** 古い bug 消化 (#189/#190/#196/#182/#183) — 並列可、1 日
-  - #189: ocrProcessor dateMarker サニタイズ境界外
-  - #190: check-master-data.js --fix 500件上限考慮
-  - #196: rescueStuckProcessingDocs MAX_RETRY_COUNT 追加
-  - #182: pdfOperations fileDateFormatted フォールバック
-  - #183: displayFileName サニタイズ
-- **Sprint 4** リファクタ (#181/#188/#253) — 1.5 日
-  - #253 (session9 follow-up): useProcessingHistory.firestoreToDocument 重複解消 → #181/#188 と同時実施が効率的
-- **Sprint 5** テスト補強 (#200/#255) — 1 日
-  - #255 (session9 follow-up): ocrProcessor/regenerateSummary write-payload regression test + CappedText discriminated union 化
-- **Sprint 6** 条件付き待機 (#237/#238/#239/#251) — 稼働実績・監査要件・false negative 発生で昇格
 
 ## ✅ session8 完了サマリー (Sprint 2-1 完遂: #214 generateSummary 共通化)
 
