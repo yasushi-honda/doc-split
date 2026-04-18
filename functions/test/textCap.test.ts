@@ -122,9 +122,9 @@ describe('textCap', () => {
 
   describe('capPageResultsAggregate (aggregate cap)', () => {
     it('合計が閾値以下なら全ページそのまま返される', () => {
-      const pages = [
-        { text: 'page1', originalLength: 5, truncated: false },
-        { text: 'page2', originalLength: 5, truncated: false },
+      const pages: SummaryField[] = [
+        { text: 'page1', truncated: false },
+        { text: 'page2', truncated: false },
       ];
       const result = capPageResultsAggregate(pages);
 
@@ -137,8 +137,7 @@ describe('textCap', () => {
       const pageSize = MAX_PAGE_TEXT_LENGTH;
       const pages = Array.from({ length: 10 }, (_, i) => ({
         text: 'a'.repeat(pageSize),
-        originalLength: pageSize,
-        truncated: false,
+        truncated: false as const,
         pageNumber: i + 1,
       }));
 
@@ -150,9 +149,9 @@ describe('textCap', () => {
 
     it('aggregate超過時、超過したページは truncated=true でメタデータ保持', () => {
       const pageSize = MAX_PAGE_TEXT_LENGTH;
-      const pages = Array.from({ length: 10 }, () => ({
+      // SummaryField[] 明示注釈: 戻り値 narrowing が truncated:false only に固定されないように union で保持
+      const pages: SummaryField[] = Array.from({ length: 10 }, () => ({
         text: 'a'.repeat(pageSize),
-        originalLength: pageSize,
         truncated: false,
       }));
 
@@ -161,15 +160,16 @@ describe('textCap', () => {
 
       expect(truncatedPages.length).to.be.at.least(1);
       truncatedPages.forEach((p) => {
+        // assertTruncated で narrow (silent skip 回避: if ブロックでスキップされて PASS する誤検知を排除)
+        assertTruncated(p);
         expect(p.originalLength).to.equal(pageSize);
       });
     });
 
     it('1ページ目で既に閾値超過の場合は1ページ目内で切り詰め', () => {
-      const pages = [
+      const pages: SummaryField[] = [
         {
           text: 'a'.repeat(MAX_AGGREGATE_PAGE_CHARS + 100),
-          originalLength: MAX_AGGREGATE_PAGE_CHARS + 100,
           truncated: false,
         },
       ];
@@ -181,16 +181,16 @@ describe('textCap', () => {
 
     it('per-page cap と合計 cap の両方が適用される', () => {
       // 各ページ MAX_PAGE_TEXT_LENGTH 超 + 合計 MAX_AGGREGATE_PAGE_CHARS 超
-      const pages = [
-        { text: 'a'.repeat(60_000), originalLength: 60_000, truncated: false },
-        { text: 'b'.repeat(60_000), originalLength: 60_000, truncated: false },
-        { text: 'c'.repeat(60_000), originalLength: 60_000, truncated: false },
-        { text: 'd'.repeat(60_000), originalLength: 60_000, truncated: false },
+      const pages: SummaryField[] = [
+        { text: 'a'.repeat(60_000), truncated: false },
+        { text: 'b'.repeat(60_000), truncated: false },
+        { text: 'c'.repeat(60_000), truncated: false },
+        { text: 'd'.repeat(60_000), truncated: false },
       ];
       const result = capPageResultsAggregate(pages);
 
       // 各ページ per-page cap 内
-      result.forEach((p: { text: string; truncated?: boolean; originalLength?: number }) => {
+      result.forEach((p) => {
         expect(p.text.length).to.be.at.most(MAX_PAGE_TEXT_LENGTH);
       });
       // 合計が aggregate cap 内
@@ -200,6 +200,85 @@ describe('textCap', () => {
 
     it('空配列は空配列を返す', () => {
       expect(capPageResultsAggregate([])).to.deep.equal([]);
+    });
+
+    // #264: discriminated union 不変条件の runtime lock-in。
+    // 型レベルでは `<T extends SummaryField>` で truncated=false ⟹ originalLength 不在を保証するが、
+    // 実装バグで false path に originalLength を付与しないことを runtime でも明示検証する。
+    describe('discriminated union 不変条件 (#264)', () => {
+      it('truncated=false 経路の戻り値に originalLength キーが存在しない', () => {
+        const pages: SummaryField[] = [
+          { text: 'short', truncated: false },
+          { text: 'also-short', truncated: false },
+        ];
+        const result = capPageResultsAggregate(pages);
+
+        result.forEach((p) => {
+          expect(p.truncated).to.be.false;
+          expect(Object.prototype.hasOwnProperty.call(p, 'originalLength')).to.be.false;
+        });
+      });
+
+      it('truncated=true 経路の戻り値に originalLength が存在し number 型である', () => {
+        const pageSize = MAX_PAGE_TEXT_LENGTH;
+        const pages: SummaryField[] = Array.from({ length: 10 }, () => ({
+          text: 'a'.repeat(pageSize),
+          truncated: false,
+        }));
+
+        const result = capPageResultsAggregate(pages);
+        const truncatedPages = result.filter((p) => p.truncated);
+
+        expect(truncatedPages.length).to.be.at.least(1);
+        truncatedPages.forEach((p) => {
+          expect(Object.prototype.hasOwnProperty.call(p, 'originalLength')).to.be.true;
+          // assertTruncated で narrow (silent skip 回避)
+          assertTruncated(p);
+          expect(p.originalLength).to.be.a('number');
+          expect(p.originalLength).to.be.at.least(p.text.length);
+        });
+      });
+
+      it('入力 truncated=true + originalLength 付きの再 cap で元の originalLength が保持される', () => {
+        // 前回実行で既に truncated=true + originalLength=1,000,000 だったページを再 cap する想定。
+        // Math.max(originalFromPage, capped.originalLength) で過去情報が保存されることを lock-in。
+        const pages: SummaryField[] = [
+          { text: 'a'.repeat(MAX_PAGE_TEXT_LENGTH), truncated: true, originalLength: 1_000_000 },
+          { text: 'b'.repeat(MAX_PAGE_TEXT_LENGTH), truncated: false },
+          { text: 'c'.repeat(MAX_PAGE_TEXT_LENGTH), truncated: false },
+          { text: 'd'.repeat(MAX_PAGE_TEXT_LENGTH), truncated: false },
+          { text: 'e'.repeat(MAX_PAGE_TEXT_LENGTH), truncated: false },
+        ];
+        const result = capPageResultsAggregate(pages);
+        const first = result[0];
+        expect(first).to.exist;
+        assertTruncated(first!);
+        expect(first!.originalLength).to.equal(1_000_000);
+      });
+
+      it('meta フィールド (pageNumber/inputTokens/outputTokens) が全経路で保持される', () => {
+        // short path と cap path が混在するサイズで検証
+        const pages = [
+          // page 1: short path (budget 内)
+          { text: 'p1', truncated: false as const, pageNumber: 1, inputTokens: 100, outputTokens: 50 },
+          // page 2: cap path (per-page cap 超過)
+          {
+            text: 'b'.repeat(MAX_PAGE_TEXT_LENGTH + 10),
+            truncated: false as const,
+            pageNumber: 2,
+            inputTokens: 200,
+            outputTokens: 60,
+          },
+        ];
+        const result = capPageResultsAggregate(pages);
+
+        expect(result[0]?.pageNumber).to.equal(1);
+        expect(result[0]?.inputTokens).to.equal(100);
+        expect(result[0]?.outputTokens).to.equal(50);
+        expect(result[1]?.pageNumber).to.equal(2);
+        expect(result[1]?.inputTokens).to.equal(200);
+        expect(result[1]?.outputTokens).to.equal(60);
+      });
     });
   });
 
@@ -247,8 +326,7 @@ describe('textCap', () => {
     it('cap適用後のpageResults配列はFirestore 1MiB制限内に収まる', () => {
       const pages = Array.from({ length: 30 }, (_, i) => ({
         text: 'あ'.repeat(MAX_PAGE_TEXT_LENGTH * 2), // 各ページ大きすぎ
-        originalLength: MAX_PAGE_TEXT_LENGTH * 2,
-        truncated: false,
+        truncated: false as const,
         pageNumber: i + 1,
         inputTokens: 100,
         outputTokens: 50000,
