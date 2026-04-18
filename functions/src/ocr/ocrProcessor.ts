@@ -145,7 +145,7 @@ export async function processDocument(
     totalOutputTokens = result.outputTokens;
   }
 
-  // aggregate cap (Issue #205): per-page後にも合計サイズで二段防御。#264 follow-up: 型レベル不変条件は textCap.ts 内コメント参照。
+  // aggregate cap (Issue #205): per-page後にも合計サイズで二段防御。
   const beforeAggregateChars = pageResults.reduce((sum, p) => sum + p.text.length, 0);
   pageResults = capPageResultsAggregate(pageResults);
   const afterAggregateChars = pageResults.reduce((sum, p) => sum + p.text.length, 0);

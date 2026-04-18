@@ -49,15 +49,37 @@ export function capPageText(rawText: string, maxLength: number = MAX_PAGE_TEXT_L
   };
 }
 
-// #258 follow-up (#264): generic `<T extends PageWithText>` の flat optional 戻り値が新 PageOcrResult
-// (discriminated union) の不変条件を runtime で破る経路を残す。Firestore 書込互換は維持。詳細は #264 参照。
-interface PageWithText {
-  text: string;
-  originalLength?: number;
-  truncated?: boolean;
+/**
+ * SummaryField 部 (text/truncated/originalLength) を除いた meta 部のみを抽出する helper。
+ * caller が追加フィールド (pageNumber/inputTokens/outputTokens 等) を持つ場合に、
+ * SummaryField を再構築する際の meta 保持のため使用。
+ *
+ * 用途は cap path (text 再生成経路) 限定。short path (L91 `return page;`) は入力が型準拠している
+ * 前提でそのまま返すため、本 helper は経由しない。型違反入力 (例: truncated=false に originalLength
+ * が混入) の robustness は cap path 内でのみ担保される。
+ */
+function stripSummaryFields<T extends SummaryField>(
+  page: T,
+): Omit<T, 'text' | 'truncated' | 'originalLength'> {
+  const rest = { ...page } as Record<string, unknown>;
+  delete rest.text;
+  delete rest.truncated;
+  delete rest.originalLength;
+  return rest as Omit<T, 'text' | 'truncated' | 'originalLength'>;
 }
 
-export function capPageResultsAggregate<T extends PageWithText>(pages: T[]): T[] {
+/**
+ * ページ配列の合計文字数を MAX_AGGREGATE_PAGE_CHARS 以下に収めるよう切り詰める。
+ *
+ * #264: generic を `<T extends SummaryField>` に制約することで、caller (PageOcrResult 等) の
+ * discriminated union 不変条件 (truncated=false ⟹ originalLength 不在) を型レベル + runtime で
+ * 両面保証する。`stripSummaryFields` で meta 部を抽出後、truncated=false/true を明示分岐して
+ * SummaryField を再構築する。
+ *
+ * T は `SummaryField` フル union を期待する。narrow された T (例: truncated=true 固定型) を
+ * 渡すと、cap 結果が truncated=false になる経路で型契約違反になるため、caller は union 型を保つこと。
+ */
+export function capPageResultsAggregate<T extends SummaryField>(pages: T[]): T[] {
   let runningTotal = 0;
   return pages.map((page) => {
     const remaining = Math.max(0, MAX_AGGREGATE_PAGE_CHARS - runningTotal);
@@ -68,15 +90,32 @@ export function capPageResultsAggregate<T extends PageWithText>(pages: T[]): T[]
       return page;
     }
 
-    const original = page.originalLength ?? page.text.length;
     const capped = capPageText(page.text, perPageBudget);
     runningTotal += capped.text.length;
-    const cappedOriginalLength = capped.truncated ? capped.originalLength : page.text.length;
+
+    const meta = stripSummaryFields(page);
+    // input が既に truncated=true だった場合は常に truncated=true を保持する (情報保存)。
+    // capped.truncated のみで分岐すると、input.truncated=true だが text が既に cap 内のケースで
+    // truncated=false + originalLength 消失という regression が発生する。
+    const isTruncated = page.truncated || capped.truncated;
+
+    if (isTruncated) {
+      // 再 cap 時は元の originalLength を優先保持 (idempotent + 過去情報保存)。
+      // page.truncated=false の場合、text 未切り詰めなので text.length が原本の長さ。
+      const originalFromPage = page.truncated ? page.originalLength : page.text.length;
+      const cappedOriginal = capped.truncated ? capped.originalLength : capped.text.length;
+      return {
+        ...meta,
+        text: capped.text,
+        truncated: true,
+        originalLength: Math.max(originalFromPage, cappedOriginal),
+      } as T;  // T は SummaryField union を保つ前提 (JSDoc 参照)
+    }
+    // truncated=false ⟹ originalLength 不在 (discriminated union 不変条件)
     return {
-      ...page,
+      ...meta,
       text: capped.text,
-      originalLength: Math.max(original, cappedOriginalLength),
-      truncated: page.truncated || capped.truncated,
-    };
+      truncated: false,
+    } as T;  // T は SummaryField union を保つ前提 (JSDoc 参照)
   });
 }
