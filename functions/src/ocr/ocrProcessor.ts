@@ -8,7 +8,7 @@ import * as admin from 'firebase-admin';
 import { VertexAI } from '@google-cloud/vertexai';
 import { PDFDocument } from 'pdf-lib';
 import { withRetry, RETRY_CONFIGS, isTransientError, is429Error } from '../utils/retry';
-import { logError, safeLogError } from '../utils/errorLogger';
+import { safeLogError } from '../utils/errorLogger';
 import { getRateLimiter } from '../utils/rateLimiter';
 import { GCP_CONFIG, GEMINI_CONFIG } from '../utils/config';
 import {
@@ -455,16 +455,12 @@ export async function handleProcessingError(
     }
   }
 
-  try {
-    await logError({
-      error,
-      source: 'ocr',
-      functionName,
-      documentId: docId,
-    });
-  } catch (logErr) {
-    console.error(`Failed to log error for document ${docId}:`, logErr);
-  }
+  await safeLogError({
+    error,
+    source: 'ocr',
+    functionName,
+    documentId: docId,
+  });
 }
 
 /**
