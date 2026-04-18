@@ -1,8 +1,89 @@
 # ハンドオフメモ
 
-**更新日**: 2026-04-18 session12 (Phase 3 完遂: #258 CappedText / SummaryField / PageOcrResult 型統合)
-**ブランチ**: main (PR #265 マージ済、clean)
-**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + Summary リファクタ集約 3/3 完了 + Phase 3 #258 完遂
+**更新日**: 2026-04-18 session13 (Phase A 完遂: #266 Vertex AI silent failure + #253 firestoreToDocument 集約)
+**ブランチ**: main (PR #270 / #272 マージ済、clean)
+**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + Summary リファクタ集約 3/3 + Phase 3 #258 + follow-up 消化 Phase A (2/2) 完遂
+
+<a id="session13"></a>
+## ✅ session13 完了サマリー (Phase A 完遂: #266 + #253、follow-up 2 Issue 起票)
+
+session12 で完遂した Phase 3 (#258) + Phase 1 (#259) の follow-up 消化スプリントとして計画。
+PM/PL 視点で WBS 策定 → Phase A (即効性 2 タスク) を 1 セッションで直列完遂。
+CLAUDE.md グローバル ルール (impl-plan / simplify / safe-refactor / review-pr) + プロジェクト
+CLAUDE.md (#178 教訓チェックリスト) を多層適用、各 PR で Critical/Important 全解消 → follow-up Issue 化で scope 明確化。
+
+| 順 | フェーズ | 結果 |
+|---|---|---|
+| 1 | **スプリント計画 (session12 follow-up 消化)** | ✅ WBS Phase A/B/C 策定、Codex 要否判定 (B-2 のみ) |
+| 2 | **Phase A-1 (#266): Vertex AI silent failure 対策** | ✅ PR #270 MERGED (`46a3f2d`) |
+| 3 | **Phase A-2 (#253): firestoreToDocument 集約** | ✅ PR #272 MERGED (`d9187b8`) |
+| 4 | **Follow-up 起票** | ✅ #271 (handleProcessingError safeLogError 統合) + #273 (useProcessingHistory.test.ts 新設) |
+
+### 達成効果 (Phase A 完遂)
+
+| 効果 | 内容 |
+|---|---|
+| 🛡️ silent failure 撃退 | Vertex AI catch 句 3 箇所で `console.error` のみ → `safeLogError` 経由で errors collection + 通知に記録。Firestore 書込失敗時も caller 主処理を中断しない try/catch ラッパ化 |
+| 📦 SSoT 化 | FE の firestoreToDocument を useDocuments に完全集約。useProcessingHistory の劣化コピー 36 行削除。派生フィールド追加時の同期漏れリスク (#178 教訓) を構造的解消 |
+| 🧪 契約テスト | summaryCatchLogErrorContract.test.ts 新設 (grep-based、15 cases)。アンカー近傍 logError/safeLogError 呼出 + params shape 静的検証。#259 同方針で SSoT 確保 |
+| ⚙️ helper 導入 | `safeLogError(params)` を errorLogger.ts に新設。4 箇所 (本 PR 3 + 既存 handleProcessingError 1) の重複パターンを SSoT 化、既存 handleProcessingError は follow-up #271 |
+
+### Phase A-1 (#266) Quality Gate 実施記録
+
+| 段階 | 結果 | 指摘・対応 |
+|---|---|---|
+| `/impl-plan` | ✅ AC 5 項目、3 Phase | scope 確定 (severity override / errorIds 追加は別 Issue) |
+| TDD (契約テスト RED→GREEN) | ✅ 3 本命 RED → 12 passing | anchor 近傍 logError 呼出の静的検証 |
+| `/simplify` 3 並列 | catch コピペ指摘 (中) | `safeLogError` helper 化で重複解消、`: Promise<SummaryField>` 型注釈削除 |
+| `/safe-refactor` | MEDIUM 2 / LOW 2 | MEDIUM 却下 (既存コード、scope 外)、LOW 1 採用 (safeLogError fallback 情報量改善) |
+| `/review-pr` 4 並列 | Critical 0 / Important 5 採用 / 3 却下 | コメント改善 3 (dead code/signature 変更/順序根拠)、契約テスト params shape 拡充、Issue #271 起票 |
+
+### Phase A-2 (#253) Quality Gate 実施記録
+
+| 段階 | 結果 | 指摘・対応 |
+|---|---|---|
+| 事前調査 | ✅ 差分明確化 | useProcessingHistory 固有 `needsManualCustomerSelection` のみ / useDocuments 固有 20+ フィールド |
+| 実装 (Option A 拡張版) | ✅ 2 ファイル +4/-41 | useDocuments に `needsManualCustomerSelection` 追加 + useProcessingHistory 内部関数削除 |
+| `/simplify` / `/safe-refactor` | ⏭️ スキップ | 2 ファイル変更、3+ファイル基準未満 |
+| `/review-pr` 3 並列 | Critical 1 (採用) / Important 3 (1 採用 + 2 follow-up) / Suggestion 1 (採用) | `needsManualCustomerSelection` テスト 3 追加、コメント rot 改善、tombstone 削除、Issue #273 起票 |
+| **#178 教訓チェックリスト準拠** | ✅ 4 点全 OK | mapping / 書込 / reprocess clear / 型定義 全確認済 |
+
+### CI / マージ結果
+
+- BE: `npm test` 435 → 450 passing (+15 = 12 初期 grep 契約テスト + 3 `/review-pr` 指摘対応で追加した params shape 検証)
+- FE: `npm test` 113 → 116 passing (+3 needsManualCustomerSelection 検証)
+- PR #270 CI: lint-build-test SUCCESS / CodeRabbit SUCCESS / GitGuardian SUCCESS → MERGED `46a3f2d`
+- PR #272 CI: lint-build-test SUCCESS / CodeRabbit SUCCESS / GitGuardian SUCCESS → MERGED `d9187b8`
+- 本 PR 群は error logging 追加 + FE refactor (情報量増加方向)、status 遷移・Firestore 書込スキーマ変更なし → kanameone / cocoro 本番環境への影響ゼロ
+
+### 教訓 (PM/PL 視点)
+
+| 教訓 | 内容 |
+|---|---|
+| **follow-up 消化スプリントの価値** | session10/12 起票の follow-up が累積していたのを Phase A で 2 件解消。scope 小の即効タスクを優先することで session 内 2 PR マージが可能 |
+| **グローバル + プロジェクト ルール多層適用** | CLAUDE.md CRITICAL (3 ステップ+→impl-plan / 3 ファイル+→simplify+safe-refactor) と プロジェクト CLAUDE.md (#178 教訓チェックリスト) を併用。#253 で #178 4 点を事前確認したことで回帰リスクゼロ化 |
+| **PR description での指摘判定明記** | `/review-pr` 指摘を採用/却下/follow-up で明示分類。却下理由も記録で監査可能、follow-up Issue への継承が clean |
+| **Codex セカンドオピニオン判定は scope 次第** | 本セッションは scope 小 (bug fix + FE refactor) で Codex 不要と判定、時間節約。B-2 (#264 generic 再設計) は scope 拡大で Codex 対象と予定 |
+| **契約テストの grep パターン継承** | #259 summaryWritePayloadContract パターンを #266 summaryCatchLogErrorContract で再利用。`hasPatternsAdjacent` ヘルパー共通化は #262 に集約予定 |
+
+### 次セッション着手予定 (session14)
+
+**最優先タスク** (Phase B、handoff 継続):
+- **Phase B-1 (#267)**: PageOcrResult 型不変条件 + buildPageResult 振る舞いテスト追加 (~1h、test のみ、#258 follow-up)
+- **Phase B-2 (#264)**: capPageResultsAggregate generic を新 PageOcrResult 対応に書き直し (~1h、3-5 ファイル想定、**Codex セカンドオピニオン予定**)
+- **Phase C-1 (#262)**: summaryWritePayloadContract grep-based 既知制限 + diagnostics 強化 (~1h、contract test ヘルパー共通化と統合余地)
+
+**follow-up Issue (session13 起票)**:
+- **#271**: handleProcessingError の fallback を `safeLogError` に統合 (scope 小、~30min)
+- **#273**: useProcessingHistory.test.ts 新設 + isCustomerConfirmed デュアルリード統合テスト (~1.5h)
+
+**残り WBS** (session10 から継続):
+- **Sprint 3 (#253)**: ✅ 本セッション完遂
+- **Sprint 4 (#237)**: search tokenizer FE/BE/script 3 箇所重複共通化 (大規模)
+- **Sprint 5**: 運用監視拡充 (#220 / #239 / #238)
+- **Sprint 6**: テスト補強 (#200) + bug 消化 (#196)
+
+---
 
 ## ✅ session12 完了サマリー (Phase 3 完遂: #258 型統合 + bridge code 削除 + dev-assert)
 
