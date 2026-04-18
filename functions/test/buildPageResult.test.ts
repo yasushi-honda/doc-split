@@ -68,4 +68,31 @@ describe('buildPageResult (#267)', () => {
       expect(result.outputTokens).to.equal(200);
     });
   });
+
+  describe('境界値 (MAX_PAGE_TEXT_LENGTH 前後)', () => {
+    it('text.length === MAX_PAGE_TEXT_LENGTH で truncated=false を返す', () => {
+      const exactText = 'x'.repeat(MAX_PAGE_TEXT_LENGTH);
+      const result = buildPageResult(
+        { text: exactText, inputTokens: 1, outputTokens: 1 },
+        1,
+        'Boundary'
+      );
+      expect(result.truncated).to.equal(false);
+      expect(result.text.length).to.equal(MAX_PAGE_TEXT_LENGTH);
+      expect(Object.prototype.hasOwnProperty.call(result, 'originalLength')).to.equal(false);
+    });
+
+    it('text.length === MAX_PAGE_TEXT_LENGTH + 1 で truncated=true を返す', () => {
+      const overByOne = 'x'.repeat(MAX_PAGE_TEXT_LENGTH + 1);
+      const result = buildPageResult(
+        { text: overByOne, inputTokens: 1, outputTokens: 1 },
+        1,
+        'Boundary+1'
+      );
+      expect(result.truncated).to.equal(true);
+      if (result.truncated) {
+        expect(result.originalLength).to.equal(MAX_PAGE_TEXT_LENGTH + 1);
+      }
+    });
+  });
 });

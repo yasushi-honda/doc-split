@@ -1,4 +1,10 @@
 {
+  // #267: 型レベルテスト (@ts-expect-error) 専用の tsc 検証設定。
+  // ts-node/register は tsconfig include 外のテストファイルを strict 型チェックしないため、
+  // @ts-expect-error directive の実効性確保には tsc を明示的に走らせる必要がある。
+  // include は test/types/ のみ。通常の *.test.ts はランタイムで ts-node/register が処理する。
+  // noUnusedLocals 緩和は型宣言保持のため不可避。副作用として src の本番コード検査が弱まる点は
+  // `npm run build` (tsconfig.json) 側で補完される想定。
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": true,
