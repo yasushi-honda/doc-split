@@ -123,8 +123,10 @@ function getPeriodDate(period: PeriodFilter): Date | null {
 
 /**
  * 顧客確定フィルターを適用（クライアント側）
+ *
+ * #273: unit test 可能化のため export。hook 内部でのみ使用される helper。
  */
-function applyConfirmedFilter(docs: Document[], filter: ConfirmedFilter): Document[] {
+export function applyConfirmedFilter(docs: Document[], filter: ConfirmedFilter): Document[] {
   if (filter === 'all') return docs;
   return docs.filter(doc => {
     const confirmed = isCustomerConfirmed(doc);
