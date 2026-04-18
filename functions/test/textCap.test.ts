@@ -202,6 +202,73 @@ describe('textCap', () => {
       expect(capPageResultsAggregate([])).to.deep.equal([]);
     });
 
+    // #283: aggregate cap 発動時の可視性を per-page 粒度で確保する契約。
+    // Issue #209 型実害 (Vertex AI 暴走で 1.1M chars 応答) が aggregate cap で切り詰められた
+    // 場合、ocrProcessor.ts:152-154 の単発 console.warn (後続で safeLogError に格上げ予定) だけ
+    // では per-page 粒度の原因追跡ができなかった。本契約はアラート信号として console.warn 発動を lock-in する。
+    describe('aggregate cap truncation log (#283)', () => {
+      /** console.warn を一時的に差し替えて呼出を捕捉するヘルパ */
+      function withWarnSpy<T>(fn: () => T): { calls: unknown[][]; result: T } {
+        const original = console.warn;
+        const calls: unknown[][] = [];
+        console.warn = (...args: unknown[]) => {
+          calls.push(args);
+        };
+        try {
+          const result = fn();
+          return { calls, result };
+        } finally {
+          console.warn = original;
+        }
+      }
+
+      it('per-page cap 新規発動時 (input truncated=false → output truncated=true) に warn が呼ばれる', () => {
+        const pages: SummaryField[] = [
+          { text: 'a'.repeat(MAX_PAGE_TEXT_LENGTH + 10), truncated: false },
+        ];
+        const { calls } = withWarnSpy(() => capPageResultsAggregate(pages));
+
+        expect(calls.length).to.be.at.least(1);
+        const firstMessage = String(calls[0]?.[0] ?? '');
+        expect(firstMessage).to.match(/textCap|aggregate|truncat/i);
+      });
+
+      it('複数ページ cap 発動で発動ページ数と同じ回数の warn が呼ばれる', () => {
+        const pages: SummaryField[] = Array.from({ length: 10 }, () => ({
+          text: 'a'.repeat(MAX_PAGE_TEXT_LENGTH),
+          truncated: false,
+        }));
+        const { calls, result } = withWarnSpy(() => capPageResultsAggregate(pages));
+
+        const truncatedCount = result.filter((p) => p.truncated).length;
+        expect(truncatedCount).to.be.at.least(1);
+        expect(calls.length).to.equal(truncatedCount);
+      });
+
+      it('cap 非発動 (全ページ budget 内) の場合は warn が呼ばれない', () => {
+        const pages: SummaryField[] = [
+          { text: 'short1', truncated: false },
+          { text: 'short2', truncated: false },
+        ];
+        const { calls } = withWarnSpy(() => capPageResultsAggregate(pages));
+        expect(calls.length).to.equal(0);
+      });
+
+      it('既に truncated=true の入力を再 cap しても新規 warn は呼ばれない (重複アラート防止)', () => {
+        // 前回実行で既に truncated=true に変換済みのページを再 cap するケース。
+        // 「新規 truncation」ではないため warn は抑制すべき (運用側で重複通知を避ける)。
+        const pages: SummaryField[] = [
+          {
+            text: 'a'.repeat(MAX_PAGE_TEXT_LENGTH),
+            truncated: true,
+            originalLength: 1_000_000,
+          },
+        ];
+        const { calls } = withWarnSpy(() => capPageResultsAggregate(pages));
+        expect(calls.length).to.equal(0);
+      });
+    });
+
     // #264: discriminated union 不変条件の runtime lock-in。
     // 型レベルでは `<T extends SummaryField>` で truncated=false ⟹ originalLength 不在を保証するが、
     // 実装バグで false path に originalLength を付与しないことを runtime でも明示検証する。

@@ -150,7 +150,19 @@ export async function processDocument(
   pageResults = capPageResultsAggregate(pageResults);
   const afterAggregateChars = pageResults.reduce((sum, p) => sum + p.text.length, 0);
   if (afterAggregateChars < beforeAggregateChars) {
-    console.warn(`[OCR] Aggregate pageResults truncated: ${beforeAggregateChars} → ${afterAggregateChars} chars`);
+    // #283: 集約サマリの observability を console.warn → safeLogError に格上げ。
+    // warn level は Cloud Logging alert に拾われにくく、#209 型実害 (Vertex AI 暴走
+    // 1.1M chars) の再発を運用側が認知できない silent failure 経路を塞ぐ。
+    // safeLogError 内部の logError が console.error も出すため重複 warn は置かない。
+    // per-page 粒度の可視性は textCap.capPageResultsAggregate 内部 console.warn でカバー。
+    await safeLogError({
+      error: new Error(
+        `[OCR] Aggregate pageResults truncated: ${beforeAggregateChars} → ${afterAggregateChars} chars`
+      ),
+      source: 'ocr',
+      functionName: `${functionName}:aggregateCap`,
+      documentId: docId,
+    });
   }
 
   // OCR結果を結合
