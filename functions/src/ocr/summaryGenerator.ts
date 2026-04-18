@@ -17,7 +17,8 @@ import { VertexAI } from '@google-cloud/vertexai';
 import { GCP_CONFIG, GEMINI_CONFIG } from '../utils/config';
 import { getRateLimiter, trackGeminiUsage } from '../utils/rateLimiter';
 import { withRetry, RETRY_CONFIGS } from '../utils/retry';
-import { capPageText, MAX_SUMMARY_LENGTH, type CappedText } from '../utils/textCap';
+import { capPageText, MAX_SUMMARY_LENGTH } from '../utils/textCap';
+import type { SummaryField } from '../../../shared/types';
 import { buildSummaryGenerationRequest } from './summaryRequestBuilder';
 
 const PROJECT_ID = GCP_CONFIG.projectId;
@@ -62,13 +63,13 @@ ${truncatedText}
  *
  * - 呼び出し前提: `ocrResult` は非空文字列。短文ガード (例: `length < 100`) は caller 責任。
  * - エラー時: throw する (catch は caller 責任)。
- *   - ocrProcessor: empty CappedText を返して後続処理を継続
+ *   - ocrProcessor: empty SummaryField を返して後続処理を継続
  *   - regenerateSummary: console.error 後 rethrow し onCall handler が internal error 化
  */
 export async function generateSummaryCore(
   ocrResult: string,
   documentType: string
-): Promise<CappedText> {
+): Promise<SummaryField> {
   // 新 caller が短文ガードを忘れた場合の safety net (type-design-analyzer 指摘)。
   // 既存 caller (ocrProcessor / regenerateSummary) は手前で同じ閾値チェック済のため到達しない。
   if (ocrResult.length < MIN_OCR_LENGTH_FOR_SUMMARY) {

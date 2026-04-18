@@ -12,7 +12,7 @@ import {
   buildSummaryFields,
 } from '../src/ocr/summaryRequestBuilder';
 import { GEMINI_CONFIG } from '../src/utils/config';
-import type { CappedText } from '../src/utils/textCap';
+import type { SummaryField } from '../../shared/types';
 
 describe('summaryRequestBuilder: buildSummaryGenerationRequest', () => {
   it('generationConfig.maxOutputTokens に GEMINI_CONFIG.maxOutputTokens を必ず設定する', () => {
@@ -51,7 +51,7 @@ describe('summaryRequestBuilder: buildSummaryGenerationRequest', () => {
 
 describe('summaryRequestBuilder: buildSummaryFields (Issue #215 discriminated union)', () => {
   it('truncated=false で { text, truncated:false } のみ返す (originalLength は型レベルで不在)', () => {
-    const summary: CappedText = {
+    const summary: SummaryField = {
       text: '通常の要約テキスト',
       truncated: false,
     };
@@ -62,7 +62,7 @@ describe('summaryRequestBuilder: buildSummaryFields (Issue #215 discriminated un
   });
 
   it('truncated=true で { text, truncated:true, originalLength } を返す', () => {
-    const summary: CappedText = {
+    const summary: SummaryField = {
       text: '切り詰め後\n[TRUNCATED]',
       originalLength: 1_100_000,
       truncated: true,
@@ -75,7 +75,7 @@ describe('summaryRequestBuilder: buildSummaryFields (Issue #215 discriminated un
   });
 
   it('空テキスト (truncated=false) でも { text:"", truncated:false } が返る', () => {
-    const summary: CappedText = { text: '', truncated: false };
+    const summary: SummaryField = { text: '', truncated: false };
     const fields = buildSummaryFields(summary);
     expect(fields).to.deep.equal({ text: '', truncated: false });
     // 不変条件の保証: truncated=false の分岐で originalLength キーが含まれない
@@ -83,7 +83,7 @@ describe('summaryRequestBuilder: buildSummaryFields (Issue #215 discriminated un
   });
 
   it('discriminated union: truncated=true の場合に必ず originalLength を含む (#215 型不変条件)', () => {
-    const summary: CappedText = {
+    const summary: SummaryField = {
       text: 'a'.repeat(30_000),
       originalLength: 50_000,
       truncated: true,

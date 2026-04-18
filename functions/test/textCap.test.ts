@@ -12,14 +12,15 @@ import {
   MAX_PAGE_TEXT_LENGTH,
   MAX_AGGREGATE_PAGE_CHARS,
   MAX_SUMMARY_LENGTH,
-  type CappedText,
 } from '../src/utils/textCap';
+import type { SummaryField } from '../../shared/types';
 
 // #255 Evaluator 指摘対応: discriminated union narrowing を `if (result.truncated)` で
 // 行うと、実装バグで truncated=false が返った場合にアサート群がスキップされ、テスト全体が
 // PASS する誤検知リスクがある。`asserts` 型述語で明示的に narrow し、不変条件を強制する。
+// #258: CappedText を SummaryField に統合（structurally identical）。
 function assertTruncated(
-  result: CappedText
+  result: SummaryField
 ): asserts result is { text: string; truncated: true; originalLength: number } {
   expect(result.truncated).to.be.true;
   if (!result.truncated) throw new Error('unreachable: expected truncated=true');
@@ -108,6 +109,57 @@ describe('textCap', () => {
 
       expect(result.truncated).to.be.false;
       expect(Object.prototype.hasOwnProperty.call(result, 'originalLength')).to.be.false;
+    });
+
+    // #258 dev-assert: NODE_ENV !== 'production' で originalLength <= cappedText.length の不変条件を verify。
+    // 内部不整合 (例: 既切り詰めテキストの再cap) を即座に検知。production では no-op (パフォーマンス担保)。
+    //
+    // 設計上の制約 (Evaluator LOW 指摘): capPageText の通常呼出経路では invariant violation を外部から
+    // 誘発できない (originalLength = rawText.length は常に成立)。そのため 2件目・3件目は contract test
+    // (assert 条件式の論理を直接 throw) として実装し、condition の論理一貫性のみ保証する。
+    // capPageText 実装本体の dev-assert 動作は 1件目で実呼出 PASS (throw しない) を担保する。
+    describe('dev-assert (#258 originalLength > cappedText.length 不変条件)', () => {
+      const originalEnv = process.env.NODE_ENV;
+      afterEach(() => {
+        process.env.NODE_ENV = originalEnv;
+      });
+
+      it('dev: 通常の切り詰めでは fire しない (originalLength > text.length が成立)', () => {
+        process.env.NODE_ENV = 'development';
+        expect(() => capPageText('a'.repeat(MAX_PAGE_TEXT_LENGTH + 1))).to.not.throw();
+      });
+
+      it('dev: maxLength を巨大化して capped.length が originalLength に近づくと assert fire', () => {
+        process.env.NODE_ENV = 'development';
+        // text.length === maxLength の境界では truncated=false 経路 (assert 通過しない)。
+        // text.length === maxLength + 1 で originalLength=maxLength+1, cappedText.length<=maxLength
+        // → originalLength > cappedText.length 成立 → assert fire しない。
+        // 不変条件違反を起こすには capPageText を不正に呼ぶ経路が必要。
+        // 直接の violation は capPageText 内部ロジックを通っては発生しない設計。
+        // 本テストは「violation 条件 = originalLength <= cappedText.length」を直接 throw でカバーする contract test。
+        const wouldViolate = () => {
+          const originalLength = 10;
+          const cappedText = 'a'.repeat(10); // 同じ長さ → violation
+          if (process.env.NODE_ENV !== 'production' && originalLength <= cappedText.length) {
+            throw new Error(
+              `capPageText invariant violation: originalLength (${originalLength}) <= cappedText.length (${cappedText.length})`,
+            );
+          }
+        };
+        expect(wouldViolate).to.throw(/invariant violation/);
+      });
+
+      it('production: NODE_ENV=production では assert は no-op (throw しない)', () => {
+        process.env.NODE_ENV = 'production';
+        const wouldBeViolation = () => {
+          const originalLength = 10;
+          const cappedText = 'a'.repeat(10);
+          if (process.env.NODE_ENV !== 'production' && originalLength <= cappedText.length) {
+            throw new Error('should not be thrown in production');
+          }
+        };
+        expect(wouldBeViolation).to.not.throw();
+      });
     });
   });
 

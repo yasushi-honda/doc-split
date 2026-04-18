@@ -12,7 +12,6 @@
 
 import type { GenerateContentRequest } from '@google-cloud/vertexai';
 import { GEMINI_CONFIG } from '../utils/config';
-import type { CappedText } from '../utils/textCap';
 import type { SummaryField } from '../../../shared/types';
 
 export interface SummaryGenerationRequest {
@@ -40,8 +39,12 @@ export function buildSummaryGenerationRequest(prompt: string): SummaryGeneration
  * 廃止し、不変条件 (truncated=true ⟹ originalLength 必須) を型レベル保証する
  * SummaryField ネスト型に統一。#178 教訓の「派生フィールドの書き込み漏れで
  * FE 表示が壊れる」問題は union の tag (truncated) で構造的に排除される。
+ *
+ * #258: CappedText と SummaryField を統合した結果、本関数は identity 化したが、
+ * 「summary 書込前に必ず通る単一通過点」としての契約テスト保護目的で存続。
+ * caller が直接書込にバイパスすると summaryWritePayloadContract.test.ts が検知。
  */
-export function buildSummaryFields(summary: CappedText): SummaryField {
+export function buildSummaryFields(summary: SummaryField): SummaryField {
   if (summary.truncated) {
     return {
       text: summary.text,
