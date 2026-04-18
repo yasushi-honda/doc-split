@@ -1,8 +1,73 @@
 # ハンドオフメモ
 
-**更新日**: 2026-04-17 session9 (Sprint 2-2 完遂: #215 Summary discriminated union 化)
-**ブランチ**: main (PR #254 CI success、次セッション冒頭でマージ予定)
-**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + Summary リファクタ集約 2/2 完了
+**更新日**: 2026-04-18 session10 (Phase 0.5 マージ修復 + Phase 1.2 完遂: #255 CappedText discriminated union 化)
+**ブランチ**: main (PR #254 / #257 マージ済、clean)
+**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + Summary リファクタ集約 3/3 完了 (#214 / #215 / #255)
+
+## ✅ session10 完了サマリー (Phase 0.5 マージ修復 + Phase 1.2 #255 完遂)
+
+session9 終了時の handoff 誤記録（PR #256 が PR #254 より先にマージされ、handoff は「#215 完遂」と記録しつつ実装は未マージという矛盾状態）を **catchup で発見・修復**。Phase 0.5 として PR #254 をマージし、続けて #255 follow-up を Phase 1.2 として完遂。
+
+| 順 | フェーズ | 結果 |
+|---|---|---|
+| 1 | **Phase 0.5: PR #254 マージ修復** | ✅ Codex セカンドオピニオン取得 → PR #254 マージ (`8bfafae`) → dev 環境で AI要約/OCR表示の回帰検証 PASS（baseline / post-merge スクリーンショット完全一致） |
+| 2 | **Phase 1.2: #255 CappedText discriminated union 化** | ✅ PR #257 MERGED (`60b70f5`)。Quality Gate 全段通過 (impl-plan → simplify → safe-refactor → evaluator → review-pr 6並列) |
+| 3 | **Follow-up 起票** | ✅ Issue #258 (CappedText/SummaryField/PageOcrResult 型設計統合) + Issue #259 (直接書込 caller 検知強化) |
+
+### 達成効果 (Phase 1.2 完遂)
+
+| 効果 | 内容 |
+|---|---|
+| 🛡️ 上流型安全 | `CappedText` を discriminated union 化 (`{text, truncated:false}` または `{text, truncated:true, originalLength}`)。`truncated=false` 時の `originalLength` アクセスは tsc エラーになり、#178/#209 系の silent failure を構造的に排除 |
+| 📦 契約テスト | `summaryWritePayloadContract.test.ts` 新設 (grep-based)。同一 `update()` ブロック近接保証 (≤30 行) + paths 実在検証 + caller 増加検知の 3 重防御 |
+| 🧪 テスト品質 | `assertTruncated` 型述語ヘルパー追加で `if (result.truncated) { ... }` の if-guard を排除 → バグ時にアサート群がスキップされる false negative リスクを構造的に解消 |
+
+### Phase 1.2 Quality Gate 実施記録
+
+| 段階 | 結果 | 指摘・対応 |
+|---|---|---|
+| `/impl-plan` | ✅ AC 7 項目定義 | 5+ ファイル → Evaluator 発動確定 |
+| `/simplify` 3 並列 (reuse/quality/efficiency) | Reuse 1 件指摘 | false positive 判定で skip (利用箇所 1 箇所のみ、Premature abstraction) |
+| `/safe-refactor` | LOW 1 件のみ | 型 narrowing 都合の if-guard 反復、後段 evaluator で根本解決 |
+| **Evaluator 分離** (5+ファイル発動) | REQUEST_CHANGES MEDIUM 1 件 | `assertTruncated` 型述語ヘルパー化で if-guard 排除、false negative リスク解消 |
+| `/review-pr` 6 エージェント並列 | Critical 1 / MEDIUM 1 / Suggestion 多数 | Critical (同一 update() ブロック保証) + MEDIUM (paths 実在検証) を本 PR で対応、Suggestion は #258/#259 で follow-up |
+
+### CI / マージ結果
+
+- BE: `npm run build` PASS / `npm test` 418 passing (元 408 + #255 規模 10) / `npm run lint` 0 errors (既存 19 warnings)
+- PR #257 CI: lint-build-test 5m13s ✅ / CodeRabbit ✅ / GitGuardian ✅ → MERGED `60b70f5`
+- PR #254 CI: lint-build-test 5m20s ✅ / CodeRabbit ✅ / GitGuardian ✅ → MERGED `8bfafae`
+- dev 環境回帰検証: AI要約「この書類は、田中太郎さんの介護保険被保険者証...」+ OCR結果 107文字 が baseline と完全一致
+
+### 教訓 (handoff PR 運用規約の改善)
+
+前セッションで「handoff docs (PR #256) が実装 PR (#254) より先にマージされる」事故が発生。本セッションで Codex セカンドオピニオンを介して修復したが、再発防止のため以下を今後の規約に組み込むべき:
+
+| 規約 | 内容 |
+|---|---|
+| 依存先明記 | handoff PR 説明に `Depends on #xxx` を必ず記載 |
+| Draft / blocked label | 依存先未マージなら Draft または `blocked` label でブロック |
+| マージ順序 | handoff 更新は実装 PR 内に同梱 or 実装 merge 後に限定 |
+| 未実装確認 | CLAUDE.md「未実装確認プロトコル」を handoff レビュー時にも適用 (`[ ]` 発見 → ソース実在 + git log 確認) |
+
+### 次セッション着手予定: Phase 1.1 (#251)
+
+**最優先タスク**:
+- **#251**: `generateSummaryCore` の unit test 追加 + `buildSummaryPrompt` 別モジュール分離
+  - rateLimiter.acquire() 順序検証
+  - trackGeminiUsage の両値呼出検証
+  - capPageText wiring 検証
+  - malformed Vertex response の silent failure 検出
+  - `summaryPromptBuilder.ts` 新設で firebase-admin 依存切り離し → pure function unit test 可能化
+
+**残り WBS**:
+- **Sprint 3 (#253)**: `useProcessingHistory.firestoreToDocument` 重複を `useDocuments` 側に集約 — 文脈新鮮、FE リファクタ
+- **Sprint 4 (#237)**: search tokenizer の FE/BE/script 3 箇所重複共通化 — 大粒、要 `/impl-plan` + `/check-api-impact`
+- **Sprint 5**: 運用監視拡充 (#220 OOM/truncated metric / #239 force-reindex audit log / #238 force-reindex 孤児 posting 検出) — 独立 3 件、並列可
+- **Sprint 6**: テスト補強 (#200 統合テスト) + bug 消化 (#196 rescueStuckProcessingDocs)
+- **新規 follow-up**: #258 (型設計統合) / #259 (contract test 強化) — 条件付き待機
+
+---
 
 ## ✅ session9 完了サマリー (Sprint 2-2 完遂: #215 Summary discriminated union 化)
 
@@ -370,6 +435,18 @@ A2 と同じ流れ。Step 1 を `./scripts/switch-client.sh cocoro` に、Step 3
 500 行超過防止のため、2026-04-16 session3 以前は別ファイルに移動:
 
 - [docs/handoff/archive/2026-04-history.md](archive/2026-04-history.md) — session1-3 詳細、Issue #217/#219/#213 系、04-14 以前の変更履歴
+
+## Git状態 (2026-04-18 session10 終了時)
+
+- ブランチ: main (本 PR マージ後)
+- 未コミット変更: なし
+- 最新コミット: `60b70f5` refactor(textCap): CappedText を discriminated union 化 + 書込契約テスト (#255) (#257)
+- session10 マージ済 PR:
+  - #254 refactor(summary): 型不変条件を discriminated union 化 + pageTextCap → textCap rename (#215) — session9 持ち越し分を Phase 0.5 で修復マージ
+  - #257 refactor(textCap): CappedText を discriminated union 化 + 書込契約テスト (#255) — Phase 1.2 完遂
+- session10 起票 Issue: #258 (型設計統合 follow-up) / #259 (contract test 強化 follow-up)
+- CI: ✅ 全 PR で lint-build-test + CodeRabbit + GitGuardian pass
+- ADR 数: 16 本 (session10 では新規 ADR なし、handoff 更新のみ)
 
 ## Git状態 (2026-04-17 session7 終了時)
 
