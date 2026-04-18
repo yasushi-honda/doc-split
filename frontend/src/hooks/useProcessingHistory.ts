@@ -106,8 +106,6 @@ export function normalizeCandidate(raw: Record<string, unknown>): CustomerCandid
   };
 }
 
-// Issue #253: firestoreToDocument は useDocuments から import (#178 教訓の構造的解消)
-
 /**
  * 期間フィルターから日付を計算
  */
