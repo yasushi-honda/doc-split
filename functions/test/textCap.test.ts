@@ -231,6 +231,8 @@ describe('textCap', () => {
         expect(calls.length).to.be.at.least(1);
         const firstMessage = String(calls[0]?.[0] ?? '');
         expect(firstMessage).to.match(/textCap|aggregate|truncat/i);
+        // #283 Codex review Suggestion: observability 強化のため runningTotal を message に残す契約。
+        expect(firstMessage).to.match(/runningTotal=\d+/);
       });
 
       it('複数ページ cap 発動で発動ページ数と同じ回数の warn が呼ばれる', () => {
@@ -254,9 +256,9 @@ describe('textCap', () => {
         expect(calls.length).to.equal(0);
       });
 
-      it('既に truncated=true の入力を再 cap しても新規 warn は呼ばれない (重複アラート防止)', () => {
-        // 前回実行で既に truncated=true に変換済みのページを再 cap するケース。
-        // 「新規 truncation」ではないため warn は抑制すべき (運用側で重複通知を避ける)。
+      it('既に truncated=true の入力 idempotent 再 cap (text.length 不変) では warn が呼ばれない', () => {
+        // 前回実行で既に truncated=true に変換済みかつ budget 内 (text.length 不変) のケース。
+        // 新規データロスはないため重複アラートを抑制すべき (運用側で重複通知を避ける)。
         const pages: SummaryField[] = [
           {
             text: 'a'.repeat(MAX_PAGE_TEXT_LENGTH),
@@ -266,6 +268,32 @@ describe('textCap', () => {
         ];
         const { calls } = withWarnSpy(() => capPageResultsAggregate(pages));
         expect(calls.length).to.equal(0);
+      });
+
+      // #283 Codex / silent-failure-hunter 指摘対応: truncated=true + budget でさらに短縮される
+      // 追加データロスケースを warn で検知する契約。旧実装 `!page.truncated` gate では silent に通過していた。
+      it('既 truncated=true でも aggregate budget でさらに短縮される場合は warn が呼ばれる', () => {
+        // 4 pages 50k each fill 200k aggregate budget → 5th page (既 truncated=true) の budget 残 0
+        // → capped.text.length=0 < page.text.length=50k で真の追加データロス発生
+        const pages: SummaryField[] = [
+          { text: 'a'.repeat(MAX_PAGE_TEXT_LENGTH), truncated: false },
+          { text: 'b'.repeat(MAX_PAGE_TEXT_LENGTH), truncated: false },
+          { text: 'c'.repeat(MAX_PAGE_TEXT_LENGTH), truncated: false },
+          { text: 'd'.repeat(MAX_PAGE_TEXT_LENGTH), truncated: false },
+          {
+            text: 'e'.repeat(MAX_PAGE_TEXT_LENGTH),
+            truncated: true,
+            originalLength: 1_000_000,
+          },
+        ];
+        const { calls, result } = withWarnSpy(() => capPageResultsAggregate(pages));
+
+        const lastPage = result[4];
+        expect(lastPage?.text.length).to.equal(0);
+        // 5 ページ目の追加短縮で warn が呼ばれる (加えて他 page の cap があれば + その数)
+        expect(calls.length).to.be.at.least(1);
+        const messages = calls.map((c) => String(c[0] ?? '')).join('\n');
+        expect(messages).to.match(/50000 → 0/);
       });
     });
 

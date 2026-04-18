@@ -110,6 +110,17 @@ describe('aggregate cap safeLogError contract (#283)', () => {
     );
   });
 
+  // #283 Codex review Low: Cloud Functions lifecycle で await 漏れは fire-and-forget 化し
+  // 実行終了前に Firestore 書込が truncate される。await 付き呼出を契約化。
+  it('aggregate cap block 内の safeLogError 呼出に await が付いている', () => {
+    const AWAITED_SAFE_LOG_ERROR = /\bawait\s+safeLogError\s*\(/;
+    expect(AWAITED_SAFE_LOG_ERROR.test(capBlock)).to.equal(
+      true,
+      'aggregate cap block 内の safeLogError 呼出に await が付いていない。' +
+        'Cloud Functions 実行終了前に Firestore 書込が truncate される silent failure リスクあり。'
+    );
+  });
+
   it('safeLogError 引数ブロックが抽出できる', () => {
     expect(safeLogErrorArgs.length).to.be.greaterThan(
       0,
