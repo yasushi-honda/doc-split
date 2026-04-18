@@ -81,6 +81,39 @@ describe('firestoreToDocument', () => {
     })
   })
 
+  // Issue #253: 派生フィールド追加時の同期漏れ (#178 教訓) を防ぐ lock-in。
+  // useProcessingHistory の劣化コピーを削除して useDocuments 版に集約した際に、
+  // 旧 useProcessingHistory 固有だった needsManualCustomerSelection を取りこぼさないことを保証。
+  describe('後方互換フィールド (#253)', () => {
+    it('needsManualCustomerSelection: true を正しく変換する', () => {
+      const data = {
+        ...baseFirestoreData,
+        needsManualCustomerSelection: true,
+      }
+
+      const result = firestoreToDocument('doc-001', data)
+
+      expect(result.needsManualCustomerSelection).toBe(true)
+    })
+
+    it('needsManualCustomerSelection: false を正しく変換する', () => {
+      const data = {
+        ...baseFirestoreData,
+        needsManualCustomerSelection: false,
+      }
+
+      const result = firestoreToDocument('doc-001', data)
+
+      expect(result.needsManualCustomerSelection).toBe(false)
+    })
+
+    it('needsManualCustomerSelection が undefined (Phase 6 以前) の場合も正しく処理する', () => {
+      const result = firestoreToDocument('doc-001', baseFirestoreData)
+
+      expect(result.needsManualCustomerSelection).toBeUndefined()
+    })
+  })
+
   describe('事業所確定フィールド（Phase 8 同名対応）★重要', () => {
     it('officeConfirmed: true を正しく変換する', () => {
       const data = {
