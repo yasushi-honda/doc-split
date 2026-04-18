@@ -21,23 +21,23 @@ export const MAX_SUMMARY_LENGTH = 30_000;
 
 const TRUNCATION_MARKER = '\n[TRUNCATED]';
 
-export interface CappedText {
-  text: string;
-  originalLength: number;
-  truncated: boolean;
-}
+// Discriminated union (#255): truncated=true の時のみ originalLength が型レベルで必須。
+// truncated=false で originalLength にアクセスすると tsc エラー → silent failure 再発防止 (#178/#209)。
+export type CappedText =
+  | { text: string; truncated: false }
+  | { text: string; truncated: true; originalLength: number };
 
 export function capPageText(rawText: string, maxLength: number = MAX_PAGE_TEXT_LENGTH): CappedText {
   const originalLength = rawText.length;
   if (originalLength <= maxLength) {
-    return { text: rawText, originalLength, truncated: false };
+    return { text: rawText, truncated: false };
   }
   const sliceLen = Math.max(0, maxLength - TRUNCATION_MARKER.length);
   const truncatedText = sliceLen === 0 ? '' : rawText.slice(0, sliceLen) + TRUNCATION_MARKER;
   return {
     text: truncatedText.slice(0, maxLength),
-    originalLength,
     truncated: true,
+    originalLength,
   };
 }
 
@@ -61,10 +61,11 @@ export function capPageResultsAggregate<T extends PageWithText>(pages: T[]): T[]
     const original = page.originalLength ?? page.text.length;
     const capped = capPageText(page.text, perPageBudget);
     runningTotal += capped.text.length;
+    const cappedOriginalLength = capped.truncated ? capped.originalLength : page.text.length;
     return {
       ...page,
       text: capped.text,
-      originalLength: Math.max(original, capped.originalLength),
+      originalLength: Math.max(original, cappedOriginalLength),
       truncated: page.truncated || capped.truncated,
     };
   });

@@ -12,7 +12,18 @@ import {
   MAX_PAGE_TEXT_LENGTH,
   MAX_AGGREGATE_PAGE_CHARS,
   MAX_SUMMARY_LENGTH,
+  type CappedText,
 } from '../src/utils/textCap';
+
+// #255 Evaluator 指摘対応: discriminated union narrowing を `if (result.truncated)` で
+// 行うと、実装バグで truncated=false が返った場合にアサート群がスキップされ、テスト全体が
+// PASS する誤検知リスクがある。`asserts` 型述語で明示的に narrow し、不変条件を強制する。
+function assertTruncated(
+  result: CappedText
+): asserts result is { text: string; truncated: true; originalLength: number } {
+  expect(result.truncated).to.be.true;
+  if (!result.truncated) throw new Error('unreachable: expected truncated=true');
+}
 
 describe('textCap', () => {
   describe('capPageText (per-page cap)', () => {
@@ -21,7 +32,6 @@ describe('textCap', () => {
       const result = capPageText(input);
 
       expect(result.text).to.equal(input);
-      expect(result.originalLength).to.equal(input.length);
       expect(result.truncated).to.be.false;
     });
 
@@ -31,14 +41,13 @@ describe('textCap', () => {
 
       expect(result.text.length).to.equal(MAX_PAGE_TEXT_LENGTH);
       expect(result.truncated).to.be.false;
-      expect(result.originalLength).to.equal(MAX_PAGE_TEXT_LENGTH);
     });
 
     it('境界値: text.length === MAX_PAGE_TEXT_LENGTH + 1 は切り詰める', () => {
       const input = 'a'.repeat(MAX_PAGE_TEXT_LENGTH + 1);
       const result = capPageText(input);
 
-      expect(result.truncated).to.be.true;
+      assertTruncated(result);
       expect(result.originalLength).to.equal(MAX_PAGE_TEXT_LENGTH + 1);
       expect(result.text.length).to.be.at.most(MAX_PAGE_TEXT_LENGTH);
     });
@@ -47,7 +56,7 @@ describe('textCap', () => {
       const input = 'x'.repeat(1_102_788);
       const result = capPageText(input);
 
-      expect(result.truncated).to.be.true;
+      assertTruncated(result);
       expect(result.originalLength).to.equal(1_102_788);
       expect(result.text.length).to.be.at.most(MAX_PAGE_TEXT_LENGTH);
     });
@@ -63,7 +72,7 @@ describe('textCap', () => {
       const input = 'a'.repeat(100);
       const result = capPageText(input, 50);
 
-      expect(result.truncated).to.be.true;
+      assertTruncated(result);
       expect(result.text.length).to.be.at.most(50);
       expect(result.originalLength).to.equal(100);
     });
@@ -72,7 +81,7 @@ describe('textCap', () => {
       const input = 'あ'.repeat(MAX_PAGE_TEXT_LENGTH + 100);
       const result = capPageText(input);
 
-      expect(result.truncated).to.be.true;
+      assertTruncated(result);
       expect(result.originalLength).to.equal(MAX_PAGE_TEXT_LENGTH + 100);
       expect(result.text.length).to.be.at.most(MAX_PAGE_TEXT_LENGTH);
     });
@@ -81,16 +90,24 @@ describe('textCap', () => {
       const result = capPageText('');
 
       expect(result.text).to.equal('');
-      expect(result.originalLength).to.equal(0);
       expect(result.truncated).to.be.false;
     });
 
     it('maxLength=0 でも安全に動作する（text空、truncated=true）', () => {
       const result = capPageText('hello', 0);
 
-      expect(result.truncated).to.be.true;
+      assertTruncated(result);
       expect(result.text.length).to.be.at.most(0);
       expect(result.originalLength).to.equal(5);
+    });
+
+    // #255: discriminated union の型絞り込み。truncated=false 分岐で originalLength
+    // プロパティが型システム上存在しないことをランタイムでも確認 (silent failure 防止)。
+    it('discriminated union: truncated=false では originalLength プロパティが存在しない', () => {
+      const result = capPageText('short');
+
+      expect(result.truncated).to.be.false;
+      expect(Object.prototype.hasOwnProperty.call(result, 'originalLength')).to.be.false;
     });
   });
 
@@ -194,7 +211,7 @@ describe('textCap', () => {
       const input = 'a'.repeat(MAX_SUMMARY_LENGTH + 1);
       const result = capPageText(input, MAX_SUMMARY_LENGTH);
 
-      expect(result.truncated).to.be.true;
+      assertTruncated(result);
       expect(result.originalLength).to.equal(MAX_SUMMARY_LENGTH + 1);
       expect(result.text.length).to.be.at.most(MAX_SUMMARY_LENGTH);
     });
@@ -203,7 +220,7 @@ describe('textCap', () => {
       const input = 'x'.repeat(1_100_000);
       const result = capPageText(input, MAX_SUMMARY_LENGTH);
 
-      expect(result.truncated).to.be.true;
+      assertTruncated(result);
       expect(result.originalLength).to.equal(1_100_000);
       expect(result.text.length).to.be.at.most(MAX_SUMMARY_LENGTH);
     });
