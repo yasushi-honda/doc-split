@@ -1,7 +1,8 @@
-# ハンドオフ履歴アーカイブ (〜2026-04-16 session2)
+# ハンドオフ履歴アーカイブ (〜2026-04-17 session9)
 
-`docs/handoff/LATEST.md` の肥大化 (618 行、500 行目標超過) に伴い、
-2026-04-16 session3 で過去履歴をこのファイルにアーカイブした。
+`docs/handoff/LATEST.md` の肥大化に伴い、
+2026-04-16 session3 で過去履歴を本ファイルへ初回アーカイブ。
+2026-04-18 session11 でさらに session9 セクションを末尾追記。
 
 最新状況は `docs/handoff/LATEST.md` 参照。
 
@@ -503,4 +504,73 @@ PR #224 効果監視:
 | P2 | #214/#215 | generateSummary 共通化 / discriminated union化 |
 | P2 | #210 | OCR切り詰めメトリクス (#220 と統合検討) |
 | P2 | 他 older | #196/#190/#189/#188/#183/#182/#181/#200/#152 |
+
+
+---
+
+# 2026-04-17 session9 (LATEST から session11 で archive 移管)
+
+## ✅ session9 完了サマリー (Sprint 2-2 完遂: #215 Summary discriminated union 化)
+
+session8 で整理した WBS の Sprint 2-2 (Evaluator 分離発動ライン) を PM/PL 視点で完遂。Quality Gate 全段 (`/impl-plan` → `/simplify` → `/safe-refactor` → `/trace-dataflow` → **Evaluator分離** → `/review-pr` 6並列) を順に通過し、Critical 指摘 4 件に対応。13 ファイル変更、347+/61-。
+
+| 順 | Issue/PR | 結果 |
+|---|---|---|
+| 1 | **`/impl-plan` 策定** | ✅ Acceptance Criteria 8 項目を定義、#178 教訓 4 点 + API 境界 + 後方互換戦略を明文化 |
+| 2 | **#215 Summary discriminated union 化 + textCap rename** | ✅ PR #254 (CI success: lint-build-test 5m20s ✅ / CodeRabbit ✅ / GitGuardian ✅、MERGEABLE) |
+| 3 | **follow-up 起票** | ✅ Issue #253 (useProcessingHistory.firestoreToDocument 重複解消) + Issue #255 (write-payload regression test + CappedText discriminated union 化) |
+
+### 達成効果 (Sprint 2-2 完遂)
+
+| 効果 | 内容 |
+|---|---|
+| 🛡️ 型不変条件 | `SummaryField` discriminated union で「truncated=true ⟹ originalLength 必須」を型レベル保証。illegal state が代入不可能 |
+| 🔒 XSS 経路排除 | summary + OCR 結果の innerHTML → createElement + textContent 化。`DocumentDetailModal.tsx` で 2 箇所修正 |
+| 📑 後方互換 | `normalizeSummary()` で旧フラット形式 (Issue #209 時代) を新ネスト型に自動変換。illegal state は `console.warn` で検知可能化 (silent degradation 解消) |
+| 🧹 再処理クリア | `getReprocessClearFields()` で新 summary + 旧 3 キー全て `deleteField()`。再処理時に Firestore 旧フィールドが自然クリーン化 |
+| 🏷️ 命名整合性 | `pageTextCap.ts` → `textCap.ts` rename + `MAX_SUMMARY_LENGTH` 用途をファイル命名に反映 |
+
+### Sprint 2-2 Quality Gate 実施記録
+
+| 段階 | 結果 | 指摘・対応 |
+|---|---|---|
+| `/impl-plan` | ✅ AC 8 項目定義 | 13 ファイル想定 → Evaluator 発動確定 |
+| `/simplify` 3 並列 (reuse/quality/efficiency) | Critical 2 件 | JSDoc 強化 2 件採用 (SummaryField 判別タグ + normalizeSummary illegal state 仕様明記)、残 1 件は Follow-up #253 起票で対応 |
+| `/safe-refactor` | HIGH/MEDIUM 0 件 | LOW 3 件は対応済 or 別 Issue |
+| `/trace-dataflow` (summary 12 レイヤー) | 全 OK | Vertex AI → Firestore → FE → UI のラウンドトリップ完全性確認、マッピング欠落なし |
+| **Evaluator 分離** (5+ファイル発動) | REQUEST_CHANGES 3 件 | 4 件修正で対応 (OCR innerHTML→textContent 併修 + getReprocessClearFields unit test + 不正型防御 test + seed-e2e-data.js 新型化) |
+| `/review-pr` 6 エージェント並列 | Critical 2 / Important 3 | Critical 2 対応 (silent failure に console.warn 追加 + JSDoc 未再処理残留注記)、Important 3 件は Follow-up #255 起票 |
+
+### CI / マージ結果
+
+- BE: `npm run build` PASS / `npm test` 408 passing / `npm run lint` 0 errors (既存 19 warnings 別ファイル)
+- FE: `npm run typecheck` PASS / `npm test` 113 passing (元 99 + 新規 14) / `npm run lint` 0 errors
+- PR #254 CI: lint-build-test 5m20s ✅ / CodeRabbit ✅ / GitGuardian ✅ → **次セッション冒頭でマージ予定**
+
+### #178 教訓 4 点チェックリスト (全更新済)
+
+- [x] `shared/types.ts`: `SummaryField` discriminated union 追加、Document 型更新
+- [x] 書込パス: `ocrProcessor.ts:287-296` / `regenerateSummary.ts:83-89` で新ネスト書込 + 旧 2 キー delete
+- [x] firestoreToDocument: `useDocuments.ts:119` / `useProcessingHistory.ts:122` で `normalizeSummary()` 呼出
+- [x] `getReprocessClearFields`: `useDocuments.ts:222-229` で新 summary + 旧 3 キー全 delete
+
+### 次セッション: Sprint 3 (古い bug 消化) 着手予定
+
+**最優先タスク (セッション冒頭)**:
+1. **PR #254 マージ** (destructive 操作、ユーザー確認必須): `gh pr merge 254 --squash --repo yasushi-honda/doc-split`
+2. マージ後 `git checkout main && git pull` で同期
+3. ハンドオフ PR (本 PR) もマージ
+
+**残り WBS**:
+- **Sprint 3** 古い bug 消化 (#189/#190/#196/#182/#183) — 並列可、1 日
+  - #189: ocrProcessor dateMarker サニタイズ境界外
+  - #190: check-master-data.js --fix 500件上限考慮
+  - #196: rescueStuckProcessingDocs MAX_RETRY_COUNT 追加
+  - #182: pdfOperations fileDateFormatted フォールバック
+  - #183: displayFileName サニタイズ
+- **Sprint 4** リファクタ (#181/#188/#253) — 1.5 日
+  - #253 (session9 follow-up): useProcessingHistory.firestoreToDocument 重複解消 → #181/#188 と同時実施が効率的
+- **Sprint 5** テスト補強 (#200/#255) — 1 日
+  - #255 (session9 follow-up): ocrProcessor/regenerateSummary write-payload regression test + CappedText discriminated union 化
+- **Sprint 6** 条件付き待機 (#237/#238/#239/#251) — 稼働実績・監査要件・false negative 発生で昇格
 
