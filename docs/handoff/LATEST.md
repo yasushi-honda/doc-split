@@ -1,8 +1,83 @@
 # ハンドオフメモ
 
-**更新日**: 2026-04-18 session11 (Phase 1 完遂: #259 summaryWritePayloadContract 直接書込検知強化)
-**ブランチ**: main (PR #261 マージ済、clean)
-**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + Summary リファクタ集約 3/3 完了 + #255 follow-up #259 完遂
+**更新日**: 2026-04-18 session12 (Phase 3 完遂: #258 CappedText / SummaryField / PageOcrResult 型統合)
+**ブランチ**: main (PR #265 マージ済、clean)
+**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + Summary リファクタ集約 3/3 完了 + Phase 3 #258 完遂
+
+## ✅ session12 完了サマリー (Phase 3 完遂: #258 型統合 + bridge code 削除 + dev-assert)
+
+session11 で完遂した #259 (summaryWritePayloadContract 直接書込検知強化) に続き、session10 の handoff で「次セッション最優先」と記録されていた Phase 3 (#258) を本セッションで完遂。type-design-analyzer の 5 軸評価で指摘された Encapsulation 2/5 / Enforcement 3/5 を改善。`/review-pr` 4 並列で検出された Critical/Important を本 PR で対応 + 別 Issue 化、Codex セカンドオピニオンで GO 判定取得。
+
+| 順 | フェーズ | 結果 |
+|---|---|---|
+| 1 | **Phase 3 (#258) 着手 — WBS + 計画策定** | ✅ `/impl-plan` AC 7 項目定義、3 Phase (型統合 + union 化 + dev-assert) |
+| 2 | **Phase 1: CappedText → SummaryField 統合** | ✅ 5 ファイルの import 統一、capPageText 戻り値型 SummaryField 化 |
+| 3 | **Phase 2: PageOcrResult discriminated union 化 + bridge code 削除** | ✅ ocrProcessor.ts L146-149 削除、`{...capped, ...meta}` spread に簡略化 |
+| 4 | **Phase 3: dev-assert 追加 (NODE_ENV !== 'production')** | ✅ originalLength 不変条件 verify、prod no-op |
+| 5 | **Evaluator 分離 (rules/quality-gate.md, 5+ ファイル)** | ✅ APPROVE、MEDIUM 1 件 → #264 起票 |
+| 6 | **`/simplify` 3 並列** | ✅ 提案全て scope 外/既対処で却下 (path alias は ts-node 設定問題で却下) |
+| 7 | **`/safe-refactor` (code-reviewer)** | ✅ HIGH 1 件 → #264 関連でコメント明示、LOW 対処済 |
+| 8 | **`/review-pr` 4 並列 (重複回避で 6→4)** | ✅ type-design APPROVE、test-analyzer + silent-failure-hunter 指摘 → #266/#267 起票 + dev-assert テスト整理 |
+| 9 | **`/codex review` セカンドオピニオン (MCP 版)** | ✅ GO 判定、必須対応なし |
+| 10 | **CI SUCCESS → squash merge** | ✅ commit `3ee1489`、Issue #258 自動クローズ |
+
+### 達成効果 (Phase 3 完遂)
+
+| 効果 | 内容 |
+|---|---|
+| 📐 型 SSoT 確立 | `CappedText` 削除、`SummaryField` (shared) を Single Source of Truth 化。caller 5 ファイル全てで統一 |
+| 🛡️ 不変条件型レベル保証 | `PageOcrResult = SummaryField & {meta}` で truncated=true ⟹ originalLength 必須を caller に伝播 |
+| 🧹 bridge code 削除 | `capped.truncated ? capped.originalLength : result.text.length` (ocrProcessor.ts:146-149) を削除、`...capped` spread で union 不変条件が自動伝播 |
+| 🚨 silent failure 早期検知 | dev-assert で「内部不整合 (再cap 経路追加等)」を即時検知、prod は no-op |
+| 📊 type-design-analyzer スコア | Encapsulation 2/5 → 4/5 / Enforcement 3/5 → 4/5 (Invariant 5/5 / Usefulness 5/5 維持) |
+
+### Phase 3 Quality Gate 実施記録
+
+| 段階 | 結果 | 指摘・対応 |
+|---|---|---|
+| `/impl-plan` | ✅ AC 7 項目定義、3 Phase 分解 | scope 確定 (capPageResultsAggregate と pdfOperations.ts 自前型は別 Issue) |
+| **Evaluator 分離** | APPROVE | MEDIUM 1 件 (capPageResultsAggregate) → #264 起票、LOW 1 件 (dev-assert contract test) → コメント補強 |
+| `/simplify` 3 並列 | 提案全て却下 | path alias 統一提案は ts-node + tsconfig-paths 未設定で却下 (workflow.md「エージェント報告は鵜呑みにしない」適用) |
+| `/safe-refactor` | HIGH 1 / LOW 1 | HIGH = #264 関連でコメント明示、LOW = PageOcrMeta export で対処 |
+| `/review-pr` type-design-analyzer | APPROVE | Encapsulation +2 / Enforcement +1 改善確認 |
+| `/review-pr` pr-test-analyzer | I1 対応済、C1/I2/I3 → #267 | dev-assert contract test (false negative リスク) を削除、本体実呼出 1 件のみ残存 |
+| `/review-pr` silent-failure-hunter | C1 → #266、I1 → #264、I2 受容 | Vertex AI catch swallow は既存問題、本 PR scope 外 |
+| `/review-pr` comment-analyzer | コメント圧縮対応済 | dev-assert テストブロック 8 行コメント / Option A/B 列挙を削除 |
+| `/codex review` セカンドオピニオン | **GO** | 必須対応なし、PR description に「Firestore 実データ完全統一は #264/#267 後」明記推奨 → 反映 |
+
+### CI / マージ結果
+
+- BE: `npm run build` PASS / `npm test` 435 passing (元 434 + dev-assert 1) / `npm run lint` 0 errors (既存 19 warnings)
+- FE: `npm run build` PASS / `npm test` 113 passing (回帰なし) / `npm run lint` 0 errors
+- PR #265 CI: lint-build-test SUCCESS (5m30s) / GitGuardian SUCCESS / CodeRabbit pass → MERGED `3ee1489`
+- 本 PR は型表現変更 + テスト追加、Firestore 書込形式は完全互換 → kanameone / cocoro 本番環境への影響ゼロ
+
+### 教訓 (PM/PL 視点)
+
+| 教訓 | 内容 |
+|---|---|
+| 7 段階品質ゲートの効果 | Evaluator → simplify → safe-refactor → review-pr 4 並列 → codex で多層レビュー。Codex GO で「APPROVE 偏重バイアス」を最終排除、安心してマージ可能 |
+| 並列レビューの重複削減 | review-pr は 6 並列 fork だが、code-reviewer/code-simplifier は /safe-refactor + /simplify と重複 → 4 並列 (type-design / pr-test / silent-failure / comment) に絞ることで context 節約 |
+| エージェント報告の verify 重要性 | /simplify HIGH 提案 (path alias 統一) は ts-node 設定確認で却下。workflow.md「エージェント結果の検証」が機能、安易な採用回避 |
+| follow-up Issue の即時起票 | レビュー指摘で本 PR scope 外と判断したものは即 Issue 化 (#264 / #266 / #267)。コメント補強で TODO リンク → 追跡可能性確保 |
+| 型設計 5 軸評価の威力 | type-design-analyzer の Encapsulation 2→4 / Enforcement 3→4 は明確な改善指標。before/after 比較で価値が定量化 |
+
+### 次セッション着手予定
+
+**最優先タスク** (P2 enhancement、scope 順):
+- **#253**: useProcessingHistory.firestoreToDocument 重複を useDocuments 側に集約 (FE 2 ファイル、scope 小、~30 分)
+- **#262**: summaryWritePayloadContract の grep-based 既知制限 + diagnostics 強化 (test 強化、~1h)
+- **#267**: PageOcrResult 型不変条件 + buildPageResult 振る舞いテスト (本 PR follow-up、~1h)
+
+**残り WBS** (優先度順):
+- **#264**: capPageResultsAggregate generic を新 PageOcrResult 対応に書き直し (本 PR follow-up、~1h、Evaluator HIGH 関連)
+- **#266**: Vertex AI catch 句で logError 追加 (silent failure 対策、~30 分、横展開要確認)
+- **#251**: generateSummaryCore unit test + buildSummaryPrompt 別モジュール分離 (中規模、~1.5h)
+- **Sprint 4 (#237)**: search tokenizer FE/BE/script 3 箇所重複共通化 (大規模)
+- **Sprint 5**: 運用監視拡充 (#220 / #239 / #238)
+- **Sprint 6**: テスト補強 (#200) + bug 消化 (#196)
+
+---
 
 ## ✅ session11 完了サマリー (Phase 1 完遂: #259 直接書込パターン caller 検知)
 
