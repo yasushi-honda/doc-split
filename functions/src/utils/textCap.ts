@@ -49,12 +49,8 @@ export function capPageText(rawText: string, maxLength: number = MAX_PAGE_TEXT_L
   };
 }
 
-// #258 follow-up (Issue #264): capPageResultsAggregate の generic 内部は flat optional `PageWithText`
-// 制約のままで、戻り値も flat fields を生成している。新 PageOcrResult (discriminated union) を input にしても
-// structural compatibility で tsc は通るが、runtime には truncated=false でも originalLength が同居する可能性がある。
-// 機能的には Firestore 書込時に問題なし (旧型と同形式)。型レベル厳格化は #264 で対応:
-// - Option A (推奨): capPageResultsAggregate を `<T extends SummaryField>` 化 + 戻り値で originalLength を明示 strip
-// - Option B: ocrProcessor 専用 helper として specialize し、generic を捨てる
+// #258 follow-up (#264): generic `<T extends PageWithText>` の flat optional 戻り値が新 PageOcrResult
+// (discriminated union) の不変条件を runtime で破る経路を残す。Firestore 書込互換は維持。詳細は #264 参照。
 interface PageWithText {
   text: string;
   originalLength?: number;

@@ -139,8 +139,7 @@ export async function processDocument(
     if (capped.truncated) {
       console.warn(`[OCR] ${label} text truncated: ${capped.originalLength} → ${capped.text.length} chars (cap=${MAX_PAGE_TEXT_LENGTH})`);
     }
-    // #258: PageOcrResult を SummaryField & {meta} に統合した結果、bridge code (truncated/originalLength の手動再構築) が消滅。
-    // capped を spread すれば truncated/originalLength の不変条件 (型レベル) が caller 側に伝播する。
+    // #258: `...capped` で discriminated union の不変条件 (truncated tag + originalLength) が caller に伝播。
     return {
       ...capped,
       pageNumber,
@@ -174,10 +173,7 @@ export async function processDocument(
     totalOutputTokens = result.outputTokens;
   }
 
-  // aggregate cap (Issue #205): per-page後にも合計サイズで二段防御
-  // #258 既知: capPageResultsAggregate は generic `<T extends PageWithText>` で flat optional 戻り値を生成するため、
-  // PageOcrResult (discriminated union) を再代入しても runtime には truncated/originalLength が同居する可能性あり。
-  // Firestore 書込互換は維持（旧形式と同 JSON）。型レベル不変条件強化は #264 で対応予定。
+  // aggregate cap (Issue #205): per-page後にも合計サイズで二段防御。#264 follow-up: 型レベル不変条件は textCap.ts 内コメント参照。
   const beforeAggregateChars = pageResults.reduce((sum, p) => sum + p.text.length, 0);
   pageResults = capPageResultsAggregate(pageResults);
   const afterAggregateChars = pageResults.reduce((sum, p) => sum + p.text.length, 0);
