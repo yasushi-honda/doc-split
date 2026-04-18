@@ -24,11 +24,14 @@ import { sanitizeCustomerMasters, sanitizeOfficeMasters, sanitizeDocumentMasters
 import { buildSummaryFields } from './summaryRequestBuilder';
 import { generateSummaryCore, MIN_OCR_LENGTH_FOR_SUMMARY } from './summaryGenerator';
 import {
-  capPageText,
   capPageResultsAggregate,
-  MAX_PAGE_TEXT_LENGTH,
 } from '../utils/textCap';
 import type { SummaryField } from '../../../shared/types';
+import { buildPageResult, type PageOcrResult } from './buildPageResult';
+
+// #267: buildPageResult / PageOcrResult 型は ./buildPageResult モジュールに移設。
+// ここでは re-export のみ行い、既存の import パス互換性を維持する。
+export { buildPageResult, type PageOcrResult };
 
 const db = admin.firestore();
 const storage = admin.storage();
@@ -42,19 +45,6 @@ const MODEL_ID = GEMINI_CONFIG.modelId;
 const OCR_RESULT_MAX_LENGTH = 100000;
 // Vertex AI暴走時の出力トークン上限（Issue #205）。8192tokens ≈ 25K chars Japanese、通常OCRには十分
 const GEMINI_MAX_OUTPUT_TOKENS = GEMINI_CONFIG.maxOutputTokens;
-
-/**
- * ページ単位OCR結果 (Issue #258 で discriminated union 化)
- *
- * SummaryField (text/truncated/originalLength) + OCR メタ (pageNumber/inputTokens/outputTokens) の合成。
- * 不変条件: truncated=true ⟹ originalLength 必須（型レベル保証）。
- * truncated=false の場合 page.originalLength は型に存在しない（access で tsc エラー）。
- */
-export type PageOcrResult = SummaryField & {
-  pageNumber: number;
-  inputTokens: number;
-  outputTokens: number;
-};
 
 /** OCR処理結果 */
 export interface OcrProcessingResult {
@@ -129,24 +119,6 @@ export async function processDocument(
   let totalPages = 1;
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
-
-  const buildPageResult = (
-    result: { text: string; inputTokens: number; outputTokens: number },
-    pageNumber: number,
-    label: string
-  ): PageOcrResult => {
-    const capped = capPageText(result.text);
-    if (capped.truncated) {
-      console.warn(`[OCR] ${label} text truncated: ${capped.originalLength} → ${capped.text.length} chars (cap=${MAX_PAGE_TEXT_LENGTH})`);
-    }
-    // #258: `...capped` で discriminated union の不変条件 (truncated tag + originalLength) が caller に伝播。
-    return {
-      ...capped,
-      pageNumber,
-      inputTokens: result.inputTokens,
-      outputTokens: result.outputTokens,
-    };
-  };
 
   if (mimeType === 'application/pdf') {
     const pdfDoc = await PDFDocument.load(buffer);
