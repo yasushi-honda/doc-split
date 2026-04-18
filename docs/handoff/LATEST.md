@@ -1,8 +1,104 @@
 # ハンドオフメモ
 
-**更新日**: 2026-04-18 session13 (Phase A 完遂: #266 Vertex AI silent failure + #253 firestoreToDocument 集約)
-**ブランチ**: main (PR #270 / #272 マージ済、clean)
-**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + Summary リファクタ集約 3/3 + Phase 3 #258 + follow-up 消化 Phase A (2/2) 完遂
+**更新日**: 2026-04-19 session14 (Phase 1A + 1B 完遂: #271 + #267 + #273、follow-up 3 Issue 起票)
+**ブランチ**: main (PR #275 / #277 / #280 マージ済、clean)
+**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + Summary リファクタ集約 3/3 + Phase 3 #258 + follow-up 消化 Phase A (2/2) + session14 follow-up Phase 1A/1B (3/3) 完遂
+
+<a id="session14"></a>
+## ✅ session14 完了サマリー (Phase 1A + 1B 完遂: #271 + #267 + #273、follow-up 3 Issue 起票)
+
+session13 で完遂した Phase A (#266 + #253) の follow-up 消化スプリント第 2 弾。PM/PL 視点で 10 open Issue を 6 Phase に分解した WBS を策定し、**Phase 1A (即効性 2 タスク: #271 + #267) + Phase 1B (FE test 1 タスク: #273) を 1 セッションで完遂**。CLAUDE.md (グローバル + プロジェクト) 多層適用、各 PR で review 指摘を採用/follow-up 分類して scope 明確化。
+
+| 順 | フェーズ | 結果 |
+|---|---|---|
+| 1 | **WBS 策定 (10 Issue → 6 Phase)** | ✅ Phase 1A/1B/2/3/4/5/6 順序確定、Codex 要否判定 (Phase 2・5 のみ) |
+| 2 | **Phase 1A 計画 (/impl-plan #271+#267)** | ✅ AC 定義、同一ファイル編集競合回避で直列順序決定 |
+| 3 | **Phase 1A-1 (#271): handleProcessingError safeLogError 統合** | ✅ PR #275 MERGED (`97d680e`) |
+| 4 | **Phase 1A-2 (#267): PageOcrResult 型不変条件 + 振る舞いテスト** | ✅ PR #277 MERGED (`e84f3b9`) |
+| 5 | **Phase 1B 計画 (/impl-plan #273)** | ✅ AC 定義、4 describe ブロック構成 |
+| 6 | **Phase 1B (#273): useProcessingHistory.test.ts 新設** | ✅ PR #280 MERGED (`d728628`) |
+| 7 | **Follow-up 起票** | ✅ #276 + #278 + #279 |
+
+### 達成効果 (Phase 1A + 1B 完遂)
+
+| 効果 | 内容 |
+|---|---|
+| 🛡️ silent failure SSoT 完成 | handleProcessingError の try/catch fallback を `safeLogError` helper に統合。#266 で導入した catch 句 fallback の SSoT 化が 100% 完成 |
+| 📐 型不変条件 CI enforcement | `tsconfig.test.json` + `type-check:test` スクリプト新設。`@ts-expect-error` directive が ts-node/register 下で silent に無視される問題を構造的に解決。#258 discriminated union (truncated=false ⟹ originalLength 不在) を CI で lock-in |
+| 🧪 buildPageResult pure 化 | ocrProcessor.ts L133-149 の local closure を `src/ocr/buildPageResult.ts` に分離。firebase-admin top-level 初期化の副作用排除で unit test から import 可能に |
+| 🧪 FE refactor 回帰ネット整備 | session13 PR #272 (#253) で firestoreToDocument を集約した refactor の pr-test-analyzer Important 指摘に対応。useProcessingHistory.test.ts 新設 (18 tests)、isCustomerConfirmed デュアルリード (Phase 6/7 + 矛盾 + mixed state) を static lock-in |
+| 🔍 境界値 / mixed state カバレッジ | review で追加: MAX_PAGE_TEXT_LENGTH ちょうど / +1 の境界値、migration 期 Phase 6 needs=true と Phase 7 customerConfirmed=false 混在配列、矛盾状態 (customerConfirmed vs needs 優先順位) |
+
+### Phase 1A-1 (#271) Quality Gate 実施記録
+
+| 段階 | 結果 | 指摘・対応 |
+|---|---|---|
+| `/impl-plan` | ✅ 直列順序 + AC 定義 | ocrProcessor.ts 同一ファイル編集競合回避 |
+| 実装 (1 ファイル -4 行正味) | ✅ safeLogError 呼出に置換 | logError 直接 import 削除 |
+| `/simplify` / `/safe-refactor` | ⏭️ スキップ | 1 ファイル、session13 #253 同判断 |
+| `/review-pr` 2 並列 (silent-failure-hunter + code-reviewer) | Critical 0 / Important 0 / Suggestion 1 | handleProcessingError の safeLogError 呼出を保証する契約テストギャップ → #276 起票 |
+
+### Phase 1A-2 (#267) Quality Gate 実施記録
+
+| 段階 | 結果 | 指摘・対応 |
+|---|---|---|
+| `/impl-plan` | ✅ AC 定義 + Phase 分解 | 型テスト + 振る舞いテスト 2 layer 構成 |
+| 実装 (6 ファイル +186/-34) | ✅ buildPageResult 分離 + 型/振る舞い test | `ts-node/register` silent 問題を `tsconfig.test.json` で解決 |
+| 負検証 | ✅ | @ts-expect-error 削除で tsc TS2339 失敗確認、enforcement 実効性担保 |
+| `/simplify` / `/safe-refactor` | ⏭️ スキップ | src 2 ファイル変更、3+ 基準未満 |
+| `/review-pr` 3 並列 (type-design + pr-test + code-reviewer) | Critical 0 / Important 1 採用 / Suggestion 採用 2 却下 1 | 境界値テスト (text.length === MAX / MAX+1) 採用、tsconfig コメント追加、PageOcrResult 3 重定義 → #278 起票、console.warn 検証 → #279 起票 |
+
+### Phase 1B (#273) Quality Gate 実施記録
+
+| 段階 | 結果 | 指摘・対応 |
+|---|---|---|
+| `/impl-plan` | ✅ AC 定義 + 4 describe ブロック | applyConfirmedFilter export 化で unit test 可能化 |
+| 実装 (2 ファイル +182/-1) | ✅ 16 tests (isCustomerConfirmed 5 + normalizeCandidate 4 + applyConfirmedFilter 4 + 統合 3) | makeDoc factory + vitest |
+| `/simplify` / `/safe-refactor` | ⏭️ スキップ | 2 ファイル、session13 #253 同判断 |
+| `/review-pr` 2 並列 (pr-test + code-reviewer) | Critical 0 / Important 2 採用 / Suggestion 1 見送り | 矛盾状態 lock-in 2 cases + migration 期 mixed state 1 case 採用 (16 → 18 tests)、Timestamp 固定化は ROI 低で見送り |
+
+### CI / マージ結果
+
+- BE: `npm test` 450 → 461 passing (+11 = 境界値 2 + 振る舞い 7 + 型 2)
+- FE: `npm test` 116 → **134** passing (+18 = デュアルリード 5 + 矛盾 2 + normalizeCandidate 4 + applyConfirmedFilter 4 + 統合 3)
+- PR #275 CI: SUCCESS → MERGED `97d680e` / 1 ファイル -4 行
+- PR #277 CI: SUCCESS → MERGED `e84f3b9` / 6 ファイル +219/-34
+- PR #280 CI: SUCCESS → MERGED `d728628` / 2 ファイル +200/-1
+- いずれも status 遷移 / Firestore 書込スキーマ変更なし → kanameone / cocoro 本番環境への影響ゼロ
+
+### 教訓 (PM/PL 視点)
+
+| 教訓 | 内容 |
+|---|---|
+| **ts-node/register の strict type check 限界** | `@ts-expect-error` directive が tsconfig include 外のテストでは silent に無視される問題を #267 実装中に発見。`tsconfig.test.json` + `type-check:test` pre-step で構造的解決。今後の型契約テストすべてで利用可能な基盤 |
+| **WBS 粒度の segment 感** | 10 Issue を 6 Phase に分解、scope × 鮮度 × ROI でマトリクス化。Phase 1A/1B は「follow-up 消化 + session 内 3 PR 完遂」の速度感に最適化、Phase 2 以降は Codex セカンドオピニオン必須で別セッション推奨と切り分け |
+| **Review Important は 1 コミット追加で採用が常道** | pr-test-analyzer Important は PR scope 内の test 追加で必ず対応。Suggestion は実害評価で採用/follow-up/見送りに分類。今回 3 PR 合計で採用 3 件 / 見送り 1 件 / follow-up 3 件起票と綺麗に分類 |
+| **review 指摘起点の follow-up Issue が Sprint 1 ネタになる** | session12→13 で 3 件、session13→14 で 2 件、session14→次回で 3 件と follow-up が再生産。`/handoff` 時に常に 10 open Issue 維持の安定運用パターンが確立 |
+| **pre-existing flaky の扱い** | `KanaFilterBar.test.tsx` timeout が本 PR 起因でないことを main reverted 確認で立証、PR 本文に明記。「本 PR scope 外の pre-existing」と切り分けることで CI 不安定化責任を回避 |
+
+### 次セッション着手予定 (session15)
+
+**最優先タスク** (Phase 2):
+- **#264 (Phase 2)**: capPageResultsAggregate generic を新 PageOcrResult discriminated union に対応 (~1.5h、3-5 ファイル想定、**Codex セカンドオピニオン必須**)
+  - Option A (推奨): `<T extends SummaryField>` 化 + `stripSummaryFields` helper
+  - Option B: ocrProcessor 専用 specialize
+  - #258 Evaluator MEDIUM 指摘の clean 化
+
+**後続 Phase (WBS 優先度順)**:
+- **#262 (Phase 3)**: summaryWritePayloadContract grep-based 既知制限 + diagnostics 強化 (~1h)
+- **#251 (Phase 4)**: generateSummaryCore unit test + buildSummaryPrompt 別モジュール分離 (~1.5h、2-3 ファイル)
+- **#237 (Phase 5)**: search tokenizer FE/BE/script 3 箇所重複共通化 (大規模、Codex + Evaluator 必須、別セッション集中)
+- **#220 / #239 / #238 (Phase 6)**: 運用監視拡充スプリント (OOM/truncated metric + alert、force-reindex 構造化 audit log、孤児 posting 検出)
+
+**session14 起票 follow-up Issue** (残存):
+- **#276**: handleProcessingError の safeLogError 呼出を保証する契約テスト追加 (#271 follow-up)
+- **#278**: PageOcrResult 型の 3 重定義 (shared / buildPageResult / pdfOperations) 解消 (#267 review follow-up)
+- **#279**: buildPageResult の console.warn 副作用検証追加 (#267 follow-up)
+
+**session13 以前の残存 follow-up**:
+- **#262 / #264 / #267 以外の起票済 P2 Issue** は session15 以降で scope 順に消化
+
+---
 
 <a id="session13"></a>
 ## ✅ session13 完了サマリー (Phase A 完遂: #266 + #253、follow-up 2 Issue 起票)
