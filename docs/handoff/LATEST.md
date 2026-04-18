@@ -55,7 +55,7 @@ session13 で完遂した Phase A (#266 + #253) の follow-up 消化スプリン
 | `/impl-plan` | ✅ AC 定義 + 4 describe ブロック | applyConfirmedFilter export 化で unit test 可能化 |
 | 実装 (2 ファイル +182/-1) | ✅ 16 tests (isCustomerConfirmed 5 + normalizeCandidate 4 + applyConfirmedFilter 4 + 統合 3) | makeDoc factory + vitest |
 | `/simplify` / `/safe-refactor` | ⏭️ スキップ | 2 ファイル、session13 #253 同判断 |
-| `/review-pr` 2 並列 (pr-test + code-reviewer) | Critical 0 / Important 2 採用 / Suggestion 1 見送り | 矛盾状態 lock-in 2 cases + migration 期 mixed state 1 case 採用 (16 → 18 tests)、Timestamp 固定化は ROI 低で見送り |
+| `/review-pr` 2 並列 (pr-test + code-reviewer) | Critical 0 / Important 2 採用 / Suggestion 1 見送り | isCustomerConfirmed に矛盾状態 lock-in 2 cases 追加 (16 → 18 tests) + applyConfirmedFilter に migration 期 mixed state fixture 追加 (既存 test の期待値更新、test 数不変)、Timestamp 固定化は ROI 低で見送り |
 
 ### CI / マージ結果
 
@@ -71,7 +71,7 @@ session13 で完遂した Phase A (#266 + #253) の follow-up 消化スプリン
 | 教訓 | 内容 |
 |---|---|
 | **ts-node/register の strict type check 限界** | `@ts-expect-error` directive が tsconfig include 外のテストでは silent に無視される問題を #267 実装中に発見。`tsconfig.test.json` + `type-check:test` pre-step で構造的解決。今後の型契約テストすべてで利用可能な基盤 |
-| **WBS 粒度の segment 感** | 10 Issue を 6 Phase に分解、scope × 鮮度 × ROI でマトリクス化。Phase 1A/1B は「follow-up 消化 + session 内 3 PR 完遂」の速度感に最適化、Phase 2 以降は Codex セカンドオピニオン必須で別セッション推奨と切り分け |
+| **WBS 粒度の segment 感** | 10 Issue を 6 Phase に分解、scope × 鮮度 × ROI でマトリクス化。Phase 1A/1B は「follow-up 消化 + session 内 3 PR 完遂」の速度感に最適化、Phase 2 以降は Codex セカンドオピニオン (現行 Quality Gate 規定発動条件該当のため)で別セッション推奨と切り分け |
 | **Review Important は 1 コミット追加で採用が常道** | pr-test-analyzer Important は PR scope 内の test 追加で必ず対応。Suggestion は実害評価で採用/follow-up/見送りに分類。今回 3 PR 合計で採用 3 件 / 見送り 1 件 / follow-up 3 件起票と綺麗に分類 |
 | **review 指摘起点の follow-up Issue が Sprint 1 ネタになる** | session12→13 で 3 件、session13→14 で 2 件、session14→次回で 3 件と follow-up が再生産。`/handoff` 時に常に 10 open Issue 維持の安定運用パターンが確立 |
 | **pre-existing flaky の扱い** | `KanaFilterBar.test.tsx` timeout が本 PR 起因でないことを main reverted 確認で立証、PR 本文に明記。「本 PR scope 外の pre-existing」と切り分けることで CI 不安定化責任を回避 |
@@ -79,7 +79,7 @@ session13 で完遂した Phase A (#266 + #253) の follow-up 消化スプリン
 ### 次セッション着手予定 (session15)
 
 **最優先タスク** (Phase 2):
-- **#264 (Phase 2)**: capPageResultsAggregate generic を新 PageOcrResult discriminated union に対応 (~1.5h、3-5 ファイル想定、**Codex セカンドオピニオン必須**)
+- **#264 (Phase 2)**: capPageResultsAggregate generic を新 PageOcrResult discriminated union に対応 (~1.5h、3-5 ファイル想定、**Codex セカンドオピニオン (現行 Quality Gate 規定発動条件該当のため)**)
   - Option A (推奨): `<T extends SummaryField>` 化 + `stripSummaryFields` helper
   - Option B: ocrProcessor 専用 specialize
   - #258 Evaluator MEDIUM 指摘の clean 化
