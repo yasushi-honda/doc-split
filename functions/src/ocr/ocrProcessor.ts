@@ -143,7 +143,9 @@ export async function processDocument(
       text: capped.text,
       inputTokens: result.inputTokens,
       outputTokens: result.outputTokens,
-      originalLength: capped.originalLength,
+      // #255: discriminated union 化により truncated=false 時は capped.originalLength 不在。
+      // 切り詰めなしの場合は原文長 = result.text.length なのでフォールバック。
+      originalLength: capped.truncated ? capped.originalLength : result.text.length,
       truncated: capped.truncated,
     };
   };
@@ -187,9 +189,9 @@ export async function processDocument(
     .join('\n\n');
 
   // マスターデータ取得（要約生成と並列実行）
-  const summaryPromise = generateSummary(ocrResult, '').catch((err) => {
+  const summaryPromise = generateSummary(ocrResult, '').catch((err): CappedText => {
     console.error('Summary generation failed:', err);
-    return { text: '', originalLength: 0, truncated: false };
+    return { text: '', truncated: false };
   });
 
   // マスターデータ取得
@@ -547,13 +549,13 @@ async function generateSummary(
   documentType: string
 ): Promise<CappedText> {
   if (!ocrResult || ocrResult.length < MIN_OCR_LENGTH_FOR_SUMMARY) {
-    return { text: '', originalLength: 0, truncated: false };
+    return { text: '', truncated: false };
   }
   try {
     return await generateSummaryCore(ocrResult, documentType);
   } catch (error) {
     console.error('Failed to generate summary:', error);
-    return { text: '', originalLength: 0, truncated: false };
+    return { text: '', truncated: false };
   }
 }
 

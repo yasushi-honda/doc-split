@@ -53,7 +53,6 @@ describe('summaryRequestBuilder: buildSummaryFields (Issue #215 discriminated un
   it('truncated=false で { text, truncated:false } のみ返す (originalLength は型レベルで不在)', () => {
     const summary: CappedText = {
       text: '通常の要約テキスト',
-      originalLength: 100,
       truncated: false,
     };
     expect(buildSummaryFields(summary)).to.deep.equal({
@@ -76,7 +75,7 @@ describe('summaryRequestBuilder: buildSummaryFields (Issue #215 discriminated un
   });
 
   it('空テキスト (truncated=false) でも { text:"", truncated:false } が返る', () => {
-    const summary: CappedText = { text: '', originalLength: 0, truncated: false };
+    const summary: CappedText = { text: '', truncated: false };
     const fields = buildSummaryFields(summary);
     expect(fields).to.deep.equal({ text: '', truncated: false });
     // 不変条件の保証: truncated=false の分岐で originalLength キーが含まれない
