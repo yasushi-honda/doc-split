@@ -1,29 +1,20 @@
 /**
  * textCap assertAggregatePageInvariant の prod observability 動的 invocation テスト (#288 item 1)
  *
- * 目的: Phase 2 (PR #296) で導入した grep-based contract を runtime 挙動で補強する。
- * grep は shape を lock-in するが、条件分岐 reversal や helper 未使用回帰を runtime で
- * 検知できないため、動的 mock を用いて safeLogError 呼出の事実と引数を直接検証する。
+ * grep contract (textCapProdInvariantContract.test.ts) と二段 lock-in:
+ * - grep: shape (token 存在) + anchor 保護
+ * - runtime (本 test): 条件分岐 reversal / callCount / 引数 propagation / console.error fallback
  *
- * 手法:
- * - `requireCjs.cache` 差し替えで `../src/utils/errorLogger` module を stub 化 (sinon/proxyquire
- *   等の追加依存なし)
- * - prod / dev / fallback 各経路を runtime 実行し callCount / args を検証
- * - afterEach で module cache を clean up し他 test への漏洩を防止
- *
- * Phase 2 grep contract (textCapProdInvariantContract.test.ts) との二段 lock-in:
- * - grep: shape (token 存在)、anchor 保護
- * - runtime (本 test): 条件分岐 reversal 検知、callCount、引数 shape
+ * mocha は default で file 内逐次実行のため module cache 差し替えは安全。並列実行を有効化する場合は
+ * 本ファイルを分離必須（cache は Node global singleton）。
  */
 
 import { expect } from 'chai';
 import { createRequire } from 'module';
 import type { SummaryField } from '../../shared/types';
 
-// ts-node の ESM モードで require を使うため createRequire 経由で取得。
-// Node.js module cache は global singleton のため、requireCjs.cache と Node 内部の
-// requireCjs.cache は同一 object を参照し、本 test で注入した stub は textCap.ts 内部の
-// dynamic require(...) にも反映される。
+// ts-node ESM モードで CJS require を得るため createRequire を使用。
+// cache は Node 内部と同一参照のため stub が textCap.ts 内部の dynamic require に反映される。
 const requireCjs = createRequire(import.meta.url);
 const ERROR_LOGGER_PATH = requireCjs.resolve('../src/utils/errorLogger');
 const TEXT_CAP_PATH = requireCjs.resolve('../src/utils/textCap');
@@ -42,16 +33,15 @@ interface StubState {
 
 /**
  * requireCjs.cache に errorLogger の stub module を注入する。
- * `stubState.throwOnLoad=true` の場合は require 時に throw (console.error fallback path 検証用)。
+ * `state.throwOnLoad=true` の場合は require 時に throw (console.error fallback path 検証用)。
+ * accessor/data どちらも `delete` で除去可能なので cleanup は単一経路で OK。
  */
 function installErrorLoggerStub(state: StubState): void {
-  // stub 注入前に既存 cache を除去 (他 test で load 済みの場合を考慮)
+  // 前回テストの cache 残留を除去（stub 反映 & 新規 load 誘発）
   delete requireCjs.cache[ERROR_LOGGER_PATH];
-  // textCap.ts も cache から外して「次の require で新規 load させる」
   delete requireCjs.cache[TEXT_CAP_PATH];
 
   if (state.throwOnLoad) {
-    // require 時に throw させるため getter を介して exports を提供
     Object.defineProperty(requireCjs.cache, ERROR_LOGGER_PATH, {
       configurable: true,
       get() {
@@ -79,7 +69,6 @@ function installErrorLoggerStub(state: StubState): void {
 }
 
 function uninstallErrorLoggerStub(): void {
-  // getter 形式も delete で両対応
   delete requireCjs.cache[ERROR_LOGGER_PATH];
   delete requireCjs.cache[TEXT_CAP_PATH];
 }
@@ -90,7 +79,12 @@ function withNodeEnv<T>(env: string, fn: () => T): T {
   try {
     return fn();
   } finally {
-    process.env.NODE_ENV = original;
+    // original が undefined のとき代入すると文字列 'undefined' に coerce されるため delete で復元
+    if (original === undefined) {
+      delete process.env.NODE_ENV;
+    } else {
+      process.env.NODE_ENV = original;
+    }
   }
 }
 
@@ -147,7 +141,7 @@ describe('textCap prod invariant dynamic invocation (#288 item 1)', () => {
       expect(call?.error.message).to.match(/capPageResultsAggregate invariant violation/);
     });
 
-    it('prod + context.documentId 指定時に safeLogError 引数へ伝搬される (silent-failure-hunter S2)', () => {
+    it('prod + context.documentId 指定時に safeLogError 引数へ伝搬され、単一 emit される', () => {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const { capPageResultsAggregate } = requireCjs('../src/utils/textCap') as typeof import('../src/utils/textCap');
 
@@ -161,6 +155,9 @@ describe('textCap prod invariant dynamic invocation (#288 item 1)', () => {
         capPageResultsAggregate([invalidPage], { documentId: 'doc-xyz-123' });
       });
 
+      // silent-failure-hunter S2 + Codex: 伝搬 propagation を assertion、
+      // かつ二重 emit mutation を length 固定で捕捉
+      expect(state.calls.length).to.equal(1);
       expect(state.calls[0]?.documentId).to.equal('doc-xyz-123');
     });
 
@@ -198,19 +195,26 @@ describe('textCap prod invariant dynamic invocation (#288 item 1)', () => {
     });
   });
 
-  describe('errorLogger load 失敗時の console.error fallback (Codex S3)', () => {
-    it('prod + errorLogger require 失敗時に console.error ([textCap] prefix) で fallback', () => {
+  describe('errorLogger load 失敗時の console.error fallback', () => {
+    // console.error を一時 spy 化し、args を取得して復元する helper
+    function withConsoleErrorSpy<T>(fn: (calls: unknown[][]) => T): T {
+      const original = console.error;
+      const calls: unknown[][] = [];
+      console.error = (...args: unknown[]): void => {
+        calls.push(args);
+      };
+      try {
+        return fn(calls);
+      } finally {
+        console.error = original;
+      }
+    }
+
+    it('prod + errorLogger require 失敗 + invalid page → console.error ([textCap] prefix + invariant message) で fallback', () => {
       state = { calls: [], throwOnLoad: true };
       installErrorLoggerStub(state);
 
-      // console.error を spy 化
-      const originalConsoleError = console.error;
-      const errorCalls: unknown[][] = [];
-      console.error = (...args: unknown[]): void => {
-        errorCalls.push(args);
-      };
-
-      try {
+      const errorCalls = withConsoleErrorSpy((calls) => {
         // eslint-disable-next-line @typescript-eslint/no-require-imports
         const { capPageResultsAggregate } = requireCjs('../src/utils/textCap') as typeof import('../src/utils/textCap');
 
@@ -223,14 +227,37 @@ describe('textCap prod invariant dynamic invocation (#288 item 1)', () => {
         withNodeEnv('production', () => {
           expect(() => capPageResultsAggregate([invalidPage])).to.not.throw();
         });
+        return calls;
+      });
 
-        // console.error が [textCap] prefix で呼ばれていること
-        expect(errorCalls.length).to.be.at.least(1);
-        const firstCall = errorCalls[0];
-        expect(String(firstCall?.[0] ?? '')).to.match(/\[textCap\]/);
-      } finally {
-        console.error = originalConsoleError;
-      }
+      // prefix
+      expect(errorCalls.length).to.be.at.least(1);
+      const firstCall = errorCalls[0] ?? [];
+      expect(String(firstCall[0] ?? '')).to.match(/\[textCap\]/);
+      // message 引数 drop regression 捕捉: 引数いずれかに invariant violation 文字列が含まれる
+      const joined = firstCall.map((a) => String(a)).join(' | ');
+      expect(joined).to.match(/invariant violation/);
+    });
+
+    // pr-test-analyzer Important #1: valid path で fallback が発火しない対称テスト。
+    // try/catch が prod 分岐外に hoist された mutation を捕捉。
+    it('prod + errorLogger require 失敗 + valid page → console.error が呼ばれない (false positive 防止)', () => {
+      state = { calls: [], throwOnLoad: true };
+      installErrorLoggerStub(state);
+
+      const errorCalls = withConsoleErrorSpy((calls) => {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { capPageResultsAggregate } = requireCjs('../src/utils/textCap') as typeof import('../src/utils/textCap');
+
+        const validPages: SummaryField[] = [{ text: 'short', truncated: false }];
+
+        withNodeEnv('production', () => {
+          capPageResultsAggregate(validPages);
+        });
+        return calls;
+      });
+
+      expect(errorCalls.length).to.equal(0);
     });
   });
 });
