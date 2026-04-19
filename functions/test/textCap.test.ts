@@ -454,7 +454,12 @@ describe('textCap', () => {
         expect(() => capPageResultsAggregate([invalidPage])).to.throw(/invariant violation/);
       });
 
-      it('production では dev-assert が no-op (invalid 入力でも throw しない)', () => {
+      // #288 item 6: prod では throw せず safeLogError fire-and-forget で emit (observability 格上げ)。
+      // 本 runtime test は「throw しない」契約のみ runtime で確認し、safeLogError 実呼出しの検証は
+      // grep-based contract (textCapProdInvariantContract.test.ts) で lock-in。動的 invocation test は
+      // Phase 3 (#288 item 1) で追加。errorLogger load は prod 分岐内で try/catch fallback 済みなので
+      // unit test 環境 (admin 未初期化) でも throw は伝播しない。
+      it('production では invalid 入力でも throw しない (safeLogError 経由で emit)', () => {
         const original = process.env.NODE_ENV;
         process.env.NODE_ENV = 'production';
         try {

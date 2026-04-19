@@ -78,8 +78,50 @@ export type CappedAggregatePage<T extends SummaryField> =
   Omit<T, 'text' | 'truncated' | 'originalLength'> & SummaryField;
 
 /**
+ * invariant violation 検出時の dev/prod 分岐ハンドラ (#288 item 6)。
+ *
+ * - dev: throw で early fail (既存 #284 契約)
+ * - prod: throw せず safeLogError fire-and-forget で errors collection に記録
+ *
+ * 背景 (#288 item 6 / PR #290 silent-failure-hunter S1 CRITICAL):
+ * 旧実装は prod で silent early return だったため、Firestore 旧データ由来の discriminated
+ * union 違反 (#209 型: truncated=false + originalLength 残存) が prod で silent に伝播する
+ * 経路が残っていた。prod 観測性を safeLogError 経由で格上げし、運用側で検知可能にする。
+ *
+ * 設計: errorLogger は top-level で admin.firestore() を呼ぶため、prod path に限定した
+ * dynamic require で unit test 環境 (admin 未初期化) への影響を回避 (buildPageResult.ts の
+ * 「unit test から import しても admin 初期化エラーが発生しない」方針と整合)。safeLogError
+ * 内部で try/catch 済み (errorLogger.ts:141-151) なので reject せず、map 処理継続。
+ */
+function handleAggregateInvariantViolation(detail: string): void {
+  const message = `capPageResultsAggregate invariant violation: ${detail}`;
+  if (process.env.NODE_ENV === 'production') {
+    // errorLogger top-level の `const db = admin.firestore()` が admin 未初期化環境で throw
+    // するため、load 失敗を try/catch し console.error fallback。prod runtime (Cloud Functions)
+    // では admin 初期化済みのため通常到達せず、万一の失敗も主処理を abort させない。
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { safeLogError } = require('./errorLogger') as typeof import('./errorLogger');
+      void safeLogError({
+        error: new Error(message),
+        source: 'ocr',
+        functionName: 'capPageResultsAggregate',
+      });
+    } catch (loadErr) {
+      console.error(
+        '[textCap] failed to load errorLogger for prod invariant report:',
+        loadErr,
+        message,
+      );
+    }
+    return;
+  }
+  throw new Error(message);
+}
+
+/**
  * dev-assert: capPageResultsAggregate の戻り値 1 要素が SummaryField discriminated union の
- * 不変条件を満たしているか runtime 検証する (production no-op)。
+ * 不変条件を満たしているか runtime 検証する。
  *
  * - truncated は boolean
  * - text は string
@@ -89,11 +131,13 @@ export type CappedAggregatePage<T extends SummaryField> =
  * caller が narrow 型 T を渡し、コード変更で discriminated union 契約を破った場合の早期検知。
  * capPageText L39-43 の dev-assert と対 (#284 Option B)。引数を unknown にし runtime 型 guard で
  * narrowing することで、戻り値型が厳格になっても追加 cast 不要にしている。
+ *
+ * #288 item 6: prod でも `handleAggregateInvariantViolation` 経由で safeLogError emit に格上げ。
  */
 function assertAggregatePageInvariant(page: unknown): void {
-  if (process.env.NODE_ENV === 'production') return;
   if (typeof page !== 'object' || page === null) {
-    throw new Error('capPageResultsAggregate invariant violation: not an object');
+    handleAggregateInvariantViolation('not an object');
+    return;
   }
   const record = page as Record<string, unknown>;
   const textOk = typeof record.text === 'string';
@@ -104,9 +148,8 @@ function assertAggregatePageInvariant(page: unknown): void {
       ? typeof record.originalLength === 'number'
       : !('originalLength' in record);
   if (!textOk || !truncatedOk || !originalLengthOk) {
-    throw new Error(
-      `capPageResultsAggregate invariant violation: text=${typeof record.text} ` +
-        `truncated=${String(truncated)} originalLengthKey=${'originalLength' in record}`,
+    handleAggregateInvariantViolation(
+      `text=${typeof record.text} truncated=${String(truncated)} originalLengthKey=${'originalLength' in record}`,
     );
   }
 }
