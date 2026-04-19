@@ -13,8 +13,13 @@ import { expect } from 'chai';
 import { createRequire } from 'module';
 import type { SummaryField } from '../../shared/types';
 
-// ts-node ESM モードで CJS require を得るため createRequire を使用。
-// cache は Node 内部と同一参照のため stub が textCap.ts 内部の dynamic require に反映される。
+// ts-node runtime は mocha esm-utils 経由で ESM モード実行 (require 未定義) だが、
+// tsc は package.json type 未設定 + tsconfig module:NodeNext を CJS 出力と判定し
+// `import.meta` を TS1470 で reject する。runtime では ESM として解決可能なので
+// @ts-expect-error で tsc エラーを抑制 (実害なし)。Node module cache は global
+// singleton のため、textCap.ts 内部 dynamic require('./errorLogger') にも stub が
+// 反映される。
+// @ts-expect-error TS1470: tsc は CJS 出力と判定するが runtime は ESM で解決可能
 const requireCjs = createRequire(import.meta.url);
 const ERROR_LOGGER_PATH = requireCjs.resolve('../src/utils/errorLogger');
 const TEXT_CAP_PATH = requireCjs.resolve('../src/utils/textCap');
@@ -103,7 +108,6 @@ describe('textCap prod invariant dynamic invocation (#288 item 1)', () => {
 
     it('prod + invalid page で safeLogError が callCount=1 で呼ばれる', () => {
       // 新規 load された textCap を取得 (stub を反映)
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
       const { capPageResultsAggregate } = requireCjs('../src/utils/textCap') as typeof import('../src/utils/textCap');
 
       const invalidPage = {
@@ -120,7 +124,6 @@ describe('textCap prod invariant dynamic invocation (#288 item 1)', () => {
     });
 
     it('prod + invalid page の safeLogError 引数に source:"ocr" / functionName:"capPageResultsAggregate" / error 含有', () => {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
       const { capPageResultsAggregate } = requireCjs('../src/utils/textCap') as typeof import('../src/utils/textCap');
 
       const invalidPage = {
@@ -142,7 +145,6 @@ describe('textCap prod invariant dynamic invocation (#288 item 1)', () => {
     });
 
     it('prod + context.documentId 指定時に safeLogError 引数へ伝搬され、単一 emit される', () => {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
       const { capPageResultsAggregate } = requireCjs('../src/utils/textCap') as typeof import('../src/utils/textCap');
 
       const invalidPage = {
@@ -162,7 +164,6 @@ describe('textCap prod invariant dynamic invocation (#288 item 1)', () => {
     });
 
     it('prod + valid page では safeLogError は呼ばれない (false positive 防止)', () => {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
       const { capPageResultsAggregate } = requireCjs('../src/utils/textCap') as typeof import('../src/utils/textCap');
 
       const validPages: SummaryField[] = [
@@ -178,7 +179,6 @@ describe('textCap prod invariant dynamic invocation (#288 item 1)', () => {
     });
 
     it('dev + invalid page では safeLogError は呼ばれず throw する (prod 分岐のみ emit)', () => {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
       const { capPageResultsAggregate } = requireCjs('../src/utils/textCap') as typeof import('../src/utils/textCap');
 
       const invalidPage = {
@@ -215,7 +215,6 @@ describe('textCap prod invariant dynamic invocation (#288 item 1)', () => {
       installErrorLoggerStub(state);
 
       const errorCalls = withConsoleErrorSpy((calls) => {
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
         const { capPageResultsAggregate } = requireCjs('../src/utils/textCap') as typeof import('../src/utils/textCap');
 
         const invalidPage = {
@@ -246,7 +245,6 @@ describe('textCap prod invariant dynamic invocation (#288 item 1)', () => {
       installErrorLoggerStub(state);
 
       const errorCalls = withConsoleErrorSpy((calls) => {
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
         const { capPageResultsAggregate } = requireCjs('../src/utils/textCap') as typeof import('../src/utils/textCap');
 
         const validPages: SummaryField[] = [{ text: 'short', truncated: false }];
