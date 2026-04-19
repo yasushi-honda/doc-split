@@ -90,10 +90,15 @@ describe('ocrProcessor aggregate caller wrapper contract (#293 + #297)', () => {
       /source\s*:\s*['"]ocr['"]/,
       'catch 内 safeLogError に source: "ocr" が含まれない',
     );
-    // 命名規則: 既存 `:aggregateCap` (正常系 truncation summary) と区別する `:aggregateCap:invariant` suffix。
+    // 命名規則: 既存 `:aggregateCap` (正常系 truncation summary) と区別する suffix。
+    // 既知 invariant は `:aggregateCap:invariant`、予期外エラーは `:aggregateCap:unexpected` に分類。
     expect(catchBlock).to.match(
-      /functionName\s*:[\s\S]*?aggregateCap:invariant/,
-      'catch 内 safeLogError の functionName が :aggregateCap:invariant suffix を含まない — 正常系と区別不能',
+      /aggregateCap:invariant/,
+      'catch 内 safeLogError の functionName に :aggregateCap:invariant suffix が現れない — 既知 invariant triage 不能',
+    );
+    expect(catchBlock).to.match(
+      /aggregateCap:unexpected/,
+      'catch 内 safeLogError の functionName に :aggregateCap:unexpected suffix が現れない — 予期外エラーが既知 invariant と混線',
     );
     expect(catchBlock).to.match(
       /documentId\s*:\s*docId/,

@@ -117,8 +117,8 @@ describe('textCap pendingLogs drain contract (#297 + #293)', () => {
   it('pendingLogs 未渡し時の fallback (void 形) が存在する (後方互換維持)', () => {
     const helperBody = extractHelperFunctionBody(source);
     const prodBranch = extractProdBranch(helperBody);
-    // `void logPromise;` または else 分岐で void 形を許容。
-    // push 呼出のない caller に対して promise が silent に leak しないための after-guard。
+    // legacy caller (pendingLogs 未渡し) では intentionally fire-and-forget を維持する。
+    // `void logPromise;` は完了保証ではなく「意図的に discard」を明示するマーカー。
     expect(prodBranch).to.match(
       /\bvoid\s+\w+\s*;?/,
       'pendingLogs 未渡し時の void fallback が見つからない — 後方互換が壊れている可能性',

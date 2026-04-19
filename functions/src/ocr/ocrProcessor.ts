@@ -163,8 +163,13 @@ export async function processDocument(
     });
   } catch (err) {
     const baseError = err instanceof Error ? err : new Error(String(err));
+    // catch boundary は広いため、既知 invariant (textCap.ts handleAggregateInvariantViolation 由来) と
+    // 予期外エラー (TypeError 等の実装バグ) を suffix で分類して triage を容易にする。
+    const isKnownInvariant = baseError.message.startsWith(
+      'capPageResultsAggregate invariant violation:',
+    );
+    const suffix = isKnownInvariant ? 'aggregateCap:invariant' : 'aggregateCap:unexpected';
     // errors collection triage 文脈: pages 件数と合計 chars を message に含めて原因特定を容易に。
-    // functionName suffix は既存 `:aggregateCap` (正常系 truncation) と区別する `:aggregateCap:invariant`。
     const enriched = new Error(
       `${baseError.message} (pages=${pageResults.length}, totalChars=${beforeAggregateChars})`,
     );
@@ -172,7 +177,7 @@ export async function processDocument(
     await safeLogError({
       error: enriched,
       source: 'ocr',
-      functionName: `${functionName}:aggregateCap:invariant`,
+      functionName: `${functionName}:${suffix}`,
       documentId: docId,
     });
   }
