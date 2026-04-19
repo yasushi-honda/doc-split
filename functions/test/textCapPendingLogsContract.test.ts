@@ -1,6 +1,6 @@
 /**
  * textCap handleAggregateInvariantViolation の pendingLogs drain 対応契約テスト
- * (Issue #297 Codex HIGH + #293 統合対応, 2026-04-20 session19)
+ * (Issue #297 + #293 統合対応)
  *
  * 目的: `void safeLogError(...)` fire-and-forget を `context.pendingLogs` array に push する
  * 形へ変更した回帰を grep-based で防止する。caller (ocrProcessor.ts) が
@@ -12,9 +12,9 @@
  *   1. safeLogError の戻り値を変数束縛 (fire-and-forget `void` 直叩きではない)
  *   2. context?.pendingLogs への push 呼出が存在
  *   3. pendingLogs 未渡し時の fallback (void logPromise or ?.push 形) で後方互換維持
- * を grep 検証する。Phase 1 (#276) / #283 / #288 item 6 と同一手法。
+ * を grep 検証する。
  *
- * #299 (Phase 4) で動的 safeLogError invocation test により runtime 挙動と二段 lock-in 予定。
+ * 動的 safeLogError invocation test は Issue #299 で追加予定。
  */
 
 import { expect } from 'chai';

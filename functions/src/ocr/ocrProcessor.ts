@@ -162,17 +162,34 @@ export async function processDocument(
       pendingLogs: pendingInvariantLogs,
     });
   } catch (err) {
+    const baseError = err instanceof Error ? err : new Error(String(err));
+    // errors collection triage 文脈: pages 件数と合計 chars を message に含めて原因特定を容易に。
     // functionName suffix は既存 `:aggregateCap` (正常系 truncation) と区別する `:aggregateCap:invariant`。
+    const enriched = new Error(
+      `${baseError.message} (pages=${pageResults.length}, totalChars=${beforeAggregateChars})`,
+    );
+    if (baseError.stack) enriched.stack = baseError.stack;
     await safeLogError({
-      error: err instanceof Error ? err : new Error(String(err)),
+      error: enriched,
       source: 'ocr',
       functionName: `${functionName}:aggregateCap:invariant`,
       documentId: docId,
     });
   }
   // #297: invariant violation の safeLogError Firestore 書込を Cloud Functions handler 終了前に flush。
+  // safeLogError 自体は reject しない設計 (errorLogger.ts:141-151) だが、将来 reject 経路が
+  // 追加された場合に silent にならないよう rejected 件数を防御的に監視する。
   if (pendingInvariantLogs.length > 0) {
-    await Promise.allSettled(pendingInvariantLogs);
+    const settled = await Promise.allSettled(pendingInvariantLogs);
+    const rejected = settled.filter(
+      (r): r is PromiseRejectedResult => r.status === 'rejected',
+    );
+    if (rejected.length > 0) {
+      console.error(
+        `[ocrProcessor] ${rejected.length}/${settled.length} invariant log(s) rejected for doc ${docId}:`,
+        rejected.map((r) => r.reason),
+      );
+    }
   }
   const afterAggregateChars = pageResults.reduce((sum, p) => sum + p.text.length, 0);
   if (afterAggregateChars < beforeAggregateChars) {

@@ -1,6 +1,6 @@
 /**
  * ocrProcessor aggregate caller try/catch + pendingLogs drain 契約テスト
- * (Issue #293 silent-failure-hunter S2 + #297 Codex HIGH, 2026-04-20 session19)
+ * (Issue #293 + #297 統合対応)
  *
  * 目的: processDocument 内 capPageResultsAggregate 呼出周辺に:
  *   1. try/catch で dev invariant throw を捕捉 → safeLogError で errors collection 記録
@@ -11,9 +11,9 @@
  * 方式選定:
  * ocrProcessor.ts のソース全体から capPageResultsAggregate 呼出周辺ブロック
  * (try { ... } catch { ... } ... Promise.allSettled) を抽出し、必須要素の存在を
- * grep で検証する。Phase 1 (#276) / #283 / #288 item 6 と同一手法。
+ * grep で検証する。
  *
- * #299 (Phase 4) で動的 runtime test により caller の throw 捕捉挙動を二段 lock-in 予定。
+ * 動的 runtime test による caller throw 捕捉挙動の verify は Issue #299 で追加予定。
  */
 
 import { expect } from 'chai';
