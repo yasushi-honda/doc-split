@@ -528,6 +528,84 @@ describe('textCap', () => {
         expect(pendingLogs.length).to.equal(0);
       });
     });
+
+    // #294: mixed-input ([valid, invalid, valid]) で assert が正しい位置で fire することを検証。
+    // silent failure (invalid 要素が prod で silent に通過する regression) と
+    // 継続保証 (prod では全要素 return、caller 側 pass-through が成立) の二段 lock-in。
+    describe('mixed-input invariant 挙動 (#294)', () => {
+      it('mixed-input [valid, invalid, valid] で dev 環境は invariant violation で throw する', () => {
+        const pages: SummaryField[] = [
+          { text: 'valid1', truncated: false },
+          {
+            text: 'invalid',
+            truncated: false,
+            originalLength: 999,
+          } as unknown as SummaryField,
+          { text: 'valid2', truncated: false },
+        ];
+        expect(() => capPageResultsAggregate(pages)).to.throw(/invariant violation/);
+      });
+
+      it('mixed-input prod 環境では全ページを return し invalid 要素は pass-through (AC-5 継続保証)', () => {
+        const originalEnv = process.env.NODE_ENV;
+        process.env.NODE_ENV = 'production';
+        try {
+          const pages: SummaryField[] = [
+            { text: 'valid1', truncated: false },
+            {
+              text: 'invalid',
+              truncated: false,
+              originalLength: 999,
+            } as unknown as SummaryField,
+            { text: 'valid2', truncated: false },
+          ];
+          const result = capPageResultsAggregate(pages);
+          expect(result).to.have.length(3);
+          expect(result[0]?.text).to.equal('valid1');
+          expect(result[2]?.text).to.equal('valid2');
+        } finally {
+          // NODE_ENV が元々 undefined の場合 `= undefined` は "undefined" 文字列化する ため delete で完全復元。
+          if (originalEnv === undefined) delete process.env.NODE_ENV;
+          else process.env.NODE_ENV = originalEnv;
+        }
+      });
+
+      it('mixed-input prod で errorLogger require 失敗時は push 0 件 + console.error fallback (unit test 環境)', () => {
+        // 本 unit test 環境 (mocha + ts-node、admin 未初期化) では errorLogger の top-level
+        // `admin.firestore()` が FirebaseAppError を throw → `require('./errorLogger')` が
+        // textCap.ts:131 の catch (loadErr) に落ちて console.error fallback する。
+        // push 経路は走らないため pendingLogs.length === 0 が決定論的。
+        // 実運用 (admin 初期化済み) での push 2 件動作検証は Issue #299 で担保予定。
+        const originalEnv = process.env.NODE_ENV;
+        process.env.NODE_ENV = 'production';
+        try {
+          const pages: SummaryField[] = [
+            { text: 'valid1', truncated: false },
+            {
+              text: 'invalid1',
+              truncated: false,
+              originalLength: 111,
+            } as unknown as SummaryField,
+            { text: 'valid2', truncated: false },
+            {
+              text: 'invalid2',
+              truncated: false,
+              originalLength: 222,
+            } as unknown as SummaryField,
+          ];
+          const pendingLogs: Promise<void>[] = [];
+          const result = capPageResultsAggregate(pages, {
+            documentId: 'mixed-doc',
+            pendingLogs,
+          });
+          expect(result).to.have.length(4);
+          expect(pendingLogs.length).to.equal(0);
+        } finally {
+          if (originalEnv === undefined) delete process.env.NODE_ENV;
+          else process.env.NODE_ENV = originalEnv;
+        }
+      });
+    });
   });
 
   describe('MAX_SUMMARY_LENGTH (Issue #209)', () => {
