@@ -71,66 +71,123 @@ function stripSummaryFields<T extends SummaryField>(
 }
 
 /**
+ * 戻り値 1 要素の型。caller T の meta 部 (Omit で SummaryField フィールドを除去) と
+ * SummaryField union を合成したもの。#284 で `as T` cast を排除するために導入。
+ */
+export type CappedAggregatePage<T extends SummaryField> =
+  Omit<T, 'text' | 'truncated' | 'originalLength'> & SummaryField;
+
+/**
+ * dev-assert: capPageResultsAggregate の戻り値 1 要素が SummaryField discriminated union の
+ * 不変条件を満たしているか runtime 検証する (production no-op)。
+ *
+ * - truncated は boolean
+ * - text は string
+ * - truncated=true ⟹ originalLength は number
+ * - truncated=false ⟹ originalLength キーが存在しない (undefined でなく絶対欠落)
+ *
+ * caller が narrow 型 T を渡し、コード変更で discriminated union 契約を破った場合の早期検知。
+ * capPageText L39-43 の dev-assert と対 (#284 Option B)。引数を unknown にし runtime 型 guard で
+ * narrowing することで、戻り値型が厳格になっても追加 cast 不要にしている。
+ */
+function assertAggregatePageInvariant(page: unknown): void {
+  if (process.env.NODE_ENV === 'production') return;
+  if (typeof page !== 'object' || page === null) {
+    throw new Error('capPageResultsAggregate invariant violation: not an object');
+  }
+  const record = page as Record<string, unknown>;
+  const textOk = typeof record.text === 'string';
+  const truncated = record.truncated;
+  const truncatedOk = typeof truncated === 'boolean';
+  const originalLengthOk =
+    truncated === true
+      ? typeof record.originalLength === 'number'
+      : !('originalLength' in record);
+  if (!textOk || !truncatedOk || !originalLengthOk) {
+    throw new Error(
+      `capPageResultsAggregate invariant violation: text=${typeof record.text} ` +
+        `truncated=${String(truncated)} originalLengthKey=${'originalLength' in record}`,
+    );
+  }
+}
+
+/**
  * ページ配列の合計文字数を MAX_AGGREGATE_PAGE_CHARS 以下に収めるよう切り詰める。
  *
- * #264: generic を `<T extends SummaryField>` に制約することで、caller (PageOcrResult 等) の
+ * #264: generic を `<T extends SummaryField>` に制約することで、caller (RawPageOcrResult 等) の
  * discriminated union 不変条件 (truncated=false ⟹ originalLength 不在) を型レベルで強制。
- * runtime では truncated=false 経路で originalLength を出力しない分岐を明示し、テスト
- * (textCap.test.ts describe 'discriminated union 不変条件 (#264)') で lock-in する。
+ * #284: 戻り値型を `CappedAggregatePage<T>[]` = `Omit<T,...SummaryField keys> & SummaryField` に
+ * 変更し、`as T` cast を排除した。narrow 型 T (truncated=true 固定等) を渡しても、戻り値は
+ * SummaryField フル union に戻るため静的型が正しく mismatch を検知できる (silent 契約違反を防止)。
+ * runtime では truncated=false 経路で originalLength を出力しない分岐を明示し、`assertAggregate
+ * PageInvariant` で dev 環境のみ runtime 検証 (production no-op、capPageText と同パターン)。
  * `stripSummaryFields` で meta 部を抽出後、truncated=false/true を明示分岐して SummaryField
  * を再構築する。
- *
- * T は `SummaryField` フル union を期待する。narrow された T (例: truncated=true 固定型) を
- * 渡すと、cap 結果が truncated=false になる経路で型契約違反になるため、caller は union 型を保つこと。
  */
-export function capPageResultsAggregate<T extends SummaryField>(pages: T[]): T[] {
+export function capPageResultsAggregate<T extends SummaryField>(
+  pages: T[],
+): Array<CappedAggregatePage<T>> {
   let runningTotal = 0;
   return pages.map((page) => {
     const remaining = Math.max(0, MAX_AGGREGATE_PAGE_CHARS - runningTotal);
     const perPageBudget = Math.min(MAX_PAGE_TEXT_LENGTH, remaining);
 
+    // short path / cap path / isTruncated 再構築 の 3 分岐で計算した rebuild 結果を 1 箇所に
+    // 集約し、map 末尾で 1 回だけ dev-assert を呼ぶ (分岐追加時の assert 漏れを防止、
+    // evaluator MEDIUM + code-quality 指摘対応)。short path でも invariant を検証することで、
+    // Firestore 旧データ由来の `originalLength` 混入 (truncated=false なのに残存) を dev 環境で
+    // 早期検知できる。
+    let rebuilt: CappedAggregatePage<T>;
+
     if (page.text.length <= perPageBudget && !page.truncated) {
       runningTotal += page.text.length;
-      return page;
+      // short path: 入力 T が (truncated=false かつ budget 内) を満たす場合、T は structurally
+      // `Omit<T, SummaryField keys> & {text, truncated:false}` → CappedAggregatePage<T> に
+      // 無変換で代入可能。dev-assert は関数末尾で適用される。
+      rebuilt = page;
+    } else {
+      const capped = capPageText(page.text, perPageBudget);
+      runningTotal += capped.text.length;
+
+      const meta = stripSummaryFields(page);
+      // input が既に truncated=true だった場合は常に truncated=true を保持する (情報保存)。
+      // capped.truncated のみで分岐すると、input.truncated=true だが text が既に cap 内のケースで
+      // truncated=false + originalLength 消失という regression が発生する。
+      const isTruncated = page.truncated || capped.truncated;
+
+      // #283: 実テキスト長さが縮んだ時のみ per-page 粒度で警告。
+      // - 新規 truncation (input truncated=false → capped truncated=true) は検知対象
+      // - 既 truncated=true 入力でも aggregate budget でさらに短縮された場合は検知対象 (真の追加データロス)
+      // - 同じ長さで返る idempotent 再 cap (text.length 不変) は重複アラート抑制
+      // ocrProcessor 側の aggregate サマリ safeLogError (#283 Option B) と二段で観測性を確保。
+      if (capped.text.length < page.text.length) {
+        console.warn(
+          `[textCap] aggregate cap truncated page: ${page.text.length} → ${capped.text.length} chars (runningTotal=${runningTotal})`,
+        );
+      }
+
+      if (isTruncated) {
+        // 再 cap 時は元の originalLength を優先保持 (idempotent + 過去情報保存)。
+        // page.truncated=false の場合、text 未切り詰めなので text.length が原本の長さ。
+        const originalFromPage = page.truncated ? page.originalLength : page.text.length;
+        const cappedOriginal = capped.truncated ? capped.originalLength : capped.text.length;
+        rebuilt = {
+          ...meta,
+          text: capped.text,
+          truncated: true,
+          originalLength: Math.max(originalFromPage, cappedOriginal),
+        };
+      } else {
+        // 意図的に originalLength 省略 (stripSummaryFields で除去済み、SummaryField 不変条件維持)
+        rebuilt = {
+          ...meta,
+          text: capped.text,
+          truncated: false,
+        };
+      }
     }
 
-    const capped = capPageText(page.text, perPageBudget);
-    runningTotal += capped.text.length;
-
-    const meta = stripSummaryFields(page);
-    // input が既に truncated=true だった場合は常に truncated=true を保持する (情報保存)。
-    // capped.truncated のみで分岐すると、input.truncated=true だが text が既に cap 内のケースで
-    // truncated=false + originalLength 消失という regression が発生する。
-    const isTruncated = page.truncated || capped.truncated;
-
-    // #283: 実テキスト長さが縮んだ時のみ per-page 粒度で警告。
-    // - 新規 truncation (input truncated=false → capped truncated=true) は検知対象
-    // - 既 truncated=true 入力でも aggregate budget でさらに短縮された場合は検知対象 (真の追加データロス)
-    // - 同じ長さで返る idempotent 再 cap (text.length 不変) は重複アラート抑制
-    // ocrProcessor 側の aggregate サマリ safeLogError (#283 Option B) と二段で観測性を確保。
-    if (capped.text.length < page.text.length) {
-      console.warn(
-        `[textCap] aggregate cap truncated page: ${page.text.length} → ${capped.text.length} chars (runningTotal=${runningTotal})`
-      );
-    }
-
-    if (isTruncated) {
-      // 再 cap 時は元の originalLength を優先保持 (idempotent + 過去情報保存)。
-      // page.truncated=false の場合、text 未切り詰めなので text.length が原本の長さ。
-      const originalFromPage = page.truncated ? page.originalLength : page.text.length;
-      const cappedOriginal = capped.truncated ? capped.originalLength : capped.text.length;
-      return {
-        ...meta,
-        text: capped.text,
-        truncated: true,
-        originalLength: Math.max(originalFromPage, cappedOriginal),
-      } as T;  // narrow 型 T (truncated=false 固定等) を渡すと runtime 契約違反 — caller は union を保つこと
-    }
-    // 意図的に originalLength 省略 (stripSummaryFields で除去済み、SummaryField 不変条件維持)
-    return {
-      ...meta,
-      text: capped.text,
-      truncated: false,
-    } as T;  // narrow 型 T (truncated=true 固定等) を渡すと runtime 契約違反 — caller は union を保つこと
+    assertAggregatePageInvariant(rebuilt);
+    return rebuilt;
   });
 }

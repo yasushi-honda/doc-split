@@ -376,6 +376,46 @@ describe('textCap', () => {
         expect(result[1]?.outputTokens).to.equal(60);
       });
     });
+
+    // #284: aggregate cap path でも capPageText L39 と同等の dev-assert を設置。
+    // production は no-op (process.env.NODE_ENV === 'production' で early return)。
+    // 型契約 (SummaryField discriminated union) を破った入力を dev 環境で早期検知する。
+    describe('dev-assert (#284)', () => {
+      it('正常な short-path 入力では throw しない', () => {
+        const pages: SummaryField[] = [
+          { text: 'short', truncated: false },
+          { text: 'also-short', truncated: false },
+        ];
+        expect(() => capPageResultsAggregate(pages)).to.not.throw();
+      });
+
+      it('short-path で originalLength が混入した不正入力は dev 環境で throw する (evaluator LOW 指摘対応)', () => {
+        // Firestore 旧データから truncated=false なのに originalLength が残存した状態を simulate。
+        // SummaryField 型契約ではあり得ないが `as unknown as` で bypass し、dev-assert が
+        // 実際に invariant violation を検知することを lock-in する。
+        const invalidPage = {
+          text: 'short',
+          truncated: false,
+          originalLength: 999_999,
+        } as unknown as SummaryField;
+        expect(() => capPageResultsAggregate([invalidPage])).to.throw(/invariant violation/);
+      });
+
+      it('production では dev-assert が no-op (invalid 入力でも throw しない)', () => {
+        const original = process.env.NODE_ENV;
+        process.env.NODE_ENV = 'production';
+        try {
+          const invalidPage = {
+            text: 'short',
+            truncated: false,
+            originalLength: 999_999,
+          } as unknown as SummaryField;
+          expect(() => capPageResultsAggregate([invalidPage])).to.not.throw();
+        } finally {
+          process.env.NODE_ENV = original;
+        }
+      });
+    });
   });
 
   describe('MAX_SUMMARY_LENGTH (Issue #209)', () => {

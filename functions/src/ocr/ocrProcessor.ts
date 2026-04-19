@@ -27,11 +27,13 @@ import {
   capPageResultsAggregate,
 } from '../utils/textCap';
 import type { SummaryField } from '../../../shared/types';
-import { buildPageResult, type PageOcrResult } from './buildPageResult';
+import { buildPageResult, type RawPageOcrResult } from './buildPageResult';
 
-// #267: buildPageResult / PageOcrResult 型は ./buildPageResult モジュールに移設。
-// ここでは re-export のみ行い、既存の import パス互換性を維持する。
-export { buildPageResult, type PageOcrResult };
+// #267: buildPageResult / 型は ./buildPageResult モジュールに移設。
+// #278: 型名 PageOcrResult → RawPageOcrResult にリネーム (shared/types.ts の post-processed
+// PageOcrResult との 3 重定義衝突を解消)。ocrProcessor からは re-export のみ行い、import の
+// 入口を 1 つに保つ。
+export { buildPageResult, type RawPageOcrResult };
 
 const db = admin.firestore();
 const storage = admin.storage();
@@ -115,7 +117,7 @@ export async function processDocument(
   );
   const mimeType = docData.mimeType as string;
 
-  let pageResults: PageOcrResult[] = [];
+  let pageResults: RawPageOcrResult[] = [];
   let totalPages = 1;
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
