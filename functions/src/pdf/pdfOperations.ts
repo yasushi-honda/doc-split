@@ -29,7 +29,15 @@ const storage = admin.storage();
 // 分割候補検出（Phase 6D: pdfAnalyzer統合）
 // ============================================
 
-interface PageOcrResult {
+/**
+ * 分割候補検出用のページ情報 (Issue #278 で PageOcrResult から SplitPageInput にリネーム)
+ *
+ * 旧名 PageOcrResult は shared/types.ts の PageOcrResult (PageOcrMeta & SummaryField) および
+ * functions/src/ocr/buildPageResult.ts の RawPageOcrResult と structurally incompatible な
+ * 3 重定義を形成していた。本 interface は Firestore `documents/{id}.pageResults` を
+ * detectSplitPoints が読み出す際の minimum subset で、独自の shape として独立性を明示する。
+ */
+interface SplitPageInput {
   pageNumber: number;
   text: string;
   detectedDocumentType: string | null;
@@ -73,7 +81,7 @@ export const detectSplitPoints = onCall(
     }
 
     const docData = docSnapshot.data()!;
-    const pageResults: PageOcrResult[] = docData.pageResults || [];
+    const pageResults: SplitPageInput[] = docData.pageResults || [];
     console.log(`pageResults count: ${pageResults.length}`);
 
     if (pageResults.length === 0) {
@@ -350,7 +358,7 @@ export const splitPdf = onCall(
 
       // 分割後のページ結果を抽出
       const segmentPageResults = (docData.pageResults || []).filter(
-        (p: PageOcrResult) => p.pageNumber >= startPage && p.pageNumber <= endPage
+        (p: SplitPageInput) => p.pageNumber >= startPage && p.pageNumber <= endPage
       );
 
       // ocrExtractionスナップショットを構築
@@ -420,7 +428,7 @@ export const splitPdf = onCall(
         // OCR抽出スナップショット
         ocrExtraction,
         // ページ結果（再OCR不要にするため保存）
-        pageResults: segmentPageResults.map((p: PageOcrResult, index: number) => ({
+        pageResults: segmentPageResults.map((p: SplitPageInput, index: number) => ({
           ...p,
           pageNumber: index + 1, // 分割後の新しいページ番号
           originalPageNumber: p.pageNumber, // 元のページ番号
@@ -617,7 +625,7 @@ function sanitize(str: string): string {
 }
 
 function extractOcrResultForPages(
-  pageResults: PageOcrResult[],
+  pageResults: SplitPageInput[],
   startPage: number,
   endPage: number
 ): string {
