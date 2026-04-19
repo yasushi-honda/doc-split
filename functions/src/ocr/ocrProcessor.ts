@@ -149,7 +149,8 @@ export async function processDocument(
 
   // aggregate cap (Issue #205): per-page後にも合計サイズで二段防御。
   const beforeAggregateChars = pageResults.reduce((sum, p) => sum + p.text.length, 0);
-  pageResults = capPageResultsAggregate(pageResults);
+  // #288 item 6: invariant violation 発生時の errors collection triage のため docId を伝搬。
+  pageResults = capPageResultsAggregate(pageResults, { documentId: docId });
   const afterAggregateChars = pageResults.reduce((sum, p) => sum + p.text.length, 0);
   if (afterAggregateChars < beforeAggregateChars) {
     // #283: 集約サマリの observability を console.warn → safeLogError に格上げ。

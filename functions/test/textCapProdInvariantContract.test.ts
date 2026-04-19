@@ -53,8 +53,8 @@ function extractAssertFunctionBody(source: string): string {
 }
 
 /**
- * handleAggregateInvariantViolation helper 関数本体を抽出する (#288 item 6 で導入予定)。
- * 実装で helper 分離した場合、prod 分岐はこちらに移る想定。存在しない場合は空文字を返す。
+ * handleAggregateInvariantViolation helper 関数本体を抽出する (#288 item 6 で導入)。
+ * 実装で helper 分離した場合、prod 分岐はこちらに移る。存在しない場合は空文字を返す。
  */
 function extractHelperFunctionBody(source: string): string {
   const ANCHOR = /function\s+handleAggregateInvariantViolation\s*\([^)]*\)\s*:\s*void\s*\{/;
@@ -203,6 +203,30 @@ describe('textCap prod invariant observability contract (#288 item 6)', () => {
     expect(combined).to.match(
       /\bthrow\s+new\s+Error\b/,
       'dev throw が消滅 — 既存 #284 契約が壊れている',
+    );
+  });
+
+  // Codex second opinion (MED): helper が残ったまま assert が silent return に回帰する
+  // パターンを検知するため、assert 本体からの helper 呼出を grep で lock-in。
+  it('assertAggregatePageInvariant 本体から handleAggregateInvariantViolation が呼ばれる', () => {
+    const assertBody = extractAssertFunctionBody(source);
+    expect(assertBody).to.match(
+      /\bhandleAggregateInvariantViolation\s*\(/,
+      'assert 本体から helper 呼出が消失 — silent return 回帰の可能性',
+    );
+  });
+
+  // silent-failure-hunter S2 + Codex MED: errors collection triage のため documentId 伝搬を
+  // lock-in。context?.documentId または documentId キー自体の存在を検証する。
+  it('prod 分岐の safeLogError 引数に documentId が含まれる (triage 伝搬)', () => {
+    const assertBody = extractAssertFunctionBody(source);
+    const helperBody = extractHelperFunctionBody(source);
+    const searchScope = helperBody || assertBody;
+    const prodBranch = extractProdBranch(searchScope);
+    const args = extractSafeLogErrorArgs(prodBranch);
+    expect(args).to.match(
+      /\bdocumentId\b/,
+      'safeLogError 引数に documentId が含まれない — 違反 document の特定不可',
     );
   });
 });
