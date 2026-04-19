@@ -69,6 +69,69 @@ describe('buildPageResult (#267)', () => {
     });
   });
 
+  // #279: buildPageResult は truncate 時に console.warn で observability 信号を出す。
+  // structured logger 差し替え時の silent failure 防御として、副作用を明示的に lock-in する。
+  // textCap.test.ts の `withWarnSpy` と同方式 (sinon 依存を新規追加しない polyfill)。
+  describe('console.warn 副作用 (#279)', () => {
+    /** console.warn を一時的に差し替えて呼出を捕捉するヘルパ */
+    function withWarnSpy<T>(fn: () => T): { calls: unknown[][]; result: T } {
+      const original = console.warn;
+      const calls: unknown[][] = [];
+      console.warn = (...args: unknown[]) => {
+        calls.push(args);
+      };
+      try {
+        const result = fn();
+        return { calls, result };
+      } finally {
+        console.warn = original;
+      }
+    }
+
+    it('truncated=true 時に console.warn が 1 回だけ呼ばれる', () => {
+      const longText = 'y'.repeat(MAX_PAGE_TEXT_LENGTH + 500);
+      const { calls, result } = withWarnSpy(() =>
+        buildPageResult(
+          { text: longText, inputTokens: 1, outputTokens: 1 },
+          2,
+          'Page 2/7',
+        ),
+      );
+      expect(result.truncated).to.equal(true);
+      expect(calls.length).to.equal(1);
+    });
+
+    it('warn メッセージに label / originalLength / cap 値が含まれる', () => {
+      const longText = 'z'.repeat(MAX_PAGE_TEXT_LENGTH + 777);
+      const { calls } = withWarnSpy(() =>
+        buildPageResult(
+          { text: longText, inputTokens: 1, outputTokens: 1 },
+          3,
+          'Page 3/9',
+        ),
+      );
+      expect(calls.length).to.equal(1);
+      const message = String(calls[0]?.[0] ?? '');
+      // 将来のフォーマット変更耐性のため、core 要素の存在のみ verify (厳密一致ではなく正規表現)
+      expect(message).to.match(/Page 3\/9/);
+      expect(message).to.include(String(MAX_PAGE_TEXT_LENGTH + 777));
+      expect(message).to.include(String(MAX_PAGE_TEXT_LENGTH));
+      expect(message).to.match(/truncat/i);
+    });
+
+    it('truncated=false 時は console.warn が呼ばれない', () => {
+      const { calls, result } = withWarnSpy(() =>
+        buildPageResult(
+          { text: 'short body', inputTokens: 1, outputTokens: 1 },
+          1,
+          'Page 1/1',
+        ),
+      );
+      expect(result.truncated).to.equal(false);
+      expect(calls.length).to.equal(0);
+    });
+  });
+
   describe('境界値 (MAX_PAGE_TEXT_LENGTH 前後)', () => {
     it('text.length === MAX_PAGE_TEXT_LENGTH で truncated=false を返す', () => {
       const exactText = 'x'.repeat(MAX_PAGE_TEXT_LENGTH);
