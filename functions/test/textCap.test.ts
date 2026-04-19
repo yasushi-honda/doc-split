@@ -476,6 +476,57 @@ describe('textCap', () => {
         const pages: SummaryField[] = [{ text: 'short', truncated: false }];
         expect(() => capPageResultsAggregate(pages, { documentId: 'doc-123' })).to.not.throw();
       });
+
+      // #297 Codex HIGH + #293: context.pendingLogs 渡し signature 拡張。fire-and-forget 廃止対応。
+      // prod 分岐で handleAggregateInvariantViolation が pendingLogs array に Promise を push する
+      // 経路と、caller が await drain 可能になる後方互換 signature を lock-in する。
+      // push 本体の動的検証は environment/require 依存が大きいため #299 + grep contract に委譲し、
+      // 本ブロックは signature/throw 挙動の最小 runtime 契約のみ保持する。
+      it('context.pendingLogs を受け取り throw しない (signature 互換)', () => {
+        const pages: SummaryField[] = [{ text: 'short', truncated: false }];
+        const pendingLogs: Promise<void>[] = [];
+        expect(() =>
+          capPageResultsAggregate(pages, { documentId: 'doc-456', pendingLogs }),
+        ).to.not.throw();
+      });
+
+      it('prod 環境 + invalid 入力 + pendingLogs 渡しで throw しない (#297 drain 経路)', () => {
+        const original = process.env.NODE_ENV;
+        process.env.NODE_ENV = 'production';
+        try {
+          const invalidPage = {
+            text: 'short',
+            truncated: false,
+            originalLength: 999_999,
+          } as unknown as SummaryField;
+          const pendingLogs: Promise<void>[] = [];
+          expect(() =>
+            capPageResultsAggregate([invalidPage], {
+              documentId: 'doc-789',
+              pendingLogs,
+            }),
+          ).to.not.throw();
+        } finally {
+          process.env.NODE_ENV = original;
+        }
+      });
+
+      it('dev 環境 + invalid 入力 + pendingLogs 渡しでも従来通り throw する (#284 契約維持)', () => {
+        const invalidPage = {
+          text: 'short',
+          truncated: false,
+          originalLength: 999_999,
+        } as unknown as SummaryField;
+        const pendingLogs: Promise<void>[] = [];
+        expect(() =>
+          capPageResultsAggregate([invalidPage], {
+            documentId: 'doc-dev',
+            pendingLogs,
+          }),
+        ).to.throw(/invariant violation/);
+        // dev 分岐は throw のみで push せず (prod 分岐専用) — pendingLogs は空のまま。
+        expect(pendingLogs.length).to.equal(0);
+      });
     });
   });
 

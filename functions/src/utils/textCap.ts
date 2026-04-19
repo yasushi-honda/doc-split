@@ -81,9 +81,16 @@ export type CappedAggregatePage<T extends SummaryField> =
  * capPageResultsAggregate の observability context。
  * documentId を caller から伝搬させ、errors collection の triage を可能にする
  * (#288 item 6 + silent-failure-hunter/Codex S2 指摘対応)。
+ *
+ * #297 (Codex HIGH): prod 分岐の `safeLogError` fire-and-forget は Cloud Functions handler
+ * Promise 解決後の未 await async work を完了保証しない。caller が `pendingLogs` mutable array
+ * を渡すと、`handleAggregateInvariantViolation` が Promise を push し、caller 側で
+ * `await Promise.allSettled(pendingLogs)` による drain で flush 可能になる。
+ * 未渡しの場合は従来通り fire-and-forget（既存 caller への後方互換維持）。
  */
 export interface AggregateInvariantContext {
   documentId?: string;
+  pendingLogs?: Promise<void>[];
 }
 
 /**
@@ -106,12 +113,18 @@ function handleAggregateInvariantViolation(
     try {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const { safeLogError } = require('./errorLogger') as typeof import('./errorLogger');
-      void safeLogError({
+      const logPromise = safeLogError({
         error: new Error(message),
         source: 'ocr',
         functionName: 'capPageResultsAggregate',
         documentId: context?.documentId,
       });
+      if (context?.pendingLogs) {
+        context.pendingLogs.push(logPromise);
+      } else {
+        // 後方互換 fallback: pendingLogs 未渡し caller には従来通り fire-and-forget を維持する。
+        void logPromise;
+      }
     } catch (loadErr) {
       console.error(
         '[textCap] failed to load errorLogger for prod invariant report:',

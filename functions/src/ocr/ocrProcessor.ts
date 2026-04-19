@@ -149,8 +149,31 @@ export async function processDocument(
 
   // aggregate cap (Issue #205): per-page後にも合計サイズで二段防御。
   const beforeAggregateChars = pageResults.reduce((sum, p) => sum + p.text.length, 0);
-  // #288 item 6: invariant violation 発生時の errors collection triage のため docId を伝搬。
-  pageResults = capPageResultsAggregate(pageResults, { documentId: docId });
+  // #288 item 6: invariant violation の errors collection triage のため docId を伝搬。
+  // #297 (Codex HIGH): pendingInvariantLogs を渡して fire-and-forget を廃止、後段で drain する。
+  // #293 (silent-failure-hunter S2): dev 環境での invariant throw を caller で捕捉し、
+  //   rules/error-handling.md §1「状態復旧 > ログ記録」に従って他ページ処理を継続する。
+  //   pageResults は cap 前のまま pass-through (per-page cap 適用済で暴走リスクなし)。
+  //   prod 分岐は handleAggregateInvariantViolation 内で safeLogError emit するため throw しない。
+  const pendingInvariantLogs: Promise<void>[] = [];
+  try {
+    pageResults = capPageResultsAggregate(pageResults, {
+      documentId: docId,
+      pendingLogs: pendingInvariantLogs,
+    });
+  } catch (err) {
+    // functionName suffix は既存 `:aggregateCap` (正常系 truncation) と区別する `:aggregateCap:invariant`。
+    await safeLogError({
+      error: err instanceof Error ? err : new Error(String(err)),
+      source: 'ocr',
+      functionName: `${functionName}:aggregateCap:invariant`,
+      documentId: docId,
+    });
+  }
+  // #297: invariant violation の safeLogError Firestore 書込を Cloud Functions handler 終了前に flush。
+  if (pendingInvariantLogs.length > 0) {
+    await Promise.allSettled(pendingInvariantLogs);
+  }
   const afterAggregateChars = pageResults.reduce((sum, p) => sum + p.text.length, 0);
   if (afterAggregateChars < beforeAggregateChars) {
     // #283: 集約サマリの observability を console.warn → safeLogError に格上げ。
