@@ -161,8 +161,13 @@ export function capPageResultsAggregate<T extends SummaryField>(
       // - 同じ長さで返る idempotent 再 cap (text.length 不変) は重複アラート抑制
       // ocrProcessor 側の aggregate サマリ safeLogError (#283 Option B) と二段で観測性を確保。
       if (capped.text.length < page.text.length) {
+        // #288 item 2: pageNumber を message に含めて「どのページで発動したか」を特定可能に。
+        // T が pageNumber を持つ保証はない (SummaryField 自体に pageNumber なし) ため optional 読取り。
+        // 欠落時は `unknown` を出力し、grep/alert の shape を pageNumber 有無で割らない。
+        const pageNumber = (page as { pageNumber?: number }).pageNumber;
+        const pageLabel = typeof pageNumber === 'number' ? pageNumber : 'unknown';
         console.warn(
-          `[textCap] aggregate cap truncated page: ${page.text.length} → ${capped.text.length} chars (runningTotal=${runningTotal})`,
+          `[textCap] aggregate cap truncated page=${pageLabel}: ${page.text.length} → ${capped.text.length} chars (runningTotal=${runningTotal})`,
         );
       }
 

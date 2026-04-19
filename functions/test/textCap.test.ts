@@ -271,6 +271,30 @@ describe('textCap', () => {
         expect(calls.length).to.equal(0);
       });
 
+      // #288 item 2: どのページが truncated されたか特定できるよう pageNumber を warn に含める契約。
+      // pageNumber を持つ型 T (例: RawPageOcrResult) が渡された場合は page=<N> を出力する。
+      it('pageNumber を持つ入力では warn message に page=<N> が含まれる', () => {
+        const pages = [
+          { text: 'a'.repeat(MAX_PAGE_TEXT_LENGTH + 10), truncated: false as const, pageNumber: 7 },
+        ];
+        const { calls } = withWarnSpy(() => capPageResultsAggregate(pages));
+        expect(calls.length).to.be.at.least(1);
+        const firstMessage = String(calls[0]?.[0] ?? '');
+        expect(firstMessage).to.match(/page=7\b/);
+      });
+
+      // #288 item 2: pageNumber を持たない型 T (plain SummaryField 等) が渡された場合は page=unknown を出力。
+      // `(page as { pageNumber?: number }).pageNumber` で optional 読取り、undefined なら unknown fallback。
+      it('pageNumber を持たない入力では warn message に page=unknown が含まれる', () => {
+        const pages: SummaryField[] = [
+          { text: 'a'.repeat(MAX_PAGE_TEXT_LENGTH + 10), truncated: false },
+        ];
+        const { calls } = withWarnSpy(() => capPageResultsAggregate(pages));
+        expect(calls.length).to.be.at.least(1);
+        const firstMessage = String(calls[0]?.[0] ?? '');
+        expect(firstMessage).to.match(/page=unknown\b/);
+      });
+
       // #283 Codex / silent-failure-hunter 指摘対応: truncated=true + budget でさらに短縮される
       // 追加データロスケースを warn で検知する契約。旧実装 `!page.truncated` gate では silent に通過していた。
       it('既 truncated=true でも aggregate budget でさらに短縮される場合は warn が呼ばれる', () => {
