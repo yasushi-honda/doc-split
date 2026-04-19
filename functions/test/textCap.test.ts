@@ -547,7 +547,7 @@ describe('textCap', () => {
       });
 
       it('mixed-input prod 環境では全ページを return し invalid 要素は pass-through (AC-5 継続保証)', () => {
-        const original = process.env.NODE_ENV;
+        const originalEnv = process.env.NODE_ENV;
         process.env.NODE_ENV = 'production';
         try {
           const pages: SummaryField[] = [
@@ -564,12 +564,19 @@ describe('textCap', () => {
           expect(result[0]?.text).to.equal('valid1');
           expect(result[2]?.text).to.equal('valid2');
         } finally {
-          process.env.NODE_ENV = original;
+          // NODE_ENV が元々 undefined の場合 `= undefined` は "undefined" 文字列化する ため delete で完全復元。
+          if (originalEnv === undefined) delete process.env.NODE_ENV;
+          else process.env.NODE_ENV = originalEnv;
         }
       });
 
-      it('mixed-input prod + pendingLogs 渡しで invalid 要素ごとに safeLogError Promise が push される', () => {
-        const original = process.env.NODE_ENV;
+      it('mixed-input prod で errorLogger require 失敗時は push 0 件 + console.error fallback (unit test 環境)', () => {
+        // 本 unit test 環境 (mocha + ts-node、admin 未初期化) では errorLogger の top-level
+        // `admin.firestore()` が FirebaseAppError を throw → `require('./errorLogger')` が
+        // textCap.ts:131 の catch (loadErr) に落ちて console.error fallback する。
+        // push 経路は走らないため pendingLogs.length === 0 が決定論的。
+        // 実運用 (admin 初期化済み) での push 2 件動作検証は Issue #299 で担保予定。
+        const originalEnv = process.env.NODE_ENV;
         process.env.NODE_ENV = 'production';
         try {
           const pages: SummaryField[] = [
@@ -592,11 +599,10 @@ describe('textCap', () => {
             pendingLogs,
           });
           expect(result).to.have.length(4);
-          // errorLogger require 成否により push 本数は環境依存だが、正常系では invalid 要素数 (2)
-          // に応じて push されることを契約として検証。require 失敗環境では 0 件で PASS させる。
-          expect(pendingLogs.length).to.be.oneOf([0, 2]);
+          expect(pendingLogs.length).to.equal(0);
         } finally {
-          process.env.NODE_ENV = original;
+          if (originalEnv === undefined) delete process.env.NODE_ENV;
+          else process.env.NODE_ENV = originalEnv;
         }
       });
     });

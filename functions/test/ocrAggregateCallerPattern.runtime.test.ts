@@ -46,9 +46,14 @@ function makeMixedPages(originalLengths: number[] = [999]): SummaryField[] {
 }
 
 /**
- * caller wrapper の想定シグネチャ (test 用再現)。
- * ocrProcessor.ts:158-186 の try/catch + drain block と意味的に等価。
- * 実装の enriched message 加工 (pages/totalChars 付与) も再現する。
+ * caller wrapper の想定シグネチャ (test 用最小再現、AC-4/AC-5 相当)。
+ * ocrProcessor.ts:158-186 の try/catch + drain block と**主要 semantics のみ**一致:
+ *   - pendingLogs 配列の生成と drain
+ *   - try/catch で dev throw を捕捉、enriched message で safeLogError 呼出
+ *   - invariant/unexpected の suffix 分岐
+ *
+ * 実装側の `Promise.allSettled` 後の rejected 件数 console.error 監視 (ocrProcessor.ts:192-199) は
+ * 本 wrapper では省略。AC-4/AC-5 検証が目的でそこまでの再現は不要 (必要なら個別 test を追加)。
  */
 async function aggregateWithCallerWrapper<T extends SummaryField>(
   pages: T[],
@@ -149,7 +154,7 @@ describe('aggregate caller wrapper runtime pattern (#294)', () => {
 
   describe('prod 環境: caller は throw を受けず pendingLogs drain (#297)', () => {
     it('prod で invalid 混入 → safeLogError spy は catch 経由では呼ばれない (throw しないため)', async () => {
-      const original = process.env.NODE_ENV;
+      const originalEnv = process.env.NODE_ENV;
       process.env.NODE_ENV = 'production';
       const calls: LogErrorParams[] = [];
       const spy = async (p: LogErrorParams): Promise<void> => {
@@ -166,7 +171,9 @@ describe('aggregate caller wrapper runtime pattern (#294)', () => {
         // prod は handleAggregateInvariantViolation 内で emit されるため caller catch は通らない。
         expect(calls).to.have.length(0);
       } finally {
-        process.env.NODE_ENV = original;
+        // NODE_ENV が元々 undefined の場合 `= undefined` は "undefined" 文字列化する ため delete で完全復元。
+        if (originalEnv === undefined) delete process.env.NODE_ENV;
+        else process.env.NODE_ENV = originalEnv;
       }
     });
   });
