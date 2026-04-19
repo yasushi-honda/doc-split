@@ -149,8 +149,53 @@ export async function processDocument(
 
   // aggregate cap (Issue #205): per-page後にも合計サイズで二段防御。
   const beforeAggregateChars = pageResults.reduce((sum, p) => sum + p.text.length, 0);
-  // #288 item 6: invariant violation 発生時の errors collection triage のため docId を伝搬。
-  pageResults = capPageResultsAggregate(pageResults, { documentId: docId });
+  // #288 item 6: invariant violation の errors collection triage のため docId を伝搬。
+  // #297 (Codex HIGH): pendingInvariantLogs を渡して fire-and-forget を廃止、後段で drain する。
+  // #293 (silent-failure-hunter S2): dev 環境での invariant throw を caller で捕捉し、
+  //   rules/error-handling.md §1「状態復旧 > ログ記録」に従って他ページ処理を継続する。
+  //   pageResults は cap 前のまま pass-through (per-page cap 適用済で暴走リスクなし)。
+  //   prod 分岐は handleAggregateInvariantViolation 内で safeLogError emit するため throw しない。
+  const pendingInvariantLogs: Promise<void>[] = [];
+  try {
+    pageResults = capPageResultsAggregate(pageResults, {
+      documentId: docId,
+      pendingLogs: pendingInvariantLogs,
+    });
+  } catch (err) {
+    const baseError = err instanceof Error ? err : new Error(String(err));
+    // catch boundary は広いため、既知 invariant (textCap.ts handleAggregateInvariantViolation 由来) と
+    // 予期外エラー (TypeError 等の実装バグ) を suffix で分類して triage を容易にする。
+    const isKnownInvariant = baseError.message.startsWith(
+      'capPageResultsAggregate invariant violation:',
+    );
+    const suffix = isKnownInvariant ? 'aggregateCap:invariant' : 'aggregateCap:unexpected';
+    // errors collection triage 文脈: pages 件数と合計 chars を message に含めて原因特定を容易に。
+    const enriched = new Error(
+      `${baseError.message} (pages=${pageResults.length}, totalChars=${beforeAggregateChars})`,
+    );
+    if (baseError.stack) enriched.stack = baseError.stack;
+    await safeLogError({
+      error: enriched,
+      source: 'ocr',
+      functionName: `${functionName}:${suffix}`,
+      documentId: docId,
+    });
+  }
+  // #297: invariant violation の safeLogError Firestore 書込を Cloud Functions handler 終了前に flush。
+  // safeLogError 自体は reject しない設計 (errorLogger.ts:141-151) だが、将来 reject 経路が
+  // 追加された場合に silent にならないよう rejected 件数を防御的に監視する。
+  if (pendingInvariantLogs.length > 0) {
+    const settled = await Promise.allSettled(pendingInvariantLogs);
+    const rejected = settled.filter(
+      (r): r is PromiseRejectedResult => r.status === 'rejected',
+    );
+    if (rejected.length > 0) {
+      console.error(
+        `[ocrProcessor] ${rejected.length}/${settled.length} invariant log(s) rejected for doc ${docId}:`,
+        rejected.map((r) => r.reason),
+      );
+    }
+  }
   const afterAggregateChars = pageResults.reduce((sum, p) => sum + p.text.length, 0);
   if (afterAggregateChars < beforeAggregateChars) {
     // #283: 集約サマリの observability を console.warn → safeLogError に格上げ。
