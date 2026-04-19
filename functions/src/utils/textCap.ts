@@ -78,22 +78,66 @@ export type CappedAggregatePage<T extends SummaryField> =
   Omit<T, 'text' | 'truncated' | 'originalLength'> & SummaryField;
 
 /**
- * dev-assert: capPageResultsAggregate の戻り値 1 要素が SummaryField discriminated union の
- * 不変条件を満たしているか runtime 検証する (production no-op)。
+ * capPageResultsAggregate の observability context。
+ * documentId を caller から伝搬させ、errors collection の triage を可能にする
+ * (#288 item 6 + silent-failure-hunter/Codex S2 指摘対応)。
+ */
+export interface AggregateInvariantContext {
+  documentId?: string;
+}
+
+/**
+ * invariant violation 検出時の dev/prod 分岐ハンドラ。
  *
- * - truncated は boolean
- * - text は string
+ * - dev: throw で early fail (#284 契約)
+ * - prod: throw せず safeLogError fire-and-forget で errors collection に記録
+ *   (#288 item 6, PR #290 silent-failure-hunter S1 対応)
+ *
+ * errorLogger は top-level で admin.firestore() を呼ぶため prod path に限定した
+ * dynamic require で unit test (admin 未初期化) への影響を回避 (buildPageResult.ts 方針と整合)。
+ * safeLogError 内部で try/catch 済み (errorLogger.ts:141-151) なので reject せず処理継続。
+ */
+function handleAggregateInvariantViolation(
+  detail: string,
+  context?: AggregateInvariantContext,
+): void {
+  const message = `capPageResultsAggregate invariant violation: ${detail}`;
+  if (process.env.NODE_ENV === 'production') {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { safeLogError } = require('./errorLogger') as typeof import('./errorLogger');
+      void safeLogError({
+        error: new Error(message),
+        source: 'ocr',
+        functionName: 'capPageResultsAggregate',
+        documentId: context?.documentId,
+      });
+    } catch (loadErr) {
+      console.error(
+        '[textCap] failed to load errorLogger for prod invariant report:',
+        loadErr,
+        message,
+      );
+    }
+    return;
+  }
+  throw new Error(message);
+}
+
+/**
+ * dev-assert: capPageResultsAggregate の戻り値 1 要素が SummaryField discriminated union の
+ * 不変条件を満たしているか runtime 検証する (#284 Option B)。
+ *
+ * - truncated は boolean / text は string
  * - truncated=true ⟹ originalLength は number
  * - truncated=false ⟹ originalLength キーが存在しない (undefined でなく絶対欠落)
  *
- * caller が narrow 型 T を渡し、コード変更で discriminated union 契約を破った場合の早期検知。
- * capPageText L39-43 の dev-assert と対 (#284 Option B)。引数を unknown にし runtime 型 guard で
- * narrowing することで、戻り値型が厳格になっても追加 cast 不要にしている。
+ * prod では `handleAggregateInvariantViolation` 経由で safeLogError emit に格上げ (#288 item 6)。
  */
-function assertAggregatePageInvariant(page: unknown): void {
-  if (process.env.NODE_ENV === 'production') return;
+function assertAggregatePageInvariant(page: unknown, context?: AggregateInvariantContext): void {
   if (typeof page !== 'object' || page === null) {
-    throw new Error('capPageResultsAggregate invariant violation: not an object');
+    handleAggregateInvariantViolation('not an object', context);
+    return;
   }
   const record = page as Record<string, unknown>;
   const textOk = typeof record.text === 'string';
@@ -104,9 +148,9 @@ function assertAggregatePageInvariant(page: unknown): void {
       ? typeof record.originalLength === 'number'
       : !('originalLength' in record);
   if (!textOk || !truncatedOk || !originalLengthOk) {
-    throw new Error(
-      `capPageResultsAggregate invariant violation: text=${typeof record.text} ` +
-        `truncated=${String(truncated)} originalLengthKey=${'originalLength' in record}`,
+    handleAggregateInvariantViolation(
+      `text=${typeof record.text} truncated=${String(truncated)} originalLengthKey=${'originalLength' in record}`,
+      context,
     );
   }
 }
@@ -126,6 +170,7 @@ function assertAggregatePageInvariant(page: unknown): void {
  */
 export function capPageResultsAggregate<T extends SummaryField>(
   pages: T[],
+  context?: AggregateInvariantContext,
 ): Array<CappedAggregatePage<T>> {
   let runningTotal = 0;
   return pages.map((page) => {
@@ -192,7 +237,7 @@ export function capPageResultsAggregate<T extends SummaryField>(
       }
     }
 
-    assertAggregatePageInvariant(rebuilt);
+    assertAggregatePageInvariant(rebuilt, context);
     return rebuilt;
   });
 }

@@ -454,7 +454,9 @@ describe('textCap', () => {
         expect(() => capPageResultsAggregate([invalidPage])).to.throw(/invariant violation/);
       });
 
-      it('production では dev-assert が no-op (invalid 入力でも throw しない)', () => {
+      // #288 item 6: prod は throw せず safeLogError emit。実呼出検証は
+      // textCapProdInvariantContract.test.ts (grep) + Phase 3 (動的) で二段 lock-in。
+      it('production では invalid 入力でも throw しない (safeLogError 経由で emit)', () => {
         const original = process.env.NODE_ENV;
         process.env.NODE_ENV = 'production';
         try {
@@ -467,6 +469,12 @@ describe('textCap', () => {
         } finally {
           process.env.NODE_ENV = original;
         }
+      });
+
+      // #288 item 6 silent-failure-hunter S2 + Codex MED: context.documentId 伝搬 signature 拡張。
+      it('context.documentId を受け取り throw しない (signature 互換)', () => {
+        const pages: SummaryField[] = [{ text: 'short', truncated: false }];
+        expect(() => capPageResultsAggregate(pages, { documentId: 'doc-123' })).to.not.throw();
       });
     });
   });
