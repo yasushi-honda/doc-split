@@ -1072,3 +1072,72 @@ CLAUDE.md (#178 教訓チェックリスト) を多層適用、各 PR で Critic
 - **Sprint 6**: テスト補強 (#200) + bug 消化 (#196)
 
 ---
+## ✅ session11 完了サマリー (Phase 1 完遂: #259 直接書込パターン caller 検知)
+
+session10 で完遂した #255 (CappedText discriminated union 化) の follow-up Issue #259 を本セッションで完遂。`/review-pr` 6 並列で検出された Critical 3 + Important 4 を全て同 PR で対応。Suggestion 系は #262 に集約 follow-up 化。
+
+| 順 | フェーズ | 結果 |
+|---|---|---|
+| 1 | **Phase 1 (#259) 着手 — 計画策定** | ✅ `/impl-plan` AC 5 項目定義、案 A (代替パターン併用) 採用 |
+| 2 | **TDD 実装 → /simplify HIGH 2 件即時対応** | ✅ 共通ヘルパー `hasPatternsAdjacent` 抽出 + `\b` word boundary 追加 |
+| 3 | **PR #261 作成 → /review-pr 6 並列** | ✅ Critical 3 / Important 4 / Suggestion 多数 検出 |
+| 4 | **Critical + Important 全 7 件を同 PR で対応** | ✅ commit `e1cfc48` |
+| 5 | **Follow-up #262 起票 + CI SUCCESS → squash merge** | ✅ commit `8ca9da5`、Issue #259 自動クローズ |
+
+### 達成効果 (Phase 1 完遂)
+
+| 効果 | 内容 |
+|---|---|
+| 🛡️ バイパス検知 | `.update()` のみ → `.update/.set/.create` 全 Firestore 書込呼出に拡張。`set({ summary }, { merge: true })` 経路で派生フィールド整合をバイパスする anti-pattern も caller として検知 |
+| 🚨 silent universal-true 防御 | `hasPatternsAdjacent` 空配列で `Array.prototype.every` の vacuous truth により全 source を caller 誤分類する silent failure を明示 throw で阻止 |
+| 🔍 identity 比較 | caller 集計を count → identity (deep.equal sorted) 比較に強化。rename + 別ファイル新規追加で count 維持されたまま identity 乖離する silent drift を検知 |
+| 🧪 lock-in 強化 | 16 fixture テスト (positive 5 / negative 4 / 境界 3 / regression 3 / 防御 2) で grep-based 検知の挙動を多層 lock-in。ADJACENCY_WINDOW_LINES 境界 / OR 合成 / word boundary を全て regression 保護 |
+| 📦 共通化 | `hasPatternsAdjacent(source, ...patterns)` を抽出。3 つ目のコピペ発生前に抑止、将来の追加契約 (#258 等) でも再利用可能 |
+
+### Phase 1 Quality Gate 実施記録
+
+| 段階 | 結果 | 指摘・対応 |
+|---|---|---|
+| `/impl-plan` | ✅ AC 5 項目定義 | 1 ファイル想定 → Evaluator / safe-refactor 不発動 |
+| `/simplify` 3 並列 | Reuse HIGH 1 / Quality HIGH 1 | 共通ヘルパー抽出 + `\b` 追加で即時対応、word boundary lock-in fixture 追加 |
+| `/safe-refactor` | ⏭️ スキップ (test 1 ファイル変更、production code 無変更、3+ 基準未満) | — |
+| **Evaluator 分離** | ⏭️ スキップ (test 1 ファイル変更、5+ 基準未満) | — |
+| `/review-pr` 6 エージェント並列 | Critical 3 / Important 4 / Suggestion 8+ | Critical (set/create バイパス + 空 patterns + identity vs count) + Important (境界 fixture + regression fixture + magic number + コメント 3 箇所) を全て同 PR で対応、Suggestion 系は Issue #262 に集約 |
+
+### CI / マージ結果
+
+- BE: `npm run build` PASS / `npm test` 434 passing (元 423 + #259 規模 11) / `npm run lint` 0 errors (既存 19 warnings 別ファイル)
+- PR #261 CI: lint-build-test SUCCESS / GitGuardian SUCCESS → MERGED `8ca9da5`
+- 本 PR は test ファイルのみ、production code 変更なし → kanameone / cocoro 本番環境への影響ゼロ
+
+### 教訓 (PM/PL 視点)
+
+| 教訓 | 内容 |
+|---|---|
+| `/review-pr` の高 ROI | 6 並列で Critical 3 + Important 4 を一発検出。pr-test-analyzer の C1 (`.set()` バイパス) は契約の盲点を的確に発見 → #178 教訓カバーが厚くなった |
+| 共通化のタイミング | 3 つ目のコピペ発生前 (= 2 関数共通) で抽出するのが最適。Reuse HIGH 指摘を即時対応で抑止 |
+| Critical 対応の機械性 | agent 指摘がコード例付きの場合、設計判断追加なしの機械的修正で済む → セカンドオピニオン不要、再 review-pr も軽量で十分 |
+| 1 セッション 1 PR | 中規模 follow-up は context 温存しつつ完遂可能。Phase 2 (#251) 着手は次セッションで安全マージン確保 |
+
+### 次セッション着手予定: Phase 2 (#251) — handoff 計画本命
+
+**最優先タスク** (session10 から継続):
+- **#251**: `generateSummaryCore` の unit test 追加 + `buildSummaryPrompt` 別モジュール分離
+  - rateLimiter.acquire() 順序検証
+  - trackGeminiUsage の両値呼出検証
+  - capPageText wiring 検証
+  - malformed Vertex response の silent failure 検出
+  - `summaryPromptBuilder.ts` 新設で firebase-admin 依存切り離し → pure function unit test 可能化
+  - 規模: 中 (3-5 ファイル)、TDD + Quality Gate 標準フロー、所要 ~1.5h 想定
+
+**残り WBS** (session10 から継続):
+- **Phase 3 (#258)**: CappedText / SummaryField / PageOcrResult 型統合 — 大 (5+ ファイル)、Evaluator 分離プロトコル必須
+- **Sprint 3 (#253)**: useProcessingHistory.firestoreToDocument 重複を useDocuments 側に集約
+- **Sprint 4 (#237)**: search tokenizer FE/BE/script 3 箇所重複共通化
+- **Sprint 5**: 運用監視拡充 (#220 / #239 / #238)
+- **Sprint 6**: テスト補強 (#200) + bug 消化 (#196)
+- **新規 follow-up**: #262 (grep-based 既知制限 + diagnostics 強化、本セッション起票)
+
+
+---
+session11 を 2026-04-20 session18 handoff 時にアーカイブ移管 (cut & append)。
