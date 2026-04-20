@@ -1,8 +1,73 @@
 # ハンドオフメモ
 
-**更新日**: 2026-04-20 session19 (#293+#297 統合 + #294 integration test 完遂、Phase 4 #299 見送り確定)
-**ブランチ**: main (PR #301 + #305 マージ済、clean)
-**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + #288 follow-up bundle 完遂 + #293/#294/#297 完遂 (#299 は CI Node v20 差分で見送り、待機中)
+**更新日**: 2026-04-20 session20 (Phase 1 Contract test 共通基盤整備 完遂、follow-up 4 件起票)
+**ブランチ**: main (PR #311 + #314 + #316 マージ済、clean)
+**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + #288 follow-up bundle 完遂 + session19 follow-up Phase 1 完遂 (Phase 2 = #303/#304 次セッション着手予定)
+
+<a id="session20"></a>
+## ✅ session20 完了サマリー (Phase 1 Contract test 共通基盤整備 完遂)
+
+session19 で起票した #288 follow-up 6 件のうち、**Phase 1 (contract test 共通基盤整備)** を PM/PL WBS 3 PR 段階で完遂。Quality Gate (`/simplify` → `/review-pr` 並列 + Evaluator 分離) を全 PR で実施、Critical 指摘は全て本 PR 内で対応、低優先度を follow-up Issue 化。
+
+| 順 | フェーズ | 結果 |
+|---|---|---|
+| 1 | **WBS 全体設計 (`/impl-plan`)** | ✅ 10 Issue を 5 Cluster に分解、Phase 1 (4 Issue) を 3 PR に分割 |
+| 2 | **PR #311 (#302 + #307)**: brace/paren helper + SummaryField fixture 集約 | ✅ MERGED (`8fbed2e`) |
+| 3 | **PR #314 (#306)**: withNodeEnv / withNodeEnvAsync helper 化 | ✅ MERGED (`f6d0cb0`) |
+| 4 | **PR #316 (#308)**: docs/context/test-strategy.md + docstring 統一 | ✅ MERGED (`101a84a`) |
+| 5 | **follow-up 4 件起票 (#312/#313/#315/#317)** | ✅ 全 P2 enhancement で整理済 |
+
+### PR #311 設計ポイント (Closes #302 #307)
+- **`extractBraceBlock(source, anchor, options?)`**: 5 ファイルで重複していた brace-nesting 抽出を共通化。`anchor: RegExp | string` 両対応 + `startAfterAnchor` option で制御フロー近接性 lock-in (#302 codex Low 1 追加対応)
+- **`extractParenBlock`**: paren-nesting 版で `safeLogError(...)` 引数ブロック抽出の偽陽性回避
+- **`makeInvalidPage` / `makeMixedPages`**: `as unknown as SummaryField` cast を 9 箇所 → 1 箇所に局所化 (Firestore 旧データ由来の discriminated union 違反再現 fixture)
+- **silent PASS 防御**: silent-failure-hunter Critical C1/C2 を受け、prodBranch 空文字時に `to.not.match(/throw/)` が silent PASS する経路を `to.not.equal('')` non-empty guard で防御
+
+### PR #314 設計ポイント (Closes #306)
+- **`withNodeEnv<T>(value, fn): T` + `withNodeEnvAsync`**: `original === undefined` 時 `delete` で完全復元 (`"undefined"` 文字列化バグ防止)、`try/finally` で throw 経路も保護、async 版は `return await fn()` で race 回避
+- **helper 単体 test 先取り (11件)**: PR #311 教訓 (pr-test-analyzer I3) を受け、nested 呼出 LIFO 順 / async reject / async 同期 throw / 戻り値透過を直接 lock-in
+- **5 箇所の `try/finally` NODE_ENV toggle を helper 経由に統一** (Phase 2 由来 2 + Phase 3 由来 3)
+
+### PR #316 設計ポイント (Closes #308)
+- **`docs/context/test-strategy.md` 新規 (119 行、5 章構成)**: contract test 3 系統 (grep-based / `@ts-expect-error` / runtime pattern) の役割・手法・使い分けを一元化、共通 helper マッピング、選定フロー、docstring テンプレート、参考 Issue
+- **9 contract test docstring を 4 節構造に統一**: 「目的 / 背景 / 方式 / 将来委譲」、reinvent されていた共通説明を `test-strategy.md §2.X 参照` に置換 (summary 系 3 ファイルは `/simplify` Reuse agent 指摘で scope 追加)
+- **silent PASS 警告と non-empty guard 推奨 (§2.1) を明文化**: PR #311 review C1/C2 実例を引用
+
+### Quality Gate 実施記録
+- **PR #311 (Phase 1 PR-1)**: `/simplify` 3 並列 (4 件 skip 判断) → Evaluator 分離 APPROVE → `/review-pr` 6 並列 (**Critical 2 + Important 3**、全て本 PR 内対応: C1/C2 guard 追加 / helper 単体 test 新設 / CAP count tripwire / コメント簡素化)
+- **PR #314 (Phase 1 PR-2)**: `/simplify` 3 並列 Green → `/review-pr` 6 並列 (**Critical 0 + Important 4**、本 PR 内対応: async 戻り値/同期throw/nested test + docstring 整合性修正)
+- **PR #316 (Phase 1 PR-3)**: `/simplify` 3 並列 (summary 系 3 ファイル scope 追加判断) → `/review-pr` 4 並列 (**Critical 1 + Important 3**、本 PR 内対応: test-strategy.md 事実不整合修正 + 情報損失復活 3 件)
+
+### メトリクス
+- テスト: **548 → 570 passing (+22)**
+- 新設ファイル: helpers 3 (`extractBraceBlock.ts` + `textCapFixtures.ts` + `withNodeEnv.ts`) + 単体 test 2 (`extractBraceBlock.test.ts` + `withNodeEnv.test.ts`) + docs 1 (`test-strategy.md`)
+- 変更ファイル: 9 contract test (docstring 統一 + helper 経由移行)
+- Quality Gate: Critical 指摘 3 件全て本 PR 内解決、follow-up は P2 低優先度のみ
+
+### Follow-up Issues 起票 (4 件、累計 open へ追加)
+
+| # | タイトル | 由来 |
+|---|---------|------|
+| **#312** | contract test helper API 改善 (boolean→enum, string\|null 戻り値, Local alias 削除, ExtractOptions export 再検討) | PR #311 `/review-pr` (type-design + code-simplifier + silent-failure-hunter + pr-test-analyzer) |
+| **#313** | contract test 共通定数集約 + 抽出キャッシュ (SAFE_LOG_ERROR_CALL 統一 / textCapProdInvariantContract 抽出キャッシュ 40%削減) | PR #311 `/simplify` Q4 + E2 |
+| **#315** | withNodeEnv helper 強化 (ESLint guard / positive assert / literal union narrow) | PR #314 `/review-pr` (silent-failure-hunter + type-design) |
+| **#317** | test-strategy.md 継続改善 (二段防御具体例 / 命名規則マッピング表 / 委譲なし明記 / §2.1 適用範囲) | PR #316 `/review-pr` (pr-test-analyzer + silent-failure-hunter + comment-analyzer) |
+
+### Lessons Learned (次セッションに持ち込む教訓)
+1. **silent PASS 防御パターン (PR #311 教訓)**: grep-based contract test で `expect(block).to.not.match(...)` は空文字で silent PASS する。`expect(block).to.not.equal('')` guard を各 it 先頭に置くこと
+2. **helper 単体 test の先取り (PR #311 → PR #314 反映)**: 新規 helper は contract test 経由の間接検証だけでは helper 固有挙動 (復元順序 / async 経路 / option) を保護できない。`helpers/*.test.ts` を初手から配置する
+3. **scope 拡張判断 (PR #316)**: `/simplify` Reuse agent が「同パターン適用可能」と指摘した場合、低コストなら本 PR 内対応が follow-up churn を減らす (summary 系 3 ファイルを scope に追加で 9 ファイル統一感実現)
+4. **PM/PL 段階分割の有効性**: 10 Issue を 1 PR にまとめると Evaluator 発動条件超過、5+ ファイル横断で review 負荷増。段階的な 3 PR 分割で各 PR に焦点を絞り、前 PR の教訓を次 PR に反映するループが機能
+
+### 次セッション予定: Phase 2 着手 (#303 + #304)
+
+WBS 当初計画通り **Cluster B: AggregateInvariantContext 観測性強化** を対象:
+- **#304** AggregateInvariantContext の pendingLogs 型設計改善 (drainSink リネーム / brand type)
+- **#303** handleAggregateInvariantViolation の errorLogger require 失敗時 errors collection fallback
+
+想定: 2-3 ファイル、`/impl-plan` → `/simplify` + `/safe-refactor`、Evaluator 不要規模、1 セッション完遂見込み。実装本体の変更を含むため silent-failure-hunter 活躍領域。
+
+---
 
 <a id="session19"></a>
 ## ✅ session19 完了サマリー (#293 + #294 + #297 完遂、#299 見送り、follow-up 6 件起票)
