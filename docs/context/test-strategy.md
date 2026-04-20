@@ -33,6 +33,8 @@
 
 **silent PASS リスク**: helper が空文字を返した場合 `expect(block).to.not.match(...)` は常に PASS する。各 `it` で `expect(block).to.not.equal('')` の non-empty guard を先に実行すること ([PR #311 review C1/C2])。
 
+> **適用範囲**: 本警告は `extractBraceBlock` / `extractParenBlock` で事前抽出したブロックを `.to.not.match(...)` で検証する **brace-extracted block tests** のみに該当する (例: `textCapProdInvariantContract` / `textCapDrainSinkContract` / `textCapErrorLoggerFallbackContract` / `aggregateCapLogErrorContract` / `handleProcessingErrorContract` / `ocrProcessorAggregateCallerContract`)。ソース全文を anchor-window (`summaryCatchLogErrorContract` の `ANCHOR_WINDOW_LINES=8`) や adjacency window (`summaryWritePayloadContract` の `ADJACENCY_WINDOW_LINES=30`) でスライドする **summary 系 contract** は抽出結果の空文字返却という失敗モードを構造的に持たず免疫である。
+
 ### 2.2 `@ts-expect-error` 型契約 test
 
 | 項目 | 内容 |
@@ -53,7 +55,19 @@
 | 既存例 | [`functions/test/ocrAggregateCallerPattern.runtime.test.ts`](../../functions/test/ocrAggregateCallerPattern.runtime.test.ts) (#294 item 8, #293/#297 補完) |
 | 将来 | 完全な統合 test は `ts-node/esm` 環境整備 + `admin` mock で Issue #299 に委譲。それまでは runtime pattern test を二段防御の一翼として保持 |
 
-### 2.4 共通 helper
+### 2.4 命名規則
+
+contract test ファイルの命名で方式系統を識別できるよう、以下の規則で統一する。
+
+| 命名規則 | 系統 | 置き場所 |
+|---------|------|---------|
+| `*Contract.test.ts` | §2.1 grep-based | `functions/test/` 直下 |
+| `types/*.test.ts` | §2.2 `@ts-expect-error` 型契約 | `functions/test/types/` |
+| `*.runtime.test.ts` | §2.3 runtime pattern | `functions/test/` 直下 |
+
+新規 contract 追加時は本規則に従うことで、ファイル名から `test-strategy.md §2.X` の参照先が一意に定まる。
+
+### 2.5 共通 helper
 
 | Helper | 用途 | Issue |
 |--------|------|-------|
@@ -85,6 +99,13 @@ Q3. runtime 挙動を実コード無しで検証したいか (admin 依存を避
 
 複数系統の二段防御が適切なケース (例: grep + runtime) は、両方を `Refs:` コメントで相互参照する。
 
+**二段防御の具体例 (#294 item 8 / #293 + #297)**:
+
+- [`ocrProcessorAggregateCallerContract.test.ts`](../../functions/test/ocrProcessorAggregateCallerContract.test.ts) (§2.1 grep-based) — caller 側 (`ocrProcessor.ts:150`) の try/catch + `await Promise.allSettled(pendingInvariantLogs)` / catch の `:aggregateCap:invariant` vs `:aggregateCap:unexpected` suffix 分類など **source 構造** を lock-in
+- [`ocrAggregateCallerPattern.runtime.test.ts`](../../functions/test/ocrAggregateCallerPattern.runtime.test.ts) (§2.3 runtime pattern) — caller wrapper パターンを inline 再現し spy 注入で **実 runtime 挙動** (allSettled flush / dev throw 捕捉継続 / documentId 伝搬) を検証
+
+grep は関数名リネームや anchor 削除を即座に検知し、runtime は grep では捕捉できない制御フロー挙動 (例: dev throw が処理継続を阻害しないこと) を検証する相補関係にある。片方だけだと検知漏れ (grep-only: 挙動 silently 破壊 / runtime-only: 関数名改名で test が別 function を evaluate) を生むため、ペアで配置する。
+
 ---
 
 ## 4. docstring テンプレート
@@ -102,11 +123,14 @@ Q3. runtime 挙動を実コード無しで検証したいか (admin 依存を避
  * 方式: <grep-based / @ts-expect-error / runtime pattern のどれか>
  *        <docs/context/test-strategy.md §2.X> 参照
  *
- * 将来委譲: <動的 test / 統合 test への移行計画がある場合のみ記載、Issue 番号付き>
+ * 将来委譲: <移行計画がある場合は Issue 番号付きで記載。恒久 contract には
+ *           「現時点で委譲先なし」と明記する (記載省略は禁止)>
  */
 ```
 
 「方式選定」節で 3 系統の使い分け理由を毎回書かず、本 docstring から `test-strategy.md §2.X` にリンクすることで重複を削減する。
+
+**「将来委譲」節の必須化**: 本節は optional ではなく、全 contract test で必ず記載する。移行計画がない恒久 contract は `現時点で委譲先なし` と明記することで、「記載漏れ」と「恒久判断」の識別情報損失を防ぐ (記載なし = 将来 Issue 化したが消えた、と誤読されると Phase/owner 追跡が途絶する)。
 
 ---
 
