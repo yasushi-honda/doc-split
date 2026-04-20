@@ -133,9 +133,10 @@ describe('extractBraceBlock helper', () => {
     });
   });
 
-  // #312 pr-test-analyzer C1 (Critical): null source passthrough は JSDoc で契約しているが
-  // 本 helper 単体テストでの回帰ガードが欠如していた。alias wrapper 経由の chain 入力
-  // (extractBraceBlock(extractBraceBlock(...), ...) で内側が null) が実運用で発生するため必須 lock-in。
+  // #312 pr-test-analyzer C1 (Critical) + comment-analyzer S4: null source passthrough は
+  // JSDoc で契約しているが本 helper 単体テストでの回帰ガードが欠如していた。chain 呼出
+  // (`extractBraceBlock(extractBraceBlock(...), ...)` で内側が null) が実運用で発生するため
+  // 必須 lock-in (#312 PR-2 で caller 側 alias wrapper を撤去、helper 側 null 透過に集約済)。
   describe('null source passthrough (chain 用途)', () => {
     it('extractBraceBlock(null, ...) は常に null を返す', () => {
       expect(extractBraceBlock(null, /anything/)).to.be.null;

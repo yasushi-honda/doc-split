@@ -118,6 +118,11 @@ describe('aggregate cap safeLogError contract (#283)', () => {
     );
   });
 
+  // #312 PR-2 B2 方針 (pr-test-analyzer S1): ANCHOR 正規表現 (AGGREGATE_CAP_ANCHOR) 自体の挙動を
+  // lock-in する目的で残置。extractBraceBlock.test.ts の helper 単体テストでは ANCHOR 変更の
+  // regression を検知できない (helper は入力にのみ依存) ため、本 describe が ANCHOR 正規表現の
+  // 変更回帰を直接捕捉する。将来 B1 (集約) への移行や削除を検討する際はこの責務を
+  // どこに移すかを明示すること。
   describe('aggregate cap block 抽出ロジック (AGGREGATE_CAP_ANCHOR 検出)', () => {
     it('positive: 通常の if block を抽出する', () => {
       const fixture = `

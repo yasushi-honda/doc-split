@@ -51,7 +51,7 @@ describe('handleProcessingError safeLogError contract (#276)', () => {
     source,
     'export async function handleProcessingError('
   );
-  const safeLogErrorArgs = extractParenBlock(functionBody, /\bsafeLogError\s*\(/);
+  const safeLogErrorArgs = extractParenBlock(functionBody, SAFE_LOG_ERROR_CALL);
 
   it('handleProcessingError 関数本体が抽出できる', () => {
     expect(
@@ -122,6 +122,9 @@ describe('handleProcessingError safeLogError contract (#276)', () => {
     );
   });
 
+  // #312 PR-2 B2 方針 (pr-test-analyzer S1): signature prefix anchor の挙動を lock-in する目的で
+  // 残置。extractBraceBlock.test.ts の helper 単体テストでは ANCHOR (= signature string) 変更の
+  // regression を検知できないため、本 describe が直接捕捉する。positive/nested/negative を網羅。
   describe('関数本体抽出ロジック (extractBraceBlock + signature prefix)', () => {
     it('positive: 通常の関数本体を抽出する', () => {
       const fixture = `
@@ -159,6 +162,10 @@ export async function foo() {
     });
   });
 
+  // #312 PR-2 B2 方針 (pr-test-analyzer S1): SAFE_LOG_ERROR_CALL anchor の挙動を lock-in する
+  // 目的で残置。positive/nested/negative/scope で偽陽性防御 (関数本体内の無関係な functionName
+  // 変数を引数ブロック抽出で除外) を保証。helper 単体テストでは ANCHOR 変更の regression を
+  // 検知できないため本 describe が直接捕捉する。
   describe('safeLogError 引数ブロック抽出ロジック (extractParenBlock + SAFE_LOG_ERROR_CALL)', () => {
     it('positive: 単純な呼出から引数ブロックを抽出する', () => {
       const fixture = `await safeLogError({ error, source: 'ocr' });`;
