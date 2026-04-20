@@ -25,7 +25,8 @@ const OCR_PROCESSOR_PATH = 'src/ocr/ocrProcessor.ts';
 const AGGREGATE_CAP_ANCHOR =
   /if\s*\(\s*afterAggregateChars\s*<\s*beforeAggregateChars\s*\)\s*\{/;
 
-const extractAggregateCapBlock = (source: string) =>
+// #312: helper が anchor 不在時に null を返すため、alias wrapper も string | null を透過する。
+const extractAggregateCapBlock = (source: string): string | null =>
   extractBraceBlock(source, AGGREGATE_CAP_ANCHOR);
 
 describe('aggregate cap safeLogError contract (#283)', () => {
@@ -44,16 +45,17 @@ describe('aggregate cap safeLogError contract (#283)', () => {
   const safeLogErrorArgs = extractParenBlock(capBlock, /\bsafeLogError\s*\(/);
 
   it('aggregate cap block が抽出できる', () => {
-    expect(capBlock.length).to.be.greaterThan(
-      0,
+    expect(
+      capBlock,
       '`if (afterAggregateChars < beforeAggregateChars) { ... }` anchor が見つからない。' +
         '変数名リネーム/条件書き換え時は本契約の見直しが必要。'
-    );
+    ).to.not.be.null;
   });
 
   it('aggregate cap block 内に safeLogError 呼出がある', () => {
     const SAFE_LOG_ERROR_CALL = /\bsafeLogError\s*\(/;
-    expect(SAFE_LOG_ERROR_CALL.test(capBlock)).to.equal(
+    expect(capBlock, 'capBlock 抽出失敗 (上位 it を確認)').to.not.be.null;
+    expect(SAFE_LOG_ERROR_CALL.test(capBlock!)).to.equal(
       true,
       'aggregate cap block 内で safeLogError 呼出が見つからない。' +
         'errors collection への記録が消失すると #209 型実害の再発を認知できない (#283 silent failure)。'
@@ -64,7 +66,8 @@ describe('aggregate cap safeLogError contract (#283)', () => {
   // 実行終了前に Firestore 書込が truncate される。await 付き呼出を契約化。
   it('aggregate cap block 内の safeLogError 呼出に await が付いている', () => {
     const AWAITED_SAFE_LOG_ERROR = /\bawait\s+safeLogError\s*\(/;
-    expect(AWAITED_SAFE_LOG_ERROR.test(capBlock)).to.equal(
+    expect(capBlock, 'capBlock 抽出失敗').to.not.be.null;
+    expect(AWAITED_SAFE_LOG_ERROR.test(capBlock!)).to.equal(
       true,
       'aggregate cap block 内の safeLogError 呼出に await が付いていない。' +
         'Cloud Functions 実行終了前に Firestore 書込が truncate される silent failure リスクあり。'
@@ -72,16 +75,17 @@ describe('aggregate cap safeLogError contract (#283)', () => {
   });
 
   it('safeLogError 引数ブロックが抽出できる', () => {
-    expect(safeLogErrorArgs.length).to.be.greaterThan(
-      0,
+    expect(
+      safeLogErrorArgs,
       'safeLogError(...) の引数ブロックが抽出できない。' +
         '呼出形式の変更 (spread 展開等) の可能性あり — 本契約の見直しが必要。'
-    );
+    ).to.not.be.null;
   });
 
   it('safeLogError 引数に error が渡されている', () => {
     const ERROR_PARAM = /\berror\s*[,:}]/;
-    expect(ERROR_PARAM.test(safeLogErrorArgs)).to.equal(
+    expect(safeLogErrorArgs, 'safeLogErrorArgs 抽出失敗').to.not.be.null;
+    expect(ERROR_PARAM.test(safeLogErrorArgs!)).to.equal(
       true,
       'safeLogError 引数に error が含まれていない。' +
         'stack trace が errors collection に残らず原因追跡不能になる。'
@@ -90,7 +94,8 @@ describe('aggregate cap safeLogError contract (#283)', () => {
 
   it('safeLogError 引数に source: \'ocr\' が含まれる', () => {
     const SOURCE_OCR = /source:\s*['"]ocr['"]/;
-    expect(SOURCE_OCR.test(safeLogErrorArgs)).to.equal(
+    expect(safeLogErrorArgs, 'safeLogErrorArgs 抽出失敗').to.not.be.null;
+    expect(SOURCE_OCR.test(safeLogErrorArgs!)).to.equal(
       true,
       'safeLogError 引数に source: \'ocr\' が見つからない。' +
         'errors collection の絞込/集計で欠落する。'
@@ -99,7 +104,8 @@ describe('aggregate cap safeLogError contract (#283)', () => {
 
   it('safeLogError 引数に documentId が渡されている', () => {
     const DOCUMENT_ID_PARAM = /\bdocumentId\s*[,:}]/;
-    expect(DOCUMENT_ID_PARAM.test(safeLogErrorArgs)).to.equal(
+    expect(safeLogErrorArgs, 'safeLogErrorArgs 抽出失敗').to.not.be.null;
+    expect(DOCUMENT_ID_PARAM.test(safeLogErrorArgs!)).to.equal(
       true,
       'safeLogError 引数に documentId が見つからない。' +
         'エラーとドキュメントの紐付けが失われる。'
@@ -108,7 +114,8 @@ describe('aggregate cap safeLogError contract (#283)', () => {
 
   it('safeLogError 引数に functionName が渡されている', () => {
     const FUNCTION_NAME_PARAM = /\bfunctionName\s*[,:}]/;
-    expect(FUNCTION_NAME_PARAM.test(safeLogErrorArgs)).to.equal(
+    expect(safeLogErrorArgs, 'safeLogErrorArgs 抽出失敗').to.not.be.null;
+    expect(FUNCTION_NAME_PARAM.test(safeLogErrorArgs!)).to.equal(
       true,
       'safeLogError 引数に functionName が見つからない。' +
         'どの呼出元で発生したエラーか特定できなくなる。'
@@ -125,9 +132,10 @@ if (afterAggregateChars < beforeAggregateChars) {
 }
 `;
       const block = extractAggregateCapBlock(fixture);
-      expect(block).to.include('safeLogError');
-      expect(block.startsWith('{')).to.equal(true);
-      expect(block.endsWith('}')).to.equal(true);
+      expect(block, 'block 抽出失敗').to.not.be.null;
+      expect(block!).to.include('safeLogError');
+      expect(block!.startsWith('{')).to.equal(true);
+      expect(block!.endsWith('}')).to.equal(true);
     });
 
     it('positive: ネストしたブロック (try-catch 等) を正しくカウントする', () => {
@@ -137,13 +145,14 @@ if (afterAggregateChars < beforeAggregateChars) {
 }
 `;
       const block = extractAggregateCapBlock(fixture);
-      expect(block).to.include('try');
-      expect(block).to.include('catch');
+      expect(block, 'block 抽出失敗').to.not.be.null;
+      expect(block!).to.include('try');
+      expect(block!).to.include('catch');
     });
 
-    it('negative: anchor 不在時は空文字', () => {
+    it('negative: anchor 不在時は null', () => {
       const fixture = `const x = 1;`;
-      expect(extractAggregateCapBlock(fixture)).to.equal('');
+      expect(extractAggregateCapBlock(fixture)).to.be.null;
     });
 
     it('scope: block 外の safeLogError は検知対象外', () => {
@@ -155,7 +164,8 @@ if (afterAggregateChars < beforeAggregateChars) {
 }
 `;
       const block = extractAggregateCapBlock(fixture);
-      expect(/\bsafeLogError\s*\(/.test(block)).to.equal(
+      expect(block, 'block 抽出失敗').to.not.be.null;
+      expect(/\bsafeLogError\s*\(/.test(block!)).to.equal(
         false,
         'block 外の safeLogError 呼出が block 抽出結果に含まれてはならない'
       );
