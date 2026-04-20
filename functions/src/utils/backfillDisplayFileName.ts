@@ -5,7 +5,7 @@
  * generateDisplayFileName に渡すための変換ロジック。
  */
 
-import { generateDisplayFileName } from './displayFileNameGenerator';
+import { generateDisplayFileName } from '../../../shared/generateDisplayFileName';
 
 interface TimestampLike {
   seconds: number;
