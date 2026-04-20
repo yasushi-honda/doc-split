@@ -1,16 +1,14 @@
 /**
  * capPageResultsAggregate の generics 型契約テスト (Issue #294)
  *
- * 目的: `<T extends SummaryField>` 制約と戻り値型 `CappedAggregatePage<T>[]`
- * (= `Omit<T, 'text' | 'truncated' | 'originalLength'> & SummaryField`) の
- * 型レベル契約を lock-in する。
+ * 目的: `<T extends SummaryField>` 制約と戻り値型 `CappedAggregatePage<T>[]` の型レベル契約を
+ * lock-in する (narrow 型 T を渡しても戻り値の SummaryField 部は union に広がり、caller は
+ * narrowing なしで originalLength にアクセスできない)。
  *
- * 背景 (#284): `as T` cast 排除で戻り値を SummaryField フル union に戻す設計に変更。
- * narrow 型 T を渡しても、戻り値の SummaryField 部は union に広がり、caller は
- * `if (result.truncated)` 等の narrowing なしで originalLength にアクセスできない契約。
+ * 背景: #284 の `as T` cast 排除で戻り値を SummaryField フル union に戻す設計に変更した
+ * 不変条件を型レベルで lock-in する。
  *
- * 方式: `@ts-expect-error` + `tsc --noEmit` (既存 pageOcrResult.types.test.ts パターン)。
- * tsd 導入は別 Issue とし、本テストは baseline として機能。
+ * 方式: `@ts-expect-error` 型契約 test (docs/context/test-strategy.md §2.2 参照)。
  */
 
 import { expect } from 'chai';

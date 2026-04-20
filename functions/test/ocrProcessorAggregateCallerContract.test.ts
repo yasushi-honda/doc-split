@@ -2,18 +2,13 @@
  * ocrProcessor aggregate caller try/catch + pendingLogs drain 契約テスト
  * (Issue #293 + #297 統合対応)
  *
- * 目的: processDocument 内 capPageResultsAggregate 呼出周辺に:
- *   1. try/catch で dev invariant throw を捕捉 → safeLogError で errors collection 記録
- *   2. pendingInvariantLogs array を渡して fire-and-forget を廃止 (#297)
- *   3. `await Promise.allSettled(pendingInvariantLogs)` による flush 保証
- * を追加した設計を grep-based で lock-in する。
+ * 目的: processDocument 内 capPageResultsAggregate 呼出周辺に (1) try/catch で dev throw
+ * 捕捉 → safeLogError 記録, (2) pendingInvariantLogs array 渡しで fire-and-forget 廃止,
+ * (3) `await Promise.allSettled(pendingInvariantLogs)` による flush 保証、を追加した設計を
+ * 静的に lock-in する。
  *
- * 方式選定:
- * ocrProcessor.ts のソース全体から capPageResultsAggregate 呼出周辺ブロック
- * (try { ... } catch { ... } ... Promise.allSettled) を抽出し、必須要素の存在を
- * grep で検証する。
- *
- * 動的 runtime test による caller throw 捕捉挙動の verify は Issue #299 で追加予定。
+ * 方式: grep-based (docs/context/test-strategy.md §2.1 参照)。
+ * 将来委譲: 動的 runtime test による caller throw 捕捉の verify は Issue #299 で追加予定。
  */
 
 import { expect } from 'chai';

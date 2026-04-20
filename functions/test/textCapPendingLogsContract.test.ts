@@ -3,18 +3,12 @@
  * (Issue #297 + #293 統合対応)
  *
  * 目的: `void safeLogError(...)` fire-and-forget を `context.pendingLogs` array に push する
- * 形へ変更した回帰を grep-based で防止する。caller (ocrProcessor.ts) が
- * `await Promise.allSettled(pendingLogs)` で drain することで Cloud Functions handler
- * 終了前の flush を保証する設計を静的に lock-in する。
+ * 形へ変更した回帰を防止する。caller (ocrProcessor.ts) が `await Promise.allSettled(pendingLogs)`
+ * で drain し、Cloud Functions handler 終了前の flush を保証する設計を静的に lock-in する。
  *
- * 方式選定:
- * handleAggregateInvariantViolation 本体を brace-nesting で抽出し、production 分岐内で:
- *   1. safeLogError の戻り値を変数束縛 (fire-and-forget `void` 直叩きではない)
- *   2. context?.pendingLogs への push 呼出が存在
- *   3. pendingLogs 未渡し時の fallback (void logPromise or ?.push 形) で後方互換維持
- * を grep 検証する。
- *
- * 動的 safeLogError invocation test は Issue #299 で追加予定。
+ * 方式: grep-based (docs/context/test-strategy.md §2.1 参照)。prod 分岐内で (1) 戻り値束縛,
+ * (2) context?.pendingLogs.push, (3) 未渡し時の void fallback の 3 要素を検証。
+ * 将来委譲: 動的 safeLogError invocation test は Issue #299 で追加予定。
  */
 
 import { expect } from 'chai';

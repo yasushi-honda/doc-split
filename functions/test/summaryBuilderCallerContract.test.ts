@@ -1,22 +1,15 @@
 /**
  * generateSummary caller-side 契約テスト (Issue #225, #214)
  *
- * builder 側 canary は builder の契約を固定するが、caller 側で builder を経由
- * しなくなると canary は PASS のまま Issue #209 (Vertex AI summary 暴走) が再発する。
- * 本テストは caller 側の呼び出しパターンを構文検証して bypass を検出する。
+ * 目的: caller 側で builder を bypass (Vertex AI 直呼) する回帰を検知する (Issue #209 型の
+ * summary 暴走再発防止)。builder 側 canary だけでは caller bypass を見逃すため、caller
+ * 呼出パターンを静的に lock-in する。
  *
- * 方式: grep-based (静的検証)。
+ * 背景 (#214 リファクタ): summaryGenerator.ts が唯一の Vertex AI caller、ocrProcessor /
+ * regenerateSummary は generateSummaryCore() 経由に統一。
  *
- * Issue #214 リファクタ後の構造:
- * - `src/ocr/summaryGenerator.ts` が `model.generateContent(buildSummaryGenerationRequest(...))` を
- *   一箇所に集約する唯一の caller。
- * - `ocrProcessor.ts` / `regenerateSummary.ts` は `generateSummaryCore()` 経由で要約を生成し、
- *   Vertex AI を直接呼ばない (bypass 防止)。
- *
- * 既知の limitation:
- * - 型 alias 経由 (const gen = model.generateContent; gen(...)) や分割代入の呼び出しは未検出
- * - caller 追加時は CALLER_FILES / CORE_CALLERS への手動追記が必要 (grep 動的検出は未導入)
- *
+ * 方式: grep-based (docs/context/test-strategy.md §2.1 参照)。
+ * 既知の limitation: 型 alias 経由や分割代入は未検出。caller 追加時は CALLER_FILES の手動追記が必要。
  * 昇格条件: false negative が 1 件でも実発生した時点で sinon spy (案A) へ切替。
  */
 
