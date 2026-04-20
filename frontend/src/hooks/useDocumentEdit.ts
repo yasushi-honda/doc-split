@@ -3,7 +3,7 @@ import { doc, updateDoc, collection, addDoc, serverTimestamp, Timestamp, deleteF
 import { useQueryClient } from '@tanstack/react-query'
 import { db, auth } from '../lib/firebase'
 import { updateDocumentInListCache } from './useDocuments'
-import { generateDisplayFileName } from '../utils/generateDisplayFileName'
+import { generateDisplayFileName } from '@shared/generateDisplayFileName'
 import type { Document } from '../../../shared/types'
 
 export interface EditLogEntry {

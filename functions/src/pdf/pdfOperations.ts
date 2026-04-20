@@ -19,7 +19,8 @@ import {
   MasterData,
 } from '../utils/pdfAnalyzer';
 import { buildSplitDocumentData } from './splitDocumentBuilder';
-import { generateDisplayFileName } from '../utils/displayFileNameGenerator';
+import { generateDisplayFileName } from '../../../shared/generateDisplayFileName';
+import { timestampToDateString } from '../utils/backfillDisplayFileName';
 import { sanitizeCustomerMasters, sanitizeOfficeMasters, sanitizeDocumentMasters } from '../utils/sanitizeMasterData';
 
 const db = admin.firestore();
@@ -395,11 +396,15 @@ export const splitPdf = onCall(
           };
 
       // displayFileName 生成 (#178 Stage 2)
+      // #182 fallback: fileDateFormatted は OCR 完了時にのみ設定される派生フィールド。
+      // 旧ドキュメントや手動登録等で未設定の場合は fileDate (Timestamp) から YYYY/MM/DD を
+      // 導出して日付パート欠落を防ぐ。fileDate も null なら日付パートが省略される。
       const displayFileName = generateDisplayFileName({
         documentType,
         customerName,
         officeName,
-        fileDate: docData.fileDateFormatted ?? undefined,
+        fileDate:
+          docData.fileDateFormatted ?? timestampToDateString(docData.fileDate),
       });
 
       // 新しいドキュメントをFirestoreに作成

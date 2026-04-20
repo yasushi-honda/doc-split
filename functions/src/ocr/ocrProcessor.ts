@@ -19,7 +19,7 @@ import {
   extractFilenameInfo,
   normalizeForMatching,
 } from '../utils/extractors';
-import { generateDisplayFileName } from '../utils/displayFileNameGenerator';
+import { generateDisplayFileName } from '../../../shared/generateDisplayFileName';
 import { sanitizeCustomerMasters, sanitizeOfficeMasters, sanitizeDocumentMasters } from '../utils/sanitizeMasterData';
 import { buildSummaryFields } from './summaryRequestBuilder';
 import { generateSummaryCore, MIN_OCR_LENGTH_FOR_SUMMARY } from './summaryGenerator';
