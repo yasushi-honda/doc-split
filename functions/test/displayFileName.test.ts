@@ -128,6 +128,36 @@ describe('displayFileName 自動生成 (#178 Stage 1)', () => {
       expect(result).to.equal('介護_保険_証_田中_太郎.pdf');
     });
 
+    it('DEL 文字 (\\x7f) も `_` に置換する', () => {
+      const result = generateDisplayFileName({
+        documentType: '介護\x7f保険証',
+        customerName: '田中太郎',
+      });
+      expect(result).to.equal('介護_保険証_田中太郎.pdf');
+    });
+
+    it('サニタイズ後に全置換文字 (`_` のみ) となる part は除外される', () => {
+      // `/////` → `_____` は「情報ゼロ」として part から除外される。
+      // 他に有効 part (documentType) があれば filename は生成されるが、customerName は
+      // 空として扱われる。
+      const result = generateDisplayFileName({
+        documentType: '介護保険証',
+        customerName: '/////',
+      });
+      expect(result).to.equal('介護保険証.pdf');
+    });
+
+    it('全 part がサニタイズで空 / デフォルトになるケースは null', () => {
+      // documentType = '未判定' (DEFAULT), customerName = '/////' (全置換)、
+      // officeName = '\\\\\\\\\\\\' (全置換) → 有効 part ゼロ → null
+      const result = generateDisplayFileName({
+        documentType: '未判定',
+        customerName: '/////',
+        officeName: '\\\\\\\\\\\\',
+      });
+      expect(result).to.be.null;
+    });
+
     it('日付文字列は入力ハイフン/スラッシュを除去し 8 桁数字のため禁止文字の混入経路なし (回帰防止)', () => {
       const result = generateDisplayFileName({
         documentType: '介護保険証',
@@ -148,9 +178,9 @@ describe('displayFileName 自動生成 (#178 Stage 1)', () => {
   });
 
   describe('generateDisplayFileName - 日付 fallback 経路 (#182)', () => {
-    // pdfOperations.ts L406 の `fileDateFormatted ?? timestampToDateString(fileDate)` chain を
+    // pdfOperations.ts 内の `fileDateFormatted ?? timestampToDateString(fileDate)` chain を
     // 単体で lock-in。timestampToDateString 自体の単体 test は backfillDisplayFileName.test.ts
-    // L15-46 で網羅済のため、本 describe は fallback 優先順位と null passthrough のみ検証する。
+    // に存在するため、本 describe は fallback 優先順位と null passthrough のみ検証する。
     it('fileDateFormatted 未設定 + Timestamp 由来文字列 (YYYY/MM/DD) 設定時、YYYYMMDD として採用', () => {
       const fileDateFormatted: string | null = null;
       const fileDateFromTimestamp = '2026/03/16';

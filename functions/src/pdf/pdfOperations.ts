@@ -396,8 +396,9 @@ export const splitPdf = onCall(
           };
 
       // displayFileName 生成 (#178 Stage 2)
-      // #182 fallback: fileDateFormatted 未設定時は fileDate (Timestamp) から YYYY/MM/DD を導出。
-      // fileDate も null なら generateDisplayFileName 側で日付パートが省略される。
+      // #182 fallback: fileDateFormatted は OCR 完了時にのみ設定される派生フィールド。
+      // 旧ドキュメントや手動登録等で未設定の場合は fileDate (Timestamp) から YYYY/MM/DD を
+      // 導出して日付パート欠落を防ぐ。fileDate も null なら日付パートが省略される。
       const displayFileName = generateDisplayFileName({
         documentType,
         customerName,

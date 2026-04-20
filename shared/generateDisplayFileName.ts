@@ -1,19 +1,16 @@
 /**
- * displayFileName 自動生成ユーティリティ (Issue #181 + #183)
+ * displayFileName 自動生成ユーティリティ
  *
  * frontend / functions の両方で使用する純粋関数を shared モジュールに集約。
  * 命名規則: 書類名_事業所_日付_顧客名.pdf
  *
- * #183 (fix): OS 禁止文字 (/ \ : * ? " < > | と制御文字) をサニタイズして
- * Storage/OS/URL で問題になる文字を構造的に除去する。
- *
- * Issue 関連:
- * - #178 (Stage 1-3 displayFileName 自動生成の本体実装)
- * - #181 (本 PR): FE/BE 重複解消、shared 集約
- * - #183 (本 PR): 特殊文字サニタイズ追加
+ * 関連 Issue:
+ * - #178: Stage 1-3 本体実装
+ * - #181: FE/BE 重複解消、shared 集約
+ * - #183: OS/Storage/URL 禁止文字のサニタイズ
  */
 
-interface DisplayFileNameInput {
+export interface DisplayFileNameInput {
   documentType?: string;
   customerName?: string;
   officeName?: string;
@@ -27,18 +24,19 @@ const DEFAULT_VALUES = new Set(['未判定', '不明顧客']);
 /**
  * OS / Storage / URL で問題になる文字を `_` に置換する。
  *
- * 対象:
- * - Windows 禁止文字: `\ / : * ? " < > |`
- * - NUL + 制御文字: `\x00-\x1f`
- *
- * macOS / Linux ではスラッシュのみ禁止だが、クロスプラットフォーム互換で
- * Windows 禁止文字を全て対象にする。
+ * 対象: Windows 禁止文字 `\ / : * ? " < > |` + NUL/C0 制御文字 `\x00-\x1f` + DEL `\x7f`
+ * (クロスプラットフォーム互換)。C1 制御文字 `\x80-\x9f` は UTF-8 multibyte の中間バイトと
+ * 衝突するため対象外 (silent-failure-hunter 指摘、C0+DEL のみで実害を覆う)。
  */
 // eslint-disable-next-line no-control-regex
-const SANITIZE_PATTERN = /[\\/:*?"<>|\x00-\x1f]/g;
+const SANITIZE_PATTERN = /[\\/:*?"<>|\x00-\x1f\x7f]/g;
+
+/** サニタイズ結果が全て置換文字 `_` のみの場合は「情報ゼロ」として空文字を返す */
+const REPLACEMENT_ONLY_PATTERN = /^_+$/;
 
 function sanitize(value: string): string {
-  return value.replace(SANITIZE_PATTERN, '_');
+  const replaced = value.replace(SANITIZE_PATTERN, '_');
+  return REPLACEMENT_ONLY_PATTERN.test(replaced) ? '' : replaced;
 }
 
 /**
@@ -50,22 +48,22 @@ export function generateDisplayFileName(
   input: DisplayFileNameInput,
 ): string | null {
   const ext = input.extension ?? '.pdf';
-
   const parts: string[] = [];
 
-  // 書類名
-  if (input.documentType && !DEFAULT_VALUES.has(input.documentType)) {
-    parts.push(sanitize(input.documentType));
-  }
+  // 書類名 / 事業所名 / 顧客名 はサニタイズ後に空文字になる可能性があるため pushValidPart で skip。
+  // 例: customerName = '/////' → sanitize で '_____' → REPLACEMENT_ONLY_PATTERN で空文字化 → skip
+  const pushValidPart = (raw?: string): void => {
+    if (!raw || DEFAULT_VALUES.has(raw)) return;
+    const sanitized = sanitize(raw);
+    if (sanitized) parts.push(sanitized);
+  };
 
-  // 事業所名
-  if (input.officeName && !DEFAULT_VALUES.has(input.officeName)) {
-    parts.push(sanitize(input.officeName));
-  }
+  pushValidPart(input.documentType);
+  pushValidPart(input.officeName);
 
   // 日付 (スラッシュ・ハイフン除去して YYYYMMDD 形式に)
-  // ※日付文字列はハイフン/スラッシュを剥がした後 8 桁数字になる前提。サニタイズ対象の
-  //   禁止文字は含まれないはずだが、万一混入しても 8 桁数字でなければ parts に入らない。
+  // ハイフン/スラッシュを剥がした後 8 桁数字になる前提。禁止文字が混入しても 8 桁数字でなければ
+  // parts に入らないため、ここでの sanitize は不要。
   if (input.fileDate) {
     const dateStr = input.fileDate.replace(/[/-]/g, '');
     if (dateStr.length >= 8) {
@@ -73,10 +71,7 @@ export function generateDisplayFileName(
     }
   }
 
-  // 顧客名
-  if (input.customerName && !DEFAULT_VALUES.has(input.customerName)) {
-    parts.push(sanitize(input.customerName));
-  }
+  pushValidPart(input.customerName);
 
   if (parts.length === 0) {
     return null;
