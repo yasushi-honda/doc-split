@@ -23,111 +23,26 @@
 import { expect } from 'chai';
 import { existsSync, readFileSync } from 'fs';
 import { resolve } from 'path';
+import { extractBraceBlock, extractParenBlock } from './helpers/extractBraceBlock';
 
 const TEXT_CAP_PATH = 'src/utils/textCap.ts';
 
-/**
- * assertAggregatePageInvariant 関数本体 (function 宣言直後の `{...}`) を抽出する。
- * anchor 消失/リネーム時は空文字を返し、caller 側で明示失敗させる。
- */
-function extractAssertFunctionBody(source: string): string {
-  const ANCHOR = /function\s+assertAggregatePageInvariant\s*\([^)]*\)\s*:\s*void\s*\{/;
-  const match = source.match(ANCHOR);
-  if (!match || match.index === undefined) return '';
+const ASSERT_BODY_ANCHOR =
+  /function\s+assertAggregatePageInvariant\s*\([^)]*\)\s*:\s*void\s*\{/;
+const HELPER_BODY_ANCHOR =
+  /function\s+handleAggregateInvariantViolation\s*\([^)]*\)\s*:\s*void\s*\{/;
+const PROD_BRANCH_ANCHOR =
+  /if\s*\(\s*process\.env\.NODE_ENV\s*===\s*['"]production['"]\s*\)\s*\{/;
+const SAFE_LOG_ERROR_CALL = /\bsafeLogError\s*\(/;
 
-  const openBraceIdx = source.indexOf('{', match.index);
-  if (openBraceIdx === -1) return '';
-
-  let depth = 0;
-  for (let i = openBraceIdx; i < source.length; i++) {
-    const ch = source[i];
-    if (ch === '{') depth++;
-    else if (ch === '}') {
-      depth--;
-      if (depth === 0) {
-        return source.slice(openBraceIdx, i + 1);
-      }
-    }
-  }
-  return '';
-}
-
-/**
- * handleAggregateInvariantViolation helper 関数本体を抽出する (#288 item 6 で導入)。
- * 実装で helper 分離した場合、prod 分岐はこちらに移る。存在しない場合は空文字を返す。
- */
-function extractHelperFunctionBody(source: string): string {
-  const ANCHOR = /function\s+handleAggregateInvariantViolation\s*\([^)]*\)\s*:\s*void\s*\{/;
-  const match = source.match(ANCHOR);
-  if (!match || match.index === undefined) return '';
-
-  const openBraceIdx = source.indexOf('{', match.index);
-  if (openBraceIdx === -1) return '';
-
-  let depth = 0;
-  for (let i = openBraceIdx; i < source.length; i++) {
-    const ch = source[i];
-    if (ch === '{') depth++;
-    else if (ch === '}') {
-      depth--;
-      if (depth === 0) {
-        return source.slice(openBraceIdx, i + 1);
-      }
-    }
-  }
-  return '';
-}
-
-/**
- * prod 分岐ブロック (`if (process.env.NODE_ENV === 'production') { ... }`) を抽出。
- * ==='production' と !== 'production' の両形を許容する前方一致。
- */
-function extractProdBranch(block: string): string {
-  const ANCHOR = /if\s*\(\s*process\.env\.NODE_ENV\s*===\s*['"]production['"]\s*\)\s*\{/;
-  const match = block.match(ANCHOR);
-  if (!match || match.index === undefined) return '';
-
-  const openBraceIdx = block.indexOf('{', match.index);
-  if (openBraceIdx === -1) return '';
-
-  let depth = 0;
-  for (let i = openBraceIdx; i < block.length; i++) {
-    const ch = block[i];
-    if (ch === '{') depth++;
-    else if (ch === '}') {
-      depth--;
-      if (depth === 0) {
-        return block.slice(openBraceIdx, i + 1);
-      }
-    }
-  }
-  return '';
-}
-
-/**
- * safeLogError 呼出の引数ブロック (括弧内) を抽出。
- * aggregateCapLogErrorContract.test.ts の同名 helper と同一仕様。
- */
-function extractSafeLogErrorArgs(block: string): string {
-  const match = block.match(/\bsafeLogError\s*\(/);
-  if (!match || match.index === undefined) return '';
-
-  const openParenIdx = block.indexOf('(', match.index);
-  if (openParenIdx === -1) return '';
-
-  let depth = 0;
-  for (let i = openParenIdx; i < block.length; i++) {
-    const ch = block[i];
-    if (ch === '(') depth++;
-    else if (ch === ')') {
-      depth--;
-      if (depth === 0) {
-        return block.slice(openParenIdx, i + 1);
-      }
-    }
-  }
-  return '';
-}
+const extractAssertFunctionBody = (source: string) =>
+  extractBraceBlock(source, ASSERT_BODY_ANCHOR);
+const extractHelperFunctionBody = (source: string) =>
+  extractBraceBlock(source, HELPER_BODY_ANCHOR);
+const extractProdBranch = (block: string) =>
+  extractBraceBlock(block, PROD_BRANCH_ANCHOR);
+const extractSafeLogErrorArgs = (block: string) =>
+  extractParenBlock(block, SAFE_LOG_ERROR_CALL);
 
 describe('textCap prod invariant observability contract (#288 item 6)', () => {
   let source = '';

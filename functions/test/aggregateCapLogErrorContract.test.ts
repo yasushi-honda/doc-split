@@ -20,63 +20,14 @@
 import { expect } from 'chai';
 import { existsSync, readFileSync } from 'fs';
 import { resolve } from 'path';
+import { extractBraceBlock, extractParenBlock } from './helpers/extractBraceBlock';
 
 const OCR_PROCESSOR_PATH = 'src/ocr/ocrProcessor.ts';
+const AGGREGATE_CAP_ANCHOR =
+  /if\s*\(\s*afterAggregateChars\s*<\s*beforeAggregateChars\s*\)\s*\{/;
 
-/**
- * aggregate cap の truncation 検知ブロック本体 (if 文 then 節) を抽出する。
- *
- * `if (afterAggregateChars < beforeAggregateChars)` を anchor にし、続く `{...}` を
- * brace-nesting で切り出す。anchor 消失/リネーム時は空文字を返し、caller 側で
- * 明示失敗させる。
- */
-function extractAggregateCapBlock(source: string): string {
-  const ANCHOR = /if\s*\(\s*afterAggregateChars\s*<\s*beforeAggregateChars\s*\)\s*\{/;
-  const match = source.match(ANCHOR);
-  if (!match || match.index === undefined) return '';
-
-  const openBraceIdx = source.indexOf('{', match.index);
-  if (openBraceIdx === -1) return '';
-
-  let depth = 0;
-  for (let i = openBraceIdx; i < source.length; i++) {
-    const ch = source[i];
-    if (ch === '{') depth++;
-    else if (ch === '}') {
-      depth--;
-      if (depth === 0) {
-        return source.slice(openBraceIdx, i + 1);
-      }
-    }
-  }
-  return '';
-}
-
-/**
- * block 内の `safeLogError(...)` 呼出の引数ブロック (括弧内) を抽出する。
- * Phase 1 (#276) handleProcessingErrorContract.test.ts の同名 helper と同一仕様。
- * 無関係な同名変数や他 logger 呼出への偽陽性を引数ブロックへの scope 縮約で防ぐ。
- */
-function extractSafeLogErrorArgs(block: string): string {
-  const match = block.match(/\bsafeLogError\s*\(/);
-  if (!match || match.index === undefined) return '';
-
-  const openParenIdx = block.indexOf('(', match.index);
-  if (openParenIdx === -1) return '';
-
-  let depth = 0;
-  for (let i = openParenIdx; i < block.length; i++) {
-    const ch = block[i];
-    if (ch === '(') depth++;
-    else if (ch === ')') {
-      depth--;
-      if (depth === 0) {
-        return block.slice(openParenIdx, i + 1);
-      }
-    }
-  }
-  return '';
-}
+const extractAggregateCapBlock = (source: string) =>
+  extractBraceBlock(source, AGGREGATE_CAP_ANCHOR);
 
 describe('aggregate cap safeLogError contract (#283)', () => {
   before(() => {
@@ -90,8 +41,8 @@ describe('aggregate cap safeLogError contract (#283)', () => {
 
   const absPath = resolve(process.cwd(), OCR_PROCESSOR_PATH);
   const source = readFileSync(absPath, 'utf-8');
-  const capBlock = extractAggregateCapBlock(source);
-  const safeLogErrorArgs = extractSafeLogErrorArgs(capBlock);
+  const capBlock = extractBraceBlock(source, AGGREGATE_CAP_ANCHOR);
+  const safeLogErrorArgs = extractParenBlock(capBlock, /\bsafeLogError\s*\(/);
 
   it('aggregate cap block が抽出できる', () => {
     expect(capBlock.length).to.be.greaterThan(

@@ -14,6 +14,7 @@ import {
   MAX_SUMMARY_LENGTH,
 } from '../src/utils/textCap';
 import type { SummaryField } from '../../shared/types';
+import { makeInvalidPage } from './helpers/textCapFixtures';
 
 // #255 Evaluator 指摘対応: discriminated union narrowing を `if (result.truncated)` で
 // 行うと、実装バグで truncated=false が返った場合にアサート群がスキップされ、テスト全体が
@@ -446,11 +447,7 @@ describe('textCap', () => {
         // Firestore 旧データから truncated=false なのに originalLength が残存した状態を simulate。
         // SummaryField 型契約ではあり得ないが `as unknown as` で bypass し、dev-assert が
         // 実際に invariant violation を検知することを lock-in する。
-        const invalidPage = {
-          text: 'short',
-          truncated: false,
-          originalLength: 999_999,
-        } as unknown as SummaryField;
+        const invalidPage = makeInvalidPage(999_999, 'short');
         expect(() => capPageResultsAggregate([invalidPage])).to.throw(/invariant violation/);
       });
 
@@ -460,11 +457,7 @@ describe('textCap', () => {
         const original = process.env.NODE_ENV;
         process.env.NODE_ENV = 'production';
         try {
-          const invalidPage = {
-            text: 'short',
-            truncated: false,
-            originalLength: 999_999,
-          } as unknown as SummaryField;
+          const invalidPage = makeInvalidPage(999_999, 'short');
           expect(() => capPageResultsAggregate([invalidPage])).to.not.throw();
         } finally {
           process.env.NODE_ENV = original;
@@ -494,11 +487,7 @@ describe('textCap', () => {
         const original = process.env.NODE_ENV;
         process.env.NODE_ENV = 'production';
         try {
-          const invalidPage = {
-            text: 'short',
-            truncated: false,
-            originalLength: 999_999,
-          } as unknown as SummaryField;
+          const invalidPage = makeInvalidPage(999_999, 'short');
           const pendingLogs: Promise<void>[] = [];
           expect(() =>
             capPageResultsAggregate([invalidPage], {
@@ -512,11 +501,7 @@ describe('textCap', () => {
       });
 
       it('dev 環境 + invalid 入力 + pendingLogs 渡しでも従来通り throw する (#284 契約維持)', () => {
-        const invalidPage = {
-          text: 'short',
-          truncated: false,
-          originalLength: 999_999,
-        } as unknown as SummaryField;
+        const invalidPage = makeInvalidPage(999_999, 'short');
         const pendingLogs: Promise<void>[] = [];
         expect(() =>
           capPageResultsAggregate([invalidPage], {
@@ -536,11 +521,7 @@ describe('textCap', () => {
       it('mixed-input [valid, invalid, valid] で dev 環境は invariant violation で throw する', () => {
         const pages: SummaryField[] = [
           { text: 'valid1', truncated: false },
-          {
-            text: 'invalid',
-            truncated: false,
-            originalLength: 999,
-          } as unknown as SummaryField,
+          makeInvalidPage(999, 'invalid'),
           { text: 'valid2', truncated: false },
         ];
         expect(() => capPageResultsAggregate(pages)).to.throw(/invariant violation/);
@@ -552,11 +533,7 @@ describe('textCap', () => {
         try {
           const pages: SummaryField[] = [
             { text: 'valid1', truncated: false },
-            {
-              text: 'invalid',
-              truncated: false,
-              originalLength: 999,
-            } as unknown as SummaryField,
+            makeInvalidPage(999, 'invalid'),
             { text: 'valid2', truncated: false },
           ];
           const result = capPageResultsAggregate(pages);
@@ -581,17 +558,9 @@ describe('textCap', () => {
         try {
           const pages: SummaryField[] = [
             { text: 'valid1', truncated: false },
-            {
-              text: 'invalid1',
-              truncated: false,
-              originalLength: 111,
-            } as unknown as SummaryField,
+            makeInvalidPage(111, 'invalid1'),
             { text: 'valid2', truncated: false },
-            {
-              text: 'invalid2',
-              truncated: false,
-              originalLength: 222,
-            } as unknown as SummaryField,
+            makeInvalidPage(222, 'invalid2'),
           ];
           const pendingLogs: Promise<void>[] = [];
           const result = capPageResultsAggregate(pages, {
