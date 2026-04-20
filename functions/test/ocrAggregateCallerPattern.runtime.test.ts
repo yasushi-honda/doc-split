@@ -20,6 +20,7 @@ import { capPageResultsAggregate } from '../src/utils/textCap';
 import type { LogErrorParams } from '../src/utils/errorLogger';
 import type { SummaryField } from '../../shared/types';
 import { makeMixedPages } from './helpers/textCapFixtures';
+import { withNodeEnvAsync } from './helpers/withNodeEnv';
 
 /**
  * caller wrapper の想定シグネチャ (test 用最小再現、AC-4/AC-5 相当)。
@@ -130,13 +131,11 @@ describe('aggregate caller wrapper runtime pattern (#294)', () => {
 
   describe('prod 環境: caller は throw を受けず pendingLogs drain (#297)', () => {
     it('prod で invalid 混入 → safeLogError spy は catch 経由では呼ばれない (throw しないため)', async () => {
-      const originalEnv = process.env.NODE_ENV;
-      process.env.NODE_ENV = 'production';
       const calls: LogErrorParams[] = [];
       const spy = async (p: LogErrorParams): Promise<void> => {
         calls.push(p);
       };
-      try {
+      await withNodeEnvAsync('production', async () => {
         const pages = makeMixedPages();
         const result = await aggregateWithCallerWrapper(
           pages,
@@ -146,11 +145,7 @@ describe('aggregate caller wrapper runtime pattern (#294)', () => {
         expect(result).to.have.length(pages.length);
         // prod は handleAggregateInvariantViolation 内で emit されるため caller catch は通らない。
         expect(calls).to.have.length(0);
-      } finally {
-        // NODE_ENV が元々 undefined の場合 `= undefined` は "undefined" 文字列化する ため delete で完全復元。
-        if (originalEnv === undefined) delete process.env.NODE_ENV;
-        else process.env.NODE_ENV = originalEnv;
-      }
+      });
     });
   });
 });
