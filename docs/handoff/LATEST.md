@@ -81,11 +81,11 @@ PM/PL 視点で WBS を引き、Phase 1.1 (#313) → Phase 1.2 (#315) → Phase 
 
 | # | 内容 | 由来 |
 |---|------|------|
-| **#331** | sanitize helper 3 本 (fileNaming.ts × 2 + shared/types.ts) の shared/ 統合検討 | PR #330 review-pr reuse I-1 |
-| **#332** | timestampToDateString を backfill 固有モジュールから抽出 (naming mismatch 解消) | PR #330 review-pr reuse I-2 |
-| **#333** | pdfOperations.ts 内 legacy sanitize 関数の整理 (#331 と連動) | PR #330 review-pr quality Important |
-| **#334** | scripts/backfill-display-filename.js の inline を shared/ に統合 (JS → ts-node 導入 or compile step 必要) | PR #330 review-pr reuse S-1 |
-| **#335** | displayFileName サニタイズで全角禁止文字 (`／` `：` 等) 対応検討 | PR #330 review-pr silent-failure Suggestion 6 |
+| **#331** | sanitize helper 3 本 (fileNaming.ts × 2 + shared/types.ts) の shared/ 統合検討 | PR #330 review-pr code-reuse Important |
+| **#332** | timestampToDateString を backfill 固有モジュールから抽出 (naming mismatch 解消) | PR #330 review-pr code-reuse Important |
+| **#333** | pdfOperations.ts 内 legacy sanitize 関数の整理 (#331 と連動) | PR #330 review-pr code-quality Important |
+| **#334** | scripts/backfill-display-filename.js の inline を shared/ に統合 (JS → ts-node 導入 or compile step 必要) | PR #330 review-pr code-reuse Suggestion |
+| **#335** | displayFileName サニタイズで全角禁止文字 (`／` `：` 等) 対応検討 | PR #330 review-pr silent-failure-hunter Suggestion |
 
 ### Test plan 実行結果
 
