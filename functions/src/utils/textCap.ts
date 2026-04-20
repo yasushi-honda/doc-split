@@ -101,8 +101,11 @@ export type CappedAggregatePage<T extends SummaryField> =
  * - Option B (brand type `DrainSink = Promise<void>[] & { __mustDrain }`):
  *   grep 誤用検知は既存 contract test (textCapDrainSinkContract / ocrProcessorAggregateCallerContract)
  *   で代替可能。branded cast の caller 側コスト増に見合う恩恵なし。見送り。
- * - Option C (名称変更のみ): 採用。diff 最小 + 役割伝達。type-design-analyzer Enforcement 1/5 は
- *   contract test 層でカバーする方針を維持。
+ * - Option C (名称変更のみ): 採用。diff 最小 + 役割伝達。caller に drain 責務を型レベルで強制する
+ *   enforcement (drainSink を渡した caller が `Promise.allSettled` で drain することの強制) は
+ *   見送り、代わりに contract test 層 (textCapDrainSinkContract + ocrProcessorAggregateCallerContract)
+ *   の grep-based 検証でカバーする方針を維持。本判断は caller が ocrProcessor.ts 単一で
+ *   あることを前提とするため、caller が 2 箇所以上に増えた場合は Option A 再評価のトリガーとする。
  */
 export interface AggregateInvariantContext {
   documentId?: string;
@@ -118,16 +121,17 @@ export interface AggregateInvariantContext {
  *      未渡し時は後方互換 fire-and-forget (`void logPromise`) を維持 (#288 item 6)。
  *   2. `require('./errorLogger')` が失敗した場合は `admin.firestore().collection('errors').add()`
  *      直接書込 fallback で救う (#303)。bundler regression / 初期化 race で errorLogger 経路が
- *      壊れた場合の silent 消失を防ぐ。fallback 書込は意図的に drainSink に push しない
- *      fire-and-forget — Cloud Functions handler 終了前の完了保証なし。主経路 (safeLogError) は
- *      drainSink で drain 保証される設計と非対称だが、fallback は「最終手段 (last resort)」で
- *      即時プロセス継続を最優先するため pragmatic な選択。完了保証が必要になった場合は別 Issue 化。
- *   3. fallback 書込自体も silent swallow でプロセス継続保証。console.error は fallback 前に
- *      先行して最低限ログを残す (rules/error-handling.md §1)。
+ *      壊れた場合の silent 消失を防ぐ。fallback 書込 Promise も主経路と対称に drainSink に
+ *      push し、caller の `Promise.allSettled(drainSink)` で Cloud Functions freeze 前の完了
+ *      保証。drainSink 未渡し時のみ fire-and-forget (後方互換)。
+ *   3. fallback 書込が reject した場合は `.catch((writeErr) => console.error(...))` で
+ *      loader 失敗と区別できる一意タグで surface (PERMISSION_DENIED / RESOURCE_EXHAUSTED 等の
+ *      operational signal を silent に落とさない)。require('firebase-admin') / admin.firestore()
+ *      の同期失敗も外側 catch で console.error 出力し区別可能化 (rules/error-handling.md §1)。
  *
  * errorLogger は top-level で admin.firestore() を呼ぶため prod path に限定した
  * dynamic require で unit test (admin 未初期化) への影響を回避 (buildPageResult.ts 方針と整合)。
- * safeLogError 内部で try/catch 済み (errorLogger.ts:141-151) なので reject せず処理継続。
+ * safeLogError 内部で try/catch 済み (errorLogger.ts の `safeLogError` 関数) なので reject せず処理継続。
  */
 function handleAggregateInvariantViolation(
   detail: string,
@@ -166,9 +170,25 @@ function handleAggregateInvariantViolation(
       try {
         // eslint-disable-next-line @typescript-eslint/no-require-imports
         const admin = require('firebase-admin') as typeof import('firebase-admin');
-        // ErrorLog schema drift 検知: errorLogger.ts の union 型 (ErrorSource/ErrorSeverity/
-        // ErrorCategory) を type-only import で share し、fallback 書込 object を compile-time
-        // 検証。errorLogger.ts の型が変わった瞬間 fallback も tsc エラーで追従が強制される。
+        // schema drift 部分検知: errorLogger.ts の union 型 (ErrorSource/ErrorSeverity/
+        // ErrorCategory) を type-only import で share し、union allowed values の drift を
+        // compile-time で検知する。ErrorLog interface の shape drift (field 追加/削除、
+        // property rename) は本 annotation ではカバー外 (contract test 層で別途 lock-in)。
+        // fallback は loaderError を含む errorLogger 非対称拡張 schema のため、`ErrorLog` 型
+        // 全体とは構造的にバインドしない。
+        //
+        // loaderError 構造化 (#303): `String(loadErr)` は Error 以外が throw された場合に
+        // `[object Object]` になる silent 情報欠損、および `FirebaseAppError.code` 等の triage
+        // 重要フィールドが落ちる問題がある。name/message/code を抽出して JSON で保存する。
+        // stack は production path のため含めない (errorLogger.ts の stack 保持方針と整合)。
+        const loaderErrInfo =
+          loadErr instanceof Error
+            ? {
+                name: loadErr.name,
+                message: loadErr.message,
+                code: (loadErr as { code?: string }).code ?? null,
+              }
+            : { raw: String(loadErr) };
         const fallbackRecord: {
           source: ErrorSource;
           functionName: string;
@@ -189,20 +209,44 @@ function handleAggregateInvariantViolation(
           status: 'pending',
           errorCode: 'LOADER_FAILED',
           errorMessage: message,
-          loaderError: String(loadErr),
+          loaderError: JSON.stringify(loaderErrInfo),
+          // Firestore は undefined を拒否するため null に正規化 (rules/error-handling.md §2)。
           documentId: context?.documentId ?? null,
           retryCount: 0,
           createdAt: admin.firestore.FieldValue.serverTimestamp(),
         };
-        admin
+        // write Promise を drainSink に push し主経路と対称化 (#303 revisit:
+        // silent-failure-hunter I2)。drainSink 未渡し caller のみ fire-and-forget。
+        // write reject 時は loader 失敗と区別できる一意タグで surface することで、
+        // PERMISSION_DENIED / RESOURCE_EXHAUSTED / UNAVAILABLE / INVALID_ARGUMENT 等の
+        // operational signal を silent に落とさない (silent-failure-hunter C1)。
+        const fallbackWritePromise: Promise<void> = admin
           .firestore()
           .collection('errors')
           .add(fallbackRecord)
-          .catch(() => {
-            /* 書込失敗は silent swallow: 既に console.error でローカル記録済、さらなる fallback なし */
+          .then(() => undefined)
+          .catch((writeErr: unknown) => {
+            console.error(
+              '[textCap] fallback errors-collection write also failed:',
+              writeErr,
+              { loaderError: loaderErrInfo, invariant: message, documentId: context?.documentId ?? null },
+            );
           });
-      } catch {
-        /* require('firebase-admin') 自体の失敗も silent swallow: プロセス継続を最優先 */
+        if (context?.drainSink) {
+          context.drainSink.push(fallbackWritePromise);
+        } else {
+          void fallbackWritePromise;
+        }
+      } catch (fallbackSetupErr) {
+        // require('firebase-admin') / admin.firestore() / FieldValue の同期失敗。
+        // loader 失敗とは別タグで記録することで、Cloud Logging alert 上で
+        // 「loader も fallback setup も共に壊れている」状態を triage 可能化する。
+        // さらなる fallback 経路は存在しないためプロセス継続のみ保証。
+        console.error(
+          '[textCap] fallback setup itself failed (admin load / firestore init):',
+          fallbackSetupErr,
+          message,
+        );
       }
     }
     return;
