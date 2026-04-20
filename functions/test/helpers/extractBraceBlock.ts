@@ -21,8 +21,10 @@
  * - `'after-match'`: anchor マッチ**末尾** (match.index + match[0].length) から最初の開き文字を探す。
  *   anchor 自体が「開始位置の目印となるテキスト」を末尾に含み、anchor 直後の block のみを狭く
  *   抽出したいケース (例: `try {...} catch (e) ` の先で catch 本体のみを抽出) に使う。
+ *
+ * #312 type-design-analyzer 推奨 #2: 外部 caller が mode 値を型安全に使うため export する。
  */
-type AnchorMode = 'from-start' | 'after-match';
+export type AnchorMode = 'from-start' | 'after-match';
 
 /**
  * source 内で anchor にマッチした位置以降の最初の `{` から、対応する `}` までを抽出する。
@@ -33,13 +35,14 @@ type AnchorMode = 'from-start' | 'after-match';
  *
  * @param source - 対象ソース全体。直前の extract 呼出結果を chain する用途で `null` も受け取り、
  *                 その場合は `null` を透過する (caller で都度 null ガードする boilerplate を回避)。
- * @param anchor - RegExp または string。string の場合は完全一致 (`indexOf`) で検索する。
+ * @param anchor - RegExp または string。string の場合は substring 検索 (`indexOf`、最初の出現位置)。
  *                 RegExp の場合は `match.index` からブロック開始位置を決める。
  * @param options.anchorMode - 起点指定 (`'from-start'` (default) / `'after-match'`)
  * @returns 抽出したブロック文字列 (`{` から `}` を両端に含む)、source が `null` もしくは
- *          anchor/開き文字/対応する閉じ文字が見つからない場合は `null`。caller は
+ *          anchor/開き文字/対応する閉じ文字/balance 不成立のいずれかで `null`。caller は
  *          `expect(block).to.not.be.null` で failure を明示化すること (silent PASS 防御、
- *          #311 C1/C2 教訓)。
+ *          #311 C1/C2 教訓)。とくに `.to.not.match(re)` は chai で `null` に対し silent PASS
+ *          するため、同一 `it` 内で先行 null ガードが必須 (#312 silent-failure-hunter I1)。
  */
 export function extractBraceBlock(
   source: string | null,
@@ -59,9 +62,10 @@ export function extractBraceBlock(
  * @param anchor - RegExp または string。RegExp 推奨 (例: `/\bsafeLogError\s*\(/`)
  * @param options.anchorMode - 起点指定 (`'from-start'` (default) / `'after-match'`)
  * @returns 抽出したブロック文字列 (`(` から `)` を両端に含む)、source が `null` もしくは
- *          anchor/開き文字/対応する閉じ文字が見つからない場合は `null`。caller は
+ *          anchor/開き文字/対応する閉じ文字/balance 不成立のいずれかで `null`。caller は
  *          `expect(args).to.not.be.null` で failure を明示化すること (silent PASS 防御、
- *          #311 C1/C2 / #312 Evaluator AC7 教訓)。
+ *          #311 C1/C2 / #312 Evaluator AC7 教訓)。`.to.not.match(re)` の null silent PASS
+ *          経路は extractBraceBlock と同様 (#312 silent-failure-hunter I1)。
  */
 export function extractParenBlock(
   source: string | null,
@@ -105,12 +109,28 @@ function resolveAnchorIndex(
   anchor: RegExp | string,
   mode: AnchorMode,
 ): number {
+  let baseIdx: number;
+  let matchLen: number;
   if (typeof anchor === 'string') {
-    const idx = source.indexOf(anchor);
-    if (idx === -1) return -1;
-    return mode === 'after-match' ? idx + anchor.length : idx;
+    baseIdx = source.indexOf(anchor);
+    if (baseIdx === -1) return -1;
+    matchLen = anchor.length;
+  } else {
+    const match = source.match(anchor);
+    if (!match || match.index === undefined) return -1;
+    baseIdx = match.index;
+    matchLen = match[0].length;
   }
-  const match = source.match(anchor);
-  if (!match || match.index === undefined) return -1;
-  return mode === 'after-match' ? match.index + match[0].length : match.index;
+  // #312 type-design-analyzer 推奨 #3: 新しい AnchorMode 追加時に silent に 'from-start' 扱いに
+  // 回帰しないよう exhaustive check で lock-in する。
+  switch (mode) {
+    case 'from-start':
+      return baseIdx;
+    case 'after-match':
+      return baseIdx + matchLen;
+    default: {
+      const _exhaustive: never = mode;
+      return _exhaustive;
+    }
+  }
 }

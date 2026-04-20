@@ -71,7 +71,7 @@ describe('textCap prod invariant observability contract (#288 item 6)', () => {
     const searchScope = helperBody || assertBody;
     const prodBranch = extractProdBranch(searchScope);
     expect(prodBranch, 'prod 分岐が抽出できない — anchor 消失').to.not.be.null;
-    expect(prodBranch).to.match(
+    expect(prodBranch!).to.match(
       /\bsafeLogError\s*\(/,
       'prod 分岐内に safeLogError 呼出が見つからない — silent 回帰',
     );
@@ -85,7 +85,7 @@ describe('textCap prod invariant observability contract (#288 item 6)', () => {
     expect(prodBranch, 'prod 分岐が抽出できない — anchor 消失').to.not.be.null;
     const args = extractSafeLogErrorArgs(prodBranch);
     expect(args, 'safeLogError 引数ブロックが抽出できない').to.not.be.null;
-    expect(args).to.match(/source\s*:\s*['"]ocr['"]/);
+    expect(args!).to.match(/source\s*:\s*['"]ocr['"]/);
   });
 
   it('prod 分岐の safeLogError 引数に functionName: "capPageResultsAggregate" が含まれる', () => {
@@ -96,7 +96,7 @@ describe('textCap prod invariant observability contract (#288 item 6)', () => {
     expect(prodBranch, 'prod 分岐が抽出できない — anchor 消失').to.not.be.null;
     const args = extractSafeLogErrorArgs(prodBranch);
     expect(args, 'safeLogError 引数ブロックが抽出できない').to.not.be.null;
-    expect(args).to.match(/functionName\s*:\s*['"]capPageResultsAggregate['"]/);
+    expect(args!).to.match(/functionName\s*:\s*['"]capPageResultsAggregate['"]/);
   });
 
   it('prod 分岐内で throw が発生しない (throw 文がない)', () => {
@@ -109,7 +109,7 @@ describe('textCap prod invariant observability contract (#288 item 6)', () => {
       prodBranch,
       'prod 分岐が抽出できない — anchor 消失 (#311 review C1 対応)',
     ).to.not.be.null;
-    expect(prodBranch).to.not.match(
+    expect(prodBranch!).to.not.match(
       /\bthrow\s+(?:new\s+)?Error\b/,
       'prod 分岐に throw が残存 — fire-and-forget 方針に違反',
     );
@@ -136,7 +136,7 @@ describe('textCap prod invariant observability contract (#288 item 6)', () => {
   it('assertAggregatePageInvariant 本体から handleAggregateInvariantViolation が呼ばれる', () => {
     const assertBody = extractAssertFunctionBody(source);
     expect(assertBody, 'assert 本体が抽出できない — anchor 消失').to.not.be.null;
-    expect(assertBody).to.match(
+    expect(assertBody!).to.match(
       /\bhandleAggregateInvariantViolation\s*\(/,
       'assert 本体から helper 呼出が消失 — silent return 回帰の可能性',
     );
@@ -152,7 +152,7 @@ describe('textCap prod invariant observability contract (#288 item 6)', () => {
     expect(prodBranch, 'prod 分岐が抽出できない — anchor 消失').to.not.be.null;
     const args = extractSafeLogErrorArgs(prodBranch);
     expect(args, 'safeLogError 引数ブロックが抽出できない').to.not.be.null;
-    expect(args).to.match(
+    expect(args!).to.match(
       /\bdocumentId\b/,
       'safeLogError 引数に documentId が含まれない — 違反 document の特定不可',
     );

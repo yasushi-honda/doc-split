@@ -59,7 +59,7 @@ describe('textCap drainSink contract (#297 + #293, #304 rename)', () => {
       interfaceBlock,
       'AggregateInvariantContext interface block が抽出できない — anchor 消失',
     ).to.not.be.null;
-    expect(interfaceBlock).to.not.match(
+    expect(interfaceBlock!).to.not.match(
       /\bpendingLogs\b/,
       'AggregateInvariantContext に旧名 pendingLogs が残存 — #304 rename が不完全',
     );
@@ -74,7 +74,7 @@ describe('textCap drainSink contract (#297 + #293, #304 rename)', () => {
     ).to.not.be.null;
     // `const <var> = safeLogError(...)` または `let <var> = safeLogError(...)` の形を検査。
     // fire-and-forget 直書き `void safeLogError(` に regression した場合に fail させる。
-    expect(prodBranch).to.match(
+    expect(prodBranch!).to.match(
       /(?:const|let)\s+\w+\s*=\s*safeLogError\s*\(/,
       'safeLogError の戻り値が変数束縛されていない — fire-and-forget に回帰している可能性',
     );
@@ -84,7 +84,7 @@ describe('textCap drainSink contract (#297 + #293, #304 rename)', () => {
     const helperBody = extractHelperFunctionBody(source);
     const prodBranch = extractProdBranch(helperBody);
     expect(prodBranch, 'prod 分岐が抽出できない — anchor 消失').to.not.be.null;
-    expect(prodBranch).to.match(
+    expect(prodBranch!).to.match(
       /context\?\.drainSink[\s\S]*?\.push\s*\(/,
       'context?.drainSink への push 呼出が見つからない — drain 経路が欠損',
     );
@@ -96,7 +96,7 @@ describe('textCap drainSink contract (#297 + #293, #304 rename)', () => {
     expect(prodBranch, 'prod 分岐が抽出できない — anchor 消失').to.not.be.null;
     // legacy caller (drainSink 未渡し) では intentionally fire-and-forget を維持する。
     // `void logPromise;` は完了保証ではなく「意図的に discard」を明示するマーカー。
-    expect(prodBranch).to.match(
+    expect(prodBranch!).to.match(
       /\bvoid\s+\w+\s*;?/,
       'drainSink 未渡し時の void fallback が見つからない — 後方互換が壊れている可能性',
     );
@@ -110,7 +110,7 @@ describe('textCap drainSink contract (#297 + #293, #304 rename)', () => {
       prodBranch,
       'prod 分岐が抽出できない — anchor 消失 (#311 review C2 対応)',
     ).to.not.be.null;
-    expect(prodBranch).to.not.match(
+    expect(prodBranch!).to.not.match(
       /\bvoid\s+safeLogError\s*\(/,
       'void safeLogError( 直叩きが残存 — fire-and-forget 回帰、#297 対応が崩れている',
     );

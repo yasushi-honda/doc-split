@@ -43,6 +43,22 @@ describe('extractBraceBlock helper', () => {
         '{ inner }',
       );
     });
+
+    // #312 pr-test-analyzer I3: string anchor + 'after-match' + anchor 不在のケース lock-in。
+    it("string anchor + 'after-match' で anchor 不在時は null", () => {
+      expect(
+        extractBraceBlock('no anchor here', 'MISSING', { anchorMode: 'after-match' }),
+      ).to.be.null;
+    });
+
+    // #312 pr-test-analyzer I4: 'from-start' 明示指定の挙動を lock-in (default と同一動作)。
+    it("anchorMode: 'from-start' 明示指定は default と同じ挙動", () => {
+      const source = `try { inner } catch (e) { outer }`;
+      const anchor = /try\s*\{[\s\S]*?\}\s*catch\s*\(\s*\w+\s*\)\s*/;
+      expect(extractBraceBlock(source, anchor, { anchorMode: 'from-start' })).to.equal(
+        '{ inner }',
+      );
+    });
   });
 
   describe("extractBraceBlock (default anchorMode: 'from-start')", () => {
@@ -65,6 +81,12 @@ describe('extractBraceBlock helper', () => {
       const source = `function f() { if (x) { y(); `;
       expect(extractBraceBlock(source, 'function f()')).to.be.null;
     });
+
+    // #312 pr-test-analyzer I2: 空 source の退化ケースを lock-in。
+    it('空 source は null を返す', () => {
+      expect(extractBraceBlock('', /const/)).to.be.null;
+      expect(extractBraceBlock('', 'const')).to.be.null;
+    });
   });
 
   describe('extractParenBlock', () => {
@@ -81,6 +103,29 @@ describe('extractBraceBlock helper', () => {
 
     it('anchor 不在時は null', () => {
       expect(extractParenBlock('const x = 1;', /nomatch/)).to.be.null;
+    });
+
+    // #312 pr-test-analyzer I1: brace 側の unbalanced テストと対称に paren 側も lock-in。
+    it('unbalanced な `(` は null を返す (loop 完走時)', () => {
+      expect(extractParenBlock('f(g(1, 2', 'f')).to.be.null;
+    });
+  });
+
+  // #312 pr-test-analyzer C1 (Critical): null source passthrough は JSDoc で契約しているが
+  // 本 helper 単体テストでの回帰ガードが欠如していた。alias wrapper 経由の chain 入力
+  // (extractProdBranch(helperBody) で helperBody が null) が実運用で発生するため必須 lock-in。
+  describe('null source passthrough (chain 用途)', () => {
+    it('extractBraceBlock(null, ...) は常に null を返す', () => {
+      expect(extractBraceBlock(null, /anything/)).to.be.null;
+      expect(extractBraceBlock(null, 'anything')).to.be.null;
+      expect(extractBraceBlock(null, /anything/, { anchorMode: 'after-match' })).to.be.null;
+      expect(extractBraceBlock(null, 'anything', { anchorMode: 'from-start' })).to.be.null;
+    });
+
+    it('extractParenBlock(null, ...) も null を透過する', () => {
+      expect(extractParenBlock(null, /anything/)).to.be.null;
+      expect(extractParenBlock(null, 'anything')).to.be.null;
+      expect(extractParenBlock(null, /anything/, { anchorMode: 'after-match' })).to.be.null;
     });
   });
 });

@@ -63,7 +63,7 @@ describe('textCap errorLogger require failure fallback contract (#303 + #319 rev
     expect(catchBlock, 'catch (loadErr) ブロックが抽出できない').to.not.be.null;
     // Cloud Logging alert grep 契約: `[textCap] failed to load errorLogger` prefix を lock-in。
     // prefix drift (例: 英語化、モジュール名変更) は operational alert を壊すため regression 検知。
-    expect(catchBlock).to.match(
+    expect(catchBlock!).to.match(
       /console\.error\s*\(\s*['"]\[textCap\]\s+failed\s+to\s+load\s+errorLogger/,
       'catch (loadErr) 冒頭の先行 console.error が消失 or prefix drift — Cloud Logging alert が壊れる',
     );
@@ -73,7 +73,7 @@ describe('textCap errorLogger require failure fallback contract (#303 + #319 rev
     const helperBody = extractHelperFunctionBody(source);
     const catchBlock = extractLoadErrCatch(helperBody);
     expect(catchBlock, 'catch (loadErr) ブロックが抽出できない').to.not.be.null;
-    expect(catchBlock).to.match(
+    expect(catchBlock!).to.match(
       /admin\.firestore\s*\(\s*\)/,
       'catch (loadErr) 内で admin.firestore() 呼出が見つからない — fallback 書込経路が欠損',
     );
@@ -83,11 +83,11 @@ describe('textCap errorLogger require failure fallback contract (#303 + #319 rev
     const helperBody = extractHelperFunctionBody(source);
     const catchBlock = extractLoadErrCatch(helperBody);
     expect(catchBlock, 'catch (loadErr) ブロックが抽出できない').to.not.be.null;
-    expect(catchBlock).to.match(
+    expect(catchBlock!).to.match(
       /\.collection\s*\(\s*['"]errors['"]\s*\)/,
       'catch (loadErr) 内で errors collection への書込先が特定されていない',
     );
-    expect(catchBlock).to.match(
+    expect(catchBlock!).to.match(
       /\.add\s*\(/,
       'catch (loadErr) 内で .add( 呼出が見つからない — errors collection への書込が欠損',
     );
@@ -148,16 +148,16 @@ describe('textCap errorLogger require failure fallback contract (#303 + #319 rev
     const catchBlock = extractLoadErrCatch(helperBody);
     expect(catchBlock, 'catch (loadErr) ブロックが抽出できない').to.not.be.null;
     // errors collection triage dashboard が集計に使う key field を lock-in。
-    expect(catchBlock).to.match(/status\s*:\s*['"]pending['"]/, 'status: pending 欠落 — triage queue invisible');
-    expect(catchBlock).to.match(/severity\s*:\s*['"]critical['"]/, 'severity: critical drift');
-    expect(catchBlock).to.match(/category\s*:\s*['"]fatal['"]/, 'category: fatal drift');
-    expect(catchBlock).to.match(/source\s*:\s*['"]ocr['"]/, 'source: ocr drift');
-    expect(catchBlock).to.match(
+    expect(catchBlock!).to.match(/status\s*:\s*['"]pending['"]/, 'status: pending 欠落 — triage queue invisible');
+    expect(catchBlock!).to.match(/severity\s*:\s*['"]critical['"]/, 'severity: critical drift');
+    expect(catchBlock!).to.match(/category\s*:\s*['"]fatal['"]/, 'category: fatal drift');
+    expect(catchBlock!).to.match(/source\s*:\s*['"]ocr['"]/, 'source: ocr drift');
+    expect(catchBlock!).to.match(
       /functionName\s*:\s*['"]capPageResultsAggregate:loaderFailed['"]/,
       'functionName suffix drift — triage filter 壊れ',
     );
-    expect(catchBlock).to.match(/errorCode\s*:\s*['"]LOADER_FAILED['"]/, 'errorCode drift');
-    expect(catchBlock).to.match(
+    expect(catchBlock!).to.match(/errorCode\s*:\s*['"]LOADER_FAILED['"]/, 'errorCode drift');
+    expect(catchBlock!).to.match(
       /documentId\s*:\s*context\?\.documentId\s*\?\?\s*null/,
       'documentId 正規化 `?? null` が消失 — undefined で Firestore 書込 reject or document 紐付け不可',
     );
@@ -170,11 +170,11 @@ describe('textCap errorLogger require failure fallback contract (#303 + #319 rev
     // String(loadErr) 直接代入は Error 以外の throw で `[object Object]` になる silent 情報欠損、
     // FirebaseAppError.code 等の triage 重要フィールド drop の原因となる。
     // instanceof Error ブランチで name/message/code を抽出する形へ regression しないよう lock-in。
-    expect(catchBlock).to.match(
+    expect(catchBlock!).to.match(
       /loadErr\s+instanceof\s+Error/,
       'instanceof Error 分岐が消失 — String(loadErr) 直代入 regression で triage 情報欠損',
     );
-    expect(catchBlock).to.not.match(
+    expect(catchBlock!).to.not.match(
       /loaderError\s*:\s*String\s*\(\s*loadErr\s*\)/,
       'loaderError: String(loadErr) 直代入に回帰 — [object Object] silent 情報欠損が再発',
     );
@@ -186,12 +186,12 @@ describe('textCap errorLogger require failure fallback contract (#303 + #319 rev
     expect(catchBlock, 'catch (loadErr) ブロックが抽出できない').to.not.be.null;
     // 主経路 (safeLogError) と対称に fallback も drainSink に push して drain 保証。
     // fire-and-forget 非対称性 (Cloud Functions freeze 時の partial delivery) に回帰しないよう lock-in。
-    expect(catchBlock).to.match(
+    expect(catchBlock!).to.match(
       /context\?\.drainSink[\s\S]*?\.push\s*\(/,
       'fallback 内で drainSink.push() が消失 — fire-and-forget 非対称性に回帰 (Cloud Functions freeze 時 partial delivery リスク)',
     );
     // .then(() => undefined) で Promise<void> に正規化されていること (drainSink の型整合)。
-    expect(catchBlock).to.match(
+    expect(catchBlock!).to.match(
       /\.then\s*\(\s*\(\s*\)\s*=>\s*undefined\s*\)/,
       '.then(() => undefined) による Promise<void> 正規化が消失 — drainSink 型整合が壊れる',
     );
