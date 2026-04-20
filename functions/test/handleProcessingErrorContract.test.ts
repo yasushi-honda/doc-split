@@ -27,9 +27,9 @@ import { expect } from 'chai';
 import { existsSync, readFileSync } from 'fs';
 import { resolve } from 'path';
 import { extractBraceBlock, extractParenBlock } from './helpers/extractBraceBlock';
+import { SAFE_LOG_ERROR_CALL } from './helpers/patterns';
 
 const OCR_PROCESSOR_PATH = 'src/ocr/ocrProcessor.ts';
-const SAFE_LOG_ERROR_CALL = /\bsafeLogError\s*\(/;
 
 // brace/paren 抽出は共通 helper (extractBraceBlock / extractParenBlock) を使用 (#302)。
 // 関数本体の抽出 = brace-nesting、safeLogError 引数の抽出 = paren-nesting で scope を絞ることで

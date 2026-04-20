@@ -19,6 +19,7 @@
 import { expect } from 'chai';
 import { existsSync, readFileSync } from 'fs';
 import { resolve } from 'path';
+import { SAFE_LOG_ERROR_CALL } from './helpers/patterns';
 
 /**
  * summary 生成失敗 catch 句のアンカー定義。
@@ -147,7 +148,6 @@ describe('summary catch logError contract (#266)', () => {
     it('ocrProcessor.ts の safeLogError 呼出に source: \'ocr\' が含まれる', () => {
       // safeLogError( ... source: 'ocr' ... ) の近接パターン検証
       // ANCHOR_WINDOW_LINES=8 内で両要素が共存することを確認
-      const SAFE_LOG_ERROR_CALL = /safeLogError\s*\(/;
       const SOURCE_OCR = /source:\s*['"]ocr['"]/;
       const lines = ocrProcessorSource.split('\n');
       const safeLogLines = lines
@@ -171,7 +171,6 @@ describe('summary catch logError contract (#266)', () => {
     });
 
     it('regenerateSummary.ts の safeLogError 呼出に functionName: \'regenerateSummary\' が含まれる', () => {
-      const SAFE_LOG_ERROR_CALL = /safeLogError\s*\(/;
       const FUNCTION_NAME_REGENERATE = /functionName:\s*['"]regenerateSummary['"]/;
       const lines = regenerateSummarySource.split('\n');
       const safeLogLines = lines
@@ -195,7 +194,6 @@ describe('summary catch logError contract (#266)', () => {
     });
 
     it('ocrProcessor.ts の safeLogError 呼出で documentId が渡されている', () => {
-      const SAFE_LOG_ERROR_CALL = /safeLogError\s*\(/;
       const DOCUMENT_ID_PARAM = /documentId:/;
       const lines = ocrProcessorSource.split('\n');
       const safeLogLines = lines
