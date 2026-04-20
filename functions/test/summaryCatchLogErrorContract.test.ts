@@ -11,6 +11,9 @@
  * 方式: grep-based (docs/context/test-strategy.md §2.1 参照)。console.error メッセージを
  * anchor に、近傍 (±ANCHOR_WINDOW_LINES 行) の logError 呼出を検知する。anchor メッセージ変更で
  * test が失敗するが、意図的変更のメンテナンス負荷は silent swallow 防止の価値と trade-off。
+ *
+ * 将来委譲: 現時点で委譲先なし (#178/#209 型 silent swallow 防止は summary 生成 catch 句の
+ *          source 構造保護が本質のため恒久 contract として保持)
  */
 
 import { expect } from 'chai';

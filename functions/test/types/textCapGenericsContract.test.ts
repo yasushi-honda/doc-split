@@ -9,6 +9,9 @@
  * 不変条件を型レベルで lock-in する。
  *
  * 方式: `@ts-expect-error` 型契約 test (docs/context/test-strategy.md §2.2 参照)。
+ *
+ * 将来委譲: 現時点で委譲先なし (#284 cast 排除後の generics 制約保護は型レベル保護が本質
+ *          のため恒久 contract として保持)
  */
 
 import { expect } from 'chai';

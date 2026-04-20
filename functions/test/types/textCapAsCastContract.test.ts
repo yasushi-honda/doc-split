@@ -15,7 +15,12 @@
  *    に近い形であること (実装詳細の揺れは許容するが主要 shape は固定)
  * 3. dev-assert (process.env.NODE_ENV !== 'production' gate) が同関数 scope 内に存在すること
  *
- * 方式: コード文字列を読み、コメント行を除外してから pattern を検出する。
+ * 方式: grep-based (docs/context/test-strategy.md §2.1 参照)。
+ * path は types/ 配下だが方式は §2.1 grep (コード文字列 + コメント除外 + pattern 検出)。
+ * 命名優先規則 (§2.4): path `types/` 配下でも方式が grep なら §2.1 として扱う (本ファイルは例外)。
+ *
+ * 将来委譲: 現時点で委譲先なし (as T cast 排除と dev-assert lock-in は source 構造保護が本質
+ *          のため恒久 contract として保持)
  */
 
 import { expect } from 'chai';
