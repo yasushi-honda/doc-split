@@ -3,9 +3,9 @@
  *
  * 本 helper は 5 ファイルの contract test から依存される共通基盤。将来の改修で
  * silent regression (null 返却の意味論変化、anchorMode の挙動反転 等) を
- * 直接検知する fixture を配置する。contract test 側 (aggregateCapLogErrorContract)
- * の `extractAggregateCapBlock detection logic` describe は実コード対象のため残置、
- * 本ファイルは helper 単体の挙動のみを狭く lock-in する。
+ * 直接検知する fixture を配置する。contract test 側の detection logic describe
+ * (aggregateCapLogErrorContract 等) は実コード対象のため残置、本ファイルは helper
+ * 単体の挙動のみを狭く lock-in する。
  *
  * #312: anchor/開き文字不在は空文字ではなく `null` を返す (silent PASS 防御)。
  */
@@ -135,7 +135,7 @@ describe('extractBraceBlock helper', () => {
 
   // #312 pr-test-analyzer C1 (Critical): null source passthrough は JSDoc で契約しているが
   // 本 helper 単体テストでの回帰ガードが欠如していた。alias wrapper 経由の chain 入力
-  // (extractProdBranch(helperBody) で helperBody が null) が実運用で発生するため必須 lock-in。
+  // (extractBraceBlock(extractBraceBlock(...), ...) で内側が null) が実運用で発生するため必須 lock-in。
   describe('null source passthrough (chain 用途)', () => {
     it('extractBraceBlock(null, ...) は常に null を返す', () => {
       expect(extractBraceBlock(null, /anything/)).to.be.null;

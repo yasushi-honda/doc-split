@@ -25,10 +25,6 @@ const OCR_PROCESSOR_PATH = 'src/ocr/ocrProcessor.ts';
 const AGGREGATE_CAP_ANCHOR =
   /if\s*\(\s*afterAggregateChars\s*<\s*beforeAggregateChars\s*\)\s*\{/;
 
-// #312: helper が anchor 不在時に null を返すため、alias wrapper も string | null を透過する。
-const extractAggregateCapBlock = (source: string): string | null =>
-  extractBraceBlock(source, AGGREGATE_CAP_ANCHOR);
-
 describe('aggregate cap safeLogError contract (#283)', () => {
   before(() => {
     const absPath = resolve(process.cwd(), OCR_PROCESSOR_PATH);
@@ -122,7 +118,7 @@ describe('aggregate cap safeLogError contract (#283)', () => {
     );
   });
 
-  describe('extractAggregateCapBlock detection logic', () => {
+  describe('aggregate cap block 抽出ロジック (AGGREGATE_CAP_ANCHOR 検出)', () => {
     it('positive: 通常の if block を抽出する', () => {
       const fixture = `
 const before = 100;
@@ -131,7 +127,7 @@ if (afterAggregateChars < beforeAggregateChars) {
   await safeLogError({ error, source: 'ocr' });
 }
 `;
-      const block = extractAggregateCapBlock(fixture);
+      const block = extractBraceBlock(fixture, AGGREGATE_CAP_ANCHOR);
       expect(block, 'block 抽出失敗').to.not.be.null;
       expect(block!).to.include('safeLogError');
       expect(block!.startsWith('{')).to.equal(true);
@@ -144,7 +140,7 @@ if (afterAggregateChars < beforeAggregateChars) {
   try { await safeLogError({ error }); } catch (e) { console.error(e); }
 }
 `;
-      const block = extractAggregateCapBlock(fixture);
+      const block = extractBraceBlock(fixture, AGGREGATE_CAP_ANCHOR);
       expect(block, 'block 抽出失敗').to.not.be.null;
       expect(block!).to.include('try');
       expect(block!).to.include('catch');
@@ -152,7 +148,7 @@ if (afterAggregateChars < beforeAggregateChars) {
 
     it('negative: anchor 不在時は null', () => {
       const fixture = `const x = 1;`;
-      expect(extractAggregateCapBlock(fixture)).to.be.null;
+      expect(extractBraceBlock(fixture, AGGREGATE_CAP_ANCHOR)).to.be.null;
     });
 
     it('scope: block 外の safeLogError は検知対象外', () => {
@@ -163,7 +159,7 @@ if (afterAggregateChars < beforeAggregateChars) {
   console.warn('truncated');
 }
 `;
-      const block = extractAggregateCapBlock(fixture);
+      const block = extractBraceBlock(fixture, AGGREGATE_CAP_ANCHOR);
       expect(block, 'block 抽出失敗').to.not.be.null;
       expect(/\bsafeLogError\s*\(/.test(block!)).to.equal(
         false,

@@ -35,12 +35,6 @@ const HELPER_BODY_ANCHOR =
   /function\s+handleAggregateInvariantViolation\s*\([^)]*\)\s*:\s*void\s*\{/;
 const LOADERR_CATCH_ANCHOR = /catch\s*\(\s*loadErr\s*\)\s*/;
 
-// #312: helper が anchor/null 入力を透過して null を返すため、alias wrapper は直接委譲する。
-const extractHelperFunctionBody = (source: string): string | null =>
-  extractBraceBlock(source, HELPER_BODY_ANCHOR);
-const extractLoadErrCatch = (block: string | null): string | null =>
-  extractBraceBlock(block, LOADERR_CATCH_ANCHOR, { anchorMode: 'after-match' });
-
 describe('textCap errorLogger require failure fallback contract (#303 + #319 review)', () => {
   let source = '';
 
@@ -51,15 +45,15 @@ describe('textCap errorLogger require failure fallback contract (#303 + #319 rev
   });
 
   it('handleAggregateInvariantViolation の catch (loadErr) ブロックが抽出できる (anchor 保護)', () => {
-    const helperBody = extractHelperFunctionBody(source);
+    const helperBody = extractBraceBlock(source, HELPER_BODY_ANCHOR);
     expect(helperBody, 'handleAggregateInvariantViolation 関数本体が抽出できない').to.not.be.null;
-    const catchBlock = extractLoadErrCatch(helperBody);
+    const catchBlock = extractBraceBlock(helperBody, LOADERR_CATCH_ANCHOR, { anchorMode: 'after-match' });
     expect(catchBlock, 'catch (loadErr) ブロックが抽出できない — anchor 消失').to.not.be.null;
   });
 
   it('loader 失敗時の先行 console.error が保持される (AC-11, rules/error-handling.md §1)', () => {
-    const helperBody = extractHelperFunctionBody(source);
-    const catchBlock = extractLoadErrCatch(helperBody);
+    const helperBody = extractBraceBlock(source, HELPER_BODY_ANCHOR);
+    const catchBlock = extractBraceBlock(helperBody, LOADERR_CATCH_ANCHOR, { anchorMode: 'after-match' });
     expect(catchBlock, 'catch (loadErr) ブロックが抽出できない').to.not.be.null;
     // Cloud Logging alert grep 契約: `[textCap] failed to load errorLogger` prefix を lock-in。
     // prefix drift (例: 英語化、モジュール名変更) は operational alert を壊すため regression 検知。
@@ -70,8 +64,8 @@ describe('textCap errorLogger require failure fallback contract (#303 + #319 rev
   });
 
   it('catch (loadErr) 内で admin.firestore() が呼ばれている (fallback 書込経路)', () => {
-    const helperBody = extractHelperFunctionBody(source);
-    const catchBlock = extractLoadErrCatch(helperBody);
+    const helperBody = extractBraceBlock(source, HELPER_BODY_ANCHOR);
+    const catchBlock = extractBraceBlock(helperBody, LOADERR_CATCH_ANCHOR, { anchorMode: 'after-match' });
     expect(catchBlock, 'catch (loadErr) ブロックが抽出できない').to.not.be.null;
     expect(catchBlock!).to.match(
       /admin\.firestore\s*\(\s*\)/,
@@ -80,8 +74,8 @@ describe('textCap errorLogger require failure fallback contract (#303 + #319 rev
   });
 
   it('catch (loadErr) 内で errors collection への add 呼出がある (errors 書込先)', () => {
-    const helperBody = extractHelperFunctionBody(source);
-    const catchBlock = extractLoadErrCatch(helperBody);
+    const helperBody = extractBraceBlock(source, HELPER_BODY_ANCHOR);
+    const catchBlock = extractBraceBlock(helperBody, LOADERR_CATCH_ANCHOR, { anchorMode: 'after-match' });
     expect(catchBlock, 'catch (loadErr) ブロックが抽出できない').to.not.be.null;
     expect(catchBlock!).to.match(
       /\.collection\s*\(\s*['"]errors['"]\s*\)/,
@@ -94,8 +88,8 @@ describe('textCap errorLogger require failure fallback contract (#303 + #319 rev
   });
 
   it('write reject 時の .catch handler で console.error により失敗を surface (#319 review C1)', () => {
-    const helperBody = extractHelperFunctionBody(source);
-    const catchBlock = extractLoadErrCatch(helperBody);
+    const helperBody = extractBraceBlock(source, HELPER_BODY_ANCHOR);
+    const catchBlock = extractBraceBlock(helperBody, LOADERR_CATCH_ANCHOR, { anchorMode: 'after-match' });
     expect(catchBlock, 'catch (loadErr) ブロックが抽出できない').to.not.be.null;
     // `.catch(() => {})` による完全 silent swallow (PERMISSION_DENIED / RESOURCE_EXHAUSTED /
     // UNAVAILABLE / INVALID_ARGUMENT 等の operational signal が消失する regression) を防ぐ。
@@ -120,8 +114,8 @@ describe('textCap errorLogger require failure fallback contract (#303 + #319 rev
   });
 
   it('外側 catch(fallbackSetupErr) で setup 失敗も console.error で surface (#319 review I1)', () => {
-    const helperBody = extractHelperFunctionBody(source);
-    const catchBlock = extractLoadErrCatch(helperBody);
+    const helperBody = extractBraceBlock(source, HELPER_BODY_ANCHOR);
+    const catchBlock = extractBraceBlock(helperBody, LOADERR_CATCH_ANCHOR, { anchorMode: 'after-match' });
     expect(catchBlock, 'catch (loadErr) ブロックが抽出できない').to.not.be.null;
     // 外側 try/catch: `try { admin.firestore()... } catch (fallbackSetupErr) { ... }`。
     // bare `catch {}` による silent swallow regression を防ぐ (require('firebase-admin') /
@@ -144,8 +138,8 @@ describe('textCap errorLogger require failure fallback contract (#303 + #319 rev
   });
 
   it('fallback record に triage 必須 field が含まれる (#319 review I2: schema lock-in)', () => {
-    const helperBody = extractHelperFunctionBody(source);
-    const catchBlock = extractLoadErrCatch(helperBody);
+    const helperBody = extractBraceBlock(source, HELPER_BODY_ANCHOR);
+    const catchBlock = extractBraceBlock(helperBody, LOADERR_CATCH_ANCHOR, { anchorMode: 'after-match' });
     expect(catchBlock, 'catch (loadErr) ブロックが抽出できない').to.not.be.null;
     // errors collection triage dashboard が集計に使う key field を lock-in。
     expect(catchBlock!).to.match(/status\s*:\s*['"]pending['"]/, 'status: pending 欠落 — triage queue invisible');
@@ -164,8 +158,8 @@ describe('textCap errorLogger require failure fallback contract (#303 + #319 rev
   });
 
   it('loaderError が構造化され String(loadErr) 直接代入されていない (#319 review I3)', () => {
-    const helperBody = extractHelperFunctionBody(source);
-    const catchBlock = extractLoadErrCatch(helperBody);
+    const helperBody = extractBraceBlock(source, HELPER_BODY_ANCHOR);
+    const catchBlock = extractBraceBlock(helperBody, LOADERR_CATCH_ANCHOR, { anchorMode: 'after-match' });
     expect(catchBlock, 'catch (loadErr) ブロックが抽出できない').to.not.be.null;
     // String(loadErr) 直接代入は Error 以外の throw で `[object Object]` になる silent 情報欠損、
     // FirebaseAppError.code 等の triage 重要フィールド drop の原因となる。
@@ -181,8 +175,8 @@ describe('textCap errorLogger require failure fallback contract (#303 + #319 rev
   });
 
   it('fallback write Promise が drainSink に push される (#319 review I2: 対称化)', () => {
-    const helperBody = extractHelperFunctionBody(source);
-    const catchBlock = extractLoadErrCatch(helperBody);
+    const helperBody = extractBraceBlock(source, HELPER_BODY_ANCHOR);
+    const catchBlock = extractBraceBlock(helperBody, LOADERR_CATCH_ANCHOR, { anchorMode: 'after-match' });
     expect(catchBlock, 'catch (loadErr) ブロックが抽出できない').to.not.be.null;
     // 主経路 (safeLogError) と対称に fallback も drainSink に push して drain 保証。
     // fire-and-forget 非対称性 (Cloud Functions freeze 時の partial delivery) に回帰しないよう lock-in。
