@@ -453,6 +453,10 @@ describe('textCap', () => {
       // textCapProdInvariantContract.test.ts (grep) + Phase 3 (動的) で二段 lock-in。
       it('production では invalid 入力でも throw しない (safeLogError 経由で emit)', () => {
         withNodeEnv('production', () => {
+          // Issue #315 #2 (silent-failure-hunter I2): helper 経由で prod 分岐に到達したことを
+          // callsite で明示。helper 実装が value.toLowerCase() 等に誤改変されても silent に
+          // 素通りしない二段 lock-in (helper 単体 test + 本 positive assert)。
+          expect(process.env.NODE_ENV, 'helper 経由で prod 分岐到達を明示').to.equal('production');
           const invalidPage = makeInvalidPage(999_999, 'short');
           expect(() => capPageResultsAggregate([invalidPage])).to.not.throw();
         });

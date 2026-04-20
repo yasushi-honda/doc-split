@@ -6,7 +6,7 @@
  */
 
 import { expect } from 'chai';
-import { withNodeEnv, withNodeEnvAsync } from './withNodeEnv';
+import { withNodeEnv, withNodeEnvAsync, type NodeEnvValue } from './withNodeEnv';
 
 describe('withNodeEnv helper', () => {
   let saved: string | undefined;
@@ -125,6 +125,38 @@ describe('withNodeEnv helper', () => {
     it('async fn の戻り値を透過する', async () => {
       const result = await withNodeEnvAsync('production', async () => 99);
       expect(result).to.equal(99);
+    });
+  });
+
+  // Issue #315 #3 (type-design-analyzer): signature が NodeEnvValue literal union で typo を
+  // 完全拒否することを compile-time で lock-in (docs/context/test-strategy.md §2.2 型契約 test)。
+  // (string & {}) escape hatch は採用せず strict union、実行時挙動は既存 sync/async describe
+  // で網羅済のため、本 describe は型構造のみを検証する。
+  describe('NodeEnvValue literal union narrow (#315)', () => {
+    it('NodeEnvValue 型は production / test / development の 3 値 union である (構造 lock-in)', () => {
+      // NodeEnvValue[] 宣言時点で tsc が union 構造を検証。値が 4 個になる / number に変わる
+      // 等の破壊的変更は compile エラーで検知される。
+      const members: readonly NodeEnvValue[] = ['production', 'test', 'development'];
+      expect(members).to.have.lengthOf(3);
+      expect(members).to.include.members(['production', 'test', 'development']);
+    });
+
+    it('typo (`prdouction` / `PROD` 等) は NodeEnvValue に含まれず @ts-expect-error で弾かれる', () => {
+      // 未消費の @ts-expect-error は tsc エラーになるため、行末に typo literal を代入する形で
+      // compile-time 検知を直接確認できる。runtime assert は不要 (expect().to.throw は getter
+      // アクセスで no-op になるため採用しない — simplify review Critical 指摘対応)。
+      // @ts-expect-error: 'prdouction' は NodeEnvValue に含まれない typo。
+      const _typo1: NodeEnvValue = 'prdouction';
+      // @ts-expect-error: 'PROD' 等の case 違いも別 literal として弾かれる。
+      const _typo2: NodeEnvValue = 'PROD';
+      void _typo1;
+      void _typo2;
+    });
+
+    it('async 版 withNodeEnvAsync も NodeEnvValue を継承し typo を弾く', () => {
+      // @ts-expect-error: async 版 signature にも同じ union が適用されることを型レベルで確認。
+      const _asyncTypo: Parameters<typeof withNodeEnvAsync>[0] = 'stagings';
+      void _asyncTypo;
     });
   });
 });

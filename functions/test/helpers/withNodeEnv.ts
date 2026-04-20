@@ -13,14 +13,22 @@
  */
 
 /**
+ * NODE_ENV として受け入れる literal 値 (Issue #315 提案 #3)。
+ *
+ * `(string & {})` escape hatch は敢えて採用せず strict union に留め、typo (`'prdouction'` 等) を
+ * 型レベルで完全拒否する。新しい値が必要になった場合のみ本 union を拡張する。
+ */
+export type NodeEnvValue = 'production' | 'test' | 'development';
+
+/**
  * NODE_ENV を value に切替えて fn を同期実行し、finally で元値に復元する。
  *
  * `try/finally` で throw 経路も保護する。original が undefined の場合は `delete` で復元する。
  *
- * @param value - 一時的に設定する NODE_ENV 値 (`'production'` / `'test'` 等)
+ * @param value - 一時的に設定する NODE_ENV 値 (`NodeEnvValue`)
  * @param fn - 切替中に実行する処理 (戻り値はそのまま返す)
  */
-export function withNodeEnv<T>(value: string, fn: () => T): T {
+export function withNodeEnv<T>(value: NodeEnvValue, fn: () => T): T {
   const original = process.env.NODE_ENV;
   process.env.NODE_ENV = value;
   try {
@@ -35,7 +43,7 @@ export function withNodeEnv<T>(value: string, fn: () => T): T {
  * `withNodeEnv` の async 版。await 対応。
  */
 export async function withNodeEnvAsync<T>(
-  value: string,
+  value: NodeEnvValue,
   fn: () => Promise<T>,
 ): Promise<T> {
   const original = process.env.NODE_ENV;
