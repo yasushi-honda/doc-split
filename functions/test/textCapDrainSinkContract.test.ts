@@ -23,9 +23,10 @@ const HELPER_BODY_ANCHOR =
 const PROD_BRANCH_ANCHOR =
   /if\s*\(\s*process\.env\.NODE_ENV\s*===\s*['"]production['"]\s*\)\s*\{/;
 
-const extractHelperFunctionBody = (source: string) =>
+// #312: helper が anchor/null 入力を透過して null を返すため、alias wrapper は直接委譲する。
+const extractHelperFunctionBody = (source: string): string | null =>
   extractBraceBlock(source, HELPER_BODY_ANCHOR);
-const extractProdBranch = (block: string) =>
+const extractProdBranch = (block: string | null): string | null =>
   extractBraceBlock(block, PROD_BRANCH_ANCHOR);
 
 describe('textCap drainSink contract (#297 + #293, #304 rename)', () => {
@@ -57,7 +58,7 @@ describe('textCap drainSink contract (#297 + #293, #304 rename)', () => {
     expect(
       interfaceBlock,
       'AggregateInvariantContext interface block が抽出できない — anchor 消失',
-    ).to.not.equal('');
+    ).to.not.be.null;
     expect(interfaceBlock).to.not.match(
       /\bpendingLogs\b/,
       'AggregateInvariantContext に旧名 pendingLogs が残存 — #304 rename が不完全',
@@ -67,9 +68,10 @@ describe('textCap drainSink contract (#297 + #293, #304 rename)', () => {
   it('prod 分岐内で safeLogError の戻り値が変数束縛されている (void 直叩きではない)', () => {
     const helperBody = extractHelperFunctionBody(source);
     const prodBranch = extractProdBranch(helperBody);
-    expect(prodBranch, 'handleAggregateInvariantViolation の prod 分岐が抽出できない').to.not.equal(
-      '',
-    );
+    expect(
+      prodBranch,
+      'handleAggregateInvariantViolation の prod 分岐が抽出できない',
+    ).to.not.be.null;
     // `const <var> = safeLogError(...)` または `let <var> = safeLogError(...)` の形を検査。
     // fire-and-forget 直書き `void safeLogError(` に regression した場合に fail させる。
     expect(prodBranch).to.match(
@@ -81,7 +83,7 @@ describe('textCap drainSink contract (#297 + #293, #304 rename)', () => {
   it('prod 分岐内で context?.drainSink への push 呼出が存在する', () => {
     const helperBody = extractHelperFunctionBody(source);
     const prodBranch = extractProdBranch(helperBody);
-    expect(prodBranch, 'prod 分岐が抽出できない — anchor 消失').to.not.equal('');
+    expect(prodBranch, 'prod 分岐が抽出できない — anchor 消失').to.not.be.null;
     expect(prodBranch).to.match(
       /context\?\.drainSink[\s\S]*?\.push\s*\(/,
       'context?.drainSink への push 呼出が見つからない — drain 経路が欠損',
@@ -91,7 +93,7 @@ describe('textCap drainSink contract (#297 + #293, #304 rename)', () => {
   it('drainSink 未渡し時の fallback (void 形) が存在する (後方互換維持)', () => {
     const helperBody = extractHelperFunctionBody(source);
     const prodBranch = extractProdBranch(helperBody);
-    expect(prodBranch, 'prod 分岐が抽出できない — anchor 消失').to.not.equal('');
+    expect(prodBranch, 'prod 分岐が抽出できない — anchor 消失').to.not.be.null;
     // legacy caller (drainSink 未渡し) では intentionally fire-and-forget を維持する。
     // `void logPromise;` は完了保証ではなく「意図的に discard」を明示するマーカー。
     expect(prodBranch).to.match(
@@ -103,10 +105,11 @@ describe('textCap drainSink contract (#297 + #293, #304 rename)', () => {
   it('prod 分岐に直接 `void safeLogError(` 形が残っていない (regression guard)', () => {
     const helperBody = extractHelperFunctionBody(source);
     const prodBranch = extractProdBranch(helperBody);
-    // anchor 消失で prodBranch が空文字のまま to.not.match(...) が silent PASS する経路を防ぐ。
-    expect(prodBranch, 'prod 分岐が抽出できない — anchor 消失 (#311 review C2 対応)').to.not.equal(
-      '',
-    );
+    // anchor 消失で prodBranch が null のまま to.not.match(...) が silent PASS する経路を防ぐ。
+    expect(
+      prodBranch,
+      'prod 分岐が抽出できない — anchor 消失 (#311 review C2 対応)',
+    ).to.not.be.null;
     expect(prodBranch).to.not.match(
       /\bvoid\s+safeLogError\s*\(/,
       'void safeLogError( 直叩きが残存 — fire-and-forget 回帰、#297 対応が崩れている',

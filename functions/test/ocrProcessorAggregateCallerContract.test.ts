@@ -23,7 +23,7 @@ const OCR_PROCESSOR_PATH = 'src/ocr/ocrProcessor.ts';
 
 // 制御フロー近接性 lock-in (#302 codex Low 1): capPageResultsAggregate 呼出 → catch ブロックを
 // 1 anchor で束ね、別所の catch ブロックや不整合な順序に回帰した場合に fail させる。
-// anchor 末尾は `catch (e) ` で終わり、そこから startAfterAnchor で最初の `{` を拾う。
+// anchor 末尾は `catch (e) ` で終わり、そこから anchorMode: 'after-match' で最初の `{` を拾う。
 //
 // 前提: ocrProcessor.ts 内で capPageResultsAggregate を参照する try/catch は 1 箇所のみ。
 // 将来 2 つ目が追加された場合、source.match() は最初のマッチを返すため、本 anchor は
@@ -81,30 +81,28 @@ describe('ocrProcessor aggregate caller wrapper contract (#293 + #297)', () => {
     // capPageResultsAggregate 呼出 → catch ブロックを 1 anchor で束ねて抽出する。
     // 別の catch ブロックや順序の回帰があれば anchor マッチ自体が失敗する (#302 codex Low 1)。
     const catchBlock = extractBraceBlock(source, CAP_AGG_CATCH_ANCHOR, {
-      startAfterAnchor: true,
+      anchorMode: 'after-match',
     });
-    expect(catchBlock, 'capPageResultsAggregate 呼出直後の catch ブロックが抽出できない').to.not.equal(
-      '',
-    );
-    expect(catchBlock).to.match(
+    expect(catchBlock, 'capPageResultsAggregate 呼出直後の catch ブロックが抽出できない').to.not.be.null;
+    expect(catchBlock!).to.match(
       /\bsafeLogError\s*\(/,
       'catch 内で safeLogError 呼出が見つからない — dev throw が silent に失われる',
     );
-    expect(catchBlock).to.match(
+    expect(catchBlock!).to.match(
       /source\s*:\s*['"]ocr['"]/,
       'catch 内 safeLogError に source: "ocr" が含まれない',
     );
     // 命名規則: 既存 `:aggregateCap` (正常系 truncation summary) と区別する suffix。
     // 既知 invariant は `:aggregateCap:invariant`、予期外エラーは `:aggregateCap:unexpected` に分類。
-    expect(catchBlock).to.match(
+    expect(catchBlock!).to.match(
       /aggregateCap:invariant/,
       'catch 内 safeLogError の functionName に :aggregateCap:invariant suffix が現れない — 既知 invariant triage 不能',
     );
-    expect(catchBlock).to.match(
+    expect(catchBlock!).to.match(
       /aggregateCap:unexpected/,
       'catch 内 safeLogError の functionName に :aggregateCap:unexpected suffix が現れない — 予期外エラーが既知 invariant と混線',
     );
-    expect(catchBlock).to.match(
+    expect(catchBlock!).to.match(
       /documentId\s*:\s*docId/,
       'catch 内 safeLogError に documentId: docId が含まれない — triage 不能',
     );
