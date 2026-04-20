@@ -15,6 +15,7 @@ import {
 } from '../src/utils/textCap';
 import type { SummaryField } from '../../shared/types';
 import { makeInvalidPage } from './helpers/textCapFixtures';
+import { withNodeEnv } from './helpers/withNodeEnv';
 
 // #255 Evaluator 指摘対応: discriminated union narrowing を `if (result.truncated)` で
 // 行うと、実装バグで truncated=false が返った場合にアサート群がスキップされ、テスト全体が
@@ -451,14 +452,10 @@ describe('textCap', () => {
       // #288 item 6: prod は throw せず safeLogError emit。実呼出検証は
       // textCapProdInvariantContract.test.ts (grep) + Phase 3 (動的) で二段 lock-in。
       it('production では invalid 入力でも throw しない (safeLogError 経由で emit)', () => {
-        const original = process.env.NODE_ENV;
-        process.env.NODE_ENV = 'production';
-        try {
+        withNodeEnv('production', () => {
           const invalidPage = makeInvalidPage(999_999, 'short');
           expect(() => capPageResultsAggregate([invalidPage])).to.not.throw();
-        } finally {
-          process.env.NODE_ENV = original;
-        }
+        });
       });
 
       // #288 item 6 silent-failure-hunter S2 + Codex MED: context.documentId 伝搬 signature 拡張。
@@ -481,9 +478,7 @@ describe('textCap', () => {
       });
 
       it('prod 環境 + invalid 入力 + pendingLogs 渡しで throw しない (#297 drain 経路)', () => {
-        const original = process.env.NODE_ENV;
-        process.env.NODE_ENV = 'production';
-        try {
+        withNodeEnv('production', () => {
           const invalidPage = makeInvalidPage(999_999, 'short');
           const pendingLogs: Promise<void>[] = [];
           expect(() =>
@@ -492,9 +487,7 @@ describe('textCap', () => {
               pendingLogs,
             }),
           ).to.not.throw();
-        } finally {
-          process.env.NODE_ENV = original;
-        }
+        });
       });
 
       it('dev 環境 + invalid 入力 + pendingLogs 渡しでも従来通り throw する (#284 契約維持)', () => {
@@ -525,9 +518,7 @@ describe('textCap', () => {
       });
 
       it('mixed-input prod 環境では全ページを return し invalid 要素は pass-through (AC-5 継続保証)', () => {
-        const originalEnv = process.env.NODE_ENV;
-        process.env.NODE_ENV = 'production';
-        try {
+        withNodeEnv('production', () => {
           const pages: SummaryField[] = [
             { text: 'valid1', truncated: false },
             makeInvalidPage(999, 'invalid'),
@@ -537,11 +528,7 @@ describe('textCap', () => {
           expect(result).to.have.length(3);
           expect(result[0]?.text).to.equal('valid1');
           expect(result[2]?.text).to.equal('valid2');
-        } finally {
-          // NODE_ENV が元々 undefined の場合 `= undefined` は "undefined" 文字列化する ため delete で完全復元。
-          if (originalEnv === undefined) delete process.env.NODE_ENV;
-          else process.env.NODE_ENV = originalEnv;
-        }
+        });
       });
 
       it('mixed-input prod で errorLogger require 失敗時は push 0 件 + console.error fallback (unit test 環境)', () => {
@@ -550,9 +537,7 @@ describe('textCap', () => {
         // textCap.ts:131 の catch (loadErr) に落ちて console.error fallback する。
         // push 経路は走らないため pendingLogs.length === 0 が決定論的。
         // 実運用 (admin 初期化済み) での push 2 件動作検証は Issue #299 で担保予定。
-        const originalEnv = process.env.NODE_ENV;
-        process.env.NODE_ENV = 'production';
-        try {
+        withNodeEnv('production', () => {
           const pages: SummaryField[] = [
             { text: 'valid1', truncated: false },
             makeInvalidPage(111, 'invalid1'),
@@ -566,10 +551,7 @@ describe('textCap', () => {
           });
           expect(result).to.have.length(4);
           expect(pendingLogs.length).to.equal(0);
-        } finally {
-          if (originalEnv === undefined) delete process.env.NODE_ENV;
-          else process.env.NODE_ENV = originalEnv;
-        }
+        });
       });
     });
   });
