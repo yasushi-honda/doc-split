@@ -1,8 +1,80 @@
 # ハンドオフメモ
 
-**更新日**: 2026-04-20 session20 (Phase 1 Contract test 共通基盤整備 完遂、follow-up 4 件起票)
-**ブランチ**: main (PR #311 + #314 + #316 マージ済、clean)
-**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + #288 follow-up bundle 完遂 + session19 follow-up Phase 1 完遂 (Phase 2 = #303/#304 次セッション着手予定)
+**更新日**: 2026-04-20 session21 (Phase 2 Cluster B: AggregateInvariantContext 観測性強化 完遂、22 指摘解消)
+**ブランチ**: main (PR #319 マージ済、clean)
+**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + #288 follow-up bundle 完遂 + session19 follow-up Phase 1 (session20) + Phase 2 (session21) 完遂
+
+<a id="session21"></a>
+## ✅ session21 完了サマリー (Phase 2 Cluster B: AggregateInvariantContext 観測性強化 完遂)
+
+session20 ハンドオフの「次セッション予定」通り **Cluster B (#303 + #304)** を PM/PL WBS で完遂。PR #319 で 3 commits (初回実装 + 5エージェントレビュー対応 + CodeRabbit 対応) を squash merge。**22 指摘 (事前 Evaluator 11 + 5エージェント 9 + CodeRabbit 2) 全解消**。
+
+| 順 | フェーズ | 結果 |
+|---|---|---|
+| 1 | `/impl-plan`: WBS + AC 11 件策定 | ✅ Option C (rename のみ) + Option A (fallback 直接書込) 固定、承認後着手 |
+| 2 | **#304 リネーム実装**: interface/caller/contract test 6 箇所追従 | ✅ commit 39bb043 |
+| 3 | **#303 fallback 実装 (TDD Red→Green)** | ✅ commit 39bb043 (new contract test 5 assertions) |
+| 4 | `/simplify` 3 並列 + Evaluator 全 11 AC PASS | ✅ Stringly-typed 指摘 → type-only import 採用 |
+| 5 | PR #319 作成、`/review-pr` 5 エージェント並列 | ✅ silent-failure-hunter "Do not merge as-is" Critical C1 |
+| 6 | **レビュー対応** (Critical 2 + Important 7) | ✅ commit 8aeee16 (fallback 観測性・対称性・情報欠損解消) |
+| 7 | CodeRabbit レビュー (Major 1 + Minor 2) | ✅ commit 3125b1b (ErrorLog schema 連動 + test-strategy 追従) |
+| 8 | CI 3/3 green → squash merge | ✅ `f5537ad` MERGED、Issue #304/#303 CLOSED |
+
+### 設計判断
+- **#304 Option 採否**: C (rename のみ) 採用。A (interface 分離) は caller 1 箇所で過剰、B (brand type) は contract test で grep 誤用検知済のため cost-benefit で見送り。JSDoc に採否理由記録 + caller 2+ で Option A 再評価トリガー明文化
+- **#303 fallback**: Option A (`admin.firestore().collection('errors').add()` 直接書込) 採用。B (re-throw) は dev throw と競合のため NG
+
+### レビュー対応の核心 (commit 8aeee16)
+silent-failure-hunter は "silent path を closing しているつもりで新たな silent path を作る" パターンを指摘:
+- **C1**: `.add().catch(() => {})` → `.catch((writeErr) => console.error(...))` で PERMISSION_DENIED 等の operational signal を surface
+- **I1**: 外側 `catch {}` → `catch (fallbackSetupErr) { console.error(...) }` で require/admin.firestore() 同期失敗を区別化
+- **I2**: fallback Promise を `.then(() => undefined).catch(...)` で正規化し drainSink に push、主経路と対称化 (Cloud Functions freeze 時の partial delivery リスク解消)
+- **I3**: `String(loadErr)` → `loadErr instanceof Error` 分岐で name/message/code 抽出、`[object Object]` silent 情報欠損を解消
+
+### CodeRabbit 対応 (commit 3125b1b)
+- **Major**: fallback record 型を `Omit<ErrorLog, ...> & { loaderError; documentId: string | null }` で ErrorLog 本体と連動。shape drift も tsc で検知可能化 (従来は union 値 drift のみ)
+- **Minor**: docs/context/test-strategy.md の既存例リストに textCapErrorLoggerFallbackContract.test.ts 追加
+- **Minor (false positive)**: silent-swallow alternation 指摘は 2nd commit で既に AND 化済
+
+### メトリクス
+- テスト: **570 → 580 passing (+10)** (rename regression guard 1 + fallback contract 5 + schema lock-in 2 + silent-swallow AND/outer catch/drainSink push 2)
+- 変更: 9 files、+409 / -62 lines
+- tsc 0 errors / lint 0 errors / CI 3/3 green
+
+### Quality Gate 実施記録 (22 指摘解消)
+| Stage | Source | Count |
+|-------|--------|-------|
+| 事前検証 | `/simplify` 3 並列 + Evaluator (11 AC PASS) | 11 |
+| 5 エージェント並列レビュー | silent-failure-hunter Critical 1 + Important 3 / pr-test-analyzer Important 2 / comment-analyzer Critical 1 + Important 2 | 9 |
+| CodeRabbit | Major 1 (ErrorLog schema 連動) + Minor 1 (docs 追従) | 2 |
+
+### Lessons Learned (次セッションに持ち込む教訓)
+1. **silent path を closing しているつもりで新たな silent path を作る pattern に警戒** — `.catch(() => {})` / bare `catch {}` は regression の温床。fallback path でも observability を surface する console.error を必ず残す
+2. **fallback path も主経路と対称化を検討** — fire-and-forget の「最終手段 (last resort)」は partial delivery リスクを生む。drainSink 等の drain 機構がある場合は fallback Promise も push して完了保証に揃える方が設計として一貫
+3. **type-only import の Omit/Pick で ErrorLog 本体と連動** — union 値の drift だけでなく interface shape drift も tsc で検知可能化。従来の inline type annotation より強い schema lock-in。circular dependency 回避のため type-only (runtime erased)
+4. **ScheduleWakeup の cache 境界** — 270s 以下で cache 温存、300s 以上は amortize。CI ~5min 待機は 270s → 180s の 2 段が効率的
+5. **CodeRabbit Minor は commit 粒度に注意** — 同一 PR 複数 commits で前 commit 時点の指摘が来る。「既に解消済」の判断を false positive として記録
+
+### 見送り (follow-up 候補、今回 Issue 化せず)
+- **Option A/B/C 採否の ADR 化**: JSDoc inline で当面十分、caller 2+ で再評価
+- **ocrProcessor.ts 旧 `pendingLogs:` key の direct regression guard**: 現状 tsc + positive assertion で間接カバー、必要性低
+- **`ErrorLogFallback = Pick<ErrorLog, ...> & { loaderError }` 型 export 化**: 既に Omit 形で inline 実装済、errorLogger.ts refactor 不要になった
+
+### 次セッション着手候補 (優先度順)
+
+**Phase 1 follow-up** (全 P2 enhancement、小粒で独立):
+- **#312** contract test helper API 改善 (boolean → enum, string\|null 戻り値, Local alias 削除, ExtractOptions export 再検討)
+- **#313** contract test 共通定数集約 + 抽出キャッシュ (SAFE_LOG_ERROR_CALL 統一、40% 削減)
+- **#315** withNodeEnv helper 強化 (ESLint guard / positive assert / literal union narrow)
+- **#317** test-strategy.md 継続改善 (二段防御具体例 / 命名規則マッピング / 委譲なし明記)
+
+**その他 P2** (状況に応じて):
+- #299 ts-node/esm 環境整備 + 動的 safeLogError invocation test (#303 完遂で fallback 動作のみ未 runtime 検証)
+- #262 summaryWritePayloadContract diagnostics 強化
+- #251 summaryGenerator unit test + buildSummaryPrompt 分離
+- #239 force-reindex 監査ログ構造化
+
+---
 
 <a id="session20"></a>
 ## ✅ session20 完了サマリー (Phase 1 Contract test 共通基盤整備 完遂)
