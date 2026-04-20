@@ -9,7 +9,8 @@
  * デバッグで原因不明となる silent failure を構造的に防ぐ。
  *
  * 方式: grep-based (docs/context/test-strategy.md §2.1 参照)。console.error メッセージを
- * anchor に、近傍 (±ANCHOR_WINDOW_LINES 行) の logError 呼出を検知する。
+ * anchor に、近傍 (±ANCHOR_WINDOW_LINES 行) の logError 呼出を検知する。anchor メッセージ変更で
+ * test が失敗するが、意図的変更のメンテナンス負荷は silent swallow 防止の価値と trade-off。
  */
 
 import { expect } from 'chai';

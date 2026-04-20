@@ -9,7 +9,8 @@
  * regenerateSummary は generateSummaryCore() 経由に統一。
  *
  * 方式: grep-based (docs/context/test-strategy.md §2.1 参照)。
- * 既知の limitation: 型 alias 経由や分割代入は未検出。caller 追加時は CALLER_FILES の手動追記が必要。
+ * 既知の limitation: 型 alias 経由 (const gen = model.generateContent; gen(...)) や分割代入は
+ * 未検出。caller 追加時は CALLER_FILES / CORE_CALLERS への手動追記が必要 (grep 動的検出は未導入)。
  * 昇格条件: false negative が 1 件でも実発生した時点で sinon spy (案A) へ切替。
  */
 

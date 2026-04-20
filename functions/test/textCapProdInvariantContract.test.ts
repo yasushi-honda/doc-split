@@ -8,7 +8,8 @@
  * Firestore 旧データ由来の discriminated union 違反 (#209 型) が silent に伝播する経路が
  * 残っていた (PR #290 silent-failure-hunter S1 CRITICAL)。
  *
- * 方式: grep-based (docs/context/test-strategy.md §2.1 参照)。
+ * 方式: grep-based (docs/context/test-strategy.md §2.1 参照)。prod 分岐内の safeLogError 呼出と
+ * params (source: 'ocr', functionName: 'capPageResultsAggregate') の存在を静的検証する。
  * 将来委譲: Phase 3 (#288 item 1) で動的 safeLogError invocation test と二段で lock-in 予定。
  */
 

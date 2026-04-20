@@ -40,7 +40,7 @@
 | 目的 | 型レベル不変条件の lock-in (union 分解 / generics 制約) |
 | 手法 | `@ts-expect-error` コメント + `tsc --noEmit` (`tsconfig.test.json` で明示検証) |
 | 適用 | discriminated union 不変条件 / generics 制約 / 戻り値型の union 広がり |
-| 既存例 | `functions/test/types/pageOcrResult.types.test.ts`, `textCapAsCastContract.test.ts` (#284), `textCapGenericsContract.test.ts` (#294) |
+| 既存例 | [`functions/test/types/pageOcrResult.types.test.ts`](../../functions/test/types/pageOcrResult.types.test.ts), [`textCapAsCastContract.test.ts`](../../functions/test/types/textCapAsCastContract.test.ts) (#284), [`textCapGenericsContract.test.ts`](../../functions/test/types/textCapGenericsContract.test.ts) (#294) |
 | 限界 | tsd 等の専用ライブラリは未導入。本 test は baseline として機能し、より精密な型 assert が必要になった時点で tsd 導入を別 Issue 化 |
 
 ### 2.3 Runtime pattern test
@@ -50,7 +50,7 @@
 | 目的 | admin 非依存で実 runtime 挙動を lock-in (統合 test の代替) |
 | 手法 | 期待される caller パターンを inline で最小再現し、spy 注入で呼出内容を検証 |
 | 適用 | caller wrapper / E2E の最小再現 / admin 初期化を避けたい箇所 |
-| 既存例 | `functions/test/ocrAggregateCallerPattern.runtime.test.ts` (#294 item 8, #293/#297 補完) |
+| 既存例 | [`functions/test/ocrAggregateCallerPattern.runtime.test.ts`](../../functions/test/ocrAggregateCallerPattern.runtime.test.ts) (#294 item 8, #293/#297 補完) |
 | 将来 | 完全な統合 test は `ts-node/esm` 環境整備 + `admin` mock で Issue #299 に委譲。それまでは runtime pattern test を二段防御の一翼として保持 |
 
 ### 2.4 共通 helper
@@ -61,7 +61,7 @@
 | [`makeInvalidPage`](../../functions/test/helpers/textCapFixtures.ts) / `makeMixedPages` | `as unknown as SummaryField` cast を集約した fixture | #307 |
 | [`withNodeEnv`](../../functions/test/helpers/withNodeEnv.ts) / `withNodeEnvAsync` | `process.env.NODE_ENV` 切替の確実復元 (undefined 文字列化防止) | #306 |
 
-各 helper には `functions/test/helpers/*.test.ts` で単体 test を配置し、helper 固有の挙動 (復元順序 / async 経路 / startAfterAnchor option) を直接 lock-in している。
+ロジック持ちの helper (`extractBraceBlock` / `withNodeEnv`) には `functions/test/helpers/*.test.ts` で単体 test を配置し、helper 固有の挙動 (復元順序 / async 経路 / startAfterAnchor option) を直接 lock-in している。pure fixture の helper (`textCapFixtures`) は消費側 contract test での利用で十分と判断し専用 test は配置しない。
 
 ---
 
