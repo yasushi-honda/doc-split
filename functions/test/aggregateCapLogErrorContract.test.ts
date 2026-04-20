@@ -20,6 +20,7 @@ import { expect } from 'chai';
 import { existsSync, readFileSync } from 'fs';
 import { resolve } from 'path';
 import { extractBraceBlock, extractParenBlock } from './helpers/extractBraceBlock';
+import { SAFE_LOG_ERROR_CALL } from './helpers/patterns';
 
 const OCR_PROCESSOR_PATH = 'src/ocr/ocrProcessor.ts';
 const AGGREGATE_CAP_ANCHOR =
@@ -38,7 +39,7 @@ describe('aggregate cap safeLogError contract (#283)', () => {
   const absPath = resolve(process.cwd(), OCR_PROCESSOR_PATH);
   const source = readFileSync(absPath, 'utf-8');
   const capBlock = extractBraceBlock(source, AGGREGATE_CAP_ANCHOR);
-  const safeLogErrorArgs = extractParenBlock(capBlock, /\bsafeLogError\s*\(/);
+  const safeLogErrorArgs = extractParenBlock(capBlock, SAFE_LOG_ERROR_CALL);
 
   it('aggregate cap block が抽出できる', () => {
     expect(
@@ -49,7 +50,6 @@ describe('aggregate cap safeLogError contract (#283)', () => {
   });
 
   it('aggregate cap block 内に safeLogError 呼出がある', () => {
-    const SAFE_LOG_ERROR_CALL = /\bsafeLogError\s*\(/;
     expect(capBlock, 'capBlock 抽出失敗 (上位 it を確認)').to.not.be.null;
     expect(SAFE_LOG_ERROR_CALL.test(capBlock!)).to.equal(
       true,
@@ -166,7 +166,7 @@ if (afterAggregateChars < beforeAggregateChars) {
 `;
       const block = extractBraceBlock(fixture, AGGREGATE_CAP_ANCHOR);
       expect(block, 'block 抽出失敗').to.not.be.null;
-      expect(/\bsafeLogError\s*\(/.test(block!)).to.equal(
+      expect(SAFE_LOG_ERROR_CALL.test(block!)).to.equal(
         false,
         'block 外の safeLogError 呼出が block 抽出結果に含まれてはならない'
       );
