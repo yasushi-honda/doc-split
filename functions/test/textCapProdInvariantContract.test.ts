@@ -105,6 +105,10 @@ describe('textCap prod invariant observability contract (#288 item 6)', () => {
     const helperBody = extractHelperFunctionBody(source);
     const searchScope = helperBody || assertBody;
     const prodBranch = extractProdBranch(searchScope);
+    // anchor 消失で prodBranch が空文字のまま to.not.match(...) が silent PASS する経路を防ぐ。
+    expect(prodBranch, 'prod 分岐が抽出できない — anchor 消失 (#311 review C1 対応)').to.not.equal(
+      '',
+    );
     expect(prodBranch).to.not.match(
       /\bthrow\s+(?:new\s+)?Error\b/,
       'prod 分岐に throw が残存 — fire-and-forget 方針に違反',

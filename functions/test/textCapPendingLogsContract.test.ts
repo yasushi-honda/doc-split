@@ -88,6 +88,10 @@ describe('textCap pendingLogs drain contract (#297 + #293)', () => {
   it('prod 分岐に直接 `void safeLogError(` 形が残っていない (regression guard)', () => {
     const helperBody = extractHelperFunctionBody(source);
     const prodBranch = extractProdBranch(helperBody);
+    // anchor 消失で prodBranch が空文字のまま to.not.match(...) が silent PASS する経路を防ぐ。
+    expect(prodBranch, 'prod 分岐が抽出できない — anchor 消失 (#311 review C2 対応)').to.not.equal(
+      '',
+    );
     expect(prodBranch).to.not.match(
       /\bvoid\s+safeLogError\s*\(/,
       'void safeLogError( 直叩きが残存 — fire-and-forget 回帰、#297 対応が崩れている',

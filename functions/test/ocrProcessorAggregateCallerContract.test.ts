@@ -44,6 +44,14 @@ describe('ocrProcessor aggregate caller wrapper contract (#293 + #297)', () => {
     source = readFileSync(absPath, 'utf-8');
   });
 
+  it('capPageResultsAggregate 呼出は ocrProcessor.ts 全体で 1 箇所のみ (CAP_AGG_CATCH_ANCHOR 前提、#311 review I4)', () => {
+    // CAP_AGG_CATCH_ANCHOR の `[\s\S]*?` 非貪欲マッチは最初の try/catch にヒットする。
+    // 2 箇所以上存在すると anchor が先行ブロックにロックインされ、意図しないブロックを
+    // 検証する silent 誤検知が発生。2 つ目が追加された時点で fail させて narrow 更新を強制する。
+    const callCount = (source.match(/capPageResultsAggregate\s*\(/g) ?? []).length;
+    expect(callCount, '2 つ目以降の呼出は anchor narrow が必要 (#302 コメント参照)').to.equal(1);
+  });
+
   it('pendingInvariantLogs: Promise<void>[] の宣言が存在する (#297)', () => {
     // caller 側で pendingLogs array を生成して textCap に渡す起点。
     // 変数名が変わった場合はリネームに応じて本契約を更新すること。

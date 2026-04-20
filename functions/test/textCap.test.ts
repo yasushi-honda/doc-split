@@ -444,9 +444,6 @@ describe('textCap', () => {
       });
 
       it('short-path で originalLength が混入した不正入力は dev 環境で throw する (evaluator LOW 指摘対応)', () => {
-        // Firestore 旧データから truncated=false なのに originalLength が残存した状態を simulate。
-        // SummaryField 型契約ではあり得ないが `as unknown as` で bypass し、dev-assert が
-        // 実際に invariant violation を検知することを lock-in する。
         const invalidPage = makeInvalidPage(999_999, 'short');
         expect(() => capPageResultsAggregate([invalidPage])).to.throw(/invariant violation/);
       });
