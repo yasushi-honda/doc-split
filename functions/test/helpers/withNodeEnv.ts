@@ -6,10 +6,10 @@
  * 1. **undefined の文字列化**: 元値 `undefined` の場合 `process.env.NODE_ENV = original` は
  *    `"undefined"` 文字列を代入し、後続 test に leak する。完全復元には
  *    `delete process.env.NODE_ENV` が必要。
- * 2. **並列実行時の race**: Mocha `--parallel` 有効化時、NODE_ENV の toggle は test 間で
- *    interleave する危険あり。本 helper は process global を触るため `--parallel` 非対応。
- *    並列実行を採用する場合は helper 全体を module isolation で囲むか、env-specific
- *    assert を mock 注入に置き換える必要がある。
+ * 2. **並行実行時の race**: 同一プロセス内で別 test が NODE_ENV を参照/変更する場合、
+ *    process global への代入が interleave する。本 helper は process.env を直接触るため
+ *    同期/直列実行専用。Mocha `--parallel` は worker process を spawn するため本 helper は
+ *    worker 内では安全だが、同一 worker の他 test と並行する構成 (非 Mocha runner 等) は非対応。
  */
 
 /**

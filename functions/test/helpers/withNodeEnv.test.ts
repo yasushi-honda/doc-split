@@ -64,6 +64,20 @@ describe('withNodeEnv helper', () => {
       const result = withNodeEnv('production', () => 42);
       expect(result).to.equal(42);
     });
+
+    it('nested 呼出は LIFO 順で復元される', () => {
+      // inner 終了時に outer の value (prod) に戻り、outer 終了時に元値 (test) に戻る。
+      // helper が public で再帰呼出可能な以上、LIFO semantics を lock-in する。
+      process.env.NODE_ENV = 'test';
+      withNodeEnv('production', () => {
+        expect(process.env.NODE_ENV).to.equal('production');
+        withNodeEnv('development', () => {
+          expect(process.env.NODE_ENV).to.equal('development');
+        });
+        expect(process.env.NODE_ENV, 'inner 終了時に outer の値へ').to.equal('production');
+      });
+      expect(process.env.NODE_ENV, 'outer 終了時に元値へ').to.equal('test');
+    });
   });
 
   describe('withNodeEnvAsync', () => {
@@ -89,6 +103,28 @@ describe('withNodeEnv helper', () => {
       }
       expect(threw).to.equal(true);
       expect(process.env.NODE_ENV).to.equal('test');
+    });
+
+    it('async fn が await 前に同期 throw しても finally で復元される', async () => {
+      // `return await fn()` は fn() が同期 throw した場合 try 内で捕捉され finally が走る。
+      // `return fn()` に退行すると同期 throw は await 前に発生し Promise 化されずに抜ける。
+      // 本テストは前者の挙動を lock-in する (`return fn()` への退行で fail)。
+      process.env.NODE_ENV = 'test';
+      let threw = false;
+      try {
+        await withNodeEnvAsync('production', () => {
+          throw new Error('sync boom inside async helper');
+        });
+      } catch {
+        threw = true;
+      }
+      expect(threw).to.equal(true);
+      expect(process.env.NODE_ENV).to.equal('test');
+    });
+
+    it('async fn の戻り値を透過する', async () => {
+      const result = await withNodeEnvAsync('production', async () => 99);
+      expect(result).to.equal(99);
     });
   });
 });
