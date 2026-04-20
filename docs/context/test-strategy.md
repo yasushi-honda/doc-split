@@ -26,7 +26,7 @@
 | 手法 | `readFileSync` でソース全文を読み、brace-nesting / paren-nesting で対象ブロックを抽出 → 必須要素を正規表現で検証 |
 | 適用 | prod 分岐 / silent failure 対策 / caller wiring |
 | 依存 helper | [`functions/test/helpers/extractBraceBlock.ts`](../../functions/test/helpers/extractBraceBlock.ts) (`extractBraceBlock` / `extractParenBlock`, Issue #302 で共通化) |
-| 既存例 | `textCapProdInvariantContract.test.ts` (#288 item 6), `aggregateCapLogErrorContract.test.ts` (#283), `handleProcessingErrorContract.test.ts` (#276), `textCapDrainSinkContract.test.ts` (#293 + #297、#304 naming refactor), `ocrProcessorAggregateCallerContract.test.ts` (#293 + #297) |
+| 既存例 | `textCapProdInvariantContract.test.ts` (#288 item 6), `aggregateCapLogErrorContract.test.ts` (#283), `handleProcessingErrorContract.test.ts` (#276), `textCapDrainSinkContract.test.ts` (#293 + #297、#304 naming refactor), `textCapErrorLoggerFallbackContract.test.ts` (#303 errorLogger require failure fallback), `ocrProcessorAggregateCallerContract.test.ts` (#293 + #297) |
 | 限界 | 文字列/正規表現/テンプレートリテラル内の裸 `{` `}` で誤判定の可能性。将来そのケースに遭遇したら AST ベース抽出への移行を検討 |
 
 **偽陽性対策**: 関数本体全体を対象にした regex だと無関係な同名ローカル変数 / 他 logger 呼出 / 文字列リテラルに偽陽性が出る ([silent-failure-hunter 指摘])。`extractBraceBlock` で scope を絞る + anchor を narrow することで精度を上げる。

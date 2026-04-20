@@ -14,10 +14,13 @@
  */
 
 import type { SummaryField } from '../../../shared/types';
-// type-only imports: runtime では erased されるため errorLogger.ts の top-level `admin.firestore()`
+// type-only import: runtime では erased されるため errorLogger.ts の top-level `admin.firestore()`
 // 副作用を誘発しない。#303 fallback の stringly-typed を compile-time drift 検知に格上げする。
-import type * as adminTypes from 'firebase-admin';
-import type { ErrorCategory, ErrorSeverity, ErrorSource } from './errorLogger';
+// `ErrorLog` 本体を import することで union 値の drift だけでなく interface shape drift (必須
+// field 追加、property rename 等) も tsc エラーとして検知可能化 (PR #319 CodeRabbit Major 対応)。
+// `ErrorLog.createdAt: admin.firestore.FieldValue` が透過的に引き継がれるため firebase-admin の
+// type-only import は不要。
+import type { ErrorLog } from './errorLogger';
 
 export const MAX_PAGE_TEXT_LENGTH = 50_000;
 
@@ -170,12 +173,17 @@ function handleAggregateInvariantViolation(
       try {
         // eslint-disable-next-line @typescript-eslint/no-require-imports
         const admin = require('firebase-admin') as typeof import('firebase-admin');
-        // schema drift 部分検知: errorLogger.ts の union 型 (ErrorSource/ErrorSeverity/
-        // ErrorCategory) を type-only import で share し、union allowed values の drift を
-        // compile-time で検知する。ErrorLog interface の shape drift (field 追加/削除、
-        // property rename) は本 annotation ではカバー外 (contract test 層で別途 lock-in)。
-        // fallback は loaderError を含む errorLogger 非対称拡張 schema のため、`ErrorLog` 型
-        // 全体とは構造的にバインドしない。
+        // schema drift 完全検知: `ErrorLog` interface (errorLogger.ts の primary schema) の shape
+        // を `Omit<ErrorLog, ...> & { loaderError; documentId: string | null }` で連動 binding する。
+        // - fallback では logError 側で自動採番される `id` / 解決後に付く `resolvedAt` / 発生コンテキスト
+        //   の `fileId` / prod では含めない `stackTrace` / 手動解決系の `resolution`/`resolvedBy` は
+        //   `Omit` で除外 (fallback 時点では取得不能)。
+        // - fallback 固有の拡張 `loaderError: string` は ErrorLog に存在しない診断専用 field。
+        //   将来 ErrorLog に標準化された場合 (`logError` 側でも同形式で使う) は本追加フィールドを外す。
+        // - `documentId` は ErrorLog で optional string だが、Firestore が undefined を拒否するため
+        //   fallback では null 正規化 (rules/error-handling.md §2)。型も override で明示する。
+        // これにより ErrorLog 側で必須 field 追加 / property rename が行われた瞬間、本 annotation が
+        // tsc エラーで追従を強制する (PR #319 CodeRabbit Major 対応)。
         //
         // loaderError 構造化 (#303): `String(loadErr)` は Error 以外が throw された場合に
         // `[object Object]` になる silent 情報欠損、および `FirebaseAppError.code` 等の triage
@@ -189,19 +197,14 @@ function handleAggregateInvariantViolation(
                 code: (loadErr as { code?: string }).code ?? null,
               }
             : { raw: String(loadErr) };
-        const fallbackRecord: {
-          source: ErrorSource;
-          functionName: string;
-          severity: ErrorSeverity;
-          category: ErrorCategory;
-          status: 'pending' | 'resolved' | 'ignored';
-          errorCode: string;
-          errorMessage: string;
-          loaderError: string;
+        type FallbackErrorRecord = Omit<
+          ErrorLog,
+          'id' | 'resolvedAt' | 'fileId' | 'stackTrace' | 'resolution' | 'resolvedBy' | 'documentId'
+        > & {
           documentId: string | null;
-          retryCount: number;
-          createdAt: adminTypes.firestore.FieldValue;
-        } = {
+          loaderError: string;
+        };
+        const fallbackRecord: FallbackErrorRecord = {
           source: 'ocr',
           functionName: 'capPageResultsAggregate:loaderFailed',
           severity: 'critical',
