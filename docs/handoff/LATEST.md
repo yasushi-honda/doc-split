@@ -1,8 +1,89 @@
 # ハンドオフメモ
 
-**更新日**: 2026-04-20 session21 (Phase 2 Cluster B: AggregateInvariantContext 観測性強化 完遂、22 指摘解消)
-**ブランチ**: main (PR #319 マージ済、clean)
-**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + #288 follow-up bundle 完遂 + session19 follow-up Phase 1 (session20) + Phase 2 (session21) 完遂
+**更新日**: 2026-04-20 session22 (WBS Phase 1 PR-A #317 完遂、scope 拡張で 9 ファイル統合同期、10 指摘解消)
+**ブランチ**: main (PR #321 マージ済、clean)
+**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + session20/21 follow-up WBS 3 PR 段階実行 Phase 1 完遂
+
+<a id="session22"></a>
+## ✅ session22 完了サマリー (WBS Phase 1 PR-A #317: test-strategy.md 継続改善 完遂)
+
+session21 ハンドオフ「Phase 1 follow-up 4 件 (#312/#313/#315/#317) を束ねる WBS」を PM/PL 視点で **3 PR 段階実行**に設計。本 session で **Phase 1 (PR-A #317)** を完遂。doc-only で開始し、`/review-pr` 軽量 2 並列 + Evaluator 分離プロトコルで **Critical 2 + Important 6 + Suggestion 2** を検出、scope を doc-only → **9 ファイル同時同期に拡張**して Critical ゼロ merge を達成。
+
+| 順 | フェーズ | 結果 |
+|---|---|---|
+| 1 | **WBS 3 PR 段階実行設計** (PR-A #317 / PR-B #312+#313 統合 / PR-C #315) | ✅ ユーザー承認、Phase 1 docs 先行リスク最小で着手 |
+| 2 | `/impl-plan`: Phase 2.7 AC 6 項目策定 (含む回帰ゼロ) | ✅ 承認後着手、`/simplify`/`/safe-refactor`/Evaluator は 1 ファイル規模でスキップ判断 |
+| 3 | **初回実装** (T1 §2.1 適用範囲 / T2 §2.4 命名規則 + §2.5 リネーム / T3 §3 二段防御具体例 / T4 §4 必須化) | ✅ commit 0501495、AC-1〜AC-6 全 grep PASS、580 passing 回帰なし |
+| 4 | PR #321 作成 + `/review-pr` 軽量 2 並列 (comment-analyzer + pr-test-analyzer) | ✅ **Critical 2 + Important 6 + Suggestion 2** 検出 |
+| 5 | **Scope 拡張判断** (PM/PL): 選択肢 A (9 ファイル統合同期) vs B (follow-up 分離) → A 採用 | ✅ session20 教訓「scope 拡張で follow-up churn 削減」に沿う |
+| 6 | **C1 対応**: 既存 8 contract test docstring に「将来委譲」行追加 (§2.1×5 + §2.2×3) | ✅ 全 13 本で `grep -L '将来委譲'` ゼロヒット |
+| 7 | **C2 対応**: §2.4 優先規則節追加 + §2.2 既存例から textCapAsCast 除去し §2.1 へ移動 | ✅ doc 内矛盾解消 |
+| 8 | **Important 対応**: I1 (関数名 anchor) / I3 comment (3 免疫パターン箇条書き) / I3 pr-test (記載例 3 pattern) / I4 (§5 Issue 拡充) | ✅ 全対応 |
+| 9 | **Evaluator 分離プロトコル**: 9 ファイル = 5+ 条件発動 → 第三者評価 | ✅ **APPROVE WITH SUGGESTIONS** (Critical ゼロ、Important 2 件対応済) |
+| 10 | commit 43e6b05 push → CI 3/3 green (lint-build-test / CodeRabbit / GitGuardian) → squash merge | ✅ `3409517` MERGED、Issue #317 CLOSED |
+
+### 設計判断
+
+- **WBS 3 PR 段階実行**: 10 follow-up Issue を 1 PR にまとめる Evaluator 発動超過 + review 負荷増を避け、**PR-A (docs 先行リスク最小) → PR-B (#312+#313 統合、5-7 ファイル Evaluator 発動規模) → PR-C (#315 withNodeEnv 独立軸)** で段階分割。session20 の 10 Issue → 5 Cluster → 3 PR 分割教訓の再現
+- **Scope 拡張判断 (選択肢 A 採用)**: レビューで「doc-only PR の弱点」として「doc merge 直後に 8 本が新ルール違反」指摘。未記載 8 本への「将来委譲」行追記 (1-2 行/ファイル、計 8 ファイル) は機械的 trivial で Evaluator 発動しても review コスト増は僅少。doc とコード同時同期で後続 churn を防ぐ ROI が高い
+- **§2.4 優先規則の設計**: マッピング表だけでは `types/textCapAsCastContract.test.ts` 型例外 (basename=§2.1 だが path=types/) をカバー不能。**方式優先** + docstring で例外明記のルールにした上で `textCapAsCast` を §2.2 既存例から §2.1 既存例に移動し、doc 内矛盾を解消
+
+### レビュー対応の核心 (commit 43e6b05)
+
+silent-failure-hunter / pr-test-analyzer の **「doc ルール ↔ 実装 docstring の乖離が silent に発生する」パターン**を指摘:
+- **C1**: 新必須化ルールに対して既存 8 本が未記載 → doc merge 直後に「ルールと実態の乖離」が確定する状態だった。`grep -L '将来委譲' functions/test/**/*Contract.test.ts` で ゼロヒット化
+- **C2**: `types/*Contract.test.ts` 2 本が §2.4 マッピング表の「ファイル名から一意に定まる」主張を破壊 → 優先規則節 + 例外明示の二重防御
+- **I4**: §3 で `#293/#294/#297` を引用するが §5 参考 Issue に記載なし → doc self-containment の情報断絶 → §5 に 4 Issue (#293/294/297/317) 追加
+
+### メトリクス
+
+- テスト: **580 passing 維持** (docstring 追記のみで test 実装不変、rename/追加 test なし)
+- 変更: **9 files、+82 / -6 lines** (当初 doc 1 ファイル → 9 ファイルへ scope 拡張)
+- tsc 0 errors / lint 0 errors / CI 3/3 green (unit test + E2E + lint-build-test)
+- contract test カバレッジ: `grep -L '将来委譲' functions/test/**/*Contract.test.ts functions/test/**/*.types.test.ts` = 0 件 (全 13 本記載)
+
+### Quality Gate 実施記録 (10 指摘解消)
+
+| Stage | Source | Count |
+|-------|--------|-------|
+| `/review-pr` 軽量 2 並列 | comment-analyzer (Important 4 + Suggestion 3) / pr-test-analyzer (Critical 1 + Important 3 + Suggestion 1) | 10 (Critical 2 + Important 6 + Suggestion 2) |
+| Evaluator 分離プロトコル (9 ファイル = 5+ 発動) | APPROVE WITH SUGGESTIONS、Important 2 件 (§2.2 既存例矛盾 + 未コミット状態) | 2 |
+| CodeRabbit | Nitpick なし | 0 |
+
+### Lessons Learned (次セッションに持ち込む教訓)
+
+1. **doc-only PR の弱点: 「doc ルール ↔ 実装 docstring の乖離」** — 新ルール追加時は **「現状の準拠率」を grep で事前検証**し、未準拠が存在する場合は本 PR 内で同時同期するか猶予注記を入れる。pr-test-analyzer は「doc merge 直後の violation state」を silent failure 型として検知できる
+2. **Scope 拡張判断の PM/PL 軸**: 機械的 trivial (1-2 行/ファイル × N 件) なら Evaluator 発動を恐れず **doc とコード同時同期**が ROI 高。review コスト増は僅少だが follow-up churn は顕著
+3. **命名規則の「一意性」主張の落とし穴**: ファイル名だけで系統が決まる doc を書く時は、**既存ファイル全件を grep で衝突チェック**必須。`*Contract.test.ts` + `types/*.test.ts` のように path/basename で二重該当するケースは優先規則 + 例外明示が必要
+4. **Evaluator 分離の ROI**: scope 拡張後 (9 ファイル) の第三者評価で **`§2.2 既存例が §2.1 例外を含んだまま`** の doc 内矛盾を発見。実装者自身が見落としていた「C2 対応が §2.4 に留まり §2.2 を忘れた」ギャップを補正
+5. **CI E2E test の待機戦略**: lint/unit test success 後も E2E (Playwright) が 3-7 分要するため、ScheduleWakeup は **180s-270s 単位**で E2E 完了を待つのが cache 温存 ライン。270s 超えると cache miss で待機が無駄
+
+### 見送り (follow-up 候補、今回 Issue 化せず)
+
+- **§2.2 限界行の tsd 評価**: 現状「tsd 未導入、より精密な型 assert が必要になった時点で別 Issue 化」で放置中。Phase 2 で @ts-expect-error が弱い型 assert 場面に遭遇したら起票
+- **AC-5 検証コマンド更新**: Evaluator Suggestion、`grep -rn '§2\.[4-5]' functions/` は C2 対応後無効化。本 PR では Test plan で言及のみで修正は省略。Phase 2/3 で test-strategy.md 編集時に合わせて更新
+- **summary 系 contract の §2.4 優先規則適用確認**: `summaryBuilderCallerContract` が `*Contract.test.ts` で §2.1 既存例に記載済だが、方式は独自 (count-based) で §2.4 マッピング表の「grep-based」に完全準拠しない。例外注記不要レベルだが Phase 2 で review 対象
+
+### 次セッション着手候補 (WBS 進捗)
+
+**WBS Phase 2 (PR-B): #312 + #313 統合** (次セッション最優先):
+- **#312**: contract test helper API 改善 (boolean → enum anchorMode / 戻り値 string|null / Local alias 削除 / ExtractOptions export 要否)
+- **#313**: contract test 共通定数集約 (SAFE_LOG_ERROR_CALL) + 抽出キャッシュ (40% 削減)
+- **想定規模**: helper 2 + 5 contract test + patterns.ts 新設 ≈ 7 ファイル、**Evaluator 分離プロトコル発動対象**
+- **想定 Quality Gate**: `/impl-plan` → `/simplify` 3 並列 → `/safe-refactor` → Evaluator → `/review-pr` 5-6 並列 → `/codex review` (3+ ファイル / 200+ 行で session16 教訓の ROI 実証ライン)
+
+**WBS Phase 3 (PR-C): #315** (Phase 2 後):
+- **#315**: withNodeEnv 強化 (ESLint guard / positive assert / literal union narrow)
+- **想定規模**: withNodeEnv.ts + ESLint + contract test 1 箇所 ≈ 3-4 ファイル
+
+**その他 P2 follow-up** (Phase 2-3 完了後、状況に応じて):
+- #299 ts-node/esm + 動的 safeLogError invocation test
+- #262 summaryWritePayloadContract diagnostics 強化
+- #251 summaryGenerator unit test + buildSummaryPrompt 分離
+- #239 / #238 force-reindex 拡張
+- #237 search tokenizer FE/BE/script 共通化 (横断変更、Evaluator 必須)
+
+---
 
 <a id="session21"></a>
 ## ✅ session21 完了サマリー (Phase 2 Cluster B: AggregateInvariantContext 観測性強化 完遂)
