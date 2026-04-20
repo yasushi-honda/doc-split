@@ -31,9 +31,11 @@
 
 **偽陽性対策**: 関数本体全体を対象にした regex だと無関係な同名ローカル変数 / 他 logger 呼出 / 文字列リテラルに偽陽性が出る ([silent-failure-hunter 指摘])。`extractBraceBlock` で scope を絞る + anchor を narrow することで精度を上げる。
 
-**silent PASS リスク**: helper が空文字を返した場合 `expect(block).to.not.match(...)` は常に PASS する。各 `it` で `expect(block).to.not.equal('')` の non-empty guard を先に実行すること ([PR #311 review C1/C2])。
+**silent PASS リスク**: helper が `null` を返した場合 `expect(block).to.not.match(...)` は chai で常に silent PASS する。各 `it` で `expect(block).to.not.be.null` の null guard を先に実行すること ([PR #311 review C1/C2], [Issue #312 silent-failure-hunter I1])。
 
-> **適用範囲**: 本警告は `extractBraceBlock` / `extractParenBlock` で事前抽出したブロックを `.to.not.match(...)` で検証する **brace-extracted block tests** のみに該当する (例: `textCapProdInvariantContract` / `textCapDrainSinkContract` / `textCapErrorLoggerFallbackContract` / `aggregateCapLogErrorContract` / `handleProcessingErrorContract` / `ocrProcessorAggregateCallerContract`)。以下 3 パターンは抽出結果の空文字返却という失敗モードを構造的に持たず免疫である:
+> **API 履歴**: 旧 API (PR #311 時点) は helper が失敗時に空文字 `''` を返しており、caller は `.to.not.equal('')` で guard していた。PR #323 (Issue #312) で戻り値を `string | null` に型安全化、ガードは `.to.not.be.null` に移行。[旧 `.to.not.equal('')` パターンは撤去済](https://github.com/yasushi-honda/doc-split/pull/323)、新規 contract test 追加時は `null` ベースを採用すること。
+
+> **適用範囲**: 本警告は `extractBraceBlock` / `extractParenBlock` で事前抽出したブロックを `.to.not.match(...)` で検証する **brace-extracted block tests** のみに該当する (例: `textCapProdInvariantContract` / `textCapDrainSinkContract` / `textCapErrorLoggerFallbackContract` / `aggregateCapLogErrorContract` / `handleProcessingErrorContract` / `ocrProcessorAggregateCallerContract`)。以下 3 パターンは抽出結果の `null` 返却という失敗モードを構造的に持たず免疫である:
 > - **anchor-window スライド**: ソース全文を anchor 周辺 ±N 行のウィンドウでスキャン (`summaryCatchLogErrorContract` の `ANCHOR_WINDOW_LINES=8`)
 > - **adjacency window スライド**: ソース全文を複数 pattern 共存判定のウィンドウでスキャン (`summaryWritePayloadContract` の `ADJACENCY_WINDOW_LINES=30`)
 > - **count-based match**: ソース全文 (コメント除外後) に対する `countMatches >= 1` 形式 (`summaryBuilderCallerContract`、`.at.least(1)` assertion で空マッチが即 FAIL)
