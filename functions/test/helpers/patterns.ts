@@ -18,8 +18,11 @@
 /**
  * safeLogError 呼出の anchor。
  *
- * - `\b` で word boundary を取り、`functionName: 'xxxSafeLogError'` 等の偽陽性を避ける。
+ * - `\b` で word boundary を取り、識別子 prefix を持つ `xxxSafeLogError(` 等の偽陽性を避ける。
  * - `\s*` で `safeLogError (` / `safeLogError(` の両方を許容。
+ * - flag 不保持 (`/g` / `/i` / `/m` / `/y` なし) は `patterns.test.ts` で契約化済。
+ *   `/g` や `/y` が誤って付与されると `test()` / `match()` の `lastIndex` 進行で silent PASS
+ *   経路を作るため、必ず flag 追加前にテストを更新すること。
  * - 引数側は `extractParenBlock(..., SAFE_LOG_ERROR_CALL)` のような paren-nesting helper と
  *   組み合わせて scope を絞ること。
  */

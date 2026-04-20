@@ -41,17 +41,25 @@ describe('helpers/patterns SAFE_LOG_ERROR_CALL', () => {
       expect(SAFE_LOG_ERROR_CALL.test('xxxSafeLogError(')).to.equal(false);
     });
 
-    it('類似名 `SafeLogErrorWrapper(` を非 match', () => {
-      // 大文字始まりは `safeLogError` と literal が一致しないため non-match。
-      // `s` と `S` で大小文字が食い違う検知も lock-in。
+    it('類似名 `SafeLogErrorWrapper(` を非 match (literal 不一致)', () => {
+      // 大文字始まりは literal `safeLogError` (s 小文字) と一致しないため non-match。
+      // 本ケースは literal 差による非 match 軸で、`/i` flag 不保持の挙動契約は boundary
+      // セクションで別途 lock-in する (axis 分離)。
       expect(SAFE_LOG_ERROR_CALL.test('SafeLogErrorWrapper(')).to.equal(false);
     });
 
-    it('中間含有名 `isSafeLogError(` を非 match (word 中間の `\\b` 偽陽性防御)', () => {
+    it('中間含有名 `isSafeLogError(` を非 match (literal 不一致)', () => {
       // `isSafeLogError` は `is` + `SafeLogError` のキャメル結合。literal `safeLogError` (s 小文字)
       // が文字列中に現れず non-match。大文字 `SafeLogError` への match を許すと、helper 名と
       // 判定関数名 (`isSafeLogError` 等) が混同される silent 誤検知リスクがある。
       expect(SAFE_LOG_ERROR_CALL.test('isSafeLogError(')).to.equal(false);
+    });
+
+    it('suffix 付き `safeLogErrorAsync(` を非 match (`\\s*\\(` 境界防御)', () => {
+      // `\b` は `safeLogError` の `r` と `A` の間で境界成立 (word char 連続中でも大小境界は非境界、
+      // ただし後続の `\s*\(` が `A` に到達できず失敗) → non-match。suffix 差分による類似名の
+      // 検知漏れ/誤検知を lock-in する (pr-test-analyzer S1 対応)。
+      expect(SAFE_LOG_ERROR_CALL.test('safeLogErrorAsync(')).to.equal(false);
     });
 
     it('`logError(` (safe なし) を非 match', () => {
@@ -84,6 +92,21 @@ describe('helpers/patterns SAFE_LOG_ERROR_CALL', () => {
 
     it('multiline flag (/m) を持たない (単一行検知前提)', () => {
       expect(SAFE_LOG_ERROR_CALL.multiline).to.equal(false);
+    });
+
+    it('sticky flag (/y) を持たない (lastIndex 進行による silent PASS 防止)', () => {
+      // `/y` は `/g` と同様に `lastIndex` を進行させる。`test()` 連続呼出で位置が進み、
+      // 2 回目以降の呼出が silent に non-match になる経路を作る。
+      expect(SAFE_LOG_ERROR_CALL.sticky).to.equal(false);
+    });
+
+    it('idempotency: 同一インスタンスを連続 test() 実行しても結果が変わらない', () => {
+      // `/g` や `/y` が誤付与されると、`lastIndex` 進行で 2 回目の test() が silent に false を
+      // 返す drift 経路が発生する。現契約 (flag 不保持) では同一入力に対して test() は冪等。
+      const input = 'await safeLogError({ error });';
+      expect(SAFE_LOG_ERROR_CALL.test(input)).to.equal(true);
+      expect(SAFE_LOG_ERROR_CALL.test(input)).to.equal(true);
+      expect(SAFE_LOG_ERROR_CALL.test(input)).to.equal(true);
     });
   });
 });
