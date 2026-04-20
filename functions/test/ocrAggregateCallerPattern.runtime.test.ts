@@ -19,31 +19,7 @@ import { expect } from 'chai';
 import { capPageResultsAggregate } from '../src/utils/textCap';
 import type { LogErrorParams } from '../src/utils/errorLogger';
 import type { SummaryField } from '../../shared/types';
-
-/**
- * test 用 invalid page fixture. truncated=false なのに originalLength が残存する
- * Firestore 旧データ相当を SummaryField 型に流すためのキャスト吸収。
- */
-function makeInvalidPage(originalLength: number, text = 'invalid'): SummaryField {
-  return {
-    text,
-    truncated: false,
-    originalLength,
-  } as unknown as SummaryField;
-}
-
-/**
- * mixed-input fixture. [valid, invalid, valid, invalid, ...] の順で交互生成。
- * `originalLengths` 要素数分 invalid を差し込み、両端と間に valid を挿入する。
- */
-function makeMixedPages(originalLengths: number[] = [999]): SummaryField[] {
-  const pages: SummaryField[] = [{ text: 'valid1', truncated: false }];
-  originalLengths.forEach((len, i) => {
-    pages.push(makeInvalidPage(len, `invalid${i + 1}`));
-    pages.push({ text: `valid${i + 2}`, truncated: false });
-  });
-  return pages;
-}
+import { makeMixedPages } from './helpers/textCapFixtures';
 
 /**
  * caller wrapper の想定シグネチャ (test 用最小再現、AC-4/AC-5 相当)。

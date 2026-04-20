@@ -20,59 +20,19 @@
 import { expect } from 'chai';
 import { existsSync, readFileSync } from 'fs';
 import { resolve } from 'path';
+import { extractBraceBlock } from './helpers/extractBraceBlock';
 
 const TEXT_CAP_PATH = 'src/utils/textCap.ts';
 
-/**
- * handleAggregateInvariantViolation 関数本体 (`{...}`) を抽出する。
- * anchor 消失/リネーム時は空文字を返し、caller 側で明示失敗させる。
- */
-function extractHelperFunctionBody(source: string): string {
-  const ANCHOR = /function\s+handleAggregateInvariantViolation\s*\([^)]*\)\s*:\s*void\s*\{/;
-  const match = source.match(ANCHOR);
-  if (!match || match.index === undefined) return '';
+const HELPER_BODY_ANCHOR =
+  /function\s+handleAggregateInvariantViolation\s*\([^)]*\)\s*:\s*void\s*\{/;
+const PROD_BRANCH_ANCHOR =
+  /if\s*\(\s*process\.env\.NODE_ENV\s*===\s*['"]production['"]\s*\)\s*\{/;
 
-  const openBraceIdx = source.indexOf('{', match.index);
-  if (openBraceIdx === -1) return '';
-
-  let depth = 0;
-  for (let i = openBraceIdx; i < source.length; i++) {
-    const ch = source[i];
-    if (ch === '{') depth++;
-    else if (ch === '}') {
-      depth--;
-      if (depth === 0) {
-        return source.slice(openBraceIdx, i + 1);
-      }
-    }
-  }
-  return '';
-}
-
-/**
- * prod 分岐ブロック (`if (process.env.NODE_ENV === 'production') { ... }`) を抽出。
- */
-function extractProdBranch(block: string): string {
-  const ANCHOR = /if\s*\(\s*process\.env\.NODE_ENV\s*===\s*['"]production['"]\s*\)\s*\{/;
-  const match = block.match(ANCHOR);
-  if (!match || match.index === undefined) return '';
-
-  const openBraceIdx = block.indexOf('{', match.index);
-  if (openBraceIdx === -1) return '';
-
-  let depth = 0;
-  for (let i = openBraceIdx; i < block.length; i++) {
-    const ch = block[i];
-    if (ch === '{') depth++;
-    else if (ch === '}') {
-      depth--;
-      if (depth === 0) {
-        return block.slice(openBraceIdx, i + 1);
-      }
-    }
-  }
-  return '';
-}
+const extractHelperFunctionBody = (source: string) =>
+  extractBraceBlock(source, HELPER_BODY_ANCHOR);
+const extractProdBranch = (block: string) =>
+  extractBraceBlock(block, PROD_BRANCH_ANCHOR);
 
 describe('textCap pendingLogs drain contract (#297 + #293)', () => {
   let source = '';
@@ -128,6 +88,10 @@ describe('textCap pendingLogs drain contract (#297 + #293)', () => {
   it('prod 分岐に直接 `void safeLogError(` 形が残っていない (regression guard)', () => {
     const helperBody = extractHelperFunctionBody(source);
     const prodBranch = extractProdBranch(helperBody);
+    // anchor 消失で prodBranch が空文字のまま to.not.match(...) が silent PASS する経路を防ぐ。
+    expect(prodBranch, 'prod 分岐が抽出できない — anchor 消失 (#311 review C2 対応)').to.not.equal(
+      '',
+    );
     expect(prodBranch).to.not.match(
       /\bvoid\s+safeLogError\s*\(/,
       'void safeLogError( 直叩きが残存 — fire-and-forget 回帰、#297 対応が崩れている',

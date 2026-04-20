@@ -23,66 +23,18 @@
 import { expect } from 'chai';
 import { existsSync, readFileSync } from 'fs';
 import { resolve } from 'path';
+import { extractBraceBlock, extractParenBlock } from './helpers/extractBraceBlock';
 
 const OCR_PROCESSOR_PATH = 'src/ocr/ocrProcessor.ts';
+const SAFE_LOG_ERROR_CALL = /\bsafeLogError\s*\(/;
 
-/**
- * `export async function handleProcessingError(` から始まる関数の本体を抽出する。
- *
- * 波括弧のネストカウントで関数終端を特定するシンプル実装。対象の ocrProcessor.ts
- * は文字列/正規表現/テンプレートリテラル内に `{` `}` を含まないため実用上は安全。
- * 将来ここにリテラル波括弧が混入した場合は AST ベース抽出への移行が必要。
- *
- * 抽出失敗時は空文字を返し、caller 側で「occurrence 0」として明示失敗させる。
- */
-function extractFunctionBody(source: string, signaturePrefix: string): string {
-  const startIdx = source.indexOf(signaturePrefix);
-  if (startIdx === -1) return '';
-
-  const openBraceIdx = source.indexOf('{', startIdx);
-  if (openBraceIdx === -1) return '';
-
-  let depth = 0;
-  for (let i = openBraceIdx; i < source.length; i++) {
-    const ch = source[i];
-    if (ch === '{') depth++;
-    else if (ch === '}') {
-      depth--;
-      if (depth === 0) {
-        return source.slice(openBraceIdx, i + 1);
-      }
-    }
-  }
-  return '';
-}
-
-/**
- * 関数本体内の `safeLogError(...)` 呼出の引数ブロック (括弧内) を抽出する。
- *
- * 関数本体全体を対象にした regex だと、無関係な同名ローカル変数・他 logger 呼出・
- * 文字列リテラルなどに偽陽性が出る (silent-failure-hunter 指摘)。本関数で引数
- * ブロックに scope を絞ることで、params 検証の精度を上げる。
- */
-function extractSafeLogErrorArgs(functionBody: string): string {
-  const match = functionBody.match(/\bsafeLogError\s*\(/);
-  if (!match || match.index === undefined) return '';
-
-  const openParenIdx = functionBody.indexOf('(', match.index);
-  if (openParenIdx === -1) return '';
-
-  let depth = 0;
-  for (let i = openParenIdx; i < functionBody.length; i++) {
-    const ch = functionBody[i];
-    if (ch === '(') depth++;
-    else if (ch === ')') {
-      depth--;
-      if (depth === 0) {
-        return functionBody.slice(openParenIdx, i + 1);
-      }
-    }
-  }
-  return '';
-}
+// brace/paren 抽出は共通 helper (extractBraceBlock / extractParenBlock) を使用 (#302)。
+// 関数本体の抽出 = brace-nesting、safeLogError 引数の抽出 = paren-nesting で scope を絞ることで
+// 無関係な同名変数・他 logger 呼出・文字列リテラルへの偽陽性を回避する。
+const extractFunctionBody = (source: string, signaturePrefix: string) =>
+  extractBraceBlock(source, signaturePrefix);
+const extractSafeLogErrorArgs = (functionBody: string) =>
+  extractParenBlock(functionBody, SAFE_LOG_ERROR_CALL);
 
 describe('handleProcessingError safeLogError contract (#276)', () => {
   before(() => {
@@ -96,11 +48,11 @@ describe('handleProcessingError safeLogError contract (#276)', () => {
 
   const absPath = resolve(process.cwd(), OCR_PROCESSOR_PATH);
   const source = readFileSync(absPath, 'utf-8');
-  const functionBody = extractFunctionBody(
+  const functionBody = extractBraceBlock(
     source,
     'export async function handleProcessingError('
   );
-  const safeLogErrorArgs = extractSafeLogErrorArgs(functionBody);
+  const safeLogErrorArgs = extractParenBlock(functionBody, /\bsafeLogError\s*\(/);
 
   it('handleProcessingError 関数本体が抽出できる', () => {
     expect(functionBody.length).to.be.greaterThan(

@@ -19,8 +19,21 @@
 import { expect } from 'chai';
 import { existsSync, readFileSync } from 'fs';
 import { resolve } from 'path';
+import { extractBraceBlock } from './helpers/extractBraceBlock';
 
 const OCR_PROCESSOR_PATH = 'src/ocr/ocrProcessor.ts';
+
+// 制御フロー近接性 lock-in (#302 codex Low 1): capPageResultsAggregate 呼出 → catch ブロックを
+// 1 anchor で束ね、別所の catch ブロックや不整合な順序に回帰した場合に fail させる。
+// anchor 末尾は `catch (e) ` で終わり、そこから startAfterAnchor で最初の `{` を拾う。
+//
+// 前提: ocrProcessor.ts 内で capPageResultsAggregate を参照する try/catch は 1 箇所のみ。
+// 将来 2 つ目が追加された場合、source.match() は最初のマッチを返すため、本 anchor は
+// 先行 try/catch を拾う。意図したブロックが検証されなくなる silent 誤検知リスクあり。
+// 2 つ目が追加される時は本 anchor を processDocument 固有の文脈 (例: pendingInvariantLogs 宣言)
+// 直後に narrow する必要がある。
+const CAP_AGG_CATCH_ANCHOR =
+  /try\s*\{[\s\S]*?capPageResultsAggregate\s*\([\s\S]*?\}\s*catch\s*\(\s*\w+\s*\)\s*/;
 
 describe('ocrProcessor aggregate caller wrapper contract (#293 + #297)', () => {
   let source = '';
@@ -29,6 +42,14 @@ describe('ocrProcessor aggregate caller wrapper contract (#293 + #297)', () => {
     const absPath = resolve(process.cwd(), OCR_PROCESSOR_PATH);
     expect(existsSync(absPath), `${OCR_PROCESSOR_PATH} が見つからない`).to.be.true;
     source = readFileSync(absPath, 'utf-8');
+  });
+
+  it('capPageResultsAggregate 呼出は ocrProcessor.ts 全体で 1 箇所のみ (CAP_AGG_CATCH_ANCHOR 前提、#311 review I4)', () => {
+    // CAP_AGG_CATCH_ANCHOR の `[\s\S]*?` 非貪欲マッチは最初の try/catch にヒットする。
+    // 2 箇所以上存在すると anchor が先行ブロックにロックインされ、意図しないブロックを
+    // 検証する silent 誤検知が発生。2 つ目が追加された時点で fail させて narrow 更新を強制する。
+    const callCount = (source.match(/capPageResultsAggregate\s*\(/g) ?? []).length;
+    expect(callCount, '2 つ目以降の呼出は anchor narrow が必要 (#302 コメント参照)').to.equal(1);
   });
 
   it('pendingInvariantLogs: Promise<void>[] の宣言が存在する (#297)', () => {
@@ -58,30 +79,14 @@ describe('ocrProcessor aggregate caller wrapper contract (#293 + #297)', () => {
   });
 
   it('catch ブロック内に safeLogError 呼出が存在する (#293 errors collection 記録)', () => {
-    // try/catch 直後の catch ブロック本体を抽出して内部の safeLogError を検証。
-    const TRY_ANCHOR = /try\s*\{[\s\S]*?capPageResultsAggregate\s*\([\s\S]*?\}\s*catch\s*\(\s*\w+\s*\)\s*\{/;
-    const match = source.match(TRY_ANCHOR);
-    expect(match, 'try/catch ブロックの anchor が抽出できない').to.not.be.null;
-
-    if (!match || match.index === undefined) return;
-    const catchOpenIdx = source.indexOf('{', match.index + match[0].length - 1);
-    if (catchOpenIdx === -1) return;
-
-    let depth = 0;
-    let catchEnd = -1;
-    for (let i = catchOpenIdx; i < source.length; i++) {
-      const ch = source[i];
-      if (ch === '{') depth++;
-      else if (ch === '}') {
-        depth--;
-        if (depth === 0) {
-          catchEnd = i + 1;
-          break;
-        }
-      }
-    }
-    expect(catchEnd, 'catch ブロック終端が検出できない').to.be.greaterThan(catchOpenIdx);
-    const catchBlock = source.slice(catchOpenIdx, catchEnd);
+    // capPageResultsAggregate 呼出 → catch ブロックを 1 anchor で束ねて抽出する。
+    // 別の catch ブロックや順序の回帰があれば anchor マッチ自体が失敗する (#302 codex Low 1)。
+    const catchBlock = extractBraceBlock(source, CAP_AGG_CATCH_ANCHOR, {
+      startAfterAnchor: true,
+    });
+    expect(catchBlock, 'capPageResultsAggregate 呼出直後の catch ブロックが抽出できない').to.not.equal(
+      '',
+    );
     expect(catchBlock).to.match(
       /\bsafeLogError\s*\(/,
       'catch 内で safeLogError 呼出が見つからない — dev throw が silent に失われる',
