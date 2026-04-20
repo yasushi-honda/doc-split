@@ -21,7 +21,7 @@ session22 ハンドオフの「WBS Phase 2 (PR-B): #312 + #313 統合」を **3 
 |------|------|
 | **merged PR** | 3 本 (#323 / #325 / #326) |
 | **closed Issue** | #312 (helper API 改善、4 AC 全達成 + 追加 5 改善) / #324 (docs 同期) |
-| **テスト増加** | 548 → **590 passing** (+42 ケース: null source passthrough / 境界値 / `/g` reject / B2 lock-in 注記) |
+| **テスト増加** | 580 → **590 passing** (+10 vs session22: null source passthrough 2 + 境界値 3 + `/g` reject 4 + from-start 明示 1 = 計 10 ケース) |
 | **品質改善** | `string \| null` 型安全化、`AnchorMode` export、exhaustive `never` check、alias 撤去、`SAFE_LOG_ERROR_CALL` 統一、docs 同期 |
 
 ### Quality Gate 実施記録 (13 エージェント review + CodeRabbit 1 件)
@@ -71,7 +71,7 @@ session22 ハンドオフの「WBS Phase 2 (PR-B): #312 + #313 統合」を **3 
 ### Phase A-1 Test plan 実行結果
 
 - [x] `npx tsc --noEmit` EXIT 0 (main / test 両方)
-- [x] `npm test` 590 passing (+42 vs session22)
+- [x] `npm test` 590 passing (580 vs session22 → +10 新規ケース)
 - [x] main CI 3/3 green (lint-build-test / CodeRabbit / GitGuardian)
 - [x] grep で旧 API 残存ゼロ確認 (`startAfterAnchor` / `.to.not.equal('')` / 11 alias 名)
 - [x] Evaluator / /review-pr 全指摘対応
@@ -79,10 +79,16 @@ session22 ハンドオフの「WBS Phase 2 (PR-B): #312 + #313 統合」を **3 
 
 ---
 
-**過去セッション (session19〜22) は `docs/handoff/archive/2026-04-history.md` に移管済み。**
+**過去セッション (session15〜22) は `docs/handoff/archive/2026-04-history.md` に移管済み。** 本 session23 で session19〜22 を追加移管した。
 
 詳細は archive を参照:
 - **session22** (2026-04-20): WBS Phase 1 PR-A #317 完遂、10 指摘解消
 - **session21** (2026-04-20): Phase 2 Cluster B (#303 + #304) 完遂、22 指摘解消
 - **session20** (2026-04-20): Phase 1 Contract test 共通基盤整備 完遂 (3 PR)、follow-up 4 件起票
 - **session19** (2026-04-19): #293 + #294 + #297 完遂、#299 見送り、follow-up 6 件起票
+- **session18** (2026-04-18 頃): #288 observability follow-up bundle 完遂
+- **session17** (2026-04-18 頃): Phase 3 #278+#284 + Phase 4 #279 完遂
+- **session16** (2026-04-18 頃): Phase 1 #276 + Phase 2 #283 完遂、セカンドオピニオン ROI 実証
+- **session15** (2026-04-17 頃): Phase 2 #264 完遂 (capPageResultsAggregate SummaryField generic 化)、follow-up 2 Issue 起票
+
+それ以前 (session6〜14) は同 archive 内に散在収録。
