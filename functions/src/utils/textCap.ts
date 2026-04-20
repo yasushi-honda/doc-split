@@ -14,6 +14,10 @@
  */
 
 import type { SummaryField } from '../../../shared/types';
+// type-only imports: runtime では erased されるため errorLogger.ts の top-level `admin.firestore()`
+// 副作用を誘発しない。#303 fallback の stringly-typed を compile-time drift 検知に格上げする。
+import type * as adminTypes from 'firebase-admin';
+import type { ErrorCategory, ErrorSeverity, ErrorSource } from './errorLogger';
 
 export const MAX_PAGE_TEXT_LENGTH = 50_000;
 
@@ -83,22 +87,43 @@ export type CappedAggregatePage<T extends SummaryField> =
  * (#288 item 6 + silent-failure-hunter/Codex S2 指摘対応)。
  *
  * #297 (Codex HIGH): prod 分岐の `safeLogError` fire-and-forget は Cloud Functions handler
- * Promise 解決後の未 await async work を完了保証しない。caller が `pendingLogs` mutable array
+ * Promise 解決後の未 await async work を完了保証しない。caller が `drainSink` mutable array
  * を渡すと、`handleAggregateInvariantViolation` が Promise を push し、caller 側で
- * `await Promise.allSettled(pendingLogs)` による drain で flush 可能になる。
+ * `await Promise.allSettled(drainSink)` による drain で flush 可能になる。
  * 未渡しの場合は従来通り fire-and-forget（既存 caller への後方互換維持）。
+ *
+ * #304 naming: `pendingLogs` → `drainSink` にリネーム。役割 (caller が drain 責務を負う
+ * output channel) を名前から伝える (OpenTelemetry / Zod ctx.addIssue と整合)。
+ *
+ * #304 Option 採否:
+ * - Option A (interface 分離 AggregateObservabilityContext/AggregateDrainContext):
+ *   caller が 1 箇所 (ocrProcessor.ts) のみで、役割分離の型レベル強制は過剰。見送り。
+ * - Option B (brand type `DrainSink = Promise<void>[] & { __mustDrain }`):
+ *   grep 誤用検知は既存 contract test (textCapDrainSinkContract / ocrProcessorAggregateCallerContract)
+ *   で代替可能。branded cast の caller 側コスト増に見合う恩恵なし。見送り。
+ * - Option C (名称変更のみ): 採用。diff 最小 + 役割伝達。type-design-analyzer Enforcement 1/5 は
+ *   contract test 層でカバーする方針を維持。
  */
 export interface AggregateInvariantContext {
   documentId?: string;
-  pendingLogs?: Promise<void>[];
+  drainSink?: Promise<void>[];
 }
 
 /**
  * invariant violation 検出時の dev/prod 分岐ハンドラ。
  *
  * - dev: throw で early fail (#284 契約)
- * - prod: throw せず safeLogError fire-and-forget で errors collection に記録
- *   (#288 item 6, PR #290 silent-failure-hunter S1 対応)
+ * - prod: throw せず errors collection に記録。以下 3 段階で observability を確保:
+ *   1. `safeLogError` を呼び、戻り Promise を caller の drainSink に push (#297)。drainSink
+ *      未渡し時は後方互換 fire-and-forget (`void logPromise`) を維持 (#288 item 6)。
+ *   2. `require('./errorLogger')` が失敗した場合は `admin.firestore().collection('errors').add()`
+ *      直接書込 fallback で救う (#303)。bundler regression / 初期化 race で errorLogger 経路が
+ *      壊れた場合の silent 消失を防ぐ。fallback 書込は意図的に drainSink に push しない
+ *      fire-and-forget — Cloud Functions handler 終了前の完了保証なし。主経路 (safeLogError) は
+ *      drainSink で drain 保証される設計と非対称だが、fallback は「最終手段 (last resort)」で
+ *      即時プロセス継続を最優先するため pragmatic な選択。完了保証が必要になった場合は別 Issue 化。
+ *   3. fallback 書込自体も silent swallow でプロセス継続保証。console.error は fallback 前に
+ *      先行して最低限ログを残す (rules/error-handling.md §1)。
  *
  * errorLogger は top-level で admin.firestore() を呼ぶため prod path に限定した
  * dynamic require で unit test (admin 未初期化) への影響を回避 (buildPageResult.ts 方針と整合)。
@@ -119,18 +144,66 @@ function handleAggregateInvariantViolation(
         functionName: 'capPageResultsAggregate',
         documentId: context?.documentId,
       });
-      if (context?.pendingLogs) {
-        context.pendingLogs.push(logPromise);
+      if (context?.drainSink) {
+        context.drainSink.push(logPromise);
       } else {
-        // 後方互換 fallback: pendingLogs 未渡し caller には従来通り fire-and-forget を維持する。
+        // 後方互換 fallback: drainSink 未渡し caller には従来通り fire-and-forget を維持する。
         void logPromise;
       }
     } catch (loadErr) {
+      // 最低限のローカルログは確実に残す (rules/error-handling.md §1:
+      // "最低限のconsole.error はtry-catch外で先に実行")。以降の fallback 書込失敗でも
+      // このログは残存するため、Cloud Logging alert から原因特定可能。
       console.error(
         '[textCap] failed to load errorLogger for prod invariant report:',
         loadErr,
         message,
       );
+      // #303: bundler/esbuild config 変更や admin.firestore() 初期化 race で dynamic require が
+      // 壊れた場合、errorLogger 経路で失われる invariant violation を errors collection に直接
+      // 書込で救う fallback。二重失敗は silent swallow (rules/error-handling.md §1「状態復旧 >
+      // ログ記録 > 通知」優先順位: さらに上位の fallback は不存在、プロセス継続のみ保証)。
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const admin = require('firebase-admin') as typeof import('firebase-admin');
+        // ErrorLog schema drift 検知: errorLogger.ts の union 型 (ErrorSource/ErrorSeverity/
+        // ErrorCategory) を type-only import で share し、fallback 書込 object を compile-time
+        // 検証。errorLogger.ts の型が変わった瞬間 fallback も tsc エラーで追従が強制される。
+        const fallbackRecord: {
+          source: ErrorSource;
+          functionName: string;
+          severity: ErrorSeverity;
+          category: ErrorCategory;
+          status: 'pending' | 'resolved' | 'ignored';
+          errorCode: string;
+          errorMessage: string;
+          loaderError: string;
+          documentId: string | null;
+          retryCount: number;
+          createdAt: adminTypes.firestore.FieldValue;
+        } = {
+          source: 'ocr',
+          functionName: 'capPageResultsAggregate:loaderFailed',
+          severity: 'critical',
+          category: 'fatal',
+          status: 'pending',
+          errorCode: 'LOADER_FAILED',
+          errorMessage: message,
+          loaderError: String(loadErr),
+          documentId: context?.documentId ?? null,
+          retryCount: 0,
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        };
+        admin
+          .firestore()
+          .collection('errors')
+          .add(fallbackRecord)
+          .catch(() => {
+            /* 書込失敗は silent swallow: 既に console.error でローカル記録済、さらなる fallback なし */
+          });
+      } catch {
+        /* require('firebase-admin') 自体の失敗も silent swallow: プロセス継続を最優先 */
+      }
     }
     return;
   }

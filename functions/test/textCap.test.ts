@@ -464,43 +464,44 @@ describe('textCap', () => {
         expect(() => capPageResultsAggregate(pages, { documentId: 'doc-123' })).to.not.throw();
       });
 
-      // #297 Codex HIGH + #293: context.pendingLogs 渡し signature 拡張。fire-and-forget 廃止対応。
-      // prod 分岐で handleAggregateInvariantViolation が pendingLogs array に Promise を push する
+      // #297 Codex HIGH + #293: context.drainSink 渡し signature 拡張。fire-and-forget 廃止対応。
+      // prod 分岐で handleAggregateInvariantViolation が drainSink array に Promise を push する
       // 経路と、caller が await drain 可能になる後方互換 signature を lock-in する。
       // push 本体の動的検証は environment/require 依存が大きいため #299 + grep contract に委譲し、
       // 本ブロックは signature/throw 挙動の最小 runtime 契約のみ保持する。
-      it('context.pendingLogs を受け取り throw しない (signature 互換)', () => {
+      // #304 naming: context field `pendingLogs` → `drainSink` にリネーム済。
+      it('context.drainSink を受け取り throw しない (signature 互換)', () => {
         const pages: SummaryField[] = [{ text: 'short', truncated: false }];
-        const pendingLogs: Promise<void>[] = [];
+        const drainSink: Promise<void>[] = [];
         expect(() =>
-          capPageResultsAggregate(pages, { documentId: 'doc-456', pendingLogs }),
+          capPageResultsAggregate(pages, { documentId: 'doc-456', drainSink }),
         ).to.not.throw();
       });
 
-      it('prod 環境 + invalid 入力 + pendingLogs 渡しで throw しない (#297 drain 経路)', () => {
+      it('prod 環境 + invalid 入力 + drainSink 渡しで throw しない (#297 drain 経路)', () => {
         withNodeEnv('production', () => {
           const invalidPage = makeInvalidPage(999_999, 'short');
-          const pendingLogs: Promise<void>[] = [];
+          const drainSink: Promise<void>[] = [];
           expect(() =>
             capPageResultsAggregate([invalidPage], {
               documentId: 'doc-789',
-              pendingLogs,
+              drainSink,
             }),
           ).to.not.throw();
         });
       });
 
-      it('dev 環境 + invalid 入力 + pendingLogs 渡しでも従来通り throw する (#284 契約維持)', () => {
+      it('dev 環境 + invalid 入力 + drainSink 渡しでも従来通り throw する (#284 契約維持)', () => {
         const invalidPage = makeInvalidPage(999_999, 'short');
-        const pendingLogs: Promise<void>[] = [];
+        const drainSink: Promise<void>[] = [];
         expect(() =>
           capPageResultsAggregate([invalidPage], {
             documentId: 'doc-dev',
-            pendingLogs,
+            drainSink,
           }),
         ).to.throw(/invariant violation/);
-        // dev 分岐は throw のみで push せず (prod 分岐専用) — pendingLogs は空のまま。
-        expect(pendingLogs.length).to.equal(0);
+        // dev 分岐は throw のみで push せず (prod 分岐専用) — drainSink は空のまま。
+        expect(drainSink.length).to.equal(0);
       });
     });
 
@@ -534,8 +535,8 @@ describe('textCap', () => {
       it('mixed-input prod で errorLogger require 失敗時は push 0 件 + console.error fallback (unit test 環境)', () => {
         // 本 unit test 環境 (mocha + ts-node、admin 未初期化) では errorLogger の top-level
         // `admin.firestore()` が FirebaseAppError を throw → `require('./errorLogger')` が
-        // textCap.ts:131 の catch (loadErr) に落ちて console.error fallback する。
-        // push 経路は走らないため pendingLogs.length === 0 が決定論的。
+        // textCap.ts の catch (loadErr) に落ちて console.error fallback する。
+        // push 経路は走らないため drainSink.length === 0 が決定論的。
         // 実運用 (admin 初期化済み) での push 2 件動作検証は Issue #299 で担保予定。
         withNodeEnv('production', () => {
           const pages: SummaryField[] = [
@@ -544,13 +545,13 @@ describe('textCap', () => {
             { text: 'valid2', truncated: false },
             makeInvalidPage(222, 'invalid2'),
           ];
-          const pendingLogs: Promise<void>[] = [];
+          const drainSink: Promise<void>[] = [];
           const result = capPageResultsAggregate(pages, {
             documentId: 'mixed-doc',
-            pendingLogs,
+            drainSink,
           });
           expect(result).to.have.length(4);
-          expect(pendingLogs.length).to.equal(0);
+          expect(drainSink.length).to.equal(0);
         });
       });
     });

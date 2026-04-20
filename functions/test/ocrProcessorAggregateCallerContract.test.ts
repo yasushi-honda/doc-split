@@ -1,11 +1,14 @@
 /**
- * ocrProcessor aggregate caller try/catch + pendingLogs drain 契約テスト
- * (Issue #293 + #297 統合対応)
+ * ocrProcessor aggregate caller try/catch + drainSink 契約テスト
+ * (Issue #293 + #297 統合対応、#304 naming refactor で context field `pendingLogs` → `drainSink`)
  *
  * 目的: processDocument 内 capPageResultsAggregate 呼出周辺に (1) try/catch で dev throw
- * 捕捉 → safeLogError 記録, (2) pendingInvariantLogs array 渡しで fire-and-forget 廃止,
- * (3) `await Promise.allSettled(pendingInvariantLogs)` による flush 保証、を追加した設計を
- * 静的に lock-in する。
+ * 捕捉 → safeLogError 記録, (2) pendingInvariantLogs array を context.drainSink として渡し
+ * fire-and-forget 廃止, (3) `await Promise.allSettled(pendingInvariantLogs)` による flush 保証、
+ * を追加した設計を静的に lock-in する。
+ *
+ * 注: caller ローカル変数名 `pendingInvariantLogs` は drain 責務を明示する従来命名を維持。
+ * context field 名 `drainSink` (#304) とは分離された命名である。
  *
  * 方式: grep-based (docs/context/test-strategy.md §2.1 参照)。
  * 将来委譲: 動的 runtime test による caller throw 捕捉の verify は Issue #299 で追加予定。
@@ -65,11 +68,12 @@ describe('ocrProcessor aggregate caller wrapper contract (#293 + #297)', () => {
     );
   });
 
-  it('capPageResultsAggregate 呼出時に pendingLogs を渡している (#297)', () => {
-    // `capPageResultsAggregate(..., { ..., pendingLogs: pendingInvariantLogs })` 形を検証。
+  it('capPageResultsAggregate 呼出時に drainSink を渡している (#297, #304 rename)', () => {
+    // `capPageResultsAggregate(..., { ..., drainSink: pendingInvariantLogs })` 形を検証。
+    // #304 naming: context field `pendingLogs` → `drainSink` にリネーム済。
     expect(source).to.match(
-      /capPageResultsAggregate\s*\([\s\S]*?pendingLogs\s*:\s*pendingInvariantLogs/,
-      'capPageResultsAggregate 呼出で pendingLogs が渡されていない — fire-and-forget に回帰',
+      /capPageResultsAggregate\s*\([\s\S]*?drainSink\s*:\s*pendingInvariantLogs/,
+      'capPageResultsAggregate 呼出で drainSink が渡されていない — fire-and-forget に回帰 or #304 rename 未追従',
     );
   });
 
