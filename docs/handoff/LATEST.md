@@ -1,94 +1,111 @@
 # ハンドオフメモ
 
-**更新日**: 2026-04-20 session23 (Phase 2 #312 helper API 改善セット 完遂、3 PR merged、Issue 2 件 closed)
-**ブランチ**: main (PR #326 マージ済、clean)
-**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + Phase A-1 (#312 系列) 完遂
+**更新日**: 2026-04-20 session24 (WBS Phase 1 + Phase 2 完遂、3 PR merged、5 Issue closed、5 follow-up Issue 起票)
+**ブランチ**: main (PR #330 マージ済、clean)
+**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + Phase A-1 (#312) + A-2/A-3 (#313/#315) + Phase 2 (#181/#182/#183) 完遂
 
-<a id="session23"></a>
-## ✅ session23 完了サマリー (Phase A-1: #312 helper API 改善セット 完遂)
+<a id="session24"></a>
+## ✅ session24 完了サマリー (WBS Phase 1 + Phase 2 完遂)
 
-session22 ハンドオフの「WBS Phase 2 (PR-B): #312 + #313 統合」を **3 PR 段階実行 (PR-1 型安全化 + PR-2 alias 削除 + PR-3 docs 同期)** に再設計し、Auto mode で連続完遂。Evaluator 分離 1 回 + 6-agent review 1 回 + 4-agent review 1 回 + 2-agent review 1 回 = **13 エージェントレビュー**を段階的に発動し、Critical / Important 指摘を全て scope 内で解消。
+PM/PL 視点で WBS を引き、Phase 1.1 (#313) → Phase 1.2 (#315) → Phase 2 (#181 + #182 + #183 バッチ) の **3 PR を 1 セッションで完遂**。各 Phase で Quality Gate フル発動 (simplify → safe-refactor → Evaluator 分離 → review-pr 4-6 並列)、合計 **15+ エージェントレビュー**。
 
-| PR | 内容 | merged commit |
-|----|------|--------------|
-| **#323 (PR-1)** | helper API 型安全化: `string` → `string \| null`、`startAfterAnchor: boolean` → `anchorMode: 'from-start' \| 'after-match'`、`ExtractOptions` inline 降格 | `55f571b` |
-| **#325 (PR-2)** | 11 alias wrapper 削除 → `extractBraceBlock(source, ANCHOR)` 直接呼出に統一、detection logic describe に B2 方針注記 | `a0a4713` |
-| **#326 (docs)** | `docs/context/test-strategy.md` の空文字返却前提記述 → `null` ベースに同期 (Closes #324) | `1898a1b` |
+### PR 一覧
+
+| PR | Phase | 内容 | closed Issues | merged commit |
+|----|-------|------|--------------|--------------|
+| **#328** | 1.1 | `SAFE_LOG_ERROR_CALL` を helpers/patterns.ts に集約 + textCapProdInvariantContract の before() キャッシュ化 | #313 | `c992d7b` |
+| **#329** | 1.2 | withNodeEnv helper 強化 (ESLint guard / callsite positive assert / NodeEnvValue literal union narrow) | #315 | `f1f7504` |
+| **#330** | 2 | displayFileName を shared/ 統合 + OS 禁止文字サニタイズ + Timestamp fallback | #181 / #182 / #183 | `0821e20` |
 
 ### 主要成果
 
 | 項目 | 内容 |
 |------|------|
-| **merged PR** | 3 本 (#323 / #325 / #326) |
-| **closed Issue** | #312 (helper API 改善、4 AC 全達成 + 追加 5 改善) / #324 (docs 同期) |
-| **テスト増加** | 580 → **590 passing** (+10 vs session22: null source passthrough 2 + 境界値 3 + `/g` reject 4 + from-start 明示 1 = 計 10 ケース) |
-| **品質改善** | `string \| null` 型安全化、`AnchorMode` export、exhaustive `never` check、alias 撤去、`SAFE_LOG_ERROR_CALL` 統一、docs 同期 |
+| **merged PR** | 3 本 (#328 / #329 / #330) |
+| **closed Issue** | #313 / #315 / #181 / #182 / #183 (計 5 件) |
+| **新規 follow-up Issue** | #331-#335 (5 件、P2 enhancement、PR #330 の review-pr 指摘由来) |
+| **BE テスト** | 590 → **622 passing** (+32: サニタイズ 9 + fallback 3 + 型契約 3 + patterns.test.ts 14 + 他 3) |
+| **FE テスト** | 137 → **127 passing** (-10: FE generateDisplayFileName.test.ts 削除、BE mocha に集約) |
+| **コード量 (Phase 2)** | +201 / -230 行 (実質削減、FE/BE 重複解消の成果) |
+| **品質改善** | 共通定数集約 / before() キャッシュ / ESLint rule 3 pattern / NodeEnvValue strict union / shared/ displayFileName / OS 禁止文字+DEL+制御文字サニタイズ / fileDate Timestamp fallback |
 
-### Quality Gate 実施記録 (13 エージェント review + CodeRabbit 1 件)
+### Quality Gate 実施記録 (15+ エージェントレビュー)
 
-| Stage | Source | Count |
-|-------|--------|-------|
-| PR #323 Evaluator 分離 | REQUEST_CHANGES (AC2 / AC7 FAIL) → 全対応 | 2 |
-| PR #323 /review-pr 6 並列 | code-reviewer / pr-test-analyzer (C1 Critical: null source passthrough 無 test) / silent-failure-hunter / type-design-analyzer / comment-analyzer (I1 / S4) / code-simplifier | 1 Critical + 4 Important |
-| PR #323 CodeRabbit Minor | global flag (/g) RegExp silent 経路 → 明示 throw で reject | 1 |
-| PR #325 /review-pr 4 並列 | code-reviewer / pr-test-analyzer (S1 B2 注記) / comment-analyzer (I1 SAFE_LOG_ERROR_CALL 不整合) / silent-failure-hunter | 1 Important + 1 Suggestion |
-| PR #326 /review-pr 2 並列 | code-reviewer / comment-analyzer (I1 Issue/PR 表記誤り) | 1 Important |
+| Phase | Stage | 結果 |
+|-------|-------|------|
+| 1.1 (#313) | /simplify 3 並列 | Critical 0, Important 2 + Suggestion 1 対応 |
+| 1.1 (#313) | Evaluator 分離 | **APPROVE**、LOW 1 件 (isSafeLogError 中間マッチ) 対応済 |
+| 1.1 (#313) | /review-pr 6 並列 | Critical 0, Important 3 対応 (`/y` sticky flag / idempotency / suffix 差分) |
+| 1.2 (#315) | /review-pr 6 並列 | Critical 0 (scope 内)、**Critical 2 検出** (ESLint selector computed property 盲点 / tsconfig.test.json include 盲点で @ts-expect-error silent PASS) → 対応済 |
+| 2 (#330) | Evaluator 分離 | **REQUEST_CHANGES** (AC6 fallback 3 ケース追加) → 対応済。`seconds === 0` guard 指摘は既存契約尊重で見送り |
+| 2 (#330) | /review-pr 6 並列 | Critical 0 (見送り)、**Important 5 件対応** (DEL `\x7f` / `_` 全置換 part 除外 / interface export / コメント整理 / WHY 補強) |
 
-### 設計判断 / Lessons Learned
+### 設計判断 / Lessons Learned (本セッション重要知見)
 
-1. **`string \| null` + null 透過 chain 設計**: caller の `extractBraceBlock(extractBraceBlock(...), ...)` chain で boilerplate を helper 側に集約。null source passthrough で silent PASS を構造的に防御。**caller 規約 `expect(block).to.not.be.null` を JSDoc に明文化 (#311 C1/C2 教訓の型昇格)**
-2. **B2 方針 (alias 削除 + detection logic describe 残置)**: 「ANCHOR 正規表現自体の挙動 lock-in」責務を残した describe には **in-test コメントで理由を明示**し、将来の削除誤判断を構造的に防止 (pr-test-analyzer S1 対応)
-3. **global flag (/g) の silent PASS リスク**: `String.prototype.match(/\bfoo/g)` は `match.index` が undefined になり silent に anchor 不在扱い。**明示的 early throw で可視化**するのが silent PASS 防御精神と整合 (CodeRabbit Minor、flag 除去による正規化より防御哲学的に優位)
-4. **Issue vs PR 表記**: `#312` は Issue、実装 PR は `#323/#325`。doc 内で「PR #312」誤表記が発生しやすいため、ソースコメントで踏襲している「`Issue #312`」形式に統一 (comment-analyzer PR #326 I1)
-5. **linter 巻き戻しリスク**: Edit 実行後に linter が変更を戻すケースを確認。**ファイル commit 前に `git show HEAD` で実際の反映内容を必ず確認**。通知された変更と HEAD の diff が食い違う場合は PR 送信後に `git show` で最終確認必須
+1. **ESLint selector は実機検証必須 (#329 C1 実検証)**: dot-access のみの selector は bracket access / `Object.assign(process.env, {...})` / dynamic key で silent bypass 可能。**dummy violation 3 パターン以上で実機検証**しないと、PR 主目的の防御自体が silent 機能不全のまま merge される
+
+2. **`tsconfig.test.json` include の盲点 (#329 C2 実検証)**: `@ts-expect-error` 型契約 test は include 対象ディレクトリに置かないと `npm run type-check:test` で silent PASS する。既存 convention (`test/types/`) に置くのが安全
+
+3. **BE `@shared/` alias 導入リスク (#330 review-pr 判断)**: `functions/tsconfig.json` の paths が定義済でも `tsconfig-paths` / `tsc-alias` 未導入のため tsc compile 後の runtime で `module not found`。**既存 relative path convention 維持**が安全
+
+4. **Evaluator も見落とす既存契約 (#330 Evaluator 判断)**: Evaluator が「`seconds === 0` guard を修正せよ」と REQUEST_CHANGES したが、既存 `backfillDisplayFileName.test.ts:32` で「seconds=0 → undefined」が明示 lock-in 済。**Evaluator 指摘でも既存契約チェック必須**、盲信せず複数ファイル確認
+
+5. **REPLACEMENT_ONLY_PATTERN 判定で silent 無意味 filename 防止 (#330 silent-failure-hunter)**: `customerName: '/////'` → サニタイズで `'_____'` → parts に push すると `介護保険証_____.pdf` 生成。全置換文字の part を「情報ゼロ」として除外する `pushValidPart` helper で silent 生成経路を塞ぐ
+
+6. **Quality Gate 段階的発動の価値**: simplify (3 並列) → safe-refactor → Evaluator 分離 (5+ ファイル) → review-pr 6 並列 の 4 段で、各段で前段が見落とした問題を検出。**単段だけでは Critical 見落とし多数** (本セッションで review-pr の silent-failure-hunter が Critical 2 件検出を実証、Evaluator 単独では見逃した)
+
+7. **3 Issue バッチ化の Quality Gate コスト効率**: #181 + #182 + #183 を 1 PR にまとめることで Evaluator / review-pr 発動 1 回で 3 Issue 同時処理。本 PR で成果検証、今後の類似 Issue 群にも適用可
 
 ### 次セッション着手候補 (WBS 進捗)
 
-**Phase A-2: #313 contract test 共通定数と抽出キャッシュ** (次セッション最優先):
-- #312 系列直近、test-strategy.md 導線で自然な follow-up
-- Q4 + E2 #311 follow-up: `SAFE_LOG_ERROR_CALL` 統一 (PR-2 で部分対応) + `textCapProdInvariantContract` 抽出キャッシュ 40% 削減
-- 想定規模: helper 1 + caller 5 ≈ 6 ファイル、**Evaluator 分離プロトコル発動ライン**
-- 想定 Quality Gate: `/impl-plan` → `/simplify` 3 並列 → `/safe-refactor` → Evaluator → `/review-pr` 4-6 並列
+**Phase 3: ocrProcessor/マスター系バッチ (#188 + #189 + #190)** (次セッション最優先):
+- **#188** loadMasterData() 共通関数抽出 (ocrProcessor.ts / pdfOperations.ts 重複)
+- **#189** dateMarker サニタイズ境界内に移動 (ocrProcessor L224、型崩れ時 INVALID_ARGUMENT 可能性)
+- **#190** check-master-data.js バッチ 500 件上限対応 (Firestore BulkWriter 検討)
+- 想定規模: 3-5 ファイル、Partial Update テスト MUST 遵守 (#178 派生フィールド教訓)
+- 想定 Quality Gate: `/impl-plan` → `/tdd` → `/simplify` → `/safe-refactor` → `/review-pr`
 
-**Phase A-3: #315 withNodeEnv helper 強化 3 件** (Phase A-2 後):
-- ESLint guard / positive assert / literal union narrow
-- 想定規模: withNodeEnv.ts + ESLint + contract test 1 箇所 ≈ 3-4 ファイル
+**Phase 4: 独立軽微バグ (#196 + #152)** (Phase 3 後):
+- **#196** rescueStuckProcessingDocs MAX_RETRY_COUNT + retryAfter 追加
+- **#152** dev 環境 setup-tenant.sh 実行 (手順実行のみ、switch-client.sh プロトコル厳守)
 
-**その他 P2** (状況に応じて):
-- #262 summaryWritePayloadContract diagnostics 強化
-- #299 ts-node/esm 環境整備 + 動的 safeLogError invocation test (#303 完遂後の未 runtime 検証)
-- #251 summaryGenerator unit test + buildSummaryPrompt 分離
-- #239/#238 force-reindex 監査ログ構造化 + 孤児検出
-- #237 search tokenizer FE/BE/script 共通化 (横断変更、Evaluator 必須)
-- #220 OOM/truncated log-based metric + alert
-- #188 ocrProcessor/pdfOperations マスターデータ読み込み共通化
+**その他 WBS 順序**:
+- Phase 5 #262 diagnostics 強化 (0.5 セッション)
+- Phase 6 #220 OOM/truncated log-based metric + alert (1 セッション、マルチクライアント 3 環境展開)
+- Phase 7 #237 search tokenizer FE/BE/script 共通化 (2 セッション、横断変更、Evaluator 必須)
+- Phase 8 #251 summaryGenerator unit test + #200 Firestore emulator test (2 セッション)
+- Phase 9 #299 ts-node/esm 環境整備 (1.5-2 セッション、過去 PR #298 失敗実績、3 回失敗 → /codex 委譲条項)
+- Phase 10 #238 / #239 force-reindex audit log + 孤児検出 (1-2 セッション、低優先)
 
-### 見送り (follow-up 候補、今回 Issue 化せず)
+### 見送り (本セッション scope 外、follow-up Issue 起票済)
 
-- **caller-side `expect(block).to.not.be.null` + `!` narrow の機械的重複**: type-design-analyzer 提案 `assertExtracted(value, label)` で一元化可能だが、20+ 箇所の書き換え = 新規 PR + Evaluator 発動。**Phase A-2 or 別 PR で batch 対応**
-- **caller 内の 3 行抽出 boilerplate (`assertBody / helperBody / searchScope`)**: textCapProdInvariantContract で 7 箇所重複。`before()` 共有化で DRY 化可能だが AC2 (silent PASS 防御) の粒度維持とトレードオフ → Phase A-2 で #313 抽出キャッシュと統合検討
+| # | 内容 | 由来 |
+|---|------|------|
+| **#331** | sanitize helper 3 本 (fileNaming.ts × 2 + shared/types.ts) の shared/ 統合検討 | PR #330 review-pr reuse I-1 |
+| **#332** | timestampToDateString を backfill 固有モジュールから抽出 (naming mismatch 解消) | PR #330 review-pr reuse I-2 |
+| **#333** | pdfOperations.ts 内 legacy sanitize 関数の整理 (#331 と連動) | PR #330 review-pr quality Important |
+| **#334** | scripts/backfill-display-filename.js の inline を shared/ に統合 (JS → ts-node 導入 or compile step 必要) | PR #330 review-pr reuse S-1 |
+| **#335** | displayFileName サニタイズで全角禁止文字 (`／` `：` 等) 対応検討 | PR #330 review-pr silent-failure Suggestion 6 |
 
-### Phase A-1 Test plan 実行結果
+### Test plan 実行結果
 
-- [x] `npx tsc --noEmit` EXIT 0 (main / test 両方)
-- [x] `npm test` 590 passing (580 vs session22 → +10 新規ケース)
-- [x] main CI 3/3 green (lint-build-test / CodeRabbit / GitGuardian)
-- [x] grep で旧 API 残存ゼロ確認 (`startAfterAnchor` / `.to.not.equal('')` / 11 alias 名)
-- [x] Evaluator / /review-pr 全指摘対応
-- [x] `gh issue view 312 / 324` で CLOSED 確認
+- [x] BE `npx tsc --noEmit` EXIT 0
+- [x] BE `npm test` **622 passing** (Phase 1.1 +17 / Phase 1.2 +3 / Phase 2 +12)
+- [x] FE `npx tsc --noEmit` EXIT 0
+- [x] FE `npm test` (vitest) **127 passing**
+- [x] main CI 3/3 green (PR #328 / #329 / #330 全て lint-build-test + CodeRabbit + GitGuardian pass)
+- [x] `gh issue view 313 / 315 / 181 / 182 / 183` で CLOSED 確認
+- [x] follow-up Issue #331-#335 起票確認
+- [x] Phase 2 squash merge で #181 のみ自動 close → #182/#183 手動 close (教訓: 複数 `Closes #XX` は PR body で別行記載でも squash 後 1 件のみ機能する場合あり、手動確認必要)
 
 ---
 
-**過去セッション (session15〜22) は `docs/handoff/archive/2026-04-history.md` に移管済み。** 本 session23 で session19〜22 を追加移管した。
+**過去セッション (session15〜22) は `docs/handoff/archive/2026-04-history.md` に移管済み。** 本 session24 完了時点で session23 を archive へ追加移管予定 (次セッション冒頭で実施可)。
 
-詳細は archive を参照:
+直近前セッション:
+- **session23** (2026-04-20): Phase A-1 #312 helper API 改善セット 完遂 (3 PR #323/#325/#326)、Issue 2 件 closed、13 エージェントレビュー
 - **session22** (2026-04-20): WBS Phase 1 PR-A #317 完遂、10 指摘解消
 - **session21** (2026-04-20): Phase 2 Cluster B (#303 + #304) 完遂、22 指摘解消
 - **session20** (2026-04-20): Phase 1 Contract test 共通基盤整備 完遂 (3 PR)、follow-up 4 件起票
 - **session19** (2026-04-19): #293 + #294 + #297 完遂、#299 見送り、follow-up 6 件起票
-- **session18** (2026-04-18 頃): #288 observability follow-up bundle 完遂
-- **session17** (2026-04-18 頃): Phase 3 #278+#284 + Phase 4 #279 完遂
-- **session16** (2026-04-18 頃): Phase 1 #276 + Phase 2 #283 完遂、セカンドオピニオン ROI 実証
-- **session15** (2026-04-17 頃): Phase 2 #264 完遂 (capPageResultsAggregate SummaryField generic 化)、follow-up 2 Issue 起票
-
-それ以前 (session6〜14) は同 archive 内に散在収録。
+- 以前は `docs/handoff/archive/2026-04-history.md` 参照
