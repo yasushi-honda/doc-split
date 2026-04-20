@@ -1,24 +1,18 @@
 /**
  * summary 書込経路 caller-side 契約テスト (Issue #255 + #259)
  *
- * 目的: ocrProcessor / regenerateSummary の Firestore 書込呼出で、
- * 以下 3 要素が同時に含まれ続けることを保証する:
- *   1. `summary: buildSummaryFields(...)` — 新 discriminated union ネスト書込 (#215)
- *   2. `summaryTruncated: FieldValue.delete()` — 旧フラットフィールドの削除
- *   3. `summaryOriginalLength: FieldValue.delete()` — 旧フラットフィールドの削除
+ * 目的: ocrProcessor / regenerateSummary の Firestore 書込呼出で 3 要素を同時保持することを
+ * lock-in する: (1) `summary: buildSummaryFields(...)` (新 discriminated union, #215),
+ * (2) `summaryTruncated: FieldValue.delete()` (旧フラット削除), (3) `summaryOriginalLength:
+ * FieldValue.delete()`。#259: builder bypass (object literal 直書込) / .set() / .create() /
+ * merge:true 等のバイパス経路も検知対象。
  *
- * #259: 加えて `buildSummaryFields` を経由しない直接書込 (`summary: { ... }` object literal)
- * を anti-pattern として検知。`.update()` だけでなく `.set()` / `.create()` 経路も対象とし、
- * `merge: true` 等のバイパスで派生フィールド整合が崩れる経路を塞ぐ。
+ * 背景 (#178 教訓): 派生フィールドの一括書込が壊れると FE 表示が崩れる。旧フィールド delete
+ * 忘れで Firestore に残留し後方互換読込に無限依存するリスクを防ぐ。
  *
- * 背景 (#178 教訓):
- * 派生フィールドの一括書込が壊れると FE 表示が崩れる。#215 で新形式への移行
- * + 旧フィールド delete を徹底したが、将来のリファクタで delete 忘れが起きると
- * Firestore に旧フィールドが残留し、後方互換読込に無限依存するリスクがある。
- *
- * 方式: grep-based (静的検証)。`summaryBuilderCallerContract.test.ts` (#214)
- * と同じ方針。false negative 発生時に sinon spy へ昇格。既知の grep limitation
- * (コメント/文字列リテラル内の偽陽性、quoted key、CJK prefix) は follow-up Issue で扱う。
+ * 方式: grep-based (docs/context/test-strategy.md §2.1 参照)。
+ * 昇格条件: false negative 発生時に sinon spy へ。grep limitation (コメント/文字列偽陽性,
+ * quoted key, CJK prefix) は follow-up Issue で扱う。
  */
 
 import { expect } from 'chai';

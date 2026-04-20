@@ -1,17 +1,16 @@
 /**
  * summary 経路 catch 句 logError 呼出契約テスト (Issue #266)
  *
- * 目的: ocrProcessor / regenerateSummary の summary 生成失敗 catch 句で、
- * console.error だけでなく logError (errors collection + 通知) が呼ばれ続けることを保証する。
+ * 目的: ocrProcessor / regenerateSummary の summary 生成失敗 catch 句で、console.error だけで
+ * なく logError (errors collection + 通知) が呼ばれ続けることを静的に lock-in する。
  *
- * 背景 (#178/#209 教訓):
- * Vertex AI のクォータ枯渇・認証失効・暴走系エラーが silently swallow されると、
- * documents は status:processed で完了し「summary が空」としか見えない。
- * 6 ヶ月後のデバッグで原因不明となる silent failure を構造的に防ぐ。
+ * 背景 (#178/#209 教訓): Vertex AI のクォータ枯渇・認証失効・暴走系エラーが silently swallow
+ * されると、documents は status:processed で完了し「summary が空」としか見えない。6 ヶ月後の
+ * デバッグで原因不明となる silent failure を構造的に防ぐ。
  *
- * 方式: grep-based (静的検証)。`summaryWritePayloadContract.test.ts` (#259) と同方針。
- * console.error メッセージをアンカーに、近傍 (±ANCHOR_WINDOW_LINES 行) の logError 呼出を検知する。
- * メッセージ変更時は test 失敗するが、意図的変更なのでメンテナンス負荷は許容範囲。
+ * 方式: grep-based (docs/context/test-strategy.md §2.1 参照)。console.error メッセージを
+ * anchor に、近傍 (±ANCHOR_WINDOW_LINES 行) の logError 呼出を検知する。anchor メッセージ変更で
+ * test が失敗するが、意図的変更のメンテナンス負荷は silent swallow 防止の価値と trade-off。
  */
 
 import { expect } from 'chai';

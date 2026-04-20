@@ -1,0 +1,119 @@
+# テスト戦略 (DocSplit functions/)
+
+このドキュメントは DocSplit の `functions/` 配下で採用している **契約テスト (contract test)** の 3 系統の役割・手法・使い分けを一元化する。個別の contract test ファイルの docstring から本ドキュメントを参照することで、共通説明の重複を削減する。
+
+---
+
+## 1. 契約テストの位置づけ
+
+`functions/` の OCR / 書類処理パスは以下の要因で unit test のみでは contract を保護できない:
+
+- `admin.firestore()` / `storage.bucket()` / Vertex AI など **top-level で admin 初期化**する副作用を持つモジュールが多く、単体から runtime 呼出が難しい
+- Firestore 旧データ (型変更前の document) 由来の discriminated union 違反が **silent に prod 分岐を通過**し Cloud Logging alert にも拾われない silent failure 経路が過去発生 ([Issue #209 / #288 item 6])
+- PR merge 後の **code レベル回帰** (例: `void safeLogError(...)` 直叩き回帰 / try/catch 剥離 / anchor rename) を CI で検知する必要がある
+
+これらを補う最小コストの層として contract test を配置している。
+
+---
+
+## 2. 3 系統の使い分け
+
+### 2.1 grep-based contract test
+
+| 項目 | 内容 |
+|------|------|
+| 目的 | source 構造の回帰防止 (関数名 / anchor / 文字列 pattern) |
+| 手法 | `readFileSync` でソース全文を読み、brace-nesting / paren-nesting で対象ブロックを抽出 → 必須要素を正規表現で検証 |
+| 適用 | prod 分岐 / silent failure 対策 / caller wiring |
+| 依存 helper | [`functions/test/helpers/extractBraceBlock.ts`](../../functions/test/helpers/extractBraceBlock.ts) (`extractBraceBlock` / `extractParenBlock`, Issue #302 で共通化) |
+| 既存例 | `textCapProdInvariantContract.test.ts` (#288 item 6), `aggregateCapLogErrorContract.test.ts` (#283), `handleProcessingErrorContract.test.ts` (#276), `textCapPendingLogsContract.test.ts` (#293 + #297), `ocrProcessorAggregateCallerContract.test.ts` (#293 + #297) |
+| 限界 | 文字列/正規表現/テンプレートリテラル内の裸 `{` `}` で誤判定の可能性。将来そのケースに遭遇したら AST ベース抽出への移行を検討 |
+
+**偽陽性対策**: 関数本体全体を対象にした regex だと無関係な同名ローカル変数 / 他 logger 呼出 / 文字列リテラルに偽陽性が出る ([silent-failure-hunter 指摘])。`extractBraceBlock` で scope を絞る + anchor を narrow することで精度を上げる。
+
+**silent PASS リスク**: helper が空文字を返した場合 `expect(block).to.not.match(...)` は常に PASS する。各 `it` で `expect(block).to.not.equal('')` の non-empty guard を先に実行すること ([PR #311 review C1/C2])。
+
+### 2.2 `@ts-expect-error` 型契約 test
+
+| 項目 | 内容 |
+|------|------|
+| 目的 | 型レベル不変条件の lock-in (union 分解 / generics 制約) |
+| 手法 | `@ts-expect-error` コメント + `tsc --noEmit` (`tsconfig.test.json` で明示検証) |
+| 適用 | discriminated union 不変条件 / generics 制約 / 戻り値型の union 広がり |
+| 既存例 | [`functions/test/types/pageOcrResult.types.test.ts`](../../functions/test/types/pageOcrResult.types.test.ts), [`textCapAsCastContract.test.ts`](../../functions/test/types/textCapAsCastContract.test.ts) (#284), [`textCapGenericsContract.test.ts`](../../functions/test/types/textCapGenericsContract.test.ts) (#294) |
+| 限界 | tsd 等の専用ライブラリは未導入。本 test は baseline として機能し、より精密な型 assert が必要になった時点で tsd 導入を別 Issue 化 |
+
+### 2.3 Runtime pattern test
+
+| 項目 | 内容 |
+|------|------|
+| 目的 | admin 非依存で実 runtime 挙動を lock-in (統合 test の代替) |
+| 手法 | 期待される caller パターンを inline で最小再現し、spy 注入で呼出内容を検証 |
+| 適用 | caller wrapper / E2E の最小再現 / admin 初期化を避けたい箇所 |
+| 既存例 | [`functions/test/ocrAggregateCallerPattern.runtime.test.ts`](../../functions/test/ocrAggregateCallerPattern.runtime.test.ts) (#294 item 8, #293/#297 補完) |
+| 将来 | 完全な統合 test は `ts-node/esm` 環境整備 + `admin` mock で Issue #299 に委譲。それまでは runtime pattern test を二段防御の一翼として保持 |
+
+### 2.4 共通 helper
+
+| Helper | 用途 | Issue |
+|--------|------|-------|
+| [`extractBraceBlock`](../../functions/test/helpers/extractBraceBlock.ts) / `extractParenBlock` | grep-based test の brace/paren nesting 抽出 | #302 |
+| [`makeInvalidPage`](../../functions/test/helpers/textCapFixtures.ts) / `makeMixedPages` | `as unknown as SummaryField` cast を集約した fixture | #307 |
+| [`withNodeEnv`](../../functions/test/helpers/withNodeEnv.ts) / `withNodeEnvAsync` | `process.env.NODE_ENV` 切替の確実復元 (undefined 文字列化防止) | #306 |
+
+ロジック持ちの helper (`extractBraceBlock` / `withNodeEnv`) には `functions/test/helpers/*.test.ts` で単体 test を配置し、helper 固有の挙動 (復元順序 / async 経路 / startAfterAnchor option) を直接 lock-in している。pure fixture の helper (`textCapFixtures`) は消費側 contract test での利用で十分と判断し専用 test は配置しない。
+
+---
+
+## 3. 選定フロー
+
+新規 contract を追加する際の判断フロー:
+
+```
+Q1. source 構造 (関数名 / anchor / 呼出の存在) を保護したいか
+ → Yes: grep-based (§2.1)
+ → No:  Q2 へ
+
+Q2. 型レベル不変条件を保護したいか (union / generics / 戻り値型)
+ → Yes: @ts-expect-error (§2.2)
+ → No:  Q3 へ
+
+Q3. runtime 挙動を実コード無しで検証したいか (admin 依存を避けたい)
+ → Yes: runtime pattern (§2.3)
+ → No:  通常の unit test / integration test を検討
+```
+
+複数系統の二段防御が適切なケース (例: grep + runtime) は、両方を `Refs:` コメントで相互参照する。
+
+---
+
+## 4. docstring テンプレート
+
+各 contract test ファイルの docstring は以下の最小テンプレートに従う:
+
+```typescript
+/**
+ * <対象関数/モジュール名> の <契約の目的> テスト (Issue #XXX)
+ *
+ * 目的: <何を検証するか。1-2 文>
+ *
+ * 背景: <なぜこの contract が必要か。過去の silent failure や回帰事例を 1-3 文>
+ *
+ * 方式: <grep-based / @ts-expect-error / runtime pattern のどれか>
+ *        <docs/context/test-strategy.md §2.X> 参照
+ *
+ * 将来委譲: <動的 test / 統合 test への移行計画がある場合のみ記載、Issue 番号付き>
+ */
+```
+
+「方式選定」節で 3 系統の使い分け理由を毎回書かず、本 docstring から `test-strategy.md §2.X` にリンクすることで重複を削減する。
+
+---
+
+## 5. 参考 Issue
+
+- [#302](https://github.com/yasushi-honda/doc-split/issues/302) brace-nesting helper 共通化
+- [#306](https://github.com/yasushi-honda/doc-split/issues/306) withNodeEnv helper
+- [#307](https://github.com/yasushi-honda/doc-split/issues/307) SummaryField fixture 集約
+- [#308](https://github.com/yasushi-honda/doc-split/issues/308) 本ドキュメント (docstring 共通パターン抽出)
+- [#299](https://github.com/yasushi-honda/doc-split/issues/299) 動的 safeLogError invocation test (将来)

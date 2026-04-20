@@ -2,22 +2,15 @@
  * textCap assertAggregatePageInvariant の prod observability 格上げ契約テスト (Issue #288 item 6)
  *
  * 目的: prod で silent early return だった invariant 検証を safeLogError emit に格上げした
- * 変更 (#288 item 6) の回帰を grep-based で防止する。
+ * 変更 (#288 item 6) の回帰を静的検証で防止する。
  *
- * 背景 (#288 item 6 / PR #290 silent-failure-hunter S1 CRITICAL):
- * 既存 (#284) の assertAggregatePageInvariant は `process.env.NODE_ENV === 'production'` で
- * early return していたため、Firestore 旧データ由来の discriminated union 違反 (#209 型)
- * が prod で silent に伝播する経路が残っていた。本契約は prod 分岐で safeLogError を
- * 経由して errors collection に記録する shape を lock-in する。
+ * 背景: 既存 (#284) の assertAggregatePageInvariant は prod で early return していたため、
+ * Firestore 旧データ由来の discriminated union 違反 (#209 型) が silent に伝播する経路が
+ * 残っていた (PR #290 silent-failure-hunter S1 CRITICAL)。
  *
- * 方式選定:
- * assertAggregatePageInvariant 関数本体を brace-nesting で抽出し、production 分岐内の
- * safeLogError 呼出と params (source: 'ocr', functionName: 'capPageResultsAggregate') を
- * 静的検証する。Phase 1 (#276) / #283 (aggregateCapLogErrorContract.test.ts) と同一手法。
- *
- * Phase 3 (Issue #288 item 1) で動的 safeLogError invocation test を追加し、本 grep 契約を
- * runtime 挙動と二段で lock-in する予定。現時点では admin.firestore() top-level 依存のため
- * unit test 環境から safeLogError を runtime 実行するのが不適 (buildPageResult 設計方針参照)。
+ * 方式: grep-based (docs/context/test-strategy.md §2.1 参照)。prod 分岐内の safeLogError 呼出と
+ * params (source: 'ocr', functionName: 'capPageResultsAggregate') の存在を静的検証する。
+ * 将来委譲: Phase 3 (#288 item 1) で動的 safeLogError invocation test と二段で lock-in 予定。
  */
 
 import { expect } from 'chai';

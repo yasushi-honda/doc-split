@@ -4,17 +4,13 @@
  * 目的: ocrProcessor.processDocument 内の aggregate cap block が、truncation 発動時に
  * safeLogError (errors collection + 通知) を呼び続けることを静的検証で保証する。
  *
- * 背景 (#283):
- * 既存実装 (#282 マージ時点) は aggregate cap 発動時に ocrProcessor.ts L152-154 で
- * 単発 console.warn を出すのみ。warn level は Cloud Logging alert に拾われにくく、
- * Issue #209 型実害 (Vertex AI 暴走 1.1M chars) が運用側で認知できない silent failure
- * 経路が残っていた。本契約は safeLogError 格上げ (#283 Option B) を lock-in する。
+ * 背景: 既存実装 (#282 マージ時点) は aggregate cap 発動時に console.warn のみを出しており、
+ * warn level は Cloud Logging alert に拾われにくく、Issue #209 型実害 (Vertex AI 暴走 1.1M chars)
+ * が運用側で認知できない silent failure 経路が残っていた。本契約は safeLogError 格上げ
+ * (#283 Option B) を lock-in する。
  *
- * 方式選定:
- * aggregate cap block は `if (afterAggregateChars < beforeAggregateChars) { ... }`
- * 条件ブロック内。このブロックを brace-nesting で抽出し、block 内での safeLogError
- * 呼出と params (source: 'ocr' / documentId / functionName) を検証する。
- * Phase 1 (#276) の extractFunctionBody / extractSafeLogErrorArgs と同一手法。
+ * 方式: grep-based (docs/context/test-strategy.md §2.1 参照)。
+ * anchor: `if (afterAggregateChars < beforeAggregateChars) { ... }`
  */
 
 import { expect } from 'chai';

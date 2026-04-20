@@ -1,18 +1,16 @@
 /**
  * aggregate caller wrapper パターンの runtime 契約テスト (Issue #294 item 8, #293/#297 補完)
  *
- * 目的: ocrProcessor.processDocument 内の `capPageResultsAggregate` 呼出周辺パターン
- * (try/catch + pendingLogs drain + 継続保証) を admin 非依存で runtime 検証する。
+ * 目的: processDocument 内の `capPageResultsAggregate` 呼出周辺パターン (try/catch +
+ * pendingLogs drain + 継続保証) を admin 非依存で runtime 検証する。
  *
- * 制約: 本物の processDocument は admin.firestore() / storage.bucket() / Vertex AI に
- * 広範囲に依存するため、unit test 環境から直接呼べない。本テストは **期待される caller
- * パターン** を inline で再現し、capPageResultsAggregate との結合動作を lock-in する。
+ * 背景: 本物の processDocument は admin.firestore() / storage.bucket() / Vertex AI に広範囲
+ * 依存するため unit test 環境から直接呼べない。本テストは期待される caller パターンを inline
+ * 再現し、`ocrProcessorAggregateCallerContract.test.ts` (grep 契約) と組み合わせて二段防御
+ * とする (#301 Evaluator HIGH 指摘への部分的対応)。
  *
- * #301 Evaluator HIGH 指摘 (AC-4/AC-5 動的 assert 不在) への部分的対応。
- * ocrProcessor 側の実装が本パターンから逸脱した場合は `ocrProcessorAggregateCallerContract.test.ts`
- * (grep 契約) で検知される。両者を組み合わせて二段防御とする。
- *
- * 完全な processDocument 統合 test は Issue #299 (ts-node/esm 環境整備 + admin mock) に委譲。
+ * 方式: runtime pattern test (docs/context/test-strategy.md §2.3 参照)。
+ * 将来委譲: 完全な processDocument 統合 test は Issue #299 (ts-node/esm 環境整備 + admin mock) に委譲。
  */
 
 import { expect } from 'chai';
