@@ -41,7 +41,7 @@ export function makeInvalidPage(
  * mixed-input fixture: `[valid, invalid, valid, invalid, ...]` の順で交互生成。
  *
  * `originalLengths` 要素数分 invalid を差し込み、両端と間に valid を挿入する。
- * #294 mixed-input invariant test / #297 pendingLogs drain test 等の caller wrapper
+ * #294 mixed-input invariant test / #297 drainSink drain test 等の caller wrapper
  * 再現シナリオで使用。
  *
  * @param originalLengths - invalid page の originalLength 一覧 (デフォルト `[999]`)

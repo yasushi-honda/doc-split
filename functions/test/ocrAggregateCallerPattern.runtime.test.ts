@@ -1,8 +1,9 @@
 /**
- * aggregate caller wrapper パターンの runtime 契約テスト (Issue #294 item 8, #293/#297 補完)
+ * aggregate caller wrapper パターンの runtime 契約テスト (Issue #294 item 8, #293/#297 補完、
+ * #304 naming refactor で `pendingLogs` → `drainSink`)
  *
  * 目的: processDocument 内の `capPageResultsAggregate` 呼出周辺パターン (try/catch +
- * pendingLogs drain + 継続保証) を admin 非依存で runtime 検証する。
+ * drainSink drain + 継続保証) を admin 非依存で runtime 検証する。
  *
  * 背景: 本物の processDocument は admin.firestore() / storage.bucket() / Vertex AI に広範囲
  * 依存するため unit test 環境から直接呼べない。本テストは期待される caller パターンを inline
@@ -23,7 +24,7 @@ import { withNodeEnvAsync } from './helpers/withNodeEnv';
 /**
  * caller wrapper の想定シグネチャ (test 用最小再現、AC-4/AC-5 相当)。
  * ocrProcessor.ts:158-186 の try/catch + drain block と**主要 semantics のみ**一致:
- *   - pendingLogs 配列の生成と drain
+ *   - drainSink 配列の生成と drain (#304 naming: 旧 pendingLogs → drainSink)
  *   - try/catch で dev throw を捕捉、enriched message で safeLogError 呼出
  *   - invariant/unexpected の suffix 分岐
  *
@@ -35,13 +36,13 @@ async function aggregateWithCallerWrapper<T extends SummaryField>(
   context: { documentId: string; functionName: string },
   safeLogErrorStub: (params: LogErrorParams) => Promise<void>,
 ): Promise<T[]> {
-  const pendingLogs: Promise<void>[] = [];
+  const drainSink: Promise<void>[] = [];
   const beforeAggregateChars = pages.reduce((sum, p) => sum + p.text.length, 0);
   let resultPages = pages;
   try {
     resultPages = capPageResultsAggregate(pages, {
       documentId: context.documentId,
-      pendingLogs,
+      drainSink,
     }) as unknown as T[];
   } catch (err) {
     const baseError = err instanceof Error ? err : new Error(String(err));
@@ -61,8 +62,8 @@ async function aggregateWithCallerWrapper<T extends SummaryField>(
       documentId: context.documentId,
     });
   }
-  if (pendingLogs.length > 0) {
-    await Promise.allSettled(pendingLogs);
+  if (drainSink.length > 0) {
+    await Promise.allSettled(drainSink);
   }
   return resultPages;
 }
@@ -127,7 +128,7 @@ describe('aggregate caller wrapper runtime pattern (#294)', () => {
     });
   });
 
-  describe('prod 環境: caller は throw を受けず pendingLogs drain (#297)', () => {
+  describe('prod 環境: caller は throw を受けず drainSink drain (#297, #304 rename)', () => {
     it('prod で invalid 混入 → safeLogError spy は catch 経由では呼ばれない (throw しないため)', async () => {
       const calls: LogErrorParams[] = [];
       const spy = async (p: LogErrorParams): Promise<void> => {

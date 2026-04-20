@@ -151,6 +151,8 @@ export async function processDocument(
   const beforeAggregateChars = pageResults.reduce((sum, p) => sum + p.text.length, 0);
   // #288 item 6: invariant violation の errors collection triage のため docId を伝搬。
   // #297 (Codex HIGH): pendingInvariantLogs を渡して fire-and-forget を廃止、後段で drain する。
+  // #304 naming: context field 名は drainSink (pendingLogs からリネーム)。caller ローカル変数名は
+  //   drain 責務を明示する従来命名 pendingInvariantLogs を維持。
   // #293 (silent-failure-hunter S2): dev 環境での invariant throw を caller で捕捉し、
   //   rules/error-handling.md §1「状態復旧 > ログ記録」に従って他ページ処理を継続する。
   //   pageResults は cap 前のまま pass-through (per-page cap 適用済で暴走リスクなし)。
@@ -159,7 +161,7 @@ export async function processDocument(
   try {
     pageResults = capPageResultsAggregate(pageResults, {
       documentId: docId,
-      pendingLogs: pendingInvariantLogs,
+      drainSink: pendingInvariantLogs,
     });
   } catch (err) {
     const baseError = err instanceof Error ? err : new Error(String(err));
