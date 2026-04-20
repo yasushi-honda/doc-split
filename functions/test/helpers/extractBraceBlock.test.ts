@@ -111,6 +111,28 @@ describe('extractBraceBlock helper', () => {
     });
   });
 
+  // #312 CodeRabbit Minor: global flag (/g) 付き RegExp は match.index が undefined になるため
+  // silent に anchor 不在扱いになる silent PASS 経路。明示的 throw で regression を可視化。
+  describe('global flag (/g) RegExp anchor の reject', () => {
+    it('extractBraceBlock: /g 付き anchor は throw する', () => {
+      expect(() => extractBraceBlock('function f() { return 1; }', /function\s+f/g)).to.throw(
+        /global flag.*非対応/,
+      );
+    });
+
+    it('extractParenBlock: /g 付き anchor は throw する', () => {
+      expect(() => extractParenBlock('f()', /f/g)).to.throw(/global flag.*非対応/);
+    });
+
+    it('/gi など /g を含む複合 flag も reject する', () => {
+      expect(() => extractBraceBlock('FUNC F() {}', /FUNC/gi)).to.throw(/global flag.*非対応/);
+    });
+
+    it('/i など /g 以外の flag は通常通り動作', () => {
+      expect(extractBraceBlock('FUNC F() { inner }', /func/i)).to.equal('{ inner }');
+    });
+  });
+
   // #312 pr-test-analyzer C1 (Critical): null source passthrough は JSDoc で契約しているが
   // 本 helper 単体テストでの回帰ガードが欠如していた。alias wrapper 経由の chain 入力
   // (extractProdBranch(helperBody) で helperBody が null) が実運用で発生するため必須 lock-in。

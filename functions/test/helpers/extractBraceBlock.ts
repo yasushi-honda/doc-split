@@ -116,6 +116,17 @@ function resolveAnchorIndex(
     if (baseIdx === -1) return -1;
     matchLen = anchor.length;
   } else {
+    // #312 CodeRabbit Minor: global flag (/g) 付き RegExp は String.prototype.match が index を
+    // 含まない配列を返し、silent に「anchor 不在」扱い (return -1) に退化する。現状 caller は
+    // /g を使っていないが、本 helper の silent PASS 防御精神 (#311 C1/C2, #312 AC2) と整合する
+    // よう明示的に reject して early throw で regression を可視化する。
+    if (anchor.flags.includes('g')) {
+      throw new Error(
+        `[extractBalancedBlock] global flag (/g) 付き RegExp anchor は非対応 — ` +
+          `match.index が undefined になり silent に anchor 不在扱いになる。` +
+          `anchor.source: ${anchor.source}, flags: ${anchor.flags}`,
+      );
+    }
     const match = source.match(anchor);
     if (!match || match.index === undefined) return -1;
     baseIdx = match.index;
