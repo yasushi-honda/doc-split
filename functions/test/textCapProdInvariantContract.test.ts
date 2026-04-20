@@ -28,16 +28,6 @@ const PROD_BRANCH_ANCHOR =
   /if\s*\(\s*process\.env\.NODE_ENV\s*===\s*['"]production['"]\s*\)\s*\{/;
 const SAFE_LOG_ERROR_CALL = /\bsafeLogError\s*\(/;
 
-// #312: helper が anchor/null 入力を透過して null を返すため、alias wrapper は直接委譲する。
-const extractAssertFunctionBody = (source: string): string | null =>
-  extractBraceBlock(source, ASSERT_BODY_ANCHOR);
-const extractHelperFunctionBody = (source: string): string | null =>
-  extractBraceBlock(source, HELPER_BODY_ANCHOR);
-const extractProdBranch = (block: string | null): string | null =>
-  extractBraceBlock(block, PROD_BRANCH_ANCHOR);
-const extractSafeLogErrorArgs = (block: string | null): string | null =>
-  extractParenBlock(block, SAFE_LOG_ERROR_CALL);
-
 describe('textCap prod invariant observability contract (#288 item 6)', () => {
   let source = '';
 
@@ -48,17 +38,17 @@ describe('textCap prod invariant observability contract (#288 item 6)', () => {
   });
 
   it('assertAggregatePageInvariant 関数定義が存在する (anchor 保護)', () => {
-    const body = extractAssertFunctionBody(source);
+    const body = extractBraceBlock(source, ASSERT_BODY_ANCHOR);
     expect(body, 'assertAggregatePageInvariant 関数の anchor が消失 — リネームなら本契約更新').to
       .not.be.null;
   });
 
   it('prod 分岐 (process.env.NODE_ENV === "production") が存在する', () => {
     // helper 分離の場合は helper 本体、未分離なら assert 本体を探索。
-    const assertBody = extractAssertFunctionBody(source);
-    const helperBody = extractHelperFunctionBody(source);
+    const assertBody = extractBraceBlock(source, ASSERT_BODY_ANCHOR);
+    const helperBody = extractBraceBlock(source, HELPER_BODY_ANCHOR);
     const searchScope = helperBody || assertBody;
-    const prodBranch = extractProdBranch(searchScope);
+    const prodBranch = extractBraceBlock(searchScope, PROD_BRANCH_ANCHOR);
     expect(
       prodBranch,
       'prod 分岐が検出されない — silent return に回帰している可能性',
@@ -66,10 +56,10 @@ describe('textCap prod invariant observability contract (#288 item 6)', () => {
   });
 
   it('prod 分岐内に safeLogError 呼出が存在する', () => {
-    const assertBody = extractAssertFunctionBody(source);
-    const helperBody = extractHelperFunctionBody(source);
+    const assertBody = extractBraceBlock(source, ASSERT_BODY_ANCHOR);
+    const helperBody = extractBraceBlock(source, HELPER_BODY_ANCHOR);
     const searchScope = helperBody || assertBody;
-    const prodBranch = extractProdBranch(searchScope);
+    const prodBranch = extractBraceBlock(searchScope, PROD_BRANCH_ANCHOR);
     expect(prodBranch, 'prod 分岐が抽出できない — anchor 消失').to.not.be.null;
     expect(prodBranch!).to.match(
       /\bsafeLogError\s*\(/,
@@ -78,32 +68,32 @@ describe('textCap prod invariant observability contract (#288 item 6)', () => {
   });
 
   it('prod 分岐の safeLogError 引数に source: "ocr" が含まれる', () => {
-    const assertBody = extractAssertFunctionBody(source);
-    const helperBody = extractHelperFunctionBody(source);
+    const assertBody = extractBraceBlock(source, ASSERT_BODY_ANCHOR);
+    const helperBody = extractBraceBlock(source, HELPER_BODY_ANCHOR);
     const searchScope = helperBody || assertBody;
-    const prodBranch = extractProdBranch(searchScope);
+    const prodBranch = extractBraceBlock(searchScope, PROD_BRANCH_ANCHOR);
     expect(prodBranch, 'prod 分岐が抽出できない — anchor 消失').to.not.be.null;
-    const args = extractSafeLogErrorArgs(prodBranch);
+    const args = extractParenBlock(prodBranch, SAFE_LOG_ERROR_CALL);
     expect(args, 'safeLogError 引数ブロックが抽出できない').to.not.be.null;
     expect(args!).to.match(/source\s*:\s*['"]ocr['"]/);
   });
 
   it('prod 分岐の safeLogError 引数に functionName: "capPageResultsAggregate" が含まれる', () => {
-    const assertBody = extractAssertFunctionBody(source);
-    const helperBody = extractHelperFunctionBody(source);
+    const assertBody = extractBraceBlock(source, ASSERT_BODY_ANCHOR);
+    const helperBody = extractBraceBlock(source, HELPER_BODY_ANCHOR);
     const searchScope = helperBody || assertBody;
-    const prodBranch = extractProdBranch(searchScope);
+    const prodBranch = extractBraceBlock(searchScope, PROD_BRANCH_ANCHOR);
     expect(prodBranch, 'prod 分岐が抽出できない — anchor 消失').to.not.be.null;
-    const args = extractSafeLogErrorArgs(prodBranch);
+    const args = extractParenBlock(prodBranch, SAFE_LOG_ERROR_CALL);
     expect(args, 'safeLogError 引数ブロックが抽出できない').to.not.be.null;
     expect(args!).to.match(/functionName\s*:\s*['"]capPageResultsAggregate['"]/);
   });
 
   it('prod 分岐内で throw が発生しない (throw 文がない)', () => {
-    const assertBody = extractAssertFunctionBody(source);
-    const helperBody = extractHelperFunctionBody(source);
+    const assertBody = extractBraceBlock(source, ASSERT_BODY_ANCHOR);
+    const helperBody = extractBraceBlock(source, HELPER_BODY_ANCHOR);
     const searchScope = helperBody || assertBody;
-    const prodBranch = extractProdBranch(searchScope);
+    const prodBranch = extractBraceBlock(searchScope, PROD_BRANCH_ANCHOR);
     // anchor 消失で prodBranch が null のまま to.not.match(...) が silent PASS する経路を防ぐ。
     expect(
       prodBranch,
@@ -116,8 +106,8 @@ describe('textCap prod invariant observability contract (#288 item 6)', () => {
   });
 
   it('dev 経路では throw が維持されている (assert 本体 or helper 本体に throw が存在)', () => {
-    const assertBody = extractAssertFunctionBody(source);
-    const helperBody = extractHelperFunctionBody(source);
+    const assertBody = extractBraceBlock(source, ASSERT_BODY_ANCHOR);
+    const helperBody = extractBraceBlock(source, HELPER_BODY_ANCHOR);
     // 両方 null (anchor 消失) の場合は assertion を silent に通過させないため、少なくとも一方は
     // 抽出できていることを先に担保する。null 連結で `"null"` 文字列が混入する false PASS 経路を防ぐ。
     expect(
@@ -134,7 +124,7 @@ describe('textCap prod invariant observability contract (#288 item 6)', () => {
   // Codex second opinion (MED): helper が残ったまま assert が silent return に回帰する
   // パターンを検知するため、assert 本体からの helper 呼出を grep で lock-in。
   it('assertAggregatePageInvariant 本体から handleAggregateInvariantViolation が呼ばれる', () => {
-    const assertBody = extractAssertFunctionBody(source);
+    const assertBody = extractBraceBlock(source, ASSERT_BODY_ANCHOR);
     expect(assertBody, 'assert 本体が抽出できない — anchor 消失').to.not.be.null;
     expect(assertBody!).to.match(
       /\bhandleAggregateInvariantViolation\s*\(/,
@@ -145,12 +135,12 @@ describe('textCap prod invariant observability contract (#288 item 6)', () => {
   // silent-failure-hunter S2 + Codex MED: errors collection triage のため documentId 伝搬を
   // lock-in。context?.documentId または documentId キー自体の存在を検証する。
   it('prod 分岐の safeLogError 引数に documentId が含まれる (triage 伝搬)', () => {
-    const assertBody = extractAssertFunctionBody(source);
-    const helperBody = extractHelperFunctionBody(source);
+    const assertBody = extractBraceBlock(source, ASSERT_BODY_ANCHOR);
+    const helperBody = extractBraceBlock(source, HELPER_BODY_ANCHOR);
     const searchScope = helperBody || assertBody;
-    const prodBranch = extractProdBranch(searchScope);
+    const prodBranch = extractBraceBlock(searchScope, PROD_BRANCH_ANCHOR);
     expect(prodBranch, 'prod 分岐が抽出できない — anchor 消失').to.not.be.null;
-    const args = extractSafeLogErrorArgs(prodBranch);
+    const args = extractParenBlock(prodBranch, SAFE_LOG_ERROR_CALL);
     expect(args, 'safeLogError 引数ブロックが抽出できない').to.not.be.null;
     expect(args!).to.match(
       /\bdocumentId\b/,

@@ -2,9 +2,10 @@
  * grep-based contract test で使う brace / paren nesting 抽出 helper
  * (Issue #302, PR #301 /simplify HIGH + codex Low 1 follow-up, Issue #312 API 改善)
  *
- * 5 ファイルで同一実装が重複していた extractFunctionBody / extractAggregateCapBlock /
- * extractAssertFunctionBody / extractHelperFunctionBody / extractProdBranch を
+ * 5 ファイルで同一実装が重複していた contract test の関数本体/ブロック抽出ロジックを
  * 共通化する。anchor (RegExp | string) と nesting 種別 (brace / paren) のみが差分。
+ * #302 で helper 化し、#312 PR-2 で caller 側の local alias wrapper (extractFunctionBody 等) を
+ * 撤去して extractBraceBlock(source, ANCHOR) 直接呼出に統一した。
  *
  * 詳細な位置づけは docs/context/test-strategy.md (#308) を参照。
  *
