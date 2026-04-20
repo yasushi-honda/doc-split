@@ -127,4 +127,8 @@ describe('withNodeEnv helper', () => {
       expect(result).to.equal(99);
     });
   });
+
+  // 型契約 test (NodeEnvValue literal union narrow) は test/types/withNodeEnv.types.test.ts に分離。
+  // tsconfig.test.json の include が test/types/ のため、type-check:test で strict 検査される
+  // (silent-failure-hunter C2 指摘対応)。
 });
