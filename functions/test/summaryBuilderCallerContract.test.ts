@@ -12,6 +12,9 @@
  * 既知の limitation: 型 alias 経由 (const gen = model.generateContent; gen(...)) や分割代入は
  * 未検出。caller 追加時は CALLER_FILES / CORE_CALLERS への手動追記が必要 (grep 動的検出は未導入)。
  * 昇格条件: false negative が 1 件でも実発生した時点で sinon spy (案A) へ切替。
+ *
+ * 将来委譲: false negative 実発生時に sinon spy 契約テスト (案A) へ切替予定。
+ *          それまでは恒久 contract として保持 (caller bypass 検知は source 構造保護が本質)。
  */
 
 import { expect } from 'chai';

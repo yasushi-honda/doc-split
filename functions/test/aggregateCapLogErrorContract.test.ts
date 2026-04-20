@@ -11,6 +11,9 @@
  *
  * 方式: grep-based (docs/context/test-strategy.md §2.1 参照)。
  * anchor: `if (afterAggregateChars < beforeAggregateChars) { ... }`
+ *
+ * 将来委譲: 現時点で委譲先なし (aggregate cap 発動時の safeLogError 呼出保護は
+ *          source 構造保護が本質のため恒久 contract として保持)
  */
 
 import { expect } from 'chai';

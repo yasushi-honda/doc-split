@@ -13,6 +13,10 @@
  * 方式: grep-based (docs/context/test-strategy.md §2.1 参照)。
  * 昇格条件: false negative 発生時に sinon spy へ。grep limitation (コメント/文字列偽陽性,
  * quoted key, CJK prefix) は follow-up Issue で扱う。
+ *
+ * 将来委譲: false negative 実発生時に sinon spy 契約テストへ切替予定。
+ *          grep limitation 改善は Issue #262 で継続 (diagnostics 強化)。
+ *          それまでは恒久 contract として保持。
  */
 
 import { expect } from 'chai';

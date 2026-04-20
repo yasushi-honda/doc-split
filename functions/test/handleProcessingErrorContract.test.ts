@@ -18,6 +18,9 @@
  *   2. 関数本体内の safeLogError(...) 引数ブロックを paren-nesting で抽出し、
  *      そのブロック内で各 param の存在を検証
  * これにより関数本体内の無関係な同名変数/コメントへの偽陽性を回避する。
+ *
+ * 将来委譲: 現時点で委譲先なし (handleProcessingError の safeLogError 呼出保護は
+ *          source 構造保護が本質のため恒久 contract として保持)
  */
 
 import { expect } from 'chai';

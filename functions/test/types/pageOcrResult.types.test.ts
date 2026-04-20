@@ -11,8 +11,12 @@
  * 命名 (#278): 旧名 PageOcrResult は shared/types.ts の post-processed `PageOcrResult`
  * (PageOcrMeta & SummaryField) と衝突していたため RawPageOcrResult にリネームした。
  *
- * 方式: 型レベルテスト。tsc --noEmit で compile エラーを期待する行に @ts-expect-error を置き、
+ * 方式: `@ts-expect-error` 型契約 test (docs/context/test-strategy.md §2.2 参照)。
+ * tsc --noEmit で compile エラーを期待する行に @ts-expect-error を置き、
  * 将来 discriminated union が崩れたら @ts-expect-error 自体が "unused directive" エラーになる。
+ *
+ * 将来委譲: 現時点で委譲先なし (RawPageOcrResult discriminated union 不変条件は
+ *          型レベル保護が本質のため恒久 contract として保持)
  */
 
 import { expect } from 'chai';
