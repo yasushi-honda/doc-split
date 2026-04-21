@@ -21,7 +21,7 @@ import {
 import { buildSplitDocumentData } from './splitDocumentBuilder';
 import { generateDisplayFileName } from '../../../shared/generateDisplayFileName';
 import { timestampToDateString } from '../utils/backfillDisplayFileName';
-import { sanitizeCustomerMasters, sanitizeOfficeMasters, sanitizeDocumentMasters } from '../utils/sanitizeMasterData';
+import { loadMasterData } from '../utils/loadMasterData';
 
 const db = admin.firestore();
 const storage = admin.storage();
@@ -92,37 +92,7 @@ export const detectSplitPoints = onCall(
 
     // 強化版分析を使用
     if (useEnhanced) {
-      // マスターデータ取得
-      const [documentMasters, customerMasters, officeMasters] = await Promise.all([
-        db.collection('masters/documents/items').get(),
-        db.collection('masters/customers/items').get(),
-        db.collection('masters/offices/items').get(),
-      ]);
-
-      const masters: MasterData = {
-        documents: sanitizeDocumentMasters(documentMasters.docs.map((d) => ({
-          id: d.id,
-          name: d.data().name as string,
-          category: d.data().category as string | undefined,
-          keywords: d.data().keywords as string[] | undefined,
-          aliases: d.data().aliases as string[] | undefined,
-        }))),
-        customers: sanitizeCustomerMasters(customerMasters.docs.map((d) => ({
-          id: d.id,
-          name: d.data().name as string,
-          furigana: d.data().furigana as string | undefined,
-          isDuplicate: d.data().isDuplicate as boolean | undefined,
-          aliases: d.data().aliases as string[] | undefined,
-          careManagerName: d.data().careManagerName as string | undefined,
-        }))),
-        offices: sanitizeOfficeMasters(officeMasters.docs.map((d) => ({
-          id: d.id,
-          name: d.data().name as string,
-          shortName: d.data().shortName as string | undefined,
-          isDuplicate: d.data().isDuplicate as boolean | undefined,
-          aliases: d.data().aliases as string[] | undefined,
-        }))),
-      };
+      const masters: MasterData = await loadMasterData(db);
 
       // ページデータを変換
       const pages: PageOcrData[] = pageResults.map((p) => ({

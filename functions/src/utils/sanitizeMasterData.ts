@@ -16,6 +16,12 @@ function toOptionalString(value: unknown): string | undefined {
   return undefined;
 }
 
+/** 空文字もundefinedとして扱う。dateMarkerのように「空=指定なし」と解釈したい用途専用 */
+function toOptionalNonEmptyString(value: unknown): string | undefined {
+  const s = toOptionalString(value);
+  return s === '' ? undefined : s;
+}
+
 /** 値がbooleanであればそのまま、それ以外はundefined */
 function toOptionalBoolean(value: unknown): boolean | undefined {
   if (typeof value === 'boolean') return value;
@@ -71,5 +77,6 @@ export function sanitizeDocumentMasters(
       category: toOptionalString(d.category),
       keywords: toOptionalStringArray(d.keywords),
       aliases: toOptionalStringArray(d.aliases),
+      dateMarker: toOptionalNonEmptyString(d.dateMarker),
     }));
 }

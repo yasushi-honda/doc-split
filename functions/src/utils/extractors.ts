@@ -154,6 +154,7 @@ export interface DocumentMaster {
   category?: string;
   keywords?: string[];
   aliases?: string[];  // 許容される別表記
+  dateMarker?: string;
 }
 
 /**
