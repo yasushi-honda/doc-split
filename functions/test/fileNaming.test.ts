@@ -134,6 +134,24 @@ describe('sanitizeFilenameForStorage', () => {
   it('空文字列を処理', () => {
     expect(sanitizeFilenameForStorage('')).to.equal('');
   });
+
+  it('全角空白 \\u3000 をアンダースコアに置換 (#333 OCR 由来 text 対策)', () => {
+    expect(sanitizeFilenameForStorage('田中\u3000太郎')).to.equal('田中_太郎');
+  });
+
+  it('半角+全角空白混在もアンダースコア統一 (#333)', () => {
+    expect(sanitizeFilenameForStorage('田中 \u3000太郎')).to.equal('田中_太郎');
+  });
+
+  it('先頭・末尾の `_` を除去 (#333 pdfOperations local 統合)', () => {
+    // 禁止文字が先頭末尾に → 置換後 `_`、さらにトリム → clean な形
+    expect(sanitizeFilenameForStorage('<test>')).to.equal('test');
+    expect(sanitizeFilenameForStorage('/path/')).to.equal('path');
+  });
+
+  it('連続する末尾 `_` も全て除去 (#333)', () => {
+    expect(sanitizeFilenameForStorage('name<>')).to.equal('name');
+  });
 });
 
 describe('sanitizeFileName', () => {

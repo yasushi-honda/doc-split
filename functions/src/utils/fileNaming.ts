@@ -196,8 +196,11 @@ export function analyzeCustomerEntries(customers: CustomerAttribute[]): Customer
 export function sanitizeFilenameForStorage(filename: string, maxLength: number = 200): string {
   return filename
     .replace(/[\\/:*?"<>|]/g, '_')
-    .replace(/\s+/g, '_')
+    // `\s` は半角空白のみで全角空白 `\u3000` を含まないため明示 (OCR 由来 text 対策、#333)
+    .replace(/[\s\u3000]+/g, '_')
     .replace(/_+/g, '_')
+    // 先頭・末尾の `_` を除去して clean な filename にする (#333 pdfOperations local 統合)
+    .replace(/^_+|_+$/g, '')
     .slice(0, maxLength);
 }
 
