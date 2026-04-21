@@ -201,7 +201,9 @@ export function sanitizeFilenameForStorage(filename: string, maxLength: number =
     .replace(/_+/g, '_')
     // 先頭・末尾の `_` を除去して clean な filename にする (#333 pdfOperations local 統合)
     .replace(/^_+|_+$/g, '')
-    .slice(0, maxLength);
+    .slice(0, maxLength)
+    // slice で境界の `_` が末尾に残った場合 (maxLength 付近の長 filename) も trim する
+    .replace(/_+$/, '');
 }
 
 /**

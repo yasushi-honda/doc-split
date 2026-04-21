@@ -152,6 +152,12 @@ describe('sanitizeFilenameForStorage', () => {
   it('連続する末尾 `_` も全て除去 (#333)', () => {
     expect(sanitizeFilenameForStorage('name<>')).to.equal('name');
   });
+
+  it('maxLength 境界で末尾に `_` が残る場合も再 trim (#333 code-reviewer suggestion)', () => {
+    // 'abc_def_ghi' (11 文字) を maxLength=8 で切ると 'abc_def_' (末尾 `_`)。
+    // slice 後 trim で 'abc_def' になることを lock-in。
+    expect(sanitizeFilenameForStorage('abc_def_ghi', 8)).to.equal('abc_def');
+  });
 });
 
 describe('sanitizeFileName', () => {
