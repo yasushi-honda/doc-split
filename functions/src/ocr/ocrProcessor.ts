@@ -237,7 +237,10 @@ export async function processDocument(
     }
   );
 
-  const { documents, customers, offices } = await loadMasterData(db);
+  const { documents, customers, offices } = await loadMasterData(db, {
+    source: 'ocr',
+    functionName: 'ocrProcessor',
+  });
 
   // 情報抽出（強化版エクストラクター使用）
   const documentTypeResult = extractDocumentTypeEnhanced(ocrResult, documents);

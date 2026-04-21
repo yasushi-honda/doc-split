@@ -11,6 +11,7 @@
 
 import type * as admin from 'firebase-admin';
 import type { CustomerMaster, DocumentMaster, MasterData, OfficeMaster } from './extractors';
+import type { ErrorSource } from './errorLogger';
 import { MASTER_PATHS } from './masterPaths';
 import {
   sanitizeCustomerMasters,
@@ -93,6 +94,7 @@ function isFirebaseFunctionsRuntime(): boolean {
  */
 async function reportSanitizeDrops(
   reports: Array<{ kind: 'documents' | 'customers' | 'offices'; rawCount: number; droppedIds: string[] }>,
+  context: { source: ErrorSource; functionName: string },
 ): Promise<void> {
   const dropped = reports.filter((r) => r.droppedIds.length > 0);
   if (dropped.length === 0) return;
@@ -117,8 +119,8 @@ async function reportSanitizeDrops(
     const { safeLogError } = require('./errorLogger') as typeof import('./errorLogger');
     await safeLogError({
       error: new Error(message),
-      source: 'ocr',
-      functionName: 'loadMasterData',
+      source: context.source,
+      functionName: context.functionName,
     });
   } catch (loadErr) {
     // 全 droppedIds を fallback に含める (safeLogError 不達時のデバッグ可能性担保)
@@ -131,9 +133,21 @@ async function reportSanitizeDrops(
   }
 }
 
+/**
+ * マスターデータを取得する。
+ *
+ * @param db Firestore インスタンス
+ * @param options.source 呼び出し元の functional area (drop 発生時 safeLogError の source として記録)。
+ *   省略時 'ocr' を default とする (歴史的な主 caller、既存動作の後方互換)。
+ *   PDF 分割候補検出から呼ぶ場合は 'pdf' を明示 (#344 codex-review 指摘対応)。
+ * @param options.functionName 呼び出し元関数名 (observability の trace 用、省略時 'loadMasterData')
+ */
 export async function loadMasterData(
-  db: admin.firestore.Firestore
+  db: admin.firestore.Firestore,
+  options: { source?: ErrorSource; functionName?: string } = {},
 ): Promise<MasterData> {
+  const source: ErrorSource = options.source ?? 'ocr';
+  const functionName = options.functionName ?? 'loadMasterData';
   const [documentSnap, customerSnap, officeSnap] = await Promise.all([
     db.collection(MASTER_PATHS.documents).get(),
     db.collection(MASTER_PATHS.customers).get(),
@@ -148,11 +162,14 @@ export async function loadMasterData(
   const customerResult = sanitizeCustomerMasters(customerRaw);
   const officeResult = sanitizeOfficeMasters(officeRaw);
 
-  await reportSanitizeDrops([
-    { kind: 'documents', rawCount: documentRaw.length, droppedIds: documentResult.droppedIds },
-    { kind: 'customers', rawCount: customerRaw.length, droppedIds: customerResult.droppedIds },
-    { kind: 'offices', rawCount: officeRaw.length, droppedIds: officeResult.droppedIds },
-  ]);
+  await reportSanitizeDrops(
+    [
+      { kind: 'documents', rawCount: documentRaw.length, droppedIds: documentResult.droppedIds },
+      { kind: 'customers', rawCount: customerRaw.length, droppedIds: customerResult.droppedIds },
+      { kind: 'offices', rawCount: officeRaw.length, droppedIds: officeResult.droppedIds },
+    ],
+    { source, functionName },
+  );
 
   return {
     documents: documentResult.items,
