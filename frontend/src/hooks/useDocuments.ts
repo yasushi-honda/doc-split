@@ -472,8 +472,9 @@ async function fetchDocumentMasters(): Promise<DocumentMaster[]> {
   return snapshot.docs.map((doc) => ({
     id: doc.id,
     name: doc.data().name as string,
-    dateMarker: doc.data().dateMarker as string,
-    category: doc.data().category as string,
+    // #338: shared 側 optional と整合させる honesty cast (silent-failure-hunter I2/I3 対応)
+    dateMarker: doc.data().dateMarker as string | undefined,
+    category: doc.data().category as string | undefined,
   }))
 }
 
@@ -490,8 +491,9 @@ async function fetchCustomerMasters(): Promise<CustomerMaster[]> {
   return snapshot.docs.map((doc) => ({
     id: doc.id,
     name: doc.data().name as string,
-    isDuplicate: doc.data().isDuplicate as boolean,
-    furigana: doc.data().furigana as string,
+    // #338: shared 側 optional と整合させる honesty cast。fetchCustomers (useMasters.ts) と同パターンに統一。
+    isDuplicate: doc.data().isDuplicate as boolean | undefined,
+    furigana: doc.data().furigana as string | undefined,
     careManagerName: doc.data().careManagerName as string | undefined,
   }))
 }
@@ -509,7 +511,8 @@ async function fetchOfficeMasters(): Promise<OfficeMaster[]> {
   return snapshot.docs.map((doc) => ({
     id: doc.id,
     name: doc.data().name as string,
-    isDuplicate: (doc.data().isDuplicate as boolean) ?? false,
+    // #338: shared 側 optional と整合。旧 `?? false` は caller 側で行う方が optional 契約を隠蔽せず明瞭。
+    isDuplicate: doc.data().isDuplicate as boolean | undefined,
     shortName: doc.data().shortName as string | undefined,
   }))
 }

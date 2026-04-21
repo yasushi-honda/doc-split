@@ -129,33 +129,19 @@ export interface FilenameInfo {
 }
 
 /**
- * マスターデータ型定義
+ * マスターデータ型定義 (#338 統合)
+ *
+ * 元々は本 extractors.ts で独自定義していたが、shared/types.ts の同名型と optionality が
+ * 乖離し (shared 側 required / 本 module optional)、FE/BE で型互換が破綻していた。
+ * Firestore 実態は optional 側なので、shared/types.ts を optional に寄せた上で本 module
+ * は re-export のみ担う (型の単一ソース化)。BE 既存 import パスは維持される。
  */
-export interface CustomerMaster {
-  id: string;
-  name: string;
-  furigana?: string;
-  isDuplicate?: boolean;
-  careManagerName?: string;
-  aliases?: string[];  // 許容される別表記
-}
-
-export interface OfficeMaster {
-  id: string;
-  name: string;
-  shortName?: string;
-  isDuplicate?: boolean;
-  aliases?: string[];  // 許容される別表記
-}
-
-export interface DocumentMaster {
-  id: string;
-  name: string;
-  category?: string;
-  keywords?: string[];
-  aliases?: string[];  // 許容される別表記
-  dateMarker?: string;
-}
+import type {
+  CustomerMaster,
+  DocumentMaster,
+  OfficeMaster,
+} from '../../../shared/types';
+export type { CustomerMaster, DocumentMaster, OfficeMaster };
 
 /**
  * マスターデータ envelope (OCR + PDF split 両系列で共用)。

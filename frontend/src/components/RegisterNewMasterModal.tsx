@@ -101,9 +101,13 @@ export function RegisterNewMasterModal({
 
   const isLoading = addCustomer.isPending || addOffice.isPending || addDocumentType.isPending;
 
-  // 既存カテゴリの一覧を抽出
+  // 既存カテゴリの一覧を抽出 (#338: DocumentMaster.category は optional、型述語で string に絞る)
   const existingCategories = Array.from(
-    new Set((existingDocTypes || []).map((d) => d.category).filter(Boolean))
+    new Set(
+      (existingDocTypes || [])
+        .map((d) => d.category)
+        .filter((c): c is string => !!c)
+    )
   );
 
   // モーダル開閉時に初期化

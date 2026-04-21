@@ -173,7 +173,7 @@ function CustomersMaster() {
   const filteredCustomers = customers?.filter(
     (c) =>
       c.name.includes(searchText) ||
-      c.furigana.includes(searchText)
+      (c.furigana ?? '').includes(searchText)
   )
 
   // 同名チェック → 確認ダイアログ or 直接追加
@@ -251,9 +251,9 @@ function CustomersMaster() {
 
   const openEdit = (customer: CustomerMaster) => {
     setFormName(customer.name)
-    setFormFurigana(customer.furigana)
+    setFormFurigana(customer.furigana ?? '')
     setFormCareManagerName(customer.careManagerName || '')
-    setFormIsDuplicate(customer.isDuplicate)
+    setFormIsDuplicate(customer.isDuplicate ?? false)
     setFormNotes(customer.notes || '')
     setFormAliases(customer.aliases?.join(', ') || '')
     setEditingCustomer(customer)
@@ -329,7 +329,7 @@ function CustomersMaster() {
                 filteredCustomers?.map((customer) => (
                   <TableRow key={customer.id}>
                     <TableCell className="font-medium">{customer.name}</TableCell>
-                    <TableCell>{customer.furigana}</TableCell>
+                    <TableCell>{customer.furigana ?? '-'}</TableCell>
                     <TableCell>{customer.careManagerName || '-'}</TableCell>
                     <TableCell className="max-w-[200px]">
                       {customer.aliases && customer.aliases.length > 0
@@ -610,7 +610,7 @@ function DocumentTypesMaster() {
   const filteredDocs = documentTypes?.filter(
     (d) =>
       d.name.includes(searchText) ||
-      d.category.includes(searchText)
+      (d.category ?? '').includes(searchText)
   )
 
   const handleAdd = async () => {
@@ -659,8 +659,8 @@ function DocumentTypesMaster() {
 
   const openEdit = (doc: DocumentMaster) => {
     setFormName(doc.name)
-    setFormDateMarker(doc.dateMarker)
-    setFormCategory(doc.category)
+    setFormDateMarker(doc.dateMarker ?? '')
+    setFormCategory(doc.category ?? '')
     setFormKeywords(doc.keywords?.join(';') || '')
     setFormAliases(doc.aliases?.join(', ') || '')
     setEditingDoc(doc)
@@ -739,7 +739,7 @@ function DocumentTypesMaster() {
                     <TableCell className="font-medium">{doc.name}</TableCell>
                     <TableCell>{doc.dateMarker || '-'}</TableCell>
                     <TableCell>
-                      <Badge variant="outline">{doc.category}</Badge>
+                      <Badge variant="outline">{doc.category ?? '-'}</Badge>
                     </TableCell>
                     <TableCell className="max-w-[200px]">
                       {doc.keywords && doc.keywords.length > 0 ? (

@@ -178,11 +178,21 @@ export interface DocumentGroup {
 // マスターデータ
 // ============================================
 
+/**
+ * マスターデータ共通型 (#338 統合)
+ *
+ * Firestore 実態に合わせて optionality を統一。書き込み時に欠落するケース (CSV import 前の
+ * partial / 旧スキーマ移行中) や sanitize*Masters (functions/src/utils/sanitizeMasterData.ts)
+ * で undefined 正規化されるケースがあるため、reader 側は optional 前提でアクセスする。
+ *
+ * 履歴: #337 で BE/FE で optionality 乖離 (BE extractors.ts は既に optional) が判明、#338 で shared 側を
+ * optional に寄せて一本化。FE で required 前提アクセスがあった箇所は `?? fallback` で防御 (MastersPage.tsx)。
+ */
 export interface DocumentMaster {
   id?: string;        // FirestoreドキュメントID（フロントエンド取得時に設定）
   name: string;
-  dateMarker: string; // 日付抽出の目印（例: "発行日"）
-  category: string;
+  dateMarker?: string; // 日付抽出の目印（例: "発行日"）。Firestore 実態で欠損するケースあり (#338)
+  category?: string;   // 分類（例: "医療"）。Firestore 実態で欠損するケースあり (#338)
   keywords?: string[]; // 照合用キーワード（例: ["被保険者証", "介護保険"]）
   aliases?: string[];  // 許容される別表記（例: ["介護保険被保険者証", "被保険者証明書"]）
 }
@@ -190,8 +200,8 @@ export interface DocumentMaster {
 export interface CustomerMaster {
   id: string;
   name: string;
-  isDuplicate: boolean; // 同姓同名フラグ
-  furigana: string;
+  isDuplicate?: boolean; // 同姓同名フラグ。sanitize で欠損ケースあり (#338)
+  furigana?: string;     // Firestore 実態で欠損ケースあり、sanitize で undefined 正規化 (#338)
   careManagerName?: string; // 担当ケアマネジャー名
   aliases?: string[];  // 許容される別表記（例: ["田中　太郎", "たなか太郎"]）
   notes?: string;      // 区別用補足情報（例: "北名古屋在住"）
@@ -202,7 +212,7 @@ export interface OfficeMaster {
   name: string;
   nameKey?: string;        // 正規化キー（検索用）
   shortName?: string;
-  isDuplicate: boolean;    // 同名フラグ
+  isDuplicate?: boolean;   // 同名フラグ。sanitize で欠損ケースあり (#338)
   aliases?: string[];      // 許容される別表記（例: ["北名古屋市東部地域包括支援センター"]）
   notes?: string;          // 区別用補足情報（例: "東部"）
 }
