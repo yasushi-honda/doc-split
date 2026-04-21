@@ -42,6 +42,17 @@ describe('timestampToDateString', () => {
     expect(timestampToDateString(ts)).to.be.undefined;
   });
 
+  it('seconds が NaN の場合は undefined を返す (#346 silent-failure-hunter)', () => {
+    // typeof NaN === 'number' で guard を素通りしてしまうため、Number.isFinite で排除する。
+    const ts = { seconds: NaN, nanoseconds: 0 };
+    expect(timestampToDateString(ts)).to.be.undefined;
+  });
+
+  it('seconds が Infinity の場合は undefined を返す (#346 silent-failure-hunter)', () => {
+    const ts = { seconds: Infinity, nanoseconds: 0 };
+    expect(timestampToDateString(ts)).to.be.undefined;
+  });
+
   it('toDate メソッドを持つ Timestamp インスタンスも変換可能', () => {
     // 2026-01-15 00:00:00 UTC（TZずれなし確認用に15日を使用）
     const ts = {

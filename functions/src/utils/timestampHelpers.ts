@@ -16,8 +16,9 @@ export interface TimestampLike {
 export function timestampToDateString(
   ts: TimestampLike | null | undefined
 ): string | undefined {
-  // seconds=0 (epoch 1970-01-01) を silent に missing 扱いしないため typeof で判定する (#346)
-  if (!ts || typeof ts.seconds !== 'number') return undefined;
+  // seconds=0 (epoch 1970-01-01) を silent に missing 扱いしないため typeof で判定する (#346)。
+  // NaN / Infinity は typeof 'number' を通るが Date(NaN) → "NaN/NaN/NaN" silent 誤出力になるため isFinite で排除する。
+  if (!ts || typeof ts.seconds !== 'number' || !Number.isFinite(ts.seconds)) return undefined;
 
   const date = ts.toDate ? ts.toDate() : new Date(ts.seconds * 1000);
   const y = date.getFullYear();
