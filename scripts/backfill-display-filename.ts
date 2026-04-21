@@ -7,8 +7,9 @@
  * Storage上の実ファイルは変更しない（表示用ラベルのみ）。
  *
  * #334 で shared/generateDisplayFileName + shared/timestampHelpers 統合済み。
- * 旧 inline 実装に欠落していた OS 禁止文字サニタイズ (#181/#183/#335) と
- * epoch (seconds=0) / NaN / Infinity の silent drop 排除 (#346) を取り込む。
+ * 旧 inline は shared 化 (#181) の取りこぼしで、以下の silent bug を抱えていた:
+ * - OS 禁止文字サニタイズ欠落 (#183 半角 + #335 全角) → shared 版で `_` 置換
+ * - epoch (seconds=0) / NaN / Infinity の silent drop (#346) → shared 版で isFinite guard
  *
  * 使用方法:
  *   FIREBASE_PROJECT_ID=doc-split-dev npx ts-node scripts/backfill-display-filename.ts --dry-run
@@ -42,11 +43,10 @@ async function main(): Promise<void> {
   console.log(`モード: ${dryRun ? 'DRY RUN（変更なし）' : '実行'}`);
   console.log(`上書き: ${force ? 'あり（既存displayFileNameも再生成）' : 'なし（未設定のみ対象）'}`);
   if (force) {
-    // #334: shared 版は OS 禁止文字 (\ / : * ? " < > |) + 全角相当 + 制御文字を `_` に置換する。
-    // 旧 inline 実装には欠落していたサニタイズなので、--force 実行時は既存 displayFileName が
-    // 書き換わる可能性がある。operator が変化を把握できるよう old → new の差分ログを出す。
+    // #334: shared 版サニタイズ (半角 \ / : * ? " < > | + 全角相当 + 制御文字 → "_") を適用。
+    // 詳細は shared/generateDisplayFileName.ts 参照。operator が変化を把握できるよう old → new 差分を CHANGE ログで出す。
     console.log('⚠️  --force: 既存 displayFileName を shared 版サニタイズで再生成します。');
-    console.log('    禁止文字 (\\ / : * ? " < > |) や全角相当・制御文字を含む既存値は変換されます (#334)。');
+    console.log('    禁止文字 (\\ / : * ? " < > |) や全角相当・制御文字を含む既存値は変換されます（shared 版サニタイズ適用のため）。');
   }
   console.log('---');
 
@@ -105,22 +105,18 @@ async function main(): Promise<void> {
           continue;
         }
 
-        // #334: --force 時に old → new が変化するかを追跡。operator が silent 書き換えを検知できるようにする。
+        // #334: --force 時の silent 書き換え検知用。"未設定 → 新規 SET" は CHANGE 扱いしないため
+        // oldDisplayFileName の存在チェックを先に置く。
         const oldDisplayFileName: string | undefined = data.displayFileName;
         const isChange = Boolean(oldDisplayFileName) && oldDisplayFileName !== displayFileName;
 
-        if (dryRun) {
-          if (isChange) {
-            console.log(`  CHANGE: ${docSnap.id}`);
-            console.log(`          "${oldDisplayFileName}" → "${displayFileName}"`);
-          } else {
-            console.log(`  SET: ${docSnap.id}`);
-            console.log(`       ${data.fileName || '(no name)'} → ${displayFileName}`);
-          }
+        if (isChange) {
+          console.log(`  CHANGE: ${docSnap.id} "${oldDisplayFileName}" → "${displayFileName}"`);
         } else {
-          if (isChange) {
-            console.log(`  CHANGE: ${docSnap.id} "${oldDisplayFileName}" → "${displayFileName}"`);
-          }
+          console.log(`  SET: ${docSnap.id} ${data.fileName || '(no name)'} → ${displayFileName}`);
+        }
+
+        if (!dryRun) {
           batch.update(docSnap.ref, {
             displayFileName,
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),

@@ -16,6 +16,8 @@ fi
 
 # FIREBASE_PROJECT_ID=xxx ... scripts/X.(js|ts) パターンを検出 (#334 で .ts 化対応)
 # interpreter (node / npx ts-node / ts-node 直接 / yarn ts-node 等) を問わず広く検知
+# 注: .* の貪欲マッチで interpreter 検出を不要にしたため、誤検知許容方針
+# (hook は ADC 依存の運用コマンドを GitHub Actions に誘導する目的なので、多少の過剰検知は許容)。
 if echo "$COMMAND" | grep -qE 'FIREBASE_PROJECT_ID=\S+\s+.*scripts/[a-zA-Z0-9_-]+\.(js|ts)'; then
   SCRIPT_NAME=$(echo "$COMMAND" | grep -oE 'scripts/[a-zA-Z0-9_-]+\.(js|ts)' | sed 's/scripts\///' | sed -E 's/\.(js|ts)//')
   echo "⚠️ 運用スクリプトはGitHub Actions経由で実行してください（ADC不要）。" >&2

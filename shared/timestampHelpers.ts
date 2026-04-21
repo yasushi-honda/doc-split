@@ -2,12 +2,14 @@
  * Firestore Timestamp 変換ヘルパー。
  *
  * backfill (scripts) と本番 (functions/pdfOperations) で共有する純粋関数。
- * #334 で functions/src/utils/ から shared/ に昇格。
+ * #332 で functions/src/utils/ に抽出、#334 で shared/ に昇格 (FE/BE/scripts 三者共有)。
  */
 
 export interface TimestampLike {
   seconds: number;
-  nanoseconds: number;
+  // #334: consumer (timestampToDateString) は seconds のみ使用するため optional。
+  // Firestore Timestamp 本物の shape を documenting しつつ、plain object 経由の duck-type 互換性を持たせる。
+  nanoseconds?: number;
   toDate?: () => Date;
 }
 
