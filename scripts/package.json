@@ -8,9 +8,14 @@
     "import:customers": "node import-masters.js --customers",
     "import:documents": "node import-masters.js --documents",
     "import:offices": "node import-masters.js --offices",
-    "import:all": "node import-masters.js --all"
+    "import:all": "node import-masters.js --all",
+    "backfill:displayname": "ts-node backfill-display-filename.ts"
   },
   "dependencies": {
     "firebase-admin": "^12.7.0"
+  },
+  "devDependencies": {
+    "ts-node": "^10.9.2",
+    "typescript": "^5.5.4"
   }
 }
