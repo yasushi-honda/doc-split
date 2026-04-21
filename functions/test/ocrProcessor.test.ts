@@ -6,6 +6,8 @@
 
 import { expect } from 'chai';
 import { isTransientError, is429Error } from '../src/utils/retry';
+// #196: 実装値を side-effect-free な constants.ts から import して drift 防止
+import { MAX_RETRY_COUNT, STUCK_RESCUE_RETRY_AFTER_MS } from '../src/ocr/constants';
 
 describe('ocrProcessor', () => {
   describe('tryStartProcessing ロジック検証', () => {
@@ -81,8 +83,7 @@ describe('ocrProcessor', () => {
      * - 非transientエラー → status: 'error'（即座に確定）
      */
 
-    // 実装側（ocrProcessor.ts）の MAX_RETRY_COUNT = 5 と一致させること
-    const MAX_RETRY_COUNT = 5;
+    // #196: 実装値を import して drift 防止 (旧: test-local `const MAX_RETRY_COUNT = 5;`)
 
     it('transientエラー + リトライ上限未満 → pendingに戻す', () => {
       const currentRetryCount = 0;
@@ -445,17 +446,23 @@ describe('ocrProcessor', () => {
       expect(newRetryCount).to.equal(2);
     });
 
-    // #196: MAX_RETRY_COUNT チェックと retryAfter 設定を追加
+    // #196: MAX_RETRY_COUNT チェックと retryAfter 設定を追加 (実装値を top-level import で参照)
     describe('MAX_RETRY_COUNT チェック (#196)', () => {
-      // 実装側 (ocrProcessor.ts) の MAX_RETRY_COUNT = 5 と一致させること
-      const MAX_RETRY_COUNT = 5;
-
-      it('retryCount < MAX_RETRY_COUNT-1 → pending (通常救済)', () => {
+      it('retryCount < MaxRetryCount-1 → pending (通常救済)', () => {
         const currentRetryCount = 2;
         const newRetryCount = currentRetryCount + 1;
         const shouldError = newRetryCount >= MAX_RETRY_COUNT;
         expect(shouldError).to.be.false;
         expect(newRetryCount).to.equal(3);
+      });
+
+      // #196 pr-test-analyzer: 境界値 ±1 ルール (最後の救済チャンス = 3 → 4 → pending)
+      it('retryCount === MAX_RETRY_COUNT-2 → pending (最後の救済)', () => {
+        const currentRetryCount = MAX_RETRY_COUNT - 2; // 3
+        const newRetryCount = currentRetryCount + 1;
+        const shouldError = newRetryCount >= MAX_RETRY_COUNT;
+        expect(shouldError).to.be.false;
+        expect(newRetryCount).to.equal(MAX_RETRY_COUNT - 1);
       });
 
       it('retryCount === MAX_RETRY_COUNT-1 → error (上限到達で確定)', () => {
@@ -483,10 +490,8 @@ describe('ocrProcessor', () => {
       });
     });
 
-    // #196: retryAfter 設定で即再処理を防止
+    // #196: retryAfter 設定で即再処理を防止 (STUCK_RESCUE_RETRY_AFTER_MS は import で drift 防止)
     describe('retryAfter 設定 (#196)', () => {
-      const STUCK_RESCUE_RETRY_AFTER_MS = 3 * 60 * 1000; // 3 分
-
       it('救済時に retryAfter が現在時刻 + 3 分後に設定される', () => {
         const now = Date.now();
         const retryAfter = now + STUCK_RESCUE_RETRY_AFTER_MS;

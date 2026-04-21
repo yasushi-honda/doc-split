@@ -14,14 +14,15 @@
 import { onSchedule } from 'firebase-functions/v2/scheduler';
 import * as admin from 'firebase-admin';
 import { trackGeminiUsage } from '../utils/rateLimiter';
-import { logError } from '../utils/errorLogger';
+import { logError, safeLogError } from '../utils/errorLogger';
 import {
   tryStartProcessing,
   processDocument,
   handleProcessingError,
   OcrProcessingResult,
-  MAX_RETRY_COUNT,
 } from './ocrProcessor';
+// 定数は side-effect-free な constants.ts から import (#196 test drift 防止)
+import { MAX_RETRY_COUNT, STUCK_RESCUE_RETRY_AFTER_MS } from './constants';
 
 const db = admin.firestore();
 
@@ -29,8 +30,7 @@ const FUNCTION_NAME = 'processOCR';
 const BATCH_SIZE = 5;
 /** processingスタック救済: この時間（ms）を超えてprocessing状態のドキュメントをpendingに戻す */
 const STUCK_PROCESSING_THRESHOLD_MS = 10 * 60 * 1000; // 10分
-/** rescue 時の retryAfter 待機時間 (ms): stuck = 高負荷/quota 相当と見做し handleProcessingError の quota 値と同じ 3 分 (#196) */
-const STUCK_RESCUE_RETRY_AFTER_MS = 3 * 60 * 1000;
+// STUCK_RESCUE_RETRY_AFTER_MS は constants.ts で定義 (上記 import)
 
 /** 処理統計 */
 interface ProcessingStats {
@@ -173,13 +173,25 @@ async function rescueStuckProcessingDocs(): Promise<void> {
       // #196: handleProcessingError と同じく MAX_RETRY_COUNT 到達で error 確定する。
       // 以前は無制限に pending に戻していたため 429 多発時に rescue ループが止まらなかった。
       if (newRetryCount >= MAX_RETRY_COUNT) {
+        const fatalMessage = `Processing timed out, max retries exceeded (${newRetryCount}/${MAX_RETRY_COUNT})`;
         await db.doc(`documents/${docSnapshot.id}`).update({
           status: 'error',
           retryCount: newRetryCount,
-          lastErrorMessage: `Processing timed out, max retries exceeded (${newRetryCount}/${MAX_RETRY_COUNT})`,
+          // #196 review: 古い retryAfter が残ると fix-stuck-documents --include-errors で
+          // pending 復帰させた時に即スキップされる。error 確定では retryAfter をクリア。
+          retryAfter: admin.firestore.FieldValue.delete(),
+          lastErrorMessage: fatalMessage,
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         });
         console.error(`Marked stuck document ${docSnapshot.id} as error (retryCount: ${newRetryCount}/${MAX_RETRY_COUNT})`);
+        // #196 silent-failure-hunter C1: errors/ コレクションに記録しないと ErrorsPage から不可視。
+        // rules/error-handling.md 「状態復旧 > ログ記録」の順で、状態 update 後に独立 try-catch で呼ぶ。
+        await safeLogError({
+          error: new Error(`Rescue max retries exceeded for stuck processing > ${STUCK_PROCESSING_THRESHOLD_MS / 60000}min`),
+          source: 'ocr',
+          functionName: FUNCTION_NAME,
+          documentId: docSnapshot.id,
+        });
       } else {
         // #196: retryAfter を設定しないと 429 救済直後に再処理されて連鎖する。quota 相当の 3 分待機を付与。
         await db.doc(`documents/${docSnapshot.id}`).update({
