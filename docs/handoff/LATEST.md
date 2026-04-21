@@ -1,8 +1,112 @@
 # ハンドオフメモ
 
-**更新日**: 2026-04-21 session25 (WBS Phase 3 完遂、PR #337 merged、3 Issue closed、3 follow-up Issue 起票)
-**ブランチ**: main (PR #337 マージ済、clean)
-**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + Phase A-1 (#312) + A-2/A-3 (#313/#315) + Phase 2 (#181/#182/#183) + Phase 3 (#188/#189/#190) 完遂
+**更新日**: 2026-04-21 session26 (WBS Phase 5/A-C1C2 完遂、3 PR merged #342/#345/#347、4 Issue closed、3 follow-up Issue 起票)
+**ブランチ**: main (clean、3 PR マージ済)
+**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + Phase A-1 (#312) + A-2/A-3 (#313/#315) + Phase 2 (#181/#182/#183) + Phase 3 (#188/#189/#190) + **Phase 5 (WBS Phase A/B/C-1/C-2 = #339/#340/#332/#335)** 完遂
+
+<a id="session26"></a>
+## ✅ session26 完了サマリー (WBS Phase A/B/C-1/C-2 完遂)
+
+PM/PL 視点で残 10 Open Issue から WBS を引き、依存関係とリスクで Phase A (loadMasterData 周辺) → Phase B (timestampHelpers 抽出) → Phase C-1/C-2 (dead code + 全角禁止文字) を **3 PR バッチ化で完遂**。各 PR で Quality Gate (pr-review-toolkit 3-4 並列 + 大規模は codex review セカンドオピニオン) を発動、合計 **10 エージェントレビュー + 2 codex review**。
+
+### PR 一覧
+
+| PR | Phase | 内容 | closed Issues | merged commit |
+|----|-------|------|--------------|--------------|
+| **#342** | A | LoadedMasterData → MasterData 型統合 + loadMasterData テスト拡張 (3 ケース + silent drop 3 sanitizer 網羅) | #339 #340 | `7db21e1` |
+| **#345** | B | timestampToDateString + TimestampLike を utils/timestampHelpers に抽出、test 分離 | #332 | `81fc60e` |
+| **#347** | C-1/C-2 | shared/types.ts dead code 60 行削除 + SANITIZE_PATTERN 全角禁止文字 9 文字追加 + per-codepoint lock-in + negative contract | #335 | `baf52d8` |
+
+### 主要成果
+
+| 項目 | 内容 |
+|------|------|
+| **merged PR** | 3 本 (#342 / #345 / #347) |
+| **closed Issue** | #339 / #340 / #332 / #335 (計 4 件) |
+| **新規 follow-up Issue** | #343 / #344 / #346 (3 件、PR レビュー指摘由来) |
+| **BE テスト** | 632 → **648 passing** (+16: loadMasterData 4 + full-width 13 + 他) |
+| **FE テスト** | 127 passing (変化なし) |
+| **コード量** | 3 PR 合計 +171 / -134 行 (実質純増、dead code 削除 + テスト増加の成果) |
+| **品質改善** | MasterData 型統合 (drift 解消) / timestampHelpers 抽出 (naming mismatch 解消) / shared/types.ts dead code 60 行削除 / 全角禁止文字 9 文字対応 / per-codepoint lock-in |
+
+### Quality Gate 実施記録 (10 エージェントレビュー + 2 codex)
+
+| PR | 発動内容 | 結果 |
+|----|---------|------|
+| **#342** (A) | pr-review 4 並列 (code-reviewer / pr-test-analyzer / silent-failure-hunter / type-design-analyzer) | Critical 0、**Important 3** (pr-test-analyzer: silent-drop 3 sanitizer 網羅 → 本 PR で対応、type-design: MasterData 移動 → #343 化、silent-failure: observability → #344 化) |
+| **#345** (B) | pr-review 3 並列 + codex review | Critical 0、**Suggestion 1** (stale comment → 本 PR で修正)、codex "Findings none" |
+| **#347** (C-1/C-2) | pr-review 3 並列 + codex review | Critical 0、**Important 2** (per-codepoint lock-in + REPLACEMENT_ONLY full-width 相互作用 → 本 PR で対応)、Suggestion 1 (negative contract for 非 forbidden 全角 → 本 PR で対応)、codex "Findings none" |
+
+### 設計判断 / Lessons Learned (本セッション重要知見)
+
+1. **PR規模別の Quality Gate 発動基準の実運用**: 2 ファイル = pr-review のみ / 3 ファイル+ or 139 行 = pr-review + codex review の 2 tier で回すと、追加コストを最小化しつつ Critical 見逃しを防げる。PR #345/#347 で codex review の "Findings none" は **既存 pr-review で十分な品質達成** を検証する役割も果たす
+
+2. **type-design-analyzer の scope 外提案を follow-up 化するパターン**: PR #342 で `MasterData` を pdfAnalyzer から extractors.ts に移動するよう指摘されたが、本 PR scope (LoadedMasterData 削除) を超えるため #343 新規 Issue 化。**スコープ拡大より follow-up 化** で Phase の意図を保つ (session24 Lessons 4 と整合)
+
+3. **silent-failure-hunter の scope 外提案を Issue として独立 tracking**: PR #342 で `sanitize*Masters` の drop observability が指摘されたが、設計拡張 (drop カウント返却) のため #344 follow-up 化。Issue body に Option A/B を併記して次セッションの設計判断を gate
+
+4. **移動 refactor の test 分離パターン (PR #345)**: `timestampToDateString` を `backfillDisplayFileName` → `timestampHelpers` に抽出時、test も同時分離 (`backfillDisplayFileName.test.ts` の timestampToDateString describe を丸ごと `timestampHelpers.test.ts` に移動)。import path 変更と test 責務分離を 1 PR で済ませる (stale comment 1 箇所だけ残り、レビュー後修正)
+
+5. **Unicode escape の明示性**: 全角禁止文字 9 文字 (#335) を直接文字 (`／`等) ではなく Unicode escape (`\uFF0F`等) で記述 → 保守時に即 codepoint 判別可、regex 内の曖昧文字 (全角スペース等の混入防止) を排除
+
+6. **Per-codepoint table-driven lock-in の効果**: 9 文字を一括 assertion 1 個にまとめると 1 文字脱落の regression を検知できない。`FULLWIDTH_CASES.forEach` で 9 it() 生成 → 個別検知可能。test cost はわずかに増える (+11 it) が、SANITIZE_PATTERN の改変耐性が 9 倍に上がる
+
+7. **dead code 判定の 3 段確認**: `shared/types.ts:512` の `generateFileName` + `sanitizeFileName` を削除時、(a) grep で import 検索、(b) 類似名 active function 確認 (pdfOperations.ts:577 local vs fileNaming.ts:217 independent)、(c) test ファイルでの reference 確認 → 3 段で dead 確定。codex review が "remaining hits are local utilities, docs, tests, or unrelated functions" と一致確認
+
+8. **全角と半角 join separator の 3 underscores 現象**: `documentType: '書類名／／'` が `書類名__` にサニタイズされ、`parts.join('_')` の separator `_` と連結して `書類名___田中_太郎` になる。テストで期待値を誤記したが、実装の実行確認で即修正。**期待値算出は part 境界 + separator で紙上で計算してから assertion 記載**
+
+### 次セッション着手候補 (WBS 進捗)
+
+**Phase D: DocumentMaster optionality 統合 (#338)** (次セッション最優先、設計判断大):
+- **#338** shared/types.ts vs extractors.ts で DocumentMaster の `id` / `category` / `dateMarker` optionality 乖離 + CustomerMaster の `isDuplicate` / `furigana` + OfficeMaster の `isDuplicate` 計 6 フィールドの不一致
+- 影響範囲: frontend 10+ ファイル (`customer.furigana.includes()` 等 required 前提コード多数、`?? fallback` 追加必要)
+- **Evaluator 発動対象 (5+ ファイル、アーキテクチャ影響)**、**`/impl-plan` 必須**
+- 設計オプション:
+  - **A**: shared/types.ts 全 optional 化 (Firestore 実態一致、frontend defensive code 追加)
+  - **B**: `DocumentMasterWrite` (required) + `DocumentMaster` (optional) 分離 (既存 frontend 影響最小、型倍増)
+  - **C**: extractors.ts 削除 → shared から re-export (drift 完全解消)
+- 想定規模: 10-15 ファイル、1.5-2 セッション相当
+
+**Phase E: backfill-display-filename.js shared 統合 (#334)** (Phase D 完了後):
+- scripts/ に ts-node or build step 追加、shared/generateDisplayFileName import
+- 想定規模: 2-4 ファイル + package.json
+
+**Phase C-3: sanitize helper 統合調査 (#331 + #333)** (独立、設計判断):
+- functions/src/utils/fileNaming.ts の 2 本 + shared/generateDisplayFileName.ts の private を比較、仕様差 (全角→半角変換、maxLength 等) を前提に統合可否を判断
+- 想定規模: 調査先行 → 統合 PR (3-5 ファイル)
+
+**Phase F: #262 + #299 test diagnostics 強化** (最後):
+- **#262** summaryWritePayloadContract grep-based 既知制限ドキュメント化 + I/O エラー強化
+- **#299** capPageResultsAggregate 動的 safeLogError invocation test (ts-node/esm 環境整備、過去 PR #298 失敗実績あり、3 回失敗 → /codex 委譲条項)
+- 想定規模: 2 セッション
+
+**Phase 3 follow-up 群** (scope 小):
+- **#343** MasterData 型を pdfAnalyzer.ts → extractors.ts に移動 (type-design-analyzer Important from PR #342)
+- **#344** sanitize*Masters の silent drop observability (silent-failure-hunter Important from PR #342)
+- **#346** timestampToDateString epoch (seconds=0) silent null 扱い (type-design-analyzer from PR #345)
+
+**その他 WBS 順序** (前セッション記載、順序維持):
+- Phase 6/7/8/9/10: #196, #220, #237, #251, #200, #238, #239 等 (session25 記載参照)
+
+### 見送り (本セッション scope 外、follow-up Issue 起票済)
+
+| # | 内容 | 由来 |
+|---|------|------|
+| **#343** | MasterData 型を pdfAnalyzer.ts から extractors.ts に移動 | PR #342 type-design-analyzer Important |
+| **#344** | sanitize*Masters の silent drop observability (drop count + logError) | PR #342 silent-failure-hunter Important |
+| **#346** | timestampToDateString epoch (seconds=0) null 判定明確化 | PR #345 type-design-analyzer Enforcement |
+
+### Test plan 実行結果
+
+- [x] BE `npx tsc --noEmit` EXIT 0 (各 PR 確認)
+- [x] BE `npm test` **648 passing** (loadMasterData +4 / timestampHelpers 5 分離 / displayFileName 全角 13 = +13 net)
+- [x] FE `npx tsc --noEmit` EXIT 0 (shared/types.ts dead code 削除の回帰なし確認)
+- [x] FE `npm test` (vitest) **127 passing** (変化なし)
+- [x] main CI 3/3 green × 3 PR (lint-build-test / CodeRabbit / GitGuardian 全 pass)
+- [x] `gh issue view 339 / 340 / 332 / 335` で CLOSED 確認 (全て squash merge で auto-close 成功)
+- [x] follow-up Issue #343 / #344 / #346 起票確認
+
+---
 
 <a id="session25"></a>
 ## ✅ session25 完了サマリー (WBS Phase 3 完遂)
