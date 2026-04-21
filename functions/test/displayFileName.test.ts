@@ -193,6 +193,47 @@ describe('displayFileName 自動生成 (#178 Stage 1)', () => {
       // 書類名__ (末尾2連続) + "_" (join separator) + 田中_太郎 → 3連続アンダースコア
       expect(result).to.equal('書類名___田中_太郎.pdf');
     });
+
+    // #335 per-codepoint lock-in: 9 文字どれか 1 つが SANITIZE_PATTERN から脱落しても検知する。
+    const FULLWIDTH_CASES: Array<[string, string]> = [
+      ['＼', 'U+FF3C 全角バックスラッシュ'],
+      ['／', 'U+FF0F 全角スラッシュ'],
+      ['：', 'U+FF1A 全角コロン'],
+      ['＊', 'U+FF0A 全角アスタリスク'],
+      ['？', 'U+FF1F 全角クエスチョン'],
+      ['＂', 'U+FF02 全角ダブルクォート'],
+      ['＜', 'U+FF1C 全角小なり'],
+      ['＞', 'U+FF1E 全角大なり'],
+      ['｜', 'U+FF5C 全角バーティカルバー'],
+    ];
+    FULLWIDTH_CASES.forEach(([ch, desc]) => {
+      it(desc + ' ' + ch + ' を `_` に置換する', () => {
+        const result = generateDisplayFileName({
+          documentType: '前' + ch + '後',
+          customerName: '田中太郎',
+        });
+        expect(result).to.equal('前_後_田中太郎.pdf');
+      });
+    });
+
+    it('全 part が全角禁止文字のみの場合は null (REPLACEMENT_ONLY_PATTERN との合流)', () => {
+      // `／／／` → sanitize → `___` → REPLACEMENT_ONLY_PATTERN で空文字化 → part 除外
+      const result = generateDisplayFileName({
+        documentType: '／／／',
+        customerName: '：：：',
+        officeName: '＊＊＊',
+      });
+      expect(result).to.be.null;
+    });
+
+    it('非禁止の全角記号 (全角ハイフン－ / 全角イコール＝ / 全角ドット．) は素通しする (negative contract)', () => {
+      // Windows 禁止文字の全角版のみを置換する契約。OCR で混入する他の全角記号は filename 安全なため保持する。
+      const result = generateDisplayFileName({
+        documentType: 'A－B＝C．D',
+        customerName: '田中太郎',
+      });
+      expect(result).to.equal('A－B＝C．D_田中太郎.pdf');
+    });
   });
 
   describe('generateDisplayFileName - 日付 fallback 経路 (#182)', () => {
