@@ -21,7 +21,15 @@ import {
 
 type RawDoc = FirebaseFirestore.DocumentData;
 
-/** Firestore Raw → 型付き中間表現。型崩れは後段の sanitize*Masters で除去される */
+/**
+ * Firestore Raw → 型付き中間表現。
+ *
+ * 型崩れは後段の sanitize*Masters で除去される。
+ * #338: shared/types.ts で `id?: string` に optional 化した後も、本関数経由で構築された
+ * DocumentMaster は必ず `id` を持つ (引数 `id: string` required)。loadMasterData の
+ * 下流で `id` 前提アクセスがあっても runtime 保証される (signature 起点の invariant)。
+ * 将来 id 無しで構築する caller が現れた場合は、shared 側 optional が型チェックで検知する。
+ */
 function toDocumentMaster(id: string, raw: RawDoc): DocumentMaster {
   return {
     id,

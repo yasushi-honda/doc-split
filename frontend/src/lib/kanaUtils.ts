@@ -103,7 +103,9 @@ export function getKanaRow(text: string): KanaRow | null {
 export function buildFuriganaMap(customers: CustomerMaster[]): Map<string, string> {
   const map = new Map<string, string>();
   for (const customer of customers) {
-    map.set(customer.name, customer.furigana);
+    // #338: CustomerMaster.furigana は optional (Firestore 実態で欠損ケースあり)。
+    // ソート時に空文字を末尾扱いとする既存挙動 (sortGroupsByFurigana 内) と整合させる。
+    map.set(customer.name, customer.furigana ?? '');
   }
   return map;
 }

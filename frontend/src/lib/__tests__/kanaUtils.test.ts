@@ -187,6 +187,16 @@ describe('buildFuriganaMap', () => {
     const map = buildFuriganaMap(customersWithEmpty);
     expect(map.get('不明者')).toBe('');
   });
+
+  // #338: CustomerMaster.furigana が optional 化されたため、runtime で欠落した場合に
+  // Map 構築が落ちず、空文字 fallback で格納される契約をロックインする。
+  it('furigana が undefined でも空文字で Map に格納される (#338)', () => {
+    const customersWithMissing: CustomerMaster[] = [
+      { id: '1', name: '新規顧客', isDuplicate: false },
+    ];
+    const map = buildFuriganaMap(customersWithMissing);
+    expect(map.get('新規顧客')).toBe('');
+  });
 });
 
 // ============================================

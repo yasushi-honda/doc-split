@@ -48,8 +48,11 @@ async function fetchCustomers(): Promise<CustomerMaster[]> {
   return snapshot.docs.map((doc) => ({
     id: doc.id,
     name: doc.data().name as string,
-    isDuplicate: doc.data().isDuplicate as boolean,
-    furigana: doc.data().furigana as string,
+    // #338: shared/types.ts 側を optional に統一したため、reader では `as ... | undefined` で honesty cast する。
+    // 旧 `as string` / `as boolean` だと shared の optional 化が type system 上で骨抜きになり、
+    // `.includes`/`.trim` 等の downstream 呼出で runtime crash する silent failure 経路が残る。
+    isDuplicate: doc.data().isDuplicate as boolean | undefined,
+    furigana: doc.data().furigana as string | undefined,
     careManagerName: doc.data().careManagerName as string | undefined,
     notes: doc.data().notes as string | undefined,
     aliases: doc.data().aliases as string[] | undefined,
@@ -274,8 +277,9 @@ async function fetchDocumentTypes(): Promise<DocumentMaster[]> {
   const snapshot = await getDocs(collection(db, COLLECTION_PATHS.documents))
   return snapshot.docs.map((doc) => ({
     name: doc.data().name as string,
-    dateMarker: doc.data().dateMarker as string,
-    category: doc.data().category as string,
+    // #338: shared 側の optional と整合させる honesty cast。silent force cast 禁止。
+    dateMarker: doc.data().dateMarker as string | undefined,
+    category: doc.data().category as string | undefined,
     keywords: normalizeKeywords(doc.data().keywords),
     aliases: doc.data().aliases as string[] | undefined,
   }))
