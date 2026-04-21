@@ -397,8 +397,10 @@ export async function processDocument(
   };
 }
 
-/** リトライ上限 */
-const MAX_RETRY_COUNT = 5;
+// MAX_RETRY_COUNT は side-effect-free な constants.ts から re-export (#196)。
+// ここを直接 const として定義すると test 側 import で admin.firestore() top-level 実行が走る。
+export { MAX_RETRY_COUNT } from './constants';
+import { MAX_RETRY_COUNT } from './constants';
 
 /**
  * エラー時の処理

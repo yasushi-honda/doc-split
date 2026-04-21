@@ -6,6 +6,8 @@
 
 import { expect } from 'chai';
 import { isTransientError, is429Error } from '../src/utils/retry';
+// #196: 実装値を side-effect-free な constants.ts から import して drift 防止
+import { MAX_RETRY_COUNT, STUCK_RESCUE_RETRY_AFTER_MS } from '../src/ocr/constants';
 
 describe('ocrProcessor', () => {
   describe('tryStartProcessing ロジック検証', () => {
@@ -81,8 +83,7 @@ describe('ocrProcessor', () => {
      * - 非transientエラー → status: 'error'（即座に確定）
      */
 
-    // 実装側（ocrProcessor.ts）の MAX_RETRY_COUNT = 5 と一致させること
-    const MAX_RETRY_COUNT = 5;
+    // #196: 実装値を import して drift 防止 (旧: test-local `const MAX_RETRY_COUNT = 5;`)
 
     it('transientエラー + リトライ上限未満 → pendingに戻す', () => {
       const currentRetryCount = 0;
@@ -443,6 +444,72 @@ describe('ocrProcessor', () => {
       const currentRetryCount = 1;
       const newRetryCount = currentRetryCount + 1;
       expect(newRetryCount).to.equal(2);
+    });
+
+    // #196: MAX_RETRY_COUNT チェックと retryAfter 設定を追加 (実装値を top-level import で参照)
+    describe('MAX_RETRY_COUNT チェック (#196)', () => {
+      it('retryCount < MaxRetryCount-1 → pending (通常救済)', () => {
+        const currentRetryCount = 2;
+        const newRetryCount = currentRetryCount + 1;
+        const shouldError = newRetryCount >= MAX_RETRY_COUNT;
+        expect(shouldError).to.be.false;
+        expect(newRetryCount).to.equal(3);
+      });
+
+      // #196 pr-test-analyzer: 境界値 ±1 ルール (最後の救済チャンス = 3 → 4 → pending)
+      it('retryCount === MAX_RETRY_COUNT-2 → pending (最後の救済)', () => {
+        const currentRetryCount = MAX_RETRY_COUNT - 2; // 3
+        const newRetryCount = currentRetryCount + 1;
+        const shouldError = newRetryCount >= MAX_RETRY_COUNT;
+        expect(shouldError).to.be.false;
+        expect(newRetryCount).to.equal(MAX_RETRY_COUNT - 1);
+      });
+
+      it('retryCount === MAX_RETRY_COUNT-1 → error (上限到達で確定)', () => {
+        const currentRetryCount = 4;
+        const newRetryCount = currentRetryCount + 1;
+        const shouldError = newRetryCount >= MAX_RETRY_COUNT;
+        expect(shouldError).to.be.true;
+        expect(newRetryCount).to.equal(5);
+      });
+
+      it('retryCount > MAX_RETRY_COUNT (異常値) → error (無限 rescue 防止)', () => {
+        const currentRetryCount = 10;
+        const newRetryCount = currentRetryCount + 1;
+        const shouldError = newRetryCount >= MAX_RETRY_COUNT;
+        expect(shouldError).to.be.true;
+      });
+
+      it('retryCount 未定義 → 1 回目の rescue で pending', () => {
+        const currentRetryCount = undefined;
+        const effective = (currentRetryCount as unknown as number) || 0;
+        const newRetryCount = effective + 1;
+        const shouldError = newRetryCount >= MAX_RETRY_COUNT;
+        expect(shouldError).to.be.false;
+        expect(newRetryCount).to.equal(1);
+      });
+    });
+
+    // #196: retryAfter 設定で即再処理を防止 (STUCK_RESCUE_RETRY_AFTER_MS は import で drift 防止)
+    describe('retryAfter 設定 (#196)', () => {
+      it('救済時に retryAfter が現在時刻 + 3 分後に設定される', () => {
+        const now = Date.now();
+        const retryAfter = now + STUCK_RESCUE_RETRY_AFTER_MS;
+        expect(retryAfter).to.be.greaterThan(now);
+        expect(retryAfter - now).to.equal(180_000);
+      });
+
+      it('retryAfter 未到達のドキュメントはスキップされる (processOCR 既存挙動)', () => {
+        const retryAfter = Date.now() + STUCK_RESCUE_RETRY_AFTER_MS;
+        const shouldSkip = retryAfter > Date.now();
+        expect(shouldSkip).to.be.true;
+      });
+
+      it('retryAfter 到達済みのドキュメントは処理対象 (processOCR 既存挙動)', () => {
+        const retryAfter = Date.now() - 1000; // 1秒前 = 既に到達
+        const shouldSkip = retryAfter > Date.now();
+        expect(shouldSkip).to.be.false;
+      });
     });
   });
 });
