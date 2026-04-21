@@ -18,9 +18,7 @@ import {
   extractDateEnhanced,
   aggregateCustomerCandidates,
   aggregateOfficeCandidates,
-  CustomerMaster,
-  DocumentMaster,
-  OfficeMaster,
+  MasterData,
   CustomerCandidate,
   OfficeCandidate,
   CustomerExtractionResult,
@@ -140,13 +138,6 @@ export interface PdfAnalysisResult {
   shouldSplit: boolean;
   /** 分割推奨理由 */
   splitReason?: string;
-}
-
-/** マスターデータ */
-export interface MasterData {
-  customers: CustomerMaster[];
-  documents: DocumentMaster[];
-  offices: OfficeMaster[];
 }
 
 /**
