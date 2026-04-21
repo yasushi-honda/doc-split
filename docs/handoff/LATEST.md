@@ -26,7 +26,7 @@ PM/PL 視点で session26 残 10 Open Issue から WBS を引き直し、Phase 1
 |------|------|
 | **merged PR** | 5 本 (#349-#353) |
 | **closed Issue** | #262 / #331 / #333 / #343 / #344 / #346 (計 6 件) |
-| **BE テスト** | 648 → **657 passing + 6 pending** (+15: timestampHelpers 5 + loadMasterData drop 5 + fileNaming 5 + skip 6) |
+| **BE テスト** | 648 → **662 passing + 6 pending** (+14: timestampHelpers 5 + loadMasterData drop 5 + fileNaming 5 - 旧 seconds=0 undefined 廃止 -1、加えて skip 6 = #262 既知制限) |
 | **FE テスト** | 127 passing (変化なし) |
 | **コード量** | 5 PR 合計 +470 / -91 行 (純増は observability logic + lock-in test) |
 | **品質改善** | epoch/NaN silent failure 排除 / 型所在の natural direction 化 / sanitize drop observability (Firebase runtime 正確検知) / local sanitize 統合 / grep-based contract の I/O 耐性 + 既知制限ドキュメント化 |
@@ -57,7 +57,9 @@ PM/PL 視点で session26 残 10 Open Issue から WBS を引き直し、Phase 1
 
 7. **大規模 PR の Quality Gate 3 tier**: 1-2 ファイル = code-reviewer のみ / 3-4 ファイル = code-reviewer + silent-failure-hunter or evaluator / 5+ ファイル or 新機能 = 3 並列 + codex review、で段階的にコスト調整できる。#351 で 4 エージェント並列 → codex review の Important #1 (Firebase runtime) が最重要指摘だった = codex の死角検出力を再確認
 
-### 次セッション着手候補 (残 4 Open Issues、全 P2)
+### 次セッション着手候補 (session26 WBS scope 残 4 Open Issues、全 P2)
+
+> 注: repo 全体の Open Issue は 11 件 (#239/#238/#237/#220/#200/#196/#152 等 session 外を含む)。以下 4 件は本 WBS cluster 内の残タスク。
 
 **Phase 4: DocumentMaster 型統合 (#338)** (最優先・最大物):
 - shared/types.ts vs extractors.ts で DocumentMaster + CustomerMaster + OfficeMaster の optionality 乖離 (計 6 フィールド)
@@ -86,11 +88,11 @@ PM/PL 視点で session26 残 10 Open Issue から WBS を引き直し、Phase 1
 ### Test plan 実行結果
 
 - [x] BE `npx tsc --noEmit` EXIT 0 (各 PR 確認)
-- [x] BE `npm test` **657 passing + 6 pending** (skip は #262 既知制限ドキュメント)
+- [x] BE `npm test` **662 passing + 6 pending** (skip は #262 既知制限ドキュメント)
 - [x] FE `npm test` (vitest) **127 passing** (変化なし)
 - [x] main CI 5/5 green × 5 PR (lint-build-test / CodeRabbit / GitGuardian 全 pass)
 - [x] `gh issue view 262/331/333/343/344/346` で CLOSED 確認
-- [x] 残 Open: #251 / #299 / #334 / #338 のみ
+- [x] WBS scope 残 Open: #251 / #299 / #334 / #338 (repo 全体 Open 11 件のうち本 cluster 4 件)
 
 ---
 
