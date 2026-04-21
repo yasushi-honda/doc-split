@@ -6,15 +6,14 @@
 
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
+import { MASTER_PATHS } from '../utils/masterPaths';
 
-/** マスタータイプ */
 type MasterType = 'office' | 'customer' | 'document';
 
-/** マスターコレクションパス */
 const MASTER_COLLECTIONS: Record<MasterType, string> = {
-  office: 'masters/offices/items',
-  customer: 'masters/customers/items',
-  document: 'masters/documents/items',
+  office: MASTER_PATHS.offices,
+  customer: MASTER_PATHS.customers,
+  document: MASTER_PATHS.documents,
 };
 
 /**

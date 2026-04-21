@@ -71,5 +71,6 @@ export function sanitizeDocumentMasters(
       category: toOptionalString(d.category),
       keywords: toOptionalStringArray(d.keywords),
       aliases: toOptionalStringArray(d.aliases),
+      dateMarker: toOptionalString(d.dateMarker),
     }));
 }

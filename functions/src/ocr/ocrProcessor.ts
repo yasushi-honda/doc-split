@@ -20,7 +20,7 @@ import {
   normalizeForMatching,
 } from '../utils/extractors';
 import { generateDisplayFileName } from '../../../shared/generateDisplayFileName';
-import { sanitizeCustomerMasters, sanitizeOfficeMasters, sanitizeDocumentMasters } from '../utils/sanitizeMasterData';
+import { loadMasterData } from '../utils/loadMasterData';
 import { buildSummaryFields } from './summaryRequestBuilder';
 import { generateSummaryCore, MIN_OCR_LENGTH_FOR_SUMMARY } from './summaryGenerator';
 import {
@@ -237,42 +237,11 @@ export async function processDocument(
     }
   );
 
-  // マスターデータ取得
-  const [documentMasters, customerMasters, officeMasters] = await Promise.all([
-    db.collection('masters/documents/items').get(),
-    db.collection('masters/customers/items').get(),
-    db.collection('masters/offices/items').get(),
-  ]);
-
-  // マスターデータを型付きで変換
-  const docMasterData = sanitizeDocumentMasters(documentMasters.docs.map((d) => ({
-    id: d.id,
-    name: d.data().name as string,
-    category: d.data().category as string | undefined,
-    keywords: d.data().keywords as string[] | undefined,
-    aliases: d.data().aliases as string[] | undefined,
-  })));
-
-  const custMasterData = sanitizeCustomerMasters(customerMasters.docs.map((d) => ({
-    id: d.id,
-    name: d.data().name as string,
-    furigana: d.data().furigana as string | undefined,
-    isDuplicate: d.data().isDuplicate as boolean | undefined,
-    careManagerName: d.data().careManagerName as string | undefined,
-    aliases: d.data().aliases as string[] | undefined,
-  })));
-
-  const officeMasterData = sanitizeOfficeMasters(officeMasters.docs.map((d) => ({
-    id: d.id,
-    name: d.data().name as string,
-    shortName: d.data().shortName as string | undefined,
-    isDuplicate: d.data().isDuplicate as boolean | undefined,
-    aliases: d.data().aliases as string[] | undefined,
-  })));
+  const { documents, customers, offices } = await loadMasterData(db);
 
   // 情報抽出（強化版エクストラクター使用）
-  const documentTypeResult = extractDocumentTypeEnhanced(ocrResult, docMasterData);
-  const customerResult = extractCustomerCandidates(ocrResult, custMasterData);
+  const documentTypeResult = extractDocumentTypeEnhanced(ocrResult, documents);
+  const customerResult = extractCustomerCandidates(ocrResult, customers);
 
   // ファイル名から事業所情報を抽出
   const fileName = docData.fileName as string | undefined;
@@ -280,7 +249,7 @@ export async function processDocument(
   console.log(`Filename info: ${JSON.stringify(filenameInfo)}`);
 
   // 事業所候補抽出
-  const officeResult = extractOfficeCandidates(ocrResult, officeMasterData, { filenameInfo });
+  const officeResult = extractOfficeCandidates(ocrResult, offices, { filenameInfo });
 
   // ファイル名からの事業所登録提案
   let suggestedNewOffice: string | null = null;
@@ -295,9 +264,9 @@ export async function processDocument(
     }
   }
 
-  // 日付抽出（1ページ目を優先）
-  const matchedDocMaster = documentMasters.docs.find((d) => d.data().name === documentTypeResult.documentType);
-  const dateMarker = matchedDocMaster?.data().dateMarker as string | undefined;
+  // dateMarker は型崩れしていても undefined に正規化済み (sanitizeDocumentMasters)
+  const matchedDoc = documents.find((d) => d.name === documentTypeResult.documentType);
+  const dateMarker = matchedDoc?.dateMarker;
   const firstPageText = pageResults.length > 0 ? pageResults[0]?.text : undefined;
   const dateResult = extractDateEnhanced(ocrResult, dateMarker, firstPageText);
 

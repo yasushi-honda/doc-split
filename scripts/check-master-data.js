@@ -22,6 +22,9 @@ if (!projectId) {
 
 const fix = process.argv.includes('--fix');
 
+/** Firestore バッチ上限は 500 writes。余裕を持って 400 件で chunk 分割する */
+const BATCH_CHUNK_SIZE = 400;
+
 admin.initializeApp({ projectId });
 const db = admin.firestore();
 
@@ -89,6 +92,7 @@ const COLLECTIONS = {
     category: 'string',
     keywords: 'string[]',
     aliases: 'string[]',
+    dateMarker: 'string',
   },
 };
 
@@ -123,15 +127,21 @@ async function main() {
       }
 
       if (fix) {
-        const batch = db.batch();
-        for (const issue of issues) {
-          const docRef = db.doc(`${collPath}/${issue.docId}`);
-          const data = docDataMap.get(issue.docId);
-          const sanitized = sanitizeValue(data[issue.field], schema[issue.field]);
-          batch.update(docRef, { [issue.field]: sanitized });
+        const totalChunks = Math.ceil(issues.length / BATCH_CHUNK_SIZE);
+        for (let i = 0; i < issues.length; i += BATCH_CHUNK_SIZE) {
+          const chunk = issues.slice(i, i + BATCH_CHUNK_SIZE);
+          const chunkNum = Math.floor(i / BATCH_CHUNK_SIZE) + 1;
+          const batch = db.batch();
+          for (const issue of chunk) {
+            const docRef = db.doc(`${collPath}/${issue.docId}`);
+            const data = docDataMap.get(issue.docId);
+            const sanitized = sanitizeValue(data[issue.field], schema[issue.field]);
+            batch.update(docRef, { [issue.field]: sanitized });
+          }
+          await batch.commit();
+          console.log(`    → batch ${chunkNum}/${totalChunks}: ${chunk.length}件コミット`);
         }
-        await batch.commit();
-        console.log(`    → ${issues.length}件を修正しました`);
+        console.log(`    → 合計 ${issues.length}件を修正しました`);
         totalFixed += issues.length;
       }
     }

@@ -122,6 +122,7 @@ describe('sanitizeMasterData', () => {
         category: '保険',
         keywords: ['被保険者証', '介護保険'],
         aliases: ['保険証'],
+        dateMarker: '発行日',
       }];
       const result = sanitizeDocumentMasters(input);
       expect(result).to.deep.equal(input);
@@ -145,6 +146,66 @@ describe('sanitizeMasterData', () => {
       }];
       const result = sanitizeDocumentMasters(input);
       expect(result[0].keywords).to.deep.equal(['被保険者証']);
+    });
+
+    it('dateMarkerが正常なstringの場合、そのまま通過する', () => {
+      const input = [{
+        id: 'd1',
+        name: '介護保険証',
+        dateMarker: '発行日',
+      }];
+      const result = sanitizeDocumentMasters(input);
+      expect(result[0].dateMarker).to.equal('発行日');
+    });
+
+    it('dateMarkerがundefinedの場合、undefinedのまま', () => {
+      const input = [{
+        id: 'd1',
+        name: '介護保険証',
+        dateMarker: undefined,
+      }];
+      const result = sanitizeDocumentMasters(input);
+      expect(result[0].dateMarker).to.be.undefined;
+    });
+
+    it('dateMarkerがnumberの場合、undefinedにする', () => {
+      const input = [{
+        id: 'd1',
+        name: '介護保険証',
+        dateMarker: 20260101 as unknown as string,
+      }];
+      const result = sanitizeDocumentMasters(input);
+      expect(result[0].dateMarker).to.be.undefined;
+    });
+
+    it('dateMarkerがobjectの場合、undefinedにする', () => {
+      const input = [{
+        id: 'd1',
+        name: '介護保険証',
+        dateMarker: { text: '発行日' } as unknown as string,
+      }];
+      const result = sanitizeDocumentMasters(input);
+      expect(result[0].dateMarker).to.be.undefined;
+    });
+
+    it('dateMarkerが配列の場合、先頭要素を文字列化する', () => {
+      const input = [{
+        id: 'd1',
+        name: '介護保険証',
+        dateMarker: ['発行日', '作成日'] as unknown as string,
+      }];
+      const result = sanitizeDocumentMasters(input);
+      expect(result[0].dateMarker).to.equal('発行日');
+    });
+
+    it('dateMarkerが空文字の場合、空文字のまま通過する（extractDateEnhanced で undefined 同等に扱われる契約）', () => {
+      const input = [{
+        id: 'd1',
+        name: '介護保険証',
+        dateMarker: '',
+      }];
+      const result = sanitizeDocumentMasters(input);
+      expect(result[0].dateMarker).to.equal('');
     });
   });
 });
