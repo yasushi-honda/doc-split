@@ -1,32 +1,15 @@
 /**
  * displayFileName バックフィル用ヘルパー
  *
- * 既存ドキュメントの Firestore Timestamp を文字列に変換し、
- * generateDisplayFileName に渡すための変換ロジック。
+ * Firestore ドキュメントから displayFileName を生成する backfill 固有ロジック。
+ * Timestamp → string 変換は utils/timestampHelpers に抽出済み (本番 pdfOperations 共用)。
  */
 
 import { generateDisplayFileName } from '../../../shared/generateDisplayFileName';
-
-interface TimestampLike {
-  seconds: number;
-  nanoseconds: number;
-  toDate?: () => Date;
-}
-
-/**
- * Firestore Timestamp（またはプレーンオブジェクト）を YYYY/MM/DD 文字列に変換
- */
-export function timestampToDateString(
-  ts: TimestampLike | null | undefined
-): string | undefined {
-  if (!ts || !ts.seconds) return undefined;
-
-  const date = ts.toDate ? ts.toDate() : new Date(ts.seconds * 1000);
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, '0');
-  const d = String(date.getDate()).padStart(2, '0');
-  return `${y}/${m}/${d}`;
-}
+import {
+  type TimestampLike,
+  timestampToDateString,
+} from './timestampHelpers';
 
 interface DocData {
   documentType?: string;
