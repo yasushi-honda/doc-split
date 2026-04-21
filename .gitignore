@@ -84,6 +84,8 @@ cors-*.json
 
 # Claude Code settings（認証情報を含む）
 .claude/settings.local.json
+# Claude Code Cron hook の session-local lock ファイル
+.claude/scheduled_tasks.lock
 
 # Playwright トレース（テスト実行時の記録）
 .playwright-mcp/
