@@ -357,7 +357,14 @@ describe('summary write-payload contract (#255)', () => {
   // #262: grep-based 検知の既知 limitation を明示 lock-in する。skip で「意図された false positive」を
   // 固定化し、将来 pattern を厳格化した際の retro-test として機能させる。
   // sinon spy 昇格時に skip を外して実検知を確認する (本 describe がその時点で落ちるなら契約改善成功)。
-  // 「false positive = 検知してしまう」「false negative = 検知漏れ」を明確に区別してコメント。
+  //
+  // ========== skip 解除時の assertion semantic (誤読防止) ==========
+  // 各 it の `expect(...).to.equal(false/true)` は「昇格後に成立すべき理想値」を記述している。
+  // skip 解除 = sinon spy 昇格後 = 全 it が PASS する状態が契約改善成功。
+  // 現状 (grep-based) は逆方向 (例: FALSE POSITIVE 4 件は現状 true だが skip 解除時に false を期待)
+  // で、skip 解除直後は FAIL する (= grep が理想を満たしていない証明)。
+  // [FUTURE LOCK-IN] のみ semantic が逆向き (現状 false、将来 true 期待) で誤読リスクが高い点に注意。
+  // ================================================================
   describe.skip('grep limitation (known false-positive/negative) #262', () => {
     it('[FALSE POSITIVE] コメント内 `// summary: { ... }` + 近傍 `.update(` を検知してしまう', () => {
       const fixture = `
