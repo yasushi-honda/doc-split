@@ -20,9 +20,9 @@ export interface LoadedMasterData {
   offices: OfficeMaster[];
 }
 
-/** Firestore から読み出した生ドキュメントデータ (unknown 型のフィールド集合) */
 type RawDoc = FirebaseFirestore.DocumentData;
 
+/** Firestore Raw → 型付き中間表現。型崩れは後段の sanitize*Masters で除去される */
 function toDocumentMaster(id: string, raw: RawDoc): DocumentMaster {
   return {
     id,
@@ -34,6 +34,7 @@ function toDocumentMaster(id: string, raw: RawDoc): DocumentMaster {
   };
 }
 
+/** Firestore Raw → 型付き中間表現。型崩れは後段の sanitize*Masters で除去される */
 function toCustomerMaster(id: string, raw: RawDoc): CustomerMaster {
   return {
     id,
@@ -45,6 +46,7 @@ function toCustomerMaster(id: string, raw: RawDoc): CustomerMaster {
   };
 }
 
+/** Firestore Raw → 型付き中間表現。型崩れは後段の sanitize*Masters で除去される */
 function toOfficeMaster(id: string, raw: RawDoc): OfficeMaster {
   return {
     id,

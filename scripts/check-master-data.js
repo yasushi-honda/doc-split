@@ -127,22 +127,34 @@ async function main() {
       }
 
       if (fix) {
+        // 500 件上限対策で chunk 分割した結果 atomicity が失われる。失敗時は
+        // 成功済み chunk と未処理 docId を明示して運用者が再実行できるようにする。
         const totalChunks = Math.ceil(issues.length / BATCH_CHUNK_SIZE);
-        for (let i = 0; i < issues.length; i += BATCH_CHUNK_SIZE) {
-          const chunk = issues.slice(i, i + BATCH_CHUNK_SIZE);
-          const chunkNum = Math.floor(i / BATCH_CHUNK_SIZE) + 1;
-          const batch = db.batch();
-          for (const issue of chunk) {
-            const docRef = db.doc(`${collPath}/${issue.docId}`);
-            const data = docDataMap.get(issue.docId);
-            const sanitized = sanitizeValue(data[issue.field], schema[issue.field]);
-            batch.update(docRef, { [issue.field]: sanitized });
+        let committedCount = 0;
+        try {
+          for (let i = 0; i < issues.length; i += BATCH_CHUNK_SIZE) {
+            const chunk = issues.slice(i, i + BATCH_CHUNK_SIZE);
+            const chunkNum = Math.floor(i / BATCH_CHUNK_SIZE) + 1;
+            const batch = db.batch();
+            for (const issue of chunk) {
+              const docRef = db.doc(`${collPath}/${issue.docId}`);
+              const data = docDataMap.get(issue.docId);
+              const sanitized = sanitizeValue(data[issue.field], schema[issue.field]);
+              batch.update(docRef, { [issue.field]: sanitized });
+            }
+            await batch.commit();
+            committedCount += chunk.length;
+            console.log(`    → batch ${chunkNum}/${totalChunks}: ${chunk.length}件コミット (累計 ${committedCount}/${issues.length})`);
           }
-          await batch.commit();
-          console.log(`    → batch ${chunkNum}/${totalChunks}: ${chunk.length}件コミット`);
+          console.log(`    → 合計 ${issues.length}件を修正しました`);
+          totalFixed += issues.length;
+        } catch (commitErr) {
+          const skipped = issues.slice(committedCount).map((it) => `${it.docId}.${it.field}`);
+          console.error(`    → コミット失敗: ${committedCount}件は書き込み済、${skipped.length}件は未処理`);
+          console.error(`    → 未処理docId一覧: ${skipped.slice(0, 20).join(', ')}${skipped.length > 20 ? ` ...(他${skipped.length - 20}件)` : ''}`);
+          totalFixed += committedCount;
+          throw commitErr;
         }
-        console.log(`    → 合計 ${issues.length}件を修正しました`);
-        totalFixed += issues.length;
       }
     }
 

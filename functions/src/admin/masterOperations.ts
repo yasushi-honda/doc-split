@@ -10,7 +10,7 @@ import { MASTER_PATHS } from '../utils/masterPaths';
 
 type MasterType = 'office' | 'customer' | 'document';
 
-const MASTER_COLLECTIONS: Record<MasterType, string> = {
+const MASTER_COLLECTIONS: Readonly<Record<MasterType, string>> = {
   office: MASTER_PATHS.offices,
   customer: MASTER_PATHS.customers,
   document: MASTER_PATHS.documents,

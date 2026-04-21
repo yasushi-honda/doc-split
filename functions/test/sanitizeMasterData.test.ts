@@ -198,14 +198,14 @@ describe('sanitizeMasterData', () => {
       expect(result[0].dateMarker).to.equal('発行日');
     });
 
-    it('dateMarkerが空文字の場合、空文字のまま通過する（extractDateEnhanced で undefined 同等に扱われる契約）', () => {
+    it('dateMarkerが空文字の場合、undefinedに正規化する（下流の truthy チェック依存を排除）', () => {
       const input = [{
         id: 'd1',
         name: '介護保険証',
         dateMarker: '',
       }];
       const result = sanitizeDocumentMasters(input);
-      expect(result[0].dateMarker).to.equal('');
+      expect(result[0].dateMarker).to.be.undefined;
     });
   });
 });
