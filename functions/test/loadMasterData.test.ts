@@ -143,20 +143,32 @@ describe('loadMasterData', () => {
     expect(result.offices).to.deep.equal([]);
   });
 
-  it('name欠落レコードはsilent dropされ、有効レコードのみ残る（現状契約）', async () => {
+  it('name欠落レコードはsilent dropされ、有効レコードのみ残る（3 sanitizer 全てで同契約）', async () => {
     const stub = createFirestoreStub({
       'masters/documents/items': [
         { id: 'd1', data: { name: '保険証', category: '保険' } },
         { id: 'd2', data: { category: '届出' } }, // name 欠落 → drop
         { id: 'd3', data: { name: '請求書' } },
       ],
-      'masters/customers/items': [],
-      'masters/offices/items': [],
+      'masters/customers/items': [
+        { id: 'c1', data: { name: '田中太郎' } },
+        { id: 'c2', data: { furigana: 'すずき' } }, // name 欠落 → drop
+        { id: 'c3', data: { name: '鈴木花子' } },
+      ],
+      'masters/offices/items': [
+        { id: 'o1', data: { name: '事業所A' } },
+        { id: 'o2', data: { shortName: 'B' } }, // name 欠落 → drop
+        { id: 'o3', data: { name: '事業所C' } },
+      ],
     });
 
     const result = await loadMasterData(stub);
 
     expect(result.documents).to.have.length(2);
     expect(result.documents.map((d) => d.id)).to.deep.equal(['d1', 'd3']);
+    expect(result.customers).to.have.length(2);
+    expect(result.customers.map((c) => c.id)).to.deep.equal(['c1', 'c3']);
+    expect(result.offices).to.have.length(2);
+    expect(result.offices.map((o) => o.id)).to.deep.equal(['o1', 'o3']);
   });
 });
