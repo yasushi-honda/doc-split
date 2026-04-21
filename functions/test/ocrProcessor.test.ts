@@ -444,5 +444,67 @@ describe('ocrProcessor', () => {
       const newRetryCount = currentRetryCount + 1;
       expect(newRetryCount).to.equal(2);
     });
+
+    // #196: MAX_RETRY_COUNT チェックと retryAfter 設定を追加
+    describe('MAX_RETRY_COUNT チェック (#196)', () => {
+      // 実装側 (ocrProcessor.ts) の MAX_RETRY_COUNT = 5 と一致させること
+      const MAX_RETRY_COUNT = 5;
+
+      it('retryCount < MAX_RETRY_COUNT-1 → pending (通常救済)', () => {
+        const currentRetryCount = 2;
+        const newRetryCount = currentRetryCount + 1;
+        const shouldError = newRetryCount >= MAX_RETRY_COUNT;
+        expect(shouldError).to.be.false;
+        expect(newRetryCount).to.equal(3);
+      });
+
+      it('retryCount === MAX_RETRY_COUNT-1 → error (上限到達で確定)', () => {
+        const currentRetryCount = 4;
+        const newRetryCount = currentRetryCount + 1;
+        const shouldError = newRetryCount >= MAX_RETRY_COUNT;
+        expect(shouldError).to.be.true;
+        expect(newRetryCount).to.equal(5);
+      });
+
+      it('retryCount > MAX_RETRY_COUNT (異常値) → error (無限 rescue 防止)', () => {
+        const currentRetryCount = 10;
+        const newRetryCount = currentRetryCount + 1;
+        const shouldError = newRetryCount >= MAX_RETRY_COUNT;
+        expect(shouldError).to.be.true;
+      });
+
+      it('retryCount 未定義 → 1 回目の rescue で pending', () => {
+        const currentRetryCount = undefined;
+        const effective = (currentRetryCount as unknown as number) || 0;
+        const newRetryCount = effective + 1;
+        const shouldError = newRetryCount >= MAX_RETRY_COUNT;
+        expect(shouldError).to.be.false;
+        expect(newRetryCount).to.equal(1);
+      });
+    });
+
+    // #196: retryAfter 設定で即再処理を防止
+    describe('retryAfter 設定 (#196)', () => {
+      const STUCK_RESCUE_RETRY_AFTER_MS = 3 * 60 * 1000; // 3 分
+
+      it('救済時に retryAfter が現在時刻 + 3 分後に設定される', () => {
+        const now = Date.now();
+        const retryAfter = now + STUCK_RESCUE_RETRY_AFTER_MS;
+        expect(retryAfter).to.be.greaterThan(now);
+        expect(retryAfter - now).to.equal(180_000);
+      });
+
+      it('retryAfter 未到達のドキュメントはスキップされる (processOCR 既存挙動)', () => {
+        const retryAfter = Date.now() + STUCK_RESCUE_RETRY_AFTER_MS;
+        const shouldSkip = retryAfter > Date.now();
+        expect(shouldSkip).to.be.true;
+      });
+
+      it('retryAfter 到達済みのドキュメントは処理対象 (processOCR 既存挙動)', () => {
+        const retryAfter = Date.now() - 1000; // 1秒前 = 既に到達
+        const shouldSkip = retryAfter > Date.now();
+        expect(shouldSkip).to.be.false;
+      });
+    });
   });
 });

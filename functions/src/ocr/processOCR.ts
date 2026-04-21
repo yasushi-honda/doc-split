@@ -20,6 +20,7 @@ import {
   processDocument,
   handleProcessingError,
   OcrProcessingResult,
+  MAX_RETRY_COUNT,
 } from './ocrProcessor';
 
 const db = admin.firestore();
@@ -28,6 +29,8 @@ const FUNCTION_NAME = 'processOCR';
 const BATCH_SIZE = 5;
 /** processingスタック救済: この時間（ms）を超えてprocessing状態のドキュメントをpendingに戻す */
 const STUCK_PROCESSING_THRESHOLD_MS = 10 * 60 * 1000; // 10分
+/** rescue 時の retryAfter 待機時間 (ms): stuck = 高負荷/quota 相当と見做し handleProcessingError の quota 値と同じ 3 分 (#196) */
+const STUCK_RESCUE_RETRY_AFTER_MS = 3 * 60 * 1000;
 
 /** 処理統計 */
 interface ProcessingStats {
@@ -165,13 +168,29 @@ async function rescueStuckProcessingDocs(): Promise<void> {
   for (const docSnapshot of stuckDocs.docs) {
     try {
       const currentRetryCount = (docSnapshot.data().retryCount as number) || 0;
-      await db.doc(`documents/${docSnapshot.id}`).update({
-        status: 'pending',
-        retryCount: currentRetryCount + 1,
-        lastErrorMessage: 'Processing timed out, retrying',
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
-      console.log(`Reset stuck document ${docSnapshot.id} to pending (retryCount: ${currentRetryCount + 1})`);
+      const newRetryCount = currentRetryCount + 1;
+
+      // #196: handleProcessingError と同じく MAX_RETRY_COUNT 到達で error 確定する。
+      // 以前は無制限に pending に戻していたため 429 多発時に rescue ループが止まらなかった。
+      if (newRetryCount >= MAX_RETRY_COUNT) {
+        await db.doc(`documents/${docSnapshot.id}`).update({
+          status: 'error',
+          retryCount: newRetryCount,
+          lastErrorMessage: `Processing timed out, max retries exceeded (${newRetryCount}/${MAX_RETRY_COUNT})`,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        console.error(`Marked stuck document ${docSnapshot.id} as error (retryCount: ${newRetryCount}/${MAX_RETRY_COUNT})`);
+      } else {
+        // #196: retryAfter を設定しないと 429 救済直後に再処理されて連鎖する。quota 相当の 3 分待機を付与。
+        await db.doc(`documents/${docSnapshot.id}`).update({
+          status: 'pending',
+          retryCount: newRetryCount,
+          retryAfter: admin.firestore.Timestamp.fromMillis(Date.now() + STUCK_RESCUE_RETRY_AFTER_MS),
+          lastErrorMessage: 'Processing timed out, retrying',
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        console.log(`Reset stuck document ${docSnapshot.id} to pending (retryCount: ${newRetryCount}/${MAX_RETRY_COUNT}, retryAfter: ${STUCK_RESCUE_RETRY_AFTER_MS / 1000}s)`);
+      }
     } catch (err) {
       console.error(`Failed to reset stuck document ${docSnapshot.id}:`, err);
     }

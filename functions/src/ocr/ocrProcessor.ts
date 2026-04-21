@@ -397,8 +397,8 @@ export async function processDocument(
   };
 }
 
-/** リトライ上限 */
-const MAX_RETRY_COUNT = 5;
+/** リトライ上限 (rescueStuckProcessingDocs でも参照、#196) */
+export const MAX_RETRY_COUNT = 5;
 
 /**
  * エラー時の処理
