@@ -8,17 +8,12 @@
 import type * as admin from 'firebase-admin';
 import type { CustomerMaster, DocumentMaster, OfficeMaster } from './extractors';
 import { MASTER_PATHS } from './masterPaths';
+import type { MasterData } from './pdfAnalyzer';
 import {
   sanitizeCustomerMasters,
   sanitizeDocumentMasters,
   sanitizeOfficeMasters,
 } from './sanitizeMasterData';
-
-export interface LoadedMasterData {
-  documents: DocumentMaster[];
-  customers: CustomerMaster[];
-  offices: OfficeMaster[];
-}
 
 type RawDoc = FirebaseFirestore.DocumentData;
 
@@ -59,7 +54,7 @@ function toOfficeMaster(id: string, raw: RawDoc): OfficeMaster {
 
 export async function loadMasterData(
   db: admin.firestore.Firestore
-): Promise<LoadedMasterData> {
+): Promise<MasterData> {
   const [documentSnap, customerSnap, officeSnap] = await Promise.all([
     db.collection(MASTER_PATHS.documents).get(),
     db.collection(MASTER_PATHS.customers).get(),
