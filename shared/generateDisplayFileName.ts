@@ -24,12 +24,18 @@ const DEFAULT_VALUES = new Set(['未判定', '不明顧客']);
 /**
  * OS / Storage / URL で問題になる文字を `_` に置換する。
  *
- * 対象: Windows 禁止文字 `\ / : * ? " < > |` + NUL/C0 制御文字 `\x00-\x1f` + DEL `\x7f`
- * (クロスプラットフォーム互換)。C1 制御文字 `\x80-\x9f` は UTF-8 multibyte の中間バイトと
- * 衝突するため対象外 (silent-failure-hunter 指摘、C0+DEL のみで実害を覆う)。
+ * 対象:
+ * - Windows 禁止文字: `\ / : * ? " < > |`
+ * - NUL/C0 制御文字: `\x00-\x1f` + DEL `\x7f` (クロスプラットフォーム互換)
+ * - 対応する全角記号 (#335): `＼ ／ ： ＊ ？ ＂ ＜ ＞ ｜`
+ *   OCR 抽出で全角記号が混入しても半角と同じ扱いにする。
+ *
+ * C1 制御文字 `\x80-\x9f` は UTF-8 multibyte の中間バイトと衝突するため対象外
+ * (silent-failure-hunter 指摘、C0+DEL のみで実害を覆う)。
  */
 // eslint-disable-next-line no-control-regex
-const SANITIZE_PATTERN = /[\\/:*?"<>|\x00-\x1f\x7f]/g;
+const SANITIZE_PATTERN =
+  /[\\/:*?"<>|\x00-\x1f\x7f\uFF02\uFF0A\uFF0F\uFF1A\uFF1C\uFF1E\uFF1F\uFF3C\uFF5C]/g;
 
 /** サニタイズ結果が全て置換文字 `_` のみの場合は「情報ゼロ」として空文字を返す */
 const REPLACEMENT_ONLY_PATTERN = /^_+$/;
