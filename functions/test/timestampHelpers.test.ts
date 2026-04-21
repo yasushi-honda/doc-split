@@ -23,8 +23,33 @@ describe('timestampToDateString', () => {
     expect(timestampToDateString(undefined)).to.be.undefined;
   });
 
-  it('seconds が 0 の場合は undefined を返す（無効な日付）', () => {
+  it('seconds=0 (epoch 1970-01-01) を有効な日付として扱う (#346)', () => {
+    // 旧仕様では `!ts.seconds` で silent null だったが、0 は有効な Timestamp 値。
+    // UTC epoch をローカル TZ 解釈するため、正規表現でフォーマットのみ検証する。
     const ts = { seconds: 0, nanoseconds: 0 };
+    const result = timestampToDateString(ts);
+    expect(result).to.match(/^\d{4}\/\d{2}\/\d{2}$/);
+  });
+
+  it('seconds が undefined の場合は undefined を返す (#346)', () => {
+    // `typeof ts.seconds !== 'number'` guard の lock-in。
+    const ts = { nanoseconds: 0 } as unknown as { seconds: number; nanoseconds: number };
+    expect(timestampToDateString(ts)).to.be.undefined;
+  });
+
+  it('seconds が string の場合は undefined を返す (#346)', () => {
+    const ts = { seconds: '1773619200', nanoseconds: 0 } as unknown as { seconds: number; nanoseconds: number };
+    expect(timestampToDateString(ts)).to.be.undefined;
+  });
+
+  it('seconds が NaN の場合は undefined を返す (#346 silent-failure-hunter)', () => {
+    // typeof NaN === 'number' で guard を素通りしてしまうため、Number.isFinite で排除する。
+    const ts = { seconds: NaN, nanoseconds: 0 };
+    expect(timestampToDateString(ts)).to.be.undefined;
+  });
+
+  it('seconds が Infinity の場合は undefined を返す (#346 silent-failure-hunter)', () => {
+    const ts = { seconds: Infinity, nanoseconds: 0 };
     expect(timestampToDateString(ts)).to.be.undefined;
   });
 
