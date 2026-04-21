@@ -11,16 +11,27 @@
  * 忘れで Firestore に残留し後方互換読込に無限依存するリスクを防ぐ。
  *
  * 方式: grep-based (docs/context/test-strategy.md §2.1 参照)。
- * 昇格条件: false negative 発生時に sinon spy へ。grep limitation (コメント/文字列偽陽性,
- * quoted key, CJK prefix) は follow-up Issue で扱う。
  *
- * 将来委譲: false negative 実発生時に sinon spy 契約テストへ切替予定。
- *          grep limitation 改善は Issue #262 で継続 (diagnostics 強化)。
- *          それまでは恒久 contract として保持。
+ * 既知の grep limitation (#262 で明示 lock-in、本 test 下方の `describe.skip`
+ * セクション 'grep limitation (known false-positive/negative)' を参照):
+ *   - コメント内 `// summary: { ... }` + 近傍 `.update(` → false positive
+ *   - 文字列リテラル内 `'summary: {'` + 近傍 `.update(` → false positive
+ *   - 型注釈 `{ summary: { t: string } }` + 近傍 `.update(` → false positive
+ *   - 深いネスト `.update({ meta: { inner: { summary: {} } } })` → false positive
+ *   - quoted key `"summary": {` → 現在 false (正) だが将来 lock-in
+ *   - CJK prefix `担当者summary: {` → `\b` が CJK-ASCII 境界で成立、限定的 false positive
+ *
+ * sinon spy 昇格条件 (上記いずれかが実害を生んだ場合):
+ *   1. 本番 caller で false positive/negative が実際に観測された
+ *   2. false positive 回避のため grep pattern を過度に複雑化する必要が出た
+ *   3. proxyquire / module rewriter 等の周辺 infra が整った (#299 と併走)
+ *
+ * それまでは grep-based contract を恒久保持する (低コスト・高速・可読性優位)。
  */
 
 import { expect } from 'chai';
 import { existsSync, readdirSync, readFileSync } from 'fs';
+import type { Dirent } from 'fs';
 import { join, resolve } from 'path';
 
 // summary 書込 3 要素を検出するパターン。
@@ -57,6 +68,31 @@ const ADJACENCY_WINDOW_LINES = 30;
  * 防御: patterns が空配列なら `Array.prototype.every` の vacuous truth で常に true となり、
  * 全 source を caller として誤分類する silent failure になる。明示的に throw して阻止。
  */
+/**
+ * readFileSync を purpose 付きでラップし、per-file 失敗時の診断を強化する (#262 silent-failure-hunter IMP-1)。
+ *
+ * EACCES / EISDIR / EMFILE / TOCTOU race で suite 全体が落ちる場合、どのファイル・どの用途で
+ * 失敗したかをエラーメッセージから即時特定できるようにする。
+ */
+function readFileWithContext(absPath: string, purpose: string): string {
+  try {
+    return readFileSync(absPath, 'utf-8');
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code ?? 'UNKNOWN';
+    throw new Error(`[${purpose}] readFileSync failed for ${absPath} (code=${code}): ${(err as Error).message}`);
+  }
+}
+
+/**
+ * walk() で symlink を skip する。broken symlink / 循環 symlink で stack overflow や
+ * generic crash を起こさない (#262 silent-failure-hunter IMP-2)。
+ */
+function shouldWalkInto(entry: Dirent): boolean {
+  // symlink は isDirectory() / isFile() を辿ろうとするが、broken 時は ENOENT で落ちる。
+  // テスト fixture の性質上 symlink は想定しないため一括 skip で安全側に倒す。
+  return !entry.isSymbolicLink() && entry.isDirectory();
+}
+
 function hasPatternsAdjacent(source: string, ...patterns: RegExp[]): boolean {
   if (patterns.length === 0) {
     throw new Error(
@@ -110,7 +146,7 @@ describe('summary write-payload contract (#255)', () => {
   for (const relPath of WRITE_PAYLOAD_CALLERS) {
     describe(relPath, () => {
       const absPath = resolve(process.cwd(), relPath);
-      const source = readFileSync(absPath, 'utf-8');
+      const source = readFileWithContext(absPath, `caller-source:${relPath}`);
 
       it('`summary: buildSummaryFields(...)` の新形式書込が存在する', () => {
         expect(source).to.match(BUILD_SUMMARY_FIELDS_CALL);
@@ -142,10 +178,11 @@ describe('summary write-payload contract (#255)', () => {
     // anti-pattern による「テストは緑、本番は静かに壊れる」を防ぐ。診断メッセージは
     // viaBuilder / viaDirect を区別し失敗時の原因究明を即時化する。
     it('summary 書込 caller の identity が WRITE_PAYLOAD_CALLERS と一致する', () => {
+      // #262: symlink は shouldWalkInto で skip し、broken/循環 symlink 由来の crash を回避
       const walk = (dir: string): string[] =>
         readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
           const full = join(dir, entry.name);
-          if (entry.isDirectory()) return walk(full);
+          if (shouldWalkInto(entry)) return walk(full);
           if (entry.isFile() && entry.name.endsWith('.ts')) return [full];
           return [];
         });
@@ -153,7 +190,7 @@ describe('summary write-payload contract (#255)', () => {
       const tsFiles = walk(srcRoot);
       const detected = tsFiles
         .map((f) => {
-          const s = readFileSync(f, 'utf-8');
+          const s = readFileWithContext(f, 'caller-scan');
           return {
             file: f,
             viaBuilder: BUILD_SUMMARY_FIELDS_CALL.test(s),
@@ -314,6 +351,60 @@ describe('summary write-payload contract (#255)', () => {
     it('1 pattern のみでも正常動作する', () => {
       expect(hasPatternsAdjacent('foo bar baz', /foo/)).to.equal(true);
       expect(hasPatternsAdjacent('foo bar baz', /qux/)).to.equal(false);
+    });
+  });
+
+  // #262: grep-based 検知の既知 limitation を明示 lock-in する。skip で「意図された false positive」を
+  // 固定化し、将来 pattern を厳格化した際の retro-test として機能させる。
+  // sinon spy 昇格時に skip を外して実検知を確認する (本 describe がその時点で落ちるなら契約改善成功)。
+  // 「false positive = 検知してしまう」「false negative = 検知漏れ」を明確に区別してコメント。
+  describe.skip('grep limitation (known false-positive/negative) #262', () => {
+    it('[FALSE POSITIVE] コメント内 `// summary: { ... }` + 近傍 `.update(` を検知してしまう', () => {
+      const fixture = `
+        // TODO: summary: { text, truncated } を廃止予定
+        await ref.update({ status: 'done' });
+      `;
+      // 実装上 `summary: {` はコメント内にあっても grep に拾われる。将来 sinon spy 化で解消。
+      expect(hasDirectSummaryWrite(fixture)).to.equal(false); // 理想、現状は true
+    });
+
+    it('[FALSE POSITIVE] 文字列リテラル内 `\'summary: {\'` + 近傍 `.update(` を検知してしまう', () => {
+      const fixture = `
+        const template = 'summary: { text, truncated }';
+        await ref.update({ note: template });
+      `;
+      expect(hasDirectSummaryWrite(fixture)).to.equal(false); // 理想、現状は true
+    });
+
+    it('[FALSE POSITIVE] 型注釈中 `{ summary: { t: string } }` + 近傍 `.update(` を検知してしまう', () => {
+      const fixture = `
+        function apply(payload: { summary: { text: string } }) {
+          return ref.update({ noop: true });
+        }
+      `;
+      expect(hasDirectSummaryWrite(fixture)).to.equal(false); // 理想、現状は true
+    });
+
+    it('[FALSE POSITIVE] 深いネスト `.update({ meta: { inner: { summary: { ... } } } })` を検知してしまう', () => {
+      // 本契約は「summary 書込」を直書込と見做すが、inner nested の summary は別 concern。
+      const fixture = `
+        await ref.update({ meta: { inner: { summary: { text: 'x' } } } });
+      `;
+      expect(hasDirectSummaryWrite(fixture)).to.equal(false); // 理想、現状は true
+    });
+
+    it('[FUTURE LOCK-IN] quoted key `"summary": {` を検知する契約 (現在 false、将来必要)', () => {
+      // 現在の regex `\bsummary\s*:` は quote を許容しないため false。JSON 由来書込導入時に true 化が必要。
+      const fixture = `await ref.update({ "summary": { text: 'x' } });`;
+      expect(hasDirectSummaryWrite(fixture)).to.equal(true); // 将来、現状は false
+    });
+
+    it('[UNICODE] CJK prefix `担当者summary: {` を `\\b` 境界で成立させない契約 (現在 true、要改善)', () => {
+      // `\b` は ASCII 境界で発火するが、CJK-ASCII 境界で成立するため `担当者summary:` が誤検知される。
+      const fixture = `
+        await ref.update({ 担当者summary: { text: 'x' } });
+      `;
+      expect(hasDirectSummaryWrite(fixture)).to.equal(false); // 理想、現状は true
     });
   });
 });
