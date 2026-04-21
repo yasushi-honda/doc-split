@@ -179,7 +179,7 @@ describe('displayFileName 自動生成 (#178 Stage 1)', () => {
 
   describe('generateDisplayFileName - 日付 fallback 経路 (#182)', () => {
     // pdfOperations.ts 内の `fileDateFormatted ?? timestampToDateString(fileDate)` chain を
-    // 単体で lock-in。timestampToDateString 自体の単体 test は backfillDisplayFileName.test.ts
+    // 単体で lock-in。timestampToDateString 自体の単体 test は timestampHelpers.test.ts
     // に存在するため、本 describe は fallback 優先順位と null passthrough のみ検証する。
     it('fileDateFormatted 未設定 + Timestamp 由来文字列 (YYYY/MM/DD) 設定時、YYYYMMDD として採用', () => {
       const fileDateFormatted: string | null = null;

@@ -20,7 +20,7 @@ import {
 } from '../utils/pdfAnalyzer';
 import { buildSplitDocumentData } from './splitDocumentBuilder';
 import { generateDisplayFileName } from '../../../shared/generateDisplayFileName';
-import { timestampToDateString } from '../utils/backfillDisplayFileName';
+import { timestampToDateString } from '../utils/timestampHelpers';
 import { loadMasterData } from '../utils/loadMasterData';
 
 const db = admin.firestore();
