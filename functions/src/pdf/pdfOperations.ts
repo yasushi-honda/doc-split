@@ -22,6 +22,7 @@ import { buildSplitDocumentData } from './splitDocumentBuilder';
 import { generateDisplayFileName } from '../../../shared/generateDisplayFileName';
 import { timestampToDateString } from '../utils/timestampHelpers';
 import { loadMasterData } from '../utils/loadMasterData';
+import { sanitizeFilenameForStorage } from '../utils/fileNaming';
 
 const db = admin.firestore();
 const storage = admin.storage();
@@ -587,19 +588,11 @@ function generateFileName(params: {
   const { customerName, documentType, timestamp, startPage, endPage } = params;
   const date = new Date(timestamp);
   const dateStr = `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}${String(date.getDate()).padStart(2, '0')}`;
-  const sanitizedCustomer = sanitize(customerName || '不明顧客');
-  const sanitizedDocType = sanitize(documentType || '不明文書');
+  const sanitizedCustomer = sanitizeFilenameForStorage(customerName || '不明顧客');
+  const sanitizedDocType = sanitizeFilenameForStorage(documentType || '不明文書');
   const pageRange = startPage === endPage ? `p${startPage}` : `p${startPage}-${endPage}`;
 
   return `${dateStr}_${sanitizedCustomer}_${sanitizedDocType}_${pageRange}.pdf`;
-}
-
-function sanitize(str: string): string {
-  return str
-    .replace(/[\\/:*?"<>|]/g, '_')
-    .replace(/[\s\u3000]/g, '_')
-    .replace(/_+/g, '_')
-    .replace(/^_|_$/g, '');
 }
 
 function extractOcrResultForPages(
