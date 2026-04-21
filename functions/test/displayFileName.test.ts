@@ -175,6 +175,24 @@ describe('displayFileName 自動生成 (#178 Stage 1)', () => {
       });
       expect(result).to.equal('介護保険証_田中太郎.p_df');
     });
+
+    it('全角禁止文字 (／＼：＊？＂＜＞｜) を `_` に置換する (#335)', () => {
+      const result = generateDisplayFileName({
+        documentType: 'A／B＼C：D',
+        customerName: 'E＊F？G＂H',
+        officeName: 'I＜J＞K｜L',
+      });
+      expect(result).to.equal('A_B_C_D_I_J_K_L_E_F_G_H.pdf');
+    });
+
+    it('全角と半角の禁止文字が混在しても等価に処理される (#335)', () => {
+      const result = generateDisplayFileName({
+        documentType: '書類名／／',
+        customerName: '田中／太郎',
+      });
+      // 書類名__ (末尾2連続) + "_" (join separator) + 田中_太郎 → 3連続アンダースコア
+      expect(result).to.equal('書類名___田中_太郎.pdf');
+    });
   });
 
   describe('generateDisplayFileName - 日付 fallback 経路 (#182)', () => {
