@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env ts-node
 /**
  * displayFileName バックフィルスクリプト
  *
@@ -6,16 +6,22 @@
  * メタ情報（書類名・事業所・日付・顧客名）から自動生成。
  * Storage上の実ファイルは変更しない（表示用ラベルのみ）。
  *
+ * #334 で shared/generateDisplayFileName + shared/timestampHelpers 統合済み。
+ * 旧 inline 実装に欠落していた OS 禁止文字サニタイズ (#181/#183/#335) と
+ * epoch (seconds=0) / NaN / Infinity の silent drop 排除 (#346) を取り込む。
+ *
  * 使用方法:
- *   FIREBASE_PROJECT_ID=doc-split-dev node scripts/backfill-display-filename.js --dry-run
- *   FIREBASE_PROJECT_ID=doc-split-dev node scripts/backfill-display-filename.js
+ *   FIREBASE_PROJECT_ID=doc-split-dev npx ts-node scripts/backfill-display-filename.ts --dry-run
+ *   FIREBASE_PROJECT_ID=doc-split-dev npx ts-node scripts/backfill-display-filename.ts
  *
  * オプション:
  *   --dry-run    変更を行わず対象と生成結果をプレビュー
  *   --force      既に displayFileName が設定済みのドキュメントも上書き
  */
 
-const admin = require('firebase-admin');
+import * as admin from 'firebase-admin';
+import { generateDisplayFileName } from '../shared/generateDisplayFileName';
+import { timestampToDateString, type TimestampLike } from '../shared/timestampHelpers';
 
 const projectId = process.env.FIREBASE_PROJECT_ID;
 if (!projectId) {
@@ -29,66 +35,30 @@ const force = process.argv.includes('--force');
 admin.initializeApp({ projectId });
 const db = admin.firestore();
 
-// --- generateDisplayFileName ロジック（functions/src/utils/displayFileNameGenerator.ts と同一） ---
-
-const DEFAULT_VALUES = new Set(['未判定', '不明顧客']);
-
-function generateDisplayFileName(input) {
-  const ext = input.extension || '.pdf';
-  const parts = [];
-
-  if (input.documentType && !DEFAULT_VALUES.has(input.documentType)) {
-    parts.push(input.documentType);
-  }
-  if (input.officeName && !DEFAULT_VALUES.has(input.officeName)) {
-    parts.push(input.officeName);
-  }
-  if (input.fileDate) {
-    const dateStr = input.fileDate.replace(/[/-]/g, '');
-    if (dateStr.length >= 8) {
-      parts.push(dateStr.slice(0, 8));
-    }
-  }
-  if (input.customerName && !DEFAULT_VALUES.has(input.customerName)) {
-    parts.push(input.customerName);
-  }
-
-  if (parts.length === 0) return null;
-
-  const hasNonDatePart = parts.some((p) => !/^\d{8}$/.test(p));
-  if (!hasNonDatePart) return null;
-
-  return parts.join('_') + ext;
-}
-
-function timestampToDateString(ts) {
-  if (!ts || !ts.seconds) return undefined;
-  const date = ts.toDate ? ts.toDate() : new Date(ts.seconds * 1000);
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, '0');
-  const d = String(date.getDate()).padStart(2, '0');
-  return `${y}/${m}/${d}`;
-}
-
-// --- メイン処理 ---
-
 const BATCH_SIZE = 500;
 
-async function main() {
+async function main(): Promise<void> {
   console.log(`プロジェクト: ${projectId}`);
   console.log(`モード: ${dryRun ? 'DRY RUN（変更なし）' : '実行'}`);
   console.log(`上書き: ${force ? 'あり（既存displayFileNameも再生成）' : 'なし（未設定のみ対象）'}`);
+  if (force) {
+    // #334: shared 版は OS 禁止文字 (\ / : * ? " < > |) + 全角相当 + 制御文字を `_` に置換する。
+    // 旧 inline 実装には欠落していたサニタイズなので、--force 実行時は既存 displayFileName が
+    // 書き換わる可能性がある。operator が変化を把握できるよう old → new の差分ログを出す。
+    console.log('⚠️  --force: 既存 displayFileName を shared 版サニタイズで再生成します。');
+    console.log('    禁止文字 (\\ / : * ? " < > |) や全角相当・制御文字を含む既存値は変換されます (#334)。');
+  }
   console.log('---');
 
-  // processed ドキュメントを取得（split含む：分割後のドキュメントも対象）
   const targetStatuses = ['processed', 'split'];
   let totalProcessed = 0;
   let totalUpdated = 0;
   let totalSkipped = 0;
   let totalNoMeta = 0;
+  let totalChanged = 0;
 
   for (const status of targetStatuses) {
-    let lastDoc = null;
+    let lastDoc: FirebaseFirestore.QueryDocumentSnapshot | null = null;
     let hasMore = true;
 
     while (hasMore) {
@@ -115,7 +85,6 @@ async function main() {
         totalProcessed++;
         const data = docSnap.data();
 
-        // 既にdisplayFileNameがある場合はスキップ（--force時は上書き）
         if (data.displayFileName && !force) {
           totalSkipped++;
           continue;
@@ -125,7 +94,7 @@ async function main() {
           documentType: data.documentType || undefined,
           customerName: data.customerName || undefined,
           officeName: data.officeName || undefined,
-          fileDate: timestampToDateString(data.fileDate),
+          fileDate: timestampToDateString(data.fileDate as TimestampLike | null | undefined),
         });
 
         if (!displayFileName) {
@@ -136,16 +105,29 @@ async function main() {
           continue;
         }
 
+        // #334: --force 時に old → new が変化するかを追跡。operator が silent 書き換えを検知できるようにする。
+        const oldDisplayFileName: string | undefined = data.displayFileName;
+        const isChange = Boolean(oldDisplayFileName) && oldDisplayFileName !== displayFileName;
+
         if (dryRun) {
-          console.log(`  SET: ${docSnap.id}`);
-          console.log(`       ${data.fileName || '(no name)'} → ${displayFileName}`);
+          if (isChange) {
+            console.log(`  CHANGE: ${docSnap.id}`);
+            console.log(`          "${oldDisplayFileName}" → "${displayFileName}"`);
+          } else {
+            console.log(`  SET: ${docSnap.id}`);
+            console.log(`       ${data.fileName || '(no name)'} → ${displayFileName}`);
+          }
         } else {
+          if (isChange) {
+            console.log(`  CHANGE: ${docSnap.id} "${oldDisplayFileName}" → "${displayFileName}"`);
+          }
           batch.update(docSnap.ref, {
             displayFileName,
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
           });
           batchCount++;
         }
+        if (isChange) totalChanged++;
         totalUpdated++;
       }
 
@@ -159,7 +141,6 @@ async function main() {
     }
   }
 
-  // _migrations に記録
   if (!dryRun && totalUpdated > 0) {
     await db.collection('_migrations').doc('display_filename_backfill').set({
       status: 'completed',
@@ -167,6 +148,7 @@ async function main() {
       updatedCount: totalUpdated,
       skippedCount: totalSkipped,
       noMetaCount: totalNoMeta,
+      changedCount: totalChanged,
       force,
       completedAt: admin.firestore.FieldValue.serverTimestamp(),
     }, { merge: true });
@@ -175,6 +157,9 @@ async function main() {
   console.log('\n--- 結果 ---');
   console.log(`検査: ${totalProcessed}件`);
   console.log(`更新${dryRun ? '予定' : '済み'}: ${totalUpdated}件`);
+  if (force) {
+    console.log(`  うち既存値からの変更: ${totalChanged}件`);
+  }
   console.log(`スキップ（設定済み）: ${totalSkipped}件`);
   console.log(`スキップ（メタ不足）: ${totalNoMeta}件`);
 

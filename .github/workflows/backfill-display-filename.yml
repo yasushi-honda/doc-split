@@ -43,6 +43,10 @@ jobs:
         working-directory: ./functions
         run: npm ci
 
+      - name: Install scripts devDependencies (ts-node for .ts scripts)
+        working-directory: ./scripts
+        run: npm install --no-audit --no-fund
+
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
@@ -75,6 +79,7 @@ jobs:
           echo "Force: ${{ github.event.inputs.force }}"
           echo "================================"
 
-          NODE_PATH=./functions/node_modules \
+          cd scripts
+          NODE_PATH=../functions/node_modules \
             FIREBASE_PROJECT_ID=${{ steps.resolve.outputs.project_id }} \
-            node scripts/backfill-display-filename.js $ARGS
+            npx ts-node backfill-display-filename.ts $ARGS

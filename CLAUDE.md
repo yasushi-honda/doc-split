@@ -116,10 +116,10 @@ FIREBASE_PROJECT_ID=<project-id> node scripts/fix-stuck-documents.js
 FIREBASE_PROJECT_ID=<project-id> node scripts/check-master-data.js            # dry-run
 FIREBASE_PROJECT_ID=<project-id> node scripts/check-master-data.js --fix      # 修正実行
 
-# displayFileName一括設定
-FIREBASE_PROJECT_ID=<project-id> node scripts/backfill-display-filename.js --dry-run  # プレビュー
-FIREBASE_PROJECT_ID=<project-id> node scripts/backfill-display-filename.js             # 実行
-FIREBASE_PROJECT_ID=<project-id> node scripts/backfill-display-filename.js --force     # 既存値も上書き
+# displayFileName一括設定 (#334 で .ts 化、ts-node 経由で shared/ import)
+FIREBASE_PROJECT_ID=<project-id> npx ts-node scripts/backfill-display-filename.ts --dry-run  # プレビュー
+FIREBASE_PROJECT_ID=<project-id> npx ts-node scripts/backfill-display-filename.ts             # 実行
+FIREBASE_PROJECT_ID=<project-id> npx ts-node scripts/backfill-display-filename.ts --force     # 既存値も上書き
 
 # 重複ドキュメント検出・削除（同一fileNameのGmail添付ファイル重複を整理）
 FIREBASE_PROJECT_ID=<project-id> node scripts/cleanup-duplicates.js                # dry-run（デフォルト）
