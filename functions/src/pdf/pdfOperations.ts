@@ -92,7 +92,10 @@ export const detectSplitPoints = onCall(
 
     // 強化版分析を使用
     if (useEnhanced) {
-      const masters: MasterData = await loadMasterData(db);
+      const masters: MasterData = await loadMasterData(db, {
+        source: 'pdf',
+        functionName: 'detectSplitPoints',
+      });
 
       // ページデータを変換
       const pages: PageOcrData[] = pageResults.map((p) => ({
