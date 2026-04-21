@@ -25,7 +25,8 @@ describe('sanitizeMasterData', () => {
         aliases: ['田中', 'タナカ'],
       }];
       const result = sanitizeCustomerMasters(input);
-      expect(result).to.deep.equal(input);
+      expect(result.items).to.deep.equal(input);
+      expect(result.droppedIds).to.deep.equal([]);
     });
 
     it('careManagerNameが配列の場合、先頭要素を文字列化する', () => {
@@ -35,7 +36,7 @@ describe('sanitizeMasterData', () => {
         careManagerName: ['山田', '佐藤'] as unknown as string,
       }];
       const result = sanitizeCustomerMasters(input);
-      expect(result[0].careManagerName).to.equal('山田');
+      expect(result.items[0].careManagerName).to.equal('山田');
     });
 
     it('careManagerNameがオブジェクトの場合、undefinedにする', () => {
@@ -45,7 +46,7 @@ describe('sanitizeMasterData', () => {
         careManagerName: { text: '山田' } as unknown as string,
       }];
       const result = sanitizeCustomerMasters(input);
-      expect(result[0].careManagerName).to.be.undefined;
+      expect(result.items[0].careManagerName).to.be.undefined;
     });
 
     it('nameが空文字やundefinedの場合、そのレコードを除外する', () => {
@@ -55,8 +56,9 @@ describe('sanitizeMasterData', () => {
         { id: 'c3', name: '鈴木一郎' },
       ];
       const result = sanitizeCustomerMasters(input);
-      expect(result).to.have.length(1);
-      expect(result[0].name).to.equal('鈴木一郎');
+      expect(result.items).to.have.length(1);
+      expect(result.items[0].name).to.equal('鈴木一郎');
+      expect(result.droppedIds).to.deep.equal(['c1', 'c2']);
     });
 
     it('aliasesが文字列の場合、配列に変換する', () => {
@@ -66,7 +68,7 @@ describe('sanitizeMasterData', () => {
         aliases: '田中' as unknown as string[],
       }];
       const result = sanitizeCustomerMasters(input);
-      expect(result[0].aliases).to.deep.equal(['田中']);
+      expect(result.items[0].aliases).to.deep.equal(['田中']);
     });
 
     it('aliasesがネストした配列の場合、フラット化してstring以外を除外する', () => {
@@ -76,7 +78,7 @@ describe('sanitizeMasterData', () => {
         aliases: ['田中', ['タナカ', '太郎']] as unknown as string[],
       }];
       const result = sanitizeCustomerMasters(input);
-      expect(result[0].aliases).to.deep.equal(['田中']);
+      expect(result.items[0].aliases).to.deep.equal(['田中']);
     });
   });
 
@@ -90,7 +92,8 @@ describe('sanitizeMasterData', () => {
         aliases: ['サクラ'],
       }];
       const result = sanitizeOfficeMasters(input);
-      expect(result).to.deep.equal(input);
+      expect(result.items).to.deep.equal(input);
+      expect(result.droppedIds).to.deep.equal([]);
     });
 
     it('shortNameがオブジェクトの場合、undefinedにする', () => {
@@ -100,7 +103,7 @@ describe('sanitizeMasterData', () => {
         shortName: { text: 'さくら' } as unknown as string,
       }];
       const result = sanitizeOfficeMasters(input);
-      expect(result[0].shortName).to.be.undefined;
+      expect(result.items[0].shortName).to.be.undefined;
     });
 
     it('shortNameが配列の場合、先頭要素を文字列化する', () => {
@@ -110,7 +113,7 @@ describe('sanitizeMasterData', () => {
         shortName: ['さくら', 'サクラ'] as unknown as string,
       }];
       const result = sanitizeOfficeMasters(input);
-      expect(result[0].shortName).to.equal('さくら');
+      expect(result.items[0].shortName).to.equal('さくら');
     });
   });
 
@@ -125,7 +128,8 @@ describe('sanitizeMasterData', () => {
         dateMarker: '発行日',
       }];
       const result = sanitizeDocumentMasters(input);
-      expect(result).to.deep.equal(input);
+      expect(result.items).to.deep.equal(input);
+      expect(result.droppedIds).to.deep.equal([]);
     });
 
     it('keywordsにネストした配列が含まれる場合、string要素のみ残す', () => {
@@ -135,7 +139,7 @@ describe('sanitizeMasterData', () => {
         keywords: ['被保険者証', ['介護保険']] as unknown as string[],
       }];
       const result = sanitizeDocumentMasters(input);
-      expect(result[0].keywords).to.deep.equal(['被保険者証']);
+      expect(result.items[0].keywords).to.deep.equal(['被保険者証']);
     });
 
     it('keywordsが文字列の場合、配列に変換する', () => {
@@ -145,7 +149,7 @@ describe('sanitizeMasterData', () => {
         keywords: '被保険者証' as unknown as string[],
       }];
       const result = sanitizeDocumentMasters(input);
-      expect(result[0].keywords).to.deep.equal(['被保険者証']);
+      expect(result.items[0].keywords).to.deep.equal(['被保険者証']);
     });
 
     it('dateMarkerが正常なstringの場合、そのまま通過する', () => {
@@ -155,7 +159,7 @@ describe('sanitizeMasterData', () => {
         dateMarker: '発行日',
       }];
       const result = sanitizeDocumentMasters(input);
-      expect(result[0].dateMarker).to.equal('発行日');
+      expect(result.items[0].dateMarker).to.equal('発行日');
     });
 
     it('dateMarkerがundefinedの場合、undefinedのまま', () => {
@@ -165,7 +169,7 @@ describe('sanitizeMasterData', () => {
         dateMarker: undefined,
       }];
       const result = sanitizeDocumentMasters(input);
-      expect(result[0].dateMarker).to.be.undefined;
+      expect(result.items[0].dateMarker).to.be.undefined;
     });
 
     it('dateMarkerがnumberの場合、undefinedにする', () => {
@@ -175,7 +179,7 @@ describe('sanitizeMasterData', () => {
         dateMarker: 20260101 as unknown as string,
       }];
       const result = sanitizeDocumentMasters(input);
-      expect(result[0].dateMarker).to.be.undefined;
+      expect(result.items[0].dateMarker).to.be.undefined;
     });
 
     it('dateMarkerがobjectの場合、undefinedにする', () => {
@@ -185,7 +189,7 @@ describe('sanitizeMasterData', () => {
         dateMarker: { text: '発行日' } as unknown as string,
       }];
       const result = sanitizeDocumentMasters(input);
-      expect(result[0].dateMarker).to.be.undefined;
+      expect(result.items[0].dateMarker).to.be.undefined;
     });
 
     it('dateMarkerが配列の場合、先頭要素を文字列化する', () => {
@@ -195,7 +199,7 @@ describe('sanitizeMasterData', () => {
         dateMarker: ['発行日', '作成日'] as unknown as string,
       }];
       const result = sanitizeDocumentMasters(input);
-      expect(result[0].dateMarker).to.equal('発行日');
+      expect(result.items[0].dateMarker).to.equal('発行日');
     });
 
     it('dateMarkerが空文字の場合、undefinedに正規化する（下流の truthy チェック依存を排除）', () => {
@@ -205,7 +209,7 @@ describe('sanitizeMasterData', () => {
         dateMarker: '',
       }];
       const result = sanitizeDocumentMasters(input);
-      expect(result[0].dateMarker).to.be.undefined;
+      expect(result.items[0].dateMarker).to.be.undefined;
     });
   });
 });
