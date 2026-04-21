@@ -158,6 +158,16 @@ export interface DocumentMaster {
 }
 
 /**
+ * マスターデータ envelope (OCR + PDF split 両系列で共用)。
+ * #343: pdfAnalyzer.ts は analyzer concern に閉じ、型は *Master element と同居させる。
+ */
+export interface MasterData {
+  customers: CustomerMaster[];
+  documents: DocumentMaster[];
+  offices: OfficeMaster[];
+}
+
+/**
  * ファイル名から情報を抽出
  *
  * ファイル名パターン例:

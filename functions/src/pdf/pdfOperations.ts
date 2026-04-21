@@ -16,8 +16,8 @@ import {
   analyzePdf,
   generateSplitSummary,
   PageOcrData,
-  MasterData,
 } from '../utils/pdfAnalyzer';
+import type { MasterData } from '../utils/extractors';
 import { buildSplitDocumentData } from './splitDocumentBuilder';
 import { generateDisplayFileName } from '../../../shared/generateDisplayFileName';
 import { timestampToDateString } from '../utils/timestampHelpers';

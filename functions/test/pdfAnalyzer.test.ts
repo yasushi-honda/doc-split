@@ -12,8 +12,8 @@ import {
   generateSplitSummary,
   PageOcrData,
   PageAnalysisResult,
-  MasterData,
 } from '../src/utils/pdfAnalyzer';
+import type { MasterData } from '../src/utils/extractors';
 
 // テスト用マスターデータ
 const masterData: MasterData = {

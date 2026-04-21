@@ -6,9 +6,8 @@
  */
 
 import type * as admin from 'firebase-admin';
-import type { CustomerMaster, DocumentMaster, OfficeMaster } from './extractors';
+import type { CustomerMaster, DocumentMaster, MasterData, OfficeMaster } from './extractors';
 import { MASTER_PATHS } from './masterPaths';
-import type { MasterData } from './pdfAnalyzer';
 import {
   sanitizeCustomerMasters,
   sanitizeDocumentMasters,
