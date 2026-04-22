@@ -28,9 +28,20 @@ const forceReindex = requireCjs(
     error?: Error;
     dryRun?: boolean;
     auditCtx: { projectId: string; executedBy?: string };
+    loggingFactory?: (projectId: string) => unknown;
   }) => Promise<void>;
   buildAuditCtx: (projectId: string) => { projectId: string; executedBy: string };
 };
+
+/** Cloud Logging 実 API を呼ばないための mock factory */
+function makeNoopLoggingFactory() {
+  return (_projectId: string) => ({
+    log: (_logName: string) => ({
+      entry: (metadata: unknown, data: unknown) => ({ metadata, data }),
+      write: async () => {},
+    }),
+  });
+}
 
 const auditLoggerMod = requireCjs(
   path.resolve(process.cwd(), '../scripts/lib/auditLogger.js'),
@@ -79,11 +90,7 @@ describe('force-reindex: emitFailureEvent (#239 review #3)', () => {
   });
 
   it('stdout JSON と Cloud Logging audit を両方に出力する (SSoT)', async () => {
-    // Cloud Logging の loggingFactory mock は _resetCacheForTest できないが、
-    // module-level require が失敗 (test 環境に @google-cloud/logging 未利用) の場合
-    // _failOpen が動き stderr に audit_log_failed を出す。今回は実 require が成功するため
-    // 実 Logging client が new される (writeAPI 未呼出のため副作用なし)。
-    // ここでは stdout JSON 出力の SSoT (AC-4) のみを assert。
+    // loggingFactory mock 注入で実 Cloud Logging API を回避 (CI 環境で認証情報なしでも動作)
     const fakeErr = Object.assign(new Error('test failure'), {
       code: 7,
       reindexStage: 'documents_search_update',
@@ -98,15 +105,15 @@ describe('force-reindex: emitFailureEvent (#239 review #3)', () => {
         error: fakeErr,
         dryRun: false,
         auditCtx: { projectId: 'doc-split-dev', executedBy: 'test-user' },
+        loggingFactory: makeNoopLoggingFactory(),
       }),
     );
 
-    // stderr 末尾行 (Cloud Logging 失敗 fallback の前) に AC-4 の構造化 JSON
+    // stderr 1 行目に AC-4 の構造化 JSON (Cloud Logging は noop mock のため stderr 追加なし)
     const lines = stderr.trim().split('\n').filter((l) => l.length > 0);
-    expect(lines.length).to.be.greaterThanOrEqual(1);
+    expect(lines).to.have.lengthOf(1);
 
-    const stdoutJsonLine = lines[0];
-    const parsed = JSON.parse(stdoutJsonLine);
+    const parsed = JSON.parse(lines[0]);
     expect(parsed.severity).to.equal('ERROR');
     expect(parsed.event).to.equal('force_reindex_failed');
     expect(parsed.docId).to.equal('docTest');
@@ -125,6 +132,7 @@ describe('force-reindex: emitFailureEvent (#239 review #3)', () => {
         severity: SEVERITIES.ERROR,
         error: fakeErr,
         auditCtx: { projectId: 'doc-split-dev' },
+        loggingFactory: makeNoopLoggingFactory(),
       }),
     );
 
@@ -132,6 +140,37 @@ describe('force-reindex: emitFailureEvent (#239 review #3)', () => {
     const parsed = JSON.parse(lines[0]);
     expect(parsed.docId).to.equal(null);
     expect(parsed.event).to.equal('force_reindex_startup_failed');
+  });
+
+  it('writeForceReindexAuditLog にも payload を伝達する (二重出力 invariant)', async () => {
+    // loggingFactory に call 捕捉機構を仕込んで、Cloud Logging 経路にも到達することを確認
+    const writeCalls: Array<{ logName: string; data: Record<string, unknown> }> = [];
+    const trackingFactory = (_projectId: string) => ({
+      log: (logName: string) => ({
+        entry: (_metadata: unknown, data: unknown) => ({ logName, data }),
+        write: async (entry: { logName: string; data: Record<string, unknown> }) => {
+          writeCalls.push({ logName: entry.logName, data: entry.data });
+        },
+      }),
+    });
+
+    await captureOutput(() =>
+      emitFailureEvent({
+        event: EVENTS.FAILED,
+        severity: SEVERITIES.ERROR,
+        mode: 'doc-id',
+        docId: 'docDualSink',
+        error: new Error('dual sink test'),
+        dryRun: false,
+        auditCtx: { projectId: 'doc-split-dev', executedBy: 'tester' },
+        loggingFactory: trackingFactory,
+      }),
+    );
+
+    expect(writeCalls).to.have.lengthOf(1);
+    expect(writeCalls[0].logName).to.equal('force_reindex_audit');
+    expect(writeCalls[0].data.event).to.equal('force_reindex_failed');
+    expect(writeCalls[0].data.docId).to.equal('docDualSink');
   });
 });
 

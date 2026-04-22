@@ -32,8 +32,13 @@ const { writeForceReindexAuditLog, EVENTS, SEVERITIES } = require('./lib/auditLo
 /**
  * 失敗イベントを stdout JSON (GitHub Actions 調査用) と
  * Cloud Logging audit (事後監査用) の両 sink に出力する SSoT。
+ *
+ * @param {Object} params
+ * @param {Function} [params.loggingFactory] - test 用 DI: auditLogger 経由で injection
  */
-async function emitFailureEvent({ event, severity, mode, docId, error, dryRun, auditCtx }) {
+async function emitFailureEvent({
+  event, severity, mode, docId, error, dryRun, auditCtx, loggingFactory,
+}) {
   console.error(JSON.stringify({
     severity,
     event,
@@ -46,6 +51,7 @@ async function emitFailureEvent({ event, severity, mode, docId, error, dryRun, a
   await writeForceReindexAuditLog(
     { event, severity, mode, dryRun, docId, error },
     auditCtx,
+    loggingFactory ? { loggingFactory } : undefined,
   );
 }
 
