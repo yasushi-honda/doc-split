@@ -20,43 +20,15 @@ import { withRetry, RETRY_CONFIGS } from '../utils/retry';
 import { capPageText, MAX_SUMMARY_LENGTH } from '../utils/textCap';
 import type { SummaryField } from '../../../shared/types';
 import { buildSummaryGenerationRequest } from './summaryRequestBuilder';
+import { buildSummaryPrompt } from './summaryPromptBuilder';
 
 const PROJECT_ID = GCP_CONFIG.projectId;
 const LOCATION = GCP_CONFIG.location;
 const MODEL_ID = GEMINI_CONFIG.modelId;
 
-const MAX_SUMMARY_INPUT_LENGTH = 8000;
-
 // 要約生成を行う最小 OCR 文字数。caller 側 (ocrProcessor / regenerateSummary) で
 // 閾値同期漏れが起きないよう単一定数化。
 export const MIN_OCR_LENGTH_FOR_SUMMARY = 100;
-
-// documentType が空の場合のフォールバック表示名 (prompt 文言に差し込まれる)。
-// 非 export: fallback の single source of truth を core 内に閉じ込め、caller 側での
-// 二重 fallback (type-design-analyzer 指摘) を構造的に防止する。
-const DEFAULT_DOCUMENT_TYPE_LABEL = '書類';
-
-function buildSummaryPrompt(ocrResult: string, documentType: string): string {
-  const truncatedText =
-    ocrResult.length > MAX_SUMMARY_INPUT_LENGTH
-      ? ocrResult.slice(0, MAX_SUMMARY_INPUT_LENGTH) + '...(以下省略)'
-      : ocrResult;
-
-  return `
-以下は「${documentType || DEFAULT_DOCUMENT_TYPE_LABEL}」のOCR結果です。この書類の内容を3〜5行で要約してください。
-
-【要約のポイント】
-- 書類の主な目的・内容
-- 重要な日付や金額があれば含める
-- 関係者（顧客名、事業所名など）の記載があれば含める
-- 専門用語は平易に言い換える
-
-【OCR結果】
-${truncatedText}
-
-【要約】
-`;
-}
 
 /**
  * OCR結果から AI 要約を生成する共通コア関数。
