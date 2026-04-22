@@ -1,6 +1,11 @@
 /**
  * Gmail 添付ファイルの重複/再取り込み判定 pure helper
  *
+ * Exports:
+ *   - evaluateReimportDecision: 主判定関数 (6 分岐を決定)
+ *   - resolveExistingLogData: gmailLogs 優先順位の共有 helper
+ *   - ReimportVerdict / ReimportDecisionInput / ReimportDecision: 公開型
+ *
  * checkGmailAttachments.ts の processAttachment 内で行われていた hash 重複判定と
  * isSplitSource=true 再取り込み許可ロジックを I/O 非依存の純粋関数として抽出。
  * production (checkGmailAttachments.ts) と test (gmailAttachmentIntegration.test.ts)
@@ -40,7 +45,8 @@ export interface ReimportDecision {
 /**
  * gmailLogs / uploadLogs 両方の hash 一致 log から優先順位に従って 1 件を返す。
  *
- * gmailLogs 優先 (checkGmailAttachments.ts の source:294-296 と等価)。
+ * gmailLogs 優先 (checkGmailAttachments.ts processAttachment の旧 inline 実装で
+ * `!existingGmailLog.empty ? gmail : upload` のパターンだった判定を集約)。
  * caller は戻り値の `.fileUrl` を用いて関連 documents query の発行要否を判定できる。
  * evaluateReimportDecision 本体でも同じロジックを使うため、production / test / helper
  * 内部の 3 箇所で優先順位 drift を構造的に防ぐ (Issue #375 evaluator MEDIUM 対応)。
@@ -55,7 +61,7 @@ export function resolveExistingLogData(
 /**
  * Gmail 添付ファイルの hash 重複判定と isSplitSource=true 再取り込み許可を決定する。
  *
- * 判定フロー (checkGmailAttachments.ts:287-326 と等価):
+ * 判定フロー (PR #199 の旧 inline 実装を本 helper に集約、Issue #375):
  * 1. gmailLogs / uploadLogs 両方に hash 一致なし → new (新規処理対象)
  * 2. 片方以上に hash 一致あり:
  *    a. gmailLogs 優先で existing log を採用
@@ -76,7 +82,13 @@ export function evaluateReimportDecision(
     existingGmailLogData,
     existingUploadLogData,
   );
-  const existingFileUrl = existingLogData?.fileUrl;
+  // 型ガード: 上の早期 return で両方 null はカバー済だが、将来の refactor 耐性として
+  // 本関数内で local にも null を弾くことで「早期 return 削除 → silent に skip 返却」
+  // の regression を防ぐ (#378 silent-failure-hunter H1 対応)。
+  if (existingLogData === null) {
+    return { verdict: 'new', fileUrl: null };
+  }
+  const existingFileUrl = existingLogData.fileUrl;
 
   if (!existingFileUrl) {
     return { verdict: 'skip', fileUrl: null };

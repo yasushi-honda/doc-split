@@ -31,24 +31,36 @@ const UPDATE_ANCHOR =
 
 let payloadBlock: string | null = null;
 
+let sourceText: string = '';
+
 describe('splitPdf docRef.update payload contract (#375 AC3)', () => {
   before(() => {
     const path = resolve(__dirname, '..', SOURCE_PATH);
     if (!existsSync(path)) {
       throw new Error(`Source file not found: ${SOURCE_PATH}`);
     }
-    const source = readFileSync(path, 'utf-8');
-    payloadBlock = extractBraceBlock(source, UPDATE_ANCHOR, {
+    sourceText = readFileSync(path, 'utf-8');
+    payloadBlock = extractBraceBlock(sourceText, UPDATE_ANCHOR, {
       anchorMode: 'after-match',
     });
+    // 以降の it で payloadBlock null 前提で assert するため、ここで早期 throw する
+    // (#378 silent-failure-hunter M1 対応: `.to.match(null)` は Chai で TypeError
+    // になる点は既に loud failure だが、診断情報を 1 箇所に集約して原因特定を高速化)。
+    if (payloadBlock === null) {
+      throw new Error(
+        `splitPdf docRef.update payload block not found in ${SOURCE_PATH}. ` +
+          `Anchor: ${UPDATE_ANCHOR.source}`,
+      );
+    }
   });
 
-  it('payload ブロックが抽出できる (anchor 不在時 silent PASS 防御)', () => {
-    expect(
-      payloadBlock,
-      `splitPdf docRef.update payload block not found in ${SOURCE_PATH}. ` +
-        `Anchor: ${UPDATE_ANCHOR.source}`,
-    ).to.not.be.null;
+  it('anchor コメント "元ドキュメントのステータスを更新" がソース内に 1 箇所のみ存在する', () => {
+    // UPDATE_ANCHOR の先頭コメント部分がソース内で複製されると、non-greedy 検索が
+    // 別 `docRef.update` にマッチする silent regression が発生しうる
+    // (#378 pr-test-analyzer I1 対応)。コメントの一意性そのものを lock-in する。
+    const matches = sourceText.match(/元ドキュメントのステータスを更新/g);
+    expect(matches, 'anchor comment must match exactly once').to.not.be.null;
+    expect(matches).to.have.lengthOf(1);
   });
 
   it('splitInto フィールドが含まれる', () => {
