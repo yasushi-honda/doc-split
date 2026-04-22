@@ -415,4 +415,13 @@ describe('getReprocessClearFields (Issue #215: 旧3キー + 新summary 全て de
     expect(fields.confirmedBy).toBeNull()
     expect(fields.verifiedBy).toBeNull()
   })
+
+  // #360 code-reviewer I3: PR #359 で rescue が error/pending 両経路で retryCount/retryAfter を
+  // 扱うようになった。reprocess (FE 手動再処理) でも古い値を残さずクリアすることで、
+  // 再処理後の monitor (retryCount が古い値から始まる等) を防ぐ。
+  it('retryCount / retryAfter を含む (#360)', () => {
+    const fields = getReprocessClearFields()
+    expect(fields).toHaveProperty('retryCount')
+    expect(fields).toHaveProperty('retryAfter')
+  })
 })

@@ -22,15 +22,18 @@ import {
   OcrProcessingResult,
 } from './ocrProcessor';
 // 定数は side-effect-free な constants.ts から import (#196 test drift 防止)
-import { MAX_RETRY_COUNT, STUCK_RESCUE_RETRY_AFTER_MS } from './constants';
+import {
+  MAX_RETRY_COUNT,
+  STUCK_RESCUE_RETRY_AFTER_MS,
+  STUCK_PROCESSING_THRESHOLD_MS,
+  STUCK_RESCUE_PENDING_MESSAGE,
+  STUCK_RESCUE_FATAL_MESSAGE_PREFIX,
+} from './constants';
 
 const db = admin.firestore();
 
 const FUNCTION_NAME = 'processOCR';
 const BATCH_SIZE = 5;
-/** processingスタック救済: この時間（ms）を超えてprocessing状態のドキュメントをpendingに戻す */
-const STUCK_PROCESSING_THRESHOLD_MS = 10 * 60 * 1000; // 10分
-// STUCK_RESCUE_RETRY_AFTER_MS は constants.ts で定義 (上記 import)
 
 /** 処理統計 */
 interface ProcessingStats {
@@ -150,8 +153,12 @@ export const processOCR = onSchedule(
  *
  * Functionタイムアウト（540秒）等でprocessing状態のまま放置されたドキュメントを救済。
  * updatedAtが10分以上前のprocessingドキュメントを対象とする。
+ *
+ * #360: per-doc を runTransaction 化して handleProcessingError と整合させ、
+ * per-doc catch でも safeLogError を呼んで silent failure を観測可能にする。
+ * integration test から直接呼び出すため export している (AC2/AC3/AC4 検証に必要)。
  */
-async function rescueStuckProcessingDocs(): Promise<void> {
+export async function rescueStuckProcessingDocs(): Promise<void> {
   const threshold = new Date(Date.now() - STUCK_PROCESSING_THRESHOLD_MS);
 
   const stuckDocs = await db
@@ -165,46 +172,78 @@ async function rescueStuckProcessingDocs(): Promise<void> {
 
   console.log(`Found ${stuckDocs.size} stuck processing documents, resetting to pending`);
 
+  // per-doc 逐次処理: 並列化は runTransaction optimistic retry を誘発する上、
+  // BATCH_SIZE=5 では全体 ~1s 未満で cron 間隔 60s に対し無視できる。
+  // ループ内の各 await には個別に eslint-disable を付けている。
   for (const docSnapshot of stuckDocs.docs) {
-    try {
-      const currentRetryCount = (docSnapshot.data().retryCount as number) || 0;
-      const newRetryCount = currentRetryCount + 1;
+    const docId = docSnapshot.id;
+    const docRef = db.doc(`documents/${docId}`);
 
-      // #196: handleProcessingError と同じく MAX_RETRY_COUNT 到達で error 確定する。
-      // 以前は無制限に pending に戻していたため 429 多発時に rescue ループが止まらなかった。
-      if (newRetryCount >= MAX_RETRY_COUNT) {
-        const fatalMessage = `Processing timed out, max retries exceeded (${newRetryCount}/${MAX_RETRY_COUNT})`;
-        await db.doc(`documents/${docSnapshot.id}`).update({
-          status: 'error',
-          retryCount: newRetryCount,
-          // #196 review: 古い retryAfter が残ると fix-stuck-documents --include-errors で
-          // pending 復帰させた時に即スキップされる。error 確定では retryAfter をクリア。
-          retryAfter: admin.firestore.FieldValue.delete(),
-          lastErrorMessage: fatalMessage,
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        });
-        console.error(`Marked stuck document ${docSnapshot.id} as error (retryCount: ${newRetryCount}/${MAX_RETRY_COUNT})`);
-        // #196 silent-failure-hunter C1: errors/ コレクションに記録しないと ErrorsPage から不可視。
-        // rules/error-handling.md 「状態復旧 > ログ記録」の順で、状態 update 後に独立 try-catch で呼ぶ。
-        await safeLogError({
-          error: new Error(`Rescue max retries exceeded for stuck processing > ${STUCK_PROCESSING_THRESHOLD_MS / 60000}min`),
-          source: 'ocr',
-          functionName: FUNCTION_NAME,
-          documentId: docSnapshot.id,
-        });
-      } else {
-        // #196: retryAfter を設定しないと 429 救済直後に再処理されて連鎖する。quota 相当の 3 分待機を付与。
-        await db.doc(`documents/${docSnapshot.id}`).update({
+    try {
+      // maxInstances=1 現状でも tx で retryCount を最新値から読む必要がある:
+      // rescue 実行中に handleProcessingError が同一 doc を更新するケースで、
+      // stale な retryCount を元に +1 すると MAX_RETRY_COUNT check が off-by-one で超過可能。
+      // eslint-disable-next-line no-await-in-loop
+      const fatalReached = await db.runTransaction(async (tx) => {
+        const fresh = await tx.get(docRef);
+        const currentRetryCount = (fresh.data()?.retryCount as number) || 0;
+        const newRetryCount = currentRetryCount + 1;
+
+        if (newRetryCount >= MAX_RETRY_COUNT) {
+          // #196: 無制限 pending 復帰で rescue ループが止まらなかった問題を MAX 到達で error 確定。
+          // 古い retryAfter は fix-stuck-documents --include-errors で復帰時の即スキップを招くため delete。
+          tx.update(docRef, {
+            status: 'error',
+            retryCount: newRetryCount,
+            retryAfter: admin.firestore.FieldValue.delete(),
+            lastErrorMessage: `${STUCK_RESCUE_FATAL_MESSAGE_PREFIX} (${newRetryCount}/${MAX_RETRY_COUNT})`,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+          return true;
+        }
+        // retryAfter を設定しないと 429 救済直後に再処理されて連鎖する (#196)。
+        tx.update(docRef, {
           status: 'pending',
           retryCount: newRetryCount,
           retryAfter: admin.firestore.Timestamp.fromMillis(Date.now() + STUCK_RESCUE_RETRY_AFTER_MS),
-          lastErrorMessage: 'Processing timed out, retrying',
+          lastErrorMessage: STUCK_RESCUE_PENDING_MESSAGE,
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         });
-        console.log(`Reset stuck document ${docSnapshot.id} to pending (retryCount: ${newRetryCount}/${MAX_RETRY_COUNT}, retryAfter: ${STUCK_RESCUE_RETRY_AFTER_MS / 1000}s)`);
+        return false;
+      });
+
+      if (fatalReached) {
+        console.error(`Marked stuck document ${docId} as error (>= ${MAX_RETRY_COUNT} retries)`);
+        // #196 silent-failure-hunter C1: errors/ に記録しないと ErrorsPage から不可視。
+        // rules/error-handling.md 「状態復旧 > ログ記録」順で tx commit 後に呼ぶ。
+        // #360 silent-failure-hunter I1: この safeLogError の失敗は outer catch に
+        // 伝播させない。伝播すると outer catch 内の safeLogError が再度呼ばれ、
+        // 同一 docId に対する errors/ 書き込みが重複する。
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          await safeLogError({
+            error: new Error(`Rescue max retries exceeded for stuck processing > ${STUCK_PROCESSING_THRESHOLD_MS / 60000}min`),
+            source: 'ocr',
+            functionName: FUNCTION_NAME,
+            documentId: docId,
+          });
+        } catch (logErr) {
+          console.error(`safeLogError failed for ${docId} (fatal branch):`, logErr);
+        }
+      } else {
+        console.log(`Reset stuck document ${docId} to pending (retryAfter: ${STUCK_RESCUE_RETRY_AFTER_MS / 1000}s)`);
       }
     } catch (err) {
-      console.error(`Failed to reset stuck document ${docSnapshot.id}:`, err);
+      // #360 silent-failure-hunter I1: per-doc DB error を console.error のみで swallow すると
+      // partial failure で残りドキュメントが silent に未処理になる。errors/ に記録で観測可能化。
+      console.error(`Failed to reset stuck document ${docId}:`, err);
+      // eslint-disable-next-line no-await-in-loop
+      await safeLogError({
+        error: err instanceof Error ? err : new Error(String(err)),
+        source: 'ocr',
+        functionName: FUNCTION_NAME,
+        documentId: docId,
+      });
     }
   }
 }
