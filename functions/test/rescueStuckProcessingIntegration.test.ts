@@ -22,6 +22,7 @@ import './helpers/initFirestoreEmulator';
 import { expect } from 'chai';
 import * as admin from 'firebase-admin';
 import { rescueStuckProcessingDocs } from '../src/ocr/processOCR';
+import type { LogErrorParams } from '../src/utils/errorLogger';
 import {
   MAX_RETRY_COUNT,
   STUCK_RESCUE_RETRY_AFTER_MS,
@@ -303,6 +304,89 @@ describe('rescueStuckProcessingDocs 統合テスト (#360)', () => {
         expect(errs.size, `errors/ for ${docId}`).to.equal(1);
         expect(errs.docs[0].data().functionName).to.equal('processOCR');
       }
+    });
+  });
+
+  describe('fatal 分岐 safeLogError 失敗時の二重呼出防止 (#370)', () => {
+    // #370: rescueStuckProcessingDocs の fatal 分岐 inner try/catch の regression lock-in。
+    // 実装元: #360 silent-failure-hunter I1 (inner try/catch 新設)、
+    // 本 test: PR #369 silent-failure-hunter I2 の follow-up として inner try/catch 削除を検知する。
+    // 詳細は Issue #370 / PR #372 参照。
+
+    /**
+     * errorLogger.safeLogError を一時的に「常に throw する stub」に差し替える。
+     *
+     * CommonJS (tsconfig "module": "NodeNext" + package.json "type": "commonjs") 配下では
+     * processOCR.ts の `await (0, errorLogger_1.safeLogError)(...)` が namespace object の
+     * dynamic lookup になるため、namespace property の書き換えが production code 側の呼出に
+     * 反映される (#369 の withFailingRunTransaction と同方針、sinon 依存なし)。
+     *
+     * 「常に throw」設計で以下の 2 通りを区別する:
+     *   - 正常実装: fatal 分岐 inner try/catch が swallow → rescue 正常完了、callCount === 1
+     *   - regression (inner try/catch 削除): outer catch に伝播 → outer 内 safeLogError も throw
+     *     → rescueStuckProcessingDocs が reject → test 側 catch で拾って FAIL
+     */
+    async function withFailingSafeLogError(
+      fn: () => Promise<void>
+    ): Promise<{ callCount: number }> {
+      const errorLoggerModule = require('../src/utils/errorLogger') as {
+        safeLogError: (params: LogErrorParams) => Promise<void>;
+      };
+      const original = errorLoggerModule.safeLogError;
+      let callCount = 0;
+      errorLoggerModule.safeLogError = async (_params: LogErrorParams) => {
+        callCount++;
+        throw new Error('Simulated safeLogError failure for #370 test');
+      };
+      try {
+        await fn();
+      } finally {
+        errorLoggerModule.safeLogError = original;
+      }
+      return { callCount };
+    }
+
+    it('fatal 分岐で safeLogError 失敗が inner catch で swallow され outer catch に伝播しない', async () => {
+      const docId = 'stuck-fatal-log-fail';
+      await db.doc(`documents/${docId}`).set({
+        status: 'processing',
+        updatedAt: admin.firestore.Timestamp.fromMillis(Date.now() - STUCK_UPDATED_AT_OFFSET_MS),
+        retryCount: MAX_RETRY_COUNT - 1, // tx 内 +1 で MAX 到達 → fatal 分岐
+        fileName: 'fatal-log-fail.pdf',
+        customerName: '顧客X',
+      });
+
+      // 正常実装では rescue が reject しないことを第一 invariant として確認する。
+      // regression で outer catch に伝播した場合、outer catch 内の safeLogError (try/catch なし)
+      // が再 throw して rescueStuckProcessingDocs 全体が reject する。
+      let rescueError: Error | undefined;
+      let callCount = 0;
+      try {
+        ({ callCount } = await withFailingSafeLogError(async () => {
+          await rescueStuckProcessingDocs();
+        }));
+      } catch (err) {
+        rescueError = err as Error;
+      }
+
+      expect(
+        rescueError,
+        'rescueStuckProcessingDocs must complete without throwing (inner catch must swallow safeLogError failure)'
+      ).to.be.undefined;
+      expect(
+        callCount,
+        'safeLogError must be invoked exactly once (inner catch swallows, outer catch unreachable)'
+      ).to.equal(1);
+
+      const docAfter = (await db.doc(`documents/${docId}`).get()).data() as StuckDocFixture;
+      expect(docAfter.status).to.equal('error');
+      expect(docAfter.retryCount).to.equal(MAX_RETRY_COUNT);
+      expect(docAfter.retryAfter).to.be.undefined;
+      expect(docAfter.lastErrorMessage).to.include(STUCK_RESCUE_FATAL_MESSAGE_PREFIX);
+
+      // 更新対象外フィールド不変 (CLAUDE.md MUST: Partial Update は更新対象外の不変性)
+      expect(docAfter.fileName).to.equal('fatal-log-fail.pdf');
+      expect(docAfter.customerName).to.equal('顧客X');
     });
   });
 
