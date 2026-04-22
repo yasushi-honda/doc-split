@@ -13,8 +13,10 @@
  * 将来 BE 側から export される aggregate helper が追加されたら本ファイルは
  * それに差替える (Follow-up Issue)。
  *
- * FIELD_TO_MASK は searchIndexer.ts:23-29 の値と完全一致させる必要がある。
+ * FIELD_TO_MASK は searchIndexer.ts の private const と値を完全一致させる必要がある。
  * 不一致なら production trigger と migrate-search-index の fieldsMask が drift する。
+ * drift 検知は functions/test/aggregateTokens.test.ts の "FIELD_TO_MASK" describe で
+ * deep.equal lock-in している (両者が同時に変更されない限り本 test が fail する)。
  */
 
 /**

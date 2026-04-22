@@ -62,7 +62,21 @@ function ensureTokenizerBuilt() {
  * loud failure する (silent 自動ビルド経路を廃止)。
  */
 function loadTokenizer() {
-  return require(TOKENIZER_PATH);
+  try {
+    return require(TOKENIZER_PATH);
+  } catch (err) {
+    // MODULE_NOT_FOUND を actionable message で包む (#379 silent-failure-hunter #1)。
+    // 生のスタックだけだと tokenizer の build が必要であることが operator に伝わらない。
+    if (err && err.code === 'MODULE_NOT_FOUND') {
+      throw new Error(
+        `[loadTokenizer] functions/lib/ が未生成です (path: ${TOKENIZER_PATH})。` +
+          `CLI 実行時は ensureTokenizerBuilt() が事前に走るはずです。` +
+          `test 実行前は 'cd functions && npm run build' を走らせてください。` +
+          `原因: ${err.message}`,
+      );
+    }
+    throw err;
+  }
 }
 
 module.exports = {

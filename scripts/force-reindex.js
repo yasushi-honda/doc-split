@@ -154,7 +154,6 @@ function detectDrift(docData, tokenizer = loadTokenizer()) {
 }
 
 // ========== Step 4: Firestore 操作 ==========
-// FIELD_TO_MASK と集約ロジックは scripts/lib/aggregateTokens.js に集約 (Issue #237)。
 
 /**
  * 指定 docId の search_index を強制再構築する。
@@ -371,6 +370,17 @@ async function runAllDrift(db, args) {
           reindexed++;
           console.log(`    [OK] 再 index 完了`);
         } catch (error) {
+          // systemic programmer error (aggregateTokens の unknown TokenField 等) は
+          // per-doc failedCount に集約せず全体中止する (#379 silent-failure-hunter #4)。
+          // drift を silent に隠すと force-reindex が部分完了で exit 0 に見え、
+          // operator は FIELD_TO_MASK の同期漏れ等の structural bug を見逃す。
+          if (error && typeof error.message === 'string' &&
+              error.message.startsWith('[aggregateTokens]')) {
+            console.error(
+              `[FATAL] aggregateTokens invariant violation on ${docSnap.id}: ${error.message}`,
+            );
+            throw error;
+          }
           failed++;
           // 構造化ログで呼出元が個別失敗を監査可能にする (PR #235 review silent-failure-hunter 指摘対応)
           console.error(JSON.stringify({

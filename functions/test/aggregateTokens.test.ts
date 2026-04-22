@@ -27,7 +27,7 @@ const fakeGenId = (s: string): string => `id:${s}`;
 
 describe('scripts/lib/aggregateTokens (#237)', () => {
   describe('FIELD_TO_MASK', () => {
-    it('searchIndexer.ts:23-29 と同じ値を持つ (drift 検知)', () => {
+    it('searchIndexer.ts の FIELD_TO_MASK と同じ値を持つ (drift 検知)', () => {
       // searchIndexer.ts 側の FIELD_TO_MASK が変わったら本 test が fail する。
       // 両者の同期は Follow-up Issue で構造的に解決する予定 (tokenizer.ts へ export 移動)
       expect(aggMod.FIELD_TO_MASK).to.deep.equal({

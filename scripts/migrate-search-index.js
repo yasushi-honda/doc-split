@@ -178,6 +178,17 @@ async function migrateSearchIndex() {
         processedCount++;
 
       } catch (error) {
+        // systemic programmer error (aggregateTokens の unknown TokenField 等) は
+        // per-doc error に集約せず全体を中止する (#379 silent-failure-hunter #3)。
+        // drift を silent に隠すと migration が部分完了で exit 0 に見え、
+        // operator は異常に気付けない。
+        if (error && typeof error.message === 'string' &&
+            error.message.startsWith('[aggregateTokens]')) {
+          console.error(
+            `[FATAL] aggregateTokens invariant violation on ${docId}: ${error.message}`,
+          );
+          throw error;
+        }
         console.error(`  [ERROR] ${docId}: ${error.message}`);
         errorCount++;
       }
