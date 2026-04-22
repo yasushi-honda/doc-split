@@ -117,12 +117,20 @@ async function main(): Promise<void> {
           continue;
         }
         // noop 以降は 'change' | 'set' のみ。将来の enum 拡張で silent に SET に落ちるのを
-        // 防ぐため exhaustive 判定で assertNever する (#358 code-simplifier S2)。
+        // 防ぐため exhaustive 判定で assertNever する。
         if (action === 'change') {
           console.log(`  CHANGE: ${docSnap.id} "${oldDisplayFileName}" → "${displayFileName}"`);
         } else if (action === 'set') {
           console.log(`  SET: ${docSnap.id} ${data.fileName || '(no name)'} → ${displayFileName}`);
         } else {
+          // 未知の enum 値到達時は部分 batch commit 前で止めて、operator が partial-apply を
+          // 把握できるよう進捗サマリーを error log に出す (#358 silent-failure-hunter Critical)。
+          console.error(
+            `[FATAL] Unexpected DisplayFileNameChange: ${String(action)}. ` +
+            `Progress (before abort): processed=${totalProcessed}, updated=${totalUpdated}, ` +
+            `skipped=${totalSkipped}, changed=${totalChanged}. ` +
+            `Uncommitted batch (size=${batchCount}) will be LOST.`
+          );
           const _exhaustive: never = action;
           throw new Error(`Unexpected DisplayFileNameChange: ${String(_exhaustive)}`);
         }
