@@ -17,7 +17,7 @@ session34 handoff の「次セッション着手候補」(#251 Scope 1 / #239 / 
 |---------|------|------|
 | **1. #251 Scope 1 着手可否判断** | Issue 本文確認 → 「Vertex AI mock 基盤 (sinon/proxyquire) 導入コスト vs false negative 未発生」の待機条件記述を発見 | **待機継続** |
 | **2. #239 着手可否判断** | Issue 本文確認 → 「**P2 (実質 P3 扱い)** — drift 実発生低頻度 + 昇格条件 (月次 1 件以上 / 監査要件明示) 未達」を発見 | **待機継続** |
-| **3. #220 着手可否判断** | 既存実装調査で `scripts/setup-log-based-metrics.sh` / `scripts/monitoring-templates/` / `docs/context/monitoring-setup.md` / `.github/workflows/setup-monitoring.yml` を発見、`monitoring-setup.md` L167-170 で 3 環境 (dev/kanameone/cocoro) 本番稼働を確認 | **close 対象と判明** → close 実施 |
+| **3. #220 着手可否判断** | 既存実装調査で `scripts/setup-log-based-metrics.sh` / `scripts/monitoring-templates/` / `docs/context/monitoring-setup.md` / `.github/workflows/setup-monitoring.yml` を発見、`monitoring-setup.md` の `### 展開状況` セクションで 3 環境 (dev/kanameone/cocoro) 本番稼働を確認 | **close 対象と判明** → close 実施 |
 | **4. 残り 3 Issue triage** | #299 (grep lock-in 済 + #251 Scope 1 と同類 mock 課題) / #238 (P3 実質扱い、孤児 posting 実発生未観測) / #152 (dev 雛形として open 維持が正しい) | **全て待機継続** |
 | **5. #220 close 実行** | monitoring-setup.md 転載の完全エビデンス (5 metrics × 3 環境稼働、閾値根拠、整備資材一覧) を close comment に付与 | **Issue Net -1** |
 
@@ -37,13 +37,13 @@ session34 handoff の「次セッション着手候補」(#251 Scope 1 / #239 / 
 
 ### 設計判断 / Lessons Learned (本 session 重要知見)
 
-1. **Issue 着手前の本文精査を前置規律化**: 「次セッション着手候補」リストは過去 session の勢いで書かれたものであり、Issue 本文の待機条件が見落とされている可能性が高い。session35 で 5 件中 5 件が「本文で待機条件付き postpone or 既に完了」だった事実は、この前置規律の ROI が極めて高いことを定量的に示す。CLAUDE.md の `feedback_verify_before_evaluate.md` + `feedback_issue_triage.md` の具体化として spec 候補
+1. **Issue 着手前の本文精査を前置規律化**: 「次セッション着手候補」リストは過去 session の勢いで書かれたものであり、Issue 本文の待機条件が見落とされている可能性が高い。session35 で 5 件中 **4 件が「本文で待機条件付き postpone」+ 1 件 (#220) が「既に完了済の close 忘れ」** だった事実は、この前置規律の ROI が極めて高いことを定量的に示す。CLAUDE.md の `feedback_verify_before_evaluate.md` + `feedback_issue_triage.md` の具体化として spec 候補
 
 2. **close 忘れ検知の仕組み化検討価値**: #220 は 2026-04-17 (session6/7) で実装完了済だが 5 日間 open のまま。handoff archive (2026-04-history.md) に稼働記録があるにもかかわらず auto-close されず。`feedback_issue_postpone_pattern.md` の逆パターン (「完了済 Issue を close 忘れる」) の機構化候補 — 例: ハンドオフ PR merge 時に実装済 Issue を gh issue list の cross-check で検出する hook
 
 3. **triage-only セッションの KPI 貢献**: Issue Net -1 は少ないが、**無駄実装を 5 件回避** (各 Issue が「強行」された場合の想定コスト: #251 Scope 1 = mock 基盤整備 0.5-1 session / #239 = Cloud Logging 導入 + 3 環境展開 0.5 session / #299 = ts-node/esm 環境整備 2 session / #238 = 全 search_index 走査設計 1 session) = **合計 4-4.5 session の実装コスト節約**。CLAUDE.md の `feedback_cost_benefit_before_action.md` の実践例として有用
 
-4. **「次アクション候補」リストは 'ToDo' でなく 'To-be-triaged' として扱う**: session34 handoff の「次セッション着手候補」は 5 件中 5 件が triage で待機判定になった。ハンドオフの「次セッション着手候補」セクションは **「着手前に triage 必須のキュー」** であり、session 開始時に必ず 1 件ずつ Issue 本文再確認する運用として定着させる
+4. **「次アクション候補」リストは 'ToDo' でなく 'To-be-triaged' として扱う**: session34 handoff の「次セッション着手候補」は 5 件中 4 件が triage で待機判定 + 1 件 (#220) が close 対象と判定された (合計 5 件全てで「着手せず」判定)。ハンドオフの「次セッション着手候補」セクションは **「着手前に triage 必須のキュー」** であり、session 開始時に必ず 1 件ずつ Issue 本文再確認する運用として定着させる
 
 5. **Issue 無限増殖問題への最終回答**: session34 handoff で「Issue Net は KPI」「rating 5-6 は Issue 化しない」等のルールは機能しており、**3 日間新規起票ゼロ** (最終 #299 = 2026-04-19)。ただし close 忘れ (#220) が 1 件残っていた。3 層ゲート (hook / CLAUDE.md / /handoff) は「過剰起票」には効くが「完了済 close 忘れ」には効かない non-covered パターンであることが判明、今後 `/catchup` 時に「5 日以上更新のない Issue を実装状況と cross-check」する運用を検討
 
@@ -63,7 +63,7 @@ session34 handoff の「次セッション着手候補」(#251 Scope 1 / #239 / 
 ### Test plan 実行結果
 
 - [x] `gh issue list --state open` で **6 → 5 Issue** に減少確認 (Net -1 達成)
-- [x] #220 close comment に monitoring-setup.md L167-170 エビデンス (3 環境稼働記録) + 全 5 metrics + 閾値根拠 + 整備資材 (script/workflow/Runbook) を転載
+- [x] #220 close comment に monitoring-setup.md `### 展開状況` セクション エビデンス (3 環境稼働記録) + 全 5 metrics + 閾値根拠 + 整備資材 (script/workflow/Runbook) を転載
 - [x] 残り 5 open Issue に active 作業なし (全て正しく待機中)
 - [x] main ブランチ clean、本 handoff PR 経由で merge
 
