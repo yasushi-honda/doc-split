@@ -324,7 +324,7 @@ describe('scripts/lib/auditLogger (#239)', () => {
         fileName: '請求書_2026-04.pdf',
       };
       await writeForceReindexAuditLog(
-        payloadWithPii as AuditPayloadInput,
+        payloadWithPii as unknown as AuditPayloadInput,
         { projectId: 'doc-split-dev' },
         { loggingFactory: factory },
       );
@@ -396,7 +396,8 @@ describe('scripts/lib/auditLogger (#239)', () => {
       const { factory } = makeFakeLoggingFactory();
       const { result, stderr } = await captureStderr(() =>
         writeForceReindexAuditLog(
-          { event: '', severity: 'NOTICE' },
+          // 型契約上は許されない値を runtime 検証のテストのため強制 cast
+          { event: '' as AuditEvent, severity: SEVERITIES.NOTICE },
           { projectId: 'p' },
           { loggingFactory: factory },
         ),
