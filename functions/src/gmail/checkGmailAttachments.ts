@@ -19,6 +19,7 @@ import { getGmailClient } from '../utils/gmailAuth';
 import { withRetry, RETRY_CONFIGS } from '../utils/retry';
 import { logError } from '../utils/errorLogger';
 import { sanitizeFilenameForStorage } from '../utils/fileNaming';
+import { evaluateReimportDecision, resolveExistingLogData } from './reimportPolicy';
 
 const db = admin.firestore();
 const storage = admin.storage();
@@ -282,6 +283,7 @@ async function processAttachment(
   }
 
   // MD5ハッシュで重複チェック（gmailLogs + uploadLogs両方）
+  // 判定ロジックは src/gmail/reimportPolicy.ts の evaluateReimportDecision に集約 (Issue #375)。
   const hash = crypto.createHash('md5').update(buffer).digest('hex');
 
   const [existingGmailLog, existingUploadLog] = await Promise.all([
@@ -289,41 +291,44 @@ async function processAttachment(
     db.collection('uploadLogs').where('hash', '==', hash).limit(1).get(),
   ]);
 
-  if (!existingGmailLog.empty || !existingUploadLog.empty) {
-    // 該当するファイルURLを取得
-    const existingLog = !existingGmailLog.empty
-      ? existingGmailLog.docs[0]
-      : existingUploadLog.docs[0];
-    const existingFileUrl = existingLog?.data().fileUrl as string | undefined;
+  const existingGmailLogData = existingGmailLog.empty
+    ? null
+    : (existingGmailLog.docs[0].data() as { fileUrl?: string });
+  const existingUploadLogData = existingUploadLog.empty
+    ? null
+    : (existingUploadLog.docs[0].data() as { fileUrl?: string });
 
-    if (existingFileUrl) {
-      // 関連するドキュメントを確認
-      const relatedDocs = await db
-        .collection('documents')
-        .where('fileUrl', '==', existingFileUrl)
-        .get();
+  const existingFileUrl =
+    resolveExistingLogData(existingGmailLogData, existingUploadLogData)?.fileUrl ?? null;
 
-      // 全てのドキュメントが分割元（isSplitSource=true）かどうかを確認
-      const hasActiveDocs = relatedDocs.docs.some(
-        (doc) => !doc.data().isSplitSource
-      );
-
-      // アクティブなドキュメントがある場合のみ重複スキップ
-      if (hasActiveDocs) {
-        console.log(`Skipping duplicate file: ${filename}`);
-        return 'skipped';
-      }
-
-      // 全て分割元の場合は再取り込みを許可
-      console.log(
-        `Re-import allowed: all existing documents are split sources (fileUrl: ${existingFileUrl})`
-      );
-    } else {
-      // fileUrlがない場合は従来通りスキップ
-      console.log(`Skipping duplicate file: ${filename}`);
-      return 'skipped';
-    }
+  let relatedDocsData: Array<{ isSplitSource?: boolean }> = [];
+  if (existingFileUrl) {
+    const relatedDocs = await db
+      .collection('documents')
+      .where('fileUrl', '==', existingFileUrl)
+      .get();
+    relatedDocsData = relatedDocs.docs.map(
+      (d) => d.data() as { isSplitSource?: boolean },
+    );
   }
+
+  const decision = evaluateReimportDecision({
+    existingGmailLogData,
+    existingUploadLogData,
+    relatedDocsData,
+  });
+
+  if (decision.verdict === 'skip') {
+    console.log(`Skipping duplicate file: ${filename}`);
+    return 'skipped';
+  }
+
+  if (decision.verdict === 'reimport') {
+    console.log(
+      `Re-import allowed: all existing documents are split sources (fileUrl: ${decision.fileUrl})`
+    );
+  }
+  // verdict === 'new' は以降の通常処理に合流
 
   // Cloud Storageに保存
   const bucket = storage.bucket();
