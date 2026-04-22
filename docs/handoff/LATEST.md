@@ -1,8 +1,94 @@
 # ハンドオフメモ
 
-**更新日**: 2026-04-22 session29 (#334 + #196 完遂、3 PR merged #357/#359/#361、Issue 2 closed + Follow-up 2 起票)
-**ブランチ**: main (clean、最新 commit `2114a21`)
-**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + Phase 2 (#181-#183) + Phase 3 (#188-#190) + Phase 5 (#339/#340/#332/#335) + Phase 6 (#346/#343/#344/#331/#333/#262) + Phase 7 (#338) + **Phase 8 (session29 = #334 scripts/shared 統合 + #196 rescue MAX_RETRY_COUNT bug fix)** 完遂
+**更新日**: 2026-04-22 session30 (#360 + #358 完遂、2 PR merged #363/#366、Issue 2 closed + Follow-up 2 起票)
+**ブランチ**: main (clean、最新 commit `d93f361`)
+**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + Phase 2 (#181-#183) + Phase 3 (#188-#190) + Phase 5 (#339/#340/#332/#335) + Phase 6 (#346/#343/#344/#331/#333/#262) + Phase 7 (#338) + Phase 8 (session29 = #334/#196) + **Phase 8 (session30 = #360 rescue observability + #358 backfill test lock-in)** 完遂
+
+<a id="session30"></a>
+## ✅ session30 完了サマリー (2026-04-22: #360 + #358 完遂、2 PR merged)
+
+session29 handoff で起票した直近 follow-up (#358 / #360) をまとめて片付け。両 PR とも Critical/Blocker 全解消を本 PR 内で完了、rating 7 以上の指摘は新規 follow-up Issue (#364 / #365) に分離。
+
+### PR 一覧
+
+| PR | 内容 | closed Issues | merged commit |
+|----|------|--------------|--------------|
+| **#363** | fix: rescueStuckProcessingDocs の observability 強化 + retryCount/retryAfter reprocess reset (runTransaction 化 + per-doc safeLogError + FE getReprocessClearFields 拡張 + emulator integration test 新設) | #360 | `816be5e` |
+| **#366** | test: backfill-display-filename の差分検出ロジック抽出 + OS 禁止文字 backfill 経路 lock-in (pure 関数 shared/ 化 + exhaustive assertNever + 8 test 追加) | #358 | `d93f361` |
+
+### 主要成果
+
+| 項目 | 内容 |
+|------|------|
+| **merged PR** | 2 本 (#363 / #366) |
+| **closed Issue** | #360 / #358 (計 2 件、auto-close 両方成功) |
+| **新規 follow-up Issue** | #364 (per-doc catch 経路 integration test、P2) / #365 (totalSkipped カウンタ分割、P2) |
+| **BE テスト** | 670 → **677 passing** (+7 from #358) + 6 pending |
+| **BE integration テスト** | 13 → **21 passing** (+8 from #360: rescue の pending/error/異常値/境界値 各分岐) |
+| **FE テスト** | 33 → **34 passing** (+1 from #360: getReprocessClearFields の retryCount/retryAfter lock-in) |
+| **コード量** | #363: +432/-51 (8 ファイル) / #366: +152/-10 (4 ファイル) 合計 +584/-61 |
+| **品質改善** | rescue 経路の observability (errors/ 経由で ErrorsPage 可視化) / reprocess 経路の retry drift 防止 / backfill の silent 書き換え検知強化 / 運用 grep 契約の定数化 |
+
+### Quality Gate 実施記録 (合計 13 エージェントレビュー + evaluator)
+
+**PR #363 (rescue observability)**:
+- /impl-plan で Acceptance Criteria 6 項目 + タスク分解 (A: FE / B: BE / C: integration test / D: Quality Gate)
+- /simplify 3 並列 (reuse/quality/efficiency) → 推奨 8 項目を本 PR 内で対応 (定数集約 / closure mutation → return value / any → StuckDocFixture interface / cleanupCollections helper 化 / after hook 削除 / eslint-disable 理由コメント等)
+- /review-pr 6 並列 + evaluator (5+ ファイル発動) → Important 7 項目を本 PR 内で対応 (fatalReached safeLogError を try-catch wrap で二重記録防止 / `as const` で literal type 保持 / test fixture を `STUCK_PROCESSING_THRESHOLD_MS / 2` で定数依存化 / `retryCount > MAX_RETRY_COUNT` 異常値 integration test 追加等)
+
+**PR #366 (backfill test lock-in)**:
+- /simplify 3 並列 → 推奨 3 項目を本 PR 内で対応 (pure 関数を `shared/detectDisplayFileNameChange.ts` に配置 / exhaustive `assertNever` 導入 / totalChanged ⊆ totalUpdated 包含関係コメント)
+- /review-pr 6 並列 (evaluator は 4 ファイルで発動条件未達) → Important 3 項目を本 PR 内で対応 (assertNever throw 前に progress log 出力 / newDisplayFileName non-empty 前提を JSDoc 明示 / `_migrations.changedCount` Firestore path 参照補強)
+
+### 設計判断 / Lessons Learned (本セッション重要知見)
+
+1. **runTransaction 化の正当化**: maxInstances=1 現状でも retryCount 最新性保証のため tx が必要。rescue 実行中に handleProcessingError が同一 doc を更新するケースで stale 値起因 off-by-one を防ぐ。handleProcessingError と同一パターンに揃えることで将来の並行処理拡張時にも整合
+
+2. **ESM loader 回避の helper パターン**: `test/helpers/initFirestoreEmulator.ts` を integration test の最初に `import './helpers/initFirestoreEmulator';` することで、ES module の depth-first module resolution を利用して `admin.initializeApp()` を `processOCR.ts` 評価前に確実に実行する。mocha の glob pattern (`test/*Integration.test.ts`) だと ESM loader に回されて `admin.initializeApp is not a function` になる罠あり → explicit file list で回避
+
+3. **運用 grep 契約の test lock-in**: 運用監視が依存する文字列 (`STUCK_RESCUE_FATAL_MESSAGE_PREFIX = 'Processing timed out, max retries exceeded' as const`) を `constants.ts` に集約し、`as const` で literal type 保持 + test `.include()` で silent drift を検知。ErrorsPage フィルタ / Cloud Logging alert の前提が変わった時に CI で即座に落ちる
+
+4. **silent-failure-hunter I1 の二重記録防止**: fatalReached 分岐内の `safeLogError` 呼出を try-catch で wrap し、失敗を outer catch に伝播させない。伝播すると outer catch 内の `safeLogError` が再度呼ばれ、同一 docId への errors/ 書き込みが重複する。errors 記録の idempotency を保つ重要パターン
+
+5. **純粋関数 shared/ 配置の原則**: Firestore/Admin SDK 非依存の関数は `shared/` に置き、scripts/functions 両方から直接 import する。`scripts/ → functions/src/` 参照は唯一事例 → 慣例違反で将来の firebase-functions 依存追加で scripts ビルド破綻リスクあり。`functions/src/utils/backfillDisplayFileName.ts` は shared からの re-export に置換済み
+
+6. **exhaustive switch + assertNever**: 新規 enum 拡張時に silent fallthrough を compile-time で検知する defensive pattern。ただし runtime throw 時は operator が partial-apply 状況を把握できるよう progress サマリー (`processed/updated/skipped/changed` + uncommitted batch size) を `console.error` で先に出力してから throw
+
+7. **Issue triage (feedback_issue_triage.md 準拠)**: review agent の rating 5-6 は Issue 化せず PR コメント/TODO で扱う、rating 7 以上を Follow-up Issue 化。本セッションは #364 (rating 7 MEDIUM) / #365 (効率推奨) を follow-up 化。Close 数 = 起票数にならないよう (net 進捗ゼロ回避)
+
+8. **動作改善の PR body 明示**: #366 では `--force` 時の noop skip 挙動が新動作 (元は SET log + 無意味な updatedAt 書き込み)。silent regression 化しないよう PR body に "動作変更の明示" セクションを作り、旧挙動との差分をテーブル化。数万件規模での write 削減効果 + listener ノイズ削減を定量化
+
+### 次セッション着手候補 (WBS 進捗)
+
+**軽量 (0.5 セッション)**:
+- **#364 rescue per-doc catch test** (本セッション起票): emulator で意図的に runTransaction 失敗を誘発する fixture を作成。sinon 新規導入 or emulator rule で書き込み拒否する方法を検討。#360 I1 の完全 lock-in
+- **#365 totalSkipped カウンタ分割** (本セッション起票): scripts の counter を `totalSkippedExisting` / `totalSkippedNoop` に分離。運用可視性向上、独立性高い
+
+**中規模 (1 セッション)**:
+- **#239 force-reindex audit log**: Cloud Logging に構造化 audit log 出力、compliance 対応の延長
+- **#251 summaryGenerator test + buildSummaryPrompt 分離**: 既存の summary 処理を testable に切り出し
+- **#200 checkGmailAttachments/splitPdf 統合テスト**: Gmail 連携経路の integration test
+
+**大物 (2 セッション、`/impl-plan` 必須)**:
+- **#237 search tokenizer 共通化**: FE/BE/script 3 箇所の重複を `shared/` に集約。session29 handoff でも大物として持ち越し、本セッションも未着手。Evaluator 分離必須 (5+ ファイル + アーキテクチャ影響)
+- **#299 capPageResultsAggregate 動的 safeLogError test** (最難): ts-node/esm 環境整備込み。ESM loader 問題 (本セッション #360 で副産物として知見獲得) を活用できる
+
+**session 外 Open Issues** (引き続き持ち越し): #238 (force-reindex 孤児 posting) / #220 (OOM/truncated metric + alert) / #152 (dev setup-tenant)
+
+### Test plan 実行結果
+
+- [x] BE `npx tsc --noEmit` EXIT 0 (両 PR 確認)
+- [x] BE `npm test` **677 passing + 6 pending** (670 → +7 from #358)
+- [x] BE `npm run test:integration` (emulator) **21 passing** (13 既存 + 8 新規 from #360)
+- [x] FE `npx tsc --noEmit` EXIT 0
+- [x] FE `npm test` (vitest) **34 passing** (33 → +1 from #360 FE test)
+- [x] scripts `npx tsc --noEmit -p scripts/tsconfig.json` EXIT 0
+- [x] main CI 3/3 green × 2 PR (lint-build-test / CodeRabbit / GitGuardian 全 pass)
+- [x] `gh issue view 360 / 358` で CLOSED 確認 (squash merge で 2 件とも auto-close 成功)
+- [x] follow-up Issue #364 / #365 起票確認
+- [ ] main Deploy IN_PROGRESS (merge 直後、次セッション開始時に `gh run list --workflow=Deploy` で SUCCESS 確認必要)
+
+---
 
 <a id="session29"></a>
 ## ✅ session29 完了サマリー (2026-04-22: #334 + #196 完遂、3 PR merged)
