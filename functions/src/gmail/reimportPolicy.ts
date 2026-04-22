@@ -38,7 +38,14 @@ export interface ReimportDecisionInput {
 
 export interface ReimportDecision {
   verdict: ReimportVerdict;
-  /** verdict が 'reimport' の場合の既存 fileUrl。それ以外は null */
+  /**
+   * 既存 fileUrl。verdict 別の値:
+   *   - 'new'      : 常に null (hash 一致なし)
+   *   - 'skip'     : 既存 log に fileUrl がある場合は non-null (アクティブ doc あり等)、
+   *                  fileUrl 欠損 legacy record の場合は null
+   *   - 'reimport' : 常に non-null string (再取り込み対象ファイル)
+   * caller は `verdict === 'reimport'` の場合のみ使用想定 (production の log 出力)。
+   */
   fileUrl: string | null;
 }
 
