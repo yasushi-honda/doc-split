@@ -24,7 +24,9 @@ import { cleanupCollections } from './helpers/cleanupEmulator';
 const db = admin.firestore();
 const COLLECTIONS_TO_CLEAN: readonly string[] = ['documents'];
 
-// splitPdf 末尾の元ドキュメント update (src/pdf/pdfOperations.ts) と同等の書き込み
+// src/pdf/pdfOperations.ts の splitPdf 内、
+//   docRef.update({ splitInto, status: 'split', isSplitSource: true })
+// と同等の書き込み (3 フィールド、これ以外を触らない Partial Update 契約)
 async function markParentAsSplitSource(
   docRef: admin.firestore.DocumentReference,
   createdDocIds: string[]

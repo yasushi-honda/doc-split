@@ -6,7 +6,8 @@
  *
  * 背景: PR #199 (Gmail 重複取得の根本対策) で maxInstances:1 を導入した。同一スケジュール
  * の複数起動は gmailLogs の messageId 重複挿入レースを招くため、設定値は regression guard
- * する必要がある。既存は grep contract すら無く、settings の静かな退行を検知できない。
+ * する必要がある。onSchedule の runtime options は設定ファイル相当でコンパイルエラーを
+ * 起こさず静かに退行しうるため、grep-based contract で固定する。
  *
  * 方式: grep-based (docs/context/test-strategy.md §2.1 参照)。
  * source import は `admin.firestore()` top-level 評価で副作用が大きく、unit test 環境に

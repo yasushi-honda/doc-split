@@ -35,7 +35,10 @@ async function isAlreadyProcessedByMessageId(messageId: string): Promise<boolean
 }
 
 // checkGmailAttachments.ts の hash 重複 + isSplitSource 再取り込み許可ロジックを再現
-// 戻り値: 'skip' = 全件アクティブ or fileUrl 欠損 / 'reimport' = 全件 split source
+// 戻り値:
+//   'new'      = hash 未登録 (新規処理対象)
+//   'skip'     = fileUrl 欠損 or 1 件以上のアクティブ doc (isSplitSource != true) 存在
+//   'reimport' = fileUrl あり + アクティブ doc ゼロ (全て split source or 関連 doc なし)
 async function shouldSkipByHashDuplicate(
   hash: string
 ): Promise<'skip' | 'reimport' | 'new'> {
