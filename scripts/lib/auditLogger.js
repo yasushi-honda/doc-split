@@ -1,26 +1,20 @@
 /**
- * Cloud Logging audit logger for force-reindex script (Issue #239)
+ * Cloud Logging audit logger for force-reindex script.
  *
  * GitHub Actions ランナーの stdout は対象環境の GCP Cloud Logging に
- * 自動取込されないため、明示的書き込みが必要 (PR #235 review evaluator 指摘)。
+ * 自動取込されないため、明示的書き込みが必要。
  *
  * 設計方針:
  *   - Fail-open: Cloud Logging 書き込み失敗で本体処理は止めない (drift 復旧優先)
  *   - PII 除外: customerName, officeName, fileName 等は payload に含めない
  *   - Schema 固定: helper 側で schema を正規化、呼出元の自由 payload を許さない
- *   - Event 名は EVENTS 定数経由で typo 防止
+ *   - Event 名と severity は EVENTS / SEVERITIES 定数経由で typo 防止
  *
- * 必要 IAM: 実行 SA に roles/logging.logWriter (3 環境設定済、2026-04-22 確認)
+ * 必要 IAM: 実行 SA に roles/logging.logWriter (運用手順は SOP §7 参照)
  *
  * 関連: ADR-0008 (データ保護), ADR-0015 (search_index silent failure policy),
  *       functions/src/utils/errorLogger.ts (in-functions Firestore error logging,
  *       本 helper とは sink が異なる)
- *
- * 既知の制約 (Follow-up):
- *   - --all-drift で 1000+ docs を処理する際、log.write を per-doc で直列実行する。
- *     大規模 drift 時は batch flush (log.write([entries...])) で 10-50x 高速化可能。
- *     通常 0-10 件運用では実害なし、ADR-0015 再評価トリガー発動レベルで顕在化。
- *     別 Issue で対応予定。
  */
 
 const LOG_NAME = 'force_reindex_audit';
@@ -32,24 +26,44 @@ const EVENTS = Object.freeze({
   FATAL: 'force_reindex_fatal',
   BATCH_SUMMARY: 'force_reindex_batch_summary',
   AUDIT_LOG_FAILED: 'force_reindex_audit_log_failed',
+  STARTUP_FAILED: 'force_reindex_startup_failed',
 });
 
-/**
- * Cloud Logging string severity (jsonPayload クエリ可読性のため string 推奨)
- */
-const VALID_SEVERITIES = new Set(['INFO', 'NOTICE', 'WARNING', 'ERROR', 'CRITICAL']);
+/** Severity SSoT (typo 防止)。Cloud Logging string severity と一致させる */
+const SEVERITIES = Object.freeze({
+  INFO: 'INFO',
+  NOTICE: 'NOTICE',
+  WARNING: 'WARNING',
+  ERROR: 'ERROR',
+  CRITICAL: 'CRITICAL',
+});
+
+/** runtime 検証用 (jsonPayload クエリ可読性のため string severity を採用) */
+const VALID_SEVERITIES = new Set(Object.values(SEVERITIES));
 
 /**
  * lazy 初期化: projectId ごとにキャッシュ。
  * 単一 cache 変数だと第 2 呼出以降の projectId が無視される silent bug が出るため
  * Map で per-project にキャッシュする。
+ *
+ * require 失敗 (依存未インストール等) は cache せず毎回 throw すると、
+ * fail-open の loop 防止が無効化されるため、別 sentinel でキャッシュする。
  */
 const cachedLogging = new Map();
+let cachedRequireError = null;
+
 function getLogging(projectId) {
+  if (cachedRequireError) throw cachedRequireError;
   const existing = cachedLogging.get(projectId);
   if (existing) return existing;
-  const { Logging } = require('@google-cloud/logging');
-  const logging = new Logging({ projectId });
+  let LoggingClass;
+  try {
+    LoggingClass = require('@google-cloud/logging').Logging;
+  } catch (err) {
+    cachedRequireError = err;
+    throw err;
+  }
+  const logging = new LoggingClass({ projectId });
   cachedLogging.set(projectId, logging);
   return logging;
 }
@@ -57,6 +71,7 @@ function getLogging(projectId) {
 /** test/inter-call 状態リセット用 (@internal) */
 function _resetCacheForTest() {
   cachedLogging.clear();
+  cachedRequireError = null;
 }
 
 /**
@@ -128,25 +143,37 @@ function _buildPayload(payload, ctx) {
  * fail-open: stderr に構造化 JSON を出力して継続。本体処理は止めない。
  * Cloud Logging への二度目の書き込みは試みない (loop 防止)。
  *
- * defensive: JSON.stringify が err.code に bigint/object 等を持つ場合に例外可能。
- * fail-open の invariant を守るため、stringify 失敗時は last-resort の text 出力に fallback。
+ * defensive 多層 catch:
+ *   - JSON.stringify は err.code に bigint/object を持つ場合に例外可能
+ *   - process.stderr.write は EPIPE (CI ログ収集側切断等) で例外可能
+ *   - いずれの失敗も無視: fail-open invariant が最優先 (本体処理を止めない)
  */
 function _failOpen(err) {
   try {
     const failurePayload = {
-      severity: 'WARNING',
+      severity: SEVERITIES.WARNING,
       event: EVENTS.AUDIT_LOG_FAILED,
       errorMessage: err?.message ?? String(err),
       errorCode: err?.code ?? null,
       timestamp: new Date().toISOString(),
     };
-    process.stderr.write(JSON.stringify(failurePayload) + '\n');
+    _safeWriteStderr(JSON.stringify(failurePayload) + '\n');
   } catch (stringifyErr) {
-    process.stderr.write(
+    _safeWriteStderr(
       `audit_log_failed: ${err?.message ?? String(err)} (stringify error: ${stringifyErr?.message})\n`,
     );
   }
   return { ok: false, error: err };
+}
+
+/** stderr write の EPIPE 等を握り潰す last-resort writer */
+function _safeWriteStderr(line) {
+  try {
+    process.stderr.write(line);
+  } catch {
+    // 監査ログの書き込み失敗を更に記録する手段がないため、ここで沈める。
+    // fail-open invariant 維持が最優先 (本体処理を止めない)。
+  }
 }
 
 /** Error / 任意 object から audit に載せるフィールドだけ抽出 (stack は監査価値なく除外) */
@@ -162,6 +189,7 @@ function _normalizeError(err) {
 module.exports = {
   writeForceReindexAuditLog,
   EVENTS,
+  SEVERITIES,
   LOG_NAME,
   VALID_SEVERITIES,
   _resetCacheForTest,

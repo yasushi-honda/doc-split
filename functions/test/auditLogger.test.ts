@@ -17,12 +17,23 @@ import * as path from 'path';
 import { createRequire } from 'module';
 
 type AuditPayload = Record<string, unknown>;
-type AuditMetadata = { severity: string; resource: { type: string } };
+type AuditMetadata = { severity: AuditSeverity; resource: { type: string } };
+
+// runtime invariant を compile-time でも表現する literal union (typo 防止)
+type AuditSeverity = 'INFO' | 'NOTICE' | 'WARNING' | 'ERROR' | 'CRITICAL';
+type AuditEvent =
+  | 'force_reindex_executed'
+  | 'force_reindex_failed'
+  | 'force_reindex_fatal'
+  | 'force_reindex_batch_summary'
+  | 'force_reindex_audit_log_failed'
+  | 'force_reindex_startup_failed';
+type AuditMode = 'doc-id' | 'all-drift';
 
 interface AuditPayloadInput {
-  event: string;
-  severity: string;
-  mode?: string;
+  event: AuditEvent;
+  severity: AuditSeverity;
+  mode?: AuditMode;
   dryRun?: boolean;
   docId?: string;
   counts?: Record<string, number>;
@@ -53,15 +64,33 @@ interface FakeLogging {
   log: (logName: string) => FakeLog;
 }
 
+interface EventsMap {
+  readonly EXECUTED: 'force_reindex_executed';
+  readonly FAILED: 'force_reindex_failed';
+  readonly FATAL: 'force_reindex_fatal';
+  readonly BATCH_SUMMARY: 'force_reindex_batch_summary';
+  readonly AUDIT_LOG_FAILED: 'force_reindex_audit_log_failed';
+  readonly STARTUP_FAILED: 'force_reindex_startup_failed';
+}
+
+interface SeveritiesMap {
+  readonly INFO: 'INFO';
+  readonly NOTICE: 'NOTICE';
+  readonly WARNING: 'WARNING';
+  readonly ERROR: 'ERROR';
+  readonly CRITICAL: 'CRITICAL';
+}
+
 interface AuditLoggerModule {
   writeForceReindexAuditLog: (
     payload: AuditPayloadInput,
     ctx: AuditCtx,
     options?: AuditOptions,
   ) => Promise<{ ok: boolean; error?: Error }>;
-  EVENTS: Readonly<Record<string, string>>;
-  LOG_NAME: string;
-  VALID_SEVERITIES: Set<string>;
+  EVENTS: EventsMap;
+  SEVERITIES: SeveritiesMap;
+  LOG_NAME: 'force_reindex_audit';
+  VALID_SEVERITIES: Set<AuditSeverity>;
   _resetCacheForTest: () => void;
 }
 
@@ -70,8 +99,14 @@ const auditLoggerMod = requireCjs(
   path.resolve(process.cwd(), '../scripts/lib/auditLogger.js'),
 ) as AuditLoggerModule;
 
-const { writeForceReindexAuditLog, EVENTS, LOG_NAME, VALID_SEVERITIES, _resetCacheForTest } =
-  auditLoggerMod;
+const {
+  writeForceReindexAuditLog,
+  EVENTS,
+  SEVERITIES,
+  LOG_NAME,
+  VALID_SEVERITIES,
+  _resetCacheForTest,
+} = auditLoggerMod;
 
 /** Fake Logging factory: 呼び出された entry/metadata を捕捉 */
 function makeFakeLoggingFactory() {
@@ -145,10 +180,31 @@ describe('scripts/lib/auditLogger (#239)', () => {
       expect(EVENTS.FATAL).to.equal('force_reindex_fatal');
       expect(EVENTS.BATCH_SUMMARY).to.equal('force_reindex_batch_summary');
       expect(EVENTS.AUDIT_LOG_FAILED).to.equal('force_reindex_audit_log_failed');
+      expect(EVENTS.STARTUP_FAILED).to.equal('force_reindex_startup_failed');
     });
 
     it('Object.freeze で変更不可', () => {
       expect(Object.isFrozen(EVENTS)).to.be.true;
+    });
+  });
+
+  describe('SEVERITIES constant', () => {
+    it('Cloud Logging string severity 5 種を提供する (typo 防止)', () => {
+      expect(SEVERITIES.INFO).to.equal('INFO');
+      expect(SEVERITIES.NOTICE).to.equal('NOTICE');
+      expect(SEVERITIES.WARNING).to.equal('WARNING');
+      expect(SEVERITIES.ERROR).to.equal('ERROR');
+      expect(SEVERITIES.CRITICAL).to.equal('CRITICAL');
+    });
+
+    it('Object.freeze で変更不可', () => {
+      expect(Object.isFrozen(SEVERITIES)).to.be.true;
+    });
+
+    it('VALID_SEVERITIES と整合 (single source of truth)', () => {
+      for (const v of Object.values(SEVERITIES)) {
+        expect(VALID_SEVERITIES.has(v)).to.be.true;
+      }
     });
   });
 
@@ -353,13 +409,64 @@ describe('scripts/lib/auditLogger (#239)', () => {
       const { factory } = makeFakeLoggingFactory();
       const { result, stderr } = await captureStderr(() =>
         writeForceReindexAuditLog(
-          { event: EVENTS.EXECUTED, severity: 'INVALID' },
+          // 型契約上は許されない値を runtime 検証のテストのため強制 cast で渡す
+          { event: EVENTS.EXECUTED, severity: 'INVALID' as AuditSeverity },
           { projectId: 'p' },
           { loggingFactory: factory },
         ),
       );
       expect(result.ok).to.be.false;
       expect(stderr).to.include('invalid severity');
+    });
+  });
+
+  describe('writeForceReindexAuditLog - defensive fallback (review #6)', () => {
+    it('err.code が BigInt でも JSON.stringify TypeError を握り潰す', async () => {
+      const bigintErr = Object.assign(new Error('bigint code'), { code: BigInt(7) });
+      const { factory } = makeFailingLoggingFactory(bigintErr);
+
+      const { result, stderr } = await captureStderr(() =>
+        writeForceReindexAuditLog(
+          { event: EVENTS.EXECUTED, severity: SEVERITIES.NOTICE },
+          { projectId: 'p' },
+          { loggingFactory: factory },
+        ),
+      );
+
+      // fail-open invariant: stringify が throw しても reject しない
+      expect(result.ok).to.be.false;
+      // last-resort text fallback が出力される
+      expect(stderr).to.include('audit_log_failed');
+      expect(stderr).to.include('bigint code');
+    });
+  });
+
+  describe('writeForceReindexAuditLog - Map cache per-project (review #5)', () => {
+    it('異なる projectId に対して factory が個別に解決される', async () => {
+      const factoryCalls: string[] = [];
+      const trackingFactory = (projectId: string): FakeLogging => {
+        factoryCalls.push(projectId);
+        return {
+          log: (_logName: string): FakeLog => ({
+            entry: (metadata, data) => ({ metadata, data }),
+            write: async () => {},
+          }),
+        };
+      };
+
+      await writeForceReindexAuditLog(
+        { event: EVENTS.EXECUTED, severity: SEVERITIES.NOTICE },
+        { projectId: 'project-a' },
+        { loggingFactory: trackingFactory },
+      );
+      await writeForceReindexAuditLog(
+        { event: EVENTS.EXECUTED, severity: SEVERITIES.NOTICE },
+        { projectId: 'project-b' },
+        { loggingFactory: trackingFactory },
+      );
+
+      // 各 projectId で factory 呼出 (cache key 化されている、silent bug 防止)
+      expect(factoryCalls).to.deep.equal(['project-a', 'project-b']);
     });
   });
 });

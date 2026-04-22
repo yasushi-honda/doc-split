@@ -27,11 +27,11 @@
 // BE tokenizer.ts の compiled lib/ を参照することで drift を防止する。
 const { loadTokenizer, ensureTokenizerBuilt } = require('./lib/loadTokenizer');
 const { aggregateTokensByTokenId } = require('./lib/aggregateTokens');
-const { writeForceReindexAuditLog, EVENTS } = require('./lib/auditLogger');
+const { writeForceReindexAuditLog, EVENTS, SEVERITIES } = require('./lib/auditLogger');
 
 /**
- * 失敗イベントを stdout JSON + Cloud Logging audit に二重出力する helper。
- * AC-4 (既存 stdout JSON 維持) と AC-2 (Cloud Logging audit) の SSoT。
+ * 失敗イベントを stdout JSON (GitHub Actions 調査用) と
+ * Cloud Logging audit (事後監査用) の両 sink に出力する SSoT。
  */
 async function emitFailureEvent({ event, severity, mode, docId, error, dryRun, auditCtx }) {
   console.error(JSON.stringify({
@@ -186,8 +186,8 @@ function detectDrift(docData, tokenizer = loadTokenizer()) {
  * エラーポリシー:
  *   - NOT_FOUND: 冪等な無視 (旧 posting が既に削除済み)
  *   - その他の永続/一時エラー: throw して呼び出し元の failedCount に集計
- *     (silent に続行すると tokenHash だけ更新され次回 scan で検出不能になる
- *      ため、本 PR の目的と逆行する。PR #235 review 指摘対応)
+ *     (silent に続行すると tokenHash だけ更新され次回 scan で検出不能になるため、
+ *      本スクリプトの目的と逆行する)
  *
  * 厳密な冪等ではない境界:
  *   - 手動で search_index から posting を削除した状態で 2 回実行すると df が負になる
@@ -213,8 +213,7 @@ async function reindexDocument(db, docId, docData, { execute }, tokenizer = load
   const now = admin.firestore.Timestamp.now();
 
   // 1. 旧 posting 削除: NOT_FOUND を事前 filter で除外してから batch。
-  //    事前 filter にすることで「1 件 NOT_FOUND → batch 全体ロールバック」を回避する
-  //    (PR #235 review evaluator HIGH 指摘対応)。
+  //    事前 filter にすることで「1 件 NOT_FOUND → batch 全体ロールバック」を回避する。
   if (tokensToRemove.length > 0) {
     const removeTokenIds = tokensToRemove.map(t => tokenizer.generateTokenId(t));
     const removeRefs = removeTokenIds.map(id => db.collection('search_index').doc(id));
@@ -270,7 +269,7 @@ async function reindexDocument(db, docId, docData, { execute }, tokenizer = load
   }
   // step 2/3 の失敗時に呼出元が stage を特定できるよう error を wrap する。
   // 半端状態 (postings 新しいが tokenHash 古い) 発生時は
-  // Runbook §4.5 に基づき手動クリーンアップする (silent-failure-hunter MEDIUM 指摘対応)。
+  // Runbook §4.5 に基づき手動クリーンアップする。
   try {
     await writeBatch.commit();
   } catch (error) {
@@ -335,7 +334,7 @@ async function runSingleDocId(db, args, auditCtx) {
     await writeForceReindexAuditLog(
       {
         event: EVENTS.EXECUTED,
-        severity: 'NOTICE',
+        severity: SEVERITIES.NOTICE,
         mode: 'doc-id',
         dryRun: !args.execute,
         docId: result.docId,
@@ -348,7 +347,7 @@ async function runSingleDocId(db, args, auditCtx) {
   } catch (error) {
     await emitFailureEvent({
       event: EVENTS.FAILED,
-      severity: 'ERROR',
+      severity: SEVERITIES.ERROR,
       mode: 'doc-id',
       docId: args.docId,
       error,
@@ -404,7 +403,7 @@ async function runAllDrift(db, args, auditCtx) {
           await writeForceReindexAuditLog(
             {
               event: EVENTS.EXECUTED,
-              severity: 'NOTICE',
+              severity: SEVERITIES.NOTICE,
               mode: 'all-drift',
               dryRun: false,
               docId: docSnap.id,
@@ -426,13 +425,14 @@ async function runAllDrift(db, args, auditCtx) {
             throw error;
           }
           failed++;
+          // 個別失敗を監査可能にする (silent 続行で次回 scan 検出不能になるのを防ぐ)
           await emitFailureEvent({
             event: EVENTS.FAILED,
-            severity: 'ERROR',
+            severity: SEVERITIES.ERROR,
             mode: 'all-drift',
             docId: docSnap.id,
             error,
-            dryRun: false,
+            dryRun: !args.execute,
             auditCtx,
           });
         }
@@ -449,7 +449,7 @@ async function runAllDrift(db, args, auditCtx) {
   await writeForceReindexAuditLog(
     {
       event: EVENTS.BATCH_SUMMARY,
-      severity: failed > 0 ? 'WARNING' : 'NOTICE',
+      severity: failed > 0 ? SEVERITIES.WARNING : SEVERITIES.NOTICE,
       mode: 'all-drift',
       dryRun: !args.execute,
       counts: { processed, drifted, reindexed, failed },
@@ -462,12 +462,35 @@ async function runAllDrift(db, args, auditCtx) {
 
 // ========== Step 6: main ==========
 
+/** GitHub Actions では GITHUB_ACTOR、手動実行時は USER をフォールバック */
+function buildAuditCtx(projectId) {
+  return {
+    projectId,
+    executedBy: process.env.GITHUB_ACTOR || process.env.USER || 'unknown',
+  };
+}
+
 async function main() {
+  // projectId は parseArgs より先に検証する。理由: parseArgs throw 時にも
+  // audit ctx を構築できるようにし、startup_failed event を Cloud Logging へ
+  // 残せるようにするため (silent failure 防止)。
+  const projectId = process.env.FIREBASE_PROJECT_ID;
+  if (!projectId) {
+    console.error('[ERROR] FIREBASE_PROJECT_ID 環境変数が未設定です');
+    process.exit(1);
+  }
+  const auditCtx = buildAuditCtx(projectId);
+
   let args;
   try {
     args = parseArgs(process.argv.slice(2));
   } catch (error) {
-    console.error(`[ERROR] ${error.message}`);
+    await emitFailureEvent({
+      event: EVENTS.STARTUP_FAILED,
+      severity: SEVERITIES.ERROR,
+      error,
+      auditCtx,
+    });
     printHelp();
     process.exit(1);
   }
@@ -477,23 +500,11 @@ async function main() {
     process.exit(0);
   }
 
-  const projectId = process.env.FIREBASE_PROJECT_ID;
-  if (!projectId) {
-    console.error('[ERROR] FIREBASE_PROJECT_ID 環境変数が未設定です');
-    process.exit(1);
-  }
-
   admin.initializeApp({ projectId });
   const db = admin.firestore();
 
   console.log(`プロジェクト: ${projectId}`);
   console.log(`モード: ${args.execute ? '実行 (書き込みあり)' : 'dry-run (書き込みなし)'}`);
-
-  // GitHub Actions では GITHUB_ACTOR、手動実行時は USER をフォールバック
-  const auditCtx = {
-    projectId,
-    executedBy: process.env.GITHUB_ACTOR || process.env.USER || 'unknown',
-  };
 
   let exitCode = EXIT_OK;
   if (args.docId) {
@@ -513,21 +524,19 @@ if (require.main === module) {
     })
     .catch(async (error) => {
       // process.exit は in-flight gRPC を切断するため、await で audit 完了を待つ
+      // projectId 未設定時は main() 内で先に exit 1 するため、ここに到達するのは
+      // admin.initializeApp 以降の async エラーに限られる
       const projectId = process.env.FIREBASE_PROJECT_ID;
       if (projectId) {
         await emitFailureEvent({
           event: EVENTS.FATAL,
-          severity: 'CRITICAL',
+          severity: SEVERITIES.CRITICAL,
           error,
-          auditCtx: {
-            projectId,
-            executedBy: process.env.GITHUB_ACTOR || process.env.USER || 'unknown',
-          },
+          auditCtx: buildAuditCtx(projectId),
         });
       } else {
-        // projectId 未設定 → audit 不可、stdout 出力のみ
         console.error(JSON.stringify({
-          severity: 'CRITICAL',
+          severity: SEVERITIES.CRITICAL,
           event: EVENTS.FATAL,
           errorCode: error.code ?? null,
           errorMessage: error.message,
@@ -543,4 +552,6 @@ module.exports = {
   computeExpectedIndex,
   detectDrift,
   reindexDocument,
+  emitFailureEvent,
+  buildAuditCtx,
 };
