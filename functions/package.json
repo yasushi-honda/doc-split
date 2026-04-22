@@ -21,28 +21,30 @@
     "node": "20"
   },
   "dependencies": {
+    "@google-cloud/secret-manager": "^5.6.0",
+    "@google-cloud/vertexai": "^1.9.0",
+    "date-fns": "^4.1.0",
     "firebase-admin": "^12.7.0",
     "firebase-functions": "^6.1.0",
-    "@google-cloud/vertexai": "^1.9.0",
     "googleapis": "^144.0.0",
-    "pdf-lib": "^1.17.1",
-    "date-fns": "^4.1.0",
-    "@google-cloud/secret-manager": "^5.6.0"
+    "pdf-lib": "^1.17.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.15.0",
+    "@firebase/rules-unit-testing": "^3.0.4",
+    "@types/chai": "^4.3.20",
+    "@types/mocha": "^10.0.10",
+    "@types/sinon": "^17.0.4",
     "@typescript-eslint/eslint-plugin": "^8.15.0",
     "@typescript-eslint/parser": "^8.15.0",
-    "eslint": "^9.15.0",
-    "globals": "^15.12.0",
-    "typescript-eslint": "^8.15.0",
-    "typescript": "~5.6.2",
-    "firebase-functions-test": "^3.3.0",
-    "@firebase/rules-unit-testing": "^3.0.4",
-    "mocha": "^10.8.2",
-    "@types/mocha": "^10.0.10",
-    "ts-node": "^10.9.2",
     "chai": "^4.5.0",
-    "@types/chai": "^4.3.20"
+    "eslint": "^9.15.0",
+    "firebase-functions-test": "^3.3.0",
+    "globals": "^15.12.0",
+    "mocha": "^10.8.2",
+    "sinon": "^17.0.1",
+    "ts-node": "^10.9.2",
+    "typescript": "~5.6.2",
+    "typescript-eslint": "^8.15.0"
   }
 }

@@ -21,6 +21,7 @@ import './helpers/initFirestoreEmulator';
 
 import { expect } from 'chai';
 import * as admin from 'firebase-admin';
+import * as sinon from 'sinon';
 import { rescueStuckProcessingDocs } from '../src/ocr/processOCR';
 import {
   MAX_RETRY_COUNT,
@@ -207,6 +208,77 @@ describe('rescueStuckProcessingDocs 統合テスト (#360)', () => {
       const errDoc = errs.docs[0].data();
       expect(errDoc.source).to.equal('ocr');
       expect(errDoc.functionName).to.equal('processOCR');
+    });
+  });
+
+  describe('per-doc catch 経路 (runTransaction 失敗時) #364', () => {
+    // #364: sinon で db.runTransaction を stub し、tx 失敗時に per-doc catch の
+    // safeLogError が呼ばれることを lock-in する。#360 silent-failure-hunter I1 で
+    // 実装されたが、integration test は fatalReached=true 経路のみ検証していた。
+    // 将来 outer try/catch を誤削除すると partial failure で silent 未処理復活するリスクを防ぐ。
+
+    const TX_FAILURE_MESSAGE = 'Simulated runTransaction failure for #364 test';
+
+    afterEach(() => {
+      sinon.restore();
+    });
+
+    it('runTransaction 失敗 → errors/ に記録、lastErrorMessage は fatal prefix と異なる', async () => {
+      const docId = 'stuck-tx-fail';
+      await db.doc(`documents/${docId}`).set({
+        status: 'processing',
+        updatedAt: admin.firestore.Timestamp.fromMillis(Date.now() - STUCK_UPDATED_AT_OFFSET_MS),
+        retryCount: 1,
+        fileName: 'tx-fail.pdf',
+      });
+
+      sinon.stub(db, 'runTransaction').rejects(new Error(TX_FAILURE_MESSAGE));
+
+      await rescueStuckProcessingDocs();
+
+      // per-doc catch 経路の errors/ 記録 (silent-failure-hunter I1 の完全 lock-in)
+      const errs = await db.collection('errors').where('documentId', '==', docId).get();
+      expect(errs.size).to.equal(1);
+      const errDoc = errs.docs[0].data();
+      expect(errDoc.source).to.equal('ocr');
+      expect(errDoc.functionName).to.equal('processOCR');
+      // per-doc catch 由来のメッセージは fatal 分岐 (STUCK_RESCUE_FATAL_MESSAGE_PREFIX) とは異なる。
+      // errors/ の errorMessage は safeLogError が params.error.message をそのまま記録するため、
+      // 送信元の TX_FAILURE_MESSAGE が含まれる。fatal 分岐は別の Error.message を投入するので区別可能。
+      const errorMessage = errDoc.errorMessage as string | undefined;
+      expect(errorMessage).to.be.a('string');
+      expect(errorMessage).to.include(TX_FAILURE_MESSAGE);
+      expect(errorMessage).to.not.include(STUCK_RESCUE_FATAL_MESSAGE_PREFIX);
+
+      // tx 失敗のため document 本体の status/retryCount は更新されない (processing のまま)。
+      // これも silent failure でなく「状態復旧に失敗した事実」を保存する観測可能性の lock-in。
+      const docAfter = (await db.doc(`documents/${docId}`).get()).data() as StuckDocFixture;
+      expect(docAfter.status).to.equal('processing');
+      expect(docAfter.retryCount).to.equal(1);
+    });
+
+    it('partial failure: 複数 doc の tx が全て失敗しても per-doc catch がループを継続する', async () => {
+      // 2 doc を配置、全 tx を失敗させる。ループ継続性 (outer try/catch 誤削除の検知) を lock-in。
+      const docIds = ['stuck-partial-1', 'stuck-partial-2'];
+      for (const docId of docIds) {
+        await db.doc(`documents/${docId}`).set({
+          status: 'processing',
+          updatedAt: admin.firestore.Timestamp.fromMillis(Date.now() - STUCK_UPDATED_AT_OFFSET_MS),
+          retryCount: 1,
+          fileName: `${docId}.pdf`,
+        });
+      }
+
+      sinon.stub(db, 'runTransaction').rejects(new Error(TX_FAILURE_MESSAGE));
+
+      await rescueStuckProcessingDocs();
+
+      // 両 doc について errors/ に記録されていること (ループが途中で止まっていない証左)
+      for (const docId of docIds) {
+        const errs = await db.collection('errors').where('documentId', '==', docId).get();
+        expect(errs.size, `errors/ for ${docId}`).to.equal(1);
+        expect(errs.docs[0].data().functionName).to.equal('processOCR');
+      }
     });
   });
 
