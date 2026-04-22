@@ -1,8 +1,85 @@
 # ハンドオフメモ
 
-**更新日**: 2026-04-22 session31 (#365 + #364 完遂、2 PR merged #368/#369、Issue 2 closed + Follow-up 1 起票、Net +1)
-**ブランチ**: main (clean、最新 commit `caa082c`)
-**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + Phase 2 (#181-#183) + Phase 3 (#188-#190) + Phase 5 (#339/#340/#332/#335) + Phase 6 (#346/#343/#344/#331/#333/#262) + Phase 7 (#338) + Phase 8 (session29 = #334/#196) + Phase 8 (session30 = #360 rescue observability + #358 backfill test lock-in) + **Phase 8 (session31 = #365 backfill counter 分割 + #364 rescue per-doc catch test)** 完遂
+**更新日**: 2026-04-22 session32 (#370 完遂、1 PR merged #372、Issue 1 closed + Follow-up 0 起票、Net -1)
+**ブランチ**: main (clean、最新 commit `44e873c`)
+**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + Phase 2 (#181-#183) + Phase 3 (#188-#190) + Phase 5 (#339/#340/#332/#335) + Phase 6 (#346/#343/#344/#331/#333/#262) + Phase 7 (#338) + Phase 8 (session29 = #334/#196) + Phase 8 (session30 = #360 rescue observability + #358 backfill test lock-in) + Phase 8 (session31 = #365 backfill counter 分割 + #364 rescue per-doc catch test) + **Phase 8 (session32 = #370 fatal 分岐 safeLogError 二重呼出防止 test)** 完遂
+
+<a id="session32"></a>
+## ✅ session32 完了サマリー (2026-04-22: #370 完遂、1 PR merged)
+
+session31 handoff で起票した follow-up #370 (rescue fatal 分岐 safeLogError 二重呼出防止 test) を完遂。PR 内で /review-pr 6 エージェント並列、silent-failure-hunter F-1 (HIGH rating 7, confidence 85%) を PR 内で修正反映。polyfill 設計を「1 回目 reject / 2 回目以降 resolve」から「常に throw」に変更し、より広い regression scenario を検知可能にした。
+
+### PR 一覧
+
+| PR | 内容 | closed Issues | merged commit |
+|----|------|--------------|--------------|
+| **#372** | test: fatal 分岐 safeLogError 二重呼出防止 integration test (withFailingSafeLogError polyfill + rescueError + callCount 二重 invariant) | #370 | `44e873c` |
+
+### 主要成果
+
+| 項目 | 内容 |
+|------|------|
+| **merged PR** | 1 本 (#372) |
+| **closed Issue** | #370 (1 件、auto-close 成功) |
+| **新規 follow-up Issue** | なし (/review-pr 指摘は全て PR 内修正 or PR コメントレベル) |
+| **Issue Net 変化** | Close 1 / 起票 0 = **-1** (feedback_issue_triage.md: Net < 0 は KPI 前進、Net = 0 (Close N / 起票 N) は進捗ゼロ扱い → 本セッションは KPI 前進) |
+| **BE integration テスト** | 23 → **24 passing** (+1 from #370: fatal 分岐 safeLogError 失敗時の二重呼出防止) |
+| **BE unit テスト** | 677 passing + 6 pending (変化なし) |
+| **コード量** | 初版 +91/-0 → review 反映 -40/+33 → 最終 +84/-0 (1 ファイル: test/rescueStuckProcessingIntegration.test.ts) |
+| **品質改善** | fatal 分岐 inner try/catch を call count + rescueError の二重 invariant で lock-in / CJS namespace dynamic lookup を利用した sinon 不依存 polyfill / signature drift を LogErrorParams 型で compile-time 検知 |
+
+### Quality Gate 実施記録 (6 エージェント並列)
+
+| エージェント | Rating | 主な指摘 | 対応 |
+|------------|--------|----------|------|
+| **code-reviewer** | 9/10 | 問題なし | Approve |
+| **pr-test-analyzer** | 8/10 | PR コメントレベルのみ | 対応不要 |
+| **code-simplifier** | 提案なし | - | - |
+| **silent-failure-hunter** | **7.5/10** (F-1 rating 7, confidence 85%) | polyfill「2 回目 resolve」が outer catch throw 挙動を silent に書き換え | **PR 内修正: 「常に throw」に変更** |
+| **type-design-analyzer** | 6/10 | `params: unknown` で signature drift 検知不可 | **PR 内修正: `LogErrorParams` 型に変更** |
+| **comment-analyzer** | 6/10 | 行番号参照は rot 耐性低 + 冗長 block comment | **PR 内修正: 記号参照化 + assertion message に集約 + `errors/` 0 件 assertion 削除** |
+
+### 設計判断 / Lessons Learned (本セッション重要知見)
+
+1. **polyfill「常に throw」設計の regression 検知力 (F-1 HIGH 対応)**: 旧設計「1 回目 reject / 2 回目以降 resolve」は outer catch 内 safeLogError (try/catch なし、processOCR.ts:241) の throw 挙動を silent に resolve に書き換えていた → production 実挙動から乖離。「常に throw」+ test 側 `rescueError` 捕捉で、inner try/catch 削除 regression (rescue 全体 reject) と outer catch 経路の test 観測可能性の両方を確保。silent-failure-hunter F-1 (HIGH) の指摘は polyfill 設計の盲点を的確に突いた — 「stub は production 挙動を silent に補完してはいけない」の実例
+
+2. **CJS namespace dynamic lookup を利用した sinon 不依存 stub**: TypeScript CJS compile 後の `await (0, errorLogger_1.safeLogError)(...)` は namespace object の dynamic property lookup であり、test 側で `errorLoggerModule.safeLogError = stub` で property rewrite すると production code の次の呼出で反映される。PR #369 の `withFailingRunTransaction` (db オブジェクトのメソッド書換) と同方針で、sinon 導入不要。compile 後の emit を `tsc --outDir /tmp/...` で peek して mechanism を事前検証することで、「仕様上動くはず」の推測を「実体で確認」に昇格
+
+3. **signature drift の compile-time 検知 (type-design 対応)**: polyfill 内 `params: unknown` だと production 側 `LogErrorParams` に required フィールド追加時に静かに drift し、stub だけ古い signature のまま passing が続く。`import type { LogErrorParams }` + `params: LogErrorParams` に変更で 1 行 cost で compile-time safety 獲得。test ファイルでも型 honesty は維持すべき
+
+4. **コメント密度の適正化 (comment 対応)**: 1 ファイル test で 35+ 行コメントは過剰、かつ行番号 `processOCR.ts:222-232` は rot 耐性低。記号参照 (`rescueStuckProcessingDocs の fatal 分岐 inner try/catch`) + assertion message への集約で、コメント削減しつつ意図伝達力は維持。comment-analyzer rating 6 以下の指摘でも累積効果があるので一括反映が効率的
+
+5. **rating 7 境界の取扱い (Issue triage)**: CLAUDE.md CRITICAL「rating ≥ 7 かつ confidence ≥ 80 は Issue 起票候補」は**新規 Issue 起票の閾値**。本 PR 内で修正対応する場合は Issue 起票不要で直接反映が正解。本セッション F-1 rating 7 confidence 85% を PR 内修正で解消 → follow-up Issue ゼロを維持 (feedback_issue_triage.md「Close N + 起票 N = net 0 は進捗ゼロ」の net -1 達成)
+
+6. **初版 → review 修正の 2 commit 運用**: 初版 PR 作成直後に `/review-pr` を走らせ、指摘反映を別 commit (amend せず) で push。reviewer が差分を追跡可能、初版の判断過程を history に残す。CLAUDE.md「新規 commit を作成する」原則の実運用。本 PR は commit 2 本を `--squash` merge で 1 本に集約して main に入った (c159136 + 2051f5e → 44e873c)
+
+### 次セッション着手候補 (WBS 進捗)
+
+**軽量 (0.5 セッション)**: 該当なし (session32 終了時点の open Issue 一覧に 0.5 セッション相当タスクなし)
+
+**中規模 (1 セッション)**:
+- **#200 checkGmailAttachments/splitPdf 統合テスト**: Gmail 連携経路の integration test
+- **#251 summaryGenerator test + buildSummaryPrompt 分離**: 既存の summary 処理を testable に切り出し
+- **#239 force-reindex audit log**: Cloud Logging に構造化 audit log 出力
+
+**大物 (2 セッション、`/impl-plan` 必須)**:
+- **#237 search tokenizer 共通化**: session29 から持ち越し継続、Evaluator 分離必須 (5+ ファイル + アーキテクチャ影響)
+- **#299 capPageResultsAggregate 動的 safeLogError test** (最難): ts-node/esm 環境整備込み。ESM loader 問題 (#360/#364 で知見獲得済) を活用できる
+
+**session 外 Open Issues** (引き続き持ち越し): #238 (force-reindex 孤児 posting) / #220 (OOM/truncated metric + alert) / #152 (dev setup-tenant、雛形として open 維持が正しい状態、active 作業不要)
+
+### Test plan 実行結果
+
+- [x] BE `npm --prefix functions run type-check:test` EXIT 0
+- [x] BE `npm --prefix functions test` **677 passing + 6 pending** (変化なし)
+- [x] BE `firebase emulators:exec --only firestore --project rescue-stuck-integration-test 'npm --prefix functions run test:integration'` **24 passing** (23 → +1 from #370)
+- [x] `npm run lint` 0 errors, **25 warnings** (新規 warning ゼロ、PR #369 と同水準)
+- [x] 動作確認: integration test ログで `safeLogError failed for stuck-fatal-log-fail (fatal branch): Error: Simulated safeLogError failure for #370 test` を確認 → processOCR.ts:224 inner try/catch が期待通り swallow、rescue 完了
+- [x] PR #372 main マージ時 CodeRabbit / GitGuardian SUCCESS、CI 実行済み (44e873c)
+- [x] `gh issue view 370` で CLOSED 確認 (squash merge で auto-close 成功)
+- [ ] main Deploy #372 (44e873c) IN_PROGRESS (merge 直後、次セッション開始時に `gh run list --workflow=Deploy` で SUCCESS 確認必要)
+
+---
 
 <a id="session31"></a>
 ## ✅ session31 完了サマリー (2026-04-22: #365 + #364 完遂、2 PR merged)
