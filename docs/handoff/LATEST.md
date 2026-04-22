@@ -1,8 +1,78 @@
 # ハンドオフメモ
 
-**更新日**: 2026-04-22 session34 (#375 完遂 + #237 完遂、2 PR merged #378/#379、Issue 2 closed + 起票 0、**Net -2**)
-**ブランチ**: main (clean、最新 commit `6d9fb46`)
-**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + Phase 2 (#181-#183) + Phase 3 (#188-#190) + Phase 5 (#339/#340/#332/#335) + Phase 6 (#346/#343/#344/#331/#333/#262) + Phase 7 (#338) + Phase 8 (session29 = #334/#196) + Phase 8 (session30 = #360 rescue observability + #358 backfill test lock-in) + Phase 8 (session31 = #365 backfill counter 分割 + #364 rescue per-doc catch test) + Phase 8 (session32 = #370 fatal 分岐 safeLogError 二重呼出防止 test) + Phase 8 (session33 = #200 Gmail/Split 統合テスト + #251 Scope 2 summaryPromptBuilder 分離) + **Phase 8 (session34 = #375 Gmail reimportPolicy pure helper 抽出 + #237 tokenizer 3 箇所共通化)** 完遂
+**更新日**: 2026-04-22 session35 (**triage-only セッション、実装作業ゼロ**。6 open Issues 全件本文精査 → #220 完了済 close で Issue Net **-1**、残り 5 件は全て本文判定で正しく待機継続)
+**ブランチ**: main (clean、最新 commit は本 handoff PR merge 後に更新)
+**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + Phase 2 (#181-#183) + Phase 3 (#188-#190) + Phase 5 (#339/#340/#332/#335) + Phase 6 (#346/#343/#344/#331/#333/#262) + Phase 7 (#338) + Phase 8 (session29 = #334/#196) + Phase 8 (session30 = #360 rescue observability + #358 backfill test lock-in) + Phase 8 (session31 = #365 backfill counter 分割 + #364 rescue per-doc catch test) + Phase 8 (session32 = #370 fatal 分岐 safeLogError 二重呼出防止 test) + Phase 8 (session33 = #200 Gmail/Split 統合テスト + #251 Scope 2 summaryPromptBuilder 分離) + Phase 8 (session34 = #375 Gmail reimportPolicy pure helper 抽出 + #237 tokenizer 3 箇所共通化) + **Phase 8 (session35 = Issue triage-only、close 忘れ 1 件整理 = #220)** 完遂
+
+<a id="session35"></a>
+## ✅ session35 完了サマリー (2026-04-22: Issue triage-only、#220 close 忘れ整理で Net -1)
+
+session34 handoff の「次セッション着手候補」(#251 Scope 1 / #239 / #238 / #220 / #299) を triage 精査する目的で開始。着手前に **Issue 本文の待機条件を機械的に確認する規律** を徹底した結果、候補 5 件全てが「本文で待機条件付き postpone」状態で新規実装着手不要と判明。さらに #220 は **既に完了済で close 忘れ** の状態にあったため close。実装作業ゼロ、Issue Net **-1** (close 1 / 起票 0) を達成。
+
+本 session の核心成果は「**無駄実装の事前回避 × 5 件**」で、定量化困難だが過去 2 session (session33/34) でも同じ「Issue 本文を先に読まずに着手した結果 scope 再調整が発生」した事象 (session34 Lessons Learned 7) の構造的予防パターンとして spec 化。
+
+### 今 session 作業内容
+
+| ステップ | 内容 | 結果 |
+|---------|------|------|
+| **1. #251 Scope 1 着手可否判断** | Issue 本文確認 → 「Vertex AI mock 基盤 (sinon/proxyquire) 導入コスト vs false negative 未発生」の待機条件記述を発見 | **待機継続** |
+| **2. #239 着手可否判断** | Issue 本文確認 → 「**P2 (実質 P3 扱い)** — drift 実発生低頻度 + 昇格条件 (月次 1 件以上 / 監査要件明示) 未達」を発見 | **待機継続** |
+| **3. #220 着手可否判断** | 既存実装調査で `scripts/setup-log-based-metrics.sh` / `scripts/monitoring-templates/` / `docs/context/monitoring-setup.md` / `.github/workflows/setup-monitoring.yml` を発見、`monitoring-setup.md` の `### 展開状況` セクションで 3 環境 (dev/kanameone/cocoro) 本番稼働を確認 | **close 対象と判明** → close 実施 |
+| **4. 残り 3 Issue triage** | #299 (grep lock-in 済 + #251 Scope 1 と同類 mock 課題) / #238 (P3 実質扱い、孤児 posting 実発生未観測) / #152 (dev 雛形として open 維持が正しい) | **全て待機継続** |
+| **5. #220 close 実行** | monitoring-setup.md 転載の完全エビデンス (5 metrics × 3 環境稼働、閾値根拠、整備資材一覧) を close comment に付与 | **Issue Net -1** |
+
+### 現状 5 open Issues の待機条件 vs 再開トリガー (全件整理)
+
+| # | 待機理由 | 再開トリガー (機械的判定可) |
+|---|---------|--------------------------|
+| **#299** capPageResultsAggregate 動的 safeLogError test | CI/ローカル ts-node/esm 環境差異で mock 戦略選定コスト大、grep lock-in (textCapProdInvariantContract.test.ts 9 cases) で mutation resistance 以外は既にカバー済 | (a) sinon/proxyquire 導入を伴う他テスト追加タスク発生 (bundle 化) / (b) mutation resistance 欠如に起因する false negative 発生 |
+| **#251 Scope 1** generateSummaryCore runtime test | Vertex AI `VertexAI`/`generateContent` の mock 化が必要、#299 と同類の mock 戦略選定コスト | (a) sinon/proxyquire 導入を伴う他テスト追加タスク発生 (**#299 と bundle 化推奨**) / (b) Vertex AI 異常の false negative (monitoring 検知漏れ) 発生 |
+| **#239** force-reindex audit log (Cloud Logging 構造化) | P3 実質扱い、drift 実発生低頻度、GitHub Actions ログで代替可能 | (a) 月次 1 件以上の drift 復旧を実行する運用になった / (b) 監査要件 (ISO/SOC2 等) で全データ操作の永続ログ要求が明示 |
+| **#238** force-reindex 孤児 posting 検出モード | P3 実質扱い、drift 実発生が観測されていない (過去 30 日 0 件) | (a) ADR-0015 再評価トリガー (silent failure metric で ERROR 検出) 発火 / (b) 検索機能に「削除済み書類がヒット」のユーザー報告 |
+| **#152** dev 環境 Firestore 初期設定 (setup-tenant.sh 未実行) | 雛形環境としての利用は問題なし (設定なしの状態がコピー元として正しい) | (a) dev 環境でアプリ動作を伴うデバッグが必要になった時 |
+
+**Follow-up (PR #379 body 記録のみ、Issue 起票せず)**:
+1. **tokenizer.ts に FIELD_TO_MASK + aggregateTokensByTokenId を export 追加** (evaluator/code-simplifier/code-reviewer 3 エージェント一致言及、8-10 ファイル、`/impl-plan` + Evaluator 必須) — 実害なし / 完全性向上
+2. **migrate-search-index.js の per-token `await indexRef.get()` → batch 化** (code-reviewer rating 7 指摘、pre-existing perf/atomicity、一回限り migration script) — 実害なし / perf 向上
+
+### 設計判断 / Lessons Learned (本 session 重要知見)
+
+1. **Issue 着手前の本文精査を前置規律化**: 「次セッション着手候補」リストは過去 session の勢いで書かれたものであり、Issue 本文の待機条件が見落とされている可能性が高い。session35 で 5 件中 **4 件が「本文で待機条件付き postpone」+ 1 件 (#220) が「既に完了済の close 忘れ」** だった事実は、この前置規律の ROI が極めて高いことを定量的に示す。CLAUDE.md の `feedback_verify_before_evaluate.md` + `feedback_issue_triage.md` の具体化として spec 候補
+
+2. **close 忘れ検知の仕組み化検討価値**: #220 は 2026-04-17 (session6/7) で実装完了済だが 5 日間 open のまま。handoff archive (2026-04-history.md) に稼働記録があるにもかかわらず auto-close されず。`feedback_issue_postpone_pattern.md` の逆パターン (「完了済 Issue を close 忘れる」) の機構化候補 — 例: ハンドオフ PR merge 時に実装済 Issue を gh issue list の cross-check で検出する hook
+
+3. **triage-only セッションの KPI 貢献**: Issue Net -1 は少ないが、**無駄実装を 5 件回避** (各 Issue が「強行」された場合の想定コスト: #251 Scope 1 = mock 基盤整備 0.5-1 session / #239 = Cloud Logging 導入 + 3 環境展開 0.5 session / #299 = ts-node/esm 環境整備 2 session / #238 = 全 search_index 走査設計 1 session) = **合計 4-4.5 session の実装コスト節約**。CLAUDE.md の `feedback_cost_benefit_before_action.md` の実践例として有用
+
+4. **「次アクション候補」リストは 'ToDo' でなく 'To-be-triaged' として扱う**: session34 handoff の「次セッション着手候補」は 5 件中 4 件が triage で待機判定 + 1 件 (#220) が close 対象と判定された (合計 5 件全てで「着手せず」判定)。ハンドオフの「次セッション着手候補」セクションは **「着手前に triage 必須のキュー」** であり、session 開始時に必ず 1 件ずつ Issue 本文再確認する運用として定着させる
+
+5. **Issue 無限増殖問題への最終回答**: session34 handoff で「Issue Net は KPI」「rating 5-6 は Issue 化しない」等のルールは機能しており、**3 日間新規起票ゼロ** (最終 #299 = 2026-04-19)。ただし close 忘れ (#220) が 1 件残っていた。3 層ゲート (hook / CLAUDE.md / /handoff) は「過剰起票」には効くが「完了済 close 忘れ」には効かない non-covered パターンであることが判明、今後 `/catchup` 時に「5 日以上更新のない Issue を実装状況と cross-check」する運用を検討
+
+### 次セッション着手候補 (triage 結果を反映)
+
+**最優先**: **全 Open Issues を再度 triage してから着手判断**。session35 の教訓として、handoff 候補リストを鵜呑みにせず各 Issue 本文を再読する。
+
+**推奨順**:
+
+1. **bundle 案: #299 + #251 Scope 1 を同時に着手** — 両者とも「sinon/proxyquire 導入」が前提条件で、mock 基盤整備コストを 1 度で償却できる。ただし全 BE test の実行経路見直し (mocha esm-utils / tsconfig) が必要で **2-3 session 規模の大物**、`/impl-plan` + Evaluator 必須
+2. **#239 単独 (中規模)**: Cloud Logging audit log 導入は単独で完結可能、ただし Issue 本文の昇格条件 (月次 drift 1 件以上 or 監査要件明示) 未達のため「強行か待機か」の ROI 判断が先
+3. **#238 単独 (中規模)**: 孤児 posting scan、Issue 本文の昇格条件未達、優先度低
+4. **持ち越し**: #152 は雛形として正しい状態、active 作業不要
+
+**Follow-up 2 件 (PR #379 body 記載のみ)** は triage 再検討 (rating 閾値未達で Issue 化保留した判断が現状も正しいか session 開始時に再確認)
+
+### Test plan 実行結果
+
+- [x] `gh issue list --state open` で **6 → 5 Issue** に減少確認 (Net -1 達成)
+- [x] #220 close comment に monitoring-setup.md `### 展開状況` セクション エビデンス (3 環境稼働記録) + 全 5 metrics + 閾値根拠 + 整備資材 (script/workflow/Runbook) を転載
+- [x] 残り 5 open Issue に active 作業なし (全て正しく待機中)
+- [x] main ブランチ clean、本 handoff PR 経由で merge
+
+### 運用規律の更新候補 (CLAUDE.md / memory への反映検討)
+
+- `feedback_issue_triage.md` に **「着手前に Issue 本文の待機条件を機械的確認する」** 項目を追加候補
+- 新規 memory `feedback_issue_close_forgetting.md` (close 忘れ検知パターン) の作成候補 — ただし 1 件の事例のみで早計、今後 2-3 件類似事例が観測されたら作成
+
+---
 
 <a id="session34"></a>
 ## ✅ session34 完了サマリー (2026-04-22: #375 + #237 完遂、2 PR merged)
