@@ -27,6 +27,33 @@
 // BE tokenizer.ts の compiled lib/ を参照することで drift を防止する。
 const { loadTokenizer, ensureTokenizerBuilt } = require('./lib/loadTokenizer');
 const { aggregateTokensByTokenId } = require('./lib/aggregateTokens');
+const { writeForceReindexAuditLog, EVENTS, SEVERITIES } = require('./lib/auditLogger');
+
+/**
+ * 失敗イベントを stdout JSON (GitHub Actions 調査用) と
+ * Cloud Logging audit (事後監査用) の両 sink に出力する SSoT。
+ *
+ * @param {Object} params
+ * @param {Function} [params.loggingFactory] - test 用 DI: auditLogger 経由で injection
+ */
+async function emitFailureEvent({
+  event, severity, mode, docId, error, dryRun, auditCtx, loggingFactory,
+}) {
+  console.error(JSON.stringify({
+    severity,
+    event,
+    docId: docId ?? null,
+    stage: error?.reindexStage ?? null,
+    errorCode: error?.code ?? null,
+    errorMessage: error?.message,
+    stack: error?.stack,
+  }));
+  await writeForceReindexAuditLog(
+    { event, severity, mode, dryRun, docId, error },
+    auditCtx,
+    loggingFactory ? { loggingFactory } : undefined,
+  );
+}
 
 // CLI 実行時のみ build を強制。test (require) 時は呼び出し側に委ねる。
 if (require.main === module) {
@@ -165,8 +192,8 @@ function detectDrift(docData, tokenizer = loadTokenizer()) {
  * エラーポリシー:
  *   - NOT_FOUND: 冪等な無視 (旧 posting が既に削除済み)
  *   - その他の永続/一時エラー: throw して呼び出し元の failedCount に集計
- *     (silent に続行すると tokenHash だけ更新され次回 scan で検出不能になる
- *      ため、本 PR の目的と逆行する。PR #235 review 指摘対応)
+ *     (silent に続行すると tokenHash だけ更新され次回 scan で検出不能になるため、
+ *      本スクリプトの目的と逆行する)
  *
  * 厳密な冪等ではない境界:
  *   - 手動で search_index から posting を削除した状態で 2 回実行すると df が負になる
@@ -192,8 +219,7 @@ async function reindexDocument(db, docId, docData, { execute }, tokenizer = load
   const now = admin.firestore.Timestamp.now();
 
   // 1. 旧 posting 削除: NOT_FOUND を事前 filter で除外してから batch。
-  //    事前 filter にすることで「1 件 NOT_FOUND → batch 全体ロールバック」を回避する
-  //    (PR #235 review evaluator HIGH 指摘対応)。
+  //    事前 filter にすることで「1 件 NOT_FOUND → batch 全体ロールバック」を回避する。
   if (tokensToRemove.length > 0) {
     const removeTokenIds = tokensToRemove.map(t => tokenizer.generateTokenId(t));
     const removeRefs = removeTokenIds.map(id => db.collection('search_index').doc(id));
@@ -249,7 +275,7 @@ async function reindexDocument(db, docId, docData, { execute }, tokenizer = load
   }
   // step 2/3 の失敗時に呼出元が stage を特定できるよう error を wrap する。
   // 半端状態 (postings 新しいが tokenHash 古い) 発生時は
-  // Runbook §4.5 に基づき手動クリーンアップする (silent-failure-hunter MEDIUM 指摘対応)。
+  // Runbook §4.5 に基づき手動クリーンアップする。
   try {
     await writeBatch.commit();
   } catch (error) {
@@ -290,7 +316,7 @@ const EXIT_OK = 0;
 const EXIT_PRECONDITION = 1;
 const EXIT_PARTIAL_FAILURE = 2;
 
-async function runSingleDocId(db, args) {
+async function runSingleDocId(db, args, auditCtx) {
   const docRef = db.collection('documents').doc(args.docId);
   const snap = await docRef.get();
   if (!snap.exists) {
@@ -311,23 +337,34 @@ async function runSingleDocId(db, args) {
       `+${result.tokensToAdd} / -${result.tokensToRemove} tokens, ` +
       `hash ${result.actualHash || '(none)'} → ${result.expectedHash}`
     );
+    await writeForceReindexAuditLog(
+      {
+        event: EVENTS.EXECUTED,
+        severity: SEVERITIES.NOTICE,
+        mode: 'doc-id',
+        dryRun: !args.execute,
+        docId: result.docId,
+        counts: { tokensAdded: result.tokensToAdd, tokensRemoved: result.tokensToRemove },
+        hashes: { oldHash: result.actualHash || null, newHash: result.expectedHash },
+      },
+      auditCtx,
+    );
     return EXIT_OK;
   } catch (error) {
-    // 構造化ログ (GitHub Actions 経由 Cloud Logging 取込用)
-    console.error(JSON.stringify({
-      severity: 'ERROR',
-      event: 'force_reindex_failed',
+    await emitFailureEvent({
+      event: EVENTS.FAILED,
+      severity: SEVERITIES.ERROR,
+      mode: 'doc-id',
       docId: args.docId,
-      stage: error.reindexStage ?? null,
-      errorCode: error.code ?? null,
-      errorMessage: error.message,
-      stack: error.stack,
-    }));
+      error,
+      dryRun: !args.execute,
+      auditCtx,
+    });
     return EXIT_PARTIAL_FAILURE;
   }
 }
 
-async function runAllDrift(db, args) {
+async function runAllDrift(db, args, auditCtx) {
   console.log(`[MODE] 全 drift scan (${args.execute ? '実行' : 'dry-run'})` +
     (args.sample ? `, sample=${args.sample}` : ''));
 
@@ -366,14 +403,26 @@ async function runAllDrift(db, args) {
 
       if (args.execute) {
         try {
-          await reindexDocument(db, docSnap.id, data, { execute: true });
+          const result = await reindexDocument(db, docSnap.id, data, { execute: true });
           reindexed++;
           console.log(`    [OK] 再 index 完了`);
+          await writeForceReindexAuditLog(
+            {
+              event: EVENTS.EXECUTED,
+              severity: SEVERITIES.NOTICE,
+              mode: 'all-drift',
+              dryRun: false,
+              docId: docSnap.id,
+              counts: { tokensAdded: result.tokensToAdd, tokensRemoved: result.tokensToRemove },
+              hashes: { oldHash: result.actualHash || null, newHash: result.expectedHash },
+            },
+            auditCtx,
+          );
         } catch (error) {
           // systemic programmer error (aggregateTokens の unknown TokenField 等) は
-          // per-doc failedCount に集約せず全体中止する (#379 silent-failure-hunter #4)。
-          // drift を silent に隠すと force-reindex が部分完了で exit 0 に見え、
-          // operator は FIELD_TO_MASK の同期漏れ等の structural bug を見逃す。
+          // per-doc failedCount に集約せず全体中止する。drift を silent に隠すと
+          // force-reindex が部分完了で exit 0 に見え、FIELD_TO_MASK の同期漏れ等の
+          // structural bug を見逃す。
           if (error && typeof error.message === 'string' &&
               error.message.startsWith('[aggregateTokens]')) {
             console.error(
@@ -382,16 +431,16 @@ async function runAllDrift(db, args) {
             throw error;
           }
           failed++;
-          // 構造化ログで呼出元が個別失敗を監査可能にする (PR #235 review silent-failure-hunter 指摘対応)
-          console.error(JSON.stringify({
-            severity: 'ERROR',
-            event: 'force_reindex_failed',
+          // 個別失敗を監査可能にする (silent 続行で次回 scan 検出不能になるのを防ぐ)
+          await emitFailureEvent({
+            event: EVENTS.FAILED,
+            severity: SEVERITIES.ERROR,
+            mode: 'all-drift',
             docId: docSnap.id,
-            stage: error.reindexStage ?? null,
-            errorCode: error.code ?? null,
-            errorMessage: error.message,
-            stack: error.stack,
-          }));
+            error,
+            dryRun: !args.execute,
+            auditCtx,
+          });
         }
       }
     }
@@ -402,17 +451,52 @@ async function runAllDrift(db, args) {
 
   console.log('---');
   console.log(`走査: ${processed} 件 / drift: ${drifted} 件 / 再 index: ${reindexed} 件 / 失敗: ${failed} 件`);
+
+  await writeForceReindexAuditLog(
+    {
+      event: EVENTS.BATCH_SUMMARY,
+      severity: failed > 0 ? SEVERITIES.WARNING : SEVERITIES.NOTICE,
+      mode: 'all-drift',
+      dryRun: !args.execute,
+      counts: { processed, drifted, reindexed, failed },
+    },
+    auditCtx,
+  );
+
   return failed > 0 ? EXIT_PARTIAL_FAILURE : EXIT_OK;
 }
 
 // ========== Step 6: main ==========
 
+/** GitHub Actions では GITHUB_ACTOR、手動実行時は USER をフォールバック */
+function buildAuditCtx(projectId) {
+  return {
+    projectId,
+    executedBy: process.env.GITHUB_ACTOR || process.env.USER || 'unknown',
+  };
+}
+
 async function main() {
+  // projectId は parseArgs より先に検証する。理由: parseArgs throw 時にも
+  // audit ctx を構築できるようにし、startup_failed event を Cloud Logging へ
+  // 残せるようにするため (silent failure 防止)。
+  const projectId = process.env.FIREBASE_PROJECT_ID;
+  if (!projectId) {
+    console.error('[ERROR] FIREBASE_PROJECT_ID 環境変数が未設定です');
+    process.exit(1);
+  }
+  const auditCtx = buildAuditCtx(projectId);
+
   let args;
   try {
     args = parseArgs(process.argv.slice(2));
   } catch (error) {
-    console.error(`[ERROR] ${error.message}`);
+    await emitFailureEvent({
+      event: EVENTS.STARTUP_FAILED,
+      severity: SEVERITIES.ERROR,
+      error,
+      auditCtx,
+    });
     printHelp();
     process.exit(1);
   }
@@ -420,12 +504,6 @@ async function main() {
   if (args.help) {
     printHelp();
     process.exit(0);
-  }
-
-  const projectId = process.env.FIREBASE_PROJECT_ID;
-  if (!projectId) {
-    console.error('[ERROR] FIREBASE_PROJECT_ID 環境変数が未設定です');
-    process.exit(1);
   }
 
   admin.initializeApp({ projectId });
@@ -436,9 +514,9 @@ async function main() {
 
   let exitCode = EXIT_OK;
   if (args.docId) {
-    exitCode = await runSingleDocId(db, args);
+    exitCode = await runSingleDocId(db, args, auditCtx);
   } else if (args.allDrift) {
-    exitCode = await runAllDrift(db, args);
+    exitCode = await runAllDrift(db, args, auditCtx);
   }
   return exitCode;
 }
@@ -450,14 +528,27 @@ if (require.main === module) {
       console.log(exitCode === EXIT_OK ? '完了' : `部分失敗で終了 (exit code=${exitCode})`);
       process.exit(exitCode);
     })
-    .catch((error) => {
-      console.error(JSON.stringify({
-        severity: 'CRITICAL',
-        event: 'force_reindex_fatal',
-        errorCode: error.code ?? null,
-        errorMessage: error.message,
-        stack: error.stack,
-      }));
+    .catch(async (error) => {
+      // process.exit は in-flight gRPC を切断するため、await で audit 完了を待つ
+      // projectId 未設定時は main() 内で先に exit 1 するため、ここに到達するのは
+      // admin.initializeApp 以降の async エラーに限られる
+      const projectId = process.env.FIREBASE_PROJECT_ID;
+      if (projectId) {
+        await emitFailureEvent({
+          event: EVENTS.FATAL,
+          severity: SEVERITIES.CRITICAL,
+          error,
+          auditCtx: buildAuditCtx(projectId),
+        });
+      } else {
+        console.error(JSON.stringify({
+          severity: SEVERITIES.CRITICAL,
+          event: EVENTS.FATAL,
+          errorCode: error.code ?? null,
+          errorMessage: error.message,
+          stack: error.stack,
+        }));
+      }
       process.exit(1);
     });
 }
@@ -467,4 +558,6 @@ module.exports = {
   computeExpectedIndex,
   detectDrift,
   reindexDocument,
+  emitFailureEvent,
+  buildAuditCtx,
 };
