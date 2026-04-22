@@ -102,16 +102,21 @@ gcloud projects remove-iam-policy-binding doc-split-dev \
 - A. `Logging.entries.write()` 直接呼出 (gRPC API direct、batch を経由しない)
 - B. `writeForceReindexAuditLog` 内で write 後に短い delay (`await new Promise(r => setTimeout(r, 100))`) で flush 待ち — hacky
 - C. `Logging` client の writeOptions / `apiEndpoint` 見直し
-- D. `partialSuccess: true` だけでなく `dryRun: false` を明示 (現状暗黙で false)
+- D. `partialSuccess: true` だけでなく Cloud Logging API の `writeOptions.dryRun: false` を明示 (現状暗黙で false)
+  - **注意**: Cloud Logging API の `dryRun` パラメータと audit payload の `dryRun` フィールドが命名衝突。次セッション着手時は文脈明示すること
 
 #### 仮説 2 (次点): CI 実行 SA が想定 SA と異なる
 
-検証手順:
+検証手順 (主: workflow log で client_email 確認、`gh secret list` は更新日時のみ):
 ```bash
-# GCP_SA_KEY_DEV から SA email 抽出
+# 1. 最新の Run Operations Script 実行を取得
+gh run list --workflow=run-ops-script.yml --limit=1 --json databaseId
+
+# 2. workflow log から client_email を抽出 (google-github-actions/auth が show する)
+gh run view <run-id> --log | grep -i "service.*account\|client_email\|impersonation"
+
+# 3. (参考) secret 更新日時のみ確認
 gh secret list --json name,updatedAt | grep GCP_SA
-# → secret 値は読めないため、手動で .github/workflows/run-ops-script.yml 経由実行時の log を確認
-gh run view <latest-run-id> --log | grep -i "service.*account\|client_email"
 ```
 
 #### 仮説 3 (低優先): resource type 'global' の書き込み権限不足
