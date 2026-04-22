@@ -22,7 +22,7 @@ session31 handoff で起票した follow-up #370 (rescue fatal 分岐 safeLogErr
 | **merged PR** | 1 本 (#372) |
 | **closed Issue** | #370 (1 件、auto-close 成功) |
 | **新規 follow-up Issue** | なし (/review-pr 指摘は全て PR 内修正 or PR コメントレベル) |
-| **Issue Net 変化** | Close 1 / 起票 0 = **-1** (ルール: Net ≤ 0 は進捗ゼロ扱いだが close のみで KPI 前進) |
+| **Issue Net 変化** | Close 1 / 起票 0 = **-1** (feedback_issue_triage.md: Net < 0 は KPI 前進、Net = 0 (Close N / 起票 N) は進捗ゼロ扱い → 本セッションは KPI 前進) |
 | **BE integration テスト** | 23 → **24 passing** (+1 from #370: fatal 分岐 safeLogError 失敗時の二重呼出防止) |
 | **BE unit テスト** | 677 passing + 6 pending (変化なし) |
 | **コード量** | 初版 +91/-0 → review 反映 -40/+33 → 最終 +84/-0 (1 ファイル: test/rescueStuckProcessingIntegration.test.ts) |
@@ -55,7 +55,7 @@ session31 handoff で起票した follow-up #370 (rescue fatal 分岐 safeLogErr
 
 ### 次セッション着手候補 (WBS 進捗)
 
-**軽量 (0.5 セッション)**: 該当なし (#370 完遂で軽量タスクは一旦底を打った)
+**軽量 (0.5 セッション)**: 該当なし (session32 終了時点の open Issue 一覧に 0.5 セッション相当タスクなし)
 
 **中規模 (1 セッション)**:
 - **#200 checkGmailAttachments/splitPdf 統合テスト**: Gmail 連携経路の integration test
