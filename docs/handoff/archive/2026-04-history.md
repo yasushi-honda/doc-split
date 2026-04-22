@@ -1,10 +1,74 @@
-# ハンドオフ履歴アーカイブ (〜2026-04-17 session9)
+# ハンドオフ履歴アーカイブ (〜2026-04-21 session27)
 
 `docs/handoff/LATEST.md` の肥大化に伴い、
 2026-04-16 session3 で過去履歴を本ファイルへ初回アーカイブ。
 2026-04-18 session11 で session9 セクションを LATEST から archive へ移管 (cut & append)。
+2026-04-22 session31 で session27 セクションを LATEST から archive へ移管 (prepend)。
 
 最新状況は `docs/handoff/LATEST.md` 参照。
+
+---
+
+<a id="session27"></a>
+## ✅ session27 完了サマリー (WBS Phase 1-3 完遂)
+
+PM/PL 視点で session26 残 10 Open Issue から WBS を引き直し、Phase 1 (Quick wins) → Phase 2 (Observability + Sanitize) → Phase 3 (Test diagnostics 部分) を **5 PR 連続 merge で完遂**。各 PR で Quality Gate (pr-review-toolkit 並列 + 大規模は evaluator + codex review セカンドオピニオン) を発動。
+
+### PR 一覧
+
+| PR | Phase | 内容 | closed Issues | merged commit |
+|----|-------|------|--------------|--------------|
+| **#349** | 1 | timestampToDateString epoch/NaN/Infinity silent 誤出力修正 | #346 | `88f7d0b` |
+| **#350** | 1 | MasterData 型を pdfAnalyzer → extractors.ts 移動 (natural dep direction) | #343 | `62932aa` |
+| **#351** | 2 | sanitize*Masters silent drop observable 化 (console.warn + safeLogError + Firebase runtime positive signal) | #344 | `620d9b7` |
+| **#352** | 2 | pdfOperations local sanitize を sanitizeFilenameForStorage に統合 (全角空白 + 前後トリム移植) | #333 | `b3143c3` |
+| **#353** | 3 | summaryWritePayloadContract diagnostics 強化 (I/O ヘルパ + symlink skip + 既知制限 describe.skip) | #262 | `f7210bb` |
+| — | 2 | #331 (sanitize shared/ 統合) を close 提案 comment で closed | #331 | (close only) |
+
+### 主要成果
+
+| 項目 | 内容 |
+|------|------|
+| **merged PR** | 5 本 (#349-#353) |
+| **closed Issue** | #262 / #331 / #333 / #343 / #344 / #346 (計 6 件) |
+| **BE テスト** | 648 → **662 passing + 6 pending** (+14: timestampHelpers 5 + loadMasterData drop 5 + fileNaming 5 - 旧 seconds=0 undefined 廃止 -1、加えて skip 6 = #262 既知制限) |
+| **FE テスト** | 127 passing (変化なし) |
+| **コード量** | 5 PR 合計 +470 / -91 行 (純増は observability logic + lock-in test) |
+| **品質改善** | epoch/NaN silent failure 排除 / 型所在の natural direction 化 / sanitize drop observability (Firebase runtime 正確検知) / local sanitize 統合 / grep-based contract の I/O 耐性 + 既知制限ドキュメント化 |
+
+### Quality Gate 実施記録
+
+| PR | 発動内容 | 結果 |
+|----|---------|------|
+| **#349** (1) | pr-review 2 並列 (code-reviewer + silent-failure-hunter) | Critical 0、**Important 1 対応** (silent-failure-hunter: NaN/Infinity 素通り → `Number.isFinite` 追加) |
+| **#350** (1) | pr-review code-reviewer + evaluator 2 並列 | Critical 0、Suggestion 1 (import type 統一、follow-up) |
+| **#351** (2) | pr-review 3 並列 (code-reviewer + silent-failure-hunter + evaluator) + codex review | Critical 0、**Important 4 対応** (NODE_ENV gate fragile → Firebase runtime positive signal / lazy require fallback 情報量 / Promise union → async 統一 / source 'ocr' 固定 → caller 指定式) |
+| **#352** (2) | pr-review code-reviewer | Critical 0、Suggestion 1 対応 (maxLength 境界の末尾 `_` 再 trim) |
+| **#353** (3) | pr-review code-reviewer | Critical 0、Suggestion 1 対応 (describe.skip 解除時 assertion semantic 明示コメント) |
+
+### 設計判断 / Lessons Learned (本セッション重要知見)
+
+1. **`NODE_ENV === 'production'` gate の単独依存は Firebase Functions Gen2 で不安全**: Cloud Run ベースの Gen2 runtime では NODE_ENV が 'production' にセットされないケースがある。positive signal として `K_SERVICE` / `FUNCTION_TARGET` の 2 種を併用して検出するのが安全 (silent-failure-hunter #351 Important #1)。textCap.ts の既存 gate も将来 refactor 候補
+
+2. **`typeof === 'number'` guard は NaN/Infinity を通す**: 旧 guard `!ts.seconds` は NaN を falsy で弾いていたが、`typeof !== 'number'` に変更すると NaN が通過し `"NaN/NaN/NaN"` silent 誤出力を新設してしまう。`Number.isFinite()` を併用すべき (silent-failure-hunter #349)
+
+3. **`Promise<void> | void` union 戻り値は brittle**: async にすべきか同期にすべきか判断を caller に委ねる設計は、`if (promise) await promise` のパターンが refactor で忘れられやすく silent failure 生む。`async function` で `Promise<void>` 統一が鉄則 (evaluator + silent-failure-hunter 両方が指摘)
+
+4. **caller context を引数で受ける observability 設計**: loadMasterData のように複数 caller (OCR / PDF 分割) から呼ばれる共通関数で source 固定は誤分類を生む。optional context `{ source, functionName }` で caller 明示 + default で既存動作保持が最小 breaking (codex review #351)
+
+5. **既知 false positive は `describe.skip` で lock-in する**: grep-based contract の limitation をコメントだけで残すと忘れられる。`describe.skip` で fixture を含めて文書化し、将来の sinon spy 昇格時に skip 外すだけで retro-test として機能する。`[FUTURE LOCK-IN]` ケースは semantic が逆向きで誤読リスク高いためヘッダで明示 (#353)
+
+6. **sanitize helper 統合は concern-based 分離が最適**: Storage path 用 / displayFileName 用 / GAS 移行版で禁止文字セット・連続 `_` 圧縮・前後トリム・maxLength 切詰が全て異なる。`shared/sanitize(value, options)` は options 地獄になるため、concern 別 helper 維持が読みやすい (#331 close 判断、#352 は同 concern 2 本の統合に限定)
+
+7. **大規模 PR の Quality Gate 3 tier**: 1-2 ファイル = code-reviewer のみ / 3-4 ファイル = code-reviewer + silent-failure-hunter or evaluator / 5+ ファイル or 新機能 = 3 並列 + codex review、で段階的にコスト調整できる。#351 で 4 エージェント並列 → codex review の Important #1 (Firebase runtime) が最重要指摘だった = codex の死角検出力を再確認
+
+### Test plan 実行結果
+
+- [x] BE `npx tsc --noEmit` EXIT 0 (各 PR 確認)
+- [x] BE `npm test` **662 passing + 6 pending** (skip は #262 既知制限ドキュメント)
+- [x] FE `npm test` (vitest) **127 passing** (変化なし)
+- [x] main CI 5/5 green × 5 PR (lint-build-test / CodeRabbit / GitGuardian 全 pass)
+- [x] `gh issue view 262/331/333/343/344/346` で CLOSED 確認
 
 ---
 

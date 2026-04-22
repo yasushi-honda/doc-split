@@ -1,8 +1,96 @@
 # ハンドオフメモ
 
-**更新日**: 2026-04-22 session30 (#360 + #358 完遂、2 PR merged #363/#366、Issue 2 closed + Follow-up 2 起票)
-**ブランチ**: main (clean、最新 commit `d93f361`)
-**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + Phase 2 (#181-#183) + Phase 3 (#188-#190) + Phase 5 (#339/#340/#332/#335) + Phase 6 (#346/#343/#344/#331/#333/#262) + Phase 7 (#338) + Phase 8 (session29 = #334/#196) + **Phase 8 (session30 = #360 rescue observability + #358 backfill test lock-in)** 完遂
+**更新日**: 2026-04-22 session31 (#365 + #364 完遂、2 PR merged #368/#369、Issue 2 closed + Follow-up 1 起票、Net +1)
+**ブランチ**: main (clean、最新 commit `caa082c`)
+**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + Phase 2 (#181-#183) + Phase 3 (#188-#190) + Phase 5 (#339/#340/#332/#335) + Phase 6 (#346/#343/#344/#331/#333/#262) + Phase 7 (#338) + Phase 8 (session29 = #334/#196) + Phase 8 (session30 = #360 rescue observability + #358 backfill test lock-in) + **Phase 8 (session31 = #365 backfill counter 分割 + #364 rescue per-doc catch test)** 完遂
+
+<a id="session31"></a>
+## ✅ session31 完了サマリー (2026-04-22: #365 + #364 完遂、2 PR merged)
+
+session30 handoff で起票した直近 follow-up (#364 / #365) をまとめて片付け。両 PR とも Critical/Important 全解消を本 PR 内で完了、review agent 指摘で scope creep が発生する test 追加のみ follow-up Issue (#370) に分離。
+
+### PR 一覧
+
+| PR | 内容 | closed Issues | merged commit |
+|----|------|--------------|--------------|
+| **#368** | feat(ops): backfill-display-filename の totalSkipped を existing/noop に分割 (counter 分割 + fatal log 拡張 + _migrations record 後方互換 + invariant runtime assertion) | #365 | `f831692` |
+| **#369** | test: rescueStuckProcessingDocs の per-doc catch 経路 integration test (runTransaction 差し替え polyfill + 全件 forEach 検証 + doc 不変条件拡張) | #364 | `caa082c` |
+
+### 主要成果
+
+| 項目 | 内容 |
+|------|------|
+| **merged PR** | 2 本 (#368 / #369) |
+| **closed Issue** | #365 / #364 (計 2 件、auto-close 両方成功) |
+| **新規 follow-up Issue** | #370 (fatal 分岐 safeLogError 二重呼出防止 test、P2、silent-failure-hunter I2 由来) |
+| **Issue Net 変化** | Close 2 / 起票 1 = **+1** (ルール: Net ≤ 0 は進捗ゼロ扱い) |
+| **BE unit テスト** | 677 passing + 6 pending (変化なし、sinon 除去で既存影響ゼロ) |
+| **BE integration テスト** | 21 → **23 passing** (+2 from #364: per-doc catch 経路 + partial failure ループ継続) |
+| **コード量** | #368: +29/-6 (1 ファイル) / #369: +107/-11 (2 ファイル: test + package.json) 合計 +136/-17 |
+| **品質改善** | backfill counter の運用可視性向上 (existing/noop 分離) / invariant runtime assertion で _migrations への silent 汚染防止 / rescue per-doc catch 経路の直接 lock-in / 既存 convention 尊重 (sinon 不採用、polyfill pattern 採用) |
+
+### Quality Gate 実施記録 (合計 12 エージェントレビュー)
+
+**PR #368 (backfill counter 分割)**:
+- /impl-plan で Acceptance Criteria 5 項目 + タスク分解 (counter 分割 / fatal log / _migrations / 結果サマリー)
+- /review-pr 6 並列 (code-reviewer / silent-failure-hunter / pr-test-analyzer / comment-analyzer / type-design-analyzer / code-simplifier)
+  - Critical 0 / Important 1 対応: silent-failure-hunter I4 MEDIUM (`--force=false` 時の `totalSkippedNoop === 0` invariant を runtime assertion で lock-in、`_migrations` 書き込み前に配置)
+  - Suggestion 対応: comment-analyzer B (L57 動機追加) / comment-analyzer C (L189 invariant 保証元言及)
+  - Suggestion 不対応 (rating 5-6、PR コメントレベル): pr-test-analyzer I1 (aggregateSkipCounts helper 抽出) / type-design-analyzer C1/C2 (`_migrations` 型化 + ログ prefix 定数化)
+
+**PR #369 (rescue per-doc catch test)**:
+- /review-pr 6 並列
+  - **code-reviewer I1 (IMPORTANT, confidence 85)**: sinon 導入が既存 convention「sinon 依存を新規追加しない polyfill」(`buildPageResult.test.ts:74`) に反する → **sinon 除去して `withFailingRunTransaction` helper で代替** (try/finally で原値復元、既存 withWarnSpy と同方針)
+  - silent-failure-hunter C1 (CRITICAL): sinon.restore() leak → sinon 除去で構造的解消
+  - silent-failure-hunter I1 (HIGH): errs.docs[0] のみ assert → `errs.docs.forEach(...)` で全件検証に昇格
+  - silent-failure-hunter I4 (HIGH): doc 不変条件を `retryAfter` / `lastErrorMessage` undefined まで拡張
+  - silent-failure-hunter I2 (HIGH): fatal 分岐 safeLogError 二重呼出防止 test → **scope creep のため Follow-up Issue #370 化**
+  - Suggestion 不対応 (rating 3-6、PR コメントレベル): comment-analyzer 3件 / type-design-analyzer (ErrorLogFixture 型化) / code-simplifier 全提案
+
+### 設計判断 / Lessons Learned (本セッション重要知見)
+
+1. **既存 convention の尊重 (sinon 不採用)**: `buildPageResult.test.ts:74` に「sinon 依存を新規追加しない polyfill」方針が明記されている以上、新 PR で sinon を導入するなら同時に既存の deferred skip (`summaryWritePayloadContract.test.ts` の `it.skip` ブロック) を一括解禁すべき。本 PR は純粋な test 追加で scope を狭く保つため、`withFailingRunTransaction` helper による inline monkey-patch を採用。try/finally で原値復元を保証することで leak 耐性も担保
+
+2. **invariant を runtime assertion で lock-in**: `--force=false → totalSkippedNoop === 0` は論理的に保証されるが、将来の L94 条件 tweak で破れる silent failure の温床。`_migrations` 書き込み前に `process.exit(1)` で abort する assertion を 1 block 追加することで、運用 audit 証跡への silent 汚染を防げる。コスト数行、恩恵 (dashboard 誤認防止) 大
+
+3. **Quality Gate 2 tier 構造 の現場適用**: 単一ファイル +18 行の極小 PR でも hook が 6 エージェント並列を強制発動 → Important 1 件検出 (silent-failure-hunter I4)。規模に対する過剰感はあるが、invariant assertion の価値は規模と独立なため、1-2 ファイルでも省略しない方針は妥当。次回からは同規模で silent-failure-hunter + code-reviewer の 2 並列に絞ることで cost 対効果を改善できる可能性 (rules/quality-gate.md 改定候補)
+
+4. **review agent rating 5-6 の Issue triage 徹底**: 本セッションの 12 エージェントから計 20+ 件の提案が出たが、Issue 化したのは silent-failure-hunter I2 (rating HIGH + scope creep) の 1 件のみ。rating 5-6 は全て PR コメントレベル or 現状維持判断で close。`feedback_issue_triage.md` ルール (Close N + 起票 N = net 0 は進捗ゼロ扱い) に沿って Net +1 を維持
+
+5. **sinon 要否判断の system-level 評価**: 単一ファイル test の視点だと sinon はシンプル解決だが、コードベース全体では `withWarnSpy` (buildPageResult.test.ts), `withSilentConsoleError` 等の polyfill pattern が既に確立されている。feedback_evaluate_as_system.md に従い、ファイル単体ではなくシステム全体の convention 整合性で判断するのが正しい。「新パターンを許容するなら deferred な skip 解禁まで PR scope を広げる」が正道
+
+6. **polyfill pattern の再利用性**: `withFailingRunTransaction` は `withWarnSpy` と同じ try/finally 構造。将来 `withFailingSafeLogError` (Issue #370 向け) や他の Firestore method 差し替えが必要になった時、同じ pattern でスケール可能。helper 化は YAGNI で今は各 describe 内に置く
+
+### 次セッション着手候補 (WBS 進捗)
+
+**軽量 (0.5 セッション)**:
+- **#370 rescue fatal 分岐 safeLogError 二重呼出防止 test** (本セッション起票): `errorLogger` モジュールを polyfill 差し替えで失敗させ、内部 try/catch nest の lock-in。PR #369 の `withFailingRunTransaction` helper 応用で実装可
+
+**中規模 (1 セッション)**:
+- **#239 force-reindex audit log**: Cloud Logging に構造化 audit log 出力、compliance 対応の延長
+- **#251 summaryGenerator test + buildSummaryPrompt 分離**: 既存の summary 処理を testable に切り出し
+- **#200 checkGmailAttachments/splitPdf 統合テスト**: Gmail 連携経路の integration test
+
+**大物 (2 セッション、`/impl-plan` 必須)**:
+- **#237 search tokenizer 共通化**: FE/BE/script 3 箇所の重複を `shared/` に集約。session29-31 で持ち越し継続、Evaluator 分離必須 (5+ ファイル + アーキテクチャ影響)
+- **#299 capPageResultsAggregate 動的 safeLogError test** (最難): ts-node/esm 環境整備込み。ESM loader 問題 (#360/#364 で知見獲得済) を活用できる
+
+**session 外 Open Issues** (引き続き持ち越し): #238 (force-reindex 孤児 posting) / #220 (OOM/truncated metric + alert) / #152 (dev setup-tenant、雛形として open 維持が正しい状態、active 作業不要)
+
+### Test plan 実行結果
+
+- [x] BE `npx tsc --noEmit` EXIT 0 (両 PR 確認)
+- [x] BE `npm test` **677 passing + 6 pending** (変化なし、sinon 導入/除去とも既存影響ゼロ)
+- [x] BE `npm run test:integration` (emulator) **23 passing** (21 既存 + 2 新規 from #364)
+- [x] BE `npm run lint` 0 errors, 25 warnings (本 PR 新規 warning ゼロ、sinon 除去で eslint-disable 不要化 → 既存 warning 2 件削減)
+- [x] scripts `npx tsc --noEmit -p scripts/tsconfig.json` EXIT 0 (#368 確認)
+- [x] main CI 3/3 green × 2 PR (lint-build-test / CodeRabbit / GitGuardian 全 pass)
+- [x] `gh issue view 365 / 364` で CLOSED 確認 (squash merge で 2 件とも auto-close 成功)
+- [x] follow-up Issue #370 起票確認
+- [x] GitHub Actions で dev 環境 `backfill-display-filename --dry-run` 実行 2 回 success、新サマリー文字列「スキップ（設定済み・--forceなし）: 2件」出力確認、invariant assertion 未発動 (正常経路)
+- [ ] main Deploy #369 (caa082c) IN_PROGRESS (merge 直後、次セッション開始時に `gh run list --workflow=Deploy` で SUCCESS 確認必要)
+
+---
 
 <a id="session30"></a>
 ## ✅ session30 完了サマリー (2026-04-22: #360 + #358 完遂、2 PR merged)
@@ -257,104 +345,11 @@ PM/PL 視点で session27 残 4 Open Issue (WBS scope 内) から **最大物・
 
 ---
 
-<a id="session27"></a>
-## ✅ session27 完了サマリー (WBS Phase 1-3 完遂)
-
-PM/PL 視点で session26 残 10 Open Issue から WBS を引き直し、Phase 1 (Quick wins) → Phase 2 (Observability + Sanitize) → Phase 3 (Test diagnostics 部分) を **5 PR 連続 merge で完遂**。各 PR で Quality Gate (pr-review-toolkit 並列 + 大規模は evaluator + codex review セカンドオピニオン) を発動。
-
-### PR 一覧
-
-| PR | Phase | 内容 | closed Issues | merged commit |
-|----|-------|------|--------------|--------------|
-| **#349** | 1 | timestampToDateString epoch/NaN/Infinity silent 誤出力修正 | #346 | `88f7d0b` |
-| **#350** | 1 | MasterData 型を pdfAnalyzer → extractors.ts 移動 (natural dep direction) | #343 | `62932aa` |
-| **#351** | 2 | sanitize*Masters silent drop observable 化 (console.warn + safeLogError + Firebase runtime positive signal) | #344 | `620d9b7` |
-| **#352** | 2 | pdfOperations local sanitize を sanitizeFilenameForStorage に統合 (全角空白 + 前後トリム移植) | #333 | `b3143c3` |
-| **#353** | 3 | summaryWritePayloadContract diagnostics 強化 (I/O ヘルパ + symlink skip + 既知制限 describe.skip) | #262 | `f7210bb` |
-| — | 2 | #331 (sanitize shared/ 統合) を close 提案 comment で closed | #331 | (close only) |
-
-### 主要成果
-
-| 項目 | 内容 |
-|------|------|
-| **merged PR** | 5 本 (#349-#353) |
-| **closed Issue** | #262 / #331 / #333 / #343 / #344 / #346 (計 6 件) |
-| **BE テスト** | 648 → **662 passing + 6 pending** (+14: timestampHelpers 5 + loadMasterData drop 5 + fileNaming 5 - 旧 seconds=0 undefined 廃止 -1、加えて skip 6 = #262 既知制限) |
-| **FE テスト** | 127 passing (変化なし) |
-| **コード量** | 5 PR 合計 +470 / -91 行 (純増は observability logic + lock-in test) |
-| **品質改善** | epoch/NaN silent failure 排除 / 型所在の natural direction 化 / sanitize drop observability (Firebase runtime 正確検知) / local sanitize 統合 / grep-based contract の I/O 耐性 + 既知制限ドキュメント化 |
-
-### Quality Gate 実施記録
-
-| PR | 発動内容 | 結果 |
-|----|---------|------|
-| **#349** (1) | pr-review 2 並列 (code-reviewer + silent-failure-hunter) | Critical 0、**Important 1 対応** (silent-failure-hunter: NaN/Infinity 素通り → `Number.isFinite` 追加) |
-| **#350** (1) | pr-review code-reviewer + evaluator 2 並列 | Critical 0、Suggestion 1 (import type 統一、follow-up) |
-| **#351** (2) | pr-review 3 並列 (code-reviewer + silent-failure-hunter + evaluator) + codex review | Critical 0、**Important 4 対応** (NODE_ENV gate fragile → Firebase runtime positive signal / lazy require fallback 情報量 / Promise union → async 統一 / source 'ocr' 固定 → caller 指定式) |
-| **#352** (2) | pr-review code-reviewer | Critical 0、Suggestion 1 対応 (maxLength 境界の末尾 `_` 再 trim) |
-| **#353** (3) | pr-review code-reviewer | Critical 0、Suggestion 1 対応 (describe.skip 解除時 assertion semantic 明示コメント) |
-
-### 設計判断 / Lessons Learned (本セッション重要知見)
-
-1. **`NODE_ENV === 'production'` gate の単独依存は Firebase Functions Gen2 で不安全**: Cloud Run ベースの Gen2 runtime では NODE_ENV が 'production' にセットされないケースがある。positive signal として `K_SERVICE` / `FUNCTION_TARGET` の 2 種を併用して検出するのが安全 (silent-failure-hunter #351 Important #1)。textCap.ts の既存 gate も将来 refactor 候補
-
-2. **`typeof === 'number'` guard は NaN/Infinity を通す**: 旧 guard `!ts.seconds` は NaN を falsy で弾いていたが、`typeof !== 'number'` に変更すると NaN が通過し `"NaN/NaN/NaN"` silent 誤出力を新設してしまう。`Number.isFinite()` を併用すべき (silent-failure-hunter #349)
-
-3. **`Promise<void> | void` union 戻り値は brittle**: async にすべきか同期にすべきか判断を caller に委ねる設計は、`if (promise) await promise` のパターンが refactor で忘れられやすく silent failure 生む。`async function` で `Promise<void>` 統一が鉄則 (evaluator + silent-failure-hunter 両方が指摘)
-
-4. **caller context を引数で受ける observability 設計**: loadMasterData のように複数 caller (OCR / PDF 分割) から呼ばれる共通関数で source 固定は誤分類を生む。optional context `{ source, functionName }` で caller 明示 + default で既存動作保持が最小 breaking (codex review #351)
-
-5. **既知 false positive は `describe.skip` で lock-in する**: grep-based contract の limitation をコメントだけで残すと忘れられる。`describe.skip` で fixture を含めて文書化し、将来の sinon spy 昇格時に skip 外すだけで retro-test として機能する。`[FUTURE LOCK-IN]` ケースは semantic が逆向きで誤読リスク高いためヘッダで明示 (#353)
-
-6. **sanitize helper 統合は concern-based 分離が最適**: Storage path 用 / displayFileName 用 / GAS 移行版で禁止文字セット・連続 `_` 圧縮・前後トリム・maxLength 切詰が全て異なる。`shared/sanitize(value, options)` は options 地獄になるため、concern 別 helper 維持が読みやすい (#331 close 判断、#352 は同 concern 2 本の統合に限定)
-
-7. **大規模 PR の Quality Gate 3 tier**: 1-2 ファイル = code-reviewer のみ / 3-4 ファイル = code-reviewer + silent-failure-hunter or evaluator / 5+ ファイル or 新機能 = 3 並列 + codex review、で段階的にコスト調整できる。#351 で 4 エージェント並列 → codex review の Important #1 (Firebase runtime) が最重要指摘だった = codex の死角検出力を再確認
-
-### 次セッション着手候補 (session26 WBS scope 残 4 Open Issues、全 P2)
-
-> 注: repo 全体の Open Issue は 11 件 (#239/#238/#237/#220/#200/#196/#152 等 session 外を含む)。以下 4 件は本 WBS cluster 内の残タスク。
-
-**Phase 4: DocumentMaster 型統合 (#338)** (最優先・最大物):
-- shared/types.ts vs extractors.ts で DocumentMaster + CustomerMaster + OfficeMaster の optionality 乖離 (計 6 フィールド)
-- frontend 10+ ファイル影響 (`customer.furigana.includes()` 等 required 前提コード)
-- **Evaluator 発動対象** (5+ ファイル + アーキテクチャ影響)、**`/impl-plan` 必須**
-- 設計オプション A (全 optional 化) / B (Write 型分離) / C (extractors 削除 + re-export)
-- 想定規模: 10-15 ファイル、1.5-2 セッション相当
-
-**Phase 5: backfill-display-filename.js shared 統合 (#334)** (Phase 4 依存):
-- scripts/ の inline `generateDisplayFileName` + `timestampToDateString` を shared/ から import
-- ts-node 導入 or build step 追加の設計判断
-- 想定規模: 2-4 ファイル + package.json
-
-**Phase 6: summaryGenerator unit test + buildSummaryPrompt 分離 (#251)** (独立):
-- summaryGenerator の unit test 追加
-- buildSummaryPrompt を別モジュールに分離
-- 想定規模: 3-5 ファイル、/impl-plan 推奨
-
-**Phase 7: capPageResultsAggregate 動的 safeLogError test + ts-node/esm 環境整備 (#299)** (最難):
-- PR #298 で CI 対応不能により close 済の大物
-- 根本原因: ローカル ts-node ESM mode vs CI tsc CJS mode で diagnostics 差異、`@ts-expect-error` 片側 unused
-- Option B (.mocharc.cjs loader 'ts-node/esm') / C (proxyquire) / D (CJS 強制) から選定
-- 3 回失敗ルール → /codex 委譲推奨
-- 想定規模: test infra、2+ セッション
-
-### Test plan 実行結果
-
-- [x] BE `npx tsc --noEmit` EXIT 0 (各 PR 確認)
-- [x] BE `npm test` **662 passing + 6 pending** (skip は #262 既知制限ドキュメント)
-- [x] FE `npm test` (vitest) **127 passing** (変化なし)
-- [x] main CI 5/5 green × 5 PR (lint-build-test / CodeRabbit / GitGuardian 全 pass)
-- [x] `gh issue view 262/331/333/343/344/346` で CLOSED 確認
-- [x] WBS scope 残 Open: #251 / #299 / #334 / #338 (repo 全体 Open 11 件のうち本 cluster 4 件)
-
----
-
----
-
-**過去セッション (session23-28) は `docs/handoff/archive/2026-04-history.md` に移管済み** (session29 handoff 時、2026-04-22 追加移管)。
+**過去セッション (session23-27) は `docs/handoff/archive/2026-04-history.md` に移管済み** (session31 handoff 時、2026-04-22 追加移管で session27 を archive 前置)。
 
 直近前セッション (LATEST 保持):
+- **session30** (2026-04-22): #360 + #358 完遂 (2 PR #363/#366)、Quality Gate 13 エージェント+evaluator、rescue observability + backfill test lock-in
+- **session29** (2026-04-22): #334 + #196 完遂 (3 PR #357/#359/#361)、silent bug 修正 + scripts .ts 化
 - **session28** (2026-04-21): WBS Phase 1 完遂 (#338 DocumentMaster 型統合、1 PR #355)、Quality Gate 3 エージェント並列で HIGH 4 + Suggestion 4 全対応
-- **session27** (2026-04-21): WBS Phase 1-3 完遂 (5 PR #349-#353)、6 Issue closed、Phase 1 Quick wins + Phase 2 Observability + Phase 3 Test diagnostics 完遂
 
-以前 (session19〜26) は `docs/handoff/archive/2026-04-history.md` 参照。
+以前 (session19〜27) は `docs/handoff/archive/2026-04-history.md` 参照。
