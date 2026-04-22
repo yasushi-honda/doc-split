@@ -1,6 +1,6 @@
 # ハンドオフメモ
 
-**更新日**: 2026-04-22 session35 (**triage-only セッション、実装作業ゼロ**。6 open Issues 全件本文精査 → #220 完了済 close で Issue Net **-1**、残り 5 件は全て本文判定で正しく待機継続)
+**更新日**: 2026-04-22 session35 (**triage-only セッション、実装作業ゼロ**。6 open Issues 全件本文精査 → #220 完了済 close で Issue Net **-1**、残り 5 件は全て本文判定で正しく待機継続。**session36 は open Issues に手を付けず、ユーザーからの新規機能追加 / バグ修正依頼に着手する方針で合意済** — 本ファイル `### 次セッション (session36) の着手方針` セクション参照)
 **ブランチ**: main (clean、最新 commit は本 handoff PR merge 後に更新)
 **フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + Phase 2 (#181-#183) + Phase 3 (#188-#190) + Phase 5 (#339/#340/#332/#335) + Phase 6 (#346/#343/#344/#331/#333/#262) + Phase 7 (#338) + Phase 8 (session29 = #334/#196) + Phase 8 (session30 = #360 rescue observability + #358 backfill test lock-in) + Phase 8 (session31 = #365 backfill counter 分割 + #364 rescue per-doc catch test) + Phase 8 (session32 = #370 fatal 分岐 safeLogError 二重呼出防止 test) + Phase 8 (session33 = #200 Gmail/Split 統合テスト + #251 Scope 2 summaryPromptBuilder 分離) + Phase 8 (session34 = #375 Gmail reimportPolicy pure helper 抽出 + #237 tokenizer 3 箇所共通化) + **Phase 8 (session35 = Issue triage-only、close 忘れ 1 件整理 = #220)** 完遂
 
@@ -47,18 +47,38 @@ session34 handoff の「次セッション着手候補」(#251 Scope 1 / #239 / 
 
 5. **Issue 無限増殖問題への最終回答**: session34 handoff で「Issue Net は KPI」「rating 5-6 は Issue 化しない」等のルールは機能しており、**3 日間新規起票ゼロ** (最終 #299 = 2026-04-19)。ただし close 忘れ (#220) が 1 件残っていた。3 層ゲート (hook / CLAUDE.md / /handoff) は「過剰起票」には効くが「完了済 close 忘れ」には効かない non-covered パターンであることが判明、今後 `/catchup` 時に「5 日以上更新のない Issue を実装状況と cross-check」する運用を検討
 
-### 次セッション着手候補 (triage 結果を反映)
+### 次セッション (session36) の着手方針 — `/catchup` 重要指示
 
-**最優先**: **全 Open Issues を再度 triage してから着手判断**。session35 の教訓として、handoff 候補リストを鵜呑みにせず各 Issue 本文を再読する。
+> ⚠️ **session36 は open Issues に手を付けず、ユーザーから新規に依頼される機能追加 / バグ修正に着手する。**
+>
+> session35 triage により、**現在の open 5 Issues は全て「待機継続が正解」の monitoring-only 状態** と確定済。`/catchup` がこの handoff を読んだ際、open Issues リストを「次にやるべき ToDo」と誤解しないこと。
+>
+> **session36 で open Issue に着手してよい唯一の条件**: 各 Issue に明記された **昇格条件 (再開トリガー) が実際に発火した場合のみ**。昇格条件未発火の Issue を「ROI 判断」「強行か待機か」等の表現で議論に持ち込むこと自体が session35 で排除した失敗パターン (「次アクション候補」リストを ToDo として読み込む) の再発。
 
-**推奨順**:
+#### 現在 open 5 Issues のステータス確認表 (session36 `/catchup` はこの表だけ読めば十分)
 
-1. **bundle 案: #299 + #251 Scope 1 を同時に着手** — 両者とも「sinon/proxyquire 導入」が前提条件で、mock 基盤整備コストを 1 度で償却できる。ただし全 BE test の実行経路見直し (mocha esm-utils / tsconfig) が必要で **2-3 session 規模の大物**、`/impl-plan` + Evaluator 必須
-2. **#239 単独 (中規模)**: Cloud Logging audit log 導入は単独で完結可能、ただし Issue 本文の昇格条件 (月次 drift 1 件以上 or 監査要件明示) 未達のため「強行か待機か」の ROI 判断が先
-3. **#238 単独 (中規模)**: 孤児 posting scan、Issue 本文の昇格条件未達、優先度低
-4. **持ち越し**: #152 は雛形として正しい状態、active 作業不要
+| # | 状態 | 昇格条件の現状 | 次 session の扱い |
+|---|------|--------------|------------------|
+| #299 | monitoring-only | false negative 未観測 | **手を付けない** |
+| #251 Scope 1 | monitoring-only | Vertex AI false negative 未観測 | **手を付けない** |
+| #239 | monitoring-only | 30日 drift 0件 / 監査要件未明示 | **手を付けない** |
+| #238 | monitoring-only | silent failure metric 未発火 / ユーザー報告なし | **手を付けない** |
+| #152 | 雛形として正しい状態 | dev デバッグ要求なし | **手を付けない** |
 
-**Follow-up 2 件 (PR #379 body 記載のみ)** は triage 再検討 (rating 閾値未達で Issue 化保留した判断が現状も正しいか session 開始時に再確認)
+**Follow-up 2 件 (PR #379 body 記載のみ)** も rating 閾値未達で Issue 化保留判断維持、session36 では触らない。
+
+#### session36 で実施すること
+
+1. **`/catchup` 実行時**: 上記表を確認し、「open Issues はアクティブ対応不要」と認識する
+2. **ユーザーから新規依頼を受ける**: 機能追加 / バグ修正 / UX 改善 / クライアント要望など
+3. 依頼内容に応じて:
+   - 軽微なバグ修正 → 即着手 (bug fix ブランチ → PR)
+   - 新機能 → `/impl-plan` で WBS 作成 → 承認後着手
+   - 複数項目 → triage 基準に沿って GitHub Issue 化 + 優先順位整理
+
+#### 万が一 session35 triage 結果を覆したい場合
+
+昇格条件未発火なのに特定 Issue を強行したい理由が新たに発生した場合 (例: クライアントからの具体的要望、新たなインシデント等)、**session36 開始時にユーザーと明示的に議論してから** 判断する。本 handoff の指示を無断で上書きしない。
 
 ### Test plan 実行結果
 
