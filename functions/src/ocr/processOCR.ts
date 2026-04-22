@@ -156,7 +156,7 @@ export const processOCR = onSchedule(
  *
  * #360: per-doc を runTransaction 化して handleProcessingError と整合させ、
  * per-doc catch でも safeLogError を呼んで silent failure を観測可能にする。
- * 副産物として test から import 可能にするため export している。
+ * integration test から直接呼び出すため export している (AC2/AC3/AC4 検証に必要)。
  */
 export async function rescueStuckProcessingDocs(): Promise<void> {
   const threshold = new Date(Date.now() - STUCK_PROCESSING_THRESHOLD_MS);
@@ -174,7 +174,7 @@ export async function rescueStuckProcessingDocs(): Promise<void> {
 
   // per-doc 逐次処理: 並列化は runTransaction optimistic retry を誘発する上、
   // BATCH_SIZE=5 では全体 ~1s 未満で cron 間隔 60s に対し無視できる。
-  // eslint-disable-next-line no-await-in-loop
+  // ループ内の各 await には個別に eslint-disable を付けている。
   for (const docSnapshot of stuckDocs.docs) {
     const docId = docSnapshot.id;
     const docRef = db.doc(`documents/${docId}`);
@@ -216,13 +216,20 @@ export async function rescueStuckProcessingDocs(): Promise<void> {
         console.error(`Marked stuck document ${docId} as error (>= ${MAX_RETRY_COUNT} retries)`);
         // #196 silent-failure-hunter C1: errors/ に記録しないと ErrorsPage から不可視。
         // rules/error-handling.md 「状態復旧 > ログ記録」順で tx commit 後に呼ぶ。
-        // eslint-disable-next-line no-await-in-loop
-        await safeLogError({
-          error: new Error(`Rescue max retries exceeded for stuck processing > ${STUCK_PROCESSING_THRESHOLD_MS / 60000}min`),
-          source: 'ocr',
-          functionName: FUNCTION_NAME,
-          documentId: docId,
-        });
+        // #360 silent-failure-hunter I1: この safeLogError の失敗は outer catch に
+        // 伝播させない。伝播すると outer catch 内の safeLogError が再度呼ばれ、
+        // 同一 docId に対する errors/ 書き込みが重複する。
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          await safeLogError({
+            error: new Error(`Rescue max retries exceeded for stuck processing > ${STUCK_PROCESSING_THRESHOLD_MS / 60000}min`),
+            source: 'ocr',
+            functionName: FUNCTION_NAME,
+            documentId: docId,
+          });
+        } catch (logErr) {
+          console.error(`safeLogError failed for ${docId} (fatal branch):`, logErr);
+        }
       } else {
         console.log(`Reset stuck document ${docId} to pending (retryAfter: ${STUCK_RESCUE_RETRY_AFTER_MS / 1000}s)`);
       }

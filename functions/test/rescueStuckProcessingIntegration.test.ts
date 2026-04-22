@@ -150,6 +150,25 @@ describe('rescueStuckProcessingDocs 統合テスト (#360)', () => {
       expect(updated.fileId).to.equal('file-abc');
     });
 
+    it('retryCount > MAX_RETRY_COUNT (異常値) → error 分岐 (無限 rescue 防止、境界値 ±2)', async () => {
+      const docId = 'stuck-error-abnormal';
+      await db.doc(`documents/${docId}`).set({
+        status: 'processing',
+        updatedAt: admin.firestore.Timestamp.fromMillis(Date.now() - STUCK_UPDATED_AT_OFFSET_MS),
+        retryCount: MAX_RETRY_COUNT + 2, // 異常値 (何らかの経緯で MAX 超過、rescue でも error に落ちるべき)
+        fileName: 'abnormal.pdf',
+      });
+
+      await rescueStuckProcessingDocs();
+
+      const updated = (await db.doc(`documents/${docId}`).get()).data() as StuckDocFixture;
+      expect(updated.status).to.equal('error');
+      // retryCount 自体はインクリメントされる (MAX+3 = MAX_RETRY_COUNT+3 になる想定)
+      expect(updated.retryCount).to.equal(MAX_RETRY_COUNT + 3);
+      expect(updated.retryAfter).to.be.undefined;
+      expect(updated.lastErrorMessage).to.include(STUCK_RESCUE_FATAL_MESSAGE_PREFIX);
+    });
+
     it('AC5: error 分岐の lastErrorMessage が substring "max retries exceeded (N/M)" を含む (運用監視 grep lock-in)', async () => {
       const docId = 'stuck-error-msg-lockin';
       await db.doc(`documents/${docId}`).set({
@@ -192,11 +211,12 @@ describe('rescueStuckProcessingDocs 統合テスト (#360)', () => {
   });
 
   describe('既存動作の維持 (境界値)', () => {
-    it('10 分未満の processing は対象外 (不変)', async () => {
+    it('閾値未満の processing は対象外 (不変)', async () => {
+      // 閾値未満の fixture は THRESHOLD 自体に依存させる (定数変更で test が意味不明化しないよう)
       const docId = 'not-stuck-yet';
       await db.doc(`documents/${docId}`).set({
         status: 'processing',
-        updatedAt: admin.firestore.Timestamp.fromMillis(Date.now() - 5 * 60 * 1000), // 5分前
+        updatedAt: admin.firestore.Timestamp.fromMillis(Date.now() - STUCK_PROCESSING_THRESHOLD_MS / 2),
         retryCount: 1,
         fileName: 'not-stuck.pdf',
       });
