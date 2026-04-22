@@ -54,7 +54,7 @@ async function main(): Promise<void> {
   const targetStatuses = ['processed', 'split'];
   let totalProcessed = 0;
   let totalUpdated = 0;
-  // #365: totalSkipped を 2 カウンタに分割。
+  // #365: totalSkipped を 2 カウンタに分割 (--force 時の冗長 write 削減量を運用で個別可視化するため)。
   // - totalSkippedExisting: --force なしで既存 displayFileName があるためスキップ
   // - totalSkippedNoop: --force ありで既存値 === 新生成値のため書き込み不要でスキップ
   // 合計値 (totalSkippedExisting + totalSkippedNoop) は _migrations.skippedCount で後方互換維持。
@@ -162,6 +162,17 @@ async function main(): Promise<void> {
     }
   }
 
+  // #365 silent-failure-hunter I4: --force=false 経路で noop は到達不能 (L94 early return で
+  // 既存値あり doc は既に totalSkippedExisting に集約されるため)。invariant が破れた場合は
+  // _migrations への silent 汚染を防ぎ、operator の audit 証跡を保つために abort する。
+  if (!force && totalSkippedNoop > 0) {
+    console.error(
+      `[FATAL] invariant violation: totalSkippedNoop=${totalSkippedNoop} with force=false. ` +
+      'noop path must be reachable only via --force. Aborting before _migrations write to preserve audit trail.'
+    );
+    process.exit(1);
+  }
+
   if (!dryRun && totalUpdated > 0) {
     await db.collection('_migrations').doc('display_filename_backfill').set({
       status: 'completed',
@@ -186,7 +197,7 @@ async function main(): Promise<void> {
   }
   console.log(`スキップ（設定済み・--forceなし）: ${totalSkippedExisting}件`);
   if (force) {
-    // --force 時のみ意味がある (noop は --force 経路でのみ発生)
+    // --force 時のみ意味がある (noop は --force 経路でのみ発生、L94 の early return が保証)
     console.log(`スキップ（既存値 === 新生成値・noop）: ${totalSkippedNoop}件`);
   }
   console.log(`スキップ（メタ不足）: ${totalNoMeta}件`);
