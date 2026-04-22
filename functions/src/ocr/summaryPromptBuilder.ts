@@ -6,10 +6,11 @@
  * なしで実行可能。
  *
  * 分離の理由 (PR #250 review 指摘):
- * - summaryGenerator.ts の依存チェーン (rateLimiter.ts → firebase-admin) により
- *   pure function 部分を unit test しようとすると `app/no-app` エラーで失敗する
- * - prompt 文言は最も退行しやすい箇所 (truncation 閾値、fallback 文言、セクション配置)
- *   だが、既存は grep 契約も無く境界値テストも欠落していた
+ * - summaryGenerator.ts が import する utils/rateLimiter.ts が module load 時に
+ *   `admin.firestore()` を呼ぶため、本モジュールを import するだけで
+ *   `app/no-app` エラー (default app 未初期化) で test が失敗する
+ * - prompt 文言は退行リスクが高い箇所 (truncation 閾値、fallback 文言、セクション配置)
+ *   のため、境界値 test を本モジュールに併置して lock-in する
  */
 
 /** OCR 結果がこの長さを超えたら「...(以下省略)」で切り詰める */
@@ -17,7 +18,7 @@ export const MAX_SUMMARY_INPUT_LENGTH = 8000;
 
 /**
  * documentType が空文字列のときに prompt 文言に差し込む fallback ラベル。
- * caller 側での二重 fallback (type-design-analyzer 指摘) を構造的に防止するため、
+ * caller 側で同じ fallback を二重に書くことを構造的に防止するため、
  * 本モジュール内に single source of truth として閉じ込める (export しない)。
  */
 const DEFAULT_DOCUMENT_TYPE_LABEL = '書類';

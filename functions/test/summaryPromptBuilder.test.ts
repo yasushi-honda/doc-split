@@ -1,5 +1,6 @@
 /**
- * buildSummaryPrompt pure function unit test (Issue #251 Scope 2)
+ * buildSummaryPrompt pure function unit test (Issue #251 で分離された
+ * pure prompt builder の test)
  *
  * 要約生成プロンプトの境界値・fallback・セクション保持を、firebase-admin /
  * Vertex AI の初期化なしで検証する。分離の経緯は summaryPromptBuilder.ts 冒頭参照。
@@ -25,13 +26,25 @@ describe('buildSummaryPrompt (#251 Scope 2)', () => {
       expect(prompt).to.not.include(TRUNCATION_SUFFIX);
     });
 
-    it('length === MAX_SUMMARY_INPUT_LENGTH + 1 (8001) は切り詰めあり', () => {
+    it('length === MAX_SUMMARY_INPUT_LENGTH + 1 (8001) は切り詰めあり (OCR結果ブロック厳密一致)', () => {
       const ocr = 'a'.repeat(MAX_SUMMARY_INPUT_LENGTH + 1);
       const prompt = buildSummaryPrompt(ocr, '請求書');
-      // 末尾の 1 文字は欠落 → 完全一致では含まれない
-      expect(prompt).to.not.include(ocr);
-      // 先頭 8000 文字 + 省略 suffix は含まれる
-      expect(prompt).to.include('a'.repeat(MAX_SUMMARY_INPUT_LENGTH) + TRUNCATION_SUFFIX);
+
+      // 【OCR結果】〜【要約】で挟まれたブロックが「先頭 8000 文字 + 省略 suffix」と厳密一致
+      // (comment-analyzer / pr-test-analyzer I1 対応: slice(0,8000) が slice(0,8001) に
+      // 変わる / suffix 位置がずれる regression を decisive に検知)
+      const bodyStart = prompt.indexOf('【OCR結果】\n') + '【OCR結果】\n'.length;
+      const bodyEnd = prompt.indexOf('\n\n【要約】');
+      expect(prompt.slice(bodyStart, bodyEnd)).to.equal(
+        'a'.repeat(MAX_SUMMARY_INPUT_LENGTH) + TRUNCATION_SUFFIX
+      );
+    });
+
+    it('length === MAX_SUMMARY_INPUT_LENGTH - 1 (7999) は切り詰めなし (off-by-one ガード)', () => {
+      const ocr = 'a'.repeat(MAX_SUMMARY_INPUT_LENGTH - 1);
+      const prompt = buildSummaryPrompt(ocr, '請求書');
+      expect(prompt).to.include(ocr);
+      expect(prompt).to.not.include(TRUNCATION_SUFFIX);
     });
 
     it('length < MAX_SUMMARY_INPUT_LENGTH はそのまま差し込まれる', () => {
@@ -86,10 +99,11 @@ describe('buildSummaryPrompt (#251 Scope 2)', () => {
   });
 
   describe('外部依存ゼロ (firebase-admin / Vertex 不要)', () => {
-    it('admin 初期化なし + Vertex mock なしで PASS する (本 test の存在自体が証拠)', () => {
-      // このブロックに到達していれば import 副作用で初期化エラーになっていない。
-      // summaryGenerator.ts の依存チェーン (rateLimiter.ts → firebase-admin) から
-      // 切り離されていることを assertion レベルで lock-in する。
+    it('admin 初期化なしで import・実行可能 (import 副作用がない)', () => {
+      // 本 test がここまで走った時点で、buildSummaryPrompt の import で
+      // admin.initializeApp() を呼ばなくても実行可能であることが示されている。
+      // 構造的な分離契約 (utils/rateLimiter 等への再依存禁止) は
+      // summaryPromptBuilderIsolationContract.test.ts で別途 lock-in する。
       expect(typeof buildSummaryPrompt).to.equal('function');
       expect(MAX_SUMMARY_INPUT_LENGTH).to.equal(8000);
     });
