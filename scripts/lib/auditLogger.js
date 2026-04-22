@@ -104,7 +104,9 @@ async function writeForceReindexAuditLog(payload, ctx, options = {}) {
     const logging = factory(ctx.projectId);
     const log = logging.log(LOG_NAME);
     const metadata = { severity: payload.severity, resource: { type: 'global' } };
-    await log.write(log.entry(metadata, entryPayload));
+    // resource: 'global' で project-level のシンプルな書き込み。
+    // partialSuccess: true で 1 件 invalid でも他を drop しない (Codex Q1 推奨)。
+    await log.write(log.entry(metadata, entryPayload), { partialSuccess: true });
     return { ok: true };
   } catch (err) {
     return _failOpen(err);
