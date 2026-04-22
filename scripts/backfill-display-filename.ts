@@ -23,6 +23,7 @@
 import * as admin from 'firebase-admin';
 import { generateDisplayFileName } from '../shared/generateDisplayFileName';
 import { timestampToDateString, type TimestampLike } from '../shared/timestampHelpers';
+import { detectDisplayFileNameChange } from '../shared/detectDisplayFileNameChange';
 
 const projectId = process.env.FIREBASE_PROJECT_ID;
 if (!projectId) {
@@ -105,15 +106,25 @@ async function main(): Promise<void> {
           continue;
         }
 
-        // #334: --force 時の silent 書き換え検知用。"未設定 → 新規 SET" は CHANGE 扱いしないため
-        // oldDisplayFileName の存在チェックを先に置く。
+        // #334: --force 時の silent 書き換え検知用。判定は純粋関数 detectDisplayFileNameChange
+        // に委譲 (#358 I1 でテスト lock-in 済み)。
         const oldDisplayFileName: string | undefined = data.displayFileName;
-        const isChange = Boolean(oldDisplayFileName) && oldDisplayFileName !== displayFileName;
+        const action = detectDisplayFileNameChange(oldDisplayFileName, displayFileName);
 
-        if (isChange) {
+        if (action === 'noop') {
+          // 既存 displayFileName が新生成値と一致 → 書き込み不要
+          totalSkipped++;
+          continue;
+        }
+        // noop 以降は 'change' | 'set' のみ。将来の enum 拡張で silent に SET に落ちるのを
+        // 防ぐため exhaustive 判定で assertNever する (#358 code-simplifier S2)。
+        if (action === 'change') {
           console.log(`  CHANGE: ${docSnap.id} "${oldDisplayFileName}" → "${displayFileName}"`);
-        } else {
+        } else if (action === 'set') {
           console.log(`  SET: ${docSnap.id} ${data.fileName || '(no name)'} → ${displayFileName}`);
+        } else {
+          const _exhaustive: never = action;
+          throw new Error(`Unexpected DisplayFileNameChange: ${String(_exhaustive)}`);
         }
 
         if (!dryRun) {
@@ -123,7 +134,8 @@ async function main(): Promise<void> {
           });
           batchCount++;
         }
-        if (isChange) totalChanged++;
+        // totalChanged は totalUpdated の subset (change + set の合計 = totalUpdated)。
+        if (action === 'change') totalChanged++;
         totalUpdated++;
       }
 
