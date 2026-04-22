@@ -15,7 +15,7 @@
     "type-check:test": "tsc --noEmit -p tsconfig.test.json",
     "test": "npm run type-check:test && mocha --require ts-node/register --timeout 10000 'test/**/*.test.ts' --ignore 'test/firestore.rules.test.ts' --ignore 'test/*Integration.test.ts'",
     "test:rules": "mocha --require ts-node/register --timeout 10000 'test/firestore.rules.test.ts'",
-    "test:integration": "mocha --require ts-node/register --timeout 10000 test/ocrRetryIntegration.test.ts test/rescueStuckProcessingIntegration.test.ts"
+    "test:integration": "mocha --require ts-node/register --timeout 10000 test/ocrRetryIntegration.test.ts test/rescueStuckProcessingIntegration.test.ts test/gmailAttachmentIntegration.test.ts test/splitPdfIntegration.test.ts"
   },
   "engines": {
     "node": "20"
