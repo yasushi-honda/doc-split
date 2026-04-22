@@ -55,6 +55,12 @@ session34 handoff の「次セッション着手候補」(#251 Scope 1 / #239 / 
 >
 > **session36 で open Issue に着手してよい唯一の条件**: 各 Issue に明記された **昇格条件 (再開トリガー) が実際に発火した場合のみ**。昇格条件未発火の Issue を「ROI 判断」「強行か待機か」等の表現で議論に持ち込むこと自体が session35 で排除した失敗パターン (「次アクション候補」リストを ToDo として読み込む) の再発。
 
+#### 「手を付けない」の操作定義
+
+- **禁止**: 新規実装 PR の作成、Issue に紐づく refactor / test 追加 / 機能拡張
+- **許容**: Issue への monitoring 観測結果の comment 追記、`/catchup` 時の完了済 close 忘れ整理 (session35 の #220 と同パターン)、triage メモ追記
+- **「新規依頼」の範囲**: **user が明示的に指示したもののみ**。過去 handoff の Lessons Learned / 設計判断 / review agent rating 5-6 指摘を Claude 側から能動的に実装化するのは禁止
+
 #### 現在 open 5 Issues のステータス確認表 (session36 `/catchup` はこの表だけ読めば十分)
 
 | # | 状態 | 昇格条件の現状 | 次 session の扱い |
@@ -65,7 +71,7 @@ session34 handoff の「次セッション着手候補」(#251 Scope 1 / #239 / 
 | #238 | monitoring-only | silent failure metric 未発火 / ユーザー報告なし | **手を付けない** |
 | #152 | 雛形として正しい状態 | dev デバッグ要求なし | **手を付けない** |
 
-**Follow-up 2 件 (PR #379 body 記載のみ)** も rating 閾値未達で Issue 化保留判断維持、session36 では触らない。
+**Follow-up 2 件** (PR #379 body 記載のみ、本 LATEST.md の上記「現状 5 open Issues の待機条件 vs 再開トリガー」表の下 (`### 現状 5 open Issues の待機条件 vs 再開トリガー (全件整理)` セクション末尾) に具体内容も保持されている): `tokenizer.ts に FIELD_TO_MASK + aggregateTokensByTokenId を export 追加` / `migrate-search-index.js の per-token await batch 化`。rating 閾値未達で Issue 化保留判断維持、session36 では触らない。
 
 #### session36 で実施すること
 
