@@ -6,10 +6,11 @@
  *   - isSplitSource=true の場合の再取り込み許可ロジック (documents collection)
  * を Firestore 実クエリで検証する。
  *
- * 方式: 既存 ocrRetryIntegration.test.ts の「ロジック再現型」パターンを踏襲する。
- * checkGmailAttachments wrapper の内部 helper は非公開であり、Gmail API の mock は
- * コストが高いため、source と同一の Firestore query/write pattern を test 内で再現し、
- * 結果の分岐 (skip vs 処理対象 / duplicate vs re-import) を assert する。
+ * 方式 (Issue #375 以降): 判定ロジック本体は pure helper
+ *   `src/gmail/reimportPolicy.ts` の evaluateReimportDecision に集約され、
+ *   production (checkGmailAttachments.ts) と本 integration test で共有される。
+ *   本テストは helper を呼び出すための Firestore query パターンを検証する位置づけ。
+ *   helper 単体の分岐は `reimportPolicy.test.ts` で unit test 済み。
  *
  * 実行: firebase emulators:exec --only firestore --project gmail-attachment-integration-test \
  *         'npm run test:integration'
@@ -20,6 +21,11 @@ import './helpers/initFirestoreEmulator';
 import { expect } from 'chai';
 import * as admin from 'firebase-admin';
 import { cleanupCollections } from './helpers/cleanupEmulator';
+import {
+  evaluateReimportDecision,
+  resolveExistingLogData,
+  type ReimportVerdict,
+} from '../src/gmail/reimportPolicy';
 
 const db = admin.firestore();
 const COLLECTIONS_TO_CLEAN: readonly string[] = ['gmailLogs', 'documents', 'uploadLogs'];
@@ -34,35 +40,51 @@ async function isAlreadyProcessedByMessageId(messageId: string): Promise<boolean
   return !existing.empty;
 }
 
-// checkGmailAttachments.ts の hash 重複 + isSplitSource 再取り込み許可ロジックを再現
-// 戻り値:
-//   'new'      = hash 未登録 (新規処理対象)
-//   'skip'     = fileUrl 欠損 or 1 件以上のアクティブ doc (isSplitSource != true) 存在
-//   'reimport' = fileUrl あり + アクティブ doc ゼロ (全て split source or 関連 doc なし)
-async function shouldSkipByHashDuplicate(
-  hash: string
-): Promise<'skip' | 'reimport' | 'new'> {
+/**
+ * integration test 専用の I/O wrapper: Firestore query パターンを production と
+ * 独立に実装し、判定ロジック本体は helper `evaluateReimportDecision` に委譲する。
+ *
+ * 設計意図 (Issue #375):
+ *   - 判定分岐は production と同じ helper を経由するため、分岐ロジック drift は
+ *     helper unit test (reimportPolicy.test.ts) と本 integration test の両方で検知
+ *   - Firestore query pattern (collection 名・where 条件・gmailLogs 優先) は
+ *     production (checkGmailAttachments.ts) と本 wrapper で**独立に**実装することで、
+ *     production 側 query の structural drift を integration test で検知できる
+ *   - 優先順位ロジック自体は helper の `resolveExistingLogData` を共有するため、
+ *     「gmailLogs 優先」の 3 重管理 (production / helper 内部 / test) を回避
+ */
+async function queryAndEvaluateReimport(hash: string): Promise<ReimportVerdict> {
   const [existingGmailLog, existingUploadLog] = await Promise.all([
     db.collection('gmailLogs').where('hash', '==', hash).limit(1).get(),
     db.collection('uploadLogs').where('hash', '==', hash).limit(1).get(),
   ]);
 
-  if (existingGmailLog.empty && existingUploadLog.empty) return 'new';
+  const existingGmailLogData = existingGmailLog.empty
+    ? null
+    : (existingGmailLog.docs[0].data() as { fileUrl?: string });
+  const existingUploadLogData = existingUploadLog.empty
+    ? null
+    : (existingUploadLog.docs[0].data() as { fileUrl?: string });
 
-  const existingLog = !existingGmailLog.empty
-    ? existingGmailLog.docs[0]
-    : existingUploadLog.docs[0];
-  const existingFileUrl = existingLog?.data().fileUrl as string | undefined;
+  const existingFileUrl =
+    resolveExistingLogData(existingGmailLogData, existingUploadLogData)?.fileUrl ?? null;
 
-  if (!existingFileUrl) return 'skip';
+  let relatedDocsData: Array<{ isSplitSource?: boolean }> = [];
+  if (existingFileUrl) {
+    const relatedDocs = await db
+      .collection('documents')
+      .where('fileUrl', '==', existingFileUrl)
+      .get();
+    relatedDocsData = relatedDocs.docs.map(
+      (d) => d.data() as { isSplitSource?: boolean },
+    );
+  }
 
-  const relatedDocs = await db
-    .collection('documents')
-    .where('fileUrl', '==', existingFileUrl)
-    .get();
-
-  const hasActiveDocs = relatedDocs.docs.some((doc) => !doc.data().isSplitSource);
-  return hasActiveDocs ? 'skip' : 'reimport';
+  return evaluateReimportDecision({
+    existingGmailLogData,
+    existingUploadLogData,
+    relatedDocsData,
+  }).verdict;
 }
 
 describe('checkGmailAttachments 統合テスト (#200)', () => {
@@ -133,7 +155,7 @@ describe('checkGmailAttachments 統合テスト (#200)', () => {
         status: 'split',
       });
 
-      const verdict = await shouldSkipByHashDuplicate(hash);
+      const verdict = await queryAndEvaluateReimport(hash);
       expect(verdict).to.equal('reimport');
     });
 
@@ -159,7 +181,7 @@ describe('checkGmailAttachments 統合テスト (#200)', () => {
         status: 'split',
       });
 
-      const verdict = await shouldSkipByHashDuplicate(hash);
+      const verdict = await queryAndEvaluateReimport(hash);
       expect(verdict).to.equal('skip');
     });
 
@@ -176,7 +198,7 @@ describe('checkGmailAttachments 統合テスト (#200)', () => {
         fileUrl,
       });
 
-      const verdict = await shouldSkipByHashDuplicate(hash);
+      const verdict = await queryAndEvaluateReimport(hash);
       expect(verdict).to.equal('reimport');
     });
 
@@ -189,12 +211,12 @@ describe('checkGmailAttachments 統合テスト (#200)', () => {
         // fileUrl 未設定 (古いレコード想定)
       });
 
-      const verdict = await shouldSkipByHashDuplicate(hash);
+      const verdict = await queryAndEvaluateReimport(hash);
       expect(verdict).to.equal('skip');
     });
 
     it('hash 一致がない → new (新規処理)', async () => {
-      const verdict = await shouldSkipByHashDuplicate('hash-unknown');
+      const verdict = await queryAndEvaluateReimport('hash-unknown');
       expect(verdict).to.equal('new');
     });
 
@@ -212,7 +234,7 @@ describe('checkGmailAttachments 統合テスト (#200)', () => {
         status: 'processed',
       });
 
-      const verdict = await shouldSkipByHashDuplicate(hash);
+      const verdict = await queryAndEvaluateReimport(hash);
       expect(verdict).to.equal('skip');
     });
   });
