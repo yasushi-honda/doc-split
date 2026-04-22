@@ -22,6 +22,7 @@ import './helpers/initFirestoreEmulator';
 import { expect } from 'chai';
 import * as admin from 'firebase-admin';
 import { rescueStuckProcessingDocs } from '../src/ocr/processOCR';
+import type { LogErrorParams } from '../src/utils/errorLogger';
 import {
   MAX_RETRY_COUNT,
   STUCK_RESCUE_RETRY_AFTER_MS,
@@ -307,45 +308,35 @@ describe('rescueStuckProcessingDocs 統合テスト (#360)', () => {
   });
 
   describe('fatal 分岐 safeLogError 失敗時の二重呼出防止 (#370)', () => {
-    // #370: processOCR.ts:222-232 の inner try/catch lock-in (PR #369 silent-failure-hunter I2)。
-    //
-    // 正常実装 (inner try/catch あり):
-    //   safeLogError 失敗 → inner catch で console.error に swallow → outer catch 未到達
-    //   → rescue ループ内で safeLogError が呼ばれるのは 1 回のみ
-    //
-    // regression シナリオ (将来の「cleanup」で inner try/catch 削除):
-    //   safeLogError 失敗 → outer catch に伝播 → outer catch 内の safeLogError が再度呼ばれ、
-    //   同一 docId に対して errors/ が 2 件書き込まれる silent regression
-    //
-    // safeLogError は現実装で logError 失敗を swallow するため throw しない契約だが、将来の
-    // errorLogger 側 cleanup (safeLogError 内部 try/catch 削除) でも二重書込を防ぐ保険として
-    // processOCR.ts 側の inner try/catch 単体で regression を防ぐことを call count で lock-in する。
+    // #370: rescueStuckProcessingDocs の fatal 分岐 inner try/catch の regression lock-in。
+    // 実装元: #360 silent-failure-hunter I1 (inner try/catch 新設)、
+    // 本 test: PR #369 silent-failure-hunter I2 の follow-up として inner try/catch 削除を検知する。
+    // 詳細は Issue #370 / PR #372 参照。
 
     /**
-     * errorLogger.safeLogError を一時的に差し替えて throw を強制する。
-     * CommonJS (tsconfig "module": "NodeNext" + package.json "type": "commonjs") 配下では
-     * processOCR.ts の `await errorLogger_1.safeLogError(...)` が namespace object の dynamic
-     * lookup になるため、namespace property 書き換えが production code 側の呼出に反映される
-     * (#369 の withFailingRunTransaction と同方針、sinon 依存なし)。
+     * errorLogger.safeLogError を一時的に「常に throw する stub」に差し替える。
      *
-     * call count で fatal 分岐 (1 回目) と outer catch (2 回目、regression 時のみ) を区別する。
-     * try/finally で原値復元を保証し、後続 test への stub leak を防ぐ。
+     * CommonJS (tsconfig "module": "NodeNext" + package.json "type": "commonjs") 配下では
+     * processOCR.ts の `await (0, errorLogger_1.safeLogError)(...)` が namespace object の
+     * dynamic lookup になるため、namespace property の書き換えが production code 側の呼出に
+     * 反映される (#369 の withFailingRunTransaction と同方針、sinon 依存なし)。
+     *
+     * 「常に throw」設計で以下の 2 通りを区別する:
+     *   - 正常実装: fatal 分岐 inner try/catch が swallow → rescue 正常完了、callCount === 1
+     *   - regression (inner try/catch 削除): outer catch に伝播 → outer 内 safeLogError も throw
+     *     → rescueStuckProcessingDocs が reject → test 側 catch で拾って FAIL
      */
     async function withFailingSafeLogError(
       fn: () => Promise<void>
     ): Promise<{ callCount: number }> {
       const errorLoggerModule = require('../src/utils/errorLogger') as {
-        safeLogError: (params: unknown) => Promise<void>;
+        safeLogError: (params: LogErrorParams) => Promise<void>;
       };
       const original = errorLoggerModule.safeLogError;
       let callCount = 0;
-      errorLoggerModule.safeLogError = async (_params: unknown) => {
+      errorLoggerModule.safeLogError = async (_params: LogErrorParams) => {
         callCount++;
-        // 1 回目 (fatal 分岐 inner try) → reject: 正常実装では inner catch で swallow される
-        // 2 回目以降 (outer catch、regression 時のみ到達) → no-op resolve で callCount のみ加算
-        if (callCount === 1) {
-          throw new Error('Simulated safeLogError failure for #370 test');
-        }
+        throw new Error('Simulated safeLogError failure for #370 test');
       };
       try {
         await fn();
@@ -365,20 +356,28 @@ describe('rescueStuckProcessingDocs 統合テスト (#360)', () => {
         customerName: '顧客X',
       });
 
-      const { callCount } = await withFailingSafeLogError(async () => {
-        await rescueStuckProcessingDocs();
-      });
+      // 正常実装では rescue が reject しないことを第一 invariant として確認する。
+      // regression で outer catch に伝播した場合、outer catch 内の safeLogError (try/catch なし)
+      // が再 throw して rescueStuckProcessingDocs 全体が reject する。
+      let rescueError: Error | undefined;
+      let callCount = 0;
+      try {
+        ({ callCount } = await withFailingSafeLogError(async () => {
+          await rescueStuckProcessingDocs();
+        }));
+      } catch (err) {
+        rescueError = err as Error;
+      }
 
-      // 二重呼出防止 invariant (#370 の本体):
-      //   callCount === 1: 正常実装 (inner catch で swallow、outer 未到達)
-      //   callCount === 2: regression (inner try/catch 削除で outer catch に伝播し再呼出)
-      // この厳密等号が将来 inner try/catch を誤削除する cleanup を test で検知する。
+      expect(
+        rescueError,
+        'rescueStuckProcessingDocs must complete without throwing (inner catch must swallow safeLogError failure)'
+      ).to.be.undefined;
       expect(
         callCount,
         'safeLogError must be invoked exactly once (inner catch swallows, outer catch unreachable)'
       ).to.equal(1);
 
-      // tx は成功しているため document 本体は status='error' に更新済み
       const docAfter = (await db.doc(`documents/${docId}`).get()).data() as StuckDocFixture;
       expect(docAfter.status).to.equal('error');
       expect(docAfter.retryCount).to.equal(MAX_RETRY_COUNT);
@@ -388,12 +387,6 @@ describe('rescueStuckProcessingDocs 統合テスト (#360)', () => {
       // 更新対象外フィールド不変 (CLAUDE.md MUST: Partial Update は更新対象外の不変性)
       expect(docAfter.fileName).to.equal('fatal-log-fail.pdf');
       expect(docAfter.customerName).to.equal('顧客X');
-
-      // safeLogError を stub している間は errors/ への実書込みが発生しない。
-      // callCount による invariant 検証が regression 検知の本体であり、errors/ 件数は
-      // 副次的な safety: stub 自身が実 Firestore write を呼ばないことの裏確認。
-      const errs = await db.collection('errors').where('documentId', '==', docId).get();
-      expect(errs.size, 'errors/ must remain empty while safeLogError is stubbed').to.equal(0);
     });
   });
 
