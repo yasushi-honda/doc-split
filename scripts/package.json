@@ -12,6 +12,7 @@
     "backfill:displayname": "ts-node backfill-display-filename.ts"
   },
   "dependencies": {
+    "@google-cloud/logging": "^11.2.1",
     "firebase-admin": "^12.7.0"
   },
   "devDependencies": {

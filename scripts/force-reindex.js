@@ -27,6 +27,27 @@
 // BE tokenizer.ts の compiled lib/ を参照することで drift を防止する。
 const { loadTokenizer, ensureTokenizerBuilt } = require('./lib/loadTokenizer');
 const { aggregateTokensByTokenId } = require('./lib/aggregateTokens');
+const { writeForceReindexAuditLog, EVENTS } = require('./lib/auditLogger');
+
+/**
+ * 失敗イベントを stdout JSON + Cloud Logging audit に二重出力する helper。
+ * AC-4 (既存 stdout JSON 維持) と AC-2 (Cloud Logging audit) の SSoT。
+ */
+async function emitFailureEvent({ event, severity, mode, docId, error, dryRun, auditCtx }) {
+  console.error(JSON.stringify({
+    severity,
+    event,
+    docId: docId ?? null,
+    stage: error?.reindexStage ?? null,
+    errorCode: error?.code ?? null,
+    errorMessage: error?.message,
+    stack: error?.stack,
+  }));
+  await writeForceReindexAuditLog(
+    { event, severity, mode, dryRun, docId, error },
+    auditCtx,
+  );
+}
 
 // CLI 実行時のみ build を強制。test (require) 時は呼び出し側に委ねる。
 if (require.main === module) {
@@ -290,7 +311,7 @@ const EXIT_OK = 0;
 const EXIT_PRECONDITION = 1;
 const EXIT_PARTIAL_FAILURE = 2;
 
-async function runSingleDocId(db, args) {
+async function runSingleDocId(db, args, auditCtx) {
   const docRef = db.collection('documents').doc(args.docId);
   const snap = await docRef.get();
   if (!snap.exists) {
@@ -311,23 +332,34 @@ async function runSingleDocId(db, args) {
       `+${result.tokensToAdd} / -${result.tokensToRemove} tokens, ` +
       `hash ${result.actualHash || '(none)'} → ${result.expectedHash}`
     );
+    await writeForceReindexAuditLog(
+      {
+        event: EVENTS.EXECUTED,
+        severity: 'NOTICE',
+        mode: 'doc-id',
+        dryRun: !args.execute,
+        docId: result.docId,
+        counts: { tokensAdded: result.tokensToAdd, tokensRemoved: result.tokensToRemove },
+        hashes: { oldHash: result.actualHash || null, newHash: result.expectedHash },
+      },
+      auditCtx,
+    );
     return EXIT_OK;
   } catch (error) {
-    // 構造化ログ (GitHub Actions 経由 Cloud Logging 取込用)
-    console.error(JSON.stringify({
+    await emitFailureEvent({
+      event: EVENTS.FAILED,
       severity: 'ERROR',
-      event: 'force_reindex_failed',
+      mode: 'doc-id',
       docId: args.docId,
-      stage: error.reindexStage ?? null,
-      errorCode: error.code ?? null,
-      errorMessage: error.message,
-      stack: error.stack,
-    }));
+      error,
+      dryRun: !args.execute,
+      auditCtx,
+    });
     return EXIT_PARTIAL_FAILURE;
   }
 }
 
-async function runAllDrift(db, args) {
+async function runAllDrift(db, args, auditCtx) {
   console.log(`[MODE] 全 drift scan (${args.execute ? '実行' : 'dry-run'})` +
     (args.sample ? `, sample=${args.sample}` : ''));
 
@@ -366,14 +398,26 @@ async function runAllDrift(db, args) {
 
       if (args.execute) {
         try {
-          await reindexDocument(db, docSnap.id, data, { execute: true });
+          const result = await reindexDocument(db, docSnap.id, data, { execute: true });
           reindexed++;
           console.log(`    [OK] 再 index 完了`);
+          await writeForceReindexAuditLog(
+            {
+              event: EVENTS.EXECUTED,
+              severity: 'NOTICE',
+              mode: 'all-drift',
+              dryRun: false,
+              docId: docSnap.id,
+              counts: { tokensAdded: result.tokensToAdd, tokensRemoved: result.tokensToRemove },
+              hashes: { oldHash: result.actualHash || null, newHash: result.expectedHash },
+            },
+            auditCtx,
+          );
         } catch (error) {
           // systemic programmer error (aggregateTokens の unknown TokenField 等) は
-          // per-doc failedCount に集約せず全体中止する (#379 silent-failure-hunter #4)。
-          // drift を silent に隠すと force-reindex が部分完了で exit 0 に見え、
-          // operator は FIELD_TO_MASK の同期漏れ等の structural bug を見逃す。
+          // per-doc failedCount に集約せず全体中止する。drift を silent に隠すと
+          // force-reindex が部分完了で exit 0 に見え、FIELD_TO_MASK の同期漏れ等の
+          // structural bug を見逃す。
           if (error && typeof error.message === 'string' &&
               error.message.startsWith('[aggregateTokens]')) {
             console.error(
@@ -382,16 +426,15 @@ async function runAllDrift(db, args) {
             throw error;
           }
           failed++;
-          // 構造化ログで呼出元が個別失敗を監査可能にする (PR #235 review silent-failure-hunter 指摘対応)
-          console.error(JSON.stringify({
+          await emitFailureEvent({
+            event: EVENTS.FAILED,
             severity: 'ERROR',
-            event: 'force_reindex_failed',
+            mode: 'all-drift',
             docId: docSnap.id,
-            stage: error.reindexStage ?? null,
-            errorCode: error.code ?? null,
-            errorMessage: error.message,
-            stack: error.stack,
-          }));
+            error,
+            dryRun: false,
+            auditCtx,
+          });
         }
       }
     }
@@ -402,6 +445,18 @@ async function runAllDrift(db, args) {
 
   console.log('---');
   console.log(`走査: ${processed} 件 / drift: ${drifted} 件 / 再 index: ${reindexed} 件 / 失敗: ${failed} 件`);
+
+  await writeForceReindexAuditLog(
+    {
+      event: EVENTS.BATCH_SUMMARY,
+      severity: failed > 0 ? 'WARNING' : 'NOTICE',
+      mode: 'all-drift',
+      dryRun: !args.execute,
+      counts: { processed, drifted, reindexed, failed },
+    },
+    auditCtx,
+  );
+
   return failed > 0 ? EXIT_PARTIAL_FAILURE : EXIT_OK;
 }
 
@@ -434,11 +489,17 @@ async function main() {
   console.log(`プロジェクト: ${projectId}`);
   console.log(`モード: ${args.execute ? '実行 (書き込みあり)' : 'dry-run (書き込みなし)'}`);
 
+  // GitHub Actions では GITHUB_ACTOR、手動実行時は USER をフォールバック
+  const auditCtx = {
+    projectId,
+    executedBy: process.env.GITHUB_ACTOR || process.env.USER || 'unknown',
+  };
+
   let exitCode = EXIT_OK;
   if (args.docId) {
-    exitCode = await runSingleDocId(db, args);
+    exitCode = await runSingleDocId(db, args, auditCtx);
   } else if (args.allDrift) {
-    exitCode = await runAllDrift(db, args);
+    exitCode = await runAllDrift(db, args, auditCtx);
   }
   return exitCode;
 }
@@ -450,14 +511,29 @@ if (require.main === module) {
       console.log(exitCode === EXIT_OK ? '完了' : `部分失敗で終了 (exit code=${exitCode})`);
       process.exit(exitCode);
     })
-    .catch((error) => {
-      console.error(JSON.stringify({
-        severity: 'CRITICAL',
-        event: 'force_reindex_fatal',
-        errorCode: error.code ?? null,
-        errorMessage: error.message,
-        stack: error.stack,
-      }));
+    .catch(async (error) => {
+      // process.exit は in-flight gRPC を切断するため、await で audit 完了を待つ
+      const projectId = process.env.FIREBASE_PROJECT_ID;
+      if (projectId) {
+        await emitFailureEvent({
+          event: EVENTS.FATAL,
+          severity: 'CRITICAL',
+          error,
+          auditCtx: {
+            projectId,
+            executedBy: process.env.GITHUB_ACTOR || process.env.USER || 'unknown',
+          },
+        });
+      } else {
+        // projectId 未設定 → audit 不可、stdout 出力のみ
+        console.error(JSON.stringify({
+          severity: 'CRITICAL',
+          event: EVENTS.FATAL,
+          errorCode: error.code ?? null,
+          errorMessage: error.message,
+          stack: error.stack,
+        }));
+      }
       process.exit(1);
     });
 }
