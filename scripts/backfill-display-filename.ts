@@ -54,7 +54,12 @@ async function main(): Promise<void> {
   const targetStatuses = ['processed', 'split'];
   let totalProcessed = 0;
   let totalUpdated = 0;
-  let totalSkipped = 0;
+  // #365: totalSkipped を 2 カウンタに分割。
+  // - totalSkippedExisting: --force なしで既存 displayFileName があるためスキップ
+  // - totalSkippedNoop: --force ありで既存値 === 新生成値のため書き込み不要でスキップ
+  // 合計値 (totalSkippedExisting + totalSkippedNoop) は _migrations.skippedCount で後方互換維持。
+  let totalSkippedExisting = 0;
+  let totalSkippedNoop = 0;
   let totalNoMeta = 0;
   let totalChanged = 0;
 
@@ -87,7 +92,7 @@ async function main(): Promise<void> {
         const data = docSnap.data();
 
         if (data.displayFileName && !force) {
-          totalSkipped++;
+          totalSkippedExisting++;
           continue;
         }
 
@@ -113,7 +118,7 @@ async function main(): Promise<void> {
 
         if (action === 'noop') {
           // 既存 displayFileName が新生成値と一致 → 書き込み不要
-          totalSkipped++;
+          totalSkippedNoop++;
           continue;
         }
         // noop 以降は 'change' | 'set' のみ。将来の enum 拡張で silent に SET に落ちるのを
@@ -128,7 +133,7 @@ async function main(): Promise<void> {
           console.error(
             `[FATAL] Unexpected DisplayFileNameChange: ${String(action)}. ` +
             `Progress (before abort): processed=${totalProcessed}, updated=${totalUpdated}, ` +
-            `skipped=${totalSkipped}, changed=${totalChanged}. ` +
+            `skippedExisting=${totalSkippedExisting}, skippedNoop=${totalSkippedNoop}, changed=${totalChanged}. ` +
             `Uncommitted batch (size=${batchCount}) will be LOST.`
           );
           const _exhaustive: never = action;
@@ -162,7 +167,10 @@ async function main(): Promise<void> {
       status: 'completed',
       processedCount: totalProcessed,
       updatedCount: totalUpdated,
-      skippedCount: totalSkipped,
+      // #365: 後方互換で skippedCount = 合計値を維持。新 field は分割カウンタ。
+      skippedCount: totalSkippedExisting + totalSkippedNoop,
+      skippedExistingCount: totalSkippedExisting,
+      skippedNoopCount: totalSkippedNoop,
       noMetaCount: totalNoMeta,
       changedCount: totalChanged,
       force,
@@ -176,7 +184,11 @@ async function main(): Promise<void> {
   if (force) {
     console.log(`  うち既存値からの変更: ${totalChanged}件`);
   }
-  console.log(`スキップ（設定済み）: ${totalSkipped}件`);
+  console.log(`スキップ（設定済み・--forceなし）: ${totalSkippedExisting}件`);
+  if (force) {
+    // --force 時のみ意味がある (noop は --force 経路でのみ発生)
+    console.log(`スキップ（既存値 === 新生成値・noop）: ${totalSkippedNoop}件`);
+  }
   console.log(`スキップ（メタ不足）: ${totalNoMeta}件`);
 
   if (dryRun) {
