@@ -12,10 +12,20 @@
  *   --dry-run       実際には書き込まず、処理内容を表示のみ
  *   --batch-size=N  バッチサイズ（デフォルト: 100）
  *   --project=ID    対象プロジェクトID（デフォルト: doc-split-dev）
+ *
+ * Issue #237 以降:
+ *   - 従来は inline で tokenizer 関数を再実装していたが、BE tokenizer.ts との drift
+ *     を防ぐため scripts/lib/loadTokenizer.js + scripts/lib/aggregateTokens.js 経由で
+ *     BE の compiled lib/ を参照する。
+ *   - 旧実装は generateTokenId に md5 16 文字 hex を使用していた。本版は BE と同じ
+ *     32bit simple hash 8 文字 hex。search_index の doc ID が変わるが、production
+ *     trigger (searchIndexer.ts) が書き直すため既存データへの実害なし。
+ *   - 日付トークンは旧 8 形式 → BE 版 3 形式 (YYYY / YYYY-MM / YYYY-MM-DD)。
  */
 
 const admin = require('firebase-admin');
-const crypto = require('crypto');
+const { loadTokenizer, ensureTokenizerBuilt } = require('./lib/loadTokenizer');
+const { aggregateTokensByTokenId } = require('./lib/aggregateTokens');
 
 // コマンドライン引数パース
 const args = process.argv.slice(2);
@@ -25,227 +35,22 @@ const batchSize = batchSizeArg ? parseInt(batchSizeArg.split('=')[1], 10) : 100;
 const projectArg = args.find(a => a.startsWith('--project='));
 const projectId = projectArg ? projectArg.split('=')[1] : 'doc-split-dev';
 
+// CLI 実行時のみ build を強制。test (require) 時は呼び出し側に委ねる。
+if (require.main === module) {
+  ensureTokenizerBuilt();
+}
+
+// BE tokenizer module (functions/src/utils/tokenizer.ts の compiled lib/)
+// CLI 実行時は ensureTokenizerBuilt() で lib/ の存在が保証されているが、
+// test からの require 時は lib/ が未生成だと throw する (意図的)。
+const tokenizer = loadTokenizer();
+
 // Firebase Admin 初期化
 admin.initializeApp({
   projectId,
 });
 
 const db = admin.firestore();
-
-// ========== トークナイザー（functions/src/utils/tokenizer.ts から移植）==========
-
-/**
- * 検索用にテキストを正規化
- */
-function normalizeForSearch(text) {
-  if (!text) return '';
-
-  let normalized = text;
-
-  // 全角英数字を半角に
-  normalized = normalized.replace(/[Ａ-Ｚａ-ｚ０-９]/g, (s) =>
-    String.fromCharCode(s.charCodeAt(0) - 0xFEE0)
-  );
-
-  // 全角スペースを半角に
-  normalized = normalized.replace(/　/g, ' ');
-
-  // 小文字化
-  normalized = normalized.toLowerCase();
-
-  // 連続スペースを単一に
-  normalized = normalized.replace(/\s+/g, ' ').trim();
-
-  return normalized;
-}
-
-/**
- * bi-gramトークンを生成
- */
-function generateBigrams(text) {
-  const normalized = normalizeForSearch(text);
-  if (normalized.length < 2) {
-    return normalized.length === 1 ? [normalized] : [];
-  }
-
-  const bigrams = new Set();
-  for (let i = 0; i < normalized.length - 1; i++) {
-    const bigram = normalized.slice(i, i + 2);
-    // スペースのみのbi-gramは除外
-    if (bigram.trim().length > 0) {
-      bigrams.add(bigram);
-    }
-  }
-
-  return Array.from(bigrams);
-}
-
-/**
- * キーワードトークンを生成（スペース区切り）
- */
-function generateKeywords(text) {
-  const normalized = normalizeForSearch(text);
-  if (!normalized) return [];
-
-  // スペースで分割して2文字以上のものを抽出
-  const words = normalized.split(' ').filter(w => w.length >= 2);
-
-  return Array.from(new Set(words));
-}
-
-/**
- * 日付トークンを生成
- */
-function generateDateTokens(date) {
-  if (!date) return [];
-
-  const tokens = [];
-  let dateObj;
-
-  if (date instanceof admin.firestore.Timestamp) {
-    dateObj = date.toDate();
-  } else if (date instanceof Date) {
-    dateObj = date;
-  } else if (typeof date === 'string') {
-    dateObj = new Date(date);
-  } else {
-    return [];
-  }
-
-  if (isNaN(dateObj.getTime())) return [];
-
-  const year = dateObj.getFullYear();
-  const month = String(dateObj.getMonth() + 1).padStart(2, '0');
-  const day = String(dateObj.getDate()).padStart(2, '0');
-
-  // 各種形式のトークン（検索クエリとマッチするように複数形式を生成）
-  tokens.push(`${year}`);               // 2024
-  tokens.push(`${year}-${month}`);      // 2024-01（YYYY-MM形式）
-  tokens.push(`${year}-${month}-${day}`); // 2024-01-15（YYYY-MM-DD形式）
-  tokens.push(`${year}${month}`);       // 202401
-  tokens.push(`${year}${month}${day}`); // 20240115
-  tokens.push(`${year}/${month}`);      // 2024/01
-  tokens.push(`${year}/${month}/${day}`); // 2024/01/15
-  tokens.push(`${month}/${day}`);       // 01/15
-
-  return tokens;
-}
-
-/**
- * フィールド重み付け
- */
-const FIELD_WEIGHTS = {
-  customerName: 3,
-  officeName: 2,
-  documentType: 2,
-  fileDate: 2,
-  fileName: 1,
-};
-
-/**
- * フィールドからマスクへの変換（オンライン処理と統一）
- */
-const FIELD_TO_MASK = {
-  customerName: 1,  // customer
-  officeName: 2,    // office
-  documentType: 4,  // documentType
-  fileName: 8,      // fileName
-  fileDate: 16,     // date
-};
-
-/**
- * ドキュメントから検索トークンを生成
- */
-function generateDocumentTokens(doc) {
-  const tokens = {};
-
-  // 顧客名
-  if (doc.customerName) {
-    const bigrams = generateBigrams(doc.customerName);
-    const keywords = generateKeywords(doc.customerName);
-    [...bigrams, ...keywords].forEach(token => {
-      if (!tokens[token]) {
-        tokens[token] = { score: 0, fieldsMask: 0, fields: [] };
-      }
-      tokens[token].score += FIELD_WEIGHTS.customerName;
-      tokens[token].fieldsMask |= FIELD_TO_MASK.customerName;
-      tokens[token].fields.push('customerName');
-    });
-  }
-
-  // 事業所名
-  if (doc.officeName) {
-    const bigrams = generateBigrams(doc.officeName);
-    const keywords = generateKeywords(doc.officeName);
-    [...bigrams, ...keywords].forEach(token => {
-      if (!tokens[token]) {
-        tokens[token] = { score: 0, fieldsMask: 0, fields: [] };
-      }
-      tokens[token].score += FIELD_WEIGHTS.officeName;
-      tokens[token].fieldsMask |= FIELD_TO_MASK.officeName;
-      tokens[token].fields.push('officeName');
-    });
-  }
-
-  // 書類種別
-  if (doc.documentType) {
-    const bigrams = generateBigrams(doc.documentType);
-    const keywords = generateKeywords(doc.documentType);
-    [...bigrams, ...keywords].forEach(token => {
-      if (!tokens[token]) {
-        tokens[token] = { score: 0, fieldsMask: 0, fields: [] };
-      }
-      tokens[token].score += FIELD_WEIGHTS.documentType;
-      tokens[token].fieldsMask |= FIELD_TO_MASK.documentType;
-      tokens[token].fields.push('documentType');
-    });
-  }
-
-  // 日付
-  if (doc.fileDate) {
-    const dateTokens = generateDateTokens(doc.fileDate);
-    dateTokens.forEach(token => {
-      if (!tokens[token]) {
-        tokens[token] = { score: 0, fieldsMask: 0, fields: [] };
-      }
-      tokens[token].score += FIELD_WEIGHTS.fileDate;
-      tokens[token].fieldsMask |= FIELD_TO_MASK.fileDate;
-      tokens[token].fields.push('fileDate');
-    });
-  }
-
-  // ファイル名
-  if (doc.fileName) {
-    const bigrams = generateBigrams(doc.fileName);
-    const keywords = generateKeywords(doc.fileName);
-    [...bigrams, ...keywords].forEach(token => {
-      if (!tokens[token]) {
-        tokens[token] = { score: 0, fieldsMask: 0, fields: [] };
-      }
-      tokens[token].score += FIELD_WEIGHTS.fileName;
-      tokens[token].fieldsMask |= FIELD_TO_MASK.fileName;
-      tokens[token].fields.push('fileName');
-    });
-  }
-
-  return tokens;
-}
-
-/**
- * トークンIDを生成（正規化したトークン値のハッシュ）
- */
-function generateTokenId(token) {
-  const normalized = normalizeForSearch(token);
-  return crypto.createHash('md5').update(normalized).digest('hex').slice(0, 16);
-}
-
-/**
- * ドキュメントのトークンハッシュを生成（冪等性チェック用）
- */
-function generateTokensHash(tokens) {
-  const sortedTokens = Object.keys(tokens).sort().join('|');
-  return crypto.createHash('md5').update(sortedTokens).digest('hex');
-}
 
 // ========== マイグレーション処理 ==========
 
@@ -296,20 +101,29 @@ async function migrateSearchIndex() {
           continue;
         }
 
-        // トークン生成
-        const tokens = generateDocumentTokens(docData);
-        const tokenCount = Object.keys(tokens).length;
+        // BE tokenizer でトークン生成 (TokenInfo[])
+        // fileDate は Firestore Timestamp → Date に変換してから渡す
+        const fileDate = docData.fileDate?.toDate?.() ?? null;
+        const tokens = tokenizer.generateDocumentTokens({
+          customerName: docData.customerName ?? null,
+          officeName: docData.officeName ?? null,
+          documentType: docData.documentType ?? null,
+          fileDate,
+          fileName: docData.fileName ?? null,
+        });
 
-        if (tokenCount === 0) {
+        if (tokens.length === 0) {
           console.log(`  [SKIP] ${docId}: トークンなし`);
           skippedCount++;
           continue;
         }
 
-        const tokensHash = generateTokensHash(tokens);
+        // tokenId ごとに集約 (searchIndexer.ts:addDocumentToIndex と同等ロジック)
+        const tokenMap = aggregateTokensByTokenId(tokens, tokenizer.generateTokenId);
+        const tokensHash = tokenizer.generateTokensHash(tokens);
 
         if (dryRun) {
-          console.log(`  [DRY] ${docId}: ${tokenCount}トークン生成予定`);
+          console.log(`  [DRY] ${docId}: ${tokenMap.size}トークン生成予定`);
           console.log(`         顧客: ${docData.customerName || '-'}, 事業所: ${docData.officeName || '-'}`);
           processedCount++;
           continue;
@@ -318,8 +132,7 @@ async function migrateSearchIndex() {
         // search_indexに書き込み（postings形式 - オンライン処理と統一）
         const now = admin.firestore.Timestamp.now();
 
-        for (const [token, data] of Object.entries(tokens)) {
-          const tokenId = generateTokenId(token);
+        for (const [tokenId, data] of tokenMap.entries()) {
           const indexRef = db.collection('search_index').doc(tokenId);
 
           // df更新を集約（同一tokenIdへの複数回更新を防止）
@@ -355,13 +168,13 @@ async function migrateSearchIndex() {
         await db.collection('documents').doc(docId).update({
           search: {
             version: 1,
-            tokens: Object.keys(tokens),
+            tokens: tokens.map(t => t.token),
             tokenHash: tokensHash,
             indexedAt: admin.firestore.Timestamp.now(),
           },
         });
 
-        console.log(`  [OK] ${docId}: ${tokenCount}トークン登録`);
+        console.log(`  [OK] ${docId}: ${tokenMap.size}トークン登録`);
         processedCount++;
 
       } catch (error) {
@@ -394,14 +207,21 @@ async function migrateSearchIndex() {
   }
 }
 
-// 実行
-migrateSearchIndex()
-  .then(() => {
-    console.log('');
-    console.log('スクリプト終了');
-    process.exit(0);
-  })
-  .catch((error) => {
-    console.error('致命的エラー:', error);
-    process.exit(1);
-  });
+// 実行 (CLI 起動時のみ)
+if (require.main === module) {
+  migrateSearchIndex()
+    .then(() => {
+      console.log('');
+      console.log('スクリプト終了');
+      process.exit(0);
+    })
+    .catch((error) => {
+      console.error('致命的エラー:', error);
+      process.exit(1);
+    });
+}
+
+// test 用に内部 helper を露出 (副作用のない pure 関数のみ)
+module.exports = {
+  migrateSearchIndex,
+};

@@ -22,39 +22,15 @@
  * build しておくこと (test は `loadTokenizer()` のデフォルト引数で間接的に lib/ を要求する)。
  */
 
-const path = require('path');
-const fs = require('fs');
-const { execFileSync } = require('child_process');
-
 // ========== Step 1: tokenizer のロード (production と同一実装を利用) ==========
-
-const TOKENIZER_PATH = path.resolve(
-  __dirname,
-  '../functions/lib/functions/src/utils/tokenizer.js'
-);
-
-function ensureTokenizerBuilt() {
-  if (fs.existsSync(TOKENIZER_PATH)) return;
-  console.log('[BUILD] functions/lib/ が未生成のため build を実行します...');
-  // execFileSync: shell を介さないため引数注入リスクなし
-  execFileSync('npm', ['run', 'build'], {
-    cwd: path.resolve(__dirname, '../functions'),
-    stdio: 'inherit',
-  });
-  if (!fs.existsSync(TOKENIZER_PATH)) {
-    console.error(`[FATAL] build 後も tokenizer が見つかりません: ${TOKENIZER_PATH}`);
-    process.exit(1);
-  }
-}
+// Issue #237 で scripts/lib/loadTokenizer.js に共通化 (migrate-search-index.js と共有)。
+// BE tokenizer.ts の compiled lib/ を参照することで drift を防止する。
+const { loadTokenizer, ensureTokenizerBuilt } = require('./lib/loadTokenizer');
+const { aggregateTokensByTokenId } = require('./lib/aggregateTokens');
 
 // CLI 実行時のみ build を強制。test (require) 時は呼び出し側に委ねる。
 if (require.main === module) {
   ensureTokenizerBuilt();
-}
-
-function loadTokenizer() {
-  ensureTokenizerBuilt();
-  return require(TOKENIZER_PATH);
 }
 
 const admin = require('firebase-admin');
@@ -178,14 +154,7 @@ function detectDrift(docData, tokenizer = loadTokenizer()) {
 }
 
 // ========== Step 4: Firestore 操作 ==========
-
-const FIELD_TO_MASK = {
-  customer: 1,
-  office: 2,
-  documentType: 4,
-  fileName: 8,
-  date: 16,
-};
+// FIELD_TO_MASK と集約ロジックは scripts/lib/aggregateTokens.js に集約 (Issue #237)。
 
 /**
  * 指定 docId の search_index を強制再構築する。
@@ -249,17 +218,8 @@ async function reindexDocument(db, docId, docData, { execute }, tokenizer = load
   }
 
   // 2. 新 posting 書き込み (同一 docId 再実行時は df を加算しない)
-  const tokenMap = new Map();
-  for (const { token, field, weight } of tokens) {
-    const tokenId = tokenizer.generateTokenId(token);
-    const existing = tokenMap.get(tokenId);
-    if (existing) {
-      existing.score += weight;
-      existing.fieldsMask |= FIELD_TO_MASK[field];
-    } else {
-      tokenMap.set(tokenId, { score: weight, fieldsMask: FIELD_TO_MASK[field] });
-    }
-  }
+  //    集約ロジックは scripts/lib/aggregateTokens.js を経由 (migrate-search-index.js と共有)
+  const tokenMap = aggregateTokensByTokenId(tokens, tokenizer.generateTokenId);
 
   const tokenIds = Array.from(tokenMap.keys());
   const indexRefs = tokenIds.map(id => db.collection('search_index').doc(id));
