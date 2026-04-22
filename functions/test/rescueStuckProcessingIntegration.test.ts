@@ -21,7 +21,6 @@ import './helpers/initFirestoreEmulator';
 
 import { expect } from 'chai';
 import * as admin from 'firebase-admin';
-import * as sinon from 'sinon';
 import { rescueStuckProcessingDocs } from '../src/ocr/processOCR';
 import {
   MAX_RETRY_COUNT,
@@ -212,18 +211,32 @@ describe('rescueStuckProcessingDocs 統合テスト (#360)', () => {
   });
 
   describe('per-doc catch 経路 (runTransaction 失敗時) #364', () => {
-    // #364: sinon で db.runTransaction を stub し、tx 失敗時に per-doc catch の
-    // safeLogError が呼ばれることを lock-in する。#360 silent-failure-hunter I1 で
-    // 実装されたが、integration test は fatalReached=true 経路のみ検証していた。
-    // 将来 outer try/catch を誤削除すると partial failure で silent 未処理復活するリスクを防ぐ。
+    // #364: db.runTransaction を一時的に差し替えて tx 失敗を誘発し、per-doc catch の safeLogError
+    // 呼出を lock-in する。#360 silent-failure-hunter I1 で実装された outer try/catch を誤削除すると
+    // partial failure で silent 未処理が復活するリスクを防ぐ。
+    //
+    // buildPageResult.test.ts の withWarnSpy と同方針で sinon 依存を新規追加しない polyfill で差し替える。
 
     const TX_FAILURE_MESSAGE = 'Simulated runTransaction failure for #364 test';
 
-    afterEach(() => {
-      sinon.restore();
-    });
+    /**
+     * db.runTransaction を一時差し替えして rescue 本体が per-doc catch を通るよう強制する。
+     * try/finally で原値復元を保証するため、assertion 内で失敗しても stub がリークしない。
+     */
+    async function withFailingRunTransaction(fn: () => Promise<void>): Promise<void> {
+      const original = db.runTransaction.bind(db);
+      // rejects() で tx body を一切呼ばず即 reject する。rescue 本体の per-doc try/catch が発火する。
+      (db as unknown as { runTransaction: unknown }).runTransaction = async () => {
+        throw new Error(TX_FAILURE_MESSAGE);
+      };
+      try {
+        await fn();
+      } finally {
+        (db as unknown as { runTransaction: typeof original }).runTransaction = original;
+      }
+    }
 
-    it('runTransaction 失敗 → errors/ に記録、lastErrorMessage は fatal prefix と異なる', async () => {
+    it('runTransaction 失敗 → errors/ に記録、errorMessage は fatal prefix と異なる', async () => {
       const docId = 'stuck-tx-fail';
       await db.doc(`documents/${docId}`).set({
         status: 'processing',
@@ -232,33 +245,42 @@ describe('rescueStuckProcessingDocs 統合テスト (#360)', () => {
         fileName: 'tx-fail.pdf',
       });
 
-      sinon.stub(db, 'runTransaction').rejects(new Error(TX_FAILURE_MESSAGE));
+      await withFailingRunTransaction(async () => {
+        await rescueStuckProcessingDocs();
+      });
 
-      await rescueStuckProcessingDocs();
-
-      // per-doc catch 経路の errors/ 記録 (silent-failure-hunter I1 の完全 lock-in)
+      // per-doc catch 経路の errors/ 記録 (#360 silent-failure-hunter I1 の完全 lock-in)。
+      // silent-failure-hunter I1 (#369 レビュー): 全件 forEach で検証することで、rescue が
+      // 同一 docId に対し safeLogError を二重呼出する regression を検知できる。
       const errs = await db.collection('errors').where('documentId', '==', docId).get();
-      expect(errs.size).to.equal(1);
-      const errDoc = errs.docs[0].data();
-      expect(errDoc.source).to.equal('ocr');
-      expect(errDoc.functionName).to.equal('processOCR');
-      // per-doc catch 由来のメッセージは fatal 分岐 (STUCK_RESCUE_FATAL_MESSAGE_PREFIX) とは異なる。
-      // errors/ の errorMessage は safeLogError が params.error.message をそのまま記録するため、
-      // 送信元の TX_FAILURE_MESSAGE が含まれる。fatal 分岐は別の Error.message を投入するので区別可能。
-      const errorMessage = errDoc.errorMessage as string | undefined;
-      expect(errorMessage).to.be.a('string');
-      expect(errorMessage).to.include(TX_FAILURE_MESSAGE);
-      expect(errorMessage).to.not.include(STUCK_RESCUE_FATAL_MESSAGE_PREFIX);
+      expect(errs.size, 'errors/ should be written exactly once per doc').to.equal(1);
+      errs.docs.forEach((d) => {
+        const data = d.data();
+        expect(data.source).to.equal('ocr');
+        expect(data.functionName).to.equal('processOCR');
+        // per-doc catch 由来のメッセージは fatal 分岐 (STUCK_RESCUE_FATAL_MESSAGE_PREFIX) とは異なる。
+        // errors/ の errorMessage は safeLogError が params.error.message をそのまま記録するため
+        // (errorLogger.ts:175)、TX_FAILURE_MESSAGE を含む。fatal 分岐とは別 Error.message で区別可能。
+        const errorMessage = data.errorMessage as string | undefined;
+        expect(errorMessage).to.be.a('string');
+        expect(errorMessage).to.include(TX_FAILURE_MESSAGE);
+        expect(errorMessage).to.not.include(STUCK_RESCUE_FATAL_MESSAGE_PREFIX);
+      });
 
-      // tx 失敗のため document 本体の status/retryCount は更新されない (processing のまま)。
-      // これも silent failure でなく「状態復旧に失敗した事実」を保存する観測可能性の lock-in。
+      // tx 失敗のため document 本体には一切の書込みが発生しない invariant。catch 句が fallback で
+      // db.update を呼ぶような silent 救済が入った場合、このテストが壊れて検知できる。
+      // silent-failure-hunter I4 (#369 レビュー): retryAfter / lastErrorMessage の undefined まで
+      // 検証することで tx 外の silent partial write を全て検知する。
       const docAfter = (await db.doc(`documents/${docId}`).get()).data() as StuckDocFixture;
       expect(docAfter.status).to.equal('processing');
       expect(docAfter.retryCount).to.equal(1);
+      expect(docAfter.retryAfter).to.be.undefined;
+      expect(docAfter.lastErrorMessage).to.be.undefined;
     });
 
     it('partial failure: 複数 doc の tx が全て失敗しても per-doc catch がループを継続する', async () => {
-      // 2 doc を配置、全 tx を失敗させる。ループ継続性 (outer try/catch 誤削除の検知) を lock-in。
+      // ループ継続性の lock-in (outer try/catch 誤削除で 2 doc 目が silent skip される回帰を検知)。
+      // 単一 doc では継続 vs 停止を区別不能なため 2 doc 必須。
       const docIds = ['stuck-partial-1', 'stuck-partial-2'];
       for (const docId of docIds) {
         await db.doc(`documents/${docId}`).set({
@@ -269,11 +291,13 @@ describe('rescueStuckProcessingDocs 統合テスト (#360)', () => {
         });
       }
 
-      sinon.stub(db, 'runTransaction').rejects(new Error(TX_FAILURE_MESSAGE));
+      await withFailingRunTransaction(async () => {
+        await rescueStuckProcessingDocs();
+      });
 
-      await rescueStuckProcessingDocs();
-
-      // 両 doc について errors/ に記録されていること (ループが途中で止まっていない証左)
+      // 両 doc について errors/ に記録されていること (ループが途中で止まっていない証左)。
+      // 差し替えた runTransaction は全 doc に対して throw するため、片方のみ記録されていれば
+      // ループが early-return している silent regression を検知できる。
       for (const docId of docIds) {
         const errs = await db.collection('errors').where('documentId', '==', docId).get();
         expect(errs.size, `errors/ for ${docId}`).to.equal(1);
