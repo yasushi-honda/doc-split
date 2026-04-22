@@ -297,6 +297,11 @@ export function getReprocessClearFields() {
     error: df,
     lastErrorMessage: df,
     lastErrorId: df,
+    // リトライ状態 (#360 code-reviewer I3): PR #359 で rescue が error/pending 両経路で
+    // retryCount/retryAfter を扱うようになったため、手動再処理 (FE reprocess) でも
+    // 古い値を残さずクリアする。#178 教訓 (派生フィールド drift 防止) の延長。
+    retryCount: df,
+    retryAfter: df,
   }
 }
 

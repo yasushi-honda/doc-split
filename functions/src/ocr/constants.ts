@@ -13,3 +13,19 @@ export const MAX_RETRY_COUNT = 5;
  * handleProcessingError の quota 値と同じ 3 分 (#196)。
  */
 export const STUCK_RESCUE_RETRY_AFTER_MS = 3 * 60 * 1000;
+
+/**
+ * processingスタック救済の閾値 (ms): この時間を超えて processing 状態の
+ * ドキュメントを rescue 対象とする。10 分 (Function タイムアウト 540s の ~2 倍バッファ)。
+ */
+export const STUCK_PROCESSING_THRESHOLD_MS = 10 * 60 * 1000;
+
+/** rescue の pending 分岐で書き込む lastErrorMessage (運用監視 grep 依存、#360) */
+export const STUCK_RESCUE_PENDING_MESSAGE = 'Processing timed out, retrying';
+
+/**
+ * rescue の error 分岐 lastErrorMessage prefix (運用監視 grep 依存、#360)。
+ * 実際の値は `${STUCK_RESCUE_FATAL_MESSAGE_PREFIX} (N/M)` の形式で書き込む。
+ * オペレータが error 状態の原因分類に grep するため、文字列契約を test で lock-in する。
+ */
+export const STUCK_RESCUE_FATAL_MESSAGE_PREFIX = 'Processing timed out, max retries exceeded';
