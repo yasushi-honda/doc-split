@@ -526,65 +526,82 @@ async function main() {
   return exitCode;
 }
 
-// テスト時は main 呼び出しをスキップ
-if (require.main === module) {
-  // process.exit() は in-flight gRPC を切断するため使用しない (#384)。
-  // process.exitCode を設定し、Logging client を gracefully close することで
-  // event loop が natural drain し audit 書き込みの完全性を保証する。
-  // #386 review I1: process.exitCode は flush より先に設定し、flush throw でも反映を保証。
-  // #386 review I2: emitFailureEvent も try/catch で包み FATAL audit log の silent loss を防止。
-  // #386 review I3: 初期値は意味的定数 EXIT_PRECONDITION (main() 同期 throw 時の事前検証エラー扱い)。
-  (async () => {
-    let exitCode = EXIT_PRECONDITION;
-    try {
-      exitCode = await main();
-      console.log(exitCode === EXIT_OK ? '完了' : `部分失敗で終了 (exit code=${exitCode})`);
-    } catch (error) {
-      // main() 内のエラー (projectId 未設定 / parseArgs 失敗 / args.help) は
-      // EXIT_PRECONDITION/EXIT_OK で return するため、ここに到達するのは
-      // admin.initializeApp 以降に発生した未捕捉 async エラーに限られる
-      exitCode = EXIT_PARTIAL_FAILURE;
-      const projectId = process.env.FIREBASE_PROJECT_ID;
-      if (projectId) {
-        try {
-          await emitFailureEvent({
-            event: EVENTS.FATAL,
-            severity: SEVERITIES.CRITICAL,
-            error,
-            auditCtx: buildAuditCtx(projectId),
-          });
-        } catch (emitErr) {
-          // emitFailureEvent 自体の throw (JSON circular 等) を最低限 stderr に残す
-          console.error(`fatal: emitFailureEvent failed: ${emitErr?.message ?? emitErr}`);
-          console.error(`original error: ${error?.message ?? error}`);
-        }
-      } else {
-        try {
-          console.error(JSON.stringify({
-            severity: SEVERITIES.CRITICAL,
-            event: EVENTS.FATAL,
-            errorCode: error?.code ?? null,
-            errorMessage: error?.message ?? String(error),
-            stack: error?.stack,
-          }));
-        } catch (stringifyErr) {
-          console.error(`fatal: error stringify failed: ${stringifyErr?.message}`);
-        }
-      }
-    } finally {
-      // exit code を flush より先に設定 (flush throw でも反映を保証)
-      process.exitCode = exitCode;
+/**
+ * CLI entrypoint の本体。テストから DI で mock 注入して invariant を lock-in する
+ * (Issue #387)。defaults は module-scope の関数を参照するため CLI 経由の挙動は不変。
+ *
+ * 保証する invariant (#386 review I1/I2/I3):
+ *   I1: process.exitCode は flushAndCloseLogging 呼び出しより先に設定する
+ *       (flush throw でも exit code 反映を保証)
+ *   I2: emitFailureEvent も try/catch で包む (FATAL audit log の silent loss 防止)
+ *   I3: 初期値は EXIT_PRECONDITION (main() 同期 throw 時の事前検証エラー扱い)
+ *
+ * process.exit() は in-flight gRPC を切断するため使用しない (#384)。
+ * process.exitCode 設定 + Logging client gracefully close により event loop が
+ * natural drain し audit 書き込みの完全性を保証する。
+ */
+async function runEntrypoint(deps = {}) {
+  const {
+    main: runMain = main,
+    flushAndCloseLogging: flushFn = flushAndCloseLogging,
+    emitFailureEvent: emitFailure = emitFailureEvent,
+    buildAuditCtx: buildCtx = buildAuditCtx,
+  } = deps;
+
+  let exitCode = EXIT_PRECONDITION;
+  try {
+    exitCode = await runMain();
+    console.log(exitCode === EXIT_OK ? '完了' : `部分失敗で終了 (exit code=${exitCode})`);
+  } catch (error) {
+    // main() 内のエラー (projectId 未設定 / parseArgs 失敗 / args.help) は
+    // EXIT_PRECONDITION/EXIT_OK で return するため、ここに到達するのは
+    // admin.initializeApp 以降に発生した未捕捉 async エラーに限られる
+    exitCode = EXIT_PARTIAL_FAILURE;
+    const projectId = process.env.FIREBASE_PROJECT_ID;
+    if (projectId) {
       try {
-        await flushAndCloseLogging();
-      } catch (flushErr) {
-        // flush 自体の throw は audit drop の強い示唆。exit code を強制的に失敗扱いに
-        console.error(`fatal: flushAndCloseLogging failed: ${flushErr?.message ?? flushErr}`);
-        if (process.exitCode === EXIT_OK) {
-          process.exitCode = EXIT_PARTIAL_FAILURE;
-        }
+        await emitFailure({
+          event: EVENTS.FATAL,
+          severity: SEVERITIES.CRITICAL,
+          error,
+          auditCtx: buildCtx(projectId),
+        });
+      } catch (emitErr) {
+        // emitFailureEvent 自体の throw (JSON circular 等) を最低限 stderr に残す
+        console.error(`fatal: emitFailureEvent failed: ${emitErr?.message ?? emitErr}`);
+        console.error(`original error: ${error?.message ?? error}`);
+      }
+    } else {
+      try {
+        console.error(JSON.stringify({
+          severity: SEVERITIES.CRITICAL,
+          event: EVENTS.FATAL,
+          errorCode: error?.code ?? null,
+          errorMessage: error?.message ?? String(error),
+          stack: error?.stack,
+        }));
+      } catch (stringifyErr) {
+        console.error(`fatal: error stringify failed: ${stringifyErr?.message}`);
       }
     }
-  })();
+  } finally {
+    // I1: exit code を flush より先に設定 (flush throw でも反映を保証)
+    process.exitCode = exitCode;
+    try {
+      await flushFn();
+    } catch (flushErr) {
+      // flush 自体の throw は audit drop の強い示唆。exit code を強制的に失敗扱いに
+      console.error(`fatal: flushAndCloseLogging failed: ${flushErr?.message ?? flushErr}`);
+      if (process.exitCode === EXIT_OK) {
+        process.exitCode = EXIT_PARTIAL_FAILURE;
+      }
+    }
+  }
+}
+
+// テスト時は entrypoint 呼び出しをスキップ
+if (require.main === module) {
+  runEntrypoint();
 }
 
 module.exports = {
@@ -594,4 +611,8 @@ module.exports = {
   reindexDocument,
   emitFailureEvent,
   buildAuditCtx,
+  runEntrypoint,
+  EXIT_OK,
+  EXIT_PRECONDITION,
+  EXIT_PARTIAL_FAILURE,
 };
