@@ -27,6 +27,10 @@ const EVENTS = Object.freeze({
   BATCH_SUMMARY: 'force_reindex_batch_summary',
   AUDIT_LOG_FAILED: 'force_reindex_audit_log_failed',
   STARTUP_FAILED: 'force_reindex_startup_failed',
+  // #386 review C1: close 失敗 = in-flight write drop 可能性。silent にしない
+  LOGGING_CLOSE_FAILED: 'force_reindex_logging_close_failed',
+  // #386 review C2: loggingService が undefined = library API 変更検知。#384 再発予兆
+  LOGGING_CLOSE_UNAVAILABLE: 'force_reindex_logging_close_unavailable',
 });
 
 /** Severity SSoT (typo 防止)。Cloud Logging string severity と一致させる */
@@ -72,6 +76,71 @@ function getLogging(projectId) {
 function _resetCacheForTest() {
   cachedLogging.clear();
   cachedRequireError = null;
+}
+
+/** test 用: cachedLogging に直接 instance を注入 (flushAndCloseLogging の検証用 @internal) */
+function _setLoggingForTest(projectId, logging) {
+  cachedLogging.set(projectId, logging);
+}
+
+/**
+ * Cached Logging instance の gRPC channel を gracefully close する。
+ *
+ * 必要性 (#384):
+ *   `Log.write()` の await が resolve しても内部 gRPC stream の post-processing が
+ *   未完了の場合があり、`process.exit()` で event loop を即時停止すると in-flight
+ *   write が drop される。`LoggingServiceV2Client.close()` を呼んで channel を
+ *   gracefully close することで全 in-flight write の完了を保証する。
+ *
+ * 呼び出しタイミング: script 終了直前 (main の then/catch 内)。
+ * Fail-open: close 失敗は無視 (script 終了処理を止めない invariant)。
+ *
+ * @returns {Promise<void>}
+ */
+async function flushAndCloseLogging() {
+  const closes = [];
+  for (const [projectId, logging] of cachedLogging.entries()) {
+    // loggingService は @google-cloud/logging v11 の internal property だが、
+    // public な Logging.close() が存在しないため唯一の graceful shutdown 経路。
+    if (!logging.loggingService?.close) {
+      // #386 review C2: API 変更検知。#384 と同じ silent drop の予兆として stderr に必ず残す
+      _emitLoggingDiagnostic(EVENTS.LOGGING_CLOSE_UNAVAILABLE, projectId);
+      continue;
+    }
+    closes.push(
+      // 同期 throw も catch するため try で wrap (Promise.resolve は sync throw を変換しない)
+      Promise.resolve()
+        .then(() => logging.loggingService.close())
+        .catch((closeErr) => {
+          // #386 review C1: close 失敗 = in-flight write drop の可能性。
+          // 本体終了は止めない (fail-open invariant) が診断情報は必ず残す
+          _emitLoggingDiagnostic(EVENTS.LOGGING_CLOSE_FAILED, projectId, closeErr);
+        }),
+    );
+  }
+  await Promise.all(closes);
+  cachedLogging.clear();
+}
+
+/** flushAndCloseLogging 内の診断情報出力 (silent failure 防止)。@internal */
+function _emitLoggingDiagnostic(event, projectId, err) {
+  try {
+    const payload = {
+      severity: SEVERITIES.WARNING,
+      event,
+      projectId,
+      timestamp: new Date().toISOString(),
+    };
+    if (err !== undefined) {
+      payload.errorMessage = err?.message ?? String(err);
+      payload.errorCode = err?.code ?? null;
+    }
+    _safeWriteStderr(JSON.stringify(payload) + '\n');
+  } catch (stringifyErr) {
+    _safeWriteStderr(
+      `${event}: projectId=${projectId} (stringify error: ${stringifyErr?.message})\n`,
+    );
+  }
 }
 
 /**
@@ -190,9 +259,11 @@ function _normalizeError(err) {
 
 module.exports = {
   writeForceReindexAuditLog,
+  flushAndCloseLogging,
   EVENTS,
   SEVERITIES,
   LOG_NAME,
   VALID_SEVERITIES,
   _resetCacheForTest,
+  _setLoggingForTest,
 };

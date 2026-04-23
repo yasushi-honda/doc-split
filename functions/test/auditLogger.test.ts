@@ -71,6 +71,8 @@ interface EventsMap {
   readonly BATCH_SUMMARY: 'force_reindex_batch_summary';
   readonly AUDIT_LOG_FAILED: 'force_reindex_audit_log_failed';
   readonly STARTUP_FAILED: 'force_reindex_startup_failed';
+  readonly LOGGING_CLOSE_FAILED: 'force_reindex_logging_close_failed';
+  readonly LOGGING_CLOSE_UNAVAILABLE: 'force_reindex_logging_close_unavailable';
 }
 
 interface SeveritiesMap {
@@ -81,17 +83,23 @@ interface SeveritiesMap {
   readonly CRITICAL: 'CRITICAL';
 }
 
+interface FakeLoggingWithClose {
+  loggingService?: { close?: () => Promise<void> | void };
+}
+
 interface AuditLoggerModule {
   writeForceReindexAuditLog: (
     payload: AuditPayloadInput,
     ctx: AuditCtx,
     options?: AuditOptions,
   ) => Promise<{ ok: boolean; error?: Error }>;
+  flushAndCloseLogging: () => Promise<void>;
   EVENTS: EventsMap;
   SEVERITIES: SeveritiesMap;
   LOG_NAME: 'force_reindex_audit';
   VALID_SEVERITIES: Set<AuditSeverity>;
   _resetCacheForTest: () => void;
+  _setLoggingForTest: (projectId: string, logging: FakeLoggingWithClose) => void;
 }
 
 const requireCjs = createRequire(`${process.cwd()}/package.json`);
@@ -101,11 +109,13 @@ const auditLoggerMod = requireCjs(
 
 const {
   writeForceReindexAuditLog,
+  flushAndCloseLogging,
   EVENTS,
   SEVERITIES,
   LOG_NAME,
   VALID_SEVERITIES,
   _resetCacheForTest,
+  _setLoggingForTest,
 } = auditLoggerMod;
 
 /** Fake Logging factory: 呼び出された entry/metadata を捕捉 */
@@ -468,6 +478,139 @@ describe('scripts/lib/auditLogger (#239)', () => {
 
       // 各 projectId で factory 呼出 (cache key 化されている、silent bug 防止)
       expect(factoryCalls).to.deep.equal(['project-a', 'project-b']);
+    });
+  });
+
+  // #384: process.exit() で in-flight gRPC writes が drop される問題への対策。
+  // flushAndCloseLogging() が cached Logging instance の loggingService.close() を
+  // gracefully 呼ぶことで、event loop natural drain と組み合わせて書き込み完全性を保証する。
+  describe('flushAndCloseLogging (#384)', () => {
+    it('cached Logging instances の loggingService.close() を全て呼ぶ', async () => {
+      const closeCalls: string[] = [];
+      _setLoggingForTest('project-a', {
+        loggingService: {
+          close: async () => {
+            closeCalls.push('project-a');
+          },
+        },
+      });
+      _setLoggingForTest('project-b', {
+        loggingService: {
+          close: async () => {
+            closeCalls.push('project-b');
+          },
+        },
+      });
+
+      await flushAndCloseLogging();
+
+      expect(closeCalls).to.have.members(['project-a', 'project-b']);
+    });
+
+    it('flush 後に cache が clear され、二重 close されない', async () => {
+      let closeCount = 0;
+      _setLoggingForTest('project-a', {
+        loggingService: {
+          close: async () => {
+            closeCount += 1;
+          },
+        },
+      });
+
+      await flushAndCloseLogging();
+      await flushAndCloseLogging();
+
+      expect(closeCount).to.equal(1);
+    });
+
+    it('close() が throw しても本体は throw しない (fail-open invariant)', async () => {
+      _setLoggingForTest('project-a', {
+        loggingService: {
+          close: async () => {
+            throw new Error('grpc channel already closed');
+          },
+        },
+      });
+
+      // #386 review C1: 本体 throw しないことに加え、診断情報を stderr に出力する
+      const { stderr } = await captureStderr(async () => {
+        await flushAndCloseLogging();
+      });
+
+      expect(stderr).to.contain(EVENTS.LOGGING_CLOSE_FAILED);
+      expect(stderr).to.contain('project-a');
+      expect(stderr).to.contain('grpc channel already closed');
+    });
+
+    it('loggingService が undefined でも throw せず、unavailable 診断を出力する', async () => {
+      _setLoggingForTest('project-a', {});
+
+      // #386 review C2: silent skip ではなく LOGGING_CLOSE_UNAVAILABLE を必ず stderr に残す
+      const { stderr } = await captureStderr(async () => {
+        await flushAndCloseLogging();
+      });
+
+      expect(stderr).to.contain(EVENTS.LOGGING_CLOSE_UNAVAILABLE);
+      expect(stderr).to.contain('project-a');
+    });
+
+    it('loggingService.close が undefined でも throw せず、unavailable 診断を出力する', async () => {
+      _setLoggingForTest('project-a', { loggingService: {} });
+
+      const { stderr } = await captureStderr(async () => {
+        await flushAndCloseLogging();
+      });
+
+      expect(stderr).to.contain(EVENTS.LOGGING_CLOSE_UNAVAILABLE);
+    });
+
+    it('close() が同期 throw しても本体は throw せず診断を出力する (#386 review C1 補強)', async () => {
+      _setLoggingForTest('project-a', {
+        loggingService: {
+          close: () => {
+            throw new Error('synchronous throw');
+          },
+        },
+      });
+
+      const { stderr } = await captureStderr(async () => {
+        await flushAndCloseLogging();
+      });
+
+      expect(stderr).to.contain(EVENTS.LOGGING_CLOSE_FAILED);
+      expect(stderr).to.contain('synchronous throw');
+    });
+
+    it('cache が空でも throw しない', async () => {
+      await flushAndCloseLogging();
+    });
+
+    it('複数 instance のうち 1 つが throw しても他の close は実行される', async () => {
+      const closeCalls: string[] = [];
+      _setLoggingForTest('project-a', {
+        loggingService: {
+          close: async () => {
+            throw new Error('a failed');
+          },
+        },
+      });
+      _setLoggingForTest('project-b', {
+        loggingService: {
+          close: async () => {
+            closeCalls.push('project-b');
+          },
+        },
+      });
+
+      // project-a が失敗しても project-b は close される (fail-isolation invariant)
+      const { stderr } = await captureStderr(async () => {
+        await flushAndCloseLogging();
+      });
+
+      expect(closeCalls).to.deep.equal(['project-b']);
+      // project-a の失敗は LOGGING_CLOSE_FAILED として stderr に残る
+      expect(stderr).to.contain(EVENTS.LOGGING_CLOSE_FAILED);
+      expect(stderr).to.contain('a failed');
     });
   });
 });
