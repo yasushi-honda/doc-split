@@ -71,6 +71,8 @@ interface EventsMap {
   readonly BATCH_SUMMARY: 'force_reindex_batch_summary';
   readonly AUDIT_LOG_FAILED: 'force_reindex_audit_log_failed';
   readonly STARTUP_FAILED: 'force_reindex_startup_failed';
+  readonly LOGGING_CLOSE_FAILED: 'force_reindex_logging_close_failed';
+  readonly LOGGING_CLOSE_UNAVAILABLE: 'force_reindex_logging_close_unavailable';
 }
 
 interface SeveritiesMap {
@@ -530,20 +532,53 @@ describe('scripts/lib/auditLogger (#239)', () => {
         },
       });
 
-      // throw しないこと。catch ブロックを書かずに await できれば成功。
-      await flushAndCloseLogging();
+      // #386 review C1: 本体 throw しないことに加え、診断情報を stderr に出力する
+      const { stderr } = await captureStderr(async () => {
+        await flushAndCloseLogging();
+      });
+
+      expect(stderr).to.contain(EVENTS.LOGGING_CLOSE_FAILED);
+      expect(stderr).to.contain('project-a');
+      expect(stderr).to.contain('grpc channel already closed');
     });
 
-    it('loggingService が undefined でも throw しない (defensive)', async () => {
+    it('loggingService が undefined でも throw せず、unavailable 診断を出力する', async () => {
       _setLoggingForTest('project-a', {});
 
-      await flushAndCloseLogging();
+      // #386 review C2: silent skip ではなく LOGGING_CLOSE_UNAVAILABLE を必ず stderr に残す
+      const { stderr } = await captureStderr(async () => {
+        await flushAndCloseLogging();
+      });
+
+      expect(stderr).to.contain(EVENTS.LOGGING_CLOSE_UNAVAILABLE);
+      expect(stderr).to.contain('project-a');
     });
 
-    it('loggingService.close が undefined でも throw しない (defensive)', async () => {
+    it('loggingService.close が undefined でも throw せず、unavailable 診断を出力する', async () => {
       _setLoggingForTest('project-a', { loggingService: {} });
 
-      await flushAndCloseLogging();
+      const { stderr } = await captureStderr(async () => {
+        await flushAndCloseLogging();
+      });
+
+      expect(stderr).to.contain(EVENTS.LOGGING_CLOSE_UNAVAILABLE);
+    });
+
+    it('close() が同期 throw しても本体は throw せず診断を出力する (#386 review C1 補強)', async () => {
+      _setLoggingForTest('project-a', {
+        loggingService: {
+          close: () => {
+            throw new Error('synchronous throw');
+          },
+        },
+      });
+
+      const { stderr } = await captureStderr(async () => {
+        await flushAndCloseLogging();
+      });
+
+      expect(stderr).to.contain(EVENTS.LOGGING_CLOSE_FAILED);
+      expect(stderr).to.contain('synchronous throw');
     });
 
     it('cache が空でも throw しない', async () => {
@@ -567,10 +602,15 @@ describe('scripts/lib/auditLogger (#239)', () => {
         },
       });
 
-      await flushAndCloseLogging();
+      // project-a が失敗しても project-b は close される (fail-isolation invariant)
+      const { stderr } = await captureStderr(async () => {
+        await flushAndCloseLogging();
+      });
 
-      // project-a が失敗しても project-b は close される (Promise.all + per-promise catch)
       expect(closeCalls).to.deep.equal(['project-b']);
+      // project-a の失敗は LOGGING_CLOSE_FAILED として stderr に残る
+      expect(stderr).to.contain(EVENTS.LOGGING_CLOSE_FAILED);
+      expect(stderr).to.contain('a failed');
     });
   });
 });

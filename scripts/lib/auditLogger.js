@@ -27,6 +27,10 @@ const EVENTS = Object.freeze({
   BATCH_SUMMARY: 'force_reindex_batch_summary',
   AUDIT_LOG_FAILED: 'force_reindex_audit_log_failed',
   STARTUP_FAILED: 'force_reindex_startup_failed',
+  // #386 review C1: close 失敗 = in-flight write drop 可能性。silent にしない
+  LOGGING_CLOSE_FAILED: 'force_reindex_logging_close_failed',
+  // #386 review C2: loggingService が undefined = library API 変更検知。#384 再発予兆
+  LOGGING_CLOSE_UNAVAILABLE: 'force_reindex_logging_close_unavailable',
 });
 
 /** Severity SSoT (typo 防止)。Cloud Logging string severity と一致させる */
@@ -95,18 +99,48 @@ function _setLoggingForTest(projectId, logging) {
  */
 async function flushAndCloseLogging() {
   const closes = [];
-  for (const logging of cachedLogging.values()) {
+  for (const [projectId, logging] of cachedLogging.entries()) {
     // loggingService は @google-cloud/logging v11 の internal property だが、
     // public な Logging.close() が存在しないため唯一の graceful shutdown 経路。
-    // close は test injection で undefined のケースを許容するため optional chain を残す。
+    if (!logging.loggingService?.close) {
+      // #386 review C2: API 変更検知。#384 と同じ silent drop の予兆として stderr に必ず残す
+      _emitLoggingDiagnostic(EVENTS.LOGGING_CLOSE_UNAVAILABLE, projectId);
+      continue;
+    }
     closes.push(
-      Promise.resolve(logging.loggingService?.close?.()).catch(() => {
-        // close 失敗は audit invariant の対象外。本体の終了処理を止めないため握り潰す。
-      }),
+      // 同期 throw も catch するため try で wrap (Promise.resolve は sync throw を変換しない)
+      Promise.resolve()
+        .then(() => logging.loggingService.close())
+        .catch((closeErr) => {
+          // #386 review C1: close 失敗 = in-flight write drop の可能性。
+          // 本体終了は止めない (fail-open invariant) が診断情報は必ず残す
+          _emitLoggingDiagnostic(EVENTS.LOGGING_CLOSE_FAILED, projectId, closeErr);
+        }),
     );
   }
   await Promise.all(closes);
   cachedLogging.clear();
+}
+
+/** flushAndCloseLogging 内の診断情報出力 (silent failure 防止)。@internal */
+function _emitLoggingDiagnostic(event, projectId, err) {
+  try {
+    const payload = {
+      severity: SEVERITIES.WARNING,
+      event,
+      projectId,
+      timestamp: new Date().toISOString(),
+    };
+    if (err !== undefined) {
+      payload.errorMessage = err?.message ?? String(err);
+      payload.errorCode = err?.code ?? null;
+    }
+    _safeWriteStderr(JSON.stringify(payload) + '\n');
+  } catch (stringifyErr) {
+    _safeWriteStderr(
+      `${event}: projectId=${projectId} (stringify error: ${stringifyErr?.message})\n`,
+    );
+  }
 }
 
 /**
