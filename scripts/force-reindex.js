@@ -27,7 +27,12 @@
 // BE tokenizer.ts の compiled lib/ を参照することで drift を防止する。
 const { loadTokenizer, ensureTokenizerBuilt } = require('./lib/loadTokenizer');
 const { aggregateTokensByTokenId } = require('./lib/aggregateTokens');
-const { writeForceReindexAuditLog, EVENTS, SEVERITIES } = require('./lib/auditLogger');
+const {
+  writeForceReindexAuditLog,
+  flushAndCloseLogging,
+  EVENTS,
+  SEVERITIES,
+} = require('./lib/auditLogger');
 
 /**
  * 失敗イベントを stdout JSON (GitHub Actions 調査用) と
@@ -483,7 +488,7 @@ async function main() {
   const projectId = process.env.FIREBASE_PROJECT_ID;
   if (!projectId) {
     console.error('[ERROR] FIREBASE_PROJECT_ID 環境変数が未設定です');
-    process.exit(1);
+    return EXIT_PRECONDITION;
   }
   const auditCtx = buildAuditCtx(projectId);
 
@@ -498,12 +503,12 @@ async function main() {
       auditCtx,
     });
     printHelp();
-    process.exit(1);
+    return EXIT_PRECONDITION;
   }
 
   if (args.help) {
     printHelp();
-    process.exit(0);
+    return EXIT_OK;
   }
 
   admin.initializeApp({ projectId });
@@ -523,14 +528,17 @@ async function main() {
 
 // テスト時は main 呼び出しをスキップ
 if (require.main === module) {
-  main()
-    .then((exitCode) => {
+  // process.exit() は in-flight gRPC を切断するため使用しない (#384)。
+  // process.exitCode を設定し、Logging client を gracefully close することで
+  // event loop が natural drain し audit 書き込みの完全性を保証する。
+  // try/finally で flush を統合し、then 内の throw でも flush 漏れを防ぐ。
+  (async () => {
+    let exitCode = 1;
+    try {
+      exitCode = await main();
       console.log(exitCode === EXIT_OK ? '完了' : `部分失敗で終了 (exit code=${exitCode})`);
-      process.exit(exitCode);
-    })
-    .catch(async (error) => {
-      // process.exit は in-flight gRPC を切断するため、await で audit 完了を待つ
-      // projectId 未設定時は main() 内で先に exit 1 するため、ここに到達するのは
+    } catch (error) {
+      // projectId 未設定時は main() 内で先に return するため、ここに到達するのは
       // admin.initializeApp 以降の async エラーに限られる
       const projectId = process.env.FIREBASE_PROJECT_ID;
       if (projectId) {
@@ -549,8 +557,12 @@ if (require.main === module) {
           stack: error.stack,
         }));
       }
-      process.exit(1);
-    });
+      exitCode = 1;
+    } finally {
+      await flushAndCloseLogging();
+      process.exitCode = exitCode;
+    }
+  })();
 }
 
 module.exports = {

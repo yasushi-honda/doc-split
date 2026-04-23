@@ -74,6 +74,41 @@ function _resetCacheForTest() {
   cachedRequireError = null;
 }
 
+/** test 用: cachedLogging に直接 instance を注入 (flushAndCloseLogging の検証用 @internal) */
+function _setLoggingForTest(projectId, logging) {
+  cachedLogging.set(projectId, logging);
+}
+
+/**
+ * Cached Logging instance の gRPC channel を gracefully close する。
+ *
+ * 必要性 (#384):
+ *   `Log.write()` の await が resolve しても内部 gRPC stream の post-processing が
+ *   未完了の場合があり、`process.exit()` で event loop を即時停止すると in-flight
+ *   write が drop される。`LoggingServiceV2Client.close()` を呼んで channel を
+ *   gracefully close することで全 in-flight write の完了を保証する。
+ *
+ * 呼び出しタイミング: script 終了直前 (main の then/catch 内)。
+ * Fail-open: close 失敗は無視 (script 終了処理を止めない invariant)。
+ *
+ * @returns {Promise<void>}
+ */
+async function flushAndCloseLogging() {
+  const closes = [];
+  for (const logging of cachedLogging.values()) {
+    // loggingService は @google-cloud/logging v11 の internal property だが、
+    // public な Logging.close() が存在しないため唯一の graceful shutdown 経路。
+    // close は test injection で undefined のケースを許容するため optional chain を残す。
+    closes.push(
+      Promise.resolve(logging.loggingService?.close?.()).catch(() => {
+        // close 失敗は audit invariant の対象外。本体の終了処理を止めないため握り潰す。
+      }),
+    );
+  }
+  await Promise.all(closes);
+  cachedLogging.clear();
+}
+
 /**
  * force-reindex 実行結果を Cloud Logging に書き込む。
  *
@@ -190,9 +225,11 @@ function _normalizeError(err) {
 
 module.exports = {
   writeForceReindexAuditLog,
+  flushAndCloseLogging,
   EVENTS,
   SEVERITIES,
   LOG_NAME,
   VALID_SEVERITIES,
   _resetCacheForTest,
+  _setLoggingForTest,
 };
