@@ -1,15 +1,18 @@
 /**
- * force-reindex.js の runEntrypoint integration test (Issue #387)
+ * force-reindex.js の runEntrypoint integration test
  *
- * 対象: #386 で導入した entrypoint 構造 (try/finally + process.exitCode +
- *       flushAndCloseLogging + emitFailureEvent の try/catch 入れ子) の invariant を
- *       unit test で lock-in する。
+ * 対象: entrypoint 構造 (try/finally + process.exitCode + flushAndCloseLogging +
+ *       emitFailureEvent の try/catch 入れ子) の invariant を unit test で lock-in。
  *
- * 受け入れ基準:
- *   - success / main throw / flush throw / emitFailureEvent throw の 4 シナリオを lock-in
- *   - #386 review I1 (exitCode を flush より先に設定) の regression 検出
- *   - #386 review I2 (emitFailureEvent を try/catch で包む) の regression 検出
- *   - #386 review I3 (初期値 EXIT_PRECONDITION) は main 同期 throw 時の挙動で間接検証
+ * ロック対象:
+ *   - I1 (exitCode を flush より先に設定) の regression 検出
+ *   - I2 (emitFailureEvent を try/catch で包む) の regression 検出
+ *   - main throw + flush throw 複合時の exitCode guard (EXIT_PARTIAL_FAILURE 維持)
+ *   - projectId 未設定時の stderr JSON fallback + stringify throw 時の original error surface
+ *
+ * 非対象:
+ *   - I3 (初期値 EXIT_PRECONDITION) は defensive fallback として保持されるのみで
+ *     現行制御フローでは observable でないため assertion しない
  *
  * 設計方針:
  *   - runEntrypoint({ main, flushAndCloseLogging, emitFailureEvent, buildAuditCtx }) で DI
@@ -213,6 +216,77 @@ describe('force-reindex: runEntrypoint (#387)', () => {
         // 最低限 stderr に original error が残ること (silent loss 防止)
         expect(stderr.buf.value).to.include('emitFailureEvent failed');
         expect(stderr.buf.value).to.include('original error');
+      },
+    );
+  });
+
+  it('main throw + flush throw: 複合失敗でも process.exitCode === EXIT_PARTIAL_FAILURE 維持 (flush catch guard)', async () => {
+    // flush catch の `if (process.exitCode === EXIT_OK)` guard が regression で
+    // 消えた/緩められた場合に検出する。main throw 後は既に EXIT_PARTIAL_FAILURE で、
+    // flush 失敗が exit code を上書きしてはならない (情報劣化防止)。
+    const callOrder: string[] = [];
+    const stderr = makeStderrCapture();
+
+    await withProcessSandbox(
+      { stdout: noopWrite, stderr: stderr.write, projectId: 'doc-split-dev' },
+      async () => {
+        await runEntrypoint({
+          main: async () => {
+            callOrder.push('main');
+            throw new Error('simulated main failure');
+          },
+          flushAndCloseLogging: async () => {
+            callOrder.push('flush');
+            throw new Error('simulated flush failure');
+          },
+          emitFailureEvent: async () => {
+            callOrder.push('emitFailure');
+          },
+          buildAuditCtx: (projectId) => ({ projectId, executedBy: 'test' }),
+        });
+
+        expect(callOrder).to.deep.equal(['main', 'emitFailure', 'flush']);
+        expect(process.exitCode).to.equal(EXIT_PARTIAL_FAILURE);
+        expect(stderr.buf.value).to.include('flushAndCloseLogging failed');
+      },
+    );
+  });
+
+  it('projectId 未設定 + stringify throw: original error も silent loss しない', async () => {
+    // BigInt を error.code に仕込むと JSON.stringify は
+    // "Do not know how to serialize a BigInt" で throw する。
+    // その時 original error の code / message を stderr に別行で surface しないと
+    // #386 で防いだ silent loss パターンが fallback 経路で再発する。
+    const callOrder: string[] = [];
+    const stderr = makeStderrCapture();
+
+    await withProcessSandbox(
+      { stdout: noopWrite, stderr: stderr.write, projectId: null },
+      async () => {
+        const errWithBigIntCode: Error & { code?: bigint } = Object.assign(
+          new Error('simulated fatal bigint'),
+          { code: BigInt(42) },
+        );
+
+        await runEntrypoint({
+          main: async () => {
+            throw errWithBigIntCode;
+          },
+          flushAndCloseLogging: async () => {
+            callOrder.push('flush');
+          },
+          emitFailureEvent: async () => {
+            callOrder.push('emitFailure');
+          },
+          buildAuditCtx: (projectId) => ({ projectId, executedBy: 'test' }),
+        });
+
+        expect(callOrder).to.deep.equal(['flush']);
+        expect(process.exitCode).to.equal(EXIT_PARTIAL_FAILURE);
+        expect(stderr.buf.value).to.include('error stringify failed');
+        // 重要: original error の message / code が silent loss していないこと
+        expect(stderr.buf.value).to.include('simulated fatal bigint');
+        expect(stderr.buf.value).to.include('code=42');
       },
     );
   });

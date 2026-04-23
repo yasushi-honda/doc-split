@@ -527,16 +527,18 @@ async function main() {
 }
 
 /**
- * CLI entrypoint の本体。テストから DI で mock 注入して invariant を lock-in する
- * (Issue #387)。defaults は module-scope の関数を参照するため CLI 経由の挙動は不変。
+ * CLI entrypoint の本体。テストから DI で mock 注入して invariant を lock-in する。
+ * defaults は module-scope の関数を参照するため CLI 経由の挙動は不変。
  *
- * 保証する invariant (#386 review I1/I2/I3):
+ * 保証する invariant:
  *   I1: process.exitCode は flushAndCloseLogging 呼び出しより先に設定する
  *       (flush throw でも exit code 反映を保証)
  *   I2: emitFailureEvent も try/catch で包む (FATAL audit log の silent loss 防止)
- *   I3: 初期値は EXIT_PRECONDITION (main() 同期 throw 時の事前検証エラー扱い)
+ *   I3: 初期値 EXIT_PRECONDITION は defensive fallback として保持。現行制御フローでは
+ *       catch 先頭で EXIT_PARTIAL_FAILURE に上書きされるため observable ではないが、
+ *       将来 runMain 呼出前に初期化処理が追加され throw された場合の安全側 default。
  *
- * process.exit() は in-flight gRPC を切断するため使用しない (#384)。
+ * process.exit() は in-flight gRPC を切断するため使用しない。
  * process.exitCode 設定 + Logging client gracefully close により event loop が
  * natural drain し audit 書き込みの完全性を保証する。
  */
@@ -581,7 +583,13 @@ async function runEntrypoint(deps = {}) {
           stack: error?.stack,
         }));
       } catch (stringifyErr) {
+        // stringify throw 時も original error を surface (silent loss 防止)。
+        // projectId 有り分岐の emit catch と対称な二行出力とし、
+        // 最低限 operator が何が起きたか追跡可能にする。
         console.error(`fatal: error stringify failed: ${stringifyErr?.message}`);
+        console.error(
+          `original error: code=${error?.code ?? 'n/a'} message=${error?.message ?? String(error)}`,
+        );
       }
     }
   } finally {
