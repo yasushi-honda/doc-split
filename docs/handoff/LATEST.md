@@ -1,8 +1,42 @@
 # ハンドオフメモ
 
-**更新日**: 2026-04-23 session38 (**#387 (force-reindex entrypoint test P2 enhancement) を完遂**。PR #386 の entrypoint 構造 `runEntrypoint(deps)` として切り出し、7 シナリオで I1/I2 invariant + main throw+flush throw 複合 + projectId 未設定 + stringify throw fallback を lock-in。`/review-pr` 6 エージェント並列で rating ≥ 7 findings 3 件 (I3 文言修正、複合シナリオ追加、fallback silent loss 修正) を 2 commit 目で反映。**Issue Net -1** (#387 close、起票 0) で KPI 達成)
-**ブランチ**: main (clean、PR #389 merged: d081121)
-**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + Phase 2 (#181-#183) + Phase 3 (#188-#190) + Phase 5 (#339/#340/#332/#335) + Phase 6 (#346/#343/#344/#331/#333/#262) + Phase 7 (#338) + Phase 8 (session29 = #334/#196) + Phase 8 (session30 = #360 rescue observability + #358 backfill test lock-in) + Phase 8 (session31 = #365 backfill counter 分割 + #364 rescue per-doc catch test) + Phase 8 (session32 = #370 fatal 分岐 safeLogError 二重呼出防止 test) + Phase 8 (session33 = #200 Gmail/Split 統合テスト + #251 Scope 2 summaryPromptBuilder 分離) + Phase 8 (session34 = #375 Gmail reimportPolicy pure helper 抽出 + #237 tokenizer 3 箇所共通化) + Phase 8 (session35 = Issue triage-only、close 忘れ 1 件整理 = #220) + Phase 8 (session36 = #239 force-reindex audit log + #152 close、新規 #384 起票) + Phase 8 (session37 = #384 完遂、新規 #387 起票) + **Phase 8 (session38 = #387 完遂、Net -1)** 完遂
+**更新日**: 2026-04-23 session39 (**triage-only セッション、実装着手なし、Issue Net 0**。積み残し Issue 3 件 (#299/#251/#238) の着手可否を triage し、#251 Scope 1 を検討したが Issue body 待機条件 (sinon 導入の他タスク bundle / Vertex AI false negative) 未充足のため見送り。ユーザー合意で次セッションからアップデート/bugfix 対応に移行)
+**ブランチ**: main (clean、PR #389 merged: d081121、session39 は実装変更なし)
+**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + Phase 2 (#181-#183) + Phase 3 (#188-#190) + Phase 5 (#339/#340/#332/#335) + Phase 6 (#346/#343/#344/#331/#333/#262) + Phase 7 (#338) + Phase 8 (session29 = #334/#196) + Phase 8 (session30 = #360 rescue observability + #358 backfill test lock-in) + Phase 8 (session31 = #365 backfill counter 分割 + #364 rescue per-doc catch test) + Phase 8 (session32 = #370 fatal 分岐 safeLogError 二重呼出防止 test) + Phase 8 (session33 = #200 Gmail/Split 統合テスト + #251 Scope 2 summaryPromptBuilder 分離) + Phase 8 (session34 = #375 Gmail reimportPolicy pure helper 抽出 + #237 tokenizer 3 箇所共通化) + Phase 8 (session35 = Issue triage-only、close 忘れ 1 件整理 = #220) + Phase 8 (session36 = #239 force-reindex audit log + #152 close、新規 #384 起票) + Phase 8 (session37 = #384 完遂、新規 #387 起票) + Phase 8 (session38 = #387 完遂、Net -1) + **Phase 8 (session39 = triage-only、Net 0、update/bugfix 移行合意)** 完遂
+
+<a id="session39"></a>
+## ✅ session39 完了サマリー (2026-04-23: triage-only、実装着手なし、Net 0)
+
+session38 で #387 完遂後、積み残し Issue 3 件 (#299 / #251 / #238、全 P2 enhancement) の着手可否を triage。#251 Scope 1 (`generateSummaryCore` runtime unit test) への着手を一時検討したが、Issue body に明示された待機条件 (**sinon/proxyquire 導入を伴う他テスト追加タスク発生** or **Vertex AI 異常の false negative 発生**) が未充足のため見送り決定。ユーザー合意で次セッションからアップデート/bugfix 対応に移行。
+
+### Issue Net 変化
+
+| 項目 | 内容 |
+|------|------|
+| Close 数 | 0 件 |
+| 起票数 | 0 件 |
+| **Net 変化** | **0 件** (triage-only、先例 session35) |
+
+### 積み残し Issue 3 件の待機条件
+
+| # | 内容 | 待機条件 |
+|---|------|---------|
+| #299 | capPageResultsAggregate test + ts-node/esm 環境整備 | ROI 低 (PR #298 頓挫)、bundle 化待ち |
+| #251 Scope 1 | summaryGenerator runtime unit test (sinon 必要) | sinon 導入の他タスク bundle or Vertex false negative (Issue body 記載) |
+| #238 | force-reindex 孤児 posting 検出モード | ADR-0015 再評価トリガー未発火 (drift 実発生なし) |
+
+### 設計判断 / Lessons Learned
+
+1. **Issue body の待機条件を先に読む** — session39 では初回に「#251 Scope 1 は 2-3h で完了可能、lock-in 価値あり」と提示したが、Issue body に sinon 導入コストを理由とした明示的待機条件があった。「最新更新日」「rating」だけで推奨せず、body の「待機条件」「ROI 判断」を読んでから提示すべき ([feedback_issue_postpone_pattern.md](../../memory/feedback_issue_postpone_pattern.md) 準拠)。
+2. **triage-only セッションも handoff を残す** — 実装ゼロでも「何を検討して見送ったか」を残さないと次セッションで同じ検討を繰り返す。session35 (2026-04-22) と同様のパターン。
+
+### 次セッションのアクション
+
+- **アップデート/bugfix 対応に移行** (ユーザー合意済)
+- `/catchup` 後、手元の事象から着手
+- Issue 3 件は待機継続 (上記条件発火時に再評価)
+
+---
 
 <a id="session38"></a>
 ## ✅ session38 完了サマリー (2026-04-23: #387 完遂、PR #389 merged、Net -1)
