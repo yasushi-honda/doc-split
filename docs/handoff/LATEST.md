@@ -1,8 +1,67 @@
 # ハンドオフメモ
 
-**更新日**: 2026-04-23 session37 (**#384 (Cloud Logging 反映未確認 P1) を完遂**。process.exit() で in-flight gRPC writes が drop される根本原因を特定し process.exitCode + flushAndCloseLogging + try/finally で修正。3環境 (dev/kanameone/cocoro) で実 Cloud Logging 受信確認済。`/review-pr` 6 エージェント並列で Critical 2 + Important 3 を反映、Codex セカンドオピニオン Approve。Issue Net **0** (#384 close + #387 起票、KPI 進捗ゼロ扱いだが #384 真の解決は達成))
-**ブランチ**: main (clean、PR #386 merged: 1118ddd)
-**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + Phase 2 (#181-#183) + Phase 3 (#188-#190) + Phase 5 (#339/#340/#332/#335) + Phase 6 (#346/#343/#344/#331/#333/#262) + Phase 7 (#338) + Phase 8 (session29 = #334/#196) + Phase 8 (session30 = #360 rescue observability + #358 backfill test lock-in) + Phase 8 (session31 = #365 backfill counter 分割 + #364 rescue per-doc catch test) + Phase 8 (session32 = #370 fatal 分岐 safeLogError 二重呼出防止 test) + Phase 8 (session33 = #200 Gmail/Split 統合テスト + #251 Scope 2 summaryPromptBuilder 分離) + Phase 8 (session34 = #375 Gmail reimportPolicy pure helper 抽出 + #237 tokenizer 3 箇所共通化) + Phase 8 (session35 = Issue triage-only、close 忘れ 1 件整理 = #220) + Phase 8 (session36 = #239 force-reindex audit log + #152 close、新規 #384 起票) + **Phase 8 (session37 = #384 完遂、新規 #387 起票)** 完遂
+**更新日**: 2026-04-23 session38 (**#387 (force-reindex entrypoint test P2 enhancement) を完遂**。PR #386 の entrypoint 構造 `runEntrypoint(deps)` として切り出し、7 シナリオで I1/I2 invariant + main throw+flush throw 複合 + projectId 未設定 + stringify throw fallback を lock-in。`/review-pr` 6 エージェント並列で rating ≥ 7 findings 3 件 (I3 文言修正、複合シナリオ追加、fallback silent loss 修正) を 2 commit 目で反映。**Issue Net -1** (#387 close、起票 0) で KPI 達成)
+**ブランチ**: main (clean、PR #389 merged: d081121)
+**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + Phase 2 (#181-#183) + Phase 3 (#188-#190) + Phase 5 (#339/#340/#332/#335) + Phase 6 (#346/#343/#344/#331/#333/#262) + Phase 7 (#338) + Phase 8 (session29 = #334/#196) + Phase 8 (session30 = #360 rescue observability + #358 backfill test lock-in) + Phase 8 (session31 = #365 backfill counter 分割 + #364 rescue per-doc catch test) + Phase 8 (session32 = #370 fatal 分岐 safeLogError 二重呼出防止 test) + Phase 8 (session33 = #200 Gmail/Split 統合テスト + #251 Scope 2 summaryPromptBuilder 分離) + Phase 8 (session34 = #375 Gmail reimportPolicy pure helper 抽出 + #237 tokenizer 3 箇所共通化) + Phase 8 (session35 = Issue triage-only、close 忘れ 1 件整理 = #220) + Phase 8 (session36 = #239 force-reindex audit log + #152 close、新規 #384 起票) + Phase 8 (session37 = #384 完遂、新規 #387 起票) + **Phase 8 (session38 = #387 完遂、Net -1)** 完遂
+
+<a id="session38"></a>
+## ✅ session38 完了サマリー (2026-04-23: #387 完遂、PR #389 merged、Net -1)
+
+session37 で起票した P2 enhancement #387 (force-reindex entrypoint の invariant を unit test で lock-in) を完遂。IIFE `(async () => { ... })()` を `runEntrypoint(deps)` 関数として切り出し、DI 可能化。7 シナリオ (success / main throw / flush throw / emitFailureEvent throw / main+flush 複合 / projectId 未設定 + stringify throw / projectId 未設定 fallback) で #386 review I1/I2 invariant を lock-in。`/review-pr` 6 エージェント並列で rating ≥ 7 findings 3 件を検出し 2 commit 目で全反映 (I3 文言修正 / 複合シナリオ追加 / fallback silent loss 修正)。Issue Net **-1** で KPI 達成。
+
+### PR 一覧
+
+| PR | 内容 | closed Issues | merged commit |
+|----|------|--------------|--------------|
+| **#389** | test(scripts): force-reindex.js runEntrypoint の invariant を 7 シナリオで lock-in (2 commits: 初版 + /review-pr findings 反映) | #387 | `d081121` |
+
+### 主要成果
+
+| 項目 | 内容 |
+|------|------|
+| **merged PR** | 1 本 (#389、2 commits) |
+| **closed Issue** | #387 (1 件、auto-close 成功) |
+| **新規 Issue** | 0 件 (silent-failure Finding 1 は PR body に follow-up 明記、起票は保留) |
+| **Issue Net 変化** | Close 1 / 起票 0 = **-1** (KPI 達成) |
+| **functions/ test** | 805 → **812 passing** (+7: runEntrypoint 7 シナリオ) |
+| **コード量** | 2 ファイル / +411/-55 (force-reindex.js: +84/-55 の entrypoint 関数化 + fallback 強化、forceReindexEntrypoint.test.ts: +327 新規) |
+
+### ロック対象 invariant
+
+| # | invariant | test |
+|---|-----------|------|
+| I1 | `process.exitCode` は flush 呼び出しより先に設定 (flush throw でも反映) | "flush throw (success 後)" |
+| I2 | `emitFailureEvent` も try/catch で包む (FATAL audit log silent loss 防止) | "emitFailureEvent throw" |
+| — | main throw + flush throw 複合時の exitCode guard (`if (process.exitCode === EXIT_OK)`) | "main throw + flush throw" |
+| — | projectId 未設定 + stringify throw 時の original error 出力 (silent loss 防止) | "projectId 未設定 + stringify throw" |
+
+**I3 (初期値 `EXIT_PRECONDITION`) は defensive fallback として保持のみ** — 現行制御フローでは catch 先頭で `EXIT_PARTIAL_FAILURE` に上書きされるため observable でなく、assertion 対象外。
+
+### Quality Gate 実施記録
+
+| ステージ | 内容 | 結果 |
+|---|---|---|
+| 計画 | Issue #387 の受け入れ基準 (4 シナリオ + 既存 805 passing 維持 + I1/I2/I3 assertion) を確認し直接実装へ | skip `/impl-plan`（Issue 記述が計画代替） |
+| `/simplify` 3並列 | reuse / quality / efficiency | Quality rating 6 × 2 (save/restore 集約 → `withProcessSandbox`、stringly-typed → `EVENTS`/`SEVERITIES` 参照) を反映。Reuse rating 7 (captureOutput helpers/ 昇格) は scope 拡大で別 PR 候補 |
+| `/review-pr` 6エージェント並列 | code-reviewer / pr-test-analyzer / silent-failure-hunter / comment-analyzer / (type-design, simplifier は対象外) | Critical 2 + silent-failure 7 相当 1 を 2 commit 目で反映: I3 文言修正 + 複合シナリオ追加 + fallback original error 出力 |
+
+### 設計判断 / Lessons Learned (本セッション重要知見)
+
+1. **Invariant lock-in test は「宣言」と「実効範囲」を一致させる必要がある** — 初版 PR body で「I3 lock-in」と宣言したが、実装上は初期値 `EXIT_PRECONDITION` が catch 先頭で即上書きされるため observable でなく、test で検証できていなかった (code-reviewer rating 8 / conf 90)。宣言を「defensive fallback として保持」に修正し、lock-in 対象からは外した。→ [feedback_invariant_declaration_vs_reality.md](../../memory/feedback_invariant_declaration_vs_reality.md) 相当の教訓。
+2. **BigInt で JSON.stringify を確実に throw させる** — `error.code: BigInt(42)` を仕込むと `JSON.stringify` は "Do not know how to serialize a BigInt" で throw する。circular reference は primitive のみ抜き出す object では発動せず、stringify throw の test には不向き。
+3. **`/review-pr` findings の triage は 2 段ゲート** — rating ≥ 7 かつ conf ≥ 80 で修正必須、5-6 は PR コメント扱い。silent-failure-hunter が self-assessed で "rating 6→7 相当" と明記した項目は本 PR 趣旨 (silent loss 防止) と一致する場合は 7 として扱う判断が有効。
+4. **複数 findings の同時反映時、scope 拡大判断を明示する** — reuse rating 7 の `captureOutput` helpers/ 昇格は `forceReindexAudit.test.ts` への波及で scope 拡大するため別 PR 候補として PR body に明記。silent-failure Finding 1 (EPIPE 耐性 / `_safeWriteStderr` 横展開) も同様に別 PR 候補として保留。
+
+### 別 Issue / follow-up PR 候補 (PR #389 で明記、Issue 起票は保留)
+
+| rating / conf | 指摘 | 扱い |
+|---|---|---|
+| 6→7 / 85 | bare `console.error` の EPIPE 耐性 (`_safeWriteStderr` 横展開) | scope 拡大のため別 PR 推奨、Issue 起票は KPI 観点で保留 |
+| 7 / 95 | `captureOutput` (forceReindexAudit.test.ts) の helpers/ 昇格 | 他ファイル波及で別 PR |
+| 6 / 85 | emitFailure 引数 payload (`.error`, `.auditCtx`) の assertion 不足 | follow-up commit 候補 |
+| 5-6 / 70-80 | Issue 番号参照コメント圧縮、JSDoc/inline 重複 | PR コメント扱い (confidence 閾値ギリギリ未満) |
+
+---
 
 <a id="session37"></a>
 ## ✅ session37 完了サマリー (2026-04-23: #384 完遂、PR #386 merged + 新規 #387 起票で Net 0)
@@ -386,98 +445,4 @@ session33 handoff の「次セッション着手候補」から #375 (軽量 0.5
 
 ---
 
-<a id="session33"></a>
-## ✅ session33 完了サマリー (2026-04-22: #200 完遂 + #251 Scope 2 完了、2 PR merged)
-
-PR #199 (Gmail 重複取得の根本対策) に不足していたテストを #200 で追加し、PR #250 の review 指摘で保留されていた #251 Scope 2 (`buildSummaryPrompt` 分離) も完了。両 PR とも `/review-pr` 3 エージェント並列、comment-analyzer Critical 2 件 + pr-test-analyzer Important 1 件を本 PR 内で修正反映。Vertex AI mock を要する #251 Scope 1/3 は scope 分割で待機。
-
-### PR 一覧
-
-| PR | 内容 | closed Issues | merged commit |
-|----|------|--------------|--------------|
-| **#374** | test: checkGmailAttachments/splitPdf 統合テスト (AC1 messageId skip / AC2 endpoint contract / AC3 Partial Update 不変 / AC4 isSplitSource 再取り込み許可、17 cases) | #200 | `1bf3ab7` |
-| **#376** | refactor(ocr): buildSummaryPrompt を summaryPromptBuilder.ts に分離 + pure unit test + isolation contract (17 cases) | (Refs #251 Scope 2) | `1f2a41e` |
-
-### 主要成果
-
-| 項目 | 内容 |
-|------|------|
-| **merged PR** | 2 本 (#374 / #376) |
-| **closed Issue** | #200 (1 件、auto-close 成功) |
-| **新規 follow-up Issue** | #375 (Gmail 重複判定の pure helper 抽出、pr-test-analyzer rating 7 + confidence 85%、triage 基準 #4 満たす) |
-| **Issue Net 変化** | Close 1 / 起票 1 = **0** (feedback_issue_triage.md: Net ≤ 0 は進捗ゼロ扱い、ただし critical path test coverage の実質向上あり — 詳細は末尾で言語化) |
-| **BE unit テスト** | 677 → **699 passing** (+22: #374 5 cases endpoint contract + #376 11 summaryPromptBuilder + 6 isolation contract) + 6 pending |
-| **BE integration テスト** | 24 → **36 passing** (+12: #374 AC1 3 + AC4 6 + AC3 3) |
-| **コード量** | #374: +414/-1 (4 ファイル、新規 3 test) / #376: +229/-29 (4 ファイル、新規 1 src + 2 test) 合計 +643/-30 |
-| **品質改善** | Gmail 重複判定 critical path 完全網羅 (messageId + hash + isSplitSource 再取り込み) / prompt 境界値・fallback・セクション保持の lock-in / 外部依存ゼロ契約の grep-based 構造検証 (将来の import 追加で decisive 失敗) |
-
-### Quality Gate 実施記録 (合計 6 エージェントレビュー)
-
-**PR #374 (Gmail/Split 統合テスト)**:
-- `/review-pr` 3 並列 (code-reviewer / pr-test-analyzer / comment-analyzer)
-  - code-reviewer: Approve、critical/important なし
-  - pr-test-analyzer: critical 0、**important 1 件 rating 7 confidence 85%** → follow-up #375 起票 (logic-drift 対策、pure helper 抽出)、rating 5-6 の 2 件は Issue 化せず PR 本文で scope 外明示
-  - comment-analyzer: critical 0、minor 3 件 (stale phrasing / skip-reimport-new 定義 / 末尾 anchor) → **PR 内修正で全対応**
-
-**PR #376 (summaryPromptBuilder 分離)**:
-- `/review-pr` 3 並列
-  - code-reviewer: LGTM、issue 0 件
-  - pr-test-analyzer: critical 0、important rating 6 confidence 85% (truncation 厳密 assert) → **PR 内修正で対応** (`【OCR結果】〜【要約】` ブロック slice 厳密一致 + 7999 off-by-one 境界追加)
-  - comment-analyzer: **critical 2 件** (1. `rateLimiter.ts` path 誤記 → `utils/rateLimiter.ts` に修正 + admin.firestore() module-load 仕組み明示 / 2. test comment "lock-in" が実 assertion と乖離 → comment 降格 + **構造契約を別 grep-based contract test で明示 lock-in**) → **PR 内修正で全対応**
-
-### 設計判断 / Lessons Learned (本セッション重要知見)
-
-1. **ロジック再現型 integration test の drift リスクと follow-up 戦略 (pr-test-analyzer rating 7)**: `shouldSkipByHashDuplicate` helper は source (`checkGmailAttachments.ts:287-325`) の分岐を test 内で手書き再現。既存 `ocrRetryIntegration.test.ts` と同慣習だが、source drift 時に test が silent に PASS し続ける。**根治策は pure helper 化 (src/gmail/reimportPolicy.ts)** で production/test が同じ source を共有する構造。PR scope を広げず follow-up #375 で一括対応する triage が triage 基準 #4 (rating≥7 & conf≥80) に合致。rating 5-6 の 2 提案 (両方一致 negative test / splitPdf grep contract) は #375 の body に bundle
-
-2. **AC2 (scheduled function runtime options) の grep-based contract 採用理由**: source import が `admin.firestore()` top-level 評価で他 unit test に副作用を波及させるため、`onSchedule` options を `__endpoint` 直接読取から **ソースファイル文字列 + `extractBraceBlock` に切替**。既存 `aggregateCapLogErrorContract.test.ts` の grep-based 方式に統一。`initFirestoreEmulator` を import するだけで `FIRESTORE_EMULATOR_HOST` が他テストに波及する教訓を明示化
-
-3. **comment-analyzer Critical の精度 vs drift 防止**: PR #376 で comment が「rateLimiter.ts」と書いていたが実体は `utils/rateLimiter.ts`、また「lock-in」と書きつつ実 assertion は `typeof === 'function'` のみ。2 件とも PR 内修正で対応し、後者は **構造契約を別の grep-based isolation contract test (6 cases: firebase-admin / Vertex / rateLimiter / summaryGenerator / errorLogger / import 0 件)** で実体化。「comment の主張と実 assertion の乖離」は comment 精度問題ではなく **test 設計問題** として扱うのが正解 — "say what you mean, mean what you say" を assertion で強制
-
-4. **ts-node の CJS/ESM 判定と `__dirname` 落とし穴**: 新規 test ファイルが relative import (例: `./helpers/extractBraceBlock`) を持たない場合、ts-node が ESM として解決して `__dirname is not defined` で before hook が失敗する。既存 `checkGmailAttachmentsEndpointContract.test.ts` に倣って未使用 helper import を 1 行足すことで CJS に統一。将来 ESM 正式移行 (#299 / #309) 時まで暫定。comment で意図明記必須
-
-5. **Issue partial progress の運用パターン (#251 Scope 2)**: 3 scope から成る Issue の一部だけ完了した場合、**Issue を close せず body を update して進捗を明示** ([x] Scope 2 完了 / [ ] Scope 1/3 待機) する運用が整理できた。Scope 1 (Vertex AI mock) は sinon/proxyquire 導入コストが #299 類似で待機、Scope 3 (error handling) は #220 延長として別途検討。Issue net 悪化を避けつつ partial な実質進捗を残す
-
-6. **Issue Net 0 の実質評価 (feedback_issue_triage.md 基準)**: 本セッション Close 1 (#200) / 起票 1 (#375) = Net 0 は機械的には「進捗ゼロ扱い」。だが #375 は pr-test-analyzer の triage 基準 #4 (rating≥7 & conf≥80) を満たす valid な structural improvement で、critical path test coverage +22 cases の実質価値は定量的。**Net 0 でも起票内容が rating≥7 の structural improvement の場合は「進捗あり」として別途評価** の運用知見を積み上げる候補 (memory 追記候補)
-
-### 次セッション着手候補 (WBS 進捗)
-
-**軽量 (0.5 セッション)**:
-- **#375 Gmail 重複判定 pure helper 抽出** (本セッション起票): `isReimportAllowed` を `src/gmail/` に export、production/test で共有。logic-drift 対策の直接対応。related に rating 6 の 2 提案 (両方一致 negative test / splitPdf grep contract) bundle 済み
-
-**中規模 (1 セッション)**:
-- **#239 force-reindex audit log**: Cloud Logging に構造化 audit log 出力、compliance 対応の延長
-- **#238 force-reindex 孤児 posting 検出モード**: session 後半でも着手可
-- **#220 OOM/truncated metric + alert**: monitoring 拡張
-
-**大物 (2 セッション、`/impl-plan` 必須)**:
-- **#237 search tokenizer 共通化**: FE/BE/script 3 箇所の重複を `shared/` に集約。session29-32 で持ち越し継続、Evaluator 分離必須 (5+ ファイル + アーキテクチャ影響)
-- **#299 capPageResultsAggregate 動的 safeLogError test** (最難): ts-node/esm 環境整備込み
-- **#251 Scope 1 generateSummaryCore runtime test**: Vertex AI mock (sinon/proxyquire) 導入必要、#299 と同時に mock 戦略を一括整備する bundle 案が合理的
-
-**session 外 Open Issues** (引き続き持ち越し): #251 Scope 1/3 (open 維持、待機) / #152 (dev setup-tenant、雛形として open 維持が正しい状態、active 作業不要)
-
-### Test plan 実行結果
-
-- [x] BE `npm --prefix functions run type-check:test` EXIT 0
-- [x] BE `npm --prefix functions test` **699 passing + 6 pending** (+22 from session32)
-- [x] BE `firebase emulators:exec --only firestore ... 'npm --prefix functions run test:integration'` **36 passing** (+12 from session32)
-- [x] `npm run lint` 0 errors, 25 warnings (新規 warning ゼロ、既存と同水準)
-- [x] PR #374 main マージ時 CI 3/3 green (lint-build-test / CodeRabbit / GitGuardian 全 pass)
-- [x] PR #376 main マージ時 CI 3/3 green (lint-build-test pass、`1f2a41e`)
-- [x] `gh issue view 200` で CLOSED 確認 (squash merge で auto-close 成功)
-- [x] `gh issue view 251` body update 確認 (Scope 2 完了 + Scope 1/3 待機理由 + PR #376 参照)
-- [x] `gh issue view 375` OPEN 確認 (P2 enhancement、Gmail 重複判定 pure helper 抽出 + bundle 2 提案)
-
-### Issue Net 変化 (詳細)
-
-- **Close 数**: 1 件 (#200)
-- **起票数**: 1 件 (#375)
-- **Net**: 0 件 (機械的には進捗ゼロ扱い)
-- **実質評価**: #375 は review agent rating 7 / confidence 85% の triage 基準適格起票、#200 完遂で Gmail 重複取得対策の critical path test coverage +22 cases 向上、#251 Scope 2 完了 (partial progress、Issue close せず body update で運用)
-
----
-
-
----
-
-*session32 / session31 / 以前は [docs/handoff/archive/2026-04-history.md](archive/2026-04-history.md) を参照。*
+*session33 / session32 / 以前は [docs/handoff/archive/2026-04-history.md](archive/2026-04-history.md) を参照。*
