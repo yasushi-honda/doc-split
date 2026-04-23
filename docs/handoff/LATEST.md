@@ -24,7 +24,7 @@ session37 で起票した P2 enhancement #387 (force-reindex entrypoint の inva
 | **新規 Issue** | 0 件 (silent-failure Finding 1 は PR body に follow-up 明記、起票は保留) |
 | **Issue Net 変化** | Close 1 / 起票 0 = **-1** (KPI 達成) |
 | **functions/ test** | 805 → **812 passing** (+7: runEntrypoint 7 シナリオ) |
-| **コード量** | 2 ファイル / +411/-55 (force-reindex.js: +76/-55 の entrypoint 関数化 + fallback 強化、forceReindexEntrypoint.test.ts: +327 新規) |
+| **コード量** | 2 ファイル / +411/-55 (force-reindex.js: +84/-55 の entrypoint 関数化 + fallback 強化、forceReindexEntrypoint.test.ts: +327 新規) |
 
 ### ロック対象 invariant
 
