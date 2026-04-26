@@ -61,3 +61,35 @@ export function formatTimestamp(
     return '-';
   }
 }
+
+// ============================================
+// 顧客名・事業所名の有効性判定
+// ============================================
+// 編集モーダル保存時に「選択確定フラグ」(customerConfirmed/officeConfirmed) を
+// true にするか判定するために使用する。Sentinel 値（'未判定'/'不明顧客'/'不明事業所'）
+// は OCR 失敗・未判定状態を示すため、選択として無効扱いにする。
+
+const CUSTOMER_INVALID_SENTINELS: ReadonlySet<string> = new Set(['未判定', '不明顧客']);
+const OFFICE_INVALID_SENTINELS: ReadonlySet<string> = new Set(['未判定', '不明事業所']);
+
+/**
+ * 顧客名が「確定可能な有効値」かを判定する。
+ * 空文字・null・undefined・空白のみ・sentinel 値（'未判定'/'不明顧客'）は false を返す。
+ */
+export function isValidCustomerSelection(name: string | null | undefined): boolean {
+  if (name == null) return false;
+  const trimmed = name.trim();
+  if (trimmed === '') return false;
+  return !CUSTOMER_INVALID_SENTINELS.has(trimmed);
+}
+
+/**
+ * 事業所名が「確定可能な有効値」かを判定する。
+ * 空文字・null・undefined・空白のみ・sentinel 値（'未判定'/'不明事業所'）は false を返す。
+ */
+export function isValidOfficeSelection(name: string | null | undefined): boolean {
+  if (name == null) return false;
+  const trimmed = name.trim();
+  if (trimmed === '') return false;
+  return !OFFICE_INVALID_SENTINELS.has(trimmed);
+}
