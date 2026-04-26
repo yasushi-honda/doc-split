@@ -1270,7 +1270,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                     onChange={(v) => updateField('fileDate', v ? new Date(v) : null)}
                     type="date"
                   />
-                  <MetaRow icon={Calendar} label="処理日時" value={formatTimestamp(document.processedAt, 'yyyy/MM/dd HH:mm')} />
+                  <MetaRow icon={Calendar} label="登録日" value={formatTimestamp(document.processedAt, 'yyyy/MM/dd HH:mm')} />
                   <MetaRow icon={FileText} label="ページ数" value={`${document.totalPages} ページ`} />
                 </div>
 

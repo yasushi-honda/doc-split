@@ -131,7 +131,7 @@ function UserGuide() {
           </tbody>
         </table>
         <ul>
-          <li><strong>日付種別の切替</strong>: 「書類日付」（書類に記載の日付）と「登録日」（システム登録日）を切り替えられます</li>
+          <li><strong>日付種別の切替</strong>: 「登録日」（システム登録日）と「書類日付」（書類に記載の日付）を切り替えられます（デフォルトは登録日）</li>
           <li><strong>解除</strong>: 同じプリセットをもう一度クリック、または「クリア」ボタンで解除</li>
         </ul>
 
@@ -171,9 +171,9 @@ function UserGuide() {
           <li>顧客名</li>
           <li>書類タイプ</li>
           <li>事業所</li>
-          <li>書類日</li>
+          <li>書類日付</li>
+          <li>登録日</li>
           <li>ステータス</li>
-          <li>作成日時</li>
         </ul>
       </section>
 
