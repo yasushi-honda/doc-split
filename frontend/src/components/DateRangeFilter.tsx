@@ -2,7 +2,7 @@
  * 期間指定フィルターコンポーネント
  *
  * プリセット（今月/今年/過去3ヶ月）+ カスタム日付入力
- * 日付種別（書類日付/登録日）の切替対応
+ * 日付種別（登録日/書類日付）の切替対応
  */
 
 import { useState, useCallback, useMemo } from 'react'
@@ -106,8 +106,8 @@ const PRESET_OPTIONS: { value: DatePreset; label: string }[] = [
 ]
 
 const DATE_FIELD_OPTIONS: { value: DateField; label: string }[] = [
-  { value: 'fileDate', label: '書類日付' },
   { value: 'processedAt', label: '登録日' },
+  { value: 'fileDate', label: '書類日付' },
 ]
 
 export function DateRangeFilter({ value, onChange }: DateRangeFilterProps) {

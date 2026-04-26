@@ -52,6 +52,7 @@ import { db } from '@/lib/firebase'
 import { callFunction } from '@/lib/callFunction'
 import { Checkbox } from '@/components/ui/checkbox'
 import { useInfiniteDocuments, useDocumentStats, useDocumentMasters, getReprocessClearFields, type DocumentFilters, type SortField, type SortOrder } from '@/hooks/useDocuments'
+import { useCareManagers } from '@/hooks/useMasters'
 import { DateRangeFilter, type DateRange } from '@/components/DateRangeFilter'
 import { isCustomerConfirmed } from '@/hooks/useProcessingHistory'
 import { DocumentDetailModal } from '@/components/DocumentDetailModal'
@@ -329,13 +330,14 @@ export function DocumentsPage() {
   const [statusFilter, setStatusFilter] = useState<DocumentStatus | 'all'>('processed')
   const [showPendingProcessing, setShowPendingProcessing] = useState(false) // 処理中を含む
   const [documentTypeFilter, setDocumentTypeFilter] = useState<string>('all')
+  const [careManagerFilter, setCareManagerFilter] = useState<string>('all')
   const [showFilters, setShowFilters] = useState(false)
   const [showSplit, setShowSplit] = useState(false) // 分割済み表示フラグ
   const [showUnverifiedOnly, setShowUnverifiedOnly] = useState(false) // 未確認のみ表示フラグ
   const [dateRange, setDateRange] = useState<DateRange>({
     dateFrom: undefined,
     dateTo: undefined,
-    dateField: 'fileDate',
+    dateField: 'processedAt',
   })
 
   // ソート状態（デフォルト: 登録日の新しい順）
@@ -373,12 +375,13 @@ export function DocumentsPage() {
   const filters: DocumentFilters = useMemo(() => ({
     status: effectiveStatusFilter === 'all' ? undefined : effectiveStatusFilter,
     documentType: documentTypeFilter === 'all' ? undefined : documentTypeFilter,
+    careManager: careManagerFilter === 'all' ? undefined : careManagerFilter,
     dateFrom,
     dateTo,
     dateField,
     sortField,
     sortOrder,
-  }), [effectiveStatusFilter, documentTypeFilter, dateFrom, dateTo, dateField, sortField, sortOrder])
+  }), [effectiveStatusFilter, documentTypeFilter, careManagerFilter, dateFrom, dateTo, dateField, sortField, sortOrder])
 
   // データ取得（無限スクロール対応）
   const {
@@ -393,6 +396,7 @@ export function DocumentsPage() {
   const { loadMoreRef } = useInfiniteScroll({ hasNextPage: !!hasNextPage, isFetchingNextPage, fetchNextPage })
   const { data: stats } = useDocumentStats()
   const { data: documentMasters } = useDocumentMasters()
+  const { data: careManagers } = useCareManagers()
 
   // ソートハンドラ
   const handleSort = useCallback((field: SortField) => {
@@ -772,6 +776,22 @@ export function DocumentsPage() {
                         {documentMasters?.map((master) => (
                           <SelectItem key={master.name} value={master.name}>
                             {master.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="min-w-[200px] flex-1">
+                    <label className="mb-1 block text-sm font-medium text-gray-700">ケアマネジャー</label>
+                    <Select value={careManagerFilter} onValueChange={setCareManagerFilter}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="すべて" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">すべて</SelectItem>
+                        {careManagers?.map((cm) => (
+                          <SelectItem key={cm.id} value={cm.name}>
+                            {cm.name}
                           </SelectItem>
                         ))}
                       </SelectContent>

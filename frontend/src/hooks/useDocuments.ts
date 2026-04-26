@@ -108,6 +108,7 @@ export interface DocumentFilters {
   status?: DocumentStatus
   customerName?: string
   documentType?: string
+  careManager?: string
   dateFrom?: Date
   dateTo?: Date
   dateField?: 'fileDate' | 'processedAt'
@@ -329,6 +330,11 @@ async function fetchDocuments(
   // 書類種別フィルター
   if (filters.documentType) {
     constraints.push(where('documentType', '==', filters.documentType))
+  }
+
+  // ケアマネジャーフィルター
+  if (filters.careManager) {
+    constraints.push(where('careManager', '==', filters.careManager))
   }
 
   // 日付範囲フィルター（dateFieldで対象フィールドを切替）

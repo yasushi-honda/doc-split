@@ -6,7 +6,7 @@ describe('DateRangeFilter', () => {
   const defaultValue: DateRange = {
     dateFrom: undefined,
     dateTo: undefined,
-    dateField: 'fileDate',
+    dateField: 'processedAt',
   }
   let onChange: Mock<(range: DateRange) => void>
 
@@ -35,6 +35,13 @@ describe('DateRangeFilter', () => {
     expect(screen.getByText('登録日')).toBeDefined()
   })
 
+  it('日付種別ボタンは「登録日」「書類日付」の順で表示される', () => {
+    render(<DateRangeFilter value={defaultValue} onChange={onChange} />)
+    const tosho = screen.getByText('登録日')
+    const shorui = screen.getByText('書類日付')
+    expect(tosho.compareDocumentPosition(shorui) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
   it('今月プリセットをクリックすると月初〜今日の範囲が設定される', () => {
     render(<DateRangeFilter value={defaultValue} onChange={onChange} />)
     fireEvent.click(screen.getByText('今月'))
@@ -42,7 +49,7 @@ describe('DateRangeFilter', () => {
     expect(onChange).toHaveBeenCalledWith({
       dateFrom: new Date(2026, 1, 1), // 2月1日
       dateTo: expect.any(Date),
-      dateField: 'fileDate',
+      dateField: 'processedAt',
     })
     // dateTo は今日の23:59:59
     const call = onChange.mock.calls[0]![0]!
@@ -79,11 +86,11 @@ describe('DateRangeFilter', () => {
 
   it('日付種別を切り替えるとdateFieldが変更される', () => {
     render(<DateRangeFilter value={defaultValue} onChange={onChange} />)
-    fireEvent.click(screen.getByText('登録日'))
+    fireEvent.click(screen.getByText('書類日付'))
 
     expect(onChange).toHaveBeenCalledWith({
       ...defaultValue,
-      dateField: 'processedAt',
+      dateField: 'fileDate',
     })
   })
 
@@ -91,7 +98,7 @@ describe('DateRangeFilter', () => {
     const activeValue: DateRange = {
       dateFrom: new Date(2026, 1, 1),
       dateTo: new Date(2026, 1, 6, 23, 59, 59),
-      dateField: 'fileDate',
+      dateField: 'processedAt',
     }
     render(<DateRangeFilter value={activeValue} onChange={onChange} />)
     fireEvent.click(screen.getByText('今月'))
@@ -99,7 +106,7 @@ describe('DateRangeFilter', () => {
     expect(onChange).toHaveBeenCalledWith({
       dateFrom: undefined,
       dateTo: undefined,
-      dateField: 'fileDate',
+      dateField: 'processedAt',
     })
   })
 
@@ -110,13 +117,13 @@ describe('DateRangeFilter', () => {
     const activeValue: DateRange = {
       dateFrom: new Date(2026, 0, 1),
       dateTo: new Date(2026, 1, 6),
-      dateField: 'fileDate',
+      dateField: 'processedAt',
     }
     rerender(<DateRangeFilter value={activeValue} onChange={onChange} />)
     expect(screen.getByText('クリア')).toBeDefined()
   })
 
-  it('クリアボタンをクリックすると日付がリセットされる', () => {
+  it('クリアボタンをクリックすると日付がリセットされる（fileDate 選択中も保持）', () => {
     const activeValue: DateRange = {
       dateFrom: new Date(2026, 0, 1),
       dateTo: new Date(2026, 1, 6),
