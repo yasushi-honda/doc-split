@@ -3,6 +3,7 @@ import { doc, updateDoc, collection, addDoc, serverTimestamp, Timestamp, deleteF
 import { useQueryClient } from '@tanstack/react-query'
 import { db, auth } from '../lib/firebase'
 import { updateDocumentInListCache } from './useDocuments'
+import { isValidCustomerSelection, isValidOfficeSelection } from '../lib/documentUtils'
 import { generateDisplayFileName } from '@shared/generateDisplayFileName'
 import type { Document } from '../../../shared/types'
 
@@ -160,7 +161,19 @@ export function useDocumentEdit(document: Document | null | undefined): UseDocum
         })
       }
 
-      if (changes.length === 0) {
+      // 確定フラグの判定（Issue #396）
+      // 「保存=確定」操作として、有効な顧客名/事業所名が現在値（編集後）に
+      // セットされていて、かつ既存 confirmed が true でない場合に true を立てる。
+      // invalid 値（空・「未判定」等）の場合や既に true の場合は updateData に含めず、
+      // 既存値を上書きしない（false への退行を防ぐ）。
+      const finalCustomerName = editedFields.customerName ?? document.customerName ?? ''
+      const finalOfficeName = editedFields.officeName ?? document.officeName ?? ''
+      const shouldSetCustomerConfirmed =
+        isValidCustomerSelection(finalCustomerName) && document.customerConfirmed !== true
+      const shouldSetOfficeConfirmed =
+        isValidOfficeSelection(finalOfficeName) && document.officeConfirmed !== true
+
+      if (changes.length === 0 && !shouldSetCustomerConfirmed && !shouldSetOfficeConfirmed) {
         setIsEditing(false)
         return true
       }
@@ -174,6 +187,28 @@ export function useDocumentEdit(document: Document | null | undefined): UseDocum
 
       // キャッシュ楽観的更新用データ（serverTimestampはクライアント値で代替）
       const optimisticData: Partial<Document> = {}
+
+      // 確定フラグの書き込み
+      // needsManualCustomerSelection はレガシーフォールバック。既存ドキュメントに値が
+      // 存在する場合のみ false に同期更新し、undefined のドキュメントには書き込まない
+      // （customerConfirmed=true で判定優先されるため、新規フィールド作成を避ける）。
+      if (shouldSetCustomerConfirmed) {
+        updateData.customerConfirmed = true
+        optimisticData.customerConfirmed = true
+        if (document.needsManualCustomerSelection !== undefined) {
+          updateData.needsManualCustomerSelection = false
+          optimisticData.needsManualCustomerSelection = false
+        }
+      }
+      // optimisticData は serverTimestamp が使えないため Timestamp.now() で代替。
+      if (shouldSetOfficeConfirmed) {
+        updateData.officeConfirmed = true
+        updateData.officeConfirmedBy = auth.currentUser.uid
+        updateData.officeConfirmedAt = serverTimestamp()
+        optimisticData.officeConfirmed = true
+        optimisticData.officeConfirmedBy = auth.currentUser.uid
+        optimisticData.officeConfirmedAt = Timestamp.now()
+      }
 
       // 変更されたフィールドを追加
       if (editedFields.customerName !== undefined) {
@@ -291,6 +326,18 @@ export function useDocumentEdit(document: Document | null | undefined): UseDocum
         }
         if (editedFields.fileName !== undefined) rollbackData.fileName = document.fileName
         if (editedFields.fileDate !== undefined) rollbackData.fileDate = document.fileDate
+        // 確定フラグもロールバック対象（楽観的更新で立てた値を元に戻す）
+        if (shouldSetCustomerConfirmed) {
+          rollbackData.customerConfirmed = document.customerConfirmed
+          if (document.needsManualCustomerSelection !== undefined) {
+            rollbackData.needsManualCustomerSelection = document.needsManualCustomerSelection
+          }
+        }
+        if (shouldSetOfficeConfirmed) {
+          rollbackData.officeConfirmed = document.officeConfirmed
+          rollbackData.officeConfirmedBy = document.officeConfirmedBy
+          rollbackData.officeConfirmedAt = document.officeConfirmedAt
+        }
         updateDocumentInListCache(queryClient, document.id, rollbackData)
         throw writeErr
       }

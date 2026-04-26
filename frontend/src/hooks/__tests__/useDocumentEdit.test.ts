@@ -192,3 +192,323 @@ describe('useDocumentEdit - careManager自動補完', () => {
     })
   })
 })
+
+// ============================================
+// 確定フラグ更新（Issue #396）
+// ============================================
+// 編集モーダルで顧客名・事業所名を選択して保存したとき、確定フラグ
+// (customerConfirmed/officeConfirmed/needsManualCustomerSelection) を
+// 適切に更新することを検証する。
+
+describe('useDocumentEdit - 確定フラグ更新 (#396)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  describe('AC1: 有効な顧客名選択時は customerConfirmed=true を書き込む', () => {
+    it('customerName を有効値に変更 → customerConfirmed=true & needsManualCustomerSelection=false', async () => {
+      const doc = makeDocument({
+        customerName: '未判定',
+        customerConfirmed: false,
+        needsManualCustomerSelection: true,
+      })
+      const { result } = renderHook(() => useDocumentEdit(doc))
+
+      act(() => result.current.startEditing())
+      act(() => result.current.updateField('customerName', '河野 文江'))
+
+      await act(async () => {
+        await result.current.saveChanges()
+      })
+
+      const updateData = mockUpdateDoc.mock.calls[0]?.[1] as Record<string, unknown>
+      expect(updateData.customerConfirmed).toBe(true)
+      expect(updateData.needsManualCustomerSelection).toBe(false)
+    })
+  })
+
+  describe('AC2: 有効な事業所名選択時は officeConfirmed=true + By/At を書き込む', () => {
+    it('officeName を有効値に変更 → officeConfirmed=true & officeConfirmedBy=uid & officeConfirmedAt=serverTimestamp', async () => {
+      const doc = makeDocument({
+        officeName: '未判定',
+        officeConfirmed: false,
+      })
+      const { result } = renderHook(() => useDocumentEdit(doc))
+
+      act(() => result.current.startEditing())
+      act(() => result.current.updateField('officeName', 'ケアサポートきらり'))
+
+      await act(async () => {
+        await result.current.saveChanges()
+      })
+
+      const updateData = mockUpdateDoc.mock.calls[0]?.[1] as Record<string, unknown>
+      expect(updateData.officeConfirmed).toBe(true)
+      expect(updateData.officeConfirmedBy).toBe('user-001')
+      expect(updateData.officeConfirmedAt).toBe('SERVER_TIMESTAMP')
+    })
+  })
+
+  describe('AC3: invalid 値選択時はフラグを書き込まない', () => {
+    it.each([
+      ['空文字', ''],
+      ['未判定', '未判定'],
+      ['不明顧客', '不明顧客'],
+    ])('customerName を "%s" に変更 → customerConfirmed が updateData に含まれない', async (_label, invalidValue) => {
+      const doc = makeDocument({
+        customerName: '田村 勝義',
+        customerConfirmed: false,
+      })
+      const { result } = renderHook(() => useDocumentEdit(doc))
+
+      act(() => result.current.startEditing())
+      act(() => result.current.updateField('customerName', invalidValue))
+
+      await act(async () => {
+        await result.current.saveChanges()
+      })
+
+      const updateData = mockUpdateDoc.mock.calls[0]?.[1] as Record<string, unknown>
+      expect(updateData.customerConfirmed).toBeUndefined()
+      expect(updateData.needsManualCustomerSelection).toBeUndefined()
+    })
+
+    it.each([
+      ['空文字', ''],
+      ['未判定', '未判定'],
+      ['不明事業所', '不明事業所'],
+    ])('officeName を "%s" に変更 → officeConfirmed が updateData に含まれない', async (_label, invalidValue) => {
+      const doc = makeDocument({
+        officeName: 'テスト事業所',
+        officeConfirmed: false,
+      })
+      const { result } = renderHook(() => useDocumentEdit(doc))
+
+      act(() => result.current.startEditing())
+      act(() => result.current.updateField('officeName', invalidValue))
+
+      await act(async () => {
+        await result.current.saveChanges()
+      })
+
+      const updateData = mockUpdateDoc.mock.calls[0]?.[1] as Record<string, unknown>
+      expect(updateData.officeConfirmed).toBeUndefined()
+      expect(updateData.officeConfirmedBy).toBeUndefined()
+      expect(updateData.officeConfirmedAt).toBeUndefined()
+    })
+  })
+
+  describe('AC3.5: 既存 confirmed=true を invalid 値で false に戻さない', () => {
+    it('customerConfirmed=true のドキュメントで invalid 値選択 → customerConfirmed が updateData に含まれない', async () => {
+      const doc = makeDocument({
+        customerName: '田村 勝義',
+        customerConfirmed: true,
+      })
+      const { result } = renderHook(() => useDocumentEdit(doc))
+
+      act(() => result.current.startEditing())
+      act(() => result.current.updateField('customerName', '未判定'))
+
+      await act(async () => {
+        await result.current.saveChanges()
+      })
+
+      const updateData = mockUpdateDoc.mock.calls[0]?.[1] as Record<string, unknown>
+      // customerConfirmed が updateData に含まれない（false に上書きされない）
+      expect('customerConfirmed' in updateData).toBe(false)
+    })
+
+    it('officeConfirmed=true のドキュメントで invalid 値選択 → officeConfirmed/By/At が updateData に含まれない', async () => {
+      const doc = makeDocument({
+        officeName: 'テスト事業所',
+        officeConfirmed: true,
+        officeConfirmedBy: 'previous-user',
+      })
+      const { result } = renderHook(() => useDocumentEdit(doc))
+
+      act(() => result.current.startEditing())
+      act(() => result.current.updateField('officeName', '未判定'))
+
+      await act(async () => {
+        await result.current.saveChanges()
+      })
+
+      const updateData = mockUpdateDoc.mock.calls[0]?.[1] as Record<string, unknown>
+      expect('officeConfirmed' in updateData).toBe(false)
+      expect('officeConfirmedBy' in updateData).toBe(false)
+      expect('officeConfirmedAt' in updateData).toBe(false)
+    })
+  })
+
+  describe('AC4: 既に両方 confirmed=true で変更なし保存 → updateDoc 呼ばない', () => {
+    it('両方 confirmed=true、編集モードを開いて何も変更せず保存 → updateDoc 呼ばれない', async () => {
+      const doc = makeDocument({
+        customerName: '田村 勝義',
+        customerConfirmed: true,
+        officeName: 'テスト事業所',
+        officeConfirmed: true,
+      })
+      const { result } = renderHook(() => useDocumentEdit(doc))
+
+      act(() => result.current.startEditing())
+      // 何も変更しない
+
+      await act(async () => {
+        await result.current.saveChanges()
+      })
+
+      expect(mockUpdateDoc).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('AC5: customerConfirmed=false で変更なし保存（現在値が有効）→ confirmed のみ書き込み', () => {
+    it('既存 needsManualCustomerSelection=true のドキュメント、変更なし保存 → customerConfirmed=true & needsManualCustomerSelection=false', async () => {
+      const doc = makeDocument({
+        customerName: '田村 勝義',
+        customerConfirmed: false,
+        needsManualCustomerSelection: true,  // 既存値あり → 同期更新対象
+        officeName: 'テスト事業所',
+        officeConfirmed: true,
+      })
+      const { result } = renderHook(() => useDocumentEdit(doc))
+
+      act(() => result.current.startEditing())
+
+      await act(async () => {
+        await result.current.saveChanges()
+      })
+
+      expect(mockUpdateDoc).toHaveBeenCalledTimes(1)
+      const updateData = mockUpdateDoc.mock.calls[0]?.[1] as Record<string, unknown>
+      expect(updateData.customerConfirmed).toBe(true)
+      expect(updateData.needsManualCustomerSelection).toBe(false)
+      expect('officeConfirmed' in updateData).toBe(false)
+      expect(mockAddDoc).not.toHaveBeenCalled()
+    })
+
+    it('needsManualCustomerSelection=undefined のドキュメント、変更なし保存 → customerConfirmed=true のみ書き込み（needsManualCustomerSelection は新規作成しない）', async () => {
+      const doc = makeDocument({
+        customerName: '田村 勝義',
+        customerConfirmed: false,
+        // needsManualCustomerSelection: undefined（明示しない）
+        officeName: 'テスト事業所',
+        officeConfirmed: true,
+      })
+      const { result } = renderHook(() => useDocumentEdit(doc))
+
+      act(() => result.current.startEditing())
+
+      await act(async () => {
+        await result.current.saveChanges()
+      })
+
+      expect(mockUpdateDoc).toHaveBeenCalledTimes(1)
+      const updateData = mockUpdateDoc.mock.calls[0]?.[1] as Record<string, unknown>
+      expect(updateData.customerConfirmed).toBe(true)
+      // 新規フィールドを生成しない（不要な書き込みを避ける）
+      expect('needsManualCustomerSelection' in updateData).toBe(false)
+    })
+  })
+
+  describe('AC8: Firestore 書き込み失敗時、確定フラグもロールバックされる', () => {
+    it('customerConfirmed のロールバック: write 失敗 → optimisticData の true を元の false に復元', async () => {
+      mockUpdateDoc.mockRejectedValueOnce(new Error('write failed'))
+      const doc = makeDocument({
+        customerName: '未判定',
+        customerConfirmed: false,
+        needsManualCustomerSelection: true,
+      })
+      const { result } = renderHook(() => useDocumentEdit(doc))
+
+      act(() => result.current.startEditing())
+      act(() => result.current.updateField('customerName', '河野 文江'))
+
+      await act(async () => {
+        await result.current.saveChanges()
+      })
+
+      const { updateDocumentInListCache } = await import('../useDocuments')
+      const calls = vi.mocked(updateDocumentInListCache).mock.calls
+      // 楽観的更新 + ロールバックで 2 回呼ばれる
+      expect(calls.length).toBe(2)
+      const rollbackData = calls[1]?.[2] as Record<string, unknown>
+      expect(rollbackData.customerConfirmed).toBe(false)
+      expect(rollbackData.needsManualCustomerSelection).toBe(true)
+    })
+
+    it('officeConfirmed のロールバック: write 失敗 → optimisticData の true/By/At を元の値に復元', async () => {
+      mockUpdateDoc.mockRejectedValueOnce(new Error('write failed'))
+      const doc = makeDocument({
+        officeName: '未判定',
+        officeConfirmed: false,
+        officeConfirmedBy: null,
+        officeConfirmedAt: null,
+      })
+      const { result } = renderHook(() => useDocumentEdit(doc))
+
+      act(() => result.current.startEditing())
+      act(() => result.current.updateField('officeName', 'ケアサポートきらり'))
+
+      await act(async () => {
+        await result.current.saveChanges()
+      })
+
+      const { updateDocumentInListCache } = await import('../useDocuments')
+      const calls = vi.mocked(updateDocumentInListCache).mock.calls
+      expect(calls.length).toBe(2)
+      const rollbackData = calls[1]?.[2] as Record<string, unknown>
+      expect(rollbackData.officeConfirmed).toBe(false)
+      expect(rollbackData.officeConfirmedBy).toBeNull()
+      expect(rollbackData.officeConfirmedAt).toBeNull()
+    })
+  })
+
+  describe('AC5.5: optimisticData にも confirmed フラグを反映', () => {
+    it('AC1 実行時、updateDocumentInListCache に customerConfirmed=true が渡される', async () => {
+      const doc = makeDocument({
+        customerName: '未判定',
+        customerConfirmed: false,
+        needsManualCustomerSelection: true,
+      })
+      const { result } = renderHook(() => useDocumentEdit(doc))
+
+      act(() => result.current.startEditing())
+      act(() => result.current.updateField('customerName', '河野 文江'))
+
+      await act(async () => {
+        await result.current.saveChanges()
+      })
+
+      const { updateDocumentInListCache } = await import('../useDocuments')
+      const calls = vi.mocked(updateDocumentInListCache).mock.calls
+      expect(calls.length).toBeGreaterThanOrEqual(1)
+      const optimistic = calls[0]?.[2] as Record<string, unknown>
+      expect(optimistic.customerConfirmed).toBe(true)
+      expect(optimistic.needsManualCustomerSelection).toBe(false)
+    })
+
+    it('AC2 実行時、updateDocumentInListCache に officeConfirmed=true & officeConfirmedBy & officeConfirmedAt が渡される', async () => {
+      const doc = makeDocument({
+        officeName: '未判定',
+        officeConfirmed: false,
+      })
+      const { result } = renderHook(() => useDocumentEdit(doc))
+
+      act(() => result.current.startEditing())
+      act(() => result.current.updateField('officeName', 'ケアサポートきらり'))
+
+      await act(async () => {
+        await result.current.saveChanges()
+      })
+
+      const { updateDocumentInListCache } = await import('../useDocuments')
+      const calls = vi.mocked(updateDocumentInListCache).mock.calls
+      expect(calls.length).toBeGreaterThanOrEqual(1)
+      const optimistic = calls[0]?.[2] as Record<string, unknown>
+      expect(optimistic.officeConfirmed).toBe(true)
+      expect(optimistic.officeConfirmedBy).toBe('user-001')
+      // optimisticData は Timestamp.now() を使う（serverTimestamp はサーバー側のみ）
+      expect(optimistic.officeConfirmedAt).toBeInstanceOf(Timestamp)
+    })
+  })
+})
