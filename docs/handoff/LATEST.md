@@ -1,8 +1,78 @@
 # ハンドオフメモ
 
-**更新日**: 2026-04-26 session40 (**ユーザー要望3点実装、PR #392 merged、Issue Net 0**。session39 合意の update/bugfix 対応移行を受け、書類一覧フィルター CM 追加 + 期間「対象」デフォルト変更 + 書類詳細表記統一 を実装。並行して別 AI が `~/.claude/CLAUDE.md` MUST line 13 追加（hook/settings 変更時の二者択一強制）)
-**ブランチ**: main (clean、PR #392 merged: df12044、CI 自動デプロイ success 1m35s)
-**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + Phase 2 (#181-#183) + Phase 3 (#188-#190) + Phase 5 (#339/#340/#332/#335) + Phase 6 (#346/#343/#344/#331/#333/#262) + Phase 7 (#338) + Phase 8 (session29 = #334/#196) + Phase 8 (session30 = #360 rescue observability + #358 backfill test lock-in) + Phase 8 (session31 = #365 backfill counter 分割 + #364 rescue per-doc catch test) + Phase 8 (session32 = #370 fatal 分岐 safeLogError 二重呼出防止 test) + Phase 8 (session33 = #200 Gmail/Split 統合テスト + #251 Scope 2 summaryPromptBuilder 分離) + Phase 8 (session34 = #375 Gmail reimportPolicy pure helper 抽出 + #237 tokenizer 3 箇所共通化) + Phase 8 (session35 = Issue triage-only、close 忘れ 1 件整理 = #220) + Phase 8 (session36 = #239 force-reindex audit log + #152 close、新規 #384 起票) + Phase 8 (session37 = #384 完遂、新規 #387 起票) + Phase 8 (session38 = #387 完遂、Net -1) + Phase 8 (session39 = triage-only、Net 0、update/bugfix 移行合意) + **Phase 8 (session40 = PR #392 merged: CMフィルター + 期間/表記統一、Net 0、hook ループ教訓 → グローバル MUST line 13 追加)** 完遂
+**更新日**: 2026-04-27 session41 (**PR #392 のクライアント環境展開完了、Issue Net 0**。session40 で「次セッション以降の積み残し」として明記された kanameone/cocoro への hosting + firestore:indexes 反映を `/deploy` スキル定義 + `switch-client.sh` + `deploy-to-project.sh --rules` 構成で順次実行。両環境の careManager 関連 indexes 全 READY 確認 + 後片付け完璧)
+**ブランチ**: main (clean、PR #392 merged: df12044、kanameone + cocoro 反映完了)
+**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + Phase 2 (#181-#183) + Phase 3 (#188-#190) + Phase 5 (#339/#340/#332/#335) + Phase 6 (#346/#343/#344/#331/#333/#262) + Phase 7 (#338) + Phase 8 (session29 = #334/#196) + Phase 8 (session30 = #360 rescue observability + #358 backfill test lock-in) + Phase 8 (session31 = #365 backfill counter 分割 + #364 rescue per-doc catch test) + Phase 8 (session32 = #370 fatal 分岐 safeLogError 二重呼出防止 test) + Phase 8 (session33 = #200 Gmail/Split 統合テスト + #251 Scope 2 summaryPromptBuilder 分離) + Phase 8 (session34 = #375 Gmail reimportPolicy pure helper 抽出 + #237 tokenizer 3 箇所共通化) + Phase 8 (session35 = Issue triage-only、close 忘れ 1 件整理 = #220) + Phase 8 (session36 = #239 force-reindex audit log + #152 close、新規 #384 起票) + Phase 8 (session37 = #384 完遂、新規 #387 起票) + Phase 8 (session38 = #387 完遂、Net -1) + Phase 8 (session39 = triage-only、Net 0、update/bugfix 移行合意) + Phase 8 (session40 = PR #392 merged: CMフィルター + 期間/表記統一、Net 0、hook ループ教訓 → グローバル MUST line 13 追加) + **Phase 8 (session41 = PR #392 を kanameone/cocoro に展開完了、indexes 全 READY、Net 0)** 完遂
+
+<a id="session41"></a>
+## ✅ session41 完了サマリー (2026-04-27: PR #392 を kanameone/cocoro に展開、indexes 全 READY、Net 0)
+
+session40 で merged された PR #392 (CMフィルター + 期間/表記統一) を kanameone/cocoro 両クライアントに展開。session40 handoff の「次セッション以降の積み残し: クライアント環境への index 展開」を完遂。実装ゼロ・デプロイ運用作業のみだが、ユーザー要望機能の本番反映完了。`/deploy` スキル定義 + `switch-client.sh` + `deploy-to-project.sh --rules` 構成で順次実行し fallback 不要、後片付けも完璧。
+
+### Issue Net 変化
+
+| 項目 | 内容 |
+|------|------|
+| Close 数 | 0 件 |
+| 起票数 | 0 件 |
+| **Net 変化** | **0 件** (デプロイ運用、Issue 化基準非該当) |
+
+### 反映状況
+
+| 環境 | URL | Hosting | Firestore Indexes (careManager 関連) | 利用可能性 |
+|------|-----|---------|--------------------------------|-----------|
+| dev | `doc-split-dev.web.app` | ✅ session40 で CI 自動配信済 | ✅ 9件 全 READY | 完了済 |
+| kanameone | `docsplit-kanameone.web.app` | ✅ 04-26 20:55 UTC | ✅ 9件 全 READY | 即時利用可 |
+| cocoro | `docsplit-cocoro.web.app` | ✅ 04-26 20:57 UTC | ✅ 9件 全 READY | 即時利用可 |
+
+> **注**: 「9件」内訳 = PR #392 で追加した careManager 関連 8件 (`careManager + processedAt/fileDate × ASC/DESC` + `status × careManager × processedAt/fileDate × ASC/DESC`) + 既存の `careManagerKey + processedAt` 1件。`gcloud firestore indexes composite list --project=<id> --format="value(state,fields[].fieldPath)" | grep careManager` で実測確認済。
+
+### 実行手順 (`/deploy` スキル準拠)
+
+| # | 環境 | 操作 |
+|---|------|------|
+| 1 | kanameone | `./scripts/switch-client.sh kanameone` (gcloud → kanameone) |
+| 2 | kanameone | `firebase login:use systemkaname@kanameone.com` (Firebase CLI 切替) |
+| 3 | kanameone | `./scripts/deploy-to-project.sh kanameone --rules` (hosting + firestore:rules,indexes + storage) |
+| 4 | kanameone | `firebase login:use hy.unimail.11@gmail.com` (Firebase CLI 戻し) |
+| 5 | cocoro | `./scripts/switch-client.sh cocoro` (gcloud → SA: docsplit-deployer@...) |
+| 6 | cocoro | `./scripts/deploy-to-project.sh cocoro --rules` (Firebase CLI 切替不要、editor 権限可) |
+| 7 | dev | `./scripts/switch-client.sh dev` (gcloud 戻し) |
+| 8 | 確認 | `.env.local` 自動復元確認 + バックアップ残骸なし確認 |
+
+### 設計判断 / Lessons Learned
+
+1. **`/deploy` スキル定義の「cocoro 手動 fallback」は switch-client.sh 適用後は不要** — `switch-client.sh cocoro` で gcloud を SA (`docsplit-deployer@docsplit-cocoro.iam.gserviceaccount.com`) に切替済の状態なら、`deploy-to-project.sh cocoro --rules` の認証チェック (gcloud アカウント一致) を通過。スキル定義の「editor アカウントでは弾かれる場合あり」は switch-client.sh を経由しなかった旧運用の話であり、現運用では fallback 不要。
+2. **Firestore index 展開は実体としては短時間（今回データ規模では）** — 想定では数分〜数十分だったが、kanameone/cocoro とも本セッション内 (デプロイ後 30 分以内) に全 READY 確認。今回のデータ規模は kanameone 約 5000 件 / cocoro 約 400 件 (session37 archive 参照) のため短時間で完了したが、**より大規模な本番データ (数十万件以上) の場合は数時間〜数日要する可能性あり**。クライアント事前通知の要否は対象環境のデータ量で再判断すべき。
+3. **`deploy-to-project.sh --rules` で `firestore:rules,indexes,storage` 全部対応** — Functions に変更なければ `--full` 不要、`--rules` で十分。今回 PR #392 は frontend + firestore.indexes.json のみのため `--rules` が最適。
+4. **`.env.local` バックアップ→復元はスクリプト trap で安全** — `trap cleanup EXIT` で異常終了時も復元される。既存 `.env.local` (dev用) を残したままデプロイ実行可能、復元も確実。後片付けで残骸ゼロを目視確認すべき (今回確認済)。
+5. **「dev デプロイ完了 ≠ クライアント反映完了」を意識する** — main push の CI 自動デプロイは dev のみ。クライアント環境は別途 `/deploy` 必要 ([feedback_goal_vs_setup_gap.md](../../memory/feedback_goal_vs_setup_gap.md) 系統の教訓に近い、技術的完了と業務目的達成の乖離)。
+
+### 反映機能 (PR #392 by session40)
+
+1. **ケアマネジャーフィルター** (書類一覧、期間カスタムと併用可)
+2. **期間「対象」のデフォルト「登録日」** (順序も入替)
+3. **書類詳細「処理日時」→「登録日」表記統一** (一覧と整合)
+
+### 後片付け確認
+
+- ✅ Firebase CLI: `hy.unimail.11@gmail.com` (dev) に復元
+- ✅ gcloud config: `doc-split / doc-split-dev` (dev) に復元
+- ✅ `frontend/.env.local`: `doc-split-dev` に自動復元
+- ✅ バックアップ残骸: なし
+
+### 次セッション以降の積み残し
+
+**1. `.claude/skills/deploy/SKILL.md` の cocoro 節更新** (本セッション Lessons Learned #1 反映、別 PR で対応):
+- L55-77 「cocoro（手動手順）」の「`deploy-to-project.sh` の認証チェックが SA を期待するため editor アカウントでは弾かれる場合がある。その場合は手動で実施」記述を、「`switch-client.sh cocoro` で gcloud を SA に切替済なら `deploy-to-project.sh cocoro --rules` で動作。手動 fallback は SA 切替を経由しなかった場合のみ」に更新
+- L148 「cocoro環境のdeploy-to-project.sh対応は今後の改善候補」記述も合わせて削除 or 「解決済（switch-client.sh 経由で動作）」に修正
+- 本 PR は LATEST.md スコープのため、SKILL.md 更新は別 PR で実施
+
+**2. アップデート/bugfix 対応継続** (session39 合意):
+- 既存 P2 Issue 3 件 (#299/#251/#238) は待機条件未充足のため待機継続 (session39/40 から変更なし)
+- 新規ユーザー要望/bugfix 着手時は `/catchup` 後に手元事象から判断
+
+---
 
 <a id="session40"></a>
 ## ✅ session40 完了サマリー (2026-04-26: ユーザー要望3点実装、PR #392 merged、Net 0、グローバル CLAUDE.md MUST line 13 追加 (別 AI 並行作業))
