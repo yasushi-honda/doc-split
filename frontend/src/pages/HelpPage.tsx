@@ -171,9 +171,9 @@ function UserGuide() {
           <li>顧客名</li>
           <li>書類タイプ</li>
           <li>事業所</li>
-          <li>書類日</li>
+          <li>書類日付</li>
+          <li>登録日</li>
           <li>ステータス</li>
-          <li>作成日時</li>
         </ul>
       </section>
 

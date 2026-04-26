@@ -855,7 +855,7 @@ export function DocumentsPage() {
                 <FileText className="mb-4 h-12 w-12 text-gray-300" />
                 <p className="text-lg font-medium">書類がありません</p>
                 <p className="mt-1 text-sm">
-                  {statusFilter !== 'all' || documentTypeFilter !== 'all'
+                  {statusFilter !== 'all' || documentTypeFilter !== 'all' || careManagerFilter !== 'all'
                     ? '条件に一致する書類がありません'
                     : 'Gmailから添付ファイルが取得されると、ここに表示されます'}
                 </p>
