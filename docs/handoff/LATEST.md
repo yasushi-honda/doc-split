@@ -1,8 +1,67 @@
 # ハンドオフメモ
 
-**更新日**: 2026-04-27 session45 (**ユーザー要望「ファックス内容変更で担当CM変更」完遂: PR #406 マージ完了 (`2ac9dae`)、escape hatch 実行、Net 0**。AI が hook ブロック後に bypass 手段 (Bash bypass / GitHub UI を AI が呼ぶ / hook 改修 / 「AI はマージしない」/ rename / gh api 迂回 / `exit 2 → ask` 改修 / scope 分割) を計 7 種提案して全て 4 原則違反として却下、メタAIアドバイスで認識整理 → CLAUDE.md「AI 駆動開発 4 原則」追加 + memory 2 件整理 + 実例 4 追記。最終的にユーザーが escape hatch (人間 push) で完遂、AI は bypass 提案を停止して待機できた。検証は localhost + Playwright MCP × 5 枚スクショ。)
-**ブランチ**: main (clean、PR #406 merged: 2ac9dae、escape hatch 実行)
-**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + Phase 2 (#181-#183) + Phase 3 (#188-#190) + Phase 5 (#339/#340/#332/#335) + Phase 6 (#346/#343/#344/#331/#333/#262) + Phase 7 (#338) + Phase 8 (session29 = #334/#196) + Phase 8 (session30 = #360 rescue observability + #358 backfill test lock-in) + Phase 8 (session31 = #365 backfill counter 分割 + #364 rescue per-doc catch test) + Phase 8 (session32 = #370 fatal 分岐 safeLogError 二重呼出防止 test) + Phase 8 (session33 = #200 Gmail/Split 統合テスト + #251 Scope 2 summaryPromptBuilder 分離) + Phase 8 (session34 = #375 Gmail reimportPolicy pure helper 抽出 + #237 tokenizer 3 箇所共通化) + Phase 8 (session35 = Issue triage-only、close 忘れ 1 件整理 = #220) + Phase 8 (session36 = #239 force-reindex audit log + #152 close、新規 #384 起票) + Phase 8 (session37 = #384 完遂、新規 #387 起票) + Phase 8 (session38 = #387 完遂、Net -1) + Phase 8 (session39 = triage-only、Net 0、update/bugfix 移行合意) + Phase 8 (session40 = PR #392 merged: CMフィルター + 期間/表記統一、Net 0、hook ループ教訓 → グローバル MUST line 13 追加) + Phase 8 (session41 = PR #392 を kanameone/cocoro に展開完了、indexes 全 READY、Net 0) + Phase 8 (session42 = Issue #396 完遂: 編集保存時の確定フラグバグ修正、PR #397 merged + 3 環境展開、observability #398 起票で Net 0) + Phase 8 (session43 = ユーザー要望「検索結果が新しい日付が上に」完遂: PR #400 merged + 3 環境展開、フォローアップ Issue #401/#402 起票で Net +2) + Phase 8 (session44 = Issue #401 完遂: searchDocuments handler 統合テスト追加、PR #404 merged + dev 自動デプロイ、Net -1) + **Phase 8 (session45 = ユーザー要望「ファックス内容変更で担当CM変更」完遂: PR #406 merged via escape hatch、Net 0、AI 駆動 4 原則追加 + memory 整理)** 完遂
+**更新日**: 2026-04-28 session46 (**PR #407 merged 確定 (`b999d72`、session45 ハンドオフ docs) + ~/.claude (claude-code-config) で PR #167 merged: hook 撤去後 memory 追従 + 予防策追加、Net 0**。doc-split コード/設定変更なしの memory 整理セッション。AI 駆動 4 原則は現状維持決定 (3 ヶ月後 = 2026-07-末レビュー予定)。リモート agent 化は手間/効果バランスで見送り、memory 記録 + マルチデバイス同期で代替。)
+**ブランチ**: main (clean、PR #407 merged で session45 ハンドオフ確定)
+**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + Phase 2 (#181-#183) + Phase 3 (#188-#190) + Phase 5 (#339/#340/#332/#335) + Phase 6 (#346/#343/#344/#331/#333/#262) + Phase 7 (#338) + Phase 8 (session29 = #334/#196) + Phase 8 (session30 = #360 rescue observability + #358 backfill test lock-in) + Phase 8 (session31 = #365 backfill counter 分割 + #364 rescue per-doc catch test) + Phase 8 (session32 = #370 fatal 分岐 safeLogError 二重呼出防止 test) + Phase 8 (session33 = #200 Gmail/Split 統合テスト + #251 Scope 2 summaryPromptBuilder 分離) + Phase 8 (session34 = #375 Gmail reimportPolicy pure helper 抽出 + #237 tokenizer 3 箇所共通化) + Phase 8 (session35 = Issue triage-only、close 忘れ 1 件整理 = #220) + Phase 8 (session36 = #239 force-reindex audit log + #152 close、新規 #384 起票) + Phase 8 (session37 = #384 完遂、新規 #387 起票) + Phase 8 (session38 = #387 完遂、Net -1) + Phase 8 (session39 = triage-only、Net 0、update/bugfix 移行合意) + Phase 8 (session40 = PR #392 merged: CMフィルター + 期間/表記統一、Net 0、hook ループ教訓 → グローバル MUST line 13 追加) + Phase 8 (session41 = PR #392 を kanameone/cocoro に展開完了、indexes 全 READY、Net 0) + Phase 8 (session42 = Issue #396 完遂: 編集保存時の確定フラグバグ修正、PR #397 merged + 3 環境展開、observability #398 起票で Net 0) + Phase 8 (session43 = ユーザー要望「検索結果が新しい日付が上に」完遂: PR #400 merged + 3 環境展開、フォローアップ Issue #401/#402 起票で Net +2) + Phase 8 (session44 = Issue #401 完遂: searchDocuments handler 統合テスト追加、PR #404 merged + dev 自動デプロイ、Net -1) + Phase 8 (session45 = ユーザー要望「ファックス内容変更で担当CM変更」完遂: PR #406 merged via escape hatch、Net 0、AI 駆動 4 原則追加 + memory 整理) + **Phase 8 (session46 = PR #407 merged 確定 + ~/.claude memory 整理 (PR #167)、Net 0、4 原則現状維持・2026-07-末レビュー予定)** 完遂
+
+<a id="session46"></a>
+## ✅ session46 完了サマリー (2026-04-28: PR #407 merged 確定 + ~/.claude memory 整理、Net 0、4 原則レビュー予定 2026-07-末)
+
+session45 ハンドオフ docs (PR #407) のマージ確定 + グローバル `~/.claude` (claude-code-config) リポジトリ側の memory 整理セッション。doc-split のコード/設定変更なし。
+
+### Issue Net 変化
+
+| 項目 | 内容 |
+|------|------|
+| Close 数 | 0 件 |
+| 起票数 | 0 件 |
+| **Net 変化 (session46 単独)** | **0 件** (doc-split コード変更なしの memory 整理セッション、Issue 化基準 [実害/再現バグ/CI破壊/rating≥7/明示指示] を満たす作業なし) |
+
+### PR / 主要成果
+
+| PR | リポジトリ | 内容 | merged commit |
+|----|-----------|------|---------------|
+| **doc-split #407** | doc-split | docs: session45 handoff | `b999d72` |
+| **claude-code-config #167** | ~/.claude | hook 撤去後 memory 追従 + 予防策追加 (PR #164/#165 follow-up) | `a0cd6be` |
+
+### ~/.claude 側の整理内容（PR #167）
+
+1. **memory 不整合修正** (A): `MEMORY.md` 索引の「（hook 化済）」表記、`feedback_no_direct_push_main.md` の「CLAUDE.md CRITICAL 最終行」位置参照を削除/§4 説明に統合
+2. **予防策追加** (B): `feedback_safety_hook_self_modification.md` 末尾に MUST 2 つ追加
+   - hook 撤去/変更 PR と同セッションで関連 memory grep + 同 commit 化
+   - CLAUDE.md/rules/memory で位置参照（"CRITICAL 最終行"/"§N"等）禁止、内容参照に統一
+3. **4 原則レビュー予定**: 2026-07-末に grep + git log 手動レビュー（5-10 分想定）を memory 化。リモート agent (`/schedule`) 化は GitHub App セキュリティ判断 + setup 手間 vs 手動レビュー 5-10 分のバランスで見送り、memory 記録 + マルチデバイス同期で代替
+
+### AI 駆動 4 原則 運用継続方針 (本セッション確定)
+
+| 観点 | 判断 |
+|------|------|
+| 短期〜中期 (3 ヶ月以内) | **現状維持**（A 案、CLAUDE.md 冒頭に維持） |
+| レビュータイミング | 2026-07-末（session45 から 3 ヶ月後） |
+| レビュー観点 | (a) 再発有無 [bypass 提案/escape hatch 常用化] (b) 機能/不発の場面 (c) 段階的簡略化の可否 |
+| 評価ファイル | `~/.claude/memory/feedback_safety_hook_self_modification.md` 末尾「AI 駆動開発 4 原則のレビュー予定」セクション |
+| 撤去判断 | 非推奨（physical hook なし + 規範なし = 歯止め全消失リスク） |
+
+### doc-split 視点での影響
+
+- コード/設定/ドキュメントへの変更: **ゼロ**
+- session45 で追加された CLAUDE.md AI 駆動 4 原則は doc-split でも継続適用（プロジェクト CLAUDE.md より上位の global ルール）
+- doc-split `.claude/hooks/ui-change-merge-check.sh` は維持（UI 変更時の dev 確認強制、4 原則 §2「立ち止まれの合図」と整合）
+
+### 次セッション着手候補
+
+| 候補 | 内容 | 優先度 |
+|------|------|-------|
+| LATEST.md アーカイブ | 562 → 500 行以下、session30 系の古いセクションを `archive/2026-04.md` に移動 | 中（500 行目標超過警告） |
+| Issue #402 | searchDocuments OOM ガード + latency/read 計測ログ (PR #400 follow-up) | 中 |
+| Issue #398 | 確定フラグ書き込みを editLogs に記録 (#396 follow-up) | 中 |
+
+### 教訓 (本セッション)
+
+1. **別プロジェクトコンテキストから別リポジトリへの作業は技術的に可能だが、cwd 移動を毎 Bash で明示する必要がある** — `Shell cwd was reset to ...` で都度戻る。git identity が共通なら混同なし
+2. **hook 撤去・変更時は memory 追従を必ず同セッション内で実施** — PR #164/#165 で hook 撤去・規範化を完了したつもりが、memory 索引の「（hook 化済）」表記と「CLAUDE.md CRITICAL 最終行」位置参照の追従が漏れていた（翌日 session46 で偶発検出）
+3. **位置参照（"CRITICAL 最終行" / "§N"）は memory に書かない** — CLAUDE.md は更新で位置がずれる。検索可能な固定文字列（実文言の引用）にする
+4. **リモート agent (`/schedule`) のコスパ判断**: GitHub App 接続のセキュリティ判断 + setup 5-10 分 vs 手動レビュー 5-10 分の場合、memory 記録 + マルチデバイス同期で十分代替できる
 
 <a id="session45"></a>
 ## ✅ session45 完了サマリー (2026-04-27: ユーザー要望「担当CM変更」完遂、PR #406 merged via escape hatch、AI 駆動 4 原則追加)
