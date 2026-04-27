@@ -3122,3 +3122,129 @@ PR #199 (Gmail 重複取得の根本対策) に不足していたテストを #2
 - **Net**: 0 件 (機械的には進捗ゼロ扱い)
 - **実質評価**: #375 は review agent rating 7 / confidence 85% の triage 基準適格起票、#200 完遂で Gmail 重複取得対策の critical path test coverage +22 cases 向上、#251 Scope 2 完了 (partial progress、Issue close せず body update で運用)
 
+
+
+<a id="session38"></a>
+## ✅ session38 完了サマリー (2026-04-23: #387 完遂、PR #389 merged、Net -1)
+
+session37 で起票した P2 enhancement #387 (force-reindex entrypoint の invariant を unit test で lock-in) を完遂。IIFE `(async () => { ... })()` を `runEntrypoint(deps)` 関数として切り出し、DI 可能化。7 シナリオ (success / main throw / flush throw / emitFailureEvent throw / main+flush 複合 / projectId 未設定 + stringify throw / projectId 未設定 fallback) で #386 review I1/I2 invariant を lock-in。`/review-pr` 6 エージェント並列で rating ≥ 7 findings 3 件を検出し 2 commit 目で全反映 (I3 文言修正 / 複合シナリオ追加 / fallback silent loss 修正)。Issue Net **-1** で KPI 達成。
+
+### PR 一覧
+
+| PR | 内容 | closed Issues | merged commit |
+|----|------|--------------|--------------|
+| **#389** | test(scripts): force-reindex.js runEntrypoint の invariant を 7 シナリオで lock-in (2 commits: 初版 + /review-pr findings 反映) | #387 | `d081121` |
+
+### 主要成果
+
+| 項目 | 内容 |
+|------|------|
+| **merged PR** | 1 本 (#389、2 commits) |
+| **closed Issue** | #387 (1 件、auto-close 成功) |
+| **新規 Issue** | 0 件 (silent-failure Finding 1 は PR body に follow-up 明記、起票は保留) |
+| **Issue Net 変化** | Close 1 / 起票 0 = **-1** (KPI 達成) |
+| **functions/ test** | 805 → **812 passing** (+7: runEntrypoint 7 シナリオ) |
+| **コード量** | 2 ファイル / +411/-55 (force-reindex.js: +84/-55 の entrypoint 関数化 + fallback 強化、forceReindexEntrypoint.test.ts: +327 新規) |
+
+### ロック対象 invariant
+
+| # | invariant | test |
+|---|-----------|------|
+| I1 | `process.exitCode` は flush 呼び出しより先に設定 (flush throw でも反映) | "flush throw (success 後)" |
+| I2 | `emitFailureEvent` も try/catch で包む (FATAL audit log silent loss 防止) | "emitFailureEvent throw" |
+| — | main throw + flush throw 複合時の exitCode guard (`if (process.exitCode === EXIT_OK)`) | "main throw + flush throw" |
+| — | projectId 未設定 + stringify throw 時の original error 出力 (silent loss 防止) | "projectId 未設定 + stringify throw" |
+
+**I3 (初期値 `EXIT_PRECONDITION`) は defensive fallback として保持のみ** — 現行制御フローでは catch 先頭で `EXIT_PARTIAL_FAILURE` に上書きされるため observable でなく、assertion 対象外。
+
+### Quality Gate 実施記録
+
+| ステージ | 内容 | 結果 |
+|---|---|---|
+| 計画 | Issue #387 の受け入れ基準 (4 シナリオ + 既存 805 passing 維持 + I1/I2/I3 assertion) を確認し直接実装へ | skip `/impl-plan`（Issue 記述が計画代替） |
+| `/simplify` 3並列 | reuse / quality / efficiency | Quality rating 6 × 2 (save/restore 集約 → `withProcessSandbox`、stringly-typed → `EVENTS`/`SEVERITIES` 参照) を反映。Reuse rating 7 (captureOutput helpers/ 昇格) は scope 拡大で別 PR 候補 |
+| `/review-pr` 6エージェント並列 | code-reviewer / pr-test-analyzer / silent-failure-hunter / comment-analyzer / (type-design, simplifier は対象外) | Critical 2 + silent-failure 7 相当 1 を 2 commit 目で反映: I3 文言修正 + 複合シナリオ追加 + fallback original error 出力 |
+
+### 設計判断 / Lessons Learned (本セッション重要知見)
+
+1. **Invariant lock-in test は「宣言」と「実効範囲」を一致させる必要がある** — 初版 PR body で「I3 lock-in」と宣言したが、実装上は初期値 `EXIT_PRECONDITION` が catch 先頭で即上書きされるため observable でなく、test で検証できていなかった (code-reviewer rating 8 / conf 90)。宣言を「defensive fallback として保持」に修正し、lock-in 対象からは外した。→ [feedback_invariant_declaration_vs_reality.md](../../memory/feedback_invariant_declaration_vs_reality.md) 相当の教訓。
+2. **BigInt で JSON.stringify を確実に throw させる** — `error.code: BigInt(42)` を仕込むと `JSON.stringify` は "Do not know how to serialize a BigInt" で throw する。circular reference は primitive のみ抜き出す object では発動せず、stringify throw の test には不向き。
+3. **`/review-pr` findings の triage は 2 段ゲート** — rating ≥ 7 かつ conf ≥ 80 で修正必須、5-6 は PR コメント扱い。silent-failure-hunter が self-assessed で "rating 6→7 相当" と明記した項目は本 PR 趣旨 (silent loss 防止) と一致する場合は 7 として扱う判断が有効。
+4. **複数 findings の同時反映時、scope 拡大判断を明示する** — reuse rating 7 の `captureOutput` helpers/ 昇格は `forceReindexAudit.test.ts` への波及で scope 拡大するため別 PR 候補として PR body に明記。silent-failure Finding 1 (EPIPE 耐性 / `_safeWriteStderr` 横展開) も同様に別 PR 候補として保留。
+
+### 別 Issue / follow-up PR 候補 (PR #389 で明記、Issue 起票は保留)
+
+| rating / conf | 指摘 | 扱い |
+|---|---|---|
+| 6→7 / 85 | bare `console.error` の EPIPE 耐性 (`_safeWriteStderr` 横展開) | scope 拡大のため別 PR 推奨、Issue 起票は KPI 観点で保留 |
+| 7 / 95 | `captureOutput` (forceReindexAudit.test.ts) の helpers/ 昇格 | 他ファイル波及で別 PR |
+| 6 / 85 | emitFailure 引数 payload (`.error`, `.auditCtx`) の assertion 不足 | follow-up commit 候補 |
+| 5-6 / 70-80 | Issue 番号参照コメント圧縮、JSDoc/inline 重複 | PR コメント扱い (confidence 閾値ギリギリ未満) |
+
+---
+
+<a id="session37"></a>
+## ✅ session37 完了サマリー (2026-04-23: #384 完遂、PR #386 merged + 新規 #387 起票で Net 0)
+
+session36 で起票した P1 bug #384 (force_reindex audit log が Cloud Logging に書き込まれていない問題) を完遂。`@google-cloud/logging` の `Log.write()` async batch dispatch が `process.exit()` で drop される根本原因を特定。3 並列 Agent で 3 仮説を検証 (gRPC drop 確定、SA 権限 OK、resource:global OK) し、`process.exitCode` + `flushAndCloseLogging()` (gRPC channel graceful close) + `try/finally` 統合で修正。`/review-pr` 6 エージェント並列で silent-failure-hunter Critical 2 + Important 3 を反映、Codex セカンドオピニオン Approve。3 環境 (dev/kanameone/cocoro) で実 Cloud Logging 受信を実証。
+
+### PR 一覧
+
+| PR | 内容 | closed Issues | merged commit |
+|----|------|--------------|--------------|
+| **#386** | fix(scripts): force-reindex audit log の Cloud Logging 反映問題を修正 (process.exitCode + LoggingServiceV2Client.close + try/finally + silent failure 排除) | #384 | `1118ddd` |
+
+### 主要成果
+
+| 項目 | 内容 |
+|------|------|
+| **merged PR** | 1 本 (#386) |
+| **closed Issue** | #384 (1 件、auto-close 成功) |
+| **新規 follow-up Issue** | #387 (entrypoint test、pr-test-analyzer rating 7 + Codex follow-up #1 = triage 基準 #4 該当) |
+| **Issue Net 変化** | Close 1 / 起票 1 = **0** (KPI 進捗ゼロ扱い、ただし P1 bug 真の解決は達成) |
+| **functions/ test** | 797 → **805 passing** (+8: flushAndCloseLogging 7 cases + 同期 throw 1 case) |
+| **コード量** | 3 ファイル / +275/-27 (auditLogger.js: +71, force-reindex.js: +88/-27, auditLogger.test.ts: +143) |
+| **実 Cloud Logging 受信実証** | dev (run_id 24815729133, 24816478814) + kanameone (24816768269: processed=4561, drifted=27) + cocoro (24816770503: processed=385, drifted=0) |
+
+### 根本原因と修正方針
+
+| 仮説 | 検証結果 | 採否 |
+|---|---|---|
+| 1. gRPC async batch write の drop | 公式は serverless 環境で `LogSync` または明示的 channel close を推奨。`process.exit` で event loop 即時停止 = in-flight gRPC drop | ✅ 確定 |
+| 2. SA `roles/logging.logWriter` 権限不足 | `docsplit-cloud-build@doc-split-dev` に付与済 (IAM policy 確認) | ❌ 否定 |
+| 3. `resource: { type: 'global' }` silent reject | `global` は valid な monitored resource type、known issue なし | ❌ 否定 |
+
+### Quality Gate 実施記録
+
+| ステージ | 内容 | 結果 |
+|---|---|---|
+| `/impl-plan` | Plan A 承認 (process.exitCode + gRPC close + try/finally) | AC 6 件定義 |
+| `/simplify` 3並列 | reuse / quality / efficiency | Quality High (try/finally 統合) + Medium (logging?. 過剰防御除去) を反映 |
+| `/safe-refactor` | DRY/未使用/複雑度/命名/型/エラー処理 | 全項目クリア |
+| `/review-pr` 6エージェント並列 | code-reviewer / pr-test-analyzer / silent-failure-hunter / type-design-analyzer / comment-analyzer / code-simplifier | silent-failure-hunter Critical 2 + Important 3 を本 PR で反映、I-1 (entrypoint test) は #387 で follow-up |
+| `/codex review` セカンドオピニオン | gpt-5.2 (gpt-5.2-codex 不可 → fallback) | **Approve** (High/Medium 追加指摘なし) |
+
+### 設計判断 / Lessons Learned (本セッション重要知見)
+
+1. **`@google-cloud/logging` v11 の `Log.write()` は内部 gRPC stream で async batch dispatch する** → `await` で resolve しても in-flight が残る。`process.exit()` で event loop を即時停止すると drop される。Cloud Logging 公式は serverless 環境で `LogSync` または明示的な channel close (`LoggingServiceV2Client.close()`) を推奨。
+
+2. **Node.js 標準パターン: `process.exit(N)` ではなく `process.exitCode = N` + return** で event loop が natural drain する。`process.exit()` を呼ばない場合、in-flight Promise / gRPC stream / file handle 等が完了するまで Node が待つ。
+
+3. **silent failure の排除は fail-open invariant と両立する**: `Promise.resolve(...).catch(() => {})` の空 catch は silent failure。`_safeWriteStderr(JSON.stringify({event, projectId, errorMessage, ...}))` で診断情報を必ず残しつつ、本体終了は止めない設計が公式の `_failOpen` パターンと整合 (今回 LOGGING_CLOSE_FAILED / LOGGING_CLOSE_UNAVAILABLE event を新設)。
+
+4. **try/finally で flush 統合**: `then`/`catch` の両方に同じ flush 呼び出しを書くと、then 内 throw 時に flush 漏れが発生し得る。try/finally + `process.exitCode` を flush より先に設定することで、flush throw でも exit code 反映を保証。
+
+5. **同期 throw 対応**: `Promise.resolve(syncThrowingFn())` は sync throw を Promise reject に変換しない (`syncThrowingFn()` の評価で外側に throw)。`Promise.resolve().then(syncThrowingFn).catch()` で sync throw も catch 可能。
+
+6. **library internal property への依存はリスクを stderr 出力で可視化**: `loggingService` は `@google-cloud/logging` v11 の internal property だが public な `Logging.close()` がないため唯一の graceful shutdown 経路。v12 で rename されると silent skip リスクあるため `LOGGING_CLOSE_UNAVAILABLE` event で API drift を検知可能に。
+
+7. **Issue Net 0 の正当性判断**: rating 7+ confidence 80+ の review 指摘 (entrypoint test) は CLAUDE.md triage 基準 #4 を満たす正当な Issue 化。Net 0 は KPI 進捗ゼロ扱いだが、P1 bug 完遂と引き換えに entrypoint refactor を別 Issue 化する判断は技術的に妥当。
+
+### 次セッション着手候補 (open Issues)
+
+- #387 (今回起票): force-reindex.js entrypoint (try/finally + process.exitCode + flushAndCloseLogging) を export して unit test でカバー (P2)
+- #251: summaryGenerator unit test 追加 + buildSummaryPrompt 別モジュール分離 (P2)
+- #299: capPageResultsAggregate 動的 safeLogError invocation test (ts-node/esm 環境整備込み、P2)
+- #238: force-reindex に孤児 posting 検出モード追加 (P2)。**今セッションで kanameone に drift 27 件検出 → 関連性高い**
+
+---
