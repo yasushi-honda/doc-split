@@ -8,7 +8,7 @@ import { format } from 'date-fns'
 import { ja } from 'date-fns/locale'
 import { Timestamp, doc as firestoreDoc, updateDoc } from 'firebase/firestore'
 import { ref, getDownloadURL } from 'firebase/storage'
-import { Download, ExternalLink, Loader2, FileText, User, UserCheck, Building, Calendar, Tag, AlertCircle, Scissors, Pencil, Save, X, BookMarked, History, ChevronUp, ChevronDown, Sparkles, RefreshCw, CheckCircle, XCircle, Trash2 } from 'lucide-react'
+import { Download, ExternalLink, Loader2, FileText, User, UserCheck, Building, Calendar, Tag, AlertCircle, Info, Scissors, Pencil, Save, X, BookMarked, History, ChevronUp, ChevronDown, Sparkles, RefreshCw, CheckCircle, XCircle, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { db, storage } from '@/lib/firebase'
 import { callFunction } from '@/lib/callFunction'
@@ -1054,6 +1054,15 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                 {verifyError && (
                   <div className="mb-4 hidden md:block rounded bg-red-50 p-2 text-xs text-red-600">
                     {verifyError}
+                  </div>
+                )}
+
+                {isEditing && (
+                  <div className="mb-4 flex gap-2 rounded border border-blue-200 bg-blue-50 p-2 text-xs text-blue-700">
+                    <Info className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+                    <span>
+                      ここでの編集は、この書類個別の記録のみ更新します。顧客・事業所・書類種別・担当ケアマネのマスタは変更されません。
+                    </span>
                   </div>
                 )}
 
