@@ -10,7 +10,11 @@
 
 import { expect } from 'chai';
 import type { firestore } from 'firebase-admin';
-import { compareSearchResults, type SortableSearchDoc } from '../src/search/sortSearchResults';
+import {
+  compareSearchResults,
+  safeToMillis,
+  type SortableSearchDoc,
+} from '../src/search/sortSearchResults';
 
 const baseData: firestore.DocumentData = {};
 
@@ -194,5 +198,70 @@ describe('searchDocuments: compareSearchResults', () => {
       arr.sort(compareSearchResults);
       expect(arr.map(d => d.docId)).to.deep.equal(['b', 'a']);
     });
+  });
+});
+
+describe('searchDocuments: safeToMillis', () => {
+  // console.warn の出力をテストごとに抑制
+  let originalWarn: typeof console.warn;
+  let warnCalls: unknown[][];
+  beforeEach(() => {
+    originalWarn = console.warn;
+    warnCalls = [];
+    console.warn = (...args: unknown[]) => { warnCalls.push(args); };
+  });
+  afterEach(() => {
+    console.warn = originalWarn;
+  });
+
+  it('Timestamp 風オブジェクトは toMillis() の値を返す', () => {
+    const ts = { toMillis: () => 1730000000000 };
+    expect(safeToMillis(ts, 'doc1', 'fileDate')).to.equal(1730000000000);
+    expect(warnCalls.length).to.equal(0);
+  });
+
+  it('null は null を返し warn なし', () => {
+    expect(safeToMillis(null, 'doc1', 'fileDate')).to.be.null;
+    expect(warnCalls.length).to.equal(0);
+  });
+
+  it('undefined は null を返し warn なし', () => {
+    expect(safeToMillis(undefined, 'doc1', 'fileDate')).to.be.null;
+    expect(warnCalls.length).to.equal(0);
+  });
+
+  it('文字列は null を返し warn を出す（旧データ防御）', () => {
+    expect(safeToMillis('2026-04-27', 'doc1', 'fileDate')).to.be.null;
+    expect(warnCalls.length).to.equal(1);
+    expect(String(warnCalls[0]![0])).to.include('not a Timestamp');
+  });
+
+  it('plain object（toMillis なし）は null を返し warn を出す', () => {
+    expect(safeToMillis({ seconds: 100 }, 'doc1', 'fileDate')).to.be.null;
+    expect(warnCalls.length).to.equal(1);
+  });
+
+  it('Date インスタンスは null を返し warn を出す', () => {
+    expect(safeToMillis(new Date(), 'doc1', 'fileDate')).to.be.null;
+    expect(warnCalls.length).to.equal(1);
+  });
+
+  it('toMillis() が例外を投げても catch して null + warn', () => {
+    const broken = {
+      toMillis: () => {
+        throw new Error('corrupted timestamp');
+      },
+    };
+    expect(safeToMillis(broken, 'doc1', 'fileDate')).to.be.null;
+    expect(warnCalls.length).to.equal(1);
+    expect(String(warnCalls[0]![0])).to.include('toMillis() failed');
+  });
+
+  it('docId と field 名は warn ログに含まれる', () => {
+    safeToMillis('bad', 'doc-abc', 'processedAt');
+    expect(warnCalls.length).to.equal(1);
+    const logContext = warnCalls[0]![1] as { docId: string };
+    expect(logContext.docId).to.equal('doc-abc');
+    expect(String(warnCalls[0]![0])).to.include('processedAt');
   });
 });

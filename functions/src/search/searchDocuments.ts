@@ -15,7 +15,11 @@ import {
   FIELD_WEIGHTS,
   type TokenField,
 } from '../utils/tokenizer';
-import { compareSearchResults, type SortableSearchDoc } from './sortSearchResults';
+import {
+  compareSearchResults,
+  safeToMillis,
+  type SortableSearchDoc,
+} from './sortSearchResults';
 
 const db = getFirestore();
 
@@ -266,17 +270,29 @@ export const searchDocuments = onCall<SearchRequest>(
     const allDocSnapshots = await db.getAll(...allDocRefs);
 
     const sortableDocs: SortableSearchDoc[] = [];
+    const orphanedDocIds: string[] = [];
     for (let i = 0; i < filteredDocs.length; i++) {
       const snapshot = allDocSnapshots[i]!;
-      if (!snapshot.exists) continue; // 削除済み等は除外
+      const docId = filteredDocs[i]!.docId;
+      if (!snapshot.exists) {
+        // search_index に posting が残っているが documents 側で削除済み（孤児）
+        orphanedDocIds.push(docId);
+        continue;
+      }
       const data = snapshot.data()!;
       sortableDocs.push({
-        docId: filteredDocs[i]!.docId,
+        docId,
         score: filteredDocs[i]!.score,
-        fileDateMs: data.fileDate?.toMillis() ?? null,
-        processedAtMs: data.processedAt?.toMillis() ?? 0,
+        fileDateMs: safeToMillis(data.fileDate, docId, 'fileDate'),
+        processedAtMs: safeToMillis(data.processedAt, docId, 'processedAt') ?? 0,
         data,
       });
+    }
+    if (orphanedDocIds.length > 0) {
+      console.warn(
+        `[searchDocuments] Orphaned index entries detected: ${orphanedDocIds.length}/${filteredDocs.length}`,
+        { query, sampleDocIds: orphanedDocIds.slice(0, 10) }
+      );
     }
 
     // 多段ソート: fileDate desc nulls last → score desc → processedAt desc → docId asc

@@ -20,6 +20,35 @@ export interface SortableSearchDoc {
 }
 
 /**
+ * Firestore Timestamp を ms に安全変換する。
+ *
+ * 旧データ・手動投入・マイグレーション中間状態で `fileDate` 等が
+ * Timestamp 以外（string/Date/plain object 等）になっている場合、
+ * 直接 `.toMillis()` を呼ぶと TypeError で検索全体が 500 落ちする。
+ * 例外を握りつぶして null を返し、warn ログのみ残す。
+ */
+export function safeToMillis(value: unknown, docId: string, field: string): number | null {
+  if (value == null) return null;
+  const candidate = value as { toMillis?: () => number };
+  if (typeof candidate.toMillis !== 'function') {
+    console.warn(`[searchDocuments] ${field} is not a Timestamp`, {
+      docId,
+      type: typeof value,
+    });
+    return null;
+  }
+  try {
+    return candidate.toMillis();
+  } catch (e) {
+    console.warn(`[searchDocuments] toMillis() failed for ${field}`, {
+      docId,
+      error: String(e),
+    });
+    return null;
+  }
+}
+
+/**
  * 検索結果のソート比較関数
  */
 export function compareSearchResults(a: SortableSearchDoc, b: SortableSearchDoc): number {
