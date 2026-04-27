@@ -15,6 +15,11 @@ import {
   FIELD_WEIGHTS,
   type TokenField,
 } from '../utils/tokenizer';
+import {
+  compareSearchResults,
+  safeToMillis,
+  type SortableSearchDoc,
+} from './sortSearchResults';
 
 const db = getFirestore();
 
@@ -253,41 +258,58 @@ export const searchDocuments = onCall<SearchRequest>(
       .filter(([, data]) => data.matchedWords.size === requiredWordCount)
       .map(([docId, data]) => ({ docId, score: data.score }));
 
-    // スコア順にソート
-    filteredDocs.sort((a, b) => b.score - a.score);
-
-    // ページネーション
-    const total = filteredDocs.length;
-    const paginatedDocs = filteredDocs.slice(offset, offset + limit);
-
-    if (paginatedDocs.length === 0) {
+    if (filteredDocs.length === 0) {
       const result: SearchResult = { documents: [], total: 0, hasMore: false };
       setCache(cacheKey, result);
       return result;
     }
 
-    // ドキュメント情報を取得
-    const docRefs = paginatedDocs.map(d => db.collection('documents').doc(d.docId));
-    const docSnapshots = await db.getAll(...docRefs);
+    // マッチ全件の documents を取得（fileDate / processedAt をソートキーに使用するため）
+    // db.getAll() の戻り順は ref 渡し順と一致するため、filteredDocs と index で対応する
+    const allDocRefs = filteredDocs.map(d => db.collection('documents').doc(d.docId));
+    const allDocSnapshots = await db.getAll(...allDocRefs);
 
-    const documents: SearchResultDocument[] = [];
-    for (let i = 0; i < docSnapshots.length; i++) {
-      const snapshot = docSnapshots[i];
-      if (!snapshot.exists) continue;
-
+    const sortableDocs: SortableSearchDoc[] = [];
+    const orphanedDocIds: string[] = [];
+    for (let i = 0; i < filteredDocs.length; i++) {
+      const snapshot = allDocSnapshots[i]!;
+      const docId = filteredDocs[i]!.docId;
+      if (!snapshot.exists) {
+        // search_index に posting が残っているが documents 側で削除済み（孤児）
+        orphanedDocIds.push(docId);
+        continue;
+      }
       const data = snapshot.data()!;
-      const score = paginatedDocs[i]!.score;
-
-      documents.push({
-        id: snapshot.id,
-        fileName: data.fileName || '',
-        customerName: data.customerName || '',
-        officeName: data.officeName || '',
-        documentType: data.documentType || '',
-        fileDate: data.fileDate?.toDate?.()?.toISOString?.().split('T')[0] || null,
-        score: Math.round(score * 100) / 100,
+      sortableDocs.push({
+        docId,
+        score: filteredDocs[i]!.score,
+        fileDateMs: safeToMillis(data.fileDate, docId, 'fileDate'),
+        processedAtMs: safeToMillis(data.processedAt, docId, 'processedAt') ?? 0,
+        data,
       });
     }
+    if (orphanedDocIds.length > 0) {
+      console.warn(
+        `[searchDocuments] Orphaned index entries detected: ${orphanedDocIds.length}/${filteredDocs.length}`,
+        { query, sampleDocIds: orphanedDocIds.slice(0, 10) }
+      );
+    }
+
+    // 多段ソート: fileDate desc nulls last → score desc → processedAt desc → docId asc
+    sortableDocs.sort(compareSearchResults);
+
+    const total = sortableDocs.length;
+    const paginatedDocs = sortableDocs.slice(offset, offset + limit);
+
+    const documents: SearchResultDocument[] = paginatedDocs.map(({ docId, score, data }) => ({
+      id: docId,
+      fileName: data.fileName || '',
+      customerName: data.customerName || '',
+      officeName: data.officeName || '',
+      documentType: data.documentType || '',
+      fileDate: data.fileDate?.toDate?.()?.toISOString?.().split('T')[0] || null,
+      score: Math.round(score * 100) / 100,
+    }));
 
     const result: SearchResult = {
       documents,
