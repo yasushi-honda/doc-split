@@ -1,8 +1,83 @@
 # ハンドオフメモ
 
-**更新日**: 2026-04-27 session43 (**ユーザー要望「検索結果が新しい日付が上に」完遂、PR #400 merged + dev/kanameone/cocoro 全環境展開完了、Net +2**。kanameone ユーザー要望に対し検索ソートを `fileDate desc nulls last → score desc → processedAt desc → docId asc` に変更。`compareSearchResults` 関数を `sortSearchResults.ts` に切り出し、unit test 13 件追加。`/review-pr` 5 エージェント並列で C1 (docs 数値矛盾)/C2 (safeToMillis 防御)/C3 (孤児 index ログ) を反映、追加で safeToMillis test 8 件 = 計 833 件 PASS。Codex 3 回相談 (threadId 019dccc4)。フォローアップ Issue #401 (handler 統合テスト rating 7) + #402 (OOM ガード + 計測ログ rating 7) 起票で Net +2)
-**ブランチ**: main (clean、PR #400 merged: 9b19ea3、3 環境展開完了)
-**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + Phase 2 (#181-#183) + Phase 3 (#188-#190) + Phase 5 (#339/#340/#332/#335) + Phase 6 (#346/#343/#344/#331/#333/#262) + Phase 7 (#338) + Phase 8 (session29 = #334/#196) + Phase 8 (session30 = #360 rescue observability + #358 backfill test lock-in) + Phase 8 (session31 = #365 backfill counter 分割 + #364 rescue per-doc catch test) + Phase 8 (session32 = #370 fatal 分岐 safeLogError 二重呼出防止 test) + Phase 8 (session33 = #200 Gmail/Split 統合テスト + #251 Scope 2 summaryPromptBuilder 分離) + Phase 8 (session34 = #375 Gmail reimportPolicy pure helper 抽出 + #237 tokenizer 3 箇所共通化) + Phase 8 (session35 = Issue triage-only、close 忘れ 1 件整理 = #220) + Phase 8 (session36 = #239 force-reindex audit log + #152 close、新規 #384 起票) + Phase 8 (session37 = #384 完遂、新規 #387 起票) + Phase 8 (session38 = #387 完遂、Net -1) + Phase 8 (session39 = triage-only、Net 0、update/bugfix 移行合意) + Phase 8 (session40 = PR #392 merged: CMフィルター + 期間/表記統一、Net 0、hook ループ教訓 → グローバル MUST line 13 追加) + Phase 8 (session41 = PR #392 を kanameone/cocoro に展開完了、indexes 全 READY、Net 0) + Phase 8 (session42 = Issue #396 完遂: 編集保存時の確定フラグバグ修正、PR #397 merged + 3 環境展開、observability #398 起票で Net 0) + **Phase 8 (session43 = ユーザー要望「検索結果が新しい日付が上に」完遂: PR #400 merged + 3 環境展開、フォローアップ Issue #401/#402 起票で Net +2)** 完遂
+**更新日**: 2026-04-27 session44 (**Issue #401 完遂: searchDocuments handler 統合テスト追加、PR #404 merged + dev 自動デプロイ完了、Net -1**。PR #400 (session43) フォローアップとして handler 全体の統合テストを実装。AC1-AC8 + smoke = 14 it、`firebase-functions-test@3.4.1` の `wrap()` で onCall@v2 を直接 invoke。実装変更ゼロ (テスト追加のみ)。`/review-pr` 5 エージェント並列 + Codex review で **rating 7+ 指摘 11 件 (CRITICAL 1 + HIGH 10) を全件反映** (AC2 score-desc 偽陽性は 4 エージェント独立指摘で確定的、AC6 try/catch + expect.fail 二重バグも CRITICAL rating 9 で対応)。50/50 PASS、CI/Deploy success。)
+**ブランチ**: main (clean、PR #404 merged: 713982f、dev 自動デプロイ完了)
+**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + Phase 2 (#181-#183) + Phase 3 (#188-#190) + Phase 5 (#339/#340/#332/#335) + Phase 6 (#346/#343/#344/#331/#333/#262) + Phase 7 (#338) + Phase 8 (session29 = #334/#196) + Phase 8 (session30 = #360 rescue observability + #358 backfill test lock-in) + Phase 8 (session31 = #365 backfill counter 分割 + #364 rescue per-doc catch test) + Phase 8 (session32 = #370 fatal 分岐 safeLogError 二重呼出防止 test) + Phase 8 (session33 = #200 Gmail/Split 統合テスト + #251 Scope 2 summaryPromptBuilder 分離) + Phase 8 (session34 = #375 Gmail reimportPolicy pure helper 抽出 + #237 tokenizer 3 箇所共通化) + Phase 8 (session35 = Issue triage-only、close 忘れ 1 件整理 = #220) + Phase 8 (session36 = #239 force-reindex audit log + #152 close、新規 #384 起票) + Phase 8 (session37 = #384 完遂、新規 #387 起票) + Phase 8 (session38 = #387 完遂、Net -1) + Phase 8 (session39 = triage-only、Net 0、update/bugfix 移行合意) + Phase 8 (session40 = PR #392 merged: CMフィルター + 期間/表記統一、Net 0、hook ループ教訓 → グローバル MUST line 13 追加) + Phase 8 (session41 = PR #392 を kanameone/cocoro に展開完了、indexes 全 READY、Net 0) + Phase 8 (session42 = Issue #396 完遂: 編集保存時の確定フラグバグ修正、PR #397 merged + 3 環境展開、observability #398 起票で Net 0) + Phase 8 (session43 = ユーザー要望「検索結果が新しい日付が上に」完遂: PR #400 merged + 3 環境展開、フォローアップ Issue #401/#402 起票で Net +2) + **Phase 8 (session44 = Issue #401 完遂: searchDocuments handler 統合テスト追加、PR #404 merged + dev 自動デプロイ、Net -1)** 完遂
+
+<a id="session44"></a>
+## ✅ session44 完了サマリー (2026-04-27: Issue #401 完遂、PR #404 merged + dev 自動デプロイ、Net -1)
+
+session43 の PR #400 (検索結果ソート) の `/review-pr` で挙がった「searchDocuments handler 統合テスト不在 (rating 7)」フォローアップ Issue #401 を完遂。handler 全体の現状契約を最小スコープで fixate し、Issue #402 (OOM ガード + 計測ログ) で壊しやすい挙動を回帰検出可能にすることが目的。Codex 2 段階セカンドオピニオン (優先順位レビュー → 詳細計画レビュー、12 件改善反映) → impl-plan → 実装 → PR #404 → 5 エージェント並列レビュー + Codex review (11 件指摘) → 全件反映 → main マージ → dev 自動デプロイ完了。
+
+### Issue Net 変化
+
+| 項目 | 内容 |
+|------|------|
+| Close 数 | 1 件 (#401) |
+| 起票数 | 0 件 |
+| **Net 変化** | **-1 件** (KPI 進捗: Issue 削減方向、CLAUDE.md「net で減らすべき」基準達成) |
+
+### PR / 主要成果
+
+| PR | 内容 | merged commit |
+|----|------|---------------|
+| **#404** | test(search): searchDocuments handler の統合テスト追加 (Closes #401) | `713982f` |
+
+| 項目 | 内容 |
+|------|------|
+| **functions tests (整合性 = 既存 unit + 既存統合 + 新規統合)** | unit 含む全テスト 50/50 PASS (search 統合 14 + 既存統合 36)、所要 ~2 秒 |
+| **コード量** | 2 ファイル / +616/-1 (`functions/test/searchDocumentsIntegration.test.ts` 615 新規 / `functions/package.json` test:integration スクリプト +1) |
+| **実装変更** | **ゼロ** (テスト追加のみ。アプリの画面・操作・データ・API 全て不変) |
+| **デプロイ環境** | dev 自動デプロイのみ (CI / Deploy / pages build 全 success)。kanameone/cocoro はテスト追加のため展開不要 (運用判断) |
+
+### Acceptance Criteria (8 件 + smoke、全達成)
+
+- AC1: AND 検索 (全単語マッチのみ結果に含まれる)
+- AC2: 多段ソート 4 段 (fileDate desc → score desc → processedAt desc → docId asc) handler レベル整合
+- AC3: NULLS LAST (fileDate null は末尾、各群内は安定タイブレーク)
+- AC4: pagination 安定性 (limit/offset 重複なし、hasMore 切替、fullPage との一致)
+- AC5: orphan 除外 (search_index posting あるが documents 不在 → 結果・total から除外)
+- AC6: HttpsError 契約 (unauthenticated / permission-denied / invalid-argument の 6 分岐)
+- AC7: cache 経路 behavioral 検証 (Firestore 空 + users 再 seed でも cache 経由で同結果)
+- AC8: 壊れた fileDate (string/plain object) でも 500 落ちせず正常データを返す
+
+### `/review-pr` 5 エージェント + Codex review 指摘 (11 件、全件反映)
+
+| # | 重大度 | 内容 | 検出元 | 対応 commit |
+|---|--------|------|--------|-------------|
+| 1 | **CRITICAL (9)** | AC6 全 6 テストの try/catch が `expect.fail()` を catch + 任意 throw で偽合格 | silent-failure-hunter | `b7f2088`: `expectHttpsError` ヘルパー化 + `instanceof HttpsError` 厳密チェック |
+| 2 | HIGH (8) | AC7 cache 偽陰性 (db read 回数を spy していない) | pr-test-analyzer | `b7f2088`: Firestore 空 + users 再 seed パターンに変更、cache 経由を behavioral 検証 |
+| 3 | HIGH (8) | AC8 console.warn stub が brittle (seed 失敗時に状態リーク) | silent-failure-hunter | `b7f2088`: warn assertion を関数名パターンマッチ (/fileDate\|safeToMillis\|.../i) に強化 |
+| 4 | HIGH (8) | 存在しない AC9 への dangling reference | comment-analyzer | `b7f2088`: AC9 削除、Out-of-scope 根拠を PR 本文に整合 |
+| 5 | **HIGH (7)** | **AC2 score-desc 段が実質検証無効 (idf=0 + docId asc 偶発)** | **4 エージェント独立指摘** (pr-test-analyzer, code-reviewer, comment-analyzer, codex review) | `b7f2088`: 2-token AND + token 順 (df=100→df=2) で idf>0 を成立、score 差を反映、docId 命名で false-positive 防止、`score[0]>score[1]` sanity 追加 |
+| 6 | HIGH (7) | AC4 pagination 決定論性が弱 (fullPage 比較なし) | pr-test-analyzer | `b7f2088`: `fullPage = limit:10` 結果との一致 assert を追加 |
+| 7 | HIGH (7) | AC8 `warnCalls.length >= 2` が緩い (関係 warn でも合格) | silent-failure-hunter | `b7f2088`: 関数名パターンマッチで絞り込み |
+| 8 | HIGH (7) | callSearch の `as never` 二重キャストで型安全性無効 | silent-failure-hunter, codex review | `b7f2088`: `Parameters<typeof wrapped>[0]` 経由の型安全変換 |
+| 9 | HIGH (7) | AC3 ヘッダー説明が test 内コメントと矛盾 | comment-analyzer | `b7f2088`: ヘッダーを「各群内は安定タイブレーク; score desc は AC2 で検証」に修正 |
+| 10 | HIGH (7) | Codex Rxx 私的セッション ID が追跡不能 | comment-analyzer | `b7f2088`: 追跡可能な根拠説明に置換 |
+
+### Out of scope (本 PR で対応せず、フォローアップ整理)
+
+- raw query の PII ログ抑制 → #402 計測ログ整備時に同時対応
+- HttpsError('resource-exhausted') 検証 → #402 ガード実装と同時
+- 旧 posting フォーマット (postings.docId 形式) 互換性検証 → 別 Issue 化候補 (現 handler に互換コード残存)
+- read 回数の厳密固定 → #402 read 計測経路を変える余地を残す
+
+### 学習教訓 (memory 更新候補、次セッション初期に追加検討)
+
+- **AC6 try/catch + expect.fail 二重バグパターン**: `expect.fail()` を try ブロック内に置くと catch が AssertionError を拾い、混乱したエラーメッセージ + 任意 throw で偽合格になる。グローバル testing memory 候補
+- **複数エージェント独立指摘の信頼性**: AC2 score-desc 偽陽性が 4 エージェント独立で指摘された事例 → 「N-way 一致 = 確定的修正必須」のシグナル化
+- **module-scope cache の test 隔離**: searchDocuments の `cache = new Map` のような module-scope 状態は cleanup helper では解消できず、test 戦略 (一意 query / 状態を消して cache 経路を逆証明) で対処する必要
+
+### 残タスク
+
+- **次セッションで「ファックス内容変更で担当CMも変更」要件着手** (ユーザー要望、未着手・未 Issue 化、本セッション末尾で確認済)
+- フォローアップ #402 (OOM ガード + 計測ログ) は本番運用ログを 1-2 週間観測してから判断 (Codex 推奨)。session43 の継続方針
+
+### 次セッションへの引き継ぎ
+
+- ユーザー要望: **「ファックスの内容変更のところで、担当CMの変更もできないか？」** が新しい改修要件として待機中。次セッション開始時に対象画面 / 担当CM のソース (caremanagers マスタ?) / 既存 Issue 化の有無 を確認してから `/impl-plan` に入る
+- 残 open Issue 5 件は全て P2 enhancement (#402 / #398 / #299 / #251 / #238)。優先度は要望対応 > #402 (本番計測ログ先行可) の順
 
 <a id="session43"></a>
 ## ✅ session43 完了サマリー (2026-04-27: ユーザー要望「検索結果が新しい日付が上に」完遂、PR #400 merged + 3 環境展開、Net +2)
