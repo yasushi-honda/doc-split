@@ -1,8 +1,118 @@
 # ハンドオフメモ
 
-**更新日**: 2026-04-27 session41 (**PR #392 のクライアント環境展開完了、Issue Net 0**。session40 で「次セッション以降の積み残し」として明記された kanameone/cocoro への hosting + firestore:indexes 反映を `/deploy` スキル定義 + `switch-client.sh` + `deploy-to-project.sh --rules` 構成で順次実行。両環境の careManager 関連 indexes 全 READY 確認 + 後片付け完璧)
-**ブランチ**: main (clean、PR #392 merged: df12044、kanameone + cocoro 反映完了)
-**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + Phase 2 (#181-#183) + Phase 3 (#188-#190) + Phase 5 (#339/#340/#332/#335) + Phase 6 (#346/#343/#344/#331/#333/#262) + Phase 7 (#338) + Phase 8 (session29 = #334/#196) + Phase 8 (session30 = #360 rescue observability + #358 backfill test lock-in) + Phase 8 (session31 = #365 backfill counter 分割 + #364 rescue per-doc catch test) + Phase 8 (session32 = #370 fatal 分岐 safeLogError 二重呼出防止 test) + Phase 8 (session33 = #200 Gmail/Split 統合テスト + #251 Scope 2 summaryPromptBuilder 分離) + Phase 8 (session34 = #375 Gmail reimportPolicy pure helper 抽出 + #237 tokenizer 3 箇所共通化) + Phase 8 (session35 = Issue triage-only、close 忘れ 1 件整理 = #220) + Phase 8 (session36 = #239 force-reindex audit log + #152 close、新規 #384 起票) + Phase 8 (session37 = #384 完遂、新規 #387 起票) + Phase 8 (session38 = #387 完遂、Net -1) + Phase 8 (session39 = triage-only、Net 0、update/bugfix 移行合意) + Phase 8 (session40 = PR #392 merged: CMフィルター + 期間/表記統一、Net 0、hook ループ教訓 → グローバル MUST line 13 追加) + **Phase 8 (session41 = PR #392 を kanameone/cocoro に展開完了、indexes 全 READY、Net 0)** 完遂
+**更新日**: 2026-04-27 session42 (**Issue #396 完遂、PR #397 merged + dev/kanameone/cocoro 全環境展開完了、Net 0**。kanameone ユーザー報告のバグ「編集モーダル保存後も候補警告が消えない・選択待ちのまま」の根本原因 = `useDocumentEdit.saveChanges` が確定フラグ未書き込み を特定。`isValidCustomerSelection`/`isValidOfficeSelection` ヘルパー追加 + `customerConfirmed`/`officeConfirmed` 書き込み + ロールバック対称性で修正。test 175 件全 PASS。`/simplify` + `/safe-refactor` + `/review-pr` 4 エージェント並列で rating 7+ 指摘 6 件すべて反映。Codex 4 回相談 (threadId 019dcbba)。observability follow-up #398 起票 = Net 0)
+**ブランチ**: main (clean、PR #397 merged: 9c0ab33、kanameone + cocoro 反映完了)
+**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + Phase 2 (#181-#183) + Phase 3 (#188-#190) + Phase 5 (#339/#340/#332/#335) + Phase 6 (#346/#343/#344/#331/#333/#262) + Phase 7 (#338) + Phase 8 (session29 = #334/#196) + Phase 8 (session30 = #360 rescue observability + #358 backfill test lock-in) + Phase 8 (session31 = #365 backfill counter 分割 + #364 rescue per-doc catch test) + Phase 8 (session32 = #370 fatal 分岐 safeLogError 二重呼出防止 test) + Phase 8 (session33 = #200 Gmail/Split 統合テスト + #251 Scope 2 summaryPromptBuilder 分離) + Phase 8 (session34 = #375 Gmail reimportPolicy pure helper 抽出 + #237 tokenizer 3 箇所共通化) + Phase 8 (session35 = Issue triage-only、close 忘れ 1 件整理 = #220) + Phase 8 (session36 = #239 force-reindex audit log + #152 close、新規 #384 起票) + Phase 8 (session37 = #384 完遂、新規 #387 起票) + Phase 8 (session38 = #387 完遂、Net -1) + Phase 8 (session39 = triage-only、Net 0、update/bugfix 移行合意) + Phase 8 (session40 = PR #392 merged: CMフィルター + 期間/表記統一、Net 0、hook ループ教訓 → グローバル MUST line 13 追加) + Phase 8 (session41 = PR #392 を kanameone/cocoro に展開完了、indexes 全 READY、Net 0) + **Phase 8 (session42 = Issue #396 完遂: 編集保存時の確定フラグバグ修正、PR #397 merged + 3 環境展開、observability #398 起票で Net 0)** 完遂
+
+<a id="session42"></a>
+## ✅ session42 完了サマリー (2026-04-27: Issue #396 完遂、PR #397 merged + dev/kanameone/cocoro 全環境展開、Net 0)
+
+kanameone ユーザーから報告された「編集モーダルで顧客名・事業所名を選択して保存しても、候補警告 (`5件の候補があります` 等) が消えない・ホーム画面が「選択待ち」のまま・確認済みでチェックマークが付かない」というバグを修正。コード調査で `useDocumentEdit.saveChanges` が `customerConfirmed`/`officeConfirmed`/`needsManualCustomerSelection` フラグを Firestore に書き込んでいないことを特定 (Phase 7 で `customerConfirmed` 導入時の編集パス追従漏れ)。`/impl-plan` で計画 → TDD 実装 → `/simplify` (ロールバック対称性追加 + needsManualCustomerSelection 条件付き化) → `/safe-refactor` (追加修正なし) → PR #397 → `/review-pr` 4 エージェント並列 → rating 7+ 指摘 6 件反映 (AC4 強化 + AC9×3 + AC10 + AC ラベル inline) → main マージ → 3 環境デプロイ完了。
+
+### Issue Net 変化
+
+| 項目 | 内容 |
+|------|------|
+| Close 数 | 1 件 (#396) |
+| 起票数 | 1 件 (#398、observability follow-up) |
+| **Net 変化** | **0 件** (P1 bug 完遂 + observability 別 Issue 化、session37 と同形) |
+
+### PR / 主要成果
+
+| PR | 内容 | closed Issues | merged commit |
+|----|------|--------------|---------------|
+| **#397** | fix(documents): 編集モーダル保存時に customerConfirmed/officeConfirmed フラグ更新 (1 commit + review-pr fix commit) | #396 | `9c0ab33` |
+
+| 項目 | 内容 |
+|------|------|
+| **frontend tests** | 167 → **175 passing** (+8: documentUtils 23 + useDocumentEdit 確定フラグ 17 のうち既存ロールバックテスト除く実質増分) |
+| **コード量** | 4 ファイル / +482/-1 (documentUtils.ts: +32, documentUtils.test.ts: +82 新規, useDocumentEdit.ts: +49/-1, useDocumentEdit.test.ts: +458) |
+| **デプロイ環境** | dev (`index-DAv9mWf4.js`) / kanameone (`index-phQgUmXd.js`) / cocoro (`index-C1zuq2pE.js`) 全環境で `'不明事業所'` リテラル含有確認 |
+
+### 修正方針 (Codex セカンドオピニオン取得済み、案 A 採用)
+
+| ステップ | 内容 |
+|---------|------|
+| ヘルパー追加 | `isValidCustomerSelection` / `isValidOfficeSelection`: invalid sentinel (`'未判定'`/`'不明顧客'`/`'不明事業所'`) と空白・null・undefined を判定 |
+| saveChanges 拡張 | 有効値選択時に `customerConfirmed: true` (+ `needsManualCustomerSelection: false` は既存値定義済みのときのみ) / `officeConfirmed: true` + `officeConfirmedBy` + `officeConfirmedAt` |
+| 楽観的更新 | `optimisticData` にも確定フラグ反映、`Timestamp.now()` で代替 |
+| ロールバック対称性 | Firestore 書き込み失敗時、optimistic で立てた確定フラグを元の値に復元 |
+| 「変更なし保存」対応 | `changes.length === 0` early return を「変更なし AND 既に両方 confirmed=true」のみに限定 (UX: 保存ボタン押下 = ユーザーの確定意思表示) |
+
+### Acceptance Criteria (10 件、unit test で全検証)
+
+- AC1: 有効な顧客名選択 → `customerConfirmed=true` & `needsManualCustomerSelection=false`
+- AC2: 有効な事業所名選択 → `officeConfirmed=true` + `officeConfirmedBy=uid` + `officeConfirmedAt=Timestamp`
+- AC3: invalid sentinel 選択 → 確定フラグを書き込まない (顧客 3 ケース + 事業所 3 ケース)
+- AC3.5: 既存 `confirmed=true` を invalid 値で false に上書きしない (regression 防止)
+- AC4: 既に両方 confirmed=true & 変更なし保存 → updateDoc/cache 更新/監査ログ全て呼ばれない (review-pr T1 強化)
+- AC5: confirmed=false の有効ドキュメント、変更なし保存 → 確定フラグのみ書き込み (`needsManualCustomerSelection` は既存値定義済みのときのみ false 同期)
+- AC5.5: optimisticData にも確定フラグを反映
+- AC6/7: dev 環境ホーム画面/編集モーダルの目視確認 (テスト対象外、本番運用で検証)
+- AC8: Firestore 書き込み失敗時、optimistic で立てた確定フラグをロールバック (review-pr Q7)
+- AC9: invalid 値・downgrade attempt の挙動 pin (whitespace-only / 混合変更 / customerConfirmed=false→未判定、review-pr T2/T3/T4)
+- AC10: rollback 対称性 — optimistic で書いた確定フラグ全 key が rollback で復元される (drift 防止、review-pr S2)
+
+### Quality Gate 実施記録
+
+| ステージ | 内容 | 結果 |
+|---|---|---|
+| `/impl-plan` | Phase 1 要件 → Phase 2 タスク分解 → Phase 2.5 統合影響分析 → Phase 2.7 AC 8 件定義 → 計画 v2 (Codex 反映) | 承認後実装 |
+| TDD | T1-test → T1 実装 → T4-test → T2 実装 (Red→Green→Refactor) | 全 PASS |
+| `/simplify` 3並列 | reuse / quality / efficiency | Quality Q7 (ロールバック漏れ、HIGH) + Efficiency E3 (needsManualCustomerSelection 条件付き) を反映、Reuse R1 (sentinel export) は scope 拡大で別 PR 候補 |
+| `/safe-refactor` | 型安全性 / エラー処理 / 境界条件 / 副作用順序 / イミュータブル性 | 追加修正なし、コミット可能と判定 |
+| `/review-pr` 4 エージェント並列 | code-reviewer / pr-test-analyzer / silent-failure-hunter / comment-analyzer | Critical 0、blocker 0、rating 7+ 6 件 → 全反映 (AC4 強化 + AC9×3 + AC10 + AC ラベル inline)、silent-failure HIGH (editLogs 記録) は #398 で別 Issue |
+| Codex セカンドオピニオン | 4 回 (実装方針 A/B/C → 計画 v2 review → review-pr 対応方針 A/B/C → 検証方針 A/B/C) | threadId `019dcbba-7ca2-7580-837c-eff14ba37454` |
+
+### デプロイ実行手順 (`/deploy` 制限により直接スクリプト実行)
+
+| # | 環境 | 操作 | 結果 |
+|---|------|------|------|
+| 1 | kanameone | `./scripts/switch-client.sh kanameone` | gcloud → kanameone (systemkaname@kanameone.com) |
+| 2 | kanameone | `./scripts/deploy-to-project.sh kanameone` (--rules 不要、frontend のみ) | HTTP 200 OK / `index-phQgUmXd.js` / `'不明事業所'` リテラル ×2 |
+| 3 | cocoro | `./scripts/switch-client.sh cocoro` | gcloud → SA (docsplit-deployer@) |
+| 4 | cocoro | `./scripts/deploy-to-project.sh cocoro` | HTTP 200 OK / `index-C1zuq2pE.js` / `'不明事業所'` リテラル ×2 |
+| 5 | dev | `./scripts/switch-client.sh dev` | gcloud 戻し |
+
+### dev 検証結果と限界
+
+dev 環境では「修正コード反映 + UI regression なし」までは確認できたが、**元症状 (候補警告残存・選択待ちバッジ) は dev データで再現不可** (`customerCandidates`/`officeCandidates` 空、フラグ既に true)。Playwright MCP で編集→保存実行 + Firestore writes 観察 + bundle 内 `'不明事業所'` リテラル grep までは実施。実データ検証は kanameone 報告者依頼で代替する方針 (Codex 案 C)。
+
+### 設計判断 / Lessons Learned
+
+1. **`customerConfirmed` には `confirmedBy`/`At` フィールドが存在しない (officeConfirmed のみ存在)** — `shared/types.ts` 確認済み。顧客側は `customerConfirmed: boolean` のみで実装計画修正。
+2. **「保存=確定」UX は「変更なし保存も確定意思」と解釈** — `changes.length === 0` early return を `&& 既に両方 confirmed=true` に限定。Codex AC4/AC5 妥当性確認済み。
+3. **`needsManualCustomerSelection` は dual-read レガシーフィールド、新規ドキュメントには書き込まない** — `customerConfirmed=true` で判定優先されるため、既存値定義済みのときのみ `false` 同期更新で OK。Efficiency 観点 (Codex/E3 指摘)。
+4. **rollback 対称性は構造的保証ではなくテスト保証で十分** — Codex 提言 (S2)、optimistic で書いた確定フラグ全 key が rollback で復元されることを test で固定。次フィールド追加時の drift をテストで検出。
+5. **review-pr Critical 2 + silent-failure HIGH 1 → 切り分け** — Critical (実バグ) は本 PR で修正 (ロールバック漏れ)、HIGH (observability 改善 = editLogs 記録) は #398 で別 Issue。「P1 bug 完遂と observability follow-up を分離して Net 0 維持」は session37 (#384 + #387) と同パターン。
+6. **dev 環境のテストデータでは元症状再現不可な場合、bundle 反映確認 + 報告者再現テスト依頼で運用** — マルチクライアント運用では「dev デプロイ完了 ≠ クライアント反映完了」(session41 教訓) に加え、「dev 動作確認 ≠ 元症状の修正効果検証」も明示すべき。
+
+### 次セッション以降の引き継ぎ
+
+#### 即時判断項目 (本 PR 由来)
+
+1. **kanameone 報告者への再現テスト依頼** (ユーザー側で送付):
+   - 確認手順: 報告書類を再度開く → 編集モードで顧客名・事業所名選択 → 保存 → 候補警告消失 + 「選択待ち」→「完了」(緑バッジ) 遷移 + 確認済みチェックマーク
+   - 異常時: 書類名/操作時刻/スクリーンショット共有依頼 → 即時 `git revert 9c0ab33 --no-edit && git push origin main` + 各環境再 `/deploy`
+2. **報告者フィードバック収集** → AC6/AC7 (UI 動作確認) の実データ検証完了
+3. **Issue #398 (editLogs 記録) の着手判断** — observability HIGH だが scope 別、ROI 評価で着手時期決定
+
+#### 既存積み残し (session39 から継続、待機条件未充足)
+
+- #299: capPageResultsAggregate test (P2、ROI 低、bundle 化待ち)
+- #251 Scope 1: summaryGenerator unit test (P2、sinon 導入条件未充足)
+- #238: force-reindex 孤児 posting 検出モード (P2、ADR-0015 再評価トリガー未発火)
+
+### CI/デプロイ状態
+
+- **dev**: 自動デプロイ済 (PR #397 マージで CI 実行、`index-DAv9mWf4.js`)
+- **kanameone**: 手動デプロイ済 (`docsplit-kanameone.web.app`、`index-phQgUmXd.js`)
+- **cocoro**: 手動デプロイ済 (`docsplit-cocoro.web.app`、`index-C1zuq2pE.js`)
+- **Firestore Rules / Indexes / Functions**: 変更なし (frontend のみ)
+- **ローカル main**: clean、9c0ab33 同期済み
+- **削除済み Branch**: `fix/document-edit-confirmed-flags` (PR #397 squash merge 時 --delete-branch)
+
+---
 
 <a id="session41"></a>
 ## ✅ session41 完了サマリー (2026-04-27: PR #392 を kanameone/cocoro に展開、indexes 全 READY、Net 0)
