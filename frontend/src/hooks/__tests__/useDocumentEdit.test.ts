@@ -166,6 +166,62 @@ describe('useDocumentEdit - careManager自動補完', () => {
       const updateData = mockUpdateDoc.mock.calls[0]?.[1] as Record<string, unknown>
       expect(updateData.careManager).toBeUndefined()
     })
+
+    // AC5 強化（Codex 指摘 R1 対応）: マスタ外既存値の保持
+    // caremanagers マスタに登録されていない既存値（例: 過去取り込み時の手書きデータ）
+    // が入っている書類で、他項目だけ編集して保存したときに、careManager の値が
+    // 空クリアされたり書き換えられたりしないことを保証する。
+    // 注: 実装上、careManagerKey は editedFields 経由で再書き込みされるが
+    // 元値と同じ値が書かれるため値は不変（実害なし）。
+    it('マスタ外既存値の書類で書類日付のみ編集 → careManager 値が保持される', async () => {
+      const doc = makeDocument({
+        careManager: 'マスタ未登録CM太郎',
+        careManagerKey: 'マスタ未登録CM太郎',
+        fileDate: Timestamp.fromDate(new Date('2026-01-01')),
+      })
+      const { result } = renderHook(() => useDocumentEdit(doc))
+
+      act(() => result.current.startEditing())
+      // 書類日付のみ変更、careManager は触らない
+      act(() => result.current.updateField('fileDate', new Date('2026-02-15')))
+
+      await act(async () => {
+        await result.current.saveChanges()
+      })
+
+      const updateData = mockUpdateDoc.mock.calls[0]?.[1] as Record<string, unknown>
+      expect(updateData.fileDate).toBeInstanceOf(Date)
+      // careManager フィールド自体は updateData に含まれない（変更されていないため）
+      expect('careManager' in updateData).toBe(false)
+      // careManagerKey は再書き込みされるが値は元と同じ（実害なし）
+      expect(updateData.careManagerKey).toBe('マスタ未登録CM太郎')
+    })
+
+    // AC6 補強: 既存 careManager から明示的に空に変更したケース
+    // 「担当ケアマネを削除する」操作（例: マスタ外値を消去したい）の境界値。
+    // editLogs には oldValue=元値, newValue=null が記録される。
+    it('既存 careManager を空文字に変更 → updateData/editLogs に正しく反映される', async () => {
+      const doc = makeDocument({ careManager: '板垣 亜紀子' })
+      const { result } = renderHook(() => useDocumentEdit(doc))
+
+      act(() => result.current.startEditing())
+      act(() => result.current.updateField('careManager', ''))
+
+      await act(async () => {
+        await result.current.saveChanges()
+      })
+
+      const updateData = mockUpdateDoc.mock.calls[0]?.[1] as Record<string, unknown>
+      expect(updateData.careManager).toBe('')
+      expect(updateData.careManagerKey).toBe('')
+
+      const careManagerLog = mockAddDoc.mock.calls.find(
+        (call: unknown[]) => (call[1] as Record<string, unknown>)?.fieldName === 'careManager'
+      ) as unknown[] | undefined
+      expect(careManagerLog).toBeDefined()
+      expect((careManagerLog![1] as Record<string, unknown>).oldValue).toBe('板垣 亜紀子')
+      expect((careManagerLog![1] as Record<string, unknown>).newValue).toBeNull()
+    })
   })
 
   describe('ロールバック', () => {

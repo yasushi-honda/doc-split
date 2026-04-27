@@ -6,7 +6,7 @@
  */
 
 import { useState } from 'react';
-import { Plus, ChevronDown, Check, User, Building2, FileText, Sparkles } from 'lucide-react';
+import { Plus, ChevronDown, Check, User, Building2, FileText, Sparkles, UserCheck } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Command,
@@ -30,7 +30,7 @@ import { RegisterNewMasterModal, type MasterType, type RegisteredMasterInfo } fr
 // 型定義
 // ============================================
 
-export type MasterFieldType = 'customer' | 'office' | 'documentType';
+export type MasterFieldType = 'customer' | 'office' | 'documentType' | 'careManager';
 
 export interface MasterItem {
   id: string;
@@ -58,6 +58,7 @@ const typeConfig: Record<MasterFieldType, { icon: typeof User; label: string; ad
   customer: { icon: User, label: '顧客', addLabel: '新規顧客を追加', suggestedLabel: 'OCR候補' },
   office: { icon: Building2, label: '事業所', addLabel: '新規事業所を追加', suggestedLabel: 'OCR候補' },
   documentType: { icon: FileText, label: '書類種別', addLabel: '新規書類種別を追加', suggestedLabel: 'OCR候補' },
+  careManager: { icon: UserCheck, label: '担当ケアマネ', addLabel: '', suggestedLabel: 'OCR候補' },
 };
 
 // ============================================
@@ -84,9 +85,13 @@ export function MasterSelectField({
     setIsRegisterModalOpen(false);
   };
 
-  // すべてのタイプで新規追加可能
-  const canAddNew = true;
-  const masterType: MasterType = type === 'customer' ? 'customer' : type === 'office' ? 'office' : 'documentType';
+  // 新規追加: customer / office / documentType のみ対応（careManager はマスタ管理画面で実施）
+  const canAddNew = type !== 'careManager';
+  const masterType: MasterType =
+    type === 'customer' ? 'customer' :
+    type === 'office' ? 'office' :
+    type === 'documentType' ? 'documentType' :
+    'customer'; // careManager 時は canAddNew=false なので参照されない
 
   // OCR候補のIDセット（重複除外用）
   const suggestedIds = new Set(suggestedItems?.map(item => item.id) || []);

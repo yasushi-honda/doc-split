@@ -8,7 +8,7 @@ import { format } from 'date-fns'
 import { ja } from 'date-fns/locale'
 import { Timestamp, doc as firestoreDoc, updateDoc } from 'firebase/firestore'
 import { ref, getDownloadURL } from 'firebase/storage'
-import { Download, ExternalLink, Loader2, FileText, User, Building, Calendar, Tag, AlertCircle, Scissors, Pencil, Save, X, BookMarked, History, ChevronUp, ChevronDown, Sparkles, RefreshCw, CheckCircle, XCircle, Trash2 } from 'lucide-react'
+import { Download, ExternalLink, Loader2, FileText, User, UserCheck, Building, Calendar, Tag, AlertCircle, Scissors, Pencil, Save, X, BookMarked, History, ChevronUp, ChevronDown, Sparkles, RefreshCw, CheckCircle, XCircle, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { db, storage } from '@/lib/firebase'
 import { callFunction } from '@/lib/callFunction'
@@ -32,7 +32,7 @@ import { MasterSelectField } from '@/components/MasterSelectField'
 import { ExtractionInfoPopover } from '@/components/ExtractionInfoPopover'
 import { useDocument, getReprocessClearFields, updateDocumentInListCache } from '@/hooks/useDocuments'
 import { useDocumentEdit } from '@/hooks/useDocumentEdit'
-import { useCustomers, useOffices, useDocumentTypes } from '@/hooks/useMasters'
+import { useCustomers, useOffices, useDocumentTypes, useCareManagers } from '@/hooks/useMasters'
 import { useMasterAlias } from '@/hooks/useMasterAlias'
 import { useAliasLearningHistory, useInvalidateAliasLearningHistory } from '@/hooks/useAliasLearningHistory'
 import { isCustomerConfirmed } from '@/hooks/useProcessingHistory'
@@ -398,6 +398,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
   const { data: customers } = useCustomers()
   const { data: offices } = useOffices()
   const { data: documentTypes } = useDocumentTypes()
+  const { data: careManagers } = useCareManagers()
 
   // エイリアス登録
   const { addAlias, isAdding: isAddingAlias } = useMasterAlias()
@@ -425,6 +426,11 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
   const documentTypeItems = (documentTypes || []).map(d => ({
     id: d.id ?? d.name,
     name: d.name,
+  }))
+  const careManagerItems = (careManagers || []).map(cm => ({
+    id: cm.id ?? cm.name,
+    name: cm.name,
+    subText: cm.email,
   }))
 
   // OCR候補をMasterSelectField用に変換（優先表示用）
@@ -1075,8 +1081,10 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                             suggestedItems={suggestedCustomerItems.length > 0 ? suggestedCustomerItems : undefined}
                             onChange={(v) => {
                               updateField('customerName', v)
+                              // 担当ケアマネは「空欄のときのみ」自動補完。
+                              // 既存値（手動編集含む）があれば顧客変更でも保持する。
                               const cm = resolveCareManager(v, customers || [])
-                              if (cm !== null) {
+                              if (cm !== null && !editedFields.careManager) {
                                 updateField('careManager', cm)
                               }
                             }}
@@ -1270,6 +1278,25 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                     onChange={(v) => updateField('fileDate', v ? new Date(v) : null)}
                     type="date"
                   />
+                  {/* 担当ケアマネ */}
+                  <div className="flex items-start gap-3 py-2">
+                    <UserCheck className="mt-0.5 h-4 w-4 flex-shrink-0 text-gray-400" />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs text-gray-500">担当ケアマネ</p>
+                      {isEditing ? (
+                        <div className="mt-1">
+                          <MasterSelectField
+                            type="careManager"
+                            value={editedFields.careManager || ''}
+                            items={careManagerItems}
+                            onChange={(v) => updateField('careManager', v)}
+                          />
+                        </div>
+                      ) : (
+                        <span className="truncate text-sm text-gray-900">{document.careManager || '未登録'}</span>
+                      )}
+                    </div>
+                  </div>
                   <MetaRow icon={Calendar} label="登録日" value={formatTimestamp(document.processedAt, 'yyyy/MM/dd HH:mm')} />
                   <MetaRow icon={FileText} label="ページ数" value={`${document.totalPages} ページ`} />
                 </div>
@@ -1279,14 +1306,6 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                   <div className="mt-4 rounded-lg bg-yellow-50 p-3">
                     <p className="text-xs font-medium text-yellow-800">同姓同名の顧客が存在します</p>
                     <p className="mt-1 text-xs text-yellow-700">{document.allCustomerCandidates}</p>
-                  </div>
-                )}
-
-                {/* ケアマネ情報 */}
-                {document.careManager && (
-                  <div className="mt-4">
-                    <h4 className="mb-2 text-xs font-medium text-gray-500">担当ケアマネジャー</h4>
-                    <p className="text-sm text-gray-900">{document.careManager}</p>
                   </div>
                 )}
 
