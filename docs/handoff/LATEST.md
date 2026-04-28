@@ -1,8 +1,86 @@
 # ハンドオフメモ
 
-**更新日**: 2026-04-28 session48 (**PR #406 + PR #409 を kanameone/cocoro に展開完了、Net 0**。ユーザー要望「ファックス内容変更で担当CM変更」(session45/47 で dev 完遂) を本番クライアント全環境へ反映。kanameone は `deploy-to-project.sh` 経由、cocoro は手動手順 (cp/build/deploy/rm) で完了。AI 駆動 4 原則 §3「番号単位の明示認可」を遵守し、各環境ごとに認可確認を経て実行。教訓: dev 成功済みなら本番側で能動的な動作確認依頼は executor 越権、PWA キャッシュは本番ユーザー側で自然解決の範囲。)
+**更新日**: 2026-04-28 session49 (**Issue #398 完遂: 確定フラグ書き込みを editLogs に記録、PR #414 merged + 3 環境展開完了、Net -1**。session45/47/48 で完遂したファックス担当CM変更系ユーザー要望に続き、積み残し P2 Issue (#402/#398/#299/#251/#238 の5件) を ROI ベースで triage → Phase A=即着手2件 (#398/#402段階1)、B-1=保留3件 open維持 の方針で合意。Phase A 前半の #398 を完遂 (内部 observability 強化、UI 影響なし)。教訓: cocoro デプロイ時 firebase login:use 切替必須 / 内部 observability 改善の即時全環境展開を当然視しない / 小規模変更は /simplify 3並列より PR review 委譲が ROI 高。)
 **ブランチ**: main (clean、3 環境展開完了)
-**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + Phase 2 (#181-#183) + Phase 3 (#188-#190) + Phase 5 (#339/#340/#332/#335) + Phase 6 (#346/#343/#344/#331/#333/#262) + Phase 7 (#338) + Phase 8 (session29 = #334/#196) + Phase 8 (session30 = #360 rescue observability + #358 backfill test lock-in) + Phase 8 (session31 = #365 backfill counter 分割 + #364 rescue per-doc catch test) + Phase 8 (session32 = #370 fatal 分岐 safeLogError 二重呼出防止 test) + Phase 8 (session33 = #200 Gmail/Split 統合テスト + #251 Scope 2 summaryPromptBuilder 分離) + Phase 8 (session34 = #375 Gmail reimportPolicy pure helper 抽出 + #237 tokenizer 3 箇所共通化) + Phase 8 (session35 = Issue triage-only、close 忘れ 1 件整理 = #220) + Phase 8 (session36 = #239 force-reindex audit log + #152 close、新規 #384 起票) + Phase 8 (session37 = #384 完遂、新規 #387 起票) + Phase 8 (session38 = #387 完遂、Net -1) + Phase 8 (session39 = triage-only、Net 0、update/bugfix 移行合意) + Phase 8 (session40 = PR #392 merged: CMフィルター + 期間/表記統一、Net 0、hook ループ教訓 → グローバル MUST line 13 追加) + Phase 8 (session41 = PR #392 を kanameone/cocoro に展開完了、indexes 全 READY、Net 0) + Phase 8 (session42 = Issue #396 完遂: 編集保存時の確定フラグバグ修正、PR #397 merged + 3 環境展開、observability #398 起票で Net 0) + Phase 8 (session43 = ユーザー要望「検索結果が新しい日付が上に」完遂: PR #400 merged + 3 環境展開、フォローアップ Issue #401/#402 起票で Net +2) + Phase 8 (session44 = Issue #401 完遂: searchDocuments handler 統合テスト追加、PR #404 merged + dev 自動デプロイ、Net -1) + Phase 8 (session45 = ユーザー要望「ファックス内容変更で担当CM変更」完遂: PR #406 merged via escape hatch、Net 0、AI 駆動 4 原則追加 + memory 整理) + Phase 8 (session46 = PR #407 merged 確定 + ~/.claude memory 整理 (PR #167)、Net 0、4 原則現状維持・2026-07-末レビュー予定) + Phase 8 (session47 = PR #406 AC8 完了 + PR #409 merged: 編集モード時マスタ非連動注意文 UI 明示化、Net 0) + **Phase 8 (session48 = PR #406 + #409 を kanameone/cocoro に展開完了、Net 0)** 完遂
+**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + Phase 2 (#181-#183) + Phase 3 (#188-#190) + Phase 5 (#339/#340/#332/#335) + Phase 6 (#346/#343/#344/#331/#333/#262) + Phase 7 (#338) + Phase 8 (session29 = #334/#196) + Phase 8 (session30 = #360 rescue observability + #358 backfill test lock-in) + Phase 8 (session31 = #365 backfill counter 分割 + #364 rescue per-doc catch test) + Phase 8 (session32 = #370 fatal 分岐 safeLogError 二重呼出防止 test) + Phase 8 (session33 = #200 Gmail/Split 統合テスト + #251 Scope 2 summaryPromptBuilder 分離) + Phase 8 (session34 = #375 Gmail reimportPolicy pure helper 抽出 + #237 tokenizer 3 箇所共通化) + Phase 8 (session35 = Issue triage-only、close 忘れ 1 件整理 = #220) + Phase 8 (session36 = #239 force-reindex audit log + #152 close、新規 #384 起票) + Phase 8 (session37 = #384 完遂、新規 #387 起票) + Phase 8 (session38 = #387 完遂、Net -1) + Phase 8 (session39 = triage-only、Net 0、update/bugfix 移行合意) + Phase 8 (session40 = PR #392 merged: CMフィルター + 期間/表記統一、Net 0、hook ループ教訓 → グローバル MUST line 13 追加) + Phase 8 (session41 = PR #392 を kanameone/cocoro に展開完了、indexes 全 READY、Net 0) + Phase 8 (session42 = Issue #396 完遂: 編集保存時の確定フラグバグ修正、PR #397 merged + 3 環境展開、observability #398 起票で Net 0) + Phase 8 (session43 = ユーザー要望「検索結果が新しい日付が上に」完遂: PR #400 merged + 3 環境展開、フォローアップ Issue #401/#402 起票で Net +2) + Phase 8 (session44 = Issue #401 完遂: searchDocuments handler 統合テスト追加、PR #404 merged + dev 自動デプロイ、Net -1) + Phase 8 (session45 = ユーザー要望「ファックス内容変更で担当CM変更」完遂: PR #406 merged via escape hatch、Net 0、AI 駆動 4 原則追加 + memory 整理) + Phase 8 (session46 = PR #407 merged 確定 + ~/.claude memory 整理 (PR #167)、Net 0、4 原則現状維持・2026-07-末レビュー予定) + Phase 8 (session47 = PR #406 AC8 完了 + PR #409 merged: 編集モード時マスタ非連動注意文 UI 明示化、Net 0) + Phase 8 (session48 = PR #406 + #409 を kanameone/cocoro に展開完了、Net 0) + **Phase 8 (session49 = Issue #398 完遂: 確定フラグ editLogs 記録、PR #414 merged + 3 環境展開、Net -1)** 完遂
+
+<a id="session49"></a>
+## ✅ session49 完了サマリー (2026-04-28: Issue #398 完遂 + 3 環境展開、Net -1)
+
+session48 の handoff 確認後、ユーザーからの「次のアップデートやbugfixに着手してよいか」要請を起点に、積み残し P2 Issue 5 件 (#402/#398/#299/#251/#238) を ROI ベースで triage。Phase A=即着手2件 (#398 / #402段階1)、B-1=保留3件 (#299/#251/#238) open維持の方針で合意し、Phase A 前半の #398 を完遂。内部 observability 強化（確定フラグ変更を editLogs に監査記録）で UI 影響なし、将来の silent failure 検知能力向上に寄与。展開段階では「内部 observability 改善は即時全環境展開を当然視するべきか」のユーザー指摘を受けて方針を撤回・再判断、最終的に ステップバイステップで全クライアント反映認可を得て完遂。
+
+### Issue Net 変化
+
+| 項目 | 内容 |
+|------|------|
+| Close 数 | 1 件 (#398) |
+| 起票数 | 0 件 |
+| **Net 変化 (session49 単独)** | **-1 件** ✅ 正の進捗 (CLAUDE.md `Net ≤ 0 は進捗ゼロ扱い` を達成) |
+
+### PR / 主要成果
+
+| PR | 内容 | 状態 |
+|----|------|------|
+| **#414** | feat(observability): 確定フラグ書き込みを editLogs に記録（#398） | merged commit `eceb426`、CI/CodeRabbit/GitGuardian 全 PASS、3 環境展開完了 |
+
+| 項目 | 内容 |
+|------|------|
+| **コード量 (#414)** | 2 ファイル / +253/-2 (useDocumentEdit.ts に changes.push 3 箇所追加 + テスト 10 ケース追加 + 既存 1 件期待値更新) |
+| **frontend テスト** | 190/190 PASS (useDocumentEdit 39 件、+10 件追加)、tsc/lint クリーン |
+| **CodeRabbit 指摘対応** | 2 件 (Minor: needsManualCustomerSelection の no-op 監査ログ防止 / Nitpick: false→false regression test 追加)、commit 407ee1a で対応 |
+
+### Acceptance Criteria (PR #414、AC1-AC7、全達成)
+
+- AC1: customerConfirmed=false→true 遷移で editLogs に oldValue:'false', newValue:'true' 記録
+- AC1': customerConfirmed=undefined→true 遷移で oldValue:null, newValue:'true' 記録
+- AC2: officeConfirmed=false→true 遷移で editLogs エントリ作成
+- AC3: 既に true / invalid 値選択時は editLogs エントリ未作成
+- AC4: 混合変更（customerName + customerConfirmed）で両エントリが同 documentId に並列記録
+- AC5: needsManualCustomerSelection=true→false の独立エントリ記録、undefined/false 時はスキップ（CodeRabbit 指摘1 反映）
+- AC6: 既存テスト L458 期待値更新（mockAddDoc 呼出回数 0→2、#398 仕様変更を反映）
+- AC7: tsc / lint クリーン
+
+### デプロイ実績
+
+| 環境 | 手段 | URL | 結果 |
+|------|------|-----|------|
+| **dev** | main 自動 CI deploy | https://doc-split-dev.web.app | ✅ |
+| **kanameone** | `firebase login:use systemkaname@kanameone.com` → `./scripts/switch-client.sh kanameone` → `./scripts/deploy-to-project.sh kanameone` | https://docsplit-kanameone.web.app | ✅ release complete |
+| **cocoro** | `firebase login:use hy.unimail.11@gmail.com`（重要、kanameone から戻す）→ `cp frontend/.env.cocoro frontend/.env.local` → `cd frontend && npm run build` → `firebase deploy --only hosting -P cocoro` → `rm frontend/.env.local` | https://docsplit-cocoro.web.app | ✅ release complete |
+
+| 項目 | 内容 |
+|------|------|
+| **変更範囲** | frontend のみ (useDocumentEdit.ts + テスト)、functions/rules/indexes 変更なし |
+| **後片付け** | Firebase CLI を `hy.unimail.11@gmail.com` (dev) に復帰、gcloud 構成を `doc-split-dev` (dev) に復帰、`.env.local` 削除済 |
+
+### 教訓 (本セッション、次セッション先行対応で memory/skill 更新予定)
+
+1. **cocoro デプロイ時は firebase login:use hy.unimail.11@gmail.com への切替必須** — kanameone デプロイ後 systemkaname@kanameone.com のままで cocoro 試行 → "Failed to get Firebase project docsplit-cocoro" エラー。session48 LATEST.md / `/deploy` SKILL.md には明記されていなかった暗黙手順。次セッションで `/deploy` SKILL.md に追記必要
+2. **内部 observability 改善は「即時全環境展開」を当然視しない** — #398 完遂後に kanameone/cocoro 展開を当然視 → ユーザーから「クライアントまで影響あるアップデートをしたんですか？」と指摘 → 撤回・再判断。過去 PR (#406, #409) は UI/UX 変更でユーザー要望由来 → 全環境展開が筋だったが、内部 observability 強化は緊急性ゼロ・ユーザー実感ゼロ。「PR の性質 (UI/UX 変更 vs 内部 observability/perf) で展開要否を分けて判断」が AI 駆動 4 原則 §1 (executor 越権防止) の具体例
+3. **/simplify 3 並列レビューは小規模変更で ROI 低** — 2 ファイル / +30 行 (実装) + 200 行 (テスト) の小規模変更で /simplify 3 並列を起動 → ユーザー拒否。A 案 (PR レビュー = CodeRabbit + silent-failure-hunter に任せる) に切替 → 結果 CodeRabbit が Minor + Nitpick の指摘を出し品質確保。「既存パターン踏襲かつ小規模な変更は PR review に委ねるのが ROI 高い」
+4. **CWD 永続化問題 (session48 教訓再発)** — `cd frontend && npm run build` で CWD が永続化、後続の絶対パス指定で問題回避。本セッションは session48 教訓を踏まえて絶対パスで対応できたが、`/deploy` SKILL.md の警告通りに動けるよう次セッション先行対応で再強化
+
+### 次セッションへの引き継ぎ (アップデート/bugfix 着手前の先行対応事項)
+
+| 優先度 | 項目 | 対応場所 |
+|--------|------|---------|
+| **HIGH** | `/deploy` SKILL.md に cocoro 認証切替手順 (`firebase login:use hy.unimail.11@gmail.com`) を追記 | グローバル `~/.claude/skills/deploy/` (PR 化) |
+| **HIGH** | 「PR の性質 (UI/UX vs 内部 observability/perf) で展開要否を分けて判断」教訓を memory 化 | claude-code-config リポジトリ `memory/feedback_*` |
+| **MEDIUM** | 「小規模変更は /simplify 3 並列より PR review 委譲」教訓を memory 化 | claude-code-config リポジトリ |
+| **LOW** | 残 P2 Issue triage 維持 (#402 段階1 = Phase A 残り、#299/#251/#238 = B-1 保留) | doc-split リポジトリ |
+
+### Phase A 残り作業 (Net -2 を狙う場合の継続候補)
+
+- **Issue #402 段階1**: searchDocuments の latency/read 計測ログ追加 (functions/src/search/searchDocuments.ts、内部 observability、UI 影響なし)。本セッション同様の流れで進行可能。session49 の教訓を反映し「展開要否はユーザー判断を仰ぐ」前提
+
+### 残オープン Issue (4 件、ブロッカーなし)
+
+| # | タイトル | 状態 |
+|---|---------|------|
+| #402 | perf: searchDocuments の OOM ガード + latency/read 計測ログ追加（PR #400 follow-up） | Phase A 残り、次セッション着手候補 |
+| #299 | feat(test): capPageResultsAggregate 動的 safeLogError invocation test (ts-node/esm 環境整備込み) | B-1 保留 (PR #298 失敗実績、トリガー監視中) |
+| #251 | test/refactor: summaryGenerator の unit test 追加 + buildSummaryPrompt 別モジュール分離 | B-1 保留 (Issue 本文「待機」明記) |
+| #238 | feat: force-reindex に孤児 posting 検出モード追加 | B-1 保留 (Issue 本文「実質 P3 扱い」) |
 
 <a id="session48"></a>
 ## ✅ session48 完了サマリー (2026-04-28: PR #406 + #409 を kanameone/cocoro に展開完了、Net 0)
