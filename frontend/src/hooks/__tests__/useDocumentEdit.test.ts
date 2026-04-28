@@ -455,7 +455,8 @@ describe('useDocumentEdit - 確定フラグ更新 (#396)', () => {
       expect(updateData.customerConfirmed).toBe(true)
       expect(updateData.needsManualCustomerSelection).toBe(false)
       expect('officeConfirmed' in updateData).toBe(false)
-      expect(mockAddDoc).not.toHaveBeenCalled()
+      // #398: 確定フラグ変更は editLogs に記録される（customerConfirmed + needsManualCustomerSelection の2件）
+      expect(mockAddDoc).toHaveBeenCalledTimes(2)
     })
 
     it('needsManualCustomerSelection=undefined のドキュメント、変更なし保存 → customerConfirmed=true のみ書き込み（needsManualCustomerSelection は新規作成しない）', async () => {
@@ -703,6 +704,214 @@ describe('useDocumentEdit - 確定フラグ更新 (#396)', () => {
       expect(optimisticFlagKeys.sort()).toEqual(rollbackFlagKeys.sort())
       // 念のため空集合でないことも確認（optimistic 自体が機能しているか）
       expect(optimisticFlagKeys.length).toBeGreaterThan(0)
+    })
+  })
+})
+
+// =================================================================
+// #398: 確定フラグ書き込みを editLogs に記録（#396 follow-up）
+// =================================================================
+//
+// 背景: PR #397 (Closes #396) で saveChanges に customerConfirmed /
+// officeConfirmed / needsManualCustomerSelection の書き込みを追加したが、
+// これらの確定フラグ変更は editLogs に記録されていなかった。
+// silent-failure-hunter HIGH 指摘: 同じバグが再発しても気づけない。
+//
+// 本ブロックでは、確定フラグの遷移が editLogs に監査ログとして記録される
+// ことを担保する（既存の addDoc(editLogsRef) ループに乗せる）。
+
+describe('useDocumentEdit - 確定フラグ editLogs 記録 (#398)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  const findLog = (fieldName: string) => {
+    const calls = mockAddDoc.mock.calls
+    return calls.find(
+      (call: unknown[]) => (call[1] as Record<string, unknown>)?.fieldName === fieldName
+    ) as unknown[] | undefined
+  }
+
+  describe('AC1: customerConfirmed=true 書き込み時に editLogs エントリ作成', () => {
+    it('既存 customerConfirmed=false → true 遷移で editLogs に oldValue:"false", newValue:"true" を記録', async () => {
+      const doc = makeDocument({
+        customerName: '未判定',
+        customerConfirmed: false,
+        needsManualCustomerSelection: true,
+      })
+      const { result } = renderHook(() => useDocumentEdit(doc))
+
+      act(() => result.current.startEditing())
+      act(() => result.current.updateField('customerName', '河野 文江'))
+
+      await act(async () => {
+        await result.current.saveChanges()
+      })
+
+      const log = findLog('customerConfirmed')
+      expect(log).toBeDefined()
+      const payload = log![1] as Record<string, unknown>
+      expect(payload.oldValue).toBe('false')
+      expect(payload.newValue).toBe('true')
+      expect(payload.documentId).toBe(doc.id)
+    })
+
+    it('既存 customerConfirmed=undefined → true 遷移で editLogs に oldValue:null, newValue:"true" を記録', async () => {
+      const doc = makeDocument({
+        customerName: '未判定',
+        customerConfirmed: undefined,
+      })
+      const { result } = renderHook(() => useDocumentEdit(doc))
+
+      act(() => result.current.startEditing())
+      act(() => result.current.updateField('customerName', '河野 文江'))
+
+      await act(async () => {
+        await result.current.saveChanges()
+      })
+
+      const log = findLog('customerConfirmed')
+      expect(log).toBeDefined()
+      const payload = log![1] as Record<string, unknown>
+      expect(payload.oldValue).toBeNull()
+      expect(payload.newValue).toBe('true')
+    })
+  })
+
+  describe('AC2: officeConfirmed=true 書き込み時に editLogs エントリ作成', () => {
+    it('既存 officeConfirmed=false → true 遷移で editLogs に oldValue:"false", newValue:"true" を記録', async () => {
+      const doc = makeDocument({
+        officeName: '未判定',
+        officeConfirmed: false,
+      })
+      const { result } = renderHook(() => useDocumentEdit(doc))
+
+      act(() => result.current.startEditing())
+      act(() => result.current.updateField('officeName', 'ケアサポートきらり'))
+
+      await act(async () => {
+        await result.current.saveChanges()
+      })
+
+      const log = findLog('officeConfirmed')
+      expect(log).toBeDefined()
+      const payload = log![1] as Record<string, unknown>
+      expect(payload.oldValue).toBe('false')
+      expect(payload.newValue).toBe('true')
+    })
+  })
+
+  describe('AC3: 確定フラグが書き込まれないケースでは editLogs エントリ未作成', () => {
+    it('既に customerConfirmed=true のドキュメントで invalid 値選択 → editLogs に customerConfirmed エントリなし', async () => {
+      const doc = makeDocument({
+        customerName: '田村 勝義',
+        customerConfirmed: true,
+      })
+      const { result } = renderHook(() => useDocumentEdit(doc))
+
+      act(() => result.current.startEditing())
+      act(() => result.current.updateField('customerName', '未判定'))
+
+      await act(async () => {
+        await result.current.saveChanges()
+      })
+
+      // customerConfirmed の editLogs エントリは作成されない（書き込み自体スキップ）
+      expect(findLog('customerConfirmed')).toBeUndefined()
+    })
+
+    it('invalid 値（"未判定"）に変更 → editLogs に customerConfirmed エントリなし', async () => {
+      const doc = makeDocument({
+        customerName: '田村 勝義',
+        customerConfirmed: false,
+      })
+      const { result } = renderHook(() => useDocumentEdit(doc))
+
+      act(() => result.current.startEditing())
+      act(() => result.current.updateField('customerName', '未判定'))
+
+      await act(async () => {
+        await result.current.saveChanges()
+      })
+
+      expect(findLog('customerConfirmed')).toBeUndefined()
+    })
+  })
+
+  describe('AC4: 混合変更で customerName と customerConfirmed が並列に記録', () => {
+    it('customerName 変更 + customerConfirmed=false→true → editLogs に両エントリが含まれる', async () => {
+      const doc = makeDocument({
+        customerName: '未判定',
+        customerConfirmed: false,
+      })
+      const { result } = renderHook(() => useDocumentEdit(doc))
+
+      act(() => result.current.startEditing())
+      act(() => result.current.updateField('customerName', '河野 文江'))
+
+      await act(async () => {
+        await result.current.saveChanges()
+      })
+
+      // customerName エントリ
+      const nameLog = findLog('customerName')
+      expect(nameLog).toBeDefined()
+      const namePayload = nameLog![1] as Record<string, unknown>
+      expect(namePayload.oldValue).toBe('未判定')
+      expect(namePayload.newValue).toBe('河野 文江')
+
+      // customerConfirmed エントリ（同じ documentId に対して並列記録）
+      const confirmedLog = findLog('customerConfirmed')
+      expect(confirmedLog).toBeDefined()
+      const confirmedPayload = confirmedLog![1] as Record<string, unknown>
+      expect(confirmedPayload.documentId).toBe(doc.id)
+      expect(confirmedPayload.oldValue).toBe('false')
+      expect(confirmedPayload.newValue).toBe('true')
+    })
+  })
+
+  describe('AC5: needsManualCustomerSelection の独立 editLogs エントリ', () => {
+    it('既存 needsManualCustomerSelection=true → false 遷移で独立エントリ記録', async () => {
+      const doc = makeDocument({
+        customerName: '未判定',
+        customerConfirmed: false,
+        needsManualCustomerSelection: true,
+      })
+      const { result } = renderHook(() => useDocumentEdit(doc))
+
+      act(() => result.current.startEditing())
+      act(() => result.current.updateField('customerName', '河野 文江'))
+
+      await act(async () => {
+        await result.current.saveChanges()
+      })
+
+      const log = findLog('needsManualCustomerSelection')
+      expect(log).toBeDefined()
+      const payload = log![1] as Record<string, unknown>
+      expect(payload.oldValue).toBe('true')
+      expect(payload.newValue).toBe('false')
+    })
+
+    it('needsManualCustomerSelection=undefined のドキュメント → editLogs に当該エントリなし（書き込み自体スキップ）', async () => {
+      const doc = makeDocument({
+        customerName: '未判定',
+        customerConfirmed: false,
+        needsManualCustomerSelection: undefined,
+      })
+      const { result } = renderHook(() => useDocumentEdit(doc))
+
+      act(() => result.current.startEditing())
+      act(() => result.current.updateField('customerName', '河野 文江'))
+
+      await act(async () => {
+        await result.current.saveChanges()
+      })
+
+      // customerConfirmed は記録される
+      expect(findLog('customerConfirmed')).toBeDefined()
+      // needsManualCustomerSelection は undefined のため書き込みスキップ → editLogs エントリも未作成
+      expect(findLog('needsManualCustomerSelection')).toBeUndefined()
     })
   })
 })
