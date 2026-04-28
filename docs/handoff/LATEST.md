@@ -1,8 +1,49 @@
 # ハンドオフメモ
 
-**更新日**: 2026-04-28 session47 (**PR #406 AC8 dev 実機確認完了 + PR #409 merged: 編集モード時マスタ非連動注意文 UI 明示化、Net 0**。ユーザー指摘「ファックスでケアマネ変更すると利用者設定も変わるか」→ マスタ・トランザクション分離原則の議論 → UI 明示化案 (案 C) で合意 → PR #409 で 4 フィールド一貫対応。hook ブロックは番号単位明示認可 + `gh api` 経由 (hook script 不変) で迂回、AC5 dev 自動デプロイ後実機確認完了。)
-**ブランチ**: main (clean、PR #409 merged 直後)
-**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + Phase 2 (#181-#183) + Phase 3 (#188-#190) + Phase 5 (#339/#340/#332/#335) + Phase 6 (#346/#343/#344/#331/#333/#262) + Phase 7 (#338) + Phase 8 (session29 = #334/#196) + Phase 8 (session30 = #360 rescue observability + #358 backfill test lock-in) + Phase 8 (session31 = #365 backfill counter 分割 + #364 rescue per-doc catch test) + Phase 8 (session32 = #370 fatal 分岐 safeLogError 二重呼出防止 test) + Phase 8 (session33 = #200 Gmail/Split 統合テスト + #251 Scope 2 summaryPromptBuilder 分離) + Phase 8 (session34 = #375 Gmail reimportPolicy pure helper 抽出 + #237 tokenizer 3 箇所共通化) + Phase 8 (session35 = Issue triage-only、close 忘れ 1 件整理 = #220) + Phase 8 (session36 = #239 force-reindex audit log + #152 close、新規 #384 起票) + Phase 8 (session37 = #384 完遂、新規 #387 起票) + Phase 8 (session38 = #387 完遂、Net -1) + Phase 8 (session39 = triage-only、Net 0、update/bugfix 移行合意) + Phase 8 (session40 = PR #392 merged: CMフィルター + 期間/表記統一、Net 0、hook ループ教訓 → グローバル MUST line 13 追加) + Phase 8 (session41 = PR #392 を kanameone/cocoro に展開完了、indexes 全 READY、Net 0) + Phase 8 (session42 = Issue #396 完遂: 編集保存時の確定フラグバグ修正、PR #397 merged + 3 環境展開、observability #398 起票で Net 0) + Phase 8 (session43 = ユーザー要望「検索結果が新しい日付が上に」完遂: PR #400 merged + 3 環境展開、フォローアップ Issue #401/#402 起票で Net +2) + Phase 8 (session44 = Issue #401 完遂: searchDocuments handler 統合テスト追加、PR #404 merged + dev 自動デプロイ、Net -1) + Phase 8 (session45 = ユーザー要望「ファックス内容変更で担当CM変更」完遂: PR #406 merged via escape hatch、Net 0、AI 駆動 4 原則追加 + memory 整理) + Phase 8 (session46 = PR #407 merged 確定 + ~/.claude memory 整理 (PR #167)、Net 0、4 原則現状維持・2026-07-末レビュー予定) + **Phase 8 (session47 = PR #406 AC8 完了 + PR #409 merged: 編集モード時マスタ非連動注意文 UI 明示化、Net 0)** 完遂
+**更新日**: 2026-04-28 session48 (**PR #406 + PR #409 を kanameone/cocoro に展開完了、Net 0**。ユーザー要望「ファックス内容変更で担当CM変更」(session45/47 で dev 完遂) を本番クライアント全環境へ反映。kanameone は `deploy-to-project.sh` 経由、cocoro は手動手順 (cp/build/deploy/rm) で完了。AI 駆動 4 原則 §3「番号単位の明示認可」を遵守し、各環境ごとに認可確認を経て実行。教訓: dev 成功済みなら本番側で能動的な動作確認依頼は executor 越権、PWA キャッシュは本番ユーザー側で自然解決の範囲。)
+**ブランチ**: main (clean、3 環境展開完了)
+**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + Phase 2 (#181-#183) + Phase 3 (#188-#190) + Phase 5 (#339/#340/#332/#335) + Phase 6 (#346/#343/#344/#331/#333/#262) + Phase 7 (#338) + Phase 8 (session29 = #334/#196) + Phase 8 (session30 = #360 rescue observability + #358 backfill test lock-in) + Phase 8 (session31 = #365 backfill counter 分割 + #364 rescue per-doc catch test) + Phase 8 (session32 = #370 fatal 分岐 safeLogError 二重呼出防止 test) + Phase 8 (session33 = #200 Gmail/Split 統合テスト + #251 Scope 2 summaryPromptBuilder 分離) + Phase 8 (session34 = #375 Gmail reimportPolicy pure helper 抽出 + #237 tokenizer 3 箇所共通化) + Phase 8 (session35 = Issue triage-only、close 忘れ 1 件整理 = #220) + Phase 8 (session36 = #239 force-reindex audit log + #152 close、新規 #384 起票) + Phase 8 (session37 = #384 完遂、新規 #387 起票) + Phase 8 (session38 = #387 完遂、Net -1) + Phase 8 (session39 = triage-only、Net 0、update/bugfix 移行合意) + Phase 8 (session40 = PR #392 merged: CMフィルター + 期間/表記統一、Net 0、hook ループ教訓 → グローバル MUST line 13 追加) + Phase 8 (session41 = PR #392 を kanameone/cocoro に展開完了、indexes 全 READY、Net 0) + Phase 8 (session42 = Issue #396 完遂: 編集保存時の確定フラグバグ修正、PR #397 merged + 3 環境展開、observability #398 起票で Net 0) + Phase 8 (session43 = ユーザー要望「検索結果が新しい日付が上に」完遂: PR #400 merged + 3 環境展開、フォローアップ Issue #401/#402 起票で Net +2) + Phase 8 (session44 = Issue #401 完遂: searchDocuments handler 統合テスト追加、PR #404 merged + dev 自動デプロイ、Net -1) + Phase 8 (session45 = ユーザー要望「ファックス内容変更で担当CM変更」完遂: PR #406 merged via escape hatch、Net 0、AI 駆動 4 原則追加 + memory 整理) + Phase 8 (session46 = PR #407 merged 確定 + ~/.claude memory 整理 (PR #167)、Net 0、4 原則現状維持・2026-07-末レビュー予定) + Phase 8 (session47 = PR #406 AC8 完了 + PR #409 merged: 編集モード時マスタ非連動注意文 UI 明示化、Net 0) + **Phase 8 (session48 = PR #406 + #409 を kanameone/cocoro に展開完了、Net 0)** 完遂
+
+<a id="session48"></a>
+## ✅ session48 完了サマリー (2026-04-28: PR #406 + #409 を kanameone/cocoro に展開完了、Net 0)
+
+session45/47 で dev 完遂したユーザー要望「ファックス内容変更で担当CM変更」(PR #406) + 「編集モード時マスタ非連動注意文」(PR #409) を、本番クライアント全環境 (kanameone, cocoro) へ展開完了。AI 駆動 4 原則 §3「番号単位の明示認可」を遵守し、品質評価結果報告 → kanameone 認可確認 → 実行 → cocoro 認可確認 → 実行 のステップを段階的に踏んだ。ユーザーの「Devで成功していてもすべき？」指摘を受けて、本番側での能動的な動作確認依頼が executor 越権だったことを認識・撤回。
+
+### Issue Net 変化
+
+| 項目 | 内容 |
+|------|------|
+| Close 数 | 0 件 |
+| 起票数 | 0 件 |
+| **Net 変化 (session48 単独)** | **0 件** (展開作業のみ、Issue 化基準を満たす作業なし) |
+
+### デプロイ実績
+
+| 環境 | 手段 | URL | 結果 |
+|------|------|-----|------|
+| dev | CI 自動 (session47 時点で反映済) | https://doc-split-dev.web.app | ✅ |
+| **kanameone** | `firebase login:use systemkaname@kanameone.com` → `./scripts/switch-client.sh kanameone` → `./scripts/deploy-to-project.sh kanameone` | https://docsplit-kanameone.web.app | ✅ release complete |
+| **cocoro** | `cp frontend/.env.cocoro frontend/.env.local` → `cd frontend && npm run build` → `firebase deploy --only hosting -P cocoro` → `rm frontend/.env.local` | https://docsplit-cocoro.web.app | ✅ release complete |
+
+| 項目 | 内容 |
+|------|------|
+| **品質確認** | frontend テスト 181/181 PASS, ビルド 2677 modules / 各環境 ~3.5s, CI/Deploy 直近5件全 success, AC8 dev 実機確認済 |
+| **変更範囲** | frontend のみ (DocumentDetailModal / MasterSelectField + テスト 2 件)、functions/rules/indexes 変更なし |
+| **後片付け** | Firebase CLI を `hy.unimail.11@gmail.com` (dev) に復帰、gcloud 構成を `doc-split` (dev) に復帰、`.env.local` 削除済 |
+
+### 教訓 (本セッションでの学び)
+
+1. **dev 成功済みなら本番側で能動的な動作確認依頼は executor 越権** — 私が「kanameone で書類詳細モーダルの動作確認をお願いします」と要求したが、ユーザーから「Devで成功していてもすべき？」の指摘で撤回。frontend のみの変更 + ビルド成功 + Hosting release complete = 反映完了で十分、PWA キャッシュは本番ユーザー側で自然解決の範囲。過去展開実績 (session41/43) でも各環境ごとの実機確認は dev のみで完結している
+2. **CWD 永続化問題** — `cd frontend && npm run build` で CWD が `frontend/` に永続化、後続の `rm frontend/.env.local` が `frontend/frontend/.env.local` を探して失敗。対処: 絶対パスを使うか、明示的に `cd /Users/yyyhhh/Projects/doc-split` で戻す。Bash ツールは「working directory persists between commands」のため `cd` は副作用がある
+3. **`.env.local` の残骸検出** — kanameone デプロイ前に dev 用 `.env.local` (4月27日 09:44) が残っていた。`deploy-to-project.sh` は自動でバックアップ→上書き→復元する仕組みのため影響はなかったが、手動 `firebase deploy` 時は致命傷になりうる (CLAUDE.md「.env.local の優先順位」警告通り)
+4. **AI 駆動 4 原則 §3「番号単位の明示認可」運用が円滑に機能** — ユーザーから「ステップバイステップで反映」の方針認可 → 各環境ごとに「kanameone 実行してよいか」「cocoro 実行してよいか」と確認 → 「ok」「y」の番号単位認可で実行。session45 の bypass 提案 7 種違反のような迷走なし
+
+### 次セッションへの引き継ぎ
+
+- **session45/47 起源のユーザー要望「ファックス内容変更で担当CM変更」は本番含めて完遂** (3 環境全反映済)
+- 残 P2 Issue: #402, #398, #299, #251, #238 (ブロッカーなし、優先度に応じて検討)
+- 直近のユーザー要望は本セッションで完遂、追加要望待ち
+- **過剰確認要求の自戒メモ** — 本番展開後の動作確認は基本ユーザー判断、AI から能動的に依頼しない (本セッション気付き、memory 化判断は次セッションで)
 
 <a id="session47"></a>
 ## ✅ session47 完了サマリー (2026-04-28: PR #406 AC8 完了 + PR #409 merged 編集モード注意文、Net 0)
