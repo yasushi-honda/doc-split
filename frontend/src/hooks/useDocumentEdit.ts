@@ -201,12 +201,12 @@ export function useDocumentEdit(document: Document | null | undefined): UseDocum
           oldValue: document.customerConfirmed === undefined ? null : String(document.customerConfirmed),
           newValue: 'true',
         })
-        if (document.needsManualCustomerSelection !== undefined) {
+        if (document.needsManualCustomerSelection === true) {
           updateData.needsManualCustomerSelection = false
           optimisticData.needsManualCustomerSelection = false
           changes.push({
             field: 'needsManualCustomerSelection',
-            oldValue: String(document.needsManualCustomerSelection),
+            oldValue: 'true',
             newValue: 'false',
           })
         }

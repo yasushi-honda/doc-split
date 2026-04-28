@@ -913,5 +913,31 @@ describe('useDocumentEdit - 確定フラグ editLogs 記録 (#398)', () => {
       // needsManualCustomerSelection は undefined のため書き込みスキップ → editLogs エントリも未作成
       expect(findLog('needsManualCustomerSelection')).toBeUndefined()
     })
+
+    // CodeRabbit 指摘2: needsManualCustomerSelection=false のドキュメントで no-op 監査ログを避ける
+    it('needsManualCustomerSelection=false のドキュメント → editLogs に当該エントリなし（false→false の no-op 防止）', async () => {
+      const doc = makeDocument({
+        customerName: '未判定',
+        customerConfirmed: false,
+        needsManualCustomerSelection: false,
+      })
+      const { result } = renderHook(() => useDocumentEdit(doc))
+
+      act(() => result.current.startEditing())
+      act(() => result.current.updateField('customerName', '河野 文江'))
+
+      await act(async () => {
+        await result.current.saveChanges()
+      })
+
+      // customerConfirmed は記録される
+      expect(findLog('customerConfirmed')).toBeDefined()
+      // needsManualCustomerSelection は false のため書き込み・記録ともスキップ（no-op エントリ防止）
+      expect(findLog('needsManualCustomerSelection')).toBeUndefined()
+
+      // updateData にも needsManualCustomerSelection が含まれないこと（Firestore write 削減）
+      const updateData = mockUpdateDoc.mock.calls[0]?.[1] as Record<string, unknown>
+      expect('needsManualCustomerSelection' in updateData).toBe(false)
+    })
   })
 })
