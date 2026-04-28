@@ -41,6 +41,8 @@ on:
           - force-reindex --doc-id
           - force-reindex --doc-id --execute
           - investigate-office-duplicate
+          - cleanup-office-name --dry-run
+          - cleanup-office-name --execute
       doc_id:
         description: 'Document ID (required when script contains --doc-id; ignored otherwise)'
         required: false
@@ -53,6 +55,29 @@ on:
         default: ''
       name2:
         description: 'Office name 2 (optional, for paired comparison; e.g. duplicate candidate variant like the trailing-zero suffix case)'
+        required: false
+        type: string
+        default: ''
+      from_name:
+        description: 'cleanup-office-name: 書き換え元の事業所名（例: ケア21上飯田0）'
+        required: false
+        type: string
+        default: ''
+      to_name:
+        description: 'cleanup-office-name: 書き換え先の事業所名（例: ケア21上飯田）'
+        required: false
+        type: string
+        default: ''
+      delete_from_master:
+        description: 'cleanup-office-name: 旧マスターを削除するか（true で削除）'
+        required: false
+        type: choice
+        default: 'false'
+        options:
+          - 'false'
+          - 'true'
+      expected_count:
+        description: 'cleanup-office-name: 影響件数の事前確認用（数値、不一致なら中断）'
         required: false
         type: string
         default: ''
@@ -137,6 +162,10 @@ jobs:
           SCRIPT_ARGS: ${{ steps.parse.outputs.script_args }}
           NAME1: ${{ github.event.inputs.name1 }}
           NAME2: ${{ github.event.inputs.name2 }}
+          FROM_NAME: ${{ github.event.inputs.from_name }}
+          TO_NAME: ${{ github.event.inputs.to_name }}
+          DELETE_FROM_MASTER: ${{ github.event.inputs.delete_from_master }}
+          EXPECTED_COUNT: ${{ github.event.inputs.expected_count }}
         run: |
           set -euo pipefail
           if [ -z "$PROJECT_ID" ]; then
@@ -158,6 +187,32 @@ jobs:
             fi
             ARGS=( --name "$NAME1" )
             if [ -n "$NAME2" ]; then ARGS+=( --name "$NAME2" ); fi
+            NODE_PATH=./functions/node_modules \
+              FIREBASE_PROJECT_ID="$PROJECT_ID" \
+              node "scripts/${SCRIPT_NAME}.js" "${ARGS[@]}"
+          elif [ "$SCRIPT_NAME" = "cleanup-office-name" ]; then
+            if [[ ! "$FROM_NAME" =~ [^[:space:]] ]]; then
+              echo "ERROR: from_name must contain non-whitespace characters" >&2
+              exit 1
+            fi
+            if [[ ! "$TO_NAME" =~ [^[:space:]] ]]; then
+              echo "ERROR: to_name must contain non-whitespace characters" >&2
+              exit 1
+            fi
+            ARGS=( --from "$FROM_NAME" --to "$TO_NAME" )
+            if [ "$DELETE_FROM_MASTER" = "true" ]; then
+              ARGS+=( --delete-from-master )
+            fi
+            if [ -n "$EXPECTED_COUNT" ]; then
+              if ! [[ "$EXPECTED_COUNT" =~ ^[0-9]+$ ]]; then
+                echo "ERROR: expected_count must be a non-negative integer (got: \"$EXPECTED_COUNT\")" >&2
+                exit 1
+              fi
+              ARGS+=( --expected-count "$EXPECTED_COUNT" )
+            fi
+            # SCRIPT_ARGS には --dry-run / --execute が入っている。read -ra で word splitting して array に追加
+            read -ra SUFFIX_ARGS <<< "$SCRIPT_ARGS"
+            ARGS+=( "${SUFFIX_ARGS[@]}" )
             NODE_PATH=./functions/node_modules \
               FIREBASE_PROJECT_ID="$PROJECT_ID" \
               node "scripts/${SCRIPT_NAME}.js" "${ARGS[@]}"
