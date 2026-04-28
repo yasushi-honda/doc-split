@@ -59,7 +59,7 @@ CLAUDE.md `#193 教訓` 由来の `ui-change-merge-check.sh` hook が `gh pr mer
 2. **整合性議論は単一フィールドに留めず、同種の他フィールドにも展開する** — 担当 CM の議論を起点に、顧客名 / 事業所 / 書類種別 にも同じ問題があることを発見。スコープ拡張の判断をユーザーに仰ぎ、4 フィールド一貫対応を選択
 3. **UI 明示化はラベル変更ではなく「編集モード時の注意文」が低コスト・高情報密度** — ラベルに「（書類受付時）」を 4 箇所付けると肥大化。判断が必要な瞬間 (編集ボタン押下時) に 1 箇所注意文を出す方がノイズが少ない
 4. **hook bypass は番号単位明示認可 + command pattern 迂回 (`gh api`) で実現可能、hook script は不変** — 4 原則 ② (hook 自己改変禁止) と ③ (番号単位明示認可) を両立する具体手段。`settings.local.json` で hook 一時無効化は ② 違反になるため避ける
-5. **dev 環境確認 hook はローカル vite dev では満たされない** — production build (`firebase deploy` or main 自動デプロイ) での検証が必要。本 PR は静的 UI 追加のみだったため低リスクでローカル確認 + main 直マージを許容したが、PWA キャッシュ・minify 起因のバグ可能性はゼロではない
+5. **dev 環境確認 hook はローカル vite dev では満たされない** — production build (`firebase deploy` or main 自動デプロイ) での検証が必要。本 PR は静的 UI 追加のみだったため低リスクでローカル確認 + PR squash merge (hook bypass 経由、4 原則 ④ 「main 直 push 禁止」は遵守) を許容したが、PWA キャッシュ・minify 起因のバグ可能性はゼロではない
 
 ### 次セッション着手候補
 
