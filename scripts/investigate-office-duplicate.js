@@ -136,6 +136,7 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error('エラー:', err.message);
+  // err 全体を渡して node に stack trace を自動印字させる（Firestore SDK の code/details 保持）
+  console.error('エラー:', err);
   process.exit(1);
 });
