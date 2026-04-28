@@ -7,8 +7,104 @@
 2026-04-23 session37 で session31/32 セクションを LATEST から archive へ移管 (prepend)。
 2026-04-26 session40 で session34/35/36 セクションを LATEST から archive へ移管 (prepend)。
 2026-04-28 session47 で session39/40/41/42 セクションを LATEST から archive へ移管 (prepend)。
+2026-04-28 session50 で session43/44 セクションを LATEST から archive へ移管 (prepend)。
 
 最新状況は `docs/handoff/LATEST.md` 参照。
+
+
+<a id="session44"></a>
+## ✅ session44 完了サマリー (2026-04-27: Issue #401 完遂、PR #404 merged + dev 自動デプロイ、Net -1)
+
+session43 の PR #400 (検索結果ソート) の `/review-pr` で挙がった「searchDocuments handler 統合テスト不在 (rating 7)」フォローアップ Issue #401 を完遂。handler 全体の現状契約を最小スコープで fixate し、Issue #402 (OOM ガード + 計測ログ) で壊しやすい挙動を回帰検出可能にすることが目的。Codex 2 段階セカンドオピニオン (優先順位レビュー → 詳細計画レビュー、12 件改善反映) → impl-plan → 実装 → PR #404 → 5 エージェント並列レビュー + Codex review (11 件指摘) → 全件反映 → main マージ → dev 自動デプロイ完了。
+
+### Issue Net 変化
+
+| 項目 | 内容 |
+|------|------|
+| Close 数 | 1 件 (#401) |
+| 起票数 | 0 件 |
+| **Net 変化 (session44 単独)** | **-1 件** (Issue 削減方向、CLAUDE.md「net で減らすべき」基準達成) |
+| **累積 (session43→44)** | session43 終了時 6 件 → session44 終了時 5 件、2 セッション累積 +1 件 (session43 で +2 起票 → session44 で 1 close) |
+
+### PR / 主要成果
+
+| PR | 内容 | merged commit |
+|----|------|---------------|
+| **#404** | test(search): searchDocuments handler の統合テスト追加 (Closes #401) | `713982f` |
+
+| 項目 | 内容 |
+|------|------|
+| **統合テスト** | 50/50 PASS (search 統合 14 + 既存統合 36)、所要 ~1 秒 |
+| **unit テスト** | 既存 833+ 件、回帰なし (CI で確認、本 PR はテスト追加のみで src 変更ゼロのため影響なし) |
+| **コード量** | 2 ファイル / +616/-1 (`functions/test/searchDocumentsIntegration.test.ts` +615 新規 / `functions/package.json` +1/-1 `test:integration` スクリプト書き換え) |
+| **実装変更** | **ゼロ** (テスト追加のみ。アプリの画面・操作・データ・API 全て不変) |
+| **デプロイ環境** | dev 自動デプロイのみ (CI / Deploy / pages build 全 success)。kanameone/cocoro はテスト追加のため展開不要 (運用判断) |
+
+### Acceptance Criteria (8 件 + smoke、全達成)
+
+- AC1: AND 検索 (全単語マッチのみ結果に含まれる)
+- AC2: 多段ソート 4 段 (fileDate desc → score desc → processedAt desc → docId asc) handler レベル整合
+- AC3: NULLS LAST (fileDate null は末尾、各群内は安定タイブレーク)
+- AC4: pagination 安定性 (limit/offset 重複なし、hasMore 切替、fullPage との一致)
+- AC5: orphan 除外 (search_index posting あるが documents 不在 → 結果・total から除外)
+- AC6: HttpsError 契約 (unauthenticated / permission-denied / invalid-argument の 6 分岐)
+- AC7: cache 経路 behavioral 検証 (Firestore 空 + users 再 seed でも cache 経由で同結果)
+- AC8: 壊れた fileDate (string/plain object) でも 500 落ちせず正常データを返す
+
+### `/review-pr` 5 エージェント + Codex review 指摘 (11 件、全件反映)
+
+| # | 重大度 | 内容 | 検出元 | 対応 commit |
+|---|--------|------|--------|-------------|
+| 1 | **CRITICAL (9)** | AC6 全 6 テストの try/catch が `expect.fail()` を catch + 任意 throw で偽合格 | silent-failure-hunter | `b7f2088`: `expectHttpsError` ヘルパー化 + `instanceof HttpsError` 厳密チェック |
+| 2 | HIGH (8) | AC7 cache 偽陰性 (db read 回数を spy していない) | pr-test-analyzer | `b7f2088`: Firestore 空 + users 再 seed パターンに変更、cache 経由を behavioral 検証 |
+| 3 | HIGH (8) | AC8 console.warn stub が brittle (seed 失敗時に状態リーク) | silent-failure-hunter | `b7f2088`: warn assertion を関数名パターンマッチ (/fileDate\|safeToMillis\|.../i) に強化 |
+| 4 | HIGH (8) | 存在しない AC9 への dangling reference | comment-analyzer | `b7f2088`: AC9 削除、Out-of-scope 根拠を PR 本文に整合 |
+| 5 | **HIGH (7)** | **AC2 score-desc 段が実質検証無効 (idf=0 + docId asc 偶発)** | **4 エージェント独立指摘** (pr-test-analyzer, code-reviewer, comment-analyzer, codex review) | `b7f2088`: 2-token AND + token 順 (df=100→df=2) で idf>0 を成立、score 差を反映、docId 命名で false-positive 防止、`score[0]>score[1]` sanity 追加 |
+| 6 | HIGH (7) | AC4 pagination 決定論性が弱 (fullPage 比較なし) | pr-test-analyzer | `b7f2088`: `fullPage = limit:10` 結果との一致 assert を追加 |
+| 7 | HIGH (7) | AC8 `warnCalls.length >= 2` が緩い (関係 warn でも合格) | silent-failure-hunter | `b7f2088`: 関数名パターンマッチで絞り込み |
+| 8 | HIGH (7) | callSearch の `as never` 二重キャストで型安全性無効 | silent-failure-hunter, codex review | `b7f2088`: `Parameters<typeof wrapped>[0]` 経由の型安全変換 |
+| 9 | HIGH (7) | AC3 ヘッダー説明が test 内コメントと矛盾 | comment-analyzer | `b7f2088`: ヘッダーを「各群内は安定タイブレーク; score desc は AC2 で検証」に修正 |
+| 10 | HIGH (7) | Codex Rxx 私的セッション ID が追跡不能 | comment-analyzer | `b7f2088`: 追跡可能な根拠説明に置換 |
+
+### Out of scope (本 PR で対応せず、フォローアップ整理)
+
+- raw query の PII ログ抑制 → #402 計測ログ整備時に同時対応
+- HttpsError('resource-exhausted') 検証 → #402 ガード実装と同時
+- 旧 posting フォーマット (postings.docId 形式) 互換性検証 → 別 Issue 化候補 (現 handler に互換コード残存)
+- read 回数の厳密固定 → #402 read 計測経路を変える余地を残す
+
+### 学習教訓 (memory 更新候補、次セッション初期に追加検討)
+
+- **AC6 try/catch + expect.fail 二重バグパターン**: `expect.fail()` を try ブロック内に置くと catch が AssertionError を拾い、混乱したエラーメッセージ + 任意 throw で偽合格になる。グローバル testing memory 候補
+- **複数エージェント独立指摘の信頼性**: AC2 score-desc 偽陽性が 4 エージェント独立で指摘された事例 → 「N-way 一致 = 確定的修正必須」のシグナル化
+- **module-scope cache の test 隔離**: searchDocuments の `cache = new Map` のような module-scope 状態は cleanup helper では解消できず、test 戦略 (一意 query / 状態を消して cache 経路を逆証明) で対処する必要
+
+### 残タスク
+
+- **次セッションで「ファックス内容変更で担当CMも変更」要件着手** (ユーザー要望、未着手・未 Issue 化、本セッション末尾で確認済)
+- フォローアップ #402 (OOM ガード + 計測ログ) は本番運用ログを 1-2 週間観測してから判断 (Codex 推奨)。session43 の継続方針
+
+### 次セッションへの引き継ぎ
+
+- ユーザー要望: **「ファックスの内容変更のところで、担当CMの変更もできないか？」** が新しい改修要件として待機中。次セッション開始時に対象画面 / 担当CM のソース (caremanagers マスタ?) / 既存 Issue 化の有無 を確認してから `/impl-plan` に入る
+- 残 open Issue 5 件は全て P2 enhancement (#402 / #398 / #299 / #251 / #238)。優先度は要望対応 > #402 (本番計測ログ先行可) の順
+
+<a id="session43"></a>
+## ✅ session43 完了サマリー (2026-04-27: ユーザー要望「検索結果が新しい日付が上に」完遂、PR #400 merged + 3 環境展開、Net +2)
+
+kanameone ユーザーから受領した要望「検索した際の結果が新しい日付が上に来るようにしてほしい」に対応。検索結果のソート順を従来のスコア降順から、書類日付 (fileDate) 降順を主軸とする多段ソート (`fileDate desc nulls last → score desc → processedAt desc → docId asc`) に変更。Claude + Codex 合議 (threadId 019dccc4) で方針2 + 案A 確定 → `/impl-plan` → 実装 → `/simplify` 3 並列 → `/safe-refactor` → Codex 事前&事後レビュー → PR #400 → `/review-pr` 5 エージェント並列 → C1/C2/C3 修正 → main マージ → 3 環境デプロイ → dev Playwright 動作確認 (AC1/3/5/6 ✅) 完了。
+
+### 残タスク (ユーザー側)
+
+- 要望者 (kanameone ユーザー) への対応完了報告 (Codex レビュー済み文案を session 内で提示済み)
+- cocoro クライアントへの機能改善のお知らせ (要望者扱いしない版を session 内で提示済み)
+
+### 次セッションへの引き継ぎ
+
+- フォローアップ #401 (handler 統合テスト) と #402 (OOM ガード + 計測ログ) は本番運用ログを 1-2 週間観測してから対応判断するのが妥当 (Codex 推奨)。先行は #402 の計測ログのみ低リスクで先行可能
+- 本番展開後の warn ログ監視対象: `[searchDocuments] fileDate is not a Timestamp` / `processedAt is not a Timestamp` / `Orphaned index entries detected` の発生頻度
+
+---
 
 
 <a id="session42"></a>
