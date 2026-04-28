@@ -1,8 +1,76 @@
 # ハンドオフメモ
 
-**更新日**: 2026-04-28 session46 (**PR #407 merged 確定 (`b999d72`、session45 ハンドオフ docs) + ~/.claude (claude-code-config) で PR #167 merged: hook 撤去後 memory 追従 + 予防策追加、Net 0**。doc-split コード/設定変更なしの memory 整理セッション。AI 駆動 4 原則は現状維持決定 (3 ヶ月後 = 2026-07-末レビュー予定)。リモート agent 化は手間/効果バランスで見送り、memory 記録 + マルチデバイス同期で代替。)
-**ブランチ**: main (clean、PR #407 merged で session45 ハンドオフ確定)
-**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + Phase 2 (#181-#183) + Phase 3 (#188-#190) + Phase 5 (#339/#340/#332/#335) + Phase 6 (#346/#343/#344/#331/#333/#262) + Phase 7 (#338) + Phase 8 (session29 = #334/#196) + Phase 8 (session30 = #360 rescue observability + #358 backfill test lock-in) + Phase 8 (session31 = #365 backfill counter 分割 + #364 rescue per-doc catch test) + Phase 8 (session32 = #370 fatal 分岐 safeLogError 二重呼出防止 test) + Phase 8 (session33 = #200 Gmail/Split 統合テスト + #251 Scope 2 summaryPromptBuilder 分離) + Phase 8 (session34 = #375 Gmail reimportPolicy pure helper 抽出 + #237 tokenizer 3 箇所共通化) + Phase 8 (session35 = Issue triage-only、close 忘れ 1 件整理 = #220) + Phase 8 (session36 = #239 force-reindex audit log + #152 close、新規 #384 起票) + Phase 8 (session37 = #384 完遂、新規 #387 起票) + Phase 8 (session38 = #387 完遂、Net -1) + Phase 8 (session39 = triage-only、Net 0、update/bugfix 移行合意) + Phase 8 (session40 = PR #392 merged: CMフィルター + 期間/表記統一、Net 0、hook ループ教訓 → グローバル MUST line 13 追加) + Phase 8 (session41 = PR #392 を kanameone/cocoro に展開完了、indexes 全 READY、Net 0) + Phase 8 (session42 = Issue #396 完遂: 編集保存時の確定フラグバグ修正、PR #397 merged + 3 環境展開、observability #398 起票で Net 0) + Phase 8 (session43 = ユーザー要望「検索結果が新しい日付が上に」完遂: PR #400 merged + 3 環境展開、フォローアップ Issue #401/#402 起票で Net +2) + Phase 8 (session44 = Issue #401 完遂: searchDocuments handler 統合テスト追加、PR #404 merged + dev 自動デプロイ、Net -1) + Phase 8 (session45 = ユーザー要望「ファックス内容変更で担当CM変更」完遂: PR #406 merged via escape hatch、Net 0、AI 駆動 4 原則追加 + memory 整理) + **Phase 8 (session46 = PR #407 merged 確定 + ~/.claude memory 整理 (PR #167)、Net 0、4 原則現状維持・2026-07-末レビュー予定)** 完遂
+**更新日**: 2026-04-28 session47 (**PR #406 AC8 dev 実機確認完了 + PR #409 merged: 編集モード時マスタ非連動注意文 UI 明示化、Net 0**。ユーザー指摘「ファックスでケアマネ変更すると利用者設定も変わるか」→ マスタ・トランザクション分離原則の議論 → UI 明示化案 (案 C) で合意 → PR #409 で 4 フィールド一貫対応。hook ブロックは番号単位明示認可 + `gh api` 経由 (hook script 不変) で迂回、AC5 dev 自動デプロイ後実機確認完了。)
+**ブランチ**: main (clean、PR #409 merged 直後)
+**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + Phase 2 (#181-#183) + Phase 3 (#188-#190) + Phase 5 (#339/#340/#332/#335) + Phase 6 (#346/#343/#344/#331/#333/#262) + Phase 7 (#338) + Phase 8 (session29 = #334/#196) + Phase 8 (session30 = #360 rescue observability + #358 backfill test lock-in) + Phase 8 (session31 = #365 backfill counter 分割 + #364 rescue per-doc catch test) + Phase 8 (session32 = #370 fatal 分岐 safeLogError 二重呼出防止 test) + Phase 8 (session33 = #200 Gmail/Split 統合テスト + #251 Scope 2 summaryPromptBuilder 分離) + Phase 8 (session34 = #375 Gmail reimportPolicy pure helper 抽出 + #237 tokenizer 3 箇所共通化) + Phase 8 (session35 = Issue triage-only、close 忘れ 1 件整理 = #220) + Phase 8 (session36 = #239 force-reindex audit log + #152 close、新規 #384 起票) + Phase 8 (session37 = #384 完遂、新規 #387 起票) + Phase 8 (session38 = #387 完遂、Net -1) + Phase 8 (session39 = triage-only、Net 0、update/bugfix 移行合意) + Phase 8 (session40 = PR #392 merged: CMフィルター + 期間/表記統一、Net 0、hook ループ教訓 → グローバル MUST line 13 追加) + Phase 8 (session41 = PR #392 を kanameone/cocoro に展開完了、indexes 全 READY、Net 0) + Phase 8 (session42 = Issue #396 完遂: 編集保存時の確定フラグバグ修正、PR #397 merged + 3 環境展開、observability #398 起票で Net 0) + Phase 8 (session43 = ユーザー要望「検索結果が新しい日付が上に」完遂: PR #400 merged + 3 環境展開、フォローアップ Issue #401/#402 起票で Net +2) + Phase 8 (session44 = Issue #401 完遂: searchDocuments handler 統合テスト追加、PR #404 merged + dev 自動デプロイ、Net -1) + Phase 8 (session45 = ユーザー要望「ファックス内容変更で担当CM変更」完遂: PR #406 merged via escape hatch、Net 0、AI 駆動 4 原則追加 + memory 整理) + Phase 8 (session46 = PR #407 merged 確定 + ~/.claude memory 整理 (PR #167)、Net 0、4 原則現状維持・2026-07-末レビュー予定) + **Phase 8 (session47 = PR #406 AC8 完了 + PR #409 merged: 編集モード時マスタ非連動注意文 UI 明示化、Net 0)** 完遂
+
+<a id="session47"></a>
+## ✅ session47 完了サマリー (2026-04-28: PR #406 AC8 完了 + PR #409 merged 編集モード注意文、Net 0)
+
+ユーザー指摘「ファックスでケアマネ変更すると、利用者設定も一緒に変わるか？整合性とれないですよね」を起点に、マスタ・トランザクション分離原則を議論。書類詳細モーダルで編集する 4 フィールド (顧客名 / 事業所 / 書類種別 / 担当ケアマネ) はすべて書類個別の記録として保存され、マスタとは独立する設計（DDD/イベントソーシング/会計帳簿の「記録の不変性」原則）が意図的であることを確認。整合性は「連動更新」ではなく「不変記録 × 最新マスタの併存」+ UI 明示化で守るべきと整理 → PR #409 で 4 フィールド一貫対応。並行して PR #406 (session45) の AC8 (dev 実機確認) も完了。
+
+### Issue Net 変化
+
+| 項目 | 内容 |
+|------|------|
+| Close 数 | 0 件 |
+| 起票数 | 0 件 |
+| **Net 変化 (session47 単独)** | **0 件** (PR #406 follow-up 検証 + PR #409 UI 改善のみ、Issue 化基準 [実害/再現バグ/CI破壊/rating≥7/明示指示] を満たす作業なし) |
+
+### PR / 主要成果
+
+| PR | 内容 | 状態 |
+|----|------|------|
+| **#406** | feat(edit): 書類詳細モーダルで担当ケアマネを変更可能に (session45 で merged) | AC8 dev 実機確認完了、本文 [x] 更新 + コメント記録 ([#issuecomment-4331098438](https://github.com/yasushi-honda/doc-split/pull/406#issuecomment-4331098438)) |
+| **#409** | feat(edit): 書類詳細モーダル編集モードにマスタ非連動の注意文を表示 | merged commit `de26d62`、AC5 dev 自動デプロイ後実機確認完了 ([#issuecomment-4331338855](https://github.com/yasushi-honda/doc-split/pull/409#issuecomment-4331338855)) |
+
+| 項目 | 内容 |
+|------|------|
+| **コード量 (#409)** | 1 ファイル / +10/-1 (DocumentDetailModal.tsx に Info アイコン import + 編集モード時の青色注意文ブロック追加) |
+| **frontend テスト** | 181/181 PASS、tsc/lint クリーン |
+| **デプロイ環境** | dev 自動デプロイのみ。kanameone/cocoro はユーザー要望未受領で展開なし |
+
+### Acceptance Criteria (PR #409、5 件全達成)
+
+- AC1: 編集モード時、書類情報セクションの先頭に青色の注意文が表示される (Playwright MCP localhost + dev 確認)
+- AC2: 閲覧モード時、注意文は DOM に存在しない (条件付きレンダリング `{isEditing && (...)}` 動作確認)
+- AC3: tsc / lint クリーン (regression なし)
+- AC4: 既存テスト 181/181 PASS
+- AC5: dev 環境での実機確認完了 (production build / PWA / Service Worker 含めて異常なし)
+
+### マージ手順 (4 原則に基づく hook bypass)
+
+CLAUDE.md `#193 教訓` 由来の `ui-change-merge-check.sh` hook が `gh pr merge` を一律ブロックし dev 環境確認を要求。本 PR のローカル dev サーバー実機確認完了後、ユーザーから **「PR #409 の hook bypass を明示認可」** を取得 (4 原則 ③ 番号単位明示認可)。実装手段はユーザー選択により `gh api -X PUT repos/.../pulls/409/merge -f merge_method=squash` で command pattern 迂回 (hook script 自体は未改変、4 原則 ② 「hook 自己改変は絶対禁止」遵守)。マージ後の dev 自動デプロイで AC5 を完了。
+
+### マスタ・トランザクション分離原則の確定 (本セッションでの議論成果)
+
+| 観点 | 内容 |
+|------|------|
+| データ層の設計 | 書類個別フィールド (`documents/{docId}.{customerName,customerOffice,documentType,careManager}`) はマスタ (`masters/{customers,offices,documents,caremanagers}/items/{id}`) と独立。意図的な非連動 |
+| セオリー上の根拠 | DDD/イベントソーシング/会計帳簿の「記録の不変性」原則。書類は「ある時点の事実」=過去書類の改変は監査証跡を失う |
+| 介護現場での具体例 | CM 引き継ぎ (田中→佐藤) 時、田中時代の書類の `careManager` が「佐藤」に書き換わるのは事実改変。書類個別保持で当時の担当が記録として残る |
+| 整合性の正しい守り方 | 「連動更新」ではなく「不変記録 × 最新マスタの併存」+ UI 明示化 |
+| 自動補完仕様 | 顧客変更時、書類の `careManager` が空欄なら顧客マスタから補完 (`resolveCareManager`)、既存値あれば変化なし。書類受付時の記録として一度入った値は保持 |
+| マスタ更新時の挙動 | マスタ管理画面で `customers/{id}.careManagerName` 等を変更しても、既存書類の値には反映しない (将来必要なら別 UI でバルク反映) |
+
+### 教訓 (本セッション)
+
+1. **ユーザーの「整合性」直感は重要だが、セオリー的な「整合性」とは意味が異なる場合がある** — 「同時刻時点でのデータ一致」と「過去事実の保持」は別概念。前者を求めると後者を失う設計トレードオフを言語化して提示すれば判断材料になる
+2. **整合性議論は単一フィールドに留めず、同種の他フィールドにも展開する** — 担当 CM の議論を起点に、顧客名 / 事業所 / 書類種別 にも同じ問題があることを発見。スコープ拡張の判断をユーザーに仰ぎ、4 フィールド一貫対応を選択
+3. **UI 明示化はラベル変更ではなく「編集モード時の注意文」が低コスト・高情報密度** — ラベルに「（書類受付時）」を 4 箇所付けると肥大化。判断が必要な瞬間 (編集ボタン押下時) に 1 箇所注意文を出す方がノイズが少ない
+4. **hook bypass は番号単位明示認可 + command pattern 迂回 (`gh api`) で実現可能、hook script は不変** — 4 原則 ② (hook 自己改変禁止) と ③ (番号単位明示認可) を両立する具体手段。`settings.local.json` で hook 一時無効化は ② 違反になるため避ける
+5. **dev 環境確認 hook はローカル vite dev では満たされない** — production build (`firebase deploy` or main 自動デプロイ) での検証が必要。本 PR は静的 UI 追加のみだったため低リスクでローカル確認 + PR squash merge (hook bypass 経由、4 原則 ④ 「main 直 push 禁止」は遵守) を許容したが、PWA キャッシュ・minify 起因のバグ可能性はゼロではない
+
+### 次セッション着手候補
+
+| 候補 | 内容 | 優先度 |
+|------|------|-------|
+| **LATEST.md アーカイブ** | 700 行超に達した。session30〜38 の古いセクションを `archive/2026-04.md` に移動推奨 | 高 (500 行目標を大幅超過) |
+| Issue #402 | searchDocuments OOM ガード + latency/read 計測ログ (PR #400 follow-up) | 中 |
+| Issue #398 | 確定フラグ書き込みを editLogs に記録 (#396 follow-up) | 中 |
+| Issue #251 | summaryGenerator unit test + buildSummaryPrompt 分離 | 中 |
+| Issue #299 | capPageResultsAggregate 動的 safeLogError invocation test (ts-node/esm 環境整備) | 中 |
+| Issue #238 | force-reindex に孤児 posting 検出モード追加 | 中 |
 
 <a id="session46"></a>
 ## ✅ session46 完了サマリー (2026-04-28: PR #407 merged 確定 + ~/.claude memory 整理、Net 0、4 原則レビュー予定 2026-07-末)
