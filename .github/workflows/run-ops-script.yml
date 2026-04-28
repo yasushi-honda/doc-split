@@ -40,8 +40,19 @@ on:
           - force-reindex --all-drift --execute
           - force-reindex --doc-id
           - force-reindex --doc-id --execute
+          - investigate-office-duplicate
       doc_id:
         description: 'Document ID (required when script contains --doc-id; ignored otherwise)'
+        required: false
+        type: string
+        default: ''
+      name1:
+        description: 'Office name 1 (required for investigate-office-duplicate; ignored otherwise)'
+        required: false
+        type: string
+        default: ''
+      name2:
+        description: 'Office name 2 (optional, for paired comparison; e.g. duplicate candidate variant like the trailing-zero suffix case)'
         required: false
         type: string
         default: ''
@@ -92,6 +103,7 @@ jobs:
           INPUT: ${{ github.event.inputs.script }}
           DOC_ID: ${{ github.event.inputs.doc_id }}
         run: |
+          set -euo pipefail
           SCRIPT_NAME=$(echo "$INPUT" | awk '{print $1}')
           SCRIPT_ARGS=$(echo "$INPUT" | sed 's/^[^ ]* *//')
           if [ "$SCRIPT_ARGS" = "$SCRIPT_NAME" ]; then
@@ -123,7 +135,14 @@ jobs:
           PROJECT_ID: ${{ steps.resolve.outputs.project_id }}
           SCRIPT_NAME: ${{ steps.parse.outputs.script_name }}
           SCRIPT_ARGS: ${{ steps.parse.outputs.script_args }}
+          NAME1: ${{ github.event.inputs.name1 }}
+          NAME2: ${{ github.event.inputs.name2 }}
         run: |
+          set -euo pipefail
+          if [ -z "$PROJECT_ID" ]; then
+            echo "ERROR: PROJECT_ID is empty (failed to resolve from .firebaserc)" >&2
+            exit 1
+          fi
           echo "=== Operations Script ==="
           echo "Environment: $ENVIRONMENT"
           echo "Project ID: $PROJECT_ID"
@@ -131,7 +150,18 @@ jobs:
           echo "Args: $SCRIPT_ARGS"
           echo "========================="
 
-          if [ "$SCRIPT_NAME" = "backfill-display-filename" ]; then
+          if [ "$SCRIPT_NAME" = "investigate-office-duplicate" ]; then
+            # 空文字 / 空白のみの NAME1 を弾く（trim せずに非空白文字の存在チェック）
+            if [[ ! "$NAME1" =~ [^[:space:]] ]]; then
+              echo "ERROR: name1 must contain non-whitespace characters for investigate-office-duplicate" >&2
+              exit 1
+            fi
+            ARGS=( --name "$NAME1" )
+            if [ -n "$NAME2" ]; then ARGS+=( --name "$NAME2" ); fi
+            NODE_PATH=./functions/node_modules \
+              FIREBASE_PROJECT_ID="$PROJECT_ID" \
+              node "scripts/${SCRIPT_NAME}.js" "${ARGS[@]}"
+          elif [ "$SCRIPT_NAME" = "backfill-display-filename" ]; then
             cd scripts
             NODE_PATH=../functions/node_modules \
               FIREBASE_PROJECT_ID="$PROJECT_ID" \
