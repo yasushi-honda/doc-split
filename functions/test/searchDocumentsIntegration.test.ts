@@ -612,4 +612,51 @@ describe('searchDocuments handler integration (#401a, Closes #401)', () => {
       expect(safeToMillisWarns.length).to.be.at.least(2);
     });
   });
+
+  // ----------------------------------------
+  // AC9: perf observability ログ (Issue #402 段階1)
+  // ----------------------------------------
+  describe('AC9: perf observability ログ', () => {
+    let originalInfo: typeof console.info;
+    let infoCalls: unknown[][];
+
+    beforeEach(() => {
+      originalInfo = console.info;
+      infoCalls = [];
+      console.info = (...args: unknown[]) => {
+        infoCalls.push(args);
+      };
+    });
+
+    afterEach(() => {
+      console.info = originalInfo;
+    });
+
+    it('閾値未満のマッチでは perf ログが出力されない (ノイズ抑制)', async () => {
+      // Arrange: 5 件のみ seed (matchedCount=5, 100 件閾値未満)
+      await seedUser();
+      const postings: Record<string, { score: number; fieldsMask: number }> = {};
+      for (let i = 1; i <= 5; i++) {
+        postings[`ac9doc${i}`] = { score: 1.0, fieldsMask: 8 };
+      }
+      await seedSearchIndex('ac9smallword', postings);
+      const proc = ts('2026-04-27T12:00:00Z');
+      for (let i = 1; i <= 5; i++) {
+        await seedDocument(`ac9doc${i}`, {
+          fileName: `file-${i}.pdf`,
+          processedAt: proc,
+        });
+      }
+
+      // Act
+      const result = await callSearch({ query: 'ac9smallword' });
+
+      // Assert: 結果は正常 + perf ログは出力されない
+      expect(result.total).to.equal(5);
+      const perfLogs = infoCalls.filter((args) =>
+        args.some((a) => typeof a === 'string' && a.includes('[searchDocuments] perf'))
+      );
+      expect(perfLogs).to.have.lengthOf(0);
+    });
+  });
 });

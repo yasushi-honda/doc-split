@@ -167,6 +167,9 @@ export const searchDocuments = onCall<SearchRequest>(
       return cached;
     }
 
+    // perf 計測開始 (cache miss 時のみ。Issue #402 段階1)
+    const startMs = Date.now();
+
     // クエリを単語ごとにトークン化（AND検索用）
     const wordTokenGroups = tokenizeQueryByWords(query);
     if (wordTokenGroups.length === 0) {
@@ -318,6 +321,21 @@ export const searchDocuments = onCall<SearchRequest>(
     };
 
     setCache(cacheKey, result);
+
+    // perf observability ログ (Issue #402 段階1)
+    // 閾値超過時のみ出力。query 自体は PII リスク (顧客名・ファイル名等が含まれ得る) のため
+    // queryLength のみ記録。N の分布・elapsedMs から OOM ガード移行判断 (#402 段階2/3) を行う。
+    const elapsedMs = Date.now() - startMs;
+    if (filteredDocs.length > 100 || elapsedMs > 1000) {
+      console.info('[searchDocuments] perf', {
+        queryLength: query.length,
+        matchedCount: filteredDocs.length,
+        fetchedCount: sortableDocs.length,
+        orphanCount: orphanedDocIds.length,
+        elapsedMs,
+      });
+    }
+
     return result;
   }
 );
