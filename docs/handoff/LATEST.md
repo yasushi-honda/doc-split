@@ -1,8 +1,92 @@
 # ハンドオフメモ
 
-**更新日**: 2026-04-28 session50 (**session49 ハンドオフ「先行対応事項」3 件 (A-1/A-2/A-3) + Phase A 後半 (B-1 = Issue #402 段階1) 完遂、3 PR merged + 全環境展開完了、Net 0**。`/deploy` SKILL.md cocoro firebase login 切替手順追記 (PR #416)、PR/デプロイ運用 + Quality Gate 関連 feedback 5 件 memory 化 (claude-code-config PR #172)、searchDocuments perf observability ログ追加 (PR #417, Issue #402 段階1)。dev/kanameone/cocoro 全環境展開完了。教訓: ハーネス遵守の継続観察 (`/schedule` 過剰実装の自戒、本番展開後の能動的確認は 4 原則 §1 越権)。次セッション: 残 open Issue 4 件 (#402/#299/#251/#238) を triage 再評価し close not planned or open 維持 + 再開条件明記でクリーン化してからアップデート/bugfix 着手。)
-**ブランチ**: main (clean、3 環境展開完了)
-**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + Phase 2 (#181-#183) + Phase 3 (#188-#190) + Phase 5 (#339/#340/#332/#335) + Phase 6 (#346/#343/#344/#331/#333/#262) + Phase 7 (#338) + Phase 8 (session29 = #334/#196) + Phase 8 (session30 = #360 rescue observability + #358 backfill test lock-in) + Phase 8 (session31 = #365 backfill counter 分割 + #364 rescue per-doc catch test) + Phase 8 (session32 = #370 fatal 分岐 safeLogError 二重呼出防止 test) + Phase 8 (session33 = #200 Gmail/Split 統合テスト + #251 Scope 2 summaryPromptBuilder 分離) + Phase 8 (session34 = #375 Gmail reimportPolicy pure helper 抽出 + #237 tokenizer 3 箇所共通化) + Phase 8 (session35 = Issue triage-only、close 忘れ 1 件整理 = #220) + Phase 8 (session36 = #239 force-reindex audit log + #152 close、新規 #384 起票) + Phase 8 (session37 = #384 完遂、新規 #387 起票) + Phase 8 (session38 = #387 完遂、Net -1) + Phase 8 (session39 = triage-only、Net 0、update/bugfix 移行合意) + Phase 8 (session40 = PR #392 merged: CMフィルター + 期間/表記統一、Net 0、hook ループ教訓 → グローバル MUST line 13 追加) + Phase 8 (session41 = PR #392 を kanameone/cocoro に展開完了、indexes 全 READY、Net 0) + Phase 8 (session42 = Issue #396 完遂: 編集保存時の確定フラグバグ修正、PR #397 merged + 3 環境展開、observability #398 起票で Net 0) + Phase 8 (session43 = ユーザー要望「検索結果が新しい日付が上に」完遂: PR #400 merged + 3 環境展開、フォローアップ Issue #401/#402 起票で Net +2) + Phase 8 (session44 = Issue #401 完遂: searchDocuments handler 統合テスト追加、PR #404 merged + dev 自動デプロイ、Net -1) + Phase 8 (session45 = ユーザー要望「ファックス内容変更で担当CM変更」完遂: PR #406 merged via escape hatch、Net 0、AI 駆動 4 原則追加 + memory 整理) + Phase 8 (session46 = PR #407 merged 確定 + ~/.claude memory 整理 (PR #167)、Net 0、4 原則現状維持・2026-07-末レビュー予定) + Phase 8 (session47 = PR #406 AC8 完了 + PR #409 merged: 編集モード時マスタ非連動注意文 UI 明示化、Net 0) + Phase 8 (session48 = PR #406 + #409 を kanameone/cocoro に展開完了、Net 0) + Phase 8 (session49 = Issue #398 完遂: 確定フラグ editLogs 記録、PR #414 merged + 3 環境展開、Net -1) + **Phase 8 (session50 = 先行対応 A-1/A-2/A-3 完遂 + B-1 = Issue #402 段階1 完遂、3 PR merged + 全環境展開、Net 0)** 完遂
+**更新日**: 2026-04-29 session51 (**kaname 問い合わせ「ケア21上飯田 / ケア21上飯田0」事業所マスター重複対応完遂、PR #419/#420 merged + kanameone 環境書き込み実行 + search_index 整合性確認、Net 0**。汎用調査スクリプト `investigate-office-duplicate.js` (PR #419) と書き込み系統合スクリプト `cleanup-office-name.js` (PR #420) を追加、kanameone で書類 9 件を「ケア21上飯田」に統合 + 旧マスター削除、副次的に発見した既存 25 件の未インデックス書類も `force-reindex --all-drift --execute` で解消。教訓: 4 並列レビュー (Claude 3 エージェント + codex review) で書き込み系の見落としを補完 / 書き込みスクリプトの多重防御パターン (`scripts/cleanup-office-name.js` がテンプレート)。次セッション: 残 open Issue 4 件 (#402/#299/#251/#238) は session50 から変化なし、kaname への完了報告メッセージはユーザー側で送信予定。)
+**ブランチ**: main (clean、kanameone 書き込み完了)
+**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + Phase 2 (#181-#183) + Phase 3 (#188-#190) + Phase 5 (#339/#340/#332/#335) + Phase 6 (#346/#343/#344/#331/#333/#262) + Phase 7 (#338) + Phase 8 (session29 = #334/#196) + Phase 8 (session30 = #360 rescue observability + #358 backfill test lock-in) + Phase 8 (session31 = #365 backfill counter 分割 + #364 rescue per-doc catch test) + Phase 8 (session32 = #370 fatal 分岐 safeLogError 二重呼出防止 test) + Phase 8 (session33 = #200 Gmail/Split 統合テスト + #251 Scope 2 summaryPromptBuilder 分離) + Phase 8 (session34 = #375 Gmail reimportPolicy pure helper 抽出 + #237 tokenizer 3 箇所共通化) + Phase 8 (session35 = Issue triage-only、close 忘れ 1 件整理 = #220) + Phase 8 (session36 = #239 force-reindex audit log + #152 close、新規 #384 起票) + Phase 8 (session37 = #384 完遂、新規 #387 起票) + Phase 8 (session38 = #387 完遂、Net -1) + Phase 8 (session39 = triage-only、Net 0、update/bugfix 移行合意) + Phase 8 (session40 = PR #392 merged: CMフィルター + 期間/表記統一、Net 0、hook ループ教訓 → グローバル MUST line 13 追加) + Phase 8 (session41 = PR #392 を kanameone/cocoro に展開完了、indexes 全 READY、Net 0) + Phase 8 (session42 = Issue #396 完遂: 編集保存時の確定フラグバグ修正、PR #397 merged + 3 環境展開、observability #398 起票で Net 0) + Phase 8 (session43 = ユーザー要望「検索結果が新しい日付が上に」完遂: PR #400 merged + 3 環境展開、フォローアップ Issue #401/#402 起票で Net +2) + Phase 8 (session44 = Issue #401 完遂: searchDocuments handler 統合テスト追加、PR #404 merged + dev 自動デプロイ、Net -1) + Phase 8 (session45 = ユーザー要望「ファックス内容変更で担当CM変更」完遂: PR #406 merged via escape hatch、Net 0、AI 駆動 4 原則追加 + memory 整理) + Phase 8 (session46 = PR #407 merged 確定 + ~/.claude memory 整理 (PR #167)、Net 0、4 原則現状維持・2026-07-末レビュー予定) + Phase 8 (session47 = PR #406 AC8 完了 + PR #409 merged: 編集モード時マスタ非連動注意文 UI 明示化、Net 0) + Phase 8 (session48 = PR #406 + #409 を kanameone/cocoro に展開完了、Net 0) + Phase 8 (session49 = Issue #398 完遂: 確定フラグ editLogs 記録、PR #414 merged + 3 環境展開、Net -1) + Phase 8 (session50 = 先行対応 A-1/A-2/A-3 完遂 + B-1 = Issue #402 段階1 完遂、3 PR merged + 全環境展開、Net 0) + **Phase 8 (session51 = kaname 問い合わせ「ケア21上飯田 / ケア21上飯田0」事業所マスター重複対応完遂、PR #419/#420 merged + kanameone 書き込み実行 + search_index 整合確認、Net 0)** 完遂
+
+<a id="session51"></a>
+## ✅ session51 完了サマリー (2026-04-29: kaname 問い合わせ「ケア21上飯田 / ケア21上飯田0」事業所マスター重複対応、PR #419/#420 merged + kanameone 書き込み実行、Net 0)
+
+kaname から問い合わせ「『ケア21上飯田』『ケア21上飯田0』が事業所マスターに併存している、後者を削除すれば良いか？」に対し、調査 → 書き込みスクリプト追加 → kanameone 本番実行 → search_index 整合性確認まで完遂。クライアント確認なしで先行対応する方針で、bug fix ではなく**運用データクレンジング**として処理。
+
+### 経緯
+
+1. **コード調査** (Explore agent): 末尾「0」を自動付与するロジックは存在しないことを確認。マスター生成パスは手動 CSV インポート (`scripts/import-masters.js`、ランダム ID 採番で重複検知なし) と自動シード (`functions/src/admin/seedMasters.ts`、`doc(name)` で上書き) の 2 経路、書類処理経由の自動マスター作成は存在しない
+2. **kanameone 実態調査** (PR #419 = `investigate-office-duplicate.js` read-only): マスター 2 件併存 (id=`YGJaUOjpx8hC0nMYT6Ox` 「ケア21上飯田」 1 件 + id=`2ytAHt9jw2RoYomPPshe` 「ケア21上飯田0」 9 件) を確認、両マスターとも `import-masters.js` 由来 (ランダム ID + timestamp なし)、CSV インポート時のデータエラー由来と推定
+3. **書き込みスクリプト追加** (PR #420 = `cleanup-office-name.js`): documents.officeName/officeId batch update + 旧マスター delete、dry-run + バックアップ JSON + 期待件数チェック + stale snapshot 再取得比較 + chunk 単位 try/catch + 中間状態警告 + 検証クエリ別 try/catch の多重防御
+4. **kanameone 書き込み実行**: dry-run (9 件一致) → execute (batch 1/1 commit + マスター delete) → 検証 (残書類 0 / 統合先 10 件)
+5. **search_index 整合性確認**: `force-reindex --all-drift` で 30 件 drift 検出 (今回起因 5 件 + 既存未インデックス 25 件)、`force-reindex --all-drift --execute` で 30/30 件再 index 成功
+
+### Issue Net 変化
+
+| 項目 | 内容 |
+|------|------|
+| Close 数 | 0 件 |
+| 起票数 | 0 件 |
+| **Net 変化 (session51 単独)** | **0 件** |
+
+**Net 0 の進捗判定**: ✅ 正の構造的進捗。
+
+根拠:
+- **kanameone 本番データの整合性向上**: 書類 9 件の事業所紐付け正規化 + 旧マスター削除 + 既存 25 件未インデックス解消による search 整合性回復
+- **再利用可能なスクリプトテンプレート追加**: 書き込み系 ad-hoc スクリプトの多重防御パターン (`scripts/cleanup-office-name.js`) が将来の類似事案に転用可能、`investigate-office-duplicate.js` も汎用調査ツールとして残存
+- **Issue 化対象なし**: 既存 25 件未インデックス書類は force-reindex で解消済 (実害なし) + 原因再追跡は再発時のみ意味あり、`import-masters.js` 重複検知機構追加は rating 5-6 (任意改善) → CLAUDE.md triage 基準未達で起票見送り
+
+### PR / 主要成果
+
+| PR | リポジトリ | 内容 | 状態 |
+|----|-----------|------|------|
+| **#419** | doc-split | chore(ops): investigate-office-duplicate スクリプト追加 (read-only 調査) | merged (kanameone 環境で実態調査済) |
+| **#420** | doc-split | chore(ops): cleanup-office-name スクリプト追加 (書き換え + 旧マスター削除) | merged + kanameone 書き込み実行完了 |
+
+| 項目 | 内容 |
+|------|------|
+| **PR #419 規模** | 2 ファイル / +165/-1 (`scripts/investigate-office-duplicate.js` 142 行 + workflow choice/inputs 追加) |
+| **PR #420 規模** | 2 ファイル / +352/-0 (`scripts/cleanup-office-name.js` 294 行 + workflow choice/inputs 追加) |
+| **kanameone 書き込み件数** | 書類 9 件 update + マスター 1 件 delete + 検索 index 30 件再生成 |
+| **バックアップ** | Firestore ネイティブ (7 日保持、2026-04-27 23:01 JST 取得済) + スクリプト側 JSON (workflow workspace、ephemeral) |
+
+### kanameone 書き込み実行の検証結果
+
+| ステップ | 結果 |
+|---------|------|
+| dry-run (expected_count=9) | ✅ 9 件一致 |
+| stale snapshot チェック | ✅ ID 集合一致 (dry-run 後の変動なし) |
+| 書類更新 batch 1/1 | ✅ 9 件 commit 成功 |
+| 旧マスター delete | ✅ id=`2ytAHt9jw2RoYomPPshe` 削除完了 |
+| 検証クエリ | ✅ 残書類 0 / 旧マスター削除済 / 統合先 10 件 |
+| force-reindex --all-drift (dry-run) | drift 30 件検出 (今回起因 5 + 既存 25) |
+| force-reindex --all-drift --execute | ✅ 30/30 件 再 index 成功 (失敗 0) |
+
+### 別件発見
+
+kanameone Firestore に **search_index に登録されていない書類が 25 件** 存在することが判明 (今回作業と無関係、過去のいずれかの時点で `onDocumentWritten` trigger 失敗の残骸と推定)。force-reindex で解消済。再発確率不明、triage 基準 (rating ≥ 7 かつ confidence ≥ 80) 未達のため Issue 化見送り、再発時に追跡。
+
+### 教訓 (4 件)
+
+1. **GitHub Actions `env:` キーは `.env` ファイルとは別物**: workflow YAML の `env:` キーは GitHub 公式推奨 injection 対策パターン (`${{ ... }}` を `env:` で束縛してから shell に渡す)。AI 駆動でアンチパターン視される `.env` ファイルとは無関係。本セッションで用語整理を要した
+
+2. **4 並列レビュー (Claude 3 エージェント + codex review) の有効性**: 書き込み系スクリプト PR (#420、285 行) で codex review が Claude 3 エージェント (code-reviewer / silent-failure-hunter / comment-analyzer) の見落とし 3 点を補完: stale snapshot overwrite (件数一致でも更新時点での同一性は保証されない) / バックアップ JSON の Timestamp ISO 化により復元時に型変換必要 / `searchIndexer` への onDocumentWritten trigger 連鎖確認の必要性。CLAUDE.md「大規模 PR (3+ ファイル / 200+ 行) → /codex review」が実証された
+
+3. **書き込みスクリプトの多重防御パターン (`scripts/cleanup-office-name.js` テンプレート)**: dry-run + バックアップ JSON + 期待件数 + stale snapshot 再取得比較 + chunk 単位 try/catch (committedCount 報告) + 中間状態警告 (書類更新済 / マスター残存) + 検証クエリ別 try/catch (書き込み完了後の検証失敗は exit 0)。`scripts/check-master-data.js` の committedCount パターン + `scripts/cleanup-duplicates.js` のバックアップ JSON パターンを合成
+
+4. **再発防止策の YAGNI 判断**: `import-masters.js` への重複検知機構追加は rating 5-6 (任意改善) で見送り、再発時は `cleanup-office-name.js` を再利用可能。CLAUDE.md「Don't add features beyond what the task requires」「3 つ似たケースが出てから抽象化」に沿う
+
+### kanameone 限定の影響範囲確認
+
+書き込み実行は `environment=kanameone` のみ:
+- dev (`docsplit-dev`): 影響なし、同名マスターも存在しない
+- cocoro (`docsplit-cocoro`): 影響なし
+- kanameone (`docsplit-kanameone`): 9 件 update + マスター 1 件 delete + 30 件再 index
+
+### 次セッション
+
+| 項目 | 内容 |
+|------|------|
+| **残 open Issue** | 4 件 (#402 / #299 / #251 / #238)、session50 から変化なし、すべて P2 enhancement |
+| **kaname への完了報告** | ユーザー側で送信予定 (Slack/メール、メッセージ案は本セッションで承認済) |
+| **UI 目視確認** | kaname / ユーザー側でブラウザ確認 (Firestore 整合済のため自動追従するはず) |
+| **アクション** | 残 Issue triage 再評価 → close not planned or open 維持 + 再開条件明記してから新規アップデート/bugfix 着手 |
 
 <a id="session50"></a>
 ## ✅ session50 完了サマリー (2026-04-28: 先行対応 + Issue #402 段階1 完遂、3 PR merged + 全環境展開、Net 0)
