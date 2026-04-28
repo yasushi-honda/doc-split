@@ -195,9 +195,20 @@ export function useDocumentEdit(document: Document | null | undefined): UseDocum
       if (shouldSetCustomerConfirmed) {
         updateData.customerConfirmed = true
         optimisticData.customerConfirmed = true
-        if (document.needsManualCustomerSelection !== undefined) {
+        // #398: 確定フラグ変更を editLogs に記録（silent failure 検知用）
+        changes.push({
+          field: 'customerConfirmed',
+          oldValue: document.customerConfirmed === undefined ? null : String(document.customerConfirmed),
+          newValue: 'true',
+        })
+        if (document.needsManualCustomerSelection === true) {
           updateData.needsManualCustomerSelection = false
           optimisticData.needsManualCustomerSelection = false
+          changes.push({
+            field: 'needsManualCustomerSelection',
+            oldValue: 'true',
+            newValue: 'false',
+          })
         }
       }
       // optimisticData は serverTimestamp が使えないため Timestamp.now() で代替。
@@ -208,6 +219,11 @@ export function useDocumentEdit(document: Document | null | undefined): UseDocum
         optimisticData.officeConfirmed = true
         optimisticData.officeConfirmedBy = auth.currentUser.uid
         optimisticData.officeConfirmedAt = Timestamp.now()
+        changes.push({
+          field: 'officeConfirmed',
+          oldValue: document.officeConfirmed === undefined ? null : String(document.officeConfirmed),
+          newValue: 'true',
+        })
       }
 
       // 変更されたフィールドを追加
