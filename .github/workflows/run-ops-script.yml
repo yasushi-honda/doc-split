@@ -7,6 +7,9 @@ name: Run Operations Script
 # 環境別SA: GCP_SA_KEY_KANAMEONE / GCP_SA_KEY_DEV / GCP_SA_KEY(cocoro、将来GCP_SA_KEY_COCOROに移行)
 
 on:
+  # 注: workflow_dispatch.inputs は GitHub Actions の仕様上最大 10 個まで定義可能。
+  # 現在 9 個使用中（残り 1）。スクリプト固有の引数追加で上限超過する場合は、
+  # 共通 inputs を JSON 文字列に統合する設計（例: script_args_json）への移行を検討。
   workflow_dispatch:
     inputs:
       environment:
@@ -77,7 +80,7 @@ on:
           - 'false'
           - 'true'
       expected_count:
-        description: 'cleanup-office-name: 影響件数の事前確認用（数値、不一致なら中断）'
+        description: 'cleanup-office-name: 影響件数の事前確認（数値；省略時はチェック無効、指定時は不一致で中断）'
         required: false
         type: string
         default: ''
