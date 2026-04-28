@@ -40,8 +40,19 @@ on:
           - force-reindex --all-drift --execute
           - force-reindex --doc-id
           - force-reindex --doc-id --execute
+          - investigate-office-duplicate
       doc_id:
         description: 'Document ID (required when script contains --doc-id; ignored otherwise)'
+        required: false
+        type: string
+        default: ''
+      name1:
+        description: 'Office name 1 (required for investigate-office-duplicate; ignored otherwise)'
+        required: false
+        type: string
+        default: ''
+      name2:
+        description: 'Office name 2 (optional second name for investigate-office-duplicate)'
         required: false
         type: string
         default: ''
@@ -123,6 +134,8 @@ jobs:
           PROJECT_ID: ${{ steps.resolve.outputs.project_id }}
           SCRIPT_NAME: ${{ steps.parse.outputs.script_name }}
           SCRIPT_ARGS: ${{ steps.parse.outputs.script_args }}
+          NAME1: ${{ github.event.inputs.name1 }}
+          NAME2: ${{ github.event.inputs.name2 }}
         run: |
           echo "=== Operations Script ==="
           echo "Environment: $ENVIRONMENT"
@@ -131,7 +144,17 @@ jobs:
           echo "Args: $SCRIPT_ARGS"
           echo "========================="
 
-          if [ "$SCRIPT_NAME" = "backfill-display-filename" ]; then
+          if [ "$SCRIPT_NAME" = "investigate-office-duplicate" ]; then
+            if [ -z "$NAME1" ]; then
+              echo "ERROR: name1 input is required for investigate-office-duplicate" >&2
+              exit 1
+            fi
+            ARGS=( --name "$NAME1" )
+            if [ -n "$NAME2" ]; then ARGS+=( --name "$NAME2" ); fi
+            NODE_PATH=./functions/node_modules \
+              FIREBASE_PROJECT_ID="$PROJECT_ID" \
+              node "scripts/${SCRIPT_NAME}.js" "${ARGS[@]}"
+          elif [ "$SCRIPT_NAME" = "backfill-display-filename" ]; then
             cd scripts
             NODE_PATH=../functions/node_modules \
               FIREBASE_PROJECT_ID="$PROJECT_ID" \
