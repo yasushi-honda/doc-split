@@ -271,13 +271,19 @@ export function GroupList({ groupType, dateFilter, onDocumentSelect }: GroupList
 
   // 顧客別: あいうえお順ソート + フィルター
   // furiganaMap未準備時はソート・フィルターをスキップ（空結果防止）
+  // 書類種別タブ・階層省略時: 全件取得しているので件数降順 + 上位 100 件で従来表示と同等にする
   const displayGroups = useMemo(() => {
     if (!groups) return [];
-    if (!isCustomerView) return groups;
-    if (!isFuriganaReady) return groups;
-    const sorted = sortGroupsByFurigana(groups, furiganaMap);
-    return filterGroupsByKanaRow(sorted, selectedKanaRow, furiganaMap);
-  }, [groups, isCustomerView, isFuriganaReady, furiganaMap, selectedKanaRow]);
+    if (isCustomerView) {
+      if (!isFuriganaReady) return groups;
+      const sorted = sortGroupsByFurigana(groups, furiganaMap);
+      return filterGroupsByKanaRow(sorted, selectedKanaRow, furiganaMap);
+    }
+    if (isDocumentTypeView && !useCategoryHierarchy) {
+      return [...groups].sort((a, b) => b.count - a.count).slice(0, 100);
+    }
+    return groups;
+  }, [groups, isCustomerView, isDocumentTypeView, useCategoryHierarchy, isFuriganaReady, furiganaMap, selectedKanaRow]);
 
   const config = GROUP_TYPE_CONFIG[groupType];
 
