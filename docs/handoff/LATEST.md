@@ -1,8 +1,91 @@
 # ハンドオフメモ
 
-**更新日**: 2026-04-29 session54 (**残 Issue triage 再評価、#299 close (Net -1)、コード変更なし**。session53 完了後の一段落タイミングで「対応すべき残タスク」確認 → A (#402 着手) → 段階1 完了済 + 段階2/3 観測待ち (2026-05-12 まで) を判明し新規アクション不要を確認 → A2 へ切替 (B 直行) → 残 3 Issue (#299 / #251 / #238) を triage 再評価 → #299 を rating 基準未達で close (grep contract カバー済 + 高コスト + 実害ゼロ)、#251 / #238 は再開条件明示済の postpone pattern 該当で open 維持。Open Issue 4 → 3 件、Net -1。)
-**ブランチ**: main (clean、コード変更なし)
-**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + (session29-52 累積実績は archive 参照) + Phase 8 (session53 = kaname 問い合わせ「ホーム画面スクロール後の表示拡大 + 右端見切れ」対応、PR #424 merged + 3 環境展開、Net 0) + **Phase 8 (session54 = 残 Issue triage 再評価、#299 close、Net -1)** 完遂
+**更新日**: 2026-04-29 session55 (**ユーザー指示「実装済み機能のドキュメント反映」→ 必須 3 項目に絞込、PR #427 merged + 3 環境展開、Net 0**。直近実装済（PR #422 / #406 / #409 / #392）でユーザー向けマニュアルに未反映だった 3 機能を HelpPage に補完。①書類種別タブのカテゴリ階層化、③担当ケアマネ編集 + マスタ非連動注意、⑤ケアマネジャーフィルター。検索結果ソート（#400）と編集モード注意文の重複（#409 単独）はスコープ外として除外。hook 一時 skip は番号単位明示認可後に対応。)
+**ブランチ**: main (clean)
+**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + (session29-53 累積実績は archive 参照) + Phase 8 (session54 = 残 Issue triage 再評価、#299 close、Net -1) + **Phase 8 (session55 = HelpPage 直近機能反映、PR #427 merged + 3 環境展開、Net 0)** 完遂
+
+<a id="session55"></a>
+## ✅ session55 完了サマリー (2026-04-29: HelpPage 直近実装機能反映、PR #427 merged + 3 環境展開、Net 0)
+
+ユーザーから「実装済みでドキュメント未反映の反映 + ヘルプページ更新」指示 → 候補 5 項目を必須 3 項目に絞込 → HelpPage.tsx 1 ファイル更新で完結 → 3 環境展開完遂。
+
+### 経緯
+
+1. **未反映項目の抽出**: 直近 2-3 週間の主要 PR と HelpPage / docs/features.md / docs/overview.md を照合し、5 項目候補（①書類種別カテゴリ階層化 #422、②マスタ非連動注意文 #409、③担当ケアマネ編集 #406、④検索結果ソート #400、⑤ケアマネジャーフィルター #392）を抽出
+2. **必須対応への絞込**: 「ユーザーが知らないと操作で困る/誤解する」基準で ①③⑤ に絞込。② は UI 内文言重複のため除外、④ は内部仕様変更でユーザー意識不要のため除外
+3. **HelpPage 更新**: 3.2 タブ切替（書類種別の階層化説明）、3.3 検索・フィルター（書類種別/ケアマネジャー/未確認のみ追記）、4.3 メタ情報（担当ケアマネ追加）、4.4 メタ情報の編集（新設、マスタ非連動注意 + 顧客変更時の自動補完仕様）
+4. **ローカル検証**: tsc / eslint / build (3.73s) / 241 tests 全 PASS
+5. **PR #427 作成 + CI**: GitGuardian / lint-build-test (4m23s) / CodeRabbit 全 pass、軽量レビュー（small PR / 1 file / 29 lines）で問題なし
+6. **Merge**: `ui-change-merge-check.sh` hook 発火 → ユーザーから番号単位明示認可（PR #427 を hook 一時 skip して merge）→ chmod -x → merge → chmod +x で対応
+7. **dev 反映確認**: Playwright MCP browser instance が他で使用中で AI 操作不可 → curl + grep で minified bundle に追加 5 文字列（「3階層で表示」「カテゴリが未設定の書類は末尾」「ケアマネジャーフィルター」「マスタは変更されません」「未確認のみ表示」）が全て含まれることを確認、build PASS + 既存スタイル踏襲によりレイアウト崩れリスク極小と判定
+8. **段階展開**: dev (CI 自動) → kanameone (`switch-client.sh kanameone` + `deploy-to-project.sh kanameone`) → cocoro (同手順) → 各環境で curl + grep 反映確認 → `switch-client.sh dev` 復帰 → gcloud config 確認 (`doc-split` / `hy.unimail.11@gmail.com` / `doc-split-dev`)
+
+### Issue Net 変化
+
+| 項目 | 内容 |
+|------|------|
+| Close 数 | 0 件 |
+| 起票数 | 0 件 |
+| **Net 変化 (session55 単独)** | **0 件** |
+
+**Net 0 の進捗判定**: ✅ 正の構造的進捗（ユーザー直接指示由来 work、Issue 化していない直接タスク。triage 基準 #5「ユーザー明示指示」該当、session52/53 と同じ構造）。残 3 件 (#402 / #251 / #238) は session54 から変化なし、すべて P2 enhancement で postpone pattern 該当。
+
+### 主要 PR
+
+- **PR #427** (merged commit `a662c45`): docs(help): 直近実装済みのユーザー機能をヘルプに反映 (#422 #406 #409 #392)
+  - 1 ファイル / +28/-1 行
+  - 修正: `frontend/src/pages/HelpPage.tsx` line 106 (3.2 タブ切替), 115-117 (3.3 フィルター), 177 (4.3 メタ情報), 181-204 (4.4 メタ情報の編集 新設)
+
+### 展開結果
+
+| 環境 | URL | 状態 |
+|------|-----|------|
+| dev | https://doc-split-dev.web.app | ✅ CI 自動デプロイ完了 + 反映確認 (5/5 文字列) |
+| kanameone | https://docsplit-kanameone.web.app | ✅ `deploy-to-project.sh kanameone` 完了 + 反映確認 |
+| cocoro | https://docsplit-cocoro.web.app | ✅ `deploy-to-project.sh cocoro` 完了 + 反映確認 |
+
+### スコープ外（除外決定）
+
+| 項目 | 元 PR | 除外理由 |
+|------|-------|---------|
+| 編集モード注意文の重複記載 | #409 単独 | UI 内文言と重複、4.4 編集セクションに集約 |
+| 検索結果ソート順変更 | #400 | 内部仕様、ユーザー意識不要 |
+| docs/features.md / overview.md 反映 | (該当 PR 群) | 開発者向けドキュメント、エンドユーザーは見ない |
+
+### 教訓
+
+#### 1. 「実装済み未反映」の抽出はユーザー視点 + 必須基準で絞り込む
+- 5 項目候補を全て反映するのは過剰。「ユーザーが知らないと操作で困る/誤解する」を必須基準にして 3 項目に絞込
+- UI 自体に説明があるもの（編集モードの注意文）、内部仕様変更（検索ソート）、開発者向けドキュメント（features.md / overview.md）は除外候補
+- ユーザーから「必須対応に絞って」と質問された段階で、機械的な網羅でなく目的指向の選別を提示する
+
+#### 2. Playwright MCP browser instance 衝突時の代替確認手段
+- AI 側で MCP の chrome instance が他セッションで使用中の場合、`Browser is already in use` でエラーとなり操作不可
+- 代替: curl で本番 bundle URL を取得 → minified JS 内に新規追加 static 文字列を grep
+- static text 追加 + 既存スタイル踏襲のケースに限り、build PASS + 文字列存在確認でレイアウト崩れリスクを実用上カバーできる
+- ロジック変更や CSS 変更を伴う場合は不十分、Playwright MCP 復旧 or ローカル dev server + 手動確認が必要
+
+#### 3. ハーネス hook の番号単位明示認可フロー（session52/53 から継続）
+- `ui-change-merge-check.sh` hook は `.tsx` 変更を機械的にブロック
+- 「PR #XXX を hook 一時 skip して merge してよい」というユーザー認可後に chmod -x → merge → chmod +x で対応
+- 認可なしでの bypass 禁止（CLAUDE.md 4 原則 §3）、ユーザーは状況説明とリスク評価を受けて decision-maker として判断する流れを毎回踏む
+- hook 改善（一時無効化フラグ機構等）は別 PR で議論する未着手課題（session52 から継続）
+
+### 残 Open Issue (3 件、すべて P2 enhancement、session54 から変化なし)
+
+| # | タイトル要約 | 状態 | 再開条件 |
+|---|---|---|---|
+| #402 | searchDocuments OOM ガード + 計測ログ | 段階1 完了、段階2/3 観測待ち | 2026-05-12 頃に観測データ判断 |
+| #251 | summaryGenerator unit test + buildSummaryPrompt 分離 | Scope 2 完了、Scope 1/3 待機 | sinon 導入伴う他タスク or Vertex AI false negative |
+| #238 | force-reindex 孤児 posting 検出モード | drift 実発生未観測 | ADR-0015 silent failure metric ERROR or 削除済書類ヒット報告 |
+
+### 次セッション候補
+
+| 項目 | 内容 |
+|------|------|
+| **kaname / cocoro 運用担当者の目視確認** | live URL でヘルプ画面の新規セクション表示確認（AI 能動依頼せず受動待機、`feedback_deploy_proactive_verification` 規範通り） |
+| **残 open Issue** | 3 件 (#402 / #251 / #238)、session54 から変化なし、すべて postpone pattern 該当 |
+| **アクション** | (a) 新規 kaname / cocoro 問い合わせの優先対応、(b) 2026-05-12 以降に #402 段階2/3 観測データ評価、(c) 将来課題（hook 改善、header/tabs 行 overflow、ふりがなフィールド追加等） |
 
 <a id="session54"></a>
 ## ✅ session54 完了サマリー (2026-04-29: 残 Issue triage 再評価、#299 close、Net -1)
