@@ -24,6 +24,6 @@ export function normalizeGroupKey(value: string | undefined | null): string {
       String.fromCharCode(s.charCodeAt(0) - 0xfee0),
     )
     .toLowerCase()
-    .replace(/[\s　]/g, '')
+    .replace(/[\s\u3000]/g, '')
     .trim();
 }
