@@ -8,7 +8,7 @@
  * 他タブ: 件数順（従来通り）
  */
 
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, type ReactNode } from 'react';
 import {
   ChevronRight,
   ChevronDown,
@@ -31,7 +31,7 @@ import {
   type GroupType,
   type DocumentGroup,
 } from '@/hooks/useDocumentGroups';
-import { useCustomers } from '@/hooks/useMasters';
+import { useCustomers, useDocumentTypes } from '@/hooks/useMasters';
 import { KanaFilterBar } from '@/components/KanaFilterBar';
 import {
   buildFuriganaMap,
@@ -39,6 +39,11 @@ import {
   filterGroupsByKanaRow,
   type KanaRow,
 } from '@/lib/kanaUtils';
+import {
+  buildDocumentTypeCategoryGroups,
+  isAllUncategorized,
+  type CategoryHierarchy,
+} from '@/lib/buildDocumentTypeCategoryGroups';
 import { GroupDocumentList } from './GroupDocumentList';
 import type { DateRange } from '@/components/DateRangeFilter';
 
@@ -156,16 +161,77 @@ function GroupItem({ group, isExpanded, furiganaMap, dateFilter, onToggle, onDoc
   );
 }
 
+interface CategoryItemProps {
+  category: CategoryHierarchy;
+  isExpanded: boolean;
+  onToggleCategory: () => void;
+  children: ReactNode;
+}
+
+function CategoryItem({
+  category,
+  isExpanded,
+  onToggleCategory,
+  children,
+}: CategoryItemProps) {
+  const totalDocs = category.groups.reduce((sum, g) => sum + g.count, 0);
+  const latestAt = category.groups.reduce<Timestamp | undefined>((max, g) => {
+    if (!g.latestAt) return max;
+    if (!max) return g.latestAt;
+    return g.latestAt.toMillis() > max.toMillis() ? g.latestAt : max;
+  }, undefined);
+
+  return (
+    <div className="border-b border-gray-100 last:border-0">
+      <button
+        onClick={onToggleCategory}
+        className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-gray-50"
+      >
+        {isExpanded ? (
+          <ChevronDown className="h-5 w-5 flex-shrink-0 text-gray-400" />
+        ) : (
+          <ChevronRight className="h-5 w-5 flex-shrink-0 text-gray-400" />
+        )}
+        <FolderOpen className="h-5 w-5 flex-shrink-0 text-blue-500" />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="font-medium text-gray-900 truncate">
+              {category.categoryName}
+            </span>
+            <Badge variant="secondary" className="text-xs">
+              {category.groups.length}種別 / {totalDocs}件
+            </Badge>
+          </div>
+          {latestAt && (
+            <div className="text-xs text-gray-500 mt-0.5">
+              最終更新: {formatTimestamp(latestAt)}
+            </div>
+          )}
+        </div>
+      </button>
+      {isExpanded && (
+        <div className="border-t border-gray-100 bg-gray-50/30 pl-6 divide-y divide-gray-100">
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ============================================
 // メインコンポーネント
 // ============================================
 
 export function GroupList({ groupType, dateFilter, onDocumentSelect }: GroupListProps) {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set());
   const [selectedKanaRow, setSelectedKanaRow] = useState<KanaRow | null>(null);
 
   const isCustomerView = groupType === 'customer';
+  const isDocumentTypeView = groupType === 'documentType';
   const needsFurigana = groupType === 'customer' || groupType === 'careManager';
+  // 顧客別: あいうえお順クライアントソート、書類種別: カテゴリ階層化のため全件必要
+  const useClientSort = isCustomerView || isDocumentTypeView;
 
   const {
     data: groups,
@@ -174,9 +240,8 @@ export function GroupList({ groupType, dateFilter, onDocumentSelect }: GroupList
     error,
   } = useDocumentGroups({
     groupType,
-    // 顧客別: クライアントソートのためorderBy/limitなし
-    sortBy: isCustomerView ? 'none' : 'count',
-    limitCount: isCustomerView ? undefined : 100,
+    sortBy: useClientSort ? 'none' : 'count',
+    limitCount: useClientSort ? undefined : 100,
   });
 
   const { data: stats } = useGroupStats(groupType);
@@ -188,6 +253,18 @@ export function GroupList({ groupType, dateFilter, onDocumentSelect }: GroupList
     () => (needsFurigana && customers ? buildFuriganaMap(customers) : new Map<string, string>()),
     [needsFurigana, customers]
   );
+
+  const { data: documentMasters } = useDocumentTypes();
+  const categoryHierarchy = useMemo(
+    () =>
+      isDocumentTypeView
+        ? buildDocumentTypeCategoryGroups(groups ?? [], documentMasters)
+        : [],
+    [isDocumentTypeView, groups, documentMasters],
+  );
+  // カテゴリ運用していない環境では階層を省略して従来表示にフォールバック (AC-5)
+  const useCategoryHierarchy =
+    isDocumentTypeView && categoryHierarchy.length > 0 && !isAllUncategorized(categoryHierarchy);
 
   // 顧客別: あいうえお順ソート + フィルター
   // furiganaMap未準備時はソート・フィルターをスキップ（空結果防止）
@@ -208,6 +285,18 @@ export function GroupList({ groupType, dateFilter, onDocumentSelect }: GroupList
         next.delete(groupId);
       } else {
         next.add(groupId);
+      }
+      return next;
+    });
+  }, []);
+
+  const toggleCategory = useCallback((categoryName: string) => {
+    setExpandedCategories((prev) => {
+      const next = new Set(prev);
+      if (next.has(categoryName)) {
+        next.delete(categoryName);
+      } else {
+        next.add(categoryName);
       }
       return next;
     });
@@ -288,17 +377,37 @@ export function GroupList({ groupType, dateFilter, onDocumentSelect }: GroupList
           </div>
         )}
         <div className="divide-y divide-gray-100">
-          {displayGroups.map((group) => (
-            <GroupItem
-              key={group.id}
-              group={group}
-              isExpanded={expandedGroups.has(group.id)}
-              furiganaMap={needsFurigana ? furiganaMap : undefined}
-              dateFilter={dateFilter}
-              onToggle={() => toggleGroup(group.id)}
-              onDocumentSelect={onDocumentSelect}
-            />
-          ))}
+          {useCategoryHierarchy
+            ? categoryHierarchy.map((category) => (
+                <CategoryItem
+                  key={category.categoryName}
+                  category={category}
+                  isExpanded={expandedCategories.has(category.categoryName)}
+                  onToggleCategory={() => toggleCategory(category.categoryName)}
+                >
+                  {category.groups.map((group) => (
+                    <GroupItem
+                      key={group.id}
+                      group={group}
+                      isExpanded={expandedGroups.has(group.id)}
+                      dateFilter={dateFilter}
+                      onToggle={() => toggleGroup(group.id)}
+                      onDocumentSelect={onDocumentSelect}
+                    />
+                  ))}
+                </CategoryItem>
+              ))
+            : displayGroups.map((group) => (
+                <GroupItem
+                  key={group.id}
+                  group={group}
+                  isExpanded={expandedGroups.has(group.id)}
+                  furiganaMap={needsFurigana ? furiganaMap : undefined}
+                  dateFilter={dateFilter}
+                  onToggle={() => toggleGroup(group.id)}
+                  onDocumentSelect={onDocumentSelect}
+                />
+              ))}
         </div>
         {/* フィルターで結果0件の場合 */}
         {isCustomerView && selectedKanaRow && displayGroups.length === 0 && (
