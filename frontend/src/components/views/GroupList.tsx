@@ -42,6 +42,7 @@ import {
 import {
   buildDocumentTypeCategoryGroups,
   isAllUncategorized,
+  summarizeCategoryGroups,
   type CategoryHierarchy,
 } from '@/lib/buildDocumentTypeCategoryGroups';
 import { GroupDocumentList } from './GroupDocumentList';
@@ -174,12 +175,7 @@ function CategoryItem({
   onToggleCategory,
   children,
 }: CategoryItemProps) {
-  const totalDocs = category.groups.reduce((sum, g) => sum + g.count, 0);
-  const latestAt = category.groups.reduce<Timestamp | undefined>((max, g) => {
-    if (!g.latestAt) return max;
-    if (!max) return g.latestAt;
-    return g.latestAt.toMillis() > max.toMillis() ? g.latestAt : max;
-  }, undefined);
+  const { totalDocs, latestAt } = summarizeCategoryGroups(category.groups);
 
   return (
     <div className="border-b border-gray-100 last:border-0">
@@ -202,11 +198,9 @@ function CategoryItem({
               {category.groups.length}種別 / {totalDocs}件
             </Badge>
           </div>
-          {latestAt && (
-            <div className="text-xs text-gray-500 mt-0.5">
-              最終更新: {formatTimestamp(latestAt)}
-            </div>
-          )}
+          <div className="text-xs text-gray-500 mt-0.5">
+            最終更新: {formatTimestamp(latestAt)}
+          </div>
         </div>
       </button>
       {isExpanded && (
@@ -254,7 +248,16 @@ export function GroupList({ groupType, dateFilter, onDocumentSelect }: GroupList
     [needsFurigana, customers]
   );
 
-  const { data: documentMasters } = useDocumentTypes();
+  const {
+    data: documentMasters,
+    isError: isMasterError,
+    error: masterError,
+  } = useDocumentTypes();
+
+  if (isDocumentTypeView && isMasterError) {
+    console.warn('[GroupList] 書類マスター取得失敗 → カテゴリ階層を出さずフラット表示にフォールバック', masterError);
+  }
+
   const categoryHierarchy = useMemo(
     () =>
       isDocumentTypeView
@@ -262,7 +265,7 @@ export function GroupList({ groupType, dateFilter, onDocumentSelect }: GroupList
         : [],
     [isDocumentTypeView, groups, documentMasters],
   );
-  // カテゴリ運用していない環境では階層を省略して従来表示にフォールバック (AC-5)
+  // カテゴリ未運用テナントでは未分類 1 件にまとまるため、階層 UI を出さず従来のフラット表示に戻す
   const useCategoryHierarchy =
     isDocumentTypeView && categoryHierarchy.length > 0 && !isAllUncategorized(categoryHierarchy);
 
@@ -366,6 +369,12 @@ export function GroupList({ groupType, dateFilter, onDocumentSelect }: GroupList
           onSelect={setSelectedKanaRow}
           disabled={!isFuriganaReady}
         />
+      )}
+
+      {isDocumentTypeView && isMasterError && (
+        <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          書類マスターの取得に失敗したため、カテゴリ階層表示を一時的に無効化しています。再読込で改善する可能性があります。
+        </div>
       )}
 
       {/* グループ一覧 */}

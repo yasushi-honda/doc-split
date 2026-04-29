@@ -20,6 +20,7 @@ import type { DocumentGroup } from '@/hooks/useDocumentGroups';
 import {
   buildDocumentTypeCategoryGroups,
   isAllUncategorized,
+  summarizeCategoryGroups,
   UNCATEGORIZED_LABEL,
 } from '../buildDocumentTypeCategoryGroups';
 
@@ -355,5 +356,68 @@ describe('isAllUncategorized - 階層省略判定 (AC-5)', () => {
 
   it('空配列なら false', () => {
     expect(isAllUncategorized([])).toBe(false);
+  });
+});
+
+// ============================================
+// summarizeCategoryGroups（CategoryItem ヘッダー用集計）
+// ============================================
+
+describe('summarizeCategoryGroups', () => {
+  it('空配列なら totalDocs=0、latestAt=undefined', () => {
+    const result = summarizeCategoryGroups([]);
+    expect(result).toEqual({ totalDocs: 0, latestAt: undefined });
+  });
+
+  it('count を合計する', () => {
+    const groups = [
+      makeGroup({ groupKey: 'a', count: 3 }),
+      makeGroup({ groupKey: 'b', count: 5 }),
+      makeGroup({ groupKey: 'c', count: 7 }),
+    ];
+    expect(summarizeCategoryGroups(groups).totalDocs).toBe(15);
+  });
+
+  it('latestAt が全て同じなら、その値を返す', () => {
+    const ts = Timestamp.fromMillis(1000);
+    const groups = [
+      makeGroup({ groupKey: 'a', latestAt: ts }),
+      makeGroup({ groupKey: 'b', latestAt: ts }),
+    ];
+    expect(summarizeCategoryGroups(groups).latestAt?.toMillis()).toBe(1000);
+  });
+
+  it('latestAt の最大値を返す', () => {
+    const groups = [
+      makeGroup({ groupKey: 'a', latestAt: Timestamp.fromMillis(1000) }),
+      makeGroup({ groupKey: 'b', latestAt: Timestamp.fromMillis(3000) }),
+      makeGroup({ groupKey: 'c', latestAt: Timestamp.fromMillis(2000) }),
+    ];
+    expect(summarizeCategoryGroups(groups).latestAt?.toMillis()).toBe(3000);
+  });
+
+  it('一部 latestAt が undefined でも、有効な最大値を返す', () => {
+    const groups = [
+      makeGroup({ groupKey: 'a', latestAt: undefined as unknown as Timestamp }),
+      makeGroup({ groupKey: 'b', latestAt: Timestamp.fromMillis(2000) }),
+      makeGroup({ groupKey: 'c', latestAt: undefined as unknown as Timestamp }),
+    ];
+    expect(summarizeCategoryGroups(groups).latestAt?.toMillis()).toBe(2000);
+  });
+
+  it('全 latestAt が undefined なら latestAt=undefined', () => {
+    const groups = [
+      makeGroup({ groupKey: 'a', latestAt: undefined as unknown as Timestamp }),
+      makeGroup({ groupKey: 'b', latestAt: undefined as unknown as Timestamp }),
+    ];
+    expect(summarizeCategoryGroups(groups).latestAt).toBeUndefined();
+  });
+
+  it('単一 group の場合も正しく集計', () => {
+    const groups = [makeGroup({ groupKey: 'a', count: 42, latestAt: Timestamp.fromMillis(5000) })];
+    expect(summarizeCategoryGroups(groups)).toEqual({
+      totalDocs: 42,
+      latestAt: Timestamp.fromMillis(5000),
+    });
   });
 });

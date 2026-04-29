@@ -2,7 +2,7 @@
  * グループキー正規化ユーティリティ
  *
  * documentGroups.groupKey と同等の正規化を frontend 側で再現する。
- * backend 実装: functions/src/utils/groupAggregation.ts:47-61 (normalizeGroupKey)
+ * backend 実装: functions/src/utils/groupAggregation.ts の normalizeGroupKey
  *
  * 書類マスター名から groupKey と同形式のキーを生成し、
  * documentGroups の groupKey と照合して category 情報を join するために使用する。

@@ -10,6 +10,7 @@
  * - 同一カテゴリ内の書類種別: displayName のあいうえお順
  */
 
+import type { Timestamp } from 'firebase/firestore';
 import type { DocumentMaster } from '@shared/types';
 import type { DocumentGroup } from '@/hooks/useDocumentGroups';
 import { normalizeGroupKey } from './normalizeGroupKey';
@@ -17,8 +18,13 @@ import { normalizeGroupKey } from './normalizeGroupKey';
 export const UNCATEGORIZED_LABEL = '未分類';
 
 export interface CategoryHierarchy {
-  categoryName: string;
-  groups: DocumentGroup[];
+  readonly categoryName: string;
+  readonly groups: readonly DocumentGroup[];
+}
+
+export interface CategorySummary {
+  totalDocs: number;
+  latestAt: Timestamp | undefined;
 }
 
 export function buildDocumentTypeCategoryGroups(
@@ -48,6 +54,24 @@ export function buildDocumentTypeCategoryGroups(
       categoryName,
       groups: groupList,
     }));
+}
+
+/**
+ * カテゴリ内グループの総件数 + 最新更新日時を集計する純関数。
+ * CategoryItem ヘッダーのバッジ・最終更新日表示で使用する。
+ */
+export function summarizeCategoryGroups(
+  groups: readonly DocumentGroup[],
+): CategorySummary {
+  let totalDocs = 0;
+  let latestAt: Timestamp | undefined;
+  for (const group of groups) {
+    totalDocs += group.count;
+    if (group.latestAt && (!latestAt || group.latestAt.toMillis() > latestAt.toMillis())) {
+      latestAt = group.latestAt;
+    }
+  }
+  return { totalDocs, latestAt };
 }
 
 /**
