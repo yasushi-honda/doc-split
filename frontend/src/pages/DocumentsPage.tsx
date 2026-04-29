@@ -86,7 +86,7 @@ function SortableHeader({
 
   return (
     <th
-      className={`px-2 py-2 text-left text-xs font-medium text-gray-700 cursor-pointer hover:bg-gray-100 select-none sm:px-4 sm:py-3 sm:text-sm ${hideOnMobile ? 'hidden md:table-cell' : ''}`}
+      className={`px-2 py-2 text-left text-xs font-medium text-gray-700 cursor-pointer hover:bg-gray-100 select-none sm:px-4 sm:py-3 sm:text-sm ${hideOnMobile ? 'hidden lg:table-cell' : ''}`}
       onClick={() => onClick(field)}
     >
       <div className="flex items-center gap-1">
@@ -267,9 +267,9 @@ function DocumentRow({
         </div>
       </td>
       <td className="px-2 py-2 text-xs text-gray-700 sm:px-4 sm:py-3 sm:text-sm">{document.customerName || '未判定'}</td>
-      <td className="hidden px-4 py-3 text-gray-700 md:table-cell">{document.officeName || '-'}</td>
+      <td className="hidden px-4 py-3 text-gray-700 lg:table-cell">{document.officeName || '-'}</td>
       <td className="px-2 py-2 text-xs text-gray-700 sm:px-4 sm:py-3 sm:text-sm">{formatDateTime(document.processedAt)}</td>
-      <td className="hidden px-4 py-3 text-gray-700 md:table-cell">{formatTimestamp(document.fileDate)}</td>
+      <td className="hidden px-4 py-3 text-gray-700 lg:table-cell">{formatTimestamp(document.fileDate)}</td>
       <td className="px-2 py-2 sm:px-4 sm:py-3">
         {needsReview ? (
           <Badge variant="outline" className="bg-orange-100 text-orange-800 border-orange-300 text-xs">
