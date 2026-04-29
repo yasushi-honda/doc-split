@@ -1,8 +1,68 @@
 # ハンドオフメモ
 
-**更新日**: 2026-04-29 session53 (**kaname 問い合わせ「ホーム画面スクロール後の表示拡大 + 右端見切れ」対応、PR #424 merged + 3 環境展開完了、Net 0**。書類一覧テーブル列「事業所」「書類日付」の表示切替を md (768px) → lg (1024px) に変更。viewport 768〜1023px の範囲で table 幅 940px が viewport を超過し overflow-x-auto コンテナ内で右端列が画面外スクロールする問題を解消。dev 環境で実データ 25 件追加 → 無限スクロール実発火 → 対照実験 (pre-fix CSS シミュ vs 修正後) で症状再現と解消の両方を確認。3 環境（dev / kanameone / cocoro）展開完了。残 open Issue 4 件は session52 から変化なし。)
-**ブランチ**: main (clean、3 環境展開完了)
-**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + (session29-51 累積実績は archive 参照) + **Phase 8 (session53 = kaname 問い合わせ「ホーム画面スクロール後の表示拡大 + 右端見切れ」対応、PR #424 merged + 3 環境展開、Net 0)** 完遂
+**更新日**: 2026-04-29 session54 (**残 Issue triage 再評価、#299 close (Net -1)、コード変更なし**。session53 完了後の一段落タイミングで「対応すべき残タスク」確認 → A (#402 着手) → 段階1 完了済 + 段階2/3 観測待ち (2026-05-12 まで) を判明し新規アクション不要を確認 → A2 へ切替 (B 直行) → 残 3 Issue (#299 / #251 / #238) を triage 再評価 → #299 を rating 基準未達で close (grep contract カバー済 + 高コスト + 実害ゼロ)、#251 / #238 は再開条件明示済の postpone pattern 該当で open 維持。Open Issue 4 → 3 件、Net -1。)
+**ブランチ**: main (clean、コード変更なし)
+**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + (session29-52 累積実績は archive 参照) + Phase 8 (session53 = kaname 問い合わせ「ホーム画面スクロール後の表示拡大 + 右端見切れ」対応、PR #424 merged + 3 環境展開、Net 0) + **Phase 8 (session54 = 残 Issue triage 再評価、#299 close、Net -1)** 完遂
+
+<a id="session54"></a>
+## ✅ session54 完了サマリー (2026-04-29: 残 Issue triage 再評価、#299 close、Net -1)
+
+session53 完了後の一段落タイミングで「対応すべき残タスク」確認 → 残 4 open Issue を triage 再評価 → #299 を rating 基準未達で close。コード変更ゼロ、Open Issue 4 → 3 件 (Net -1)。
+
+### 経緯
+
+1. **対応すべき残タスク確認**: ユーザーより「いったん一段落、ここで対応しておくべき残タスクは？」と問われ、A (#402 着手) / B (残 4 Issue triage 再評価) / C (kaname 反応待ち) の 3 択を提示、ユーザーが **A → B 順** を選択
+2. **A: #402 状況確認**: コード調査 (`searchDocuments.ts`) で **段階1 (観測ログ) は PR #417 で 2026-04-28 merged + 3 環境デプロイ済** と判明、Issue 本文・ハンドオフ archive で **段階2/3 は 1-2 週間観測後判断 (≈ 2026-05-12 頃)** と postpone 確定 → 新規アクション不要を確認、ユーザーに報告し A2 (B 直行) を選択
+3. **B: 残 3 Issue triage 再評価**:
+   - **#299 (capPageResultsAggregate 動的 safeLogError test)**: 既存 grep contract (PR #296 / 9 cases) で safeLogError 呼出・引数 shape を **静的に lock-in 済**、残ギャップ (mutation resistance) は CLAUDE.md triage 基準 (rating ≥ 7 かつ confidence ≥ 80) に **達していない** → close 候補
+   - **#251 (summaryGenerator unit test)**: Scope 2 完了 (PR #376) 反映済、Scope 1/3 待機条件 (sinon 導入伴う他タスク or Vertex AI false negative) 明示済 → open 維持
+   - **#238 (force-reindex 孤児 posting 検出)**: drift 実発生未観測、再開トリガー (silent failure metric ERROR / 削除済書類ヒット報告) 機械判定可能に明示済 → open 維持
+4. **#299 close 実行**: ユーザー承認後、`gh issue close 299 --reason "not planned"` + コメント (再開条件 2 件含む)
+
+### Issue Net 変化
+
+| 項目 | 内容 |
+|------|------|
+| Close 数 | **1 件** (#299) |
+| 起票数 | 0 件 |
+| **Net 変化 (session54 単独)** | **-1 件** ✅ |
+
+**Net -1 の進捗判定**: ✅ 正の構造的進捗。Open 4 → 3 件、すべて再開条件明示済の postpone pattern。triage 規律 (rating < 7 起票しない / 既存ギャップは grep contract カバー済) を遵守。
+
+### 残 Open Issue (3 件、すべて P2 enhancement)
+
+| # | タイトル要約 | 状態 | 再開条件 |
+|---|---|---|---|
+| #402 | searchDocuments OOM ガード + 計測ログ | 段階1 完了、段階2/3 観測待ち | 2026-05-12 頃に観測データ判断 |
+| #251 | summaryGenerator unit test + buildSummaryPrompt 分離 | Scope 2 完了、Scope 1/3 待機 | sinon 導入伴う他タスク or Vertex AI false negative |
+| #238 | force-reindex 孤児 posting 検出モード | drift 実発生未観測 | ADR-0015 silent failure metric ERROR or 削除済書類ヒット報告 |
+
+### 主要 PR / コミット
+
+なし (コード変更ゼロ、Issue close + handoff 更新のみ)
+
+### 教訓
+
+#### 1. 「対応すべき残タスクは？」問いに対し executor 越権を避けて選択肢提示する型
+- session53 完了後の clean 状態で「次に何をする？」と問われたとき、AI が勝手に「#402 を進める」と決めず、A (#402) / B (triage) / C (受動待機) を **トレードオフ付きで提示してユーザーに decision-maker を渡す** のが 4 原則 §1 (executor / decision-maker 分離) の正しい運用
+- 結果的に A → B → A2 (B 直行) と動的に切替、ユーザーの意思決定を反映できた
+
+#### 2. issue 本文の postpone 記述を最初に確認すれば余計な実装に踏み出さない
+- #402 は issue 本文で「1-2 週間運用してから判断」と明示、archive ハンドオフで「再開条件: 2026-05-12 頃」と postpone pattern 適用済
+- 「Issue が open だから着手する」のではなく **「open 理由が postpone か未着手か」を 1 行確認する** ことで、observation 期間中の premature な段階2 実装を回避できた
+- `feedback_issue_postpone_pattern.md` の close せず open 維持 + 再開条件明記方針が機能した
+
+#### 3. triage 再評価で grep contract カバー済 Issue は close 候補
+- #299 のように「既存 contract test (grep-based / static) でカバー済 + 残ギャップは mutation resistance のみ + 高コスト (CI/ローカル環境差異整備) + 実害ゼロ」という条件揃えば、CLAUDE.md triage 基準 (rating ≥ 7 + confidence ≥ 80) 未達で close 妥当
+- close 時に「false negative 発生時に再起票 / sinon 導入伴う他タスク bundle 化」という再開条件を残せば、将来再評価可能
+
+### 次セッション候補
+
+| 項目 | 内容 |
+|------|------|
+| **残 open Issue** | 3 件 (#402 / #251 / #238)、session54 で #299 close により 1 件減少、すべて P2 enhancement で postpone pattern 該当 |
+| **kaname フィードバック** | session53 PR #424 リリース後の挙動確認、AI から能動依頼せず受動待機 (`feedback_deploy_proactive_verification` 規範通り) |
+| **アクション** | (a) 新規 kaname 問い合わせ・他クライアント要望の優先対応、(b) 2026-05-12 以降に #402 段階2/3 観測データ評価、(c) 将来課題 (header / tabs 行 overflow 修正、ふりがなフィールド追加、`useDocumentTypes` enabled 化、`CategoryItem` aria 付与、`ui-change-merge-check.sh` hook 改善) の優先度判定 |
 
 <a id="session53"></a>
 ## ✅ session53 完了サマリー (2026-04-29: kaname 問い合わせ「ホーム画面スクロール後の表示拡大 + 右端見切れ」対応、PR #424 merged + 3 環境展開、Net 0)
