@@ -7,20 +7,20 @@
  * `bucket.getFiles({prefix:'processed/'})` の再帰スキャンで検出可。
  *
  * 検出する不整合:
- *   1. fileUrl 孤児: fileUrl が指す Storage オブジェクトが存在しない
+ *   1. fileUrl 孤児: fileUrl が指す Storage オブジェクトが存在しない (Firestore→Storage 欠損)
  *   2. fileName 衝突: 複数 docs が同じ fileName を持つ（fileUrl が衝突する候補）
- *
- * NOTE: 現状は片方向 (Firestore→Storage 欠損) のみ検出。逆方向 (Storage 実体あり
- * Firestore doc なし = orphan storage、PR-B 補償処理の二段失敗で発生し得る) の検出は
- * 別 Issue で追加予定 (Issue #432 follow-up)。
+ *   3. reverse orphan: Storage 実体あり、Firestore doc から参照なし (Issue #432 PR-D)
+ *      PR-B 補償処理の二段失敗 (Firestore set 失敗 → Storage delete も失敗) や
+ *      手動 Storage 操作で発生し得る。bucket 容量の silent な消費源
  *
  * 使用方法:
  *   FIREBASE_PROJECT_ID=docsplit-kanameone node scripts/audit-storage-mismatch.js
  *
  * オプション:
- *   --prefix <path>  Storage の対象 prefix（デフォルト: processed/）
- *   --no-orphans     fileUrl 孤児チェックを省略（fileName 衝突のみ出力）
- *   --no-collisions  fileName 衝突チェックを省略
+ *   --prefix <path>          Storage の対象 prefix（デフォルト: processed/）
+ *   --no-orphans             fileUrl 孤児チェック (Firestore→Storage) を省略
+ *   --no-collisions          fileName 衝突チェックを省略
+ *   --no-reverse-orphans     reverse orphan チェック (Storage→Firestore) を省略
  */
 
 const admin = require('firebase-admin');
@@ -47,6 +47,7 @@ function getOpt(name, def = null) {
 const prefix = getOpt('--prefix', 'processed/');
 const skipOrphans = process.argv.includes('--no-orphans');
 const skipCollisions = process.argv.includes('--no-collisions');
+const skipReverseOrphans = process.argv.includes('--no-reverse-orphans');
 
 admin.initializeApp({ projectId, storageBucket });
 const db = admin.firestore();
@@ -119,8 +120,13 @@ async function main() {
   });
   console.log(`Documents with fileUrl matching prefix "${prefix}": ${targetDocs.length}\n`);
 
+  // Storage の全 path を一度だけ load (orphans / reverse orphans の両方で使う)
+  let storagePaths = null;
+  if (!skipOrphans || !skipReverseOrphans) {
+    storagePaths = await listAllStorageFiles(prefix);
+  }
+
   if (!skipOrphans) {
-    const storagePaths = await listAllStorageFiles(prefix);
     const orphans = [];
     for (const d of targetDocs) {
       const path = pathFromUrl(d.fileUrl);
@@ -136,6 +142,47 @@ async function main() {
       return acc;
     }, {});
     console.log(`\nOrphan breakdown by status: ${JSON.stringify(orphansByStatus)}`);
+  }
+
+  if (!skipReverseOrphans) {
+    // Firestore documents から参照されている Storage path 集合
+    const referencedPaths = new Set();
+    for (const d of allDocs) {
+      const p = pathFromUrl(d.fileUrl);
+      if (p && p.startsWith(prefix)) {
+        referencedPaths.add(p);
+      }
+    }
+
+    // Storage 実体あり Firestore 参照なし = reverse orphan
+    const reverseOrphans = [];
+    for (const p of storagePaths) {
+      if (!referencedPaths.has(p)) {
+        reverseOrphans.push(p);
+      }
+    }
+
+    console.log(
+      `\n=== reverse orphans (Storage 実体あり Firestore 参照なし): ${reverseOrphans.length} ===`
+    );
+    reverseOrphans.forEach((p) =>
+      console.log(`  gs://${bucket.name}/${p}`)
+    );
+
+    // Issue #432 PR-B 補償処理の二段失敗で発生する想定パターンを抽出
+    // (path が processed/{docId}/ 形式で docId が 20 文字英数字)
+    const pr_b_pattern_orphans = reverseOrphans.filter((p) => {
+      const segments = p.replace(prefix, '').split('/');
+      return segments.length >= 2 && /^[A-Za-z0-9]{15,30}$/.test(segments[0]);
+    });
+    if (pr_b_pattern_orphans.length > 0) {
+      console.log(
+        `\n  PR-B namespace pattern (processed/{docId}/...): ${pr_b_pattern_orphans.length}`
+      );
+      console.log(
+        '  (PR-B 補償処理二段失敗 / 手動 Storage 操作で発生する可能性が高い候補)'
+      );
+    }
   }
 
   if (!skipCollisions) {
