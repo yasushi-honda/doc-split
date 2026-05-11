@@ -25,6 +25,16 @@ import * as admin from 'firebase-admin';
 import * as fs from 'fs';
 import { isPathSafeToDeleteAfterExcluding } from './lib/storageGuard';
 import { regenerateChildPdf } from './lib/pdfRegenerator';
+import {
+  buildMigrateUpdatePayload,
+  buildRegenerateUpdatePayload,
+  buildMarkErrorUpdatePayload,
+} from './lib/executeMigrationOps';
+// F-C3: classifier の型を import して二重定義 (drift リスク) を解消
+import type {
+  Classification,
+  RecommendedAction,
+} from './lib/collisionClassifier';
 
 const projectId = process.env.FIREBASE_PROJECT_ID;
 const storageBucket = process.env.STORAGE_BUCKET;
@@ -58,12 +68,8 @@ if (!planFile || !approvalFile) {
 interface Operation {
   operationId: string;
   docId: string;
-  classification: 'MatchedByHash' | 'Ambiguous' | 'RepairableMissingFile' | 'LostOrUnrecoverable';
-  recommendedAction:
-    | 'migrate-to-namespace'
-    | 'regenerate-from-parent'
-    | 'manual-review'
-    | 'mark-error';
+  classification: Classification;
+  recommendedAction: RecommendedAction;
   reason: string;
   suggestedWinner: boolean;
   expectedCurrentFileUrl: string | null;
@@ -182,6 +188,27 @@ async function isAlreadyMigrated(op: Operation): Promise<boolean> {
   return exists;
 }
 
+/**
+ * F-B2: Storage delete を 404 のみ silent skip し、それ以外は構造化結果として返す。
+ * caller は outcome.details.oldDeleteOutcome を見て operator に伝達できる。
+ * Issue #432 silent breakage の再演 (delete 失敗の握りつぶし) を防ぐ。
+ */
+type OldDeleteResult =
+  | { outcome: 'deleted' }
+  | { outcome: 'already-absent' }
+  | { outcome: 'failed'; error: string };
+
+async function deleteStorageSelective(path: string): Promise<OldDeleteResult> {
+  try {
+    await bucket.file(path).delete();
+    return { outcome: 'deleted' };
+  } catch (err) {
+    const code = (err as { code?: number }).code;
+    if (code === 404) return { outcome: 'already-absent' };
+    return { outcome: 'failed', error: (err as Error).message };
+  }
+}
+
 async function executeMigrate(op: Operation): Promise<OperationOutcome> {
   // migrate-to-namespace: 旧 Storage path → 新 docId namespace path に copy → Firestore fileUrl 更新 → 旧 path delete
   if (op.sourcePath === null || op.destPath === null) {
@@ -203,8 +230,8 @@ async function executeMigrate(op: Operation): Promise<OperationOutcome> {
     await bucket.file(op.sourcePath).copy(bucket.file(op.destPath));
   }
 
-  // Firestore: fileUrl 更新 (Partial update 不変 = fileUrl のみ)
-  await db.doc(`documents/${op.docId}`).update({ fileUrl: newFileUrl });
+  // Firestore: fileUrl 更新 (Partial update 不変 = fileUrl のみ、F-D2 で testable 化)
+  await db.doc(`documents/${op.docId}`).update(buildMigrateUpdatePayload(newFileUrl));
 
   // 旧 path delete (storageGuard で同 fileUrl 共有 doc 残存確認)
   // 今回更新した自分自身は新 fileUrl になっているため共有者から外れる
@@ -219,21 +246,35 @@ async function executeMigrate(op: Operation): Promise<OperationOutcome> {
       details: {
         newFileUrl,
         oldFileUrl,
+        oldDeleteOutcome: 'skipped-sharing',
         residualDocIds: guard.residualDocIds,
       },
     };
   }
 
-  await bucket.file(op.sourcePath).delete().catch(() => {
-    /* idempotent: 既に削除済みなら無視 */
-  });
+  // F-B2: 404 以外の delete 失敗を silent に握り潰さず outcome に残す
+  const deleteResult = await deleteStorageSelective(op.sourcePath);
+  if (deleteResult.outcome === 'failed') {
+    return {
+      operationId: op.operationId,
+      docId: op.docId,
+      action: op.recommendedAction,
+      status: 'error',
+      reason: `migrated but old path delete failed: ${deleteResult.error}`,
+      details: { newFileUrl, oldFileUrl, oldDeleteOutcome: 'failed', oldDeleteError: deleteResult.error },
+    };
+  }
+
   return {
     operationId: op.operationId,
     docId: op.docId,
     action: op.recommendedAction,
     status: 'executed',
-    reason: 'migrated to docId namespace, old path deleted',
-    details: { newFileUrl, oldFileUrl },
+    reason:
+      deleteResult.outcome === 'deleted'
+        ? 'migrated to docId namespace, old path deleted'
+        : 'migrated to docId namespace, old path was already absent',
+    details: { newFileUrl, oldFileUrl, oldDeleteOutcome: deleteResult.outcome },
   };
 }
 
@@ -259,8 +300,28 @@ async function executeRegenerate(op: Operation): Promise<OperationOutcome> {
       reason: 'parent doc disappeared since plan creation',
     };
   }
-  const parentFileUrl = parentSnap.data()!.fileUrl as string;
-  const parentPath = parentFileUrl.replace(`gs://${storageBucket}/`, '');
+  const parentFileUrl = parentSnap.data()?.fileUrl;
+  if (typeof parentFileUrl !== 'string') {
+    return {
+      operationId: op.operationId,
+      docId: op.docId,
+      action: op.recommendedAction,
+      status: 'error',
+      reason: 'parent fileUrl is missing or not a string',
+    };
+  }
+  // F-B4: parent fileUrl が runtime bucket と一致することを検証 (`.appspot.com` ↔ `.firebasestorage.app` 取り違え防止)
+  const parentMatch = parentFileUrl.match(/^gs:\/\/([^/]+)\/(.+)$/);
+  if (!parentMatch || parentMatch[1] !== storageBucket) {
+    return {
+      operationId: op.operationId,
+      docId: op.docId,
+      action: op.recommendedAction,
+      status: 'error',
+      reason: `parent fileUrl bucket mismatch: ${parentFileUrl} (expected bucket=${storageBucket})`,
+    };
+  }
+  const parentPath = parentMatch[2];
   const [parentBuf] = await bucket.file(parentPath).download();
 
   const childBuf = await regenerateChildPdf(
@@ -277,19 +338,39 @@ async function executeRegenerate(op: Operation): Promise<OperationOutcome> {
   const newFileUrl = `gs://${storageBucket}/${op.destPath}`;
 
   // Firestore: fileUrl 更新 + status を processed に戻す (元々 processed だった想定だが orphan 由来で error 化したケースも回復)
-  // Partial update 不変: fileUrl + status + lastErrorMessage の deleteField のみ
-  await db.doc(`documents/${op.docId}`).update({
-    fileUrl: newFileUrl,
-    status: 'processed',
-    lastErrorMessage: admin.firestore.FieldValue.delete(),
-  });
+  // Partial update 不変: fileUrl + status + lastErrorMessage の deleteField のみ (F-D2)
+  await db.doc(`documents/${op.docId}`).update(buildRegenerateUpdatePayload(newFileUrl));
 
   // 旧 path 後始末 (collision group 敗者の場合): storageGuard で安全確認
+  // F-B2: 404 以外の delete 失敗を outcome details に残す (silent failure 防止)
+  let oldDeleteRecord: { outcome: string; error?: string; residualDocIds?: string[] } | undefined;
   if (op.sourcePath !== null && op.sourcePath !== op.destPath) {
     const oldFileUrl = `gs://${storageBucket}/${op.sourcePath}`;
     const guard = await isPathSafeToDeleteAfterExcluding(db, oldFileUrl, [op.docId]);
-    if (guard.safe) {
-      await bucket.file(op.sourcePath).delete().catch(() => undefined);
+    if (!guard.safe) {
+      oldDeleteRecord = {
+        outcome: 'skipped-sharing',
+        residualDocIds: guard.residualDocIds,
+      };
+    } else {
+      const deleteResult = await deleteStorageSelective(op.sourcePath);
+      oldDeleteRecord = deleteResult.outcome === 'failed'
+        ? { outcome: 'failed', error: deleteResult.error }
+        : { outcome: deleteResult.outcome };
+      if (deleteResult.outcome === 'failed') {
+        return {
+          operationId: op.operationId,
+          docId: op.docId,
+          action: op.recommendedAction,
+          status: 'error',
+          reason: `regenerated but old path delete failed: ${deleteResult.error}`,
+          details: {
+            newFileUrl,
+            regeneratedBytes: childBuf.length,
+            oldDeleteOutcome: oldDeleteRecord,
+          },
+        };
+      }
     }
   }
 
@@ -302,16 +383,14 @@ async function executeRegenerate(op: Operation): Promise<OperationOutcome> {
     details: {
       newFileUrl,
       regeneratedBytes: childBuf.length,
+      ...(oldDeleteRecord ? { oldDeleteOutcome: oldDeleteRecord } : {}),
     },
   };
 }
 
 async function executeMarkError(op: Operation): Promise<OperationOutcome> {
-  // Partial update 不変 (CLAUDE.md MUST): status + lastErrorMessage のみ更新、他フィールド不変
-  await db.doc(`documents/${op.docId}`).update({
-    status: 'error',
-    lastErrorMessage: `Issue #432 PR-C migration: ${op.reason}`,
-  });
+  // Partial update 不変 (CLAUDE.md MUST): status + lastErrorMessage のみ更新、他フィールド不変 (F-D2)
+  await db.doc(`documents/${op.docId}`).update(buildMarkErrorUpdatePayload(op.reason));
   return {
     operationId: op.operationId,
     docId: op.docId,
@@ -335,12 +414,51 @@ function isPathApproved(op: Operation): { ok: boolean; reason: string } {
     if (op.destPath && !approvedPaths.has(`gs://${storageBucket}/${op.destPath}`)) {
       return { ok: false, reason: `destPath not in approvedPaths: gs://${storageBucket}/${op.destPath}` };
     }
+    // F-B1: executeRegenerate は op.sourcePath !== destPath の場合 sourcePath を delete し得る。
+    // ADR-0008 教訓「per-path 個別認可必須」を守るため、sourcePath も approvedPaths にあることを要求。
+    if (
+      op.sourcePath &&
+      op.sourcePath !== op.destPath &&
+      !approvedPaths.has(`gs://${storageBucket}/${op.sourcePath}`)
+    ) {
+      return {
+        ok: false,
+        reason: `sourcePath (regenerate-from-parent will delete this) not in approvedPaths: gs://${storageBucket}/${op.sourcePath}`,
+      };
+    }
   }
   // mark-error は Storage 触らないため path 認可不要 (operationId 認可のみで通す)
   return { ok: true, reason: 'path approved' };
 }
 
 async function processOperation(op: Operation): Promise<OperationOutcome> {
+  // Gate 0 (defense in depth, F-B5): Codex セカンドオピニオンの Critical を裏付けゲート化。
+  // Ambiguous classification は manual-review action 以外で実行不可、suggestedWinner hint は
+  // 自動 destructive action の根拠にしない (rotatedAt!=null 唯一は Storage 実体正当性証明ではない)。
+  if (op.classification === 'Ambiguous' && op.recommendedAction !== 'manual-review') {
+    return {
+      operationId: op.operationId,
+      docId: op.docId,
+      action: op.recommendedAction,
+      status: 'gate-rejected',
+      reason: `defense-in-depth: Ambiguous classification must use manual-review (got ${op.recommendedAction})`,
+    };
+  }
+  if (
+    op.suggestedWinner &&
+    (op.recommendedAction === 'migrate-to-namespace' ||
+      op.recommendedAction === 'regenerate-from-parent')
+  ) {
+    return {
+      operationId: op.operationId,
+      docId: op.docId,
+      action: op.recommendedAction,
+      status: 'gate-rejected',
+      reason:
+        'defense-in-depth: suggestedWinner hint must not trigger automatic destructive action (Codex Critical)',
+    };
+  }
+
   // Gate 2: operationId 認可
   if (!approvedOpIds.has(op.operationId)) {
     return {
@@ -375,19 +493,11 @@ async function processOperation(op: Operation): Promise<OperationOutcome> {
     };
   }
 
-  // Gate 5: precondition snapshot
-  const pre = await checkPrecondition(op);
-  if (!pre.ok) {
-    return {
-      operationId: op.operationId,
-      docId: op.docId,
-      action: op.recommendedAction,
-      status: 'skipped',
-      reason: `precondition mismatch: ${pre.reason}`,
-    };
-  }
-
-  // idempotency: migrate / regenerate で既に完了済 → skip
+  // F-A3: idempotency を precondition より前に評価。
+  // copy 成功 → Firestore update 失敗 → 再実行のシナリオで、precondition は旧 fileUrl を期待し
+  // 現状は新 fileUrl になっている (もしくはその逆) のドリフト検出になる。idempotency check が
+  // 「完了状態 (新 path 存在 + Firestore fileUrl 更新済)」を先に判定することで、
+  // 完了済 op は precondition mismatch にせず安全に skip する。
   if (
     (op.recommendedAction === 'migrate-to-namespace' ||
       op.recommendedAction === 'regenerate-from-parent') &&
@@ -399,6 +509,18 @@ async function processOperation(op: Operation): Promise<OperationOutcome> {
       action: op.recommendedAction,
       status: 'skipped',
       reason: 'already migrated (idempotent)',
+    };
+  }
+
+  // Gate 5: precondition snapshot (idempotency check 通過後に実行)
+  const pre = await checkPrecondition(op);
+  if (!pre.ok) {
+    return {
+      operationId: op.operationId,
+      docId: op.docId,
+      action: op.recommendedAction,
+      status: 'skipped',
+      reason: `precondition mismatch: ${pre.reason}`,
     };
   }
 

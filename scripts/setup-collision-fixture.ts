@@ -51,6 +51,9 @@ const db = admin.firestore();
 const bucket = admin.storage().bucket();
 
 const FIXTURE_PREFIX = 'processed/';
+// F-A1: parent PDF は実環境同様 `original/` 配下に置く (旧版は processed/ に置いていて
+// classify が parent 不在を見落とす欠陥を隠蔽していた)。
+const PARENT_PREFIX = 'original/';
 const PARENT_DOC_ID = 'pr-c-fixture-parent';
 const FIXTURE_DOC_IDS = {
   PARENT: PARENT_DOC_ID,
@@ -142,7 +145,8 @@ async function doCleanup(): Promise<void> {
   // Storage cleanup: parent + collision + ambiguous (orphan は元々なし)
   // 旧 path (= 旧 fileUrl 形式) と新 docId namespace 形式の両方掃除
   const pathsToDelete = [
-    `${FIXTURE_PREFIX}${PARENT_DOC_ID}.pdf`,
+    `${PARENT_PREFIX}${PARENT_DOC_ID}.pdf`, // F-A1: parent は original/ 配下
+    `${FIXTURE_PREFIX}${PARENT_DOC_ID}.pdf`, // 旧 fixture 残存 (互換 cleanup)
     `${FIXTURE_PREFIX}${COLLISION_FILENAME}`, // 旧形式 (collision)
     `${FIXTURE_PREFIX}${AMBIGUOUS_FILENAME}`, // 旧形式 (ambiguous)
     `${FIXTURE_PREFIX}${FIXTURE_DOC_IDS.MATCHED_WINNER}/${COLLISION_FILENAME}`,
@@ -172,7 +176,9 @@ async function main(): Promise<void> {
 
   console.log('\nGenerating parent PDF...');
   const parentBuf = await makeParentPdf();
-  const parentPath = `${FIXTURE_PREFIX}${PARENT_DOC_ID}.pdf`;
+  // F-A1: parent は original/ 配下 (実環境同様)。classify-collision-docs.ts が `processed/`
+  // Storage 一覧だけで parent 不在判定する欠陥を再発見させない。
+  const parentPath = `${PARENT_PREFIX}${PARENT_DOC_ID}.pdf`;
   await uploadPdf(parentPath, parentBuf);
   await setDoc(PARENT_DOC_ID, {
     id: PARENT_DOC_ID,

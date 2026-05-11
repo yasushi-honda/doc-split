@@ -63,12 +63,20 @@ function tsToIso(ts: unknown): string | null {
   return String(ts);
 }
 
+/**
+ * gs://<bucket>/<path> の <path> 部分を返す。bucket 一致確認なし。
+ * F-B4 後は呼び出し元を狭く保つため、参照箇所を最小化している。
+ */
 function pathFromUrl(url: string | null | undefined): string | null {
   if (!url || typeof url !== 'string') return null;
   const m = url.match(/^gs:\/\/[^/]+\/(.+)$/);
   return m ? m[1] : null;
 }
 
+/**
+ * bucket 一致確認付き (PR-D 同等、F-B4 反映)。マルチクライアント環境で別 bucket
+ * 参照を本環境の参照と誤計上する false negative を防ぐ。
+ */
 function extractPathIfBucketMatches(
   url: string | null | undefined,
   expectedBucket: string
@@ -82,6 +90,24 @@ function extractPathIfBucketMatches(
 
 function sha256(buf: Buffer): string {
   return crypto.createHash('sha256').update(buf).digest('hex');
+}
+
+/**
+ * Storage の指定 path が実在するか個別 exists() で確認する (cache 付き)。
+ * F-A1: parent PDF は `processed/` に限定されない (通常 `original/...`) ため
+ * Storage 一覧 (prefix 限定) には載らない。`bucket.file(p).exists()` で個別確認。
+ */
+async function makeStorageExistenceChecker(): Promise<
+  (path: string) => Promise<boolean>
+> {
+  const cache = new Map<string, boolean>();
+  return async (path: string): Promise<boolean> => {
+    const cached = cache.get(path);
+    if (cached !== undefined) return cached;
+    const [exists] = await bucket.file(path).exists();
+    cache.set(path, exists);
+    return exists;
+  };
 }
 
 async function loadAllDocs(): Promise<RawDoc[]> {
@@ -121,19 +147,40 @@ async function listStorageFiles(prefixPath: string): Promise<Set<string>> {
   return all;
 }
 
-async function downloadIfExists(path: string): Promise<Buffer | null> {
+/**
+ * F-B3: catch-all で transient 503/403 を「ファイルなし」と誤分類する silent
+ * failure を防ぐ。404 のみ absent、それ以外は error として hashEvidence 側で
+ * computation-error 扱いにする (LostOrUnrecoverable に流さない)。
+ */
+type DownloadResult =
+  | { kind: 'ok'; buf: Buffer }
+  | { kind: 'absent' }
+  | { kind: 'error'; message: string };
+
+async function downloadIfExists(path: string): Promise<DownloadResult> {
   try {
     const [buf] = await bucket.file(path).download();
-    return buf;
-  } catch {
-    return null;
+    return { kind: 'ok', buf };
+  } catch (err) {
+    const code = (err as { code?: number }).code;
+    if (code === 404) return { kind: 'absent' };
+    return { kind: 'error', message: (err as Error).message };
   }
 }
 
-/** doc 1 件分の hash evidence + parent context を gather (Firestore/Storage I/O) */
+/**
+ * doc 1 件分の hash evidence + parent context を gather (Firestore/Storage I/O)
+ *
+ * F-A1 反映: parent PDF は通常 `original/...` 配下にあり `processed/` Storage 一覧には
+ *   載らない。`storageExists(parentPath)` で個別確認 + cache する。
+ * F-B3 反映: download の transient error (403/503) は hashEvidence: unavailable +
+ *   reason: 'computation-error' として返し、LostOrUnrecoverable に降格させない。
+ * F-B4 反映: bucket 不一致の fileUrl は本環境の path として扱わず、
+ *   reason: 'bucket-mismatch' で hash 比較不能として返す。
+ */
 async function buildDocEvidence(
   doc: CollisionDoc,
-  storagePaths: Set<string>,
+  storageExists: (path: string) => Promise<boolean>,
   parentCache: Map<string, RawDoc | null>,
   parentBufferCache: Map<string, Buffer | null>
 ): Promise<DocEvidence> {
@@ -166,15 +213,25 @@ async function buildDocEvidence(
     if (parentDoc === null) {
       parent = { exists: false };
     } else {
-      const parentPath = pathFromUrl(parentDoc.fileUrl);
-      const parentPdfExists = parentPath !== null && storagePaths.has(parentPath);
+      // F-B4: bucket 一致確認、不一致の parent は本環境の参照として扱わない
+      const parentPath = extractPathIfBucketMatches(parentDoc.fileUrl, bucket.name);
+      const parentPdfExists = parentPath !== null && (await storageExists(parentPath));
       parent = { exists: true, originalPdfExists: parentPdfExists };
     }
   }
 
   // hash evidence (Storage 実体 sha256 vs 親から再生成した期待 sha256)
-  const docPath = pathFromUrl(doc.fileUrl);
-  if (docPath === null || !storagePaths.has(docPath)) {
+  // F-B4: bucket mismatch は本環境の path として扱わず unavailable
+  const docPath = extractPathIfBucketMatches(doc.fileUrl, bucket.name);
+  if (docPath === null) {
+    return {
+      doc,
+      hashEvidence: { type: 'unavailable', reason: 'no-storage-actual' },
+      parent,
+    };
+  }
+  const docPathExists = await storageExists(docPath);
+  if (!docPathExists) {
     return {
       doc,
       hashEvidence: { type: 'unavailable', reason: 'no-storage-actual' },
@@ -204,20 +261,51 @@ async function buildDocEvidence(
   }
 
   try {
-    const actualBuf = await downloadIfExists(docPath);
-    if (actualBuf === null) {
+    const actualResult = await downloadIfExists(docPath);
+    if (actualResult.kind === 'absent') {
       return {
         doc,
         hashEvidence: { type: 'unavailable', reason: 'no-storage-actual' },
         parent,
       };
     }
+    if (actualResult.kind === 'error') {
+      console.warn(
+        `WARN: actual download failed (transient?) docId=${doc.id} path=${docPath}: ${actualResult.message}`
+      );
+      return {
+        doc,
+        hashEvidence: { type: 'unavailable', reason: 'computation-error' },
+        parent,
+      };
+    }
+    const actualBuf = actualResult.buf;
 
     let parentBuf = parentBufferCache.get(doc.parentDocumentId);
     if (parentBuf === undefined) {
       const parentDoc = parentCache.get(doc.parentDocumentId)!;
-      const parentPath = pathFromUrl(parentDoc!.fileUrl);
-      parentBuf = parentPath ? await downloadIfExists(parentPath) : null;
+      // F-B4: parent path も bucket 一致確認
+      const parentPath = extractPathIfBucketMatches(parentDoc!.fileUrl, bucket.name);
+      if (parentPath === null) {
+        parentBuf = null;
+      } else {
+        const parentResult = await downloadIfExists(parentPath);
+        if (parentResult.kind === 'ok') {
+          parentBuf = parentResult.buf;
+        } else if (parentResult.kind === 'error') {
+          console.warn(
+            `WARN: parent download failed (transient?) parentId=${doc.parentDocumentId} path=${parentPath}: ${parentResult.message}`
+          );
+          parentBufferCache.set(doc.parentDocumentId, null);
+          return {
+            doc,
+            hashEvidence: { type: 'unavailable', reason: 'computation-error' },
+            parent,
+          };
+        } else {
+          parentBuf = null;
+        }
+      }
       parentBufferCache.set(doc.parentDocumentId, parentBuf);
     }
     if (parentBuf === null) {
@@ -321,12 +409,13 @@ async function main(): Promise<void> {
   const allDocs = await loadAllDocs();
   console.log(`Total documents: ${allDocs.length}`);
 
+  // F-B4: bucket 一致確認付きで target 抽出 (別 bucket 参照を本環境に誤計上しない)
   const targetDocs = allDocs.filter((d) => {
-    const path = pathFromUrl(d.fileUrl);
-    return path && path.startsWith(prefix);
+    const path = extractPathIfBucketMatches(d.fileUrl, bucket.name);
+    return path !== null && path.startsWith(prefix);
   });
   console.log(
-    `Documents with fileUrl matching prefix "${prefix}": ${targetDocs.length}\n`
+    `Documents with fileUrl matching prefix "${prefix}" in bucket "${bucket.name}": ${targetDocs.length}\n`
   );
 
   console.log(`Listing Storage files under prefix "${prefix}"...`);
@@ -342,13 +431,14 @@ async function main(): Promise<void> {
     process.exit(2);
   }
 
-  // 衝突 group + orphan を分離
+  // F-A2: 衝突 group + orphan を排他的に分離 (orphan を byFileName に push しない)
   const byFileName = new Map<string, RawDoc[]>();
   const orphanDocs: RawDoc[] = [];
   for (const d of targetDocs) {
-    const path = pathFromUrl(d.fileUrl);
-    if (path && !storagePaths.has(path)) {
+    const path = extractPathIfBucketMatches(d.fileUrl, bucket.name);
+    if (path !== null && !storagePaths.has(path)) {
       orphanDocs.push(d);
+      continue; // ★ orphan は collision group 集計から除外 (二重登録防止)
     }
     if (!d.fileName) continue;
     if (!byFileName.has(d.fileName)) byFileName.set(d.fileName, []);
@@ -360,6 +450,9 @@ async function main(): Promise<void> {
   console.log(
     `Collision groups: ${collisionGroups.length} | fileUrl orphans: ${orphanDocs.length}\n`
   );
+
+  // F-A1: parent PDF 個別 exists() checker (`original/` 配下も含めて検出可能)
+  const storageExists = await makeStorageExistenceChecker();
 
   const parentCache = new Map<string, RawDoc | null>();
   const parentBufferCache = new Map<string, Buffer | null>();
@@ -393,7 +486,7 @@ async function main(): Promise<void> {
     }
     const evidences: DocEvidence[] = [];
     for (const d of docs) {
-      evidences.push(await buildDocEvidence(d, storagePaths, parentCache, parentBufferCache));
+      evidences.push(await buildDocEvidence(d, storageExists, parentCache, parentBufferCache));
     }
     const group: CollisionGroup = { fileName, evidences };
     const results = classifyCollisionGroup(group);
@@ -409,7 +502,7 @@ async function main(): Promise<void> {
   // orphan の classify
   console.log(`\nClassifying ${orphanDocs.length} orphans...`);
   for (const d of orphanDocs) {
-    const evidence = await buildDocEvidence(d, storagePaths, parentCache, parentBufferCache);
+    const evidence = await buildDocEvidence(d, storageExists, parentCache, parentBufferCache);
     const result = classifyOrphan(evidence);
     const op = buildOperation(d, result, opCounter);
     operations.push(op);
