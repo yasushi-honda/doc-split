@@ -425,6 +425,38 @@ describe('collisionClassifier (Issue #432 PR-C)', () => {
       expect(result.reason).to.contain('optional-content');
     });
 
+    it('orphan + hashEvidence.type=unsupported (annotations, Codex Critical 反映) → Ambiguous', () => {
+      const evidence: DocEvidence = {
+        doc: makeDoc({ id: 'anno-doc' }),
+        hashEvidence: {
+          type: 'unsupported',
+          reason: 'annotations',
+          detail: 'page 0 has 1 annotation(s)',
+          algorithm: 'pdf-page-visual-v1',
+        },
+        parent: PARENT_OK,
+      };
+      const result = classifyOrphan(evidence);
+      expect(result.classification).to.equal('Ambiguous');
+      expect(result.reason).to.contain('annotations');
+    });
+
+    it('orphan + hashEvidence.type=unsupported (unsupported-resource-filter, Codex Important 反映) → Ambiguous', () => {
+      const evidence: DocEvidence = {
+        doc: makeDoc({ id: 'filter-doc' }),
+        hashEvidence: {
+          type: 'unsupported',
+          reason: 'unsupported-resource-filter',
+          detail: 'page 0 resources canonical digest: UnsupportedEncodingError DCTDecode',
+          algorithm: 'pdf-page-visual-v1',
+        },
+        parent: PARENT_OK,
+      };
+      const result = classifyOrphan(evidence);
+      expect(result.classification).to.equal('Ambiguous');
+      expect(result.reason).to.contain('unsupported-resource-filter');
+    });
+
     it('collision group loser + hashEvidence.type=unsupported (malformed) → Ambiguous (Repairable 経路から降格)', () => {
       const group: CollisionGroup = {
         fileName: 'unsupported-loser.pdf',

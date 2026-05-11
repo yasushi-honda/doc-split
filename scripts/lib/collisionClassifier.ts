@@ -57,11 +57,9 @@ export interface CollisionDoc {
  */
 export type FingerprintAlgorithm = 'pdf-page-visual-v1';
 
-export type UnsupportedReason =
-  | 'encryption'
-  | 'acroform'
-  | 'optional-content'
-  | 'malformed';
+// drift 防止のため pdfPageVisualFingerprint で定義した UnsupportedReason を re-export
+import type { UnsupportedReason as FingerprintUnsupportedReason } from './pdfPageVisualFingerprint';
+export type UnsupportedReason = FingerprintUnsupportedReason;
 
 export interface DocEvidence {
   doc: CollisionDoc;
@@ -171,7 +169,7 @@ export function classifyCollisionGroup(
     return group.evidences.map((e) => ({
       docId: e.doc.id,
       classification: 'Ambiguous' as const,
-      reason: `multiple fingerprint matches in group (${matchedDocIds.length} docs share the same visual fingerprint with the regenerated PDF)`,
+      reason: `multiple-fingerprint-matches: ${matchedDocIds.length} docs share the same visual fingerprint with the regenerated PDF`,
       suggestedWinner: e.hashEvidence.type === 'matched',
       recommendedAction: 'manual-review' as const,
     }));
@@ -342,7 +340,8 @@ export type AmbiguousReasonKind =
   | 'content-mismatch'
   | 'unsupported-pdf-feature'
   | 'hash-unavailable-transient'
-  | 'hash-unavailable-no-parent';
+  | 'hash-unavailable-no-parent'
+  | 'multiple-fingerprint-matches';
 
 function buildAmbiguousReason(evidence: DocEvidence): string {
   switch (evidence.hashEvidence.type) {
@@ -357,7 +356,7 @@ function buildAmbiguousReason(evidence: DocEvidence): string {
       return buildUnavailableReason('hash-unavailable-no-parent', evidence.hashEvidence.reason);
     case 'matched':
       // この path は ケース 2 (multiple matches) でのみ到達するが defensive に
-      return 'multiple-fingerprint-matches: fingerprint matched but multiple winners in group';
+      return 'multiple-fingerprint-matches: defensive fallback for matched evidence';
   }
 }
 

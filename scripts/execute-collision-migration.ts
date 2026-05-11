@@ -37,6 +37,8 @@ import type {
   RecommendedAction,
 } from './lib/collisionClassifier';
 import { HASH_ALGORITHM } from './lib/pdfPageVisualFingerprint';
+// AC13 拡張 (Codex Important): plan.pdfLibVersion と execute 側 pdf-lib version の照合
+import { version as expectedPdfLibVersion } from 'pdf-lib/package.json';
 
 const projectId = process.env.FIREBASE_PROJECT_ID;
 const storageBucket = process.env.STORAGE_BUCKET;
@@ -97,6 +99,11 @@ interface Plan {
    * することを防ぐ)。PR-C1 plan (pre v1) には存在しないので undefined で gate を弾く。
    */
   hashAlgorithm?: FingerprintAlgorithm;
+  /**
+   * AC13 拡張 (Codex Important): pdf-lib npm package の version 文字列。algorithm 名は
+   * 同じでも pdf-lib internal API 変更で fingerprint 計算結果が変わるリスクを検出する。
+   */
+  pdfLibVersion?: string;
   summary: unknown;
   operations: Operation[];
 }
@@ -136,6 +143,14 @@ if (plan.bucket !== storageBucket) {
 if (plan.hashAlgorithm !== HASH_ALGORITHM) {
   console.error(
     `FATAL: plan.hashAlgorithm (${plan.hashAlgorithm ?? '<missing>'}) !== execute code's HASH_ALGORITHM (${HASH_ALGORITHM}). Re-run classify-collision-docs.ts to regenerate the plan with the current fingerprint algorithm.`
+  );
+  process.exit(2);
+}
+// AC13 拡張 (Codex Important): pdf-lib version mismatch も reject。algorithm 名は
+// 同じでも pdf-lib internal API 挙動が変わると fingerprint 計算結果が変わるため。
+if (plan.pdfLibVersion !== expectedPdfLibVersion) {
+  console.error(
+    `FATAL: plan.pdfLibVersion (${plan.pdfLibVersion ?? '<missing>'}) !== execute runtime pdf-lib version (${expectedPdfLibVersion}). Re-run classify-collision-docs.ts after package version sync.`
   );
   process.exit(2);
 }

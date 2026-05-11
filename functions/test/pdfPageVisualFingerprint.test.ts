@@ -31,9 +31,12 @@ import {
   PDFArray,
   PDFDict,
   PDFDocument,
+  PDFName,
+  PDFNumber,
   PDFObject,
   PDFRawStream,
   PDFRef,
+  PDFString,
   decodePDFRawStream,
   degrees,
 } from 'pdf-lib';
@@ -385,6 +388,96 @@ describe('pdfPageVisualFingerprint (Issue #432 PR-C2)', () => {
       const d2 = canonicalDigest(dict as PDFDict, reloaded.context);
       expect(d1).to.be.instanceOf(Buffer);
       expect(d1.equals(d2)).to.equal(true);
+    });
+  });
+
+  describe('Codex review (PR #441 post-review) 反映 v1.1', () => {
+    it('Critical: visible annotation 入り page → unsupported.annotations', async () => {
+      const pdf = await PDFDocument.create();
+      const page = pdf.addPage([200, 200]);
+      page.drawRectangle({ x: 5, y: 5, width: 20, height: 20 });
+
+      // 手動で Text annotation を 1 件追加 (form field ではないので AcroForm 経路を踏まない)
+      const annotDict = pdf.context.obj({
+        Type: 'Annot',
+        Subtype: 'Text',
+        Rect: [50, 50, 100, 100],
+        Contents: PDFString.of('codex review annotation test'),
+      });
+      const annotRef = pdf.context.register(annotDict);
+      page.node.addAnnot(annotRef);
+
+      const buf = Buffer.from(await pdf.save());
+      const fp = await computePdfPageVisualFingerprint(buf);
+      expect(fp.kind).to.equal('unsupported');
+      if (fp.kind === 'unsupported') {
+        expect(fp.reason).to.equal('annotations');
+      }
+    });
+
+    it('Suggestion: CropBox absent == CropBox 明示 (MediaBox 同値) → 同 fingerprint', async () => {
+      // pdf1: CropBox なし (PDF spec で MediaBox にフォールバック)
+      const pdf1 = await PDFDocument.create();
+      const p1 = pdf1.addPage([200, 200]);
+      p1.drawRectangle({ x: 5, y: 5, width: 20, height: 20 });
+      const buf1 = Buffer.from(await pdf1.save());
+
+      // pdf2: CropBox を MediaBox と同じ値で明示
+      const pdf2 = await PDFDocument.create();
+      const p2 = pdf2.addPage([200, 200]);
+      p2.drawRectangle({ x: 5, y: 5, width: 20, height: 20 });
+      const cropArr = pdf2.context.obj([0, 0, 200, 200]);
+      p2.node.set(PDFName.of('CropBox'), cropArr);
+      const buf2 = Buffer.from(await pdf2.save());
+
+      const fp1 = await computePdfPageVisualFingerprint(buf1);
+      const fp2 = await computePdfPageVisualFingerprint(buf2);
+      expect(fp1.kind).to.equal('ok');
+      expect(fp2.kind).to.equal('ok');
+      if (fp1.kind === 'ok' && fp2.kind === 'ok') {
+        // 表示同一性は等価 → effective fallback で同 fingerprint
+        expect(fp1.hex).to.equal(fp2.hex);
+      }
+    });
+
+    it('Important: UserUnit 差分 → fingerprint が異なる', async () => {
+      const build = async (unit: number) => {
+        const pdf = await PDFDocument.create();
+        const p = pdf.addPage([200, 200]);
+        p.drawRectangle({ x: 5, y: 5, width: 20, height: 20 });
+        p.node.set(PDFName.of('UserUnit'), PDFNumber.of(unit));
+        return Buffer.from(await pdf.save());
+      };
+      const fp1 = await computePdfPageVisualFingerprint(await build(1));
+      const fp2 = await computePdfPageVisualFingerprint(await build(2));
+      expect(fp1.kind).to.equal('ok');
+      expect(fp2.kind).to.equal('ok');
+      if (fp1.kind === 'ok' && fp2.kind === 'ok') {
+        expect(fp1.hex).to.not.equal(fp2.hex);
+      }
+    });
+
+    it('Important: /Group 差分 → fingerprint が異なる', async () => {
+      const build = async (cs: string) => {
+        const pdf = await PDFDocument.create();
+        const p = pdf.addPage([200, 200]);
+        p.drawRectangle({ x: 5, y: 5, width: 20, height: 20 });
+        // page-level /Group (transparency group dict) の CS (color space) 差分
+        const group = pdf.context.obj({
+          Type: 'Group',
+          S: 'Transparency',
+          CS: cs,
+        });
+        p.node.set(PDFName.of('Group'), group);
+        return Buffer.from(await pdf.save());
+      };
+      const fp1 = await computePdfPageVisualFingerprint(await build('DeviceRGB'));
+      const fp2 = await computePdfPageVisualFingerprint(await build('DeviceCMYK'));
+      expect(fp1.kind).to.equal('ok');
+      expect(fp2.kind).to.equal('ok');
+      if (fp1.kind === 'ok' && fp2.kind === 'ok') {
+        expect(fp1.hex).to.not.equal(fp2.hex);
+      }
     });
   });
 });

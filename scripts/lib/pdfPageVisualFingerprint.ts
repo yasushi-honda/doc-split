@@ -61,7 +61,13 @@ export type UnsupportedReason =
   | 'encryption'
   | 'acroform'
   | 'optional-content'
-  | 'malformed';
+  | 'malformed'
+  /** Codex Critical 反映: visible annotations は描画に影響するが Contents stream に
+   *  乗らない (別 dict / appearance stream)。安全側で自動復旧対象外に倒す。 */
+  | 'annotations'
+  /** Codex Important 反映: DCTDecode/JPXDecode 等 pdf-lib decodePDFRawStream 未対応の
+   *  filter で resources subtree が decode できない場合に降格させる reason。 */
+  | 'unsupported-resource-filter';
 
 export type Fingerprint =
   | {
@@ -138,15 +144,40 @@ export async function computePdfPageVisualFingerprint(
   for (let i = 0; i < pageCount; i++) {
     const node = pdf.getPage(i).node;
 
+    // Codex Critical 反映: visible annotations は描画に影響するが Contents stream に
+    // 乗らない (separate /Annots 配列 + appearance stream)。同 Contents/Resources で
+    // annotation のみ違う PDF が偽 MatchedByHash になるリスクを排除するため unsupported。
+    const annots = node.Annots();
+    if (annots !== undefined && annots.size() > 0) {
+      return {
+        kind: 'unsupported',
+        reason: 'annotations',
+        detail: `page ${i} has ${annots.size()} annotation(s); cannot prove visual equivalence via fingerprint`,
+        algorithm: HASH_ALGORITHM,
+      };
+    }
+
     // 1. decoded Contents bytes (正規化禁止)
     let contentBytes: Uint8Array;
     try {
       contentBytes = collectDecodedContentBytes(node.Contents(), pdf.context);
     } catch (err) {
+      // Codex Important 反映: 画像 stream の decode 失敗 (DCTDecode/JPXDecode 等
+      // pdf-lib 1.17.1 未対応 filter) は malformed ではなく unsupported-resource-filter
+      // に降格させる。catch-all で computation-error にすると transient と誤分類される。
+      const msg = (err as Error).message;
+      if (isUnsupportedFilterError(msg)) {
+        return {
+          kind: 'unsupported',
+          reason: 'unsupported-resource-filter',
+          detail: `page ${i} content stream uses unsupported filter: ${msg}`,
+          algorithm: HASH_ALGORITHM,
+        };
+      }
       return {
         kind: 'unsupported',
         reason: 'malformed',
-        detail: `page ${i} content stream: ${(err as Error).message}`,
+        detail: `page ${i} content stream: ${msg}`,
         algorithm: HASH_ALGORITHM,
       };
     }
@@ -154,14 +185,48 @@ export async function computePdfPageVisualFingerprint(
     top.update(Buffer.from(contentBytes));
 
     // 2. geometry
+    // Codex Suggestion 反映: CropBox absent は PDF spec 上 MediaBox にフォールバックする。
+    // absent と「CropBox==MediaBox 明示」は表示同一なので、effective crop を hash する。
     top.update('|media=');
     top.update(encodeRect(node.MediaBox(), pdf.context));
     const cropBox = node.CropBox();
-    top.update('|crop=');
-    top.update(cropBox === undefined ? '<absent>' : encodeRect(cropBox, pdf.context));
+    const effectiveCrop = cropBox ?? node.MediaBox();
+    top.update('|effectiveCrop=');
+    top.update(encodeRect(effectiveCrop, pdf.context));
     const rotate = node.Rotate();
     const rotateValue = rotate === undefined ? 0 : rotate.asNumber();
     top.update(`|rotate=${rotateValue}`);
+
+    // Codex Important 反映: page-level visual entries の追加 /UserUnit, /Group。
+    // /UserUnit は page size の実寸 (1.0 default), /Group は transparency blending。
+    const userUnit = node.lookup(PDFName.of('UserUnit'));
+    if (userUnit === undefined) {
+      top.update('|userUnit=<absent>');
+    } else if (userUnit instanceof PDFNumber) {
+      top.update(`|userUnit=${userUnit.asNumber()}`);
+    } else {
+      top.update(`|userUnit=<unexpected:${userUnit.constructor.name}>`);
+    }
+    top.update('|group=');
+    const group = node.lookup(PDFName.of('Group'));
+    if (group === undefined) {
+      top.update('<absent>');
+    } else {
+      try {
+        top.update(canonicalDigest(group, pdf.context));
+      } catch (err) {
+        const msg = (err as Error).message;
+        if (isUnsupportedFilterError(msg)) {
+          return {
+            kind: 'unsupported',
+            reason: 'unsupported-resource-filter',
+            detail: `page ${i} /Group canonical digest: ${msg}`,
+            algorithm: HASH_ALGORITHM,
+          };
+        }
+        throw err;
+      }
+    }
 
     // 3. Resources canonical digest
     top.update('|resources=');
@@ -169,8 +234,23 @@ export async function computePdfPageVisualFingerprint(
     if (resources === undefined) {
       top.update('<absent>');
     } else {
-      const resourcesDigest = canonicalDigest(resources, pdf.context);
-      top.update(resourcesDigest);
+      try {
+        const resourcesDigest = canonicalDigest(resources, pdf.context);
+        top.update(resourcesDigest);
+      } catch (err) {
+        // Codex Important 反映: resources subtree 内の image XObject 等の decode 失敗を
+        // unsupported-resource-filter に降格 (transient computation-error にしない)
+        const msg = (err as Error).message;
+        if (isUnsupportedFilterError(msg)) {
+          return {
+            kind: 'unsupported',
+            reason: 'unsupported-resource-filter',
+            detail: `page ${i} resources canonical digest: ${msg}`,
+            algorithm: HASH_ALGORITHM,
+          };
+        }
+        throw err;
+      }
     }
   }
 
@@ -180,6 +260,24 @@ export async function computePdfPageVisualFingerprint(
     pageCount,
     algorithm: HASH_ALGORITHM,
   };
+}
+
+/**
+ * pdf-lib `decodePDFRawStream` が UnsupportedEncodingError を投げるパターンを判定する。
+ * DCTDecode / JPXDecode / CCITTFaxDecode / JBIG2Decode 等の画像 filter のほか、不明
+ * filter も含む。本判定は pdf-lib 内部メッセージに依存するため lock test で固定する。
+ */
+function isUnsupportedFilterError(message: string): boolean {
+  return (
+    message.includes('UnsupportedEncoding') ||
+    message.includes('DCTDecode') ||
+    message.includes('JPXDecode') ||
+    message.includes('CCITTFaxDecode') ||
+    message.includes('JBIG2Decode') ||
+    message.includes('Crypt') ||
+    message.includes('unknown filter') ||
+    message.includes('Unknown filter')
+  );
 }
 
 /**
@@ -257,12 +355,12 @@ function encodeRect(arr: PDFArray, context: PDFContext): Buffer {
  *
  * - PDFDict: entries を name 文字列 sort してから recurse (V8 iteration order 差吸収)
  * - PDFArray: 順序保持して recurse (PDF semantically order-sensitive)
- * - PDFRef: 循環防止 + lookup して resolve した先を recurse
- * - PDFStream: dict subtree + decoded bytes
+ * - PDFRef: recursion stack 上の循環のみ cycle marker、stack 外の共有参照は通常 recurse
+ *   (Codex Important 反映: 旧版は traversal 全体共有 Set だったため、sibling 経由の共有参照
+ *    で object number が hash に混入 → cross-process determinism が弱くなっていた)
+ * - PDFStream: dict subtree + decoded bytes (filter 不可なら caller に throw、上位で
+ *   unsupported-resource-filter に降格)
  * - その他 scalar: 型 prefix + 値 string
- *
- * 循環 ref を visited で検出 (PDFRef は pdf-lib 側で同一識別子を共有 instance に
- * 解決される設計のため Set<PDFRef> で識別可能)。
  */
 export function canonicalDigest(obj: PDFObject, context: PDFContext): Buffer {
   const sha = crypto.createHash('sha256');
@@ -274,20 +372,27 @@ function walk(
   sha: crypto.Hash,
   obj: PDFObject,
   context: PDFContext,
-  visited: Set<PDFRef>
+  recursionStack: Set<PDFRef>
 ): void {
   if (obj instanceof PDFRef) {
-    if (visited.has(obj)) {
-      sha.update(`ref-cycle|${obj.objectNumber}|${obj.generationNumber}`);
+    if (recursionStack.has(obj)) {
+      // 真の循環参照のみ stable cycle marker (object number は意図的に含めない =
+      // cross-process determinism のため)
+      sha.update('ref-cycle');
       return;
     }
-    visited.add(obj);
-    const resolved = context.lookup(obj);
-    sha.update('ref|');
-    if (resolved === undefined) {
-      sha.update('<undefined>');
-    } else {
-      walk(sha, resolved, context, visited);
+    recursionStack.add(obj);
+    try {
+      const resolved = context.lookup(obj);
+      sha.update('ref|');
+      if (resolved === undefined) {
+        sha.update('<undefined>');
+      } else {
+        walk(sha, resolved, context, recursionStack);
+      }
+    } finally {
+      // recursion stack から外し、sibling 経由で同 ref が再出現したら通常 recurse
+      recursionStack.delete(obj);
     }
     return;
   }
@@ -299,7 +404,7 @@ function walk(
       sha.update('|key=');
       sha.update(k.asString());
       sha.update('|val=');
-      walk(sha, v, context, visited);
+      walk(sha, v, context, recursionStack);
     }
     return;
   }
@@ -308,13 +413,13 @@ function walk(
     sha.update(`array|size=${size}`);
     for (let i = 0; i < size; i++) {
       sha.update('|');
-      walk(sha, obj.get(i), context, visited);
+      walk(sha, obj.get(i), context, recursionStack);
     }
     return;
   }
   if (obj instanceof PDFStream) {
     sha.update('stream|dict=');
-    walk(sha, obj.dict, context, visited);
+    walk(sha, obj.dict, context, recursionStack);
     const bytes = decodeStreamBytes(obj);
     sha.update(`|bytes_len=${bytes.length}|bytes=`);
     sha.update(Buffer.from(bytes));

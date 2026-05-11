@@ -180,7 +180,7 @@ operator が manual-review 時に対処方針を即特定できるよう、Ambig
 |---|---|---|
 | `content-mismatch` | fingerprint(actual storage) != fingerprint(regenerated) | parent から再生成した PDF と実体が描画的に異なる。operator が中身を比較し、勝者判定 → 手動 migrate or status='error' |
 | `multiple-fingerprint-matches` | 複数 doc が同 fingerprint (希少) | どの docId に紐付けるべきか operator が業務文脈で判定 |
-| `unsupported-pdf-feature` | encryption / acroform / optional-content / malformed | PDF 構造が自動 fingerprint 対象外。手動でファイル内容を確認し復旧可否判定 |
+| `unsupported-pdf-feature` | encryption / acroform / optional-content / malformed / **annotations** (Codex Critical 反映) / **unsupported-resource-filter** (Codex Important 反映: DCTDecode/JPXDecode 等の画像 filter) | PDF 構造が自動 fingerprint 対象外。手動でファイル内容を確認し復旧可否判定。スキャン PDF (JPEG XObject 多用) は `unsupported-resource-filter` で大半が Ambiguous に倒れる可能性あり |
 | `hash-unavailable-transient` | download 一時エラー (503/403) | 数分後に再 classify、解消すれば再分類 |
 | `hash-unavailable-no-parent` | parent doc / 親 PDF / splitFromPages のいずれかが不在 | LostOrUnrecoverable 寄り。parent doc 復元できれば再分類 |
 
@@ -274,6 +274,7 @@ Step 2 で出力された plan JSON 内容と各 operation の sourcePath/destPa
 4. runtime env (`FIREBASE_PROJECT_ID + STORAGE_BUCKET`) が plan の `projectId / bucket` と一致 (環境取り違え防止)
 5. precondition snapshot (`expectedCurrentFileUrl + expectedStatus + expectedUpdatedAt`) が現状 doc と一致 (進行中 splitPdf invocation との race 検出 → skip)
 6. **`plan.hashAlgorithm === HASH_ALGORITHM` (PR-C2 追加 AC13)**: plan 作成時の fingerprint algorithm version と execute 側コード固定値が一致 (pdf-lib upgrade 等で algorithm が変わった古い plan を新コードで実行することを防ぐ)。PR-C1 plan (`hashAlgorithm` フィールドなし) は新 execute で gate reject される。**対応**: 古い plan を捨てて `classify-collision-docs.ts` を再実行し、新しい plan を生成すること
+7. **`plan.pdfLibVersion === expectedPdfLibVersion` (PR-C2 Codex Important 反映 AC13 拡張)**: plan 作成時の pdf-lib npm version と execute 側 runtime の pdf-lib version が一致。algorithm 名は同じでも pdf-lib internal API 挙動 (decodePDFRawStream/PDFPageLeaf 等) が変わるとfingerprint 計算結果が変わるため、依存更新ごとに再 classify を要求する
 
 > **禁止**: `Issue #432 全件OK` / `processed/ 配下OK` 等の prefix / 包括認可は execute script 側で reject (ADR-0008 教訓)。
 

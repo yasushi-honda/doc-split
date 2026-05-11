@@ -30,6 +30,9 @@ import {
   HASH_ALGORITHM,
   computePdfPageVisualFingerprint,
 } from './lib/pdfPageVisualFingerprint';
+// AC13 拡張 (Codex Important): plan に pdf-lib version も記録。dependency 更新で
+// internal API 挙動が変わったときに古い plan が新コードで黙って通るのを防ぐ。
+import { version as pdfLibVersion } from 'pdf-lib/package.json';
 
 const projectId = process.env.FIREBASE_PROJECT_ID;
 const storageBucket = process.env.STORAGE_BUCKET;
@@ -572,6 +575,7 @@ async function main(): Promise<void> {
     bucket: bucket.name,
     prefix,
     hashAlgorithm,
+    pdfLibVersion,
     summary,
     operations,
   };
