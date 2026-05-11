@@ -1,8 +1,80 @@
 # ハンドオフメモ
 
-**更新日**: 2026-04-29 session55 (**ユーザー指示「実装済み機能のドキュメント反映」→ 必須 3 項目に絞込、PR #427 merged + 3 環境展開、Net 0**。直近実装済（PR #422 / #406 / #409 / #392）でユーザー向けマニュアルに未反映だった 3 機能を HelpPage に補完。①書類種別タブのカテゴリ階層化、③担当ケアマネ編集 + マスタ非連動注意、⑤ケアマネジャーフィルター。検索結果ソート（#400）と編集モード注意文の重複（#409 単独）はスコープ外として除外。hook 一時 skip は番号単位明示認可後に対応。)
-**ブランチ**: main (clean)
-**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + (session29-53 累積実績は archive 参照) + Phase 8 (session54 = 残 Issue triage 再評価、#299 close、Net -1) + **Phase 8 (session55 = HelpPage 直近機能反映、PR #427 merged + 3 環境展開、Net 0)** 完遂
+**更新日**: 2026-05-11 session56 (**ヘルスレポート 1 件エラーから設計バグ発見、調査ツール 3 PR merged + P0 Issue #432 起票 + Codex セカンドオピニオン反映、Net -1**。kanameone Storage 404 を起点に PR #429 inspect-document / PR #430 audit-storage-mismatch / PR #431 STORAGE_BUCKET fix を merged。全件監査で 39 fileName 衝突 group + 4 orphan + 推定 90+ silent breakage を確認。cocoro は被害なし。Codex 評価で修正方針を A 案 (timestamp suffix) → B 案 (docId namespace) に変更、`deleteDocument` 追加経路 / 非トランザクション split を発見、マイグレーション 5 分類追加。設計バグ修正実装は次セッションで /brainstorm → /impl-plan)
+**ブランチ**: main (clean、`.serena/project.yml` のみ未コミット差分、Serena LSP 自動更新で機能影響なし)
+**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + (session29-54 累積実績は archive 参照) + Phase 8 (session55 = HelpPage 直近機能反映、PR #427 merged + 3 環境展開、Net 0) + **Phase 8 (session56 = 分割PDF Storage 設計バグ調査、PR #429/#430/#431 merged + Issue #432 起票、Net -1)** 完遂
+
+<a id="session56"></a>
+## ✅ session56 完了サマリー (2026-05-11: 分割PDF Storage 設計バグ調査、調査ツール 3 PR merged + P0 Issue #432 起票、Net -1)
+
+2026-05-10 ヘルスレポートの kanameone 1 件 `No such object` エラーを起点に、調査ツール構築 → 全件監査 → 設計バグ発見 → Codex セカンドオピニオン → P0 Issue 起票まで完遂。設計バグ修正実装は次セッションへ引継ぎ。
+
+### 経緯
+
+1. **エラー検出**: 2026-05-10 ヘルスレポートで kanameone 環境に 1 件のみ `No such object: docsplit-kanameone.firebasestorage.app/processed/20260509_未判定_未判定_p3.pdf` エラー検出
+2. **Storage 側調査**: `gsutil ls processed/` で旧パス `_p3.pdf` 不在 + 回転後パス `_p3_r1778340000575.pdf` 存在を確認 → `rotatePdfPages` の `_r{timestamp}` パターンに合致
+3. **PR #429 (merged)**: read-only な `inspect-document.js` 追加、`run-ops-script.yml` workflow_dispatch に組込み
+4. **詳細調査**: workflow_dispatch で `fileName: 20260509_未判定_未判定_p3.pdf` 検索 → **3 docs が同 fileName** を持つことを発見（うち 1 件は status:processed のまま実体破壊 = silent failure 確定）
+5. **PR #430 (merged)**: 全件 audit を行う `audit-storage-mismatch.js` 追加（`bucket.getFiles({prefix, autoPaginate:false})` ページング + Set 化で O(1) lookup）
+6. **PR #431 (merged) follow-up**: PR #430 が初回 fail（`storageBucket` 未指定）→ `scripts/clients/<env>.env` の `STORAGE_BUCKET` を resolve step で抽出 + Run script env 経由で渡すよう修正
+7. **kanameone 監査**: 5,725 docs 中 processed/ 211 docs / Storage 145 ファイル / **fileUrl 孤児 4 件 (processed:3 + error:1) / fileName 衝突 39 group**（最大 6 docs/group, ほぼ `日付_未判定_未判定_pXX.pdf` パターン）
+8. **cocoro 監査**: 539 docs 中被害ゼロ、ただし設計バグは共通（データ規模 1/10 で衝突確率が低いだけ）
+9. **P0 Issue #432 起票**: triage 基準 #1（実害あり = データ silent 破壊・ユーザー影響）該当
+10. **Codex セカンドオピニオン (MCP review)**: 修正方針 A→B 案変更 / `deleteDocument` 追加経路発見 / 非トランザクション split 発見 / マイグレーション 5 分類追加 / 検出指標 4 項目追加
+11. **Issue #432 本文を edit 更新**: Codex 補強指摘を全反映、修正方針セクション・根本原因セクション・マイグレーション計画・検出強化を再構成
+
+### 根本原因（Issue #432 詳細参照）
+
+- **`generateFileName` (`functions/src/pdf/pdfOperations.ts:581-595`)** に衝突回避要素なし（`timestamp` 引数を受け取るが日付部分しか使わない）
+- **`bucket.file(newFilePath).save()` (`pdfOperations.ts:328-332`)** が衝突検査せず上書き
+- **`rotatePdfPages` (`pdfOperations.ts:528-545`)** が古ファイル delete で同パス共有 docs を破壊
+- **`deleteDocument` 経路（Codex 発見）** も同様の連鎖破壊
+- **splitPdf の Storage save と Firestore set が非トランザクション**（Codex 発見）
+
+### 修正方針（Codex 評価で更新）
+
+- **B 案（推奨・根治）**: `processed/{docId}/{fileName}` で **docId namespace 分離**（Storage path を doc identity に従属）
+- **A 案（代替・対症）**: `generateFileName` に **`docId` suffix** 追加（既存衝突は migration で吸収）
+- **C 案（補助）**: `rotatePdfPages` / `deleteDocument` で同パス共有 docs を検出 → 最後の参照のみ削除（safety net）
+
+### Issue Net 変化
+
+| 項目 | 内容 |
+|------|------|
+| Close 数 | 0 件 |
+| 起票数 | 1 件 (#432) |
+| **Net 変化 (session56 単独)** | **-1 件** |
+
+**Net -1 の進捗判定**: ✅ 正の構造的進捗（triage 基準 #1「実害あり」完全該当 = orphan 4 件 + silent breakage 推定 90+ docs の本番被害を確認、ユーザー影響大、本来 P0 で起票必須の事案）。`feedback_issue_triage.md` の rating 5-6 機械起票には該当せず、調査結果と修正方針を Issue 1 件に集約することで散逸を回避（B 案構造修正 + マイグレーション 5 分類 + 検出強化を 1 親 Issue にチェックリスト集約）。
+
+### 主要 PR
+
+| PR | コミット | 内容 |
+|---|---|---|
+| **#429** | `e41a082` | feat(scripts): inspect-document.js 追加 — documents Firestore read-only 調査ツール (2 files / +185/-0) |
+| **#430** | `eddd051` | feat(scripts): audit-storage-mismatch.js 追加 — Firestore↔Storage 整合性監査 (2 files / +152/-0) |
+| **#431** | `37da31c` | fix(scripts): audit-storage-mismatch に STORAGE_BUCKET env 必須化 (2 files / +33/-4) |
+
+### 監査結果（Issue #432 詳細参照）
+
+| 環境 | Total docs | processed/ docs | Storage files | orphans | collisions |
+|------|---|---|---|---|---|
+| kanameone | 5,725 | 211 | 145 | **4** (processed:3 + error:1) | **39 groups** |
+| cocoro | 539 | 23 | 23 | 0 | 0 groups |
+
+### 次のアクション（次セッション以降）
+
+1. **Issue #432 修正実装の計画作成**: `/brainstorm` で要件深掘り → `/impl-plan` で実装計画（rules/workflow.md SHOULD: 複数アプローチ存在 + アーキテクチャ判断必要に該当）
+2. **B 案 docId namespace 採用判断**: 既存 5640+ docs の互換 migration 設計、roll-out 戦略
+3. **マイグレーション scripts**: 復元可能性 5 分類のロジック実装、影響 doc CSV/JSON 抽出ツール
+4. **検出強化**: ヘルスレポートに fileUrl 重複数 / docId 一意性違反 / parentDocumentId 関連欠損 / 回転履歴件数を追加
+5. **応急対応**: 構造修正完了前の暫定処置（C 案 safety net 先行実装も検討）
+6. **ADR 0016 候補**: B 案採用時に「Storage path = doc identity 設計」の判断記録
+
+### スコープ外（次セッション以降の判断対象）
+
+- session55 から継続の P2 enhancement Issue（#402 / #251 / #238）→ Issue #432 完了後に再評価
+- workflow_dispatch.inputs 上限 10 個達成（次回追加時は JSON 統合方針への移行検討）
 
 <a id="session55"></a>
 ## ✅ session55 完了サマリー (2026-04-29: HelpPage 直近実装機能反映、PR #427 merged + 3 環境展開、Net 0)
