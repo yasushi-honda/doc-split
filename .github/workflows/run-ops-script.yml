@@ -130,12 +130,32 @@ jobs:
                 github.event.inputs.environment == 'dev' && secrets.GCP_SA_KEY_DEV ||
                 secrets.GCP_SA_KEY }}
 
-      - name: Resolve project ID from .firebaserc
+      - name: Resolve project ID and storage bucket
         id: resolve
+        env:
+          ENVIRONMENT: ${{ github.event.inputs.environment }}
         run: |
-          PROJECT_ID=$(node scripts/helpers/firebaserc-helper.js get-project "${{ github.event.inputs.environment }}")
+          set -euo pipefail
+          PROJECT_ID=$(node scripts/helpers/firebaserc-helper.js get-project "$ENVIRONMENT")
           echo "project_id=$PROJECT_ID" >> "$GITHUB_OUTPUT"
-          echo "Resolved: ${{ github.event.inputs.environment }} → $PROJECT_ID"
+          echo "Resolved project_id: $ENVIRONMENT → $PROJECT_ID"
+
+          # CLAUDE.md「Storage バケット名」: .appspot.com / .firebasestorage.app 混在で
+          # projectId からの推測禁止。scripts/clients/<env>.env の STORAGE_BUCKET を抽出する。
+          # ENVIRONMENT は workflow_dispatch.choice で固定 enum (dev / kanameone / cocoro)、
+          # path traversal リスクなし。
+          ENV_FILE="scripts/clients/${ENVIRONMENT}.env"
+          if [ ! -f "$ENV_FILE" ]; then
+            echo "ERROR: $ENV_FILE not found" >&2
+            exit 1
+          fi
+          STORAGE_BUCKET=$(grep -E '^STORAGE_BUCKET=' "$ENV_FILE" | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'")
+          if [ -z "$STORAGE_BUCKET" ]; then
+            echo "ERROR: STORAGE_BUCKET not found in $ENV_FILE" >&2
+            exit 1
+          fi
+          echo "storage_bucket=$STORAGE_BUCKET" >> "$GITHUB_OUTPUT"
+          echo "Resolved storage_bucket: $STORAGE_BUCKET"
 
       - name: Parse script and args
         id: parse
@@ -183,6 +203,7 @@ jobs:
           EXPECTED_COUNT: ${{ github.event.inputs.expected_count }}
           FILE_NAME: ${{ github.event.inputs.file_name }}
           DOC_ID: ${{ github.event.inputs.doc_id }}
+          STORAGE_BUCKET: ${{ steps.resolve.outputs.storage_bucket }}
         run: |
           set -euo pipefail
           if [ -z "$PROJECT_ID" ]; then

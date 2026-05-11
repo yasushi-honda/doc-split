@@ -24,6 +24,14 @@ if (!projectId) {
   process.exit(1);
 }
 
+// CLAUDE.md「Storage バケット名」: .appspot.com / .firebasestorage.app の 2 形式が混在しており、
+// projectId からの推測は禁止。scripts/clients/<env>.env の STORAGE_BUCKET を必ず env 経由で渡す。
+const storageBucket = process.env.STORAGE_BUCKET;
+if (!storageBucket) {
+  console.error('STORAGE_BUCKET を設定してください (例: docsplit-kanameone.firebasestorage.app)');
+  process.exit(1);
+}
+
 function getOpt(name, def = null) {
   const i = process.argv.indexOf(name);
   return i >= 0 && i + 1 < process.argv.length ? process.argv[i + 1] : def;
@@ -33,7 +41,7 @@ const prefix = getOpt('--prefix', 'processed/');
 const skipOrphans = process.argv.includes('--no-orphans');
 const skipCollisions = process.argv.includes('--no-collisions');
 
-admin.initializeApp({ projectId });
+admin.initializeApp({ projectId, storageBucket });
 const db = admin.firestore();
 const bucket = admin.storage().bucket();
 
