@@ -537,28 +537,51 @@ export const rotatePdfPages = onCall(
     });
     console.log('PDF uploaded to new path:', newFilePath);
 
-    // 古いファイルを削除（Issue #432 PR-A safety net: 同 fileUrl 共有 doc がある場合は skip）
+    // Issue #432 PR-A safety net: 同 fileUrl 共有 doc 検出時は旧 file delete を skip。
+    // safety net query 失敗時は fail-closed (delete しない) で構造化エラーログを残す。
+    let canDelete = false;
+    let sharingDocCountUpTo2 = 0;
     try {
-      const { canDelete, sharingDocCount } = await canSafelyDeleteStorageFile(
-        db,
+      const guardResult = await canSafelyDeleteStorageFile(db, fileUrl, documentId);
+      canDelete = guardResult.canDelete;
+      sharingDocCountUpTo2 = guardResult.sharingDocCountUpTo2;
+    } catch (guardErr) {
+      console.error('Storage safety-net query failed; skipping delete (fail-closed)', {
+        skippedStorageDelete: true,
+        skipReason: 'safetyNetQueryFailed',
+        operation: 'rotatePdfPages',
+        documentId,
         fileUrl,
-        documentId
-      );
-      if (!canDelete) {
-        console.warn('Skipped storage delete: shared fileUrl detected', {
-          skippedStorageDelete: true,
-          operation: 'rotatePdfPages',
-          documentId,
-          fileUrl,
-          sharingDocCount,
-          reason: 'Issue #432 safety net: other documents reference the same fileUrl',
-        });
-      } else {
+        error: guardErr instanceof Error ? guardErr.message : String(guardErr),
+      });
+      canDelete = false;
+    }
+
+    if (!canDelete) {
+      console.warn('Skipped storage delete: shared fileUrl detected', {
+        skippedStorageDelete: true,
+        skipReason: 'sharedFileUrl',
+        operation: 'rotatePdfPages',
+        documentId,
+        fileUrl,
+        sharingDocCountUpTo2,
+      });
+    } else {
+      // delete 失敗は許容 (旧 file 既に存在しない等のケースあり)。
+      // ただし silent failure 回避のため severity warn + 構造化ログで観測可能化。
+      try {
         await file.delete();
         console.log('Old file deleted:', filePath);
+      } catch (deleteErr) {
+        console.warn('Old file delete attempt failed (root cause not classified)', {
+          operation: 'rotatePdfPages',
+          stage: 'storageDelete',
+          documentId,
+          fileUrl,
+          filePath,
+          error: deleteErr instanceof Error ? deleteErr.message : String(deleteErr),
+        });
       }
-    } catch (deleteErr) {
-      console.log('Could not delete old file (may not exist):', deleteErr);
     }
 
     // 新しいファイルURLを構築

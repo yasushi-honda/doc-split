@@ -87,21 +87,44 @@ export const deleteDocument = onCall(
 
           const [exists] = await file.exists();
           if (exists) {
-            // Issue #432 PR-A safety net: 同 fileUrl 共有 doc がある場合は delete skip
-            const { canDelete, sharingDocCount } = await canSafelyDeleteStorageFile(
-              db,
-              fileUrl,
-              documentId
-            );
+            // Issue #432 PR-A safety net: fail-closed で skip 理由を区別記録
+            let canDelete = false;
+            let sharingDocCountUpTo2 = 0;
+            try {
+              const guardResult = await canSafelyDeleteStorageFile(
+                db,
+                fileUrl,
+                documentId
+              );
+              canDelete = guardResult.canDelete;
+              sharingDocCountUpTo2 = guardResult.sharingDocCountUpTo2;
+            } catch (guardErr) {
+              console.error(
+                'Storage safety-net query failed; skipping delete (fail-closed)',
+                {
+                  skippedStorageDelete: true,
+                  skipReason: 'safetyNetQueryFailed',
+                  operation: 'deleteDocument',
+                  documentId,
+                  fileUrl,
+                  error:
+                    guardErr instanceof Error ? guardErr.message : String(guardErr),
+                }
+              );
+              errors.push(
+                'Storage safety-net query failed (fail-closed: delete skipped)'
+              );
+              canDelete = false;
+            }
+
             if (!canDelete) {
               console.warn('Skipped storage delete: shared fileUrl detected', {
                 skippedStorageDelete: true,
+                skipReason: 'sharedFileUrl',
                 operation: 'deleteDocument',
                 documentId,
                 fileUrl,
-                sharingDocCount,
-                reason:
-                  'Issue #432 safety net: other documents reference the same fileUrl',
+                sharingDocCountUpTo2,
               });
             } else {
               await file.delete();
@@ -113,7 +136,13 @@ export const deleteDocument = onCall(
         }
       } catch (error) {
         const errMsg = error instanceof Error ? error.message : String(error);
-        console.error('Failed to delete storage file:', errMsg);
+        console.error('Failed to delete storage file', {
+          operation: 'deleteDocument',
+          stage: 'storageDelete',
+          documentId,
+          fileUrl,
+          error: errMsg,
+        });
         errors.push(`Storage deletion failed: ${errMsg}`);
       }
     }
