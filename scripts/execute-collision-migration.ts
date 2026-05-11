@@ -33,8 +33,10 @@ import {
 // F-C3: classifier の型を import して二重定義 (drift リスク) を解消
 import type {
   Classification,
+  FingerprintAlgorithm,
   RecommendedAction,
 } from './lib/collisionClassifier';
+import { HASH_ALGORITHM } from './lib/pdfPageVisualFingerprint';
 
 const projectId = process.env.FIREBASE_PROJECT_ID;
 const storageBucket = process.env.STORAGE_BUCKET;
@@ -89,6 +91,12 @@ interface Plan {
   projectId: string;
   bucket: string;
   prefix: string;
+  /**
+   * AC13: fingerprint algorithm version。execute 側コード固定値と一致しない plan は
+   * gate reject (pdf-lib upgrade 等で algorithm が変わった古い plan を新コードで実行
+   * することを防ぐ)。PR-C1 plan (pre v1) には存在しないので undefined で gate を弾く。
+   */
+  hashAlgorithm?: FingerprintAlgorithm;
   summary: unknown;
   operations: Operation[];
 }
@@ -118,6 +126,16 @@ if (plan.projectId !== projectId) {
 if (plan.bucket !== storageBucket) {
   console.error(
     `FATAL: plan.bucket (${plan.bucket}) !== runtime STORAGE_BUCKET (${storageBucket})`
+  );
+  process.exit(2);
+}
+
+// === AC13: fingerprint algorithm version gate (PR-C2) ===
+// PR-C1 plan は hashAlgorithm を持たないため undefined で reject。
+// pdf-lib upgrade で algorithm が変わった旧 plan を新コードで実行するシナリオも reject。
+if (plan.hashAlgorithm !== HASH_ALGORITHM) {
+  console.error(
+    `FATAL: plan.hashAlgorithm (${plan.hashAlgorithm ?? '<missing>'}) !== execute code's HASH_ALGORITHM (${HASH_ALGORITHM}). Re-run classify-collision-docs.ts to regenerate the plan with the current fingerprint algorithm.`
   );
   process.exit(2);
 }

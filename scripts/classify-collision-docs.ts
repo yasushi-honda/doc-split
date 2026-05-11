@@ -23,8 +23,13 @@ import {
   CollisionGroup,
   ClassificationResult,
   DocEvidence,
+  FingerprintAlgorithm,
 } from './lib/collisionClassifier';
 import { regenerateChildPdf } from './lib/pdfRegenerator';
+import {
+  HASH_ALGORITHM,
+  computePdfPageVisualFingerprint,
+} from './lib/pdfPageVisualFingerprint';
 
 const projectId = process.env.FIREBASE_PROJECT_ID;
 const storageBucket = process.env.STORAGE_BUCKET;
@@ -88,9 +93,8 @@ function extractPathIfBucketMatches(
   return m[2];
 }
 
-function sha256(buf: Buffer): string {
-  return crypto.createHash('sha256').update(buf).digest('hex');
-}
+// sha256() は PR-C1 で使われていたが、PR-C2 で visual fingerprint 比較に切り替えたため削除。
+// 必要であれば crypto.createHash('sha256') を直接利用。
 
 /**
  * Storage の指定 path が実在するか個別 exists() で確認する (cache 付き)。
@@ -321,18 +325,63 @@ async function buildDocEvidence(
       doc.splitFromPages.start,
       doc.splitFromPages.end
     );
-    const actualHash = sha256(actualBuf);
-    const expectedHash = sha256(expectedBuf);
-    if (actualHash === expectedHash) {
-      return { doc, hashEvidence: { type: 'matched', sha256: actualHash }, parent };
+    // PR-C2: cross-process deterministic visual fingerprint で比較 (pdf-page-visual-v1)
+    const actualFp = await computePdfPageVisualFingerprint(actualBuf);
+    const expectedFp = await computePdfPageVisualFingerprint(expectedBuf);
+
+    // どちらかが unsupported (encryption/acroform/optional-content/malformed) なら
+    // Ambiguous に倒すための unsupported evidence を返す (両方の状態を 1 つに集約)
+    if (actualFp.kind === 'unsupported' || expectedFp.kind === 'unsupported') {
+      const target = actualFp.kind === 'unsupported' ? actualFp : expectedFp;
+      // type narrowing
+      if (target.kind === 'unsupported') {
+        return {
+          doc,
+          hashEvidence: {
+            type: 'unsupported',
+            reason: target.reason,
+            detail:
+              actualFp.kind === 'unsupported' && expectedFp.kind === 'unsupported'
+                ? `actual+expected: ${target.detail}`
+                : `${actualFp.kind === 'unsupported' ? 'actual' : 'expected'}: ${target.detail}`,
+            algorithm: HASH_ALGORITHM,
+          },
+          parent,
+        };
+      }
     }
+
+    if (
+      actualFp.kind === 'ok' &&
+      expectedFp.kind === 'ok' &&
+      actualFp.hex === expectedFp.hex
+    ) {
+      return {
+        doc,
+        hashEvidence: {
+          type: 'matched',
+          fingerprint: actualFp.hex,
+          algorithm: HASH_ALGORITHM,
+        },
+        parent,
+      };
+    }
+    if (actualFp.kind === 'ok' && expectedFp.kind === 'ok') {
+      return {
+        doc,
+        hashEvidence: {
+          type: 'mismatched',
+          actualFingerprint: actualFp.hex,
+          expectedFingerprint: expectedFp.hex,
+          algorithm: HASH_ALGORITHM,
+        },
+        parent,
+      };
+    }
+    // ここに到達するのは defensive case (両方 unsupported かつ最初の分岐から抜けた等)
     return {
       doc,
-      hashEvidence: {
-        type: 'mismatched',
-        actualSha256: actualHash,
-        expectedSha256: expectedHash,
-      },
+      hashEvidence: { type: 'unavailable', reason: 'computation-error' },
       parent,
     };
   } catch (err) {
@@ -510,6 +559,11 @@ async function main(): Promise<void> {
     summary.byAction[result.recommendedAction] += 1;
   }
 
+  // AC13: plan に fingerprint algorithm version を記録。execute 側で固定値と照合し、
+  // mismatch なら gate reject (pdf-lib upgrade 等で algorithm が変わった古い plan を
+  // 新コードで実行することを防ぐ)。
+  const hashAlgorithm: FingerprintAlgorithm = HASH_ALGORITHM;
+
   const plan = {
     planId,
     createdAt: new Date().toISOString(),
@@ -517,6 +571,7 @@ async function main(): Promise<void> {
     projectId,
     bucket: bucket.name,
     prefix,
+    hashAlgorithm,
     summary,
     operations,
   };

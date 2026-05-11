@@ -150,17 +150,39 @@ parent (= splitPdf に渡された元 doc ID) を特定する手段:
 - `audit-storage-mismatch.js` で被害が検出済 (衝突 group / fileUrl 孤児)
 - runbook §Phase 1〜3 で個別対応する量を超え、bulk migration が妥当と判断済
 - **freeze window (推奨)**: migration 実行中は対象環境の UI 操作 (分割 / 回転 / 削除) を停止する。進行中 splitPdf invocation との race を precondition gate で skip するが、freeze window で race 数を最小化
+- **PR-C2 で fingerprint algorithm 切替**: PR-C1 (sha256 raw bytes 比較) は pdf-lib の cross-process non-determinism により MatchedByHash が成立しないことが dev fixture で発覚 (session59 教訓)。**PR-C2 以降は `pdf-page-visual-v1` fingerprint 比較を使用**。実装: `scripts/lib/pdfPageVisualFingerprint.ts`。
+
+### fingerprint algorithm: pdf-page-visual-v1
+
+各 PDF ページの「描画同一性」を以下の構成要素で sha256 化:
+1. 各ページの **decoded Contents bytes** (正規化禁止 — whitespace / operator 順 / inline image data を保持)
+2. 各ページの **geometry**: MediaBox / CropBox / Rotate
+3. 各ページが参照する **Resources subtree**: Font / XObject / ExtGState / ColorSpace / Pattern / Shading / ProcSet を canonical digest (entries を name 文字列 sort)
+
+> **cross-process deterministic**: 別 Node プロセスで生成した PDF と同プロセス生成 PDF が同 fingerprint を返す (functions/test/pdfPageVisualFingerprint.test.ts で cross-process spawn 検証)。pdf-lib `PDFDocument.save()` のプロセス間 random `/ID` を吸収する設計。
 
 ### 5 分類と自動 action 一覧
 
 | 分類 | 判定条件 | recommendedAction | 自動実行可否 |
 |---|---|---|---|
-| **MatchedByHash** | sha256(Storage 実体) == sha256(parent + splitFromPages から再生成した期待 PDF) かつ group 内一意 | migrate-to-namespace | ✅ 自動 |
+| **MatchedByHash** | fingerprint(Storage 実体, pdf-page-visual-v1) == fingerprint(parent + splitFromPages から再生成した期待 PDF) かつ group 内一意 | migrate-to-namespace | ✅ 自動 |
 | **RepairableMissingFile** | parent + splitFromPages + 親 PDF 全て実在 | regenerate-from-parent | ✅ 自動 (敗者 doc / orphan 共通) |
-| **Ambiguous** | hash 不能 / 不一致 / 複数一致 (LikelyWinner suggestedWinner hint 含む) | manual-review | ❌ 自動禁止 |
+| **Ambiguous** | fingerprint 不能 / 不一致 / 複数一致 / unsupported-pdf-feature (LikelyWinner suggestedWinner hint 含む) | manual-review | ❌ 自動禁止 |
 | **LostOrUnrecoverable** | parent doc 不在 / splitFromPages 不在 / 親 PDF 不在 | mark-error | ✅ status:'error' のみ自動 (Storage 操作なし) |
 
 > **重要 (Codex Critical 反映)**: `rotatedAt!=null 唯一` による LikelyWinner は「離脱可能性」の手がかりに過ぎず Storage 実体の正当性証明ではない。自動 destructive action は禁止。Ambiguous の suggestedWinner hint として operator に提示する。
+
+### Ambiguous reason 細分化 (Codex Suggestion 反映)
+
+operator が manual-review 時に対処方針を即特定できるよう、Ambiguous の `reason` フィールドは以下 5 サブカテゴリ prefix で返す:
+
+| reason prefix | 意味 | operator 対処 |
+|---|---|---|
+| `content-mismatch` | fingerprint(actual storage) != fingerprint(regenerated) | parent から再生成した PDF と実体が描画的に異なる。operator が中身を比較し、勝者判定 → 手動 migrate or status='error' |
+| `multiple-fingerprint-matches` | 複数 doc が同 fingerprint (希少) | どの docId に紐付けるべきか operator が業務文脈で判定 |
+| `unsupported-pdf-feature` | encryption / acroform / optional-content / malformed | PDF 構造が自動 fingerprint 対象外。手動でファイル内容を確認し復旧可否判定 |
+| `hash-unavailable-transient` | download 一時エラー (503/403) | 数分後に再 classify、解消すれば再分類 |
+| `hash-unavailable-no-parent` | parent doc / 親 PDF / splitFromPages のいずれかが不在 | LostOrUnrecoverable 寄り。parent doc 復元できれば再分類 |
 
 ### Step 1: dev 環境で execute path を全分類検証 (本番前必須)
 
@@ -199,6 +221,7 @@ FIREBASE_PROJECT_ID=<project-id> STORAGE_BUCKET=<bucket> \
   "projectId": "docsplit-kanameone",
   "bucket": "docsplit-kanameone.firebasestorage.app",
   "prefix": "processed/",
+  "hashAlgorithm": "pdf-page-visual-v1",
   "summary": {
     "totalGroups": 39,
     "totalCollisionDocs": 90,
@@ -243,13 +266,14 @@ Step 2 で出力された plan JSON 内容と各 operation の sourcePath/destPa
 }
 ```
 
-**4 重 gate (Codex セカンドオピニオン反映)**:
+**6 重 gate (Codex セカンドオピニオン反映 + PR-C2 fingerprint version gate)**:
 
 1. `approval.planId === plan.planId` (古い plan の流用防止)
 2. `operation.operationId ∈ approvedOperationIds` (operation 単位の認可)
 3. destructive action は `sourcePath / destPath ∈ approvedPaths` (per-path 文字列認可、ADR-0008 教訓)
 4. runtime env (`FIREBASE_PROJECT_ID + STORAGE_BUCKET`) が plan の `projectId / bucket` と一致 (環境取り違え防止)
 5. precondition snapshot (`expectedCurrentFileUrl + expectedStatus + expectedUpdatedAt`) が現状 doc と一致 (進行中 splitPdf invocation との race 検出 → skip)
+6. **`plan.hashAlgorithm === HASH_ALGORITHM` (PR-C2 追加 AC13)**: plan 作成時の fingerprint algorithm version と execute 側コード固定値が一致 (pdf-lib upgrade 等で algorithm が変わった古い plan を新コードで実行することを防ぐ)。PR-C1 plan (`hashAlgorithm` フィールドなし) は新 execute で gate reject される。**対応**: 古い plan を捨てて `classify-collision-docs.ts` を再実行し、新しい plan を生成すること
 
 > **禁止**: `Issue #432 全件OK` / `processed/ 配下OK` 等の prefix / 包括認可は execute script 側で reject (ADR-0008 教訓)。
 
