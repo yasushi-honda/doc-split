@@ -141,11 +141,186 @@ parent (= splitPdf に渡された元 doc ID) を特定する手段:
 
 ---
 
+## PR-C 衝突 doc / orphan の信頼度付き 5 分類 migration (Issue #432 PR-C)
+
+過去被害 (kanameone 39 衝突 group + 4 fileUrl 孤児 = silent breakage 90+ docs) の復旧手順。Codex セカンドオピニオン反映後の 5 分類アルゴリズム (`MatchedByHash` / `Ambiguous` / `RepairableMissingFile` / `LostOrUnrecoverable`、LikelyWinner は Ambiguous 内 suggestedWinner hint に降格)。
+
+### 前提
+
+- `audit-storage-mismatch.js` で被害が検出済 (衝突 group / fileUrl 孤児)
+- runbook §Phase 1〜3 で個別対応する量を超え、bulk migration が妥当と判断済
+- **freeze window (推奨)**: migration 実行中は対象環境の UI 操作 (分割 / 回転 / 削除) を停止する。進行中 splitPdf invocation との race を precondition gate で skip するが、freeze window で race 数を最小化
+
+### 5 分類と自動 action 一覧
+
+| 分類 | 判定条件 | recommendedAction | 自動実行可否 |
+|---|---|---|---|
+| **MatchedByHash** | sha256(Storage 実体) == sha256(parent + splitFromPages から再生成した期待 PDF) かつ group 内一意 | migrate-to-namespace | ✅ 自動 |
+| **RepairableMissingFile** | parent + splitFromPages + 親 PDF 全て実在 | regenerate-from-parent | ✅ 自動 (敗者 doc / orphan 共通) |
+| **Ambiguous** | hash 不能 / 不一致 / 複数一致 (LikelyWinner suggestedWinner hint 含む) | manual-review | ❌ 自動禁止 |
+| **LostOrUnrecoverable** | parent doc 不在 / splitFromPages 不在 / 親 PDF 不在 | mark-error | ✅ status:'error' のみ自動 (Storage 操作なし) |
+
+> **重要 (Codex Critical 反映)**: `rotatedAt!=null 唯一` による LikelyWinner は「離脱可能性」の手がかりに過ぎず Storage 実体の正当性証明ではない。自動 destructive action は禁止。Ambiguous の suggestedWinner hint として operator に提示する。
+
+### Step 1: dev 環境で execute path を全分類検証 (本番前必須)
+
+cocoro/kanameone は被害ゼロ or 本番のため、`execute` path は dev fixture で先行検証する。
+
+```bash
+# dev 環境に 5 分類 fixture を投入 (idempotent、安全策で projectId に "dev" 含むか確認)
+./scripts/switch-client.sh dev
+FIREBASE_PROJECT_ID=doc-split-dev STORAGE_BUCKET=doc-split-dev.firebasestorage.app \
+  npx ts-node scripts/setup-collision-fixture.ts
+
+# fixture cleanup (検証完了後)
+FIREBASE_PROJECT_ID=doc-split-dev STORAGE_BUCKET=doc-split-dev.firebasestorage.app \
+  npx ts-node scripts/setup-collision-fixture.ts --cleanup
+```
+
+### Step 2: classify (read-only) で migration plan JSON 出力
+
+```bash
+# 対象環境に切替
+./scripts/switch-client.sh <env>
+
+# classify 実行 (Firestore/Storage 書き込みゼロ、JSON レポート出力)
+FIREBASE_PROJECT_ID=<project-id> STORAGE_BUCKET=<bucket> \
+  npx ts-node scripts/classify-collision-docs.ts \
+    --prefix processed/ --out plan-$(date +%Y%m%d-%H%M%S).json
+```
+
+出力 JSON 構造:
+
+```json
+{
+  "planId": "plan-2026-05-11T...",
+  "createdAt": "...",
+  "environment": "...",
+  "projectId": "docsplit-kanameone",
+  "bucket": "docsplit-kanameone.firebasestorage.app",
+  "prefix": "processed/",
+  "summary": {
+    "totalGroups": 39,
+    "totalCollisionDocs": 90,
+    "totalOrphans": 4,
+    "byClassification": { "MatchedByHash": ..., "Ambiguous": ..., ... },
+    "byAction": { "migrate-to-namespace": ..., ... }
+  },
+  "operations": [
+    {
+      "operationId": "op-0001",
+      "docId": "...",
+      "classification": "MatchedByHash",
+      "recommendedAction": "migrate-to-namespace",
+      "expectedCurrentFileUrl": "gs://bucket/processed/old-name.pdf",
+      "expectedStatus": "processed",
+      "expectedUpdatedAt": "...",
+      "sourcePath": "processed/old-name.pdf",
+      "destPath": "processed/<docId>/old-name.pdf",
+      ...
+    }
+  ]
+}
+```
+
+### Step 3: ユーザーへ提示 → 番号認可 (per-operation + per-path)
+
+Step 2 で出力された plan JSON 内容と各 operation の sourcePath/destPath を operator に提示し、**operationId と path を文字列単位で含む承認**を取得する。
+
+承認は別 JSON ファイルとして保存:
+
+```json
+{
+  "planId": "plan-2026-05-11T...",
+  "approvedOperationIds": [
+    "op-0001",
+    "op-0002"
+  ],
+  "approvedPaths": [
+    "gs://docsplit-kanameone.firebasestorage.app/processed/old-name-1.pdf",
+    "gs://docsplit-kanameone.firebasestorage.app/processed/<docId>/old-name-1.pdf"
+  ]
+}
+```
+
+**4 重 gate (Codex セカンドオピニオン反映)**:
+
+1. `approval.planId === plan.planId` (古い plan の流用防止)
+2. `operation.operationId ∈ approvedOperationIds` (operation 単位の認可)
+3. destructive action は `sourcePath / destPath ∈ approvedPaths` (per-path 文字列認可、ADR-0008 教訓)
+4. runtime env (`FIREBASE_PROJECT_ID + STORAGE_BUCKET`) が plan の `projectId / bucket` と一致 (環境取り違え防止)
+5. precondition snapshot (`expectedCurrentFileUrl + expectedStatus + expectedUpdatedAt`) が現状 doc と一致 (進行中 splitPdf invocation との race 検出 → skip)
+
+> **禁止**: `Issue #432 全件OK` / `processed/ 配下OK` 等の prefix / 包括認可は execute script 側で reject (ADR-0008 教訓)。
+
+### Step 4: dry-run で執行計画確認
+
+```bash
+FIREBASE_PROJECT_ID=<project-id> STORAGE_BUCKET=<bucket> \
+  npx ts-node scripts/execute-collision-migration.ts \
+    --plan plan-XXX.json --approval approval-XXX.json
+# (--execute なし = dry-run)
+```
+
+期待出力:
+- 全 gate 通過 operation: `📋 op-XXXX` (would execute)
+- gate 落ち: `🚫 op-XXXX` (gate-rejected)
+- precondition mismatch: `⏭️ op-XXXX` (skipped)
+
+### Step 5: 番号認可後 execute
+
+```bash
+FIREBASE_PROJECT_ID=<project-id> STORAGE_BUCKET=<bucket> \
+  npx ts-node scripts/execute-collision-migration.ts \
+    --plan plan-XXX.json --approval approval-XXX.json --execute
+
+# 段階実行 (operation 単位):
+FIREBASE_PROJECT_ID=<project-id> STORAGE_BUCKET=<bucket> \
+  npx ts-node scripts/execute-collision-migration.ts \
+    --plan plan-XXX.json --approval approval-XXX.json --execute \
+    --operations op-0001,op-0002
+```
+
+### Step 6: 中断時の再実行 (idempotency)
+
+migration 中断 (network error / kill / etc) 後の再実行は同じ plan + approval で安全:
+
+- migrate / regenerate: 新 path 存在 + Firestore fileUrl 更新済 → skip (`already migrated (idempotent)`)
+- mark-error: 既に status='error' でも再 update (副作用なし)
+
+precondition mismatch (race condition の検出) は skip + warning。再 classify で plan を作り直すか、operator が個別判断。
+
+### Step 7: post-audit で復旧確認
+
+```bash
+FIREBASE_PROJECT_ID=<project-id> STORAGE_BUCKET=<bucket> \
+  node scripts/audit-storage-mismatch.js
+```
+
+期待: `fileName collisions: 0 groups` / `fileUrl orphans: 0` (migration 対象として処理されたもの全て)。Ambiguous 分類で manual-review 状態のものは継続して衝突 group に表示される (operator が個別対応)。
+
+### PR-C migration スコープ外
+
+以下は本 migration では扱わない (別 PR / 手動対応):
+
+- 旧 `processed/{fileName}` 形式 → `processed/{docId}/{fileName}` の **被害なし docs** の一斉移行 (5640+ docs、本 migration は被害復旧限定)
+- `generateFileName` の timestamp 引数完全削除 (handoff session57 別 PR)
+- Cloud Monitoring alert (`cleanupResult=failed`) (handoff follow-up)
+- audit-storage-mismatch.js の cron 自動化 (handoff follow-up)
+
+---
+
 ## 関連リソース
 
 - Issue #432 (P0 設計バグ)
 - ADR-0008 (本番データ保護)
 - `scripts/audit-storage-mismatch.js` (検出 script)
 - `scripts/inspect-document.js` (調査 script, read-only)
-- `functions/src/storage/storageDeletionGuard.ts` (PR-A safety net)
+- `scripts/classify-collision-docs.ts` (PR-C: 5 分類 plan 出力)
+- `scripts/execute-collision-migration.ts` (PR-C: 4 重 gate + idempotent migration)
+- `scripts/setup-collision-fixture.ts` (PR-C: dev 環境 fixture)
+- `scripts/lib/collisionClassifier.ts` (PR-C: 5 分類 pure function)
+- `scripts/lib/pdfRegenerator.ts` (PR-C: parent から PDF 再生成)
+- `scripts/lib/storageGuard.ts` (PR-C: 削除安全性判定 helper)
+- `functions/src/storage/storageDeletionGuard.ts` (PR-A safety net、Functions 用)
 - `functions/src/pdf/pdfOperations.ts` (PR-B docId namespace + 補償処理)
