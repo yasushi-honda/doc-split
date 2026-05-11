@@ -50,6 +50,9 @@ on:
           - inspect-document --file-name --include-related
           - inspect-document --doc-id
           - inspect-document --doc-id --include-related
+          - audit-storage-mismatch
+          - audit-storage-mismatch --no-orphans
+          - audit-storage-mismatch --no-collisions
       doc_id:
         description: 'Document ID (required when script contains --doc-id; ignored otherwise)'
         required: false
