@@ -3,9 +3,16 @@
  * Firestore documents.fileUrl と Storage 実体の整合性監査スクリプト（read-only）
  *
  * documents コレクションを全件スキャンし、Storage `processed/` の実ファイル一覧と
- * 突合する。検出する不整合:
+ * 突合する。Issue #432 PR-B 以降の `processed/{docId}/{fileName}` 形式も
+ * `bucket.getFiles({prefix:'processed/'})` の再帰スキャンで検出可。
+ *
+ * 検出する不整合:
  *   1. fileUrl 孤児: fileUrl が指す Storage オブジェクトが存在しない
  *   2. fileName 衝突: 複数 docs が同じ fileName を持つ（fileUrl が衝突する候補）
+ *
+ * NOTE: 現状は片方向 (Firestore→Storage 欠損) のみ検出。逆方向 (Storage 実体あり
+ * Firestore doc なし = orphan storage、PR-B 補償処理の二段失敗で発生し得る) の検出は
+ * 別 Issue で追加予定 (Issue #432 follow-up)。
  *
  * 使用方法:
  *   FIREBASE_PROJECT_ID=docsplit-kanameone node scripts/audit-storage-mismatch.js

@@ -317,10 +317,10 @@ export const splitPdf = onCall(
 
       // Issue #432 PR-B: docId namespace 分離で Storage path 衝突を根治。
       // Firestore docId を Storage save 前に確定させ path に組み込む。
+      // PR-A (storageDeletionGuard) は旧 path 旧 doc 保護用に恒久有効。本 PR は新規 split のみ根治。
       const newDocRef = db.collection('documents').doc();
 
-      // ファイル名生成。timestamp は表示用 date 部分の生成に使うのみ
-      // (衝突回避は docId namespace で担保、generateFileName は責務を持たない)。
+      // ファイル名生成。
       const timestamp = Date.now();
       const fileName = generateFileName({
         customerName,
@@ -330,7 +330,9 @@ export const splitPdf = onCall(
         endPage,
       });
 
-      // Cloud Storage に保存 (Issue #432 PR-B: processed/{docId}/{fileName} で一意性保証)
+      // Cloud Storage に保存 (Issue #432 PR-B: processed/{docId}/{fileName} で一意性保証)。
+      // NOTE: 意図的に try/catch なし。Storage save 失敗は callable error として
+      // caller に surface すべき (この時点で Firestore set 未実行のため orphan 不発生)。
       const newFilePath = `processed/${newDocRef.id}/${fileName}`;
       const newFile = bucket.file(newFilePath);
       await newFile.save(Buffer.from(newPdfBytes), {
@@ -430,6 +432,17 @@ export const splitPdf = onCall(
         });
         createdDocIds.push(newDocRef.id);
       } catch (firestoreErr) {
+        // Issue #432 PR-B partial state log: segments 途中失敗で先行 N-1 docs が残る
+        // (rollback は本 PR スコープ外、別 Issue で扱う)。
+        console.error('splitPdf failed mid-loop; partial children remain in Firestore', {
+          operation: 'splitPdf',
+          stage: 'segmentsLoop',
+          parentDocumentId: documentId,
+          successfulSegments: createdDocIds.length,
+          totalSegments: segments.length,
+          failedSegmentIndex: segments.indexOf(segment),
+          partialChildIds: createdDocIds,
+        });
         console.error('Firestore set failed after Storage save; attempting orphan cleanup', {
           operation: 'splitPdf',
           stage: 'firestoreSet',
@@ -437,8 +450,14 @@ export const splitPdf = onCall(
           newFilePath,
           error: firestoreErr instanceof Error ? firestoreErr.message : String(firestoreErr),
         });
+        let cleanupErrorCaptured: unknown = null;
         try {
           await newFile.delete();
+        } catch (cleanupErr) {
+          cleanupErrorCaptured = cleanupErr;
+        }
+
+        if (cleanupErrorCaptured === null) {
           console.warn('Cleaned up orphan Storage file after Firestore set failure', {
             operation: 'splitPdf',
             stage: 'orphanCleanup',
@@ -446,18 +465,31 @@ export const splitPdf = onCall(
             newFilePath,
             cleanupResult: 'success',
           });
-        } catch (cleanupErr) {
-          console.error('Failed to cleanup orphan Storage file (manual cleanup needed)', {
-            operation: 'splitPdf',
-            stage: 'orphanCleanup',
-            newDocId: newDocRef.id,
-            newFilePath,
-            cleanupResult: 'failed',
-            cleanupError:
-              cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr),
-          });
+          throw firestoreErr;
         }
-        throw firestoreErr;
+
+        // 二段失敗: cleanup 自体が失敗 → Storage orphan 残存。
+        // audit-storage-mismatch.js の逆方向検出 (Storage→Firestore missing) は別 Issue で追加予定。
+        // 元例外と cleanup 失敗の両方を Error.cause で保持し、Sentry/log dedup での区別を可能に。
+        console.error('Failed to cleanup orphan Storage file (manual cleanup needed)', {
+          operation: 'splitPdf',
+          stage: 'orphanCleanup',
+          newDocId: newDocRef.id,
+          newFilePath,
+          bucket: bucket.name,
+          cleanupResult: 'failed',
+          cleanupError:
+            cleanupErrorCaptured instanceof Error
+              ? cleanupErrorCaptured.message
+              : String(cleanupErrorCaptured),
+          manualCleanupCommand: `gsutil rm gs://${bucket.name}/${newFilePath}`,
+        });
+        const wrapped = new Error(
+          `splitPdf: Firestore set failed AND orphan cleanup failed (newDocId=${newDocRef.id}, path=${newFilePath})`
+        ) as Error & { cause?: unknown; orphanLeft?: boolean };
+        wrapped.cause = firestoreErr;
+        wrapped.orphanLeft = true;
+        throw wrapped;
       }
     }
 
@@ -653,9 +685,19 @@ export const rotatePdfPages = onCall(
 // ヘルパー関数
 // ============================================
 
+/**
+ * 表示用ファイル名を生成する。
+ *
+ * Issue #432 PR-B 以降、衝突回避の責務は持たない (Storage path は呼び出し側で
+ * `processed/{docId}/{fileName}` 形式に namespace 化することで一意性を保証)。
+ *
+ * @param timestamp 表示用 date 部分の生成にのみ使用 (`{YYYYMMDD}` プレフィックス)。
+ *   Issue #432 後続 PR (PR-D 候補) で caller 修正を経て削除予定。
+ */
 function generateFileName(params: {
   customerName: string;
   documentType: string;
+  /** @deprecated Issue #432 後続 PR で削除予定。表示用 date 部分の生成にのみ使用。 */
   timestamp: number;
   startPage: number;
   endPage: number;
