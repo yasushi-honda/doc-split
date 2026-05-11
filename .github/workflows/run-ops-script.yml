@@ -46,8 +46,17 @@ on:
           - investigate-office-duplicate
           - cleanup-office-name --dry-run
           - cleanup-office-name --execute
+          - inspect-document --file-name
+          - inspect-document --file-name --include-related
+          - inspect-document --doc-id
+          - inspect-document --doc-id --include-related
       doc_id:
         description: 'Document ID (required when script contains --doc-id; ignored otherwise)'
+        required: false
+        type: string
+        default: ''
+      file_name:
+        description: 'fileName (required when script contains "inspect-document --file-name"; ignored otherwise)'
         required: false
         type: string
         default: ''
@@ -169,6 +178,8 @@ jobs:
           TO_NAME: ${{ github.event.inputs.to_name }}
           DELETE_FROM_MASTER: ${{ github.event.inputs.delete_from_master }}
           EXPECTED_COUNT: ${{ github.event.inputs.expected_count }}
+          FILE_NAME: ${{ github.event.inputs.file_name }}
+          DOC_ID: ${{ github.event.inputs.doc_id }}
         run: |
           set -euo pipefail
           if [ -z "$PROJECT_ID" ]; then
@@ -224,6 +235,36 @@ jobs:
             NODE_PATH=../functions/node_modules \
               FIREBASE_PROJECT_ID="$PROJECT_ID" \
               npx ts-node "${SCRIPT_NAME}.ts" $SCRIPT_ARGS
+          elif [ "$SCRIPT_NAME" = "inspect-document" ]; then
+            # SCRIPT_ARGS は workflow_dispatch で選んだ "--file-name" / "--doc-id" / "... --include-related"
+            # FILE_NAME / DOC_ID は env 経由で受け取り、配列に積んで execv 渡しでシェル展開を経由しない
+            ARGS=()
+            INCLUDE_RELATED=0
+            if echo "$SCRIPT_ARGS" | grep -q -- '--include-related'; then
+              INCLUDE_RELATED=1
+            fi
+            if echo "$SCRIPT_ARGS" | grep -q -- '--file-name'; then
+              if [[ ! "$FILE_NAME" =~ [^[:space:]] ]]; then
+                echo "ERROR: file_name input is required when script contains --file-name" >&2
+                exit 1
+              fi
+              ARGS+=( --file-name "$FILE_NAME" )
+            fi
+            if echo "$SCRIPT_ARGS" | grep -q -- '--doc-id'; then
+              # parse 段階で DOC_ID validation 済み (英数字_-)、SCRIPT_ARGS 側は "--doc-id <DOC_ID>" の形
+              # ARGS には DOC_ID を直接入れる（execv 経由でシェル展開されない）
+              if [ -z "${DOC_ID:-}" ]; then
+                echo "ERROR: doc_id input is required when script contains --doc-id" >&2
+                exit 1
+              fi
+              ARGS+=( --doc-id "$DOC_ID" )
+            fi
+            if [ "$INCLUDE_RELATED" = "1" ]; then
+              ARGS+=( --include-related )
+            fi
+            NODE_PATH=./functions/node_modules \
+              FIREBASE_PROJECT_ID="$PROJECT_ID" \
+              node "scripts/${SCRIPT_NAME}.js" "${ARGS[@]}"
           else
             NODE_PATH=./functions/node_modules \
               FIREBASE_PROJECT_ID="$PROJECT_ID" \
