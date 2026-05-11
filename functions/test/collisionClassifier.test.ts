@@ -48,7 +48,7 @@ describe('collisionClassifier (Issue #432 PR-C)', () => {
         evidences: [
           {
             doc: makeDoc({ id: 'winner' }),
-            hashEvidence: { type: 'matched', sha256: 'abc' },
+            hashEvidence: { type: 'matched', fingerprint: 'abc', algorithm: 'pdf-page-visual-v1' },
             parent: PARENT_OK,
           },
         ],
@@ -67,15 +67,16 @@ describe('collisionClassifier (Issue #432 PR-C)', () => {
         evidences: [
           {
             doc: makeDoc({ id: 'winner' }),
-            hashEvidence: { type: 'matched', sha256: 'abc' },
+            hashEvidence: { type: 'matched', fingerprint: 'abc', algorithm: 'pdf-page-visual-v1' },
             parent: PARENT_OK,
           },
           {
             doc: makeDoc({ id: 'loser', parentDocumentId: 'parent-2' }),
             hashEvidence: {
               type: 'mismatched',
-              actualSha256: 'abc',
-              expectedSha256: 'xyz',
+              algorithm: 'pdf-page-visual-v1',
+              actualFingerprint: 'abc',
+              expectedFingerprint: 'xyz',
             },
             parent: PARENT_OK,
           },
@@ -96,7 +97,7 @@ describe('collisionClassifier (Issue #432 PR-C)', () => {
         evidences: [
           {
             doc: makeDoc({ id: 'winner' }),
-            hashEvidence: { type: 'matched', sha256: 'abc' },
+            hashEvidence: { type: 'matched', fingerprint: 'abc', algorithm: 'pdf-page-visual-v1' },
             parent: PARENT_OK,
           },
           {
@@ -121,12 +122,12 @@ describe('collisionClassifier (Issue #432 PR-C)', () => {
         evidences: [
           {
             doc: makeDoc({ id: 'docA' }),
-            hashEvidence: { type: 'matched', sha256: 'abc' },
+            hashEvidence: { type: 'matched', fingerprint: 'abc', algorithm: 'pdf-page-visual-v1' },
             parent: PARENT_OK,
           },
           {
             doc: makeDoc({ id: 'docB' }),
-            hashEvidence: { type: 'matched', sha256: 'abc' },
+            hashEvidence: { type: 'matched', fingerprint: 'abc', algorithm: 'pdf-page-visual-v1' },
             parent: PARENT_OK,
           },
         ],
@@ -219,8 +220,9 @@ describe('collisionClassifier (Issue #432 PR-C)', () => {
             doc: makeDoc({ id: 'docA' }),
             hashEvidence: {
               type: 'mismatched',
-              actualSha256: 'aaa',
-              expectedSha256: 'xxx',
+              algorithm: 'pdf-page-visual-v1',
+              actualFingerprint: 'aaa',
+              expectedFingerprint: 'xxx',
             },
             parent: PARENT_OK,
           },
@@ -228,8 +230,9 @@ describe('collisionClassifier (Issue #432 PR-C)', () => {
             doc: makeDoc({ id: 'docB' }),
             hashEvidence: {
               type: 'mismatched',
-              actualSha256: 'aaa',
-              expectedSha256: 'yyy',
+              algorithm: 'pdf-page-visual-v1',
+              actualFingerprint: 'aaa',
+              expectedFingerprint: 'yyy',
             },
             parent: PARENT_OK,
           },
@@ -238,7 +241,8 @@ describe('collisionClassifier (Issue #432 PR-C)', () => {
       const results = classifyCollisionGroup(group);
       results.forEach((r) => {
         expect(r.classification).to.equal('Ambiguous');
-        expect(r.reason).to.contain('hash mismatch');
+        // PR-C2: reason は細分化されて 'content-mismatch:' prefix を持つ
+        expect(r.reason).to.contain('content-mismatch');
       });
     });
   });
@@ -308,15 +312,16 @@ describe('collisionClassifier (Issue #432 PR-C)', () => {
         evidences: [
           {
             doc: makeDoc({ id: 'matched' }),
-            hashEvidence: { type: 'matched', sha256: 'abc' },
+            hashEvidence: { type: 'matched', fingerprint: 'abc', algorithm: 'pdf-page-visual-v1' },
             parent: PARENT_OK,
           },
           {
             doc: makeDoc({ id: 'repairable', parentDocumentId: 'parent-3' }),
             hashEvidence: {
               type: 'mismatched',
-              actualSha256: 'abc',
-              expectedSha256: 'def',
+              algorithm: 'pdf-page-visual-v1',
+              actualFingerprint: 'abc',
+              expectedFingerprint: 'def',
             },
             parent: PARENT_OK,
           },
@@ -351,7 +356,7 @@ describe('collisionClassifier (Issue #432 PR-C)', () => {
         evidences: [
           {
             doc: makeDoc({ id: 'a' }),
-            hashEvidence: { type: 'matched', sha256: 'h' },
+            hashEvidence: { type: 'matched', fingerprint: 'h', algorithm: 'pdf-page-visual-v1' },
             parent: PARENT_OK,
           },
           {
@@ -364,6 +369,189 @@ describe('collisionClassifier (Issue #432 PR-C)', () => {
       const results = classifyCollisionGroup(group);
       results.forEach((r) => {
         expect(allowedActions.has(r.recommendedAction), r.recommendedAction).to.be.true;
+      });
+    });
+  });
+
+  describe('PR-C2: unsupported PDF feature (encryption/acroform/optional-content/malformed)', () => {
+    it('orphan + hashEvidence.type=unsupported (encryption) → Ambiguous + manual-review', () => {
+      const evidence: DocEvidence = {
+        doc: makeDoc({ id: 'enc-doc' }),
+        hashEvidence: {
+          type: 'unsupported',
+          reason: 'encryption',
+          detail: '/Encrypt entry present in trailer',
+          algorithm: 'pdf-page-visual-v1',
+        },
+        parent: PARENT_OK,
+      };
+      const result = classifyOrphan(evidence);
+      expect(result.classification).to.equal('Ambiguous');
+      expect(result.recommendedAction).to.equal('manual-review');
+      expect(result.reason).to.contain('unsupported-pdf-feature');
+      expect(result.reason).to.contain('encryption');
+    });
+
+    it('orphan + hashEvidence.type=unsupported (acroform) → Ambiguous (parent 在でも Repairable に降格しない)', () => {
+      const evidence: DocEvidence = {
+        doc: makeDoc({ id: 'form-doc' }),
+        hashEvidence: {
+          type: 'unsupported',
+          reason: 'acroform',
+          detail: '/AcroForm present in catalog',
+          algorithm: 'pdf-page-visual-v1',
+        },
+        parent: PARENT_OK,
+      };
+      const result = classifyOrphan(evidence);
+      expect(result.classification).to.equal('Ambiguous');
+      expect(result.recommendedAction).to.equal('manual-review');
+      expect(result.reason).to.contain('acroform');
+    });
+
+    it('orphan + hashEvidence.type=unsupported (optional-content) → Ambiguous', () => {
+      const evidence: DocEvidence = {
+        doc: makeDoc({ id: 'oc-doc' }),
+        hashEvidence: {
+          type: 'unsupported',
+          reason: 'optional-content',
+          detail: '/OCProperties present',
+          algorithm: 'pdf-page-visual-v1',
+        },
+        parent: PARENT_OK,
+      };
+      const result = classifyOrphan(evidence);
+      expect(result.classification).to.equal('Ambiguous');
+      expect(result.reason).to.contain('optional-content');
+    });
+
+    it('orphan + hashEvidence.type=unsupported (annotations, Codex Critical 反映) → Ambiguous', () => {
+      const evidence: DocEvidence = {
+        doc: makeDoc({ id: 'anno-doc' }),
+        hashEvidence: {
+          type: 'unsupported',
+          reason: 'annotations',
+          detail: 'page 0 has 1 annotation(s)',
+          algorithm: 'pdf-page-visual-v1',
+        },
+        parent: PARENT_OK,
+      };
+      const result = classifyOrphan(evidence);
+      expect(result.classification).to.equal('Ambiguous');
+      expect(result.reason).to.contain('annotations');
+    });
+
+    it('orphan + hashEvidence.type=unsupported (unsupported-resource-filter, Codex Important 反映) → Ambiguous', () => {
+      const evidence: DocEvidence = {
+        doc: makeDoc({ id: 'filter-doc' }),
+        hashEvidence: {
+          type: 'unsupported',
+          reason: 'unsupported-resource-filter',
+          detail: 'page 0 resources canonical digest: UnsupportedEncodingError DCTDecode',
+          algorithm: 'pdf-page-visual-v1',
+        },
+        parent: PARENT_OK,
+      };
+      const result = classifyOrphan(evidence);
+      expect(result.classification).to.equal('Ambiguous');
+      expect(result.reason).to.contain('unsupported-resource-filter');
+    });
+
+    it('collision group loser + hashEvidence.type=unsupported (malformed) → Ambiguous (Repairable 経路から降格)', () => {
+      const group: CollisionGroup = {
+        fileName: 'unsupported-loser.pdf',
+        evidences: [
+          {
+            doc: makeDoc({ id: 'winner' }),
+            hashEvidence: { type: 'matched', fingerprint: 'abc', algorithm: 'pdf-page-visual-v1' },
+            parent: PARENT_OK,
+          },
+          {
+            doc: makeDoc({ id: 'loser' }),
+            hashEvidence: {
+              type: 'unsupported',
+              reason: 'malformed',
+              detail: 'page 0 content stream decode failed',
+              algorithm: 'pdf-page-visual-v1',
+            },
+            parent: PARENT_OK,
+          },
+        ],
+      };
+      const results = classifyCollisionGroup(group);
+      const winner = results.find((r) => r.docId === 'winner')!;
+      const loser = results.find((r) => r.docId === 'loser')!;
+      expect(winner.classification).to.equal('MatchedByHash');
+      expect(loser.classification).to.equal('Ambiguous');
+      expect(loser.reason).to.contain('collision group loser');
+      expect(loser.reason).to.contain('unsupported-pdf-feature');
+      expect(loser.reason).to.contain('malformed');
+    });
+  });
+
+  describe('PR-C2 Codex Suggestion: Ambiguous reason 細分化', () => {
+    it('content-mismatch: fingerprint mismatch の reason に "content-mismatch" prefix', () => {
+      const group: CollisionGroup = {
+        fileName: 'mm.pdf',
+        evidences: [
+          {
+            doc: makeDoc({ id: 'a' }),
+            hashEvidence: {
+              type: 'mismatched',
+              algorithm: 'pdf-page-visual-v1',
+              actualFingerprint: 'x',
+              expectedFingerprint: 'y',
+            },
+            parent: PARENT_OK,
+          },
+          {
+            doc: makeDoc({ id: 'b' }),
+            hashEvidence: {
+              type: 'mismatched',
+              algorithm: 'pdf-page-visual-v1',
+              actualFingerprint: 'x',
+              expectedFingerprint: 'z',
+            },
+            parent: PARENT_OK,
+          },
+        ],
+      };
+      const results = classifyCollisionGroup(group);
+      results.forEach((r) => {
+        expect(r.reason).to.match(/^content-mismatch/);
+      });
+    });
+
+    it('hash-unavailable-transient: computation-error の reason は "hash-unavailable-transient"', () => {
+      const evidence: DocEvidence = {
+        doc: makeDoc({ id: 'tr' }),
+        hashEvidence: { type: 'unavailable', reason: 'computation-error' },
+        parent: PARENT_OK,
+      };
+      const result = classifyOrphan(evidence);
+      expect(result.classification).to.equal('Ambiguous');
+      expect(result.reason).to.contain('hash-unavailable-transient');
+    });
+
+    it('hash-unavailable-no-parent: unavailable reason="no-parent" は "hash-unavailable-no-parent"', () => {
+      const group: CollisionGroup = {
+        fileName: 'np.pdf',
+        evidences: [
+          {
+            doc: makeDoc({ id: 'doc' }),
+            hashEvidence: { type: 'unavailable', reason: 'no-parent' },
+            parent: null,
+          },
+          {
+            doc: makeDoc({ id: 'doc2' }),
+            hashEvidence: { type: 'unavailable', reason: 'no-storage-actual' },
+            parent: null,
+          },
+        ],
+      };
+      const results = classifyCollisionGroup(group);
+      results.forEach((r) => {
+        expect(r.reason).to.contain('hash-unavailable-no-parent');
       });
     });
   });

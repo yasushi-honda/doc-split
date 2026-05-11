@@ -22,6 +22,11 @@
  */
 
 import * as admin from 'firebase-admin';
+import * as crypto from 'crypto';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { spawnSync } from 'child_process';
 import { PDFDocument } from 'pdf-lib';
 
 const projectId = process.env.FIREBASE_PROJECT_ID;
@@ -93,21 +98,98 @@ async function makeUnrelatedPdf(seed: number): Promise<Buffer> {
   return Buffer.from(await pdf.save());
 }
 
-// parent から特定 page range を抽出 (regenerateChildPdf と同等ロジック = hash matched 保証)
-async function extractFromParent(
-  parentBuf: Buffer,
+/**
+ * PR-C2: 別 Node プロセスを spawn して `regenerateChildPdf(parent, start, end)` を
+ * 実行し、その bytes を Storage upload 用に取り出す。setup プロセスと classify プロセスが
+ * 別 process である本番条件を fixture でも再現することで、「visual fingerprint が
+ * cross-process で一致する」ことを fixture 検証で実証する (Codex Important 反映)。
+ *
+ * 失敗時は throw して setup を中止する。
+ */
+function regenerateChildPdfInOtherProcess(
+  parentPdfBuffer: Buffer,
   startPage: number,
   endPage: number
-): Promise<Buffer> {
-  const parent = await PDFDocument.load(parentBuf);
-  const pdf = await PDFDocument.create();
-  const indices = Array.from(
-    { length: endPage - startPage + 1 },
-    (_, i) => startPage - 1 + i
+): Buffer {
+  const parentTmp = path.join(
+    os.tmpdir(),
+    `fixture-parent-${crypto.randomBytes(4).toString('hex')}.pdf`
   );
-  const pages = await pdf.copyPages(parent, indices);
-  pages.forEach((p) => pdf.addPage(p));
-  return Buffer.from(await pdf.save());
+  const outTmp = path.join(
+    os.tmpdir(),
+    `fixture-child-${crypto.randomBytes(4).toString('hex')}.pdf`
+  );
+  const regenModule = path.resolve(__dirname, './lib/pdfRegenerator');
+  const script = `
+    const fs = require('fs');
+    const { regenerateChildPdf } = require(${JSON.stringify(regenModule)});
+    (async () => {
+      const parent = fs.readFileSync(${JSON.stringify(parentTmp)});
+      const child = await regenerateChildPdf(parent, ${startPage}, ${endPage});
+      fs.writeFileSync(${JSON.stringify(outTmp)}, child);
+    })().catch((err) => {
+      process.stderr.write(err.stack || err.message);
+      process.exit(1);
+    });
+  `;
+  const scriptTmp = path.join(
+    os.tmpdir(),
+    `fixture-spawn-${crypto.randomBytes(4).toString('hex')}.js`
+  );
+  fs.writeFileSync(parentTmp, parentPdfBuffer);
+  fs.writeFileSync(scriptTmp, script);
+  try {
+    const result = spawnSync(
+      process.execPath,
+      ['--require', 'ts-node/register', scriptTmp],
+      {
+        encoding: 'utf-8',
+        timeout: 30000,
+        cwd: path.resolve(__dirname, '../'),
+      }
+    );
+    // Critical (silent-failure-hunter PR #441 review): spawn 自体の失敗 (ENOENT 等) /
+    // signal kill (SIGTERM by timeout) / outTmp 未書き込み を握りつぶすと、壊れた or
+    // 古い winner PDF を MatchedByHash fixture として upload してしまい、本番条件
+    // (cross-process MatchedByHash 成立) を fixture で破る silent failure になる。
+    if (result.error) {
+      throw new Error(
+        `cross-process regenerate spawn failed: ${result.error.message} (signal=${result.signal ?? '<none>'})`
+      );
+    }
+    if (result.signal) {
+      throw new Error(
+        `cross-process regenerate killed by signal=${result.signal} stderr=${result.stderr}`
+      );
+    }
+    if (result.status !== 0) {
+      throw new Error(
+        `cross-process regenerate exit=${result.status} stderr=${result.stderr}`
+      );
+    }
+    if (!fs.existsSync(outTmp)) {
+      throw new Error(
+        `cross-process regenerate reported success (status=0) but outTmp was not written: ${outTmp}`
+      );
+    }
+    const buf = fs.readFileSync(outTmp);
+    if (buf.length === 0) {
+      throw new Error(`cross-process regenerate produced empty file: ${outTmp}`);
+    }
+    return buf;
+  } finally {
+    // ENOENT 以外の cleanup 失敗は log だけ残す (disk full 等の検知)
+    for (const p of [parentTmp, outTmp, scriptTmp]) {
+      try {
+        fs.unlinkSync(p);
+      } catch (err) {
+        const code = (err as { code?: string }).code;
+        if (code !== 'ENOENT') {
+          console.warn(`tmp cleanup failed path=${p} code=${code}: ${(err as Error).message}`);
+        }
+      }
+    }
+  }
 }
 
 async function uploadPdf(path: string, buf: Buffer): Promise<void> {
@@ -200,9 +282,15 @@ async function main(): Promise<void> {
 
   // ── MatchedByHash group ──
   // 旧形式 fileUrl で衝突: 両 child docs が `processed/{COLLISION_FILENAME}` を指す
-  // Storage には MATCHED_WINNER の期待 hash と一致する PDF を 1 つだけ upload
-  console.log('Setting up MatchedByHash collision group...');
-  const winnerExpectedBuf = await extractFromParent(parentBuf, 1, 1);
+  // Storage には MATCHED_WINNER の期待 fingerprint と一致する PDF を 1 つだけ upload。
+  //
+  // PR-C2 (Codex Important 反映): winner PDF は **別 Node プロセス** で生成する。
+  // 同プロセス生成だと PR-C1 で見落とした「sha256(raw bytes) は一致するが、別プロセスで
+  // 生成された raw bytes とは異なる」リスクが再発する可能性があるため、本番条件 (setup
+  // と classify が別プロセス) を fixture で再現する。
+  // visual fingerprint は cross-process で一致する設計のため、これでも MatchedByHash 成立。
+  console.log('Setting up MatchedByHash collision group (cross-process generation)...');
+  const winnerExpectedBuf = regenerateChildPdfInOtherProcess(parentBuf, 1, 1);
   const collisionPath = `${FIXTURE_PREFIX}${COLLISION_FILENAME}`;
   await uploadPdf(collisionPath, winnerExpectedBuf);
   const collisionFileUrl = `gs://${storageBucket}/${collisionPath}`;

@@ -2,12 +2,15 @@
 /**
  * Issue #432 PR-C: classify-collision-docs.ts が出力した migration plan を実行
  *
- * 4 重 gate (Codex セカンドオピニオン反映):
+ * 多重 gate (現在 7 種、Codex セカンドオピニオン反映 + PR-C2 で AC13 algorithm/version 追加):
  *   1. approval.planId === plan.planId
  *   2. operation.operationId が approval.approvedOperationIds に含まれる
  *   3. (destructive 時) operation の sourcePath/destPath が approval.approvedPaths に含まれる
  *   4. runtime env (projectId / storageBucket) が plan の projectId / bucket と一致
  *   5. precondition (expectedCurrentFileUrl / expectedStatus / expectedUpdatedAt) が現状 doc と一致
+ *   6. plan.hashAlgorithm === HASH_ALGORITHM (AC13)
+ *   7. plan.pdfLibVersion === expectedPdfLibVersion (AC13 拡張 / Codex Important 反映)
+ * Gate 0 (defense-in-depth): Ambiguous + suggestedWinner=true の destructive action を reject
  *
  * idempotency: 各 operation は再実行可能。既に完了状態 (新 path 存在 + fileUrl 更新済) なら skip。
  * Storage delete は scripts/lib/storageGuard 経由で同 fileUrl 共有 doc が残存しないことを確認。
@@ -33,8 +36,12 @@ import {
 // F-C3: classifier の型を import して二重定義 (drift リスク) を解消
 import type {
   Classification,
+  FingerprintAlgorithm,
   RecommendedAction,
 } from './lib/collisionClassifier';
+import { HASH_ALGORITHM } from './lib/pdfPageVisualFingerprint';
+// AC13 拡張 (Codex Important): plan.pdfLibVersion と execute 側 pdf-lib version の照合
+import { version as expectedPdfLibVersion } from 'pdf-lib/package.json';
 
 const projectId = process.env.FIREBASE_PROJECT_ID;
 const storageBucket = process.env.STORAGE_BUCKET;
@@ -89,6 +96,17 @@ interface Plan {
   projectId: string;
   bucket: string;
   prefix: string;
+  /**
+   * AC13: fingerprint algorithm version。execute 側コード固定値と一致しない plan は
+   * gate reject (pdf-lib upgrade 等で algorithm が変わった古い plan を新コードで実行
+   * することを防ぐ)。PR-C1 plan (pre v1) には存在しないので undefined で gate を弾く。
+   */
+  hashAlgorithm?: FingerprintAlgorithm;
+  /**
+   * AC13 拡張 (Codex Important): pdf-lib npm package の version 文字列。algorithm 名は
+   * 同じでも pdf-lib internal API 変更で fingerprint 計算結果が変わるリスクを検出する。
+   */
+  pdfLibVersion?: string;
   summary: unknown;
   operations: Operation[];
 }
@@ -118,6 +136,24 @@ if (plan.projectId !== projectId) {
 if (plan.bucket !== storageBucket) {
   console.error(
     `FATAL: plan.bucket (${plan.bucket}) !== runtime STORAGE_BUCKET (${storageBucket})`
+  );
+  process.exit(2);
+}
+
+// === AC13: fingerprint algorithm version gate (PR-C2) ===
+// PR-C1 plan は hashAlgorithm を持たないため undefined で reject。
+// pdf-lib upgrade で algorithm が変わった旧 plan を新コードで実行するシナリオも reject。
+if (plan.hashAlgorithm !== HASH_ALGORITHM) {
+  console.error(
+    `FATAL: plan.hashAlgorithm (${plan.hashAlgorithm ?? '<missing>'}) !== execute code's HASH_ALGORITHM (${HASH_ALGORITHM}). Re-run classify-collision-docs.ts to regenerate the plan with the current fingerprint algorithm.`
+  );
+  process.exit(2);
+}
+// AC13 拡張 (Codex Important): pdf-lib version mismatch も reject。algorithm 名は
+// 同じでも pdf-lib internal API 挙動が変わると fingerprint 計算結果が変わるため。
+if (plan.pdfLibVersion !== expectedPdfLibVersion) {
+  console.error(
+    `FATAL: plan.pdfLibVersion (${plan.pdfLibVersion ?? '<missing>'}) !== execute runtime pdf-lib version (${expectedPdfLibVersion}). Re-run classify-collision-docs.ts after package version sync.`
   );
   process.exit(2);
 }

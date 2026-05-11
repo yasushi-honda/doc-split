@@ -6,7 +6,7 @@
  * parent context を gather し scripts/lib/collisionClassifier に渡す。
  *
  * 出力 JSON は execute-collision-migration.ts (T7) の入力となる migration plan。
- * planId / env / bucket / precondition snapshot を含み、4 重 gate (T7 実装) で照合される。
+ * planId / env / bucket / precondition snapshot を含み、多重 gate (T7 実装) で照合される。
  *
  * 使用方法:
  *   FIREBASE_PROJECT_ID=<project-id> STORAGE_BUCKET=<bucket> \
@@ -23,8 +23,16 @@ import {
   CollisionGroup,
   ClassificationResult,
   DocEvidence,
+  FingerprintAlgorithm,
 } from './lib/collisionClassifier';
 import { regenerateChildPdf } from './lib/pdfRegenerator';
+import {
+  HASH_ALGORITHM,
+  computePdfPageVisualFingerprint,
+} from './lib/pdfPageVisualFingerprint';
+// AC13 拡張 (Codex Important): plan に pdf-lib version も記録。dependency 更新で
+// internal API 挙動が変わったときに古い plan が新コードで黙って通るのを防ぐ。
+import { version as pdfLibVersion } from 'pdf-lib/package.json';
 
 const projectId = process.env.FIREBASE_PROJECT_ID;
 const storageBucket = process.env.STORAGE_BUCKET;
@@ -88,9 +96,6 @@ function extractPathIfBucketMatches(
   return m[2];
 }
 
-function sha256(buf: Buffer): string {
-  return crypto.createHash('sha256').update(buf).digest('hex');
-}
 
 /**
  * Storage の指定 path が実在するか個別 exists() で確認する (cache 付き)。
@@ -321,25 +326,83 @@ async function buildDocEvidence(
       doc.splitFromPages.start,
       doc.splitFromPages.end
     );
-    const actualHash = sha256(actualBuf);
-    const expectedHash = sha256(expectedBuf);
-    if (actualHash === expectedHash) {
-      return { doc, hashEvidence: { type: 'matched', sha256: actualHash }, parent };
+    // PR-C2: cross-process deterministic visual fingerprint で比較 (pdf-page-visual-v1)
+    const actualFp = await computePdfPageVisualFingerprint(actualBuf);
+    const expectedFp = await computePdfPageVisualFingerprint(expectedBuf);
+
+    // どちらかが unsupported (encryption/acroform/optional-content/malformed) なら
+    // Ambiguous に倒すための unsupported evidence を返す (両方の状態を 1 つに集約)
+    if (actualFp.kind === 'unsupported' || expectedFp.kind === 'unsupported') {
+      const target = actualFp.kind === 'unsupported' ? actualFp : expectedFp;
+      // type narrowing
+      if (target.kind === 'unsupported') {
+        return {
+          doc,
+          hashEvidence: {
+            type: 'unsupported',
+            reason: target.reason,
+            detail:
+              actualFp.kind === 'unsupported' && expectedFp.kind === 'unsupported'
+                ? `actual+expected: ${target.detail}`
+                : `${actualFp.kind === 'unsupported' ? 'actual' : 'expected'}: ${target.detail}`,
+            algorithm: HASH_ALGORITHM,
+          },
+          parent,
+        };
+      }
     }
-    return {
-      doc,
-      hashEvidence: {
-        type: 'mismatched',
-        actualSha256: actualHash,
-        expectedSha256: expectedHash,
-      },
-      parent,
-    };
-  } catch (err) {
-    console.warn(`hash computation failed for doc ${doc.id}: ${(err as Error).message}`);
+
+    if (
+      actualFp.kind === 'ok' &&
+      expectedFp.kind === 'ok' &&
+      actualFp.hex === expectedFp.hex
+    ) {
+      return {
+        doc,
+        hashEvidence: {
+          type: 'matched',
+          fingerprint: actualFp.hex,
+          algorithm: HASH_ALGORITHM,
+        },
+        parent,
+      };
+    }
+    if (actualFp.kind === 'ok' && expectedFp.kind === 'ok') {
+      return {
+        doc,
+        hashEvidence: {
+          type: 'mismatched',
+          actualFingerprint: actualFp.hex,
+          expectedFingerprint: expectedFp.hex,
+          algorithm: HASH_ALGORITHM,
+        },
+        parent,
+      };
+    }
+    // ここに到達するのは defensive case (両方 unsupported かつ最初の分岐から抜けた等)
     return {
       doc,
       hashEvidence: { type: 'unavailable', reason: 'computation-error' },
+      parent,
+    };
+  } catch (err) {
+    // silent-failure-hunter I2 反映: 残った throw は regenerateChildPdf 系の permanent
+    // failure (parent PDF malformed / page range out-of-bounds / pdf-lib copyPages 失敗)
+    // が支配的。computation-error (transient) に流すと operator が永久に retry し続ける
+    // silent retry loop になる。unsupported.malformed に倒し、Ambiguous + manual-review
+    // 経路 (classifyOrphan / classifyLoserForRegeneration 共通) に確実に到達させる。
+    const msg = (err as Error).message;
+    console.error(
+      `PERMANENT hash failure docId=${doc.id} parentId=${doc.parentDocumentId} msg=${msg}`
+    );
+    return {
+      doc,
+      hashEvidence: {
+        type: 'unsupported',
+        reason: 'malformed',
+        detail: `regenerate/fingerprint failure: ${msg}`,
+        algorithm: HASH_ALGORITHM,
+      },
       parent,
     };
   }
@@ -352,7 +415,7 @@ interface MigrationOperation {
   recommendedAction: ClassificationResult['recommendedAction'];
   reason: string;
   suggestedWinner: boolean;
-  // precondition snapshot (T7 4 重 gate で照合)
+  // precondition snapshot (T7 多重 gate で照合)
   expectedCurrentFileUrl: string | null;
   expectedStatus: string;
   expectedUpdatedAt: string | null;
@@ -510,6 +573,11 @@ async function main(): Promise<void> {
     summary.byAction[result.recommendedAction] += 1;
   }
 
+  // AC13: plan に fingerprint algorithm version を記録。execute 側で固定値と照合し、
+  // mismatch なら gate reject (pdf-lib upgrade 等で algorithm が変わった古い plan を
+  // 新コードで実行することを防ぐ)。
+  const hashAlgorithm: FingerprintAlgorithm = HASH_ALGORITHM;
+
   const plan = {
     planId,
     createdAt: new Date().toISOString(),
@@ -517,6 +585,8 @@ async function main(): Promise<void> {
     projectId,
     bucket: bucket.name,
     prefix,
+    hashAlgorithm,
+    pdfLibVersion,
     summary,
     operations,
   };
