@@ -2,12 +2,15 @@
 /**
  * Issue #432 PR-C: classify-collision-docs.ts が出力した migration plan を実行
  *
- * 4 重 gate (Codex セカンドオピニオン反映):
+ * 多重 gate (現在 7 種、Codex セカンドオピニオン反映 + PR-C2 で AC13 algorithm/version 追加):
  *   1. approval.planId === plan.planId
  *   2. operation.operationId が approval.approvedOperationIds に含まれる
  *   3. (destructive 時) operation の sourcePath/destPath が approval.approvedPaths に含まれる
  *   4. runtime env (projectId / storageBucket) が plan の projectId / bucket と一致
  *   5. precondition (expectedCurrentFileUrl / expectedStatus / expectedUpdatedAt) が現状 doc と一致
+ *   6. plan.hashAlgorithm === HASH_ALGORITHM (AC13)
+ *   7. plan.pdfLibVersion === expectedPdfLibVersion (AC13 拡張 / Codex Important 反映)
+ * Gate 0 (defense-in-depth): Ambiguous + suggestedWinner=true の destructive action を reject
  *
  * idempotency: 各 operation は再実行可能。既に完了状態 (新 path 存在 + fileUrl 更新済) なら skip。
  * Storage delete は scripts/lib/storageGuard 経由で同 fileUrl 共有 doc が残存しないことを確認。

@@ -180,7 +180,9 @@ operator が manual-review 時に対処方針を即特定できるよう、Ambig
 |---|---|---|
 | `content-mismatch` | fingerprint(actual storage) != fingerprint(regenerated) | parent から再生成した PDF と実体が描画的に異なる。operator が中身を比較し、勝者判定 → 手動 migrate or status='error' |
 | `multiple-fingerprint-matches` | 複数 doc が同 fingerprint (希少) | どの docId に紐付けるべきか operator が業務文脈で判定 |
-| `unsupported-pdf-feature` | encryption / acroform / optional-content / malformed / **annotations** (Codex Critical 反映) / **unsupported-resource-filter** (Codex Important 反映: DCTDecode/JPXDecode 等の画像 filter) | PDF 構造が自動 fingerprint 対象外。手動でファイル内容を確認し復旧可否判定。スキャン PDF (JPEG XObject 多用) は `unsupported-resource-filter` で大半が Ambiguous に倒れる可能性あり |
+| `unsupported-pdf-feature: encryption / acroform / optional-content / malformed` | PDF 構造が自動 fingerprint 対象外 (form / 暗号化 / 構造異常) | 手動でファイル内容を確認し復旧可否判定 |
+| `unsupported-pdf-feature: annotations` (Codex Critical 反映) | page に visible annotation (Stamp/FreeText/Highlight 等) があり、Contents stream に乗らない差分があり得る | 該当 doc の PDF を Acrobat or diff-pdf で actual storage と parent regenerate 結果を visual compare → 同一なら手動で `migrate-to-namespace` 相当の更新、差異あれば `mark-error` |
+| `unsupported-pdf-feature: unsupported-resource-filter` (Codex Important 反映) | resource (画像 XObject 等) が DCTDecode/JPXDecode/Crypt 等 pdf-lib 未対応 filter | 自動 fingerprint で同一性証明できない。スキャン PDF (JPEG XObject 多用) で多発の可能性。byte 比較 + visual diff で判定、または `mark-error` で確定 |
 | `hash-unavailable-transient` | download 一時エラー (503/403) | 数分後に再 classify、解消すれば再分類 |
 | `hash-unavailable-no-parent` | parent doc / 親 PDF / splitFromPages のいずれかが不在 | LostOrUnrecoverable 寄り。parent doc 復元できれば再分類 |
 
@@ -266,7 +268,7 @@ Step 2 で出力された plan JSON 内容と各 operation の sourcePath/destPa
 }
 ```
 
-**6 重 gate (Codex セカンドオピニオン反映 + PR-C2 fingerprint version gate)**:
+**多重 gate (現在 7 種、Codex セカンドオピニオン反映 + PR-C2 で AC13 algorithm/version 追加)**:
 
 1. `approval.planId === plan.planId` (古い plan の流用防止)
 2. `operation.operationId ∈ approvedOperationIds` (operation 単位の認可)
@@ -342,7 +344,7 @@ FIREBASE_PROJECT_ID=<project-id> STORAGE_BUCKET=<bucket> \
 - `scripts/audit-storage-mismatch.js` (検出 script)
 - `scripts/inspect-document.js` (調査 script, read-only)
 - `scripts/classify-collision-docs.ts` (PR-C: 5 分類 plan 出力)
-- `scripts/execute-collision-migration.ts` (PR-C: 4 重 gate + idempotent migration)
+- `scripts/execute-collision-migration.ts` (PR-C: 多重 gate + idempotent migration、PR-C2 で AC13 algorithm/version gate 追加)
 - `scripts/setup-collision-fixture.ts` (PR-C: dev 環境 fixture)
 - `scripts/lib/collisionClassifier.ts` (PR-C: 5 分類 pure function)
 - `scripts/lib/pdfRegenerator.ts` (PR-C: parent から PDF 再生成)

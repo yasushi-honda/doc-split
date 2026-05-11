@@ -343,7 +343,17 @@ export type AmbiguousReasonKind =
   | 'hash-unavailable-no-parent'
   | 'multiple-fingerprint-matches';
 
-function buildAmbiguousReason(evidence: DocEvidence): string {
+/**
+ * type-design-analyzer (PR #441 review) 反映: Ambiguous の reason 文字列を
+ * `${AmbiguousReasonKind}` または `${AmbiguousReasonKind}: ${string}` の template
+ * literal で型強制し、build*Reason 関数群と AmbiguousReasonKind の drift を
+ * compile error 化する。
+ */
+export type AmbiguousReasonString =
+  | `${AmbiguousReasonKind}`
+  | `${AmbiguousReasonKind}: ${string}`;
+
+function buildAmbiguousReason(evidence: DocEvidence): AmbiguousReasonString {
   switch (evidence.hashEvidence.type) {
     case 'mismatched':
       return 'content-mismatch: visual fingerprint(actual storage) != visual fingerprint(regenerated from parent + splitFromPages)';
@@ -360,14 +370,17 @@ function buildAmbiguousReason(evidence: DocEvidence): string {
   }
 }
 
-function buildUnsupportedReason(evidence: DocEvidence): string {
+function buildUnsupportedReason(evidence: DocEvidence): AmbiguousReasonString {
   if (evidence.hashEvidence.type !== 'unsupported') {
     return 'unsupported-pdf-feature: <unexpected hashEvidence type>';
   }
   return `unsupported-pdf-feature: ${evidence.hashEvidence.reason} (${evidence.hashEvidence.detail})`;
 }
 
-function buildUnavailableReason(kind: AmbiguousReasonKind, detail?: string): string {
+function buildUnavailableReason(
+  kind: AmbiguousReasonKind,
+  detail?: string
+): AmbiguousReasonString {
   return detail ? `${kind}: ${detail}` : kind;
 }
 

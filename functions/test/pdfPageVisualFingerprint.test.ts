@@ -110,6 +110,18 @@ function fingerprintInChildProcess(
         cwd: path.resolve(__dirname, '../../'),
       }
     );
+    // Critical (silent-failure-hunter PR #441 review): spawn 失敗 / signal kill /
+    // exit !== 0 を区別して握りつぶさない (debug 性 + test の偽 PASS 防止)
+    if (result.error) {
+      throw new Error(
+        `child process spawn failed: ${result.error.message} (signal=${result.signal ?? '<none>'})`
+      );
+    }
+    if (result.signal) {
+      throw new Error(
+        `child process killed by signal=${result.signal} stderr=${result.stderr}`
+      );
+    }
     if (result.status !== 0) {
       throw new Error(
         `child process exit=${result.status}: stderr=${result.stderr}`
@@ -477,6 +489,59 @@ describe('pdfPageVisualFingerprint (Issue #432 PR-C2)', () => {
       expect(fp2.kind).to.equal('ok');
       if (fp1.kind === 'ok' && fp2.kind === 'ok') {
         expect(fp1.hex).to.not.equal(fp2.hex);
+      }
+    });
+  });
+
+  describe('5 並列 review 反映 (PR #441 post-review v1.2)', () => {
+    it('Critical (code-reviewer): cross-locale 子プロセス間で同 PDF → 同 fingerprint hex (byte-order sort 担保)', async () => {
+      const parent = await makeNPagePdf(3, 0);
+      const parentPath = writeTmpPdf(parent);
+      try {
+        // 2 つの子プロセスを異なる LANG/LC_ALL で起動。byte-order sort 化により
+        // どちらの locale でも同じ canonical digest を返すことを担保。
+        const fpInLocale = (lang: string): FingerprintOk | FingerprintUnsupported => {
+          const script = `
+            const { regenerateChildPdf } = require(${JSON.stringify(REGENERATOR_MODULE)});
+            const { computePdfPageVisualFingerprint } = require(${JSON.stringify(FINGERPRINT_MODULE)});
+            const fs = require('fs');
+            (async () => {
+              const buf = fs.readFileSync(${JSON.stringify(parentPath)});
+              const child = await regenerateChildPdf(buf, 1, 2);
+              const fp = await computePdfPageVisualFingerprint(child);
+              process.stdout.write(JSON.stringify(fp));
+            })().catch((err) => { process.stderr.write(err.stack || err.message); process.exit(1); });
+          `;
+          const sp = path.join(os.tmpdir(), `loc-${crypto.randomBytes(4).toString('hex')}.js`);
+          fs.writeFileSync(sp, script);
+          try {
+            const result = spawnSync(
+              process.execPath,
+              ['--require', 'ts-node/register', sp],
+              {
+                encoding: 'utf-8',
+                timeout: 30000,
+                cwd: path.resolve(__dirname, '../../'),
+                env: { ...process.env, LANG: lang, LC_ALL: lang },
+              }
+            );
+            if (result.status !== 0) {
+              throw new Error(`child exit=${result.status} stderr=${result.stderr}`);
+            }
+            return JSON.parse(result.stdout);
+          } finally {
+            try { fs.unlinkSync(sp); } catch { /* ignore */ }
+          }
+        };
+        const fpC = fpInLocale('C.UTF-8');
+        const fpJa = fpInLocale('ja_JP.UTF-8');
+        expect(fpC.kind).to.equal('ok');
+        expect(fpJa.kind).to.equal('ok');
+        if (fpC.kind === 'ok' && fpJa.kind === 'ok') {
+          expect(fpJa.hex).to.equal(fpC.hex);
+        }
+      } finally {
+        try { fs.unlinkSync(parentPath); } catch { /* ignore */ }
       }
     });
   });

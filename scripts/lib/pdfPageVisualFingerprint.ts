@@ -215,16 +215,15 @@ export async function computePdfPageVisualFingerprint(
       try {
         top.update(canonicalDigest(group, pdf.context));
       } catch (err) {
+        // silent-failure-hunter I1 反映: canonical digest 失敗は構造解析失敗 = malformed
+        // 等価で扱う (transient computation-error に流すと operator が retry し続ける)
         const msg = (err as Error).message;
-        if (isUnsupportedFilterError(msg)) {
-          return {
-            kind: 'unsupported',
-            reason: 'unsupported-resource-filter',
-            detail: `page ${i} /Group canonical digest: ${msg}`,
-            algorithm: HASH_ALGORITHM,
-          };
-        }
-        throw err;
+        return {
+          kind: 'unsupported',
+          reason: isUnsupportedFilterError(msg) ? 'unsupported-resource-filter' : 'malformed',
+          detail: `page ${i} /Group canonical digest failed: ${msg}`,
+          algorithm: HASH_ALGORITHM,
+        };
       }
     }
 
@@ -238,18 +237,16 @@ export async function computePdfPageVisualFingerprint(
         const resourcesDigest = canonicalDigest(resources, pdf.context);
         top.update(resourcesDigest);
       } catch (err) {
-        // Codex Important 反映: resources subtree 内の image XObject 等の decode 失敗を
-        // unsupported-resource-filter に降格 (transient computation-error にしない)
+        // silent-failure-hunter I1 + Codex Important 反映: resources subtree の decode
+        // 失敗 (image XObject の DCTDecode 等) は unsupported-resource-filter、その他の
+        // 構造解析失敗は malformed として returning unsupported (catch-all 不発防止)。
         const msg = (err as Error).message;
-        if (isUnsupportedFilterError(msg)) {
-          return {
-            kind: 'unsupported',
-            reason: 'unsupported-resource-filter',
-            detail: `page ${i} resources canonical digest: ${msg}`,
-            algorithm: HASH_ALGORITHM,
-          };
-        }
-        throw err;
+        return {
+          kind: 'unsupported',
+          reason: isUnsupportedFilterError(msg) ? 'unsupported-resource-filter' : 'malformed',
+          detail: `page ${i} resources canonical digest failed: ${msg}`,
+          algorithm: HASH_ALGORITHM,
+        };
       }
     }
   }
@@ -398,7 +395,14 @@ function walk(
   }
   if (obj instanceof PDFDict) {
     const entries = [...obj.entries()];
-    entries.sort((a, b) => a[0].asString().localeCompare(b[0].asString()));
+    // Critical (code-reviewer PR #441 review): localeCompare は OS locale / ICU データ版
+    // 依存で cross-machine non-deterministic。byte-order 比較に置換して classify
+    // (e.g. ja_JP な開発機) と execute (e.g. C な GitHub Actions) で同 hex を保証。
+    entries.sort((a, b) => {
+      const sa = a[0].asString();
+      const sb = b[0].asString();
+      return sa < sb ? -1 : sa > sb ? 1 : 0;
+    });
     sha.update(`dict|size=${entries.length}`);
     for (const [k, v] of entries) {
       sha.update('|key=');

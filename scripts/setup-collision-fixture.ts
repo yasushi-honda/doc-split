@@ -148,18 +148,45 @@ function regenerateChildPdfInOtherProcess(
         cwd: path.resolve(__dirname, '../'),
       }
     );
-    if (result.status !== 0) {
+    // Critical (silent-failure-hunter PR #441 review): spawn 自体の失敗 (ENOENT 等) /
+    // signal kill (SIGTERM by timeout) / outTmp 未書き込み を握りつぶすと、壊れた or
+    // 古い winner PDF を MatchedByHash fixture として upload してしまい、本番条件
+    // (cross-process MatchedByHash 成立) を fixture で破る silent failure になる。
+    if (result.error) {
       throw new Error(
-        `cross-process regenerate failed (exit=${result.status}): ${result.stderr}`
+        `cross-process regenerate spawn failed: ${result.error.message} (signal=${result.signal ?? '<none>'})`
       );
     }
-    return fs.readFileSync(outTmp);
+    if (result.signal) {
+      throw new Error(
+        `cross-process regenerate killed by signal=${result.signal} stderr=${result.stderr}`
+      );
+    }
+    if (result.status !== 0) {
+      throw new Error(
+        `cross-process regenerate exit=${result.status} stderr=${result.stderr}`
+      );
+    }
+    if (!fs.existsSync(outTmp)) {
+      throw new Error(
+        `cross-process regenerate reported success (status=0) but outTmp was not written: ${outTmp}`
+      );
+    }
+    const buf = fs.readFileSync(outTmp);
+    if (buf.length === 0) {
+      throw new Error(`cross-process regenerate produced empty file: ${outTmp}`);
+    }
+    return buf;
   } finally {
+    // ENOENT 以外の cleanup 失敗は log だけ残す (disk full 等の検知)
     for (const p of [parentTmp, outTmp, scriptTmp]) {
       try {
         fs.unlinkSync(p);
-      } catch {
-        /* ignore */
+      } catch (err) {
+        const code = (err as { code?: string }).code;
+        if (code !== 'ENOENT') {
+          console.warn(`tmp cleanup failed path=${p} code=${code}: ${(err as Error).message}`);
+        }
       }
     }
   }

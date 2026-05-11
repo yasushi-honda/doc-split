@@ -6,7 +6,7 @@
  * parent context を gather し scripts/lib/collisionClassifier に渡す。
  *
  * 出力 JSON は execute-collision-migration.ts (T7) の入力となる migration plan。
- * planId / env / bucket / precondition snapshot を含み、4 重 gate (T7 実装) で照合される。
+ * planId / env / bucket / precondition snapshot を含み、多重 gate (T7 実装) で照合される。
  *
  * 使用方法:
  *   FIREBASE_PROJECT_ID=<project-id> STORAGE_BUCKET=<bucket> \
@@ -96,8 +96,6 @@ function extractPathIfBucketMatches(
   return m[2];
 }
 
-// sha256() は PR-C1 で使われていたが、PR-C2 で visual fingerprint 比較に切り替えたため削除。
-// 必要であれば crypto.createHash('sha256') を直接利用。
 
 /**
  * Storage の指定 path が実在するか個別 exists() で確認する (cache 付き)。
@@ -388,10 +386,23 @@ async function buildDocEvidence(
       parent,
     };
   } catch (err) {
-    console.warn(`hash computation failed for doc ${doc.id}: ${(err as Error).message}`);
+    // silent-failure-hunter I2 反映: 残った throw は regenerateChildPdf 系の permanent
+    // failure (parent PDF malformed / page range out-of-bounds / pdf-lib copyPages 失敗)
+    // が支配的。computation-error (transient) に流すと operator が永久に retry し続ける
+    // silent retry loop になる。unsupported.malformed に倒し、Ambiguous + manual-review
+    // 経路 (classifyOrphan / classifyLoserForRegeneration 共通) に確実に到達させる。
+    const msg = (err as Error).message;
+    console.error(
+      `PERMANENT hash failure docId=${doc.id} parentId=${doc.parentDocumentId} msg=${msg}`
+    );
     return {
       doc,
-      hashEvidence: { type: 'unavailable', reason: 'computation-error' },
+      hashEvidence: {
+        type: 'unsupported',
+        reason: 'malformed',
+        detail: `regenerate/fingerprint failure: ${msg}`,
+        algorithm: HASH_ALGORITHM,
+      },
       parent,
     };
   }
@@ -404,7 +415,7 @@ interface MigrationOperation {
   recommendedAction: ClassificationResult['recommendedAction'];
   reason: string;
   suggestedWinner: boolean;
-  // precondition snapshot (T7 4 重 gate で照合)
+  // precondition snapshot (T7 多重 gate で照合)
   expectedCurrentFileUrl: string | null;
   expectedStatus: string;
   expectedUpdatedAt: string | null;
