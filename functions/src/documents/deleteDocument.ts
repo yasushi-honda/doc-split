@@ -13,6 +13,7 @@
 
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
+import { canSafelyDeleteStorageFile } from '../storage/storageDeletionGuard';
 
 const db = admin.firestore();
 const storage = admin.storage();
@@ -86,8 +87,26 @@ export const deleteDocument = onCall(
 
           const [exists] = await file.exists();
           if (exists) {
-            await file.delete();
-            console.log(`Deleted storage file: ${filePath}`);
+            // Issue #432 PR-A safety net: 同 fileUrl 共有 doc がある場合は delete skip
+            const { canDelete, sharingDocCount } = await canSafelyDeleteStorageFile(
+              db,
+              fileUrl,
+              documentId
+            );
+            if (!canDelete) {
+              console.warn('Skipped storage delete: shared fileUrl detected', {
+                skippedStorageDelete: true,
+                operation: 'deleteDocument',
+                documentId,
+                fileUrl,
+                sharingDocCount,
+                reason:
+                  'Issue #432 safety net: other documents reference the same fileUrl',
+              });
+            } else {
+              await file.delete();
+              console.log(`Deleted storage file: ${filePath}`);
+            }
           } else {
             console.log(`Storage file not found (already deleted?): ${filePath}`);
           }

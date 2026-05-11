@@ -23,6 +23,7 @@ import { generateDisplayFileName } from '../../../shared/generateDisplayFileName
 import { timestampToDateString } from '../utils/timestampHelpers';
 import { loadMasterData } from '../utils/loadMasterData';
 import { sanitizeFilenameForStorage } from '../utils/fileNaming';
+import { canSafelyDeleteStorageFile } from '../storage/storageDeletionGuard';
 
 const db = admin.firestore();
 const storage = admin.storage();
@@ -536,10 +537,26 @@ export const rotatePdfPages = onCall(
     });
     console.log('PDF uploaded to new path:', newFilePath);
 
-    // 古いファイルを削除（エラーは無視）
+    // 古いファイルを削除（Issue #432 PR-A safety net: 同 fileUrl 共有 doc がある場合は skip）
     try {
-      await file.delete();
-      console.log('Old file deleted:', filePath);
+      const { canDelete, sharingDocCount } = await canSafelyDeleteStorageFile(
+        db,
+        fileUrl,
+        documentId
+      );
+      if (!canDelete) {
+        console.warn('Skipped storage delete: shared fileUrl detected', {
+          skippedStorageDelete: true,
+          operation: 'rotatePdfPages',
+          documentId,
+          fileUrl,
+          sharingDocCount,
+          reason: 'Issue #432 safety net: other documents reference the same fileUrl',
+        });
+      } else {
+        await file.delete();
+        console.log('Old file deleted:', filePath);
+      }
     } catch (deleteErr) {
       console.log('Could not delete old file (may not exist):', deleteErr);
     }
