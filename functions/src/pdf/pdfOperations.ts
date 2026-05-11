@@ -315,7 +315,12 @@ export const splitPdf = onCall(
       // PDFをバイト配列に変換
       const newPdfBytes = await newPdf.save();
 
-      // ファイル名生成
+      // Issue #432 PR-B: docId namespace 分離で Storage path 衝突を根治。
+      // Firestore docId を Storage save 前に確定させ path に組み込む。
+      const newDocRef = db.collection('documents').doc();
+
+      // ファイル名生成。timestamp は表示用 date 部分の生成に使うのみ
+      // (衝突回避は docId namespace で担保、generateFileName は責務を持たない)。
       const timestamp = Date.now();
       const fileName = generateFileName({
         customerName,
@@ -325,8 +330,8 @@ export const splitPdf = onCall(
         endPage,
       });
 
-      // Cloud Storageに保存
-      const newFilePath = `processed/${fileName}`;
+      // Cloud Storage に保存 (Issue #432 PR-B: processed/{docId}/{fileName} で一意性保証)
+      const newFilePath = `processed/${newDocRef.id}/${fileName}`;
       const newFile = bucket.file(newFilePath);
       await newFile.save(Buffer.from(newPdfBytes), {
         metadata: { contentType: 'application/pdf' },
@@ -382,48 +387,78 @@ export const splitPdf = onCall(
           docData.fileDateFormatted ?? timestampToDateString(docData.fileDate),
       });
 
-      // 新しいドキュメントをFirestoreに作成
-      // ユーザーが分割UIで選択した値は常にconfirmed=true
-      const newDocRef = db.collection('documents').doc();
+      // 新しいドキュメントを Firestore に作成 (ユーザーが分割UIで選択した値は常に confirmed=true)。
+      // Issue #432 PR-B 補償処理: Storage save 成功後の Firestore set 失敗で orphan が
+      // 残ると後続 split との path 衝突リスクが再発するため、best-effort で cleanup する。
       const splitDocFields = buildSplitDocumentData(segment);
-      await newDocRef.set({
-        ...(displayFileName ? { displayFileName } : {}),
-        id: newDocRef.id,
-        processedAt: admin.firestore.FieldValue.serverTimestamp(),
-        fileId: newDocRef.id,
-        fileName,
-        mimeType: 'application/pdf',
-        ocrResult: extractOcrResultForPages(
-          docData.pageResults || [],
-          startPage,
-          endPage
-        ),
-        // セグメントから構築したフィールド（careManager/careManagerKey含む）
-        ...splitDocFields,
-        confirmedBy: request.auth?.uid || null,
-        confirmedAt: admin.firestore.FieldValue.serverTimestamp(),
-        // 事業所確定
-        officeConfirmedBy: request.auth?.uid || null,
-        officeConfirmedAt: admin.firestore.FieldValue.serverTimestamp(),
-        // OCR抽出スナップショット
-        ocrExtraction,
-        // ページ結果（再OCR不要にするため保存）
-        pageResults: segmentPageResults.map((p: SplitPageInput, index: number) => ({
-          ...p,
-          pageNumber: index + 1, // 分割後の新しいページ番号
-          originalPageNumber: p.pageNumber, // 元のページ番号
-        })),
-        // ファイル情報
-        fileUrl: `gs://${bucket.name}/${newFilePath}`,
-        fileDate: docData.fileDate,
-        totalPages: endPage - startPage + 1,
-        targetPageNumber: 1,
-        status: 'processed',
-        parentDocumentId: documentId,
-        splitFromPages: { start: startPage, end: endPage },
-      });
-
-      createdDocIds.push(newDocRef.id);
+      try {
+        await newDocRef.set({
+          ...(displayFileName ? { displayFileName } : {}),
+          id: newDocRef.id,
+          processedAt: admin.firestore.FieldValue.serverTimestamp(),
+          fileId: newDocRef.id,
+          fileName,
+          mimeType: 'application/pdf',
+          ocrResult: extractOcrResultForPages(
+            docData.pageResults || [],
+            startPage,
+            endPage
+          ),
+          // セグメントから構築したフィールド（careManager/careManagerKey含む）
+          ...splitDocFields,
+          confirmedBy: request.auth?.uid || null,
+          confirmedAt: admin.firestore.FieldValue.serverTimestamp(),
+          // 事業所確定
+          officeConfirmedBy: request.auth?.uid || null,
+          officeConfirmedAt: admin.firestore.FieldValue.serverTimestamp(),
+          // OCR抽出スナップショット
+          ocrExtraction,
+          // ページ結果（再OCR不要にするため保存）
+          pageResults: segmentPageResults.map((p: SplitPageInput, index: number) => ({
+            ...p,
+            pageNumber: index + 1, // 分割後の新しいページ番号
+            originalPageNumber: p.pageNumber, // 元のページ番号
+          })),
+          // ファイル情報
+          fileUrl: `gs://${bucket.name}/${newFilePath}`,
+          fileDate: docData.fileDate,
+          totalPages: endPage - startPage + 1,
+          targetPageNumber: 1,
+          status: 'processed',
+          parentDocumentId: documentId,
+          splitFromPages: { start: startPage, end: endPage },
+        });
+        createdDocIds.push(newDocRef.id);
+      } catch (firestoreErr) {
+        console.error('Firestore set failed after Storage save; attempting orphan cleanup', {
+          operation: 'splitPdf',
+          stage: 'firestoreSet',
+          newDocId: newDocRef.id,
+          newFilePath,
+          error: firestoreErr instanceof Error ? firestoreErr.message : String(firestoreErr),
+        });
+        try {
+          await newFile.delete();
+          console.warn('Cleaned up orphan Storage file after Firestore set failure', {
+            operation: 'splitPdf',
+            stage: 'orphanCleanup',
+            newDocId: newDocRef.id,
+            newFilePath,
+            cleanupResult: 'success',
+          });
+        } catch (cleanupErr) {
+          console.error('Failed to cleanup orphan Storage file (manual cleanup needed)', {
+            operation: 'splitPdf',
+            stage: 'orphanCleanup',
+            newDocId: newDocRef.id,
+            newFilePath,
+            cleanupResult: 'failed',
+            cleanupError:
+              cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr),
+          });
+        }
+        throw firestoreErr;
+      }
     }
 
     // 元ドキュメントのステータスを更新（分割済みフラグ）
