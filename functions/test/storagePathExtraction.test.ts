@@ -10,10 +10,17 @@
  * 新形式 path で fileName のみが取れて bucket/path 構造が破綻し silent 破壊が
  * 再発するため、grep contract で固定する。
  *
- * 対象 call sites:
- *   - functions/src/ocr/ocrProcessor.ts (~line 111): fileUrl.replace() 形式
- *   - functions/src/documents/deleteDocument.ts (~line 80): regex match 形式
- *   - functions/src/pdf/pdfOperations.ts (rotatePdfPages, ~line 493): fileUrl.replace() 形式
+ * 対象 call sites (`expectedPattern` 正規表現で検索):
+ *   - functions/src/ocr/ocrProcessor.ts: `fileUrl.replace(\`gs://${bucket.name}/\`, ...)` 形式
+ *   - functions/src/documents/deleteDocument.ts: `match(/^gs:\/\/([^/]+)\/(.+)$/)` 形式
+ *   - functions/src/pdf/pdfOperations.ts (rotatePdfPages): `fileUrl.replace(\`gs://${bucket.name}/\`, ...)` 形式
+ *     NOTE: pdfOperations.ts の splitPdf (元 PDF 読込) にも同形式の path 抽出があるが、
+ *     `rotatePdfPages` 側が新形式 path で動作することの contract を本 test で固定。
+ *     splitPdf 側のみ refactor された場合の検出は別 contract で扱う必要あり (follow-up)。
+ *
+ * 例: `path.basename(filePath)` に refactor すると新形式 `processed/{docId}/{fileName}` から
+ *     `{fileName}` のみ抽出され、`bucket.file(filePath)` が異なる object を指す
+ *     → 削除/読込が他 doc を破壊する。
  */
 
 import { expect } from 'chai';

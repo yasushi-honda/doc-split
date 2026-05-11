@@ -86,6 +86,20 @@ function pathFromUrl(url) {
   return m ? m[1] : null;
 }
 
+/**
+ * `gs://<bucket>/<path>` 形式の URL から path を抽出するが、bucket 名が
+ * 指定された expected bucket と一致する場合のみ返す。一致しない場合は null。
+ * 環境差 (`.appspot.com` / `.firebasestorage.app` 混在等) で別 bucket の参照
+ * を現環境の参照と誤計上する false negative を防ぐ (Issue #432 PR-D Codex 指摘)。
+ */
+function extractPathIfBucketMatches(url, expectedBucket) {
+  if (!url || typeof url !== 'string') return null;
+  const m = url.match(/^gs:\/\/([^/]+)\/(.+)$/);
+  if (!m) return null;
+  if (m[1] !== expectedBucket) return null;
+  return m[2];
+}
+
 async function main() {
   console.log(`Project: ${projectId}`);
   console.log(`Bucket : ${bucket.name}`);
@@ -145,13 +159,55 @@ async function main() {
   }
 
   if (!skipReverseOrphans) {
+    // sanity check: Firestore docs と Storage list の整合性を verify
+    // (Issue #432 silent-failure-hunter C2 指摘: 0 件レポートが load 失敗を hide する)
+    if (targetDocs.length > 0 && storagePaths.size === 0) {
+      console.error(
+        `FATAL: Firestore に prefix="${prefix}" 参照 docs が ${targetDocs.length} 件あるが、` +
+          `Storage list は 0 件。false reverse-orphan 報告を防ぐため abort。` +
+          `bucket 名 (${bucket.name}) と IAM 権限を確認すること。`
+      );
+      await admin.app().delete();
+      process.exit(2);
+    }
+
     // Firestore documents から参照されている Storage path 集合
+    // bucket 名が一致しない fileUrl (別環境 / 旧形式 https URL 等) は除外し、解析失敗件数を記録
     const referencedPaths = new Set();
+    let fileUrlParseFailureCount = 0;
+    let fileUrlOtherBucketCount = 0;
+    let fileUrlNullOrEmptyCount = 0;
     for (const d of allDocs) {
-      const p = pathFromUrl(d.fileUrl);
-      if (p && p.startsWith(prefix)) {
+      if (d.fileUrl === undefined || d.fileUrl === null || d.fileUrl === '') {
+        fileUrlNullOrEmptyCount += 1;
+        continue;
+      }
+      // bucket 名一致確認 (false negative 防止)
+      const p = extractPathIfBucketMatches(d.fileUrl, bucket.name);
+      if (p === null) {
+        // bucket mismatch or non-gs:// URL → 解析失敗 / 別 bucket として分類
+        const looksGs = typeof d.fileUrl === 'string' && d.fileUrl.startsWith('gs://');
+        if (looksGs) {
+          fileUrlOtherBucketCount += 1;
+        } else {
+          fileUrlParseFailureCount += 1;
+          console.warn(
+            `WARN: fileUrl 解析失敗 (no-reference 扱い): docId=${d.id} status=${d.status} fileUrl=${JSON.stringify(d.fileUrl)}`
+          );
+        }
+        continue;
+      }
+      if (p.startsWith(prefix)) {
         referencedPaths.add(p);
       }
+    }
+
+    if (fileUrlParseFailureCount > 0 || fileUrlOtherBucketCount > 0) {
+      console.warn(
+        `\nWARN: fileUrl 解析失敗 ${fileUrlParseFailureCount} 件 / 別 bucket 参照 ${fileUrlOtherBucketCount} 件 / ` +
+          `null or empty ${fileUrlNullOrEmptyCount} 件。reverse orphan に false positive 含む可能性。` +
+          `gsutil rm 前に必ず原因調査すること。`
+      );
     }
 
     // Storage 実体あり Firestore 参照なし = reverse orphan
@@ -169,18 +225,26 @@ async function main() {
       console.log(`  gs://${bucket.name}/${p}`)
     );
 
-    // Issue #432 PR-B 補償処理の二段失敗で発生する想定パターンを抽出
-    // (path が processed/{docId}/ 形式で docId が 20 文字英数字)
-    const pr_b_pattern_orphans = reverseOrphans.filter((p) => {
-      const segments = p.replace(prefix, '').split('/');
-      return segments.length >= 2 && /^[A-Za-z0-9]{15,30}$/.test(segments[0]);
+    // docId namespace pattern (processed/{docId}/...) を hint 表示。
+    // Firestore auto-ID = `[A-Za-z0-9]{20}` 固定仕様に厳密一致 + 同 ID の doc が
+    // 不在であることを確認 (Issue #432 PR-D 補強: codex / silent-failure I1 指摘反映)。
+    // PR-B 補償処理二段失敗で発生する正規パターン。
+    const normalizedPrefix = prefix.endsWith('/') ? prefix : `${prefix}/`;
+    const allDocIds = new Set(allDocs.map((d) => d.id));
+    const docIdNamespaceOrphans = reverseOrphans.filter((p) => {
+      if (!p.startsWith(normalizedPrefix)) return false;
+      const segments = p.slice(normalizedPrefix.length).split('/');
+      if (segments.length < 2) return false;
+      if (!/^[A-Za-z0-9]{20}$/.test(segments[0])) return false;
+      // 同 ID の doc が存在しない場合のみ PR-B 由来候補 (set 失敗で doc 不在のはず)
+      return !allDocIds.has(segments[0]);
     });
-    if (pr_b_pattern_orphans.length > 0) {
+    if (docIdNamespaceOrphans.length > 0) {
       console.log(
-        `\n  PR-B namespace pattern (processed/{docId}/...): ${pr_b_pattern_orphans.length}`
+        `\n  docId namespace pattern (processed/{docId}/..., doc 不在): ${docIdNamespaceOrphans.length}`
       );
       console.log(
-        '  (PR-B 補償処理二段失敗 / 手動 Storage 操作で発生する可能性が高い候補)'
+        '  (Issue #432 PR-B 補償処理二段失敗 / 手動 Storage 操作で発生する可能性が高い候補)'
       );
     }
   }
