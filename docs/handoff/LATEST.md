@@ -21,10 +21,10 @@ session56 で起票した P0 Issue #432 (分割PDF Storage 設計バグ、kaname
 | 項目 | 内容 |
 |------|------|
 | Close 数 | 0 件 |
-| 起票数 | 0 件 (Issue #432 follow-up 3 件は本 Issue へコメント集約、Net 増加回避) |
+| 起票数 | 0 件 (Issue #432 follow-up 6 件は本 Issue へコメント集約、Net 増加回避) |
 | **Net 変化 (session57 単独)** | **0 件** |
 
-**Net 0 の進捗判定**: ✅ 正の構造的進捗。Issue #432 (P0) の 4 PR 計画 (A/B/C/D) のうち 3 件完了で、進行中破壊停止 + 新規発生ゼロ化 + 検出機構が完了。残る PR-C (マイグレーション、過去被害 90+ 件復旧) は destructive 操作のため kanameone 実行に番号認可必須 = 次セッションへ持越し。`feedback_issue_triage.md` の rating 5-6 機械起票には該当せず、follow-up 3 件 (audit reverse orphan logic / AC-B3 contract / segments rollback) はすべて Issue #432 にコメント集約することで散逸を回避。
+**Net 0 の進捗判定**: ✅ 正の構造的進捗。Issue #432 (P0) の 4 PR 計画 (A/B/C/D) のうち 3 件完了で、進行中破壊停止 + 新規発生ゼロ化 + 検出機構が完了。残る PR-C (マイグレーション、過去被害 90+ 件復旧) は destructive 操作のため kanameone 実行に番号認可必須 = 次セッションへ持越し。`feedback_issue_triage.md` の rating 5-6 機械起票には該当せず、follow-up 6 件 (audit reverse orphan logic / AC-B3 contract / segments rollback / contract test negative pattern 拡充 / コメントアウト bypass / rotatePdfPages scope 絞り) はすべて Issue #432 にコメント集約することで散逸を回避。
 
 ### 主要 PR
 
@@ -67,7 +67,7 @@ PR-B/PR-D の review で抽出した follow-up 計 6 件 (audit reverse orphan /
    - audit-storage-mismatch.js の cron 定期実行
    - ヘルスレポート 4 指標追加 (fileUrl 重複 / Storage path × docId 一意性 / parentDocumentId 関連欠損 / 回転履歴件数)
    - contract test の更広 negative pattern (`path.parse` / `substring` / `lastIndexOf`) + コメントアウト bypass 対策
-3. **generateFileName timestamp 引数完全削除** (caller 修正後の別 PR):
+3. **generateFileName timestamp 引数完全削除** (PR-C migration 完了後、旧 timestamp 引数の caller 残存ゼロを `tsc` で確認してから signature から削除する別 PR)
 4. **kaname / cocoro 運用者目視確認** (本番に新コード稼働の影響観測、受動待機)
 
 ### 残 Open Issue (4 件)
