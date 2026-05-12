@@ -711,6 +711,24 @@ function evaluateExpectations(opts: CliOptions, summary: SurveySummary): string[
   if (opts.expectAcroform && (summary.byCatalogFlag.acroform ?? 0) === 0) {
     failures.push(`--expect-acroform but no file has /AcroForm in catalog`);
   }
+  // Codex review #019e1e54 Important 2 反映: --expect-* 指定時は survey parse error
+  // (filesWithErrors) も failure 条件に含める。部分 parse 失敗 (1 file の load 例外
+  // 等) が起きた状態で「期待 filter が別 file で検出された」結果が exit 0 になり、
+  // partial result を全成功と誤認するアンチパターンを防ぐ。
+  // --expect-* が 1 つも指定されていない場合は survey only mode なので filesWithErrors
+  // による exit code 強制は行わない (caller が summary を見て判断)。
+  const expectModeActive =
+    opts.expectFilter.length +
+      opts.expectSubtype.length +
+      (opts.expectEncrypted ? 1 : 0) +
+      (opts.expectAcroform ? 1 : 0) >
+    0;
+  if (expectModeActive && summary.filesWithErrors > 0) {
+    failures.push(
+      `expect mode: ${summary.filesWithErrors}/${summary.totalFiles} file(s) had parse errors; ` +
+        `partial scan cannot satisfy strict --expect-* assertions safely`
+    );
+  }
   return failures;
 }
 

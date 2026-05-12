@@ -72,13 +72,20 @@ import * as crypto from 'crypto';
 export const HASH_ALGORITHM = 'pdf-page-visual-v2';
 
 /**
- * Catalog/Info metadata + Trailer /ID。
+ * Catalog/Info dict / Metadata stream の metadata + Trailer /ID。
  *
  * これらは PDF 生成時の timestamp / 製作者識別 / random ID であり、描画同一性に
- * 寄与しない。常時除外 (denylist) する。`PDFName.asString()` は先頭 `/` 付きで
- * 返るため、key も `/` 付きで保持する。
+ * 寄与しない。**dict の /Type が /Catalog or /Metadata に限定して** 除外する
+ * (Codex review #019e1e54 Important 4 反映: 全 dict に適用すると Resources 配下
+ * の `/Title` 等が誤って落ちる、AC21「未知 key 包含」と衝突)。`PDFName.asString()`
+ * は先頭 `/` 付きで返るため、key も `/` 付きで保持する。
+ *
+ * 注: 本 fingerprint の walk は Resources subtree を root にしており、Info /
+ * Catalog dict / Metadata stream には到達しない構造。よって scope 限定の denylist
+ * 適用は実質 no-op だが、将来 walk scope を拡張した際の cross-process determinism
+ * 保護として残す (defensive)。
  */
-const METADATA_DENYLIST = new Set([
+const CATALOG_INFO_METADATA_DENYLIST = new Set([
   '/Author',
   '/CreationDate',
   '/ModDate',
@@ -355,14 +362,18 @@ function decodeContentStream(stream: PDFStream): Uint8Array {
 /**
  * 任意 PDFStream の hash 用 bytes を取得。v2 の核心 fallback:
  *
- *   1. PDFRawStream かつ filter に unsupported (CCITT/JBIG2/JPX/DCT/Crypt) を含む
- *      → encoded bytes (.contents) を返す (decode 不要、describe via filter name)
+ *   1. PDFRawStream かつ stream.dict /Subtype === /Image かつ filter に unsupported
+ *      (CCITT/JBIG2/JPX/DCT) を含む → encoded bytes (.contents) を返す (decode 不要)
  *   2. PDFRawStream で supported filter のみ → decode して decoded bytes を返す
  *   3. 非 PDFRawStream (pdf-lib 生成側) → stream.getContents() (filter 不適用後の bytes)
  *   4. decode 例外:
- *      a. UnsupportedEncodingError (filter name から漏れた pdf-lib 未対応 encoding)
- *         → encoded bytes fallback
- *      b. それ以外 (Flate 壊れ / OOM / internal API 仕様変更 等の本物の構造異常)
+ *      a. UnsupportedEncodingError かつ stream.dict /Subtype === /Image
+ *         → encoded bytes fallback (filter list に出ない future image encoding 吸収)
+ *      b. UnsupportedEncodingError かつ /Subtype が /Image 以外
+ *         → throw (例: /Crypt は stream 単位の暗号化レイヤーで「visual equivalence」
+ *           とは別概念。encoded bytes で「偽 PASS」させると暗号化 stream が同 hex の
+ *           可能性が出る。Codex review #019e1e54 Critical 2 反映)
+ *      c. それ以外 (Flate 壊れ / OOM / internal API 仕様変更 等の本物の構造異常)
  *         → throw して caller (canonicalDigest の呼出元) で malformed 降格させる
  *         (silent-failure-hunter CRITICAL-1 反映: bare catch だと
  *         本物の構造異常を encoded bytes で「偽 PASS」させ MatchedByHash 誤判定の
@@ -377,16 +388,34 @@ function getStreamBytesForHash(
     return { mode: 'decoded', bytes: stream.getContents() };
   }
   const filters = listStreamFilters(stream);
-  const hasUnsupported = filters.some((f) => UNSUPPORTED_DECODE_FILTERS.has(f));
-  if (hasUnsupported) {
+  const isImageXObject = isImageXObjectStream(stream);
+  const hasUnsupportedDecode = filters.some((f) => UNSUPPORTED_DECODE_FILTERS.has(f));
+  if (hasUnsupportedDecode) {
+    if (!isImageXObject) {
+      // Codex review Critical 2 反映: /Crypt 等 non-image unsupported filter の stream
+      // は「visual equivalence」枠で encoded fallback してはならない (暗号化 stream
+      // を可視 image stream と同列で hash すると偽 MatchedByHash の余地が出る)。
+      // caller で malformed 降格させる。
+      throw new Error(
+        `getStreamBytesForHash: unsupported filter ${filters.join(',')} on non-image stream ` +
+          `(subtype=${getStreamSubtype(stream) ?? '<missing>'}); refusing encoded fallback`
+      );
+    }
     return { mode: 'encoded', bytes: stream.contents };
   }
   try {
     return { mode: 'decoded', bytes: decodePDFRawStream(stream).decode() };
   } catch (err) {
     if (err instanceof UnsupportedEncodingError) {
-      // pdf-lib から「未対応 encoding」として明示的に通知された場合のみ encoded fallback。
-      // filter list に出ない future encoding (e.g. /CryptV2) も含めて吸収する。
+      if (!isImageXObject) {
+        // /Subtype が /Image 以外で未知 encoding 検出 → image visual equivalence の
+        // 経路から外す (Codex Critical 2 反映、image XObject 以外は decode 不能 = 構造異常)
+        throw new Error(
+          `getStreamBytesForHash: pdf-lib UnsupportedEncodingError on non-image stream ` +
+            `(subtype=${getStreamSubtype(stream) ?? '<missing>'}): ${err.message}`
+        );
+      }
+      // image XObject に限定して、filter list から漏れた future encoding を吸収。
       return { mode: 'encoded', bytes: stream.contents };
     }
     // 本物の構造異常 (Flate 壊れ / RangeError / TypeError / pdf-lib upgrade 仕様変更等)
@@ -397,6 +426,21 @@ function getStreamBytesForHash(
       )}): ${(err as Error).message}`
     );
   }
+}
+
+function getStreamSubtype(stream: PDFStream): string | null {
+  const entry = stream.dict.get(PDFName.of('Subtype'));
+  return entry instanceof PDFName ? entry.asString() : null;
+}
+
+function isImageXObjectStream(stream: PDFStream): boolean {
+  const subtype = getStreamSubtype(stream);
+  if (subtype !== '/Image') return false;
+  const type = stream.dict.get(PDFName.of('Type'));
+  // /Type=/XObject 明示 or /Type 省略 (PDF spec 上 /Subtype /Image があれば /XObject
+  // とみなせる慣用) のいずれかを許容
+  if (type === undefined) return true;
+  return type instanceof PDFName && type.asString() === '/XObject';
 }
 
 function listStreamFilters(stream: PDFStream): string[] {
@@ -457,13 +501,17 @@ export function canonicalDigest(obj: PDFObject, context: PDFContext): Buffer {
   return sha.digest();
 }
 
-function getScopedDenylist(dict: PDFDict): Set<string> | null {
+function getScopedDenylists(dict: PDFDict): ReadonlyArray<Set<string>> {
   const type = dict.get(PDFName.of('Type'));
-  if (!(type instanceof PDFName)) return null;
+  if (!(type instanceof PDFName)) return [];
   const typeName = type.asString();
-  if (typeName === '/Page' || typeName === '/Pages') return PAGE_TREE_SCOPED_DENYLIST;
-  if (typeName === '/Outlines' || typeName === '/Outline') return OUTLINE_SCOPED_DENYLIST;
-  return null;
+  const out: Array<Set<string>> = [];
+  if (typeName === '/Page' || typeName === '/Pages') out.push(PAGE_TREE_SCOPED_DENYLIST);
+  if (typeName === '/Outlines' || typeName === '/Outline') out.push(OUTLINE_SCOPED_DENYLIST);
+  if (typeName === '/Catalog' || typeName === '/Metadata') {
+    out.push(CATALOG_INFO_METADATA_DENYLIST);
+  }
+  return out;
 }
 
 function walk(
@@ -495,12 +543,11 @@ function walk(
     return;
   }
   if (obj instanceof PDFDict) {
-    const scopedDenylist = getScopedDenylist(obj);
+    const scopedDenylists = getScopedDenylists(obj);
     const filteredEntries: Array<[PDFName, PDFObject]> = [];
     for (const [k, v] of obj.entries()) {
       const key = k.asString();
-      if (METADATA_DENYLIST.has(key)) continue;
-      if (scopedDenylist !== null && scopedDenylist.has(key)) continue;
+      if (scopedDenylists.some((dl) => dl.has(key))) continue;
       filteredEntries.push([k, v]);
     }
     // Critical (code-reviewer PR #441 review): localeCompare は OS locale / ICU データ版

@@ -311,10 +311,12 @@ function runChildFingerprint(
         kind: string;
         hex?: string;
         reason?: string;
+        algorithm?: string;
       };
-      // silent-failure-hunter CRITICAL-3 反映: child stdout の整合性を検証する。
-      // partial JSON / 想定外 kind / 不正 hex を「kind=failed」として顕在化させ、
-      // verifyOne 側で cross-process mismatch と取り違えない経路に流す。
+      // silent-failure-hunter CRITICAL-3 + Codex review #019e1e54 Important 3 反映:
+      // child stdout の整合性を検証する。partial JSON / 想定外 kind / 不正 hex /
+      // algorithm 不一致を「kind=failed」として顕在化させ、verifyOne 側で
+      // cross-process mismatch と取り違えない経路に流す。
       if (parsed.kind !== 'ok' && parsed.kind !== 'unsupported') {
         return {
           hex: null,
@@ -324,7 +326,22 @@ function runChildFingerprint(
           reason: `child returned unexpected kind=${parsed.kind}`,
         };
       }
-      if (parsed.kind === 'ok' && (typeof parsed.hex !== 'string' || parsed.hex.length !== 64)) {
+      // algorithm 一致確認 (parent と child で同 algorithm version を保証、
+      // pdf-lib upgrade / module path 差等で別 algorithm が出る事故を catch)
+      if (parsed.algorithm !== HASH_ALGORITHM) {
+        return {
+          hex: null,
+          stderr: `${proc.stderr || ''}\nchild algorithm=${parsed.algorithm} !== parent ${HASH_ALGORITHM}`,
+          exitCode: proc.status,
+          kind: 'failed',
+          reason: `child algorithm mismatch: ${parsed.algorithm}`,
+        };
+      }
+      // hex 形式厳密検証: 64-char 0-9 a-f のみ (sha256 hex)
+      if (
+        parsed.kind === 'ok' &&
+        (typeof parsed.hex !== 'string' || !/^[0-9a-f]{64}$/.test(parsed.hex))
+      ) {
         return {
           hex: null,
           stderr: `${proc.stderr || ''}\nchild ok but hex invalid: ${JSON.stringify(parsed.hex)}`,
