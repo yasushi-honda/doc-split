@@ -1,8 +1,117 @@
 # ハンドオフメモ
 
-**更新日**: 2026-05-12 session61 (**Issue #432 PR-C2-execution A 完遂 + PR-C3 計画 Codex MCP 起案済、Net 0**。kanameone 本番 classify で 135 docs 全件 `unsupported-resource-filter: /CCITTFaxDecode stream encoding not supported` が判明し、Ambiguous → Gate 0 reject。ユーザー判断「A+B ハイブリッド」採用: A = RepairableMissingFile 4 件 (op-0136~op-0139) を番号認可で execute (✅ 全件 regenerate-from-parent + docId namespace に save 成功、post-audit で fileUrl orphan 4→0)、B = 残 135 Ambiguous は PR-C3 で対応。**PR #442 merged** で workflow 改修 3 件 + handoff session61 entry を main 反映。**dev フルリハーサル 6 stage** で workflow 改修部分の実機動作確認 (PR-C1/PR-C2 で 3 連続見落としていた `execute まで dev 検証` を初補完、memory `feedback_destructive_ci_dev_rehearsal.md` 新規)。**PR-C3 計画は Codex MCP read-only セカンドオピニオン経由で起案済** (threadId `019e1b56-5cc7-76d0-b156-83549e833a71`): 主戦略 = `pdf-page-visual-v2` (CCITT/JBIG2/DCT/JPX を decode せず encoded bytes hash)、補助 = PDF feature survey、fallback = OCR hint + 手動 UI。5 段階 PR 分割 (C3a-C3e)。次セッションは PR-C3a (feature survey) 着手 + reverse orphan 1 件調査)
-**ブランチ**: `docs/pr-c3-codex-plan` (PR-C3 計画 Codex 起案 handoff 追記、PR 化中)
-**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + (session29-55 累積実績は archive 参照) + Phase 8 (session56 = 分割PDF Storage 設計バグ調査、Net -1) + Phase 8 (session57 = Issue #432 PR-A/B/D 完遂、Net 0) + Phase 8 (session58 = Issue #432 PR-C1 完遂、Net 0) + Phase 8 (session59 = PR-C1 設計欠陥発覚 + PR-C2 v2 計画確定、Net 0) + Phase 8 (session60 = Issue #432 PR-C2 v2 完遂、Net 0) + **Phase 8 (session61 = Issue #432 PR-C2-execution A 部分完遂 + PR-C3 計画必要、Net 0)** 完遂
+**更新日**: 2026-05-12 session62 (**Issue #432 PR-C3 計画 Codex 2 段階セカンドオピニオン経由で AC 21 項目に再起案 + session61 復旧 4 docs post-audit 完遂 + PR-D Issue #445 起票、Net +1**。Task #1 = `audit-session61-parent-provenance.js` (read-only) で kanameone 本番 4 docs を遡及検証 → verdict suspect 4/4 (rotation 後親から regenerate、provenance 未保存)、PR #444 merged。Task #2 = Codex MCP セカンドオピニオン 2 thread (旧 `019e1bc6-...` で Codex Critical 2 + 提案 6、新 `019e1c1e-...` で Critical 追加 4) を impl-plan 再起案に反映、AC 12→21 項目拡充。**核心修正 = AC19 (MatchedByHash は provenance 不要 / RepairableMissingFile + collision loser regenerate のみ provenance verified 必須)**、AC18 (provenance verified 6 fields 全一致)、AC20 (人工 fixture + 生成不能 feature の固定 synthetic 補完)、AC21 (denylist scope 限定)。Task #3 = PR-D Issue #445 起票 (ユーザー明示指示 #5 + rating 9 + confidence 95 triage クリア)、fileName identity 排除 + docId namespace identity + provenance fields 必須化のデータモデル正規化。**handoff archive 全体 + Issue #432 全コメント grep 確認で本番 LostOrUnrecoverable 0 件 = 完全破損ケースなし** 確定。次セッションは PR-C3a (feature survey + cross-process determinism 検証、read-only) and/or PR-D1 (データモデル設計 ADR + 型定義、read-only) 並行着手候補)
+**ブランチ**: `docs/session62-handoff` (本 session62 entry 追記、PR 化中)
+**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + (session29-55 累積実績は archive 参照) + Phase 8 (session56-60 = Issue #432 PR-A〜PR-C2 v2 段階完遂、Net -1) + Phase 8 (session61 = Issue #432 PR-C2-execution A 部分完遂 + CCITTFaxDecode 設計限界判明、Net 0) + **Phase 8 (session62 = Issue #432 PR-C3 計画 AC 21 項目に再起案 + session61 post-audit + PR-D 起票、Net +1)** 完遂
+
+<a id="session62"></a>
+## ✅ session62 完了サマリー (2026-05-12: Issue #432 PR-C3 再起案 + post-audit + PR-D 起票、Net +1)
+
+session61 の handoff 確認後、ユーザー指摘「いまのアプローチで本当に大丈夫か?」「破壊的にならず、kaname 問題解消、dev 主体、各クライアント等価運用」の 4 要件を構造的に満たすか再点検。Codex MCP セカンドオピニオン 2 thread を経由して PR-C3 計画の重大盲点を発見、AC を 12→21 項目に拡充。並行で session61 で execute した 4 docs の親 PDF provenance を遡及検証し、`verdict: suspect` 4/4 (rotation 痕跡) を確定。データモデル正規化 (fileName を identity に使わない) の根本対策を PR-D Issue #445 として起票。
+
+### 経緯
+
+1. **問題提起**: ユーザー指摘「破壊的にならず、kaname の問題対応を修正できて、dev が主となり他の各クライアントは基本は dev の内容を反映されているだけの状態。新しいクライアントが追加されても問題なく等しく運用が可能な状況となっているか?」→ 現 PR-C3 計画 (先行 Codex thread `019e1b56-...`) に 4 弱点を私が検出 (dev fixture 特化 / feature survey gate 未明記 / cross-process determinism 未検証 / kanameone 直行順序)
+2. **Codex MCP セカンドオピニオン #1 (`019e1bc6-...`)**: 私の 4 弱点を Critical 2 (feature survey gate / cross-process determinism) + Important 2 に再評価、私の検出漏れ Critical 2 件追加 (親 PDF provenance gate / v2 fingerprint denylist 厳密化)、根本指摘 E (PR-C3 は修復アルゴリズム、新規クライアント運用には PR-D データモデル正規化が必須)
+3. **案 D 採択**: B (post-audit) → A (PR-C3 再起案) + PR-D 並行起票
+4. **Task #1 (post-audit)**: `scripts/audit-session61-parent-provenance.js` 新規 (read-only)、`.github/workflows/run-ops-script.yml` choice 追加 + `--out` 強制付与 + artifact upload。CI SA に `roles/logging.viewer` 未付与確認 (Cloud Logging 経路 scope 外)。dev で graceful skip (target docs 不在で exit 0) → kanameone 実機で **verdict: suspect 4/4** (parent metageneration=2 + updated≠timeCreated + rotatedAt 痕跡 + Storage path `_r<timestamp>` suffix = rotation 後親から regenerate)。**PR #444 merged**
+5. **被害深刻度確認**: ユーザー質問「PDF ファイル自体が完全破損して復旧不可能など深刻なことは?」→ handoff archive 全体 (4498 行) + Issue #432 全 3 コメント grep 確認で **本番 LostOrUnrecoverable 0 件**、reverse orphan 1 件は Storage 実体生存。「完全復旧不可能」ケースなし確定
+6. **Task #2 (PR-C3 再起案)**: `/impl-plan` で 5 段階分割 (C3a-C3e) + AC 17 項目 (旧 12 + Codex #1 + Critical 2 反映) を起案
+7. **Codex MCP セカンドオピニオン #2 (`019e1c1e-...`)**: 新 thread で再評価 → **Critical 4 件追加 (AC18-21)**。特に **AC19 = 私の重大見落とし**: 初稿は「provenance verified 必須」を全 destructive action に課す設計だったが、それだと legacy 135 docs 全件 Ambiguous 降格で PR-C3 主目的失敗 → 正解は「MatchedByHash migrate-to-namespace は provenance 不要 (v2 fingerprint 一致が証拠)、RepairableMissingFile + collision loser regenerate のみ provenance verified 必須」の分離
+8. **AC 21 項目最終形確定**: Issue #432 [#issuecomment-4430509019](https://github.com/yasushi-honda/doc-split/issues/432#issuecomment-4430509019) に追記
+9. **Task #3 (PR-D 起票)**: Issue #445 起票、fileName identity 排除 + docId namespace identity + provenance fields 必須化 + rotatePdfPages 構造的修正 + backfill + 型/lint 禁止の 5 段階分割 (PR-D1〜D5)、PR-C3 との並行可能性明示 (PR-D 未完成でも PR-C3 は legacy Ambiguous 降格 or MatchedByHash 救済で動作)
+
+### Issue Net 変化
+
+| 項目 | 内容 |
+|------|------|
+| Close 数 | 0 件 |
+| 起票数 | 1 件 (Issue #445 - ユーザー明示指示 #5 + rating 9 + confidence 95、構造的予防の長期 Issue) |
+| **Net 変化 (session62 単独)** | **+1 件** |
+
+**Net +1 の進捗判定**: 構造的予防策の起票 + 長期戦略の文書化として KPI 例外 (CLAUDE.md「Net ≤ 0 は進捗ゼロ扱い」の triage 基準 #5 該当)。session61 復旧の安全性確認 + PR-C3 計画の致命的盲点修正 + 新規クライアント運用の根本対策設計確立で、本セッションは Issue #432 全体の終結に向けた構造進捗大 (執行可能設計に到達)。
+
+### Codex MCP セカンドオピニオン 2 段階で得た核心修正
+
+#### 修正 1: AC19 (RepairableMissingFile / MatchedByHash の分離)
+
+| 分類 | destructive action | provenance 要否 | 根拠 |
+|---|---|---|---|
+| **MatchedByHash** | `migrate-to-namespace` | **不要** | actual と expected の v2 fingerprint 一致自体が証拠 |
+| **RepairableMissingFile** | `regenerate-from-parent` | **verified 必須** | 親 PDF 内容と過去 split の整合が必要 |
+| **collision loser** | `regenerate-from-parent` | **verified 必須** | 同上 |
+| **Ambiguous** | — (operator approval) | — | — |
+
+→ kaname 135 docs の大半は MatchedByHash で救済可能、誤復旧リスクが残る operation のみ provenance gate で守る分離。
+
+#### 修正 2: AC18 (provenance verified 6 fields 全一致)
+
+```
+parentDocumentId + splitFromPages + sourcePath + sourceBucket + generation + metageneration + sourceSha256
+```
+
+すべて一致して初めて `verified`。1 fields でも mismatch → Ambiguous + manual approval 降格。
+
+#### 修正 3: AC20 (人工 fixture + 固定 synthetic 補完)
+
+pdf-lib は CCITT/JBIG2/JPX/encrypted のネイティブ生成困難 → 生成不能 feature は固定 synthetic/minimal fixture or PII なし公開合成 sample で補完、fixture が survey で実際の `/Filter` を含むことを assert する test 必須。
+
+#### 修正 4: AC21 (denylist scope 限定)
+
+`/Parent` `/Prev` `/Next` `/First` `/Last` のグローバル除外禁止、Page tree / outline navigation / internal structural refs のみ scope 限定で除外。
+
+### session61 復旧 4 docs の評価 (Task #1 結果)
+
+| op | docId | parent | verdict | reasons |
+|---|---|---|---|---|
+| op-0136 | Lso7jEXzWxBjU4Cj6zqR | Xe6jCKoTk4yflHqefDtb | suspect | parent.metageneration=2 + updated≠timeCreated + rotatedAt 痕跡 + path `_r1778338356121` |
+| op-0137 | M7i4Nx6khiYEo2KTGJHg | EkZ6bwIM3ji17UugWeEr | suspect | 同上 (path `_r1778339907915`) |
+| op-0138 | U4Lf5ZPNA4IyH73SXE2P | FIGbegoDvfaUTO2cYHkI | suspect | 同上 (path `_r1778338966269`) |
+| op-0139 | gifjllJ57Sx58TktzHCf | EkZ6bwIM3ji17UugWeEr | suspect | 同上 (path `_r1778339907915`) |
+
+**3 親 PDF いずれも fileUrl が rotation 後の path (`_r<timestamp>` suffix) を指す**。session61 execute は rotation 後の親から regenerate しており、Codex 指摘「split 時の親と現在の親が同一」を満たしていない。視覚比較による rotation 前 内容との照合は backup 不在で構造的不能、ユーザー判断で **「rotation がページ内容保持 (向きのみ) なら復旧結果は実質正しい」前提で運用継続、将来予防 (PR-C3 + PR-D) に集中**の割り切り。
+
+### 主要 PR / 実行記録
+
+| 項目 | 値 |
+|---|---|
+| Task #1 PR | **PR #444 merged** (`6d42ad9`、audit script 334 行 + workflow 21 行) |
+| Task #2 成果 | Issue #432 [#issuecomment-4430509019](https://github.com/yasushi-honda/doc-split/issues/432#issuecomment-4430509019) (AC 21 項目 + 5 段階分割 + provenance 設計) |
+| Task #3 成果 | **Issue #445 起票** ([P1] データモデル正規化、bug+enhancement+P1) |
+| Codex MCP thread (旧) | `019e1bc6-bbd9-7580-9442-08f8f534fd72` (PR-C3 6 提案 + Critical 2 + 根本指摘 E) |
+| Codex MCP thread (新) | `019e1c1e-0fc8-70d1-a633-051f7521c4ee` (PR-C3 再起案再評価、Critical 4 件追加) |
+| 本 PR (session62 handoff) | `docs/session62-handoff` (本 PR、handoff 追記) |
+| kanameone audit run id | 25730687772 (✅ verdict suspect 4/4 確定) |
+| dev smoke test run id | 25730427085 (✅ graceful skip exit 0) |
+
+### Codex Important 指摘 (PR-C3 実装時注意)
+
+- denylist 対象 dict scope を Page tree / outline / annotation で別管理 (実装時の lint check)
+- image XObject survey で `/Filter` 配列, 複数 filter, `/DecodeParms` 配列, indirect object, `/Alternates`, `/SMaskInData`, `/Matte`, `/OPI` を可視化
+- `metageneration` 変化での mismatch 判定は自動復旧率低下するため runbook 明記
+
+### handoff サイズ最適化 (次セッション持越し)
+
+LATEST.md が現時点 649 行 (目標 500 行超過)。session56-58 (PR-A/B/D + PR-C1 完遂) を archive/2026-05-history.md へ移動する作業を次セッション開始時に実施 (本セッションは session62 entry 追加優先で size 削減は持越し)。
+
+### 残 Open Issue (5 件)
+
+| # | タイトル要約 | 状態 | 再開条件 |
+|---|---|---|---|
+| **#432** | [P0] 分割PDF 設計バグ | **PR-A/B/C1/C2/C2-execution-A/D + post-audit 完了、PR-C3 計画 AC 21 項目確定** | 次セッションで PR-C3a (read-only) 着手 |
+| **#445** | [P1] データモデル正規化 (Issue #432 根本対策) | **本セッション起票、設計フェーズ** | 次セッションで PR-D1 (ADR + 型定義) 着手候補 |
+| #402 | searchDocuments OOM ガード + 計測ログ | 段階1 完了、段階2/3 観測待ち | 観測データ判断 |
+| #251 | summaryGenerator unit test + buildSummaryPrompt 分離 | Scope 2 完了、Scope 1/3 待機 | sinon 導入伴う他タスク or Vertex AI false negative |
+| #238 | force-reindex 孤児 posting 検出モード | drift 実発生未観測 | ADR-0015 silent failure metric ERROR or 削除済書類ヒット報告 |
+
+### 次セッション着手項目
+
+PR-C3a と PR-D1 は両方 read-only で並行可能。ユーザー判断:
+
+1. **PR-C3a 実装** (Issue #432): `scripts/verify-pdf-determinism.ts` 新規 (cross-process invariance 検証、pdf-lib `embedPdf` の encoded bytes 保持を実証) + `scripts/pdf-feature-survey.ts` 新規 (本番 PDF の `/Filter` 分布事前列挙)。AC17 先行で C3b 着手前に main merge 必須。dev run で実証完了が完了条件
+2. **PR-D1 実装** (Issue #445): データモデル設計 ADR 起案 + Firestore schema 文書化 + TypeScript 型定義 (fileName を identity に使わない型強制の設計)
+3. **handoff サイズ最適化**: session56-58 を archive/2026-05-history.md へ移動 (LATEST.md を 500 行以下に削減)
+4. **Issue #432 reverse orphan 1 件** (`processed/20260413_未判定_未判定_p27-28.pdf`) 調査 (low priority、follow-up)
 
 <a id="session61"></a>
 ## ✅ session61 完了サマリー (2026-05-12: Issue #432 PR-C2-execution A 部分完遂、Net 0)
