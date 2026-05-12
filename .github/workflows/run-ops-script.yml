@@ -56,6 +56,8 @@ on:
           - classify-collision-docs
           - setup-collision-fixture --dev
           - setup-collision-fixture --dev --cleanup
+          - execute-collision-migration --dry-run
+          - execute-collision-migration --execute
       doc_id:
         description: 'Document ID (required when script contains --doc-id; ignored otherwise)'
         required: false
@@ -96,6 +98,11 @@ on:
           - 'true'
       expected_count:
         description: 'cleanup-office-name: 影響件数の事前確認（数値；省略時はチェック無効、指定時は不一致で中断）'
+        required: false
+        type: string
+        default: ''
+      exec_args_json:
+        description: 'execute-collision-migration: JSON {"planRunId":"<classify run id>","approvedOperationIds":["op-0001",...]}'
         required: false
         type: string
         default: ''
@@ -192,6 +199,102 @@ jobs:
           echo "Script: $SCRIPT_NAME"
           echo "Args: $SCRIPT_ARGS"
 
+      - name: Parse execute-collision-migration args
+        # Issue #432 PR-C2-execution: exec_args_json から planRunId と
+        # approvedOperationIds を抽出する。後段の Download artifact + Generate
+        # approval JSON で参照。
+        id: parse_exec
+        if: ${{ startsWith(github.event.inputs.script, 'execute-collision-migration') }}
+        env:
+          EXEC_ARGS_JSON: ${{ github.event.inputs.exec_args_json }}
+          SCRIPT_NAME: ${{ steps.parse.outputs.script_name }}
+        run: |
+          set -euo pipefail
+          if [ -z "$EXEC_ARGS_JSON" ]; then
+            echo "ERROR: exec_args_json is required when script is execute-collision-migration" >&2
+            exit 1
+          fi
+          # JSON validate + 抽出 (jq は ubuntu-latest に標準搭載)
+          if ! echo "$EXEC_ARGS_JSON" | jq empty 2>/dev/null; then
+            echo "ERROR: exec_args_json is not valid JSON" >&2
+            exit 1
+          fi
+          PLAN_RUN_ID=$(echo "$EXEC_ARGS_JSON" | jq -r '.planRunId // empty')
+          OPERATION_IDS=$(echo "$EXEC_ARGS_JSON" | jq -r '.approvedOperationIds // empty | join(",")')
+          if [ -z "$PLAN_RUN_ID" ] || [ -z "$OPERATION_IDS" ]; then
+            echo "ERROR: exec_args_json must contain planRunId (string) and approvedOperationIds (array)" >&2
+            exit 1
+          fi
+          # planRunId は GitHub Actions run id (数字のみ) — path traversal / injection 防止
+          if ! echo "$PLAN_RUN_ID" | grep -qE '^[0-9]+$'; then
+            echo "ERROR: planRunId must be a numeric run id (got: $PLAN_RUN_ID)" >&2
+            exit 1
+          fi
+          # operationId は op-NNNN 形式のみ許可
+          if ! echo "$OPERATION_IDS" | grep -qE '^op-[0-9]+(,op-[0-9]+)*$'; then
+            echo "ERROR: approvedOperationIds must each match ^op-[0-9]+$ (got: $OPERATION_IDS)" >&2
+            exit 1
+          fi
+          echo "plan_run_id=$PLAN_RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "operation_ids_csv=$OPERATION_IDS" >> "$GITHUB_OUTPUT"
+          echo "Plan run id: $PLAN_RUN_ID"
+          echo "Approved operation ids: $OPERATION_IDS"
+
+      - name: Download classify-collision-docs plan artifact
+        # exec_args_json.planRunId で指定された前段 classify run の plan-output.json を取得。
+        # Artifact 名は upload 側 (上記 Upload step) と一致させる。
+        if: ${{ startsWith(github.event.inputs.script, 'execute-collision-migration') }}
+        uses: actions/download-artifact@v4
+        with:
+          name: classify-collision-docs-plan-${{ github.event.inputs.environment }}-${{ steps.parse_exec.outputs.plan_run_id }}
+          path: ${{ github.workspace }}/.exec-plan
+          run-id: ${{ steps.parse_exec.outputs.plan_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate approval JSON from plan + approved operation ids
+        # plan-output.json の operations 配列から approvedOperationIds に該当する op を
+        # 抽出し、その planId + opIds + (sourcePath/destPath を gs://bucket/path で展開) を
+        # approval.json に書き出す。execute-collision-migration.ts の Gate 1-3 を満たす形式。
+        if: ${{ startsWith(github.event.inputs.script, 'execute-collision-migration') }}
+        env:
+          OPERATION_IDS_CSV: ${{ steps.parse_exec.outputs.operation_ids_csv }}
+          STORAGE_BUCKET: ${{ steps.resolve.outputs.storage_bucket }}
+        run: |
+          set -euo pipefail
+          PLAN_FILE="${GITHUB_WORKSPACE}/.exec-plan/plan-output.json"
+          APPROVAL_FILE="${GITHUB_WORKSPACE}/.exec-plan/approval.json"
+          if [ ! -f "$PLAN_FILE" ]; then
+            echo "ERROR: plan-output.json not found at $PLAN_FILE" >&2
+            exit 1
+          fi
+          # CSV → JSON array of strings
+          OP_IDS_JSON=$(echo "$OPERATION_IDS_CSV" | jq -R 'split(",")')
+          # planId は plan から、approvedPaths は該当 op の sourcePath/destPath を gs:// 形式で集合化
+          jq --argjson opids "$OP_IDS_JSON" --arg bucket "$STORAGE_BUCKET" '
+            {
+              planId: .planId,
+              approvedOperationIds: $opids,
+              approvedPaths: [
+                .operations[]
+                | select(.operationId as $id | $opids | index($id))
+                | (.sourcePath, .destPath)
+                | select(. != null and . != "")
+                | "gs://\($bucket)/\(.)"
+              ] | unique
+            }
+          ' "$PLAN_FILE" > "$APPROVAL_FILE"
+          # 確認用 (path をログに出すことで監査証跡を残す)
+          echo "=== Generated approval.json ==="
+          cat "$APPROVAL_FILE"
+          echo "==============================="
+          # approvedOperationIds の数 = 入力 opId 数 を検証 (plan に存在しない opId は警告)
+          INPUT_COUNT=$(echo "$OP_IDS_JSON" | jq 'length')
+          MATCHED_COUNT=$(jq '[.operations[] | select(.operationId as $id | ('"$OP_IDS_JSON"' | index($id))) ] | length' "$PLAN_FILE")
+          if [ "$INPUT_COUNT" != "$MATCHED_COUNT" ]; then
+            echo "ERROR: $INPUT_COUNT operation ids requested but only $MATCHED_COUNT matched in plan" >&2
+            exit 1
+          fi
+
       - name: Run script
         env:
           ENVIRONMENT: ${{ github.event.inputs.environment }}
@@ -257,6 +360,17 @@ jobs:
             NODE_PATH=./functions/node_modules \
               FIREBASE_PROJECT_ID="$PROJECT_ID" \
               node "scripts/${SCRIPT_NAME}.js" "${ARGS[@]}"
+          elif [ "$SCRIPT_NAME" = "execute-collision-migration" ]; then
+            # Issue #432 PR-C2-execution: plan + approval を前段 step で artifact 取得 + 生成。
+            # SCRIPT_ARGS は workflow_dispatch の choice に応じて "--dry-run" or "--execute"。
+            cd scripts
+            NODE_PATH=../functions/node_modules \
+              FIREBASE_PROJECT_ID="$PROJECT_ID" \
+              STORAGE_BUCKET="$STORAGE_BUCKET" \
+              npx ts-node "${SCRIPT_NAME}.ts" \
+                --plan "${GITHUB_WORKSPACE}/.exec-plan/plan-output.json" \
+                --approval "${GITHUB_WORKSPACE}/.exec-plan/approval.json" \
+                $SCRIPT_ARGS
           elif [ "$SCRIPT_NAME" = "backfill-display-filename" ] || \
                [ "$SCRIPT_NAME" = "classify-collision-docs" ] || \
                [ "$SCRIPT_NAME" = "setup-collision-fixture" ]; then
