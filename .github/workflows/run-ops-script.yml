@@ -262,11 +262,18 @@ jobs:
                [ "$SCRIPT_NAME" = "setup-collision-fixture" ]; then
             # Issue #432 PR-C 系 script は scripts/lib/* (TypeScript) に依存するため
             # ts-node 経由で実行。STORAGE_BUCKET は resolve step で env 化済。
+            EXTRA_ARGS=""
+            if [ "$SCRIPT_NAME" = "classify-collision-docs" ]; then
+              # ログマスキングで `{` が `***` に置換されるため、plan JSON を
+              # ファイル出力 → upload-artifact で取得する経路を必須化。
+              # workflow_dispatch の choice には --out を含めず、ここで強制付与する。
+              EXTRA_ARGS="--out ${GITHUB_WORKSPACE}/scripts/plan-output.json"
+            fi
             cd scripts
             NODE_PATH=../functions/node_modules \
               FIREBASE_PROJECT_ID="$PROJECT_ID" \
               STORAGE_BUCKET="$STORAGE_BUCKET" \
-              npx ts-node "${SCRIPT_NAME}.ts" $SCRIPT_ARGS
+              npx ts-node "${SCRIPT_NAME}.ts" $SCRIPT_ARGS $EXTRA_ARGS
           elif [ "$SCRIPT_NAME" = "inspect-document" ]; then
             # SCRIPT_ARGS は workflow_dispatch で選んだ "--file-name" / "--doc-id" / "... --include-related"
             # FILE_NAME / DOC_ID は env 経由で受け取り、配列に積んで execv 渡しでシェル展開を経由しない
@@ -302,3 +309,15 @@ jobs:
               FIREBASE_PROJECT_ID="$PROJECT_ID" \
               node "scripts/${SCRIPT_NAME}.js" $SCRIPT_ARGS
           fi
+
+      - name: Upload classify-collision-docs plan artifact
+        # Issue #432 PR-C2-execution: log の secret masking で `{` → `***` 置換で plan JSON
+        # を log から再構成できないため、artifact 経由で受け渡す。classify-collision-docs
+        # 実行時のみ動作 (Run script step で `--out` を強制付与した出力ファイル)。
+        if: ${{ github.event.inputs.script == 'classify-collision-docs' && always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: classify-collision-docs-plan-${{ github.event.inputs.environment }}-${{ github.run_id }}
+          path: scripts/plan-output.json
+          if-no-files-found: warn
+          retention-days: 30
