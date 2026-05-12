@@ -621,3 +621,206 @@ PR-B/PR-D の review で抽出した follow-up 計 6 件 (audit reverse orphan /
 | kanameone | 5,725 | 211 | 145 | **4** (processed:3 + error:1) | **39 groups** |
 | cocoro | 539 | 23 | 23 | 0 | 0 groups |
 
+<a id="session60"></a>
+## ✅ session60 完了サマリー (2026-05-12: Issue #432 PR-C2 v2 完遂、Net 0)
+
+session59 で確定した PR-C2 v2 計画 (pdf-page-visual-v1 fingerprint) を 1 セッションで実装完了。Codex MCP セカンドオピニオン + 5 並列 review の 2 段品質ゲートで Critical 3 + Important 9 + Suggestion 7 を反映し、dev 通し検証で cross-process MatchedByHash 成立を実証。PR-C1 (sha256 同一プロセス前提) で 0 件だった MatchedByHash が PR-C2 (visual fingerprint) で 1 件成立し、kanameone 90+ docs 自動復旧の前提条件が満たされた。
+
+### 経緯
+
+1. **PR-C2 v2 計画反映 (commit `0a06d82`)**: session59 handoff の Codex セカンドオピニオン (Critical 3 + Important 5 + Suggestion 4) を実装に反映し、scripts/lib/pdfPageVisualFingerprint.ts + cross-process spawn test を新規追加。HASH_ALGORITHM='pdf-page-visual-v1' で plan 記録 + execute gate (AC13)。8 files / +1215/-59 行。
+2. **PR #441 作成 + Codex MCP セカンドオピニオン (commit `1e5988f`)**: PR 作成後 `/codex review` MCP (threadId `019e194d-...`) で Critical 1 (annotations 偽陽性) + Important 4 (DCTDecode/JPXDecode 未対応 / visited recursion stack 化 / UserUnit+Group / pdfLibVersion gate) + Suggestion 3 (CropBox MediaBox fallback / AmbiguousReasonKind drift / UnsupportedReason re-export) を発見・反映。7 files / +282/-33 行。
+3. **5 並列 review (commit `6829932`)**: `/review-pr all parallel` で code-reviewer + pr-test-analyzer + silent-failure-hunter + type-design-analyzer + comment-analyzer を並列実行:
+   - **Critical 2 (本番展開ブロッカー)**: ① localeCompare cross-machine 非決定性 → byte-order sort (PR の自称ゴールを破る欠陥)、② spawnSync error/signal/missing outTmp/empty buffer 握りつぶし → 全 4 ケースで明示 throw
+   - **Important 5**: canonicalDigest catch-all を malformed/unsupported-resource-filter 分類、buildDocEvidence catch-all を permanent unsupported.malformed に降格、AC13 gate unit test 5 件追加 (subprocess spawn で gate reject 検証)、gate 数表記 (4 重 → 多重 7 種) 統一、AmbiguousReasonString を template literal type で型強制
+   - **Suggestion 1**: runbook の Ambiguous reason 表を annotations / unsupported-resource-filter 別行に分割
+4. **dev 通し検証 (GitHub Actions workflow_dispatch)**: setup-collision-fixture --dev → classify-collision-docs → 5 分類完全確認 → setup-collision-fixture --dev --cleanup の 3 stage 全成功。run IDs: 25703807428 / 25703906827 / 25704019664
+5. **PR #441 merged**: squash merge `2dc0867`、9 files / +1804/-66 行、CI (lint-build-test + CodeRabbit + GitGuardian) 全 pass、ユーザー番号認可付き merge
+
+### dev fixture 5 分類検証結果 (Test plan §dev 環境通し検証 完了)
+
+```json
+"hashAlgorithm": "pdf-page-visual-v1",
+"summary": {
+  "totalGroups": 2,
+  "totalCollisionDocs": 4,
+  "totalOrphans": 2,
+  "byClassification": {
+    "MatchedByHash": 1,
+    "Ambiguous": 2,
+    "RepairableMissingFile": 2,
+    "LostOrUnrecoverable": 1
+  }
+}
+```
+
+| 観点 | PR-C1 (session59 fixture) | **PR-C2 (session60 fixture)** | 評価 |
+|---|---|---|---|
+| MatchedByHash | **0 件** (cross-process non-deterministic) | **1 件** | ✅ PR の存在意義実証 |
+| Ambiguous | 4 (winner も Ambiguous に倒れていた) | 2 (matched_loser は RepairableMissingFile に正しく分類) | ✅ |
+| RepairableMissingFile | 1 | 2 (敗者再生成 + orphan、設計通り) | ✅ |
+| LostOrUnrecoverable | 1 | 1 | ✅ |
+| hashAlgorithm 記録 | なし | `pdf-page-visual-v1` | ✅ AC13 通過 |
+
+session59 handoff の期待値 `MatchedByHash:2, RepairableMissingFile:1` は誤記載で、collisionClassifier の case 1 (matched 一意) では敗者 doc を classifyLoserForRegeneration 経由で RepairableMissingFile に分類するため、`MatchedByHash:1 + RepairableMissingFile:2 (敗者 + orphan)` が正しい挙動。
+
+### Issue Net 変化
+
+| 項目 | 内容 |
+|------|------|
+| Close 数 | 0 件 |
+| 起票数 | 0 件 (Issue #432 にコメント追記のみ、issue/comment-4426066508) |
+| **Net 変化 (session60 単独)** | **0 件** |
+
+**Net 0 の進捗判定**: ✅ 正の構造的進捗。Issue #432 PR-C2 v2 (Codex Critical 3 + 5 並列 review Critical 2 反映済) が dev 通し検証で MatchedByHash 成立を実証して merge。残る PR-C2-execution (cocoro classify dry-run + kanameone 番号認可付き execute + post-audit + Issue #432 close 報告) は destructive 実行のため次セッションで番号認可後に実施。
+
+### 教訓 (memory 候補)
+
+#### 1. 「自称 cross-process deterministic」は cross-locale 含めて検証する
+本 PR の自称 cross-process determinism は cross-process spawn test を 4 件含めたが、`localeCompare` の OS locale 依存性 (ICU データ版差) を 5 並列 review code-reviewer が指摘するまで見落とした。`PDFDict.entries()` を `localeCompare` で sort すると `ja_JP` 開発機と `C.UTF-8` GitHub Actions runner で順序が逆転するケースが現実的に存在する (Group vs GS0 等)。修正は 5 行未満の byte-order 比較置換で済み、追加 test (cross-locale spawn) で回帰防止可。→ `feedback_cross_locale_determinism.md` 候補。
+
+#### 2. Generator-Evaluator 分離 + 5 並列 review の補完性
+session58 で「Codex セカンドオピニオン + 7 並列 review」を経て merge した PR-C1 が cross-process determinism で破綻し、session59 で発覚。session60 では同様のパターンで「v2 計画 + Codex MCP review + 5 並列 review」で 3 段の品質ゲートを掛けたが、各段で全く異なる Critical / Important を発見:
+- Codex 計画段階 (session59): content stream 正規化禁止 / Annots / Resources canonical digest
+- Codex post-implementation MCP (session60 commit 2): visible annotations / DCTDecode / visited shared ref / pdfLibVersion gate
+- 5 並列 review (session60 commit 3): localeCompare / spawnSync silent failure / canonicalDigest catch-all
+これは「review agent ごとに見落とすパターンが構造的に異なる」ことを示し、destructive migration では多層 review が経済的に妥当。→ `feedback_multi_layer_review_complementarity.md` 候補。
+
+#### 3. session59 handoff の期待値誤記載
+session59 handoff で「期待 MatchedByHash:2, RepairableMissingFile:1」と書いたが、collisionClassifier 設計 (case 1 matched 一意 + 敗者 classifyLoserForRegeneration) を読み解くと正しい期待は `MatchedByHash:1 + RepairableMissingFile:2`。検証時には fixture と classifier 設計の対応表を明示しておくべき。
+
+### 主要 PR
+
+| PR | コミット | 内容 |
+|---|---|---|
+| **#441** | `2dc0867` | fix(scripts): Issue #432 PR-C2 — pdf-page-visual-v1 fingerprint で cross-process MatchedByHash を成立させる (9 files / +1804/-66) |
+| #440 | (open) | docs: 2026-05-12 session59 handoff (本 PR で session60 entry を含めて統合) |
+
+### 残 Open Issue (4 件)
+
+| # | タイトル要約 | 状態 | 再開条件 |
+|---|---|---|---|
+| **#432** | [P0] 分割PDF 設計バグ | **PR-A/B/C1/C2/D 完了、PR-C2-execution 残り** | 次セッションで PR-C2-execution (cocoro classify dry-run + kanameone 番号認可付き execute + post-audit) |
+| #402 | searchDocuments OOM ガード + 計測ログ | 段階1 完了、段階2/3 観測待ち | 観測データ判断 |
+| #251 | summaryGenerator unit test + buildSummaryPrompt 分離 | Scope 2 完了、Scope 1/3 待機 | sinon 導入伴う他タスク or Vertex AI false negative |
+| #238 | force-reindex 孤児 posting 検出モード | drift 実発生未観測 | ADR-0015 silent failure metric ERROR or 削除済書類ヒット報告 |
+
+### 次セッション着手項目 (PR-C2-execution)
+
+**スコープ**:
+1. dev fixture (本セッションで cleanup 済): 再実行不要
+2. cocoro classify dry-run: 被害ゼロ環境で 0 件 / 0 orphan を確認 (`./scripts/switch-client.sh cocoro` + workflow_dispatch)
+3. kanameone classify (read-only): plan-{timestamp}.json 取得 → operator に提示 → 番号認可
+4. kanameone execute --dry-run: 実行計画照合
+5. kanameone execute (番号認可後): 4 重 + AC13 6/7 gate 通過で実 migration
+6. post-audit (`audit-storage-mismatch.js --reverse-orphans`): 衝突 group 0 / orphan 0 確認
+7. Issue #432 close 報告 (PR-A/B/C1/C2/D 全完遂)
+8. PR-C2-execution PR (handoff PR、実行ログ + before/after audit JSON + Issue #432 close)
+
+**注意**:
+- kanameone destructive 実行は番号認可必須 (operationId + path 文字列単位)
+- merge 後は post-audit 5 分以内に実行して silent breakage 復活がないことを確認
+- pdf-lib version (1.17.1) は plan-execute 間で固定 (AC13 拡張 gate)
+
+<a id="session59"></a>
+## ✅ session59 完了サマリー (2026-05-12: PR-C1 dev fixture 検証で設計欠陥発覚、PR-C2 v2 計画確定、Net 0)
+
+session58 で merge した PR-C1 を dev 環境で fixture 検証したところ、MatchedByHash 分類が 0 件 (期待 2 件) と判明。pdf-lib `PDFDocument.save()` の **プロセス間 non-determinism** が根本原因。kanameone destructive 実行を未然防止 (90+ docs 全件 manual-review に倒れる事態を回避) し、PR-C2 修正計画 v2 を Codex セカンドオピニオンで堅牢化して確定。
+
+### 経緯
+
+1. **PR #439 (session58 handoff) merge** (`42e4d3f`、squash merge、CI 全 SUCCESS)
+2. **ADC 認証問題解決**: ADC `quota_project_id` が `tokunaga-chup-pj` だったため doc-split-dev Firestore に PERMISSION_DENIED。ADC ファイル直編集 + `gcloud auth application-default login` で `hy.unimail.11@gmail.com` 再認証 + quota=doc-split-dev に切替 (cocoro/kanameone 用は switch-client.sh + ADC 個別切替プロトコル遵守)
+3. **dev fixture 通し検証** (CLAUDE.md「destructive 操作」明示認可受領):
+   - `setup-collision-fixture --dev` 成功 (parent + 6 child docs + Storage upload)
+   - `classify-collision-docs` 結果: `byClassification: { MatchedByHash:0, Ambiguous:4, RepairableMissingFile:1, LostOrUnrecoverable:1 }` ⚠️
+   - 期待値 `{ MatchedByHash:2, Ambiguous:2, RepairableMissingFile:1, LostOrUnrecoverable:1 }` と乖離
+4. **根本原因 debug**: `regenerateChildPdf(parent, 1, 1)` を直接呼び出して比較
+   - 同一プロセス: regen=748 byte sha `e2388974...` (deterministic ✅)
+   - 別プロセス: regen=747 byte sha `ef7517...` (1 byte 差、sha 完全違い ❌)
+   - actual storage (setup プロセス): 746 byte sha `0c5f35...`
+   - **pdf-lib の `PDFDocument.save()` は同一プロセス内 deterministic だが、別プロセスでは PDF `/ID` + internal random metadata で違う bytes** を出力
+5. **dev fixture cleanup 完了** (Storage + Firestore 完全削除)
+6. **Issue #432 にコメント追記** ([comment-4425607136](https://github.com/yasushi-honda/doc-split/issues/432#issuecomment-4425607136)): 設計欠陥詳細 + 4 修正方針 (A: deterministic save / B: page content stream 正規化 sha / D: 全件 Ambiguous フォールバック / E: GCS md5 → 不可) + 教訓 (Generator-Evaluator 分離が「同一プロセス内 deterministic test」を共有信頼源として両者見落とし)
+7. **教訓 memory 化**: `~/.claude/memory/feedback_deterministic_cross_process.md` 新規 + `MEMORY.md` 追記。「`deterministic` を主張するテストは必ずプロセス間 (別 node プロセスで生成 → 比較) も検証する」をルール化
+8. **PR-C2 修正方針確定**: ユーザー判断で **B+D ハイブリッド** (B=ページ content stream 正規化 sha + D=規範化後も mismatch なら Ambiguous フォールバック)
+9. **`/impl-plan` で v1 計画作成** (9 file / ~400 行差分) → **Codex セカンドオピニオン** (mcp__codex__codex, read-only, threadId `019e1925-792a-7e01-aeea-6ffe5c8cf6e0`) で Critical 3 + Important 5 + Suggestion 4 を取得
+10. **impl-plan v2 確定** (Codex 指摘反映): ゴールを `pdf-page-visual-fingerprint-v1` に格上げ、10 file / ~700 行差分
+
+### Codex セカンドオピニオン主要指摘 (PR-C2 v2 反映)
+
+**Critical (3)**:
+1. **content stream だけでは描画同一性を証明できない** — `/Resources` (Font/XObject/ExtGState/ColorSpace), `MediaBox`/`CropBox`/`Rotate` への依存。`/Im1 Do` 同じでも `/Im1` が別画像なら偽陽性 → **decoded Contents bytes + page geometry + 参照 Resources canonical digest** に格上げ
+2. **空白/改行/オペレータ順の正規化は偽陽性リスク** — 文字列リテラル/inline image/数値が混在、whitespace 潰しで inline image data 破壊。graphics state は順序依存 → **正規化しない**、decoded Contents bytes をそのまま hash
+3. **`PDFPage.node.normalizedEntries()` 使用禁止** — `normalize()` が副作用で push/pop graphics state stream 追加 + Resources/Annots 補完 → **`page.node.Contents()` 直接読み + `PDFArray`/`PDFStream`/`PDFRawStream` 明示処理** + `decodePDFRawStream` 内部 API は lock test で固定
+
+**Important (5)**:
+- `pdfPageHasher.ts` 50-80 行は過小 → resource graph canonicalization 含めて **150-250 行** (v2 では 200 行見積)
+- `PDFDict` entries は **name 文字列 sort** (Node/V8 object key iteration 順差を吸収して cross-process determinism 保証)
+- AC に **偽陽性防止** が不足 (XObject/font/Rotate/CropBox 差分 + inline image whitespace) → AC9-12 追加
+- fixture: 「同 page content + 異なる metadata」だけでは弱い → **親から抽出した actual と expected が別プロセス生成でも visual fingerprint 一致する fixture 1 件必須**
+- precondition snapshot に **`hashAlgorithm: "pdf-page-visual-v1"`** version 記録 + execute 側 mismatch で gate reject (AC13)
+
+**Suggestion (4)**:
+- pdfjs-dist 追加せず pdf-lib のみで完結 (operator list は font/image/worker/version 差分で重い)
+- 暗号化/AcroForm/optional content/encryption は自動復旧対象外、**Ambiguous 明示**
+- runbook の Ambiguous reason 細分化: `content-mismatch`/`resource-mismatch`/`unsupported-pdf-feature`/`hash-unavailable-transient`/`hash-unavailable-no-parent`
+- **PR 分割**: PR-C2 (実装) と PR-C2-execution (dev 実行ログ + kanameone 展開判断) を分離
+
+### Issue Net 変化
+
+| 項目 | 内容 |
+|------|------|
+| Close 数 | 0 件 |
+| 起票数 | 0 件 (Issue #432 にコメント追記のみ) |
+| **Net 変化 (session59 単独)** | **0 件** |
+
+**Net 0 の進捗判定**: ✅ 正の構造的進捗。kanameone への destructive 実行を未然防止 (90+ docs 全件 manual-review に倒れる事態を回避)。PR-C2 修正方針を Codex Critical 3 含む 12 指摘で堅牢化した v2 計画として確定。次セッションで実装着手すれば PR-C1 主目的「自動復旧」を回復可能。
+
+### 教訓 (memory 追記済)
+
+[`feedback_deterministic_cross_process.md`](../../../../.claude/memory/feedback_deterministic_cross_process.md): `deterministic` を主張するライブラリ output (pdf-lib / PDFKit / Puppeteer / docx / image processing 等) は、**同一プロセス内 deterministic を pass しても別プロセスで非決定的になる** ものが多い。`sha 比較で同一性判定` する設計は、テストで **「子 node プロセスで生成 → 比較」を必ず含める**。PR-C1 では Codex セカンドオピニオン + 7 並列 review でも見落とした。Generator-Evaluator 分離プロトコル使用時、両者が「同一プロセス内 deterministic test pass」を共有信頼源にすると見落とすため、チェックリストに「プロセス間 deterministic」を明示追加すべき。
+
+### 環境状態 (次セッション catchup 用)
+
+- ADC quota_project_id = `doc-split-dev` のまま (本セッションで `tokunaga-chup-pj` から切替、復元せず維持)
+- cocoro / kanameone への作業時は `./scripts/switch-client.sh <env>` + ADC quota の個別切替プロトコル遵守 (CLAUDE.md「環境別 gcloud 操作の必須プロトコル」)
+- scripts/ deps: `npm install` 実行済 (root の `package-lock.json` に `pdf-lib` lock 同期、本 PR で commit)
+- gcloud active config: `doc-split` (= dev)
+
+### 次セッション着手項目 (PR-C2 実装計画 v2)
+
+**スコープ** (10 file / ~700 行差分):
+| タスク | file | 規模 |
+|---|---|---|
+| A | `scripts/lib/pdfPageVisualFingerprint.ts` (new) | ~200 行 — `page.node.Contents()` 直接読み + Resources canonical digest + geometry + unsupported feature 検出 |
+| B | `functions/test/pdfPageVisualFingerprint.test.ts` (new) | ~280 行 — cross-process (子 node プロセス spawn) + 偽陽性防止 (XObject/font/Rotate/CropBox 差分) + lock test (pdf-lib internal API 依存) |
+| C | `scripts/lib/collisionClassifier.ts` 修正 | ~50 行 — visual fingerprint 比較 + reason 細分化 |
+| D | `scripts/classify-collision-docs.ts` 修正 | ~30 行 — plan に `hashAlgorithm: "pdf-page-visual-v1"` 記録 |
+| E | `scripts/execute-collision-migration.ts` 修正 | ~30 行 — hashAlgorithm version mismatch で gate reject |
+| F | `scripts/setup-collision-fixture.ts` 修正 | ~80 行 — cross-process MatchedByHash 実証 fixture (子プロセス起動で生成) + 偽陽性防止 fixture |
+| G | `functions/test/collisionClassifier.test.ts` 修正 | ~80 行 — unsupported feature + Ambiguous reason 細分化 |
+| H | dev 環境通し検証 (PR-C2 内) | dev データ |
+| K | `docs/runbooks/orphan-storage-cleanup.md` 修正 | ~50 行 — visual fingerprint v1 説明 + Ambiguous reason 細分化表 |
+
+**Acceptance Criteria** (AC1-AC14): AC1-AC8 は v1 から継続、AC9-12 で偽陽性防止 (XObject/font/geometry/inline image)、AC13 で hashAlgorithm version mismatch gate reject、AC14 で pdf-lib internal API lock test。
+
+**PR 分割戦略** (Codex 指摘反映):
+- **PR-C2**: hasher (A,B) + classifier/plan/precondition 差替 (C,D,E) + fixture (F) + tests (G) + runbook (K) + dev 通し検証 (H)。merge 条件 = Codex 再 review + 7 並列 review + dev fixture 5 分類完全一致
+- **PR-C2-execution** (PR-C2 merge 後別 PR): dev 実行ログ + cocoro classify dry-run + kanameone classify dry-run + 番号認可付き execute + post-audit + Issue #432 close 報告
+
+**着手手順** (次セッション catchup 後):
+1. `git checkout -b fix/issue-432-pr-c2-visual-fingerprint`
+2. A 実装 → B (cross-process test) → C/D/E/F/G 並列 (Agent Teams 候補) → K → H (dev 通し検証)
+3. `/codex review` MCP で再セカンドオピニオン
+4. `/review-pr all parallel` で 7 並列 review
+5. PR 作成 → CI → merge 認可依頼 → merge
+6. PR-C2-execution へ
+
+### 主要 PR
+
+| PR | タイトル | 状態 |
+|---|---|---|
+| #439 | docs: 2026-05-12 session58 handoff (Issue #432 PR-C1 完遂、Net 0) | ✅ merged (`42e4d3f`) |
+| (本 PR) | docs: 2026-05-12 session59 handoff (PR-C1 設計欠陥発覚 + PR-C2 v2 計画確定、Net 0) | 提出中 |
+
