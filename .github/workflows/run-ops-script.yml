@@ -59,6 +59,10 @@ on:
           - setup-collision-fixture --dev --cleanup
           - execute-collision-migration --dry-run
           - execute-collision-migration --execute
+          - pdf-feature-survey --source gcs --prefix original/
+          - pdf-feature-survey --source gcs --prefix processed/
+          - pdf-feature-survey --source gcs --prefix processed/ --limit 200
+          - verify-pdf-determinism --synthetic
       doc_id:
         description: 'Document ID (required when script contains --doc-id; ignored otherwise)'
         required: false
@@ -382,7 +386,9 @@ jobs:
                 $SCRIPT_ARGS
           elif [ "$SCRIPT_NAME" = "backfill-display-filename" ] || \
                [ "$SCRIPT_NAME" = "classify-collision-docs" ] || \
-               [ "$SCRIPT_NAME" = "setup-collision-fixture" ]; then
+               [ "$SCRIPT_NAME" = "setup-collision-fixture" ] || \
+               [ "$SCRIPT_NAME" = "pdf-feature-survey" ] || \
+               [ "$SCRIPT_NAME" = "verify-pdf-determinism" ]; then
             # Issue #432 PR-C 系 script は scripts/lib/* (TypeScript) に依存するため
             # ts-node 経由で実行。STORAGE_BUCKET は resolve step で env 化済。
             EXTRA_ARGS=""
@@ -391,6 +397,12 @@ jobs:
               # ファイル出力 → upload-artifact で取得する経路を必須化。
               # workflow_dispatch の choice には --out を含めず、ここで強制付与する。
               EXTRA_ARGS="--out ${GITHUB_WORKSPACE}/scripts/plan-output.json"
+            elif [ "$SCRIPT_NAME" = "pdf-feature-survey" ]; then
+              # Issue #432 PR-C3a: survey 結果も JSON で artifact 化する (log secret masking 回避)。
+              EXTRA_ARGS="--out ${GITHUB_WORKSPACE}/scripts/pdf-feature-survey-output.json"
+            elif [ "$SCRIPT_NAME" = "verify-pdf-determinism" ]; then
+              # Issue #432 PR-C3a: determinism verdict も JSON で artifact 化する。
+              EXTRA_ARGS="--out ${GITHUB_WORKSPACE}/scripts/verify-pdf-determinism-output.json"
             fi
             cd scripts
             NODE_PATH=../functions/node_modules \
@@ -451,6 +463,26 @@ jobs:
         with:
           name: classify-collision-docs-plan-${{ github.event.inputs.environment }}-${{ github.run_id }}
           path: scripts/plan-output.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload pdf-feature-survey report artifact
+        # Issue #432 PR-C3a: PDF feature 分布調査の survey JSON を artifact 経由で取得。
+        if: ${{ github.event.inputs.script == 'pdf-feature-survey' && always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pdf-feature-survey-${{ github.event.inputs.environment }}-${{ github.run_id }}
+          path: scripts/pdf-feature-survey-output.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload verify-pdf-determinism report artifact
+        # Issue #432 PR-C3a: cross-process invariance 検証結果を artifact 経由で取得。
+        if: ${{ github.event.inputs.script == 'verify-pdf-determinism' && always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: verify-pdf-determinism-${{ github.event.inputs.environment }}-${{ github.run_id }}
+          path: scripts/verify-pdf-determinism-output.json
           if-no-files-found: warn
           retention-days: 30
 
