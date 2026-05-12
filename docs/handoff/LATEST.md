@@ -77,12 +77,31 @@ PR-C3 設計時の対策:
 
 | 項目 | 値 |
 |---|---|
-| **本 PR** (session61) | `fix/issue-432-pr-c2-execution` (3 commits) - PR 作成予定 |
-| planId | `plan-2026-05-12T04-21-39-187Z-eca5b3f3` |
+| **本 PR** (session61) | `fix/issue-432-pr-c2-execution` PR #442 (4 commits + dev フルリハーサル commit) |
+| classify planId (kanameone) | `plan-2026-05-12T04-21-39-187Z-eca5b3f3` |
 | classify run id (kanameone) | 25713096820 |
-| execute --dry-run run id | 25713588277 (4 ops `all gates passed; would execute`) |
-| execute (destructive) run id | 25713911985 (4 ops ✅ executed) |
-| post-audit run id | 25714003425 (orphans 4→0、reverse 1 件発見) |
+| execute --dry-run run id (kanameone) | 25713588277 (4 ops `all gates passed; would execute`) |
+| execute (destructive) run id (kanameone) | 25713911985 (4 ops ✅ executed) |
+| post-audit run id (kanameone) | 25714003425 (orphans 4→0、reverse 1 件発見) |
+
+### dev フルリハーサル (本セッション中盤、ユーザー指摘で追加実施)
+
+ユーザー指摘「`dev → クライアント` 順序を飛ばしていないか」を受け、kanameone 実行後に dev で workflow 改修部分のフルパス再検証を実施。過去の PR-C1/PR-C2 でも `dev execute まで通したことがない` 共通の見落としを補完する目的。
+
+| Stage | Run ID | Result |
+|---|---|---|
+| 1. setup-collision-fixture --dev | 25717762881 | ✅ 5 docs (excl. parent) covering 4 classifications |
+| 2. classify-collision-docs | 25717863184 | ✅ planId `dba3864a`、`MatchedByHash:1, Ambiguous:2, RepairableMissingFile:2, LostOrUnrecoverable:1` (session60 と同一構成、cross-process determinism 再現確認) |
+| 3. execute --dry-run | 25717985363 | ✅ 2 ops (op-0003, op-0006 = RepairableMissingFile) `all gates passed`、gate-rejected: 0 |
+| 4. execute (destructive、dev fixture 対象) | 25718095580 | ✅ 2 ops `regenerated from parent and saved to docId namespace` |
+| 5. audit-storage-mismatch | 25718205231 | ✅ fileUrl orphan: 1 (LostOrUnrecoverable 1 件、execute 対象外で設計通り残存) |
+| 6. cleanup | 25718319642 | ✅ fixture cleanup completed |
+
+**dev フルリハーサルの意義**: 本 PR で新規追加した workflow 改修 (Parse exec args / Download artifact / Generate approval JSON / --operations filter) の動作を dev fixture で実機検証。session58 (PR-C1)、session60 (PR-C2 v2) では `execute まで dev で通したことがない` 共通の見落としがあり、本セッションで初めて補完。次セッション以降の PR-C3 開発でも本 workflow を再利用できる信頼性を確立。
+
+### dev フルリハーサル順序を初動で見落とした reflexion
+
+ユーザー指摘前は「session60 handoff『dev fixture 再実行不要』」を字義解釈し cocoro → kanameone へ直行。session60 計画時点では **本 PR の workflow 改修は計画外**で、session61 で新規 CI コードを追加した時点で前提が変わったことに気づくべきだった。kanameone 実行 4 docs 復旧は結果的に成功したが、プロセスとしては「destructive 実行を含む CI 改修の dev 事前検証なし」という基本安全ルール違反。同パターンが PR-C1 / PR-C2 でも繰り返されており、今回 dev フルリハーサルで構造的に補完。memory `feedback_destructive_ci_dev_rehearsal.md` 新規追記候補。
 
 ### 残 Open Issue (4 件)
 
