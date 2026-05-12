@@ -1,7 +1,7 @@
 # ハンドオフメモ
 
-**更新日**: 2026-05-12 session61 (**Issue #432 PR-C2-execution 部分完遂 = kanameone RepairableMissingFile 4 件自動復旧 + CCITTFaxDecode 設計限界発覚、Net 0**。kanameone 本番 classify で 135 docs 全件 `unsupported-resource-filter: /CCITTFaxDecode stream encoding not supported` が判明し、Ambiguous → Gate 0 reject → 自動復旧不能と確定。ユーザー判断「A+B ハイブリッド」採用: A = RepairableMissingFile 4 件 (op-0136~op-0139) のみ番号認可で execute (✅ 全件 regenerate-from-parent + docId namespace に save 成功、post-audit で fileUrl orphan 4→0)、B = 残 135 Ambiguous は PR-C3 で別 hash 戦略 (CCITTFaxDecode 対応 or image-render-hash) を Codex MCP セカンドオピニオン経由で設計予定。workflow 改修 3 件 (classify plan artifact 化 / execute-collision-migration choice 追加 / --operations filter 追加)。次セッションは PR-C3 計画 + Issue #432 残 135 Ambiguous + 新規発見 reverse orphan 1 件の調査)
-**ブランチ**: `fix/issue-432-pr-c2-execution` (本 PR 化中、3 commits)
+**更新日**: 2026-05-12 session61 (**Issue #432 PR-C2-execution A 完遂 + PR-C3 計画 Codex MCP 起案済、Net 0**。kanameone 本番 classify で 135 docs 全件 `unsupported-resource-filter: /CCITTFaxDecode stream encoding not supported` が判明し、Ambiguous → Gate 0 reject。ユーザー判断「A+B ハイブリッド」採用: A = RepairableMissingFile 4 件 (op-0136~op-0139) を番号認可で execute (✅ 全件 regenerate-from-parent + docId namespace に save 成功、post-audit で fileUrl orphan 4→0)、B = 残 135 Ambiguous は PR-C3 で対応。**PR #442 merged** で workflow 改修 3 件 + handoff session61 entry を main 反映。**dev フルリハーサル 6 stage** で workflow 改修部分の実機動作確認 (PR-C1/PR-C2 で 3 連続見落としていた `execute まで dev 検証` を初補完、memory `feedback_destructive_ci_dev_rehearsal.md` 新規)。**PR-C3 計画は Codex MCP read-only セカンドオピニオン経由で起案済** (threadId `019e1b56-5cc7-76d0-b156-83549e833a71`): 主戦略 = `pdf-page-visual-v2` (CCITT/JBIG2/DCT/JPX を decode せず encoded bytes hash)、補助 = PDF feature survey、fallback = OCR hint + 手動 UI。5 段階 PR 分割 (C3a-C3e)。次セッションは PR-C3a (feature survey) 着手 + reverse orphan 1 件調査)
+**ブランチ**: `docs/pr-c3-codex-plan` (PR-C3 計画 Codex 起案 handoff 追記、PR 化中)
 **フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + (session29-55 累積実績は archive 参照) + Phase 8 (session56 = 分割PDF Storage 設計バグ調査、Net -1) + Phase 8 (session57 = Issue #432 PR-A/B/D 完遂、Net 0) + Phase 8 (session58 = Issue #432 PR-C1 完遂、Net 0) + Phase 8 (session59 = PR-C1 設計欠陥発覚 + PR-C2 v2 計画確定、Net 0) + Phase 8 (session60 = Issue #432 PR-C2 v2 完遂、Net 0) + **Phase 8 (session61 = Issue #432 PR-C2-execution A 部分完遂 + PR-C3 計画必要、Net 0)** 完遂
 
 <a id="session61"></a>
@@ -112,21 +112,88 @@ PR-C3 設計時の対策:
 | #251 | summaryGenerator unit test + buildSummaryPrompt 分離 | Scope 2 完了、Scope 1/3 待機 | sinon 導入伴う他タスク or Vertex AI false negative |
 | #238 | force-reindex 孤児 posting 検出モード | drift 実発生未観測 | ADR-0015 silent failure metric ERROR or 削除済書類ヒット報告 |
 
-### 次セッション着手項目 (PR-C3 計画)
+### 次セッション着手項目 (PR-C3 計画 — Codex MCP 起案済)
 
-**スコープ**:
-1. **本番 PDF feature 分布調査** (`pdf-feature-survey.ts` 新規 script):
-   - 全 kanameone processed/ PDFs を読み、各 `/Resources/XObject/*/Filter` 値を集計
-   - 未対応 filter (CCITTFaxDecode / DCTDecode / JPXDecode / JBIG2Decode 等) の分布把握
-   - cocoro も並行 (将来の被害発生時のため)
-2. **PR-C3 設計** (Codex MCP セカンドオピニオン必須):
-   - 選択肢 a: CCITTFaxDecode 対応 visual fingerprint (CCITT decoder 実装 or 外部ライブラリ)
-   - 選択肢 b: pdfjs-dist で page を image render → image hash 比較 (重いが汎用)
-   - 選択肢 c: 既存 OCR text を hash 比較 (kanameone 既に OCR 完了済が大半)
-   - 選択肢 d: 自動復旧諦め、operator UI で手動マッチング支援ツール開発
-3. **reverse orphan 1 件の調査**: `processed/20260413_未判定_未判定_p27-28.pdf` (Storage 実体あり Firestore 参照なし)
-   - 過去の rotate / delete 経路で残骸となった可能性
-   - 単一なら手動削除 + Issue #432 内コメントで報告、複数なら別 Issue 化判断
+PR-C2-execution A 完遂直後 (session61 後半) に Codex MCP セカンドオピニオン (read-only, threadId `019e1b56-5cc7-76d0-b156-83549e833a71`) を取得済。**主な発見: CCITT decoder の自前実装 (or 外部ライブラリ追加) は不要**。画像 XObject を decode せず raw encoded bytes + Filter + DecodeParms + 描画関連 dict keys を hash すれば CCITT/JBIG2/DCT/JPX 全て同じ枠でカバー可能。
+
+#### 推奨案: `pdf-page-visual-v2` (encoded resource fingerprint) 3 段構え
+
+| 段階 | 内容 | 目的 |
+|---|---|---|
+| **主** | `pdf-page-visual-v2` encoded resource fingerprint | `/Subtype /Image` の binary stream は decode せず、encoded bytes + Filter + DecodeParms + Width/Height/BitsPerComponent/ColorSpace/ImageMask/Decode/SMask/Mask を canonical hash。Form XObject (content stream) は v1 同様 decoded/canonical 側で扱う |
+| **補助** | PDF feature survey (`pdf-feature-survey.ts` 新規) | classify の **前段 gate** として全本番 PDF の filter/subtypes/encryption/AcroForm 等を集計、未対応 feature を事前検出。dev fixture の偏りを構造的に防ぐ |
+| **fallback** | OCR hint + 手動 UI (将来 PR) | v2 でも Ambiguous に残る docs に対し OCR digest / suggestedWinner / page count を operator hint として提示。destructive 主証拠には使わない (PII + 偽陽性リスク) |
+
+#### 4 選択肢評価 (Codex 結論)
+
+| 選択肢 | 評価 | 採否 |
+|---|---|---|
+| a (CCITT decoder 実装) | バグ面が広い、画像仕様差で偽陽性/偽陰性 | **却下** → a の変形「encoded bytes hash」を採用 |
+| b (pdfjs-dist render → image hash) | CI Canvas/worker/font 安定化コスト高、render determinism 検証必要 | 主戦略には不採用、最終 fallback 候補 |
+| c (OCR text hash) | 開発コスト最小だが destructive 主証拠には弱い (OCR vendor 差・PII) | operator hint に限定 |
+| d (手動 UI) | 信頼性高いが 135 docs 運用負荷大 | 残 Ambiguous の運用 fallback (将来 PR) |
+
+#### PR-C3 分割 5 段階
+
+| PR | 内容 | destructive |
+|---|---|---|
+| **PR-C3a** | feature survey + CI workflow + runbook | read-only (生存 path 確認のみ) |
+| **PR-C3b** | `pdf-page-visual-v2` 実装 + tests + dev fixture 拡張 (CCITT/JBIG2/DCT/JPX sample) | コード変更のみ |
+| **PR-C3c** | classify/execute integration + dev フルリハーサル 6 stage 再走 (v2 で) | dev fixture 対象 |
+| **PR-C3d** | kanameone classify artifact → limited destructive execute | **kanameone 番号認可必須** |
+| **PR-C3e** | 残 Ambiguous の OCR hint / manual follow-up | 必要時のみ |
+
+#### Acceptance Criteria (Codex 起案 12 項目要約)
+
+1. `pdf-page-visual-v2` が CCITTFaxDecode を含む kanameone sample で `kind: ok` 返す
+2. 同 parent+range を別 process で regenerate しても fingerprint 一致 (cross-process determinism、session59 教訓)
+3. 異なる page range / image bytes / geometry / visible resources は不一致 (偽陽性防止)
+4. `/Encrypt`, `/AcroForm`, `/OCProperties`, visible annotations は引き続き unsupported (operator UI へ)
+5. `/DCTDecode`, `/JPXDecode`, `/JBIG2Decode`, `/CCITTFaxDecode` の image XObject は decode 不能でも raw encoded hash で処理可能
+6. unknown filter は feature survey で検出 + Ambiguous reason に filter 名を明示
+7. classify plan は `hashAlgorithm: "pdf-page-visual-v2"` + `pdfLibVersion: "1.17.1"` を記録 (AC13)
+8. execute は v1 plan / pdf-lib version mismatch / env mismatch / path 未認可を reject
+9. dev フルリハーサル 6 stage 通過 (session61 確立フロー再利用)
+10. kanameone は first run を read-only survey + classify artifact のみに限定
+11. destructive execute は operationId + exact path approval のみ通す
+12. plan artifact/log に OCR text や PDF content bytes を出さない (PII 保護)
+
+#### Codex 指摘: PR-C2 v2 で見落とした盲点 7 件
+
+1. **resource stream を decoded bytes にする必要なし** ← 今回の核心 (encoded bytes hash で十分)
+2. `unsupported-resource-filter` を「外部 decoder 不足」と扱うと CCITT/JBIG2/JPX の沼に入る
+3. OCR hash は便利だが PII + 偽陽性で destructive proof には弱い
+4. feature survey が classify 前段 gate になっていないと dev fixture の偏りを再演 (session58/60/61 共通教訓)
+5. `actual+expected` のどちらが unsupported かだけでなく filter/subtype/object path を plan に出さないと operator 判断不能
+6. Form XObject (content stream) と Image XObject (encoded binary) を分けて扱う (Form は decoded/canonical 側に残す)
+7. image stream dict の描画 keys と metadata keys を分ける (過剰な偽陰性/偽陽性回避)
+
+#### dev fixture 拡張 (PR-C3b)
+
+- kanameone 実 PDF から **PII マスク済み CCITTFaxDecode sample** を最低 1 parent (これが session58/60/61 で欠けていた最大の盲点)
+- 同 parent から split range を作り、actual Storage と expected regenerate が v2 で match する fixture
+- 別ページだがテンプレが似た negative fixture (偽陽性防止)
+- DCTDecode JPEG image PDF
+- 可能なら JBIG2Decode / JPXDecode sample
+- annotations / AcroForm / encryption は unsupported fixture として維持
+
+#### リスクと緩和策
+
+| リスク | 緩和策 |
+|---|---|
+| Ambiguous 残存 (CCITT 以外の特殊 PDF) | feature survey で事前把握 + 20 件以下は runbook、50 件超は operator UI |
+| 偽陽性 destructive (誤マッチング) | `pageCount` + `splitFromPages` + parent id + v2 fingerprint を precondition 多重化、post-audit + sample visual inspection |
+| pdfjs-dist 重量級依存 | 採用せず fallback のみに留める |
+| PII 漏洩 (artifact/log) | plan/audit JSON に OCR text や PDF bytes を出さない、metadata のみ |
+
+#### reverse orphan 1 件 (PR-C3 と別件扱い、PR-C3a 後に単独調査)
+
+対象: `gs://docsplit-kanameone.firebasestorage.app/processed/20260413_未判定_未判定_p27-28.pdf`
+
+- 「Firestore 参照なし Storage 実体あり」= 135 Ambiguous の逆向き問題
+- 原因仮説: rotatePdfPages delete 副作用残骸 / deleteDocument の orphan / 過去手動操作 / PR-B 前の旧 path 残存
+- 判断材料: Cloud Logging で該当 path/filename/`p27-28`/日付周辺の split/rotate/delete invocation 検索、Storage metadata (createdAt/generation/md5)、parent candidate `20260413...` の v2 fingerprint 一致確認
+- 扱い: 別 artifact `reverse-orphan-investigation.json` を出し、復元すべき parent/docId が特定できれば PR-C3 follow-up で restore、特定不能なら exact path approval で削除
 
 ### Issue #432 への次回コメント案 (本 PR merge 後に追記)
 
