@@ -1,8 +1,110 @@
 # ハンドオフメモ
 
-**更新日**: 2026-05-12 session63 (**Issue #432 PR-C3a 実装 + dev 実証 + main merge 完遂、Net 0**。session62 計画 (AC 21 項目) の PR-C3 第一段階を実装着手。`scripts/pdf-feature-survey.ts` (read-only) + `scripts/verify-pdf-determinism.ts` (read-only) 2 script 新規 + `.github/workflows/run-ops-script.yml` に script choice 4 件 + artifact upload 2 件追加。/simplify (Critical 3 反映: GCS pagination/OOM, silent download error, firebase-admin import) + /safe-refactor (LOW 1) + /review-pr 4 並列 (Critical 4 + Important 3 反映: stat/readdir error 処理, runChildFingerprint try 範囲, non-deterministic kind 分離, fixture B comment rot, parseArgs guard, surveyLocalPaths 非再帰 doc, unsupportedPass 内訳) + /codex review (大規模 PR セカンドオピニオン 新 thread `019e1cd9-...`、Critical なし Important 3 件は PR-C3b/c 持越し or PR description 明記) 全実施。dev workflow run #25745219139 で **verdict PASS 3/3 ok artifact 取得**、AC17 (cross-process invariance) を pdf-lib 生成 fixture で実証完了。CI lint-build-test ✅ pass 6m10s (run #25746991318)、PR #447 squash merge (`62896c5`)、main deploy success 1m54s。handoff size 削減: session56-58 を archive/2026-05-history.md へ移動 (LATEST.md 758→<500 行目標)。次セッションは PR-C3b (pdf-page-visual-v2 + denylist + 人工 fixture 拡張) and/or PR-D1 (Issue #445 データモデル ADR + 型定義) 並行着手候補)
-**ブランチ**: `docs/session63-handoff` (本 session63 entry 追記 + session56-58 archive、PR 化中)
-**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + (session29-58 累積実績は archive 参照) + Phase 8 (session59-60 = Issue #432 PR-C2 v2 段階完遂、Net 0) + Phase 8 (session61 = Issue #432 PR-C2-execution A 部分完遂 + CCITTFaxDecode 設計限界判明、Net 0) + Phase 8 (session62 = Issue #432 PR-C3 計画 AC 21 項目再起案 + session61 post-audit + PR-D #445 起票、Net +1) + **Phase 8 (session63 = Issue #432 PR-C3a 実装 + dev 実証 + main merge、Net 0)** 完遂
+**更新日**: 2026-05-13 session64 (**Issue #432 PR-C3b 実装 + dev 実証 + Quality Gate 4 並列 review fix 完遂、Net 0、PR #450 進行中**。session63 の PR-C3a (read-only) を base に PR-C3b 第二段階を実装。`scripts/lib/pdfPageVisualFingerprint.ts` を v2 化 (denylist + image filter encoded bytes hash、AC21)、`scripts/fixtures/` に固定 synthetic fixture 6 種 (CCITT/JBIG2/JPX/DCT/encrypted/simple、AC16/AC20) を deterministic 生成、`scripts/pdf-feature-survey.ts` に `--expect-*` fail-fast guard (AC20)、`scripts/verify-pdf-determinism.ts` の child cwd + TS_NODE_PROJECT 修正 + 実 fixture --paths 検証経路実装 (AC17 拡張)。dev workflow runs #25765691451 (verify --paths PASS 6/6) + #25765692757 (survey --expect-* all satisfied) success 完遂。Quality Gate 4 並列 (code-reviewer / silent-failure-hunter / comment-analyzer / type-design-analyzer) で Critical 3 (getStreamBytesForHash bare catch / runChildFingerprint child stdout 検証 / fixture header docstring 事実誤認) + Important 6 (proc.error/signal 区別 / --check 例外連鎖 / v1 reject test / classifier reason 動的化 / survey JSON doc / workflow inputs 上限 / verify cwd why) を反映 (commit `c82ef53`)。次セッションは PR-C3c (AC15 classify gate + AC18 provenance 6 fields + AC19 MatchedByHash/RepairableMissingFile 分離) and/or PR-D1 並行着手候補)
+**ブランチ**: `fix/issue-432-pr-c3b-fingerprint-v2` (PR #450、2 commits = 実装 `96745a4` + review fix `c82ef53`、CI 進行中)
+**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + (session29-58 累積実績は archive 参照) + Phase 8 (session59-60 = Issue #432 PR-C2 v2 段階完遂、Net 0) + Phase 8 (session61 = Issue #432 PR-C2-execution A 部分完遂 + CCITTFaxDecode 設計限界判明、Net 0) + Phase 8 (session62 = Issue #432 PR-C3 計画 AC 21 項目再起案 + session61 post-audit + PR-D #445 起票、Net +1) + Phase 8 (session63 = Issue #432 PR-C3a 実装 + dev 実証 + main merge、Net 0) + **Phase 8 (session64 = Issue #432 PR-C3b 実装 + dev 実証 + Quality Gate 4 並列 review fix、Net 0、merge 待ち)** 進行中
+
+<a id="session64"></a>
+## ✅ session64 完了サマリー (2026-05-13: Issue #432 PR-C3b 実装 + dev 実証 + Quality Gate review fix、Net 0、merge 待ち)
+
+session63 の PR-C3a (read-only verifier/survey、main merge 済) を base に **PR-C3b 第二段階** を完遂。`pdf-page-visual-v2` (denylist + image filter encoded bytes hash) + 固定 synthetic fixture 6 種 + survey `--expect-*` fail-fast guard + verify `--paths` 経路実装。kanameone 135 docs CCITTFaxDecode Ambiguous 倒れの解消経路を技術的に開く。Quality Gate 4 並列 review で Critical 3 + Important 6 を反映 (PR #450 merge 前)。
+
+### 経緯
+
+1. **catchup**: session63 handoff 確認、次セッション着手候補「PR-C3b (コード変更のみ) and/or PR-D1 (read-only/設計) 並行可能」のうち PR-C3b を選択 (#432 P0 系列優先)
+2. **`/impl-plan`**: 9 タスクに分解 (T1 fingerprint v2 / T2 固定 synthetic fixture / T3 survey --expect-* / T4 verify コメント / T5 tests / T6 classifier 型 additive / T7 workflow CI / T8 dev 実証 / T9 Quality Gate + merge)
+3. **branch 作成**: `fix/issue-432-pr-c3b-fingerprint-v2`
+4. **1st commit `96745a4` 実装** (15 files +775/-90):
+   - `scripts/lib/pdfPageVisualFingerprint.ts` v2 化 (HASH_ALGORITHM bump、METADATA_DENYLIST 10 keys、PAGE_TREE_SCOPED_DENYLIST `/Parent`、OUTLINE_SCOPED_DENYLIST 4 keys、`getStreamBytesForHash` で image filter encoded bytes hash)
+   - `scripts/fixtures/generate-fixtures.ts` (新規 349 行、deterministic 6 fixture 生成 + `--check` byte 単位再現性検証)
+   - `scripts/fixtures/{simple,with-dctdecode,with-ccittfaxdecode,with-jbig2decode,with-jpxdecode,encrypted}.pdf` (1026〜1240 bytes 各々、git commit)
+   - `scripts/pdf-feature-survey.ts` に `--expect-filter` / `--expect-subtype` / `--expect-encrypted` / `--expect-acroform` 追加 (fail-fast、exit 1)
+   - `scripts/verify-pdf-determinism.ts` の child cwd + TS_NODE_PROJECT 修正 (TS5109 回避、local + CI 両対応)
+   - `scripts/lib/collisionClassifier.ts` `FingerprintAlgorithm` を `'v1' | 'v2'` union 拡張 (additive、breaking change なし)
+   - `.github/workflows/run-ops-script.yml` に script choice 2 件追加
+   - tests: `functions/test/pdfPageVisualFingerprint.test.ts` に v2 専用 describe block 4 つ (8 新 test)、`collisionClassifier.test.ts` で `unsupported-resource-filter` → `optional-content` 置換、`executeCollisionMigrationGate.test.ts` で makePlan default v2 化
+5. **PR #450 作成** + 1st commit push
+6. **dev workflow runs 並列 trigger** (PR branch `fix/issue-432-pr-c3b-fingerprint-v2`):
+   - run `25765691451`: `verify-pdf-determinism --paths fixtures/*.pdf` → **success** (verdict PASS 6/6、CCITT/JBIG2/JPX/DCT は kind='ok' で cross-process invariant、encrypted は kind='unsupported' で同 reason 一致、artifact 取得)
+   - run `25765692757`: `pdf-feature-survey --expect-filter /CCITTFaxDecode,/JBIG2Decode,/JPXDecode,/DCTDecode --expect-subtype /Image --expect-encrypted` → **success** (all expects satisfied、artifact 取得)
+   - **AC17 拡張 (real fixture cross-process invariance)** + **AC20 (fixture が survey で /Filter assert)** dev 実証完了
+7. **Quality Gate 4 並列 review** (code-reviewer / silent-failure-hunter / comment-analyzer / type-design-analyzer):
+   - **silent-failure-hunter**: Critical 3 + High 5 + Medium 6 + Low 3 検出
+   - **comment-analyzer**: Critical 1 + Important 5 + Nit 6
+   - **code-reviewer**: Approve with 2 Important fixes
+   - **type-design-analyzer**: No type-design changes required for merge (Enc 8 / Inv 8 / Useful 9 / Enforce 7)
+8. **2nd commit `c82ef53` review fix** (7 files +150/-33):
+   - **Critical 3**: getStreamBytesForHash bare catch → UnsupportedEncodingError specific / runChildFingerprint child stdout の parsed.kind ∈ {'ok','unsupported'} + hex 64-char 検証 / generate-fixtures header docstring の `updateMetadata=false` 言及削除 (pdf-lib API 不存在)
+   - **Important 6**: spawnSync proc.error/proc.signal 区別 (HIGH-2) / --check 例外連鎖 (HIGH-3) / v1 plan reject test 追加 (MEDIUM-3) / classifier reason 文字列を evidence.algorithm 動的化 (I1/I4) / survey header JSON example に expectations 追記 (I5) / workflow inputs 上限 comment 更新 (I2、10→25 GitHub 2025-12-04 拡張) / verify cwd 修正コメント why 補強 (I3、TS5109 具体的故障モード明示)
+9. **Defer to PR-C3c** (review で identified、本 PR scope 外): HIGH-1/4/5 / MEDIUM-1/2/4/5/6 / LOW 全 3 件 / FileResult/VerifyResult discriminated union 化
+10. **Local verification 最終確認**: `npx tsc --noEmit` (scripts + functions) pass / `npm test` 965 passing (前 964 + v1 reject test 1) / `generate-fixtures --check` 6/6 OK / `verify --paths` verdict PASS 6/6
+
+### Issue Net 変化
+
+| 項目 | 内容 |
+|------|------|
+| Close 数 | 0 件 (Issue #432 は未 close、PR-C3b は第二段階) |
+| 起票数 | 0 件 |
+| **Net 変化 (session64 単独)** | **0 件** |
+
+**Net 0 の進捗判定**: ✅ 正の構造的進捗。Issue #432 (P0) 根本対策 PR-C3 計画 (AC 21 項目) の **AC21 (denylist scope 限定) + AC16 (人工 fixture 拡張) + AC20 (fixture が survey で /Filter assert) + AC17 拡張 (real fixture cross-process invariance)** を達成、kanameone 135 docs CCITTFaxDecode Ambiguous 倒れの解消経路を技術的に開く。後続 PR-C3c の precondition 全充足 (AC18 provenance 6 fields + AC19 MatchedByHash/RepairableMissingFile 分離 + classify survey gate + execute provenance gate)。triage 基準 #5 (ユーザー明示指示「次のアクション優先順にすすめて」) 該当。
+
+### 主要 PR / 実行記録
+
+| 項目 | 値 |
+|---|---|
+| 本 PR (PR-C3b) | **PR #450** (`fix/issue-432-pr-c3b-fingerprint-v2`、2 commits、merge 待ち) |
+| 1st commit (実装) | `96745a4` (15 files +775/-90) |
+| 2nd commit (Quality Gate review fix) | `c82ef53` (7 files +150/-33) |
+| dev workflow #1 (verify --paths) | `25765691451` ✅ success、verdict PASS 6/6 |
+| dev workflow #2 (survey --expect-*) | `25765692757` ✅ success、all expects satisfied |
+
+### AC 達成状況 (PR-C3 計画 21 項目中、本 PR で達成分)
+
+| AC | 達成 | 根拠 |
+|---|---|---|
+| AC13 | ✅ 維持 | v2 plan algorithm 固定値照合、execute gate 既存 (PR-C2) |
+| AC16 | ✅ **完全達成** | `scripts/fixtures/` に CCITT/JBIG2/JPX/DCT/encrypted 固定 synthetic + simple baseline の 6 種、deterministic byte 単位安定 (`--check` で 6/6 OK 確認) |
+| AC17 | ✅ **拡張完全達成** | dev run #25765691451 で 実 fixture verdict PASS 6/6、cross-process invariance 実証完了 |
+| AC20 | ✅ **完全達成** | `pdf-feature-survey --expect-*` fail-fast guard + dev run #25765692757 で all satisfied |
+| AC21 | ✅ **完全達成** | denylist scope 限定実装 (METADATA / PAGE_TREE / OUTLINE)、未知 key 包含 (描画影響あり前提の安全側) |
+
+### 残 Open Issue (5 件、session63 から不変)
+
+| # | タイトル要約 | 状態 | 再開条件 |
+|---|---|---|---|
+| **#432** | [P0] 分割PDF 設計バグ | **PR-A/B/C1/C2/C2-execution-A/D/C3a/C3b + post-audit 完了 (C3b は merge 待ち)** | 次セッションで PR-C3c 着手 (classify survey gate + execute provenance gate + AC18/AC19 分離) |
+| **#445** | [P1] データモデル正規化 | 設計フェーズ | 次セッションで PR-D1 着手候補 |
+| #402 | searchDocuments OOM ガード | 段階1 完了 | 観測データ判断 |
+| #251 | summaryGenerator unit test | Scope 2 完了 | sinon 導入伴う他タスク or Vertex AI false negative |
+| #238 | force-reindex 孤児 posting | drift 未観測 | ADR-0015 silent failure metric ERROR or 削除済書類ヒット報告 |
+
+### Quality Gate review 持越し (PR-C3c で対応)
+
+- HIGH-1: verifyOne parent throw 時の child 短絡 (parent throw は library bug シナリオのみ、CRITICAL-1+HIGH-2 fix でカバー範囲拡大)
+- HIGH-4: pdf-feature-survey aggregate partial parse failure 集計 (file-level errors への page-level errors 集約)
+- HIGH-5: surveyGcs error message 取り違え (download vs surveyFile)
+- MEDIUM-1/2/4/5/6: PDFRef dangling silent / PDFNull lock test / TOCTOU / surveyFile page accessor catch / fixture self-consistency check
+- LOW 全 3 件: 空 catch / 空 dir silent / userUnit silent
+- N2 系統的: PR 履歴コメント reduce (PR-C3c マージ後 一括棚卸推奨)
+- type-design-analyzer: FileResult/VerifyResult discriminated union 化 (PR-C3c の consumer 設計と統合)
+
+### 次セッション着手項目
+
+1. **PR-C3c** (Issue #432、dev fixture 対象 destructive、要 codex セカンドオピニオン): classify-collision-docs に survey gate (AC15) + execute-collision-migration に provenance gate (AC18) + AC19 MatchedByHash/RepairableMissingFile 分離設計実装 + dev フルリハーサル 6 stage v2 再走
+2. **PR-D1** (Issue #445、read-only/設計): データモデル設計 ADR (fileName identity 排除 + docId namespace identity + provenance fields 必須化) + TypeScript 型定義 + Firestore schema 文書化 — PR-C3c と並行可能
+3. **Issue #432 reverse orphan 1 件** (`processed/20260413_未判定_未判定_p27-28.pdf`) 調査 (low priority、follow-up)
+
+### 教訓 (本セッション新規)
+
+- **pdf-lib API 仕様の前提を docstring に書く前にコード or 公式 d.ts で確認する**: `updateMetadata=false で save` と書いたが `SaveOptions` に該当 field なし。pdf-lib `PDFDocument.save(options)` は `useObjectStreams / addDefaultPage / objectsPerTick / updateFieldAppearances` のみ。「公式に存在しないメカニズムを前提にした設計は禁止」(CLAUDE.md MUST) に該当する潜在的事案を review (comment-analyzer C1) で catch。今後 pdf-lib 公式 .d.ts を参照してから docstring 化する。
+- **bare `catch` は CRITICAL の温床**: silent-failure-hunter CRITICAL-1 で `getStreamBytesForHash` の bare catch を指摘。本物の構造異常を encoded bytes で「偽 PASS」させ MatchedByHash 誤判定リスクを生んでいた。CLAUDE.md「empty catch blocks are never acceptable」+ feedback_overcorrection_regression.md と同型の事案、TypeScript で `instanceof UnsupportedEncodingError` specific の捕捉に書き換え。
+- **test 側に入れた pattern が production スクリプト側に反映漏れする**: silent-failure-hunter HIGH-2 で `proc.error` / `proc.signal` 区別が test ファイルに既に入っていたのに production verify-pdf-determinism.ts に欠けていた事案を catch。同 codebase 内の pattern 同期は機械的にできないため、review agent の存在価値が高い。
+- **PR 履歴コメントは将来 rot の温床**: comment-analyzer N2 系統的問題として「(PR-C3a で...)」「(PR-C3b 修正)」のような注釈は git blame で十分復元可能。PR-C3 完了後の一括棚卸を計画。
+
+---
+
+
 
 <a id="session63"></a>
 ## ✅ session63 完了サマリー (2026-05-12: Issue #432 PR-C3a 実装 + dev 実証 + main merge、Net 0)
