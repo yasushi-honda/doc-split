@@ -53,6 +53,7 @@ on:
           - audit-storage-mismatch
           - audit-storage-mismatch --no-orphans
           - audit-storage-mismatch --no-collisions
+          - audit-session61-parent-provenance
           - classify-collision-docs
           - setup-collision-fixture --dev
           - setup-collision-fixture --dev --cleanup
@@ -426,6 +427,15 @@ jobs:
             NODE_PATH=./functions/node_modules \
               FIREBASE_PROJECT_ID="$PROJECT_ID" \
               node "scripts/${SCRIPT_NAME}.js" "${ARGS[@]}"
+          elif [ "$SCRIPT_NAME" = "audit-session61-parent-provenance" ]; then
+            # Issue #432 PR-C2-execution post-audit: log secret masking で `{` が
+            # 置換されると JSON 再構成不能のため、artifact 経由で報告書を渡す。
+            # workflow_dispatch の choice には --out を含めず、ここで強制付与する。
+            NODE_PATH=./functions/node_modules \
+              FIREBASE_PROJECT_ID="$PROJECT_ID" \
+              STORAGE_BUCKET="$STORAGE_BUCKET" \
+              node "scripts/${SCRIPT_NAME}.js" \
+                --out "${GITHUB_WORKSPACE}/scripts/audit-session61-parent-provenance-output.json"
           else
             NODE_PATH=./functions/node_modules \
               FIREBASE_PROJECT_ID="$PROJECT_ID" \
@@ -441,5 +451,16 @@ jobs:
         with:
           name: classify-collision-docs-plan-${{ github.event.inputs.environment }}-${{ github.run_id }}
           path: scripts/plan-output.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload audit-session61-parent-provenance report artifact
+        # Issue #432 PR-C2-execution post-audit: log secret masking 回避のため
+        # 報告書を artifact 経由で取得。audit-session61-parent-provenance 実行時のみ動作。
+        if: ${{ github.event.inputs.script == 'audit-session61-parent-provenance' && always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-session61-parent-provenance-${{ github.event.inputs.environment }}-${{ github.run_id }}
+          path: scripts/audit-session61-parent-provenance-output.json
           if-no-files-found: warn
           retention-days: 30
