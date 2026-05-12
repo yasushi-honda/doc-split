@@ -441,20 +441,24 @@ describe('collisionClassifier (Issue #432 PR-C)', () => {
       expect(result.reason).to.contain('annotations');
     });
 
-    it('orphan + hashEvidence.type=unsupported (unsupported-resource-filter, Codex Important 反映) → Ambiguous', () => {
+    it('orphan + hashEvidence.type=unsupported (PR-C3b: optional-content 等の v2 reason) → Ambiguous', () => {
+      // PR-C3b で v1 の 'unsupported-resource-filter' reason は廃止 (image filter は
+      // encoded bytes hash で吸収)。本テストは「fingerprint 不能 = Ambiguous」の汎用
+      // 経路を v2 reason ('optional-content') で代表検証する。他 reason (encryption /
+      // acroform / annotations / malformed) も同 経路を通る。
       const evidence: DocEvidence = {
         doc: makeDoc({ id: 'filter-doc' }),
         hashEvidence: {
           type: 'unsupported',
-          reason: 'unsupported-resource-filter',
-          detail: 'page 0 resources canonical digest: UnsupportedEncodingError DCTDecode',
-          algorithm: 'pdf-page-visual-v1',
+          reason: 'optional-content',
+          detail: '/OCProperties present in catalog (optional content / layers)',
+          algorithm: 'pdf-page-visual-v2',
         },
         parent: PARENT_OK,
       };
       const result = classifyOrphan(evidence);
       expect(result.classification).to.equal('Ambiguous');
-      expect(result.reason).to.contain('unsupported-resource-filter');
+      expect(result.reason).to.contain('optional-content');
     });
 
     it('collision group loser + hashEvidence.type=unsupported (malformed) → Ambiguous (Repairable 経路から降格)', () => {

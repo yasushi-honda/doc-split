@@ -7,9 +7,12 @@ name: Run Operations Script
 # 環境別SA: GCP_SA_KEY_KANAMEONE / GCP_SA_KEY_DEV / GCP_SA_KEY(cocoro、将来GCP_SA_KEY_COCOROに移行)
 
 on:
-  # 注: workflow_dispatch.inputs は GitHub Actions の仕様上最大 10 個まで定義可能。
-  # 現在 9 個使用中（残り 1）。スクリプト固有の引数追加で上限超過する場合は、
-  # 共通 inputs を JSON 文字列に統合する設計（例: script_args_json）への移行を検討。
+  # 注: workflow_dispatch.inputs は GitHub Actions の仕様上 25 個まで定義可能
+  # (2025-12-04 拡張、それ以前は 10 個上限)。現在 10 個使用中（environment / script /
+  # doc_id / file_name / name1 / name2 / from_name / to_name / delete_from_master /
+  # expected_count + exec_args_json で実質 11、残り 14）。
+  # スクリプト固有の引数追加で上限が窮屈になる場合は、共通 inputs を JSON 文字列に
+  # 統合する設計（例: script_args_json）への移行を検討。
   workflow_dispatch:
     inputs:
       environment:
@@ -62,7 +65,9 @@ on:
           - pdf-feature-survey --source gcs --prefix original/
           - pdf-feature-survey --source gcs --prefix processed/
           - pdf-feature-survey --source gcs --prefix processed/ --limit 200
+          - pdf-feature-survey --source local --paths fixtures/ --expect-filter /CCITTFaxDecode,/JBIG2Decode,/JPXDecode,/DCTDecode --expect-subtype /Image --expect-encrypted
           - verify-pdf-determinism --synthetic
+          - verify-pdf-determinism --paths fixtures/simple.pdf,fixtures/with-ccittfaxdecode.pdf,fixtures/with-jbig2decode.pdf,fixtures/with-jpxdecode.pdf,fixtures/with-dctdecode.pdf,fixtures/encrypted.pdf
       doc_id:
         description: 'Document ID (required when script contains --doc-id; ignored otherwise)'
         required: false

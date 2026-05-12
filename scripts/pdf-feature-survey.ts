@@ -33,8 +33,17 @@
  *     },
  *     files: [
  *       { path, sizeBytes, pageCount, catalogFlags, pages: [{ pageIndex, filters, hasAnnots, ... }], errors }
- *     ]
+ *     ],
+ *     expectations: {                          // PR-C3b (AC20 strict guard): --expect-* で渡された期待値
+ *       filters: string[],                     // --expect-filter で指定された filter (例: ['/CCITTFaxDecode'])
+ *       subtypes: string[],                    // --expect-subtype で指定された XObject subtype
+ *       encrypted: boolean,                    // --expect-encrypted が指定されたか
+ *       acroform: boolean,                     // --expect-acroform が指定されたか
+ *       failures: string[]                     // 満たされなかった期待値の説明 (空 = 全 satisfy、exit 0)
+ *     }
  *   }
+ *
+ * 期待値 (expectations.failures) が 1 件以上ある場合は exit 1。
  */
 
 import * as admin from 'firebase-admin';
@@ -59,6 +68,17 @@ interface CliOptions {
   prefix: string;
   limit: number;
   out: string | null;
+  /** AC20 strict guard (PR-C3b): 指定 filter が survey 結果の byXObjectFilter or
+   *  byContentFilter のいずれにも含まれない場合 exit 1。fixture が実際に該当 filter
+   *  を持つことを CI で fail-fast assert する。空配列は guard 無効化。 */
+  expectFilter: string[];
+  /** AC20 strict guard: 指定 XObject subtype (例 /Image /Form) が byXObjectSubtype
+   *  に含まれない場合 exit 1。fixture が image XObject 構造を持つことを assert。 */
+  expectSubtype: string[];
+  /** AC20 strict guard: encrypted catalog flag が 1 件以上検出されない場合 exit 1。 */
+  expectEncrypted: boolean;
+  /** AC20 strict guard: acroform catalog flag が 1 件以上検出されない場合 exit 1。 */
+  expectAcroform: boolean;
 }
 
 interface CatalogFlags {
@@ -153,6 +173,10 @@ function parseArgs(argv: string[]): CliOptions {
     prefix: '',
     limit: 0,
     out: null,
+    expectFilter: [],
+    expectSubtype: [],
+    expectEncrypted: false,
+    expectAcroform: false,
   };
   for (let i = 2; i < argv.length; i++) {
     const arg = argv[i];
@@ -190,6 +214,20 @@ function parseArgs(argv: string[]): CliOptions {
         opts.out = requireValue(arg, next);
         i++;
         break;
+      case '--expect-filter':
+        opts.expectFilter = requireValue(arg, next).split(',').map((s) => s.trim()).filter(Boolean);
+        i++;
+        break;
+      case '--expect-subtype':
+        opts.expectSubtype = requireValue(arg, next).split(',').map((s) => s.trim()).filter(Boolean);
+        i++;
+        break;
+      case '--expect-encrypted':
+        opts.expectEncrypted = true;
+        break;
+      case '--expect-acroform':
+        opts.expectAcroform = true;
+        break;
       case '--help':
       case '-h':
         printUsage();
@@ -214,6 +252,14 @@ function printUsage(): void {
       '  --prefix path/            GCS object prefix (gcs mode)',
       '  --limit N                 max files to scan (0 = unlimited)',
       '  --out PATH                write JSON output to PATH (default: stdout)',
+      '',
+      'Strict guard options (PR-C3b, AC20 fail-fast assert; exit 1 if any not met):',
+      '  --expect-filter LIST      comma-separated /Filter names that MUST be detected',
+      '                            (e.g. /CCITTFaxDecode,/JBIG2Decode); matched against',
+      '                            byXObjectFilter ∪ byContentFilter',
+      '  --expect-subtype LIST     comma-separated XObject /Subtype names (e.g. /Image)',
+      '  --expect-encrypted        require at least 1 file with isEncrypted=true',
+      '  --expect-acroform         require at least 1 file with /AcroForm present',
     ].join('\n')
   );
 }
@@ -630,6 +676,62 @@ function aggregate(results: FileResult[]): SurveySummary {
   return summary;
 }
 
+/**
+ * --expect-* strict guard 評価 (PR-C3b, AC20 反映)。
+ *
+ * 期待値が満たされない場合は exit 1 (CI fail-fast)。fixture が実際に該当 feature を
+ * 含むことを classify 前段の必須 gate として強制し、PR-C2/PR-C3a で再演された
+ * 「dev fixture に kanameone 実 PDF の feature が含まれず本番欠陥を隠蔽する」
+ * アンチパターンを構造的に防止する。
+ */
+function evaluateExpectations(opts: CliOptions, summary: SurveySummary): string[] {
+  const failures: string[] = [];
+  const allFilters = new Set<string>([
+    ...Object.keys(summary.byXObjectFilter),
+    ...Object.keys(summary.byContentFilter),
+  ]);
+  for (const expected of opts.expectFilter) {
+    if (!allFilters.has(expected)) {
+      failures.push(
+        `--expect-filter ${expected} not found (detected filters: ${[...allFilters].sort().join(', ') || '<none>'})`
+      );
+    }
+  }
+  const allSubtypes = new Set<string>(Object.keys(summary.byXObjectSubtype));
+  for (const expected of opts.expectSubtype) {
+    if (!allSubtypes.has(expected)) {
+      failures.push(
+        `--expect-subtype ${expected} not found (detected subtypes: ${[...allSubtypes].sort().join(', ') || '<none>'})`
+      );
+    }
+  }
+  if (opts.expectEncrypted && (summary.byCatalogFlag.encrypted ?? 0) === 0) {
+    failures.push(`--expect-encrypted but no file has isEncrypted=true`);
+  }
+  if (opts.expectAcroform && (summary.byCatalogFlag.acroform ?? 0) === 0) {
+    failures.push(`--expect-acroform but no file has /AcroForm in catalog`);
+  }
+  // Codex review #019e1e54 Important 2 反映: --expect-* 指定時は survey parse error
+  // (filesWithErrors) も failure 条件に含める。部分 parse 失敗 (1 file の load 例外
+  // 等) が起きた状態で「期待 filter が別 file で検出された」結果が exit 0 になり、
+  // partial result を全成功と誤認するアンチパターンを防ぐ。
+  // --expect-* が 1 つも指定されていない場合は survey only mode なので filesWithErrors
+  // による exit code 強制は行わない (caller が summary を見て判断)。
+  const expectModeActive =
+    opts.expectFilter.length +
+      opts.expectSubtype.length +
+      (opts.expectEncrypted ? 1 : 0) +
+      (opts.expectAcroform ? 1 : 0) >
+    0;
+  if (expectModeActive && summary.filesWithErrors > 0) {
+    failures.push(
+      `expect mode: ${summary.filesWithErrors}/${summary.totalFiles} file(s) had parse errors; ` +
+        `partial scan cannot satisfy strict --expect-* assertions safely`
+    );
+  }
+  return failures;
+}
+
 async function main(): Promise<void> {
   const opts = parseArgs(process.argv);
   let results: FileResult[];
@@ -649,7 +751,18 @@ async function main(): Promise<void> {
     results = await surveyGcs(bucketName, opts.prefix, opts.limit);
   }
   const summary = aggregate(results);
-  const payload = { summary, files: results };
+  const expectationFailures = evaluateExpectations(opts, summary);
+  const payload = {
+    summary,
+    files: results,
+    expectations: {
+      filters: opts.expectFilter,
+      subtypes: opts.expectSubtype,
+      encrypted: opts.expectEncrypted,
+      acroform: opts.expectAcroform,
+      failures: expectationFailures,
+    },
+  };
   const jsonStr = JSON.stringify(payload, null, 2);
   if (opts.out) {
     fs.writeFileSync(opts.out, jsonStr);
@@ -661,6 +774,20 @@ async function main(): Promise<void> {
   console.error(
     `done: scanned=${summary.scannedFiles}/${summary.totalFiles} errors=${summary.filesWithErrors}`
   );
+  if (expectationFailures.length > 0) {
+    console.error(`FAIL: ${expectationFailures.length} expectation(s) not met:`);
+    for (const f of expectationFailures) console.error(`  - ${f}`);
+    process.exit(1);
+  }
+  if (
+    opts.expectFilter.length +
+      opts.expectSubtype.length +
+      (opts.expectEncrypted ? 1 : 0) +
+      (opts.expectAcroform ? 1 : 0) >
+    0
+  ) {
+    console.error(`expects: all satisfied`);
+  }
 }
 
 main().catch((err) => {

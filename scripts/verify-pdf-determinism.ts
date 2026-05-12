@@ -1,13 +1,15 @@
 #!/usr/bin/env ts-node
 /**
- * Issue #432 PR-C3a: cross-process PDF fingerprint determinism verifier (read-only).
+ * Issue #432 PR-C3a/b: cross-process PDF fingerprint determinism verifier (read-only).
  *
  * 目的 (Codex MCP セカンドオピニオン #1 Critical, AC17 反映):
- *   - `pdf-page-visual-v1` fingerprint が **別プロセス間** で同一 hex を返すことを実証
+ *   - `pdf-page-visual-v2` fingerprint が **別プロセス間** で同一 hex を返すことを実証
  *   - pdf-lib `PDFDocument.save()` は同一プロセス内 deterministic だがプロセス間で
  *     非決定 (PDF `/ID` random、internal metadata) のため、classify と execute が
  *     別プロセスで走る以上、fingerprint 側の cross-process invariance は precondition
  *   - PR-C3b の `pdf-page-visual-v2` 着手前 (AC17) に main merge 必須 + dev で実証必須
+ *   - PR-C3b で AC17 拡張: scripts/fixtures/ の CCITT/JBIG2/JPX/DCT/encrypted 等
+ *     hand-craft fixture を --paths 経由で cross-process invariance 実証
  *
  * 副作用なし: PDF を read するのみ。Firestore / Storage への書き込みなし。
  *
@@ -22,14 +24,14 @@
  *   # 内蔵 synthetic fixture (pdf-lib generated) で smoke test
  *   ts-node scripts/verify-pdf-determinism.ts --synthetic --out determinism.json
  *
- *   # 既存 PDF fixture で検証
+ *   # 既存 PDF fixture (scripts/fixtures/* 等) で検証
  *   ts-node scripts/verify-pdf-determinism.ts --paths fixture-a.pdf,fixture-b.pdf --out determinism.json
  *
  * 出力 (JSON):
  *   {
  *     verdict: 'PASS' | 'FAIL',
- *     algorithm: 'pdf-page-visual-v1',
- *     totals: { files, pass, fail },
+ *     algorithm: 'pdf-page-visual-v2',
+ *     totals: { files, pass, ok, unsupportedPass, nonDeterministic, fail },
  *     results: [{ path, kind, sameProcess: {...}, crossProcess: {...} }]
  *   }
  */
@@ -59,7 +61,7 @@ interface VerifyResult {
   // 'unsupported': fingerprint 計算は完了したが unsupported 分類 (encrypted / acroform 等)、
   //   parent と child で同 reason なら invariance 成立として扱う
   // 'non-deterministic': **same-process** で fingerprint が一致しない (precondition 違反、
-  //   AC17 失敗)。pdf-page-visual-v1 の deterministic 仕様自体が壊れている重大事象
+  //   AC17 失敗)。pdf-page-visual-v2 の deterministic 仕様自体が壊れている重大事象
   // 'failed': fingerprint 計算が parent で例外、または child process 異常終了
   kind: 'ok' | 'unsupported' | 'non-deterministic' | 'failed';
   pageCount: number | null;
@@ -234,6 +236,20 @@ function runChildFingerprint(
     // ts-node 経由で同 script を child mode で再起動。--child-mode で run 経路を分岐。
     // ts-node の起動コストはあるが、ts-node 内蔵で本 script が回る環境を前提とする
     // (PR-C2 既存 ts script と同様、scripts/package.json に ts-node 依存あり).
+    // child の CWD + TS_NODE_PROJECT を scripts/ 配下の tsconfig.json に固定。
+    //
+    // 解消する問題: parent CWD が doc-split root の場合、子 ts-node は
+    // tsconfig.json を root から上方向に探索するが root には存在せず、
+    // ambient default で module=NodeNext を採用する一方 moduleResolution は
+    // 未指定となり TS5109 "moduleResolution must be set to NodeNext when module
+    // is NodeNext" で child が異常終了する (local dev で再現)。
+    // CI では `cd scripts` 後実行のため偶然 scripts/tsconfig.json が解決されて
+    // 動いていたが、CWD 暗黙依存は環境差で壊れる。
+    //
+    // 対策: cwd と TS_NODE_PROJECT を明示固定し、parent 実行位置と無関係に
+    // 子が同じ tsconfig を読むよう保証する。
+    const scriptsDir = path.dirname(scriptPath);
+    const tsconfigPath = path.join(scriptsDir, 'tsconfig.json');
     const proc = spawnSync(
       process.execPath,
       [
@@ -247,14 +263,40 @@ function runChildFingerprint(
       {
         encoding: 'utf-8',
         maxBuffer: 50 * 1024 * 1024,
+        cwd: scriptsDir,
         env: {
           ...process.env,
           // child でも同じ ts-node 設定が回るよう TS_NODE_TRANSPILE_ONLY を有効化
           // (型エラーは parent で既に検出済)
           TS_NODE_TRANSPILE_ONLY: '1',
+          // scripts/tsconfig.json を明示指定 (module/moduleResolution 等の解決を
+          // 親 CWD 依存にしない)
+          TS_NODE_PROJECT: tsconfigPath,
         },
       }
     );
+    // silent-failure-hunter HIGH-2 反映: spawn 失敗 (ENOENT/EACCES 等) と
+    // signal kill (SIGKILL/SIGTERM 等 OOM killer) と exit !== 0 を区別する。
+    // テスト側 (functions/test/pdfPageVisualFingerprint.test.ts:115-129) には
+    // 既に同 pattern が入っているが production スクリプト側に反映漏れていた。
+    if (proc.error) {
+      return {
+        hex: null,
+        stderr: '',
+        exitCode: null,
+        kind: 'failed',
+        reason: `child spawn failed: ${proc.error.message}`,
+      };
+    }
+    if (proc.signal) {
+      return {
+        hex: null,
+        stderr: proc.stderr || '',
+        exitCode: null,
+        kind: 'failed',
+        reason: `child killed by signal=${proc.signal}`,
+      };
+    }
     if (proc.status !== 0) {
       return {
         hex: null,
@@ -269,7 +311,45 @@ function runChildFingerprint(
         kind: string;
         hex?: string;
         reason?: string;
+        algorithm?: string;
       };
+      // silent-failure-hunter CRITICAL-3 + Codex review #019e1e54 Important 3 反映:
+      // child stdout の整合性を検証する。partial JSON / 想定外 kind / 不正 hex /
+      // algorithm 不一致を「kind=failed」として顕在化させ、verifyOne 側で
+      // cross-process mismatch と取り違えない経路に流す。
+      if (parsed.kind !== 'ok' && parsed.kind !== 'unsupported') {
+        return {
+          hex: null,
+          stderr: `${proc.stderr || ''}\nunexpected child kind=${parsed.kind}`,
+          exitCode: proc.status,
+          kind: 'failed',
+          reason: `child returned unexpected kind=${parsed.kind}`,
+        };
+      }
+      // algorithm 一致確認 (parent と child で同 algorithm version を保証、
+      // pdf-lib upgrade / module path 差等で別 algorithm が出る事故を catch)
+      if (parsed.algorithm !== HASH_ALGORITHM) {
+        return {
+          hex: null,
+          stderr: `${proc.stderr || ''}\nchild algorithm=${parsed.algorithm} !== parent ${HASH_ALGORITHM}`,
+          exitCode: proc.status,
+          kind: 'failed',
+          reason: `child algorithm mismatch: ${parsed.algorithm}`,
+        };
+      }
+      // hex 形式厳密検証: 64-char 0-9 a-f のみ (sha256 hex)
+      if (
+        parsed.kind === 'ok' &&
+        (typeof parsed.hex !== 'string' || !/^[0-9a-f]{64}$/.test(parsed.hex))
+      ) {
+        return {
+          hex: null,
+          stderr: `${proc.stderr || ''}\nchild ok but hex invalid: ${JSON.stringify(parsed.hex)}`,
+          exitCode: proc.status,
+          kind: 'failed',
+          reason: 'child ok but hex not 64-char sha256 hex',
+        };
+      }
       return {
         hex: parsed.hex ?? null,
         stderr: proc.stderr || '',
@@ -345,13 +425,13 @@ async function verifyOne(
   }
   if (!crossMatch) notes.push('cross-process mismatch (parent vs child differ)');
 
-  // same-process mismatch は pdf-page-visual-v1 の deterministic 仕様違反 = precondition
+  // same-process mismatch は pdf-page-visual-v2 の deterministic 仕様違反 = precondition
   // 違反として独立 kind に分離する (review #3 反映)。cross-process FAIL と区別することで
   // operator がアルゴリズム再設計が必要か単に child spawn 環境差かを切り分け可能。
   let kind: VerifyResult['kind'];
   if (!sameMatch) {
     kind = 'non-deterministic';
-    notes.unshift('same-process mismatch — pdf-page-visual-v1 deterministic precondition violated');
+    notes.unshift('same-process mismatch — pdf-page-visual-v2 deterministic precondition violated');
   } else if (fpA.kind === 'ok') {
     kind = 'ok';
   } else {

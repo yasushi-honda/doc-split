@@ -82,7 +82,9 @@ function makePlan(overrides: Partial<PlanFixture> = {}): PlanFixture {
     projectId: 'test-project',
     bucket: 'test-bucket',
     prefix: 'processed/',
-    hashAlgorithm: 'pdf-page-visual-v1',
+    // PR-C3b: HASH_ALGORITHM が v2 に bump されたため、現行コード合致 plan を v2 で発行。
+    // 旧 v1 plan の reject は別 test ('pdf-page-visual-v0-FAKE' literal) で検証する。
+    hashAlgorithm: 'pdf-page-visual-v2',
     pdfLibVersion,
     summary: {},
     operations: [],
@@ -177,8 +179,19 @@ describe('execute-collision-migration AC13 gate (Issue #432 PR-C2, pr-test-analy
     expect(result.stderr).to.match(/plan\.hashAlgorithm.*missing|hashAlgorithm/);
   });
 
-  it('Critical: plan.hashAlgorithm が現行 HASH_ALGORITHM と不一致 → exit 2', () => {
+  it('Critical: plan.hashAlgorithm が現行 HASH_ALGORITHM と不一致 (架空 v0-FAKE) → exit 2', () => {
     const plan = makePlan({ hashAlgorithm: 'pdf-page-visual-v0-FAKE' });
+    const result = runExecuteScript(plan);
+    expect(result.status).to.equal(2);
+    expect(result.stderr).to.contain('hashAlgorithm');
+  });
+
+  it('Critical: plan.hashAlgorithm が "pdf-page-visual-v1" (旧 v1 plan) → exit 2', () => {
+    // silent-failure-hunter MEDIUM-3 反映: PR-C3b で HASH_ALGORITHM を v2 に bump した後、
+    // session60/61 で生成済の v1 plan が execute 経路に流れた場合に reject されること
+    // を実際の v1 literal で assert する。架空 v0-FAKE では「v1 が migration tolerance
+    // で silently 通る」回帰を検知できない。
+    const plan = makePlan({ hashAlgorithm: 'pdf-page-visual-v1' });
     const result = runExecuteScript(plan);
     expect(result.status).to.equal(2);
     expect(result.stderr).to.contain('hashAlgorithm');

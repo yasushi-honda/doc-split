@@ -7,6 +7,9 @@
  * PR-C2 (2026-05-12, session60 着手): hash 比較を `sha256(raw PDF bytes)` から
  * `pdf-page-visual-v1` fingerprint 比較に変更 (pdf-lib `PDFDocument.save()` の
  * cross-process non-determinism を回避)。実装は scripts/lib/pdfPageVisualFingerprint.ts。
+ * PR-C3b (2026-05-13): fingerprint アルゴリズムを v2 に bump (denylist + image filter
+ * encoded bytes hash)。FingerprintAlgorithm は型 additive 拡張で v1/v2 並記。
+ * execute 側 strict gate (v2 のみ accept) は PR-C3c で導入。
  *   - DocEvidence.hashEvidence.type='matched' → fingerprint hex が一致 (algorithm 明示)
  *   - DocEvidence.hashEvidence.type='mismatched' → fingerprint hex が異なる
  *   - DocEvidence.hashEvidence.type='unsupported' → PDF が暗号化 / AcroForm 等で fingerprint
@@ -51,11 +54,14 @@ export interface CollisionDoc {
  *   - parent: parentDocumentId の有無 + 親 doc 存在 + 元 PDF 実在
  * を Firestore / Storage アクセスで埋め、本 classifier (pure) に渡す。
  *
- * `algorithm` は fingerprint アルゴリズムバージョン (例 'pdf-page-visual-v1')。
+ * `algorithm` は fingerprint アルゴリズムバージョン (例 'pdf-page-visual-v2')。
  * plan JSON の precondition snapshot に記録し、execute 側で固定値と照合して mismatch
  * なら gate reject する (AC13)。
+ *
+ * PR-C3b 移行期: v1/v2 並記 (additive)。v1 は legacy plan の forward compat 目的、
+ * 新規 classify は v2 を出す。execute 側 strict gate (v2 のみ accept) は PR-C3c で実装。
  */
-export type FingerprintAlgorithm = 'pdf-page-visual-v1';
+export type FingerprintAlgorithm = 'pdf-page-visual-v1' | 'pdf-page-visual-v2';
 
 // drift 防止のため pdfPageVisualFingerprint で定義した UnsupportedReason を re-export
 import type { UnsupportedReason as FingerprintUnsupportedReason } from './pdfPageVisualFingerprint';
@@ -150,18 +156,24 @@ export function classifyCollisionGroup(
   // ケース 1: hash matched が一意 → 自動 migrate (敗者は再生成 or LostOrUnrecoverable)
   if (matchedDocIds.length === 1) {
     const winnerId = matchedDocIds[0];
-    return group.evidences.map((e) =>
-      e.doc.id === winnerId
-        ? {
-            docId: e.doc.id,
-            classification: 'MatchedByHash' as const,
-            reason:
-              'fingerprint(actual storage, pdf-page-visual-v1) == fingerprint(regenerated from parent + splitFromPages)',
-            suggestedWinner: false,
-            recommendedAction: 'migrate-to-namespace' as const,
-          }
-        : classifyLoserForRegeneration(e, /* hasUniqueWinner */ true)
-    );
+    return group.evidences.map((e) => {
+      if (e.doc.id === winnerId) {
+        // code-reviewer I1 + comment-analyzer I4 反映:
+        // reason 文字列の algorithm を hashEvidence.algorithm から動的化し、v1/v2 plan
+        // に対して常に正しい version を出力する (drift 防止)。'matched' 型は MatchedByHash
+        // 経路の前提なので type narrowing で algorithm 必須 field を取り出せる。
+        const algorithm =
+          e.hashEvidence.type === 'matched' ? e.hashEvidence.algorithm : '<unknown>';
+        return {
+          docId: e.doc.id,
+          classification: 'MatchedByHash' as const,
+          reason: `fingerprint(actual storage, ${algorithm}) == fingerprint(regenerated from parent + splitFromPages)`,
+          suggestedWinner: false,
+          recommendedAction: 'migrate-to-namespace' as const,
+        };
+      }
+      return classifyLoserForRegeneration(e, /* hasUniqueWinner */ true);
+    });
   }
 
   // ケース 2: hash matched が複数 → 全員 Ambiguous (どれを勝者とすべきか断定不能)
