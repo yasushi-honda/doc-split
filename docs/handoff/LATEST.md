@@ -1,8 +1,119 @@
 # ハンドオフメモ
 
-**更新日**: 2026-05-12 session60 (**Issue #432 PR-C2 v2 完遂 = pdf-page-visual-v1 fingerprint で cross-process MatchedByHash 成立、Net 0**。session59 で確定した v2 計画を 1 セッションで実装完了し、PR #441 merged。3 commits 累積: v2 計画反映 (`0a06d82`) → Codex MCP post-review 反映 (Critical 1 + Important 4 + Suggestion 3, `1e5988f`) → 5 並列 review 反映 (Critical 2 + Important 5 + Suggestion 1, `6829932`)。dev 通し検証で `MatchedByHash:1 / Ambiguous:2 / RepairableMissingFile:2 / LostOrUnrecoverable:1` を成立確認 = PR-C1 で 0 件だった MatchedByHash が PR-C2 で復活、cross-process determinism 実証。9 files / +1804/-66 行、955 mocha tests passing (cross-process spawn + cross-locale spawn + AC13 gate test 含む)。次セッションは PR-C2-execution = cocoro classify dry-run + kanameone 番号認可付き execute + post-audit + Issue #432 close)
-**ブランチ**: main (`.serena/project.yml` のみ未コミット、Serena LSP 自動更新で機能影響なし)
-**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + (session29-55 累積実績は archive 参照) + Phase 8 (session56 = 分割PDF Storage 設計バグ調査、Net -1) + Phase 8 (session57 = Issue #432 PR-A/B/D 完遂、Net 0) + Phase 8 (session58 = Issue #432 PR-C1 完遂、Net 0) + Phase 8 (session59 = PR-C1 設計欠陥発覚 + PR-C2 v2 計画確定、Net 0) + **Phase 8 (session60 = Issue #432 PR-C2 v2 完遂、Net 0)** 完遂
+**更新日**: 2026-05-12 session61 (**Issue #432 PR-C2-execution 部分完遂 = kanameone RepairableMissingFile 4 件自動復旧 + CCITTFaxDecode 設計限界発覚、Net 0**。kanameone 本番 classify で 135 docs 全件 `unsupported-resource-filter: /CCITTFaxDecode stream encoding not supported` が判明し、Ambiguous → Gate 0 reject → 自動復旧不能と確定。ユーザー判断「A+B ハイブリッド」採用: A = RepairableMissingFile 4 件 (op-0136~op-0139) のみ番号認可で execute (✅ 全件 regenerate-from-parent + docId namespace に save 成功、post-audit で fileUrl orphan 4→0)、B = 残 135 Ambiguous は PR-C3 で別 hash 戦略 (CCITTFaxDecode 対応 or image-render-hash) を Codex MCP セカンドオピニオン経由で設計予定。workflow 改修 3 件 (classify plan artifact 化 / execute-collision-migration choice 追加 / --operations filter 追加)。次セッションは PR-C3 計画 + Issue #432 残 135 Ambiguous + 新規発見 reverse orphan 1 件の調査)
+**ブランチ**: `fix/issue-432-pr-c2-execution` (本 PR 化中、3 commits)
+**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + (session29-55 累積実績は archive 参照) + Phase 8 (session56 = 分割PDF Storage 設計バグ調査、Net -1) + Phase 8 (session57 = Issue #432 PR-A/B/D 完遂、Net 0) + Phase 8 (session58 = Issue #432 PR-C1 完遂、Net 0) + Phase 8 (session59 = PR-C1 設計欠陥発覚 + PR-C2 v2 計画確定、Net 0) + Phase 8 (session60 = Issue #432 PR-C2 v2 完遂、Net 0) + **Phase 8 (session61 = Issue #432 PR-C2-execution A 部分完遂 + PR-C3 計画必要、Net 0)** 完遂
+
+<a id="session61"></a>
+## ✅ session61 完了サマリー (2026-05-12: Issue #432 PR-C2-execution A 部分完遂、Net 0)
+
+session60 で merge した PR-C2 v2 (pdf-page-visual-v1 fingerprint) を kanameone 本番に classify 実行したところ、**135 docs 全件 CCITTFaxDecode 未対応で Ambiguous 倒れ**。dev fixture には CCITTFaxDecode サンプルがなく Codex MCP セカンドオピニオン (Important 4: DCTDecode/JPXDecode 未対応) でも見落とした。ユーザー判断で「A + B ハイブリッド」採用、A = RepairableMissingFile 4 件のみ番号認可付き execute (✅ 全件成功)、B = 残 135 Ambiguous は PR-C3 で対応。
+
+### 経緯
+
+1. **PR #440 (session59-60 handoff) merge** (`da9a348`、squash merge、CI 全 SUCCESS)
+2. **新ブランチ `fix/issue-432-pr-c2-execution` 作成**、PR-C2-execution 着手
+3. **cocoro classify dry-run** (GitHub Actions workflow_dispatch、CI SA 経由): `totalGroups: 0 / collisionDocs: 0 / orphans: 0` ✅ (被害ゼロ環境、期待通り)
+4. **kanameone classify dry-run** (CI SA 経由): `totalGroups: 45 / totalCollisionDocs: 135 / totalOrphans: 4`、`byClassification: { MatchedByHash: 0, Ambiguous: 135, RepairableMissingFile: 4, LostOrUnrecoverable: 0 }`
+5. **Ambiguous 135 件の reason 分析**: ほぼ全件 `unsupported-pdf-feature: unsupported-resource-filter (page 0 resources canonical digest failed: /CCITTFaxDecode stream encoding not supported)`
+   - **/CCITTFaxDecode = CCITT Group 3/4 FAX 圧縮**、スキャナ生成 PDF / FAX 出力で最頻出。kanameone のスキャン書類は大半がこの形式
+   - PR-C2 `canonicalPageResourceDigest` が image stream decode 不能で例外 → `unsupported-resource-filter` で**設計通り** Ambiguous に降格 → Gate 0 (AC13) で destructive action reject
+6. **ユーザー判断「A + B ハイブリッド」採用** (4 原則 §1 = AI は executor、ユーザーが decision-maker):
+   - A = RepairableMissingFile 4 件 (op-0136 ~ op-0139) のみ番号認可で execute (リスク最小、orphan 解消で部分的に主目的達成)
+   - B = 残 135 Ambiguous は PR-C3 で CCITTFaxDecode 対応 / 別 hash 戦略 / image-render-hash 等を Codex MCP セカンドオピニオン経由で設計
+7. **workflow 改修 3 件 (本 PR の 3 commits)**:
+   - `a187835` ci: classify-collision-docs の plan JSON を artifact 化 (log secret masking で `{` → `***` の回避)
+   - `111d485` ci: execute-collision-migration を workflow_dispatch に追加 (plan artifact + 入力 opIds から approval.json を動的生成、`exec_args_json` 1 input 追加)
+   - `f7e8567` ci: --operations フィルタ追加 (approval 外 op を gate-rejected exit 1 にしないため、approvedOperationIds に二重 filter)
+8. **kanameone execute (番号認可済)** (CI SA 経由):
+   - Filter: op-0136, op-0137, op-0138, op-0139 (Processing 4/139)
+   - ✅ op-0136 Lso7jEXzWxBjU4Cj6zqR (regenerate-from-parent): regenerated from parent and saved to docId namespace
+   - ✅ op-0137 M7i4Nx6khiYEo2KTGJHg: 同上
+   - ✅ op-0138 U4Lf5ZPNA4IyH73SXE2P: 同上
+   - ✅ op-0139 gifjllJ57Sx58TktzHCf: 同上
+   - Summary: `executed: 4`、gate-rejected: 0
+9. **post-audit (`audit-storage-mismatch`)** (CI SA 経由):
+   - **fileUrl orphans: 4 → 0** ✅ (PR-C2 主目的部分達成)
+   - **reverse orphans: 1 件新規発見** (`processed/20260413_未判定_未判定_p27-28.pdf` - Storage 実体あり Firestore 参照なし)
+   - **fileName collisions: 45 → 47** (旧 Ambiguous 45 + 新 2 = PR-C2 復旧 4 docs が 2 fileName で 2 groups 増。docId namespace で物理 path は別なので正常副作用)
+
+### Issue Net 変化
+
+| 項目 | 内容 |
+|------|------|
+| Close 数 | 0 件 |
+| 起票数 | 0 件 (Issue #432 にコメント追記のみ予定、reverse orphan 1 件は #432 内 follow-up に集約) |
+| **Net 変化 (session61 単独)** | **0 件** |
+
+**Net 0 の進捗判定**: ✅ 正の構造的進捗。Issue #432 (P0) の被害 4 docs を自動復旧 (silent breakage を実復旧で完遂)。残 135 Ambiguous は CCITTFaxDecode 設計限界として明確化し、PR-C3 の Codex セカンドオピニオン経由設計フェーズに移行可能。reverse orphan 1 件は新規発見だが Issue #432 と関連が薄く、別途調査して Issue 化判断 (rating ≥ 7 + confidence ≥ 80 のみ起票)。
+
+### dev → kanameone での設計限界判明 (PR-C2 教訓 #3 の再演)
+
+session60 handoff の教訓「fixture が本番欠陥を隠蔽するアンチパターン」(#3) を **再び** 踏襲。dev fixture には CCITTFaxDecode サンプルを含めず、Codex MCP セカンドオピニオン (Important 4: DCTDecode/JPXDecode 未対応) で他 image filter は指摘されたが、**CCITTFaxDecode は明示的に列挙されなかった**。
+
+PR-C3 設計時の対策:
+- **kanameone 実 PDF を dev fixture に含める** (個人情報マスク版を最小限取得して `tests/fixtures/kanameone-sample-ccittfaxdecode.pdf` として)
+- **本番 PDF feature 分布の事前調査** (`pdf-feature-survey.ts` 等で全本番 PDF の `/Resources/XObject/*/Filter` を列挙し、未対応 filter の存在を classify 前に検出)
+- これは Codex セカンドオピニオン Suggestion: 「暗号化/AcroForm/optional content/encryption は自動復旧対象外、Ambiguous 明示」の延長
+
+### workflow 改修詳細 (commits)
+
+| commit | 内容 | 行数 |
+|---|---|---|
+| `a187835` | `ci(run-ops-script): classify-collision-docs の plan JSON を artifact 化` — log secret masking 回避、`actions/upload-artifact@v4` で plan-output.json 取得経路確立 | +20/-1 |
+| `111d485` | `ci(run-ops-script): execute-collision-migration を workflow_dispatch に追加` — script choice 2 件 + `exec_args_json` input + Parse step (jq validate, planRunId 数字 / opId `op-NNNN` 正規表現) + Download artifact step (`actions/download-artifact@v4` with `run-id`) + Generate approval JSON step (plan の op 抽出 + `gs://<bucket>/<path>` で approvedPaths 展開 + opId 数の整合検証) + Run script step に分岐追加 | +114/-0 |
+| `f7e8567` | `ci(run-ops-script): execute-collision-migration に --operations フィルタ追加` — plan 内の approval 外 op を gate-rejected で exit 1 にしないため、approvedOperationIds に二重 filter (approval + operations) | +8/-0 |
+
+### 復旧した 4 docs の詳細 (番号認可 + execute 結果)
+
+| operationId | docId | parentDocumentId | splitFromPages | sourcePath (orphan、削除なし、404 silent skip) | destPath (新規 write、復旧完了) |
+|---|---|---|---|---|---|
+| op-0136 | `Lso7jEXzWxBjU4Cj6zqR` | `Xe6jCKoTk4yflHqefDtb` | 1-2 | `processed/20260509_未判定_未判定_p1-2.pdf` | `processed/Lso7jEXzWxBjU4Cj6zqR/20260509_未判定_未判定_p1-2.pdf` |
+| op-0137 | `M7i4Nx6khiYEo2KTGJHg` | `EkZ6bwIM3ji17UugWeEr` | 3 | `processed/20260509_未判定_未判定_p3.pdf` | `processed/M7i4Nx6khiYEo2KTGJHg/20260509_未判定_未判定_p3.pdf` |
+| op-0138 | `U4Lf5ZPNA4IyH73SXE2P` | `FIGbegoDvfaUTO2cYHkI` | 3 | `processed/20260509_未判定_未判定_p3.pdf` | `processed/U4Lf5ZPNA4IyH73SXE2P/20260509_未判定_未判定_p3.pdf` |
+| op-0139 | `gifjllJ57Sx58TktzHCf` | `EkZ6bwIM3ji17UugWeEr` | 1-2 | `processed/20260509_未判定_未判定_p1-2.pdf` | `processed/gifjllJ57Sx58TktzHCf/20260509_未判定_未判定_p1-2.pdf` |
+
+### 主要 PR / 実行記録
+
+| 項目 | 値 |
+|---|---|
+| **本 PR** (session61) | `fix/issue-432-pr-c2-execution` (3 commits) - PR 作成予定 |
+| planId | `plan-2026-05-12T04-21-39-187Z-eca5b3f3` |
+| classify run id (kanameone) | 25713096820 |
+| execute --dry-run run id | 25713588277 (4 ops `all gates passed; would execute`) |
+| execute (destructive) run id | 25713911985 (4 ops ✅ executed) |
+| post-audit run id | 25714003425 (orphans 4→0、reverse 1 件発見) |
+
+### 残 Open Issue (4 件)
+
+| # | タイトル要約 | 状態 | 再開条件 |
+|---|---|---|---|
+| **#432** | [P0] 分割PDF 設計バグ | **PR-A/B/C1/C2/C2-execution-A/D 完了、PR-C3 必要** (CCITTFaxDecode + 135 Ambiguous + reverse orphan 1 件) | 次セッションで PR-C3 計画 (Codex MCP セカンドオピニオン) |
+| #402 | searchDocuments OOM ガード + 計測ログ | 段階1 完了、段階2/3 観測待ち | 観測データ判断 |
+| #251 | summaryGenerator unit test + buildSummaryPrompt 分離 | Scope 2 完了、Scope 1/3 待機 | sinon 導入伴う他タスク or Vertex AI false negative |
+| #238 | force-reindex 孤児 posting 検出モード | drift 実発生未観測 | ADR-0015 silent failure metric ERROR or 削除済書類ヒット報告 |
+
+### 次セッション着手項目 (PR-C3 計画)
+
+**スコープ**:
+1. **本番 PDF feature 分布調査** (`pdf-feature-survey.ts` 新規 script):
+   - 全 kanameone processed/ PDFs を読み、各 `/Resources/XObject/*/Filter` 値を集計
+   - 未対応 filter (CCITTFaxDecode / DCTDecode / JPXDecode / JBIG2Decode 等) の分布把握
+   - cocoro も並行 (将来の被害発生時のため)
+2. **PR-C3 設計** (Codex MCP セカンドオピニオン必須):
+   - 選択肢 a: CCITTFaxDecode 対応 visual fingerprint (CCITT decoder 実装 or 外部ライブラリ)
+   - 選択肢 b: pdfjs-dist で page を image render → image hash 比較 (重いが汎用)
+   - 選択肢 c: 既存 OCR text を hash 比較 (kanameone 既に OCR 完了済が大半)
+   - 選択肢 d: 自動復旧諦め、operator UI で手動マッチング支援ツール開発
+3. **reverse orphan 1 件の調査**: `processed/20260413_未判定_未判定_p27-28.pdf` (Storage 実体あり Firestore 参照なし)
+   - 過去の rotate / delete 経路で残骸となった可能性
+   - 単一なら手動削除 + Issue #432 内コメントで報告、複数なら別 Issue 化判断
+
+### Issue #432 への次回コメント案 (本 PR merge 後に追記)
+
+- PR-C2-execution A 完遂報告: 4 docs 自動復旧、fileUrl orphan 4→0 confirmed
+- B 残作業: 135 docs Ambiguous (`/CCITTFaxDecode`) は PR-C3 で別 hash 戦略
+- reverse orphan 1 件新規発見: 別途調査予定
 
 <a id="session60"></a>
 ## ✅ session60 完了サマリー (2026-05-12: Issue #432 PR-C2 v2 完遂、Net 0)
