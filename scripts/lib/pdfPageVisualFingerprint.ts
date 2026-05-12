@@ -64,6 +64,7 @@ import {
   PDFRef,
   PDFStream,
   PDFString,
+  UnsupportedEncodingError,
   decodePDFRawStream,
 } from 'pdf-lib';
 import * as crypto from 'crypto';
@@ -358,7 +359,14 @@ function decodeContentStream(stream: PDFStream): Uint8Array {
  *      → encoded bytes (.contents) を返す (decode 不要、describe via filter name)
  *   2. PDFRawStream で supported filter のみ → decode して decoded bytes を返す
  *   3. 非 PDFRawStream (pdf-lib 生成側) → stream.getContents() (filter 不適用後の bytes)
- *   4. decode 例外 → encoded bytes fallback
+ *   4. decode 例外:
+ *      a. UnsupportedEncodingError (filter name から漏れた pdf-lib 未対応 encoding)
+ *         → encoded bytes fallback
+ *      b. それ以外 (Flate 壊れ / OOM / internal API 仕様変更 等の本物の構造異常)
+ *         → throw して caller (canonicalDigest の呼出元) で malformed 降格させる
+ *         (silent-failure-hunter CRITICAL-1 反映: bare catch だと
+ *         本物の構造異常を encoded bytes で「偽 PASS」させ MatchedByHash 誤判定の
+ *         リスクが残るため、UnsupportedEncodingError specific の捕捉に限定する)
  *
  * 返り値 mode はそのまま hash に組み込み、 encoded と decoded を区別する。
  */
@@ -375,9 +383,19 @@ function getStreamBytesForHash(
   }
   try {
     return { mode: 'decoded', bytes: decodePDFRawStream(stream).decode() };
-  } catch {
-    // decode 例外: filter name から判定漏れの未知 unsupported filter を encoded fallback
-    return { mode: 'encoded', bytes: stream.contents };
+  } catch (err) {
+    if (err instanceof UnsupportedEncodingError) {
+      // pdf-lib から「未対応 encoding」として明示的に通知された場合のみ encoded fallback。
+      // filter list に出ない future encoding (e.g. /CryptV2) も含めて吸収する。
+      return { mode: 'encoded', bytes: stream.contents };
+    }
+    // 本物の構造異常 (Flate 壊れ / RangeError / TypeError / pdf-lib upgrade 仕様変更等)
+    // は throw して caller で unsupported.malformed に降格させる。
+    throw new Error(
+      `getStreamBytesForHash: unexpected decode error (filters=${filters.join(
+        ','
+      )}): ${(err as Error).message}`
+    );
   }
 }
 

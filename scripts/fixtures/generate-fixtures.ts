@@ -15,14 +15,18 @@
  * 出力: scripts/fixtures/*.pdf (deterministic、git commit 対象)
  *
  * 決定論性の根拠:
- *   1. CreationDate / ModDate を固定値 2026-01-01T00:00:00Z に設定
- *   2. Producer / Creator を固定文字列に設定
- *   3. trailer /ID を固定 PDFHexString に設定 (pdf-lib は ID 未設定時 omit、明示設定で固定化)
- *   4. updateMetadata=false で save (timestamp 自動更新を防ぐ)
+ *   1. CreationDate / ModDate を applyDeterminism() の setCreationDate / setModificationDate
+ *      で固定値 2026-01-01T00:00:00Z に上書き (PDFDocument.create() default の現在時刻を排除)
+ *   2. Producer / Creator / Title / Author / Subject / Keywords を固定文字列に設定
+ *   3. trailer /ID を固定 PDFHexString array に設定 (pdf-lib は ID 未設定時 omit、明示設定で固定化)
+ *   4. PDFDocument.prototype.save() は updateMetadata オプションを取らず、instance に保持された
+ *      Info dict / trailer をそのまま flush する (pdf-lib 1.17.1 確認)。よって applyDeterminism()
+ *      で固定化した metadata は save() 経路で書き換えられない
  *   5. PDFRawStream は hand-craft 済 bytes を保持、再エンコードしない
  *
- * 同一マシンで再実行すれば byte 単位で同一の PDF が生成される。CI でも `node scripts/fixtures/
- * generate-fixtures.ts --check` で commit 済 fixture との byte 一致を verify 可能 (後続 PR)。
+ * 同一マシンで再実行すれば byte 単位で同一の PDF が生成される。本ファイルの `--check` モードで
+ * existing fixture と再生成結果の Buffer.compare === 0 を verify 可能。CI への組み込みは
+ * PR-C3c で workflow_dispatch に追加予定。
  *
  * 使用方法:
  *   ts-node scripts/fixtures/generate-fixtures.ts        # 全 fixture を生成 (上書き)
@@ -75,8 +79,10 @@ function applyDeterminism(pdf: PDFDocument): void {
 }
 
 async function saveDeterministic(pdf: PDFDocument): Promise<Buffer> {
-  // PDFDocument.save() は metadata 自動更新しない (確認済、pdf-lib 1.17.1)。
-  // metadata 固定値は applyDeterminism() で設定済。
+  // pdf-lib 1.17.1 PDFDocument.prototype.save() は metadata を再生成せず、instance に
+  // 保持された Info dict / trailer をそのまま flush する仕様 (useObjectStreams /
+  // addDefaultPage / objectsPerTick / updateFieldAppearances の 4 options のみ、
+  // updateMetadata は受け取らない)。metadata 固定値は applyDeterminism() で設定済。
   return Buffer.from(await pdf.save());
 }
 
@@ -310,8 +316,21 @@ const FIXTURES: FixtureSpec[] = [
 async function generateAll(checkOnly: boolean): Promise<void> {
   let mismatches = 0;
   for (const spec of FIXTURES) {
-    const buf = await spec.generator();
+    // silent-failure-hunter HIGH-3 反映: 個別 generator の例外で全体を abort せず、
+    // mismatch カウントを加算して他 fixture の検証を継続する。CI で 1 fixture 失敗時に
+    // 他 fixture の状態を可視化したい (pdf-lib upgrade で複数 fixture が一斉に壊れる
+    // 可能性を catch するため)。
     const outPath = path.join(FIXTURE_DIR, spec.name);
+    let buf: Buffer;
+    try {
+      buf = await spec.generator();
+    } catch (err) {
+      console.error(
+        `FAILED: ${spec.name} generator threw: ${(err as Error).message}`
+      );
+      mismatches++;
+      continue;
+    }
     if (checkOnly) {
       if (!fs.existsSync(outPath)) {
         console.error(`MISSING: ${outPath}`);

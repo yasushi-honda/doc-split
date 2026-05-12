@@ -156,18 +156,24 @@ export function classifyCollisionGroup(
   // ケース 1: hash matched が一意 → 自動 migrate (敗者は再生成 or LostOrUnrecoverable)
   if (matchedDocIds.length === 1) {
     const winnerId = matchedDocIds[0];
-    return group.evidences.map((e) =>
-      e.doc.id === winnerId
-        ? {
-            docId: e.doc.id,
-            classification: 'MatchedByHash' as const,
-            reason:
-              'fingerprint(actual storage, pdf-page-visual-v1) == fingerprint(regenerated from parent + splitFromPages)',
-            suggestedWinner: false,
-            recommendedAction: 'migrate-to-namespace' as const,
-          }
-        : classifyLoserForRegeneration(e, /* hasUniqueWinner */ true)
-    );
+    return group.evidences.map((e) => {
+      if (e.doc.id === winnerId) {
+        // code-reviewer I1 + comment-analyzer I4 反映:
+        // reason 文字列の algorithm を hashEvidence.algorithm から動的化し、v1/v2 plan
+        // に対して常に正しい version を出力する (drift 防止)。'matched' 型は MatchedByHash
+        // 経路の前提なので type narrowing で algorithm 必須 field を取り出せる。
+        const algorithm =
+          e.hashEvidence.type === 'matched' ? e.hashEvidence.algorithm : '<unknown>';
+        return {
+          docId: e.doc.id,
+          classification: 'MatchedByHash' as const,
+          reason: `fingerprint(actual storage, ${algorithm}) == fingerprint(regenerated from parent + splitFromPages)`,
+          suggestedWinner: false,
+          recommendedAction: 'migrate-to-namespace' as const,
+        };
+      }
+      return classifyLoserForRegeneration(e, /* hasUniqueWinner */ true);
+    });
   }
 
   // ケース 2: hash matched が複数 → 全員 Ambiguous (どれを勝者とすべきか断定不能)

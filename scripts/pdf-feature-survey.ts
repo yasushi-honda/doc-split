@@ -33,8 +33,17 @@
  *     },
  *     files: [
  *       { path, sizeBytes, pageCount, catalogFlags, pages: [{ pageIndex, filters, hasAnnots, ... }], errors }
- *     ]
+ *     ],
+ *     expectations: {                          // PR-C3b (AC20 strict guard): --expect-* で渡された期待値
+ *       filters: string[],                     // --expect-filter で指定された filter (例: ['/CCITTFaxDecode'])
+ *       subtypes: string[],                    // --expect-subtype で指定された XObject subtype
+ *       encrypted: boolean,                    // --expect-encrypted が指定されたか
+ *       acroform: boolean,                     // --expect-acroform が指定されたか
+ *       failures: string[]                     // 満たされなかった期待値の説明 (空 = 全 satisfy、exit 0)
+ *     }
  *   }
+ *
+ * 期待値 (expectations.failures) が 1 件以上ある場合は exit 1。
  */
 
 import * as admin from 'firebase-admin';

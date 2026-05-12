@@ -237,9 +237,17 @@ function runChildFingerprint(
     // ts-node の起動コストはあるが、ts-node 内蔵で本 script が回る環境を前提とする
     // (PR-C2 既存 ts script と同様、scripts/package.json に ts-node 依存あり).
     // child の CWD + TS_NODE_PROJECT を scripts/ 配下の tsconfig.json に固定。
-    // local dev (doc-split root から実行) でも CI (cd scripts 後実行) でも child が
-    // 確実に scripts/tsconfig.json を読み込むようにする (PR-C3b 修正、PR-C3a の
-    // CWD 暗黙依存を解消)。
+    //
+    // 解消する問題: parent CWD が doc-split root の場合、子 ts-node は
+    // tsconfig.json を root から上方向に探索するが root には存在せず、
+    // ambient default で module=NodeNext を採用する一方 moduleResolution は
+    // 未指定となり TS5109 "moduleResolution must be set to NodeNext when module
+    // is NodeNext" で child が異常終了する (local dev で再現)。
+    // CI では `cd scripts` 後実行のため偶然 scripts/tsconfig.json が解決されて
+    // 動いていたが、CWD 暗黙依存は環境差で壊れる。
+    //
+    // 対策: cwd と TS_NODE_PROJECT を明示固定し、parent 実行位置と無関係に
+    // 子が同じ tsconfig を読むよう保証する。
     const scriptsDir = path.dirname(scriptPath);
     const tsconfigPath = path.join(scriptsDir, 'tsconfig.json');
     const proc = spawnSync(
@@ -267,6 +275,28 @@ function runChildFingerprint(
         },
       }
     );
+    // silent-failure-hunter HIGH-2 反映: spawn 失敗 (ENOENT/EACCES 等) と
+    // signal kill (SIGKILL/SIGTERM 等 OOM killer) と exit !== 0 を区別する。
+    // テスト側 (functions/test/pdfPageVisualFingerprint.test.ts:115-129) には
+    // 既に同 pattern が入っているが production スクリプト側に反映漏れていた。
+    if (proc.error) {
+      return {
+        hex: null,
+        stderr: '',
+        exitCode: null,
+        kind: 'failed',
+        reason: `child spawn failed: ${proc.error.message}`,
+      };
+    }
+    if (proc.signal) {
+      return {
+        hex: null,
+        stderr: proc.stderr || '',
+        exitCode: null,
+        kind: 'failed',
+        reason: `child killed by signal=${proc.signal}`,
+      };
+    }
     if (proc.status !== 0) {
       return {
         hex: null,
@@ -282,6 +312,27 @@ function runChildFingerprint(
         hex?: string;
         reason?: string;
       };
+      // silent-failure-hunter CRITICAL-3 反映: child stdout の整合性を検証する。
+      // partial JSON / 想定外 kind / 不正 hex を「kind=failed」として顕在化させ、
+      // verifyOne 側で cross-process mismatch と取り違えない経路に流す。
+      if (parsed.kind !== 'ok' && parsed.kind !== 'unsupported') {
+        return {
+          hex: null,
+          stderr: `${proc.stderr || ''}\nunexpected child kind=${parsed.kind}`,
+          exitCode: proc.status,
+          kind: 'failed',
+          reason: `child returned unexpected kind=${parsed.kind}`,
+        };
+      }
+      if (parsed.kind === 'ok' && (typeof parsed.hex !== 'string' || parsed.hex.length !== 64)) {
+        return {
+          hex: null,
+          stderr: `${proc.stderr || ''}\nchild ok but hex invalid: ${JSON.stringify(parsed.hex)}`,
+          exitCode: proc.status,
+          kind: 'failed',
+          reason: 'child ok but hex not 64-char sha256 hex',
+        };
+      }
       return {
         hex: parsed.hex ?? null,
         stderr: proc.stderr || '',
