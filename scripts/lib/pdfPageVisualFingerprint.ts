@@ -1,38 +1,51 @@
 /**
- * Issue #432 PR-C2: PDF page visual fingerprint (cross-process deterministic).
+ * Issue #432 PR-C3b: PDF page visual fingerprint v2 (cross-process deterministic).
  *
  * pdf-lib `PDFDocument.save()` は同一プロセス内 deterministic だがプロセス間で
  * 非決定 (PDF `/ID` random、internal metadata) のため、sha256(raw bytes) 比較は
  * MatchedByHash を成立させない (PR-C1 session59 で発覚)。本モジュールは PDF の
  * 「描画同一性」を以下の要素で表現する fingerprint hex を返す:
  *   1. 各ページの decoded Contents bytes (正規化禁止、Codex Critical 2 反映)
- *   2. 各ページの geometry (MediaBox / CropBox / Rotate)
+ *   2. 各ページの geometry (MediaBox / CropBox / Rotate / UserUnit / Group)
  *   3. 各ページが参照する Resources (Font / XObject / ExtGState / ColorSpace
  *      / Pattern / Shading / ProcSet) の canonical digest
  *
- * Codex Critical (PR-C2 v2 計画):
+ * v2 変更点 (PR-C3b、AC21 反映):
+ *   - Image XObject (Subtype /Image) で unsupported filter (CCITT/JBIG2/JPX/DCT/Crypt)
+ *     を含む stream は **encoded bytes** で hash (decode 不要、kanameone CCITT scan
+ *     書類 unblock)。他 stream は v1 同様 decoded canonical
+ *   - 各 stream に mode='encoded'|'decoded' タグを hash に含め、両者を区別
+ *   - Catalog/Info metadata + Trailer /ID の denylist (常時除外)
+ *   - 内部参照 scope 限定 denylist:
+ *     - /Parent: PDFDict /Type=/Page or /Type=/Pages のみ除外
+ *     - /First /Last /Prev /Next: PDFDict /Type=/Outlines or /Type=/Outline のみ除外
+ *   - 未知 key は denylist 対象外として hash に含める (描画影響あり前提の安全側)
+ *
+ * Codex Critical (PR-C2 v2 計画、v1 から継承):
  *   - PDFPage.node.normalizedEntries() は副作用 (push/pop graphics state stream
  *     追加 + Resources/Annots 補完) のため使用禁止 → page.node.Contents() 直接読み
  *     + PDFArray / PDFStream / PDFRawStream 明示処理
  *   - whitespace / operator 順 / 数値表記 を正規化しない (inline image data 破壊
  *     リスク + graphics state 順序依存 = 偽陽性増加)
- *   - PDFDict entries は name 文字列 sort で V8 iteration order 差を吸収
+ *   - PDFDict entries は name 文字列 byte-order sort で V8 iteration order 差 +
+ *     locale 依存性 (ja_JP vs C) を吸収
  *
  * Unsupported features (Ambiguous フォールバック):
  *   - /Encrypt → unsupported.encryption
  *   - /AcroForm → unsupported.acroform
  *   - /OCProperties → unsupported.optional-content
  *   - 復元不能 PDF load 例外 → unsupported.malformed
+ *   - visible annotations → unsupported.annotations (appearance stream は別途 PR-C3c で検討)
  *
- * Algorithm version: 'pdf-page-visual-v1'。precondition snapshot + execute 側
+ * Algorithm version: 'pdf-page-visual-v2'。precondition snapshot + execute 側
  * 固定値で照合し、mismatch なら gate reject (AC13)。
  *
  * Internal API lock (AC14): pdf-lib の以下を直接利用しているため、test で
  * 存在をアサートする:
  *   - decodePDFRawStream (named export)
- *   - PDFRawStream (named export, instanceof check 用)
+ *   - PDFRawStream (named export, instanceof check + .contents access 用)
  *   - PDFPageLeaf.Contents() / Resources() / MediaBox() / CropBox() / Rotate()
- *   - PDFDict.entries()
+ *   - PDFDict.entries() / PDFDict.get()
  *   - PDFContext.lookup()
  */
 
@@ -55,7 +68,47 @@ import {
 } from 'pdf-lib';
 import * as crypto from 'crypto';
 
-export const HASH_ALGORITHM = 'pdf-page-visual-v1';
+export const HASH_ALGORITHM = 'pdf-page-visual-v2';
+
+/**
+ * Catalog/Info metadata + Trailer /ID。
+ *
+ * これらは PDF 生成時の timestamp / 製作者識別 / random ID であり、描画同一性に
+ * 寄与しない。常時除外 (denylist) する。`PDFName.asString()` は先頭 `/` 付きで
+ * 返るため、key も `/` 付きで保持する。
+ */
+const METADATA_DENYLIST = new Set([
+  '/Author',
+  '/CreationDate',
+  '/ModDate',
+  '/Creator',
+  '/Producer',
+  '/Title',
+  '/Subject',
+  '/Keywords',
+  '/Trapped',
+  '/ID',
+]);
+
+/** Page tree 構造的内部参照。/Type=/Page or /Type=/Pages の dict 内のみ除外。 */
+const PAGE_TREE_SCOPED_DENYLIST = new Set(['/Parent']);
+
+/** Outline tree 構造的内部参照。/Type=/Outlines or /Type=/Outline の dict 内のみ除外。 */
+const OUTLINE_SCOPED_DENYLIST = new Set(['/First', '/Last', '/Prev', '/Next']);
+
+/**
+ * decodePDFRawStream() で UnsupportedEncodingError が出る filter 群。
+ *
+ * 画像系 (CCITT/JBIG2/JPX/DCT) と /Crypt は pdf-lib 1.17.1 が decode 未対応。
+ * v2 では「decode せず encoded bytes を hash」して降格を避ける。
+ */
+const UNSUPPORTED_DECODE_FILTERS = new Set([
+  '/CCITTFaxDecode',
+  '/JBIG2Decode',
+  '/JPXDecode',
+  '/DCTDecode',
+  '/Crypt',
+]);
 
 export type UnsupportedReason =
   | 'encryption'
@@ -64,10 +117,7 @@ export type UnsupportedReason =
   | 'malformed'
   /** Codex Critical 反映: visible annotations は描画に影響するが Contents stream に
    *  乗らない (別 dict / appearance stream)。安全側で自動復旧対象外に倒す。 */
-  | 'annotations'
-  /** Codex Important 反映: DCTDecode/JPXDecode 等 pdf-lib decodePDFRawStream 未対応の
-   *  filter で resources subtree が decode できない場合に降格させる reason。 */
-  | 'unsupported-resource-filter';
+  | 'annotations';
 
 export type Fingerprint =
   | {
@@ -91,6 +141,8 @@ export type Fingerprint =
  *
  * 異なる描画 (XObject 入替 / font 差替 / Rotate 変化 / CropBox 変化 / 同 operator
  * 列でも inline image data 差分) では異なる hex を返す (AC9-12 偽陽性防止)。
+ *
+ * v2: image XObject の CCITT/JBIG2/JPX/DCT filter も encoded bytes で hash 可能。
  */
 export async function computePdfPageVisualFingerprint(
   pdfBuffer: Buffer
@@ -147,6 +199,7 @@ export async function computePdfPageVisualFingerprint(
     // Codex Critical 反映: visible annotations は描画に影響するが Contents stream に
     // 乗らない (separate /Annots 配列 + appearance stream)。同 Contents/Resources で
     // annotation のみ違う PDF が偽 MatchedByHash になるリスクを排除するため unsupported。
+    // v2 で appearance stream hashing 追加検討は PR-C3c 以降 (本 PR では v1 挙動維持)。
     const annots = node.Annots();
     if (annots !== undefined && annots.size() > 0) {
       return {
@@ -157,27 +210,18 @@ export async function computePdfPageVisualFingerprint(
       };
     }
 
-    // 1. decoded Contents bytes (正規化禁止)
+    // 1. Contents bytes (page-level content stream は decoded canonical; FlateDecode のみ)
     let contentBytes: Uint8Array;
     try {
       contentBytes = collectDecodedContentBytes(node.Contents(), pdf.context);
     } catch (err) {
-      // Codex Important 反映: 画像 stream の decode 失敗 (DCTDecode/JPXDecode 等
-      // pdf-lib 1.17.1 未対応 filter) は malformed ではなく unsupported-resource-filter
-      // に降格させる。catch-all で computation-error にすると transient と誤分類される。
-      const msg = (err as Error).message;
-      if (isUnsupportedFilterError(msg)) {
-        return {
-          kind: 'unsupported',
-          reason: 'unsupported-resource-filter',
-          detail: `page ${i} content stream uses unsupported filter: ${msg}`,
-          algorithm: HASH_ALGORITHM,
-        };
-      }
+      // content stream は通常 FlateDecode (pdf-lib 標準) のため、decode 失敗 = malformed
+      // と等価で扱う (CCITT 等 image filter は content stream ではなく XObject 配下なので
+      // ここには来ない)。
       return {
         kind: 'unsupported',
         reason: 'malformed',
-        detail: `page ${i} content stream: ${msg}`,
+        detail: `page ${i} content stream: ${(err as Error).message}`,
         algorithm: HASH_ALGORITHM,
       };
     }
@@ -212,22 +256,21 @@ export async function computePdfPageVisualFingerprint(
     if (group === undefined) {
       top.update('<absent>');
     } else {
+      // canonical digest 失敗は構造解析失敗 = malformed (v2 は image filter は encoded bytes
+      // で吸収するため canonical digest 失敗は本物の構造異常のみ)
       try {
         top.update(canonicalDigest(group, pdf.context));
       } catch (err) {
-        // silent-failure-hunter I1 反映: canonical digest 失敗は構造解析失敗 = malformed
-        // 等価で扱う (transient computation-error に流すと operator が retry し続ける)
-        const msg = (err as Error).message;
         return {
           kind: 'unsupported',
-          reason: isUnsupportedFilterError(msg) ? 'unsupported-resource-filter' : 'malformed',
-          detail: `page ${i} /Group canonical digest failed: ${msg}`,
+          reason: 'malformed',
+          detail: `page ${i} /Group canonical digest failed: ${(err as Error).message}`,
           algorithm: HASH_ALGORITHM,
         };
       }
     }
 
-    // 3. Resources canonical digest
+    // 3. Resources canonical digest (v2: image filter は encoded bytes で吸収)
     top.update('|resources=');
     const resources = node.Resources();
     if (resources === undefined) {
@@ -237,14 +280,10 @@ export async function computePdfPageVisualFingerprint(
         const resourcesDigest = canonicalDigest(resources, pdf.context);
         top.update(resourcesDigest);
       } catch (err) {
-        // silent-failure-hunter I1 + Codex Important 反映: resources subtree の decode
-        // 失敗 (image XObject の DCTDecode 等) は unsupported-resource-filter、その他の
-        // 構造解析失敗は malformed として returning unsupported (catch-all 不発防止)。
-        const msg = (err as Error).message;
         return {
           kind: 'unsupported',
-          reason: isUnsupportedFilterError(msg) ? 'unsupported-resource-filter' : 'malformed',
-          detail: `page ${i} resources canonical digest failed: ${msg}`,
+          reason: 'malformed',
+          detail: `page ${i} resources canonical digest failed: ${(err as Error).message}`,
           algorithm: HASH_ALGORITHM,
         };
       }
@@ -260,27 +299,13 @@ export async function computePdfPageVisualFingerprint(
 }
 
 /**
- * pdf-lib `decodePDFRawStream` が UnsupportedEncodingError を投げるパターンを判定する。
- * DCTDecode / JPXDecode / CCITTFaxDecode / JBIG2Decode 等の画像 filter のほか、不明
- * filter も含む。本判定は pdf-lib 内部メッセージに依存するため lock test で固定する。
- */
-function isUnsupportedFilterError(message: string): boolean {
-  return (
-    message.includes('UnsupportedEncoding') ||
-    message.includes('DCTDecode') ||
-    message.includes('JPXDecode') ||
-    message.includes('CCITTFaxDecode') ||
-    message.includes('JBIG2Decode') ||
-    message.includes('Crypt') ||
-    message.includes('unknown filter') ||
-    message.includes('Unknown filter')
-  );
-}
-
-/**
  * page.node.Contents() の戻り (PDFStream | PDFArray | undefined) を decoded bytes
  * の連結に変換する。PDFArray の場合は各要素を 0x0a で区切る (PDF spec の content
  * stream concat と等価)。
+ *
+ * page-level content stream は通常 FlateDecode (pdf-lib 標準) または filter なし。
+ * CCITT/JBIG2/JPX 等 image filter は image XObject 配下にあり content stream には来ないため、
+ * ここでは強制 decode する (失敗 = malformed)。
  */
 function collectDecodedContentBytes(
   contents: PDFStream | PDFArray | undefined,
@@ -293,13 +318,13 @@ function collectDecodedContentBytes(
     for (let i = 0; i < size; i++) {
       const elem = contents.get(i);
       const resolved = resolveStream(elem, context);
-      parts.push(Buffer.from(decodeStreamBytes(resolved)));
+      parts.push(Buffer.from(decodeContentStream(resolved)));
       if (i + 1 < size) parts.push(Buffer.from([0x0a]));
     }
     return Buffer.concat(parts);
   }
   if (contents instanceof PDFStream) {
-    return decodeStreamBytes(contents);
+    return decodeContentStream(contents);
   }
   throw new Error(
     `unexpected Contents type: ${(contents as PDFObject).constructor.name}`
@@ -316,15 +341,60 @@ function resolveStream(obj: PDFObject, context: PDFContext): PDFStream {
   return resolved;
 }
 
-function decodeStreamBytes(stream: PDFStream): Uint8Array {
+/**
+ * content stream 専用 decode (FlateDecode 前提)。decode 失敗は throw → caller で malformed。
+ */
+function decodeContentStream(stream: PDFStream): Uint8Array {
   if (stream instanceof PDFRawStream) {
-    // decodePDFRawStream は StreamType を返す。decode() で filter 解除後の bytes を取り出す。
     return decodePDFRawStream(stream).decode();
   }
-  // PDFFlateStream 等 (新規生成側) は内部で encoded bytes を保持しており getContents() は
-  // filter 適用後の raw bytes を返す。decoded 表現で比較したいので無変換のまま使う
-  // (生成側の content stream は uncompressed のため filter 解除は同値).
   return stream.getContents();
+}
+
+/**
+ * 任意 PDFStream の hash 用 bytes を取得。v2 の核心 fallback:
+ *
+ *   1. PDFRawStream かつ filter に unsupported (CCITT/JBIG2/JPX/DCT/Crypt) を含む
+ *      → encoded bytes (.contents) を返す (decode 不要、describe via filter name)
+ *   2. PDFRawStream で supported filter のみ → decode して decoded bytes を返す
+ *   3. 非 PDFRawStream (pdf-lib 生成側) → stream.getContents() (filter 不適用後の bytes)
+ *   4. decode 例外 → encoded bytes fallback
+ *
+ * 返り値 mode はそのまま hash に組み込み、 encoded と decoded を区別する。
+ */
+function getStreamBytesForHash(
+  stream: PDFStream
+): { mode: 'encoded' | 'decoded'; bytes: Uint8Array } {
+  if (!(stream instanceof PDFRawStream)) {
+    return { mode: 'decoded', bytes: stream.getContents() };
+  }
+  const filters = listStreamFilters(stream);
+  const hasUnsupported = filters.some((f) => UNSUPPORTED_DECODE_FILTERS.has(f));
+  if (hasUnsupported) {
+    return { mode: 'encoded', bytes: stream.contents };
+  }
+  try {
+    return { mode: 'decoded', bytes: decodePDFRawStream(stream).decode() };
+  } catch {
+    // decode 例外: filter name から判定漏れの未知 unsupported filter を encoded fallback
+    return { mode: 'encoded', bytes: stream.contents };
+  }
+}
+
+function listStreamFilters(stream: PDFStream): string[] {
+  const filterEntry = stream.dict.get(PDFName.of('Filter'));
+  if (filterEntry === undefined) return [];
+  if (filterEntry instanceof PDFName) return [filterEntry.asString()];
+  if (filterEntry instanceof PDFArray) {
+    const out: string[] = [];
+    for (let i = 0; i < filterEntry.size(); i++) {
+      const elem = filterEntry.get(i);
+      if (elem instanceof PDFName) out.push(elem.asString());
+      else out.push(`<unexpected:${elem?.constructor.name ?? 'undefined'}>`);
+    }
+    return out;
+  }
+  return [`<unexpected:${(filterEntry as PDFObject).constructor.name}>`];
 }
 
 /**
@@ -351,18 +421,31 @@ function encodeRect(arr: PDFArray, context: PDFContext): Buffer {
  * PDFObject の canonical digest を返す。Resources subtree 等を再帰的に hash 化。
  *
  * - PDFDict: entries を name 文字列 sort してから recurse (V8 iteration order 差吸収)
+ *   - METADATA_DENYLIST に含まれる key は常時除外 (cross-process determinism + 描画
+ *     非寄与)
+ *   - dict の /Type が /Page or /Pages なら PAGE_TREE_SCOPED_DENYLIST 適用
+ *   - dict の /Type が /Outlines or /Outline なら OUTLINE_SCOPED_DENYLIST 適用
+ *   - 未知 key は denylist 対象外 (描画影響あり前提の安全側)
  * - PDFArray: 順序保持して recurse (PDF semantically order-sensitive)
  * - PDFRef: recursion stack 上の循環のみ cycle marker、stack 外の共有参照は通常 recurse
  *   (Codex Important 反映: 旧版は traversal 全体共有 Set だったため、sibling 経由の共有参照
  *    で object number が hash に混入 → cross-process determinism が弱くなっていた)
- * - PDFStream: dict subtree + decoded bytes (filter 不可なら caller に throw、上位で
- *   unsupported-resource-filter に降格)
+ * - PDFStream: dict subtree + (encoded|decoded) bytes (v2 image filter 吸収)
  * - その他 scalar: 型 prefix + 値 string
  */
 export function canonicalDigest(obj: PDFObject, context: PDFContext): Buffer {
   const sha = crypto.createHash('sha256');
   walk(sha, obj, context, new Set<PDFRef>());
   return sha.digest();
+}
+
+function getScopedDenylist(dict: PDFDict): Set<string> | null {
+  const type = dict.get(PDFName.of('Type'));
+  if (!(type instanceof PDFName)) return null;
+  const typeName = type.asString();
+  if (typeName === '/Page' || typeName === '/Pages') return PAGE_TREE_SCOPED_DENYLIST;
+  if (typeName === '/Outlines' || typeName === '/Outline') return OUTLINE_SCOPED_DENYLIST;
+  return null;
 }
 
 function walk(
@@ -394,17 +477,24 @@ function walk(
     return;
   }
   if (obj instanceof PDFDict) {
-    const entries = [...obj.entries()];
+    const scopedDenylist = getScopedDenylist(obj);
+    const filteredEntries: Array<[PDFName, PDFObject]> = [];
+    for (const [k, v] of obj.entries()) {
+      const key = k.asString();
+      if (METADATA_DENYLIST.has(key)) continue;
+      if (scopedDenylist !== null && scopedDenylist.has(key)) continue;
+      filteredEntries.push([k, v]);
+    }
     // Critical (code-reviewer PR #441 review): localeCompare は OS locale / ICU データ版
     // 依存で cross-machine non-deterministic。byte-order 比較に置換して classify
     // (e.g. ja_JP な開発機) と execute (e.g. C な GitHub Actions) で同 hex を保証。
-    entries.sort((a, b) => {
+    filteredEntries.sort((a, b) => {
       const sa = a[0].asString();
       const sb = b[0].asString();
       return sa < sb ? -1 : sa > sb ? 1 : 0;
     });
-    sha.update(`dict|size=${entries.length}`);
-    for (const [k, v] of entries) {
+    sha.update(`dict|size=${filteredEntries.length}`);
+    for (const [k, v] of filteredEntries) {
       sha.update('|key=');
       sha.update(k.asString());
       sha.update('|val=');
@@ -424,8 +514,8 @@ function walk(
   if (obj instanceof PDFStream) {
     sha.update('stream|dict=');
     walk(sha, obj.dict, context, recursionStack);
-    const bytes = decodeStreamBytes(obj);
-    sha.update(`|bytes_len=${bytes.length}|bytes=`);
+    const { mode, bytes } = getStreamBytesForHash(obj);
+    sha.update(`|mode=${mode}|bytes_len=${bytes.length}|bytes=`);
     sha.update(Buffer.from(bytes));
     return;
   }

@@ -221,11 +221,11 @@ describe('pdfPageVisualFingerprint (Issue #432 PR-C2)', () => {
       }
     });
 
-    it('algorithm version が "pdf-page-visual-v1" を返す', async () => {
+    it('algorithm version が "pdf-page-visual-v2" を返す', async () => {
       const pdf = await makeNPagePdf(1);
       const fp = await computePdfPageVisualFingerprint(pdf);
       expect(fp.algorithm).to.equal(HASH_ALGORITHM);
-      expect(HASH_ALGORITHM).to.equal('pdf-page-visual-v1');
+      expect(HASH_ALGORITHM).to.equal('pdf-page-visual-v2');
     });
   });
 
@@ -490,6 +490,126 @@ describe('pdfPageVisualFingerprint (Issue #432 PR-C2)', () => {
       if (fp1.kind === 'ok' && fp2.kind === 'ok') {
         expect(fp1.hex).to.not.equal(fp2.hex);
       }
+    });
+  });
+
+  describe('PR-C3b v2: AC21 denylist + image filter encoded bytes hash', () => {
+    const FIXTURE_DIR = path.resolve(__dirname, '../../scripts/fixtures');
+
+    const readFixture = (name: string): Buffer => {
+      const p = path.join(FIXTURE_DIR, name);
+      if (!fs.existsSync(p)) {
+        throw new Error(
+          `fixture ${p} not found; run \`npx ts-node scripts/fixtures/generate-fixtures.ts\` to regenerate`
+        );
+      }
+      return fs.readFileSync(p);
+    };
+
+    describe('AC21: image filter (CCITT/JBIG2/JPX/DCT) → kind=ok (encoded bytes hash)', () => {
+      it('CCITTFaxDecode 含む fixture → kind=ok (v1 では unsupported-resource-filter だった)', async () => {
+        const buf = readFixture('with-ccittfaxdecode.pdf');
+        const fp = await computePdfPageVisualFingerprint(buf);
+        expect(fp.kind).to.equal('ok');
+        if (fp.kind === 'ok') expect(fp.hex).to.have.length(64);
+      });
+
+      it('JBIG2Decode 含む fixture → kind=ok', async () => {
+        const fp = await computePdfPageVisualFingerprint(readFixture('with-jbig2decode.pdf'));
+        expect(fp.kind).to.equal('ok');
+      });
+
+      it('JPXDecode 含む fixture → kind=ok', async () => {
+        const fp = await computePdfPageVisualFingerprint(readFixture('with-jpxdecode.pdf'));
+        expect(fp.kind).to.equal('ok');
+      });
+
+      it('DCTDecode 含む fixture → kind=ok', async () => {
+        const fp = await computePdfPageVisualFingerprint(readFixture('with-dctdecode.pdf'));
+        expect(fp.kind).to.equal('ok');
+      });
+
+      it('CCITT fixture: same-process deterministic (2 回連続呼出で同 hex)', async () => {
+        const buf = readFixture('with-ccittfaxdecode.pdf');
+        const fp1 = await computePdfPageVisualFingerprint(buf);
+        const fp2 = await computePdfPageVisualFingerprint(buf);
+        expect(fp1.kind).to.equal('ok');
+        expect(fp2.kind).to.equal('ok');
+        if (fp1.kind === 'ok' && fp2.kind === 'ok') expect(fp1.hex).to.equal(fp2.hex);
+      });
+
+      it('異なる image filter (CCITT vs JBIG2) → fingerprint が異なる', async () => {
+        const fpCcitt = await computePdfPageVisualFingerprint(readFixture('with-ccittfaxdecode.pdf'));
+        const fpJbig2 = await computePdfPageVisualFingerprint(readFixture('with-jbig2decode.pdf'));
+        expect(fpCcitt.kind).to.equal('ok');
+        expect(fpJbig2.kind).to.equal('ok');
+        if (fpCcitt.kind === 'ok' && fpJbig2.kind === 'ok') {
+          expect(fpCcitt.hex).to.not.equal(fpJbig2.hex);
+        }
+      });
+    });
+
+    describe('AC21: METADATA_DENYLIST (Catalog/Info metadata + trailer /ID)', () => {
+      it('Author / CreationDate / ModDate / Producer 違いで同 hex (denylist 除外)', async () => {
+        const build = async (
+          author: string,
+          createdAt: Date,
+          producer: string
+        ): Promise<Buffer> => {
+          const pdf = await PDFDocument.create();
+          pdf.setAuthor(author);
+          pdf.setCreationDate(createdAt);
+          pdf.setModificationDate(createdAt);
+          pdf.setProducer(producer);
+          pdf.setTitle(author);
+          pdf.setSubject(producer);
+          const p = pdf.addPage([100, 100]);
+          p.drawRectangle({ x: 10, y: 10, width: 50, height: 50 });
+          return Buffer.from(await pdf.save());
+        };
+        const a = await build('Alice', new Date('2020-01-01T00:00:00Z'), 'pdf-lib-1');
+        const b = await build('Bob', new Date('2026-12-31T00:00:00Z'), 'pdf-lib-2');
+        const fpA = await computePdfPageVisualFingerprint(a);
+        const fpB = await computePdfPageVisualFingerprint(b);
+        expect(fpA.kind).to.equal('ok');
+        expect(fpB.kind).to.equal('ok');
+        if (fpA.kind === 'ok' && fpB.kind === 'ok') expect(fpA.hex).to.equal(fpB.hex);
+      });
+    });
+
+    describe('AC21: encrypted fixture → unsupported.encryption (v2 でも維持)', () => {
+      it('encrypted.pdf → kind=unsupported, reason=encryption', async () => {
+        const fp = await computePdfPageVisualFingerprint(readFixture('encrypted.pdf'));
+        expect(fp.kind).to.equal('unsupported');
+        if (fp.kind === 'unsupported') expect(fp.reason).to.equal('encryption');
+      });
+    });
+
+    describe('AC21: 未知 key は denylist 対象外 (描画影響あり前提の安全側)', () => {
+      it('Resources dict 内の未知 key /CustomDrawingKey 値違いで fingerprint 異なる', async () => {
+        // 注: 本 fingerprint は page node 自体を canonical walk しないため、未知 key は
+        // canonical walk 対象 (例: Resources subtree) に置く必要がある。未知 key を
+        // Resources dict に注入し、denylist 対象外として hash に含まれることを実証。
+        const build = async (val: string): Promise<Buffer> => {
+          const pdf = await PDFDocument.create();
+          const p = pdf.addPage([100, 100]);
+          p.drawRectangle({ x: 10, y: 10, width: 50, height: 50 });
+          let resources = p.node.Resources();
+          if (resources === undefined) {
+            resources = pdf.context.obj({}) as PDFDict;
+            p.node.set(PDFName.of('Resources'), resources);
+          }
+          resources.set(PDFName.of('CustomDrawingKey'), PDFString.of(val));
+          return Buffer.from(await pdf.save());
+        };
+        const a = await build('value-a');
+        const b = await build('value-b');
+        const fpA = await computePdfPageVisualFingerprint(a);
+        const fpB = await computePdfPageVisualFingerprint(b);
+        expect(fpA.kind).to.equal('ok');
+        expect(fpB.kind).to.equal('ok');
+        if (fpA.kind === 'ok' && fpB.kind === 'ok') expect(fpA.hex).to.not.equal(fpB.hex);
+      });
     });
   });
 

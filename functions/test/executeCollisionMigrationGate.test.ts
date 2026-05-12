@@ -82,7 +82,9 @@ function makePlan(overrides: Partial<PlanFixture> = {}): PlanFixture {
     projectId: 'test-project',
     bucket: 'test-bucket',
     prefix: 'processed/',
-    hashAlgorithm: 'pdf-page-visual-v1',
+    // PR-C3b: HASH_ALGORITHM が v2 に bump されたため、現行コード合致 plan を v2 で発行。
+    // 旧 v1 plan の reject は別 test ('pdf-page-visual-v0-FAKE' literal) で検証する。
+    hashAlgorithm: 'pdf-page-visual-v2',
     pdfLibVersion,
     summary: {},
     operations: [],

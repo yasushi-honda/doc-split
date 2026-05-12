@@ -7,6 +7,9 @@
  * PR-C2 (2026-05-12, session60 着手): hash 比較を `sha256(raw PDF bytes)` から
  * `pdf-page-visual-v1` fingerprint 比較に変更 (pdf-lib `PDFDocument.save()` の
  * cross-process non-determinism を回避)。実装は scripts/lib/pdfPageVisualFingerprint.ts。
+ * PR-C3b (2026-05-13): fingerprint アルゴリズムを v2 に bump (denylist + image filter
+ * encoded bytes hash)。FingerprintAlgorithm は型 additive 拡張で v1/v2 並記。
+ * execute 側 strict gate (v2 のみ accept) は PR-C3c で導入。
  *   - DocEvidence.hashEvidence.type='matched' → fingerprint hex が一致 (algorithm 明示)
  *   - DocEvidence.hashEvidence.type='mismatched' → fingerprint hex が異なる
  *   - DocEvidence.hashEvidence.type='unsupported' → PDF が暗号化 / AcroForm 等で fingerprint
@@ -51,11 +54,14 @@ export interface CollisionDoc {
  *   - parent: parentDocumentId の有無 + 親 doc 存在 + 元 PDF 実在
  * を Firestore / Storage アクセスで埋め、本 classifier (pure) に渡す。
  *
- * `algorithm` は fingerprint アルゴリズムバージョン (例 'pdf-page-visual-v1')。
+ * `algorithm` は fingerprint アルゴリズムバージョン (例 'pdf-page-visual-v2')。
  * plan JSON の precondition snapshot に記録し、execute 側で固定値と照合して mismatch
  * なら gate reject する (AC13)。
+ *
+ * PR-C3b 移行期: v1/v2 並記 (additive)。v1 は legacy plan の forward compat 目的、
+ * 新規 classify は v2 を出す。execute 側 strict gate (v2 のみ accept) は PR-C3c で実装。
  */
-export type FingerprintAlgorithm = 'pdf-page-visual-v1';
+export type FingerprintAlgorithm = 'pdf-page-visual-v1' | 'pdf-page-visual-v2';
 
 // drift 防止のため pdfPageVisualFingerprint で定義した UnsupportedReason を re-export
 import type { UnsupportedReason as FingerprintUnsupportedReason } from './pdfPageVisualFingerprint';

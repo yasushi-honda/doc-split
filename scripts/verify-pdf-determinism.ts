@@ -1,13 +1,15 @@
 #!/usr/bin/env ts-node
 /**
- * Issue #432 PR-C3a: cross-process PDF fingerprint determinism verifier (read-only).
+ * Issue #432 PR-C3a/b: cross-process PDF fingerprint determinism verifier (read-only).
  *
  * 目的 (Codex MCP セカンドオピニオン #1 Critical, AC17 反映):
- *   - `pdf-page-visual-v1` fingerprint が **別プロセス間** で同一 hex を返すことを実証
+ *   - `pdf-page-visual-v2` fingerprint が **別プロセス間** で同一 hex を返すことを実証
  *   - pdf-lib `PDFDocument.save()` は同一プロセス内 deterministic だがプロセス間で
  *     非決定 (PDF `/ID` random、internal metadata) のため、classify と execute が
  *     別プロセスで走る以上、fingerprint 側の cross-process invariance は precondition
  *   - PR-C3b の `pdf-page-visual-v2` 着手前 (AC17) に main merge 必須 + dev で実証必須
+ *   - PR-C3b で AC17 拡張: scripts/fixtures/ の CCITT/JBIG2/JPX/DCT/encrypted 等
+ *     hand-craft fixture を --paths 経由で cross-process invariance 実証
  *
  * 副作用なし: PDF を read するのみ。Firestore / Storage への書き込みなし。
  *
@@ -22,14 +24,14 @@
  *   # 内蔵 synthetic fixture (pdf-lib generated) で smoke test
  *   ts-node scripts/verify-pdf-determinism.ts --synthetic --out determinism.json
  *
- *   # 既存 PDF fixture で検証
+ *   # 既存 PDF fixture (scripts/fixtures/* 等) で検証
  *   ts-node scripts/verify-pdf-determinism.ts --paths fixture-a.pdf,fixture-b.pdf --out determinism.json
  *
  * 出力 (JSON):
  *   {
  *     verdict: 'PASS' | 'FAIL',
- *     algorithm: 'pdf-page-visual-v1',
- *     totals: { files, pass, fail },
+ *     algorithm: 'pdf-page-visual-v2',
+ *     totals: { files, pass, ok, unsupportedPass, nonDeterministic, fail },
  *     results: [{ path, kind, sameProcess: {...}, crossProcess: {...} }]
  *   }
  */
@@ -59,7 +61,7 @@ interface VerifyResult {
   // 'unsupported': fingerprint 計算は完了したが unsupported 分類 (encrypted / acroform 等)、
   //   parent と child で同 reason なら invariance 成立として扱う
   // 'non-deterministic': **same-process** で fingerprint が一致しない (precondition 違反、
-  //   AC17 失敗)。pdf-page-visual-v1 の deterministic 仕様自体が壊れている重大事象
+  //   AC17 失敗)。pdf-page-visual-v2 の deterministic 仕様自体が壊れている重大事象
   // 'failed': fingerprint 計算が parent で例外、または child process 異常終了
   kind: 'ok' | 'unsupported' | 'non-deterministic' | 'failed';
   pageCount: number | null;
@@ -234,6 +236,12 @@ function runChildFingerprint(
     // ts-node 経由で同 script を child mode で再起動。--child-mode で run 経路を分岐。
     // ts-node の起動コストはあるが、ts-node 内蔵で本 script が回る環境を前提とする
     // (PR-C2 既存 ts script と同様、scripts/package.json に ts-node 依存あり).
+    // child の CWD + TS_NODE_PROJECT を scripts/ 配下の tsconfig.json に固定。
+    // local dev (doc-split root から実行) でも CI (cd scripts 後実行) でも child が
+    // 確実に scripts/tsconfig.json を読み込むようにする (PR-C3b 修正、PR-C3a の
+    // CWD 暗黙依存を解消)。
+    const scriptsDir = path.dirname(scriptPath);
+    const tsconfigPath = path.join(scriptsDir, 'tsconfig.json');
     const proc = spawnSync(
       process.execPath,
       [
@@ -247,11 +255,15 @@ function runChildFingerprint(
       {
         encoding: 'utf-8',
         maxBuffer: 50 * 1024 * 1024,
+        cwd: scriptsDir,
         env: {
           ...process.env,
           // child でも同じ ts-node 設定が回るよう TS_NODE_TRANSPILE_ONLY を有効化
           // (型エラーは parent で既に検出済)
           TS_NODE_TRANSPILE_ONLY: '1',
+          // scripts/tsconfig.json を明示指定 (module/moduleResolution 等の解決を
+          // 親 CWD 依存にしない)
+          TS_NODE_PROJECT: tsconfigPath,
         },
       }
     );
@@ -345,13 +357,13 @@ async function verifyOne(
   }
   if (!crossMatch) notes.push('cross-process mismatch (parent vs child differ)');
 
-  // same-process mismatch は pdf-page-visual-v1 の deterministic 仕様違反 = precondition
+  // same-process mismatch は pdf-page-visual-v2 の deterministic 仕様違反 = precondition
   // 違反として独立 kind に分離する (review #3 反映)。cross-process FAIL と区別することで
   // operator がアルゴリズム再設計が必要か単に child spawn 環境差かを切り分け可能。
   let kind: VerifyResult['kind'];
   if (!sameMatch) {
     kind = 'non-deterministic';
-    notes.unshift('same-process mismatch — pdf-page-visual-v1 deterministic precondition violated');
+    notes.unshift('same-process mismatch — pdf-page-visual-v2 deterministic precondition violated');
   } else if (fpA.kind === 'ok') {
     kind = 'ok';
   } else {

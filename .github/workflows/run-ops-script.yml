@@ -62,7 +62,9 @@ on:
           - pdf-feature-survey --source gcs --prefix original/
           - pdf-feature-survey --source gcs --prefix processed/
           - pdf-feature-survey --source gcs --prefix processed/ --limit 200
+          - pdf-feature-survey --source local --paths fixtures/ --expect-filter /CCITTFaxDecode,/JBIG2Decode,/JPXDecode,/DCTDecode --expect-subtype /Image --expect-encrypted
           - verify-pdf-determinism --synthetic
+          - verify-pdf-determinism --paths fixtures/simple.pdf,fixtures/with-ccittfaxdecode.pdf,fixtures/with-jbig2decode.pdf,fixtures/with-jpxdecode.pdf,fixtures/with-dctdecode.pdf,fixtures/encrypted.pdf
       doc_id:
         description: 'Document ID (required when script contains --doc-id; ignored otherwise)'
         required: false
