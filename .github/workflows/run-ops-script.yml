@@ -468,7 +468,9 @@ jobs:
 
       - name: Upload pdf-feature-survey report artifact
         # Issue #432 PR-C3a: PDF feature 分布調査の survey JSON を artifact 経由で取得。
-        if: ${{ github.event.inputs.script == 'pdf-feature-survey' && always() }}
+        # 入力 script は "pdf-feature-survey --source gcs --prefix processed/" 等の引数付き
+        # 文字列のため startsWith で判定する。
+        if: ${{ startsWith(github.event.inputs.script, 'pdf-feature-survey') && always() }}
         uses: actions/upload-artifact@v4
         with:
           name: pdf-feature-survey-${{ github.event.inputs.environment }}-${{ github.run_id }}
@@ -478,7 +480,9 @@ jobs:
 
       - name: Upload verify-pdf-determinism report artifact
         # Issue #432 PR-C3a: cross-process invariance 検証結果を artifact 経由で取得。
-        if: ${{ github.event.inputs.script == 'verify-pdf-determinism' && always() }}
+        # 入力 script は "verify-pdf-determinism --synthetic" 等の引数付き文字列のため
+        # startsWith で判定する。
+        if: ${{ startsWith(github.event.inputs.script, 'verify-pdf-determinism') && always() }}
         uses: actions/upload-artifact@v4
         with:
           name: verify-pdf-determinism-${{ github.event.inputs.environment }}-${{ github.run_id }}

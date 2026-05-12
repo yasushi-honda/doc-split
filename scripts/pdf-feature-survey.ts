@@ -140,6 +140,11 @@ const KNOWN_FILTERS = new Set([
   '/Crypt',
 ]);
 
+function requireValue(arg: string, next: string | undefined): string {
+  if (next === undefined) throw new Error(`${arg} requires a value`);
+  return next;
+}
+
 function parseArgs(argv: string[]): CliOptions {
   const opts: CliOptions = {
     source: 'local',
@@ -153,31 +158,36 @@ function parseArgs(argv: string[]): CliOptions {
     const arg = argv[i];
     const next = argv[i + 1];
     switch (arg) {
-      case '--source':
-        if (next !== 'local' && next !== 'gcs') {
-          throw new Error(`--source must be local or gcs, got ${next}`);
+      case '--source': {
+        const v = requireValue(arg, next);
+        if (v !== 'local' && v !== 'gcs') {
+          throw new Error(`--source must be local or gcs, got ${v}`);
         }
-        opts.source = next;
+        opts.source = v;
         i++;
         break;
+      }
       case '--paths':
-        opts.paths = next.split(',').map((s) => s.trim()).filter(Boolean);
+        opts.paths = requireValue(arg, next).split(',').map((s) => s.trim()).filter(Boolean);
         i++;
         break;
       case '--bucket':
-        opts.bucket = next;
+        opts.bucket = requireValue(arg, next);
         i++;
         break;
       case '--prefix':
-        opts.prefix = next;
+        opts.prefix = requireValue(arg, next);
         i++;
         break;
-      case '--limit':
-        opts.limit = Number.parseInt(next, 10);
+      case '--limit': {
+        const n = Number.parseInt(requireValue(arg, next), 10);
+        if (Number.isNaN(n) || n < 0) throw new Error(`--limit must be a non-negative integer, got ${next}`);
+        opts.limit = n;
         i++;
         break;
+      }
       case '--out':
-        opts.out = next;
+        opts.out = requireValue(arg, next);
         i++;
         break;
       case '--help':
@@ -208,32 +218,56 @@ function printUsage(): void {
   );
 }
 
+function makeErrorResult(p: string, msg: string): FileResult {
+  return {
+    path: p,
+    sizeBytes: 0,
+    pageCount: null,
+    catalogFlags: null,
+    pages: [],
+    errors: [msg],
+  };
+}
+
+/**
+ * Survey local PDF paths. Files / directories と path 単位で混在可。
+ *
+ * ディレクトリは **直下のみ** scan する (非再帰)。nested 構造に PDF を置く場合は
+ * caller が path を列挙して渡す。stat / readdir / readFile の error は abort せず
+ * 個別 FileResult.errors に伝播するため、bad path が混じっても他の path は survey 継続。
+ */
 async function surveyLocalPaths(paths: string[]): Promise<FileResult[]> {
+  const results: FileResult[] = [];
   const targets: string[] = [];
   for (const p of paths) {
-    const stat = fs.statSync(p);
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(p);
+    } catch (err) {
+      results.push(makeErrorResult(p, `stat failed: ${(err as Error).message}`));
+      continue;
+    }
     if (stat.isDirectory()) {
-      for (const entry of fs.readdirSync(p)) {
+      let entries: string[];
+      try {
+        entries = fs.readdirSync(p);
+      } catch (err) {
+        results.push(makeErrorResult(p, `readdir failed: ${(err as Error).message}`));
+        continue;
+      }
+      for (const entry of entries) {
         if (entry.toLowerCase().endsWith('.pdf')) targets.push(path.join(p, entry));
       }
     } else {
       targets.push(p);
     }
   }
-  const results: FileResult[] = [];
   for (const t of targets) {
     let buffer: Buffer;
     try {
       buffer = fs.readFileSync(t);
     } catch (err) {
-      results.push({
-        path: t,
-        sizeBytes: 0,
-        pageCount: null,
-        catalogFlags: null,
-        pages: [],
-        errors: [`read failed: ${(err as Error).message}`],
-      });
+      results.push(makeErrorResult(t, `read failed: ${(err as Error).message}`));
       continue;
     }
     results.push(await surveyFile({ path: t, buffer }));

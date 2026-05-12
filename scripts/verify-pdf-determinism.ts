@@ -55,7 +55,13 @@ interface CliOptions {
 
 interface VerifyResult {
   path: string;
-  kind: 'ok' | 'unsupported' | 'failed';
+  // 'ok': fingerprint 計算成功 + same-process / cross-process invariance 成立
+  // 'unsupported': fingerprint 計算は完了したが unsupported 分類 (encrypted / acroform 等)、
+  //   parent と child で同 reason なら invariance 成立として扱う
+  // 'non-deterministic': **same-process** で fingerprint が一致しない (precondition 違反、
+  //   AC17 失敗)。pdf-page-visual-v1 の deterministic 仕様自体が壊れている重大事象
+  // 'failed': fingerprint 計算が parent で例外、または child process 異常終了
+  kind: 'ok' | 'unsupported' | 'non-deterministic' | 'failed';
   pageCount: number | null;
   unsupportedReason: string | null;
   sameProcess: {
@@ -73,6 +79,11 @@ interface VerifyResult {
   notes: string[];
 }
 
+function requireValue(arg: string, next: string | undefined): string {
+  if (next === undefined) throw new Error(`${arg} requires a value`);
+  return next;
+}
+
 function parseArgs(argv: string[]): CliOptions {
   const opts: CliOptions = {
     paths: [],
@@ -86,21 +97,21 @@ function parseArgs(argv: string[]): CliOptions {
     const next = argv[i + 1];
     switch (arg) {
       case '--paths':
-        opts.paths = next.split(',').map((s) => s.trim()).filter(Boolean);
+        opts.paths = requireValue(arg, next).split(',').map((s) => s.trim()).filter(Boolean);
         i++;
         break;
       case '--synthetic':
         opts.synthetic = true;
         break;
       case '--out':
-        opts.out = next;
+        opts.out = requireValue(arg, next);
         i++;
         break;
       case '--child-mode':
         opts.childMode = true;
         break;
       case '--child-buffer-path':
-        opts.childBufferPath = next;
+        opts.childBufferPath = requireValue(arg, next);
         i++;
         break;
       case '--help':
@@ -131,11 +142,13 @@ function printUsage(): void {
 }
 
 async function generateSyntheticFixtures(): Promise<Array<{ path: string; buffer: Buffer }>> {
-  // pdf-lib で生成可能な features を網羅した最小 fixture を 3 種作る:
+  // pdf-lib で生成可能な features に絞った最小 fixture を 3 種作る:
   //   A: 単純 page (geometry + raw operators)
-  //   B: image XObject (JPEG-likeなどはpdf-libで直接embed出来ない為、minimal stream)
-  //   C: 複数ページ + rotation + cropbox
-  // 各 fixture は same-process / cross-process 検証用の正解 PDF
+  //   B: transparency (opacity + 円) — image XObject は pdf-lib 単独で生成困難な
+  //      ため AC20 の synthetic 補完は別途用意 (本 verifier の scope 外)
+  //   C: 複数ページ + rotation
+  // 本 verifier の目的は cross-process invariance の実証 (AC17) なので、CCITT/JBIG2/
+  // JPX/encrypted 等 pdf-lib 不能 feature の生成は不要 (それらは PR-C3b で fixture 用意)。
   const fixtures: Array<{ path: string; buffer: Buffer }> = [];
 
   const fixA = await PDFDocument.create();
@@ -192,10 +205,31 @@ function fingerprintHex(fp: Fingerprint): string | null {
 function runChildFingerprint(
   buffer: Buffer
 ): { hex: string | null; stderr: string; exitCode: number | null; kind: string; reason: string | null } {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pr-c3a-det-'));
-  const bufPath = path.join(tmpDir, 'in.pdf');
-  fs.writeFileSync(bufPath, buffer);
+  let tmpDir: string;
   try {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pr-c3a-det-'));
+  } catch (err) {
+    return {
+      hex: null,
+      stderr: '',
+      exitCode: null,
+      kind: 'failed',
+      reason: `mkdtemp failed: ${(err as Error).message}`,
+    };
+  }
+  try {
+    const bufPath = path.join(tmpDir, 'in.pdf');
+    try {
+      fs.writeFileSync(bufPath, buffer);
+    } catch (err) {
+      return {
+        hex: null,
+        stderr: '',
+        exitCode: null,
+        kind: 'failed',
+        reason: `tmp write failed: ${(err as Error).message}`,
+      };
+    }
     const scriptPath = __filename;
     // ts-node 経由で同 script を child mode で再起動。--child-mode で run 経路を分岐。
     // ts-node の起動コストはあるが、ts-node 内蔵で本 script が回る環境を前提とする
@@ -296,11 +330,10 @@ async function verifyOne(
     };
   }
   const sameMatch = fingerprintEqual(fpA, fpB);
-  if (!sameMatch) notes.push('same-process mismatch (fingerprint is non-deterministic in process)');
-
-  const child = runChildFingerprint(file.buffer);
-  let crossMatch = false;
   const parentHex = fingerprintHex(fpA);
+  const child = runChildFingerprint(file.buffer);
+
+  let crossMatch = false;
   if (fpA.kind === 'ok' && child.kind === 'ok') {
     crossMatch = parentHex === child.hex && parentHex !== null;
   } else if (fpA.kind === 'unsupported' && child.kind === 'unsupported') {
@@ -312,9 +345,22 @@ async function verifyOne(
   }
   if (!crossMatch) notes.push('cross-process mismatch (parent vs child differ)');
 
+  // same-process mismatch は pdf-page-visual-v1 の deterministic 仕様違反 = precondition
+  // 違反として独立 kind に分離する (review #3 反映)。cross-process FAIL と区別することで
+  // operator がアルゴリズム再設計が必要か単に child spawn 環境差かを切り分け可能。
+  let kind: VerifyResult['kind'];
+  if (!sameMatch) {
+    kind = 'non-deterministic';
+    notes.unshift('same-process mismatch — pdf-page-visual-v1 deterministic precondition violated');
+  } else if (fpA.kind === 'ok') {
+    kind = 'ok';
+  } else {
+    kind = 'unsupported';
+  }
+
   return {
     path: file.path,
-    kind: fpA.kind === 'ok' ? 'ok' : 'unsupported',
+    kind,
     pageCount: fpA.kind === 'ok' ? fpA.pageCount : null,
     unsupportedReason: fpA.kind === 'unsupported' ? fpA.reason : null,
     sameProcess: { match: sameMatch, hexA: parentHex, hexB: fingerprintHex(fpB) },
@@ -346,13 +392,28 @@ async function main(): Promise<void> {
       `  [${pass ? 'PASS' : 'FAIL'}] ${r.path} (kind=${r.kind}${r.unsupportedReason ? `:${r.unsupportedReason}` : ''})`
     );
   }
-  const passCount = results.filter((r) => r.sameProcess.match && r.crossProcess.match).length;
+  // ok / unsupported (両方 same-process + cross-process match) を pass、それ以外を fail に分類。
+  // unsupportedPass は内訳として別出し (review #4 反映: operator が「PASS だが分類不可」を
+  // 識別できるよう、totals.unsupportedPass を分けて報告)。
+  const okCount = results.filter((r) => r.kind === 'ok' && r.sameProcess.match && r.crossProcess.match).length;
+  const unsupportedPassCount = results.filter(
+    (r) => r.kind === 'unsupported' && r.sameProcess.match && r.crossProcess.match
+  ).length;
+  const passCount = okCount + unsupportedPassCount;
+  const nonDeterministicCount = results.filter((r) => r.kind === 'non-deterministic').length;
   const failCount = results.length - passCount;
   const verdict: 'PASS' | 'FAIL' = failCount === 0 ? 'PASS' : 'FAIL';
   const payload = {
     verdict,
     algorithm: HASH_ALGORITHM,
-    totals: { files: results.length, pass: passCount, fail: failCount },
+    totals: {
+      files: results.length,
+      pass: passCount,
+      ok: okCount,
+      unsupportedPass: unsupportedPassCount,
+      nonDeterministic: nonDeterministicCount,
+      fail: failCount,
+    },
     results,
   };
   const jsonStr = JSON.stringify(payload, null, 2);
