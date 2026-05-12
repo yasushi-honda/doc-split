@@ -310,6 +310,7 @@ jobs:
           FILE_NAME: ${{ github.event.inputs.file_name }}
           DOC_ID: ${{ github.event.inputs.doc_id }}
           STORAGE_BUCKET: ${{ steps.resolve.outputs.storage_bucket }}
+          OPERATION_IDS_CSV: ${{ steps.parse_exec.outputs.operation_ids_csv }}
         run: |
           set -euo pipefail
           if [ -z "$PROJECT_ID" ]; then
@@ -363,6 +364,12 @@ jobs:
           elif [ "$SCRIPT_NAME" = "execute-collision-migration" ]; then
             # Issue #432 PR-C2-execution: plan + approval を前段 step で artifact 取得 + 生成。
             # SCRIPT_ARGS は workflow_dispatch の choice に応じて "--dry-run" or "--execute"。
+            # --operations で approvedOperationIds に対象を限定 (plan 内の他 op を gate-rejected で
+            # exit 1 にしないため。approvedOperationIds に対する二重 filter で安全側)。
+            if [ -z "${OPERATION_IDS_CSV:-}" ]; then
+              echo "ERROR: operation_ids_csv is empty (should be set by Parse exec args step)" >&2
+              exit 1
+            fi
             cd scripts
             NODE_PATH=../functions/node_modules \
               FIREBASE_PROJECT_ID="$PROJECT_ID" \
@@ -370,6 +377,7 @@ jobs:
               npx ts-node "${SCRIPT_NAME}.ts" \
                 --plan "${GITHUB_WORKSPACE}/.exec-plan/plan-output.json" \
                 --approval "${GITHUB_WORKSPACE}/.exec-plan/approval.json" \
+                --operations "$OPERATION_IDS_CSV" \
                 $SCRIPT_ARGS
           elif [ "$SCRIPT_NAME" = "backfill-display-filename" ] || \
                [ "$SCRIPT_NAME" = "classify-collision-docs" ] || \
