@@ -1,8 +1,100 @@
 # ハンドオフメモ
 
-**更新日**: 2026-05-12 session62 (**Issue #432 PR-C3 計画 Codex 2 段階セカンドオピニオン経由で AC 21 項目に再起案 + session61 復旧 4 docs post-audit 完遂 + PR-D Issue #445 起票、Net +1**。Task #1 = `audit-session61-parent-provenance.js` (read-only) で kanameone 本番 4 docs を遡及検証 → verdict suspect 4/4 (rotation 後親から regenerate、provenance 未保存)、PR #444 merged。Task #2 = Codex MCP セカンドオピニオン 2 thread (旧 `019e1bc6-...` で Codex Critical 2 + 提案 6、新 `019e1c1e-...` で Critical 追加 4) を impl-plan 再起案に反映、AC 12→21 項目拡充。**核心修正 = AC19 (MatchedByHash は provenance 不要 / RepairableMissingFile + collision loser regenerate のみ provenance verified 必須)**、AC18 (provenance verified 6 fields 全一致)、AC20 (人工 fixture + 生成不能 feature の固定 synthetic 補完)、AC21 (denylist scope 限定)。Task #3 = PR-D Issue #445 起票 (ユーザー明示指示 #5 + rating 9 + confidence 95 triage クリア)、fileName identity 排除 + docId namespace identity + provenance fields 必須化のデータモデル正規化。**handoff archive 全体 + Issue #432 全コメント grep 確認で本番 LostOrUnrecoverable 0 件 = 完全破損ケースなし** 確定。次セッションは PR-C3a (feature survey + cross-process determinism 検証、read-only) and/or PR-D1 (データモデル設計 ADR + 型定義、read-only) 並行着手候補)
-**ブランチ**: `docs/session62-handoff` (本 session62 entry 追記、PR 化中)
-**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + (session29-55 累積実績は archive 参照) + Phase 8 (session56-60 = Issue #432 PR-A〜PR-C2 v2 段階完遂、Net -1) + Phase 8 (session61 = Issue #432 PR-C2-execution A 部分完遂 + CCITTFaxDecode 設計限界判明、Net 0) + **Phase 8 (session62 = Issue #432 PR-C3 計画 AC 21 項目に再起案 + session61 post-audit + PR-D 起票、Net +1)** 完遂
+**更新日**: 2026-05-12 session63 (**Issue #432 PR-C3a 実装 + dev 実証 + main merge 完遂、Net 0**。session62 計画 (AC 21 項目) の PR-C3 第一段階を実装着手。`scripts/pdf-feature-survey.ts` (read-only) + `scripts/verify-pdf-determinism.ts` (read-only) 2 script 新規 + `.github/workflows/run-ops-script.yml` に script choice 4 件 + artifact upload 2 件追加。/simplify (Critical 3 反映: GCS pagination/OOM, silent download error, firebase-admin import) + /safe-refactor (LOW 1) + /review-pr 4 並列 (Critical 4 + Important 3 反映: stat/readdir error 処理, runChildFingerprint try 範囲, non-deterministic kind 分離, fixture B comment rot, parseArgs guard, surveyLocalPaths 非再帰 doc, unsupportedPass 内訳) + /codex review (大規模 PR セカンドオピニオン 新 thread `019e1cd9-...`、Critical なし Important 3 件は PR-C3b/c 持越し or PR description 明記) 全実施。dev workflow run #25745219139 で **verdict PASS 3/3 ok artifact 取得**、AC17 (cross-process invariance) を pdf-lib 生成 fixture で実証完了。CI lint-build-test ✅ pass 6m10s (run #25746991318)、PR #447 squash merge (`62896c5`)、main deploy success 1m54s。handoff size 削減: session56-58 を archive/2026-05-history.md へ移動 (LATEST.md 758→<500 行目標)。次セッションは PR-C3b (pdf-page-visual-v2 + denylist + 人工 fixture 拡張) and/or PR-D1 (Issue #445 データモデル ADR + 型定義) 並行着手候補)
+**ブランチ**: `docs/session63-handoff` (本 session63 entry 追記 + session56-58 archive、PR 化中)
+**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + (session29-58 累積実績は archive 参照) + Phase 8 (session59-60 = Issue #432 PR-C2 v2 段階完遂、Net 0) + Phase 8 (session61 = Issue #432 PR-C2-execution A 部分完遂 + CCITTFaxDecode 設計限界判明、Net 0) + Phase 8 (session62 = Issue #432 PR-C3 計画 AC 21 項目再起案 + session61 post-audit + PR-D #445 起票、Net +1) + **Phase 8 (session63 = Issue #432 PR-C3a 実装 + dev 実証 + main merge、Net 0)** 完遂
+
+<a id="session63"></a>
+## ✅ session63 完了サマリー (2026-05-12: Issue #432 PR-C3a 実装 + dev 実証 + main merge、Net 0)
+
+session62 で確定した PR-C3 計画 (AC 21 項目) の **第一段階 PR-C3a** を完遂。read-only な 2 script (PDF feature survey + cross-process determinism verifier) を実装、Quality Gate 4 種 (simplify/safe-refactor/review-pr/codex review) を経て dev 実証 + main merge。AC17 (C3b 着手前 main merge + dev cross-process invariance 実証) を達成し、後続 PR-C3b/c/d/e の前提を整備。
+
+### 経緯
+
+1. **catchup**: session62 handoff 確認、次セッション着手候補「PR-C3a (read-only) and/or PR-D1 (read-only) 並行着手」のうち PR-C3a を選択 (#432 P0 系列優先)
+2. **branch 作成**: `fix/issue-432-pr-c3a-feature-survey-determinism`
+3. **実装** (commit `7c28eb7`、3 files +1041/-1):
+   - `scripts/pdf-feature-survey.ts` (新規): catalog/page/XObject feature 列挙、local + GCS 両対応、JSON artifact 出力
+   - `scripts/verify-pdf-determinism.ts` (新規): pdf-page-visual-v1 fingerprint の same-process + cross-process invariance 実証、--synthetic で pdf-lib 生成 fixture 3 件内蔵 + --paths で既存 fixture も可
+   - `.github/workflows/run-ops-script.yml`: script choice 4 件 (`pdf-feature-survey --source gcs --prefix original/`, `--prefix processed/`, `--prefix processed/ --limit 200`, `verify-pdf-determinism --synthetic`) + artifact upload 2 件
+4. **/simplify** 3 並列レビュー: Critical 3 反映 (GCS 数千件 OOM 回避 = pagination + 8 並列 download + buffer 即解放 / silent download error → FileResult.errors 伝播 / firebase-admin 動的 require → static import)
+5. **/safe-refactor**: LOW 1 (未使用 import `PDFRawStream` 削除)
+6. **PR #447 作成** + 1st commit push、dev workflow run #25744877076 (verdict PASS 3/3) — ただし artifact upload `if` 条件が `== 'verify-pdf-determinism'` で完全一致判定だったため 0 件 (workflow_dispatch の入力 script が引数付き文字列 `verify-pdf-determinism --synthetic`)
+7. **/review-pr** 4 並列 (code-reviewer + silent-failure-hunter + comment-analyzer + type-design-analyzer): Critical 4 + Important 3 検出
+   - silent-failure-hunter HIGH 3: `surveyLocalPaths` の stat/readdir error 処理 / `runChildFingerprint` の writeFileSync を try 範囲内 / same-process mismatch を独立 `kind: 'non-deterministic'` に分離
+   - comment-analyzer CRITICAL 1: synthetic fixture B の comment rot 修正 (実装は opacity + 円のみ、image XObject 未生成と明記)
+   - code-reviewer Important 3: parseArgs `next===undefined` guard (両 script) / surveyLocalPaths 非再帰の docstring 明示 / verdict `totals` に ok / unsupportedPass / nonDeterministic 内訳追加
+   - artifact upload `if` 条件を `startsWith` に修正 (commit `ac350ec`、3 files +139/-40)
+8. **/codex review** (大規模 PR セカンドオピニオン、新 thread `019e1cd9-1dbc-7f43-80ef-527592566526`): Critical なし、Important 3 件 (AC17 は synthetic 経路のみで実 PDF `--paths` 経路は PR-C3b で追加 / AC20 の `--expect-*` assert は PR-C3b/c で fixture と一緒に / VerifyResult/FileResult discriminated union 化は PR-C3c consumer 設計と統合) — 全件 scope crawl 回避で PR description 明記 + 持越し
+9. **dev 再実証**: workflow run #25745219139 (2m2s) で **verdict PASS / totals.ok=3 / totals.nonDeterministic=0 / totals.fail=0**、3 fixture 全件で same-process hex == cross-process hex 完全一致 (例: simple.pdf hex = `2754cd06...23d5` を parent + child 両プロセスで再現)、artifact 取得確認
+10. **CI lint-build-test 異常 + 復旧**: 2nd commit (ac350ec) の CI run #25745221506 が「Install Playwright browsers」で 35 分超 stuck (前回 run は 7m17s で完遂)。ユーザー判断 Cancel + re-run を選択。空 commit `279ab15` push で新規 CI run #25746991318 をトリガー、**6m10s で success 完遂**
+11. **PR #447 squash merge** (`62896c5`、ユーザー番号認可「#447 をマージしてよい」取得後)、main deploy success 1m54s (run 25747858380)
+12. **handoff size 削減**: session56-58 を `docs/handoff/archive/2026-05-history.md` へ移動 (session62 で「次セッション持越し」と明示済の作業を消化)、LATEST.md footer 「session51-55 → session51-58 archive」と更新
+
+### Issue Net 変化
+
+| 項目 | 内容 |
+|------|------|
+| Close 数 | 0 件 (Issue #432 は未 close、PR-C3a は前提実装、続 PR-C3b/c/d/e あり) |
+| 起票数 | 0 件 (本セッション新規 Issue なし) |
+| **Net 変化 (session63 単独)** | **0 件** |
+
+**Net 0 の進捗判定**: ✅ 正の構造的進捗。Issue #432 (P0) 根本対策 PR-C3 計画 (AC 21 項目) の AC17 (cross-process invariance dev 実証 + main merge) を達成し、AC15/AC16/AC20 の前提となる read-only 検証基盤を整備。後続 PR-C3b 着手の precondition 全充足。triage 基準 #5 (ユーザー明示指示「次のアクション優先順にすすめて」) 該当。
+
+### 主要 PR / 実行記録
+
+| 項目 | 値 |
+|---|---|
+| 本 PR (PR-C3a) | **PR #447 merged** (`62896c5`、squash、3 commits) |
+| 1st commit (実装) | `7c28eb7` (3 files +1041/-1) |
+| 2nd commit (review fix + artifact upload startsWith) | `ac350ec` (3 files +139/-40) |
+| 3rd commit (CI re-trigger) | `279ab15` (empty) |
+| 1st CI run | `25744872543` ✅ success 7m17s |
+| Stuck CI run | `25745221506` ⚠️ Playwright install 35m+ → cancelled |
+| Final CI run | `25746991318` ✅ success 6m10s |
+| dev workflow #1 (verdict PASS、artifact 0 件 = if 条件 bug) | `25744877076` |
+| dev workflow #2 (verdict PASS、artifact 取得確認) | `25745219139` |
+| main deploy | `25747858380` ✅ success 1m54s |
+| Codex MCP thread (PR-C3a review 用、新規) | `019e1cd9-1dbc-7f43-80ef-527592566526` (read-only) |
+
+### AC 達成状況
+
+| AC | 達成 | 根拠 |
+|---|---|---|
+| AC15 | ✅ 前提整備 | `pdf-feature-survey` を CI choice + artifact 化、PR-C3c classify gate の必須入力に消費可能 |
+| AC16 | ✅ 前提整備 | `verify-pdf-determinism --synthetic` で pdf-lib 生成可能な 3 fixture 内蔵、生成不能 feature の synthetic 補完は PR-C3b で fixture 追加時に併せて実施 |
+| AC17 | ✅ **完全達成** | dev run #25745219139 で verdict PASS 3/3 ok、main merge 済 (`62896c5`)、C3b 着手 precondition 全充足 |
+| AC20 | 🟡 前提整備 | survey で feature 分布列挙可能、`--expect-*` parser guard は PR-C3b/c で fixture と一緒に追加予定 (Codex Important 反映) |
+
+### Codex Important 持越し (PR-C3b/c で対応予定)
+
+- 実 PDF `--paths` 経路で cross-process invariance 実証 (PR-C3b の fixture 追加と統合)
+- pdf-feature-survey の `--expect-*` fail-fast parser guard (AC20 strict assert、PR-C3b/c で実装)
+- `FileResult` / `VerifyResult` の discriminated union 化 (PR-C3c の classify-gate consumer 設計と統合、null fan-out → kind 判別で compile-time safety 強化)
+
+### 残 Open Issue (5 件、session62 から不変)
+
+| # | タイトル要約 | 状態 | 再開条件 |
+|---|---|---|---|
+| **#432** | [P0] 分割PDF 設計バグ | **PR-A/B/C1/C2/C2-execution-A/D/C3a + post-audit 完了** | 次セッションで PR-C3b 着手 (pdf-page-visual-v2 + denylist + 人工 fixture 拡張) |
+| **#445** | [P1] データモデル正規化 (Issue #432 根本対策) | 設計フェーズ | 次セッションで PR-D1 (ADR + 型定義) 着手候補 |
+| #402 | searchDocuments OOM ガード + 計測ログ | 段階1 完了、段階2/3 観測待ち | 観測データ判断 |
+| #251 | summaryGenerator unit test + buildSummaryPrompt 分離 | Scope 2 完了、Scope 1/3 待機 | sinon 導入伴う他タスク or Vertex AI false negative |
+| #238 | force-reindex 孤児 posting 検出モード | drift 実発生未観測 | ADR-0015 silent failure metric ERROR or 削除済書類ヒット報告 |
+
+### 次セッション着手項目
+
+1. **PR-C3b** (Issue #432、コード変更のみ): `scripts/lib/pdfPageVisualFingerprint.ts` v2 実装 (denylist 方式 = `/Author`/`/CreationDate`/`/ModDate`/`/ID` 等 metadata 除外 + Page tree `/Parent` / outline `/First`/`/Last` / navigation `/Prev`/`/Next` の scope 限定除外、AC21) + 人工 fixture 拡張 (CCITT/JBIG2/JPX/encrypted の固定 synthetic 補完、AC16/AC20) + `pdf-feature-survey --expect-*` parser guard 追加 + `verify-pdf-determinism --paths` 経路で実 fixture cross-process 実証 (AC17 拡張)
+2. **PR-D1** (Issue #445、read-only/設計フェーズ): データモデル設計 ADR (fileName identity 排除 + docId namespace identity + provenance fields 必須化) + TypeScript 型定義 (型レベルで旧 identity を禁止) + Firestore schema 文書化 — PR-C3b と並行可能
+3. **Issue #432 reverse orphan 1 件** (`processed/20260413_未判定_未判定_p27-28.pdf`、session61 発見) 調査 (low priority、follow-up)
+
+### 教訓 (本セッション新規)
+
+- **artifact upload `if` 条件は startsWith 必須**: workflow_dispatch の `inputs.script` choice が引数付き文字列 (`pdf-feature-survey --source gcs --prefix processed/` 等) の場合、完全一致 `== 'pdf-feature-survey'` では false になり artifact が 0 件。`startsWith(github.event.inputs.script, 'pdf-feature-survey')` で判定する。本 session で 1st commit でこれを見落とし、2nd commit で修正
+- **CI hang 対処は cancel + 新 commit push**: GitHub Actions の cancel は即時ではなく Playwright install 中だと反映に時間がかかる。空 commit `git commit --allow-empty` を push して新規 CI run をトリガーする方が早い (旧 run は自然 cancel される)
+- **block comment 内の `*/` は構文壊滅**: JSDoc 内に `/Resources/XObject/*/Filter` のような PDF パスを書くと `*/` がコメント終端と解釈され、後続テキストがコード扱いに。`/<name>/Filter` のような meta 表現に書き換える必要
+
+---
 
 <a id="session62"></a>
 ## ✅ session62 完了サマリー (2026-05-12: Issue #432 PR-C3 再起案 + post-audit + PR-D 起票、Net +1)
@@ -513,246 +605,7 @@ session58 で merge した PR-C1 を dev 環境で fixture 検証したところ
 | #439 | docs: 2026-05-12 session58 handoff (Issue #432 PR-C1 完遂、Net 0) | ✅ merged (`42e4d3f`) |
 | (本 PR) | docs: 2026-05-12 session59 handoff (PR-C1 設計欠陥発覚 + PR-C2 v2 計画確定、Net 0) | 提出中 |
 
-<a id="session58"></a>
-## ✅ session58 完了サマリー (2026-05-12: Issue #432 PR-C1 collision migration scripts 完遂、Net 0)
-
-session57 で残課題だった PR-C (マイグレーション = 過去被害 90+ docs 復旧) を「PR-C1 (実装) + PR-C2 (実行ログ)」に分割し、PR-C1 を完成。`/codex plan` セカンドオピニオンで Critical 2 件 (LikelyWinner 自動 destructive 禁止 / 「敗者 doc を pending 化」禁止 = OCR 再処理キュー破壊) + Important 6 件 を計画段階で反映してから実装。7 並列 review で更に Critical 9 件 + Important 3 件を検出・反映。
-
-### 経緯
-
-1. **計画段階**: `/impl-plan` で PR-C 計画策定 → `/codex plan` MCP セカンドオピニオン → 致命的指摘反映:
-   - Critical: LikelyWinner 自動 destructive action 禁止 (`rotatedAt!=null 唯一` は離脱可能性 hint であり Storage 実体正当性証明ではない、silent breakage 偽装復旧の再演リスク) → Ambiguous 内 suggestedWinner hint に降格
-   - Critical: 「敗者 doc を pending + fileUrl クリア」禁止 (`processOCR` の OCR 再処理キューを壊す、splitPdf 再生成トリガーではない) → RepairableMissingFile 経路で親から再生成
-   - Important: hash は GCS md5Hash ではなく sha256 download/regenerated bytes / 4 重 gate (planId + operationId + path + env + precondition) / dev fixture / storageGuard 共有 / migration freeze window
-2. **PR #438 (PR-C1) 初回 commit (`31572b4`) merged**: 11 files / +2226 行
-   - `scripts/lib/collisionClassifier.ts` (5 分類 pure function) + `storageGuard.ts` (削除安全性) + `pdfRegenerator.ts` (parent から PDF 再生成)
-   - `scripts/classify-collision-docs.ts` (read-only scan → JSON plan) + `execute-collision-migration.ts` (4 重 gate + idempotent execute) + `setup-collision-fixture.ts` (dev 環境 fixture)
-   - `functions/test/collisionClassifier.test.ts` (15 tests) + `storageGuard.test.ts` (5 tests)
-   - `docs/runbooks/orphan-storage-cleanup.md` (PR-C 手順 + freeze window 追記) + `.github/workflows/run-ops-script.yml` (script choice + ts-node 分岐)
-3. **品質ゲート**: 7 並列 review (`/review-pr` 5 agent + `/codex review` MCP + `evaluator` 分離) で Critical 9 件 + Important 3 件追加検出
-4. **PR #438 fix-up commit (`f6c0f03`) merged**: 7 files / +642 行 で Critical 全件反映:
-   - F-A1: parent PDF 探索を `bucket.file().exists()` + cache 化 (`processed/` 一覧のみ参照していた根本バグ → 本番でほぼ全 doc が hash 不能になる欠陥を修正)
-   - F-A2: orphan を collision group から `continue` 除外 (二重登録防止)
-   - F-A3: idempotency 判定を precondition より前に評価 (中間状態の自動復旧)
-   - F-B1: regenerate path gate に sourcePath 認可追加 (ADR-0008 違反修正)
-   - F-B2: Storage delete を 404 のみ silent skip + outcome に oldDeleteOutcome/Error 残す
-   - F-B3: `downloadIfExists` を `{kind: ok|absent|error}` 構造化、computation-error は Lost に降格させず Ambiguous に留める (transient 503 を「永久 lost」と分類して status='error' 焼き込みを防ぐ)
-   - F-B4: parent fileUrl bucket 一致を classify + executeRegenerate 両方で検証
-   - F-B5: Gate 0 (defense-in-depth) — Ambiguous + suggestedWinner=true の destructive action を reject
-   - F-C1+C2: `classifyLoserForRegeneration` rename + コメント rot 修正 (敗者処理の隠蔽解消)
-   - F-C3: `Classification` / `RecommendedAction` 型を classifier から `import type` 化 (drift リスク解消)
-   - F-D1: `pdfRegenerator.test.ts` 10 tests (deterministic 性 = MatchedByHash 信頼性根拠を lock-in)
-   - F-D2: `executeMigrationOps.ts` 切り出し + `executeMigrationOps.test.ts` 14 tests (Partial update 不変、CLAUDE.md MUST 準拠)
-5. **PR #438 merge**: 13 files / +2868 行 / -81 行、squash merge `3d88fdb`、ブランチ削除済
-
-### Issue Net 変化
-
-| 項目 | 内容 |
-|------|------|
-| Close 数 | 0 件 |
-| 起票数 | 0 件 |
-| **Net 変化 (session58 単独)** | **0 件** |
-
-**Net 0 の進捗判定**: ✅ 正の構造的進捗。Issue #432 (P0) の 4 PR 計画 (A/B/C/D) のうち PR-C1 (実装) を Codex Critical 全反映 + 7 並列 review で堅牢化して完了。残 PR-C2 (kanameone destructive 実行) は番号認可必須のため次セッション持越し。Issue #432 close は PR-C2 完了で。
-
-### 主要 PR
-
-| PR | コミット | 内容 |
-|---|---|---|
-| **#438** | `3d88fdb` | fix(scripts): Issue #432 PR-C — 衝突/orphan 5 分類 migration (Codex 反映) (13 files / +2868/-81) |
-
-### 展開結果
-
-| 環境 | PR-C1 |
-|------|------|
-| dev | ✅ main 反映 (Functions 変更ゼロ、scripts のみ) |
-| kanameone | ✅ main 反映 (Functions 変更ゼロ、PR-C2 で classify → execute 実行予定) |
-| cocoro | ✅ main 反映 (Functions 変更ゼロ、PR-C2 で classify dry-run 0 件確認予定) |
-
-### 教訓
-
-#### 1. destructive migration の impl-plan は AskUserQuestion 前に Codex セカンドオピニオン必須
-本セッション最重要教訓。本番データ復旧用 migration 計画を AI 単独で AskUserQuestion → ユーザー承認 → 実装に進むと致命的設計欠陥 (pending キュー破壊 / 不確定推定の自動実行) を見落とす。`/codex plan` で計画全文 + 質問リスト送付 → Critical/Important 反映 → AskUserQuestion で承認するフローを memory 化 (`feedback_destructive_migration_codex_review.md`)。本 PR の Codex 指摘は AI 単独レビュー (4 並列 review + evaluator 等) では検出不能だった。
-
-#### 2. 7 並列 review が Critical 9 件を追加検出 (Codex plan 反映後でも漏れあり)
-計画段階で Codex Critical 反映済の実装に対し、実装後の品質ゲート (4 agent + Codex review + evaluator + comment-analyzer + type-design + test-analyzer) で更に Critical 9 件を検出。特に重大:
-- A1 (parent path を `processed/` 一覧でしか探さない = 本番動作の根本バグ): Codex review で発見、4 agent も evaluator も見落とし
-- C1+C2 (コメントが古い設計を残し、operator が destructive action を見落とす設計の透明性破壊): comment-analyzer 単独で発見
-- D2 (Partial update 不変が実 update 形状で未検証 = CLAUDE.md MUST 違反): test-analyzer 単独で発見
-
-各 agent の専門性が補完的に機能した実例。CLAUDE.md「5 ファイル以上 + 新機能 → Evaluator 分離プロトコル」+「大規模 PR → /codex review」+「PR レビュー → /review-pr (6 並列)」を併用する正当性を裏付け。
-
-#### 3. fixture が本番欠陥を隠蔽するアンチパターン
-F-A1 修正前の `setup-collision-fixture.ts` は parent PDF を `processed/` 配下に配置しており、`classify-collision-docs.ts` が `processed/` Storage 一覧でしか parent 探さない欠陥を fixture では検出できなかった。**「fixture は本番のデータ配置を実環境同等に再現すべき」**。原因は「fixture を単純化したい誘惑」と「Codex Critical の cocoro 0 件 no-op 問題対策で急造した fixture が新たな盲点を作った」ため。fixture 設計時は「fixture が本番と異なる前提を持っていないか」を意識的にチェック。
-
-#### 4. tagged union と pure function 分離が test 容易性を担保
-F-D2 で `executeMigrationOps.ts` を切り出して build*UpdatePayload を pure function 化することで、Firestore emulator なしで Partial update 不変 (CLAUDE.md MUST) を 14 tests でカバーできた。execute-collision-migration.ts は admin.initializeApp() を top-level で呼ぶため import するだけで起動が走るが、ロジック部分のみ pure function に分離すれば test ファイルから副作用なく import 可能。**「testable な pure function 部と CLI entrypoint 部を分離する」設計パターン**を migration script 系に適用する標準とする。
-
-### 次のアクション (次セッション以降)
-
-1. **PR-C2 dev fixture 検証** (Codex Critical 「cocoro 0 件 no-op で本番初動」回避):
-   - `./scripts/switch-client.sh dev`
-   - `FIREBASE_PROJECT_ID=doc-split-dev STORAGE_BUCKET=doc-split-dev.firebasestorage.app npx ts-node scripts/setup-collision-fixture.ts`
-   - `npx ts-node scripts/classify-collision-docs.ts --out plan-fixture.json` → 5 分類 (MatchedByHash + Ambiguous + RepairableMissingFile + LostOrUnrecoverable) のうち期待数で出るか確認
-   - approval JSON 手動作成 → `execute --dry-run` → 期待出力照合 → `--execute` → Firestore/Storage 状態の期待値確認 → fixture cleanup
-2. **cocoro 環境 classify dry-run** (被害ゼロ環境で 0 件レポートが出ることを確認):
-   - `./scripts/switch-client.sh cocoro` → `classify-collision-docs.ts` 実行 → `summary.totalGroups=0 / totalOrphans=0` を期待
-3. **kanameone 環境 PR-C2 実行** (番号認可必須 = destructive):
-   - classify dry-run → 39 group + 4 orphan の分類レポート JSON
-   - レポート提示 → 各分類の対応方針 + 各 operationId / sourcePath / destPath を文字列単位で含む承認文取得
-   - approval JSON 作成 → execute --dry-run → execute (番号認可後)
-   - post-audit (`audit-storage-mismatch.js`) で衝突 group 0 / orphan 0 確認
-4. **PR-C2 (実行ログ PR)** + Issue #432 close 報告
-5. **PR-D follow-up (任意 / 別 PR)** (session57 から継続):
-   - Cloud Monitoring alert policy (`cleanupResult=failed`)
-   - audit-storage-mismatch.js の cron 定期実行
-6. **handoff 別 PR 候補 (session58 quality-gate 後送り、Important 級)**:
-   - evaluator HIGH-2: 衝突 group 全敗者完了後の旧 path 残存対策 (post-migration cleanup pass)
-   - silent-failure I2: executeMigrate destExists skip の md5 検証
-   - silent-failure I3: updatedAt null doc の precondition false skip (runbook 明記で代替済)
-   - type-design P1+: Operation tagged union / Zod boundary validation
-
-### 残 Open Issue (4 件)
-
-| # | タイトル要約 | 状態 | 再開条件 |
-|---|---|---|---|
-| **#432** | [P0] 分割PDF 設計バグ | **PR-A/B/D + PR-C1 完了、PR-C2 残り** | 次セッションで PR-C2 (dev fixture → cocoro → kanameone destructive 実行 + post-audit) |
-| #402 | searchDocuments OOM ガード + 計測ログ | 段階1 完了、段階2/3 観測待ち | 2026-05-12 頃に観測データ判断 |
-| #251 | summaryGenerator unit test + buildSummaryPrompt 分離 | Scope 2 完了、Scope 1/3 待機 | sinon 導入伴う他タスク or Vertex AI false negative |
-| #238 | force-reindex 孤児 posting 検出モード | drift 実発生未観測 | ADR-0015 silent failure metric ERROR or 削除済書類ヒット報告 |
-
-<a id="session57"></a>
-## ✅ session57 完了サマリー (2026-05-11: Issue #432 PR-A/PR-B/PR-D 完遂、Net 0)
-
-session56 で起票した P0 Issue #432 (分割PDF Storage 設計バグ、kanameone で silent breakage 90+ docs + 完全消失 4 件) に対し、Codex セカンドオピニオン (B 案推奨) を活用しつつ 3 PR を順に完成・全環境展開。進行中破壊の停止 + 新規発生のゼロ化 + 検出機構が完了。
-
-### 経緯
-
-1. **計画段階**: `/impl-plan` で PR-A/B/C/D 4 分割計画策定 → `/codex plan` セカンドオピニオンで 5 件の修正方針反映 (PR-B 補償処理 / PR-C 信頼度付き 4 分類 / fileUrl 参照範囲調査 / generateFileName 段階削除 / 旧/新 path 混在 AC 追加)
-2. **PR #434 (PR-A safety net) merged**: `rotatePdfPages` / `deleteDocument` に「同 fileUrl 共有 doc」detection を導入し、共有検出時は構造化警告ログ (`skippedStorageDelete: true`, `skipReason: 'sharedFileUrl' | 'safetyNetQueryFailed'`) を出して delete を skip。fail-closed 設計。4 並列 review で Critical 1 (silent failure) + Important 8 を修正、kanameone/cocoro Functions deploy で進行中破壊停止
-3. **PR #435 (PR-B docId namespace) merged**: `splitPdf` の Storage path を `processed/{fileName}` → **`processed/{docId}/{fileName}`** に変更し path 衝突を構造的に根治。補償処理 (Storage save 成功 → Firestore set 失敗時の cleanup + Error.cause + orphanLeft マーカー) も統合。4 並列 review で Critical 1 + Important 8、3 環境展開
-4. **PR #436 (PR-D 検出強化) merged**: PR-B follow-up 3 件統合 - `audit-storage-mismatch.js` reverse orphan mode 追加 / 3 call sites path-extraction grep contract test / `docs/runbooks/orphan-storage-cleanup.md` 新規 runbook。5 並列 review (4 agent + codex) で Critical 4 + Important 多数を修正、main merge (Functions 変更なし展開不要)
-
-### Issue Net 変化
-
-| 項目 | 内容 |
-|------|------|
-| Close 数 | 0 件 |
-| 起票数 | 0 件 (Issue #432 follow-up 6 件は本 Issue へコメント集約、Net 増加回避) |
-| **Net 変化 (session57 単独)** | **0 件** |
-
-**Net 0 の進捗判定**: ✅ 正の構造的進捗。Issue #432 (P0) の 4 PR 計画 (A/B/C/D) のうち 3 件完了で、進行中破壊停止 + 新規発生ゼロ化 + 検出機構が完了。残る PR-C (マイグレーション、過去被害 90+ 件復旧) は destructive 操作のため kanameone 実行に番号認可必須 = 次セッションへ持越し。`feedback_issue_triage.md` の rating 5-6 機械起票には該当せず、follow-up 6 件 (audit reverse orphan logic / AC-B3 contract / segments rollback / contract test negative pattern 拡充 / コメントアウト bypass / rotatePdfPages scope 絞り) はすべて Issue #432 にコメント集約することで散逸を回避。
-
-### 主要 PR
-
-| PR | コミット | 内容 |
-|---|---|---|
-| **#434** | `683bce9` | fix(storage): Issue #432 PR-A safety net (4 files / +281/-8) |
-| **#435** | `337e66c` | fix(pdf): Issue #432 PR-B docId namespace (3 files / +240/-45) |
-| **#436** | `1f681d4` | feat(detection): Issue #432 PR-D 検出強化 + runbook (3 files / +352/-9) |
-
-### 展開結果
-
-| 環境 | PR-A | PR-B | PR-D |
-|------|------|------|------|
-| dev | ✅ CI auto deploy | ✅ CI auto deploy | ✅ main reflect (Functions 変更なし) |
-| kanameone | ✅ Deploy Cloud Functions | ✅ Deploy Cloud Functions | ⏭️ Functions 変更なし、展開不要 |
-| cocoro | ✅ Deploy Cloud Functions | ✅ Deploy Cloud Functions | ⏭️ Functions 変更なし、展開不要 |
-
-### 教訓
-
-#### 1. 4 並列 review + codex review (large tier) の有効性
-PR-B では Codex review が「Storage save 成功 → Firestore set 失敗の補償処理を namespace 化と同 PR で行うべき」を発見、4 agent では検出されない設計レベルの指摘を補完。PR-D では Critical 4 件 (pathFromUrl silent skip / Storage 0 件 load 失敗区別 / parentDocumentId 誤読 / line drift) を 5 並列で漏れなく検出。CLAUDE.md「大規模 PR (3+ ファイル / 200+ 行) → /codex review」を実証
-
-#### 2. silent-failure の隠れ場所
-PR-A 元実装で `canSafelyDeleteStorageFile` を pre-existing `try/catch (deleteErr) { console.log('may not exist') }` 内に置いた結果、Firestore query 失敗が「old file may not exist」と誤誘導ログに巻き取られて signal 喪失。独立 try/catch + skipReason 識別 + 構造化 log で修正。silent-failure-hunter agent の必須性を再確認
-
-#### 3. 番号認可境界の言語表現
-PR-D runbook で「番号認可必須」と書いていたが、「Issue 番号認可」と誤読される可能性 (例: `Issue #432 全件削除してよい` → prefix 一括削除実行)。「個別パス認可必須 (per-path explicit authorization required)」+ `gs:// path を文字列単位で含む承認文のみ有効` と明示。ADR-0008 の prefix 一括削除禁止教訓を runbook レベルで強化
-
-#### 4. handoff コメント集約による Issue Net 増加回避
-PR-B/PR-D の review で抽出した follow-up 計 6 件 (audit reverse orphan / AC-B3 contract / segments rollback / contract test negative pattern 拡充 / コメントアウト bypass / rotatePdfPages scope 絞り) は、別 Issue 起票せず Issue #432 にチェックリスト集約。triage 基準 #4 (rating ≥ 7 + confidence ≥ 80) を満たすが、親 Issue が open のため散逸を回避できる利点を優先
-
-### 次のアクション (次セッション以降)
-
-1. **PR-C マイグレーション実装 + 番号認可付き実行** (Issue #432 残り):
-   - 信頼度付き 4 分類 (`MatchedByHash` / `LikelyWinner` / `Ambiguous` / `LostOrUnrecoverable`) ロジック実装 (Codex セカンドオピニオン推奨)
-   - cocoro 環境で test 実行 → kanameone 番号認可後実行
-   - kanameone 90+ docs silent breakage + 4 orphan の復旧
-2. **PR-D follow-up (任意 / 別 PR)**:
-   - Cloud Monitoring alert policy 設定 (`jsonPayload.cleanupResult="failed"`)
-   - audit-storage-mismatch.js の cron 定期実行
-   - ヘルスレポート 4 指標追加 (fileUrl 重複 / Storage path × docId 一意性 / parentDocumentId 関連欠損 / 回転履歴件数)
-   - contract test の更広 negative pattern (`path.parse` / `substring` / `lastIndexOf`) + コメントアウト bypass 対策
-3. **generateFileName timestamp 引数完全削除** (PR-C migration 完了後、旧 timestamp 引数の caller 残存ゼロを `tsc` で確認してから signature から削除する別 PR)
-4. **kaname / cocoro 運用者目視確認** (本番に新コード稼働の影響観測、受動待機)
-
-### 残 Open Issue (4 件)
-
-| # | タイトル要約 | 状態 | 再開条件 |
-|---|---|---|---|
-| **#432** | [P0] 分割PDF 設計バグ | **PR-A/B/D 完了、PR-C 残り** | 次セッションで PR-C 実装 + 番号認可後実行 |
-| #402 | searchDocuments OOM ガード + 計測ログ | 段階1 完了、段階2/3 観測待ち | 2026-05-12 頃に観測データ判断 |
-| #251 | summaryGenerator unit test + buildSummaryPrompt 分離 | Scope 2 完了、Scope 1/3 待機 | sinon 導入伴う他タスク or Vertex AI false negative |
-| #238 | force-reindex 孤児 posting 検出モード | drift 実発生未観測 | ADR-0015 silent failure metric ERROR or 削除済書類ヒット報告 |
-
-<a id="session56"></a>
-## ✅ session56 完了サマリー (2026-05-11: 分割PDF Storage 設計バグ調査、調査ツール 3 PR merged + P0 Issue #432 起票、Net -1)
-
-2026-05-10 ヘルスレポートの kanameone 1 件 `No such object` エラーを起点に、調査ツール構築 → 全件監査 → 設計バグ発見 → Codex セカンドオピニオン → P0 Issue 起票まで完遂。設計バグ修正実装は session57 で完了。
-
-### 経緯
-
-1. **エラー検出**: 2026-05-10 ヘルスレポートで kanameone 環境に 1 件のみ `No such object: docsplit-kanameone.firebasestorage.app/processed/20260509_未判定_未判定_p3.pdf` エラー検出
-2. **Storage 側調査**: `gsutil ls processed/` で旧パス `_p3.pdf` 不在 + 回転後パス `_p3_r1778340000575.pdf` 存在を確認 → `rotatePdfPages` の `_r{timestamp}` パターンに合致
-3. **PR #429 (merged)**: read-only な `inspect-document.js` 追加、`run-ops-script.yml` workflow_dispatch に組込み
-4. **詳細調査**: workflow_dispatch で `fileName: 20260509_未判定_未判定_p3.pdf` 検索 → **3 docs が同 fileName** を持つことを発見（うち 1 件は status:processed のまま実体破壊 = silent failure 確定）
-5. **PR #430 (merged)**: 全件 audit を行う `audit-storage-mismatch.js` 追加（`bucket.getFiles({prefix, autoPaginate:false})` ページング + Set 化で O(1) lookup）
-6. **PR #431 (merged) follow-up**: PR #430 が初回 fail（`storageBucket` 未指定）→ `scripts/clients/<env>.env` の `STORAGE_BUCKET` を resolve step で抽出 + Run script env 経由で渡すよう修正
-7. **kanameone 監査**: 5,725 docs 中 processed/ 211 docs / Storage 145 ファイル / **fileUrl 孤児 4 件 (processed:3 + error:1) / fileName 衝突 39 group**（最大 6 docs/group, ほぼ `日付_未判定_未判定_pXX.pdf` パターン）
-8. **cocoro 監査**: 539 docs 中被害ゼロ、ただし設計バグは共通（データ規模 1/10 で衝突確率が低いだけ）
-9. **P0 Issue #432 起票**: triage 基準 #1（実害あり = データ silent 破壊・ユーザー影響）該当
-10. **Codex セカンドオピニオン (MCP review)**: 修正方針 A→B 案変更 / `deleteDocument` 追加経路発見 / 非トランザクション split 発見 / マイグレーション 5 分類追加 / 検出指標 4 項目追加
-11. **Issue #432 本文を edit 更新**: Codex 補強指摘を全反映、修正方針セクション・根本原因セクション・マイグレーション計画・検出強化を再構成
-
-### 根本原因（Issue #432 詳細参照）
-
-- **`generateFileName` (`functions/src/pdf/pdfOperations.ts:581-595`)** に衝突回避要素なし（`timestamp` 引数を受け取るが日付部分しか使わない）
-- **`bucket.file(newFilePath).save()` (`pdfOperations.ts:328-332`)** が衝突検査せず上書き
-- **`rotatePdfPages` (`pdfOperations.ts:528-545`)** が古ファイル delete で同パス共有 docs を破壊
-- **`deleteDocument` 経路（Codex 発見）** も同様の連鎖破壊
-- **splitPdf の Storage save と Firestore set が非トランザクション**（Codex 発見）
-
-### 修正方針（Codex 評価で更新、session57 で実装完遂）
-
-- **B 案（推奨・根治）**: `processed/{docId}/{fileName}` で **docId namespace 分離**（Storage path を doc identity に従属） → ✅ PR #435 で実装
-- **A 案（代替・対症）**: `generateFileName` に **`docId` suffix** 追加 → 採用せず (B 案で十分)
-- **C 案（補助）**: `rotatePdfPages` / `deleteDocument` で同パス共有 docs を検出 → 最後の参照のみ削除（safety net） → ✅ PR #434 で実装
-
-### Issue Net 変化
-
-| 項目 | 内容 |
-|------|------|
-| Close 数 | 0 件 |
-| 起票数 | 1 件 (#432) |
-| **Net 変化 (session56 単独)** | **-1 件** |
-
-### 主要 PR
-
-| PR | コミット | 内容 |
-|---|---|---|
-| **#429** | `e41a082` | feat(scripts): inspect-document.js 追加 — documents Firestore read-only 調査ツール (2 files / +185/-0) |
-| **#430** | `eddd051` | feat(scripts): audit-storage-mismatch.js 追加 — Firestore↔Storage 整合性監査 (2 files / +152/-0) |
-| **#431** | `37da31c` | fix(scripts): audit-storage-mismatch に STORAGE_BUCKET env 必須化 (2 files / +33/-4) |
-
-### 監査結果（Issue #432 詳細参照）
-
-| 環境 | Total docs | processed/ docs | Storage files | orphans | collisions |
-|------|---|---|---|---|---|
-| kanameone | 5,725 | 211 | 145 | **4** (processed:3 + error:1) | **39 groups** |
-| cocoro | 539 | 23 | 23 | 0 | 0 groups |
-
 ---
 
-session51-55 は `docs/handoff/archive/2026-05-history.md` 参照。
+session51-58 は `docs/handoff/archive/2026-05-history.md` 参照。
 session29-50 は `docs/handoff/archive/2026-04-history.md` 参照。
