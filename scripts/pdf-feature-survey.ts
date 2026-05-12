@@ -46,6 +46,7 @@
  * 期待値 (expectations.failures) が 1 件以上ある場合は exit 1。
  */
 
+import crypto from 'crypto';
 import * as admin from 'firebase-admin';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -60,6 +61,14 @@ import {
   PDFRef,
   PDFStream,
 } from 'pdf-lib';
+
+// PR-C3c (AC-SURVEY-MANIFEST): survey artifact に sourceManifestHash + entries を出力し、
+// classify-collision-docs.ts 側 (Gate 15-3) で同関数で再計算して一致確認する。
+import {
+  computeSourceManifestHash,
+  type SourceManifestEntry,
+  type SourceManifestRef,
+} from './lib/collisionPlanTypes';
 
 interface CliOptions {
   source: 'local' | 'gcs';
@@ -133,6 +142,12 @@ interface FileResult {
   catalogFlags: CatalogFlags | null;
   pages: PageFeature[];
   errors: string[];
+  /**
+   * PR-C3c (AC-SURVEY-MANIFEST): GCS object identity + bytes sha256。
+   * download/read 失敗時は null。aggregate 後に
+   * sourceManifestEntries / sourceManifestHash として artifact top-level に集約する。
+   */
+  manifestEntry: SourceManifestEntry | null;
 }
 
 interface SurveySummary {
@@ -265,6 +280,9 @@ function printUsage(): void {
 }
 
 function makeErrorResult(p: string, msg: string): FileResult {
+  // 注: manifestEntry=null。caller 側 (surveyLocalPaths/surveyGcs) でも bytes 取得
+  // 失敗時はこの helper を使うため、manifestEntry を埋められない事案として null 化する。
+  // sourceManifestHash 計算からは除外される。
   return {
     path: p,
     sizeBytes: 0,
@@ -272,6 +290,7 @@ function makeErrorResult(p: string, msg: string): FileResult {
     catalogFlags: null,
     pages: [],
     errors: [msg],
+    manifestEntry: null,
   };
 }
 
@@ -310,13 +329,29 @@ async function surveyLocalPaths(paths: string[]): Promise<FileResult[]> {
   }
   for (const t of targets) {
     let buffer: Buffer;
+    let stat: fs.Stats;
     try {
       buffer = fs.readFileSync(t);
+      stat = fs.statSync(t);
     } catch (err) {
       results.push(makeErrorResult(t, `read failed: ${(err as Error).message}`));
       continue;
     }
-    results.push(await surveyFile({ path: t, buffer }));
+    // PR-C3c (AC-SURVEY-MANIFEST): local モードでも bucket='local' で manifest entry 構築。
+    // generation/metageneration は GCS にしか存在しないので '0' 固定。classify 側で再計算する
+    // 際は同 fixture を local モードで再 scan して同じ値を生成可能。
+    const sha256 = crypto.createHash('sha256').update(buffer).digest('hex');
+    const manifestEntry: SourceManifestEntry = {
+      bucket: 'local',
+      prefix: '.',
+      objectName: path.basename(t),
+      generation: '0',
+      metageneration: '0',
+      size: String(stat.size),
+      sha256,
+    };
+    const fileResult = await surveyFile({ path: t, buffer });
+    results.push({ ...fileResult, manifestEntry });
   }
   return results;
 }
@@ -371,8 +406,31 @@ async function surveyGcs(bucketName: string, prefix: string, limit: number): Pro
       batch.map(async (name) => {
         const fullPath = `gs://${bucketName}/${name}`;
         try {
-          const [buf] = await bucket.file(name).download();
-          return await surveyFile({ path: fullPath, buffer: buf });
+          // PR-C3c (AC-SURVEY-MANIFEST): download + getMetadata を並列実行。
+          // download buffer から sha256、getMetadata から generation/metageneration を取得。
+          const file = bucket.file(name);
+          const [bufResult, metaResult] = await Promise.all([
+            file.download(),
+            file.getMetadata(),
+          ]);
+          const buf = bufResult[0];
+          const meta = metaResult[0] as {
+            generation?: string | number;
+            metageneration?: string | number;
+            size?: string | number;
+          };
+          const sha256 = crypto.createHash('sha256').update(buf).digest('hex');
+          const manifestEntry: SourceManifestEntry = {
+            bucket: bucketName,
+            prefix,
+            objectName: name,
+            generation: String(meta.generation ?? '0'),
+            metageneration: String(meta.metageneration ?? '0'),
+            size: String(meta.size ?? buf.length),
+            sha256,
+          };
+          const fileResult = await surveyFile({ path: fullPath, buffer: buf });
+          return { ...fileResult, manifestEntry };
         } catch (err) {
           return {
             path: fullPath,
@@ -380,7 +438,8 @@ async function surveyGcs(bucketName: string, prefix: string, limit: number): Pro
             pageCount: null,
             catalogFlags: null,
             pages: [],
-            errors: [`gcs download failed: ${(err as Error).message}`],
+            errors: [`gcs download/metadata failed: ${(err as Error).message}`],
+            manifestEntry: null,
           } as FileResult;
         }
       })
@@ -541,6 +600,8 @@ async function surveyFile(file: { path: string; buffer: Buffer }): Promise<FileR
       catalogFlags: null,
       pages: [],
       errors: ['empty buffer'],
+      // manifestEntry: null。caller (surveyLocalPaths/surveyGcs) が manifest 情報を上書きする。
+      manifestEntry: null,
     };
   }
   let pdf: PDFDocument;
@@ -557,6 +618,7 @@ async function surveyFile(file: { path: string; buffer: Buffer }): Promise<FileR
       catalogFlags: null,
       pages: [],
       errors: [`load failed: ${(err as Error).message}`],
+      manifestEntry: null,
     };
   }
 
@@ -619,6 +681,7 @@ async function surveyFile(file: { path: string; buffer: Buffer }): Promise<FileR
     catalogFlags,
     pages,
     errors,
+    manifestEntry: null,
   };
 }
 
@@ -752,7 +815,26 @@ async function main(): Promise<void> {
   }
   const summary = aggregate(results);
   const expectationFailures = evaluateExpectations(opts, summary);
+
+  // PR-C3c (AC-SURVEY-MANIFEST-1): manifest hash 計算。manifestEntry が null の results
+  // (download/read 失敗) は除外。classify 側 (Gate 15-3) は survey artifact の bucket/prefix
+  // で同関数を呼び、現在の object set から hash を再計算して一致確認する。
+  const sourceManifestEntries: SourceManifestEntry[] = results
+    .map((r) => r.manifestEntry)
+    .filter((e): e is SourceManifestEntry => e !== null);
+  const sourceManifestHash = computeSourceManifestHash(sourceManifestEntries);
+  const sourceManifestRef: SourceManifestRef = {
+    bucket:
+      opts.source === 'gcs'
+        ? opts.bucket ?? process.env.STORAGE_BUCKET ?? '<unknown>'
+        : 'local',
+    prefix: opts.source === 'gcs' ? opts.prefix : '.',
+    sourceManifestHash,
+    surveyedAt: new Date().toISOString(),
+  };
+
   const payload = {
+    source: opts.source,
     summary,
     files: results,
     expectations: {
@@ -762,6 +844,9 @@ async function main(): Promise<void> {
       acroform: opts.expectAcroform,
       failures: expectationFailures,
     },
+    // PR-C3c (AC-SURVEY-MANIFEST): classify gate (AC15-3) で再計算一致確認するための manifest。
+    sourceManifestRef,
+    sourceManifestEntries,
   };
   const jsonStr = JSON.stringify(payload, null, 2);
   if (opts.out) {

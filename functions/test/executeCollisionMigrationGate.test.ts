@@ -27,6 +27,10 @@ import * as os from 'os';
 import * as path from 'path';
 import { spawnSync } from 'child_process';
 import { PDFDocument } from 'pdf-lib';
+// PR-C3c: AC-SCHEMA + AC-CC1 gate を通過させるため、fixture に runtime と一致する
+// lockfile snapshot + v3 schemaVersion を埋め込む必要がある。
+import { readLockfileSnapshot } from '../../scripts/lib/lockfileGate';
+import { COLLISION_PLAN_SCHEMA_VERSION } from '../../scripts/lib/collisionPlanTypes';
 
 // pdf-lib version を runtime で取得。ESM mode の test loader でも動作させるため、
 // __dirname / require / package.json import attribute すべて使わず、pdf-lib の
@@ -62,6 +66,9 @@ const SCRIPT_PATH = path.join(
 );
 
 interface PlanFixture {
+  // PR-C3c (AC-SCHEMA): v3 schema 必須 fields
+  schemaVersion?: string;
+  // 既存 PR-C2 / 共通 fields
   planId: string;
   createdAt: string;
   environment: string;
@@ -70,12 +77,30 @@ interface PlanFixture {
   prefix: string;
   hashAlgorithm?: string;
   pdfLibVersion?: string;
+  // PR-C3c (AC-CC1): lockfile gate fields
+  lockfileHash?: string;
+  pdfLibLockfileVersion?: string;
+  // PR-C3c (AC-SURVEY-MANIFEST): source manifest reference (execute では未使用だが
+  // Plan 型に含まれる必須 field なので fixture でも埋める)
+  sourceManifestRef?: {
+    bucket: string;
+    prefix: string;
+    sourceManifestHash: string;
+    surveyedAt: string;
+  };
   summary: Record<string, unknown>;
   operations: unknown[];
 }
 
+// PR-C3c (AC-CC1-2): runtime lockfile snapshot を取得し、fixture に埋める。
+// fixture の lockfileHash + pdfLibLockfileVersion が runtime と一致すれば、本テスト群が
+// 検証したい AC13 gate (hashAlgorithm / pdfLibVersion) まで evaluation が到達する。
+const runtimeLockfile = readLockfileSnapshot();
+
 function makePlan(overrides: Partial<PlanFixture> = {}): PlanFixture {
   return {
+    // PR-C3c: AC-SCHEMA gate を通過させるための v3 schema version
+    schemaVersion: COLLISION_PLAN_SCHEMA_VERSION,
     planId: 'plan-test-' + crypto.randomBytes(2).toString('hex'),
     createdAt: '2026-05-12T00:00:00.000Z',
     environment: 'test',
@@ -86,6 +111,15 @@ function makePlan(overrides: Partial<PlanFixture> = {}): PlanFixture {
     // 旧 v1 plan の reject は別 test ('pdf-page-visual-v0-FAKE' literal) で検証する。
     hashAlgorithm: 'pdf-page-visual-v2',
     pdfLibVersion,
+    // PR-C3c: AC-CC1-2 gate を通過させるための runtime lockfile snapshot
+    lockfileHash: runtimeLockfile.lockfileHash,
+    pdfLibLockfileVersion: runtimeLockfile.pdfLibLockfileVersion,
+    sourceManifestRef: {
+      bucket: 'test-bucket',
+      prefix: 'processed/',
+      sourceManifestHash: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', // empty list sha256
+      surveyedAt: '2026-05-12T00:00:00.000Z',
+    },
     summary: {},
     operations: [],
     ...overrides,

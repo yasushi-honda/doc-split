@@ -33,6 +33,21 @@ import {
 // AC13 拡張 (Codex Important): plan に pdf-lib version も記録。dependency 更新で
 // internal API 挙動が変わったときに古い plan が新コードで黙って通るのを防ぐ。
 import { version as pdfLibVersion } from 'pdf-lib/package.json';
+// PR-C3c (AC18 / AC19 / AC-SCHEMA / AC-SURVEY-MANIFEST / AC-CC1): 統合 plan schema v3 +
+// 親 PDF provenance lib + lockfile gate lib + survey artifact source manifest 検証。
+import {
+  COLLISION_PLAN_SCHEMA_VERSION,
+  PROVENANCE_REQUIRED_BY_ACTION,
+  computeSourceManifestHash,
+  type Operation,
+  type Plan,
+  type PlanSummary,
+  type ParentPdfProvenance,
+  type SourceManifestEntry,
+  type SourceManifestRef,
+} from './lib/collisionPlanTypes';
+import { computeParentPdfProvenance } from './lib/parentPdfProvenance';
+import { readLockfileSnapshot } from './lib/lockfileGate';
 
 const projectId = process.env.FIREBASE_PROJECT_ID;
 const storageBucket = process.env.STORAGE_BUCKET;
@@ -54,6 +69,17 @@ function getOpt(name: string, def: string | null = null): string | null {
 
 const prefix = getOpt('--prefix', 'processed/')!;
 const outFile = getOpt('--out', null);
+
+// PR-C3c (AC15-1): --survey-artifact 必須化。pdf-feature-survey.ts の出力 JSON path を
+// 受け取り、後続の survey gate (AC15-2 / AC15-3) で expectations + sourceManifestHash を
+// 検証する。
+const surveyArtifactPath = getOpt('--survey-artifact', null);
+if (!surveyArtifactPath) {
+  console.error(
+    'FATAL: --survey-artifact <survey.json> required (run pdf-feature-survey first; AC15-1)'
+  );
+  process.exit(2);
+}
 
 admin.initializeApp({ projectId, storageBucket });
 const db = admin.firestore();
@@ -408,31 +434,15 @@ async function buildDocEvidence(
   }
 }
 
-interface MigrationOperation {
-  operationId: string;
-  docId: string;
-  classification: ClassificationResult['classification'];
-  recommendedAction: ClassificationResult['recommendedAction'];
-  reason: string;
-  suggestedWinner: boolean;
-  // precondition snapshot (T7 多重 gate で照合)
-  expectedCurrentFileUrl: string | null;
-  expectedStatus: string;
-  expectedUpdatedAt: string | null;
-  // path 情報
-  sourcePath: string | null;
-  destPath: string | null;
-  // 親情報 (regenerate-from-parent 時に必要)
-  parentDocumentId: string | null;
-  splitFromPages: { start: number; end: number } | null;
-  fileName: string;
-}
+// PR-C3c: MigrationOperation を削除し、scripts/lib/collisionPlanTypes.ts の統合型
+// Operation を使う。Operation には PR-C3c で provenanceRequired + provenance (6 fields)
+// が追加されている (AC18 / AC19)。
 
 function buildOperation(
   doc: CollisionDoc,
   result: ClassificationResult,
   opCounter: { n: number }
-): MigrationOperation {
+): Operation {
   const sourcePath = pathFromUrl(doc.fileUrl);
   const destPath =
     result.recommendedAction === 'migrate-to-namespace' ||
@@ -441,6 +451,14 @@ function buildOperation(
       : null;
 
   opCounter.n += 1;
+  // PR-C3c (AC19-1): category → action → provenanceRequired のマッピング。
+  // 既存 classifier は既に正しい action を返している (MatchedByHash=migrate-to-namespace,
+  // RepairableMissingFile=regenerate-from-parent, Ambiguous=manual-review,
+  // LostOrUnrecoverable=mark-error)。Codex Critical C1 は計画書 v1 の誤記指摘で、既存
+  // 実装は OK。本関数は action から PROVENANCE_REQUIRED_BY_ACTION lookup table で
+  // provenanceRequired を導出する (AC18-1 invariant の plan-side 保証)。
+  const provenanceRequired = PROVENANCE_REQUIRED_BY_ACTION[result.recommendedAction];
+
   return {
     operationId: `op-${String(opCounter.n).padStart(4, '0')}`,
     docId: doc.id,
@@ -456,13 +474,139 @@ function buildOperation(
     parentDocumentId: doc.parentDocumentId,
     splitFromPages: doc.splitFromPages,
     fileName: doc.fileName,
+    // PR-C3c (AC18 / AC19): provenanceRequired を action から導出、provenance は後段で
+    // async に埋める (regenerate-from-parent のみ親 PDF を download して sha256 計算)。
+    provenanceRequired,
+    provenance: null,
   };
+}
+
+// PR-C3c (AC15): survey artifact の最小型。pdf-feature-survey.ts の出力 JSON 構造
+// (top-level の `summary`/`expectations`/`sourceManifestRef`/`sourceManifestEntries`)
+// を classify 側で検証するために必要な field のみ宣言する。
+interface SurveyArtifact {
+  source?: 'local' | 'gcs';
+  summary?: {
+    filesWithErrors?: number;
+  };
+  expectations?: {
+    filters?: string[];
+    subtypes?: string[];
+    encrypted?: boolean;
+    acroform?: boolean;
+    failures?: string[];
+  };
+  sourceManifestRef?: SourceManifestRef;
+  sourceManifestEntries?: SourceManifestEntry[];
+}
+
+/**
+ * PR-C3c AC15 反映: survey artifact を読込んで survey gate を評価する。
+ *
+ *  - AC15-1: --survey-artifact 引数必須 (caller 側で確認、本関数は path 受け取り)
+ *  - AC15-2: expectations.failures 空 + --expect-* 最低 1 指定 + filesWithErrors === 0
+ *  - AC15-3: sourceManifestHash 再計算一致 (caller 側で再 survey して照合する設計)
+ *
+ * 本関数では (1) artifact 読込 (2) AC15-2 評価 (3) artifact 内部の sourceManifestHash と
+ * sourceManifestEntries から再計算した hash が一致することの sanity check を行う。
+ *
+ * AC15-3 の本質的な改竄検出 (artifact 提示時の現在 Storage 状態との一致) は本 PR では
+ * artifact 内部の自己整合性に留め、execute 側 preflight phase で再度 GCS から fetch して
+ * 照合する設計に分離する (Codex Q4 反映、HMAC 不要)。
+ */
+function loadAndValidateSurveyArtifact(artifactPath: string): SurveyArtifact {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(artifactPath, 'utf8');
+  } catch (err) {
+    console.error(
+      `FATAL: cannot read --survey-artifact at ${artifactPath}: ${(err as Error).message}`
+    );
+    process.exit(2);
+  }
+  let artifact: SurveyArtifact;
+  try {
+    artifact = JSON.parse(raw) as SurveyArtifact;
+  } catch (err) {
+    console.error(
+      `FATAL: --survey-artifact ${artifactPath} is not valid JSON: ${(err as Error).message}`
+    );
+    process.exit(2);
+  }
+
+  // AC15-2 (Codex Important I4 反映): --expect-* 最低 1 指定 + failures empty + filesWithErrors === 0
+  const expectations = artifact.expectations;
+  if (!expectations) {
+    console.error(
+      `FATAL: survey artifact missing 'expectations' (AC15-2; produced by pdf-feature-survey before PR-C3c?)`
+    );
+    process.exit(2);
+  }
+  const expectCount =
+    (expectations.filters?.length ?? 0) +
+    (expectations.subtypes?.length ?? 0) +
+    (expectations.encrypted ? 1 : 0) +
+    (expectations.acroform ? 1 : 0);
+  if (expectCount === 0) {
+    console.error(
+      `FATAL: survey artifact has no --expect-* assertions (AC15-2; survey must be run with at least one --expect-filter / --expect-subtype / --expect-encrypted / --expect-acroform)`
+    );
+    process.exit(2);
+  }
+  const failures = expectations.failures ?? [];
+  if (failures.length > 0) {
+    console.error(
+      `FATAL: survey gate failed (AC15-2): ${failures.length} expectation(s) not met:`
+    );
+    for (const f of failures) console.error(`  - ${f}`);
+    process.exit(2);
+  }
+  const filesWithErrors = artifact.summary?.filesWithErrors ?? 0;
+  if (filesWithErrors > 0) {
+    console.error(
+      `FATAL: survey gate failed (AC15-2): ${filesWithErrors} file(s) had errors during survey (filesWithErrors > 0)`
+    );
+    process.exit(2);
+  }
+
+  // AC15-3 内部 sanity: artifact 内の sourceManifestHash と sourceManifestEntries が
+  // 自己整合しているか確認 (改竄 / 古い形式の artifact を弾く)。
+  const ref = artifact.sourceManifestRef;
+  const entries = artifact.sourceManifestEntries;
+  if (!ref || !entries) {
+    console.error(
+      `FATAL: survey artifact missing 'sourceManifestRef' or 'sourceManifestEntries' (AC15-3; artifact must be produced by pdf-feature-survey with PR-C3c changes)`
+    );
+    process.exit(2);
+  }
+  const recomputedHash = computeSourceManifestHash(entries);
+  if (recomputedHash !== ref.sourceManifestHash) {
+    console.error(
+      `FATAL: survey artifact self-inconsistency (AC15-3): sourceManifestHash ${ref.sourceManifestHash} but recomputed from entries = ${recomputedHash}. The artifact may have been tampered or produced by a different version of pdf-feature-survey.`
+    );
+    process.exit(2);
+  }
+
+  return artifact;
 }
 
 async function main(): Promise<void> {
   console.log(`Project: ${projectId}`);
   console.log(`Bucket : ${bucket.name}`);
   console.log(`Prefix : ${prefix}\n`);
+
+  // PR-C3c (AC15): survey gate を最初に走らせる (重い classify 処理の前で fail-fast)。
+  console.log(`Loading and validating survey artifact: ${surveyArtifactPath}`);
+  const surveyArtifact = loadAndValidateSurveyArtifact(surveyArtifactPath!);
+  console.log(
+    `Survey gate passed (AC15): expectations.failures=0, filesWithErrors=0, sourceManifestHash self-consistent\n`
+  );
+
+  // PR-C3c (AC-CC1): lockfile snapshot を取得して plan に記録。execute 側 Gate 10 で照合。
+  const lockfileSnapshot = readLockfileSnapshot();
+  console.log(
+    `Lockfile snapshot: hash=${lockfileSnapshot.lockfileHash.slice(0, 16)}... pdfLibLockfileVersion=${lockfileSnapshot.pdfLibLockfileVersion}\n`
+  );
 
   const planId = `plan-${new Date().toISOString().replace(/[:.]/g, '-')}-${crypto
     .randomBytes(4)
@@ -520,8 +664,8 @@ async function main(): Promise<void> {
   const parentCache = new Map<string, RawDoc | null>();
   const parentBufferCache = new Map<string, Buffer | null>();
   const opCounter = { n: 0 };
-  const operations: MigrationOperation[] = [];
-  const summary = {
+  const operations: Operation[] = [];
+  const summary: PlanSummary = {
     totalGroups: collisionGroups.length,
     totalCollisionDocs: collisionGroups.reduce((sum, [, docs]) => sum + docs.length, 0),
     totalOrphans: orphanDocs.length,
@@ -573,20 +717,88 @@ async function main(): Promise<void> {
     summary.byAction[result.recommendedAction] += 1;
   }
 
+  // PR-C3c (AC18): regenerate-from-parent op の provenance 6 fields を非同期計算。
+  // 親 PDF を Storage から download → sha256 + metadata 取得して plan に記録する。
+  // 同一 parent に対する重複計算を避けるため per-(parentDocId, destPath) cache を使う。
+  // ただし derivedObjectPath (= destPath) は op 単位で異なるため、parent 単位 cache に
+  // derivedObjectPath を後付けする形にする。
+  console.log('\nComputing parent PDF provenance for regenerate-from-parent operations...');
+  const provenanceParentCache = new Map<string, ParentPdfProvenance>();
+  let provenanceComputed = 0;
+  let provenanceFailed = 0;
+  for (const op of operations) {
+    if (op.recommendedAction !== 'regenerate-from-parent') continue;
+    if (!op.parentDocumentId || !op.destPath) {
+      // schema invariant 違反: regenerate-from-parent は parentDocumentId + destPath 必須。
+      // 既存 buildOperation が満たすはずだが念のため fail-fast (Codex C2 反映)。
+      console.error(
+        `FATAL: op ${op.operationId} action=regenerate-from-parent but parentDocumentId=${op.parentDocumentId} destPath=${op.destPath}. classify logic bug.`
+      );
+      await admin.app().delete();
+      process.exit(2);
+    }
+    // parent PDF path: 親 doc の fileUrl から path を抜き出すロジックは buildDocEvidence
+    // 等で既出。ここでは parentBufferCache の key (parentDocumentId) を起点に Firestore
+    // 経由で fileUrl を再取得する代わりに、parentCache から直接拾う。
+    const parentDoc = parentCache.get(op.parentDocumentId);
+    if (!parentDoc || !parentDoc.fileUrl) {
+      console.error(
+        `WARN: op ${op.operationId} parentDocumentId=${op.parentDocumentId} not in parentCache or has no fileUrl. Provenance cannot be computed; this op will fail AC18 gate.`
+      );
+      provenanceFailed += 1;
+      continue;
+    }
+    const parentPath = extractPathIfBucketMatches(parentDoc.fileUrl, bucket.name);
+    if (!parentPath) {
+      console.error(
+        `WARN: op ${op.operationId} parent fileUrl ${parentDoc.fileUrl} not in current bucket ${bucket.name}. Provenance not computed.`
+      );
+      provenanceFailed += 1;
+      continue;
+    }
+    try {
+      // per-parent cache: 同一 parent から複数 child が出る場合 (敗者 + orphan) は
+      // sha256 計算を 1 度だけ行い、derivedObjectPath だけ各 op に差し替える。
+      const cacheKey = `${parentPath}|${op.destPath}`;
+      let provenance = provenanceParentCache.get(cacheKey);
+      if (!provenance) {
+        provenance = await computeParentPdfProvenance(bucket, parentPath, op.destPath);
+        provenanceParentCache.set(cacheKey, provenance);
+      }
+      op.provenance = provenance;
+      provenanceComputed += 1;
+    } catch (err) {
+      console.error(
+        `WARN: op ${op.operationId} provenance computation failed: ${(err as Error).message}`
+      );
+      provenanceFailed += 1;
+    }
+  }
+  console.log(
+    `Provenance computed: ${provenanceComputed} | failed: ${provenanceFailed}\n`
+  );
+
   // AC13: plan に fingerprint algorithm version を記録。execute 側で固定値と照合し、
   // mismatch なら gate reject (pdf-lib upgrade 等で algorithm が変わった古い plan を
   // 新コードで実行することを防ぐ)。
   const hashAlgorithm: FingerprintAlgorithm = HASH_ALGORITHM;
 
-  const plan = {
+  // PR-C3c (AC-SCHEMA / AC-CC1 / AC-SURVEY-MANIFEST): Plan v3 完成。
+  // projectId / storageBucket は冒頭 L39-48 で fail-fast チェック済みのため non-null。
+  // tsc flow analysis が main 関数まで narrowing を持ち越せないので明示的に non-null assert。
+  const plan: Plan = {
+    schemaVersion: COLLISION_PLAN_SCHEMA_VERSION,
     planId,
     createdAt: new Date().toISOString(),
-    environment: process.env.ENVIRONMENT_LABEL ?? projectId, // CI 経由で渡される環境 label (optional)
-    projectId,
+    environment: process.env.ENVIRONMENT_LABEL ?? projectId!, // CI 経由で渡される環境 label (optional)
+    projectId: projectId!,
     bucket: bucket.name,
     prefix,
     hashAlgorithm,
     pdfLibVersion,
+    lockfileHash: lockfileSnapshot.lockfileHash,
+    pdfLibLockfileVersion: lockfileSnapshot.pdfLibLockfileVersion,
+    sourceManifestRef: surveyArtifact.sourceManifestRef!,
     summary,
     operations,
   };
