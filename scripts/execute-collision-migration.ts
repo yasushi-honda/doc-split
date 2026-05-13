@@ -63,6 +63,9 @@ import {
   verifyParentPdfProvenanceMatch,
 } from './lib/parentPdfProvenance';
 import { readLockfileSnapshot, verifyLockfileMatch } from './lib/lockfileGate';
+// PR-C3c (Codex Important): precondition drift exit 1 + preflight gate-rejected exit 1 で
+// operator が再開する手順を統一表示。classify 側 AC15-3 drift と同 runbook を共有する。
+import { SURVEY_OR_PRECONDITION_DRIFT_RUNBOOK } from './lib/sourceManifestDrift';
 
 const projectId = process.env.FIREBASE_PROJECT_ID;
 const storageBucket = process.env.STORAGE_BUCKET;
@@ -784,9 +787,11 @@ async function main(): Promise<void> {
     for (const o of writeSkippedDrift) {
       console.error(`  - ${o.operationId} ${o.docId}: ${o.reason}`);
     }
-    console.error(
-      `Investigate concurrent writers and re-run classify + execute after Firestore quiesces.`
-    );
+    // PR-C3c Codex Important 反映: precondition drift は AC15-3 drift と同根 (= Firestore/Storage
+    // concurrent write)。operator は writeSummary を必ず保存し、Firestore quiesce + 再 survey +
+    // 再 classify + 未完了 op の approval 再構築 + execute 再走を 6 ステップで実施する。
+    console.error('');
+    console.error(SURVEY_OR_PRECONDITION_DRIFT_RUNBOOK);
     await admin.app().delete();
     process.exit(1);
   }

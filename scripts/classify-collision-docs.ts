@@ -14,6 +14,7 @@
  */
 
 import * as admin from 'firebase-admin';
+import type { Bucket } from '@google-cloud/storage';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import {
@@ -48,6 +49,17 @@ import {
 } from './lib/collisionPlanTypes';
 import { computeParentPdfProvenance } from './lib/parentPdfProvenance';
 import { readLockfileSnapshot } from './lib/lockfileGate';
+// PR-C3c AC15-3 強化 (Codex MCP NO-GO 反映): survey artifact の sourceManifestEntries と
+// 現在 GCS state の drift 検出。caller 側で listing + getMetadata(並列 8) を実行し、
+// pure functions に渡す。
+import {
+  CurrentGcsState,
+  ManifestDriftResult,
+  compareSurveyManifestToCurrentGcs,
+  formatDriftError,
+  hasManifestDrift,
+  SURVEY_OR_PRECONDITION_DRIFT_RUNBOOK,
+} from './lib/sourceManifestDrift';
 
 const projectId = process.env.FIREBASE_PROJECT_ID;
 const storageBucket = process.env.STORAGE_BUCKET;
@@ -501,18 +513,15 @@ interface SurveyArtifact {
 }
 
 /**
- * PR-C3c AC15 反映: survey artifact を読込んで survey gate を評価する。
+ * PR-C3c AC15 反映: survey artifact を読込んで survey gate (artifact 内部チェック層) を評価する。
  *
  *  - AC15-1: --survey-artifact 引数必須 (caller 側で確認、本関数は path 受け取り)
  *  - AC15-2: expectations.failures 空 + --expect-* 最低 1 指定 + filesWithErrors === 0
- *  - AC15-3: sourceManifestHash 再計算一致 (caller 側で再 survey して照合する設計)
+ *  - AC15-3 (artifact 内部自己整合性): sourceManifestHash と sourceManifestEntries の再計算一致
  *
- * 本関数では (1) artifact 読込 (2) AC15-2 評価 (3) artifact 内部の sourceManifestHash と
- * sourceManifestEntries から再計算した hash が一致することの sanity check を行う。
- *
- * AC15-3 の本質的な改竄検出 (artifact 提示時の現在 Storage 状態との一致) は本 PR では
- * artifact 内部の自己整合性に留め、execute 側 preflight phase で再度 GCS から fetch して
- * 照合する設計に分離する (Codex Q4 反映、HMAC 不要)。
+ * AC15-3 の「現在 GCS 状態との再計算照合」は本関数では行わず、
+ * `verifySurveyManifestAgainstCurrentGcs` (async + GCS I/O) に分離 (Codex MCP NO-GO 反映)。
+ * 自己整合性は artifact の改竄検出、現在状態照合は survey 後の drift 検出と役割が異なる。
  */
 function loadAndValidateSurveyArtifact(artifactPath: string): SurveyArtifact {
   let raw: string;
@@ -590,6 +599,155 @@ function loadAndValidateSurveyArtifact(artifactPath: string): SurveyArtifact {
   return artifact;
 }
 
+// PR-C3c AC15-3 強化: survey 時点と classify 時点の drift 検出は重い (listing + getMetadata)
+// ため、main 内で 1 度だけ呼ぶ。getMetadata は parallel 8 (survey 側と同じ並列度)。
+const SURVEY_VS_GCS_VERIFY_CONCURRENCY = 8;
+
+/**
+ * 現在 GCS state を survey artifact の prefix 配下でリストし、各 object の
+ * generation/metageneration を並列取得する (bytes/sha256 は計算しない = 軽量)。
+ *
+ * - PDF のみ filter (survey 側と同条件、`.pdf` 末尾 case-insensitive)
+ * - getMetadata は 8 並列。1 件失敗しても他 op を継続し、metadataFetchErrors に集約
+ * - listing 0 件 (survey は非空) は呼び出し側の drift 検出で missingInGcs 全件として扱う
+ */
+async function fetchCurrentGcsState(
+  bucketRef: Bucket,
+  prefixPath: string
+): Promise<{
+  state: CurrentGcsState;
+  metadataFetchErrors: Array<{ objectName: string; error: string }>;
+}> {
+  const objectNames = new Set<string>();
+  let pageToken: string | undefined;
+  do {
+    const [files, nextQuery] = await bucketRef.getFiles({
+      prefix: prefixPath,
+      maxResults: 1000,
+      pageToken,
+      autoPaginate: false,
+    });
+    for (const f of files) {
+      if (!f.name.toLowerCase().endsWith('.pdf')) continue;
+      objectNames.add(f.name);
+    }
+    pageToken = (nextQuery as { pageToken?: string } | undefined)?.pageToken;
+  } while (pageToken);
+
+  const metadata = new Map<string, { generation: string; metageneration: string }>();
+  const metadataFetchErrors: Array<{ objectName: string; error: string }> = [];
+  const allNames = [...objectNames];
+  for (let i = 0; i < allNames.length; i += SURVEY_VS_GCS_VERIFY_CONCURRENCY) {
+    const batch = allNames.slice(i, i + SURVEY_VS_GCS_VERIFY_CONCURRENCY);
+    const results = await Promise.all(
+      batch.map(async (name) => {
+        try {
+          const metaResponse = await bucketRef.file(name).getMetadata();
+          // getMetadata は [Metadata, ApiResponse] のタプルを返す。FileMetadata は任意 field の
+          // ため `generation` / `metageneration` を string|number|undefined として narrow する。
+          const meta = metaResponse[0] as {
+            generation?: string | number;
+            metageneration?: string | number;
+          };
+          return {
+            ok: true as const,
+            objectName: name,
+            generation: String(meta.generation ?? ''),
+            metageneration: String(meta.metageneration ?? ''),
+          };
+        } catch (err) {
+          return {
+            ok: false as const,
+            objectName: name,
+            error: (err as Error).message,
+          };
+        }
+      })
+    );
+    for (const r of results) {
+      if (r.ok) {
+        metadata.set(r.objectName, {
+          generation: r.generation,
+          metageneration: r.metageneration,
+        });
+      } else {
+        metadataFetchErrors.push({ objectName: r.objectName, error: r.error });
+      }
+    }
+  }
+
+  return { state: { objectNames, metadata }, metadataFetchErrors };
+}
+
+/**
+ * PR-C3c AC15-3 強化 (Codex MCP NO-GO 反映): survey artifact の sourceManifestEntries と
+ * 現在 GCS state を generation/metageneration で照合する。
+ *
+ * - local モード (`sourceManifestRef.bucket === 'local'`) は GCS 比較不能のため skip
+ * - bucket 不一致 / prefix 不一致は drift 以前の構成エラーとして fail-fast (exit 2)
+ * - drift 検出 (missing / extra / generation / metageneration / metadataFetchErrors) は
+ *   formatDriftError で operator 向けに整形 + runbook を出力して exit 2
+ *
+ * 本検証は classify の重い処理 (Firestore 全 doc 走査 + parent PDF 計算) の前に走らせ、
+ * 早期 fail で operator が re-survey + re-classify に進めるようにする。
+ */
+async function verifySurveyManifestAgainstCurrentGcs(
+  artifact: SurveyArtifact,
+  classifyBucketName: string,
+  classifyPrefix: string,
+  bucketRef: Bucket
+): Promise<void> {
+  const ref = artifact.sourceManifestRef!;
+  const entries = artifact.sourceManifestEntries!;
+
+  if (ref.bucket === 'local') {
+    console.log(
+      `Survey artifact is in local mode (bucket='local'). Skipping GCS state verification (AC15-3 only verifies artifact internal consistency for local mode).`
+    );
+    return;
+  }
+
+  if (ref.bucket !== classifyBucketName) {
+    console.error(
+      `FATAL: survey artifact bucket='${ref.bucket}' but classify bucket='${classifyBucketName}' (AC15-3). Survey must be run against the same bucket as classify.`
+    );
+    process.exit(2);
+  }
+  if (ref.prefix !== classifyPrefix) {
+    console.error(
+      `FATAL: survey artifact prefix='${ref.prefix}' but classify --prefix='${classifyPrefix}' (AC15-3). Survey must be run against the same prefix as classify.`
+    );
+    process.exit(2);
+  }
+
+  console.log(
+    `Verifying survey vs current GCS state under gs://${classifyBucketName}/${classifyPrefix} (AC15-3)...`
+  );
+  const { state, metadataFetchErrors } = await fetchCurrentGcsState(bucketRef, classifyPrefix);
+  console.log(
+    `Current GCS: ${state.objectNames.size} objects (metadata fetched: ${state.metadata.size}, fetch errors: ${metadataFetchErrors.length})`
+  );
+
+  const drift: ManifestDriftResult = compareSurveyManifestToCurrentGcs(
+    entries,
+    state,
+    metadataFetchErrors
+  );
+  if (hasManifestDrift(drift)) {
+    console.error(
+      `FATAL: survey artifact vs current GCS state drift detected (AC15-3):`
+    );
+    console.error(formatDriftError(drift));
+    console.error('');
+    console.error(SURVEY_OR_PRECONDITION_DRIFT_RUNBOOK);
+    await admin.app().delete();
+    process.exit(2);
+  }
+  console.log(
+    `AC15-3 PASS: ${entries.length} survey entries match current GCS state (no drift).\n`
+  );
+}
+
 async function main(): Promise<void> {
   console.log(`Project: ${projectId}`);
   console.log(`Bucket : ${bucket.name}`);
@@ -599,7 +757,16 @@ async function main(): Promise<void> {
   console.log(`Loading and validating survey artifact: ${surveyArtifactPath}`);
   const surveyArtifact = loadAndValidateSurveyArtifact(surveyArtifactPath!);
   console.log(
-    `Survey gate passed (AC15): expectations.failures=0, filesWithErrors=0, sourceManifestHash self-consistent\n`
+    `Survey gate passed (AC15-1/2 + 15-3 internal): expectations.failures=0, filesWithErrors=0, sourceManifestHash self-consistent`
+  );
+
+  // PR-C3c AC15-3 強化 (Codex MCP NO-GO 反映): 現在 GCS state との drift 検出。
+  // local モードは skip、gcs モードは listing + getMetadata(並列 8) で照合。
+  await verifySurveyManifestAgainstCurrentGcs(
+    surveyArtifact,
+    bucket.name,
+    prefix,
+    bucket
   );
 
   // PR-C3c (AC-CC1): lockfile snapshot を取得して plan に記録。execute 側 Gate 10 で照合。
