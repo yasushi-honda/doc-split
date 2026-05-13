@@ -1,8 +1,84 @@
 # ハンドオフメモ
 
-**更新日**: 2026-05-13 session64 (**Issue #432 PR-C3b 実装 + dev 実証 + Quality Gate 4 並列 + Codex MCP review fix + main merge 完遂、Net 0**。session63 の PR-C3a (read-only) を base に PR-C3b 第二段階を完遂。`scripts/lib/pdfPageVisualFingerprint.ts` を v2 化 (denylist scope 限定 + image filter encoded bytes hash、AC21)、`scripts/fixtures/` に固定 synthetic fixture 6 種 (CCITT/JBIG2/JPX/DCT/encrypted/simple、AC16/AC20) を deterministic 生成、`scripts/pdf-feature-survey.ts` に `--expect-*` fail-fast guard + parse error failure 条件 (AC20)、`scripts/verify-pdf-determinism.ts` の child cwd + TS_NODE_PROJECT 修正 + algorithm/hex regex 検証 + 実 fixture --paths 検証経路実装 (AC17 拡張)。dev workflow runs #25765691451 (verify --paths PASS 6/6) + #25765692757 (survey --expect-* all satisfied) success 完遂。Quality Gate 4 並列 (Critical 3 + Important 6 反映、commit `c82ef53`) + Codex MCP セカンドオピニオン thread `019e1e54-e3c2-77a3-b0f4-46aacca897cf` (Critical 2 + Important 3 反映、commit `46e5296`) + npm CI fix (commit `879d944`)。**PR #450 squash merge `8e8fb86`**、ユーザー番号認可 (`#450 をマージしてよい`) 取得後、5 commits 17 files +1097/-111 を main に統合、main deploy run #25766920588 進行中。次セッションは PR-C3c (AC15 classify gate + AC18 provenance 6 fields + AC19 MatchedByHash/RepairableMissingFile 分離 + Codex Critical 1 plan-side lockfile gate) and/or PR-D1 並行着手候補)
-**ブランチ**: `main` (PR #450 merge 完了、feature branch `fix/issue-432-pr-c3b-fingerprint-v2` 削除済)
-**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + (session29-58 累積実績は archive 参照) + Phase 8 (session59-60 = Issue #432 PR-C2 v2 段階完遂、Net 0) + Phase 8 (session61 = Issue #432 PR-C2-execution A 部分完遂 + CCITTFaxDecode 設計限界判明、Net 0) + Phase 8 (session62 = Issue #432 PR-C3 計画 AC 21 項目再起案 + session61 post-audit + PR-D #445 起票、Net +1) + Phase 8 (session63 = Issue #432 PR-C3a 実装 + dev 実証 + main merge、Net 0) + **Phase 8 (session64 = Issue #432 PR-C3b 実装 + dev 実証 + Quality Gate 4 並列 review + Codex MCP セカンドオピニオン + main merge、Net 0)** 完遂
+**更新日**: 2026-05-13 session65 (**Issue #432 PR-C3c 実装 + dev リハーサル 7 stages 完遂 + Quality Gate 4 並列 + Evaluator + Codex MCP セカンドオピニオン、Net 0、PR #452 draft、AC15-3 残課題で NO-GO**。session64 の PR-C3b (`8e8fb86` merged) を base に PR-C3c を実装。新規 3 lib (`collisionPlanTypes`/`parentPdfProvenance`/`lockfileGate`) + 既存 4 script 拡張 (survey sourceManifestRef / classify `--survey-artifact` 必須 + Plan v3 / execute Gate 8-10 + 2-pass preflight + setup-collision-fixture CCITT 入り parent) + workflow 改修 (survey_artifact_run_id 受け渡し) + 単体テスト 33 件 (collisionPlanTypesV3、AC pure functions 全カバー)。dev フルリハーサル 7 stages 全 success (Stage 5 destructive `3 ops executed`)。Quality Gate 4 並列 review (Critical 2 + HIGH 3 + Important 5 + MEDIUM 1 反映、commit `8b48d1f`)。Evaluator (前提知識なし) **APPROVE** (15/16 AC PASS、CRITICAL 0)。Codex MCP セカンドオピニオン session `019e1e7b-1425-77d2-844e-1258858822d1` で **NO-GO 判定** (AC15-3 計画書 vs 実装乖離、現在 GCS 状態との再計算照合が未実装)。PR #452 draft、CI run #25771318825 success ✅。次セッションで AC15-3 強化実装 (A 案、ユーザー認可済) → dev リハーサル再走 → PR ready for merge → 番号認可 → kanameone/cocoro 展開判断)
+**ブランチ**: `fix/issue-432-pr-c3c-classify-execute-gates` (PR #452 draft、4 commits push 済、CI success)
+**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + (session29-58 累積実績は archive 参照) + Phase 8 (session59-60 = Issue #432 PR-C2 v2 段階完遂、Net 0) + Phase 8 (session61 = Issue #432 PR-C2-execution A 部分完遂 + CCITTFaxDecode 設計限界判明、Net 0) + Phase 8 (session62 = Issue #432 PR-C3 計画 AC 21 項目再起案 + session61 post-audit + PR-D #445 起票、Net +1) + Phase 8 (session63 = Issue #432 PR-C3a 実装 + dev 実証 + main merge、Net 0) + Phase 8 (session64 = Issue #432 PR-C3b 実装 + dev 実証 + Quality Gate 4 並列 + Codex MCP + main merge、Net 0) + **Phase 8 (session65 = Issue #432 PR-C3c 実装 + dev リハーサル 7 stages 完遂 + Quality Gate + Evaluator + Codex MCP、Net 0、PR #452 draft、AC15-3 残課題)** 進行中
+
+<a id="session65"></a>
+## 🟡 session65 進行中サマリー (2026-05-13: Issue #432 PR-C3c 実装 + dev リハーサル 7 stages 完遂、Net 0、PR #452 draft、AC15-3 残課題で NO-GO)
+
+session64 の PR-C3b (`8e8fb86` merged) を base に **PR-C3c (AC15/18/19 + Codex Critical 1 lockfile gate + 追加 AC 6 件)** を実装。destructive migration safety gate 4 種 + 2-pass preflight phase + CCITT 入り dev fixture で本番 kanameone と等価条件の dev リハーサル経路を構造的に開いた。dev 7 stages 全 success だが、Codex MCP セカンドオピニオン (実装後 review) で **AC15-3 計画書 vs 実装乖離** を NO-GO 指摘。次セッションで AC15-3 強化 (A 案、ユーザー認可済) → PR ready for merge → 本番展開の流れ。
+
+### 主要 PR / 実行記録
+
+| 項目 | 値 |
+|---|---|
+| 本 PR (PR-C3c) | **PR #452 draft** (`fix/issue-432-pr-c3c-classify-execute-gates`、4 commits、11 files +1,596/-110) |
+| 1st commit (T0-T3) | `414b3d0` (8 files、Plan v3 + survey/provenance/lockfile gate + 2-pass preflight + 33 unit tests) |
+| 2nd commit (T4 prep) | `89465cc` (2 files、CCITT dev fixture + workflow survey artifact 受け渡し) |
+| 3rd commit (T4 fix) | `fc73891` (1 file、copyPages で CCITT Image XObject を Page resources 直下に配置) |
+| 4th commit (Quality Gate 反映) | `8b48d1f` (6 files、Critical 2 + HIGH 3 + Important 5 + MEDIUM 1 反映) |
+| dev リハーサル Stage 1 (setup) | run `25769796946` ✅ |
+| dev リハーサル Stage 2 (survey) | run `25769888730` ✅ "expects: all satisfied" |
+| dev リハーサル Stage 3 (classify) | run `25769969149` ✅ Survey gate + Lockfile + Provenance computed 2 |
+| dev リハーサル Stage 4 (execute --dry-run) | run `25770071719` ✅ 5 ops gate passed |
+| **dev リハーサル Stage 5 (execute、destructive)** | run `25770180041` ✅ **3 ops executed** |
+| dev リハーサル Stage 6 (audit) | run `25770273823` ✅ docId namespace 分離確認 |
+| dev リハーサル Stage 7 (cleanup) | run `25770371540` ✅ |
+| PR CI 最終 run | run `25771318825` ✅ success (5m20s) |
+| Codex MCP セカンドオピニオン thread (実装後) | `019e1e7b-1425-77d2-844e-1258858822d1` (NO-GO 判定) |
+| 計画書 v2 | `.artifacts/plans/pr-c3c-impl-plan-v2.md` |
+
+### AC 達成状況 (Evaluator 評価)
+
+| AC | dev 実証 | Evaluator 判定 | Codex 判定 |
+|---|---|---|---|
+| AC15-1 (--survey-artifact 必須化) | Stage 3 OK | PASS | PASS |
+| AC15-2 (expectations + filesWithErrors + --expect-* ≥ 1) | Stage 2/3 OK | PASS | PASS |
+| **AC15-3 (sourceManifestHash 再計算)** | Stage 3 自己整合性のみ | PASS | **FAIL** (計画書要求の現在 GCS 状態照合が未実装) |
+| AC18-1/18-2/18-3 (provenance gate) | Stage 4/5 OK | PASS | PASS |
+| AC19-1/19-2 (4 category 分離) | Stage 3 OK | PASS | PASS |
+| AC-SCHEMA-1/2 | Stage 4 OK | PASS | PASS |
+| AC-CC1-1/CC1-2 (lockfile gate) | Stage 5 OK | PASS | PASS |
+| AC-PREFLIGHT-1/2 | Stage 5 OK | PASS | PASS |
+| AC-SURVEY-MANIFEST-1 | Stage 2 OK | PASS | PASS |
+| AC-INVARIANT | Stage 4/5 OK | PASS | PASS |
+| AC-NONRESTRICTIVE-1 | Stage 3 (Provenance computed 2) | UNTESTABLE | n/a |
+
+### 残 Open Issue (5 件、session63 から不変)
+
+| # | タイトル要約 | 状態 | 再開条件 |
+|---|---|---|---|
+| **#432** | [P0] 分割PDF 設計バグ | **PR-A/B/C1/C2/C2-execution-A/D/C3a/C3b + post-audit 完了 (C3c は AC15-3 強化待ち、PR #452 draft)** | 次セッションで AC15-3 強化 → PR ready for merge → 番号認可 → kanameone/cocoro 展開判断 |
+| **#445** | [P1] データモデル正規化 | 設計フェーズ | PR-C3c 完了後 PR-D1 着手候補 |
+| #402 | searchDocuments OOM ガード | 段階1 完了 | 観測データ判断 |
+| #251 | summaryGenerator unit test | Scope 2 完了 | sinon 導入伴う他タスク or Vertex AI false negative |
+| #238 | force-reindex 孤児 posting 検出 | 未着手 | 観測データ蓄積後 |
+
+### 教訓
+
+- **Evaluator (前提知識なし、APPROVE) と Codex MCP (NO-GO) の判定差は AC 解釈の差**: Evaluator は「AC 文面と code 実装の対応」で評価し、コード側コメント (「artifact 内部自己整合性に留める」「execute 側 preflight で再照合する設計に分離」) を考慮して PASS とした。Codex は「計画書 v2 の AC15-3 文面 (現在 GCS 状態との再計算照合)」と「実装」の **乖離** を Critical として検出。**両者の評価は補完関係**、本セッションでは Codex の指摘が本質的 (= 計画書通りに実装する必要、コメントで先送り宣言した実装が抜け落ちた状態)。
+- **大規模 destructive migration では計画書 → 実装 → Quality Gate (4 並列) → Evaluator → Codex MCP の 5 段階 review が必要**: 各 review が補完する欠陥種類が異なる。Quality Gate は「コード品質 / silent failure」、Evaluator は「AC 検証 / 設計妥当性 / エッジケース」、Codex は「計画書整合性 / 本番展開判定」。session65 で各 layer が異なる Critical/HIGH を検出した実例。
+- **dev fixture を本番と等価条件に保つことが destructive migration の dev リハーサルの validity を担保する**: 本セッションで `setup-collision-fixture` を `scripts/fixtures/with-ccittfaxdecode.pdf` 流用 (copyPages で CCITT Image XObject を Page resources 直下に配置) に改修したことで、dev で本番 kanameone と等価な fingerprint v2 動作経路を実証できた。`embedPdf + drawPage` だと Form XObject にラップされ survey scanner で /Subtype=/Image として検出されない設計上の落とし穴があり、`copyPages` で deep copy が正解。
+- **Codex MCP の 300s timeout 対策は Bash codex exec (`tee /tmp/...log`) で結果ファイル保存**: 計画段階・実装後の 2 回投入で計画書反映 + 本番展開可否判定の 2 つの局面で機能した。新規クライアント追加時の dev 検証経路を計画段階で固める用途にも有効。
+
+### 次セッション着手指示
+
+1. `/catchup` で本 handoff + PR #452 状態 + Issue を再構築
+2. **AC15-3 強化実装** (A 案、ユーザー認可済): classify-collision-docs.ts で `processed/` 配下の現在 GCS object set を取得 → 各 file の generation/metageneration を `file.getMetadata()` で並列取得 (8 並列、bytes/sha256 は計算しない = 軽量) → sourceManifestEntries と比較 → 不一致なら exit 2
+3. **Codex Important runbook**: precondition drift exit 1 ロジックの operator runbook を計画書 v2 + execute-collision-migration log に追記 (writeSummary 保存 → Firestore quiesce → 再 classify → 未完了 op のみ再 approval/execute)
+4. tsc + test + commit + push
+5. dev リハーサル Stage 2-7 再走 (新 survey から sourceManifestHash 再計算が含まれるため Stage 2 含む)
+6. Codex MCP セカンドオピニオン (AC15-3 強化後の最終 review、新 thread)
+7. PR #452 ready for review → 番号認可 (`PR #452 — タイトル (N files, +X/-Y)` 形式) → squash merge
+8. (merge 後) kanameone / cocoro 展開判断 (本 PR 範囲外、別途番号認可)
+9. (option) PR-D1 (Issue #445) と並行着手検討
+
+### Net 0 の進捗判定
+
+✅ 正の構造的進捗 (NO-GO だが安定状態)。Issue #432 (P0) 根本対策 PR-C3 計画 (AC 21 項目) の **AC15-1/15-2/18-1/18-2/18-3/19-1/19-2/SCHEMA/CC1/PREFLIGHT/SURVEY-MANIFEST/INVARIANT** を達成、kanameone 135 docs CCITTFaxDecode Ambiguous 倒れの解消経路を **dev 7 stages destructive 実証** まで完遂。残 AC15-3 は次セッション約 1 時間の作業で完了見込み。triage 基準 #5 (ユーザー明示指示「次のアクション優先順にすすめて」「kanameでのエラーを dev からしっかり対応」「即時修正 + Evaluator + Codex MCP」) 該当。
+
+---
 
 <a id="session64"></a>
 ## ✅ session64 完了サマリー (2026-05-13: Issue #432 PR-C3b 実装 + dev 実証 + Quality Gate 4 並列 review + Codex MCP セカンドオピニオン + main merge、Net 0)
