@@ -68,6 +68,20 @@ export interface Document {
   isSplitSource?: boolean;
   splitInto?: string[];
 
+  /**
+   * 分割 PDF の identity / provenance fields (ADR-0016 / Issue #445)
+   *
+   * 移行期間中は optional。lifecycle:
+   * - PR-D1 (本 PR): 型定義のみ、書込なし
+   * - PR-D2: 新規分割 PDF (splitPdf 改修後) で必須書込 (10 fields 全て)
+   * - PR-D3: rotatePdfPages 改修後の rotation 結果でも更新
+   * - PR-D4: 既存 docs への best-effort backfill (親 PDF 現存 + sha256 計算可能ケースのみ)
+   * - PR-D5: optional → required 格上げを評価
+   *
+   * 詳細は docs/adr/0016-document-identity-and-provenance.md 参照
+   */
+  provenance?: DocumentProvenance;
+
   // Phase 7: 顧客確定機能
   customerId?: string | null;                    // 顧客ID（「該当なし」選択時はnull）
   customerCandidates?: CustomerCandidateInfo[];  // 構造化された候補リスト
@@ -102,6 +116,51 @@ export interface Document {
   verified?: boolean;           // 確認済みフラグ（デフォルト: false）
   verifiedBy?: string | null;   // 確認者UID
   verifiedAt?: Timestamp | null; // 確認日時
+}
+
+// ============================================
+// ADR-0016: 分割 PDF Identity / Provenance (Issue #445)
+// ============================================
+
+/**
+ * 分割 PDF の provenance fields (ADR-0016 / Issue #445)
+ *
+ * 親 PDF identity (source*) + 子 object identity (derived*) + audit (createdAt) の 10 fields。
+ *
+ * 書込タイミング:
+ * - PR-D2 (splitPdf 改修後): 新規分割 PDF で 10 fields 全て必須書込
+ * - PR-D3 (rotatePdfPages 改修後): rotation 結果でも derived* + sourceSha256 を更新
+ * - PR-D4 (backfill): 既存 docs に対し best-effort で書込 (親 PDF 現存 + sha256 計算可能ケースのみ)
+ *
+ * MUST 5 (ADR-0016): sourceSha256 / sourceGeneration / sourceMetageneration は
+ * 「実際に split に使用した parent PDF bytes」と同一 read snapshot で取得・整合検証する。
+ *
+ * 注意: createdAt は audit / トレース用途のみで、bytes identity 照合対象ではない。
+ * PR-C3c (PR #452) の自動復旧 gate (6-field provenance) と混同しない。
+ *
+ * 詳細: docs/adr/0016-document-identity-and-provenance.md
+ */
+export interface DocumentProvenance {
+  /** 親 Storage object generation (split 時点の同一 read snapshot で取得) */
+  sourceGeneration: string;
+  /** 親 Storage object metageneration */
+  sourceMetageneration: string;
+  /** 親 PDF bytes の sha256 (hex)、実際に split に使用した buffer から計算 (MUST 5) */
+  sourceSha256: string;
+  /** 親 Storage bucket 内 object name (split 時点、`gs://` prefix は含まない) */
+  sourcePath: string;
+  /** 親 Storage bucket 名 */
+  sourceBucket: string;
+  /** 子 (本 doc) の canonical Storage path (`processed/{docId}/{fileName}`) */
+  derivedObjectPath: string;
+  /** 子 Storage object 書込後の generation */
+  derivedGeneration: string;
+  /** 子 Storage object 書込後の metageneration */
+  derivedMetageneration: string;
+  /** 子 PDF bytes の sha256 (hex)、子 object 書込後に compute / metadata 取得 */
+  derivedSha256: string;
+  /** provenance 書込時刻 (= split 完了時刻)。audit field、bytes identity 照合対象ではない */
+  createdAt: Timestamp;
 }
 
 // ============================================
