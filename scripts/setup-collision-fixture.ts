@@ -74,12 +74,32 @@ const AMBIGUOUS_FILENAME = '20260102_fixture_未判定_未判定_p2.pdf';
 const REPAIRABLE_FILENAME = '20260103_fixture_未判定_未判定_p3.pdf';
 const LOST_FILENAME = '20260104_fixture_未判定_未判定_p4.pdf';
 
-// parent PDF: 5 pages, content をページ番号で区別 (hash 比較対象として必要)
+// parent PDF: 5 pages, content をページ番号で区別 (hash 比較対象として必要)。
+//
+// PR-C3c (kanameone 復旧経路 dev 実証): 各 page に scripts/fixtures/with-ccittfaxdecode.pdf
+// を embed して CCITT XObject を含める。本番 kanameone の OCR 出力 PDF は CCITTFaxDecode
+// 圧縮の Image XObject を持つため、dev fixture でも同 filter を再現することで:
+//
+//   1. survey gate (AC15-2) で `--expect-filter /CCITTFaxDecode --expect-subtype /Image`
+//      が dev でも本番でも同様に satisfied になる
+//   2. fingerprint v2 (denylist + image filter encoded bytes hash、PR-C3b) が CCITT
+//      入り PDF に対して cross-process invariance を保つ経路を実機で実証する (AC17 拡張)
+//   3. classify の MatchedByHash 判定が CCITT 入り Storage 実体で成立する (= 本番 kanameone
+//      の 135 docs Ambiguous 倒れの解消経路を dev で確認できる)
+//
+// 各 page 識別用に drawRectangle も加えており、hash 区別性は保たれる。
 async function makeParentPdf(): Promise<Buffer> {
   const pdf = await PDFDocument.create();
+  const ccittBytes = fs.readFileSync(
+    path.resolve(__dirname, 'fixtures/with-ccittfaxdecode.pdf')
+  );
+  const ccittSrc = await PDFDocument.load(ccittBytes, { ignoreEncryption: true });
+  const [embeddedPage] = await pdf.embedPdf(ccittSrc, [0]);
   for (let i = 0; i < 5; i++) {
     const page = pdf.addPage([100, 100]);
-    // 各ページに違う矩形を描画して hash 区別を確保 (font 不要)
+    // CCITT XObject を含む embedded page を base として draw
+    page.drawPage(embeddedPage, { x: 0, y: 0, width: 100, height: 100 });
+    // 各ページ識別用矩形 (page bytes に差を作って fingerprint 区別性を保つ)
     page.drawRectangle({ x: 10 + i * 5, y: 10 + i * 5, width: 30, height: 30 });
   }
   return Buffer.from(await pdf.save());
