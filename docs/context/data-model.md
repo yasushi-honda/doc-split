@@ -129,9 +129,10 @@ DocSplitのデータはすべてCloud Firestoreに格納される。
 | splitSuggestions | SplitSuggestion[] | No | 分割候補 |
 | splitInto | string[] | No | 分割で生成されたドキュメントIDリスト（元ドキュメントに設定） |
 | isSplitSource | boolean | No | 分割元フラグ（重複チェック除外用） |
-| parentDocumentId | string | No | 分割元ドキュメントID（子に設定） |
+| parentDocumentId | string | No | 分割元ドキュメントID（Firestore tree 参照用、ADR-0016） |
 | splitFromPages | {start: number, end: number} | No | 分割元のページ範囲（子に設定） |
 | pageRotations | PageRotation[] | No | ページ回転情報（永続保存） |
+| provenance | DocumentProvenance | No | 分割 PDF の identity / provenance fields（ADR-0016、Issue #445）。PR-D2 以降の新規分割で必須書込、PR-D4 で既存 docs に best-effort backfill。詳細は「埋め込み型定義 > DocumentProvenance」参照 |
 
 ### エラー情報
 
@@ -628,6 +629,56 @@ interface PageRotation {
   rotation: 0 | 90 | 180 | 270;
 }
 ```
+
+### DocumentProvenance
+
+分割 PDF の identity / provenance fields（ADR-0016 / Issue #445）。親 PDF identity（`source*` 5 個）+ 子 object identity（`derived*` 4 個）+ audit（`createdAt`）の **10 fields**。
+
+| フィールド | 型 | 説明 |
+|-----------|-----|------|
+| sourceGeneration | string | 親 Storage object generation（split 時点の同一 read snapshot で取得） |
+| sourceMetageneration | string | 親 Storage object metageneration |
+| sourceSha256 | string | 親 PDF bytes の sha256（hex）。**実際に split に使用した buffer から計算**（ADR-0016 MUST 5） |
+| sourcePath | string | 親 Storage **bucket 内 object name**（split 時点、`gs://` prefix は含まない） |
+| sourceBucket | string | 親 Storage bucket 名 |
+| derivedObjectPath | string | 子（本 doc）の canonical Storage path（`processed/{docId}/{fileName}`） |
+| derivedGeneration | string | 子 Storage object 書込後の generation（bit-perfect 照合用、ADR-0016 MUST 2） |
+| derivedMetageneration | string | 子 Storage object 書込後の metageneration |
+| derivedSha256 | string | 子 PDF bytes の sha256（hex）、子 object 書込後に compute / metadata 取得 |
+| createdAt | Timestamp | provenance 書込時刻（= split 完了時刻）。**audit field**、bytes identity 照合対象ではない |
+
+```typescript
+interface DocumentProvenance {
+  // 親 PDF identity (split に使用した parent PDF の bit-perfect 証拠)
+  sourceGeneration: string;
+  sourceMetageneration: string;
+  sourceSha256: string;
+  sourcePath: string;
+  sourceBucket: string;
+  // 子 object identity (子 Storage object の bit-perfect 証拠)
+  derivedObjectPath: string;
+  derivedGeneration: string;
+  derivedMetageneration: string;
+  derivedSha256: string;
+  // audit
+  createdAt: Timestamp;
+}
+```
+
+**lifecycle**:
+
+| 段階 | PR | provenance の状態 |
+|------|----|-------------------|
+| 既存 docs（PR-D1 時点） | - | `undefined`（書込なし） |
+| 新規分割（PR-D2 splitPdf 改修後） | PR-D2 | 10 fields 全て必須書込 |
+| 回転（PR-D3 rotatePdfPages 改修後） | PR-D3 | `derived*` + `sourceSha256` を更新（in-place 編集禁止、新 path 書込） |
+| backfill（PR-D4） | PR-D4 | 親 PDF 現存 + sha256 計算可能ケースのみ best-effort 書込 |
+| 型レベル必須化（PR-D5 評価） | PR-D5 | `provenance?` → `provenance` への格上げを評価 |
+
+**注意**:
+- `parentDocumentId`（Firestore parent docId、Firestore tree 参照用）と `provenance.sourcePath`（split 時点の親 Storage object name、parent 削除/移動後も保持）は **役割分担を保つ**（ADR-0016 SHOULD 2）。
+- `fileName` / `displayFileName` は引き続き UI 表示・ソート・検索用、`derivedObjectPath` を Storage identity / path construction / Firestore lookup key として使い分ける（ADR-0014 + ADR-0016 SHOULD 3 / MUST 4）。
+- `createdAt` は audit / トレース用途のみで、PR-C3c（PR #452）の自動復旧 gate（6-field provenance）と混同しない（Codex MCP Low 1 指摘）。
 
 ---
 
