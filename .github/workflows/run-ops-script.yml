@@ -65,6 +65,7 @@ on:
           - pdf-feature-survey --source gcs --prefix original/
           - pdf-feature-survey --source gcs --prefix processed/
           - pdf-feature-survey --source gcs --prefix processed/ --limit 200
+          - pdf-feature-survey --source gcs --prefix processed/ --expect-filter /CCITTFaxDecode --expect-subtype /Image
           - pdf-feature-survey --source local --paths fixtures/ --expect-filter /CCITTFaxDecode,/JBIG2Decode,/JPXDecode,/DCTDecode --expect-subtype /Image --expect-encrypted
           - verify-pdf-determinism --synthetic
           - verify-pdf-determinism --paths fixtures/simple.pdf,fixtures/with-ccittfaxdecode.pdf,fixtures/with-jbig2decode.pdf,fixtures/with-jpxdecode.pdf,fixtures/with-dctdecode.pdf,fixtures/encrypted.pdf
@@ -113,6 +114,11 @@ on:
         default: ''
       exec_args_json:
         description: 'execute-collision-migration: JSON {"planRunId":"<classify run id>","approvedOperationIds":["op-0001",...]}'
+        required: false
+        type: string
+        default: ''
+      survey_artifact_run_id:
+        description: 'classify-collision-docs: 前段 pdf-feature-survey workflow run ID (PR-C3c AC15-1 必須、数値のみ)'
         required: false
         type: string
         default: ''
@@ -261,6 +267,36 @@ jobs:
           run-id: ${{ steps.parse_exec.outputs.plan_run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Validate survey_artifact_run_id (for classify-collision-docs)
+        # PR-C3c (AC15-1): classify-collision-docs は --survey-artifact 必須化されたため、
+        # 前段 pdf-feature-survey の workflow run ID を入力で受け取る。run-id は数値のみ許可
+        # (path traversal / injection 防止)。
+        if: ${{ github.event.inputs.script == 'classify-collision-docs' }}
+        env:
+          SURVEY_RUN_ID: ${{ github.event.inputs.survey_artifact_run_id }}
+        run: |
+          set -euo pipefail
+          if [ -z "$SURVEY_RUN_ID" ]; then
+            echo "ERROR: survey_artifact_run_id is required for classify-collision-docs (PR-C3c AC15-1)" >&2
+            exit 1
+          fi
+          if ! [[ "$SURVEY_RUN_ID" =~ ^[0-9]+$ ]]; then
+            echo "ERROR: survey_artifact_run_id must be numeric run ID (got: \"$SURVEY_RUN_ID\")" >&2
+            exit 1
+          fi
+          echo "survey_artifact_run_id validated: $SURVEY_RUN_ID"
+
+      - name: Download pdf-feature-survey artifact (for classify-collision-docs)
+        # PR-C3c (AC15-1): classify は前段 pdf-feature-survey run の output JSON を必須入力
+        # として読む (--survey-artifact 引数で渡す)。Artifact 名は survey 側 upload と一致。
+        if: ${{ github.event.inputs.script == 'classify-collision-docs' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: pdf-feature-survey-${{ github.event.inputs.environment }}-${{ github.event.inputs.survey_artifact_run_id }}
+          path: ${{ github.workspace }}/.survey-artifact
+          run-id: ${{ github.event.inputs.survey_artifact_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Generate approval JSON from plan + approved operation ids
         # plan-output.json の operations 配列から approvedOperationIds に該当する op を
         # 抽出し、その planId + opIds + (sourcePath/destPath を gs://bucket/path で展開) を
@@ -401,7 +437,10 @@ jobs:
               # ログマスキングで `{` が `***` に置換されるため、plan JSON を
               # ファイル出力 → upload-artifact で取得する経路を必須化。
               # workflow_dispatch の choice には --out を含めず、ここで強制付与する。
-              EXTRA_ARGS="--out ${GITHUB_WORKSPACE}/scripts/plan-output.json"
+              # PR-C3c (AC15-1): --survey-artifact を前段 pdf-feature-survey artifact から取得した
+              # ファイルパスで自動付与。Download pdf-feature-survey artifact step が
+              # ${GITHUB_WORKSPACE}/.survey-artifact/pdf-feature-survey-output.json に展開済。
+              EXTRA_ARGS="--out ${GITHUB_WORKSPACE}/scripts/plan-output.json --survey-artifact ${GITHUB_WORKSPACE}/.survey-artifact/pdf-feature-survey-output.json"
             elif [ "$SCRIPT_NAME" = "pdf-feature-survey" ]; then
               # Issue #432 PR-C3a: survey 結果も JSON で artifact 化する (log secret masking 回避)。
               EXTRA_ARGS="--out ${GITHUB_WORKSPACE}/scripts/pdf-feature-survey-output.json"

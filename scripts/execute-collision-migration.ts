@@ -2,15 +2,20 @@
 /**
  * Issue #432 PR-C: classify-collision-docs.ts が出力した migration plan を実行
  *
- * 多重 gate (現在 7 種、Codex セカンドオピニオン反映 + PR-C2 で AC13 algorithm/version 追加):
- *   1. approval.planId === plan.planId
- *   2. operation.operationId が approval.approvedOperationIds に含まれる
- *   3. (destructive 時) operation の sourcePath/destPath が approval.approvedPaths に含まれる
- *   4. runtime env (projectId / storageBucket) が plan の projectId / bucket と一致
- *   5. precondition (expectedCurrentFileUrl / expectedStatus / expectedUpdatedAt) が現状 doc と一致
- *   6. plan.hashAlgorithm === HASH_ALGORITHM (AC13)
- *   7. plan.pdfLibVersion === expectedPdfLibVersion (AC13 拡張 / Codex Important 反映)
- * Gate 0 (defense-in-depth): Ambiguous + suggestedWinner=true の destructive action を reject
+ * 多重 gate (PR-C3c で 11 種に拡張、各 AC は PR description 参照):
+ *   AC-SCHEMA: plan.schemaVersion === 'collision-plan-v3' (PR-C3c)
+ *   Gate 1: approval.planId === plan.planId
+ *   Gate 4-env: runtime projectId / storageBucket が plan の projectId / bucket と一致
+ *   AC13: plan.hashAlgorithm === HASH_ALGORITHM (PR-C2)
+ *   AC13拡張: plan.pdfLibVersion === expectedPdfLibVersion (PR-C2 Codex Important)
+ *   AC-CC1-2: plan.lockfileHash + pdfLibLockfileVersion が runtime lockfile と一致 (PR-C3c, Codex Critical 1)
+ *   Gate 0 (defense-in-depth): Ambiguous + non-manual-review / suggestedWinner=true reject
+ *   Gate 8 (AC-INVARIANT): action ↔ provenanceRequired 組合せ強制 (PR-C3c, Codex C2)
+ *   Gate 2: operation.operationId が approval.approvedOperationIds に含まれる
+ *   Gate 3: (destructive 時) sourcePath/destPath が approval.approvedPaths に含まれる
+ *   Gate 5: precondition (expectedCurrentFileUrl / expectedStatus / expectedUpdatedAt) が現状 doc と一致
+ *   Gate 9a-9b (AC18): provenance completeness + runtime 親 PDF sha256+metadata 照合 (PR-C3c)
+ * AC-PREFLIGHT (PR-C3c): --execute 時 write-free preflight phase → 全件通過後に write phase
  *
  * idempotency: 各 operation は再実行可能。既に完了状態 (新 path 存在 + fileUrl 更新済) なら skip。
  * Storage delete は scripts/lib/storageGuard 経由で同 fileUrl 共有 doc が残存しないことを確認。
@@ -42,6 +47,25 @@ import type {
 import { HASH_ALGORITHM } from './lib/pdfPageVisualFingerprint';
 // AC13 拡張 (Codex Important): plan.pdfLibVersion と execute 側 pdf-lib version の照合
 import { version as expectedPdfLibVersion } from 'pdf-lib/package.json';
+// PR-C3c (AC-SCHEMA / AC-INVARIANT / AC18 / AC-CC1): 統合 plan schema v3 + 親 PDF
+// provenance lib + lockfile gate lib。execute 側で plan を読み込んで複数 gate を評価。
+import {
+  COLLISION_PLAN_SCHEMA_VERSION,
+  verifyActionProvenanceInvariant,
+  verifyProvenanceCompleteness,
+  type Operation,
+  type Plan,
+  type Approval,
+  type ParentPdfProvenance,
+} from './lib/collisionPlanTypes';
+import {
+  computeParentPdfProvenance,
+  verifyParentPdfProvenanceMatch,
+} from './lib/parentPdfProvenance';
+import { readLockfileSnapshot, verifyLockfileMatch } from './lib/lockfileGate';
+// PR-C3c (Codex Important): precondition drift exit 1 + preflight gate-rejected exit 1 で
+// operator が再開する手順を統一表示。classify 側 AC15-3 drift と同 runbook を共有する。
+import { SURVEY_OR_PRECONDITION_DRIFT_RUNBOOK } from './lib/sourceManifestDrift';
 
 const projectId = process.env.FIREBASE_PROJECT_ID;
 const storageBucket = process.env.STORAGE_BUCKET;
@@ -72,53 +96,22 @@ if (!planFile || !approvalFile) {
   process.exit(1);
 }
 
-interface Operation {
-  operationId: string;
-  docId: string;
-  classification: Classification;
-  recommendedAction: RecommendedAction;
-  reason: string;
-  suggestedWinner: boolean;
-  expectedCurrentFileUrl: string | null;
-  expectedStatus: string;
-  expectedUpdatedAt: string | null;
-  sourcePath: string | null;
-  destPath: string | null;
-  parentDocumentId: string | null;
-  splitFromPages: { start: number; end: number } | null;
-  fileName: string;
-}
-
-interface Plan {
-  planId: string;
-  createdAt: string;
-  environment: string;
-  projectId: string;
-  bucket: string;
-  prefix: string;
-  /**
-   * AC13: fingerprint algorithm version。execute 側コード固定値と一致しない plan は
-   * gate reject (pdf-lib upgrade 等で algorithm が変わった古い plan を新コードで実行
-   * することを防ぐ)。PR-C1 plan (pre v1) には存在しないので undefined で gate を弾く。
-   */
-  hashAlgorithm?: FingerprintAlgorithm;
-  /**
-   * AC13 拡張 (Codex Important): pdf-lib npm package の version 文字列。algorithm 名は
-   * 同じでも pdf-lib internal API 変更で fingerprint 計算結果が変わるリスクを検出する。
-   */
-  pdfLibVersion?: string;
-  summary: unknown;
-  operations: Operation[];
-}
-
-interface Approval {
-  planId: string;
-  approvedOperationIds: string[];
-  approvedPaths: string[];
-}
+// PR-C3c: Operation / Plan / Approval は scripts/lib/collisionPlanTypes.ts に統合済。
+// 旧インライン定義は削除し、import 済型を使う。v3 必須 fields (schemaVersion / lockfileHash /
+// pdfLibLockfileVersion / sourceManifestRef / provenanceRequired / provenance) が型レベルで強制。
 
 const plan: Plan = JSON.parse(fs.readFileSync(planFile, 'utf8'));
 const approval: Approval = JSON.parse(fs.readFileSync(approvalFile, 'utf8'));
+
+// === AC-SCHEMA (PR-C3c, Important I2 反映): plan.schemaVersion gate ===
+// 旧 plan (PR-C2 以前で schemaVersion 不在) は明示的に reject。新 schema 強制で
+// 改竄 plan / 後方互換 fallback を防ぐ。
+if (plan.schemaVersion !== COLLISION_PLAN_SCHEMA_VERSION) {
+  console.error(
+    `FATAL: unsupported plan schemaVersion (got '${plan.schemaVersion ?? '<missing>'}', expected '${COLLISION_PLAN_SCHEMA_VERSION}'). Re-run classify-collision-docs.ts to regenerate the plan with the current schema (AC-SCHEMA-2).`
+  );
+  process.exit(2);
+}
 
 // === Gate 1+4: planId + runtime env 一致 ===
 if (approval.planId !== plan.planId) {
@@ -141,20 +134,35 @@ if (plan.bucket !== storageBucket) {
 }
 
 // === AC13: fingerprint algorithm version gate (PR-C2) ===
-// PR-C1 plan は hashAlgorithm を持たないため undefined で reject。
-// pdf-lib upgrade で algorithm が変わった旧 plan を新コードで実行するシナリオも reject。
 if (plan.hashAlgorithm !== HASH_ALGORITHM) {
   console.error(
     `FATAL: plan.hashAlgorithm (${plan.hashAlgorithm ?? '<missing>'}) !== execute code's HASH_ALGORITHM (${HASH_ALGORITHM}). Re-run classify-collision-docs.ts to regenerate the plan with the current fingerprint algorithm.`
   );
   process.exit(2);
 }
-// AC13 拡張 (Codex Important): pdf-lib version mismatch も reject。algorithm 名は
-// 同じでも pdf-lib internal API 挙動が変わると fingerprint 計算結果が変わるため。
+// AC13 拡張 (Codex Important): pdf-lib version mismatch も reject。
 if (plan.pdfLibVersion !== expectedPdfLibVersion) {
   console.error(
     `FATAL: plan.pdfLibVersion (${plan.pdfLibVersion ?? '<missing>'}) !== execute runtime pdf-lib version (${expectedPdfLibVersion}). Re-run classify-collision-docs.ts after package version sync.`
   );
+  process.exit(2);
+}
+
+// === AC-CC1-2 (PR-C3c, Codex Critical 1): plan-side lockfile gate ===
+// classify 時に記録した package-lock.json sha256 + pdf-lib resolved version と runtime を
+// 照合。dependency 更新検出により、fingerprint 計算結果が classify と execute で乖離する
+// シナリオを塞ぐ (Codex Important I1: pdfLibLockfileVersion は package.json でなく
+// package-lock.json から読む)。
+const runtimeLockfileSnapshot = readLockfileSnapshot();
+const lockfileGateResult = verifyLockfileMatch(
+  {
+    lockfileHash: plan.lockfileHash,
+    pdfLibLockfileVersion: plan.pdfLibLockfileVersion,
+  },
+  runtimeLockfileSnapshot
+);
+if (!lockfileGateResult.ok) {
+  console.error(`FATAL: ${lockfileGateResult.reason} (AC-CC1-2)`);
   process.exit(2);
 }
 
@@ -467,7 +475,21 @@ function isPathApproved(op: Operation): { ok: boolean; reason: string } {
   return { ok: true, reason: 'path approved' };
 }
 
-async function processOperation(op: Operation): Promise<OperationOutcome> {
+/**
+ * PR-C3c (AC-PREFLIGHT): processOperation のシグネチャに `currentlyExecuting` を追加。
+ *
+ *  - main 関数の preflight phase (1 pass) では `currentlyExecuting=false` で呼び、全 gate
+ *    評価 + dry-run 相当の結果を集める (Firestore/Storage 書き込みなし)。
+ *  - 全 op で gate-rejected/error 0 を確認してから、write phase (2 pass) で
+ *    `currentlyExecuting=true` で呼び、実 destructive action を実行する。
+ *
+ * 旧 global `execute` は --execute 引数判定として残し、main 関数で
+ * `execute && allPreflightOk` のときのみ currentlyExecuting=true で 2 pass 目を回す。
+ */
+async function processOperation(
+  op: Operation,
+  currentlyExecuting: boolean
+): Promise<OperationOutcome> {
   // Gate 0 (defense in depth, F-B5): Codex セカンドオピニオンの Critical を裏付けゲート化。
   // Ambiguous classification は manual-review action 以外で実行不可、suggestedWinner hint は
   // 自動 destructive action の根拠にしない (rotatedAt!=null 唯一は Storage 実体正当性証明ではない)。
@@ -492,6 +514,23 @@ async function processOperation(op: Operation): Promise<OperationOutcome> {
       status: 'gate-rejected',
       reason:
         'defense-in-depth: suggestedWinner hint must not trigger automatic destructive action (Codex Critical)',
+    };
+  }
+
+  // === Gate 8 (PR-C3c, AC-INVARIANT / AC18-1, Codex Critical C2 反映): action ↔ provenanceRequired 組合せ強制 ===
+  // plan 改竄で「regenerate-from-parent + provenanceRequired:false」を作っても AC18 gate
+  // を bypass できないように schema invariant を runtime でも強制する。
+  const invariantResult = verifyActionProvenanceInvariant(
+    op.recommendedAction,
+    op.provenanceRequired
+  );
+  if (!invariantResult.ok) {
+    return {
+      operationId: op.operationId,
+      docId: op.docId,
+      action: op.recommendedAction,
+      status: 'gate-rejected',
+      reason: invariantResult.reason,
     };
   }
 
@@ -560,7 +599,51 @@ async function processOperation(op: Operation): Promise<OperationOutcome> {
     };
   }
 
-  if (!execute) {
+  // === Gate 9 (PR-C3c, AC18 provenance gate): regenerate-from-parent の親 PDF 整合性確認 ===
+  // provenanceRequired === true の op (= regenerate-from-parent) のみ評価。
+  //
+  // Gate 9a (AC18-1): provenance 6 fields completeness check (plan に欠落していたら reject)
+  // Gate 9b (AC18-2): runtime 親 PDF を download → sha256 + metadata 計算 → plan 記録と field 単位で照合
+  if (op.provenanceRequired) {
+    const completeness = verifyProvenanceCompleteness(op.provenance);
+    if (!completeness.ok) {
+      return {
+        operationId: op.operationId,
+        docId: op.docId,
+        action: op.recommendedAction,
+        status: 'gate-rejected',
+        reason: `AC18-1: ${completeness.reason}`,
+      };
+    }
+    const planProvenance = op.provenance as ParentPdfProvenance; // narrowed by completeness check
+    try {
+      const runtimeProvenance = await computeParentPdfProvenance(
+        bucket,
+        planProvenance.sourcePath,
+        planProvenance.derivedObjectPath
+      );
+      const matchResult = verifyParentPdfProvenanceMatch(planProvenance, runtimeProvenance);
+      if (!matchResult.ok) {
+        return {
+          operationId: op.operationId,
+          docId: op.docId,
+          action: op.recommendedAction,
+          status: 'gate-rejected',
+          reason: `AC18-2: ${matchResult.reason}`,
+        };
+      }
+    } catch (err) {
+      return {
+        operationId: op.operationId,
+        docId: op.docId,
+        action: op.recommendedAction,
+        status: 'gate-rejected',
+        reason: `AC18-2 runtime provenance computation failed: ${(err as Error).message}`,
+      };
+    }
+  }
+
+  if (!currentlyExecuting) {
     return {
       operationId: op.operationId,
       docId: op.docId,
@@ -600,12 +683,40 @@ async function processOperation(op: Operation): Promise<OperationOutcome> {
   }
 }
 
+const OUTCOME_SYMBOLS: Record<string, string> = {
+  executed: '✅',
+  'dry-run': '📋',
+  skipped: '⏭️ ',
+  'gate-rejected': '🚫',
+  error: '❌',
+};
+
+function summarizeOutcomes(outcomes: OperationOutcome[]): Record<string, number> {
+  return outcomes.reduce(
+    (acc, o) => {
+      acc[o.status] = (acc[o.status] || 0) + 1;
+      return acc;
+    },
+    {} as Record<string, number>
+  );
+}
+
+function printOutcomes(outcomes: OperationOutcome[], phaseLabel: string): void {
+  console.log(`\n--- ${phaseLabel} outcomes ---`);
+  for (const outcome of outcomes) {
+    const symbol = OUTCOME_SYMBOLS[outcome.status] ?? '?';
+    console.log(
+      `${symbol} ${outcome.operationId} ${outcome.docId} (${outcome.action}): ${outcome.reason}`
+    );
+  }
+}
+
 async function main(): Promise<void> {
   console.log(`Project: ${projectId}`);
   console.log(`Bucket : ${storageBucket}`);
-  console.log(`Plan   : ${planFile} (planId=${plan.planId})`);
+  console.log(`Plan   : ${planFile} (planId=${plan.planId}, schemaVersion=${plan.schemaVersion})`);
   console.log(`Approval: ${approvalFile}`);
-  console.log(`Mode   : ${execute ? 'EXECUTE' : 'DRY-RUN'}`);
+  console.log(`Mode   : ${execute ? 'EXECUTE (preflight + write)' : 'DRY-RUN (preflight only)'}`);
   if (operationsFilter) {
     console.log(`Filter : ${[...operationsFilter].join(', ')}`);
   }
@@ -615,36 +726,80 @@ async function main(): Promise<void> {
     ? plan.operations.filter((op) => operationsFilter.has(op.operationId))
     : plan.operations;
 
-  console.log(`Processing ${ops.length}/${plan.operations.length} operations...\n`);
+  console.log(`Processing ${ops.length}/${plan.operations.length} operations...`);
 
-  const outcomes: OperationOutcome[] = [];
+  // PR-C3c (AC-PREFLIGHT): write-free preflight phase。`--execute` 時も初回はこの phase
+  // で全 op を gate 評価し、gate-rejected/error が 1 件でもあれば write phase に進まず exit。
+  // `--dry-run` (--execute なし) は preflight のみで終了する。
+  console.log('\n[Phase 1/2] Preflight (write-free gate evaluation, AC-PREFLIGHT-1)\n');
+  const preflightOutcomes: OperationOutcome[] = [];
   for (const op of ops) {
-    const outcome = await processOperation(op);
-    outcomes.push(outcome);
-    const symbol = {
-      executed: '✅',
-      'dry-run': '📋',
-      skipped: '⏭️ ',
-      'gate-rejected': '🚫',
-      error: '❌',
-    }[outcome.status];
-    console.log(`${symbol} ${outcome.operationId} ${outcome.docId} (${outcome.action}): ${outcome.reason}`);
+    const outcome = await processOperation(op, false);
+    preflightOutcomes.push(outcome);
+  }
+  printOutcomes(preflightOutcomes, 'Preflight');
+  const preflightSummary = summarizeOutcomes(preflightOutcomes);
+  console.log('\n=== Preflight Summary ===');
+  console.log(JSON.stringify(preflightSummary, null, 2));
+
+  const hasPreflightFailure =
+    (preflightSummary['gate-rejected'] ?? 0) > 0 || (preflightSummary['error'] ?? 0) > 0;
+
+  if (hasPreflightFailure || !execute) {
+    // dry-run mode、または preflight で 1 件でも fail → write phase に進まず exit。
+    await admin.app().delete();
+    if (hasPreflightFailure) {
+      console.error(
+        '\nFATAL: preflight phase had gate-rejected or error outcomes. Write phase aborted (AC-PREFLIGHT-1).'
+      );
+      process.exit(1);
+    }
+    // dry-run mode の正常終了
+    process.exit(0);
   }
 
-  const summary = outcomes.reduce(
-    (acc, o) => {
-      acc[o.status] = (acc[o.status] || 0) + 1;
-      return acc;
-    },
-    {} as Record<string, number>
+  // [Phase 2/2] Write phase (AC-PREFLIGHT-2 反映): preflight 全件通過後にのみ書き込み開始。
+  console.log('\n[Phase 2/2] Write (preflight passed, executing destructive actions)\n');
+  const writeOutcomes: OperationOutcome[] = [];
+  for (const op of ops) {
+    const outcome = await processOperation(op, true);
+    writeOutcomes.push(outcome);
+    const symbol = OUTCOME_SYMBOLS[outcome.status] ?? '?';
+    console.log(`${symbol} ${outcome.operationId} ${outcome.docId} (${outcome.action}): ${outcome.reason}`);
+  }
+  const writeSummary = summarizeOutcomes(writeOutcomes);
+  console.log('\n=== Write Summary ===');
+  console.log(JSON.stringify(writeSummary, null, 2));
+
+  // PR-C3c (silent-failure-hunter HIGH-2 反映): write phase の precondition drift で
+  // skipped が発生した場合は exit 1。preflight 段階で precondition OK だった op が
+  // write phase 開始までの間 (= I/O 時間 90+ ops 分) に Firestore で他者によって update
+  // されると precondition mismatch で silent skip される。これを exit 0 で済ませると
+  // operator は「90 件 executed」と誤認する。
+  const writeSkippedDrift = writeOutcomes.filter(
+    (o) => o.status === 'skipped' && o.reason.startsWith('precondition mismatch')
   );
-  console.log('\n=== Summary ===');
-  console.log(JSON.stringify(summary, null, 2));
+  if (writeSkippedDrift.length > 0) {
+    console.error(
+      `\nFATAL: ${writeSkippedDrift.length} op(s) had precondition drift between preflight and write phase. ` +
+        `These ops were NOT executed:`
+    );
+    for (const o of writeSkippedDrift) {
+      console.error(`  - ${o.operationId} ${o.docId}: ${o.reason}`);
+    }
+    // PR-C3c Codex Important 反映: precondition drift は AC15-3 drift と同根 (= Firestore/Storage
+    // concurrent write)。operator は writeSummary を必ず保存し、Firestore quiesce + 再 survey +
+    // 再 classify + 未完了 op の approval 再構築 + execute 再走を 6 ステップで実施する。
+    console.error('');
+    console.error(SURVEY_OR_PRECONDITION_DRIFT_RUNBOOK);
+    await admin.app().delete();
+    process.exit(1);
+  }
 
   await admin.app().delete();
 
-  // gate-rejected / error がある場合は exit 1 (operator が確認しやすいように)
-  if ((summary['gate-rejected'] ?? 0) > 0 || (summary['error'] ?? 0) > 0) {
+  // write phase で error が出た場合は exit 1 (gate-rejected は preflight で排除済のはず)
+  if ((writeSummary['error'] ?? 0) > 0) {
     process.exit(1);
   }
 }
