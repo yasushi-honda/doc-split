@@ -25,14 +25,14 @@ import fs from 'fs';
 import path from 'path';
 
 /**
- * package-lock.json (v3 形式) の packages map の最小型。npm v7+ の lockfile v2/v3 で
+ * package-lock.json の packages map の最小型。npm v7+ で導入された lockfile v2/v3 では
  * `packages` フィールドが top-level に存在し、`""` (root) と `"node_modules/<name>"`
  * 形式の key で各 package の resolved metadata を持つ。
  *
- * 古い npm v6 の lockfile v1 (top-level `dependencies` ネスト形式) はサポート外。本
- * リポジトリは npm v7+ 想定なので v3 形式のみ扱う。
+ * 本 lib は packages フィールドの存在のみで lockfile v2/v3 両方を受け付ける (v1 のみ
+ * reject)。npm v6 以前の lockfile v1 (top-level `dependencies` ネスト形式) はサポート外。
  */
-interface PackageLockJsonV3 {
+interface PackageLockJson {
   lockfileVersion?: number;
   packages?: Record<string, { version?: string }>;
 }
@@ -85,9 +85,9 @@ export function readLockfileSnapshot(fromDir: string = process.cwd()): LockfileS
   const buffer = fs.readFileSync(lockfilePath);
   const lockfileHash = crypto.createHash('sha256').update(buffer).digest('hex');
 
-  let parsed: PackageLockJsonV3;
+  let parsed: PackageLockJson;
   try {
-    parsed = JSON.parse(buffer.toString('utf8')) as PackageLockJsonV3;
+    parsed = JSON.parse(buffer.toString('utf8')) as PackageLockJson;
   } catch (err) {
     throw new Error(
       `package-lock.json parse failed at ${lockfilePath}: ${(err as Error).message}`
@@ -96,7 +96,9 @@ export function readLockfileSnapshot(fromDir: string = process.cwd()): LockfileS
 
   if (!parsed.packages || typeof parsed.packages !== 'object') {
     throw new Error(
-      `package-lock.json missing 'packages' field at ${lockfilePath} (lockfile v1 not supported, run 'npm install' with npm v7+)`
+      `package-lock.json missing 'packages' field at ${lockfilePath}. ` +
+        `lockfile v1 is not supported (only v2/v3). ` +
+        `Fix: delete package-lock.json + node_modules and re-run 'npm install' with npm v7+ installed.`
     );
   }
 

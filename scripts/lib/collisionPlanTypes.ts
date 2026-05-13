@@ -40,9 +40,11 @@ export type CollisionPlanSchemaVersion = typeof COLLISION_PLAN_SCHEMA_VERSION;
  * 同一性、sourceMetageneration = metadata 変更検出、derivedObjectPath = どの child 出力
  * をこの parent snapshot から作るかの整合確認)。
  *
- * AC18-2 反映: execute 側照合は generation / metageneration / size / contentType /
- * sha256 のみ。GCS metadata 全体は比較しない (irrelevant metadata 変更で false reject
- * を避ける)。
+ * AC18-2 反映: execute 側照合は本 interface の 6 fields のみ (sourceBucket / sourcePath
+ * / sourceGeneration / sourceMetageneration / sourceSha256 / derivedObjectPath)。
+ * GCS metadata の size / contentType / md5Hash 等は比較対象外 (irrelevant metadata 変更
+ * で false reject を避ける)。bytes 不変判定の主証拠は sourceSha256、sourceGeneration が
+ * 中核補助、他 4 fields は識別性確認。
  *
  * AC-PRD-BRIDGE: PR-D2 (Issue #445) で Firestore に永続化する provenance field 名と
  * 一致させる。同名のまま PR-D 側 schema 候補として ADR-0016 で記録する予定。
@@ -240,6 +242,15 @@ export interface Plan {
 
   /** per-doc 操作 */
   operations: Operation[];
+
+  /**
+   * PR-C3c (silent-failure-hunter HIGH-1 / code-reviewer I-1 反映): classify 時に
+   * 親 PDF provenance 計算が失敗した op の operationId 一覧。これら op は本 classify run
+   * で `recommendedAction: 'manual-review'` に degrade されており、provenance fail 詳細は
+   * `op.reason` に記録される。空配列なら全 regenerate-from-parent 候補で provenance 計算
+   * 成功 (理想状態)。operator は plan.json から非空を検出し、operator review に回す。
+   */
+  provenanceFailedOps: string[];
 }
 
 /**

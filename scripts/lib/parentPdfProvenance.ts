@@ -5,7 +5,9 @@
  *   - classify 側 (T1): provenanceRequired=true op の生成時に親 PDF metadata + bytes
  *     sha256 を snapshot として記録 (`Plan.operations[].provenance`)。
  *   - execute 側 (T2): runtime で同関数を呼び出し、plan 記録と field 単位で照合
- *     (AC18-2、generation/metageneration/size/contentType/sha256 のみ比較)。
+ *     (AC18-2、sourceBucket / sourcePath / sourceGeneration / sourceMetageneration /
+ *      sourceSha256 / derivedObjectPath の 6 fields を比較。size/contentType は AC18-2
+ *      対象外、bytes 不変判定の主証拠は sourceSha256)。
  *
  * Codex Q1 反映: sourceSha256 + sourceGeneration が中核証拠、他 4 fields は補助。
  * sourceSha256 単独でも bytes 不変判定として強力だが、GCS object 識別性

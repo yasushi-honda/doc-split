@@ -236,10 +236,19 @@ async function deleteDocIfExists(id: string): Promise<void> {
 }
 
 async function deleteFileIfExists(path: string): Promise<void> {
+  // PR-C3c (silent-failure-hunter MEDIUM-5 反映): 404 のみ無視し、403 / 503 / network
+  // error は WARN で残す。dev 専用 fixture でも cleanup 漏れで次 setup が「既存 fixture を
+  // 上書き」する 2 次災害可能性を防ぐ (PR-C3b の getStreamBytesForHash bare catch CRITICAL
+  // 同型回避)。
   try {
     await bucket.file(path).delete();
-  } catch {
-    /* ignore not-found */
+  } catch (err) {
+    const code = (err as { code?: number }).code;
+    if (code !== 404) {
+      console.warn(
+        `WARN: deleteFileIfExists path=${path} code=${code ?? '<none>'}: ${(err as Error).message}`
+      );
+    }
   }
 }
 

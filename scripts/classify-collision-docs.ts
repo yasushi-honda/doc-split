@@ -352,7 +352,7 @@ async function buildDocEvidence(
       doc.splitFromPages.start,
       doc.splitFromPages.end
     );
-    // PR-C2: cross-process deterministic visual fingerprint で比較 (pdf-page-visual-v1)
+    // PR-C2/C3b: cross-process deterministic visual fingerprint で比較 (HASH_ALGORITHM、PR-C3b で v2 bump)
     const actualFp = await computePdfPageVisualFingerprint(actualBuf);
     const expectedFp = await computePdfPageVisualFingerprint(expectedBuf);
 
@@ -719,13 +719,44 @@ async function main(): Promise<void> {
 
   // PR-C3c (AC18): regenerate-from-parent op の provenance 6 fields を非同期計算。
   // 親 PDF を Storage から download → sha256 + metadata 取得して plan に記録する。
-  // 同一 parent に対する重複計算を避けるため per-(parentDocId, destPath) cache を使う。
-  // ただし derivedObjectPath (= destPath) は op 単位で異なるため、parent 単位 cache に
-  // derivedObjectPath を後付けする形にする。
+  //
+  // cache 設計 (silent-failure-hunter HIGH-3 / comment-analyzer C2 / code-reviewer I-2 反映):
+  //   - 同一 parent から複数 child が出る場合 (敗者 + orphan) は **sha256 計算を 1 度だけ**行う。
+  //   - cacheKey は `${bucket.name}|${parentPath}` のみ。derivedObjectPath は op 単位で異なるため
+  //     spread (`{...cached, derivedObjectPath: op.destPath}`) で各 op に差し替える。
+  //   - bucket を key に含めることで将来 multi-bucket scan 対応時の silent regression を防ぐ。
+  //
+  // failure 設計 (silent-failure-hunter HIGH-1 / code-reviewer I-1 反映):
+  //   - parent 不在 / bucket mismatch / 計算 throw のいずれかが起きた op は **manual-review に
+  //     degrade** する (recommendedAction = 'manual-review', provenanceRequired = false,
+  //     provenance = null, reason に詳細)。これにより execute preflight phase で「全件 fail-fast」
+  //     ではなく「degrade した op だけ manual-review にスキップ + 残りは destructive 実行」が
+  //     成立する。本番 90+ docs で 1 件の provenance fail が全体を倒すリスクを構造的に排除。
+  //   - degrade した opId は plan.provenanceFailedOps[] に記録し、operator が plan.json から
+  //     機械可読に検出できる。
   console.log('\nComputing parent PDF provenance for regenerate-from-parent operations...');
+  // cache key = `${bucket.name}|${parentPath}` (derivedObjectPath は含めず、spread で各 op に上書き)
   const provenanceParentCache = new Map<string, ParentPdfProvenance>();
   let provenanceComputed = 0;
   let provenanceFailed = 0;
+  const provenanceFailedOps: string[] = [];
+
+  /**
+   * provenance 計算失敗 op を manual-review に degrade する pure-ish helper (副作用: op /
+   * summary 更新)。summary.byAction の再集計も同時に行う。
+   */
+  const degradeOpToManualReview = (op: Operation, reason: string): void => {
+    summary.byAction[op.recommendedAction] -= 1;
+    op.recommendedAction = 'manual-review';
+    op.provenanceRequired = false;
+    op.provenance = null;
+    op.destPath = null; // manual-review は destructive action でないため destPath クリア
+    op.reason = `${op.reason} | provenance-fail-degrade: ${reason}`;
+    summary.byAction['manual-review'] += 1;
+    provenanceFailed += 1;
+    provenanceFailedOps.push(op.operationId);
+  };
+
   for (const op of operations) {
     if (op.recommendedAction !== 'regenerate-from-parent') continue;
     if (!op.parentDocumentId || !op.destPath) {
@@ -742,41 +773,46 @@ async function main(): Promise<void> {
     // 経由で fileUrl を再取得する代わりに、parentCache から直接拾う。
     const parentDoc = parentCache.get(op.parentDocumentId);
     if (!parentDoc || !parentDoc.fileUrl) {
-      console.error(
-        `WARN: op ${op.operationId} parentDocumentId=${op.parentDocumentId} not in parentCache or has no fileUrl. Provenance cannot be computed; this op will fail AC18 gate.`
+      console.warn(
+        `WARN: op ${op.operationId} parentDocumentId=${op.parentDocumentId} not in parentCache or has no fileUrl. Degrading to manual-review.`
       );
-      provenanceFailed += 1;
+      degradeOpToManualReview(op, `parent doc ${op.parentDocumentId} not in cache or missing fileUrl`);
       continue;
     }
     const parentPath = extractPathIfBucketMatches(parentDoc.fileUrl, bucket.name);
     if (!parentPath) {
-      console.error(
-        `WARN: op ${op.operationId} parent fileUrl ${parentDoc.fileUrl} not in current bucket ${bucket.name}. Provenance not computed.`
+      console.warn(
+        `WARN: op ${op.operationId} parent fileUrl ${parentDoc.fileUrl} not in current bucket ${bucket.name}. Degrading to manual-review.`
       );
-      provenanceFailed += 1;
+      degradeOpToManualReview(op, `parent fileUrl bucket mismatch (current=${bucket.name})`);
       continue;
     }
     try {
-      // per-parent cache: 同一 parent から複数 child が出る場合 (敗者 + orphan) は
-      // sha256 計算を 1 度だけ行い、derivedObjectPath だけ各 op に差し替える。
-      const cacheKey = `${parentPath}|${op.destPath}`;
-      let provenance = provenanceParentCache.get(cacheKey);
-      if (!provenance) {
-        provenance = await computeParentPdfProvenance(bucket, parentPath, op.destPath);
-        provenanceParentCache.set(cacheKey, provenance);
+      const cacheKey = `${bucket.name}|${parentPath}`;
+      let cachedBase = provenanceParentCache.get(cacheKey);
+      if (!cachedBase) {
+        cachedBase = await computeParentPdfProvenance(bucket, parentPath, op.destPath);
+        provenanceParentCache.set(cacheKey, cachedBase);
       }
-      op.provenance = provenance;
+      // spread で op 個別の derivedObjectPath を差し替え (cache 共有時も op ごとに正しい
+      // derivedObjectPath が記録される)。
+      op.provenance = { ...cachedBase, derivedObjectPath: op.destPath };
       provenanceComputed += 1;
     } catch (err) {
-      console.error(
-        `WARN: op ${op.operationId} provenance computation failed: ${(err as Error).message}`
+      console.warn(
+        `WARN: op ${op.operationId} provenance computation failed: ${(err as Error).message}. Degrading to manual-review.`
       );
-      provenanceFailed += 1;
+      degradeOpToManualReview(op, `computeParentPdfProvenance threw: ${(err as Error).message}`);
     }
   }
   console.log(
-    `Provenance computed: ${provenanceComputed} | failed: ${provenanceFailed}\n`
+    `Provenance computed: ${provenanceComputed} | failed (degraded to manual-review): ${provenanceFailed}\n`
   );
+  if (provenanceFailedOps.length > 0) {
+    console.warn(
+      `WARN: ${provenanceFailedOps.length} op(s) degraded to manual-review due to provenance failure: ${provenanceFailedOps.join(', ')}`
+    );
+  }
 
   // AC13: plan に fingerprint algorithm version を記録。execute 側で固定値と照合し、
   // mismatch なら gate reject (pdf-lib upgrade 等で algorithm が変わった古い plan を
@@ -801,6 +837,9 @@ async function main(): Promise<void> {
     sourceManifestRef: surveyArtifact.sourceManifestRef!,
     summary,
     operations,
+    // PR-C3c (HIGH-1/I-1): provenance 計算失敗で manual-review に degrade された opId 一覧。
+    // 空配列 = 全 regenerate-from-parent 候補で provenance 計算成功 (理想状態)。
+    provenanceFailedOps,
   };
 
   const json = JSON.stringify(plan, null, 2);

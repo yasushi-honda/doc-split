@@ -2,15 +2,20 @@
 /**
  * Issue #432 PR-C: classify-collision-docs.ts が出力した migration plan を実行
  *
- * 多重 gate (現在 7 種、Codex セカンドオピニオン反映 + PR-C2 で AC13 algorithm/version 追加):
- *   1. approval.planId === plan.planId
- *   2. operation.operationId が approval.approvedOperationIds に含まれる
- *   3. (destructive 時) operation の sourcePath/destPath が approval.approvedPaths に含まれる
- *   4. runtime env (projectId / storageBucket) が plan の projectId / bucket と一致
- *   5. precondition (expectedCurrentFileUrl / expectedStatus / expectedUpdatedAt) が現状 doc と一致
- *   6. plan.hashAlgorithm === HASH_ALGORITHM (AC13)
- *   7. plan.pdfLibVersion === expectedPdfLibVersion (AC13 拡張 / Codex Important 反映)
- * Gate 0 (defense-in-depth): Ambiguous + suggestedWinner=true の destructive action を reject
+ * 多重 gate (PR-C3c で 11 種に拡張、各 AC は PR description 参照):
+ *   AC-SCHEMA: plan.schemaVersion === 'collision-plan-v3' (PR-C3c)
+ *   Gate 1: approval.planId === plan.planId
+ *   Gate 4-env: runtime projectId / storageBucket が plan の projectId / bucket と一致
+ *   AC13: plan.hashAlgorithm === HASH_ALGORITHM (PR-C2)
+ *   AC13拡張: plan.pdfLibVersion === expectedPdfLibVersion (PR-C2 Codex Important)
+ *   AC-CC1-2: plan.lockfileHash + pdfLibLockfileVersion が runtime lockfile と一致 (PR-C3c, Codex Critical 1)
+ *   Gate 0 (defense-in-depth): Ambiguous + non-manual-review / suggestedWinner=true reject
+ *   Gate 8 (AC-INVARIANT): action ↔ provenanceRequired 組合せ強制 (PR-C3c, Codex C2)
+ *   Gate 2: operation.operationId が approval.approvedOperationIds に含まれる
+ *   Gate 3: (destructive 時) sourcePath/destPath が approval.approvedPaths に含まれる
+ *   Gate 5: precondition (expectedCurrentFileUrl / expectedStatus / expectedUpdatedAt) が現状 doc と一致
+ *   Gate 9a-9b (AC18): provenance completeness + runtime 親 PDF sha256+metadata 照合 (PR-C3c)
+ * AC-PREFLIGHT (PR-C3c): --execute 時 write-free preflight phase → 全件通過後に write phase
  *
  * idempotency: 各 operation は再実行可能。既に完了状態 (新 path 存在 + fileUrl 更新済) なら skip。
  * Storage delete は scripts/lib/storageGuard 経由で同 fileUrl 共有 doc が残存しないことを確認。
@@ -762,6 +767,29 @@ async function main(): Promise<void> {
   const writeSummary = summarizeOutcomes(writeOutcomes);
   console.log('\n=== Write Summary ===');
   console.log(JSON.stringify(writeSummary, null, 2));
+
+  // PR-C3c (silent-failure-hunter HIGH-2 反映): write phase の precondition drift で
+  // skipped が発生した場合は exit 1。preflight 段階で precondition OK だった op が
+  // write phase 開始までの間 (= I/O 時間 90+ ops 分) に Firestore で他者によって update
+  // されると precondition mismatch で silent skip される。これを exit 0 で済ませると
+  // operator は「90 件 executed」と誤認する。
+  const writeSkippedDrift = writeOutcomes.filter(
+    (o) => o.status === 'skipped' && o.reason.startsWith('precondition mismatch')
+  );
+  if (writeSkippedDrift.length > 0) {
+    console.error(
+      `\nFATAL: ${writeSkippedDrift.length} op(s) had precondition drift between preflight and write phase. ` +
+        `These ops were NOT executed:`
+    );
+    for (const o of writeSkippedDrift) {
+      console.error(`  - ${o.operationId} ${o.docId}: ${o.reason}`);
+    }
+    console.error(
+      `Investigate concurrent writers and re-run classify + execute after Firestore quiesces.`
+    );
+    await admin.app().delete();
+    process.exit(1);
+  }
 
   await admin.app().delete();
 
