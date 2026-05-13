@@ -430,6 +430,18 @@ export const splitPdf = onCall(
       // PDF を読み込み
       const pdfDoc = await PDFDocument.load(buffer);
 
+      // Evaluator LOW 3 反映: endPage が実 PDF ページ数を超えると pdf-lib copyPages が
+      // raw Error を throw し、Cloud Functions INTERNAL エラーで client に伝播してデバッグ
+      // 困難になる。invalid-argument として早期 abort し、原因を明示する。
+      const totalSourcePages = pdfDoc.getPageCount();
+      const outOfRange = segments.find((s) => s.endPage > totalSourcePages);
+      if (outOfRange) {
+        throw new HttpsError(
+          'invalid-argument',
+          `segment endPage=${outOfRange.endPage} exceeds source PDF totalPages=${totalSourcePages}`
+        );
+      }
+
       // segments を accumulate (Firestore set はまだ実行しない)
       // Codex High 3: Firestore は最後に batch.commit で原子書込、partial state を消す
       const accumulated: AccumulatedSegment[] = [];
