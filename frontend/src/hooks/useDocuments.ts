@@ -263,6 +263,9 @@ export function getReprocessClearFields() {
     pageResults: df,
     // 表示用ファイル名（#178 displayFileName自動生成）
     displayFileName: df,
+    // 分割 PDF provenance (#445 ADR-0016): 再処理時に古い snapshot を残すと
+    // derivedObjectPath と実 Storage state が不整合になるため必ずクリアする
+    provenance: df,
     // メタ情報
     customerName: df,
     customerId: df,

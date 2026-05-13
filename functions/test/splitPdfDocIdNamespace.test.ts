@@ -63,49 +63,52 @@ describe('splitPdf docId namespace 設計 (Issue #432 PR-B 衝突根治)', () =>
   });
 });
 
-describe('splitPdf orphan cleanup 補償処理 (Issue #432 PR-B Codex 補強)', () => {
-  it('Firestore set を try/catch でラップしている (補償処理の前提)', () => {
-    // 'await newDocRef.set(' が try ブロック内に存在することの近傍チェック
-    expect(content).to.match(/try\s*\{[\s\S]{0,2000}await newDocRef\.set\(/);
+describe('splitPdf cleanup / atomic write 設計 (Issue #445 PR-D2 atomic batch)', () => {
+  it('Firestore 書込は db.batch().commit() で atomic (Codex H3: partial state 排除)', () => {
+    // 個別 newDocRef.set() ループは PR-D2 で廃止し、accumulated payload を batch で一括書込
+    expect(content).to.match(/const\s+batch\s*=\s*db\.batch\(\)/);
+    expect(content).to.match(/batch\.set\(item\.newDocRef/);
+    expect(content).to.match(/await\s+batch\.commit\(\)/);
   });
 
-  it('Firestore set 失敗時に Storage orphan cleanup を試行する', () => {
-    expect(content).to.include('orphanCleanup');
-    // newFile.delete() が catch ブロック内で呼ばれる (近傍チェック)
-    expect(content).to.match(/catch\s*\(firestoreErr[\s\S]{0,2000}await newFile\.delete\(\)/);
+  it('segments を一旦 accumulate してから batch 書込する (atomic 化の前提)', () => {
+    // accumulated: AccumulatedSegment[] を build → final drift check 通過後 batch.commit
+    expect(content).to.match(/const\s+accumulated\s*:\s*AccumulatedSegment\[\]/);
+    expect(content).to.match(/accumulated\.push\(/);
   });
 
-  it('orphan cleanup の構造化ログキー (Cloud Logging 監視 contract)', () => {
+  it('drift / batch 失敗時の Storage cleanup は専用 helper で実行する', () => {
+    expect(content).to.include('cleanupAccumulatedStorageFiles');
+    // Promise.allSettled で best-effort
+    expect(content).to.match(/Promise\.allSettled/);
+  });
+
+  it('cleanup は ifGenerationMatch precondition で誤削除を防ぐ (Codex M3)', () => {
+    expect(content).to.match(/ifGenerationMatch\s*:\s*item\.derivedGeneration/);
+  });
+
+  it('cleanup helper の構造化ログキー (Cloud Logging 監視 contract)', () => {
     expect(content).to.include("operation: 'splitPdf'");
-    expect(content).to.match(/stage:\s*['"]firestoreSet['"]/);
-    expect(content).to.match(/stage:\s*['"]orphanCleanup['"]/);
-    expect(content).to.match(/cleanupResult:\s*['"]success['"]/);
-    expect(content).to.match(/cleanupResult:\s*['"]failed['"]/);
-  });
-
-  it('Firestore set 失敗時に元の例外を caller に伝播する (silent failure 防止)', () => {
-    // 補償処理経路の終端で必ず throw が発生 (success → throw firestoreErr / failure → throw wrapped)
-    expect(content).to.match(/throw firestoreErr;/);
-    expect(content).to.match(/throw wrapped;/);
-  });
-
-  it('createdDocIds.push は try ブロック内 (Firestore set 成功時のみ実行)', () => {
-    // try 外に出ると失敗時にも push されて splitInto に orphan id が混入
-    expect(content).to.match(/await newDocRef\.set\([\s\S]{0,3000}createdDocIds\.push/);
-    expect(content).not.to.match(/\}\s*finally\s*\{[\s\S]{0,500}createdDocIds\.push/);
-  });
-
-  it('二段失敗時は Error.cause で元例外を保持し orphanLeft マーカーを付与する (Sentry/log dedup での区別)', () => {
-    // wrapped.cause = firestoreErr; wrapped.orphanLeft = true; の存在を contract 化
-    expect(content).to.match(/wrapped\.cause\s*=\s*firestoreErr/);
-    expect(content).to.match(/wrapped\.orphanLeft\s*=\s*true/);
-    expect(content).to.include('manualCleanupCommand');
-  });
-
-  it('segments 途中失敗時に partial state 概要ログを出力する (運用 triage 支援)', () => {
+    // 3 つの cleanup 発火 stage を区別できる
     expect(content).to.match(/stage:\s*['"]segmentsLoop['"]/);
-    expect(content).to.include('partialChildIds');
-    expect(content).to.include('successfulSegments');
-    expect(content).to.include('failedSegmentIndex');
+    expect(content).to.match(/stage:\s*['"]finalDrift['"]/);
+    expect(content).to.match(/stage:\s*['"]firestoreBatch['"]/);
+    // 失敗件数 + manual cleanup hint
+    expect(content).to.match(/failedCount/);
+    expect(content).to.match(/manualCleanupHint/);
+  });
+
+  it('Firestore batch 失敗時は HttpsError(internal) で原因 message を client へ surface する (/review-pr silent-failure-hunter C1)', () => {
+    // 旧: throw wrapped (Error.cause) → INTERNAL に潰れる
+    // 新: throw new HttpsError('internal', ...message + originalErr.message..., { stage: 'firestoreBatch', ... })
+    expect(content).to.match(/HttpsError\(\s*['"]internal['"][\s\S]{0,400}firestoreErr/);
+    expect(content).to.match(/stage:\s*['"]firestoreBatch['"]/);
+  });
+
+  it('drift 検出時は HttpsError aborted で投げ retry max 後に最終 fail する', () => {
+    expect(content).to.match(
+      /HttpsError\(\s*['"]aborted['"][\s\S]{0,200}concurrent write detected/
+    );
+    expect(content).to.match(/MAX_RETRIES\s*=\s*2/);
   });
 });

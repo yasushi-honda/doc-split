@@ -12,6 +12,7 @@
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
 import { PDFDocument, degrees } from 'pdf-lib';
+import { sha256Hex } from '../utils/hash';
 import {
   analyzePdf,
   generateSplitSummary,
@@ -24,6 +25,14 @@ import { timestampToDateString } from '../utils/timestampHelpers';
 import { loadMasterData } from '../utils/loadMasterData';
 import { sanitizeFilenameForStorage } from '../utils/fileNaming';
 import { canSafelyDeleteStorageFile } from '../storage/storageDeletionGuard';
+import { createSplitProvenance } from './provenance';
+import {
+  SourceDriftError,
+  acquireSourceSnapshot,
+  backoffSleep,
+  parseGcsUri,
+  verifyFinalDrift,
+} from './splitSnapshot';
 
 const db = admin.firestore();
 const storage = admin.storage();
@@ -242,6 +251,60 @@ interface SplitRequest {
 /**
  * PDFを分割して新しいドキュメントを作成
  */
+// ============================================
+// splitPdf 内部: drift 時に cleanup する Storage file の最小 shape
+// (Codex Medium 3: ifGenerationMatch precondition で誤削除防止)
+// ============================================
+
+interface CleanableStorageFile {
+  delete(options?: { ifGenerationMatch?: string | number }): Promise<unknown>;
+}
+
+interface AccumulatedSegment {
+  newDocRef: FirebaseFirestore.DocumentReference;
+  newFile: CleanableStorageFile;
+  newFilePath: string;
+  fileName: string;
+  derivedGeneration: string;
+  payload: Record<string, unknown>;
+}
+
+async function cleanupAccumulatedStorageFiles(
+  accumulated: AccumulatedSegment[],
+  stage: string,
+  parentDocumentId: string
+): Promise<void> {
+  if (accumulated.length === 0) return;
+  // derivedGeneration が空 = `newFile.save()` 直後・`getMetadata()` 前に失敗した entry。
+  // 自分が生成した newDocRef 配下の新規 path のため、他 process が割込む可能性はない
+  // (newDocRef.id は fresh random で外部公開前)。precondition なしの delete を使う。
+  const results = await Promise.allSettled(
+    accumulated.map((item) =>
+      item.newFile.delete(
+        item.derivedGeneration
+          ? { ifGenerationMatch: item.derivedGeneration }
+          : undefined
+      )
+    )
+  );
+  const failed = results.filter((r) => r.status === 'rejected');
+  if (failed.length > 0) {
+    console.error('splitPdf: failed to cleanup some accumulated Storage files', {
+      operation: 'splitPdf',
+      stage,
+      parentDocumentId,
+      totalCount: accumulated.length,
+      failedCount: failed.length,
+      failedPaths: accumulated
+        .map((item, idx) =>
+          results[idx].status === 'rejected' ? item.newFilePath : null
+        )
+        .filter((p): p is string => p !== null),
+      manualCleanupHint: 'gsutil rm gs://<bucket>/<path> for each failed path',
+    });
+  }
+}
+
 export const splitPdf = onCall(
   {
     region: 'asia-northeast1',
@@ -263,6 +326,35 @@ export const splitPdf = onCall(
     if (!documentId || !splitPoints || !segments) {
       throw new HttpsError('invalid-argument', 'Missing required fields');
     }
+    // Codex Low 2: segments の page 範囲を runtime 検証 (UI を信用しすぎない)
+    if (!Array.isArray(segments) || segments.length === 0) {
+      throw new HttpsError('invalid-argument', 'segments must be a non-empty array');
+    }
+    // Codex post-impl review Low 1 反映: Firestore batch.commit() は 500 writes の hard limit。
+    // batch 内訳は child set × N + parent update × 1 = N+1 ≤ 500 → N ≤ 499 が安全な上限。
+    // 実運用で 500 segment 分割は非現実的だが明示的に弾く (UI / API 双方への防御線)。
+    if (segments.length > 499) {
+      throw new HttpsError(
+        'invalid-argument',
+        `segments.length=${segments.length} exceeds Firestore batch write limit (max 499 to allow 1 parent update in same commit)`
+      );
+    }
+    for (let i = 0; i < segments.length; i++) {
+      const seg = segments[i];
+      if (
+        typeof seg.startPage !== 'number' ||
+        typeof seg.endPage !== 'number' ||
+        !Number.isInteger(seg.startPage) ||
+        !Number.isInteger(seg.endPage) ||
+        seg.startPage < 1 ||
+        seg.endPage < seg.startPage
+      ) {
+        throw new HttpsError(
+          'invalid-argument',
+          `segments[${i}] has invalid page range: start=${seg.startPage}, end=${seg.endPage}`
+        );
+      }
+    }
 
     // 元ドキュメント取得
     const docRef = db.doc(`documents/${documentId}`);
@@ -275,235 +367,409 @@ export const splitPdf = onCall(
     const docData = docSnapshot.data()!;
     const fileUrl = docData.fileUrl as string;
 
-    // PDFファイルをダウンロード
+    // Codex Medium 1: gs:// URI parser + bucket mismatch を failed-precondition で abort
     const bucket = storage.bucket();
-    const filePath = fileUrl.replace(`gs://${bucket.name}/`, '');
-    const file = bucket.file(filePath);
-    const [buffer] = await file.download();
-
-    // PDFを読み込み
-    const pdfDoc = await PDFDocument.load(buffer);
-
-    const createdDocIds: string[] = [];
-
-    // 各セグメントを分割
-    for (const segment of segments) {
-      const {
-        startPage,
-        endPage,
-        documentType,
-        customerName,
-        customerId,
-        officeName,
-        officeId,
-        customerCandidates,
-        officeCandidates,
-        // needsManualCustomerSelection, needsManualOfficeSelectionは
-        // 分割UIで選択済みのため常にfalseになる
-        // isDuplicateCustomer, careManagerName は buildSplitDocumentData(segment) で処理
-      } = segment;
-
-      // 新しいPDFを作成
-      const newPdf = await PDFDocument.create();
-      const pageIndices = Array.from(
-        { length: endPage - startPage + 1 },
-        (_, i) => startPage - 1 + i
+    let sourceObjectName: string;
+    try {
+      const parsed = parseGcsUri(fileUrl, bucket.name);
+      sourceObjectName = parsed.objectName;
+    } catch (err) {
+      throw new HttpsError(
+        'failed-precondition',
+        `Source fileUrl is not a valid gs:// URI in bucket "${bucket.name}": ${
+          err instanceof Error ? err.message : String(err)
+        }`
       );
-      const copiedPages = await newPdf.copyPages(pdfDoc, pageIndices);
-      copiedPages.forEach((page) => newPdf.addPage(page));
+    }
+    const file = bucket.file(sourceObjectName);
 
-      // PDFをバイト配列に変換
-      const newPdfBytes = await newPdf.save();
+    const MAX_RETRIES = 2; // 合計 3 attempts
+    let lastDriftError: SourceDriftError | null = null;
 
-      // Issue #432 PR-B: docId namespace 分離で Storage path 衝突を根治。
-      // Firestore docId を Storage save 前に確定させ path に組み込む。
-      // PR-A (storageDeletionGuard) は旧 path 旧 doc 保護用に恒久有効。本 PR は新規 split のみ根治。
-      const newDocRef = db.collection('documents').doc();
-
-      // ファイル名生成。
-      const timestamp = Date.now();
-      const fileName = generateFileName({
-        customerName,
-        documentType,
-        timestamp,
-        startPage,
-        endPage,
-      });
-
-      // Cloud Storage に保存 (Issue #432 PR-B: processed/{docId}/{fileName} で一意性保証)。
-      // NOTE: 意図的に try/catch なし。Storage save 失敗は callable error として
-      // caller に surface すべき (この時点で Firestore set 未実行のため orphan 不発生)。
-      const newFilePath = `processed/${newDocRef.id}/${fileName}`;
-      const newFile = bucket.file(newFilePath);
-      await newFile.save(Buffer.from(newPdfBytes), {
-        metadata: { contentType: 'application/pdf' },
-      });
-
-      // 分割後のページ結果を抽出
-      const segmentPageResults = (docData.pageResults || []).filter(
-        (p: SplitPageInput) => p.pageNumber >= startPage && p.pageNumber <= endPage
-      );
-
-      // ocrExtractionスナップショットを構築
-      // 元ドキュメントのocrExtractionがあれば継承、なければsplit-legacyとして生成
-      const parentOcrExtraction = docData.ocrExtraction;
-      const ocrExtraction = parentOcrExtraction
-        ? {
-            ...parentOcrExtraction,
-            splitFrom: {
-              documentId,
-              pages: { start: startPage, end: endPage },
-            },
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      // T1: 3-stage metadata-download-metadata snapshot
+      // (Codex High 1/H2: download 中の上書きを generation + metageneration 両方で検出)
+      // 純粋 orchestration は splitSnapshot.ts に抽出済 (Codex M4 対応の unit test 可能化)
+      let buffer: Buffer;
+      let sourceSnapshot: {
+        generation: string;
+        metageneration: string;
+        sha256: string;
+      };
+      try {
+        const snap = await acquireSourceSnapshot(file);
+        buffer = snap.buffer;
+        sourceSnapshot = {
+          generation: snap.generation,
+          metageneration: snap.metageneration,
+          sha256: sha256Hex(buffer),
+        };
+      } catch (err) {
+        if (err instanceof SourceDriftError) {
+          console.warn('splitPdf: source drift detected during snapshot acquisition', {
+            operation: 'splitPdf',
+            stage: 'sourceSnapshot',
+            attempt,
+            parentDocumentId: documentId,
+            before: err.before,
+            after: err.after,
+          });
+          lastDriftError = err;
+          if (attempt < MAX_RETRIES) {
+            await backoffSleep(attempt);
+            continue;
           }
-        : {
-            version: 'split-legacy',
-            extractedAt: admin.firestore.FieldValue.serverTimestamp(),
-            customer: {
-              name: customerName,
-              id: customerId || null,
-              candidates: customerCandidates || [],
-            },
-            office: {
-              name: officeName,
-              id: officeId || null,
-              candidates: officeCandidates || [],
-            },
-            documentType: {
-              name: documentType,
-            },
-            splitFrom: {
-              documentId,
-              pages: { start: startPage, end: endPage },
-            },
+          throw new HttpsError(
+            'aborted',
+            `splitPdf aborted: source concurrent write detected after ${attempt + 1} attempts (${err.message})`
+          );
+        }
+        throw err;
+      }
+
+      // PDF を読み込み
+      const pdfDoc = await PDFDocument.load(buffer);
+
+      // Evaluator LOW 3 反映: endPage が実 PDF ページ数を超えると pdf-lib copyPages が
+      // raw Error を throw し、Cloud Functions INTERNAL エラーで client に伝播してデバッグ
+      // 困難になる。invalid-argument として早期 abort し、原因を明示する。
+      const totalSourcePages = pdfDoc.getPageCount();
+      const outOfRange = segments.find((s) => s.endPage > totalSourcePages);
+      if (outOfRange) {
+        throw new HttpsError(
+          'invalid-argument',
+          `segment endPage=${outOfRange.endPage} exceeds source PDF totalPages=${totalSourcePages}`
+        );
+      }
+
+      // segments を accumulate (Firestore set はまだ実行しない)
+      // Codex High 3: Firestore は最後に batch.commit で原子書込、partial state を消す
+      const accumulated: AccumulatedSegment[] = [];
+
+      try {
+        for (const segment of segments) {
+          const {
+            startPage,
+            endPage,
+            documentType,
+            customerName,
+            customerId,
+            officeName,
+            officeId,
+            customerCandidates,
+            officeCandidates,
+            // needsManualCustomerSelection, needsManualOfficeSelection は
+            // 分割UIで選択済みのため常に false。
+            // isDuplicateCustomer, careManagerName は buildSplitDocumentData(segment) で処理。
+          } = segment;
+
+          const newPdf = await PDFDocument.create();
+          const pageIndices = Array.from(
+            { length: endPage - startPage + 1 },
+            (_, i) => startPage - 1 + i
+          );
+          const copiedPages = await newPdf.copyPages(pdfDoc, pageIndices);
+          copiedPages.forEach((page) => newPdf.addPage(page));
+          const newPdfBytes = await newPdf.save();
+
+          // Issue #432 PR-B: docId namespace 分離で Storage path 衝突を根治
+          const newDocRef = db.collection('documents').doc();
+          const timestamp = Date.now();
+          const fileName = generateFileName({
+            customerName,
+            documentType,
+            timestamp,
+            startPage,
+            endPage,
+          });
+          const newFilePath = `processed/${newDocRef.id}/${fileName}`;
+          const newFile = bucket.file(newFilePath);
+
+          // Storage save (失敗は callable error として surface)。
+          // pdf-lib の Uint8Array を直接渡し、sha256 と共用して Buffer.from 二重 allocation を回避。
+          await newFile.save(newPdfBytes, {
+            metadata: { contentType: 'application/pdf' },
+          });
+
+          // Codex post-impl review Medium 1 反映: save 直後・metadata 取得前に失敗しても
+          // cleanup 対象になるよう、partial entry を即 accumulated に登録する。
+          // derivedGeneration / payload は後段で fill in。
+          const inflightEntry: AccumulatedSegment = {
+            newDocRef,
+            newFile,
+            newFilePath,
+            fileName,
+            derivedGeneration: '',
+            payload: {},
+          };
+          accumulated.push(inflightEntry);
+
+          // T2: file.save() 直後に derived* を取得 (GCS は object metadata strongly consistent)
+          const [derivedMeta] = await newFile.getMetadata();
+          const derivedGeneration = String(derivedMeta.generation ?? '');
+          const derivedMetageneration = String(derivedMeta.metageneration ?? '');
+          if (!derivedGeneration || !derivedMetageneration) {
+            throw new HttpsError(
+              'internal',
+              `Failed to retrieve derived metadata for ${newFilePath} (gen=${derivedGeneration}, meta=${derivedMetageneration})`
+            );
+          }
+          inflightEntry.derivedGeneration = derivedGeneration;
+          const derivedSha256 = sha256Hex(newPdfBytes);
+
+          // 分割後のページ結果を抽出
+          const segmentPageResults = (docData.pageResults || []).filter(
+            (p: SplitPageInput) =>
+              p.pageNumber >= startPage && p.pageNumber <= endPage
+          );
+
+          // ocrExtraction スナップショット
+          const parentOcrExtraction = docData.ocrExtraction;
+          const ocrExtraction = parentOcrExtraction
+            ? {
+                ...parentOcrExtraction,
+                splitFrom: {
+                  documentId,
+                  pages: { start: startPage, end: endPage },
+                },
+              }
+            : {
+                version: 'split-legacy',
+                extractedAt: admin.firestore.FieldValue.serverTimestamp(),
+                customer: {
+                  name: customerName,
+                  id: customerId || null,
+                  candidates: customerCandidates || [],
+                },
+                office: {
+                  name: officeName,
+                  id: officeId || null,
+                  candidates: officeCandidates || [],
+                },
+                documentType: { name: documentType },
+                splitFrom: {
+                  documentId,
+                  pages: { start: startPage, end: endPage },
+                },
+              };
+
+          // displayFileName 生成 (#178 Stage 2 / #182 fallback)
+          const displayFileName = generateDisplayFileName({
+            documentType,
+            customerName,
+            officeName,
+            fileDate:
+              docData.fileDateFormatted ?? timestampToDateString(docData.fileDate),
+          });
+
+          // T2-3: provenance を factory で構築 (10 fields を runtime 検証)
+          const provenance = createSplitProvenance({
+            sourceGeneration: sourceSnapshot.generation,
+            sourceMetageneration: sourceSnapshot.metageneration,
+            sourceSha256: sourceSnapshot.sha256,
+            sourcePath: sourceObjectName,
+            sourceBucket: bucket.name,
+            derivedObjectPath: newFilePath,
+            derivedGeneration,
+            derivedMetageneration,
+            derivedSha256,
+          });
+
+          const splitDocFields = buildSplitDocumentData(segment);
+          const payload: Record<string, unknown> = {
+            ...(displayFileName ? { displayFileName } : {}),
+            id: newDocRef.id,
+            processedAt: admin.firestore.FieldValue.serverTimestamp(),
+            fileId: newDocRef.id,
+            fileName,
+            mimeType: 'application/pdf',
+            ocrResult: extractOcrResultForPages(
+              docData.pageResults || [],
+              startPage,
+              endPage
+            ),
+            // セグメントから構築したフィールド (careManager/careManagerKey 含む)
+            ...splitDocFields,
+            confirmedBy: request.auth?.uid || null,
+            confirmedAt: admin.firestore.FieldValue.serverTimestamp(),
+            officeConfirmedBy: request.auth?.uid || null,
+            officeConfirmedAt: admin.firestore.FieldValue.serverTimestamp(),
+            ocrExtraction,
+            pageResults: segmentPageResults.map(
+              (p: SplitPageInput, index: number) => ({
+                ...p,
+                pageNumber: index + 1,
+                originalPageNumber: p.pageNumber,
+              })
+            ),
+            fileUrl: `gs://${bucket.name}/${newFilePath}`,
+            fileDate: docData.fileDate,
+            totalPages: endPage - startPage + 1,
+            targetPageNumber: 1,
+            status: 'processed',
+            parentDocumentId: documentId,
+            splitFromPages: { start: startPage, end: endPage },
+            provenance,
           };
 
-      // displayFileName 生成 (#178 Stage 2)
-      // #182 fallback: fileDateFormatted は OCR 完了時にのみ設定される派生フィールド。
-      // 旧ドキュメントや手動登録等で未設定の場合は fileDate (Timestamp) から YYYY/MM/DD を
-      // 導出して日付パート欠落を防ぐ。fileDate も null なら日付パートが省略される。
-      const displayFileName = generateDisplayFileName({
-        documentType,
-        customerName,
-        officeName,
-        fileDate:
-          docData.fileDateFormatted ?? timestampToDateString(docData.fileDate),
-      });
-
-      // 新しいドキュメントを Firestore に作成 (ユーザーが分割UIで選択した値は常に confirmed=true)。
-      // Issue #432 PR-B 補償処理: Storage save 成功後の Firestore set 失敗で orphan が
-      // 残ると後続 split との path 衝突リスクが再発するため、best-effort で cleanup する。
-      const splitDocFields = buildSplitDocumentData(segment);
-      try {
-        await newDocRef.set({
-          ...(displayFileName ? { displayFileName } : {}),
-          id: newDocRef.id,
-          processedAt: admin.firestore.FieldValue.serverTimestamp(),
-          fileId: newDocRef.id,
-          fileName,
-          mimeType: 'application/pdf',
-          ocrResult: extractOcrResultForPages(
-            docData.pageResults || [],
-            startPage,
-            endPage
-          ),
-          // セグメントから構築したフィールド（careManager/careManagerKey含む）
-          ...splitDocFields,
-          confirmedBy: request.auth?.uid || null,
-          confirmedAt: admin.firestore.FieldValue.serverTimestamp(),
-          // 事業所確定
-          officeConfirmedBy: request.auth?.uid || null,
-          officeConfirmedAt: admin.firestore.FieldValue.serverTimestamp(),
-          // OCR抽出スナップショット
-          ocrExtraction,
-          // ページ結果（再OCR不要にするため保存）
-          pageResults: segmentPageResults.map((p: SplitPageInput, index: number) => ({
-            ...p,
-            pageNumber: index + 1, // 分割後の新しいページ番号
-            originalPageNumber: p.pageNumber, // 元のページ番号
-          })),
-          // ファイル情報
-          fileUrl: `gs://${bucket.name}/${newFilePath}`,
-          fileDate: docData.fileDate,
-          totalPages: endPage - startPage + 1,
-          targetPageNumber: 1,
-          status: 'processed',
-          parentDocumentId: documentId,
-          splitFromPages: { start: startPage, end: endPage },
-        });
-        createdDocIds.push(newDocRef.id);
-      } catch (firestoreErr) {
-        // Issue #432 PR-B partial state log: segments 途中失敗で先行 N-1 docs が残る
-        // (rollback は本 PR スコープ外、別 Issue で扱う)。
-        console.error('splitPdf failed mid-loop; partial children remain in Firestore', {
+          // payload を完成させ inflightEntry に書込む (push 済なので別に push しない)
+          inflightEntry.payload = payload;
+        }
+      } catch (err) {
+        // segment 内 PDF 生成 / Storage save / derived metadata / provenance factory 失敗。
+        // 既に accumulate された Storage files を best-effort cleanup する。
+        console.error('splitPdf: segment processing failed, cleaning up accumulated', {
           operation: 'splitPdf',
           stage: 'segmentsLoop',
+          attempt,
           parentDocumentId: documentId,
-          successfulSegments: createdDocIds.length,
+          accumulatedCount: accumulated.length,
           totalSegments: segments.length,
-          failedSegmentIndex: segments.indexOf(segment),
-          partialChildIds: createdDocIds,
+          error: err instanceof Error ? err.message : String(err),
         });
-        console.error('Firestore set failed after Storage save; attempting orphan cleanup', {
-          operation: 'splitPdf',
-          stage: 'firestoreSet',
-          newDocId: newDocRef.id,
-          newFilePath,
-          error: firestoreErr instanceof Error ? firestoreErr.message : String(firestoreErr),
-        });
-        let cleanupErrorCaptured: unknown = null;
-        try {
-          await newFile.delete();
-        } catch (cleanupErr) {
-          cleanupErrorCaptured = cleanupErr;
-        }
-
-        if (cleanupErrorCaptured === null) {
-          console.warn('Cleaned up orphan Storage file after Firestore set failure', {
-            operation: 'splitPdf',
-            stage: 'orphanCleanup',
-            newDocId: newDocRef.id,
-            newFilePath,
-            cleanupResult: 'success',
-          });
-          throw firestoreErr;
-        }
-
-        // 二段失敗: cleanup 自体が失敗 → Storage orphan 残存。
-        // audit-storage-mismatch.js の逆方向検出 (Storage→Firestore missing) は別 Issue で追加予定。
-        // 元例外と cleanup 失敗の両方を Error.cause で保持し、Sentry/log dedup での区別を可能に。
-        console.error('Failed to cleanup orphan Storage file (manual cleanup needed)', {
-          operation: 'splitPdf',
-          stage: 'orphanCleanup',
-          newDocId: newDocRef.id,
-          newFilePath,
-          bucket: bucket.name,
-          cleanupResult: 'failed',
-          cleanupError:
-            cleanupErrorCaptured instanceof Error
-              ? cleanupErrorCaptured.message
-              : String(cleanupErrorCaptured),
-          manualCleanupCommand: `gsutil rm gs://${bucket.name}/${newFilePath}`,
-        });
-        const wrapped = new Error(
-          `splitPdf: Firestore set failed AND orphan cleanup failed (newDocId=${newDocRef.id}, path=${newFilePath})`
-        ) as Error & { cause?: unknown; orphanLeft?: boolean };
-        wrapped.cause = firestoreErr;
-        wrapped.orphanLeft = true;
-        throw wrapped;
+        await cleanupAccumulatedStorageFiles(accumulated, 'segmentsLoop', documentId);
+        // /review-pr silent-failure-hunter C2 反映: HttpsError 以外を rethrow すると
+        // Firebase Functions v2 が INTERNAL に潰すため明示的にラップする。
+        // pdf-lib parse error / GCS getMetadata 失敗 / provenance validation 等を
+        // 全て internal でラップし、原因 message を client へ伝える。
+        if (err instanceof HttpsError) throw err;
+        throw new HttpsError(
+          'internal',
+          `splitPdf segment processing failed at attempt ${attempt}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+          {
+            stage: 'segmentsLoop',
+            parentDocumentId: documentId,
+            accumulatedCount: accumulated.length,
+          }
+        );
       }
+
+      // T3: Final drift check (Codex High 1/H2: generation + metageneration 両方比較)
+      try {
+        const [finalMeta] = await file.getMetadata();
+        verifyFinalDrift(
+          {
+            generation: sourceSnapshot.generation,
+            metageneration: sourceSnapshot.metageneration,
+          },
+          finalMeta
+        );
+      } catch (err) {
+        if (err instanceof SourceDriftError) {
+          console.warn('splitPdf: source drift detected at final check', {
+            operation: 'splitPdf',
+            stage: 'finalDrift',
+            attempt,
+            parentDocumentId: documentId,
+            before: err.before,
+            after: err.after,
+            accumulatedCount: accumulated.length,
+          });
+          await cleanupAccumulatedStorageFiles(
+            accumulated,
+            'finalDrift',
+            documentId
+          );
+          lastDriftError = err;
+          if (attempt < MAX_RETRIES) {
+            await backoffSleep(attempt);
+            continue;
+          }
+          throw new HttpsError(
+            'aborted',
+            `splitPdf aborted: source concurrent write detected after ${attempt + 1} attempts (${err.message})`
+          );
+        }
+        // /review-pr silent-failure-hunter I-6: verifyFinalDrift の "Missing generation"
+        // 系 raw Error が INTERNAL に潰れないよう明示ラップ
+        if (err instanceof HttpsError) throw err;
+        throw new HttpsError(
+          'internal',
+          `splitPdf final drift check failed at attempt ${attempt}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+          { stage: 'finalDrift', parentDocumentId: documentId }
+        );
+      }
+
+      // T4: Atomic Firestore batch write (Codex High 3 + post-impl High: child + parent
+      // を同一 batch にまとめて 1 commit にし、「子作成済み・親未 split」状態を構造的に排除)
+      const createdDocIds = accumulated.map((item) => item.newDocRef.id);
+      const batch = db.batch();
+      for (const item of accumulated) {
+        batch.set(item.newDocRef, item.payload);
+      }
+      // 元ドキュメントのステータスを更新 (分割済みフラグ) — child set と同一 batch
+      batch.update(docRef, {
+        splitInto: createdDocIds,
+        status: 'split',
+        isSplitSource: true,
+      });
+      try {
+        await batch.commit();
+      } catch (firestoreErr) {
+        console.error(
+          'splitPdf: Firestore batch commit failed; cleaning up Storage orphans',
+          {
+            operation: 'splitPdf',
+            stage: 'firestoreBatch',
+            attempt,
+            parentDocumentId: documentId,
+            accumulatedCount: accumulated.length,
+            error:
+              firestoreErr instanceof Error
+                ? firestoreErr.message
+                : String(firestoreErr),
+          }
+        );
+        await cleanupAccumulatedStorageFiles(
+          accumulated,
+          'firestoreBatch',
+          documentId
+        );
+        // /review-pr silent-failure-hunter C1: Firebase Functions v2 は非 HttpsError を
+        // INTERNAL (message: "INTERNAL") に潰す。明示的に internal でラップして
+        // 原因 message + structured details を client / 監視ログへ surface する。
+        throw new HttpsError(
+          'internal',
+          `splitPdf Firestore batch commit failed (parent=${documentId}, segments=${accumulated.length}): ${
+            firestoreErr instanceof Error
+              ? firestoreErr.message
+              : String(firestoreErr)
+          }`,
+          {
+            stage: 'firestoreBatch',
+            parentDocumentId: documentId,
+            accumulatedCount: accumulated.length,
+          }
+        );
+      }
+
+      return {
+        success: true,
+        createdDocuments: createdDocIds,
+      };
     }
 
-    // 元ドキュメントのステータスを更新（分割済みフラグ）
-    await docRef.update({
-      splitInto: createdDocIds,
-      status: 'split',
-      isSplitSource: true,
+    // 通常は到達不能 (retry loop 内 throw で 100% return / throw する)。
+    // 到達したら retry loop の制御フローが壊れている = bug。
+    // /review-pr silent-failure-hunter I-4 反映: 'aborted' は drift retry exhausted を意味し、
+    // この時点では「retry loop が return せず throw もせず抜けた」状態のため 'internal' が正確。
+    console.error('splitPdf: retry loop exited without explicit throw/return (logic bug)', {
+      operation: 'splitPdf',
+      stage: 'retryLoopExit',
+      parentDocumentId: documentId,
+      lastDriftError: lastDriftError?.message ?? null,
     });
-
-    return {
-      success: true,
-      createdDocuments: createdDocIds,
-    };
+    throw new HttpsError(
+      'internal',
+      `splitPdf: retry loop exited unexpectedly (parent=${documentId}, lastDrift=${
+        lastDriftError?.message ?? 'none'
+      })`,
+      { stage: 'retryLoopExit', parentDocumentId: documentId }
+    );
   }
 );
 
