@@ -32,7 +32,6 @@ import {
   backoffSleep,
   parseGcsUri,
   verifyFinalDrift,
-  verifySnapshotConsistency,
 } from './splitSnapshot';
 
 const db = admin.firestore();
@@ -276,9 +275,16 @@ async function cleanupAccumulatedStorageFiles(
   parentDocumentId: string
 ): Promise<void> {
   if (accumulated.length === 0) return;
+  // derivedGeneration が空 = `newFile.save()` 直後・`getMetadata()` 前に失敗した entry。
+  // 自分が生成した newDocRef 配下の新規 path のため、他 process が割込む可能性はない
+  // (newDocRef.id は fresh random で外部公開前)。precondition なしの delete を使う。
   const results = await Promise.allSettled(
     accumulated.map((item) =>
-      item.newFile.delete({ ifGenerationMatch: item.derivedGeneration })
+      item.newFile.delete(
+        item.derivedGeneration
+          ? { ifGenerationMatch: item.derivedGeneration }
+          : undefined
+      )
     )
   );
   const failed = results.filter((r) => r.status === 'rejected');
@@ -464,6 +470,19 @@ export const splitPdf = onCall(
             metadata: { contentType: 'application/pdf' },
           });
 
+          // Codex post-impl review Medium 1 反映: save 直後・metadata 取得前に失敗しても
+          // cleanup 対象になるよう、partial entry を即 accumulated に登録する。
+          // derivedGeneration / payload は後段で fill in。
+          const inflightEntry: AccumulatedSegment = {
+            newDocRef,
+            newFile,
+            newFilePath,
+            fileName,
+            derivedGeneration: '',
+            payload: {},
+          };
+          accumulated.push(inflightEntry);
+
           // T2: file.save() 直後に derived* を取得 (GCS は object metadata strongly consistent)
           const [derivedMeta] = await newFile.getMetadata();
           const derivedGeneration = String(derivedMeta.generation ?? '');
@@ -474,6 +493,7 @@ export const splitPdf = onCall(
               `Failed to retrieve derived metadata for ${newFilePath} (gen=${derivedGeneration}, meta=${derivedMetageneration})`
             );
           }
+          inflightEntry.derivedGeneration = derivedGeneration;
           const derivedSha256 = sha256Hex(newPdfBytes);
 
           // 分割後のページ結果を抽出
@@ -571,14 +591,8 @@ export const splitPdf = onCall(
             provenance,
           };
 
-          accumulated.push({
-            newDocRef,
-            newFile,
-            newFilePath,
-            fileName,
-            derivedGeneration,
-            payload,
-          });
+          // payload を完成させ inflightEntry に書込む (push 済なので別に push しない)
+          inflightEntry.payload = payload;
         }
       } catch (err) {
         // segment 内 PDF 生成 / Storage save / derived metadata / provenance factory 失敗。
@@ -635,11 +649,19 @@ export const splitPdf = onCall(
         throw err;
       }
 
-      // T4: Atomic Firestore batch write (Codex High 3: partial state を消す)
+      // T4: Atomic Firestore batch write (Codex High 3 + post-impl High: child + parent
+      // を同一 batch にまとめて 1 commit にし、「子作成済み・親未 split」状態を構造的に排除)
+      const createdDocIds = accumulated.map((item) => item.newDocRef.id);
       const batch = db.batch();
       for (const item of accumulated) {
         batch.set(item.newDocRef, item.payload);
       }
+      // 元ドキュメントのステータスを更新 (分割済みフラグ) — child set と同一 batch
+      batch.update(docRef, {
+        splitInto: createdDocIds,
+        status: 'split',
+        isSplitSource: true,
+      });
       try {
         await batch.commit();
       } catch (firestoreErr) {
@@ -668,15 +690,6 @@ export const splitPdf = onCall(
         wrapped.cause = firestoreErr;
         throw wrapped;
       }
-
-      const createdDocIds = accumulated.map((item) => item.newDocRef.id);
-
-      // 元ドキュメントのステータスを更新 (分割済みフラグ)
-      await docRef.update({
-        splitInto: createdDocIds,
-        status: 'split',
-        isSplitSource: true,
-      });
 
       return {
         success: true,

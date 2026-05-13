@@ -26,8 +26,10 @@ const SOURCE_PATH = 'src/pdf/pdfOperations.ts';
 // 元ドキュメントを `isSplitSource: true` に更新する箇所の anchor。
 // 先行する `// 元ドキュメントのステータスを更新` コメントを起点にし、
 // forEach 内 split doc 書き込みの `newDocRef` 箇所と混同しないようにする。
+// PR-D2 (Issue #445) で `await docRef.update(...)` → `batch.update(docRef, ...)` に
+// 変更 (Codex post-impl High 反映: child + parent を同一 batch で 1 commit atomic 化)。
 const UPDATE_ANCHOR =
-  /元ドキュメントのステータスを更新[\s\S]*?await\s+docRef\.update\s*\(/;
+  /元ドキュメントのステータスを更新[\s\S]*?batch\.update\(\s*docRef\s*,\s*/;
 
 let payloadBlock: string | null = null;
 
