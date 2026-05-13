@@ -330,6 +330,15 @@ export const splitPdf = onCall(
     if (!Array.isArray(segments) || segments.length === 0) {
       throw new HttpsError('invalid-argument', 'segments must be a non-empty array');
     }
+    // Codex post-impl review Low 1 反映: Firestore batch.commit() は 500 writes の hard limit。
+    // batch 内訳は child set × N + parent update × 1 = N+1 ≤ 500 → N ≤ 499 が安全な上限。
+    // 実運用で 500 segment 分割は非現実的だが明示的に弾く (UI / API 双方への防御線)。
+    if (segments.length > 499) {
+      throw new HttpsError(
+        'invalid-argument',
+        `segments.length=${segments.length} exceeds Firestore batch write limit (max 499 to allow 1 parent update in same commit)`
+      );
+    }
     for (let i = 0; i < segments.length; i++) {
       const seg = segments[i];
       if (
