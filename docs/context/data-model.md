@@ -680,6 +680,19 @@ interface DocumentProvenance {
 - `fileName` / `displayFileName` は引き続き UI 表示・ソート・検索用、`derivedObjectPath` を Storage identity / path construction / Firestore lookup key として使い分ける（ADR-0014 + ADR-0016 SHOULD 3 / MUST 4）。
 - `createdAt` は audit / トレース用途のみで、PR-C3c（PR #452）の自動復旧 gate（6-field provenance）と混同しない（Codex MCP Low 1 指摘）。
 
+### 実装注釈（PR-D2 splitPdf 改修時の運用ルール）
+
+PR-D2（`splitPdf` 改修、Issue #445）以降、provenance の書込は以下のパターンで実装する：
+
+| 項目 | 実装上の選択 | 理由 |
+|------|------------|------|
+| `createdAt` の生成 | `Timestamp.now()`（`firebase-admin/firestore` の admin Timestamp、`provenance.ts` factory が自動付与） | factory で 10 fields 完備を保証するため、`FieldValue.serverTimestamp()` sentinel ではなく具体値の Timestamp を使う。runtime 検証 + lowercase 正規化 + 省略時 default を 1 箇所にカプセル化（`createSplitProvenance()`）。`processedAt` 等の他 audit field は引き続き `serverTimestamp()` を使用（書込タイミングが Firestore commit 側に委譲できる場合）。 |
+| `sourceSha256` / `derivedSha256` の計算 | `crypto.createHash('sha256').update(buffer).digest('hex')` で **書込/読込した buffer から compute** | GCS metadata は `md5Hash` / `crc32c` のみ提供し sha256 を含まない。MUST 5（同一 read snapshot 整合）保証のため、download / save に使った実 buffer から計算する。 |
+| `source*` 5 fields の取得タイミング | `acquireSourceSnapshot()` helper で **`getMetadata() → download() → getMetadata()`** 3-stage 一致確認 | download 中の親 PDF 上書き（concurrent write）を検出。`generation` + `metageneration` 両方が一致するときのみ snapshot として採用。不一致は `SourceDriftError` で retry / abort（Codex H1 / H2 反映）。 |
+| `derived*` 4 fields の取得タイミング | `file.save()` resolve 直後の `file.getMetadata()` で取得、sha256 は同時に compute | GCS は object write 後の metadata read を strongly consistent に保証。eventual consistency による不正値リスクなし。 |
+| Firestore 書込の atomicity | 全 segments を accumulate → 最終 drift check 通過後に **`db.batch().commit()`** で原子書込 | 個別 `newDocRef.set()` 中失敗による partial child docs を構造的に排除（Codex H3 反映）。Storage の cleanup は別途 best-effort（`ifGenerationMatch` precondition 付き）。 |
+| `provenance.sourcePath` のフォーマット | GCS **object name のみ**（`gs://` prefix を含まない） | `parseGcsUri()` で fileUrl から bucket + objectName を分離、bucket mismatch は `failed-precondition` で abort。factory の runtime 検証で `gs://` 始まりを reject。 |
+
 ---
 
 ## 定数（ビジネスロジック設定値）
