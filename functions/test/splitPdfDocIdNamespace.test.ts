@@ -98,9 +98,11 @@ describe('splitPdf cleanup / atomic write 設計 (Issue #445 PR-D2 atomic batch)
     expect(content).to.match(/manualCleanupHint/);
   });
 
-  it('Firestore batch 失敗時は Error.cause で元例外を保持する (silent failure 防止)', () => {
-    expect(content).to.match(/wrapped\.cause\s*=\s*firestoreErr/);
-    expect(content).to.match(/throw wrapped/);
+  it('Firestore batch 失敗時は HttpsError(internal) で原因 message を client へ surface する (/review-pr silent-failure-hunter C1)', () => {
+    // 旧: throw wrapped (Error.cause) → INTERNAL に潰れる
+    // 新: throw new HttpsError('internal', ...message + originalErr.message..., { stage: 'firestoreBatch', ... })
+    expect(content).to.match(/HttpsError\(\s*['"]internal['"][\s\S]{0,400}firestoreErr/);
+    expect(content).to.match(/stage:\s*['"]firestoreBatch['"]/);
   });
 
   it('drift 検出時は HttpsError aborted で投げ retry max 後に最終 fail する', () => {

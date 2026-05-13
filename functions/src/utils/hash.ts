@@ -2,11 +2,11 @@
  * 暗号学的ハッシュ計算の共通 helper。
  *
  * 同一の `crypto.createHash('sha256').update(buffer).digest('hex')` idiom が
- * functions/scripts/test に 5+ 箇所散在していたため統一する (Issue #445 PR-D2 review)。
+ * functions/scripts/test に複数箇所散在していたため統一 (Issue #445 PR-D2 review)。
  *
- * 使用箇所: functions/src/pdf/pdfOperations.ts (source/derived sha256),
- * functions/src/pdf/provenance.ts (型整合の正規化), scripts/lib/parentPdfProvenance.ts
- * (将来 migrate 予定), pdf-feature-survey.ts (将来 migrate 予定)。
+ * 現在の使用箇所: `functions/src/pdf/pdfOperations.ts` の splitPdf 内 source/derived
+ * sha256 計算。他の inline `createHash('sha256')` 箇所 (`scripts/lib/parentPdfProvenance.ts`
+ * 等) の migrate は別 PR scope。
  */
 
 import * as crypto from 'crypto';

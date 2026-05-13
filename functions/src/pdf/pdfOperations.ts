@@ -562,7 +562,7 @@ export const splitPdf = onCall(
               docData.fileDateFormatted ?? timestampToDateString(docData.fileDate),
           });
 
-          // T4: provenance を factory で構築 (10 fields を runtime 検証)
+          // T2-3: provenance を factory で構築 (10 fields を runtime 検証)
           const provenance = createSplitProvenance({
             sourceGeneration: sourceSnapshot.generation,
             sourceMetageneration: sourceSnapshot.metageneration,
@@ -628,7 +628,22 @@ export const splitPdf = onCall(
           error: err instanceof Error ? err.message : String(err),
         });
         await cleanupAccumulatedStorageFiles(accumulated, 'segmentsLoop', documentId);
-        throw err;
+        // /review-pr silent-failure-hunter C2 反映: HttpsError 以外を rethrow すると
+        // Firebase Functions v2 が INTERNAL に潰すため明示的にラップする。
+        // pdf-lib parse error / GCS getMetadata 失敗 / provenance validation 等を
+        // 全て internal でラップし、原因 message を client へ伝える。
+        if (err instanceof HttpsError) throw err;
+        throw new HttpsError(
+          'internal',
+          `splitPdf segment processing failed at attempt ${attempt}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+          {
+            stage: 'segmentsLoop',
+            parentDocumentId: documentId,
+            accumulatedCount: accumulated.length,
+          }
+        );
       }
 
       // T3: Final drift check (Codex High 1/H2: generation + metageneration 両方比較)
@@ -667,7 +682,16 @@ export const splitPdf = onCall(
             `splitPdf aborted: source concurrent write detected after ${attempt + 1} attempts (${err.message})`
           );
         }
-        throw err;
+        // /review-pr silent-failure-hunter I-6: verifyFinalDrift の "Missing generation"
+        // 系 raw Error が INTERNAL に潰れないよう明示ラップ
+        if (err instanceof HttpsError) throw err;
+        throw new HttpsError(
+          'internal',
+          `splitPdf final drift check failed at attempt ${attempt}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+          { stage: 'finalDrift', parentDocumentId: documentId }
+        );
       }
 
       // T4: Atomic Firestore batch write (Codex High 3 + post-impl High: child + parent
@@ -705,11 +729,22 @@ export const splitPdf = onCall(
           'firestoreBatch',
           documentId
         );
-        const wrapped = new Error(
-          `splitPdf: Firestore batch commit failed (parent=${documentId}, segments=${accumulated.length})`
-        ) as Error & { cause?: unknown };
-        wrapped.cause = firestoreErr;
-        throw wrapped;
+        // /review-pr silent-failure-hunter C1: Firebase Functions v2 は非 HttpsError を
+        // INTERNAL (message: "INTERNAL") に潰す。明示的に internal でラップして
+        // 原因 message + structured details を client / 監視ログへ surface する。
+        throw new HttpsError(
+          'internal',
+          `splitPdf Firestore batch commit failed (parent=${documentId}, segments=${accumulated.length}): ${
+            firestoreErr instanceof Error
+              ? firestoreErr.message
+              : String(firestoreErr)
+          }`,
+          {
+            stage: 'firestoreBatch',
+            parentDocumentId: documentId,
+            accumulatedCount: accumulated.length,
+          }
+        );
       }
 
       return {
@@ -718,12 +753,22 @@ export const splitPdf = onCall(
       };
     }
 
-    // 全 attempts drift で失敗 (上記 throw でほぼ到達しないが安全網)
+    // 通常は到達不能 (retry loop 内 throw で 100% return / throw する)。
+    // 到達したら retry loop の制御フローが壊れている = bug。
+    // /review-pr silent-failure-hunter I-4 反映: 'aborted' は drift retry exhausted を意味し、
+    // この時点では「retry loop が return せず throw もせず抜けた」状態のため 'internal' が正確。
+    console.error('splitPdf: retry loop exited without explicit throw/return (logic bug)', {
+      operation: 'splitPdf',
+      stage: 'retryLoopExit',
+      parentDocumentId: documentId,
+      lastDriftError: lastDriftError?.message ?? null,
+    });
     throw new HttpsError(
-      'aborted',
-      `splitPdf aborted: source concurrent write detected (${
-        lastDriftError?.message ?? 'unknown drift'
-      })`
+      'internal',
+      `splitPdf: retry loop exited unexpectedly (parent=${documentId}, lastDrift=${
+        lastDriftError?.message ?? 'none'
+      })`,
+      { stage: 'retryLoopExit', parentDocumentId: documentId }
     );
   }
 );

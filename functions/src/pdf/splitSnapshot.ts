@@ -2,8 +2,9 @@
  * 分割 PDF Source Snapshot 取得 / Drift 検出 / GCS URI parsing
  *
  * ADR-0016 MUST 5 (同一 read snapshot で source\* を取得 + concurrent write 検出) を
- * 純粋関数で実装する。Codex MCP セカンドオピニオン thread `019e231a-...` の High 1/H2
- * 指摘を反映した「3-stage metadata-download-metadata 一致確認」パターン。
+ * 純粋関数で実装する。「3-stage metadata-download-metadata 一致確認」パターンで
+ * download 中の親 PDF 上書きを generation + metageneration 両方で検知する
+ * (Codex MCP セカンドオピニオン High 1/H2 指摘反映、詳細は PR #456 description 参照)。
  *
  * Issue #445 PR-D2 (splitPdf 改修) で利用。
  *
