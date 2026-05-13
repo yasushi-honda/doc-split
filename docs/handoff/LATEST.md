@@ -1,8 +1,111 @@
 # ハンドオフメモ
 
-**更新日**: 2026-05-13 session67 (**Issue #445 PR-D1 完遂: ADR-0016 + DocumentProvenance interface (10 fields) + data-model.md schema + Codex MCP review GO + /simplify + /safe-refactor + /review-pr 3 段階品質ゲート全 PASS + main merge `e21eabe` + main CI/Deploy success、Net 0**。Issue #432 (P0、PR-C3c で過去破壊修復完遂) の根本対策として、分割 PDF の identity 設計を **fileName 主体** から **docId namespace + provenance 10 fields 必須化** に正規化する設計合意を ADR-0016 で確立。Codex MCP セカンドオピニオン (新 thread `019e1f5d-...`) で **GO with required amendments** — High 3 (rotatePdfPages MUST 強化 / provenance 7→10 fields / splitPdf read snapshot 整合検証) + Medium 3 + Low 2 を全反映、`/simplify` 3 agent 並列で HIGH 1 (fileUrl backward compat try 順序) + MEDIUM 2 (Codex thread ID 露出削除) + Low 2 (PR-D2/D4 申し送り) を全反映、`/review-pr` で Critical 0 / High 0 / Medium 1 / 申し送り 2 件を全反映。実装コード変更ゼロ (設計フェーズ)、PR-D2〜D5 への申し送り (factory function / runtime 検証 / branded type / lint rule) を ADR Implementation Roadmap に明文化。次セッション着手候補: kanameone / cocoro 本番展開判断 (別 PR + 番号認可) / PR-D2 (splitPdf 改修) impl-plan)
-**ブランチ**: `main` (PR #454 squash merge 完了、`e21eabe`、main CI run #25776969014 success ✅、main Deploy run #25776969039 success ✅、pages build #25776968420 success ✅)
-**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + (session29-65 累積実績は archive 参照) + **Phase 8 (session66 = Issue #432 PR-C3c 完遂 / session67 = Issue #445 PR-D1 完遂 = ADR-0016 + DocumentProvenance + 3 段階品質ゲート、Net 0)** = Issue #432 P0 根本対策 + Issue #445 PR-D 系列の設計合意完遂
+**更新日**: 2026-05-14 session68 (**Issue #445 PR-D2 完遂: splitPdf provenance 10 fields 必須化 + 3-stage source snapshot + concurrent write 検出 + atomic batch.commit + cleanup helper + 5 段階品質ゲート全通過 + main merge `cb8d94a` + main CI/Deploy success、Net 0**。session67 で確立した ADR-0016 設計合意を実装フェーズへ移行。Codex MCP 2 段階セカンドオピニオン (impl-plan + post-impl、thread `019e231a-...`) で計 High 4 + Medium 5 + Low 5 を発見・全反映、`/simplify` 3 agent 並列で HIGH 1 (sha256Hex 抽出) + MEDIUM 2 (Buffer.from dedup) を反映、`/safe-refactor` 0 件、Evaluator 分離プロトコル (5+ files 発動) で APPROVE + LOW 3 反映 (endPage > PDF ページ数 invalid-argument 早期 abort)、`/review-pr` 6 agent 並列で Critical 3 (HttpsError ラップで INTERNAL 潰れ防止) + Important 3 (FE provenance クリア + 軽微 cleanup) を反映。Issue #432 P0 collision の構造的予防を確立 (Storage path 衝突は新規クライアント環境で原理的に発生不可能、source identity bit-perfect 証拠 5 fields + child identity 4 fields + audit 1 field = 10 fields の Firestore 永続化基盤完成)。次セッション着手候補: dev E2E 確認 (AC9) / kanameone・cocoro 本番展開判断 (別 PR + 番号認可) / PR-D3 (rotatePdfPages 改修) impl-plan)
+**ブランチ**: `main` (PR #456 squash merge 完了、`cb8d94a`、main CI run `25828945451` ✅、main Deploy run `25828945465` ✅、pages build run `25828944667` ✅)
+**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + (session29-66 累積実績は archive 参照) + **Phase 8 (session67 = Issue #445 PR-D1 完遂 = ADR-0016 + DocumentProvenance 設計合意 / session68 = Issue #445 PR-D2 完遂 = splitPdf provenance 10 fields 実装、Net 0)** = Issue #432 P0 collision の構造的予防完成 (新規クライアント等価運用基盤の核心実装)
+
+<a id="session68"></a>
+## ✅ session68 完了サマリー (2026-05-14: Issue #445 PR-D2 完遂、splitPdf provenance 10 fields 実装 + 5 段階品質ゲート + main merge `cb8d94a`、Net 0)
+
+session67 (PR-D1 完遂、PR #454 main merge `e21eabe`) で確立した ADR-0016 設計合意 (DocumentProvenance 10 fields interface + Firestore schema) を実装フェーズへ移行。`splitPdf` callable を retry loop + 3-stage source snapshot + accumulate + final drift check + atomic batch.commit に refactor し、新規分割 PDF が常に provenance 10 fields を持つよう構造的に保証。
+
+### 経緯
+
+1. **catchup**: session67 handoff 確認、次セッション着手項目から PR-D2 (Issue #445 forward-only) 選択 (kanameone/cocoro 本番展開は destructive で番号認可必須のため別 PR 建て)
+2. **`/impl-plan`**: T0-T8 タスク分解 + AC1-AC10 + 統合影響分析 + リスク評価 (Zod 未導入 → 手動 runtime 検証採用、Frontend は本 PR scope 外 = optional の breaking change なし)
+3. **T0 provenance.ts**: `createSplitProvenance()` factory + `assertValidProvenanceInput()` (sha256 hex 64桁 / generation 数値文字列 / path 非空 + gs:// prefix 禁止) + `ProvenanceValidationError`。admin/client Timestamp 互換性のため factory 境界で `as unknown as DocumentProvenance` 1 箇所キャスト
+4. **Codex MCP impl-plan review** (新 thread `019e231a-...`): **NO-GO** → High 3 (download→sha256→getMetadata は同一 snapshot ではない / metageneration 両方比較必須 / Firestore partial state) + Medium 4 (gs:// parser / jitter backoff / ifGenerationMatch / download 前後 metadata 変化テスト) + Low 3 全反映方針確認
+5. **T1-T4 splitSnapshot.ts + pdfOperations.ts refactor**: `parseGcsUri` / `verifySnapshotConsistency` / `verifyFinalDrift` / `acquireSourceSnapshot` (3-stage getMetadata→download→getMetadata 一致確認) / `backoffSleep` (100/300ms + jitter) / `SourceDriftError`。`splitPdf` を MAX_RETRIES=2 retry loop + `accumulated[]` (Firestore set 遅延) + final drift check + `db.batch().commit()` (child set + parent update 同一 commit) + `cleanupAccumulatedStorageFiles` (ifGenerationMatch precondition、`derivedGeneration=''` 時は unconditional delete fallback) に書換
+6. **T5-T8 tests + docs**: provenance.test.ts (18) / splitSnapshot.test.ts (24、acquireSourceSnapshot 4 件含む) / hash.test.ts (4) / splitPdfProvenanceContract.test.ts (15 grep contracts) / splitPdfDocIdNamespace.test.ts (拡張 12 = 旧 PR-B 設計 → 新 PR-D2 atomic batch 設計に書換) / splitPdfPayloadContract.test.ts (UPDATE_ANCHOR を `await docRef.update` → `batch.update(docRef,` 追従) / data-model.md +13 (実装注釈表)
+7. **`/simplify` 3 agent 並列**: HIGH 1 (efficiency: Buffer.from(newPdfBytes) 二重 allocation を排除、`file.save(newPdfBytes, ...)` + `sha256Hex(newPdfBytes)` で Uint8Array 直接) + MEDIUM 2 (reuse: sha256Hex 共通 helper `functions/src/utils/hash.ts` 新設) 反映。defer: parseGcsUri 既存 3 callsite migrate / segments loop 並列化 / sleep primitive 抽出 (別 PR)
+8. **`/safe-refactor`**: HIGH 0 / MEDIUM 0 / LOW 0 (`as unknown as` cast 1 箇所は admin/client Timestamp 互換性 + コメント明示で許容)
+9. **Codex MCP post-impl review** (同 thread `019e231a-...` 継続): **NO-GO** → High 1 (`batch.commit()` 後の `docRef.update()` が別 commit、partial state リスク) + Medium 1 (save 後・accumulated.push 前の orphan window) + Low 2 (unused import `verifySnapshotConsistency` / segments 500 batch limit) 全反映 → **GO**
+   - parent update を child set と同一 batch に統合 (1 commit atomic)
+   - `inflightEntry` を save 直後に即 accumulated に push、derivedGeneration / payload は後段で fill in
+   - cleanup helper を `item.derivedGeneration ? { ifGenerationMatch } : undefined` で precondition optional 化
+10. **Evaluator 分離プロトコル** (5+ files = quality-gate.md 発動): **APPROVE** / HIGH 0 / LOW 3 (Storage orphan best-effort 設計明示 / generation='0' falsy 判定 / endPage > PDF ページ数で pdf-lib raw Error) → LOW 3 反映 (`pdfDoc.getPageCount()` で照合し超過時 `HttpsError('invalid-argument')` 早期 abort)
+11. **PR #456 作成** + push (6 commits)、CI 全 green (lint-build-test ✅ / CodeRabbit ✅ / GitGuardian ✅)
+12. **`/review-pr` 6 agent 並列**:
+    - silent-failure-hunter **Critical 3** (segmentsLoop / finalDrift / firestoreBatch の 3 catch で非-HttpsError rethrow → Firebase Functions v2 が INTERNAL に潰す anti-pattern、プロジェクト error-handling-policy 違反) → 全 catch を `HttpsError('internal', '... + 原因 message', { stage, parentDocumentId, ... })` でラップ
+    - silent-failure-hunter I-4 (unreachable safety net) → `aborted` → `internal` + console.error 即時可視化
+    - code-reviewer **Important 1** (CLAUDE.md #178 MUST 違反: FE `getReprocessClearFields()` に `provenance` 欠落) → `provenance: deleteField()` 追加
+    - comment-analyzer Important 3 (hash.ts JSDoc factual error / T-numbering 不整合 / Codex thread ID 切り詰め) → 全修正
+    - 6 agent /review-pr で発見した「非-HttpsError throw → INTERNAL 潰れ」は Codex / Evaluator 全層が見落とした class of issue、レビュー深度の補完性実証
+    - defer: timeout budget / type AccumulatedSegment discriminated union / emulator integration test (PR-D3 で再検討 or 別 follow-up PR)
+13. **再 push + CI green 確認** → ユーザー番号認可「PR #456 をマージしてよい」取得 → `gh pr merge 456 --squash --delete-branch` → main merge `cb8d94a`
+14. **main CI/Deploy success**: CI run `25828945451` ✅ (5m18s) / Deploy run `25828945465` ✅ (6m42s) / pages build run `25828944667` ✅ (34s)
+
+### Issue Net 変化
+
+| 項目 | 内容 |
+|------|------|
+| Close 数 | 0 件 (Issue #445 は PR-D5 まで継続、PR-D2 単独では close せず) |
+| 起票数 | 0 件 |
+| **Net 変化 (session68 単独)** | **0 件** |
+
+**Net 0 の進捗判定**: ✅ 正の構造的進捗。Issue #432 (P0) collision の **構造的予防完成** — Storage path 衝突は新規クライアント環境で原理的に発生不可能 (`processed/{docId}/{fileName}` namespace + 10 fields provenance による bit-perfect identity 記録)。新規クライアント等価運用基盤 (Issue #445 要件 4) の核心実装完遂。triage 基準 #5 (ユーザー明示指示「推奨で」「OK」「GO」「PR #456 をマージしてよい」) 該当。
+
+### 主要 PR / 実行記録
+
+| 項目 | 値 |
+|---|---|
+| **本 PR (PR-D2)** | **PR #456 merged** (squash commit `cb8d94a`、6 commits、12 files +1,513/-239) |
+| commit (T0-T8 初回) | `02e162a` (8 files +1,360/-235) |
+| commit (/simplify HIGH 1 + MEDIUM 2 反映) | `d285a27` (4 files +77/-15) |
+| commit (Codex post-impl High + Medium + Low 反映) | `cae3066` (2 files +36/-21) |
+| commit (Codex post-impl Low 1 / segments 500 batch limit) | `1b42e36` (1 file +9) |
+| commit (Evaluator LOW 3 反映 / endPage 早期 abort) | `2779c65` (1 file +12) |
+| commit (/review-pr Critical 3 + Important 3 反映) | `b55cf18` (5 files +73/-22) |
+| Codex MCP thread (impl-plan + post-impl 2 段階) | `019e231a-3adc-74a0-b28e-3aee62c5f969` (High 4 + Medium 5 + Low 5、全反映) |
+| Evaluator agent | APPROVE (LOW 3 反映済) |
+| /review-pr agents | 6 並列 (code-reviewer / pr-test-analyzer / silent-failure-hunter / type-design-analyzer / comment-analyzer / code-simplifier) |
+| main CI (post-merge) | run `25828945451` ✅ success (5m18s) |
+| main Deploy (post-merge) | run `25828945465` ✅ success (6m42s) |
+| main pages build (post-merge) | run `25828944667` ✅ success (34s) |
+
+### AC 達成状況 (PR-D2 impl-plan 10 項目、最終状態)
+
+| AC | 達成 | 根拠 |
+|---|---|---|
+| AC1 | ✅ | `createSplitProvenance` export + `ProvenanceValidationError` throw (provenance.test.ts 18 tests) |
+| AC2 | ✅ | sha256 hex / generation 非数値 / path 空文字 / gs:// prefix 禁止 (5 ケース PASS) |
+| AC3 | ✅ | grep contract で 9 input fields + processed/${docId}/ パターン固定 (splitPdfProvenanceContract.test.ts 15 tests) |
+| AC4 | ✅ | `acquireSourceSnapshot` の buffer をそのまま sha256Hex に渡し、PDFDocument.load にも同 buffer (変数共有で同一性保証) |
+| AC5 | ✅ (部分) | HttpsError('aborted') + child 0 件 (atomic batch) + Storage cleanup (best-effort、ifGenerationMatch precondition + 構造化ログ) |
+| AC6 | ✅ | splitPdfPayloadContract.test.ts 5 + splitPdfDocIdNamespace.test.ts 12 + splitPdfProvenanceContract.test.ts 15 全 PASS |
+| AC7 | ✅ | tsc clean (functions + frontend) |
+| AC8 | ✅ | 1079 passing (前 998 → +81)、regression 0 |
+| AC9 | ⏳ | dev 環境 E2E (`https://doc-split-dev.web.app` で実 PDF split 1 件 → Firestore Console で provenance 10 fields 目視) は次セッション実施 |
+| AC10 | ✅ | Codex MCP 2 段階セカンドオピニオン GO 取得 (thread `019e231a-...`) |
+
+### 残 Open Issue (5 件、session67 から不変)
+
+| # | タイトル要約 | 状態 | 再開条件 |
+|---|---|---|---|
+| **#432** | [P0] 分割PDF 設計バグ | **PR-A〜C3c 修復完遂 + PR-D1 (ADR) + PR-D2 (本 `cb8d94a`) 予防完成** | 次セッションで kanameone / cocoro 本番展開判断 (別 PR + 番号認可)、復旧確認後 close |
+| **#445** | [P1] データモデル正規化 | **PR-D1 + PR-D2 完遂、PR-D3〜D5 残** | 次セッションで PR-D3 (rotatePdfPages 改修) impl-plan 着手候補 |
+| #402 | searchDocuments OOM ガード | 段階1 完了 | 観測データ判断 |
+| #251 | summaryGenerator unit test | Scope 2 完了 | sinon 導入伴う他タスク or Vertex AI false negative |
+| #238 | force-reindex 孤児 posting 検出 | 未着手 | 観測データ蓄積後 |
+
+### 教訓 (本セッション新規)
+
+- **Codex MCP 2 段階セカンドオピニオン (impl-plan + post-impl、同 thread 継続) が単発レビューでは発見できない根本指摘を補完**: impl-plan 段階で 3-stage snapshot / atomic batch の High 3 件を発見、post-impl 段階でも親 update 別 commit / save 後 orphan window の High + Medium 計 2 件を追加発見。実装後の view で初めて見える "interaction-level" の指摘 (個別 helper は正しいが組み合わせで穴が残る) は impl-plan 段階だけでは見えない。**destructive ではない forward-only 改修でも 2 段階 Codex 必須**として PR-D 系列に固定運用
+- **6 agent /review-pr で発見した「非-HttpsError throw → INTERNAL 潰れ」は Codex / Evaluator が全層で見落とした class of issue**: Codex MCP は MUST 5 / batch atomicity / orphan window の構造的問題に集中、Evaluator は AC 検証 + 設計妥当性に集中、silent-failure-hunter は error handling 完全性 (HttpsError 分類 / Promise.allSettled / .cause 保持) に集中。**「review 観点の補完性 = 多層化の正当性」を実証**、5 段階品質ゲート (Codex impl-plan / simplify / safe-refactor / Codex post-impl / Evaluator / review-pr) は冗長ではなく深度別の網
+- **`AccumulatedSegment` 二段ライフサイクル sentinel ('' / {}) は discriminated union 化候補 (type-design-analyzer Important)**: 本 PR scope では defer 妥当 (急修正は逆に refactor 範囲拡大 → 別の review round 必要)、PR-D3 で `rotatePdfPages` 改修時に同パターンが必要なら統合して discriminated union 化する想定 → `feedback_review_defer_for_scope_control.md` 候補
+- **CLAUDE.md #178 教訓 (派生フィールド追加時の 4 箇所漏れチェック) の自動検知は code-reviewer agent が初発見**: BE 側 (Firestore 書込 + 型定義 + shared/types.ts) は impl-plan / Codex / Evaluator が全カバー、**FE 側の `firestoreToDocument()` + `getReprocessClearFields()` 同期は code-reviewer (CLAUDE.md 準拠チェック専門) が拾った**。プロジェクト固有 MUST の lint 化 (派生フィールド追加時の grep gate) は今後の改善余地
+
+### 次セッション着手項目
+
+1. `/catchup` で本 handoff + Issue 状態確認
+2. **dev 環境 E2E 確認 (AC9)** — `https://doc-split-dev.web.app` で実 PDF split 1 件 → Firestore Console で child doc の `provenance` 10 fields 目視 (sourceGeneration / sourceMetageneration / sourceSha256 / sourcePath / sourceBucket / derivedObjectPath / derivedGeneration / derivedMetageneration / derivedSha256 / createdAt が全て存在し数値文字列 / hex / object name として正しい形)
+3. **kanameone 本番展開判断** (別 PR + 番号認可必須、Issue #432 close 候補): PR #452 (PR-C3c) の AC15-3 + AC18 + AC-CC1 + AC-PREFLIGHT を使い、kanameone 135 docs CCITTFaxDecode Ambiguous の解消を実機実行
+4. **cocoro 本番展開判断** (同上、被害 0 件想定だが survey + dry-run で確認)
+5. **PR-D3 (rotatePdfPages 改修) impl-plan** — in-place 編集禁止 + 新 path 書込 + 安全な delete 経路。本 PR の `AccumulatedSegment` を discriminated union 化する統合 refactor も検討候補。Codex MCP セカンドオピニオン (impl-plan + 実装後 2 段階) 必須
+6. **PR-D4 (既存 docs backfill) impl-plan** — destructive、kanameone ~5,725 + cocoro ~539 docs、GCS egress + Cloud Functions CPU 秒のフェルミ試算必須、dev リハーサル 7 stages × 2 周必須
+7. (option) **follow-up reuse/efficiency PRs**: `parseGcsUri` 既存 3 callsite (ocrProcessor / rotatePdfPages / deleteDocument) migrate / `sleep` primitive を `functions/src/utils/sleep.ts` に統合 (retry.ts / rateLimiter.ts と統一) / segments loop bounded concurrency 並列化 / emulator-based splitPdf integration test harness
+
+---
 
 <a id="session67"></a>
 ## ✅ session67 完了サマリー (2026-05-13: Issue #445 PR-D1 完遂、ADR-0016 + DocumentProvenance + main merge `e21eabe`、Net 0)
