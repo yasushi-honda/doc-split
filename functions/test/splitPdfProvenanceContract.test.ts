@@ -97,14 +97,19 @@ describe('splitPdf provenance 書込契約 (Issue #445 PR-D2 AC6 + Codex L3)', (
   });
 
   it('source sha256 は実際の download buffer から compute している (ADR MUST 5)', () => {
-    // createHash('sha256').update(buffer) が出現する (download した buffer が input)
-    expect(sourceText).to.match(/createHash\(['"]sha256['"]\)[\s\S]*?\.update\(buffer\)/);
+    // sha256Hex(buffer) で download した buffer から compute
+    expect(sourceText).to.match(/sha256Hex\(buffer\)/);
   });
 
-  it('derived sha256 は実際の newPdfBytes buffer から compute している', () => {
-    expect(sourceText).to.match(
-      /createHash\(['"]sha256['"]\)[\s\S]*?\.update\(Buffer\.from\(newPdfBytes\)\)/
-    );
+  it('derived sha256 は newPdfBytes (pdf-lib 出力) から compute している', () => {
+    // sha256Hex(newPdfBytes) を直接呼出 (Buffer.from で 2 重 allocate しない)
+    expect(sourceText).to.match(/sha256Hex\(newPdfBytes\)/);
+  });
+
+  it('sha256 計算は共通 helper sha256Hex を経由する (inline crypto.createHash 禁止)', () => {
+    expect(sourceText).to.match(/import\s*\{\s*sha256Hex\s*\}\s*from\s*['"]\.\.\/utils\/hash['"]/);
+    // pdfOperations.ts 内で inline createHash('sha256') を直接呼ばない (重複排除)
+    expect(sourceText).not.to.match(/crypto\.createHash\(['"]sha256['"]\)/);
   });
 
   it('Firestore は db.batch() で原子書込している (Codex H3 反映: partial state 排除)', () => {

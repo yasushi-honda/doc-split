@@ -11,8 +11,8 @@
 
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
-import * as crypto from 'crypto';
 import { PDFDocument, degrees } from 'pdf-lib';
+import { sha256Hex } from '../utils/hash';
 import {
   analyzePdf,
   generateSplitSummary,
@@ -384,11 +384,10 @@ export const splitPdf = onCall(
       try {
         const snap = await acquireSourceSnapshot(file);
         buffer = snap.buffer;
-        const sha256 = crypto.createHash('sha256').update(buffer).digest('hex');
         sourceSnapshot = {
           generation: snap.generation,
           metageneration: snap.metageneration,
-          sha256,
+          sha256: sha256Hex(buffer),
         };
       } catch (err) {
         if (err instanceof SourceDriftError) {
@@ -459,8 +458,9 @@ export const splitPdf = onCall(
           const newFilePath = `processed/${newDocRef.id}/${fileName}`;
           const newFile = bucket.file(newFilePath);
 
-          // Storage save (失敗は callable error として surface)
-          await newFile.save(Buffer.from(newPdfBytes), {
+          // Storage save (失敗は callable error として surface)。
+          // pdf-lib の Uint8Array を直接渡し、sha256 と共用して Buffer.from 二重 allocation を回避。
+          await newFile.save(newPdfBytes, {
             metadata: { contentType: 'application/pdf' },
           });
 
@@ -474,10 +474,7 @@ export const splitPdf = onCall(
               `Failed to retrieve derived metadata for ${newFilePath} (gen=${derivedGeneration}, meta=${derivedMetageneration})`
             );
           }
-          const derivedSha256 = crypto
-            .createHash('sha256')
-            .update(Buffer.from(newPdfBytes))
-            .digest('hex');
+          const derivedSha256 = sha256Hex(newPdfBytes);
 
           // 分割後のページ結果を抽出
           const segmentPageResults = (docData.pageResults || []).filter(
