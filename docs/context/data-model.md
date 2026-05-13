@@ -645,7 +645,7 @@ interface PageRotation {
 | derivedGeneration | string | 子 Storage object 書込後の generation（bit-perfect 照合用、ADR-0016 MUST 2） |
 | derivedMetageneration | string | 子 Storage object 書込後の metageneration |
 | derivedSha256 | string | 子 PDF bytes の sha256（hex）、子 object 書込後に compute / metadata 取得 |
-| createdAt | Timestamp | provenance 書込時刻（= split 完了時刻）。**audit field**、bytes identity 照合対象ではない |
+| createdAt | Timestamp | provenance 書込時刻（= split 完了時刻）。**audit field**、bytes identity 照合対象ではない。既存 `processedAt` / `fileDate` と同じ慣習で、`shared/types.ts` は `firebase/firestore` 由来 `Timestamp` を使用、admin SDK 側（functions/）では構造的に互換な admin Timestamp を書込む |
 
 ```typescript
 interface DocumentProvenance {
