@@ -701,8 +701,17 @@ async function verifySurveyManifestAgainstCurrentGcs(
   const entries = artifact.sourceManifestEntries!;
 
   if (ref.bucket === 'local') {
-    console.log(
-      `Survey artifact is in local mode (bucket='local'). Skipping GCS state verification (AC15-3 only verifies artifact internal consistency for local mode).`
+    // Codex session66 review (High 1件) 反映: local survey artifact は本来 unit test 用で、
+    // classify は GCS 前提のため、通常運用では reject が安全。明示 opt-in
+    // (ALLOW_LOCAL_SURVEY_ARTIFACT=1) のときだけ skip を許可する。
+    if (process.env.ALLOW_LOCAL_SURVEY_ARTIFACT !== '1') {
+      console.error(
+        `FATAL: survey artifact is in local mode (bucket='local') but classify runs against GCS bucket='${classifyBucketName}' (AC15-3). Set ALLOW_LOCAL_SURVEY_ARTIFACT=1 explicitly to bypass GCS verification (intended only for local/CI test flows).`
+      );
+      process.exit(2);
+    }
+    console.warn(
+      `WARN: Survey artifact in local mode (bucket='local'), but ALLOW_LOCAL_SURVEY_ARTIFACT=1 set. Skipping AC15-3 GCS state verification (opt-in bypass for test flows).`
     );
     return;
   }
