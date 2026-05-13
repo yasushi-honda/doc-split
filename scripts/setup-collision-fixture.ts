@@ -94,12 +94,16 @@ async function makeParentPdf(): Promise<Buffer> {
     path.resolve(__dirname, 'fixtures/with-ccittfaxdecode.pdf')
   );
   const ccittSrc = await PDFDocument.load(ccittBytes, { ignoreEncryption: true });
-  const [embeddedPage] = await pdf.embedPdf(ccittSrc, [0]);
+  // copyPages で source page を deep copy する。embedPdf + drawPage だと CCITT Image
+  // XObject が Form XObject 内に wrap され、survey の XObject scanner (非再帰、Page
+  // resources 直下のみ走査) で /Subtype=/Image として検出されないため。
+  // copyPages は source page の resources tree を target に直接 transfer するので、
+  // Page resources 直下に CCITT Image XObject が来る。
   for (let i = 0; i < 5; i++) {
-    const page = pdf.addPage([100, 100]);
-    // CCITT XObject を含む embedded page を base として draw
-    page.drawPage(embeddedPage, { x: 0, y: 0, width: 100, height: 100 });
+    const [copiedPage] = await pdf.copyPages(ccittSrc, [0]);
+    pdf.addPage(copiedPage);
     // 各ページ識別用矩形 (page bytes に差を作って fingerprint 区別性を保つ)
+    const page = pdf.getPage(pdf.getPageCount() - 1);
     page.drawRectangle({ x: 10 + i * 5, y: 10 + i * 5, width: 30, height: 30 });
   }
   return Buffer.from(await pdf.save());
