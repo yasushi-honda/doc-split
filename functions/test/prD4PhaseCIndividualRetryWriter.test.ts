@@ -190,8 +190,8 @@ describe('processFallback (PR-D4 S1-4 Phase C BF18/BF23)', () => {
     });
   });
 
-  describe('precondition Map 不在 (defense in depth)', () => {
-    it('lastUpdateTimePreconditions に entry 不在 → 隔離 retryCount=0 (silent fail させない)', async () => {
+  describe('caller-bug paths (code-reviewer #3、observability 別軸)', () => {
+    it('lastUpdateTimePreconditions に entry 不在 → unprocessableDocs.reason="missing" に分類 (drift と混同しない)', async () => {
       const adapter = new FakeIndividualAdapter();
       const rl = new FakeRateLimiter();
       const result = await processFallback(
@@ -203,9 +203,32 @@ describe('processFallback (PR-D4 S1-4 Phase C BF18/BF23)', () => {
         adapter,
         rl
       );
-      expect(result.preconditionFailedDocs).to.deep.equal([
-        { docId: 'orphan', reason: 'lastUpdateTime drift', retryCount: 0 },
-      ]);
+      expect(result.preconditionFailedDocs).to.deep.equal([]);
+      expect(result.unprocessableDocs).to.have.length(1);
+      expect(result.unprocessableDocs[0].docId).to.equal('orphan');
+      expect(result.unprocessableDocs[0].reason).to.equal('missing');
+      expect(result.unprocessableDocs[0].message).to.match(/caller bug/);
+      expect(adapter.updateCalls).to.have.length(0);
+    });
+
+    it('provenance に invalid sha256 → unprocessableDocs.reason="validation" に分類', async () => {
+      const adapter = new FakeIndividualAdapter();
+      const rl = new FakeRateLimiter();
+      const broken = buildCandidate('broken');
+      broken.computedProvenance.derivedSha256 = 'not-a-sha256';
+      const result = await processFallback(
+        {
+          ...BASE_INPUT,
+          candidates: [broken],
+          lastUpdateTimePreconditions: preconditionMap(['broken']),
+        },
+        adapter,
+        rl
+      );
+      expect(result.preconditionFailedDocs).to.deep.equal([]);
+      expect(result.unprocessableDocs).to.have.length(1);
+      expect(result.unprocessableDocs[0].reason).to.equal('validation');
+      expect(result.unprocessableDocs[0].message).to.match(/derivedSha256/);
       expect(adapter.updateCalls).to.have.length(0);
     });
   });

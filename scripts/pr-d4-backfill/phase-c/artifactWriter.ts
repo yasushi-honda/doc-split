@@ -18,8 +18,10 @@ import type {
   PhaseCBackfillChunk,
   PhaseCBackfillSummary,
   PhaseCImmutableSkippedDoc,
+  PhaseCOutOfScopeDoc,
   PhaseCPreconditionFailedDoc,
   PhaseCRateLimiterConfig,
+  PhaseCUnprocessableDoc,
   PhaseCWrittenDoc,
 } from '../types';
 import { PR_D4_ARTIFACT_SCHEMA_VERSION, PR_D4_SCRIPT_VERSION } from '../types';
@@ -41,12 +43,14 @@ export interface WritePhaseCChunkInput {
   writtenDocs: PhaseCWrittenDoc[];
   preconditionFailedDocs: PhaseCPreconditionFailedDoc[];
   immutableSkippedDocs: PhaseCImmutableSkippedDoc[];
+  unprocessableDocs: PhaseCUnprocessableDoc[];
+  outOfScopeDocs: PhaseCOutOfScopeDoc[];
 }
 
 /**
  * 1 chunk 書込 (orchestrator が per-chunk flush で呼ぶ)。
- * chunk の docCount は writtenDocs.length を採用 (Phase A/B と同じ意味論)。
- * precondition / immutable skipped 件数は main artifact の集計値で別途記録される。
+ * Codex 5th I3 反映: chunk docCount は全カテゴリ合計 (BF22 artifact 完全性、運用者が
+ * 「この chunk で扱った全 doc 数」を pointer 単独で把握可能)。
  */
 export async function writePhaseCChunk(
   input: WritePhaseCChunkInput,
@@ -58,6 +62,8 @@ export async function writePhaseCChunk(
     writtenDocs: input.writtenDocs,
     preconditionFailedDocs: input.preconditionFailedDocs,
     immutableSkippedDocs: input.immutableSkippedDocs,
+    unprocessableDocs: input.unprocessableDocs,
+    outOfScopeDocs: input.outOfScopeDocs,
   };
   const chunkContent = JSON.stringify(chunkBody);
   const chunkPath = buildObjectPath(
@@ -66,10 +72,16 @@ export async function writePhaseCChunk(
     `phase-c-backfill-summary-chunk-${input.chunkIndex}.json`
   );
   await writer.writeJson(chunkPath, chunkContent);
+  const totalDocCount =
+    input.writtenDocs.length +
+    input.preconditionFailedDocs.length +
+    input.immutableSkippedDocs.length +
+    input.unprocessableDocs.length +
+    input.outOfScopeDocs.length;
   return {
     path: chunkPath,
     sha256: sha256Hex(chunkContent),
-    docCount: input.writtenDocs.length,
+    docCount: totalDocCount,
   };
 }
 
@@ -85,6 +97,10 @@ export interface FinalizePhaseCInput {
   writtenDocs: number;
   preconditionFailedDocs: number;
   skippedImmutable: number;
+  /** Codex 5th C2 反映: missing / validation 不能 doc の集計 */
+  unprocessableDocs: number;
+  /** Codex 5th C1 反映: hard-gate で除外された Phase C スコープ外 doc の集計 */
+  outOfScopeDocs: number;
   lockAcquiredGeneration: string;
   lockReleasedAt: string;
   rateLimiterConfig: PhaseCRateLimiterConfig;
@@ -121,6 +137,8 @@ export async function finalizePhaseCArtifact(
     writtenDocs: input.writtenDocs,
     preconditionFailedDocs: input.preconditionFailedDocs,
     skippedImmutable: input.skippedImmutable,
+    unprocessableDocs: input.unprocessableDocs,
+    outOfScopeDocs: input.outOfScopeDocs,
     lockAcquiredGeneration: input.lockAcquiredGeneration,
     lockReleasedAt: input.lockReleasedAt,
     rateLimiterConfig: input.rateLimiterConfig,

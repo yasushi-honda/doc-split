@@ -23,6 +23,7 @@ import { ProvenanceValidationError } from '../../../functions/src/pdf/provenance
 import type {
   PhaseBRevalidatedCandidate,
   PhaseCPreconditionFailedDoc,
+  PhaseCUnprocessableDoc,
   PhaseCWrittenDoc,
 } from '../types';
 import { PR_D4_PHASE_C_INDIVIDUAL_RETRY_MAX } from '../types';
@@ -59,6 +60,11 @@ export interface ProcessFallbackInput {
 export interface ProcessFallbackOutcome {
   writtenDocs: PhaseCWrittenDoc[];
   preconditionFailedDocs: PhaseCPreconditionFailedDoc[];
+  /**
+   * caller-bug 経路 (lastUpdateTimePreconditions 不在 / ProvenanceValidationError) を
+   * 'lastUpdateTime drift' と混同せず、unprocessable に分類 (code-reviewer #3 反映)。
+   */
+  unprocessableDocs: PhaseCUnprocessableDoc[];
 }
 
 /**
@@ -114,16 +120,17 @@ export async function processFallback(
   const retryMax = input.retryMax ?? PR_D4_PHASE_C_INDIVIDUAL_RETRY_MAX;
   const writtenDocs: PhaseCWrittenDoc[] = [];
   const preconditionFailedDocs: PhaseCPreconditionFailedDoc[] = [];
+  const unprocessableDocs: PhaseCUnprocessableDoc[] = [];
 
   for (const candidate of input.candidates) {
     const lastUpdateTime = input.lastUpdateTimePreconditions.get(candidate.docId);
     if (!lastUpdateTime) {
       // batchWriter outcome から渡された Map に必ず entry がある前提だが、defense-in-depth:
-      // entry 不在は隔離 (= caller のバグだが silent fail させない)
-      preconditionFailedDocs.push({
+      // entry 不在は caller-bug = unprocessable に分類 (drift とは別観測軸、code-reviewer #3 反映)
+      unprocessableDocs.push({
         docId: candidate.docId,
-        reason: 'lastUpdateTime drift',
-        retryCount: 0,
+        reason: 'missing',
+        message: 'lastUpdateTimePreconditions entry absent (caller bug)',
       });
       continue;
     }
@@ -133,11 +140,11 @@ export async function processFallback(
     } catch (e) {
       if (e instanceof ProvenanceValidationError) {
         // validation error は batchWriter scope で既に除外済の前提だが、defense:
-        // skip 扱いではなく隔離 (caller observability)
-        preconditionFailedDocs.push({
+        // unprocessable に分類 (caller observability、drift とは別観測軸)
+        unprocessableDocs.push({
           docId: candidate.docId,
-          reason: 'lastUpdateTime drift',
-          retryCount: 0,
+          reason: 'validation',
+          message: e.message,
         });
         continue;
       }
@@ -175,5 +182,5 @@ export async function processFallback(
     }
   }
 
-  return { writtenDocs, preconditionFailedDocs };
+  return { writtenDocs, preconditionFailedDocs, unprocessableDocs };
 }

@@ -16,7 +16,9 @@ import type {
   PhaseCBackfillChunk,
   PhaseCBackfillSummary,
   PhaseCImmutableSkippedDoc,
+  PhaseCOutOfScopeDoc,
   PhaseCPreconditionFailedDoc,
+  PhaseCUnprocessableDoc,
   PhaseCWrittenDoc,
 } from '../../scripts/pr-d4-backfill/types';
 
@@ -62,6 +64,17 @@ describe('Phase C artifactWriter (PR-D4 S1-4 BF22)', () => {
       const immutableSkippedDocs: PhaseCImmutableSkippedDoc[] = [
         { docId: 'd3', reason: 'provenance exists, provenanceBackfill absent' },
       ];
+      const unprocessableDocs: PhaseCUnprocessableDoc[] = [
+        { docId: 'd4', reason: 'missing' },
+      ];
+      const outOfScopeDocs: PhaseCOutOfScopeDoc[] = [
+        {
+          docId: 'd5',
+          reason: 'confidence not derived-bytes-verified',
+          observedCategory: 'MatchedByHash',
+          observedConfidence: 'child-snapshot-only',
+        },
+      ];
 
       const pointer = await writePhaseCChunk(
         {
@@ -71,6 +84,8 @@ describe('Phase C artifactWriter (PR-D4 S1-4 BF22)', () => {
           writtenDocs,
           preconditionFailedDocs,
           immutableSkippedDocs,
+          unprocessableDocs,
+          outOfScopeDocs,
         },
         writer
       );
@@ -85,13 +100,16 @@ describe('Phase C artifactWriter (PR-D4 S1-4 BF22)', () => {
       expect(parsed.writtenDocs).to.have.length(1);
       expect(parsed.preconditionFailedDocs).to.have.length(1);
       expect(parsed.immutableSkippedDocs).to.have.length(1);
+      expect(parsed.unprocessableDocs).to.have.length(1);
+      expect(parsed.outOfScopeDocs).to.have.length(1);
 
       expect(pointer.path).to.equal(writer.objects[0].path);
       expect(pointer.sha256).to.equal(sha256Hex(writer.objects[0].content));
-      expect(pointer.docCount).to.equal(1); // writtenDocs.length
+      // Codex 5th I3 反映: docCount は全カテゴリ合計 (BF22 artifact 完全性)
+      expect(pointer.docCount).to.equal(5);
     });
 
-    it('docCount = writtenDocs.length のみ (precondition/skip は含めない)', async () => {
+    it('docCount = 全カテゴリ合計 (Codex 5th I3、writtenDocs だけでなく precondition/skip/unprocessable/outOfScope も含める)', async () => {
       const writer = new FakeArtifactWriter();
       const pointer = await writePhaseCChunk(
         {
@@ -106,10 +124,15 @@ describe('Phase C artifactWriter (PR-D4 S1-4 BF22)', () => {
           immutableSkippedDocs: [
             { docId: 'z', reason: 'provenance exists, provenanceBackfill absent' },
           ],
+          unprocessableDocs: [
+            { docId: 'u1', reason: 'missing' },
+            { docId: 'u2', reason: 'validation', message: 'invalid sha256' },
+          ],
+          outOfScopeDocs: [],
         },
         writer
       );
-      expect(pointer.docCount).to.equal(0);
+      expect(pointer.docCount).to.equal(5);
     });
   });
 
@@ -140,9 +163,11 @@ describe('Phase C artifactWriter (PR-D4 S1-4 BF22)', () => {
           phaseBArtifactRef: 'gs://x/phase-b-revalidation-summary.json',
           phaseBManifestSha256: 'phase-b-manifest-sha',
           candidatesIn: 100,
-          writtenDocs: 98,
+          writtenDocs: 96,
           preconditionFailedDocs: 1,
           skippedImmutable: 1,
+          unprocessableDocs: 1,
+          outOfScopeDocs: 1,
           lockAcquiredGeneration: '12345',
           lockReleasedAt: '2026-05-15T00:30:01.000Z',
           rateLimiterConfig: { tokensPerSecond: 100, burstCapacity: 100 },
@@ -150,7 +175,7 @@ describe('Phase C artifactWriter (PR-D4 S1-4 BF22)', () => {
             {
               path: `gs://${BUCKET}/pr-d4-backfill-artifacts/${RUN_ID}/phase-c-backfill-summary-chunk-0.json`,
               sha256: 'c'.repeat(64),
-              docCount: 98,
+              docCount: 100,
             },
           ],
           existingManifest,
@@ -170,9 +195,19 @@ describe('Phase C artifactWriter (PR-D4 S1-4 BF22)', () => {
       expect(mainBody.schemaVersion).to.equal('pr-d4-v1.0');
       expect(mainBody.env).to.equal('dev');
       expect(mainBody.candidatesIn).to.equal(100);
-      expect(mainBody.writtenDocs).to.equal(98);
+      expect(mainBody.writtenDocs).to.equal(96);
       expect(mainBody.preconditionFailedDocs).to.equal(1);
       expect(mainBody.skippedImmutable).to.equal(1);
+      expect(mainBody.unprocessableDocs).to.equal(1);
+      expect(mainBody.outOfScopeDocs).to.equal(1);
+      // 保全式: candidatesIn = writtenDocs + preconditionFailedDocs + skippedImmutable + unprocessableDocs + outOfScopeDocs
+      expect(
+        mainBody.writtenDocs +
+          mainBody.preconditionFailedDocs +
+          mainBody.skippedImmutable +
+          mainBody.unprocessableDocs +
+          mainBody.outOfScopeDocs
+      ).to.equal(mainBody.candidatesIn);
       expect(mainBody.lockAcquiredGeneration).to.equal('12345');
       expect(mainBody.chunks).to.have.length(1);
       expect(mainBody.rateLimiterConfig).to.deep.equal({
@@ -208,6 +243,8 @@ describe('Phase C artifactWriter (PR-D4 S1-4 BF22)', () => {
           writtenDocs: 0,
           preconditionFailedDocs: 0,
           skippedImmutable: 0,
+          unprocessableDocs: 0,
+          outOfScopeDocs: 0,
           lockAcquiredGeneration: '1',
           lockReleasedAt: '2026-05-15T00:30:01.000Z',
           rateLimiterConfig: { tokensPerSecond: 100, burstCapacity: 100 },

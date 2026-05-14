@@ -60,8 +60,19 @@ export class GcsLockStoreImpl implements LockObjectStore {
         preconditionOpts: { ifGenerationMatch: 0 },
         metadata: { cacheControl: 'no-store' },
       });
+      // Codex 5th I1 反映 + code-reviewer suggestion: generation strict validation。
+      // save() と getMetadata() の間に他者が delete + 再 create する race window は理論上存在するが、
+      // ifGenerationMatch:0 で save 成功直後に delete + 別 owner save が起きる現実的シナリオは
+      // 極めて稀。defensive に generation が numeric digit string であることを runtime 検証し、
+      // 空文字 / 不正値の場合は throw して silent failure を避ける。
       const [metadata] = await file.getMetadata();
-      return { acquired: true, generation: String(metadata.generation ?? '') };
+      const generation = String(metadata.generation ?? '');
+      if (!/^[0-9]+$/.test(generation)) {
+        throw new Error(
+          `lock acquired but generation invalid (path=${input.path}, generation="${generation}")`
+        );
+      }
+      return { acquired: true, generation };
     } catch (err) {
       const code = (err as { code?: number }).code;
       if (code === 412) {

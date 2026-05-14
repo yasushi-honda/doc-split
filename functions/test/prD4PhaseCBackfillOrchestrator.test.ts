@@ -327,7 +327,7 @@ describe('runPhaseC orchestrator (PR-D4 S1-4 統合)', () => {
     expect(manifestWrite!.precondition).to.exist;
   });
 
-  it('既存 lock 検出 → LockHeldByOthersError throw (Phase B artifact は読まない)', async () => {
+  it('既存 lock 検出 → LockHeldByOthersError throw (Phase B artifact は読まない、別 owner lock は解放されない)', async () => {
     const storage = new FakeArtifactStorage();
     const lock = new FakeLockStore();
     const batch = new FakeBatchAdapter();
@@ -353,8 +353,9 @@ describe('runPhaseC orchestrator (PR-D4 S1-4 統合)', () => {
     }
     expect(err).to.be.instanceOf(LockHeldByOthersError);
     expect(batch.commitCalls).to.equal(0);
-    // lock 解放呼び出し試行はあるが、別 owner なので失敗 (best-effort)
-    // FakeLockStore は generation mismatch で error throw → swallow
+    // acquire 失敗時は orchestrator の try ブロックに入らない → release も呼ばれない
+    // (= 別 owner の lock が誤って解放されないことを構造的に保証、code-reviewer #5 反映)
+    expect(lock.released).to.equal(0);
   });
 
   it('batch 失敗 → fallback individual update で 5 件書込', async () => {
@@ -409,5 +410,85 @@ describe('runPhaseC orchestrator (PR-D4 S1-4 統合)', () => {
     expect(result.writtenDocs).to.equal(0);
     expect(lock.released).to.equal(1);
     expect(batch.commitCalls).to.equal(0);
+  });
+
+  it('保全式: candidatesIn = writtenDocs + preconditionFailedDocs + skippedImmutable + unprocessableDocs + outOfScopeDocs (Evaluator HIGH 反映)', async () => {
+    const storage = new FakeArtifactStorage();
+    const lock = new FakeLockStore();
+    const batch = new FakeBatchAdapter();
+    const individual = new FakeIndividualAdapter();
+    const rateLimiter = new FakeRateLimiter();
+    const candidates = Array.from({ length: 5 }, (_, i) => buildCandidate(`d${i}`));
+    storage.seedPhaseBArtifacts(candidates);
+
+    const result = await runPhaseC(
+      buildRunInput({ storage, lock, batch, individual, rateLimiter })
+    );
+    expect(
+      result.writtenDocs +
+        result.preconditionFailedDocs +
+        result.skippedImmutable +
+        result.unprocessableDocs +
+        result.outOfScopeDocs
+    ).to.equal(result.candidatesIn);
+  });
+
+  it('out-of-scope hard-gate (Codex 5th C1): Phase B の異種 candidate は outOfScopeDocs に記録され Firestore 書込なし', async () => {
+    const storage = new FakeArtifactStorage();
+    const lock = new FakeLockStore();
+    const batch = new FakeBatchAdapter();
+    const individual = new FakeIndividualAdapter();
+    const rateLimiter = new FakeRateLimiter();
+    // 1 doc を out-of-scope (Ambiguous + child-snapshot-only) で混入
+    const outOfScope = buildCandidate('amb-1');
+    outOfScope.category = 'Ambiguous';
+    outOfScope.computedConfidence = 'child-snapshot-only';
+    const candidates = [buildCandidate('ok-1'), outOfScope, buildCandidate('ok-2')];
+    storage.seedPhaseBArtifacts(candidates);
+
+    const result = await runPhaseC(
+      buildRunInput({ storage, lock, batch, individual, rateLimiter })
+    );
+    expect(result.candidatesIn).to.equal(3);
+    expect(result.writtenDocs).to.equal(2); // ok-1 + ok-2
+    expect(result.outOfScopeDocs).to.equal(1);
+    expect(result.preconditionFailedDocs).to.equal(0);
+    // 保全式
+    expect(
+      result.writtenDocs +
+        result.preconditionFailedDocs +
+        result.skippedImmutable +
+        result.unprocessableDocs +
+        result.outOfScopeDocs
+    ).to.equal(result.candidatesIn);
+  });
+
+  it('lockReleasedAt は release 後の時刻 (Evaluator MEDIUM 反映、finalize 開始時刻ではない)', async () => {
+    const storage = new FakeArtifactStorage();
+    const lock = new FakeLockStore();
+    const batch = new FakeBatchAdapter();
+    const individual = new FakeIndividualAdapter();
+    const rateLimiter = new FakeRateLimiter();
+    storage.seedPhaseBArtifacts([buildCandidate('d1')]);
+
+    // nowProvider が呼ばれた順を観測
+    const nowCalls: string[] = [];
+    let i = 0;
+    const times = [
+      '2026-05-15T00:00:00.000Z', // backfillStartedAt
+      '2026-05-15T00:30:00.000Z', // lockReleasedAt (release 後)
+    ];
+    const input = buildRunInput({ storage, lock, batch, individual, rateLimiter });
+    input.nowProvider = () => {
+      const t = times[Math.min(i, times.length - 1)];
+      nowCalls.push(t);
+      i++;
+      return t;
+    };
+
+    const result = await runPhaseC(input);
+    expect(result.lockReleasedAt).to.equal('2026-05-15T00:30:00.000Z');
+    // lock 解放は finalize 前 = nowProvider 2 回目より前に lock.released が increment
+    expect(lock.released).to.equal(1);
   });
 });

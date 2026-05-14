@@ -133,7 +133,8 @@ describe('processBatch (PR-D4 S1-4 Phase C BF10/BF11/BF14/BF18/BF23)', () => {
       if (result.outcome !== 'all-committed') throw new Error('unreachable');
       expect(result.writtenDocs).to.have.length(20);
       expect(result.immutableSkippedDocs).to.deep.equal([]);
-      expect(result.missingDocs).to.deep.equal([]);
+      expect(result.unprocessableDocs).to.deep.equal([]);
+      expect(result.outOfScopeDocs).to.deep.equal([]);
       // 全 writtenDoc が writeStatus=ok + sha256 + lastUpdateTimeAfter
       for (const w of result.writtenDocs) {
         expect(w.writeStatus).to.equal('ok');
@@ -241,8 +242,8 @@ describe('processBatch (PR-D4 S1-4 Phase C BF10/BF11/BF14/BF18/BF23)', () => {
     });
   });
 
-  describe('missing doc handling', () => {
-    it('doc 不在 (re-read で exists=false) → missingDocs に記録 + batch から除外', async () => {
+  describe('unprocessable doc handling (Codex 5th C2)', () => {
+    it('doc 不在 (re-read で exists=false) → unprocessableDocs.reason="missing" に記録', async () => {
       const { rateLimiter, adapter } = freshDeps();
       const candidates = [buildCandidate('found'), buildCandidate('missing')];
       adapter.snapshots.set('found', {
@@ -268,7 +269,92 @@ describe('processBatch (PR-D4 S1-4 Phase C BF10/BF11/BF14/BF18/BF23)', () => {
       expect(result.outcome).to.equal('all-committed');
       if (result.outcome !== 'all-committed') throw new Error('unreachable');
       expect(result.writtenDocs.map((w) => w.docId)).to.deep.equal(['found']);
-      expect(result.missingDocs).to.deep.equal(['missing']);
+      expect(result.unprocessableDocs).to.deep.equal([{ docId: 'missing', reason: 'missing' }]);
+    });
+
+    it('provenance fields に invalid sha256 が含まれる → unprocessableDocs.reason="validation"', async () => {
+      const { rateLimiter, adapter } = freshDeps();
+      const broken = buildCandidate('broken');
+      broken.computedProvenance.derivedSha256 = 'not-a-sha256'; // ProvenanceValidationError 誘発
+      adapter.snapshots.set('broken', {
+        exists: true,
+        updateTime: '2026-05-14T22:00:00.000Z',
+        provenance: undefined,
+        provenanceBackfill: undefined,
+      });
+      const result = await processBatch(
+        {
+          candidates: [broken],
+          backfillScriptVersion: BACKFILL_SCRIPT_VERSION,
+          backfilledAt: Timestamp.fromDate(new Date('2026-05-15T00:00:00.000Z')),
+        },
+        adapter,
+        rateLimiter
+      );
+      expect(result.outcome).to.equal('all-committed');
+      if (result.outcome !== 'all-committed') throw new Error('unreachable');
+      expect(result.writtenDocs).to.have.length(0);
+      expect(result.unprocessableDocs).to.have.length(1);
+      expect(result.unprocessableDocs[0].docId).to.equal('broken');
+      expect(result.unprocessableDocs[0].reason).to.equal('validation');
+      expect(result.unprocessableDocs[0].message).to.match(/derivedSha256/);
+    });
+  });
+
+  describe('out-of-scope hard-gate (Codex 5th C1、impl-plan §4.0)', () => {
+    it('category !== MatchedByHash → outOfScopeDocs に分類 (書込なし)', async () => {
+      const { rateLimiter, adapter } = freshDeps();
+      const c = buildCandidate('amb');
+      c.category = 'Ambiguous';
+      c.computedConfidence = 'child-snapshot-only';
+      adapter.snapshots.set('amb', {
+        exists: true,
+        updateTime: '2026-05-14T22:00:00.000Z',
+        provenance: undefined,
+        provenanceBackfill: undefined,
+      });
+      const result = await processBatch(
+        {
+          candidates: [c],
+          backfillScriptVersion: BACKFILL_SCRIPT_VERSION,
+          backfilledAt: Timestamp.fromDate(new Date('2026-05-15T00:00:00.000Z')),
+        },
+        adapter,
+        rateLimiter
+      );
+      expect(result.outcome).to.equal('all-committed');
+      if (result.outcome !== 'all-committed') throw new Error('unreachable');
+      expect(result.writtenDocs).to.have.length(0);
+      expect(result.outOfScopeDocs).to.deep.equal([
+        {
+          docId: 'amb',
+          reason: 'category not MatchedByHash',
+          observedCategory: 'Ambiguous',
+          observedConfidence: 'child-snapshot-only',
+        },
+      ]);
+      // hard-gate で commit / reReadForBatch すら呼ばれない
+      expect(adapter.commitCalls).to.have.length(0);
+      expect(adapter.reReadCalls).to.have.length(0);
+    });
+
+    it('MatchedByHash + confidence !== derived-bytes-verified → outOfScopeDocs に分類', async () => {
+      const { rateLimiter, adapter } = freshDeps();
+      const c = buildCandidate('snapshot');
+      c.computedConfidence = 'child-snapshot-only'; // MatchedByHash のままだが confidence 違い
+      const result = await processBatch(
+        {
+          candidates: [c],
+          backfillScriptVersion: BACKFILL_SCRIPT_VERSION,
+          backfilledAt: Timestamp.fromDate(new Date('2026-05-15T00:00:00.000Z')),
+        },
+        adapter,
+        rateLimiter
+      );
+      expect(result.outcome).to.equal('all-committed');
+      if (result.outcome !== 'all-committed') throw new Error('unreachable');
+      expect(result.outOfScopeDocs[0].reason).to.equal('confidence not derived-bytes-verified');
+      expect(result.outOfScopeDocs[0].observedConfidence).to.equal('child-snapshot-only');
     });
   });
 
@@ -319,7 +405,7 @@ describe('processBatch (PR-D4 S1-4 Phase C BF10/BF11/BF14/BF18/BF23)', () => {
       if (result.outcome !== 'batch-failed') throw new Error('unreachable');
       expect(result.candidatesForFallback.map((c) => c.docId)).to.deep.equal(['a', 'b']);
       expect(result.immutableSkippedDocs.map((s) => s.docId)).to.deep.equal(['verified']);
-      expect(result.missingDocs).to.deep.equal(['missing']);
+      expect(result.unprocessableDocs).to.deep.equal([{ docId: 'missing', reason: 'missing' }]);
       expect(result.lastUpdateTimePreconditions.get('a')).to.equal('2026-05-14T22:00:00.000Z');
       expect(result.lastUpdateTimePreconditions.get('b')).to.equal('2026-05-14T22:01:00.000Z');
       expect(result.failureReason).to.match(/precondition/);

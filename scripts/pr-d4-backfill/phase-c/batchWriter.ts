@@ -36,6 +36,8 @@ import {
 import type {
   PhaseBRevalidatedCandidate,
   PhaseCImmutableSkippedDoc,
+  PhaseCOutOfScopeDoc,
+  PhaseCUnprocessableDoc,
   PhaseCWrittenDoc,
 } from '../types';
 import { checkImmutableSkip } from './immutableSkipChecker';
@@ -95,18 +97,19 @@ export type ProcessBatchOutcome =
       outcome: 'all-committed';
       writtenDocs: PhaseCWrittenDoc[];
       immutableSkippedDocs: PhaseCImmutableSkippedDoc[];
-      /** doc 不在 / lookup 不能で skip された docs (caller が観測ログに残す) */
-      missingDocs: string[];
+      unprocessableDocs: PhaseCUnprocessableDoc[];
+      outOfScopeDocs: PhaseCOutOfScopeDoc[];
     }
   | {
       outcome: 'batch-failed';
       failureReason: string;
-      /** individualRetryWriter で fallback 対象 (immutable skip / missing は既に除外済) */
+      /** individualRetryWriter で fallback 対象 (immutable skip / unprocessable / out-of-scope は既に除外済) */
       candidatesForFallback: PhaseBRevalidatedCandidate[];
-      /** 各 candidate に対応する precondition lastUpdateTime (再読込時の値) */
+      /** 各 fallback candidate に対応する precondition lastUpdateTime (再読込時の値) */
       lastUpdateTimePreconditions: Map<string, string>;
       immutableSkippedDocs: PhaseCImmutableSkippedDoc[];
-      missingDocs: string[];
+      unprocessableDocs: PhaseCUnprocessableDoc[];
+      outOfScopeDocs: PhaseCOutOfScopeDoc[];
     };
 
 /**
@@ -115,6 +118,19 @@ export type ProcessBatchOutcome =
  *
  * individualRetryWriter からも writtenDocs[].newProvenanceBackfillSha256 計算で利用するため
  * export する (BF22 artifact 観測一貫性)。
+ *
+ * **cross-process determinism の注意** (memory: feedback_deterministic_cross_process.md):
+ *   本関数は **同一 process 内で `createBackfillProvenance` factory 経由で構築された
+ *   metadata object** に対しては deterministic に sha256 を返す。
+ *   ECMA-262 で string (non-integer) key の object literal は insertion order を保持し、
+ *   `createBackfillProvenance` factory 内の field 構築順は固定。
+ *
+ *   一方、**Phase D で Firestore から `data().provenanceBackfill` を読んで再 sha256 計算**
+ *   する場合、Firestore admin SDK が返す object の key order は実装依存で insertion order
+ *   を保証しない可能性がある。Phase D verification では:
+ *     (a) `createBackfillProvenance` を再 invoke して metadata を再構築してから sha256 比較
+ *     (b) または field 単位 deep-equal で sha256 比較を回避
+ *   いずれかを採用すること (cross-process byte 一致は要求しない設計)。
  */
 export function sha256ProvenanceBackfill(metadata: ProvenanceBackfillMetadata): string {
   const canonical = JSON.stringify(metadata, (_key, value) => {
@@ -191,23 +207,63 @@ export async function processBatch(
       outcome: 'all-committed',
       writtenDocs: [],
       immutableSkippedDocs: [],
-      missingDocs: [],
+      unprocessableDocs: [],
+      outOfScopeDocs: [],
     };
   }
 
-  const snapshots = await adapter.reReadForBatch(candidates.map((c) => c.docId));
   const immutableSkippedDocs: PhaseCImmutableSkippedDoc[] = [];
-  const missingDocs: string[] = [];
+  const unprocessableDocs: PhaseCUnprocessableDoc[] = [];
+  const outOfScopeDocs: PhaseCOutOfScopeDoc[] = [];
+
+  // (Codex 5th C1 反映) impl-plan §4.0 hard-gate: 本番 Phase C 書込対象は
+  // category === 'MatchedByHash' かつ computedConfidence === 'derived-bytes-verified' のみ。
+  // Phase B 実装は MatchedByHash のみ revalidated[] に入れるが、dev fixture / 将来の
+  // Phase B 拡張 / 設計バグで異種 candidate が混入した場合に構造的にガードする。
+  const inScopeCandidates: PhaseBRevalidatedCandidate[] = [];
+  for (const candidate of candidates) {
+    if (candidate.category !== 'MatchedByHash') {
+      outOfScopeDocs.push({
+        docId: candidate.docId,
+        reason: 'category not MatchedByHash',
+        observedCategory: candidate.category,
+        observedConfidence: candidate.computedConfidence,
+      });
+      continue;
+    }
+    if (candidate.computedConfidence !== 'derived-bytes-verified') {
+      outOfScopeDocs.push({
+        docId: candidate.docId,
+        reason: 'confidence not derived-bytes-verified',
+        observedCategory: candidate.category,
+        observedConfidence: candidate.computedConfidence,
+      });
+      continue;
+    }
+    inScopeCandidates.push(candidate);
+  }
+
+  if (inScopeCandidates.length === 0) {
+    return {
+      outcome: 'all-committed',
+      writtenDocs: [],
+      immutableSkippedDocs,
+      unprocessableDocs,
+      outOfScopeDocs,
+    };
+  }
+
+  const snapshots = await adapter.reReadForBatch(inScopeCandidates.map((c) => c.docId));
   const eligible: Array<{
     candidate: PhaseBRevalidatedCandidate;
     record: { provenance: DocumentProvenance; provenanceBackfill: ProvenanceBackfillMetadata };
     lastUpdateTimePrecondition: string;
   }> = [];
 
-  for (const candidate of candidates) {
+  for (const candidate of inScopeCandidates) {
     const snapshot = snapshots.get(candidate.docId);
     if (!snapshot || !snapshot.exists || !snapshot.updateTime) {
-      missingDocs.push(candidate.docId);
+      unprocessableDocs.push({ docId: candidate.docId, reason: 'missing' });
       continue;
     }
     const skipDecision = checkImmutableSkip({
@@ -223,8 +279,12 @@ export async function processBatch(
       record = buildBackfillRecord(candidate, backfillScriptVersion, backfilledAt);
     } catch (e) {
       if (e instanceof ProvenanceValidationError) {
-        // validation error は doc 単位 skip (本 PR では missing 扱い、observability ログのみ)
-        missingDocs.push(candidate.docId);
+        // Codex 5th C2 反映: validation error は 'missing' とは区別して unprocessable に分類
+        unprocessableDocs.push({
+          docId: candidate.docId,
+          reason: 'validation',
+          message: e.message,
+        });
         continue;
       }
       throw e;
@@ -241,7 +301,8 @@ export async function processBatch(
       outcome: 'all-committed',
       writtenDocs: [],
       immutableSkippedDocs,
-      missingDocs,
+      unprocessableDocs,
+      outOfScopeDocs,
     };
   }
 
@@ -267,7 +328,8 @@ export async function processBatch(
       candidatesForFallback: eligible.map((e) => e.candidate),
       lastUpdateTimePreconditions,
       immutableSkippedDocs,
-      missingDocs,
+      unprocessableDocs,
+      outOfScopeDocs,
     };
   }
 
@@ -293,6 +355,7 @@ export async function processBatch(
     outcome: 'all-committed',
     writtenDocs,
     immutableSkippedDocs,
-    missingDocs,
+    unprocessableDocs,
+    outOfScopeDocs,
   };
 }

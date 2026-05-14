@@ -343,10 +343,47 @@ export interface PhaseCImmutableSkippedDoc {
 }
 
 /**
+ * Phase C 書込 scope 外 (Codex 5th C1 反映、impl-plan §4.0 hard-gate)。
+ *
+ * 本 PR Phase C 本番書込対象は `category === 'MatchedByHash' && computedConfidence ===
+ * 'derived-bytes-verified'` のみ。Phase B 実装は `MatchedByHash` のみ revalidated[] に入れる
+ * が、dev fixture / Phase B のバグ / 将来の Phase B 拡張で異種 candidate が混入した場合に
+ * 構造的にガードする。
+ *
+ * reason:
+ * - `'category not MatchedByHash'`: Phase B 出力で `category !== 'MatchedByHash'`
+ * - `'confidence not derived-bytes-verified'`: `MatchedByHash` だが confidence が
+ *   `child-snapshot-only` / `metadata-only` (dev fixture 用、本番書込禁止)
+ */
+export interface PhaseCOutOfScopeDoc {
+  docId: string;
+  reason: 'category not MatchedByHash' | 'confidence not derived-bytes-verified';
+  observedCategory: BackfillClassifierCategory;
+  observedConfidence: BackfillConfidence;
+}
+
+/**
+ * Phase C 処理不能 doc 記録 (Codex 5th C2 反映、observability)。
+ *
+ * 過去 `missingDocs` で扱われていたが、原因区別不能だったため reason 付きに統合。
+ * `validation`: `createBackfillProvenance` の runtime validation が throw (sha256 不正等)
+ * `missing`: Firestore re-read で doc 不在
+ */
+export interface PhaseCUnprocessableDoc {
+  docId: string;
+  reason: 'missing' | 'validation';
+  message?: string;
+}
+
+/**
  * Phase C 書込 chunk file (BF22、1 chunk ≤ PR_D4_CANDIDATES_PER_CHUNK)。
  *
- * writtenDocs と preconditionFailedDocs を chunk 単位で分割保存し、全 chunk を
- * 一括メモリロードしない (Phase A/B と同じ chunked streaming パターン)。
+ * 全カテゴリを chunk 単位で分割保存し、全 chunk を一括メモリロードしない。
+ * Codex 5th C2 反映で `unprocessableDocs` / `outOfScopeDocs` を追加 (運用観測完全性)。
+ *
+ * 保全式 (chunk 全件):
+ *   writtenDocs + preconditionFailedDocs + immutableSkippedDocs + unprocessableDocs +
+ *   outOfScopeDocs == 該当 chunk に渡された候補件数
  */
 export interface PhaseCBackfillChunk {
   schemaVersion: PrD4ArtifactSchemaVersion;
@@ -354,6 +391,8 @@ export interface PhaseCBackfillChunk {
   writtenDocs: PhaseCWrittenDoc[];
   preconditionFailedDocs: PhaseCPreconditionFailedDoc[];
   immutableSkippedDocs: PhaseCImmutableSkippedDoc[];
+  unprocessableDocs: PhaseCUnprocessableDoc[];
+  outOfScopeDocs: PhaseCOutOfScopeDoc[];
 }
 
 /**
@@ -381,11 +420,21 @@ export interface PhaseCBackfillSummary {
   phaseBManifestSha256: string;
   backfillStartedAt: string;
   backfillCompletedAt: string;
+  /**
+   * 保全式: candidatesIn = writtenDocs + preconditionFailedDocs + skippedImmutable +
+   *                       unprocessableDocs + outOfScopeDocs
+   * (orchestrator が test でアサート、observability 完全性)
+   */
   candidatesIn: number;
   writtenDocs: number;
   preconditionFailedDocs: number;
   skippedImmutable: number;
+  /** Codex 5th C2 反映: missing / validation 不能 doc の集計 (silent drop 防止) */
+  unprocessableDocs: number;
+  /** Codex 5th C1 反映: hard-gate で除外された Phase C スコープ外 doc の集計 */
+  outOfScopeDocs: number;
   lockAcquiredGeneration: string;
+  /** lock release 完了時刻 (releasePhaseCLock 成功直後の nowProvider 値、Evaluator MEDIUM 反映) */
   lockReleasedAt: string;
   rateLimiterConfig: PhaseCRateLimiterConfig;
   chunks: ArtifactChunkPointer[];

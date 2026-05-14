@@ -23,8 +23,10 @@ import type {
   BackfillEnvName,
   PhaseBRevalidatedCandidate,
   PhaseCImmutableSkippedDoc,
+  PhaseCOutOfScopeDoc,
   PhaseCPreconditionFailedDoc,
   PhaseCRateLimiterConfig,
+  PhaseCUnprocessableDoc,
   PhaseCWrittenDoc,
 } from '../types';
 import {
@@ -77,10 +79,16 @@ export interface RunPhaseCInput {
 export interface RunPhaseCResult {
   mainArtifactPath: string;
   manifestPath: string;
+  /**
+   * 保全式: candidatesIn = writtenDocs + preconditionFailedDocs + skippedImmutable +
+   *                       unprocessableDocs + outOfScopeDocs (orchestrator が test でアサート)
+   */
   candidatesIn: number;
   writtenDocs: number;
   preconditionFailedDocs: number;
   skippedImmutable: number;
+  unprocessableDocs: number;
+  outOfScopeDocs: number;
   lockAcquiredGeneration: string;
   lockReleasedAt: string;
   backfillCompletedAt: string;
@@ -124,27 +132,37 @@ export async function runPhaseC(input: RunPhaseCInput): Promise<RunPhaseCResult>
     let totalWritten = 0;
     let totalPreconditionFailed = 0;
     let totalImmutableSkipped = 0;
+    let totalUnprocessable = 0;
+    let totalOutOfScope = 0;
 
     const chunkPointers: ArtifactChunkPointer[] = [];
     let writtenBuffer: PhaseCWrittenDoc[] = [];
     let preconditionFailedBuffer: PhaseCPreconditionFailedDoc[] = [];
     let immutableSkippedBuffer: PhaseCImmutableSkippedDoc[] = [];
+    let unprocessableBuffer: PhaseCUnprocessableDoc[] = [];
+    let outOfScopeBuffer: PhaseCOutOfScopeDoc[] = [];
     let chunkIndex = 0;
 
     /**
-     * buffer flush 判定:
+     * buffer flush 判定 (全カテゴリ対象):
      *   - forceFlush=true (最終 flush): 残 buffer を空にする
-     *   - 各 buffer 数が PR_D4_CANDIDATES_PER_CHUNK 以上: 1 chunk 出力
+     *   - いずれかの buffer 数が PR_D4_CANDIDATES_PER_CHUNK 以上: 1 chunk 出力
      *   - 全 buffer が空 / forceFlush=true でも 0 件: chunk 出力なし
      */
     async function flushChunkBuffersIfFull(forceFlush = false): Promise<void> {
       const totalBuffered =
-        writtenBuffer.length + preconditionFailedBuffer.length + immutableSkippedBuffer.length;
+        writtenBuffer.length +
+        preconditionFailedBuffer.length +
+        immutableSkippedBuffer.length +
+        unprocessableBuffer.length +
+        outOfScopeBuffer.length;
       const shouldFlush =
         forceFlush ||
         writtenBuffer.length >= PR_D4_CANDIDATES_PER_CHUNK ||
         preconditionFailedBuffer.length >= PR_D4_CANDIDATES_PER_CHUNK ||
-        immutableSkippedBuffer.length >= PR_D4_CANDIDATES_PER_CHUNK;
+        immutableSkippedBuffer.length >= PR_D4_CANDIDATES_PER_CHUNK ||
+        unprocessableBuffer.length >= PR_D4_CANDIDATES_PER_CHUNK ||
+        outOfScopeBuffer.length >= PR_D4_CANDIDATES_PER_CHUNK;
       if (!shouldFlush || totalBuffered === 0) return;
       const pointer = await writePhaseCChunk(
         {
@@ -154,6 +172,8 @@ export async function runPhaseC(input: RunPhaseCInput): Promise<RunPhaseCResult>
           writtenDocs: writtenBuffer,
           preconditionFailedDocs: preconditionFailedBuffer,
           immutableSkippedDocs: immutableSkippedBuffer,
+          unprocessableDocs: unprocessableBuffer,
+          outOfScopeDocs: outOfScopeBuffer,
         },
         input.artifactWriter
       );
@@ -162,6 +182,8 @@ export async function runPhaseC(input: RunPhaseCInput): Promise<RunPhaseCResult>
       writtenBuffer = [];
       preconditionFailedBuffer = [];
       immutableSkippedBuffer = [];
+      unprocessableBuffer = [];
+      outOfScopeBuffer = [];
     }
 
     // (3) batch 単位 grouping (batch size = 20)
@@ -179,15 +201,19 @@ export async function runPhaseC(input: RunPhaseCInput): Promise<RunPhaseCResult>
         input.rateLimiter
       );
 
+      // batch 直前段で除外された immutable / unprocessable / out-of-scope を先に積む
+      immutableSkippedBuffer.push(...batchResult.immutableSkippedDocs);
+      totalImmutableSkipped += batchResult.immutableSkippedDocs.length;
+      unprocessableBuffer.push(...batchResult.unprocessableDocs);
+      totalUnprocessable += batchResult.unprocessableDocs.length;
+      outOfScopeBuffer.push(...batchResult.outOfScopeDocs);
+      totalOutOfScope += batchResult.outOfScopeDocs.length;
+
       if (batchResult.outcome === 'all-committed') {
         writtenBuffer.push(...batchResult.writtenDocs);
         totalWritten += batchResult.writtenDocs.length;
-        immutableSkippedBuffer.push(...batchResult.immutableSkippedDocs);
-        totalImmutableSkipped += batchResult.immutableSkippedDocs.length;
       } else {
-        // (5) batch 失敗 → fallback
-        immutableSkippedBuffer.push(...batchResult.immutableSkippedDocs);
-        totalImmutableSkipped += batchResult.immutableSkippedDocs.length;
+        // (5) batch 失敗 → fallback (immutable / unprocessable / out-of-scope は既に積み済)
         const fallback = await processFallback(
           {
             candidates: batchResult.candidatesForFallback,
@@ -202,6 +228,8 @@ export async function runPhaseC(input: RunPhaseCInput): Promise<RunPhaseCResult>
         totalWritten += fallback.writtenDocs.length;
         preconditionFailedBuffer.push(...fallback.preconditionFailedDocs);
         totalPreconditionFailed += fallback.preconditionFailedDocs.length;
+        unprocessableBuffer.push(...fallback.unprocessableDocs);
+        totalUnprocessable += fallback.unprocessableDocs.length;
       }
 
       batchAccumulator = [];
@@ -220,6 +248,16 @@ export async function runPhaseC(input: RunPhaseCInput): Promise<RunPhaseCResult>
     // 残 buffer chunk 出力
     await flushChunkBuffersIfFull(true);
 
+    // (7) lock release は finalize 前に実行 (Evaluator MEDIUM 反映、lockReleasedAt が
+    // finalize 開始時刻になる問題を解消)。manifest CAS update は precondition で守られて
+    // いるため、lock 解放後でも並走による artifact 整合性破壊は発生しない。
+    await releasePhaseCLock(
+      {
+        lockPath: lockAcquired.lockPath,
+        acquiredGeneration: lockAcquired.acquiredGeneration,
+      },
+      input.lockStore
+    );
     const lockReleasedAt = nowProvider();
     const backfillCompletedAt = lockReleasedAt;
 
@@ -236,6 +274,8 @@ export async function runPhaseC(input: RunPhaseCInput): Promise<RunPhaseCResult>
         writtenDocs: totalWritten,
         preconditionFailedDocs: totalPreconditionFailed,
         skippedImmutable: totalImmutableSkipped,
+        unprocessableDocs: totalUnprocessable,
+        outOfScopeDocs: totalOutOfScope,
         lockAcquiredGeneration: lockAcquired.acquiredGeneration,
         lockReleasedAt,
         rateLimiterConfig: input.rateLimiterConfig,
@@ -246,15 +286,6 @@ export async function runPhaseC(input: RunPhaseCInput): Promise<RunPhaseCResult>
       input.artifactWriter
     );
 
-    // (7) lock release (必ず実行、generation precondition 付き)
-    await releasePhaseCLock(
-      {
-        lockPath: lockAcquired.lockPath,
-        acquiredGeneration: lockAcquired.acquiredGeneration,
-      },
-      input.lockStore
-    );
-
     return {
       mainArtifactPath: finalize.mainArtifactPath,
       manifestPath: finalize.manifestPath,
@@ -262,12 +293,15 @@ export async function runPhaseC(input: RunPhaseCInput): Promise<RunPhaseCResult>
       writtenDocs: totalWritten,
       preconditionFailedDocs: totalPreconditionFailed,
       skippedImmutable: totalImmutableSkipped,
+      unprocessableDocs: totalUnprocessable,
+      outOfScopeDocs: totalOutOfScope,
       lockAcquiredGeneration: lockAcquired.acquiredGeneration,
       lockReleasedAt,
       backfillCompletedAt,
     };
   } catch (e) {
-    // 中断 / error 時は lock を best-effort で解放 (release 失敗は元 error 優先)
+    // 中断 / error 時は lock を best-effort で解放 (release 失敗は console.error で
+    // 通知、運用者が stale lock 解放手順を runbook 通り実行できるよう支援、Codex 5th I2 反映)。
     try {
       await releasePhaseCLock(
         {
@@ -276,8 +310,11 @@ export async function runPhaseC(input: RunPhaseCInput): Promise<RunPhaseCResult>
         },
         input.lockStore
       );
-    } catch {
-      /* swallow */
+    } catch (releaseErr) {
+      console.error(
+        `[PR-D4 Phase C] lock release failed during error recovery (lockPath=${lockAcquired.lockPath}, generation=${lockAcquired.acquiredGeneration}):`,
+        releaseErr
+      );
     }
     throw e;
   }
