@@ -82,6 +82,24 @@ export interface Document {
    */
   provenance?: DocumentProvenance;
 
+  /**
+   * legacy backfill metadata (ADR-0016 MUST 6 / Issue #445 PR-D4)
+   *
+   * 意味論:
+   * - field absent = PR-D2/D3 で生成された verified provenance (split 完了時刻の正当 bytes 証拠)
+   * - field exists = PR-D4 backfill で書込まれた legacy doc (split 時点正当ではない)
+   *
+   * Consumer は provenance 単独で "verified split-time origin" と判定してはならない (ADR MUST 6 Consumer contract)。
+   * rotate gate は backfilled doc を confidence === 'derived-bytes-verified' のみ許可 (ADR MUST 3 拡張)。
+   *
+   * **判定方法 (Codex 4th review Low 1 反映)**: TypeScript 上の型表面は `undefined` を absence として扱う
+   * (`strictNullChecks` 下で `null` 不可)。一方 Firestore 経由で読み込んだ document に `provenanceBackfill: null`
+   * が混入する可能性がある (古い書込経路 / 手動修復等)。Consumer は `provenanceBackfill === undefined`
+   * ではなく **field 存在チェック** (`'provenanceBackfill' in doc` または等価) または `!= null` (loose) で判定し、
+   * truthiness check (`if (provenanceBackfill)`) は **使わない** (空オブジェクト判定の事故を防ぐ)。
+   */
+  provenanceBackfill?: ProvenanceBackfillMetadata;
+
   // Phase 7: 顧客確定機能
   customerId?: string | null;                    // 顧客ID（「該当なし」選択時はnull）
   customerCandidates?: CustomerCandidateInfo[];  // 構造化された候補リスト
@@ -161,6 +179,78 @@ export interface DocumentProvenance {
   derivedSha256: string;
   /** provenance 書込時刻 (= split 完了時刻)。audit field、bytes identity 照合対象ではない */
   createdAt: Timestamp;
+}
+
+/**
+ * Backfill confidence 階層 (ADR-0016 MUST 6)
+ *
+ * 高 → 低:
+ * - `derived-bytes-verified`: parent + child 現存、再 split で sha256 一致 (Issue #432 silent corruption 被害なし)
+ * - `child-snapshot-only`: 現 child sha256/generation 実計算記録のみ、parent 不在 or 再 split 不一致
+ *   (壊れた legacy bytes の可能性あり、dev/test fixture のみで作成、本番 Phase C では原則記録しない)
+ * - `metadata-only`: child GCS metadata のみで sha256 実計算スキップ (PR-D4 では原則禁止、明示 approval 必要)
+ *
+ * rotate gate 動作 (ADR MUST 3 拡張):
+ * - `derived-bytes-verified`: allow
+ * - `child-snapshot-only` / `metadata-only`: failed-precondition reject
+ */
+export type BackfillConfidence =
+  | 'derived-bytes-verified'
+  | 'child-snapshot-only'
+  | 'metadata-only';
+
+/**
+ * Backfill 時に記録する 5 分類カテゴリ (ADR-0016 MUST 6 evidence.classifierCategory、Codex 2nd review I7 反映)。
+ *
+ * 内訳:
+ * - PR-C3c classifier 4 メンバー (`scripts/lib/collisionClassifier.ts` の `Classification`):
+ *   `MatchedByHash | RepairableMissingFile | Ambiguous | LostOrUnrecoverable`
+ * - PR-D4 で追加した classifier 通過不能ケースのフォールバック: `NeedsManualReview`
+ *   (splitFromPages 不在 / dual parent 等で classifier に渡せない doc を記録するための値、
+ *   impl-plan §8 fixture 拡張表参照)
+ *
+ * `Classification` を直接 import せず別定義する理由: `shared/` は `scripts/` に依存できない
+ * (frontend bundle 経路 + layer 規約)。drift 防止は doc-audit と PR review でカバーする。
+ */
+export type BackfillClassifierCategory =
+  | 'MatchedByHash'
+  | 'RepairableMissingFile'
+  | 'Ambiguous'
+  | 'LostOrUnrecoverable'
+  | 'NeedsManualReview';
+
+/**
+ * 既存 docs への legacy backfill metadata (ADR-0016 MUST 6 / PR-D4)
+ *
+ * 必須記録項目:
+ * - `method`: enum で将来別 method を追加する余地を残す
+ * - `confidence`: 階層化された信頼度 (rotate gate 動作と連動)
+ * - `backfilledAt`: backfill 実行時刻 (≠ provenance.createdAt = split 完了時刻、Codex 1st Critical 2 反映)
+ * - `evidence`: 再現性 / 監査用の現物計算情報
+ *
+ * MUST 7 (ADR-0016): provenance exists + provenanceBackfill absent な doc は immutable skip。
+ * 既存 verified provenance を低信頼度 backfill で破壊する経路を構造的に閉鎖する。
+ */
+export interface ProvenanceBackfillMetadata {
+  /** backfill 方法 (enum、将来拡張余地) */
+  method: 'legacy-observed';
+  /** rotate gate 動作と連動する confidence 階層 */
+  confidence: BackfillConfidence;
+  /** backfill 実行時刻 (≠ provenance.createdAt) */
+  backfilledAt: Timestamp;
+  /** 再現性 / 監査用の現物計算情報 */
+  evidence: {
+    /** 親 Storage object が backfill 時点で存在したか */
+    parentExists: boolean;
+    /** 再 split で sha256 一致を検証した場合 true、未検証 null */
+    parentSha256MatchedAtBackfill: boolean | null;
+    /** child object から sha256 を実計算したか */
+    childSha256ComputedAtBackfill: boolean;
+    /** 例: 'pr-d4-v1.0' (script 改修で再 backfill 区別) */
+    backfillScriptVersion: string;
+    /** PR-C3c classifier 出力 (Codex 2nd review I7 反映) */
+    classifierCategory: BackfillClassifierCategory;
+  };
 }
 
 // ============================================
