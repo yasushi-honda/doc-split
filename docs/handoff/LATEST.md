@@ -1,8 +1,95 @@
 # ハンドオフメモ
 
-**更新日**: 2026-05-14 session69 (**Issue #445 PR-D3 完遂 + PR #458 main merge `aa61fb6` + dev E2E PASS (PR-D2 AC9 + PR-D3 AC9/15/16) + cocoro/kanameone 本番展開完了 + Issue #445 close 達成 (Net -1) + PR-D4 impl-plan 素案 + Codex 1st review NO-GO 取得**。rotatePdfPages を ADR-0016 MUST 3 準拠に refactor (in-place 編集禁止 + canonical path `processed/{docId}/rotations/{rotationId}.pdf` + source 5 + createdAt 不変 / derived 4 更新 + lastUpdateTime precondition + 3-way error-code OR + identity drift 検証 + 二段階方針 normalizeRotation/Fallback)、6 段階品質ゲート全通過 (Codex MCP 2 段階 thread `019e2383-...` HIGH 4 + MEDIUM 4 + LOW 1 / `/simplify` HIGH 3 + M1 / `/safe-refactor` LOW 1 / Evaluator REQUEST_CHANGES CRITICAL Q1+HIGH Q2+MEDIUM / `/review-pr` 5 並列 Critical 5 + Important 4)。ADR-0016 Status: Proposed → Accepted (PR-D3 完遂で MUST 1/2/3/5 実装完成)。Issue #432 P0 collision の構造的予防は splitPdf (PR-D2) + rotatePdfPages (PR-D3) 双方で **dev/cocoro/kanameone 3 環境**稼働。次セッション最優先: PR-D4 (既存 docs backfill destructive migration) 正式 impl-plan 起票 (Codex 1st review NO-GO + Critical 8 + Important 7 + 追加 AC BF8-15 + Phase A-D 改訂指針反映、thread `019e2558-f83f-7a13-aadd-0eab042fd949`)
-**ブランチ**: `main` (PR #458 squash merge `aa61fb6` 完遂、feature ブランチ自動削除済。tsc clean、npm test 1132 件全 pass、regression 0、CI 全 green)
-**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + (session29-66 累積実績は archive 参照) + **Phase 8 (session67 = Issue #445 PR-D1 完遂 = ADR-0016 + DocumentProvenance 設計合意 / session68 = Issue #445 PR-D2 完遂 = splitPdf provenance 10 fields 実装 / session69 = Issue #445 PR-D3 完遂 + main merge + 3 環境展開 + Issue #445 close、Net -1)** = Issue #432 P0 collision の構造的予防 splitPdf + rotatePdfPages 双方で 3 環境稼働 (新規クライアント等価運用基盤の構造的予防完了)
+**更新日**: 2026-05-14 session70 (**Issue #445 PR-D4 impl-plan v3.1 + ADR-0016 改訂 main merge `1d369bf` (PR #460) + Codex MCP 4 段階 review GO 取得 (1st NO-GO → 2nd NO-GO → 3rd NO-GO → 4th GO with required amendments)、Net 0**)。destructive migration の正式 design 段階完成。ADR MUST 6/7 追加 (`provenanceBackfill` field 必須化 + 既存 valid provenance immutable skip) + MUST 3 拡張 (rotate gate `derived-bytes-verified` 限定 allow) + SHOULD 1 改訂 (5 段階 classify + 4 phase 構造 A=audit / B=preflight revalidation / C=atomic backfill / D=verify+gate behavior、物理 rewrite=PR-D5+ defer)。impl-plan 836 行 + AC BF8-24 (17 件) + フェルミ試算 + 修正トリガー 8 件 + Cloud Run Job 採用 (2 vCPU/4 GB/N=4 保守的初期) + GCS sentinel 排他 lock (取得 + 解放 generation precondition + lease 60 min 自動 takeover 禁止 + 手動解放手順) + batch precondition failure doc 単位隔離 + Firestore write 100-200/sec 共通 token bucket。次セッション最優先: PR-D4 dev rehearsal S1 (Cloud Run Job container build) 着手
+**ブランチ**: `main` (PR #460 squash merge `1d369bf` 完遂、feature ブランチ自動削除済。CI 全 green: CodeRabbit pass / GitGuardian pass / lint-build-test 5m12s pass)
+**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + (session29-66 累積実績は archive 参照) + **Phase 8 (session67 = PR-D1 完遂 / session68 = PR-D2 完遂 / session69 = PR-D3 完遂 + 3 環境展開 + Issue #445 close / session70 = PR-D4 impl-plan + ADR 改訂 main merge、Net 0)** = Issue #432 P0 collision の構造的予防 splitPdf + rotatePdfPages 双方で 3 環境稼働 + 既存 docs backfill design 完成 (Codex 4 段階 review GO 取得済)
+
+<a id="session70"></a>
+## ✅ session70 完了サマリー (2026-05-14: Issue #445 PR-D4 impl-plan v3.1 + ADR-0016 改訂 main merge `1d369bf` (PR #460) + Codex MCP 4 段階 review GO 取得、Net 0)
+
+session69 で取得した PR-D4 (既存 docs Provenance Backfill destructive migration) impl-plan 素案の Codex 1st review NO-GO (Critical 8 + Important 7 + 追加 AC BF8-15 + Phase A-D 改訂指針) を起点に、4 段階 review (1st → 2nd → 3rd → 4th) で Critical 0 + Important ≤ 2 達成、4th = **GO with required amendments** を取得。impl-plan v3.1 + ADR-0016 改訂を main merge し、destructive migration の正式 design 段階を完成。実装着手 (S1 Cloud Run Job container build 以降) は次セッション。
+
+### 経緯
+
+1. **catchup**: session69 handoff 確認、最優先タスク = PR-D4 正式 impl-plan 起票 (Codex 1st review NO-GO 反映必須) を選択
+2. **ADR-0016 改訂 v1**: MUST 6 (provenanceBackfill 必須記録) + MUST 7 (既存 valid provenance immutable skip) 追加 + MUST 3 拡張 (rotate gate behavior) + SHOULD 1 改訂 (5 段階 classify + 4 phase 構造) + Implementation Roadmap PR-D4 行更新
+3. **impl-plan v1 起票** (`docs/specs/pr-d4-backfill-impl-plan.md`、836 行): 13 章構成 + Phase A-D 詳細 + AC BF8-15 + フェルミ試算 + Cloud Run Job 採用 + lockfile gate + 50+ fixture + dev rehearsal 7-stage × 2 周 + 段階展開フロー
+4. **Codex MCP 2nd review** (thread `019e2678-7f18-7a62-bab8-13cc98ca490c`、前 thread session 切れのため新規): **NO-GO**、Critical 4 (child-snapshot-only Phase C 矛盾 / lockfile gate 排他 lock 誤用 / batch retry doc 単位隔離 / consumer contract) + Important 8 + Low 3 + 追加 AC BF16-20 (5 件)
+5. **impl-plan v2 改訂**: §4.0 Phase C 書込スコープ表 (本番=MatchedByHash の derived-bytes-verified のみ) + GCS sentinel object 排他 lock + batch precondition failure doc 単位隔離 + ADR Consumer contract 節新設 + Cloud Run Job spec 統一 (2 vCPU/4 GB/N=4) + 全 phase artifact GCS chunking + dev disposable fixture + BF16-20 追加
+6. **Codex MCP 3rd review** (同 thread 継続): **NO-GO**、Critical 0 ✅ + Important 7 (GCS lock 解放 generation precondition / lease 60 min 挙動明確化 / null vs absent 表現統一 / Phase C rate limit 共通 token bucket / S6 rollback MUST 7 矛盾 / 本番手動 rotate 緩和 / BF22 全 phase chunking 拡張) + Low 3 + 追加 AC BF21-24 (4 件)
+7. **impl-plan v3 改訂**: GCS sentinel lock generation precondition + 自動 takeover 禁止 + 手動解放手順 5 step (runbook 化) + null sentinel 不使用統一 + Firestore write 100-200/sec 共通 token bucket + S6 rollback fixture 限定 + 本番 read-only verification + BF21-24 追加
+8. **Codex MCP 4th review (final)** (同 thread 継続): **GO with required amendments**、Critical 0 + Important 1 (BF22 本文反映薄) + Low 3 (§10 Step 2 古い記述 / Phase C "Storage 操作なし" 表現 / Phase C 手順番号 2 重)
+9. **impl-plan v3.1 改訂**: §4.2-4.4 全 phase artifact chunking 本文具体化 + §4.3 step renumber + write 操作精緻化 + Status: Final
+10. **PR #460 作成 + CI green + main merge** (ユーザー番号認可「PR #460 をマージしてよい」取得):
+    - feature branch `feat/issue-445-pr-d4-impl-plan` 作成 → commit `d774612` → push → PR #460 (large tier、`Refs #445`)
+    - CI: GitGuardian pass / CodeRabbit pass / lint-build-test 5m12s pass
+    - `gh pr merge 460 --squash --delete-branch` → main squash merge `1d369bf`
+
+### 変更ファイル一覧 (2 ファイル: 1 modified + 1 new、+895/-5)
+
+| ファイル | 変更 |
+|---------|------|
+| `docs/adr/0016-document-identity-and-provenance.md` | +59/-5 (MUST 6/7 追加 + MUST 3 拡張 + SHOULD 1 改訂 + Status Amended + Roadmap PR-D4 行更新 + References 追記) |
+| `docs/specs/pr-d4-backfill-impl-plan.md` | **新規 836 行** (13 章 + 11bis/ter/quater Codex review mapping、Phase A-D + AC BF8-24 17 件 + フェルミ + Cloud Run Job + GCS sentinel lock + dev rehearsal + 段階展開フロー) |
+
+### Net 計測 (CLAUDE.md MUST)
+
+- Before: open Issues = 4 (#432 P0 復旧確認待ち、#402 P2、#251 P2、#238 P2)
+- After: open Issues = 4 (変化なし)。**#445 は session69 で auto-close 済、本 PR は #432 復旧の design 段階で復旧自体は PR-D4 実装後に判定**
+- 本 session 完了時点で **+0 / -0 = Net 0**
+- 進捗判定: ✅ 構造的進捗 (destructive migration の design 段階完成、4 段階 Codex review GO で実装着手準備完了)。既存 ~6,264 docs (kanameone 5,725 + cocoro 539) の rotate 復旧経路の正式設計が main 確定
+
+### 設計上の重要決定
+
+- **`provenanceBackfill` field 形状** (ADR MUST 6): method='legacy-observed' + confidence 3 階層 (`derived-bytes-verified` / `child-snapshot-only` / `metadata-only`) + backfilledAt + evidence 5 fields (parentExists / parentSha256MatchedAtBackfill / childSha256ComputedAtBackfill / backfillScriptVersion / classifierCategory)
+- **意味論分離**: `provenance.createdAt` = split 完了時刻不変、`provenanceBackfill.backfilledAt` = backfill 実行時刻 (Codex 1st C2 反映、Issue #432 silent corruption 偽装復旧の永続化を防止)
+- **Phase C 書込スコープ限定**: 本番は `MatchedByHash` の `derived-bytes-verified` のみ書込、`child-snapshot-only` は dev fixture 限定、`metadata-only` は原則禁止 + 明示 approval (Codex 2nd C1)
+- **GCS sentinel object 排他 lock 採用** (Codex 2nd C2 反映、`scripts/lib/lockfileGate.ts` は package-lock 整合性のみで分散 lock 機能なし): 取得 generation 保存 + 解放時 `ifGenerationMatch:<acquiredLockGeneration>` precondition + lease 60 min 自動 takeover 禁止 + 手動解放手順 5 step (runbook 化、PR-D4 実装 PR で作成)
+- **batch precondition failure doc 単位隔離** (Codex 2nd C3 反映): batch 全体失敗時に doc 単位 individual update に分解、drift doc のみ `preconditionFailedDocs` 隔離、残り書込継続 (1 件 drift で 19 件巻き込まない)
+- **immutable skip field existence 判定** (Codex 3rd I3 反映、Codex 1st C8): `provenance` field exists && `provenanceBackfill` field absent (Firestore で `undefined`) で判定、null sentinel 不使用 (PR-D2/D3 後 verified provenance を低信頼度 backfill で破壊禁止)
+- **Cloud Run Job spec 保守的初期** (Codex 2nd I3 反映): 2 vCPU / 4 GB memory / N=4 並行 / Firestore write 100-200/sec 共通 token bucket (impl-plan v1 の 8 vCPU/32 GB は dev rehearsal 実測値で昇格判断)
+- **本番 cocoro/kanameone は read-only verification のみ** (Codex 3rd I6 反映): rotate 実 API 検証は dev disposable fixture と CI contract test で担保、本番 doc に rotate side effect を残さない
+- **`provenance` Consumer contract** (ADR MUST 6 Consumer contract、Codex 2nd C4 反映): 全 consumer は `provenanceBackfill` 存在を必ず確認、`provenance` 単独で「verified split-time origin」と判定禁止、contract test (BF20) で構造的検証
+
+### 反映を defer した項目
+
+- **PR-D4 実装着手** (S1 Cloud Run Job container build 以降): 別 PR で次セッション
+- **dev rehearsal 7-stage × 2 周**: PR-D4 実装 PR の中で実施 (S2-S5 = Phase A-D / S6 = fixture 限定 rollback / S7 = 統合確認)
+- **runbook 文書** (`docs/runbooks/pr-d4-backfill-runbook.md`): PR-D4 実装 PR で新規作成 (GCS sentinel lock 手動解放手順 5 step + Phase A-D 各 step 操作手順)
+
+### 次セッション着手項目 (優先順)
+
+1. **catchup** (次セッション、本 session70 handoff 確認)
+2. **PR-D4 dev rehearsal S1 着手 (Cloud Run Job container build + push)** ★最優先
+   - `functions/src/pdf/provenance.ts` に `createBackfillProvenance()` factory + `assertValidBackfillProvenanceInput()` + `BackfillConfidence` 型 追加 (BF20 helper `isVerifiedOrigin(doc)` も export)
+   - `shared/types.ts` に `ProvenanceBackfillMetadata` interface 追加 + `Document` interface 拡張
+   - Cloud Run Job container 設計 (`functions/src/scripts/pr-d4-backfill/` 新規ディレクトリ、Phase A/B/C/D 各 entry point)
+   - GCS sentinel lock utility (`functions/src/scripts/pr-d4-backfill/lib/gcsSentinelLock.ts` 新規、取得 + 解放 generation precondition + lease 60 min)
+   - 50+ fixture 拡張 (`scripts/fixtures/pr-d4/`)
+   - rotate gate 拡張 (`functions/src/pdf/pdfOperations.ts` の `rotatePdfPages` legacy guard を `provenanceBackfill` 検査に拡張)
+   - dev rehearsal S2-S7 実行 → Codex MCP 5th review (実装 PR 単位) → 2 周目 → PR 作成
+3. (期間運用継続) **既存 docs rotation 不可期間**: PR-D4 実装完了まで dev/cocoro/kanameone 既存 docs (~6,264 件合計) は rotation 操作が `failed-precondition` で reject される。ユーザー影響 = rotation 機能のみ (split は不変)
+4. (option) **PR-D5 (TypeScript 型 + lint 強化) impl-plan**: PR-D4 完了後の判定 (Codex 4th Q7、Issue #432 close は PR-D4 完遂後 + 残件 Issue 切出 + #432 に residual risk + coverage artifact 貼付)
+
+### 主要 PR / 実行記録
+
+| 項目 | 値 |
+|---|---|
+| **本 PR (PR-D4 design)** | **PR #460 merged** (squash commit `1d369bf`、1 commit `d774612`、2 files +895/-5) |
+| Codex MCP thread (4 段階 review) | 1st: `019e2558-f83f-7a13-aadd-0eab042fd949` / 2nd-4th: `019e2678-7f18-7a62-bab8-13cc98ca490c` |
+| Codex 4th 結論 | **GO with required amendments** (Critical 0 + Important 1 + Low 3、本 PR で全件反映) |
+| ADR-0016 Status | Accepted (session69) → Amended (session70 = PR-D4 design 反映) |
+| Issue Net | **0** (Before 4 → After 4) |
+| 構造的進捗 | destructive migration design 段階完成、Codex 4 段階 review GO で次セッション実装着手準備完了 |
+
+### 教訓 (本 session70)
+
+- **destructive migration は AI 単独 impl-plan でも Codex 4 段階 review が必要なケース**: 本 PR で 1st NO-GO → 2nd NO-GO → 3rd NO-GO → 4th GO までかかった。Critical 1st 8 → 2nd 4 → 3rd 0 + Important 1st 7 → 2nd 8 → 3rd 7 → 4th 1 と段階的に潰せた。memory `feedback_destructive_migration_codex_review` の有効性が 2 例目 (PR-D4 計画) で実証 + 4 round 必要性も判明
+- **Codex MCP thread session 切れ対応**: 1st review thread `019e2558` は session 切れで継続不可、2nd 以降は新 thread `019e2678` で実施。AI 単独で「1st の Critical 8 + Important 7 全件サマリー」を catchup から復元できたため大過なし、ただし thread 継続性に依存する設計は脆い (memory 化候補)
+- **AskUserQuestion + dev rehearsal 着手認可フロー**: ユーザー単一質問で「dev rehearsal 着手 (本日 / 次セッション)」を取得 → 本 session で impl-plan + ADR commit + main merge までを実施、実装着手は次セッションに分離。クリーンな分離点
+- **GCS sentinel object 排他 lock vs `scripts/lib/lockfileGate.ts`** の用語混同回避 (Codex 2nd C2): 既存 lockfileGate.ts は package-lock 整合性のみで分散 lock 機能なし。本 PR-D4 で初めて分散 lock を導入し、GCS sentinel + generation precondition + 手動解除手順で正式実装
+
+---
 
 <a id="session69"></a>
 ## ✅ session69 完了サマリー (2026-05-14: Issue #445 PR-D3 完遂 + PR #458 main merge `aa61fb6` + dev E2E PASS + cocoro/kanameone 本番展開 + Issue #445 close、Net -1)
