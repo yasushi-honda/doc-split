@@ -1,8 +1,106 @@
 # ハンドオフメモ
 
-**更新日**: 2026-05-15 session72 (**Issue #445 PR-D4 S1-2 (Phase A read-only audit + classify) main merge `cc2616d` (PR #464) + Codex MCP 2nd review GO (BF22 strict adherence + bucket-location default 削除 + overwrite 禁止) 反映、Net 0**)。`scripts/pr-d4-backfill/` 新規ディレクトリ + types + 6 phase-a モジュール (artifactWriter / bucketLocationVerifier / categoryClassifier / docSnapshotter / auditClassify / adapters) + CLI entry (8 source files / 1165 行) + unit test 47 件追加。documents collection を全件 stream → 5 分類予測 → GCS artifact (main + chunks + manifest) JSON 書込 (read-only invariant)。BF22 適合のため orchestrator は per-chunk buffer (≤ 1000 件) のみ保持し flush 設計。`ifGenerationMatch: 0` で artifact overwrite 拒否、run-id 単位の partial failure invariant 確保。全 1198 tests passing (新規 47 + 既存 1151) / Quality Gate 全クリア (TDD + evaluator + pr-review-toolkit:code-reviewer + Codex MCP review 1st NO-GO → 2nd GO)。次セッション最優先: PR-D4 S1-3 (Phase B 実装 = write-free preflight revalidation) 着手
-**ブランチ**: `main` (PR #464 squash merge `cc2616d` 完遂、feature ブランチ自動削除済。CI 全 green: CodeRabbit pass / GitGuardian pass / lint-build-test 6m39s pass)
-**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + (session29-66 累積実績は archive 参照) + **Phase 8 (session67 = PR-D1 / session68 = PR-D2 / session69 = PR-D3 完遂 + 3 環境展開 + #445 close / session70 = PR-D4 impl-plan + ADR 改訂 main merge / session71 = PR-D4 S1-1 基盤層 main merge / session72 = PR-D4 S1-2 Phase A 実装 main merge、Net 0)** = Issue #432 P0 collision の構造的予防 splitPdf + rotatePdfPages 双方で 3 環境稼働 + 既存 docs backfill の Phase A (read-only audit + classify) も main に確定 (Phase B-D 実装は後続セッション)
+**更新日**: 2026-05-15 session73 (**Issue #445 PR-D4 S1-3 (Phase B write-free preflight revalidation) main merge `6cafbba` (PR #466) + Codex MCP 2nd review GO (manifest CAS update + parent download 遅延) 反映、Net 0**)。`scripts/pr-d4-backfill/phase-b/` 新規 (7 source files) + 6 test files (47 unit tests)。Phase A artifact streaming read → drift 検出 + child download + sha256 計算 + parent metadata HEAD → drift なしのみ parent bytes download + 再 split + child sha256 一致確認 → derived-bytes-verified のみ revalidated[] に追加。production Firestore / production GCS への write ゼロ (write-free invariant)。`ArtifactStorageWriter.writeJson` に optional `precondition.ifGenerationMatch` 拡張で manifest CAS update 経路を実装、orchestrator を drift → bytes download の順に refactor。全 1245 tests passing (新規 47 + 既存 1198) / Quality Gate 全クリア (TDD + evaluator + pr-review-toolkit:code-reviewer + Codex MCP review 1st NO-GO → 2nd GO)。次セッション最優先: PR-D4 S1-4 (Phase C 実装 = atomic backfill + GCS sentinel lock + batch precondition failure 隔離) 着手
+**ブランチ**: `main` (PR #466 squash merge `6cafbba` 完遂、feature ブランチ自動削除済。CI 全 green: CodeRabbit pass / GitGuardian pass / lint-build-test pass)
+**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + (session29-66 累積実績は archive 参照) + **Phase 8 (session67 = PR-D1 / session68 = PR-D2 / session69 = PR-D3 完遂 + 3 環境展開 + #445 close / session70 = PR-D4 impl-plan + ADR 改訂 main merge / session71 = PR-D4 S1-1 基盤層 main merge / session72 = PR-D4 S1-2 Phase A 実装 main merge / session73 = PR-D4 S1-3 Phase B 実装 main merge、Net 0)** = Issue #432 P0 collision の構造的予防 splitPdf + rotatePdfPages 双方で 3 環境稼働 + 既存 docs backfill の Phase A (read-only audit) + Phase B (write-free preflight revalidation) が main に確定 (Phase C-D 実装は後続セッション)
+
+<a id="session73"></a>
+## ✅ session73 完了サマリー (2026-05-15: Issue #445 PR-D4 S1-3 Phase B 実装 main merge `6cafbba` (PR #466) + Codex MCP 1st NO-GO → 2nd GO 反映、Net 0)
+
+session72 で main 確定した PR-D4 S1-2 Phase A (read-only audit) の出力を **消費する Phase B** = write-free preflight revalidation を実装。`scripts/pr-d4-backfill/phase-b/` 新規 7 source files + 6 test files (47 unit tests)。Phase A artifact streaming read → 各 MatchedByHash 候補に drift 検出 + child download + sha256 計算 + parent metadata HEAD only → drift なしのみ parent bytes download + 再 split + child sha256 一致確認 → derived-bytes-verified のみ revalidated[] に追加 → Phase B artifact (main + chunks + manifest 追記) を GCS 書込。Codex MCP 1st review で **NO-GO 判定** (Critical: manifest CAS 412 + Important: parent download 順序) を取得し、`ArtifactStorageWriter.writeJson` に optional `precondition.ifGenerationMatch` 追加 + orchestrator を drift → bytes download の順に refactor 反映後の 2nd review で **GO** に転換。
+
+### 経緯
+
+1. **catchup**: session72 handoff 確認、次セッション最優先 = PR-D4 S1-3 (Phase B) 着手を選択
+2. **feature branch 作成** (`feature/pr-d4-s1-3-phase-b`): main 直 push 禁止 (CLAUDE.md 4 原則 §4)
+3. **TaskCreate** (11 件): types → driftDetector → artifactReader → childRevalidator → parentReSplitVerifier → artifactWriter → orchestrator → adapters → CLI → Quality Gate の段階分解
+4. **TDD 実装** (RED→GREEN→REFACTOR、各モジュール独立):
+   - `types.ts`: Phase B schemas 追加 (PhaseBRevalidatedCandidate / PhaseBRevalidatedChunk / PhaseBRevalidationSummary / PhaseBDriftSkipped) + BackfillConfidence import 追加
+   - `driftDetector.ts` (12 tests): pure function、3 種 drift 分類 (Firestore updateTime / child generation / parent generation) の優先順位 firstmost-fail 設計
+   - `artifactReader.ts` (8 tests): manifest 読込 + main artifact sha256 verify (eager) + chunks 1 つずつ streaming + sha256 verify (BF22 維持)
+   - `childRevalidator.ts` (5 tests): child download + sha256 (raw bytes、provenance.derivedSha256 canonical 値)
+   - `parentReSplitVerifier.ts` (7 tests): parent download + `regenerateChildPdf` (scripts/lib/pdfRegenerator.ts 流用) + child sha256 一致確認、graceful degrade (PDF parse 失敗 → matched=false)
+   - `artifactWriter.ts` (7 tests): per-chunk flush + main + manifest 追記
+   - `revalidationOrchestrator.ts` (8 tests): BF22 per-chunk buffer + Firestore re-fetch + child download + parent metadata HEAD → drift detect → drift OK + child 存在のみ parent bytes download + verify
+   - `adapters.ts`: Firebase admin SDK + GCS wrapper、`GcsObjectDownloader` (download + getMetadataOnly)、`FirestoreReReaderImpl` (createdAt 不在で null 返却)
+   - `index.ts`: --phase B 対応 + Phase B 起動コード
+5. **evaluator + pr-review-toolkit:code-reviewer 並列起動**:
+   - evaluator (REQUEST_CHANGES): **HIGH 1** = createdAt 不在 doc の epoch (1970-01-01) silent fallback が derived-bytes-verified で Phase C に流れる経路 + MEDIUM 2 件 (child orphan で parent download 無駄 / phaseAManifestSha256 命名)
+   - code-reviewer (HIGH 3 件): **H1** computedProvenance.createdAt (ISO string) → createBackfillProvenance(Timestamp) 型整合性 + **H2** epoch silent fallback (同 evaluator HIGH 1) + **H3** orchestrator が manifest を 2 回 read
+   - 全件反映: `adapters.fetchDoc` で createdAt 不在時 null 返却、`artifactReader` が `manifest` + `manifestGeneration` を返し orchestrator は二重 read 廃止、`PhaseAArtifactStream.phaseAManifestSha256` の JSDoc 修正、child orphan で parent download スキップ、`createdAt` ISO 化と Phase C Timestamp 変換責務分離の JSDoc 明文化
+6. **Codex MCP 1st review** (read-only sandbox): **NO-GO 判定**
+   - **Critical**: Phase B `finalizePhaseBArtifact` が既存 manifest を update するが、`ArtifactStorageWriter.writeJson` は `ifGenerationMatch: 0` で既存 object 拒否のため 412 PreconditionFailed 確定 → manifest CAS update 経路の実装が必要
+   - **Important**: parent bytes download が drift 検出より先 → child drift 時にも parent PDF download cost 発生
+   - **Suggestion**: manifest update は専用 writer に分け CAS で他者上書き検出
+7. **refactor 反映**:
+   - `ArtifactStorageWriter.writeJson` signature 拡張: 第 3 引数 optional `precondition: { ifGenerationMatch: number }` (省略 = 0 = 新規 only、>0 = CAS)
+   - `ArtifactStorageReader.readJson` 戻り値を `{ content, generation }` に変更し、Phase A reader が manifest generation を返す
+   - `PhaseAArtifactStream.manifestGeneration` field 追加、`FinalizePhaseBInput.manifestGeneration` 必須化、finalize で `writer.writeJson(manifestPath, content, { ifGenerationMatch: input.manifestGeneration })`
+   - `ParentObjectDownloader.getMetadataOnly` 追加 + orchestrator を `child download → parent metadata HEAD → drift detect → drift OK + child 存在のみ parent bytes download` の順に refactor
+   - production adapter (`GcsArtifactStorageWriter.writeJson` / `GcsArtifactReader.readJson` / `GcsObjectDownloader.getMetadataOnly`) 実装更新
+   - test fake (FakeStorageReader / FakeStorageWriter / InMemoryStorage / FakeParentDownloader / CountingParentDl) を新 signature に追随、InMemoryStorage は 412 PreconditionFailed simulation を追加
+   - test 追加 (createdAt 不在時 fetchDoc null 経路 / child orphan 時 parent download 呼ばれない経路 / manifest CAS update ifGenerationMatch 確認)
+8. **Codex MCP 2nd review**: **GO 判定** (Critical + Important 全件解消、write-free invariant + per-chunk buffer + sourceSha256 実 parent bytes + createdAt document.createdAt 由来 + Phase C 入力形状 確認済)
+9. **commit (`5e64baa`)**: 19 files / +2615/-42 / TDD + evaluator + code-reviewer + Codex MCP 1st→2nd 反映を一括
+10. **PR #466 作成** + CI 全 green (lint-build-test pass / CodeRabbit pass / GitGuardian pass)
+11. **PR #466 squash merge** (ユーザー番号認可「PR #466 をマージして」取得): `6cafbba` main merge、feature branch 自動削除、main 同期完了
+
+### 変更ファイル一覧 (19 files: 13 new + 6 modified、+2615/-42)
+
+| ファイル | 区分 | LoC |
+|---------|------|----:|
+| `scripts/pr-d4-backfill/phase-b/artifactReader.ts` | new | 100 |
+| `scripts/pr-d4-backfill/phase-b/driftDetector.ts` | new | 64 |
+| `scripts/pr-d4-backfill/phase-b/childRevalidator.ts` | new | 67 |
+| `scripts/pr-d4-backfill/phase-b/parentReSplitVerifier.ts` | new | 89 |
+| `scripts/pr-d4-backfill/phase-b/artifactWriter.ts` | new | 142 |
+| `scripts/pr-d4-backfill/phase-b/revalidationOrchestrator.ts` | new | 247 |
+| `scripts/pr-d4-backfill/phase-b/adapters.ts` | new | 130 |
+| `scripts/pr-d4-backfill/types.ts` | modified | +101/-1 |
+| `scripts/pr-d4-backfill/phase-a/artifactWriter.ts` | modified | +23/-7 (writeJson signature 拡張) |
+| `scripts/pr-d4-backfill/phase-a/adapters.ts` | modified | +16/-7 (writeJson precondition 対応) |
+| `scripts/pr-d4-backfill/index.ts` | modified | +97/-32 (--phase B 対応) |
+| `functions/test/prD4ArtifactReader.test.ts` | new | 210 |
+| `functions/test/prD4DriftDetector.test.ts` | new | 184 |
+| `functions/test/prD4ChildRevalidator.test.ts` | new | 91 |
+| `functions/test/prD4ParentReSplitVerifier.test.ts` | new | 155 |
+| `functions/test/prD4PhaseBArtifactWriter.test.ts` | new | 197 |
+| `functions/test/prD4RevalidationOrchestrator.test.ts` | new | 540 |
+| `functions/test/prD4ArtifactWriter.test.ts` | modified | +6/-2 |
+| `functions/test/prD4AuditClassify.test.ts` | modified | +6/-1 |
+
+### Net 計測 (CLAUDE.md MUST)
+
+- Before: open Issues = 4 (#432 P0、#402 P2、#251 P2、#238 P2)
+- After: open Issues = 4 (変化なし)
+- 本 session 完了時点で **+0 / -0 = Net 0**
+- 進捗判定: ✅ 構造的進捗 (Issue #432 P0 復旧経路の **Phase B write-free preflight revalidation が main 確定**、Phase C/D 実装が安全に積み上げ可能)
+
+### 設計上の重要決定 (Codex MCP 1st NO-GO → 2nd GO 反映)
+
+- **manifest CAS update (Codex Critical 反映)**: Phase B が既存 Phase A manifest を update する経路で `ifGenerationMatch: 0` (overwrite 禁止) が 412 確定 fail させていた問題を、`ArtifactStorageWriter.writeJson` の signature 拡張 (`precondition.ifGenerationMatch` optional) で compare-and-swap update に変更。reader が manifest GCS generation を取得し、finalize で同じ generation を渡すことで「Phase B 実行中に他者が manifest を書換えていれば 412 fail」の race-safe 設計に。Phase A 既存パス (`writeJson(path, content)` 省略 = 0) は互換維持
+- **parent download 遅延 (Codex Important 反映)**: orchestrator を `child download → parent metadata HEAD → drift detect → drift OK + child 存在のみ parent bytes download` の順に refactor。`ParentObjectDownloader.getMetadataOnly` 追加で HEAD-only 経路を提供。drift / child orphan の場合は parent PDF download (大容量 / cross-region egress potential) を構造的に回避
+- **createdAt epoch silent fallback 構造的閉鎖 (evaluator + code-reviewer HIGH)**: `FirestoreReReaderImpl.fetchDoc` で `createdAt` 不在 / 不正型の場合 null 返却。orchestrator は null 受領で `driftSkipped.firestoreUpdateTimeChanged++` で除外。これにより 1970-01-01 epoch を `provenance.createdAt` に書込んで Phase C に流す経路が型・実装の両レベルで閉鎖。ADR-0016 Critical 2 (split 完了時刻 ≠ backfill 実行時刻) を強化
+- **write-free invariant 維持**: Phase B は production Firestore / production GCS への write を一切しない。GCS への write は artifact bucket の chunks / main / manifest のみ。Codex MCP 2nd review でも明示確認
+- **Phase C 連携設計の責務分離**: `PhaseBRevalidatedCandidate.computedProvenance.createdAt` を **ISO string** で保持 (Phase B level)。Phase C caller (S1-4 で実装) で `Timestamp.fromDate(new Date(...))` 変換して `createBackfillProvenance()` factory に渡す責務分割を JSDoc に明文化
+
+### 教訓 (本セッション新規)
+
+- **interface 拡張時の Phase 間 contract 検証必須**: Phase A の `ArtifactStorageWriter.writeJson(path, content)` は新規書込専用に最適化 (`ifGenerationMatch: 0` 強制) されていたが、Phase B で同 interface を使う manifest update 経路が 412 で fail する構造的バグを Codex 1st review が発見。**Phase 間で同一 interface を別目的で使う場合、各 Phase の write semantics を contract レベルで確認する**。今後の Phase C/D 着手時に同種の Phase 跨ぎ interface 拡張があれば impl-plan 段階で signature 検討する
+- **silent fallback (epoch / null) は型または invariant で構造的に閉鎖**: createdAt 不在時の `new Date(0).toISOString()` (1970-01-01) は型上は valid だが意味論破壊。**「該当値を生成する fallback コードを書いたら、それが consumer 側で fail-safely 弾かれる経路を全 invariant パスで検証」** を Codex review チェックリストに追加。今回は adapters で null 返却 + orchestrator で counter 加算で構造的閉鎖
+- **drift 検出の cost-aware ordering**: drift 検出は **「最も cheap な metadata 取得 → 最も expensive な download/compute」** の順に並べる。今回 child は sha256 計算が必要なため download 必須だが、parent は HEAD で drift 検出可能 → drift fail なら bytes download を skip できる。Phase C/D も同じパターンで「drift 検出と heavy compute の分離」を impl-plan に組込むこと
+- **大規模 stage の段階分解の有効性確認**: session71 (S1-1) で確立した「sub-stage 単位の独立 PR」パターンを session72 (Phase A) / 73 (Phase B) で実証。各 PR が 1245 tests を保ちながら 19 files / 2615 行規模でも 1 セッション内 main merge 可能。**1 機能 1 phase レベルまで scope 絞ること**が安全な完遂条件と再確認
+
+### 次セッション着手項目
+
+1. `/catchup` で本 handoff + Issue #432 状態 + open Issue 確認
+2. **PR-D4 S1-4 着手** (Phase C 実装、atomic backfill verified docs): Phase B artifact streaming read (chunk 単位 sha256 verify) + **GCS sentinel object 排他 lock** (`pr-d4-backfill-locks/{env}-phase-c.lock` を `ifGenerationMatch:0` で create、既存 lock 検出で abort) + **atomic batch write** (`provenance` 10 fields + `provenanceBackfill` metadata を `Timestamp.fromDate(new Date(...))` 変換しつつ書込) + **batch precondition failure doc 単位隔離** (個別 update で precondition 失敗なら `preconditionFailedDocs` 配列に隔離して continue) + **global write rate limiter** (100-200/sec で開始、Codex 2nd L2 反映)。createBackfillProvenance() factory 経由で 10 fields + metadata 完全構築。本番 Phase C 書込対象は MatchedByHash かつ derived-bytes-verified のみ (impl-plan §4.0)
+3. **PR-D4 S1-5** (Phase D 実装、verify + gate behavior): Phase C 書込 doc 全件再読込 + rotate gate test (derived-bytes-verified allow / child-snapshot-only reject)
+4. **PR-D4 S1-6**: Dockerfile + `.github/workflows/pr-d4-backfill.yml` (workflow_dispatch + env/phase 選択)
+5. **PR-D4 S1-7**: container build + push (dev で実行) → image tag 取得 (= S1 完了条件)
+6. **PR-D4 S2-S7**: dev rehearsal 7-stage × 2 周 → Codex MCP 5th review GO 確認 → cocoro / kanameone 段階展開 (各 phase ユーザー番号認可)
+
+---
 
 <a id="session72"></a>
 ## ✅ session72 完了サマリー (2026-05-15: Issue #445 PR-D4 S1-2 Phase A 実装 main merge `cc2616d` (PR #464) + Codex MCP 1st NO-GO → 2nd GO 反映、Net 0)
