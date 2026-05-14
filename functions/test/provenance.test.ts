@@ -9,9 +9,11 @@
 import { expect } from 'chai';
 import { Timestamp } from 'firebase-admin/firestore';
 import {
+  CreateBackfillProvenanceInput,
   CreateSplitProvenanceInput,
   ProvenanceValidationError,
   assertValidProvenanceInput,
+  createBackfillProvenance,
   createSplitProvenance,
 } from '../src/pdf/provenance';
 
@@ -204,5 +206,257 @@ describe('ProvenanceValidationError', () => {
       expect((err as ProvenanceValidationError).reason).to.match(/64-char hex/);
       expect((err as Error).name).to.equal('ProvenanceValidationError');
     }
+  });
+});
+
+// ============================================================
+// createBackfillProvenance (ADR-0016 MUST 6 / Issue #445 PR-D4)
+// ============================================================
+
+function makeBackfillInput(
+  overrides: Partial<CreateBackfillProvenanceInput> = {}
+): CreateBackfillProvenanceInput {
+  return {
+    provenanceFields: makeValidInput(),
+    confidence: 'derived-bytes-verified',
+    classifierCategory: 'MatchedByHash',
+    evidence: {
+      parentExists: true,
+      parentSha256MatchedAtBackfill: true,
+      childSha256ComputedAtBackfill: true,
+    },
+    backfillScriptVersion: 'pr-d4-v1.0',
+    ...overrides,
+  };
+}
+
+describe('createBackfillProvenance (ADR-0016 MUST 6 factory)', () => {
+  describe('正常系: confidence ごとの構築', () => {
+    it('derived-bytes-verified で provenance 10 fields + backfill metadata を構築する', () => {
+      const result = createBackfillProvenance(makeBackfillInput());
+      // provenance side (10 fields の値を継承)
+      expect(result.provenance.sourceGeneration).to.equal('1700000000000001');
+      expect(result.provenance.sourceSha256).to.equal('a'.repeat(64));
+      expect(result.provenance.derivedObjectPath).to.equal('processed/doc-id-xyz/output.pdf');
+      expect(result.provenance.derivedSha256).to.equal('b'.repeat(64));
+      // backfill metadata side
+      expect(result.provenanceBackfill.method).to.equal('legacy-observed');
+      expect(result.provenanceBackfill.confidence).to.equal('derived-bytes-verified');
+      expect(result.provenanceBackfill.backfilledAt).to.exist;
+      expect(result.provenanceBackfill.evidence.parentExists).to.equal(true);
+      expect(result.provenanceBackfill.evidence.parentSha256MatchedAtBackfill).to.equal(true);
+      expect(result.provenanceBackfill.evidence.childSha256ComputedAtBackfill).to.equal(true);
+      expect(result.provenanceBackfill.evidence.backfillScriptVersion).to.equal('pr-d4-v1.0');
+      expect(result.provenanceBackfill.evidence.classifierCategory).to.equal('MatchedByHash');
+    });
+
+    it('child-snapshot-only で構築する (parent 不在 + child sha256 実計算済)', () => {
+      const result = createBackfillProvenance(
+        makeBackfillInput({
+          confidence: 'child-snapshot-only',
+          classifierCategory: 'Ambiguous',
+          evidence: {
+            parentExists: false,
+            parentSha256MatchedAtBackfill: null,
+            childSha256ComputedAtBackfill: true,
+          },
+        })
+      );
+      expect(result.provenanceBackfill.confidence).to.equal('child-snapshot-only');
+      expect(result.provenanceBackfill.evidence.parentExists).to.equal(false);
+      expect(result.provenanceBackfill.evidence.parentSha256MatchedAtBackfill).to.be.null;
+      expect(result.provenanceBackfill.evidence.classifierCategory).to.equal('Ambiguous');
+    });
+
+    it('metadata-only で構築する (childSha256ComputedAtBackfill=false 許容)', () => {
+      const result = createBackfillProvenance(
+        makeBackfillInput({
+          confidence: 'metadata-only',
+          classifierCategory: 'Ambiguous',
+          evidence: {
+            parentExists: false,
+            parentSha256MatchedAtBackfill: null,
+            childSha256ComputedAtBackfill: false,
+          },
+        })
+      );
+      expect(result.provenanceBackfill.confidence).to.equal('metadata-only');
+      expect(result.provenanceBackfill.evidence.childSha256ComputedAtBackfill).to.equal(false);
+    });
+  });
+
+  describe('時刻フィールド', () => {
+    it('backfilledAt 省略時は Timestamp.now() を採用する', () => {
+      const before = Timestamp.now();
+      const result = createBackfillProvenance(makeBackfillInput());
+      const after = Timestamp.now();
+      const ms = (result.provenanceBackfill.backfilledAt as unknown as Timestamp).toMillis();
+      expect(ms).to.be.at.least(before.toMillis());
+      expect(ms).to.be.at.most(after.toMillis());
+    });
+
+    it('backfilledAt 明示指定時はそれを採用する', () => {
+      const fixed = Timestamp.fromMillis(1700000000000);
+      const result = createBackfillProvenance(makeBackfillInput({ backfilledAt: fixed }));
+      expect((result.provenanceBackfill.backfilledAt as unknown as Timestamp).toMillis()).to.equal(
+        1700000000000
+      );
+    });
+
+    it('provenance.createdAt は input.provenanceFields.createdAt を継承する (split 完了時刻)', () => {
+      const splitCompletedAt = Timestamp.fromMillis(1690000000000);
+      const result = createBackfillProvenance(
+        makeBackfillInput({
+          provenanceFields: { ...makeValidInput(), createdAt: splitCompletedAt },
+          backfilledAt: Timestamp.fromMillis(1700000000000),
+        })
+      );
+      expect((result.provenance.createdAt as unknown as Timestamp).toMillis()).to.equal(
+        1690000000000
+      );
+      expect(
+        (result.provenanceBackfill.backfilledAt as unknown as Timestamp).toMillis()
+      ).to.equal(1700000000000);
+    });
+  });
+
+  describe('sha256 lowercase 正規化', () => {
+    it('provenance fields の sha256 を lowercase 化する', () => {
+      const result = createBackfillProvenance(
+        makeBackfillInput({
+          provenanceFields: makeValidInput({
+            sourceSha256: 'A'.repeat(64),
+            derivedSha256: 'B'.repeat(64),
+          }),
+        })
+      );
+      expect(result.provenance.sourceSha256).to.equal('a'.repeat(64));
+      expect(result.provenance.derivedSha256).to.equal('b'.repeat(64));
+    });
+  });
+
+  describe('validation: provenance fields の 10 fields 検証 (assertValidProvenanceInput 流用)', () => {
+    it('sourceSha256 短すぎで ProvenanceValidationError', () => {
+      expect(() =>
+        createBackfillProvenance(
+          makeBackfillInput({
+            provenanceFields: makeValidInput({ sourceSha256: 'abc' }),
+          })
+        )
+      )
+        .to.throw(ProvenanceValidationError)
+        .with.property('field', 'sourceSha256');
+    });
+
+    it('derivedObjectPath に gs:// prefix で throw', () => {
+      expect(() =>
+        createBackfillProvenance(
+          makeBackfillInput({
+            provenanceFields: makeValidInput({
+              derivedObjectPath: 'gs://bucket/x.pdf',
+            }),
+          })
+        )
+      )
+        .to.throw(ProvenanceValidationError)
+        .with.property('field', 'derivedObjectPath');
+    });
+  });
+
+  describe('validation: backfillScriptVersion', () => {
+    it('空文字で ProvenanceValidationError', () => {
+      expect(() =>
+        createBackfillProvenance(makeBackfillInput({ backfillScriptVersion: '' }))
+      )
+        .to.throw(ProvenanceValidationError)
+        .with.property('field', 'backfillScriptVersion');
+    });
+  });
+
+  describe('validation: confidence-evidence 整合性 (ADR Critical 6 反映)', () => {
+    it('derived-bytes-verified で parentExists=false なら throw (verified には parent 現存必須)', () => {
+      expect(() =>
+        createBackfillProvenance(
+          makeBackfillInput({
+            confidence: 'derived-bytes-verified',
+            evidence: {
+              parentExists: false,
+              parentSha256MatchedAtBackfill: true,
+              childSha256ComputedAtBackfill: true,
+            },
+          })
+        )
+      )
+        .to.throw(ProvenanceValidationError)
+        .with.property('field', 'evidence.parentExists');
+    });
+
+    it('derived-bytes-verified で parentSha256MatchedAtBackfill !== true なら throw', () => {
+      expect(() =>
+        createBackfillProvenance(
+          makeBackfillInput({
+            confidence: 'derived-bytes-verified',
+            evidence: {
+              parentExists: true,
+              parentSha256MatchedAtBackfill: null,
+              childSha256ComputedAtBackfill: true,
+            },
+          })
+        )
+      )
+        .to.throw(ProvenanceValidationError)
+        .with.property('field', 'evidence.parentSha256MatchedAtBackfill');
+    });
+
+    it('derived-bytes-verified で childSha256ComputedAtBackfill=false なら throw', () => {
+      expect(() =>
+        createBackfillProvenance(
+          makeBackfillInput({
+            confidence: 'derived-bytes-verified',
+            evidence: {
+              parentExists: true,
+              parentSha256MatchedAtBackfill: true,
+              childSha256ComputedAtBackfill: false,
+            },
+          })
+        )
+      )
+        .to.throw(ProvenanceValidationError)
+        .with.property('field', 'evidence.childSha256ComputedAtBackfill');
+    });
+
+    it('child-snapshot-only で childSha256ComputedAtBackfill=false なら throw (現 child sha256 実計算必須)', () => {
+      expect(() =>
+        createBackfillProvenance(
+          makeBackfillInput({
+            confidence: 'child-snapshot-only',
+            evidence: {
+              parentExists: false,
+              parentSha256MatchedAtBackfill: null,
+              childSha256ComputedAtBackfill: false,
+            },
+          })
+        )
+      )
+        .to.throw(ProvenanceValidationError)
+        .with.property('field', 'evidence.childSha256ComputedAtBackfill');
+    });
+
+    it('metadata-only で childSha256ComputedAtBackfill=true なら throw (metadata-only は実計算スキップが定義)', () => {
+      expect(() =>
+        createBackfillProvenance(
+          makeBackfillInput({
+            confidence: 'metadata-only',
+            evidence: {
+              parentExists: true,
+              parentSha256MatchedAtBackfill: null,
+              childSha256ComputedAtBackfill: true,
+            },
+          })
+        )
+      )
+        .to.throw(ProvenanceValidationError)
+        .with.property('field', 'evidence.childSha256ComputedAtBackfill');
+    });
   });
 });

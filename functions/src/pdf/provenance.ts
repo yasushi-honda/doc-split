@@ -1,16 +1,21 @@
 /**
  * 分割 PDF Provenance Factory + Runtime Validation
  *
- * ADR-0016 MUST 2 (10 fields) / MUST 5 (read snapshot 整合) を実装する factory。
- * sha256 hex 長さ・generation 数値文字列・path 非空を runtime 検証する。
+ * ADR-0016 MUST 2 (10 fields) / MUST 5 (read snapshot 整合) / MUST 6 (provenanceBackfill) を実装する factory。
+ * sha256 hex 長さ・generation 数値文字列・path 非空・confidence-evidence 整合性を runtime 検証する。
  *
- * Issue #445 PR-D2 (splitPdf 改修) で利用。
+ * Issue #445 PR-D2 (splitPdf 改修) / PR-D3 (rotatePdfPages 改修) / PR-D4 (legacy backfill) で利用。
  *
  * 詳細: docs/adr/0016-document-identity-and-provenance.md
  */
 
 import { Timestamp } from 'firebase-admin/firestore';
-import type { DocumentProvenance } from '../../../shared/types';
+import type {
+  BackfillClassifierCategory,
+  BackfillConfidence,
+  DocumentProvenance,
+  ProvenanceBackfillMetadata,
+} from '../../../shared/types';
 
 const SHA256_HEX_RE = /^[0-9a-fA-F]{64}$/;
 const NUMERIC_STRING_RE = /^[0-9]+$/;
@@ -221,4 +226,132 @@ export function createRotationProvenance(
     createdAt: input.base.createdAt,
   };
   return provenance as unknown as DocumentProvenance;
+}
+
+// ============================================================
+// createBackfillProvenance (ADR-0016 MUST 6 / Issue #445 PR-D4)
+// ============================================================
+
+/**
+ * createBackfillProvenance() の入力型。
+ *
+ * 設計:
+ * - `provenanceFields`: caller が現在の GCS state から組立てた 10 fields (CreateSplitProvenanceInput と同形)。
+ *   `createdAt` は **split 完了時刻** (= document.createdAt 由来) を渡す。backfill 実行時刻ではない (Codex 1st Critical 2 反映)。
+ * - `confidence`: rotate gate 動作と連動。`evidence` との整合性を runtime 検証 (Codex 1st Critical 6 反映)。
+ * - `classifierCategory`: PR-C3c classifier 出力を記録 (Codex 2nd review I7 反映)。
+ * - `evidence`: 現物計算結果 (再現性 + 監査)。
+ * - `backfillScriptVersion`: 例 'pr-d4-v1.0' (script 改修で再 backfill を区別)。
+ * - `backfilledAt`: 省略時は Timestamp.now()。
+ */
+export interface CreateBackfillProvenanceInput {
+  provenanceFields: CreateSplitProvenanceInput;
+  confidence: BackfillConfidence;
+  classifierCategory: BackfillClassifierCategory;
+  evidence: {
+    parentExists: boolean;
+    parentSha256MatchedAtBackfill: boolean | null;
+    childSha256ComputedAtBackfill: boolean;
+  };
+  backfillScriptVersion: string;
+  backfilledAt?: Timestamp;
+}
+
+/**
+ * confidence と evidence の整合性を検証する (ADR-0016 MUST 6 / Codex 1st Critical 6 反映)。
+ *
+ * 低 confidence の doc を "verified" に昇格させる経路を構造的に閉鎖する。
+ *
+ * - `derived-bytes-verified`: parent 現存 + parent sha256 match + child sha256 実計算 の **3 つ全部** 必須
+ * - `child-snapshot-only`: child sha256 実計算 必須 (parent 状態は問わない)
+ * - `metadata-only`: child sha256 実計算 **しない** (定義上スキップ、Codex 2nd L3 反映)
+ */
+function assertConfidenceEvidenceConsistency(
+  confidence: BackfillConfidence,
+  evidence: CreateBackfillProvenanceInput['evidence']
+): void {
+  switch (confidence) {
+    case 'derived-bytes-verified':
+      if (!evidence.parentExists) {
+        throw new ProvenanceValidationError(
+          'evidence.parentExists',
+          'derived-bytes-verified requires parentExists=true'
+        );
+      }
+      if (evidence.parentSha256MatchedAtBackfill !== true) {
+        throw new ProvenanceValidationError(
+          'evidence.parentSha256MatchedAtBackfill',
+          'derived-bytes-verified requires parentSha256MatchedAtBackfill=true (re-split bytes match)'
+        );
+      }
+      if (!evidence.childSha256ComputedAtBackfill) {
+        throw new ProvenanceValidationError(
+          'evidence.childSha256ComputedAtBackfill',
+          'derived-bytes-verified requires childSha256ComputedAtBackfill=true'
+        );
+      }
+      break;
+    case 'child-snapshot-only':
+      if (!evidence.childSha256ComputedAtBackfill) {
+        throw new ProvenanceValidationError(
+          'evidence.childSha256ComputedAtBackfill',
+          'child-snapshot-only requires childSha256ComputedAtBackfill=true (現 child sha256 実計算必須)'
+        );
+      }
+      break;
+    case 'metadata-only':
+      if (evidence.childSha256ComputedAtBackfill) {
+        throw new ProvenanceValidationError(
+          'evidence.childSha256ComputedAtBackfill',
+          'metadata-only definition skips actual sha256 compute; set childSha256ComputedAtBackfill=false'
+        );
+      }
+      break;
+    default: {
+      // exhaustiveness check
+      const _exhaustive: never = confidence;
+      throw new ProvenanceValidationError('confidence', `unknown confidence: ${String(_exhaustive)}`);
+    }
+  }
+}
+
+/**
+ * legacy backfill 用に provenance 10 fields + provenanceBackfill metadata を構築する factory。
+ *
+ * 検証手順:
+ * 1. `assertValidProvenanceInput(provenanceFields)` で 10 fields の型・形式を検証
+ * 2. `backfillScriptVersion` 非空検証
+ * 3. `assertConfidenceEvidenceConsistency` で confidence-evidence 整合性検証 (Critical 6 反映)
+ *
+ * 出力:
+ * - `provenance`: createSplitProvenance と同形 (sha256 lowercase 正規化、createdAt は input 由来)
+ * - `provenanceBackfill`: legacy-observed metadata (backfilledAt は別時刻、evidence 完備)
+ *
+ * Phase C で Firestore atomic batch に渡される 2 オブジェクト。
+ */
+export function createBackfillProvenance(input: CreateBackfillProvenanceInput): {
+  provenance: DocumentProvenance;
+  provenanceBackfill: ProvenanceBackfillMetadata;
+} {
+  assertValidProvenanceInput(input.provenanceFields);
+  assertNonEmptyString(input.backfillScriptVersion, 'backfillScriptVersion');
+  assertConfidenceEvidenceConsistency(input.confidence, input.evidence);
+
+  const provenance = createSplitProvenance(input.provenanceFields);
+  const provenanceBackfill = {
+    method: 'legacy-observed' as const,
+    confidence: input.confidence,
+    backfilledAt: input.backfilledAt ?? Timestamp.now(),
+    evidence: {
+      parentExists: input.evidence.parentExists,
+      parentSha256MatchedAtBackfill: input.evidence.parentSha256MatchedAtBackfill,
+      childSha256ComputedAtBackfill: input.evidence.childSha256ComputedAtBackfill,
+      backfillScriptVersion: input.backfillScriptVersion,
+      classifierCategory: input.classifierCategory,
+    },
+  };
+  return {
+    provenance,
+    provenanceBackfill: provenanceBackfill as unknown as ProvenanceBackfillMetadata,
+  };
 }
