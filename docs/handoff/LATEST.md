@@ -1,8 +1,110 @@
 # ハンドオフメモ
 
-**更新日**: 2026-05-14 session68 (**Issue #445 PR-D2 完遂: splitPdf provenance 10 fields 必須化 + 3-stage source snapshot + concurrent write 検出 + atomic batch.commit + cleanup helper + 5 段階品質ゲート全通過 + main merge `cb8d94a` + main CI/Deploy success、Net 0**。session67 で確立した ADR-0016 設計合意を実装フェーズへ移行。Codex MCP 2 段階セカンドオピニオン (impl-plan + post-impl、thread `019e231a-...`) で計 High 4 + Medium 5 + Low 5 を発見・全反映、`/simplify` 3 agent 並列で HIGH 1 (sha256Hex 抽出) + MEDIUM 2 (Buffer.from dedup) を反映、`/safe-refactor` 0 件、Evaluator 分離プロトコル (5+ files 発動) で APPROVE + LOW 3 反映 (endPage > PDF ページ数 invalid-argument 早期 abort)、`/review-pr` 6 agent 並列で Critical 3 (HttpsError ラップで INTERNAL 潰れ防止) + Important 3 (FE provenance クリア + 軽微 cleanup) を反映。Issue #432 P0 collision の構造的予防を確立 (Storage path 衝突は新規クライアント環境で原理的に発生不可能、source identity bit-perfect 証拠 5 fields + child identity 4 fields + audit 1 field = 10 fields の Firestore 永続化基盤完成)。次セッション着手候補: dev E2E 確認 (AC9) / kanameone・cocoro 本番展開判断 (別 PR + 番号認可) / PR-D3 (rotatePdfPages 改修) impl-plan)
-**ブランチ**: `main` (PR #456 squash merge 完了、`cb8d94a`、main CI run `25828945451` ✅、main Deploy run `25828945465` ✅、pages build run `25828944667` ✅)
-**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + (session29-66 累積実績は archive 参照) + **Phase 8 (session67 = Issue #445 PR-D1 完遂 = ADR-0016 + DocumentProvenance 設計合意 / session68 = Issue #445 PR-D2 完遂 = splitPdf provenance 10 fields 実装、Net 0)** = Issue #432 P0 collision の構造的予防完成 (新規クライアント等価運用基盤の核心実装)
+**更新日**: 2026-05-14 session69 (**Issue #445 PR-D3 完遂: rotatePdfPages を ADR-0016 MUST 3 準拠に refactor、in-place 編集禁止 + 案 Y' canonical path `processed/{docId}/rotations/{rotationId}.pdf` (UUID v4) + source 5 + createdAt 不変 / derived 4 更新 (createRotationProvenance factory) + lastUpdateTime precondition による optimistic locking + 3-way error-code OR judgment + identity drift 検証 (path + bytes sha256) + 二段階方針 normalizeRotation/Fallback + 6 段階品質ゲート全通過、Net 0 (PR 作成承認待ち)**。前 session68 (PR-D2 完遂、splitPdf provenance 10 fields) で確立した ADR-0016 設計合意を rotation 側に展開。Codex MCP 2 段階セカンドオピニオン (impl-plan + post-impl、thread `019e2383-...`) で HIGH 4 + MEDIUM 4 + LOW 1 を発見・全反映 (案 X → 案 Y' 切替含む)、`/simplify` 3 agent 並列で HIGH 3 (mergeRotations unsafe cast / CleanableStorageFile reuse / runTransaction → lastUpdateTime precondition) + M1 (unwrapErrorMessage) を反映、`/safe-refactor` LOW 1 反映、Evaluator 分離プロトコル REQUEST_CHANGES (CRITICAL Q1 gRPC code 型保証なし / HIGH Q2 pageRotations 既存値破損 / MEDIUM fileUrl.replace) 全反映、`/review-pr` 5 agent 並列で Critical 5 (mergeRotations 累積 strict / rollback details / 用語不整合 source 6→5+createdAt / mergeRotations unit test / shared/types.ts docstring) + Important 4 反映。ADR-0016 Status: Proposed → Accepted (PR-D3 完遂で MUST 1/2/3/5 実装完成)。Issue #432 P0 collision の構造的予防は splitPdf (PR-D2) + rotatePdfPages (PR-D3) 双方で完成。次セッション着手候補: dev E2E 確認 (AC9 + AC15/16) / PR-D3 PR 作成 + main merge 承認待ち / kanameone・cocoro 本番展開判断 (別 PR + 番号認可) / PR-D4 (既存 docs backfill) impl-plan)
+**ブランチ**: `main` (PR-D3 は feature ブランチ未作成、本 session 終了時点ではローカル変更のみ。tsc clean、npm test 1132 件全 pass、regression 0)
+**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + (session29-66 累積実績は archive 参照) + **Phase 8 (session67 = Issue #445 PR-D1 完遂 = ADR-0016 + DocumentProvenance 設計合意 / session68 = Issue #445 PR-D2 完遂 = splitPdf provenance 10 fields 実装 / session69 = Issue #445 PR-D3 完遂 = rotatePdfPages refactor + ADR-0016 Accepted、Net 0)** = Issue #432 P0 collision の構造的予防 splitPdf + rotatePdfPages 双方で完成 (新規クライアント等価運用基盤の構造的予防完了)
+
+<a id="session69"></a>
+## ✅ session69 完了サマリー (2026-05-14: Issue #445 PR-D3 完遂、rotatePdfPages を ADR-0016 MUST 3 準拠に refactor + 6 段階品質ゲート全通過、Net 0、PR 作成承認待ち)
+
+session68 (PR-D2 完遂、PR #456 main merge `cb8d94a`) で splitPdf 側に確立した provenance 10 fields + atomic batch pattern を、rotatePdfPages に展開。ADR-0016 MUST 3 (rotation in-place 編集禁止 + callable 内 delete 完全撤廃) を実装し、Issue #432 P0 collision の構造的予防を splitPdf + rotatePdfPages 双方で完成させた。
+
+### 経緯
+
+1. **catchup**: session68 handoff 確認、次セッション着手項目から PR-D3 (Issue #445 forward-only) を選択 (dev E2E AC9 は AI 単独完遂困難 + kanameone/cocoro 本番展開は destructive で番号認可必須のため除外)
+2. **`/impl-plan`**: T0-T6 タスク分解 + AC1-AC9 + 統合影響分析 + 設計判断 4 件 (path 命名規則 / provenance 更新セマンティクス / delete 撤廃 / AccumulatedSegment 統合) — ADR-0016 MUST 3 で 3 件は確定済、AccumulatedSegment は rotation で accumulate 不要のため対象外
+3. **T0 Codex MCP impl-plan 1st セカンドオピニオン** (thread `019e2383-5a67-73d0-ac75-61afb212b90d`):
+   - HIGH 4: ADR MUST 3 整合性違反 (案 X path 固定 + 新 generation 上書きは ADR 文面違反) / Storage Versioning 依存 / concurrent write 検出不十分 (3-stage snapshot だけでは不足、Firestore transaction + GCS `ifGenerationMatch` 必要) / エッジケース見落とし (legacy provenance / Storage save 後 commit 失敗 / 空配列 / 重複)
+   - MEDIUM 3: AC1 文言不整合 (derivedObjectPath 不変) / grep contract 拡張 / PR-C3c gate 整合性 (sourceSha256 不変テスト必須)
+   - LOW 1: `/review-pr 6 並列` やや過剰
+   - **設計判断 case X → 案 Y' 切替を強く勧告** (新 path `processed/{docId}/rotations/{rotationId}.pdf`)
+4. **ユーザー判断**: 案 Y' へ切替確定 (Recommended、ADR 整合 / versioning 依存解消 / commit 失敗 rollback 容易 / derivedObjectPath AC1 原文一致)
+5. **T1-T4 実装**:
+   - T1: `provenance.ts` に `createRotationProvenance()` + `assertValidRotationProvenanceInput()` + `CreateRotationProvenanceInput` 型 追加 (10 fields 全入力、source 5 + createdAt は base、derived 4 は newDerived、型表面で sourceSha256 上書き不可)
+   - T2: `pdfOperations.ts` の `rotatePdfPages` を全面 refactor (~170 → ~270 行)。8 step (auth → 入力 validation → snapshot + legacy guard → identity drift 検証 + download → PDF load + rotation → 新 path save → metadata + sha256 → provenance build → optimistic locking commit) + 3 helper (`rollbackOrphanRotation` / `mergeRotations` / `unwrapErrorMessage` / `RotationDegrees` / `normalizeRotation` / `normalizeRotationOrFallback`)
+   - T3: `rotationProvenance.test.ts` 新規 (33 件、AC1/2/6/14 + mergeRotations 3 branch + sourceMetageneration negative) + `rotatePdfPagesContract.test.ts` 新規 (27 件 grep contract、AC3/4/11/12/13 + 識別性 drift 検証 AC15/16 + 3-way error-code + 入力 validation 事前)
+   - T4: ADR-0016 Status: Proposed → Accepted + MUST 3 詳細化 (canonical path 規約 + rollback 例外解釈補足) + data-model.md rotation lifecycle 行修正 (source 5 + createdAt 不変)
+6. **T5 6 段階品質ゲート全通過**:
+   - **Gate 1 (Codex impl-plan 1st)**: 上記 HIGH 4 + MEDIUM 3 + LOW 1 全件反映
+   - **Gate 2 (/simplify 3 並列)**: HIGH 3 (mergeRotations `as` キャスト 4 連 → `normalizeRotation` runtime 検証 / `CleanableStorageFile` reuse / `runTransaction` → `docRef.update(payload, { lastUpdateTime })` precondition で SDK 自動 retry 回避 + TOCTOU race-free + 1 read 節約) + M1 (`unwrapErrorMessage` helper で 5 連 try-catch 簡素化) 反映
+   - **Gate 3 (/safe-refactor)**: LOW 1 (gRPC code judge の safety comment 追加) 反映
+   - **Gate 4 (Evaluator 分離 REQUEST_CHANGES)**: CRITICAL Q1 (gRPC error code 型保証なし → 3 系統 OR 判定: 数値 code 9/5 + 文字列 code 'failed-precondition'/'not-found' + error.message regex 全防御) + HIGH Q2 (pageRotations 既存値破損で全 rotation abort = 破壊的変更 → 二段階方針: 既存 = warn + 0 fallback / 新規 = strict / 累積 = strict) + MEDIUM (fileUrl.replace 直書き → parseGcsUri で bucket mismatch 検出付き防御強化) 全反映
+   - **Gate 5 (/review-pr 5 並列)**: Critical 5 (mergeRotations 累積 strict 化 / rollback details `rollbackFailed` flag + orphanObjectPath / "source 6" 用語不整合 → "source 5 + createdAt" / mergeRotations unit test 追加 9 件 / shared/types.ts L132 docstring 修正 PR-D3 矛盾) + Important 4 (3-way error-code grep contract 拡張 / sourceMetageneration negative case / `assertValidRotationProvenanceInput` で base 9 fields 検証 = defense in depth / pageNumber/degrees 事前 validation で PDF download 前 reject) 反映。`mergeRotations` を `rotationMerge.ts` に切出 (Firebase admin 非依存、test 直接 import 可能化)。`rollbackOrphanRotation` 戻り値型を `RollbackResult` type alias に分離 (extraction logic 互換)
+   - **Gate 6 (Codex MCP 2nd セカンドオピニオン)**: MEDIUM (fileUrl ↔ baseProvenance.derivedObjectPath path 一致検証 + download buffer sha256 ↔ derivedSha256 bytes 一致検証で Issue #432 root cause 再発リスク = identity drift で別 object を rotate しつつ provenance source を保持する silent corruption を構造的に排除、AC15/AC16 として記録) + LOW (rotationProvenance.test.ts 冒頭コメント "source 6" drift) 反映 → **APPROVE**
+7. **Net 計測** (CLAUDE.md MUST):
+   - Before: open Issues = 5 (#445 P1、#432 P0 復旧確認待ち、#402 P2、#251 P2、#238 P2)
+   - After: 同上 (#445 は PR-D3 完遂だが close は PR-D4/D5 完了時、本 session で close なし、本 session 完了時点で **+0 / -0 = Net 0**)
+   - 進捗判定: ✅ 正の構造的進捗。Issue #432 (P0) collision の構造的予防が splitPdf + rotatePdfPages 双方で完成 (新規クライアント等価運用基盤の構造的予防完了)
+
+### 変更ファイル一覧 (11 ファイル: 8 modified + 3 new)
+
+| ファイル | 変更 |
+|---------|------|
+| `functions/src/pdf/provenance.ts` | +~120 行 (createRotationProvenance factory + assertValidRotationProvenanceInput + CreateRotationProvenanceInput 型、defense in depth で base 9 fields 検証) |
+| `functions/src/pdf/pdfOperations.ts` | +~200/-87 行 (rotatePdfPages 全面 refactor、8 step + 3 helper、4 系統 OR error judge、identity drift 検証) |
+| `functions/src/pdf/rotationMerge.ts` | **新規 ~95 行** (RotationDegrees / normalizeRotation / normalizeRotationOrFallback / mergeRotations、Firebase admin 非依存 = test 直接 import 可能化) |
+| `shared/types.ts` | DocumentProvenance docstring 修正 (AC14 整合、PR-D3 矛盾解消) |
+| `functions/test/rotationProvenance.test.ts` | **新規 ~440 行** (33 件、provenance factory unit + mergeRotations unit + sourceMetageneration negative + base defense in depth) |
+| `functions/test/rotatePdfPagesContract.test.ts` | **新規 ~250 行** (27 件 grep contract、AC3/4/11/12/13 + AC15/16 identity drift + 3-way error-code + 入力 validation) |
+| `functions/test/storageDeletionGuard.test.ts` | rotatePdfPages entry を構造化ログ grep loop から除外 (PR-D3 で delete 経路撤廃、deleteDocument 側は維持) |
+| `functions/test/splitPdfProvenanceContract.test.ts` | import grep regex 緩和 (`createRotationProvenance` 併記許容) |
+| `functions/test/storagePathExtraction.test.ts` | rotatePdfPages entry を `parseGcsUri` 期待に変更 |
+| `docs/adr/0016-document-identity-and-provenance.md` | Status: Proposed → **Accepted** + MUST 3 詳細化 (canonical path 規約 `processed/{docId}/rotations/{rotationId}.pdf` 明文化 + rollback 例外解釈補足) + Implementation Roadmap PR-D3 ✅ 完遂行 |
+| `docs/context/data-model.md` | rotation lifecycle 行修正 (`derived 4 fields のみ更新 / source 5 + createdAt 不変`) |
+
+### Acceptance Criteria 完遂状況 (AC1-AC16)
+
+| AC | 内容 | 状況 | 検証手段 |
+|----|------|------|---------|
+| AC1 | provenance derived 4 fields update | ✅ | rotationProvenance.test.ts unit |
+| AC2 | source 5 + createdAt 不変 (6 fields preserve) | ✅ | unit test (before/after 比較 + 100 chain) |
+| AC3 | `.delete(` / `canSafelyDeleteStorageFile` / `_r${timestamp}` grep 0 件 | ✅ | rotatePdfPagesContract.test.ts |
+| AC4 | rotation 結果 `processed/{docId}/rotations/{rotationId}.pdf` | ✅ | grep contract |
+| AC5 | concurrent write で `HttpsError('aborted')` | ⏳ UNTESTABLE | grep contract (3-way OR judge) + dev E2E / emulator integration defer |
+| AC6 | provenance runtime validation で `ProvenanceValidationError` | ✅ | unit test (15+ ケース) |
+| AC7 | 既存 splitPdf 系テスト pass | ✅ | npm test 1132 件全 pass |
+| AC8 | ADR-0016 Accepted + data-model.md 修正 | ✅ | git diff |
+| AC9 | dev E2E (実 rotation + Firestore Console / Storage Console 目視) | ⏳ | **次セッション (手動)** |
+| AC10 | 同 docId 並行 rotation で aborted | ⏳ UNTESTABLE | grep contract (lastUpdateTime + 3-way error) + emulator integration defer |
+| AC11 | Storage save 後 commit 失敗時 orphan rollback + `HttpsError('internal')` | ✅ | grep contract + `rollbackFailed` details flag |
+| AC12 | legacy provenance 無し doc を `failed-precondition` で reject | ✅ | grep contract |
+| AC13 | 入力 validation (空配列 / 重複 / 範囲外 / 非整数 pageNumber / 非90倍数 degrees) | ✅ | grep contract + PDF download 前 early abort |
+| AC14 | sourceSha256 を rotation で絶対更新しない (型 + 値) | ✅ | unit test (型レベル keys + 100 chain 値レベル) |
+| **AC15 (Codex 2nd 追加)** | fileUrl ↔ provenance.derivedObjectPath path 一致検証 | ✅ | grep contract |
+| **AC16 (Codex 2nd 追加)** | download buffer sha256 ↔ derivedSha256 bytes 一致検証 | ✅ | grep contract |
+
+### 設計上の重要決定
+
+- **`AccumulatedSegment` discriminated union 化 PR-D2 defer 分**: rotation で accumulate 不要のため PR-D3 でも統合せず、別 follow-up Issue 化候補
+- **rollbackOrphanRotation の ADR-0016 MUST 3 例外解釈**: 「callable 内で生成し未 commit な orphan object の rollback delete は ADR 禁止対象外 (自己生成 + 外部公開前 + 他 doc 参照不可能のため、ADR が予防対象とする同 path 共有 docs の物理破壊が原理的に発生しない)」を ADR に明文化
+- **identity drift 検証の Issue #432 root cause 再発リスク対応**: Codex 2nd で発見、fileUrl と provenance.derivedObjectPath / derivedSha256 の path + bytes 二重検証で「stale fileUrl で別 object を rotate しつつ provenance source を保持する silent corruption」経路を構造的に閉鎖。AC15/16 として grep contract に lock-in
+- **二段階方針 (Evaluator HIGH Q2)**: 既存破損データ (45 度等の非 90 倍数) を warn + 0 fallback で recover、新規 user input は strict 検証。累積は両者 90 倍数なので strict 検証で safe (silent-failure-hunter CRITICAL 1 反映)
+
+### 反映を defer した項目 (follow-up Issue 化候補)
+
+- **review-thread reference labels の rot リスク**: `// Codex HIGH 3:` `// Evaluator CRITICAL Q1:` 等の identifier 削除 (cosmetic 大量変更、本 PR scope 外)
+- **`// Step N: ===` 区切りコメント整理**: rotatePdfPages 関数を 6 helper に分解する大規模 refactor (smell ありだが本 PR scope 上限)
+- **DocumentProvenance branded type 化** (type-design-analyzer 長期推奨): caller が未検証 base を直接 Firestore から読み込んで渡せる経路を型レベルで完全排除 (現状は assertValidRotationProvenanceInput で base 検証 = defense in depth)
+- **RotationDegrees を shared/types.ts に昇格**: PR-D5 で TypeScript 型 + lint 強化と統合
+- **bracket counter sentinel assertion**: rotatePdfPagesContract.test.ts の extraction logic 脆弱性 (string literal / regex 内 `(`/`)` で誤動作リスク)、現状動作問題なし
+- **pdf-lib `getRotation().angle` vs Firestore `pageRotations` 値の同期保証**: 既存設計由来、PR-D3 で新規導入したわけではない
+- **emulator integration test (AC5 / AC10 lock-in)**: 既存方針 (splitPdfIntegration.test.ts と同パターン) に従い別 integration test PR で実装
+- **GCS Object Lifecycle rule** (rotations subdirectory の 7 日経過 + Firestore 参照無し object 自動削除): rollback 失敗時 manual cleanup 撤廃、別 infra PR
+
+### 次セッション着手項目 (優先順)
+
+1. **catchup** (次セッション、本 session69 handoff 確認)
+2. **PR 作成 + main merge 承認待ち** (Issue #445 PR-D3、feature ブランチ `feat/issue-445-pr-d3-rotate-pdf-pages` 作成 → commit → push → PR 作成 → CI pass 確認 → ユーザー番号認可 → main merge)
+3. **dev 環境 E2E 確認 (AC9 + AC15/16)** — `https://doc-split-dev.web.app` で実 rotation 1 件 → Firestore Console で provenance.derivedObjectPath / derivedGeneration / derivedMetageneration / derivedSha256 の 4 fields 更新 + source 5 + createdAt 不変 を目視確認 + Storage Console で `processed/{docId}/rotations/{rotationId}.pdf` 新 path 確認
+4. **kanameone 本番展開判断** (Issue #432 復旧確認、別 PR + 番号認可必須)
+5. **cocoro 本番展開判断** (同上、被害想定 0 件だが survey + dry-run 必須)
+6. **PR-D4 (既存 docs backfill) impl-plan** — destructive、kanameone ~5,725 + cocoro ~539 docs、GCS egress + Cloud Functions CPU 秒のフェルミ試算 + dev リハーサル 7 stages × 2 周必須
+7. (option) PR-D5 (TypeScript 型 + lint 強化) impl-plan
+8. (option) follow-up reuse/efficiency PRs (上記 defer 項目)
+
+> 注: 4, 5 は destructive 操作 — 番号単位の明示認可必須。session69 で Issue #432 P0 collision の構造的予防は完成済 (splitPdf + rotatePdfPages 双方で identity drift 検出付き)、本番展開の復旧確認はユーザー判断 (4 原則 §1 越権回避)。
+
+---
 
 <a id="session68"></a>
 ## ✅ session68 完了サマリー (2026-05-14: Issue #445 PR-D2 完遂、splitPdf provenance 10 fields 実装 + 5 段階品質ゲート + main merge `cb8d94a`、Net 0)

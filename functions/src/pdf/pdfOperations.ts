@@ -24,8 +24,10 @@ import { generateDisplayFileName } from '../../../shared/generateDisplayFileName
 import { timestampToDateString } from '../utils/timestampHelpers';
 import { loadMasterData } from '../utils/loadMasterData';
 import { sanitizeFilenameForStorage } from '../utils/fileNaming';
-import { canSafelyDeleteStorageFile } from '../storage/storageDeletionGuard';
-import { createSplitProvenance } from './provenance';
+import { createSplitProvenance, createRotationProvenance } from './provenance';
+import { mergeRotations } from './rotationMerge';
+import { randomUUID } from 'node:crypto';
+import type { DocumentProvenance } from '../../../shared/types';
 import {
   SourceDriftError,
   acquireSourceSnapshot,
@@ -777,6 +779,21 @@ export const splitPdf = onCall(
 // PDF回転
 // ============================================
 
+/**
+ * rotation 関連 helper (RotationDegrees / normalizeRotation / normalizeRotationOrFallback / mergeRotations) は
+ * test 環境で Firebase admin 初期化なしで import できるよう `rotationMerge.ts` に分離。
+ * pr-test-analyzer Critical 反映 (mergeRotations の unit test 追加のための切出)。
+ */
+// import は file 冒頭の import block で実施: import { mergeRotations } from './rotationMerge';
+
+/**
+ * `e instanceof Error ? e.message : String(e)` の 3 行 boilerplate を 1 行で書くための helper。
+ * M1 (quality): rotatePdfPages の 5 連 try-catch error wrap を簡素化。
+ */
+function unwrapErrorMessage(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
 interface RotateRequest {
   documentId: string;
   rotations: Array<{
@@ -786,7 +803,16 @@ interface RotateRequest {
 }
 
 /**
- * PDFページを回転
+ * PDFページを回転 (Issue #445 PR-D3: ADR-0016 MUST 3 準拠)
+ *
+ * 設計原則:
+ * - in-place 編集禁止: rotation 結果は必ず新 canonical path `processed/{docId}/rotations/{rotationId}.pdf` に書込
+ * - source 5 fields + createdAt (audit 1) は base provenance から完全保持、derived 4 fields のみ更新
+ * - 旧 object は callable 内で削除しない (削除は番号認可付き destructive migration / deleteDocument 経路のみ)
+ * - orphan rollback: Storage save 成功後の任意の失敗で新 path object を delete (自己生成・未 commit の例外)
+ * - 入力 validation: 空配列 / 同ページ重複 / pageNumber 範囲外を early abort
+ * - legacy provenance 無し doc は failed-precondition で reject (PR-D4 backfill 完了後に再 rotation 可)
+ * - concurrent write 検出: Firestore transaction で optimistic locking (開始時 updateTime 比較)
  */
 export const rotatePdfPages = onCall(
   {
@@ -794,7 +820,6 @@ export const rotatePdfPages = onCall(
     memory: '512MiB',
   },
   async (request) => {
-    // 認証チェック
     if (!request.auth) {
       throw new HttpsError('unauthenticated', 'Authentication required');
     }
@@ -806,146 +831,312 @@ export const rotatePdfPages = onCall(
     const { documentId, rotations } = request.data as RotateRequest;
     console.log('rotatePdfPages called:', { documentId, rotations });
 
+    // AC13: 入力 validation
     if (!documentId || !rotations) {
       throw new HttpsError('invalid-argument', 'Missing required fields');
     }
+    if (!Array.isArray(rotations) || rotations.length === 0) {
+      throw new HttpsError('invalid-argument', 'rotations must be a non-empty array');
+    }
+    const pageNumbers = rotations.map((r) => r.pageNumber);
+    if (new Set(pageNumbers).size !== pageNumbers.length) {
+      throw new HttpsError('invalid-argument', 'rotations contain duplicate pageNumber entries');
+    }
+    // PDF download 前に input shape を validate (bandwidth 節約 + early failure)。
+    for (const r of rotations) {
+      if (!Number.isInteger(r.pageNumber) || r.pageNumber < 1) {
+        throw new HttpsError(
+          'invalid-argument',
+          `rotations[].pageNumber must be a positive integer, got ${r.pageNumber}`
+        );
+      }
+      if (r.degrees !== 90 && r.degrees !== 180 && r.degrees !== 270) {
+        throw new HttpsError(
+          'invalid-argument',
+          `rotations[].degrees must be one of 90 / 180 / 270, got ${r.degrees}`
+        );
+      }
+    }
 
-    // ドキュメント取得
+    // Step 1: 開始時 snapshot 取得 + legacy provenance guard
     const docRef = db.doc(`documents/${documentId}`);
-    const docSnapshot = await docRef.get();
-
-    if (!docSnapshot.exists) {
+    const startSnapshot = await docRef.get();
+    if (!startSnapshot.exists) {
       throw new HttpsError('not-found', 'Document not found');
     }
+    const startData = startSnapshot.data()!;
 
-    const docData = docSnapshot.data()!;
-    const fileUrl = docData.fileUrl as string;
-    console.log('Processing file:', fileUrl);
+    // AC12: legacy provenance 無し doc は reject (PR-D4 backfill 完了後に再 rotation 可能)
+    const baseProvenance = startData.provenance as DocumentProvenance | undefined;
+    if (!baseProvenance) {
+      console.warn('rotatePdfPages: legacy doc without provenance, rejecting', {
+        operation: 'rotatePdfPages',
+        stage: 'provenance_check',
+        documentId,
+      });
+      throw new HttpsError(
+        'failed-precondition',
+        'Document is missing provenance fields; backfill required (Issue #445 PR-D4) before rotation'
+      );
+    }
+    const startUpdateTime = startSnapshot.updateTime;
+    const fileUrl = startData.fileUrl as string;
+    if (!fileUrl) {
+      throw new HttpsError('failed-precondition', 'Document has no fileUrl');
+    }
 
-    // PDFファイルをダウンロード
+    // Step 2: 親 PDF identity 整合性検証 + download
+    // Codex 2nd MEDIUM: fileUrl と baseProvenance.derivedObjectPath の一致検証で identity drift を防ぐ。
+    // Issue #432 root cause 再発リスク (stale fileUrl で別 object を rotate しつつ provenance source を保持 →
+    // silent provenance corruption) を構造的に排除。
     const bucket = storage.bucket();
-    const filePath = fileUrl.replace(`gs://${bucket.name}/`, '');
+    let filePath: string;
+    try {
+      const parsed = parseGcsUri(fileUrl, bucket.name);
+      filePath = parsed.objectName;
+    } catch (parseErr) {
+      throw new HttpsError(
+        'failed-precondition',
+        `Source fileUrl is not a valid gs:// URI in bucket "${bucket.name}": ${unwrapErrorMessage(parseErr)}`
+      );
+    }
+    if (filePath !== baseProvenance.derivedObjectPath) {
+      throw new HttpsError(
+        'failed-precondition',
+        `fileUrl path "${filePath}" does not match provenance.derivedObjectPath "${baseProvenance.derivedObjectPath}"; identity drift detected (Issue #432 root cause prevention)`
+      );
+    }
     const file = bucket.file(filePath);
-    const [buffer] = await file.download();
+    let buffer: Buffer;
+    try {
+      [buffer] = await file.download();
+    } catch (downloadErr) {
+      throw new HttpsError('internal', `PDF download failed: ${unwrapErrorMessage(downloadErr)}`);
+    }
     console.log('Downloaded PDF, size:', buffer.length);
 
-    // PDFを読み込み
-    const pdfDoc = await PDFDocument.load(buffer);
-    console.log('PDF loaded, pages:', pdfDoc.getPageCount());
-
-    // 各ページを回転
-    for (const { pageNumber, degrees: deg } of rotations) {
-      if (pageNumber < 1 || pageNumber > pdfDoc.getPageCount()) {
-        console.error(`Invalid page number: ${pageNumber}, total pages: ${pdfDoc.getPageCount()}`);
-        continue;
-      }
-      const page = pdfDoc.getPage(pageNumber - 1); // 0-indexed
-      const currentRotation = page.getRotation().angle;
-      const newRotation = (currentRotation + deg) % 360;
-      console.log(`Page ${pageNumber}: current rotation ${currentRotation}, adding ${deg}, new rotation ${newRotation}`);
-      page.setRotation(degrees(newRotation));
-      // 検証
-      const afterRotation = page.getRotation().angle;
-      console.log(`Page ${pageNumber}: rotation after setRotation: ${afterRotation}`);
-    }
-
-    // 保存
-    const newPdfBytes = await pdfDoc.save();
-    console.log('PDF saved in memory, size:', newPdfBytes.length);
-
-    // 元のファイルサイズを記録
-    const originalSize = buffer.length;
-    console.log('Original file size:', originalSize, 'New file size:', newPdfBytes.length);
-
-    // CDNキャッシュを完全に回避するため、新しいパスに保存
-    const timestamp = Date.now();
-    const newFilePath = filePath.replace(/\.pdf$/i, `_r${timestamp}.pdf`);
-    const newFile = bucket.file(newFilePath);
-
-    await newFile.save(Buffer.from(newPdfBytes), {
-      metadata: {
-        contentType: 'application/pdf',
-        cacheControl: 'no-cache, no-store, must-revalidate',
-      },
-    });
-    console.log('PDF uploaded to new path:', newFilePath);
-
-    // Issue #432 PR-A safety net: 同 fileUrl 共有 doc 検出時は旧 file delete を skip。
-    // safety net query 失敗時は fail-closed (delete しない) で構造化エラーログを残す。
-    let canDelete = false;
-    let sharingDocCountUpTo2 = 0;
-    try {
-      const guardResult = await canSafelyDeleteStorageFile(db, fileUrl, documentId);
-      canDelete = guardResult.canDelete;
-      sharingDocCountUpTo2 = guardResult.sharingDocCountUpTo2;
-    } catch (guardErr) {
-      console.error('Storage safety-net query failed; skipping delete (fail-closed)', {
-        skippedStorageDelete: true,
-        skipReason: 'safetyNetQueryFailed',
-        operation: 'rotatePdfPages',
-        documentId,
-        fileUrl,
-        error: guardErr instanceof Error ? guardErr.message : String(guardErr),
-      });
-      canDelete = false;
-    }
-
-    if (!canDelete) {
-      console.warn('Skipped storage delete: shared fileUrl detected', {
-        skippedStorageDelete: true,
-        skipReason: 'sharedFileUrl',
-        operation: 'rotatePdfPages',
-        documentId,
-        fileUrl,
-        sharingDocCountUpTo2,
-      });
-    } else {
-      // delete 失敗は許容 (旧 file 既に存在しない等のケースあり)。
-      // ただし silent failure 回避のため severity warn + 構造化ログで観測可能化。
-      try {
-        await file.delete();
-        console.log('Old file deleted:', filePath);
-      } catch (deleteErr) {
-        console.warn('Old file delete attempt failed (root cause not classified)', {
-          operation: 'rotatePdfPages',
-          stage: 'storageDelete',
-          documentId,
-          fileUrl,
-          filePath,
-          error: deleteErr instanceof Error ? deleteErr.message : String(deleteErr),
-        });
-      }
-    }
-
-    // 新しいファイルURLを構築
-    const newFileUrl = `gs://${bucket.name}/${newFilePath}`;
-    console.log('New file URL:', newFileUrl);
-
-    // 回転情報をFirestoreに記録
-    const existingRotations = docData.pageRotations || [];
-    const updatedRotations = [...existingRotations];
-
-    for (const { pageNumber, degrees: deg } of rotations) {
-      const existing = updatedRotations.find(
-        (r: { pageNumber: number }) => r.pageNumber === pageNumber
+    // Codex 2nd MEDIUM (続き): download 後 buffer の sha256 を provenance.derivedSha256 と照合。
+    // 不一致 = identity drift (parseGcsUri は path だけ、ここで bytes identity も検証)。
+    const sourceSha256 = sha256Hex(buffer);
+    if (sourceSha256 !== baseProvenance.derivedSha256.toLowerCase()) {
+      throw new HttpsError(
+        'failed-precondition',
+        `Source PDF sha256 "${sourceSha256}" does not match provenance.derivedSha256 "${baseProvenance.derivedSha256}"; bytes identity drift detected (Issue #432 root cause prevention)`
       );
-      if (existing) {
-        existing.rotation = ((existing.rotation + deg) % 360) as 0 | 90 | 180 | 270;
-      } else {
-        updatedRotations.push({ pageNumber, rotation: deg as 0 | 90 | 180 | 270 });
-      }
     }
 
-    await docRef.update({
-      fileUrl: newFileUrl, // 新しいファイルURLに更新
-      pageRotations: updatedRotations,
-      rotatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
-    console.log('Firestore updated');
+    // Step 3: PDF load + rotation (page 範囲 validation 込)
+    let newPdfBytes: Buffer;
+    try {
+      const pdfDoc = await PDFDocument.load(buffer);
+      const pageCount = pdfDoc.getPageCount();
+      for (const { pageNumber, degrees: deg } of rotations) {
+        if (pageNumber < 1 || pageNumber > pageCount) {
+          throw new HttpsError(
+            'invalid-argument',
+            `pageNumber ${pageNumber} out of range (PDF has ${pageCount} pages)`
+          );
+        }
+        const page = pdfDoc.getPage(pageNumber - 1);
+        const currentRotation = page.getRotation().angle;
+        const newRotation = (currentRotation + deg) % 360;
+        page.setRotation(degrees(newRotation));
+      }
+      newPdfBytes = Buffer.from(await pdfDoc.save());
+    } catch (rotateErr) {
+      if (rotateErr instanceof HttpsError) throw rotateErr;
+      throw new HttpsError('internal', `PDF rotation failed: ${unwrapErrorMessage(rotateErr)}`);
+    }
+    console.log('PDF rotated in memory, size:', newPdfBytes.length);
+
+    // Step 4: 新 canonical path に save (ADR-0016 MUST 3 / AC4)
+    const rotationId = randomUUID();
+    const newObjectPath = `processed/${documentId}/rotations/${rotationId}.pdf`;
+    const newFile = bucket.file(newObjectPath);
+    try {
+      await newFile.save(newPdfBytes, {
+        metadata: {
+          contentType: 'application/pdf',
+          cacheControl: 'no-cache, no-store, must-revalidate',
+        },
+        // Codex HIGH 3: ifGenerationMatch: 0 = "object 不存在" precondition (UUID 衝突防止ダブルセーフティ)
+        preconditionOpts: { ifGenerationMatch: 0 },
+      });
+    } catch (saveErr) {
+      throw new HttpsError('internal', `Storage save failed: ${unwrapErrorMessage(saveErr)}`);
+    }
+    console.log('PDF uploaded to new canonical path:', newObjectPath);
+
+    // Step 5: 新 object metadata + derivedSha256
+    let derivedGeneration = '';
+    let derivedMetageneration = '';
+    try {
+      const [metadata] = await newFile.getMetadata();
+      derivedGeneration = String(metadata.generation ?? '');
+      derivedMetageneration = String(metadata.metageneration ?? '');
+      if (!derivedGeneration || !derivedMetageneration) {
+        throw new Error(
+          `metadata.generation=${derivedGeneration}, metageneration=${derivedMetageneration}`
+        );
+      }
+    } catch (metaErr) {
+      await rollbackOrphanRotation(newFile, newObjectPath, documentId, derivedGeneration);
+      throw new HttpsError('internal', `getMetadata failed: ${unwrapErrorMessage(metaErr)}`);
+    }
+    const derivedSha256 = sha256Hex(newPdfBytes);
+
+    // Step 6: rotation provenance 構築 (source 5 + createdAt 不変、derived 4 更新)
+    let newProvenance: DocumentProvenance;
+    try {
+      newProvenance = createRotationProvenance({
+        base: baseProvenance,
+        newDerived: {
+          derivedObjectPath: newObjectPath,
+          derivedGeneration,
+          derivedMetageneration,
+          derivedSha256,
+        },
+      });
+    } catch (provErr) {
+      await rollbackOrphanRotation(newFile, newObjectPath, documentId, derivedGeneration);
+      throw new HttpsError('internal', `provenance build failed: ${unwrapErrorMessage(provErr)}`);
+    }
+
+    // Step 7: Firestore optimistic locking via lastUpdateTime precondition (AC5 / AC10)
+    // EFF-M2 修正: runTransaction を撤廃し docRef.update(payload, { lastUpdateTime }) 単発に変更。
+    // 利点: (a) tx callback 内 throw が SDK 自動 retry を triggering する懸念を排除
+    //       (b) 同一 doc を 2 回 get する無駄を削減 (pre-tx get の startUpdateTime を直接 precondition に使用)
+    //       (c) Firestore backend 側で TOCTOU race-free な atomic precondition check + update
+    // precondition mismatch は backend が FAILED_PRECONDITION code で reject、それを HttpsError('aborted') に wrap
+    const newFileUrl = `gs://${bucket.name}/${newObjectPath}`;
+    const existingRotations =
+      (startData.pageRotations as Array<{ pageNumber: number; rotation: number }> | undefined) || [];
+    const updatedRotations = mergeRotations(documentId, existingRotations, rotations);
+
+    try {
+      if (!startUpdateTime) {
+        throw new HttpsError(
+          'failed-precondition',
+          'Document has no updateTime; cannot enforce optimistic locking'
+        );
+      }
+      await docRef.update(
+        {
+          fileUrl: newFileUrl,
+          pageRotations: updatedRotations,
+          rotatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          provenance: newProvenance,
+        },
+        { lastUpdateTime: startUpdateTime }
+      );
+    } catch (commitErr) {
+      const rollbackResult = await rollbackOrphanRotation(
+        newFile,
+        newObjectPath,
+        documentId,
+        derivedGeneration
+      );
+      // silent-failure-hunter CRITICAL 2 反映: rollback 失敗時は HttpsError details に flag を含め、
+      // client/Sentry 側で「Firestore 失敗 + Storage orphan 残存」の複合状態を可視化。
+      const rollbackDetails =
+        rollbackResult.ok === false
+          ? { rollbackFailed: true, orphanObjectPath: newObjectPath }
+          : undefined;
+      if (commitErr instanceof HttpsError) {
+        if (rollbackDetails) {
+          throw new HttpsError(commitErr.code, commitErr.message, rollbackDetails);
+        }
+        throw commitErr;
+      }
+      // Firestore precondition mismatch (NOT_FOUND / FAILED_PRECONDITION 等) を concurrent write として扱う。
+      // Evaluator CRITICAL Q1: Firestore admin SDK の Error.code は @grpc/grpc-js 内部実装で
+      // 公式 API 約束ではない (SDK バージョンアップで number → string 変動リスクあり)。
+      // 堅牢化のため 3 系統 OR 判定: (a) gRPC 数値 code (b) Cloud Functions 文字列 code (c) error.message string fallback
+      const errCode =
+        commitErr instanceof Error && 'code' in commitErr
+          ? (commitErr as { code: number | string }).code
+          : undefined;
+      const errMessage = unwrapErrorMessage(commitErr);
+      const isPreconditionFailure =
+        // (a) gRPC 数値 code
+        errCode === 9 || // FAILED_PRECONDITION
+        errCode === 5 || // NOT_FOUND
+        // (b) Cloud Functions 文字列 code
+        errCode === 'failed-precondition' ||
+        errCode === 'not-found' ||
+        // (c) error.message string fallback (SDK 型変動への防御)
+        /FAILED_PRECONDITION|NOT_FOUND|precondition|no document to update/i.test(errMessage);
+      if (isPreconditionFailure) {
+        throw new HttpsError(
+          'aborted',
+          `Concurrent write detected during rotation (document updateTime drift): ${errMessage}`,
+          rollbackDetails
+        );
+      }
+      throw new HttpsError(
+        'internal',
+        `Firestore commit failed: ${errMessage}`,
+        rollbackDetails
+      );
+    }
+    console.log('Firestore updated atomically with new provenance');
 
     return { success: true };
   }
 );
+
+/**
+ * Rotation で自己生成した新 path object を rollback delete する。
+ *
+ * ADR-0016 MUST 3 「callable 内での旧 path 削除を行わない」の **例外**:
+ * 本関数は callable 内で生成し未 commit のため他 doc が参照していない
+ * orphan を対象とする (rotation の自己責任範囲)。
+ *
+ * 戻り値:
+ *   - { ok: true }            : delete 成功
+ *   - { ok: false, error }    : delete 失敗 (warn log 出力済)
+ *
+ * silent-failure-hunter CRITICAL 2 反映: rollback 失敗を caller に通知して
+ * HttpsError details に rollbackFailed flag を含められるようにする。
+ * delete 失敗時の error は HttpsError として throw せず、caller の元エラーを保持する。
+ */
+type RollbackResult = { ok: true } | { ok: false; error: string };
+
+async function rollbackOrphanRotation(
+  newFile: CleanableStorageFile,
+  newObjectPath: string,
+  documentId: string,
+  derivedGeneration: string
+): Promise<RollbackResult> {
+  try {
+    await newFile.delete(
+      derivedGeneration ? { ifGenerationMatch: derivedGeneration } : undefined
+    );
+    console.log('rotatePdfPages: rolled back orphan rotation object', {
+      operation: 'rotatePdfPages',
+      stage: 'orphan_rollback',
+      documentId,
+      newObjectPath,
+    });
+    return { ok: true };
+  } catch (deleteErr) {
+    const errMsg = deleteErr instanceof Error ? deleteErr.message : String(deleteErr);
+    console.warn(
+      'rotatePdfPages: failed to rollback orphan rotation object (manual cleanup hint)',
+      {
+        operation: 'rotatePdfPages',
+        stage: 'orphan_rollback',
+        documentId,
+        newObjectPath,
+        manualCleanupHint: `gsutil rm gs://<bucket>/${newObjectPath}`,
+        error: errMsg,
+      }
+    );
+    return { ok: false, error: errMsg };
+  }
+}
+
+// `mergeRotations` は `./rotationMerge` から import 済 (Firebase admin 初期化なしで test import 可能化)
 
 // ============================================
 // ヘルパー関数

@@ -131,3 +131,94 @@ export function createSplitProvenance(
   };
   return provenance as unknown as DocumentProvenance;
 }
+
+/**
+ * createRotationProvenance() の入力型。
+ *
+ * rotation セマンティクス (ADR-0016 MUST 3 + PR-D3 AC1/AC2/AC14):
+ * - `base`: rotation 前の DocumentProvenance (10 fields)。source 5 + audit 1 (createdAt) は
+ *   そのまま継承。base.derived* は新 object のもので上書きされるため検証対象外。
+ * - `newDerived`: rotation 後の新 Storage object 由来の 4 fields (caller が GCS metadata
+ *   取得後に渡す)。derivedObjectPath は `processed/{docId}/rotations/{rotationId}.pdf` 形式。
+ *
+ * 型表面で sourceSha256 等を上書きする API を意図的に持たない (AC14 担保)。
+ */
+export interface CreateRotationProvenanceInput {
+  base: DocumentProvenance;
+  newDerived: {
+    derivedObjectPath: string;
+    derivedGeneration: string;
+    derivedMetageneration: string;
+    derivedSha256: string;
+  };
+}
+
+/**
+ * rotation 後の最終 provenance を runtime 検証する。
+ *
+ * 検証対象:
+ *   (a) rotation 後に Firestore へ書き込む 9 fields (source 5 + newDerived 4) — base.derived* を newDerived で置換した最終形
+ *   (b) base.derived* 単体 (defense in depth、type-design-analyzer 推奨): 未検証の base を caller が
+ *       直接 Firestore から読み込んで渡した場合のガード。`createSplitProvenance()` 経由なら通過済だが二重チェック。
+ *
+ * `base.createdAt` は audit field のため runtime 検証対象外 (Timestamp は型レベルで保証)。
+ * 失敗時は ProvenanceValidationError を throw。
+ */
+export function assertValidRotationProvenanceInput(
+  input: CreateRotationProvenanceInput
+): void {
+  // (a) 最終形 (= rotation 後に Firestore へ書き込まれる 9 fields の整合)
+  assertValidProvenanceInput({
+    sourceGeneration: input.base.sourceGeneration,
+    sourceMetageneration: input.base.sourceMetageneration,
+    sourceSha256: input.base.sourceSha256,
+    sourcePath: input.base.sourcePath,
+    sourceBucket: input.base.sourceBucket,
+    derivedObjectPath: input.newDerived.derivedObjectPath,
+    derivedGeneration: input.newDerived.derivedGeneration,
+    derivedMetageneration: input.newDerived.derivedMetageneration,
+    derivedSha256: input.newDerived.derivedSha256,
+  });
+  // (b) base.derived* 単体 (defense in depth、未検証 base のガード)
+  assertValidProvenanceInput({
+    sourceGeneration: input.base.sourceGeneration,
+    sourceMetageneration: input.base.sourceMetageneration,
+    sourceSha256: input.base.sourceSha256,
+    sourcePath: input.base.sourcePath,
+    sourceBucket: input.base.sourceBucket,
+    derivedObjectPath: input.base.derivedObjectPath,
+    derivedGeneration: input.base.derivedGeneration,
+    derivedMetageneration: input.base.derivedMetageneration,
+    derivedSha256: input.base.derivedSha256,
+  });
+}
+
+/**
+ * rotation 後の DocumentProvenance を構築する factory。
+ *
+ * 不変性 (ADR-0016 MUST 3 + AC2 + AC14):
+ * - source 5 fields は base の値を保持
+ * - createdAt は base の値を保持 (rotation は audit timestamp を変更しない、split 完了時刻のまま)
+ * - derived 4 fields のみ newDerived で上書き
+ *
+ * sha256 は lowercase に正規化 (createSplitProvenance と同じ)。
+ * 戻り値キャスト理由は createSplitProvenance と同じ (admin/client Timestamp 互換性)。
+ */
+export function createRotationProvenance(
+  input: CreateRotationProvenanceInput
+): DocumentProvenance {
+  assertValidRotationProvenanceInput(input);
+  const provenance = {
+    sourceGeneration: input.base.sourceGeneration,
+    sourceMetageneration: input.base.sourceMetageneration,
+    sourceSha256: input.base.sourceSha256.toLowerCase(),
+    sourcePath: input.base.sourcePath,
+    sourceBucket: input.base.sourceBucket,
+    derivedObjectPath: input.newDerived.derivedObjectPath,
+    derivedGeneration: input.newDerived.derivedGeneration,
+    derivedMetageneration: input.newDerived.derivedMetageneration,
+    derivedSha256: input.newDerived.derivedSha256.toLowerCase(),
+    createdAt: input.base.createdAt,
+  };
+  return provenance as unknown as DocumentProvenance;
+}

@@ -57,19 +57,18 @@ describe('hasOtherSharingDoc (Issue #432 PR-A safety net)', () => {
  * Cloud Logging クエリ (Test plan で監視対象) は以下のキー名に依存する:
  *   - skippedStorageDelete: true
  *   - skipReason: 'sharedFileUrl' | 'safetyNetQueryFailed'
- *   - operation: 'rotatePdfPages' | 'deleteDocument'
+ *   - operation: 'deleteDocument'
  *   - documentId, fileUrl
  *
  * 将来のリファクタでキー名が silently 変更されると kanameone 環境の監視が壊れるため、
  * grep contract で固定する (純粋関数のテストでは検出不可能な接続部の lock-in)。
+ *
+ * Issue #445 PR-D3 (2026-05-14): rotatePdfPages から delete 経路を完全撤廃 (ADR-0016 MUST 3)。
+ * rotatePdfPages の skippedStorageDelete grep は構造的に存在しなくなったため対象から除外。
+ * 撤廃の lock-in は rotatePdfPagesContract.test.ts の grep contract (`.delete(` / `canSafelyDeleteStorageFile` 禁止) で別途実施。
  */
 describe('構造化ログのキー名契約 (Issue #432 PR-A Cloud Logging クエリ保護)', () => {
   const sourceFiles = [
-    {
-      label: 'pdfOperations.ts (rotatePdfPages)',
-      filePath: path.join(__dirname, '..', 'src', 'pdf', 'pdfOperations.ts'),
-      operationName: 'rotatePdfPages',
-    },
     {
       label: 'deleteDocument.ts',
       filePath: path.join(__dirname, '..', 'src', 'documents', 'deleteDocument.ts'),

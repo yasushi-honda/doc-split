@@ -34,8 +34,10 @@ describe('splitPdf provenance 書込契約 (Issue #445 PR-D2 AC6 + Codex L3)', (
   });
 
   it('createSplitProvenance を provenance/splitSnapshot helper として import している', () => {
+    // PR-D3 (#445) で createRotationProvenance が同一 import 文に併記されたため、
+    // 単独形式 `{ createSplitProvenance }` ではなく `{ createSplitProvenance[, ...] }` を許容
     expect(sourceText).to.match(
-      /import\s*\{\s*createSplitProvenance\s*\}\s*from\s*['"]\.\/provenance['"]/
+      /import\s*\{[^}]*\bcreateSplitProvenance\b[^}]*\}\s*from\s*['"]\.\/provenance['"]/
     );
   });
 

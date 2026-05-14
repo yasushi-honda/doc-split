@@ -50,8 +50,8 @@ const targets: PathExtractionTarget[] = [
   {
     label: 'pdfOperations.ts (rotatePdfPages)',
     filePath: 'src/pdf/pdfOperations.ts',
-    // rotatePdfPages 内の filePath = fileUrl.replace(...) パターン
-    expectedPattern: /filePath = fileUrl\.replace\(`gs:\/\/\$\{bucket\.name\}\//,
+    // Issue #445 PR-D3 で fileUrl.replace 直書きから parseGcsUri (bucket mismatch 検出付き) へ移行 (Evaluator MEDIUM 反映)
+    expectedPattern: /parseGcsUri\(fileUrl,\s*bucket\.name\)/,
   },
 ];
 
