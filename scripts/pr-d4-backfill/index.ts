@@ -33,6 +33,17 @@ import {
   GcsObjectDownloader,
   FirestoreReReaderImpl,
 } from './phase-b/adapters';
+import { runPhaseC } from './phase-c/backfillOrchestrator';
+import {
+  FirestoreBatchAdapterImpl,
+  FirestoreIndividualAdapterImpl,
+  GcsLockStoreImpl,
+} from './phase-c/adapters';
+import {
+  PR_D4_PHASE_C_DEFAULT_RATE_LIMITER,
+  PR_D4_SCRIPT_VERSION,
+} from './types';
+import { TokenBucketRateLimiter } from './phase-c/rateLimiter';
 
 function readArg(name: string, defaultValue?: string): string | undefined {
   const idx = process.argv.indexOf(name);
@@ -68,8 +79,10 @@ async function main(): Promise<void> {
     process.exit(2);
   }
   const phase = readArg('--phase', 'A');
-  if (phase !== 'A' && phase !== 'B') {
-    console.error(`FATAL: phase ${phase} not implemented (only Phase A / B are available in S1-3)`);
+  if (phase !== 'A' && phase !== 'B' && phase !== 'C') {
+    console.error(
+      `FATAL: phase ${phase} not implemented (only Phase A / B / C are available in S1-4)`
+    );
     process.exit(2);
   }
 
@@ -131,7 +144,7 @@ async function main(): Promise<void> {
     console.log(`  manifest: ${result.manifestPath}`);
     console.log(`  snapshotStartedAt: ${snapshotStartedAt}`);
     console.log(`  snapshotCompletedAt: ${result.snapshotCompletedAt}`);
-  } else {
+  } else if (phase === 'B') {
     // Phase B: Phase A artifact 経由 manifest を読み revalidation 実施
     const manifestPath = `gs://${artifactBucketName}/pr-d4-backfill-artifacts/${runId}/manifest.json`;
     console.log(`\nPhase B starting with manifest: ${manifestPath}`);
@@ -164,6 +177,56 @@ async function main(): Promise<void> {
     console.log(`  manifest: ${result.manifestPath}`);
     console.log(`  revalidationStartedAt: ${revalidationStartedAt}`);
     console.log(`  revalidationCompletedAt: ${result.revalidationCompletedAt}`);
+  } else {
+    // Phase C: Phase B artifact 経由 manifest を読み atomic backfill 実施 (本 PR S1-4)
+    const manifestPath = `gs://${artifactBucketName}/pr-d4-backfill-artifacts/${runId}/manifest.json`;
+    const jobId = readArg('--job-id', `job-${runId}`)!;
+    // lock owner: GitHub Actions 経由なら GITHUB_RUN_ID + GITHUB_REPOSITORY、ローカルなら 'manual-cli'
+    const githubRunId = process.env.GITHUB_RUN_ID;
+    const defaultLockOwner = githubRunId
+      ? `github-actions-run-${githubRunId}`
+      : 'manual-cli';
+    const lockOwner = readArg('--lock-owner', defaultLockOwner)!;
+    const expectedDurationSec = Number(readArg('--expected-duration-sec', '3600'));
+
+    console.log(`\nPhase C starting with manifest: ${manifestPath}`);
+    console.log(`  jobId: ${jobId}`);
+    console.log(`  lockOwner: ${lockOwner}`);
+    console.log(`  expectedDurationSec: ${expectedDurationSec}`);
+    console.log(
+      `  rateLimiter: ${PR_D4_PHASE_C_DEFAULT_RATE_LIMITER.tokensPerSecond} tokens/sec, burst ${PR_D4_PHASE_C_DEFAULT_RATE_LIMITER.burstCapacity}`
+    );
+
+    const rateLimiter = new TokenBucketRateLimiter(PR_D4_PHASE_C_DEFAULT_RATE_LIMITER);
+
+    const result = await runPhaseC({
+      env: envName,
+      runId,
+      jobId,
+      lockOwner,
+      artifactBucketName,
+      manifestPath,
+      artifactReader: new GcsArtifactReader(artifactBucketRef),
+      artifactWriter: new GcsArtifactStorageWriter(artifactBucketRef),
+      lockStore: new GcsLockStoreImpl(artifactBucketRef),
+      batchAdapter: new FirestoreBatchAdapterImpl(db),
+      individualAdapter: new FirestoreIndividualAdapterImpl(db),
+      rateLimiter,
+      rateLimiterConfig: PR_D4_PHASE_C_DEFAULT_RATE_LIMITER,
+      backfillScriptVersion: PR_D4_SCRIPT_VERSION,
+      expectedDurationSec,
+    });
+
+    console.log('\nPhase C complete:');
+    console.log(`  candidatesIn: ${result.candidatesIn}`);
+    console.log(`  writtenDocs: ${result.writtenDocs}`);
+    console.log(`  preconditionFailedDocs: ${result.preconditionFailedDocs}`);
+    console.log(`  skippedImmutable: ${result.skippedImmutable}`);
+    console.log(`  lockAcquiredGeneration: ${result.lockAcquiredGeneration}`);
+    console.log(`  lockReleasedAt: ${result.lockReleasedAt}`);
+    console.log(`  mainArtifact: ${result.mainArtifactPath}`);
+    console.log(`  manifest: ${result.manifestPath}`);
+    console.log(`  backfillCompletedAt: ${result.backfillCompletedAt}`);
   }
 }
 

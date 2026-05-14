@@ -263,3 +263,204 @@ export interface PhaseBRevalidationSummary {
   skippedNonMatchedByHash: number;
   chunks: ArtifactChunkPointer[];
 }
+
+// ============================================================================
+// Phase C types (impl-plan §4.3、AC BF10/BF11/BF14/BF16/BF18/BF21/BF22/BF23)
+// ============================================================================
+
+/**
+ * Phase C で取得する GCS sentinel lock の body (impl-plan §4.3 step 1)。
+ *
+ * 設計判断:
+ * - `runId`: Phase A/B/C で同一の runId を使う (manifest と整合)
+ * - `jobId`: Cloud Run Job execution ID (Phase C 起動側で生成、stale lock 解放時に
+ *   Cloud Run Console と照合する人間判断材料)
+ * - `startedAt`: lock 取得時刻 (lease 60 min 計算基準、stale 判定の参考)
+ * - `expectedDuration`: 計画見込み時間 (秒、観測用)
+ * - `lockOwner`: GitHub Actions run / 手動実行など lock 取得元 ('github-actions-run-{N}' 等)
+ * - `lockSchemaVersion`: lock body 互換性 (script 改修で bump、parse 失敗時の人間判断助け)
+ */
+export interface PhaseCLockBody {
+  lockSchemaVersion: PrD4ArtifactSchemaVersion;
+  runId: string;
+  jobId: string;
+  startedAt: string;
+  expectedDurationSec: number;
+  lockOwner: string;
+}
+
+/**
+ * Phase C rate limiter (token bucket) の設定 (BF23 + Codex 3rd I4 反映)。
+ *
+ * 設計:
+ * - batch / individual update 共通の global token bucket
+ * - `tokensPerSecond`: refill rate (100-200 / sec、Codex 2nd L2、dev rehearsal 実測で昇格判断)
+ * - `burstCapacity`: 一時的に許容する突発 (= tokensPerSecond 同値で安定運用、Codex 3rd I4)
+ * - 実装は monotonic clock + token refill で正確性を担保
+ */
+export interface PhaseCRateLimiterConfig {
+  tokensPerSecond: number;
+  burstCapacity: number;
+}
+
+/**
+ * Phase C 書込成功 1 doc の記録 (BF22 chunk 内)。
+ *
+ * - `writeStatus`: 'ok' = batch / individual で書込成功
+ * - `newProvenanceBackfillSha256`: 書込んだ provenanceBackfill metadata を canonical JSON
+ *   で sha256 した値 (Phase D verification の入力)
+ * - `lastUpdateTimeAfter`: 書込後の Firestore updateTime (ISO8601、後続 backfill の drift 検出用)
+ */
+export interface PhaseCWrittenDoc {
+  docId: string;
+  writeStatus: 'ok';
+  newProvenanceBackfillSha256: string;
+  lastUpdateTimeAfter: string;
+}
+
+/**
+ * Phase C precondition 失敗で隔離された 1 doc (BF18、impl-plan §4.3 step 5)。
+ *
+ * - `reason`: 'lastUpdateTime drift' (precondition 失敗時) / 'transient retry exhausted'
+ *   (network / timeout で max retry 超過)
+ * - `retryCount`: 個別 update での実行回数 (max=3、impl-plan §4.3 step 5)
+ */
+export interface PhaseCPreconditionFailedDoc {
+  docId: string;
+  reason: 'lastUpdateTime drift' | 'transient retry exhausted';
+  retryCount: number;
+}
+
+/**
+ * Phase C immutable skip 記録 (BF14 + Codex 6th Important、impl-plan §4.3 step 5)。
+ *
+ * 2 種類の skip reason:
+ * - `'provenance exists, provenanceBackfill absent'`: PR-D2/D3 で書込まれた verified
+ *   split-time provenance を本 PR-D4 backfill が上書きしないガード (BF14)
+ * - `'already backfilled (provenanceBackfill present)'`: 別 Phase C run / retry で
+ *   既 backfilled doc を再 backfill しない idempotency 保護 (Codex 6th)
+ */
+export interface PhaseCImmutableSkippedDoc {
+  docId: string;
+  reason:
+    | 'provenance exists, provenanceBackfill absent'
+    | 'already backfilled (provenanceBackfill present)';
+}
+
+/**
+ * Phase C 書込 scope 外 (Codex 5th C1 反映、impl-plan §4.0 hard-gate)。
+ *
+ * 本 PR Phase C 本番書込対象は `category === 'MatchedByHash' && computedConfidence ===
+ * 'derived-bytes-verified'` のみ。Phase B 実装は `MatchedByHash` のみ revalidated[] に入れる
+ * が、dev fixture / Phase B のバグ / 将来の Phase B 拡張で異種 candidate が混入した場合に
+ * 構造的にガードする。
+ *
+ * reason:
+ * - `'category not MatchedByHash'`: Phase B 出力で `category !== 'MatchedByHash'`
+ * - `'confidence not derived-bytes-verified'`: `MatchedByHash` だが confidence が
+ *   `child-snapshot-only` / `metadata-only` (dev fixture 用、本番書込禁止)
+ */
+export interface PhaseCOutOfScopeDoc {
+  docId: string;
+  reason: 'category not MatchedByHash' | 'confidence not derived-bytes-verified';
+  observedCategory: BackfillClassifierCategory;
+  observedConfidence: BackfillConfidence;
+}
+
+/**
+ * Phase C 処理不能 doc 記録 (Codex 5th C2 反映、observability)。
+ *
+ * 過去 `missingDocs` で扱われていたが、原因区別不能だったため reason 付きに統合。
+ * `validation`: `createBackfillProvenance` の runtime validation が throw (sha256 不正等)
+ * `missing`: Firestore re-read で doc 不在
+ */
+export interface PhaseCUnprocessableDoc {
+  docId: string;
+  reason: 'missing' | 'validation';
+  message?: string;
+}
+
+/**
+ * Phase C 書込 chunk file (BF22、1 chunk ≤ PR_D4_CANDIDATES_PER_CHUNK)。
+ *
+ * 全カテゴリを chunk 単位で分割保存し、全 chunk を一括メモリロードしない。
+ * Codex 5th C2 反映で `unprocessableDocs` / `outOfScopeDocs` を追加 (運用観測完全性)。
+ *
+ * 保全式 (chunk 全件):
+ *   writtenDocs + preconditionFailedDocs + immutableSkippedDocs + unprocessableDocs +
+ *   outOfScopeDocs == 該当 chunk に渡された候補件数
+ */
+export interface PhaseCBackfillChunk {
+  schemaVersion: PrD4ArtifactSchemaVersion;
+  chunkIndex: number;
+  writtenDocs: PhaseCWrittenDoc[];
+  preconditionFailedDocs: PhaseCPreconditionFailedDoc[];
+  immutableSkippedDocs: PhaseCImmutableSkippedDoc[];
+  unprocessableDocs: PhaseCUnprocessableDoc[];
+  outOfScopeDocs: PhaseCOutOfScopeDoc[];
+}
+
+/**
+ * Phase C main artifact 構造 (impl-plan §4.3 output)。
+ *
+ * 設計:
+ * - `candidatesIn`: Phase B revalidated[] 全件
+ * - `writtenDocs`: 書込成功合計 (chunks の writtenDocs.length 合計と一致)
+ * - `preconditionFailedDocs`: 隔離合計 (chunks の preconditionFailedDocs.length 合計と一致)
+ * - `skippedImmutable`: immutable skip 合計 (BF14 検証用)
+ * - `phaseBArtifactRef`: Phase B main artifact path (manifest chain 再構成可能)
+ * - `phaseBManifestSha256`: Phase C 起動時に検証した Phase B manifest sha256
+ * - `lockAcquiredGeneration`: 取得した GCS sentinel lock の generation (BF21、解放時に
+ *   ifGenerationMatch 必須 = 安全解放確認の証跡)
+ * - `lockReleasedAt`: lock 解放完了時刻 (ISO8601、stale lock detection の人間判断材料)
+ * - `rateLimiterConfig`: 使用した rate limiter 設定 (BF23、観測用)
+ */
+export interface PhaseCBackfillSummary {
+  phase: 'C';
+  schemaVersion: PrD4ArtifactSchemaVersion;
+  scriptVersion: PrD4ScriptVersion;
+  env: BackfillEnvName;
+  runId: string;
+  phaseBArtifactRef: string;
+  phaseBManifestSha256: string;
+  backfillStartedAt: string;
+  backfillCompletedAt: string;
+  /**
+   * 保全式: candidatesIn = writtenDocs + preconditionFailedDocs + skippedImmutable +
+   *                       unprocessableDocs + outOfScopeDocs
+   * (orchestrator が test でアサート、observability 完全性)
+   */
+  candidatesIn: number;
+  writtenDocs: number;
+  preconditionFailedDocs: number;
+  skippedImmutable: number;
+  /** Codex 5th C2 反映: missing / validation 不能 doc の集計 (silent drop 防止) */
+  unprocessableDocs: number;
+  /** Codex 5th C1 反映: hard-gate で除外された Phase C スコープ外 doc の集計 */
+  outOfScopeDocs: number;
+  lockAcquiredGeneration: string;
+  /**
+   * lock release を要求する直前の時刻 (= finalize 直前の nowProvider 値、Codex 6th Critical 反映)。
+   *
+   * **重要**: 「実際の release ACK 完了時刻」ではない。Codex 6th Critical で指摘された
+   * 「lock release を finalize 前に行うと production-unsafe」を回避するため、
+   * 順序は finalize → release で固定し、artifact 内では release **要求** 時刻のみ
+   * 記録する。実 release ACK 後の時刻は orchestrator 戻り値 (RunPhaseCResult) でも
+   * 同値を返す (artifact 整合性優先)。
+   */
+  lockReleasedAt: string;
+  rateLimiterConfig: PhaseCRateLimiterConfig;
+  chunks: ArtifactChunkPointer[];
+}
+
+/** Phase C atomic batch 上限 (impl-plan §4.3 step 5、Firestore 上限 500 の余裕値) */
+export const PR_D4_PHASE_C_BATCH_SIZE = 20 as const;
+
+/** Phase C individual update retry max (impl-plan §4.3 step 5、transient error 対策) */
+export const PR_D4_PHASE_C_INDIVIDUAL_RETRY_MAX = 3 as const;
+
+/** Phase C rate limiter defaults (impl-plan §4.3 / §6.1、Codex 2nd L2) */
+export const PR_D4_PHASE_C_DEFAULT_RATE_LIMITER: PhaseCRateLimiterConfig = {
+  tokensPerSecond: 100,
+  burstCapacity: 100,
+} as const;
