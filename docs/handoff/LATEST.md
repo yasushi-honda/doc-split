@@ -1,8 +1,97 @@
 # ハンドオフメモ
 
-**更新日**: 2026-05-15 session71 (**Issue #445 PR-D4 S1-1 (基盤層) main merge `e487d4e` (PR #462) + Codex MCP 4th review GO with required amendments 全件反映、Net 0**)。`ProvenanceBackfillMetadata` 型 + `BackfillConfidence` (3 階層) / `BackfillClassifierCategory` (5 メンバー) 型 + `Document.provenanceBackfill?` optional field 追加 (ADR MUST 7 field-absence 判定の前提)。`createBackfillProvenance()` factory + `assertConfidenceEvidenceConsistency()` runtime guard + unit test 19 件追加。Codex 4th review High 1 (createdAt 必須化) + Medium 1 (strict boolean check) + Low 1 (null vs undefined 明文化) 反映で compile-time + runtime 二重 enforce 達成。Medium 2 (classifierCategory ↔ confidence invariant) は Phase C caller スコープに defer。全 1151 tests passing / Quality Gate 全クリア (TDD + /simplify + /safe-refactor + Codex MCP review)。次セッション最優先: PR-D4 S1-2 (Phase A 実装 = audit + classify、read-only) 着手
-**ブランチ**: `main` (PR #462 squash merge `e487d4e` 完遂、feature ブランチ自動削除済。CI 全 green: CodeRabbit pass / GitGuardian pass / lint-build-test 5m59s pass)
-**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + (session29-66 累積実績は archive 参照) + **Phase 8 (session67 = PR-D1 / session68 = PR-D2 / session69 = PR-D3 完遂 + 3 環境展開 + #445 close / session70 = PR-D4 impl-plan + ADR 改訂 main merge / session71 = PR-D4 S1-1 基盤層 main merge、Net 0)** = Issue #432 P0 collision の構造的予防 splitPdf + rotatePdfPages 双方で 3 環境稼働 + 既存 docs backfill の型 + factory 基盤層が main に確定 (Phase A-D 実装は後続セッション)
+**更新日**: 2026-05-15 session72 (**Issue #445 PR-D4 S1-2 (Phase A read-only audit + classify) main merge `cc2616d` (PR #464) + Codex MCP 2nd review GO (BF22 strict adherence + bucket-location default 削除 + overwrite 禁止) 反映、Net 0**)。`scripts/pr-d4-backfill/` 新規ディレクトリ + types + 6 phase-a モジュール (artifactWriter / bucketLocationVerifier / categoryClassifier / docSnapshotter / auditClassify / adapters) + CLI entry (8 source files / 1165 行) + unit test 47 件追加。documents collection を全件 stream → 5 分類予測 → GCS artifact (main + chunks + manifest) JSON 書込 (read-only invariant)。BF22 適合のため orchestrator は per-chunk buffer (≤ 1000 件) のみ保持し flush 設計。`ifGenerationMatch: 0` で artifact overwrite 拒否、run-id 単位の partial failure invariant 確保。全 1198 tests passing (新規 47 + 既存 1151) / Quality Gate 全クリア (TDD + evaluator + pr-review-toolkit:code-reviewer + Codex MCP review 1st NO-GO → 2nd GO)。次セッション最優先: PR-D4 S1-3 (Phase B 実装 = write-free preflight revalidation) 着手
+**ブランチ**: `main` (PR #464 squash merge `cc2616d` 完遂、feature ブランチ自動削除済。CI 全 green: CodeRabbit pass / GitGuardian pass / lint-build-test 6m39s pass)
+**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + (session29-66 累積実績は archive 参照) + **Phase 8 (session67 = PR-D1 / session68 = PR-D2 / session69 = PR-D3 完遂 + 3 環境展開 + #445 close / session70 = PR-D4 impl-plan + ADR 改訂 main merge / session71 = PR-D4 S1-1 基盤層 main merge / session72 = PR-D4 S1-2 Phase A 実装 main merge、Net 0)** = Issue #432 P0 collision の構造的予防 splitPdf + rotatePdfPages 双方で 3 環境稼働 + 既存 docs backfill の Phase A (read-only audit + classify) も main に確定 (Phase B-D 実装は後続セッション)
+
+<a id="session72"></a>
+## ✅ session72 完了サマリー (2026-05-15: Issue #445 PR-D4 S1-2 Phase A 実装 main merge `cc2616d` (PR #464) + Codex MCP 1st NO-GO → 2nd GO 反映、Net 0)
+
+session71 で main 確定した PR-D4 S1-1 基盤層 (型 + factory) を消費する **最初の caller** = Phase A (read-only audit + classify) を実装。`scripts/pr-d4-backfill/` 新規ディレクトリ + types + 6 phase-a モジュール + CLI entry + 5 test files (47 tests) を追加。documents collection 全件 stream → 構造 5 分類 → GCS artifact (main + chunks + manifest) JSON 書込。Firestore / production GCS への write 経路ゼロ (read-only invariant 確認済)。Codex MCP 1st review で **NO-GO 判定** (Critical: BF22 違反 + Important: bucket-location default + overwrite 許容) を取得し、per-chunk streaming flush 設計に refactor + 明示必須 / `ifGenerationMatch: 0` 反映後の 2nd review で **GO** に転換。
+
+### 経緯
+
+1. **catchup**: session71 handoff 確認、次セッション最優先 = PR-D4 S1-2 (Phase A) 着手を選択
+2. **feature branch 作成** (`feature/pr-d4-s1-2-phase-a`): main 直 push 禁止 + commit 前ブランチ切替 (CLAUDE.md 4 原則 §4)
+3. **TaskCreate** (10 件): types → bucket-location-verifier → artifact-writer → doc-snapshotter → category-classifier → audit-classify orchestrator → CLI → quality gate → PR/handoff の段階分解
+4. **TDD 実装** (5 module × 各 RED→GREEN→REFACTOR):
+   - `types.ts`: PhaseAClassifySummary / PhaseAClassifyChunk / BackfillManifest / ArtifactChunkPointer interfaces + 定数 (PR_D4_ARTIFACT_SCHEMA_VERSION / PR_D4_CANDIDATES_PER_CHUNK=1000)
+   - `bucketLocationVerifier.ts` (7 tests): Cloud Run vs target bucket region 検証 (Codex 2nd I4 / BF19)
+   - `artifactWriter.ts` (初版 9 tests → refactor 後 8 tests): per-chunk flush + main + manifest 書込
+   - `categoryClassifier.ts` (13 tests): 構造分類 (Phase A は hash 計算しない、Phase B が verify)
+   - `docSnapshotter.ts` (9 tests): Firestore + GCS HEAD → PhaseADocSnapshot (DI 化、F-B4 bucket 不一致時 skip)
+   - `auditClassify.ts` (10 tests): orchestrator (initial 8 → BF22 refactor 後 10、streaming flush + 順序 invariant test 追加)
+   - `adapters.ts`: Firebase admin SDK + GCS wrapper (production wiring、unit test 対象外)
+   - `index.ts`: CLI entry (--env / --phase / --cloud-run-location / --bucket-location 明示必須)
+5. **evaluator + pr-review-toolkit:code-reviewer 並列起動**:
+   - evaluator (APPROVE with notes): MEDIUM 1 (snapshotCompletedAt 二重取得) + MEDIUM 2 (bucketName 命名) + LOW (classifier 順序依存) → 全件反映
+   - code-reviewer (No critical/high): M1 (readArg flag-as-value bug) + M2 (updateTime cast 簡素化) + L1 (satisfies no-op) + L3 (bucketLocation 型 string | undefined) → 全件反映
+6. **Codex MCP 1st review (read-only sandbox)**: **NO-GO 判定**
+   - **Critical**: orchestrator が全 `candidates: PhaseACandidate[]` をメモリ保持していて BF22 「全 chunk を一括メモリロードしない」未達 → orchestrator 側 per-chunk flush 設計に refactor 必要
+   - **Important 1**: `--bucket-location` default `asia-northeast1` で実 bucket location 確認せず assume してしまう → 明示必須に
+   - **Important 2**: artifact run-id 再利用時に overwrite 可能 → `ifGenerationMatch: 0` で既存 object 拒否
+7. **refactor 反映**:
+   - `artifactWriter.ts` を `writePhaseAChunk` (per-chunk flush) + `finalizePhaseAArtifact` (main + manifest) の 2 関数に分離
+   - `auditClassify.ts` orchestrator を per-chunk buffer (≤ PR_D4_CANDIDATES_PER_CHUNK 件) のみ保持 + buffer 満杯時 / 終了時に flush する設計に変更
+   - test 書き換え + BF22 streaming 動作確認 test 2 件追加 (1500/1200 docs で per-chunk flush + 書込順序 invariant 確認)
+   - `index.ts`: --cloud-run-location / --bucket-location default 削除 → 未指定なら FATAL exit
+   - `adapters.ts`: GcsArtifactStorageWriter.save() に `preconditionOpts: { ifGenerationMatch: 0 }` 追加
+8. **Codex MCP 2nd review**: **GO 判定** (BF22 解消 + Important 2 件全反映を確認)
+9. **commit (`5492642`)**: 13 files / +2220/-0 / TDD + evaluator + code-reviewer + Codex MCP 1st→2nd 反映を一括
+10. **PR #464 作成** + CI 全 green (lint-build-test 6m39s / CodeRabbit pass / GitGuardian pass)
+11. **PR #464 squash merge** (ユーザー番号認可「PR #464 をマージしてよい」取得): `cc2616d` main merge、feature branch 自動削除、main 同期完了
+
+### 変更ファイル一覧 (13 ファイル: 全 new, +2220/-0)
+
+| ファイル | LoC |
+|---------|----:|
+| `scripts/pr-d4-backfill/types.ts` | 153 |
+| `scripts/pr-d4-backfill/index.ts` | 131 |
+| `scripts/pr-d4-backfill/phase-a/artifactWriter.ts` | 156 |
+| `scripts/pr-d4-backfill/phase-a/bucketLocationVerifier.ts` | 82 |
+| `scripts/pr-d4-backfill/phase-a/categoryClassifier.ts` | 139 |
+| `scripts/pr-d4-backfill/phase-a/docSnapshotter.ts` | 137 |
+| `scripts/pr-d4-backfill/phase-a/auditClassify.ts` | 192 |
+| `scripts/pr-d4-backfill/phase-a/adapters.ts` | 175 |
+| `functions/test/prD4ArtifactWriter.test.ts` | 199 |
+| `functions/test/prD4BucketLocationVerifier.test.ts` | 71 |
+| `functions/test/prD4CategoryClassifier.test.ts` | 152 |
+| `functions/test/prD4DocSnapshotter.test.ts` | 213 |
+| `functions/test/prD4AuditClassify.test.ts` | 420 |
+
+### Net 計測 (CLAUDE.md MUST)
+
+- Before: open Issues = 4 (#432 P0、#402 P2、#251 P2、#238 P2)
+- After: open Issues = 4 (変化なし)
+- 本 session 完了時点で **+0 / -0 = Net 0**
+- 進捗判定: ✅ 構造的進捗 (Issue #432 P0 復旧経路の **Phase A read-only audit + classify が main 確定**、後続 Phase B-D が安全に積み上げ可能)
+
+### 設計上の重要決定 (Codex MCP 1st NO-GO → 2nd GO 反映)
+
+- **BF22 streaming 厳密適合 (Codex Critical 反映)**: orchestrator は `candidates` 全件配列を保持せず、per-chunk buffer (≤ PR_D4_CANDIDATES_PER_CHUNK=1000 件) のみ。buffer が満杯になった時点で `writePhaseAChunk` flush + chunkPointer 蓄積、buffer reset。streaming 完了後に残 buffer flush + `finalizePhaseAArtifact` (main + manifest)。これにより 6,264 docs 程度の現状規模だけでなく、将来 1M+ docs 環境でも constant-memory で動作。test 1500/1200 件で per-chunk flush + 書込順序 invariant を確認
+- **bucket-location 明示必須 (Codex Important 1 反映)**: `--cloud-run-location` / `--bucket-location` の default `asia-northeast1` を削除。未指定なら FATAL exit (egress 課金前提 = region 一致を caller に強制確認させる)。operator が region を意識せず asia-northeast1 assume してしまう経路を構造的に閉鎖
+- **artifact overwrite 禁止 (Codex Important 2 反映)**: `GcsArtifactStorageWriter.writeJson()` で `preconditionOpts: { ifGenerationMatch: 0 }` を強制。既存 object overwrite は 412 Precondition Failed で reject。同一 run-id re-run は新 run-id 発行を caller に強制 → Phase B が「古い chunk + 新 partial main」を読む経路を閉鎖
+- **構造分類 vs hash 検証の責務分離**: Phase A は **構造的状態だけ** (parent/child 存在 + splitFromPages 存在) で 5 分類を予測。hash 計算 (再 split + fingerprint compare) は Phase B 担当。PR-C3c `collisionClassifier.ts` の `classifyOrphan` / `classifyCollisionGroup` は hash evidence を入力に取るため流用不可、Phase A 専用の独立 pure function (`classifyForPhaseA`) を別実装。DRY 違反ではなく **入力契約の違いによる正当な分離**
+- **DI 設計**: DocumentSource / ParentFetcher / BucketProber / ArtifactStorageWriter の 4 interface を auditClassify.ts が消費し、production wiring は adapters.ts に集約 (Firebase admin SDK + @google-cloud/storage)。unit test は in-memory mock で 47 件全 PASS (実 Firebase 接続不要)、production 動作検証は dev rehearsal S2 stage で実施予定
+
+### 教訓 (本セッション新規)
+
+- **Codex MCP review は read-only Phase でも価値発見**: Phase A は "read-only audit" で destructive migration よりリスク低い前提だったが、Codex 1st review で BF22 違反 (orchestrator メモリ保持) という設計レベル指摘を発見。「scope が読みだけだから review 軽め」という安易な省略は危険。Quality Gate (TDD + evaluator + code-reviewer) を通過しても、impl-plan AC との **strict adherence** は別観点として独立 review すべき
+- **AC strict adherence は impl-plan 段階で全文一致確認**: BF22 「全 chunk を一括メモリロードしない」を impl-plan 段階で「writer 側は 1000 docs/chunk で分割保存」と緩く解釈していたため、orchestrator 側の全 candidates 保持を見落とし。AC 表現が「全 ... しない」型の negative constraint は実装側で **どこで invariant が壊れうるか** を impl-plan 段階で書き出す必要あり (memory `feedback_ac_negative_constraint.md` 候補)
+- **per-chunk streaming 設計の test 補完**: writer 関数を 2 分割 (`writePhaseAChunk` + `finalizePhaseAArtifact`) し orchestrator 側で buffer 管理する設計は、test 観点で「chunk 連番性」「順序 invariant」「最終 buffer flush」が writer 単体テストでは確認不能。orchestrator integration test で 1500/1200 件 streaming 確認を追加する必要あり、これを忘れると BF22 適合の証跡が test に残らない
+- **大規模新規ディレクトリ (8 source + 5 test) でも 1 PR で完遂可能**: session71 教訓 (1500+ 行 S1 全体を 1 セッションで完遂しようとすると破綻) を踏まえ、S1-2 = Phase A のみに scope 絞込んで実装。13 files / +2220 行 / 47 tests でも TDD + evaluator + code-reviewer + Codex MCP 1st→2nd review で 1 セッション内 main merge まで完遂可能と確認。**スコープを「1 機能 1 phase」レベルまで絞ること**が安全な 1 セッション完遂条件
+
+### 次セッション着手項目
+
+1. `/catchup` で本 handoff + Issue #432 状態 + open Issue 確認
+2. **PR-D4 S1-3 着手** (Phase B 実装、write-free preflight revalidation): Phase A artifact streaming read (chunk 単位 sha256 verify + chunked memory load) + 各 candidate について Firestore `updateTime` + GCS `generation`/`metageneration` を再照合し drift があれば skip + `MatchedByHash` の場合は parent 再 download + page selection で再 split → child sha256 と一致確認 (実 hash verify はここで実施)。output = `phase-b-revalidation-summary.json` + chunks + manifest 追記
+3. **PR-D4 S1-4** (Phase C 実装、atomic backfill verified docs): Phase B artifact から `MatchedByHash + derived-bytes-verified` 候補のみを atomic batch write (provenance 10 fields + provenanceBackfill metadata)。GCS sentinel object 排他 lock + batch precondition failure doc 単位隔離 + global write rate limiter (BF16 / BF18 / BF23)
+4. **PR-D4 S1-5** (Phase D 実装、verify + gate behavior): Phase C 書込 doc 全件再読込 + rotate gate test (derived-bytes-verified allow / child-snapshot-only reject)
+5. **PR-D4 S1-6**: Dockerfile + `.github/workflows/pr-d4-backfill.yml` (workflow_dispatch + env/phase 選択)
+6. **PR-D4 S1-7**: container build + push (dev で実行) → image tag 取得 (= S1 完了条件)
+7. **PR-D4 S2-S7**: dev rehearsal 7-stage × 2 周 → Codex MCP 5th review GO 確認 → cocoro / kanameone 段階展開 (各 phase ユーザー番号認可)
+
+---
 
 <a id="session71"></a>
 ## ✅ session71 完了サマリー (2026-05-15: Issue #445 PR-D4 S1-1 基盤層 main merge `e487d4e` (PR #462) + Codex MCP 4th review 反映、Net 0)
