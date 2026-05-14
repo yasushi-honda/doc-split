@@ -39,8 +39,8 @@ export type ImmutableSkipDecision =
  *
  * - `provenance` 不在 + `provenanceBackfill` 不在 → skip しない (新規 backfill 対象)
  * - `provenance` 存在 + `provenanceBackfill` 不在 → skip='provenance exists, provenanceBackfill absent'
- * - `provenanceBackfill` 存在 (== !== undefined、null 含む)... ただし `null` は明示書込で
- *   別意味のため skip しない (Codex 3rd I3、null sentinel 禁止)
+ * - `provenanceBackfill` 存在 (== !== undefined、ただし `null` は **除外**) → skip='already backfilled'
+ *   (Codex 3rd I3、null は明示書込で別意味のため "present" 扱いしない)
  * - `provenance` 存在 + `provenanceBackfill` object/string/値 (null 以外) → skip='already backfilled'
  */
 export function checkImmutableSkip(

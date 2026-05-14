@@ -14,7 +14,8 @@
  *   6. 結果を per-chunk buffer (PR_D4_CANDIDATES_PER_CHUNK 上限) で flush
  *   7. finalize (main + manifest) → lock release
  *
- * lock 解放は try/finally で必ず実行 (中断 / error でも stale lock を残さない、Codex 2nd 反映)
+ * lock 解放は finalize 後の最終操作。中断 / error 時は try/catch で best-effort 解放
+ * (release 失敗は console.error で運用者通知、元 error を伝播、Codex 2nd 反映)
  */
 
 import { Timestamp } from 'firebase-admin/firestore';
