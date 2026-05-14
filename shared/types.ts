@@ -91,6 +91,12 @@ export interface Document {
    *
    * Consumer は provenance 単独で "verified split-time origin" と判定してはならない (ADR MUST 6 Consumer contract)。
    * rotate gate は backfilled doc を confidence === 'derived-bytes-verified' のみ許可 (ADR MUST 3 拡張)。
+   *
+   * **判定方法 (Codex 4th review Low 1 反映)**: TypeScript 上の型表面は `undefined` を absence として扱う
+   * (`strictNullChecks` 下で `null` 不可)。一方 Firestore 経由で読み込んだ document に `provenanceBackfill: null`
+   * が混入する可能性がある (古い書込経路 / 手動修復等)。Consumer は `provenanceBackfill === undefined`
+   * ではなく **field 存在チェック** (`'provenanceBackfill' in doc` または等価) または `!= null` (loose) で判定し、
+   * truthiness check (`if (provenanceBackfill)`) は **使わない** (空オブジェクト判定の事故を防ぐ)。
    */
   provenanceBackfill?: ProvenanceBackfillMetadata;
 

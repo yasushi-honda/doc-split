@@ -236,16 +236,25 @@ export function createRotationProvenance(
  * createBackfillProvenance() の入力型。
  *
  * 設計:
- * - `provenanceFields`: caller が現在の GCS state から組立てた 10 fields (CreateSplitProvenanceInput と同形)。
- *   `createdAt` は **split 完了時刻** (= document.createdAt 由来) を渡す。backfill 実行時刻ではない (Codex 1st Critical 2 反映)。
+ * - `provenanceFields`: caller が現在の GCS state から組立てた 10 fields (CreateSplitProvenanceInput 派生)。
+ *   `createdAt` は **必須** で **split 完了時刻** (= document.createdAt 由来) を渡す。
+ *   backfill 実行時刻ではない (ADR Critical 2 反映、Codex 4th review High 1 反映で `createdAt` の型レベル必須化)。
+ *   `createSplitProvenance()` の fallback `Timestamp.now()` が走ると ADR Critical 2 違反になるため、
+ *   入力型から `createdAt` を Required pick して compile-time enforce。
  * - `confidence`: rotate gate 動作と連動。`evidence` との整合性を runtime 検証 (Codex 1st Critical 6 反映)。
  * - `classifierCategory`: PR-C3c classifier 出力を記録 (Codex 2nd review I7 反映)。
- * - `evidence`: 現物計算結果 (再現性 + 監査)。
+ *   classifierCategory ↔ confidence invariant (MatchedByHash → derived-bytes-verified 等) は **Phase C caller**
+ *   (S1-4 で実装) で enforce する。factory level では両方を独立に受け取り、dev fixture が
+ *   `Ambiguous → child-snapshot-only` 等を作成できる柔軟性を保つ (impl-plan §4.0 / Codex 4th review Medium 2)。
+ * - `evidence`: 現物計算結果 (再現性 + 監査)。boolean は **strict** で検証 (`!== true` / `!== false`、
+ *   `as unknown as` TS bypass 経由の hostile input をブロック、Codex 4th review Medium 1)。
  * - `backfillScriptVersion`: 例 'pr-d4-v1.0' (script 改修で再 backfill を区別)。
  * - `backfilledAt`: 省略時は Timestamp.now()。
  */
 export interface CreateBackfillProvenanceInput {
-  provenanceFields: CreateSplitProvenanceInput;
+  provenanceFields: Omit<CreateSplitProvenanceInput, 'createdAt'> & {
+    createdAt: Timestamp;
+  };
   confidence: BackfillConfidence;
   classifierCategory: BackfillClassifierCategory;
   evidence: {
@@ -265,6 +274,10 @@ export interface CreateBackfillProvenanceInput {
  * - `derived-bytes-verified`: parent 現存 + parent sha256 match + child sha256 実計算 の **3 つ全部** 必須
  * - `child-snapshot-only`: child sha256 実計算 必須 (parent 状態は問わない)
  * - `metadata-only`: child sha256 実計算 **しない** (定義上スキップ、Codex 2nd L3 反映)
+ *
+ * boolean 比較は **strict** (`!== true` / `!== false`、Codex 4th review Medium 1 反映)。
+ * `as unknown as` TS bypass で `parentExists: 1` や `childSha256ComputedAtBackfill: "yes"` を渡しても
+ * truthy で素通りしない。defense in depth として hostile input をブロックする。
  */
 function assertConfidenceEvidenceConsistency(
   confidence: BackfillConfidence,
@@ -272,38 +285,38 @@ function assertConfidenceEvidenceConsistency(
 ): void {
   switch (confidence) {
     case 'derived-bytes-verified':
-      if (!evidence.parentExists) {
+      if (evidence.parentExists !== true) {
         throw new ProvenanceValidationError(
           'evidence.parentExists',
-          'derived-bytes-verified requires parentExists=true'
+          'derived-bytes-verified requires parentExists strictly === true'
         );
       }
       if (evidence.parentSha256MatchedAtBackfill !== true) {
         throw new ProvenanceValidationError(
           'evidence.parentSha256MatchedAtBackfill',
-          'derived-bytes-verified requires parentSha256MatchedAtBackfill=true (re-split bytes match)'
+          'derived-bytes-verified requires parentSha256MatchedAtBackfill strictly === true (re-split bytes match)'
         );
       }
-      if (!evidence.childSha256ComputedAtBackfill) {
+      if (evidence.childSha256ComputedAtBackfill !== true) {
         throw new ProvenanceValidationError(
           'evidence.childSha256ComputedAtBackfill',
-          'derived-bytes-verified requires childSha256ComputedAtBackfill=true'
+          'derived-bytes-verified requires childSha256ComputedAtBackfill strictly === true'
         );
       }
       break;
     case 'child-snapshot-only':
-      if (!evidence.childSha256ComputedAtBackfill) {
+      if (evidence.childSha256ComputedAtBackfill !== true) {
         throw new ProvenanceValidationError(
           'evidence.childSha256ComputedAtBackfill',
-          'child-snapshot-only requires childSha256ComputedAtBackfill=true (現 child sha256 実計算必須)'
+          'child-snapshot-only requires childSha256ComputedAtBackfill strictly === true (現 child sha256 実計算必須)'
         );
       }
       break;
     case 'metadata-only':
-      if (evidence.childSha256ComputedAtBackfill) {
+      if (evidence.childSha256ComputedAtBackfill !== false) {
         throw new ProvenanceValidationError(
           'evidence.childSha256ComputedAtBackfill',
-          'metadata-only definition skips actual sha256 compute; set childSha256ComputedAtBackfill=false'
+          'metadata-only definition skips actual sha256 compute; childSha256ComputedAtBackfill must strictly === false'
         );
       }
       break;
@@ -333,6 +346,14 @@ export function createBackfillProvenance(input: CreateBackfillProvenanceInput): 
   provenance: DocumentProvenance;
   provenanceBackfill: ProvenanceBackfillMetadata;
 } {
+  // defense in depth: TS bypass (`as unknown as`) 経路でも createdAt 省略を block する
+  // (Codex 4th review High 1 反映、ADR Critical 2 = split 完了時刻 ≠ backfill 実行時刻)
+  if (input.provenanceFields.createdAt === undefined) {
+    throw new ProvenanceValidationError(
+      'provenanceFields.createdAt',
+      'backfill では split 完了時刻を明示渡しが必須 (document.createdAt 由来)。createSplitProvenance の Timestamp.now() fallback を回避'
+    );
+  }
   assertValidProvenanceInput(input.provenanceFields);
   assertNonEmptyString(input.backfillScriptVersion, 'backfillScriptVersion');
   assertConfidenceEvidenceConsistency(input.confidence, input.evidence);

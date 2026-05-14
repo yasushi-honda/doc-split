@@ -213,11 +213,22 @@ describe('ProvenanceValidationError', () => {
 // createBackfillProvenance (ADR-0016 MUST 6 / Issue #445 PR-D4)
 // ============================================================
 
+// helper: provenanceFields の createdAt 必須化を満たす (Codex 4th High 1 反映)
+function makeBackfillFields(
+  overrides: Partial<CreateSplitProvenanceInput> = {}
+): CreateBackfillProvenanceInput['provenanceFields'] {
+  return {
+    ...makeValidInput(overrides),
+    // ADR Critical 2 / Codex 4th High 1: backfill では split 完了時刻を必須渡し
+    createdAt: overrides.createdAt ?? Timestamp.fromMillis(1690000000000),
+  };
+}
+
 function makeBackfillInput(
   overrides: Partial<CreateBackfillProvenanceInput> = {}
 ): CreateBackfillProvenanceInput {
   return {
-    provenanceFields: makeValidInput(),
+    provenanceFields: makeBackfillFields(),
     confidence: 'derived-bytes-verified',
     classifierCategory: 'MatchedByHash',
     evidence: {
@@ -307,7 +318,7 @@ describe('createBackfillProvenance (ADR-0016 MUST 6 factory)', () => {
       const splitCompletedAt = Timestamp.fromMillis(1690000000000);
       const result = createBackfillProvenance(
         makeBackfillInput({
-          provenanceFields: { ...makeValidInput(), createdAt: splitCompletedAt },
+          provenanceFields: makeBackfillFields({ createdAt: splitCompletedAt }),
           backfilledAt: Timestamp.fromMillis(1700000000000),
         })
       );
@@ -324,7 +335,7 @@ describe('createBackfillProvenance (ADR-0016 MUST 6 factory)', () => {
     it('provenance fields の sha256 を lowercase 化する', () => {
       const result = createBackfillProvenance(
         makeBackfillInput({
-          provenanceFields: makeValidInput({
+          provenanceFields: makeBackfillFields({
             sourceSha256: 'A'.repeat(64),
             derivedSha256: 'B'.repeat(64),
           }),
@@ -340,7 +351,7 @@ describe('createBackfillProvenance (ADR-0016 MUST 6 factory)', () => {
       expect(() =>
         createBackfillProvenance(
           makeBackfillInput({
-            provenanceFields: makeValidInput({ sourceSha256: 'abc' }),
+            provenanceFields: makeBackfillFields({ sourceSha256: 'abc' }),
           })
         )
       )
@@ -352,7 +363,7 @@ describe('createBackfillProvenance (ADR-0016 MUST 6 factory)', () => {
       expect(() =>
         createBackfillProvenance(
           makeBackfillInput({
-            provenanceFields: makeValidInput({
+            provenanceFields: makeBackfillFields({
               derivedObjectPath: 'gs://bucket/x.pdf',
             }),
           })
@@ -454,6 +465,67 @@ describe('createBackfillProvenance (ADR-0016 MUST 6 factory)', () => {
             },
           })
         )
+      )
+        .to.throw(ProvenanceValidationError)
+        .with.property('field', 'evidence.childSha256ComputedAtBackfill');
+    });
+  });
+
+  describe('validation: defense in depth (Codex 4th review 反映)', () => {
+    it('provenanceFields.createdAt 省略 (TS bypass) で ProvenanceValidationError (ADR Critical 2 enforcement)', () => {
+      // TS 型レベルでは createdAt 必須だが、`as unknown as` で省略を強制した場合に
+      // factory の runtime guard が backfill 実行時刻を split 完了時刻に混入させない
+      const bad = makeBackfillInput() as unknown as Record<string, unknown>;
+      const provenanceFields = { ...(bad.provenanceFields as Record<string, unknown>) };
+      delete provenanceFields.createdAt;
+      bad.provenanceFields = provenanceFields;
+      expect(() =>
+        createBackfillProvenance(bad as unknown as CreateBackfillProvenanceInput)
+      )
+        .to.throw(ProvenanceValidationError)
+        .with.property('field', 'provenanceFields.createdAt');
+    });
+
+    it('derived-bytes-verified で parentExists=1 (truthy non-boolean) なら throw (strict boolean check)', () => {
+      const bad = makeBackfillInput() as unknown as Record<string, unknown>;
+      bad.evidence = {
+        parentExists: 1,
+        parentSha256MatchedAtBackfill: true,
+        childSha256ComputedAtBackfill: true,
+      };
+      expect(() =>
+        createBackfillProvenance(bad as unknown as CreateBackfillProvenanceInput)
+      )
+        .to.throw(ProvenanceValidationError)
+        .with.property('field', 'evidence.parentExists');
+    });
+
+    it('derived-bytes-verified で childSha256ComputedAtBackfill="yes" (truthy string) なら throw', () => {
+      const bad = makeBackfillInput() as unknown as Record<string, unknown>;
+      bad.evidence = {
+        parentExists: true,
+        parentSha256MatchedAtBackfill: true,
+        childSha256ComputedAtBackfill: 'yes',
+      };
+      expect(() =>
+        createBackfillProvenance(bad as unknown as CreateBackfillProvenanceInput)
+      )
+        .to.throw(ProvenanceValidationError)
+        .with.property('field', 'evidence.childSha256ComputedAtBackfill');
+    });
+
+    it('metadata-only で childSha256ComputedAtBackfill=1 (truthy non-boolean) なら throw (=== false 必須)', () => {
+      const bad = makeBackfillInput({ confidence: 'metadata-only' }) as unknown as Record<
+        string,
+        unknown
+      >;
+      bad.evidence = {
+        parentExists: true,
+        parentSha256MatchedAtBackfill: null,
+        childSha256ComputedAtBackfill: 1,
+      };
+      expect(() =>
+        createBackfillProvenance(bad as unknown as CreateBackfillProvenanceInput)
       )
         .to.throw(ProvenanceValidationError)
         .with.property('field', 'evidence.childSha256ComputedAtBackfill');
