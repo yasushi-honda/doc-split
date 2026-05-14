@@ -463,7 +463,7 @@ describe('runPhaseC orchestrator (PR-D4 S1-4 統合)', () => {
     ).to.equal(result.candidatesIn);
   });
 
-  it('lockReleasedAt は release 後の時刻 (Evaluator MEDIUM 反映、finalize 開始時刻ではない)', async () => {
+  it('lock 順序: finalize → release (Codex 6th Critical 反映、release 前の finalize で artifact 整合性保証)', async () => {
     const storage = new FakeArtifactStorage();
     const lock = new FakeLockStore();
     const batch = new FakeBatchAdapter();
@@ -471,24 +471,54 @@ describe('runPhaseC orchestrator (PR-D4 S1-4 統合)', () => {
     const rateLimiter = new FakeRateLimiter();
     storage.seedPhaseBArtifacts([buildCandidate('d1')]);
 
-    // nowProvider が呼ばれた順を観測
-    const nowCalls: string[] = [];
-    let i = 0;
-    const times = [
-      '2026-05-15T00:00:00.000Z', // backfillStartedAt
-      '2026-05-15T00:30:00.000Z', // lockReleasedAt (release 後)
-    ];
-    const input = buildRunInput({ storage, lock, batch, individual, rateLimiter });
-    input.nowProvider = () => {
-      const t = times[Math.min(i, times.length - 1)];
-      nowCalls.push(t);
-      i++;
-      return t;
+    // storage write 履歴と lock release の順序を観測
+    const eventOrder: string[] = [];
+    const origRelease = lock.release.bind(lock);
+    lock.release = async (input) => {
+      eventOrder.push('lock-released');
+      return origRelease(input);
+    };
+    const origWriteJson = storage.writeJson.bind(storage);
+    storage.writeJson = async (path, content, precondition) => {
+      if (path.includes('manifest.json')) eventOrder.push('manifest-written');
+      else if (path.includes('phase-c-backfill-summary.json')) {
+        eventOrder.push('main-artifact-written');
+      }
+      return origWriteJson(path, content, precondition);
     };
 
-    const result = await runPhaseC(input);
-    expect(result.lockReleasedAt).to.equal('2026-05-15T00:30:00.000Z');
-    // lock 解放は finalize 前 = nowProvider 2 回目より前に lock.released が increment
-    expect(lock.released).to.equal(1);
+    await runPhaseC(buildRunInput({ storage, lock, batch, individual, rateLimiter }));
+    // 順序: main artifact → manifest → release (release は finalize 後)
+    expect(eventOrder).to.deep.equal([
+      'main-artifact-written',
+      'manifest-written',
+      'lock-released',
+    ]);
+  });
+
+  it('既存 provenanceBackfill (= already backfilled) → skipReason "already backfilled" で skip (Codex 6th Important 反映)', async () => {
+    const storage = new FakeArtifactStorage();
+    const lock = new FakeLockStore();
+    const batch = new FakeBatchAdapter();
+    const individual = new FakeIndividualAdapter();
+    const rateLimiter = new FakeRateLimiter();
+    storage.seedPhaseBArtifacts([buildCandidate('already-bf')]);
+    // 既 backfilled snapshot を返すよう adapter を上書き
+    const origReRead = batch.reReadForBatch.bind(batch);
+    batch.reReadForBatch = async (docIds) => {
+      const m = await origReRead(docIds);
+      m.set('already-bf', {
+        exists: true,
+        updateTime: '2026-05-14T22:00:00.000Z',
+        provenance: { sourceSha256: 'x' },
+        provenanceBackfill: { method: 'legacy-observed', confidence: 'derived-bytes-verified' },
+      });
+      return m;
+    };
+
+    const result = await runPhaseC(buildRunInput({ storage, lock, batch, individual, rateLimiter }));
+    expect(result.writtenDocs).to.equal(0);
+    expect(result.skippedImmutable).to.equal(1);
+    expect(batch.commitCalls).to.equal(0); // immutable skip で commit 不要
   });
 });

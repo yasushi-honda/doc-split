@@ -332,14 +332,19 @@ export interface PhaseCPreconditionFailedDoc {
 }
 
 /**
- * Phase C immutable skip 記録 (BF14、impl-plan §4.3 step 5)。
+ * Phase C immutable skip 記録 (BF14 + Codex 6th Important、impl-plan §4.3 step 5)。
  *
- * batch 直前の再読込で `provenance` field exists && `provenanceBackfill` field undefined
- * を検出した doc。null sentinel は使わない (Codex 3rd I3)。
+ * 2 種類の skip reason:
+ * - `'provenance exists, provenanceBackfill absent'`: PR-D2/D3 で書込まれた verified
+ *   split-time provenance を本 PR-D4 backfill が上書きしないガード (BF14)
+ * - `'already backfilled (provenanceBackfill present)'`: 別 Phase C run / retry で
+ *   既 backfilled doc を再 backfill しない idempotency 保護 (Codex 6th)
  */
 export interface PhaseCImmutableSkippedDoc {
   docId: string;
-  reason: 'provenance exists, provenanceBackfill absent';
+  reason:
+    | 'provenance exists, provenanceBackfill absent'
+    | 'already backfilled (provenanceBackfill present)';
 }
 
 /**
@@ -434,7 +439,15 @@ export interface PhaseCBackfillSummary {
   /** Codex 5th C1 反映: hard-gate で除外された Phase C スコープ外 doc の集計 */
   outOfScopeDocs: number;
   lockAcquiredGeneration: string;
-  /** lock release 完了時刻 (releasePhaseCLock 成功直後の nowProvider 値、Evaluator MEDIUM 反映) */
+  /**
+   * lock release を要求する直前の時刻 (= finalize 直前の nowProvider 値、Codex 6th Critical 反映)。
+   *
+   * **重要**: 「実際の release ACK 完了時刻」ではない。Codex 6th Critical で指摘された
+   * 「lock release を finalize 前に行うと production-unsafe」を回避するため、
+   * 順序は finalize → release で固定し、artifact 内では release **要求** 時刻のみ
+   * 記録する。実 release ACK 後の時刻は orchestrator 戻り値 (RunPhaseCResult) でも
+   * 同値を返す (artifact 整合性優先)。
+   */
   lockReleasedAt: string;
   rateLimiterConfig: PhaseCRateLimiterConfig;
   chunks: ArtifactChunkPointer[];

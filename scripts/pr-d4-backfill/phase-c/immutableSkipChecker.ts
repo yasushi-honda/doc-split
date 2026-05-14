@@ -20,24 +20,41 @@ export interface FirestoreDocSnapshotForSkipCheck {
   provenanceBackfill: unknown;
 }
 
+export type ImmutableSkipReason =
+  | 'provenance exists, provenanceBackfill absent'
+  | 'already backfilled (provenanceBackfill present)';
+
 export type ImmutableSkipDecision =
   | { skip: false }
-  | { skip: true; reason: 'provenance exists, provenanceBackfill absent' };
+  | { skip: true; reason: ImmutableSkipReason };
 
 /**
- * BF14: `provenance` field exists && `provenanceBackfill` field absent (undefined) で skip。
+ * BF14 + Codex 6th Important: 2 種類の skip 判定で既存 doc の上書きを防止する。
  *
- * - `provenance` undefined → skip しない (新規 backfill 対象)
- * - `provenance` 存在 + `provenanceBackfill` undefined → **skip** (verified existing、immutable)
- * - `provenance` 存在 + `provenanceBackfill` null → skip しない (null は明示書込で別意味、I3)
- * - `provenance` 存在 + `provenanceBackfill` object/string/任意の値 → skip しない (既 backfilled、
- *   既存 backfill 上書きは別途 ADR で議論。本 PR-D4 では候補から除外済の前提)
+ * 1. `provenance exists, provenanceBackfill absent` (BF14 verified existing):
+ *    PR-D2/D3 で書込まれた split-time provenance を PR-D4 backfill が上書きしないガード
+ * 2. `already backfilled (provenanceBackfill present)`:
+ *    別 Phase C run / 同 run の retry で既 backfilled doc を再 backfill しないガード
+ *    (Phase A → C 間で別 run が backfill した場合の idempotency 保護)
+ *
+ * - `provenance` 不在 + `provenanceBackfill` 不在 → skip しない (新規 backfill 対象)
+ * - `provenance` 存在 + `provenanceBackfill` 不在 → skip='provenance exists, provenanceBackfill absent'
+ * - `provenanceBackfill` 存在 (== !== undefined、null 含む)... ただし `null` は明示書込で
+ *   別意味のため skip しない (Codex 3rd I3、null sentinel 禁止)
+ * - `provenance` 存在 + `provenanceBackfill` object/string/値 (null 以外) → skip='already backfilled'
  */
 export function checkImmutableSkip(
   snapshot: FirestoreDocSnapshotForSkipCheck
 ): ImmutableSkipDecision {
   const provenanceExists = snapshot.provenance !== undefined;
   const provenanceBackfillAbsent = snapshot.provenanceBackfill === undefined;
+  // null は明示書込で別意味 (Codex 3rd I3) → "present" 扱いしない
+  const provenanceBackfillPresent =
+    snapshot.provenanceBackfill !== undefined && snapshot.provenanceBackfill !== null;
+
+  if (provenanceBackfillPresent) {
+    return { skip: true, reason: 'already backfilled (provenanceBackfill present)' };
+  }
   if (provenanceExists && provenanceBackfillAbsent) {
     return { skip: true, reason: 'provenance exists, provenanceBackfill absent' };
   }

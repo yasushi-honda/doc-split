@@ -248,18 +248,16 @@ export async function runPhaseC(input: RunPhaseCInput): Promise<RunPhaseCResult>
     // 残 buffer chunk 出力
     await flushChunkBuffersIfFull(true);
 
-    // (7) lock release は finalize 前に実行 (Evaluator MEDIUM 反映、lockReleasedAt が
-    // finalize 開始時刻になる問題を解消)。manifest CAS update は precondition で守られて
-    // いるため、lock 解放後でも並走による artifact 整合性破壊は発生しない。
-    await releasePhaseCLock(
-      {
-        lockPath: lockAcquired.lockPath,
-        acquiredGeneration: lockAcquired.acquiredGeneration,
-      },
-      input.lockStore
-    );
-    const lockReleasedAt = nowProvider();
-    const backfillCompletedAt = lockReleasedAt;
+    // Codex 6th Critical 反映: lock release は finalize の **後** に行う。
+    // 先に release すると finalize 失敗時に別 run が同 env lock を取得可能になり、
+    // 「Firestore writes は committed + manifest.phaseC 未反映」の中途半端な状態が
+    // 別 run に観測される (production-unsafe window)。
+    //
+    // `lockReleasedAt` field は **lock release を要求する直前の時刻** を記録する。
+    // 実際の release ACK 後の時刻は別途 `runPhaseC` 戻り値で追加観測することも
+    // 可能だが、artifact 完整性 (= lock 保護下で書込まれる) を優先する。
+    const backfillCompletedAt = nowProvider();
+    const lockReleasedAt = backfillCompletedAt;
 
     const finalize = await finalizePhaseCArtifact(
       {
@@ -284,6 +282,15 @@ export async function runPhaseC(input: RunPhaseCInput): Promise<RunPhaseCResult>
         manifestGeneration: stream.manifestGeneration,
       },
       input.artifactWriter
+    );
+
+    // finalize 完了後に lock release (Codex 6th Critical 反映)
+    await releasePhaseCLock(
+      {
+        lockPath: lockAcquired.lockPath,
+        acquiredGeneration: lockAcquired.acquiredGeneration,
+      },
+      input.lockStore
     );
 
     return {

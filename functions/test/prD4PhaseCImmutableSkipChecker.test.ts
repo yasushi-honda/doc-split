@@ -28,22 +28,28 @@ describe('checkImmutableSkip (PR-D4 S1-4 Phase C BF14)', () => {
     });
   });
 
-  it('provenance 不在 + provenanceBackfill 存在 → skip=false (異常状態、caller で対応)', () => {
+  it('provenance 不在 + provenanceBackfill 存在 → skip=true reason="already backfilled" (Codex 6th Important)', () => {
     // 通常は provenance + provenanceBackfill が atomic に書込まれるため発生しないが、
-    // 本 pure function は判定責務のみ。実害は caller (orchestrator) で別途検出する。
+    // present check で防御 (caller-bug ガード)。
     const result = checkImmutableSkip({
       provenance: undefined,
       provenanceBackfill: { method: 'legacy-observed' },
     });
-    expect(result).to.deep.equal({ skip: false });
+    expect(result).to.deep.equal({
+      skip: true,
+      reason: 'already backfilled (provenanceBackfill present)',
+    });
   });
 
-  it('両 field 存在 → skip=false (既 backfilled、Phase A で除外済の前提)', () => {
+  it('両 field 存在 → skip=true reason="already backfilled" (Codex 6th Important、idempotency 保護)', () => {
     const result = checkImmutableSkip({
       provenance: { sourceSha256: 'abc' },
       provenanceBackfill: { method: 'legacy-observed', confidence: 'derived-bytes-verified' },
     });
-    expect(result).to.deep.equal({ skip: false });
+    expect(result).to.deep.equal({
+      skip: true,
+      reason: 'already backfilled (provenanceBackfill present)',
+    });
   });
 
   it('provenanceBackfill が null → skip=false (Codex 3rd I3: null sentinel 禁止、明示書込で別意味)', () => {
