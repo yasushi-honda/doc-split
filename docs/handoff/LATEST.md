@@ -1,8 +1,115 @@
 # ハンドオフメモ
 
-**更新日**: 2026-05-15 session73 (**Issue #445 PR-D4 S1-3 (Phase B write-free preflight revalidation) main merge `6cafbba` (PR #466) + Codex MCP 2nd review GO (manifest CAS update + parent download 遅延) 反映、Net 0**)。`scripts/pr-d4-backfill/phase-b/` 新規 (7 source files) + 6 test files (47 unit tests)。Phase A artifact streaming read → drift 検出 + child download + sha256 計算 + parent metadata HEAD → drift なしのみ parent bytes download + 再 split + child sha256 一致確認 → derived-bytes-verified のみ revalidated[] に追加。production Firestore / production GCS への write ゼロ (write-free invariant)。`ArtifactStorageWriter.writeJson` に optional `precondition.ifGenerationMatch` 拡張で manifest CAS update 経路を実装、orchestrator を drift → bytes download の順に refactor。全 1245 tests passing (新規 47 + 既存 1198) / Quality Gate 全クリア (TDD + evaluator + pr-review-toolkit:code-reviewer + Codex MCP review 1st NO-GO → 2nd GO)。次セッション最優先: PR-D4 S1-4 (Phase C 実装 = atomic backfill + GCS sentinel lock + batch precondition failure 隔離) 着手
-**ブランチ**: `main` (PR #466 squash merge `6cafbba` 完遂、feature ブランチ自動削除済。CI 全 green: CodeRabbit pass / GitGuardian pass / lint-build-test pass)
-**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + (session29-66 累積実績は archive 参照) + **Phase 8 (session67 = PR-D1 / session68 = PR-D2 / session69 = PR-D3 完遂 + 3 環境展開 + #445 close / session70 = PR-D4 impl-plan + ADR 改訂 main merge / session71 = PR-D4 S1-1 基盤層 main merge / session72 = PR-D4 S1-2 Phase A 実装 main merge / session73 = PR-D4 S1-3 Phase B 実装 main merge、Net 0)** = Issue #432 P0 collision の構造的予防 splitPdf + rotatePdfPages 双方で 3 環境稼働 + 既存 docs backfill の Phase A (read-only audit) + Phase B (write-free preflight revalidation) が main に確定 (Phase C-D 実装は後続セッション)
+**更新日**: 2026-05-15 session74 (**Issue #445 PR-D4 S1-4 (Phase C atomic backfill) main merge `b543774` (PR #469) + Codex MCP 1st/2nd NO-GO → 3rd GO 反映、Net 0**)。`scripts/pr-d4-backfill/phase-c/` 新規 9 source files + 7 test files (60 unit tests)。GCS sentinel 排他 lock (BF16/BF21) + 20 docs/batch + lastUpdateTime precondition + immutable skip (verified existing + already backfilled の 2 reason、BF14) + batch fallback の doc 単位 retry max=3 (BF18) + global write rate limiter (BF23) + 保全式 candidatesIn = writtenDocs + preconditionFailedDocs + skippedImmutable + unprocessableDocs + outOfScopeDocs (Evaluator HIGH 反映)。Hard-gate で MatchedByHash + derived-bytes-verified 以外を本番書込から構造的に除外 (impl-plan §4.0)。lock 順序は finalize → release (Codex 2nd Critical 反映、release 前 finalize で artifact 整合性保証)。全 1305 tests passing (新規 60 + 既存 1245) / Quality Gate 全クリア (TDD + evaluator + pr-review-toolkit:code-reviewer + Codex MCP 1st NO-GO → 2nd NO-GO → 3rd GO)。次セッション最優先: PR-D4 S1-5 (Phase D 実装 = verify + rotate gate behavior、BF12/BF13/BF15) 着手
+**ブランチ**: `main` (PR #469 squash merge `b543774` 完遂、feature ブランチ自動削除済。CI 全 green: CodeRabbit pass / GitGuardian pass / lint-build-test pass)
+**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + (session29-66 累積実績は archive 参照) + **Phase 8 (session67 = PR-D1 / session68 = PR-D2 / session69 = PR-D3 完遂 + 3 環境展開 + #445 close / session70 = PR-D4 impl-plan + ADR 改訂 main merge / session71 = PR-D4 S1-1 基盤層 main merge / session72 = PR-D4 S1-2 Phase A 実装 main merge / session73 = PR-D4 S1-3 Phase B 実装 main merge / session74 = PR-D4 S1-4 Phase C 実装 main merge、Net 0)** = Issue #432 P0 collision の構造的予防 splitPdf + rotatePdfPages 双方で 3 環境稼働 + 既存 docs backfill の Phase A (read-only audit) + Phase B (write-free preflight revalidation) + Phase C (atomic backfill verified docs) が main に確定 (Phase D 実装は後続セッション)
+
+<a id="session74"></a>
+## ✅ session74 完了サマリー (2026-05-15: Issue #445 PR-D4 S1-4 Phase C 実装 main merge `b543774` (PR #469) + Codex MCP 1st/2nd NO-GO → 3rd GO 反映、Net 0)
+
+session73 で main 確定した PR-D4 S1-3 Phase B (write-free preflight revalidation) の出力を **消費する Phase C** = atomic backfill verified docs を実装。`scripts/pr-d4-backfill/phase-c/` 新規 9 source files + 7 test files (60 unit tests)。Phase B artifact streaming read → ≤20 docs/batch grouping → 各 doc を再読込 + immutable skip 判定 (新規 + 既 backfilled 両方) + Hard-gate (MatchedByHash + derived-bytes-verified 以外を outOfScopeDocs) + Firestore atomic batch update (lastUpdateTime precondition) → 失敗時 doc 単位 retry (max=3) で precondition 失敗 doc を隔離 → per-chunk artifact 出力 → finalize (main + manifest CAS) → lock release。本番 Firestore への 5 fields write (`provenance` + `provenanceBackfill`) が含まれる初めての PR-D4 series PR。Codex MCP review = 1st NO-GO (hard-gate / unprocessable 集計) → 2nd NO-GO (lock 順序 / idempotency) → **3rd GO** の 3 段階で安全性を構造的に固めて main merge。
+
+### 経緯
+
+1. **catchup**: session73 handoff 確認、次セッション最優先 = PR-D4 S1-4 (Phase C) 着手を選択
+2. **feature branch 作成** (`feat/pr-d4-phase-c`): main 直 push 禁止 (CLAUDE.md 4 原則 §4)
+3. **TaskCreate** (13 件): types → rateLimiter → immutableSkipChecker → lockManager → batchWriter → individualRetryWriter → artifactWriter → backfillOrchestrator → adapters → index → Quality Gate → Codex review → PR/handoff
+4. **TDD 実装** (RED→GREEN、各モジュール独立):
+   - `types.ts`: Phase C schemas 追加 (PhaseCBackfillSummary / PhaseCBackfillChunk / PhaseCWrittenDoc / PhaseCPreconditionFailedDoc / PhaseCImmutableSkippedDoc / PhaseCOutOfScopeDoc / PhaseCUnprocessableDoc / PhaseCLockBody / PhaseCRateLimiterConfig) + 定数 (BATCH_SIZE=20 / RETRY_MAX=3 / DEFAULT_RATE_LIMITER=100/sec)
+   - `rateLimiter.ts` (10 tests): TokenBucketRateLimiter + RateLimiter interface (DI 抽象化、clock 注入で deterministic test)
+   - `immutableSkipChecker.ts` (6 tests): field existence 判定、null sentinel 禁止 (Codex 3rd I3)、`verified existing` + `already backfilled` の 2 reason
+   - `lockManager.ts` (9 tests): GCS sentinel acquire (ifGenerationMatch:0) + release (acquired generation 付き)、LockObjectStore interface
+   - `batchWriter.ts` (14 tests): 20 docs/batch + lastUpdateTime precondition + Hard-gate (out-of-scope filter) + immutable skip 再確認 + atomic update、buildBackfillRecord + sha256ProvenanceBackfill を export (DRY)
+   - `individualRetryWriter.ts` (8 tests): batch fallback の doc 単位 retry max=3 + 隔離、unprocessableDocs (caller-bug 経路) を preconditionFailedDocs (drift 経路) と別観測軸に分離
+   - `artifactReader.ts` (Phase C 専用、Phase B 用): Phase B manifest 読込 + main artifact sha256 verify + chunks streaming
+   - `artifactWriter.ts` (4 tests): writePhaseCChunk (docCount = 全カテゴリ合計、BF22 完全性) + finalizePhaseCArtifact (main + manifest CAS update)
+   - `backfillOrchestrator.ts` (9 tests): 統合フロー (lock acquire → stream → batch → fallback → flush → finalize → release)、保全式アサート、lock 順序検証
+   - `adapters.ts`: production wire (GcsLockStoreImpl + FirestoreBatchAdapterImpl + FirestoreIndividualAdapterImpl、unit test 対象外)
+   - `index.ts`: `--phase C` ブランチ追加 (--job-id / --lock-owner / --expected-duration-sec)
+5. **Quality Gate 3 並列起動** (evaluator + code-reviewer + Codex MCP review):
+   - evaluator (REQUEST_CHANGES): HIGH 1 (missingDocs 集計欠落、保全式不成立) + MEDIUM 2 (lockReleasedAt 順序 / acquire read-after-write gap)
+   - code-reviewer (rating 7-8): #1 sha256 cross-process determinism + #3 caller-bug 経路の drift 誤分類 + #4 ProvenanceValidationError 隔離分類 + #5 lock held 時 release=0 test 不足
+   - Codex MCP 1st review: **NO-GO 判定**
+     - **Critical**: C1 = batchWriter に MatchedByHash + derived-bytes-verified の Hard-gate なし (child-snapshot-only が書込可能、impl-plan §4.0 違反) / C2 = ProvenanceValidationError + missing doc を missingDocs 隔離 + orchestrator が artifact / counter に未反映で silent drop
+     - **Important**: I1 = lock generation を save→getMetadata 2 RTT 取得 (race window) / I2 = catch ブロック release 失敗 swallow / I3 = chunk docCount が writtenDocs のみ
+6. **Codex 1st 反映** (commit `111b9d1`、+482/-70):
+   - batchWriter に Hard-gate (out-of-scope filter) 追加、`PhaseCOutOfScopeDoc` 新型
+   - missingDocs を `PhaseCUnprocessableDoc { docId, reason: 'missing' | 'validation', message? }` に統合 + orchestrator が `totalUnprocessable` / `totalOutOfScope` を集計
+   - 保全式 candidatesIn = writtenDocs + preconditionFailedDocs + skippedImmutable + unprocessableDocs + outOfScopeDocs を `PhaseCBackfillSummary` + `RunPhaseCResult` + test でアサート
+   - chunk docCount を全カテゴリ合計に変更 (BF22 完全性)
+   - individualRetryWriter の caller-bug 経路 ('lastUpdateTime drift' 誤分類) を unprocessableDocs に分離
+   - GcsLockStoreImpl.acquire で generation を numeric digit string strict validation
+   - catch ブロックの release 失敗を console.error で通知
+   - sha256ProvenanceBackfill JSDoc に cross-process determinism 注意明記 (memory `feedback_deterministic_cross_process.md`)
+7. **Codex MCP 2nd review**: **NO-GO 判定**
+   - **Critical**: lock release を finalize 前に行うと production-unsafe (Codex 1st 反映で lock 順序を逆にしてしまった = Evaluator MEDIUM 反映の副作用)。finalize 失敗時に別 run が同 env lock 取得可能 + writes committed + manifest.phaseC 未反映の中途半端状態を許容
+   - **Important**: `provenanceBackfill !== undefined` (= 既 backfilled) を skip しない (idempotency 欠如、同 run retry や別 Phase C run 同時実行で既 backfilled doc を上書き)
+8. **Codex 2nd 反映** (commit `ce506a0`、+120/-47):
+   - lock 順序を `finalize → release` に戻す (artifact 整合性優先)、`lockReleasedAt` は finalize 直前の nowProvider (= release 要求時刻) として JSDoc 明示
+   - immutableSkipChecker に `'already backfilled (provenanceBackfill present)'` reason 追加、null sentinel 禁止 (Codex 3rd I3 維持) + `PhaseCImmutableSkippedDoc.reason` union 拡張
+   - orchestrator test 追加: lock 順序 (eventOrder で main-written → manifest-written → lock-released)、既 backfilled doc skip 動作
+9. **Codex MCP 3rd review**: **GO 判定** (Critical + Important 全件解消、minor 2 件のみ = JSDoc 整合性)
+10. **Codex 3rd minor 反映** (commit `828f4ae`、+4/-3): immutableSkipChecker JSDoc「null 含む」→「null 除外」、backfillOrchestrator JSDoc「try/finally」→「try/catch best-effort」
+11. **commit 4 件 (`6d7749d` + `111b9d1` + `ce506a0` + `828f4ae`)**: 18 files / +3995/-3
+12. **PR #469 作成** + CI 全 green (lint-build-test pass / CodeRabbit pass / GitGuardian pass)
+13. **PR #469 squash merge** (ユーザー番号認可「#469 をマージしてよい」取得): `b543774` main merge、feature branch 自動削除、main 同期完了
+
+### 変更ファイル一覧 (18 files: 16 new + 2 modified、+3995/-3)
+
+| ファイル | 区分 | LoC |
+|---------|------|----:|
+| `scripts/pr-d4-backfill/phase-c/types.ts` | (types.ts 内 Phase C section) | +201 |
+| `scripts/pr-d4-backfill/phase-c/rateLimiter.ts` | new | 101 |
+| `scripts/pr-d4-backfill/phase-c/immutableSkipChecker.ts` | new | 58 |
+| `scripts/pr-d4-backfill/phase-c/lockManager.ts` | new | 142 |
+| `scripts/pr-d4-backfill/phase-c/batchWriter.ts` | new | 286 |
+| `scripts/pr-d4-backfill/phase-c/individualRetryWriter.ts` | new | 186 |
+| `scripts/pr-d4-backfill/phase-c/artifactReader.ts` | new | 89 |
+| `scripts/pr-d4-backfill/phase-c/artifactWriter.ts` | new | 156 |
+| `scripts/pr-d4-backfill/phase-c/backfillOrchestrator.ts` | new | 285 |
+| `scripts/pr-d4-backfill/phase-c/adapters.ts` | new | 207 |
+| `scripts/pr-d4-backfill/index.ts` | modified | +68/-3 (--phase C 経路) |
+| `functions/test/prD4PhaseCRateLimiter.test.ts` | new | 207 |
+| `functions/test/prD4PhaseCImmutableSkipChecker.test.ts` | new | 73 |
+| `functions/test/prD4PhaseCLockManager.test.ts` | new | 209 |
+| `functions/test/prD4PhaseCBatchWriter.test.ts` | new | 506 |
+| `functions/test/prD4PhaseCIndividualRetryWriter.test.ts` | new | 251 |
+| `functions/test/prD4PhaseCArtifactWriter.test.ts` | new | 282 |
+| `functions/test/prD4PhaseCBackfillOrchestrator.test.ts` | new | 459 |
+
+### Net 計測 (CLAUDE.md MUST)
+
+- Before: open Issues = 4 (#432 P0、#402 P2、#251 P2、#238 P2)
+- After: open Issues = 4 (変化なし)
+- 本 session 完了時点で **+0 / -0 = Net 0**
+- 進捗判定: ✅ 構造的進捗 (Issue #432 P0 復旧経路の **Phase C atomic backfill が main 確定**、Phase D 実装が安全に積み上げ可能。これで PR-D4 series の全 Firestore 書込みコード = Phase C が確定し、残りは Phase D verify + Cloud Run Job container 化のみ)
+
+### 設計上の重要決定 (Codex MCP 1st/2nd NO-GO → 3rd GO 反映)
+
+- **Hard-gate (Codex 1st Critical 1 反映)**: batchWriter で `category === 'MatchedByHash' && computedConfidence === 'derived-bytes-verified'` 以外を `outOfScopeDocs` に分類し、reReadForBatch / commitBatch を呼ばずに skip。Phase B 実装は MatchedByHash のみ revalidated[] に入れるが、dev fixture / Phase B のバグ / 将来 Phase B 拡張で異種候補が混入しても本番書込しない構造的ガード。impl-plan §4.0 を型レベルで lock-in
+- **observability 完全性 (Codex 1st Critical 2 反映)**: `missingDocs` を `PhaseCUnprocessableDoc { reason: 'missing' | 'validation' }` に統合し、`PhaseCOutOfScopeDoc { reason, observedCategory, observedConfidence }` と合わせて全 5 カテゴリで分類。保全式 `candidatesIn = writtenDocs + preconditionFailedDocs + skippedImmutable + unprocessableDocs + outOfScopeDocs` を artifact + orchestrator test で構造的に保証 (silent drop 防止)
+- **lock 順序 finalize → release (Codex 2nd Critical 1 反映)**: lock release を finalize の **後** に固定。Codex 1st 反映で Evaluator MEDIUM (lockReleasedAt が finalize 開始時刻) を解消しようとして lock 順序を逆にしたが、Codex 2nd でこれが production-unsafe window (finalize 失敗時に別 run が同 env lock 取得可能 + writes committed + manifest.phaseC 未反映) と判明 → 元の順序に戻し、`lockReleasedAt` field 意味を「release 要求時刻」と JSDoc 明示で trade-off
+- **idempotency (Codex 2nd Important 1 反映)**: immutableSkipChecker に `'already backfilled (provenanceBackfill present)'` reason 追加。`provenanceBackfill !== undefined && !== null` (null sentinel 禁止 = Codex 3rd I3 維持) → skip。これにより同 run retry / 別 Phase C run 同時実行で既 backfilled doc を再書込する経路を構造的に閉鎖
+- **rate limiter 共通通過 (BF23)**: TokenBucketRateLimiter を RateLimiter interface に抽象化し、batchWriter (batch size 分一括 acquire) と individualRetryWriter (各 attempt 1 token acquire) が同一インスタンスを共有。突発書込 rate 増加防止を構造的に保証
+- **cross-process determinism 注意 (code-reviewer #1 反映)**: sha256ProvenanceBackfill JSDoc に「Phase D verification 時は `createBackfillProvenance` factory 再 invoke で metadata 再構築してから sha256 比較、Firestore data() 直 stringify は使わない (key insertion order が cross-process で異なる可能性)」と明記 (memory `feedback_deterministic_cross_process.md`)
+- **caller-bug 観測軸分離 (code-reviewer #3 反映)**: individualRetryWriter で `lastUpdateTimePreconditions` Map entry 不在 / `ProvenanceValidationError` を `preconditionFailedDocs.reason='lastUpdateTime drift'` と誤分類していたのを、`unprocessableDocs.reason='missing' | 'validation'` に分離。drift (Firestore 状態変化) と caller-bug (実装側の問題) を別観測軸で artifact 化
+
+### 教訓 (本セッション新規)
+
+- **Codex MCP review は destructive migration では複数 round 必須**: Phase C は本番 Firestore write を含む初の PR で、Codex MCP review が 1st NO-GO (Critical 2) → 2nd NO-GO (Critical 1) → 3rd GO の 3 round 必要だった。**1 round で済む期待をせず、3 round 想定で work estimation する**。前 session (Phase A/B) は 2 round で完了したが、destructive write を含む phase は安全性が指数的に複雑化するため余裕を持つ
+- **review 反映の副作用検証必須**: Codex 1st 反映で Evaluator MEDIUM (lockReleasedAt 順序) を解消するため lock 順序を逆にしたが、これが Codex 2nd Critical (production-unsafe window) を引き起こした。**review 指摘を反映する際、その反映が別の invariant を壊さないか毎回 Codex review に再投入する**。impl-plan §4.3 の元設計 (finalize → release) は理由があって設計されており、Evaluator が見落とした観点 (artifact 整合性) を Codex 2nd が補完した
+- **保全式 (invariant equation) は AC strict adherence の最強検証**: `candidatesIn = writtenDocs + preconditionFailedDocs + skippedImmutable + unprocessableDocs + outOfScopeDocs` を artifact + test で書き出すと、新カテゴリ追加忘れや silent drop が即時 fail する。**多状態を扱う module では、入力 = 出力カテゴリ合計の保全式を明示すること**。Codex 1st Critical 2 (silent drop) を発見できたのも保全式の欠如が顕在化したから
+- **依存性逆転 interface は production / test 両方で機能**: RateLimiter / LockObjectStore / FirestoreBatchAdapter / FirestoreIndividualAdapter / ArtifactStorageReader / ArtifactStorageWriter の 6 interface で抽象化したことで、unit test (in-memory fake) と production wire (adapters.ts) を完全分離。60 unit tests は Firebase / GCS 接続なしで動作、production 動作検証は dev rehearsal S2 stage に分離
+
+### 次セッション着手項目
+
+1. `/catchup` で本 handoff + Issue #432 状態 + open Issue 確認
+2. **PR-D4 S1-5 着手** (Phase D 実装、verify + gate behavior、BF12/BF13/BF15): Phase C 書込 doc 全件再読込 + `provenance` + `provenanceBackfill` の field 整合 verify + `derived-bytes-verified` doc で rotate API call (dev fixture) → 成功 + `child-snapshot-only` (dev fixture) で `failed-precondition` reject 確認 + integration test (本番 doc 副作用なし) + coverage 比率 artifact 出力
+3. **PR-D4 S1-6**: Dockerfile + `.github/workflows/pr-d4-backfill.yml` (workflow_dispatch + env/phase 選択)
+4. **PR-D4 S1-7**: container build + push (dev で実行) → image tag 取得 (= S1 完了条件)
+5. **PR-D4 S2-S7**: dev rehearsal 7-stage × 2 周 → Codex MCP 5th review GO 確認 → cocoro / kanameone 段階展開 (各 phase ユーザー番号認可)
+
+---
 
 <a id="session73"></a>
 ## ✅ session73 完了サマリー (2026-05-15: Issue #445 PR-D4 S1-3 Phase B 実装 main merge `6cafbba` (PR #466) + Codex MCP 1st NO-GO → 2nd GO 反映、Net 0)
