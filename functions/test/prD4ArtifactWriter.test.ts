@@ -27,7 +27,11 @@ import type {
 
 class FakeStorageWriter implements ArtifactStorageWriter {
   public writes: WrittenObject[] = [];
-  async writeJson(objectPath: string, content: string): Promise<void> {
+  async writeJson(
+    objectPath: string,
+    content: string,
+    _precondition?: { ifGenerationMatch: number }
+  ): Promise<void> {
     this.writes.push({ path: objectPath, content });
   }
 }

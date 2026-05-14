@@ -158,7 +158,11 @@ export class GcsArtifactStorageWriter implements ArtifactStorageWriter {
     this.artifactBucket = artifactBucket;
   }
 
-  async writeJson(objectPath: string, content: string): Promise<void> {
+  async writeJson(
+    objectPath: string,
+    content: string,
+    precondition?: { ifGenerationMatch: number }
+  ): Promise<void> {
     const match = objectPath.match(/^gs:\/\/([^/]+)\/(.+)$/);
     if (!match) {
       throw new Error(`invalid GCS object path (expected gs://bucket/path): ${objectPath}`);
@@ -169,14 +173,14 @@ export class GcsArtifactStorageWriter implements ArtifactStorageWriter {
         `artifact bucket mismatch: expected ${this.artifactBucket.name}, got ${bucketName} (path=${objectPath})`
       );
     }
-    // ifGenerationMatch: 0 で **既存 object の overwrite を拒否** する (Codex MCP Important 2 反映)。
-    // run-id 単位で artifact directory を分けているため、同一 run-id の re-run は
-    // 新 run-id を発行することを caller に強制する。これにより Phase B が「古い chunk +
-    // 新しい partial main」のような不整合 artifact を読む事故を構造的に閉鎖する。
+    // precondition 省略 → ifGenerationMatch: 0 (新規 only、Phase A 互換)。
+    // precondition 指定 → 渡された値で compare-and-swap (Phase B が manifest update する際に
+    //                     Phase A reader が取得した generation を渡す、Codex MCP S1-3 Critical 反映)
+    const ifGenerationMatch = precondition?.ifGenerationMatch ?? 0;
     await this.artifactBucket.file(path).save(content, {
       contentType: 'application/json',
       resumable: false,
-      preconditionOpts: { ifGenerationMatch: 0 },
+      preconditionOpts: { ifGenerationMatch },
       metadata: {
         cacheControl: 'no-store',
       },

@@ -71,7 +71,11 @@ class StaticBucketProber implements BucketProber {
 
 class FakeStorageWriter implements ArtifactStorageWriter {
   public writes: WrittenObject[] = [];
-  async writeJson(path: string, content: string) {
+  async writeJson(
+    path: string,
+    content: string,
+    _precondition?: { ifGenerationMatch: number }
+  ) {
     this.writes.push({ path, content });
   }
 }
