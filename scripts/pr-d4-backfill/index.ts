@@ -27,6 +27,12 @@ import {
   GcsBucketProber,
   GcsArtifactStorageWriter,
 } from './phase-a/adapters';
+import { runPhaseB } from './phase-b/revalidationOrchestrator';
+import {
+  GcsArtifactReader,
+  GcsObjectDownloader,
+  FirestoreReReaderImpl,
+} from './phase-b/adapters';
 
 function readArg(name: string, defaultValue?: string): string | undefined {
   const idx = process.argv.indexOf(name);
@@ -62,8 +68,8 @@ async function main(): Promise<void> {
     process.exit(2);
   }
   const phase = readArg('--phase', 'A');
-  if (phase !== 'A') {
-    console.error(`FATAL: phase ${phase} not implemented in S1-2 (only Phase A is available)`);
+  if (phase !== 'A' && phase !== 'B') {
+    console.error(`FATAL: phase ${phase} not implemented (only Phase A / B are available in S1-3)`);
     process.exit(2);
   }
 
@@ -96,34 +102,69 @@ async function main(): Promise<void> {
   const productionBucketRef = admin.storage().bucket(productionBucket);
   const artifactBucketRef = admin.storage().bucket(artifactBucketName);
 
-  const snapshotStartedAt = new Date().toISOString();
-  const result = await runPhaseA({
-    env: envName,
-    runId,
-    productionDataBucketName: productionBucket,
-    artifactBucketName,
-    cloudRunLocation,
-    bucketLocation,
-    documentSource: new FirestoreDocumentSource(db),
-    parentFetcher: new FirestoreParentFetcher(db),
-    bucketProber: new GcsBucketProber(productionBucketRef),
-    artifactWriter: new GcsArtifactStorageWriter(artifactBucketRef),
-    snapshotStartedAt,
-  });
+  if (phase === 'A') {
+    const snapshotStartedAt = new Date().toISOString();
+    const result = await runPhaseA({
+      env: envName,
+      runId,
+      productionDataBucketName: productionBucket,
+      artifactBucketName,
+      cloudRunLocation,
+      bucketLocation,
+      documentSource: new FirestoreDocumentSource(db),
+      parentFetcher: new FirestoreParentFetcher(db),
+      bucketProber: new GcsBucketProber(productionBucketRef),
+      artifactWriter: new GcsArtifactStorageWriter(artifactBucketRef),
+      snapshotStartedAt,
+    });
 
-  console.log('\nPhase A complete:');
-  console.log(`  totalDocs: ${result.totalDocs}`);
-  console.log(`  alreadyBackfilled: ${result.alreadyBackfilled}`);
-  console.log(`  verifiedExistingProvenance: ${result.verifiedExistingProvenance}`);
-  console.log('  categoryDistribution:');
-  for (const [cat, count] of Object.entries(result.categoryDistribution)) {
-    console.log(`    ${cat}: ${count}`);
+    console.log('\nPhase A complete:');
+    console.log(`  totalDocs: ${result.totalDocs}`);
+    console.log(`  alreadyBackfilled: ${result.alreadyBackfilled}`);
+    console.log(`  verifiedExistingProvenance: ${result.verifiedExistingProvenance}`);
+    console.log('  categoryDistribution:');
+    for (const [cat, count] of Object.entries(result.categoryDistribution)) {
+      console.log(`    ${cat}: ${count}`);
+    }
+    console.log(`  chunkCount: ${result.chunkCount}`);
+    console.log(`  mainArtifact: ${result.mainArtifactPath}`);
+    console.log(`  manifest: ${result.manifestPath}`);
+    console.log(`  snapshotStartedAt: ${snapshotStartedAt}`);
+    console.log(`  snapshotCompletedAt: ${result.snapshotCompletedAt}`);
+  } else {
+    // Phase B: Phase A artifact 経由 manifest を読み revalidation 実施
+    const manifestPath = `gs://${artifactBucketName}/pr-d4-backfill-artifacts/${runId}/manifest.json`;
+    console.log(`\nPhase B starting with manifest: ${manifestPath}`);
+
+    const revalidationStartedAt = new Date().toISOString();
+    const result = await runPhaseB({
+      env: envName,
+      runId,
+      artifactBucketName,
+      manifestPath,
+      artifactReader: new GcsArtifactReader(artifactBucketRef),
+      artifactWriter: new GcsArtifactStorageWriter(artifactBucketRef),
+      firestoreReReader: new FirestoreReReaderImpl(db),
+      childDownloader: new GcsObjectDownloader(productionBucketRef),
+      parentDownloader: new GcsObjectDownloader(productionBucketRef),
+      productionDataBucketName: productionBucket,
+      revalidationStartedAt,
+    });
+
+    console.log('\nPhase B complete:');
+    console.log(`  candidatesIn: ${result.candidatesIn}`);
+    console.log(`  candidatesOut: ${result.candidatesOut}`);
+    console.log(`  skippedNonMatchedByHash: ${result.skippedNonMatchedByHash}`);
+    console.log(`  verifyFailedMatchedByHash: ${result.verifyFailedMatchedByHash}`);
+    console.log('  driftSkipped:');
+    console.log(`    firestoreUpdateTimeChanged: ${result.driftSkipped.firestoreUpdateTimeChanged}`);
+    console.log(`    childGenerationChanged: ${result.driftSkipped.childGenerationChanged}`);
+    console.log(`    parentGenerationChanged: ${result.driftSkipped.parentGenerationChanged}`);
+    console.log(`  mainArtifact: ${result.mainArtifactPath}`);
+    console.log(`  manifest: ${result.manifestPath}`);
+    console.log(`  revalidationStartedAt: ${revalidationStartedAt}`);
+    console.log(`  revalidationCompletedAt: ${result.revalidationCompletedAt}`);
   }
-  console.log(`  chunkCount: ${result.chunkCount}`);
-  console.log(`  mainArtifact: ${result.mainArtifactPath}`);
-  console.log(`  manifest: ${result.manifestPath}`);
-  console.log(`  snapshotStartedAt: ${snapshotStartedAt}`);
-  console.log(`  snapshotCompletedAt: ${result.snapshotCompletedAt}`);
 }
 
 main().catch((err) => {

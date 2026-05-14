@@ -11,7 +11,7 @@
  * - BackfillClassifierCategory: shared/types.ts (PR-D4 S1-1 で確定済)
  */
 
-import type { BackfillClassifierCategory } from '../../shared/types';
+import type { BackfillClassifierCategory, BackfillConfidence } from '../../shared/types';
 
 /**
  * artifact schema version (script 改修時に bump)。Phase A/B/C/D で共通の prefix を持つ。
@@ -164,3 +164,102 @@ export interface BackfillManifest {
 
 /** chunk 1 件あたり最大件数 (impl-plan §4.1 BF19 / BF22 反映) */
 export const PR_D4_CANDIDATES_PER_CHUNK = 1000 as const;
+
+// ============================================================================
+// Phase B types (impl-plan §4.2)
+// ============================================================================
+
+/**
+ * Phase B drift skip 種別ごとのカウンタ (BF9 / impl-plan §4.2)。
+ *
+ * - `firestoreUpdateTimeChanged`: Phase A 取得後に Firestore doc が更新された (status 変化等)
+ * - `childGenerationChanged`: Phase A 取得後に child Storage object が更新された
+ *   (rotate / replace / delete-then-write 等)
+ * - `parentGenerationChanged`: Phase A 取得後に parent Storage object が更新された
+ *   (MatchedByHash の再 split 検証で parent も再照合するため検出される)
+ */
+export interface PhaseBDriftSkipped {
+  firestoreUpdateTimeChanged: number;
+  childGenerationChanged: number;
+  parentGenerationChanged: number;
+}
+
+/**
+ * Phase B revalidated 1 candidate (impl-plan §4.2 chunk 構造)。
+ *
+ * 設計判断:
+ * - 本 PR スコープでは **MatchedByHash かつ drift 無し かつ re-split verify 結果記録済**
+ *   のみが revalidated[] に入る。Phase C で `provenance` + `provenanceBackfill` 書込対象は
+ *   `computedConfidence === 'derived-bytes-verified'` 限定 (ADR MUST 7 + impl-plan §4.0)
+ * - `computedProvenance` は Phase C atomic batch に渡す 10 fields を完全構築済。caller は
+ *   `createBackfillProvenance()` factory にそのまま渡せる
+ * - `computedConfidence === 'derived-bytes-verified'`: re-split で sha256 一致確認済
+ * - `computedConfidence === 'child-snapshot-only'`: re-split で sha256 不一致 (dev fixture
+ *   テスト用、本番 Phase C は書込しない)
+ * - `evidence` は ProvenanceBackfillMetadata.evidence に詰込まれる runtime 整合性検証情報
+ */
+export interface PhaseBRevalidatedCandidate {
+  docId: string;
+  category: BackfillClassifierCategory;
+  computedConfidence: BackfillConfidence;
+  computedProvenance: {
+    sourceGeneration: string;
+    sourceMetageneration: string;
+    sourceSha256: string;
+    sourcePath: string;
+    sourceBucket: string;
+    derivedObjectPath: string;
+    derivedGeneration: string;
+    derivedMetageneration: string;
+    derivedSha256: string;
+    /** ISO8601 (= document.createdAt から取得した split 完了時刻、Phase C で Timestamp 化) */
+    createdAt: string;
+  };
+  evidence: {
+    parentExists: boolean;
+    parentSha256MatchedAtBackfill: boolean;
+    childSha256ComputedAtBackfill: boolean;
+  };
+}
+
+/**
+ * Phase B revalidated chunk (1 chunk ≤ PR_D4_CANDIDATES_PER_CHUNK 件)。
+ */
+export interface PhaseBRevalidatedChunk {
+  schemaVersion: PrD4ArtifactSchemaVersion;
+  chunkIndex: number;
+  revalidated: PhaseBRevalidatedCandidate[];
+}
+
+/**
+ * Phase B main artifact 構造 (impl-plan §4.2)。
+ *
+ * 設計:
+ * - `candidatesIn`: Phase A artifact から streaming read した candidates 全件
+ *   (`PhaseAClassifySummary.totalDocs` ではなく Phase A revalidate 対象 = candidates 配列件数)
+ * - `candidatesOut`: revalidated[] に入った件数 = chunks の docCount 合計
+ * - `driftSkipped`: drift 検出された件数の内訳 (合計 = candidatesIn - candidatesOut - skipped 他)
+ * - `verifyFailedMatchedByHash`: MatchedByHash で drift 無しだが re-split verify 失敗した件数
+ *   (本番 Phase C 書込対象外)
+ * - `skippedNonMatchedByHash`: Phase A で MatchedByHash 以外の category だった件数
+ *   (Phase B では re-split しない、本番 Phase C 書込対象外)
+ * - `phaseAArtifactRef`: Phase A main artifact path (consumer が manifest chain を再構成可能)
+ * - `phaseAManifestSha256`: Phase B 起動時に検証した manifest sha256 (Phase A → B 連携の整合性)
+ */
+export interface PhaseBRevalidationSummary {
+  phase: 'B';
+  schemaVersion: PrD4ArtifactSchemaVersion;
+  scriptVersion: PrD4ScriptVersion;
+  env: BackfillEnvName;
+  runId: string;
+  phaseAArtifactRef: string;
+  phaseAManifestSha256: string;
+  revalidationStartedAt: string;
+  revalidationCompletedAt: string;
+  candidatesIn: number;
+  candidatesOut: number;
+  driftSkipped: PhaseBDriftSkipped;
+  verifyFailedMatchedByHash: number;
+  skippedNonMatchedByHash: number;
+  chunks: ArtifactChunkPointer[];
+}

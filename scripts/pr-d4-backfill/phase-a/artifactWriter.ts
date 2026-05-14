@@ -29,12 +29,25 @@ import {
 } from '../types';
 import type { BackfillClassifierCategory } from '../../../shared/types';
 
+/**
+ * `precondition.ifGenerationMatch`:
+ *   - 省略 → 既存 object 拒否 (`ifGenerationMatch: 0` 相当、Phase A 新規書込 default)
+ *   - `0` → 同じく既存 object 拒否
+ *   - `> 0` → compare-and-swap: 指定 generation と一致するときのみ overwrite、不一致は 412 fail
+ *
+ * Phase B が既存 manifest を update する際は Phase A reader が取得した generation を渡す
+ * (Codex MCP S1-3 Critical 反映)。
+ */
+export interface WriteJsonPrecondition {
+  ifGenerationMatch: number;
+}
+
 export interface ArtifactStorageWriter {
-  /**
-   * `gs://{bucket}/{path}` 形式の path に JSON 文字列を書込む。
-   * 実装側で必要に応じて Content-Type 設定 + ifGenerationMatch: 0 (overwrite 禁止) を強制。
-   */
-  writeJson(objectPath: string, content: string): Promise<void>;
+  writeJson(
+    objectPath: string,
+    content: string,
+    precondition?: WriteJsonPrecondition
+  ): Promise<void>;
 }
 
 /** test 側で書込履歴を assertion するための表現 */
