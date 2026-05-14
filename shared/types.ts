@@ -74,7 +74,7 @@ export interface Document {
    * 移行期間中は optional。lifecycle:
    * - PR-D1 (本 PR): 型定義のみ、書込なし
    * - PR-D2: 新規分割 PDF (splitPdf 改修後) で必須書込 (10 fields 全て)
-   * - PR-D3: rotatePdfPages 改修後の rotation 結果でも更新
+   * - PR-D3: rotatePdfPages 改修後の rotation 結果で derived 4 fields のみ更新 (source 5 + createdAt は base から完全保持、ADR-0016 MUST 3 / AC14)
    * - PR-D4: 既存 docs への best-effort backfill (親 PDF 現存 + sha256 計算可能ケースのみ)
    * - PR-D5: optional → required 格上げを評価
    *
@@ -129,7 +129,7 @@ export interface Document {
  *
  * 書込タイミング:
  * - PR-D2 (splitPdf 改修後): 新規分割 PDF で 10 fields 全て必須書込
- * - PR-D3 (rotatePdfPages 改修後): rotation 結果でも derived* + sourceSha256 を更新
+ * - PR-D3 (rotatePdfPages 改修後): rotation 結果で derived 4 fields のみ更新 (source 5 + createdAt は base から完全保持、AC14 / ADR-0016 MUST 3)
  * - PR-D4 (backfill): 既存 docs に対し best-effort で書込 (親 PDF 現存 + sha256 計算可能ケースのみ)
  *
  * MUST 5 (ADR-0016): sourceSha256 / sourceGeneration / sourceMetageneration は

@@ -671,7 +671,7 @@ interface DocumentProvenance {
 |------|----|-------------------|
 | 既存 docs（PR-D1 時点） | - | `undefined`（書込なし） |
 | 新規分割（PR-D2 splitPdf 改修後） | PR-D2 | 10 fields 全て必須書込 |
-| 回転（PR-D3 rotatePdfPages 改修後） | PR-D3 | `derived*` + `sourceSha256` を更新（in-place 編集禁止、新 path 書込） |
+| 回転（PR-D3 rotatePdfPages 改修後） | PR-D3 | `derived` 4 fields のみ更新（新 path `processed/{docId}/rotations/{rotationId}.pdf` 書込、in-place 編集禁止）。`source` 5 fields + `createdAt` は **base provenance から完全保持**（rotation は親 PDF identity を再定義しない、ADR-0016 MUST 3） |
 | backfill（PR-D4） | PR-D4 | 親 PDF 現存 + sha256 計算可能ケースのみ best-effort 書込 |
 | 型レベル必須化（PR-D5 評価） | PR-D5 | `provenance?` → `provenance` への格上げを評価 |
 
