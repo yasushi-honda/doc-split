@@ -1,10 +1,109 @@
 # ハンドオフメモ
 
-**更新日**: 2026-05-15 session77 (**Issue #445 PR-D4 S1-6 (Dockerfile + workflow_dispatch) main merge `4299ec8` (PR #475) + Codex MCP 4 round + 6 agent 並列 review 反映、Net 0**)。`Dockerfile` (50 LoC) + `.dockerignore` (71 LoC) + `.github/workflows/pr-d4-backfill.yml` (446 LoC) + `scripts/pr-d4-backfill/README.md` (208 LoC) 新規 + `scripts/clients/{dev,cocoro,kanameone}.env` 各 +3 fields 拡張 + `scripts/pr-d4-backfill/index.ts` defense-in-depth 4 行追加 = 8 files / +827/-3。**機能コードゼロ** (infrastructure-as-code 中心)、ただし destructive migration scope (本番 IAM + Cloud Run Jobs deploy 経路の確立)。設計判断: **deploy/execute 分離** (per-run args/env を execute --args / --update-env-vars で execution-level override) + **env 単位 concurrency** (固定 job 名 image race 防止) + **2 job 分離** (deploy-dev / deploy-prod) + **dev fixture 専用 job** (`pr-d4-backfill-dev-fixture` で PR_D4_ROTATE_AUTH_TOKEN state leak 排除) + **Cloud Run Job spec 固定** (--max-retries=0 / --task-timeout=21600 / --cpu=2 / --memory=4Gi) + **digest pinning** (tag mutable race 排除) + **包括 placeholder reject** (`<TBD>`/`null`/`undefined`/`TODO`/`xxx` + whitespace trim) + **run_id Docker tag 規約** (先頭文字 + 長さ ≤ 120) + **container fixture phase 制約** (yaml gate との defense-in-depth) + **最小権限** (PR_D4_ROTATE_URL を fixture run のみ env load)。Codex MCP review = impl-plan 3 round (1st NO-GO Critical 2 → 2nd NO-GO Critical 1 → 3rd NO-GO → 反映後 4th GO) + 実装段階 1 round (GO 即取得) で **Critical 4 + Important 14 + Suggestion 4 解消**。さらに 6 agent 並列 review (code-reviewer / silent-failure-hunter / comment-analyzer / pr-test-analyzer / type-design-analyzer / code-simplifier) で Critical 1 + Important 6 を 2nd commit で反映。AC 21 件 (docker build / actionlint / functions 1370 tests / grep) 全 pass。**次セッション最優先: PR-D4 S1-7 (dev で container build + push + GCP provision + Phase A〜D 実 execute = S1 完了条件) 着手**
+**更新日**: 2026-05-15 session78 (**Issue #445 PR-D4 S1-7 主要部達成: GCP provision + Phase A/B/C/D dev 完走 + rehearsal 中に 4 設計修正 main merge (#477/#478/#479/#480)、Net 0**)。`dev` 環境に Artifact Registry repo `pr-d4-backfill` + cleanup policy + Artifact bucket `doc-split-dev-pr-d4-artifacts` + Cloud Run Job runtime SA `pr-d4-backfill-runtime@doc-split-dev` + 4 roles + deploy SA `docsplit-cloud-build@doc-split-dev` への 5 ロール追加 (cloudbuild.builds.editor / storage.admin / logging.viewer / cloudbuild.builds.viewer / viewer + ActAs runtime SA) を全て provision 済。workflow_dispatch で Phase A (4m5s / totalDocs=6 / verifiedExistingProvenance=2 / NeedsManualReview=4) → Phase B (3m35s / candidatesIn=4 / candidatesOut=0、MatchedByHash=0 のため verify 対象なし) → Phase C (3m28s / writtenDocs=0 / GCS lock generation `1778852359224407` 取得+解除 + rate-limit 100tps 経路通過 / 副作用ゼロ) → Phase D (3m28s / verifiedDocs=0 / fieldsMismatch=[] / manifestUpdateStatus=ok / rotateGateTest=null) を全て成功。artifact chain (manifest sha256 連鎖) + finalize status all `ok`。rehearsal 中に gcloud / Cloud Build / container 周辺の 4 つの設計不具合を発見し PR #477 (Cloud Build を `--async` + describe polling に変更、log stream 経路の既知挙動回避) → PR #478 (`--async` 出力の format path を `value(metadata.build.id)` → `value(id)`) → PR #479 (location を CLI args から env var 経由に変更、`gcloud run jobs execute --args` の同 value 重複 reject 回避、container index.ts は CLI args 優先 + env var fallback) → PR #480 (`functions/src/pdf/provenance.ts` を container に allowlist 取込、`.dockerignore` の `functions/src` 一括除外を subdir 単位に変更し pdf/ 内 5 file を明示除外しつつ provenance.ts のみ残す + Dockerfile COPY 1 行追加) を順次 main merge。actual Cloud Build SA を `gcloud builds describe` log から確認: `217393576593-compute@developer.gserviceaccount.com` (README §5 想定通り、Compute Engine default `roles/editor` で十分カバー)。S1-7 rehearsal 16 項目中 #1-#11 を達成 (済) / #12 (Phase D fixture=true) は `PR_D4_ROTATE_URL` secret 未登録のため skip / #13-#16 (exit code failure / concurrency / negative test 4 ケース / `<TBD>` env sourcing 副作用) は次セッション着手予定。**次セッション最優先: S1-7 残 5 項目 (#12-#16) → README §5 actual build SA 追記 PR → S2 (dev rehearsal 7-stage × 2 周) → Codex MCP 12th review → cocoro/kanameone 段階展開 (各 phase 番号認可)**
+
+**更新日 (前)**: 2026-05-15 session77 (**Issue #445 PR-D4 S1-6 (Dockerfile + workflow_dispatch) main merge `4299ec8` (PR #475) + Codex MCP 4 round + 6 agent 並列 review 反映、Net 0**)。`Dockerfile` (50 LoC) + `.dockerignore` (71 LoC) + `.github/workflows/pr-d4-backfill.yml` (446 LoC) + `scripts/pr-d4-backfill/README.md` (208 LoC) 新規 + `scripts/clients/{dev,cocoro,kanameone}.env` 各 +3 fields 拡張 + `scripts/pr-d4-backfill/index.ts` defense-in-depth 4 行追加 = 8 files / +827/-3。**機能コードゼロ** (infrastructure-as-code 中心)、ただし destructive migration scope (本番 IAM + Cloud Run Jobs deploy 経路の確立)。設計判断: **deploy/execute 分離** (per-run args/env を execute --args / --update-env-vars で execution-level override) + **env 単位 concurrency** (固定 job 名 image race 防止) + **2 job 分離** (deploy-dev / deploy-prod) + **dev fixture 専用 job** (`pr-d4-backfill-dev-fixture` で PR_D4_ROTATE_AUTH_TOKEN state leak 排除) + **Cloud Run Job spec 固定** (--max-retries=0 / --task-timeout=21600 / --cpu=2 / --memory=4Gi) + **digest pinning** (tag mutable race 排除) + **包括 placeholder reject** (`<TBD>`/`null`/`undefined`/`TODO`/`xxx` + whitespace trim) + **run_id Docker tag 規約** (先頭文字 + 長さ ≤ 120) + **container fixture phase 制約** (yaml gate との defense-in-depth) + **最小権限** (PR_D4_ROTATE_URL を fixture run のみ env load)。Codex MCP review = impl-plan 3 round (1st NO-GO Critical 2 → 2nd NO-GO Critical 1 → 3rd NO-GO → 反映後 4th GO) + 実装段階 1 round (GO 即取得) で **Critical 4 + Important 14 + Suggestion 4 解消**。さらに 6 agent 並列 review (code-reviewer / silent-failure-hunter / comment-analyzer / pr-test-analyzer / type-design-analyzer / code-simplifier) で Critical 1 + Important 6 を 2nd commit で反映。AC 21 件 (docker build / actionlint / functions 1370 tests / grep) 全 pass。**次セッション最優先: PR-D4 S1-7 (dev で container build + push + GCP provision + Phase A〜D 実 execute = S1 完了条件) 着手**
 
 **更新日 (前)**: 2026-05-15 session76 (**Issue #445 PR-D4 S1-5 (Phase D verify + rotate gate 拡張) main merge `8a31c93` (PR #472) + Codex MCP review 11 round 反映、Net 0**)。`scripts/pr-d4-backfill/phase-d/` 新規 7 source files + 5 test files (65 unit tests) + `functions/src/pdf/rotateGate.ts` pure helper + `pdfOperations.ts` rotate gate guard = 17 files / +4470/-4。BF12/BF13/BF15/BF22 + 保全式アサート + 2 系統 coverage + CAS 3 段構造 + Stage 1 + Stage 2 verify + dev fixture rotate test + `shouldRejectRotateForBackfill` fail-closed。全 1370 tests passing / Codex MCP **1st-11th** = Critical 8 + Important 12 + Suggestion 全反映 → **11th GO**。
-**ブランチ**: `main` (PR #475 squash merge `4299ec8` 完遂、feature ブランチ自動削除済。CI 全 green: CodeRabbit pass / GitGuardian pass / lint-build-test 6m2s pass)
-**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + (session29-66 累積実績は archive 参照) + **Phase 8 (session67 = PR-D1 / session68 = PR-D2 / session69 = PR-D3 完遂 + 3 環境展開 + #445 close / session70 = PR-D4 impl-plan + ADR 改訂 main merge / session71 = PR-D4 S1-1 基盤層 main merge / session72 = PR-D4 S1-2 Phase A 実装 main merge / session73 = PR-D4 S1-3 Phase B 実装 main merge / session74 = PR-D4 S1-4 Phase C 実装 main merge / session76 = PR-D4 S1-5 Phase D 実装 main merge / session77 = PR-D4 S1-6 Dockerfile + workflow_dispatch main merge、Net 0)** = Issue #432 P0 collision の構造的予防 splitPdf + rotatePdfPages 双方で 3 環境稼働 + 既存 docs backfill の Phase A/B/C/D 全実装 + Cloud Run Jobs 実行経路 (Dockerfile + workflow) が全て main に確定。残りは S1-7 (dev container build/push + GCP provision + 実 execute) + S2-S7 (dev rehearsal × 2 周) + 本番展開
+**ブランチ**: `main` (PR #477 + #478 + #479 + #480 を順次 squash merge、feature ブランチ自動削除済。各 CI 全 green: lint-build-test ~6m / CodeRabbit pass / GitGuardian pass)
+**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + (session29-66 累積実績は archive 参照) + **Phase 8 (session67 = PR-D1 / session68 = PR-D2 / session69 = PR-D3 完遂 + 3 環境展開 + #445 close / session70 = PR-D4 impl-plan + ADR 改訂 main merge / session71 = PR-D4 S1-1 基盤層 main merge / session72 = PR-D4 S1-2 Phase A 実装 main merge / session73 = PR-D4 S1-3 Phase B 実装 main merge / session74 = PR-D4 S1-4 Phase C 実装 main merge / session76 = PR-D4 S1-5 Phase D 実装 main merge / session77 = PR-D4 S1-6 Dockerfile + workflow_dispatch main merge / session78 = PR-D4 S1-7 主要部達成 (GCP provision + Phase A/B/C/D dev 完走 + 4 設計修正 PR main merge)、Net 0)** = Issue #432 P0 collision の構造的予防 splitPdf + rotatePdfPages 双方で 3 環境稼働 + 既存 docs backfill の Phase A/B/C/D 全実装 + Cloud Run Jobs 実行経路 (Dockerfile + workflow + gcloud beat-known 挙動回避 4 修正) + dev 環境での実 execute 全 4 phase 完走確認が全て main に確定。残りは S1-7 残 5 項目 (#12-#16 + README 更新) + S2-S7 (dev rehearsal × 2 周) + 本番展開
+
+<a id="session78"></a>
+## ✅ session78 完了サマリー (2026-05-15: Issue #445 PR-D4 S1-7 主要部達成: GCP provision + Phase A/B/C/D dev 完走 + 4 設計修正 PR main merge、Net 0)
+
+session77 で main 確定した PR-D4 S1-6 (Dockerfile + workflow_dispatch) の続き。dev 環境に GCP リソースを provision し、workflow_dispatch で Phase A〜D を順次実行。rehearsal 中に gcloud / Cloud Build / container 経路の 4 つの設計不具合を発見し、PR #477/#478/#479/#480 を順次 main merge して全 phase 完走を達成。S1-7 rehearsal 16 項目中 #1-#11 を完了。
+
+### 経緯
+
+1. **catchup**: session77 handoff 確認、次セッション最優先 = PR-D4 S1-7 着手を選択
+2. **dev 環境切替**: `./scripts/switch-client.sh dev` で `hy.unimail.11@gmail.com / doc-split-dev` に切替、必要 API 5 件 (artifactregistry / cloudbuild / firestore / run / secretmanager) enable 確認
+3. **GCP provisioning** (read-only 調査で全リソース未作成を確認したのち順次 create):
+   - Artifact Registry repo `pr-d4-backfill` (asia-northeast1, Docker format)
+   - Cleanup policy 適用 (keep-latest-2 + delete-all-others)
+   - Artifact bucket `gs://doc-split-dev-pr-d4-artifacts` (asia-northeast1, uniform-bucket-level-access)
+   - Cloud Run Job runtime SA `pr-d4-backfill-runtime@doc-split-dev` + 4 roles (datastore.user / storage.objectAdmin / logging.logWriter / secretmanager.secretAccessor)
+   - deploy SA `docsplit-cloud-build@doc-split-dev` への 5 ロール追加 (`cloudbuild.builds.editor` / `storage.admin` / `logging.viewer` / `cloudbuild.builds.viewer` / `viewer`) + runtime SA への `iam.serviceAccountUser` ActAs binding
+4. **rehearsal シリーズ (4 PR main merge)**:
+   - **PR #477** (`fd81526`): Cloud Build を `--async` + describe polling に変更。3 回の dispatch で `gcloud builds submit` が default logs bucket への log stream に失敗し exit 1 を返す (build 自体は SUCCESS) ことを確認、`roles/viewer` 含む 3 ロール付与でも再現したため log streaming 経路を回避する設計に変更。`gcloud builds submit --async --format='value(metadata.build.id)'` で BUILD_ID 取得 + `gcloud builds describe` で 15s 間隔 polling (60min timeout = 240 iterations)、terminal status (SUCCESS / FAILURE / CANCELLED / TIMEOUT / EXPIRED / INTERNAL_ERROR) 識別、QUEUED/WORKING/PENDING は poll、unknown は WARN+retry。deploy-dev / deploy-prod 両 job に適用。actionlint pass + lint-build-test 6m12s pass で軽量 review GO
+   - **PR #478** (`289217a`): PR #477 で導入した `--format='value(metadata.build.id)'` が空文字列を返すため `value(id)` に修正。`metadata.build.id` は long-running operation の output schema で、`--async` で直接返される Build resource には適用されない。`gcloud builds list --format='value(id)'` で同 build を取得可、修正後の即座な確認で確証。lint-build-test 6m13s pass、軽量 review GO
+   - **PR #479** (`14c69db`): `gcloud run jobs execute --args` が同一 value `asia-northeast1` の複数回指定を reject する挙動 (`CLOUD_RUN_LOCATION` と `BUCKET_LOCATION` がともに `asia-northeast1` の場合に発火) を確認、location を CLI args から env var 経由に変更。yaml の Execute step で `ENV_VARS` に `CLOUD_RUN_LOCATION` と `BUCKET_LOCATION` を追加し `ARGS_CSV` から該当を削除。container index.ts は CLI args (`--cloud-run-location` / `--bucket-location`) を優先、env vars を fallback として受け付ける OR 演算で対応 (ローカル CLI 実行と CI execute 両方を維持)。両 job に適用、1370 functions tests pass、lint-build-test 6m30s pass、軽量 review GO
+   - **PR #480** (`c746d79`): Cloud Run Job execution 内で `Error: Cannot find module '../../../functions/src/pdf/provenance'` を確認、S1-6 設計時に「functions/ source 不要」と誤判断していたが PR-D4 scripts (phase-c batchWriter / individualRetryWriter + phase-d docVerifier) が同 module を import していた。provenance.ts は `firebase-admin/firestore` + `shared/types` のみ依存と判明したため最小限 allowlist で取込。`.dockerignore` を `functions/src` 一括除外から subdir 単位 (admin / documents / gmail / index.ts / ocr / search / storage / triggers / upload / utils) + pdf/ 内 5 file (pdfOperations / rotateGate / rotationMerge / splitDocumentBuilder / splitSnapshot) 明示除外に変更し、`Dockerfile` に `COPY functions/src/pdf/provenance.ts ./functions/src/pdf/provenance.ts` 1 行追加。ローカル docker build pass + container 内構造確認 + lint-build-test 6m49s pass、軽量 review GO
+5. **dev で Phase A/B/C/D 完走** (PR #480 merge 後の v4 run):
+   - Phase A: run `25919919476` / 4m5s / `totalDocs=6` / categoryDistribution: NeedsManualReview=4 / verifiedExistingProvenance=2 (PR-D2 splitPdf 経由の新規 docs) / artifact chain (manifest + main + chunk-0 + sha256) 出力
+   - Phase B: run `25920362622` / 3m35s / 同 run_id 再利用 (新 run_id 別 dispatch で manifest 404 を 1 回経験、設計通り Phase A の run_id を継承) / `candidatesIn=4` / `candidatesOut=0` (MatchedByHash=0 のため verify 対象なし) / driftSkipped=0 / phase-b-revalidation-summary.json + manifest sha256 連鎖更新
+   - Phase C (番号認可下で実行): run `25920761053` / 3m28s / `candidatesIn=0` / `writtenDocs=0` / GCS sentinel lock `1778852359224407` 取得 + 13:39:19 release / rate-limit 100tps + burst 100 経路通過 / Firestore 副作用ゼロ + CAS / lock / rate-limit の全経路通過確認
+   - Phase D (read-only): run `25920971551` / 3m28s / `verifiedDocs=0` / `fieldsMismatch=[]` / `manifestUpdateStatus=ok` (CAS 成功 + 別 file `phase-d-finalize-status.json` に `expectedGeneration=1778852359564060`) / `rotateGateTest=null` (fixture=false のため skip) / `estateRotateReadyCoverage`: 6 docs 中 verifiedExisting 2 件 (33.33%)
+6. **actual Cloud Build build SA 確認** (S1-7 rehearsal #6): `gcloud builds describe ${BUILD_ID} --format='value(serviceAccount)'` で `217393576593-compute@developer.gserviceaccount.com` を取得 (README §5 想定通り、Compute Engine default が `roles/editor` を持つため artifactregistry.writer / logging.logWriter / storage.objectViewer 等を全てカバー)
+
+### 設計上の重要決定 (4 PR review 反映)
+
+- **Cloud Build log streaming 回避は `--async` + describe polling が事実上の解** (PR #477): deploy SA に project Viewer + cloudbuild.builds.viewer + logging.viewer を 3 重で付与しても再現したため、IAM 解決路を諦め log stream を使わない設計に転換。`--async` 出力 schema は `--format='value(id)'` (PR #478 で修正)
+- **gcloud `--args` は同 value 複数禁止** (PR #479): repeatable flag の挙動として comma-separated parse 後に duplicate value を reject する。region 系の同 value 引数は env var 経路に逃す必要あり。container 側は CLI args 優先 + env var fallback の OR 演算で互換性維持
+- **container source allowlist は subdir + file 単位の二段除外で精密化** (PR #480): `functions/src` 一括除外は単純だが PR-D4 のような cross-package import を見落とす。subdir 単位 + 特定 file 単位の二段除外で必要最小限を残す方針
+- **Cloud Run Jobs の Phase 間連携は同 run_id で artifact chain を読む設計** (rehearsal で再確認): Phase B は Phase A の `phase-a-classify-summary.json` を読むため、新 run_id で B を起動すると manifest 404。同一 run の Phase A→B→C→D は同 run_id を継承する運用が required (workflow_dispatch UI で明示的に Phase A の run_id を copy する手順を README §S1-7 rehearsal に追記候補)
+
+### 変更ファイル一覧 (4 PR / 7 files, +123/-18)
+
+| PR | ファイル | 区分 | LoC |
+|----|----------|------|----:|
+| #477 | `.github/workflows/pr-d4-backfill.yml` | modified | +79/-7 |
+| #478 | `.github/workflows/pr-d4-backfill.yml` | modified | +2/-2 |
+| #479 | `.github/workflows/pr-d4-backfill.yml` | modified | +7/-4 |
+| #479 | `scripts/pr-d4-backfill/index.ts` | modified | +15/-3 |
+| #480 | `.dockerignore` | modified | +18/-2 |
+| #480 | `Dockerfile` | modified | +3/-0 |
+
+### S1-7 rehearsal 達成項目
+
+| # | 項目 | 状態 |
+|---|------|------|
+| 1 | Artifact Registry repo `pr-d4-backfill` 作成 | ✅ |
+| 2 | Cleanup policy (keep-latest-2) 適用 | ✅ |
+| 3 | Artifact bucket `doc-split-dev-pr-d4-artifacts` 作成 | ✅ |
+| 4 | Cloud Run Job runtime SA + 4 roles | ✅ |
+| 5 | deploy SA 不足ロール 5 件追加 + Environment reviewer 確認は dev 範囲外 | ✅ (dev) |
+| 6 | actual Cloud Build SA = `217393576593-compute@developer.gserviceaccount.com` 確認 | ✅ |
+| 7 | workflow_dispatch (env=dev, phase=A) で Cloud Build + Cloud Run Jobs deploy + Phase A execute 成功 | ✅ |
+| 8 | Phase A artifact (manifest + main + chunks) ARTIFACT_BUCKET 出力 | ✅ |
+| 9 | Phase B 起動 → revalidation 成功 (candidatesOut=0) | ✅ |
+| 10 | Phase C 起動 → atomic backfill (writtenDocs=0、lock 取得+解除) | ✅ |
+| 11 | Phase D 起動 (fixture=false) → verify 成功 (verifiedDocs=0) | ✅ |
+| 12 | Phase D fixture=true (PR_D4_ROTATE_URL secret 必要) | ⏳ secret 未登録のため次セッション |
+| 13 | exit code non-zero failure (人為 fail) | ⏳ 次セッション |
+| 14 | env 単位 concurrency 同時起動 (前を待つ動作) | ⏳ 次セッション |
+| 15 | negative test 4 ケース (`gh workflow run` で dispatch) | ⏳ 次セッション |
+| 16 | `<TBD>` env sourcing 副作用なし確認 | ⏳ 次セッション |
+
+### 教訓 (本セッション新規)
+
+- **dev rehearsal は本番想定の 4 倍の修正を含意する**: S1-6 で「機能コードゼロ」と評価した workflow yaml に、実 dispatch で 4 つの設計不具合 (PR #477-#480) が連続発生。IaC は静的検証だけでは catch できず実 execute が唯一の確証
+- **gcloud CLI の挙動には IAM では解けない部分がある**: deploy SA に Viewer + logging.viewer + cloudbuild.builds.viewer を付与しても log stream は復活しない。同様に `--args` の duplicate value も IAM では解けない。設計側で経路を変える (`--async`、env var 経由) のが事実上の解
+- **`--async` の output schema は long-running operation とは別系統**: `--format='value(metadata.build.id)'` は LRO の typical だが、`--async` 直接 Build resource では `value(id)` が正解。1 PR で両方を直さず段階的修正になった (PR #477 → PR #478) のは observability の連鎖切れで、本来は最初の修正で公式 schema 確認が必要だった
+- **Phase 間連携は run_id 継承 (artifact chain) を文書化する**: workflow_dispatch UI で「Phase B には Phase A の run_id を入力」が暗黙 contract になっており、新 run_id で B を起動すると manifest 404。README §S1-7 rehearsal に明示する候補 (次セッション PR で対応)
+- **container size 最適化と cross-package import は両立しない場合あり**: PR-D4 のように `functions/src/pdf/provenance.ts` を scripts から import する場合、`functions/src` 一括除外は破綻する。subdir + file 単位の二段除外で精密化する設計が必要
+
+### Net 計測 (CLAUDE.md MUST)
+
+- Before: open Issues = 4 (#432 P0、#402 P2、#251 P2、#238 P2)
+- After: open Issues = 4 (変化なし)
+- 本 session 完了時点で **+0 / -0 = Net 0**
+- 進捗判定: ✅ 構造的進捗 (Issue #432 P0 復旧経路 = PR-D4 S1-7 主要部達成 + dev 4 phase 完走 + 4 設計修正 main 確定。Cloud Build / Cloud Run Jobs / artifact chain / GCS lock / Firestore CAS / rate-limit の全経路が実 execute で確証された)
+
+### 次セッション着手項目
+
+1. `/catchup` で本 handoff + Issue #432 状態 + open Issue 確認
+2. **S1-7 残 5 項目** (#12-#16):
+   - #12: dev に rotate callable URL 取得 + `PR_D4_ROTATE_URL` secret 登録 → Phase D fixture=true 実行
+   - #13: 人為 fail (ARTIFACT_BUCKET 不正 等) で workflow step failure() 扱い確認
+   - #14: 2 つの workflow_dispatch を同時起動 → 後続が前を待つ動作確認
+   - #15: `run_id="invalid value"` / 121 文字 / `rotate_fixture_mode=true + phase=A` / `rotate_fixture_mode=true + env=cocoro` の 4 ケース
+   - #16: `bash -n` syntax check + `source scripts/clients/cocoro.env` で `<TBD>` の副作用なし確認
+3. **README §5 actual Cloud Build SA 追記 PR** + S1-7 rehearsal note (run_id 継承の明示) 追加
+4. **S2-S7 (dev rehearsal 7-stage × 2 周)** + Codex MCP 12th review GO 取得
+5. **cocoro / kanameone 本番展開** (各 phase 番号認可 + GitHub Environment reviewer ≥ 1 確認)
+6. **PR-C3 kanameone execute** (PR-D4 完了後): 135 Ambiguous (CCITTFaxDecode) の classify → execute
+
+---
 
 <a id="session77"></a>
 ## ✅ session77 完了サマリー (2026-05-15: Issue #445 PR-D4 S1-6 Dockerfile + workflow_dispatch 実装 main merge `4299ec8` (PR #475) + Codex MCP 4 round + 6 agent 並列 review 反映、Net 0)
