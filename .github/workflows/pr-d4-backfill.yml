@@ -1,0 +1,474 @@
+name: PR-D4 Backfill (Issue #445)
+
+# Issue #445 PR-D4 S1-6: provenance backfill (Phase A/B/C/D) を Cloud Run Jobs で実行
+#
+# 設計判断 (Codex MCP review 3 round 反映):
+# - C3 反映: deploy/execute 分離。per-run の args/env は execute --args / --update-env-vars で
+#     execution-level override (公式 https://docs.cloud.google.com/run/docs/execute/jobs#override-job-configuration)
+# - C4 反映: env 単位 concurrency で固定 job 名の image race 防止
+#     deploy→execute mutation を同一 env で直列化
+# - I1 反映: Cloud Run Job spec 固定 (--max-retries=0 は destructive migration で必須)
+# - I8 反映: 2 job 分離 (deploy-dev / deploy-prod)。conditional environment の null 挙動未確定リスク回避
+# - I9 反映: dev fixture 専用 job (pr-d4-backfill-dev-fixture)。PR_D4_ROTATE_AUTH_TOKEN の state leak 排除
+# - I6/I7 反映: <TBD> placeholder reject + run_id 文字種 validate
+# - security: 全ての github.event.inputs.* / secrets.* / github.sha は env: 経由で env var 化、
+#     run: 内で ${{ }} 直接展開なし (workflow injection 防止、actionlint shellcheck pass 想定)
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        type: choice
+        options:
+          - dev
+          - cocoro
+          - kanameone
+      phase:
+        description: 'PR-D4 phase (A=audit, B=preflight, C=atomic backfill, D=verify+rotate gate)'
+        required: true
+        type: choice
+        options:
+          - A
+          - B
+          - C
+          - D
+      run_id:
+        description: 'Run ID (optional, auto-generated if empty; must match ^[A-Za-z0-9._-]+$)'
+        required: false
+        type: string
+        default: ''
+      rotate_fixture_mode:
+        description: 'Phase D rotate gate fixture test (dev + phase=D only; prod では常に false 強制)'
+        required: true
+        type: choice
+        default: 'false'
+        options:
+          - 'false'
+          - 'true'
+
+# 同一 env での deploy→execute 並走を直列化 (固定 job 名の image race 防止、C4)
+# cancel-in-progress: false → 進行中の run を kill せず順番待ち (destructive migration の暗黙 kill 禁止)
+concurrency:
+  group: pr-d4-backfill-${{ github.event.inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  # ====================================================================
+  # deploy-dev: dev 専用 job (GitHub Environment なし)
+  # ====================================================================
+  deploy-dev:
+    if: ${{ github.event.inputs.environment == 'dev' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate inputs
+        env:
+          ENVIRONMENT: ${{ github.event.inputs.environment }}
+          PHASE: ${{ github.event.inputs.phase }}
+          RUN_ID: ${{ github.event.inputs.run_id }}
+          ROTATE_FIXTURE_MODE: ${{ github.event.inputs.rotate_fixture_mode }}
+        run: |
+          set -euo pipefail
+          # run_id 文字種 validate (Codex review I7 + 実装後 review: Docker tag 規約遵守)
+          # Docker tag 規約: 先頭 [A-Za-z0-9_]、続く [A-Za-z0-9._-]、全長 128 文字以下
+          # IMAGE_TAG = "${RUN_ID}-${SHORT_SHA}" で SHORT_SHA は 7 文字 + "-" = 8 文字
+          # → run_id は最大 120 文字
+          if [ -n "$RUN_ID" ]; then
+            if ! echo "$RUN_ID" | grep -qE '^[A-Za-z0-9_][A-Za-z0-9._-]*$'; then
+              echo "ERROR: run_id must start with [A-Za-z0-9_] and match ^[A-Za-z0-9_][A-Za-z0-9._-]*\$ (got: \"$RUN_ID\")" >&2
+              exit 1
+            fi
+            if [ ${#RUN_ID} -gt 120 ]; then
+              echo "ERROR: run_id length must be <= 120 (Docker tag 128 - SHORT_SHA suffix 8 chars); got length ${#RUN_ID}" >&2
+              exit 1
+            fi
+          fi
+          # rotate_fixture_mode 制約 (phase=D + env=dev のみ true 許可、container 側でも validate される defense-in-depth)
+          if [ "$ROTATE_FIXTURE_MODE" = "true" ]; then
+            if [ "$PHASE" != "D" ] || [ "$ENVIRONMENT" != "dev" ]; then
+              echo "ERROR: rotate_fixture_mode=true requires phase=D AND environment=dev (got: phase=$PHASE, env=$ENVIRONMENT)" >&2
+              exit 1
+            fi
+          fi
+          echo "Inputs validated: env=$ENVIRONMENT phase=$PHASE run_id=${RUN_ID:-<auto>} rotate_fixture_mode=$ROTATE_FIXTURE_MODE"
+
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY_DEV }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Resolve project / buckets / locations
+        id: resolve
+        env:
+          ENVIRONMENT: ${{ github.event.inputs.environment }}
+        run: |
+          set -euo pipefail
+          # ENVIRONMENT は workflow_dispatch.choice で固定 enum (dev/cocoro/kanameone)、path traversal なし
+          ENV_FILE="scripts/clients/${ENVIRONMENT}.env"
+          if [ ! -f "$ENV_FILE" ]; then
+            echo "ERROR: $ENV_FILE not found" >&2
+            exit 1
+          fi
+          # 抽出ヘルパー関数化 + 包括 placeholder reject + whitespace trim
+          # (Codex review I6 + silent-failure-hunter C1: typo/雑値の素通り防止)
+          resolve_field() {
+            local field="$1"
+            local file="$2"
+            local val
+            val=$(grep -E "^${field}=" "$file" | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'")
+            # whitespace trim (前後の空白除去、`<TBD> ` のような末尾空白付き typo 防止)
+            val="${val#"${val%%[![:space:]]*}"}"
+            val="${val%"${val##*[![:space:]]}"}"
+            # 包括 placeholder reject (S2 実値書込 PR での typo 防止: null/undefined/TODO/FIXME/xxx + lowercase)
+            case "$val" in
+              ""|"<TBD>"|"TBD"|"tbd"|"<TODO>"|"TODO"|"todo"|"<FIXME>"|"FIXME"|"fixme"|"null"|"NULL"|"undefined"|"UNDEFINED"|"xxx"|"XXX"|"<PLACEHOLDER>")
+                echo "ERROR: ${field} not configured for $ENVIRONMENT (value=\"$val\"); see scripts/pr-d4-backfill/README.md prerequisites" >&2
+                exit 1
+                ;;
+            esac
+            echo "$val"
+          }
+          PROJECT_ID=$(node scripts/helpers/firebaserc-helper.js get-project "$ENVIRONMENT")
+          STORAGE_BUCKET=$(resolve_field STORAGE_BUCKET "$ENV_FILE")
+          ARTIFACT_BUCKET=$(resolve_field ARTIFACT_BUCKET "$ENV_FILE")
+          CLOUD_RUN_LOCATION=$(resolve_field CLOUD_RUN_LOCATION "$ENV_FILE")
+          BUCKET_LOCATION=$(resolve_field BUCKET_LOCATION "$ENV_FILE")
+          {
+            echo "project_id=$PROJECT_ID"
+            echo "storage_bucket=$STORAGE_BUCKET"
+            echo "artifact_bucket=$ARTIFACT_BUCKET"
+            echo "cloud_run_location=$CLOUD_RUN_LOCATION"
+            echo "bucket_location=$BUCKET_LOCATION"
+          } >> "$GITHUB_OUTPUT"
+          echo "Resolved: project=$PROJECT_ID storage=$STORAGE_BUCKET artifact=$ARTIFACT_BUCKET cloud_run_loc=$CLOUD_RUN_LOCATION bucket_loc=$BUCKET_LOCATION"
+
+      - name: Compute run_id, job name, image tag
+        id: compute
+        env:
+          ENVIRONMENT: ${{ github.event.inputs.environment }}
+          PHASE: ${{ github.event.inputs.phase }}
+          ROTATE_FIXTURE_MODE: ${{ github.event.inputs.rotate_fixture_mode }}
+          INPUT_RUN_ID: ${{ github.event.inputs.run_id }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ -n "$INPUT_RUN_ID" ]; then
+            RUN_ID="$INPUT_RUN_ID"
+          else
+            TS=$(date -u +%Y%m%dT%H%M%SZ)
+            RUN_ID="${TS}-${ENVIRONMENT}-pr-d4-v1"
+          fi
+          # dev fixture run 判定 (Phase D + env=dev + rotate_fixture_mode=true、I9)
+          IS_DEV_FIXTURE_RUN="false"
+          if [ "$ROTATE_FIXTURE_MODE" = "true" ] && [ "$PHASE" = "D" ] && [ "$ENVIRONMENT" = "dev" ]; then
+            IS_DEV_FIXTURE_RUN="true"
+            JOB_NAME="pr-d4-backfill-dev-fixture"
+          else
+            JOB_NAME="pr-d4-backfill-${ENVIRONMENT}"
+          fi
+          SHORT_SHA="${COMMIT_SHA:0:7}"
+          IMAGE_TAG="${RUN_ID}-${SHORT_SHA}"
+          {
+            echo "run_id=$RUN_ID"
+            echo "is_dev_fixture_run=$IS_DEV_FIXTURE_RUN"
+            echo "job_name=$JOB_NAME"
+            echo "image_tag=$IMAGE_TAG"
+          } >> "$GITHUB_OUTPUT"
+          echo "Computed: run_id=$RUN_ID job_name=$JOB_NAME image_tag=$IMAGE_TAG fixture_run=$IS_DEV_FIXTURE_RUN"
+
+      - name: Validate PR_D4_ROTATE_URL (fixture run only)
+        if: ${{ steps.compute.outputs.is_dev_fixture_run == 'true' }}
+        env:
+          PR_D4_ROTATE_URL: ${{ secrets.PR_D4_ROTATE_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "$PR_D4_ROTATE_URL" ]; then
+            echo "ERROR: secrets.PR_D4_ROTATE_URL is empty (required for dev fixture run)" >&2
+            exit 1
+          fi
+          # Codex I2 反映: comma reject (gcloud --update-env-vars CSV 衝突回避)
+          if echo "$PR_D4_ROTATE_URL" | grep -q ','; then
+            echo "ERROR: PR_D4_ROTATE_URL must not contain comma (gcloud --update-env-vars CSV conflict)" >&2
+            exit 1
+          fi
+
+      - name: Build container image (Cloud Build) + digest pinning
+        id: build
+        env:
+          PROJECT_ID: ${{ steps.resolve.outputs.project_id }}
+          CLOUD_RUN_LOCATION: ${{ steps.resolve.outputs.cloud_run_location }}
+          IMAGE_TAG: ${{ steps.compute.outputs.image_tag }}
+        run: |
+          set -euo pipefail
+          IMAGE_URI="${CLOUD_RUN_LOCATION}-docker.pkg.dev/${PROJECT_ID}/pr-d4-backfill/pr-d4-backfill:${IMAGE_TAG}"
+          echo "Submitting Cloud Build: $IMAGE_URI"
+          gcloud builds submit \
+            --tag="$IMAGE_URI" \
+            --project="$PROJECT_ID"
+          # digest pinning (S2 suggestion 反映): tag は mutable のため digest を deploy に渡す
+          IMAGE_DIGEST=$(gcloud artifacts docker images describe "$IMAGE_URI" \
+            --format='value(image_summary.fully_qualified_digest)' \
+            --project="$PROJECT_ID")
+          if [ -z "$IMAGE_DIGEST" ]; then
+            echo "ERROR: failed to resolve image digest for $IMAGE_URI" >&2
+            exit 1
+          fi
+          echo "image_digest=$IMAGE_DIGEST" >> "$GITHUB_OUTPUT"
+          echo "Built: $IMAGE_URI"
+          echo "Digest: $IMAGE_DIGEST"
+
+      - name: Deploy Cloud Run Job definition (静的 spec のみ、per-run args/env は焼かない)
+        env:
+          PROJECT_ID: ${{ steps.resolve.outputs.project_id }}
+          CLOUD_RUN_LOCATION: ${{ steps.resolve.outputs.cloud_run_location }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.image_digest }}
+          JOB_NAME: ${{ steps.compute.outputs.job_name }}
+          IS_DEV_FIXTURE_RUN: ${{ steps.compute.outputs.is_dev_fixture_run }}
+        run: |
+          set -euo pipefail
+          # runtime SA は env 別 (S1-7 で provision、cocoro/kanameone は S2 番号認可下)
+          RUNTIME_SA="pr-d4-backfill-runtime@${PROJECT_ID}.iam.gserviceaccount.com"
+          # Codex I1 反映: spec 固定 (--max-retries=0 destructive migration の暗黙 retry 防止)
+          DEPLOY_ARGS=(
+            run jobs deploy "$JOB_NAME"
+            --image="$IMAGE_DIGEST"
+            --region="$CLOUD_RUN_LOCATION"
+            --tasks=1
+            --parallelism=1
+            --max-retries=0
+            --task-timeout=21600
+            --cpu=2
+            --memory=4Gi
+            --service-account="$RUNTIME_SA"
+            --project="$PROJECT_ID"
+          )
+          # I9 反映: fixture job のみ Secret bind、通常 job には bind しない (state leak 排除)
+          if [ "$IS_DEV_FIXTURE_RUN" = "true" ]; then
+            DEPLOY_ARGS+=(--set-secrets="PR_D4_ROTATE_AUTH_TOKEN=pr-d4-rotate-token:latest")
+          fi
+          echo "Deploying job definition: $JOB_NAME (runtime SA: $RUNTIME_SA)"
+          gcloud "${DEPLOY_ARGS[@]}"
+
+      - name: Execute Cloud Run Job (per-run args/env override)
+        env:
+          PROJECT_ID: ${{ steps.resolve.outputs.project_id }}
+          CLOUD_RUN_LOCATION: ${{ steps.resolve.outputs.cloud_run_location }}
+          STORAGE_BUCKET: ${{ steps.resolve.outputs.storage_bucket }}
+          ARTIFACT_BUCKET: ${{ steps.resolve.outputs.artifact_bucket }}
+          BUCKET_LOCATION: ${{ steps.resolve.outputs.bucket_location }}
+          ENVIRONMENT: ${{ github.event.inputs.environment }}
+          PHASE: ${{ github.event.inputs.phase }}
+          RUN_ID: ${{ steps.compute.outputs.run_id }}
+          JOB_NAME: ${{ steps.compute.outputs.job_name }}
+          IS_DEV_FIXTURE_RUN: ${{ steps.compute.outputs.is_dev_fixture_run }}
+          # 最小権限: PR_D4_ROTATE_URL は fixture run でのみ env: にロードする
+          # (silent-failure-hunter / Codex Important 2 反映: 非 fixture run で secret を env に載せない)
+          PR_D4_ROTATE_URL: ${{ steps.compute.outputs.is_dev_fixture_run == 'true' && secrets.PR_D4_ROTATE_URL || '' }}
+        run: |
+          set -euo pipefail
+          # Codex I1 反映: --update-env-vars は 1 回に統合 (base + fixture env を comma-separated に組み立て)
+          ENV_VARS="FIREBASE_PROJECT_ID=${PROJECT_ID},STORAGE_BUCKET=${STORAGE_BUCKET},ARTIFACT_BUCKET=${ARTIFACT_BUCKET}"
+          ARGS_CSV="--env,${ENVIRONMENT},--phase,${PHASE},--run-id,${RUN_ID},--cloud-run-location,${CLOUD_RUN_LOCATION},--bucket-location,${BUCKET_LOCATION}"
+          if [ "$IS_DEV_FIXTURE_RUN" = "true" ]; then
+            ENV_VARS="${ENV_VARS},PR_D4_ROTATE_URL=${PR_D4_ROTATE_URL}"
+            ARGS_CSV="${ARGS_CSV},--phase-d-rotate-fixture-mode,true"
+          fi
+          echo "Executing job: $JOB_NAME"
+          echo "  args: $ARGS_CSV"
+          # silent-failure-hunter I2 反映: bash `:+` 修飾子は "false" 文字列でも non-empty で truthy 判定するため if 分岐に変更
+          if [ "$IS_DEV_FIXTURE_RUN" = "true" ]; then
+            echo "  env vars: (FIREBASE_PROJECT_ID, STORAGE_BUCKET, ARTIFACT_BUCKET, PR_D4_ROTATE_URL; PR_D4_ROTATE_AUTH_TOKEN は Secret bind)"
+          else
+            echo "  env vars: (FIREBASE_PROJECT_ID, STORAGE_BUCKET, ARTIFACT_BUCKET; fixture mode 無効)"
+          fi
+          # --wait で container exit code を gcloud CLI exit code に propagate
+          # exit code: 0=clean / 1=fatal / 2=arg error / 3=CAS fail / 4=verification failure
+          # 0 以外 → workflow step failure() 扱い (3/4 識別は logs 経由でユーザー目視)
+          gcloud run jobs execute "$JOB_NAME" \
+            --region="$CLOUD_RUN_LOCATION" \
+            --args="$ARGS_CSV" \
+            --update-env-vars="$ENV_VARS" \
+            --wait \
+            --project="$PROJECT_ID"
+
+  # ====================================================================
+  # deploy-prod: cocoro/kanameone 専用 job (GitHub Environment 経由で manual approval)
+  # ====================================================================
+  deploy-prod:
+    if: ${{ github.event.inputs.environment != 'dev' }}
+    runs-on: ubuntu-latest
+    environment: pr-d4-prod-${{ github.event.inputs.environment }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate inputs
+        env:
+          ENVIRONMENT: ${{ github.event.inputs.environment }}
+          PHASE: ${{ github.event.inputs.phase }}
+          RUN_ID: ${{ github.event.inputs.run_id }}
+          ROTATE_FIXTURE_MODE: ${{ github.event.inputs.rotate_fixture_mode }}
+        run: |
+          set -euo pipefail
+          if [ -n "$RUN_ID" ]; then
+            # Docker tag 規約: 先頭 [A-Za-z0-9_]、全長 120 文字以下 (deploy-dev と同等)
+            if ! echo "$RUN_ID" | grep -qE '^[A-Za-z0-9_][A-Za-z0-9._-]*$'; then
+              echo "ERROR: run_id must start with [A-Za-z0-9_] and match ^[A-Za-z0-9_][A-Za-z0-9._-]*\$" >&2
+              exit 1
+            fi
+            if [ ${#RUN_ID} -gt 120 ]; then
+              echo "ERROR: run_id length must be <= 120; got length ${#RUN_ID}" >&2
+              exit 1
+            fi
+          fi
+          # rotate_fixture_mode は prod (cocoro/kanameone) では常に false 強制 (defense-in-depth)
+          if [ "$ROTATE_FIXTURE_MODE" = "true" ]; then
+            echo "ERROR: rotate_fixture_mode=true is dev-only (got env=$ENVIRONMENT)" >&2
+            exit 1
+          fi
+          echo "Inputs validated: env=$ENVIRONMENT phase=$PHASE run_id=${RUN_ID:-<auto>}"
+
+      - uses: google-github-actions/auth@v2
+        with:
+          # cocoro は GCP_SA_KEY (将来 GCP_SA_KEY_COCORO に移行)、kanameone は GCP_SA_KEY_KANAMEONE
+          credentials_json: |-
+            ${{ github.event.inputs.environment == 'kanameone' && secrets.GCP_SA_KEY_KANAMEONE || secrets.GCP_SA_KEY }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Resolve project / buckets / locations
+        id: resolve
+        env:
+          ENVIRONMENT: ${{ github.event.inputs.environment }}
+        run: |
+          set -euo pipefail
+          ENV_FILE="scripts/clients/${ENVIRONMENT}.env"
+          if [ ! -f "$ENV_FILE" ]; then
+            echo "ERROR: $ENV_FILE not found" >&2
+            exit 1
+          fi
+          # 抽出ヘルパー関数化 + 包括 placeholder reject + whitespace trim (review 反映、deploy-dev と同等強化)
+          resolve_field() {
+            local field="$1"
+            local file="$2"
+            local val
+            val=$(grep -E "^${field}=" "$file" | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'")
+            val="${val#"${val%%[![:space:]]*}"}"
+            val="${val%"${val##*[![:space:]]}"}"
+            case "$val" in
+              ""|"<TBD>"|"TBD"|"tbd"|"<TODO>"|"TODO"|"todo"|"<FIXME>"|"FIXME"|"fixme"|"null"|"NULL"|"undefined"|"UNDEFINED"|"xxx"|"XXX"|"<PLACEHOLDER>")
+                echo "ERROR: ${field} not configured for $ENVIRONMENT (value=\"$val\"); cocoro/kanameone は S2 番号認可下で実値書込" >&2
+                exit 1
+                ;;
+            esac
+            echo "$val"
+          }
+          PROJECT_ID=$(node scripts/helpers/firebaserc-helper.js get-project "$ENVIRONMENT")
+          STORAGE_BUCKET=$(resolve_field STORAGE_BUCKET "$ENV_FILE")
+          ARTIFACT_BUCKET=$(resolve_field ARTIFACT_BUCKET "$ENV_FILE")
+          CLOUD_RUN_LOCATION=$(resolve_field CLOUD_RUN_LOCATION "$ENV_FILE")
+          BUCKET_LOCATION=$(resolve_field BUCKET_LOCATION "$ENV_FILE")
+          {
+            echo "project_id=$PROJECT_ID"
+            echo "storage_bucket=$STORAGE_BUCKET"
+            echo "artifact_bucket=$ARTIFACT_BUCKET"
+            echo "cloud_run_location=$CLOUD_RUN_LOCATION"
+            echo "bucket_location=$BUCKET_LOCATION"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Compute run_id, job name, image tag (prod は通常 job 固定、fixture job なし)
+        id: compute
+        env:
+          ENVIRONMENT: ${{ github.event.inputs.environment }}
+          INPUT_RUN_ID: ${{ github.event.inputs.run_id }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ -n "$INPUT_RUN_ID" ]; then
+            RUN_ID="$INPUT_RUN_ID"
+          else
+            TS=$(date -u +%Y%m%dT%H%M%SZ)
+            RUN_ID="${TS}-${ENVIRONMENT}-pr-d4-v1"
+          fi
+          JOB_NAME="pr-d4-backfill-${ENVIRONMENT}"
+          SHORT_SHA="${COMMIT_SHA:0:7}"
+          IMAGE_TAG="${RUN_ID}-${SHORT_SHA}"
+          {
+            echo "run_id=$RUN_ID"
+            echo "job_name=$JOB_NAME"
+            echo "image_tag=$IMAGE_TAG"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build container image (Cloud Build) + digest pinning
+        id: build
+        env:
+          PROJECT_ID: ${{ steps.resolve.outputs.project_id }}
+          CLOUD_RUN_LOCATION: ${{ steps.resolve.outputs.cloud_run_location }}
+          IMAGE_TAG: ${{ steps.compute.outputs.image_tag }}
+        run: |
+          set -euo pipefail
+          IMAGE_URI="${CLOUD_RUN_LOCATION}-docker.pkg.dev/${PROJECT_ID}/pr-d4-backfill/pr-d4-backfill:${IMAGE_TAG}"
+          gcloud builds submit \
+            --tag="$IMAGE_URI" \
+            --project="$PROJECT_ID"
+          IMAGE_DIGEST=$(gcloud artifacts docker images describe "$IMAGE_URI" \
+            --format='value(image_summary.fully_qualified_digest)' \
+            --project="$PROJECT_ID")
+          if [ -z "$IMAGE_DIGEST" ]; then
+            echo "ERROR: failed to resolve image digest" >&2
+            exit 1
+          fi
+          echo "image_digest=$IMAGE_DIGEST" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy Cloud Run Job definition
+        env:
+          PROJECT_ID: ${{ steps.resolve.outputs.project_id }}
+          CLOUD_RUN_LOCATION: ${{ steps.resolve.outputs.cloud_run_location }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.image_digest }}
+          JOB_NAME: ${{ steps.compute.outputs.job_name }}
+        run: |
+          set -euo pipefail
+          RUNTIME_SA="pr-d4-backfill-runtime@${PROJECT_ID}.iam.gserviceaccount.com"
+          gcloud run jobs deploy "$JOB_NAME" \
+            --image="$IMAGE_DIGEST" \
+            --region="$CLOUD_RUN_LOCATION" \
+            --tasks=1 \
+            --parallelism=1 \
+            --max-retries=0 \
+            --task-timeout=21600 \
+            --cpu=2 \
+            --memory=4Gi \
+            --service-account="$RUNTIME_SA" \
+            --project="$PROJECT_ID"
+
+      - name: Execute Cloud Run Job (per-run args/env override)
+        env:
+          PROJECT_ID: ${{ steps.resolve.outputs.project_id }}
+          CLOUD_RUN_LOCATION: ${{ steps.resolve.outputs.cloud_run_location }}
+          STORAGE_BUCKET: ${{ steps.resolve.outputs.storage_bucket }}
+          ARTIFACT_BUCKET: ${{ steps.resolve.outputs.artifact_bucket }}
+          BUCKET_LOCATION: ${{ steps.resolve.outputs.bucket_location }}
+          ENVIRONMENT: ${{ github.event.inputs.environment }}
+          PHASE: ${{ github.event.inputs.phase }}
+          RUN_ID: ${{ steps.compute.outputs.run_id }}
+          JOB_NAME: ${{ steps.compute.outputs.job_name }}
+        run: |
+          set -euo pipefail
+          ENV_VARS="FIREBASE_PROJECT_ID=${PROJECT_ID},STORAGE_BUCKET=${STORAGE_BUCKET},ARTIFACT_BUCKET=${ARTIFACT_BUCKET}"
+          ARGS_CSV="--env,${ENVIRONMENT},--phase,${PHASE},--run-id,${RUN_ID},--cloud-run-location,${CLOUD_RUN_LOCATION},--bucket-location,${BUCKET_LOCATION}"
+          echo "Executing: $JOB_NAME (env=$ENVIRONMENT phase=$PHASE run_id=$RUN_ID)"
+          gcloud run jobs execute "$JOB_NAME" \
+            --region="$CLOUD_RUN_LOCATION" \
+            --args="$ARGS_CSV" \
+            --update-env-vars="$ENV_VARS" \
+            --wait \
+            --project="$PROJECT_ID"
