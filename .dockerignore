@@ -1,0 +1,71 @@
+# Issue #445 PR-D4 S1-6: container image サイズ削減 + 機密情報除外
+#
+# 注: Dockerfile 側で明示 COPY していないものは原則 container に入らないが、
+#     .dockerignore で明示することで誤 COPY 時の事故を防ぐ (defense-in-depth)
+
+# Node
+**/node_modules
+**/npm-debug.log*
+**/yarn-debug.log*
+**/yarn-error.log*
+
+# Build outputs
+frontend/dist
+frontend/build
+functions/lib
+functions/build
+**/*.tsbuildinfo
+
+# Test / coverage
+**/coverage
+**/.nyc_output
+**/test-results
+**/test/__snapshots__
+
+# IDE / OS
+.vscode
+.idea
+.DS_Store
+Thumbs.db
+
+# Git / docs (container には不要)
+.git
+.gitignore
+.github
+docs
+*.md
+!scripts/pr-d4-backfill/README.md
+
+# 機密情報 (誤 commit 対策、念のため除外)
+.env
+.env.local
+.env.*.local
+**/serviceAccount*.json
+**/*-key.json
+**/credentials.json
+
+# Firebase emulator data
+.firebase
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
+
+# Frontend (source 不要、container 内では使わない)
+frontend/src
+frontend/public
+frontend/index.html
+frontend/vite.config.ts
+frontend/tsconfig*.json
+frontend/postcss.config.*
+frontend/tailwind.config.*
+
+# functions (source 不要、PR-D4 backfill から依存なし)
+functions/src
+functions/test
+functions/lib
+functions/tsconfig*.json
+functions/jest.config.*
+
+# Artifacts / local debug
+.artifacts
+*.tar.gz
