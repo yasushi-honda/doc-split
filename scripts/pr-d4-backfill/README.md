@@ -188,6 +188,85 @@ gh api repos/yasushi-honda/doc-split/environments/pr-d4-prod-kanameone \
 4. `gh secret set PR_D4_ROTATE_URL --body 'https://rotatepdfpages-whfgr6jwaa-an.a.run.app'` (dev callable URL、`gcloud functions describe rotatePdfPages --region=asia-northeast1 --project=doc-split-dev --format='value(serviceConfig.uri)'`)
 5. `gh workflow run pr-d4-backfill.yml -f environment=dev -f phase=D -f run_id='<前 Phase C の run_id>' -f rotate_fixture_mode=true`
 
+## S2-S7 dev rehearsal × 2 周 達成記録
+
+impl-plan §9.2 で要求された 2 周完走の達成記録。round 1 = session78、round 2 = session80 (2026-05-16)。**Phase A-D の reproducibility は完全一致 (totalDocs / candidatesIn / candidatesOut / writtenDocs / manifestUpdate 全 metric)**、ただし **S6 (rollback rehearsal) は実装 gap で両 round 未達**、S7 はユーザー目視 task。
+
+### Round 1 (session78、2026-05-15)
+
+| Stage | Phase | Run ID | 所要 | 主要 metric |
+|-------|-------|--------|------|-------------|
+| S2 | A | 25919919476 | 4m5s | totalDocs=6, NeedsManualReview=4, verifiedExistingProvenance=2 |
+| S3 | B | (round1) | 3m35s | candidatesIn=4, candidatesOut=0, MatchedByHash=0 |
+| S4 | C | (round1) | 3m28s | candidatesIn=0, writtenDocs=0, GCS lock=1778852359224407 取得+解除 |
+| S5 | D | (round1) | 3m28s | verifiedDocs=0, manifestUpdateStatus(finalize)=ok, rotateGateTest=null |
+
+### Round 2 (session80、2026-05-16)
+
+| Stage | Phase | Run ID | 所要 | 主要 metric |
+|-------|-------|--------|------|-------------|
+| S2 | A | 25926785292 | 4m0s | totalDocs=6, NeedsManualReview=4, verifiedExistingProvenance=2 ← round 1 と一致 |
+| S3 | B | 25927039470 | 3m15s | candidatesIn=4, candidatesOut=0, skippedNonMatchedByHash=4 ← round 1 と一致 |
+| S4 | C | 25927219665 | 3m45s | candidatesIn=0, writtenDocs=0, GCS lock=1778860371030620 取得+解除 ← round 1 と一致 |
+| S5 | D | 25927417193 | 3m0s | verifiedDocs=0, manifestUpdateStatus(finalize)=ok, rotateGateTest=null ← round 1 と一致 |
+
+**run_id chain**: `20260515T154040Z-dev-pr-d4-v1` (Phase A→B→C→D 全 phase で同一 run_id 継承、`manifest.json` schema validation pass)。
+
+### S6 (rollback rehearsal) 実装 gap
+
+- **要求** (impl-plan BF24 / §9.1 S6): PR-D4 が書いた fixture 限定 (`fixtureId.startsWith('BF_')`) で `provenance` と `provenanceBackfill` の **両方を削除** + 再 Phase C → 同結果再現
+- **現状**: `grep -rEn rollback scripts/pr-d4-backfill/` 空、stand-alone rollback script 未実装。`GcsFixtureStoreImpl.cleanupFixture` (`scripts/pr-d4-backfill/phase-d/adapters.ts:153`) は fixture doc + GCS object **delete** であり、provenance fields の **delete (FieldValue.delete)** + 既存 verified provenance の **immutable skip** を検証しない (Codex MCP 12th review 確認)
+
+### S7 (統合確認)
+
+ユーザー manual task: Firestore Console + GCS Console + Actions logs の目視。round 2 完了時点で artifact bucket `gs://doc-split-dev-pr-d4-artifacts/pr-d4-backfill-artifacts/20260515T154040Z-dev-pr-d4-v1/` 配下に 7 objects (manifest + Phase A-D summary + chunk + finalize-status) 完備。
+
+## Codex MCP 12th review 結果 (2026-05-16、thread `019e2d49-0b38-7ea2-bcd7-15af13bcb73b`)
+
+**Final verdict: GO with required amendments**
+
+- Critical findings: 0 件
+- Important findings: 2 件
+  - I1: S6 rollback script は **stand-alone 必須** (`cleanupFixture` では BF24 充足できない、provenance field delete + immutable skip 非適用の検証が別途必要)
+  - I2: #12 (S1-7 残) は本番 workflow の機械的前提ではないが、cocoro/kanameone **destructive Phase C 前の GO 根拠としては完了推奨** (cocoro/kanameone は `rotate_fixture_mode=false` 強制なので Phase A/B/D の機械実行は依存しない)
+- Low findings: 1 件
+  - L1: README S1-7 #12 gate を明文化 (Phase A/B 可、Phase C 前必須)
+
+### Codex 12th 推奨 PR scope (S6 rollback script 実装)
+
+- file: `scripts/pr-d4-backfill/rollback-fixtures.ts` 新規 (or 既存 `index.ts` に `phase=ROLLBACK_DEV_FIXTURES` 追加)
+- 仕様:
+  - dev-only hard gate (env validation)
+  - `run_id` 必須
+  - fixture prefix allowlist: `BF_` / `BF13_test_fixture_`
+  - dry-run default true、明示 confirm required
+  - Firestore update: 対象 fixture の `provenance` と `provenanceBackfill` のみ `FieldValue.delete()`
+  - doc delete / GCS delete は **行わない** (cleanup と区別)
+  - 既存 verified provenance (`provenance` exists && `provenanceBackfill` absent) は **必ず skip** + artifact 記録
+- unit tests:
+  - target query allowlist
+  - field delete 確認
+  - immutable skip 動作確認
+  - non-dev reject
+  - dry-run no-write
+- dev rehearsal: rollback 実行 → Phase C 再実行 → Round 1/2 と同 metrics 再現を artifact/log で記録
+
+## cocoro/kanameone 本番展開 gating (Codex 12th 反映)
+
+Codex 12th verdict に基づく phase 別 GO 状態:
+
+| Phase | cocoro/kanameone GO 状態 | 根拠 |
+|-------|------------------------|------|
+| A (classify) | ✅ **GO** (番号認可下で実行可) | read-only + artifact write、現 gap による破壊リスク低 |
+| B (revalidate) | ✅ **GO** (番号認可下で実行可) | read-only + artifact write、Phase A artifact ref のみ |
+| C (atomic backfill) | ⚠️ **GO with required amendments** | **S6 rollback script 実装 + dev rehearsal + #12 rotate fixture 完了が前提** |
+| D (verify) | ⚠️ **GO with required amendments** | Phase C 前提条件と同様 (cocoro/kanameone は `rotate_fixture_mode=false` 強制で fixture test 不要) |
+
+実施前提:
+1. `<TBD>` placeholder を実値で埋める PR (cocoro/kanameone の ARTIFACT_BUCKET / CLOUD_RUN_LOCATION / BUCKET_LOCATION)
+2. GitHub Environment `pr-d4-prod-<env>` で required reviewers ≥ 1 事前確認 (§8 の `gh api` コマンド)
+3. Phase A/B は本 amendment 状態でも即実行可、Phase C/D は S6 + #12 + Codex 13th review 後
+
 ## Phase 間連携: run_id 継承 (session78 rehearsal で発見)
 
 **MUST**: Phase B/C/D の workflow_dispatch UI で input `run_id` には **Phase A 完走時の run_id を明示的にコピー入力**する。空入力 (auto-generate) を使うと:
@@ -220,6 +299,10 @@ PR #<番号> — PR-D4 backfill (N files, +X/-Y)
 ```
 
 実施前に `<TBD>` placeholder を実値で埋める PR (本 PR の続き or 別 PR) を作成 → 番号認可 → workflow_dispatch 起動 → GitHub Environment `pr-d4-prod-<env>` で manual approval。
+
+**Phase 別 gate** (Codex 12th 反映、上記 §cocoro/kanameone 本番展開 gating 参照):
+- Phase A/B: 本 amendment 状態でも番号認可下で実行可
+- Phase C/D: S6 rollback script 実装 PR merge + dev rehearsal + #12 rotate fixture 完了 + Codex 13th review GO 取得 後
 
 ## References
 
