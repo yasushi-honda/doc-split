@@ -316,6 +316,7 @@ Codex MCP 12th review I1 で要求された stand-alone rollback の dev rehears
 ### artifact 出力
 - main: `gs://<artifact-bucket>/pr-d4-backfill-artifacts/<run_id>/phase-rollback-summary.json`
 - 構造: `PhaseRollbackSummary` (types.ts 参照)。保全式: `targets.length + skipped.length === scannedDocs`、`targets[*].status === 'executed' ⇔ dryRun === false`
+- **manifest 非更新**: Phase E は **standalone rollback artifact** であり、Phase A/B/C/D の `manifest.json` には書き込まない (本 PR では `BackfillManifest.phaseRollback?` 型のみ将来拡張用に予約)。理由: rollback は通常 Phase C と異なる `run_id` で起動し artifact chain を共有しないため。Codex MCP 13th review (Low 1) 反映
 
 ## Phase 間連携: run_id 継承 (session78 rehearsal で発見)
 
