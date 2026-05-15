@@ -318,8 +318,11 @@ jobs:
         run: |
           set -euo pipefail
           # Codex I1 反映: --update-env-vars は 1 回に統合 (base + fixture env を comma-separated に組み立て)
-          ENV_VARS="FIREBASE_PROJECT_ID=${PROJECT_ID},STORAGE_BUCKET=${STORAGE_BUCKET},ARTIFACT_BUCKET=${ARTIFACT_BUCKET}"
-          ARGS_CSV="--env,${ENVIRONMENT},--phase,${PHASE},--run-id,${RUN_ID},--cloud-run-location,${CLOUD_RUN_LOCATION},--bucket-location,${BUCKET_LOCATION}"
+          # S1-7 fix (PR #478 follow-up): gcloud run jobs execute --args は同一 value
+          # の複数回指定 ("asia-northeast1" 等) を reject するため、location は
+          # env var 経由で container に渡す (container 側は env fallback 対応済)
+          ENV_VARS="FIREBASE_PROJECT_ID=${PROJECT_ID},STORAGE_BUCKET=${STORAGE_BUCKET},ARTIFACT_BUCKET=${ARTIFACT_BUCKET},CLOUD_RUN_LOCATION=${CLOUD_RUN_LOCATION},BUCKET_LOCATION=${BUCKET_LOCATION}"
+          ARGS_CSV="--env,${ENVIRONMENT},--phase,${PHASE},--run-id,${RUN_ID}"
           if [ "$IS_DEV_FIXTURE_RUN" = "true" ]; then
             ENV_VARS="${ENV_VARS},PR_D4_ROTATE_URL=${PR_D4_ROTATE_URL}"
             ARGS_CSV="${ARGS_CSV},--phase-d-rotate-fixture-mode,true"
@@ -535,8 +538,9 @@ jobs:
           JOB_NAME: ${{ steps.compute.outputs.job_name }}
         run: |
           set -euo pipefail
-          ENV_VARS="FIREBASE_PROJECT_ID=${PROJECT_ID},STORAGE_BUCKET=${STORAGE_BUCKET},ARTIFACT_BUCKET=${ARTIFACT_BUCKET}"
-          ARGS_CSV="--env,${ENVIRONMENT},--phase,${PHASE},--run-id,${RUN_ID},--cloud-run-location,${CLOUD_RUN_LOCATION},--bucket-location,${BUCKET_LOCATION}"
+          # S1-7 fix: location は env var 経由 (PR #478 follow-up、--args 重複 reject 回避)
+          ENV_VARS="FIREBASE_PROJECT_ID=${PROJECT_ID},STORAGE_BUCKET=${STORAGE_BUCKET},ARTIFACT_BUCKET=${ARTIFACT_BUCKET},CLOUD_RUN_LOCATION=${CLOUD_RUN_LOCATION},BUCKET_LOCATION=${BUCKET_LOCATION}"
+          ARGS_CSV="--env,${ENVIRONMENT},--phase,${PHASE},--run-id,${RUN_ID}"
           echo "Executing: $JOB_NAME (env=$ENVIRONMENT phase=$PHASE run_id=$RUN_ID)"
           gcloud run jobs execute "$JOB_NAME" \
             --region="$CLOUD_RUN_LOCATION" \
