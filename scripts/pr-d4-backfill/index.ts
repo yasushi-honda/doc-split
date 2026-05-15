@@ -98,10 +98,21 @@ async function main(): Promise<void> {
   // --cloud-run-location / --bucket-location は **明示指定必須**。default を与えると、
   // 実 bucket location を確認せず "asia-northeast1" を assume してしまい、
   // 別 region に作られた bucket への cross-region egress を見逃す (Codex MCP Important 1)
-  const cloudRunLocation = readArg('--cloud-run-location');
-  const bucketLocation = readArg('--bucket-location');
+  // gcloud run jobs execute --args は同一 value を複数回禁ずる挙動があるため、
+  // workflow yaml では args 経由ではなく env var 経由で渡す (S1-7 rehearsal 発見、 PR #478 follow-up)。
+  // CLI 引数を優先、env var を fallback として受け付け、ローカル実行と CI 両方を維持する。
+  const cloudRunLocation = readArg('--cloud-run-location') || process.env.CLOUD_RUN_LOCATION;
+  const bucketLocation = readArg('--bucket-location') || process.env.BUCKET_LOCATION;
   if (!cloudRunLocation || !bucketLocation) {
-    console.error('FATAL: --cloud-run-location and --bucket-location are required (no default).');
+    console.error(
+      'FATAL: cloud-run-location and bucket-location are required (no default).'
+    );
+    console.error(
+      '       Specify via --cloud-run-location / --bucket-location CLI args'
+    );
+    console.error(
+      '       or CLOUD_RUN_LOCATION / BUCKET_LOCATION env vars.'
+    );
     console.error('       bucket location 確認は egress 課金前提のため明示指定必須');
     process.exit(2);
   }
