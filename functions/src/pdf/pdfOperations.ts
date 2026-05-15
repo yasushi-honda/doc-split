@@ -26,6 +26,7 @@ import { loadMasterData } from '../utils/loadMasterData';
 import { sanitizeFilenameForStorage } from '../utils/fileNaming';
 import { createSplitProvenance, createRotationProvenance } from './provenance';
 import { mergeRotations } from './rotationMerge';
+import { shouldRejectRotateForBackfill } from './rotateGate';
 import { randomUUID } from 'node:crypto';
 import type { DocumentProvenance } from '../../../shared/types';
 import {
@@ -878,6 +879,20 @@ export const rotatePdfPages = onCall(
         'failed-precondition',
         'Document is missing provenance fields; backfill required (Issue #445 PR-D4) before rotation'
       );
+    }
+
+    // PR-D4 BF12/BF13 (ADR-0016 MUST 3 拡張): backfilled doc は confidence 'derived-bytes-verified'
+    // のみ rotate 許可。malformed (null 含む) や低信頼度 confidence は failed-precondition で reject。
+    // 壊れた legacy bytes を正規 rotation 経路で昇格させる経路を構造的に閉鎖する (Codex 7th Critical 6)。
+    const backfillRejection = shouldRejectRotateForBackfill(startData.provenanceBackfill);
+    if (backfillRejection != null) {
+      console.warn('rotatePdfPages: backfill confidence guard rejected', {
+        operation: 'rotatePdfPages',
+        stage: 'backfill_confidence_check',
+        documentId,
+        rejection: backfillRejection,
+      });
+      throw new HttpsError('failed-precondition', backfillRejection);
     }
     const startUpdateTime = startSnapshot.updateTime;
     const fileUrl = startData.fileUrl as string;

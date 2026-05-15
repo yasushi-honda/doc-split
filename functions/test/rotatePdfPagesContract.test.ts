@@ -208,6 +208,23 @@ describe('rotatePdfPages source code grep contract (PR-D3 AC3 拡張)', () => {
       expect(rotateBody).to.match(/baseProvenance\.derivedSha256\.toLowerCase\(\)/);
       expect(rotateBody).to.match(/bytes identity drift detected/i);
     });
+
+    it('PR-D4 BF12/BF13: shouldRejectRotateForBackfill helper で provenanceBackfill gate を実装', () => {
+      // ADR-0016 MUST 3 拡張: backfilled doc は confidence === derived-bytes-verified のみ allow。
+      // pure helper 化 (Codex MCP 2nd review Suggestion 1 反映) で test/contract と production を共通化。
+      expect(rotateBody).to.include('shouldRejectRotateForBackfill(');
+      expect(rotateBody).to.include('startData.provenanceBackfill');
+      expect(rotateBody).to.match(/backfill_confidence_check/);
+    });
+
+    it('PR-D4 Suggestion 2: rotate の docRef.update payload は provenanceBackfill を含まない (preserve contract)', () => {
+      // update 対象 fields: fileUrl / pageRotations / rotatedAt / provenance のみ。
+      // provenanceBackfill を update payload に入れると既存値を破壊するため、
+      // 「rotate は provenanceBackfill を保持する (= update 対象外)」を構造的に契約化。
+      const updateMatch = rotateBody.match(/docRef\.update\(\s*\{[\s\S]*?\}\s*,\s*\{\s*lastUpdateTime/);
+      expect(updateMatch, 'docRef.update 呼出が見つからない').to.not.be.null;
+      expect(updateMatch![0]).to.not.include('provenanceBackfill');
+    });
   });
 });
 
