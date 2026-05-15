@@ -240,12 +240,14 @@ async function main(): Promise<void> {
     // Phase D: Phase C artifact 経由 manifest を読み verify + rotate gate test 実施 (本 PR S1-5)
     const manifestPath = `gs://${artifactBucketName}/pr-d4-backfill-artifacts/${runId}/manifest.json`;
     // dev 環境のみ rotate gate fixture test 実行可、cocoro/kanameone は強制 false (Codex 3rd I6)
+    // PR-D4 S1-6 review 反映 (type-design-analyzer): phase=D 制約を container 側でも reject
+    // (yaml gate が必ず先に発火するが、container CLI 直叩き時の defense-in-depth)
     const rotateGateFixtureEnabledArg = readArg('--phase-d-rotate-fixture-mode', 'false');
     const rotateGateFixtureEnabled =
-      envName === 'dev' && rotateGateFixtureEnabledArg === 'true';
-    if (rotateGateFixtureEnabledArg === 'true' && envName !== 'dev') {
+      envName === 'dev' && phase === 'D' && rotateGateFixtureEnabledArg === 'true';
+    if (rotateGateFixtureEnabledArg === 'true' && (envName !== 'dev' || phase !== 'D')) {
       console.error(
-        `FATAL: --phase-d-rotate-fixture-mode=true is dev-only; received env=${envName}`
+        `FATAL: --phase-d-rotate-fixture-mode=true requires env=dev AND phase=D; received env=${envName}, phase=${phase}`
       );
       process.exit(2);
     }

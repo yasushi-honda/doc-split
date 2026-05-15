@@ -138,10 +138,20 @@ GitHub Settings → Secrets and variables → Actions:
 - `GCP_SA_KEY` (cocoro、将来 `GCP_SA_KEY_COCORO` に移行)
 - `PR_D4_ROTATE_URL` (dev fixture only、rotate callable URL、comma を含まないこと)
 
-### 8. GitHub Environments 作成 (cocoro/kanameone)
+### 8. GitHub Environments 作成 (cocoro/kanameone) — **MUST: required reviewers ≥ 1**
 GitHub Settings → Environments:
-- `pr-d4-prod-cocoro`: required reviewers + (option) wait timer
-- `pr-d4-prod-kanameone`: required reviewers + (option) wait timer
+- `pr-d4-prod-cocoro`: **required reviewers ≥ 1 (MUST)** + (option) wait timer
+- `pr-d4-prod-kanameone`: **required reviewers ≥ 1 (MUST)** + (option) wait timer
+
+reviewer 未登録だと environment gate は機能せず workflow が **承認なしで即実行**される (silent-failure-hunter I1 指摘の silent risk)。S1-7 rehearsal で確認コマンド:
+
+```bash
+# reviewer ≥ 1 でなければ即時 silent 実行リスク
+gh api repos/yasushi-honda/doc-split/environments/pr-d4-prod-cocoro \
+  --jq '.protection_rules[] | select(.type=="required_reviewers") | .reviewers | length'
+gh api repos/yasushi-honda/doc-split/environments/pr-d4-prod-kanameone \
+  --jq '.protection_rules[] | select(.type=="required_reviewers") | .reviewers | length'
+```
 
 ### 9. `scripts/clients/<env>.env` 3 fields 設定
 - **dev**: 本 PR で実値記載済 (ARTIFACT_BUCKET / CLOUD_RUN_LOCATION / BUCKET_LOCATION)
@@ -153,7 +163,7 @@ GitHub Settings → Environments:
 2. ✅ cleanup policy 適用済 (`gcloud artifacts repositories describe ... --format=json | jq '.cleanupPolicies'`)
 3. ✅ Artifact bucket 存在 + asia-northeast1 location
 4. ✅ Cloud Run Job runtime SA + 4 roles (datastore.user, storage.objectAdmin, logging.logWriter, secretmanager.secretAccessor) 付与済
-5. ✅ GitHub deploy SA 7 roles 確認 (上記表 1 行目)
+5. ✅ GitHub deploy SA 7 roles 確認 (上記表 1 行目) + **GitHub Environment `pr-d4-prod-{env}` の required reviewers ≥ 1 確認** (silent-failure-hunter I1: 上記 §8 の `gh api` コマンドで `reviewers | length ≥ 1`)
 6. ✅ **actual Cloud Build build SA を `gcloud builds describe` log から確認**、本 README の IAM 表に追記
 7. ✅ workflow_dispatch (env=dev, phase=A) で Cloud Build submit + Cloud Run Jobs deploy + Phase A execute 成功
 8. ✅ Phase A artifact (manifest + main + chunks) が ARTIFACT_BUCKET に出力
@@ -163,6 +173,18 @@ GitHub Settings → Environments:
 12. ✅ Phase D 起動 (rotate_fixture_mode=true) → fixture job (`pr-d4-backfill-dev-fixture`) 経由 + rotate test 成功 + fixture cleanup 成功
 13. ✅ exit code non-zero failure 確認 (人為 fail: 例 ARTIFACT_BUCKET 不正で Phase A fail → workflow step failure() 扱い)
 14. ✅ env 単位 concurrency 確認 (2 つの workflow_dispatch を同時起動 → 後続が前を待つ動作)
+15. ✅ **negative test** (`Validate inputs` の bash logic 検証、pr-test-analyzer I3): 4 ケースを `gh workflow run` で dispatch して即 fail を確認:
+    - `run_id="invalid value"` (空白含む) → fail expected
+    - `run_id="$(printf 'a%.0s' {1..121})"` (121 文字) → fail expected
+    - `rotate_fixture_mode=true` + `phase=A` → fail expected
+    - `rotate_fixture_mode=true` + `env=cocoro` → fail expected (prod 経路)
+16. ✅ **`<TBD>` env での既存 sourcing 副作用なし確認** (pr-test-analyzer I1): cocoro/kanameone の `<TBD>` placeholder 状態で既存スクリプトが shell error を出さないことを確認:
+    ```bash
+    bash -n scripts/clients/cocoro.env  # syntax check
+    bash -n scripts/clients/kanameone.env
+    # source 実行 (`<TBD>` 値が他スクリプトで eval されないこと)
+    ( source scripts/clients/cocoro.env && echo "ARTIFACT_BUCKET=$ARTIFACT_BUCKET" )
+    ```
 
 ## cocoro/kanameone 本番展開時の番号認可手順
 

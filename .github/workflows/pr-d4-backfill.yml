@@ -75,10 +75,17 @@ jobs:
           ROTATE_FIXTURE_MODE: ${{ github.event.inputs.rotate_fixture_mode }}
         run: |
           set -euo pipefail
-          # run_id 文字種 validate (Codex review I7)
+          # run_id 文字種 validate (Codex review I7 + 実装後 review: Docker tag 規約遵守)
+          # Docker tag 規約: 先頭 [A-Za-z0-9_]、続く [A-Za-z0-9._-]、全長 128 文字以下
+          # IMAGE_TAG = "${RUN_ID}-${SHORT_SHA}" で SHORT_SHA は 7 文字 + "-" = 8 文字
+          # → run_id は最大 120 文字
           if [ -n "$RUN_ID" ]; then
-            if ! echo "$RUN_ID" | grep -qE '^[A-Za-z0-9._-]+$'; then
-              echo "ERROR: run_id must match ^[A-Za-z0-9._-]+\$ (got: \"$RUN_ID\")" >&2
+            if ! echo "$RUN_ID" | grep -qE '^[A-Za-z0-9_][A-Za-z0-9._-]*$'; then
+              echo "ERROR: run_id must start with [A-Za-z0-9_] and match ^[A-Za-z0-9_][A-Za-z0-9._-]*\$ (got: \"$RUN_ID\")" >&2
+              exit 1
+            fi
+            if [ ${#RUN_ID} -gt 120 ]; then
+              echo "ERROR: run_id length must be <= 120 (Docker tag 128 - SHORT_SHA suffix 8 chars); got length ${#RUN_ID}" >&2
               exit 1
             fi
           fi
@@ -109,16 +116,23 @@ jobs:
             echo "ERROR: $ENV_FILE not found" >&2
             exit 1
           fi
-          # S1 反映: 抽出ヘルパー関数化 + <TBD> placeholder reject (I6)
+          # 抽出ヘルパー関数化 + 包括 placeholder reject + whitespace trim
+          # (Codex review I6 + silent-failure-hunter C1: typo/雑値の素通り防止)
           resolve_field() {
             local field="$1"
             local file="$2"
             local val
             val=$(grep -E "^${field}=" "$file" | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'")
-            if [ -z "$val" ] || [ "$val" = "<TBD>" ] || [ "$val" = "TBD" ]; then
-              echo "ERROR: ${field} not configured for $ENVIRONMENT (value=\"$val\"); see scripts/pr-d4-backfill/README.md prerequisites" >&2
-              exit 1
-            fi
+            # whitespace trim (前後の空白除去、`<TBD> ` のような末尾空白付き typo 防止)
+            val="${val#"${val%%[![:space:]]*}"}"
+            val="${val%"${val##*[![:space:]]}"}"
+            # 包括 placeholder reject (S2 実値書込 PR での typo 防止: null/undefined/TODO/FIXME/xxx + lowercase)
+            case "$val" in
+              ""|"<TBD>"|"TBD"|"tbd"|"<TODO>"|"TODO"|"todo"|"<FIXME>"|"FIXME"|"fixme"|"null"|"NULL"|"undefined"|"UNDEFINED"|"xxx"|"XXX"|"<PLACEHOLDER>")
+                echo "ERROR: ${field} not configured for $ENVIRONMENT (value=\"$val\"); see scripts/pr-d4-backfill/README.md prerequisites" >&2
+                exit 1
+                ;;
+            esac
             echo "$val"
           }
           PROJECT_ID=$(node scripts/helpers/firebaserc-helper.js get-project "$ENVIRONMENT")
@@ -254,7 +268,9 @@ jobs:
           RUN_ID: ${{ steps.compute.outputs.run_id }}
           JOB_NAME: ${{ steps.compute.outputs.job_name }}
           IS_DEV_FIXTURE_RUN: ${{ steps.compute.outputs.is_dev_fixture_run }}
-          PR_D4_ROTATE_URL: ${{ secrets.PR_D4_ROTATE_URL }}
+          # 最小権限: PR_D4_ROTATE_URL は fixture run でのみ env: にロードする
+          # (silent-failure-hunter / Codex Important 2 反映: 非 fixture run で secret を env に載せない)
+          PR_D4_ROTATE_URL: ${{ steps.compute.outputs.is_dev_fixture_run == 'true' && secrets.PR_D4_ROTATE_URL || '' }}
         run: |
           set -euo pipefail
           # Codex I1 反映: --update-env-vars は 1 回に統合 (base + fixture env を comma-separated に組み立て)
@@ -266,7 +282,12 @@ jobs:
           fi
           echo "Executing job: $JOB_NAME"
           echo "  args: $ARGS_CSV"
-          echo "  env vars: (FIREBASE_PROJECT_ID, STORAGE_BUCKET, ARTIFACT_BUCKET${IS_DEV_FIXTURE_RUN:+, PR_D4_ROTATE_URL}; PR_D4_ROTATE_AUTH_TOKEN は Secret bind)"
+          # silent-failure-hunter I2 反映: bash `:+` 修飾子は "false" 文字列でも non-empty で truthy 判定するため if 分岐に変更
+          if [ "$IS_DEV_FIXTURE_RUN" = "true" ]; then
+            echo "  env vars: (FIREBASE_PROJECT_ID, STORAGE_BUCKET, ARTIFACT_BUCKET, PR_D4_ROTATE_URL; PR_D4_ROTATE_AUTH_TOKEN は Secret bind)"
+          else
+            echo "  env vars: (FIREBASE_PROJECT_ID, STORAGE_BUCKET, ARTIFACT_BUCKET; fixture mode 無効)"
+          fi
           # --wait で container exit code を gcloud CLI exit code に propagate
           # exit code: 0=clean / 1=fatal / 2=arg error / 3=CAS fail / 4=verification failure
           # 0 以外 → workflow step failure() 扱い (3/4 識別は logs 経由でユーザー目視)
@@ -299,8 +320,13 @@ jobs:
         run: |
           set -euo pipefail
           if [ -n "$RUN_ID" ]; then
-            if ! echo "$RUN_ID" | grep -qE '^[A-Za-z0-9._-]+$'; then
-              echo "ERROR: run_id must match ^[A-Za-z0-9._-]+\$" >&2
+            # Docker tag 規約: 先頭 [A-Za-z0-9_]、全長 120 文字以下 (deploy-dev と同等)
+            if ! echo "$RUN_ID" | grep -qE '^[A-Za-z0-9_][A-Za-z0-9._-]*$'; then
+              echo "ERROR: run_id must start with [A-Za-z0-9_] and match ^[A-Za-z0-9_][A-Za-z0-9._-]*\$" >&2
+              exit 1
+            fi
+            if [ ${#RUN_ID} -gt 120 ]; then
+              echo "ERROR: run_id length must be <= 120; got length ${#RUN_ID}" >&2
               exit 1
             fi
           fi
@@ -330,15 +356,20 @@ jobs:
             echo "ERROR: $ENV_FILE not found" >&2
             exit 1
           fi
+          # 抽出ヘルパー関数化 + 包括 placeholder reject + whitespace trim (review 反映、deploy-dev と同等強化)
           resolve_field() {
             local field="$1"
             local file="$2"
             local val
             val=$(grep -E "^${field}=" "$file" | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'")
-            if [ -z "$val" ] || [ "$val" = "<TBD>" ] || [ "$val" = "TBD" ]; then
-              echo "ERROR: ${field} not configured for $ENVIRONMENT (value=\"$val\"); cocoro/kanameone は S2 番号認可下で実値書込" >&2
-              exit 1
-            fi
+            val="${val#"${val%%[![:space:]]*}"}"
+            val="${val%"${val##*[![:space:]]}"}"
+            case "$val" in
+              ""|"<TBD>"|"TBD"|"tbd"|"<TODO>"|"TODO"|"todo"|"<FIXME>"|"FIXME"|"fixme"|"null"|"NULL"|"undefined"|"UNDEFINED"|"xxx"|"XXX"|"<PLACEHOLDER>")
+                echo "ERROR: ${field} not configured for $ENVIRONMENT (value=\"$val\"); cocoro/kanameone は S2 番号認可下で実値書込" >&2
+                exit 1
+                ;;
+            esac
             echo "$val"
           }
           PROJECT_ID=$(node scripts/helpers/firebaserc-helper.js get-project "$ENVIRONMENT")
