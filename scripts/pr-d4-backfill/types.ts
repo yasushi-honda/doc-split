@@ -160,6 +160,13 @@ export interface BackfillManifest {
     mainArtifact: { path: string; sha256: string };
     chunks: ArtifactChunkPointer[];
   };
+  /**
+   * rollback artifact (S6 / BF24、Codex MCP 12th review I1 反映)。
+   * dev fixture rollback summary を chain。chunks なし (fixture 件数少なく chunking 不要)。
+   */
+  phaseRollback?: {
+    mainArtifact: { path: string; sha256: string };
+  };
 }
 
 /** chunk 1 件あたり最大件数 (impl-plan §4.1 BF19 / BF22 反映) */
@@ -703,4 +710,98 @@ export interface PhaseDFinalizeStatus {
   expectedGeneration: string;
   /** CAS 失敗時のリトライ手順 (operator 用) */
   remediation?: string;
+}
+
+// ============================================================================
+// Rollback types (S6 / BF24、Codex MCP 12th review I1 反映)
+// ============================================================================
+
+/**
+ * dev fixture rollback の対象 prefix allowlist (BF24)。
+ *
+ * PR-D4 が書いた fixture のみを rollback 対象とするための docId prefix 集合。
+ * - `BF_`: 将来追加 fixture / 一般 PR-D4 fixture 用 prefix
+ * - `BF13_test_fixture_`: Phase D rotate gate fixture (BF13) と一致 (実装済)
+ *
+ * 設計 (Codex 12th I1 反映):
+ * - 本番環境 (cocoro/kanameone) には本 prefix の doc が存在しないことを前提
+ *   (Phase A/B/C/D 通常運用で BF_ prefix を生成しない、PR-D2/D3 split も同様)
+ * - workflow + container 双方で env=dev hard gate を入れ、cocoro/kanameone での
+ *   rollback 起動を構造的に排除する (defense in depth)
+ * - rollback orchestrator は本 allowlist に match しない docId を `out-of-scope`
+ *   として skip artifact に記録 (silent drop しない、観測完全性)
+ */
+export const PR_D4_ROLLBACK_FIXTURE_PREFIX_ALLOWLIST = [
+  'BF_',
+  'BF13_test_fixture_',
+] as const;
+
+/**
+ * rollback の target に分類された 1 doc (実 delete または dry-run 想定)。
+ *
+ * `provenance` + `provenanceBackfill` 双方を `FieldValue.delete()` で削除する候補。
+ * AC3 (doc delete はしない、field-only) に従い、doc 自体および他 fields (createdAt 等)
+ * は残存。ADR-0008 (Firestore 削除禁止) は doc/collection delete を禁ずるもので、本 PR
+ * の field delete はガード対象外。
+ *
+ * - `executed`: dry-run=false で実 `FieldValue.delete()` を発行
+ * - `dryRun`: dry-run=true で実 update は発行せず、想定 delete のみ記録
+ */
+export interface PhaseRollbackTargetDoc {
+  docId: string;
+  status: 'executed' | 'dryRun';
+  /** 削除予定 (または実行済) field 名 (両 fields 不在のときは [], 通常は両方記載) */
+  deletedFields: Array<'provenance' | 'provenanceBackfill'>;
+}
+
+/**
+ * rollback で skip された 1 doc。
+ *
+ * - `reason='out-of-scope'`: docId が PR_D4_ROLLBACK_FIXTURE_PREFIX_ALLOWLIST に
+ *   match しない (AC2、BF24 fixture 限定、cocoro/kanameone 万一混入時の二重防御)
+ * - `reason='existing-verified-provenance'`: provenance exists && provenanceBackfill
+ *   absent (= PR-D2/D3 split-time provenance、ADR MUST 7 immutable skip + BF24)
+ * - `reason='no-provenance-fields'`: provenance も provenanceBackfill も存在しない
+ *   (既 rollback 済 / 元から無い fixture、idempotent skip)
+ */
+export interface PhaseRollbackSkippedDoc {
+  docId: string;
+  reason:
+    | 'out-of-scope'
+    | 'existing-verified-provenance'
+    | 'no-provenance-fields';
+}
+
+/**
+ * rollback 操作の summary artifact (main file、chunks なし)。
+ *
+ * 設計:
+ * - rollback 対象は dev fixture のみで件数が少ない (典型: ~10 docs) ため chunking 不要
+ * - `dryRun=true`: Firestore update 発行ゼロ、artifact に scope-out / immutable skip
+ *   判定結果のみ記録 (operator が target 範囲を事前確認するための材料)
+ * - `dryRun=false`: 実 `FieldValue.delete()` を発行し、targets[*].status='executed'
+ *
+ * 保全式:
+ *   targets.length + skipped.length === scannedDocs
+ *   targets[*].status === 'executed' ⇔ dryRun === false
+ *   targets[*].status === 'dryRun'   ⇔ dryRun === true
+ */
+export interface PhaseRollbackSummary {
+  phase: 'E';
+  schemaVersion: PrD4ArtifactSchemaVersion;
+  scriptVersion: PrD4ScriptVersion;
+  env: BackfillEnvName;
+  runId: string;
+  rollbackStartedAt: string;
+  rollbackCompletedAt: string;
+  /** documents collection を scan し prefix match で抽出した件数 (skip 含む) */
+  scannedDocs: number;
+  /** rollback 対象に分類された件数 (= targets.length) */
+  targetedDocs: number;
+  /** skip された件数 (= skipped.length) */
+  skippedDocs: number;
+  /** dry-run 動作フラグ (true = Firestore update なし) */
+  dryRun: boolean;
+  targets: PhaseRollbackTargetDoc[];
+  skipped: PhaseRollbackSkippedDoc[];
 }

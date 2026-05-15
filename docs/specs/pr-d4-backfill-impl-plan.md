@@ -629,7 +629,7 @@ PR-D2/D3 で integration fixtures が 28 件存在 (`scripts/fixtures/`)。PR-D4
 | S3 | Phase B 実行 (dev、dry-run なし) | `phase-b-revalidation-summary-dev-*.json` 生成、drift skip rate < 1% |
 | S4 | Phase C 実行 (dev、dry-run なし) | `phase-c-backfill-summary-dev-*.json` 生成、precondition 失敗 0 件 |
 | S5 | Phase D 実行 (dev、dry-run なし) | `phase-d-verify-summary-dev-*.json` 生成、rotate gate test 期待通り |
-| S6 (Codex 3rd I5/BF24 反映) | rollback rehearsal (dev): **PR-D4 が書いた fixture 限定** (`fixtureId.startsWith('BF_')` で query 限定) で `provenance` と `provenanceBackfill` の **両方を削除** + 再 Phase C → 同結果再現。**既存 verified provenance (`provenanceBackfill` absent) には適用しない** | rollback script 動作確認 + immutable skip 動作確認 |
+| S6 (Codex 3rd I5/BF24 + 12th I1 反映) | rollback rehearsal (dev): **PR-D4 が書いた fixture 限定** (`PR_D4_ROLLBACK_FIXTURE_PREFIX_ALLOWLIST = ['BF_', 'BF13_test_fixture_']`) で `provenance` と `provenanceBackfill` の **両方を `FieldValue.delete()` で field-only 削除** + 再 Phase C → 同結果再現。**既存 verified provenance (`provenanceBackfill` absent) には適用しない**。実装: `scripts/pr-d4-backfill/rollback/` 配下 + workflow yaml の `phase=E` + 3 段 hard gate (workflow + index.ts + orchestrator) + prefix allowlist 2 段適用 | rollback script (`phase=E`) 動作確認 + immutable skip 動作確認 + dry-run default + confirm 明示で実 delete |
 | S7 | 統合確認: Firestore Console で代表 doc 5 件目視 + GitHub Actions logs + GCS Console で artifact + manifest 目視 | ユーザー目視 OK |
 
 ### 9.2 2 周目 (1 周目で発覚した issue 修正後の再実行)
