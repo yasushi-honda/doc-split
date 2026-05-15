@@ -117,7 +117,7 @@ done
 | SA | 用途 | 必要 roles | 確認方法 |
 |---|---|---|---|
 | **GitHub deploy SA** (`secrets.GCP_SA_KEY_*` の identity) | workflow 起動 → Cloud Build submit + Cloud Run Jobs deploy/execute + Artifact Registry push | `roles/cloudbuild.builds.editor`, `roles/run.developer`, `roles/iam.serviceAccountUser` (runtime SA ActAs), `roles/artifactregistry.reader` (2025-01-13 以降必須), `roles/artifactregistry.writer`, `roles/storage.admin` (Cloud Build source staging bucket への create/write), `roles/logging.logWriter` | `gcloud projects get-iam-policy --flatten='bindings[].members' --filter='bindings.members:<sa>'` |
-| **actual Cloud Build build SA** (典型: `{project_number}-compute@developer.gserviceaccount.com` だが organization 設定で外れる可能性) | Cloud Build 内 container build | `roles/storage.objectViewer` (gcs-staging), `roles/artifactregistry.writer`, `roles/logging.logWriter` | **S1-7 で `gcloud builds describe ${BUILD_ID}` log から実 build SA を確認**。Compute Engine default 前提が崩れる場合あり |
+| **actual Cloud Build build SA** (**dev で確認済 session78**: `217393576593-compute@developer.gserviceaccount.com` = Compute Engine default、`roles/editor` 保持で下記 3 roles を全カバー) | Cloud Build 内 container build | `roles/storage.objectViewer` (gcs-staging), `roles/artifactregistry.writer`, `roles/logging.logWriter` | `gcloud builds describe ${BUILD_ID} --format='value(serviceAccount)'`。**cocoro/kanameone でも本番展開前に同コマンドで実 SA を確認し、organization 設定で Compute Engine default から外れている場合は明示 roles 付与必要** |
 | **Cloud Run Job runtime SA** (`pr-d4-backfill-runtime@<project-id>.iam.gserviceaccount.com`) | container 内 ts-node 実行 ID | `roles/datastore.user` (Firestore read/write), `roles/storage.objectAdmin` (production STORAGE_BUCKET + ARTIFACT_BUCKET), `roles/logging.logWriter`, `roles/secretmanager.secretAccessor` (Phase D fixture のみ) | 上記 4 番で provision |
 
 ### 6. Phase D fixture only: Secret Manager
@@ -157,34 +157,58 @@ gh api repos/yasushi-honda/doc-split/environments/pr-d4-prod-kanameone \
 - **dev**: 本 PR で実値記載済 (ARTIFACT_BUCKET / CLOUD_RUN_LOCATION / BUCKET_LOCATION)
 - **cocoro / kanameone**: `<TBD>` placeholder。S2 番号認可下で実値書込 PR を別途作成
 
-## S1-7 dev rehearsal 確認項目
+## S1-7 dev rehearsal 達成記録
 
-1. ✅ Artifact Registry repo `pr-d4-backfill` 存在 (`gcloud artifacts repositories describe pr-d4-backfill`)
-2. ✅ cleanup policy 適用済 (`gcloud artifacts repositories describe ... --format=json | jq '.cleanupPolicies'`)
-3. ✅ Artifact bucket 存在 + asia-northeast1 location
-4. ✅ Cloud Run Job runtime SA + 4 roles (datastore.user, storage.objectAdmin, logging.logWriter, secretmanager.secretAccessor) 付与済
-5. ✅ GitHub deploy SA 7 roles 確認 (上記表 1 行目) + **GitHub Environment `pr-d4-prod-{env}` の required reviewers ≥ 1 確認** (silent-failure-hunter I1: 上記 §8 の `gh api` コマンドで `reviewers | length ≥ 1`)
-6. ✅ **actual Cloud Build build SA を `gcloud builds describe` log から確認**、本 README の IAM 表に追記
-7. ✅ workflow_dispatch (env=dev, phase=A) で Cloud Build submit + Cloud Run Jobs deploy + Phase A execute 成功
-8. ✅ Phase A artifact (manifest + main + chunks) が ARTIFACT_BUCKET に出力
-9. ✅ Phase B 起動 → revalidation 成功
-10. ✅ Phase C 起動 → atomic backfill (dev fixture docs に provenance 書込) 成功 + GCS lock の同時起動拒否確認
-11. ✅ Phase D 起動 (rotate_fixture_mode=false) → verify 成功
-12. ✅ Phase D 起動 (rotate_fixture_mode=true) → fixture job (`pr-d4-backfill-dev-fixture`) 経由 + rotate test 成功 + fixture cleanup 成功
-13. ✅ exit code non-zero failure 確認 (人為 fail: 例 ARTIFACT_BUCKET 不正で Phase A fail → workflow step failure() 扱い)
-14. ✅ env 単位 concurrency 確認 (2 つの workflow_dispatch を同時起動 → 後続が前を待つ動作)
-15. ✅ **negative test** (`Validate inputs` の bash logic 検証、pr-test-analyzer I3): 4 ケースを `gh workflow run` で dispatch して即 fail を確認:
-    - `run_id="invalid value"` (空白含む) → fail expected
-    - `run_id="$(printf 'a%.0s' {1..121})"` (121 文字) → fail expected
-    - `rotate_fixture_mode=true` + `phase=A` → fail expected
-    - `rotate_fixture_mode=true` + `env=cocoro` → fail expected (prod 経路)
-16. ✅ **`<TBD>` env での既存 sourcing 副作用なし確認** (pr-test-analyzer I1): cocoro/kanameone の `<TBD>` placeholder 状態で既存スクリプトが shell error を出さないことを確認:
-    ```bash
-    bash -n scripts/clients/cocoro.env  # syntax check
-    bash -n scripts/clients/kanameone.env
-    # source 実行 (`<TBD>` 値が他スクリプトで eval されないこと)
-    ( source scripts/clients/cocoro.env && echo "ARTIFACT_BUCKET=$ARTIFACT_BUCKET" )
-    ```
+16 項目中 **15 項目達成** (session78 + session79)、残 #12 (Firebase ID token 取得が必要) は本番展開前 (S2-S7) の rehearsal で実施。
+
+| # | 項目 | 達成 session | 確認内容 |
+|---|------|--------------|----------|
+| 1 | Artifact Registry repo `pr-d4-backfill` 存在 | session78 | `gcloud artifacts repositories describe pr-d4-backfill` |
+| 2 | cleanup policy 適用済 | session78 | keep-latest-2 + delete-all-others |
+| 3 | Artifact bucket `doc-split-dev-pr-d4-artifacts` 存在 + asia-northeast1 | session78 | uniform-bucket-level-access |
+| 4 | Cloud Run Job runtime SA + 4 roles | session78 | datastore.user / storage.objectAdmin / logging.logWriter / secretmanager.secretAccessor |
+| 5 | GitHub deploy SA 7 roles + Environment reviewers (dev は対象外) | session78 | dev は GitHub Environment なしのため §8 確認は cocoro/kanameone 展開時 |
+| 6 | **actual Cloud Build SA = `217393576593-compute@developer.gserviceaccount.com`** | session78 | §5 IAM 表に反映済 (本 PR) |
+| 7 | workflow_dispatch (env=dev, phase=A) deploy + execute 成功 | session78 | Phase A run `25919919476` / 4m5s |
+| 8 | Phase A artifact (manifest + main + chunks) 出力 | session78 | `totalDocs=6` / NeedsManualReview=4 / verifiedExistingProvenance=2 |
+| 9 | Phase B 起動 → revalidation 成功 | session78 | `candidatesIn=4` / `candidatesOut=0` (MatchedByHash=0) |
+| 10 | Phase C 起動 → atomic backfill + GCS lock | session78 | GCS sentinel lock `1778852359224407` 取得+解除、Firestore 副作用ゼロ |
+| 11 | Phase D 起動 (rotate_fixture_mode=false) → verify 成功 | session78 | `verifiedDocs=0` / `manifestUpdateStatus=ok` / `rotateGateTest=null` |
+| 12 | Phase D rotate_fixture_mode=true → fixture job + rotate test + cleanup | ⏳ 未達 | Firebase ID token 取得 (admin user の手動 login) + `pr-d4-rotate-token` secret 登録 が必要 |
+| 13 | 人為 fail で workflow step failure() 扱い | session79 | feature branch で `ARTIFACT_BUCKET=<TBD>` → `Resolve project / buckets / locations` step で fail、後続 step 全 skipped (run `25922483719`) |
+| 14 | env 単位 concurrency (同時 dispatch、後続が前を待つ) | session79 | Run A `25922564576` in_progress / Run B `25922569233` pending を 30 秒後も維持確認 |
+| 15 | **negative test** 4 ケースで Validate inputs 即 fail | session79 | run `25922298910` / `25922310147` / `25922318730` / `25922328194`、全 conclusion=failure |
+| 16 | `<TBD>` env sourcing 副作用なし | session79 | `bash -n` + `source` (sub-shell) + `switch-client.sh --list` で全 client 正常表示 |
+
+### S1-7 #12 残作業手順 (次セッション or S2 着手時)
+
+1. dev project の admin user (`hy.unimail.11@gmail.com` 等) で Firebase auth login → Firebase ID token 取得
+2. `gcloud secrets create pr-d4-rotate-token --data-file=- --project=doc-split-dev` (token を stdin で)
+3. `gcloud secrets add-iam-policy-binding pr-d4-rotate-token --member='serviceAccount:pr-d4-backfill-runtime@doc-split-dev.iam.gserviceaccount.com' --role='roles/secretmanager.secretAccessor' --project=doc-split-dev`
+4. `gh secret set PR_D4_ROTATE_URL --body 'https://rotatepdfpages-whfgr6jwaa-an.a.run.app'` (dev callable URL、`gcloud functions describe rotatePdfPages --region=asia-northeast1 --project=doc-split-dev --format='value(serviceConfig.uri)'`)
+5. `gh workflow run pr-d4-backfill.yml -f environment=dev -f phase=D -f run_id='<前 Phase C の run_id>' -f rotate_fixture_mode=true`
+
+## Phase 間連携: run_id 継承 (session78 rehearsal で発見)
+
+**MUST**: Phase B/C/D の workflow_dispatch UI で input `run_id` には **Phase A 完走時の run_id を明示的にコピー入力**する。空入力 (auto-generate) を使うと:
+
+- Phase B が Phase A artifact (`<run_id>/phase-a-classify-summary.json`) を 404 で読めず即 fail
+- Phase C/D も同様に上流 phase artifact を参照する
+
+これは workflow yaml 上の暗黙 contract (artifact chain は `gs://<artifact-bucket>/<run_id>/...` で run_id ごとに分離)。session78 rehearsal で Phase A 後に新 run_id で Phase B を起動した結果、manifest 404 を 1 回経験。
+
+### 推奨フロー (4 phase 連続実行)
+
+```
+1. Phase A 起動 (run_id 空欄 → auto-generate、例: 20260515T143000Z-dev-pr-d4-v1)
+2. Phase A 完走 → workflow logs から RUN_ID を copy (echo "Computed: run_id=..." 行)
+3. Phase B 起動 (run_id に上記 RUN_ID を貼付)
+4. Phase B 完走 → 同 run_id
+5. Phase C 起動 (同 run_id) ← 番号認可 (destructive: provenance write)
+6. Phase D 起動 (同 run_id) ← 通常 mode = read-only verify
+```
+
+または、初回から固定 run_id を入力する運用 (例: `20260515T143000Z-cocoro-pr-d4-v1` を全 phase 共通)。
 
 ## cocoro/kanameone 本番展開時の番号認可手順
 
