@@ -1,8 +1,65 @@
 # ハンドオフメモ
 
-**更新日**: 2026-05-15 session74 (**Issue #445 PR-D4 S1-4 (Phase C atomic backfill) main merge `b543774` (PR #469) + Codex MCP 1st/2nd NO-GO → 3rd GO 反映、Net 0**)。`scripts/pr-d4-backfill/phase-c/` 新規 9 source files + 7 test files (60 unit tests)。GCS sentinel 排他 lock (BF16/BF21) + 20 docs/batch + lastUpdateTime precondition + immutable skip (verified existing + already backfilled の 2 reason、BF14) + batch fallback の doc 単位 retry max=3 (BF18) + global write rate limiter (BF23) + 保全式 candidatesIn = writtenDocs + preconditionFailedDocs + skippedImmutable + unprocessableDocs + outOfScopeDocs (Evaluator HIGH 反映)。Hard-gate で MatchedByHash + derived-bytes-verified 以外を本番書込から構造的に除外 (impl-plan §4.0)。lock 順序は finalize → release (Codex 2nd Critical 反映、release 前 finalize で artifact 整合性保証)。全 1305 tests passing (新規 60 + 既存 1245) / Quality Gate 全クリア (TDD + evaluator + pr-review-toolkit:code-reviewer + Codex MCP 1st NO-GO → 2nd NO-GO → 3rd GO)。次セッション最優先: PR-D4 S1-5 (Phase D 実装 = verify + rotate gate behavior、BF12/BF13/BF15) 着手
+**更新日**: 2026-05-15 session75 (**Issue #432 残対応ロードマップ整理 + 順守規範明文化、実装作業なし、Net 0**)。session74 で main 確定した PR-D4 Phase C を踏まえ、ユーザー質問「kanameone のエラー対応完了見込み」に対し残作業を整理: PR-D4 S1-5 (Phase D) → S1-6/7 (container 化) → S2-S7 (dev リハーサル 7-stage × 2 周) → 本番展開 (cocoro → kanameone、phase ごと番号認可) → PR-C3 kanameone execute (135 Ambiguous)。完了見込み計 5-8 session。AI 側順守規範を明文化 (4 原則 / destructive migration の Codex MCP 多段 review 必須 / dev フルリハーサル必須 / 本番動作確認は AI 能動依頼禁止)。次セッション最優先は session74 から不変: PR-D4 S1-5 (Phase D 実装 = verify + rotate gate behavior、BF12/BF13/BF15) 着手
+
+**更新日 (前)**: 2026-05-15 session74 (**Issue #445 PR-D4 S1-4 (Phase C atomic backfill) main merge `b543774` (PR #469) + Codex MCP 1st/2nd NO-GO → 3rd GO 反映、Net 0**)。`scripts/pr-d4-backfill/phase-c/` 新規 9 source files + 7 test files (60 unit tests)。GCS sentinel 排他 lock (BF16/BF21) + 20 docs/batch + lastUpdateTime precondition + immutable skip (verified existing + already backfilled の 2 reason、BF14) + batch fallback の doc 単位 retry max=3 (BF18) + global write rate limiter (BF23) + 保全式 candidatesIn = writtenDocs + preconditionFailedDocs + skippedImmutable + unprocessableDocs + outOfScopeDocs (Evaluator HIGH 反映)。Hard-gate で MatchedByHash + derived-bytes-verified 以外を本番書込から構造的に除外 (impl-plan §4.0)。lock 順序は finalize → release (Codex 2nd Critical 反映、release 前 finalize で artifact 整合性保証)。全 1305 tests passing (新規 60 + 既存 1245) / Quality Gate 全クリア (TDD + evaluator + pr-review-toolkit:code-reviewer + Codex MCP 1st NO-GO → 2nd NO-GO → 3rd GO)。次セッション最優先: PR-D4 S1-5 (Phase D 実装 = verify + rotate gate behavior、BF12/BF13/BF15) 着手
 **ブランチ**: `main` (PR #469 squash merge `b543774` 完遂、feature ブランチ自動削除済。CI 全 green: CodeRabbit pass / GitGuardian pass / lint-build-test pass)
 **フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + (session29-66 累積実績は archive 参照) + **Phase 8 (session67 = PR-D1 / session68 = PR-D2 / session69 = PR-D3 完遂 + 3 環境展開 + #445 close / session70 = PR-D4 impl-plan + ADR 改訂 main merge / session71 = PR-D4 S1-1 基盤層 main merge / session72 = PR-D4 S1-2 Phase A 実装 main merge / session73 = PR-D4 S1-3 Phase B 実装 main merge / session74 = PR-D4 S1-4 Phase C 実装 main merge、Net 0)** = Issue #432 P0 collision の構造的予防 splitPdf + rotatePdfPages 双方で 3 環境稼働 + 既存 docs backfill の Phase A (read-only audit) + Phase B (write-free preflight revalidation) + Phase C (atomic backfill verified docs) が main に確定 (Phase D 実装は後続セッション)
+
+<a id="session75"></a>
+## ✅ session75 完了サマリー (2026-05-15: Issue #432 残対応ロードマップ整理 + 順守規範明文化、実装作業なし、Net 0)
+
+session74 で PR-D4 S1-4 (Phase C atomic backfill) を main merge 完了した状態で、ユーザーから過去エラー画像 (`No such object: docsplit-kanameone.firebasestorage.app/processed/20260509_未判定_未判定_p3.pdf`) を提示され「対応完了はいつまでか」との質問。**現状は新規エラー発生なし**(PR-D2/D3 構造的予防が 3 環境展開済) を確認のうえ、完全閉鎖までの残作業と所要 session を明文化。AI 側の順守規範 (4 原則 / destructive migration 多段 review / 本番動作確認の能動依頼禁止 等) を確認しコミット。実装作業は本セッションでは実施せず (残 context 13% で着手不適)、次セッション以降に持ち越し。
+
+### 確認した残作業と完了見込み
+
+| ステップ | 内容 | session 数目安 | 性質 |
+|---|---|---|---|
+| **PR-D4 S1-5** | Phase D 実装 (verify + rotate gate behavior、BF12/BF13/BF15) | 1 | TDD + Codex review |
+| **PR-D4 S1-6** | Dockerfile + `pr-d4-backfill.yml` workflow_dispatch | 0.5 | 設定 |
+| **PR-D4 S1-7** | container build + push (= S1 完了条件) | 0.5 | dev 検証 |
+| **PR-D4 S2-S7** | dev リハーサル 7-stage × 2 周 + Codex MCP 5th review | 1-2 | read-only |
+| **PR-D4 本番展開** | cocoro → kanameone 段階展開 (phase ごと番号認可) | 1-2 | destructive |
+| **PR-C3 kanameone** | 135 Ambiguous (CCITTFaxDecode) の execute (dev リハーサル完遂済) | 1-2 | destructive |
+| **合計** | Issue #432 構造的閉鎖まで | **5-8 session** | |
+
+### 確認した本件特定エラーの位置付け
+
+- `20260509_未判定_未判定_p3.pdf` は Issue #432 起票の発端 (2026-05-10 検出) と同一文字列
+- 当時 3 docs が同 fileName を共有 (`M7i4Nx6khiYEo2KTGJHg` / `U4Lf5ZPNA4IyH73SXE2P` / 3 件目未特定)
+- session61 PR-C2 (PR #442) で **RepairableMissingFile 4 件を docId namespace に regenerate**、post-audit (run 25714003425) で fileUrl 孤児 4→0 確認済
+- ユーザー報告「現在はエラー出てない」= 構造的予防 (PR-D2/D3) と過去復旧 (PR-C2) で **新規ユーザー被害は停止状態**
+- 残るのは「過去 silent 破壊 docs の検出可能化 (PR-D4 = provenance backfill)」+「135 Ambiguous の事後復旧 (PR-C3)」
+
+### 確認・コミットした順守規範
+
+- **AI 駆動開発 4 原則**: executor 動作 / hook ブロックは立ち止まれの合図 / destructive 操作は番号単位の明示認可のみ / main 直 push 禁止
+- **destructive migration**: impl-plan 段階で Codex MCP セカンドオピニオン必須 (1 round 想定禁止、3-4 round 想定で work estimation) / dev フルリハーサル 7-stage × 2 周必須 / 本番展開は `PR #番号 — タイトル (N files, +X/-Y)` 形式で番号認可依頼
+- **Quality Gate**: 5+ファイル/新機能/アーキ変更 → Evaluator 分離 / 3+ファイル → `/simplify` + `/safe-refactor` / TDD RED→GREEN→REFACTOR
+- **抑制ルール**: 本番動作確認は AI から能動的に依頼しない / 約束・確約化リスク表現はユーザー承認後 / 同一機能 3 連続失敗 → 元設計再レビュー
+
+### 教訓 (本セッション)
+
+- **「対応完了見込み」質問にはロードマップ + session 数 + 完了条件で答える**: 確約日付は AI 側で出さない (実 session 着手タイミングはユーザー判断 + destructive phase は番号認可待ちで伸縮するため)
+- **新規エラー停止と完全閉鎖は別概念**: ユーザーが「エラー出てない」と言っても構造的閉鎖 (provenance 100% backfilled + Ambiguous 解消) は別軸で進める必要あり、両者を混同しない
+- **残 context 低下時の判断**: 13% で PR-D4 S1-5 (multi-hour impl-plan + Codex review + TDD) 着手は不適、handoff 更新で次セッション渡しが適切
+
+### Net 計測 (CLAUDE.md MUST)
+
+- Before: open Issues = 4 (#432 P0、#402 P2、#251 P2、#238 P2)
+- After: open Issues = 4 (変化なし)
+- **Net 0** (実装作業なし、整理・確認 session)
+
+### 次セッション着手項目 (session74 から不変)
+
+1. `/catchup` で本 handoff + Issue #432 状態 + open Issue 確認
+2. **PR-D4 S1-5 着手** (Phase D 実装、verify + rotate gate behavior、BF12/BF13/BF15): Phase C 書込 doc 全件再読込 + `provenance` + `provenanceBackfill` の field 整合 verify + `derived-bytes-verified` doc で rotate API call (dev fixture) → 成功 + `child-snapshot-only` (dev fixture) で `failed-precondition` reject 確認 + integration test (本番 doc 副作用なし) + coverage 比率 artifact 出力
+3. **PR-D4 S1-6**: Dockerfile + `.github/workflows/pr-d4-backfill.yml` (workflow_dispatch + env/phase 選択)
+4. **PR-D4 S1-7**: container build + push (dev で実行) → image tag 取得 (= S1 完了条件)
+5. **PR-D4 S2-S7**: dev rehearsal 7-stage × 2 周 → Codex MCP 5th review GO 確認 → cocoro / kanameone 段階展開 (各 phase ユーザー番号認可)
+6. **PR-C3 kanameone execute** (PR-D4 完了後): 135 Ambiguous (CCITTFaxDecode) の classify → execute
+
+---
 
 <a id="session74"></a>
 ## ✅ session74 完了サマリー (2026-05-15: Issue #445 PR-D4 S1-4 Phase C 実装 main merge `b543774` (PR #469) + Codex MCP 1st/2nd NO-GO → 3rd GO 反映、Net 0)
