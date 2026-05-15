@@ -1,10 +1,109 @@
 # ハンドオフメモ
 
-**更新日**: 2026-05-15 session75 (**Issue #432 残対応ロードマップ整理 + 順守規範明文化、実装作業なし、Net 0**)。session74 で main 確定した PR-D4 Phase C を踏まえ、ユーザー質問「kanameone のエラー対応完了見込み」に対し残作業を整理: PR-D4 S1-5 (Phase D) → S1-6/7 (container 化) → S2-S7 (dev リハーサル 7-stage × 2 周) → 本番展開 (cocoro → kanameone、phase ごと番号認可) → PR-C3 kanameone execute (135 Ambiguous)。完了見込み計 5-8 session。AI 側順守規範を明文化 (4 原則 / destructive migration の Codex MCP 多段 review 必須 / dev フルリハーサル必須 / 本番動作確認は AI 能動依頼禁止)。次セッション最優先は session74 から不変: PR-D4 S1-5 (Phase D 実装 = verify + rotate gate behavior、BF12/BF13/BF15) 着手
+**更新日**: 2026-05-15 session76 (**Issue #445 PR-D4 S1-5 (Phase D verify + rotate gate 拡張) main merge `8a31c93` (PR #472) + Codex MCP review 11 round 反映、Net 0**)。`scripts/pr-d4-backfill/phase-d/` 新規 7 source files + 5 test files (65 unit tests) + `functions/src/pdf/rotateGate.ts` pure helper + `pdfOperations.ts` rotate gate guard = 17 files / +4470/-4。BF12/BF13/BF15/BF22 + 保全式 (verifiedDocs + mismatchedDocCount === candidatesIn / streamingDocsObserved === candidatesIn / estateRotateReadyCoverage + notRotateReady === 1.0) を orchestrator runtime throw でアサート。2 系統 coverage (backfillAttemptCoverage 分母 = Phase C candidatesIn、estateRotateReadyCoverage 分母 = Phase A totalDocs)。CAS update 3 段構造 (main 'pending' → manifest CAS → 別 status file)。Stage 1 (field 単位検証) + Stage 2 (factory 再 invoke sha256 比較) で false positive 構造的排除 (cross-process determinism 反映)。dev fixture rotate test は env hard gate + prefix allowlist + generation precondition + try/finally cleanup + cleanup 失敗 artifact 記録、本番では `rotateGateTest: null` で副作用ゼロ。`shouldRejectRotateForBackfill` pure helper は fail-closed (null / malformed / 不明 confidence / derived-bytes-verified の evidence 不完全 全 reject)。全 1370 tests passing (新規 65 + 既存 1305) / Quality Gate 全クリア (TDD + evaluator + code-reviewer + Codex MCP **1st-11th** = Critical 8 + Important 12 + Suggestion 全反映 → **11th GO**)。**次セッション最優先: PR-D4 S1-6 (Dockerfile + workflow) 着手**
 
-**更新日 (前)**: 2026-05-15 session74 (**Issue #445 PR-D4 S1-4 (Phase C atomic backfill) main merge `b543774` (PR #469) + Codex MCP 1st/2nd NO-GO → 3rd GO 反映、Net 0**)。`scripts/pr-d4-backfill/phase-c/` 新規 9 source files + 7 test files (60 unit tests)。GCS sentinel 排他 lock (BF16/BF21) + 20 docs/batch + lastUpdateTime precondition + immutable skip (verified existing + already backfilled の 2 reason、BF14) + batch fallback の doc 単位 retry max=3 (BF18) + global write rate limiter (BF23) + 保全式 candidatesIn = writtenDocs + preconditionFailedDocs + skippedImmutable + unprocessableDocs + outOfScopeDocs (Evaluator HIGH 反映)。Hard-gate で MatchedByHash + derived-bytes-verified 以外を本番書込から構造的に除外 (impl-plan §4.0)。lock 順序は finalize → release (Codex 2nd Critical 反映、release 前 finalize で artifact 整合性保証)。全 1305 tests passing (新規 60 + 既存 1245) / Quality Gate 全クリア (TDD + evaluator + pr-review-toolkit:code-reviewer + Codex MCP 1st NO-GO → 2nd NO-GO → 3rd GO)。次セッション最優先: PR-D4 S1-5 (Phase D 実装 = verify + rotate gate behavior、BF12/BF13/BF15) 着手
-**ブランチ**: `main` (PR #469 squash merge `b543774` 完遂、feature ブランチ自動削除済。CI 全 green: CodeRabbit pass / GitGuardian pass / lint-build-test pass)
-**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + (session29-66 累積実績は archive 参照) + **Phase 8 (session67 = PR-D1 / session68 = PR-D2 / session69 = PR-D3 完遂 + 3 環境展開 + #445 close / session70 = PR-D4 impl-plan + ADR 改訂 main merge / session71 = PR-D4 S1-1 基盤層 main merge / session72 = PR-D4 S1-2 Phase A 実装 main merge / session73 = PR-D4 S1-3 Phase B 実装 main merge / session74 = PR-D4 S1-4 Phase C 実装 main merge、Net 0)** = Issue #432 P0 collision の構造的予防 splitPdf + rotatePdfPages 双方で 3 環境稼働 + 既存 docs backfill の Phase A (read-only audit) + Phase B (write-free preflight revalidation) + Phase C (atomic backfill verified docs) が main に確定 (Phase D 実装は後続セッション)
+**更新日 (前)**: 2026-05-15 session75 (**Issue #445 PR-D4 S1-4 (Phase C atomic backfill) main merge `b543774` (PR #469) + Codex MCP 1st/2nd NO-GO → 3rd GO 反映、Net 0**)。`scripts/pr-d4-backfill/phase-c/` 新規 9 source files + 7 test files (60 unit tests)。GCS sentinel 排他 lock (BF16/BF21) + 20 docs/batch + lastUpdateTime precondition + immutable skip (verified existing + already backfilled の 2 reason、BF14) + batch fallback の doc 単位 retry max=3 (BF18) + global write rate limiter (BF23) + 保全式 candidatesIn = writtenDocs + preconditionFailedDocs + skippedImmutable + unprocessableDocs + outOfScopeDocs (Evaluator HIGH 反映)。Hard-gate で MatchedByHash + derived-bytes-verified 以外を本番書込から構造的に除外 (impl-plan §4.0)。lock 順序は finalize → release (Codex 2nd Critical 反映、release 前 finalize で artifact 整合性保証)。全 1305 tests passing (新規 60 + 既存 1245) / Quality Gate 全クリア (TDD + evaluator + pr-review-toolkit:code-reviewer + Codex MCP 1st NO-GO → 2nd NO-GO → 3rd GO)。次セッション最優先: PR-D4 S1-5 (Phase D 実装 = verify + rotate gate behavior、BF12/BF13/BF15) 着手
+**ブランチ**: `main` (PR #472 squash merge `8a31c93` 完遂、feature ブランチ自動削除済。CI 全 green: CodeRabbit pass / GitGuardian pass / lint-build-test pass)
+**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + (session29-66 累積実績は archive 参照) + **Phase 8 (session67 = PR-D1 / session68 = PR-D2 / session69 = PR-D3 完遂 + 3 環境展開 + #445 close / session70 = PR-D4 impl-plan + ADR 改訂 main merge / session71 = PR-D4 S1-1 基盤層 main merge / session72 = PR-D4 S1-2 Phase A 実装 main merge / session73 = PR-D4 S1-3 Phase B 実装 main merge / session74 = PR-D4 S1-4 Phase C 実装 main merge / session76 = PR-D4 S1-5 Phase D 実装 main merge、Net 0)** = Issue #432 P0 collision の構造的予防 splitPdf + rotatePdfPages 双方で 3 環境稼働 + 既存 docs backfill の Phase A (read-only audit) + Phase B (write-free preflight revalidation) + Phase C (atomic backfill verified docs) + Phase D (verify + rotate gate 拡張) が全て main に確定
+
+<a id="session76"></a>
+## ✅ session76 完了サマリー (2026-05-15: Issue #445 PR-D4 S1-5 Phase D 実装 main merge `8a31c93` (PR #472) + Codex MCP review 11 round 反映、Net 0)
+
+session75 で整理した残ロードマップに従い、PR-D4 S1-5 (Phase D 実装) に着手。`scripts/pr-d4-backfill/phase-d/` 新規 7 source files + `functions/src/pdf/rotateGate.ts` pure helper + `pdfOperations.ts` rotate gate guard + 5 test files (65 unit tests) = 17 files / +4470/-4 LoC。Phase D verify + rotate gate 拡張 (BF12/BF13/BF15) を実装し、Codex MCP review 11 round (impl-plan 段階 7 + 実装段階 4) で Critical 8 + Important 12 + Suggestion 全件反映後、**11th GO** 判定取得。**PR #472 を squash merge** (`8a31c93` main 確定、feature branch 自動削除、main 同期完了)。
+
+### 経緯
+
+1. **catchup**: session75 handoff 確認、次セッション最優先 = PR-D4 S1-5 (Phase D) 着手を選択
+2. **TaskCreate** (8 件) + **feature branch 作成** (`feat/pr-d4-phase-d`、main 直 push 禁止 = CLAUDE.md 4 原則 §4)
+3. **/impl-plan**: Phase D 実装計画策定 (scope: rotate gate 拡張 + Phase D verify orchestrator + integration test + Phase D artifact 出力 + index.ts CLI 拡張)
+4. **Codex MCP impl-plan review 7 round** (thread `019e29e8-7e59-7512-a86f-7a8fb5a3cf93`):
+   - 1st NO-GO: Critical 2 (Phase D 10 fields 証明力不足 / factory 再 invoke false positive) + Important 5
+   - 2nd GO with Important fixes (3 件): rotate gate helper malformed validation 強化 / parentSha256MatchedAtBackfill 型 union / CAS 失敗タイミング
+5. **TDD 実装** (RED→GREEN→REFACTOR、各 module 独立):
+   - `rotateGate.ts` (pure helper、20 tests): fail-closed gate、null / malformed / 不明 confidence / derived-bytes-verified の evidence 3 field 全 true 必須
+   - `pdfOperations.ts`: AC12 legacy guard 直後に `shouldRejectRotateForBackfill` 呼出 + grep contract 2 件追加
+   - `phase-d/types.ts`: PhaseDVerifySummary / Chunk / VerifiedDoc / FieldMismatchDoc / RotateGateTestResult / CoverageRatio / FinalizeStatus + MismatchType
+   - `phase-d/artifactReader.ts`: manifest chain authority (phaseA/B/C ref 取得) + Phase A/B/C 全 main artifact sha256 verify + Phase B in-memory index 構築
+   - `phase-d/docVerifier.ts`: Stage 1 (provenance 10 fields field-by-field + provenanceBackfill 単位検証) + Stage 2 (factory 再 invoke で sha256 比較、observed backfilledAt 必須)
+   - `phase-d/artifactWriter.ts`: writePhaseDChunk + finalizePhaseDArtifact (main `manifestUpdateStatus: 'pending'` + manifest CAS + 別 status file `phase-d-finalize-status.json`)
+   - `phase-d/rotateGateFixtureTester.ts`: dev disposable fixture rotate test (env hard gate + prefix allowlist BF13_test_fixture_<runId>_<kind>_<uuid> + try/finally cleanup + fixtureCleanupFailures[])
+   - `phase-d/verifyOrchestrator.ts`: 統合フロー (Phase C streaming → per-doc Firestore re-read → verifyDoc → per-chunk flush → rotate fixture test (dev のみ) → coverage 2 系統 → finalize) + 保全式 runtime throw
+   - `phase-d/adapters.ts`: FirestoreDocReaderImpl + GcsFixtureStoreImpl + HttpsRotateApiCallerImpl (rotate 成功後 Firestore re-read で実 path + GCS metadata で generation 取得)
+   - `index.ts`: --phase D CLI ブランチ + exit code policy (3=CAS fail, 4=verification failure)
+6. **Quality Gate 3 並列起動** (evaluator + code-reviewer + Codex MCP 8th-11th):
+   - **evaluator** (REQUEST_CHANGES): HIGH 2 (保全式空ブロック / sha256 mismatch カウント漏れ) + MEDIUM 2 + LOW 1 + エッジケース 3
+   - **code-reviewer**: HIGH 2 (rating 8) + MEDIUM 4 + LOW 4、起票候補 4 件
+   - **Codex MCP 8th**: GO with Important fixes (3 件)
+   - **Codex MCP 9th** (実装完了後 1st review): NO-GO with Critical 3 (CLI 構文エラー / fixture cleanup orphan / 保全式集計誤り) + Important 4
+   - **Codex MCP 10th** (反映後): NO-GO with Important 1 (BF15 backfillAttemptCoverage 分母誤り、phaseC.candidatesIn を使うべき)
+   - **Codex MCP 11th** (10th 反映後): **GO** (PR merge blocker なし)
+7. **追加 test**: BF15 denominator 検証 (Phase C candidatesIn=7 / writtenDocs=2 / preconditionFailed=2 / skippedImmutable=3 で正しい分母をアサート) + hasVerificationFailure 判定 2 件
+8. **commit**: `25af030`、17 files / +4470/-4
+9. **PR #472 作成** (`https://github.com/yasushi-honda/doc-split/pull/472`): CI 全 green (lint-build-test pass / CodeRabbit pass / GitGuardian pass)
+10. **PR #472 squash merge** (ユーザー番号認可「PR #472 — merge 可」取得): `8a31c93` main merge、feature branch 自動削除、main 同期完了
+
+### 設計上の重要決定 (Codex MCP 7th/8th/9th/10th/11th review 反映)
+
+- **Phase D verify が provenance 10 fields を field-by-field 比較** (Codex 7th Critical 1): Phase C `newProvenanceBackfillSha256` だけでは 10 fields を証明不能。Phase B `computedProvenance` を docId join で expected として読み込む
+- **Stage 1 + Stage 2 の 2 段階 verify** (Codex 7th Critical 2): factory 再 invoke の false positive 回避のため、observed field 単位検証を先に実施、Stage 1 pass のみ sha256 比較。observed `backfilledAt` を Stage 2 で必ず渡す (省略時 Timestamp.now() で hash 不一致回避)
+- **rotate gate fail-closed + pure helper 化** (Codex 7th Important 1 + Suggestion 1): `shouldRejectRotateForBackfill(raw: unknown)` で type + invariant + evidence 検証。null も reject (malformed)
+- **CAS 失敗時 3 段構造** (Codex 8th Important 3): main artifact は `manifestUpdateStatus: 'pending'` で書込 (overwrite 回避)、CAS 結果は別 file `phase-d-finalize-status.json` に記録
+- **dev fixture cleanup hook の必須条件 5 件** (Codex 7th Important 2): env hard gate + prefix allowlist + generation precondition + try/finally + cleanup 失敗 artifact 記録
+- **2 系統 coverage の分母分離** (Codex 7th Important 4 + 10th Important 1): backfillAttemptCoverage 分母 = Phase C **candidatesIn** (Phase B revalidated 全件、書込試行母集団) ≠ writtenDocs。estateRotateReadyCoverage 分母 = Phase A totalDocs (BF15 主指標)
+- **doc 単位保全式** (Codex 9th Critical 3): `verifiedDocs + mismatchedDocCount === candidatesIn` (= Phase C writtenDocs)、`streamingDocsObserved === candidatesIn` で chunk truncation 検出、orchestrator runtime throw
+- **fixture cleanup orphan 防止** (Codex 9th Critical 2): rotatePdfPages callable response に path/generation が含まれないため、rotate 成功後 Firestore re-read で fileUrl 取得 + GCS metadata で generation 確定
+- **Phase A/B main artifact sha256 verify** (Codex 9th Important 2 + code-reviewer M2): readPhaseACountReadOnly / readPhaseBCandidatesIndex に `expectedMainSha256: string` 引数追加、chain authority 完全性
+- **CLI exit code policy** (Codex 9th Important 3): 0=clean / 2=arg error / 3=CAS fail / 4=verification failure (hasVerificationFailure フラグで判定)
+
+### 変更ファイル一覧 (17 files: 11 new + 6 modified、+4470/-4)
+
+| ファイル | 区分 | LoC |
+|---------|------|----:|
+| `functions/src/pdf/rotateGate.ts` | new | 117 |
+| `functions/src/pdf/pdfOperations.ts` | modified | +15/-0 |
+| `functions/test/rotateGate.test.ts` | new | 222 |
+| `functions/test/rotatePdfPagesContract.test.ts` | modified | +17/-0 |
+| `functions/test/prD4PhaseDDocVerifier.test.ts` | new | 430 |
+| `functions/test/prD4PhaseDArtifactReader.test.ts` | new | 331 |
+| `functions/test/prD4PhaseDArtifactWriter.test.ts` | new | 238 |
+| `functions/test/prD4PhaseDRotateGateFixtureTester.test.ts` | new | 215 |
+| `functions/test/prD4PhaseDVerifyOrchestrator.test.ts` | new | 690 |
+| `scripts/pr-d4-backfill/index.ts` | modified | +131/-4 |
+| `scripts/pr-d4-backfill/types.ts` | modified | +240/-0 |
+| `scripts/pr-d4-backfill/phase-d/adapters.ts` | new | 291 |
+| `scripts/pr-d4-backfill/phase-d/artifactReader.ts` | new | 217 |
+| `scripts/pr-d4-backfill/phase-d/artifactWriter.ts` | new | 223 |
+| `scripts/pr-d4-backfill/phase-d/docVerifier.ts` | new | 462 |
+| `scripts/pr-d4-backfill/phase-d/rotateGateFixtureTester.ts` | new | 255 |
+| `scripts/pr-d4-backfill/phase-d/verifyOrchestrator.ts` | new | 380 |
+
+### 教訓 (本セッション新規)
+
+- **destructive migration の Codex MCP review は impl-plan + 実装で 11 round 必要**: Phase D は production callable 挙動変更を含み、本番 5,725 docs / 539 docs に rotate gate 影響あり。Codex review 1st-7th (impl-plan)、8th GO with Important、9th-10th NO-GO with Critical/Important (CLI / cleanup / 保全式 / BF15 denominator) → 11th GO。**3-4 round 想定では足りない、destructive scope では 10+ round 想定で work estimation する**
+- **production callable 挙動変更の gate test は pure helper 化必須**: Codex 7th Suggestion 1 で `shouldRejectRotateForBackfill(raw: unknown)` を切り出し、unit test と production を同じ helper で contract 化。grep contract も追加して構造的 lock-in
+- **保全式は field 単位レコード vs doc 単位カウントを明示分離**: `fieldsMismatch.length` (field レコード) と `mismatchedDocCount` (Set 由来 doc 数) は別概念。混同すると 1 doc が複数 field mismatch を起こす経路で保全式破綻 (Codex 9th Critical 3 で発見、`fieldsMismatchDocs` を doc 単位 ID 集合に再設計)
+- **空ブロック保全式アサートは無効、必ず実 throw / console.error 化**: 「保全式アサート」とコメントしていても空 if block は dead code (Evaluator HIGH で発見)。runtime check は throw で stop the world に
+- **coverage 比率は分母の意味論を明示する**: `backfillAttemptCoverage` (試行母集団) vs `estateRotateReadyCoverage` (env 全体) で別 metric を出す。Codex 10th で「writtenDocs を分母にしていた」誤りを発見
+
+### Net 計測 (CLAUDE.md MUST)
+
+- Before: open Issues = 4 (#432 P0、#402 P2、#251 P2、#238 P2)
+- After: open Issues = 4 (変化なし)
+- 本 session 完了時点で **+0 / -0 = Net 0**
+- 進捗判定: ✅ 構造的進捗 (Issue #432 P0 復旧経路の **Phase D verify + rotate gate 拡張が main 確定**、PR-D4 series の全 module 実装 (Phase A/B/C/D + rotate gate) が完了し、残りは S1-6 Dockerfile + S1-7 container build/push で S1 完了条件達成)
+
+### 次セッション着手項目
+
+1. `/catchup` で本 handoff + Issue #432 状態 + open Issue 確認
+2. **PR-D4 S1-6 着手** (Dockerfile + `.github/workflows/pr-d4-backfill.yml`):
+   - Dockerfile: `ts-node --transpile-only` 固定運用、通常 `tsc` / `ts-node` (transpile-only なし) は本 scripts 経路で使わない方針をコメント明記 (Codex 11th 指摘)
+   - workflow_dispatch + env / phase / rotate-fixture-mode 選択
+   - exit code 3 / 4 を workflow 失敗扱い
+3. **PR-D4 S1-7**: container build + push (dev で実行) → image tag 取得 (= S1 完了条件)
+4. **PR-D4 S2-S7**: dev rehearsal 7-stage × 2 周 → Codex MCP 12th review GO 確認 → cocoro / kanameone 段階展開 (各 phase ユーザー番号認可)
+5. **PR-C3 kanameone execute** (PR-D4 完了後): 135 Ambiguous (CCITTFaxDecode) の classify → execute
+
+---
 
 <a id="session75"></a>
 ## ✅ session75 完了サマリー (2026-05-15: Issue #432 残対応ロードマップ整理 + 順守規範明文化、実装作業なし、Net 0)
