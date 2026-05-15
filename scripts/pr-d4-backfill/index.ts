@@ -44,6 +44,12 @@ import {
   PR_D4_SCRIPT_VERSION,
 } from './types';
 import { TokenBucketRateLimiter } from './phase-c/rateLimiter';
+import { runPhaseD } from './phase-d/verifyOrchestrator';
+import {
+  FirestoreDocReaderImpl,
+  GcsFixtureStoreImpl,
+  HttpsRotateApiCallerImpl,
+} from './phase-d/adapters';
 
 function readArg(name: string, defaultValue?: string): string | undefined {
   const idx = process.argv.indexOf(name);
@@ -79,9 +85,9 @@ async function main(): Promise<void> {
     process.exit(2);
   }
   const phase = readArg('--phase', 'A');
-  if (phase !== 'A' && phase !== 'B' && phase !== 'C') {
+  if (phase !== 'A' && phase !== 'B' && phase !== 'C' && phase !== 'D') {
     console.error(
-      `FATAL: phase ${phase} not implemented (only Phase A / B / C are available in S1-4)`
+      `FATAL: phase ${phase} not implemented (only Phase A / B / C / D are available in S1-5)`
     );
     process.exit(2);
   }
@@ -114,6 +120,9 @@ async function main(): Promise<void> {
   const db = admin.firestore();
   const productionBucketRef = admin.storage().bucket(productionBucket);
   const artifactBucketRef = admin.storage().bucket(artifactBucketName);
+
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const _phaseGuard: 'A' | 'B' | 'C' | 'D' = phase;
 
   if (phase === 'A') {
     const snapshotStartedAt = new Date().toISOString();
@@ -177,8 +186,8 @@ async function main(): Promise<void> {
     console.log(`  manifest: ${result.manifestPath}`);
     console.log(`  revalidationStartedAt: ${revalidationStartedAt}`);
     console.log(`  revalidationCompletedAt: ${result.revalidationCompletedAt}`);
-  } else {
-    // Phase C: Phase B artifact 経由 manifest を読み atomic backfill 実施 (本 PR S1-4)
+  } else if (phase === 'C') {
+    // Phase C: Phase B artifact 経由 manifest を読み atomic backfill 実施 (S1-4)
     const manifestPath = `gs://${artifactBucketName}/pr-d4-backfill-artifacts/${runId}/manifest.json`;
     const jobId = readArg('--job-id', `job-${runId}`)!;
     // lock owner: GitHub Actions 経由なら GITHUB_RUN_ID + GITHUB_REPOSITORY、ローカルなら 'manual-cli'
@@ -227,6 +236,120 @@ async function main(): Promise<void> {
     console.log(`  mainArtifact: ${result.mainArtifactPath}`);
     console.log(`  manifest: ${result.manifestPath}`);
     console.log(`  backfillCompletedAt: ${result.backfillCompletedAt}`);
+  } else {
+    // Phase D: Phase C artifact 経由 manifest を読み verify + rotate gate test 実施 (本 PR S1-5)
+    const manifestPath = `gs://${artifactBucketName}/pr-d4-backfill-artifacts/${runId}/manifest.json`;
+    // dev 環境のみ rotate gate fixture test 実行可、cocoro/kanameone は強制 false (Codex 3rd I6)
+    const rotateGateFixtureEnabledArg = readArg('--phase-d-rotate-fixture-mode', 'false');
+    const rotateGateFixtureEnabled =
+      envName === 'dev' && rotateGateFixtureEnabledArg === 'true';
+    if (rotateGateFixtureEnabledArg === 'true' && envName !== 'dev') {
+      console.error(
+        `FATAL: --phase-d-rotate-fixture-mode=true is dev-only; received env=${envName}`
+      );
+      process.exit(2);
+    }
+
+    console.log(`\nPhase D starting with manifest: ${manifestPath}`);
+    console.log(`  rotateGateFixtureEnabled: ${rotateGateFixtureEnabled}`);
+
+    const verifyStartedAt = new Date().toISOString();
+
+    // fixture mode 起動時: rotate URL + auth token を env 経由で受け取る
+    let fixtureStore;
+    let rotateApiCaller;
+    let fixturePdfBytesVerified;
+    let fixturePdfBytesChildSnapshotOnly;
+    if (rotateGateFixtureEnabled) {
+      const rotateUrl = process.env.PR_D4_ROTATE_URL;
+      const authToken = process.env.PR_D4_ROTATE_AUTH_TOKEN;
+      if (!rotateUrl || !authToken) {
+        console.error(
+          'FATAL: rotateGateFixtureEnabled=true requires PR_D4_ROTATE_URL + PR_D4_ROTATE_AUTH_TOKEN env'
+        );
+        process.exit(2);
+      }
+      // fixture PDF bytes: 最小の valid PDF (test caller が fixture bucket に事前 upload 想定だが、
+      // dev rehearsal では本 CLI が直接生成する。最小 1-page PDF を pdf-lib で構築)
+      const { PDFDocument } = await import('pdf-lib');
+      const docVerified = await PDFDocument.create();
+      docVerified.addPage();
+      fixturePdfBytesVerified = Buffer.from(await docVerified.save());
+      const docChild = await PDFDocument.create();
+      docChild.addPage();
+      docChild.addPage();
+      fixturePdfBytesChildSnapshotOnly = Buffer.from(await docChild.save());
+
+      fixtureStore = new GcsFixtureStoreImpl(db, productionBucketRef, productionBucket);
+      // Codex 9th Critical 2 反映: rotate 後 Firestore re-read で実 path + generation 取得するため db を渡す
+      rotateApiCaller = new HttpsRotateApiCallerImpl(rotateUrl, authToken, db, productionBucketRef);
+    }
+
+    const result = await runPhaseD({
+      env: envName,
+      runId,
+      artifactBucketName,
+      manifestPath,
+      artifactReader: new GcsArtifactReader(artifactBucketRef),
+      artifactWriter: new GcsArtifactStorageWriter(artifactBucketRef),
+      docReader: new FirestoreDocReaderImpl(db),
+      backfillScriptVersion: PR_D4_SCRIPT_VERSION,
+      rotateGateFixtureEnabled,
+      fixtureStore,
+      rotateApiCaller,
+      fixturePdfBytesVerified,
+      fixturePdfBytesChildSnapshotOnly,
+      verifyStartedAt,
+    });
+
+    console.log('\nPhase D complete:');
+    console.log(`  candidatesIn: ${result.candidatesIn}`);
+    console.log(`  verifiedDocs: ${result.verifiedDocs}`);
+    console.log(`  fieldsConsistent: ${result.fieldsConsistent}`);
+    console.log(`  fieldsMismatchCount (field 単位): ${result.fieldsMismatchCount}`);
+    console.log(`  mismatchedDocCount (doc 単位): ${result.mismatchedDocCount}`);
+    console.log(`  createdAtConsistent: ${result.createdAtConsistent}`);
+    console.log(`  createdAtMismatchCount: ${result.createdAtMismatchCount}`);
+    console.log(`  provenanceBackfillNullCount: ${result.provenanceBackfillNullCount}`);
+    console.log(`  provenanceBackfillAbsentCount: ${result.provenanceBackfillAbsentCount}`);
+    console.log(`  confidenceDistribution: ${JSON.stringify(result.confidenceDistribution)}`);
+    console.log(`  rotateGateTest: ${result.rotateGateTest ? 'executed' : 'skipped (production)'}`);
+    if (result.rotateGateTest) {
+      console.log(
+        `    derivedBytesVerified: ${result.rotateGateTest.derivedBytesVerified.rotateApiResult}`
+      );
+      console.log(
+        `    childSnapshotOnly: ${result.rotateGateTest.childSnapshotOnly.rotateApiResult}`
+      );
+      console.log(
+        `    fixtureCleanupFailures: ${result.rotateGateTest.fixtureCleanupFailures.length}`
+      );
+    }
+    console.log('  coverage:');
+    console.log(`    backfillAttempt.derivedBytesVerified: ${result.coverageRatio.backfillAttemptCoverage.derivedBytesVerified.toFixed(4)}`);
+    console.log(`    estateRotateReady.rotateReadyTotal: ${result.coverageRatio.estateRotateReadyCoverage.rotateReadyTotal.toFixed(4)} (BF15 主指標)`);
+    console.log(`  mainArtifact: ${result.mainArtifactPath}`);
+    console.log(`  manifest: ${result.manifestPath}`);
+    console.log(`  finalizeStatus: ${result.finalizeStatusPath}`);
+    console.log(`  manifestUpdateStatus: ${result.manifestUpdateStatus}`);
+    console.log(`  hasVerificationFailure: ${result.hasVerificationFailure}`);
+    console.log(`  verifyCompletedAt: ${result.verifyCompletedAt}`);
+
+    // exit code policy (Codex 9th Important 3 反映)
+    if (result.manifestUpdateStatus === 'failed') {
+      console.error('FATAL: manifest CAS failed; phase-d artifact not authoritative (exit 3)');
+      process.exit(3);
+    }
+    if (result.hasVerificationFailure) {
+      console.error(
+        `FATAL: Phase D verification failure detected ` +
+          `(mismatchedDocCount=${result.mismatchedDocCount}, ` +
+          `createdAtMismatchCount=${result.createdAtMismatchCount}, ` +
+          `provenanceBackfillNullCount=${result.provenanceBackfillNullCount}, ` +
+          `rotateGate=${result.rotateGateTest ? 'tested' : 'skipped'}); exit 4`
+      );
+      process.exit(4);
+    }
   }
 }
 

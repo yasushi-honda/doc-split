@@ -464,3 +464,243 @@ export const PR_D4_PHASE_C_DEFAULT_RATE_LIMITER: PhaseCRateLimiterConfig = {
   tokensPerSecond: 100,
   burstCapacity: 100,
 } as const;
+
+// ============================================================================
+// Phase D types (impl-plan §4.4、AC BF10/BF11/BF12/BF13/BF15、Codex MCP 8th review GO 反映)
+// ============================================================================
+
+/**
+ * Phase D verify で検出した field mismatch 1 件 (impl-plan §4.4 + Codex 8th Suggestion 1)。
+ *
+ * `mismatchType` で運用切り分けを高速化:
+ * - `'provenance-field'`: `provenance` 10 fields のいずれか不一致 (e.g. sourceSha256 / derivedSha256)
+ * - `'backfill-field'`: `provenanceBackfill` Stage 1 field 単位検証で fail (method / confidence /
+ *   backfilledAt / evidence.*)
+ * - `'sha256'`: Stage 2 deterministic hash 比較で fail (factory 再 invoke 後の sha256 が Phase C
+ *   `newProvenanceBackfillSha256` と不一致)
+ * - `'missing-expected'`: Phase B candidate index に docId が無い (Phase C と Phase B の同期ズレ)
+ *
+ * Codex 8th Suggestion 2 反映: observed/expected は JSON scalar union + null。Timestamp や
+ * malformed object を記録するため、unknown を許容する側に振る (string 化された JSON 表現 OK)。
+ */
+export type PhaseDMismatchType =
+  | 'provenance-field'
+  | 'backfill-field'
+  | 'sha256'
+  | 'missing-expected';
+
+export interface PhaseDFieldMismatchDoc {
+  docId: string;
+  mismatchType: PhaseDMismatchType;
+  /**
+   * 不一致 field 名 (DocumentProvenance 10 keys + provenanceBackfill subfield、sha256 比較時は
+   * `'provenanceBackfill.sha256'`、missing-expected 時は `'__phaseBIndex'`)。
+   */
+  field: string;
+  /** observed value (Firestore document から取得)。`null` は不在 / 取得不能 */
+  observed: string | number | boolean | null;
+  /** expected value (Phase B computedProvenance / Phase C newProvenanceBackfillSha256 由来) */
+  expected: string | number | boolean | null;
+}
+
+/**
+ * Phase D で verify した 1 doc の成功記録 (Codex 8th Critical 1/2 反映)。
+ *
+ * - `provenanceFieldsConsistent`: provenance 10 fields すべて Phase B `computedProvenance` と一致
+ * - `provenanceBackfillSha256Match`: observed metadata を factory 再 invoke して sha256 化した結果が
+ *   Phase C `newProvenanceBackfillSha256` と一致 (Stage 2、deterministic hash 二重 validation)
+ * - `observedConfidence`: 取得した `provenanceBackfill.confidence` (`BackfillConfidence` の literal)
+ * - `observedCreatedAt`: provenance.createdAt の ISO8601 表現 (BF10 検証で document.createdAt と比較)
+ */
+export interface PhaseDVerifiedDoc {
+  docId: string;
+  provenanceFieldsConsistent: boolean;
+  provenanceBackfillSha256Match: boolean;
+  observedConfidence: BackfillConfidence;
+  observedCreatedAt: string;
+}
+
+/**
+ * dev 環境 rotate gate fixture test 結果 (BF12 / BF13)。
+ *
+ * fixture docId 形式 (Codex 8th 残課題回答 3 反映): `BF13_test_fixture_${runId}_${kind}_${uuid}`
+ * (kind = 'verified' | 'child_snapshot_only'、uuid = randomUUID()、prefix + UUID 二重識別)。
+ *
+ * 本番環境 (cocoro / kanameone) では本 field は `null` (read-only verification のみ、Codex 3rd I6
+ * + 7th 回答 6 反映、本番に rotate side effect ゼロを保証)。
+ */
+export interface PhaseDRotateGateTestResult {
+  /** `derived-bytes-verified` fixture で rotate 成功 (BF12) */
+  derivedBytesVerified: {
+    fixtureDocId: string;
+    rotateApiResult: 'success' | 'rejected';
+    rotatedAt: string | null;
+    rejectionMessage: string | null;
+  };
+  /** `child-snapshot-only` fixture で failed-precondition reject (BF13) */
+  childSnapshotOnly: {
+    fixtureDocId: string;
+    rotateApiResult: 'success' | 'rejected';
+    rotatedAt: string | null;
+    rejectionMessage: string | null;
+  };
+  /**
+   * cleanup hook で削除しきれなかった fixture (operator 目視削除を artifact に明示、
+   * Codex 8th Important 2 反映)。
+   */
+  fixtureCleanupFailures: Array<{
+    fixtureDocId: string;
+    objectPath: string | null;
+    error: string;
+  }>;
+}
+
+/**
+ * Phase D coverage 比率 (2 系統、BF15 主指標 + 補助指標、Codex 7th Important 4 反映)。
+ *
+ * 設計:
+ * - `backfillAttemptCoverage`: Phase C candidatesIn (本 run で backfill 試行した母集団) 基準。
+ *   分母 = `phaseC.candidatesIn`、各カテゴリの ratio (0.0-1.0)
+ * - `estateRotateReadyCoverage`: Phase A totalDocs (env 全 documents) 基準。**BF15 主指標**。
+ *   分母 = `phaseA.totalDocs`、kanameone 全体で rotate 可能な状態の比率を直接表現
+ *
+ * 保全式: `estateRotateReadyCoverage.rotateReadyTotal + notRotateReady === totalDocs`
+ */
+export interface PhaseDCoverageRatio {
+  backfillAttemptCoverage: {
+    denominator: number;
+    derivedBytesVerified: number;
+    childSnapshotOnly: number;
+    metadataOnly: number;
+    preconditionFailed: number;
+    immutableSkipped: number;
+  };
+  estateRotateReadyCoverage: {
+    denominator: number;
+    verifiedExisting: number;
+    backfilledDerivedBytesVerified: number;
+    rotateReadyTotal: number;
+    notRotateReady: number;
+  };
+}
+
+/**
+ * Phase D verify 1 chunk (BF22、1 chunk ≤ PR_D4_CANDIDATES_PER_CHUNK)。
+ *
+ * Codex 9th Critical 3 / Evaluator HIGH / code-reviewer H1 反映:
+ * `fieldsMismatch` は **field 単位レコード** 配列。1 doc に複数 field mismatch がある場合、複数件記録される。
+ * doc 数の保全式には `mismatchedDocIds` (Set 由来の集計、type は string[]) を使う。
+ *
+ * 保全式 (chunk 全件、doc 単位):
+ *   verifiedDocs.length + uniqueMismatchedDocIds.length === 該当 chunk に渡された Phase C
+ *   writtenDocs 件数
+ */
+export interface PhaseDVerifyChunk {
+  schemaVersion: PrD4ArtifactSchemaVersion;
+  chunkIndex: number;
+  verifiedDocs: PhaseDVerifiedDoc[];
+  fieldsMismatchDocs: PhaseDFieldMismatchDoc[];
+  /** chunk 内で mismatch を起こした unique docId 集合 (doc 単位保全式の検証用) */
+  mismatchedDocIds: string[];
+}
+
+/**
+ * Phase D main artifact 構造 (impl-plan §4.4 + Codex 7th/8th review 反映)。
+ *
+ * 設計:
+ * - `candidatesIn`: Phase C writtenDocs 総数 (Phase D verify 対象)
+ * - `verifiedDocs`: Phase D で再読込 + field 整合 verify 成功した件数 (= chunks の verifiedDocs 合計)
+ * - `fieldsConsistent`: provenance 10 fields + provenanceBackfill 全 verify 成功
+ * - `fieldsMismatch`: chunks の fieldsMismatchDocs 全件 (BF11 違反の集計)
+ * - `createdAtConsistent`: `provenance.createdAt === document.createdAt` を満たした件数 (BF10)
+ * - `confidenceDistribution`: observed confidence の集計 (BF11、Phase B 期待と比較)
+ * - `provenanceBackfillNullCount`: Codex 8th 回答 4 反映、`provenanceBackfill === null` 件数を
+ *   事前検知 (fail-closed 変更前の影響予測)
+ * - `rotateGateTest`: dev のみ存在、cocoro/kanameone は `null`
+ * - `coverageRatio`: 2 系統 (Codex 7th Important 4)
+ * - `phaseACountReadOnly`: Phase A summary を Phase D が取り込む (Codex 7th Important 5)
+ * - `phaseBArtifactRef` / `phaseCArtifactRef`: manifest chain authority (Codex 8th 回答 5 反映)
+ * - `manifestUpdateStatus`: CAS update 結果 (Codex 8th Important 3 反映、`'pending'` で main 書込、
+ *   CAS 後別 status file で結果記録)
+ *
+ * 保全式 (top-level、Codex 10th Important 2 反映で doc 単位に修正):
+ *   verifiedDocs + mismatchedDocCount === candidatesIn (= Phase C writtenDocs、Phase D verify 対象)
+ *   createdAtConsistent + createdAtMismatch.length === verifiedDocs (verified 内訳)
+ *   streamingDocsObserved === candidatesIn (chunk truncation 検出、orchestrator runtime check)
+ *   result.kind === 'verified' ⇒ provenanceBackfillSha256Match === true (verifyDoc 仕様、defensive throw)
+ *   estateRotateReadyCoverage.rotateReadyTotal + notRotateReady === 1.0
+ *
+ * 注: `fieldsConsistent` は「provenance 10 fields + provenanceBackfill Stage 1/2 全 pass」の doc 数。
+ *     `mismatchedDocCount` (doc 単位) と `fieldsMismatch.length` (field 単位レコード合計) は別概念。
+ *     1 doc が複数 field mismatch を起こすと fieldsMismatch.length > mismatchedDocCount となる。
+ */
+export interface PhaseDVerifySummary {
+  phase: 'D';
+  schemaVersion: PrD4ArtifactSchemaVersion;
+  scriptVersion: PrD4ScriptVersion;
+  env: BackfillEnvName;
+  runId: string;
+  phaseAArtifactRef: string;
+  phaseBArtifactRef: string;
+  phaseCArtifactRef: string;
+  phaseCManifestSha256: string;
+  verifyStartedAt: string;
+  verifyCompletedAt: string;
+  candidatesIn: number;
+  /**
+   * verifyDoc が verified を返却した doc 数 (sha256 only mismatch 含まず、mismatch 経路は別途集計)。
+   * Codex 9th Critical 3 + Evaluator HIGH 反映で doc 単位カウントを厳密化。
+   */
+  verifiedDocs: number;
+  /** 完全一致 doc 数 (provenance 10 fields + provenanceBackfill Stage 1/2 全 pass) */
+  fieldsConsistent: number;
+  /**
+   * field 単位 mismatch レコード (1 doc に複数 field mismatch あれば複数件)。
+   * doc 数の集計は `mismatchedDocCount` で別途保持。
+   */
+  fieldsMismatch: PhaseDFieldMismatchDoc[];
+  /** field 単位 mismatch を起こした unique doc 数 (保全式: verifiedDocs + mismatchedDocCount === candidatesIn) */
+  mismatchedDocCount: number;
+  createdAtConsistent: number;
+  createdAtMismatch: PhaseDFieldMismatchDoc[];
+  confidenceDistribution: Record<BackfillConfidence, number>;
+  /** Codex 8th 回答 4: provenanceBackfill === null の件数 (fail-closed 変更前影響予測) */
+  provenanceBackfillNullCount: number;
+  /** Codex 9th Evaluator エッジケース 1: provenanceBackfill field absent (undefined) の件数 */
+  provenanceBackfillAbsentCount: number;
+  rotateGateTest: PhaseDRotateGateTestResult | null;
+  coverageRatio: PhaseDCoverageRatio;
+  /** Codex 7th Important 5: Phase A read-only count を Phase D summary に統合 */
+  phaseACountReadOnly: {
+    totalDocs: number;
+    alreadyBackfilled: number;
+    verifiedExistingProvenance: number;
+    categoryDistribution: Record<BackfillClassifierCategory, number>;
+  };
+  /**
+   * Codex 8th Important 3 反映: main artifact 書込 → CAS update の 2 段階で行うため、main
+   * 書込時点では `'pending'` を入れる。CAS 結果は別 status file (`phase-d-finalize-status.json`)
+   * に記録し、main artifact は overwrite しない (artifact writer の `ifGenerationMatch: 0` semantics
+   * 維持)。
+   */
+  manifestUpdateStatus: 'pending';
+  chunks: ArtifactChunkPointer[];
+}
+
+/**
+ * Phase D finalize 結果ステータス (Codex 8th Important 3 反映)。
+ *
+ * main artifact とは独立した別 file に書込 (`phase-d-finalize-status.json`)。CAS 失敗時に main
+ * artifact を上書きせず、operator が「main artifact は authoritative ではない」を判断する材料。
+ */
+export interface PhaseDFinalizeStatus {
+  schemaVersion: PrD4ArtifactSchemaVersion;
+  runId: string;
+  env: BackfillEnvName;
+  finalizedAt: string;
+  /** 'ok' = CAS 成功、'failed' = CAS で 412 PreconditionFailed (別 process が manifest 書換) */
+  manifestUpdateStatus: 'ok' | 'failed';
+  expectedGeneration: string;
+  /** CAS 失敗時のリトライ手順 (operator 用) */
+  remediation?: string;
+}
