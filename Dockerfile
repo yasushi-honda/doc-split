@@ -34,6 +34,9 @@ RUN npm ci \
 # source copy (functions/frontend の source は .dockerignore で排除)
 COPY scripts ./scripts
 COPY shared ./shared
+# PR-D4 backfill scripts は `functions/src/pdf/provenance.ts` を import するため、
+# 該当 file のみ allowlist で取り込む (.dockerignore で他 file は除外済)
+COPY functions/src/pdf/provenance.ts ./functions/src/pdf/provenance.ts
 # .firebaserc: container 内では project_id を env 経由で受け取るため runtime では不要だが、
 #   helpers/firebaserc-helper.js を将来 container 内で呼ぶ可能性に備えて copy
 COPY .firebaserc ./

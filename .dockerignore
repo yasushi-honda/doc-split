@@ -59,8 +59,24 @@ frontend/tsconfig*.json
 frontend/postcss.config.*
 frontend/tailwind.config.*
 
-# functions (source 不要、PR-D4 backfill から依存なし)
-functions/src
+# functions (大半は source 不要だが PR-D4 backfill scripts は
+# `functions/src/pdf/provenance.ts` (factory + validation、shared/types 依存のみ) を import する。
+# pdf subdir を allowlist し、その中で provenance.ts のみ残す:
+functions/src/admin
+functions/src/documents
+functions/src/gmail
+functions/src/index.ts
+functions/src/ocr
+functions/src/search
+functions/src/storage
+functions/src/triggers
+functions/src/upload
+functions/src/utils
+functions/src/pdf/pdfOperations.ts
+functions/src/pdf/rotateGate.ts
+functions/src/pdf/rotationMerge.ts
+functions/src/pdf/splitDocumentBuilder.ts
+functions/src/pdf/splitSnapshot.ts
 functions/test
 functions/lib
 functions/tsconfig*.json
