@@ -199,7 +199,7 @@ jobs:
             exit 1
           fi
 
-      - name: Build container image (Cloud Build) + digest pinning
+      - name: Build container image (Cloud Build, async + polling) + digest pinning
         id: build
         env:
           PROJECT_ID: ${{ steps.resolve.outputs.project_id }}
@@ -208,10 +208,54 @@ jobs:
         run: |
           set -euo pipefail
           IMAGE_URI="${CLOUD_RUN_LOCATION}-docker.pkg.dev/${PROJECT_ID}/pr-d4-backfill/pr-d4-backfill:${IMAGE_TAG}"
-          echo "Submitting Cloud Build: $IMAGE_URI"
-          gcloud builds submit \
+          echo "Submitting Cloud Build (async): $IMAGE_URI"
+          # S1-7 rehearsal: deploy SA が project Viewer 持っていても default logs bucket
+          # への stream は環境により fail しうるため --async submit + describe polling で
+          # log streaming を回避する。
+          BUILD_ID=$(gcloud builds submit \
             --tag="$IMAGE_URI" \
-            --project="$PROJECT_ID"
+            --project="$PROJECT_ID" \
+            --async \
+            --format='value(metadata.build.id)')
+          if [ -z "$BUILD_ID" ]; then
+            echo "ERROR: failed to obtain BUILD_ID" >&2
+            exit 1
+          fi
+          echo "BUILD_ID: $BUILD_ID"
+          # poll status (60min timeout = 240 iterations × 15s)
+          POLL_INTERVAL=15
+          MAX_ITERATIONS=240
+          ITERATION=0
+          while [ "$ITERATION" -lt "$MAX_ITERATIONS" ]; do
+            STATUS=$(gcloud builds describe "$BUILD_ID" --project="$PROJECT_ID" --format='value(status)' 2>/dev/null || echo "UNKNOWN")
+            case "$STATUS" in
+              SUCCESS)
+                echo "Build succeeded after ${ITERATION} polls"
+                break
+                ;;
+              FAILURE|CANCELLED|TIMEOUT|EXPIRED|INTERNAL_ERROR)
+                echo "ERROR: Build failed with status: $STATUS" >&2
+                echo "Logs: https://console.cloud.google.com/cloud-build/builds/${BUILD_ID}?project=${PROJECT_ID}" >&2
+                exit 1
+                ;;
+              QUEUED|WORKING|PENDING)
+                echo "[${ITERATION}/${MAX_ITERATIONS}] Status: $STATUS, waiting ${POLL_INTERVAL}s..."
+                sleep "$POLL_INTERVAL"
+                ITERATION=$((ITERATION + 1))
+                ;;
+              *)
+                echo "WARN: Unexpected status '$STATUS', waiting ${POLL_INTERVAL}s and retrying..." >&2
+                sleep "$POLL_INTERVAL"
+                ITERATION=$((ITERATION + 1))
+                ;;
+            esac
+          done
+          if [ "$ITERATION" -ge "$MAX_ITERATIONS" ]; then
+            echo "ERROR: Build polling timed out after $((MAX_ITERATIONS * POLL_INTERVAL))s" >&2
+            exit 1
+          fi
+          BUILD_SA=$(gcloud builds describe "$BUILD_ID" --project="$PROJECT_ID" --format='value(serviceAccount)' 2>/dev/null || echo "unknown")
+          echo "actual Cloud Build SA: $BUILD_SA"
           # digest pinning (S2 suggestion 反映): tag は mutable のため digest を deploy に渡す
           IMAGE_DIGEST=$(gcloud artifacts docker images describe "$IMAGE_URI" \
             --format='value(image_summary.fully_qualified_digest)' \
@@ -408,7 +452,7 @@ jobs:
             echo "image_tag=$IMAGE_TAG"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Build container image (Cloud Build) + digest pinning
+      - name: Build container image (Cloud Build, async + polling) + digest pinning
         id: build
         env:
           PROJECT_ID: ${{ steps.resolve.outputs.project_id }}
@@ -417,9 +461,37 @@ jobs:
         run: |
           set -euo pipefail
           IMAGE_URI="${CLOUD_RUN_LOCATION}-docker.pkg.dev/${PROJECT_ID}/pr-d4-backfill/pr-d4-backfill:${IMAGE_TAG}"
-          gcloud builds submit \
+          BUILD_ID=$(gcloud builds submit \
             --tag="$IMAGE_URI" \
-            --project="$PROJECT_ID"
+            --project="$PROJECT_ID" \
+            --async \
+            --format='value(metadata.build.id)')
+          if [ -z "$BUILD_ID" ]; then
+            echo "ERROR: failed to obtain BUILD_ID" >&2
+            exit 1
+          fi
+          POLL_INTERVAL=15
+          MAX_ITERATIONS=240
+          ITERATION=0
+          while [ "$ITERATION" -lt "$MAX_ITERATIONS" ]; do
+            STATUS=$(gcloud builds describe "$BUILD_ID" --project="$PROJECT_ID" --format='value(status)' 2>/dev/null || echo "UNKNOWN")
+            case "$STATUS" in
+              SUCCESS) break ;;
+              FAILURE|CANCELLED|TIMEOUT|EXPIRED|INTERNAL_ERROR)
+                echo "ERROR: Build failed with status: $STATUS" >&2
+                echo "Logs: https://console.cloud.google.com/cloud-build/builds/${BUILD_ID}?project=${PROJECT_ID}" >&2
+                exit 1
+                ;;
+              QUEUED|WORKING|PENDING|*)
+                sleep "$POLL_INTERVAL"
+                ITERATION=$((ITERATION + 1))
+                ;;
+            esac
+          done
+          if [ "$ITERATION" -ge "$MAX_ITERATIONS" ]; then
+            echo "ERROR: Build polling timed out" >&2
+            exit 1
+          fi
           IMAGE_DIGEST=$(gcloud artifacts docker images describe "$IMAGE_URI" \
             --format='value(image_summary.fully_qualified_digest)' \
             --project="$PROJECT_ID")
