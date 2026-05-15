@@ -216,7 +216,7 @@ jobs:
             --tag="$IMAGE_URI" \
             --project="$PROJECT_ID" \
             --async \
-            --format='value(metadata.build.id)')
+            --format='value(id)')
           if [ -z "$BUILD_ID" ]; then
             echo "ERROR: failed to obtain BUILD_ID" >&2
             exit 1
@@ -465,7 +465,7 @@ jobs:
             --tag="$IMAGE_URI" \
             --project="$PROJECT_ID" \
             --async \
-            --format='value(metadata.build.id)')
+            --format='value(id)')
           if [ -z "$BUILD_ID" ]; then
             echo "ERROR: failed to obtain BUILD_ID" >&2
             exit 1
