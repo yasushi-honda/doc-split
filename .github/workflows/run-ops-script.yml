@@ -56,6 +56,7 @@ on:
           - audit-storage-mismatch
           - audit-storage-mismatch --no-orphans
           - audit-storage-mismatch --no-collisions
+          - audit-storage-mismatch --show-creation-times
           - audit-session61-parent-provenance
           - classify-collision-docs
           - setup-collision-fixture --dev
