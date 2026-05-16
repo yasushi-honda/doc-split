@@ -21,6 +21,8 @@
  *   --no-orphans             fileUrl 孤児チェック (Firestore→Storage) を省略
  *   --no-collisions          fileName 衝突チェックを省略
  *   --no-reverse-orphans     reverse orphan チェック (Storage→Firestore) を省略
+ *   --show-creation-times    collision 出力に createdAt を含める (PR-B/D2 等 deploy 反映前後の
+ *                            切り分け用、Issue #432 session82 で導入)
  */
 
 const admin = require('firebase-admin');
@@ -48,6 +50,7 @@ const prefix = getOpt('--prefix', 'processed/');
 const skipOrphans = process.argv.includes('--no-orphans');
 const skipCollisions = process.argv.includes('--no-collisions');
 const skipReverseOrphans = process.argv.includes('--no-reverse-orphans');
+const showCreationTimes = process.argv.includes('--show-creation-times');
 
 admin.initializeApp({ projectId, storageBucket });
 const db = admin.firestore();
@@ -124,6 +127,7 @@ async function main() {
       rotatedAt: tsToIso(data.rotatedAt),
       processedAt: tsToIso(data.processedAt),
       updatedAt: tsToIso(data.updatedAt),
+      createdAt: tsToIso(data.createdAt),
       lastErrorMessage: data.lastErrorMessage,
     });
   });
@@ -261,7 +265,12 @@ async function main() {
     for (const [fileName, docs] of collisions) {
       console.log(`\n-- ${fileName} (${docs.length} docs) --`);
       for (const d of docs) {
-        console.log(`  ${d.id} | status=${d.status} | rotatedAt=${d.rotatedAt} | fileUrl=${d.fileUrl}`);
+        const base = `  ${d.id} | status=${d.status} | rotatedAt=${d.rotatedAt} | fileUrl=${d.fileUrl}`;
+        if (showCreationTimes) {
+          console.log(`${base} | createdAt=${d.createdAt} | processedAt=${d.processedAt}`);
+        } else {
+          console.log(base);
+        }
       }
     }
   }
