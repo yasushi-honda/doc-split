@@ -26,7 +26,7 @@ on:
           - cocoro
           - kanameone
       phase:
-        description: 'PR-D4 phase (A=audit, B=preflight, C=atomic backfill, D=verify+rotate gate)'
+        description: 'PR-D4 phase (A=audit, B=preflight, C=atomic backfill, D=verify+rotate gate, E=rollback dev fixtures, S6/BF24, dev-only)'
         required: true
         type: choice
         options:
@@ -34,6 +34,7 @@ on:
           - B
           - C
           - D
+          - E
       run_id:
         description: 'Run ID (optional, auto-generated if empty; must match ^[A-Za-z0-9._-]+$)'
         required: false
@@ -41,6 +42,14 @@ on:
         default: ''
       rotate_fixture_mode:
         description: 'Phase D rotate gate fixture test (dev + phase=D only; prod では常に false 強制)'
+        required: true
+        type: choice
+        default: 'false'
+        options:
+          - 'false'
+          - 'true'
+      confirm:
+        description: 'Phase E rollback で実 FieldValue.delete() を発行 (phase=E + dev のみ true 許可、デフォルト false=dry-run)'
         required: true
         type: choice
         default: 'false'
@@ -73,6 +82,7 @@ jobs:
           PHASE: ${{ github.event.inputs.phase }}
           RUN_ID: ${{ github.event.inputs.run_id }}
           ROTATE_FIXTURE_MODE: ${{ github.event.inputs.rotate_fixture_mode }}
+          CONFIRM: ${{ github.event.inputs.confirm }}
         run: |
           set -euo pipefail
           # run_id 文字種 validate (Codex review I7 + 実装後 review: Docker tag 規約遵守)
@@ -96,7 +106,24 @@ jobs:
               exit 1
             fi
           fi
-          echo "Inputs validated: env=$ENVIRONMENT phase=$PHASE run_id=${RUN_ID:-<auto>} rotate_fixture_mode=$ROTATE_FIXTURE_MODE"
+          # Phase E (rollback) 制約 (S6 / BF24、Codex MCP 12th review I1 反映、env=dev 強制 + confirm 整合)
+          # deploy-dev job 自体が env=dev 限定なので env check は冗長だが defense in depth で明示
+          if [ "$PHASE" = "E" ]; then
+            if [ "$ENVIRONMENT" != "dev" ]; then
+              echo "ERROR: phase=E (rollback dev fixtures) requires environment=dev (got: env=$ENVIRONMENT)" >&2
+              exit 1
+            fi
+            if [ "$ROTATE_FIXTURE_MODE" = "true" ]; then
+              echo "ERROR: phase=E and rotate_fixture_mode=true are mutually exclusive" >&2
+              exit 1
+            fi
+          fi
+          # confirm=true は phase=E でのみ意味を持つ (他 phase で true を渡すと運用者誤認)
+          if [ "$CONFIRM" = "true" ] && [ "$PHASE" != "E" ]; then
+            echo "ERROR: confirm=true is only valid with phase=E (got: phase=$PHASE)" >&2
+            exit 1
+          fi
+          echo "Inputs validated: env=$ENVIRONMENT phase=$PHASE run_id=${RUN_ID:-<auto>} rotate_fixture_mode=$ROTATE_FIXTURE_MODE confirm=$CONFIRM"
 
       - uses: google-github-actions/auth@v2
         with:
@@ -309,6 +336,7 @@ jobs:
           BUCKET_LOCATION: ${{ steps.resolve.outputs.bucket_location }}
           ENVIRONMENT: ${{ github.event.inputs.environment }}
           PHASE: ${{ github.event.inputs.phase }}
+          CONFIRM: ${{ github.event.inputs.confirm }}
           RUN_ID: ${{ steps.compute.outputs.run_id }}
           JOB_NAME: ${{ steps.compute.outputs.job_name }}
           IS_DEV_FIXTURE_RUN: ${{ steps.compute.outputs.is_dev_fixture_run }}
@@ -326,6 +354,10 @@ jobs:
           if [ "$IS_DEV_FIXTURE_RUN" = "true" ]; then
             ENV_VARS="${ENV_VARS},PR_D4_ROTATE_URL=${PR_D4_ROTATE_URL}"
             ARGS_CSV="${ARGS_CSV},--phase-d-rotate-fixture-mode,true"
+          fi
+          # Phase E (rollback) 専用: --confirm を args に追加 (S6 / BF24)
+          if [ "$PHASE" = "E" ]; then
+            ARGS_CSV="${ARGS_CSV},--confirm,${CONFIRM}"
           fi
           echo "Executing job: $JOB_NAME"
           echo "  args: $ARGS_CSV"
@@ -364,6 +396,7 @@ jobs:
           PHASE: ${{ github.event.inputs.phase }}
           RUN_ID: ${{ github.event.inputs.run_id }}
           ROTATE_FIXTURE_MODE: ${{ github.event.inputs.rotate_fixture_mode }}
+          CONFIRM: ${{ github.event.inputs.confirm }}
         run: |
           set -euo pipefail
           if [ -n "$RUN_ID" ]; then
@@ -382,7 +415,18 @@ jobs:
             echo "ERROR: rotate_fixture_mode=true is dev-only (got env=$ENVIRONMENT)" >&2
             exit 1
           fi
-          echo "Inputs validated: env=$ENVIRONMENT phase=$PHASE run_id=${RUN_ID:-<auto>}"
+          # Phase E (rollback) は prod では一切実行禁止 (S6 / BF24、Codex MCP 12th review I1)
+          # workflow_dispatch.choice には残るが、deploy-prod job 側で hard reject。
+          # GitHub Environment reviewer も追加 gate になるが、本 step で先に止める (silent risk 排除)
+          if [ "$PHASE" = "E" ]; then
+            echo "ERROR: phase=E (rollback dev fixtures) is dev-only (got env=$ENVIRONMENT); workflow rejects on production envs" >&2
+            exit 1
+          fi
+          if [ "$CONFIRM" = "true" ]; then
+            echo "ERROR: confirm=true is only valid with phase=E (dev-only); rejected on production envs" >&2
+            exit 1
+          fi
+          echo "Inputs validated: env=$ENVIRONMENT phase=$PHASE run_id=${RUN_ID:-<auto>} confirm=$CONFIRM"
 
       - uses: google-github-actions/auth@v2
         with:

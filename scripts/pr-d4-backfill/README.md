@@ -10,6 +10,7 @@ Issue #445 PR-D4 series。Issue #432 P0 collision の構造的予防 (新規 spl
 | **B** | MatchedByHash 候補に対し parent 再 download + 再 split + child sha256 verify | なし | read-only |
 | **C** | Phase B verified (derived-bytes-verified) docs に `provenance` 10 fields + `provenanceBackfill` metadata を atomic batch write (GCS sentinel lock + lastUpdateTime precondition + max 100-200 tps) | あり | destructive |
 | **D** | Phase C 書込 doc を re-read + 10 fields field-by-field verify (Stage 1) + factory 再 invoke sha256 比較 (Stage 2) + (dev のみ) rotate fixture test | なし (verify のみ) | dev fixture 副作用は env hard gate で構造的排除 |
+| **E** | dev fixture (`BF_` / `BF13_test_fixture_` prefix) の `provenance` + `provenanceBackfill` を `FieldValue.delete()` で field-only 削除 (S6 / BF24、Codex MCP 12th review I1)。`confirm=true` で実 delete、それ以外は dry-run | あり (`confirm=true` のみ) | dev-only。workflow + index + orchestrator の 3 段 hard gate |
 
 ## 起動方法
 
@@ -18,11 +19,12 @@ GitHub Actions UI → Actions → "PR-D4 Backfill (Issue #445)" → "Run workflo
 | 入力 | 説明 | 例 |
 |---|---|---|
 | environment | dev / cocoro / kanameone | dev |
-| phase | A / B / C / D | A |
+| phase | A / B / C / D / E | A |
 | run_id | optional (auto-generated if empty), must match `^[A-Za-z0-9._-]+$` | `20260515T143000Z-dev-pr-d4-v1` |
 | rotate_fixture_mode | dev + phase=D のみ true 許可、prod では常に false 強制 | false |
+| confirm | phase=E + dev のみ true 許可で実 `FieldValue.delete()` 発行、それ以外 default false (dry-run) | false |
 
-dev → 即実行 (GitHub Environment なし)。cocoro/kanameone → GitHub Environment `pr-d4-prod-{env}` で manual approval。
+dev → 即実行 (GitHub Environment なし)。cocoro/kanameone → GitHub Environment `pr-d4-prod-{env}` で manual approval。`phase=E` は **dev 専用** (deploy-prod の Validate inputs で hard reject)。
 
 ## 設計判断
 
@@ -37,6 +39,21 @@ workflow に `concurrency.group: pr-d4-backfill-${env}` + `cancel-in-progress: f
 
 ### dev fixture 専用 job (Codex review I9)
 phase=D + env=dev + rotate_fixture_mode=true のときのみ `pr-d4-backfill-dev-fixture` (Secret bind 付き) を使用。通常 job には `PR_D4_ROTATE_AUTH_TOKEN` を bind しないことで state leak を構造的に排除。
+
+### Phase E rollback の 3 段 hard gate (S6 / BF24、Codex 12th I1)
+1. **workflow yaml**: deploy-dev で `phase=E` かつ `env=dev` 強制、deploy-prod で `phase=E` を hard reject
+2. **container CLI** (`scripts/pr-d4-backfill/index.ts`): `phase=E` かつ `env=dev` 強制、それ以外で exit 2
+3. **orchestrator** (`scripts/pr-d4-backfill/rollback/rollbackOrchestrator.ts`): `env !== 'dev'` で `throw new Error`
+
+加えて **fixture prefix allowlist** (`BF_` / `BF13_test_fixture_`) を orchestrator と Firestore adapter (`startAt/endAt` prefix-bounded query) で 2 段適用。本番に該当 prefix の doc が存在しないため、仮に 3 段 gate を全突破しても query 結果ゼロで silent (副作用ゼロ)。
+
+### Phase E delete スコープ (ADR-0008 整合)
+- 対象: `provenance` と `provenanceBackfill` の **field のみ** を `FieldValue.delete()` で削除
+- 非対象: doc 自体、他 fields (createdAt 等)、Storage object はすべて残存
+- ADR-0008 (Firestore 削除禁止) は doc/collection delete を禁ずるもので、本 PR の field delete はガード対象外
+
+### Phase E 既存 verified provenance immutable skip (BF24)
+`provenance` exists かつ `provenanceBackfill` absent (= PR-D2/D3 split-time provenance、ADR MUST 7) は rollback 対象外として skip artifact (`existing-verified-provenance`) に記録。PR-D4 が書いた fixture のみを巻き戻し、PR-D2/D3 で生成された verified provenance を失わない。
 
 ## exit code 一覧
 
@@ -266,6 +283,40 @@ Codex 12th verdict に基づく phase 別 GO 状態:
 1. `<TBD>` placeholder を実値で埋める PR (cocoro/kanameone の ARTIFACT_BUCKET / CLOUD_RUN_LOCATION / BUCKET_LOCATION)
 2. GitHub Environment `pr-d4-prod-<env>` で required reviewers ≥ 1 事前確認 (§8 の `gh api` コマンド)
 3. Phase A/B は本 amendment 状態でも即実行可、Phase C/D は S6 + #12 + Codex 13th review 後
+
+## Phase E (S6 / BF24 rollback) 使い方
+
+Codex MCP 12th review I1 で要求された stand-alone rollback の dev rehearsal 用 phase。dev fixture (`BF_` / `BF13_test_fixture_`) の `provenance` + `provenanceBackfill` を `FieldValue.delete()` で field-only 削除する (doc 自体は残存)。
+
+### 通常フロー (dev rehearsal 用)
+1. fixture 作成: `#12 Phase D rotate_fixture_mode=true` で `BF13_test_fixture_*` 作成
+2. dry-run 確認 (`confirm=false` default、Firestore 副作用ゼロ):
+   ```bash
+   gh workflow run pr-d4-backfill.yml \
+     -f environment=dev -f phase=E \
+     -f run_id='20260516T120000Z-dev-pr-d4-rollback-v1' \
+     -f rotate_fixture_mode=false -f confirm=false
+   ```
+   → artifact `phase-rollback-summary.json` で target/skip 判定を事前確認
+3. 番号認可下で実行 (`confirm=true`、実 `FieldValue.delete()` 発行):
+   ```bash
+   gh workflow run pr-d4-backfill.yml \
+     -f environment=dev -f phase=E \
+     -f run_id='20260516T120100Z-dev-pr-d4-rollback-v1' \
+     -f rotate_fixture_mode=false -f confirm=true
+   ```
+4. 後続: 別 run_id で `phase=C` 起動 → Round 1/2 と同 metrics 再現を artifact diff で確認 (BF24)
+
+### 安全装置 (3 段 hard gate)
+- workflow Validate inputs: `phase=E` かつ `env=dev` 強制、`confirm=true` の他 phase 拒否、deploy-prod は `phase=E` 自体を hard reject
+- container CLI: `phase=E` かつ `env=dev` 強制 (`scripts/pr-d4-backfill/index.ts`)
+- orchestrator: `env !== 'dev'` で `throw` (`scripts/pr-d4-backfill/rollback/rollbackOrchestrator.ts`)
+- prefix allowlist: `BF_` / `BF13_test_fixture_` のみ target、本番には該当 prefix の doc 不在
+
+### artifact 出力
+- main: `gs://<artifact-bucket>/pr-d4-backfill-artifacts/<run_id>/phase-rollback-summary.json`
+- 構造: `PhaseRollbackSummary` (types.ts 参照)。保全式: `targets.length + skipped.length === scannedDocs`、`targets[*].status === 'executed' ⇔ dryRun === false`
+- **manifest 非更新**: Phase E は **standalone rollback artifact** であり、Phase A/B/C/D の `manifest.json` には書き込まない (本 PR では `BackfillManifest.phaseRollback?` 型のみ将来拡張用に予約)。理由: rollback は通常 Phase C と異なる `run_id` で起動し artifact chain を共有しないため。Codex MCP 13th review (Low 1) 反映
 
 ## Phase 間連携: run_id 継承 (session78 rehearsal で発見)
 

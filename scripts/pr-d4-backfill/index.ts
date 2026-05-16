@@ -50,6 +50,12 @@ import {
   GcsFixtureStoreImpl,
   HttpsRotateApiCallerImpl,
 } from './phase-d/adapters';
+import { runRollback } from './rollback/rollbackOrchestrator';
+import {
+  FirestoreRollbackReaderImpl,
+  FirestoreRollbackWriterImpl,
+} from './rollback/adapters';
+import { PR_D4_ROLLBACK_FIXTURE_PREFIX_ALLOWLIST } from './types';
 
 function readArg(name: string, defaultValue?: string): string | undefined {
   const idx = process.argv.indexOf(name);
@@ -85,9 +91,9 @@ async function main(): Promise<void> {
     process.exit(2);
   }
   const phase = readArg('--phase', 'A');
-  if (phase !== 'A' && phase !== 'B' && phase !== 'C' && phase !== 'D') {
+  if (phase !== 'A' && phase !== 'B' && phase !== 'C' && phase !== 'D' && phase !== 'E') {
     console.error(
-      `FATAL: phase ${phase} not implemented (only Phase A / B / C / D are available in S1-5)`
+      `FATAL: phase ${phase} not implemented (Phase A / B / C / D / E (rollback dev fixtures) only)`
     );
     process.exit(2);
   }
@@ -118,7 +124,7 @@ async function main(): Promise<void> {
   }
   const runId = readArg('--run-id', generateRunId(envName))!;
 
-  console.log('Phase A (PR-D4 S1-2) starting:');
+  console.log(`Phase ${phase} (PR-D4) starting:`);
   console.log(`  env: ${envName}`);
   console.log(`  projectId: ${projectId}`);
   console.log(`  productionBucket: ${productionBucket}`);
@@ -133,7 +139,7 @@ async function main(): Promise<void> {
   const artifactBucketRef = admin.storage().bucket(artifactBucketName);
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const _phaseGuard: 'A' | 'B' | 'C' | 'D' = phase;
+  const _phaseGuard: 'A' | 'B' | 'C' | 'D' | 'E' = phase;
 
   if (phase === 'A') {
     const snapshotStartedAt = new Date().toISOString();
@@ -247,7 +253,7 @@ async function main(): Promise<void> {
     console.log(`  mainArtifact: ${result.mainArtifactPath}`);
     console.log(`  manifest: ${result.manifestPath}`);
     console.log(`  backfillCompletedAt: ${result.backfillCompletedAt}`);
-  } else {
+  } else if (phase === 'D') {
     // Phase D: Phase C artifact 経由 manifest を読み verify + rotate gate test 実施 (本 PR S1-5)
     const manifestPath = `gs://${artifactBucketName}/pr-d4-backfill-artifacts/${runId}/manifest.json`;
     // dev 環境のみ rotate gate fixture test 実行可、cocoro/kanameone は強制 false (Codex 3rd I6)
@@ -363,6 +369,48 @@ async function main(): Promise<void> {
       );
       process.exit(4);
     }
+  } else if (phase === 'E') {
+    // Phase E: dev fixture rollback (S6 / BF24、Codex MCP 12th review I1 反映)
+    // env=dev hard gate を container 側でも明示 (workflow + index + orchestrator の 3 段 defense in depth の 2nd layer)
+    if (envName !== 'dev') {
+      console.error(
+        `FATAL: phase=E (rollback dev fixtures) requires env=dev; received env=${envName}`
+      );
+      process.exit(2);
+    }
+
+    // dry-run default true、`--confirm true` で実 delete
+    const confirmArg = readArg('--confirm', 'false');
+    const dryRun = confirmArg !== 'true';
+
+    console.log('\nPhase E (rollback dev fixtures) starting:');
+    console.log(`  prefixes: ${PR_D4_ROLLBACK_FIXTURE_PREFIX_ALLOWLIST.join(', ')}`);
+    console.log(`  dryRun: ${dryRun} (confirm=${confirmArg})`);
+
+    const rollbackStartedAt = new Date().toISOString();
+    const rollbackResult = await runRollback({
+      env: envName,
+      runId,
+      dryRun,
+      firestoreReader: new FirestoreRollbackReaderImpl(
+        db,
+        PR_D4_ROLLBACK_FIXTURE_PREFIX_ALLOWLIST
+      ),
+      firestoreWriter: new FirestoreRollbackWriterImpl(db),
+      artifactWriter: new GcsArtifactStorageWriter(artifactBucketRef),
+      artifactBucketName,
+      rollbackStartedAt,
+      scriptVersion: PR_D4_SCRIPT_VERSION,
+    });
+
+    console.log('\nPhase E complete:');
+    console.log(`  scannedDocs: ${rollbackResult.summary.scannedDocs}`);
+    console.log(`  targetedDocs: ${rollbackResult.summary.targetedDocs}`);
+    console.log(`  skippedDocs: ${rollbackResult.summary.skippedDocs}`);
+    console.log(`  dryRun: ${rollbackResult.summary.dryRun}`);
+    console.log(`  mainArtifact: ${rollbackResult.mainArtifactPath}`);
+    console.log(`  rollbackStartedAt: ${rollbackStartedAt}`);
+    console.log(`  rollbackCompletedAt: ${rollbackResult.summary.rollbackCompletedAt}`);
   }
 }
 
