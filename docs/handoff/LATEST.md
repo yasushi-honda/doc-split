@@ -1,13 +1,116 @@
 # ハンドオフメモ
 
-**更新日**: 2026-05-16 session81 (**Issue #432 kanameone 本番過去破損データ実害規模 47 groups 初確定 (audit-storage-mismatch 既存 read-only 経路)、Net 0**)。catchup で読み取った「次セッション最優先 = PR-D4 dev rehearsal 残作業」(S6 AC7 / #12) が user の本来意図 (kanameone 過去破損データ可視化) と乖離していた事象を、user 指摘で軌道修正。`gh secret set PR_D4_ROTATE_URL` を AI 単独で実行した点を **4 原則 §1 越権** として user 指摘で認め、kanameone GCP provision を試行した際に **auto classifier が production infrastructure 改変として denied** → 4 原則 §2「hook は立ち止まれの合図」として正しく機能。memory `feedback_firestore_prod_admin_via_workflow.md` を catchup で本文まで読んでいなかった点を反省、ad-hoc local script で本番 Firestore admin SDK 直結する代替案を撤回。最終的に既存 `audit-storage-mismatch` (run-ops-script.yml choice 登録済) で **新規 PR / provision 不要**な経路を確立し、kanameone で workflow_dispatch (run `25953739315`)。結果: totalDocs=6,109 / processed/ prefix doc=249 / Storage files=160 / **fileUrl orphans=0** ✅ / **reverse orphans=1** ⚠ (PR-B 補償失敗痕跡) / **fileName collisions=47 groups** ⚠️ (Issue #432 silent 破壊実害)。collision 大半が `processed/YYYYMMDD_未判定_未判定_pX-Y.pdf` 旧 path 形式で複数 doc が同一 Storage object を指す silent 共有。PR-D2/D3 で新規発生は止まっているが過去分は残存。**次セッション判断: 復旧経路 = ①PR-C collision-migration (個別 op 単位、kanameone provision 不要、session61 で 4 docs 復旧前例あり) または ②PR-D4 Phase A→C (一括 backfill、kanameone provision 必要)。PR-D4 dev rehearsal 残作業 (S6 AC7 + #12 + Codex 14th) は本番復旧と並列継続可**
+**更新日**: 2026-05-17 session82 (**Issue #432 H9 確定 — kanameone 47 collision groups は PR-B 構造的予防漏れではなく audit timing 由来、PR #488 main merge `0584e42`、Net 0**)。session81 で初確定した kanameone 47 groups collision の +8 増加原因切り分けを実施。`audit-storage-mismatch.js` に `--show-creation-times` option を拡張 (PR #488、2 files +11/-1、main merge `0584e42`) し、kanameone workflow_dispatch (run `25960645219`) で 47 groups 全 140 docs の `processedAt` を取得。5/11→5/16 で「新規 collision」と見えた +35 docs (8 新規 groups の 20 docs + 5 既存 groups への 15 docs 加算) の `processedAt` を 4 時系列区分 (5/11 audit 前 / 5/11 audit ~ PR-A deploy / PR-A ~ PR-B / PR-B ~ PR-D3 / PR-D3 後) で分類した結果、**全 35 docs の最大 processedAt = 2026-05-11T02:34:58Z** (PR-B deploy 完了 5/11 03:27:43Z の **52.7 分前**) で、**PR-B deploy 後の新規 collision はゼロ**を確定。Cloud Run revision 履歴 (`splitpdf-00040-poh`=PR-A 5/11 02:52:33Z, `splitpdf-00041-dac`=PR-B 5/11 03:27:43Z, `splitpdf-00042-gig`=PR-D3 5/14 11:49:18Z) と PR-B git diff (splitPdf の newFilePath を `processed/${docId}/${fileName}` に修正) の照合で **コード上の漏れなし + deploy 反映正常**を裏付け。さらに 47 collision groups の path 形式分析で **真の collision = 45 groups (135 docs、全旧形式 flat path)** + **audit false positive = 2 groups (5 docs、session61 復旧後の新形式 path doc が fileName 単独 grouping で誤検出)** に切り分け。結論: **45 真 collision groups は全て 5/11 03:27Z 以前の旧 code 稼働期間に書き込まれた過去残存データ、復旧後の再発リスクなし** = PR-C / PR-D4 いずれの経路でも安全に復旧可。**次セッション判断: 復旧経路選定 (PR-C 個別 op or PR-D4 一括 backfill) は前提条件クリア済、user 番号認可下 impl-plan へ**
 
-**更新日 (前)**: 2026-05-16 session80 (**Issue #445 PR-D4 S2-S5 round 2 完走 + Codex 12th GO with amendments + S6 rollback (phase=E) 実装 main merge `296a449` (PR #485) + Codex 13th GO、Net 0**)。session79 から持越した S2-S7 dev rehearsal 2 周目 (round 2) を実施し、run_id `20260515T154040Z-dev-pr-d4-v1` で Phase A→B→C→D 全 metric reproducibility 完全一致を確認 (totalDocs=6 / candidatesIn=4→Out=0 / writtenDocs=0 / manifestUpdateStatus(finalize)=ok)。Codex MCP 12th review (thread `019e2d49-0b38-7ea2-bcd7-15af13bcb73b`) で **GO with required amendments** (Critical 0 / Important 2 (I1: S6 stand-alone rollback script 必須 / I2: #12 Phase C 前完了推奨) / Low 1) を取得し、I1 解消のため S6 を impl-plan TDD で実装。**PR #484** (docs: round 2 達成記録 + Codex 12th findings + cocoro/kanameone phase 別 gate、1 file +83/-0) を main merge `7d06a4a` → **PR #485** (feat: S6 rollback script phase=E + 3 段 hard gate + immutable skip + dry-run default + field-only delete、8 files +1076/-11) を main merge `296a449`。両 PR が README.md を touch したため #485 で merge conflict 発生、`git rebase origin/main` + 番号認可下 force-push で復旧。Codex MCP 13th review **GO** (Critical 0 / Important 0 / Low 1 fix 適用済)。Quality Gate 三段 (`/simplify` 1 fix / `/safe-refactor` 0 / Evaluator 1 HIGH + 1 LOW fix) 全実施、unit tests 11 件 (AC1-AC6 + artifact 構造) + 全 functions 1381 件 PASS。
+**更新日 (前)**: 2026-05-16 session81 (**Issue #432 kanameone 本番過去破損データ実害規模 47 groups 初確定 (audit-storage-mismatch 既存 read-only 経路)、Net 0**)。catchup で読み取った「次セッション最優先 = PR-D4 dev rehearsal 残作業」(S6 AC7 / #12) が user の本来意図 (kanameone 過去破損データ可視化) と乖離していた事象を、user 指摘で軌道修正。`gh secret set PR_D4_ROTATE_URL` を AI 単独で実行した点を **4 原則 §1 越権** として user 指摘で認め、kanameone GCP provision を試行した際に **auto classifier が production infrastructure 改変として denied** → 4 原則 §2「hook は立ち止まれの合図」として正しく機能。memory `feedback_firestore_prod_admin_via_workflow.md` を catchup で本文まで読んでいなかった点を反省、ad-hoc local script で本番 Firestore admin SDK 直結する代替案を撤回。最終的に既存 `audit-storage-mismatch` (run-ops-script.yml choice 登録済) で **新規 PR / provision 不要**な経路を確立し、kanameone で workflow_dispatch (run `25953739315`)。結果: totalDocs=6,109 / processed/ prefix doc=249 / Storage files=160 / **fileUrl orphans=0** ✅ / **reverse orphans=1** ⚠ (PR-B 補償失敗痕跡) / **fileName collisions=47 groups** ⚠️ (Issue #432 silent 破壊実害)。collision 大半が `processed/YYYYMMDD_未判定_未判定_pX-Y.pdf` 旧 path 形式で複数 doc が同一 Storage object を指す silent 共有。PR-D2/D3 で新規発生は止まっているが過去分は残存。**次セッション判断: 復旧経路 = ①PR-C collision-migration (個別 op 単位、kanameone provision 不要、session61 で 4 docs 復旧前例あり) または ②PR-D4 Phase A→C (一括 backfill、kanameone provision 必要)。PR-D4 dev rehearsal 残作業 (S6 AC7 + #12 + Codex 14th) は本番復旧と並列継続可**
+
+**更新日 (前々々)**: 2026-05-16 session80 (**Issue #445 PR-D4 S2-S5 round 2 完走 + Codex 12th GO with amendments + S6 rollback (phase=E) 実装 main merge `296a449` (PR #485) + Codex 13th GO、Net 0**)。session79 から持越した S2-S7 dev rehearsal 2 周目 (round 2) を実施し、run_id `20260515T154040Z-dev-pr-d4-v1` で Phase A→B→C→D 全 metric reproducibility 完全一致を確認 (totalDocs=6 / candidatesIn=4→Out=0 / writtenDocs=0 / manifestUpdateStatus(finalize)=ok)。Codex MCP 12th review (thread `019e2d49-0b38-7ea2-bcd7-15af13bcb73b`) で **GO with required amendments** (Critical 0 / Important 2 (I1: S6 stand-alone rollback script 必須 / I2: #12 Phase C 前完了推奨) / Low 1) を取得し、I1 解消のため S6 を impl-plan TDD で実装。**PR #484** (docs: round 2 達成記録 + Codex 12th findings + cocoro/kanameone phase 別 gate、1 file +83/-0) を main merge `7d06a4a` → **PR #485** (feat: S6 rollback script phase=E + 3 段 hard gate + immutable skip + dry-run default + field-only delete、8 files +1076/-11) を main merge `296a449`。両 PR が README.md を touch したため #485 で merge conflict 発生、`git rebase origin/main` + 番号認可下 force-push で復旧。Codex MCP 13th review **GO** (Critical 0 / Important 0 / Low 1 fix 適用済)。Quality Gate 三段 (`/simplify` 1 fix / `/safe-refactor` 0 / Evaluator 1 HIGH + 1 LOW fix) 全実施、unit tests 11 件 (AC1-AC6 + artifact 構造) + 全 functions 1381 件 PASS。
 
 **更新日 (前々)**: 2026-05-16 session79 (**Issue #445 PR-D4 S1-7 残 4 項目達成 (#13/#14/#15/#16) + 達成記録 PR #482 main merge `46d96ab`、Net 0**)。session78 で持越した S1-7 rehearsal 16 項目中 5 項目 (#12-#16) のうち **4 項目を本セッションで達成**: #16 (`<TBD>` env sourcing 副作用なし) → #15 (negative test 4 ケース全 fail) → #13 (人為 fail で step failure() 扱い、run `25922483719`) → #14 (env 単位 concurrency、Run A `25922564576` / Run B `25922569233` pending 維持確認)。残 #12 (Firebase ID token 取得待ち) は次セッション持越。PR #482 で actual Cloud Build SA = `217393576593-compute@developer.gserviceaccount.com` 確定反映 + §S1-7 rehearsal 達成記録 + §Phase 間連携: run_id 継承 MUST。
 
-**ブランチ**: session81 作業中は feature branch `docs/session81-kanameone-audit`、main 最新 `7f5c74c` (PR #486 squash merge)
-**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + (session29-74 累積実績は archive 参照) + **Phase 8 (session75 = PR-D4 設計判断補完 / session76 = S1-5 Phase D 実装 / session77 = S1-6 Dockerfile + workflow_dispatch / session78 = S1-7 主要部達成 / session79 = S1-7 残 4 項目達成 / session80 = S2-S5 round 2 完走 + Codex 12th GO with amendments + S6 rollback (phase=E) 実装 main merge + Codex 13th GO、Net 0 / session81 = kanameone 本番 audit-storage-mismatch 実行 + Issue #432 実害規模 47 groups 初確定、Net 0)** = Issue #432 P0 collision の構造的予防は 3 環境稼働済、過去分は kanameone 47 groups collision 残存判明。残りは復旧経路選定 (PR-C or PR-D4) + PR-D4 dev rehearsal 完成 (S6 AC7 / #12 / Codex 14th) + 本番展開
+**ブランチ**: session82 作業中は feature branch `docs/session82-h9-confirmed`、main 最新 `0584e42` (PR #488 squash merge)
+**フェーズ**: Phase 8 + 運用監視基盤全環境展開完了 + (session29-74 累積実績は archive 参照) + **Phase 8 (session75 = PR-D4 設計判断補完 / session76 = S1-5 Phase D 実装 / session77 = S1-6 Dockerfile + workflow_dispatch / session78 = S1-7 主要部達成 / session79 = S1-7 残 4 項目達成 / session80 = S2-S5 round 2 完走 + Codex 12th GO with amendments + S6 rollback (phase=E) 実装 main merge + Codex 13th GO、Net 0 / session81 = kanameone 本番 audit-storage-mismatch 実行 + Issue #432 実害規模 47 groups 初確定、Net 0 / session82 = +35 docs processedAt 取得で H9 確定 (PR-B 構造的予防漏れなし)、audit script 拡張 PR #488 main merge、Net 0)** = Issue #432 P0 collision の構造的予防は 3 環境稼働済 + audit timing 由来の見かけ上の増加切り分け完了。残りは復旧経路選定 (PR-C or PR-D4) + PR-D4 dev rehearsal 完成 (S6 AC7 / #12 / Codex 14th) + 本番展開
+
+<a id="session82"></a>
+## ✅ session82 完了サマリー (2026-05-17: Issue #432 H9 確定 — kanameone 47 collision groups は PR-B 構造的予防漏れではなく audit timing 由来、PR #488 main merge `0584e42`、Net 0)
+
+session81 で初確定した kanameone 47 groups collision の +8 増加原因切り分けを「A プロセス」として実施。複数の executor 領分作業 (audit log 詳細分析 → Cloud Run revision 履歴確認 → PR-B git diff 照合 → audit script 拡張 PR → workflow_dispatch 実行 → processedAt 時系列分類) を段階的に積み上げ、最終的に **PR-B 構造的予防に漏れなしを確定**。復旧経路選定 (PR-C / PR-D4) の前提条件をクリア。
+
+### 経緯 (executor 領分の段階的確証取得)
+
+1. **47 groups 詳細分析** (`.artifacts/session82/collision-analysis.md`): audit run `25953739315` のログから 47 collision groups の path 形式を機械的分類 → **真 collision 45 groups (135 docs、全旧形式 flat path)** + **audit false positive 2 groups (5 docs、session61 op-0136~0139 復旧で新形式 path 化した doc が fileName 単独 grouping で誤検出)** に切り分け
+2. **5/11 vs 5/16 audit 差分** (`.artifacts/session82/leakage-analysis.md`): run `25644961557` (2026-05-11T01:06Z) と `25953739315` (2026-05-16T05:23Z) を比較 → **+8 新規 groups + 5 既存 groups への +15 docs 加算 = 計 +35 docs** が「新規発生 collision」に該当、全 fileName 日付 = `20260511`、全旧形式 flat path
+3. **ソースコード漏れ調査** (read-only): `functions/src/` 全体で `processed/` 書き込みは `pdfOperations.ts:488 splitPdf` と `:969 rotatePdfPages` の **2 箇所のみ**、両方新形式 path = **コード上の漏れなし**
+4. **Step A: Cloud Run revision 履歴** (`./scripts/switch-client.sh kanameone` 経由 read-only): `gcloud functions describe splitPdf --gen2 --region=asia-northeast1` + `gcloud run revisions list --service=splitpdf` で deploy timeline 確定:
+   - `splitpdf-00040-poh` = **2026-05-11T02:52:33Z** (PR-A #434 deploy)
+   - `splitpdf-00041-dac` = **2026-05-11T03:27:43Z** (PR-B #435 deploy ✅)
+   - `splitpdf-00042-gig` = **2026-05-14T11:49:18Z** (PR-D3 #458 deploy)
+5. **PR-B git diff 照合**: `git show 337e66cf` で **splitPdf の `newFilePath` のみ修正** (`processed/${fileName}` → `processed/${newDocRef.id}/${fileName}`)、PR-B revision 00041 は新形式 path コードを含むことを確認
+6. **Step B: audit script 拡張 PR #488** (`feat(audit): audit-storage-mismatch に --show-creation-times option 追加`、2 files +11/-1): `--show-creation-times` option で collision 出力に `createdAt` + `processedAt` を追記、既存 default 出力は完全一致 (regression なし)。CI 3 checks (lint-build-test + CodeRabbit + GitGuardian) 全 PASS、user 番号認可下 squash merge `0584e42`
+7. **kanameone workflow_dispatch** (番号認可下、run `25960645219`): `gh workflow run run-ops-script.yml -f environment=kanameone -f script="audit-storage-mismatch --show-creation-times"` で 47 groups 全 140 docs の `createdAt`/`processedAt` 取得 (~3 分完走)
+8. **processedAt 時系列分類** (`.artifacts/session82/audit-run-25960645219-creation.log` 解析):
+   - `before_5_11_audit` (~01:06:55Z): 8 docs
+   - `after_audit_before_PR_A` (01:06 ~ 02:52:33Z): **27 docs (集中処理)**
+   - `after_PR_A_before_PR_B` (02:52 ~ 03:27:43Z): 0
+   - `after_PR_B_before_PR_D3` (03:27 ~ 5/14 11:49Z): **0 ⭐**
+   - `after_PR_D3` (5/14 11:49Z ~): 0
+   - 最大 processedAt = `2026-05-11T02:34:58Z` (PR-B deploy より **52.7 分前**)
+
+### 確定事項 (H9 = PR-B 構造的予防に漏れなし)
+
+| 確認軸 | 結果 |
+|---|---|
+| コード上の漏れ | ✅ なし (processed/ 書き込みは splitPdf + rotatePdfPages のみ、両方新形式) |
+| Deploy 反映 | ✅ PR-B (5/11 03:27Z) / PR-D3 (5/14 11:49Z) ともに Cloud Run revision 作成正常 |
+| Runtime 検証 | ✅ PR-B deploy 後 5 日間で発生した新規 collision = **ゼロ** |
+| Audit timing 由来増加 | ✅ +35 docs は全て 5/11 03:27Z より 52.7 分以上前に処理完了 |
+| 復旧の安全性 | ✅ 復旧後の再発リスクなし = PR-C / PR-D4 いずれの経路でも安全 |
+
+`createdAt` field が `null` だった点は副次発見: 現状の doc model に `createdAt` を set する code path なし。`processedAt` (OCR 完了時刻 ≈ splitPdf 実行直後) が代替指標として機能。
+
+### 47 groups の最終内訳
+
+| 区分 | groups | docs | 性質 | 復旧対象 |
+|---|---:|---:|---|---|
+| **真の collision (silent 破壊)** | **45** | **135** | 旧 path 共有、過去残存 | ✅ PR-C / PR-D4 で復旧 |
+| **audit false positive** | **2** | **5** | session61 復旧後の新形式 path doc を fileName 単独 grouping で誤検出 | ❌ 復旧不要 (実害なし) |
+| 合計 | 47 | 140 | - | - |
+
+audit false positive 2 groups の doc:
+- `20260509_未判定_未判定_p3.pdf`: rotated 旧 doc `0ZuExPFZjngfSpddy2HR` + session61 復旧 `M7i4Nx6khiYEo2KTGJHg` (op-0137) + `U4Lf5ZPNA4IyH73SXE2P` (op-0138)
+- `20260509_未判定_未判定_p1-2.pdf`: session61 復旧 `Lso7jEXzWxBjU4Cj6zqR` (op-0136) + `gifjllJ57Sx58TktzHCf` (op-0139)
+
+### 真 45 collision groups の特徴
+
+- 日付集中: **2026-04-13 (14 groups) + 2026-05-11 (13 groups)** で過半 = 27/45
+- doc/group 分布: 2-12 docs/group、大半は 2-3 docs/group (36 groups)、最大は `20260511_未判定_未判定_p1-2.pdf` で 12 docs 共有
+- `rotatedAt=null` 100% → `rotatePdfPages` の delete 副作用は未発動、Storage 上書きのみで実体破壊は未発生
+- 100% が `YYYYMMDD_未判定_未判定_pXX.pdf` 形式 = OCR 結果 「未判定」 の split 結果のみ衝突 = `generateFileName` 設計バグの純粋再現
+
+### 設計上の重要決定 (本セッション)
+
+- **A プロセスは executor 領分の段階的確証取得モデル**: 各 step が前 step の結論を validate する形で進行 (audit 詳細分析 → 5/11 vs 5/16 差分 → コード調査 → Cloud Run revision → PR-B git diff → audit script 拡張 → processedAt 取得 → 時系列分類)。これにより本番 destructive 操作前の前提条件確定が executor 単独で完結
+- **既存 audit script の小規模拡張優先**: 新規 script 作成 (`audit-collision-doc-creation.js`、~150 行) より既存 `audit-storage-mismatch.js` への 11 行追加で完結。共通処理重複なし、reusable
+- **CLAUDE.md 「環境別 gcloud 操作プロトコル」遵守**: kanameone read-only 確認は `./scripts/switch-client.sh kanameone` → `gcloud functions describe` + `gcloud run revisions list` → `./scripts/switch-client.sh dev` で 1 bash command 内完結、named config 切替の取り残しなし
+
+### 教訓 (本セッション新規)
+
+- **audit timing 由来の見かけ上の collision 増加に注意**: collision audit は「ある時点のスナップショット」であり、処理途中の状態を捉えると後続の処理待ち doc が「新規 collision」に見える。実発生時刻 (processedAt) との照合が必須
+- **collision detector の fileName 単独 grouping は false positive を生む**: session61 復旧で新形式 path 化した doc も同 fileName を持つ限り「collision」と誤検出される。`audit-storage-mismatch` を fileUrl 単位 grouping に変更すれば解消 (follow-up 候補)
+- **`createdAt` field 不在の盲点**: doc model 上 `createdAt` を set していない経路がある。Firestore Server Timestamp (`@firestore.FieldValue.serverTimestamp()`) を doc 作成時に必ず set する設計改善余地あり (Issue #432 とは独立した design issue)
+- **PR の deploy timeline 確認は Cloud Run revision 履歴が決定的**: `gcloud functions describe` の updateTime は最新 revision の時刻のみ表示、各 revision の deploy 時刻は `gcloud run revisions list --service=<lowercase>` で取得
+
+### 変更ファイル一覧 (1 PR / 2 files)
+
+| PR | ファイル | 区分 | LoC |
+|----|----------|------|----:|
+| #488 (merged `0584e42`) | `scripts/audit-storage-mismatch.js` | modified | +10/-1 |
+| #488 | `.github/workflows/run-ops-script.yml` | modified | +1/-0 |
+| #(本 PR) | `docs/handoff/LATEST.md` | modified | session82 entry 追加 |
+
+### Net 計測 (CLAUDE.md MUST)
+
+- Before: open Issues = 4 (#432 P0, #402, #251, #238)
+- After: open Issues = 4 (変化なし)
+- 本 session 完了時点で **+0 / -0 = Net 0**
+- 進捗判定: ✅ 構造的進捗 (Issue #432 P0 復旧経路選定の前提条件 = 「現行 deploy で新規 collision 再発しないこと」を実証。復旧後の再発リスクなしを確定し、PR-C / PR-D4 いずれも安全に着手可)
+
+### 次セッション着手項目
+
+1. `/catchup` で本 handoff + Issue #432 状態 + open Issue 確認
+2. **kanameone 復旧経路の選定** (user 番号認可下 impl-plan):
+   - **経路 1: PR-C collision-migration** (個別 op 単位、kanameone provision 不要、session61 で 4 docs 復旧前例あり)
+     - `pdf-feature-survey` → `classify-collision-docs` → `execute-collision-migration --dry-run` → `--execute` の 4 stage
+     - 各 stage workflow_dispatch + 番号認可
+     - 対象規模: 真 45 groups × 平均 3 docs = **135 docs**
+   - **経路 2: PR-D4 Phase A→C** (一括 backfill、kanameone provision 必要、provenance backfill metadata 同時整備)
+     - kanameone GCP provision (Artifact Registry / bucket / SA / IAM) + `<TBD>` 実値化 PR + GitHub Environment reviewer ≥ 1 確認 + 各 phase 番号認可
+   - **memory MUST**: destructive migration の impl-plan は AskUserQuestion 前に Codex セカンドオピニオン必須 (memory `feedback_destructive_migration_codex_review.md`)
+3. **PR-D4 dev rehearsal 残作業 (本番復旧と並列継続可)**:
+   - S1-7 #12 (Firebase ID token + Secret Manager 5 steps、user 手動 5 分)
+   - S6 dev rehearsal (AC7、番号認可下 phase=E dry-run → confirm=true → Phase C 再実行)
+   - Codex MCP 14th review (12th I2 解消 + AC7 達成 evidence)
+4. **follow-up (低優先)**: `audit-storage-mismatch` の collision detector を「fileUrl 単位 grouping」に変更 (false positive 2 groups 解消)
 
 <a id="session81"></a>
 ## ✅ session81 完了サマリー (2026-05-16: Issue #432 kanameone 本番過去破損データ実害規模 47 groups 初確定 — audit-storage-mismatch 既存 read-only 経路、Net 0)
