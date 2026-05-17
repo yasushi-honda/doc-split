@@ -4,18 +4,19 @@
  * OOM ガード発動時バナーの表示/非表示を検証する。silent-failure-hunter CRT-1 対応
  * (Issue #402 段階2、PR #496) で BE 側に `truncated` / `actualMatchedCount` flag を
  * 追加した後、FE 側でユーザーが切り捨て事実に気付ける semi-silent 状態を実現する。
+ *
+ * E2E (Playwright) では別 issue で実機確認予定 (dark mode 視覚検証、aria-live 通知の
+ * 実際の screen reader 挙動)。本ファイルは描画ロジック契約 (props 駆動の表示判定 +
+ * accessibility role 属性 + 防御短絡) の単体検証に範囲を限定する。
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { SearchBar } from '../SearchBar'
 
-// useDebouncedSearch をモックして戻り値を直接制御
-vi.mock('@/hooks/useSearch', async () => {
-  return {
-    useDebouncedSearch: vi.fn(),
-  }
-})
+vi.mock('@/hooks/useSearch', async () => ({
+  useDebouncedSearch: vi.fn(),
+}))
 
 import { useDebouncedSearch } from '@/hooks/useSearch'
 
@@ -53,77 +54,88 @@ function setupMockedSearch(overrides: Partial<MockedHookReturn>): void {
   })
 }
 
+/**
+ * dropdown を open させて render する shorthand。mock の query='test' により
+ * `query.length >= 2 && setIsOpen(true)` で focus 1 回で確実に dropdown が描画される。
+ */
+function renderAndOpen(): void {
+  render(<SearchBar />)
+  const input = screen.getByPlaceholderText('顧客名、事業所名、書類種別で検索...')
+  fireEvent.focus(input)
+}
+
 describe('SearchBar — OOM ガード発動時バナー (Issue #497)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
 
-  it('truncated=true + actualMatchedCount>0 でバナーが表示される (silent loss → semi-silent)', () => {
+  it('truncated=true + actualMatchedCount>0 でバナー描画 + role=status + 文言固定', () => {
+    setupMockedSearch({ total: 500, truncated: true, actualMatchedCount: 501 })
+    renderAndOpen()
+
+    // CRIT-1 対応: getByRole は要素未発見で自動 fail (前回 fail 時の if-else fallback 廃止)。
+    const banner = screen.getByRole('status')
+
+    // CRIT-2 対応: aria-live region 相当の role="status" 属性を直接 fixate。
+    // class だけ残して role が消えるリファクタは silent regression のため明示固定する。
+    expect(banner.getAttribute('role')).toBe('status')
+
+    // 文言は silent loss 改善の核心 UX (= ユーザーが「実 M 件中の上位 N 件」事実に
+    // 気付けて検索語句絞り込みに誘導される) のため 3 要素を独立検証する。
+    const text = banner.textContent ?? ''
+    expect(text).toContain('該当が多すぎるため上位 500 件のみ表示しています')
+    expect(text).toContain('501 件中')
+    expect(text).toContain('検索語句を追加すると絞り込めます')
+  })
+
+  it('truncated=false ではバナー非表示', () => {
+    setupMockedSearch({ total: 20, truncated: false, actualMatchedCount: 0 })
+    renderAndOpen()
+    expect(screen.queryByRole('status')).toBeNull()
+  })
+
+  it('truncated=true でも actualMatchedCount=0 ならバナー非表示 (防御短絡: 数値不正値)', () => {
+    setupMockedSearch({ total: 500, truncated: true, actualMatchedCount: 0 })
+    renderAndOpen()
+    expect(screen.queryByRole('status')).toBeNull()
+  })
+
+  it('truncated=true でも actualMatchedCount=undefined ならバナー非表示 (防御短絡: 型契約)', () => {
+    // BE contract 違反シミュレーション: spread 漏れで `truncated: true` のみ送られ
+    // `actualMatchedCount` が欠落するケース。FE 側 `?? 0` フォールバック後に
+    // `&& actualMatchedCount > 0` で短絡されるため非表示が正解 (IMP-3 対応)。
     setupMockedSearch({
+      total: 500,
+      truncated: true,
+      actualMatchedCount: undefined as unknown as number,
+    })
+    renderAndOpen()
+    expect(screen.queryByRole('status')).toBeNull()
+  })
+
+  it('isLoading=true のときは truncated=true でもバナー非表示 (描画ネスト位置の固定)', () => {
+    // バナーは `{!isLoading && results.length > 0 && (<>...</>)}` 配下にネスト。
+    // ローディング中にバナーが残るリファクタを silent regression として検出 (IMP-4 対応)。
+    setupMockedSearch({
+      isLoading: true,
       total: 500,
       truncated: true,
       actualMatchedCount: 501,
     })
-
-    render(<SearchBar />)
-
-    // dropdown は query.length >= 2 + focus で開く設計だが、テストでは初期 isOpen=false
-    // のため、まず query を入力扱いにする必要がある。ここでは isOpen を制御できないので、
-    // 直接 useDebouncedSearch の query を 2 文字以上 + onFocus シミュレーションは不要で、
-    // テスト対象は「results.length > 0 のとき truncated=true ならバナーが現れる」。
-    // 実際の DOM は dropdown 内 (isOpen=true) でしか描画されないため、テストでは
-    // SearchBar 内部の isOpen を強制的に true にする手段が必要。
-    //
-    // 簡易策: input に value='test' (query.length>=2) を入れた状態で focus を発火させて
-    // dropdown を開く。
-    const input = screen.getByPlaceholderText('顧客名、事業所名、書類種別で検索...')
-    fireEvent.focus(input)
-
-    // バナー role="status" を直接検索 (dropdown open 後に DOM に存在)
-    const banner = screen.queryByRole('status')
-    if (banner) {
-      expect(banner.textContent).toContain('該当が多すぎるため上位 500 件のみ表示しています')
-      expect(banner.textContent).toContain('501 件中')
-      expect(banner.textContent).toContain('検索語句を追加すると絞り込めます')
-    } else {
-      // dropdown が open していない場合は isOpen 制御が必要。本テストは描画ロジック確認
-      // のため、focus 後に dropdown が開いていない場合は SearchBar の isOpen state を
-      // 検証できない。代わりに「results が描画される DOM 構造を Card 配下に持つ」前提で
-      // 不開状態をスキップせず明示的に fail させる。
-      throw new Error(
-        'dropdown が open していないためバナー検証不可。SearchBar の onFocus 条件を確認してください。',
-      )
-    }
-  })
-
-  it('truncated=false ではバナーが表示されない (非発動側)', () => {
-    setupMockedSearch({
-      total: 20,
-      truncated: false,
-      actualMatchedCount: 0,
-    })
-
-    render(<SearchBar />)
-    const input = screen.getByPlaceholderText('顧客名、事業所名、書類種別で検索...')
-    fireEvent.focus(input)
-
-    // バナーは存在してはならない
+    renderAndOpen()
     expect(screen.queryByRole('status')).toBeNull()
   })
 
-  it('truncated=true でも actualMatchedCount=0 ならバナーが表示されない (防御的 short-circuit)', () => {
-    // 異常系: BE 側 contract 違反で truncated=true なのに actualMatchedCount が欠落する
-    // ケース。SearchBar 側は && actualMatchedCount > 0 でガードしているため非表示が正解。
+  it('results.length===0 のときは truncated=true でもバナー非表示 (BE contract 違反防御)', () => {
+    // 論理的にあり得ないが BE 側 contract 違反 (truncated=true なのに documents=[]) で
+    // 起こり得る。`results.length > 0` ガード破壊を回帰検出 (IMP-4 対応)。
     setupMockedSearch({
-      total: 500,
+      results: [],
+      total: 0,
       truncated: true,
-      actualMatchedCount: 0,
+      actualMatchedCount: 501,
     })
-
-    render(<SearchBar />)
-    const input = screen.getByPlaceholderText('顧客名、事業所名、書類種別で検索...')
-    fireEvent.focus(input)
-
+    renderAndOpen()
     expect(screen.queryByRole('status')).toBeNull()
   })
 })

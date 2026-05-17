@@ -54,9 +54,17 @@ interface UseSearchResult {
   results: SearchResultDocument[];
   total: number;
   hasMore: boolean;
-  /** Issue #402 段階2 OOM ガード発動時のみ true (SearchBar バナー表示用)。 */
+  /**
+   * Issue #402 段階2 OOM ガード発動時のみ true。SearchBar の表示判定は
+   * `truncated && actualMatchedCount > 0` の AND 条件 (BE contract 違反時の防御短絡)。
+   * BE が field を返さない場合は `?? false` でフォールバック。
+   */
   truncated: boolean;
-  /** Issue #402 段階2 OOM ガード発動時のみ実マッチ件数。未発動時は 0 (SearchBar 未表示)。 */
+  /**
+   * Issue #402 段階2 OOM ガード発動時のみ BE から付与される (optional)。truncate 前の
+   * 実マッチ件数。FE では未発動時 / フィールド欠落時に 0 にフォールバック (`?? 0`)。
+   * 0 のときは BE contract 違反として SearchBar のバナーは非表示 (上の AND 短絡)。
+   */
   actualMatchedCount: number;
   isLoading: boolean;
   isError: boolean;
