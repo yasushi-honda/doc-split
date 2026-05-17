@@ -79,6 +79,11 @@ interface CacheEntry {
 const CACHE_TTL_MS = 10 * 60 * 1000;  // 10分
 const cache = new Map<string, CacheEntry>();
 
+// OOM ガード上限 (Issue #402 段階2)。256MiB Functions で db.getAll() の戻りを安全に
+// 保持できる件数の暫定値。document 1 件 ~ 数 KB × 500 = 数 MB 程度。段階1 計測ログの
+// N 分布から見直す前提の暫定値で、段階3 (posting に fileDate 内包) まで保持する。
+const MAX_GETALL = 500;
+
 function getCacheKey(query: string, limit: number, offset: number): string {
   return `${query}:${limit}:${offset}`;
 }
@@ -267,6 +272,25 @@ export const searchDocuments = onCall<SearchRequest>(
       return result;
     }
 
+    // OOM ガード暫定 (Issue #402 段階2)。256MiB Functions で getAll の戻りメモリを
+    // 安全圏に抑えるため、マッチ全件が MAX_GETALL を超えた場合は score 降順で上位 N
+    // 件のみ getAll する。fileDate ソートは MAX_GETALL 件の範囲内に限定 (= 全体ソート
+    // の部分犠牲)。query は PII リスク (顧客名・ファイル名等) のため warn 出力に含めず
+    // queryLength のみ記録 (段階1 perf ログと整合)。真の対応 (段階3 = posting に
+    // fileDate 内包) は段階1 計測ログの N 分布データに基づき後続 Issue で判断する。
+    const truncatedBeforeCount = filteredDocs.length;
+    let truncated = false;
+    if (truncatedBeforeCount > MAX_GETALL) {
+      filteredDocs.sort((a, b) => b.score - a.score);
+      filteredDocs.length = MAX_GETALL;
+      truncated = true;
+      console.warn('[searchDocuments] filteredDocs exceeds safe getAll limit', {
+        queryLength: query.length,
+        matchedCount: truncatedBeforeCount,
+        limit: MAX_GETALL,
+      });
+    }
+
     // マッチ全件の documents を取得（fileDate / processedAt をソートキーに使用するため）
     // db.getAll() の戻り順は ref 渡し順と一致するため、filteredDocs と index で対応する
     const allDocRefs = filteredDocs.map(d => db.collection('documents').doc(d.docId));
@@ -324,14 +348,17 @@ export const searchDocuments = onCall<SearchRequest>(
 
     // perf observability ログ (Issue #402 段階1)
     // 閾値超過時のみ出力。query 自体は PII リスク (顧客名・ファイル名等が含まれ得る) のため
-    // queryLength のみ記録。N の分布・elapsedMs から OOM ガード移行判断 (#402 段階2/3) を行う。
+    // queryLength のみ記録。N の分布・elapsedMs から OOM ガード移行判断 (#402 段階3) を行う。
+    // matchedCount は OOM ガード暫定 (段階2) 発動後の値ではなく実マッチ件数 (truncatedBeforeCount)
+    // を記録し、N 分布の正確な観測を継続する。truncated=true は段階2 ガード発動を示す。
     const elapsedMs = Date.now() - startMs;
-    if (filteredDocs.length > 100 || elapsedMs > 1000) {
+    if (truncatedBeforeCount > 100 || elapsedMs > 1000) {
       console.info('[searchDocuments] perf', {
         queryLength: query.length,
-        matchedCount: filteredDocs.length,
+        matchedCount: truncatedBeforeCount,
         fetchedCount: sortableDocs.length,
         orphanCount: orphanedDocIds.length,
+        truncated,
         elapsedMs,
       });
     }

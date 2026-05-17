@@ -659,4 +659,193 @@ describe('searchDocuments handler integration (#401a, Closes #401)', () => {
       expect(perfLogs).to.have.lengthOf(0);
     });
   });
+
+  // ----------------------------------------
+  // AC10: OOM ガード暫定 (Issue #402 段階2)
+  //
+  // filteredDocs.length > MAX_GETALL (=500) のとき、score 降順で上位 MAX_GETALL 件
+  // のみを getAll する。fileDate ソートは MAX_GETALL 件の範囲内に限定 (部分犠牲)。
+  // 256MiB Functions の OOM 防止が目的。本 AC では production 定数 MAX_GETALL=500
+  // に依存しつつ、501 件で境界 +1 を検証する (production 定数の変更は別 PR で扱う)。
+  // ----------------------------------------
+  describe('AC10: OOM ガード暫定 (#402 段階2)', () => {
+    let originalWarn: typeof console.warn;
+    let warnCalls: unknown[][];
+    let originalInfo: typeof console.info;
+    let infoCalls: unknown[][];
+
+    beforeEach(() => {
+      originalWarn = console.warn;
+      warnCalls = [];
+      console.warn = (...args: unknown[]) => {
+        warnCalls.push(args);
+      };
+      originalInfo = console.info;
+      infoCalls = [];
+      console.info = (...args: unknown[]) => {
+        infoCalls.push(args);
+      };
+    });
+
+    afterEach(() => {
+      console.warn = originalWarn;
+      console.info = originalInfo;
+    });
+
+    it('matchedCount > 500 のとき score 上位 500 件のみ取得、warn 発火 + truncated=true', async () => {
+      await seedUser();
+
+      // AC2 と同じ「score-desc を実 fixture で強制検証」設計:
+      // 2 token AND + token 順 (token1 高 df / token2 低 df) で idf > 0 を成立させる。
+      // 単一 token search では totalDocs == df となり idf = log(1) = 0 で score 差が
+      // 消えるため、501 件全件が同 score になり OOM ガードの「上位 N 件取得」が
+      // 検証できない (前回 fail 原因)。
+      //
+      // ac10common: df=10000 (人為値)、501 doc 全部に posting (score=1.0)
+      // ac10rare:   df=2 (人為値)、    501 doc 全部に posting (score=1..501)
+      // → 最初の token (ac10common) で totalDocs=10000、次の token (ac10rare) で
+      //   idf = log(10001/3) ≈ 8.12 が成立 → ac10rare 経由の score=i*8.12 が最終 score
+      const MATCHED = 501;
+      const TRUNCATE_LIMIT = 500;
+      const commonPostings: Record<string, { score: number; fieldsMask: number }> = {};
+      const rarePostings: Record<string, { score: number; fieldsMask: number }> = {};
+      for (let i = 1; i <= MATCHED; i++) {
+        const docId = `doc-ac10-${String(i).padStart(3, '0')}`;
+        commonPostings[docId] = { score: 1.0, fieldsMask: 8 };
+        rarePostings[docId] = { score: i, fieldsMask: 8 };
+      }
+      await seedSearchIndex('ac10common', commonPostings, 10000);
+      await seedSearchIndex('ac10rare', rarePostings, 2);
+
+      // documents を batch write で seed (admin SDK batch 制限 500 op/commit のため 2 batch)。
+      const proc = ts('2026-04-27T12:00:00Z');
+      for (let batchStart = 1; batchStart <= MATCHED; batchStart += 400) {
+        const batch = db.batch();
+        const batchEnd = Math.min(batchStart + 399, MATCHED);
+        for (let i = batchStart; i <= batchEnd; i++) {
+          const docId = `doc-ac10-${String(i).padStart(3, '0')}`;
+          batch.set(db.doc(`documents/${docId}`), {
+            fileName: `oom-${docId}.pdf`,
+            customerName: '',
+            officeName: '',
+            documentType: '',
+            fileDate: null,
+            processedAt: proc,
+            status: 'processed',
+          });
+        }
+        await batch.commit();
+      }
+
+      // Act
+      const result = await callSearch({
+        query: 'ac10common ac10rare',
+        limit: 50,
+        offset: 0,
+      });
+
+      // Assert 1: total は取得した件数 (MAX_GETALL=500)。 全マッチ 501 件中 1 件は犠牲。
+      expect(result.total).to.equal(TRUNCATE_LIMIT);
+      expect(result.hasMore).to.be.true;
+
+      // Assert 2: 除外される 1 件 (score=1, doc-ac10-001) は結果セットに含まれない。
+      // limit=50 で 1 ページ目を取る場合、score 降順なら上位 50 件 (501..452) で 001 は含まれない。
+      const ids = result.documents.map((d) => d.id);
+      expect(ids).to.not.include('doc-ac10-001');
+
+      // Assert 3: 1 ページ目は score 上位 50 件 (501..452) が含まれる。
+      // fileDate=null + processedAt 同一 + score 降順 → ID 末尾 501..452 が並ぶ。
+      const expectedTopIds = Array.from(
+        { length: 50 },
+        (_, k) => `doc-ac10-${String(MATCHED - k).padStart(3, '0')}`
+      );
+      expect(ids).to.deep.equal(expectedTopIds);
+
+      // Assert 4: console.warn が発火している (OOM ガード payload を pattern match で絞り込む)。
+      const guardWarns = warnCalls.filter((args) =>
+        args.some(
+          (a) => typeof a === 'string' && a.includes('exceeds safe getAll limit')
+        )
+      );
+      expect(guardWarns).to.have.lengthOf(1);
+
+      // Assert 5: warn payload は queryLength のみ含み raw query は含まない (PII リスク対策)。
+      // payload は 2 番目の argument (object) として渡される。
+      const guardPayload = guardWarns[0]![1] as {
+        queryLength?: number;
+        matchedCount?: number;
+        limit?: number;
+        query?: string;
+      };
+      expect(guardPayload.queryLength).to.equal('ac10common ac10rare'.length);
+      expect(guardPayload.matchedCount).to.equal(MATCHED);
+      expect(guardPayload.limit).to.equal(TRUNCATE_LIMIT);
+      expect(guardPayload).to.not.have.property('query');
+
+      // Assert 6: perf info ログに truncated=true が反映される (matchedCount は実マッチ数 501)。
+      const perfLogs = infoCalls.filter((args) =>
+        args.some((a) => typeof a === 'string' && a.includes('[searchDocuments] perf'))
+      );
+      expect(perfLogs).to.have.lengthOf(1);
+      const perfPayload = perfLogs[0]![1] as {
+        matchedCount?: number;
+        fetchedCount?: number;
+        truncated?: boolean;
+      };
+      expect(perfPayload.matchedCount).to.equal(MATCHED);
+      expect(perfPayload.fetchedCount).to.equal(TRUNCATE_LIMIT);
+      expect(perfPayload.truncated).to.be.true;
+    }).timeout(60000); // 501 件 seed + getAll で時間がかかる場合のマージン
+
+    it('matchedCount <= 500 のとき OOM ガード warn は発火せず truncated=false', async () => {
+      // 境界の反対側: 100 件 (perf info ログ閾値は超えるが OOM ガードは未発動) を seed。
+      await seedUser();
+      const COUNT = 150;
+      const postings: Record<string, { score: number; fieldsMask: number }> = {};
+      for (let i = 1; i <= COUNT; i++) {
+        postings[`doc-ac10b-${i}`] = { score: i, fieldsMask: 8 };
+      }
+      await seedSearchIndex('ac10bbelowword', postings);
+
+      const proc = ts('2026-04-27T12:00:00Z');
+      const batch = db.batch();
+      for (let i = 1; i <= COUNT; i++) {
+        batch.set(db.doc(`documents/doc-ac10b-${i}`), {
+          fileName: `below-${i}.pdf`,
+          customerName: '',
+          officeName: '',
+          documentType: '',
+          fileDate: null,
+          processedAt: proc,
+          status: 'processed',
+        });
+      }
+      await batch.commit();
+
+      // Act
+      const result = await callSearch({
+        query: 'ac10bbelowword',
+        limit: 50,
+        offset: 0,
+      });
+
+      // Assert: 全件取得 + OOM warn 未発火 + perf info の truncated=false
+      expect(result.total).to.equal(COUNT);
+      const guardWarns = warnCalls.filter((args) =>
+        args.some(
+          (a) => typeof a === 'string' && a.includes('exceeds safe getAll limit')
+        )
+      );
+      expect(guardWarns).to.have.lengthOf(0);
+
+      const perfLogs = infoCalls.filter((args) =>
+        args.some((a) => typeof a === 'string' && a.includes('[searchDocuments] perf'))
+      );
+      // matchedCount=150 > 100 閾値なので perf info ログは出力される
+      expect(perfLogs).to.have.lengthOf(1);
+      const perfPayload = perfLogs[0]![1] as { truncated?: boolean; matchedCount?: number };
+      expect(perfPayload.matchedCount).to.equal(COUNT);
+      expect(perfPayload.truncated).to.be.false;
+    }).timeout(30000);
+  });
 });
