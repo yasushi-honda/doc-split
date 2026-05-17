@@ -27,6 +27,8 @@ export function SearchBar({ onResultClick }: SearchBarProps) {
     results,
     total,
     hasMore,
+    truncated,
+    actualMatchedCount,
     isLoading,
     isError,
     loadMore,
@@ -131,6 +133,20 @@ export function SearchBar({ onResultClick }: SearchBarProps) {
             {/* 結果リスト */}
             {!isLoading && results.length > 0 && (
               <>
+                {/*
+                 * OOM ガード発動時のみ表示するバナー (Issue #402 段階2 / Issue #497)。
+                 * silent loss を semi-silent に格上げ: ユーザーが「上位 N 件のみ」事実に
+                 * 気付ける状態を作る。BE 側 (functions/src/search/searchDocuments.ts) で
+                 * MAX_GETALL=500 超過時のみ truncated=true + actualMatchedCount を付与。
+                 */}
+                {truncated && actualMatchedCount > 0 && (
+                  <div
+                    role="status"
+                    className="mb-2 rounded border border-yellow-300 bg-yellow-50 px-2 py-1.5 text-xs text-yellow-900 dark:border-yellow-800 dark:bg-yellow-950 dark:text-yellow-200"
+                  >
+                    該当が多すぎるため上位 {total} 件のみ表示しています（{actualMatchedCount} 件中）。検索語句を追加すると絞り込めます。
+                  </div>
+                )}
                 <div className="mb-2 px-2 text-xs text-muted-foreground">
                   {total}件の結果
                 </div>

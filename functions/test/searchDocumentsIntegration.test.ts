@@ -868,5 +868,87 @@ describe('searchDocuments handler integration (#401a, Closes #401)', () => {
       expect(perfPayload.matchedCount).to.equal(COUNT);
       expect(perfPayload.truncated).to.be.false;
     }).timeout(30000);
+
+    // ----------------------------------------
+    // AC10-c: fileDate 部分犠牲 — score 下位は fileDate 最新でも犠牲対象 (Issue #497、
+    //         PR #496 レビュー pr-test-analyzer IMPORTANT-1 対応)
+    //
+    // OOM ガードは score 降順切り捨てで上位 MAX_GETALL 件のみ getAll する設計。fileDate
+    // ソート (compareSearchResults の tier-1) は MAX_GETALL 件の範囲内に限定 (= 全体
+    // ソートの「部分犠牲」)。本テストは「score 最下位 (= 犠牲対象) に最新 fileDate を
+    // 仕込んでも結果に含まれない」ことを 1 アサーションで固定し、将来「ガード前に
+    // fileDate sort してから getAll」へ書き換わるリファクタを回帰検出可能にする。
+    // ----------------------------------------
+    it('fileDate 部分犠牲 — score 下位は fileDate 最新でも犠牲対象 (IMPORTANT-1)', async () => {
+      await seedUser();
+
+      // AC10 発動側と同じ「2 token AND + 高 df / 低 df」設計で idf > 0 を成立させる。
+      // 501 件のうち doc-ac10c-001 (score=1、最下位) のみ将来 fileDate を持たせ、残りは
+      // null。ガード発動で doc-ac10c-001 が犠牲になることを「fileDate 最新でも除外」で
+      // 明示検証する。
+      const MATCHED = 501;
+      const TRUNCATE_LIMIT = 500;
+      const commonPostings: Record<string, { score: number; fieldsMask: number }> = {};
+      const rarePostings: Record<string, { score: number; fieldsMask: number }> = {};
+      for (let i = 1; i <= MATCHED; i++) {
+        const docId = `doc-ac10c-${String(i).padStart(3, '0')}`;
+        commonPostings[docId] = { score: 1.0, fieldsMask: 8 };
+        rarePostings[docId] = { score: i, fieldsMask: 8 };
+      }
+      await seedSearchIndex('ac10ccommon', commonPostings, 10000);
+      await seedSearchIndex('ac10crare', rarePostings, 2);
+
+      const proc = ts('2026-04-27T12:00:00Z');
+      // 上位 500 件 (doc-ac10c-002..doc-ac10c-501): fileDate=null
+      // 最下位 1 件 (doc-ac10c-001): fileDate=2099-01-01 (将来日付、ソート tier-1 では最先頭)
+      const futureFileDate = ts('2099-01-01T00:00:00Z');
+      for (let batchStart = 1; batchStart <= MATCHED; batchStart += 400) {
+        const batch = db.batch();
+        const batchEnd = Math.min(batchStart + 399, MATCHED);
+        for (let i = batchStart; i <= batchEnd; i++) {
+          const docId = `doc-ac10c-${String(i).padStart(3, '0')}`;
+          batch.set(db.doc(`documents/${docId}`), {
+            fileName: `oom-fd-${docId}.pdf`,
+            customerName: '',
+            officeName: '',
+            documentType: '',
+            fileDate: i === 1 ? futureFileDate : null, // score=1 (最下位) のみ最新 fileDate
+            processedAt: proc,
+            status: 'processed',
+          });
+        }
+        await batch.commit();
+      }
+
+      // Act
+      const result = await callSearch({
+        query: 'ac10ccommon ac10crare',
+        limit: 50,
+        offset: 0,
+      });
+
+      // Assert: doc-ac10c-001 は fileDate 最新だが score 最下位のため犠牲対象。
+      // ガード発動なしの設計 (= fileDate sort 先行で getAll する実装) では doc-ac10c-001
+      // が tier-1 fileDate desc で結果先頭に来るはずだが、本実装 (score 降順切り捨て)
+      // では犠牲対象になり結果セットに含まれない。
+      expect(result.total).to.equal(TRUNCATE_LIMIT);
+      expect((result as { truncated?: boolean }).truncated).to.equal(true);
+      expect((result as { actualMatchedCount?: number }).actualMatchedCount).to.equal(MATCHED);
+
+      const ids = result.documents.map((d) => d.id);
+      expect(
+        ids,
+        'fileDate 最新でも score 最下位 (doc-ac10c-001) は犠牲対象として除外される',
+      ).to.not.include('doc-ac10c-001');
+
+      // 上位 500 件は score 降順切り捨て後の集合 (doc-ac10c-002..501)、fileDate=null。
+      // limit=50 + offset=0 で 1 ページ目は score 降順上位 50 件 = doc-ac10c-501..452。
+      // fileDate=null なので tier-1 NULLS LAST 内では tier-2 score desc が支配。
+      const expectedTopIds = Array.from(
+        { length: 50 },
+        (_, k) => `doc-ac10c-${String(MATCHED - k).padStart(3, '0')}`,
+      );
+      expect(ids).to.deep.equal(expectedTopIds);
+    }).timeout(60000);
   });
 });
