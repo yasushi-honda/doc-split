@@ -748,6 +748,12 @@ describe('searchDocuments handler integration (#401a, Closes #401)', () => {
       expect(result.total).to.equal(TRUNCATE_LIMIT);
       expect(result.hasMore).to.be.true;
 
+      // Assert 1b: silent loss 防止 (silent-failure-hunter CRT-1 対応)。
+      // 切り捨て発動時は SearchResult に truncated=true + actualMatchedCount=実マッチ件数を
+      // 含める。FE で「上位 N 件のみ表示」バナー表示用 (follow-up PR で消費)。
+      expect((result as { truncated?: boolean }).truncated).to.equal(true);
+      expect((result as { actualMatchedCount?: number }).actualMatchedCount).to.equal(MATCHED);
+
       // Assert 2: 除外される 1 件 (score=1, doc-ac10-001) は結果セットに含まれない。
       // limit=50 で 1 ページ目を取る場合、score 降順なら上位 50 件 (501..452) で 001 は含まれない。
       const ids = result.documents.map((d) => d.id);
@@ -781,6 +787,15 @@ describe('searchDocuments handler integration (#401a, Closes #401)', () => {
       expect(guardPayload.matchedCount).to.equal(MATCHED);
       expect(guardPayload.limit).to.equal(TRUNCATE_LIMIT);
       expect(guardPayload).to.not.have.property('query');
+
+      // Assert 5b: PII 防御 negative — raw query 文字列が warn payload のどの key 経由でも
+      // 漏れないことを全文検索で固定 (key 改名で漏れるリスクへの 2 段防御)。pr-test-analyzer
+      // SUGGESTION #6 対応。
+      const guardWarnSerialized = JSON.stringify(guardWarns[0]);
+      expect(
+        guardWarnSerialized,
+        'raw query "ac10common ac10rare" must not appear in warn payload'
+      ).to.not.include('ac10common ac10rare');
 
       // Assert 6: perf info ログに truncated=true が反映される (matchedCount は実マッチ数 501)。
       const perfLogs = infoCalls.filter((args) =>
@@ -829,8 +844,14 @@ describe('searchDocuments handler integration (#401a, Closes #401)', () => {
         offset: 0,
       });
 
-      // Assert: 全件取得 + OOM warn 未発火 + perf info の truncated=false
+      // Assert: 全件取得 + OOM warn 未発火 + perf info の truncated=false + 結果に
+      // truncated/actualMatchedCount フィールドが付与されない (silent-failure-hunter
+      // CRT-1 と対称な non-firing 側 fixate)。
       expect(result.total).to.equal(COUNT);
+      expect((result as { truncated?: boolean })).to.not.have.property('truncated');
+      expect((result as { actualMatchedCount?: number })).to.not.have.property(
+        'actualMatchedCount'
+      );
       const guardWarns = warnCalls.filter((args) =>
         args.some(
           (a) => typeof a === 'string' && a.includes('exceeds safe getAll limit')

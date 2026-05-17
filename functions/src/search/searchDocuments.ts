@@ -39,6 +39,16 @@ interface SearchResult {
   documents: SearchResultDocument[];
   total: number;
   hasMore: boolean;
+  /**
+   * Issue #402 段階2 OOM ガード発動時のみ true。FE は未読でも互換 (optional)。
+   * true のとき total = MAX_GETALL (取得件数) で実マッチ件数は actualMatchedCount を参照。
+   */
+  truncated?: boolean;
+  /**
+   * Issue #402 段階2 OOM ガード発動時のみ存在。実マッチ件数 (truncate 前)。
+   * FE で "上位 N 件のみ表示しています (実 M 件中)" バナー表示用 (follow-up PR で消費予定)。
+   */
+  actualMatchedCount?: number;
 }
 
 /** 検索結果ドキュメント */
@@ -81,7 +91,10 @@ const cache = new Map<string, CacheEntry>();
 
 // OOM ガード上限 (Issue #402 段階2)。256MiB Functions で db.getAll() の戻りを安全に
 // 保持できる件数の暫定値。document 1 件 ~ 数 KB × 500 = 数 MB 程度。段階1 計測ログの
-// N 分布から見直す前提の暫定値で、段階3 (posting に fileDate 内包) まで保持する。
+// N 分布から見直す前提の暫定値で、段階3 (posting に fileDate 内包 or getAll chunk 分割)
+// まで保持する。
+// TODO(#402): 段階3 完了時に MAX_GETALL / truncatedBeforeCount / truncated / actualMatchedCount
+// を撤去する。AC10 fixture (test/searchDocumentsIntegration.test.ts) は本定数に依存。
 const MAX_GETALL = 500;
 
 function getCacheKey(query: string, limit: number, offset: number): string {
@@ -342,6 +355,12 @@ export const searchDocuments = onCall<SearchRequest>(
       documents,
       total,
       hasMore: offset + limit < total,
+      // OOM ガード発動時のみ truncated / actualMatchedCount を露出 (Issue #402 段階2)。
+      // silent loss 防止: FE は optional field として未読でも互換、follow-up PR でバナー表示。
+      ...(truncated && {
+        truncated: true as const,
+        actualMatchedCount: truncatedBeforeCount,
+      }),
     };
 
     setCache(cacheKey, result);
