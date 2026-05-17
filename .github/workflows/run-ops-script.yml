@@ -8,9 +8,10 @@ name: Run Operations Script
 
 on:
   # 注: workflow_dispatch.inputs は GitHub Actions の仕様上 25 個まで定義可能
-  # (2025-12-04 拡張、それ以前は 10 個上限)。現在 10 個使用中（environment / script /
+  # (2025-12-04 拡張、それ以前は 10 個上限)。現在 15 個使用中（environment / script /
   # doc_id / file_name / name1 / name2 / from_name / to_name / delete_from_master /
-  # expected_count + exec_args_json で実質 11、残り 14）。
+  # expected_count / exec_args_json / survey_artifact_run_id / delete_ids /
+  # office_names / office_ids）、残り 10。
   # スクリプト固有の引数追加で上限が窮屈になる場合は、共通 inputs を JSON 文字列に
   # 統合する設計（例: script_args_json）への移行を検討。
   workflow_dispatch:
@@ -50,6 +51,10 @@ on:
           - audit-short-office-masters
           - audit-short-office-masters --max-length 3
           - audit-short-office-masters --max-length 4
+          - delete-office-master --dry-run
+          - delete-office-master --execute
+          - reset-documents-by-office --dry-run
+          - reset-documents-by-office --execute
           - cleanup-office-name --dry-run
           - cleanup-office-name --execute
           - inspect-document --file-name
@@ -112,7 +117,22 @@ on:
           - 'false'
           - 'true'
       expected_count:
-        description: 'cleanup-office-name: 影響件数の事前確認（数値；省略時はチェック無効、指定時は不一致で中断）'
+        description: 'cleanup-office-name / delete-office-master / reset-documents-by-office: 影響件数の事前確認（数値；省略時はチェック無効、指定時は不一致で中断）'
+        required: false
+        type: string
+        default: ''
+      delete_ids:
+        description: 'delete-office-master: 削除対象 master id (CSV、例: 6umj52B2r7pYLYWJjPx8,ケア,ニック)'
+        required: false
+        type: string
+        default: ''
+      office_names:
+        description: 'reset-documents-by-office: 対象 officeName (CSV、例: ケア,ニック)'
+        required: false
+        type: string
+        default: ''
+      office_ids:
+        description: 'reset-documents-by-office: 対象 officeId (CSV、例: 6umj52B2r7pYLYWJjPx8,ケア,ニック)'
         required: false
         type: string
         default: ''
@@ -361,6 +381,9 @@ jobs:
           DOC_ID: ${{ github.event.inputs.doc_id }}
           STORAGE_BUCKET: ${{ steps.resolve.outputs.storage_bucket }}
           OPERATION_IDS_CSV: ${{ steps.parse_exec.outputs.operation_ids_csv }}
+          DELETE_IDS: ${{ github.event.inputs.delete_ids }}
+          OFFICE_NAMES: ${{ github.event.inputs.office_names }}
+          OFFICE_IDS: ${{ github.event.inputs.office_ids }}
         run: |
           set -euo pipefail
           if [ -z "$PROJECT_ID" ]; then
@@ -382,6 +405,83 @@ jobs:
             fi
             ARGS=( --name "$NAME1" )
             if [ -n "$NAME2" ]; then ARGS+=( --name "$NAME2" ); fi
+            NODE_PATH=./functions/node_modules \
+              FIREBASE_PROJECT_ID="$PROJECT_ID" \
+              node "scripts/${SCRIPT_NAME}.js" "${ARGS[@]}"
+          elif [ "$SCRIPT_NAME" = "delete-office-master" ]; then
+            # delete_ids (CSV) を --id 引数列に展開 (Issue #504)
+            if [ -z "${DELETE_IDS:-}" ]; then
+              echo "ERROR: delete_ids input is required for delete-office-master" >&2
+              exit 1
+            fi
+            ARGS=()
+            IFS=',' read -ra ID_ARR <<< "$DELETE_IDS"
+            for id in "${ID_ARR[@]}"; do
+              if [[ ! "$id" =~ [^[:space:]] ]]; then
+                continue
+              fi
+              # 「--」で始まる値は引数として誤解釈されるリスクがあるため reject (PR #505 review I3)
+              if [[ "$id" == --* ]]; then
+                echo "ERROR: delete_ids 値が '--' で始まるためreject: \"$id\"" >&2
+                exit 1
+              fi
+              ARGS+=( --id "$id" )
+            done
+            if [ ${#ARGS[@]} -eq 0 ]; then
+              echo "ERROR: delete_ids did not yield any non-empty id" >&2
+              exit 1
+            fi
+            if [ -n "$EXPECTED_COUNT" ]; then
+              if ! [[ "$EXPECTED_COUNT" =~ ^[0-9]+$ ]]; then
+                echo "ERROR: expected_count must be a non-negative integer (got: \"$EXPECTED_COUNT\")" >&2
+                exit 1
+              fi
+              ARGS+=( --expected-count "$EXPECTED_COUNT" )
+            fi
+            read -ra SUFFIX_ARGS <<< "$SCRIPT_ARGS"
+            ARGS+=( "${SUFFIX_ARGS[@]}" )
+            NODE_PATH=./functions/node_modules \
+              FIREBASE_PROJECT_ID="$PROJECT_ID" \
+              node "scripts/${SCRIPT_NAME}.js" "${ARGS[@]}"
+          elif [ "$SCRIPT_NAME" = "reset-documents-by-office" ]; then
+            # office_names / office_ids (CSV) を --office-name / --office-id 引数列に展開 (Issue #504)
+            # 「--」で始まる値は引数として誤解釈されるリスクがあるため reject (PR #505 review I3)
+            ARGS=()
+            if [ -n "${OFFICE_NAMES:-}" ]; then
+              IFS=',' read -ra NAME_ARR <<< "$OFFICE_NAMES"
+              for name in "${NAME_ARR[@]}"; do
+                if [[ ! "$name" =~ [^[:space:]] ]]; then continue; fi
+                if [[ "$name" == --* ]]; then
+                  echo "ERROR: office_names 値が '--' で始まるためreject: \"$name\"" >&2
+                  exit 1
+                fi
+                ARGS+=( --office-name "$name" )
+              done
+            fi
+            if [ -n "${OFFICE_IDS:-}" ]; then
+              IFS=',' read -ra OID_ARR <<< "$OFFICE_IDS"
+              for oid in "${OID_ARR[@]}"; do
+                if [[ ! "$oid" =~ [^[:space:]] ]]; then continue; fi
+                if [[ "$oid" == --* ]]; then
+                  echo "ERROR: office_ids 値が '--' で始まるためreject: \"$oid\"" >&2
+                  exit 1
+                fi
+                ARGS+=( --office-id "$oid" )
+              done
+            fi
+            if [ ${#ARGS[@]} -eq 0 ]; then
+              echo "ERROR: office_names または office_ids のいずれかに非空値を指定してください" >&2
+              exit 1
+            fi
+            if [ -n "$EXPECTED_COUNT" ]; then
+              if ! [[ "$EXPECTED_COUNT" =~ ^[0-9]+$ ]]; then
+                echo "ERROR: expected_count must be a non-negative integer (got: \"$EXPECTED_COUNT\")" >&2
+                exit 1
+              fi
+              ARGS+=( --expected-count "$EXPECTED_COUNT" )
+            fi
+            read -ra SUFFIX_ARGS <<< "$SCRIPT_ARGS"
+            ARGS+=( "${SUFFIX_ARGS[@]}" )
             NODE_PATH=./functions/node_modules \
               FIREBASE_PROJECT_ID="$PROJECT_ID" \
               node "scripts/${SCRIPT_NAME}.js" "${ARGS[@]}"
