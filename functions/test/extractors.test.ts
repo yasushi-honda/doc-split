@@ -13,6 +13,7 @@ import {
   extractDateEnhanced,
   ensureCustomerEntry,
   extractAllInformation,
+  computeCommonShortMasters,
   DocumentMaster,
   OfficeMaster,
   CustomerMaster,
@@ -581,6 +582,8 @@ TEL: 052-509-2292
   // === 全ひらがな事業所名 ===
 
   it('全ひらがな事業所名: OCRに含まれる場合は完全一致', () => {
+    // #501 v2: collision-based 抑制方式では length 単独で drop しないため、
+    // 衝突がなければ 3 文字 hiragana name も exact 認定される (legitimate 保護)
     const testOfficeMasters: OfficeMaster[] = [
       { id: 'off1', name: 'あさひ', isDuplicate: false },
     ];
@@ -622,6 +625,190 @@ TEL: 052-509-2292
     if (midori) {
       expect(midori.score).to.be.lessThan(70);
     }
+  });
+
+  // #501 v2: 短文字列マスター ("ケア" / "ニック" 等) が長マスター name の substring に
+  // 頻出する場合 (collision >= 2) は「common short master」と判定し exact match から除外。
+  // length 単独でなく collision 数で動的判定するため legitimate 短マスター ("ピース" "てらす"
+  // 等、cocoro/kanameone 実在で collision=0-1) はそのまま動作する。
+  describe('#501 v2 common short master 抑制', () => {
+    it('"ケア" マスターは他マスターの substring に頻出 (collision>=2) → bug マスターと判定され exact 認定されない', () => {
+      const testMasters: OfficeMaster[] = [
+        { id: 'bug-care', name: 'ケア', isDuplicate: false },
+        { id: 'long-1', name: 'ニチイケアセンター岩倉', isDuplicate: false },
+        { id: 'long-2', name: 'エスケアステーション開明', isDuplicate: false },
+      ];
+      const ocrText = '発行元: ニチイケアセンター岩倉 担当: 佐藤';
+      const result = extractOfficeCandidates(ocrText, testMasters);
+
+      expect(result.bestMatch).to.not.be.null;
+      expect(result.bestMatch!.id).to.equal('long-1');
+      // bug マスター「ケア」は exact match に到達しない (skip)
+      const bug = result.candidates.find((c) => c.id === 'bug-care');
+      if (bug) {
+        expect(bug.matchType).to.not.equal('exact');
+        expect(bug.score).to.be.lessThan(100);
+      }
+    });
+
+    it('"ニック" マスターはクリニック系の substring に頻出 → 除外', () => {
+      const testMasters: OfficeMaster[] = [
+        { id: 'bug-nick', name: 'ニック', isDuplicate: false },
+        { id: 'long-1', name: '正翔会クリニック小牧', isDuplicate: false },
+        { id: 'long-2', name: '木の香往診クリニック', isDuplicate: false },
+      ];
+      const ocrText = 'クリニック発行: 正翔会クリニック小牧';
+      const result = extractOfficeCandidates(ocrText, testMasters);
+
+      expect(result.bestMatch).to.not.be.null;
+      expect(result.bestMatch!.id).to.equal('long-1');
+      const bug = result.candidates.find((c) => c.id === 'bug-nick');
+      if (bug) {
+        expect(bug.matchType).to.not.equal('exact');
+      }
+    });
+
+    it('legitimate な短マスター "ピース" は他マスターと衝突しない → そのまま exact 認定', () => {
+      // kanameone 実在事例: 「ピース」(3 文字、Firestore auto ID、12 件運用) は
+      // 他マスター name と衝突しないため legitimate に動作する
+      const testMasters: OfficeMaster[] = [
+        { id: 'legit-piece', name: 'ピース', isDuplicate: false },
+        { id: 'unrelated-1', name: 'デイサービスさくら', isDuplicate: false },
+        { id: 'unrelated-2', name: '訪問看護ステーション桜', isDuplicate: false },
+      ];
+      const ocrText = '発行元: ピース 利用明細書';
+      const result = extractOfficeCandidates(ocrText, testMasters);
+
+      expect(result.bestMatch).to.not.be.null;
+      expect(result.bestMatch!.id).to.equal('legit-piece');
+      expect(result.bestMatch!.score).to.equal(100);
+      expect(result.bestMatch!.matchType).to.equal('exact');
+    });
+
+    it('境界値: 衝突が 1 件のみ → uncommon と判定 (exact 認定可)', () => {
+      // COMMON_SHORT_COLLISION_THRESHOLD=2 のため、1 件衝突では skip しない
+      const testMasters: OfficeMaster[] = [
+        { id: 'short', name: 'ケア', isDuplicate: false },
+        { id: 'long-1', name: 'デイケアセンター', isDuplicate: false },
+      ];
+      const ocrText = 'ケア 担当者報告';
+      const result = extractOfficeCandidates(ocrText, testMasters);
+
+      const short = result.candidates.find((c) => c.id === 'short');
+      // 「ケア」は他マスター 1 件のみに含まれるので exact 認定される
+      expect(short).to.not.be.undefined;
+      expect(short!.score).to.equal(100);
+    });
+
+    it('長マスター (length>=4) は collision 計算対象外、現状通り exact 認定', () => {
+      // 長マスター同士の衝突は本機構の対象外 (短マスターのみが対象)
+      const testMasters: OfficeMaster[] = [
+        { id: 'long-1', name: 'デイケアセンター', isDuplicate: false },
+        { id: 'long-2', name: 'デイケアセンター岩倉', isDuplicate: false },
+      ];
+      const ocrText = 'デイケアセンター 発行';
+      const result = extractOfficeCandidates(ocrText, testMasters);
+
+      expect(result.bestMatch).to.not.be.null;
+      expect(result.bestMatch!.score).to.equal(100);
+    });
+
+    it('shortName 経路: common short master は exact 認定 skip', () => {
+      const testMasters: OfficeMaster[] = [
+        { id: 'bug-sn', name: '株式会社テストケア', shortName: 'ケア', isDuplicate: false },
+        { id: 'long-1', name: 'ニチイケアセンター岩倉', isDuplicate: false },
+        { id: 'long-2', name: 'エスケアステーション開明', isDuplicate: false },
+      ];
+      // shortName "ケア" がほかマスター name に頻出 → ただし shortName 自体は対象外で
+      // bug-sn の name 「株式会社テストケア」(長) は collision 対象外
+      // よって短 shortName 経由の skip にはならない仕様 (= 形式名長 ≥4 ならば対象外)
+      const ocrText = '株式会社テストケア 利用明細';
+      const result = extractOfficeCandidates(ocrText, testMasters);
+
+      // 名前 'ケア' を含む文書では正式名一致 'bug-sn' が score 100 で勝つ
+      expect(result.bestMatch).to.not.be.null;
+      expect(result.bestMatch!.id).to.equal('bug-sn');
+      expect(result.bestMatch!.score).to.equal(100);
+    });
+
+    it('aliases 経路: common short master でない長 aliases は exact 認定', () => {
+      // 回帰防止: aliases は正規長で正常動作する
+      const testMasters: OfficeMaster[] = [
+        { id: 'al', name: '正翔会クリニック小牧', aliases: ['正翔クリニック'], isDuplicate: false },
+      ];
+      const ocrText = '発行元: 正翔クリニック';
+      const result = extractOfficeCandidates(ocrText, testMasters);
+
+      expect(result.bestMatch).to.not.be.null;
+      expect(result.bestMatch!.id).to.equal('al');
+      expect(result.bestMatch!.score).to.equal(98);
+      expect(result.bestMatch!.matchType).to.equal('exact');
+    });
+  });
+});
+
+describe('#501 v2 common short master 抑制 (extractOfficeNameEnhanced)', () => {
+  it('"ケア" マスターは collision 多 → exact 認定 skip、正規マスターが勝つ', () => {
+    const testMasters: OfficeMaster[] = [
+      { id: 'bug-care', name: 'ケア', isDuplicate: false },
+      { id: 'long-1', name: 'ニチイケアセンター岩倉', isDuplicate: false },
+      { id: 'long-2', name: 'エスケアステーション開明', isDuplicate: false },
+    ];
+    const ocrText = '発行元: ニチイケアセンター岩倉';
+    const result = extractOfficeNameEnhanced(ocrText, testMasters);
+
+    expect(result.officeName).to.equal('ニチイケアセンター岩倉');
+    expect(result.score).to.equal(100);
+  });
+
+  it('legitimate 短マスター "ピース" は collision なし → exact 認定可', () => {
+    const testMasters: OfficeMaster[] = [
+      { id: 'legit', name: 'ピース', isDuplicate: false },
+      { id: 'unrelated', name: 'デイサービスさくら', isDuplicate: false },
+    ];
+    const ocrText = '発行元: ピース 報告書';
+    const result = extractOfficeNameEnhanced(ocrText, testMasters);
+
+    expect(result.officeName).to.equal('ピース');
+    expect(result.score).to.equal(100);
+    expect(result.matchType).to.equal('exact');
+  });
+});
+
+describe('#501 v2 computeCommonShortMasters', () => {
+  it('短マスター + 衝突 >= 2 → common 集合に含まれる', () => {
+    const masters: OfficeMaster[] = [
+      { id: 'short', name: 'ケア', isDuplicate: false },
+      { id: 'long-1', name: 'デイケアセンター', isDuplicate: false },
+      { id: 'long-2', name: 'ニチイケアセンター', isDuplicate: false },
+    ];
+    const result = computeCommonShortMasters(masters);
+    expect(result.has('short')).to.be.true;
+    expect(result.has('long-1')).to.be.false;
+  });
+
+  it('短マスター + 衝突 < 2 → common 集合に含まれない (legitimate 保護)', () => {
+    const masters: OfficeMaster[] = [
+      { id: 'short', name: 'ピース', isDuplicate: false },
+      { id: 'long', name: 'デイサービスさくら', isDuplicate: false },
+    ];
+    const result = computeCommonShortMasters(masters);
+    expect(result.has('short')).to.be.false;
+  });
+
+  it('長マスター (length>=4) は対象外', () => {
+    const masters: OfficeMaster[] = [
+      { id: 'len-4', name: 'デイケア', isDuplicate: false },
+      { id: 'long-1', name: 'デイケアセンター岩倉', isDuplicate: false },
+      { id: 'long-2', name: 'デイケアスマイル', isDuplicate: false },
+    ];
+    const result = computeCommonShortMasters(masters);
+    expect(result.has('len-4')).to.be.false;
+  });
+
+  it('空マスター配列 → 空集合', () => {
+    const result = computeCommonShortMasters([]);
+    expect(result.size).to.equal(0);
   });
 });
 

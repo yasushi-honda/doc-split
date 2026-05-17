@@ -115,6 +115,7 @@ describe('sanitizeMasterData', () => {
       const result = sanitizeOfficeMasters(input);
       expect(result.items[0].shortName).to.equal('さくら');
     });
+
   });
 
   describe('sanitizeDocumentMasters', () => {

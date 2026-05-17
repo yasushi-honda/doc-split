@@ -47,6 +47,9 @@ on:
           - force-reindex --doc-id
           - force-reindex --doc-id --execute
           - investigate-office-duplicate
+          - audit-short-office-masters
+          - audit-short-office-masters --max-length 3
+          - audit-short-office-masters --max-length 4
           - cleanup-office-name --dry-run
           - cleanup-office-name --execute
           - inspect-document --file-name

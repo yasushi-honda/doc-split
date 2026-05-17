@@ -33,6 +33,57 @@ const MAX_CANDIDATES = 10;
 /** 最小スコア閾値 */
 const MIN_SCORE_THRESHOLD = 70;
 
+/**
+ * Office classifier で「common short master」と判定する閾値 (#501 v2)。
+ *
+ * 短文字列マスター ("ケア" 2/「ニック」3 等、CSV import 由来の汚染) は OCR 文書中の
+ * 他事業所名の substring として頻繁に出現するため exact match で score 100 を取り
+ * 正規マスターを駆逐する。一方で legitimate な短マスター ("ピース" "わかば" "てらす"
+ * 3-4 文字、cocoro/kanameone 実在) は他マスター name と衝突しないため独立して機能する。
+ *
+ * length 単独では distinguish 不可能なため、マスター name 同士の substring 衝突数を
+ * 動的に計測し「他マスター name の substring に COMMON_SHORT_COLLISION_THRESHOLD 件以上
+ * 含まれる短マスター」を common 扱いとし exact match path から除外する。partial/fuzzy
+ * 経路は通常通り。
+ */
+const COMMON_SHORT_LENGTH_THRESHOLD = 4; // length < N を「短い」と扱う
+const COMMON_SHORT_COLLISION_THRESHOLD = 2; // 他マスター N+ の substring に含まれる → common
+
+/**
+ * マスター name 同士の substring 衝突に基づき「common short master」id 集合を返す。
+ *
+ * @param masters office マスター全件
+ * @returns common 扱いする master id の Set (exact match から除外する対象)
+ */
+export function computeCommonShortMasters(masters: OfficeMaster[]): Set<string> {
+  const commonIds = new Set<string>();
+  // 短マスターのみが対象 (長マスターは元々 substring 衝突に強い)
+  const normalizedNames = masters.map((m) => ({
+    id: m.id,
+    name: m.name,
+    normalized: normalizeForMatching(m.name),
+  }));
+  const shortMasters = normalizedNames.filter(
+    (m) => m.normalized.length > 0 && m.normalized.length < COMMON_SHORT_LENGTH_THRESHOLD,
+  );
+
+  for (const candidate of shortMasters) {
+    let collisions = 0;
+    for (const other of normalizedNames) {
+      if (other.id === candidate.id) continue;
+      if (other.normalized.length <= candidate.normalized.length) continue;
+      if (other.normalized.includes(candidate.normalized)) {
+        collisions++;
+        if (collisions >= COMMON_SHORT_COLLISION_THRESHOLD) {
+          commonIds.add(candidate.id);
+          break;
+        }
+      }
+    }
+  }
+  return commonIds;
+}
+
 /** 施設タイプキーワード（汎用語判定にも使用） */
 const FACILITY_TYPES = [
   'デイサービス',
@@ -360,6 +411,10 @@ export function extractOfficeNameEnhanced(
   const normalizedText = normalizeTextEnhanced(ocrText);
   const matchingText = normalizeForMatching(normalizedText);
 
+  // #501 v2: マスター name 同士の substring 衝突から common short master を事前計算し
+  // exact match path から除外する (legitimate な短マスターは collision なしで通過する)
+  const commonShortIds = computeCommonShortMasters(officeMasters);
+
   let bestResult: OfficeExtractionResult = {
     officeName: null,
     score: 0,
@@ -371,14 +426,17 @@ export function extractOfficeNameEnhanced(
     const normalizedOfficeName = normalizeForMatching(office.name);
     let score = 0;
     let matchType: MatchType = 'none';
+    const skipExactMatch = commonShortIds.has(office.id);
 
-    // 完全一致
-    if (matchingText.includes(normalizedOfficeName)) {
+    // 完全一致 (正式名 / shortName) — #501 で common short master は exact path skip
+    if (
+      !skipExactMatch &&
+      matchingText.includes(normalizedOfficeName)
+    ) {
       score = 100;
       matchType = 'exact';
     }
-    // 短縮名での一致
-    else if (office.shortName) {
+    else if (office.shortName && !skipExactMatch) {
       const normalizedShortName = normalizeForMatching(office.shortName);
       if (matchingText.includes(normalizedShortName)) {
         score = 95;
@@ -796,6 +854,10 @@ export function extractOfficeCandidates(
   const normalizedText = normalizeTextEnhanced(ocrText);
   const matchingText = normalizeForMatching(normalizedText);
 
+  // #501 v2: マスター name 同士の substring 衝突から common short master を事前計算し
+  // exact match path から除外する (legitimate な短マスターは collision なしで通過する)
+  const commonShortIds = computeCommonShortMasters(officeMasters);
+
   // ファイル名プレフィックスの正規化（事業所名タイプの場合のみ使用）
   const useFilenameForMatching = filenameInfo && filenameInfo.prefixType === 'office_name';
   const filenamePrefix = useFilenameForMatching ? filenameInfo.normalizedPrefix : '';
@@ -807,6 +869,7 @@ export function extractOfficeCandidates(
     let score = 0;
     let matchType: MatchType = 'none';
     let filenameBoost = 0;
+    const skipExactMatch = commonShortIds.has(office.id);
 
     // ファイル名マッチング（事業所名がファイル名に含まれる場合にボーナス）
     if (useFilenameForMatching && filenamePrefix) {
@@ -830,13 +893,15 @@ export function extractOfficeCandidates(
       }
     }
 
+    // 1-2.5: 完全一致 (正式名 / shortName / aliases)
+    // #501 v2 で common short master (他マスター name の substring に頻出) は skip。
     // 1. 完全一致（正式名称）
-    if (matchingText.includes(normalizedOfficeName)) {
+    if (!skipExactMatch && matchingText.includes(normalizedOfficeName)) {
       score = 100;
       matchType = 'exact';
     }
     // 2. 短縮名での一致
-    else if (office.shortName) {
+    else if (office.shortName && !skipExactMatch) {
       const normalizedShortName = normalizeForMatching(office.shortName);
       if (matchingText.includes(normalizedShortName)) {
         score = 95;
@@ -845,7 +910,7 @@ export function extractOfficeCandidates(
     }
 
     // 2.5. エイリアス（許容表記）での一致
-    if (matchType === 'none' && office.aliases && office.aliases.length > 0) {
+    if (matchType === 'none' && !skipExactMatch && office.aliases && office.aliases.length > 0) {
       for (const alias of office.aliases) {
         const normalizedAlias = normalizeForMatching(alias);
         if (matchingText.includes(normalizedAlias)) {
