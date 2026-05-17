@@ -165,7 +165,7 @@ async function main() {
   fs.writeFileSync(backupPath, JSON.stringify(backup, null, 2), 'utf8');
   console.log(`✓ バックアップ保存: ${backupPath}\n`);
 
-  // Phase 4: 削除実行 (再取得 + 集合比較で stale snapshot 防止)
+  // Phase 4: 削除実行 (再取得 + 件数 assertion で stale snapshot 防止)
   console.log('=== 削除実行 ===');
   const batch = db.batch();
   let queued = 0;
@@ -179,6 +179,16 @@ async function main() {
     batch.delete(ref);
     queued++;
     console.log(`  ${t.id} → delete queued`);
+  }
+
+  // Phase 1 集計と Phase 4 再取得の件数一致 assertion (CLAUDE.md MUST 「destructive 操作の対象抽出は件数アサーション」)
+  // dry-run と --execute の間に他オペレーターが新規 master を同 ID で作成 / 既存マスターが削除されたケースを検知して abort する。
+  if (queued !== existingCount) {
+    console.error(
+      `ERROR: stale snapshot detected — Phase 1 で ${existingCount}件存在、Phase 4 再取得で ${queued}件のみ。abort (batch.commit() 未実行)。`,
+    );
+    console.error(`バックアップは保存済: ${backupPath}`);
+    process.exit(1);
   }
 
   if (queued === 0) {
@@ -213,7 +223,7 @@ async function main() {
   }
   console.log(`\n=== サマリー ===`);
   console.log(`削除完了: ${queued}件 / バックアップ: ${backupPath}`);
-  console.log(`次の工程: reprocess-master-matching で関連 documents を再分類してください`);
+  console.log(`次の工程: reset-documents-by-office で関連 documents を pending に reset してください (scheduled processOCR poller が再分類)`);
 }
 
 main()

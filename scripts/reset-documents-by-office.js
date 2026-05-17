@@ -4,9 +4,10 @@
  * (Issue #504, PR #502 #501 v2 cleanup tail)
  *
  * 短文字列マスター (「ケア」「ニック」等) を削除した後、誤分類された関連 documents を
- * BE OCR processor で再処理させるため status を pending に reset する。OCR processor は
- * documents.onDocumentWritten trigger で起動し、現行 (PR #502 v2 deploy 済) の
- * classifier collision-based 抑制を適用して再分類する。
+ * BE OCR processor で再処理させるため status を pending に reset する。再分類経路は
+ * functions/src/ocr/processOCR.ts (scheduled job、`where('status', '==', 'pending')`
+ * polling) で、現行 (PR #502 v2 deploy 済) の classifier collision-based 抑制を適用して
+ * 再分類する。即時 trigger ではなく次回 scheduled poller 起動で処理される点に注意。
  *
  * 処理:
  *   1. --office-name / --office-id で指定された値の documents を全件取得 (read-only)
@@ -198,7 +199,7 @@ async function main() {
   console.log(`\n=== サマリー ===`);
   console.log(`reset 完了: ${committedCount}/${totalCount}件`);
   console.log(`バックアップ: ${backupPath}`);
-  console.log(`OCR processor が onDocumentWritten trigger 経由で再処理を開始します`);
+  console.log(`次回 scheduled processOCR poller (functions/src/ocr/processOCR.ts) 起動時に pending 状態が pick up され、再分類されます`);
 }
 
 main()

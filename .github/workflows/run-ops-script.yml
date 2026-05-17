@@ -8,9 +8,10 @@ name: Run Operations Script
 
 on:
   # 注: workflow_dispatch.inputs は GitHub Actions の仕様上 25 個まで定義可能
-  # (2025-12-04 拡張、それ以前は 10 個上限)。現在 10 個使用中（environment / script /
+  # (2025-12-04 拡張、それ以前は 10 個上限)。現在 15 個使用中（environment / script /
   # doc_id / file_name / name1 / name2 / from_name / to_name / delete_from_master /
-  # expected_count + exec_args_json で実質 11、残り 14）。
+  # expected_count / exec_args_json / survey_artifact_run_id / delete_ids /
+  # office_names / office_ids）、残り 10。
   # スクリプト固有の引数追加で上限が窮屈になる場合は、共通 inputs を JSON 文字列に
   # 統合する設計（例: script_args_json）への移行を検討。
   workflow_dispatch:
@@ -419,6 +420,11 @@ jobs:
               if [[ ! "$id" =~ [^[:space:]] ]]; then
                 continue
               fi
+              # 「--」で始まる値は引数として誤解釈されるリスクがあるため reject (PR #505 review I3)
+              if [[ "$id" == --* ]]; then
+                echo "ERROR: delete_ids 値が '--' で始まるためreject: \"$id\"" >&2
+                exit 1
+              fi
               ARGS+=( --id "$id" )
             done
             if [ ${#ARGS[@]} -eq 0 ]; then
@@ -439,11 +445,16 @@ jobs:
               node "scripts/${SCRIPT_NAME}.js" "${ARGS[@]}"
           elif [ "$SCRIPT_NAME" = "reset-documents-by-office" ]; then
             # office_names / office_ids (CSV) を --office-name / --office-id 引数列に展開 (Issue #504)
+            # 「--」で始まる値は引数として誤解釈されるリスクがあるため reject (PR #505 review I3)
             ARGS=()
             if [ -n "${OFFICE_NAMES:-}" ]; then
               IFS=',' read -ra NAME_ARR <<< "$OFFICE_NAMES"
               for name in "${NAME_ARR[@]}"; do
                 if [[ ! "$name" =~ [^[:space:]] ]]; then continue; fi
+                if [[ "$name" == --* ]]; then
+                  echo "ERROR: office_names 値が '--' で始まるためreject: \"$name\"" >&2
+                  exit 1
+                fi
                 ARGS+=( --office-name "$name" )
               done
             fi
@@ -451,6 +462,10 @@ jobs:
               IFS=',' read -ra OID_ARR <<< "$OFFICE_IDS"
               for oid in "${OID_ARR[@]}"; do
                 if [[ ! "$oid" =~ [^[:space:]] ]]; then continue; fi
+                if [[ "$oid" == --* ]]; then
+                  echo "ERROR: office_ids 値が '--' で始まるためreject: \"$oid\"" >&2
+                  exit 1
+                fi
                 ARGS+=( --office-id "$oid" )
               done
             fi
