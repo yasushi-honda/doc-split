@@ -581,11 +581,14 @@ TEL: 052-509-2292
   // === 全ひらがな事業所名 ===
 
   it('全ひらがな事業所名: OCRに含まれる場合は完全一致', () => {
+    // #501: 短文字列マスター ("ケア" 2/「ニック」3 文字) の substring 暴走防止のため
+    // exact match path に length >= 4 ガード導入。本テストは「ひらがな office 名がマッチする」
+    // という意図を保つため 4 文字のひらがな名で検証する。
     const testOfficeMasters: OfficeMaster[] = [
-      { id: 'off1', name: 'あさひ', isDuplicate: false },
+      { id: 'off1', name: 'あさひや', isDuplicate: false },
     ];
 
-    const ocrText = 'あさひ 訪問介護サービス提供票';
+    const ocrText = 'あさひや 訪問介護サービス提供票';
     const result = extractOfficeCandidates(ocrText, testOfficeMasters);
 
     expect(result.bestMatch).to.not.be.null;
@@ -622,6 +625,111 @@ TEL: 052-509-2292
     if (midori) {
       expect(midori.score).to.be.lessThan(70);
     }
+  });
+
+  // #501: 短文字列マスター ("ケア" / "ニック" 等、CSV import 由来) は
+  // substring 包含で exact match score 100 を取って正規マスターを駆逐する。
+  // sanitize 段で drop されるが二重防御として classifier 側も length ガードを持つ。
+  describe('#501 短文字列マスター classifier 防御', () => {
+    it('"ケア" (2 文字) は substring 包含されても score 100 にならず正規マスターが勝つ', () => {
+      const testMasters: OfficeMaster[] = [
+        { id: 'short-care', name: 'ケア', isDuplicate: false },
+        { id: 'normal', name: 'ニチイケアセンター岩倉', isDuplicate: false },
+      ];
+      const ocrText = '発行元: ニチイケアセンター岩倉 担当: 佐藤';
+      const result = extractOfficeCandidates(ocrText, testMasters);
+
+      expect(result.bestMatch).to.not.be.null;
+      expect(result.bestMatch!.id).to.equal('normal');
+      // 「ケア」マスターは exact match に到達しないため score 100 にならない
+      const short = result.candidates.find((c) => c.id === 'short-care');
+      if (short) {
+        expect(short.score).to.be.lessThan(100);
+        expect(short.matchType).to.not.equal('exact');
+      }
+    });
+
+    it('"ニック" (3 文字) は substring 包含されても score 100 にならない', () => {
+      const testMasters: OfficeMaster[] = [
+        { id: 'short-nick', name: 'ニック', isDuplicate: false },
+        { id: 'normal', name: '正翔会クリニック小牧', isDuplicate: false },
+      ];
+      const ocrText = 'クリニック発行: 正翔会クリニック小牧';
+      const result = extractOfficeCandidates(ocrText, testMasters);
+
+      expect(result.bestMatch).to.not.be.null;
+      expect(result.bestMatch!.id).to.equal('normal');
+      const short = result.candidates.find((c) => c.id === 'short-nick');
+      if (short) {
+        expect(short.score).to.be.lessThan(100);
+      }
+    });
+
+    it('境界値: name.length === 4 (正規マスター下限) は exact match で score 100 を取れる', () => {
+      const testMasters: OfficeMaster[] = [
+        { id: 'len-4', name: 'デイケア', isDuplicate: false },
+      ];
+      const ocrText = 'デイケア施設発行';
+      const result = extractOfficeCandidates(ocrText, testMasters);
+
+      expect(result.bestMatch).to.not.be.null;
+      expect(result.bestMatch!.score).to.equal(100);
+      expect(result.bestMatch!.matchType).to.equal('exact');
+    });
+
+    it('shortName が短文字列の場合も exact match score 95 を取らない', () => {
+      const testMasters: OfficeMaster[] = [
+        { id: 'short-sn', name: '株式会社テストケア', shortName: 'ケア', isDuplicate: false },
+      ];
+      // OCR text に 'ケア' は含まれるが正式名・shortName は完全には含まれない
+      const ocrText = 'ケアプラン作成依頼';
+      const result = extractOfficeCandidates(ocrText, testMasters);
+
+      // shortName 「ケア」は length ガードで exact match されない
+      const found = result.candidates.find((c) => c.id === 'short-sn');
+      if (found) {
+        expect(found.score).to.not.equal(95);
+      }
+    });
+
+    it('aliases が短文字列の場合も exact match score 98 を取らない', () => {
+      const testMasters: OfficeMaster[] = [
+        { id: 'short-alias', name: '株式会社テストオフィス', aliases: ['ケア'], isDuplicate: false },
+      ];
+      const ocrText = 'ケアプラン記録票';
+      const result = extractOfficeCandidates(ocrText, testMasters);
+
+      const found = result.candidates.find((c) => c.id === 'short-alias');
+      if (found) {
+        expect(found.score).to.not.equal(98);
+      }
+    });
+  });
+});
+
+describe('#501 短文字列マスター classifier 防御 (extractOfficeNameEnhanced)', () => {
+  it('"ケア" (2 文字) は substring 包含されても score 100 にならず正規マスターが勝つ', () => {
+    const testMasters: OfficeMaster[] = [
+      { id: 'short-care', name: 'ケア', isDuplicate: false },
+      { id: 'normal', name: 'ニチイケアセンター岩倉', isDuplicate: false },
+    ];
+    const ocrText = '発行元: ニチイケアセンター岩倉';
+    const result = extractOfficeNameEnhanced(ocrText, testMasters);
+
+    expect(result.officeName).to.equal('ニチイケアセンター岩倉');
+    expect(result.score).to.equal(100);
+  });
+
+  it('境界値: name.length === 4 は exact match で score 100 を取れる', () => {
+    const testMasters: OfficeMaster[] = [
+      { id: 'len-4', name: 'デイケア', isDuplicate: false },
+    ];
+    const ocrText = 'デイケア発行';
+    const result = extractOfficeNameEnhanced(ocrText, testMasters);
+
+    expect(result.officeName).to.equal('デイケア');
+    expect(result.score).to.equal(100);
+    expect(result.matchType).to.equal('exact');
   });
 });
 

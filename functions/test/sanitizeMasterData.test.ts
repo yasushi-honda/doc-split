@@ -115,6 +115,64 @@ describe('sanitizeMasterData', () => {
       const result = sanitizeOfficeMasters(input);
       expect(result.items[0].shortName).to.equal('さくら');
     });
+
+    // #501: 短文字列マスター (CSV import 由来の「ケア」「ニック」等) は
+    // classifier の substring match で score 100 を取って正規マスターを駆逐するため
+    // sanitize 段で length ガードで drop する。境界値テスト + 観測性 (droppedIds) を担保する。
+    describe('#501 短文字列マスター drop ガード', () => {
+      it('name.length が 4 未満のレコードは drop される ("ケア" = 2 文字)', () => {
+        const input = [{ id: 'short-care', name: 'ケア' }];
+        const result = sanitizeOfficeMasters(input);
+        expect(result.items).to.have.length(0);
+        expect(result.droppedIds).to.deep.equal(['short-care']);
+      });
+
+      it('name.length が 4 未満のレコードは drop される ("ニック" = 3 文字)', () => {
+        const input = [{ id: 'short-nick', name: 'ニック' }];
+        const result = sanitizeOfficeMasters(input);
+        expect(result.items).to.have.length(0);
+        expect(result.droppedIds).to.deep.equal(['short-nick']);
+      });
+
+      it('境界値: name.length === 3 は drop', () => {
+        const input = [{ id: 'three', name: 'あいう' }];
+        const result = sanitizeOfficeMasters(input);
+        expect(result.items).to.have.length(0);
+        expect(result.droppedIds).to.deep.equal(['three']);
+      });
+
+      it('境界値: name.length === 4 は通過', () => {
+        const input = [{ id: 'four', name: 'あいうえ' }];
+        const result = sanitizeOfficeMasters(input);
+        expect(result.items).to.have.length(1);
+        expect(result.items[0].name).to.equal('あいうえ');
+        expect(result.droppedIds).to.deep.equal([]);
+      });
+
+      it('options.minNameLength で閾値を上書きできる (テスト容易性)', () => {
+        const input = [
+          { id: 'len-2', name: 'ケア' },
+          { id: 'len-3', name: 'ニック' },
+          { id: 'len-4', name: 'デイサ' + 'ービス' },
+        ];
+        const result = sanitizeOfficeMasters(input, { minNameLength: 2 });
+        expect(result.items).to.have.length(3);
+        expect(result.droppedIds).to.deep.equal([]);
+      });
+
+      it('短文字列と正規マスターが混在する場合、短文字列のみ drop され正規は通過する', () => {
+        const input = [
+          { id: 'short-care', name: 'ケア' },
+          { id: 'normal-1', name: 'デイサービスさくら' },
+          { id: 'short-nick', name: 'ニック' },
+          { id: 'normal-2', name: '訪問看護ステーション桜' },
+        ];
+        const result = sanitizeOfficeMasters(input);
+        expect(result.items).to.have.length(2);
+        expect(result.items.map((o) => o.id)).to.deep.equal(['normal-1', 'normal-2']);
+        expect(result.droppedIds).to.deep.equal(['short-care', 'short-nick']);
+      });
+    });
   });
 
   describe('sanitizeDocumentMasters', () => {

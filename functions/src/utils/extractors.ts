@@ -33,6 +33,19 @@ const MAX_CANDIDATES = 10;
 /** 最小スコア閾値 */
 const MIN_SCORE_THRESHOLD = 70;
 
+/**
+ * Office classifier の exact-match path で score 100/95/98 を取らせる最小文字数 (#501)。
+ *
+ * substring 包含だけで exact 認定する 3 path (正式名 / shortName / aliases) は、
+ * 短文字列マスター (CSV import 由来の「ケア」「ニック」等) が任意文書に含まれて
+ * score 100 で正規マスターを駆逐する経路を提供してしまう。
+ *
+ * sanitize 側で同基準 (DEFAULT_MIN_OFFICE_NAME_LENGTH) で drop するため通常は到達しないが、
+ * sanitize bypass 経路 (テスト / 旧データ / 短縮値が一時的に低い場合) でも防御層が機能するよう
+ * 二重防御として classifier 側にも独立にガードする。
+ */
+const OFFICE_EXACT_MATCH_MIN_LENGTH = 4;
+
 /** 施設タイプキーワード（汎用語判定にも使用） */
 const FACILITY_TYPES = [
   'デイサービス',
@@ -372,15 +385,21 @@ export function extractOfficeNameEnhanced(
     let score = 0;
     let matchType: MatchType = 'none';
 
-    // 完全一致
-    if (matchingText.includes(normalizedOfficeName)) {
+    // 完全一致 (#501: 短文字列マスターの substring 暴走を防ぐため length ガード)
+    if (
+      normalizedOfficeName.length >= OFFICE_EXACT_MATCH_MIN_LENGTH &&
+      matchingText.includes(normalizedOfficeName)
+    ) {
       score = 100;
       matchType = 'exact';
     }
-    // 短縮名での一致
+    // 短縮名での一致 (#501: 同様に length ガード)
     else if (office.shortName) {
       const normalizedShortName = normalizeForMatching(office.shortName);
-      if (matchingText.includes(normalizedShortName)) {
+      if (
+        normalizedShortName.length >= OFFICE_EXACT_MATCH_MIN_LENGTH &&
+        matchingText.includes(normalizedShortName)
+      ) {
         score = 95;
         matchType = 'exact';
       }
@@ -830,25 +849,34 @@ export function extractOfficeCandidates(
       }
     }
 
-    // 1. 完全一致（正式名称）
-    if (matchingText.includes(normalizedOfficeName)) {
+    // 1. 完全一致（正式名称） (#501: 短文字列マスターの substring 暴走を防ぐため length ガード)
+    if (
+      normalizedOfficeName.length >= OFFICE_EXACT_MATCH_MIN_LENGTH &&
+      matchingText.includes(normalizedOfficeName)
+    ) {
       score = 100;
       matchType = 'exact';
     }
-    // 2. 短縮名での一致
+    // 2. 短縮名での一致 (#501: 同様に length ガード)
     else if (office.shortName) {
       const normalizedShortName = normalizeForMatching(office.shortName);
-      if (matchingText.includes(normalizedShortName)) {
+      if (
+        normalizedShortName.length >= OFFICE_EXACT_MATCH_MIN_LENGTH &&
+        matchingText.includes(normalizedShortName)
+      ) {
         score = 95;
         matchType = 'exact';
       }
     }
 
-    // 2.5. エイリアス（許容表記）での一致
+    // 2.5. エイリアス（許容表記）での一致 (#501: 同様に length ガード)
     if (matchType === 'none' && office.aliases && office.aliases.length > 0) {
       for (const alias of office.aliases) {
         const normalizedAlias = normalizeForMatching(alias);
-        if (matchingText.includes(normalizedAlias)) {
+        if (
+          normalizedAlias.length >= OFFICE_EXACT_MATCH_MIN_LENGTH &&
+          matchingText.includes(normalizedAlias)
+        ) {
           score = 98; // 正式名称一致に近いスコア
           matchType = 'exact';
           break;
