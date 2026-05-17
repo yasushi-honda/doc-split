@@ -27,6 +27,17 @@ export interface SearchResult {
   documents: SearchResultDocument[];
   total: number;
   hasMore: boolean;
+  /**
+   * Issue #402 段階2 OOM ガード発動時のみ true。BE 側 (functions/src/search/searchDocuments.ts)
+   * の SearchResult 型と同期する optional field。true のとき total = MAX_GETALL (= 取得件数)
+   * で、実マッチ件数は actualMatchedCount を参照。
+   */
+  truncated?: boolean;
+  /**
+   * Issue #402 段階2 OOM ガード発動時のみ存在。truncate 前の実マッチ件数。
+   * SearchBar で「上位 N 件のみ表示しています (実 M 件中)」バナー表示用 (Issue #497)。
+   */
+  actualMatchedCount?: number;
 }
 
 /** 検索リクエスト */
@@ -43,6 +54,10 @@ interface UseSearchResult {
   results: SearchResultDocument[];
   total: number;
   hasMore: boolean;
+  /** Issue #402 段階2 OOM ガード発動時のみ true (SearchBar バナー表示用)。 */
+  truncated: boolean;
+  /** Issue #402 段階2 OOM ガード発動時のみ実マッチ件数。未発動時は 0 (SearchBar 未表示)。 */
+  actualMatchedCount: number;
   isLoading: boolean;
   isError: boolean;
   error: Error | null;
@@ -128,6 +143,8 @@ export function useSearch(): UseSearchResult {
     results,
     total: data?.total || 0,
     hasMore: data?.hasMore || false,
+    truncated: data?.truncated ?? false,
+    actualMatchedCount: data?.actualMatchedCount ?? 0,
     isLoading,
     isError,
     error: error as Error | null,
