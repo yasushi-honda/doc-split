@@ -63,6 +63,7 @@ import {
   useDeleteCareManager,
   useBulkImportCareManagersWithActions,
   DuplicateError,
+  ShortMasterRejectedError,
   type ImportAction,
   type BulkImportResultDetailed,
 } from '@/hooks/useMasters'
@@ -1007,8 +1008,14 @@ function OfficesMaster() {
         resetForm()
         setIsAddOpen(false)
       }
-    } catch {
-      setFormError('追加に失敗しました')
+    } catch (error) {
+      // #506 #507: ShortMasterRejectedError は collision 検出時の reject メッセージを
+      // 持つため、操作者が理由を理解できるよう message をそのまま表示する
+      if (error instanceof ShortMasterRejectedError) {
+        setFormError(error.message)
+      } else {
+        setFormError('追加に失敗しました')
+      }
     } finally {
       setCheckingDuplicate(false)
     }
@@ -1027,8 +1034,13 @@ function OfficesMaster() {
       resetForm()
       setIsAddOpen(false)
       setDuplicateConfirmOpen(false)
-    } catch {
-      setFormError('追加に失敗しました')
+    } catch (error) {
+      // #506 #507: 同上 (force=true でも collision-based reject は阻止される設計)
+      if (error instanceof ShortMasterRejectedError) {
+        setFormError(error.message)
+      } else {
+        setFormError('追加に失敗しました')
+      }
     }
   }
 

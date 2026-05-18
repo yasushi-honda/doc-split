@@ -73,11 +73,14 @@ jobs:
             echo "ERROR: max_length must be non-negative integer (got: \"$MAX_LENGTH\")" >&2
             exit 1
           fi
+          # #507 review Critical #2: --fail-on-collision を使うことで legitimate な
+          # 短マスター ("ピース"・"わかば" 等) では false-positive Issue を抑制。
+          # collision 検出 (PR #502 v2 と同じ判定) のみで通知発火する。
           NODE_PATH=./functions/node_modules \
             FIREBASE_PROJECT_ID="$PROJECT_ID" \
             node scripts/audit-short-office-masters.js \
               --max-length "$MAX_LENGTH" \
-              --fail-on-detected
+              --fail-on-collision
 
   notify-on-detection:
     needs: audit

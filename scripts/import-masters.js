@@ -322,10 +322,13 @@ async function importOffices(filePath, dryRun) {
       console.error(`     行${r.idx}: name="${r.name}" — 他マスター name の substring に頻出するため、誤分類の原因になります`);
     }
     console.error(`     計 ${rejected.length} 件の reject 行があります。CSV を修正してから再実行してください。`);
-    if (!dryRun) {
-      console.error('     (abort: --execute を中止しました。--dry-run で問題なく完了することを先に確認してください)');
-      process.exit(1);
+    // #507 review: dry-run でも reject 1+ なら exit 1 (CI gate が dry-run pass で誤判定する経路を塞ぐ)
+    if (dryRun) {
+      console.error(`     [DRY-RUN] reject=${rejected.length}, warned=${warned.length}. exit 1 で abort します。`);
+    } else {
+      console.error('     (abort: --execute を中止しました)');
     }
+    process.exit(1);
   }
   if (warned.length > 0) {
     console.warn('  ⚠ 短マスター warning (衝突は検出されないが正規名として疑わしい):');

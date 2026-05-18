@@ -13,6 +13,10 @@
 import { onRequest } from 'firebase-functions/v2/https'
 import { getFirestore, FieldValue, type Firestore } from 'firebase-admin/firestore'
 import { initializeApp, getApps } from 'firebase-admin/app'
+import {
+  normalizeForMatching,
+  COMMON_SHORT_LENGTH_THRESHOLD,
+} from '../../../shared/officeMasterValidation'
 
 if (getApps().length === 0) {
   initializeApp()
@@ -24,10 +28,11 @@ const db = getFirestore()
  * シードマスター name の最小許容長 (Issue #506)。
  *
  * 短マスター ("ケア" 2/「ニック」3 等) はそれ自体が CSV import 由来の汚染パターンで
- * あり、seed には絶対に混入させない。length<MIN を含む場合 deploy / 呼び出し時に
- * 即座に panic させて開発者に通知する。
+ * あり、seed には絶対に混入させない。`shared/officeMasterValidation.ts` の
+ * `COMMON_SHORT_LENGTH_THRESHOLD` を共有 (Evaluator 指摘 HIGH #4: 定数 drift 防止)。
+ * 判定は **normalize 後の length** で行う (raw length と shared 側挙動の不一致を回避)。
  */
-const MIN_SEED_MASTER_NAME_LENGTH = 4
+const MIN_SEED_MASTER_NAME_LENGTH = COMMON_SHORT_LENGTH_THRESHOLD
 
 /**
  * 既存マスターを name で lookup し、あれば merge update、なければ auto ID で create
@@ -47,9 +52,11 @@ async function upsertMastersByName(
     if (typeof item.name !== 'string' || item.name.length === 0) {
       throw new Error(`Seed master name is empty or non-string: ${JSON.stringify(item)}`)
     }
-    if (item.name.length < MIN_SEED_MASTER_NAME_LENGTH) {
+    // #506 #507 Evaluator HIGH #4: normalize 後 length で判定 (shared と同一仕様)
+    const normalizedLength = normalizeForMatching(item.name).length
+    if (normalizedLength < MIN_SEED_MASTER_NAME_LENGTH) {
       throw new Error(
-        `Seed master name too short: "${item.name}" (length=${item.name.length} < ${MIN_SEED_MASTER_NAME_LENGTH}). 短マスターは CSV import 由来の汚染パターンであり seed では拒否します。`,
+        `Seed master name too short: "${item.name}" (normalized length=${normalizedLength} < ${MIN_SEED_MASTER_NAME_LENGTH}). 短マスターは CSV import 由来の汚染パターンであり seed では拒否します。`,
       )
     }
     const existing = await firestore.collection(collection).where('name', '==', item.name).limit(1).get()
