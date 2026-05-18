@@ -27,62 +27,25 @@ import { similarityScore, SIMILARITY_THRESHOLDS } from './similarity';
 // Re-export for use in other modules
 export { normalizeForMatching } from './textNormalizer';
 
+// #506: collision-based common short master 判定は shared/ に集約 (BE/FE/import-masters
+// 全 write 経路で同等ロジックを共有して drift 防止)。再 export は既存 import 経路の
+// 後方互換維持のため (functions/test/extractors.test.ts 等の import 先を変えずに済む)。
+import {
+  computeCommonShortMasters,
+  COMMON_SHORT_LENGTH_THRESHOLD,
+  COMMON_SHORT_COLLISION_THRESHOLD,
+} from '../../../shared/officeMasterValidation';
+export {
+  computeCommonShortMasters,
+  COMMON_SHORT_LENGTH_THRESHOLD,
+  COMMON_SHORT_COLLISION_THRESHOLD,
+};
+
 /** 候補の最大数 */
 const MAX_CANDIDATES = 10;
 
 /** 最小スコア閾値 */
 const MIN_SCORE_THRESHOLD = 70;
-
-/**
- * Office classifier で「common short master」と判定する閾値 (#501 v2)。
- *
- * 短文字列マスター ("ケア" 2/「ニック」3 等、CSV import 由来の汚染) は OCR 文書中の
- * 他事業所名の substring として頻繁に出現するため exact match で score 100 を取り
- * 正規マスターを駆逐する。一方で legitimate な短マスター ("ピース" "わかば" "てらす"
- * 3-4 文字、cocoro/kanameone 実在) は他マスター name と衝突しないため独立して機能する。
- *
- * length 単独では distinguish 不可能なため、マスター name 同士の substring 衝突数を
- * 動的に計測し「他マスター name の substring に COMMON_SHORT_COLLISION_THRESHOLD 件以上
- * 含まれる短マスター」を common 扱いとし exact match path から除外する。partial/fuzzy
- * 経路は通常通り。
- */
-const COMMON_SHORT_LENGTH_THRESHOLD = 4; // length < N を「短い」と扱う
-const COMMON_SHORT_COLLISION_THRESHOLD = 2; // 他マスター N+ の substring に含まれる → common
-
-/**
- * マスター name 同士の substring 衝突に基づき「common short master」id 集合を返す。
- *
- * @param masters office マスター全件
- * @returns common 扱いする master id の Set (exact match から除外する対象)
- */
-export function computeCommonShortMasters(masters: OfficeMaster[]): Set<string> {
-  const commonIds = new Set<string>();
-  // 短マスターのみが対象 (長マスターは元々 substring 衝突に強い)
-  const normalizedNames = masters.map((m) => ({
-    id: m.id,
-    name: m.name,
-    normalized: normalizeForMatching(m.name),
-  }));
-  const shortMasters = normalizedNames.filter(
-    (m) => m.normalized.length > 0 && m.normalized.length < COMMON_SHORT_LENGTH_THRESHOLD,
-  );
-
-  for (const candidate of shortMasters) {
-    let collisions = 0;
-    for (const other of normalizedNames) {
-      if (other.id === candidate.id) continue;
-      if (other.normalized.length <= candidate.normalized.length) continue;
-      if (other.normalized.includes(candidate.normalized)) {
-        collisions++;
-        if (collisions >= COMMON_SHORT_COLLISION_THRESHOLD) {
-          commonIds.add(candidate.id);
-          break;
-        }
-      }
-    }
-  }
-  return commonIds;
-}
 
 /** 施設タイプキーワード（汎用語判定にも使用） */
 const FACILITY_TYPES = [

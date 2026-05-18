@@ -812,6 +812,49 @@ describe('#501 v2 computeCommonShortMasters', () => {
   });
 });
 
+// #506: 本番で発見された bug pattern を fixture から流して回帰テスト
+// (classifier collision-based 抑制 + shared validation の意図しない rollback を CI で検出)
+import { BUG_OFFICE_MASTER_PATTERNS, LEGITIMATE_SHORT_OFFICE_MASTERS } from './fixtures/bug-masters';
+
+describe('#506 本番 bug pattern 回帰テスト (extractOfficeCandidates)', () => {
+  for (const pattern of BUG_OFFICE_MASTER_PATTERNS) {
+    it(`${pattern.label}: collision 多 → exact 認定 skip、正規マスターが勝つ`, () => {
+      const masters: OfficeMaster[] = [pattern.master, ...pattern.collidingLongMasters];
+      // 任意の長マスター name を含む OCR で検証
+      const ocrText = `発行元: ${pattern.collidingLongMasters[0]!.name} 担当者報告書`;
+      const result = extractOfficeCandidates(ocrText, masters);
+
+      expect(result.bestMatch).to.not.be.null;
+      expect(result.bestMatch!.id).to.equal(pattern.collidingLongMasters[0]!.id);
+      // bug master は exact 認定されない
+      const bugMatch = result.candidates.find((c) => c.id === pattern.master.id);
+      if (bugMatch) {
+        expect(bugMatch.matchType).to.not.equal('exact');
+        expect(bugMatch.score).to.be.lessThan(100);
+      }
+    });
+  }
+});
+
+describe('#506 legitimate 短マスター保護 (extractOfficeCandidates)', () => {
+  for (const legit of LEGITIMATE_SHORT_OFFICE_MASTERS) {
+    it(`"${legit.name}" (length=${legit.name.length}): collision なし → exact 認定 score 100 を取れる`, () => {
+      const masters: OfficeMaster[] = [
+        legit,
+        { id: 'unrelated-1', name: 'デイサービスさくら', isDuplicate: false },
+        { id: 'unrelated-2', name: '訪問看護ステーション桜', isDuplicate: false },
+      ];
+      const ocrText = `発行元: ${legit.name} 利用明細書`;
+      const result = extractOfficeCandidates(ocrText, masters);
+
+      expect(result.bestMatch).to.not.be.null;
+      expect(result.bestMatch!.id).to.equal(legit.id);
+      expect(result.bestMatch!.score).to.equal(100);
+      expect(result.bestMatch!.matchType).to.equal('exact');
+    });
+  }
+});
+
 describe('aggregateOfficeCandidates', () => {
   it('複数ページの事業所候補を集約', () => {
     const pageResults: Array<{ pageNumber: number; result: OfficeExtractionResultWithCandidates }> = [

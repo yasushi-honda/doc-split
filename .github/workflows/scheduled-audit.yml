@@ -1,0 +1,119 @@
+name: Scheduled Master Audit
+
+# #506: 短マスター混入予防のための定期 audit
+# - 3 環境 (dev/kanameone/cocoro) の masters/offices/items から name.length <= 3 を抽出
+# - 検出時に GitHub issue を自動作成 (運用者が next step を判断する materials)
+# - cron は日次 (06:00 JST = 21:00 UTC、前日分)。Phase 1 で全 write 経路に
+#   予防 validation 入れたため理論上検出ゼロのはず。検出時は新たな抜け道発見の signal。
+
+on:
+  schedule:
+    # 毎日 21:00 UTC = 06:00 JST
+    - cron: '0 21 * * *'
+  workflow_dispatch:
+    inputs:
+      max_length:
+        description: 'Detect masters with name.length <= N (default: 3)'
+        required: false
+        default: '3'
+        type: string
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false # 1 環境失敗でも他環境続行
+      matrix:
+        environment:
+          - dev
+          - kanameone
+          - cocoro
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies (firebase-admin)
+        working-directory: ./functions
+        run: npm ci
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: |-
+            ${{ matrix.environment == 'kanameone' && secrets.GCP_SA_KEY_KANAMEONE ||
+                matrix.environment == 'dev' && secrets.GCP_SA_KEY_DEV ||
+                secrets.GCP_SA_KEY }}
+
+      - name: Resolve project ID
+        id: resolve
+        env:
+          ENVIRONMENT: ${{ matrix.environment }}
+        run: |
+          set -euo pipefail
+          PROJECT_ID=$(node scripts/helpers/firebaserc-helper.js get-project "$ENVIRONMENT")
+          echo "project_id=$PROJECT_ID" >> "$GITHUB_OUTPUT"
+          echo "Resolved project_id: $ENVIRONMENT → $PROJECT_ID"
+
+      - name: Run audit (--fail-on-detected)
+        id: audit
+        env:
+          PROJECT_ID: ${{ steps.resolve.outputs.project_id }}
+          # workflow_dispatch input は数値のみ許可 → bash で数値検証
+          MAX_LENGTH_INPUT: ${{ github.event.inputs.max_length }}
+        run: |
+          set -euo pipefail
+          # input validation (デフォルト 3、整数のみ許可、injection 防止)
+          MAX_LENGTH="${MAX_LENGTH_INPUT:-3}"
+          if ! [[ "$MAX_LENGTH" =~ ^[0-9]+$ ]]; then
+            echo "ERROR: max_length must be non-negative integer (got: \"$MAX_LENGTH\")" >&2
+            exit 1
+          fi
+          # #507 review Critical #2: --fail-on-collision を使うことで legitimate な
+          # 短マスター ("ピース"・"わかば" 等) では false-positive Issue を抑制。
+          # collision 検出 (PR #502 v2 と同じ判定) のみで通知発火する。
+          NODE_PATH=./functions/node_modules \
+            FIREBASE_PROJECT_ID="$PROJECT_ID" \
+            node scripts/audit-short-office-masters.js \
+              --max-length "$MAX_LENGTH" \
+              --fail-on-collision
+
+  notify-on-detection:
+    needs: audit
+    runs-on: ubuntu-latest
+    if: always() && needs.audit.result == 'failure'
+    permissions:
+      issues: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Create issue for detected short masters
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          TODAY=$(date -u +%Y-%m-%d)
+          gh issue create \
+            --title "[scheduled-audit] 短 office マスター検出 (${TODAY})" \
+            --label "bug,P2" \
+            --body "$(cat <<EOF
+## Scheduled audit が短マスターを検出
+
+[Workflow run](${RUN_URL}) で 3 環境 (dev/kanameone/cocoro) のいずれかで length<=3 の office マスターが検出されました。
+
+## 確認手順
+1. workflow run ログで該当 master id / name / 環境を確認
+2. legitimate な短マスター (新規追加分) なら本 issue を close
+3. CSV import 由来の汚染なら scripts/delete-office-master + scripts/reset-documents-by-office で cleanup
+
+## 関連
+- Issue #506 (予防策実装の親 Issue)
+- Phase 1 で全 write 経路に validation 入れたため理論上検出ゼロのはず。本検出は新たな抜け道発見の signal。
+EOF
+)"

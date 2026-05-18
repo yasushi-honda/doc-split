@@ -10,7 +10,11 @@
  *   FIREBASE_PROJECT_ID=<project-id> node scripts/audit-short-office-masters.js [--max-length N]
  *
  * オプション:
- *   --max-length N  name.length <= N のエントリを出力 (default: 3)
+ *   --max-length N         name.length <= N のエントリを出力 (default: 3)
+ *   --fail-on-detected     length<=N のエントリが 1件でも見つかれば exit 1 (legitimate 含む)
+ *   --fail-on-collision    PR #507 review Critical #2 対応: legitimate 短マスター (collision なし)
+ *                          を除外し、common short master (PR #502 v2 と同じ collision 判定)
+ *                          のみで exit 1 する。scheduled audit から呼ぶ場合の推奨 flag。
  */
 
 const admin = require('firebase-admin');
@@ -23,6 +27,8 @@ if (!projectId) {
 
 const args = process.argv.slice(2);
 let maxLength = 3;
+let failOnDetected = false;
+let failOnCollision = false;
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--max-length' && args[i + 1]) {
     const n = parseInt(args[i + 1], 10);
@@ -32,8 +38,17 @@ for (let i = 0; i < args.length; i++) {
     }
     maxLength = n;
     i++;
+  } else if (args[i] === '--fail-on-detected') {
+    // length<=N で 1 件でも検出 → exit 1 (legitimate 短マスター含む)
+    failOnDetected = true;
+  } else if (args[i] === '--fail-on-collision') {
+    // #507 review Critical #2: legitimate (collision なし) を除外し、common short master のみで exit 1
+    failOnCollision = true;
   }
 }
+
+// shared collision 判定 (PR #502 v2 と同等)。Bridge 経由で ts-node から TS を require
+const { computeCommonShortMasters } = require('./lib/officeMasterValidationBridge');
 
 admin.initializeApp({ projectId });
 const db = admin.firestore();
@@ -82,14 +97,43 @@ async function main() {
     console.log('');
   }
 
+  // #507 review Critical #2: collision 判定で legitimate と汚染を区別
+  const allMasters = snap.docs.map((doc) => ({
+    id: doc.id,
+    name: typeof doc.data().name === 'string' ? doc.data().name : '',
+  }));
+  const commonShortIds = computeCommonShortMasters(allMasters);
+  const collisionDetected = short.filter((s) => commonShortIds.has(s.id));
+
   console.log(`\n=== サマリー ===`);
   console.log(`プロジェクト: ${projectId}`);
   console.log(`全件: ${snap.size}`);
   console.log(`length <= ${maxLength}: ${short.length}件`);
+  console.log(`うち common short master (collision 検出): ${collisionDetected.length}件`);
+  if (collisionDetected.length > 0) {
+    console.log('common short master id:');
+    for (const c of collisionDetected) {
+      console.log(`  - ${c.id} (name="${c.name}")`);
+    }
+  }
+  return { detectedCount: short.length, collisionCount: collisionDetected.length };
 }
 
 main()
-  .then(() => process.exit(0))
+  .then(({ detectedCount, collisionCount }) => {
+    // #507 review: --fail-on-collision (新規) を優先評価 → legitimate 短マスターでは
+    // exit 0、bug pattern (collision 検出) でのみ exit 1。scheduled audit からは
+    // 本 flag を使うことで false-positive Issue を抑制する。
+    if (failOnCollision && collisionCount > 0) {
+      console.error(`\n[FAIL] --fail-on-collision: common short master ${collisionCount}件が検出されたため exit 1`);
+      process.exit(1);
+    }
+    if (failOnDetected && detectedCount > 0) {
+      console.error(`\n[FAIL] --fail-on-detected: ${detectedCount}件の短マスターが検出されたため exit 1 (legitimate 含む)`);
+      process.exit(1);
+    }
+    process.exit(0);
+  })
   .catch((err) => {
     console.error('エラー:', err);
     process.exit(1);

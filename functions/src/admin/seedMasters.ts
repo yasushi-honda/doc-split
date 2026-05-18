@@ -11,14 +11,71 @@
  */
 
 import { onRequest } from 'firebase-functions/v2/https'
-import { getFirestore, FieldValue } from 'firebase-admin/firestore'
+import { getFirestore, FieldValue, type Firestore } from 'firebase-admin/firestore'
 import { initializeApp, getApps } from 'firebase-admin/app'
+import {
+  normalizeForMatching,
+  COMMON_SHORT_LENGTH_THRESHOLD,
+} from '../../../shared/officeMasterValidation'
 
 if (getApps().length === 0) {
   initializeApp()
 }
 
 const db = getFirestore()
+
+/**
+ * シードマスター name の最小許容長 (Issue #506)。
+ *
+ * 短マスター ("ケア" 2/「ニック」3 等) はそれ自体が CSV import 由来の汚染パターンで
+ * あり、seed には絶対に混入させない。`shared/officeMasterValidation.ts` の
+ * `COMMON_SHORT_LENGTH_THRESHOLD` を共有 (Evaluator 指摘 HIGH #4: 定数 drift 防止)。
+ * 判定は **normalize 後の length** で行う (raw length と shared 側挙動の不一致を回避)。
+ */
+const MIN_SEED_MASTER_NAME_LENGTH = COMMON_SHORT_LENGTH_THRESHOLD
+
+/**
+ * 既存マスターを name で lookup し、あれば merge update、なければ auto ID で create
+ * する upsert pattern (Issue #506)。
+ *
+ * 旧実装の `db.collection(...).doc(name)` + `{ merge: true }` は id=name で固定する
+ * 副作用で「ケア」「ニック」のような日本語 ID 汚染を生み出す経路だった。本関数は
+ * id を auto-generate しつつ name 単位の冪等性を担保する。
+ */
+async function upsertMastersByName(
+  firestore: Firestore,
+  collection: string,
+  items: Array<Record<string, unknown> & { name: string }>,
+): Promise<number> {
+  let count = 0
+  for (const item of items) {
+    if (typeof item.name !== 'string' || item.name.length === 0) {
+      throw new Error(`Seed master name is empty or non-string: ${JSON.stringify(item)}`)
+    }
+    // #506 #507 Evaluator HIGH #4: normalize 後 length で判定 (shared と同一仕様)
+    const normalizedLength = normalizeForMatching(item.name).length
+    if (normalizedLength < MIN_SEED_MASTER_NAME_LENGTH) {
+      throw new Error(
+        `Seed master name too short: "${item.name}" (normalized length=${normalizedLength} < ${MIN_SEED_MASTER_NAME_LENGTH}). 短マスターは CSV import 由来の汚染パターンであり seed では拒否します。`,
+      )
+    }
+    const existing = await firestore.collection(collection).where('name', '==', item.name).limit(1).get()
+    if (!existing.empty) {
+      await existing.docs[0]!.ref.set(
+        { ...item, updatedAt: FieldValue.serverTimestamp() },
+        { merge: true },
+      )
+    } else {
+      await firestore.collection(collection).add({
+        ...item,
+        createdAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      })
+    }
+    count++
+  }
+  return count
+}
 
 // 書類種別マスターデータ
 const DOCUMENT_MASTERS = [
@@ -72,22 +129,12 @@ export const seedDocumentMasters = onRequest(
   { region: 'asia-northeast1', memory: '256MiB' },
   async (req, res) => {
     try {
-      const batch = db.batch()
+      // #506: doc(name) → name lookup + auto ID upsert に統一 (汚染経路潰し)
+      const count = await upsertMastersByName(db, 'masters/documents/items', DOCUMENT_MASTERS)
 
-      for (const doc of DOCUMENT_MASTERS) {
-        const ref = db.collection('masters/documents/items').doc(doc.name)
-        batch.set(ref, {
-          ...doc,
-          createdAt: FieldValue.serverTimestamp(),
-          updatedAt: FieldValue.serverTimestamp(),
-        }, { merge: true })
-      }
-
-      await batch.commit()
-
-      const message = `書類種別マスター ${DOCUMENT_MASTERS.length}件 シード完了`
+      const message = `書類種別マスター ${count}件 シード完了`
       console.log(message)
-      res.json({ success: true, message, count: DOCUMENT_MASTERS.length })
+      res.json({ success: true, message, count })
     } catch (error) {
       console.error('シードエラー:', error)
       res.status(500).json({ success: false, error: String(error) })
@@ -104,57 +151,13 @@ export const seedAllMasters = onRequest(
     try {
       const results: Record<string, number> = {}
 
-      // 書類種別
-      const docBatch = db.batch()
-      for (const doc of DOCUMENT_MASTERS) {
-        const ref = db.collection('masters/documents/items').doc(doc.name)
-        docBatch.set(ref, {
-          ...doc,
-          createdAt: FieldValue.serverTimestamp(),
-          updatedAt: FieldValue.serverTimestamp(),
-        }, { merge: true })
-      }
-      await docBatch.commit()
-      results.documents = DOCUMENT_MASTERS.length
-
-      // 顧客
-      const custBatch = db.batch()
-      for (const cust of CUSTOMER_MASTERS) {
-        const ref = db.collection('masters/customers/items').doc(cust.name)
-        custBatch.set(ref, {
-          ...cust,
-          createdAt: FieldValue.serverTimestamp(),
-          updatedAt: FieldValue.serverTimestamp(),
-        }, { merge: true })
-      }
-      await custBatch.commit()
-      results.customers = CUSTOMER_MASTERS.length
-
-      // 事業所
-      const officeBatch = db.batch()
-      for (const office of OFFICE_MASTERS) {
-        const ref = db.collection('masters/offices/items').doc(office.name)
-        officeBatch.set(ref, {
-          ...office,
-          createdAt: FieldValue.serverTimestamp(),
-          updatedAt: FieldValue.serverTimestamp(),
-        }, { merge: true })
-      }
-      await officeBatch.commit()
-      results.offices = OFFICE_MASTERS.length
-
-      // ケアマネジャー
-      const cmBatch = db.batch()
-      for (const cm of CAREMANAGER_MASTERS) {
-        const ref = db.collection('masters/caremanagers/items').doc(cm.name)
-        cmBatch.set(ref, {
-          ...cm,
-          createdAt: FieldValue.serverTimestamp(),
-          updatedAt: FieldValue.serverTimestamp(),
-        }, { merge: true })
-      }
-      await cmBatch.commit()
-      results.caremanagers = CAREMANAGER_MASTERS.length
+      // #506: 全 master を name lookup + auto ID upsert pattern に統一
+      // (旧実装の doc(name) は id=name 固定で「ケア」「ニック」等の日本語 ID 汚染を
+      // 生む経路だった。新実装は冪等性を name 一意性で担保しつつ auto ID 化)
+      results.documents = await upsertMastersByName(db, 'masters/documents/items', DOCUMENT_MASTERS)
+      results.customers = await upsertMastersByName(db, 'masters/customers/items', CUSTOMER_MASTERS)
+      results.offices = await upsertMastersByName(db, 'masters/offices/items', OFFICE_MASTERS)
+      results.caremanagers = await upsertMastersByName(db, 'masters/caremanagers/items', CAREMANAGER_MASTERS)
 
       console.log('全マスターデータシード完了:', results)
       res.json({ success: true, results })
