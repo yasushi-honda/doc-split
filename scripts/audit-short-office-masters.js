@@ -23,6 +23,7 @@ if (!projectId) {
 
 const args = process.argv.slice(2);
 let maxLength = 3;
+let failOnDetected = false;
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--max-length' && args[i + 1]) {
     const n = parseInt(args[i + 1], 10);
@@ -32,6 +33,9 @@ for (let i = 0; i < args.length; i++) {
     }
     maxLength = n;
     i++;
+  } else if (args[i] === '--fail-on-detected') {
+    // #506: scheduled audit から workflow が exit code で検知できるよう non-zero exit を選択可能化
+    failOnDetected = true;
   }
 }
 
@@ -86,10 +90,19 @@ async function main() {
   console.log(`プロジェクト: ${projectId}`);
   console.log(`全件: ${snap.size}`);
   console.log(`length <= ${maxLength}: ${short.length}件`);
+  return short.length;
 }
 
 main()
-  .then(() => process.exit(0))
+  .then((detectedCount) => {
+    // #506: --fail-on-detected が指定された場合、検出件数>0 で non-zero exit
+    // (scheduled workflow から exit code 経由で Slack 通知 / Issue 自動作成を分岐可能に)
+    if (failOnDetected && detectedCount > 0) {
+      console.error(`\n[FAIL] --fail-on-detected: ${detectedCount}件の短マスターが検出されたため exit 1`);
+      process.exit(1);
+    }
+    process.exit(0);
+  })
   .catch((err) => {
     console.error('エラー:', err);
     process.exit(1);

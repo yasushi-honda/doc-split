@@ -292,13 +292,59 @@ async function importOffices(filePath, dryRun) {
     console.log(`  同名事業所を検出: ${duplicateNames.join(', ')}`);
   }
 
+  // #506: 短マスター混入予防 — collision-based 動的判定
+  // 既存マスター + 新規 CSV row を合算して各 row の verdict を計算する
+  // (新規 row 同士の衝突も検知できる)。
+  const { validateOfficeMasterImport } = require('./lib/officeMasterValidationBridge');
+  const existingSnap = await db.collection('masters/offices/items').get();
+  const existing = existingSnap.docs.map((d) => ({ id: d.id, name: d.data().name || '' }));
+  // 新規 row 集合 (仮 id 付与で内部識別のみに利用、Firestore 書き込み時は別 auto ID を生成)
+  const newCandidates = rows.map((row, idx) => ({
+    id: `__new_${idx}__`,
+    name: row['name'] || row['事業所名'] || '',
+  }));
+  const combined = existing.concat(newCandidates);
+  const rejected = []; // { row, name, idx }
+  const warned = []; // { row, name, idx }
+  for (let i = 0; i < newCandidates.length; i++) {
+    const candidate = newCandidates[i];
+    const verdict = validateOfficeMasterImport(candidate, combined);
+    if (verdict.kind === 'reject-short-common') {
+      rejected.push({ idx: i + 2, name: candidate.name }); // CSV 行番号 (header=1 とした 2 起点)
+    } else if (verdict.kind === 'warning-short-uncommon') {
+      warned.push({ idx: i + 2, name: candidate.name });
+    }
+  }
+
+  if (rejected.length > 0) {
+    console.error('  ❌ 短マスター衝突 reject (CSV import 由来の汚染パターン、登録不可):');
+    for (const r of rejected) {
+      console.error(`     行${r.idx}: name="${r.name}" — 他マスター name の substring に頻出するため、誤分類の原因になります`);
+    }
+    console.error(`     計 ${rejected.length} 件の reject 行があります。CSV を修正してから再実行してください。`);
+    if (!dryRun) {
+      console.error('     (abort: --execute を中止しました。--dry-run で問題なく完了することを先に確認してください)');
+      process.exit(1);
+    }
+  }
+  if (warned.length > 0) {
+    console.warn('  ⚠ 短マスター warning (衝突は検出されないが正規名として疑わしい):');
+    for (const w of warned) {
+      console.warn(`     行${w.idx}: name="${w.name}" — 短い正規事業所名なら問題なし、誤入力の場合は CSV を修正してください`);
+    }
+  }
+
   console.log(`  ✓ ${rows.length}件の事業所を解析しました`);
   if (dryRun) return;
 
+  // reject があれば既に process.exit(1) 済。warning は通過させて続行 (operator 判断)。
   const batch = db.batch();
   let count = 0;
 
-  for (const row of rows) {
+  for (let i = 0; i < rows.length; i++) {
+    // reject 行は skip
+    if (rejected.some((r) => r.idx === i + 2)) continue;
+    const row = rows[i];
     // 期待するカラム: name, shortName (optional)
     const name = row['name'] || row['事業所名'] || '';
     const docRef = db.collection('masters/offices/items').doc();

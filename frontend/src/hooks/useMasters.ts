@@ -22,12 +22,27 @@ import type {
   OfficeMaster,
   CareManagerMaster,
 } from '@shared/types'
+import { validateOfficeMasterImport } from '@shared/officeMasterValidation'
 
 // 重複エラークラス
 export class DuplicateError extends Error {
   constructor(message: string) {
     super(message)
     this.name = 'DuplicateError'
+  }
+}
+
+/**
+ * 短マスター混入 reject エラー (#506)。
+ *
+ * CSV import 由来の汚染パターン (「ケア」「ニック」等、length<4 で他マスター name の
+ * substring に頻出するもの) を登録しようとした際に発火する。誤分類を未然に防ぐため
+ * 操作者へのフィードバックとして利用。
+ */
+export class ShortMasterRejectedError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'ShortMasterRejectedError'
   }
 }
 
@@ -530,6 +545,21 @@ async function addOffice(params: AddOfficeParams | string): Promise<string> {
   const force = typeof params === 'string' ? false : params.force
 
   const normalizedName = normalizeName(name)
+
+  // #506: 短マスター混入予防 collision-based validation
+  // 既存マスター全件と比較し、length<4 かつ他マスター name の substring に頻出する
+  // 短マスター ("ケア"・"ニック" 等の汚染パターン) は登録を拒否。
+  const existingSnapshot = await getDocs(collection(db, COLLECTION_PATHS.offices))
+  const existing = existingSnapshot.docs.map(d => ({ id: d.id, name: (d.data().name as string) || '' }))
+  const verdict = validateOfficeMasterImport({ id: '__new__', name: normalizedName }, existing)
+  if (verdict.kind === 'reject-short-common') {
+    throw new ShortMasterRejectedError(
+      `「${normalizedName}」は他事業所名の一部として頻出する短い名前のため登録できません (誤分類の原因になります)。`,
+    )
+  }
+  if (verdict.kind === 'warning-short-uncommon') {
+    console.warn(`[short master warning] "${normalizedName}" は短い名前です。誤入力でないか確認してください。`)
+  }
 
   // 重複チェック（force=trueの場合はスキップ）
   if (!force) {
@@ -1164,20 +1194,48 @@ async function bulkImportOfficesWithActions(
   // 既存データを取得
   const snapshot = await getDocs(collection(db, COLLECTION_PATHS.offices))
   const existingByName = new Map<string, string>()
+  const existingForCollision: Array<{ id: string; name: string }> = []
   snapshot.docs.forEach(d => {
-    existingByName.set(d.data().name, d.id)
+    const docName = (d.data().name as string) || ''
+    existingByName.set(docName, d.id)
+    existingForCollision.push({ id: d.id, name: docName })
   })
+
+  // #506: 短マスター混入予防 — 新規登録予定 row も合算して collision-based 判定
+  // (新規 row 同士の衝突も検知できる)。reject 行は skip カウントに含める。
+  const newCandidates = items.map((item, idx) => ({
+    id: `__new_${idx}__`,
+    name: normalizeName(item.data.name),
+  }))
+  const combined = existingForCollision.concat(newCandidates)
+  const rejectedShortIndices = new Set<number>()
+  for (let i = 0; i < newCandidates.length; i++) {
+    const verdict = validateOfficeMasterImport(newCandidates[i]!, combined)
+    if (verdict.kind === 'reject-short-common') {
+      rejectedShortIndices.add(i)
+    } else if (verdict.kind === 'warning-short-uncommon') {
+      console.warn(`[short master warning] "${newCandidates[i]!.name}" は短い名前です。誤入力でないか確認してください。`)
+    }
+  }
 
   let added = 0
   let overwritten = 0
   let skipped = 0
   const skippedNames: string[] = []
 
-  for (const item of items) {
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i]!
     const normalizedName = normalizeName(item.data.name)
     if (!normalizedName) {
       skipped++
       skippedNames.push('(空)')
+      continue
+    }
+
+    // #506: 短マスター reject 行は skip としてカウント、skippedNames に明示
+    if (rejectedShortIndices.has(i)) {
+      skipped++
+      skippedNames.push(`${normalizedName} (短マスター reject)`)
       continue
     }
 
