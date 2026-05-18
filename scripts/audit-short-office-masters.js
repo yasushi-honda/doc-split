@@ -76,7 +76,9 @@ async function main() {
   console.log(`=== name.length <= ${maxLength} のマスター: ${short.length}件 ===\n`);
   if (short.length === 0) {
     console.log('該当なし');
-    return;
+    // Issue #510: main().then(({ detectedCount, collisionCount }) => {}) で destructure するため、
+    // 0 件 case でも shape を維持して return する必要がある。
+    return { detectedCount: 0, collisionCount: 0 };
   }
 
   for (const entry of short) {
