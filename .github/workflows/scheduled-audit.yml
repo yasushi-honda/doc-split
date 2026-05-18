@@ -99,21 +99,28 @@ jobs:
         run: |
           set -euo pipefail
           TODAY=$(date -u +%Y-%m-%d)
+          # YAML literal block scalar の indent (10 spaces) を heredoc 内も維持する必要がある。
+          # block scalar 終了と誤判定されて workflow 全体の parse が壊れ、
+          # workflow_dispatch / schedule trigger が認識されなくなるため。
+          # heredoc 出力後に行頭 10 spaces を sed で除去して issue body 化する。
+          BODY=$(cat <<EOF
+          ## Scheduled audit が短マスターを検出
+
+          [Workflow run](${RUN_URL}) で 3 環境 (dev/kanameone/cocoro) のいずれかで length<=3 の office マスターが検出されました。
+
+          ## 確認手順
+          1. workflow run ログで該当 master id / name / 環境を確認
+          2. legitimate な短マスター (新規追加分) なら本 issue を close
+          3. CSV import 由来の汚染なら scripts/delete-office-master + scripts/reset-documents-by-office で cleanup
+
+          ## 関連
+          - Issue #506 (予防策実装の親 Issue)
+          - Phase 1 で全 write 経路に validation 入れたため理論上検出ゼロのはず。本検出は新たな抜け道発見の signal。
+          EOF
+          )
+          # shellcheck disable=SC2001  # 行頭限定除去のため sed が簡潔
+          BODY=$(echo "$BODY" | sed 's/^          //')
           gh issue create \
             --title "[scheduled-audit] 短 office マスター検出 (${TODAY})" \
             --label "bug,P2" \
-            --body "$(cat <<EOF
-## Scheduled audit が短マスターを検出
-
-[Workflow run](${RUN_URL}) で 3 環境 (dev/kanameone/cocoro) のいずれかで length<=3 の office マスターが検出されました。
-
-## 確認手順
-1. workflow run ログで該当 master id / name / 環境を確認
-2. legitimate な短マスター (新規追加分) なら本 issue を close
-3. CSV import 由来の汚染なら scripts/delete-office-master + scripts/reset-documents-by-office で cleanup
-
-## 関連
-- Issue #506 (予防策実装の親 Issue)
-- Phase 1 で全 write 経路に validation 入れたため理論上検出ゼロのはず。本検出は新たな抜け道発見の signal。
-EOF
-)"
+            --body "$BODY"
