@@ -5,9 +5,20 @@
  */
 
 import { expect } from 'chai';
-import { isTransientError, is429Error } from '../src/utils/retry';
+import {
+  isTransientError,
+  is429Error,
+  isQuotaErrorMessage,
+  calculateRetryDelay429Ms,
+} from '../src/utils/retry';
 // #196: 実装値を side-effect-free な constants.ts から import して drift 防止
-import { MAX_RETRY_COUNT, STUCK_RESCUE_RETRY_AFTER_MS } from '../src/ocr/constants';
+import {
+  MAX_RETRY_COUNT,
+  MAX_RETRY_COUNT_429,
+  RETRY_DELAYS_429_MS,
+  RETRY_JITTER_FACTOR,
+  STUCK_RESCUE_RETRY_AFTER_MS,
+} from '../src/ocr/constants';
 
 describe('ocrProcessor', () => {
   describe('tryStartProcessing ロジック検証', () => {
@@ -510,6 +521,167 @@ describe('ocrProcessor', () => {
         const shouldSkip = retryAfter > Date.now();
         expect(shouldSkip).to.be.false;
       });
+    });
+  });
+
+  // 429 専用 retry policy (Vertex AI 429 Resilience 2026-06-12)
+  // 既存 MAX_RETRY_COUNT (5) は他 transient 用に維持。429 系のみ MAX_RETRY_COUNT_429 (8) + exponential delay。
+  describe('calculateRetryDelay429Ms (429 専用 delay 計算)', () => {
+    it('retry 1 の base delay は 1 分 (60_000 ms)', () => {
+      const delay = calculateRetryDelay429Ms(1, () => 0.5);
+      expect(delay).to.equal(60_000);
+    });
+
+    it('retry 2 の base delay は 3 分 (180_000 ms)', () => {
+      const delay = calculateRetryDelay429Ms(2, () => 0.5);
+      expect(delay).to.equal(180_000);
+    });
+
+    it('retry 6 の base delay は 48 分 (2_880_000 ms)', () => {
+      const delay = calculateRetryDelay429Ms(6, () => 0.5);
+      expect(delay).to.equal(2_880_000);
+    });
+
+    it('retry 8 (最大) の base delay は 60 分 (3_600_000 ms)', () => {
+      const delay = calculateRetryDelay429Ms(8, () => 0.5);
+      expect(delay).to.equal(3_600_000);
+    });
+
+    it('retry 9+ は配列末尾値で clamp (3_600_000 ms)', () => {
+      const delay = calculateRetryDelay429Ms(99, () => 0.5);
+      expect(delay).to.equal(3_600_000);
+    });
+
+    it('retry 0 / 負数は retry 1 と同等 (safe guard)', () => {
+      expect(calculateRetryDelay429Ms(0, () => 0.5)).to.equal(60_000);
+      expect(calculateRetryDelay429Ms(-3, () => 0.5)).to.equal(60_000);
+    });
+
+    it('jitter 下端 (rng=0) は base * 0.8 (factor 0.2)', () => {
+      const delay = calculateRetryDelay429Ms(1, () => 0);
+      // base 60_000 * (1 + (0*2-1)*0.2) = 60_000 * 0.8 = 48_000
+      expect(delay).to.equal(48_000);
+    });
+
+    it('jitter 上端付近 (rng≈1) は base * 1.2 弱 (factor 0.2)', () => {
+      // rng() は [0,1) なので 1 は到達不可。0.999... 近似
+      const delay = calculateRetryDelay429Ms(1, () => 0.9999999);
+      // base 60_000 * (1 + (0.9999*2-1)*0.2) ≈ 60_000 * 1.2 ≈ 72_000
+      expect(delay).to.be.closeTo(72_000, 50);
+    });
+
+    it('jitter range が全 retry attempt で base ±20% に収まる', () => {
+      for (let attempt = 1; attempt <= RETRY_DELAYS_429_MS.length; attempt++) {
+        const base = RETRY_DELAYS_429_MS[attempt - 1];
+        const lower = calculateRetryDelay429Ms(attempt, () => 0);
+        const upper = calculateRetryDelay429Ms(attempt, () => 0.9999999);
+        expect(lower).to.be.at.least(Math.floor(base * (1 - RETRY_JITTER_FACTOR)));
+        expect(upper).to.be.at.most(Math.ceil(base * (1 + RETRY_JITTER_FACTOR)));
+      }
+    });
+  });
+
+  describe('429 vs 非 429 transient の maxRetries 分岐 (handleProcessingError)', () => {
+    /**
+     * 実装ロジック:
+     *   const newRetryCount = (currentRetryCount || 0) + 1;
+     *   const maxRetries = is429Error(error) ? MAX_RETRY_COUNT_429 : MAX_RETRY_COUNT;
+     *   if (transient && newRetryCount < maxRetries) pending else error
+     *
+     * 本 describe は newRetryCount を直接代入する pure logic 検証。
+     * (currentRetryCount → newRetryCount の +1 増分は integration test 側でカバー)
+     */
+
+    it('429 系 + newRetryCount=5 → pending (< MAX_RETRY_COUNT_429=8)', () => {
+      const isQuotaError = true;
+      const maxRetries = isQuotaError ? MAX_RETRY_COUNT_429 : MAX_RETRY_COUNT;
+      const newRetryCount = 5;
+      expect(newRetryCount < maxRetries).to.be.true;
+    });
+
+    it('429 系 + newRetryCount=7 → pending (< MAX_RETRY_COUNT_429=8、最後の retry)', () => {
+      const isQuotaError = true;
+      const maxRetries = isQuotaError ? MAX_RETRY_COUNT_429 : MAX_RETRY_COUNT;
+      const newRetryCount = 7;
+      expect(newRetryCount < maxRetries).to.be.true;
+    });
+
+    it('429 系 + newRetryCount=8 → error 確定 (== MAX_RETRY_COUNT_429 到達)', () => {
+      const isQuotaError = true;
+      const maxRetries = isQuotaError ? MAX_RETRY_COUNT_429 : MAX_RETRY_COUNT;
+      const newRetryCount = 8;
+      expect(newRetryCount < maxRetries).to.be.false;
+    });
+
+    it('非 429 transient + newRetryCount=4 → pending (< MAX_RETRY_COUNT=5、既存挙動)', () => {
+      const isQuotaError = false;
+      const maxRetries = isQuotaError ? MAX_RETRY_COUNT_429 : MAX_RETRY_COUNT;
+      const newRetryCount = 4;
+      expect(newRetryCount < maxRetries).to.be.true;
+    });
+
+    it('非 429 transient + newRetryCount=5 → error 確定 (== MAX_RETRY_COUNT 到達、既存挙動維持)', () => {
+      const isQuotaError = false;
+      const maxRetries = isQuotaError ? MAX_RETRY_COUNT_429 : MAX_RETRY_COUNT;
+      const newRetryCount = 5;
+      expect(newRetryCount < maxRetries).to.be.false;
+    });
+
+    it('39 分 quota 枯渇 (kanameone 2026-06-11 事象) は MAX_RETRY_COUNT_429 で吸収可能', () => {
+      // retry 1: 1 min, retry 2: 3 min, retry 3: 6 min → 累計 10 分で 3 回 retry 完了
+      // retry 4: 12 min → 累計 22 分で 4 回 retry 完了
+      // retry 5: 24 min → 累計 46 分で 5 回 retry 完了
+      // 39 分時点では retry 5 進行中 → error 確定せず pending 継続
+      const cumulativeMinutes = [1, 4, 10, 22, 46, 94, 154, 214];
+      // retry 5 完了時点で 46 分 > 39 分 ∴ 39 分間の quota 枯渇は retry 1-5 のいずれかで吸収
+      expect(cumulativeMinutes[4]).to.be.greaterThan(39);
+      // 旧 MAX_RETRY_COUNT=5 + 3 min 固定だと累計 15 分 < 39 分 → error 確定するパターン
+      expect(MAX_RETRY_COUNT * 3).to.be.lessThan(39);
+    });
+  });
+
+  describe('isQuotaErrorMessage (lastErrorMessage string 判定)', () => {
+    it('null/undefined/空文字は false', () => {
+      expect(isQuotaErrorMessage(null)).to.be.false;
+      expect(isQuotaErrorMessage(undefined)).to.be.false;
+      expect(isQuotaErrorMessage('')).to.be.false;
+    });
+
+    it('"429" を含む文字列は true', () => {
+      expect(isQuotaErrorMessage('VertexAI.ClientError: got status: 429 Too Many Requests')).to.be
+        .true;
+    });
+
+    it('"RESOURCE_EXHAUSTED" (大文字混在) は true', () => {
+      expect(isQuotaErrorMessage('status: RESOURCE_EXHAUSTED')).to.be.true;
+    });
+
+    it('"resource exhausted" (スペース版) は true', () => {
+      expect(isQuotaErrorMessage('Resource Exhausted: quota limit reached')).to.be.true;
+    });
+
+    it('"quota exceeded" は true', () => {
+      expect(isQuotaErrorMessage('Quota exceeded for this project')).to.be.true;
+    });
+
+    it('"too many requests" は true', () => {
+      expect(isQuotaErrorMessage('Too Many Requests - please retry later')).to.be.true;
+    });
+
+    it('非 429 系 transient (timeout 等) は false', () => {
+      expect(isQuotaErrorMessage('Request timeout')).to.be.false;
+      expect(isQuotaErrorMessage('Connection reset')).to.be.false;
+    });
+
+    it('一般的なエラー (permission denied 等) は false', () => {
+      expect(isQuotaErrorMessage('Permission denied')).to.be.false;
+      expect(isQuotaErrorMessage('Invalid argument')).to.be.false;
+    });
+
+    it('kanameone 2026-06-11 実エラー message は true', () => {
+      const actual =
+        '[VertexAI.ClientError]: got status: 429 Too Many Requests. {"error":{"code":429,"message":"Resource exhausted. Please try again later. ...","status":"RESOURCE_EXHAUSTED"}}';
+      expect(isQuotaErrorMessage(actual)).to.be.true;
     });
   });
 });

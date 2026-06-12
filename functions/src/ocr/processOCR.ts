@@ -14,6 +14,7 @@
 import { onSchedule } from 'firebase-functions/v2/scheduler';
 import * as admin from 'firebase-admin';
 import { trackGeminiUsage } from '../utils/rateLimiter';
+import { isQuotaErrorMessage } from '../utils/retry';
 import { logError, safeLogError } from '../utils/errorLogger';
 import {
   tryStartProcessing,
@@ -28,6 +29,11 @@ import {
   STUCK_PROCESSING_THRESHOLD_MS,
   STUCK_RESCUE_PENDING_MESSAGE,
   STUCK_RESCUE_FATAL_MESSAGE_PREFIX,
+  ERROR_RESCUE_THRESHOLD_MS,
+  ERROR_RESCUE_RETRY_AFTER_MS,
+  ERROR_RESCUE_SCAN_INTERVAL_MS,
+  MAX_ERROR_RESCUE_COUNT,
+  RESCUE_STATE_DOC_PATH,
 } from './constants';
 
 const db = admin.firestore();
@@ -73,6 +79,10 @@ export const processOCR = onSchedule(
     try {
       // processing状態で長時間スタックしたドキュメントを救済
       await rescueStuckProcessingDocs();
+
+      // 429 系 error 状態 doc を 1 時間ごとに rescue (backstop)
+      // 主防御は handleProcessingError 内の 429 専用 retry policy。本 rescue は保険。
+      await rescueErroredDocumentsIfDue();
 
       // pending状態のドキュメントを取得
       const pendingDocs = await db
@@ -246,4 +256,132 @@ export async function rescueStuckProcessingDocs(): Promise<void> {
       });
     }
   }
+}
+
+/**
+ * processOCR scheduler の冒頭で呼び出す interval ガード。
+ *
+ * `meta/ocrRescueState` doc の lastErrorRescueAt を参照し、
+ * `ERROR_RESCUE_SCAN_INTERVAL_MS` (1 時間) 経過時のみ scan 実行 + timestamp 更新。
+ * 1 min cadence の processOCR で毎回 scan を走らせる過剰実行を防止。
+ *
+ * doc 不在 (初回起動) の場合は即時 scan、その後 timestamp 書き込み。
+ *
+ * NOTE: `processOCR` の `maxInstances: 1` を前提に non-transactional な read-then-write
+ * で実装している。`maxInstances` を 2+ に変更する場合は state read/write を transaction
+ * 化して並列 instance の同時 scan を防ぐこと (現状の実装では同時 scan が稀に発生しうる)。
+ */
+export async function rescueErroredDocumentsIfDue(): Promise<void> {
+  const stateRef = db.doc(RESCUE_STATE_DOC_PATH);
+  const stateSnap = await stateRef.get();
+  const lastAt = (stateSnap.data()?.lastErrorRescueAt as admin.firestore.Timestamp | undefined)
+    ?.toMillis?.();
+  const now = Date.now();
+
+  if (lastAt && now - lastAt < ERROR_RESCUE_SCAN_INTERVAL_MS) {
+    return; // interval 未到達 → skip
+  }
+
+  try {
+    await rescueErroredDocuments();
+  } finally {
+    // scan 失敗時も次回再試行を 1 時間後にずらす (storm 回避)。
+    // 失敗を完全に隠さないよう内側で catch しない。
+    await stateRef.set(
+      { lastErrorRescueAt: admin.firestore.Timestamp.fromMillis(now) },
+      { merge: true }
+    );
+  }
+}
+
+/**
+ * 429 系 error 状態の doc を pending に戻す (backstop)。
+ *
+ * 主防御 (handleProcessingError 内の 429 専用 retry policy) を逃れて error 確定した doc を救済。
+ * - 条件: status='error' AND updatedAt < (now - 1h) AND lastErrorMessage に 429 系キーワード AND errorRescueCount < 3
+ * - 動作: status='pending', retryCount=0 リセット, retryAfter=now+10min, errorRescueCount++
+ * - 永続ループ防止: errorRescueCount >= MAX_ERROR_RESCUE_COUNT で対象外 (手動介入)
+ *
+ * integration test から直接呼び出すため export している。
+ */
+export async function rescueErroredDocuments(): Promise<void> {
+  const cutoff = admin.firestore.Timestamp.fromMillis(Date.now() - ERROR_RESCUE_THRESHOLD_MS);
+
+  const erroredDocs = await db
+    .collection('documents')
+    .where('status', '==', 'error')
+    .where('updatedAt', '<', cutoff)
+    .limit(BATCH_SIZE * 2) // 1 時間ごとなので多めに拾う
+    .get();
+
+  if (erroredDocs.empty) return;
+
+  console.log(`Found ${erroredDocs.size} errored documents to evaluate for rescue`);
+
+  let rescuedCount = 0;
+  let skippedNon429 = 0;
+  let skippedMaxRescue = 0;
+
+  for (const docSnapshot of erroredDocs.docs) {
+    const docId = docSnapshot.id;
+    const data = docSnapshot.data();
+
+    if (!isQuotaErrorMessage(data.lastErrorMessage as string | null | undefined)) {
+      skippedNon429++;
+      continue;
+    }
+
+    const rescueCount = (data.errorRescueCount as number) || 0;
+    if (rescueCount >= MAX_ERROR_RESCUE_COUNT) {
+      skippedMaxRescue++;
+      continue;
+    }
+
+    const docRef = db.doc(`documents/${docId}`);
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const rescued = await db.runTransaction(async (tx) => {
+        const fresh = await tx.get(docRef);
+        const freshData = fresh.data();
+        // 並列で他 worker が status を変えた場合は no-op (race condition 対策)
+        if (freshData?.status !== 'error') return false;
+        const currentRescueCount = (freshData?.errorRescueCount as number) || 0;
+        if (currentRescueCount >= MAX_ERROR_RESCUE_COUNT) return false;
+
+        tx.update(docRef, {
+          status: 'pending',
+          retryCount: 0,
+          retryAfter: admin.firestore.Timestamp.fromMillis(
+            Date.now() + ERROR_RESCUE_RETRY_AFTER_MS
+          ),
+          errorRescueCount: currentRescueCount + 1,
+          lastRescuedAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        return true;
+      });
+
+      if (rescued) {
+        rescuedCount++;
+        console.log(
+          `Rescued errored ${docId} (rescueCount: ${rescueCount + 1}/${MAX_ERROR_RESCUE_COUNT}, ` +
+            `retryAfter: ${ERROR_RESCUE_RETRY_AFTER_MS / 60000}min)`
+        );
+      }
+    } catch (err) {
+      console.error(`Failed to rescue errored document ${docId}:`, err);
+      // eslint-disable-next-line no-await-in-loop
+      await safeLogError({
+        error: err instanceof Error ? err : new Error(String(err)),
+        source: 'ocr',
+        functionName: FUNCTION_NAME,
+        documentId: docId,
+      });
+    }
+  }
+
+  console.log(
+    `Error rescue summary: rescued=${rescuedCount}, skipped_non429=${skippedNon429}, ` +
+      `skipped_max_rescue=${skippedMaxRescue}`
+  );
 }
