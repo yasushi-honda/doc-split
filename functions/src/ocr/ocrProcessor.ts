@@ -7,7 +7,13 @@
 import * as admin from 'firebase-admin';
 import { VertexAI } from '@google-cloud/vertexai';
 import { PDFDocument } from 'pdf-lib';
-import { withRetry, RETRY_CONFIGS, isTransientError, is429Error } from '../utils/retry';
+import {
+  withRetry,
+  RETRY_CONFIGS,
+  isTransientError,
+  is429Error,
+  calculateRetryDelay429Ms,
+} from '../utils/retry';
 import { safeLogError } from '../utils/errorLogger';
 import { getRateLimiter } from '../utils/rateLimiter';
 import { GCP_CONFIG, GEMINI_CONFIG } from '../utils/config';
@@ -400,13 +406,17 @@ export async function processDocument(
 // MAX_RETRY_COUNT は side-effect-free な constants.ts から re-export (#196)。
 // ここを直接 const として定義すると test 側 import で admin.firestore() top-level 実行が走る。
 export { MAX_RETRY_COUNT } from './constants';
-import { MAX_RETRY_COUNT } from './constants';
+import { MAX_RETRY_COUNT, MAX_RETRY_COUNT_429 } from './constants';
 
 /**
  * エラー時の処理
  *
- * transientエラー（429等）の場合はstatus:pendingに戻して自動リトライ。
- * リトライ上限（MAX_RETRY_COUNT）超過時のみstatus:errorに設定。
+ * transient エラー (429 等) の場合は status:pending に戻して自動リトライ。
+ * - 429/RESOURCE_EXHAUSTED 系: MAX_RETRY_COUNT_429 (8) + exponential delay + jitter
+ *   (Vertex AI quota 数十分〜数時間の枯渇を吸収、kanameone 2026-06-11 事象予防)
+ * - その他 transient (network/timeout 等): MAX_RETRY_COUNT (5) + 1 分 delay (既存挙動維持)
+ *
+ * リトライ上限超過 or 非 transient エラーは status:error 確定。
  */
 export async function handleProcessingError(
   docId: string,
@@ -416,6 +426,8 @@ export async function handleProcessingError(
   console.error(`Error processing document ${docId}:`, error.message);
 
   const transient = isTransientError(error);
+  const isQuotaError = is429Error(error);
+  const maxRetries = isQuotaError ? MAX_RETRY_COUNT_429 : MAX_RETRY_COUNT;
 
   // ステータス更新を最優先（トランザクションでretryCountをアトミックに管理）
   try {
@@ -425,12 +437,15 @@ export async function handleProcessingError(
       const currentRetryCount = (doc.data()?.retryCount as number) || 0;
       const newRetryCount = currentRetryCount + 1;
 
-      if (transient && newRetryCount < MAX_RETRY_COUNT) {
+      if (transient && newRetryCount < maxRetries) {
         // transientエラーかつ上限未満 → pendingに戻して自動リトライ
-        // 429/RESOURCE_EXHAUSTEDは3分、その他transientは1分待機
-        const isQuotaError = is429Error(error);
-        const retryAfterMs = isQuotaError ? 3 * 60 * 1000 : 1 * 60 * 1000;
-        console.log(`Transient error for ${docId}, retrying (${newRetryCount}/${MAX_RETRY_COUNT}), retryAfter: ${retryAfterMs / 1000}s (quota: ${isQuotaError})`);
+        const retryAfterMs = isQuotaError
+          ? calculateRetryDelay429Ms(newRetryCount)
+          : 1 * 60 * 1000;
+        console.log(
+          `Transient error for ${docId}, retrying (${newRetryCount}/${maxRetries}), ` +
+            `retryAfter: ${Math.round(retryAfterMs / 1000)}s (quota: ${isQuotaError})`
+        );
         tx.update(docRef, {
           status: 'pending',
           retryCount: newRetryCount,
@@ -440,10 +455,16 @@ export async function handleProcessingError(
         });
       } else {
         // 非transientエラーまたはリトライ上限超過 → error確定
-        console.error(`Fatal/max-retry error for ${docId} (retryCount: ${newRetryCount}, transient: ${transient})`);
+        console.error(
+          `Fatal/max-retry error for ${docId} (retryCount: ${newRetryCount}/${maxRetries}, ` +
+            `transient: ${transient}, quota: ${isQuotaError})`
+        );
+        // retryAfter は直前 retry で書き込まれた値が残存しうる → delete で一貫性確保
+        // (rescueStuckProcessingDocs の fatal 分岐 #196 と同じパターン)
         tx.update(docRef, {
           status: 'error',
           retryCount: newRetryCount,
+          retryAfter: admin.firestore.FieldValue.delete(),
           lastErrorMessage: error.message.slice(0, 500),
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         });

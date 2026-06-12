@@ -39,9 +39,14 @@ async function resetDoc(docRef, data) {
     status: 'pending',
     retryCount: 0,
     lastErrorMessage: null,
+    // 2026-06-12 vertex 429 resilience: 自動 rescue 状態もクリア。
+    // 残存すると errorRescueCount 由来で次回自動 rescue 対象外になり手動意図と矛盾する。
+    errorRescueCount: admin.firestore.FieldValue.delete(),
+    lastRescuedAt: admin.firestore.FieldValue.delete(),
+    retryAfter: admin.firestore.FieldValue.delete(),
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   });
-  console.log(`    → pendingに変更（retryCount: 0）`);
+  console.log(`    → pendingに変更（retryCount: 0, rescue state cleared）`);
 }
 
 async function runSingle() {

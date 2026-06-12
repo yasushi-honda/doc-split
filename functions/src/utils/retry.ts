@@ -4,6 +4,8 @@
  * error-handling-policy.md に基づく Exponential Backoff 実装
  */
 
+import { RETRY_DELAYS_429_MS, RETRY_JITTER_FACTOR } from '../ocr/constants';
+
 /** リトライ設定 */
 export interface RetryConfig {
   maxRetries: number;
@@ -88,6 +90,21 @@ export function isTransientError(error: unknown): boolean {
 }
 
 /**
+ * 429/RESOURCE_EXHAUSTED 系の message キーワード集合。
+ *
+ * `is429Error` (Error 引数) と `isQuotaErrorMessage` (string 引数) で共通利用。
+ * 片方の追加時に他方が drift しないよう単一定義 (DRY)。
+ * すべて lowercase で記述すること (両関数とも入力を toLowerCase してから match)。
+ */
+const QUOTA_ERROR_MESSAGE_KEYWORDS: readonly string[] = [
+  '429',
+  'too many requests',
+  'resource exhausted',
+  'resource_exhausted',
+  'quota exceeded',
+];
+
+/**
  * 429/RESOURCE_EXHAUSTEDエラー（配額超過）かどうか判定
  *
  * retryAfter待機時間の決定に使用（429系は長めに待機）
@@ -105,18 +122,45 @@ export function is429Error(error: unknown): boolean {
   // gRPCコード RESOURCE_EXHAUSTED
   if (errorWithCode.code === 'RESOURCE_EXHAUSTED') return true;
 
-  // メッセージベース検出
-  if (
-    message.includes('429') ||
-    message.includes('too many requests') ||
-    message.includes('resource exhausted') ||
-    message.includes('resource_exhausted') ||
-    message.includes('quota exceeded')
-  ) {
-    return true;
-  }
+  // メッセージベース検出 (QUOTA_ERROR_MESSAGE_KEYWORDS を共有)
+  return QUOTA_ERROR_MESSAGE_KEYWORDS.some((kw) => message.includes(kw));
+}
 
-  return false;
+/**
+ * lastErrorMessage 文字列に 429/RESOURCE_EXHAUSTED 系のキーワードが含まれるか判定。
+ *
+ * `is429Error` は Error オブジェクト引数 (status/code/message の多経路チェック) だが、
+ * 本関数は Firestore に保存された `lastErrorMessage` (string) を判定する用途。
+ * rescueErroredDocuments で「処理時の 429 が原因の error 状態 doc のみ rescue」判定に使用。
+ *
+ * `is429Error` の message ベース判定と同じ QUOTA_ERROR_MESSAGE_KEYWORDS を共有。
+ */
+export function isQuotaErrorMessage(msg: string | null | undefined): boolean {
+  if (!msg) return false;
+  const lower = msg.toLowerCase();
+  return QUOTA_ERROR_MESSAGE_KEYWORDS.some((kw) => lower.includes(kw));
+}
+
+/**
+ * 429/RESOURCE_EXHAUSTED 専用 retry delay 計算 (jitter 込み)。
+ *
+ * retryCount に応じて RETRY_DELAYS_429_MS から base 値を選び、
+ * ±RETRY_JITTER_FACTOR の範囲で jitter を加える (thundering herd 対策)。
+ *
+ * @param retryCount 1-indexed の retry attempt 数
+ * @param rng [0,1) を返す乱数生成器 (テスト時に inject 可)
+ * @returns retry 待機時間 (ms)
+ */
+export function calculateRetryDelay429Ms(
+  retryCount: number,
+  rng: () => number = Math.random
+): number {
+  const safeAttempt = Math.max(1, retryCount);
+  const idx = Math.min(safeAttempt - 1, RETRY_DELAYS_429_MS.length - 1);
+  const baseMs = RETRY_DELAYS_429_MS[idx];
+  // jitter: rng() ∈ [0,1) → (rng()*2 - 1) ∈ [-1,1) → factor 倍で ±RETRY_JITTER_FACTOR
+  const jitterMultiplier = 1 + (rng() * 2 - 1) * RETRY_JITTER_FACTOR;
+  return Math.round(baseMs * jitterMultiplier);
 }
 
 /**

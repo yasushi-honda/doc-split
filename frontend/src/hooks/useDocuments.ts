@@ -306,6 +306,11 @@ export function getReprocessClearFields() {
     // 古い値を残さずクリアする。#178 教訓 (派生フィールド drift 防止) の延長。
     retryCount: df,
     retryAfter: df,
+    // 429 系 error 自動 rescue 状態 (2026-06-12 vertex 429 resilience):
+    // 手動 reprocess 時もクリアして「自動 rescue 諦め (MAX_ERROR_RESCUE_COUNT 到達)」を
+    // user 操作で解除可能にする。残存すると次回 429 で即「対象外」判定されてしまう。
+    errorRescueCount: df,
+    lastRescuedAt: df,
   }
 }
 
