@@ -1,0 +1,317 @@
+#!/usr/bin/env ts-node
+/**
+ * Issue #492: Ambiguous collision docs cleanup (方針 A データ駆動版)
+ *
+ * 同名・同 Storage path を共有する重複 Firestore docs (Issue #432 復旧で
+ * manual-review 除外された Ambiguous 群) を winner 1 件残しで削除する。
+ *
+ * 安全装置:
+ *   - dry-run デフォルト。--execute 明示時のみ削除
+ *   - plan JSON (scripts/plans/) に winner/loser を固定。projectId 二重照合
+ *   - preconditions all-or-nothing (scripts/lib/ambiguousCleanup.ts 参照)。
+ *     ユーザーが触った doc (verified / editedAt / rotatedAt) は削除禁止
+ *   - 削除前に winner+loser 全フィールド JSON バックアップを必ず出力
+ *   - 件数厳密アサーション (plan.expectedLoserCount と 1 件でもずれたら abort)
+ *   - Storage 実体は一切触らない (winner が同一ファイルを参照継続)。
+ *     本スクリプトは Storage の read (existence check) のみで delete API を呼ばない
+ *   - 事後検証: loser 不在 / winner 現存 / 共有 Storage path 現存
+ *
+ * 使用方法:
+ *   FIREBASE_PROJECT_ID=<project-id> STORAGE_BUCKET=<bucket> \
+ *     npx ts-node scripts/cleanup-ambiguous-collision-docs.ts \
+ *       [--plan <path>] [--execute] [--backup-out <path>]
+ *       [--seed-dev-fixture [--seed-violation]] [--cleanup-fixture]
+ *
+ *   --plan 省略時は FIREBASE_PROJECT_ID から plans/ 配下を自動選択
+ *   --seed-dev-fixture: dev 専用。fixture plan と一致する合成 docs を投入
+ *   --seed-violation: fixture の loser 1 件に editedAt を付与 (reject 経路の実証用)
+ *   --cleanup-fixture: dev 専用。fixture docs + Storage 実体を削除
+ */
+
+import * as admin from 'firebase-admin';
+import * as fs from 'fs';
+import * as path from 'path';
+import { PDFDocument } from 'pdf-lib';
+import {
+  CleanupPlan,
+  DocState,
+  validatePlanStructure,
+  evaluatePreconditions,
+} from './lib/ambiguousCleanup';
+
+const projectId = process.env.FIREBASE_PROJECT_ID;
+const storageBucket = process.env.STORAGE_BUCKET;
+
+if (!projectId) {
+  console.error('FIREBASE_PROJECT_ID を設定してください');
+  process.exit(1);
+}
+
+function getOpt(name: string): string | null {
+  const i = process.argv.indexOf(name);
+  return i >= 0 && i + 1 < process.argv.length ? process.argv[i + 1] : null;
+}
+
+const execute = process.argv.includes('--execute');
+const seedDevFixture = process.argv.includes('--seed-dev-fixture');
+const seedViolation = process.argv.includes('--seed-violation');
+const cleanupFixture = process.argv.includes('--cleanup-fixture');
+const planPathOpt = getOpt('--plan');
+const backupOut =
+  getOpt('--backup-out') ||
+  path.join(process.cwd(), `cleanup-ambiguous-backup-${projectId}.json`);
+
+// plan 自動選択: projectId → plans/ 配下。未知 projectId は明示 --plan 必須
+function resolvePlanPath(): string {
+  if (planPathOpt) return planPathOpt;
+  if (projectId === 'docsplit-kanameone') {
+    return path.join(__dirname, 'plans', 'cleanup-ambiguous-492-kanameone.json');
+  }
+  if (projectId!.includes('dev')) {
+    return path.join(__dirname, 'plans', 'cleanup-ambiguous-492-dev-fixture.json');
+  }
+  console.error(
+    `FATAL: projectId=${projectId} 用の既定 plan がありません。--plan で明示してください。`
+  );
+  process.exit(2);
+}
+
+admin.initializeApp(
+  storageBucket ? { projectId, storageBucket } : { projectId }
+);
+const db = admin.firestore();
+
+function loadPlan(planPath: string): CleanupPlan {
+  const plan = JSON.parse(fs.readFileSync(planPath, 'utf-8')) as CleanupPlan;
+  const structErrors = validatePlanStructure(plan);
+  if (structErrors.length > 0) {
+    console.error('FATAL: plan 構造エラー:');
+    for (const e of structErrors) console.error(`  - ${e}`);
+    process.exit(2);
+  }
+  if (plan.projectId !== projectId) {
+    console.error(
+      `FATAL: plan.projectId=${plan.projectId} と FIREBASE_PROJECT_ID=${projectId} が不一致`
+    );
+    process.exit(2);
+  }
+  return plan;
+}
+
+function gsUrl(fileName: string): string {
+  return `gs://${storageBucket}/processed/${fileName}`;
+}
+
+/** dev 専用ガード */
+function assertDevOnly(op: string): void {
+  if (!projectId!.includes('dev')) {
+    console.error(`FATAL: ${op} は dev 環境専用です (projectId=${projectId})`);
+    process.exit(2);
+  }
+  if (!storageBucket) {
+    console.error(`FATAL: ${op} には STORAGE_BUCKET が必要です`);
+    process.exit(2);
+  }
+}
+
+async function seedFixture(plan: CleanupPlan): Promise<void> {
+  assertDevOnly('--seed-dev-fixture');
+  const bucket = admin.storage().bucket();
+
+  // 親 doc
+  const parentId = plan.groups[0].parentDocumentId;
+  await db.collection('documents').doc(parentId).set({
+    fileName: 'fixture492-parent.pdf',
+    status: 'processed',
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    fixture: 'issue-492-cleanup',
+  });
+
+  for (const [gi, g] of plan.groups.entries()) {
+    // 共有 Storage 実体 (1 グループ 1 ファイル)
+    const pdf = await PDFDocument.create();
+    pdf.addPage([200, 200]);
+    const bytes = await pdf.save();
+    await bucket.file(`processed/${g.fileName}`).save(Buffer.from(bytes), {
+      contentType: 'application/pdf',
+    });
+
+    const fileUrl = gsUrl(g.fileName);
+    const docIds = [g.winnerDocId, ...g.loserDocIds];
+    for (const [di, docId] of docIds.entries()) {
+      const isWinner = di === 0;
+      const data: Record<string, unknown> = {
+        fileName: g.fileName,
+        fileUrl,
+        parentDocumentId: g.parentDocumentId,
+        status: 'processed',
+        customerName: '未判定',
+        documentType: '未判定',
+        // グループ 1 の winner のみ verified=true (本番 p1-4 / p23-24 相当)
+        verified: isWinner && gi === 0,
+        customerConfirmed: isWinner && gi === 0,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        fixture: 'issue-492-cleanup',
+      };
+      // reject 経路実証: 最初のグループの loser-a に editedAt を付与
+      if (seedViolation && gi === 0 && docId === g.loserDocIds[0]) {
+        data.editedAt = admin.firestore.FieldValue.serverTimestamp();
+      }
+      await db.collection('documents').doc(docId).set(data);
+    }
+  }
+  console.log(
+    `✅ fixture 投入完了: parent 1 + docs ${plan.groups.reduce((n, g) => n + 1 + g.loserDocIds.length, 0)} 件` +
+      (seedViolation ? ' (violation: グループ1 loser-a に editedAt 付与)' : '')
+  );
+}
+
+async function removeFixture(plan: CleanupPlan): Promise<void> {
+  assertDevOnly('--cleanup-fixture');
+  const bucket = admin.storage().bucket();
+  const ids = new Set<string>([plan.groups[0].parentDocumentId]);
+  for (const g of plan.groups) {
+    ids.add(g.winnerDocId);
+    for (const id of g.loserDocIds) ids.add(id);
+  }
+  for (const id of ids) {
+    // fixture マーカー付き doc のみ削除 (実データ巻き込み防止)
+    const snap = await db.collection('documents').doc(id).get();
+    if (snap.exists && snap.data()?.fixture === 'issue-492-cleanup') {
+      await snap.ref.delete();
+    }
+  }
+  for (const g of plan.groups) {
+    await bucket
+      .file(`processed/${g.fileName}`)
+      .delete()
+      .catch(() => undefined); // 404 は冪等扱い
+  }
+  console.log(`✅ fixture 削除完了 (docs ${ids.size} 件 + Storage ${plan.groups.length} 件)`);
+}
+
+async function fetchDocStates(plan: CleanupPlan): Promise<Map<string, DocState>> {
+  const ids: string[] = [];
+  for (const g of plan.groups) {
+    ids.push(g.winnerDocId, ...g.loserDocIds);
+  }
+  const refs = ids.map((id) => db.collection('documents').doc(id));
+  const snaps = await db.getAll(...refs);
+  const map = new Map<string, DocState>();
+  snaps.forEach((snap, i) => {
+    map.set(ids[i], { exists: snap.exists, data: snap.data() as Record<string, unknown> });
+  });
+  return map;
+}
+
+function writeBackup(plan: CleanupPlan, docs: Map<string, DocState>): void {
+  const backup = {
+    createdAt: new Date().toISOString(),
+    projectId,
+    planIssue: plan.issue,
+    note: 'Issue #492 cleanup 前の全対象 doc スナップショット (winner 含む)。Timestamp は {_seconds,_nanoseconds} 形式。',
+    docs: Object.fromEntries(
+      [...docs.entries()].map(([id, s]) => [id, s.exists ? s.data : null])
+    ),
+  };
+  fs.writeFileSync(backupOut, JSON.stringify(backup, null, 2));
+  console.log(`📦 バックアップ出力: ${backupOut} (${docs.size} docs)`);
+}
+
+async function main(): Promise<void> {
+  const planPath = resolvePlanPath();
+  const plan = loadPlan(planPath);
+
+  console.log('=== Issue #492 Ambiguous collision docs cleanup ===');
+  console.log(`project: ${projectId}`);
+  console.log(`plan: ${planPath} (groups=${plan.groups.length}, expectedLoserCount=${plan.expectedLoserCount})`);
+  console.log(`mode: ${execute ? '⚠️ EXECUTE (削除実行)' : 'dry-run (書き込みなし)'}`);
+
+  if (cleanupFixture) {
+    await removeFixture(plan);
+    return;
+  }
+  if (seedDevFixture) {
+    await seedFixture(plan);
+    return;
+  }
+
+  // 1. 現状取得
+  const docs = await fetchDocStates(plan);
+
+  // 2. バックアップ (dry-run でも出力し、レビュー材料にする)
+  writeBackup(plan, docs);
+
+  // 3. preconditions (all-or-nothing)
+  const { violations, deletions } = evaluatePreconditions(plan, docs);
+  if (violations.length > 0) {
+    console.error(`❌ precondition 違反 ${violations.length} 件。削除は一切行いません:`);
+    for (const v of violations) console.error(`  - ${v}`);
+    process.exit(1);
+  }
+
+  console.log(`✅ preconditions 全通過。削除対象 ${deletions.length} 件:`);
+  for (const d of deletions) {
+    console.log(`  - ${d.docId} (${d.fileName}, winner=${d.winnerDocId})`);
+  }
+
+  if (!execute) {
+    console.log('dry-run 終了 (削除するには --execute を指定)');
+    return;
+  }
+
+  // 4. 削除実行 (Firestore doc のみ。Storage は不可侵)
+  let deleted = 0;
+  for (const d of deletions) {
+    await db.collection('documents').doc(d.docId).delete();
+    deleted++;
+  }
+  if (deleted !== plan.expectedLoserCount) {
+    console.error(
+      `❌ 削除件数不一致: expected=${plan.expectedLoserCount} actual=${deleted}。事後検証で確認してください。`
+    );
+    process.exit(1);
+  }
+  console.log(`🗑️ 削除完了: ${deleted} 件`);
+
+  // 5. 事後検証
+  const after = await fetchDocStates(plan);
+  const postErrors: string[] = [];
+  for (const g of plan.groups) {
+    if (!after.get(g.winnerDocId)?.exists) {
+      postErrors.push(`winner ${g.winnerDocId} が消えている (${g.fileName})`);
+    }
+    for (const id of g.loserDocIds) {
+      if (after.get(id)?.exists) {
+        postErrors.push(`loser ${id} が残存 (${g.fileName})`);
+      }
+    }
+  }
+  if (storageBucket) {
+    const bucket = admin.storage().bucket();
+    for (const g of plan.groups) {
+      const [exists] = await bucket.file(`processed/${g.fileName}`).exists();
+      if (!exists) {
+        postErrors.push(`Storage 実体 processed/${g.fileName} が不在 (winner が閲覧不能)`);
+      }
+    }
+  } else {
+    console.warn('⚠️ STORAGE_BUCKET 未設定のため Storage 実体の事後検証をスキップ');
+  }
+
+  if (postErrors.length > 0) {
+    console.error('❌ 事後検証エラー:');
+    for (const e of postErrors) console.error(`  - ${e}`);
+    process.exit(1);
+  }
+  console.log(
+    `✅ 事後検証 OK: winner ${plan.groups.length} 件現存 / loser ${plan.expectedLoserCount} 件削除済 / Storage 実体現存`
+  );
+}
+
+main().catch((err) => {
+  console.error('FATAL:', err);
+  process.exit(1);
+});

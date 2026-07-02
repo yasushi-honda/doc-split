@@ -76,6 +76,11 @@ on:
           - pdf-feature-survey --source gcs --prefix processed/ --limit 200
           - pdf-feature-survey --source gcs --prefix processed/ --expect-filter /CCITTFaxDecode --expect-subtype /Image
           - pdf-feature-survey --source local --paths fixtures/ --expect-filter /CCITTFaxDecode,/JBIG2Decode,/JPXDecode,/DCTDecode --expect-subtype /Image --expect-encrypted
+          - cleanup-ambiguous-collision-docs --dry-run
+          - cleanup-ambiguous-collision-docs --execute
+          - cleanup-ambiguous-collision-docs --seed-dev-fixture
+          - cleanup-ambiguous-collision-docs --seed-dev-fixture --seed-violation
+          - cleanup-ambiguous-collision-docs --cleanup-fixture
           - verify-pdf-determinism --synthetic
           - verify-pdf-determinism --paths fixtures/simple.pdf,fixtures/with-ccittfaxdecode.pdf,fixtures/with-jbig2decode.pdf,fixtures/with-jpxdecode.pdf,fixtures/with-dctdecode.pdf,fixtures/encrypted.pdf
       doc_id:
@@ -557,6 +562,17 @@ jobs:
               FIREBASE_PROJECT_ID="$PROJECT_ID" \
               STORAGE_BUCKET="$STORAGE_BUCKET" \
               npx ts-node "${SCRIPT_NAME}.ts" $SCRIPT_ARGS $EXTRA_ARGS
+          elif [ "$SCRIPT_NAME" = "cleanup-ambiguous-collision-docs" ]; then
+            # Issue #492: Ambiguous collision docs cleanup。scripts/lib/* (TypeScript)
+            # 依存のため ts-node 経由。plan は projectId から scripts/plans/ 配下を
+            # 自動選択 (plan.projectId と FIREBASE_PROJECT_ID の二重照合あり)。
+            # バックアップ JSON は log secret masking 回避のため artifact 経由で取得。
+            cd scripts
+            NODE_PATH=../functions/node_modules \
+              FIREBASE_PROJECT_ID="$PROJECT_ID" \
+              STORAGE_BUCKET="$STORAGE_BUCKET" \
+              npx ts-node "${SCRIPT_NAME}.ts" $SCRIPT_ARGS \
+                --backup-out "${GITHUB_WORKSPACE}/scripts/cleanup-ambiguous-backup.json"
           elif [ "$SCRIPT_NAME" = "inspect-document" ]; then
             # SCRIPT_ARGS は workflow_dispatch で選んだ "--file-name" / "--doc-id" / "... --include-related"
             # FILE_NAME / DOC_ID は env 経由で受け取り、配列に積んで execv 渡しでシェル展開を経由しない
@@ -637,6 +653,18 @@ jobs:
           path: scripts/verify-pdf-determinism-output.json
           if-no-files-found: warn
           retention-days: 30
+
+      - name: Upload cleanup-ambiguous backup artifact
+        # Issue #492: 削除前バックアップ (winner 含む全対象 doc スナップショット)。
+        # destructive 操作の復旧材料のため retention を長めに取る。
+        # dry-run でも出力されるためレビュー材料としても使える。
+        if: ${{ startsWith(github.event.inputs.script, 'cleanup-ambiguous-collision-docs') && always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: cleanup-ambiguous-backup-${{ github.event.inputs.environment }}-${{ github.run_id }}
+          path: scripts/cleanup-ambiguous-backup.json
+          if-no-files-found: ignore
+          retention-days: 90
 
       - name: Upload audit-session61-parent-provenance report artifact
         # Issue #432 PR-C2-execution post-audit: log secret masking 回避のため
