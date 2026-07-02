@@ -2,7 +2,14 @@
 
 ## Status
 
-Proposed (2026-06-12、本 PR で実装、Phase B/C deploy 完了で Accepted)。
+Accepted (2026-07-02)。2026-06-12 実装 + 3 環境 deploy 完了 (session90)、約 3 週間の運用実績確認で格上げ。
+
+### 格上げ根拠 (2026-07-02 運用実績確認、read-only 監査)
+
+- **kanameone 2026-06-16**: 約 7.9 時間 (06:15-14:08 UTC) の 429 ストーム (ログ 683 件) が発生。発端事象 (39 分) を大きく超える規模だったが、主防御が大半を吸収し error 化は 6 doc のみ。backstop が全件自動 rescue (いずれも rescueCount 1/3) → 全件完走。Risks 欄「3.5 時間以上枯渇 → rescue で完走を待つ」シナリオを実戦で実証
+- **kanameone 2026-06-17**: 429 ×104 件 → 主防御のみで完全吸収 (error 化ゼロ)
+- **cocoro**: 429 ×2 件のみ (in-call retry で即吸収)、rescue 発火なし
+- rescue 上限 (3 回) 到達ゼロ、手動介入ゼロ、確認時点で 3 環境すべて status=error doc 数 0
 
 ## Context
 
