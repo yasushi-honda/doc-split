@@ -8,26 +8,32 @@
  * 設計方針:
  *   - all-or-nothing: precondition 違反が 1 件でもあれば削除対象ゼロ
  *   - 削除は Firestore doc のみ。Storage 実体は winner が参照継続するため不可侵
- *     (このモジュールは削除自体を行わない。CLI 側も Storage delete API を呼ばない)
+ *     (このモジュールは削除自体を行わない。CLI 側も cleanup 本経路 (dry-run / --execute)
+ *      では Storage delete API を呼ばない。dev 専用 --seed-dev-fixture / --cleanup-fixture
+ *      のみ例外で fixture 実体の作成・削除を行う)
  *   - loser は「ユーザーが一度も触っていない doc」のみ許可
  *     (verified=true / editedAt あり / rotatedAt あり はすべて reject)
  */
 
-export const AMBIGUOUS_CLEANUP_SCHEMA_VERSION = 'ambiguous-cleanup-v1';
+export const AMBIGUOUS_CLEANUP_SCHEMA_VERSION = 'ambiguous-cleanup-v1' as const;
+export type AmbiguousCleanupSchemaVersion = typeof AMBIGUOUS_CLEANUP_SCHEMA_VERSION;
 
 export interface CleanupGroup {
   /** 共有されている fileName (例: 20260413_未判定_未判定_p1-4.pdf) */
   fileName: string;
   /** グループ全 docs が持つべき親 doc ID */
   parentDocumentId: string;
-  /** 残す doc (クライアント編集/確認済み doc 優先、なければ docId 辞書順先頭) */
+  /**
+   * 残す doc。plan 作成時の選定ポリシーは「クライアント編集/確認済み doc 優先、
+   * なければ docId 辞書順先頭」(本モジュールはこのポリシー自体を検証しない)
+   */
   winnerDocId: string;
   /** 削除する docs */
   loserDocIds: string[];
 }
 
 export interface CleanupPlan {
-  schemaVersion: string;
+  schemaVersion: AmbiguousCleanupSchemaVersion;
   issue: number;
   projectId: string;
   description?: string;
@@ -124,6 +130,11 @@ function str(data: Record<string, unknown>, key: string): string | undefined {
  *   - winner doc が存在する
  *   - winner.fileName === plan.fileName
  *   - winner.parentDocumentId === plan.parentDocumentId
+ *   - winner.fileUrl が非空
+ *
+ * validatePlanStructure 通過済み plan を前提とするが、winner が loserDocIds に
+ * 混入した plan は本関数単独でも reject する (defense-in-depth。混入時は loser の
+ * fileUrl 照合が「winner 自身との比較」になり全 precondition を素通りするため)。
  *
  * 違反が 1 件でもあれば deletions は空 (all-or-nothing)。
  */
@@ -135,6 +146,12 @@ export function evaluatePreconditions(
   const deletions: PlannedDeletion[] = [];
 
   for (const g of plan.groups) {
+    if (g.loserDocIds.includes(g.winnerDocId)) {
+      violations.push(
+        `${g.fileName}: winner ${g.winnerDocId} が loserDocIds に含まれる (defense-in-depth)`
+      );
+      continue;
+    }
     const winner = docs.get(g.winnerDocId);
     if (!winner || !winner.exists || !winner.data) {
       violations.push(`${g.fileName}: winner ${g.winnerDocId} が存在しない`);

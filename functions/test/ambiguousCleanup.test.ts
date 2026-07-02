@@ -11,6 +11,8 @@
  */
 
 import { expect } from 'chai';
+import * as fs from 'fs';
+import * as path from 'path';
 import {
   AMBIGUOUS_CLEANUP_SCHEMA_VERSION,
   CleanupPlan,
@@ -71,7 +73,9 @@ describe('ambiguousCleanup: validatePlanStructure', () => {
   });
 
   it('schemaVersion 不一致を reject', () => {
-    const errors = validatePlanStructure(makePlan({ schemaVersion: 'v0' }));
+    const errors = validatePlanStructure(
+      makePlan({ schemaVersion: 'v0' as CleanupPlan['schemaVersion'] })
+    );
     expect(errors.some((e) => e.includes('schemaVersion'))).to.equal(true);
   });
 
@@ -79,7 +83,9 @@ describe('ambiguousCleanup: validatePlanStructure', () => {
     const plan = makePlan();
     plan.groups[0].loserDocIds = ['winner-1', 'loser-1b'];
     const errors = validatePlanStructure(plan);
-    expect(errors.some((e) => e.includes('winner'))).to.equal(true);
+    // 専用チェックのメッセージ固有文字列で assert (「docId 重複」との overlap で
+    // 専用チェック削除を検知できなくなるのを防ぐ — pr-test-analyzer 反映)
+    expect(errors.some((e) => e.includes('loserDocIds に含まれる'))).to.equal(true);
   });
 
   it('グループ跨ぎの docId 重複を reject', () => {
@@ -218,5 +224,96 @@ describe('ambiguousCleanup: evaluatePreconditions', () => {
     const { violations, deletions } = evaluatePreconditions(makePlan(), docs);
     expect(violations).to.deep.equal([]);
     expect(deletions).to.have.length(2);
+  });
+
+  it('winner の fileName 不一致なら reject (stale plan の防波堤)', () => {
+    const docs = healthyDocs();
+    docs.set('winner-1', makeDoc({ verified: true, fileName: 'reassigned.pdf' }));
+    const { violations, deletions } = evaluatePreconditions(makePlan(), docs);
+    expect(violations.some((v) => v.includes('winner') && v.includes('fileName 不一致'))).to.equal(true);
+    expect(deletions).to.deep.equal([]);
+  });
+
+  it('winner の parentDocumentId 不一致なら reject', () => {
+    const docs = healthyDocs();
+    docs.set('winner-1', makeDoc({ verified: true, parentDocumentId: 'other-parent' }));
+    const { violations, deletions } = evaluatePreconditions(makePlan(), docs);
+    expect(
+      violations.some((v) => v.includes('winner') && v.includes('parentDocumentId 不一致'))
+    ).to.equal(true);
+    expect(deletions).to.deep.equal([]);
+  });
+
+  it('winner が loserDocIds に混入した plan は evaluatePreconditions 単独でも reject (defense-in-depth)', () => {
+    // validatePlanStructure を経由しない呼び出し経路への防御。混入時は loser の
+    // fileUrl 照合が「winner 自身との比較」になり全 precondition を素通りするため、
+    // ここで止めないと winner 本体が削除対象に載る
+    const plan = makePlan();
+    plan.groups[0].loserDocIds = ['winner-1', 'loser-1b'];
+    const { violations, deletions } = evaluatePreconditions(plan, healthyDocs());
+    expect(violations.some((v) => v.includes('loserDocIds に含まれる'))).to.equal(true);
+    expect(deletions).to.deep.equal([]);
+  });
+
+  it('複数グループ: 1 グループの違反が健全な他グループの削除も止める (all-or-nothing)', () => {
+    const plan = makePlan({
+      groups: [
+        {
+          fileName: '20260413_未判定_未判定_p1-4.pdf',
+          parentDocumentId: 'parent-1',
+          winnerDocId: 'winner-1',
+          loserDocIds: ['loser-1a', 'loser-1b'],
+        },
+        {
+          fileName: '20260413_未判定_未判定_p13-14.pdf',
+          parentDocumentId: 'parent-1',
+          winnerDocId: 'winner-2',
+          loserDocIds: ['loser-2a'],
+        },
+      ],
+      expectedLoserCount: 3,
+    });
+    const fileUrl2 = 'gs://bucket/processed/20260413_未判定_未判定_p13-14.pdf';
+    const docs = makeDocs({
+      'winner-1': makeDoc({ verified: true }),
+      'loser-1a': makeDoc(),
+      'loser-1b': makeDoc(),
+      'winner-2': makeDoc({ fileName: '20260413_未判定_未判定_p13-14.pdf', fileUrl: fileUrl2 }),
+      // グループ 2 の loser がユーザー確認済み → グループ 1 も削除してはいけない
+      'loser-2a': makeDoc({
+        fileName: '20260413_未判定_未判定_p13-14.pdf',
+        fileUrl: fileUrl2,
+        verified: true,
+      }),
+    });
+    const { violations, deletions } = evaluatePreconditions(plan, docs);
+    expect(violations.some((v) => v.includes('loser-2a'))).to.equal(true);
+    expect(deletions).to.deep.equal([]);
+  });
+});
+
+describe('ambiguousCleanup: checked-in plan JSON の実物検証', () => {
+  // 本番削除を駆動するデータそのものを regression gate にかける
+  // (Phase 2 での plan 編集時の docId コピペ重複・件数更新漏れを検知する)
+  const plansDir = path.join(__dirname, '..', '..', 'scripts', 'plans');
+
+  function loadPlanFile(name: string): CleanupPlan {
+    return JSON.parse(fs.readFileSync(path.join(plansDir, name), 'utf-8')) as CleanupPlan;
+  }
+
+  it('kanameone plan: 構造検証を通過し、想定値 (8 groups / 16 losers / projectId) と一致', () => {
+    const plan = loadPlanFile('cleanup-ambiguous-492-kanameone.json');
+    expect(validatePlanStructure(plan)).to.deep.equal([]);
+    expect(plan.projectId).to.equal('docsplit-kanameone');
+    expect(plan.groups).to.have.length(8);
+    expect(plan.expectedLoserCount).to.equal(16);
+  });
+
+  it('dev fixture plan: 構造検証を通過し、想定値 (2 groups / 4 losers / projectId) と一致', () => {
+    const plan = loadPlanFile('cleanup-ambiguous-492-dev-fixture.json');
+    expect(validatePlanStructure(plan)).to.deep.equal([]);
+    expect(plan.projectId).to.equal('doc-split-dev');
+    expect(plan.groups).to.have.length(2);
+    expect(plan.expectedLoserCount).to.equal(4);
   });
 });

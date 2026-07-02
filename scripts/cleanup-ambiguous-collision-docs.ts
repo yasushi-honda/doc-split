@@ -5,7 +5,7 @@
  * 同名・同 Storage path を共有する重複 Firestore docs (Issue #432 復旧で
  * manual-review 除外された Ambiguous 群) を winner 1 件残しで削除する。
  *
- * 安全装置:
+ * 安全装置 (cleanup 本経路 = dry-run / --execute):
  *   - dry-run デフォルト。--execute 明示時のみ削除
  *   - plan JSON (scripts/plans/) に winner/loser を固定。projectId 二重照合
  *   - preconditions all-or-nothing (scripts/lib/ambiguousCleanup.ts 参照)。
@@ -13,16 +13,22 @@
  *   - 削除前に winner+loser 全フィールド JSON バックアップを必ず出力
  *   - 件数厳密アサーション (plan.expectedLoserCount と 1 件でもずれたら abort)
  *   - Storage 実体は一切触らない (winner が同一ファイルを参照継続)。
- *     本スクリプトは Storage の read (existence check) のみで delete API を呼ばない
- *   - 事後検証: loser 不在 / winner 現存 / 共有 Storage path 現存
+ *     cleanup 本経路は Storage の read (existence check) のみで delete API を呼ばない
+ *   - --execute は STORAGE_BUCKET 必須 (事後検証を欠いた削除を構造的に排除)
+ *   - 事後検証: loser 不在 / winner 現存 / winner の実 fileUrl が指す Storage 実体現存
+ *   - 未知フラグは exit 2 (typo が黙って dry-run に化けるのを防ぐ)
+ *
+ * ※ 例外経路: --seed-dev-fixture / --cleanup-fixture は dev 専用 (assertDevOnly
+ *    ガード) で、fixture の Storage 実体の作成・削除を行う。
  *
  * 使用方法:
  *   FIREBASE_PROJECT_ID=<project-id> STORAGE_BUCKET=<bucket> \
  *     npx ts-node scripts/cleanup-ambiguous-collision-docs.ts \
- *       [--plan <path>] [--execute] [--backup-out <path>]
+ *       [--plan <path>] [--dry-run] [--execute] [--backup-out <path>]
  *       [--seed-dev-fixture [--seed-violation]] [--cleanup-fixture]
  *
  *   --plan 省略時は FIREBASE_PROJECT_ID から plans/ 配下を自動選択
+ *   --dry-run: 明示フラグ (デフォルト挙動と同じ。workflow choice の可読性用)
  *   --seed-dev-fixture: dev 専用。fixture plan と一致する合成 docs を投入
  *   --seed-violation: fixture の loser 1 件に editedAt を付与 (reject 経路の実証用)
  *   --cleanup-fixture: dev 専用。fixture docs + Storage 実体を削除
@@ -52,11 +58,42 @@ function getOpt(name: string): string | null {
   return i >= 0 && i + 1 < process.argv.length ? process.argv[i + 1] : null;
 }
 
+// 未知フラグ reject: typo (--exeucte 等) が黙って dry-run に化けるのを防ぐ
+const KNOWN_FLAGS = new Set([
+  '--execute',
+  '--dry-run',
+  '--seed-dev-fixture',
+  '--seed-violation',
+  '--cleanup-fixture',
+]);
+const VALUE_OPTS = new Set(['--plan', '--backup-out']);
+{
+  const args = process.argv.slice(2);
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (VALUE_OPTS.has(a)) {
+      i++; // 値をスキップ
+      continue;
+    }
+    if (a.startsWith('--') && !KNOWN_FLAGS.has(a)) {
+      console.error(`FATAL: 未知のフラグ: ${a} (有効: ${[...KNOWN_FLAGS, ...VALUE_OPTS].join(' ')})`);
+      process.exit(2);
+    }
+  }
+}
+
 const execute = process.argv.includes('--execute');
 const seedDevFixture = process.argv.includes('--seed-dev-fixture');
 const seedViolation = process.argv.includes('--seed-violation');
 const cleanupFixture = process.argv.includes('--cleanup-fixture');
 const planPathOpt = getOpt('--plan');
+
+// --execute は事後検証 (Storage 実体現存チェック) まで含めて 1 セット。
+// STORAGE_BUCKET なしの削除実行を構造的に排除する (silent-failure review 反映)
+if (execute && !storageBucket) {
+  console.error('FATAL: --execute には STORAGE_BUCKET が必須です (事後検証に使用)');
+  process.exit(2);
+}
 const backupOut =
   getOpt('--backup-out') ||
   path.join(process.cwd(), `cleanup-ambiguous-backup-${projectId}.json`);
@@ -82,7 +119,14 @@ admin.initializeApp(
 const db = admin.firestore();
 
 function loadPlan(planPath: string): CleanupPlan {
-  const plan = JSON.parse(fs.readFileSync(planPath, 'utf-8')) as CleanupPlan;
+  let plan: CleanupPlan;
+  try {
+    plan = JSON.parse(fs.readFileSync(planPath, 'utf-8')) as CleanupPlan;
+  } catch (err) {
+    // SyntaxError にはファイルパスが含まれないため文脈を付けて rethrow
+    console.error(`FATAL: plan の読込/parse に失敗: ${planPath}`);
+    throw err;
+  }
   const structErrors = validatePlanStructure(plan);
   if (structErrors.length > 0) {
     console.error('FATAL: plan 構造エラー:');
@@ -237,12 +281,20 @@ function writeBackup(plan: CleanupPlan, docs: Map<string, DocState>): void {
 
 async function main(): Promise<void> {
   const planPath = resolvePlanPath();
-  const plan = loadPlan(planPath);
-
   console.log('=== Issue #492 Ambiguous collision docs cleanup ===');
   console.log(`project: ${projectId}`);
-  console.log(`plan: ${planPath} (groups=${plan.groups.length}, expectedLoserCount=${plan.expectedLoserCount})`);
-  console.log(`mode: ${execute ? '⚠️ EXECUTE (削除実行)' : 'dry-run (書き込みなし)'}`);
+  console.log(`plan: ${planPath}`);
+  const plan = loadPlan(planPath);
+  console.log(`  groups=${plan.groups.length}, expectedLoserCount=${plan.expectedLoserCount}`);
+  // mode 表示は実際の動作と一致させる (fixture 系は --execute なしで書き込む dev 専用経路)
+  const mode = cleanupFixture
+    ? '⚠️ fixture-cleanup (dev: fixture docs + Storage 実体を削除)'
+    : seedDevFixture
+      ? 'fixture-seed (dev: fixture docs + Storage 実体を作成)'
+      : execute
+        ? '⚠️ EXECUTE (削除実行)'
+        : 'dry-run (Firestore/Storage 書き込みなし。バックアップ JSON のみローカル出力)';
+  console.log(`mode: ${mode}`);
 
   if (cleanupFixture) {
     await removeFixture(plan);
@@ -300,9 +352,13 @@ async function main(): Promise<void> {
   try {
     await batch.commit();
   } catch (err) {
+    // gRPC FAILED_PRECONDITION (code 9) = lastUpdateTime 不一致 = 検証後に doc が更新された
+    const isPreconditionFailure = (err as { code?: number }).code === 9;
     console.error(
       '❌ batch 削除が失敗しました (atomic のため部分削除はありません)。' +
-        '検証後に doc が更新された可能性があります。再実行前に dry-run で状態を確認してください。'
+        (isPreconditionFailure
+          ? '検証後に doc が更新されています (lastUpdateTime precondition 不一致)。再実行前に dry-run で状態を確認してください。'
+          : '一時的エラー/権限エラーの可能性があります。原因解消後に dry-run から再実行してください。')
     );
     console.error(err);
     process.exit(1);
@@ -322,16 +378,29 @@ async function main(): Promise<void> {
       }
     }
   }
-  if (storageBucket) {
-    const bucket = admin.storage().bucket();
-    for (const g of plan.groups) {
-      const [exists] = await bucket.file(`processed/${g.fileName}`).exists();
-      if (!exists) {
-        postErrors.push(`Storage 実体 processed/${g.fileName} が不在 (winner が閲覧不能)`);
-      }
+  // Storage 実体の現存確認は winner の実 fileUrl から object path を導出する
+  // (`processed/${fileName}` の再構築は split 由来 doc の docId namespace 形式
+  //  `processed/{docId}/{fileName}` と乖離しうる — code review Important 反映)。
+  // fileUrl は preconditions で非空を検証済み。STORAGE_BUCKET は --execute で必須。
+  const bucket = admin.storage().bucket();
+  for (const g of plan.groups) {
+    const winnerFileUrl = docs.get(g.winnerDocId)?.data?.fileUrl as string;
+    const m = winnerFileUrl.match(/^gs:\/\/([^/]+)\/(.+)$/);
+    if (!m) {
+      postErrors.push(`winner ${g.winnerDocId} の fileUrl が gs:// 形式でない: ${winnerFileUrl}`);
+      continue;
     }
-  } else {
-    console.warn('⚠️ STORAGE_BUCKET 未設定のため Storage 実体の事後検証をスキップ');
+    const [, urlBucket, objectPath] = m;
+    if (urlBucket !== storageBucket) {
+      postErrors.push(
+        `winner ${g.winnerDocId} の fileUrl bucket (${urlBucket}) が STORAGE_BUCKET (${storageBucket}) と不一致`
+      );
+      continue;
+    }
+    const [exists] = await bucket.file(objectPath).exists();
+    if (!exists) {
+      postErrors.push(`Storage 実体 ${objectPath} が不在 (winner ${g.winnerDocId} が閲覧不能)`);
+    }
   }
 
   if (postErrors.length > 0) {

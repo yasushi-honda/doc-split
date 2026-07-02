@@ -2,7 +2,7 @@
   "schemaVersion": "ambiguous-cleanup-v1",
   "issue": 492,
   "projectId": "doc-split-dev",
-  "description": "Issue #492 dev リハーサル用 fixture plan。cleanup-ambiguous-collision-docs.ts --seed-dev-fixture がこの plan と一致する合成 docs + 共有 Storage 実体を投入する。グループ 1 は winner が verified=true (本番 p1-4/p23-24 相当)、グループ 2 は全 doc 未操作 (辞書順 winner 相当)。",
+  "description": "Issue #492 dev リハーサル用 fixture plan。cleanup-ambiguous-collision-docs.ts --seed-dev-fixture がこの plan と一致する合成 docs + 共有 Storage 実体を投入する。グループ 1 は winner が verified=true (本番 p1-4/p23-24 相当)、グループ 2 は全 doc 未操作 (本番の辞書順選定グループに相当。fixture ID 自体は辞書順を再現していない)。",
   "groups": [
     {
       "fileName": "20990101_未判定_未判定_p1-2.fixture492.pdf",

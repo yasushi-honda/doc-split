@@ -663,7 +663,10 @@ jobs:
         with:
           name: cleanup-ambiguous-backup-${{ github.event.inputs.environment }}-${{ github.run_id }}
           path: scripts/cleanup-ambiguous-backup.json
-          if-no-files-found: ignore
+          # fixture 系 run では backup が出ないため error にはしないが、
+          # --execute run で backup 不在なら気付けるよう warn (ignore は復旧材料の
+          # 消失を無音化するため不可 — silent-failure review 反映)
+          if-no-files-found: warn
           retention-days: 90
 
       - name: Upload audit-session61-parent-provenance report artifact
