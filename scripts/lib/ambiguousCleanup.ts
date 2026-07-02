@@ -138,6 +138,15 @@ export function validatePlanStructure(plan: CleanupPlan): string[] {
           }
         }
       }
+      // pin URL は gs:// 形式のみ許可 (doc 削除後の object 操作で初めて形式不正が
+      // 発覚するのを防ぐ — 静的に検証できる情報は plan 段階で弾く)
+      if (g.expectedFileUrls) {
+        for (const [id, url] of Object.entries(g.expectedFileUrls)) {
+          if (!/^gs:\/\/[^/]+\/.+$/.test(url)) {
+            errors.push(`${g.fileName}: expectedFileUrls[${id}] が gs:// 形式でない: ${url}`);
+          }
+        }
+      }
     } else if (g.expectedFileUrls) {
       errors.push(
         `${g.fileName}: expectedFileUrls は expectedParents 指定時のみ使用可 (同一親グループは fileUrl 共有で同一性を証明する)`
@@ -220,8 +229,21 @@ export function evaluatePreconditions(
       violations.push(`${g.fileName}: winner ${g.winnerDocId} が存在しない`);
       continue;
     }
-    const expectedParentOf = (docId: string): string | undefined =>
-      g.expectedParents ? g.expectedParents[docId] : g.parentDocumentId;
+    // 期待親が解決できない doc は「一致」で素通りさせず violation にする
+    // (validatePlanStructure を経由しない直接呼び出しへの defense-in-depth。
+    //  undefined === undefined で親チェックが無効化されるのを防ぐ)
+    const checkParent = (docId: string, role: 'winner' | 'loser', data: Record<string, unknown>): void => {
+      const expected = g.expectedParents ? g.expectedParents[docId] : g.parentDocumentId;
+      if (!expected) {
+        violations.push(`${g.fileName}: ${role} ${docId} の期待親が plan から解決できない (plan 不備)`);
+        return;
+      }
+      if (str(data, 'parentDocumentId') !== expected) {
+        violations.push(
+          `${g.fileName}: ${role} ${docId} の parentDocumentId 不一致 (actual=${str(data, 'parentDocumentId')})`
+        );
+      }
+    };
 
     const winnerData = winner.data;
     if (str(winnerData, 'fileName') !== g.fileName) {
@@ -229,11 +251,7 @@ export function evaluatePreconditions(
         `${g.fileName}: winner ${g.winnerDocId} の fileName 不一致 (actual=${str(winnerData, 'fileName')})`
       );
     }
-    if (str(winnerData, 'parentDocumentId') !== expectedParentOf(g.winnerDocId)) {
-      violations.push(
-        `${g.fileName}: winner ${g.winnerDocId} の parentDocumentId 不一致 (actual=${str(winnerData, 'parentDocumentId')})`
-      );
-    }
+    checkParent(g.winnerDocId, 'winner', winnerData);
     const winnerFileUrl = str(winnerData, 'fileUrl');
     if (!winnerFileUrl) {
       violations.push(`${g.fileName}: winner ${g.winnerDocId} の fileUrl が空`);
@@ -256,11 +274,7 @@ export function evaluatePreconditions(
           `${g.fileName}: loser ${loserId} の fileName 不一致 (actual=${str(d, 'fileName')})`
         );
       }
-      if (str(d, 'parentDocumentId') !== expectedParentOf(loserId)) {
-        violations.push(
-          `${g.fileName}: loser ${loserId} の parentDocumentId 不一致 (actual=${str(d, 'parentDocumentId')})`
-        );
-      }
+      checkParent(loserId, 'loser', d);
       if (str(d, 'status') !== 'processed') {
         violations.push(
           `${g.fileName}: loser ${loserId} の status が processed でない (actual=${str(d, 'status')})`

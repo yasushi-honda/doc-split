@@ -259,7 +259,17 @@ describe('ambiguousCleanup: evaluatePreconditions', () => {
     const docs = healthyDocs();
     docs.set('winner-1', makeDoc({ verified: true, fileUrl: undefined }));
     const { violations, deletions } = evaluatePreconditions(makePlan(), docs);
-    expect(violations.some((v) => v.includes('winner') && v.includes('fileUrl'))).to.equal(true);
+    // チェック固有のメッセージで assert (pin 系メッセージも 'fileUrl' を含むため)
+    expect(violations.some((v) => v.includes('winner') && v.includes('fileUrl が空'))).to.equal(true);
+    expect(deletions).to.deep.equal([]);
+  });
+
+  it('evaluatePreconditions 単独でも件数不一致を violation にする (二重の件数ゲート)', () => {
+    // validatePlanStructure を経由しない直接呼び出しでも「件数厳密アサーション」が
+    // 独立に機能することを pin する
+    const plan = makePlan({ expectedLoserCount: 3 });
+    const { violations, deletions } = evaluatePreconditions(plan, healthyDocs());
+    expect(violations.some((v) => v.includes('件数不一致'))).to.equal(true);
     expect(deletions).to.deep.equal([]);
   });
 
@@ -414,6 +424,60 @@ describe('ambiguousCleanup: evaluatePreconditions', () => {
     expect(deletions).to.deep.equal([]);
   });
 
+  it('expectedFileUrls のエントリ欠落 plan を直接渡しても reject (defense-in-depth)', () => {
+    // validate を経由しない呼び出しで「pin なし = 同一性証明なし」の doc が
+    // 素通りしないことを pin する (比較緩和 refactor への防波堤)
+    const plan = makeMultiParentPlan();
+    delete plan.groups[0].expectedFileUrls!['loser-1a'];
+    const { violations, deletions } = evaluatePreconditions(plan, makeMultiParentDocs());
+    expect(violations.some((v) => v.includes('loser-1a') && v.includes('pin と不一致'))).to.equal(true);
+    expect(deletions).to.deep.equal([]);
+  });
+
+  it('expectedFileUrls の winner エントリ欠落 plan を直接渡しても reject (defense-in-depth)', () => {
+    const plan = makeMultiParentPlan();
+    delete plan.groups[0].expectedFileUrls!['winner-1'];
+    const { violations, deletions } = evaluatePreconditions(plan, makeMultiParentDocs());
+    expect(violations.some((v) => v.includes('winner') && v.includes('pin と不一致'))).to.equal(true);
+    expect(deletions).to.deep.equal([]);
+  });
+
+  it('expectedParents のエントリ欠落 plan を直接渡しても reject (期待親未解決は素通りさせない)', () => {
+    const plan = makeMultiParentPlan();
+    delete plan.groups[0].expectedParents!['loser-1b'];
+    const { violations, deletions } = evaluatePreconditions(plan, makeMultiParentDocs());
+    expect(
+      violations.some((v) => v.includes('loser-1b') && v.includes('期待親が plan から解決できない'))
+    ).to.equal(true);
+    expect(deletions).to.deep.equal([]);
+  });
+
+  it('同一グループ内の 2 loser が同じ専有 object を pin した場合、両方に専有フラグが立つ', () => {
+    // deletions に重複 path が現れるのは合法な出力で、CLI 側は 404 冪等 +
+    // 「guard は doc 削除後に実行」の順序前提で両立する (順序を入れ替える
+    // refactor をすると兄弟共有 object が保守的 skip に変わる)
+    const plan = makeMultiParentPlan();
+    const dupUrl = 'gs://bucket/processed/dup/x.pdf';
+    plan.groups[0].expectedFileUrls = {
+      'winner-1': 'gs://bucket/processed/winner-1/x.pdf',
+      'loser-1a': dupUrl,
+      'loser-1b': dupUrl,
+    };
+    const docs = makeDocs({
+      'winner-1': makeDoc({
+        verified: true,
+        parentDocumentId: 'parent-a',
+        fileUrl: 'gs://bucket/processed/winner-1/x.pdf',
+      }),
+      'loser-1a': makeDoc({ parentDocumentId: 'parent-b', fileUrl: dupUrl }),
+      'loser-1b': makeDoc({ parentDocumentId: 'parent-c', fileUrl: dupUrl }),
+    });
+    const { violations, deletions } = evaluatePreconditions(plan, docs);
+    expect(violations).to.deep.equal([]);
+    expect(deletions.every((d) => d.ownsStorageObject === true)).to.equal(true);
+    expect(deletions.map((d) => d.fileUrl)).to.deep.equal([dupUrl, dupUrl]);
+  });
+
   it('expectedParents で loser が winner と object を共有する場合は専有フラグが立たない', () => {
     const plan = makeMultiParentPlan();
     plan.groups[0].expectedFileUrls = {
@@ -520,6 +584,22 @@ describe('ambiguousCleanup: checked-in plan JSON の実物検証', () => {
     expect(allLosers).to.not.include('U4Lf5ZPNA4IyH73SXE2P');
     expect(allLosers).to.not.include('Lso7jEXzWxBjU4Cj6zqR');
     expect(allLosers).to.not.include('0ZuExPFZjngfSpddy2HR');
+  });
+
+  it('kanameone plan: pin URL が plan 全体で一意 + 各 loser は winner と別 object を専有', () => {
+    // コピペミスで loser の pin が他 doc (特に winner) の URL を指すと、
+    // 専有判定と object 削除の前提が崩れる。plan 編集時の regression gate
+    const plan = loadPlanFile('cleanup-ambiguous-492-kanameone.json');
+    const allUrls: string[] = [];
+    for (const g of plan.groups) {
+      expect(g.expectedFileUrls, `${g.fileName}: expectedFileUrls 必須`).to.not.equal(undefined);
+      const urls = g.expectedFileUrls!;
+      for (const loserId of g.loserDocIds) {
+        expect(urls[loserId]).to.not.equal(urls[g.winnerDocId]);
+      }
+      allUrls.push(...Object.values(urls));
+    }
+    expect(new Set(allUrls).size).to.equal(allUrls.length);
   });
 
   it('dev fixture plan: 構造検証を通過し、想定値 (2 groups / 4 losers / projectId) と一致', () => {

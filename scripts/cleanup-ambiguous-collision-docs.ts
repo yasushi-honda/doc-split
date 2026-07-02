@@ -252,7 +252,7 @@ async function seedFixture(plan: CleanupPlan): Promise<void> {
     }
   }
   console.log(
-    `✅ fixture 投入完了: parent 1 + docs ${plan.groups.reduce((n, g) => n + 1 + g.loserDocIds.length, 0)} 件` +
+    `✅ fixture 投入完了: parent ${allParentIds(plan).size} + docs ${plan.groups.reduce((n, g) => n + 1 + g.loserDocIds.length, 0)} 件` +
       (seedViolation ? ' (violation: グループ1 loser-a に editedAt 付与)' : '')
   );
 }
@@ -286,7 +286,12 @@ async function removeFixture(plan: CleanupPlan): Promise<void> {
     if (g.expectedFileUrls) {
       for (const url of new Set(Object.values(g.expectedFileUrls))) {
         const parsed = parseGsUrl(url);
-        if (parsed && parsed.bucket === storageBucket) await deleteObject(parsed.objectPath);
+        if (!parsed || parsed.bucket !== storageBucket) {
+          // 無言 skip すると fixture object が残置されて観測不能になる (F5)
+          console.warn(`⚠️ fixture object 削除スキップ (URL 不正 or bucket 不一致): ${url}`);
+          continue;
+        }
+        await deleteObject(parsed.objectPath);
       }
     } else {
       await deleteObject(`processed/${g.fileName}`);
@@ -381,6 +386,30 @@ async function main(): Promise<void> {
     console.log(`  - ${d.docId} (${d.fileName}, winner=${d.winnerDocId})${storageNote}`);
   }
 
+  // 3.5 pre-flight: 専有 object の pin URL 形式/bucket を「削除前に」検証する。
+  // step 4 (doc 削除) は不可逆なので、plan の pin 記載ミス / STORAGE_BUCKET 誤設定は
+  // ここで abort する (silent-failure review F3: 事後検出だと doc だけ消えて
+  // object が孤児化する再実行不能状態になってから発覚する)。
+  const ownedDeletions = deletions.filter((d) => d.ownsStorageObject);
+  {
+    const preflightErrors: string[] = [];
+    for (const d of ownedDeletions) {
+      const parsed = parseGsUrl(d.fileUrl);
+      if (!parsed) {
+        preflightErrors.push(`loser ${d.docId} の fileUrl が gs:// 形式でない: ${d.fileUrl}`);
+      } else if (storageBucket && parsed.bucket !== storageBucket) {
+        preflightErrors.push(
+          `loser ${d.docId} の fileUrl bucket (${parsed.bucket}) が STORAGE_BUCKET (${storageBucket}) と不一致`
+        );
+      }
+    }
+    if (preflightErrors.length > 0) {
+      console.error(`❌ 専有 object pre-flight 違反 ${preflightErrors.length} 件。削除は一切行いません:`);
+      for (const e of preflightErrors) console.error(`  - ${e}`);
+      process.exit(1);
+    }
+  }
+
   if (!execute) {
     console.log('dry-run 終了 (削除するには --execute を指定)');
     return;
@@ -424,96 +453,138 @@ async function main(): Promise<void> {
 
   const bucket = admin.storage().bucket();
   const postErrors: string[] = [];
-
-  // 4.5 専有 Storage object の削除 (別親グループの loser のみ)。
-  // doc 削除後に storageGuard で「他 doc が同 fileUrl を参照していない」ことを
-  // 確認できた場合のみ削除。共有が検出されたら skip して object を残す (安全側)。
-  const ownedDeletions = deletions.filter((d) => d.ownsStorageObject);
   const deletedObjectPaths: string[] = [];
-  for (const d of ownedDeletions) {
-    const parsed = parseGsUrl(d.fileUrl);
-    if (!parsed) {
-      postErrors.push(`loser ${d.docId} の fileUrl が gs:// 形式でない: ${d.fileUrl}`);
-      continue;
-    }
-    if (parsed.bucket !== storageBucket) {
-      postErrors.push(
-        `loser ${d.docId} の fileUrl bucket (${parsed.bucket}) が STORAGE_BUCKET と不一致のため object 削除をスキップ`
-      );
-      continue;
-    }
-    const guard = await isPathSafeToDeleteAfterExcluding(db, d.fileUrl, [d.docId]);
-    if (!guard.safe) {
-      console.warn(
-        `⚠️ ${parsed.objectPath} は他 doc (${guard.residualDocIds.join(',')}) が参照中のため削除スキップ (object 残置)`
-      );
-      continue;
-    }
-    try {
-      await bucket.file(parsed.objectPath).delete();
-      deletedObjectPaths.push(parsed.objectPath);
-    } catch (err) {
-      if ((err as { code?: number }).code === 404) {
-        deletedObjectPaths.push(parsed.objectPath); // 既に不在 = 冪等扱い
-      } else {
-        postErrors.push(`専有 object 削除失敗: ${parsed.objectPath}: ${String(err)}`);
-      }
-    }
-  }
-  if (ownedDeletions.length > 0) {
-    console.log(`🗑️ 専有 Storage object 削除: ${deletedObjectPaths.length}/${ownedDeletions.length} 件`);
-  }
+  const skippedObjects: string[] = [];
 
-  // 5. 事後検証
-  const { states: after } = await fetchDocStates(plan);
-  for (const g of plan.groups) {
-    if (!after.get(g.winnerDocId)?.exists) {
-      postErrors.push(`winner ${g.winnerDocId} が消えている (${g.fileName})`);
+  // doc 削除後の全収集情報を必ず出力する (silent-failure review F1:
+  // 途中 throw で postErrors が報告前に消えると、不可逆ゾーンで何が起きたか
+  // 分からなくなる)。object 削除失敗時は復旧手順も出す (F2: doc は削除済みの
+  // ため再実行は precondition abort になり、本スクリプトでは回収できない)。
+  const flushPostDeletionReport = (): void => {
+    if (deletedObjectPaths.length > 0) {
+      console.log(`🗑️ 削除済み専有 object: ${deletedObjectPaths.join(', ')}`);
     }
-    for (const id of g.loserDocIds) {
-      if (after.get(id)?.exists) {
-        postErrors.push(`loser ${id} が残存 (${g.fileName})`);
+    if (skippedObjects.length > 0) {
+      console.warn(`⚠️ 削除スキップした専有 object ${skippedObjects.length} 件 (要確認): ${skippedObjects.join(', ')}`);
+    }
+    if (postErrors.length > 0) {
+      console.error(`❌ 事後エラー ${postErrors.length} 件:`);
+      for (const e of postErrors) console.error(`  - ${e}`);
+      if (postErrors.some((e) => e.includes('専有 object'))) {
+        console.error(
+          '📌 復旧手順: doc は削除済みのため本スクリプトの再実行では回収できません。' +
+            '残存 object は手動削除してください (例: gsutil rm gs://<bucket>/<path>)。' +
+            '放置すると audit-storage-mismatch で孤児として誤検知されます。'
+        );
       }
     }
-  }
-  // Storage 実体の現存確認は winner の実 fileUrl から object path を導出する
-  // (`processed/${fileName}` の再構築は split 由来 doc の docId namespace 形式
-  //  `processed/{docId}/{fileName}` と乖離しうる — code review Important 反映)。
-  // fileUrl は preconditions で非空を検証済み。STORAGE_BUCKET は --execute で必須。
-  for (const g of plan.groups) {
-    const winnerFileUrl = docs.get(g.winnerDocId)?.data?.fileUrl as string;
-    const m = winnerFileUrl.match(/^gs:\/\/([^/]+)\/(.+)$/);
-    if (!m) {
-      postErrors.push(`winner ${g.winnerDocId} の fileUrl が gs:// 形式でない: ${winnerFileUrl}`);
-      continue;
+  };
+
+  try {
+    // 4.5 専有 Storage object の削除 (別親グループの loser のみ)。
+    // doc 削除後に storageGuard で「他 doc が同 fileUrl を参照していない」ことを
+    // 確認できた場合のみ削除。共有が検出されたら skip して object を残す (安全側)。
+    // NOTE: guard は「doc batch 削除の後」に実行される前提。exclude が [d.docId]
+    // 単独で足りるのは兄弟 loser が既に削除済みだから — 順序を入れ替える refactor
+    // をすると兄弟共有 object が保守的に skip されるようになる (安全側だが挙動変化)。
+    for (const d of ownedDeletions) {
+      const parsed = parseGsUrl(d.fileUrl);
+      if (!parsed) {
+        // pre-flight 済みのため到達不能。防御的に記録のみ
+        postErrors.push(`専有 object 削除不能 (fileUrl 不正): ${d.fileUrl}`);
+        continue;
+      }
+      try {
+        const guard = await isPathSafeToDeleteAfterExcluding(db, d.fileUrl, [d.docId]);
+        if (!guard.safe) {
+          console.warn(
+            `⚠️ ${parsed.objectPath} は他 doc (${guard.residualDocIds.join(',')}) が参照中のため削除スキップ (object 残置)`
+          );
+          skippedObjects.push(parsed.objectPath);
+          continue;
+        }
+        try {
+          await bucket.file(parsed.objectPath).delete();
+          deletedObjectPaths.push(parsed.objectPath);
+        } catch (err) {
+          if ((err as { code?: number }).code === 404) {
+            console.log(`  (既に不在: ${parsed.objectPath})`);
+            deletedObjectPaths.push(parsed.objectPath); // 冪等扱い
+          } else {
+            postErrors.push(`専有 object 削除失敗: ${parsed.objectPath}: ${String(err)}`);
+          }
+        }
+      } catch (err) {
+        // guard の Firestore query 失敗等。次の object の処理は継続する
+        postErrors.push(`専有 object 処理失敗 (storageGuard): ${parsed.objectPath}: ${String(err)}`);
+      }
     }
-    const [, urlBucket, objectPath] = m;
-    if (urlBucket !== storageBucket) {
-      postErrors.push(
-        `winner ${g.winnerDocId} の fileUrl bucket (${urlBucket}) が STORAGE_BUCKET (${storageBucket}) と不一致`
+    if (ownedDeletions.length > 0) {
+      console.log(
+        `🗑️ 専有 Storage object 削除: ${deletedObjectPaths.length}/${ownedDeletions.length} 件` +
+          (skippedObjects.length > 0 ? ` (スキップ ${skippedObjects.length} 件)` : '')
       );
-      continue;
     }
-    const [exists] = await bucket.file(objectPath).exists();
-    if (!exists) {
-      postErrors.push(`Storage 実体 ${objectPath} が不在 (winner ${g.winnerDocId} が閲覧不能)`);
+
+    // 5. 事後検証
+    const { states: after } = await fetchDocStates(plan);
+    for (const g of plan.groups) {
+      if (!after.get(g.winnerDocId)?.exists) {
+        postErrors.push(`winner ${g.winnerDocId} が消えている (${g.fileName})`);
+      }
+      for (const id of g.loserDocIds) {
+        if (after.get(id)?.exists) {
+          postErrors.push(`loser ${id} が残存 (${g.fileName})`);
+        }
+      }
     }
-  }
-  // 削除した専有 object が実際に不在になったことを確認
-  for (const objectPath of deletedObjectPaths) {
-    const [exists] = await bucket.file(objectPath).exists();
-    if (exists) {
-      postErrors.push(`専有 object ${objectPath} が削除後も残存`);
+    // Storage 実体の現存確認は winner の実 fileUrl から object path を導出する
+    // (`processed/${fileName}` の再構築は split 由来 doc の docId namespace 形式
+    //  `processed/{docId}/{fileName}` と乖離しうる — code review Important 反映)。
+    // fileUrl は preconditions で非空を検証済み。STORAGE_BUCKET は --execute で必須。
+    for (const g of plan.groups) {
+      const winnerFileUrl = docs.get(g.winnerDocId)?.data?.fileUrl as string;
+      const parsed = parseGsUrl(winnerFileUrl);
+      if (!parsed) {
+        postErrors.push(`winner ${g.winnerDocId} の fileUrl が gs:// 形式でない: ${winnerFileUrl}`);
+        continue;
+      }
+      if (parsed.bucket !== storageBucket) {
+        postErrors.push(
+          `winner ${g.winnerDocId} の fileUrl bucket (${parsed.bucket}) が STORAGE_BUCKET (${storageBucket}) と不一致`
+        );
+        continue;
+      }
+      const [exists] = await bucket.file(parsed.objectPath).exists();
+      if (!exists) {
+        postErrors.push(`Storage 実体 ${parsed.objectPath} が不在 (winner ${g.winnerDocId} が閲覧不能)`);
+      }
     }
+    // 削除した専有 object が実際に不在になったことを確認
+    for (const objectPath of deletedObjectPaths) {
+      const [exists] = await bucket.file(objectPath).exists();
+      if (exists) {
+        postErrors.push(`専有 object ${objectPath} が削除後も残存`);
+      }
+    }
+  } catch (err) {
+    // 不可逆ゾーンでの予期しない throw でも、収集済みの状態を必ず出力してから落とす
+    flushPostDeletionReport();
+    throw err;
   }
 
   if (postErrors.length > 0) {
-    console.error('❌ 事後検証エラー:');
-    for (const e of postErrors) console.error(`  - ${e}`);
+    flushPostDeletionReport();
     process.exit(1);
   }
   console.log(
-    `✅ 事後検証 OK: winner ${plan.groups.length} 件現存 / loser ${plan.expectedLoserCount} 件削除済 / Storage 実体現存`
+    `✅ 事後検証 OK: winner ${plan.groups.length} 件現存 / loser ${plan.expectedLoserCount} 件削除済 / Storage 実体現存` +
+      (ownedDeletions.length > 0
+        ? ` / 専有 object 削除 ${deletedObjectPaths.length} 件` +
+          (skippedObjects.length > 0
+            ? ` (スキップ ${skippedObjects.length} 件: ${skippedObjects.join(', ')} — plan 前提と実態の乖離のため要確認)`
+            : '')
+        : '')
   );
 }
 
