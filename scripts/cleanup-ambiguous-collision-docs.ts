@@ -184,26 +184,41 @@ async function removeFixture(plan: CleanupPlan): Promise<void> {
     }
   }
   for (const g of plan.groups) {
+    // 404 のみ冪等扱い。permission/transient エラーは握り潰さず fail させる
+    // (Codex review P2: silent cleanup failure 防止)
     await bucket
       .file(`processed/${g.fileName}`)
       .delete()
-      .catch(() => undefined); // 404 は冪等扱い
+      .catch((err: { code?: number }) => {
+        if (err.code === 404) return undefined;
+        throw err;
+      });
   }
   console.log(`✅ fixture 削除完了 (docs ${ids.size} 件 + Storage ${plan.groups.length} 件)`);
 }
 
-async function fetchDocStates(plan: CleanupPlan): Promise<Map<string, DocState>> {
+interface FetchedStates {
+  states: Map<string, DocState>;
+  /** 検証時点の snapshot updateTime。削除時の lastUpdateTime precondition に使う */
+  updateTimes: Map<string, FirebaseFirestore.Timestamp>;
+}
+
+async function fetchDocStates(plan: CleanupPlan): Promise<FetchedStates> {
   const ids: string[] = [];
   for (const g of plan.groups) {
     ids.push(g.winnerDocId, ...g.loserDocIds);
   }
   const refs = ids.map((id) => db.collection('documents').doc(id));
   const snaps = await db.getAll(...refs);
-  const map = new Map<string, DocState>();
+  const states = new Map<string, DocState>();
+  const updateTimes = new Map<string, FirebaseFirestore.Timestamp>();
   snaps.forEach((snap, i) => {
-    map.set(ids[i], { exists: snap.exists, data: snap.data() as Record<string, unknown> });
+    states.set(ids[i], { exists: snap.exists, data: snap.data() as Record<string, unknown> });
+    if (snap.exists && snap.updateTime) {
+      updateTimes.set(ids[i], snap.updateTime);
+    }
   });
-  return map;
+  return { states, updateTimes };
 }
 
 function writeBackup(plan: CleanupPlan, docs: Map<string, DocState>): void {
@@ -239,7 +254,7 @@ async function main(): Promise<void> {
   }
 
   // 1. 現状取得
-  const docs = await fetchDocStates(plan);
+  const { states: docs, updateTimes } = await fetchDocStates(plan);
 
   // 2. バックアップ (dry-run でも出力し、レビュー材料にする)
   writeBackup(plan, docs);
@@ -263,21 +278,39 @@ async function main(): Promise<void> {
   }
 
   // 4. 削除実行 (Firestore doc のみ。Storage は不可侵)
-  let deleted = 0;
-  for (const d of deletions) {
-    await db.collection('documents').doc(d.docId).delete();
-    deleted++;
-  }
-  if (deleted !== plan.expectedLoserCount) {
+  // Codex review P1 反映:
+  //   - 単一 atomic batch commit (全成功 or 全失敗。部分削除状態を作らない)
+  //   - lastUpdateTime precondition (検証後に doc が更新されていたら batch ごと fail
+  //     = 検証〜削除間の TOCTOU でユーザー操作済み doc を消さない)
+  if (deletions.length !== plan.expectedLoserCount) {
     console.error(
-      `❌ 削除件数不一致: expected=${plan.expectedLoserCount} actual=${deleted}。事後検証で確認してください。`
+      `❌ 削除対象件数不一致: expected=${plan.expectedLoserCount} actual=${deletions.length}`
     );
     process.exit(1);
   }
-  console.log(`🗑️ 削除完了: ${deleted} 件`);
+  const batch = db.batch();
+  for (const d of deletions) {
+    const lastUpdateTime = updateTimes.get(d.docId);
+    if (!lastUpdateTime) {
+      console.error(`❌ ${d.docId} の updateTime が取得できず precondition を構成できません`);
+      process.exit(1);
+    }
+    batch.delete(db.collection('documents').doc(d.docId), { lastUpdateTime });
+  }
+  try {
+    await batch.commit();
+  } catch (err) {
+    console.error(
+      '❌ batch 削除が失敗しました (atomic のため部分削除はありません)。' +
+        '検証後に doc が更新された可能性があります。再実行前に dry-run で状態を確認してください。'
+    );
+    console.error(err);
+    process.exit(1);
+  }
+  console.log(`🗑️ 削除完了: ${deletions.length} 件 (atomic batch + lastUpdateTime precondition)`);
 
   // 5. 事後検証
-  const after = await fetchDocStates(plan);
+  const { states: after } = await fetchDocStates(plan);
   const postErrors: string[] = [];
   for (const g of plan.groups) {
     if (!after.get(g.winnerDocId)?.exists) {
