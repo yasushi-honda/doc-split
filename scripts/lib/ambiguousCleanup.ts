@@ -33,6 +33,13 @@ export interface CleanupGroup {
    */
   expectedParents?: Record<string, string>;
   /**
+   * doc ごとの期待 fileUrl (expectedParents 指定時は必須)。
+   * 別親グループは #432 復旧で各 doc が専用 Storage path に移行済みのことがあり
+   * 「fileUrl 共有」による同一性証明が使えないため、plan 作成時に実測した
+   * fileUrl を pin して「検証した doc と同一の doc を消す」ことを保証する。
+   */
+  expectedFileUrls?: Record<string, string>;
+  /**
    * 残す doc。plan 作成時の選定ポリシーは「クライアント編集/確認済み doc 優先、
    * なければ docId 辞書順先頭」(本モジュールはこのポリシー自体を検証しない)
    */
@@ -61,6 +68,14 @@ export interface PlannedDeletion {
   docId: string;
   fileName: string;
   winnerDocId: string;
+  /** loser の現 fileUrl (preconditions 通過時点の検証済み値) */
+  fileUrl: string;
+  /**
+   * true = loser が winner と別の Storage object を専有しており、doc 削除後に
+   * 孤児化する (CLI は storageGuard 確認の上でこの object も削除してよい)。
+   * false = winner と共有 (object は不可侵)。
+   */
+  ownsStorageObject: boolean;
 }
 
 export interface PreconditionResult {
@@ -101,17 +116,32 @@ export function validatePlanStructure(plan: CleanupPlan): string[] {
       errors.push(`${g.fileName}: parentDocumentId と expectedParents は排他 (両方指定不可)`);
     }
     if (g.expectedParents) {
-      for (const id of [g.winnerDocId, ...(g.loserDocIds ?? [])]) {
-        if (id && !g.expectedParents[id]) {
-          errors.push(`${g.fileName}: expectedParents に ${id} のエントリがない`);
-        }
+      // expectedParents 使用時は fileUrl 共有による同一性証明が使えないため
+      // expectedFileUrls の pin が必須
+      if (!g.expectedFileUrls) {
+        errors.push(`${g.fileName}: expectedParents 指定時は expectedFileUrls が必須`);
       }
       const members = new Set([g.winnerDocId, ...(g.loserDocIds ?? [])]);
-      for (const key of Object.keys(g.expectedParents)) {
-        if (!members.has(key)) {
-          errors.push(`${g.fileName}: expectedParents に group 外の docId ${key} が含まれる`);
+      for (const [label, map] of [
+        ['expectedParents', g.expectedParents],
+        ['expectedFileUrls', g.expectedFileUrls],
+      ] as const) {
+        if (!map) continue;
+        for (const id of members) {
+          if (id && !map[id]) {
+            errors.push(`${g.fileName}: ${label} に ${id} のエントリがない`);
+          }
+        }
+        for (const key of Object.keys(map)) {
+          if (!members.has(key)) {
+            errors.push(`${g.fileName}: ${label} に group 外の docId ${key} が含まれる`);
+          }
         }
       }
+    } else if (g.expectedFileUrls) {
+      errors.push(
+        `${g.fileName}: expectedFileUrls は expectedParents 指定時のみ使用可 (同一親グループは fileUrl 共有で同一性を証明する)`
+      );
     }
     if (!g.winnerDocId) errors.push(`${g.fileName}: winnerDocId 未設定`);
     if (!Array.isArray(g.loserDocIds) || g.loserDocIds.length === 0) {
@@ -151,7 +181,11 @@ function str(data: Record<string, unknown>, key: string): string | undefined {
  *   - loser.parentDocumentId === 期待親 (group.parentDocumentId、または
  *     group.expectedParents[docId] — 別親グループ用)
  *   - loser.status === 'processed'
- *   - loser.fileUrl が非空かつ winner.fileUrl と同一 (Storage path 共有の証明)
+ *   - fileUrl 同一性証明 (グループ形式で分岐):
+ *     - 同一親 (parentDocumentId): loser.fileUrl が非空かつ winner.fileUrl と同一
+ *       (Storage path 共有の証明)
+ *     - 別親 (expectedParents): loser/winner とも fileUrl が plan の
+ *       expectedFileUrls の pin と完全一致 (検証した doc と同一であることの証明)
  *   - loser.verified !== true (確認済み doc は削除禁止)
  *   - loser.editedAt が存在しない (クライアント編集済み doc は削除禁止)
  *   - loser.rotatedAt が存在しない (回転操作済み doc は削除禁止)
@@ -204,6 +238,11 @@ export function evaluatePreconditions(
     if (!winnerFileUrl) {
       violations.push(`${g.fileName}: winner ${g.winnerDocId} の fileUrl が空`);
     }
+    if (g.expectedFileUrls && winnerFileUrl !== g.expectedFileUrls[g.winnerDocId]) {
+      violations.push(
+        `${g.fileName}: winner ${g.winnerDocId} の fileUrl が plan の pin と不一致 (actual=${winnerFileUrl})`
+      );
+    }
 
     for (const loserId of g.loserDocIds) {
       const loser = docs.get(loserId);
@@ -228,10 +267,20 @@ export function evaluatePreconditions(
         );
       }
       const loserFileUrl = str(d, 'fileUrl');
-      if (!loserFileUrl || loserFileUrl !== winnerFileUrl) {
-        violations.push(
-          `${g.fileName}: loser ${loserId} の fileUrl が winner と不一致 (Storage path 共有が証明できない)`
-        );
+      if (g.expectedFileUrls) {
+        // 別親グループ: plan 作成時に実測した fileUrl との完全一致で同一性を証明
+        if (!loserFileUrl || loserFileUrl !== g.expectedFileUrls[loserId]) {
+          violations.push(
+            `${g.fileName}: loser ${loserId} の fileUrl が plan の pin と不一致 (actual=${loserFileUrl})`
+          );
+        }
+      } else {
+        // 同一親グループ: winner との fileUrl 共有で同一性を証明
+        if (!loserFileUrl || loserFileUrl !== winnerFileUrl) {
+          violations.push(
+            `${g.fileName}: loser ${loserId} の fileUrl が winner と不一致 (Storage path 共有が証明できない)`
+          );
+        }
       }
       if (d.verified === true) {
         violations.push(
@@ -248,7 +297,16 @@ export function evaluatePreconditions(
           `${g.fileName}: loser ${loserId} に rotatedAt あり (回転操作済み doc は削除禁止)`
         );
       }
-      deletions.push({ docId: loserId, fileName: g.fileName, winnerDocId: g.winnerDocId });
+      deletions.push({
+        docId: loserId,
+        fileName: g.fileName,
+        winnerDocId: g.winnerDocId,
+        fileUrl: loserFileUrl ?? '',
+        // 別親グループで winner と異なる object を持つ loser のみ「専有」。
+        // 同一親 (共有) グループは常に false = object 不可侵
+        ownsStorageObject:
+          !!g.expectedFileUrls && !!loserFileUrl && loserFileUrl !== winnerFileUrl,
+      });
     }
   }
 

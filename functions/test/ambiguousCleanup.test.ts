@@ -149,6 +149,48 @@ describe('ambiguousCleanup: validatePlanStructure', () => {
     expect(errors.some((e) => e.includes('loser-1b のエントリがない'))).to.equal(true);
   });
 
+  it('expectedParents 指定時に expectedFileUrls が無ければ reject', () => {
+    const plan = makePlan();
+    delete plan.groups[0].parentDocumentId;
+    plan.groups[0].expectedParents = {
+      'winner-1': 'parent-a',
+      'loser-1a': 'parent-b',
+      'loser-1b': 'parent-c',
+    };
+    const errors = validatePlanStructure(plan);
+    expect(errors.some((e) => e.includes('expectedFileUrls が必須'))).to.equal(true);
+  });
+
+  it('expectedFileUrls を同一親グループ (parentDocumentId) に付けたら reject', () => {
+    const plan = makePlan();
+    plan.groups[0].expectedFileUrls = {
+      'winner-1': 'gs://b/x.pdf',
+      'loser-1a': 'gs://b/y.pdf',
+      'loser-1b': 'gs://b/z.pdf',
+    };
+    const errors = validatePlanStructure(plan);
+    expect(errors.some((e) => e.includes('指定時のみ使用可'))).to.equal(true);
+  });
+
+  it('expectedFileUrls に loser のエントリが欠けていたら reject', () => {
+    const plan = makePlan();
+    delete plan.groups[0].parentDocumentId;
+    plan.groups[0].expectedParents = {
+      'winner-1': 'parent-a',
+      'loser-1a': 'parent-b',
+      'loser-1b': 'parent-c',
+    };
+    plan.groups[0].expectedFileUrls = {
+      'winner-1': 'gs://b/x.pdf',
+      'loser-1a': 'gs://b/y.pdf',
+      // loser-1b が欠落
+    };
+    const errors = validatePlanStructure(plan);
+    expect(
+      errors.some((e) => e.includes('expectedFileUrls に loser-1b のエントリがない'))
+    ).to.equal(true);
+  });
+
   it('expectedParents に group 外の docId が混入していたら reject', () => {
     const plan = makePlan();
     delete plan.groups[0].parentDocumentId;
@@ -164,11 +206,14 @@ describe('ambiguousCleanup: validatePlanStructure', () => {
 });
 
 describe('ambiguousCleanup: evaluatePreconditions', () => {
-  it('全条件充足なら loser 全件が deletions に載る', () => {
+  it('全条件充足なら loser 全件が deletions に載る (共有 object は不可侵フラグ)', () => {
     const { violations, deletions } = evaluatePreconditions(makePlan(), healthyDocs());
     expect(violations).to.deep.equal([]);
     expect(deletions.map((d) => d.docId)).to.deep.equal(['loser-1a', 'loser-1b']);
     expect(deletions[0].winnerDocId).to.equal('winner-1');
+    // 同一親 (共有 object) グループの loser は object 削除対象にならない
+    expect(deletions.every((d) => d.ownsStorageObject === false)).to.equal(true);
+    expect(deletions[0].fileUrl).to.equal(FILE_URL);
   });
 
   it('loser が verified=true なら reject (ユーザー確認済み doc の削除禁止)', () => {
@@ -298,7 +343,8 @@ describe('ambiguousCleanup: evaluatePreconditions', () => {
     expect(deletions).to.deep.equal([]);
   });
 
-  it('expectedParents (別親グループ): doc ごとの期待親で検証が通過する', () => {
+  // 別親グループ用の plan/docs (本番 Phase 2 と同構造: 各 doc が専用 object)
+  function makeMultiParentPlan(): CleanupPlan {
     const plan = makePlan();
     delete plan.groups[0].parentDocumentId;
     plan.groups[0].expectedParents = {
@@ -306,14 +352,95 @@ describe('ambiguousCleanup: evaluatePreconditions', () => {
       'loser-1a': 'parent-b',
       'loser-1b': 'parent-c',
     };
+    plan.groups[0].expectedFileUrls = {
+      'winner-1': 'gs://bucket/processed/winner-1/x.pdf',
+      'loser-1a': 'gs://bucket/processed/loser-1a/x.pdf',
+      'loser-1b': 'gs://bucket/processed/loser-1b/x.pdf',
+    };
+    return plan;
+  }
+  function makeMultiParentDocs(): Map<string, DocState> {
+    return makeDocs({
+      'winner-1': makeDoc({
+        verified: true,
+        parentDocumentId: 'parent-a',
+        fileUrl: 'gs://bucket/processed/winner-1/x.pdf',
+      }),
+      'loser-1a': makeDoc({
+        parentDocumentId: 'parent-b',
+        fileUrl: 'gs://bucket/processed/loser-1a/x.pdf',
+      }),
+      'loser-1b': makeDoc({
+        parentDocumentId: 'parent-c',
+        fileUrl: 'gs://bucket/processed/loser-1b/x.pdf',
+      }),
+    });
+  }
+
+  it('expectedParents (別親グループ): 期待親 + fileUrl pin 一致で通過し、専有 object フラグが立つ', () => {
+    const { violations, deletions } = evaluatePreconditions(
+      makeMultiParentPlan(),
+      makeMultiParentDocs()
+    );
+    expect(violations).to.deep.equal([]);
+    expect(deletions.map((d) => d.docId)).to.deep.equal(['loser-1a', 'loser-1b']);
+    expect(deletions.every((d) => d.ownsStorageObject === true)).to.equal(true);
+    expect(deletions[0].fileUrl).to.equal('gs://bucket/processed/loser-1a/x.pdf');
+  });
+
+  it('expectedParents (別親グループ): loser の fileUrl が pin と異なれば reject', () => {
+    const docs = makeMultiParentDocs();
+    docs.set(
+      'loser-1a',
+      makeDoc({ parentDocumentId: 'parent-b', fileUrl: 'gs://bucket/processed/DRIFTED.pdf' })
+    );
+    const { violations, deletions } = evaluatePreconditions(makeMultiParentPlan(), docs);
+    expect(violations.some((v) => v.includes('loser-1a') && v.includes('pin と不一致'))).to.equal(true);
+    expect(deletions).to.deep.equal([]);
+  });
+
+  it('expectedParents (別親グループ): winner の fileUrl が pin と異なれば reject', () => {
+    const docs = makeMultiParentDocs();
+    docs.set(
+      'winner-1',
+      makeDoc({
+        verified: true,
+        parentDocumentId: 'parent-a',
+        fileUrl: 'gs://bucket/processed/DRIFTED.pdf',
+      })
+    );
+    const { violations, deletions } = evaluatePreconditions(makeMultiParentPlan(), docs);
+    expect(violations.some((v) => v.includes('winner') && v.includes('pin と不一致'))).to.equal(true);
+    expect(deletions).to.deep.equal([]);
+  });
+
+  it('expectedParents で loser が winner と object を共有する場合は専有フラグが立たない', () => {
+    const plan = makeMultiParentPlan();
+    plan.groups[0].expectedFileUrls = {
+      'winner-1': 'gs://bucket/processed/shared.pdf',
+      'loser-1a': 'gs://bucket/processed/shared.pdf',
+      'loser-1b': 'gs://bucket/processed/loser-1b/x.pdf',
+    };
     const docs = makeDocs({
-      'winner-1': makeDoc({ verified: true, parentDocumentId: 'parent-a' }),
-      'loser-1a': makeDoc({ parentDocumentId: 'parent-b' }),
-      'loser-1b': makeDoc({ parentDocumentId: 'parent-c' }),
+      'winner-1': makeDoc({
+        verified: true,
+        parentDocumentId: 'parent-a',
+        fileUrl: 'gs://bucket/processed/shared.pdf',
+      }),
+      'loser-1a': makeDoc({
+        parentDocumentId: 'parent-b',
+        fileUrl: 'gs://bucket/processed/shared.pdf',
+      }),
+      'loser-1b': makeDoc({
+        parentDocumentId: 'parent-c',
+        fileUrl: 'gs://bucket/processed/loser-1b/x.pdf',
+      }),
     });
     const { violations, deletions } = evaluatePreconditions(plan, docs);
     expect(violations).to.deep.equal([]);
-    expect(deletions.map((d) => d.docId)).to.deep.equal(['loser-1a', 'loser-1b']);
+    const byId = new Map(deletions.map((d) => [d.docId, d]));
+    expect(byId.get('loser-1a')?.ownsStorageObject).to.equal(false); // winner と共有 = 不可侵
+    expect(byId.get('loser-1b')?.ownsStorageObject).to.equal(true);
   });
 
   it('expectedParents (別親グループ): loser の実親が期待と異なれば reject', () => {

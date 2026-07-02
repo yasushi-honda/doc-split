@@ -12,8 +12,12 @@
  *     ユーザーが触った doc (verified / editedAt / rotatedAt) は削除禁止
  *   - 削除前に winner+loser 全フィールド JSON バックアップを必ず出力
  *   - 件数厳密アサーション (plan.expectedLoserCount と 1 件でもずれたら abort)
- *   - Storage 実体は一切触らない (winner が同一ファイルを参照継続)。
- *     cleanup 本経路は Storage の read (existence check) のみで delete API を呼ばない
+ *   - Storage 実体の扱い (グループ形式で分岐):
+ *     - 同一親 (共有 object): 一切触らない (winner が同一ファイルを参照継続)
+ *     - 別親 (loser が object を専有): doc 削除後に storageGuard で
+ *       「他 doc が同 fileUrl を参照していない」ことを確認できた場合のみ
+ *       専有 object を削除 (孤児 object を残すと audit-storage-mismatch の
+ *       誤検知源になるため)。共有が検出されたら skip して object を残す
  *   - --execute は STORAGE_BUCKET 必須 (事後検証を欠いた削除を構造的に排除)
  *   - 事後検証: loser 不在 / winner 現存 / winner の実 fileUrl が指す Storage 実体現存
  *   - 未知フラグは exit 2 (typo が黙って dry-run に化けるのを防ぐ)
@@ -44,6 +48,7 @@ import {
   validatePlanStructure,
   evaluatePreconditions,
 } from './lib/ambiguousCleanup';
+import { isPathSafeToDeleteAfterExcluding } from './lib/storageGuard';
 
 const projectId = process.env.FIREBASE_PROJECT_ID;
 const storageBucket = process.env.STORAGE_BUCKET;
@@ -146,6 +151,12 @@ function gsUrl(fileName: string): string {
   return `gs://${storageBucket}/processed/${fileName}`;
 }
 
+/** gs:// URL を {bucket, objectPath} に分解。不正形式は null */
+function parseGsUrl(url: string): { bucket: string; objectPath: string } | null {
+  const m = url.match(/^gs:\/\/([^/]+)\/(.+)$/);
+  return m ? { bucket: m[1], objectPath: m[2] } : null;
+}
+
 /** dev 専用ガード */
 function assertDevOnly(op: string): void {
   if (!projectId!.includes('dev')) {
@@ -189,17 +200,35 @@ async function seedFixture(plan: CleanupPlan): Promise<void> {
   }
 
   for (const [gi, g] of plan.groups.entries()) {
-    // 共有 Storage 実体 (1 グループ 1 ファイル)
-    const pdf = await PDFDocument.create();
-    pdf.addPage([200, 200]);
-    const bytes = await pdf.save();
-    await bucket.file(`processed/${g.fileName}`).save(Buffer.from(bytes), {
-      contentType: 'application/pdf',
-    });
+    const makePdf = async (): Promise<Buffer> => {
+      const pdf = await PDFDocument.create();
+      pdf.addPage([200, 200]);
+      return Buffer.from(await pdf.save());
+    };
 
-    const fileUrl = gsUrl(g.fileName);
+    // Storage 実体: 同一親グループは共有 1 ファイル、別親 (expectedFileUrls)
+    // グループは doc ごとに専有ファイルを作成 (本番 Phase 2 と同じ構造を再現)
+    if (g.expectedFileUrls) {
+      for (const url of new Set(Object.values(g.expectedFileUrls))) {
+        const parsed = parseGsUrl(url);
+        if (!parsed || parsed.bucket !== storageBucket) {
+          console.error(`FATAL: fixture plan の expectedFileUrls が不正: ${url}`);
+          process.exit(2);
+        }
+        await bucket.file(parsed.objectPath).save(await makePdf(), {
+          contentType: 'application/pdf',
+        });
+      }
+    } else {
+      await bucket.file(`processed/${g.fileName}`).save(await makePdf(), {
+        contentType: 'application/pdf',
+      });
+    }
+
+    const sharedFileUrl = gsUrl(g.fileName);
     const docIds = [g.winnerDocId, ...g.loserDocIds];
     for (const [di, docId] of docIds.entries()) {
+      const fileUrl = g.expectedFileUrls ? g.expectedFileUrls[docId] : sharedFileUrl;
       const isWinner = di === 0;
       const data: Record<string, unknown> = {
         fileName: g.fileName,
@@ -243,18 +272,27 @@ async function removeFixture(plan: CleanupPlan): Promise<void> {
       await snap.ref.delete();
     }
   }
-  for (const g of plan.groups) {
-    // 404 のみ冪等扱い。permission/transient エラーは握り潰さず fail させる
-    // (Codex review P2: silent cleanup failure 防止)
-    await bucket
-      .file(`processed/${g.fileName}`)
+  // 404 のみ冪等扱い。permission/transient エラーは握り潰さず fail させる
+  // (Codex review P2: silent cleanup failure 防止)
+  const deleteObject = (objectPath: string) =>
+    bucket
+      .file(objectPath)
       .delete()
       .catch((err: { code?: number }) => {
         if (err.code === 404) return undefined;
         throw err;
       });
+  for (const g of plan.groups) {
+    if (g.expectedFileUrls) {
+      for (const url of new Set(Object.values(g.expectedFileUrls))) {
+        const parsed = parseGsUrl(url);
+        if (parsed && parsed.bucket === storageBucket) await deleteObject(parsed.objectPath);
+      }
+    } else {
+      await deleteObject(`processed/${g.fileName}`);
+    }
   }
-  console.log(`✅ fixture 削除完了 (docs ${ids.size} 件 + Storage ${plan.groups.length} 件)`);
+  console.log(`✅ fixture 削除完了 (docs ${ids.size} 件 + Storage 実体)`);
 }
 
 interface FetchedStates {
@@ -337,7 +375,10 @@ async function main(): Promise<void> {
 
   console.log(`✅ preconditions 全通過。削除対象 ${deletions.length} 件:`);
   for (const d of deletions) {
-    console.log(`  - ${d.docId} (${d.fileName}, winner=${d.winnerDocId})`);
+    const storageNote = d.ownsStorageObject
+      ? ' [専有 object も削除対象 (storageGuard 確認後)]'
+      : ' [object は winner と共有 = 不可侵]';
+    console.log(`  - ${d.docId} (${d.fileName}, winner=${d.winnerDocId})${storageNote}`);
   }
 
   if (!execute) {
@@ -381,9 +422,50 @@ async function main(): Promise<void> {
   }
   console.log(`🗑️ 削除完了: ${deletions.length} 件 (atomic batch + lastUpdateTime precondition)`);
 
+  const bucket = admin.storage().bucket();
+  const postErrors: string[] = [];
+
+  // 4.5 専有 Storage object の削除 (別親グループの loser のみ)。
+  // doc 削除後に storageGuard で「他 doc が同 fileUrl を参照していない」ことを
+  // 確認できた場合のみ削除。共有が検出されたら skip して object を残す (安全側)。
+  const ownedDeletions = deletions.filter((d) => d.ownsStorageObject);
+  const deletedObjectPaths: string[] = [];
+  for (const d of ownedDeletions) {
+    const parsed = parseGsUrl(d.fileUrl);
+    if (!parsed) {
+      postErrors.push(`loser ${d.docId} の fileUrl が gs:// 形式でない: ${d.fileUrl}`);
+      continue;
+    }
+    if (parsed.bucket !== storageBucket) {
+      postErrors.push(
+        `loser ${d.docId} の fileUrl bucket (${parsed.bucket}) が STORAGE_BUCKET と不一致のため object 削除をスキップ`
+      );
+      continue;
+    }
+    const guard = await isPathSafeToDeleteAfterExcluding(db, d.fileUrl, [d.docId]);
+    if (!guard.safe) {
+      console.warn(
+        `⚠️ ${parsed.objectPath} は他 doc (${guard.residualDocIds.join(',')}) が参照中のため削除スキップ (object 残置)`
+      );
+      continue;
+    }
+    try {
+      await bucket.file(parsed.objectPath).delete();
+      deletedObjectPaths.push(parsed.objectPath);
+    } catch (err) {
+      if ((err as { code?: number }).code === 404) {
+        deletedObjectPaths.push(parsed.objectPath); // 既に不在 = 冪等扱い
+      } else {
+        postErrors.push(`専有 object 削除失敗: ${parsed.objectPath}: ${String(err)}`);
+      }
+    }
+  }
+  if (ownedDeletions.length > 0) {
+    console.log(`🗑️ 専有 Storage object 削除: ${deletedObjectPaths.length}/${ownedDeletions.length} 件`);
+  }
+
   // 5. 事後検証
   const { states: after } = await fetchDocStates(plan);
-  const postErrors: string[] = [];
   for (const g of plan.groups) {
     if (!after.get(g.winnerDocId)?.exists) {
       postErrors.push(`winner ${g.winnerDocId} が消えている (${g.fileName})`);
@@ -398,7 +480,6 @@ async function main(): Promise<void> {
   // (`processed/${fileName}` の再構築は split 由来 doc の docId namespace 形式
   //  `processed/{docId}/{fileName}` と乖離しうる — code review Important 反映)。
   // fileUrl は preconditions で非空を検証済み。STORAGE_BUCKET は --execute で必須。
-  const bucket = admin.storage().bucket();
   for (const g of plan.groups) {
     const winnerFileUrl = docs.get(g.winnerDocId)?.data?.fileUrl as string;
     const m = winnerFileUrl.match(/^gs:\/\/([^/]+)\/(.+)$/);
@@ -416,6 +497,13 @@ async function main(): Promise<void> {
     const [exists] = await bucket.file(objectPath).exists();
     if (!exists) {
       postErrors.push(`Storage 実体 ${objectPath} が不在 (winner ${g.winnerDocId} が閲覧不能)`);
+    }
+  }
+  // 削除した専有 object が実際に不在になったことを確認
+  for (const objectPath of deletedObjectPaths) {
+    const [exists] = await bucket.file(objectPath).exists();
+    if (exists) {
+      postErrors.push(`専有 object ${objectPath} が削除後も残存`);
     }
   }
 

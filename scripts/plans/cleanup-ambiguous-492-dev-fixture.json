@@ -17,6 +17,11 @@
         "fixture492-g2-loser-a": "fixture492-parent-y",
         "fixture492-g2-loser-b": "fixture492-parent-y"
       },
+      "expectedFileUrls": {
+        "fixture492-g2-winner": "gs://doc-split-dev.firebasestorage.app/processed/fixture492-g2-winner/20990101_未判定_未判定_p3-4.fixture492.pdf",
+        "fixture492-g2-loser-a": "gs://doc-split-dev.firebasestorage.app/processed/fixture492-g2-loser-a/20990101_未判定_未判定_p3-4.fixture492.pdf",
+        "fixture492-g2-loser-b": "gs://doc-split-dev.firebasestorage.app/processed/fixture492-g2-loser-b/20990101_未判定_未判定_p3-4.fixture492.pdf"
+      },
       "winnerDocId": "fixture492-g2-winner",
       "loserDocIds": ["fixture492-g2-loser-a", "fixture492-g2-loser-b"]
     }

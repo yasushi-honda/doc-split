@@ -2,13 +2,17 @@
   "schemaVersion": "ambiguous-cleanup-v1",
   "issue": 492,
   "projectId": "docsplit-kanameone",
-  "description": "Issue #492 Phase 2: 20260509 の別親 2 グループ (Gmail 重複受信由来とみられる同一内容 docs)。expectedParents で doc ごとの親を検証する。削除対象はユーザー未操作の重複のみ — p3 の U4Lf5ZPNA4IyH73SXE2P はユーザー確認済みのため意図的に plan 対象外 (確認済み 2 docs が残る)。Phase 1 (20260413 の 8 グループ / 16 losers) は 2026-07-02 GHA run 28622728191 で削除完了済みのため本 plan から除外 (backup: cleanup-ambiguous-backup-kanameone-28622728191)。根拠: session83 classify artifact + 2026-07-02 本番 batchGet 実測。",
+  "description": "Issue #492 Phase 2: 20260509 の別親 2 グループ (Gmail 重複受信由来とみられる同一内容 docs)。expectedParents で doc ごとの親を、expectedFileUrls で doc ごとの実測 fileUrl を検証する (#432 復旧で各 doc が専用 Storage path に移行済みのため fileUrl 共有による同一性証明は使えない — Codex review 指摘反映)。loser の専有 object は storageGuard 確認後に削除。削除対象はユーザー未操作の重複のみ — p3 の U4Lf5ZPNA4IyH73SXE2P はユーザー確認済みのため意図的に plan 対象外 (確認済み 2 docs が残る)。Phase 1 (20260413 の 8 グループ / 16 losers) は 2026-07-02 GHA run 28622728191 で削除完了済みのため本 plan から除外 (backup: cleanup-ambiguous-backup-kanameone-28622728191)。根拠: session83 classify artifact + 2026-07-02/03 本番 batchGet 実測。",
   "groups": [
     {
       "fileName": "20260509_未判定_未判定_p1-2.pdf",
       "expectedParents": {
         "Lso7jEXzWxBjU4Cj6zqR": "Xe6jCKoTk4yflHqefDtb",
         "gifjllJ57Sx58TktzHCf": "EkZ6bwIM3ji17UugWeEr"
+      },
+      "expectedFileUrls": {
+        "Lso7jEXzWxBjU4Cj6zqR": "gs://docsplit-kanameone.firebasestorage.app/processed/Lso7jEXzWxBjU4Cj6zqR/20260509_未判定_未判定_p1-2.pdf",
+        "gifjllJ57Sx58TktzHCf": "gs://docsplit-kanameone.firebasestorage.app/processed/gifjllJ57Sx58TktzHCf/20260509_未判定_未判定_p1-2.pdf"
       },
       "winnerDocId": "Lso7jEXzWxBjU4Cj6zqR",
       "loserDocIds": ["gifjllJ57Sx58TktzHCf"]
@@ -18,6 +22,10 @@
       "expectedParents": {
         "0ZuExPFZjngfSpddy2HR": "lqoU41gSf9Yj1gM1qgZK",
         "M7i4Nx6khiYEo2KTGJHg": "EkZ6bwIM3ji17UugWeEr"
+      },
+      "expectedFileUrls": {
+        "0ZuExPFZjngfSpddy2HR": "gs://docsplit-kanameone.firebasestorage.app/processed/20260509_未判定_未判定_p3_r1778340000575.pdf",
+        "M7i4Nx6khiYEo2KTGJHg": "gs://docsplit-kanameone.firebasestorage.app/processed/M7i4Nx6khiYEo2KTGJHg/20260509_未判定_未判定_p3.pdf"
       },
       "winnerDocId": "0ZuExPFZjngfSpddy2HR",
       "loserDocIds": ["M7i4Nx6khiYEo2KTGJHg"]
