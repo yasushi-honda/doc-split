@@ -2,56 +2,26 @@
   "schemaVersion": "ambiguous-cleanup-v1",
   "issue": 492,
   "projectId": "docsplit-kanameone",
-  "description": "Issue #492 Phase 1: 20260413 の同一親 (qwCIJLBkTNDvjVFbQNgm)・同一ページ範囲・fingerprint 一致の真の重複 8 グループ。winner はクライアント操作済み doc (verified=true / editedAt あり) 優先、なければ docId 辞書順先頭。20260509 の 2 グループ (別親、Gmail 重複受信由来) は Phase 2 で本 plan 対象外。根拠: session83 classify artifact + 2026-07-02 本番 batchGet 実測。",
+  "description": "Issue #492 Phase 2: 20260509 の別親 2 グループ (Gmail 重複受信由来とみられる同一内容 docs)。expectedParents で doc ごとの親を検証する。削除対象はユーザー未操作の重複のみ — p3 の U4Lf5ZPNA4IyH73SXE2P はユーザー確認済みのため意図的に plan 対象外 (確認済み 2 docs が残る)。Phase 1 (20260413 の 8 グループ / 16 losers) は 2026-07-02 GHA run 28622728191 で削除完了済みのため本 plan から除外 (backup: cleanup-ambiguous-backup-kanameone-28622728191)。根拠: session83 classify artifact + 2026-07-02 本番 batchGet 実測。",
   "groups": [
     {
-      "fileName": "20260413_未判定_未判定_p1-4.pdf",
-      "parentDocumentId": "qwCIJLBkTNDvjVFbQNgm",
-      "winnerDocId": "MMBWDxbNtHEBdVuWZoV7",
-      "loserDocIds": ["MYQHsGN4T4g8dyIE7pMF", "QaHRDFH2CCeBRQc2IYDY"]
+      "fileName": "20260509_未判定_未判定_p1-2.pdf",
+      "expectedParents": {
+        "Lso7jEXzWxBjU4Cj6zqR": "Xe6jCKoTk4yflHqefDtb",
+        "gifjllJ57Sx58TktzHCf": "EkZ6bwIM3ji17UugWeEr"
+      },
+      "winnerDocId": "Lso7jEXzWxBjU4Cj6zqR",
+      "loserDocIds": ["gifjllJ57Sx58TktzHCf"]
     },
     {
-      "fileName": "20260413_未判定_未判定_p13-14.pdf",
-      "parentDocumentId": "qwCIJLBkTNDvjVFbQNgm",
-      "winnerDocId": "CEyZ0HwvGWNSW5gBofmv",
-      "loserDocIds": ["nNr0eCWKCJ0TdOYqajS5", "tAsra5fGb7COwI6SHHKK"]
-    },
-    {
-      "fileName": "20260413_未判定_未判定_p15-16.pdf",
-      "parentDocumentId": "qwCIJLBkTNDvjVFbQNgm",
-      "winnerDocId": "0FUs833maylUXBquK6LI",
-      "loserDocIds": ["KqhURvjQqM08MGSfz7vX", "kVhhqwe2HeMSoxgwiaZI"]
-    },
-    {
-      "fileName": "20260413_未判定_未判定_p17-18.pdf",
-      "parentDocumentId": "qwCIJLBkTNDvjVFbQNgm",
-      "winnerDocId": "BZJ9hppNiqIc22nKG24k",
-      "loserDocIds": ["S2Z5Pazn04K1XHzdrv8d", "nZeaA7KLm4pOrADkdSTg"]
-    },
-    {
-      "fileName": "20260413_未判定_未判定_p19-20.pdf",
-      "parentDocumentId": "qwCIJLBkTNDvjVFbQNgm",
-      "winnerDocId": "eJjtsWIP9qKl8iFQ83ly",
-      "loserDocIds": ["r2YHGzCEwAiJgyYdbHzH", "tdWonj8jW9dE6ykseAaO"]
-    },
-    {
-      "fileName": "20260413_未判定_未判定_p21-22.pdf",
-      "parentDocumentId": "qwCIJLBkTNDvjVFbQNgm",
-      "winnerDocId": "0n1iJ8YjTgKLnWUWfEAL",
-      "loserDocIds": ["Fk3gws1plaX2pzOJ16R0", "NVQopGScKJATXNy90Gtu"]
-    },
-    {
-      "fileName": "20260413_未判定_未判定_p23-24.pdf",
-      "parentDocumentId": "qwCIJLBkTNDvjVFbQNgm",
-      "winnerDocId": "XJz5w5ekAFu9eE5DXWGr",
-      "loserDocIds": ["GMqzUhEQWDXtHi9SCSxg", "ePqahIlfVMIKbwoLfeV6"]
-    },
-    {
-      "fileName": "20260413_未判定_未判定_p25-26.pdf",
-      "parentDocumentId": "qwCIJLBkTNDvjVFbQNgm",
-      "winnerDocId": "Oz9x4D0xfUcxU0GPCABf",
-      "loserDocIds": ["k7xtgOLdqVwxKQIp3CXG", "ts2bm0LuuxFqg5Qnyuc7"]
+      "fileName": "20260509_未判定_未判定_p3.pdf",
+      "expectedParents": {
+        "0ZuExPFZjngfSpddy2HR": "lqoU41gSf9Yj1gM1qgZK",
+        "M7i4Nx6khiYEo2KTGJHg": "EkZ6bwIM3ji17UugWeEr"
+      },
+      "winnerDocId": "0ZuExPFZjngfSpddy2HR",
+      "loserDocIds": ["M7i4Nx6khiYEo2KTGJHg"]
     }
   ],
-  "expectedLoserCount": 16
+  "expectedLoserCount": 2
 }

@@ -21,8 +21,17 @@ export type AmbiguousCleanupSchemaVersion = typeof AMBIGUOUS_CLEANUP_SCHEMA_VERS
 export interface CleanupGroup {
   /** 共有されている fileName (例: 20260413_未判定_未判定_p1-4.pdf) */
   fileName: string;
-  /** グループ全 docs が持つべき親 doc ID */
-  parentDocumentId: string;
+  /**
+   * グループ全 docs が持つべき親 doc ID (同一親グループ用)。
+   * expectedParents と排他 — どちらか一方のみ指定する。
+   */
+  parentDocumentId?: string;
+  /**
+   * doc ごとの期待親 doc ID (別親グループ用。Gmail 重複受信由来など、
+   * 同一内容が別親から split されたケース)。winner + 全 loser を network せず
+   * 検証できるよう、グループ内の全 docId をキーに持つこと。
+   */
+  expectedParents?: Record<string, string>;
   /**
    * 残す doc。plan 作成時の選定ポリシーは「クライアント編集/確認済み doc 優先、
    * なければ docId 辞書順先頭」(本モジュールはこのポリシー自体を検証しない)
@@ -84,7 +93,26 @@ export function validatePlanStructure(plan: CleanupPlan): string[] {
   let loserTotal = 0;
   for (const g of plan.groups) {
     if (!g.fileName) errors.push(`fileName 未設定の group あり`);
-    if (!g.parentDocumentId) errors.push(`${g.fileName}: parentDocumentId 未設定`);
+    // 親の期待値は uniform (parentDocumentId) XOR per-doc (expectedParents)
+    if (!g.parentDocumentId && !g.expectedParents) {
+      errors.push(`${g.fileName}: parentDocumentId / expectedParents のいずれかが必要`);
+    }
+    if (g.parentDocumentId && g.expectedParents) {
+      errors.push(`${g.fileName}: parentDocumentId と expectedParents は排他 (両方指定不可)`);
+    }
+    if (g.expectedParents) {
+      for (const id of [g.winnerDocId, ...(g.loserDocIds ?? [])]) {
+        if (id && !g.expectedParents[id]) {
+          errors.push(`${g.fileName}: expectedParents に ${id} のエントリがない`);
+        }
+      }
+      const members = new Set([g.winnerDocId, ...(g.loserDocIds ?? [])]);
+      for (const key of Object.keys(g.expectedParents)) {
+        if (!members.has(key)) {
+          errors.push(`${g.fileName}: expectedParents に group 外の docId ${key} が含まれる`);
+        }
+      }
+    }
     if (!g.winnerDocId) errors.push(`${g.fileName}: winnerDocId 未設定`);
     if (!Array.isArray(g.loserDocIds) || g.loserDocIds.length === 0) {
       errors.push(`${g.fileName}: loserDocIds が空`);
@@ -120,7 +148,8 @@ function str(data: Record<string, unknown>, key: string): string | undefined {
  * loser 削除可能条件 (全て AND):
  *   - loser doc が存在する
  *   - loser.fileName === plan.fileName
- *   - loser.parentDocumentId === plan.parentDocumentId
+ *   - loser.parentDocumentId === 期待親 (group.parentDocumentId、または
+ *     group.expectedParents[docId] — 別親グループ用)
  *   - loser.status === 'processed'
  *   - loser.fileUrl が非空かつ winner.fileUrl と同一 (Storage path 共有の証明)
  *   - loser.verified !== true (確認済み doc は削除禁止)
@@ -157,13 +186,16 @@ export function evaluatePreconditions(
       violations.push(`${g.fileName}: winner ${g.winnerDocId} が存在しない`);
       continue;
     }
+    const expectedParentOf = (docId: string): string | undefined =>
+      g.expectedParents ? g.expectedParents[docId] : g.parentDocumentId;
+
     const winnerData = winner.data;
     if (str(winnerData, 'fileName') !== g.fileName) {
       violations.push(
         `${g.fileName}: winner ${g.winnerDocId} の fileName 不一致 (actual=${str(winnerData, 'fileName')})`
       );
     }
-    if (str(winnerData, 'parentDocumentId') !== g.parentDocumentId) {
+    if (str(winnerData, 'parentDocumentId') !== expectedParentOf(g.winnerDocId)) {
       violations.push(
         `${g.fileName}: winner ${g.winnerDocId} の parentDocumentId 不一致 (actual=${str(winnerData, 'parentDocumentId')})`
       );
@@ -185,7 +217,7 @@ export function evaluatePreconditions(
           `${g.fileName}: loser ${loserId} の fileName 不一致 (actual=${str(d, 'fileName')})`
         );
       }
-      if (str(d, 'parentDocumentId') !== g.parentDocumentId) {
+      if (str(d, 'parentDocumentId') !== expectedParentOf(loserId)) {
         violations.push(
           `${g.fileName}: loser ${loserId} の parentDocumentId 不一致 (actual=${str(d, 'parentDocumentId')})`
         );

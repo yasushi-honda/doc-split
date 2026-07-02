@@ -158,19 +158,35 @@ function assertDevOnly(op: string): void {
   }
 }
 
+/** group 内の docId → 期待親 を解決 (uniform / per-doc 両対応) */
+function parentOf(g: CleanupPlan['groups'][number], docId: string): string {
+  return (g.expectedParents ? g.expectedParents[docId] : g.parentDocumentId) ?? '';
+}
+
+/** plan 内の全親 docId (重複排除) */
+function allParentIds(plan: CleanupPlan): Set<string> {
+  const ids = new Set<string>();
+  for (const g of plan.groups) {
+    if (g.parentDocumentId) ids.add(g.parentDocumentId);
+    if (g.expectedParents) for (const p of Object.values(g.expectedParents)) ids.add(p);
+  }
+  return ids;
+}
+
 async function seedFixture(plan: CleanupPlan): Promise<void> {
   assertDevOnly('--seed-dev-fixture');
   const bucket = admin.storage().bucket();
 
-  // 親 doc
-  const parentId = plan.groups[0].parentDocumentId;
-  await db.collection('documents').doc(parentId).set({
-    fileName: 'fixture492-parent.pdf',
-    status: 'processed',
-    createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    fixture: 'issue-492-cleanup',
-  });
+  // 親 docs (uniform / per-doc 両形式の親をすべて作成)
+  for (const parentId of allParentIds(plan)) {
+    await db.collection('documents').doc(parentId).set({
+      fileName: `${parentId}.pdf`,
+      status: 'processed',
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      fixture: 'issue-492-cleanup',
+    });
+  }
 
   for (const [gi, g] of plan.groups.entries()) {
     // 共有 Storage 実体 (1 グループ 1 ファイル)
@@ -188,7 +204,7 @@ async function seedFixture(plan: CleanupPlan): Promise<void> {
       const data: Record<string, unknown> = {
         fileName: g.fileName,
         fileUrl,
-        parentDocumentId: g.parentDocumentId,
+        parentDocumentId: parentOf(g, docId),
         status: 'processed',
         customerName: '未判定',
         documentType: '未判定',
@@ -215,7 +231,7 @@ async function seedFixture(plan: CleanupPlan): Promise<void> {
 async function removeFixture(plan: CleanupPlan): Promise<void> {
   assertDevOnly('--cleanup-fixture');
   const bucket = admin.storage().bucket();
-  const ids = new Set<string>([plan.groups[0].parentDocumentId]);
+  const ids = allParentIds(plan);
   for (const g of plan.groups) {
     ids.add(g.winnerDocId);
     for (const id of g.loserDocIds) ids.add(id);

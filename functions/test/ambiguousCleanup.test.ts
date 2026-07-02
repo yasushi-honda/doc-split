@@ -118,6 +118,49 @@ describe('ambiguousCleanup: validatePlanStructure', () => {
     const errors = validatePlanStructure(makePlan({ groups: [], expectedLoserCount: 0 }));
     expect(errors.some((e) => e.includes('groups が空'))).to.equal(true);
   });
+
+  it('parentDocumentId / expectedParents の両方欠落を reject', () => {
+    const plan = makePlan();
+    delete plan.groups[0].parentDocumentId;
+    const errors = validatePlanStructure(plan);
+    expect(errors.some((e) => e.includes('いずれかが必要'))).to.equal(true);
+  });
+
+  it('parentDocumentId と expectedParents の同時指定を reject (排他)', () => {
+    const plan = makePlan();
+    plan.groups[0].expectedParents = {
+      'winner-1': 'parent-1',
+      'loser-1a': 'parent-1',
+      'loser-1b': 'parent-1',
+    };
+    const errors = validatePlanStructure(plan);
+    expect(errors.some((e) => e.includes('排他'))).to.equal(true);
+  });
+
+  it('expectedParents に loser のエントリが欠けていたら reject', () => {
+    const plan = makePlan();
+    delete plan.groups[0].parentDocumentId;
+    plan.groups[0].expectedParents = {
+      'winner-1': 'parent-a',
+      'loser-1a': 'parent-b',
+      // loser-1b が欠落
+    };
+    const errors = validatePlanStructure(plan);
+    expect(errors.some((e) => e.includes('loser-1b のエントリがない'))).to.equal(true);
+  });
+
+  it('expectedParents に group 外の docId が混入していたら reject', () => {
+    const plan = makePlan();
+    delete plan.groups[0].parentDocumentId;
+    plan.groups[0].expectedParents = {
+      'winner-1': 'parent-a',
+      'loser-1a': 'parent-b',
+      'loser-1b': 'parent-b',
+      'stranger-doc': 'parent-c',
+    };
+    const errors = validatePlanStructure(plan);
+    expect(errors.some((e) => e.includes('group 外の docId'))).to.equal(true);
+  });
 });
 
 describe('ambiguousCleanup: evaluatePreconditions', () => {
@@ -255,6 +298,44 @@ describe('ambiguousCleanup: evaluatePreconditions', () => {
     expect(deletions).to.deep.equal([]);
   });
 
+  it('expectedParents (別親グループ): doc ごとの期待親で検証が通過する', () => {
+    const plan = makePlan();
+    delete plan.groups[0].parentDocumentId;
+    plan.groups[0].expectedParents = {
+      'winner-1': 'parent-a',
+      'loser-1a': 'parent-b',
+      'loser-1b': 'parent-c',
+    };
+    const docs = makeDocs({
+      'winner-1': makeDoc({ verified: true, parentDocumentId: 'parent-a' }),
+      'loser-1a': makeDoc({ parentDocumentId: 'parent-b' }),
+      'loser-1b': makeDoc({ parentDocumentId: 'parent-c' }),
+    });
+    const { violations, deletions } = evaluatePreconditions(plan, docs);
+    expect(violations).to.deep.equal([]);
+    expect(deletions.map((d) => d.docId)).to.deep.equal(['loser-1a', 'loser-1b']);
+  });
+
+  it('expectedParents (別親グループ): loser の実親が期待と異なれば reject', () => {
+    const plan = makePlan();
+    delete plan.groups[0].parentDocumentId;
+    plan.groups[0].expectedParents = {
+      'winner-1': 'parent-a',
+      'loser-1a': 'parent-b',
+      'loser-1b': 'parent-c',
+    };
+    const docs = makeDocs({
+      'winner-1': makeDoc({ verified: true, parentDocumentId: 'parent-a' }),
+      'loser-1a': makeDoc({ parentDocumentId: 'parent-WRONG' }),
+      'loser-1b': makeDoc({ parentDocumentId: 'parent-c' }),
+    });
+    const { violations, deletions } = evaluatePreconditions(plan, docs);
+    expect(
+      violations.some((v) => v.includes('loser-1a') && v.includes('parentDocumentId 不一致'))
+    ).to.equal(true);
+    expect(deletions).to.deep.equal([]);
+  });
+
   it('複数グループ: 1 グループの違反が健全な他グループの削除も止める (all-or-nothing)', () => {
     const plan = makePlan({
       groups: [
@@ -301,12 +382,17 @@ describe('ambiguousCleanup: checked-in plan JSON の実物検証', () => {
     return JSON.parse(fs.readFileSync(path.join(plansDir, name), 'utf-8')) as CleanupPlan;
   }
 
-  it('kanameone plan: 構造検証を通過し、想定値 (8 groups / 16 losers / projectId) と一致', () => {
+  it('kanameone plan (Phase 2): 構造検証を通過し、想定値 (2 groups / 2 losers / projectId) と一致', () => {
     const plan = loadPlanFile('cleanup-ambiguous-492-kanameone.json');
     expect(validatePlanStructure(plan)).to.deep.equal([]);
     expect(plan.projectId).to.equal('docsplit-kanameone');
-    expect(plan.groups).to.have.length(8);
-    expect(plan.expectedLoserCount).to.equal(16);
+    expect(plan.groups).to.have.length(2);
+    expect(plan.expectedLoserCount).to.equal(2);
+    // ユーザー確認済み doc (U4Lf5ZPNA4IyH73SXE2P) が誤って loser に入っていないこと
+    const allLosers = plan.groups.flatMap((g) => g.loserDocIds);
+    expect(allLosers).to.not.include('U4Lf5ZPNA4IyH73SXE2P');
+    expect(allLosers).to.not.include('Lso7jEXzWxBjU4Cj6zqR');
+    expect(allLosers).to.not.include('0ZuExPFZjngfSpddy2HR');
   });
 
   it('dev fixture plan: 構造検証を通過し、想定値 (2 groups / 4 losers / projectId) と一致', () => {
