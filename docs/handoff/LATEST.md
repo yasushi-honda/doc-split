@@ -1,8 +1,13 @@
 # ハンドオフメモ
 
-**更新日**: 2026-07-03 session94（`docs/handoff/LATEST.md` 圧縮 + archive 機構の代理指標修正、Net 0）
+**更新日**: 2026-07-03 session94（handoff 最適化のみ、product 作業なし、doc-split 側 Net 0）
 
-session87〜93 で1セッション=1行の超高密度段落（最長6,674文字/行）に記法が変質し、`wc -l` 500行しきい値がバイトサイズの実態（108KB）を捉えられずアーカイブが13セッション分機能しなかった件を是正。session79〜93 の詳細記録を `docs/handoff/archive/2026-06-history.md` へロスレス移動し、本ファイルは構造化された簡潔な記法に戻す。あわせて `~/.claude/skills/handoff/`（グローバル設定）側のしきい値判定をバイトサイズベースに修正し、再発を防止（詳細は本セッションの会話ログ参照）。
+session87〜93 で1セッション=1行の超高密度段落（最長6,674文字/行）に記法が変質し、`wc -l` 500行しきい値がバイトサイズの実態（108KB）を捉えられずアーカイブが13セッション分機能しなかった件を是正した session。
+
+- **LATEST.md 圧縮（PR #536）**: 108KB→5.7KB（95%減）、session79〜93 の詳細を `docs/handoff/archive/2026-06-history.md` へロスレス移動、構造化された簡潔な記法に復帰。
+- **handoff スキルしきい値修正（グローバル設定 claude-code-config PR #346 + #347）**: `wc -l` 500行判定 →`wc -c` 60KB backstop + 最長行1,500文字チェック（記法ドリフトを直接測る主防御）。#346 で混入した「80KB=500行換算」の虚偽コメントを #347 で是正（実測 500行 ≈ 42〜60KB）。両側検証済み（変質6,674文字→発動 / 健全728〜1,016文字→誤発動なし）。
+- **`.serena/project.yml` 復旧**: main 同期時の `git reset --hard` で未 stash のまま破棄したファイルを、稼働中 Serena サーバーの権威テンプレートから byte 一致で復元（未コミットの作業ツリー変更として保持＝元状態）。次セッションはこの ` M` を異常視しないこと。
+- 教訓: 「ground truth なき断定」が本 session で複数回再発（.serena「likely」/ 80KB「換算値」）→ グローバル memory `reference_handoff_line_count_proxy_metric.md` 等に定着済み。
 
 ## 現在のフェーズ
 
@@ -30,6 +35,9 @@ session29〜93 の詳細（PR番号・実測値・review所見・教訓等）は
 | 1 | Issue #526（要望E、P1）実装着手 | user から設計判断ゲート3点（①手動入力メタの保持方針 ②OCR課金増の許容 ③再処理中の一覧表示方法）への回答 | `/impl-plan` でPhase 4実装開始 | `gh issue view 526` のコメント欄確認 |
 | 2 | `.artifacts/` untrackedディレクトリの扱い | decision-maker の明示指示（gitignore追加/削除/保持のいずれか） | 指示内容に応じて対応 | `git status --short` |
 | 3 | #503 / #251 / #238（P2）着手 | 各Issue本文記載トリガー充足（2026-07-02 session91時点で全て未充足を実測確認済） | トリガー充足確認後に着手判断 | `gh issue view <番号>` のトリガー記載確認 |
+| 4 | 古い OPEN PR #474 のクローズ | decision-maker の明示指示 | `gh pr close 474 --comment "superseded by #536 (session71 は既に archive 済)"` | `gh pr view 474` |
+
+**PR #474 検出メモ（守り・検出のみ）**: session94 の handoff チェックで検出。「session71 を archive 移動」（2026-05-15、約7週間前）は目的達成済み（session71 は `archive/2026-05-history.md` に既に存在）+ 対象 LATEST.md が PR #536 で全面書換のためマージ不能。クローズ推奨だが write 操作のため明示指示待ち。
 
 ### 却下候補（記録のみ）
 却下候補なし
@@ -40,7 +48,9 @@ session29〜93 の詳細（PR番号・実測値・review所見・教訓等）は
 
 🛑 **executor 領分の作業ゼロ、即時終了推奨**（次セッション側でIssue #526の設計判断ゲート回答を得るまでは新規実装作業なし）
 
-- OPEN PR: 0件 / active Issue: #503, #251, #238（P2、トリガー未充足）+ #526（P1、設計判断待ち）
-- Git: 本セッション作業はfeatureブランチ上、PR経由でmerge予定
-- 即着手: 0件 / 条件待ち: 3件（すべてdecision-maker判断待ち）
+- OPEN PR: 1件（#474 = 失効・クローズ推奨）/ active Issue: #526（P1、設計判断待ち）+ #503/#251/#238（P2、トリガー未充足）
+- Git: `.serena/project.yml`（復旧済・意図的に未コミット保持）+ `.artifacts/`（untracked）のみ、本セッションの handoff 更新は feature ブランチで PR 化
+- 即着手: 0件 / 条件待ち: 4件（すべてdecision-maker判断待ち）
 - 残留プロセス: なし
+- §4.6 同根再発スキャン: 本セッション fix PR は #346→#347（同根 = handoff 代理指標）だが #347 が #346 の較正ミスを明示是正済み、root cause（proxy metric 過信 + 未検証断定）は memory 定着済で潜在再発なし
+- §4.7 対症療法判定: 該当なし（行数→バイト+最長行の直接測定への構造置換 + anti-pattern の memory 化 = 根治、対症療法ではない）
