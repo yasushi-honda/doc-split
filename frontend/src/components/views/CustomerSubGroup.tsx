@@ -9,6 +9,7 @@ import {
   ChevronRight,
   ChevronDown,
   FileText,
+  FolderOpen,
   Users,
   RefreshCw,
 } from 'lucide-react';
@@ -167,6 +168,90 @@ function DocumentRow({ document, onClick, onRetry }: DocumentRowProps) {
 }
 
 // ============================================
+// 書類種別サブグループ (#527: 担当CM → 利用者 → 書類種別 → 書類 の第3階層)
+// ============================================
+
+interface DocTypeGroup {
+  docType: string;
+  documents: Document[];
+}
+
+const UNKNOWN_DOC_TYPE = '未判定';
+
+/**
+ * 利用者配下の書類を書類種別ごとに集約する。
+ * 並びは名前順 (ja locale。開くたびに順序が変わらない紙ファイリングのメンタルモデル優先)、
+ * 「未判定」は末尾。件数は読み込み済みページ分のクライアント集約
+ * (既存の顧客サブグループと同一方式。未読分は LoadMoreIndicator で可視)。
+ */
+function groupByDocType(documents: Document[]): DocTypeGroup[] {
+  const groupMap = new Map<string, DocTypeGroup>();
+  for (const doc of documents) {
+    const docType = doc.documentType || UNKNOWN_DOC_TYPE;
+    if (!groupMap.has(docType)) {
+      groupMap.set(docType, { docType, documents: [] });
+    }
+    groupMap.get(docType)!.documents.push(doc);
+  }
+  return Array.from(groupMap.values()).sort((a, b) => {
+    if (a.docType === UNKNOWN_DOC_TYPE) return 1;
+    if (b.docType === UNKNOWN_DOC_TYPE) return -1;
+    return a.docType.localeCompare(b.docType, 'ja');
+  });
+}
+
+interface DocTypeGroupItemProps {
+  group: DocTypeGroup;
+  isExpanded: boolean;
+  onToggle: () => void;
+  onDocumentSelect?: (documentId: string) => void;
+  onRetry?: (document: Document) => void;
+}
+
+function DocTypeGroupItem({
+  group,
+  isExpanded,
+  onToggle,
+  onDocumentSelect,
+  onRetry,
+}: DocTypeGroupItemProps) {
+  return (
+    <div className="border-b border-gray-50 last:border-0">
+      <button
+        onClick={onToggle}
+        className="flex w-full items-center gap-3 px-4 py-2 text-left transition-colors hover:bg-gray-100"
+      >
+        {isExpanded ? (
+          <ChevronDown className="h-4 w-4 flex-shrink-0 text-gray-400" />
+        ) : (
+          <ChevronRight className="h-4 w-4 flex-shrink-0 text-gray-400" />
+        )}
+        <FolderOpen className="h-4 w-4 flex-shrink-0 text-amber-500" />
+        <div className="flex items-center gap-2 flex-1 min-w-0">
+          <span className="text-sm text-gray-800 truncate">{group.docType}</span>
+          <Badge variant="outline" className="text-xs">
+            {group.documents.length}件
+          </Badge>
+        </div>
+      </button>
+
+      {isExpanded && (
+        <div className="bg-white ml-6">
+          {group.documents.map((doc) => (
+            <DocumentRow
+              key={doc.id}
+              document={doc}
+              onClick={() => onDocumentSelect?.(doc.id)}
+              onRetry={onRetry}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================
 // 顧客グループアイテムコンポーネント
 // ============================================
 
@@ -185,6 +270,22 @@ function CustomerGroupItem({
   onDocumentSelect,
   onRetry,
 }: CustomerGroupItemProps) {
+  // 書類種別サブグループの展開状態 (#527)。顧客を閉じると状態ごと破棄される
+  const [expandedDocTypes, setExpandedDocTypes] = useState<Set<string>>(new Set());
+  const docTypeGroups = useMemo(() => groupByDocType(group.documents), [group.documents]);
+
+  const toggleDocType = (docType: string) => {
+    setExpandedDocTypes((prev) => {
+      const next = new Set(prev);
+      if (next.has(docType)) {
+        next.delete(docType);
+      } else {
+        next.add(docType);
+      }
+      return next;
+    });
+  };
+
   return (
     <div className="border-b border-gray-100 last:border-0">
       {/* 顧客グループヘッダー */}
@@ -213,14 +314,16 @@ function CustomerGroupItem({
         </div>
       </button>
 
-      {/* 顧客グループ内ドキュメント（展開時） */}
+      {/* 顧客グループ内の書類種別サブグループ（展開時、#527: 4 階層化） */}
       {isExpanded && (
         <div className="bg-white border-t border-gray-50 ml-6">
-          {group.documents.map((doc) => (
-            <DocumentRow
-              key={doc.id}
-              document={doc}
-              onClick={() => onDocumentSelect?.(doc.id)}
+          {docTypeGroups.map((dtGroup) => (
+            <DocTypeGroupItem
+              key={dtGroup.docType}
+              group={dtGroup}
+              isExpanded={expandedDocTypes.has(dtGroup.docType)}
+              onToggle={() => toggleDocType(dtGroup.docType)}
+              onDocumentSelect={onDocumentSelect}
               onRetry={onRetry}
             />
           ))}

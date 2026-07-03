@@ -380,6 +380,8 @@ async function seedGroupRetryTestData() {
         status: 'processed',
         // #525: totalPages 0 = 旧形式 doc 相当。一覧のページ数列「-」表示の検証用
         totalPages: 0,
+        // #527: 別種別を混ぜて書類種別サブグループ (請求書/ケアプラン) の分離を検証
+        documentType: 'ケアプラン',
       },
     },
   ];
