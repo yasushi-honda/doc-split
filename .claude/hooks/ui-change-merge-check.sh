@@ -21,10 +21,14 @@
 INPUT=$(cat)
 COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command')
 
-# トリガーはコマンド位置 (行頭 / ; & | $( の直後) の "gh pr merge" のみ。
+# トリガーはコマンド位置 (行頭 / ; & $( の直後) の "gh pr merge" のみ。
 # コミットメッセージや PR body 中の説明文 (`gh pr merge` 等のインライン記述) に
-# 反応する false positive を防ぐ
-MERGE_INVOCATION=$(echo "$COMMAND" | grep -oE '(^|[;&|]|\$\() *gh pr merge( +[0-9]+)?' | head -1)
+# 反応する false positive を防ぐ。
+# 注意: "|" (パイプ) はトリガーに含めない。ダブルクォート文字列内の grep OR 構文
+# (例: grep "foo\|gh pr merge bar") がシェルのパイプ区切りと誤認され、無関係な
+# コマンドを誤ブロックする実例が2026-07-03に発覚したため除外。gh pr merge は stdin を
+# 読まないため "cmd | gh pr merge" という実用パターンは存在せず、除外による見逃しリスクはない
+MERGE_INVOCATION=$(echo "$COMMAND" | grep -oE '(^|[;&]|\$\() *gh pr merge( +[0-9]+)?' | head -1)
 
 if [ -n "$MERGE_INVOCATION" ]; then
   # PR番号は "gh pr merge" の直後から抽出する (コマンド先頭の無関係な数字を拾わない)
