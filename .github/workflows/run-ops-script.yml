@@ -83,6 +83,8 @@ on:
           - cleanup-ambiguous-collision-docs --cleanup-fixture
           - verify-pdf-determinism --synthetic
           - verify-pdf-determinism --paths fixtures/simple.pdf,fixtures/with-ccittfaxdecode.pdf,fixtures/with-jbig2decode.pdf,fixtures/with-jpxdecode.pdf,fixtures/with-dctdecode.pdf,fixtures/encrypted.pdf
+          - seed-dev-data --dry-run
+          - seed-dev-data
       doc_id:
         description: 'Document ID (required when script contains --doc-id; ignored otherwise)'
         required: false
@@ -538,7 +540,8 @@ jobs:
                [ "$SCRIPT_NAME" = "classify-collision-docs" ] || \
                [ "$SCRIPT_NAME" = "setup-collision-fixture" ] || \
                [ "$SCRIPT_NAME" = "pdf-feature-survey" ] || \
-               [ "$SCRIPT_NAME" = "verify-pdf-determinism" ]; then
+               [ "$SCRIPT_NAME" = "verify-pdf-determinism" ] || \
+               [ "$SCRIPT_NAME" = "seed-dev-data" ]; then
             # Issue #432 PR-C 系 script は scripts/lib/* (TypeScript) に依存するため
             # ts-node 経由で実行。STORAGE_BUCKET は resolve step で env 化済。
             EXTRA_ARGS=""
