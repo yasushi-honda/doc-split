@@ -12,12 +12,18 @@
  *   3. totalPages: 0 の書類 (D のフォールバック表示検証用)
  *   4. error 状態書類 3 件 (メタ付き。B のグループビュー行「再試行」検証用)
  *   5. 複数書類混在の複数ページ PDF 2 件を Storage に実アップロードし status: 'pending' で投入
- *      → dev の実 OCR パイプラインが処理 (E の分割 E2E 素材。実行の度に再 OCR される)
+ *      → dev の実 OCR パイプラインが処理 (E の分割 E2E 素材)
+ *
+ * 冪等性:
+ *   - マスター / processed / error 書類: seed- prefix 固定 ID の set() 上書きで何度でも再実行可
+ *   - pending 書類: 既に存在する場合はスキップ (OCR 完了・手動検証済みの状態を保護)。
+ *     再投入して OCR からやり直したい場合のみ --force-pending を付ける (Vertex AI 再課金)
  *
  * ガード:
  *   - FIREBASE_PROJECT_ID が 'doc-split-dev' 以外なら即終了 (本番誤投入防御)
- *   - 書込対象は seed- prefix の固定 ID のみ (set() 上書きで冪等)。既存データには触れない
+ *   - 書込対象は seed- prefix の固定 ID のみ。既存データには触れない
  *   - Storage は original/seed_*.pdf のみ (実パイプラインと同 prefix、固定パス上書き)
+ *   - STORAGE_BUCKET は env 未指定時 scripts/clients/dev.env から取得 (projectId からの推測はしない)
  *
  * 使用方法 (推奨: GitHub Actions 経由、ADC 不要):
  *   Actions → "Run Operations Script" → environment: dev / script: seed-dev-data を選択して実行
@@ -29,14 +35,12 @@
  * PDF fixture 再生成 (ローカル専用。日本語フォントが必要なため GHA では実行しない):
  *   npx ts-node scripts/seed-dev-data.ts --generate-pdfs
  *   → scripts/fixtures/seed/*.pdf を再生成 (git commit 対象)。
- *      投入モードはコミット済み fixture を読むだけなのでフォント不要。
+ *      投入モードはコミット済み fixture を読むだけなのでフォント・pdf-lib 不要。
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
 import * as admin from 'firebase-admin';
-import { PDFDocument, PDFFont, rgb } from 'pdf-lib';
-import fontkit from '@pdf-lib/fontkit';
 import { generateDisplayFileName } from '../shared/generateDisplayFileName';
 
 const ALLOWED_PROJECT_ID = 'doc-split-dev';
@@ -44,6 +48,7 @@ const FIXTURE_SEED_DIR = path.join(__dirname, 'fixtures', 'seed');
 
 const dryRun = process.argv.includes('--dry-run');
 const generatePdfs = process.argv.includes('--generate-pdfs');
+const forcePending = process.argv.includes('--force-pending');
 
 // ============================================
 // seed データ定義 (deterministic)
@@ -83,20 +88,28 @@ const CUSTOMERS = [
   { id: 'seed-cust-12', name: '鈴木蔵之助', furigana: 'すずきくらのすけ', cm: 2 },
 ];
 
-/** totalPages を deterministic に散らす (0 は D のフォールバック検証用に別枠で注入) */
+/**
+ * totalPages のバリエーション。各値に対応する実ページ数の generic PDF を用意し、
+ * Firestore の totalPages と fileUrl の実体ページ数を常に一致させる
+ * (不一致だと詳細モーダル/分割プレビューのページ遷移が実 PDF と矛盾し、偽の不具合を生む)。
+ * 0 は「OCR 前の旧形式 doc」相当の意図的な誤値で、実体は 1p を共有する。
+ */
 const PAGE_VARIATIONS = [1, 2, 3, 5, 8, 12];
 
-/** 共有 PDF (bulk 書類の実体)。totalPages に近いページ数の実ファイルを参照させる */
-const GENERIC_PDFS = [
-  { fixture: 'seed_generic_1p.pdf', storagePath: 'original/seed_generic_1p.pdf', pages: 1 },
-  { fixture: 'seed_generic_3p.pdf', storagePath: 'original/seed_generic_3p.pdf', pages: 3 },
-  { fixture: 'seed_generic_8p.pdf', storagePath: 'original/seed_generic_8p.pdf', pages: 8 },
-];
+const GENERIC_PDFS = PAGE_VARIATIONS.map((pages) => ({
+  fixture: `seed_generic_${pages}p.pdf`,
+  pages,
+}));
+
+/** Storage パスは fixture 名から一意に導出する (二重管理による不整合防止) */
+function storagePathOf(fixture: string): string {
+  return `original/${fixture}`;
+}
 
 function genericPdfFor(totalPages: number): string {
-  if (totalPages <= 2) return GENERIC_PDFS[0].storagePath;
-  if (totalPages <= 5) return GENERIC_PDFS[1].storagePath;
-  return GENERIC_PDFS[2].storagePath;
+  const entry = GENERIC_PDFS.find((g) => g.pages === (totalPages === 0 ? 1 : totalPages));
+  if (!entry) throw new Error(`totalPages=${totalPages} に対応する generic PDF がありません`);
+  return storagePathOf(entry.fixture);
 }
 
 /** E 用: 複数書類混在 FAX PDF の構成定義 */
@@ -104,7 +117,6 @@ const MIXED_FAX_PDFS = [
   {
     id: 'seed-doc-pending-mixed-01',
     fixture: 'seed_mixed_fax_01.pdf',
-    storagePath: 'original/seed_mixed_fax_01.pdf',
     fileName: 'seed_混在FAX受信_01.pdf',
     segments: [
       { docType: 'ケアプラン', customer: '相沢一郎', office: 'ひまわり訪問介護ステーション', pages: 2, dateLabel: '作成日: 2026年6月1日' },
@@ -115,7 +127,6 @@ const MIXED_FAX_PDFS = [
   {
     id: 'seed-doc-pending-mixed-02',
     fixture: 'seed_mixed_fax_02.pdf',
-    storagePath: 'original/seed_mixed_fax_02.pdf',
     fileName: 'seed_混在FAX受信_02.pdf',
     segments: [
       { docType: '訪問看護報告書', customer: '加藤秋人', office: 'あおぞらデイサービスセンター', pages: 2, dateLabel: '報告日: 2026年6月15日' },
@@ -133,37 +144,9 @@ const FONT_CANDIDATES = [
   '/Library/Fonts/Arial Unicode.ttf',
 ];
 
-function loadJapaneseFont(): Buffer {
-  for (const p of FONT_CANDIDATES) {
-    if (fs.existsSync(p)) return fs.readFileSync(p);
-  }
-  throw new Error(
-    `日本語対応フォントが見つかりません。候補: ${FONT_CANDIDATES.join(', ')}\n` +
-      'CJK グリフを含む TTF のパスを FONT_CANDIDATES に追加してください。',
-  );
-}
-
 interface PdfPageSpec {
   title: string;
   lines: string[];
-}
-
-async function buildPdf(pages: PdfPageSpec[], fontBytes: Buffer): Promise<Uint8Array> {
-  const doc = await PDFDocument.create();
-  doc.registerFontkit(fontkit);
-  const font: PDFFont = await doc.embedFont(fontBytes, { subset: true });
-
-  pages.forEach((spec, i) => {
-    const page = doc.addPage([595.28, 841.89]); // A4
-    const { height } = page.getSize();
-    page.drawText(spec.title, { x: 50, y: height - 80, size: 20, font, color: rgb(0.1, 0.1, 0.1) });
-    spec.lines.forEach((line, li) => {
-      page.drawText(line, { x: 50, y: height - 130 - li * 26, size: 13, font, color: rgb(0.2, 0.2, 0.2) });
-    });
-    page.drawText(`${i + 1} / ${pages.length}`, { x: 270, y: 40, size: 10, font, color: rgb(0.5, 0.5, 0.5) });
-  });
-
-  return doc.save();
 }
 
 function genericPdfPages(pages: number): PdfPageSpec[] {
@@ -197,19 +180,52 @@ function mixedFaxPages(segments: (typeof MIXED_FAX_PDFS)[number]['segments']): P
   return pages;
 }
 
+/**
+ * pdf-lib / fontkit は fixture 生成時のみ必要なため dynamic import にする
+ * (投入・dry-run 経路を PDF 生成依存の解決可否から切り離す)。
+ */
 async function generateFixtures(): Promise<void> {
+  const { PDFDocument, rgb } = await import('pdf-lib');
+  const fontkit = (await import('@pdf-lib/fontkit')).default;
+
+  const fontPath = FONT_CANDIDATES.find((p) => fs.existsSync(p));
+  if (!fontPath) {
+    throw new Error(
+      `日本語対応フォントが見つかりません。候補: ${FONT_CANDIDATES.join(', ')}\n` +
+        'CJK グリフを含む TTF のパスを FONT_CANDIDATES に追加してください。',
+    );
+  }
+  const fontBytes = fs.readFileSync(fontPath);
+
+  async function buildPdf(pages: PdfPageSpec[]): Promise<Uint8Array> {
+    const doc = await PDFDocument.create();
+    doc.registerFontkit(fontkit);
+    const font = await doc.embedFont(fontBytes, { subset: true });
+
+    pages.forEach((spec, i) => {
+      const page = doc.addPage([595.28, 841.89]); // A4
+      const { height } = page.getSize();
+      page.drawText(spec.title, { x: 50, y: height - 80, size: 20, font, color: rgb(0.1, 0.1, 0.1) });
+      spec.lines.forEach((line, li) => {
+        page.drawText(line, { x: 50, y: height - 130 - li * 26, size: 13, font, color: rgb(0.2, 0.2, 0.2) });
+      });
+      page.drawText(`${i + 1} / ${pages.length}`, { x: 270, y: 40, size: 10, font, color: rgb(0.5, 0.5, 0.5) });
+    });
+
+    return doc.save();
+  }
+
   console.log(`📄 PDF fixture 生成 → ${FIXTURE_SEED_DIR}`);
-  const fontBytes = loadJapaneseFont();
   fs.mkdirSync(FIXTURE_SEED_DIR, { recursive: true });
 
   for (const g of GENERIC_PDFS) {
-    const bytes = await buildPdf(genericPdfPages(g.pages), fontBytes);
+    const bytes = await buildPdf(genericPdfPages(g.pages));
     fs.writeFileSync(path.join(FIXTURE_SEED_DIR, g.fixture), bytes);
     console.log(`  ✅ ${g.fixture} (${g.pages}p, ${(bytes.length / 1024).toFixed(0)}KB)`);
   }
   for (const m of MIXED_FAX_PDFS) {
     const pages = mixedFaxPages(m.segments);
-    const bytes = await buildPdf(pages, fontBytes);
+    const bytes = await buildPdf(pages);
     fs.writeFileSync(path.join(FIXTURE_SEED_DIR, m.fixture), bytes);
     console.log(`  ✅ ${m.fixture} (${pages.length}p, ${(bytes.length / 1024).toFixed(0)}KB)`);
   }
@@ -228,14 +244,36 @@ function readFixture(fixture: string): Buffer {
 }
 
 // ============================================
+// 設定解決
+// ============================================
+
+/**
+ * Storage バケット名の解決。CLAUDE.md「バケット名をプロジェクトIDから推測してはいけない」
+ * に従い、env 未指定時は scripts/clients/dev.env の STORAGE_BUCKET を読む (推測合成はしない)。
+ */
+function resolveStorageBucket(): string {
+  if (process.env.STORAGE_BUCKET) return process.env.STORAGE_BUCKET;
+  const envFile = path.join(__dirname, 'clients', 'dev.env');
+  const content = fs.readFileSync(envFile, 'utf8');
+  const m = content.match(/^STORAGE_BUCKET=["']?([^"'\r\n]+)["']?/m);
+  if (!m) {
+    throw new Error(`STORAGE_BUCKET を ${envFile} から取得できません。STORAGE_BUCKET 環境変数を指定してください。`);
+  }
+  return m[1];
+}
+
+// ============================================
 // Firestore ドキュメント構築
 // ============================================
 
 type SeedDoc = { id: string; data: Record<string, unknown> };
 
-/** 日付を deterministic に散らす (2026-01-10 起点、index × 33 時間刻み) */
+/**
+ * 日付を deterministic に散らす (2026-01-10 起点、index × 24 時間刻み)。
+ * 最大 index ~150 でも 2026-06 上旬に収まり、未来日付を生成しない。
+ */
 function spreadDate(index: number): Date {
-  return new Date(Date.UTC(2026, 0, 10) + index * 33 * 60 * 60 * 1000);
+  return new Date(Date.UTC(2026, 0, 10) + index * 24 * 60 * 60 * 1000);
 }
 
 function toDateString(d: Date): string {
@@ -252,9 +290,9 @@ function buildProcessedDoc(
     index: number;
     status?: 'processed' | 'error';
   },
-  Timestamp: typeof admin.firestore.Timestamp,
   storageBucket: string,
 ): SeedDoc {
+  const { Timestamp } = admin.firestore;
   const { id, customer, docType, office, totalPages, index } = params;
   const status = params.status ?? 'processed';
   const cm = CARE_MANAGERS[customer.cm];
@@ -300,44 +338,42 @@ function buildProcessedDoc(
   };
 }
 
-function buildBulkDocs(
-  Timestamp: typeof admin.firestore.Timestamp,
-  storageBucket: string,
-): SeedDoc[] {
+/** totalPages:0 (旧形式 doc 相当) を CM2 配下に入れる件数 */
+const ZERO_PAGE_COUNT = 5;
+
+function buildBulkDocs(storageBucket: string): SeedDoc[] {
   const docs: SeedDoc[] = [];
   let index = 0;
+  let zeroPagesSeeded = 0;
 
   // CM1 (5 顧客): 4 種別 × 6 件 = 顧客 24 件 × 5 = 120 件 → グループ展開 pageSize 100 を跨ぐ
   // CM2 (4 顧客): 4 種別 × 1 件 = 16 件
   // CM3 (3 顧客): 3 種別 × 1 件 = 9 件
-  const plan: Array<{ customer: (typeof CUSTOMERS)[number]; docType: (typeof DOC_TYPES)[number]; repeat: number }> = [];
   for (const customer of CUSTOMERS) {
     const types = customer.cm === 2 ? DOC_TYPES.slice(0, 3) : DOC_TYPES;
     const repeat = customer.cm === 0 ? 6 : 1;
-    for (const docType of types) plan.push({ customer, docType, repeat });
-  }
-
-  for (const { customer, docType, repeat } of plan) {
-    for (let r = 0; r < repeat; r++) {
-      const office = OFFICES[index % OFFICES.length];
-      // CM2 の先頭 5 件は totalPages: 0 (旧形式 doc 相当、D のフォールバック検証用)
-      const isZeroPage = customer.cm === 1 && docs.filter((d) => d.data.totalPages === 0).length < 5;
-      const totalPages = isZeroPage ? 0 : PAGE_VARIATIONS[index % PAGE_VARIATIONS.length];
-      docs.push(
-        buildProcessedDoc(
-          {
-            id: `seed-doc-${String(index + 1).padStart(4, '0')}`,
-            customer,
-            docType,
-            office,
-            totalPages,
-            index,
-          },
-          Timestamp,
-          storageBucket,
-        ),
-      );
-      index++;
+    for (const docType of types) {
+      for (let r = 0; r < repeat; r++) {
+        const office = OFFICES[index % OFFICES.length];
+        // CM2 の先頭 ZERO_PAGE_COUNT 件は totalPages: 0 (D のフォールバック検証用)
+        const isZeroPage = customer.cm === 1 && zeroPagesSeeded < ZERO_PAGE_COUNT;
+        if (isZeroPage) zeroPagesSeeded++;
+        const totalPages = isZeroPage ? 0 : PAGE_VARIATIONS[index % PAGE_VARIATIONS.length];
+        docs.push(
+          buildProcessedDoc(
+            {
+              id: `seed-doc-${String(index + 1).padStart(4, '0')}`,
+              customer,
+              docType,
+              office,
+              totalPages,
+              index,
+            },
+            storageBucket,
+          ),
+        );
+        index++;
+      }
     }
   }
 
@@ -355,7 +391,6 @@ function buildBulkDocs(
           index: index + i,
           status: 'error',
         },
-        Timestamp,
         storageBucket,
       ),
     );
@@ -365,11 +400,8 @@ function buildBulkDocs(
 }
 
 /** E 用 pending 書類 (uploadPdf.ts の payload 形状を踏襲。実 OCR パイプラインが処理する) */
-function buildPendingDoc(
-  mixed: (typeof MIXED_FAX_PDFS)[number],
-  Timestamp: typeof admin.firestore.Timestamp,
-  storageBucket: string,
-): SeedDoc {
+function buildPendingDoc(mixed: (typeof MIXED_FAX_PDFS)[number], storageBucket: string): SeedDoc {
+  const { Timestamp } = admin.firestore;
   return {
     id: mixed.id,
     data: {
@@ -382,7 +414,7 @@ function buildPendingDoc(
       documentType: '',
       customerName: '',
       officeName: '',
-      fileUrl: `gs://${storageBucket}/${mixed.storagePath}`,
+      fileUrl: `gs://${storageBucket}/${storagePathOf(mixed.fixture)}`,
       fileDate: null,
       isDuplicateCustomer: false,
       totalPages: 0,
@@ -399,6 +431,20 @@ function buildPendingDoc(
 
 const BATCH_SIZE = 400;
 
+async function commitInBatches(
+  db: FirebaseFirestore.Firestore,
+  writes: Array<{ ref: FirebaseFirestore.DocumentReference; data: Record<string, unknown> }>,
+): Promise<void> {
+  for (let i = 0; i < writes.length; i += BATCH_SIZE) {
+    const batch = db.batch();
+    for (const w of writes.slice(i, i + BATCH_SIZE)) {
+      batch.set(w.ref, w.data);
+    }
+    await batch.commit();
+    console.log(`  ... ${Math.min(i + BATCH_SIZE, writes.length)}/${writes.length} 件コミット`);
+  }
+}
+
 async function seed(): Promise<void> {
   const projectId = process.env.FIREBASE_PROJECT_ID;
   if (projectId !== ALLOWED_PROJECT_ID) {
@@ -409,20 +455,19 @@ async function seed(): Promise<void> {
     process.exit(1);
   }
 
-  const storageBucket = process.env.STORAGE_BUCKET || `${ALLOWED_PROJECT_ID}.firebasestorage.app`;
+  const storageBucket = resolveStorageBucket();
 
   admin.initializeApp({ projectId, storageBucket });
   const db = admin.firestore();
   const bucket = admin.storage().bucket();
-  const { Timestamp } = admin.firestore;
 
   console.log(`🌱 dev seed データ投入 (Issue #528)`);
   console.log(`プロジェクト: ${projectId} / bucket: ${storageBucket}`);
-  console.log(`モード: ${dryRun ? 'DRY RUN (書込なし)' : '実行'}`);
+  console.log(`モード: ${dryRun ? 'DRY RUN (書込なし)' : '実行'}${forcePending ? ' + force-pending' : ''}`);
   console.log('---');
 
-  const bulkDocs = buildBulkDocs(Timestamp, storageBucket);
-  const pendingDocs = MIXED_FAX_PDFS.map((m) => buildPendingDoc(m, Timestamp, storageBucket));
+  const bulkDocs = buildBulkDocs(storageBucket);
+  const pendingDocs = MIXED_FAX_PDFS.map((m) => buildPendingDoc(m, storageBucket));
   const zeroPageCount = bulkDocs.filter((d) => d.data.totalPages === 0).length;
   const errorCount = bulkDocs.filter((d) => d.data.status === 'error').length;
   const cm1Count = bulkDocs.filter((d) => d.data.careManager === CARE_MANAGERS[0].name).length;
@@ -431,11 +476,12 @@ async function seed(): Promise<void> {
   console.log(`  マスター: ケアマネ ${CARE_MANAGERS.length} / 顧客 ${CUSTOMERS.length} / 事業所 ${OFFICES.length} / 書類種別 ${DOC_TYPES.length}`);
   console.log(`  Storage PDF: 汎用 ${GENERIC_PDFS.length} + 混在FAX ${MIXED_FAX_PDFS.length} (fixtures/seed/ から)`);
   console.log(`  書類: processed/error ${bulkDocs.length} 件 (うち totalPages:0 ${zeroPageCount} / error ${errorCount} / ${CARE_MANAGERS[0].name} 配下 ${cm1Count})`);
-  console.log(`  書類: pending ${pendingDocs.length} 件 (実 OCR パイプラインが処理 → Vertex AI 課金が発生)`);
+  console.log(`  書類: pending ${pendingDocs.length} 件 (既存はスキップ。--force-pending で再投入 = 再 OCR 課金)`);
 
   if (dryRun) {
     // fixture の存在だけは dry-run でも検証する (GHA 実行前の事前チェックとして機能させる)
-    for (const f of [...GENERIC_PDFS, ...MIXED_FAX_PDFS]) readFixture(f.fixture);
+    for (const g of GENERIC_PDFS) readFixture(g.fixture);
+    for (const m of MIXED_FAX_PDFS) readFixture(m.fixture);
     console.log('\n✅ DRY RUN 完了 (fixture 存在確認 OK)。実行するには --dry-run を外してください。');
     return;
   }
@@ -444,8 +490,8 @@ async function seed(): Promise<void> {
   console.log('\n📄 Storage アップロード...');
   for (const f of [...GENERIC_PDFS, ...MIXED_FAX_PDFS]) {
     const bytes = readFixture(f.fixture);
-    await bucket.file(f.storagePath).save(bytes, { contentType: 'application/pdf' });
-    console.log(`  ✅ ${f.storagePath} (${(bytes.length / 1024).toFixed(0)}KB)`);
+    await bucket.file(storagePathOf(f.fixture)).save(bytes, { contentType: 'application/pdf' });
+    console.log(`  ✅ ${storagePathOf(f.fixture)} (${(bytes.length / 1024).toFixed(0)}KB)`);
   }
 
   // 2. マスターデータ
@@ -484,34 +530,28 @@ async function seed(): Promise<void> {
     bulkDocs.map((d) => ({ ref: db.collection('documents').doc(d.id), data: d.data })),
   );
 
-  // 4. pending 書類 (OCR パイプライン発火)
-  console.log('\n⏳ pending 書類投入 (OCR パイプラインが処理を開始します)...');
-  await commitInBatches(
-    db,
-    pendingDocs.map((d) => ({ ref: db.collection('documents').doc(d.id), data: d.data })),
-  );
+  // 4. pending 書類 (OCR パイプライン発火)。既存 doc は OCR 完了・検証済み状態の保護のためスキップ
+  console.log('\n⏳ pending 書類投入...');
+  const pendingWrites: Array<{ ref: FirebaseFirestore.DocumentReference; data: Record<string, unknown> }> = [];
+  for (const d of pendingDocs) {
+    const ref = db.collection('documents').doc(d.id);
+    if (!forcePending && (await ref.get()).exists) {
+      console.log(`  ⏭ ${d.id} は既に存在するためスキップ (再投入は --force-pending)`);
+      continue;
+    }
+    pendingWrites.push({ ref, data: d.data });
+  }
+  if (pendingWrites.length > 0) {
+    await commitInBatches(db, pendingWrites);
+    console.log(`  → ${pendingWrites.length} 件を pending 投入 (OCR パイプラインが処理を開始します)`);
+  }
 
   console.log('\n✅ seed 投入完了');
   console.log('\n検証ポイント:');
   console.log(`  - F (4階層): 担当CM別タブ → ${CARE_MANAGERS[0].name} (${cm1Count} 件、ページング境界跨ぎ)`);
-  console.log(`  - D (ページ数): totalPages 0/${PAGE_VARIATIONS.join('/')} が分布。0 は CM2 (${CARE_MANAGERS[1].name}) 配下 ${zeroPageCount} 件`);
+  console.log(`  - D (ページ数): totalPages 0/${PAGE_VARIATIONS.join('/')} が分布 (実 PDF ページ数と一致)。0 は CM2 (${CARE_MANAGERS[1].name}) 配下 ${zeroPageCount} 件`);
   console.log(`  - B (再試行): error 書類 ${errorCount} 件 (各 CM 配下に 1 件ずつ)`);
   console.log(`  - E (分割): ${MIXED_FAX_PDFS.map((m) => m.id).join(', ')} の OCR 完了後、分割モーダルで検証`);
-  console.log('\n注意: pending 書類は実行の度に再投入 → 再 OCR されます (Vertex AI 課金)。');
-}
-
-async function commitInBatches(
-  db: FirebaseFirestore.Firestore,
-  writes: Array<{ ref: FirebaseFirestore.DocumentReference; data: Record<string, unknown> }>,
-): Promise<void> {
-  for (let i = 0; i < writes.length; i += BATCH_SIZE) {
-    const batch = db.batch();
-    for (const w of writes.slice(i, i + BATCH_SIZE)) {
-      batch.set(w.ref, w.data);
-    }
-    await batch.commit();
-    console.log(`  ... ${Math.min(i + BATCH_SIZE, writes.length)}/${writes.length} 件コミット`);
-  }
 }
 
 (generatePdfs ? generateFixtures() : seed())

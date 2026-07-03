@@ -542,8 +542,8 @@ jobs:
                [ "$SCRIPT_NAME" = "pdf-feature-survey" ] || \
                [ "$SCRIPT_NAME" = "verify-pdf-determinism" ] || \
                [ "$SCRIPT_NAME" = "seed-dev-data" ]; then
-            # Issue #432 PR-C 系 script は scripts/lib/* (TypeScript) に依存するため
-            # ts-node 経由で実行。STORAGE_BUCKET は resolve step で env 化済。
+            # Issue #432 PR-C 系 script は scripts/lib/* (TypeScript)、seed-dev-data (#528) は
+            # shared/*.ts に依存するため ts-node 経由で実行。STORAGE_BUCKET は resolve step で env 化済。
             EXTRA_ARGS=""
             if [ "$SCRIPT_NAME" = "classify-collision-docs" ]; then
               # ログマスキングで `{` が `***` に置換されるため、plan JSON を
