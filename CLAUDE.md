@@ -156,11 +156,12 @@ FIREBASE_PROJECT_ID=<project-id> node scripts/import-masters.js --all scripts/sa
 
 ## UIコンポーネント変更時の確認（#193教訓）
 
-Select、Combobox、Modal、Popover等のUIコンポーネントを変更・置き換えた場合、**マージ前に**dev環境（`doc-split-dev.web.app`）でブラウザ確認すること。
+Select、Combobox、Modal、Popover等のUIコンポーネントを変更・置き換えた場合、**マージ前に**ブラウザ確認すること（ローカル emulator + vite でも dev 環境でも可）。
 
 - tsc・テスト・ビルドのpassだけでは不十分（Popover位置、レイアウト崩れ、スクロール挙動は検出できない）
 - Playwright MCPまたは手動で、変更箇所を最低1回操作してスクリーンショットを残す
-- devはmainへのpush時にCI自動デプロイされるため、push後すぐに確認可能
+- **マージフロー（2026-07-03〜）**: `.tsx/.css` を含む PR は `ui-change-merge-check.sh` hook が「CI 全 PASS + `ui-verified` ラベル」の両方を満たす場合のみマージを許可する。確認証跡（確認内容・viewport・スクリーンショット）を PR コメント/body に記録した上で `gh pr edit <番号> --add-label ui-verified` を付与してからマージする
+- devはmainへのpush時にCI自動デプロイされるため、push後の実環境確認も可能
 
 ## 危険な操作の禁止事項
 
