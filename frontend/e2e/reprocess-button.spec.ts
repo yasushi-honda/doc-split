@@ -48,6 +48,24 @@ test.describe('再処理ボタン @emulator', () => {
     await loginWithTestUser(page);
   });
 
+  test('書類一覧にページ数列が表示され、0 は「-」になる（#525）', async ({ page }) => {
+    // デフォルト viewport 1280px = xl なのでページ数列が表示される
+    await expect(page.locator('th:has-text("ページ数")')).toBeVisible({ timeout: 10000 });
+
+    // ページ数は 6 列目 (ファイル名/顧客名/事業所/登録日/書類日付/ページ数/ステータス/✓)
+    const PAGE_COUNT_COL = 5;
+
+    // totalPages: 3 の書類（e2e-detail-001）は「3」
+    const row3 = page.locator('tbody tr', { hasText: 'E2E_テスト請求書_詳細確認用' });
+    await expect(row3).toBeVisible({ timeout: 10000 });
+    await expect(row3.locator('td').nth(PAGE_COUNT_COL)).toHaveText('3');
+
+    // totalPages: 0 の書類（e2e-group-doc-003）は「-」
+    const row0 = page.locator('tbody tr', { hasText: 'E2E_グループ再試行_正常' });
+    await expect(row0).toBeVisible({ timeout: 10000 });
+    await expect(row0.locator('td').nth(PAGE_COUNT_COL)).toHaveText('-');
+  });
+
   test('エラー書類の詳細モーダルに再処理ボタンが表示される', async ({ page }) => {
     const modal = await openErrorDocument(page);
 
