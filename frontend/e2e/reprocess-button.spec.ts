@@ -88,6 +88,28 @@ test.describe('再処理ボタン @emulator', () => {
     await expect(modal).toBeVisible();
   });
 
+  test('processed 書類の詳細モーダルに「AIで再解析」ボタンが表示される（#524）', async ({ page }) => {
+    // デフォルトフィルター（完了）の先頭行 = processed 書類
+    await expect(page.locator('tbody tr').first()).toBeVisible({ timeout: 10000 });
+    await page.locator('tbody tr').first().click();
+    const modal = page.locator('[role="dialog"]');
+    await expect(modal).toBeVisible({ timeout: 5000 });
+
+    // 「AIで再解析」ボタンが表示される
+    const reanalyzeButton = modal.locator('button:has-text("AIで再解析")');
+    await expect(reanalyzeButton).toBeVisible();
+    await reanalyzeButton.click();
+
+    // 確認ダイアログに消去項目が明示される
+    await expect(page.locator('text=AIで再解析しますか？')).toBeVisible({ timeout: 3000 });
+    await expect(page.locator('text=顧客名・事業所・書類種別・書類日付・担当ケアマネ')).toBeVisible();
+
+    // キャンセルで閉じ、詳細モーダルは開いたまま
+    await page.locator('button:has-text("キャンセル")').click();
+    await expect(page.locator('text=AIで再解析しますか？')).not.toBeVisible({ timeout: 3000 });
+    await expect(modal).toBeVisible();
+  });
+
   test('再処理を実行ボタンが押せてトーストが表示される（#119修正確認）', async ({ page }) => {
     const modal = await openErrorDocument(page);
 

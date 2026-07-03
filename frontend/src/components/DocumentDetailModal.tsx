@@ -6,11 +6,11 @@
 import { useState, useEffect, useRef } from 'react'
 import { format } from 'date-fns'
 import { ja } from 'date-fns/locale'
-import { Timestamp, doc as firestoreDoc, updateDoc } from 'firebase/firestore'
+import { Timestamp } from 'firebase/firestore'
 import { ref, getDownloadURL } from 'firebase/storage'
 import { Download, ExternalLink, Loader2, FileText, User, UserCheck, Building, Calendar, Tag, AlertCircle, Info, Scissors, Pencil, Save, X, BookMarked, History, ChevronUp, ChevronDown, Sparkles, RefreshCw, CheckCircle, XCircle, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
-import { db, storage } from '@/lib/firebase'
+import { storage } from '@/lib/firebase'
 import { callFunction } from '@/lib/callFunction'
 import { useAuthStore } from '@/stores/authStore'
 import { useQueryClient } from '@tanstack/react-query'
@@ -30,7 +30,7 @@ import { PdfViewer } from '@/components/PdfViewer'
 import { PdfSplitModal } from '@/components/PdfSplitModal'
 import { MasterSelectField } from '@/components/MasterSelectField'
 import { ExtractionInfoPopover } from '@/components/ExtractionInfoPopover'
-import { useDocument, getReprocessClearFields, updateDocumentInListCache } from '@/hooks/useDocuments'
+import { useDocument, useReprocessDocument } from '@/hooks/useDocuments'
 import { useDocumentEdit } from '@/hooks/useDocumentEdit'
 import { useCustomers, useOffices, useDocumentTypes, useCareManagers } from '@/hooks/useMasters'
 import { useMasterAlias } from '@/hooks/useMasterAlias'
@@ -366,7 +366,8 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
   const [showDownloadDialog, setShowDownloadDialog] = useState(false)
   // 再処理確認ダイアログ
   const [showReprocessDialog, setShowReprocessDialog] = useState(false)
-  const [isReprocessing, setIsReprocessing] = useState(false)
+  const { reprocess, reprocessingId } = useReprocessDocument()
+  const isReprocessing = reprocessingId !== null && reprocessingId === documentId
   // 削除確認ダイアログ
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
@@ -643,38 +644,11 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
     setIsSplitModalOpen(false)
   }
 
-  // 再処理ハンドラ
+  // 再処理ハンドラ (#524: useReprocessDocument に共通化。processed 書類の再解析にも対応)
   const handleReprocess = async () => {
-    if (!documentId || isReprocessing) return
-    setIsReprocessing(true)
-    try {
-      const clearFields = getReprocessClearFields()
-      const docRef = firestoreDoc(db, 'documents', documentId)
-      await updateDoc(docRef, {
-        status: 'pending',
-        ...clearFields,
-      })
-      // 楽観的更新（即時UI反映）
-      updateDocumentInListCache(queryClient, documentId, {
-        status: 'pending',
-        ocrResult: '',
-        customerName: '',
-        officeName: '',
-        documentType: '',
-        customerConfirmed: false,
-        officeConfirmed: false,
-        verified: false,
-      })
-      queryClient.invalidateQueries({ queryKey: ['document', documentId] })
-      queryClient.invalidateQueries({ queryKey: ['documentsInfinite'] })
-      setShowReprocessDialog(false)
-      toast.success('再処理をリクエストしました。処理完了まで画面が自動更新されます。', { duration: 5000 })
-    } catch (err) {
-      console.error('Failed to reprocess:', err)
-      toast.error('再処理リクエストに失敗しました')
-    } finally {
-      setIsReprocessing(false)
-    }
+    if (!documentId) return
+    const ok = await reprocess(documentId)
+    if (ok) setShowReprocessDialog(false)
   }
 
   // 個別削除
@@ -841,7 +815,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                   </Badge>
                 </div>
                 <div className="flex items-center gap-1 sm:gap-2">
-                  {document.status === 'error' && (
+                  {(document.status === 'error' || document.status === 'processed') && (
                     <Button
                       variant="outline"
                       size="sm"
@@ -849,7 +823,9 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                       className="text-blue-600 border-blue-300 hover:bg-blue-50"
                     >
                       <RefreshCw className="h-4 w-4 sm:mr-1" />
-                      <span className="hidden sm:inline">再処理</span>
+                      <span className="hidden sm:inline">
+                        {document.status === 'processed' ? 'AIで再解析' : '再処理'}
+                      </span>
                     </Button>
                   )}
                   {canSplit && (
@@ -1609,13 +1585,25 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
       </AlertDialogContent>
     </AlertDialog>
 
-    {/* 再処理確認ダイアログ */}
+    {/* 再処理確認ダイアログ (#524: 消去される項目を明示) */}
     <AlertDialog open={showReprocessDialog} onOpenChange={setShowReprocessDialog}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>再処理を実行しますか？</AlertDialogTitle>
-          <AlertDialogDescription>
-            この書類のOCR処理を再実行します。現在のOCR結果は削除されます。
+          <AlertDialogTitle>
+            {document?.status === 'processed' ? 'AIで再解析しますか？' : '再処理を実行しますか？'}
+          </AlertDialogTitle>
+          <AlertDialogDescription asChild>
+            <div className="space-y-2">
+              <p>この書類のOCR処理を再実行します。以下の情報は削除され、AIが再抽出します。</p>
+              <ul className="list-disc pl-5 space-y-0.5">
+                <li>OCR結果・AI要約</li>
+                <li>顧客名・事業所・書類種別・書類日付・担当ケアマネ</li>
+                <li>確認済み状態（再抽出後にあらためて確認が必要になります）</li>
+              </ul>
+              <p className="text-xs text-gray-500">
+                再処理中は顧客別・担当CM別などのグループ分けから一時的に外れます。
+              </p>
+            </div>
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
@@ -1632,7 +1620,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
             ) : (
               <RefreshCw className="mr-1 h-4 w-4" />
             )}
-            {isReprocessing ? '処理中...' : '再処理を実行'}
+            {isReprocessing ? '処理中...' : document?.status === 'processed' ? '再解析を実行' : '再処理を実行'}
           </Button>
         </AlertDialogFooter>
       </AlertDialogContent>
