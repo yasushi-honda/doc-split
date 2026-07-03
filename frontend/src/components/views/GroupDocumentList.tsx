@@ -100,6 +100,12 @@ function DocumentRow({ document, groupType, onClick, onRetry }: DocumentRowProps
         <p className="text-xs text-gray-500 truncate">{getSubInfo()}</p>
       </div>
       <div className="flex items-center gap-2 flex-shrink-0">
+        {/* ページ数 (#525): 0 (旧形式 doc) は非表示 */}
+        {document.totalPages > 0 && (
+          <span className="text-xs text-gray-400 hidden sm:inline">
+            {document.totalPages}ページ
+          </span>
+        )}
         <span className="text-xs text-gray-500 hidden sm:inline">
           {formatTimestamp(document.fileDate)}
         </span>

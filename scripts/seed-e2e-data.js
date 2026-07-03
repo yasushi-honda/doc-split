@@ -378,6 +378,8 @@ async function seedGroupRetryTestData() {
         fileName: 'E2E_グループ再試行_正常.pdf',
         fileUrl: 'gs://doc-split-dev-documents/test/e2e-group-doc-3.pdf',
         status: 'processed',
+        // #525: totalPages 0 = 旧形式 doc 相当。一覧のページ数列「-」表示の検証用
+        totalPages: 0,
       },
     },
   ];
