@@ -316,6 +316,78 @@ async function seedMainFlowTestDocuments() {
   console.log(`✅ 主要フローテスト用書類 ${docs.length}件作成`);
 }
 
+/**
+ * グループビュー再試行テスト用データ (#524)
+ *
+ * 顧客「組合花子」+ 担当CM「五十嵐恵」配下に error 2 件 + processed 1 件を作成。
+ * E2E (CI) は functions emulator 込みで実行されるため、updateDocumentGroups トリガーが
+ * 正規化キー (customerKey/careManagerKey) と documentGroups を自動生成する。
+ * error 2 件の内訳: 1 件は顧客別タブの再処理実行テストで消費、もう 1 件は
+ * 担当CM別タブの表示確認テスト用 (並列実行でも干渉しない)。
+ */
+async function seedGroupRetryTestData() {
+  console.log('\n📄 グループ再試行テスト用データを作成中...');
+
+  await db.collection('masters').doc('customers').collection('items').doc('e2e-cust-group').set({
+    name: '組合花子',
+    furigana: 'くみあいはなこ',
+    careManagerName: '五十嵐恵',
+    notes: '',
+    createdAt: Timestamp.now(),
+  });
+
+  const base = {
+    mimeType: 'application/pdf',
+    customerId: 'e2e-cust-group',
+    customerName: '組合花子',
+    customerConfirmed: true,
+    officeId: 'office-001',
+    officeName: 'テスト第一事業所',
+    officeConfirmed: true,
+    careManager: '五十嵐恵',
+    documentType: '請求書',
+    totalPages: 1,
+    createdAt: Timestamp.now(),
+    processedAt: Timestamp.now(),
+  };
+  const docs = [
+    {
+      id: 'e2e-group-error-001',
+      data: {
+        ...base,
+        fileName: 'E2E_グループ再試行_エラー1.pdf',
+        fileUrl: 'gs://doc-split-dev-documents/test/e2e-group-error-1.pdf',
+        status: 'error',
+        errorMessage: 'OCR処理に失敗しました',
+      },
+    },
+    {
+      id: 'e2e-group-error-002',
+      data: {
+        ...base,
+        fileName: 'E2E_グループ再試行_エラー2.pdf',
+        fileUrl: 'gs://doc-split-dev-documents/test/e2e-group-error-2.pdf',
+        status: 'error',
+        errorMessage: 'OCR処理に失敗しました',
+      },
+    },
+    {
+      id: 'e2e-group-doc-003',
+      data: {
+        ...base,
+        fileName: 'E2E_グループ再試行_正常.pdf',
+        fileUrl: 'gs://doc-split-dev-documents/test/e2e-group-doc-3.pdf',
+        status: 'processed',
+      },
+    },
+  ];
+
+  for (const doc of docs) {
+    await db.collection('documents').doc(doc.id).set(doc.data);
+  }
+  console.log(`✅ グループ再試行テスト用書類 ${docs.length}件作成`);
+}
+
 async function main() {
   console.log('🚀 E2Eテスト用シードデータ作成開始');
   console.log(`プロジェクト: ${projectId}\n`);
@@ -325,6 +397,7 @@ async function main() {
   const customers = await seedCustomerMasters();
   await seedFilterTestDocuments(customers);
   await seedMainFlowTestDocuments();
+  await seedGroupRetryTestData();
 
   console.log('\n✅ シードデータ作成完了');
   console.log('\nテストユーザー情報:');

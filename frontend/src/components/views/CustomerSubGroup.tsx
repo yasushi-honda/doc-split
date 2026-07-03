@@ -10,9 +10,11 @@ import {
   ChevronDown,
   FileText,
   Users,
+  RefreshCw,
 } from 'lucide-react';
 import { Timestamp } from 'firebase/firestore';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { isCustomerConfirmed } from '@/hooks/useProcessingHistory';
 import { getStatusConfig, formatTimestamp } from '@/lib/documentUtils';
 import type { Document } from '@shared/types';
@@ -25,6 +27,8 @@ interface CustomerSubGroupProps {
   documents: Document[];
   furiganaMap?: Map<string, string>;
   onDocumentSelect?: (documentId: string) => void;
+  /** error 書類の「再試行」(#524)。未指定時はボタン非表示 */
+  onRetry?: (document: Document) => void;
 }
 
 interface CustomerGroup {
@@ -88,9 +92,10 @@ function groupByCustomer(
 interface DocumentRowProps {
   document: Document;
   onClick: () => void;
+  onRetry?: (document: Document) => void;
 }
 
-function DocumentRow({ document, onClick }: DocumentRowProps) {
+function DocumentRow({ document, onClick, onRetry }: DocumentRowProps) {
   const statusConfig = getStatusConfig(document.status);
 
   // 選択待ち判定
@@ -136,6 +141,20 @@ function DocumentRow({ document, onClick }: DocumentRowProps) {
             未確認
           </Badge>
         )}
+        {document.status === 'error' && onRetry && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-6 px-2 text-xs text-blue-600 border-blue-300 hover:bg-blue-50"
+            onClick={(e) => {
+              e.stopPropagation();
+              onRetry(document);
+            }}
+          >
+            <RefreshCw className="h-3 w-3 sm:mr-1" />
+            <span className="hidden sm:inline">再試行</span>
+          </Button>
+        )}
       </div>
     </div>
   );
@@ -150,6 +169,7 @@ interface CustomerGroupItemProps {
   isExpanded: boolean;
   onToggle: () => void;
   onDocumentSelect?: (documentId: string) => void;
+  onRetry?: (document: Document) => void;
 }
 
 function CustomerGroupItem({
@@ -157,6 +177,7 @@ function CustomerGroupItem({
   isExpanded,
   onToggle,
   onDocumentSelect,
+  onRetry,
 }: CustomerGroupItemProps) {
   return (
     <div className="border-b border-gray-100 last:border-0">
@@ -194,6 +215,7 @@ function CustomerGroupItem({
               key={doc.id}
               document={doc}
               onClick={() => onDocumentSelect?.(doc.id)}
+              onRetry={onRetry}
             />
           ))}
         </div>
@@ -210,6 +232,7 @@ export function CustomerSubGroup({
   documents,
   furiganaMap,
   onDocumentSelect,
+  onRetry,
 }: CustomerSubGroupProps) {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
 
@@ -248,6 +271,7 @@ export function CustomerSubGroup({
           isExpanded={expandedGroups.has(group.customerKey)}
           onToggle={() => toggleGroup(group.customerKey)}
           onDocumentSelect={onDocumentSelect}
+          onRetry={onRetry}
         />
       ))}
     </div>

@@ -20,6 +20,8 @@ import {
   startAfter,
   DocumentSnapshot,
 } from 'firebase/firestore'
+import { useState } from 'react'
+import { toast } from 'sonner'
 import { db } from '@/lib/firebase'
 import type { Document, DocumentStatus, DocumentMaster, CustomerMaster, OfficeMaster, SummaryField } from '@shared/types'
 
@@ -312,6 +314,59 @@ export function getReprocessClearFields() {
     errorRescueCount: df,
     lastRescuedAt: df,
   }
+}
+
+// ============================================
+// 個別再処理フック (#524)
+// ============================================
+
+/**
+ * 書類 1 件を再処理 (status: pending + メタ全クリア) するフック。
+ * DocumentDetailModal とグループビュー行の「再試行」で共通利用。
+ *
+ * 一覧・グループビューの両キャッシュを invalidate する
+ * (メタクリアで customerKey/careManagerKey が空になり、再処理中は
+ * グループ集計から外れるため、グループ側の再取得が必須)。
+ */
+export function useReprocessDocument() {
+  const queryClient = useQueryClient()
+  const [reprocessingId, setReprocessingId] = useState<string | null>(null)
+
+  const reprocess = async (documentId: string): Promise<boolean> => {
+    if (!documentId || reprocessingId) return false
+    setReprocessingId(documentId)
+    try {
+      await updateDoc(doc(db, 'documents', documentId), {
+        status: 'pending',
+        ...getReprocessClearFields(),
+      })
+      // 楽観的更新（即時UI反映）
+      updateDocumentInListCache(queryClient, documentId, {
+        status: 'pending',
+        ocrResult: '',
+        customerName: '',
+        officeName: '',
+        documentType: '',
+        customerConfirmed: false,
+        officeConfirmed: false,
+        verified: false,
+      })
+      queryClient.invalidateQueries({ queryKey: ['document', documentId] })
+      queryClient.invalidateQueries({ queryKey: ['documentsInfinite'] })
+      queryClient.invalidateQueries({ queryKey: ['groupDocuments'] })
+      queryClient.invalidateQueries({ queryKey: ['documentGroups'] })
+      toast.success('再処理をリクエストしました。処理完了まで画面が自動更新されます。', { duration: 5000 })
+      return true
+    } catch (err) {
+      console.error('Failed to reprocess:', err)
+      toast.error('再処理リクエストに失敗しました')
+      return false
+    } finally {
+      setReprocessingId(null)
+    }
+  }
+
+  return { reprocess, reprocessingId }
 }
 
 // ============================================

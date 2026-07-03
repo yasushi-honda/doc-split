@@ -5,11 +5,22 @@
  * 無限スクロール対応
  */
 
-import { useMemo } from 'react';
-import { FileText, Loader2 } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { FileText, Loader2, RefreshCw } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { LoadMoreIndicator } from '@/components/LoadMoreIndicator';
 import { useInfiniteScroll } from '@/hooks/useInfiniteScroll';
+import { useReprocessDocument } from '@/hooks/useDocuments';
 import {
   useGroupDocuments,
   type GroupType,
@@ -42,9 +53,11 @@ interface DocumentRowProps {
   document: Document;
   groupType: GroupType;
   onClick: () => void;
+  /** error 書類の「再試行」(#524)。未指定時はボタン非表示 */
+  onRetry?: (document: Document) => void;
 }
 
-function DocumentRow({ document, groupType, onClick }: DocumentRowProps) {
+function DocumentRow({ document, groupType, onClick, onRetry }: DocumentRowProps) {
   const statusConfig = getStatusConfig(document.status);
 
   // 選択待ち判定（顧客・事業所）
@@ -104,6 +117,20 @@ function DocumentRow({ document, groupType, onClick }: DocumentRowProps) {
             未確認
           </Badge>
         )}
+        {document.status === 'error' && onRetry && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-6 px-2 text-xs text-blue-600 border-blue-300 hover:bg-blue-50"
+            onClick={(e) => {
+              e.stopPropagation();
+              onRetry(document);
+            }}
+          >
+            <RefreshCw className="h-3 w-3 sm:mr-1" />
+            <span className="hidden sm:inline">再試行</span>
+          </Button>
+        )}
       </div>
     </div>
   );
@@ -154,6 +181,15 @@ export function GroupDocumentList({
   });
   const { loadMoreRef } = useInfiniteScroll({ hasNextPage: !!hasNextPage, isFetchingNextPage, fetchNextPage });
 
+  // error 書類の「再試行」(#524): 行ボタン → 確認ダイアログ → 再処理
+  const { reprocess, reprocessingId } = useReprocessDocument();
+  const [retryTarget, setRetryTarget] = useState<Document | null>(null);
+  const handleRetryConfirm = async () => {
+    if (!retryTarget) return;
+    const ok = await reprocess(retryTarget.id);
+    if (ok) setRetryTarget(null);
+  };
+
   // 全ページのドキュメントを結合 + 日付フィルター適用
   const allDocuments = useMemo(
     () => filterByDate(data?.pages.flatMap((page) => page.documents) ?? [], dateFilter),
@@ -188,6 +224,41 @@ export function GroupDocumentList({
     );
   }
 
+  // error 書類の再試行確認ダイアログ (#524)
+  const retryDialog = (
+    <AlertDialog open={retryTarget !== null} onOpenChange={(open) => !open && setRetryTarget(null)}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>再処理を実行しますか？</AlertDialogTitle>
+          <AlertDialogDescription asChild>
+            <div className="space-y-2">
+              <p className="break-all">対象: {retryTarget ? getDisplayFileName(retryTarget) : ''}</p>
+              <p>
+                エラー状態の書類のOCR処理を再実行します。抽出済みのメタ情報・確認状態はリセットされ、
+                AIが再抽出します。再処理中はグループ分けから一時的に外れます。
+              </p>
+            </div>
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={reprocessingId !== null}>キャンセル</AlertDialogCancel>
+          <Button
+            onClick={handleRetryConfirm}
+            disabled={reprocessingId !== null}
+            className="bg-blue-600 hover:bg-blue-700"
+          >
+            {reprocessingId !== null ? (
+              <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCw className="mr-1 h-4 w-4" />
+            )}
+            {reprocessingId !== null ? '処理中...' : '再処理を実行'}
+          </Button>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+
   // 担当CM別の場合は顧客サブグループで表示
   if (groupType === 'careManager') {
     return (
@@ -196,6 +267,7 @@ export function GroupDocumentList({
           documents={allDocuments}
           furiganaMap={furiganaMap}
           onDocumentSelect={onDocumentSelect}
+          onRetry={setRetryTarget}
         />
 
         <LoadMoreIndicator
@@ -204,6 +276,7 @@ export function GroupDocumentList({
           isFetchingNextPage={isFetchingNextPage}
           className="border-t border-gray-100"
         />
+        {retryDialog}
       </div>
     );
   }
@@ -219,6 +292,7 @@ export function GroupDocumentList({
             document={doc}
             groupType={groupType}
             onClick={() => onDocumentSelect?.(doc.id)}
+            onRetry={setRetryTarget}
           />
         ))}
       </div>
@@ -228,6 +302,7 @@ export function GroupDocumentList({
         hasNextPage={hasNextPage}
         isFetchingNextPage={isFetchingNextPage}
       />
+      {retryDialog}
     </div>
   );
 }
