@@ -40,20 +40,33 @@ test.describe('グループビュー再試行 (#524) @emulator', () => {
     await expect(page.locator('text=再処理をリクエストしました')).toBeVisible({ timeout: 5000 });
   });
 
-  test('担当CM別タブの顧客サブグループ配下 error 行に再試行ボタンが表示されキャンセルできる', async ({ page }) => {
+  test('担当CM別タブは 4 階層 (CM→利用者→書類種別→書類) で遷移でき、error 行の再試行がキャンセルできる (#527/#524)', async ({ page }) => {
     await clickTab(page, '担当CM別');
 
-    // 担当CMグループを展開
+    // 第1階層: 担当CMグループを展開
     const cmHeader = page.locator('button', { hasText: '五十嵐恵' }).first();
     await expect(cmHeader).toBeVisible({ timeout: 10000 });
     await cmHeader.click();
 
-    // 顧客サブグループを展開
+    // 第2階層: 顧客サブグループを展開
     const customerHeader = page.locator('button', { hasText: '組合花子' }).first();
     await expect(customerHeader).toBeVisible({ timeout: 10000 });
     await customerHeader.click();
 
-    // error 行の「再試行」→ ダイアログ表示 → キャンセルで閉じる
+    // 第3階層 (#527): 書類種別グループ (請求書/ケアプラン) が分離して表示される。
+    // この時点で書類行はまだ見えない
+    // 注: エラー2 は先行の顧客別テストが再処理で消費する (workers=1 で順次実行) ため、
+    //     本テストは残存するエラー1 を対象にする
+    const docTypeHeader = page.locator('button', { hasText: '請求書' }).first();
+    await expect(docTypeHeader).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('button', { hasText: 'ケアプラン' }).first()).toBeVisible();
+    await expect(page.locator('text=E2E_グループ再試行_エラー1')).not.toBeVisible();
+
+    // 書類種別を展開すると第4階層の書類行が表示される
+    await docTypeHeader.click();
+    await expect(page.locator('text=E2E_グループ再試行_エラー1').first()).toBeVisible({ timeout: 10000 });
+
+    // error 行の「再試行」→ ダイアログ表示 → キャンセルで閉じる (#524)
     const retryButton = page.locator('button:has-text("再試行")').first();
     await expect(retryButton).toBeVisible({ timeout: 10000 });
     await retryButton.click();
