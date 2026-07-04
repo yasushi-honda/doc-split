@@ -255,7 +255,7 @@ describe('firestoreToDocument', () => {
       expect(result.officeCandidates).toHaveLength(1)
     })
 
-    it('documentTypeConfirmed を正しく変換する (Issue #526)', () => {
+    it('documentTypeConfirmed: false を正しく変換する (Issue #526)', () => {
       const data = {
         ...baseFirestoreData,
         documentTypeConfirmed: false,
@@ -264,6 +264,23 @@ describe('firestoreToDocument', () => {
       const result = firestoreToDocument('doc-001', data)
 
       expect(result.documentTypeConfirmed).toBe(false)
+    })
+
+    it('documentTypeConfirmed: true を正しく変換する (Issue #526)', () => {
+      const data = {
+        ...baseFirestoreData,
+        documentTypeConfirmed: true,
+      }
+
+      const result = firestoreToDocument('doc-001', data)
+
+      expect(result.documentTypeConfirmed).toBe(true)
+    })
+
+    it('documentTypeConfirmed が undefined の場合も正しく処理する (Issue #526)', () => {
+      const result = firestoreToDocument('doc-001', baseFirestoreData)
+
+      expect(result.documentTypeConfirmed).toBeUndefined()
     })
   })
 

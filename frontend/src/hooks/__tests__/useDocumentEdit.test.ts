@@ -735,6 +735,30 @@ describe('useDocumentEdit - 確定フラグ更新 (#396)', () => {
       expect(updateData.documentTypeConfirmed).toBe(true)
     })
 
+    // pr-test-analyzerレビュー指摘: customerConfirmed/officeConfirmedのAC5と同型の
+    // auto-heal(既存値が有効ならdocumentType自体を編集しなくても他フィールドの保存で
+    // 確定させる)挙動がdocumentTypeにも意図的に存在することをpinする。
+    // この挙動が本当に望ましいかはIssue #526の設計判断だが、現状customer/officeと
+    // 対称にする方針を採用しているため、その挙動自体を明示的にテストで固定する。
+    it('AC5相当: documentType自体は編集せず他フィールドのみ編集して保存 → 既存値が有効ならdocumentTypeConfirmed=trueが書き込まれる', async () => {
+      const doc = makeDocument({
+        documentType: '実績', // 既に有効値だが確定はしていない
+        documentTypeConfirmed: false,
+        careManager: '',
+      })
+      const { result } = renderHook(() => useDocumentEdit(doc))
+
+      act(() => result.current.startEditing())
+      act(() => result.current.updateField('careManager', '五十嵐恵')) // documentTypeには一切触れない
+
+      await act(async () => {
+        await result.current.saveChanges()
+      })
+
+      const updateData = mockUpdateDoc.mock.calls[0]?.[1] as Record<string, unknown>
+      expect(updateData.documentTypeConfirmed).toBe(true)
+    })
+
     it('documentType を "未判定" に変更 → documentTypeConfirmed は書き込まない', async () => {
       const doc = makeDocument({
         documentType: '実績',
@@ -1025,6 +1049,32 @@ describe('useDocumentEdit - 確定フラグ editLogs 記録 (#398)', () => {
       // updateData にも needsManualCustomerSelection が含まれないこと（Firestore write 削減）
       const updateData = mockUpdateDoc.mock.calls[0]?.[1] as Record<string, unknown>
       expect('needsManualCustomerSelection' in updateData).toBe(false)
+    })
+  })
+
+  describe('AC12: documentTypeConfirmed=true 書き込み時に editLogs エントリ作成 (Issue #526)', () => {
+    // #398の教訓（確定フラグ変更がeditLogsに記録されないsilent failure）が
+    // documentTypeConfirmedにも再発しないことを確認する（pr-test-analyzerレビュー指摘）。
+    it('既存 documentTypeConfirmed=false → true 遷移で editLogs に oldValue:"false", newValue:"true" を記録', async () => {
+      const doc = makeDocument({
+        documentType: '未判定',
+        documentTypeConfirmed: false,
+      })
+      const { result } = renderHook(() => useDocumentEdit(doc))
+
+      act(() => result.current.startEditing())
+      act(() => result.current.updateField('documentType', '実績'))
+
+      await act(async () => {
+        await result.current.saveChanges()
+      })
+
+      const log = findLog('documentTypeConfirmed')
+      expect(log).toBeDefined()
+      const payload = log![1] as Record<string, unknown>
+      expect(payload.oldValue).toBe('false')
+      expect(payload.newValue).toBe('true')
+      expect(payload.documentId).toBe(doc.id)
     })
   })
 })

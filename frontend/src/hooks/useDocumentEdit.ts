@@ -161,8 +161,8 @@ export function useDocumentEdit(document: Document | null | undefined): UseDocum
         })
       }
 
-      // 確定フラグの判定（Issue #396）
-      // 「保存=確定」操作として、有効な顧客名/事業所名が現在値（編集後）に
+      // 確定フラグの判定（Issue #396、documentTypeはIssue #526で追加）
+      // 「保存=確定」操作として、有効な顧客名/事業所名/書類種別が現在値（編集後）に
       // セットされていて、かつ既存 confirmed が true でない場合に true を立てる。
       // invalid 値（空・「未判定」等）の場合や既に true の場合は updateData に含めず、
       // 既存値を上書きしない（false への退行を防ぐ）。

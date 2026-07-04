@@ -94,6 +94,8 @@ describe('isValidDocumentTypeSelection', () => {
       ['空白のみ', '   '],
       ['「未判定」sentinel', '未判定'],
       ['前後空白付き「未判定」', '  未判定  '],
+      ['「不明文書」sentinel', '不明文書'],
+      ['前後空白付き「不明文書」', '  不明文書  '],
     ])('"%s" は false を返す', (_label, input) => {
       expect(isValidDocumentTypeSelection(input)).toBe(false);
     });
@@ -170,15 +172,17 @@ describe('applySegmentFieldEdit', () => {
 });
 
 describe('buildSegmentConfirmedFlags', () => {
-  // Issue #526: 分割画面の最終値からconfirmedフラグを算出する。
-  // サーバー側でID有無から推測しない設計のため、値の妥当性（sentinel判定）のみで決定する。
+  // Issue #526: confirmed判定は「値が有効かどうか」だけでは不十分で、
+  // 「そのフィールドをユーザーが実際に編集（選択）したか」も要件にする。
+  // AI自動検出のみで一度も編集していないフィールドまでconfirmed=trueにすると、
+  // Issue #526が解決しようとしている「AIの推測が確定情報として固定される」問題が
+  // 形を変えて再発する（silent-failure-hunterレビュー指摘を反映、2026-07-04修正）。
 
-  it('全フィールドが有効値 → 全フラグtrue', () => {
-    const flags = buildSegmentConfirmedFlags({
-      customerName: '田中太郎',
-      officeName: 'ケアサポートきらり',
-      documentType: '介護保険被保険者証',
-    });
+  it('編集済み+有効値 → confirmed=true', () => {
+    const flags = buildSegmentConfirmedFlags(
+      { customerName: '田中太郎', officeName: 'ケアサポートきらり', documentType: '介護保険被保険者証' },
+      { customerName: '田中太郎', officeName: 'ケアサポートきらり', documentType: '介護保険被保険者証' }
+    );
     expect(flags).toEqual({
       customerConfirmed: true,
       officeConfirmed: true,
@@ -186,12 +190,11 @@ describe('buildSegmentConfirmedFlags', () => {
     });
   });
 
-  it('全フィールドが「未判定」→ 全フラグfalse', () => {
-    const flags = buildSegmentConfirmedFlags({
-      customerName: '未判定',
-      officeName: '未判定',
-      documentType: '未判定',
-    });
+  it('未編集（AI自動検出のみ、値は有効）→ confirmed=falseのまま', () => {
+    const flags = buildSegmentConfirmedFlags(
+      { customerName: '田中太郎', officeName: 'ケアサポートきらり', documentType: '介護保険被保険者証' },
+      {}
+    );
     expect(flags).toEqual({
       customerConfirmed: false,
       officeConfirmed: false,
@@ -199,12 +202,31 @@ describe('buildSegmentConfirmedFlags', () => {
     });
   });
 
-  it('一部のみ有効値 → 該当フラグのみtrue', () => {
-    const flags = buildSegmentConfirmedFlags({
-      customerName: '田中太郎',
-      officeName: '未判定',
-      documentType: '未判定',
+  it('touchedFieldsがundefined（一度も編集されていないセグメント）→ 全てfalse', () => {
+    const flags = buildSegmentConfirmedFlags(
+      { customerName: '田中太郎', officeName: 'ケアサポートきらり', documentType: '介護保険被保険者証' },
+      undefined
+    );
+    expect(flags).toEqual({
+      customerConfirmed: false,
+      officeConfirmed: false,
+      documentTypeConfirmed: false,
     });
+  });
+
+  it('編集したが無効値（未判定）に変更 → confirmed=false（編集済みでも無効値なら確定しない）', () => {
+    const flags = buildSegmentConfirmedFlags(
+      { customerName: '未判定', officeName: 'ケアサポートきらり', documentType: '介護保険被保険者証' },
+      { customerName: '未判定' }
+    );
+    expect(flags.customerConfirmed).toBe(false);
+  });
+
+  it('一部のフィールドのみ編集 → 編集したフィールドのみtrue、未編集フィールドはfalse', () => {
+    const flags = buildSegmentConfirmedFlags(
+      { customerName: '田中太郎', officeName: 'ケアサポートきらり', documentType: '介護保険被保険者証' },
+      { customerName: '田中太郎' }
+    );
     expect(flags).toEqual({
       customerConfirmed: true,
       officeConfirmed: false,

@@ -3,6 +3,13 @@
  *
  * pdfOperations.tsから純粋なデータ構築ロジックを抽出し、テスト可能にする。
  * Firestore依存（serverTimestamp等）を含まない部分のみ。
+ *
+ * customerConfirmed/officeConfirmed/documentTypeConfirmed（Issue #526）は
+ * フロントエンド（分割画面）から受け取った値をそのまま反映する（未送信時は
+ * false にフォールバック）。呼出元 pdfOperations.ts は、この戻り値の
+ * customerConfirmed/officeConfirmed を見て confirmedBy/confirmedAt/
+ * officeConfirmedBy/officeConfirmedAt を条件付きで書き込む（false のフィールドに
+ * 確認者情報が付かないようにするため）。
  */
 
 export interface SplitSegmentInput {

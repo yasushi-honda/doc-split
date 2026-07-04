@@ -101,23 +101,30 @@ export interface Document {
   provenanceBackfill?: ProvenanceBackfillMetadata;
 
   // Phase 7: 顧客確定機能
+  //
+  // customerConfirmed/officeConfirmed/documentTypeConfirmed 共通の注意点（2026-07-04訂正）:
+  // 「デフォルト: true」という値は書込元によって成立しない。通常OCR取り込み(ocrProcessor.ts)は
+  // 抽出確信度に応じてtrue/falseを書き分け、手動分割(splitDocumentBuilder.ts)はユーザーが
+  // 実際に選択したフィールドのみtrue・未送信時はfalseにフォールバックする。一方で一覧・詳細画面の
+  // 一部UIはundefinedを「対応不要」扱いし`=== false`のみで再確認バナーを出す（本フィールド自体は
+  // undefinedを確定済み相当として黙って許容する設計、この非対称性は既知のものとして扱うこと）。
   customerId?: string | null;                    // 顧客ID（「該当なし」選択時はnull）
   customerCandidates?: CustomerCandidateInfo[];  // 構造化された候補リスト
-  customerConfirmed?: boolean;                   // 確定済みフラグ（デフォルト: true）
-  confirmedBy?: string | null;                   // 確定者UID（システム自動確定時はnull）
-  confirmedAt?: Timestamp | null;                // 確定日時（システム自動確定時はnull）
+  customerConfirmed?: boolean;                   // 確定済みフラグ（上記注意点を参照）
+  confirmedBy?: string | null;                   // 確定者UID（システム自動確定時・未確定時はnull）
+  confirmedAt?: Timestamp | null;                // 確定日時（システム自動確定時・未確定時はnull）
   needsManualCustomerSelection?: boolean;        // 後方互換用（Phase 6以前）
 
   // 事業所確定機能
   officeId?: string | null;                      // 事業所ID（「該当なし」選択時はnull）
   officeCandidates?: OfficeCandidateInfo[];      // 構造化された候補リスト
-  officeConfirmed?: boolean;                     // 確定済みフラグ（デフォルト: true）
-  officeConfirmedBy?: string | null;             // 確定者UID（システム自動確定時はnull）
-  officeConfirmedAt?: Timestamp | null;          // 確定日時（システム自動確定時はnull）
+  officeConfirmed?: boolean;                     // 確定済みフラグ（上記注意点を参照）
+  officeConfirmedBy?: string | null;             // 確定者UID（システム自動確定時・未確定時はnull）
+  officeConfirmedAt?: Timestamp | null;          // 確定日時（システム自動確定時・未確定時はnull）
   suggestedNewOffice?: string | null;            // ファイル名から抽出された事業所名（登録提案用）
 
   // 書類種別確定機能 (Issue #526: 手動分割時の確定入力をOCR再解析から保護するため)
-  documentTypeConfirmed?: boolean;               // 確定済みフラグ（デフォルト: true）
+  documentTypeConfirmed?: boolean;               // 確定済みフラグ（上記注意点を参照。By/Atは持たない）
 
   // Phase 8: グループ化用正規化キー（Cloud Functionsで自動設定）
   customerKey?: string;       // customerName正規化版

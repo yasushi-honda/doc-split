@@ -39,7 +39,7 @@ import {
 import { useDocumentMasters, useCustomerMasters, useOfficeMasters } from '@/hooks/useDocuments'
 import { PdfSplitPreview } from './PdfSplitPreview'
 import { getDisplayFileName } from '@/utils/getDisplayFileName'
-import { applySegmentFieldEdit, buildSegmentConfirmedFlags } from '@/lib/documentUtils'
+import { applySegmentFieldEdit, buildSegmentConfirmedFlags, type SegmentTextField } from '@/lib/documentUtils'
 import type { Document, SplitSuggestion, SplitSegment } from '@shared/types'
 
 interface PdfSplitModalProps {
@@ -248,7 +248,7 @@ export function PdfSplitModal({
   // ID同期は applySegmentFieldEdit（documentUtils.ts）に委譲する。
   const handleSegmentEdit = (
     index: number,
-    field: keyof SplitSegment,
+    field: SegmentTextField,
     value: string,
     item?: { id: string }
   ) => {
@@ -270,7 +270,7 @@ export function PdfSplitModal({
 
   // 分割実行
   const handleSplit = async () => {
-    const segmentsData = segments.map((segment) => {
+    const segmentsData = segments.map((segment, index) => {
       // マスターデータからIDを解決
       const customerMaster = customerMasters?.find(
         (c) => c.name === segment.customerName
@@ -305,13 +305,18 @@ export function PdfSplitModal({
         needsManualOfficeSelection: ('needsManualOfficeSelection' in segment && segment.needsManualOfficeSelection) || false,
         isDuplicateCustomer: ('isDuplicateCustomer' in segment && segment.isDuplicateCustomer) || customerMaster?.isDuplicate || false,
         careManagerName: ('careManagerName' in segment ? segment.careManagerName : null) || customerMaster?.careManagerName || null,
-        // Issue #526: サーバー側でID有無から確定状態を推測せず、フロントエンドの
-        // 値妥当性判定（isValid*Selection）に基づくconfirmedフラグを明示送信する
-        ...buildSegmentConfirmedFlags({
-          customerName: segment.customerName,
-          officeName: segment.officeName,
-          documentType: segment.documentType,
-        }),
+        // Issue #526: サーバー側でID有無から確定状態を推測せず、フロントエンドが
+        // 「実際に編集したフィールドか」+値の妥当性に基づくconfirmedフラグを明示送信する
+        // (AI自動検出のみで未編集のフィールドはconfirmed=falseのまま、
+        //  silent-failure-hunterレビュー反映)
+        ...buildSegmentConfirmedFlags(
+          {
+            customerName: segment.customerName,
+            officeName: segment.officeName,
+            documentType: segment.documentType,
+          },
+          segmentEdits.get(index)
+        ),
       }
     })
 

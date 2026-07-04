@@ -63,15 +63,16 @@ export function formatTimestamp(
 }
 
 // ============================================
-// 顧客名・事業所名の有効性判定
+// 顧客名・事業所名・書類種別の有効性判定
 // ============================================
-// 編集モーダル保存時に「選択確定フラグ」(customerConfirmed/officeConfirmed) を
-// true にするか判定するために使用する。Sentinel 値（'未判定'/'不明顧客'/'不明事業所'）
-// は OCR 失敗・未判定状態を示すため、選択として無効扱いにする。
+// 編集モーダル保存時に「選択確定フラグ」(customerConfirmed/officeConfirmed/
+// documentTypeConfirmed) を true にするか判定するために使用する。Sentinel 値
+// （'未判定'/'不明顧客'/'不明事業所'/'不明文書'）は OCR 失敗・未判定状態を示すため、
+// 選択として無効扱いにする。
 
 const CUSTOMER_INVALID_SENTINELS: ReadonlySet<string> = new Set(['未判定', '不明顧客']);
 const OFFICE_INVALID_SENTINELS: ReadonlySet<string> = new Set(['未判定', '不明事業所']);
-const DOCUMENT_TYPE_INVALID_SENTINELS: ReadonlySet<string> = new Set(['未判定']);
+const DOCUMENT_TYPE_INVALID_SENTINELS: ReadonlySet<string> = new Set(['未判定', '不明文書']);
 
 /**
  * 顧客名が「確定可能な有効値」かを判定する。
@@ -110,6 +111,9 @@ export function isValidDocumentTypeSelection(name: string | null | undefined): b
 // 分割セグメント編集ユーティリティ（Issue #526 / #538）
 // ============================================
 
+/** 分割セグメントの手動編集可能なテキストフィールド（applySegmentFieldEdit / 確定判定の対象） */
+export type SegmentTextField = 'customerName' | 'officeName' | 'documentType';
+
 /**
  * 分割セグメントのフィールド編集を反映する（Issue #538対応）。
  * MasterSelectField は選択時に value（名前）と item（id 付きマスタ情報）を
@@ -117,10 +121,14 @@ export function isValidDocumentTypeSelection(name: string | null | undefined): b
  * 編集前の値のまま残り、表示名と実際に紐付くマスタが食い違う。
  * 名前フィールド編集時は対応するIDを item 由来の値に同期し、
  * item が無い（マスタ不一致・未判定化）場合は null にクリアする。
+ *
+ * field を SegmentTextField に narrowing しているのは、`keyof SplitSegment` のままだと
+ * startPage(number)/fileDate(Date)等の非string フィールドにも `value: string` を代入可能に
+ * 見えてしまい、tsc が誤りを検出できないため（type-design-analyzerレビュー指摘）。
  */
 export function applySegmentFieldEdit(
   existing: Partial<SplitSegment>,
-  field: keyof SplitSegment,
+  field: SegmentTextField,
   value: string,
   item?: { id: string }
 ): Partial<SplitSegment> {
@@ -136,22 +144,29 @@ export function applySegmentFieldEdit(
 
 /**
  * 分割セグメントの最終値からconfirmedフラグを算出する（Issue #526）。
+ *
+ * confirmed判定は「値が有効か」だけでなく「そのフィールドをユーザーが実際に編集
+ * （選択）したか」も要件にする。AI自動検出のみで一度も編集していないフィールドまで
+ * confirmed=trueにすると、Issue #526が解決しようとしている「AIの推測が確定情報として
+ * 固定される」問題が形を変えて再発するため（silent-failure-hunterレビュー指摘、
+ * 2026-07-04修正）。`touchedFields` は `PdfSplitModal` の `segmentEdits.get(index)`
+ * をそのまま渡す想定（該当フィールドのkeyが存在する＝ユーザーが編集した）。
+ *
  * サーバー側ではID有無から確定状態を推測しない（自動検出候補にもIDが付くため
- * 誤判定しうる、Codexセカンドオピニオン反映）。フロントエンドが値の妥当性
- * 判定結果（isValid*Selection）をそのまま送信する。
+ * 誤判定しうる、Codexセカンドオピニオン反映）。
  */
-export function buildSegmentConfirmedFlags(segment: {
-  customerName: string;
-  officeName: string;
-  documentType: string;
-}): {
+export function buildSegmentConfirmedFlags(
+  segment: { customerName: string; officeName: string; documentType: string },
+  touchedFields: Partial<Record<SegmentTextField, unknown>> | undefined
+): {
   customerConfirmed: boolean;
   officeConfirmed: boolean;
   documentTypeConfirmed: boolean;
 } {
+  const touched = touchedFields ?? {};
   return {
-    customerConfirmed: isValidCustomerSelection(segment.customerName),
-    officeConfirmed: isValidOfficeSelection(segment.officeName),
-    documentTypeConfirmed: isValidDocumentTypeSelection(segment.documentType),
+    customerConfirmed: 'customerName' in touched && isValidCustomerSelection(segment.customerName),
+    officeConfirmed: 'officeName' in touched && isValidOfficeSelection(segment.officeName),
+    documentTypeConfirmed: 'documentType' in touched && isValidDocumentTypeSelection(segment.documentType),
   };
 }
