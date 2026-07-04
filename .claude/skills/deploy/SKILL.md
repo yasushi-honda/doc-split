@@ -82,7 +82,16 @@ rm frontend/.env.local
 
 Functionsデプロイ：
 ```bash
+# ローカル手動実行
 firebase deploy --only functions -P cocoro
+
+# GitHub Actions経由（推奨、SA鍵はGitHub Secretsから自動取得されるためローカルSA activate不要）
+gh workflow run "Deploy Cloud Functions" -f environment=cocoro
+```
+
+Firestore/Storageルール + インデックスデプロイ（**MUST**: schema変更時。Firebase CLIログインアカウント`hy.unimail.11@gmail.com`のまま実行可能なはず、`deploy-to-project.sh`のgcloud認証チェック(SA前提)を経由しない単純な`firebase`コマンドのため。**未検証**、実行時に要確認）：
+```bash
+firebase deploy --only firestore:rules,firestore:indexes,storage -P cocoro
 ```
 
 ### 全クライアント一括
