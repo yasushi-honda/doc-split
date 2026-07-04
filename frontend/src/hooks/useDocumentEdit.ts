@@ -3,7 +3,7 @@ import { doc, updateDoc, collection, addDoc, serverTimestamp, Timestamp, deleteF
 import { useQueryClient } from '@tanstack/react-query'
 import { db, auth } from '../lib/firebase'
 import { updateDocumentInListCache } from './useDocuments'
-import { isValidCustomerSelection, isValidOfficeSelection } from '../lib/documentUtils'
+import { isValidCustomerSelection, isValidOfficeSelection, isValidDocumentTypeSelection } from '../lib/documentUtils'
 import { generateDisplayFileName } from '@shared/generateDisplayFileName'
 import type { Document } from '../../../shared/types'
 
@@ -161,8 +161,8 @@ export function useDocumentEdit(document: Document | null | undefined): UseDocum
         })
       }
 
-      // 確定フラグの判定（Issue #396）
-      // 「保存=確定」操作として、有効な顧客名/事業所名が現在値（編集後）に
+      // 確定フラグの判定（Issue #396、documentTypeはIssue #526で追加）
+      // 「保存=確定」操作として、有効な顧客名/事業所名/書類種別が現在値（編集後）に
       // セットされていて、かつ既存 confirmed が true でない場合に true を立てる。
       // invalid 値（空・「未判定」等）の場合や既に true の場合は updateData に含めず、
       // 既存値を上書きしない（false への退行を防ぐ）。
@@ -172,8 +172,16 @@ export function useDocumentEdit(document: Document | null | undefined): UseDocum
         isValidCustomerSelection(finalCustomerName) && document.customerConfirmed !== true
       const shouldSetOfficeConfirmed =
         isValidOfficeSelection(finalOfficeName) && document.officeConfirmed !== true
+      const finalDocumentType = editedFields.documentType ?? document.documentType ?? ''
+      const shouldSetDocumentTypeConfirmed =
+        isValidDocumentTypeSelection(finalDocumentType) && document.documentTypeConfirmed !== true
 
-      if (changes.length === 0 && !shouldSetCustomerConfirmed && !shouldSetOfficeConfirmed) {
+      if (
+        changes.length === 0 &&
+        !shouldSetCustomerConfirmed &&
+        !shouldSetOfficeConfirmed &&
+        !shouldSetDocumentTypeConfirmed
+      ) {
         setIsEditing(false)
         return true
       }
@@ -222,6 +230,15 @@ export function useDocumentEdit(document: Document | null | undefined): UseDocum
         changes.push({
           field: 'officeConfirmed',
           oldValue: document.officeConfirmed === undefined ? null : String(document.officeConfirmed),
+          newValue: 'true',
+        })
+      }
+      if (shouldSetDocumentTypeConfirmed) {
+        updateData.documentTypeConfirmed = true
+        optimisticData.documentTypeConfirmed = true
+        changes.push({
+          field: 'documentTypeConfirmed',
+          oldValue: document.documentTypeConfirmed === undefined ? null : String(document.documentTypeConfirmed),
           newValue: 'true',
         })
       }
@@ -353,6 +370,9 @@ export function useDocumentEdit(document: Document | null | undefined): UseDocum
           rollbackData.officeConfirmed = document.officeConfirmed
           rollbackData.officeConfirmedBy = document.officeConfirmedBy
           rollbackData.officeConfirmedAt = document.officeConfirmedAt
+        }
+        if (shouldSetDocumentTypeConfirmed) {
+          rollbackData.documentTypeConfirmed = document.documentTypeConfirmed
         }
         updateDocumentInListCache(queryClient, document.id, rollbackData)
         throw writeErr

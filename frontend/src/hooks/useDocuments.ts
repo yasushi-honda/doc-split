@@ -200,6 +200,8 @@ export function firestoreToDocument(id: string, data: Record<string, unknown>): 
     verifiedAt: data.verifiedAt as Timestamp | null | undefined,
     // 後方互換: 顧客確定状態のレガシー表現。customerConfirmed と併読される。
     needsManualCustomerSelection: data.needsManualCustomerSelection as boolean | undefined,
+    // 書類種別確定フィールド（Issue #526）
+    documentTypeConfirmed: data.documentTypeConfirmed as boolean | undefined,
   }
 }
 
@@ -295,6 +297,7 @@ export function getReprocessClearFields() {
     officeConfirmed: false,
     officeConfirmedBy: null,
     officeConfirmedAt: null,
+    documentTypeConfirmed: false,
     // OCR確認ステータス
     verified: false,
     verifiedBy: null,

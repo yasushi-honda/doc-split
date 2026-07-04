@@ -593,10 +593,18 @@ export const splitPdf = onCall(
             ),
             // セグメントから構築したフィールド (careManager/careManagerKey 含む)
             ...splitDocFields,
-            confirmedBy: request.auth?.uid || null,
-            confirmedAt: admin.firestore.FieldValue.serverTimestamp(),
-            officeConfirmedBy: request.auth?.uid || null,
-            officeConfirmedAt: admin.firestore.FieldValue.serverTimestamp(),
+            // Issue #526レビュー反映 (Codex/code-reviewer/silent-failure-hunter 3件独立指摘):
+            // customerConfirmed/officeConfirmedがfalseの場合、確認者情報(confirmedBy/At)を
+            // 無条件で書き込むと「未確認なのに確認者がいる」矛盾したデータになる。
+            // 既存のocrProcessor.ts通常OCRパス(officeConfirmedBy: null等)と同じ規約に揃える。
+            confirmedBy: splitDocFields.customerConfirmed ? (request.auth?.uid || null) : null,
+            confirmedAt: splitDocFields.customerConfirmed
+              ? admin.firestore.FieldValue.serverTimestamp()
+              : null,
+            officeConfirmedBy: splitDocFields.officeConfirmed ? (request.auth?.uid || null) : null,
+            officeConfirmedAt: splitDocFields.officeConfirmed
+              ? admin.firestore.FieldValue.serverTimestamp()
+              : null,
             ocrExtraction,
             pageResults: segmentPageResults.map(
               (p: SplitPageInput, index: number) => ({

@@ -32,6 +32,10 @@ describe('PDF分割 - careManagerフィールド伝播 (#172)', () => {
     officeCandidates: [],
     isDuplicateCustomer: false,
     careManagerName: '長谷川 由紀',
+    // このフィクスチャは顧客/事業所が実際に選択済みのセグメントを表す (#526)
+    customerConfirmed: true,
+    officeConfirmed: true,
+    documentTypeConfirmed: true,
   };
 
   describe('careManagerフィールドの正しいマッピング', () => {

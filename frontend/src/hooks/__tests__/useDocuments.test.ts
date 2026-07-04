@@ -254,6 +254,34 @@ describe('firestoreToDocument', () => {
       expect(result.customerCandidates).toHaveLength(1)
       expect(result.officeCandidates).toHaveLength(1)
     })
+
+    it('documentTypeConfirmed: false を正しく変換する (Issue #526)', () => {
+      const data = {
+        ...baseFirestoreData,
+        documentTypeConfirmed: false,
+      }
+
+      const result = firestoreToDocument('doc-001', data)
+
+      expect(result.documentTypeConfirmed).toBe(false)
+    })
+
+    it('documentTypeConfirmed: true を正しく変換する (Issue #526)', () => {
+      const data = {
+        ...baseFirestoreData,
+        documentTypeConfirmed: true,
+      }
+
+      const result = firestoreToDocument('doc-001', data)
+
+      expect(result.documentTypeConfirmed).toBe(true)
+    })
+
+    it('documentTypeConfirmed が undefined の場合も正しく処理する (Issue #526)', () => {
+      const result = firestoreToDocument('doc-001', baseFirestoreData)
+
+      expect(result.documentTypeConfirmed).toBeUndefined()
+    })
   })
 
   describe('summary フィールド (Issue #215 discriminated union + 後方互換読込)', () => {
@@ -423,5 +451,10 @@ describe('getReprocessClearFields (Issue #215: 旧3キー + 新summary 全て de
     const fields = getReprocessClearFields()
     expect(fields).toHaveProperty('retryCount')
     expect(fields).toHaveProperty('retryAfter')
+  })
+
+  it('documentTypeConfirmed を false にリセットする (Issue #526)', () => {
+    const fields = getReprocessClearFields()
+    expect(fields.documentTypeConfirmed).toBe(false)
   })
 })

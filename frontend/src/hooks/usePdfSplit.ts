@@ -60,6 +60,13 @@ interface SplitPdfSegment {
   isDuplicateCustomer?: boolean
   /** 担当ケアマネ名 */
   careManagerName?: string | null
+  /**
+   * 確定フラグ（Issue #526）: 分割画面でユーザーが実際に選択した値かどうか。
+   * サーバー側ではID有無から推測しない。フロントエンドが明示送信する。
+   */
+  customerConfirmed?: boolean
+  officeConfirmed?: boolean
+  documentTypeConfirmed?: boolean
 }
 
 interface SplitPdfRequest {
