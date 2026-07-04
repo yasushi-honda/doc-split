@@ -617,7 +617,12 @@ export const splitPdf = onCall(
             fileDate: docData.fileDate,
             totalPages: endPage - startPage + 1,
             targetPageNumber: 1,
-            status: 'processed',
+            // Issue #526 PR4: 子ドキュメントをOCR再処理パイプライン(processOCRポーリング)に
+            // 乗せるため'pending'で生成する(旧実装は'processed'固定でパイプライン未到達だった)。
+            // parentDocumentId(直下)がPR3のpageResults再利用条件を満たすため、フルOCR再実行
+            // ではなくconfirmed保護マージのみが実行される想定(processedAtは既に設定済みのため
+            // 既存のprocessOCRクエリに追加配線なしで乗る)。
+            status: 'pending',
             parentDocumentId: documentId,
             splitFromPages: { start: startPage, end: endPage },
             provenance,
