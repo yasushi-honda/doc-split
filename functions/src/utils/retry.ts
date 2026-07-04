@@ -42,6 +42,12 @@ const TRANSIENT_ERROR_CODES = [
 const TRANSIENT_STATUS_CODES = [429, 500, 502, 503, 504];
 
 /**
+ * gRPC ABORTED (Firestore transaction書込競合)。HTTPステータスとは体系が異なる
+ * ため TRANSIENT_STATUS_CODES とは別定数として明示する (Issue #526)。
+ */
+const GRPC_ABORTED_CODE = 10;
+
+/**
  * エラーが一時的（リトライ可能）かどうか判定
  */
 export function isTransientError(error: unknown): boolean {
@@ -59,7 +65,10 @@ export function isTransientError(error: unknown): boolean {
         }
       }
       if (typeof errorWithCode.code === 'number') {
-        if (TRANSIENT_STATUS_CODES.includes(errorWithCode.code)) {
+        if (
+          TRANSIENT_STATUS_CODES.includes(errorWithCode.code) ||
+          errorWithCode.code === GRPC_ABORTED_CODE
+        ) {
           return true;
         }
       }
@@ -80,7 +89,12 @@ export function isTransientError(error: unknown): boolean {
       message.includes('too many requests') ||
       message.includes('resource exhausted') ||
       message.includes('resource_exhausted') ||
-      message.includes('exception posting request')
+      message.includes('exception posting request') ||
+      // Issue #526: db.runTransaction()の書込競合(gRPC ABORTED)は一時的エラー。検知しないと、
+      // 本来自動リトライ可能な競合がstatus:'error'に即確定してしまう。数値codeが取れないSDK/
+      // テストダブル向けのfallbackとして、Firestoreの実メッセージ形式("10 ABORTED: ...")に
+      // 近い「数字+aborted」のみ許容し、AbortController等の無関係な中断エラーと区別する。
+      /\d+\s*aborted/.test(message)
     ) {
       return true;
     }

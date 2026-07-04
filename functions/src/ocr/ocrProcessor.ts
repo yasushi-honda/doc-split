@@ -35,6 +35,8 @@ import {
 import type { SummaryField } from '../../../shared/types';
 import { buildPageResult, type RawPageOcrResult } from './buildPageResult';
 import { buildOcrExtractionUpdatePayload } from './ocrUpdatePayloadBuilder';
+import { validatePageResultsForReuse } from './pageResultsReuse';
+import { applyConfirmedFieldProtection } from './confirmedFieldMerge';
 
 // #267: buildPageResult / 型は ./buildPageResult モジュールに移設。
 // #278: 型名 PageOcrResult → RawPageOcrResult にリネーム (shared/types.ts の post-processed
@@ -112,46 +114,63 @@ export async function processDocument(
 ): Promise<OcrProcessingResult> {
   console.log(`Processing document: ${docId}`);
 
-  // ファイル取得
-  const fileUrl = docData.fileUrl as string;
-  const bucket = storage.bucket();
-  const filePath = fileUrl.replace(`gs://${bucket.name}/`, '');
-  const file = bucket.file(filePath);
-
-  const [buffer] = await withRetry(
-    () => file.download(),
-    RETRY_CONFIGS.storage
-  );
-  const mimeType = docData.mimeType as string;
+  // Issue #526 D3: 分割子ドキュメント(#445で確立済みのparentDocumentIdを持つ)が
+  // 親から継承した有効なpageResultsを持つ場合、ページOCRを再実行せず再利用する(コスト削減)。
+  const existingPageResults = docData.pageResults as RawPageOcrResult[] | undefined;
+  const reuseCheck = validatePageResultsForReuse(existingPageResults, docData.parentDocumentId);
 
   let pageResults: RawPageOcrResult[] = [];
   let totalPages = 1;
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
 
-  if (mimeType === 'application/pdf') {
-    const pdfDoc = await PDFDocument.load(buffer);
-    totalPages = pdfDoc.getPageCount();
-
-    console.log(`PDF has ${totalPages} pages`);
-
-    for (let i = 0; i < totalPages; i++) {
-      const pageNumber = i + 1;
-      console.log(`Processing page ${pageNumber}/${totalPages}`);
-
-      const pageBuffer = await extractPdfPage(buffer, i);
-      const result = await ocrWithGemini(pageBuffer, 'application/pdf', pageNumber);
-
-      pageResults.push(buildPageResult(result, pageNumber, `Page ${pageNumber}/${totalPages}`));
-
-      totalInputTokens += result.inputTokens;
-      totalOutputTokens += result.outputTokens;
-    }
+  if (reuseCheck.reusable && existingPageResults) {
+    console.log(
+      `Reusing existing pageResults for ${docId} (${existingPageResults.length} pages), skipping page OCR`
+    );
+    pageResults = existingPageResults;
+    totalPages = existingPageResults.length;
   } else {
-    const result = await ocrWithGemini(buffer, mimeType);
-    pageResults.push(buildPageResult(result, 1, 'Image'));
-    totalInputTokens = result.inputTokens;
-    totalOutputTokens = result.outputTokens;
+    if (!reuseCheck.reusable && existingPageResults && existingPageResults.length > 0) {
+      console.log(`pageResults reuse skipped for ${docId}: ${reuseCheck.reason}`);
+    }
+
+    // ファイル取得
+    const fileUrl = docData.fileUrl as string;
+    const bucket = storage.bucket();
+    const filePath = fileUrl.replace(`gs://${bucket.name}/`, '');
+    const file = bucket.file(filePath);
+
+    const [buffer] = await withRetry(
+      () => file.download(),
+      RETRY_CONFIGS.storage
+    );
+    const mimeType = docData.mimeType as string;
+
+    if (mimeType === 'application/pdf') {
+      const pdfDoc = await PDFDocument.load(buffer);
+      totalPages = pdfDoc.getPageCount();
+
+      console.log(`PDF has ${totalPages} pages`);
+
+      for (let i = 0; i < totalPages; i++) {
+        const pageNumber = i + 1;
+        console.log(`Processing page ${pageNumber}/${totalPages}`);
+
+        const pageBuffer = await extractPdfPage(buffer, i);
+        const result = await ocrWithGemini(pageBuffer, 'application/pdf', pageNumber);
+
+        pageResults.push(buildPageResult(result, pageNumber, `Page ${pageNumber}/${totalPages}`));
+
+        totalInputTokens += result.inputTokens;
+        totalOutputTokens += result.outputTokens;
+      }
+    } else {
+      const result = await ocrWithGemini(buffer, mimeType);
+      pageResults.push(buildPageResult(result, 1, 'Image'));
+      totalInputTokens = result.inputTokens;
+      totalOutputTokens = result.outputTokens;
+    }
   }
 
   // aggregate cap (Issue #205): per-page後にも合計サイズで二段防御。
@@ -292,30 +311,14 @@ export async function processDocument(
   // 要約生成を待機
   const summary = await summaryPromise;
 
-  // displayFileName 生成 (#178 Stage 1)
-  // デフォルト値（未判定/不明顧客）は渡さない。generateDisplayFileNameが除外するが、
-  // 日付だけで「20260315.pdf」のような識別不能な名前を防ぐため
-  const displayFileName = generateDisplayFileName({
-    documentType: documentTypeResult.documentType || undefined,
-    customerName: customerResult.bestMatch?.name || undefined,
-    officeName: officeResult.bestMatch?.name || undefined,
-    fileDate: dateResult.formattedDate ?? undefined,
-  });
-
-  // ドキュメント更新
-  // Issue #215: summary を discriminated union ネスト型で書き込み、
-  // 旧フラット3フィールド (summaryTruncated / summaryOriginalLength) は削除。
-  // 旧 summary (string型) は新 summary (object型) で上書きされる。
   // Issue #526 D1: 抽出結果の集約ロジックは ocrUpdatePayloadBuilder.ts の純粋関数に
-  // 切り出し済み(挙動不変、ユニットテストで契約をlock-in)。
-  // summary は summaryWritePayloadContract.test.ts の隣接性契約により、
-  // status/updatedAt はライフサイクル管理フィールドのため、ここで直接組み立てる。
+  // 切り出し済み(挙動不変、ユニットテストで契約をlock-in)。displayFileNameはここでは
+  // 生成しない(Issue #526 D2: confirmed保護マージ後の最終メタから生成する順序に変更)。
   const extractionFields = buildOcrExtractionUpdatePayload({
     documentTypeResult,
     customerResult,
     officeResult,
     dateResult,
-    displayFileName,
     savedOcrResult,
     ocrResultUrl,
     pageResults,
@@ -325,16 +328,72 @@ export async function processDocument(
     extractedAt: admin.firestore.FieldValue.serverTimestamp(),
   });
 
-  await db.doc(`documents/${docId}`).update({
-    ...extractionFields,
-    summary: buildSummaryFields(summary),
-    summaryTruncated: admin.firestore.FieldValue.delete(),
-    summaryOriginalLength: admin.firestore.FieldValue.delete(),
-    status: 'processed',
-    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-  });
+  // Issue #526 D2: confirmed保護マージはFirestore transaction内で最新ドキュメントを
+  // 読み直してから行う。OCR/抽出処理は数秒〜数十秒かかるため、docData(呼出時点の
+  // スナップショット)をそのまま使うと、処理中にユーザーが編集した内容と競合する
+  // stale snapshot問題が起きる(Issue #526本文の設計要件)。
+  const docRef = db.doc(`documents/${docId}`);
 
-  console.log(`Document ${docId} processed: ${documentTypeResult.documentType}, ${customerResult.bestMatch?.name || '不明'}`);
+  await db.runTransaction(async (tx) => {
+    const freshSnap = await tx.get(docRef);
+    // tryStartProcessing() (本ファイル78行目付近) と同じ存在チェックパターン。
+    // ドキュメントが処理中に削除されると tx.update() は NOT_FOUND を投げるが、
+    // ここで明示的に検知することで handleProcessingError() の lastErrorMessage に
+    // 原因不明な NOT_FOUND ではなく具体的な状況が残る(silent-failure-hunter指摘)。
+    if (!freshSnap.exists) {
+      throw new Error(
+        `Document ${docId} was deleted during OCR processing, aborting confirmed-merge update`
+      );
+    }
+    const freshData = freshSnap.data()!;
+
+    const merged = applyConfirmedFieldProtection(extractionFields, {
+      customerConfirmed: freshData.customerConfirmed,
+      officeConfirmed: freshData.officeConfirmed,
+      documentTypeConfirmed: freshData.documentTypeConfirmed,
+      customerName: freshData.customerName,
+      customerId: freshData.customerId,
+      careManager: freshData.careManager,
+      isDuplicateCustomer: freshData.isDuplicateCustomer,
+      needsManualCustomerSelection: freshData.needsManualCustomerSelection,
+      confirmedBy: freshData.confirmedBy,
+      confirmedAt: freshData.confirmedAt,
+      officeName: freshData.officeName,
+      officeId: freshData.officeId,
+      officeConfirmedBy: freshData.officeConfirmedBy,
+      officeConfirmedAt: freshData.officeConfirmedAt,
+      documentType: freshData.documentType,
+      category: freshData.category,
+    });
+
+    // displayFileName 生成 (#178 Stage 1、Issue #526 D2でマージ後の最終メタから生成)
+    // 「未判定」「不明顧客」等のデフォルト値・日付のみでの識別不能な名前生成の抑制は
+    // generateDisplayFileName内部で行うため、ここでは merged の値をそのまま渡す。
+    const displayFileName = generateDisplayFileName({
+      documentType: merged.documentType,
+      customerName: merged.customerName,
+      officeName: merged.officeName,
+      fileDate: dateResult.formattedDate ?? undefined,
+    });
+
+    // ドキュメント更新
+    // Issue #215: summary を discriminated union ネスト型で書き込み、
+    // 旧フラット3フィールド (summaryTruncated / summaryOriginalLength) は削除。
+    // 旧 summary (string型) は新 summary (object型) で上書きされる。
+    tx.update(docRef, {
+      ...merged,
+      ...(displayFileName ? { displayFileName } : {}),
+      summary: buildSummaryFields(summary),
+      summaryTruncated: admin.firestore.FieldValue.delete(),
+      summaryOriginalLength: admin.firestore.FieldValue.delete(),
+      status: 'processed',
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    console.log(
+      `Document ${docId} processed: ${merged.documentType}, ${merged.customerName}`
+    );
+  });
 
   return {
     pagesProcessed: totalPages,

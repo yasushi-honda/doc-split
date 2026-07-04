@@ -1,0 +1,78 @@
+/**
+ * 既存pageResultsの再利用可否を判定する純粋関数。(Issue #526 D3)
+ *
+ * processDocument()は通常、PDFをStorageからダウンロードしページ単位でOCRを実行するが、
+ * ドキュメントが既に有効なpageResultsを保持している場合(手動分割で生成された子ドキュメント、
+ * 親の`pageResults`から該当ページ分を継承済み)、そのOCRを再実行せず既存テキストを再利用する
+ * ことでコスト・レイテンシを削減する。
+ *
+ * 再利用対象とみなす条件は以下の4点全て:
+ * 1. `parentDocumentId`が設定されている(#445で確立済みの、分割元ドキュメントを指す識別
+ *    フィールド。ADR-0016の構造化`provenance`フィールドとは別物)。構造(連番/非空)だけを
+ *    見て判定すると、将来マスターデータ移行や手動データ修復スクリプトが偶然この構造を
+ *    満たすpageResultsを書き込んだ場合に、意図せずフルOCRがスキップされてしまう
+ * 2. 各要素がオブジェクトである(null/非オブジェクト混入時はfallback、throwしない。
+ *    unknown型を受け取る以上、不正データはreusable=falseでフルOCRへ委ねるべきで、
+ *    例外を投げてドキュメント処理全体を失敗させてはならない)
+ * 3. ページ番号が「配列の並び順どおり」1..Nの連番で揃っている(ソート後に連番と
+ *    一致するだけでは不十分。呼出元processDocument()は本関数がtrueを返した配列を
+ *    並び替えずそのまま使うため、ソートありきの判定だとページ順が入れ替わったまま
+ *    OCR結果を結合してしまう)
+ * 4. 各ページのtextが非空
+ *
+ * #524の手動再処理(`getReprocessClearFields()`)は`pageResults`自体をdeleteFieldで
+ * 削除するため、このパスに到達する時点でpageResultsが存在するのは分割子ドキュメント
+ * 由来のケースに限られる(条件1はこれを構造的に保証する)。
+ */
+
+export type PageResultsReuseCheck =
+  | { reusable: true }
+  | { reusable: false; reason: string };
+
+interface CandidatePage {
+  pageNumber?: unknown;
+  text?: unknown;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+export function validatePageResultsForReuse(
+  pageResults: unknown,
+  parentDocumentId: unknown
+): PageResultsReuseCheck {
+  if (typeof parentDocumentId !== 'string' || parentDocumentId.length === 0) {
+    return { reusable: false, reason: 'parentDocumentId is missing (not a split child)' };
+  }
+
+  if (!Array.isArray(pageResults) || pageResults.length === 0) {
+    return { reusable: false, reason: 'pageResults is missing or empty' };
+  }
+
+  if (!pageResults.every(isPlainObject)) {
+    return { reusable: false, reason: 'one or more page entries are not objects (null等)' };
+  }
+
+  const pages = pageResults as CandidatePage[];
+
+  const pageNumbers = pages.map((p) => p.pageNumber);
+  const isInOrderSequential =
+    pageNumbers.every((n): n is number => typeof n === 'number') &&
+    (pageNumbers as number[]).every((n, i) => n === i + 1);
+  if (!isInOrderSequential) {
+    return {
+      reusable: false,
+      reason: 'pageNumber is not an in-order sequential 1..N series',
+    };
+  }
+
+  const allNonEmpty = pages.every(
+    (p) => typeof p.text === 'string' && p.text.trim().length > 0
+  );
+  if (!allNonEmpty) {
+    return { reusable: false, reason: 'one or more pages have empty text' };
+  }
+
+  return { reusable: true };
+}
