@@ -4,15 +4,21 @@
  * processDocument()の後段処理（抽出結果の集約→Firestore update payload生成）を
  * Firestore/Storage/VertexAIの副作用から切り離すことで、直接ユニットテスト可能にする。
  * splitDocumentBuilder.ts と同じ規約: serverTimestamp()/delete() 等のFieldValueは
- * 含めず、呼出元(ocrProcessor.ts)がこの戻り値に対して層を重ねる。
+ * 自前で呼び出さない。ただし `extractedAt` は呼出元が生成したFieldValueをそのまま
+ * 受け取り `ocrExtraction` に一体化して返す(後述のレビュー教訓)。
  *
  * `summary` フィールドは意図的に含まない: summaryWritePayloadContract.test.ts が、要約の
  * discriminated union 変換呼出と `summaryTruncated`/`summaryOriginalLength` の
  * FieldValue.delete() が同一update()ブロック内で隣接することを契約テストしており、
  * 呼出元(ocrProcessor.ts)のupdate()呼出に直接書く必要があるため。
+ * `status`/`updatedAt` も意図的に含まない: これらは抽出結果ではなくライフサイクル管理
+ * フィールドであり、呼出元がupdate()呼出の中で直接書き込む。
  *
- * Issue #526 PR3で、この戻り値を元にconfirmed保護マージロジック（transactionベース）を
- * 追加する予定（本PRでは抽出のみを切り出し、挙動は変更しない）。
+ * `extractedAt` を呼出元でのspread後override(オブジェクトキーの「後勝ち」)に頼らず
+ * この関数の入力として受け取っているのは、キー順序に安全性が依存する設計を避け、
+ * 将来の並び替えで `extractedAt` が静かに失われるリスクを構造的に排除するため。
+ *
+ * Issue #526 では後続PRで、この戻り値を元にconfirmed保護マージロジックを追加する予定。
  */
 
 import type {
@@ -20,6 +26,7 @@ import type {
   CustomerExtractionResult,
   OfficeExtractionResultWithCandidates,
   DateExtractionResult,
+  MatchType,
 } from '../utils/extractors';
 import type { RawPageOcrResult } from './buildPageResult';
 
@@ -36,35 +43,34 @@ export interface OcrUpdatePayloadInputs {
   suggestedNewOffice: string | null;
   /** ocrExtraction.version に書き込むモデルID (呼出元のGEMINI_CONFIG.modelId) */
   modelId: string;
+  /** ocrExtraction.extractedAt にそのまま書き込む値 (呼出元のFieldValue.serverTimestamp()) */
+  extractedAt: FirebaseFirestore.FieldValue;
 }
 
-/** ocrExtraction.extractedAt を含まない (呼出元がFieldValue.serverTimestamp()を追加する) */
 export interface OcrExtractionMeta {
   version: string;
+  extractedAt: FirebaseFirestore.FieldValue;
   customer: {
     suggestedValue: string;
     suggestedId: string | null;
     confidence: number;
-    matchType: string;
+    matchType: MatchType;
   };
   office: {
     suggestedValue: string;
     suggestedId: string | null;
     confidence: number;
-    matchType: string;
+    matchType: MatchType;
   };
   documentType: {
     suggestedValue: string;
     suggestedId: string | null;
     confidence: number;
-    matchType: string;
+    matchType: MatchType;
   };
 }
 
-/**
- * summary/summaryTruncated/summaryOriginalLength/updatedAt/ocrExtraction.extractedAt は含まない
- * (呼出元がFieldValueおよびbuildSummaryFields()経由のsummaryを追加する)
- */
+/** summary/summaryTruncated/summaryOriginalLength/status/updatedAt は含まない (呼出元が追加する) */
 export interface OcrExtractionUpdateFields {
   displayFileName?: string;
   ocrResult: string;
@@ -89,7 +95,7 @@ export interface OcrExtractionUpdateFields {
     customerName: string;
     isDuplicate: boolean;
     score: number;
-    matchType: string;
+    matchType: MatchType;
     careManagerName: string | null;
   }>;
   officeConfirmed: boolean;
@@ -101,7 +107,7 @@ export interface OcrExtractionUpdateFields {
     shortName: string | null;
     isDuplicate: boolean;
     score: number;
-    matchType: string;
+    matchType: MatchType;
   }>;
   suggestedNewOffice: string | null;
   totalPages: number;
@@ -113,15 +119,18 @@ export interface OcrExtractionUpdateFields {
     date: number;
   };
   extractionDetails: {
-    documentMatchType: string;
+    documentMatchType: MatchType;
     documentKeywords: string[];
-    customerMatchType: string;
-    officeMatchType: string;
+    customerMatchType: MatchType;
+    officeMatchType: MatchType;
     datePattern: string | null;
     dateSource: string | null;
   };
   ocrExtraction: OcrExtractionMeta;
 }
+
+/** 顧客/事業所候補は表示・課金コスト抑制のため先頭5件のみ保持する (#178 既存挙動) */
+const MAX_CANDIDATES = 5;
 
 export function buildOcrExtractionUpdatePayload(
   inputs: OcrUpdatePayloadInputs
@@ -138,9 +147,12 @@ export function buildOcrExtractionUpdatePayload(
     totalPages,
     suggestedNewOffice,
     modelId,
+    extractedAt,
   } = inputs;
 
-  const customerCandidateNames = customerResult.candidates.slice(0, 5).map((c) => c.name);
+  const customerCandidateNames = customerResult.candidates
+    .slice(0, MAX_CANDIDATES)
+    .map((c) => c.name);
 
   return {
     ...(displayFileName ? { displayFileName } : {}),
@@ -161,7 +173,7 @@ export function buildOcrExtractionUpdatePayload(
     confirmedBy: null,
     confirmedAt: null,
     allCustomerCandidates: customerCandidateNames.join(','),
-    customerCandidates: customerResult.candidates.slice(0, 5).map((c) => ({
+    customerCandidates: customerResult.candidates.slice(0, MAX_CANDIDATES).map((c) => ({
       customerId: c.id ?? null,
       customerName: c.name ?? '',
       isDuplicate: c.isDuplicate || false,
@@ -172,7 +184,7 @@ export function buildOcrExtractionUpdatePayload(
     officeConfirmed: !officeResult.needsManualSelection,
     officeConfirmedBy: null,
     officeConfirmedAt: null,
-    officeCandidates: officeResult.candidates.slice(0, 5).map((o) => ({
+    officeCandidates: officeResult.candidates.slice(0, MAX_CANDIDATES).map((o) => ({
       officeId: o.id ?? null,
       officeName: o.name ?? '',
       shortName: o.shortName ?? null,
@@ -199,6 +211,7 @@ export function buildOcrExtractionUpdatePayload(
     },
     ocrExtraction: {
       version: modelId,
+      extractedAt,
       customer: {
         suggestedValue: customerResult.bestMatch?.name || '不明顧客',
         suggestedId: customerResult.bestMatch?.id ?? null,

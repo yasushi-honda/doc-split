@@ -307,8 +307,9 @@ export async function processDocument(
   // 旧フラット3フィールド (summaryTruncated / summaryOriginalLength) は削除。
   // 旧 summary (string型) は新 summary (object型) で上書きされる。
   // Issue #526 D1: 抽出結果の集約ロジックは ocrUpdatePayloadBuilder.ts の純粋関数に
-  // 切り出し済み(挙動不変、ユニットテストで契約をlock-in)。summaryとFieldValue系フィールドは
-  // summaryWritePayloadContract.test.ts の隣接性契約により、ここで直接組み立てる。
+  // 切り出し済み(挙動不変、ユニットテストで契約をlock-in)。
+  // summary は summaryWritePayloadContract.test.ts の隣接性契約により、
+  // status/updatedAt はライフサイクル管理フィールドのため、ここで直接組み立てる。
   const extractionFields = buildOcrExtractionUpdatePayload({
     documentTypeResult,
     customerResult,
@@ -321,6 +322,7 @@ export async function processDocument(
     totalPages,
     suggestedNewOffice,
     modelId: MODEL_ID,
+    extractedAt: admin.firestore.FieldValue.serverTimestamp(),
   });
 
   await db.doc(`documents/${docId}`).update({
@@ -330,12 +332,6 @@ export async function processDocument(
     summaryOriginalLength: admin.firestore.FieldValue.delete(),
     status: 'processed',
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    // extractionFields.ocrExtraction には extractedAt が無いため、この明示キーで
-    // 上書き(後勝ち)して追加する。この ocrExtraction: の位置は ...extractionFields より後である必要がある。
-    ocrExtraction: {
-      ...extractionFields.ocrExtraction,
-      extractedAt: admin.firestore.FieldValue.serverTimestamp(),
-    },
   });
 
   console.log(`Document ${docId} processed: ${documentTypeResult.documentType}, ${customerResult.bestMatch?.name || '不明'}`);
