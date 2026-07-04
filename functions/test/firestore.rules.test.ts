@@ -243,6 +243,32 @@ describe('Firestore Security Rules', () => {
         }, { merge: true })
       );
     });
+
+    // ============================================
+    // 書類種別確定フィールド更新テスト (Issue #526)
+    // ============================================
+    it('ホワイトリスト登録ユーザーはdocumentTypeConfirmedフィールドを更新可能', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'documents', 'doc-doctype'), {
+          fileName: 'test.pdf',
+          status: 'processed',
+          documentType: '未判定',
+          documentTypeConfirmed: false,
+        });
+      });
+
+      const docRef = doc(normalUser.firestore(), 'documents', 'doc-doctype');
+      await assertSucceeds(
+        setDoc(docRef, {
+          fileName: 'test.pdf',
+          status: 'processed',
+          documentType: '請求書',
+          documentTypeConfirmed: true,
+        }, { merge: true })
+      );
+    });
   });
 
   // ============================================

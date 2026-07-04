@@ -39,6 +39,7 @@ import {
 import { useDocumentMasters, useCustomerMasters, useOfficeMasters } from '@/hooks/useDocuments'
 import { PdfSplitPreview } from './PdfSplitPreview'
 import { getDisplayFileName } from '@/utils/getDisplayFileName'
+import { applySegmentFieldEdit, buildSegmentConfirmedFlags } from '@/lib/documentUtils'
 import type { Document, SplitSuggestion, SplitSegment } from '@shared/types'
 
 interface PdfSplitModalProps {
@@ -243,15 +244,18 @@ export function PdfSplitModal({
   }
 
   // セグメントの編集
+  // Issue #538: 顧客名/事業所名編集時にIDが古いまま残る不整合を防ぐため、
+  // ID同期は applySegmentFieldEdit（documentUtils.ts）に委譲する。
   const handleSegmentEdit = (
     index: number,
     field: keyof SplitSegment,
-    value: string
+    value: string,
+    item?: { id: string }
   ) => {
     setSegmentEdits((prev) => {
       const newMap = new Map(prev)
       const existing = newMap.get(index) || {}
-      newMap.set(index, { ...existing, [field]: value })
+      newMap.set(index, applySegmentFieldEdit(existing, field, value, item))
       return newMap
     })
   }
@@ -301,6 +305,13 @@ export function PdfSplitModal({
         needsManualOfficeSelection: ('needsManualOfficeSelection' in segment && segment.needsManualOfficeSelection) || false,
         isDuplicateCustomer: ('isDuplicateCustomer' in segment && segment.isDuplicateCustomer) || customerMaster?.isDuplicate || false,
         careManagerName: ('careManagerName' in segment ? segment.careManagerName : null) || customerMaster?.careManagerName || null,
+        // Issue #526: サーバー側でID有無から確定状態を推測せず、フロントエンドの
+        // 値妥当性判定（isValid*Selection）に基づくconfirmedフラグを明示送信する
+        ...buildSegmentConfirmedFlags({
+          customerName: segment.customerName,
+          officeName: segment.officeName,
+          documentType: segment.documentType,
+        }),
       }
     })
 
@@ -547,7 +558,7 @@ export function PdfSplitModal({
                           type="customer"
                           value={segment.customerName}
                           items={customerItems}
-                          onChange={(v) => handleSegmentEdit(index, 'customerName', v)}
+                          onChange={(v, item) => handleSegmentEdit(index, 'customerName', v, item)}
                         />
                       </div>
                       <div>
@@ -565,7 +576,7 @@ export function PdfSplitModal({
                           type="office"
                           value={segment.officeName}
                           items={officeItems}
-                          onChange={(v) => handleSegmentEdit(index, 'officeName', v)}
+                          onChange={(v, item) => handleSegmentEdit(index, 'officeName', v, item)}
                         />
                       </div>
                     </div>

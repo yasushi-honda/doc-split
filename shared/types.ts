@@ -116,6 +116,9 @@ export interface Document {
   officeConfirmedAt?: Timestamp | null;          // 確定日時（システム自動確定時はnull）
   suggestedNewOffice?: string | null;            // ファイル名から抽出された事業所名（登録提案用）
 
+  // 書類種別確定機能 (Issue #526: 手動分割時の確定入力をOCR再解析から保護するため)
+  documentTypeConfirmed?: boolean;               // 確定済みフラグ（デフォルト: true）
+
   // Phase 8: グループ化用正規化キー（Cloud Functionsで自動設定）
   customerKey?: string;       // customerName正規化版
   officeKey?: string;         // officeName正規化版
@@ -639,6 +642,14 @@ export interface SplitSegment {
   isDuplicateCustomer?: boolean;
   /** 担当ケアマネ名 */
   careManagerName?: string | null;
+  /**
+   * 確定フラグ（Issue #526）: 分割画面でユーザーが実際に選択した値かどうか。
+   * サーバー側ではID有無から推測しない（自動検出候補にもIDが付くため誤判定しうる）。
+   * フロントエンドが `isValidCustomerSelection` 等の判定結果をそのまま送信する。
+   */
+  customerConfirmed?: boolean;
+  officeConfirmed?: boolean;
+  documentTypeConfirmed?: boolean;
 }
 
 // ============================================

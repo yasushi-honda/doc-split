@@ -28,6 +28,15 @@ export interface SplitSegmentInput {
   }>;
   isDuplicateCustomer?: boolean;
   careManagerName?: string | null;
+  /**
+   * 確定フラグ（Issue #526）: 分割画面でユーザーが実際に選択した値かどうか。
+   * サーバー側ではID有無から推測しない（自動検出候補にもIDが付くため誤判定しうる、
+   * Codexセカンドオピニオン反映）。フロントエンドの明示送信値をそのまま使う。
+   * 未送信（旧クライアント想定）時は false にフォールバックする。
+   */
+  customerConfirmed?: boolean;
+  officeConfirmed?: boolean;
+  documentTypeConfirmed?: boolean;
 }
 
 /**
@@ -43,7 +52,10 @@ export function buildSplitDocumentData(segment: SplitSegmentInput): Record<strin
     customerName: segment.customerName,
     customerId: segment.customerId || null,
     customerCandidates: segment.customerCandidates || [],
-    customerConfirmed: true,
+    // Issue #526: 従来は無条件 true 固定（分割時点で全フィールドを確定済み扱い）だったが、
+    // OCR再処理連携で「未確認フィールドをOCRが補完する」設計にするため、フロントエンドが
+    // 明示送信した値をそのまま反映する（サーバー側でID有無から推測しない）。
+    customerConfirmed: segment.customerConfirmed ?? false,
     needsManualCustomerSelection: false,
     isDuplicateCustomer: segment.isDuplicateCustomer || false,
     careManager: careManager,
@@ -51,6 +63,7 @@ export function buildSplitDocumentData(segment: SplitSegmentInput): Record<strin
     officeName: segment.officeName,
     officeId: segment.officeId || null,
     officeCandidates: segment.officeCandidates || [],
-    officeConfirmed: true,
+    officeConfirmed: segment.officeConfirmed ?? false,
+    documentTypeConfirmed: segment.documentTypeConfirmed ?? false,
   };
 }

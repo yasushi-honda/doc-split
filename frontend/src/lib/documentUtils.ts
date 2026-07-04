@@ -7,7 +7,7 @@
 import { format } from 'date-fns';
 import { ja } from 'date-fns/locale';
 import { Timestamp } from 'firebase/firestore';
-import type { DocumentStatus } from '@shared/types';
+import type { DocumentStatus, SplitSegment } from '@shared/types';
 
 // ============================================
 // ステータス表示設定
@@ -71,6 +71,7 @@ export function formatTimestamp(
 
 const CUSTOMER_INVALID_SENTINELS: ReadonlySet<string> = new Set(['未判定', '不明顧客']);
 const OFFICE_INVALID_SENTINELS: ReadonlySet<string> = new Set(['未判定', '不明事業所']);
+const DOCUMENT_TYPE_INVALID_SENTINELS: ReadonlySet<string> = new Set(['未判定']);
 
 /**
  * 顧客名が「確定可能な有効値」かを判定する。
@@ -92,4 +93,65 @@ export function isValidOfficeSelection(name: string | null | undefined): boolean
   const trimmed = name.trim();
   if (trimmed === '') return false;
   return !OFFICE_INVALID_SENTINELS.has(trimmed);
+}
+
+/**
+ * 書類種別が「確定可能な有効値」かを判定する。
+ * 空文字・null・undefined・空白のみ・sentinel 値（'未判定'）は false を返す。
+ */
+export function isValidDocumentTypeSelection(name: string | null | undefined): boolean {
+  if (name == null) return false;
+  const trimmed = name.trim();
+  if (trimmed === '') return false;
+  return !DOCUMENT_TYPE_INVALID_SENTINELS.has(trimmed);
+}
+
+// ============================================
+// 分割セグメント編集ユーティリティ（Issue #526 / #538）
+// ============================================
+
+/**
+ * 分割セグメントのフィールド編集を反映する（Issue #538対応）。
+ * MasterSelectField は選択時に value（名前）と item（id 付きマスタ情報）を
+ * 両方渡すが、名前だけ更新して item を捨てると customerId/officeId が
+ * 編集前の値のまま残り、表示名と実際に紐付くマスタが食い違う。
+ * 名前フィールド編集時は対応するIDを item 由来の値に同期し、
+ * item が無い（マスタ不一致・未判定化）場合は null にクリアする。
+ */
+export function applySegmentFieldEdit(
+  existing: Partial<SplitSegment>,
+  field: keyof SplitSegment,
+  value: string,
+  item?: { id: string }
+): Partial<SplitSegment> {
+  const update: Partial<SplitSegment> = { ...existing, [field]: value };
+  if (field === 'customerName') {
+    update.customerId = item?.id ?? null;
+  }
+  if (field === 'officeName') {
+    update.officeId = item?.id ?? null;
+  }
+  return update;
+}
+
+/**
+ * 分割セグメントの最終値からconfirmedフラグを算出する（Issue #526）。
+ * サーバー側ではID有無から確定状態を推測しない（自動検出候補にもIDが付くため
+ * 誤判定しうる、Codexセカンドオピニオン反映）。フロントエンドが値の妥当性
+ * 判定結果（isValid*Selection）をそのまま送信する。
+ */
+export function buildSegmentConfirmedFlags(segment: {
+  customerName: string;
+  officeName: string;
+  documentType: string;
+}): {
+  customerConfirmed: boolean;
+  officeConfirmed: boolean;
+  documentTypeConfirmed: boolean;
+} {
+  return {
+    customerConfirmed: isValidCustomerSelection(segment.customerName),
+    officeConfirmed: isValidOfficeSelection(segment.officeName),
+    documentTypeConfirmed: isValidDocumentTypeSelection(segment.documentType),
+  };
 }

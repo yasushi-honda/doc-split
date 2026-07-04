@@ -48,6 +48,7 @@ service cloud.firestore {
           'displayFileName',
           'documentType',
           'documentTypeKey',
+          'documentTypeConfirmed',
           'careManagerKey',
           'fileDate',
           'fileName',

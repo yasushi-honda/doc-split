@@ -62,6 +62,7 @@ const makeDocument = (overrides: Partial<Document> = {}): Document => ({
   mimeType: 'application/pdf',
   ocrResult: '',
   documentType: '請求書',
+  documentTypeConfirmed: true, // 既定は確定済み扱い（Issue #526で新設。未確定挙動は専用テストで明示override）
   customerName: '田村 勝義',
   officeName: 'テスト事業所',
   fileUrl: 'gs://bucket/test.pdf',
@@ -672,12 +673,15 @@ describe('useDocumentEdit - 確定フラグ更新 (#396)', () => {
         officeConfirmed: false,
         officeConfirmedBy: null,
         officeConfirmedAt: null,
+        documentType: '未判定',
+        documentTypeConfirmed: false,
       })
       const { result } = renderHook(() => useDocumentEdit(doc))
 
       act(() => result.current.startEditing())
       act(() => result.current.updateField('customerName', '河野 文江'))
       act(() => result.current.updateField('officeName', 'ケアサポートきらり'))
+      act(() => result.current.updateField('documentType', '実績'))
 
       await act(async () => {
         await result.current.saveChanges()
@@ -696,6 +700,7 @@ describe('useDocumentEdit - 確定フラグ更新 (#396)', () => {
         'officeConfirmed',
         'officeConfirmedBy',
         'officeConfirmedAt',
+        'documentTypeConfirmed',
       ]
       const optimisticFlagKeys = confirmedFlagKeys.filter((k) => k in optimisticData)
       const rollbackFlagKeys = confirmedFlagKeys.filter((k) => k in rollbackData)
@@ -704,6 +709,88 @@ describe('useDocumentEdit - 確定フラグ更新 (#396)', () => {
       expect(optimisticFlagKeys.sort()).toEqual(rollbackFlagKeys.sort())
       // 念のため空集合でないことも確認（optimistic 自体が機能しているか）
       expect(optimisticFlagKeys.length).toBeGreaterThan(0)
+    })
+  })
+
+  // Issue #526: 手動分割後のOCR再処理連携で、documentTypeも customerConfirmed/
+  // officeConfirmed と同じ「保護対象フィールド」として扱うために新設。
+  // customer/office と異なりBy/Atは持たない（booleanのみ、Codexセカンドオピニオンで
+  // 過剰設計と判断）。
+  describe('AC11: 書類種別確定フラグ (documentTypeConfirmed, Issue #526)', () => {
+    it('documentType を有効値に変更 → documentTypeConfirmed=true を書き込む', async () => {
+      const doc = makeDocument({
+        documentType: '未判定',
+        documentTypeConfirmed: false,
+      })
+      const { result } = renderHook(() => useDocumentEdit(doc))
+
+      act(() => result.current.startEditing())
+      act(() => result.current.updateField('documentType', '実績'))
+
+      await act(async () => {
+        await result.current.saveChanges()
+      })
+
+      const updateData = mockUpdateDoc.mock.calls[0]?.[1] as Record<string, unknown>
+      expect(updateData.documentTypeConfirmed).toBe(true)
+    })
+
+    it('documentType を "未判定" に変更 → documentTypeConfirmed は書き込まない', async () => {
+      const doc = makeDocument({
+        documentType: '実績',
+        documentTypeConfirmed: false,
+      })
+      const { result } = renderHook(() => useDocumentEdit(doc))
+
+      act(() => result.current.startEditing())
+      act(() => result.current.updateField('documentType', '未判定'))
+
+      await act(async () => {
+        await result.current.saveChanges()
+      })
+
+      const updateData = mockUpdateDoc.mock.calls[0]?.[1] as Record<string, unknown>
+      expect('documentTypeConfirmed' in updateData).toBe(false)
+    })
+
+    it('既存 documentTypeConfirmed=true のドキュメントで "未判定" に変更 → false に退行させない', async () => {
+      const doc = makeDocument({
+        documentType: '実績',
+        documentTypeConfirmed: true,
+      })
+      const { result } = renderHook(() => useDocumentEdit(doc))
+
+      act(() => result.current.startEditing())
+      act(() => result.current.updateField('documentType', '未判定'))
+
+      await act(async () => {
+        await result.current.saveChanges()
+      })
+
+      const updateData = mockUpdateDoc.mock.calls[0]?.[1] as Record<string, unknown>
+      expect('documentTypeConfirmed' in updateData).toBe(false)
+    })
+
+    it('write 失敗時、documentTypeConfirmed の optimistic 更新がロールバックされる', async () => {
+      mockUpdateDoc.mockRejectedValueOnce(new Error('write failed'))
+      const doc = makeDocument({
+        documentType: '未判定',
+        documentTypeConfirmed: false,
+      })
+      const { result } = renderHook(() => useDocumentEdit(doc))
+
+      act(() => result.current.startEditing())
+      act(() => result.current.updateField('documentType', '実績'))
+
+      await act(async () => {
+        await result.current.saveChanges()
+      })
+
+      const { updateDocumentInListCache } = await import('../useDocuments')
+      const calls = vi.mocked(updateDocumentInListCache).mock.calls
+      expect(calls.length).toBe(2)
+      const rollbackData = calls[1]?.[2] as Record<string, unknown>
+      expect(rollbackData.documentTypeConfirmed).toBe(false)
     })
   })
 })

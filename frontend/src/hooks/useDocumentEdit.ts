@@ -3,7 +3,7 @@ import { doc, updateDoc, collection, addDoc, serverTimestamp, Timestamp, deleteF
 import { useQueryClient } from '@tanstack/react-query'
 import { db, auth } from '../lib/firebase'
 import { updateDocumentInListCache } from './useDocuments'
-import { isValidCustomerSelection, isValidOfficeSelection } from '../lib/documentUtils'
+import { isValidCustomerSelection, isValidOfficeSelection, isValidDocumentTypeSelection } from '../lib/documentUtils'
 import { generateDisplayFileName } from '@shared/generateDisplayFileName'
 import type { Document } from '../../../shared/types'
 
@@ -172,8 +172,16 @@ export function useDocumentEdit(document: Document | null | undefined): UseDocum
         isValidCustomerSelection(finalCustomerName) && document.customerConfirmed !== true
       const shouldSetOfficeConfirmed =
         isValidOfficeSelection(finalOfficeName) && document.officeConfirmed !== true
+      const finalDocumentType = editedFields.documentType ?? document.documentType ?? ''
+      const shouldSetDocumentTypeConfirmed =
+        isValidDocumentTypeSelection(finalDocumentType) && document.documentTypeConfirmed !== true
 
-      if (changes.length === 0 && !shouldSetCustomerConfirmed && !shouldSetOfficeConfirmed) {
+      if (
+        changes.length === 0 &&
+        !shouldSetCustomerConfirmed &&
+        !shouldSetOfficeConfirmed &&
+        !shouldSetDocumentTypeConfirmed
+      ) {
         setIsEditing(false)
         return true
       }
@@ -222,6 +230,15 @@ export function useDocumentEdit(document: Document | null | undefined): UseDocum
         changes.push({
           field: 'officeConfirmed',
           oldValue: document.officeConfirmed === undefined ? null : String(document.officeConfirmed),
+          newValue: 'true',
+        })
+      }
+      if (shouldSetDocumentTypeConfirmed) {
+        updateData.documentTypeConfirmed = true
+        optimisticData.documentTypeConfirmed = true
+        changes.push({
+          field: 'documentTypeConfirmed',
+          oldValue: document.documentTypeConfirmed === undefined ? null : String(document.documentTypeConfirmed),
           newValue: 'true',
         })
       }
@@ -353,6 +370,9 @@ export function useDocumentEdit(document: Document | null | undefined): UseDocum
           rollbackData.officeConfirmed = document.officeConfirmed
           rollbackData.officeConfirmedBy = document.officeConfirmedBy
           rollbackData.officeConfirmedAt = document.officeConfirmedAt
+        }
+        if (shouldSetDocumentTypeConfirmed) {
+          rollbackData.documentTypeConfirmed = document.documentTypeConfirmed
         }
         updateDocumentInListCache(queryClient, document.id, rollbackData)
         throw writeErr
