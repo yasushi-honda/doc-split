@@ -80,7 +80,10 @@ export function isTransientError(error: unknown): boolean {
       message.includes('too many requests') ||
       message.includes('resource exhausted') ||
       message.includes('resource_exhausted') ||
-      message.includes('exception posting request')
+      message.includes('exception posting request') ||
+      // Issue #526: db.runTransaction()の書込競合(gRPC ABORTED)は一時的エラー。
+      // 検知しないと、本来自動リトライ可能な競合がstatus:'error'に即確定してしまう。
+      message.includes('aborted')
     ) {
       return true;
     }

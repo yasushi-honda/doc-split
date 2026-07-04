@@ -18,7 +18,9 @@
  * この関数の入力として受け取っているのは、キー順序に安全性が依存する設計を避け、
  * 将来の並び替えで `extractedAt` が静かに失われるリスクを構造的に排除するため。
  *
- * Issue #526 では後続PRで、この戻り値を元にconfirmed保護マージロジックを追加する予定。
+ * Issue #526 D2: この戻り値は呼出元でconfirmedFieldMerge.tsのconfirmed保護マージを
+ * 経てから書き込まれる(customerConfirmed等がtrueのフィールドはこの関数の提案値ではなく
+ * 既存ドキュメントの確定値が優先される)。
  */
 
 import type {
@@ -35,7 +37,6 @@ export interface OcrUpdatePayloadInputs {
   customerResult: CustomerExtractionResult;
   officeResult: OfficeExtractionResultWithCandidates;
   dateResult: DateExtractionResult;
-  displayFileName: string | null;
   savedOcrResult: string;
   ocrResultUrl: string | null;
   pageResults: RawPageOcrResult[];
@@ -70,9 +71,13 @@ export interface OcrExtractionMeta {
   };
 }
 
-/** summary/summaryTruncated/summaryOriginalLength/status/updatedAt は含まない (呼出元が追加する) */
+/**
+ * summary/summaryTruncated/summaryOriginalLength/status/updatedAt は含まない (呼出元が追加する)。
+ * displayFileNameも含まない: Issue #526 D2でconfirmed保護マージ後の最終メタから生成する
+ * 順序に変更されたため、この関数の戻り値(マージ前のOCR提案値)からは生成できない。
+ * 呼出元(ocrProcessor.ts)がconfirmed保護マージ後にgenerateDisplayFileName()を呼び出す。
+ */
 export interface OcrExtractionUpdateFields {
-  displayFileName?: string;
   ocrResult: string;
   ocrResultUrl: string | null;
   pageResults: RawPageOcrResult[];
@@ -111,6 +116,12 @@ export interface OcrExtractionUpdateFields {
   }>;
   suggestedNewOffice: string | null;
   totalPages: number;
+  /**
+   * Issue #526 D2: documentTypeにはcustomerConfirmed/officeConfirmedのような
+   * 確信度ベースの自己判定シグナル(needsManualSelection相当)が存在しないため、
+   * OCR自身は常にfalseを書く(documentTypeConfirmedは分割画面でのユーザー選択でのみtrueになる)。
+   */
+  documentTypeConfirmed: boolean;
   category: string | null;
   extractionScores: {
     documentType: number;
@@ -140,7 +151,6 @@ export function buildOcrExtractionUpdatePayload(
     customerResult,
     officeResult,
     dateResult,
-    displayFileName,
     savedOcrResult,
     ocrResultUrl,
     pageResults,
@@ -155,7 +165,6 @@ export function buildOcrExtractionUpdatePayload(
     .map((c) => c.name);
 
   return {
-    ...(displayFileName ? { displayFileName } : {}),
     ocrResult: savedOcrResult,
     ocrResultUrl: ocrResultUrl ?? null,
     pageResults,
@@ -194,6 +203,7 @@ export function buildOcrExtractionUpdatePayload(
     })),
     suggestedNewOffice: suggestedNewOffice ?? null,
     totalPages,
+    documentTypeConfirmed: false,
     category: documentTypeResult.category ?? null,
     extractionScores: {
       documentType: documentTypeResult.score ?? 0,

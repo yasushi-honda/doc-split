@@ -80,7 +80,6 @@ function makeInputs(overrides: Partial<OcrUpdatePayloadInputs> = {}): OcrUpdateP
       confidence: 80,
       allCandidates: [],
     },
-    displayFileName: '請求書_山田太郎_20260115.pdf',
     savedOcrResult: 'page1 text',
     ocrResultUrl: null,
     pageResults,
@@ -96,7 +95,6 @@ describe('buildOcrExtractionUpdatePayload', () => {
   it('抽出結果が正常な場合、全フィールドを期待通りに構築する', () => {
     const payload = buildOcrExtractionUpdatePayload(makeInputs());
 
-    expect(payload.displayFileName).to.equal('請求書_山田太郎_20260115.pdf');
     expect(payload.ocrResult).to.equal('page1 text');
     expect(payload.ocrResultUrl).to.equal(null);
     expect(payload.pageResults).to.have.lengthOf(1);
@@ -139,6 +137,8 @@ describe('buildOcrExtractionUpdatePayload', () => {
     ]);
     expect(payload.suggestedNewOffice).to.equal(null);
     expect(payload.totalPages).to.equal(1);
+    // Issue #526 D2: OCR自身は確信度ベースのdocumentType自己確定シグナルを持たないため常にfalse
+    expect(payload.documentTypeConfirmed).to.equal(false);
     expect(payload.category).to.equal('billing');
     expect(payload.extractionScores).to.deep.equal({
       documentType: 90,
@@ -176,11 +176,6 @@ describe('buildOcrExtractionUpdatePayload', () => {
         matchType: 'exact',
       },
     });
-  });
-
-  it('displayFileNameがnullの場合、フィールド自体を含めない', () => {
-    const payload = buildOcrExtractionUpdatePayload(makeInputs({ displayFileName: null }));
-    expect(payload).to.not.have.property('displayFileName');
   });
 
   it('customerResult.bestMatchがnullの場合、デフォルト値(不明顧客/null)にフォールバックする', () => {

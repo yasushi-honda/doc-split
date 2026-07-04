@@ -303,6 +303,12 @@ describe('ocrProcessor', () => {
       expect(isTransientError(error)).to.be.true;
     });
 
+    // Issue #526: db.runTransaction()導入により新たに発生しうる書込競合エラー
+    it('Firestore ABORTED (transaction書込競合)はtransientと判定される', () => {
+      const error = new Error('10 ABORTED: Too much contention on these documents.');
+      expect(isTransientError(error)).to.be.true;
+    });
+
     // Vertex AI固有エラー形式の検出テスト (#194)
     it('VertexAI 429 Too Many Requestsはtransientと判定される', () => {
       const error = new Error('VertexAI.ClientError: 429 Too Many Requests');
