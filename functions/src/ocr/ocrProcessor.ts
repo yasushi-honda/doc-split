@@ -34,6 +34,7 @@ import {
 } from '../utils/textCap';
 import type { SummaryField } from '../../../shared/types';
 import { buildPageResult, type RawPageOcrResult } from './buildPageResult';
+import { buildOcrExtractionUpdatePayload } from './ocrUpdatePayloadBuilder';
 
 // #267: buildPageResult / 型は ./buildPageResult モジュールに移設。
 // #278: 型名 PageOcrResult → RawPageOcrResult にリネーム (shared/types.ts の post-processed
@@ -288,11 +289,6 @@ export async function processDocument(
     savedOcrResult = '';
   }
 
-  // 顧客候補リスト（最大5件）
-  const customerCandidateNames = customerResult.candidates
-    .slice(0, 5)
-    .map((c) => c.name);
-
   // 要約生成を待機
   const summary = await summaryPromise;
 
@@ -310,88 +306,32 @@ export async function processDocument(
   // Issue #215: summary を discriminated union ネスト型で書き込み、
   // 旧フラット3フィールド (summaryTruncated / summaryOriginalLength) は削除。
   // 旧 summary (string型) は新 summary (object型) で上書きされる。
+  // Issue #526 D1: 抽出結果の集約ロジックは ocrUpdatePayloadBuilder.ts の純粋関数に
+  // 切り出し済み(挙動不変、ユニットテストで契約をlock-in)。
+  // summary は summaryWritePayloadContract.test.ts の隣接性契約により、
+  // status/updatedAt はライフサイクル管理フィールドのため、ここで直接組み立てる。
+  const extractionFields = buildOcrExtractionUpdatePayload({
+    documentTypeResult,
+    customerResult,
+    officeResult,
+    dateResult,
+    displayFileName,
+    savedOcrResult,
+    ocrResultUrl,
+    pageResults,
+    totalPages,
+    suggestedNewOffice,
+    modelId: MODEL_ID,
+    extractedAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
   await db.doc(`documents/${docId}`).update({
-    ...(displayFileName ? { displayFileName } : {}),
-    ocrResult: savedOcrResult,
-    ocrResultUrl: ocrResultUrl ?? null,
+    ...extractionFields,
     summary: buildSummaryFields(summary),
     summaryTruncated: admin.firestore.FieldValue.delete(),
     summaryOriginalLength: admin.firestore.FieldValue.delete(),
-    pageResults,
-    documentType: documentTypeResult.documentType || '未判定',
-    customerName: customerResult.bestMatch?.name || '不明顧客',
-    customerId: customerResult.bestMatch?.id ?? null,
-    careManager: customerResult.bestMatch?.careManagerName ?? null,
-    officeName: officeResult.bestMatch?.name || '未判定',
-    officeId: officeResult.bestMatch?.id ?? null,
-    fileDate: dateResult.date ?? null,
-    fileDateFormatted: dateResult.formattedDate ?? null,
-    isDuplicateCustomer: customerResult.bestMatch?.isDuplicate || false,
-    needsManualCustomerSelection: customerResult.needsManualSelection ?? false,
-    customerConfirmed: !customerResult.needsManualSelection,
-    confirmedBy: null,
-    confirmedAt: null,
-    allCustomerCandidates: customerCandidateNames.join(','),
-    customerCandidates: customerResult.candidates.slice(0, 5).map((c) => ({
-      customerId: c.id ?? null,
-      customerName: c.name ?? '',
-      isDuplicate: c.isDuplicate || false,
-      score: c.score ?? 0,
-      matchType: c.matchType ?? 'none',
-      careManagerName: c.careManagerName ?? null,
-    })),
-    officeConfirmed: !officeResult.needsManualSelection,
-    officeConfirmedBy: null,
-    officeConfirmedAt: null,
-    officeCandidates: officeResult.candidates.slice(0, 5).map((o) => ({
-      officeId: o.id ?? null,
-      officeName: o.name ?? '',
-      shortName: o.shortName ?? null,
-      isDuplicate: o.isDuplicate || false,
-      score: o.score ?? 0,
-      matchType: o.matchType ?? 'none',
-    })),
-    suggestedNewOffice: suggestedNewOffice ?? null,
-    totalPages,
-    category: documentTypeResult.category ?? null,
     status: 'processed',
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    extractionScores: {
-      documentType: documentTypeResult.score ?? 0,
-      customerName: customerResult.bestMatch?.score ?? 0,
-      officeName: officeResult.bestMatch?.score ?? 0,
-      date: dateResult.confidence ?? 0,
-    },
-    extractionDetails: {
-      documentMatchType: documentTypeResult.matchType ?? 'none',
-      documentKeywords: documentTypeResult.keywords ?? [],
-      customerMatchType: customerResult.bestMatch?.matchType ?? 'none',
-      officeMatchType: officeResult.bestMatch?.matchType ?? 'none',
-      datePattern: dateResult.pattern ?? null,
-      dateSource: dateResult.source ?? null,
-    },
-    ocrExtraction: {
-      version: MODEL_ID,
-      extractedAt: admin.firestore.FieldValue.serverTimestamp(),
-      customer: {
-        suggestedValue: customerResult.bestMatch?.name || '不明顧客',
-        suggestedId: customerResult.bestMatch?.id ?? null,
-        confidence: customerResult.bestMatch?.score ?? 0,
-        matchType: customerResult.bestMatch?.matchType ?? 'none',
-      },
-      office: {
-        suggestedValue: officeResult.bestMatch?.name || '未判定',
-        suggestedId: officeResult.bestMatch?.id ?? null,
-        confidence: officeResult.bestMatch?.score ?? 0,
-        matchType: officeResult.bestMatch?.matchType ?? 'none',
-      },
-      documentType: {
-        suggestedValue: documentTypeResult.documentType || '未判定',
-        suggestedId: null,
-        confidence: documentTypeResult.score ?? 0,
-        matchType: documentTypeResult.matchType ?? 'none',
-      },
-    },
   });
 
   console.log(`Document ${docId} processed: ${documentTypeResult.documentType}, ${customerResult.bestMatch?.name || '不明'}`);
