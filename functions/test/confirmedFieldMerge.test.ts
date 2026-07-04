@@ -3,6 +3,7 @@
  */
 
 import { expect } from 'chai';
+import { Timestamp } from 'firebase-admin/firestore';
 import {
   applyConfirmedFieldProtection,
   type ConfirmedProtectableFields,
@@ -53,7 +54,7 @@ describe('applyConfirmedFieldProtection', () => {
 
   it('customerConfirmed=trueの場合、フラグ自体・顧客関連フィールド・確定者情報がcurrentの値で保護される', () => {
     const proposed = makeProposed({ customerConfirmed: true });
-    const fixedTimestamp = { seconds: 1234567890, nanoseconds: 0 };
+    const fixedTimestamp = Timestamp.fromMillis(1234567890 * 1000);
     const current: ConfirmedProtectionSnapshot = {
       customerConfirmed: true,
       customerName: '確定顧客',
@@ -98,7 +99,7 @@ describe('applyConfirmedFieldProtection', () => {
       officeName: '確定事業所',
       officeId: 'confirmed-office-id',
       officeConfirmedBy: 'user-uid-456',
-      officeConfirmedAt: { seconds: 1111111111, nanoseconds: 0 },
+      officeConfirmedAt: Timestamp.fromMillis(1111111111 * 1000),
     };
     const merged = applyConfirmedFieldProtection(proposed, current);
 
@@ -106,7 +107,7 @@ describe('applyConfirmedFieldProtection', () => {
     expect(merged.officeName).to.equal('確定事業所');
     expect(merged.officeId).to.equal('confirmed-office-id');
     expect(merged.officeConfirmedBy).to.equal('user-uid-456');
-    expect(merged.officeConfirmedAt).to.deep.equal({ seconds: 1111111111, nanoseconds: 0 });
+    expect(merged.officeConfirmedAt).to.deep.equal(Timestamp.fromMillis(1111111111 * 1000));
     // 顧客・書類種別はOCR提案のまま
     expect(merged.customerName).to.equal('OCR顧客');
     expect(merged.documentType).to.equal('OCR書類種別');
@@ -145,11 +146,11 @@ describe('applyConfirmedFieldProtection', () => {
       isDuplicateCustomer: false,
       needsManualCustomerSelection: false,
       confirmedBy: 'user-uid',
-      confirmedAt: { seconds: 1, nanoseconds: 0 },
+      confirmedAt: Timestamp.fromMillis(1000),
       officeName: '確定事業所',
       officeId: 'confirmed-office-id',
       officeConfirmedBy: 'user-uid',
-      officeConfirmedAt: { seconds: 2, nanoseconds: 0 },
+      officeConfirmedAt: Timestamp.fromMillis(2000),
       documentType: '確定書類種別',
       category: 'confirmed-category',
     };
@@ -161,6 +162,31 @@ describe('applyConfirmedFieldProtection', () => {
     expect(merged.customerName).to.equal('確定顧客');
     expect(merged.officeName).to.equal('確定事業所');
     expect(merged.documentType).to.equal('確定書類種別');
+  });
+
+  it('customerConfirmed=trueかつofficeConfirmed=false・documentTypeConfirmed=falseの混在時、確定済みグループのみ保護され残りはOCR提案が使われる', () => {
+    const proposed = makeProposed({
+      customerConfirmed: true,
+      officeConfirmed: false,
+      documentTypeConfirmed: false,
+    });
+    const current: ConfirmedProtectionSnapshot = {
+      customerConfirmed: true,
+      officeConfirmed: false,
+      documentTypeConfirmed: false,
+      customerName: '確定顧客',
+      customerId: 'confirmed-cust-id',
+    };
+    const merged = applyConfirmedFieldProtection(proposed, current);
+
+    expect(merged.customerConfirmed).to.equal(true);
+    expect(merged.customerName).to.equal('確定顧客');
+    expect(merged.customerId).to.equal('confirmed-cust-id');
+    // 事業所・書類種別は未確定のためOCR提案のまま
+    expect(merged.officeConfirmed).to.equal(false);
+    expect(merged.officeName).to.equal('OCR事業所');
+    expect(merged.documentTypeConfirmed).to.equal(false);
+    expect(merged.documentType).to.equal('OCR書類種別');
   });
 
   it('customerConfirmed=trueだがcurrent.customerIdがundefinedの場合、nullにフォールバックする(OCR値を継承しない)', () => {

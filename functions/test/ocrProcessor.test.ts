@@ -304,9 +304,22 @@ describe('ocrProcessor', () => {
     });
 
     // Issue #526: db.runTransaction()導入により新たに発生しうる書込競合エラー
-    it('Firestore ABORTED (transaction書込競合)はtransientと判定される', () => {
+    it('Firestore ABORTED (transaction書込競合、数値code)はtransientと判定される', () => {
+      const error = new Error('Too much contention on these documents.') as Error & {
+        code: number;
+      };
+      error.code = 10;
+      expect(isTransientError(error)).to.be.true;
+    });
+
+    it('Firestore ABORTED (transaction書込競合、メッセージのみ)はtransientと判定される', () => {
       const error = new Error('10 ABORTED: Too much contention on these documents.');
       expect(isTransientError(error)).to.be.true;
+    });
+
+    it('AbortControllerによる無関係な中断("The operation was aborted")はtransientと判定しない(過剰な広域一致の防止)', () => {
+      const error = new Error('The operation was aborted');
+      expect(isTransientError(error)).to.be.false;
     });
 
     // Vertex AI固有エラー形式の検出テスト (#194)

@@ -114,7 +114,7 @@ export async function processDocument(
 ): Promise<OcrProcessingResult> {
   console.log(`Processing document: ${docId}`);
 
-  // Issue #526 D3: 分割子ドキュメント(parentDocumentIdを持つ、#445 provenance)が
+  // Issue #526 D3: 分割子ドキュメント(#445で確立済みのparentDocumentIdを持つ)が
   // 親から継承した有効なpageResultsを持つ場合、ページOCRを再実行せず再利用する(コスト削減)。
   const existingPageResults = docData.pageResults as RawPageOcrResult[] | undefined;
   const reuseCheck = validatePageResultsForReuse(existingPageResults, docData.parentDocumentId);
@@ -126,13 +126,13 @@ export async function processDocument(
 
   if (reuseCheck.reusable && existingPageResults) {
     console.log(
-      `[Issue #526] Reusing existing pageResults for ${docId} (${existingPageResults.length} pages), skipping page OCR`
+      `Reusing existing pageResults for ${docId} (${existingPageResults.length} pages), skipping page OCR`
     );
     pageResults = existingPageResults;
     totalPages = existingPageResults.length;
   } else {
-    if (existingPageResults && existingPageResults.length > 0) {
-      console.log(`[Issue #526] pageResults reuse skipped for ${docId}: ${reuseCheck.reason}`);
+    if (!reuseCheck.reusable && existingPageResults && existingPageResults.length > 0) {
+      console.log(`pageResults reuse skipped for ${docId}: ${reuseCheck.reason}`);
     }
 
     // ファイル取得
@@ -336,7 +336,16 @@ export async function processDocument(
 
   await db.runTransaction(async (tx) => {
     const freshSnap = await tx.get(docRef);
-    const freshData = freshSnap.data() ?? {};
+    // tryStartProcessing() (本ファイル78行目付近) と同じ存在チェックパターン。
+    // ドキュメントが処理中に削除されると tx.update() は NOT_FOUND を投げるが、
+    // ここで明示的に検知することで handleProcessingError() の lastErrorMessage に
+    // 原因不明な NOT_FOUND ではなく具体的な状況が残る(silent-failure-hunter指摘)。
+    if (!freshSnap.exists) {
+      throw new Error(
+        `Document ${docId} was deleted during OCR processing, aborting confirmed-merge update`
+      );
+    }
+    const freshData = freshSnap.data()!;
 
     const merged = applyConfirmedFieldProtection(extractionFields, {
       customerConfirmed: freshData.customerConfirmed,
