@@ -2,7 +2,7 @@
 title: "機能要件"
 description: "書類管理ビューアーアプリの機能要件定義"
 status: completed
-updated: "2026-02-07"
+updated: "2026-04-27"
 ---
 
 # 機能要件

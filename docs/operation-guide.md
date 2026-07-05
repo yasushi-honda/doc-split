@@ -64,7 +64,7 @@ flowchart TD
 - `isDuplicate`フラグはシステムが自動設定するため、CSVに含める必要はありません
 - 同名が検出された場合、ログに表示されます
 
-詳細: [同名/同姓同名対応](duplicate-name-handling.md)
+詳細: [同名/同姓同名対応](context/duplicate-name-handling.md)
 
 ### 顧客マスター
 
