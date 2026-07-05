@@ -151,6 +151,24 @@ export interface Document {
 // ============================================
 
 /**
+ * pageResults として実際に永続化される shape。
+ *
+ * `functions/src/ocr/buildPageResult.ts` の `RawPageOcrResult` と同一だが、
+ * shared/types.ts は functions/ 配下の型を import できない（shared/ の独立性）ため
+ * ここに複製定義する。shared/types.ts の `PageOcrResult`(`PageOcrMeta & SummaryField`、
+ * detectedDocumentType 等の検出メタ合成後の post-processed shape) とは
+ * **structurally incompatible**(Issue #278 で意図的に分離された別 shape)。
+ * `Document.pageResults` フィールドの型宣言(`PageOcrResult[]`)はこの不一致を
+ * 引き継いだ既存の型不正確さであり、新設する `DocumentDetail` では実際に
+ * 書き込まれる shape に合わせて正しく型付けする(Codex review #556 P2 反映)。
+ */
+export type PersistedPageOcrResult = SummaryField & {
+  pageNumber: number;
+  inputTokens: number;
+  outputTokens: number;
+};
+
+/**
  * `documents/{docId}/detail/main` サブコレクションドキュメントの型。
  *
  * Issue #547 (Firestore egress削減) の対応として、`Document` 本体から
@@ -170,7 +188,7 @@ export interface Document {
  */
 export interface DocumentDetail {
   ocrResult: string;
-  pageResults?: PageOcrResult[];
+  pageResults?: PersistedPageOcrResult[];
 }
 
 // ============================================

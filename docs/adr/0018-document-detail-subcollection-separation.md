@@ -2,9 +2,15 @@
 
 ## Status
 
-Proposed (2026-07-06、Codexレビュー待ち)
+Proposed (2026-07-06、Codex 1st review 反映済み、再レビュー待ち)
 
 - Proposed: 2026-07-06 (Phase A、本ADR + `DocumentDetail`型定義)
+- Amended: 2026-07-06 (Codex 1st review, `codex review --base main -c model_reasoning_effort=xhigh`、P1×3 + P2×2 反映)
+  - P1: `deleteDocument.ts`が親のみ削除しサブコレクションが孤児化する問題 → 削除フロー改修 + ルールに親存在チェック追加
+  - P1: Phase Dの読者列挙漏れ(`detectSplitPoints`/`splitPdf`のpageResults読込/`ocrProcessor`のpageResultsReuse読込/`useProcessingHistory`の`getOcrExcerpt`)を追加
+  - P1: `set(merge:true)`によるレース対策が、実際にはFirestoreルールの create/update 判定(存在しないdocへの書込は常にcreate評価)と矛盾し機能しない → phase順序保証(Phase C完了後にPhase D-FE書込を投入)に置き換え
+  - P2: `ProcessingHistoryPage`の`getOcrExcerpt()`がPhase E後に空文字列化する問題を追記
+  - P2: `DocumentDetail.pageResults`の型を実際の永続化shape(`PersistedPageOcrResult`)に修正(旧`PageOcrResult`はIssue #278で意図的に分離されたstructurally incompatibleな別shape)
 
 ## Context
 
@@ -41,21 +47,24 @@ kanameone の 2026年6月請求で、「App Engine」表示のカテゴリ ¥5,4
 
 - 新設: `documents/{docId}/detail/main`(固定ドキュメントID `main`、1親1detail)
   - `ocrResult: string`
-  - `pageResults?: PageOcrResult[]`
+  - `pageResults?: PersistedPageOcrResult[]`(**Codex P2反映**: 旧`PageOcrResult`は検出メタ合成後のpost-processed shapeで実際の永続化shapeと不一致。`shared/types.ts`に新設した`PersistedPageOcrResult`型を使う)
 - 本体 `documents/{docId}` からは Phase E 完了時点で `ocrResult` / `pageResults` を削除。他7フィールド(customerCandidates / officeCandidates / ocrExtraction / extractionScores / extractionDetails / splitSuggestions / splitSegments)は本体に残置、変更なし
 - `shared/types.ts` に `DocumentDetail` interface を追加(本PRで追加。`Document` 型の `ocrResult` / `pageResults` は後続 Phase まで維持し、Phase D で `@deprecated` コメントを付与予定)
 
-### 書込箇所の改修(6箇所、Phase B以降で対応)
+### 書込・読込箇所の改修(9箇所、Phase B以降で対応)
 
 | # | ファイル | 現状 | 改修内容 |
 |---|---------|------|---------|
-| 1 | `functions/src/ocr/ocrProcessor.ts`(`db.runTransaction`) | 7/9フィールドを他メタと同一tx.update | tx内で本体update + `detail/main` set(merge) を同一transactionに含める(MUST: 原子性) |
-| 2 | `functions/src/pdf/pdfOperations.ts` `splitPdf` | 子docへ5/9フィールドをbatch.setでコピー | 子ごとに本体batch.set + `detail/main` batch.set を同一batch.commit()に含める(MUST: 原子性)。ocrResult/pageResultsのコピー処理(`:589,609-615,718`相当)を`detail/main`書込に付け替え |
-| 3 | `functions/src/pdf/pdfOperations.ts` `detectSplitPoints` | splitSuggestions/splitSegmentsを非tx単独update | **変更なし**(本移行のスコープ外フィールド) |
-| 4 | `functions/src/gmail/checkGmailAttachments.ts` / `functions/src/upload/uploadPdf.ts` | 新規doc作成時に`ocrResult`を空文字初期化 | 初期化を`detail/main`側に付け替え(同一transaction内) |
+| 1 | `functions/src/ocr/ocrProcessor.ts`(`db.runTransaction`) | 7/9フィールドを他メタと同一tx.update。**読込側**: `pageResultsReuse`判定(:117)が`docData.pageResults`を直接参照 | tx内で本体update + `detail/main` set を同一transactionに含める(MUST: 原子性)。Phase D: `pageResultsReuse`の読込元を`detail/main`に切替 |
+| 2 | `functions/src/pdf/pdfOperations.ts` `splitPdf` | 子docへ5/9フィールドをbatch.setでコピー。**読込側**: 親の`docData.pageResults`(:524,590)を読んで子用に整形 | 子ごとに本体batch.set + `detail/main` batch.set を同一batch.commit()に含める(MUST: 原子性)。Phase D: 親`pageResults`読込元を`detail/main`に切替 |
+| 3 | `functions/src/pdf/pdfOperations.ts` `detectSplitPoints` | splitSuggestions/splitSegmentsの書込先は**変更なし**(本移行のスコープ外フィールド)。**読込側**: `docData.pageResults`(:99)を直接参照 | 書込ロジック変更なし。Phase D: `pageResults`読込元を`detail/main`に切替(切替なしだとPhase E後、分割候補検出が常に0件になる — Codex P1指摘) |
+| 4 | `functions/src/gmail/checkGmailAttachments.ts` / `functions/src/upload/uploadPdf.ts` / `scripts/import-historical-gmail.js` | 新規doc作成時に`ocrResult`を空文字初期化(3箇所) | 初期化を`detail/main`側に付け替え(同一transaction内) |
 | 5 | `functions/src/ocr/getOcrText.ts` | `data.ocrResult`を親docから直接読込 | `detail/main`ドキュメント読込に変更(`ocrResultUrl`オフロード判定ロジックは維持) |
 | 6 | `functions/src/ocr/regenerateSummary.ts` | 同上 | 同上 |
-| 7 | `frontend/src/hooks/useDocuments.ts` `getReprocessClearFields()` | `ocrResult`/`pageResults`を親docから`deleteField()` | 削除先を`detail/main`に変更。**`update()`ではなく`set({...}, {merge:true})`を使用**(理由は後述「原子性要件」参照)。クリア順序: `detail/main`側を先に実行してから本体側 |
+| 7 | `frontend/src/hooks/useDocuments.ts` `getReprocessClearFields()` | `ocrResult`/`pageResults`を親docから`deleteField()` | 削除先を`detail/main`に変更。**`update()`を使用**(理由は後述「原子性要件」参照、Phase C完了保証によりdoc常存在)。クリア順序: `detail/main`側を先に実行してから本体側 |
+| 8 | `functions/src/documents/deleteDocument.ts`(:172、`docRef.delete()`) | 親docのみ削除。サブコレクションは削除されず残存する(Firestoreの既定挙動) | 親削除と同時に`docRef.collection('detail').doc('main').delete()`を実行(順序: サブコレクション削除 → 親削除。削除対象データのraw OCR全文が孤児化してwhitelistedユーザーに読み取り可能なまま残るリスクへの対処、Codex P1指摘) |
+| 9 | `frontend/src/hooks/useProcessingHistory.ts` `getOcrExcerpt()` / `frontend/src/pages/ProcessingHistoryPage.tsx`(:277) | `doc.ocrResult`を親docスナップショットから直接読込 | Phase D: `detail/main`を個別取得して抜粋生成に変更、またはこの機能自体の要否を見直す(Codex P2指摘) |
+| 10 | `scripts/reprocess-master-matching.js` | `doc.ocrResult`/`doc.pageResults`を親docから直接読込(マスターデータ再突合スクリプト) | Phase D: `detail/main`読込に変更 |
 
 ### Firestoreルール
 
@@ -63,7 +72,11 @@ kanameone の 2026年6月請求で、「App Engine」表示のカテゴリ ¥5,4
 
 ```
 match /documents/{docId}/detail/{detailId} {
-  allow read: if isWhitelisted();
+  // Codex P1反映: 親doc削除後もサブコレクションが孤児として残存するケースへの
+  // defense-in-depth。deleteDocument.ts改修(書込箇所#8)を主対策とし、本条件は
+  // 将来の別削除経路(手動コンソール操作等)が同期を忘れた場合の保険。
+  allow read: if isWhitelisted()
+    && exists(/databases/$(database)/documents/documents/$(docId));
   allow create: if false; // Functions専用 (admin SDK経由はルール適用外)
   allow update: if isWhitelisted()
     && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['ocrResult', 'pageResults']);
@@ -73,22 +86,24 @@ match /documents/{docId}/detail/{detailId} {
 
 親 `documents/{docId}` のルールが持つ `isWhitelisted()` / `isAdmin()` ヘルパーをそのまま再利用する。`splitSuggestions` / `splitSegments` 相当のFunctions専用フィールドはこのサブコレクションに存在しないため、update許可リストは2フィールドのみで完結する。
 
+**`allow create: if false` と FE書込の整合性(Codex P1反映)**: Firestoreセキュリティルールは、書込対象パスに既存ドキュメントが無い場合、クライアントが`set()`/`update()`いずれのAPIを使っても**`create`ルールで評価する**(`resource.data == null`が判定基準であり、クライアント側APIの選択とは無関係)。そのため「`update()`だと`NOT_FOUND`で失敗するので`set(merge:true)`を使う」という対策はここでは機能しない — `detail/main`が存在しない状態でのFE書込は`allow create: if false`によりいずれの方法でも`permission-denied`で拒否される。正しい対策は「原子性要件」節を参照。
+
 ### 原子性要件 (MUST)
 
 - `ocrProcessor.ts` のメイン書込み、`splitPdf` の子ドキュメント作成は、本体 + `detail/main` を**同一transaction/batchで書込む**。2回の独立書込は禁止(整合性ウィンドウが生じるため)。
 - `splitPdf` の子ドキュメント数上限: 現在499(`N+1≤500`、`pdfOperations.ts:337-344`)。分離後は子ごとに本体set + `detail/main` set の2書込になるため **`N≤249`に変更**(`2N+1≤500`)。実装前にPhase C監査工程で既存`splitInto`配列の実際の最大長を確認し、249で十分か検証する(不足する場合はチャンク分割コミット + コミットマーカー方式を別途検討)。
 - `getReprocessClearFields()`(FE直接書込、非transaction)は現状も複数フィールドを1回のupdateで消しており親doc単体では原子的だが、本移行で `detail/main` を追加することにより**親doc↔`detail/main`間の新たな整合性ウィンドウ**が生じる。緩和策:
-  1. **書込方式**: `detail/main`へは`update()`ではなく`set({ocrResult: deleteField(), pageResults: deleteField()}, {merge:true})`を使う。理由: backfill(Phase C)未完了のdocに対し`update()`を呼ぶとFirestoreは対象doc不在で`NOT_FOUND`エラーを返すが、`set(..., {merge:true})`は対象doc不在時に(フィールド削除のみの)空同然のdocを作成するため失敗しない。
+  1. **Phase順序による存在保証(Codex P1反映、当初案の`set(merge:true)`は機能しないため置換)**: `detail/main`はFunctions専用(`allow create: if false`)であり、FEは`update()`のみ可能(既存doc必須)。この前提を成立させるため、**FE書込(Phase Dのreprocess-clear改修)はPhase C(backfill)が全docに対して完了・検証済みであることを確認してからデプロイする**(Phase B以降のdual-writeで新規/再処理docは`detail/main`が必ず作成されるため、Phase Cの全件backfill完了時点で「`detail/main`が存在しないdocはゼロ」が保証される)。この順序保証により、FEの`update()`は常に成功する。
   2. **書込順序**: `detail/main`側を先にクリアしてから本体側をクリアする。`pageResultsReuse.ts`の再利用判定は`pageResults`の実体(移行後は`detail/main`)を参照するため、この順序なら処理が中断しても「古い`pageResults`が再利用可能と誤判定される」方向の失敗を避けられる。
 
 ### 移行フェーズ (ADR-0016 PR-D1〜D5パターンを踏襲)
 
 | Phase | 内容 | destructive | Codexレビュー |
 |-------|------|:---:|:---:|
-| **A(本PR)** | 本ADR + `DocumentDetail`型定義。書込ロジック変更なし | No | **本PRがゲート対象** |
-| **B** | dual-write。上記6箇所の書込改修。本体フィールドは後方互換のため当面維持 | No(追加書込のみ) | 実装後review |
-| **C** | backfill。既存全docに`detail/main`を作成。ADR-0016 PR-D4型の4-phase構造(Phase A=監査+分類read-only → Phase B=書込前revalidation → Phase C=原子的backfill → Phase D=検証)。監査時に splitInto 実測上限も確認 | Yes(既存docへの新規書込) | impl-plan + 実装後 |
-| **D** | dual-read cutover。FE(`DocumentDetailModal`/`PdfSplitModal`/`firestoreToDocument()`)+ Functions(`getOcrText`/`regenerateSummary`)が`detail/main`を読むよう変更。一覧クエリは`ocrResult`/`pageResults`を一切参照しない状態にする | No | 実装後review |
+| **A(本PR)** | 本ADR + `DocumentDetail`/`PersistedPageOcrResult`型定義。書込ロジック変更なし | No | **本PRがゲート対象** |
+| **B** | dual-write + delete同期。上記表#1〜4,8の書込/削除改修(`deleteDocument.ts`の`detail/main`削除同期を含む)。本体フィールドは後方互換のため当面維持。**Phase D(FE reprocess-clear)はこのPhaseだけでは投入しない**(#7はPhase C完了確認後) | No(追加書込+削除同期のみ) | 実装後review |
+| **C** | backfill。既存全docに`detail/main`を作成。ADR-0016 PR-D4型の4-phase構造(Phase A=監査+分類read-only → Phase B=書込前revalidation → Phase C=原子的backfill → Phase D=検証)。監査時に splitInto 実測上限も確認。**完了検証(全doc`detail/main`存在確認)がPhase D-FE投入の前提条件** | Yes(既存docへの新規書込) | impl-plan + 実装後 |
+| **D** | dual-read cutover。読者を全て`detail/main`に切替: FE(`DocumentDetailModal`/`PdfSplitModal`/`firestoreToDocument()`/`useProcessingHistory.getOcrExcerpt()`)+ Functions(`getOcrText`/`regenerateSummary`/`detectSplitPoints`/`splitPdf`の親pageResults読込/`ocrProcessor`の`pageResultsReuse`読込)+ scripts(`reprocess-master-matching.js`)。**Phase C完了確認後にFE reprocess-clear(#7)を`update()`でデプロイ**。一覧クエリは`ocrResult`/`pageResults`を一切参照しない状態にする | No | 実装後review |
 | **E** | 検証(`detail/main`存在確認 **+ 内容パリティ確認**、ハッシュまたは値照合で本体とdetailの不一致を検出)後、本体から`ocrResult`/`pageResults`を`FieldValue.delete()`で削除。**egressの実削減効果はこのフェーズで初めて発生**(Firestoreはprojection非対応のため、フィールドを実際に本体から消さない限り一覧クエリの転送量は変わらない)。トリガーストーム対策: `onDocumentWrite`(documentGroups集計)/`onDocumentWriteSearchIndex`が全件分のdoc writeイベントとして発火するため、レート制御したバッチ実行 + 事前のトリガー影響評価(既存トリガーが重フィールドの変化を無視できるかの確認)を前提条件とする | **Yes(destructive、番号認可+dry-run+devリハーサル必須)** | impl-plan + 実装後 + devリハーサル |
 | **F** | cleanup。dual-write用の暫定コード除去、`seed-dev-data.ts`更新、テスト14+2ファイルの更新確認 | No | 実装後review |
 
@@ -131,4 +146,5 @@ match /documents/{docId}/detail/{detailId} {
 - **ADR-0016**(段階移行パターン=PR-D1〜D5構造の前例): `docs/adr/0016-document-identity-and-provenance.md`
 - **memory: feedback_destructive_migration_codex_review.md**(destructive migrationのimpl-planはCodexセカンドオピニオン必須)
 - **memory: feedback_second_opinion_not_final_conclusion.md**(セカンドオピニオンは参考情報として扱い、指摘は検証の上で採否判断する)
-- **既存実装**: `functions/src/ocr/ocrProcessor.ts:288-376`(ocrResultUrlオフロード判定+メインtransaction) / `functions/src/pdf/pdfOperations.ts:337-344,713-727`(splitPdf batch上限+原子性) / `frontend/src/hooks/useDocuments.ts:254-320`(`getReprocessClearFields()`)
+- **既存実装**: `functions/src/ocr/ocrProcessor.ts:288-376`(ocrResultUrlオフロード判定+メインtransaction) / `functions/src/pdf/pdfOperations.ts:337-344,713-727`(splitPdf batch上限+原子性) / `frontend/src/hooks/useDocuments.ts:254-320`(`getReprocessClearFields()`) / `functions/src/documents/deleteDocument.ts:172`(親doc削除)
+- **Codex CLI 1st review**(2026-07-06、`codex review --base main --strict-config -c model_reasoning_effort=xhigh`、session `019f34a5-7de2-7941-a09f-39c52e3cf652`): P1×3 + P2×2、本ADR改訂で全件反映済み
