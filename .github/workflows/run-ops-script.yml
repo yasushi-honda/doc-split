@@ -87,6 +87,8 @@ on:
           - seed-dev-data
           - check-gemini-cost-stats
           - check-gemini-cost-stats --days 3 --doc-limit 30
+          - measure-field-byte-sizes
+          - measure-field-byte-sizes --limit 300
       doc_id:
         description: 'Document ID (required when script contains --doc-id; ignored otherwise)'
         required: false
