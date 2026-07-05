@@ -1,9 +1,10 @@
 /**
  * OCR結果から Vertex AI Gemini で要約を生成する共通コア関数 (Issue #214)
  *
- * ocrProcessor.ts / regenerateSummary.ts に分散していた重複実装
- * (generateSummary / generateSummaryInternal) を集約。
- * 関数本体は完全同一で、差分は呼び出し元のエラー処理 (catch 返却 vs throw) のみ。
+ * 導入時 (#214) は ocrProcessor.ts / regenerateSummary.ts に分散していた重複実装
+ * (generateSummary / generateSummaryInternal) を集約したもの。
+ * Issue #548-B1: ocrProcessor.ts は自動要約生成を廃止し呼び出し元から外れたため、
+ * 現在の caller は regenerateSummary.ts のみ (SUMMARY_FREE_CALLERS契約でlock-in済)。
  * エラー伝搬は caller 側の try/catch で差別化する。
  *
  * 関連:
@@ -24,7 +25,7 @@ import { buildSummaryPrompt } from './summaryPromptBuilder';
 const PROJECT_ID = GCP_CONFIG.projectId;
 const LOCATION = GCP_CONFIG.location;
 
-// 要約生成を行う最小 OCR 文字数。caller 側 (ocrProcessor / regenerateSummary) で
+// 要約生成を行う最小 OCR 文字数。caller 側 (regenerateSummary.ts) で
 // 閾値同期漏れが起きないよう単一定数化。
 export const MIN_OCR_LENGTH_FOR_SUMMARY = 100;
 
@@ -33,7 +34,6 @@ export const MIN_OCR_LENGTH_FOR_SUMMARY = 100;
  *
  * - 呼び出し前提: `ocrResult` は非空文字列。短文ガード (例: `length < 100`) は caller 責任。
  * - エラー時: throw する (catch は caller 責任)。
- *   - ocrProcessor: empty SummaryField を返して後続処理を継続
  *   - regenerateSummary: console.error 後 rethrow し onCall handler が internal error 化
  */
 export async function generateSummaryCore(
@@ -41,7 +41,7 @@ export async function generateSummaryCore(
   documentType: string
 ): Promise<SummaryField> {
   // 新 caller が短文ガードを忘れた場合の safety net (type-design-analyzer 指摘)。
-  // 既存 caller (ocrProcessor / regenerateSummary) は手前で同じ閾値チェック済のため到達しない。
+  // 既存 caller (regenerateSummary) は手前で同じ閾値チェック済のため到達しない。
   if (ocrResult.length < MIN_OCR_LENGTH_FOR_SUMMARY) {
     throw new Error(
       `generateSummaryCore: ocrResult must be at least ${MIN_OCR_LENGTH_FOR_SUMMARY} chars (actual=${ocrResult.length})`
