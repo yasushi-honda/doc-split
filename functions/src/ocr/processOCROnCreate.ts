@@ -61,8 +61,8 @@ export const processOCROnCreate = onDocumentCreated(
       // OCR処理実行
       const result = await processDocument(docId, docData, FUNCTION_NAME);
 
-      // 使用量を追跡
-      if (result.inputTokens > 0 || result.outputTokens > 0) {
+      // 使用量を追跡 (PR#550レビュー指摘: thinkingTokensのみ非ゼロのレアケースも計測対象に含める)
+      if (result.inputTokens > 0 || result.outputTokens > 0 || result.thinkingTokens > 0) {
         await trackGeminiUsage(result.inputTokens, result.outputTokens, result.thinkingTokens, 'ocr');
       }
 

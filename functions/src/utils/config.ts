@@ -24,10 +24,15 @@ export const GCP_CONFIG = {
  * 全OCRリクエストがバリデーションエラーで失敗しうるため、ロールバック用途として
  * ドキュメント化された `0`/`-1` の2値のみを許容し、それ以外は安全側の既定値0に
  * フォールバックする。
+ *
+ * PR#550レビュー指摘: GCPコンソール等からのコピペで混入しうる前後空白・改行を
+ * trimしてから比較する(でないと"-1\n"等が不正値扱いされ、意図したロールバックが
+ * 無言で無効化される)。
  */
 export function parseOcrThinkingBudget(envValue: string | undefined): number {
-  if (envValue === '-1') return -1;
-  if (envValue === undefined || envValue === '' || envValue === '0') return 0;
+  const trimmed = envValue?.trim();
+  if (trimmed === '-1') return -1;
+  if (trimmed === undefined || trimmed === '' || trimmed === '0') return 0;
   console.warn(
     `[config] GEMINI_OCR_THINKING_BUDGET="${envValue}" is not a supported value (expected "0" or "-1"). Falling back to 0.`
   );

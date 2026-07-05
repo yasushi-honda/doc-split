@@ -140,8 +140,12 @@ export const processOCR = onSchedule(
         }
       }
 
-      // 使用量を追跡
-      if (stats.totalInputTokens > 0 || stats.totalOutputTokens > 0) {
+      // 使用量を追跡 (PR#550レビュー指摘: thinkingTokensのみ非ゼロのレアケースも計測対象に含める)
+      if (
+        stats.totalInputTokens > 0 ||
+        stats.totalOutputTokens > 0 ||
+        stats.totalThinkingTokens > 0
+      ) {
         await trackGeminiUsage(
           stats.totalInputTokens,
           stats.totalOutputTokens,

@@ -66,7 +66,9 @@ export async function generateSummaryCore(
   const rawSummary = (response.text || '').trim();
 
   const usageMetadata = response.usageMetadata;
-  trackGeminiUsage(
+  // Issue #546: awaitしないとCloud Functions v2のコンテナ凍結でFirestore書込が
+  // 完了前に失われ、bySource.summaryの計測が欠落しうる(PR#550レビュー指摘)。
+  await trackGeminiUsage(
     usageMetadata?.promptTokenCount || 0,
     usageMetadata?.candidatesTokenCount || 0,
     usageMetadata?.thoughtsTokenCount || 0,

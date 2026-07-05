@@ -42,4 +42,17 @@ describe('config: parseOcrThinkingBudget (Issue #546)', () => {
   it('数値として解釈できない文字列の場合は既定値0にフォールバックする(誤設定時の安全側動作)', () => {
     expect(parseOcrThinkingBudget('not-a-number')).to.equal(0);
   });
+
+  // PR#550レビュー指摘: GCPコンソール等からのコピペで混入する前後空白・改行はtrimして扱う。
+  it('前後空白付き"-1"("  -1  ")はtrimして-1として扱われる', () => {
+    expect(parseOcrThinkingBudget('  -1  ')).to.equal(-1);
+  });
+
+  it('末尾改行付き"-1"("-1\\n")はtrimして-1として扱われる', () => {
+    expect(parseOcrThinkingBudget('-1\n')).to.equal(-1);
+  });
+
+  it('前後空白付き"0"("  0  ")はtrimして0として扱われる', () => {
+    expect(parseOcrThinkingBudget('  0  ')).to.equal(0);
+  });
 });
