@@ -3,7 +3,7 @@ title: "データモデル概要"
 description: "DocSplit Firestoreスキーマ定義（実装準拠）"
 purpose: "AI駆動開発時のコンテキストとして優先読込"
 status: completed
-updated: 2026-03-16
+updated: 2026-07-05
 ---
 
 # データモデル概要
