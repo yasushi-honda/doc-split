@@ -1,56 +1,69 @@
 # ハンドオフメモ
 
-**更新日**: 2026-07-03 session94（handoff 最適化のみ、product 作業なし、doc-split 側 Net 0）
+**更新日**: 2026-07-05 session95（Issue #526 PR1〜5 dev側完遂 + GCPコスト分析→圧縮プラン策定・#546〜548起票。Net -5、理由は§直近の変更のsession95行参照）
 
-session87〜93 で1セッション=1行の超高密度段落（最長6,674文字/行）に記法が変質し、`wc -l` 500行しきい値がバイトサイズの実態（108KB）を捉えられずアーカイブが13セッション分機能しなかった件を是正した session。
+## session95 サマリ（2026-07-04〜05）
 
-- **LATEST.md 圧縮（PR #536）**: 108KB→5.7KB（95%減）、session79〜93 の詳細を `docs/handoff/archive/2026-06-history.md` へロスレス移動、構造化された簡潔な記法に復帰。
-- **handoff スキルしきい値修正（グローバル設定 claude-code-config PR #346 + #347）**: `wc -l` 500行判定 →`wc -c` 60KB backstop + 最長行1,500文字チェック（記法ドリフトを直接測る主防御）。#346 で混入した「80KB=500行換算」の虚偽コメントを #347 で是正（実測 500行 ≈ 42〜60KB）。両側検証済み（変質6,674文字→発動 / 健全728〜1,016文字→誤発動なし）。
-- **`.serena/project.yml` 復旧**: main 同期時の `git reset --hard` で未 stash のまま破棄したファイルを、稼働中 Serena サーバーの権威テンプレートから byte 一致で復元（未コミットの作業ツリー変更として保持＝元状態）。次セッションはこの ` M` を異常視しないこと。
-- 教訓: 「ground truth なき断定」が本 session で複数回再発（.serena「likely」/ 80KB「換算値」）→ グローバル memory `reference_handoff_line_count_proxy_metric.md` 等に定着済み。
+- **Issue #526（kaname要望E）dev側完遂**: 設計判断ゲート3点回答（Codexセカンドオピニオン2回反映）→フェーズ実装PR1〜4を全merge — #541（スキーマ+confirmed保護フラグ+FE+#538修正）/ #542（OCR後段処理の純粋関数切出し、挙動不変）/ #543（confirmed保護マージ+transaction化+pageResults再利用。evaluator AC10項目+5エージェント/review-pr+Codex reviewの指摘を全反映）/ #544（splitPdf子ドキュメントをpending生成へ切替、実運用到達）。
+- **PR5 dev側完了**: seed実データE2E（`seed-doc-pending-mixed-01`を3セグメント分割、confirmed=trueの井上春子保持+confirmed=falseの2セグメントがOCRから完全一致で再抽出=**confirmed保護とOCR自動補完のフィールド単位併存を実証**）。回帰1585 tests pass / lint 0 errors / build PASS。ログ証跡はPR #544本文とIssue #526進捗欄に記録済み。
+- **残タスク**: kanameone/cocoro展開のみ（両環境はmainより19コミット遅れ、2026-06-12最終デプロイ。functions+hosting+rulesの3点セット必要。#526はこれが済むまでopen維持）。
+- **隣接バグ**: #538（分割画面のcustomerId/officeId不整合、PR#541で修正済close）/ #539（並行splitガード欠如、P2）/ #540（processOCR stale snapshot一般解、P2。#543のtransaction化は#526スコープの局所対策）。
+- **/deploy skill補強**: cocoroのFunctions CI経路+rulesデプロイ手順の空白を修正（PR#545）。
+- **GCPコスト分析（Fable 5で実施）**: kanameone 6月請求¥12,714の内訳確定 — Vertex AI ¥6,093 + **Firestore egress ¥4,645**（「App Engine」表示の実体。一覧表示が`ocrResult`/`pageResults`等の重フィールド込みでdoc全体を配信）で計84%。**両者とも「OCR全文をdoc本体に逐語保存」という単一設計判断に起因**。Gemini 2.5 Flash廃止（最速2026-10-16）+日本データレジデンシーで3.5 Flash一択（input×5/output×3.6）。7日間実測: 798docs/2,841pages、in 1,378/page・out 892/page、コストの約8割がoutput（単価×6〜8のため）。突合ロジックは100%ローカルコードでGeminiは転記+要約の2呼出のみと確認。**品質不劣化を絶対制約**とした圧縮プランを策定し #546（計測基盤+SDK移行+thinking制御）/ #547（egress削減=重フィールドのサブコレクション分離、destructive migration・Codexレビュー必須）/ #548（要約遅延化+3.5移行）を起票。到達見通し: 移行前¥8,000（−37%）→10月移行後¥23,000（無対策なら¥32,000+α）。
+- **計測の盲点2件発見**: `GEMINI_PRICING`定数が古い（$0.075/$0.30、実際は$0.30/$2.50=約1/8過小表示）+ thinkingトークン（`thoughtsTokenCount`）が完全未計測（output単価で課金されるのに不可視）。#546で是正。
 
 ## 現在のフェーズ
 
-Phase 8 完了 + 追加実装（CI/CD、PWA、テナント自動化等）運用中。Issue #432（silent 破壊 collision）系は dev/cocoro/kanameone 全クライアントで構造修正・復旧・監査すべて完了しクローズ済み。Issue #402（検索 OOM ガード）・#504（誤分類復旧）・#492（Ambiguous 重複）もすべて close 済み。429 resilience（ADR-0017）はkanameone本番 7.9h ストームをrescue機構が自動吸収した実戦実証を経てStatus Accepted昇格。kaname 新規要望5件（B/C/D/E/F）はC=既存対応済/B・D・F=実装・merge・close完了/E（#526, P1、`splitPdf`挙動変更を伴う）のみ設計判断ゲート3点待ちで次セッション最優先。
+Phase 8 完了+追加実装運用中。#432系/#402/#504/#492 close済。429 resilience（ADR-0017）Accepted。kaname要望B〜Fは**E（#526）のdev実装まで完了**、残りはkanameone/cocoro展開判断のみ。**次の主戦線はコスト圧縮トラック（#546〜548、3.5 Flash移行期限2026-10-16）**。
 
-## 直近の変更（session89〜93、簡潔に）
+## 直近の変更（session89〜95、簡潔に）
 
-- **session93 (2026-07-03)**: kaname新規要望B/C/D/E/F受領→スコープ判断（Codexセカンドオピニオン反映）→Issue化(#524-528)→dev seed基盤(#528, PR#529)→B(再処理導線拡張, #524, PR#530)/D(ページ数表示, #525, PR#531)/F(担当CM別4階層, #527, PR#533)実装・merge・close完了。hook `ui-change-merge-check.sh` 条件付き許可化(PR#532)+すり抜け穴2件修正(PR#534)。E(#526, P1)は設計判断ゲート3点（①手動入力メタの保持方針 ②OCR課金増の許容 ③再処理中の一覧表示方法）待ちで次セッション持越し。Issue Net -1（起票5/close4、4/5完了の実質進捗）。
-- **session92 (2026-07-02〜03)**: kaname問い合わせ「保存・確認済みにしても選択待ちが残る」→原因はIssue #492 Ambiguous重複docsと実証→postponed解除→方針Aデータ駆動版でPhase1+2実施（20260413/20260509系の重複docs全量整理、kanameone execute run実施）→Issue #492 close。cocoro影響なし再確認、マルチクライアント確認マトリクス完結。Net -1。
-- **session91 (2026-07-02)**: ADR-0017運用実績確認（read-only 3環境監査）— kanameone 2026-06-16の約7.9h 429ストーム（発端事象の約12倍規模）をbackstop `rescueErroredDocuments` が全件自動rescue、手動介入ゼロで完走を実戦実証→Status Accepted昇格（PR#518）。残P2 Issues(#503/#251/#238)の着手トリガー未充足を実測確認（Net 0）。
-- **session90 (2026-06-12)**: kanameone健全性レポートで429 RESOURCE_EXHAUSTED 21件error事案発覚→429専用retry policy（cumulative horizon約3.5h）+ rescue backstop機構実装（PR#516 + ADR-0017新規）→dev/kanameone/cocoro 3環境deploy→kanameone 11件reprocess完走確認。Net 0。
-- **session89 (2026-05-20)**: kanameone 892件reprocess完走確認（session86起動分）+ Issue #504（誤分類復旧、AC1-5達成）close + Issue #402段階1ログ観測完了で段階3着手不要判定→#402 close。Net -2。
+- **session95 (2026-07-04〜05)**: 上記サマリ参照。Net -5（起票6/close 1、コスト3件はuser明示指示+実害根拠、バグ3件は#526設計中に発見した実バグでtriage充足）。
+- **session93 (2026-07-03)**: kaname新規要望B/C/D/E/F受領→B/D/F実装・merge・close。E(#526)は設計判断ゲート3点待ちで持越し（→session95で解消）。Net -1。
+- **session92 (2026-07-02〜03)**: #492 Ambiguous重複docs整理完遂→close。Net -1。
+- **session91 (2026-07-02)**: ADR-0017実戦実証（7.9hストーム自動吸収）→Accepted昇格。Net 0。
+- **session90 (2026-06-12)**: 429専用retry+rescue backstop（PR#516+ADR-0017）3環境deploy。Net 0。
+- **session89 (2026-05-20)**: #504/#402 close。Net -2。
 
-session29〜93 の詳細（PR番号・実測値・review所見・教訓等）は `docs/handoff/archive/2026-04-history.md` / `2026-05-history.md` / `2026-06-history.md` 参照。
+session29〜94の詳細は `docs/handoff/archive/2026-0{4,5,6}-history.md` 参照。
 
 ## 次のアクション（3 分割・SKILL.md §2.5 参照）
 
-### 即着手タスク
-即着手タスクなし（executor 領分の作業ゼロ）
+### 即着手タスク（すべてdecision-maker承認済みのコストトラック。番号単位認可で順次実行）
+
+| # | タスク | ROI | 工数 | 完了条件 |
+|---|--------|-----|------|---------|
+| 1 | **#546 計測基盤+SDK移行+thinking制御** | 全施策の効果測定前提+未計測thinking課金の即遮断。#547/#548の前提 | 0.5〜1日 | `GEMINI_PRICING`修正+`thoughtsTokenCount`記録+用途別内訳+`@google/genai`移行+2.5に`thinkingBudget:0`（dev seedでOCRテキストdiff一致確認後に適用）。**3ステップ超のため/impl-plan必須** |
+| 2 | **#548-B1 要約の遅延生成化** | −¥650/月(現行)→−¥3,000/月(3.5後)。既存`regenerateSummary` onCall転用で最小工数。品質影響ゼロ（要約は突合と構造的に独立） | 0.5日 | `processDocument()`の自動要約スキップ+FE「要約を生成」ボタン+dev実機確認。#546と並行可 |
+| 3 | **#547 事前計測（フィールド別バイトサイズ分布）** | 削減見込み（egress ¥4,645→¥500〜1,000）の確度確定。設計の入力 | 30分 | 実docサンプリング結果をIssue #547にコメント記録 |
 
 ### 条件待ち（明示 trigger 付き）
 
-| # | 項目 | trigger（充足条件） | 充足時のタスク | 充足確認方法 |
-|---|------|------------------|--------------|------------|
-| 1 | Issue #526（要望E、P1）実装着手 | user から設計判断ゲート3点（①手動入力メタの保持方針 ②OCR課金増の許容 ③再処理中の一覧表示方法）への回答 | `/impl-plan` でPhase 4実装開始 | `gh issue view 526` のコメント欄確認 |
-| 2 | `.artifacts/` untrackedディレクトリの扱い | decision-maker の明示指示（gitignore追加/削除/保持のいずれか） | 指示内容に応じて対応 | `git status --short` |
-| 3 | #503 / #251 / #238（P2）着手 | 各Issue本文記載トリガー充足（2026-07-02 session91時点で全て未充足を実測確認済） | トリガー充足確認後に着手判断 | `gh issue view <番号>` のトリガー記載確認 |
-| 4 | 古い OPEN PR #474 のクローズ | decision-maker の明示指示 | `gh pr close 474 --comment "superseded by #536 (session71 は既に archive 済)"` | `gh pr view 474` |
-
-**PR #474 検出メモ（守り・検出のみ）**: session94 の handoff チェックで検出。「session71 を archive 移動」（2026-05-15、約7週間前）は目的達成済み（session71 は `archive/2026-05-history.md` に既に存在）+ 対象 LATEST.md が PR #536 で全面書換のためマージ不能。クローズ推奨だが write 操作のため明示指示待ち。
+| # | 項目 | trigger | 充足時のタスク | 確認方法 |
+|---|------|---------|--------------|---------|
+| 1 | **#526 kanameone/cocoro展開**（これで#526 close） | decision-makerの番号単位展開認可 | `/deploy` 3点セット（functions+hosting+rules）。kanameone=`deploy-to-project.sh --full`、cocoro=SKILL.md記載の3経路。展開直後の分割操作自粛アナウンス+実データでOCR補完確認（Issue #526「展開時の注意」参照） | user指示 |
+| 2 | #547 実装着手 | 詳細設計（スキーマ/移行手順/dual-read計画）+**ADR作成+Codexレビュー完了**（destructive migration規約） | 新規doc新構造→backfill→dual-read→検証→削除（最終・数週後）。dev→cocoro→kanameoneの段階展開 | 設計doc+Codexレビュー記録 |
+| 3 | #548 3.5移行スイッチ | #546完了+dev seedでの2.5vs3.5 A/B PASS。**期限2026-10-16** | modelId切替+`thinking_level:low`+価格定数更新 | A/B結果 |
+| 4 | #548-B4 再処理「再突合のみ」モード | UI仕様のdecision-maker判断 | 2モード化実装 | user回答 |
+| 5 | #539/#540（P2バグ） | 明示指示 or 実害観測 | 各Issue参照 | `gh issue view` |
+| 6 | 継承事項: PR#474 close / `.artifacts/` 扱い / #503・#251・#238 | decision-maker明示指示（全て前session94から継続、トリガー未充足） | 各項目参照 | — |
 
 ### 却下候補（記録のみ）
-却下候補なし
 
-> ⚠️ 「優先順にすすめて」「進めて」等の包括指示で次セッションが動けるのは即着手タスクのみ。上記は全て条件待ちのため、包括指示では着手しない。
+| 項目 | 経緯 | 着手しない理由 |
+|------|------|--------------|
+| OCR出力のエンティティリスト化（−¥11,000/月級） | コスト分析で最大レバーと特定 | 突合品質の厳密A/B実証が前提=品質不劣化制約に抵触しうる唯一の施策。**3.5移行後の実測を見てdecision-makerが判断する保留カード**（#548に記録済み） |
+| processOCR head-of-line blocking対策 | Codex指摘で実在確認（BATCH_SIZE=5固定） | 実害未観測。分割多用でpending滞留が観測されたら別Issue化（#526本文に監視事項として記録済み） |
+| PWA更新バナー実装 | 展開時リスクとして一時検討 | `vite.config.ts`実査でSWは登録のみ（キャッシュなし）と確認、通常のSPAバージョンスキュー程度のため不要と判定済み |
+
+> ⚠️ 包括指示（「進めて」等）で動けるのは即着手タスクのみ。**次セッションのモデルはSonnet 5を想定**（session95末尾時点のデフォルト保存はFable 5のため、開始時に`/model`確認推奨。Fable 5は2026-07-07失効）。
 
 ### 最終結論
 
-🛑 **executor 領分の作業ゼロ、即時終了推奨**（次セッション側でIssue #526の設計判断ゲート回答を得るまでは新規実装作業なし）
+✅ **セッション終了可**（handoff PR merge後）
 
-- OPEN PR: 1件（#474 = 失効・クローズ推奨）/ active Issue: #526（P1、設計判断待ち）+ #503/#251/#238（P2、トリガー未充足）
-- Git: `.serena/project.yml`（復旧済・意図的に未コミット保持）+ `.artifacts/`（untracked）のみ、本セッションの handoff 更新は feature ブランチで PR 化
-- 即着手: 0件 / 条件待ち: 4件（すべてdecision-maker判断待ち）
+- OPEN PR: #474（失効・クローズ推奨、継承）+ 本handoff PR / active Issue: #546〜548（コストトラック、即着手3件）+ #526（展開待ち）+ #539/#540/#503/#251/#238（トリガー待ち）
+- Git: `.serena/project.yml`（意図的未コミット保持、session94参照）+ `.artifacts/`（untracked、扱い未指示）のみ
 - 残留プロセス: なし
-- §4.6 同根再発スキャン: 本セッション fix PR は #346→#347（同根 = handoff 代理指標）だが #347 が #346 の較正ミスを明示是正済み、root cause（proxy metric 過信 + 未検証断定）は memory 定着済で潜在再発なし
-- §4.7 対症療法判定: 該当なし（行数→バイト+最長行の直接測定への構造置換 + anti-pattern の memory 化 = 根治、対症療法ではない）
+- §4.6 同根再発スキャン: #538/#539/#540はsplitPdf/OCR並行性・stale snapshotの同族だが、設計調査で**意図的に発見・分離・記録**したもの（silent再発ではない）。#540の一般解は未着手のまま明示的にopen管理
+- §4.7 対症療法判定: #538修正はroot cause対応（confirmedフラグの明示送信化）、#543のtransaction化は#540の局所対策と明記済み。対症療法疑いなし
