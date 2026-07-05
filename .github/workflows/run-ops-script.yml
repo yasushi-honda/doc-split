@@ -85,6 +85,8 @@ on:
           - verify-pdf-determinism --paths fixtures/simple.pdf,fixtures/with-ccittfaxdecode.pdf,fixtures/with-jbig2decode.pdf,fixtures/with-jpxdecode.pdf,fixtures/with-dctdecode.pdf,fixtures/encrypted.pdf
           - seed-dev-data --dry-run
           - seed-dev-data
+          - check-gemini-cost-stats
+          - check-gemini-cost-stats --days 3 --doc-limit 30
       doc_id:
         description: 'Document ID (required when script contains --doc-id; ignored otherwise)'
         required: false
