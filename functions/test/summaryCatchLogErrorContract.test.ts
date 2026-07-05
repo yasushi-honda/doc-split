@@ -1,8 +1,11 @@
 /**
  * summary 経路 catch 句 logError 呼出契約テスト (Issue #266)
  *
- * 目的: ocrProcessor / regenerateSummary の summary 生成失敗 catch 句で、console.error だけで
+ * 目的: regenerateSummary の summary 生成失敗 catch 句で、console.error だけで
  * なく logError (errors collection + 通知) が呼ばれ続けることを静的に lock-in する。
+ * Issue #548-B1: ocrProcessor.ts の自動要約生成 (summaryPromise) は削除されたため、
+ * 本契約の対象は regenerateSummary.ts のみ。ocrProcessor.ts 自体の safeLogError 呼出は
+ * 下記 'logError/safeLogError params shape contract' で別途 lock-in する。
  *
  * 背景 (#178/#209 教訓): Vertex AI のクォータ枯渇・認証失効・暴走系エラーが silently swallow
  * されると、documents は status:processed で完了し「summary が空」としか見えない。6 ヶ月後の
@@ -27,16 +30,6 @@ import { SAFE_LOG_ERROR_CALL } from './helpers/patterns';
  * console.error を削除して logError のみに移行する場合は本契約の設計見直しが必要。
  */
 const SUMMARY_CATCH_ANCHORS = [
-  {
-    file: 'src/ocr/ocrProcessor.ts',
-    anchor: 'Summary generation failed',
-    context: 'summaryPromise.catch (best-effort, edge case safety net)',
-  },
-  {
-    file: 'src/ocr/ocrProcessor.ts',
-    anchor: 'Failed to generate summary',
-    context: 'generateSummary inner catch (main path)',
-  },
   {
     file: 'src/ocr/regenerateSummary.ts',
     anchor: 'Failed to generate summary',
@@ -156,8 +149,10 @@ describe('summary catch logError contract (#266)', () => {
         .map(({ idx }) => idx);
 
       expect(safeLogLines.length).to.be.greaterThanOrEqual(
-        2,
-        'ocrProcessor.ts で safeLogError 呼出が 2 箇所以上あることを想定 (summaryPromise + generateSummary inner)'
+        3,
+        'ocrProcessor.ts で safeLogError 呼出が 3 箇所以上あることを想定 ' +
+          '(aggregateCap:invariant, aggregateCap:truncated, handleProcessingError)。' +
+          'Issue #548-B1 で summaryPromise/generateSummary の catch 句は削除済み。'
       );
 
       for (const idx of safeLogLines) {

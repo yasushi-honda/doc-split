@@ -26,12 +26,9 @@ import {
 } from '../utils/extractors';
 import { generateDisplayFileName } from '../../../shared/generateDisplayFileName';
 import { loadMasterData } from '../utils/loadMasterData';
-import { buildSummaryFields } from './summaryRequestBuilder';
-import { generateSummaryCore, MIN_OCR_LENGTH_FOR_SUMMARY } from './summaryGenerator';
 import {
   capPageResultsAggregate,
 } from '../utils/textCap';
-import type { SummaryField } from '../../../shared/types';
 import { buildPageResult, type RawPageOcrResult } from './buildPageResult';
 import { buildOcrExtractionUpdatePayload } from './ocrUpdatePayloadBuilder';
 import { validatePageResultsForReuse } from './pageResultsReuse';
@@ -250,23 +247,7 @@ export async function processDocument(
     .map((p) => `--- Page ${p.pageNumber} ---\n${p.text}`)
     .join('\n\n');
 
-  // マスターデータ取得（要約生成と並列実行）
-  // Issue #266: 通常は generateSummary 内部 catch で吸収されるため本 catch には到達しない。
-  // inner catch の regression や Promise 化されていない throw 経路に対する二重防御として残置。
-  // safeLogError 経由で silent failure を防ぎ、errors collection から検知可能にする。
-  const summaryPromise = generateSummary(ocrResult, '', { docId, functionName }).catch(
-    async (err) => {
-      console.error('Summary generation failed:', err);
-      await safeLogError({
-        error: err instanceof Error ? err : new Error(String(err)),
-        source: 'ocr',
-        functionName: `${functionName}:summaryPromise`,
-        documentId: docId,
-      });
-      return { text: '', truncated: false } satisfies SummaryField;
-    }
-  );
-
+  // マスターデータ取得
   const { documents, customers, offices } = await loadMasterData(db, {
     source: 'ocr',
     functionName: 'ocrProcessor',
@@ -311,9 +292,6 @@ export async function processDocument(
     ocrResultUrl = await saveOcrResult(docId, ocrResult);
     savedOcrResult = '';
   }
-
-  // 要約生成を待機
-  const summary = await summaryPromise;
 
   // Issue #526 D1: 抽出結果の集約ロジックは ocrUpdatePayloadBuilder.ts の純粋関数に
   // 切り出し済み(挙動不変、ユニットテストで契約をlock-in)。displayFileNameはここでは
@@ -381,13 +359,15 @@ export async function processDocument(
     });
 
     // ドキュメント更新
-    // Issue #215: summary を discriminated union ネスト型で書き込み、
-    // 旧フラット3フィールド (summaryTruncated / summaryOriginalLength) は削除。
-    // 旧 summary (string型) は新 summary (object型) で上書きされる。
+    // Issue #548-B1: 要約は自動生成しない (regenerateSummary onCall 経由の手動生成のみ)。
+    // OCR再実行のたびに summary を無効化することで、documentType/customerName/officeName等が
+    // 更新されたのに古い内容の要約が残存する不整合 (429自動rescue・fix-stuck-documents.js等、
+    // getReprocessClearFields()を経由しない再処理経路でも発生しうる) を構造的に防ぐ。
+    // 旧フラット3フィールド (summaryTruncated/summaryOriginalLength) も後方互換のため同時削除。
     tx.update(docRef, {
       ...merged,
       ...(displayFileName ? { displayFileName } : {}),
-      summary: buildSummaryFields(summary),
+      summary: admin.firestore.FieldValue.delete(),
       summaryTruncated: admin.firestore.FieldValue.delete(),
       summaryOriginalLength: admin.firestore.FieldValue.delete(),
       status: 'processed',
@@ -585,37 +565,6 @@ ${pageNumber ? `\nこれは${pageNumber}ページ目です。` : ''}
   );
 
   return { text, inputTokens, outputTokens, thinkingTokens };
-}
-
-/**
- * OCR結果からAI要約を生成 (Issue #209, Issue #214, #258, #266)
- *
- * Precondition: core の `generateSummaryCore` は `length < MIN_OCR_LENGTH_FOR_SUMMARY` を許容しない。
- * 本 helper はその precondition を先に消化し、短文時は empty SummaryField を返して後続処理を継続する。
- * Vertex AI エラーは catch → empty 返却で best-effort (呼出元 `summaryPromise` の `.catch(empty)` と二重防御)。
- * Issue #266: catch 句で logError 呼出を追加し、silent failure を防ぐ。
- * @returns SummaryField - text(切り詰め後summary), truncated(切り詰めフラグ), originalLength(truncated=true 時のみ)
- */
-async function generateSummary(
-  ocrResult: string,
-  documentType: string,
-  logContext: { docId: string; functionName: string }
-): Promise<SummaryField> {
-  if (!ocrResult || ocrResult.length < MIN_OCR_LENGTH_FOR_SUMMARY) {
-    return { text: '', truncated: false };
-  }
-  try {
-    return await generateSummaryCore(ocrResult, documentType);
-  } catch (error) {
-    console.error('Failed to generate summary:', error);
-    await safeLogError({
-      error: error instanceof Error ? error : new Error(String(error)),
-      source: 'ocr',
-      functionName: `${logContext.functionName}:generateSummary`,
-      documentId: logContext.docId,
-    });
-    return { text: '', truncated: false };
-  }
 }
 
 /**

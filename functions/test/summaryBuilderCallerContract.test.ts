@@ -5,12 +5,14 @@
  * summary 暴走再発防止)。builder 側 canary だけでは caller bypass を見逃すため、caller
  * 呼出パターンを静的に lock-in する。
  *
- * 背景 (#214 リファクタ): summaryGenerator.ts が唯一の Vertex AI caller、ocrProcessor /
- * regenerateSummary は generateSummaryCore() 経由に統一。
+ * 背景 (#214 リファクタ): summaryGenerator.ts が唯一の Vertex AI caller、regenerateSummary は
+ * generateSummaryCore() 経由に統一。Issue #548-B1: ocrProcessor.ts の自動要約生成は削除され、
+ * 要約生成は regenerateSummary (手動トリガー) のみに一本化された。
  *
  * 方式: grep-based (docs/context/test-strategy.md §2.1 参照)。
  * 既知の limitation: 型 alias 経由 (const gen = xxx.generateContent; gen(...)) や分割代入は
- * 未検出。caller 追加時は CALLER_FILES / CORE_CALLERS への手動追記が必要 (grep 動的検出は未導入)。
+ * 未検出。caller 追加時は CALLER_FILES / CORE_CALLERS / SUMMARY_FREE_CALLERS への手動追記が
+ * 必要 (grep 動的検出は未導入)。
  * 昇格条件: false negative が 1 件でも実発生した時点で sinon spy (案A) へ切替。
  *
  * 将来委譲: false negative 実発生時に sinon spy 契約テスト (案A) へ切替予定。
@@ -33,7 +35,13 @@ const CORE_DELEGATE_PATTERN = /generateSummaryCore\s*\(/g;
 const CALLER_FILES = ['src/ocr/summaryGenerator.ts'];
 
 // Issue #214: 要約生成は generateSummaryCore に委譲される caller 群
-const CORE_CALLERS = ['src/ocr/ocrProcessor.ts', 'src/ocr/regenerateSummary.ts'];
+// Issue #548-B1: ocrProcessor.ts の自動要約生成は削除。要約生成は regenerateSummary
+// (手動トリガー) のみに集約された。
+const CORE_CALLERS = ['src/ocr/regenerateSummary.ts'];
+
+// Issue #548-B1: ocrProcessor.ts が要約生成に一切関与しない (bypass 復活防止) ことを
+// 別途 lock-in する caller 群。
+const SUMMARY_FREE_CALLERS = ['src/ocr/ocrProcessor.ts'];
 
 /**
  * 行頭 `//` コメント行を除去。コメントアウトされた呼び出しを「存在する」と
@@ -82,14 +90,38 @@ describe('generateSummary delegation contract (Issue #214)', () => {
     it(`${relPath} は model.generateContent を直接呼ばない (bypass 防止)`, () => {
       const absPath = resolve(process.cwd(), relPath);
       const source = stripLineComments(readFileSync(absPath, 'utf-8'));
-      // OCR 経路 (ocrProcessor.ts) は別目的で model.generateContent を呼ぶため、
-      // buildSummaryGenerationRequest と組み合わさった "summary 用" 呼び出しのみを禁止する。
       const summaryCallCount = countMatches(source, BUILDER_CALL_PATTERN);
       expect(summaryCallCount).to.equal(
         0,
         `${relPath} で model.generateContent(buildSummaryGenerationRequest(...)) の直接呼び出しを検出。` +
           'Issue #214 のリファクタ後、summary 生成は summaryGenerator.ts に集約されているため、' +
           'caller からの直接呼び出しは bypass と見なします。'
+      );
+    });
+  }
+});
+
+describe('generateSummary 不在契約 (Issue #548-B1)', () => {
+  // ocrProcessor.ts の自動要約生成 (summaryPromise) は削除済み。復活 (再bypass) を検知する。
+  for (const relPath of SUMMARY_FREE_CALLERS) {
+    it(`${relPath} は generateSummaryCore を呼ばない (自動要約生成の復活防止)`, () => {
+      const absPath = resolve(process.cwd(), relPath);
+      const source = stripLineComments(readFileSync(absPath, 'utf-8'));
+      const count = countMatches(source, CORE_DELEGATE_PATTERN);
+      expect(count).to.equal(
+        0,
+        `${relPath} で generateSummaryCore 呼び出しを検出。` +
+          'Issue #548-B1 で自動要約生成は削除された (要約は regenerateSummary 経由の手動生成のみ)。'
+      );
+    });
+
+    it(`${relPath} は buildSummaryGenerationRequest 経由で model.generateContent を呼ばない`, () => {
+      const absPath = resolve(process.cwd(), relPath);
+      const source = stripLineComments(readFileSync(absPath, 'utf-8'));
+      const count = countMatches(source, BUILDER_CALL_PATTERN);
+      expect(count).to.equal(
+        0,
+        `${relPath} で summary 用の model.generateContent 呼び出しを検出。Issue #548-B1 違反。`
       );
     });
   }
