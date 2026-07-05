@@ -59,6 +59,16 @@ const FIRESTORE_WRITE_CALL = /\.(?:update|set|create)\s*\(/;
 // regenerateSummary (手動トリガー) のみに一本化された。
 const WRITE_PAYLOAD_CALLERS = ['src/ocr/regenerateSummary.ts'] as const;
 
+// review-pr 指摘対応 (pr-test-analyzer Critical + code-reviewer Suggestion, 収斂): ocrProcessor.ts は
+// buildSummaryFields(...) を呼ばないため WRITE_PAYLOAD_CALLERS 対象外だが、OCR完了のたびに
+// summary/summaryTruncated/summaryOriginalLength を FieldValue.delete() で無効化する行自体は
+// 本PRの核心的なバグ修正 (再処理経路での要約不整合防止) であり、これを検知する契約が
+// これまで存在しなかった。将来この delete() 呼出が誤って削除されても既存の
+// SUMMARY_FREE_CALLERS (generateSummaryCore 不在契約) では検知できないため、別途 lock-in する。
+const SUMMARY_INVALIDATE_CALLERS = ['src/ocr/ocrProcessor.ts'] as const;
+const SUMMARY_INVALIDATE_DELETE =
+  /summary:\s*(?:admin\.firestore\.)?FieldValue\.delete\s*\(\s*\)/;
+
 // 同一 update() ブロック近接性の検証ウィンドウ。regenerateSummary の update は ~4 行と
 // 短いが、将来 caller が増えた場合の余裕を持たせ 30 行のまま維持する。
 const ADJACENCY_WINDOW_LINES = 30;
@@ -172,6 +182,40 @@ describe('summary write-payload contract (#255)', () => {
       });
     });
   }
+
+  describe('ocrProcessor summary無効化 canary (Issue #548-B1)', () => {
+    for (const relPath of SUMMARY_INVALIDATE_CALLERS) {
+      describe(relPath, () => {
+        const absPath = resolve(process.cwd(), relPath);
+        const source = readFileWithContext(absPath, `caller-source:${relPath}`);
+
+        it('`summary: FieldValue.delete()` でOCR完了のたびに要約を無効化する', () => {
+          expect(source).to.match(
+            SUMMARY_INVALIDATE_DELETE,
+            `${relPath} に summary: FieldValue.delete() が見つからない。` +
+              'Issue #548-B1: 再処理経路 (429自動rescue・運用スクリプト等) で古い要約が' +
+              '残存する不整合を防ぐための必須の書込。'
+          );
+        });
+
+        it('`summaryTruncated`/`summaryOriginalLength` も同時に無効化する', () => {
+          expect(source).to.match(SUMMARY_TRUNCATED_DELETE);
+          expect(source).to.match(SUMMARY_ORIGINAL_LENGTH_DELETE);
+        });
+
+        it(`3 要素が同一 update() ブロック近接 (≤${ADJACENCY_WINDOW_LINES} 行) に共存する`, () => {
+          expect(
+            hasPatternsAdjacent(
+              source,
+              SUMMARY_INVALIDATE_DELETE,
+              SUMMARY_TRUNCATED_DELETE,
+              SUMMARY_ORIGINAL_LENGTH_DELETE
+            )
+          ).to.equal(true, '3 要素が散在している。同一 update() で書き込まれていない可能性あり');
+        });
+      });
+    }
+  });
 
   describe('caller 追加検知 (noUnused contract)', () => {
     // summary 書込パターンを持つファイルが WRITE_PAYLOAD_CALLERS と完全一致するか identity で検証。

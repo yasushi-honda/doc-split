@@ -363,7 +363,8 @@ export async function processDocument(
     // OCR再実行のたびに summary を無効化することで、documentType/customerName/officeName等が
     // 更新されたのに古い内容の要約が残存する不整合 (429自動rescue・fix-stuck-documents.js等、
     // getReprocessClearFields()を経由しない再処理経路でも発生しうる) を構造的に防ぐ。
-    // 旧フラット3フィールド (summaryTruncated/summaryOriginalLength) も後方互換のため同時削除。
+    // summary/summaryTruncated/summaryOriginalLengthの3フィールドを同時削除する。
+    // 後2者はIssue #215以前の旧フラット形式の残骸クリーンアップ(前方互換とは無関係)。
     tx.update(docRef, {
       ...merged,
       ...(displayFileName ? { displayFileName } : {}),

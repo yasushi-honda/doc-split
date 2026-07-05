@@ -151,7 +151,9 @@ describe('summary catch logError contract (#266)', () => {
       expect(safeLogLines.length).to.be.greaterThanOrEqual(
         3,
         'ocrProcessor.ts で safeLogError 呼出が 3 箇所以上あることを想定 ' +
-          '(aggregateCap:invariant, aggregateCap:truncated, handleProcessingError)。' +
+          '(aggregateCap invariant検知時の functionName suffix ":aggregateCap:invariant"/' +
+          '":aggregateCap:unexpected"、aggregateCap truncated警告時の suffix ":aggregateCap"、' +
+          'handleProcessingError内の呼出元由来functionName)。' +
           'Issue #548-B1 で summaryPromise/generateSummary の catch 句は削除済み。'
       );
 
