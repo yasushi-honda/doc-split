@@ -147,6 +147,33 @@ export interface Document {
 }
 
 // ============================================
+// ADR-0018: Firestore egress削減のためのサブコレクション分離 (Issue #547)
+// ============================================
+
+/**
+ * `documents/{docId}/detail/main` サブコレクションドキュメントの型。
+ *
+ * Issue #547 (Firestore egress削減) の対応として、`Document` 本体から
+ * `ocrResult` / `pageResults` の2フィールドのみを分離する（Phase E完了後、
+ * 本体からは削除される）。他の重フィールド（customerCandidates等）は
+ * FE複数箇所（ExtractionInfoPopover / 一覧バッジ判定）が依存するため
+ * 本体に残置する（ADR-0018 Alternatives Considered A案 参照）。
+ *
+ * 移行フェーズ（ADR-0016 PR-D1〜D5パターン踏襲）:
+ * - Phase A (本型定義): 書込ロジック変更なし
+ * - Phase B (dual-write): 本体 + 本サブコレクションへ同一transaction/batchで同時書込
+ * - Phase C (backfill): 既存docへの一括作成
+ * - Phase D (dual-read cutover): FE/Functions双方の読込先切替
+ * - Phase E (destructive): 本体からocrResult/pageResultsを削除（egress削減の本丸）
+ *
+ * 詳細: docs/adr/0018-document-detail-subcollection-separation.md
+ */
+export interface DocumentDetail {
+  ocrResult: string;
+  pageResults?: PageOcrResult[];
+}
+
+// ============================================
 // ADR-0016: 分割 PDF Identity / Provenance (Issue #445)
 // ============================================
 
