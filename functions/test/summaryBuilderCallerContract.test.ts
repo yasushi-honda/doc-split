@@ -9,19 +9,24 @@
  * regenerateSummary は generateSummaryCore() 経由に統一。
  *
  * 方式: grep-based (docs/context/test-strategy.md §2.1 参照)。
- * 既知の limitation: 型 alias 経由 (const gen = model.generateContent; gen(...)) や分割代入は
+ * 既知の limitation: 型 alias 経由 (const gen = xxx.generateContent; gen(...)) や分割代入は
  * 未検出。caller 追加時は CALLER_FILES / CORE_CALLERS への手動追記が必要 (grep 動的検出は未導入)。
  * 昇格条件: false negative が 1 件でも実発生した時点で sinon spy (案A) へ切替。
  *
  * 将来委譲: false negative 実発生時に sinon spy 契約テスト (案A) へ切替予定。
  *          それまでは恒久 contract として保持 (caller bypass 検知は source 構造保護が本質)。
+ *
+ * Issue #546 (SDK移行 @google-cloud/vertexai → @google/genai) で呼び出し形状が
+ * `model.generateContent(...)` から `ai.models.generateContent(...)` に変化したため、
+ * パターンは receiver 名を問わず `.generateContent(buildSummaryGenerationRequest(` の
+ * 部分文字列のみを見る (SDK 変更に対して頑健にする)。
  */
 
 import { expect } from 'chai';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
 
-const BUILDER_CALL_PATTERN = /model\.generateContent\s*\(\s*buildSummaryGenerationRequest\s*\(/g;
+const BUILDER_CALL_PATTERN = /\.generateContent\s*\(\s*buildSummaryGenerationRequest\s*\(/g;
 const CORE_DELEGATE_PATTERN = /generateSummaryCore\s*\(/g;
 
 // Issue #214: builder 経由の Vertex AI 呼び出しを集約する唯一のファイル
@@ -91,8 +96,13 @@ describe('generateSummary delegation contract (Issue #214)', () => {
 });
 
 describe('BUILDER_CALL_PATTERN sanity (regex が bypass を正しく検出するか)', () => {
-  it('正例: buildSummaryGenerationRequest 経由の呼び出しはマッチする', () => {
+  it('正例: buildSummaryGenerationRequest 経由の呼び出しはマッチする (旧SDK: model.generateContent)', () => {
     const src = 'return await model.generateContent(buildSummaryGenerationRequest(prompt));';
+    expect(countMatches(src, BUILDER_CALL_PATTERN)).to.equal(1);
+  });
+
+  it('正例: buildSummaryGenerationRequest 経由の呼び出しはマッチする (Issue #546 新SDK: ai.models.generateContent)', () => {
+    const src = 'async () => ai.models.generateContent(buildSummaryGenerationRequest(prompt)),';
     expect(countMatches(src, BUILDER_CALL_PATTERN)).to.equal(1);
   });
 

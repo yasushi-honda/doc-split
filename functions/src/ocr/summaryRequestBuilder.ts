@@ -10,25 +10,29 @@
  * - #178 教訓: 派生フィールド (truncated/originalLength) を一括で書き込まないとFE側マッピングが破壊される
  */
 
-import type { GenerateContentRequest } from '@google-cloud/vertexai';
+// @google/genai はESM専用パッケージのため、CJSビルドのこのファイルで型のみ
+// importする際は resolution-mode 属性で明示的に import 条件を指定する(TS1479回避)。
+import type { GenerateContentParameters } from '@google/genai' with { 'resolution-mode': 'import' };
 import { GEMINI_CONFIG } from '../utils/config';
 import type { SummaryField } from '../../../shared/types';
 
 export interface SummaryGenerationRequest {
+  model: string;
   contents: Array<{ role: 'user'; parts: Array<{ text: string }> }>;
-  generationConfig: { maxOutputTokens: number };
+  config: { maxOutputTokens: number };
 }
 
 /**
- * Vertex AI Gemini に渡す GenerateContentRequest を構築。
- * `generationConfig.maxOutputTokens` の付与漏れを呼び出し元から構造的に排除する。
- * `satisfies GenerateContentRequest` で SDK 型変更時にコンパイルエラーで検知。
+ * Gemini に渡す GenerateContentParameters を構築。
+ * `config.maxOutputTokens` の付与漏れを呼び出し元から構造的に排除する。
+ * `satisfies GenerateContentParameters` で SDK 型変更時にコンパイルエラーで検知。
  */
 export function buildSummaryGenerationRequest(prompt: string): SummaryGenerationRequest {
   const request = {
+    model: GEMINI_CONFIG.modelId,
     contents: [{ role: 'user' as const, parts: [{ text: prompt }] }],
-    generationConfig: { maxOutputTokens: GEMINI_CONFIG.maxOutputTokens },
-  } satisfies GenerateContentRequest;
+    config: { maxOutputTokens: GEMINI_CONFIG.maxOutputTokens },
+  } satisfies GenerateContentParameters;
   return request;
 }
 

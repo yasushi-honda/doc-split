@@ -347,6 +347,30 @@ describe('ocrProcessor', () => {
       const error = new Error('Too Many Requests - please retry later');
       expect(isTransientError(error)).to.be.true;
     });
+
+    // Issue #546: @google/genai(fetch実装)のネットワーク層エラー検出
+    it('@google/genaiのfetch失敗(.cause.codeにECONNREFUSED)はtransientと判定される', () => {
+      const error = new TypeError('fetch failed');
+      (error as TypeError & { cause?: unknown }).cause = { code: 'ECONNREFUSED' };
+      expect(isTransientError(error)).to.be.true;
+    });
+
+    it('@google/genaiのfetch失敗(.cause.codeにENOTFOUND、DNS解決失敗)はtransientと判定される', () => {
+      const error = new TypeError('fetch failed');
+      (error as TypeError & { cause?: unknown }).cause = { code: 'ENOTFOUND' };
+      expect(isTransientError(error)).to.be.true;
+    });
+
+    it('"fetch failed"メッセージのみ(.cause.codeが未知/取得不能)でもtransientと判定される', () => {
+      const error = new TypeError('fetch failed');
+      expect(isTransientError(error)).to.be.true;
+    });
+
+    it('.causeがオブジェクトでない場合もエラーにならずfalseを維持する(既存メッセージにも非該当)', () => {
+      const error = new Error('some unrelated permanent error');
+      (error as Error & { cause?: unknown }).cause = 'not an object';
+      expect(isTransientError(error)).to.be.false;
+    });
   });
 
   describe('is429Error 判定検証 (#194)', () => {

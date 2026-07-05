@@ -517,11 +517,25 @@ Gemini API使用量の日次追跡。`rateLimiter.ts` の `trackGeminiUsage` で
 | フィールド | 型 | 必須 | 説明 |
 |-----------|-----|------|------|
 | date | string | Yes | 日付（YYYY-MM-DD形式） |
-| inputTokens | number | Yes | 入力トークン数（累積） |
-| outputTokens | number | Yes | 出力トークン数（累積） |
-| requestCount | number | Yes | リクエスト回数（累積） |
-| estimatedCostUsd | number | Yes | 推定コスト（USD、累積） |
+| inputTokens | number | Yes | 入力トークン数（累積、全source合計） |
+| outputTokens | number | Yes | 出力トークン数（累積、全source合計） |
+| thinkingTokens | number | Yes | thinkingトークン数（累積、全source合計。Issue #546。output単価で課金されるが可視化のため分離集計） |
+| requestCount | number | Yes | リクエスト回数（累積、全source合計） |
+| estimatedCostUsd | number | Yes | 推定コスト（USD、累積、全source合計） |
+| bySource | map | Yes | 用途別内訳（Issue #546）。`ocr`/`summary` の2キー、各値は下表 |
 | updatedAt | timestamp | Yes | 最終更新日時 |
+
+**bySource.{ocr\|summary} の構造**（`GeminiSourceUsageStats`）:
+
+| フィールド | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| inputTokens | number | Yes | 当該source分の入力トークン数（累積） |
+| outputTokens | number | Yes | 当該source分の出力トークン数（累積） |
+| thinkingTokens | number | Yes | 当該source分のthinkingトークン数（累積） |
+| requestCount | number | Yes | 当該source分のリクエスト回数（累積） |
+| estimatedCostUsd | number | Yes | 当該source分の推定コスト（USD、累積） |
+
+本PR以前（Issue #546適用前）に書き込まれた日次ドキュメントには `thinkingTokens`/`bySource` が存在しない。読み取り側（`getMonthlyUsage`）はoptional chainingで後方互換対応済み。
 
 ---
 

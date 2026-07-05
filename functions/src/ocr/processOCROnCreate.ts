@@ -63,7 +63,7 @@ export const processOCROnCreate = onDocumentCreated(
 
       // 使用量を追跡
       if (result.inputTokens > 0 || result.outputTokens > 0) {
-        await trackGeminiUsage(result.inputTokens, result.outputTokens);
+        await trackGeminiUsage(result.inputTokens, result.outputTokens, result.thinkingTokens, 'ocr');
       }
 
       console.log(`Document ${docId} processed successfully via trigger`, {

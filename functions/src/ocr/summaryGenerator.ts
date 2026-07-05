@@ -13,8 +13,7 @@
  *   呼び出し元で buildSummaryFields() を使い Firestore 更新するパターンを維持
  */
 
-import { VertexAI } from '@google-cloud/vertexai';
-import { GCP_CONFIG, GEMINI_CONFIG } from '../utils/config';
+import { GCP_CONFIG } from '../utils/config';
 import { getRateLimiter, trackGeminiUsage } from '../utils/rateLimiter';
 import { withRetry, RETRY_CONFIGS } from '../utils/retry';
 import { capPageText, MAX_SUMMARY_LENGTH } from '../utils/textCap';
@@ -24,7 +23,6 @@ import { buildSummaryPrompt } from './summaryPromptBuilder';
 
 const PROJECT_ID = GCP_CONFIG.projectId;
 const LOCATION = GCP_CONFIG.location;
-const MODEL_ID = GEMINI_CONFIG.modelId;
 
 // 要約生成を行う最小 OCR 文字数。caller 側 (ocrProcessor / regenerateSummary) で
 // 閾値同期漏れが起きないよう単一定数化。
@@ -53,23 +51,26 @@ export async function generateSummaryCore(
   const rateLimiter = getRateLimiter();
   await rateLimiter.acquire();
 
-  const vertexai = new VertexAI({ project: PROJECT_ID, location: LOCATION });
-  const model = vertexai.getGenerativeModel({ model: MODEL_ID });
+  // @google/genai はESM専用パッケージのため、CJSビルドのこのファイルからは
+  // 静的importでなく動的importで読み込む(TS1479回避)。
+  const { GoogleGenAI } = await import('@google/genai');
+  const ai = new GoogleGenAI({ vertexai: true, project: PROJECT_ID, location: LOCATION });
 
   const prompt = buildSummaryPrompt(ocrResult, documentType);
 
   const response = await withRetry(
-    async () => model.generateContent(buildSummaryGenerationRequest(prompt)),
+    async () => ai.models.generateContent(buildSummaryGenerationRequest(prompt)),
     RETRY_CONFIGS.gemini
   );
 
-  const result = response.response;
-  const rawSummary = (result.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
+  const rawSummary = (response.text || '').trim();
 
-  const usageMetadata = result.usageMetadata;
+  const usageMetadata = response.usageMetadata;
   trackGeminiUsage(
     usageMetadata?.promptTokenCount || 0,
-    usageMetadata?.candidatesTokenCount || 0
+    usageMetadata?.candidatesTokenCount || 0,
+    usageMetadata?.thoughtsTokenCount || 0,
+    'summary'
   );
 
   // Issue #209: 二重防御。maxOutputTokens を抜けた異常応答も Firestore 1 MiB 超過前に切り詰め。

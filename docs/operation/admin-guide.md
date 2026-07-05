@@ -260,12 +260,18 @@ error_type: matching_failed
 // Firestore Console から確認
 /stats/gemini/daily/{YYYY-MM-DD}
 {
-  inputTokens: number,
-  outputTokens: number,
-  totalRequests: number,
-  estimatedCost: number
+  inputTokens: number,       // 入力トークン数（累積、全用途合計）
+  outputTokens: number,      // 出力トークン数（累積、全用途合計）
+  thinkingTokens: number,    // thinkingトークン数（累積、全用途合計）
+  requestCount: number,      // リクエスト回数（累積、全用途合計）
+  estimatedCostUsd: number,  // 推定コスト USD（累積、全用途合計）
+  bySource: {                // 用途別内訳（ocr: OCR転記 / summary: 要約生成）
+    ocr: { inputTokens, outputTokens, thinkingTokens, requestCount, estimatedCostUsd },
+    summary: { inputTokens, outputTokens, thinkingTokens, requestCount, estimatedCostUsd }
+  }
 }
 ```
+詳細なフィールド定義は [データモデル](../context/data-model.md#statsgeminidailyyyyy-mm-dd) を参照。
 
 ### 定期メンテナンス
 

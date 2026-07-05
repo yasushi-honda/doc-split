@@ -37,6 +37,9 @@ const TRANSIENT_ERROR_CODES = [
   'ECONNREFUSED',
   'RESOURCE_EXHAUSTED',
   'UNAVAILABLE',
+  // Issue #546: @google/genai(fetch実装)移行後のDNS解決失敗系。.cause.codeに現れる。
+  'ENOTFOUND',
+  'EAI_AGAIN',
 ];
 
 const TRANSIENT_STATUS_CODES = [429, 500, 502, 503, 504];
@@ -55,7 +58,11 @@ export function isTransientError(error: unknown): boolean {
 
   // Error オブジェクトの場合
   if (error instanceof Error) {
-    const errorWithCode = error as Error & { code?: string | number; status?: number };
+    const errorWithCode = error as Error & {
+      code?: string | number;
+      status?: number;
+      cause?: unknown;
+    };
 
     // エラーコードでチェック
     if (errorWithCode.code) {
@@ -74,6 +81,15 @@ export function isTransientError(error: unknown): boolean {
       }
     }
 
+    // Issue #546: @google/genai(fetch実装)はDNS失敗/接続拒否/リセット等のネットワーク層エラーを
+    // `TypeError: fetch failed` として投げ、実際のerrno(ECONNREFUSED等)はトップレベルの`.code`
+    // ではなく`.cause.code`にネストされる。ここを見ないとネットワーク瞬断がterminal errorに
+    // 即確定し、withRetryのbackoffが機能しない。
+    const causeCode = (errorWithCode.cause as { code?: string } | undefined)?.code;
+    if (typeof causeCode === 'string' && TRANSIENT_ERROR_CODES.includes(causeCode)) {
+      return true;
+    }
+
     // HTTP ステータスコードでチェック
     if (errorWithCode.status && TRANSIENT_STATUS_CODES.includes(errorWithCode.status)) {
       return true;
@@ -90,6 +106,9 @@ export function isTransientError(error: unknown): boolean {
       message.includes('resource exhausted') ||
       message.includes('resource_exhausted') ||
       message.includes('exception posting request') ||
+      // Issue #546: @google/genaiのfetch失敗時の汎用メッセージ。.cause.codeが取れない
+      // (未知のerrno等)場合のfallbackとして許容する。
+      message.includes('fetch failed') ||
       // Issue #526: db.runTransaction()の書込競合(gRPC ABORTED)は一時的エラー。検知しないと、
       // 本来自動リトライ可能な競合がstatus:'error'に即確定してしまう。数値codeが取れないSDK/
       // テストダブル向けのfallbackとして、Firestoreの実メッセージ形式("10 ABORTED: ...")に
