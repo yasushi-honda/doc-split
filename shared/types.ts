@@ -185,9 +185,14 @@ export type PersistedPageOcrResult = SummaryField & {
  * - Phase E (destructive): 本体からocrResult/pageResultsを削除（egress削減の本丸）
  *
  * 詳細: docs/adr/0018-document-detail-subcollection-separation.md
+ *
+ * `ocrResult` が optional な理由(Codex 2nd review P2反映): 再処理時
+ * `getReprocessClearFields()` が `writeBatch()` で本体+本ドキュメントを
+ * 原子的に `deleteField()` するため、OCR完了までの間 `detail/main` は
+ * 存在するが `ocrResult` フィールドを持たない状態になる。
  */
 export interface DocumentDetail {
-  ocrResult: string;
+  ocrResult?: string;
   pageResults?: PersistedPageOcrResult[];
 }
 
