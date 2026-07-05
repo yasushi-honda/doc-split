@@ -25,6 +25,13 @@ import { capPageText, MAX_PAGE_TEXT_LENGTH } from '../utils/textCap';
  * SummaryField (text/truncated/originalLength) + OCR メタ (pageNumber/inputTokens/outputTokens) の合成。
  * 不変条件: truncated=true ⟹ originalLength 必須（型レベル保証）。
  * truncated=false の場合 page.originalLength は型に存在しない（access で tsc エラー）。
+ *
+ * Issue #546: ocrWithGemini() の戻り値には thinkingTokens も含まれるが、本型・
+ * buildPageResult() では意図的に伝播させていない。documents/{id}.pageResults として
+ * Firestore に永続化されるフィールドを増やすと #178 教訓の4点チェック
+ * (firestoreToDocument/書込パス/getReprocessClearFields/型定義) が必要になるため、
+ * コスト計測(stats/gemini/daily)専用の値はここでは切り捨て、
+ * processDocument() 側で ocrWithGemini() の戻り値から直接集計する。
  */
 export type RawPageOcrResult = SummaryField & {
   pageNumber: number;

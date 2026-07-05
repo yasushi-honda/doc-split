@@ -12,6 +12,33 @@ export const GCP_CONFIG = {
   location: 'asia-northeast1',
 } as const;
 
+/**
+ * OCR転記用thinkingBudgetを環境変数から解決する (Issue #546)。
+ *
+ * 既定は0(thinking無効化、コスト削減)。dev deploy後にOCR転記精度への影響が
+ * 確認された場合、環境変数 `GEMINI_OCR_THINKING_BUDGET` を`-1`(dynamic thinkingで
+ * 従来挙動に戻す)に設定してfunctionsを再deployするだけでコード変更・PRなしに
+ * 即時ロールバックできる。
+ *
+ * Codexレビュー指摘: サポート対象外の値(小数・範囲外整数等)をそのままGeminiに渡すと
+ * 全OCRリクエストがバリデーションエラーで失敗しうるため、ロールバック用途として
+ * ドキュメント化された `0`/`-1` の2値のみを許容し、それ以外は安全側の既定値0に
+ * フォールバックする。
+ *
+ * PR#550レビュー指摘: GCPコンソール等からのコピペで混入しうる前後空白・改行を
+ * trimしてから比較する(でないと"-1\n"等が不正値扱いされ、意図したロールバックが
+ * 無言で無効化される)。
+ */
+export function parseOcrThinkingBudget(envValue: string | undefined): number {
+  const trimmed = envValue?.trim();
+  if (trimmed === '-1') return -1;
+  if (trimmed === undefined || trimmed === '' || trimmed === '0') return 0;
+  console.warn(
+    `[config] GEMINI_OCR_THINKING_BUDGET="${envValue}" is not a supported value (expected "0" or "-1"). Falling back to 0.`
+  );
+  return 0;
+}
+
 // Vertex AI / Gemini設定
 export const GEMINI_CONFIG = {
   /** 使用するGeminiモデルID */
@@ -24,4 +51,6 @@ export const GEMINI_CONFIG = {
    * OCR 経路・summary 経路の両方で必須設定。
    */
   maxOutputTokens: 8192,
+  /** OCR転記の thinkingBudget (Issue #546)。既定0、`GEMINI_OCR_THINKING_BUDGET`で上書き可能。 */
+  ocrThinkingBudget: parseOcrThinkingBudget(process.env.GEMINI_OCR_THINKING_BUDGET),
 } as const;

@@ -47,6 +47,7 @@ interface ProcessingStats {
   pagesProcessed: number;
   totalInputTokens: number;
   totalOutputTokens: number;
+  totalThinkingTokens: number;
   errors: number;
   skipped: number;
 }
@@ -72,6 +73,7 @@ export const processOCR = onSchedule(
       pagesProcessed: 0,
       totalInputTokens: 0,
       totalOutputTokens: 0,
+      totalThinkingTokens: 0,
       errors: 0,
       skipped: 0,
     };
@@ -130,6 +132,7 @@ export const processOCR = onSchedule(
           stats.pagesProcessed += result.pagesProcessed;
           stats.totalInputTokens += result.inputTokens;
           stats.totalOutputTokens += result.outputTokens;
+          stats.totalThinkingTokens += result.thinkingTokens;
         } catch (error) {
           stats.errors++;
           const err = error instanceof Error ? error : new Error(String(error));
@@ -137,9 +140,18 @@ export const processOCR = onSchedule(
         }
       }
 
-      // 使用量を追跡
-      if (stats.totalInputTokens > 0 || stats.totalOutputTokens > 0) {
-        await trackGeminiUsage(stats.totalInputTokens, stats.totalOutputTokens);
+      // 使用量を追跡 (PR#550レビュー指摘: thinkingTokensのみ非ゼロのレアケースも計測対象に含める)
+      if (
+        stats.totalInputTokens > 0 ||
+        stats.totalOutputTokens > 0 ||
+        stats.totalThinkingTokens > 0
+      ) {
+        await trackGeminiUsage(
+          stats.totalInputTokens,
+          stats.totalOutputTokens,
+          stats.totalThinkingTokens,
+          'ocr'
+        );
       }
 
       console.log('OCR processing (polling) completed', stats);

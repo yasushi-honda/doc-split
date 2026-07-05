@@ -2,7 +2,7 @@
  * generateSummary regression テスト (Issue #213)
  *
  * 目的:
- * - Vertex AI generateContent 呼び出しに maxOutputTokens=8192 が付与され続けることを保証 (Issue #209 再発防止)
+ * - Gemini generateContent 呼び出しに maxOutputTokens=8192 が付与され続けることを保証 (Issue #209 再発防止)
  * - Firestore の summary フィールド書き込みに truncated/originalLength が同梱され続けることを保証 (#178 教訓)
  */
 
@@ -15,16 +15,21 @@ import { GEMINI_CONFIG } from '../src/utils/config';
 import type { SummaryField } from '../../shared/types';
 
 describe('summaryRequestBuilder: buildSummaryGenerationRequest', () => {
-  it('generationConfig.maxOutputTokens に GEMINI_CONFIG.maxOutputTokens を必ず設定する', () => {
+  it('config.maxOutputTokens に GEMINI_CONFIG.maxOutputTokens を必ず設定する', () => {
     const req = buildSummaryGenerationRequest('test prompt');
-    expect(req.generationConfig.maxOutputTokens).to.equal(GEMINI_CONFIG.maxOutputTokens);
+    expect(req.config.maxOutputTokens).to.equal(GEMINI_CONFIG.maxOutputTokens);
+  });
+
+  it('model に GEMINI_CONFIG.modelId を設定する (Issue #546 SDK移行: @google/genai は model を呼び出し引数に統合)', () => {
+    const req = buildSummaryGenerationRequest('test prompt');
+    expect(req.model).to.equal(GEMINI_CONFIG.modelId);
   });
 
   // canary: GEMINI_CONFIG.maxOutputTokens を意図せず緩和した場合の安全網。
   // 値変更が必要なら #205/#209 の防御目的を再評価し、本テストも明示的に更新すること。
   it('canary: maxOutputTokens は 8192 で固定 (#205で導入、#209でsummary適用)', () => {
     const req = buildSummaryGenerationRequest('test prompt');
-    expect(req.generationConfig.maxOutputTokens).to.equal(8192);
+    expect(req.config.maxOutputTokens).to.equal(8192);
   });
 
   it('contents[0].parts[0].text に prompt 全文を含む', () => {
@@ -36,15 +41,15 @@ describe('summaryRequestBuilder: buildSummaryGenerationRequest', () => {
     expect(req.contents[0].parts[0].text).to.equal(prompt);
   });
 
-  it('空 prompt でも generationConfig は維持される (防御の不変条件)', () => {
+  it('空 prompt でも config は維持される (防御の不変条件)', () => {
     const req = buildSummaryGenerationRequest('');
-    expect(req.generationConfig).to.deep.equal({ maxOutputTokens: 8192 });
+    expect(req.config).to.deep.equal({ maxOutputTokens: 8192 });
   });
 
-  it('長大 prompt (50K chars) でも generationConfig は維持される', () => {
+  it('長大 prompt (50K chars) でも config は維持される', () => {
     const longPrompt = 'a'.repeat(50_000);
     const req = buildSummaryGenerationRequest(longPrompt);
-    expect(req.generationConfig.maxOutputTokens).to.equal(8192);
+    expect(req.config.maxOutputTokens).to.equal(8192);
     expect(req.contents[0].parts[0].text.length).to.equal(50_000);
   });
 });

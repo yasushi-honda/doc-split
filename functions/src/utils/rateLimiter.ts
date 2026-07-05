@@ -100,42 +100,81 @@ export class GeminiRateLimiter {
   }
 }
 
+/** Gemini呼び出しの用途区分 (Issue #546: OCR転記 / 要約生成でコストを分離計測) */
+export type GeminiUsageSource = 'ocr' | 'summary';
+
+/** 用途別 (source別) のGemini使用統計 */
+export interface GeminiSourceUsageStats {
+  inputTokens: number;
+  outputTokens: number;
+  thinkingTokens: number;
+  requestCount: number;
+  estimatedCostUsd: number;
+}
+
 /** Gemini使用統計 */
 export interface GeminiUsageStats {
   date: string;
   inputTokens: number;
   outputTokens: number;
+  /** thinkingトークン (Issue #546: usageMetadata.thoughtsTokenCount。output単価で課金されるが可視化のため分離集計) */
+  thinkingTokens: number;
   requestCount: number;
   estimatedCostUsd: number;
+  bySource: Record<GeminiUsageSource, GeminiSourceUsageStats>;
 }
 
-/** 料金定数（2026年1月時点） */
-const GEMINI_PRICING = {
-  inputPer1MTokens: 0.075, // $0.075
-  outputPer1MTokens: 0.3, // $0.30
-};
+/**
+ * 料金定数（2026年7月時点、gemini-2.5-flash実単価）
+ *
+ * Issue #546: 旧値($0.075/$0.30)はgemini-1.5-flash相当の単価が残置されており、
+ * アプリ内コスト表示が実請求の約1/8に過小評価されていた。
+ */
+export const GEMINI_PRICING = Object.freeze({
+  inputPer1MTokens: 0.3, // $0.30
+  outputPer1MTokens: 2.5, // $2.50（thinkingトークンも同単価で課金される）
+});
 
 /**
  * Gemini API使用量を追跡
+ *
+ * Issue #546: thinkingTokens は output と同単価で課金されるため estimatedCostUsd には
+ * output と合算して算入するが、可視化のため inputTokens/outputTokens とは分離して記録する。
+ * source (ocr/summary) 別の内訳は bySource 以下にも同じ値を積み上げる。
  */
 export async function trackGeminiUsage(
   inputTokens: number,
-  outputTokens: number
+  outputTokens: number,
+  thinkingTokens: number,
+  source: GeminiUsageSource
 ): Promise<void> {
   const today = new Date().toISOString().split('T')[0];
   const statsRef = db.doc(`stats/gemini/daily/${today}`);
 
+  const billableOutputTokens = outputTokens + thinkingTokens;
   const inputCost = (inputTokens * GEMINI_PRICING.inputPer1MTokens) / 1000000;
-  const outputCost = (outputTokens * GEMINI_PRICING.outputPer1MTokens) / 1000000;
+  const outputCost = (billableOutputTokens * GEMINI_PRICING.outputPer1MTokens) / 1000000;
+  const cost = inputCost + outputCost;
+  const increment = admin.firestore.FieldValue.increment;
 
   try {
     await statsRef.set(
       {
         date: today,
-        inputTokens: admin.firestore.FieldValue.increment(inputTokens),
-        outputTokens: admin.firestore.FieldValue.increment(outputTokens),
-        requestCount: admin.firestore.FieldValue.increment(1),
-        estimatedCostUsd: admin.firestore.FieldValue.increment(inputCost + outputCost),
+        inputTokens: increment(inputTokens),
+        outputTokens: increment(outputTokens),
+        thinkingTokens: increment(thinkingTokens),
+        requestCount: increment(1),
+        estimatedCostUsd: increment(cost),
+        bySource: {
+          [source]: {
+            inputTokens: increment(inputTokens),
+            outputTokens: increment(outputTokens),
+            thinkingTokens: increment(thinkingTokens),
+            requestCount: increment(1),
+            estimatedCostUsd: increment(cost),
+          },
+        },
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       },
       { merge: true }
@@ -175,20 +214,41 @@ export async function getMonthlyUsage(): Promise<GeminiUsageStats> {
     .where('date', '<=', `${prefix}-31`)
     .get();
 
-  let totalStats: GeminiUsageStats = {
+  const emptySourceStats = (): GeminiSourceUsageStats => ({
+    inputTokens: 0,
+    outputTokens: 0,
+    thinkingTokens: 0,
+    requestCount: 0,
+    estimatedCostUsd: 0,
+  });
+
+  const totalStats: GeminiUsageStats = {
     date: prefix,
     inputTokens: 0,
     outputTokens: 0,
+    thinkingTokens: 0,
     requestCount: 0,
     estimatedCostUsd: 0,
+    bySource: { ocr: emptySourceStats(), summary: emptySourceStats() },
   };
 
   snapshot.forEach((doc) => {
     const data = doc.data() as GeminiUsageStats;
     totalStats.inputTokens += data.inputTokens || 0;
     totalStats.outputTokens += data.outputTokens || 0;
+    totalStats.thinkingTokens += data.thinkingTokens || 0;
     totalStats.requestCount += data.requestCount || 0;
     totalStats.estimatedCostUsd += data.estimatedCostUsd || 0;
+
+    (Object.keys(totalStats.bySource) as GeminiUsageSource[]).forEach((source) => {
+      const sourceData = data.bySource?.[source];
+      if (!sourceData) return;
+      totalStats.bySource[source].inputTokens += sourceData.inputTokens || 0;
+      totalStats.bySource[source].outputTokens += sourceData.outputTokens || 0;
+      totalStats.bySource[source].thinkingTokens += sourceData.thinkingTokens || 0;
+      totalStats.bySource[source].requestCount += sourceData.requestCount || 0;
+      totalStats.bySource[source].estimatedCostUsd += sourceData.estimatedCostUsd || 0;
+    });
   });
 
   return totalStats;
