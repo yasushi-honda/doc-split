@@ -911,6 +911,30 @@ describe('Firestore Security Rules', () => {
       );
     });
 
+    it('サーバー専有フィールドが不在のdocへnull値を新規注入するのは拒否される（Codex review #569 2nd round P2反映）', async () => {
+      // resource.data.get(field, null) を使った素朴な「無変更判定」だと、フィールド不在の
+      // docに対してクライアントが`field: null`を新規設定しても
+      // resource.data.get(field, null)===null と一致してしまい通過する脆弱性があった。
+      // これは「フィールドが存在するが値がnull」という不正状態を作り、Phase C backfillの
+      // presence判定やrotatePdfPagesのlegacy provenance guardを誤動作させうる。
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'documents', 'doc-no-server-fields-yet'), {
+          fileName: 'test.pdf',
+          status: 'processed',
+          // retryCount/retryAfter/errorRescueCount/lastRescuedAt/provenance はいずれも未設定
+        });
+      });
+
+      const docRef = doc(normalUser.firestore(), 'documents', 'doc-no-server-fields-yet');
+      await assertFails(updateDoc(docRef, { provenance: null }));
+      await assertFails(updateDoc(docRef, { retryCount: null }));
+      await assertFails(updateDoc(docRef, { retryAfter: null }));
+      await assertFails(updateDoc(docRef, { errorRescueCount: null }));
+      await assertFails(updateDoc(docRef, { lastRescuedAt: null }));
+    });
+
     it('許可されていないフィールドの更新は禁止', async () => {
       const normalUser = testEnv.authenticatedContext(normalUid);
 
@@ -1040,7 +1064,7 @@ describe('Firestore Security Rules', () => {
       await assertFails(setDoc(detailRef, { ocrResult: 'x', pageResults: [] }));
     });
 
-    it('ホワイトリスト登録ユーザーはocrResult/pageResultsのみ更新可能', async () => {
+    it('ホワイトリスト登録ユーザーはocrResult/pageResultsの削除(deleteField)が可能', async () => {
       const normalUser = testEnv.authenticatedContext(normalUid);
 
       await testEnv.withSecurityRulesDisabled(async (context) => {
@@ -1057,6 +1081,33 @@ describe('Firestore Security Rules', () => {
 
       const detailRef = doc(normalUser.firestore(), 'documents', 'doc-update-detail', 'detail', 'main');
       await assertSucceeds(
+        updateDoc(detailRef, { ocrResult: deleteField(), pageResults: deleteField() })
+      );
+    });
+
+    it('ocrResult/pageResultsへの新しい値の上書きは拒否される（Codex review #569 P2反映、OCR内容改ざん防止）', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        const db = context.firestore();
+        await setDoc(doc(db, 'documents', 'doc-update-detail-overwrite'), {
+          fileName: 'test.pdf',
+          status: 'processed',
+        });
+        await setDoc(doc(db, 'documents', 'doc-update-detail-overwrite', 'detail', 'main'), {
+          ocrResult: 'old text',
+          pageResults: [],
+        });
+      });
+
+      const detailRef = doc(
+        normalUser.firestore(),
+        'documents',
+        'doc-update-detail-overwrite',
+        'detail',
+        'main'
+      );
+      await assertFails(
         updateDoc(detailRef, { ocrResult: 'new text', pageResults: [{ pageNumber: 1 }] })
       );
     });
