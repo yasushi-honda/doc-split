@@ -147,6 +147,64 @@ export interface Document {
 }
 
 // ============================================
+// ADR-0018: Firestore egress削減のためのサブコレクション分離 (Issue #547)
+// ============================================
+
+/**
+ * pageResults として実際に永続化される shape。
+ *
+ * `functions/src/ocr/buildPageResult.ts` の `RawPageOcrResult` と同一だが、
+ * shared/types.ts は functions/ 配下の型を import できない（shared/ の独立性）ため
+ * ここに複製定義する。shared/types.ts の `PageOcrResult`(`PageOcrMeta & SummaryField`、
+ * detectedDocumentType 等の検出メタ合成後の post-processed shape) とは
+ * **structurally incompatible**(Issue #278 で意図的に分離された別 shape)。
+ * `Document.pageResults` フィールドの型宣言(`PageOcrResult[]`)はこの不一致を
+ * 引き継いだ既存の型不正確さであり、新設する `DocumentDetail` では実際に
+ * 書き込まれる shape に合わせて正しく型付けする(Codex review #556 P2 反映)。
+ *
+ * **既知の限界(Codex review #556 5th round 反映、ADR-0018参照)**: 分割子ドキュメント
+ * (`pdfOperations.ts:609-615`)にコピーされる pageResults は本型にない `originalPageNumber`
+ * を追加で持つ。また Issue #205(OCR暴走対策・per-page cap)以前に書かれた古いレコードは
+ * `truncated` フィールド自体を持たない可能性がある(本型の `SummaryField` 由来の discriminated
+ * union は `truncated: boolean` を必須とする)。これらはサブコレクション分離が原因ではなく
+ * 既存データの経年による schema drift であり、本 ADR のスコープでは是正しない
+ * (Phase C の監査で実データの分布を確認し、必要なら別途データクレンジングを検討する)。
+ */
+export type PersistedPageOcrResult = SummaryField & {
+  pageNumber: number;
+  inputTokens: number;
+  outputTokens: number;
+};
+
+/**
+ * `documents/{docId}/detail/main` サブコレクションドキュメントの型。
+ *
+ * Issue #547 (Firestore egress削減) の対応として、`Document` 本体から
+ * `ocrResult` / `pageResults` の2フィールドのみを分離する（Phase E完了後、
+ * 本体からは削除される）。他の重フィールド（customerCandidates等）は
+ * FE複数箇所（ExtractionInfoPopover / 一覧バッジ判定）が依存するため
+ * 本体に残置する（ADR-0018 Alternatives Considered A案 参照）。
+ *
+ * 移行フェーズ（ADR-0016 PR-D1〜D5パターン踏襲）:
+ * - Phase A (本型定義): 書込ロジック変更なし
+ * - Phase B (dual-write): 本体 + 本サブコレクションへ同一transaction/batchで同時書込
+ * - Phase C (backfill): 既存docへの一括作成
+ * - Phase D (dual-read cutover): FE/Functions双方の読込先切替
+ * - Phase E (destructive): 本体からocrResult/pageResultsを削除（egress削減の本丸）
+ *
+ * 詳細: docs/adr/0018-document-detail-subcollection-separation.md
+ *
+ * `ocrResult` が optional な理由(Codex 2nd review P2反映): 再処理時
+ * `getReprocessClearFields()` が `writeBatch()` で本体+本ドキュメントを
+ * 原子的に `deleteField()` するため、OCR完了までの間 `detail/main` は
+ * 存在するが `ocrResult` フィールドを持たない状態になる。
+ */
+export interface DocumentDetail {
+  ocrResult?: string;
+  pageResults?: PersistedPageOcrResult[];
+}
+
+// ============================================
 // ADR-0016: 分割 PDF Identity / Provenance (Issue #445)
 // ============================================
 
