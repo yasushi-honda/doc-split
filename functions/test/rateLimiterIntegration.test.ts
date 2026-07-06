@@ -31,13 +31,16 @@ describe('rateLimiter 統合テスト (エミュレータ, Issue #546)', () => {
     await cleanupCollections(db, ['stats/gemini/daily']);
   });
 
+  // Issue #548: 既定モデルがgemini-2.5-flashからgemini-3.5-flashへ移行したため、
+  // GEMINI_PRICINGもGEMINI_CONFIG.modelId(既定gemini-3.5-flash)に応じた実単価を返す。
+  // modelId別の解決ロジック自体の網羅テストはconfig.test.tsのresolveGeminiPricingで実施。
   describe('GEMINI_PRICING', () => {
-    it('inputPer1MTokens は gemini-2.5-flash 実単価 $0.30 で固定', () => {
-      expect(GEMINI_PRICING.inputPer1MTokens).to.equal(0.3);
+    it('inputPer1MTokens は既定モデル(gemini-3.5-flash)の実単価 $1.50 で固定', () => {
+      expect(GEMINI_PRICING.inputPer1MTokens).to.equal(1.5);
     });
 
-    it('outputPer1MTokens は gemini-2.5-flash 実単価 $2.50 で固定', () => {
-      expect(GEMINI_PRICING.outputPer1MTokens).to.equal(2.5);
+    it('outputPer1MTokens は既定モデル(gemini-3.5-flash)の実単価 $9.00 で固定', () => {
+      expect(GEMINI_PRICING.outputPer1MTokens).to.equal(9.0);
     });
   });
 
@@ -55,8 +58,9 @@ describe('rateLimiter 統合テスト (エミュレータ, Issue #546)', () => {
       expect(data?.bySource?.ocr?.outputTokens).to.equal(500);
       expect(data?.bySource?.ocr?.thinkingTokens).to.equal(100);
       expect(data?.bySource?.ocr?.requestCount).to.equal(1);
-      // input: 1000*$0.30/1M + output(500+thinking100=600件分): 600*$2.50/1M
-      expect(data?.bySource?.ocr?.estimatedCostUsd).to.be.closeTo(0.0018, 1e-9);
+      // Issue #548: 既定モデルgemini-3.5-flash実単価。
+      // input: 1000*$1.50/1M + output(500+thinking100=600件分): 600*$9.00/1M
+      expect(data?.bySource?.ocr?.estimatedCostUsd).to.be.closeTo(0.0069, 1e-9);
       expect(data?.bySource?.summary).to.be.undefined;
     });
 
@@ -64,14 +68,15 @@ describe('rateLimiter 統合テスト (エミュレータ, Issue #546)', () => {
       await trackGeminiUsage(1_000_000, 1_000_000, 0, 'ocr');
 
       const withoutThinking = (await todayDocRef().get()).data()?.estimatedCostUsd;
-      // input: 1M tokens * $0.30/1M = $0.30、output: 1M tokens * $2.50/1M = $2.50 → 合計$2.80
-      expect(withoutThinking).to.be.closeTo(2.8, 1e-9);
+      // Issue #548: 既定モデルgemini-3.5-flash実単価。
+      // input: 1M tokens * $1.50/1M = $1.50、output: 1M tokens * $9.00/1M = $9.00 → 合計$10.50
+      expect(withoutThinking).to.be.closeTo(10.5, 1e-9);
 
       await todayDocRef().delete();
       await trackGeminiUsage(0, 0, 1_000_000, 'ocr');
       const onlyThinking = (await todayDocRef().get()).data()?.estimatedCostUsd;
-      // thinkingTokens は output と同単価 ($2.50/1M) で課金される
-      expect(onlyThinking).to.be.closeTo(2.5, 1e-9);
+      // thinkingTokens は output と同単価 ($9.00/1M) で課金される
+      expect(onlyThinking).to.be.closeTo(9.0, 1e-9);
     });
 
     it('ocr と summary の呼び出しは bySource 内で独立して集計される', async () => {
