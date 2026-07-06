@@ -91,6 +91,7 @@ on:
           - measure-field-byte-sizes
           - measure-field-byte-sizes --limit 300
           - compare-gemini-ocr-models
+          - measure-summary-cost --doc-id
       doc_id:
         description: 'Document ID (required when script contains --doc-id; ignored otherwise)'
         required: false
@@ -548,10 +549,12 @@ jobs:
                [ "$SCRIPT_NAME" = "pdf-feature-survey" ] || \
                [ "$SCRIPT_NAME" = "verify-pdf-determinism" ] || \
                [ "$SCRIPT_NAME" = "seed-dev-data" ] || \
-               [ "$SCRIPT_NAME" = "compare-gemini-ocr-models" ]; then
+               [ "$SCRIPT_NAME" = "compare-gemini-ocr-models" ] || \
+               [ "$SCRIPT_NAME" = "measure-summary-cost" ]; then
             # Issue #432 PR-C 系 script は scripts/lib/* (TypeScript)、seed-dev-data (#528) は
             # shared/*.ts に依存するため ts-node 経由で実行。compare-gemini-ocr-models (#548) は
             # functions/src/utils/* (extractors.ts/retry.ts) に依存するため同様に ts-node 経由。
+            # measure-summary-cost (#562) は functions/src/ocr/summaryGenerator.ts に依存するため同様。
             # STORAGE_BUCKET は resolve step で env 化済。
             EXTRA_ARGS=""
             if [ "$SCRIPT_NAME" = "classify-collision-docs" ]; then
