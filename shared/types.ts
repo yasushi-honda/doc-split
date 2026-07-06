@@ -161,6 +161,14 @@ export interface Document {
  * `Document.pageResults` フィールドの型宣言(`PageOcrResult[]`)はこの不一致を
  * 引き継いだ既存の型不正確さであり、新設する `DocumentDetail` では実際に
  * 書き込まれる shape に合わせて正しく型付けする(Codex review #556 P2 反映)。
+ *
+ * **既知の限界(Codex review #556 5th round 反映、ADR-0018参照)**: 分割子ドキュメント
+ * (`pdfOperations.ts:609-615`)にコピーされる pageResults は本型にない `originalPageNumber`
+ * を追加で持つ。また Issue #205(OCR暴走対策・per-page cap)以前に書かれた古いレコードは
+ * `truncated` フィールド自体を持たない可能性がある(本型の `SummaryField` 由来の discriminated
+ * union は `truncated: boolean` を必須とする)。これらはサブコレクション分離が原因ではなく
+ * 既存データの経年による schema drift であり、本 ADR のスコープでは是正しない
+ * (Phase C の監査で実データの分布を確認し、必要なら別途データクレンジングを検討する)。
  */
 export type PersistedPageOcrResult = SummaryField & {
   pageNumber: number;
