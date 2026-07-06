@@ -89,6 +89,7 @@ on:
           - check-gemini-cost-stats --days 3 --doc-limit 30
           - measure-field-byte-sizes
           - measure-field-byte-sizes --limit 300
+          - compare-gemini-ocr-models
       doc_id:
         description: 'Document ID (required when script contains --doc-id; ignored otherwise)'
         required: false
@@ -545,9 +546,12 @@ jobs:
                [ "$SCRIPT_NAME" = "setup-collision-fixture" ] || \
                [ "$SCRIPT_NAME" = "pdf-feature-survey" ] || \
                [ "$SCRIPT_NAME" = "verify-pdf-determinism" ] || \
-               [ "$SCRIPT_NAME" = "seed-dev-data" ]; then
+               [ "$SCRIPT_NAME" = "seed-dev-data" ] || \
+               [ "$SCRIPT_NAME" = "compare-gemini-ocr-models" ]; then
             # Issue #432 PR-C 系 script は scripts/lib/* (TypeScript)、seed-dev-data (#528) は
-            # shared/*.ts に依存するため ts-node 経由で実行。STORAGE_BUCKET は resolve step で env 化済。
+            # shared/*.ts に依存するため ts-node 経由で実行。compare-gemini-ocr-models (#548) は
+            # functions/src/utils/* (extractors.ts/retry.ts) に依存するため同様に ts-node 経由。
+            # STORAGE_BUCKET は resolve step で env 化済。
             EXTRA_ARGS=""
             if [ "$SCRIPT_NAME" = "classify-collision-docs" ]; then
               # ログマスキングで `{` が `***` に置換されるため、plan JSON を
