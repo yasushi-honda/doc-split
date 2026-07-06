@@ -64,6 +64,8 @@ service cloud.firestore {
           'ocrResult',
           'ocrResultUrl',
           'summary',
+          'summaryTruncated',
+          'summaryOriginalLength',
           'ocrExtraction',
           'pageResults',
           'fileDateFormatted',
@@ -75,9 +77,16 @@ service cloud.firestore {
           'extractionDetails',
           'allCustomerCandidates',
           'suggestedNewOffice',
+          'provenance',
           'error',
           'lastErrorMessage',
-          'lastErrorId'
+          'lastErrorId',
+          'retryCount',
+          'retryAfter',
+          'errorRescueCount',
+          'lastRescuedAt',
+          // ADR-0018 (Issue #547): detail/main サブコレクション分離に伴う軽量抜粋フィールド
+          'ocrExcerpt'
         ])
         // confirmedBy は自分のUIDのみ設定可能（事業所解決時は含まれない場合あり）
         && (request.resource.data.confirmedBy == request.auth.uid
@@ -98,7 +107,53 @@ service cloud.firestore {
         && (request.resource.data.verifiedBy == request.auth.uid
             || request.resource.data.verifiedBy == resource.data.verifiedBy
             || request.resource.data.verifiedBy == null
-            || !('verifiedBy' in request.resource.data));
+            || !('verifiedBy' in request.resource.data))
+        // サーバー専有フィールド (Codex review #569 P2反映、2nd round P2でnull挿入脆弱性を修正):
+        // FEは getReprocessClearFields() 経由の deleteField() でのみこれらを操作する
+        // (frontend/src/hooks/useDocuments.ts に値を設定する経路は存在しない)。値の新規
+        // 設定・上書きを許可すると、retryAfter を未来日時に書き換えて再処理を永久にスキップ
+        // させたり、provenance を改ざんして rotatePdfPages の整合性検証を無効化する等の
+        // 悪用経路になるため、削除(フィールド不在への遷移)または無変更のみ許可する。
+        // `('field' in resource.data)` の明示チェックが必須: これが無いと、フィールド不在の
+        // docに対して `field: null` を新規注入しても resource.data.get(field, null)==null と
+        // 一致してしまい、「フィールドが存在するが値がnull」という不正状態を作れてしまう
+        // (Phase C backfillのpresence判定やrotatePdfPagesのlegacy provenance guardを誤動作させる)。
+        && (!('retryCount' in request.resource.data)
+            || (('retryCount' in resource.data) && request.resource.data.retryCount == resource.data.retryCount))
+        && (!('retryAfter' in request.resource.data)
+            || (('retryAfter' in resource.data) && request.resource.data.retryAfter == resource.data.retryAfter))
+        && (!('errorRescueCount' in request.resource.data)
+            || (('errorRescueCount' in resource.data) && request.resource.data.errorRescueCount == resource.data.errorRescueCount))
+        && (!('lastRescuedAt' in request.resource.data)
+            || (('lastRescuedAt' in resource.data) && request.resource.data.lastRescuedAt == resource.data.lastRescuedAt))
+        && (!('provenance' in request.resource.data)
+            || (('provenance' in resource.data) && request.resource.data.provenance == resource.data.provenance))
+        // ADR-0018 (Issue #547): ocrExcerptもFunctions(ocrProcessor.ts)専有の派生フィールド。
+        // FEはgetReprocessClearFields()のdeleteField()でのみ操作する想定(#9参照)。
+        && (!('ocrExcerpt' in request.resource.data)
+            || (('ocrExcerpt' in resource.data) && request.resource.data.ocrExcerpt == resource.data.ocrExcerpt));
+      allow delete: if isAdmin();
+    }
+
+    // ADR-0018 (Issue #547): OCR結果本文のサブコレクション分離 (Firestore egress削減)
+    // Phase B (dual-write) 時点では本体からの読込を継続し、本サブコレクションは
+    // Functionsのみが書込む。Phase D以降でFE/Functionsの読込先をこちらへ切替える。
+    match /documents/{docId}/detail/{detailId} {
+      allow read: if isWhitelisted()
+        && exists(/databases/$(database)/documents/documents/$(docId));
+      // 作成: Cloud Functionsのみ（サービスアカウント経由、ルール適用外）
+      allow create: if false;
+      // 更新: Functionsが書込んだocrResult/pageResultsをFEが削除する用途のみ許可
+      // (Codex review #569 P2反映)。Phase D以降のreprocess-clear(#7)もdeleteField()
+      // のみで、値の新規設定・上書きはFunctions専有(ルール適用外のAdmin SDK経由)。
+      // ホワイトリスト登録ユーザーによるOCR内容の任意書換えを防ぐため、親の
+      // サーバー専有フィールドと同じく削除または無変更のみ許可する。
+      allow update: if isWhitelisted()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['ocrResult', 'pageResults'])
+        && (!('ocrResult' in request.resource.data)
+            || (('ocrResult' in resource.data) && request.resource.data.ocrResult == resource.data.ocrResult))
+        && (!('pageResults' in request.resource.data)
+            || (('pageResults' in resource.data) && request.resource.data.pageResults == resource.data.pageResults));
       allow delete: if isAdmin();
     }
 
