@@ -36,12 +36,30 @@ import {
 import type { DocumentMaster, CustomerMaster, OfficeMaster } from '../shared/types';
 import { MIXED_FAX_PDFS, readFixture, CUSTOMERS, OFFICES, DOC_TYPES, CARE_MANAGERS } from './seed-dev-data';
 
+/**
+ * scripts/seed-dev-data.ts の ALLOWED_PROJECT_ID ガードと同じ意図: 本スクリプトは
+ * dev環境のseedフィクスチャ(scripts/fixtures/seed/)の正解ラベルを前提にしており、
+ * kanameone/cocoro等の他環境で実行しても意味を成さない。run-ops-script.yml は
+ * environment(dev/kanameone/cocoro) × script の組合せを自由に選べる共通ワークフローの
+ * ため、選択ミスでVertex AI課金が発生する事故を防ぐ (IAM権限の有無への間接依存ではなく
+ * スクリプト自身で明示的に弾く)。
+ */
+const ALLOWED_PROJECT_ID = 'doc-split-dev';
+
 const PROJECT_ID =
   process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || process.env.FIREBASE_PROJECT_ID || '';
 const LOCATION = 'asia-northeast1';
 
 if (!PROJECT_ID) {
   console.error('GOOGLE_CLOUD_PROJECT (または FIREBASE_PROJECT_ID) を設定してください');
+  process.exit(1);
+}
+
+if (PROJECT_ID !== ALLOWED_PROJECT_ID) {
+  console.error(
+    `❌ このスクリプトは ${ALLOWED_PROJECT_ID} 専用です (指定されたプロジェクト: ${PROJECT_ID})。` +
+      'dev環境seedフィクスチャの正解ラベル前提のため他環境では実行できません。'
+  );
   process.exit(1);
 }
 
