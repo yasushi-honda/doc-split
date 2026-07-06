@@ -107,7 +107,23 @@ service cloud.firestore {
         && (request.resource.data.verifiedBy == request.auth.uid
             || request.resource.data.verifiedBy == resource.data.verifiedBy
             || request.resource.data.verifiedBy == null
-            || !('verifiedBy' in request.resource.data));
+            || !('verifiedBy' in request.resource.data))
+        // サーバー専有フィールド (Codex review #569 P2反映): FEは getReprocessClearFields()
+        // 経由の deleteField() でのみこれらを操作する (frontend/src/hooks/useDocuments.ts に
+        // 値を設定する経路は存在しない)。値の新規設定・上書きを許可すると、retryAfter を
+        // 未来日時に書き換えて再処理を永久にスキップさせたり、provenance を改ざんして
+        // rotatePdfPages の整合性検証を無効化する等の悪用経路になるため、削除(フィールド
+        // 不在への遷移)または無変更のみ許可する。
+        && (!('retryCount' in request.resource.data)
+            || request.resource.data.retryCount == resource.data.get('retryCount', null))
+        && (!('retryAfter' in request.resource.data)
+            || request.resource.data.retryAfter == resource.data.get('retryAfter', null))
+        && (!('errorRescueCount' in request.resource.data)
+            || request.resource.data.errorRescueCount == resource.data.get('errorRescueCount', null))
+        && (!('lastRescuedAt' in request.resource.data)
+            || request.resource.data.lastRescuedAt == resource.data.get('lastRescuedAt', null))
+        && (!('provenance' in request.resource.data)
+            || request.resource.data.provenance == resource.data.get('provenance', null));
       allow delete: if isAdmin();
     }
 

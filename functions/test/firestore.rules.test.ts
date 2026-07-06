@@ -856,6 +856,61 @@ describe('Firestore Security Rules', () => {
       );
     });
 
+    it('サーバー専有フィールド(retryCount等)への新規値の上書きは拒否される（Codex review #569 P2反映）', async () => {
+      // getReprocessClearFields()はこれらのフィールドをdeleteField()する用途のみで、
+      // 値を新規設定・上書きする経路はFEに存在しない。ホワイトリスト登録ユーザーが
+      // 任意の値を書き込めてしまうと、retryAfterを未来日時にして再処理を妨害したり、
+      // provenanceを改ざんしてrotatePdfPagesの整合性検証を無効化する等の悪用経路になる。
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'documents', 'doc-server-owned-fields'), {
+          fileName: 'test.pdf',
+          status: 'error',
+          retryCount: 1,
+          retryAfter: new Date('2026-01-01'),
+          errorRescueCount: 0,
+          provenance: { sourcePath: 'original/legit.pdf' },
+        });
+      });
+
+      const docRef = doc(normalUser.firestore(), 'documents', 'doc-server-owned-fields');
+      // retryAfterを遠い未来に書き換えて再処理を妨害しようとするケース
+      await assertFails(updateDoc(docRef, { retryAfter: new Date('2099-01-01') }));
+      // provenanceを改ざんしようとするケース
+      await assertFails(updateDoc(docRef, { provenance: { sourcePath: 'original/tampered.pdf' } }));
+      // retryCount/errorRescueCountを任意値に書き換えようとするケース
+      await assertFails(updateDoc(docRef, { retryCount: 0 }));
+      await assertFails(updateDoc(docRef, { errorRescueCount: 99 }));
+    });
+
+    it('サーバー専有フィールドの削除(deleteField)は引き続き許可される', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'documents', 'doc-server-owned-fields-clear'), {
+          fileName: 'test.pdf',
+          status: 'error',
+          retryCount: 1,
+          retryAfter: new Date('2026-01-01'),
+          errorRescueCount: 0,
+          lastRescuedAt: new Date('2026-01-01'),
+          provenance: { sourcePath: 'original/legit.pdf' },
+        });
+      });
+
+      const docRef = doc(normalUser.firestore(), 'documents', 'doc-server-owned-fields-clear');
+      await assertSucceeds(
+        updateDoc(docRef, {
+          retryCount: deleteField(),
+          retryAfter: deleteField(),
+          errorRescueCount: deleteField(),
+          lastRescuedAt: deleteField(),
+          provenance: deleteField(),
+        })
+      );
+    });
+
     it('許可されていないフィールドの更新は禁止', async () => {
       const normalUser = testEnv.authenticatedContext(normalUid);
 
