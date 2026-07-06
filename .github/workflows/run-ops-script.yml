@@ -92,6 +92,7 @@ on:
           - measure-field-byte-sizes --limit 300
           - compare-gemini-ocr-models
           - measure-summary-cost --doc-id
+          - create-pending-doc --doc-id --storage-path original/seed_generic_12p.pdf
       doc_id:
         description: 'Document ID (required when script contains --doc-id; ignored otherwise)'
         required: false
@@ -550,11 +551,14 @@ jobs:
                [ "$SCRIPT_NAME" = "verify-pdf-determinism" ] || \
                [ "$SCRIPT_NAME" = "seed-dev-data" ] || \
                [ "$SCRIPT_NAME" = "compare-gemini-ocr-models" ] || \
-               [ "$SCRIPT_NAME" = "measure-summary-cost" ]; then
+               [ "$SCRIPT_NAME" = "measure-summary-cost" ] || \
+               [ "$SCRIPT_NAME" = "create-pending-doc" ]; then
             # Issue #432 PR-C 系 script は scripts/lib/* (TypeScript)、seed-dev-data (#528) は
             # shared/*.ts に依存するため ts-node 経由で実行。compare-gemini-ocr-models (#548) は
             # functions/src/utils/* (extractors.ts/retry.ts) に依存するため同様に ts-node 経由。
             # measure-summary-cost (#562) は functions/src/ocr/summaryGenerator.ts に依存するため同様。
+            # create-pending-doc (#562) はfirebase-adminのみ依存(functions/src非依存)だが、
+            # 統一的にscriptsディレクトリからts-node経由で実行する。
             # STORAGE_BUCKET は resolve step で env 化済。
             EXTRA_ARGS=""
             if [ "$SCRIPT_NAME" = "classify-collision-docs" ]; then
