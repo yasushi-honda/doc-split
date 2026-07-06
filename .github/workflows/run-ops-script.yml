@@ -85,6 +85,7 @@ on:
           - verify-pdf-determinism --paths fixtures/simple.pdf,fixtures/with-ccittfaxdecode.pdf,fixtures/with-jbig2decode.pdf,fixtures/with-jpxdecode.pdf,fixtures/with-dctdecode.pdf,fixtures/encrypted.pdf
           - seed-dev-data --dry-run
           - seed-dev-data
+          - seed-dev-data --force-pending
           - check-gemini-cost-stats
           - check-gemini-cost-stats --days 3 --doc-limit 30
           - measure-field-byte-sizes
