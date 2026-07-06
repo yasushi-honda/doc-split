@@ -90,6 +90,7 @@ on:
           - check-gemini-cost-stats --days 3 --doc-limit 30
           - measure-field-byte-sizes
           - measure-field-byte-sizes --limit 300
+          - measure-split-into-length
           - compare-gemini-ocr-models
           - measure-summary-cost --doc-id
           - create-pending-doc --doc-id --storage-path original/seed_generic_12p.pdf
