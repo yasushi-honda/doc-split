@@ -15,7 +15,7 @@ import {
 } from '../utils/retry';
 import { safeLogError } from '../utils/errorLogger';
 import { getRateLimiter } from '../utils/rateLimiter';
-import { GCP_CONFIG, GEMINI_CONFIG } from '../utils/config';
+import { GCP_CONFIG, GEMINI_CONFIG, isThreePointFiveModel } from '../utils/config';
 import {
   extractDocumentTypeEnhanced,
   extractCustomerCandidates,
@@ -47,6 +47,9 @@ const storage = admin.storage();
 const PROJECT_ID = GCP_CONFIG.projectId;
 const LOCATION = GCP_CONFIG.location;
 const MODEL_ID = GEMINI_CONFIG.modelId;
+// Issue #548: gemini-3.5-flashはthinkingBudget非対応でthinkingLevel方式のみサポートのため、
+// generateContent呼び出し時のthinkingConfig形式をモデル別に分岐する。
+const IS_35_MODEL = isThreePointFiveModel(MODEL_ID);
 
 // 定数
 const OCR_RESULT_MAX_LENGTH = 100000;
@@ -502,7 +505,7 @@ async function ocrWithGemini(
 
   // @google/genai はESM専用パッケージのため、CJSビルドのこのファイルからは
   // 静的importでなく動的importで読み込む(TS1479回避)。
-  const { GoogleGenAI } = await import('@google/genai');
+  const { GoogleGenAI, ThinkingLevel } = await import('@google/genai');
   const ai = new GoogleGenAI({ vertexai: true, project: PROJECT_ID, location: LOCATION });
 
   const base64Data = buffer.toString('base64');
@@ -541,12 +544,14 @@ ${pageNumber ? `\nこれは${pageNumber}ページ目です。` : ''}
           // Issue #205: ハルシネーション/暴走による1.1M chars応答を防止する根本対策
           maxOutputTokens: GEMINI_MAX_OUTPUT_TOKENS,
           // Issue #546: OCR転記はテキストの正確な書き起こしのみで推論を要さないため、
-          // デフォルト有効(dynamic)のthinkingを無効化しコストを削減する(既定値0)。
-          // dev環境の個人アカウント権限制約により事前のOCRテキストdiff検証は未実施のため、
-          // GEMINI_OCR_THINKING_BUDGET環境変数でfeature flag化(GEMINI_CONFIG参照)。
-          // deploy後に少数サンプルで手動diff確認し、精度劣化が見つかれば環境変数の再設定+
-          // functions再deployのみ(コード変更不要)で即時ロールバック可能(#546 Task D)。
-          thinkingConfig: { thinkingBudget: GEMINI_CONFIG.ocrThinkingBudget },
+          // thinkingを最小化しコストを削減する。gemini-2.5-flashはthinkingBudget方式
+          // (既定0、GEMINI_OCR_THINKING_BUDGET環境変数でfeature flag化、GEMINI_CONFIG参照)。
+          // Issue #548: gemini-3.5-flashはthinkingBudget非対応でthinkingLevel方式のみサポートのため、
+          // A/Bテストharness(PR #559、実機3回PASS・精度劣化なし)で実証済みのthinkingLevel.LOWを使用する。
+          // ロールバックは`GEMINI_MODEL_ID=gemini-2.5-flash`設定+functions再deployのみ(コード変更不要)。
+          thinkingConfig: IS_35_MODEL
+            ? { thinkingLevel: ThinkingLevel.LOW }
+            : { thinkingBudget: GEMINI_CONFIG.ocrThinkingBudget },
         },
       });
     },

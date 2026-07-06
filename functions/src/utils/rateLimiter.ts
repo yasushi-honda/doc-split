@@ -5,6 +5,10 @@
  */
 
 import * as admin from 'firebase-admin';
+// 料金定数はGEMINI_CONFIG.modelIdに応じてconfig.tsで解決される (Issue #546/#548)。
+// config.tsはfirebase-adminに依存しないため、pure functionとして単体テスト可能。
+import { GEMINI_PRICING } from './config';
+export { GEMINI_PRICING };
 
 const db = admin.firestore();
 
@@ -123,17 +127,6 @@ export interface GeminiUsageStats {
   estimatedCostUsd: number;
   bySource: Record<GeminiUsageSource, GeminiSourceUsageStats>;
 }
-
-/**
- * 料金定数（2026年7月時点、gemini-2.5-flash実単価）
- *
- * Issue #546: 旧値($0.075/$0.30)はgemini-1.5-flash相当の単価が残置されており、
- * アプリ内コスト表示が実請求の約1/8に過小評価されていた。
- */
-export const GEMINI_PRICING = Object.freeze({
-  inputPer1MTokens: 0.3, // $0.30
-  outputPer1MTokens: 2.5, // $2.50（thinkingトークンも同単価で課金される）
-});
 
 /**
  * Gemini API使用量を追跡

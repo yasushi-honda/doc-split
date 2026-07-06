@@ -1,12 +1,18 @@
 /**
- * config.ts: parseOcrThinkingBudget テスト (Issue #546)
+ * config.ts: parseOcrThinkingBudget / parseModelId / isThreePointFiveModel /
+ * resolveGeminiPricing テスト (Issue #546, #548)
  *
- * GEMINI_CONFIG.ocrThinkingBudget はモジュール読み込み時に一度だけ評価されるため、
- * 環境変数の組み合わせを直接テストするには純粋関数として切り出した本関数を検証する。
+ * GEMINI_CONFIG.* はモジュール読み込み時に一度だけ評価されるため、
+ * 環境変数の組み合わせを直接テストするには純粋関数として切り出した各関数を検証する。
  */
 
 import { expect } from 'chai';
-import { parseOcrThinkingBudget } from '../src/utils/config';
+import {
+  parseOcrThinkingBudget,
+  parseModelId,
+  isThreePointFiveModel,
+  resolveGeminiPricing,
+} from '../src/utils/config';
 
 describe('config: parseOcrThinkingBudget (Issue #546)', () => {
   it('未設定(undefined)の場合は既定値0を返す', () => {
@@ -54,5 +60,64 @@ describe('config: parseOcrThinkingBudget (Issue #546)', () => {
 
   it('前後空白付き"0"("  0  ")はtrimして0として扱われる', () => {
     expect(parseOcrThinkingBudget('  0  ')).to.equal(0);
+  });
+});
+
+describe('config: parseModelId (Issue #548)', () => {
+  it('未設定(undefined)の場合は既定値gemini-3.5-flashを返す(移行後の既定モデル)', () => {
+    expect(parseModelId(undefined)).to.equal('gemini-3.5-flash');
+  });
+
+  it('空文字列の場合は既定値gemini-3.5-flashを返す', () => {
+    expect(parseModelId('')).to.equal('gemini-3.5-flash');
+  });
+
+  it('"gemini-3.5-flash"を指定した場合はそのまま返す', () => {
+    expect(parseModelId('gemini-3.5-flash')).to.equal('gemini-3.5-flash');
+  });
+
+  it('"gemini-2.5-flash"を指定した場合はそのまま返す(ロールバック用途)', () => {
+    expect(parseModelId('gemini-2.5-flash')).to.equal('gemini-2.5-flash');
+  });
+
+  it('未サポートの値は既定値gemini-3.5-flashにフォールバックする(誤設定時の安全側動作)', () => {
+    expect(parseModelId('gemini-1.5-flash')).to.equal('gemini-3.5-flash');
+  });
+
+  it('前後空白付き"gemini-2.5-flash"はtrimしてそのまま扱われる', () => {
+    expect(parseModelId('  gemini-2.5-flash  ')).to.equal('gemini-2.5-flash');
+  });
+});
+
+describe('config: isThreePointFiveModel (Issue #548)', () => {
+  it('"gemini-3.5-flash"はtrueを返す', () => {
+    expect(isThreePointFiveModel('gemini-3.5-flash')).to.equal(true);
+  });
+
+  it('"gemini-2.5-flash"はfalseを返す', () => {
+    expect(isThreePointFiveModel('gemini-2.5-flash')).to.equal(false);
+  });
+});
+
+describe('config: resolveGeminiPricing (Issue #548)', () => {
+  it('"gemini-3.5-flash"は実単価(入力$1.50/出力$9.00)を返す', () => {
+    expect(resolveGeminiPricing('gemini-3.5-flash')).to.deep.equal({
+      inputPer1MTokens: 1.5,
+      outputPer1MTokens: 9.0,
+    });
+  });
+
+  it('"gemini-2.5-flash"は実単価(入力$0.30/出力$2.50)を返す', () => {
+    expect(resolveGeminiPricing('gemini-2.5-flash')).to.deep.equal({
+      inputPer1MTokens: 0.3,
+      outputPer1MTokens: 2.5,
+    });
+  });
+
+  it('未知のmodelIdはgemini-2.5-flash単価にフォールバックする(安全側動作)', () => {
+    expect(resolveGeminiPricing('gemini-1.5-flash')).to.deep.equal({
+      inputPer1MTokens: 0.3,
+      outputPer1MTokens: 2.5,
+    });
   });
 });
