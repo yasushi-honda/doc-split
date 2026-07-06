@@ -3,27 +3,36 @@
  * Gemini 2.5 Flash vs 3.5 Flash OCR精度+コスト比較スクリプト（read-only、Issue #548）
  *
  * dev環境のseedフィクスチャ（scripts/seed-dev-data.ts の MIXED_FAX_PDFS、正解ラベル付き
- * 2ファイル・5segment・計11ページ）を両モデルでページ単位OCRし、extractors.ts の実突合
- * ロジック（extractAllInformation）で書類種別/顧客/事業所の抽出精度を比較する。
+ * 2ファイル・5segment・計11ページ）を両モデルでページ単位OCRし、functions/src/utils/extractors.ts
+ * の各抽出関数（extractDocumentTypeEnhanced / extractCustomerCandidates / extractOfficeCandidates）を
+ * functions/src/ocr/ocrProcessor.ts の processDocument() と同じ呼出形（filenameInfo込み）で使い、
+ * 書類種別/顧客/事業所の3フィールドの抽出精度を比較する。日付(date)は対象外
+ * （Issue #548本文が言及する4フィールドのうち3つのみを検証。理由: 正解の期待日付文字列を
+ * ground truthとして別途モデリングする必要があり本スクリプトのスコープ外としたため）。
  *
- * Issue #548 の必須トリガー条件「dev seedでの2.5 vs 3.5 A/B PASS」（3.5移行で精度が
- * 劣化しないこと）を検証するための唯一の残工程。Firestore/Storageへの書込は一切行わない
- * （ローカルfixture読込 + Vertex AI呼出のみ）。
+ * Issue #548 の必須トリガー条件「dev seedでの2.5 vs 3.5 A/B PASS」のうち、上記3フィールドの
+ * 精度非劣化を検証する。Firestore/Storageへの書込は一切行わない（ローカルfixture読込 +
+ * Vertex AI呼出のみ）。
  *
  * 使用方法:
- *   GOOGLE_CLOUD_PROJECT=doc-split-dev npx ts-node scripts/compare-gemini-ocr-models.ts
- *
- * 前提: Vertex AI (Gemini) 呼出権限を持つGCP認証(ADC)が必要。
- *   ローカル: gcloud auth application-default login (doc-split-dev環境のアカウントで)
- *   注意: 本スクリプトはCLAUDE.md「運用スクリプトはGitHub Actions経由」の対象外
- *   （Firestore/Storageを触らずVertex AI呼出のみのため、既存run-ops-script.ymlの
- *   スコープと異なる。ローカルADCでの単発実行を想定）。
+ *   推奨: GitHub Actions "Run Operations Script" → environment: dev /
+ *         script: compare-gemini-ocr-models で実行（docsplit-cloud-build SAに
+ *         roles/aiplatform.user 付与済み、ADC不要）。
+ *   ローカル実行（フォールバック）:
+ *     gcloud auth application-default login (doc-split-dev環境のアカウントで)
+ *     GOOGLE_CLOUD_PROJECT=doc-split-dev npx ts-node scripts/compare-gemini-ocr-models.ts
  */
 
 import { GoogleGenAI, ThinkingLevel, type ThinkingConfig } from '@google/genai';
 import { PDFDocument } from 'pdf-lib';
 import { withRetry, RETRY_CONFIGS } from '../functions/src/utils/retry';
-import { extractAllInformation } from '../functions/src/utils/extractors';
+import { GEMINI_CONFIG } from '../functions/src/utils/config';
+import {
+  extractDocumentTypeEnhanced,
+  extractCustomerCandidates,
+  extractOfficeCandidates,
+  extractFilenameInfo,
+} from '../functions/src/utils/extractors';
 import type { DocumentMaster, CustomerMaster, OfficeMaster } from '../shared/types';
 import { MIXED_FAX_PDFS, readFixture, CUSTOMERS, OFFICES, DOC_TYPES, CARE_MANAGERS } from './seed-dev-data';
 
@@ -36,25 +45,33 @@ if (!PROJECT_ID) {
   process.exit(1);
 }
 
-// functions/src/utils/config.ts の GEMINI_CONFIG.maxOutputTokens と同値 (Issue #205踏襲)
-const MAX_OUTPUT_TOKENS = 8192;
+type ModelRole = 'baseline' | 'candidate';
 
 interface ModelConfig {
+  role: ModelRole;
   label: string;
   modelId: string;
   thinkingConfig: ThinkingConfig;
   pricing: { inputPer1MTokens: number; outputPer1MTokens: number };
 }
 
-/** 比較対象モデル定義。2.5は現行本番設定、3.5はIssue #548移行予定設定。単価は公式サイト確認済み(2026-07-06)。 */
+/**
+ * 比較対象モデル定義。2.5は現行既定値(GEMINI_OCR_THINKING_BUDGET未設定時のデフォルト、
+ * functions/src/utils/config.ts GEMINI_CONFIG.ocrThinkingBudget参照)、3.5はIssue #548
+ * 移行予定設定(thinking完全無効化不可のため最小のlow)。
+ * 単価は Vertex AI Gemini API 公式料金ページ(https://cloud.google.com/vertex-ai/generative-ai/pricing)
+ * で確認済み(2026-07-06、gemini-2.5-flash/gemini-3.5-flash)。
+ */
 const MODEL_CONFIGS: ModelConfig[] = [
   {
+    role: 'baseline',
     label: 'gemini-2.5-flash(現行)',
     modelId: 'gemini-2.5-flash',
     thinkingConfig: { thinkingBudget: 0 },
     pricing: { inputPer1MTokens: 0.3, outputPer1MTokens: 2.5 },
   },
   {
+    role: 'candidate',
     label: 'gemini-3.5-flash(移行予定)',
     modelId: 'gemini-3.5-flash',
     thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
@@ -62,8 +79,13 @@ const MODEL_CONFIGS: ModelConfig[] = [
   },
 ];
 
-// functions/src/ocr/ocrProcessor.ts の OCR プロンプトと同一 (比較条件を揃えるため)
-const OCR_PROMPT = `
+/**
+ * functions/src/ocr/ocrProcessor.ts の OCR プロンプトと同一ベース + ページ番号suffix
+ * (本番の ocrWithGemini はPDFの全ページで pageNumber を渡すため、常にsuffixが付与される。
+ * 比較条件を揃えるためsuffixもページごとに付与する)。
+ */
+function buildOcrPrompt(pageNumber: number): string {
+  return `
 この画像/PDFの内容をOCRしてください。
 
 【指示】
@@ -72,12 +94,17 @@ const OCR_PROMPT = `
 - 手書き文字も可能な限り読み取ってください
 - 読み取れない部分は[判読不能]と記載してください
 - 余計な説明は不要です。抽出したテキストのみを出力してください
+
+これは${pageNumber}ページ目です。
 `;
+}
 
 interface PageGroundTruth {
   fixtureId: string;
   /** fixture内の1-basedページ番号 */
   pageNumber: number;
+  /** ファイル名から事業所推定するfilenameInfo生成用 (functions/src/ocr/ocrProcessor.ts と同じ経路) */
+  fileName: string;
   docType: string;
   customer: string;
   office: string;
@@ -94,6 +121,7 @@ function expandGroundTruth(): PageGroundTruth[] {
         pages.push({
           fixtureId: mixed.id,
           pageNumber,
+          fileName: mixed.fileName,
           docType: seg.docType,
           customer: seg.customer,
           office: seg.office,
@@ -144,13 +172,16 @@ interface PageOcrOutcome {
   docTypeMatch: boolean;
   customerMatch: boolean;
   officeMatch: boolean;
+  /** true の場合、空応答がsafetyブロック等のAPI異常由来の可能性があり、判定に含めるべきでない疑いがある */
+  anomalous: boolean;
 }
 
 async function ocrPage(
   ai: InstanceType<typeof GoogleGenAI>,
   modelConfig: ModelConfig,
-  pageBuffer: Buffer
-): Promise<{ text: string; inputTokens: number; outputTokens: number; thinkingTokens: number }> {
+  pageBuffer: Buffer,
+  pageNumber: number
+): Promise<{ text: string; inputTokens: number; outputTokens: number; thinkingTokens: number; anomalous: boolean }> {
   const base64Data = pageBuffer.toString('base64');
 
   const response = await withRetry(
@@ -162,12 +193,12 @@ async function ocrPage(
             role: 'user',
             parts: [
               { inlineData: { mimeType: 'application/pdf', data: base64Data } },
-              { text: OCR_PROMPT },
+              { text: buildOcrPrompt(pageNumber) },
             ],
           },
         ],
         config: {
-          maxOutputTokens: MAX_OUTPUT_TOKENS,
+          maxOutputTokens: GEMINI_CONFIG.maxOutputTokens,
           thinkingConfig: modelConfig.thinkingConfig,
         },
       }),
@@ -176,11 +207,31 @@ async function ocrPage(
 
   const text = response.text || '';
   const usageMetadata = response.usageMetadata;
+
+  // Issue #559 silent-failure-hunter指摘: response.text は safetyブロック/zero-candidate等
+  // API異常時にも例外を投げず単に undefined を返す (@google/genai getter実装)。空応答を
+  // 無言で「OCR誤読」と同一視すると、n=11の少数サンプルでPASS/FAIL判定が異常値に左右されうる。
+  let anomalous = false;
+  if (!response.text) {
+    const candidate = response.candidates?.[0];
+    const finishReason = candidate?.finishReason;
+    const blockReason = response.promptFeedback?.blockReason;
+    if (blockReason || (finishReason && finishReason !== 'STOP')) {
+      anomalous = true;
+      console.warn(
+        `⚠️ [${modelConfig.label}] p${pageNumber}: 空応答検出 (API異常の可能性) ` +
+          `finishReason=${finishReason ?? 'none'} blockReason=${blockReason ?? 'none'} — ` +
+          `この結果はモデルの読取精度ではなくAPI応答異常が原因の可能性があります`
+      );
+    }
+  }
+
   return {
     text,
     inputTokens: usageMetadata?.promptTokenCount || 0,
     outputTokens: usageMetadata?.candidatesTokenCount || 0,
     thinkingTokens: usageMetadata?.thoughtsTokenCount || 0,
+    anomalous,
   };
 }
 
@@ -200,32 +251,65 @@ async function runModel(
     if (!pdfBuffer) throw new Error(`fixture buffer not found for ${gt.fixtureId}`);
 
     const pageBuffer = await extractPdfPage(pdfBuffer, gt.pageNumber - 1);
-    const { text, inputTokens, outputTokens, thinkingTokens } = await ocrPage(ai, modelConfig, pageBuffer);
+    const { text, inputTokens, outputTokens, thinkingTokens, anomalous } = await ocrPage(
+      ai,
+      modelConfig,
+      pageBuffer,
+      gt.pageNumber
+    );
 
-    const info = extractAllInformation(text, masters, {});
-    const docTypeMatch = info.document.documentType === gt.docType;
-    const customerMatch = info.customer.bestMatch?.name === gt.customer;
-    const officeMatch = info.office.officeName === gt.office;
+    // functions/src/ocr/ocrProcessor.ts の processDocument() と同じ抽出関数・同じ呼出形
+    // (filenameInfo込みのextractOfficeCandidates) を使う。extractAllInformation() は内部で
+    // extractOfficeNameEnhanced (filenameInfo非対応) を使うため、本番の事業所抽出とは
+    // 別ロジックになってしまい使わない (Issue #559 Codex/comment-analyzer指摘)。
+    const filenameInfo = extractFilenameInfo(gt.fileName);
+    const documentTypeResult = extractDocumentTypeEnhanced(text, masters.documents);
+    const customerResult = extractCustomerCandidates(text, masters.customers);
+    const officeResult = extractOfficeCandidates(text, masters.offices, { filenameInfo });
 
-    outcomes.push({ groundTruth: gt, inputTokens, outputTokens, thinkingTokens, docTypeMatch, customerMatch, officeMatch });
+    const docTypeMatch = documentTypeResult.documentType === gt.docType;
+    const customerMatch = customerResult.bestMatch?.name === gt.customer;
+    const officeMatch = officeResult.bestMatch?.name === gt.office;
+
+    outcomes.push({
+      groundTruth: gt,
+      inputTokens,
+      outputTokens,
+      thinkingTokens,
+      docTypeMatch,
+      customerMatch,
+      officeMatch,
+      anomalous,
+    });
 
     console.log(
       `  [${modelConfig.label}] ${gt.fixtureId} p${gt.pageNumber}: ` +
         `docType=${docTypeMatch ? '✅' : '❌'} customer=${customerMatch ? '✅' : '❌'} office=${officeMatch ? '✅' : '❌'} ` +
         `(in=${inputTokens}/out=${outputTokens}/thinking=${thinkingTokens})`
     );
+    if (!docTypeMatch) {
+      console.log(`    docType不一致: expected="${gt.docType}" actual="${documentTypeResult.documentType ?? '(none)'}"`);
+    }
+    if (!customerMatch) {
+      console.log(`    customer不一致: expected="${gt.customer}" actual="${customerResult.bestMatch?.name ?? '(none)'}"`);
+    }
+    if (!officeMatch) {
+      console.log(`    office不一致: expected="${gt.office}" actual="${officeResult.bestMatch?.name ?? '(none)'}"`);
+    }
   }
 
   return outcomes;
 }
 
 interface ModelSummary {
+  role: ModelRole;
   label: string;
   total: number;
   docTypePass: number;
   customerPass: number;
   officePass: number;
   allPass: number;
+  anomalousCount: number;
   totalInput: number;
   totalOutput: number;
   totalThinking: number;
@@ -233,15 +317,16 @@ interface ModelSummary {
 }
 
 function summarize(
-  label: string,
-  outcomes: PageOcrOutcome[],
-  pricing: { inputPer1MTokens: number; outputPer1MTokens: number }
+  modelConfig: ModelConfig,
+  outcomes: PageOcrOutcome[]
 ): ModelSummary {
+  const { role, label, pricing } = modelConfig;
   const total = outcomes.length;
   const docTypePass = outcomes.filter((o) => o.docTypeMatch).length;
   const customerPass = outcomes.filter((o) => o.customerMatch).length;
   const officePass = outcomes.filter((o) => o.officeMatch).length;
   const allPass = outcomes.filter((o) => o.docTypeMatch && o.customerMatch && o.officeMatch).length;
+  const anomalousCount = outcomes.filter((o) => o.anomalous).length;
 
   const totalInput = outcomes.reduce((s, o) => s + o.inputTokens, 0);
   const totalOutput = outcomes.reduce((s, o) => s + o.outputTokens, 0);
@@ -254,10 +339,13 @@ function summarize(
   console.log(`顧客     一致率: ${customerPass}/${total} (${((customerPass / total) * 100).toFixed(1)}%)`);
   console.log(`事業所   一致率: ${officePass}/${total} (${((officePass / total) * 100).toFixed(1)}%)`);
   console.log(`全項目一致      : ${allPass}/${total} (${((allPass / total) * 100).toFixed(1)}%)`);
+  if (anomalousCount > 0) {
+    console.log(`⚠️ API異常疑いの空応答: ${anomalousCount}/${total} 件 (判定に影響している可能性、上記ログのwarning参照)`);
+  }
   console.log(`トークン: input=${totalInput} output=${totalOutput} thinking=${totalThinking}`);
   console.log(`概算コスト(本テストのみ): $${costUsd.toFixed(6)}`);
 
-  return { label, total, docTypePass, customerPass, officePass, allPass, totalInput, totalOutput, totalThinking, costUsd };
+  return { role, label, total, docTypePass, customerPass, officePass, allPass, anomalousCount, totalInput, totalOutput, totalThinking, costUsd };
 }
 
 async function main(): Promise<void> {
@@ -272,14 +360,29 @@ async function main(): Promise<void> {
   for (const modelConfig of MODEL_CONFIGS) {
     console.log(`\n--- ${modelConfig.label} 実行中... ---`);
     const outcomes = await runModel(modelConfig, groundTruthPages, masters);
-    summaries.push(summarize(modelConfig.label, outcomes, modelConfig.pricing));
+    summaries.push(summarize(modelConfig, outcomes));
   }
 
-  const [baseline, migrated] = summaries;
-  console.log('\n=== 判定 (Issue #548 トリガー条件: 3.5の精度が2.5を下回らないこと) ===');
+  // MODEL_CONFIGS の配列順序ではなく role で明示的に取得する (Issue #559 code-simplifier/
+  // type-design-analyzer指摘: 配列順への暗黙依存はMODEL_CONFIGS変更時に判定を静かに壊す)。
+  const baseline = summaries.find((s) => s.role === 'baseline');
+  const migrated = summaries.find((s) => s.role === 'candidate');
+  if (!baseline || !migrated) {
+    throw new Error(
+      `baseline/candidate の role を持つ ModelSummary が揃っていません (summaries: ${summaries.map((s) => s.role).join(',')})`
+    );
+  }
+
+  console.log('\n=== 判定 (Issue #548 トリガー条件: 3.5の精度が2.5を下回らないこと。書類種別/顧客/事業所の3フィールド、日付は対象外) ===');
   const regressed = migrated.allPass < baseline.allPass;
   console.log(regressed ? '❌ FAIL: 3.5 Flashで精度劣化を検出' : '✅ PASS: 精度劣化なし');
   console.log(`コスト比 (このテストのみ、実運用スケールの参考値ではない): ${(migrated.costUsd / baseline.costUsd).toFixed(2)}倍`);
+
+  // Issue #559 Codex P1指摘: 判定がFAILでもexit codeが0のままだとGitHub Actions上は
+  // 緑のままになり、実際には精度劣化を検出していても見た目上パスしたように誤読されうる。
+  if (regressed) {
+    process.exitCode = 1;
+  }
 }
 
 main().catch((err) => {
