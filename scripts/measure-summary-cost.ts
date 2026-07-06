@@ -21,7 +21,6 @@
  */
 
 import * as admin from 'firebase-admin';
-import { generateSummaryCore, MIN_OCR_LENGTH_FOR_SUMMARY } from '../functions/src/ocr/summaryGenerator';
 
 const ALLOWED_PROJECT_ID = 'doc-split-dev';
 
@@ -45,6 +44,13 @@ admin.initializeApp({ projectId });
 const db = admin.firestore();
 
 async function main(): Promise<void> {
+  // functions/src/utils/rateLimiter.ts はモジュールトップレベルで admin.firestore()
+  // を参照するため(GEMINI_PRICING経由でsummaryGenerator.tsから間接importされる)、
+  // 静的importだとadmin.initializeApp()より先に評価されてFirebaseAppError(no-app)に
+  // なる。動的importでadmin初期化後まで評価を遅延させる
+  // (rateLimiterIntegration.test.tsの./helpers/initFirestoreEmulator分離と同種の対策)。
+  const { generateSummaryCore, MIN_OCR_LENGTH_FOR_SUMMARY } = await import('../functions/src/ocr/summaryGenerator');
+
   const snap = await db.doc(`documents/${docId}`).get();
   if (!snap.exists) {
     console.error(`❌ documents/${docId} が見つかりません`);
