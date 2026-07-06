@@ -54,18 +54,18 @@ const forcePending = process.argv.includes('--force-pending');
 // seed データ定義 (deterministic)
 // ============================================
 
-const CARE_MANAGERS = [
+export const CARE_MANAGERS = [
   { id: 'seed-cm-01', name: '佐々木恵子' },
   { id: 'seed-cm-02', name: '高橋誠' },
   { id: 'seed-cm-03', name: '森さくら' },
 ];
 
-const OFFICES = [
+export const OFFICES = [
   { id: 'seed-office-01', name: 'ひまわり訪問介護ステーション', shortName: 'ひまわり' },
   { id: 'seed-office-02', name: 'あおぞらデイサービスセンター', shortName: 'あおぞら' },
 ];
 
-const DOC_TYPES = [
+export const DOC_TYPES = [
   { id: 'seed-doctype-01', name: 'ケアプラン', category: '計画', dateMarker: '作成日', keywords: ['居宅サービス計画', 'ケアプラン'] },
   { id: 'seed-doctype-02', name: 'サービス提供票', category: '計画', dateMarker: '提供月', keywords: ['提供票', 'サービス提供'] },
   { id: 'seed-doctype-03', name: '訪問看護報告書', category: '医療', dateMarker: '報告日', keywords: ['訪問看護', '報告書'] },
@@ -73,7 +73,7 @@ const DOC_TYPES = [
 ];
 
 /** 顧客 12 名。CM1: 5 名 (配下 120 docs でページング境界)、CM2: 4 名、CM3: 3 名 */
-const CUSTOMERS = [
+export const CUSTOMERS = [
   { id: 'seed-cust-01', name: '相沢一郎', furigana: 'あいざわいちろう', cm: 0 },
   { id: 'seed-cust-02', name: '井上春子', furigana: 'いのうえはるこ', cm: 0 },
   { id: 'seed-cust-03', name: '内田健三', furigana: 'うちだけんぞう', cm: 0 },
@@ -113,7 +113,7 @@ function genericPdfFor(totalPages: number): string {
 }
 
 /** E 用: 複数書類混在 FAX PDF の構成定義 */
-const MIXED_FAX_PDFS = [
+export const MIXED_FAX_PDFS = [
   {
     id: 'seed-doc-pending-mixed-01',
     fixture: 'seed_mixed_fax_01.pdf',
@@ -232,7 +232,7 @@ async function generateFixtures(): Promise<void> {
   console.log('✅ 生成完了。git add scripts/fixtures/seed/ でコミットしてください。');
 }
 
-function readFixture(fixture: string): Buffer {
+export function readFixture(fixture: string): Buffer {
   const p = path.join(FIXTURE_SEED_DIR, fixture);
   if (!fs.existsSync(p)) {
     throw new Error(
@@ -554,9 +554,13 @@ async function seed(): Promise<void> {
   console.log(`  - E (分割): ${MIXED_FAX_PDFS.map((m) => m.id).join(', ')} の OCR 完了後、分割モーダルで検証`);
 }
 
-(generatePdfs ? generateFixtures() : seed())
-  .then(() => process.exit(0))
-  .catch((err) => {
-    console.error('❌ エラー:', err);
-    process.exit(1);
-  });
+// 他スクリプト(compare-gemini-ocr-models.ts等)からMIXED_FAX_PDFS/readFixture等を
+// import するだけでFirestore書込・PDF生成が走らないよう、直接実行時のみ起動する。
+if (require.main === module) {
+  (generatePdfs ? generateFixtures() : seed())
+    .then(() => process.exit(0))
+    .catch((err) => {
+      console.error('❌ エラー:', err);
+      process.exit(1);
+    });
+}
