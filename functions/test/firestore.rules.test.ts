@@ -742,10 +742,15 @@ describe('Firestore Security Rules', () => {
       );
     });
 
-    it('getReprocessClearFieldsの全フィールド更新が許可される（再処理用）', async () => {
+    it('getReprocessClearFieldsの全フィールド更新が許可される（再処理用、対象フィールド全てが実在するdocで検証）', async () => {
+      // fixture drift防止(Codex/Fable5レビュー由来): clearFieldsが削除しようとする
+      // 全キーを「実在させた」docに対してテストする。フィールドが元々存在しない
+      // docへのdeleteFieldは「diffのaffectedKeysに含まれない」ため見かけ上成功するが、
+      // 実在するフィールドをdeleteFieldする場合のみwhitelist漏れが顕在化する
+      // (retryCount/provenance等7フィールドがwhitelist未登録だった実バグの再発防止)。
       const normalUser = testEnv.authenticatedContext(normalUid);
 
-      // テストデータを作成（再処理前の状態）
+      // テストデータを作成（再処理前の状態、getReprocessClearFields()が消す全フィールドを実在させる）
       await testEnv.withSecurityRulesDisabled(async (context) => {
         await setDoc(doc(context.firestore(), 'documents', 'doc-reprocess-full'), {
           fileName: 'test.pdf',
@@ -753,6 +758,10 @@ describe('Firestore Security Rules', () => {
           ocrResult: 'some text',
           ocrResultUrl: 'gs://bucket/ocr.json',
           summary: 'summary text',
+          summaryTruncated: false,
+          summaryOriginalLength: 100,
+          displayFileName: '請求書_山田太郎_20260115.pdf',
+          provenance: { sourcePath: 'original/foo.pdf' },
           customerName: '山田太郎',
           customerId: 'cust-001',
           officeName: 'テスト事業所',
@@ -773,11 +782,17 @@ describe('Firestore Security Rules', () => {
           verifiedBy: normalUid,
           verifiedAt: new Date(),
           error: 'some error',
+          // handleProcessingError (functions/src/ocr/ocrProcessor.ts) がerror確定時に
+          // 必ず書き込むフィールド。本番のエラー文書再処理で典型的に実在する。
+          retryCount: 3,
+          retryAfter: new Date(),
+          errorRescueCount: 1,
+          lastRescuedAt: new Date(),
         });
       });
 
       const docRef = doc(normalUser.firestore(), 'documents', 'doc-reprocess-full');
-      // getReprocessClearFields() と同等のフィールドセットで更新
+      // getReprocessClearFields() と完全に同一のフィールドセットで更新
       await assertSucceeds(
         updateDoc(docRef, {
           status: 'pending',
@@ -785,8 +800,12 @@ describe('Firestore Security Rules', () => {
           ocrResult: deleteField(),
           ocrResultUrl: deleteField(),
           summary: deleteField(),
+          summaryTruncated: deleteField(),
+          summaryOriginalLength: deleteField(),
           ocrExtraction: deleteField(),
           pageResults: deleteField(),
+          displayFileName: deleteField(),
+          provenance: deleteField(),
           customerName: deleteField(),
           customerId: deleteField(),
           officeName: deleteField(),
@@ -807,6 +826,10 @@ describe('Firestore Security Rules', () => {
           error: deleteField(),
           lastErrorMessage: deleteField(),
           lastErrorId: deleteField(),
+          retryCount: deleteField(),
+          retryAfter: deleteField(),
+          errorRescueCount: deleteField(),
+          lastRescuedAt: deleteField(),
           // 値をリセット
           customerConfirmed: false,
           confirmedBy: null,
@@ -890,6 +913,192 @@ describe('Firestore Security Rules', () => {
           verifiedAt: new Date(),
         }, { merge: true })
       );
+    });
+  });
+
+  // ============================================
+  // /documents/{docId}/detail/{detailId} サブコレクション (ADR-0018, Issue #547)
+  // ============================================
+  describe('/documents/{docId}/detail/{detailId} subcollection', () => {
+    it('親docが存在する場合、ホワイトリスト登録ユーザーはdetail/mainを読み取り可能', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        // context.firestore() は同一コールバック内で複数回呼ぶと
+        // "Firestore has already been started" エラーになるため、1回だけ呼び再利用する。
+        const db = context.firestore();
+        await setDoc(doc(db, 'documents', 'doc-with-detail'), {
+          fileName: 'test.pdf',
+          status: 'processed',
+        });
+        await setDoc(doc(db, 'documents', 'doc-with-detail', 'detail', 'main'), {
+          ocrResult: 'full text',
+          pageResults: [],
+        });
+      });
+
+      const detailRef = doc(normalUser.firestore(), 'documents', 'doc-with-detail', 'detail', 'main');
+      await assertSucceeds(getDoc(detailRef));
+    });
+
+    it('親docが存在しない場合、detail/mainの読み取りは拒否される（孤児detail防御）', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        // 親docを作らず detail/main のみ作成（削除同期漏れ・孤児状態を再現）
+        await setDoc(doc(context.firestore(), 'documents', 'doc-orphan-detail', 'detail', 'main'), {
+          ocrResult: 'full text',
+          pageResults: [],
+        });
+      });
+
+      const detailRef = doc(normalUser.firestore(), 'documents', 'doc-orphan-detail', 'detail', 'main');
+      await assertFails(getDoc(detailRef));
+    });
+
+    it('detail/mainへの新規作成(setDoc)はpermission-deniedで拒否される（Functions専用）', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'documents', 'doc-create-detail'), {
+          fileName: 'test.pdf',
+          status: 'pending',
+        });
+      });
+
+      const detailRef = doc(normalUser.firestore(), 'documents', 'doc-create-detail', 'detail', 'main');
+      // resource.data == null (未作成) への書込は create ルールで評価される。
+      // update() ではなく setDoc() を使うのは、update() は対象doc不在時に
+      // SDK/サーバー側の存在チェックで NOT_FOUND となりルール評価に届かないため
+      // (allow create: if false による permission-denied を検証するにはこちらが正しい)。
+      await assertFails(setDoc(detailRef, { ocrResult: 'x', pageResults: [] }));
+    });
+
+    it('ホワイトリスト登録ユーザーはocrResult/pageResultsのみ更新可能', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        const db = context.firestore();
+        await setDoc(doc(db, 'documents', 'doc-update-detail'), {
+          fileName: 'test.pdf',
+          status: 'processed',
+        });
+        await setDoc(doc(db, 'documents', 'doc-update-detail', 'detail', 'main'), {
+          ocrResult: 'old text',
+          pageResults: [],
+        });
+      });
+
+      const detailRef = doc(normalUser.firestore(), 'documents', 'doc-update-detail', 'detail', 'main');
+      await assertSucceeds(
+        updateDoc(detailRef, { ocrResult: 'new text', pageResults: [{ pageNumber: 1 }] })
+      );
+    });
+
+    it('ocrResult/pageResults以外のフィールド更新は拒否される', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        const db = context.firestore();
+        await setDoc(doc(db, 'documents', 'doc-update-detail-forbidden'), {
+          fileName: 'test.pdf',
+          status: 'processed',
+        });
+        await setDoc(
+          doc(db, 'documents', 'doc-update-detail-forbidden', 'detail', 'main'),
+          { ocrResult: 'old text', pageResults: [] }
+        );
+      });
+
+      const detailRef = doc(
+        normalUser.firestore(),
+        'documents',
+        'doc-update-detail-forbidden',
+        'detail',
+        'main'
+      );
+      await assertFails(updateDoc(detailRef, { unrelatedField: 'x' }));
+    });
+
+    it('detail/main不在のdocへのupdate()は失敗する（resource.dataがnullでdiff()評価不能、set()のcreateルール拒否とは別経路）', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'documents', 'doc-no-detail-yet'), {
+          fileName: 'test.pdf',
+          status: 'pending',
+        });
+      });
+
+      const detailRef = doc(normalUser.firestore(), 'documents', 'doc-no-detail-yet', 'detail', 'main');
+      // 実測(emulator): update() は対象doc不在時もクライアントにNOT_FOUNDを返すのではなく、
+      // resource.data が null になった状態で allow update の diff() 評価が失敗し、
+      // 結果としてPERMISSION_DENIED (evaluation error, "Null value error") になる。
+      // set()によるcreateルール拒否(allow create: if false → false for 'create')とは
+      // ログ上のエラー内容が異なる、別の評価パスであることを確認する。
+      await assertFails(updateDoc(detailRef, { ocrResult: 'x' }));
+    });
+
+    it('管理者はdetail/mainを削除可能', async () => {
+      const adminUser = testEnv.authenticatedContext(adminUid);
+
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        const db = context.firestore();
+        await setDoc(doc(db, 'documents', 'doc-delete-detail-admin'), {
+          fileName: 'test.pdf',
+          status: 'processed',
+        });
+        await setDoc(
+          doc(db, 'documents', 'doc-delete-detail-admin', 'detail', 'main'),
+          { ocrResult: 'x', pageResults: [] }
+        );
+      });
+
+      const detailRef = doc(adminUser.firestore(), 'documents', 'doc-delete-detail-admin', 'detail', 'main');
+      await assertSucceeds(deleteDoc(detailRef));
+    });
+
+    it('一般ユーザーはdetail/mainを削除できない', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        const db = context.firestore();
+        await setDoc(doc(db, 'documents', 'doc-delete-detail-normal'), {
+          fileName: 'test.pdf',
+          status: 'processed',
+        });
+        await setDoc(
+          doc(db, 'documents', 'doc-delete-detail-normal', 'detail', 'main'),
+          { ocrResult: 'x', pageResults: [] }
+        );
+      });
+
+      const detailRef = doc(
+        normalUser.firestore(),
+        'documents',
+        'doc-delete-detail-normal',
+        'detail',
+        'main'
+      );
+      await assertFails(deleteDoc(detailRef));
+    });
+
+    it('未認証ユーザーはdetail/mainを読み取れない', async () => {
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        const db = context.firestore();
+        await setDoc(doc(db, 'documents', 'doc-unauth-detail'), {
+          fileName: 'test.pdf',
+          status: 'processed',
+        });
+        await setDoc(doc(db, 'documents', 'doc-unauth-detail', 'detail', 'main'), {
+          ocrResult: 'x',
+          pageResults: [],
+        });
+      });
+
+      const unauthedContext = testEnv.unauthenticatedContext();
+      const detailRef = doc(unauthedContext.firestore(), 'documents', 'doc-unauth-detail', 'detail', 'main');
+      await assertFails(getDoc(detailRef));
     });
   });
 
