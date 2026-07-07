@@ -91,7 +91,9 @@ export async function extractPdfPage(pdfBuffer: Buffer, pageIndex: number): Prom
 }
 
 /**
- * 同一PDFの全ページを抽出する。extractPdfPage()をページ数分呼ぶと`PDFDocument.load()`
+ * 同一PDFから先頭totalPages件のページを抽出する(呼出元がFirestore等の外部値をtotalPagesに
+ * 渡す場合、実PDFの実ページ数と一致する保証は呼出元の責任。不一致(totalPagesが実ページ数を
+ * 超える)場合はcopyPagesがrange errorでthrowする)。extractPdfPage()をページ数分呼ぶと`PDFDocument.load()`
  * (PDF全体のパース)がページ数だけ繰り返されるため、1文書を複数モデルで処理する場合は
  * 全ページを一度だけロードして抽出するここのバッチ版を使う(code-review指摘: N=300規模で
  * 2モデル分の冗長パースはCPU浪費)。

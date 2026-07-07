@@ -264,6 +264,15 @@ interface SampledDoc {
  * (Codex review指摘反映、上部doc comment参照)。documentTypeConfirmedはユーザー選択専用の
  * ため追加フィルタ不要(confirmedFieldMerge.ts参照)。
  */
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0;
+}
+
+/** totalPagesが正の整数でない(欠損/0/負数/非数値)場合は1にフォールバックする */
+function toValidTotalPages(value: unknown): number {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : 1;
+}
+
 async function sampleConfirmedDocuments(limit: number): Promise<SampledDoc[]> {
   const queryLimit = Math.min(limit * SAMPLE_HEADROOM_MULTIPLIER, SAMPLE_HEADROOM_CAP);
   const snap = await db
@@ -281,18 +290,38 @@ async function sampleConfirmedDocuments(limit: number): Promise<SampledDoc[]> {
     return data.confirmedBy != null && data.officeConfirmedBy != null;
   });
 
-  return humanConfirmedOnly.slice(0, limit).map((d) => {
+  // ground truth 3フィールドが有効な非空文字列でない文書は突合不能なため除外する
+  // (confirmedフラグがtrueでもデータドリフトで欠損しているケースを想定した防御)
+  const withValidGroundTruth: SampledDoc[] = [];
+  let skippedInvalidGroundTruth = 0;
+  for (const d of humanConfirmedOnly) {
     const data = d.data();
-    return {
+    if (
+      !isNonEmptyString(data.fileName) ||
+      !isNonEmptyString(data.fileUrl) ||
+      !isNonEmptyString(data.documentType) ||
+      !isNonEmptyString(data.customerName) ||
+      !isNonEmptyString(data.officeName)
+    ) {
+      skippedInvalidGroundTruth++;
+      continue;
+    }
+    withValidGroundTruth.push({
       id: d.id,
-      fileName: data.fileName as string,
-      fileUrl: data.fileUrl as string,
-      totalPages: (data.totalPages as number) ?? 1,
-      confirmedDocumentType: data.documentType as string,
-      confirmedCustomerName: data.customerName as string,
-      confirmedOfficeName: data.officeName as string,
-    };
-  });
+      fileName: data.fileName,
+      fileUrl: data.fileUrl,
+      totalPages: toValidTotalPages(data.totalPages),
+      confirmedDocumentType: data.documentType,
+      confirmedCustomerName: data.customerName,
+      confirmedOfficeName: data.officeName,
+    });
+    if (withValidGroundTruth.length >= limit) break;
+  }
+  if (skippedInvalidGroundTruth > 0) {
+    console.warn(`[sampleConfirmedDocuments] ground truthフィールド欠損のため${skippedInvalidGroundTruth}件を除外`);
+  }
+
+  return withValidGroundTruth;
 }
 
 /** read-only: file.download() のみ、書込・削除は行わない */
@@ -585,30 +614,32 @@ interface DocPairResult {
  * N=300規模でGitHub Actions runnerのメモリを圧迫するリスクがあった。文書単位で
  * バッファのスコープを閉じることでrunner側のGCに任せられる。)
  *
- * aiClientsは呼出元(main)で1回だけ生成したものを再利用する(code-review指摘反映:
+ * aiは呼出元(main)で1回だけ生成したものを再利用する(code-review指摘反映:
  * GoogleGenAIクライアントはstateless設定オブジェクトのため、文書×モデルごとに毎回
- * 新規生成するのはN=300規模で無駄なCPU/初期化コスト)。baseline/candidateの2モデル呼出は
- * 互いに独立(同一pageBuffersを読むだけで状態を共有しない)のためPromise.allで並行実行し、
- * 1文書あたりの処理時間を半減させる。
+ * 新規生成するのはN=300規模で無駄なCPU/初期化コスト。モデル選択はgenerateContent呼出時の
+ * modelIdパラメータで行うためクライアント自体はbaseline/candidateで共有できる、
+ * review-pr指摘反映: 完全に同一引数で構築される2インスタンスは冗長だったため1個に統一)。
+ * baseline/candidateの2モデル呼出は互いに独立(同一pageBuffersを読むだけで状態を共有しない)
+ * のためPromise.allで並行実行し、1文書あたりの処理時間を半減させる。
  */
 async function processOneDocument(
   doc: SampledDoc,
-  aiClients: Record<ModelRole, InstanceType<typeof GoogleGenAI>>,
+  ai: InstanceType<typeof GoogleGenAI>,
   masters: { documents: DocumentMaster[]; customers: CustomerMaster[]; offices: OfficeMaster[] }
 ): Promise<DocPairResult | null> {
   let pdfBuffer: Buffer;
+  let pageBuffers: Buffer[];
   try {
     pdfBuffer = await downloadOriginalPdf(doc.fileUrl);
+    pageBuffers = await extractAllPdfPages(pdfBuffer, doc.totalPages);
   } catch (err) {
-    console.warn(`[processOneDocument] PDF取得失敗 (1件スキップ): ${describeErrorSafely(err)}`);
+    console.warn(`[processOneDocument] PDF取得/ページ抽出失敗 (1件スキップ): ${describeErrorSafely(err)}`);
     return null;
   }
 
-  const pageBuffers = await extractAllPdfPages(pdfBuffer, doc.totalPages);
-
   const [baseline, candidate] = await Promise.all([
-    processDocumentWithModel(aiClients.baseline, BASELINE_MODEL_CONFIG, doc, pageBuffers, masters),
-    processDocumentWithModel(aiClients.candidate, CANDIDATE_MODEL_CONFIG, doc, pageBuffers, masters),
+    processDocumentWithModel(ai, BASELINE_MODEL_CONFIG, doc, pageBuffers, masters),
+    processDocumentWithModel(ai, CANDIDATE_MODEL_CONFIG, doc, pageBuffers, masters),
   ]);
 
   return { baseline, candidate };
@@ -633,18 +664,23 @@ async function main(): Promise<void> {
   }
   console.log(`サンプリングした文書数: ${sampled.length}`);
 
-  // GoogleGenAIクライアントはstateless設定オブジェクトのため実行全体で1個ずつ使い回す
-  // (code-review指摘反映: 文書×モデルごとの再生成は無駄なCPU/初期化コスト)。
-  const aiClients: Record<ModelRole, InstanceType<typeof GoogleGenAI>> = {
-    baseline: new GoogleGenAI({ vertexai: true, project: PROJECT_ID, location: LOCATION }),
-    candidate: new GoogleGenAI({ vertexai: true, project: PROJECT_ID, location: LOCATION }),
-  };
+  // 実行全体で1個だけ生成し使い回す(理由はprocessOneDocument()のJSDoc参照)。
+  const ai = new GoogleGenAI({ vertexai: true, project: PROJECT_ID, location: LOCATION });
 
   console.log('\n--- 文書ごとに処理中 (ダウンロード→2.5-flash/3.5-flash並行実行→バッファ破棄) ---');
-  const results = await runWithConcurrency(sampled, CONCURRENCY, (doc) => processOneDocument(doc, aiClients, masters));
+  const results = await runWithConcurrency(sampled, CONCURRENCY, (doc) => processOneDocument(doc, ai, masters));
   const validResults = results.filter((r): r is DocPairResult => r !== null);
 
-  console.log(`処理成功: ${validResults.length}/${sampled.length} (PDF取得失敗分を除く)`);
+  // review-pr指摘反映: PDF取得/ページ抽出失敗(processOneDocumentがnullを返す)はvalidResultsから
+  // 除外されるため、summarize()の失敗率ゲートには一切現れない。サンプル全体に対する比率で
+  // 別途ゲートする(モデル分岐前の共通失敗のため、baseline/candidate個別ではなくsampled基準)。
+  const downloadFailedCount = sampled.length - validResults.length;
+  const downloadFailureRateExceeded = downloadFailedCount > sampled.length * 0.1;
+
+  console.log(`処理成功: ${validResults.length}/${sampled.length} (PDF取得/ページ抽出失敗分を除く)`);
+  if (downloadFailureRateExceeded) {
+    console.log(`⚠️ PDF取得/ページ抽出の失敗率が10%を超過: ${downloadFailedCount}/${sampled.length}`);
+  }
   if (validResults.length === 0) {
     console.error('❌ 処理できた文書が1件もありませんでした');
     process.exit(1);
@@ -674,7 +710,6 @@ async function main(): Promise<void> {
   console.log(
     `全項目一致率: baseline(2.5)=${(baselineRate * 100).toFixed(1)}% candidate(3.5)=${(candidateRate * 100).toFixed(1)}%`
   );
-  console.log(regressed ? '❌ FAIL: 3.5 Flashで精度劣化を検出' : '✅ PASS: 精度劣化なし');
   console.log(`コスト比 (N=${validResults.length}件): ${(migrated.costUsd / baseline.costUsd).toFixed(2)}倍`);
 
   // Codex review指摘反映: API失敗(success:false)が正しくfailedDocsに集計されるようになったため、
@@ -688,7 +723,17 @@ async function main(): Promise<void> {
     console.log(`⚠️ candidate(3.5-flash)の失敗率が10%を超過: ${migrated.failedDocs}/${migrated.totalDocs}`);
   }
 
-  if (regressed || baselineFailureRateExceeded || candidateFailureRateExceeded) {
+  // review-pr指摘反映: 以前はregressedのみでヘッドラインを表示しており、失敗率ゲート超過時も
+  // 「✅ PASS」と表示されてしまい、下の⚠️行を見落とすと誤って安全と判断しうる状態だった。
+  // 全ゲートを反映した単一の総合判定行にする。
+  const overallPass = !regressed && !baselineFailureRateExceeded && !candidateFailureRateExceeded && !downloadFailureRateExceeded;
+  console.log(
+    overallPass
+      ? '✅ PASS: 精度劣化なし、失敗率ゲートも全て許容範囲内'
+      : '❌ FAIL: 精度劣化または失敗率ゲート超過を検出(詳細は上記⚠️行を参照)'
+  );
+
+  if (!overallPass) {
     process.exitCode = 1;
   }
 }
