@@ -91,15 +91,19 @@ export async function extractPdfPage(pdfBuffer: Buffer, pageIndex: number): Prom
 }
 
 /**
- * 同一PDFから先頭totalPages件のページを抽出する(呼出元がFirestore等の外部値をtotalPagesに
- * 渡す場合、実PDFの実ページ数と一致する保証は呼出元の責任。不一致(totalPagesが実ページ数を
- * 超える)場合はcopyPagesがrange errorでthrowする)。extractPdfPage()をページ数分呼ぶと`PDFDocument.load()`
+ * 同一PDFの全ページを抽出する。ページ数はロード済みPDFの`getPageCount()`から取得する
+ * (functions/src/ocr/ocrProcessor.ts の processDocument() と同じ方式。review-pr指摘反映:
+ * 以前はFirestore保存済みのtotalPagesフィールドを呼出元から受け取っていたが、保存値と
+ * 実PDFの実ページ数がドリフトしている場合(欠損/更新漏れ等)、複数ページ文書がwarningなく
+ * 一部ページのみOCRされ精度測定が静かに歪むリスクがあった。実PDFから直接取得することで
+ * このドリフト依存を排除する)。extractPdfPage()をページ数分呼ぶと`PDFDocument.load()`
  * (PDF全体のパース)がページ数だけ繰り返されるため、1文書を複数モデルで処理する場合は
  * 全ページを一度だけロードして抽出するここのバッチ版を使う(code-review指摘: N=300規模で
  * 2モデル分の冗長パースはCPU浪費)。
  */
-export async function extractAllPdfPages(pdfBuffer: Buffer, totalPages: number): Promise<Buffer[]> {
+export async function extractAllPdfPages(pdfBuffer: Buffer): Promise<Buffer[]> {
   const pdfDoc = await PDFDocument.load(pdfBuffer);
+  const totalPages = pdfDoc.getPageCount();
   const pages: Buffer[] = [];
   for (let i = 0; i < totalPages; i++) {
     const newPdf = await PDFDocument.create();

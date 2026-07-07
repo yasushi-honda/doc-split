@@ -4,7 +4,6 @@ import {
   percentile,
   pct,
   isNonEmptyString,
-  toValidTotalPages,
   computeModelSummaryStats,
   computeMatchRate,
   computeOverallPass,
@@ -58,23 +57,6 @@ test('isNonEmptyString: 有効な非空文字列のみtrue', () => {
   assert.equal(isNonEmptyString(undefined), false);
   assert.equal(isNonEmptyString(null), false);
   assert.equal(isNonEmptyString(123), false);
-});
-
-test('toValidTotalPages: 正の整数はそのまま通す', () => {
-  assert.equal(toValidTotalPages(5), 5);
-  assert.equal(toValidTotalPages(1), 1);
-});
-
-test('toValidTotalPages: 0はFirestoreの??演算子では拾えないため明示ガードが必要(実バグ回帰防止)', () => {
-  assert.equal(toValidTotalPages(0), 1);
-});
-
-test('toValidTotalPages: 負数・非整数・非数値・欠損は1にフォールバック', () => {
-  assert.equal(toValidTotalPages(-3), 1);
-  assert.equal(toValidTotalPages(2.5), 1);
-  assert.equal(toValidTotalPages('5'), 1);
-  assert.equal(toValidTotalPages(undefined), 1);
-  assert.equal(toValidTotalPages(null), 1);
 });
 
 test('computeModelSummaryStats: 成功/失敗混在時、失敗文書はマッチ集計の分母から除外される', () => {

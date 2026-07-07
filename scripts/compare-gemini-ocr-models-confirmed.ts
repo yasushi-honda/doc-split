@@ -80,7 +80,6 @@ import {
 } from './lib/geminiOcrCompare';
 import {
   isNonEmptyString,
-  toValidTotalPages,
   pct,
   computeModelSummaryStats,
   computeMatchRate,
@@ -95,7 +94,11 @@ import {
  */
 const ALLOWED_PROJECT_IDS = ['docsplit-kanameone', 'docsplit-cocoro'];
 const LOCATION = 'asia-northeast1';
-/** Vertex AIレート制限を踏まえた保守的な同時実行数 */
+/**
+ * Vertex AIレート制限を踏まえた同時実行文書数(review-pr指摘反映: 1文書あたり
+ * baseline/candidateをPromise.allで並行実行するため、実際のgenerateContent同時実行数は
+ * この値の2倍になる点に注意)。
+ */
 const CONCURRENCY = 5;
 const DEFAULT_LIMIT = 30;
 /**
@@ -257,7 +260,6 @@ interface SampledDoc {
   id: string;
   fileName: string;
   fileUrl: string;
-  totalPages: number;
   confirmedDocumentType: string;
   confirmedCustomerName: string;
   confirmedOfficeName: string;
@@ -310,7 +312,6 @@ async function sampleConfirmedDocuments(limit: number): Promise<SampledDoc[]> {
       id: d.id,
       fileName: data.fileName,
       fileUrl: data.fileUrl,
-      totalPages: toValidTotalPages(data.totalPages),
       confirmedDocumentType: data.documentType,
       confirmedCustomerName: data.customerName,
       confirmedOfficeName: data.officeName,
@@ -574,7 +575,7 @@ async function processOneDocument(
   let pageBuffers: Buffer[];
   try {
     pdfBuffer = await downloadOriginalPdf(doc.fileUrl);
-    pageBuffers = await extractAllPdfPages(pdfBuffer, doc.totalPages);
+    pageBuffers = await extractAllPdfPages(pdfBuffer);
   } catch (err) {
     console.warn(`[processOneDocument] PDF取得/ページ抽出失敗 (1件スキップ): ${describeErrorSafely(err)}`);
     return null;
@@ -686,8 +687,16 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err) => {
-  // fatal error: 個人情報保護のため生のエラーメッセージはログに出さない (describeErrorSafely参照)
-  console.error('❌ エラー:', describeErrorSafely(err));
-  process.exit(1);
-});
+// review-pr指摘反映(HIGH): firebase-adminのFirestore/StorageクライアントはgRPCハンドルを
+// イベントループに残すため、main()がresolveしてもprocess.exitCodeを設定するだけでは
+// プロセスが自然終了しない。GitHub Actions側にtimeout-minutes設定が無いため、成功/失敗を
+// 問わずjobがdefaultの6時間ハングし続け、上で組んだoverallPassのexit-codeゲートが機能しなく
+// なる(他のfirebase-admin使用スクリプト4本は全て成功パスで明示exitしており、本スクリプトの
+// 抜けはこの規約からの逸脱だった)。process.exitCode(FAIL時1)を尊重した上で明示的にexitする。
+main()
+  .then(() => process.exit(process.exitCode ?? 0))
+  .catch((err) => {
+    // fatal error: 個人情報保護のため生のエラーメッセージはログに出さない (describeErrorSafely参照)
+    console.error('❌ エラー:', describeErrorSafely(err));
+    process.exit(1);
+  });

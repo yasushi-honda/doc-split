@@ -22,11 +22,6 @@ export function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0;
 }
 
-/** totalPagesが正の整数でない(欠損/0/負数/非数値)場合は1にフォールバックする */
-export function toValidTotalPages(value: unknown): number {
-  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : 1;
-}
-
 export interface DocOutcomeForSummary {
   success: boolean;
   inputTokens: number;
