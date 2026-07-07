@@ -23,8 +23,7 @@
  *     GOOGLE_CLOUD_PROJECT=doc-split-dev npx ts-node scripts/compare-gemini-ocr-models.ts
  */
 
-import { GoogleGenAI, ThinkingLevel, type ThinkingConfig } from '@google/genai';
-import { PDFDocument } from 'pdf-lib';
+import { GoogleGenAI } from '@google/genai';
 import { withRetry, RETRY_CONFIGS } from '../functions/src/utils/retry';
 import { GEMINI_CONFIG } from '../functions/src/utils/config';
 import {
@@ -35,6 +34,7 @@ import {
 } from '../functions/src/utils/extractors';
 import type { DocumentMaster, CustomerMaster, OfficeMaster } from '../shared/types';
 import { MIXED_FAX_PDFS, readFixture, CUSTOMERS, OFFICES, DOC_TYPES, CARE_MANAGERS } from './seed-dev-data';
+import { MODEL_CONFIGS, buildOcrPrompt, extractPdfPage, type ModelConfig, type ModelRole } from './lib/geminiOcrCompare';
 
 /**
  * scripts/seed-dev-data.ts の ALLOWED_PROJECT_ID ガードと同じ意図: 本スクリプトは
@@ -61,60 +61,6 @@ if (PROJECT_ID !== ALLOWED_PROJECT_ID) {
       'dev環境seedフィクスチャの正解ラベル前提のため他環境では実行できません。'
   );
   process.exit(1);
-}
-
-type ModelRole = 'baseline' | 'candidate';
-
-interface ModelConfig {
-  role: ModelRole;
-  label: string;
-  modelId: string;
-  thinkingConfig: ThinkingConfig;
-  pricing: { inputPer1MTokens: number; outputPer1MTokens: number };
-}
-
-/**
- * 比較対象モデル定義。2.5は現行既定値(GEMINI_OCR_THINKING_BUDGET未設定時のデフォルト、
- * functions/src/utils/config.ts GEMINI_CONFIG.ocrThinkingBudget参照)、3.5はIssue #548
- * 移行予定設定(thinking完全無効化不可のため最小のlow)。
- * 単価は Vertex AI Gemini API 公式料金ページ(https://cloud.google.com/vertex-ai/generative-ai/pricing)
- * で確認済み(2026-07-06、gemini-2.5-flash/gemini-3.5-flash)。
- */
-const MODEL_CONFIGS: ModelConfig[] = [
-  {
-    role: 'baseline',
-    label: 'gemini-2.5-flash(現行)',
-    modelId: 'gemini-2.5-flash',
-    thinkingConfig: { thinkingBudget: 0 },
-    pricing: { inputPer1MTokens: 0.3, outputPer1MTokens: 2.5 },
-  },
-  {
-    role: 'candidate',
-    label: 'gemini-3.5-flash(移行予定)',
-    modelId: 'gemini-3.5-flash',
-    thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-    pricing: { inputPer1MTokens: 1.5, outputPer1MTokens: 9.0 },
-  },
-];
-
-/**
- * functions/src/ocr/ocrProcessor.ts の OCR プロンプトと同一ベース + ページ番号suffix
- * (本番の ocrWithGemini はPDFの全ページで pageNumber を渡すため、常にsuffixが付与される。
- * 比較条件を揃えるためsuffixもページごとに付与する)。
- */
-function buildOcrPrompt(pageNumber: number): string {
-  return `
-この画像/PDFの内容をOCRしてください。
-
-【指示】
-- テキストをそのまま正確に抽出してください
-- 表がある場合は、構造を保ってテキスト化してください
-- 手書き文字も可能な限り読み取ってください
-- 読み取れない部分は[判読不能]と記載してください
-- 余計な説明は不要です。抽出したテキストのみを出力してください
-
-これは${pageNumber}ページ目です。
-`;
 }
 
 interface PageGroundTruth {
@@ -148,16 +94,6 @@ function expandGroundTruth(): PageGroundTruth[] {
     }
   }
   return pages;
-}
-
-/** PDFから単一ページを抽出 (functions/src/ocr/ocrProcessor.ts の extractPdfPage と同ロジック) */
-async function extractPdfPage(pdfBuffer: Buffer, pageIndex: number): Promise<Buffer> {
-  const pdfDoc = await PDFDocument.load(pdfBuffer);
-  const newPdf = await PDFDocument.create();
-  const [copiedPage] = await newPdf.copyPages(pdfDoc, [pageIndex]);
-  newPdf.addPage(copiedPage);
-  const pdfBytes = await newPdf.save();
-  return Buffer.from(pdfBytes);
 }
 
 function buildMasters(): { documents: DocumentMaster[]; customers: CustomerMaster[]; offices: OfficeMaster[] } {
