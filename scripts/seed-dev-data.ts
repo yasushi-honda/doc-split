@@ -429,7 +429,13 @@ function buildPendingDoc(mixed: (typeof MIXED_FAX_PDFS)[number], storageBucket: 
 // 投入
 // ============================================
 
-const BATCH_SIZE = 400;
+// ADR-0018 (Issue #547) Phase B: commitInBatchesは既にflatMap後の生write配列
+// (parent+detail/mainのペアが連続2要素として並ぶ)をBATCH_SIZE単位でchunkする。
+// BATCH_SIZEは「doc数」ではなく「write要素数」の上限であり、偶数である限り
+// 各docのペアがchunk境界をまたぐことはない(250要素=processed/error等は125doc分)。
+// 250はFirestore 500 write上限の半分で、1write/docのmasterWritesにも同じ定数を
+// 適用しているため実質125doc分とやや保守的だが、安全側でありコストは無視できる。
+const BATCH_SIZE = 250;
 
 async function commitInBatches(
   db: FirebaseFirestore.Firestore,
@@ -524,13 +530,22 @@ async function seed(): Promise<void> {
   await commitInBatches(db, masterWrites);
 
   // 3. processed / error 書類
+  // ADR-0018 (Issue #547) Phase B: 本体と同一batch内でdetail/mainへocrResultを
+  // dual-write (MUST: 原子性)。本体からの削除はPhase E。
   console.log('\n📄 processed/error 書類投入...');
   await commitInBatches(
     db,
-    bulkDocs.map((d) => ({ ref: db.collection('documents').doc(d.id), data: d.data })),
+    bulkDocs.flatMap((d) => {
+      const ref = db.collection('documents').doc(d.id);
+      return [
+        { ref, data: d.data },
+        { ref: ref.collection('detail').doc('main'), data: { ocrResult: d.data.ocrResult as string } },
+      ];
+    }),
   );
 
   // 4. pending 書類 (OCR パイプライン発火)。既存 doc は OCR 完了・検証済み状態の保護のためスキップ
+  // ADR-0018 (Issue #547) Phase B: 本体と同一batch内でdetail/mainへdual-write
   console.log('\n⏳ pending 書類投入...');
   const pendingWrites: Array<{ ref: FirebaseFirestore.DocumentReference; data: Record<string, unknown> }> = [];
   for (const d of pendingDocs) {
@@ -540,6 +555,10 @@ async function seed(): Promise<void> {
       continue;
     }
     pendingWrites.push({ ref, data: d.data });
+    pendingWrites.push({
+      ref: ref.collection('detail').doc('main'),
+      data: { ocrResult: d.data.ocrResult as string },
+    });
   }
   if (pendingWrites.length > 0) {
     await commitInBatches(db, pendingWrites);
