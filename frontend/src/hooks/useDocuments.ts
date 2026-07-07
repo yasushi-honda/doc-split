@@ -14,6 +14,7 @@ import {
   doc,
   getDoc,
   updateDoc,
+  writeBatch,
   deleteField,
   Timestamp,
   QueryConstraint,
@@ -147,6 +148,8 @@ export function firestoreToDocument(id: string, data: Record<string, unknown>): 
     mimeType: data.mimeType as string,
     ocrResult: data.ocrResult as string,
     ocrResultUrl: data.ocrResultUrl as string | undefined,
+    // 一覧表示用軽量抜粋 (ADR-0018 Phase B、Issue #547)
+    ocrExcerpt: data.ocrExcerpt as string | undefined,
     // Issue #209/#215: 切り詰めメタ込みの discriminated union (旧フラット形式も互換読込)
     summary: normalizeSummary(data),
     documentType: data.documentType as string,
@@ -257,6 +260,8 @@ export function getReprocessClearFields() {
     // OCR結果
     ocrResult: df,
     ocrResultUrl: df,
+    // 一覧表示用軽量抜粋 (ADR-0018 Phase B、Issue #547)
+    ocrExcerpt: df,
     // Issue #215: summary は discriminated union ネスト型に統一。旧フラット3フィールド
     // (summaryTruncated / summaryOriginalLength) は後方互換のため同時に delete し、
     // 既存 Firestore ドキュメントに残存する旧フィールドも再処理時にクリーン化する。
@@ -339,10 +344,14 @@ export function useReprocessDocument() {
     if (!documentId || reprocessingId) return false
     setReprocessingId(documentId)
     try {
-      await updateDoc(doc(db, 'documents', documentId), {
+      // ADR-0018 Phase B (Issue #547): 他2箇所(useErrors/DocumentsPage)との
+      // writeBatch統一。detail/main書込はPhase D以降(PR4b)に分離、本PRは親docのみ。
+      const batch = writeBatch(db)
+      batch.update(doc(db, 'documents', documentId), {
         status: 'pending',
         ...getReprocessClearFields(),
       })
+      await batch.commit()
       // 楽観的更新（即時UI反映）
       updateDocumentInListCache(queryClient, documentId, {
         status: 'pending',
