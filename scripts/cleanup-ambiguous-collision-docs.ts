@@ -426,6 +426,15 @@ async function main(): Promise<void> {
     );
     process.exit(1);
   }
+  // ADR-0018 (Issue #547) Phase B: 本体+detail/main の2書込のため
+  // batch内訳は 2N ≤ 500 → N ≤ 250 が安全な上限 (cleanup-duplicates.js と同じ根拠)。
+  // 単一batch (chunking なし) のため、上限超過は明示的に abort する。
+  if (deletions.length > 250) {
+    console.error(
+      `❌ 削除対象件数=${deletions.length} が単一batchの上限(250、本体+detail/main の2書込のため)を超過しています。plan を分割してください。`
+    );
+    process.exit(1);
+  }
   const batch = db.batch();
   for (const d of deletions) {
     const lastUpdateTime = updateTimes.get(d.docId);
@@ -434,6 +443,13 @@ async function main(): Promise<void> {
       process.exit(1);
     }
     batch.delete(db.collection('documents').doc(d.docId), { lastUpdateTime });
+    // ADR-0018 (Issue #547) Phase B: detail/main サブコレクションを同一batchで削除
+    // (孤児化防止)。lastUpdateTime preconditionは親docのみで足りる
+    // (detail/mainは親と同一transaction/batchでのみ書込まれるため、親の
+    // precondition不一致で batch 全体が abort されればdetail/mainも道連れで残る)。
+    batch.delete(
+      db.collection('documents').doc(d.docId).collection('detail').doc('main')
+    );
   }
   try {
     await batch.commit();
