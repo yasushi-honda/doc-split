@@ -1,6 +1,16 @@
 # ハンドオフメモ
 
-**更新日**: 2026-07-07 session103（#547 Phase B完遂・Issue自体もclose。PR3(削除同期改修、PR #573)/PR4a(FE writeBatch化、PR #574)/PR5(seed-dev-data.ts dual-write化、PR #575)を実装・レビュー・マージし、5PR構成(PR1〜PR5)完了。各PRで`/code-review high`+Codexセカンドオピニオンを実施しCONFIRMED計6件を検出・修正（PR3: batchサイズ安全装置欠如／PR4a: エラーハンドリング回帰2件+firestoreToDocument()のocrExcerptマッピング欠如／PR5: BATCH_SIZEコメント不整合+契約テスト欠如）。PR4a/PR5は実機確認も実施（PR4a: Firebase emulator+Playwright手動操作で一括再処理15件を実証、PR5: GitHub Actions経由でdev実投入しFirebase Consoleでdetail/main実在確認）。Issue #547はPR #575の`Closes #547`で自動close）
+**更新日**: 2026-07-08 session104（Issue #548のprod展開判断材料として、kanameone本番の確定済み文書を使ったconfirmed replay検証スクリプトを新規実装。既存dev A/Bテスト(n=11)がCodexセカンドオピニオンで統計的に不十分と指摘されたことへの対応。`/safe-refactor`→Codex review(4件修正)→`/code-review medium`(8件検出・6件修正)のフルサイクルを実施しPR #577作成。プロジェクトhookにより大規模PR判定(`/review-pr`+`codex review`必須)、マージ・pilot実行は次セッション持越し）
+
+## session104 サマリ（2026-07-08）
+
+- **背景**: 前セッションまでで#548(Gemini 3.5移行)はdev実装+実機検証完了(PR #561)、残るはkanameone/cocoro本番展開のみの状態だった。本セッションでユーザーから展開判断のセカンドオピニオンを求められ、Codex(plan mode)に相談したところ「n=11のA/Bテストは実運用判断の統計的根拠として不十分(rule of threeで劣化率上限27%までしか保証しない)」と指摘。より大規模な実データ検証が必要と判断し、追加検証スクリプトの実装に着手。
+- **設計**: kanameone/cocoro本番の「確定済み文書」(`customerConfirmed`/`officeConfirmed`/`documentTypeConfirmed`が true)は既に人間検証済み(またはOCR高確信度自己判定済み)のground truthをFirestore上に持つため、新規ラベリングコストなしで大規模検証に転用できると気づき、この「confirmed replay方式」を`/impl-plan`で計画。
+- **実装(`scripts/compare-gemini-ocr-models-confirmed.ts`新規)**: kanameone本番から確定済み文書をサンプリングし、元PDFを2.5-flash/3.5-flash両方で再OCRして精度・コスト・レイテンシを比較するread-onlyスクリプト。`scripts/lib/geminiOcrCompare.ts`を新規作成し既存devスクリプト(`compare-gemini-ocr-models.ts`)とモデル定義/プロンプト構築/PDFページ抽出を共通化(挙動不変、ts-node実行で回帰確認済み)。この共通化の過程で、新規スクリプトのOCRプロンプトが本番`ocrProcessor.ts`と異なる文言(余分なページ総数付与)になっていた実バグを発見・修正。
+- **品質ゲート1: Codex review(`codex exec`、read-only保証+PII非出力の重点確認)**: 4件の実質指摘を検証の上修正。①リトライ時に共通retry(`withRetry`)が生エラーメッセージをログ出力しStorageパス(元アップロードファイル名を含みうる)経由でPII漏洩する経路があった→独自の`withSilentRetry()`(エラー内容非出力)に切替。②Gemini API最終失敗が「空文字+成功扱い」で集計され10%失敗率ゲートが機能しなかった→`ocrPage()`を最終失敗時throwに変更。③`admin.initializeApp()`にStorage bucket未設定でGitHub Actions実行時にPDF取得が失敗する可能性→`STORAGE_BUCKET`環境変数を必須化(CLAUDE.md「Storageバケット名」rule準拠)。④`customerConfirmed`/`officeConfirmed`はOCR自己判定でもtrueになりうり2.5-flash自己判定値をground truthにするとbaseline有利のラベルリークになる→`confirmedBy`/`officeConfirmedBy`が非nullの真に人間確定した文書のみに対象限定。
+- **品質ゲート2: `/code-review medium`(8角度finder並列+1-vote verify)**: 8件検出、6件修正。判定ロジック(`regressed`)が絶対件数比較でモデル間の成功文書数が異なる場合に誤判定しうる問題→一致率比較に変更。2モデルの逐次処理→`Promise.all`で並行化(N=300規模での実行時間半減)。GoogleGenAIクライアントの600回再生成→1回生成し使い回し。PDF全体を2モデル分冗長パース→1文書1回に統一。未使用フィールド削除。型安全でない`.find()`パターン→named constants化。**あえて見送った2件**(共通`retry.ts`/`loadMasterData.ts`との重複解消): 本番Cloud Functions全体に影響する共有ファイル変更が必要でコストに見合わないと判断、docコメントで理由明記。
+- **PR #577作成**: `feat/gemini-confirmed-replay-verification`ブランチで4ファイル(+816/-66)。作成直後、`post-pr-review.sh`hookが「large tier(4 files/882 lines)」と判定し、`/review-pr`(6エージェント並列)+`codex review`(セカンドオピニオン)をマージ前に必須と指示。本セッションでは未実施のため次セッション持越し。
+- **セッション運営面**: ユーザーから「dev対策実装+検証クリアで本番反映段階」という認識を2度確認され、いずれも「今回のpilot実行は本番データを使った追加検証であって実際の3.5切替デプロイではない」「Firestore側(#547 Phase C以降)は今回無関係」と訂正。GitHub Issue #548のコメント欄が実装完了(PR #561)を反映しないまま止まっていたため、`gh issue view`だけに頼ると誤った現状認識に陥る点を`docs/handoff/LATEST.md`との突き合わせで発見・訂正した。
 
 ## session103 サマリ（2026-07-07）
 
