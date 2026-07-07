@@ -154,12 +154,15 @@ async function main() {
 
   // 実行モード: Firestoreから削除
   console.log(`\n削除実行中...`);
-  const BATCH_SIZE = 500;
+  // ADR-0018 (Issue #547) Phase B: 本体+detail/main の2書込のため
+  // batch内訳は 2N ≤ 500 → N ≤ 250 が安全な上限
+  const BATCH_SIZE = 250;
   for (let i = 0; i < allToDelete.length; i += BATCH_SIZE) {
     const batch = db.batch();
     const chunk = allToDelete.slice(i, i + BATCH_SIZE);
     for (const doc of chunk) {
       batch.delete(db.doc(`documents/${doc.id}`));
+      batch.delete(db.doc(`documents/${doc.id}/detail/main`));
     }
     await batch.commit();
     console.log(`  ${Math.min(i + BATCH_SIZE, allToDelete.length)}/${allToDelete.length} 件削除`);

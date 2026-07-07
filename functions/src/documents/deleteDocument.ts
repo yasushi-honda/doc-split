@@ -167,9 +167,14 @@ export const deleteDocument = onCall(
       }
     }
 
-    // 6. documents 削除
+    // 6. documents 削除 (ADR-0018 Phase B: detail/main サブコレクションを
+    // 同一batchで削除し、孤児化を防ぐ。detail/main が未作成のdocでも
+    // batch.delete()は存在しないdocに対して無害)
     try {
-      await docRef.delete();
+      const batch = db.batch();
+      batch.delete(docRef.collection('detail').doc('main'));
+      batch.delete(docRef);
+      await batch.commit();
       console.log(`Deleted document: ${documentId}`);
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : String(error);
