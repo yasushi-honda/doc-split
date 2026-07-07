@@ -38,6 +38,19 @@ describe('firestoreToDocument', () => {
       expect(result.officeName).toBe('テスト事業所')
       expect(result.status).toBe('processed')
     })
+
+    // ADR-0018 Phase B (Issue #547, #178教訓): ocrExcerptがfirestoreToDocument()で
+    // マッピングされないと、Functions側が書込んでもFEで永久に読めなくなる
+    it('ocrExcerpt を正しく変換する (ADR-0018 Phase B)', () => {
+      const data = { ...baseFirestoreData, ocrExcerpt: '抜粋テキスト' }
+      const result = firestoreToDocument('doc-001', data)
+      expect(result.ocrExcerpt).toBe('抜粋テキスト')
+    })
+
+    it('ocrExcerpt が未設定の場合は undefined', () => {
+      const result = firestoreToDocument('doc-001', baseFirestoreData)
+      expect(result.ocrExcerpt).toBeUndefined()
+    })
   })
 
   describe('顧客確定フィールド（Phase 7）', () => {
@@ -433,6 +446,13 @@ describe('getReprocessClearFields (Issue #215: 旧3キー + 新summary 全て de
     expect(fields).toHaveProperty('ocrResultUrl')
     expect(fields).toHaveProperty('pageResults')
     expect(fields).toHaveProperty('ocrExtraction')
+  })
+
+  // ADR-0018 Phase B (Issue #547): 一覧表示用軽量抜粋も再処理時にクリアしないと、
+  // OCR完了までの間、古いocrExcerptが一覧に残存する
+  it('ocrExcerpt も含む (ADR-0018 Phase B)', () => {
+    const fields = getReprocessClearFields()
+    expect(fields).toHaveProperty('ocrExcerpt')
   })
 
   it('確認ステータスのリセット値 (customerConfirmed=false, verified=false 等) を含む', () => {

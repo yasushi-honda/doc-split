@@ -17,6 +17,7 @@ import {
   getDoc,
   doc,
   updateDoc,
+  writeBatch,
   Timestamp,
   QueryConstraint,
 } from 'firebase/firestore'
@@ -219,27 +220,30 @@ interface ReprocessParams {
 }
 
 async function requestReprocess({ errorId, fileId }: ReprocessParams): Promise<void> {
-  // 1. エラーステータスを「pending」に更新（BE値）
-  const errorRef = doc(db, 'errors', errorId)
-  await updateDoc(errorRef, { status: 'pending' })
-
-  // 2. 対応するドキュメントのステータスを「pending」に戻す + メタ情報・確認フラグをクリア
-  const clearFields = getReprocessClearFields()
+  // 対応するドキュメントを検索 (writeより先にread)
   const docsQuery = query(
     collection(db, 'documents'),
     where('fileId', '==', fileId),
     limit(1)
   )
   const snapshot = await getDocs(docsQuery)
-
   const firstDoc = snapshot.docs[0]
+
+  // ADR-0018 Phase B (Issue #547): エラーstatus更新とdocumentクリアを単一batchで
+  // 原子的に実行 (途中失敗による不整合状態を防ぐ)。detail/main書込は
+  // Phase D以降(PR4b)に分離、本PRは親docのみ。
+  const batch = writeBatch(db)
+  const errorRef = doc(db, 'errors', errorId)
+  batch.update(errorRef, { status: 'pending' })
+
   if (firstDoc) {
     const docRef = doc(db, 'documents', firstDoc.id)
-    await updateDoc(docRef, {
+    batch.update(docRef, {
       status: 'pending',
-      ...clearFields,
+      ...getReprocessClearFields(),
     })
   }
+  await batch.commit()
 }
 
 export function useReprocessError() {

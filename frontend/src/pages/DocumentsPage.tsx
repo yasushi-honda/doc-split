@@ -477,29 +477,58 @@ export function DocumentsPage() {
   }, [selectedIds, user, queryClient, clearSelection])
 
   // 一括再処理
+  // ADR-0018 Phase B (Issue #547): 250件チャンク化。detail/main書込は
+  // Phase D以降(PR4b)に分離、本PRは親docのみ+ocrExcerptクリア。
   const handleBulkReprocess = useCallback(async () => {
     if (selectedIds.size === 0) return
 
     setIsBulkOperating(true)
     try {
       const clearFields = getReprocessClearFields()
-      const batch = writeBatch(db)
-      for (const docId of selectedIds) {
-        const docRef = doc(db, 'documents', docId)
-        batch.update(docRef, {
-          status: 'pending',
-          ...clearFields,
-        })
-      }
-      const count = selectedIds.size
-      await batch.commit()
+      const ids = Array.from(selectedIds)
+      const CHUNK_SIZE = 250
+      let succeededCount = 0
+      let chunkFailed = false
 
-      // 一覧をリフレッシュ
+      for (let i = 0; i < ids.length; i += CHUNK_SIZE) {
+        const chunk = ids.slice(i, i + CHUNK_SIZE)
+        // code-review指摘: batch構築(doc()/batch.update())もtry内に含め、
+        // チャンク単位のエラーとして扱う(構築時エラーが外側catchに漏れて
+        // succeededCountの情報が失われるのを防ぐ)
+        try {
+          const batch = writeBatch(db)
+          for (const docId of chunk) {
+            const docRef = doc(db, 'documents', docId)
+            batch.update(docRef, {
+              status: 'pending',
+              ...clearFields,
+            })
+          }
+          await batch.commit()
+          succeededCount += chunk.length
+        } catch (chunkError) {
+          console.error('Bulk reprocess chunk error:', chunkError)
+          chunkFailed = true
+          break
+        }
+      }
+
+      // 一覧をリフレッシュ (部分的成功分も反映)
       queryClient.invalidateQueries({ queryKey: ['documentsInfinite'] })
       queryClient.invalidateQueries({ queryKey: ['documentStats'] })
-      clearSelection()
       setBulkOperation(null)
-      toast.success(`${count}件を再処理キューに追加しました`)
+
+      if (chunkFailed) {
+        // Codexレビュー指摘: 成功済みチャンクのIDは選択から除外する。残すと
+        // 既にpending化済みの文書が再試行対象に残り、進行中のOCRと重複/競合しうる。
+        // 失敗+未処理分のみ選択に残し、ユーザーがその分だけ再試行できるようにする。
+        const succeededIds = new Set(ids.slice(0, succeededCount))
+        setSelectedIds(prev => new Set([...prev].filter(id => !succeededIds.has(id))))
+        toast.error(`一括再処理が途中で失敗しました（${succeededCount}/${ids.length}件完了）`)
+      } else {
+        clearSelection()
+        toast.success(`${succeededCount}件を再処理キューに追加しました`)
+      }
     } catch (error) {
       console.error('Bulk reprocess error:', error)
       toast.error('一括再処理に失敗しました')
