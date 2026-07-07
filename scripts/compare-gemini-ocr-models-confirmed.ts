@@ -78,6 +78,15 @@ import {
   type ModelConfig,
   type ModelRole,
 } from './lib/geminiOcrCompare';
+import {
+  isNonEmptyString,
+  toValidTotalPages,
+  pct,
+  computeModelSummaryStats,
+  computeMatchRate,
+  computeOverallPass,
+  type ModelSummaryStats,
+} from './lib/confirmedReplayStats';
 
 /**
  * confirmed文書が実運用規模で存在する本番クライアント環境のみ許可する
@@ -264,15 +273,6 @@ interface SampledDoc {
  * (Codex review指摘反映、上部doc comment参照)。documentTypeConfirmedはユーザー選択専用の
  * ため追加フィルタ不要(confirmedFieldMerge.ts参照)。
  */
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === 'string' && value.length > 0;
-}
-
-/** totalPagesが正の整数でない(欠損/0/負数/非数値)場合は1にフォールバックする */
-function toValidTotalPages(value: unknown): number {
-  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : 1;
-}
-
 async function sampleConfirmedDocuments(limit: number): Promise<SampledDoc[]> {
   const queryLimit = Math.min(limit * SAMPLE_HEADROOM_MULTIPLIER, SAMPLE_HEADROOM_CAP);
   const snap = await db
@@ -514,93 +514,36 @@ async function processDocumentWithModel(
   }
 }
 
-function percentile(sortedValues: number[], p: number): number {
-  if (sortedValues.length === 0) return 0;
-  const idx = Math.min(sortedValues.length - 1, Math.ceil((p / 100) * sortedValues.length) - 1);
-  return sortedValues[Math.max(0, idx)];
-}
-
-interface ModelSummary {
+interface ModelSummary extends ModelSummaryStats {
   role: ModelRole;
   label: string;
-  totalDocs: number;
-  succeededDocs: number;
-  failedDocs: number;
-  docTypePass: number;
-  customerPass: number;
-  officePass: number;
-  allPass: number;
-  anomalousPageCount: number;
-  retriedDocCount: number;
-  totalInput: number;
-  totalOutput: number;
-  totalThinking: number;
-  costUsd: number;
-  p50Ms: number;
-  p95Ms: number;
-  p99Ms: number;
 }
 
+/**
+ * 集計・判定の計算本体はscripts/lib/confirmedReplayStats.ts(純粋関数、unit test済み)に
+ * 委譲する。ここではモデル固有情報(role/label)の付与とコンソール出力のみを担う
+ * (pr-test-analyzer指摘反映: 集計ロジックはI/O非依存のため分離してテスト可能にした)。
+ */
 function summarize(modelConfig: ModelConfig, outcomes: DocOcrOutcome[]): ModelSummary {
   const { role, label, pricing } = modelConfig;
-  const totalDocs = outcomes.length;
-  const succeeded = outcomes.filter((o) => o.success);
-  const failedDocs = totalDocs - succeeded.length;
-
-  const docTypePass = succeeded.filter((o) => o.docTypeMatch).length;
-  const customerPass = succeeded.filter((o) => o.customerMatch).length;
-  const officePass = succeeded.filter((o) => o.officeMatch).length;
-  const allPass = succeeded.filter((o) => o.docTypeMatch && o.customerMatch && o.officeMatch).length;
-  const anomalousPageCount = outcomes.reduce((s, o) => s + o.anomalousPages, 0);
-  const retriedDocCount = outcomes.filter((o) => o.hadRetry).length;
-
-  const totalInput = outcomes.reduce((s, o) => s + o.inputTokens, 0);
-  const totalOutput = outcomes.reduce((s, o) => s + o.outputTokens, 0);
-  const totalThinking = outcomes.reduce((s, o) => s + o.thinkingTokens, 0);
-  const billableOutput = totalOutput + totalThinking;
-  const costUsd = (totalInput * pricing.inputPer1MTokens + billableOutput * pricing.outputPer1MTokens) / 1_000_000;
-
-  const sortedMs = outcomes.map((o) => o.elapsedMs).sort((a, b) => a - b);
-
-  const summary: ModelSummary = {
-    role,
-    label,
-    totalDocs,
-    succeededDocs: succeeded.length,
-    failedDocs,
-    docTypePass,
-    customerPass,
-    officePass,
-    allPass,
-    anomalousPageCount,
-    retriedDocCount,
-    totalInput,
-    totalOutput,
-    totalThinking,
-    costUsd,
-    p50Ms: percentile(sortedMs, 50),
-    p95Ms: percentile(sortedMs, 95),
-    p99Ms: percentile(sortedMs, 99),
-  };
+  const stats = computeModelSummaryStats(pricing, outcomes);
+  const summary: ModelSummary = { role, label, ...stats };
 
   console.log(`\n=== ${label} ===`);
-  console.log(`対象文書数: ${totalDocs} (成功 ${succeeded.length} / 失敗 ${failedDocs}、失敗率 ${pct(failedDocs, totalDocs)}%)`);
-  console.log(`書類種別 一致率: ${docTypePass}/${succeeded.length} (${pct(docTypePass, succeeded.length)}%)`);
-  console.log(`顧客     一致率: ${customerPass}/${succeeded.length} (${pct(customerPass, succeeded.length)}%)`);
-  console.log(`事業所   一致率: ${officePass}/${succeeded.length} (${pct(officePass, succeeded.length)}%)`);
-  console.log(`全項目一致      : ${allPass}/${succeeded.length} (${pct(allPass, succeeded.length)}%)`);
-  console.log(`API異常疑いページ数: ${anomalousPageCount}`);
-  console.log(`リトライ発生文書数: ${retriedDocCount}/${totalDocs} (${pct(retriedDocCount, totalDocs)}%)`);
-  console.log(`トークン: input=${totalInput} output=${totalOutput} thinking=${totalThinking}`);
-  console.log(`概算コスト: $${costUsd.toFixed(4)}`);
-  console.log(`文書あたり処理時間: p50=${summary.p50Ms}ms p95=${summary.p95Ms}ms p99=${summary.p99Ms}ms`);
+  console.log(
+    `対象文書数: ${stats.totalDocs} (成功 ${stats.succeededDocs} / 失敗 ${stats.failedDocs}、失敗率 ${pct(stats.failedDocs, stats.totalDocs)}%)`
+  );
+  console.log(`書類種別 一致率: ${stats.docTypePass}/${stats.succeededDocs} (${pct(stats.docTypePass, stats.succeededDocs)}%)`);
+  console.log(`顧客     一致率: ${stats.customerPass}/${stats.succeededDocs} (${pct(stats.customerPass, stats.succeededDocs)}%)`);
+  console.log(`事業所   一致率: ${stats.officePass}/${stats.succeededDocs} (${pct(stats.officePass, stats.succeededDocs)}%)`);
+  console.log(`全項目一致      : ${stats.allPass}/${stats.succeededDocs} (${pct(stats.allPass, stats.succeededDocs)}%)`);
+  console.log(`API異常疑いページ数: ${stats.anomalousPageCount}`);
+  console.log(`リトライ発生文書数: ${stats.retriedDocCount}/${stats.totalDocs} (${pct(stats.retriedDocCount, stats.totalDocs)}%)`);
+  console.log(`トークン: input=${stats.totalInput} output=${stats.totalOutput} thinking=${stats.totalThinking}`);
+  console.log(`概算コスト: $${stats.costUsd.toFixed(4)}`);
+  console.log(`文書あたり処理時間: p50=${stats.p50Ms}ms p95=${stats.p95Ms}ms p99=${stats.p99Ms}ms`);
 
   return summary;
-}
-
-function pct(n: number, total: number): string {
-  if (total === 0) return '0.0';
-  return ((n / total) * 100).toFixed(1);
 }
 
 interface DocPairResult {
@@ -704,8 +647,8 @@ async function main(): Promise<void> {
   // モデルごとに失敗件数(succeededDocs)が異なりうるため、件数比較だと片方が失敗多めなだけで
   // 誤って「精度劣化」と判定されうる(例: baseline 300成功/250一致=83.3% vs
   // candidate 271成功/240一致=88.6%は実質candidateの方が高精度だが、240<250で誤FAILしていた)。
-  const baselineRate = baseline.succeededDocs > 0 ? baseline.allPass / baseline.succeededDocs : 0;
-  const candidateRate = migrated.succeededDocs > 0 ? migrated.allPass / migrated.succeededDocs : 0;
+  const baselineRate = computeMatchRate(baseline);
+  const candidateRate = computeMatchRate(migrated);
   const regressed = candidateRate < baselineRate;
   console.log(
     `全項目一致率: baseline(2.5)=${(baselineRate * 100).toFixed(1)}% candidate(3.5)=${(candidateRate * 100).toFixed(1)}%`
@@ -726,7 +669,12 @@ async function main(): Promise<void> {
   // review-pr指摘反映: 以前はregressedのみでヘッドラインを表示しており、失敗率ゲート超過時も
   // 「✅ PASS」と表示されてしまい、下の⚠️行を見落とすと誤って安全と判断しうる状態だった。
   // 全ゲートを反映した単一の総合判定行にする。
-  const overallPass = !regressed && !baselineFailureRateExceeded && !candidateFailureRateExceeded && !downloadFailureRateExceeded;
+  const overallPass = computeOverallPass({
+    regressed,
+    baselineFailureRateExceeded,
+    candidateFailureRateExceeded,
+    downloadFailureRateExceeded,
+  });
   console.log(
     overallPass
       ? '✅ PASS: 精度劣化なし、失敗率ゲートも全て許容範囲内'

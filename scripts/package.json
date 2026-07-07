@@ -10,7 +10,8 @@
     "import:offices": "node import-masters.js --offices",
     "import:all": "node import-masters.js --all",
     "backfill:displayname": "ts-node backfill-display-filename.ts",
-    "seed:dev": "ts-node seed-dev-data.ts"
+    "seed:dev": "ts-node seed-dev-data.ts",
+    "test": "node --require ts-node/register --test lib/*.test.ts"
   },
   "dependencies": {
     "@google-cloud/logging": "^11.2.1",
