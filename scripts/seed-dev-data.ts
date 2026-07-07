@@ -429,9 +429,12 @@ function buildPendingDoc(mixed: (typeof MIXED_FAX_PDFS)[number], storageBucket: 
 // 投入
 // ============================================
 
-// ADR-0018 (Issue #547) Phase B: documents書込みはdetail/main分と合わせて
-// 1docあたり2writeになるため、batch内訳は2N<=500 → N<=250が安全な上限
-// (マスターデータ書込みは1write/docのため影響なし)
+// ADR-0018 (Issue #547) Phase B: commitInBatchesは既にflatMap後の生write配列
+// (parent+detail/mainのペアが連続2要素として並ぶ)をBATCH_SIZE単位でchunkする。
+// BATCH_SIZEは「doc数」ではなく「write要素数」の上限であり、偶数である限り
+// 各docのペアがchunk境界をまたぐことはない(250要素=processed/error等は125doc分)。
+// 250はFirestore 500 write上限の半分で、1write/docのmasterWritesにも同じ定数を
+// 適用しているため実質125doc分とやや保守的だが、安全側でありコストは無視できる。
 const BATCH_SIZE = 250;
 
 async function commitInBatches(
