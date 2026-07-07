@@ -296,6 +296,13 @@ export async function processDocument(
     savedOcrResult = '';
   }
 
+  // ADR-0018 (Issue #547) Phase B: 一覧系UI用の軽量抜粋。Storage offload済み
+  // (ocrResultUrlセット時)は既存のplaceholder文言をそのまま格納する
+  // (useProcessingHistory.getOcrExcerpt()と同じ出し分けロジック、Phase Dで読込元切替予定)。
+  const ocrExcerpt = ocrResultUrl
+    ? '（OCR結果はCloud Storageに保存されています）'
+    : ocrResult.slice(0, 200);
+
   // Issue #526 D1: 抽出結果の集約ロジックは ocrUpdatePayloadBuilder.ts の純粋関数に
   // 切り出し済み(挙動不変、ユニットテストで契約をlock-in)。displayFileNameはここでは
   // 生成しない(Issue #526 D2: confirmed保護マージ後の最終メタから生成する順序に変更)。
@@ -374,8 +381,16 @@ export async function processDocument(
       summary: admin.firestore.FieldValue.delete(),
       summaryTruncated: admin.firestore.FieldValue.delete(),
       summaryOriginalLength: admin.firestore.FieldValue.delete(),
+      ocrExcerpt,
       status: 'processed',
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    // ADR-0018 (Issue #547) Phase B: 本体updateと同一transactionでdetail/mainへ
+    // dual-write (MUST: 原子性、2回の独立書込は禁止)。本体からの削除はPhase E。
+    tx.set(docRef.collection('detail').doc('main'), {
+      ocrResult: savedOcrResult,
+      pageResults,
     });
 
     console.log(

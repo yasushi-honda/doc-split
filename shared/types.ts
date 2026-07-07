@@ -40,6 +40,13 @@ export interface Document {
   mimeType: string;
   ocrResult: string;
   ocrResultUrl?: string; // 長い場合はCloud Storage参照
+  /**
+   * OCR結果の軽量抜粋 (ADR-0018 Phase B、Issue #547)。
+   * `ocrProcessor.ts` のメインtransaction内で算出・書込。`ocrResultUrl` セット時
+   * (Storage offload済み) は既存のplaceholder文言をそのまま格納する。
+   * Phase D以降、一覧系UI(`useProcessingHistory.getOcrExcerpt()`)の読込元をこちらに切替予定。
+   */
+  ocrExcerpt?: string;
   summary?: SummaryField; // AI生成の要約 (Issue #209/#215)
   documentType: string;
   customerName: string;
