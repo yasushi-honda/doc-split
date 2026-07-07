@@ -81,6 +81,7 @@ import {
 import {
   isNonEmptyString,
   pct,
+  describeErrorSafely,
   computeModelSummaryStats,
   computeMatchRate,
   computeOverallPass,
@@ -140,25 +141,6 @@ if (!admin.apps.length) {
 }
 const db = admin.firestore();
 const storage = admin.storage();
-
-/**
- * エラーの種別のみを個人情報漏洩なくログ出力するためのヘルパー。
- *
- * GCS/Firestore SDKのエラーメッセージは対象オブジェクトのパス(例: "No such object:
- * bucket/original/xxxx_田中太郎様_請求書.pdf")を含むことがある。fileUrl/storagePathは
- * functions/src/utils/fileNaming.ts の sanitizeFilenameForStorage() が元のアップロード/
- * 添付ファイル名から禁止文字を置換するのみで日本語文字等はそのまま残すため、氏名を含む
- * 元ファイル名がストレージパスに埋め込まれている可能性がある。エラーメッセージを生のまま
- * ログ出力しないよう、種別・コードのみを抽出する。
- */
-function describeErrorSafely(err: unknown): string {
-  if (err instanceof Error) {
-    const withCode = err as Error & { code?: string | number; status?: number };
-    const code = withCode.code ?? withCode.status;
-    return code !== undefined ? `${err.constructor.name}(code=${code})` : err.constructor.name;
-  }
-  return typeof err;
-}
 
 type SilentRetryResult<T> = { success: true; data: T; attempts: number } | { success: false; error: Error; attempts: number };
 

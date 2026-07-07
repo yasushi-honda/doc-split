@@ -4,6 +4,7 @@ import {
   percentile,
   pct,
   isNonEmptyString,
+  describeErrorSafely,
   computeModelSummaryStats,
   computeMatchRate,
   computeOverallPass,
@@ -57,6 +58,27 @@ test('isNonEmptyString: 有効な非空文字列のみtrue', () => {
   assert.equal(isNonEmptyString(undefined), false);
   assert.equal(isNonEmptyString(null), false);
   assert.equal(isNonEmptyString(123), false);
+});
+
+test('describeErrorSafely: PII(氏名等)を含みうる生のerror.messageを絶対に含まない', () => {
+  const err = new Error('No such object: bucket/original/xxxx_田中太郎様_請求書.pdf');
+  const result = describeErrorSafely(err);
+  assert.ok(!result.includes('田中太郎'), 'エラーメッセージ中のPIIが出力に含まれてはならない');
+  assert.ok(!result.includes(err.message), 'error.messageの生文字列を含んではならない');
+  assert.equal(result, 'Error');
+});
+
+test('describeErrorSafely: code/statusプロパティ付きエラーはコード種別のみ出力する', () => {
+  const err = Object.assign(new Error('sensitive path info here'), { code: 'ENOENT' });
+  const result = describeErrorSafely(err);
+  assert.equal(result, 'Error(code=ENOENT)');
+  assert.ok(!result.includes('sensitive'));
+});
+
+test('describeErrorSafely: Error以外はtypeofのみ返す(オブジェクトの中身を漏らさない)', () => {
+  assert.equal(describeErrorSafely('plain string error'), 'string');
+  assert.equal(describeErrorSafely({ message: '田中太郎様の情報' }), 'object');
+  assert.equal(describeErrorSafely(undefined), 'undefined');
 });
 
 test('computeModelSummaryStats: 成功/失敗混在時、失敗文書はマッチ集計の分母から除外される', () => {
