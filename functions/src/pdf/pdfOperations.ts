@@ -333,13 +333,14 @@ export const splitPdf = onCall(
     if (!Array.isArray(segments) || segments.length === 0) {
       throw new HttpsError('invalid-argument', 'segments must be a non-empty array');
     }
-    // Codex post-impl review Low 1 反映: Firestore batch.commit() は 500 writes の hard limit。
-    // batch 内訳は child set × N + parent update × 1 = N+1 ≤ 500 → N ≤ 499 が安全な上限。
-    // 実運用で 500 segment 分割は非現実的だが明示的に弾く (UI / API 双方への防御線)。
-    if (segments.length > 499) {
+    // ADR-0018 (Issue #547) Phase B: 子ドキュメントごとに本体set + detail/main setの
+    // 2書込になったため、batch内訳は child(本体+detail/main) set × 2N + parent update × 1
+    // = 2N+1 ≤ 500 → N ≤ 249 が安全な上限 (Firestore batch.commit() は 500 writes の hard limit)。
+    // 実測(kanameone, PR #568): splitInto配列の実データ最大長は17件で249に十分な余裕あり。
+    if (segments.length > 249) {
       throw new HttpsError(
         'invalid-argument',
-        `segments.length=${segments.length} exceeds Firestore batch write limit (max 499 to allow 1 parent update in same commit)`
+        `segments.length=${segments.length} exceeds Firestore batch write limit (max 249 to allow child + detail/main set per segment + 1 parent update in same commit)`
       );
     }
     for (let i = 0; i < segments.length; i++) {
@@ -716,6 +717,12 @@ export const splitPdf = onCall(
       const batch = db.batch();
       for (const item of accumulated) {
         batch.set(item.newDocRef, item.payload);
+        // ADR-0018 (Issue #547) Phase B: 子docのocrResult/pageResultsをdetail/mainへ
+        // 同一batchでdual-write (MUST: 原子性)。本体からの削除はPhase E。
+        batch.set(item.newDocRef.collection('detail').doc('main'), {
+          ocrResult: item.payload.ocrResult,
+          pageResults: item.payload.pageResults,
+        });
       }
       // 元ドキュメントのステータスを更新 (分割済みフラグ) — child set と同一 batch
       batch.update(docRef, {

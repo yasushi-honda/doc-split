@@ -235,6 +235,12 @@ export const uploadPdf = onCall(
           status: 'pending',
           sourceType: 'upload',
         });
+
+        // ADR-0018 (Issue #547) Phase B: detail/mainへ同一transactionでdual-write
+        // (MUST: 原子性)。未OCRのためocrResultは空文字で初期化。
+        transaction.set(docRef.collection('detail').doc('main'), {
+          ocrResult: '',
+        });
       });
     } catch (error) {
       console.error('Firestore transaction error:', error);

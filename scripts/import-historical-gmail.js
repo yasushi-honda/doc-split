@@ -289,6 +289,12 @@ async function processAttachment(gmail, userId, messageId, part, subject, emailB
       officeConfirmed: false,
       officeCandidates: []
     });
+
+    // ADR-0018 (Issue #547) Phase B: detail/mainへ同一transactionでdual-write
+    // (MUST: 原子性)。未OCRのためocrResultは空文字で初期化。
+    transaction.set(docRef.collection('detail').doc('main'), {
+      ocrResult: ''
+    });
   });
 
   console.log(`  ✅ 保存完了: ${filename} → ${docRef.id}`);
