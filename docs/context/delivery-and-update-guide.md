@@ -513,6 +513,7 @@ FIREBASE_PROJECT_ID=<new-client-project-id> node scripts/import-masters.js --off
 | ユーザー管理 | 許可ユーザーの追加・削除 |
 | 日常運用 | 書類処理・エラー対応 |
 | Gmail | 監視対象アカウントの管理 |
+| 個人情報の取扱い同意 | AI/デジタルシステムへの個人情報（要配慮個人情報を含む場合は特に）取込について、ご利用者からの同意取得 |
 
 ---
 
