@@ -1,26 +1,25 @@
 # ハンドオフメモ
 
-**更新日**: 2026-07-08 session105（⚠️ **kanameone本番デプロイが未完了状態のまま**。PR #577マージ後にpilot実行(N=30)が「対象文書0件」→診断の結果、kanameoneがmainより50コミット遅れ(2026-06-12が最終デプロイ)でdocumentTypeConfirmed機能が未反映と判明。Codexセカンドオピニオンで段階デプロイ計画を策定・実行(Rules→Functions→canary検証)し、canaryで実際にSTORAGE_BUCKET欠如の本番バグを検出・修正・再検証まで完了。**しかしcheckGmailAttachments Schedulerは意図的に停止したまま**、Hosting未デプロイ、通常運用復帰前。次セッション最優先で§セッション105引き継ぎ参照）
+**更新日**: 2026-07-08 session105（✅ **kanameone本番デプロイ完遂、通常運用復帰済み**。PR #577マージ後にpilot実行(N=30)が「対象文書0件」→診断の結果、kanameoneがmainより50コミット遅れ(2026-06-12が最終デプロイ)でdocumentTypeConfirmed機能が未反映と判明。Codexセカンドオピニオンで段階デプロイ計画を策定・実行(Rules→Functions→canary検証→Scheduler再開→20分監視→Hosting)し、canaryで実際にSTORAGE_BUCKET欠如の本番バグを検出・修正・再検証まで完了。checkGmailAttachments再開後の実トラフィック監視(3回、約20分)でerror/pending滞留ゼロを確認、Hostingデプロイ・疎通確認(HTTP 200)まで完了。**同根再発の懸念（他2デプロイ経路の同種ギャップ）は未解決のまま次セッション持越し**）
 
-## ⚠️ session105 引き継ぎ（最優先で読むこと）
+## ✅ session105 完了記録（kanameone段階デプロイ）
 
-### 現在のkanameone状態（2026-07-08時点）
+### 最終状態（2026-07-08 07:1x UTC時点）
 | 項目 | 状態 |
 |------|------|
 | firestore.rules | ✅ デプロイ済み |
 | Cloud Functions | ✅ デプロイ済み（GEMINI_MODEL_ID=gemini-2.5-flash固定、STORAGE_BUCKET修正済み） |
 | processOCR Scheduler | ✅ 再開済み（1分間隔） |
-| **checkGmailAttachments Scheduler** | 🛑 **意図的に停止中**（5分間隔、実際のGmail新規取込が止まっている） |
-| Hosting | ❌ 未デプロイ（mainのフロントエンド変更が本番未反映） |
-| 通常運用復帰 | ❌ 未実施 |
+| checkGmailAttachments Scheduler | ✅ 再開済み（5分間隔）、再開後約20分監視でerror/pending滞留ゼロ確認済み |
+| Hosting | ✅ デプロイ済み、疎通確認OK（HTTP 200、https://docsplit-kanameone.web.app） |
+| 通常運用復帰 | ✅ 完了 |
 
-### 次セッション即実施（この順序で）
-```bash
-gcloud scheduler jobs resume firebase-schedule-checkGmailAttachments-asia-northeast1 --project=docsplit-kanameone --location=asia-northeast1
-```
-→ 15〜30分監視（`diagnose-confirmed-replay-sampling`のstatus別内訳をGitHub Actions経由で再実行、pending/processing/error件数を確認）
-→ 問題なければ `./scripts/deploy-to-project.sh kanameone`（Hostingのみ）
-→ 通常運用復帰を明示的に確認・宣言
+### 再開後監視結果（GitHub Actions `diagnose-confirmed-replay-sampling`、3回・約20分間隔7分）
+| チェック | processed | pending/processing/error |
+|---------|-----------|---------------------------|
+| #1 (06:52 UTC) | 9317 | 0/0/0 |
+| #2 (07:01 UTC) | 9333 (+16、実トラフィック処理確認) | 0/0/0 |
+| #3 (07:11 UTC) | 9333 | 0/0/0 |
 
 ### ⚠️ 同根再発の懸念（未解決、次セッションで検討要）
 今回`deploy-functions.yml`にSTORAGE_BUCKET/GEMINI_MODEL_ID設定を追加したが、**Cloud Functionsのデプロイ経路は他に2つあり、そちらは未修正**:
