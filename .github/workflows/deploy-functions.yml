@@ -74,11 +74,32 @@ jobs:
             PROJECT_ID="doc-split-dev"
           fi
 
+          # STORAGE_BUCKET (必須): functions/src/index.ts の admin.initializeApp() が
+          # process.env.STORAGE_BUCKET に依存しているが、functions/.env.<project-id> は
+          # これまで一度も生成されておらず、kanameone実機で undefined のまま運用されていた
+          # (2026-07-08 canary検証で発覚: storage.bucket()を引数無しで呼ぶ再OCR時の
+          # 再ダウンロード経路(ocrProcessor.ts, Issue #526 pageResults再利用フォールバック)
+          # で "Bucket name not specified or invalid" エラーが発生することを実機確認)。
+          # scripts/clients/<alias>.env の値が正解(CLAUDE.md: プロジェクトIDからの推測禁止、
+          # .appspot.com/.firebasestorage.app の形式は環境ごとに異なる)。
+          ENV_FILE="scripts/clients/${PROJECT_ALIAS}.env"
+          if [ ! -f "$ENV_FILE" ]; then
+            echo "ERROR: $ENV_FILE が見つかりません" >&2
+            exit 1
+          fi
+          STORAGE_BUCKET=$(grep -E '^STORAGE_BUCKET=' "$ENV_FILE" | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'")
+          if [ -z "$STORAGE_BUCKET" ]; then
+            echo "ERROR: $ENV_FILE に STORAGE_BUCKET が見つかりません" >&2
+            exit 1
+          fi
+          echo "STORAGE_BUCKET=${STORAGE_BUCKET}" > "functions/.env.${PROJECT_ID}"
+          echo "STORAGE_BUCKET 設定: ${STORAGE_BUCKET} (functions/.env.${PROJECT_ID})"
+
           # GEMINI_MODEL_ID override (任意): Firebase Functions v2は環境変数を
           # functions/.env.<project-id> ファイルから読む(シェル環境変数は伝播しない)。
           # 未指定(code-default)ならfunctions/src/utils/config.tsのコード既定値を使用。
           if [ "${{ github.event.inputs.gemini_model_id_override }}" != "code-default" ]; then
-            echo "GEMINI_MODEL_ID=${{ github.event.inputs.gemini_model_id_override }}" > "functions/.env.${PROJECT_ID}"
+            echo "GEMINI_MODEL_ID=${{ github.event.inputs.gemini_model_id_override }}" >> "functions/.env.${PROJECT_ID}"
             echo "GEMINI_MODEL_ID override 適用: ${{ github.event.inputs.gemini_model_id_override }} (functions/.env.${PROJECT_ID})"
           fi
 
