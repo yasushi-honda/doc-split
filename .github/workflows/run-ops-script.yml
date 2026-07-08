@@ -94,6 +94,7 @@ on:
           - compare-gemini-ocr-models
           - compare-gemini-ocr-models-confirmed --limit 30
           - compare-gemini-ocr-models-confirmed --limit 300
+          - compare-gemini-ocr-models-confirmed --limit 5000
           - diagnose-confirmed-replay-sampling
           - diagnose-confirmed-replay-sampling --doc-id
           - measure-summary-cost --doc-id
