@@ -529,6 +529,13 @@ async function main(): Promise<void> {
     if (c.errors > 0) {
       console.error('❌ エラーが発生したdocがあります。再実行(冪等)で解消するか確認してください。');
       process.exitCode = 1;
+    } else if (limit > 0) {
+      // Codex 4th review P2反映: --limit付きcanaryの再実行は「次のN件」を処理する
+      // (処理済みdocは次回スキャンで対象から外れるため)。「書込0件になる」という
+      // 誤った完了ガイダンスでcanaryが意図せず拡大するのを防ぐ
+      console.log(
+        `✅ canary実行完了(${limit}件上限)。次: 結果確認後、--execute(制限なし)で全量実行 → 再実行で書込0件確認 → --verify`
+      );
     } else {
       console.log('✅ execute完了。次: 同モード再実行で書込0件(冪等性確認) → --verify');
     }
