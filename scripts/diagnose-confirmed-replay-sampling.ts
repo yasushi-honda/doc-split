@@ -29,6 +29,42 @@ async function count(query: FirebaseFirestore.Query): Promise<number> {
   return snap.data().count;
 }
 
+function getDocIdArg(): string | null {
+  const idx = process.argv.indexOf('--doc-id');
+  return idx >= 0 ? (process.argv[idx + 1] ?? null) : null;
+}
+
+/**
+ * canary検証用: 指定ドキュメントの非PIIフィールドのみを確認する
+ * (status/updatedAt/ocrExtraction.version/summary有無/confirmedフラグ)。
+ * customerName/officeName/fileName等は一切取得しない。
+ */
+async function checkCanaryDoc(docId: string): Promise<void> {
+  console.log(`\n--- canary検証: ${docId} の非PIIフィールド確認 ---`);
+  const snap = await db.collection('documents').doc(docId).get();
+  if (!snap.exists) {
+    console.log('❌ ドキュメントが見つかりません');
+    return;
+  }
+  const data = snap.data()!;
+  console.log(`status: ${data.status}`);
+  console.log(`updatedAt: ${data.updatedAt?.toDate?.()?.toISOString() ?? data.updatedAt}`);
+  console.log(`ocrExtraction.version: ${data.ocrExtraction?.version ?? '(未設定)'}`);
+  console.log(`summaryフィールド有無: ${data.summary !== undefined ? 'あり' : 'なし(削除済みまたは未生成)'}`);
+  console.log(`customerConfirmed: ${data.customerConfirmed}`);
+  console.log(`officeConfirmed: ${data.officeConfirmed}`);
+
+  const detailSnap = await db.collection('documents').doc(docId).collection('detail').doc('main').get();
+  console.log(`detail/main存在: ${detailSnap.exists}`);
+  if (detailSnap.exists) {
+    const detailData = detailSnap.data()!;
+    const parentOcrResultLen = typeof data.ocrResult === 'string' ? data.ocrResult.length : null;
+    const detailOcrResultLen = typeof detailData.ocrResult === 'string' ? detailData.ocrResult.length : null;
+    console.log(`親ocrResult文字数: ${parentOcrResultLen ?? '(親には無し、Storage参照の可能性)'}`);
+    console.log(`detail/main ocrResult文字数: ${detailOcrResultLen}`);
+  }
+}
+
 async function main(): Promise<void> {
   const col = db.collection('documents');
   console.log(`=== confirmed replay サンプリング条件診断 (${PROJECT_ID}) ===`);
@@ -100,6 +136,12 @@ async function main(): Promise<void> {
     console.log('該当文書なし');
   } else {
     console.log(`CANARY_DOC_ID=${canarySnap.docs[0].id}`);
+  }
+
+  // --doc-id 指定時: 再OCR後のcanary検証(status/version/summary有無等の非PIIフィールド確認)
+  const canaryCheckDocId = getDocIdArg();
+  if (canaryCheckDocId) {
+    await checkCanaryDoc(canaryCheckDocId);
   }
 
   console.log('\n=== 診断完了 ===');
