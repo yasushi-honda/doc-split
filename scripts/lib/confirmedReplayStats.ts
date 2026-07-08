@@ -62,7 +62,15 @@ export interface ModelSummaryStats {
   docTypePass: number;
   customerPass: number;
   officePass: number;
-  allPass: number;
+  /**
+   * customerMatch && officeMatch の一致数(documentTypeは含まない)。
+   * documentTypeConfirmedはkanameone実運用で常時false(Issue #526の手動確定UIが
+   * 本番未展開のため、trueになる書込経路自体が存在しない)であり、documentTypeの
+   * ground truthはOCR自己判定値である可能性を排除できない。customer/officeは
+   * confirmedBy/officeConfirmedBy非nullで人間確定のみに絞れるためgate対象、
+   * documentTypeはdocTypePassとして参考値のみ報告する(dateフィールドと同様の扱い)。
+   */
+  confirmedFieldsPass: number;
   anomalousPageCount: number;
   retriedDocCount: number;
   totalInput: number;
@@ -75,14 +83,14 @@ export interface ModelSummaryStats {
 }
 
 /**
- * 一致率(allPass/succeededDocs)ではなく絶対件数(allPass)で比較すると、モデル間で
+ * 一致率(confirmedFieldsPass/succeededDocs)ではなく絶対件数で比較すると、モデル間で
  * succeededDocsが異なる場合に誤判定しうる(例: baseline 300成功/250一致=83.3% vs
  * candidate 271成功/240一致=88.6%は実質candidateの方が高精度だが、240<250で誤判定していた)。
- * この関数はallPass/succeededDocsの一致率のみを返し、呼出元で比較させることで
+ * この関数はconfirmedFieldsPass/succeededDocsの一致率のみを返し、呼出元で比較させることで
  * 絶対件数比較への回帰を防ぐ。
  */
-export function computeMatchRate(stats: Pick<ModelSummaryStats, 'allPass' | 'succeededDocs'>): number {
-  return stats.succeededDocs > 0 ? stats.allPass / stats.succeededDocs : 0;
+export function computeMatchRate(stats: Pick<ModelSummaryStats, 'confirmedFieldsPass' | 'succeededDocs'>): number {
+  return stats.succeededDocs > 0 ? stats.confirmedFieldsPass / stats.succeededDocs : 0;
 }
 
 export function computeModelSummaryStats(
@@ -96,7 +104,7 @@ export function computeModelSummaryStats(
   const docTypePass = succeeded.filter((o) => o.docTypeMatch).length;
   const customerPass = succeeded.filter((o) => o.customerMatch).length;
   const officePass = succeeded.filter((o) => o.officeMatch).length;
-  const allPass = succeeded.filter((o) => o.docTypeMatch && o.customerMatch && o.officeMatch).length;
+  const confirmedFieldsPass = succeeded.filter((o) => o.customerMatch && o.officeMatch).length;
   const anomalousPageCount = outcomes.reduce((s, o) => s + o.anomalousPages, 0);
   const retriedDocCount = outcomes.filter((o) => o.hadRetry).length;
 
@@ -115,7 +123,7 @@ export function computeModelSummaryStats(
     docTypePass,
     customerPass,
     officePass,
-    allPass,
+    confirmedFieldsPass,
     anomalousPageCount,
     retriedDocCount,
     totalInput,
