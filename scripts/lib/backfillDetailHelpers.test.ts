@@ -8,26 +8,66 @@ import {
   createCounters,
 } from './backfillDetailHelpers';
 
-test('decideBackfillAction: pending/processingはstatus優先でin-pipelineスキップ(detail有無より優先)', () => {
-  assert.equal(decideBackfillAction({ status: 'pending', detailExists: false }), 'skip-in-pipeline');
-  assert.equal(decideBackfillAction({ status: 'pending', detailExists: true }), 'skip-in-pipeline');
-  assert.equal(decideBackfillAction({ status: 'processing', detailExists: false }), 'skip-in-pipeline');
+test('decideBackfillAction: pending/processingはstatus優先でin-pipelineスキップ(detail有無・excerpt有無より優先)', () => {
+  assert.equal(
+    decideBackfillAction({ status: 'pending', detailExists: false, hasOcrExcerpt: false }),
+    'skip-in-pipeline'
+  );
+  assert.equal(
+    decideBackfillAction({ status: 'pending', detailExists: true, hasOcrExcerpt: true }),
+    'skip-in-pipeline'
+  );
+  assert.equal(
+    decideBackfillAction({ status: 'processing', detailExists: false, hasOcrExcerpt: false }),
+    'skip-in-pipeline'
+  );
 });
 
-test('decideBackfillAction: detail既存はスキップ(冪等性)', () => {
-  assert.equal(decideBackfillAction({ status: 'processed', detailExists: true }), 'skip-detail-exists');
-  assert.equal(decideBackfillAction({ status: 'error', detailExists: true }), 'skip-detail-exists');
+test('decideBackfillAction: detail既存+excerpt既存は完了スキップ(冪等性)', () => {
+  assert.equal(
+    decideBackfillAction({ status: 'processed', detailExists: true, hasOcrExcerpt: true }),
+    'skip-complete'
+  );
+  assert.equal(
+    decideBackfillAction({ status: 'error', detailExists: true, hasOcrExcerpt: true }),
+    'skip-complete'
+  );
 });
 
-test('decideBackfillAction: processed/error/split等のdetail不在docはbackfill対象(processed限定にしない — Codex C2反映)', () => {
-  assert.equal(decideBackfillAction({ status: 'processed', detailExists: false }), 'backfill');
-  assert.equal(decideBackfillAction({ status: 'error', detailExists: false }), 'backfill');
-  assert.equal(decideBackfillAction({ status: 'split', detailExists: false }), 'backfill');
+test('decideBackfillAction: detail既存でもexcerpt欠落ならexcerpt-only対象(Codex Phase C review P1: seed-dev-data等のdetailのみdual-write経路)', () => {
+  assert.equal(
+    decideBackfillAction({ status: 'processed', detailExists: true, hasOcrExcerpt: false }),
+    'backfill-excerpt-only'
+  );
+  assert.equal(
+    decideBackfillAction({ status: 'error', detailExists: true, hasOcrExcerpt: false }),
+    'backfill-excerpt-only'
+  );
+});
+
+test('decideBackfillAction: processed/error/split等のdetail不在docはフルbackfill対象(processed限定にしない — Codex C2反映)', () => {
+  for (const status of ['processed', 'error', 'split']) {
+    assert.equal(
+      decideBackfillAction({ status, detailExists: false, hasOcrExcerpt: false }),
+      'backfill-detail-and-excerpt'
+    );
+  }
+  // excerptが既にあってもdetail不在ならフルbackfill(excerptは同値上書きで冪等)
+  assert.equal(
+    decideBackfillAction({ status: 'processed', detailExists: false, hasOcrExcerpt: true }),
+    'backfill-detail-and-excerpt'
+  );
 });
 
 test('decideBackfillAction: status欠落/非文字列のdocもbackfill対象(存在保証の網羅性)', () => {
-  assert.equal(decideBackfillAction({ status: undefined, detailExists: false }), 'backfill');
-  assert.equal(decideBackfillAction({ status: 123, detailExists: false }), 'backfill');
+  assert.equal(
+    decideBackfillAction({ status: undefined, detailExists: false, hasOcrExcerpt: false }),
+    'backfill-detail-and-excerpt'
+  );
+  assert.equal(
+    decideBackfillAction({ status: 123, detailExists: false, hasOcrExcerpt: false }),
+    'backfill-detail-and-excerpt'
+  );
 });
 
 test('buildDetailPayload: ocrResult/pageResultsが存在すればコピーする', () => {

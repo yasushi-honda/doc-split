@@ -11,14 +11,23 @@ import { createHash } from 'node:crypto';
 /**
  * backfill 対象判定の結果。1 doc = 1 判定。
  *
- * - `backfill`: detail/main を作成し ocrExcerpt を親に書込む対象
- * - `skip-detail-exists`: Phase B 以降の dual-write で作成済み(冪等スキップ)
+ * detail/main 作成と ocrExcerpt 書込は**独立に判定する** (Codex Phase C review P1反映:
+ * seed-dev-data.ts 等は detail/main を dual-write するが親に ocrExcerpt を書かないため、
+ * 「detail存在＝完了」と扱うと excerpt が永久に欠けたまま --verify が収束しない)。
+ *
+ * - `backfill-detail-and-excerpt`: detail/main 作成 + ocrExcerpt 書込(フルbackfill)
+ * - `backfill-excerpt-only`: detail/main は既存、親の ocrExcerpt のみ欠落
+ * - `skip-complete`: detail/main と ocrExcerpt の両方が既に存在(冪等スキップ)
  * - `skip-in-pipeline`: status が pending/processing(OCRパイプライン進行中。
  *   ADR-0018 Phase C行 Codex 6th review P1: 再処理開始後に失敗した doc の detail/main が
  *   古い内容のまま残存しうるため、backfill 対象にも完了検証対象にも含めない。
  *   通常のOCRパイプライン完了時に dual-write で自然に解消される)
  */
-export type BackfillDecision = 'backfill' | 'skip-detail-exists' | 'skip-in-pipeline';
+export type BackfillDecision =
+  | 'backfill-detail-and-excerpt'
+  | 'backfill-excerpt-only'
+  | 'skip-complete'
+  | 'skip-in-pipeline';
 
 /** OCRパイプライン進行中の status (backfill/検証の両方から除外) */
 export const IN_PIPELINE_STATUSES = ['pending', 'processing'] as const;
@@ -26,6 +35,7 @@ export const IN_PIPELINE_STATUSES = ['pending', 'processing'] as const;
 export function decideBackfillAction(params: {
   status: unknown;
   detailExists: boolean;
+  hasOcrExcerpt: boolean;
 }): BackfillDecision {
   if (
     typeof params.status === 'string' &&
@@ -33,10 +43,10 @@ export function decideBackfillAction(params: {
   ) {
     return 'skip-in-pipeline';
   }
-  if (params.detailExists) {
-    return 'skip-detail-exists';
+  if (!params.detailExists) {
+    return 'backfill-detail-and-excerpt';
   }
-  return 'backfill';
+  return params.hasOcrExcerpt ? 'skip-complete' : 'backfill-excerpt-only';
 }
 
 /**
@@ -99,10 +109,12 @@ export function canonicalStringify(value: unknown): string {
  */
 export interface BackfillCounters {
   scanned: number;
-  backfillTargets: number;
-  skippedDetailExists: number;
+  targetsDetailAndExcerpt: number;
+  targetsExcerptOnly: number;
+  skippedComplete: number;
   skippedInPipeline: number;
-  written: number;
+  writtenDetailAndExcerpt: number;
+  writtenExcerptOnly: number;
   parentDeleted: number;
   decisionChanged: number;
   errors: number;
@@ -111,10 +123,12 @@ export interface BackfillCounters {
 export function createCounters(): BackfillCounters {
   return {
     scanned: 0,
-    backfillTargets: 0,
-    skippedDetailExists: 0,
+    targetsDetailAndExcerpt: 0,
+    targetsExcerptOnly: 0,
+    skippedComplete: 0,
     skippedInPipeline: 0,
-    written: 0,
+    writtenDetailAndExcerpt: 0,
+    writtenExcerptOnly: 0,
     parentDeleted: 0,
     decisionChanged: 0,
     errors: 0,

@@ -105,29 +105,47 @@ const db = admin.firestore();
 type Mode = 'audit' | 'dry-run' | 'execute' | 'verify';
 
 function parseArgs(): { mode: Mode; limit: number } {
+  const MODE_FLAGS: Record<string, Mode> = {
+    '--audit': 'audit',
+    '--dry-run': 'dry-run',
+    '--execute': 'execute',
+    '--verify': 'verify',
+  };
+  const args = process.argv.slice(2);
   const modes: Mode[] = [];
-  if (process.argv.includes('--audit')) modes.push('audit');
-  if (process.argv.includes('--dry-run')) modes.push('dry-run');
-  if (process.argv.includes('--execute')) modes.push('execute');
-  if (process.argv.includes('--verify')) modes.push('verify');
+  let limit = 0; // 0 = 無制限
+
+  // 未知の引数は明示拒否する (Codex Phase C review P2反映: `--limit=10` や typo が
+  // 黙殺されると、canary意図の起動が全件実行に化ける。destructiveスクリプトでは
+  // 「解釈できない指定 = 即エラー」が唯一安全なデフォルト)
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg in MODE_FLAGS) {
+      modes.push(MODE_FLAGS[arg]);
+      continue;
+    }
+    if (arg === '--limit') {
+      limit = Number(args[i + 1]);
+      if (!Number.isInteger(limit) || limit <= 0) {
+        console.error('--limit には正の整数を指定してください (例: --limit 10)');
+        process.exit(1);
+      }
+      i++; // 値を消費
+      continue;
+    }
+    console.error(`未知の引数です: ${arg} (--limit=N 形式は不可、--limit N を使用)`);
+    process.exit(1);
+  }
+
   if (modes.length !== 1) {
     console.error('使用方法: --audit | --dry-run | --execute [--limit N] | --verify のいずれか1つを指定');
     process.exit(1);
   }
-  let limit = 0; // 0 = 無制限
-  const idx = process.argv.indexOf('--limit');
-  if (idx !== -1) {
-    // --limit は execute 専用 (review A3指摘反映: 他モードで受理するとヘッダに
-    // 表示されるのに適用されず、operator が「サンプル済み」と誤認するため明示拒否)
-    if (modes[0] !== 'execute') {
-      console.error('--limit は --execute 専用です (audit/dry-run/verify は常に全件対象)');
-      process.exit(1);
-    }
-    limit = Number(process.argv[idx + 1]);
-    if (!Number.isInteger(limit) || limit <= 0) {
-      console.error('--limit には正の整数を指定してください');
-      process.exit(1);
-    }
+  // --limit は execute 専用 (review A3指摘反映: 他モードで受理するとヘッダに
+  // 表示されるのに適用されず、operator が「サンプル済み」と誤認するため明示拒否)
+  if (limit > 0 && modes[0] !== 'execute') {
+    console.error('--limit は --execute 専用です (audit/dry-run/verify は常に全件対象)');
+    process.exit(1);
   }
   return { mode: modes[0], limit };
 }
@@ -153,21 +171,27 @@ interface ScannedDoc {
   id: string;
   status: string | undefined;
   hasTokenHash: boolean;
+  hasOcrExcerpt: boolean;
 }
 
 /**
- * documents 全件を軽量スキャンする(select field maskでstatusとsearch.tokenHashのみ転送)。
+ * documents 全件を軽量スキャンする(select field maskでstatus/search.tokenHash/
+ * ocrExcerptのみ転送。ocrExcerptは最大200字の軽量フィールド)。
  * 重フィールド(ocrResult/pageResults)は --execute のper-docトランザクション内、
  * --verify の対象doc読込時にのみ取得する。
  */
 async function scanAllDocuments(): Promise<ScannedDoc[]> {
-  const snap = await db.collection('documents').select('status', 'search.tokenHash').get();
+  const snap = await db
+    .collection('documents')
+    .select('status', 'search.tokenHash', 'ocrExcerpt')
+    .get();
   return snap.docs.map((d) => {
     const data = d.data();
     return {
       id: d.id,
       status: typeof data.status === 'string' ? data.status : undefined,
       hasTokenHash: typeof data.search?.tokenHash === 'string' && data.search.tokenHash.length > 0,
+      hasOcrExcerpt: typeof data.ocrExcerpt === 'string',
     };
   });
 }
@@ -194,16 +218,21 @@ function classify(docs: ScannedDoc[], parentIdsWithDetail: Set<string>): Classif
     const detailExists = parentIdsWithDetail.has(doc.id);
     if (detailExists) dist.detailExists++;
 
-    const decision = decideBackfillAction({ status: doc.status, detailExists });
-    if (decision === 'backfill') {
-      counters.backfillTargets++;
+    const decision = decideBackfillAction({
+      status: doc.status,
+      detailExists,
+      hasOcrExcerpt: doc.hasOcrExcerpt,
+    });
+    if (decision === 'backfill-detail-and-excerpt' || decision === 'backfill-excerpt-only') {
+      if (decision === 'backfill-detail-and-excerpt') counters.targetsDetailAndExcerpt++;
+      else counters.targetsExcerptOnly++;
       dist.targets++;
       targets.push(doc);
       // searchIndexerトリガー増幅の見積りはbackfillが実際に親を更新するdoc(=target)に
       // 限定して数える (review A5指摘反映: 全doc対象だとskip分まで含み過大推定になる)
       if (!doc.hasTokenHash) tokenHashMissing++;
-    } else if (decision === 'skip-detail-exists') {
-      counters.skippedDetailExists++;
+    } else if (decision === 'skip-complete') {
+      counters.skippedComplete++;
     } else {
       counters.skippedInPipeline++;
     }
@@ -220,8 +249,10 @@ function printClassification(c: Classification): void {
       `status=${status}: total=${dist.total} detail/main有=${dist.detailExists} backfill対象=${dist.targets}`
     );
   }
-  console.log(`\nbackfill対象合計: ${c.counters.backfillTargets}`);
-  console.log(`スキップ(detail/main既存): ${c.counters.skippedDetailExists}`);
+  const totalTargets = c.counters.targetsDetailAndExcerpt + c.counters.targetsExcerptOnly;
+  console.log(`\nbackfill対象合計: ${totalTargets}`);
+  console.log(`  内訳: detail+excerpt作成=${c.counters.targetsDetailAndExcerpt} / excerptのみ補完=${c.counters.targetsExcerptOnly}`);
+  console.log(`スキップ(detail/main・ocrExcerptとも既存): ${c.counters.skippedComplete}`);
   console.log(`スキップ(in-pipeline: ${IN_PIPELINE_STATUSES.join('/')}): ${c.counters.skippedInPipeline}`);
   console.log(
     `search.tokenHash欠落(backfill対象内): ${c.tokenHashMissing} (該当docはsearchIndexer書き戻しでgroup tx最大8件/docに増幅)`
@@ -259,12 +290,16 @@ async function runWithRateControl<T>(
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, items.length) }, () => runner()));
 }
 
-type BackfillOutcome = 'written' | 'parent-deleted' | 'decision-changed';
+type BackfillOutcome = 'written-detail-and-excerpt' | 'written-excerpt-only' | 'parent-deleted' | 'decision-changed';
 
 /**
  * 1 docのbackfillを単一トランザクションで実行する (設計判断は冒頭doc comment参照)。
  * トランザクション内で親・detailを読み直すため、スキャン時点との状態差(並行再処理等)は
  * ここで最終判定される。
+ *
+ * detail作成とocrExcerpt補完は独立に判定する (Codex Phase C review P1反映:
+ * detail既存でも親のocrExcerptが欠けていればexcerptのみ書く。seed-dev-data.ts等の
+ * 「detailはdual-writeするがexcerptは書かない」経路で作られたdocを収束させるため)。
  *
  * カウンタ加算はトランザクションの**外**で行う (review A1指摘反映: Firestoreは競合時に
  * トランザクションコールバックを再実行するため、コールバック内で加算すると
@@ -282,21 +317,28 @@ async function backfillOneDoc(docId: string, counters: BackfillCounters): Promis
         return 'parent-deleted';
       }
       const data = parentSnap.data()!;
-      const decision = decideBackfillAction({ status: data.status, detailExists: detailSnap.exists });
-      if (decision !== 'backfill') {
-        // スキャン後に並行処理がdetail/main作成 or statusをin-pipelineに変えた(正常系)
+      const decision = decideBackfillAction({
+        status: data.status,
+        detailExists: detailSnap.exists,
+        hasOcrExcerpt: typeof data.ocrExcerpt === 'string',
+      });
+      if (decision === 'skip-in-pipeline' || decision === 'skip-complete') {
+        // スキャン後に並行処理がdetail/main+excerptを書いた or statusがin-pipelineに変わった(正常系)
         return 'decision-changed';
       }
-      tx.create(detailRef, buildDetailPayload(data));
+      if (decision === 'backfill-detail-and-excerpt') {
+        tx.create(detailRef, buildDetailPayload(data));
+      }
       tx.update(docRef, {
         ocrExcerpt: buildOcrExcerpt(
           typeof data.ocrResult === 'string' ? data.ocrResult : '',
           typeof data.ocrResultUrl === 'string' ? data.ocrResultUrl : null
         ),
       });
-      return 'written';
+      return decision === 'backfill-detail-and-excerpt' ? 'written-detail-and-excerpt' : 'written-excerpt-only';
     });
-    if (outcome === 'written') counters.written++;
+    if (outcome === 'written-detail-and-excerpt') counters.writtenDetailAndExcerpt++;
+    else if (outcome === 'written-excerpt-only') counters.writtenExcerptOnly++;
     else if (outcome === 'parent-deleted') counters.parentDeleted++;
     else counters.decisionChanged++;
   } catch (err) {
@@ -347,8 +389,11 @@ async function verifyOneDoc(docId: string, result: VerifyResult): Promise<void> 
     // in-pipeline判定はexecuteパスと同一関数を通す (review D5指摘反映: 判定ロジックが
     // 二重実装だと将来の変更でexecute/verifyが静かに乖離する)
     if (
-      decideBackfillAction({ status: parent.status, detailExists: detailSnap.exists }) ===
-      'skip-in-pipeline'
+      decideBackfillAction({
+        status: parent.status,
+        detailExists: detailSnap.exists,
+        hasOcrExcerpt: typeof parent.ocrExcerpt === 'string',
+      }) === 'skip-in-pipeline'
     ) {
       result.inPipeline++;
       return;
@@ -427,8 +472,9 @@ async function main(): Promise<void> {
     );
     const c = classification.counters;
     console.log(`\n--- 実行結果 (${Math.round((Date.now() - started) / 1000)}秒) ---`);
-    console.log(`書込成功: ${c.written}`);
-    console.log(`実行時skip(並行処理がdetail作成/status変更、正常系): ${c.decisionChanged}`);
+    console.log(`書込成功(detail+excerpt作成): ${c.writtenDetailAndExcerpt}`);
+    console.log(`書込成功(excerptのみ補完): ${c.writtenExcerptOnly}`);
+    console.log(`実行時skip(並行処理がdetail+excerpt作成/status変更、正常系): ${c.decisionChanged}`);
     console.log(
       `実行時skip(スキャン後に親doc削除): ${c.parentDeleted}` +
         (c.parentDeleted > 0 ? ' ⚠️ 想定外に多い場合は削除経路を調査すること' : '')
