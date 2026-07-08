@@ -1,0 +1,665 @@
+#!/usr/bin/env ts-node
+/**
+ * ADR-0018 Phase C: 既存documentsへの detail/main サブコレクション backfill (Issue #547)
+ *
+ * Phase B (dual-write、PR #569/#571/#573/#574/#575) 以降に一度も再処理されていない
+ * 既存docへ `documents/{docId}/detail/main` を作成し、`ocrExcerpt` を親の既存
+ * `ocrResult`/`ocrResultUrl` から算出して親docへ書込む。Phase D (dual-read cutover) の
+ * 前提条件「detail/main が存在しない doc はゼロ」(ADR-0018 §原子性要件2) を成立させる。
+ *
+ * ## 実行モード (排他、いずれか1つ必須)
+ * - `--audit`:   read-only。status分布 × detail/main有無 × search.tokenHash欠落数を集計
+ * - `--dry-run`: read-only。backfill対象件数の確定とサンプルdoc ID表示(書込0)
+ * - `--execute`: per-docトランザクションでbackfill実行(レート制御付き、冪等)
+ * - `--verify`:  read-only。親↔detailの内容パリティ(canonical hash照合)と
+ *                ocrExcerpt再計算照合。不一致は報告のみ(自動修正しない)
+ *
+ * ## 設計判断 (Codexセカンドオピニオン 2026-07-08 反映)
+ * - **batch書込ではなく 1 doc = 1 トランザクション** (Codex Critical 1 対応):
+ *   `tx.getAll(親, detail)` で読み直し、decideBackfillAction + detectStaleDetail が
+ *   4つのtx結果のいずれかに最終判定する — ①detail作成+excerpt書込(`tx.create`) /
+ *   ②excerptのみ補完 / ③stale detail是正(親クリア済みdocのdetail残存コンテンツを
+ *   空/deleteに揃える) / ④skip。Firestoreトランザクションの直列化保証により、
+ *   backfill実行中に並行する再処理(dual-write)があってもトランザクションが自動リトライ→
+ *   新鮮な状態を再読→再判定となり、detail/mainへの**値の書込はcreate経由のみ**
+ *   (既存docに対して失敗)のため、古いデータで新しいOCR結果を上書きする経路が
+ *   構造的に存在しない(契約テストでlock-in)。
+ *   副次効果: batch 500 ops上限(2N≤500)・10MiBリクエスト上限の考慮も不要になる。
+ * - **対象はprocessed限定ではなく「in-pipeline (pending/processing) 以外の全doc」**
+ *   (Codex Critical 2 対応): error/split等のdocもPhase DのFE writeBatch (`update()`) の
+ *   対象になりうるため、存在保証は全statusに必要。in-pipeline除外の理由は
+ *   scripts/lib/backfillDetailHelpers.ts の decideBackfillAction doc comment 参照。
+ * - **レート制御** (Codex Critical 3 対応): 親docの `ocrExcerpt` 更新は
+ *   updateDocumentGroups.onDocumentWrite を発火させ、groupキー不変でも delta:0 の
+ *   group transaction が最大4件走る(groupAggregation.ts:115-117 実読で確認)。
+ *   searchIndexer は tokenHash 一致で早期return するため大半は素通り(audit で
+ *   tokenHash 欠落数を事前計測)。同時実行数 + 起動間隔でトリガー負荷を制御する。
+ * - **ocrExcerpt算出は本番と同一ヘルパー共用** (Codex Important 対応):
+ *   functions/src/ocr/ocrExcerpt.ts (ocrProcessor.tsから抽出) を import。
+ *
+ * ## 冪等性・再実行安全性
+ * detail/main が既に存在する doc はスキップするため、途中killからの再開 = 単純再実行。
+ * 2周目の実行で written=0 になることが devリハーサルの冪等性完了条件。
+ *
+ * ## 個人情報保護
+ * fileName/customerName/officeName 等はログに一切出力しない。出力は件数と
+ * doc ID (Firestore auto-ID、非PII) のみ。
+ *
+ * 使用方法 (推奨: GitHub Actions "Run Operations Script"):
+ *   backfill-detail-subcollection --audit
+ *   backfill-detail-subcollection --dry-run
+ *   backfill-detail-subcollection --execute --limit 10   (canary)
+ *   backfill-detail-subcollection --execute
+ *   backfill-detail-subcollection --verify
+ */
+
+import * as admin from 'firebase-admin';
+import { buildOcrExcerpt } from '../functions/src/ocr/ocrExcerpt';
+import {
+  decideBackfillAction,
+  buildDetailPayload,
+  detectStaleDetail,
+  canonicalHash,
+  createCounters,
+  IN_PIPELINE_STATUSES,
+  type BackfillCounters,
+} from './lib/backfillDetailHelpers';
+
+const ALLOWED_PROJECT_IDS = ['doc-split-dev', 'docsplit-kanameone', 'docsplit-cocoro'];
+
+/**
+ * レート制御 (Codex Critical 3 対応)。
+ * 起動レート上限 = 1000/EXECUTE_START_INTERVAL_MS ≈ 6.7 docs/sec (起動間隔のみで
+ * 決まる上限。CONCURRENCYは同時in-flight数の上限で、txが長引けば実効レートは
+ * これより下がる=トリガー負荷は安全側)。runWithRateControlが起動スロットを
+ * 同期的に予約することで上限を保証。
+ * kanameone 9,355件(2026-07-08 audit時点、実行前に--auditで再計測)で約23分以上。
+ * 1 doc backfill = 親update 1回 (トリガー発火はonDocumentWrite→group tx最大4件) +
+ * detail create 1回 (documents/{id} 直下ではないためonDocumentWriteは発火しない)。
+ * → group tx ~27/sec、Firestore余裕範囲。
+ * 注: 旧docのgroupキー欠落/不一致時はトリガーがキー書き戻しでもう1周発火しうる
+ * (updateDocumentGroups.ts:54-63)ため上記は典型値。倍増しても余裕範囲内。
+ *
+ * search.tokenHash 欠落の processed doc は、searchIndexer が search メタデータを
+ * 親へ書き戻すため onDocumentWrite が2度目に発火し、group tx は最大8件/docになる
+ * (review C2指摘反映: 2度目のsearchIndexer発火はhash一致で早期returnし無限ループには
+ * ならない。processed以外のstatusはsearchIndexerが早期returnするため増幅なし)。
+ * audit の tokenHash欠落数(backfill対象内)で該当規模を事前確認すること。
+ *
+ * --verify は読取専用でトリガーを一切発火しないため、起動間隔なし
+ * (concurrency制限のみ) で実行する (review A4/D1指摘反映)。
+ */
+const CONCURRENCY = 4;
+const EXECUTE_START_INTERVAL_MS = 150;
+
+/** verify で不一致検出時に表示するサンプルdoc ID数の上限 */
+const MISMATCH_SAMPLE_LIMIT = 20;
+
+/**
+ * PROJECT_IDは明示指定のFIREBASE_PROJECT_IDを最優先する (Codex Phase C review 3rd P1反映:
+ * この環境はdirenv/gcloud named configがGOOGLE_CLOUD_PROJECT等のambient変数を自動設定する
+ * ため、ambient優先だと「FIREBASE_PROJECT_ID=doc-split-devでdevリハーサルのつもりが
+ * ambientのkanameoneに書き込む」silent mismatchが起こりうる。両方設定されていて値が
+ * 食い違う場合は解釈せず即エラーにする)。
+ */
+const EXPLICIT_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || '';
+const AMBIENT_PROJECT_ID = process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || '';
+if (EXPLICIT_PROJECT_ID && AMBIENT_PROJECT_ID && EXPLICIT_PROJECT_ID !== AMBIENT_PROJECT_ID) {
+  console.error(
+    `❌ FIREBASE_PROJECT_ID (${EXPLICIT_PROJECT_ID}) と GOOGLE_CLOUD_PROJECT/GCLOUD_PROJECT ` +
+      `(${AMBIENT_PROJECT_ID}) が食い違っています。意図しない環境への書込を防ぐため中断します。`
+  );
+  process.exit(1);
+}
+const PROJECT_ID = EXPLICIT_PROJECT_ID || AMBIENT_PROJECT_ID;
+
+if (!PROJECT_ID) {
+  console.error('FIREBASE_PROJECT_ID (または GOOGLE_CLOUD_PROJECT) を設定してください');
+  process.exit(1);
+}
+if (!ALLOWED_PROJECT_IDS.includes(PROJECT_ID)) {
+  console.error(`❌ このスクリプトは ${ALLOWED_PROJECT_IDS.join('/')} 専用です (指定: ${PROJECT_ID})`);
+  process.exit(1);
+}
+
+if (!admin.apps.length) {
+  admin.initializeApp({ projectId: PROJECT_ID });
+}
+const db = admin.firestore();
+
+type Mode = 'audit' | 'dry-run' | 'execute' | 'verify';
+
+function parseArgs(): { mode: Mode; limit: number } {
+  const MODE_FLAGS: Record<string, Mode> = {
+    '--audit': 'audit',
+    '--dry-run': 'dry-run',
+    '--execute': 'execute',
+    '--verify': 'verify',
+  };
+  const args = process.argv.slice(2);
+  const modes: Mode[] = [];
+  let limit = 0; // 0 = 無制限
+
+  // 未知の引数は明示拒否する (Codex Phase C review P2反映: `--limit=10` や typo が
+  // 黙殺されると、canary意図の起動が全件実行に化ける。destructiveスクリプトでは
+  // 「解釈できない指定 = 即エラー」が唯一安全なデフォルト)
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg in MODE_FLAGS) {
+      modes.push(MODE_FLAGS[arg]);
+      continue;
+    }
+    if (arg === '--limit') {
+      limit = Number(args[i + 1]);
+      if (!Number.isInteger(limit) || limit <= 0) {
+        console.error('--limit には正の整数を指定してください (例: --limit 10)');
+        process.exit(1);
+      }
+      i++; // 値を消費
+      continue;
+    }
+    console.error(`未知の引数です: ${arg} (--limit=N 形式は不可、--limit N を使用)`);
+    process.exit(1);
+  }
+
+  if (modes.length !== 1) {
+    console.error('使用方法: --audit | --dry-run | --execute [--limit N] | --verify のいずれか1つを指定');
+    process.exit(1);
+  }
+  // --limit は execute 専用 (review A3指摘反映: 他モードで受理するとヘッダに
+  // 表示されるのに適用されず、operator が「サンプル済み」と誤認するため明示拒否)
+  if (limit > 0 && modes[0] !== 'execute') {
+    console.error('--limit は --execute 専用です (audit/dry-run/verify は常に全件対象)');
+    process.exit(1);
+  }
+  return { mode: modes[0], limit };
+}
+
+/**
+ * detail/main を持つ親doc IDの集合を1回のcollection-groupスキャンで取得する。
+ * `select()` (投影フィールドなし = key-only projection) により転送はドキュメント名のみで、
+ * 9,000件規模でも軽量。documents/{docId}/detail/main 以外のパスは除外する。
+ */
+async function fetchParentIdsWithDetail(): Promise<Set<string>> {
+  const parentIds = new Set<string>();
+  const snap = await db.collectionGroup('detail').select().get();
+  for (const doc of snap.docs) {
+    const parent = doc.ref.parent.parent;
+    if (doc.id === 'main' && parent && parent.parent?.id === 'documents' && !parent.parent.parent) {
+      parentIds.add(parent.id);
+    }
+  }
+  return parentIds;
+}
+
+interface ScannedDoc {
+  id: string;
+  status: string | undefined;
+  hasTokenHash: boolean;
+  hasOcrExcerpt: boolean;
+}
+
+/**
+ * documents 全件を軽量スキャンする(select field maskでstatus/search.tokenHash/
+ * ocrExcerptのみ転送。ocrExcerptは最大200字の軽量フィールド)。
+ * 重フィールド(ocrResult/pageResults)は --execute のper-docトランザクション内、
+ * --verify の対象doc読込時にのみ取得する。
+ */
+async function scanAllDocuments(): Promise<ScannedDoc[]> {
+  const snap = await db
+    .collection('documents')
+    .select('status', 'search.tokenHash', 'ocrExcerpt')
+    .get();
+  return snap.docs.map((d) => {
+    const data = d.data();
+    return {
+      id: d.id,
+      status: typeof data.status === 'string' ? data.status : undefined,
+      hasTokenHash: typeof data.search?.tokenHash === 'string' && data.search.tokenHash.length > 0,
+      hasOcrExcerpt: typeof data.ocrExcerpt === 'string',
+    };
+  });
+}
+
+interface Classification {
+  targets: ScannedDoc[];
+  counters: BackfillCounters;
+  statusDist: Map<string, { total: number; detailExists: number; targets: number }>;
+  tokenHashMissing: number;
+}
+
+function classify(docs: ScannedDoc[], parentIdsWithDetail: Set<string>): Classification {
+  const counters = createCounters();
+  const statusDist = new Map<string, { total: number; detailExists: number; targets: number }>();
+  const targets: ScannedDoc[] = [];
+  let tokenHashMissing = 0;
+
+  for (const doc of docs) {
+    counters.scanned++;
+    const statusKey = doc.status ?? '(missing)';
+    const dist = statusDist.get(statusKey) ?? { total: 0, detailExists: 0, targets: 0 };
+    dist.total++;
+
+    const detailExists = parentIdsWithDetail.has(doc.id);
+    if (detailExists) dist.detailExists++;
+
+    const decision = decideBackfillAction({
+      status: doc.status,
+      detailExists,
+      hasOcrExcerpt: doc.hasOcrExcerpt,
+    });
+    if (decision === 'backfill-detail-and-excerpt' || decision === 'backfill-excerpt-only') {
+      if (decision === 'backfill-detail-and-excerpt') counters.targetsDetailAndExcerpt++;
+      else counters.targetsExcerptOnly++;
+      dist.targets++;
+      targets.push(doc);
+      // searchIndexerトリガー増幅の見積りはbackfillが実際に親を更新するdoc(=target)に
+      // 限定して数える (review A5指摘反映: 全doc対象だとskip分まで含み過大推定になる)
+      if (!doc.hasTokenHash) tokenHashMissing++;
+    } else if (decision === 'skip-complete') {
+      counters.skippedComplete++;
+    } else if (decision === 'skip-in-pipeline') {
+      counters.skippedInPipeline++;
+    } else {
+      // 網羅性ガード (type-design review反映: 状態追加時に既存カウンタへ静かに吸収されない)
+      assertNeverDecision(decision);
+    }
+    statusDist.set(statusKey, dist);
+  }
+
+  return { targets, counters, statusDist, tokenHashMissing };
+}
+
+function printClassification(c: Classification): void {
+  console.log(`\n--- status別内訳 (全${c.counters.scanned}件) ---`);
+  for (const [status, dist] of [...c.statusDist.entries()].sort()) {
+    console.log(
+      `status=${status}: total=${dist.total} detail/main有=${dist.detailExists} backfill対象=${dist.targets}`
+    );
+  }
+  const totalTargets = c.counters.targetsDetailAndExcerpt + c.counters.targetsExcerptOnly;
+  console.log(`\nbackfill対象合計: ${totalTargets}`);
+  console.log(`  内訳: detail+excerpt作成=${c.counters.targetsDetailAndExcerpt} / excerptのみ補完=${c.counters.targetsExcerptOnly}`);
+  console.log(`スキップ(detail/main・ocrExcerptとも既存): ${c.counters.skippedComplete}`);
+  console.log(`スキップ(in-pipeline: ${IN_PIPELINE_STATUSES.join('/')}): ${c.counters.skippedInPipeline}`);
+  console.log(
+    `search.tokenHash欠落(backfill対象内): ${c.tokenHashMissing} (該当docはsearchIndexer書き戻しでgroup tx最大8件/docに増幅)`
+  );
+}
+
+/**
+ * 同時実行数 + グローバル起動間隔の両方を制御するworkerプール (トリガー負荷制御)。
+ *
+ * 起動スロットは await の**前に同期的に予約する** (review A2/D2指摘反映: 予約を
+ * await後に行うと、複数workerが同じ古いlastStartを読んで同一スロットに整列し、
+ * 実効レートが最大CONCURRENCY倍まで劣化してレート制御が機能しなくなる)。
+ * startIntervalMs=0 で起動間隔なし(concurrency制限のみ)になる(--verify用)。
+ */
+async function runWithRateControl<T>(
+  items: T[],
+  startIntervalMs: number,
+  worker: (item: T) => Promise<void>
+): Promise<void> {
+  let cursor = 0;
+  let nextSlot = 0;
+  async function runner(): Promise<void> {
+    for (;;) {
+      const index = cursor++;
+      if (index >= items.length) return;
+      if (startIntervalMs > 0) {
+        const slot = Math.max(Date.now(), nextSlot);
+        nextSlot = slot + startIntervalMs; // 同期的にスロット予約(この行までawaitなし)
+        const wait = slot - Date.now();
+        if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+      }
+      await worker(items[index]);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, items.length) }, () => runner()));
+}
+
+type BackfillOutcome =
+  | 'written-detail-and-excerpt'
+  | 'written-excerpt-only'
+  | 'reconciled-stale-detail'
+  | 'parent-deleted'
+  | 'decision-changed';
+
+/**
+ * 1 docのbackfillを単一トランザクションで実行する (設計判断は冒頭doc comment参照)。
+ * トランザクション内で親・detailを読み直すため、スキャン時点との状態差(並行再処理等)は
+ * ここで最終判定される。
+ *
+ * detail作成とocrExcerpt補完は独立に判定する (Codex Phase C review P1反映:
+ * detail既存でも親のocrExcerptが欠けていればexcerptのみ書く。seed-dev-data.ts等の
+ * 「detailはdual-writeするがexcerptは書かない」経路で作られたdocを収束させるため)。
+ *
+ * カウンタ加算はトランザクションの**外**で行う (review A1指摘反映: Firestoreは競合時に
+ * トランザクションコールバックを再実行するため、コールバック内で加算すると
+ * 「attempt1でwritten++→commit失敗→attempt2でskip判定」のような経路で
+ * 実際には書き込まれていないdocがwrittenに計上される)。
+ */
+/**
+ * BackfillOutcome → カウンタの対応表。Record型により、outcomeユニオンに状態を
+ * 追加するとここがコンパイルエラーになる (type-design review反映: if/elseチェーンだと
+ * 新しいoutcomeが既存else節に静かに吸収されて誤計上される)。
+ */
+const OUTCOME_COUNTER: Record<BackfillOutcome, keyof BackfillCounters> = {
+  'written-detail-and-excerpt': 'writtenDetailAndExcerpt',
+  'written-excerpt-only': 'writtenExcerptOnly',
+  'reconciled-stale-detail': 'reconciledStaleDetail',
+  'parent-deleted': 'parentDeleted',
+  'decision-changed': 'decisionChanged',
+};
+
+/**
+ * 個人情報保護と診断可能性の両立: エラーメッセージ本文(Storageパス等を含みうる)は
+ * 出力しないが、gRPCステータスコード(PERMISSION_DENIED=7/ABORTED=10/
+ * RESOURCE_EXHAUSTED=8等の非PII数値)は出力する (silent-failure review反映:
+ * constructor名だけでは「リトライで解消する一時エラー」と「IAM設定ミス等の
+ * 構造的エラー」を operator が区別できず、誤った復旧手順に誘導される)。
+ */
+function describeErrorForLog(err: unknown): string {
+  const name = err instanceof Error ? err.constructor.name : typeof err;
+  const code = (err as { code?: number | string })?.code;
+  return code !== undefined ? `${name} code=${code}` : name;
+}
+
+async function backfillOneDoc(docId: string, counters: BackfillCounters): Promise<void> {
+  try {
+    const docRef = db.doc(`documents/${docId}`);
+    const detailRef = docRef.collection('detail').doc('main');
+    const outcome = await db.runTransaction<BackfillOutcome>(async (tx) => {
+      const [parentSnap, detailSnap] = await tx.getAll(docRef, detailRef);
+      if (!parentSnap.exists) {
+        // スキャン後に削除された(削除同期は deleteDocument.ts が担保)
+        return 'parent-deleted';
+      }
+      const data = parentSnap.data()!;
+      const decision = decideBackfillAction({
+        status: data.status,
+        detailExists: detailSnap.exists,
+        hasOcrExcerpt: typeof data.ocrExcerpt === 'string',
+      });
+      if (decision === 'skip-in-pipeline' || decision === 'skip-complete') {
+        // スキャン後に並行処理がdetail/main+excerptを書いた or statusがin-pipelineに変わった(正常系)
+        return 'decision-changed';
+      }
+      if (decision !== 'backfill-detail-and-excerpt' && decision !== 'backfill-excerpt-only') {
+        // 網羅性ガード (type-design review反映: BackfillDecisionに状態が追加されたとき、
+        // ここでコンパイルエラーにならないと新状態が下の書込パスに落ちる)
+        return assertNeverDecision(decision);
+      }
+      if (decision === 'backfill-detail-and-excerpt') {
+        tx.create(detailRef, buildDetailPayload(data));
+      } else if (detectStaleDetail(data, detailSnap.data() ?? {})) {
+        // Codex Phase C review 3rd P1: 親クリア済み+OCR最終失敗(error確定)のdocは
+        // detail/mainに再処理前の古いOCRが残存する。excerptだけ補完して古いdetailを
+        // 温存するとPhase D読者が古いOCRを配信するため、親のクリア済み状態に合わせて
+        // detail側の残存コンテンツを是正する(次回再処理成功時にdual-writeで再生成される)。
+        // ocrResultはdeleteではなく空文字で上書き (silent-failure review反映:
+        // buildDetailPayloadのC1不変条件「detail存在時ocrResultは常にstring」を
+        // 本経路でも維持する。''はdetectStaleDetailが非コンテンツ扱いのため冪等)
+        tx.update(detailRef, {
+          ocrResult: '',
+          pageResults: admin.firestore.FieldValue.delete(),
+        });
+        tx.update(docRef, {
+          ocrExcerpt: buildOcrExcerpt('', typeof data.ocrResultUrl === 'string' ? data.ocrResultUrl : null),
+        });
+        return 'reconciled-stale-detail';
+      }
+      tx.update(docRef, {
+        ocrExcerpt: buildOcrExcerpt(
+          typeof data.ocrResult === 'string' ? data.ocrResult : '',
+          typeof data.ocrResultUrl === 'string' ? data.ocrResultUrl : null
+        ),
+      });
+      return decision === 'backfill-detail-and-excerpt' ? 'written-detail-and-excerpt' : 'written-excerpt-only';
+    });
+    counters[OUTCOME_COUNTER[outcome]]++;
+    if (outcome === 'reconciled-stale-detail') {
+      // 破壊的操作(detailの残存コンテンツ是正)の監査証跡: 対象docIDを必ず記録する
+      // (silent-failure review反映: 件数だけでは事後の個別確認・選択的リストアが不可能)
+      console.warn(`[backfillOneDoc] stale detail是正 docId=${docId}`);
+    }
+  } catch (err) {
+    counters.errors++;
+    console.warn(`[backfillOneDoc] 失敗 docId=${docId} (${describeErrorForLog(err)})`);
+  }
+}
+
+/** BackfillDecision網羅性ガード。ユニオン成長時にコンパイルエラーで検出する */
+function assertNeverDecision(decision: never): never {
+  throw new Error(`未対応のBackfillDecision: ${String(decision)}`);
+}
+
+/** 不一致件数と、報告用のサンプルdoc ID(上限MISMATCH_SAMPLE_LIMIT)を保持する */
+class MismatchTally {
+  count = 0;
+  samples: string[] = [];
+  add(docId: string): void {
+    this.count++;
+    if (this.samples.length < MISMATCH_SAMPLE_LIMIT) this.samples.push(docId);
+  }
+  toString(): string {
+    return `${this.count}${this.samples.length > 0 ? ` (sample: ${this.samples.join(', ')})` : ''}`;
+  }
+}
+
+interface VerifyResult {
+  checked: number;
+  ocrResultMismatch: MismatchTally;
+  pageResultsMismatch: MismatchTally;
+  ocrExcerptMismatch: MismatchTally;
+  detailMissing: MismatchTally;
+  staleDetail: MismatchTally;
+  inPipeline: number;
+  /**
+   * 検証中に親docが削除されていた件数 (silent-failure review反映: 黙って除外すると
+   * ヘッダの検証件数とchecked+inPipeline+errorsの合計が合わず、executeパスの
+   * parentDeletedと同じ「削除ストーム兆候シグナル」も失われる。FAILには数えない)
+   */
+  deletedDuringVerify: number;
+  errors: number;
+}
+
+/**
+ * parity検証: in-pipeline以外の全docについて親とdetail/mainを読み、
+ * ocrResult/pageResultsのcanonical hash一致と、ocrExcerptの再計算一致を確認する。
+ * 「親にフィールドが存在するのにdetail側に無い/値が異なる」を不一致として数える。
+ * 親にpageResultsが無い場合はdetail側にも無くてよい(buildDetailPayloadのpageResults
+ * 省略規則と同じ。ocrResultは常にstringで書かれるため省略規則の対象外)。
+ * 親にocrResultが無いのにdetail側にコンテンツが残る場合はstaleDetailとして検出する。
+ */
+async function verifyOneDoc(docId: string, result: VerifyResult): Promise<void> {
+  try {
+    const docRef = db.doc(`documents/${docId}`);
+    const detailRef = docRef.collection('detail').doc('main');
+    const [parentSnap, detailSnap] = await db.getAll(docRef, detailRef);
+    if (!parentSnap.exists) {
+      // 検証中に削除された(削除同期済みなら不一致ではないが、件数は記録する)
+      result.deletedDuringVerify++;
+      return;
+    }
+    const parent = parentSnap.data()!;
+
+    // in-pipeline判定はexecuteパスと同一関数を通す (review D5指摘反映: 判定ロジックが
+    // 二重実装だと将来の変更でexecute/verifyが静かに乖離する)
+    if (
+      decideBackfillAction({
+        status: parent.status,
+        detailExists: detailSnap.exists,
+        hasOcrExcerpt: typeof parent.ocrExcerpt === 'string',
+      }) === 'skip-in-pipeline'
+    ) {
+      result.inPipeline++;
+      return;
+    }
+    result.checked++;
+
+    if (!detailSnap.exists) {
+      result.detailMissing.add(docId);
+      return;
+    }
+    const detail = detailSnap.data()!;
+
+    if (typeof parent.ocrResult === 'string') {
+      if (canonicalHash(parent.ocrResult) !== canonicalHash(detail.ocrResult)) {
+        result.ocrResultMismatch.add(docId);
+      }
+    }
+    if (Array.isArray(parent.pageResults)) {
+      if (canonicalHash(parent.pageResults) !== canonicalHash(detail.pageResults)) {
+        result.pageResultsMismatch.add(docId);
+      }
+    }
+    // 親にフィールドが無いのにdetail側に古いコンテンツが残存しているケースも不一致
+    // (Codex Phase C review 3rd P1反映: この盲点を放置すると再処理失敗docの
+    // 古いOCRがverify PASSのままPhase Dで配信される)
+    if (detectStaleDetail(parent, detail)) {
+      result.staleDetail.add(docId);
+    }
+
+    const expectedExcerpt = buildOcrExcerpt(
+      typeof parent.ocrResult === 'string' ? parent.ocrResult : '',
+      typeof parent.ocrResultUrl === 'string' ? parent.ocrResultUrl : null
+    );
+    if (parent.ocrExcerpt !== expectedExcerpt) {
+      result.ocrExcerptMismatch.add(docId);
+    }
+  } catch (err) {
+    result.errors++;
+    console.warn(`[verifyOneDoc] 読込失敗 docId=${docId} (${describeErrorForLog(err)})`);
+  }
+}
+
+async function main(): Promise<void> {
+  const { mode, limit } = parseArgs();
+  console.log(`=== detail/main backfill (ADR-0018 Phase C, Issue #547) ===`);
+  console.log(`プロジェクト: ${PROJECT_ID} / モード: ${mode}${limit ? ` / limit: ${limit}` : ''}`);
+  console.log('個人情報はログに出力しません(件数とdoc IDのみ)。');
+
+  const [docs, parentIdsWithDetail] = await Promise.all([scanAllDocuments(), fetchParentIdsWithDetail()]);
+  const classification = classify(docs, parentIdsWithDetail);
+  printClassification(classification);
+
+  if (mode === 'audit') {
+    console.log('\n=== audit完了 (read-only、書込なし) ===');
+    return;
+  }
+
+  if (mode === 'dry-run') {
+    const sample = classification.targets.slice(0, 10).map((t) => t.id);
+    console.log(`\nbackfill対象サンプル(最大10件): ${sample.join(', ') || '(なし)'}`);
+    console.log('\n=== dry-run完了 (read-only、書込なし) ===');
+    return;
+  }
+
+  if (mode === 'execute') {
+    let targets = classification.targets;
+    if (limit > 0) {
+      targets = targets.slice(0, limit);
+      console.log(`\n--limit ${limit} 指定によりcanary実行: 対象を先頭${targets.length}件に制限`);
+    }
+    if (targets.length === 0) {
+      console.log('\n✅ backfill対象0件(冪等: 全doc処理済み or 対象なし)');
+      return;
+    }
+    console.log(
+      `\n--- backfill実行: ${targets.length}件 (concurrency=${CONCURRENCY}, 起動間隔${EXECUTE_START_INTERVAL_MS}ms ≈ ${(1000 / EXECUTE_START_INTERVAL_MS).toFixed(1)} docs/sec) ---`
+    );
+    const started = Date.now();
+    await runWithRateControl(targets, EXECUTE_START_INTERVAL_MS, (t) =>
+      backfillOneDoc(t.id, classification.counters)
+    );
+    const c = classification.counters;
+    console.log(`\n--- 実行結果 (${Math.round((Date.now() - started) / 1000)}秒) ---`);
+    console.log(`書込成功(detail+excerpt作成): ${c.writtenDetailAndExcerpt}`);
+    console.log(`書込成功(excerptのみ補完): ${c.writtenExcerptOnly}`);
+    console.log(
+      `stale detail是正(親クリア済みdocのdetail残存コンテンツ削除): ${c.reconciledStaleDetail}` +
+        (c.reconciledStaleDetail > 0 ? ' ℹ️ 再処理失敗(error)由来。該当docは次回再処理成功時に再生成される' : '')
+    );
+    console.log(`実行時skip(並行処理がdetail+excerpt作成/status変更、正常系): ${c.decisionChanged}`);
+    console.log(
+      `実行時skip(スキャン後に親doc削除): ${c.parentDeleted}` +
+        (c.parentDeleted > 0 ? ' ⚠️ 想定外に多い場合は削除経路を調査すること' : '')
+    );
+    console.log(`エラー: ${c.errors}`);
+    if (c.errors > 0) {
+      console.error('❌ エラーが発生したdocがあります。再実行(冪等)で解消するか確認してください。');
+      process.exitCode = 1;
+    } else if (limit > 0) {
+      // Codex 4th review P2反映: --limit付きcanaryの再実行は「次のN件」を処理する
+      // (処理済みdocは次回スキャンで対象から外れるため)。「書込0件になる」という
+      // 誤った完了ガイダンスでcanaryが意図せず拡大するのを防ぐ
+      console.log(
+        `✅ canary実行完了(${limit}件上限)。次: 結果確認後、--execute(制限なし)で全量実行 → 再実行で書込0件確認 → --verify`
+      );
+    } else {
+      console.log('✅ execute完了。次: 同モード再実行で書込0件(冪等性確認) → --verify');
+    }
+    return;
+  }
+
+  // mode === 'verify' — 読取専用でトリガー発火なしのため起動間隔0(concurrency制限のみ)
+  const verifyTargets = docs.map((d) => d.id);
+  console.log(`\n--- parity検証: ${verifyTargets.length}件 (in-pipelineは判定時に除外) ---`);
+  const result: VerifyResult = {
+    checked: 0,
+    ocrResultMismatch: new MismatchTally(),
+    pageResultsMismatch: new MismatchTally(),
+    ocrExcerptMismatch: new MismatchTally(),
+    detailMissing: new MismatchTally(),
+    staleDetail: new MismatchTally(),
+    inPipeline: 0,
+    deletedDuringVerify: 0,
+    errors: 0,
+  };
+  await runWithRateControl(verifyTargets, 0, (id) => verifyOneDoc(id, result));
+
+  console.log(`\n--- 検証結果 ---`);
+  console.log(
+    `検証対象: ${result.checked} / in-pipeline除外: ${result.inPipeline} / ` +
+      `検証中削除: ${result.deletedDuringVerify}` +
+      (result.deletedDuringVerify > 0 ? ' ⚠️ 想定外に多い場合は削除経路を調査すること' : '') +
+      ` / 読込エラー: ${result.errors}`
+  );
+  console.log(`detail/main不在: ${result.detailMissing}`);
+  if (result.detailMissing.count > 0) {
+    console.log(
+      '  ℹ️ detail/main不在には「execute実行中にin-pipelineだったdocがその後error等に遷移した」' +
+        'ケースが含まれうる — その場合は--executeを再実行(冪等)してから--verifyし直すこと (review A6)'
+    );
+  }
+  console.log(`ocrResult不一致: ${result.ocrResultMismatch}`);
+  console.log(`pageResults不一致: ${result.pageResultsMismatch}`);
+  console.log(`ocrExcerpt不一致: ${result.ocrExcerptMismatch}`);
+  console.log(`stale detail(親クリア済みだがdetailに古いコンテンツ残存): ${result.staleDetail}`);
+  console.log(
+    `\n[Phase D投入ゲート情報] in-pipeline (${IN_PIPELINE_STATUSES.join('/')}) 件数: ${result.inPipeline} — Phase D-FE投入時点でゼロであることを別途確認 (ADR-0018 Phase C行)`
+  );
+
+  const mismatchTotal =
+    result.detailMissing.count +
+    result.ocrResultMismatch.count +
+    result.pageResultsMismatch.count +
+    result.ocrExcerptMismatch.count +
+    result.staleDetail.count;
+  if (mismatchTotal > 0 || result.errors > 0) {
+    console.error(`❌ FAIL: 不一致${mismatchTotal}件 / エラー${result.errors}件`);
+    process.exitCode = 1;
+  } else {
+    console.log('✅ PASS: 全doc parity一致');
+  }
+}
+
+// firebase-adminのgRPCハンドルがイベントループに残りプロセスが自然終了しないため明示exit
+// (compare-gemini-ocr-models-confirmed.ts と同じ規約)
+main()
+  .then(() => process.exit(process.exitCode ?? 0))
+  .catch((err) => {
+    console.error(`❌ 致命的エラー (${describeErrorForLog(err)})`);
+    process.exit(1);
+  });
