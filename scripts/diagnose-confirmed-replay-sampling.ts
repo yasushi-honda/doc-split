@@ -37,6 +37,15 @@ async function main(): Promise<void> {
   const totalDocs = await count(col);
   console.log(`全文書数: ${totalDocs}`);
 
+  // kanameone本番デプロイ前のベースライン取得用(status別内訳)。デプロイ後の異常検知の
+  // 比較対象として使う(処理中/エラー件数が急増していないか等)。
+  console.log('\n--- status別内訳(デプロイ前ベースライン) ---');
+  for (const s of ['pending', 'processing', 'processed', 'error']) {
+    const c = await count(col.where('status', '==', s));
+    console.log(`status=${s}: ${c}`);
+  }
+  console.log('');
+
   const processed = await count(col.where('status', '==', 'processed'));
   console.log(`status=processed: ${processed}`);
 
