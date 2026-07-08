@@ -33,6 +33,7 @@ import { buildPageResult, type RawPageOcrResult } from './buildPageResult';
 import { buildOcrExtractionUpdatePayload } from './ocrUpdatePayloadBuilder';
 import { validatePageResultsForReuse } from './pageResultsReuse';
 import { applyConfirmedFieldProtection } from './confirmedFieldMerge';
+import { buildOcrExcerpt } from './ocrExcerpt';
 
 // #267: buildPageResult / 型は ./buildPageResult モジュールに移設。
 // #278: 型名 PageOcrResult → RawPageOcrResult にリネーム (shared/types.ts の post-processed
@@ -296,12 +297,9 @@ export async function processDocument(
     savedOcrResult = '';
   }
 
-  // ADR-0018 (Issue #547) Phase B: 一覧系UI用の軽量抜粋。Storage offload済み
-  // (ocrResultUrlセット時)は既存のplaceholder文言をそのまま格納する
-  // (useProcessingHistory.getOcrExcerpt()と同じ出し分けロジック、Phase Dで読込元切替予定)。
-  const ocrExcerpt = ocrResultUrl
-    ? '（OCR結果はCloud Storageに保存されています）'
-    : ocrResult.slice(0, 200);
+  // ADR-0018 (Issue #547) Phase B: 一覧系UI用の軽量抜粋。算出式は Phase C backfill と
+  // 共有するため ocrExcerpt.ts に抽出済み (詳細は同ファイルの doc comment 参照)。
+  const ocrExcerpt = buildOcrExcerpt(ocrResult, ocrResultUrl);
 
   // Issue #526 D1: 抽出結果の集約ロジックは ocrUpdatePayloadBuilder.ts の純粋関数に
   // 切り出し済み(挙動不変、ユニットテストで契約をlock-in)。displayFileNameはここでは

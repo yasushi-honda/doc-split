@@ -97,6 +97,11 @@ on:
           - compare-gemini-ocr-models-confirmed --limit 5000
           - diagnose-confirmed-replay-sampling
           - diagnose-confirmed-replay-sampling --doc-id
+          - backfill-detail-subcollection --audit
+          - backfill-detail-subcollection --dry-run
+          - backfill-detail-subcollection --execute --limit 10
+          - backfill-detail-subcollection --execute
+          - backfill-detail-subcollection --verify
           - measure-summary-cost --doc-id
           - create-pending-doc --doc-id --storage-path original/seed_generic_12p.pdf
       doc_id:
@@ -559,6 +564,7 @@ jobs:
                [ "$SCRIPT_NAME" = "compare-gemini-ocr-models" ] || \
                [ "$SCRIPT_NAME" = "compare-gemini-ocr-models-confirmed" ] || \
                [ "$SCRIPT_NAME" = "diagnose-confirmed-replay-sampling" ] || \
+               [ "$SCRIPT_NAME" = "backfill-detail-subcollection" ] || \
                [ "$SCRIPT_NAME" = "measure-summary-cost" ] || \
                [ "$SCRIPT_NAME" = "create-pending-doc" ]; then
             # Issue #432 PR-C 系 script は scripts/lib/* (TypeScript)、seed-dev-data (#528) は
@@ -568,6 +574,8 @@ jobs:
             # diagnose-confirmed-replay-sampling (#548 pilot実行0件原因調査用) は firebase-admin
             # のみ依存(functions/src非依存、STORAGE_BUCKET不使用)だが統一的にts-node経由で実行。
             # measure-summary-cost (#562) は functions/src/ocr/summaryGenerator.ts に依存するため同様。
+            # backfill-detail-subcollection (#547 ADR-0018 Phase C) は
+            # functions/src/ocr/ocrExcerpt.ts + scripts/lib/* に依存するため同様。
             # create-pending-doc (#562) はfirebase-adminのみ依存(functions/src非依存)だが、
             # 統一的にscriptsディレクトリからts-node経由で実行する。
             # STORAGE_BUCKET は resolve step で env 化済。
