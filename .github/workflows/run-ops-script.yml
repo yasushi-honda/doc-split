@@ -95,6 +95,7 @@ on:
           - compare-gemini-ocr-models-confirmed --limit 30
           - compare-gemini-ocr-models-confirmed --limit 300
           - diagnose-confirmed-replay-sampling
+          - diagnose-confirmed-replay-sampling --doc-id
           - measure-summary-cost --doc-id
           - create-pending-doc --doc-id --storage-path original/seed_generic_12p.pdf
       doc_id:
