@@ -1,6 +1,33 @@
 # ハンドオフメモ
 
-**更新日**: 2026-07-08 session104（Issue #548のprod展開判断材料として、kanameone本番の確定済み文書を使ったconfirmed replay検証スクリプトを新規実装。既存dev A/Bテスト(n=11)がCodexセカンドオピニオンで統計的に不十分と指摘されたことへの対応。`/safe-refactor`→Codex review(4件修正)→`/code-review medium`(8件検出・6件修正)のフルサイクルを実施しPR #577作成。プロジェクトhookにより大規模PR判定(`/review-pr`+`codex review`必須)、マージ・pilot実行は次セッション持越し）
+**更新日**: 2026-07-08 session105（⚠️ **kanameone本番デプロイが未完了状態のまま**。PR #577マージ後にpilot実行(N=30)が「対象文書0件」→診断の結果、kanameoneがmainより50コミット遅れ(2026-06-12が最終デプロイ)でdocumentTypeConfirmed機能が未反映と判明。Codexセカンドオピニオンで段階デプロイ計画を策定・実行(Rules→Functions→canary検証)し、canaryで実際にSTORAGE_BUCKET欠如の本番バグを検出・修正・再検証まで完了。**しかしcheckGmailAttachments Schedulerは意図的に停止したまま**、Hosting未デプロイ、通常運用復帰前。次セッション最優先で§セッション105引き継ぎ参照）
+
+## ⚠️ session105 引き継ぎ（最優先で読むこと）
+
+### 現在のkanameone状態（2026-07-08時点）
+| 項目 | 状態 |
+|------|------|
+| firestore.rules | ✅ デプロイ済み |
+| Cloud Functions | ✅ デプロイ済み（GEMINI_MODEL_ID=gemini-2.5-flash固定、STORAGE_BUCKET修正済み） |
+| processOCR Scheduler | ✅ 再開済み（1分間隔） |
+| **checkGmailAttachments Scheduler** | 🛑 **意図的に停止中**（5分間隔、実際のGmail新規取込が止まっている） |
+| Hosting | ❌ 未デプロイ（mainのフロントエンド変更が本番未反映） |
+| 通常運用復帰 | ❌ 未実施 |
+
+### 次セッション即実施（この順序で）
+```bash
+gcloud scheduler jobs resume firebase-schedule-checkGmailAttachments-asia-northeast1 --project=docsplit-kanameone --location=asia-northeast1
+```
+→ 15〜30分監視（`diagnose-confirmed-replay-sampling`のstatus別内訳をGitHub Actions経由で再実行、pending/processing/error件数を確認）
+→ 問題なければ `./scripts/deploy-to-project.sh kanameone`（Hostingのみ）
+→ 通常運用復帰を明示的に確認・宣言
+
+### ⚠️ 同根再発の懸念（未解決、次セッションで検討要）
+今回`deploy-functions.yml`にSTORAGE_BUCKET/GEMINI_MODEL_ID設定を追加したが、**Cloud Functionsのデプロイ経路は他に2つあり、そちらは未修正**:
+1. `scripts/deploy-to-project.sh`（ローカル手動デプロイ、`--full`時に`firebase deploy --only functions`を呼ぶが env file 書込ステップなし）
+2. `.github/workflows/deploy.yml`（dev自動デプロイ、mainへのpush毎に発火、同じく env file 書込ステップなし）
+
+**つまりdevは現在もSTORAGE_BUCKET未設定のまま自動デプロイされ続けている**（実害は無データのため顕在化していないだけ）。kanameone/cocoroを`deploy-to-project.sh`で手動デプロイした場合も同じ穴に落ちる。過去にも類似のSTORAGE_BUCKET設定漏れ（2026-06 `cleanup-ambiguous-collision-docs.ts`のfail-fast追加、本セッション内の確認済みスクリプトでの必須化）があり、プロジェクト全体で「STORAGE_BUCKETの正解値取得元(`scripts/clients/<client>.env`)を新規デプロイ経路ごとに個別に思い出す」設計になっていることが真因と推測される。次セッションで3経路の統一（共通スクリプト化 or 全経路への同等ロジック追加）を検討要。
 
 ## session104 サマリ（2026-07-08）
 
