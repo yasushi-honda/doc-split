@@ -21,6 +21,7 @@ import { createHash } from 'node:crypto';
  * - `skip-in-pipeline`: status が pending/processing(OCRパイプライン進行中。
  *   ADR-0018 Phase C行 Codex 6th review P1: 再処理開始後に失敗した doc の detail/main が
  *   古い内容のまま残存しうるため、backfill 対象にも完了検証対象にも含めない。
+ *   ADRが明示するのはpendingのみで、processingは同趣旨により本スクリプトで追加除外。
  *   通常のOCRパイプライン完了時に dual-write で自然に解消される)
  */
 export type BackfillDecision =
@@ -56,10 +57,11 @@ export function decideBackfillAction(params: {
  * 同じ2フィールドのみを対象とする。
  *
  * - `ocrResult`: 親に string があればコピー、なければ **空文字列で必ず書く**
- *   (code-review C1指摘反映: 本番の全doc作成経路4箇所 — checkGmailAttachments /
+ *   (code-review C1指摘反映: 本番の detail/main 書込経路4箇所 — checkGmailAttachments /
  *   uploadPdf / ocrProcessor(savedOcrResult、offload時は'') / splitPdf — は例外なく
- *   ocrResult を string で書く。backfill だけ省略すると「detail作成時 ocrResult は
- *   常に string」という production 不変条件を破り、Phase D 読者の想定を崩す)
+ *   ocrResult を string で書く。backfill だけ省略すると「detail存在時 ocrResult は
+ *   常に string」という production 不変条件を破り、Phase D 読者の想定を崩す。
+ *   stale是正パス(backfill-detail-subcollection.ts)も同不変条件のため''を書く)
  * - `pageResults`: 親に配列があればコピー、なければ省略 (空配列は本番書込に存在しない
  *   値のため捏造しない。pageResultsReuse 等の Phase D 読者はフィールド不在を
  *   「再利用不可」として扱う)
@@ -77,11 +79,13 @@ export function buildDetailPayload(parentData: Record<string, unknown>): Record<
 /**
  * stale detail 検出 (Codex Phase C review 3rd P1反映)。
  *
- * FE再処理クリア(現行=PR4a、親docのみdeleteFieldしdetail/mainは触らない)の後に
- * OCRが最終失敗してstatus='error'に確定したdocは、「親はクリア済み(ocrResult不在) だが
- * detail/mainには再処理前の古いOCR内容が残存」という状態になる。この状態を
- * excerpt-only補完だけで通すと、Phase D読者が古いOCRを現行データとして配信する
- * silent品質破壊になるため、detail側の残存コンテンツを検出して是正(deleteField)する。
+ * FE再処理クリア(現行=PR4a、親docのみdeleteFieldしdetail/mainは触らない。
+ * PR4b=Phase D-FEマージ後はFEがdetail側も同時クリアするため本経路の新規発生は
+ * 止まる — 本コメントはbackfill実行時点の状態記述)の後にOCRが最終失敗して
+ * status='error'に確定したdocは、「親はクリア済み(ocrResult不在) だが detail/mainには
+ * 再処理前の古いOCR内容が残存」という状態になる。この状態をexcerpt-only補完だけで
+ * 通すと、Phase D読者が古いOCRを現行データとして配信するsilent品質破壊になるため、
+ * detail側の残存コンテンツを検出して是正する(ocrResultは''化、pageResultsは削除)。
  *
  * 判定: 親にocrResultが無い(=クリア済み or 旧来から不在)のに、detail側に
  * 非空のocrResultまたは非空のpageResultsが残っている場合にstale。

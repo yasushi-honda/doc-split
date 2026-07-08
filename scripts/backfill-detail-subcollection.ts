@@ -16,11 +16,14 @@
  *
  * ## 設計判断 (Codexセカンドオピニオン 2026-07-08 反映)
  * - **batch書込ではなく 1 doc = 1 トランザクション** (Codex Critical 1 対応):
- *   `tx.getAll(親, detail)` → detail存在/in-pipelineならskip → `tx.create(detail)` +
- *   `tx.update(親, {ocrExcerpt})`。Firestoreトランザクションの直列化保証により、
+ *   `tx.getAll(親, detail)` で読み直し、decideBackfillAction + detectStaleDetail が
+ *   4つのtx結果のいずれかに最終判定する — ①detail作成+excerpt書込(`tx.create`) /
+ *   ②excerptのみ補完 / ③stale detail是正(親クリア済みdocのdetail残存コンテンツを
+ *   空/deleteに揃える) / ④skip。Firestoreトランザクションの直列化保証により、
  *   backfill実行中に並行する再処理(dual-write)があってもトランザクションが自動リトライ→
- *   新鮮な状態を再読→skipとなり、古いデータで新しいOCR結果を上書きする経路が構造的に
- *   存在しない。`create()` は既存docに対して失敗するため二重防御になる。
+ *   新鮮な状態を再読→再判定となり、detail/mainへの**値の書込はcreate経由のみ**
+ *   (既存docに対して失敗)のため、古いデータで新しいOCR結果を上書きする経路が
+ *   構造的に存在しない(契約テストでlock-in)。
  *   副次効果: batch 500 ops上限(2N≤500)・10MiBリクエスト上限の考慮も不要になる。
  * - **対象はprocessed限定ではなく「in-pipeline (pending/processing) 以外の全doc」**
  *   (Codex Critical 2 対応): error/split等のdocもPhase DのFE writeBatch (`update()`) の
@@ -66,16 +69,22 @@ const ALLOWED_PROJECT_IDS = ['doc-split-dev', 'docsplit-kanameone', 'docsplit-co
 
 /**
  * レート制御 (Codex Critical 3 対応)。
- * CONCURRENCY=4 × EXECUTE_START_INTERVAL_MS=150 ≈ 6.7 docs/sec (グローバルレート、
- * runWithRateControl が起動スロットを同期的に予約することで保証)。
- * kanameone 9,355件で約23分。1 doc backfill = 親update 1回 (トリガー発火は
- * onDocumentWrite→group tx最大4件) + detail create 1回 (documents/{id} 直下では
- * ないためonDocumentWriteは発火しない)。→ group tx ~27/sec、Firestore余裕範囲。
+ * 起動レート上限 = 1000/EXECUTE_START_INTERVAL_MS ≈ 6.7 docs/sec (起動間隔のみで
+ * 決まる上限。CONCURRENCYは同時in-flight数の上限で、txが長引けば実効レートは
+ * これより下がる=トリガー負荷は安全側)。runWithRateControlが起動スロットを
+ * 同期的に予約することで上限を保証。
+ * kanameone 9,355件(2026-07-08 audit時点、実行前に--auditで再計測)で約23分以上。
+ * 1 doc backfill = 親update 1回 (トリガー発火はonDocumentWrite→group tx最大4件) +
+ * detail create 1回 (documents/{id} 直下ではないためonDocumentWriteは発火しない)。
+ * → group tx ~27/sec、Firestore余裕範囲。
+ * 注: 旧docのgroupキー欠落/不一致時はトリガーがキー書き戻しでもう1周発火しうる
+ * (updateDocumentGroups.ts:54-63)ため上記は典型値。倍増しても余裕範囲内。
  *
  * search.tokenHash 欠落の processed doc は、searchIndexer が search メタデータを
  * 親へ書き戻すため onDocumentWrite が2度目に発火し、group tx は最大8件/docになる
  * (review C2指摘反映: 2度目のsearchIndexer発火はhash一致で早期returnし無限ループには
- * ならない)。audit の tokenHash欠落数(backfill対象内)で該当規模を事前確認すること。
+ * ならない。processed以外のstatusはsearchIndexerが早期returnするため増幅なし)。
+ * audit の tokenHash欠落数(backfill対象内)で該当規模を事前確認すること。
  *
  * --verify は読取専用でトリガーを一切発火しないため、起動間隔なし
  * (concurrency制限のみ) で実行する (review A4/D1指摘反映)。
@@ -249,8 +258,11 @@ function classify(docs: ScannedDoc[], parentIdsWithDetail: Set<string>): Classif
       if (!doc.hasTokenHash) tokenHashMissing++;
     } else if (decision === 'skip-complete') {
       counters.skippedComplete++;
-    } else {
+    } else if (decision === 'skip-in-pipeline') {
       counters.skippedInPipeline++;
+    } else {
+      // 網羅性ガード (type-design review反映: 状態追加時に既存カウンタへ静かに吸収されない)
+      assertNeverDecision(decision);
     }
     statusDist.set(statusKey, dist);
   }
@@ -327,10 +339,36 @@ type BackfillOutcome =
  * 「attempt1でwritten++→commit失敗→attempt2でskip判定」のような経路で
  * 実際には書き込まれていないdocがwrittenに計上される)。
  */
+/**
+ * BackfillOutcome → カウンタの対応表。Record型により、outcomeユニオンに状態を
+ * 追加するとここがコンパイルエラーになる (type-design review反映: if/elseチェーンだと
+ * 新しいoutcomeが既存else節に静かに吸収されて誤計上される)。
+ */
+const OUTCOME_COUNTER: Record<BackfillOutcome, keyof BackfillCounters> = {
+  'written-detail-and-excerpt': 'writtenDetailAndExcerpt',
+  'written-excerpt-only': 'writtenExcerptOnly',
+  'reconciled-stale-detail': 'reconciledStaleDetail',
+  'parent-deleted': 'parentDeleted',
+  'decision-changed': 'decisionChanged',
+};
+
+/**
+ * 個人情報保護と診断可能性の両立: エラーメッセージ本文(Storageパス等を含みうる)は
+ * 出力しないが、gRPCステータスコード(PERMISSION_DENIED=7/ABORTED=10/
+ * RESOURCE_EXHAUSTED=8等の非PII数値)は出力する (silent-failure review反映:
+ * constructor名だけでは「リトライで解消する一時エラー」と「IAM設定ミス等の
+ * 構造的エラー」を operator が区別できず、誤った復旧手順に誘導される)。
+ */
+function describeErrorForLog(err: unknown): string {
+  const name = err instanceof Error ? err.constructor.name : typeof err;
+  const code = (err as { code?: number | string })?.code;
+  return code !== undefined ? `${name} code=${code}` : name;
+}
+
 async function backfillOneDoc(docId: string, counters: BackfillCounters): Promise<void> {
-  const docRef = db.doc(`documents/${docId}`);
-  const detailRef = docRef.collection('detail').doc('main');
   try {
+    const docRef = db.doc(`documents/${docId}`);
+    const detailRef = docRef.collection('detail').doc('main');
     const outcome = await db.runTransaction<BackfillOutcome>(async (tx) => {
       const [parentSnap, detailSnap] = await tx.getAll(docRef, detailRef);
       if (!parentSnap.exists) {
@@ -347,15 +385,23 @@ async function backfillOneDoc(docId: string, counters: BackfillCounters): Promis
         // スキャン後に並行処理がdetail/main+excerptを書いた or statusがin-pipelineに変わった(正常系)
         return 'decision-changed';
       }
+      if (decision !== 'backfill-detail-and-excerpt' && decision !== 'backfill-excerpt-only') {
+        // 網羅性ガード (type-design review反映: BackfillDecisionに状態が追加されたとき、
+        // ここでコンパイルエラーにならないと新状態が下の書込パスに落ちる)
+        return assertNeverDecision(decision);
+      }
       if (decision === 'backfill-detail-and-excerpt') {
         tx.create(detailRef, buildDetailPayload(data));
       } else if (detectStaleDetail(data, detailSnap.data() ?? {})) {
         // Codex Phase C review 3rd P1: 親クリア済み+OCR最終失敗(error確定)のdocは
         // detail/mainに再処理前の古いOCRが残存する。excerptだけ補完して古いdetailを
         // 温存するとPhase D読者が古いOCRを配信するため、親のクリア済み状態に合わせて
-        // detail側の残存コンテンツも削除する(次回再処理成功時にdual-writeで再生成される)
+        // detail側の残存コンテンツを是正する(次回再処理成功時にdual-writeで再生成される)。
+        // ocrResultはdeleteではなく空文字で上書き (silent-failure review反映:
+        // buildDetailPayloadのC1不変条件「detail存在時ocrResultは常にstring」を
+        // 本経路でも維持する。''はdetectStaleDetailが非コンテンツ扱いのため冪等)
         tx.update(detailRef, {
-          ocrResult: admin.firestore.FieldValue.delete(),
+          ocrResult: '',
           pageResults: admin.firestore.FieldValue.delete(),
         });
         tx.update(docRef, {
@@ -371,17 +417,21 @@ async function backfillOneDoc(docId: string, counters: BackfillCounters): Promis
       });
       return decision === 'backfill-detail-and-excerpt' ? 'written-detail-and-excerpt' : 'written-excerpt-only';
     });
-    if (outcome === 'written-detail-and-excerpt') counters.writtenDetailAndExcerpt++;
-    else if (outcome === 'written-excerpt-only') counters.writtenExcerptOnly++;
-    else if (outcome === 'reconciled-stale-detail') counters.reconciledStaleDetail++;
-    else if (outcome === 'parent-deleted') counters.parentDeleted++;
-    else counters.decisionChanged++;
+    counters[OUTCOME_COUNTER[outcome]]++;
+    if (outcome === 'reconciled-stale-detail') {
+      // 破壊的操作(detailの残存コンテンツ是正)の監査証跡: 対象docIDを必ず記録する
+      // (silent-failure review反映: 件数だけでは事後の個別確認・選択的リストアが不可能)
+      console.warn(`[backfillOneDoc] stale detail是正 docId=${docId}`);
+    }
   } catch (err) {
     counters.errors++;
-    // 個人情報保護: エラー種別のみ出力(メッセージ本文にStorageパス等が含まれうるため)
-    const name = err instanceof Error ? err.constructor.name : typeof err;
-    console.warn(`[backfillOneDoc] 失敗 docId=${docId} (${name})`);
+    console.warn(`[backfillOneDoc] 失敗 docId=${docId} (${describeErrorForLog(err)})`);
   }
+}
+
+/** BackfillDecision網羅性ガード。ユニオン成長時にコンパイルエラーで検出する */
+function assertNeverDecision(decision: never): never {
+  throw new Error(`未対応のBackfillDecision: ${String(decision)}`);
 }
 
 /** 不一致件数と、報告用のサンプルdoc ID(上限MISMATCH_SAMPLE_LIMIT)を保持する */
@@ -405,21 +455,33 @@ interface VerifyResult {
   detailMissing: MismatchTally;
   staleDetail: MismatchTally;
   inPipeline: number;
+  /**
+   * 検証中に親docが削除されていた件数 (silent-failure review反映: 黙って除外すると
+   * ヘッダの検証件数とchecked+inPipeline+errorsの合計が合わず、executeパスの
+   * parentDeletedと同じ「削除ストーム兆候シグナル」も失われる。FAILには数えない)
+   */
+  deletedDuringVerify: number;
   errors: number;
 }
 
 /**
  * parity検証: in-pipeline以外の全docについて親とdetail/mainを読み、
  * ocrResult/pageResultsのcanonical hash一致と、ocrExcerptの再計算一致を確認する。
- * 「親にフィールドが存在するのにdetail側に無い/値が異なる」を不一致として数える
- * (親に無いフィールドはdetail側にも無くてよい — buildDetailPayloadと同じ規則)。
+ * 「親にフィールドが存在するのにdetail側に無い/値が異なる」を不一致として数える。
+ * 親にpageResultsが無い場合はdetail側にも無くてよい(buildDetailPayloadのpageResults
+ * 省略規則と同じ。ocrResultは常にstringで書かれるため省略規則の対象外)。
+ * 親にocrResultが無いのにdetail側にコンテンツが残る場合はstaleDetailとして検出する。
  */
 async function verifyOneDoc(docId: string, result: VerifyResult): Promise<void> {
-  const docRef = db.doc(`documents/${docId}`);
-  const detailRef = docRef.collection('detail').doc('main');
   try {
+    const docRef = db.doc(`documents/${docId}`);
+    const detailRef = docRef.collection('detail').doc('main');
     const [parentSnap, detailSnap] = await db.getAll(docRef, detailRef);
-    if (!parentSnap.exists) return; // 検証中に削除された(削除同期済みなら不一致ではない)
+    if (!parentSnap.exists) {
+      // 検証中に削除された(削除同期済みなら不一致ではないが、件数は記録する)
+      result.deletedDuringVerify++;
+      return;
+    }
     const parent = parentSnap.data()!;
 
     // in-pipeline判定はexecuteパスと同一関数を通す (review D5指摘反映: 判定ロジックが
@@ -468,8 +530,7 @@ async function verifyOneDoc(docId: string, result: VerifyResult): Promise<void> 
     }
   } catch (err) {
     result.errors++;
-    const name = err instanceof Error ? err.constructor.name : typeof err;
-    console.warn(`[verifyOneDoc] 読込失敗 docId=${docId} (${name})`);
+    console.warn(`[verifyOneDoc] 読込失敗 docId=${docId} (${describeErrorForLog(err)})`);
   }
 }
 
@@ -553,12 +614,18 @@ async function main(): Promise<void> {
     detailMissing: new MismatchTally(),
     staleDetail: new MismatchTally(),
     inPipeline: 0,
+    deletedDuringVerify: 0,
     errors: 0,
   };
   await runWithRateControl(verifyTargets, 0, (id) => verifyOneDoc(id, result));
 
   console.log(`\n--- 検証結果 ---`);
-  console.log(`検証対象: ${result.checked} / in-pipeline除外: ${result.inPipeline} / 読込エラー: ${result.errors}`);
+  console.log(
+    `検証対象: ${result.checked} / in-pipeline除外: ${result.inPipeline} / ` +
+      `検証中削除: ${result.deletedDuringVerify}` +
+      (result.deletedDuringVerify > 0 ? ' ⚠️ 想定外に多い場合は削除経路を調査すること' : '') +
+      ` / 読込エラー: ${result.errors}`
+  );
   console.log(`detail/main不在: ${result.detailMissing}`);
   if (result.detailMissing.count > 0) {
     console.log(
@@ -593,7 +660,6 @@ async function main(): Promise<void> {
 main()
   .then(() => process.exit(process.exitCode ?? 0))
   .catch((err) => {
-    const name = err instanceof Error ? err.constructor.name : typeof err;
-    console.error(`❌ 致命的エラー (${name})`);
+    console.error(`❌ 致命的エラー (${describeErrorForLog(err)})`);
     process.exit(1);
   });
