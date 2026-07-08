@@ -55,6 +55,7 @@ import { buildOcrExcerpt } from '../functions/src/ocr/ocrExcerpt';
 import {
   decideBackfillAction,
   buildDetailPayload,
+  detectStaleDetail,
   canonicalHash,
   createCounters,
   IN_PIPELINE_STATUSES,
@@ -85,11 +86,26 @@ const EXECUTE_START_INTERVAL_MS = 150;
 /** verify で不一致検出時に表示するサンプルdoc ID数の上限 */
 const MISMATCH_SAMPLE_LIMIT = 20;
 
-const PROJECT_ID =
-  process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || process.env.FIREBASE_PROJECT_ID || '';
+/**
+ * PROJECT_IDは明示指定のFIREBASE_PROJECT_IDを最優先する (Codex Phase C review 3rd P1反映:
+ * この環境はdirenv/gcloud named configがGOOGLE_CLOUD_PROJECT等のambient変数を自動設定する
+ * ため、ambient優先だと「FIREBASE_PROJECT_ID=doc-split-devでdevリハーサルのつもりが
+ * ambientのkanameoneに書き込む」silent mismatchが起こりうる。両方設定されていて値が
+ * 食い違う場合は解釈せず即エラーにする)。
+ */
+const EXPLICIT_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || '';
+const AMBIENT_PROJECT_ID = process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || '';
+if (EXPLICIT_PROJECT_ID && AMBIENT_PROJECT_ID && EXPLICIT_PROJECT_ID !== AMBIENT_PROJECT_ID) {
+  console.error(
+    `❌ FIREBASE_PROJECT_ID (${EXPLICIT_PROJECT_ID}) と GOOGLE_CLOUD_PROJECT/GCLOUD_PROJECT ` +
+      `(${AMBIENT_PROJECT_ID}) が食い違っています。意図しない環境への書込を防ぐため中断します。`
+  );
+  process.exit(1);
+}
+const PROJECT_ID = EXPLICIT_PROJECT_ID || AMBIENT_PROJECT_ID;
 
 if (!PROJECT_ID) {
-  console.error('GOOGLE_CLOUD_PROJECT (または FIREBASE_PROJECT_ID) を設定してください');
+  console.error('FIREBASE_PROJECT_ID (または GOOGLE_CLOUD_PROJECT) を設定してください');
   process.exit(1);
 }
 if (!ALLOWED_PROJECT_IDS.includes(PROJECT_ID)) {
@@ -290,7 +306,12 @@ async function runWithRateControl<T>(
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, items.length) }, () => runner()));
 }
 
-type BackfillOutcome = 'written-detail-and-excerpt' | 'written-excerpt-only' | 'parent-deleted' | 'decision-changed';
+type BackfillOutcome =
+  | 'written-detail-and-excerpt'
+  | 'written-excerpt-only'
+  | 'reconciled-stale-detail'
+  | 'parent-deleted'
+  | 'decision-changed';
 
 /**
  * 1 docのbackfillを単一トランザクションで実行する (設計判断は冒頭doc comment参照)。
@@ -328,6 +349,19 @@ async function backfillOneDoc(docId: string, counters: BackfillCounters): Promis
       }
       if (decision === 'backfill-detail-and-excerpt') {
         tx.create(detailRef, buildDetailPayload(data));
+      } else if (detectStaleDetail(data, detailSnap.data() ?? {})) {
+        // Codex Phase C review 3rd P1: 親クリア済み+OCR最終失敗(error確定)のdocは
+        // detail/mainに再処理前の古いOCRが残存する。excerptだけ補完して古いdetailを
+        // 温存するとPhase D読者が古いOCRを配信するため、親のクリア済み状態に合わせて
+        // detail側の残存コンテンツも削除する(次回再処理成功時にdual-writeで再生成される)
+        tx.update(detailRef, {
+          ocrResult: admin.firestore.FieldValue.delete(),
+          pageResults: admin.firestore.FieldValue.delete(),
+        });
+        tx.update(docRef, {
+          ocrExcerpt: buildOcrExcerpt('', typeof data.ocrResultUrl === 'string' ? data.ocrResultUrl : null),
+        });
+        return 'reconciled-stale-detail';
       }
       tx.update(docRef, {
         ocrExcerpt: buildOcrExcerpt(
@@ -339,6 +373,7 @@ async function backfillOneDoc(docId: string, counters: BackfillCounters): Promis
     });
     if (outcome === 'written-detail-and-excerpt') counters.writtenDetailAndExcerpt++;
     else if (outcome === 'written-excerpt-only') counters.writtenExcerptOnly++;
+    else if (outcome === 'reconciled-stale-detail') counters.reconciledStaleDetail++;
     else if (outcome === 'parent-deleted') counters.parentDeleted++;
     else counters.decisionChanged++;
   } catch (err) {
@@ -368,6 +403,7 @@ interface VerifyResult {
   pageResultsMismatch: MismatchTally;
   ocrExcerptMismatch: MismatchTally;
   detailMissing: MismatchTally;
+  staleDetail: MismatchTally;
   inPipeline: number;
   errors: number;
 }
@@ -415,6 +451,12 @@ async function verifyOneDoc(docId: string, result: VerifyResult): Promise<void> 
       if (canonicalHash(parent.pageResults) !== canonicalHash(detail.pageResults)) {
         result.pageResultsMismatch.add(docId);
       }
+    }
+    // 親にフィールドが無いのにdetail側に古いコンテンツが残存しているケースも不一致
+    // (Codex Phase C review 3rd P1反映: この盲点を放置すると再処理失敗docの
+    // 古いOCRがverify PASSのままPhase Dで配信される)
+    if (detectStaleDetail(parent, detail)) {
+      result.staleDetail.add(docId);
     }
 
     const expectedExcerpt = buildOcrExcerpt(
@@ -474,6 +516,10 @@ async function main(): Promise<void> {
     console.log(`\n--- 実行結果 (${Math.round((Date.now() - started) / 1000)}秒) ---`);
     console.log(`書込成功(detail+excerpt作成): ${c.writtenDetailAndExcerpt}`);
     console.log(`書込成功(excerptのみ補完): ${c.writtenExcerptOnly}`);
+    console.log(
+      `stale detail是正(親クリア済みdocのdetail残存コンテンツ削除): ${c.reconciledStaleDetail}` +
+        (c.reconciledStaleDetail > 0 ? ' ℹ️ 再処理失敗(error)由来。該当docは次回再処理成功時に再生成される' : '')
+    );
     console.log(`実行時skip(並行処理がdetail+excerpt作成/status変更、正常系): ${c.decisionChanged}`);
     console.log(
       `実行時skip(スキャン後に親doc削除): ${c.parentDeleted}` +
@@ -498,6 +544,7 @@ async function main(): Promise<void> {
     pageResultsMismatch: new MismatchTally(),
     ocrExcerptMismatch: new MismatchTally(),
     detailMissing: new MismatchTally(),
+    staleDetail: new MismatchTally(),
     inPipeline: 0,
     errors: 0,
   };
@@ -515,6 +562,7 @@ async function main(): Promise<void> {
   console.log(`ocrResult不一致: ${result.ocrResultMismatch}`);
   console.log(`pageResults不一致: ${result.pageResultsMismatch}`);
   console.log(`ocrExcerpt不一致: ${result.ocrExcerptMismatch}`);
+  console.log(`stale detail(親クリア済みだがdetailに古いコンテンツ残存): ${result.staleDetail}`);
   console.log(
     `\n[Phase D投入ゲート情報] in-pipeline (${IN_PIPELINE_STATUSES.join('/')}) 件数: ${result.inPipeline} — Phase D-FE投入時点でゼロであることを別途確認 (ADR-0018 Phase C行)`
   );
@@ -523,7 +571,8 @@ async function main(): Promise<void> {
     result.detailMissing.count +
     result.ocrResultMismatch.count +
     result.pageResultsMismatch.count +
-    result.ocrExcerptMismatch.count;
+    result.ocrExcerptMismatch.count +
+    result.staleDetail.count;
   if (mismatchTotal > 0 || result.errors > 0) {
     console.error(`❌ FAIL: 不一致${mismatchTotal}件 / エラー${result.errors}件`);
     process.exitCode = 1;

@@ -75,6 +75,31 @@ export function buildDetailPayload(parentData: Record<string, unknown>): Record<
 }
 
 /**
+ * stale detail 検出 (Codex Phase C review 3rd P1反映)。
+ *
+ * FE再処理クリア(現行=PR4a、親docのみdeleteFieldしdetail/mainは触らない)の後に
+ * OCRが最終失敗してstatus='error'に確定したdocは、「親はクリア済み(ocrResult不在) だが
+ * detail/mainには再処理前の古いOCR内容が残存」という状態になる。この状態を
+ * excerpt-only補完だけで通すと、Phase D読者が古いOCRを現行データとして配信する
+ * silent品質破壊になるため、detail側の残存コンテンツを検出して是正(deleteField)する。
+ *
+ * 判定: 親にocrResultが無い(=クリア済み or 旧来から不在)のに、detail側に
+ * 非空のocrResultまたは非空のpageResultsが残っている場合にstale。
+ * (backfill自身が書くocrResult:''はコンテンツではないためstaleとみなさない。
+ * 親がStorage offload済みの場合はocrResult=''がstringとして存在するため対象外)
+ */
+export function detectStaleDetail(
+  parentData: Record<string, unknown>,
+  detailData: Record<string, unknown>
+): boolean {
+  if (typeof parentData.ocrResult === 'string') return false;
+  const detailHasContent =
+    (typeof detailData.ocrResult === 'string' && detailData.ocrResult.length > 0) ||
+    (Array.isArray(detailData.pageResults) && detailData.pageResults.length > 0);
+  return detailHasContent;
+}
+
+/**
  * 値のcanonical JSON文字列(キーを再帰的にソート)のSHA-256を返す。
  *
  * Firestoreから読んだオブジェクトはキー順序が保証されないため、JSON.stringifyを
@@ -115,6 +140,7 @@ export interface BackfillCounters {
   skippedInPipeline: number;
   writtenDetailAndExcerpt: number;
   writtenExcerptOnly: number;
+  reconciledStaleDetail: number;
   parentDeleted: number;
   decisionChanged: number;
   errors: number;
@@ -129,6 +155,7 @@ export function createCounters(): BackfillCounters {
     skippedInPipeline: 0,
     writtenDetailAndExcerpt: 0,
     writtenExcerptOnly: 0,
+    reconciledStaleDetail: 0,
     parentDeleted: 0,
     decisionChanged: 0,
     errors: 0,

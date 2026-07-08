@@ -17,18 +17,35 @@ import { resolve } from 'node:path';
 
 const source = readFileSync(resolve(__dirname, '../backfill-detail-subcollection.ts'), 'utf-8');
 
-test('契約: 親docへのtx.updateはocrExcerpt 1フィールドのみ (partial update安全性、CLAUDE.md MUST)', () => {
-  const match = source.match(/tx\.update\(docRef,\s*\{([\s\S]*?)\}\);/);
-  assert.ok(match, 'tx.update(docRef, {...}) が見つかること');
-  const payloadBody = match[1];
-  // payload直下のキーがocrExcerptのみであること(ネストしたbuildOcrExcerpt呼出の引数は
-  // 括弧内のため、トップレベルの `キー:` パターンで検査する)
-  const topLevelKeys = payloadBody.match(/^\s{8}(\w+):/gm) ?? [];
-  assert.deepEqual(
-    topLevelKeys.map((k) => k.trim().replace(':', '')),
-    ['ocrExcerpt'],
-    `親update payloadはocrExcerptのみであるべき (検出: ${JSON.stringify(topLevelKeys)})`
-  );
+test('契約: 親docへの全tx.updateはocrExcerpt 1フィールドのみ (partial update安全性、CLAUDE.md MUST)', () => {
+  const matches = [...source.matchAll(/tx\.update\(docRef,\s*\{([\s\S]*?)\}\);/g)];
+  assert.ok(matches.length >= 1, 'tx.update(docRef, {...}) が最低1箇所見つかること');
+  for (const match of matches) {
+    // payload直下の `キー:` パターンを検査(ネストしたbuildOcrExcerpt呼出の引数行は
+    // `typeof ...` で始まりキーパターンにマッチしない)
+    const keys = [...match[1].matchAll(/^\s*(\w+):/gm)].map((m) => m[1]);
+    assert.deepEqual(
+      keys,
+      ['ocrExcerpt'],
+      `親update payloadはocrExcerptのみであるべき (検出: ${JSON.stringify(keys)})`
+    );
+  }
+});
+
+test('契約: detail/mainへのtx.updateはstale是正のdeleteFieldのみ (detailコンテンツを値で上書きしない)', () => {
+  const matches = [...source.matchAll(/tx\.update\(detailRef,\s*\{([\s\S]*?)\}\);/g)];
+  for (const match of matches) {
+    // detail側へのupdateはocrResult/pageResultsのFieldValue.delete()のみを許可
+    // (値の書込はtx.create経由のbuildDetailPayloadに限定される)
+    const lines = match[1].split('\n').filter((l) => l.trim().length > 0);
+    for (const line of lines) {
+      assert.match(
+        line,
+        /(ocrResult|pageResults):\s*admin\.firestore\.FieldValue\.delete\(\)/,
+        `detail updateはdeleteFieldのみ許可 (検出行: ${line.trim()})`
+      );
+    }
+  }
 });
 
 test('契約: detail/mainへの書込はtx.create (上書き不可能なAPI選択、並行dual-writeとの競合安全性)', () => {
