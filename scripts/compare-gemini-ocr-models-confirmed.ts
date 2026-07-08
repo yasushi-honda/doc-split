@@ -112,9 +112,15 @@ const DEFAULT_LIMIT = 30;
  * confirmedBy/officeConfirmedBy による人間確定フィルタで一部が弾かれる前提で、
  * Firestoreクエリ自体は目標件数の3倍を上限にサンプリングする(Codex review指摘反映)。
  * 大きすぎる無制限headroomによるread coストを避けるため上限をキャップする。
+ *
+ * **2026-07-08判明**: kanameone実データでconfirmedBy/officeConfirmedByが非nullの
+ * 歩留まりは約1.3%(900件照会→12件)と低く、旧上限2000だと最大でも約26件しか
+ * 到達できなかった。母集団の真の上限を確認するため、kanameone全processed件数
+ * (9,355件、2026-07-08時点)を上回る値に引き上げる(customerConfirmed&&officeConfirmed
+ * が真部分集合のため、この上限で全対象文書をカバーできる)。
  */
 const SAMPLE_HEADROOM_MULTIPLIER = 3;
-const SAMPLE_HEADROOM_CAP = 2000;
+const SAMPLE_HEADROOM_CAP = 10000;
 
 const PROJECT_ID =
   process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || process.env.FIREBASE_PROJECT_ID || '';
