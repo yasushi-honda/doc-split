@@ -84,6 +84,24 @@ async function main(): Promise<void> {
     console.log('  (3条件ANDが0件のため、confirmedBy/officeConfirmedByの内訳確認は省略)');
   }
 
+  // kanameoneデプロイ後のcanary検証用: confirmedFieldProtection(再OCR時の確定フィールド保護)を
+  // 実データで確認するため、customerConfirmed/officeConfirmed両方trueの処理済み文書を1件選ぶ。
+  // ドキュメントIDのみを出力し、氏名等のPIIは一切取得・出力しない。
+  const canarySnap = await col
+    .where('status', '==', 'processed')
+    .where('customerConfirmed', '==', true)
+    .where('officeConfirmed', '==', true)
+    .orderBy('__name__')
+    .limit(1)
+    .select()
+    .get();
+  console.log('\n--- canary検証用ドキュメントID(confirmed済み1件、PII非出力) ---');
+  if (canarySnap.empty) {
+    console.log('該当文書なし');
+  } else {
+    console.log(`CANARY_DOC_ID=${canarySnap.docs[0].id}`);
+  }
+
   console.log('\n=== 診断完了 ===');
 }
 
