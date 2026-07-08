@@ -7,17 +7,23 @@
  * (rule of threeで劣化率上限27%までしか保証しない)。
  *
  * 本スクリプトは、kanameone/cocoro本番環境に存在する「確定済み文書」
- * (customerConfirmed && officeConfirmed && documentTypeConfirmed が true、
- * functions/src/ocr/confirmedFieldMerge.ts参照)を活用する。これらは既に人間検証済み
- * (またはOCR高確信度自己判定済み)のcustomerName/officeName/documentTypeをFirestore上に
- * 持っているため、新規ラベリングコストなしで大規模・実データでの精度検証ができる。
+ * (customerConfirmed && officeConfirmed が true、functions/src/ocr/confirmedFieldMerge.ts参照)
+ * を活用する。これらは既に人間検証済み(またはOCR高確信度自己判定済み)のcustomerName/officeName
+ * をFirestore上に持っているため、新規ラベリングコストなしで大規模・実データでの精度検証ができる。
  *
  * **ground truthの限定(Codex review指摘反映)**: customerConfirmed/officeConfirmedはOCR自身の
  * 高確信度自己判定でもtrueになりうる(confirmedFieldMerge.ts参照)。現行gemini-2.5-flash由来の
  * 自己判定値をground truthに使うと、baseline(2.5)に有利なラベルリークになる。そのため
  * customer/officeは`confirmedBy`/`officeConfirmedBy`が非nullの、真に人間が確定した文書のみを
- * 対象とする(documentTypeConfirmedはユーザー選択専用で自己判定シグナルを持たないため対象外の
- * フィルタ不要)。
+ * 対象とする。
+ *
+ * **documentTypeはgate対象外(2026-07-08判明)**: documentTypeConfirmedはIssue #526で新設された
+ * 「分割画面/編集画面でのユーザー選択」でのみtrueになるフィールドだが、その機能自体がkanameone
+ * 本番未展開のため、documentTypeConfirmed=trueの文書は実運用で0件(diagnose-confirmed-replay-
+ * samplingで確認済み)。当初は3条件ANDでサンプリングしていたが、この前提が成立せずサンプル母集団が
+ * 常に0件になっていた。documentTypeはconfirmedByに相当する人間確定シグナルを持たないため、
+ * 一致率(docTypePass)は参考値としてのみ報告し、精度劣化判定(regressed)のgateにはcustomer/office
+ * の2フィールドのみを用いる(dateフィールドを既に対象外としているのと同じ扱い)。
  *
  * サンプリングした文書の元PDFを2.5-flash/3.5-flash両方で再OCRし、
  * functions/src/utils/extractors.ts の抽出関数で書類種別/顧客/事業所を抽出、
@@ -122,7 +128,7 @@ if (!PROJECT_ID) {
 if (!ALLOWED_PROJECT_IDS.includes(PROJECT_ID)) {
   console.error(
     `❌ このスクリプトは ${ALLOWED_PROJECT_IDS.join('/')} 専用です (指定されたプロジェクト: ${PROJECT_ID})。` +
-      '確定済み文書(customerConfirmed/officeConfirmed/documentTypeConfirmed)を実運用規模で持つ' +
+      '確定済み文書(customerConfirmed/officeConfirmed)を実運用規模で持つ' +
       '本番クライアント環境でのみ意味を成す検証のため、他環境では実行できません。'
   );
   process.exit(1);
@@ -254,8 +260,8 @@ interface SampledDoc {
  * ID順ソート+limitは真の乱数生成器なしで妥当な疑似ランダムサンプルになる。
  *
  * customerConfirmedBy/officeConfirmedByが非nullの(真に人間が確定した)文書のみを対象とする
- * (Codex review指摘反映、上部doc comment参照)。documentTypeConfirmedはユーザー選択専用の
- * ため追加フィルタ不要(confirmedFieldMerge.ts参照)。
+ * (Codex review指摘反映、上部doc comment参照)。documentTypeConfirmedは条件に含めない
+ * (2026-07-08判明: Issue #526の本番未展開により実運用で常時false、上部doc comment参照)。
  */
 async function sampleConfirmedDocuments(limit: number): Promise<SampledDoc[]> {
   const queryLimit = Math.min(limit * SAMPLE_HEADROOM_MULTIPLIER, SAMPLE_HEADROOM_CAP);
@@ -264,7 +270,6 @@ async function sampleConfirmedDocuments(limit: number): Promise<SampledDoc[]> {
     .where('status', '==', 'processed')
     .where('customerConfirmed', '==', true)
     .where('officeConfirmed', '==', true)
-    .where('documentTypeConfirmed', '==', true)
     .orderBy('__name__')
     .limit(queryLimit)
     .get();
@@ -274,19 +279,16 @@ async function sampleConfirmedDocuments(limit: number): Promise<SampledDoc[]> {
     return data.confirmedBy != null && data.officeConfirmedBy != null;
   });
 
-  // ground truth 3フィールドが有効な非空文字列でない文書は突合不能なため除外する
-  // (confirmedフラグがtrueでもデータドリフトで欠損しているケースを想定した防御)
+  // customer/officeは人間確定ground truthのため、いずれかが有効な非空文字列でない文書は
+  // 突合不能なため除外する(confirmedフラグがtrueでもデータドリフトで欠損しているケースを
+  // 想定した防御)。documentTypeはgate対象外の参考値のため、空でもサンプル自体は除外しない
+  // (レビュー指摘反映: documentTypeが空というだけでcustomer/officeの有効なground truthを
+  // 持つ文書がサンプルから漏れ、gate対象metricのNが不必要に縮小するのを防ぐ)。
   const withValidGroundTruth: SampledDoc[] = [];
   let skippedInvalidGroundTruth = 0;
   for (const d of humanConfirmedOnly) {
     const data = d.data();
-    if (
-      !isNonEmptyString(data.fileName) ||
-      !isNonEmptyString(data.fileUrl) ||
-      !isNonEmptyString(data.documentType) ||
-      !isNonEmptyString(data.customerName) ||
-      !isNonEmptyString(data.officeName)
-    ) {
+    if (!isNonEmptyString(data.fileName) || !isNonEmptyString(data.fileUrl) || !isNonEmptyString(data.customerName) || !isNonEmptyString(data.officeName)) {
       skippedInvalidGroundTruth++;
       continue;
     }
@@ -294,7 +296,7 @@ async function sampleConfirmedDocuments(limit: number): Promise<SampledDoc[]> {
       id: d.id,
       fileName: data.fileName,
       fileUrl: data.fileUrl,
-      confirmedDocumentType: data.documentType,
+      confirmedDocumentType: isNonEmptyString(data.documentType) ? data.documentType : '',
       confirmedCustomerName: data.customerName,
       confirmedOfficeName: data.officeName,
     });
@@ -516,10 +518,10 @@ function summarize(modelConfig: ModelConfig, outcomes: DocOcrOutcome[]): ModelSu
   console.log(
     `対象文書数: ${stats.totalDocs} (成功 ${stats.succeededDocs} / 失敗 ${stats.failedDocs}、失敗率 ${pct(stats.failedDocs, stats.totalDocs)}%)`
   );
-  console.log(`書類種別 一致率: ${stats.docTypePass}/${stats.succeededDocs} (${pct(stats.docTypePass, stats.succeededDocs)}%)`);
+  console.log(`書類種別 一致率(参考値、gate対象外): ${stats.docTypePass}/${stats.succeededDocs} (${pct(stats.docTypePass, stats.succeededDocs)}%)`);
   console.log(`顧客     一致率: ${stats.customerPass}/${stats.succeededDocs} (${pct(stats.customerPass, stats.succeededDocs)}%)`);
   console.log(`事業所   一致率: ${stats.officePass}/${stats.succeededDocs} (${pct(stats.officePass, stats.succeededDocs)}%)`);
-  console.log(`全項目一致      : ${stats.allPass}/${stats.succeededDocs} (${pct(stats.allPass, stats.succeededDocs)}%)`);
+  console.log(`確定2項目一致   : ${stats.confirmedFieldsPass}/${stats.succeededDocs} (${pct(stats.confirmedFieldsPass, stats.succeededDocs)}%)`);
   console.log(`API異常疑いページ数: ${stats.anomalousPageCount}`);
   console.log(`リトライ発生文書数: ${stats.retriedDocCount}/${stats.totalDocs} (${pct(stats.retriedDocCount, stats.totalDocs)}%)`);
   console.log(`トークン: input=${stats.totalInput} output=${stats.totalOutput} thinking=${stats.totalThinking}`);
@@ -583,8 +585,8 @@ async function main(): Promise<void> {
 
   if (sampled.length === 0) {
     console.error(
-      '❌ 対象文書が見つかりませんでした (status=processed かつ customerConfirmed/officeConfirmed/' +
-        'documentTypeConfirmedが全てtrue、かつconfirmedBy/officeConfirmedByが非null)'
+      '❌ 対象文書が見つかりませんでした (status=processed かつ customerConfirmed/officeConfirmedが' +
+        '全てtrue、かつconfirmedBy/officeConfirmedByが非null)'
     );
     process.exit(1);
   }
@@ -621,12 +623,12 @@ async function main(): Promise<void> {
     validResults.map((r) => r.candidate)
   );
 
-  console.log('\n=== 判定 (Issue #548 トリガー条件: 3.5の精度が2.5を下回らないこと。書類種別/顧客/事業所の3フィールド、日付は対象外) ===');
+  console.log('\n=== 判定 (Issue #548 トリガー条件: 3.5の精度が2.5を下回らないこと。顧客/事業所の2フィールドのみgate、書類種別/日付は参考値・対象外) ===');
   console.log(
-    '(dateフィールドはconfirmed相当のground truthがFirestore上に存在しないため、' +
-      'compare-gemini-ocr-models.tsと同様に本検証でも対象外)'
+    '(documentTypeはconfirmedByに相当する人間確定シグナルを持たず、dateフィールドはconfirmed相当の' +
+      'ground truthがFirestore上に存在しないため、いずれもcompare-gemini-ocr-models.tsと同様に本検証でも対象外)'
   );
-  // code-review指摘反映: 絶対件数(allPass)ではなく成功文書中の一致率で比較する。
+  // code-review指摘反映: 絶対件数ではなく成功文書中の一致率で比較する。
   // モデルごとに失敗件数(succeededDocs)が異なりうるため、件数比較だと片方が失敗多めなだけで
   // 誤って「精度劣化」と判定されうる(例: baseline 300成功/250一致=83.3% vs
   // candidate 271成功/240一致=88.6%は実質candidateの方が高精度だが、240<250で誤FAILしていた)。
@@ -634,7 +636,7 @@ async function main(): Promise<void> {
   const candidateRate = computeMatchRate(migrated);
   const regressed = candidateRate < baselineRate;
   console.log(
-    `全項目一致率: baseline(2.5)=${(baselineRate * 100).toFixed(1)}% candidate(3.5)=${(candidateRate * 100).toFixed(1)}%`
+    `確定2項目一致率: baseline(2.5)=${(baselineRate * 100).toFixed(1)}% candidate(3.5)=${(candidateRate * 100).toFixed(1)}%`
   );
   console.log(`コスト比 (N=${validResults.length}件): ${(migrated.costUsd / baseline.costUsd).toFixed(2)}倍`);
 
