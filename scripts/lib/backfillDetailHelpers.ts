@@ -43,17 +43,21 @@ export function decideBackfillAction(params: {
  * detail/main へ書き込む payload を親docフィールドから構築する。
  *
  * ocrProcessor.ts の dual-write (`tx.set(detailRef, { ocrResult, pageResults })`) と
- * 同じ2フィールドのみを対象とし、親に存在するフィールドだけをコピーする
- * (存在しないフィールドを undefined で書いて Firestore エラーになるのを防ぐ)。
- * 両方とも不在の場合は空オブジェクト — ADR-0018 §原子性要件2「存在保証」により、
- * Phase D の FE reprocess-clear (`update()`) が常に成功するには detail/main の
- * 「ドキュメントとしての存在」自体が必要なため、中身が空でも作成する。
+ * 同じ2フィールドのみを対象とする。
+ *
+ * - `ocrResult`: 親に string があればコピー、なければ **空文字列で必ず書く**
+ *   (code-review C1指摘反映: 本番の全doc作成経路4箇所 — checkGmailAttachments /
+ *   uploadPdf / ocrProcessor(savedOcrResult、offload時は'') / splitPdf — は例外なく
+ *   ocrResult を string で書く。backfill だけ省略すると「detail作成時 ocrResult は
+ *   常に string」という production 不変条件を破り、Phase D 読者の想定を崩す)
+ * - `pageResults`: 親に配列があればコピー、なければ省略 (空配列は本番書込に存在しない
+ *   値のため捏造しない。pageResultsReuse 等の Phase D 読者はフィールド不在を
+ *   「再利用不可」として扱う)
  */
 export function buildDetailPayload(parentData: Record<string, unknown>): Record<string, unknown> {
-  const payload: Record<string, unknown> = {};
-  if (typeof parentData.ocrResult === 'string') {
-    payload.ocrResult = parentData.ocrResult;
-  }
+  const payload: Record<string, unknown> = {
+    ocrResult: typeof parentData.ocrResult === 'string' ? parentData.ocrResult : '',
+  };
   if (Array.isArray(parentData.pageResults)) {
     payload.pageResults = parentData.pageResults;
   }
@@ -85,14 +89,22 @@ export function canonicalStringify(value: unknown): string {
   return `{${entries.join(',')}}`;
 }
 
-/** --audit / --dry-run / --execute / --verify の集計カウンタ */
+/**
+ * --audit / --dry-run / --execute / --verify の集計カウンタ。
+ *
+ * `parentDeleted` と `decisionChanged` を分離する理由 (code-review D3指摘反映):
+ * 前者「スキャン後に親docが削除された」は削除同期の異常やdeleteストームの兆候になりうる
+ * シグナル、後者「並行再処理がdetail/mainを先に作成した」は設計想定内の正常系。
+ * 同一カウンタに混ぜると operator が実行結果から異常を見分けられない。
+ */
 export interface BackfillCounters {
   scanned: number;
   backfillTargets: number;
   skippedDetailExists: number;
   skippedInPipeline: number;
   written: number;
-  writeConflicts: number;
+  parentDeleted: number;
+  decisionChanged: number;
   errors: number;
 }
 
@@ -103,7 +115,8 @@ export function createCounters(): BackfillCounters {
     skippedDetailExists: 0,
     skippedInPipeline: 0,
     written: 0,
-    writeConflicts: 0,
+    parentDeleted: 0,
+    decisionChanged: 0,
     errors: 0,
   };
 }

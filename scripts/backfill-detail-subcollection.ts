@@ -65,13 +65,22 @@ const ALLOWED_PROJECT_IDS = ['doc-split-dev', 'docsplit-kanameone', 'docsplit-co
 
 /**
  * レート制御 (Codex Critical 3 対応)。
- * CONCURRENCY=4 × MIN_START_INTERVAL_MS=150 ≈ 6.7 docs/sec。
+ * CONCURRENCY=4 × EXECUTE_START_INTERVAL_MS=150 ≈ 6.7 docs/sec (グローバルレート、
+ * runWithRateControl が起動スロットを同期的に予約することで保証)。
  * kanameone 9,355件で約23分。1 doc backfill = 親update 1回 (トリガー発火は
  * onDocumentWrite→group tx最大4件) + detail create 1回 (documents/{id} 直下では
  * ないためonDocumentWriteは発火しない)。→ group tx ~27/sec、Firestore余裕範囲。
+ *
+ * search.tokenHash 欠落の processed doc は、searchIndexer が search メタデータを
+ * 親へ書き戻すため onDocumentWrite が2度目に発火し、group tx は最大8件/docになる
+ * (review C2指摘反映: 2度目のsearchIndexer発火はhash一致で早期returnし無限ループには
+ * ならない)。audit の tokenHash欠落数(backfill対象内)で該当規模を事前確認すること。
+ *
+ * --verify は読取専用でトリガーを一切発火しないため、起動間隔なし
+ * (concurrency制限のみ) で実行する (review A4/D1指摘反映)。
  */
 const CONCURRENCY = 4;
-const MIN_START_INTERVAL_MS = 150;
+const EXECUTE_START_INTERVAL_MS = 150;
 
 /** verify で不一致検出時に表示するサンプルdoc ID数の上限 */
 const MISMATCH_SAMPLE_LIMIT = 20;
@@ -108,6 +117,12 @@ function parseArgs(): { mode: Mode; limit: number } {
   let limit = 0; // 0 = 無制限
   const idx = process.argv.indexOf('--limit');
   if (idx !== -1) {
+    // --limit は execute 専用 (review A3指摘反映: 他モードで受理するとヘッダに
+    // 表示されるのに適用されず、operator が「サンプル済み」と誤認するため明示拒否)
+    if (modes[0] !== 'execute') {
+      console.error('--limit は --execute 専用です (audit/dry-run/verify は常に全件対象)');
+      process.exit(1);
+    }
     limit = Number(process.argv[idx + 1]);
     if (!Number.isInteger(limit) || limit <= 0) {
       console.error('--limit には正の整数を指定してください');
@@ -178,13 +193,15 @@ function classify(docs: ScannedDoc[], parentIdsWithDetail: Set<string>): Classif
 
     const detailExists = parentIdsWithDetail.has(doc.id);
     if (detailExists) dist.detailExists++;
-    if (!doc.hasTokenHash) tokenHashMissing++;
 
     const decision = decideBackfillAction({ status: doc.status, detailExists });
     if (decision === 'backfill') {
       counters.backfillTargets++;
       dist.targets++;
       targets.push(doc);
+      // searchIndexerトリガー増幅の見積りはbackfillが実際に親を更新するdoc(=target)に
+      // 限定して数える (review A5指摘反映: 全doc対象だとskip分まで含み過大推定になる)
+      if (!doc.hasTokenHash) tokenHashMissing++;
     } else if (decision === 'skip-detail-exists') {
       counters.skippedDetailExists++;
     } else {
@@ -206,49 +223,69 @@ function printClassification(c: Classification): void {
   console.log(`\nbackfill対象合計: ${c.counters.backfillTargets}`);
   console.log(`スキップ(detail/main既存): ${c.counters.skippedDetailExists}`);
   console.log(`スキップ(in-pipeline: ${IN_PIPELINE_STATUSES.join('/')}): ${c.counters.skippedInPipeline}`);
-  console.log(`search.tokenHash欠落: ${c.tokenHashMissing} (searchIndexerトリガー増幅の事前見積り用)`);
+  console.log(
+    `search.tokenHash欠落(backfill対象内): ${c.tokenHashMissing} (該当docはsearchIndexer書き戻しでgroup tx最大8件/docに増幅)`
+  );
 }
 
-/** 同時実行数 + タスク起動間隔の両方を制御するworkerプール (トリガー負荷制御) */
+/**
+ * 同時実行数 + グローバル起動間隔の両方を制御するworkerプール (トリガー負荷制御)。
+ *
+ * 起動スロットは await の**前に同期的に予約する** (review A2/D2指摘反映: 予約を
+ * await後に行うと、複数workerが同じ古いlastStartを読んで同一スロットに整列し、
+ * 実効レートが最大CONCURRENCY倍まで劣化してレート制御が機能しなくなる)。
+ * startIntervalMs=0 で起動間隔なし(concurrency制限のみ)になる(--verify用)。
+ */
 async function runWithRateControl<T>(
   items: T[],
+  startIntervalMs: number,
   worker: (item: T) => Promise<void>
 ): Promise<void> {
   let cursor = 0;
-  let lastStart = 0;
+  let nextSlot = 0;
   async function runner(): Promise<void> {
     for (;;) {
       const index = cursor++;
       if (index >= items.length) return;
-      const wait = lastStart + MIN_START_INTERVAL_MS - Date.now();
-      if (wait > 0) await new Promise((r) => setTimeout(r, wait));
-      lastStart = Date.now();
+      if (startIntervalMs > 0) {
+        const slot = Math.max(Date.now(), nextSlot);
+        nextSlot = slot + startIntervalMs; // 同期的にスロット予約(この行までawaitなし)
+        const wait = slot - Date.now();
+        if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+      }
       await worker(items[index]);
     }
   }
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, items.length) }, () => runner()));
 }
 
+type BackfillOutcome = 'written' | 'parent-deleted' | 'decision-changed';
+
 /**
  * 1 docのbackfillを単一トランザクションで実行する (設計判断は冒頭doc comment参照)。
  * トランザクション内で親・detailを読み直すため、スキャン時点との状態差(並行再処理等)は
  * ここで最終判定される。
+ *
+ * カウンタ加算はトランザクションの**外**で行う (review A1指摘反映: Firestoreは競合時に
+ * トランザクションコールバックを再実行するため、コールバック内で加算すると
+ * 「attempt1でwritten++→commit失敗→attempt2でskip判定」のような経路で
+ * 実際には書き込まれていないdocがwrittenに計上される)。
  */
 async function backfillOneDoc(docId: string, counters: BackfillCounters): Promise<void> {
   const docRef = db.doc(`documents/${docId}`);
   const detailRef = docRef.collection('detail').doc('main');
   try {
-    await db.runTransaction(async (tx) => {
+    const outcome = await db.runTransaction<BackfillOutcome>(async (tx) => {
       const [parentSnap, detailSnap] = await tx.getAll(docRef, detailRef);
       if (!parentSnap.exists) {
-        counters.writeConflicts++; // スキャン後に削除された(削除同期は deleteDocument.ts が担保)
-        return;
+        // スキャン後に削除された(削除同期は deleteDocument.ts が担保)
+        return 'parent-deleted';
       }
       const data = parentSnap.data()!;
       const decision = decideBackfillAction({ status: data.status, detailExists: detailSnap.exists });
       if (decision !== 'backfill') {
-        counters.writeConflicts++; // スキャン後に並行処理が状態を変えた(正常系、skipで整合)
-        return;
+        // スキャン後に並行処理がdetail/main作成 or statusをin-pipelineに変えた(正常系)
+        return 'decision-changed';
       }
       tx.create(detailRef, buildDetailPayload(data));
       tx.update(docRef, {
@@ -257,8 +294,11 @@ async function backfillOneDoc(docId: string, counters: BackfillCounters): Promis
           typeof data.ocrResultUrl === 'string' ? data.ocrResultUrl : null
         ),
       });
-      counters.written++;
+      return 'written';
     });
+    if (outcome === 'written') counters.written++;
+    else if (outcome === 'parent-deleted') counters.parentDeleted++;
+    else counters.decisionChanged++;
   } catch (err) {
     counters.errors++;
     // 個人情報保護: エラー種別のみ出力(メッセージ本文にStorageパス等が含まれうるため)
@@ -304,7 +344,12 @@ async function verifyOneDoc(docId: string, result: VerifyResult): Promise<void> 
     if (!parentSnap.exists) return; // 検証中に削除された(削除同期済みなら不一致ではない)
     const parent = parentSnap.data()!;
 
-    if (typeof parent.status === 'string' && (IN_PIPELINE_STATUSES as readonly string[]).includes(parent.status)) {
+    // in-pipeline判定はexecuteパスと同一関数を通す (review D5指摘反映: 判定ロジックが
+    // 二重実装だと将来の変更でexecute/verifyが静かに乖離する)
+    if (
+      decideBackfillAction({ status: parent.status, detailExists: detailSnap.exists }) ===
+      'skip-in-pipeline'
+    ) {
       result.inPipeline++;
       return;
     }
@@ -374,14 +419,20 @@ async function main(): Promise<void> {
       return;
     }
     console.log(
-      `\n--- backfill実行: ${targets.length}件 (concurrency=${CONCURRENCY}, 起動間隔${MIN_START_INTERVAL_MS}ms ≈ ${(1000 / MIN_START_INTERVAL_MS).toFixed(1)} docs/sec) ---`
+      `\n--- backfill実行: ${targets.length}件 (concurrency=${CONCURRENCY}, 起動間隔${EXECUTE_START_INTERVAL_MS}ms ≈ ${(1000 / EXECUTE_START_INTERVAL_MS).toFixed(1)} docs/sec) ---`
     );
     const started = Date.now();
-    await runWithRateControl(targets, (t) => backfillOneDoc(t.id, classification.counters));
+    await runWithRateControl(targets, EXECUTE_START_INTERVAL_MS, (t) =>
+      backfillOneDoc(t.id, classification.counters)
+    );
     const c = classification.counters;
     console.log(`\n--- 実行結果 (${Math.round((Date.now() - started) / 1000)}秒) ---`);
     console.log(`書込成功: ${c.written}`);
-    console.log(`実行時skip(並行処理との競合、正常系): ${c.writeConflicts}`);
+    console.log(`実行時skip(並行処理がdetail作成/status変更、正常系): ${c.decisionChanged}`);
+    console.log(
+      `実行時skip(スキャン後に親doc削除): ${c.parentDeleted}` +
+        (c.parentDeleted > 0 ? ' ⚠️ 想定外に多い場合は削除経路を調査すること' : '')
+    );
     console.log(`エラー: ${c.errors}`);
     if (c.errors > 0) {
       console.error('❌ エラーが発生したdocがあります。再実行(冪等)で解消するか確認してください。');
@@ -392,7 +443,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  // mode === 'verify'
+  // mode === 'verify' — 読取専用でトリガー発火なしのため起動間隔0(concurrency制限のみ)
   const verifyTargets = docs.map((d) => d.id);
   console.log(`\n--- parity検証: ${verifyTargets.length}件 (in-pipelineは判定時に除外) ---`);
   const result: VerifyResult = {
@@ -404,11 +455,17 @@ async function main(): Promise<void> {
     inPipeline: 0,
     errors: 0,
   };
-  await runWithRateControl(verifyTargets, (id) => verifyOneDoc(id, result));
+  await runWithRateControl(verifyTargets, 0, (id) => verifyOneDoc(id, result));
 
   console.log(`\n--- 検証結果 ---`);
   console.log(`検証対象: ${result.checked} / in-pipeline除外: ${result.inPipeline} / 読込エラー: ${result.errors}`);
   console.log(`detail/main不在: ${result.detailMissing}`);
+  if (result.detailMissing.count > 0) {
+    console.log(
+      '  ℹ️ detail/main不在には「execute実行中にin-pipelineだったdocがその後error等に遷移した」' +
+        'ケースが含まれうる — その場合は--executeを再実行(冪等)してから--verifyし直すこと (review A6)'
+    );
+  }
   console.log(`ocrResult不一致: ${result.ocrResultMismatch}`);
   console.log(`pageResults不一致: ${result.pageResultsMismatch}`);
   console.log(`ocrExcerpt不一致: ${result.ocrExcerptMismatch}`);

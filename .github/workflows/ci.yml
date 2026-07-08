@@ -63,6 +63,13 @@ jobs:
       - name: Run unit tests
         run: npm run test:functions
 
+      - name: Run scripts unit tests
+        # scripts/lib/*.test.ts (backfillDetailHelpers / confirmedReplayStats 等の
+        # 運用スクリプト安全ロジック) はこれまでCIで未実行だった (Issue #547 Phase C
+        # review B1指摘)。scriptsはroot workspacesメンバーのため依存は上のnpm ciで
+        # 解決済み。node --test ランナーで軽量実行(外部依存なし、数秒)。
+        run: cd scripts && npm test
+
       - name: Install Playwright browsers
         run: cd frontend && npx playwright install --with-deps chromium
 

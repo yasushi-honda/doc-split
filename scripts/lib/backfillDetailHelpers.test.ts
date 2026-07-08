@@ -43,12 +43,19 @@ test('buildDetailPayload: 空文字列のocrResultもコピーする(Storage off
   assert.deepEqual(buildDetailPayload({ ocrResult: '' }), { ocrResult: '' });
 });
 
-test('buildDetailPayload: 両フィールド不在なら空オブジェクト(存在保証のため空でも作成)', () => {
-  assert.deepEqual(buildDetailPayload({ customerName: 'x' }), {});
+test('buildDetailPayload: ocrResult不在でも空文字列で必ず書く(本番全作成経路の「常にstring」不変条件維持、review C1)', () => {
+  assert.deepEqual(buildDetailPayload({ customerName: 'x' }), { ocrResult: '' });
 });
 
-test('buildDetailPayload: 型不正(非string/非array)はコピーしない', () => {
-  assert.deepEqual(buildDetailPayload({ ocrResult: 123, pageResults: 'not-array' }), {});
+test('buildDetailPayload: 型不正(非string/非array)はocrResult空文字フォールバック+pageResults省略', () => {
+  assert.deepEqual(buildDetailPayload({ ocrResult: 123, pageResults: 'not-array' }), { ocrResult: '' });
+});
+
+test('buildDetailPayload: 空のpageResults配列は捏造せずそのままコピー(親に実在する場合のみ)', () => {
+  assert.deepEqual(buildDetailPayload({ ocrResult: 'x', pageResults: [] }), {
+    ocrResult: 'x',
+    pageResults: [],
+  });
 });
 
 test('canonicalStringify: キー順序が異なる同一オブジェクトは同一文字列', () => {
