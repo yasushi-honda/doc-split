@@ -1,6 +1,7 @@
 ---
 updated: 2026-07-09
 ---
+<!-- session108: Phase C完遂+#548 close+Phase D計画承認を反映 -->
 
 ## 現在のミッション
 運用コスト圧縮2トラック — #547 Firestore読取egress削減（ADR-0018 detail/main分離）と #548 Gemini 3.5 Flash移行 — を、本番2環境（kanameone / cocoro）で安全に完遂する。
@@ -19,15 +20,19 @@ updated: 2026-07-09
 ## 進行中のtasks
 - [x] #548 confirmed-replay 統計検証（kanameone 実データ N=60、2.5/3.5 確定2項目完全同値 36.7% PASS、手法上限到達）
 - [x] #547 Phase C backfill スクリプト実装・マージ（PR #595、3層レビュー通過）
-- [x] #547 dev リハーサル前半（--audit 160件整合 / --dry-run 件数一致）
-- [ ] #547 dev リハーサル後半（canary `--execute --limit 10` → 全量 → 2周目書込0件=冪等 → `--verify` PASS。9項目チェックリストは PR #595 コメント）
-- [ ] #547 cocoro backfill 実行（trigger: dev リハーサル全PASS + 番号単位認可 + バックアップ鮮度確認）
-- [ ] #547 kanameone backfill 実行（trigger: 同上。9,355件）
-- [ ] #548 kanameone / cocoro 本番展開 → Issue #548 close（trigger: 番号単位展開認可。検証材料は充足済み）
-- [ ] #547 Phase D dual-read cutover → Phase E 親doc大容量フィールド削除（egress実削減）→ Issue #547 close（ADR-0018 ロードマップ。着手時に /impl-plan 必須）
+- [x] #547 dev リハーサル完了（2026-07-09、7項目PASS + stale/並行競合2項目は本番ログ注視で代替。kill→再開の再開安全性実証。記録: PR #595 コメント）
+- [x] #547 cocoro backfill 完了（2026-07-09、1,039件・verify PASS）
+- [x] #547 kanameone backfill 完了（2026-07-09、9,341件・verify PASS 9,389件 parity一致）
+- [x] #548 kanameone / cocoro 本番展開 → **Issue #548 close 済み**（2026-07-09。kanameone=2.5 pin解除、cocoro=1ヶ月分一括反映+Hosting+rules。ロールバック: gemini_model_id_override=gemini-2.5-flash）
+- [ ] #547 Phase D **PR-D1**: FE reprocess-clear の detail/main 同時クリア化（3箇所の既存writeBatchに detail deleteField 追加。計画: session108 承認済み impl-plan）
+- [ ] #547 Phase D **PR-D2**: Functions 読者切替（getOcrText/regenerateSummary=tx.getAll paired-read、pageResultsReuse/detectSplitPoints/splitPdf=detail読込、dual-readフォールバック）
+- [ ] #547 Phase D **PR-D3**: FE 読者切替（モーダルのオンデマンドdetail取得/PdfSplitModal/ocrExcerpt参照化/dead code防御除去）+ ui-verified 必須
+- [ ] #547 Phase D **PR-D4**: scripts 読者切替（reprocess-master-matching.js + measure-summary-cost.ts）+ AC9読者ゼロgrep契約テスト
+- [ ] #547 Phase D 展開（trigger: 全PR merge + dev AC確認 + 環境ごと番号単位認可。**環境内は Hosting先行 → stale/pending検証ゲート → Functions の順**（旧PWA由来stale再利用の封鎖））
+- [ ] #547 Phase E impl-plan 起票 → 実行 → Issue #547 close（trigger: Phase D 展開完了 + AC9ゲートPASS。destructive につき番号認可+devリハーサル必須）
 
 ## 🔄 中断点（in-flight）
-- 対象タスク: #547 dev リハーサル後半
-- 直前の状態: PR #595 マージ済み。dev で `--audit`（160件: detail+excerpt 12 / excerpt-only 148 / stale 0）と `--dry-run`（audit と件数一致）まで完了。実書込（--execute）は未実施
-- 次の一手: GitHub Actions "Run Operations Script" → 環境 dev → `backfill-detail-subcollection --execute --limit 10`（canary）を実行し、書込カウンタとログを確認
-- 検証コマンド: `gh run list --workflow=run-ops-script.yml --limit 3`（直近実行の成否）/ dev で `--audit` 再実行（残対象件数の減少確認）
+- 対象タスク: #547 Phase D PR-D1
+- 直前の状態: Phase D 計画承認済み（Codex plan review P1×3/P2×2 反映済み、計画全文: セッション scratchpad/phase-d-plan.md → 消失時は本GOAL.mdのタスク分解+ADR-0018で再構成可）。Phase B PR4a により3箇所は writeBatch/chunking/親ocrExcerptクリアまで実装済みで、PR-D1 の残作業は「既存batchへの detail/main deleteField 追加」のみ
+- 次の一手: feature ブランチで useDocuments.ts useReprocessDocument / useErrors.ts requestReprocess / DocumentsPage.tsx handleBulkReprocess の3箇所に `batch.update(doc(db,'documents',id,'detail','main'), {ocrResult: deleteField(), pageResults: deleteField()})` を追加（rules は deleteField のみ許可、値上書き不可に注意）
+- 検証コマンド: `cd frontend && npm test` / `cd functions && npm run test:rules`（detail update ルール適合）

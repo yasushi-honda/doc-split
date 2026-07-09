@@ -6,8 +6,8 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { Timestamp } from 'firebase/firestore'
-import { firestoreToDocument, normalizeSummary, getReprocessClearFields } from '../useDocuments'
+import { deleteField, Timestamp } from 'firebase/firestore'
+import { firestoreToDocument, normalizeSummary, getReprocessClearFields, getReprocessDetailClearFields } from '../useDocuments'
 
 describe('firestoreToDocument', () => {
   // 基本フィールドのモックデータ
@@ -476,5 +476,22 @@ describe('getReprocessClearFields (Issue #215: 旧3キー + 新summary 全て de
   it('documentTypeConfirmed を false にリセットする (Issue #526)', () => {
     const fields = getReprocessClearFields()
     expect(fields.documentTypeConfirmed).toBe(false)
+  })
+})
+
+describe('getReprocessDetailClearFields (ADR-0018 Phase D PR4b, Issue #547)', () => {
+  it('detail/main の update 対象は ocrResult / pageResults の2キーのみ (更新対象外フィールドに触れない)', () => {
+    const fields = getReprocessDetailClearFields()
+    // firestore.rules は affectedKeys().hasOnly(['ocrResult', 'pageResults']) を要求する。
+    // キーが増減すると permission-denied で再処理 batch 全体が失敗する
+    expect(Object.keys(fields).sort()).toEqual(['ocrResult', 'pageResults'])
+  })
+
+  it('両フィールドとも deleteField sentinel (値の設定は rules が拒否するため不可)', () => {
+    const fields = getReprocessDetailClearFields()
+    // rules は「フィールド削除または無変更」のみ許可。'' や null の設定は
+    // 値の上書きとして permission-denied になる
+    expect(deleteField().isEqual(fields.ocrResult)).toBe(true)
+    expect(deleteField().isEqual(fields.pageResults)).toBe(true)
   })
 })

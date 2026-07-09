@@ -15,6 +15,7 @@ import {
   getDoc,
   updateDoc,
   writeBatch,
+  type WriteBatch,
   deleteField,
   Timestamp,
   QueryConstraint,
@@ -250,9 +251,9 @@ export function updateDocumentInListCache(
 // ============================================
 
 /**
- * 再処理時にリセットすべき全フィールドを返すファクトリ関数
- * DocumentDetailModal, DocumentsPage, useErrors の3箇所で共通利用（DRY）
- * deleteField() はファクトリ関数内で毎回生成（安全性）
+ * 再処理時にリセットすべき親docの全フィールドを返すファクトリ関数
+ * 直接の呼出元は appendReprocessClearToBatch のみ（再処理3経路は
+ * ヘルパー経由で間接利用）。deleteField() はファクトリ関数内で毎回生成（安全性）
  */
 export function getReprocessClearFields() {
   const df = deleteField()
@@ -324,6 +325,58 @@ export function getReprocessClearFields() {
   }
 }
 
+/**
+ * 再処理時に detail/main サブコレクションからクリアすべきフィールドを返すファクトリ関数
+ * (ADR-0018 Phase D PR4b、Issue #547)。親docと同じく3経路(useReprocessDocument /
+ * useErrors / DocumentsPage)で共通利用し、親クリアと同一 writeBatch に含めて
+ * 原子的にコミットする(片側だけクリアされた doc を作らない)。
+ *
+ * firestore.rules は detail/main の update を「フィールド削除または無変更」のみ許可
+ * している(値の上書きは Functions 専有)ため、deleteField() のみで構成する。
+ * `ocrResult: ''` のような値の設定は permission-denied で batch 全体が失敗する。
+ *
+ * detail/main が不在の doc への挙動は appendReprocessClearToBatch の存在ガード参照
+ * (不在時は skip)。不在 detail の充填自体は backfill 再実行(冪等)で行う。
+ */
+export function getReprocessDetailClearFields() {
+  const df = deleteField()
+  return {
+    ocrResult: df,
+    pageResults: df,
+  }
+}
+
+/**
+ * 再処理クリア一式（親doc + detail/main）を writeBatch に積む共通ヘルパー
+ * (ADR-0018 Phase D PR4b、Issue #547)。3経路(useReprocessDocument / useErrors /
+ * DocumentsPage)はすべて本ヘルパー経由でクリアする — 経路ごとの手書き重複だと
+ * detail クリア漏れ(= stale detail 再発)を経路追加時に作り込みやすいため、
+ * ペア不変条件をこの1点に集約する。
+ *
+ * detail/main は存在確認してから update に積む: 不在 doc への update() は
+ * not-found で batch 全体を落とす(Firestore 仕様)。rules が create を禁止している
+ * ため set() での upsert 回避も不可 — よって存在確認 → 条件付き update が必須。
+ * 不在 = クリアすべきコンテンツが最初から無い(望む終端状態が既に成立)ので、
+ * skip が意味的にも正しい。
+ * 確認と commit の間に detail が作成されるレース(並行OCR完了)はあり得るが、その場合も
+ * 親クリアで status:'pending' になった doc を次の OCR パイプラインが dual-write で
+ * 上書きするため自己修復する。
+ */
+export async function appendReprocessClearToBatch(
+  batch: WriteBatch,
+  documentId: string
+): Promise<void> {
+  batch.update(doc(db, 'documents', documentId), {
+    status: 'pending',
+    ...getReprocessClearFields(),
+  })
+  const detailRef = doc(db, 'documents', documentId, 'detail', 'main')
+  const detailSnap = await getDoc(detailRef)
+  if (detailSnap.exists()) {
+    batch.update(detailRef, getReprocessDetailClearFields())
+  }
+}
+
 // ============================================
 // 個別再処理フック (#524)
 // ============================================
@@ -344,13 +397,10 @@ export function useReprocessDocument() {
     if (!documentId || reprocessingId) return false
     setReprocessingId(documentId)
     try {
-      // ADR-0018 Phase B (Issue #547): 他2箇所(useErrors/DocumentsPage)との
-      // writeBatch統一。detail/main書込はPhase D以降(PR4b)に分離、本PRは親docのみ。
+      // ADR-0018 Phase D PR4b (Issue #547): 親docクリアと detail/main クリアを
+      // 単一batchで原子的にコミット(他2箇所 useErrors/DocumentsPage と同一ヘルパー)
       const batch = writeBatch(db)
-      batch.update(doc(db, 'documents', documentId), {
-        status: 'pending',
-        ...getReprocessClearFields(),
-      })
+      await appendReprocessClearToBatch(batch, documentId)
       await batch.commit()
       // 楽観的更新（即時UI反映）
       updateDocumentInListCache(queryClient, documentId, {
