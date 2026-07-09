@@ -3,8 +3,8 @@
  *
  * functions/test/ocrProcessorDetailDualWriteContract.test.ts /
  * scripts/lib/backfillScriptContract.test.ts と同じ grep-based 契約パターン。
- * 「親docクリアと detail/main クリアが同一 writeBatch に含まれる」配線を
- * ソース文字列レベルで lock-in する。
+ * 「再処理クリアは全経路 appendReprocessClearToBatch ヘルパー経由」という
+ * 1点への集約をソース文字列レベルで lock-in する。
  *
  * 1経路でも detail クリアが漏れると、そのパスで再処理された doc は
  * detail/main に再処理前の古い OCR 内容が残存し、Phase D 以降の detail-first
@@ -23,39 +23,45 @@ const useErrorsSrc = read('../useErrors.ts')
 const documentsPageSrc = read('../../pages/DocumentsPage.tsx')
 
 describe('reprocess-clear detail/main 配線契約 (ADR-0018 PR4b)', () => {
-  it('useReprocessDocument: 親update と同一batchで detail/main を getReprocessDetailClearFields でクリアする', () => {
-    expect(useDocumentsSrc).toMatch(
-      /batch\.update\(\s*doc\(db, 'documents', documentId, 'detail', 'main'\),\s*getReprocessDetailClearFields\(\)\s*\)/
+  it('ヘルパー: 親docの status:pending + getReprocessClearFields を batch に積む', () => {
+    const helper = useDocumentsSrc.match(
+      /export async function appendReprocessClearToBatch[\s\S]*?\n\}/
+    )
+    expect(helper, 'appendReprocessClearToBatch が定義されていること').not.toBeNull()
+    expect(helper![0]).toMatch(/status: 'pending',\s*\.\.\.getReprocessClearFields\(\)/)
+  })
+
+  it('ヘルパー: detail/main は存在確認(getDoc)の上、存在時のみ getReprocessDetailClearFields でクリアする', () => {
+    const helper = useDocumentsSrc.match(
+      /export async function appendReprocessClearToBatch[\s\S]*?\n\}/
+    )![0]
+    // rules は detail の create を禁止しているため、不在 doc への update() は
+    // not-found で batch 全体を落とす。存在確認 → 条件付き update が必須配線
+    expect(helper).toMatch(/doc\(db, 'documents', documentId, 'detail', 'main'\)/)
+    expect(helper).toMatch(/await getDoc\(detailRef\)/)
+    expect(helper).toMatch(
+      /if \(detailSnap\.exists\(\)\) \{\s*batch\.update\(detailRef, getReprocessDetailClearFields\(\)\)/
     )
   })
 
-  it('useErrors requestReprocess: firstDoc 存在時に detail/main を同一batchでクリアする', () => {
-    expect(useErrorsSrc).toMatch(
-      /batch\.update\(\s*doc\(db, 'documents', firstDoc\.id, 'detail', 'main'\),\s*getReprocessDetailClearFields\(\)\s*\)/
-    )
+  it.each([
+    ['useDocuments.ts useReprocessDocument', () => useDocumentsSrc, /await appendReprocessClearToBatch\(batch, documentId\)/],
+    ['useErrors.ts requestReprocess', () => useErrorsSrc, /await appendReprocessClearToBatch\(batch, firstDoc\.id\)/],
+    ['DocumentsPage.tsx handleBulkReprocess', () => documentsPageSrc, /chunk\.map\(\(docId\) => appendReprocessClearToBatch\(batch, docId\)\)/],
+  ])('%s はヘルパー経由でクリアする', (_name, getSrc, pattern) => {
+    expect(getSrc()).toMatch(pattern)
   })
 
-  it('DocumentsPage handleBulkReprocess: チャンクループ内で doc ごとに detail/main をクリアする', () => {
-    expect(documentsPageSrc).toMatch(
-      /const detailClearFields = getReprocessDetailClearFields\(\)/
-    )
-    expect(documentsPageSrc).toMatch(
-      /batch\.update\(doc\(db, 'documents', docId, 'detail', 'main'\), detailClearFields\)/
-    )
+  it("ヘルパーの外に detail/main への書込配線が存在しない (経路追加時のクリア漏れ・rules違反の値設定を構造的に防ぐ)", () => {
+    // useDocuments.ts では appendReprocessClearToBatch 内の1箇所のみ許可
+    const detailPathCount = [...useDocumentsSrc.matchAll(/'detail', 'main'/g)].length
+    expect(detailPathCount, 'useDocuments.ts の detail/main パス構築はヘルパー内の1箇所のみ').toBe(1)
+    // 他2ファイルは detail/main パスを直接構築しない (全てヘルパー委譲)
+    expect(useErrorsSrc).not.toMatch(/'detail'/)
+    expect(documentsPageSrc).not.toMatch(/'detail'/)
   })
 
-  it('DocumentsPage: CHUNK_SIZE は 250 (1doc=2update で 500 ops = batch 上限ちょうど。増やすと commit が失敗する)', () => {
+  it('DocumentsPage: CHUNK_SIZE は 250 (最大500 update/チャンク。hard limitは2023年撤廃済みだが、payload上限と部分成功粒度の保守値として維持)', () => {
     expect(documentsPageSrc).toMatch(/const CHUNK_SIZE = 250/)
-  })
-
-  it("detail/main へ値を設定する batch.update が存在しない (rules は削除のみ許可、'''化は permission-denied)", () => {
-    // detail/main への update は全経路 getReprocessDetailClearFields (deleteFieldのみ) 経由。
-    // ocrResult: '' のような値設定が紛れ込むと rules 拒否で batch 全体が失敗する
-    for (const src of [useDocumentsSrc, useErrorsSrc, documentsPageSrc]) {
-      const detailUpdates = [...src.matchAll(/'detail', 'main'\),\s*\{([^}]*)\}/g)]
-      for (const m of detailUpdates) {
-        expect(m[1]).not.toMatch(/ocrResult:\s*['"`]/)
-      }
-    }
   })
 })

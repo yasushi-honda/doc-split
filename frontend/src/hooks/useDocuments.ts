@@ -15,6 +15,7 @@ import {
   getDoc,
   updateDoc,
   writeBatch,
+  type WriteBatch,
   deleteField,
   Timestamp,
   QueryConstraint,
@@ -347,6 +348,35 @@ export function getReprocessDetailClearFields() {
   }
 }
 
+/**
+ * 再処理クリア一式（親doc + detail/main）を writeBatch に積む共通ヘルパー
+ * (ADR-0018 Phase D PR4b、Issue #547)。3経路(useReprocessDocument / useErrors /
+ * DocumentsPage)はすべて本ヘルパー経由でクリアする — 経路ごとの手書き重複だと
+ * detail クリア漏れ(= stale detail 再発)を経路追加時に作り込みやすいため、
+ * ペア不変条件をこの1点に集約する。
+ *
+ * detail/main は存在確認してから update に積む: rules が create を禁止しているため
+ * 不在 doc への update() は not-found で batch 全体を落とす。不在 = クリアすべき
+ * コンテンツが最初から無い(望む終端状態が既に成立)ので、skip が意味的にも正しい。
+ * 確認と commit の間に detail が作成されるレース(並行OCR完了)はあり得るが、その場合も
+ * 親クリアで status:'pending' になった doc を次の OCR パイプラインが dual-write で
+ * 上書きするため自己修復する。
+ */
+export async function appendReprocessClearToBatch(
+  batch: WriteBatch,
+  documentId: string
+): Promise<void> {
+  batch.update(doc(db, 'documents', documentId), {
+    status: 'pending',
+    ...getReprocessClearFields(),
+  })
+  const detailRef = doc(db, 'documents', documentId, 'detail', 'main')
+  const detailSnap = await getDoc(detailRef)
+  if (detailSnap.exists()) {
+    batch.update(detailRef, getReprocessDetailClearFields())
+  }
+}
+
 // ============================================
 // 個別再処理フック (#524)
 // ============================================
@@ -368,16 +398,9 @@ export function useReprocessDocument() {
     setReprocessingId(documentId)
     try {
       // ADR-0018 Phase D PR4b (Issue #547): 親docクリアと detail/main クリアを
-      // 単一batchで原子的にコミット(他2箇所 useErrors/DocumentsPage と同一パターン)
+      // 単一batchで原子的にコミット(他2箇所 useErrors/DocumentsPage と同一ヘルパー)
       const batch = writeBatch(db)
-      batch.update(doc(db, 'documents', documentId), {
-        status: 'pending',
-        ...getReprocessClearFields(),
-      })
-      batch.update(
-        doc(db, 'documents', documentId, 'detail', 'main'),
-        getReprocessDetailClearFields()
-      )
+      await appendReprocessClearToBatch(batch, documentId)
       await batch.commit()
       // 楽観的更新（即時UI反映）
       updateDocumentInListCache(queryClient, documentId, {

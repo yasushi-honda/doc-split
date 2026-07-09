@@ -22,7 +22,7 @@ import {
   QueryConstraint,
 } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
-import { getReprocessClearFields, getReprocessDetailClearFields } from './useDocuments'
+import { appendReprocessClearToBatch } from './useDocuments'
 import type { ErrorRecord, ErrorStatus, ErrorType } from '@shared/types'
 
 // ============================================
@@ -236,15 +236,7 @@ async function requestReprocess({ errorId, fileId }: ReprocessParams): Promise<v
   batch.update(errorRef, { status: 'pending' })
 
   if (firstDoc) {
-    const docRef = doc(db, 'documents', firstDoc.id)
-    batch.update(docRef, {
-      status: 'pending',
-      ...getReprocessClearFields(),
-    })
-    batch.update(
-      doc(db, 'documents', firstDoc.id, 'detail', 'main'),
-      getReprocessDetailClearFields()
-    )
+    await appendReprocessClearToBatch(batch, firstDoc.id)
   }
   await batch.commit()
 }

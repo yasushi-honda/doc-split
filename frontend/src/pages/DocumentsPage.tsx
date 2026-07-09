@@ -51,7 +51,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { db } from '@/lib/firebase'
 import { callFunction } from '@/lib/callFunction'
 import { Checkbox } from '@/components/ui/checkbox'
-import { useInfiniteDocuments, useDocumentStats, useDocumentMasters, getReprocessClearFields, getReprocessDetailClearFields, type DocumentFilters, type SortField, type SortOrder } from '@/hooks/useDocuments'
+import { useInfiniteDocuments, useDocumentStats, useDocumentMasters, appendReprocessClearToBatch, type DocumentFilters, type SortField, type SortOrder } from '@/hooks/useDocuments'
 import { useCareManagers } from '@/hooks/useMasters'
 import { DateRangeFilter, type DateRange } from '@/components/DateRangeFilter'
 import { isCustomerConfirmed } from '@/hooks/useProcessingHistory'
@@ -478,15 +478,14 @@ export function DocumentsPage() {
 
   // 一括再処理
   // ADR-0018 Phase D PR4b (Issue #547): 親doc + detail/main を同一batchでクリア。
-  // 1docあたり2 update のため CHUNK_SIZE=250 で 500 ops = Firestore batch 上限ちょうど。
-  // 本ループに per-doc の書込を追加する場合は CHUNK_SIZE の引き下げが必須。
+  // CHUNK_SIZE=250 (最大500 update/チャンク) は保守値: Firestoreのbatch 500件hard limitは
+  // 2023年に撤廃済みだが、request payloadサイズ上限と部分成功の粒度(チャンク単位の
+  // 成否がユーザーに報告される)を考慮して据え置く。
   const handleBulkReprocess = useCallback(async () => {
     if (selectedIds.size === 0) return
 
     setIsBulkOperating(true)
     try {
-      const clearFields = getReprocessClearFields()
-      const detailClearFields = getReprocessDetailClearFields()
       const ids = Array.from(selectedIds)
       const CHUNK_SIZE = 250
       let succeededCount = 0
@@ -499,14 +498,8 @@ export function DocumentsPage() {
         // succeededCountの情報が失われるのを防ぐ)
         try {
           const batch = writeBatch(db)
-          for (const docId of chunk) {
-            const docRef = doc(db, 'documents', docId)
-            batch.update(docRef, {
-              status: 'pending',
-              ...clearFields,
-            })
-            batch.update(doc(db, 'documents', docId, 'detail', 'main'), detailClearFields)
-          }
+          // detail/main の存在確認(ヘルパー内のgetDoc)はチャンク内で並列実行
+          await Promise.all(chunk.map((docId) => appendReprocessClearToBatch(batch, docId)))
           await batch.commit()
           succeededCount += chunk.length
         } catch (chunkError) {

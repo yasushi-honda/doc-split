@@ -6,8 +6,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { deleteField } from 'firebase/firestore'
-import { Timestamp } from 'firebase/firestore'
+import { deleteField, Timestamp } from 'firebase/firestore'
 import { firestoreToDocument, normalizeSummary, getReprocessClearFields, getReprocessDetailClearFields } from '../useDocuments'
 
 describe('firestoreToDocument', () => {
