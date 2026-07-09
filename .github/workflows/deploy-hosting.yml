@@ -1,0 +1,68 @@
+name: Deploy Firebase Hosting
+
+# kanameone/cocoro は Firebase CLI ローカルログイン(systemkaname@kanameone.com等)が
+# 前提だが、セッション失効時にブラウザ再認証が必要でAI実行環境からは対応不能
+# (Issue #547 Phase D session110)。GitHub Actions経由ならSA鍵で完結できるため、
+# deploy-functions.yml と同じ SA 認証パターンで Hosting のみを対象に追加。
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment target'
+        required: true
+        default: 'kanameone'
+        type: choice
+        options:
+          - kanameone
+          - cocoro
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: ./frontend
+        run: npm run build
+        env:
+          VITE_FIREBASE_API_KEY: ${{ github.event.inputs.environment == 'kanameone' && secrets.VITE_FIREBASE_API_KEY_KANAMEONE || secrets.VITE_FIREBASE_API_KEY_COCORO }}
+          VITE_FIREBASE_AUTH_DOMAIN: ${{ github.event.inputs.environment == 'kanameone' && secrets.VITE_FIREBASE_AUTH_DOMAIN_KANAMEONE || secrets.VITE_FIREBASE_AUTH_DOMAIN_COCORO }}
+          VITE_FIREBASE_PROJECT_ID: ${{ github.event.inputs.environment == 'kanameone' && secrets.VITE_FIREBASE_PROJECT_ID_KANAMEONE || secrets.VITE_FIREBASE_PROJECT_ID_COCORO }}
+          VITE_FIREBASE_STORAGE_BUCKET: ${{ github.event.inputs.environment == 'kanameone' && secrets.VITE_FIREBASE_STORAGE_BUCKET_KANAMEONE || secrets.VITE_FIREBASE_STORAGE_BUCKET_COCORO }}
+          VITE_FIREBASE_MESSAGING_SENDER_ID: ${{ github.event.inputs.environment == 'kanameone' && secrets.VITE_FIREBASE_MESSAGING_SENDER_ID_KANAMEONE || secrets.VITE_FIREBASE_MESSAGING_SENDER_ID_COCORO }}
+          VITE_FIREBASE_APP_ID: ${{ github.event.inputs.environment == 'kanameone' && secrets.VITE_FIREBASE_APP_ID_KANAMEONE || secrets.VITE_FIREBASE_APP_ID_COCORO }}
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: |-
+            ${{ github.event.inputs.environment == 'kanameone' && secrets.GCP_SA_KEY_KANAMEONE ||
+                secrets.GCP_SA_KEY }}
+
+      - name: Install Firebase CLI
+        run: npm install -g firebase-tools
+
+      - name: Deploy to Firebase Hosting
+        run: firebase deploy --only hosting -P ${{ github.event.inputs.environment }} --force
+
+      - name: Notify deployment status
+        if: always()
+        run: |
+          if [ "${{ job.status }}" == 'success' ]; then
+            echo "✅ Deployment successful"
+          else
+            echo "❌ Deployment failed"
+          fi
