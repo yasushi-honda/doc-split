@@ -219,7 +219,7 @@ interface ReprocessParams {
   fileId: string
 }
 
-async function requestReprocess({ errorId, fileId }: ReprocessParams): Promise<void> {
+async function requestReprocess({ errorId, fileId }: ReprocessParams): Promise<{ documentId: string | null }> {
   // 対応するドキュメントを検索 (writeより先にread)
   const docsQuery = query(
     collection(db, 'documents'),
@@ -239,6 +239,7 @@ async function requestReprocess({ errorId, fileId }: ReprocessParams): Promise<v
     await appendReprocessClearToBatch(batch, firstDoc.id)
   }
   await batch.commit()
+  return { documentId: firstDoc?.id ?? null }
 }
 
 export function useReprocessError() {
@@ -246,10 +247,16 @@ export function useReprocessError() {
 
   return useMutation({
     mutationFn: requestReprocess,
-    onSuccess: () => {
+    onSuccess: ({ documentId }) => {
       queryClient.invalidateQueries({ queryKey: ['errors'] })
       queryClient.invalidateQueries({ queryKey: ['errorStats'] })
       queryClient.invalidateQueries({ queryKey: ['documentsInfinite'] })
+      // detail/main もクリア対象 (appendReprocessClearToBatch) のため、キャッシュ済み
+      // documentDetailが古いOCR内容を残さないよう無効化する (useDocuments.ts
+      // useReprocessDocument と同じ理由、Issue #547)
+      if (documentId) {
+        queryClient.invalidateQueries({ queryKey: ['documentDetail', documentId] })
+      }
     },
   })
 }

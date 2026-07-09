@@ -82,14 +82,16 @@ export function isCustomerConfirmed(doc: Document): boolean {
 }
 
 /**
- * OCR抜粋を取得（ocrResultUrl対応）
- * PRD: ocrResultUrl 対応（大容量OCR結果）
+ * OCR抜粋を取得。
+ *
+ * ADR-0018 Phase D (Issue #547): 参照元を `doc.ocrResult` から軽量抜粋フィールド
+ * `doc.ocrExcerpt` に切替。書込側 (`functions/src/ocr/ocrExcerpt.ts` の
+ * `buildOcrExcerpt()`) が Storage offload時のplaceholder文言込みで既に算出済みの
+ * ため、offload有無の分岐をここで再実装する必要はない(旧実装が同placeholder文言を
+ * 独自ハードコードしていた既知の結合を解消 — ocrExcerpt.ts docコメント参照)。
  */
 export function getOcrExcerpt(doc: Document): string {
-  if (doc.ocrResultUrl && !doc.ocrResult) {
-    return '（OCR結果はCloud Storageに保存されています）';
-  }
-  return doc.ocrResult?.slice(0, 200) || '';
+  return doc.ocrExcerpt ?? '';
 }
 
 /**

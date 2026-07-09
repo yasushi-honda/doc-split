@@ -9,13 +9,10 @@
  *
  * Storage offload済み (ocrResultUrl セット時) は既存の placeholder 文言をそのまま格納する。
  *
- * ⚠️ 既知の結合 (review B2指摘、Phase Dで解消予定):
- * frontend/src/hooks/useProcessingHistory.ts の getOcrExcerpt() が同じ placeholder
- * 文言を独自にハードコードしている (frontend は functions/src を import できない)。
- * OCR_EXCERPT_OFFLOADED_PLACEHOLDER の文言を変更する場合は frontend 側も同時に
- * 変更しないと、Phase D (frontend が保存済み ocrExcerpt を読む切替) 後に
- * offload済みdocと fallback 経路で表示文言が乖離する。Phase D の実装時に
- * shared/ への定数移設または getOcrExcerpt() の置換で結合自体を解消すること。
+ * 解消済み (review B2指摘、Phase D PR-D3で対応): frontend/src/hooks/useProcessingHistory.ts
+ * の getOcrExcerpt() は同 placeholder 文言を独自ハードコードしていたが、Phase D で
+ * `doc.ocrExcerpt`(本ヘルパーが書込済みの値)をそのまま返すだけに置換し、結合を解消した。
+ * OCR_EXCERPT_OFFLOADED_PLACEHOLDER の文言を変更する場合、書込側は本ファイルのみで完結する。
  */
 
 export const OCR_EXCERPT_MAX_LENGTH = 200;

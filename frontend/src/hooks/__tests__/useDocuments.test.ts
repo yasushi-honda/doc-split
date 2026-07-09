@@ -7,7 +7,15 @@
 
 import { describe, it, expect } from 'vitest'
 import { deleteField, Timestamp } from 'firebase/firestore'
-import { firestoreToDocument, normalizeSummary, getReprocessClearFields, getReprocessDetailClearFields } from '../useDocuments'
+import {
+  firestoreToDocument,
+  normalizeSummary,
+  getReprocessClearFields,
+  getReprocessDetailClearFields,
+  resolveDetailFields,
+  applySearchTextFilter,
+} from '../useDocuments'
+import type { Document } from '@shared/types'
 
 describe('firestoreToDocument', () => {
   // 基本フィールドのモックデータ
@@ -493,5 +501,82 @@ describe('getReprocessDetailClearFields (ADR-0018 Phase D PR4b, Issue #547)', ()
     // 値の上書きとして permission-denied になる
     expect(deleteField().isEqual(fields.ocrResult)).toBe(true)
     expect(deleteField().isEqual(fields.pageResults)).toBe(true)
+  })
+})
+
+describe('resolveDetailFields (ADR-0018 Phase D PR-D3, Issue #547 — FE版、BE resolveDetailFields とペア不変条件)', () => {
+  it('detail優先: detailに両フィールドがあれば親の値は使わない', () => {
+    const r = resolveDetailFields(
+      { ocrResult: 'detail-text', pageResults: [{ pageNumber: 1 }] as Document['pageResults'] },
+      { ocrResult: 'parent-text', pageResults: [{ pageNumber: 99 }] as Document['pageResults'] }
+    )
+    expect(r.ocrResult).toBe('detail-text')
+    expect(r.pageResults).toEqual([{ pageNumber: 1 }])
+  })
+
+  it('親フォールバック: detail不在(undefined)なら親の値を使う', () => {
+    const r = resolveDetailFields(undefined, {
+      ocrResult: 'parent-text',
+      pageResults: [{ pageNumber: 2 }] as Document['pageResults'],
+    })
+    expect(r.ocrResult).toBe('parent-text')
+    expect(r.pageResults).toEqual([{ pageNumber: 2 }])
+  })
+
+  it('フィールド単位フォールバック: detail存在・フィールド不在(reprocess-clear後)は親を参照', () => {
+    const r = resolveDetailFields({}, { ocrResult: 'parent-text', pageResults: [] })
+    expect(r.ocrResult).toBe('parent-text')
+    expect(r.pageResults).toEqual([])
+  })
+
+  it("detailのocrResult=''は有効値(Storage offload済み): 親へフォールバックしない", () => {
+    const r = resolveDetailFields({ ocrResult: '' }, { ocrResult: 'stale-parent-text' })
+    expect(r.ocrResult).toBe('')
+  })
+
+  it('親がnull(loading中): detail優先値のみで解決する', () => {
+    const r = resolveDetailFields({ ocrResult: 'detail-text' }, null)
+    expect(r.ocrResult).toBe('detail-text')
+  })
+
+  it('両方欠落: フィールドはundefined(捏造しない、Phase E後の想定挙動)', () => {
+    const r = resolveDetailFields(undefined, undefined)
+    expect(r.ocrResult).toBeUndefined()
+    expect(r.pageResults).toBeUndefined()
+  })
+
+  it('空配列のpageResultsは有効値: 親へフォールバックしない', () => {
+    const r = resolveDetailFields(
+      { pageResults: [] },
+      { ocrResult: 'parent-text', pageResults: [{ pageNumber: 1 }] as Document['pageResults'] }
+    )
+    expect(r.pageResults).toEqual([])
+  })
+})
+
+describe('applySearchTextFilter (ADR-0018 Phase D、Issue #547: ocrResult条件除去)', () => {
+  const docs = [
+    { fileName: 'invoice.pdf', customerName: '山田太郎', documentType: '請求書' },
+    { fileName: 'careplan.pdf', customerName: '佐藤花子', documentType: 'ケアプラン' },
+  ] as Document[]
+
+  it('searchText未指定なら全件そのまま返す', () => {
+    expect(applySearchTextFilter(docs, undefined)).toEqual(docs)
+  })
+
+  it('fileName / customerName / documentType の部分一致でフィルタする', () => {
+    expect(applySearchTextFilter(docs, '山田')).toEqual([docs[0]])
+    expect(applySearchTextFilter(docs, 'ケアプラン')).toEqual([docs[1]])
+    expect(applySearchTextFilter(docs, 'invoice')).toEqual([docs[0]])
+  })
+
+  it('ocrResultがundefinedでも例外を投げない (Phase E後、本体からocrResultが削除された状態を再現)', () => {
+    const docsWithoutOcrResult = docs.map((d) => {
+      const withoutOcr = { ...d } as unknown as Record<string, unknown>
+      delete withoutOcr.ocrResult
+      return withoutOcr as unknown as Document
+    })
+    expect(() => applySearchTextFilter(docsWithoutOcrResult, '山田')).not.toThrow()
+    expect(applySearchTextFilter(docsWithoutOcrResult, '山田')).toEqual([docsWithoutOcrResult[0]])
   })
 })

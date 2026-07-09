@@ -514,12 +514,21 @@ export function DocumentsPage() {
       queryClient.invalidateQueries({ queryKey: ['documentStats'] })
       setBulkOperation(null)
 
+      // detail/main もクリア対象 (appendReprocessClearToBatch) のため、成功分の
+      // documentDetailキャッシュを無効化する (useDocuments.ts useReprocessDocument
+      // と同じ理由、Issue #547) — DocumentDetailModalを開いていた文書が対象に
+      // 含まれる場合、古いOCR内容が残存するのを防ぐ
+      const succeededIds = ids.slice(0, succeededCount)
+      succeededIds.forEach((docId) => {
+        queryClient.invalidateQueries({ queryKey: ['documentDetail', docId] })
+      })
+
       if (chunkFailed) {
         // Codexレビュー指摘: 成功済みチャンクのIDは選択から除外する。残すと
         // 既にpending化済みの文書が再試行対象に残り、進行中のOCRと重複/競合しうる。
         // 失敗+未処理分のみ選択に残し、ユーザーがその分だけ再試行できるようにする。
-        const succeededIds = new Set(ids.slice(0, succeededCount))
-        setSelectedIds(prev => new Set([...prev].filter(id => !succeededIds.has(id))))
+        const succeededIdSet = new Set(succeededIds)
+        setSelectedIds(prev => new Set([...prev].filter(id => !succeededIdSet.has(id))))
         toast.error(`一括再処理が途中で失敗しました（${succeededCount}/${ids.length}件完了）`)
       } else {
         clearSelection()
