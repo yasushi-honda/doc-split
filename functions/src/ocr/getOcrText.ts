@@ -9,7 +9,7 @@
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { getStorage } from 'firebase-admin/storage';
 import { getFirestore } from 'firebase-admin/firestore';
-import { resolveDetailFields } from './documentDetail';
+import { resolveDetailFields, readDocWithDetail } from './documentDetail';
 
 /**
  * OCR全文取得 Callable Function
@@ -35,17 +35,15 @@ export const getOcrText = onCall(
     }
 
     // 2. ドキュメント取得・存在確認
-    // ADR-0018 Phase D (#5): 親 + detail/main を read-only transaction の
-    // tx.getAll で同一スナップショットとして読む。独立した2回の get() だと
-    // dual-write 中の別処理が間に commit した場合、「新しい親(ocrResultUrlセット済み)」
-    // +「古い detail(ocrResult空)」のような不整合な組合せを読みうる
+    // ADR-0018 Phase D (#5): 親 + detail/main の transactional paired-read
+    // (不整合な組合せ防止の根拠は readDocWithDetail の doc comment 参照)。
+    // fieldMask で pageResults 等の重量フィールドの転送を抑止
     const db = getFirestore();
     const docRef = db.doc(`documents/${documentId}`);
-    const detailRef = docRef.collection('detail').doc('main');
-    const [docSnap, detailSnap] = await db.runTransaction(
-      async (tx) => tx.getAll(docRef, detailRef),
-      { readOnly: true }
-    );
+    const [docSnap, detailSnap] = await readDocWithDetail(db, docRef, [
+      'ocrResult',
+      'ocrResultUrl',
+    ]);
     if (!docSnap.exists) {
       throw new HttpsError('not-found', 'Document not found');
     }

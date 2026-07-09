@@ -12,7 +12,7 @@ import { safeLogError } from '../utils/errorLogger';
 import type { SummaryField } from '../../../shared/types';
 import { buildSummaryFields } from './summaryRequestBuilder';
 import { generateSummaryCore, MIN_OCR_LENGTH_FOR_SUMMARY } from './summaryGenerator';
-import { resolveDetailFields } from './documentDetail';
+import { resolveDetailFields, readDocWithDetail } from './documentDetail';
 
 const LOCATION = GCP_CONFIG.location;
 
@@ -49,14 +49,14 @@ export const regenerateSummary = functions.https.onCall(
     }
 
     // ドキュメント取得
-    // ADR-0018 Phase D (#6): getOcrText と同じ transactional paired-read で
-    // 親 + detail/main を同一スナップショットとして読む(不整合な組合せの防止)
+    // ADR-0018 Phase D (#6): getOcrText と同じ transactional paired-read
+    // (根拠は readDocWithDetail の doc comment 参照)。fieldMask で転送を要約に必要な
+    // フィールドに限定
     const docRef = db.doc(`documents/${docId}`);
-    const detailRef = docRef.collection('detail').doc('main');
-    const [docSnap, detailSnap] = await db.runTransaction(
-      async (tx) => tx.getAll(docRef, detailRef),
-      { readOnly: true }
-    );
+    const [docSnap, detailSnap] = await readDocWithDetail(db, docRef, [
+      'ocrResult',
+      'documentType',
+    ]);
 
     if (!docSnap.exists) {
       throw new functions.https.HttpsError('not-found', 'ドキュメントが見つかりません');
