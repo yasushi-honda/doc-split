@@ -414,6 +414,9 @@ export function useReprocessDocument() {
         verified: false,
       })
       queryClient.invalidateQueries({ queryKey: ['document', documentId] })
+      // detail/main もクリア対象 (appendReprocessClearToBatch) のため、キャッシュ済み
+      // detailの古いOCR内容がポーリング再開(3秒後)まで表示され続けるのを防ぐ
+      queryClient.invalidateQueries({ queryKey: ['documentDetail', documentId] })
       queryClient.invalidateQueries({ queryKey: ['documentsInfinite'] })
       queryClient.invalidateQueries({ queryKey: ['groupDocuments'] })
       queryClient.invalidateQueries({ queryKey: ['documentGroups'] })
@@ -434,6 +437,26 @@ export function useReprocessDocument() {
 // ============================================
 // 書類一覧取得
 // ============================================
+
+/**
+ * ファイル名/顧客名/書類種別のクライアントサイド検索（一覧取得後の後処理）
+ *
+ * ADR-0018 Phase D (Issue #547): `doc.ocrResult` 条件は除外する。一覧クエリは
+ * `ocrResult`/`pageResults` を含まない軽量化がPhase Dの趣旨であり、Phase E完了後は
+ * 本体から `ocrResult` フィールド自体が削除されるため `.toLowerCase()` が undefined
+ * 呼出で例外を投げる。OCR全文検索という機能自体の要否は本ADRのスコープ外
+ * (decision-maker確認事項、ADR-0018 書込・読込箇所表 #12参照)。
+ */
+export function applySearchTextFilter(documents: Document[], searchText: string | undefined): Document[] {
+  if (!searchText) return documents
+  const searchLower = searchText.toLowerCase()
+  return documents.filter(
+    (doc) =>
+      doc.fileName.toLowerCase().includes(searchLower) ||
+      doc.customerName.toLowerCase().includes(searchLower) ||
+      doc.documentType.toLowerCase().includes(searchLower)
+  )
+}
 
 async function fetchDocuments(
   filters: DocumentFilters,
@@ -493,21 +516,8 @@ async function fetchDocuments(
     lastDoc = docSnap
   })
 
-  // テキスト検索（クライアントサイド）
-  let filtered = documents
-  if (filters.searchText) {
-    const searchLower = filters.searchText.toLowerCase()
-    filtered = documents.filter(
-      (doc) =>
-        doc.fileName.toLowerCase().includes(searchLower) ||
-        doc.customerName.toLowerCase().includes(searchLower) ||
-        doc.documentType.toLowerCase().includes(searchLower) ||
-        doc.ocrResult.toLowerCase().includes(searchLower)
-    )
-  }
-
   return {
-    documents: filtered,
+    documents: applySearchTextFilter(documents, filters.searchText),
     lastDoc,
     hasMore: snapshot.docs.length > pageSize,
   }
@@ -569,6 +579,73 @@ export function useDocument(documentId: string | null) {
       }
       return false
     },
+  })
+}
+
+// ============================================
+// 書類詳細(detail/main)取得 — オンデマンド (ADR-0018 Phase D PR-D3、Issue #547)
+// ============================================
+
+export interface DocumentDetailFields {
+  ocrResult?: string
+  pageResults?: Document['pageResults']
+}
+
+async function fetchDocumentDetail(documentId: string): Promise<DocumentDetailFields> {
+  const detailSnap = await getDoc(doc(db, 'documents', documentId, 'detail', 'main'))
+  if (!detailSnap.exists()) return {}
+  const data = detailSnap.data()
+  return {
+    ocrResult: data.ocrResult as string | undefined,
+    pageResults: data.pageResults as Document['pageResults'],
+  }
+}
+
+/**
+ * detail優先 + 親フォールバックで dual-read を解決する (ADR-0018 Phase D)。
+ * Functions側 `resolveDetailFields` (functions/src/ocr/documentDetail.ts) のFE版
+ * ペア不変条件: 両実装は同一のフィールド単位フォールバック規則を維持する。
+ *
+ * フィールド単位で判定し型が合う値のみ採用する(FE reprocess-clear (PR-D1 #598) は
+ * detailのocrResult/pageResultsのみdeleteFieldで消すため、「detail doc は存在するが
+ * フィールド不在」の形がある)。detailの ocrResult=''/pageResults=[] は有効値として
+ * そのまま返す(親へフォールバックしない — offload doc の真値は ''+ocrResultUrl)。
+ */
+export function resolveDetailFields(
+  detail: DocumentDetailFields | undefined,
+  parent: Pick<Document, 'ocrResult' | 'pageResults'> | undefined | null
+): DocumentDetailFields {
+  const resolved: DocumentDetailFields = {}
+  if (typeof detail?.ocrResult === 'string') {
+    resolved.ocrResult = detail.ocrResult
+  } else if (typeof parent?.ocrResult === 'string') {
+    resolved.ocrResult = parent.ocrResult
+  }
+  if (Array.isArray(detail?.pageResults)) {
+    resolved.pageResults = detail.pageResults
+  } else if (Array.isArray(parent?.pageResults)) {
+    resolved.pageResults = parent.pageResults
+  }
+  return resolved
+}
+
+/**
+ * documents/{id}/detail/main のオンデマンド取得。一覧・処理履歴では呼ばない
+ * (egress削減がPhase Dの趣旨) — DocumentDetailModal/PdfSplitModal が開いている
+ * 間のみ `enabled` で取得する。`status` はOCR処理中(pending/processing)の間
+ * useDocument と同じ3秒間隔でポーリングするために親から渡す。
+ */
+export function useDocumentDetail(
+  documentId: string | null,
+  options: { enabled: boolean; status?: DocumentStatus }
+) {
+  return useQuery({
+    queryKey: ['documentDetail', documentId],
+    queryFn: () => fetchDocumentDetail(documentId as string),
+    enabled: options.enabled && !!documentId,
+    staleTime: 30000,
+    refetchInterval: () =>
+      options.status === 'pending' || options.status === 'processing' ? 3000 : false,
   })
 }
 

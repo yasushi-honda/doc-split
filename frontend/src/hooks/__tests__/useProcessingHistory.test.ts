@@ -19,6 +19,7 @@ import {
   isCustomerConfirmed,
   normalizeCandidate,
   applyConfirmedFilter,
+  getOcrExcerpt,
 } from '../useProcessingHistory';
 import { firestoreToDocument } from '../useDocuments';
 import type { Document } from '@shared/types';
@@ -193,5 +194,32 @@ describe('firestoreToDocument → isCustomerConfirmed 統合 (#273)', () => {
   it('Phase 6 以前データ (両フィールド欠落) → isCustomerConfirmed: true (デフォルト)', () => {
     const doc = firestoreToDocument('d3', baseData);
     expect(isCustomerConfirmed(doc)).to.equal(true);
+  });
+});
+
+describe('getOcrExcerpt (ADR-0018 Phase D、Issue #547: 参照元を doc.ocrResult → doc.ocrExcerpt に切替)', () => {
+  it('ocrExcerpt が設定されていればそのまま返す (書込側 buildOcrExcerpt が算出済みの値)', () => {
+    const doc = makeDoc({ ocrExcerpt: '先頭200字の抜粋...' });
+    expect(getOcrExcerpt(doc)).to.equal('先頭200字の抜粋...');
+  });
+
+  it('Storage offload済み (ocrResultUrl セット時) は書込側で格納済みのplaceholder文言をそのまま返す', () => {
+    const doc = makeDoc({
+      ocrResultUrl: 'gs://bucket/large-ocr.txt',
+      ocrExcerpt: '（OCR結果はCloud Storageに保存されています）',
+    });
+    expect(getOcrExcerpt(doc)).to.equal('（OCR結果はCloud Storageに保存されています）');
+  });
+
+  it('ocrExcerpt 未設定 (pending中 / backfill未実施) は空文字を返す (旧 doc.ocrResult は参照しない)', () => {
+    const doc = makeDoc({ ocrResult: '本文が親にだけ残っている旧データ' });
+    expect(getOcrExcerpt(doc)).to.equal('');
+  });
+
+  it('ocrResult が undefined (Phase E後を想定) でも例外を投げない', () => {
+    const doc = makeDoc({ ocrExcerpt: '抜粋' });
+    delete (doc as { ocrResult?: string }).ocrResult;
+    expect(() => getOcrExcerpt(doc)).not.toThrow();
+    expect(getOcrExcerpt(doc)).to.equal('抜粋');
   });
 });

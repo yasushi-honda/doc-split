@@ -38,6 +38,12 @@ export interface Document {
   fileName: string;
   displayFileName?: string;
   mimeType: string;
+  /**
+   * @deprecated ADR-0018 (Issue #547) Phase D: 読込は `documents/{id}/detail/main`
+   * (`fetchDocumentDetail`/`resolveDetailFields`、`frontend/src/hooks/useDocuments.ts`)
+   * に切替済み。本フィールドは書込互換のためPhase E完了まで残置するのみで、Phase E後は
+   * 本体から削除され常に空文字列になる。新規コードはこのフィールドを直接参照しないこと。
+   */
   ocrResult: string;
   ocrResultUrl?: string; // 長い場合はCloud Storage参照
   /**
@@ -63,7 +69,13 @@ export interface Document {
   careManager?: string;
   category?: string;
 
-  // ページ単位OCR結果（PDF分割用）
+  /**
+   * ページ単位OCR結果（PDF分割用）
+   * @deprecated ADR-0018 (Issue #547) Phase D: 読込は `documents/{id}/detail/main`
+   * (`fetchDocumentDetail`/`resolveDetailFields`、`frontend/src/hooks/useDocuments.ts`)
+   * に切替済み。本フィールドは書込互換のためPhase E完了まで残置するのみ。新規コードは
+   * このフィールドを直接参照せず、`useDocumentDetail`/`resolveDetailFields` 経由で取得すること。
+   */
   pageResults?: PageOcrResult[];
   splitSuggestions?: SplitSuggestion[];
   pageRotations?: PageRotation[];

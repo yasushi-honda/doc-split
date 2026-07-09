@@ -54,9 +54,25 @@ describe('reprocess-clear detail/main 配線契約 (ADR-0018 PR4b)', () => {
   })
 
   it("ヘルパーの外に detail/main への書込配線が存在しない (経路追加時のクリア漏れ・rules違反の値設定を構造的に防ぐ)", () => {
-    // useDocuments.ts では appendReprocessClearToBatch 内の1箇所のみ許可
+    // useDocuments.ts の detail/main パス構築は
+    // 書込ヘルパー(appendReprocessClearToBatch)1箇所 + 読取ヘルパー(fetchDocumentDetail,
+    // ADR-0018 Phase D PR-D3)1箇所の計2箇所のみ許可。読取ヘルパーはgetDoc専用で
+    // batch.update/setを一切行わないことを個別に検証し、「書込は1箇所のみ」という
+    // 本テストの核心不変条件を維持する。
     const detailPathCount = [...useDocumentsSrc.matchAll(/'detail', 'main'/g)].length
-    expect(detailPathCount, 'useDocuments.ts の detail/main パス構築はヘルパー内の1箇所のみ').toBe(1)
+    expect(detailPathCount, 'useDocuments.ts の detail/main パス構築は書込ヘルパー1箇所+読取ヘルパー1箇所の計2箇所のみ').toBe(2)
+
+    const readHelper = useDocumentsSrc.match(/async function fetchDocumentDetail[\s\S]*?\n\}/)
+    expect(readHelper, 'fetchDocumentDetail が定義されていること').not.toBeNull()
+    expect(readHelper![0]).toMatch(/doc\(db, 'documents', documentId, 'detail', 'main'\)/)
+    expect(readHelper![0]).toMatch(/getDoc\(/)
+    expect(readHelper![0]).not.toMatch(/batch\.(update|set)/)
+
+    // batch.update(detailRef, ...) による detail/main 書込は appendReprocessClearToBatch
+    // 内の1箇所のみ (書込ヘルパー外からの書込混入を構造的に防ぐ、本テストの核心不変条件)
+    const batchWriteToDetail = [...useDocumentsSrc.matchAll(/batch\.(update|set)\(detailRef/g)]
+    expect(batchWriteToDetail.length, 'batch.update(detailRef, ...) はappendReprocessClearToBatch内の1箇所のみ').toBe(1)
+
     // 他2ファイルは detail/main パスを直接構築しない (全てヘルパー委譲)。
     // テンプレート文字列パス (`documents/${id}/detail/main`) や collection(ref, 'detail')
     // による迂回も含めて検出するため、引用符種を問わない緩い regex で網を張る

@@ -30,7 +30,7 @@ import { PdfViewer } from '@/components/PdfViewer'
 import { PdfSplitModal } from '@/components/PdfSplitModal'
 import { MasterSelectField } from '@/components/MasterSelectField'
 import { ExtractionInfoPopover } from '@/components/ExtractionInfoPopover'
-import { useDocument, useReprocessDocument } from '@/hooks/useDocuments'
+import { useDocument, useDocumentDetail, useReprocessDocument, resolveDetailFields } from '@/hooks/useDocuments'
 import { useDocumentEdit } from '@/hooks/useDocumentEdit'
 import { useCustomers, useOffices, useDocumentTypes, useCareManagers } from '@/hooks/useMasters'
 import { useMasterAlias } from '@/hooks/useMasterAlias'
@@ -348,6 +348,13 @@ function EditableMetaRow({
 
 export function DocumentDetailModal({ documentId, open, onOpenChange }: DocumentDetailModalProps) {
   const { data: document, isLoading, isError, error, refetch } = useDocument(documentId)
+  // オンデマンドdetail取得 (ADR-0018 Phase D PR-D3、Issue #547): モーダルが開いている
+  // 間のみ documents/{id}/detail/main を読む。一覧・処理履歴では読まない(egress削減)
+  const { data: detailFields } = useDocumentDetail(documentId, {
+    enabled: open,
+    status: document?.status,
+  })
+  const resolved = resolveDetailFields(detailFields, document)
   const [isSplitModalOpen, setIsSplitModalOpen] = useState(false)
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null)
   const [urlLoading, setUrlLoading] = useState(false)
@@ -374,6 +381,23 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
 
   const queryClient = useQueryClient()
   const { isAdmin } = useAuthStore()
+
+  // useDocument(3秒ポーリング)とuseDocumentDetail(同じく3秒だが独立タイマー)は
+  // 非同期のため、OCR完了(status: pending/processing → 確定)を親側のpollが先に
+  // 観測した場合、detail側は「もうpending/processingではない」と判定してポーリングを
+  // 止めてしまい、直前の(完了直前の)古いdetailで固定されるレースがありうる。
+  // 状態遷移を検知した時点で1回だけdetailを明示的に再取得し、この窓を閉じる。
+  const prevStatusRef = useRef<DocumentStatus | undefined>(undefined)
+  useEffect(() => {
+    const prevStatus = prevStatusRef.current
+    const currentStatus = document?.status
+    const wasInFlight = prevStatus === 'pending' || prevStatus === 'processing'
+    const isSettled = currentStatus !== undefined && currentStatus !== 'pending' && currentStatus !== 'processing'
+    if (wasInFlight && isSettled) {
+      queryClient.invalidateQueries({ queryKey: ['documentDetail', documentId] })
+    }
+    prevStatusRef.current = currentStatus
+  }, [document?.status, documentId, queryClient])
 
   // 確認ステータス管理（楽観的更新で即時反映）
   const {
@@ -694,6 +718,10 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
     document.totalPages > 1 &&
     document.mimeType === 'application/pdf' &&
     document.status === 'processed'
+
+  // PdfSplitModal は pageResults を分割プレビュー生成に使うため、detail優先の
+  // 解決値で上書きして渡す (ADR-0018 Phase D PR-D3)
+  const documentForSplit = document ? { ...document, pageResults: resolved.pageResults } : document
 
   // 閉じる時のハンドラ（編集中または未確認の場合はダイアログを表示）
   const handleOpenChange = (newOpen: boolean) => {
@@ -1374,7 +1402,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                           <div className="text-sm text-gray-700 leading-relaxed">
                             {document.summary.text}
                           </div>
-                        ) : document.ocrResult && document.ocrResult.length >= 100 ? (
+                        ) : resolved.ocrResult && resolved.ocrResult.length >= 100 ? (
                           <Button
                             variant="outline"
                             size="sm"
@@ -1414,9 +1442,9 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                       <span className="flex items-center gap-2 text-xs font-medium text-gray-700">
                         <FileText className="h-3.5 w-3.5 text-slate-500" />
                         OCR結果
-                        {document.ocrResult && (
+                        {resolved.ocrResult && (
                           <span className="text-[10px] text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded">
-                            {document.ocrResult.length.toLocaleString()}文字
+                            {resolved.ocrResult.length.toLocaleString()}文字
                           </span>
                         )}
                       </span>
@@ -1425,7 +1453,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                     {expandedSection === 'ocr' && (
                       <div className="p-3 overflow-y-auto max-h-[220px] bg-white border-t border-gray-100">
                         <div className="text-xs text-gray-600 whitespace-pre-wrap font-mono leading-relaxed">
-                          {document.ocrResult || 'OCR結果なし'}
+                          {resolved.ocrResult || 'OCR結果なし'}
                         </div>
                       </div>
                     )}
@@ -1479,9 +1507,9 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
       </DialogContent>
 
       {/* PDF分割モーダル */}
-      {document && (
+      {documentForSplit && (
         <PdfSplitModal
-          document={document}
+          document={documentForSplit}
           isOpen={isSplitModalOpen}
           onClose={() => setIsSplitModalOpen(false)}
           onSuccess={handleSplitSuccess}
@@ -1493,7 +1521,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
     {mobilePopup && document && (
       <MobileContentPopup
         type={mobilePopup}
-        document={document}
+        document={{ summary: document.summary, ocrResult: resolved.ocrResult }}
         onClose={() => setMobilePopup(null)}
         onGenerateSummary={handleGenerateSummary}
         isGeneratingSummary={isGeneratingSummary}
