@@ -481,8 +481,12 @@ async function main() {
     // FEクリア後のフィールド不在はundefinedとして扱う)。
     const detailSnap = await docSnap.ref.collection('detail').doc('main').get();
     const detailData = detailSnap.exists ? detailSnap.data() : undefined;
-    const ocrText = typeof detailData?.ocrResult === 'string' ? detailData.ocrResult : (doc.ocrResult || '');
-    const pageResults = Array.isArray(detailData?.pageResults) ? detailData.pageResults : (doc.pageResults || []);
+    const ocrText = typeof detailData?.ocrResult === 'string'
+      ? detailData.ocrResult
+      : (typeof doc.ocrResult === 'string' ? doc.ocrResult : '');
+    const pageResults = Array.isArray(detailData?.pageResults)
+      ? detailData.pageResults
+      : (Array.isArray(doc.pageResults) ? doc.pageResults : []);
 
     // OCR結果がない場合はスキップ
     if (!ocrText) {

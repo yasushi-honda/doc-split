@@ -63,7 +63,9 @@ async function main(): Promise<void> {
   // functions/src/ocr/documentDetail.ts と同じフィールド単位フォールバック規則。
   const detailSnap = await db.doc(`documents/${docId}/detail/main`).get();
   const detailData = detailSnap.exists ? detailSnap.data() : undefined;
-  const ocrResult: string = typeof detailData?.ocrResult === 'string' ? detailData.ocrResult : (data.ocrResult || '');
+  const ocrResult: string = typeof detailData?.ocrResult === 'string'
+    ? detailData.ocrResult
+    : (typeof data.ocrResult === 'string' ? data.ocrResult : '');
   const documentType: string = data.documentType || '';
 
   console.log(`対象文書: ${docId}`);

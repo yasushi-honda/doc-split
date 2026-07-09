@@ -6,9 +6,15 @@
  * ocrResult/pageResults を読む」配線をソース文字列レベルで lock-in する。
  *
  * AC9 (Phase E 前提ゲート): 本テストがPASSする = scripts/ 配下に、既知の許可リスト
- * (backfill移行元データ/診断比較/fixture投入の3カテゴリ)以外で親 ocrResult/pageResults を
+ * (backfill移行元データ/診断比較/計測/fixture投入の4カテゴリ)以外で親 ocrResult/pageResults を
  * 直接参照する「読者」が存在しないことを保証する。1読者でも切替が漏れると、Phase E
  * (親からの実フィールド削除) 後にその読者が空データを受け取り、silent な機能停止が起きる。
+ *
+ * 検出パターンは `.ocrResult`/`.pageResults` のドット参照だけでなく、`'ocrResult'`/
+ * `'pageResults'` の文字列リテラル参照(ブラケット記法 `d[field]` や配列経由の動的
+ * アクセス)も対象に含める(Codexレビュー指摘: measure-field-byte-sizes.js が
+ * `HEAVY_FIELDS` 配列経由の `d[field]` でこれらのフィールドを読んでおり、ドット
+ * 参照のみの検出だと見逃す)。
  */
 
 import assert from 'node:assert/strict';
@@ -38,6 +44,10 @@ const ALLOWLIST = new Set([
   'lib/backfillDetailHelpers.ts',
   // #548 一時的診断スクリプト: 親/detailの値を意図的に比較するのが目的(実行済み、再利用予定なし)
   'diagnose-confirmed-replay-sampling.ts',
+  // Issue #547着手前の事前計測スクリプト(ADR-0018 Context節に実測値の出典として記載、PR #555)。
+  // 移行前の親docの重フィールドのバイトサイズ分布を測るのが目的そのもののため、
+  // detail優先化すると計測対象(移行前の親doc実態)を失い本来の目的と矛盾する。read-only。
+  'measure-field-byte-sizes.js',
   // PR-D4で detail優先+親フォールバックに切替済み(下記テストで個別に配線確認する対象そのもの)
   'reprocess-master-matching.js',
   'measure-summary-cost.ts',
@@ -66,11 +76,11 @@ test('reprocess-master-matching.js: detail優先 + 親フォールバックでoc
   );
   assert.match(
     reprocessMasterMatchingSrc,
-    /typeof detailData\?\.ocrResult === 'string' \? detailData\.ocrResult : \(doc\.ocrResult \|\| ''\)/
+    /typeof detailData\?\.ocrResult === 'string'\s*\n\s*\? detailData\.ocrResult\s*\n\s*: \(typeof doc\.ocrResult === 'string' \? doc\.ocrResult : ''\)/
   );
   assert.match(
     reprocessMasterMatchingSrc,
-    /Array\.isArray\(detailData\?\.pageResults\) \? detailData\.pageResults : \(doc\.pageResults \|\| \[\]\)/
+    /Array\.isArray\(detailData\?\.pageResults\)\s*\n\s*\? detailData\.pageResults\s*\n\s*: \(Array\.isArray\(doc\.pageResults\) \? doc\.pageResults : \[\]\)/
   );
   // 旧経路 (detail解決なしの直接ocrResult参照によるスキップ判定) が残っていないこと
   assert.doesNotMatch(reprocessMasterMatchingSrc, /if \(!doc\.ocrResult\) \{/);
@@ -80,18 +90,19 @@ test('measure-summary-cost.ts: detail優先 + 親フォールバックでocrResu
   assert.match(measureSummaryCostSrc, /db\.doc\(`documents\/\$\{docId\}\/detail\/main`\)\.get\(\)/);
   assert.match(
     measureSummaryCostSrc,
-    /typeof detailData\?\.ocrResult === 'string' \? detailData\.ocrResult : \(data\.ocrResult \|\| ''\)/
+    /typeof detailData\?\.ocrResult === 'string'\s*\n\s*\? detailData\.ocrResult\s*\n\s*: \(typeof data\.ocrResult === 'string' \? data\.ocrResult : ''\)/
   );
 });
 
 test('AC9 (Phase E前提ゲート): scripts/ 配下に許可リスト外で親ocrResult/pageResultsを直接参照するファイルが存在しない', () => {
   const allFiles = walkSourceFiles(scriptsDir);
   const violations: string[] = [];
+  const detectionPattern = /\.ocrResult\b|\.pageResults\b|'ocrResult'|"ocrResult"|'pageResults'|"pageResults"/;
   for (const file of allFiles) {
     const rel = relative(scriptsDir, file).split('\\').join('/');
     if (ALLOWLIST.has(rel)) continue;
     const src = readFileSync(file, 'utf-8');
-    if (/\.ocrResult\b/.test(src) || /\.pageResults\b/.test(src)) {
+    if (detectionPattern.test(src)) {
       violations.push(rel);
     }
   }
