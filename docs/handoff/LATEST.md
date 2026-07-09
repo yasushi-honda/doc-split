@@ -1,6 +1,26 @@
 # ハンドオフメモ
 
-**更新日**: 2026-07-09 session108（✅ **#547 Phase C全環境完遂 + #548本番展開→close + Phase D計画承認+PR-D1/D2マージ**。詳細は下記session108サマリ参照）
+**更新日**: 2026-07-09 session109（✅ **#547 Phase D PR-D3(#601)/PR-D4(#602)実装+マージ完遂、Phase D実装フェーズ完了**。詳細は下記session109サマリ参照）
+
+## session109 サマリ（2026-07-09、#547 Phase D PR-D3/PR-D4完遂）
+
+ユーザー指示「ゴール目指して進めてください」を受け、中断点だったPR-D2 dev実機確認から着手し、Phase D残タスク（PR-D3/PR-D4）を完遂。
+
+- **PR-D2 dev実機確認**: Playwright MCPでdoc-split-dev環境の要約再生成/PDF分割候補表示/処理履歴OCR抜粋を確認、コンソールエラー0件で中断点解消。
+- **PR-D3 (#601) FE読者切替**:
+  - `fetchDocumentDetail`/`resolveDetailFields`/`useDocumentDetail`新設（`functions/src/ocr/documentDetail.ts`のFE版、detail優先+親フォールバック）。DocumentDetailModal/PdfSplitModalをdetail/mainのオンデマンド取得に切替
+  - `useProcessingHistory.getOcrExcerpt()`を`doc.ocrExcerpt`参照に変更（Storage offload placeholderの重複ハードコード解消）、`fetchDocuments()`のsearchTextフィルタから`doc.ocrResult`条件を除去（Phase E後クラッシュ防止のdead code対応）
+  - **code-review high（5エージェント並列: line-by-line/removed-behavior/cross-file/reuse-simplification-efficiency/altitude-conventions）で実質2件検出・修正**: ①再処理3経路中2経路（`useErrors.ts`単発/`DocumentsPage.tsx`一括）で`['documentDetail', id]`キャッシュ無効化漏れ ②`useDocument`/`useDocumentDetail`が独立3秒ポーリングのため、OCR完了直後に親側status遷移をdetail側が後追いできず古い値で固定されうるレース→status遷移検知でのinvalidateQueriesで解消
+  - **Codexセカンドオピニオン**: P1相当bugなし、FE/BE間resolveDetailFieldsフォールバック規則不一致なし。P2/P3所見2件（PdfSplitModalのdetail loading中ブロック欠如/useDocumentDetailのisError未サーフェス、いずれもPhase E後に初めて顕在化）はADR-0018 Phase E行に記録
+  - **ui-verified**: ローカルvite+dev実FirestoreでOCR結果アコーディオン(1,351文字)/AI要約/PDF分割モーダル(12ページ)/モバイルOCRポップアップ/処理履歴OCR抜粋を確認、PR body+コメントに証跡記録の上`ui-verified`ラベル付与。frontend新規14テスト追加（290→304件）
+- **PR-D4 (#602) scripts読者切替**:
+  - `reprocess-master-matching.js`/`measure-summary-cost.ts`をdetail優先+親フォールバックに切替。`scripts/lib/detailReaderCutoverContract.test.ts`新設——AC9（Phase E前提ゲート）としてscripts/配下に許可リスト外で親ocrResult/pageResultsを直接参照するファイルが存在しないことを検証
+  - **Codexで2件検出・修正**: ①AC9検出パターンがドット記法のみで`measure-field-byte-sizes.js`（Issue #547着手前の事前計測スクリプト、`HEAVY_FIELDS`配列経由の`d[field]`ブラケット記法）を見逃していた漏れ→検出パターンを引用符付き文字列リテラルまで拡張+許可リストに追加で解消 ②親フォールバックを`typeof === 'string'`の厳密チェックに統一
+  - scripts新規3テスト追加（42→45件）、検出ロジックの動作確認（意図的違反注入でFAILすることを実証）も実施
+- **CI flaky failure対応**: PR-D4のCIで`functions/test/prD4RevalidationOrchestrator.test.ts`（別件ADR-0016 provenance backfill、Issue #445領域、本セッション変更対象外）が1件失敗。ローカルでは1664/1664件全PASSと再現せず、再実行で解消（CI環境依存の非決定性と判断）。
+- **stacked branch + squash mergeの罠と対処**: PR-D4をPR-D3ブランチからstackして作成したため、PR-D3マージ(squash)後にPR-D4の差分がPR-D3分まで重複表示される事象が発生。`git rebase --onto origin/main <PR-D3分岐点> HEAD`でPR-D3の個別コミットをdropしてから`force-with-lease` pushし解消。
+- **handoff時のドキュメント整合性チェックで検出・是正**: ADR-0018のPhase C/D行が「✅完了」マーカー未反映（Phase Bのみ反映済み）だったため、実態（Phase C全環境完遂・Phase D実装完遂/展開未実施）を追記（PR #604）。
+- **マージ**: PR #601/#602/#603(GOAL.md更新)/#604(ADR整合性)の計4件、いずれも番号単位認可を得てマージ。Issue Net変化はゼロ（起票0/close0、Issue #547自体はPhase D展開+Phase Eが残るためopen継続）。
 
 ## session108 サマリ（2026-07-09、コスト圧縮2トラックの大幅前進）
 
@@ -82,10 +102,11 @@ session95〜104の詳細は `docs/handoff/archive/2026-07-history.md` 参照。
 
 ## 現在のフェーズ
 
-Phase 8 完了+追加実装運用中。**#548 close済（2026-07-09、3.5 Flash両本番展開完了）**。コスト圧縮の残トラックは**#547のみ**: ADR-0018 Phase A/B/C完遂（backfill全3環境verify PASS）、**Phase D計画承認済み・PR-D1(#598)/PR-D2(#599)マージ済み**。残り=PR-D3(FE読者切替+ui-verified)→PR-D4(scripts)→展開（環境毎にHosting先行→verify stale=0→Functionsの順、番号単位認可）→**Phase E（親doc大容量フィールド削除=egress実削減の発生点、要impl-plan+devリハーサル）**→#547 close。ゴール全体はdocs/handoff/GOAL.md参照（SessionStart hook自動注入）。
+Phase 8 完了+追加実装運用中。**#548 close済（2026-07-09、3.5 Flash両本番展開完了）**。コスト圧縮の残トラックは**#547のみ**: ADR-0018 Phase A/B/C完遂（backfill全3環境verify PASS）、**Phase D実装完遂（PR-D1〜D4全マージ: #598/#599/#601/#602）**。残り=**展開**（cocoro→kanameone、環境毎にHosting先行→verify stale=0→Functions→scriptsの順、番号単位認可）→**Phase E（親doc大容量フィールド削除=egress実削減の発生点、要impl-plan+Codex+devリハーサル。ADR-0018 Phase E行にPR-D3 Codex所見2件を確認事項として記録済み）**→#547 close。ゴール全体はdocs/handoff/GOAL.md参照（SessionStart hook自動注入）。
 
-## 直近の変更（session89〜108、簡潔に）
+## 直近の変更（session89〜109、簡潔に）
 
+- **session109 (2026-07-09)**: 上記サマリ参照。Net 0（起票0/close0）。#547 Phase D PR-D3(#601)/PR-D4(#602)実装+マージでPhase D実装フェーズ完遂、GOAL.md/ADR-0018のドキュメント整合性是正(PR #603/#604)。
 - **session108 (2026-07-09)**: 上記サマリ参照。**Net +1（起票0/close 1、#548）**。#547 Phase C全環境完遂+Phase D計画承認+PR-D1/D2マージ+GOAL.md新設(PR #597/#598/#599)。
 - **session107 (2026-07-08〜09)**: 上記サマリ参照。Net 0。#548統計検証完遂+#547 Phase C実装マージ(PR #592〜596)。
 - **session106 (2026-07-08)**: 上記サマリ参照。Net 0。個人情報コンプライアンス3層対応(PR #588〜591)。
