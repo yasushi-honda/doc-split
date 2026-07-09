@@ -58,7 +58,14 @@ async function main(): Promise<void> {
   }
 
   const data = snap.data()!;
-  const ocrResult: string = data.ocrResult || '';
+  // ADR-0018 Phase D PR-D4 (Issue #547): detail/main優先 + 親フォールバックで
+  // ocrResultを解決する。frontend/src/hooks/useDocuments.ts の resolveDetailFields、
+  // functions/src/ocr/documentDetail.ts と同じフィールド単位フォールバック規則。
+  const detailSnap = await db.doc(`documents/${docId}/detail/main`).get();
+  const detailData = detailSnap.exists ? detailSnap.data() : undefined;
+  const ocrResult: string = typeof detailData?.ocrResult === 'string'
+    ? detailData.ocrResult
+    : (typeof data.ocrResult === 'string' ? data.ocrResult : '');
   const documentType: string = data.documentType || '';
 
   console.log(`対象文書: ${docId}`);

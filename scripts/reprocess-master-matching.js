@@ -474,14 +474,26 @@ async function main() {
     const doc = docSnap.data();
     const docId = docSnap.id;
 
+    // ADR-0018 Phase D PR-D4 (Issue #547): detail/main優先 + 親フォールバックで
+    // ocrResult/pageResultsを解決する。frontend/src/hooks/useDocuments.ts の
+    // resolveDetailFields、functions/src/ocr/documentDetail.ts と同じフィールド単位
+    // フォールバック規則(''/[]は有効値として親へフォールバックしない、
+    // FEクリア後のフィールド不在はundefinedとして扱う)。
+    const detailSnap = await docSnap.ref.collection('detail').doc('main').get();
+    const detailData = detailSnap.exists ? detailSnap.data() : undefined;
+    const ocrText = typeof detailData?.ocrResult === 'string'
+      ? detailData.ocrResult
+      : (typeof doc.ocrResult === 'string' ? doc.ocrResult : '');
+    const pageResults = Array.isArray(detailData?.pageResults)
+      ? detailData.pageResults
+      : (Array.isArray(doc.pageResults) ? doc.pageResults : []);
+
     // OCR結果がない場合はスキップ
-    if (!doc.ocrResult) {
+    if (!ocrText) {
       console.log(`⏭️  ${docId}: OCR結果なし - スキップ`);
       skipped++;
       continue;
     }
-
-    const ocrText = doc.ocrResult;
 
     // マスター照合を再実行
     const customerResult = extractCustomerCandidates(ocrText, customerMasters);
@@ -489,7 +501,6 @@ async function main() {
     const docTypeResult = extractDocumentTypeCandidates(ocrText, documentTypeMasters);
 
     // 日付抽出を再実行（1ページ目優先）
-    const pageResults = doc.pageResults || [];
     const firstPageText = pageResults.length > 0 ? pageResults[0]?.text : undefined;
     const dateResult = extractDateEnhanced(ocrText, firstPageText);
 
