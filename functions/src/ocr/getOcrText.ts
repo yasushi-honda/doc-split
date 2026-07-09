@@ -9,6 +9,7 @@
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { getStorage } from 'firebase-admin/storage';
 import { getFirestore } from 'firebase-admin/firestore';
+import { resolveDetailFields } from './documentDetail';
 
 /**
  * OCR全文取得 Callable Function
@@ -34,15 +35,24 @@ export const getOcrText = onCall(
     }
 
     // 2. ドキュメント取得・存在確認
+    // ADR-0018 Phase D (#5): 親 + detail/main を read-only transaction の
+    // tx.getAll で同一スナップショットとして読む。独立した2回の get() だと
+    // dual-write 中の別処理が間に commit した場合、「新しい親(ocrResultUrlセット済み)」
+    // +「古い detail(ocrResult空)」のような不整合な組合せを読みうる
     const db = getFirestore();
-    const docSnap = await db.doc(`documents/${documentId}`).get();
+    const docRef = db.doc(`documents/${documentId}`);
+    const detailRef = docRef.collection('detail').doc('main');
+    const [docSnap, detailSnap] = await db.runTransaction(
+      async (tx) => tx.getAll(docRef, detailRef),
+      { readOnly: true }
+    );
     if (!docSnap.exists) {
       throw new HttpsError('not-found', 'Document not found');
     }
 
     const data = docSnap.data()!;
-    const ocrResultUrl = data.ocrResultUrl as string | undefined;
-    const ocrResult = data.ocrResult as string | undefined;
+    const ocrResultUrl = data.ocrResultUrl as string | undefined; // offload判定は親から維持
+    const { ocrResult } = resolveDetailFields(detailSnap.data(), data);
 
     // 3. ocrResultUrl がない場合は ocrResult を返す
     if (!ocrResultUrl) {

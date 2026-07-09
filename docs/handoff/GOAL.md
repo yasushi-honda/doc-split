@@ -24,7 +24,7 @@ updated: 2026-07-09
 - [x] #547 cocoro backfill 完了（2026-07-09、1,039件・verify PASS）
 - [x] #547 kanameone backfill 完了（2026-07-09、9,341件・verify PASS 9,389件 parity一致）
 - [x] #548 kanameone / cocoro 本番展開 → **Issue #548 close 済み**（2026-07-09。kanameone=2.5 pin解除、cocoro=1ヶ月分一括反映+Hosting+rules。ロールバック: gemini_model_id_override=gemini-2.5-flash）
-- [ ] #547 Phase D **PR-D1**: FE reprocess-clear の detail/main 同時クリア化（3箇所の既存writeBatchに detail deleteField 追加。計画: session108 承認済み impl-plan）
+- [x] #547 Phase D **PR-D1**: FE reprocess-clear の detail/main 同時クリア化（**PR #598 マージ済み** 2026-07-09。appendReprocessClearToBatch ヘルパー集約 + detail存在ガード + ui-verified実機検証）
 - [ ] #547 Phase D **PR-D2**: Functions 読者切替（getOcrText/regenerateSummary=tx.getAll paired-read、pageResultsReuse/detectSplitPoints/splitPdf=detail読込、dual-readフォールバック）
 - [ ] #547 Phase D **PR-D3**: FE 読者切替（モーダルのオンデマンドdetail取得/PdfSplitModal/ocrExcerpt参照化/dead code防御除去）+ ui-verified 必須
 - [ ] #547 Phase D **PR-D4**: scripts 読者切替（reprocess-master-matching.js + measure-summary-cost.ts）+ AC9読者ゼロgrep契約テスト
@@ -32,7 +32,7 @@ updated: 2026-07-09
 - [ ] #547 Phase E impl-plan 起票 → 実行 → Issue #547 close（trigger: Phase D 展開完了 + AC9ゲートPASS。destructive につき番号認可+devリハーサル必須）
 
 ## 🔄 中断点（in-flight）
-- 対象タスク: #547 Phase D PR-D1
-- 直前の状態: Phase D 計画承認済み（Codex plan review P1×3/P2×2 反映済み、計画全文: セッション scratchpad/phase-d-plan.md → 消失時は本GOAL.mdのタスク分解+ADR-0018で再構成可）。Phase B PR4a により3箇所は writeBatch/chunking/親ocrExcerptクリアまで実装済みで、PR-D1 の残作業は「既存batchへの detail/main deleteField 追加」のみ
-- 次の一手: feature ブランチで useDocuments.ts useReprocessDocument / useErrors.ts requestReprocess / DocumentsPage.tsx handleBulkReprocess の3箇所に `batch.update(doc(db,'documents',id,'detail','main'), {ocrResult: deleteField(), pageResults: deleteField()})` を追加（rules は deleteField のみ許可、値上書き不可に注意）
-- 検証コマンド: `cd frontend && npm test` / `cd functions && npm run test:rules`（detail update ルール適合）
+- 対象タスク: #547 Phase D PR-D2（Functions 読者切替）
+- 直前の状態: 実装完了（documentDetail.ts新設 + getOcrText/regenerateSummary=tx.getAll paired-read + ocrProcessor pageResultsReuse/pdfOperations detectSplitPoints・splitPdf=detail優先読み）。tsc/lint/functions 1,661テスト PASS。ブランチ feature/547-phase-d2-functions-detail-read
+- 次の一手: 品質ゲート（/safe-refactor → /code-review high → Codex review-diff）→ PR作成 → CI → マージ認可依頼
+- 検証コマンド: `cd functions && npm test`（1,661 passing 確認）/ `git log --oneline -3`

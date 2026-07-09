@@ -25,6 +25,7 @@ import { timestampToDateString } from '../utils/timestampHelpers';
 import { loadMasterData } from '../utils/loadMasterData';
 import { sanitizeFilenameForStorage } from '../utils/fileNaming';
 import { createSplitProvenance, createRotationProvenance } from './provenance';
+import { resolveDetailFields } from '../ocr/documentDetail';
 import { mergeRotations } from './rotationMerge';
 import { shouldRejectRotateForBackfill } from './rotateGate';
 import { randomUUID } from 'node:crypto';
@@ -87,8 +88,12 @@ export const detectSplitPoints = onCall(
     }
 
     // ドキュメント取得
+    // ADR-0018 Phase D (#3): 親 + detail/main を getAll の同一バッチで読み、
+    // pageResults は detail 優先(親フォールバック付き)で解決する。
+    // 切替しないと Phase E 後に分割候補検出が常に0件になる
     const docRef = db.doc(`documents/${documentId}`);
-    const docSnapshot = await docRef.get();
+    const detailRef = docRef.collection('detail').doc('main');
+    const [docSnapshot, detailSnapshot] = await db.getAll(docRef, detailRef);
 
     if (!docSnapshot.exists) {
       console.log(`Document not found: ${documentId}`);
@@ -96,7 +101,14 @@ export const detectSplitPoints = onCall(
     }
 
     const docData = docSnapshot.data()!;
-    const pageResults: SplitPageInput[] = docData.pageResults || [];
+    // unknown 経由キャスト: 保存された pageResults は SplitPageInput の検出系フィールド
+    // (detectedDocumentType 等)を実データとして持つが、DocumentDetail の宣言型
+    // PersistedPageOcrResult には含まれない(shared/types.ts の既知 schema drift 注記参照。
+    // 従来は DocumentData の any 経由で暗黙に通っていた同じ実態への型付け)
+    const pageResults: SplitPageInput[] = (resolveDetailFields(
+      detailSnapshot.data(),
+      docData
+    ).pageResults ?? []) as unknown as SplitPageInput[];
     console.log(`pageResults count: ${pageResults.length}`);
 
     if (pageResults.length === 0) {
@@ -361,14 +373,22 @@ export const splitPdf = onCall(
     }
 
     // 元ドキュメント取得
+    // ADR-0018 Phase D (#2): 親 + detail/main を getAll の同一バッチで読む。
+    // splitPdf の整合性モデル(親doc取得→GCS snapshot→final drift check→batch commit)と
+    // 同一時点で detail を読むことで、親メタ・元PDF・detail の組合せずれを防ぐ
     const docRef = db.doc(`documents/${documentId}`);
-    const docSnapshot = await docRef.get();
+    const detailRef = docRef.collection('detail').doc('main');
+    const [docSnapshot, detailSnapshot] = await db.getAll(docRef, detailRef);
 
     if (!docSnapshot.exists) {
       throw new HttpsError('not-found', 'Document not found');
     }
 
     const docData = docSnapshot.data()!;
+    // 分割元の pageResults は detail 優先で解決し、以降の全用途(セグメント抽出/子doc用
+    // ocrResult 生成)で同一ソースを使う。unknown 経由キャストの根拠は detectSplitPoints 側と同じ
+    const sourcePageResults = (resolveDetailFields(detailSnapshot.data(), docData).pageResults ??
+      []) as unknown as SplitPageInput[];
     const fileUrl = docData.fileUrl as string;
 
     // Codex Medium 1: gs:// URI parser + bucket mismatch を failed-precondition で abort
@@ -521,8 +541,8 @@ export const splitPdf = onCall(
           inflightEntry.derivedGeneration = derivedGeneration;
           const derivedSha256 = sha256Hex(newPdfBytes);
 
-          // 分割後のページ結果を抽出
-          const segmentPageResults = (docData.pageResults || []).filter(
+          // 分割後のページ結果を抽出 (ADR-0018 Phase D: detail優先で解決済みのソースを使用)
+          const segmentPageResults = sourcePageResults.filter(
             (p: SplitPageInput) =>
               p.pageNumber >= startPage && p.pageNumber <= endPage
           );
@@ -588,7 +608,7 @@ export const splitPdf = onCall(
             fileName,
             mimeType: 'application/pdf',
             ocrResult: extractOcrResultForPages(
-              docData.pageResults || [],
+              sourcePageResults,
               startPage,
               endPage
             ),

@@ -32,6 +32,7 @@ import {
 import { buildPageResult, type RawPageOcrResult } from './buildPageResult';
 import { buildOcrExtractionUpdatePayload } from './ocrUpdatePayloadBuilder';
 import { validatePageResultsForReuse } from './pageResultsReuse';
+import { resolveDetailFields } from './documentDetail';
 import { applyConfirmedFieldProtection } from './confirmedFieldMerge';
 import { buildOcrExcerpt } from './ocrExcerpt';
 
@@ -118,7 +119,12 @@ export async function processDocument(
 
   // Issue #526 D3: 分割子ドキュメント(#445で確立済みのparentDocumentIdを持つ)が
   // 親から継承した有効なpageResultsを持つ場合、ページOCRを再実行せず再利用する(コスト削減)。
-  const existingPageResults = docData.pageResults as RawPageOcrResult[] | undefined;
+  // ADR-0018 Phase D (#1): 再利用元は detail/main を優先読み(親フォールバック付き)。
+  // Phase E 後は親に pageResults が存在しなくなるため、切替しないと再利用が常に不成立になる
+  const detailSnap = await db.doc(`documents/${docId}/detail/main`).get();
+  const existingPageResults = resolveDetailFields(detailSnap.data(), docData).pageResults as
+    | RawPageOcrResult[]
+    | undefined;
   const reuseCheck = validatePageResultsForReuse(existingPageResults, docData.parentDocumentId);
 
   let pageResults: RawPageOcrResult[] = [];
