@@ -35,8 +35,9 @@ describe('reprocess-clear detail/main 配線契約 (ADR-0018 PR4b)', () => {
     const helper = useDocumentsSrc.match(
       /export async function appendReprocessClearToBatch[\s\S]*?\n\}/
     )![0]
-    // rules は detail の create を禁止しているため、不在 doc への update() は
-    // not-found で batch 全体を落とす。存在確認 → 条件付き update が必須配線
+    // 不在 doc への update() は not-found で batch 全体を落とす(Firestore 仕様)。
+    // rules が create を禁止しているため set() での回避も不可 — 存在確認 →
+    // 条件付き update が必須配線
     expect(helper).toMatch(/doc\(db, 'documents', documentId, 'detail', 'main'\)/)
     expect(helper).toMatch(/await getDoc\(detailRef\)/)
     expect(helper).toMatch(
@@ -56,9 +57,11 @@ describe('reprocess-clear detail/main 配線契約 (ADR-0018 PR4b)', () => {
     // useDocuments.ts では appendReprocessClearToBatch 内の1箇所のみ許可
     const detailPathCount = [...useDocumentsSrc.matchAll(/'detail', 'main'/g)].length
     expect(detailPathCount, 'useDocuments.ts の detail/main パス構築はヘルパー内の1箇所のみ').toBe(1)
-    // 他2ファイルは detail/main パスを直接構築しない (全てヘルパー委譲)
-    expect(useErrorsSrc).not.toMatch(/'detail'/)
-    expect(documentsPageSrc).not.toMatch(/'detail'/)
+    // 他2ファイルは detail/main パスを直接構築しない (全てヘルパー委譲)。
+    // テンプレート文字列パス (`documents/${id}/detail/main`) や collection(ref, 'detail')
+    // による迂回も含めて検出するため、引用符種を問わない緩い regex で網を張る
+    expect(useErrorsSrc).not.toMatch(/['"`/]detail['"`/]/)
+    expect(documentsPageSrc).not.toMatch(/['"`/]detail['"`/]/)
   })
 
   it('DocumentsPage: CHUNK_SIZE は 250 (最大500 update/チャンク。hard limitは2023年撤廃済みだが、payload上限と部分成功粒度の保守値として維持)', () => {

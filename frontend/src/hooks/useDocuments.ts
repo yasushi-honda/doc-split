@@ -251,9 +251,9 @@ export function updateDocumentInListCache(
 // ============================================
 
 /**
- * 再処理時にリセットすべき全フィールドを返すファクトリ関数
- * DocumentDetailModal, DocumentsPage, useErrors の3箇所で共通利用（DRY）
- * deleteField() はファクトリ関数内で毎回生成（安全性）
+ * 再処理時にリセットすべき親docの全フィールドを返すファクトリ関数
+ * 直接の呼出元は appendReprocessClearToBatch のみ（再処理3経路は
+ * ヘルパー経由で間接利用）。deleteField() はファクトリ関数内で毎回生成（安全性）
  */
 export function getReprocessClearFields() {
   const df = deleteField()
@@ -335,10 +335,8 @@ export function getReprocessClearFields() {
  * している(値の上書きは Functions 専有)ため、deleteField() のみで構成する。
  * `ocrResult: ''` のような値の設定は permission-denied で batch 全体が失敗する。
  *
- * detail/main の存在は doc 作成時の dual-write (Phase B) + 既存 doc の backfill
- * (Phase C、全環境 verify PASS) で保証されており、update() は常に成功する。
- * 旧ビルド期間に作成された doc が残る環境へは、本変更のデプロイ前に backfill を
- * 再実行(冪等)して隙間を埋める(デプロイゲート)。
+ * detail/main が不在の doc への挙動は appendReprocessClearToBatch の存在ガード参照
+ * (不在時は skip)。不在 detail の充填自体は backfill 再実行(冪等)で行う。
  */
 export function getReprocessDetailClearFields() {
   const df = deleteField()
@@ -355,9 +353,11 @@ export function getReprocessDetailClearFields() {
  * detail クリア漏れ(= stale detail 再発)を経路追加時に作り込みやすいため、
  * ペア不変条件をこの1点に集約する。
  *
- * detail/main は存在確認してから update に積む: rules が create を禁止しているため
- * 不在 doc への update() は not-found で batch 全体を落とす。不在 = クリアすべき
- * コンテンツが最初から無い(望む終端状態が既に成立)ので、skip が意味的にも正しい。
+ * detail/main は存在確認してから update に積む: 不在 doc への update() は
+ * not-found で batch 全体を落とす(Firestore 仕様)。rules が create を禁止している
+ * ため set() での upsert 回避も不可 — よって存在確認 → 条件付き update が必須。
+ * 不在 = クリアすべきコンテンツが最初から無い(望む終端状態が既に成立)ので、
+ * skip が意味的にも正しい。
  * 確認と commit の間に detail が作成されるレース(並行OCR完了)はあり得るが、その場合も
  * 親クリアで status:'pending' になった doc を次の OCR パイプラインが dual-write で
  * 上書きするため自己修復する。
