@@ -324,6 +324,29 @@ export function getReprocessClearFields() {
   }
 }
 
+/**
+ * 再処理時に detail/main サブコレクションからクリアすべきフィールドを返すファクトリ関数
+ * (ADR-0018 Phase D PR4b、Issue #547)。親docと同じく3経路(useReprocessDocument /
+ * useErrors / DocumentsPage)で共通利用し、親クリアと同一 writeBatch に含めて
+ * 原子的にコミットする(片側だけクリアされた doc を作らない)。
+ *
+ * firestore.rules は detail/main の update を「フィールド削除または無変更」のみ許可
+ * している(値の上書きは Functions 専有)ため、deleteField() のみで構成する。
+ * `ocrResult: ''` のような値の設定は permission-denied で batch 全体が失敗する。
+ *
+ * detail/main の存在は doc 作成時の dual-write (Phase B) + 既存 doc の backfill
+ * (Phase C、全環境 verify PASS) で保証されており、update() は常に成功する。
+ * 旧ビルド期間に作成された doc が残る環境へは、本変更のデプロイ前に backfill を
+ * 再実行(冪等)して隙間を埋める(デプロイゲート)。
+ */
+export function getReprocessDetailClearFields() {
+  const df = deleteField()
+  return {
+    ocrResult: df,
+    pageResults: df,
+  }
+}
+
 // ============================================
 // 個別再処理フック (#524)
 // ============================================
@@ -344,13 +367,17 @@ export function useReprocessDocument() {
     if (!documentId || reprocessingId) return false
     setReprocessingId(documentId)
     try {
-      // ADR-0018 Phase B (Issue #547): 他2箇所(useErrors/DocumentsPage)との
-      // writeBatch統一。detail/main書込はPhase D以降(PR4b)に分離、本PRは親docのみ。
+      // ADR-0018 Phase D PR4b (Issue #547): 親docクリアと detail/main クリアを
+      // 単一batchで原子的にコミット(他2箇所 useErrors/DocumentsPage と同一パターン)
       const batch = writeBatch(db)
       batch.update(doc(db, 'documents', documentId), {
         status: 'pending',
         ...getReprocessClearFields(),
       })
+      batch.update(
+        doc(db, 'documents', documentId, 'detail', 'main'),
+        getReprocessDetailClearFields()
+      )
       await batch.commit()
       // 楽観的更新（即時UI反映）
       updateDocumentInListCache(queryClient, documentId, {

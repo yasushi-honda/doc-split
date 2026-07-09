@@ -22,7 +22,7 @@ import {
   QueryConstraint,
 } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
-import { getReprocessClearFields } from './useDocuments'
+import { getReprocessClearFields, getReprocessDetailClearFields } from './useDocuments'
 import type { ErrorRecord, ErrorStatus, ErrorType } from '@shared/types'
 
 // ============================================
@@ -229,9 +229,8 @@ async function requestReprocess({ errorId, fileId }: ReprocessParams): Promise<v
   const snapshot = await getDocs(docsQuery)
   const firstDoc = snapshot.docs[0]
 
-  // ADR-0018 Phase B (Issue #547): エラーstatus更新とdocumentクリアを単一batchで
-  // 原子的に実行 (途中失敗による不整合状態を防ぐ)。detail/main書込は
-  // Phase D以降(PR4b)に分離、本PRは親docのみ。
+  // ADR-0018 Phase D PR4b (Issue #547): エラーstatus更新・documentクリア・
+  // detail/main クリアを単一batchで原子的に実行 (途中失敗による不整合状態を防ぐ)
   const batch = writeBatch(db)
   const errorRef = doc(db, 'errors', errorId)
   batch.update(errorRef, { status: 'pending' })
@@ -242,6 +241,10 @@ async function requestReprocess({ errorId, fileId }: ReprocessParams): Promise<v
       status: 'pending',
       ...getReprocessClearFields(),
     })
+    batch.update(
+      doc(db, 'documents', firstDoc.id, 'detail', 'main'),
+      getReprocessDetailClearFields()
+    )
   }
   await batch.commit()
 }

@@ -51,7 +51,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { db } from '@/lib/firebase'
 import { callFunction } from '@/lib/callFunction'
 import { Checkbox } from '@/components/ui/checkbox'
-import { useInfiniteDocuments, useDocumentStats, useDocumentMasters, getReprocessClearFields, type DocumentFilters, type SortField, type SortOrder } from '@/hooks/useDocuments'
+import { useInfiniteDocuments, useDocumentStats, useDocumentMasters, getReprocessClearFields, getReprocessDetailClearFields, type DocumentFilters, type SortField, type SortOrder } from '@/hooks/useDocuments'
 import { useCareManagers } from '@/hooks/useMasters'
 import { DateRangeFilter, type DateRange } from '@/components/DateRangeFilter'
 import { isCustomerConfirmed } from '@/hooks/useProcessingHistory'
@@ -477,14 +477,16 @@ export function DocumentsPage() {
   }, [selectedIds, user, queryClient, clearSelection])
 
   // 一括再処理
-  // ADR-0018 Phase B (Issue #547): 250件チャンク化。detail/main書込は
-  // Phase D以降(PR4b)に分離、本PRは親docのみ+ocrExcerptクリア。
+  // ADR-0018 Phase D PR4b (Issue #547): 親doc + detail/main を同一batchでクリア。
+  // 1docあたり2 update のため CHUNK_SIZE=250 で 500 ops = Firestore batch 上限ちょうど。
+  // 本ループに per-doc の書込を追加する場合は CHUNK_SIZE の引き下げが必須。
   const handleBulkReprocess = useCallback(async () => {
     if (selectedIds.size === 0) return
 
     setIsBulkOperating(true)
     try {
       const clearFields = getReprocessClearFields()
+      const detailClearFields = getReprocessDetailClearFields()
       const ids = Array.from(selectedIds)
       const CHUNK_SIZE = 250
       let succeededCount = 0
@@ -503,6 +505,7 @@ export function DocumentsPage() {
               status: 'pending',
               ...clearFields,
             })
+            batch.update(doc(db, 'documents', docId, 'detail', 'main'), detailClearFields)
           }
           await batch.commit()
           succeededCount += chunk.length
