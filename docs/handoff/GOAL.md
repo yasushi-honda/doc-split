@@ -1,7 +1,7 @@
 ---
 updated: 2026-07-09
 ---
-<!-- session110: Phase D cocoro/kanameone本番展開完遂を反映 -->
+<!-- session110: Phase D cocoro/kanameone本番展開完遂 + CodexセカンドオピニオンによるPhase E前AC具体化を反映 -->
 
 ## 現在のミッション
 運用コスト圧縮2トラック — #547 Firestore読取egress削減（ADR-0018 detail/main分離）と #548 Gemini 3.5 Flash移行 — を、本番2環境（kanameone / cocoro）で安全に完遂する。
@@ -29,10 +29,15 @@ updated: 2026-07-09
 - [x] #547 Phase D **PR-D3**: FE 読者切替（**PR #601 マージ済み** 2026-07-09。fetchDocumentDetail/resolveDetailFields/useDocumentDetail新設、DocumentDetailModal/PdfSplitModalオンデマンドdetail取得、getOcrExcerpt→ocrExcerpt参照化、searchText dead code除去。code-review high 5エージェント+Codexで検出2件〔documentDetailキャッシュ無効化漏れ/独立ポーリングレース〕修正済み、ui-verified確認済み）
 - [x] #547 Phase D **PR-D4**: scripts 読者切替（**PR #602 マージ済み** 2026-07-09。reprocess-master-matching.js/measure-summary-cost.tsをdetail優先+親フォールバックに切替、AC9読者ゼロgrep契約テスト新設〔scripts/lib/detailReaderCutoverContract.test.ts〕。Codexで検出2件〔measure-field-byte-sizes.js検出漏れ/フォールバック順序〕修正済み）
 - [x] #547 Phase D 展開（2026-07-09 session110完遂。dev: E2E確認PASS〔OCR結果アコーディオン/PDF分割モーダル/処理履歴OCR抜粋、コンソールエラー0件〕。cocoro: Hosting→verify PASS〔新規処理1件のbackfill漏れを検出・--execute再実行で解消→再verify全件parity一致〕→Functions全関数update成功。kanameone: Hosting→verify一発PASS〔9,435件全件parity一致〕→Functions全関数update成功。副産物: kanameone Hosting用GitHub Actions workflow新設〔PR #606、Firebase CLIブラウザ認証不要化〕）
-- [ ] #547 Phase E impl-plan 起票 → 実行 → Issue #547 close（trigger: AC9ゲートPASS確認。destructive につき番号認可+devリハーサル必須。ADR-0018 Phase E行にCodex P2/P3所見〔PdfSplitModalのdetail loading中ブロック欠如/useDocumentDetailのisError未サーフェス〕を確認事項として記録済み）
+- [x] #547 Phase E 着手前 AC9ゲート内容確認（2026-07-09 session110、Codexセカンドオピニオン via `/codex plan` MCP版・effort high。AC9正体特定: `scripts/lib/detailReaderCutoverContract.test.ts` が定義する「scripts配下で許可リスト外の親`ocrResult/pageResults`直接参照ゼロ」契約、`cd scripts && npm test` 45 passingで記録上PASS済み〔今回read-only制約のため再実行はせず記録確認のみ〕。**ただしAC9はPhase E全体の十分条件ではないとの指摘あり**、詳細は次項）
+- [ ] #547 Phase E impl-plan 起票 → 実行 → Issue #547 close（trigger: 下記4点をAcceptance Criteria候補としてimpl-planに組込み。destructive につき番号認可+devリハーサル必須）
+  - **[High]** FE側の同等契約テスト（親`ocrResult/pageResults`直接参照ゼロ）の有無を確認、なければAC9同等のgrep契約テストをFEにも追加
+  - **[High]** Phase E直前に両本番（cocoro/kanameone）で `backfill-detail-subcollection --verify` を再実行し `detailMissing=0/mismatch=0/staleDetail=0/inPipeline=0` を再確認（session110時点の記録はスナップショットでありPhase E直前のライブ状態ではない）
+  - **[Medium]** トリガーストーム評価: Phase Eの全件`FieldValue.delete()`で`onDocumentWrite`/search index系トリガーが全件発火するため、レート制御・影響評価を設計に含める（ADR-0018 Phase E行に前提として明記済み）
+  - **[Medium]** FE既知リスク2件の修正 or 明示受容判断: `PdfSplitModal`のdetail loading中操作ブロック欠如（`frontend/src/components/DocumentDetailModal.tsx`）/ `useDocumentDetail`のisLoading・isError未サーフェス
 
 ## 🔄 中断点（in-flight）
-- 対象タスク: #547 Phase E 着手前のAC9ゲート確認
-- 直前の状態: Phase D展開が cocoro/kanameone 両本番環境で完遂（2026-07-09 session110）。両環境ともverify stale=0・in-pipeline=0・parity一致を確認済み
-- 次の一手: ① AC9ゲート内容の確認（ADR-0018参照、Phase D展開完了が満たすべき条件の特定）② PASSであれば Phase E（親docの大容量フィールド削除、egress削減本体）の `/impl-plan` フル起票 → dev リハーサル必須 → 番号単位認可
+- 対象タスク: #547 Phase E `/impl-plan` フル起票
+- 直前の状態: Phase D展開が cocoro/kanameone 両本番環境で完遂（2026-07-09 session110）。AC9ゲート内容をCodexセカンドオピニオンで特定・記録済み。Phase E自体は destructive（親docフィールド削除）につき未着手
+- 次の一手: ① 上記4点（FE契約テスト有無/直前再verify/トリガーストーム評価/FE既知リスク2件）をAcceptance Criteriaに組み込んで `/impl-plan` フル起票 ② dev リハーサル必須 ③ 番号単位認可を得てから本番実行
 - 検証コマンド: `cd functions && npm test`（1,664 passing）/ `cd frontend && npm test`（304 passing）/ `cd scripts && npm test`（45 passing）
