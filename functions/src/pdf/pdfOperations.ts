@@ -66,10 +66,12 @@ interface SplitPageInput {
  * detail優先で解決した pageResults を SplitPageInput[] として返す
  * (ADR-0018 Phase D、detectSplitPoints/splitPdf 共用。unknown 経由キャストの一元点)。
  *
- * unknown 経由キャストの根拠: 保存された pageResults は SplitPageInput の検出系フィールド
- * (detectedDocumentType 等)を実データとして持つが、DocumentDetail の宣言型
- * PersistedPageOcrResult には含まれない(shared/types.ts の既知 schema drift 注記参照。
- * 従来は DocumentData の any 経由で暗黙に通っていた同じ実態への型付け)。
+ * unknown 経由キャストの根拠: SplitPageInput は保存データに存在しない検出系フィールド
+ * (detectedDocumentType 等)を宣言している(実際に永続化される shape は
+ * PersistedPageOcrResult 相当で、検出系フィールドを書いた writer は存在しない —
+ * git 履歴で確認済み)。下流の pdfAnalyzer は検出系を optional として undefined を許容し
+ * text+マスターから再検出するため、宣言型が実データより広い方向の不一致は無害。
+ * 従来は DocumentData の any 経由で暗黙に通っていた同じ実態への型付け。
  */
 function resolveSplitPageInputs(
   detailData: FirebaseFirestore.DocumentData | undefined,

@@ -31,6 +31,14 @@ describe('detail/main 読者切替 配線契約 (ADR-0018 Phase D PR-D2)', () =>
     expect(documentDetailSrc).to.match(/\{ readOnly: true \}/);
   });
 
+  it('detail 読取パスの pin: サブコレクション/doc ID の typo は親フォールバックが Phase E まで隠蔽するため文字列レベルで固定 (pr-test-analyzer Critical反映)', () => {
+    // write 側契約 (ocrProcessorDetailDualWriteContract) と同じパス pin を read 側にも張る。
+    // パスがズレても detail 読取は undefined → 親フォールバックで全環境正常動作し、
+    // Phase E (親フィールド削除) の瞬間に silent 一斉停止する — この誤配線を merge 前に落とす
+    expect(documentDetailSrc).to.match(/docRef\.collection\('detail'\)\.doc\('main'\)/);
+    expect(ocrProcessorSrc).to.match(/documents\/\$\{docId\}\/detail\/main/);
+  });
+
   it('getOcrText: readDocWithDetail + fieldMask(重量フィールド転送抑止) + resolveDetailFields (ADR #5)', () => {
     expect(getOcrTextSrc).to.match(
       /readDocWithDetail\(db, docRef, \[\s*'ocrResult',\s*'ocrResultUrl',\s*\]\)/
