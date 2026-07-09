@@ -25,14 +25,14 @@ updated: 2026-07-09
 - [x] #547 kanameone backfill 完了（2026-07-09、9,341件・verify PASS 9,389件 parity一致）
 - [x] #548 kanameone / cocoro 本番展開 → **Issue #548 close 済み**（2026-07-09。kanameone=2.5 pin解除、cocoro=1ヶ月分一括反映+Hosting+rules。ロールバック: gemini_model_id_override=gemini-2.5-flash）
 - [x] #547 Phase D **PR-D1**: FE reprocess-clear の detail/main 同時クリア化（**PR #598 マージ済み** 2026-07-09。appendReprocessClearToBatch ヘルパー集約 + detail存在ガード + ui-verified実機検証）
-- [ ] #547 Phase D **PR-D2**: Functions 読者切替（getOcrText/regenerateSummary=tx.getAll paired-read、pageResultsReuse/detectSplitPoints/splitPdf=detail読込、dual-readフォールバック）
+- [x] #547 Phase D **PR-D2**: Functions 読者切替（**PR #599 マージ済み** 2026-07-09。readDocWithDetail=readOnly transaction統一、parentDocumentIdゲート、fieldMask。dev実機確認のみ次セッション持越し）
 - [ ] #547 Phase D **PR-D3**: FE 読者切替（モーダルのオンデマンドdetail取得/PdfSplitModal/ocrExcerpt参照化/dead code防御除去）+ ui-verified 必須
 - [ ] #547 Phase D **PR-D4**: scripts 読者切替（reprocess-master-matching.js + measure-summary-cost.ts）+ AC9読者ゼロgrep契約テスト
 - [ ] #547 Phase D 展開（trigger: 全PR merge + dev AC確認 + 環境ごと番号単位認可。**環境内は Hosting先行 → stale/pending検証ゲート → Functions の順**（旧PWA由来stale再利用の封鎖））
 - [ ] #547 Phase E impl-plan 起票 → 実行 → Issue #547 close（trigger: Phase D 展開完了 + AC9ゲートPASS。destructive につき番号認可+devリハーサル必須）
 
 ## 🔄 中断点（in-flight）
-- 対象タスク: #547 Phase D PR-D2（Functions 読者切替）
-- 直前の状態: 実装完了（documentDetail.ts新設 + getOcrText/regenerateSummary=tx.getAll paired-read + ocrProcessor pageResultsReuse/pdfOperations detectSplitPoints・splitPdf=detail優先読み）。tsc/lint/functions 1,661テスト PASS。ブランチ feature/547-phase-d2-functions-detail-read
-- 次の一手: 品質ゲート（/safe-refactor → /code-review high → Codex review-diff）→ PR作成 → CI → マージ認可依頼
-- 検証コマンド: `cd functions && npm test`（1,661 passing 確認）/ `git log --oneline -3`
+- 対象タスク: #547 Phase D PR-D3（FE 読者切替）— 未着手 + PR-D2 の dev 実機確認が持越し
+- 直前の状態: PR-D1(#598)/PR-D2(#599) マージ済み。dev Functions デプロイ発火済み（run 29017957991、結果未確認）。Phase D 計画は承認済み（詳細: LATEST.md session108 + ADR-0018 #9/#12 行）
+- 次の一手: ①`gh run view 29017957991` で dev デプロイ success 確認 → dev UI で要約再生成/分割候補/処理履歴を各1回動作確認 ②PR-D3 実装着手（fetchDocumentDetail 新設 → DocumentDetailModal/PdfSplitModal のオンデマンド detail 取得 → useProcessingHistory→ocrExcerpt → searchText dead code 防御除去。ui-verified 必須）
+- 検証コマンド: `gh run view 29017957991 --json conclusion` / `cd functions && npm test`（1,665 passing）/ `cd frontend && npm test`（290 passing）
