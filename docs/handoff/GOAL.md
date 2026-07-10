@@ -1,7 +1,7 @@
 ---
 updated: 2026-07-10
 ---
-<!-- session111: #547 Phase E impl-planフル起票・承認完了。Codex 2周目レビューで重大設計ギャップ(dual-write再発生/rollback未実装)を検出、PR-E1(dual-write停止)+PR-E2(削除実行基盤)の2PR構成に確定 -->
+<!-- session111: #547 Phase E 実装+devリハーサル完遂。PR-E1/E2実装、GitHub Actions run-ops-script.ymlにdelete-legacy-ocr-fields追加、featureブランチpush済み。devリハーサル全項目PASS（PR-E1実効性/documentGroups負荷ゼロ実測/kill→再開安全性）。次: PR作成・レビュー→マージ→本番実行は番号認可 -->
 
 ## 現在のミッション
 運用コスト圧縮2トラック — #547 Firestore読取egress削減（ADR-0018 detail/main分離）と #548 Gemini 3.5 Flash移行 — を、本番2環境（kanameone / cocoro）で安全に完遂する。
@@ -31,15 +31,16 @@ updated: 2026-07-10
 - [x] #547 Phase D 展開（2026-07-09 session110完遂。dev: E2E確認PASS〔OCR結果アコーディオン/PDF分割モーダル/処理履歴OCR抜粋、コンソールエラー0件〕。cocoro: Hosting→verify PASS〔新規処理1件のbackfill漏れを検出・--execute再実行で解消→再verify全件parity一致〕→Functions全関数update成功。kanameone: Hosting→verify一発PASS〔9,435件全件parity一致〕→Functions全関数update成功。副産物: kanameone Hosting用GitHub Actions workflow新設〔PR #606、Firebase CLIブラウザ認証不要化〕）
 - [x] #547 Phase E 着手前 AC9ゲート内容確認（2026-07-09 session110、Codexセカンドオピニオン via `/codex plan` MCP版・effort high。AC9正体特定: `scripts/lib/detailReaderCutoverContract.test.ts` が定義する「scripts配下で許可リスト外の親`ocrResult/pageResults`直接参照ゼロ」契約、`cd scripts && npm test` 45 passingで記録上PASS済み〔今回read-only制約のため再実行はせず記録確認のみ〕。**ただしAC9はPhase E全体の十分条件ではないとの指摘あり**、詳細は次項）
 - [x] #547 Phase E impl-plan フル起票・承認完了（session111、2026-07-10。GOAL.md記載4点ACを起点に、Codexセカンドオピニオン2周実施。1周目でPhase E後もdual-writeが止まらず親フィールドが再発生する重大な設計ギャップを検出（ocrProcessor.ts:391-410でmergedがocrResult/pageResultsを含み本体へも書込み続ける実装をコードで実証確認）→ dual-write停止(PR-E1)をPhase Eスコープへ前倒し統合する方針に転換。2周目で7指摘、うち2件（getReprocessClearFields()のdeleteFieldは維持すべき/splitPdfのitem.payloadは親・detail共有のため分離が必要）をコード検証で確認・計画反映。全17件のAcceptance Criteriaで承認済み）
-- [ ] #547 Phase E **PR-E1**: dual-write停止（親への「値」set/update停止、`deleteField()`によるクリアは維持） — `ocrProcessor.ts`(merged構築から値書込み除去)/`pdfOperations.ts`splitPdf(parentPayload/detailPayload分離)/`checkGmailAttachments.ts`/`uploadPdf.ts`/`import-historical-gmail.js`/`seed-dev-data.ts`改修 + 書込み側契約テスト新設（値書込み禁止・deleteFieldは許可を区別）。**`useDocuments.ts`のgetReprocessClearFields()は対象外(変更なし)**
-- [ ] #547 Phase E **PR-E2**: 削除実行基盤 — migration marker機構(E1デプロイ未確認環境でabort) + documentGroupsトリガーdiff最適化(集計キー不変時は下流transaction/write 0) + 削除スクリプト(状態別4分類ロジック、GCS+Firestore同時commitのmanifest) + `--rollback`実装(manifest限定復元、将来write不可逆を明記) + FE契約テスト新設 + PdfSplitModal/DocumentDetailModal強化(loading/error gate)
-- [ ] #547 Phase E: ADR-0018 Amended追記（Phase E/F区分改訂: dual-write停止をPhase Eへ前倒しした経緯を記録）
-- [ ] #547 Phase E: devリハーサル（PR-E1実効性確認=新規処理後も値としての親フィールド再発生ゼロ／documentGroups・search_indexの下流write・エラー率実測／kill→再開安全性確認）
-- [ ] #547 Phase E: 本番実行（cocoro先行→kanameone後続、destructiveにつき番号単位認可必須）
+- [x] #547 Phase E **PR-E1**: dual-write停止（親への「値」set/update停止、`deleteField()`によるクリアは維持） — `ocrProcessor.ts`/`pdfOperations.ts`splitPdf(parentPayload/detailPayload分離)/`checkGmailAttachments.ts`/`uploadPdf.ts`/`import-historical-gmail.js`/`seed-dev-data.ts`改修 + 書込み側契約テスト新設。**devリハーサル中に見落とし発見・修正**: `create-pending-doc.ts`(Issue #562、Phase B完了後追加され網羅的監査対象外だった運用スクリプト)が本体へocrResult直書きしていたため追加修正+契約テスト追加
+- [x] #547 Phase E **PR-E2**: 削除実行基盤 — migration marker機構(`_migrations/adr0018PhaseEPreflight`) + documentGroupsトリガーdiff最適化(`isAggregationUnchanged()`) + 削除スクリプト`scripts/delete-legacy-ocr-fields.ts`(状態別5分類ロジック、Firestoreのみの軽量manifest=GCS不要) + `--rollback`実装 + FE契約テスト新設 + PdfSplitModal/DocumentDetailModal強化(loading/error gate)。GitHub Actions `run-ops-script.yml`にdelete-legacy-ocr-fields選択肢追加
+- [x] #547 Phase E: ADR-0018 Amended追記完了（Phase E/F区分改訂、Codex 7th/8th review記録を含む）
+- [x] #547 Phase E: devリハーサル完遂（2026-07-10、dev環境`doc-split-dev`、GitHub Actions経由。全項目PASS: dry-run/mark-preflight/execute canary/verify/rollback/execute全件160件/**PR-E1実効性実証**(修正版create-pending-docで新規OCR処理後も親フィールド非復活を確認)/**documentGroups負荷実測**(全160件`Updated 0 groups`、下流write完全ゼロ)/**search_index負荷実測**(全件unchanged)/**kill→再開試験**(削除中にジョブキャンセル→87件処理済みで中断→再実行で残り73件削除、二重削除エラーなし、detail/main不在0件=部分破損なし)。実装: featureブランチ`feature/adr-0018-phase-e-dual-write-stop`にコミット2件、push済み（未PR）
+- [ ] #547 Phase E: PR作成・レビュー（`/code-review`または`/review-pr`）→ マージ
+- [ ] #547 Phase E: 本番実行（cocoro先行→kanameone後続、destructiveにつき番号単位認可必須。手順: `--mark-preflight --marked-by <name>` → `--dry-run`確認 → `--execute --limit 10`canary → `--verify` → `--execute`全件 → `--verify`最終確認。GitHub Actions `run-ops-script.yml`経由）
 
 ## 🔄 中断点（in-flight）
-- 対象タスク: #547 Phase E **PR-E1**（dual-write停止）の実装着手
-- 直前の状態: impl-planフル承認済み（session111、2026-07-10）。Codex 2周目レビューで7指摘、コード検証で2件を確認済み・計画反映済み。GOAL.md「進行中のtasks」PR-E1/PR-E2に詳細記載
-- 次の一手: PR-E1（書込み箇所改修 + 書込み側契約テスト）の実装から開始。並列着手可能: E2-a(documentGroups diff最適化)/E2-d(FE契約テスト)/E2-e・E2-f(FE強化、PdfSplitModal/DocumentDetailModal)はE1と独立ファイルのため並行実装可
-- 承認済みAcceptance Criteria: 17個（本セッション会話ログ参照。主要カテゴリ: dual-write停止の実効性/削除スクリプトの状態別分類・migration marker・manifest原子性/rollbackの限界明記/documentGroups負荷/FE gate/devリハーサル3項目/既存テストPASS維持/ADR Amended）
-- 検証コマンド: `cd functions && npm test`（1,664 passing）/ `cd frontend && npm test`（304 passing）/ `cd scripts && npm test`（45 passing）
+- 対象タスク: #547 Phase E PR作成（featureブランチ`feature/adr-0018-phase-e-dual-write-stop`は実装+devリハーサル完了、PR未作成）
+- 直前の状態: PR-E1/PR-E2実装完了、ADR-0018 Amended追記完了、devリハーサル全項目PASS（session111、2026-07-10）。dev環境のテストデータ`phase-e-devcheck-001`(意図的に壊れた不一致状態、実害なし)/`phase-e-devcheck-002`(正常)が残存 — 後片付けは任意
+- 次の一手: ① `gh pr create`でPR作成 ② レビュー(`/code-review`か`/review-pr`、25ファイル変更のためEvaluator分離プロトコル対象) ③ マージ ④ 本番実行は番号単位認可を得てから（cocoro先行）
+- 変更ファイル: 27件（PR-E1/E2実装25件 + create-pending-doc.ts修正2件）。コミット: f05f297(本体実装) + 623b405(create-pending-doc.ts修正)
+- 検証コマンド: `cd functions && npm test`（1,680 passing）/ `cd frontend && npm test`（310 passing）/ `cd scripts && npm test`（66 passing）
