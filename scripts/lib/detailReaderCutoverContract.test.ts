@@ -51,6 +51,12 @@ const ALLOWLIST = new Set([
   // PR-D4で detail優先+親フォールバックに切替済み(下記テストで個別に配線確認する対象そのもの)
   'reprocess-master-matching.js',
   'measure-summary-cost.ts',
+  // Phase E 削除実行本体: 親の既存ocrResult/pageResultsをFieldValue.delete()するのが
+  // 目的そのもの(削除前提条件の判定・canonicalHash比較にも親の値を直接参照する)。
+  // 「読者」ではなく削除実行者のため、detail優先化の対象外。
+  'delete-legacy-ocr-fields.ts',
+  // 上記のヘルパー(decideDeletionAction等、親の値の有無・内容比較ロジック)
+  'lib/deleteLegacyOcrFieldsHelpers.ts',
 ]);
 
 const EXCLUDED_DIR_NAMES = new Set(['node_modules', '.git']);

@@ -530,22 +530,25 @@ async function seed(): Promise<void> {
   await commitInBatches(db, masterWrites);
 
   // 3. processed / error 書類
-  // ADR-0018 (Issue #547) Phase B: 本体と同一batch内でdetail/mainへocrResultを
-  // dual-write (MUST: 原子性)。本体からの削除はPhase E。
+  // ADR-0018 (Issue #547) Phase E: 本体にはocrResultを書かず、detail/mainにのみ
+  // dual-write (MUST: 原子性、同一batch)。d.dataはbuildProcessedDoc()の戻り値の
+  // 都合上ocrResultを含んだままなので、本体書込み直前に除いたコピーを作る
+  // (pdfOperations.ts splitPdfのparentPayload分離と同じパターン)。
   console.log('\n📄 processed/error 書類投入...');
   await commitInBatches(
     db,
     bulkDocs.flatMap((d) => {
       const ref = db.collection('documents').doc(d.id);
+      const { ocrResult, ...parentData } = d.data;
       return [
-        { ref, data: d.data },
-        { ref: ref.collection('detail').doc('main'), data: { ocrResult: d.data.ocrResult as string } },
+        { ref, data: parentData },
+        { ref: ref.collection('detail').doc('main'), data: { ocrResult: ocrResult as string } },
       ];
     }),
   );
 
   // 4. pending 書類 (OCR パイプライン発火)。既存 doc は OCR 完了・検証済み状態の保護のためスキップ
-  // ADR-0018 (Issue #547) Phase B: 本体と同一batch内でdetail/mainへdual-write
+  // ADR-0018 (Issue #547) Phase E: 本体と同一batch内でdetail/mainへのみdual-write
   console.log('\n⏳ pending 書類投入...');
   const pendingWrites: Array<{ ref: FirebaseFirestore.DocumentReference; data: Record<string, unknown> }> = [];
   for (const d of pendingDocs) {
@@ -554,10 +557,11 @@ async function seed(): Promise<void> {
       console.log(`  ⏭ ${d.id} は既に存在するためスキップ (再投入は --force-pending)`);
       continue;
     }
-    pendingWrites.push({ ref, data: d.data });
+    const { ocrResult, ...parentData } = d.data;
+    pendingWrites.push({ ref, data: parentData });
     pendingWrites.push({
       ref: ref.collection('detail').doc('main'),
-      data: { ocrResult: d.data.ocrResult as string },
+      data: { ocrResult: ocrResult as string },
     });
   }
   if (pendingWrites.length > 0) {

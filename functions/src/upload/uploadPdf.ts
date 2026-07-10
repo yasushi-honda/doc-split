@@ -223,7 +223,6 @@ export const uploadPdf = onCall(
           fileId: uploadLogRef.id,
           fileName: finalFileName,
           mimeType,
-          ocrResult: '',
           documentType: '',
           customerName: '',
           officeName: '',
@@ -236,8 +235,8 @@ export const uploadPdf = onCall(
           sourceType: 'upload',
         });
 
-        // ADR-0018 (Issue #547) Phase B: detail/mainへ同一transactionでdual-write
-        // (MUST: 原子性)。未OCRのためocrResultは空文字で初期化。
+        // ADR-0018 (Issue #547) Phase E: ocrResultはdetail/mainにのみ初期化する
+        // (本体には書かない)。同一transactionでの作成はMUST: 原子性。
         transaction.set(docRef.collection('detail').doc('main'), {
           ocrResult: '',
         });

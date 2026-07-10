@@ -85,12 +85,43 @@ export function generateGroupId(groupType: GroupType, groupKey: string): string 
 }
 
 /**
+ * 集計に関わる全フィールド（グループキー・表示名・status）が before/after で
+ * 完全に不変かどうかを判定する。
+ *
+ * Issue #547 Phase E: ocrResult/pageResults 削除等、集計に無関係なフィールドの
+ * 書き込みでも onDocumentWritten が発火し、getAffectedGroups() が無条件に
+ * delta:0 のグループ更新（実質 updatedAt のみ更新する no-op transaction）を
+ * pushしていた。これがdocuments全件に対する破壊的マイグレーション時の
+ * 「トリガーストーム」の一因となるため、集計対象フィールドが完全一致する
+ * 場合は早期returnで下流のgroup transaction/writeを一切発生させない。
+ */
+function isAggregationUnchanged(before: DocumentData, after: DocumentData): boolean {
+  return (
+    before.customerKey === after.customerKey &&
+    before.officeKey === after.officeKey &&
+    before.documentTypeKey === after.documentTypeKey &&
+    before.careManagerKey === after.careManagerKey &&
+    before.customerName === after.customerName &&
+    before.officeName === after.officeName &&
+    before.documentType === after.documentType &&
+    before.careManager === after.careManager &&
+    before.status === after.status
+  );
+}
+
+/**
  * 影響を受けるグループを特定
  */
 export function getAffectedGroups(
   before: DocumentData | undefined,
   after: DocumentData | undefined
 ): Array<{ groupType: GroupType; groupKey: string; displayName: string; delta: number }> {
+  // create（before未定義）/ delete（after未定義）は必ず処理対象。
+  // update時のみ、集計対象フィールドが完全不変なら早期returnで下流writeを回避。
+  if (before && after && isAggregationUnchanged(before, after)) {
+    return [];
+  }
+
   const affected: Array<{ groupType: GroupType; groupKey: string; displayName: string; delta: number }> = [];
 
   const types: Array<{ type: GroupType; keyField: keyof DocumentData; displayField: keyof DocumentData }> = [

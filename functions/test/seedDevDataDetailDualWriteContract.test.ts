@@ -1,10 +1,16 @@
 /**
  * scripts/seed-dev-data.ts の detail/main dual-write 配線契約テスト
- * (ADR-0018 Phase B, Issue #547)
+ * (ADR-0018 Phase B〜E, Issue #547)
  *
  * processed/error 書類・pending 書類の投入時、本体docと同一batch内で
  * detail/main へ ocrResult を dual-write する配線をソース文字列レベルでlock-in
  * する(documentCreationDetailDualWriteContract.test.ts と同形式)。
+ *
+ * Phase E (dual-write停止): d.data (buildProcessedDoc/buildPendingDocの戻り値) は
+ * seed値生成の都合上ocrResultを含んだままなので、本体書込み直前に
+ * `const { ocrResult, ...parentData } = d.data;` で分離し、本体には parentData
+ * (ocrResult除外済み)を、detail/mainには分離した ocrResult 変数を書く。値そのものの
+ * lock-in は scripts/lib/parentWriteOcrFieldExclusionContract.test.ts が担う。
  */
 
 import { expect } from 'chai';
@@ -39,8 +45,10 @@ describe('seed-dev-data.ts detail/main dual-write contract (ADR-0018 Phase B)', 
       { anchorMode: 'from-start' }
     );
     expect(block, 'bulkDocs.flatMap block must be found').to.not.be.null;
+    expect(block).to.match(/const \{ ocrResult, \.\.\.parentData \} = d\.data;/);
+    expect(block).to.match(/\{ ref, data: parentData \}/);
     expect(block).to.match(/ref\.collection\('detail'\)\.doc\('main'\)/);
-    expect(block).to.match(/ocrResult:\s*d\.data\.ocrResult/);
+    expect(block).to.match(/ocrResult:\s*ocrResult\s*as\s*string/);
   });
 
   it('pending書類の投入でdetail/mainへocrResultをdual-writeするpushがある', () => {
@@ -50,8 +58,9 @@ describe('seed-dev-data.ts detail/main dual-write contract (ADR-0018 Phase B)', 
       { anchorMode: 'from-start' }
     );
     expect(loopBlock, 'pendingDocs for-loop block must be found').to.not.be.null;
-    expect(loopBlock).to.match(/pendingWrites\.push\(\{\s*ref,\s*data:\s*d\.data,?\s*\}\)/);
+    expect(loopBlock).to.match(/const \{ ocrResult, \.\.\.parentData \} = d\.data;/);
+    expect(loopBlock).to.match(/pendingWrites\.push\(\{ ref, data: parentData \}\)/);
     expect(loopBlock).to.match(/ref\.collection\('detail'\)\.doc\('main'\)/);
-    expect(loopBlock).to.match(/ocrResult:\s*d\.data\.ocrResult/);
+    expect(loopBlock).to.match(/ocrResult:\s*ocrResult\s*as\s*string/);
   });
 });

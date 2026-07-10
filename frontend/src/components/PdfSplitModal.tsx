@@ -47,6 +47,13 @@ interface PdfSplitModalProps {
   isOpen: boolean
   onClose: () => void
   onSuccess: () => void
+  // ADR-0018 Phase E 事前調査の既知リスク対応: documents/{id}/detail/main の
+  // 取得が未完了・失敗のまま分割を進めると、pageResults 欠落により
+  // documentType/customerName が黙って「未判定」化する（親から渡される
+  // document.pageResults は親側で detail 優先の resolveDetailFields 済み）。
+  // 呼び出し元 (DocumentDetailModal) の useDocumentDetail の状態をそのまま渡す。
+  detailLoading: boolean
+  detailError: boolean
 }
 
 export function PdfSplitModal({
@@ -54,6 +61,8 @@ export function PdfSplitModal({
   isOpen,
   onClose,
   onSuccess,
+  detailLoading,
+  detailError,
 }: PdfSplitModalProps) {
   // 分割ポイント（ページ番号の配列）
   const [splitPoints, setSplitPoints] = useState<number[]>([])
@@ -361,6 +370,25 @@ export function PdfSplitModal({
           </DialogDescription>
         </DialogHeader>
 
+        {(detailLoading || detailError) && (
+          <div
+            className={`flex items-center gap-2 rounded p-2 text-sm ${
+              detailError
+                ? 'bg-red-50 text-red-700 border border-red-200'
+                : 'bg-blue-50 text-blue-700 border border-blue-200'
+            }`}
+          >
+            {detailError ? (
+              <AlertCircle className="h-4 w-4 flex-shrink-0" />
+            ) : (
+              <Loader2 className="h-4 w-4 flex-shrink-0 animate-spin" />
+            )}
+            {detailError
+              ? '書類詳細の取得に失敗したため分割を実行できません。モーダルを閉じて開き直してください。'
+              : '書類詳細を読み込み中です。読み込みが完了するまで分割は実行できません。'}
+          </div>
+        )}
+
         {!isConfirmStep ? (
           // ステップ1: 分割ポイント設定
           <div className="flex-1 overflow-hidden flex gap-4">
@@ -600,7 +628,7 @@ export function PdfSplitModal({
               </Button>
               <Button
                 onClick={() => setIsConfirmStep(true)}
-                disabled={splitPoints.length === 0}
+                disabled={splitPoints.length === 0 || detailLoading || detailError}
               >
                 次へ: 分割内容の確認
               </Button>
@@ -612,7 +640,7 @@ export function PdfSplitModal({
               </Button>
               <Button
                 onClick={handleSplit}
-                disabled={splitPdf.isPending}
+                disabled={splitPdf.isPending || detailLoading || detailError}
                 className="bg-orange-600 hover:bg-orange-700"
               >
                 {splitPdf.isPending ? (

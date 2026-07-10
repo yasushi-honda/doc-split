@@ -746,9 +746,15 @@ export const splitPdf = onCall(
       const createdDocIds = accumulated.map((item) => item.newDocRef.id);
       const batch = db.batch();
       for (const item of accumulated) {
-        batch.set(item.newDocRef, item.payload);
-        // ADR-0018 (Issue #547) Phase B: 子docのocrResult/pageResultsをdetail/mainへ
-        // 同一batchでdual-write (MUST: 原子性)。本体からの削除はPhase E。
+        // ADR-0018 (Issue #547) Phase E: item.payload は親batch.setとdetail batch.setの
+        // 両方のソースとして共有されているため、親用にocrResult/pageResultsを除いた
+        // コピーを作る(親には書かない)。detail書込みは元のitem.payloadから値を取る。
+        const parentPayload = { ...item.payload };
+        delete parentPayload.ocrResult;
+        delete parentPayload.pageResults;
+        batch.set(item.newDocRef, parentPayload);
+        // 子docのocrResult/pageResultsはdetail/mainにのみ書く。本体updateと同一batchでの
+        // dual-write はMUST: 原子性(2回の独立書込は禁止)。
         batch.set(item.newDocRef.collection('detail').doc('main'), {
           ocrResult: item.payload.ocrResult,
           pageResults: item.payload.pageResults,

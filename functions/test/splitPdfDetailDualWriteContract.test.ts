@@ -1,10 +1,14 @@
 /**
  * splitPdf の detail/main dual-write + segments 上限249 契約テスト
- * (ADR-0018 Phase B, Issue #547)
+ * (ADR-0018 Phase B〜E, Issue #547)
  *
  * batch内訳が child(本体+detail/main) set × 2N + parent update × 1 = 2N+1 ≤ 500 と
  * なるよう、上限が249であること、および子docごとの detail/main batch.set 配線を
  * ソース文字列レベルでlock-inする(splitPdfPayloadContract.test.ts と同形式)。
+ *
+ * Phase E (dual-write停止): item.payload は親batch.setとdetail batch.setの両方の
+ * ソースとして共有されているため、親には ocrResult/pageResults を除いた parentPayload
+ * を書く。detail batch.set は元の item.payload から値を取る(変更なし)。
  */
 
 import { expect } from 'chai';
@@ -44,12 +48,25 @@ describe('splitPdf detail/main dual-write contract (ADR-0018 Phase B)', () => {
     );
     expect(loopBlock, 'accumulated batch.set loop block must be found').to.not
       .be.null;
-    expect(loopBlock).to.match(/batch\.set\(item\.newDocRef,\s*item\.payload\)/);
+    expect(loopBlock).to.match(/batch\.set\(item\.newDocRef,\s*parentPayload\)/);
     expect(loopBlock).to.match(
       /batch\.set\(\s*item\.newDocRef\.collection\('detail'\)\.doc\('main'\),/
     );
     expect(loopBlock).to.match(/ocrResult:\s*item\.payload\.ocrResult/);
     expect(loopBlock).to.match(/pageResults:\s*item\.payload\.pageResults/);
+  });
+
+  it('Phase E: 親batch.setにはocrResult/pageResultsを含まないparentPayloadを使う(値as-is漏れ防止)', () => {
+    const loopBlock = extractBraceBlock(
+      sourceText,
+      /for \(const item of accumulated\) \{/,
+      { anchorMode: 'from-start' }
+    );
+    expect(loopBlock, 'accumulated batch.set loop block must be found').to.not
+      .be.null;
+    expect(loopBlock).to.match(/const parentPayload = \{ \.\.\.item\.payload \};/);
+    expect(loopBlock).to.match(/delete parentPayload\.ocrResult;/);
+    expect(loopBlock).to.match(/delete parentPayload\.pageResults;/);
   });
 
   it('detail/main への batch.set は親 docRef.update と同一 batch (T4) 内にある', () => {

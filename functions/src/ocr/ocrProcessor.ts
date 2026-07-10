@@ -325,9 +325,7 @@ export async function processDocument(
     customerResult,
     officeResult,
     dateResult,
-    savedOcrResult,
     ocrResultUrl,
-    pageResults,
     totalPages,
     suggestedNewOffice,
     modelId: MODEL_ID,
@@ -400,8 +398,9 @@ export async function processDocument(
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
-    // ADR-0018 (Issue #547) Phase B: 本体updateと同一transactionでdetail/mainへ
-    // dual-write (MUST: 原子性、2回の独立書込は禁止)。本体からの削除はPhase E。
+    // ADR-0018 (Issue #547) Phase E: ocrResult/pageResultsはdetail/mainにのみ書く
+    // (本体updateの`merged`は型レベルでこれらを含まない、ocrUpdatePayloadBuilder.ts参照)。
+    // 本体updateと同一transactionでのdetail/main書込みはMUST: 原子性(2回の独立書込は禁止)。
     tx.set(docRef.collection('detail').doc('main'), {
       ocrResult: savedOcrResult,
       pageResults,
