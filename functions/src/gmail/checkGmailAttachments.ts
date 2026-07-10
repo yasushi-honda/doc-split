@@ -377,7 +377,6 @@ async function processAttachment(
       fileId: logRef.id,
       fileName: filename,
       mimeType,
-      ocrResult: '',
       documentType: '',
       customerName: '',
       officeName: '',
@@ -390,8 +389,8 @@ async function processAttachment(
       sourceType: 'gmail',
     });
 
-    // ADR-0018 (Issue #547) Phase B: detail/mainへ同一transactionでdual-write
-    // (MUST: 原子性)。未OCRのためocrResultは空文字で初期化。
+    // ADR-0018 (Issue #547) Phase E: ocrResultはdetail/mainにのみ初期化する
+    // (本体には書かない)。同一transactionでの作成はMUST: 原子性。
     transaction.set(docRef.collection('detail').doc('main'), {
       ocrResult: '',
     });

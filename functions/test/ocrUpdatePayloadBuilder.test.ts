@@ -11,15 +11,10 @@ import {
   buildOcrExtractionUpdatePayload,
   type OcrUpdatePayloadInputs,
 } from '../src/ocr/ocrUpdatePayloadBuilder';
-import type { RawPageOcrResult } from '../src/ocr/buildPageResult';
 
 const FIXED_EXTRACTED_AT = admin.firestore.FieldValue.serverTimestamp();
 
 function makeInputs(overrides: Partial<OcrUpdatePayloadInputs> = {}): OcrUpdatePayloadInputs {
-  const pageResults: RawPageOcrResult[] = [
-    { text: 'page1 text', truncated: false, pageNumber: 1, inputTokens: 10, outputTokens: 5 },
-  ];
-
   return {
     documentTypeResult: {
       documentType: '請求書',
@@ -80,9 +75,7 @@ function makeInputs(overrides: Partial<OcrUpdatePayloadInputs> = {}): OcrUpdateP
       confidence: 80,
       allCandidates: [],
     },
-    savedOcrResult: 'page1 text',
     ocrResultUrl: null,
-    pageResults,
     totalPages: 1,
     suggestedNewOffice: null,
     modelId: 'gemini-test-model',
@@ -95,9 +88,7 @@ describe('buildOcrExtractionUpdatePayload', () => {
   it('抽出結果が正常な場合、全フィールドを期待通りに構築する', () => {
     const payload = buildOcrExtractionUpdatePayload(makeInputs());
 
-    expect(payload.ocrResult).to.equal('page1 text');
     expect(payload.ocrResultUrl).to.equal(null);
-    expect(payload.pageResults).to.have.lengthOf(1);
     expect(payload.documentType).to.equal('請求書');
     expect(payload.customerName).to.equal('山田太郎');
     expect(payload.customerId).to.equal('cust-1');

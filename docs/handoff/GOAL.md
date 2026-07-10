@@ -1,7 +1,7 @@
 ---
-updated: 2026-07-09
+updated: 2026-07-10
 ---
-<!-- session110: Phase D cocoro/kanameone本番展開完遂 + CodexセカンドオピニオンによるPhase E前AC具体化を反映 -->
+<!-- session112: PR #611作成済み。/code-review high(8 finder+20件1-vote検証)+Codexセカンドオピニオン(MCP high)でマージ前修正6件を特定・実装・push済み(コミット2459986)。follow-up8件はPRコメントに記録済み。次: ui-verifiedラベル対応(PR #611はhookでマージブロック中)→マージ→本番実行は番号認可 -->
 
 ## 現在のミッション
 運用コスト圧縮2トラック — #547 Firestore読取egress削減（ADR-0018 detail/main分離）と #548 Gemini 3.5 Flash移行 — を、本番2環境（kanameone / cocoro）で安全に完遂する。
@@ -30,14 +30,20 @@ updated: 2026-07-09
 - [x] #547 Phase D **PR-D4**: scripts 読者切替（**PR #602 マージ済み** 2026-07-09。reprocess-master-matching.js/measure-summary-cost.tsをdetail優先+親フォールバックに切替、AC9読者ゼロgrep契約テスト新設〔scripts/lib/detailReaderCutoverContract.test.ts〕。Codexで検出2件〔measure-field-byte-sizes.js検出漏れ/フォールバック順序〕修正済み）
 - [x] #547 Phase D 展開（2026-07-09 session110完遂。dev: E2E確認PASS〔OCR結果アコーディオン/PDF分割モーダル/処理履歴OCR抜粋、コンソールエラー0件〕。cocoro: Hosting→verify PASS〔新規処理1件のbackfill漏れを検出・--execute再実行で解消→再verify全件parity一致〕→Functions全関数update成功。kanameone: Hosting→verify一発PASS〔9,435件全件parity一致〕→Functions全関数update成功。副産物: kanameone Hosting用GitHub Actions workflow新設〔PR #606、Firebase CLIブラウザ認証不要化〕）
 - [x] #547 Phase E 着手前 AC9ゲート内容確認（2026-07-09 session110、Codexセカンドオピニオン via `/codex plan` MCP版・effort high。AC9正体特定: `scripts/lib/detailReaderCutoverContract.test.ts` が定義する「scripts配下で許可リスト外の親`ocrResult/pageResults`直接参照ゼロ」契約、`cd scripts && npm test` 45 passingで記録上PASS済み〔今回read-only制約のため再実行はせず記録確認のみ〕。**ただしAC9はPhase E全体の十分条件ではないとの指摘あり**、詳細は次項）
-- [ ] #547 Phase E impl-plan 起票 → 実行 → Issue #547 close（trigger: 下記4点をAcceptance Criteria候補としてimpl-planに組込み。destructive につき番号認可+devリハーサル必須）
-  - **[High]** FE側の同等契約テスト（親`ocrResult/pageResults`直接参照ゼロ）の有無を確認、なければAC9同等のgrep契約テストをFEにも追加
-  - **[High]** Phase E直前に両本番（cocoro/kanameone）で `backfill-detail-subcollection --verify` を再実行し `detailMissing=0/mismatch=0/staleDetail=0/inPipeline=0` を再確認（session110時点の記録はスナップショットでありPhase E直前のライブ状態ではない）
-  - **[Medium]** トリガーストーム評価: Phase Eの全件`FieldValue.delete()`で`onDocumentWrite`/search index系トリガーが全件発火するため、レート制御・影響評価を設計に含める（ADR-0018 Phase E行に前提として明記済み）
-  - **[Medium]** FE既知リスク2件の修正 or 明示受容判断: `PdfSplitModal`のdetail loading中操作ブロック欠如（`frontend/src/components/DocumentDetailModal.tsx`）/ `useDocumentDetail`のisLoading・isError未サーフェス
+- [x] #547 Phase E impl-plan フル起票・承認完了（session111、2026-07-10。GOAL.md記載4点ACを起点に、Codexセカンドオピニオン2周実施。1周目でPhase E後もdual-writeが止まらず親フィールドが再発生する重大な設計ギャップを検出（ocrProcessor.ts:391-410でmergedがocrResult/pageResultsを含み本体へも書込み続ける実装をコードで実証確認）→ dual-write停止(PR-E1)をPhase Eスコープへ前倒し統合する方針に転換。2周目で7指摘、うち2件（getReprocessClearFields()のdeleteFieldは維持すべき/splitPdfのitem.payloadは親・detail共有のため分離が必要）をコード検証で確認・計画反映。全17件のAcceptance Criteriaで承認済み）
+- [x] #547 Phase E **PR-E1**: dual-write停止（親への「値」set/update停止、`deleteField()`によるクリアは維持） — `ocrProcessor.ts`/`pdfOperations.ts`splitPdf(parentPayload/detailPayload分離)/`checkGmailAttachments.ts`/`uploadPdf.ts`/`import-historical-gmail.js`/`seed-dev-data.ts`改修 + 書込み側契約テスト新設。**devリハーサル中に見落とし発見・修正**: `create-pending-doc.ts`(Issue #562、Phase B完了後追加され網羅的監査対象外だった運用スクリプト)が本体へocrResult直書きしていたため追加修正+契約テスト追加
+- [x] #547 Phase E **PR-E2**: 削除実行基盤 — migration marker機構(`_migrations/adr0018PhaseEPreflight`) + documentGroupsトリガーdiff最適化(`isAggregationUnchanged()`) + 削除スクリプト`scripts/delete-legacy-ocr-fields.ts`(状態別5分類ロジック、Firestoreのみの軽量manifest=GCS不要) + `--rollback`実装 + FE契約テスト新設 + PdfSplitModal/DocumentDetailModal強化(loading/error gate)。GitHub Actions `run-ops-script.yml`にdelete-legacy-ocr-fields選択肢追加
+- [x] #547 Phase E: ADR-0018 Amended追記完了（Phase E/F区分改訂、Codex 7th/8th review記録を含む）
+- [x] #547 Phase E: devリハーサル完遂（2026-07-10、dev環境`doc-split-dev`、GitHub Actions経由。全項目PASS: dry-run/mark-preflight/execute canary/verify/rollback/execute全件160件/**PR-E1実効性実証**(修正版create-pending-docで新規OCR処理後も親フィールド非復活を確認)/**documentGroups負荷実測**(全160件`Updated 0 groups`、下流write完全ゼロ)/**search_index負荷実測**(全件unchanged)/**kill→再開試験**(削除中にジョブキャンセル→87件処理済みで中断→再実行で残り73件削除、二重削除エラーなし、detail/main不在0件=部分破損なし)。実装: featureブランチ`feature/adr-0018-phase-e-dual-write-stop`にコミット2件、push済み（未PR）
+- [x] #547 Phase E: PR作成（**PR #611**、session111）
+- [x] #547 Phase E: `/code-review high`（8 finder + 20件1-vote検証）+ Codexセカンドオピニオン（MCP high）でバランス判定 → マージ前修正必須6件を特定・実装・push済み（session112、コミット2459986）。follow-up8件はPRコメントで記録（新規Issue化基準未達のため対応不要）
+- [ ] #547 Phase E: UI確認（`ui-verified`ラベル）— PR #611は`.claude/hooks/ui-change-merge-check.sh`により**現状マージがブロックされている**（`DocumentDetailModal.tsx`/`PdfSplitModal.tsx`のUI変更にブラウザ確認証跡が未記録）。Playwright MCPまたは手動で変更箇所を操作確認 → 証跡をPRに記録 → `gh pr edit 611 --add-label ui-verified`
+- [ ] #547 Phase E: PRマージ（番号単位明示認可必須）
+- [ ] #547 Phase E: 本番実行（cocoro先行→kanameone後続、destructiveにつき番号単位認可必須。手順: `--mark-preflight --marked-by <name>` → `--dry-run`確認 → `--execute --limit 10`canary → `--verify` → `--execute`全件 → `--verify`最終確認。GitHub Actions `run-ops-script.yml`経由）
 
 ## 🔄 中断点（in-flight）
-- 対象タスク: #547 Phase E `/impl-plan` フル起票
-- 直前の状態: Phase D展開が cocoro/kanameone 両本番環境で完遂（2026-07-09 session110）。AC9ゲート内容をCodexセカンドオピニオンで特定・記録済み。Phase E自体は destructive（親docフィールド削除）につき未着手
-- 次の一手: ① 上記4点（FE契約テスト有無/直前再verify/トリガーストーム評価/FE既知リスク2件）をAcceptance Criteriaに組み込んで `/impl-plan` フル起票 ② dev リハーサル必須 ③ 番号単位認可を得てから本番実行
-- 検証コマンド: `cd functions && npm test`（1,664 passing）/ `cd frontend && npm test`（304 passing）/ `cd scripts && npm test`（45 passing）
+- 対象タスク: #547 Phase E UI確認（PR #611のui-verifiedラベル未付与によるマージブロック解消）
+- 直前の状態: `/code-review high`+Codexセカンドオピニオンで確定したマージ前修正6件を実装・テスト全PASS・push済み（session112、2026-07-10、コミット2459986）。PR #611にfollow-up事項をコメント記録済み。dev環境のテストデータ`phase-e-devcheck-001`(意図的に壊れた不一致状態、実害なし)/`phase-e-devcheck-002`(正常)が残存 — 後片付けは任意
+- 次の一手: ① Playwright MCP等でDocumentDetailModal/PdfSplitModalのloading/errorゲート表示を実機確認 ② 確認証跡をPR #611に記録 ③ `ui-verified`ラベル付与 ④ マージ番号単位認可を得る ⑤ 本番実行は別途認可（cocoro先行）
+- 変更ファイル: 32件（PR-E1/E2実装25件 + create-pending-doc.ts修正2件 + code-review/Codex指摘修正5件）。コミット: f05f297 → 623b405 → 85cf68d(Codex review-diff修正) → 2459986(code-review+Codex修正)
+- 検証コマンド: `cd functions && npm test`（1,680 passing）/ `cd frontend && npm test`（310 passing）/ `cd scripts && npm test`（72 passing）

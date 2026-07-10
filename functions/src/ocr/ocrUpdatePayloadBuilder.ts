@@ -21,6 +21,10 @@
  * Issue #526 D2: この戻り値は呼出元でconfirmedFieldMerge.tsのconfirmed保護マージを
  * 経てから書き込まれる(customerConfirmed等がtrueのフィールドはこの関数の提案値ではなく
  * 既存ドキュメントの確定値が優先される)。
+ *
+ * ADR-0018 Phase E (Issue #547): `ocrResult`/`pageResults` は本体update payloadに
+ * 含まない(型レベルで本体への値書込みを不可能にする)。detail/mainへの書込みは
+ * 呼出元(ocrProcessor.ts)がローカル変数 savedOcrResult/pageResults を直接使う。
  */
 
 import type {
@@ -30,16 +34,13 @@ import type {
   DateExtractionResult,
   MatchType,
 } from '../utils/extractors';
-import type { RawPageOcrResult } from './buildPageResult';
 
 export interface OcrUpdatePayloadInputs {
   documentTypeResult: DocumentExtractionResult;
   customerResult: CustomerExtractionResult;
   officeResult: OfficeExtractionResultWithCandidates;
   dateResult: DateExtractionResult;
-  savedOcrResult: string;
   ocrResultUrl: string | null;
-  pageResults: RawPageOcrResult[];
   totalPages: number;
   suggestedNewOffice: string | null;
   /** ocrExtraction.version に書き込むモデルID (呼出元のGEMINI_CONFIG.modelId) */
@@ -78,9 +79,7 @@ export interface OcrExtractionMeta {
  * 呼出元(ocrProcessor.ts)がconfirmed保護マージ後にgenerateDisplayFileName()を呼び出す。
  */
 export interface OcrExtractionUpdateFields {
-  ocrResult: string;
   ocrResultUrl: string | null;
-  pageResults: RawPageOcrResult[];
   documentType: string;
   customerName: string;
   customerId: string | null;
@@ -151,9 +150,7 @@ export function buildOcrExtractionUpdatePayload(
     customerResult,
     officeResult,
     dateResult,
-    savedOcrResult,
     ocrResultUrl,
-    pageResults,
     totalPages,
     suggestedNewOffice,
     modelId,
@@ -165,9 +162,7 @@ export function buildOcrExtractionUpdatePayload(
     .map((c) => c.name);
 
   return {
-    ocrResult: savedOcrResult,
     ocrResultUrl: ocrResultUrl ?? null,
-    pageResults,
     documentType: documentTypeResult.documentType || '未判定',
     customerName: customerResult.bestMatch?.name || '不明顧客',
     customerId: customerResult.bestMatch?.id ?? null,

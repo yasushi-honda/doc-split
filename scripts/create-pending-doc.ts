@@ -60,23 +60,29 @@ async function main(): Promise<void> {
 
   const fileName = storagePath!.split('/').pop() || storagePath!;
 
-  await ref.set({
-    id: docId,
-    processedAt: admin.firestore.Timestamp.now(),
-    fileId: docId,
-    fileName,
-    mimeType: 'application/pdf',
-    ocrResult: '',
-    documentType: '',
-    customerName: '',
-    officeName: '',
-    fileUrl: `gs://${storageBucket}/${storagePath}`,
-    fileDate: null,
-    isDuplicateCustomer: false,
-    totalPages: 0,
-    targetPageNumber: 1,
-    status: 'pending',
-    sourceType: 'upload',
+  // ADR-0018 (Issue #547) Phase E: ocrResultはdetail/mainにのみ初期化する
+  // (本体には書かない)。同一transactionでの作成はMUST: 原子性。
+  await db.runTransaction(async (tx) => {
+    tx.set(ref, {
+      id: docId,
+      processedAt: admin.firestore.Timestamp.now(),
+      fileId: docId,
+      fileName,
+      mimeType: 'application/pdf',
+      documentType: '',
+      customerName: '',
+      officeName: '',
+      fileUrl: `gs://${storageBucket}/${storagePath}`,
+      fileDate: null,
+      isDuplicateCustomer: false,
+      totalPages: 0,
+      targetPageNumber: 1,
+      status: 'pending',
+      sourceType: 'upload',
+    });
+    tx.set(ref.collection('detail').doc('main'), {
+      ocrResult: '',
+    });
   });
 
   console.log(`✅ documents/${docId} をpendingで作成しました (fileUrl: gs://${storageBucket}/${storagePath})`);

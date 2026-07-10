@@ -41,10 +41,13 @@ export interface Document {
   /**
    * @deprecated ADR-0018 (Issue #547) Phase D: 読込は `documents/{id}/detail/main`
    * (`fetchDocumentDetail`/`resolveDetailFields`、`frontend/src/hooks/useDocuments.ts`)
-   * に切替済み。本フィールドは書込互換のためPhase E完了まで残置するのみで、Phase E後は
-   * 本体から削除され常に空文字列になる。新規コードはこのフィールドを直接参照しないこと。
+   * に切替済み。Phase E (dual-write停止 + 削除実行) により、本フィールドは新規docの
+   * 本体には書き込まれず undefined になる(review指摘反映: 以前は「Phase E後は常に
+   * 空文字列になる」としていたが、実際に本体へ書込み自体が行われないためundefinedが
+   * 正しい実態)。新規コードはこのフィールドを直接参照せず、必ず `resolveDetailFields()`
+   * 経由で取得すること。
    */
-  ocrResult: string;
+  ocrResult?: string;
   ocrResultUrl?: string; // 長い場合はCloud Storage参照
   /**
    * OCR結果の軽量抜粋 (ADR-0018 Phase B、Issue #547)。

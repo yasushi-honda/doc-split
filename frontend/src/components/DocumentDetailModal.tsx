@@ -63,12 +63,14 @@ interface DocumentDetailModalProps {
 function MobileContentPopup({
   type,
   document: doc,
+  isDetailError,
   onClose,
   onGenerateSummary,
   isGeneratingSummary,
 }: {
   type: 'summary' | 'ocr'
   document: { summary?: SummaryField; ocrResult?: string }
+  isDetailError: boolean
   onClose: () => void
   onGenerateSummary: () => void
   isGeneratingSummary: boolean
@@ -192,6 +194,8 @@ function MobileContentPopup({
         summaryDiv.style.lineHeight = '1.6'
         summaryDiv.textContent = doc.summary.text
         contentArea.replaceChildren(summaryDiv)
+      } else if (isDetailError) {
+        contentArea.innerHTML = `<p style="font-size: 14px; color: #ef4444; text-align: center; padding: 16px;">OCR結果の取得に失敗したため要約を生成できません</p>`
       } else if (doc.ocrResult && doc.ocrResult.length >= 100) {
         contentArea.innerHTML = `<div style="text-align: center; padding: 16px;">
           <button id="generate-summary-btn" style="padding: 8px 16px; background: #f3e8ff; color: #7c3aed; border: 1px solid #c4b5fd; border-radius: 6px; cursor: pointer;">
@@ -206,12 +210,17 @@ function MobileContentPopup({
       // OCR 結果は改行や文字制御を保持する必要があるため <pre> を使用。
       const ocrPre = globalThis.document.createElement('pre')
       ocrPre.style.fontSize = '12px'
-      ocrPre.style.color = '#4b5563'
       ocrPre.style.whiteSpace = 'pre-wrap'
       ocrPre.style.fontFamily = 'monospace'
       ocrPre.style.lineHeight = '1.5'
       ocrPre.style.margin = '0'
-      ocrPre.textContent = doc.ocrResult || 'OCR結果なし'
+      if (isDetailError) {
+        ocrPre.style.color = '#ef4444'
+        ocrPre.textContent = 'OCR結果の取得に失敗しました'
+      } else {
+        ocrPre.style.color = '#4b5563'
+        ocrPre.textContent = doc.ocrResult || 'OCR結果なし'
+      }
       contentArea.replaceChildren(ocrPre)
     }
 
@@ -261,7 +270,7 @@ function MobileContentPopup({
         container.parentNode.removeChild(container)
       }
     }
-  }, [type, doc.summary?.text, doc.ocrResult, onClose, onGenerateSummary])
+  }, [type, doc.summary?.text, doc.ocrResult, isDetailError, onClose, onGenerateSummary])
 
   // isGeneratingSummary の変更を反映
   useEffect(() => {
@@ -350,7 +359,15 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
   const { data: document, isLoading, isError, error, refetch } = useDocument(documentId)
   // オンデマンドdetail取得 (ADR-0018 Phase D PR-D3、Issue #547): モーダルが開いている
   // 間のみ documents/{id}/detail/main を読む。一覧・処理履歴では読まない(egress削減)
-  const { data: detailFields } = useDocumentDetail(documentId, {
+  // isLoading/isError は Phase E 事前調査の既知リスク対応で取得: detail取得が
+  // 未完了・失敗のまま PdfSplitModal を操作すると pageResults 欠落により
+  // documentType/customerName が黙って「未判定」化するため、状態をUIに反映する。
+  const {
+    data: detailFields,
+    isLoading: isDetailLoading,
+    isError: isDetailError,
+    error: detailError,
+  } = useDocumentDetail(documentId, {
     enabled: open,
     status: document?.status,
   })
@@ -1060,6 +1077,16 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                     {verifyError}
                   </div>
                 )}
+                {isDetailError && (
+                  <div className="mb-4 flex items-start gap-2 rounded bg-red-50 p-2 text-xs text-red-600">
+                    <AlertCircle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+                    <span>
+                      書類詳細（OCR結果・分割用ページ情報）の取得に失敗しました。
+                      {detailError?.message ? `（${detailError.message}）` : ''}
+                      再度開き直すか、しばらくしてからお試しください。
+                    </span>
+                  </div>
+                )}
 
                 {isEditing && (
                   <div className="mb-4 flex gap-2 rounded border border-blue-200 bg-blue-50 p-2 text-xs text-blue-700">
@@ -1402,6 +1429,8 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                           <div className="text-sm text-gray-700 leading-relaxed">
                             {document.summary.text}
                           </div>
+                        ) : isDetailError ? (
+                          <p className="text-xs text-red-500">OCR結果の取得に失敗したため要約を生成できません</p>
                         ) : resolved.ocrResult && resolved.ocrResult.length >= 100 ? (
                           <Button
                             variant="outline"
@@ -1452,9 +1481,13 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                     </button>
                     {expandedSection === 'ocr' && (
                       <div className="p-3 overflow-y-auto max-h-[220px] bg-white border-t border-gray-100">
-                        <div className="text-xs text-gray-600 whitespace-pre-wrap font-mono leading-relaxed">
-                          {resolved.ocrResult || 'OCR結果なし'}
-                        </div>
+                        {isDetailError ? (
+                          <p className="text-xs text-red-500">OCR結果の取得に失敗しました</p>
+                        ) : (
+                          <div className="text-xs text-gray-600 whitespace-pre-wrap font-mono leading-relaxed">
+                            {resolved.ocrResult || 'OCR結果なし'}
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
@@ -1513,6 +1546,8 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
           isOpen={isSplitModalOpen}
           onClose={() => setIsSplitModalOpen(false)}
           onSuccess={handleSplitSuccess}
+          detailLoading={isDetailLoading}
+          detailError={isDetailError}
         />
       )}
     </Dialog>
@@ -1522,6 +1557,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
       <MobileContentPopup
         type={mobilePopup}
         document={{ summary: document.summary, ocrResult: resolved.ocrResult }}
+        isDetailError={isDetailError}
         onClose={() => setMobilePopup(null)}
         onGenerateSummary={handleGenerateSummary}
         isGeneratingSummary={isGeneratingSummary}
