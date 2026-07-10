@@ -147,7 +147,10 @@ export function firestoreToDocument(id: string, data: Record<string, unknown>): 
     fileName: data.fileName as string,
     displayFileName: data.displayFileName as string | undefined,
     mimeType: data.mimeType as string,
-    ocrResult: data.ocrResult as string,
+    // Phase E (Issue #547) 以降、新規docの本体にはocrResultが書き込まれずundefinedになる
+    // (shared/types.ts Document.ocrResult は optional)。無条件キャストは実態と乖離するため
+    // typeof guardで安全に変換する。
+    ocrResult: typeof data.ocrResult === 'string' ? data.ocrResult : undefined,
     ocrResultUrl: data.ocrResultUrl as string | undefined,
     // 一覧表示用軽量抜粋 (ADR-0018 Phase B、Issue #547)
     ocrExcerpt: data.ocrExcerpt as string | undefined,

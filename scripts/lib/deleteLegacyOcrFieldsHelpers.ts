@@ -10,7 +10,6 @@
  * mismatch誤判定する)。
  */
 
-import { createHash } from 'node:crypto';
 import { FieldValue } from 'firebase-admin/firestore';
 
 /** in-pipeline status (削除対象・検証対象から除外。backfillDetailHelpers.tsと同じ定義) */
@@ -82,28 +81,37 @@ export function buildDeletionFieldUpdate(params: {
 }
 
 /**
- * 値のcanonical JSON文字列(キーを再帰的にソート)のSHA-256を返す。
- * backfillDetailHelpers.ts と同一実装(重複だが、scripts/lib配下は各スクリプトが
- * 独立npmコンテキストを持たないシンプルな構成のため、依存関係を増やさず値渡しで
- * 済む範囲は許容する)。
+ * `--rollback` が `docRef.update()` に渡す復元ペイロードを組み立てる。manifestに記録された
+ * deletedFields(削除時に実際に消したフィールド名)のうち、detail/main側の現在値が期待する
+ * 型を満たすものだけを復元対象に含める(Partial Update: 対象外フィールドは一切含めない)。
+ *
+ * 型不一致(detail/mainの値がstring/Arrayでない)のフィールドは黙って除外する。呼出元は
+ * 戻り値が空オブジェクトになったケースを「型不一致で復元不可」として明示的にカウント・
+ * 警告すること(review指摘反映: ここで空を返すこと自体は正常な仕様だが、呼出元が
+ * 無視すると復元失敗がexitCode 0のまま検知されずに終わる)。
  */
-export function canonicalHash(value: unknown): string {
-  return createHash('sha256').update(canonicalStringify(value)).digest('hex');
+export function buildRollbackFieldUpdate(params: {
+  deletedFields: string[];
+  detailOcrResult: unknown;
+  detailPageResults: unknown;
+}): Record<string, unknown> {
+  const restore: Record<string, unknown> = {};
+  if (params.deletedFields.includes('ocrResult') && typeof params.detailOcrResult === 'string') {
+    restore.ocrResult = params.detailOcrResult;
+  }
+  if (params.deletedFields.includes('pageResults') && Array.isArray(params.detailPageResults)) {
+    restore.pageResults = params.detailPageResults;
+  }
+  return restore;
 }
 
-function canonicalStringify(value: unknown): string {
-  if (value === null || typeof value !== 'object') {
-    return JSON.stringify(value) ?? 'undefined';
-  }
-  if (Array.isArray(value)) {
-    return `[${value.map((v) => canonicalStringify(v)).join(',')}]`;
-  }
-  const keys = Object.keys(value as Record<string, unknown>).sort();
-  const entries = keys.map(
-    (k) => `${JSON.stringify(k)}:${canonicalStringify((value as Record<string, unknown>)[k])}`
-  );
-  return `{${entries.join(',')}}`;
-}
+/**
+ * 値のcanonical JSON文字列(キーを再帰的にソート)のSHA-256を返す。
+ * backfillDetailHelpers.ts (Phase C) の実装を再利用する(review指摘反映: 独自複製すると
+ * Phase C/Eで「一致」の判定基準が将来乖離し、destructive削除の安全条件が壊れるリスクが
+ * あった)。
+ */
+export { canonicalHash } from './backfillDetailHelpers';
 
 /**
  * --audit / --dry-run / --execute / --verify の集計カウンタ。
@@ -117,7 +125,6 @@ export interface DeletionCounters {
   skippedInPipeline: number;
   deleted: number;
   parentDeletedDuringRun: number;
-  decisionChanged: number;
   errors: number;
 }
 
@@ -131,7 +138,6 @@ export function createDeletionCounters(): DeletionCounters {
     skippedInPipeline: 0,
     deleted: 0,
     parentDeletedDuringRun: 0,
-    decisionChanged: 0,
     errors: 0,
   };
 }

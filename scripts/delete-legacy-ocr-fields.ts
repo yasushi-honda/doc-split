@@ -53,10 +53,12 @@ import { FieldValue } from 'firebase-admin/firestore';
 import {
   decideDeletionAction,
   buildDeletionFieldUpdate,
+  buildRollbackFieldUpdate,
   canonicalHash,
   createDeletionCounters,
   IN_PIPELINE_STATUSES,
   type DeletionCounters,
+  type DeletionDecision,
 } from './lib/deleteLegacyOcrFieldsHelpers';
 
 const ALLOWED_PROJECT_IDS = ['doc-split-dev', 'docsplit-kanameone', 'docsplit-cocoro'];
@@ -130,13 +132,23 @@ function parseArgs(): { mode: Mode; limit: number; markedBy: string; runId: stri
       continue;
     }
     if (arg === '--marked-by') {
-      markedBy = args[i + 1] ?? '';
-      i++;
+      // review指摘反映: 次トークンが未知フラグかどうか確認せず無条件で値に代入すると、
+      // 値の指定漏れ時(例: --marked-by --dry-run)に次のフラグを静かに飲み込んでしまう
+      // (pr-d4-backfill/index.ts の readArg と同じガードをミラー)。'--'始まりの値は
+      // フラグとみなし消費しない(=値未指定として扱う、後続のバリデーションでエラーになる)。
+      const value = args[i + 1];
+      if (value !== undefined && !value.startsWith('--')) {
+        markedBy = value;
+        i++;
+      }
       continue;
     }
     if (arg === '--run-id') {
-      runId = args[i + 1] ?? '';
-      i++;
+      const value = args[i + 1];
+      if (value !== undefined && !value.startsWith('--')) {
+        runId = value;
+        i++;
+      }
       continue;
     }
     console.error(`未知の引数です: ${arg} (--limit=N 形式は不可、--limit N を使用)`);
@@ -271,13 +283,31 @@ function manifestCollectionPath(runId: string): string {
   return `_migrations/adr0018PhaseEDeletionRun_${runId}/deletedDocs`;
 }
 
+type DeletionOutcome = DeletionDecision | 'parent-deleted-during-run';
+
+/**
+ * DeletionOutcome → カウンタの対応表。Record型により、outcomeユニオンに状態を追加すると
+ * ここがコンパイルエラーになる (backfill-detail-subcollection.tsのOUTCOME_COUNTERパターンを
+ * ミラー、review指摘反映: 以前はswitch文の到達不能なdefault節がdecisionChangedへ静かに
+ * 吸収しており、将来DeletionDecisionに分類が追加された際にexecuteのFAILゲートを
+ * 素通りしうる型安全性のギャップがあった)。
+ */
+const OUTCOME_COUNTER: Record<DeletionOutcome, keyof DeletionCounters> = {
+  delete: 'deleted',
+  'already-deleted': 'skippedAlreadyDeleted',
+  'skip-mismatch': 'skippedMismatch',
+  'skip-detail-missing': 'skippedDetailMissing',
+  'skip-in-pipeline': 'skippedInPipeline',
+  'parent-deleted-during-run': 'parentDeletedDuringRun',
+};
+
 async function deleteOneDoc(docId: string, runId: string, counters: DeletionCounters): Promise<void> {
   try {
     const docRef = db.doc(`documents/${docId}`);
     const detailRef = docRef.collection('detail').doc('main');
     const manifestRef = db.doc(`${manifestCollectionPath(runId)}/${docId}`);
 
-    const outcome = await db.runTransaction<string>(async (tx) => {
+    const outcome = await db.runTransaction<DeletionOutcome>(async (tx) => {
       const [parentSnap, detailSnap] = await tx.getAll(docRef, detailRef);
       if (!parentSnap.exists) return 'parent-deleted-during-run';
       const data = parentSnap.data()!;
@@ -320,29 +350,11 @@ async function deleteOneDoc(docId: string, runId: string, counters: DeletionCoun
       return 'delete';
     });
 
-    switch (outcome) {
-      case 'delete':
-        counters.deleted++;
-        break;
-      case 'already-deleted':
-        counters.skippedAlreadyDeleted++;
-        break;
-      case 'skip-mismatch':
-        counters.skippedMismatch++;
-        console.warn(`[deleteOneDoc] 不一致のためskip docId=${docId} (要調査)`);
-        break;
-      case 'skip-detail-missing':
-        counters.skippedDetailMissing++;
-        console.warn(`[deleteOneDoc] detail不在のためskip docId=${docId} (要調査)`);
-        break;
-      case 'skip-in-pipeline':
-        counters.skippedInPipeline++;
-        break;
-      case 'parent-deleted-during-run':
-        counters.parentDeletedDuringRun++;
-        break;
-      default:
-        counters.decisionChanged++;
+    counters[OUTCOME_COUNTER[outcome]]++;
+    if (outcome === 'skip-mismatch') {
+      console.warn(`[deleteOneDoc] 不一致のためskip docId=${docId} (要調査)`);
+    } else if (outcome === 'skip-detail-missing') {
+      console.warn(`[deleteOneDoc] detail不在のためskip docId=${docId} (要調査)`);
     }
   } catch (err) {
     counters.errors++;
@@ -407,6 +419,7 @@ async function runRollback(runId: string): Promise<void> {
 
   let restored = 0;
   let detailMissing = 0;
+  let typeMismatch = 0;
   let errors = 0;
   const docIds = manifestSnap.docs.map((d) => d.id);
 
@@ -423,14 +436,21 @@ async function runRollback(runId: string): Promise<void> {
       }
       const deletedFields: string[] = manifestDocSnap.data()?.deletedFields ?? [];
       const detailData = detailSnap.data()!;
-      const restore: Record<string, unknown> = {};
-      if (deletedFields.includes('ocrResult') && typeof detailData.ocrResult === 'string') {
-        restore.ocrResult = detailData.ocrResult;
+      const restore = buildRollbackFieldUpdate({
+        deletedFields,
+        detailOcrResult: detailData.ocrResult,
+        detailPageResults: detailData.pageResults,
+      });
+      if (Object.keys(restore).length === 0) {
+        // review指摘反映: 以前はここで無音returnしており、rollback失敗がカウントされず
+        // exitCode=0(成功扱い)になっていた。detail/mainのフィールド型がmanifest記録時と
+        // 食い違っている(要調査)ケースとして明示的にカウント・警告する。
+        typeMismatch++;
+        console.warn(
+          `[rollback] detail/mainの値が期待した型と一致しないため復元不可 docId=${docId} (要調査)`
+        );
+        return;
       }
-      if (deletedFields.includes('pageResults') && Array.isArray(detailData.pageResults)) {
-        restore.pageResults = detailData.pageResults;
-      }
-      if (Object.keys(restore).length === 0) return;
       await docRef.update(restore);
       restored++;
     } catch (err) {
@@ -442,8 +462,20 @@ async function runRollback(runId: string): Promise<void> {
   console.log(`\n--- rollback結果 ---`);
   console.log(`復元: ${restored}`);
   console.log(`detail/main不在(復元不可): ${detailMissing}`);
+  console.log(`型不一致で復元不可(要調査): ${typeMismatch}`);
   console.log(`エラー: ${errors}`);
-  if (errors > 0 || detailMissing > 0) process.exitCode = 1;
+  // review指摘反映: 集計の合計がmanifest件数と一致することを照合する(reconciliation)。
+  // 将来この関数に新しいスキップ経路が追加された際、対応するカウンタ加算を忘れても
+  // ここで検知できる。
+  const accountedFor = restored + detailMissing + typeMismatch + errors;
+  if (accountedFor !== manifestSnap.size) {
+    console.warn(
+      `⚠️ 集計不整合: manifest件数${manifestSnap.size}に対し集計合計${accountedFor}が一致しません(差分${manifestSnap.size - accountedFor})`
+    );
+  }
+  if (errors > 0 || detailMissing > 0 || typeMismatch > 0 || accountedFor !== manifestSnap.size) {
+    process.exitCode = 1;
+  }
 }
 
 async function main(): Promise<void> {
