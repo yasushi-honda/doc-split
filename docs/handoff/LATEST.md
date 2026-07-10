@@ -1,6 +1,20 @@
 # ハンドオフメモ
 
-**更新日**: 2026-07-09 session109（✅ **#547 Phase D PR-D3(#601)/PR-D4(#602)実装+マージ完遂、Phase D実装フェーズ完了**。詳細は下記session109サマリ参照）
+**更新日**: 2026-07-09 session110（✅ **#547 Phase D 本番展開完遂（cocoro/kanameone両環境）+ CodexセカンドオピニオンでPhase E前AC具体化**。詳細は下記session110サマリ参照）
+
+## session110 サマリ（2026-07-09、#547 Phase D 本番展開完遂）
+
+ユーザー指示「ゴール目指して進めてください」を受け、GOAL.mdの中断点（dev E2E確認→cocoro展開→kanameone展開）から着手。
+
+- **dev E2E確認**: Playwright MCPでOCR結果アコーディオン(51文字展開)/PDF分割モーダル(5ページ)/処理履歴OCR抜粋(複数件)を確認、コンソールエラー/警告0件。
+- **cocoro展開**: Firebase CLI(hy.unimail.11@gmail.com)でHosting(D1+D3)デプロイ→`backfill-detail-subcollection --verify`実行→新規処理1件のdetail/main不在を検出(stale detailではなくbackfill後に処理された新規docのbackfill未反映)→`--execute`再実行(対象1件のみ、冪等)で解消→再verify全1046件parity一致確認→GitHub Actions「Deploy Cloud Functions」で全関数デプロイ成功(7分46秒)。
+- **kanameone展開**: Firebase CLIの`systemkaname@kanameone.com`ローカルログインが失効しブラウザ再認証必須(AI実行環境から対応不能)と判明→ユーザー指示「GitHub Actionsで対応」を受け、新規workflow`.github/workflows/deploy-hosting.yml`をSA鍵(`GCP_SA_KEY_KANAMEONE`)認証パターンで追加(**PR #606**。kanameone専用でcocoroオプションは意図的に含めず——cocoro用Secrets未登録のため空文字列ビルド事故を防止)→Hosting(D1+D3)デプロイ→verify一発PASS(9,435件全件parity一致、backfill対象0件)→Functions(D2)デプロイ全関数成功(7分53秒)。
+- **GOAL.md更新×2**: **PR #607**(Phase D展開完遂を反映)、**PR #608**(Codexセカンドオピニオンによる AC9正体特定+Phase E前AC候補4件を記録)。
+- **Codexセカンドオピニオン**: decision-maker指示によりCodex(`/codex plan`、MCP版、effort=high)でPhase D展開の安全性検証+Phase E着手前確認事項を洗い出し。**AC9正体特定**: `scripts/lib/detailReaderCutoverContract.test.ts`が定義する「scripts配下の親`ocrResult`/`pageResults`直接参照ゼロ」契約(scripts限定、FE側同等契約は未確認)。指摘はHigh2件(FE契約テスト有無/Phase E直前の再verify必須)、Medium2件(トリガーストーム評価・FE既知リスク2件、いずれもADR-0018既記載事項の再掲)、Low1件(kanameone workflowの承認ゲート検討)。
+- **セカンドオピニオン運用の教訓**: Codexの4指摘を独立評価を添えずに一括でGOAL.md反映提案した点をdecision-makerから「盲目的に承認しないように」と指摘され、`~/.claude/memory/feedback_second_opinion_not_final_conclusion.md`に具体判断則(複数指摘の一括反映回避)を追記。事後的にHigh2件を実質的な新規指摘、Medium2件は既存ADR記載の再掲と整理し直した。
+- **ADR-0018整合性是正**: handoff中のドキュメント整合性チェックでPhase D行が「展開は別途」「未実施」のまま古い状態だったことを検出、本番展開完遂を反映して更新(本PR)。
+- **マージ**: PR #606(kanameone Hosting workflow新設)/#607/#608(GOAL.md更新)の計3件、いずれも番号単位認可を得てマージ。Issue Net変化はゼロ(起票0/close0、Issue #547自体はPhase Eが残るためopen継続)。
+- **セッション終了判断**: decision-maker「ここでゴールを目指して進めるかhandoffしてセッションを変えるか」への相談に対し、Phase Eがdestructive操作でフル`/impl-plan`起票が必要な新規大作業単位であること、本セッションが長時間のデプロイ待ちポーリングでコンテキストを消費していることを理由にhandoffを推奨、decision-maker合意。
 
 ## session109 サマリ（2026-07-09、#547 Phase D PR-D3/PR-D4完遂）
 
