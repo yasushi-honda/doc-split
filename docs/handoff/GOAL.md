@@ -1,7 +1,7 @@
 ---
 updated: 2026-07-10
 ---
-<!-- session112: PR #611作成済み。/code-review high(8 finder+20件1-vote検証)+Codexセカンドオピニオン(MCP high)でマージ前修正6件を特定・実装・push済み(コミット2459986)。follow-up8件はPRコメントに記録済み。次: ui-verifiedラベル対応(PR #611はhookでマージブロック中)→マージ→本番実行は番号認可 -->
+<!-- session112: PR #611マージ完了(squash、コミットb1e8297)。/code-review high(8 finder+20件1-vote検証)+Codexセカンドオピニオン(MCP high)でマージ前修正6件を実装、ローカルemulator+Playwright MCPでUI正常系確認・ui-verifiedラベル付与、CI全PASS確認後に番号単位認可を得てマージ。次: 本番実行(cocoro先行→kanameone、destructiveにつき番号単位認可必須) -->
 
 ## 現在のミッション
 運用コスト圧縮2トラック — #547 Firestore読取egress削減（ADR-0018 detail/main分離）と #548 Gemini 3.5 Flash移行 — を、本番2環境（kanameone / cocoro）で安全に完遂する。
@@ -37,13 +37,13 @@ updated: 2026-07-10
 - [x] #547 Phase E: devリハーサル完遂（2026-07-10、dev環境`doc-split-dev`、GitHub Actions経由。全項目PASS: dry-run/mark-preflight/execute canary/verify/rollback/execute全件160件/**PR-E1実効性実証**(修正版create-pending-docで新規OCR処理後も親フィールド非復活を確認)/**documentGroups負荷実測**(全160件`Updated 0 groups`、下流write完全ゼロ)/**search_index負荷実測**(全件unchanged)/**kill→再開試験**(削除中にジョブキャンセル→87件処理済みで中断→再実行で残り73件削除、二重削除エラーなし、detail/main不在0件=部分破損なし)。実装: featureブランチ`feature/adr-0018-phase-e-dual-write-stop`にコミット2件、push済み（未PR）
 - [x] #547 Phase E: PR作成（**PR #611**、session111）
 - [x] #547 Phase E: `/code-review high`（8 finder + 20件1-vote検証）+ Codexセカンドオピニオン（MCP high）でバランス判定 → マージ前修正必須6件を特定・実装・push済み（session112、コミット2459986）。follow-up8件はPRコメントで記録（新規Issue化基準未達のため対応不要）
-- [ ] #547 Phase E: UI確認（`ui-verified`ラベル）— PR #611は`.claude/hooks/ui-change-merge-check.sh`により**現状マージがブロックされている**（`DocumentDetailModal.tsx`/`PdfSplitModal.tsx`のUI変更にブラウザ確認証跡が未記録）。Playwright MCPまたは手動で変更箇所を操作確認 → 証跡をPRに記録 → `gh pr edit 611 --add-label ui-verified`
-- [ ] #547 Phase E: PRマージ（番号単位明示認可必須）
+- [x] #547 Phase E: UI確認（`ui-verified`ラベル）— ローカルFirebase Emulators + Vite dev server + Playwright MCPでDocumentDetailModal/PdfSplitModalの正常系（loading/errorゲート非発火時の表示）を実機確認、証跡をPRコメントに記録、ラベル付与済み。isDetailError時のUI矛盾表示(follow-up扱い)の再検証はfirestore.rules一時変更がauto-mode権限classifierにブロックされたため実施せず(即revert確認済み、session111時点で同手法により一度検証済みのためdecision-maker判断でスキップ)
+- [x] #547 Phase E: PRマージ（**PR #611マージ完了**、squash、コミット`b1e8297`、featureブランチ削除済み。番号単位明示認可取得済み）
 - [ ] #547 Phase E: 本番実行（cocoro先行→kanameone後続、destructiveにつき番号単位認可必須。手順: `--mark-preflight --marked-by <name>` → `--dry-run`確認 → `--execute --limit 10`canary → `--verify` → `--execute`全件 → `--verify`最終確認。GitHub Actions `run-ops-script.yml`経由）
 
 ## 🔄 中断点（in-flight）
-- 対象タスク: #547 Phase E UI確認（PR #611のui-verifiedラベル未付与によるマージブロック解消）
-- 直前の状態: `/code-review high`+Codexセカンドオピニオンで確定したマージ前修正6件を実装・テスト全PASS・push済み（session112、2026-07-10、コミット2459986）。PR #611にfollow-up事項をコメント記録済み。dev環境のテストデータ`phase-e-devcheck-001`(意図的に壊れた不一致状態、実害なし)/`phase-e-devcheck-002`(正常)が残存 — 後片付けは任意
-- 次の一手: ① Playwright MCP等でDocumentDetailModal/PdfSplitModalのloading/errorゲート表示を実機確認 ② 確認証跡をPR #611に記録 ③ `ui-verified`ラベル付与 ④ マージ番号単位認可を得る ⑤ 本番実行は別途認可（cocoro先行）
-- 変更ファイル: 32件（PR-E1/E2実装25件 + create-pending-doc.ts修正2件 + code-review/Codex指摘修正5件）。コミット: f05f297 → 623b405 → 85cf68d(Codex review-diff修正) → 2459986(code-review+Codex修正)
+- 対象タスク: #547 Phase E 本番実行（cocoro先行→kanameone後続）
+- 直前の状態: PR #611マージ完了（session112、2026-07-10、コミット`b1e8297`）。dual-write停止(PR-E1)+削除実行基盤(PR-E2)がmainに統合済み。dev環境のテストデータ`phase-e-devcheck-001`(意図的に壊れた不一致状態、実害なし)/`phase-e-devcheck-002`(正常)が残存 — 後片付けは任意
+- 次の一手: cocoro環境で `--mark-preflight --marked-by <name>` → `--dry-run`確認 → `--execute --limit 10`canary → `--verify` → 問題なければ `--execute`全件 → `--verify`最終確認（GitHub Actions `run-ops-script.yml`経由）。**destructive delete のため各ステップ実行前に番号単位認可を得ること**。cocoro完了後、同手順をkanameoneで実施
+- mainへの統合: コミット`b1e8297`（f05f297→623b405→85cf68d→2459986→703a39cの5コミットをsquash）
 - 検証コマンド: `cd functions && npm test`（1,680 passing）/ `cd frontend && npm test`（310 passing）/ `cd scripts && npm test`（72 passing）
