@@ -362,7 +362,14 @@ async function verifyOneDoc(docId: string, result: VerifyResult): Promise<void> 
   try {
     const docRef = db.doc(`documents/${docId}`);
     const detailRef = docRef.collection('detail').doc('main');
-    const [parentSnap, detailSnap] = await db.getAll(docRef, detailRef);
+    // Codexレビュー指摘: detailSnapは存在確認のみに使うため、空fieldMaskで軽量取得する
+    // (ocrResult/pageResultsの実体を転送しない)。親はstatus/ocrResult/pageResultsの
+    // 値が必要なため通常取得。fieldMaskは単一のReadOptionsとして両refに適用されるため
+    // 別々のgetAll呼出しに分離する(親の値取得を犠牲にしないため)。
+    const [[parentSnap], [detailSnap]] = await Promise.all([
+      db.getAll(docRef),
+      db.getAll(detailRef, { fieldMask: [] }),
+    ]);
     if (!parentSnap.exists) return;
     const data = parentSnap.data()!;
 
@@ -542,13 +549,21 @@ async function main(): Promise<void> {
         ? ` (sample: ${result.detailMissingForNonDeleted.slice(0, 20).join(', ')})`
         : '')
   );
-  if (result.legacyFieldStillPresent.length > 0 || result.errors > 0) {
+  // Codexレビュー指摘: detail/main不在も安全性の失敗条件に含める。親から削除済みでも
+  // detail/mainが存在しなければdetail優先読者が読むデータが完全に失われた状態であり、
+  // legacyFieldStillPresentのみのFAIL判定だとこのケースを見逃しPASSと誤報告する。
+  if (
+    result.legacyFieldStillPresent.length > 0 ||
+    result.detailMissingForNonDeleted.length > 0 ||
+    result.errors > 0
+  ) {
     console.error(
-      `❌ FAIL: 親に残存${result.legacyFieldStillPresent.length}件 / 読込エラー${result.errors}件`
+      `❌ FAIL: 親に残存${result.legacyFieldStillPresent.length}件 / ` +
+        `detail/main不在${result.detailMissingForNonDeleted.length}件 / 読込エラー${result.errors}件`
     );
     process.exitCode = 1;
   } else {
-    console.log('✅ PASS: 全doc(in-pipeline以外)から親のocrResult/pageResultsが削除済み');
+    console.log('✅ PASS: 全doc(in-pipeline以外)から親のocrResult/pageResultsが削除済み、detail/mainは全件残存');
   }
 }
 
