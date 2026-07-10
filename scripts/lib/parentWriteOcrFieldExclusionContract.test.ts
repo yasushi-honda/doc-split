@@ -23,6 +23,7 @@ const importHistoricalGmailSrc = readFileSync(
   'utf-8'
 );
 const seedDevDataSrc = readFileSync(resolve(scriptsDir, 'seed-dev-data.ts'), 'utf-8');
+const createPendingDocSrc = readFileSync(resolve(scriptsDir, 'create-pending-doc.ts'), 'utf-8');
 
 /** anchor開始位置からanchor終了位置までの区間を切り出す(scriptsにはextractBraceBlock相当のヘルパーがないため簡易実装) */
 function sliceBetween(source: string, startAnchor: string, endAnchor: string): string {
@@ -64,4 +65,16 @@ test('seed-dev-data.ts: 本体への書込みに parentData を使い d.data を
   assert.match(seedDevDataSrc, /\{ ref, data: parentData \}/);
   assert.match(seedDevDataSrc, /pendingWrites\.push\(\{ ref, data: parentData \}\);/);
   assert.doesNotMatch(seedDevDataSrc, /\{ ref, data: d\.data \}/);
+});
+
+test('create-pending-doc.ts: documents本体tx.set()ブロックにocrResultキーが値として含まれない', () => {
+  const block = sliceBetween(createPendingDocSrc, 'tx.set(ref, {', "tx.set(ref.collection('detail')");
+  assert.doesNotMatch(block, /ocrResult:/);
+});
+
+test('create-pending-doc.ts: detail/main側にはocrResultが引き続き初期化される (dual-write自体は継続)', () => {
+  assert.match(
+    createPendingDocSrc,
+    /tx\.set\(ref\.collection\('detail'\)\.doc\('main'\), \{\s*\n\s*ocrResult: ''/
+  );
 });
