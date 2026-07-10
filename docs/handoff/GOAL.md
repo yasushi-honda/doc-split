@@ -1,7 +1,7 @@
 ---
 updated: 2026-07-10
 ---
-<!-- session111: #547 Phase E 実装+devリハーサル完遂。PR-E1/E2実装、GitHub Actions run-ops-script.ymlにdelete-legacy-ocr-fields追加、featureブランチpush済み。devリハーサル全項目PASS（PR-E1実効性/documentGroups負荷ゼロ実測/kill→再開安全性）。次: PR作成・レビュー→マージ→本番実行は番号認可 -->
+<!-- session112: PR #611作成済み。/code-review high(8 finder+20件1-vote検証)+Codexセカンドオピニオン(MCP high)でマージ前修正6件を特定・実装・push済み(コミット2459986)。follow-up8件はPRコメントに記録済み。次: ui-verifiedラベル対応(PR #611はhookでマージブロック中)→マージ→本番実行は番号認可 -->
 
 ## 現在のミッション
 運用コスト圧縮2トラック — #547 Firestore読取egress削減（ADR-0018 detail/main分離）と #548 Gemini 3.5 Flash移行 — を、本番2環境（kanameone / cocoro）で安全に完遂する。
@@ -35,12 +35,15 @@ updated: 2026-07-10
 - [x] #547 Phase E **PR-E2**: 削除実行基盤 — migration marker機構(`_migrations/adr0018PhaseEPreflight`) + documentGroupsトリガーdiff最適化(`isAggregationUnchanged()`) + 削除スクリプト`scripts/delete-legacy-ocr-fields.ts`(状態別5分類ロジック、Firestoreのみの軽量manifest=GCS不要) + `--rollback`実装 + FE契約テスト新設 + PdfSplitModal/DocumentDetailModal強化(loading/error gate)。GitHub Actions `run-ops-script.yml`にdelete-legacy-ocr-fields選択肢追加
 - [x] #547 Phase E: ADR-0018 Amended追記完了（Phase E/F区分改訂、Codex 7th/8th review記録を含む）
 - [x] #547 Phase E: devリハーサル完遂（2026-07-10、dev環境`doc-split-dev`、GitHub Actions経由。全項目PASS: dry-run/mark-preflight/execute canary/verify/rollback/execute全件160件/**PR-E1実効性実証**(修正版create-pending-docで新規OCR処理後も親フィールド非復活を確認)/**documentGroups負荷実測**(全160件`Updated 0 groups`、下流write完全ゼロ)/**search_index負荷実測**(全件unchanged)/**kill→再開試験**(削除中にジョブキャンセル→87件処理済みで中断→再実行で残り73件削除、二重削除エラーなし、detail/main不在0件=部分破損なし)。実装: featureブランチ`feature/adr-0018-phase-e-dual-write-stop`にコミット2件、push済み（未PR）
-- [ ] #547 Phase E: PR作成・レビュー（`/code-review`または`/review-pr`）→ マージ
+- [x] #547 Phase E: PR作成（**PR #611**、session111）
+- [x] #547 Phase E: `/code-review high`（8 finder + 20件1-vote検証）+ Codexセカンドオピニオン（MCP high）でバランス判定 → マージ前修正必須6件を特定・実装・push済み（session112、コミット2459986）。follow-up8件はPRコメントで記録（新規Issue化基準未達のため対応不要）
+- [ ] #547 Phase E: UI確認（`ui-verified`ラベル）— PR #611は`.claude/hooks/ui-change-merge-check.sh`により**現状マージがブロックされている**（`DocumentDetailModal.tsx`/`PdfSplitModal.tsx`のUI変更にブラウザ確認証跡が未記録）。Playwright MCPまたは手動で変更箇所を操作確認 → 証跡をPRに記録 → `gh pr edit 611 --add-label ui-verified`
+- [ ] #547 Phase E: PRマージ（番号単位明示認可必須）
 - [ ] #547 Phase E: 本番実行（cocoro先行→kanameone後続、destructiveにつき番号単位認可必須。手順: `--mark-preflight --marked-by <name>` → `--dry-run`確認 → `--execute --limit 10`canary → `--verify` → `--execute`全件 → `--verify`最終確認。GitHub Actions `run-ops-script.yml`経由）
 
 ## 🔄 中断点（in-flight）
-- 対象タスク: #547 Phase E PR作成（featureブランチ`feature/adr-0018-phase-e-dual-write-stop`は実装+devリハーサル完了、PR未作成）
-- 直前の状態: PR-E1/PR-E2実装完了、ADR-0018 Amended追記完了、devリハーサル全項目PASS（session111、2026-07-10）。dev環境のテストデータ`phase-e-devcheck-001`(意図的に壊れた不一致状態、実害なし)/`phase-e-devcheck-002`(正常)が残存 — 後片付けは任意
-- 次の一手: ① `gh pr create`でPR作成 ② レビュー(`/code-review`か`/review-pr`、25ファイル変更のためEvaluator分離プロトコル対象) ③ マージ ④ 本番実行は番号単位認可を得てから（cocoro先行）
-- 変更ファイル: 27件（PR-E1/E2実装25件 + create-pending-doc.ts修正2件）。コミット: f05f297(本体実装) + 623b405(create-pending-doc.ts修正)
-- 検証コマンド: `cd functions && npm test`（1,680 passing）/ `cd frontend && npm test`（310 passing）/ `cd scripts && npm test`（66 passing）
+- 対象タスク: #547 Phase E UI確認（PR #611のui-verifiedラベル未付与によるマージブロック解消）
+- 直前の状態: `/code-review high`+Codexセカンドオピニオンで確定したマージ前修正6件を実装・テスト全PASS・push済み（session112、2026-07-10、コミット2459986）。PR #611にfollow-up事項をコメント記録済み。dev環境のテストデータ`phase-e-devcheck-001`(意図的に壊れた不一致状態、実害なし)/`phase-e-devcheck-002`(正常)が残存 — 後片付けは任意
+- 次の一手: ① Playwright MCP等でDocumentDetailModal/PdfSplitModalのloading/errorゲート表示を実機確認 ② 確認証跡をPR #611に記録 ③ `ui-verified`ラベル付与 ④ マージ番号単位認可を得る ⑤ 本番実行は別途認可（cocoro先行）
+- 変更ファイル: 32件（PR-E1/E2実装25件 + create-pending-doc.ts修正2件 + code-review/Codex指摘修正5件）。コミット: f05f297 → 623b405 → 85cf68d(Codex review-diff修正) → 2459986(code-review+Codex修正)
+- 検証コマンド: `cd functions && npm test`（1,680 passing）/ `cd frontend && npm test`（310 passing）/ `cd scripts && npm test`（72 passing）
