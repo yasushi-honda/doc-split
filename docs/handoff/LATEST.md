@@ -1,6 +1,26 @@
 # ハンドオフメモ
 
-**更新日**: 2026-07-10 session112（✅ **#547 Phase E コードをmain統合完了（PR #611マージ）+ コスト圧縮の実態把握（Gemini 3.5移行は増コスト、Firestore egress削減は本番未実行）**。本番`--execute`実行はまだ行われていない。詳細は下記session112サマリ参照）
+**更新日**: 2026-07-10 session113（✅ **#547 Phase E 本番実行完遂（cocoro→kanameone両環境）。GOAL.md完了の定義2点を技術的に充足**。ただしコスト最適化は未達——3.5移行の増コストが先行し、egress削減効果は翌月請求での実測待ち、真の黒字化には保留中のエンティティリスト化判断が別途必要。詳細は下記session113サマリ参照）
+
+## session113 サマリ（2026-07-10、#547 Phase E 本番実行完遂）
+
+decision-makerから「gemini3.5flashへの移行とFirestoreのコスト圧縮、その他コスト圧縮の対応は進んでいるか、最適コスト圧縮に正しく向かっているか」と問われ、session112の調査結果（GOAL.md/LATEST.md記載）を提示した上で、GOAL.mdの中断点（#547 Phase E本番実行、cocoro先行→kanameone後続）へ着手。
+
+### 前提検証（鵜呑み防止）
+session112 handoffの「cocoro/kanameoneへのdestructive delete実行はゼロ」という記述を、GitHub Actions実行ログの直接サンプル確認で裏取り（zshの単語分割仕様に起因する検証スクリプトの不具合により網羅的検証は途中で打ち切ったが、個別サンプル3件の確認+GOAL.mdの明示的な未完了チェックボックスの記録整合性から、記述は正確と判断）。
+
+### #547 Phase E本番実行（cocoro→kanameone、各ステップ番号単位認可）
+両環境とも同一手順（`--mark-preflight --marked-by yasushi-honda` → `--dry-run` → `--execute --limit 10`canary → `--verify`(中間、想定内FAIL) → `--execute`全件 → `--verify`最終確認）をGitHub Actions `run-ops-script.yml`経由で実施、各ステップ実行前にAskUserQuestionで番号単位認可を取得。
+
+- **cocoro**（1,055件）: canary10件成功/0エラー → 全量1,045件成功/0エラー（169秒）→ 最終verify **PASS**（親残存0・detail不在0）
+- **kanameone**（9,513件）: canary10件成功/0エラー → 全量9,503件成功/0エラー（1,432秒≈24分）→ 最終verify **PASS**（親残存0・detail不在0）
+- 全ステップ通じてエラー・異常skip 0件。detail/mainサブコレクションは両環境とも無傷。中間verifyのFAILは「全件削除完了」を判定基準とする仕様上の想定内の結果（canary分を除く残存件数が正しくカウントされていることを確認した上で継続）。
+
+### GOAL.md / LATEST.md更新
+GOAL.mdの完了の定義2点（#548 close済み・#547 Phase E完遂+egress実削減発生）が技術的に充足されたことを反映。同時に「重要な注記（コスト実態）」セクションを新設し、技術完了とコスト最適化達成が別物であることを明記（#548試算では全対策後も現状より高コスト、真の黒字化には保留中のエンティティリスト化判断が別途必要）。
+
+### 引き継ぎ教訓
+- GitHub Actions実行ログの網羅検証をバックグラウンドループで試みたが、zshの`for id in $VAR`が単語分割しない仕様（bashと異なる）により空ループになる不具合に遭遇。`while IFS= read -r id; do...done < file`方式で修正したが、100件近い個別ログ取得は時間がかかりすぎるため打ち切り、サンプル確認+文書記録の整合性で妥当性を判断する方針に切替えた。
 
 ## session112 サマリ（2026-07-10、#547 Phase E コードmain統合 + コスト実態調査）
 
