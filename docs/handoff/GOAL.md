@@ -2,7 +2,7 @@
 updated: 2026-07-11
 ---
 <!-- session113: #547 Phase E本番実行(cocoro→kanameone)完遂。全ステップ(mark-preflight/dry-run/canary10件/中間verify/全量execute/最終verify)を番号単位認可で実行、両環境verify PASS・エラー0件・detail/main不在0件。GOAL.mdの完了の定義2点(Ycs#548 close / #547 Phase E完遂+egress実削減発生)を技術的に充足。ただし#548試算では全対策後も現状より高コストのままであり、真の黒字化には保留中のエンティティリスト化判断が別途必要(下記「重要な注記」参照) -->
-<!-- session114: decision-makerから「当初のkanameコスト問題を基準に進捗はどうか」「翌月請求を待たずに今できることはないか」と問われ、read-only `check-gemini-cost-stats`(stats/gemini/daily)をkanameone/cocoro双方でGitHub Actions経由(read-only)で実行。初回のcocoro分析は誤り(旧pricing定数+旧B1未反映のデータと比較する誤検算で「63倍」と誤算出)だったが、Fable5切替後の再検証で訂正: 実効値上がり倍率は約9〜13倍(#548試算の5.53倍を上回る)。ただし絶対額はB1(要約遅延化)の相殺効果で6月実績と同水準〜microdisplayやや高め程度に留まっており、9〜13倍は「単価×トークン重量」の話であって月額破綻ではない。最大の不確実性は流量(現状39〜53件/日 vs 6月実測406ページ/日)で、6月並みに戻れば月換算¥23,000試算を大幅超過するリスクあり。詳細はLATEST.md session114サマリ参照 -->
+<!-- session114: decision-makerから「当初のkanameコスト問題を基準に進捗はどうか」「翌月請求を待たずに今できることはないか」と問われ、read-only `check-gemini-cost-stats`(stats/gemini/daily)をkanameone/cocoro双方でGitHub Actions経由(read-only)で実行。初回のcocoro分析は誤り(旧pricing定数+旧B1未反映のデータと比較する誤検算で「63倍」と誤算出)だったが、Fable5切替後の再検証で訂正: 実効値上がり倍率は約9〜13倍(#548試算の5.53倍を上回る)。ただし絶対額はB1(要約遅延化)の相殺効果で6月実績と同水準〜やや高め程度に留まっており、9〜13倍は「単価×トークン重量」の話であって月額破綻ではない。最大の不確実性は流量(現状39〜53件/日 vs 6月実測406ページ/日)で、6月並みに戻れば月換算¥23,000試算を大幅超過するリスクあり。詳細はLATEST.md session114サマリ参照 -->
 
 ## 現在のミッション
 運用コスト圧縮2トラック — #547 Firestore読取egress削減（ADR-0018 detail/main分離）と #548 Gemini 3.5 Flash移行 — を、本番2環境（kanameone / cocoro）で安全に完遂する。
