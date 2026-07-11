@@ -1,7 +1,8 @@
 ---
-updated: 2026-07-10
+updated: 2026-07-11
 ---
 <!-- session113: #547 Phase E本番実行(cocoro→kanameone)完遂。全ステップ(mark-preflight/dry-run/canary10件/中間verify/全量execute/最終verify)を番号単位認可で実行、両環境verify PASS・エラー0件・detail/main不在0件。GOAL.mdの完了の定義2点(Ycs#548 close / #547 Phase E完遂+egress実削減発生)を技術的に充足。ただし#548試算では全対策後も現状より高コストのままであり、真の黒字化には保留中のエンティティリスト化判断が別途必要(下記「重要な注記」参照) -->
+<!-- session114: decision-makerから「当初のkanameコスト問題を基準に進捗はどうか」「翌月請求を待たずに今できることはないか」と問われ、read-only `check-gemini-cost-stats`(stats/gemini/daily)をkanameone/cocoro双方でGitHub Actions経由(read-only)で実行。初回のcocoro分析は誤り(旧pricing定数+旧B1未反映のデータと比較する誤検算で「63倍」と誤算出)だったが、Fable5切替後の再検証で訂正: 実効値上がり倍率は約9〜13倍(#548試算の5.53倍を上回る)。ただし絶対額はB1(要約遅延化)の相殺効果で6月実績と同水準〜microdisplayやや高め程度に留まっており、9〜13倍は「単価×トークン重量」の話であって月額破綻ではない。最大の不確実性は流量(現状39〜53件/日 vs 6月実測406ページ/日)で、6月並みに戻れば月換算¥23,000試算を大幅超過するリスクあり。詳細はLATEST.md session114サマリ参照 -->
 
 ## 現在のミッション
 運用コスト圧縮2トラック — #547 Firestore読取egress削減（ADR-0018 detail/main分離）と #548 Gemini 3.5 Flash移行 — を、本番2環境（kanameone / cocoro）で安全に完遂する。
@@ -19,12 +20,14 @@ updated: 2026-07-10
 - **#547 Phase E が完了し、egress実削減効果が発生する**（証明: 本体 `documents/{docId}` から `ocrResult`/`pageResults` が `FieldValue.delete()` で削除され、一覧クエリの転送量が実測で減少）。**達成済み、2026-07-10 session113**: cocoro（1,055件、run [29102788032](https://github.com/yasushi-honda/doc-split/actions/runs/29102788032)で`--verify` PASS）・kanameone（9,513件、run [29130164136](https://github.com/yasushi-honda/doc-split/actions/runs/29130164136)で`--verify` PASS）両環境とも親doc残存0件・detail/main不在0件・エラー0件を確認。egress実削減自体は翌月請求で実測確認が必要（本項目は「削除実行が完了したこと」の証明であり「請求額が下がったこと」の証明ではない点に注意、下記「重要な注記」参照）。**注: Issue #547自体は2026-07-07 Phase B完遂時点で既にclose済み**（ADR-0018記載の意図的運用: 「Phase C以降は別途decision-maker起点指示+`/impl-plan`で着手」）。Phase C/D/Eの進捗はIssue再オープンではなく本GOAL.md + ADR-0018で追跡する
 - 不変条件: 本番 documents の既存フィールドを破壊しない（backfill の親doc更新は ocrExcerpt 1フィールドのみ・detail/main は create 経由のみ。契約テスト `scripts/lib/backfillScriptContract.test.ts` の PASS を維持）。**Phase E本番実行でも維持確認済み**（両環境とも detail/main不在0件、元PDFからの再OCR復元が必要になった箇所なし）
 
-## 重要な注記（コスト実態、session112/113で判明）
+## 重要な注記（コスト実態、session112/113/114で判明）
 上記2点の技術的完了は「運用コストが最適化された」ことを意味しない。decision-makerからの問いかけ「最適コスト圧縮に正しく向かっているか」への回答:
-- **#548（Gemini 3.5移行）はコスト削減策ではない**: Gemini 2.5 Flash廃止（2026-10-16）+日本データレジデンシー要件による**強制移行**。単価は2.5比で入力×5・出力×3.6高い。Issue試算では全対策後でも**約¥23,000/月**（3.5移行前の現状¥12,714/月より**高い**）。kanameone実測（移行前後2日間サンプル）ではリクエスト単価が約9倍に上昇（試算5.53倍よりさらに悪化）
+- **#548（Gemini 3.5移行）はコスト削減策ではない**: Gemini 2.5 Flash廃止（2026-10-16）+日本データレジデンシー要件による**強制移行**。単価は2.5比で入力×5・出力×3.6高い。Issue試算では全対策後でも**約¥23,000/月**（3.5移行前の現状¥12,714/月より**高い**）
+- **session114実測（read-only `check-gemini-cost-stats`、kanameone/cocoro、GitHub Actions経由）**: リクエスト単価の実効上昇は**約9〜13倍**（#548試算の前提5.53倍を上回る。出力+thinkingトークンがページあたり6月実測比で約3.8倍に増量しているのが主因、A/Bテスト事前実測の3.7〜4倍との乖離は未解明）。ただし**絶対額は6月実績¥6,093/月(Vertex AI分)と同水準〜やや高め程度に留まっている**（B1=要約遅延化の相殺効果によりリクエスト数自体が減少しているため）。単価上昇=即月額破綻ではない
+- **月額を最終的に左右するのは単価でなく流量**: 現状39〜53件/日 vs 6月実測406ページ/日。6月並みの流量に戻れば月換算¥23,000試算を大幅超過するリスクがあり、逆に現流量が続けば試算内に収まる可能性がある。1〜2週間分の`stats/gemini/daily`蓄積で翌月請求を待たずに再判定可能（read-only、decision-maker判断不要で実行可）
 - **#547（Firestore egress削減）は本項目の完了により初めて削減効果が発生**するが、翌月請求での実測確認が必要（未実施）
 - **真の黒字化（3.5移行前を下回る水準）には、保留中の「OCR出力エンティティリスト化」（−¥11,000/月級）の着手判断が別途必要**。#548 close時点でdecision-maker判断待ちの保留カードとして記録済み、本ミッションのスコープ外
-- 結論: 本ミッション（#547/#548技術完遂）の達成は、コスト最適化に向けた土台が整ったことを意味するが、それ自体で黒字化を保証しない
+- 結論: 本ミッション（#547/#548技術完遂）の達成は、コスト最適化に向けた土台が整ったことを意味するが、それ自体で黒字化を保証しない。当初計画（session95: ¥12,714→施策後¥8,000→移行後¥23,000）との比較では、緊急性優先（decision-maker明言「待ったなし」）により中間¥8,000水準を経ずに移行後水準へ直行したトレードオフが実行されている（意図的判断、失敗ではない）
 
 ## 進行中のtasks
 - [x] #548 confirmed-replay 統計検証（kanameone 実データ N=60、2.5/3.5 確定2項目完全同値 36.7% PASS、手法上限到達）
@@ -55,6 +58,8 @@ updated: 2026-07-10
 
 ## 完了後の残タスク（次セッション以降）
 - egress実削減効果の翌月請求での実測確認（未実施、上記「重要な注記」参照）
+- session114で開始した`stats/gemini/daily`蓄積によるコスト再判定（read-only、翌月請求を待たずに継続実行可能）。1〜2週間分溜まった時点で単価9〜13倍×流量の実測から月額を再試算
+- A/Bテスト事前実測（3.7〜4倍）と本番実測（9〜13倍）の乖離原因調査（未着手、read-only範囲で可能）
 - dev環境のテストデータ`phase-e-devcheck-001`(意図的に壊れた不一致状態、実害なし)/`phase-e-devcheck-002`(正常)の後片付け（任意）
 - 保留カード「OCR出力エンティティリスト化」着手要否のdecision-maker判断（本ミッションのスコープ外、#548 close時に記録済み）
 - 検証コマンド: `cd functions && npm test`（1,680 passing）/ `cd frontend && npm test`（310 passing）/ `cd scripts && npm test`（72 passing）
