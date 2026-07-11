@@ -331,6 +331,56 @@ async function cleanupAccumulatedStorageFiles(
   }
 }
 
+/**
+ * source-drift retry (MAX_RETRIES) の backoff 直後に親 doc の現在状態を再チェックする (Issue #539 fix)。
+ * retry loop は startUpdateTime を最初の読取り時点のまま固定して使い回していたため、
+ * retry の backoff window 中に他プロセスが正当な操作(reprocess等、二重splitに限らない)で
+ * 親 doc を更新すると、T4 の precondition が「二重split」と誤診断して正当な処理を abort していた。
+ *
+ * Codex review (PR #623) P1 反映: updateTime だけを rebase して retry を継続すると、
+ * retry が使い続ける docData/sourcePageResults/sourceObjectName 等は初回読取り時点のまま
+ * stale なので、その間に status(reprocessでpendingへ) や fileUrl が変化していた場合、
+ * stale データから作った子docを新しい parent revision に紐付けて split 完了させてしまう
+ * (precondition だけ通って実データは古い、という別種のバグ)。
+ * status/fileUrl が初回読取りから変化していないかも検証し、変化があれば rebase せず
+ * 安全側に abort する。変化がなければ updateTime のみ最新化して retry を継続する。
+ */
+async function recheckParentBeforeRetry(
+  docRef: FirebaseFirestore.DocumentReference,
+  documentId: string,
+  expectedStatus: unknown,
+  expectedFileUrl: string
+): Promise<FirebaseFirestore.Timestamp> {
+  const snap = await docRef.get();
+  if (!snap.exists) {
+    throw new HttpsError(
+      'not-found',
+      `Document ${documentId} was deleted during splitPdf retry`
+    );
+  }
+  const data = snap.data()!;
+  if (data.status === 'split') {
+    throw new HttpsError(
+      'already-exists',
+      `Document ${documentId} has already been split (status='split') (detected during retry)`
+    );
+  }
+  if (data.status !== expectedStatus || data.fileUrl !== expectedFileUrl) {
+    throw new HttpsError(
+      'aborted',
+      `splitPdf aborted: parent document was modified during retry (documentId=${documentId}, status or fileUrl changed since initial read) — please retry the split operation`
+    );
+  }
+  const updateTime = snap.updateTime;
+  if (!updateTime) {
+    throw new HttpsError(
+      'failed-precondition',
+      'Document has no updateTime; cannot enforce optimistic locking'
+    );
+  }
+  return updateTime;
+}
+
 export const splitPdf = onCall(
   {
     region: 'asia-northeast1',
@@ -396,6 +446,23 @@ export const splitPdf = onCall(
     }
 
     const docData = docSnapshot.data()!;
+
+    // Issue #539: 二重split race防止。既にsplit済みのdocへの再実行を重い処理前に拒否する
+    // (完全な同時実行のrace windowはT4のbatch.update precondition側でカバー、rotatePdfPagesと同一パターン)
+    if (docData.status === 'split') {
+      throw new HttpsError(
+        'already-exists',
+        `Document ${documentId} has already been split (status='split')`
+      );
+    }
+    let startUpdateTime = docSnapshot.updateTime;
+    if (!startUpdateTime) {
+      throw new HttpsError(
+        'failed-precondition',
+        'Document has no updateTime; cannot enforce optimistic locking'
+      );
+    }
+
     // 分割元の pageResults は detail 優先で解決し、以降の全用途(セグメント抽出/子doc用
     // ocrResult 生成)で同一ソースを使う
     const sourcePageResults = resolveSplitPageInputs(detailSnapshot.data(), docData);
@@ -451,6 +518,9 @@ export const splitPdf = onCall(
           lastDriftError = err;
           if (attempt < MAX_RETRIES) {
             await backoffSleep(attempt);
+            // Issue #539 fix: retry前に親docを再チェックし、stale startUpdateTimeによる
+            // 誤ったprecondition失敗(二重splitの誤検知)を防ぐ
+            startUpdateTime = await recheckParentBeforeRetry(docRef, documentId, docData.status, fileUrl);
             continue;
           }
           throw new HttpsError(
@@ -722,6 +792,9 @@ export const splitPdf = onCall(
           lastDriftError = err;
           if (attempt < MAX_RETRIES) {
             await backoffSleep(attempt);
+            // Issue #539 fix: retry前に親docを再チェックし、stale startUpdateTimeによる
+            // 誤ったprecondition失敗(二重splitの誤検知)を防ぐ
+            startUpdateTime = await recheckParentBeforeRetry(docRef, documentId, docData.status, fileUrl);
             continue;
           }
           throw new HttpsError(
@@ -761,11 +834,17 @@ export const splitPdf = onCall(
         });
       }
       // 元ドキュメントのステータスを更新 (分割済みフラグ) — child set と同一 batch
-      batch.update(docRef, {
-        splitInto: createdDocIds,
-        status: 'split',
-        isSplitSource: true,
-      });
+      // Issue #539: lastUpdateTime precondition で二重split raceを防止 (rotatePdfPagesと同一パターン)。
+      // 読取り時点(startUpdateTime)から親docが変更されていれば FAILED_PRECONDITION で commit 拒否される。
+      batch.update(
+        docRef,
+        {
+          splitInto: createdDocIds,
+          status: 'split',
+          isSplitSource: true,
+        },
+        { lastUpdateTime: startUpdateTime }
+      );
       try {
         await batch.commit();
       } catch (firestoreErr) {
@@ -788,16 +867,22 @@ export const splitPdf = onCall(
           'firestoreBatch',
           documentId
         );
+        // Issue #539: precondition mismatch (二重split race) は internal ではなく aborted として
+        // 区別する。判定は rotatePdfPages と共通の isFirestorePreconditionFailure ヘルパーを使う。
+        const errMessage = unwrapErrorMessage(firestoreErr);
+        if (isFirestorePreconditionFailure(firestoreErr)) {
+          throw new HttpsError(
+            'aborted',
+            `splitPdf aborted: concurrent split detected (parent=${documentId} was modified since read, likely split by another request): ${errMessage}`,
+            { stage: 'firestoreBatch', parentDocumentId: documentId }
+          );
+        }
         // /review-pr silent-failure-hunter C1: Firebase Functions v2 は非 HttpsError を
         // INTERNAL (message: "INTERNAL") に潰す。明示的に internal でラップして
         // 原因 message + structured details を client / 監視ログへ surface する。
         throw new HttpsError(
           'internal',
-          `splitPdf Firestore batch commit failed (parent=${documentId}, segments=${accumulated.length}): ${
-            firestoreErr instanceof Error
-              ? firestoreErr.message
-              : String(firestoreErr)
-          }`,
+          `splitPdf Firestore batch commit failed (parent=${documentId}, segments=${accumulated.length}): ${errMessage}`,
           {
             stage: 'firestoreBatch',
             parentDocumentId: documentId,
@@ -849,6 +934,28 @@ export const splitPdf = onCall(
  */
 function unwrapErrorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
+}
+
+/**
+ * Firestore commit/update の失敗が optimistic locking の precondition mismatch
+ * (lastUpdateTime drift 等) によるものかを判定する。rotatePdfPages / splitPdf 共通。
+ * Evaluator CRITICAL Q1: Firestore admin SDK の Error.code は @grpc/grpc-js 内部実装で
+ * 公式 API 約束ではない (SDK バージョンアップで number → string 変動リスクあり)。
+ * 堅牢化のため 3 系統 OR 判定: (a) gRPC 数値 code (b) Cloud Functions 文字列 code (c) message fallback
+ */
+function isFirestorePreconditionFailure(err: unknown): boolean {
+  const errCode =
+    err instanceof Error && 'code' in err
+      ? (err as { code: number | string }).code
+      : undefined;
+  const errMessage = unwrapErrorMessage(err);
+  return (
+    errCode === 9 || // FAILED_PRECONDITION
+    errCode === 5 || // NOT_FOUND
+    errCode === 'failed-precondition' ||
+    errCode === 'not-found' ||
+    /FAILED_PRECONDITION|NOT_FOUND|precondition|no document to update/i.test(errMessage)
+  );
 }
 
 interface RotateRequest {
@@ -1120,24 +1227,9 @@ export const rotatePdfPages = onCall(
         throw commitErr;
       }
       // Firestore precondition mismatch (NOT_FOUND / FAILED_PRECONDITION 等) を concurrent write として扱う。
-      // Evaluator CRITICAL Q1: Firestore admin SDK の Error.code は @grpc/grpc-js 内部実装で
-      // 公式 API 約束ではない (SDK バージョンアップで number → string 変動リスクあり)。
-      // 堅牢化のため 3 系統 OR 判定: (a) gRPC 数値 code (b) Cloud Functions 文字列 code (c) error.message string fallback
-      const errCode =
-        commitErr instanceof Error && 'code' in commitErr
-          ? (commitErr as { code: number | string }).code
-          : undefined;
+      // 判定は splitPdf と共通の isFirestorePreconditionFailure ヘルパーを使う。
       const errMessage = unwrapErrorMessage(commitErr);
-      const isPreconditionFailure =
-        // (a) gRPC 数値 code
-        errCode === 9 || // FAILED_PRECONDITION
-        errCode === 5 || // NOT_FOUND
-        // (b) Cloud Functions 文字列 code
-        errCode === 'failed-precondition' ||
-        errCode === 'not-found' ||
-        // (c) error.message string fallback (SDK 型変動への防御)
-        /FAILED_PRECONDITION|NOT_FOUND|precondition|no document to update/i.test(errMessage);
-      if (isPreconditionFailure) {
+      if (isFirestorePreconditionFailure(commitErr)) {
         throw new HttpsError(
           'aborted',
           `Concurrent write detected during rotation (document updateTime drift): ${errMessage}`,

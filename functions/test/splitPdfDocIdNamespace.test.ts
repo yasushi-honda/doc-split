@@ -101,8 +101,18 @@ describe('splitPdf cleanup / atomic write 設計 (Issue #445 PR-D2 atomic batch)
   it('Firestore batch 失敗時は HttpsError(internal) で原因 message を client へ surface する (/review-pr silent-failure-hunter C1)', () => {
     // 旧: throw wrapped (Error.cause) → INTERNAL に潰れる
     // 新: throw new HttpsError('internal', ...message + originalErr.message..., { stage: 'firestoreBatch', ... })
-    expect(content).to.match(/HttpsError\(\s*['"]internal['"][\s\S]{0,400}firestoreErr/);
+    // Issue #539: errMessage = unwrapErrorMessage(firestoreErr) の中間変数経由になったため
+    // firestoreErr直接参照ではなく errMessage を検索する (値の由来は unwrapErrorMessage(firestoreErr) 呼出で保証)
+    expect(content).to.match(/const errMessage = unwrapErrorMessage\(firestoreErr\)/);
+    expect(content).to.match(/HttpsError\(\s*['"]internal['"][\s\S]{0,400}errMessage/);
     expect(content).to.match(/stage:\s*['"]firestoreBatch['"]/);
+  });
+
+  it('Firestore batch commit の precondition mismatch (二重split race) は HttpsError(aborted) で区別される (Issue #539)', () => {
+    expect(content).to.match(/isFirestorePreconditionFailure\(firestoreErr\)/);
+    expect(content).to.match(
+      /HttpsError\(\s*['"]aborted['"][\s\S]{0,200}concurrent split detected/
+    );
   });
 
   it('drift 検出時は HttpsError aborted で投げ retry max 後に最終 fail する', () => {

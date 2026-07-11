@@ -74,12 +74,16 @@ describe('splitPdf detail/main dual-write contract (ADR-0018 Phase B)', () => {
     const detailSetIdx = sourceText.indexOf(
       "batch.set(item.newDocRef.collection('detail').doc('main'),"
     );
-    const parentUpdateIdx = sourceText.indexOf('batch.update(docRef, {');
+    // Issue #539: lastUpdateTime precondition 追加で batch.update(docRef, { が
+    // 複数行 (batch.update(\n docRef,\n {) に変わったため正規表現で検索する
+    const parentUpdateMatch = /batch\.update\(\s*docRef,/.exec(sourceText);
+    const parentUpdateIdx = parentUpdateMatch ? parentUpdateMatch.index : -1;
     const commitIdx = sourceText.indexOf('await batch.commit();');
     expect(loopIdx).to.be.greaterThan(-1);
     expect(detailSetIdx, 'detail/main batch.set call site must be found').to
       .be.greaterThan(loopIdx);
-    expect(parentUpdateIdx).to.be.greaterThan(detailSetIdx);
+    expect(parentUpdateIdx, 'parent batch.update(docRef, ...) call site must be found').to
+      .be.greaterThan(detailSetIdx);
     expect(commitIdx).to.be.greaterThan(parentUpdateIdx);
   });
 });

@@ -74,9 +74,11 @@ function extractRollbackOrphanRotationFunctionBody(): string {
 
 describe('rotatePdfPages source code grep contract (PR-D3 AC3 拡張)', () => {
   let rotateBody: string;
+  let fileContent: string;
 
   before(() => {
     rotateBody = extractRotatePdfPagesFunctionBody();
+    fileContent = fs.readFileSync(SOURCE_PATH, 'utf-8');
   });
 
   describe('AC3: 旧 path 削除パターンの全面禁止 (rotatePdfPages 関数体内)', () => {
@@ -152,20 +154,26 @@ describe('rotatePdfPages source code grep contract (PR-D3 AC3 拡張)', () => {
       expect(rotateBody).to.match(/Concurrent write detected/i);
     });
 
-    it('gRPC FAILED_PRECONDITION (code 9) / NOT_FOUND (code 5) を concurrent write として扱う', () => {
+    it('precondition mismatch 判定は splitPdf と共通の isFirestorePreconditionFailure ヘルパーを呼ぶ (Issue #539で共通化)', () => {
+      // 判定ロジック自体は rotatePdfPages 関数体の外 (isFirestorePreconditionFailure) に
+      // 抽出されているため、rotateBody からは呼出し箇所のみを検証する
+      expect(rotateBody).to.match(/isFirestorePreconditionFailure\(commitErr\)/);
+    });
+
+    it('isFirestorePreconditionFailure: gRPC FAILED_PRECONDITION (code 9) / NOT_FOUND (code 5) を concurrent write として扱う', () => {
       // Firestore backend が precondition mismatch で発する gRPC code を catch して aborted に wrap
-      expect(rotateBody).to.match(/errCode === 9/);
-      expect(rotateBody).to.match(/errCode === 5/);
+      expect(fileContent).to.match(/errCode === 9/);
+      expect(fileContent).to.match(/errCode === 5/);
     });
 
-    it('Cloud Functions 文字列 code (failed-precondition / not-found) も OR 判定対象 (Evaluator CRITICAL Q1 SDK 型変動防御)', () => {
-      expect(rotateBody).to.match(/errCode === ['"]failed-precondition['"]/);
-      expect(rotateBody).to.match(/errCode === ['"]not-found['"]/);
+    it('isFirestorePreconditionFailure: Cloud Functions 文字列 code (failed-precondition / not-found) も OR 判定対象 (Evaluator CRITICAL Q1 SDK 型変動防御)', () => {
+      expect(fileContent).to.match(/errCode === ['"]failed-precondition['"]/);
+      expect(fileContent).to.match(/errCode === ['"]not-found['"]/);
     });
 
-    it('error.message regex fallback も OR 判定 (SDK 型変動の最終防御線)', () => {
+    it('isFirestorePreconditionFailure: error.message regex fallback も OR 判定 (SDK 型変動の最終防御線)', () => {
       // FAILED_PRECONDITION / NOT_FOUND / precondition / no document to update のいずれか string match
-      expect(rotateBody).to.match(
+      expect(fileContent).to.match(
         /FAILED_PRECONDITION\|NOT_FOUND\|precondition\|no document to update/
       );
     });
