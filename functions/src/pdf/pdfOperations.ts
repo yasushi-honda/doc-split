@@ -336,12 +336,20 @@ async function cleanupAccumulatedStorageFiles(
  * retry loop は startUpdateTime を最初の読取り時点のまま固定して使い回していたため、
  * retry の backoff window 中に他プロセスが正当な操作(reprocess等、二重splitに限らない)で
  * 親 doc を更新すると、T4 の precondition が「二重split」と誤診断して正当な処理を abort していた。
- * retry直前にこの関数で状態を再取得し startUpdateTime を更新することで、stale precondition の
- * 窓を「初回読取り〜最終commit」から「直近のretry再読取り〜最終commit」に縮小する。
+ *
+ * Codex review (PR #623) P1 反映: updateTime だけを rebase して retry を継続すると、
+ * retry が使い続ける docData/sourcePageResults/sourceObjectName 等は初回読取り時点のまま
+ * stale なので、その間に status(reprocessでpendingへ) や fileUrl が変化していた場合、
+ * stale データから作った子docを新しい parent revision に紐付けて split 完了させてしまう
+ * (precondition だけ通って実データは古い、という別種のバグ)。
+ * status/fileUrl が初回読取りから変化していないかも検証し、変化があれば rebase せず
+ * 安全側に abort する。変化がなければ updateTime のみ最新化して retry を継続する。
  */
 async function recheckParentBeforeRetry(
   docRef: FirebaseFirestore.DocumentReference,
-  documentId: string
+  documentId: string,
+  expectedStatus: unknown,
+  expectedFileUrl: string
 ): Promise<FirebaseFirestore.Timestamp> {
   const snap = await docRef.get();
   if (!snap.exists) {
@@ -355,6 +363,12 @@ async function recheckParentBeforeRetry(
     throw new HttpsError(
       'already-exists',
       `Document ${documentId} has already been split (status='split') (detected during retry)`
+    );
+  }
+  if (data.status !== expectedStatus || data.fileUrl !== expectedFileUrl) {
+    throw new HttpsError(
+      'aborted',
+      `splitPdf aborted: parent document was modified during retry (documentId=${documentId}, status or fileUrl changed since initial read) — please retry the split operation`
     );
   }
   const updateTime = snap.updateTime;
@@ -506,7 +520,7 @@ export const splitPdf = onCall(
             await backoffSleep(attempt);
             // Issue #539 fix: retry前に親docを再チェックし、stale startUpdateTimeによる
             // 誤ったprecondition失敗(二重splitの誤検知)を防ぐ
-            startUpdateTime = await recheckParentBeforeRetry(docRef, documentId);
+            startUpdateTime = await recheckParentBeforeRetry(docRef, documentId, docData.status, fileUrl);
             continue;
           }
           throw new HttpsError(
@@ -780,7 +794,7 @@ export const splitPdf = onCall(
             await backoffSleep(attempt);
             // Issue #539 fix: retry前に親docを再チェックし、stale startUpdateTimeによる
             // 誤ったprecondition失敗(二重splitの誤検知)を防ぐ
-            startUpdateTime = await recheckParentBeforeRetry(docRef, documentId);
+            startUpdateTime = await recheckParentBeforeRetry(docRef, documentId, docData.status, fileUrl);
             continue;
           }
           throw new HttpsError(

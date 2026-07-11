@@ -53,20 +53,25 @@ describe('splitPdf 二重split race防止 grep contract (Issue #539)', () => {
     expect(sourceText).to.match(/async function recheckParentBeforeRetry\(/);
     // T1 (sourceSnapshot取得時drift) と T3 (final drift) の両方の retry 直前で呼ばれる
     const callSites = sourceText.match(
-      /startUpdateTime = await recheckParentBeforeRetry\(docRef, documentId\);/g
+      /startUpdateTime = await recheckParentBeforeRetry\(docRef, documentId, docData\.status, fileUrl\);/g
     );
     expect(callSites, 'recheckParentBeforeRetry call sites must be found').to.not.be.null;
     expect(callSites!.length, 'must be called at both T1 and T3 retry points').to.equal(2);
   });
 
-  it('recheckParentBeforeRetry は already-exists / not-found / failed-precondition の3系統を判定する', () => {
-    const fnMatch = /async function recheckParentBeforeRetry\([\s\S]{0,900}?\n}/.exec(sourceText);
+  it('recheckParentBeforeRetry は already-exists / not-found / failed-precondition の3系統に加え status/fileUrl drift も判定する (Codex PR #623 P1 fix)', () => {
+    const fnMatch = /async function recheckParentBeforeRetry\([\s\S]{0,1400}?\n}/.exec(sourceText);
     expect(fnMatch, 'recheckParentBeforeRetry function body must be found').to.not.be.null;
     const fnBody = fnMatch![0];
     expect(fnBody).to.match(/if \(!snap\.exists\) \{/);
     expect(fnBody).to.match(/'not-found'/);
     expect(fnBody).to.match(/data\.status === 'split'/);
     expect(fnBody).to.match(/'already-exists'/);
+    // Codex P1: statusまたはfileUrlが初回読取りから変化していたら、docData/sourcePageResults等の
+    // 実処理データがstaleなままrebaseされてしまうため、updateTimeのみのrebaseは行わずabortする
+    expect(fnBody).to.match(
+      /data\.status !== expectedStatus \|\| data\.fileUrl !== expectedFileUrl/
+    );
     expect(fnBody).to.match(/if \(!updateTime\) \{/);
     expect(fnBody).to.match(/'failed-precondition'/);
   });

@@ -116,12 +116,15 @@ describe('splitPdf 二重split race防止 integration (#539)', () => {
   });
 });
 
-// pdfOperations.ts の recheckParentBeforeRetry (Issue #539 fix) と同等のロジックを再現する。
-// source-drift retry の backoff 直後にこれを呼び、startUpdateTime を最新化することで
-// 「retry中に発生した二重split以外の正当な同時更新」を誤ってabortしなくなることを検証する。
+// pdfOperations.ts の recheckParentBeforeRetry (Issue #539 fix, Codex PR #623 P1 fix) と
+// 同等のロジックを再現する。source-drift retry の backoff 直後にこれを呼び、
+// status/fileUrlが初回読取りから変化していなければ startUpdateTime を最新化して継続、
+// 変化していれば(処理中のdocData等がstaleになるため)rebaseせず安全側にabortする。
 async function recheckParentLikeSplitPdf(
   docRef: admin.firestore.DocumentReference,
-  documentId: string
+  documentId: string,
+  expectedStatus: unknown,
+  expectedFileUrl: string
 ): Promise<admin.firestore.Timestamp> {
   const snap = await docRef.get();
   if (!snap.exists) {
@@ -134,6 +137,14 @@ async function recheckParentLikeSplitPdf(
     throw Object.assign(
       new Error(`Document ${documentId} has already been split (status='split') (detected during retry)`),
       { code: 'already-exists' }
+    );
+  }
+  if (data.status !== expectedStatus || data.fileUrl !== expectedFileUrl) {
+    throw Object.assign(
+      new Error(
+        `splitPdf aborted: parent document was modified during retry (documentId=${documentId}, status or fileUrl changed since initial read)`
+      ),
+      { code: 'aborted' }
     );
   }
   const updateTime = snap.updateTime;
@@ -150,13 +161,13 @@ describe('splitPdf drift-retry前の親doc再チェック (Issue #539 fix: stale
     await cleanupCollections(db, COLLECTIONS_TO_CLEAN);
   });
 
-  it('retry中に二重splitとは無関係な正当な更新(reprocess等)が入っても、再チェック後のupdateTimeでbatch.commitは成功する', async () => {
+  it('retry中にstatus/fileUrlを変えない無関係な更新が入っても、再チェック後のupdateTimeでbatch.commitは成功する', async () => {
     const docRef = db.collection('documents').doc();
-    await docRef.set({ fileName: 'a.pdf', status: 'processed' });
+    await docRef.set({ fileName: 'a.pdf', status: 'processed', fileUrl: 'gs://bucket/a.pdf' });
     const staleUpdateTime = (await docRef.get()).updateTime!;
 
-    // source-drift retryのbackoff window中に、reprocess等の無関係な正当な操作が親docを更新する想定
-    await docRef.update({ status: 'processed', reprocessedAt: 'dummy' });
+    // source-drift retryのbackoff window中に、statusもfileUrlも変えない無関係な更新が入る想定
+    await docRef.update({ status: 'processed', someUnrelatedFlag: 'dummy' });
 
     // 修正前: staleUpdateTimeのままcommitしようとしてFAILED_PRECONDITIONで誤ってabortしていた
     let thrownWithStale = false;
@@ -169,8 +180,13 @@ describe('splitPdf drift-retry前の親doc再チェック (Issue #539 fix: stale
       true
     );
 
-    // 修正後: retry前にrecheckParentBeforeRetry相当で再取得したupdateTimeを使えば成功する
-    const refreshedUpdateTime = await recheckParentLikeSplitPdf(docRef, docRef.id);
+    // 修正後: status/fileUrlが不変なのでrebaseして継続、再取得したupdateTimeを使えば成功する
+    const refreshedUpdateTime = await recheckParentLikeSplitPdf(
+      docRef,
+      docRef.id,
+      'processed',
+      'gs://bucket/a.pdf'
+    );
     await commitSplitLikeParentUpdate(docRef, ['child-A'], refreshedUpdateTime);
 
     const after = await docRef.get();
@@ -180,14 +196,14 @@ describe('splitPdf drift-retry前の親doc再チェック (Issue #539 fix: stale
 
   it('retry前の再チェック時に既にstatus=split済みなら already-exists で即座に拒否する(無駄な再試行を避ける)', async () => {
     const docRef = db.collection('documents').doc();
-    await docRef.set({ fileName: 'a.pdf', status: 'processed' });
+    await docRef.set({ fileName: 'a.pdf', status: 'processed', fileUrl: 'gs://bucket/a.pdf' });
 
     // 他プロセスが既に本物のsplitを完了させた状態
     await docRef.update({ status: 'split', splitInto: ['child-X'], isSplitSource: true });
 
     let thrownCode: unknown;
     try {
-      await recheckParentLikeSplitPdf(docRef, docRef.id);
+      await recheckParentLikeSplitPdf(docRef, docRef.id, 'processed', 'gs://bucket/a.pdf');
     } catch (err) {
       thrownCode = (err as { code?: unknown }).code;
     }
@@ -196,15 +212,53 @@ describe('splitPdf drift-retry前の親doc再チェック (Issue #539 fix: stale
 
   it('retry前の再チェック時に親docが削除されていたら not-found で拒否する', async () => {
     const docRef = db.collection('documents').doc();
-    await docRef.set({ fileName: 'a.pdf', status: 'processed' });
+    await docRef.set({ fileName: 'a.pdf', status: 'processed', fileUrl: 'gs://bucket/a.pdf' });
     await docRef.delete();
 
     let thrownCode: unknown;
     try {
-      await recheckParentLikeSplitPdf(docRef, docRef.id);
+      await recheckParentLikeSplitPdf(docRef, docRef.id, 'processed', 'gs://bucket/a.pdf');
     } catch (err) {
       thrownCode = (err as { code?: unknown }).code;
     }
     expect(thrownCode).to.equal('not-found');
+  });
+
+  it('retry中にstatusが変化(reprocess等でpendingへ)していたら、docData/pageResults等がstaleなためrebaseせずabortする (Codex PR #623 P1 fix)', async () => {
+    const docRef = db.collection('documents').doc();
+    await docRef.set({ fileName: 'a.pdf', status: 'processed', fileUrl: 'gs://bucket/a.pdf' });
+
+    // reprocessは親docのstatusをpendingに変える(かつpageResults等の処理対象データもクリアする)
+    await docRef.update({ status: 'pending' });
+
+    let thrownCode: unknown;
+    try {
+      await recheckParentLikeSplitPdf(docRef, docRef.id, 'processed', 'gs://bucket/a.pdf');
+    } catch (err) {
+      thrownCode = (err as { code?: unknown }).code;
+    }
+    expect(
+      thrownCode,
+      'status変化時はstaleなdocData/pageResultsからのsplit完了を防ぐためabortedになるべき'
+    ).to.equal('aborted');
+  });
+
+  it('retry中にfileUrlが変化していたら、sourceObjectName等がstaleなためrebaseせずabortする (Codex PR #623 P1 fix)', async () => {
+    const docRef = db.collection('documents').doc();
+    await docRef.set({ fileName: 'a.pdf', status: 'processed', fileUrl: 'gs://bucket/a.pdf' });
+
+    // fileUrlだけが変化するケース(statusは変わらない)
+    await docRef.update({ fileUrl: 'gs://bucket/a-replaced.pdf' });
+
+    let thrownCode: unknown;
+    try {
+      await recheckParentLikeSplitPdf(docRef, docRef.id, 'processed', 'gs://bucket/a.pdf');
+    } catch (err) {
+      thrownCode = (err as { code?: unknown }).code;
+    }
+    expect(
+      thrownCode,
+      'fileUrl変化時はstaleなsourceObjectNameからのsplit完了を防ぐためabortedになるべき'
+    ).to.equal('aborted');
   });
 });
