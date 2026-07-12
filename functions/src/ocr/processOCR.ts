@@ -22,6 +22,7 @@ import {
   handleProcessingError,
   OcrProcessingResult,
 } from './ocrProcessor';
+import { OcrRunSupersededError, applySupersededOutcome } from './ocrRunGuard';
 // 定数は side-effect-free な constants.ts から import (#196 test drift 防止)
 import {
   MAX_RETRY_COUNT,
@@ -42,7 +43,7 @@ const FUNCTION_NAME = 'processOCR';
 const BATCH_SIZE = 5;
 
 /** 処理統計 */
-interface ProcessingStats {
+export interface ProcessingStats {
   documentsProcessed: number;
   pagesProcessed: number;
   totalInputTokens: number;
@@ -50,6 +51,8 @@ interface ProcessingStats {
   totalThinkingTokens: number;
   errors: number;
   skipped: number;
+  /** OCR run が別の実行に所有権を奪われた/入力世代が変わったためabortした件数 (Issue #540) */
+  superseded: number;
 }
 
 /**
@@ -76,6 +79,7 @@ export const processOCR = onSchedule(
       totalThinkingTokens: 0,
       errors: 0,
       skipped: 0,
+      superseded: 0,
     };
 
     try {
@@ -113,19 +117,24 @@ export const processOCR = onSchedule(
           await new Promise(resolve => setTimeout(resolve, 2000));
         }
 
-        try {
-          // 排他制御: 既に処理中ならスキップ
-          const acquired = await tryStartProcessing(docId);
-          if (!acquired) {
-            stats.skipped++;
-            continue;
-          }
+        // 排他制御: 既に処理中ならスキップ。claim transaction内で読んだ最新dataとocrRunIdを
+        // 受け取り、以降はポーリング時点の`data`ではなく`claimedData`を使う
+        // (Issue #540 H1: pending一覧取得からclaim成立までの間隔でfileUrl等が変化していても
+        // 最終チェックがclaim時点の実態と整合するようにする)。
+        const claim = await tryStartProcessing(docId);
+        if (!claim) {
+          stats.skipped++;
+          continue;
+        }
+        const { ocrRunId, docData: claimedData } = claim;
 
+        try {
           // OCR処理実行
           const result: OcrProcessingResult = await processDocument(
             docId,
-            data,
-            FUNCTION_NAME
+            claimedData,
+            FUNCTION_NAME,
+            ocrRunId
           );
 
           stats.documentsProcessed++;
@@ -134,9 +143,18 @@ export const processOCR = onSchedule(
           stats.totalOutputTokens += result.outputTokens;
           stats.totalThinkingTokens += result.thinkingTokens;
         } catch (error) {
+          if (error instanceof OcrRunSupersededError) {
+            // Issue #540: 別の実行に所有権が移った/入力世代が変わったための正常なabort。
+            // retryCountを消費せずstatus:'error'化もしない。
+            applySupersededOutcome(stats, error);
+            console.log(
+              `Document ${docId} OCR run superseded (reason: ${error.reason}), skipping`
+            );
+            continue;
+          }
           stats.errors++;
           const err = error instanceof Error ? error : new Error(String(error));
-          await handleProcessingError(docId, err, FUNCTION_NAME);
+          await handleProcessingError(docId, err, FUNCTION_NAME, ocrRunId);
         }
       }
 

@@ -5,6 +5,7 @@
  */
 
 import * as admin from 'firebase-admin';
+import { randomUUID } from 'node:crypto';
 import { PDFDocument } from 'pdf-lib';
 import {
   withRetry,
@@ -14,6 +15,7 @@ import {
   calculateRetryDelay429Ms,
 } from '../utils/retry';
 import { safeLogError } from '../utils/errorLogger';
+import { evaluateOcrRunOwnership, OcrRunSupersededError } from './ocrRunGuard';
 import { getRateLimiter } from '../utils/rateLimiter';
 import { GCP_CONFIG, GEMINI_CONFIG, isThreePointFiveModel } from '../utils/config';
 import {
@@ -67,43 +69,58 @@ export interface OcrProcessingResult {
   thinkingTokens: number;
 }
 
+/** tryStartProcessing成功時の戻り値 */
+export interface OcrClaim {
+  /** この実行の所有権トークン。processDocument/handleProcessingErrorに引き継ぐ (Issue #540) */
+  ocrRunId: string;
+  /**
+   * claim transaction内(status:'processing'書込みと同一transaction)で読んだ最新のドキュメントデータ。
+   * pending一覧取得からtryStartProcessing呼出しまでの間隔でfileUrl等が変化していても、
+   * ここで返す値は常にocrRunId発行時点の実態と整合する (Issue #540 H1)。
+   */
+  docData: FirebaseFirestore.DocumentData;
+}
+
 /**
  * 排他制御付きでドキュメントの処理を開始
- * 既に処理中の場合はnullを返す
+ * 既に処理中の場合、または存在しない場合はnullを返す
  */
-export async function tryStartProcessing(docId: string): Promise<boolean> {
+export async function tryStartProcessing(docId: string): Promise<OcrClaim | null> {
   const docRef = db.doc(`documents/${docId}`);
 
   try {
-    const success = await db.runTransaction(async (transaction) => {
+    const claim = await db.runTransaction(async (transaction) => {
       const doc = await transaction.get(docRef);
 
       if (!doc.exists) {
         console.log(`Document ${docId} not found`);
-        return false;
+        return null;
       }
 
-      const status = doc.data()?.status;
+      const docData = doc.data()!;
 
       // pending以外は処理しない（既に処理中または完了）
-      if (status !== 'pending') {
-        console.log(`Document ${docId} is not pending (status: ${status}), skipping`);
-        return false;
+      if (docData.status !== 'pending') {
+        console.log(`Document ${docId} is not pending (status: ${docData.status}), skipping`);
+        return null;
       }
 
-      // processingに更新
+      const ocrRunId = randomUUID();
+
+      // processingに更新、ocrRunIdを所有権トークンとして発行 (Issue #540)
       transaction.update(docRef, {
         status: 'processing',
+        ocrRunId,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
 
-      return true;
+      return { ocrRunId, docData };
     });
 
-    return success;
+    return claim;
   } catch (error) {
     console.error(`Failed to start processing ${docId}:`, error);
-    return false;
+    return null;
   }
 }
 
@@ -113,7 +130,8 @@ export async function tryStartProcessing(docId: string): Promise<boolean> {
 export async function processDocument(
   docId: string,
   docData: FirebaseFirestore.DocumentData,
-  functionName: string
+  functionName: string,
+  ocrRunId: string
 ): Promise<OcrProcessingResult> {
   console.log(`Processing document: ${docId}`);
 
@@ -309,7 +327,7 @@ export async function processDocument(
   let savedOcrResult = ocrResult;
 
   if (ocrResult.length > OCR_RESULT_MAX_LENGTH) {
-    ocrResultUrl = await saveOcrResult(docId, ocrResult);
+    ocrResultUrl = await saveOcrResult(docId, ocrRunId, ocrResult);
     savedOcrResult = '';
   }
 
@@ -340,7 +358,7 @@ export async function processDocument(
 
   await db.runTransaction(async (tx) => {
     const freshSnap = await tx.get(docRef);
-    // tryStartProcessing() (本ファイル78行目付近) と同じ存在チェックパターン。
+    // tryStartProcessing() と同じ存在チェックパターン。
     // ドキュメントが処理中に削除されると tx.update() は NOT_FOUND を投げるが、
     // ここで明示的に検知することで handleProcessingError() の lastErrorMessage に
     // 原因不明な NOT_FOUND ではなく具体的な状況が残る(silent-failure-hunter指摘)。
@@ -350,6 +368,30 @@ export async function processDocument(
       );
     }
     const freshData = freshSnap.data()!;
+
+    // Issue #540: 所有権(ocrRunId)・入力世代(fileUrl/mimeType)検証。処理開始からOCR完了
+    // までの間(最大540秒)に、reprocess等で別の実行が同一docIdに対して開始されている、
+    // またはfileUrl/mimeTypeが変化している場合、この実行の抽出結果はもはや正しい対象を
+    // 表していない。書込みを一切行わずOcrRunSupersededErrorをthrowしてabortする
+    // (呼出元processOCR.tsはこれをエラーではなく正常なsupersedeとして扱う)。
+    const ownership = evaluateOcrRunOwnership(freshData, {
+      ocrRunId,
+      fileUrl: docData.fileUrl as string,
+      mimeType: docData.mimeType as string,
+    });
+    if (!ownership.ok) {
+      throw new OcrRunSupersededError(
+        `OCR run for document ${docId} superseded (reason: ${ownership.reason}), skipping write`,
+        docId,
+        ownership.reason,
+        {
+          inputTokens: totalInputTokens,
+          outputTokens: totalOutputTokens,
+          thinkingTokens: totalThinkingTokens,
+          pagesProcessed: totalPages,
+        }
+      );
+    }
 
     const merged = applyConfirmedFieldProtection(extractionFields, {
       customerConfirmed: freshData.customerConfirmed,
@@ -437,20 +479,42 @@ import { MAX_RETRY_COUNT, MAX_RETRY_COUNT_429 } from './constants';
 export async function handleProcessingError(
   docId: string,
   error: Error,
-  functionName: string
+  functionName: string,
+  expectedOcrRunId: string
 ): Promise<void> {
   console.error(`Error processing document ${docId}:`, error.message);
 
+  const docRef = db.doc(`documents/${docId}`);
   const transient = isTransientError(error);
   const isQuotaError = is429Error(error);
   const maxRetries = isQuotaError ? MAX_RETRY_COUNT_429 : MAX_RETRY_COUNT;
 
   // ステータス更新を最優先（トランザクションでretryCountをアトミックに管理）
   try {
-    const docRef = db.doc(`documents/${docId}`);
     await db.runTransaction(async (tx) => {
       const doc = await tx.get(docRef);
-      const currentRetryCount = (doc.data()?.retryCount as number) || 0;
+
+      // ドキュメント削除時は更新対象が無いためtx.updateは行わない。
+      if (!doc.exists) {
+        return;
+      }
+      const freshData = doc.data()!;
+
+      // Issue #540 H2: このエラーを起こした実行が既に別の実行(reprocess後の新run等)に
+      // 所有権を奪われている場合、retryCount/statusを変更すると新runの状態を壊す。
+      // 状態更新のみスキップする(/review-pr silent-failure-hunter指摘: このerrorは
+      // processOCR.ts側のOcrRunSupersededError専用分岐を経ずにここへ渡ってきた「所有権と
+      // 無関係な本物のエラー」でありうるため、末尾safeLogErrorでの記録まで抑制してはならない。
+      // 修正前は所有権不一致時にsafeLogError自体をskipしていたが、それは削除ケースだけでなく
+      // このケースでも観測性の回帰だった)。
+      if (freshData.status !== 'processing' || freshData.ocrRunId !== expectedOcrRunId) {
+        console.log(
+          `Skipping state update for ${docId}: ownership no longer held (expected ocrRunId ${expectedOcrRunId})`
+        );
+        return;
+      }
+
+      const currentRetryCount = (freshData.retryCount as number) || 0;
       const newRetryCount = currentRetryCount + 1;
 
       if (transient && newRetryCount < maxRetries) {
@@ -488,18 +552,27 @@ export async function handleProcessingError(
     });
   } catch (updateErr) {
     console.error(`Failed to update document ${docId} status:`, updateErr);
-    // トランザクション失敗時のフォールバック
+    // トランザクション失敗時のフォールバック(所有権を確認してから書込む、Issue #540 H2)
     try {
-      await db.doc(`documents/${docId}`).update({
-        status: 'error',
-        lastErrorMessage: error.message.slice(0, 500),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
+      const snap = await docRef.get();
+      const data = snap.data();
+      if (data?.status === 'processing' && data?.ocrRunId === expectedOcrRunId) {
+        await docRef.update({
+          status: 'error',
+          lastErrorMessage: error.message.slice(0, 500),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      } else {
+        console.log(`Skipping fallback state update for ${docId}: ownership no longer held or document missing`);
+      }
     } catch (fallbackErr) {
       console.error(`Fallback update also failed for ${docId}:`, fallbackErr);
     }
   }
 
+  // 状態更新の成否・所有権の有無に関わらず、エラー自体は必ずerrors/へ記録する
+  // (/review-pr silent-failure-hunter指摘反映: 所有権喪失はstate更新を止める理由にはなっても、
+  // エラー自体の観測性を止める理由にはならない)。
   await safeLogError({
     error,
     source: 'ocr',
@@ -603,10 +676,15 @@ ${pageNumber ? `\nこれは${pageNumber}ページ目です。` : ''}
 
 /**
  * 長いOCR結果をCloud Storageに保存
+ *
+ * Issue #540 H4: 保存先はrun毎(ocrRunId)に分離する。固定パス(docId基準)のままだと、
+ * Firestore書込みをOcrRunSupersededErrorでガードしても、supersededされた実行の
+ * Storage書込み自体は無条件に行われるため、後から本文だけが上書きされうる。
  */
-async function saveOcrResult(docId: string, ocrResult: string): Promise<string> {
+async function saveOcrResult(docId: string, ocrRunId: string, ocrResult: string): Promise<string> {
   const bucket = storage.bucket();
-  const file = bucket.file(`ocr-results/${docId}.txt`);
+  const objectPath = `ocr-results/${docId}/${ocrRunId}.txt`;
+  const file = bucket.file(objectPath);
 
   await withRetry(
     () =>
@@ -620,5 +698,5 @@ async function saveOcrResult(docId: string, ocrResult: string): Promise<string> 
     RETRY_CONFIGS.storage
   );
 
-  return `gs://${bucket.name}/ocr-results/${docId}.txt`;
+  return `gs://${bucket.name}/${objectPath}`;
 }

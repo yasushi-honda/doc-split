@@ -60,7 +60,7 @@ export const getOcrText = onCall(
     // 4. Cloud Storage から取得
     const storage = getStorage();
     const bucket = storage.bucket();
-    // ocrResultUrl形式: gs://bucket-name/ocr-results/docId.txt
+    // ocrResultUrl形式: gs://bucket-name/ocr-results/docId/ocrRunId.txt (Issue #540)
     const filePath = ocrResultUrl.replace(`gs://${bucket.name}/`, '');
     const file = bucket.file(filePath);
 
