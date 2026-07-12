@@ -17,6 +17,7 @@ import './helpers/initFirestoreEmulator';
 import { expect } from 'chai';
 import * as admin from 'firebase-admin';
 import { cleanupCollections } from './helpers/cleanupEmulator';
+import { isFirestorePreconditionFailure } from '../src/pdf/pdfOperations';
 
 const db = admin.firestore();
 const COLLECTIONS_TO_CLEAN: readonly string[] = ['documents'];
@@ -74,22 +75,13 @@ describe('splitPdf 二重split race防止 integration (#539)', () => {
     }
     expect(thrown, 'second concurrent commit must throw').to.not.be.undefined;
 
-    // pdfOperations.ts の isPreconditionFailure 判定ロジックと同一条件で検証
-    // (実装と同じ3系統OR: gRPC数値code / Cloud Functions文字列code / message fallback)
-    const errCode =
-      thrown instanceof Error && 'code' in thrown
-        ? (thrown as { code: number | string }).code
-        : undefined;
-    const errMessage = thrown instanceof Error ? thrown.message : String(thrown);
-    const isPreconditionFailure =
-      errCode === 9 ||
-      errCode === 5 ||
-      errCode === 'failed-precondition' ||
-      errCode === 'not-found' ||
-      /FAILED_PRECONDITION|NOT_FOUND|precondition|no document to update/i.test(errMessage);
+    // pdfOperations.ts の isFirestorePreconditionFailure を直接importして検証する
+    // (Issue #622: ロジックの手動複製によるドリフトリスクを解消)
     expect(
-      isPreconditionFailure,
-      `expected precondition failure, got code=${errCode} message=${errMessage}`
+      isFirestorePreconditionFailure(thrown),
+      `expected precondition failure, got ${
+        thrown instanceof Error ? thrown.message : String(thrown)
+      }`
     ).to.equal(true);
 
     // 親docは1つ目のリクエストの結果のまま (2つ目の上書きが発生していないこと)
