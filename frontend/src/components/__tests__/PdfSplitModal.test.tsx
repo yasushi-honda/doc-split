@@ -65,6 +65,15 @@ vi.mock('@/hooks/usePdfSplit', async () => {
   }
 })
 
+const mockToastError = vi.fn()
+const mockToastSuccess = vi.fn()
+vi.mock('sonner', () => ({
+  toast: {
+    error: (...args: unknown[]) => mockToastError(...args),
+    success: (...args: unknown[]) => mockToastSuccess(...args),
+  },
+}))
+
 import { PdfSplitModal } from '../PdfSplitModal'
 
 const makeDocument = (overrides: Partial<Document> = {}): Document => ({
@@ -205,5 +214,150 @@ describe('PdfSplitModal - detail取得状態によるボタン制御 (Issue #547
     )
 
     expect(isDisabled(screen.getByRole('button', { name: /分割を実行/ }))).toBe(true)
+  })
+
+  it('確認ステップ中に document.splitSuggestions の参照が変わっても、ユーザーが確定した splitPoints は維持される（Issue #621回帰防止: useSplitPdfのonErrorがinvalidateQueriesすると発生しうる）', async () => {
+    const initialDoc = makeDocument({
+      totalPages: 4,
+      splitSuggestions: [
+        { afterPageNumber: 1, reason: 'manual', confidence: 100, newDocumentType: null, newCustomerName: null },
+      ],
+    })
+    const { rerender } = render(
+      <PdfSplitModal
+        document={initialDoc}
+        isOpen={true}
+        onClose={vi.fn()}
+        onSuccess={vi.fn()}
+        detailLoading={false}
+        detailError={false}
+      />
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: '次へ: 分割内容の確認' }))
+    await screen.findByRole('button', { name: /分割を実行/ })
+    // splitPoints=[1] → 2セグメント（セグメント3は存在しない）
+    expect(screen.getByText(/セグメント 2/)).toBeDefined()
+    expect(screen.queryByText(/セグメント 3/)).toBeNull()
+
+    // 確認ステップのまま document.splitSuggestions が新しい配列参照で変化する
+    // (already-exists/aborted の onError による ['document'] invalidate 相当を模擬)
+    rerender(
+      <PdfSplitModal
+        document={makeDocument({
+          totalPages: 4,
+          splitSuggestions: [
+            { afterPageNumber: 1, reason: 'manual', confidence: 100, newDocumentType: null, newCustomerName: null },
+            { afterPageNumber: 2, reason: 'manual', confidence: 100, newDocumentType: null, newCustomerName: null },
+          ],
+        })}
+        isOpen={true}
+        onClose={vi.fn()}
+        onSuccess={vi.fn()}
+        detailLoading={false}
+        detailError={false}
+      />
+    )
+
+    // 確認ステップ中はsplitPointsが上書きされずセグメント3は出現しない
+    // (旧実装ではここでeffectが再発火しsplitPoints=[1,2]→3セグメントに変化していた)
+    expect(screen.queryByText(/セグメント 3/)).toBeNull()
+  })
+})
+
+function makeFunctionsError(code: string, message: string): Error {
+  const err = new Error(message)
+  ;(err as Error & { code: string }).code = `functions/${code}`
+  return err
+}
+
+function lastToastErrorMessage(): string {
+  const calls = mockToastError.mock.calls
+  const lastCall = calls[calls.length - 1]
+  if (!lastCall) throw new Error('toast.error was not called')
+  return lastCall[0] as string
+}
+
+async function executeSplit() {
+  render(
+    <PdfSplitModal
+      document={makeDocument()}
+      isOpen={true}
+      onClose={vi.fn()}
+      onSuccess={vi.fn()}
+      detailLoading={false}
+      detailError={false}
+    />
+  )
+  fireEvent.click(screen.getByRole('button', { name: '次へ: 分割内容の確認' }))
+  const executeButton = await screen.findByRole('button', { name: /分割を実行/ })
+  fireEvent.click(executeButton)
+}
+
+describe('PdfSplitModal - splitPdfエラーハンドリング (Issue #621)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('already-exists エラー時、内部IDを含まない日本語メッセージをtoast表示する', async () => {
+    mockSplitPdfMutateAsync.mockRejectedValueOnce(
+      makeFunctionsError('already-exists', "Document doc-001 has already been split (status='split')")
+    )
+
+    await executeSplit()
+
+    await vi.waitFor(() => expect(mockToastError).toHaveBeenCalled())
+    const shownMessage = lastToastErrorMessage()
+    expect(shownMessage).not.toMatch(/doc-001/)
+    expect(shownMessage).not.toMatch(/already-exists|already been split/i)
+    expect(shownMessage).toContain('既に分割')
+  })
+
+  it('aborted エラー時、内部IDを含まない日本語メッセージをtoast表示する', async () => {
+    mockSplitPdfMutateAsync.mockRejectedValueOnce(
+      makeFunctionsError(
+        'aborted',
+        'splitPdf aborted: concurrent split detected (parent=doc-001 was modified since read)'
+      )
+    )
+
+    await executeSplit()
+
+    await vi.waitFor(() => expect(mockToastError).toHaveBeenCalled())
+    const shownMessage = lastToastErrorMessage()
+    expect(shownMessage).not.toMatch(/doc-001/)
+    expect(shownMessage).not.toMatch(/splitPdf aborted|concurrent split detected/i)
+    expect(shownMessage).toContain('競合')
+  })
+
+  it('その他のエラー(internal)時は従来通りgetCallableErrorMessageのフォールバック文言を表示する', async () => {
+    mockSplitPdfMutateAsync.mockRejectedValueOnce(makeFunctionsError('internal', 'network glitch'))
+
+    await executeSplit()
+
+    await vi.waitFor(() => expect(mockToastError).toHaveBeenCalled())
+    const shownMessage = lastToastErrorMessage()
+    expect(shownMessage).not.toMatch(/network glitch/i)
+    expect(shownMessage).toContain('通信エラー')
+  })
+
+  it('not-found エラー時は具体的な原因情報を保持するため生メッセージを表示する（回帰防止: 汎用文言に丸めない）', async () => {
+    mockSplitPdfMutateAsync.mockRejectedValueOnce(makeFunctionsError('not-found', 'Document not found'))
+
+    await executeSplit()
+
+    await vi.waitFor(() => expect(mockToastError).toHaveBeenCalled())
+    expect(lastToastErrorMessage()).toContain('Document not found')
+  })
+
+  it('failed-precondition エラー時は具体的な原因情報を保持するため生メッセージを表示する（回帰防止）', async () => {
+    mockSplitPdfMutateAsync.mockRejectedValueOnce(
+      makeFunctionsError('failed-precondition', 'Document has no updateTime; cannot enforce optimistic locking')
+    )
+
+    await executeSplit()
+
+    await vi.waitFor(() => expect(mockToastError).toHaveBeenCalled())
+    expect(lastToastErrorMessage()).toContain('Document has no updateTime')
   })
 })

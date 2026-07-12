@@ -3,8 +3,8 @@
  * Cloud Functionsと連携してPDF分割を実行
  */
 
-import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { callFunction } from '@/lib/callFunction'
+import { useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query'
+import { callFunction, getCallableErrorCode } from '@/lib/callFunction'
 import type { SplitSuggestion, SplitSegment } from '@shared/types'
 
 // ============================================
@@ -119,14 +119,25 @@ async function splitPdf(request: SplitPdfRequest): Promise<SplitPdfResponse> {
   )
 }
 
+function invalidateSplitQueries(queryClient: QueryClient): void {
+  queryClient.invalidateQueries({ queryKey: ['documentsInfinite'] })
+  queryClient.invalidateQueries({ queryKey: ['document'] })
+}
+
 export function useSplitPdf() {
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: splitPdf,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['documentsInfinite'] })
-      queryClient.invalidateQueries({ queryKey: ['document'] })
+    onSuccess: () => invalidateSplitQueries(queryClient),
+    onError: (err) => {
+      // Issue #621: already-exists(既に分割済み)/aborted(並行split競合)は
+      // いずれもサーバー側の状態が実際に変化した(または既に変化していた)ことを示すため、
+      // 失敗時も画面を最新化する必要がある
+      const code = getCallableErrorCode(err)
+      if (code === 'already-exists' || code === 'aborted') {
+        invalidateSplitQueries(queryClient)
+      }
     },
   })
 }
