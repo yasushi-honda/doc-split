@@ -869,8 +869,17 @@ export const splitPdf = onCall(
         );
         // Issue #539: precondition mismatch (二重split race) は internal ではなく aborted として
         // 区別する。判定は rotatePdfPages と共通の isFirestorePreconditionFailure ヘルパーを使う。
+        // Issue #620: NOT_FOUND (親doc削除) は FAILED_PRECONDITION (同時書込み) と原因が異なるため
+        // isFirestoreNotFound で分離し、誤って「二重split」と断定しないメッセージにする。
         const errMessage = unwrapErrorMessage(firestoreErr);
         if (isFirestorePreconditionFailure(firestoreErr)) {
+          if (isFirestoreNotFound(firestoreErr)) {
+            throw new HttpsError(
+              'aborted',
+              `splitPdf aborted: parent document (${documentId}) was deleted during processing: ${errMessage}`,
+              { stage: 'firestoreBatch', parentDocumentId: documentId }
+            );
+          }
           throw new HttpsError(
             'aborted',
             `splitPdf aborted: concurrent split detected (parent=${documentId} was modified since read, likely split by another request): ${errMessage}`,
@@ -955,6 +964,24 @@ function isFirestorePreconditionFailure(err: unknown): boolean {
     errCode === 'failed-precondition' ||
     errCode === 'not-found' ||
     /FAILED_PRECONDITION|NOT_FOUND|precondition|no document to update/i.test(errMessage)
+  );
+}
+
+/**
+ * isFirestorePreconditionFailure が true のケースのうち、NOT_FOUND (親doc削除) のみを
+ * 判定する (Issue #620)。FAILED_PRECONDITION (同時書込みによる二重split) と区別し、
+ * 呼び出し側でより正確な診断メッセージを出し分けるために使う。
+ */
+function isFirestoreNotFound(err: unknown): boolean {
+  const errCode =
+    err instanceof Error && 'code' in err
+      ? (err as { code: number | string }).code
+      : undefined;
+  const errMessage = unwrapErrorMessage(err);
+  return (
+    errCode === 5 || // NOT_FOUND
+    errCode === 'not-found' ||
+    /NOT_FOUND|no document to update/i.test(errMessage)
   );
 }
 
@@ -1228,8 +1255,17 @@ export const rotatePdfPages = onCall(
       }
       // Firestore precondition mismatch (NOT_FOUND / FAILED_PRECONDITION 等) を concurrent write として扱う。
       // 判定は splitPdf と共通の isFirestorePreconditionFailure ヘルパーを使う。
+      // Issue #620: NOT_FOUND (親doc削除) は FAILED_PRECONDITION (同時書込み) と原因が異なるため
+      // isFirestoreNotFound で分離し、誤って「concurrent write」と断定しないメッセージにする。
       const errMessage = unwrapErrorMessage(commitErr);
       if (isFirestorePreconditionFailure(commitErr)) {
+        if (isFirestoreNotFound(commitErr)) {
+          throw new HttpsError(
+            'aborted',
+            `Rotation aborted: parent document (${documentId}) was deleted during processing: ${errMessage}`,
+            rollbackDetails
+          );
+        }
         throw new HttpsError(
           'aborted',
           `Concurrent write detected during rotation (document updateTime drift): ${errMessage}`,

@@ -94,6 +94,14 @@ describe('splitPdf 二重split race防止 grep contract (Issue #539)', () => {
     );
   });
 
+  it('NOT_FOUND (親doc削除) は FAILED_PRECONDITION (二重split) と区別したメッセージになる (Issue #620)', () => {
+    expect(sourceText).to.match(/function isFirestoreNotFound\(/);
+    expect(sourceText).to.match(/isFirestoreNotFound\(firestoreErr\)/);
+    expect(sourceText).to.match(
+      /HttpsError\(\s*['"]aborted['"][\s\S]{0,200}was deleted during processing/
+    );
+  });
+
   it('precondition mismatch 時も既存の Storage cleanup を経由してから aborted へ分岐する', () => {
     const catchIdx = sourceText.indexOf('} catch (firestoreErr) {');
     const cleanupCallMatch = /await cleanupAccumulatedStorageFiles\(\s*accumulated,\s*'firestoreBatch',/.exec(
