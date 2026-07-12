@@ -17,7 +17,11 @@ import './helpers/initFirestoreEmulator';
 
 import { expect } from 'chai';
 import * as admin from 'firebase-admin';
-import { tryStartProcessing, handleProcessingError } from '../src/ocr/ocrProcessor';
+import {
+  tryStartProcessing,
+  handleProcessingError,
+  checkOcrRunStillOwned,
+} from '../src/ocr/ocrProcessor';
 import { evaluateOcrRunOwnership, OcrRunSupersededError } from '../src/ocr/ocrRunGuard';
 import { cleanupCollections } from './helpers/cleanupEmulator';
 
@@ -290,5 +294,102 @@ describe('OCR実行所有権ガード integration (#540)', () => {
     // 削除エラー自体はsupersededと違いerrors/に記録される(観測性の回帰防止)
     const errors = await db.collection('errors').get();
     expect(errors.empty, 'ドキュメント削除エラーはerrors/に記録されるべき').to.equal(false);
+  });
+});
+
+describe('checkOcrRunStillOwned: PDFページOCRループの早期所有権チェック (Issue #626)', () => {
+  beforeEach(async () => {
+    await cleanupCollections(db, COLLECTIONS_TO_CLEAN);
+  });
+
+  it('所有権が維持されている場合 { ok: true } を返す', async () => {
+    const docId = 'doc-early-check-ok';
+    const docRef = db.collection('documents').doc(docId);
+    await docRef.set({
+      status: 'pending',
+      fileUrl: 'gs://bucket/a.pdf',
+      mimeType: 'application/pdf',
+    });
+    const claim = await tryStartProcessing(docId);
+    const { ocrRunId, docData } = claim!;
+
+    const result = await checkOcrRunStillOwned(
+      docRef,
+      { ocrRunId, fileUrl: docData.fileUrl as string, mimeType: docData.mimeType as string },
+      docId,
+      'test'
+    );
+
+    expect(result).to.deep.equal({ ok: true });
+  });
+
+  it('reprocess等で別runにclaimし直された場合 run-id-mismatch を返す', async () => {
+    const docId = 'doc-early-check-superseded';
+    const docRef = db.collection('documents').doc(docId);
+    await docRef.set({
+      status: 'pending',
+      fileUrl: 'gs://bucket/a.pdf',
+      mimeType: 'application/pdf',
+    });
+    const claimA = await tryStartProcessing(docId);
+    const { ocrRunId: ocrRunIdA, docData: docDataA } = claimA!;
+
+    // run Aのページループ処理中に、reprocess相当でrun Bがclaimする
+    await docRef.update({ status: 'pending' });
+    await tryStartProcessing(docId);
+
+    const result = await checkOcrRunStillOwned(
+      docRef,
+      {
+        ocrRunId: ocrRunIdA,
+        fileUrl: docDataA.fileUrl as string,
+        mimeType: docDataA.mimeType as string,
+      },
+      docId,
+      'test'
+    );
+
+    expect(result).to.deep.equal({ ok: false, reason: 'run-id-mismatch' });
+  });
+
+  it('ドキュメントが処理中に削除された場合 run-id-mismatch を返す(ocrRunIdがundefinedになるため)', async () => {
+    const docId = 'doc-early-check-deleted';
+    const docRef = db.collection('documents').doc(docId);
+    await docRef.set({
+      status: 'pending',
+      fileUrl: 'gs://bucket/a.pdf',
+      mimeType: 'application/pdf',
+    });
+    const claim = await tryStartProcessing(docId);
+    const { ocrRunId, docData } = claim!;
+
+    await docRef.delete();
+
+    const result = await checkOcrRunStillOwned(
+      docRef,
+      { ocrRunId, fileUrl: docData.fileUrl as string, mimeType: docData.mimeType as string },
+      docId,
+      'test'
+    );
+
+    expect(result).to.deep.equal({ ok: false, reason: 'run-id-mismatch' });
+  });
+
+  it('Firestore read自体が失敗した場合、false positiveを避けるため { ok: true } (継続) を返す', async () => {
+    const docId = 'doc-early-check-read-failure';
+    // docRef.get()自体がrejectするモック(admin appの初期化に依存しない純粋な差し替え)。
+    // 実運用のdocRefと同じshapeを満たせばよいため、テスト目的でキャストする。
+    const failingDocRef = {
+      get: () => Promise.reject(new Error('simulated transient Firestore read failure')),
+    } as unknown as FirebaseFirestore.DocumentReference;
+
+    const result = await checkOcrRunStillOwned(
+      failingDocRef,
+      { ocrRunId: 'run-x', fileUrl: 'gs://bucket/a.pdf', mimeType: 'application/pdf' },
+      docId,
+      'test'
+    );
+
+    expect(result).to.deep.equal({ ok: true });
   });
 });
