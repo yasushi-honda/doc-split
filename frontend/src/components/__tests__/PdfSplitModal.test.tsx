@@ -263,6 +263,36 @@ describe('PdfSplitModal - detail取得状態によるボタン制御 (Issue #547
     // (旧実装ではここでeffectが再発火しsplitPoints=[1,2]→3セグメントに変化していた)
     expect(screen.queryByText(/セグメント 3/)).toBeNull()
   })
+
+  it('確認ステップから「戻る」で分割ポイント選択に戻っても、ユーザーが手動追加したポイントは維持される（Codexレビュー指摘: isConfirmStep依存ガードの復路での再発防止）', async () => {
+    // splitSuggestionsなし(自動候補ゼロ)の書類で、ユーザーが手動でポイントを追加するケース
+    render(
+      <PdfSplitModal
+        document={makeDocument({ totalPages: 4, splitSuggestions: [] })}
+        isOpen={true}
+        onClose={vi.fn()}
+        onSuccess={vi.fn()}
+        detailLoading={false}
+        detailError={false}
+      />
+    )
+
+    // 手動でページ1の後に分割ポイントを追加(splitSuggestionsが空のため自動候補には無い)
+    fireEvent.click(screen.getByRole('button', { name: 'ページ 1 の後で分割' }))
+    fireEvent.click(screen.getByRole('button', { name: '次へ: 分割内容の確認' }))
+    await screen.findByRole('button', { name: /分割を実行/ })
+    expect(screen.getByText(/セグメント 2/)).toBeDefined()
+
+    // 「戻る」で選択ステップに戻る(isConfirmStepがfalseに戻る)
+    fireEvent.click(screen.getByRole('button', { name: '戻る' }))
+    // 再度「次へ」で確認ステップに戻る
+    fireEvent.click(screen.getByRole('button', { name: '次へ: 分割内容の確認' }))
+    await screen.findByRole('button', { name: /分割を実行/ })
+
+    // 手動追加したsplitPointsが保持されており、splitSuggestions(空)による
+    // 上書きでセグメントが1件に戻っていないこと
+    expect(screen.getByText(/セグメント 2/)).toBeDefined()
+  })
 })
 
 function makeFunctionsError(code: string, message: string): Error {

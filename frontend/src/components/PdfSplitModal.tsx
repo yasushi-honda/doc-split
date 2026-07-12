@@ -3,7 +3,7 @@
  * 分割候補の表示、手動追加、分割実行
  */
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { ref, getDownloadURL } from 'firebase/storage'
 import { storage } from '@/lib/firebase'
 import { toast } from 'sonner'
@@ -121,17 +121,20 @@ export function PdfSplitModal({
   const rotatePdf = useRotatePdfPages()
 
   // 分割候補から初期ポイントを設定
-  // Issue #621: already-exists/aborted失敗時にuseSplitPdfのonErrorが
-  // ['document']をinvalidateすると、確認ステップ中でもdocument.splitSuggestions
-  // の参照が変わり本エフェクトが再発火してしまう。確認ステップ以降はユーザーが
-  // 確定させたsplitPointsを保持し、自動候補による上書きをしない。
+  // Issue #621 (Codexレビュー指摘反映): isConfirmStepへの依存でガードすると、
+  // 「戻る」でisConfirmStepがfalseに戻った際に本エフェクトが再発火し、結局
+  // ユーザーの手動編集がsplitSuggestionsで上書きされてしまう(往路のonError
+  // invalidateだけでなく復路の「戻る」操作でも同じ問題が起きる)。
+  // ステップ遷移に依存させず、同一document.idに対しては一度だけ初期化する。
+  const initializedDocIdRef = useRef<string | null>(null)
   useEffect(() => {
-    if (isConfirmStep) return
+    if (initializedDocIdRef.current === document.id) return
     if (document.splitSuggestions && document.splitSuggestions.length > 0) {
       const points = document.splitSuggestions.map((s) => s.afterPageNumber)
       setSplitPoints(points)
+      initializedDocIdRef.current = document.id
     }
-  }, [document.splitSuggestions, isConfirmStep])
+  }, [document.id, document.splitSuggestions])
 
   // gs:// URL を HTTPS ダウンロードURLに変換
   useEffect(() => {
