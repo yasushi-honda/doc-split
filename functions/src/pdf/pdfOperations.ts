@@ -952,7 +952,7 @@ function unwrapErrorMessage(e: unknown): string {
  * 公式 API 約束ではない (SDK バージョンアップで number → string 変動リスクあり)。
  * 堅牢化のため 3 系統 OR 判定: (a) gRPC 数値 code (b) Cloud Functions 文字列 code (c) message fallback
  */
-function isFirestorePreconditionFailure(err: unknown): boolean {
+export function isFirestorePreconditionFailure(err: unknown): boolean {
   const errCode =
     err instanceof Error && 'code' in err
       ? (err as { code: number | string }).code
