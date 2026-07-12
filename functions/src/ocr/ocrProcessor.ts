@@ -37,6 +37,12 @@ import { validatePageResultsForReuse } from './pageResultsReuse';
 import { resolveDetailFields } from './documentDetail';
 import { applyConfirmedFieldProtection } from './confirmedFieldMerge';
 import { buildOcrExcerpt } from './ocrExcerpt';
+import {
+  computeOcrResultObjectsToDelete,
+  shouldSkipCompensatingDelete,
+  shouldSkipSuccessCleanup,
+  type OcrResultStorageAdapter,
+} from './ocrResultCleanup';
 
 // #267: buildPageResult / 型は ./buildPageResult モジュールに移設。
 // #278: 型名 PageOcrResult → RawPageOcrResult にリネーム (shared/types.ts の post-processed
@@ -356,102 +362,119 @@ export async function processDocument(
   // stale snapshot問題が起きる(Issue #526本文の設計要件)。
   const docRef = db.doc(`documents/${docId}`);
 
-  await db.runTransaction(async (tx) => {
-    const freshSnap = await tx.get(docRef);
-    // tryStartProcessing() と同じ存在チェックパターン。
-    // ドキュメントが処理中に削除されると tx.update() は NOT_FOUND を投げるが、
-    // ここで明示的に検知することで handleProcessingError() の lastErrorMessage に
-    // 原因不明な NOT_FOUND ではなく具体的な状況が残る(silent-failure-hunter指摘)。
-    if (!freshSnap.exists) {
-      throw new Error(
-        `Document ${docId} was deleted during OCR processing, aborting confirmed-merge update`
+  try {
+    await db.runTransaction(async (tx) => {
+      const freshSnap = await tx.get(docRef);
+      // tryStartProcessing() と同じ存在チェックパターン。
+      // ドキュメントが処理中に削除されると tx.update() は NOT_FOUND を投げるが、
+      // ここで明示的に検知することで handleProcessingError() の lastErrorMessage に
+      // 原因不明な NOT_FOUND ではなく具体的な状況が残る(silent-failure-hunter指摘)。
+      if (!freshSnap.exists) {
+        throw new Error(
+          `Document ${docId} was deleted during OCR processing, aborting confirmed-merge update`
+        );
+      }
+      const freshData = freshSnap.data()!;
+
+      // Issue #540: 所有権(ocrRunId)・入力世代(fileUrl/mimeType)検証。処理開始からOCR完了
+      // までの間(最大540秒)に、reprocess等で別の実行が同一docIdに対して開始されている、
+      // またはfileUrl/mimeTypeが変化している場合、この実行の抽出結果はもはや正しい対象を
+      // 表していない。書込みを一切行わずOcrRunSupersededErrorをthrowしてabortする
+      // (呼出元processOCR.tsはこれをエラーではなく正常なsupersedeとして扱う)。
+      const ownership = evaluateOcrRunOwnership(freshData, {
+        ocrRunId,
+        fileUrl: docData.fileUrl as string,
+        mimeType: docData.mimeType as string,
+      });
+      if (!ownership.ok) {
+        throw new OcrRunSupersededError(
+          `OCR run for document ${docId} superseded (reason: ${ownership.reason}), skipping write`,
+          docId,
+          ownership.reason,
+          {
+            inputTokens: totalInputTokens,
+            outputTokens: totalOutputTokens,
+            thinkingTokens: totalThinkingTokens,
+            pagesProcessed: totalPages,
+          }
+        );
+      }
+
+      const merged = applyConfirmedFieldProtection(extractionFields, {
+        customerConfirmed: freshData.customerConfirmed,
+        officeConfirmed: freshData.officeConfirmed,
+        documentTypeConfirmed: freshData.documentTypeConfirmed,
+        customerName: freshData.customerName,
+        customerId: freshData.customerId,
+        careManager: freshData.careManager,
+        isDuplicateCustomer: freshData.isDuplicateCustomer,
+        needsManualCustomerSelection: freshData.needsManualCustomerSelection,
+        confirmedBy: freshData.confirmedBy,
+        confirmedAt: freshData.confirmedAt,
+        officeName: freshData.officeName,
+        officeId: freshData.officeId,
+        officeConfirmedBy: freshData.officeConfirmedBy,
+        officeConfirmedAt: freshData.officeConfirmedAt,
+        documentType: freshData.documentType,
+        category: freshData.category,
+      });
+
+      // displayFileName 生成 (#178 Stage 1、Issue #526 D2でマージ後の最終メタから生成)
+      // 「未判定」「不明顧客」等のデフォルト値・日付のみでの識別不能な名前生成の抑制は
+      // generateDisplayFileName内部で行うため、ここでは merged の値をそのまま渡す。
+      const displayFileName = generateDisplayFileName({
+        documentType: merged.documentType,
+        customerName: merged.customerName,
+        officeName: merged.officeName,
+        fileDate: dateResult.formattedDate ?? undefined,
+      });
+
+      // ドキュメント更新
+      // Issue #548-B1: 要約は自動生成しない (regenerateSummary onCall 経由の手動生成のみ)。
+      // OCR再実行のたびに summary を無効化することで、documentType/customerName/officeName等が
+      // 更新されたのに古い内容の要約が残存する不整合 (429自動rescue・fix-stuck-documents.js等、
+      // getReprocessClearFields()を経由しない再処理経路でも発生しうる) を構造的に防ぐ。
+      // summary/summaryTruncated/summaryOriginalLengthの3フィールドを同時削除する。
+      // 後2者はIssue #215以前の旧フラット形式の残骸クリーンアップ(前方互換とは無関係)。
+      tx.update(docRef, {
+        ...merged,
+        ...(displayFileName ? { displayFileName } : {}),
+        summary: admin.firestore.FieldValue.delete(),
+        summaryTruncated: admin.firestore.FieldValue.delete(),
+        summaryOriginalLength: admin.firestore.FieldValue.delete(),
+        ocrExcerpt,
+        status: 'processed',
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      // ADR-0018 (Issue #547) Phase E: ocrResult/pageResultsはdetail/mainにのみ書く
+      // (本体updateの`merged`は型レベルでこれらを含まない、ocrUpdatePayloadBuilder.ts参照)。
+      // 本体updateと同一transactionでのdetail/main書込みはMUST: 原子性(2回の独立書込は禁止)。
+      tx.set(docRef.collection('detail').doc('main'), {
+        ocrResult: savedOcrResult,
+        pageResults,
+      });
+
+      console.log(
+        `Document ${docId} processed: ${merged.documentType}, ${merged.customerName}`
       );
+    });
+  } catch (err) {
+    // Issue #625: 最終transaction失敗時(supersede/ドキュメント削除/その他エラー)、
+    // 今回このrunがStorageに新規作成したオブジェクトをbest-effortで補償削除してから、
+    // 元のエラーをそのままre-throwする(呼出元processOCR.tsのsupersede/エラー処理は
+    // 一切変更しない)。
+    if (ocrResultUrl) {
+      await compensateDeleteOnFailure(docId, ocrRunId, functionName);
     }
-    const freshData = freshSnap.data()!;
+    throw err;
+  }
 
-    // Issue #540: 所有権(ocrRunId)・入力世代(fileUrl/mimeType)検証。処理開始からOCR完了
-    // までの間(最大540秒)に、reprocess等で別の実行が同一docIdに対して開始されている、
-    // またはfileUrl/mimeTypeが変化している場合、この実行の抽出結果はもはや正しい対象を
-    // 表していない。書込みを一切行わずOcrRunSupersededErrorをthrowしてabortする
-    // (呼出元processOCR.tsはこれをエラーではなく正常なsupersedeとして扱う)。
-    const ownership = evaluateOcrRunOwnership(freshData, {
-      ocrRunId,
-      fileUrl: docData.fileUrl as string,
-      mimeType: docData.mimeType as string,
-    });
-    if (!ownership.ok) {
-      throw new OcrRunSupersededError(
-        `OCR run for document ${docId} superseded (reason: ${ownership.reason}), skipping write`,
-        docId,
-        ownership.reason,
-        {
-          inputTokens: totalInputTokens,
-          outputTokens: totalOutputTokens,
-          thinkingTokens: totalThinkingTokens,
-          pagesProcessed: totalPages,
-        }
-      );
-    }
-
-    const merged = applyConfirmedFieldProtection(extractionFields, {
-      customerConfirmed: freshData.customerConfirmed,
-      officeConfirmed: freshData.officeConfirmed,
-      documentTypeConfirmed: freshData.documentTypeConfirmed,
-      customerName: freshData.customerName,
-      customerId: freshData.customerId,
-      careManager: freshData.careManager,
-      isDuplicateCustomer: freshData.isDuplicateCustomer,
-      needsManualCustomerSelection: freshData.needsManualCustomerSelection,
-      confirmedBy: freshData.confirmedBy,
-      confirmedAt: freshData.confirmedAt,
-      officeName: freshData.officeName,
-      officeId: freshData.officeId,
-      officeConfirmedBy: freshData.officeConfirmedBy,
-      officeConfirmedAt: freshData.officeConfirmedAt,
-      documentType: freshData.documentType,
-      category: freshData.category,
-    });
-
-    // displayFileName 生成 (#178 Stage 1、Issue #526 D2でマージ後の最終メタから生成)
-    // 「未判定」「不明顧客」等のデフォルト値・日付のみでの識別不能な名前生成の抑制は
-    // generateDisplayFileName内部で行うため、ここでは merged の値をそのまま渡す。
-    const displayFileName = generateDisplayFileName({
-      documentType: merged.documentType,
-      customerName: merged.customerName,
-      officeName: merged.officeName,
-      fileDate: dateResult.formattedDate ?? undefined,
-    });
-
-    // ドキュメント更新
-    // Issue #548-B1: 要約は自動生成しない (regenerateSummary onCall 経由の手動生成のみ)。
-    // OCR再実行のたびに summary を無効化することで、documentType/customerName/officeName等が
-    // 更新されたのに古い内容の要約が残存する不整合 (429自動rescue・fix-stuck-documents.js等、
-    // getReprocessClearFields()を経由しない再処理経路でも発生しうる) を構造的に防ぐ。
-    // summary/summaryTruncated/summaryOriginalLengthの3フィールドを同時削除する。
-    // 後2者はIssue #215以前の旧フラット形式の残骸クリーンアップ(前方互換とは無関係)。
-    tx.update(docRef, {
-      ...merged,
-      ...(displayFileName ? { displayFileName } : {}),
-      summary: admin.firestore.FieldValue.delete(),
-      summaryTruncated: admin.firestore.FieldValue.delete(),
-      summaryOriginalLength: admin.firestore.FieldValue.delete(),
-      ocrExcerpt,
-      status: 'processed',
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
-
-    // ADR-0018 (Issue #547) Phase E: ocrResult/pageResultsはdetail/mainにのみ書く
-    // (本体updateの`merged`は型レベルでこれらを含まない、ocrUpdatePayloadBuilder.ts参照)。
-    // 本体updateと同一transactionでのdetail/main書込みはMUST: 原子性(2回の独立書込は禁止)。
-    tx.set(docRef.collection('detail').doc('main'), {
-      ocrResult: savedOcrResult,
-      pageResults,
-    });
-
-    console.log(
-      `Document ${docId} processed: ${merged.documentType}, ${merged.customerName}`
-    );
-  });
+  // Issue #625: transaction成功後(=確実にcommit済み)、ocr-results/{docId}/配下を
+  // 正規化する。今回Storageに保存した場合はそのrunのみ残し、保存しなかった場合は
+  // (OCR結果がFirestore本体にインライン保持されている)配下の全オブジェクトを孤児と
+  // みなして削除する。
+  await cleanupOrphanedOcrResultObjects(docId, ocrRunId, ocrResultUrl ? ocrRunId : null, functionName);
 
   return {
     pagesProcessed: totalPages,
@@ -699,4 +722,169 @@ async function saveOcrResult(docId: string, ocrRunId: string, ocrResult: string)
   );
 
   return `gs://${bucket.name}/${objectPath}`;
+}
+
+function createDefaultOcrResultStorageAdapter(): OcrResultStorageAdapter {
+  const bucket = storage.bucket();
+  return {
+    async listObjectNames(prefix: string): Promise<string[]> {
+      const [files] = await bucket.getFiles({ prefix });
+      return files.map((f) => f.name);
+    },
+    async deleteObject(objectName: string): Promise<void> {
+      await withRetry(
+        () => bucket.file(objectName).delete({ ignoreNotFound: true }),
+        RETRY_CONFIGS.storage
+      );
+    },
+  };
+}
+
+/**
+ * 現在もこのrun(ocrRunId)がドキュメントの所有者であるかをFirestore再読みで確認する。
+ * 確認自体が失敗した場合は安全側に倒しfalse(=もはや現在のrunではない扱い)を返す。
+ */
+async function isStillCurrentOwner(
+  docRef: FirebaseFirestore.DocumentReference,
+  ocrRunId: string,
+  docId: string,
+  functionName: string
+): Promise<boolean> {
+  try {
+    const snap = await docRef.get();
+    return !shouldSkipSuccessCleanup(snap.exists, snap.data()?.ocrRunId, ocrRunId);
+  } catch (err) {
+    await safeLogError({
+      error: err instanceof Error ? err : new Error(String(err)),
+      source: 'ocr',
+      functionName: `${functionName}:ocrResultCleanupVerify`,
+      documentId: docId,
+    });
+    return false;
+  }
+}
+
+/**
+ * `ocr-results/{docId}/` 配下をlistingし、keepOcrRunId(あれば)に対応するオブジェクト
+ * 以外をbest-effortで削除する (Issue #625)。
+ *
+ * FE側のreprocessクリア処理(getReprocessClearFields、reprocess開始時にocrResultUrlを
+ * 即座にdeleteFieldする)のタイミングに依存せず、Storage自体をsource of truthとして
+ * 扱うことで、通常のreprocessサイクルで生じる孤児オブジェクトを解消する(Codexセカンド
+ * オピニオンでの指摘: Firestoreのフィールド値を頼りに旧URLを特定する設計は、reprocess
+ * クリア処理と競合して機能しない)。呼出しは最終transaction成功後(=確実にcommit済み)に
+ * 限定すること。
+ *
+ * /code-review low 指摘反映: listing前に`isStillCurrentOwner`でドキュメントを再読みし、
+ * `ocrRunId`(このrun自身の所有権トークン)が依然最新であることを確認してからcleanupする。
+ * 再読み時点で既に後続runにownershipが移っている場合はcleanup自体をスキップし、後続run
+ * 自身の成功パスcleanupに委ねる(でなければ後続runが直近書き込んだ有効なオブジェクトを、
+ * 先行runの古い視点でのcleanupが誤削除しうる)。
+ *
+ * CodeRabbit指摘反映(PR #629): listing〜複数回delete の間にも同じレースが起こりうるため、
+ * 削除の都度`isStillCurrentOwner`で再検証し、supersedeを検知した時点で残りの削除を
+ * 中断する(レースウィンドウを「削除1件ごと」まで縮小する。完全な排除ではなくbest-effort
+ * 設計の残存リスク低減)。listing/削除いずれの失敗もOCR処理結果を巻き戻さず、
+ * safeLogErrorにのみ記録する。
+ */
+async function cleanupOrphanedOcrResultObjects(
+  docId: string,
+  ocrRunId: string,
+  keepOcrRunId: string | null,
+  functionName: string,
+  adapter: OcrResultStorageAdapter = createDefaultOcrResultStorageAdapter()
+): Promise<void> {
+  const docRef = db.doc(`documents/${docId}`);
+
+  if (!(await isStillCurrentOwner(docRef, ocrRunId, docId, functionName))) {
+    console.log(
+      `Skipping success-path cleanup for ${docId}: run ${ocrRunId} no longer current (superseded or document deleted)`
+    );
+    return;
+  }
+
+  const prefix = `ocr-results/${docId}/`;
+  const keepObjectName = keepOcrRunId ? `${prefix}${keepOcrRunId}.txt` : null;
+
+  try {
+    const allObjectNames = await adapter.listObjectNames(prefix);
+    const toDelete = computeOcrResultObjectsToDelete(allObjectNames, keepObjectName);
+
+    for (const objectName of toDelete) {
+      if (!(await isStillCurrentOwner(docRef, ocrRunId, docId, functionName))) {
+        console.log(
+          `Aborting remaining cleanup for ${docId}: run ${ocrRunId} superseded mid-cleanup`
+        );
+        break;
+      }
+
+      try {
+        await adapter.deleteObject(objectName);
+        console.log(`Deleted orphaned OCR result object: ${objectName}`);
+      } catch (err) {
+        await safeLogError({
+          error: err instanceof Error ? err : new Error(String(err)),
+          source: 'ocr',
+          functionName: `${functionName}:ocrResultCleanup`,
+          documentId: docId,
+        });
+      }
+    }
+  } catch (err) {
+    await safeLogError({
+      error: err instanceof Error ? err : new Error(String(err)),
+      source: 'ocr',
+      functionName: `${functionName}:ocrResultCleanupListing`,
+      documentId: docId,
+    });
+  }
+}
+
+/**
+ * 最終transaction失敗時、今回のrunがStorageに新規作成したオブジェクトを
+ * best-effortで補償削除する (Issue #625)。
+ *
+ * 削除前にドキュメントを再読みし `shouldSkipCompensatingDelete` で安全確認する。
+ * 確認自体が失敗した場合は安全側に倒し削除をスキップする(リーク許容)。
+ */
+async function compensateDeleteOnFailure(
+  docId: string,
+  ocrRunId: string,
+  functionName: string,
+  adapter: OcrResultStorageAdapter = createDefaultOcrResultStorageAdapter()
+): Promise<void> {
+  const docRef = db.doc(`documents/${docId}`);
+  const objectName = `ocr-results/${docId}/${ocrRunId}.txt`;
+
+  let skip: boolean;
+  try {
+    const snap = await docRef.get();
+    const data = snap.data();
+    skip = shouldSkipCompensatingDelete(snap.exists, data?.status, data?.ocrRunId, ocrRunId);
+  } catch (err) {
+    await safeLogError({
+      error: err instanceof Error ? err : new Error(String(err)),
+      source: 'ocr',
+      functionName: `${functionName}:ocrResultCompensateVerify`,
+      documentId: docId,
+    });
+    return;
+  }
+
+  if (skip) {
+    console.log(`Skipping compensating delete for ${docId}: run ${ocrRunId} was actually adopted`);
+    return;
+  }
+
+  try {
+    await adapter.deleteObject(objectName);
+    console.log(`Compensating delete of orphaned OCR result object: ${objectName}`);
+  } catch (err) {
+    await safeLogError({
+      error: err instanceof Error ? err : new Error(String(err)),
+      source: 'ocr',
+      functionName: `${functionName}:ocrResultCleanup`,
+      documentId: docId,
+    });
+  }
 }
