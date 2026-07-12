@@ -20,37 +20,53 @@ const OCR_PROCESSOR_PATH = 'src/ocr/ocrProcessor.ts';
 const PROCESS_DOCUMENT_ANCHOR = /export\s+async\s+function\s+processDocument\s*\(/;
 
 const CLEANUP_FN_ANCHOR = /async\s+function\s+cleanupOrphanedOcrResultObjects\s*\(/;
+const IS_CURRENT_OWNER_FN_ANCHOR = /async\s+function\s+isStillCurrentOwner\s*\(/;
+
+/**
+ * ファイル内で anchor が単一マッチであることを表明するヘルパー。
+ * 2つ目の定義が追加された場合、extractBraceBlock の anchor は最初の定義に
+ * マッチし続けるため、narrow 漏れによる vacuous test (#622 同種) を防ぐ。
+ */
+function expectSingleDefinition(source: string, pattern: RegExp, label: string): void {
+  const count = (source.match(pattern) ?? []).length;
+  expect(count, `${label} の定義が複数存在する場合は anchor の narrow が必要`).to.equal(1);
+}
 
 describe('ocrProcessor OCR結果クリーンアップ配線契約 (Issue #625)', () => {
   let processDocumentBody = '';
   let cleanupFunctionBody = '';
+  let isStillCurrentOwnerBody = '';
 
   before(() => {
     const absPath = resolve(process.cwd(), OCR_PROCESSOR_PATH);
     const source = readFileSync(absPath, 'utf-8');
 
-    // processDocument はファイル内で1つのみ定義されている前提。2つ目が追加された場合、
-    // 本 anchor は最初の定義にマッチし続けるため、その時点で narrow が必要になる。
-    const defCount = (source.match(/export\s+async\s+function\s+processDocument\s*\(/g) ?? [])
-      .length;
-    expect(defCount, 'processDocument の定義が複数存在する場合は anchor の narrow が必要').to.equal(
-      1
+    expectSingleDefinition(
+      source,
+      /export\s+async\s+function\s+processDocument\s*\(/g,
+      'processDocument'
     );
-
     const body = extractBraceBlock(source, PROCESS_DOCUMENT_ANCHOR);
     expect(body, 'processDocument 関数本体の抽出に失敗した').to.not.be.null;
     processDocumentBody = body!;
 
-    const cleanupDefCount = (
-      source.match(/async\s+function\s+cleanupOrphanedOcrResultObjects\s*\(/g) ?? []
-    ).length;
-    expect(
-      cleanupDefCount,
-      'cleanupOrphanedOcrResultObjects の定義が複数存在する場合は anchor の narrow が必要'
-    ).to.equal(1);
+    expectSingleDefinition(
+      source,
+      /async\s+function\s+cleanupOrphanedOcrResultObjects\s*\(/g,
+      'cleanupOrphanedOcrResultObjects'
+    );
     const cleanupBody = extractBraceBlock(source, CLEANUP_FN_ANCHOR);
     expect(cleanupBody, 'cleanupOrphanedOcrResultObjects 関数本体の抽出に失敗した').to.not.be.null;
     cleanupFunctionBody = cleanupBody!;
+
+    expectSingleDefinition(
+      source,
+      /async\s+function\s+isStillCurrentOwner\s*\(/g,
+      'isStillCurrentOwner'
+    );
+    const ownerCheckBody = extractBraceBlock(source, IS_CURRENT_OWNER_FN_ANCHOR);
+    expect(ownerCheckBody, 'isStillCurrentOwner 関数本体の抽出に失敗した').to.not.be.null;
+    isStillCurrentOwnerBody = ownerCheckBody!;
   });
 
   /**
@@ -134,26 +150,65 @@ describe('ocrProcessor OCR結果クリーンアップ配線契約 (Issue #625)',
     expect(cleanupIdx).to.be.lessThan(returnIdx);
   });
 
-  it('cleanupOrphanedOcrResultObjectsはlisting/削除前にshouldSkipSuccessCleanupで所有権を再確認する (/code-review low 指摘反映)', () => {
-    // 先行run自身の古い視点でのcleanupが、後続runが直近書き込んだ有効なオブジェクトを
-    // 誤削除するレースを防ぐための安全確認。listing呼出しより前に配線されていること、
-    // skip時はlisting自体を実行せずreturnすることを検証する。
-    expect(cleanupFunctionBody).to.match(
+  it('isStillCurrentOwnerはshouldSkipSuccessCleanupを正しい引数で呼ぶ', () => {
+    expect(isStillCurrentOwnerBody).to.match(
       /shouldSkipSuccessCleanup\s*\(\s*snap\.exists\s*,\s*snap\.data\(\)\?\.\s*ocrRunId\s*,\s*ocrRunId\s*\)/,
       'shouldSkipSuccessCleanupが正しい引数で呼ばれていない'
     );
+  });
 
-    const skipCheckIdx = cleanupFunctionBody.indexOf('shouldSkipSuccessCleanup(');
+  it('cleanupOrphanedOcrResultObjectsはlisting前にisStillCurrentOwnerで所有権を再確認する', () => {
+    // 先行run自身の古い視点でのcleanupが、後続runが直近書き込んだ有効なオブジェクトを
+    // 誤削除するレースを防ぐための安全確認。listing呼出しより前に配線されていること、
+    // skip時はlisting自体を実行せずreturnすることを検証する(#622同種のvacuous test防止のため、
+    // isStillCurrentOwner自体はisStillCurrentOwnerBodyで別途配線確認済み)。
+    const preCheckIdx = cleanupFunctionBody.indexOf('isStillCurrentOwner(');
     const listingIdx = cleanupFunctionBody.indexOf('adapter.listObjectNames(');
-    expect(skipCheckIdx, 'shouldSkipSuccessCleanup呼出が見つからない').to.be.greaterThan(-1);
+    expect(preCheckIdx, 'listing前のisStillCurrentOwner呼出が見つからない').to.be.greaterThan(-1);
     expect(listingIdx, 'adapter.listObjectNames呼出が見つからない').to.be.greaterThan(-1);
-    expect(skipCheckIdx, 'shouldSkipSuccessCleanupがlistingより後に配線されている').to.be.lessThan(
+    expect(preCheckIdx, 'isStillCurrentOwnerがlistingより後に配線されている').to.be.lessThan(
       listingIdx
     );
 
     expect(cleanupFunctionBody).to.match(
-      /if\s*\(\s*skip\s*\)\s*\{[\s\S]*?return\s*;[\s\S]*?\}/,
-      'skip=trueの場合にreturnしていない — listing/削除が実行されてしまう'
+      /if\s*\(\s*!\s*\(\s*await\s+isStillCurrentOwner\s*\([\s\S]*?\)\s*\)\s*\)\s*\{[\s\S]*?return\s*;/,
+      'isStillCurrentOwnerがfalseの場合にreturnしていない — listing/削除が実行されてしまう'
     );
+  });
+
+  it('cleanupOrphanedOcrResultObjectsは削除ループ内でも都度isStillCurrentOwnerを再検証しbreakする (CodeRabbit指摘反映 PR #629)', () => {
+    // listing〜複数回deleteの間にも同じレースが起こりうるため、削除の都度所有権を
+    // 再検証し、supersedeを検知した時点で残りの削除を中断してレースウィンドウを
+    // 「削除1件ごと」まで縮小する。
+    const forLoopIdx = cleanupFunctionBody.indexOf('for (const objectName of toDelete)');
+    expect(forLoopIdx, 'for (const objectName of toDelete) ループが見つからない').to.be.greaterThan(
+      -1
+    );
+    const ownerCheckCallCount = (cleanupFunctionBody.match(/isStillCurrentOwner\s*\(/g) ?? [])
+      .length;
+    expect(
+      ownerCheckCallCount,
+      'isStillCurrentOwner呼出がlisting前+ループ内の2箇所存在しない — 削除毎の再検証が配線されていない'
+    ).to.equal(2);
+
+    const loopBody = extractBraceBlock(
+      cleanupFunctionBody.slice(forLoopIdx),
+      'for (const objectName of toDelete)',
+      { anchorMode: 'after-match' }
+    );
+    expect(loopBody, 'for ループ本体の抽出に失敗した').to.not.be.null;
+    expect(loopBody).to.match(
+      /if\s*\(\s*!\s*\(\s*await\s+isStillCurrentOwner\s*\([\s\S]*?\)\s*\)\s*\)\s*\{[\s\S]*?break\s*;/,
+      'ループ内でisStillCurrentOwnerがfalseの場合にbreakしていない — supersede後も削除を継続してしまう'
+    );
+
+    const loopOwnerCheckIdx = loopBody!.indexOf('isStillCurrentOwner(');
+    const loopDeleteIdx = loopBody!.indexOf('adapter.deleteObject(');
+    expect(loopOwnerCheckIdx, 'ループ内のisStillCurrentOwner呼出が見つからない').to.be.greaterThan(
+      -1
+    );
+    expect(loopDeleteIdx, 'ループ内のadapter.deleteObject呼出が見つからない').to.be.greaterThan(-1);
+    expect(loopOwnerCheckIdx, 'ループ内でisStillCurrentOwnerがdeleteより後に配線されている').to.be
+      .lessThan(loopDeleteIdx);
   });
 });

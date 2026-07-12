@@ -741,6 +741,30 @@ function createDefaultOcrResultStorageAdapter(): OcrResultStorageAdapter {
 }
 
 /**
+ * 現在もこのrun(ocrRunId)がドキュメントの所有者であるかをFirestore再読みで確認する。
+ * 確認自体が失敗した場合は安全側に倒しfalse(=もはや現在のrunではない扱い)を返す。
+ */
+async function isStillCurrentOwner(
+  docRef: FirebaseFirestore.DocumentReference,
+  ocrRunId: string,
+  docId: string,
+  functionName: string
+): Promise<boolean> {
+  try {
+    const snap = await docRef.get();
+    return !shouldSkipSuccessCleanup(snap.exists, snap.data()?.ocrRunId, ocrRunId);
+  } catch (err) {
+    await safeLogError({
+      error: err instanceof Error ? err : new Error(String(err)),
+      source: 'ocr',
+      functionName: `${functionName}:ocrResultCleanupVerify`,
+      documentId: docId,
+    });
+    return false;
+  }
+}
+
+/**
  * `ocr-results/{docId}/` 配下をlistingし、keepOcrRunId(あれば)に対応するオブジェクト
  * 以外をbest-effortで削除する (Issue #625)。
  *
@@ -751,12 +775,17 @@ function createDefaultOcrResultStorageAdapter(): OcrResultStorageAdapter {
  * クリア処理と競合して機能しない)。呼出しは最終transaction成功後(=確実にcommit済み)に
  * 限定すること。
  *
- * /code-review low 指摘反映: 呼出し前にドキュメントを再読みし、`ocrRunId`(このrun自身の
- * 所有権トークン)が依然最新であることを`shouldSkipSuccessCleanup`で確認してからcleanup
- * する。再読み時点で既に後続runにownershipが移っている場合はcleanup自体をスキップし、
- * 後続run自身の成功パスcleanupに委ねる(でなければ後続runが直近書き込んだ有効な
- * オブジェクトを、先行runの古い視点でのcleanupが誤削除しうる)。listing/削除いずれの
- * 失敗もOCR処理結果を巻き戻さず、safeLogErrorにのみ記録する。
+ * /code-review low 指摘反映: listing前に`isStillCurrentOwner`でドキュメントを再読みし、
+ * `ocrRunId`(このrun自身の所有権トークン)が依然最新であることを確認してからcleanupする。
+ * 再読み時点で既に後続runにownershipが移っている場合はcleanup自体をスキップし、後続run
+ * 自身の成功パスcleanupに委ねる(でなければ後続runが直近書き込んだ有効なオブジェクトを、
+ * 先行runの古い視点でのcleanupが誤削除しうる)。
+ *
+ * CodeRabbit指摘反映(PR #629): listing〜複数回delete の間にも同じレースが起こりうるため、
+ * 削除の都度`isStillCurrentOwner`で再検証し、supersedeを検知した時点で残りの削除を
+ * 中断する(レースウィンドウを「削除1件ごと」まで縮小する。完全な排除ではなくbest-effort
+ * 設計の残存リスク低減)。listing/削除いずれの失敗もOCR処理結果を巻き戻さず、
+ * safeLogErrorにのみ記録する。
  */
 async function cleanupOrphanedOcrResultObjects(
   docId: string,
@@ -767,21 +796,7 @@ async function cleanupOrphanedOcrResultObjects(
 ): Promise<void> {
   const docRef = db.doc(`documents/${docId}`);
 
-  let skip: boolean;
-  try {
-    const snap = await docRef.get();
-    skip = shouldSkipSuccessCleanup(snap.exists, snap.data()?.ocrRunId, ocrRunId);
-  } catch (err) {
-    await safeLogError({
-      error: err instanceof Error ? err : new Error(String(err)),
-      source: 'ocr',
-      functionName: `${functionName}:ocrResultCleanupVerify`,
-      documentId: docId,
-    });
-    return;
-  }
-
-  if (skip) {
+  if (!(await isStillCurrentOwner(docRef, ocrRunId, docId, functionName))) {
     console.log(
       `Skipping success-path cleanup for ${docId}: run ${ocrRunId} no longer current (superseded or document deleted)`
     );
@@ -796,6 +811,13 @@ async function cleanupOrphanedOcrResultObjects(
     const toDelete = computeOcrResultObjectsToDelete(allObjectNames, keepObjectName);
 
     for (const objectName of toDelete) {
+      if (!(await isStillCurrentOwner(docRef, ocrRunId, docId, functionName))) {
+        console.log(
+          `Aborting remaining cleanup for ${docId}: run ${ocrRunId} superseded mid-cleanup`
+        );
+        break;
+      }
+
       try {
         await adapter.deleteObject(objectName);
         console.log(`Deleted orphaned OCR result object: ${objectName}`);
