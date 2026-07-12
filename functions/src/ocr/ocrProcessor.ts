@@ -15,7 +15,12 @@ import {
   calculateRetryDelay429Ms,
 } from '../utils/retry';
 import { safeLogError } from '../utils/errorLogger';
-import { evaluateOcrRunOwnership, OcrRunSupersededError } from './ocrRunGuard';
+import {
+  evaluateOcrRunOwnership,
+  OcrRunSupersededError,
+  type OcrRunExpectation,
+  type OcrRunOwnershipResult,
+} from './ocrRunGuard';
 import { getRateLimiter } from '../utils/rateLimiter';
 import { GCP_CONFIG, GEMINI_CONFIG, isThreePointFiveModel } from '../utils/config';
 import {
@@ -141,6 +146,16 @@ export async function processDocument(
 ): Promise<OcrProcessingResult> {
   console.log(`Processing document: ${docId}`);
 
+  // Issue #626: PDFページOCRループ内で早期所有権チェックに使うため、最終transaction用
+  // (元は363行目付近で定義)より前方に移動。db.doc()自体はFirestore read副作用を持たない
+  // 参照生成のみなので、早期に定義しても安全。
+  const docRef = db.doc(`documents/${docId}`);
+  const ownershipExpectation: OcrRunExpectation = {
+    ocrRunId,
+    fileUrl: docData.fileUrl as string,
+    mimeType: docData.mimeType as string,
+  };
+
   // Issue #526 D3: 分割子ドキュメント(#445で確立済みのparentDocumentIdを持つ)が
   // 親から継承した有効なpageResultsを持つ場合、ページOCRを再実行せず再利用する(コスト削減)。
   // ADR-0018 Phase D (#1): 再利用元は detail/main を優先読み(親フォールバック付き)。
@@ -198,6 +213,32 @@ export async function processDocument(
 
       for (let i = 0; i < totalPages; i++) {
         const pageNumber = i + 1;
+
+        // Issue #626: 各ページのGemini呼出し前に軽量な所有権チェックを行う。最終transaction
+        // (evaluateOcrRunOwnershipによる検証)と同じ判定基準だが、ここで先に検知することで
+        // supersededされたrunが残りページ分のGemini APIコストを消費し切ってから最終
+        // transactionで結果を破棄する無駄を防ぐ。最終transactionのガードは
+        // defense-in-depthとして引き続き必要 (このチェックはbest-effort最適化)。
+        const ownership = await checkOcrRunStillOwned(
+          docRef,
+          ownershipExpectation,
+          docId,
+          functionName
+        );
+        if (!ownership.ok) {
+          throw new OcrRunSupersededError(
+            `OCR run for document ${docId} superseded during page OCR loop (page ${pageNumber}/${totalPages}, reason: ${ownership.reason}), aborting remaining pages`,
+            docId,
+            ownership.reason,
+            {
+              inputTokens: totalInputTokens,
+              outputTokens: totalOutputTokens,
+              thinkingTokens: totalThinkingTokens,
+              pagesProcessed: i,
+            }
+          );
+        }
+
         console.log(`Processing page ${pageNumber}/${totalPages}`);
 
         const pageBuffer = await extractPdfPage(buffer, i);
@@ -359,8 +400,8 @@ export async function processDocument(
   // Issue #526 D2: confirmed保護マージはFirestore transaction内で最新ドキュメントを
   // 読み直してから行う。OCR/抽出処理は数秒〜数十秒かかるため、docData(呼出時点の
   // スナップショット)をそのまま使うと、処理中にユーザーが編集した内容と競合する
-  // stale snapshot問題が起きる(Issue #526本文の設計要件)。
-  const docRef = db.doc(`documents/${docId}`);
+  // stale snapshot問題が起きる(Issue #526本文の設計要件)。docRef自体は関数冒頭
+  // (Issue #626)で早期定義済みのためここでは再定義しない。
 
   try {
     await db.runTransaction(async (tx) => {
@@ -381,11 +422,7 @@ export async function processDocument(
       // またはfileUrl/mimeTypeが変化している場合、この実行の抽出結果はもはや正しい対象を
       // 表していない。書込みを一切行わずOcrRunSupersededErrorをthrowしてabortする
       // (呼出元processOCR.tsはこれをエラーではなく正常なsupersedeとして扱う)。
-      const ownership = evaluateOcrRunOwnership(freshData, {
-        ocrRunId,
-        fileUrl: docData.fileUrl as string,
-        mimeType: docData.mimeType as string,
-      });
+      const ownership = evaluateOcrRunOwnership(freshData, ownershipExpectation);
       if (!ownership.ok) {
         throw new OcrRunSupersededError(
           `OCR run for document ${docId} superseded (reason: ${ownership.reason}), skipping write`,
@@ -738,6 +775,37 @@ function createDefaultOcrResultStorageAdapter(): OcrResultStorageAdapter {
       );
     },
   };
+}
+
+/**
+ * PDFページOCRループの各イテレーション開始前に呼ぶ、軽量な所有権チェック (Issue #626)。
+ * 最終transactionと同じ evaluateOcrRunOwnership の判定基準(ocrRunId→status→fileUrl→
+ * mimeType)をそのまま使い、Firestore再読みの結果を渡すだけの薄いラッパー。
+ *
+ * Firestore read自体が失敗した場合は `{ ok: true }` (継続) を返す。cleanup用の
+ * isStillCurrentOwner (失敗時false=安全側でスキップ、実害はorphan object残存のみ)とは
+ * 判断基準が異なる意図的な選択: 本チェックはbest-effort最適化でありdata整合性は最終
+ * transactionが最終的に担保するため、read失敗で誤って正当な処理を中断するfalse positiveの
+ * コストの方が高いと判断した。
+ */
+export async function checkOcrRunStillOwned(
+  docRef: FirebaseFirestore.DocumentReference,
+  expected: OcrRunExpectation,
+  docId: string,
+  functionName: string
+): Promise<OcrRunOwnershipResult> {
+  try {
+    const snap = await docRef.get();
+    return evaluateOcrRunOwnership(snap.data() ?? {}, expected);
+  } catch (err) {
+    await safeLogError({
+      error: err instanceof Error ? err : new Error(String(err)),
+      source: 'ocr',
+      functionName: `${functionName}:ocrRunOwnershipEarlyCheck`,
+      documentId: docId,
+    });
+    return { ok: true };
+  }
 }
 
 /**
