@@ -94,10 +94,11 @@ describe('429 専用 retry policy + rescueErroredDocuments 統合テスト', () 
         status: 'processing',
         retryCount: 0,
         fileName: `${docId}.pdf`,
+        ocrRunId: 'test-run',
       });
 
       const before = Date.now();
-      await handleProcessingError(docId, make429Error(), 'test-fn');
+      await handleProcessingError(docId, make429Error(), 'test-fn', 'test-run');
 
       const snap = await db.doc(`documents/${docId}`).get();
       const data = snap.data()!;
@@ -118,9 +119,10 @@ describe('429 専用 retry policy + rescueErroredDocuments 統合テスト', () 
         status: 'processing',
         retryCount: 6,
         fileName: `${docId}.pdf`,
+        ocrRunId: 'test-run',
       });
 
-      await handleProcessingError(docId, make429Error(), 'test-fn');
+      await handleProcessingError(docId, make429Error(), 'test-fn', 'test-run');
 
       const snap = await db.doc(`documents/${docId}`).get();
       const data = snap.data()!;
@@ -134,9 +136,10 @@ describe('429 専用 retry policy + rescueErroredDocuments 統合テスト', () 
         status: 'processing',
         retryCount: 7,
         fileName: `${docId}.pdf`,
+        ocrRunId: 'test-run',
       });
 
-      await handleProcessingError(docId, make429Error(), 'test-fn');
+      await handleProcessingError(docId, make429Error(), 'test-fn', 'test-run');
 
       const snap = await db.doc(`documents/${docId}`).get();
       const data = snap.data()!;
@@ -153,9 +156,10 @@ describe('429 専用 retry policy + rescueErroredDocuments 統合テスト', () 
         status: 'processing',
         retryCount: 4,
         fileName: `${docId}.pdf`,
+        ocrRunId: 'test-run',
       });
 
-      await handleProcessingError(docId, make429Error(), 'test-fn');
+      await handleProcessingError(docId, make429Error(), 'test-fn', 'test-run');
 
       const snap = await db.doc(`documents/${docId}`).get();
       const data = snap.data()!;
@@ -171,10 +175,11 @@ describe('429 専用 retry policy + rescueErroredDocuments 統合テスト', () 
         status: 'processing',
         retryCount: 3,
         fileName: `${docId}.pdf`,
+        ocrRunId: 'test-run',
       });
 
       const before = Date.now();
-      await handleProcessingError(docId, makeTimeoutError(), 'test-fn');
+      await handleProcessingError(docId, makeTimeoutError(), 'test-fn', 'test-run');
 
       const snap = await db.doc(`documents/${docId}`).get();
       const data = snap.data()!;
@@ -192,9 +197,10 @@ describe('429 専用 retry policy + rescueErroredDocuments 統合テスト', () 
         status: 'processing',
         retryCount: 4,
         fileName: `${docId}.pdf`,
+        ocrRunId: 'test-run',
       });
 
-      await handleProcessingError(docId, makeTimeoutError(), 'test-fn');
+      await handleProcessingError(docId, makeTimeoutError(), 'test-fn', 'test-run');
 
       const snap = await db.doc(`documents/${docId}`).get();
       const data = snap.data()!;

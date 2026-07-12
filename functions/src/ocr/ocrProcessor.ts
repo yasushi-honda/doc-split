@@ -5,6 +5,7 @@
  */
 
 import * as admin from 'firebase-admin';
+import { randomUUID } from 'node:crypto';
 import { PDFDocument } from 'pdf-lib';
 import {
   withRetry,
@@ -14,6 +15,7 @@ import {
   calculateRetryDelay429Ms,
 } from '../utils/retry';
 import { safeLogError } from '../utils/errorLogger';
+import { evaluateOcrRunOwnership, OcrRunSupersededError } from './ocrRunGuard';
 import { getRateLimiter } from '../utils/rateLimiter';
 import { GCP_CONFIG, GEMINI_CONFIG, isThreePointFiveModel } from '../utils/config';
 import {
@@ -67,43 +69,58 @@ export interface OcrProcessingResult {
   thinkingTokens: number;
 }
 
+/** tryStartProcessing成功時の戻り値 */
+export interface OcrClaim {
+  /** この実行の所有権トークン。processDocument/handleProcessingErrorに引き継ぐ (Issue #540) */
+  ocrRunId: string;
+  /**
+   * claim transaction内(status:'processing'書込みと同一transaction)で読んだ最新のドキュメントデータ。
+   * pending一覧取得からtryStartProcessing呼出しまでの間隔でfileUrl等が変化していても、
+   * ここで返す値は常にocrRunId発行時点の実態と整合する (Issue #540 H1)。
+   */
+  docData: FirebaseFirestore.DocumentData;
+}
+
 /**
  * 排他制御付きでドキュメントの処理を開始
- * 既に処理中の場合はnullを返す
+ * 既に処理中の場合、または存在しない場合はnullを返す
  */
-export async function tryStartProcessing(docId: string): Promise<boolean> {
+export async function tryStartProcessing(docId: string): Promise<OcrClaim | null> {
   const docRef = db.doc(`documents/${docId}`);
 
   try {
-    const success = await db.runTransaction(async (transaction) => {
+    const claim = await db.runTransaction(async (transaction) => {
       const doc = await transaction.get(docRef);
 
       if (!doc.exists) {
         console.log(`Document ${docId} not found`);
-        return false;
+        return null;
       }
 
-      const status = doc.data()?.status;
+      const docData = doc.data()!;
 
       // pending以外は処理しない（既に処理中または完了）
-      if (status !== 'pending') {
-        console.log(`Document ${docId} is not pending (status: ${status}), skipping`);
-        return false;
+      if (docData.status !== 'pending') {
+        console.log(`Document ${docId} is not pending (status: ${docData.status}), skipping`);
+        return null;
       }
 
-      // processingに更新
+      const ocrRunId = randomUUID();
+
+      // processingに更新、ocrRunIdを所有権トークンとして発行 (Issue #540)
       transaction.update(docRef, {
         status: 'processing',
+        ocrRunId,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
 
-      return true;
+      return { ocrRunId, docData };
     });
 
-    return success;
+    return claim;
   } catch (error) {
     console.error(`Failed to start processing ${docId}:`, error);
-    return false;
+    return null;
   }
 }
 
@@ -113,7 +130,8 @@ export async function tryStartProcessing(docId: string): Promise<boolean> {
 export async function processDocument(
   docId: string,
   docData: FirebaseFirestore.DocumentData,
-  functionName: string
+  functionName: string,
+  ocrRunId: string
 ): Promise<OcrProcessingResult> {
   console.log(`Processing document: ${docId}`);
 
@@ -309,7 +327,7 @@ export async function processDocument(
   let savedOcrResult = ocrResult;
 
   if (ocrResult.length > OCR_RESULT_MAX_LENGTH) {
-    ocrResultUrl = await saveOcrResult(docId, ocrResult);
+    ocrResultUrl = await saveOcrResult(docId, ocrRunId, ocrResult);
     savedOcrResult = '';
   }
 
@@ -350,6 +368,30 @@ export async function processDocument(
       );
     }
     const freshData = freshSnap.data()!;
+
+    // Issue #540: 所有権(ocrRunId)・入力世代(fileUrl/mimeType)検証。処理開始からOCR完了
+    // までの間(最大540秒)に、reprocess等で別の実行が同一docIdに対して開始されている、
+    // またはfileUrl/mimeTypeが変化している場合、この実行の抽出結果はもはや正しい対象を
+    // 表していない。書込みを一切行わずOcrRunSupersededErrorをthrowしてabortする
+    // (呼出元processOCR.tsはこれをエラーではなく正常なsupersedeとして扱う)。
+    const ownership = evaluateOcrRunOwnership(freshData, {
+      ocrRunId,
+      fileUrl: docData.fileUrl as string,
+      mimeType: docData.mimeType as string,
+    });
+    if (!ownership.ok) {
+      throw new OcrRunSupersededError(
+        `OCR run for document ${docId} superseded (reason: ${ownership.reason}), skipping write`,
+        docId,
+        ownership.reason,
+        {
+          inputTokens: totalInputTokens,
+          outputTokens: totalOutputTokens,
+          thinkingTokens: totalThinkingTokens,
+          pagesProcessed: totalPages,
+        }
+      );
+    }
 
     const merged = applyConfirmedFieldProtection(extractionFields, {
       customerConfirmed: freshData.customerConfirmed,
@@ -437,20 +479,39 @@ import { MAX_RETRY_COUNT, MAX_RETRY_COUNT_429 } from './constants';
 export async function handleProcessingError(
   docId: string,
   error: Error,
-  functionName: string
+  functionName: string,
+  expectedOcrRunId: string
 ): Promise<void> {
   console.error(`Error processing document ${docId}:`, error.message);
 
+  const docRef = db.doc(`documents/${docId}`);
   const transient = isTransientError(error);
   const isQuotaError = is429Error(error);
   const maxRetries = isQuotaError ? MAX_RETRY_COUNT_429 : MAX_RETRY_COUNT;
 
   // ステータス更新を最優先（トランザクションでretryCountをアトミックに管理）
   try {
-    const docRef = db.doc(`documents/${docId}`);
-    await db.runTransaction(async (tx) => {
+    const superseded = await db.runTransaction(async (tx) => {
       const doc = await tx.get(docRef);
-      const currentRetryCount = (doc.data()?.retryCount as number) || 0;
+
+      // /code-review high 指摘: ドキュメント削除は「所有権喪失」ではない別の実害。
+      // 削除時は更新対象が無いためtx.updateは行わないが、supersededと同一視して
+      // 早期returnすると末尾safeLogErrorがskipされ、削除エラー自体がerrors/に
+      // 記録されなくなる(修正前は必ず記録されていた回帰)。false(非supersede)を
+      // 返し、末尾safeLogErrorに到達させる。
+      if (!doc.exists) {
+        return false;
+      }
+      const freshData = doc.data()!;
+
+      // Issue #540 H2: このエラーを起こした実行が既に別の実行(reprocess後の新run等)に
+      // 所有権を奪われている場合、retryCount/statusを変更すると新runの状態を壊す。
+      // ownership不一致はno-opとする(新runは自身のエラーハンドリングで独立に対処する)。
+      if (freshData.status !== 'processing' || freshData.ocrRunId !== expectedOcrRunId) {
+        return true;
+      }
+
+      const currentRetryCount = (freshData.retryCount as number) || 0;
       const newRetryCount = currentRetryCount + 1;
 
       if (transient && newRetryCount < maxRetries) {
@@ -485,16 +546,32 @@ export async function handleProcessingError(
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         });
       }
+      return false;
     });
+
+    if (superseded) {
+      console.log(
+        `Skipping error handling for ${docId}: ownership no longer held (expected ocrRunId ${expectedOcrRunId})`
+      );
+      return;
+    }
   } catch (updateErr) {
     console.error(`Failed to update document ${docId} status:`, updateErr);
-    // トランザクション失敗時のフォールバック
+    // トランザクション失敗時のフォールバック(所有権を確認してから書込む、Issue #540 H2)
     try {
-      await db.doc(`documents/${docId}`).update({
-        status: 'error',
-        lastErrorMessage: error.message.slice(0, 500),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
+      const snap = await docRef.get();
+      const data = snap.data();
+      // dataが存在しない(削除済み)場合はupdate不要・ログも不要でそのまま末尾safeLogErrorへ進む
+      // (/code-review high 指摘: 削除ケースをsupersededと混同してログ抑制しない)。
+      if (data?.status === 'processing' && data?.ocrRunId === expectedOcrRunId) {
+        await docRef.update({
+          status: 'error',
+          lastErrorMessage: error.message.slice(0, 500),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      } else if (data) {
+        console.log(`Skipping fallback error update for ${docId}: ownership no longer held`);
+      }
     } catch (fallbackErr) {
       console.error(`Fallback update also failed for ${docId}:`, fallbackErr);
     }
@@ -603,10 +680,15 @@ ${pageNumber ? `\nこれは${pageNumber}ページ目です。` : ''}
 
 /**
  * 長いOCR結果をCloud Storageに保存
+ *
+ * Issue #540 H4: 保存先はrun毎(ocrRunId)に分離する。固定パス(docId基準)のままだと、
+ * Firestore書込みをOcrRunSupersededErrorでガードしても、supersededされた実行の
+ * Storage書込み自体は無条件に行われるため、後から本文だけが上書きされうる。
  */
-async function saveOcrResult(docId: string, ocrResult: string): Promise<string> {
+async function saveOcrResult(docId: string, ocrRunId: string, ocrResult: string): Promise<string> {
   const bucket = storage.bucket();
-  const file = bucket.file(`ocr-results/${docId}.txt`);
+  const objectPath = `ocr-results/${docId}/${ocrRunId}.txt`;
+  const file = bucket.file(objectPath);
 
   await withRetry(
     () =>
@@ -620,5 +702,5 @@ async function saveOcrResult(docId: string, ocrResult: string): Promise<string> 
     RETRY_CONFIGS.storage
   );
 
-  return `gs://${bucket.name}/ocr-results/${docId}.txt`;
+  return `gs://${bucket.name}/${objectPath}`;
 }

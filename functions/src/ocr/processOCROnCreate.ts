@@ -18,6 +18,7 @@ import {
   processDocument,
   handleProcessingError,
 } from './ocrProcessor';
+import { OcrRunSupersededError } from './ocrRunGuard';
 
 const FUNCTION_NAME = 'processOCROnCreate';
 
@@ -50,16 +51,18 @@ export const processOCROnCreate = onDocumentCreated(
 
     console.log(`Processing document on create: ${docId}`);
 
-    try {
-      // 排他制御: 既に処理中ならスキップ
-      const acquired = await tryStartProcessing(docId);
-      if (!acquired) {
-        console.log(`Document ${docId} already being processed, skipping`);
-        return;
-      }
+    // 排他制御: 既に処理中ならスキップ。claim transaction内で読んだ最新dataとocrRunIdを
+    // 受け取り、以降はトリガーイベント時点の`docData`ではなく`claimedData`を使う (Issue #540)。
+    const claim = await tryStartProcessing(docId);
+    if (!claim) {
+      console.log(`Document ${docId} already being processed, skipping`);
+      return;
+    }
+    const { ocrRunId, docData: claimedData } = claim;
 
+    try {
       // OCR処理実行
-      const result = await processDocument(docId, docData, FUNCTION_NAME);
+      const result = await processDocument(docId, claimedData, FUNCTION_NAME, ocrRunId);
 
       // 使用量を追跡 (PR#550レビュー指摘: thinkingTokensのみ非ゼロのレアケースも計測対象に含める)
       if (result.inputTokens > 0 || result.outputTokens > 0 || result.thinkingTokens > 0) {
@@ -72,10 +75,24 @@ export const processOCROnCreate = onDocumentCreated(
         outputTokens: result.outputTokens,
       });
     } catch (error) {
+      if (error instanceof OcrRunSupersededError) {
+        // Issue #540: 別の実行に所有権が移った/入力世代が変わったための正常なabort。
+        // retryCountを消費せずstatus:'error'化もしない。既に消費済みのGemini使用量は
+        // コスト計測から漏れないよう別途trackGeminiUsageへ計上する。
+        if (error.tokenUsage) {
+          const { inputTokens, outputTokens, thinkingTokens } = error.tokenUsage;
+          if (inputTokens > 0 || outputTokens > 0 || thinkingTokens > 0) {
+            await trackGeminiUsage(inputTokens, outputTokens, thinkingTokens, 'ocr');
+          }
+        }
+        console.log(`Document ${docId} OCR run superseded (reason: ${error.reason}), skipping`);
+        return;
+      }
+
       const err = error instanceof Error ? error : new Error(String(error));
       console.error(`Error processing document ${docId}:`, err.message);
 
-      await handleProcessingError(docId, err, FUNCTION_NAME);
+      await handleProcessingError(docId, err, FUNCTION_NAME, ocrRunId);
 
       await logError({
         error: err,
