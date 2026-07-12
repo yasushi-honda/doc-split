@@ -154,6 +154,11 @@ describe('rotatePdfPages source code grep contract (PR-D3 AC3 拡張)', () => {
       expect(rotateBody).to.match(/Concurrent write detected/i);
     });
 
+    it('NOT_FOUND (親doc削除) は Concurrent write と区別したメッセージになる (Issue #620)', () => {
+      expect(rotateBody).to.match(/isFirestoreNotFound\(commitErr\)/);
+      expect(rotateBody).to.match(/was deleted during processing/);
+    });
+
     it('precondition mismatch 判定は splitPdf と共通の isFirestorePreconditionFailure ヘルパーを呼ぶ (Issue #539で共通化)', () => {
       // 判定ロジック自体は rotatePdfPages 関数体の外 (isFirestorePreconditionFailure) に
       // 抽出されているため、rotateBody からは呼出し箇所のみを検証する
