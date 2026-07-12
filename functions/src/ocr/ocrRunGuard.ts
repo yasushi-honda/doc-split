@@ -87,3 +87,37 @@ export class OcrRunSupersededError extends Error {
     this.name = 'OcrRunSupersededError';
   }
 }
+
+/** applySupersededOutcome()が更新するstatsの最小部分集合(processOCR.tsのProcessingStatsが構造的に満たす) */
+export interface OcrRunSupersededStats {
+  pagesProcessed: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalThinkingTokens: number;
+  superseded: number;
+}
+
+/**
+ * OcrRunSupersededError捕捉時のstats反映(Issue #540)。
+ *
+ * retryCountは消費せずsupersededカウンタのみ増やす。既に消費済みのGemini使用量
+ * (error.tokenUsage、superseded runでも実際にAPIコストは発生している)は、
+ * trackGeminiUsageでのコスト計上から漏れないようstatsへ加算する。
+ *
+ * processOCR.tsのonSchedule handler内に閉じたロジックだと直接テストできない
+ * (admin.firestore()がモジュールtop-levelで評価されるため単体テストからimportできない)。
+ * side-effect-freeな本モジュールに切り出すことでunit testから直接保護する
+ * (/review-pr pr-test-analyzer指摘反映)。
+ */
+export function applySupersededOutcome(
+  stats: OcrRunSupersededStats,
+  error: { tokenUsage?: OcrRunTokenUsage }
+): void {
+  stats.superseded++;
+  if (error.tokenUsage) {
+    stats.pagesProcessed += error.tokenUsage.pagesProcessed;
+    stats.totalInputTokens += error.tokenUsage.inputTokens;
+    stats.totalOutputTokens += error.tokenUsage.outputTokens;
+    stats.totalThinkingTokens += error.tokenUsage.thinkingTokens;
+  }
+}

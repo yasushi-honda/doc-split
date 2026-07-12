@@ -22,7 +22,7 @@ import {
   handleProcessingError,
   OcrProcessingResult,
 } from './ocrProcessor';
-import { OcrRunSupersededError } from './ocrRunGuard';
+import { OcrRunSupersededError, applySupersededOutcome } from './ocrRunGuard';
 // 定数は side-effect-free な constants.ts から import (#196 test drift 防止)
 import {
   MAX_RETRY_COUNT,
@@ -43,7 +43,7 @@ const FUNCTION_NAME = 'processOCR';
 const BATCH_SIZE = 5;
 
 /** 処理統計 */
-interface ProcessingStats {
+export interface ProcessingStats {
   documentsProcessed: number;
   pagesProcessed: number;
   totalInputTokens: number;
@@ -145,15 +145,8 @@ export const processOCR = onSchedule(
         } catch (error) {
           if (error instanceof OcrRunSupersededError) {
             // Issue #540: 別の実行に所有権が移った/入力世代が変わったための正常なabort。
-            // retryCountを消費せずstatus:'error'化もしない。既に消費済みのGemini使用量は
-            // コスト計測(trackGeminiUsage)から漏れないようstatsへ加算する。
-            stats.superseded++;
-            if (error.tokenUsage) {
-              stats.pagesProcessed += error.tokenUsage.pagesProcessed;
-              stats.totalInputTokens += error.tokenUsage.inputTokens;
-              stats.totalOutputTokens += error.tokenUsage.outputTokens;
-              stats.totalThinkingTokens += error.tokenUsage.thinkingTokens;
-            }
+            // retryCountを消費せずstatus:'error'化もしない。
+            applySupersededOutcome(stats, error);
             console.log(
               `Document ${docId} OCR run superseded (reason: ${error.reason}), skipping`
             );

@@ -358,7 +358,7 @@ export async function processDocument(
 
   await db.runTransaction(async (tx) => {
     const freshSnap = await tx.get(docRef);
-    // tryStartProcessing() (本ファイル78行目付近) と同じ存在チェックパターン。
+    // tryStartProcessing() と同じ存在チェックパターン。
     // ドキュメントが処理中に削除されると tx.update() は NOT_FOUND を投げるが、
     // ここで明示的に検知することで handleProcessingError() の lastErrorMessage に
     // 原因不明な NOT_FOUND ではなく具体的な状況が残る(silent-failure-hunter指摘)。
@@ -491,24 +491,27 @@ export async function handleProcessingError(
 
   // ステータス更新を最優先（トランザクションでretryCountをアトミックに管理）
   try {
-    const superseded = await db.runTransaction(async (tx) => {
+    await db.runTransaction(async (tx) => {
       const doc = await tx.get(docRef);
 
-      // /code-review high 指摘: ドキュメント削除は「所有権喪失」ではない別の実害。
-      // 削除時は更新対象が無いためtx.updateは行わないが、supersededと同一視して
-      // 早期returnすると末尾safeLogErrorがskipされ、削除エラー自体がerrors/に
-      // 記録されなくなる(修正前は必ず記録されていた回帰)。false(非supersede)を
-      // 返し、末尾safeLogErrorに到達させる。
+      // ドキュメント削除時は更新対象が無いためtx.updateは行わない。
       if (!doc.exists) {
-        return false;
+        return;
       }
       const freshData = doc.data()!;
 
       // Issue #540 H2: このエラーを起こした実行が既に別の実行(reprocess後の新run等)に
       // 所有権を奪われている場合、retryCount/statusを変更すると新runの状態を壊す。
-      // ownership不一致はno-opとする(新runは自身のエラーハンドリングで独立に対処する)。
+      // 状態更新のみスキップする(/review-pr silent-failure-hunter指摘: このerrorは
+      // processOCR.ts側のOcrRunSupersededError専用分岐を経ずにここへ渡ってきた「所有権と
+      // 無関係な本物のエラー」でありうるため、末尾safeLogErrorでの記録まで抑制してはならない。
+      // 修正前は所有権不一致時にsafeLogError自体をskipしていたが、それは削除ケースだけでなく
+      // このケースでも観測性の回帰だった)。
       if (freshData.status !== 'processing' || freshData.ocrRunId !== expectedOcrRunId) {
-        return true;
+        console.log(
+          `Skipping state update for ${docId}: ownership no longer held (expected ocrRunId ${expectedOcrRunId})`
+        );
+        return;
       }
 
       const currentRetryCount = (freshData.retryCount as number) || 0;
@@ -546,37 +549,30 @@ export async function handleProcessingError(
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         });
       }
-      return false;
     });
-
-    if (superseded) {
-      console.log(
-        `Skipping error handling for ${docId}: ownership no longer held (expected ocrRunId ${expectedOcrRunId})`
-      );
-      return;
-    }
   } catch (updateErr) {
     console.error(`Failed to update document ${docId} status:`, updateErr);
     // トランザクション失敗時のフォールバック(所有権を確認してから書込む、Issue #540 H2)
     try {
       const snap = await docRef.get();
       const data = snap.data();
-      // dataが存在しない(削除済み)場合はupdate不要・ログも不要でそのまま末尾safeLogErrorへ進む
-      // (/code-review high 指摘: 削除ケースをsupersededと混同してログ抑制しない)。
       if (data?.status === 'processing' && data?.ocrRunId === expectedOcrRunId) {
         await docRef.update({
           status: 'error',
           lastErrorMessage: error.message.slice(0, 500),
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         });
-      } else if (data) {
-        console.log(`Skipping fallback error update for ${docId}: ownership no longer held`);
+      } else {
+        console.log(`Skipping fallback state update for ${docId}: ownership no longer held or document missing`);
       }
     } catch (fallbackErr) {
       console.error(`Fallback update also failed for ${docId}:`, fallbackErr);
     }
   }
 
+  // 状態更新の成否・所有権の有無に関わらず、エラー自体は必ずerrors/へ記録する
+  // (/review-pr silent-failure-hunter指摘反映: 所有権喪失はstate更新を止める理由にはなっても、
+  // エラー自体の観測性を止める理由にはならない)。
   await safeLogError({
     error,
     source: 'ocr',

@@ -9,8 +9,21 @@ import { expect } from 'chai';
 import {
   evaluateOcrRunOwnership,
   OcrRunSupersededError,
+  applySupersededOutcome,
   type OcrRunExpectation,
+  type OcrRunSupersededStats,
 } from '../src/ocr/ocrRunGuard';
+
+function makeStats(overrides: Partial<OcrRunSupersededStats> = {}): OcrRunSupersededStats {
+  return {
+    pagesProcessed: 0,
+    totalInputTokens: 0,
+    totalOutputTokens: 0,
+    totalThinkingTokens: 0,
+    superseded: 0,
+    ...overrides,
+  };
+}
 
 describe('ocrRunGuard', () => {
   const expected: OcrRunExpectation = {
@@ -141,6 +154,49 @@ describe('ocrRunGuard', () => {
       ];
       const supersededCount = errors.filter((e) => e instanceof OcrRunSupersededError).length;
       expect(supersededCount).to.equal(1);
+    });
+  });
+
+  describe('applySupersededOutcome (processOCR.ts superseded配線、/review-pr指摘)', () => {
+    it('tokenUsageがある場合、statsのpages/token各フィールドに加算しsupersededを増やす', () => {
+      const stats = makeStats({ pagesProcessed: 5, totalInputTokens: 100 });
+
+      applySupersededOutcome(stats, {
+        tokenUsage: { inputTokens: 200, outputTokens: 50, thinkingTokens: 10, pagesProcessed: 3 },
+      });
+
+      expect(stats.superseded).to.equal(1);
+      expect(stats.pagesProcessed).to.equal(8);
+      expect(stats.totalInputTokens).to.equal(300);
+      expect(stats.totalOutputTokens).to.equal(50);
+      expect(stats.totalThinkingTokens).to.equal(10);
+    });
+
+    it('tokenUsageが無い場合、supersededのみ増やしpages/token各フィールドは変更しない', () => {
+      const stats = makeStats({ pagesProcessed: 5, totalInputTokens: 100 });
+
+      applySupersededOutcome(stats, {});
+
+      expect(stats.superseded).to.equal(1);
+      expect(stats.pagesProcessed).to.equal(5);
+      expect(stats.totalInputTokens).to.equal(100);
+    });
+
+    it('複数回呼び出すとsupersededと各tokenフィールドが累積する', () => {
+      const stats = makeStats();
+
+      applySupersededOutcome(stats, {
+        tokenUsage: { inputTokens: 10, outputTokens: 5, thinkingTokens: 1, pagesProcessed: 2 },
+      });
+      applySupersededOutcome(stats, {
+        tokenUsage: { inputTokens: 20, outputTokens: 10, thinkingTokens: 2, pagesProcessed: 3 },
+      });
+
+      expect(stats.superseded).to.equal(2);
+      expect(stats.pagesProcessed).to.equal(5);
+      expect(stats.totalInputTokens).to.equal(30);
+      expect(stats.totalOutputTokens).to.equal(15);
+      expect(stats.totalThinkingTokens).to.equal(3);
     });
   });
 });

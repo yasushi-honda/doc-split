@@ -205,7 +205,7 @@ describe('OCR実行所有権ガード integration (#540)', () => {
     expect(after.data()!.customerName).to.equal('田中太郎');
   });
 
-  it('handleProcessingErrorは所有権不一致時、他runのstatus/retryCountを変更しない', async () => {
+  it('handleProcessingErrorは所有権不一致時、他runのstatus/retryCountを変更しないが、エラー自体はerrors/に記録する', async () => {
     const docId = 'doc-error-race';
     const docRef = db.collection('documents').doc(docId);
     await docRef.set({
@@ -232,9 +232,11 @@ describe('OCR実行所有権ガード integration (#540)', () => {
     expect(after.data()!.ocrRunId).to.equal(ocrRunIdB);
     expect(after.data()!.retryCount).to.be.undefined;
 
-    // run Aのエラー自体はerrors/へも記録されない(supersededされたrunのノイズを避ける設計)
+    // run Aのエラー自体はerrors/に記録される(/review-pr silent-failure-hunter指摘反映:
+    // 所有権喪失は状態更新を止める理由にはなっても、エラー自体が所有権と無関係な本物の
+    // 障害である可能性があるため観測性まで止めてはならない)
     const errors = await db.collection('errors').get();
-    expect(errors.empty, 'superseded run のエラーは errors/ に記録しない').to.equal(true);
+    expect(errors.empty, '所有権喪失時もエラー自体は errors/ に記録される').to.equal(false);
   });
 
   it('handleProcessingErrorは所有権維持時、従来通りretryCount/statusを更新する', async () => {
