@@ -264,11 +264,21 @@ describe('PdfSplitModal - detail取得状態によるボタン制御 (Issue #547
     expect(screen.queryByText(/セグメント 3/)).toBeNull()
   })
 
-  it('確認ステップから「戻る」で分割ポイント選択に戻っても、ユーザーが手動追加したポイントは維持される（Codexレビュー指摘: isConfirmStep依存ガードの復路での再発防止）', async () => {
-    // splitSuggestionsなし(自動候補ゼロ)の書類で、ユーザーが手動でポイントを追加するケース
-    render(
+  it('確認ステップから「戻る」で分割ポイント選択に戻っても、ユーザーが確定したsplitPointsは維持される（Codexレビュー指摘: isConfirmStep依存ガードの復路での再発防止）', async () => {
+    // comment-analyzerレビュー指摘: 旧版のこのテストはsplitSuggestions=[]（常に空）を
+    // 使っていたため、isConfirmStepガード版・docId-ref版のどちらでもeffect本体が
+    // 実行されず、テストが実際には回帰を検出できていなかった。document.splitSuggestions
+    // の「参照」が変化するケースでなければ、isConfirmStepガードの有無による差が
+    // 現れないため、非空のsplitSuggestionsを用いて参照変化を発生させる。
+    const initialDoc = makeDocument({
+      totalPages: 4,
+      splitSuggestions: [
+        { afterPageNumber: 1, reason: 'manual', confidence: 100, newDocumentType: null, newCustomerName: null },
+      ],
+    })
+    const { rerender } = render(
       <PdfSplitModal
-        document={makeDocument({ totalPages: 4, splitSuggestions: [] })}
+        document={initialDoc}
         isOpen={true}
         onClose={vi.fn()}
         onSuccess={vi.fn()}
@@ -277,21 +287,41 @@ describe('PdfSplitModal - detail取得状態によるボタン制御 (Issue #547
       />
     )
 
-    // 手動でページ1の後に分割ポイントを追加(splitSuggestionsが空のため自動候補には無い)
-    fireEvent.click(screen.getByRole('button', { name: 'ページ 1 の後で分割' }))
     fireEvent.click(screen.getByRole('button', { name: '次へ: 分割内容の確認' }))
     await screen.findByRole('button', { name: /分割を実行/ })
     expect(screen.getByText(/セグメント 2/)).toBeDefined()
 
-    // 「戻る」で選択ステップに戻る(isConfirmStepがfalseに戻る)
+    // 確認ステップ中に document.splitSuggestions が新しい参照に変わる
+    // (旧isConfirmStepガード版はこの時点ではまだ再適用をブロックする)
+    const docWithMoreSuggestions = makeDocument({
+      totalPages: 4,
+      splitSuggestions: [
+        { afterPageNumber: 1, reason: 'manual', confidence: 100, newDocumentType: null, newCustomerName: null },
+        { afterPageNumber: 2, reason: 'manual', confidence: 100, newDocumentType: null, newCustomerName: null },
+      ],
+    })
+    rerender(
+      <PdfSplitModal
+        document={docWithMoreSuggestions}
+        isOpen={true}
+        onClose={vi.fn()}
+        onSuccess={vi.fn()}
+        detailLoading={false}
+        detailError={false}
+      />
+    )
+
+    // 「戻る」でisConfirmStepがfalseに戻る。旧isConfirmStepガード版は
+    // ここで依存配列のisConfirmStep変化によりeffectが再発火し、
+    // 変化済みのsplitSuggestions([1,2])で上書きしてしまっていた
     fireEvent.click(screen.getByRole('button', { name: '戻る' }))
-    // 再度「次へ」で確認ステップに戻る
     fireEvent.click(screen.getByRole('button', { name: '次へ: 分割内容の確認' }))
     await screen.findByRole('button', { name: /分割を実行/ })
 
-    // 手動追加したsplitPointsが保持されており、splitSuggestions(空)による
-    // 上書きでセグメントが1件に戻っていないこと
+    // 元のsplitPoints=[1]（2セグメント）のまま。セグメント3が出現していれば
+    // [1,2]で上書きされた=回帰再発を意味する
     expect(screen.getByText(/セグメント 2/)).toBeDefined()
+    expect(screen.queryByText(/セグメント 3/)).toBeNull()
   })
 })
 

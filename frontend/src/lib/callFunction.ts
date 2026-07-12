@@ -13,13 +13,24 @@
 import { httpsCallable } from 'firebase/functions'
 import { functions, auth } from './firebase'
 
+/**
+ * Cloud Functions callable のエラーコードを取得する（`functions/${code}` prefixを除去）。
+ * BE側のエラーメッセージ文字列自体にコード名が含まれるとは限らないため
+ * (例: splitPdfのalready-exists/abortedは内部docId混じりの説明文のみ)、
+ * メッセージのパターンマッチではなく FirebaseError.code を正としてハンドリングする。
+ */
+export function getCallableErrorCode(err: unknown): string | undefined {
+  if (!(err instanceof Error)) return undefined
+  const code = (err as Error & { code?: unknown }).code
+  return typeof code === 'string' ? code.replace(/^functions\//, '') : undefined
+}
+
 /** リトライ対象のエラーかどうか判定 */
 function isRetryableError(err: unknown): boolean {
-  if (!(err instanceof Error)) return false
-  const msg = err.message
-  return msg.includes('unauthenticated') ||
-    msg.includes('deadline-exceeded') ||
-    msg.includes('internal')
+  const code = getCallableErrorCode(err)
+  return code === 'unauthenticated' ||
+    code === 'deadline-exceeded' ||
+    code === 'internal'
 }
 
 /**
@@ -45,28 +56,17 @@ export async function callFunction<TReq, TRes>(
     return result.data
   } catch (err) {
     if (isRetryableError(err) && auth.currentUser) {
-      try {
-        await auth.currentUser.getIdToken(true)
-        const result = await callable(data)
-        return result.data
-      } catch {
-        // リトライも失敗 → 元のエラーをthrow
-      }
+      // silent-failure-hunterレビュー指摘: リトライ後の呼び出しをtry/catchで
+      // 包んで元のerrをthrowすると、getCallableErrorCode/onErrorベースの
+      // 分岐(Issue #621)がリトライ後の真のコード(例: already-exists)を
+      // 見られなくなる。リトライ後に失敗した場合はここでcatchせず、
+      // その例外をそのまま呼び出し元へ伝播させる(リトライの結果を正とする)。
+      await auth.currentUser.getIdToken(true)
+      const result = await callable(data)
+      return result.data
     }
     throw err
   }
-}
-
-/**
- * Cloud Functions callable のエラーコードを取得する（`functions/${code}` prefixを除去）。
- * BE側のエラーメッセージ文字列自体にコード名が含まれるとは限らないため
- * (例: splitPdfのalready-exists/abortedは内部docId混じりの説明文のみ)、
- * メッセージのパターンマッチではなく FirebaseError.code を正としてハンドリングする。
- */
-export function getCallableErrorCode(err: unknown): string | undefined {
-  if (!(err instanceof Error)) return undefined
-  const code = (err as Error & { code?: unknown }).code
-  return typeof code === 'string' ? code.replace(/^functions\//, '') : undefined
 }
 
 /** よくあるエラーをユーザー向けメッセージに変換 */
