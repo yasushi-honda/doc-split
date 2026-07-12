@@ -3,7 +3,7 @@
  * 分割候補の表示、手動追加、分割実行
  */
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { ref, getDownloadURL } from 'firebase/storage'
 import { storage } from '@/lib/firebase'
 import { toast } from 'sonner'
@@ -40,6 +40,7 @@ import { useDocumentMasters, useCustomerMasters, useOfficeMasters } from '@/hook
 import { PdfSplitPreview } from './PdfSplitPreview'
 import { getDisplayFileName } from '@/utils/getDisplayFileName'
 import { applySegmentFieldEdit, buildSegmentConfirmedFlags, type SegmentTextField } from '@/lib/documentUtils'
+import { getCallableErrorCode, getCallableErrorMessage } from '@/lib/callFunction'
 import type { Document, SplitSuggestion, SplitSegment } from '@shared/types'
 
 interface PdfSplitModalProps {
@@ -120,12 +121,20 @@ export function PdfSplitModal({
   const rotatePdf = useRotatePdfPages()
 
   // 分割候補から初期ポイントを設定
+  // Issue #621 (Codexレビュー指摘反映): isConfirmStepへの依存でガードすると、
+  // 「戻る」でisConfirmStepがfalseに戻った際に本エフェクトが再発火し、結局
+  // ユーザーの手動編集がsplitSuggestionsで上書きされてしまう(往路のonError
+  // invalidateだけでなく復路の「戻る」操作でも同じ問題が起きる)。
+  // ステップ遷移に依存させず、同一document.idに対しては一度だけ初期化する。
+  const initializedDocIdRef = useRef<string | null>(null)
   useEffect(() => {
+    if (initializedDocIdRef.current === document.id) return
     if (document.splitSuggestions && document.splitSuggestions.length > 0) {
       const points = document.splitSuggestions.map((s) => s.afterPageNumber)
       setSplitPoints(points)
+      initializedDocIdRef.current = document.id
     }
-  }, [document.splitSuggestions])
+  }, [document.id, document.splitSuggestions])
 
   // gs:// URL を HTTPS ダウンロードURLに変換
   useEffect(() => {
@@ -340,7 +349,27 @@ export function PdfSplitModal({
       onClose()
     } catch (error) {
       console.error('Split error:', error)
-      const message = error instanceof Error ? error.message : '分割処理に失敗しました'
+      // Issue #621: already-exists/aborted はBE側メッセージに内部docIdや英語の
+      // 技術的説明文が含まれるため、そのまま表示せず文脈に応じた文言に翻訳する。
+      // それ以外のコード(invalid-argument/not-found/failed-precondition等)は
+      // 従来通り生メッセージを表示する(getCallableErrorMessageは未知コードを
+      // 汎用文言に丸めてしまい、splitPdf固有の具体的な原因情報が失われるため)
+      const code = getCallableErrorCode(error)
+      let message: string
+      if (code === 'already-exists') {
+        message = 'この書類は既に分割済みです。画面を更新して最新の状態をご確認ください。'
+      } else if (code === 'aborted') {
+        message = '別の操作と競合したため分割を中断しました。時間をおいて再度お試しください。'
+      } else if (
+        code === 'unauthenticated' ||
+        code === 'deadline-exceeded' ||
+        code === 'internal' ||
+        code === 'permission-denied'
+      ) {
+        message = getCallableErrorMessage(error, '分割処理に失敗しました')
+      } else {
+        message = error instanceof Error ? error.message : '分割処理に失敗しました'
+      }
       toast.error(`分割エラー: ${message}`)
     }
   }
