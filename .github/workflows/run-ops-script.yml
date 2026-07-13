@@ -94,6 +94,7 @@ on:
           - measure-split-into-length
           - compare-gemini-ocr-models
           - spike-candidate-extraction
+          - verify-candidate-extraction-document-level
           - compare-gemini-ocr-models-confirmed --limit 30
           - compare-gemini-ocr-models-confirmed --limit 300
           - compare-gemini-ocr-models-confirmed --limit 5000
@@ -609,6 +610,7 @@ jobs:
                [ "$SCRIPT_NAME" = "seed-dev-data" ] || \
                [ "$SCRIPT_NAME" = "compare-gemini-ocr-models" ] || \
                [ "$SCRIPT_NAME" = "spike-candidate-extraction" ] || \
+               [ "$SCRIPT_NAME" = "verify-candidate-extraction-document-level" ] || \
                [ "$SCRIPT_NAME" = "compare-gemini-ocr-models-confirmed" ] || \
                [ "$SCRIPT_NAME" = "diagnose-confirmed-replay-sampling" ] || \
                [ "$SCRIPT_NAME" = "backfill-detail-subcollection" ] || \
@@ -620,6 +622,9 @@ jobs:
             # compare-gemini-ocr-models-confirmed (#548 confirmed replay方式) も同様の依存関係。
             # spike-candidate-extraction (OCR突合精度向上ミッション タスクA) も同様に
             # functions/src/utils/* + scripts/lib/geminiOcrCompare.ts に依存する。
+            # verify-candidate-extraction-document-level (同ミッション タスクB) も同様に加え
+            # functions/src/ocr/ocrProcessor.ts の extractOcrCandidates() に依存する
+            # (admin.initializeApp()後の動的importで解決、measure-summary-costと同パターン)。
             # diagnose-confirmed-replay-sampling (#548 pilot実行0件原因調査用) は firebase-admin
             # のみ依存(functions/src非依存、STORAGE_BUCKET不使用)だが統一的にts-node経由で実行。
             # measure-summary-cost (#562) は functions/src/ocr/summaryGenerator.ts に依存するため同様。
