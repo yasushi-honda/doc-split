@@ -175,7 +175,6 @@ function isGrounded(candidate: string | null, pageText: string): boolean | null 
 interface PageGroundTruth {
   fixtureId: string;
   pageNumber: number;
-  fileName: string;
   docType: string;
   customer: string;
   office: string;
@@ -191,7 +190,6 @@ function expandGroundTruth(): PageGroundTruth[] {
         pages.push({
           fixtureId: mixed.id,
           pageNumber,
-          fileName: mixed.fileName,
           docType: seg.docType,
           customer: seg.customer,
           office: seg.office,
@@ -304,12 +302,21 @@ async function main(): Promise<void> {
       ['office', result.officeNameCandidate],
       ['date', result.dateCandidate],
     ];
-    const groundingResults = groundingChecks.map(([label, candidate]) => {
-      const grounded = isGrounded(candidate, pageText);
+    // isGrounded()はここで1回だけ計算し、表示用ラベル生成とnot-grounded診断判定の両方で使い回す
+    const groundingEvaluations = groundingChecks.map(([label, candidate]) => ({
+      label,
+      candidate,
+      grounded: isGrounded(candidate, pageText),
+    }));
+
+    for (const { candidate, grounded } of groundingEvaluations) {
       if (candidate !== null) {
         nonNullCandidateCount++;
         if (grounded) groundedCount++;
       }
+    }
+
+    const groundingResults = groundingEvaluations.map(({ label, candidate, grounded }) => {
       const statusLabel = candidate === null ? '(null)' : grounded ? '✅grounded' : `⚠️not-grounded:"${candidate}"`;
       return `${label}=${statusLabel}`;
     });
@@ -320,7 +327,7 @@ async function main(): Promise<void> {
         ` (in=${result.inputTokens}/out=${result.outputTokens}/thinking=${result.thinkingTokens})`
     );
     // not-grounded診断用: pageText冒頭を出力し、候補文字列がどこから来たか手掛かりを残す
-    const hasNotGrounded = groundingChecks.some(([, candidate]) => candidate !== null && !isGrounded(candidate, pageText));
+    const hasNotGrounded = groundingEvaluations.some(({ candidate, grounded }) => candidate !== null && !grounded);
     if (hasNotGrounded) {
       console.log(`    [診断] pageText冒頭300文字: "${pageText.slice(0, 300).replace(/\n/g, '\\n')}"`);
     }
