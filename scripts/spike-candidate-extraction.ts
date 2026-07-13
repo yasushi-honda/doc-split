@@ -310,7 +310,8 @@ async function main(): Promise<void> {
         nonNullCandidateCount++;
         if (grounded) groundedCount++;
       }
-      return `${label}=${candidate === null ? '(null)' : grounded ? '✅grounded' : '⚠️not-grounded'}`;
+      const statusLabel = candidate === null ? '(null)' : grounded ? '✅grounded' : `⚠️not-grounded:"${candidate}"`;
+      return `${label}=${statusLabel}`;
     });
 
     console.log(
@@ -318,6 +319,11 @@ async function main(): Promise<void> {
         groundingResults.join(' / ') +
         ` (in=${result.inputTokens}/out=${result.outputTokens}/thinking=${result.thinkingTokens})`
     );
+    // not-grounded診断用: pageText冒頭を出力し、候補文字列がどこから来たか手掛かりを残す
+    const hasNotGrounded = groundingChecks.some(([, candidate]) => candidate !== null && !isGrounded(candidate, pageText));
+    if (hasNotGrounded) {
+      console.log(`    [診断] pageText冒頭300文字: "${pageText.slice(0, 300).replace(/\n/g, '\\n')}"`);
+    }
   }
 
   console.log(`\n実行結果: 成功 ${successCount}/${groundTruthPages.length} (JSON解析失敗 ${parseErrorCount}件)`);
