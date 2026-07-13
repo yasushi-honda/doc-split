@@ -20,6 +20,7 @@ import {
   convertFullWidthToHalfWidth,
   extractDateCandidates,
   selectMostReasonableDate,
+  formatDateString,
   DateCandidate,
 } from './textNormalizer';
 import { similarityScore, SIMILARITY_THRESHOLDS } from './similarity';
@@ -236,6 +237,13 @@ export function extractFilenameInfo(filename: string): FilenameInfo {
  * @param documentMasters 書類マスターリスト
  * @param options オプション
  */
+/**
+ * 書類種別抽出の既定検索範囲(先頭何文字を対象にするか)。arbitrateDocumentType
+ * （本ファイル後方）が候補文字列の再照合でも同じ位置制約を維持するために
+ * 定数として共有する。
+ */
+const DOCUMENT_TYPE_DEFAULT_SEARCH_RANGE = 300;
+
 export function extractDocumentTypeEnhanced(
   ocrText: string,
   documentMasters: DocumentMaster[],
@@ -244,7 +252,10 @@ export function extractDocumentTypeEnhanced(
     minScore?: number;
   } = {}
 ): DocumentExtractionResult {
-  const { searchRange = 300, minScore = SIMILARITY_THRESHOLDS.DOCUMENT_THRESHOLD } = options;
+  const {
+    searchRange = DOCUMENT_TYPE_DEFAULT_SEARCH_RANGE,
+    minScore = SIMILARITY_THRESHOLDS.DOCUMENT_THRESHOLD,
+  } = options;
 
   if (!ocrText || documentMasters.length === 0) {
     return { documentType: null, category: null, score: 0, matchType: 'none', keywords: [] };
@@ -1223,5 +1234,242 @@ export function extractAllInformation(
       pageNumber: options.pageNumber,
     }),
     date: extractDateEnhanced(ocrText, options.dateMarker),
+  };
+}
+
+/**
+ * OCR突合arbitration（GOAL.md タスクC）
+ *
+ * 既存の全文ベース突合結果（本ファイル既存関数の出力）と、独立したGemini呼出し
+ * （functions/src/ocr/ocrProcessor.ts の extractOcrCandidates()、タスクB実装済み）
+ * が返す候補文字列を統合する。不変条件（GOAL.md）: 突合の精度劣化は一切禁止。
+ *
+ * 設計はCodexセカンドオピニオン（plan mode、session121）の指摘を反映した保守的な
+ * ものになっている:
+ * - 既存が何らかのマッチ済み（documentType: matchType!=='none' / officeName・
+ *   customerName: bestMatch!==null / date: date!==null）なら、候補がどれだけ
+ *   高スコアでも絶対に上書きしない
+ * - 候補は既存関数へ再入力してマスター突合させるが、既存の全文とは
+ *   searchRange・スライディングウィンドウの前提が異なり、fuzzy/partial一致は
+ *   スコアインフレしやすいため、昇格対象はexact matchのみに限定する
+ * - 候補はOCR全文内へのgrounding（逐語一致）が必須。文字化けした候補
+ *   （タスクA/Bスパイクで実証: 「請求書」→「舅求書」等）を弾く安全弁
+ */
+
+/** arbitrationの結果、既存(全文ベース)結果と候補抽出結果のどちらを採用したかの由来情報 */
+export interface ArbitrationProvenance {
+  /** 'existing'=全文ベース結果を採用 / 'candidate'=AI候補抽出結果に昇格 */
+  source: 'existing' | 'candidate';
+  /** 候補文字列がOCR全文内にgrounding(逐語存在)されていたか。候補がnull/型崩れの場合はfalse */
+  candidateGrounded: boolean;
+}
+
+export interface ArbitratedDocumentExtractionResult extends DocumentExtractionResult {
+  provenance: ArbitrationProvenance;
+}
+
+export interface ArbitratedOfficeExtractionResult extends OfficeExtractionResultWithCandidates {
+  provenance: ArbitrationProvenance;
+}
+
+export interface ArbitratedCustomerExtractionResult extends CustomerExtractionResult {
+  provenance: ArbitrationProvenance;
+}
+
+export interface ArbitratedDateExtractionResult extends DateExtractionResult {
+  provenance: ArbitrationProvenance;
+}
+
+/**
+ * grounding判定で許容する候補文字列の最小文字数（正規化後）。1〜2文字等の極端に
+ * 短い候補は、無関係な文脈に偶然出現しただけでも「grounded」と誤判定されるリスクが
+ * 高いため拒否する（/code-review medium指摘・実証済み: 実サンプルの事業所shortName
+ * 「ふじ」2文字が、顧客名「ふじたに」を含む無関係な文書全文で誤ってgrounded判定
+ * され、exact match昇格してしまうケースを実機で再現）。
+ */
+const MIN_GROUNDING_LENGTH = 3;
+
+/**
+ * 候補文字列がOCR全文（またはその先頭searchRange文字）内に逐語的に存在するか
+ * 判定する（grounding判定）。
+ *
+ * normalizeForMatchingで表記ゆれ（全角半角・長音等）は吸収するが、OCR特有の
+ * 文字化め（誤字）までは吸収しない。文字化け候補を誤ってgroundedと判定すると
+ * タスクA/Bのスパイクで実証された誤昇格リスクに直結するため、意図的に厳格。
+ *
+ * candidateが文字列でない場合（型崩れ）・正規化後にMIN_GROUNDING_LENGTH未満に
+ * なる場合は必ずfalseを返す（後者は/code-review medium指摘・実証済みの誤昇格を
+ * 防ぐガード）。
+ *
+ * searchRangeを指定した場合、fullTextの先頭searchRange文字（normalizeTextEnhanced
+ * 適用後）のみを対象に判定する。既存のextractDocumentTypeEnhanced等が持つ位置
+ * 制約（書類種別名は文書冒頭に出現するはず、という設計上の前提）を、候補文字列の
+ * 再照合でも維持するために使う（/code-review medium指摘・実証済み: searchRange
+ * 未適用のままだと、文書後方の無関係な言及が候補経由で誤ってexact match昇格した）。
+ */
+function isGroundedInText(candidate: string | null, fullText: string, searchRange?: number): boolean {
+  if (typeof candidate !== 'string') return false;
+  const normalizedCandidate = normalizeForMatching(candidate);
+  if (normalizedCandidate.length < MIN_GROUNDING_LENGTH) return false;
+  const targetText = searchRange !== undefined ? normalizeTextEnhanced(fullText).slice(0, searchRange) : fullText;
+  const normalizedTargetText = normalizeForMatching(targetText);
+  return normalizedTargetText.includes(normalizedCandidate);
+}
+
+/**
+ * documentTypeのarbitration。既存の全文ベース結果がmatchType==='none'の場合
+ * のみ、候補による昇格を検討する（既存に何らかのマッチがあれば絶対に上書きしない）。
+ */
+export function arbitrateDocumentType(
+  existing: DocumentExtractionResult,
+  candidate: string | null,
+  documentMasters: DocumentMaster[],
+  fullText: string
+): ArbitratedDocumentExtractionResult {
+  const candidateGrounded = isGroundedInText(candidate, fullText, DOCUMENT_TYPE_DEFAULT_SEARCH_RANGE);
+
+  if (existing.matchType !== 'none') {
+    return { ...existing, provenance: { source: 'existing', candidateGrounded } };
+  }
+
+  if (!candidateGrounded || typeof candidate !== 'string') {
+    return { ...existing, provenance: { source: 'existing', candidateGrounded: false } };
+  }
+
+  const candidateResult = extractDocumentTypeEnhanced(candidate, documentMasters);
+  if (candidateResult.matchType !== 'exact') {
+    return { ...existing, provenance: { source: 'existing', candidateGrounded: true } };
+  }
+
+  // #501と同種のリスク対策: office系のみに実装されているcomputeCommonShortMasters
+  // (短い/汎用的な名前が他マスターとの衝突で誤ってexact match対象になるのを防ぐ)を、
+  // document系のexact match昇格にも適用する（/code-review medium指摘: customer/
+  // document側にはこの防御がなく、#501で実際にoffice系675件を誤分類したのと同種の
+  // 脆弱性がarbitrationの安全性の拠り所として温存されていた）。
+  const commonShortIds = computeCommonShortMasters(
+    documentMasters.map((d) => ({ id: d.id ?? d.name, name: d.name }))
+  );
+  const matchedMaster = documentMasters.find((d) => d.name === candidateResult.documentType);
+  if (matchedMaster && commonShortIds.has(matchedMaster.id ?? matchedMaster.name)) {
+    return { ...existing, provenance: { source: 'existing', candidateGrounded: true } };
+  }
+
+  return { ...candidateResult, provenance: { source: 'candidate', candidateGrounded: true } };
+}
+
+/**
+ * officeNameのarbitration。既存の全文ベース結果のbestMatchがnullの場合のみ、
+ * 候補による昇格を検討する（既存に何らかの候補があれば絶対に上書きしない）。
+ *
+ * 候補再照合には既存のextractOfficeCandidatesをそのまま使うため、#501対策の
+ * computeCommonShortMasters/skipExactMatchが既にexact match判定に組み込まれて
+ * おり、customer/documentと異なり追加のコリジョン防御は不要。
+ */
+export function arbitrateOfficeName(
+  existing: OfficeExtractionResultWithCandidates,
+  candidate: string | null,
+  officeMasters: OfficeMaster[],
+  fullText: string,
+  options: { filenameInfo?: FilenameInfo } = {}
+): ArbitratedOfficeExtractionResult {
+  const candidateGrounded = isGroundedInText(candidate, fullText);
+
+  if (existing.bestMatch !== null) {
+    return { ...existing, provenance: { source: 'existing', candidateGrounded } };
+  }
+
+  if (!candidateGrounded || typeof candidate !== 'string') {
+    return { ...existing, provenance: { source: 'existing', candidateGrounded: false } };
+  }
+
+  const candidateResult = extractOfficeCandidates(candidate, officeMasters, options);
+  if (candidateResult.bestMatch?.matchType === 'exact') {
+    return { ...candidateResult, provenance: { source: 'candidate', candidateGrounded: true } };
+  }
+
+  return { ...existing, provenance: { source: 'existing', candidateGrounded: true } };
+}
+
+/**
+ * customerNameのarbitration。既存の全文ベース結果のbestMatchがnullの場合のみ、
+ * 候補による昇格を検討する（既存に何らかの候補があれば絶対に上書きしない）。
+ */
+export function arbitrateCustomerName(
+  existing: CustomerExtractionResult,
+  candidate: string | null,
+  customerMasters: CustomerMaster[],
+  fullText: string
+): ArbitratedCustomerExtractionResult {
+  const candidateGrounded = isGroundedInText(candidate, fullText);
+
+  if (existing.bestMatch !== null) {
+    return { ...existing, provenance: { source: 'existing', candidateGrounded } };
+  }
+
+  if (!candidateGrounded || typeof candidate !== 'string') {
+    return { ...existing, provenance: { source: 'existing', candidateGrounded: false } };
+  }
+
+  const candidateResult = extractCustomerCandidates(candidate, customerMasters);
+  if (candidateResult.bestMatch?.matchType !== 'exact') {
+    return { ...existing, provenance: { source: 'existing', candidateGrounded: true } };
+  }
+
+  // #501と同種のリスク対策: arbitrateDocumentTypeと同じ理由でcustomer系にも
+  // computeCommonShortMastersによるコリジョン防御を適用する。
+  const commonShortIds = computeCommonShortMasters(customerMasters);
+  if (commonShortIds.has(candidateResult.bestMatch.id)) {
+    return { ...existing, provenance: { source: 'existing', candidateGrounded: true } };
+  }
+
+  return { ...candidateResult, provenance: { source: 'candidate', candidateGrounded: true } };
+}
+
+/**
+ * dateのarbitration。既存の全文ベース結果がdate===nullの場合のみ、候補による
+ * 補完を検討する（既存に何らかの日付があれば絶対に上書きしない）。
+ *
+ * 既存のextractDateEnhanced()が持つdateMarker優先・1ページ目優先などの複雑な
+ * 選択ロジックはここでは再現しない（Codexセカンドオピニオン指摘: 候補は
+ * grounding済みの単一文字列でしかなく、複数候補間の選別ロジックを必要としない
+ * ため、再現しようとすること自体が過剰設計と判断）。extractDateCandidatesは
+ * confidence降順ソート済みのため、先頭候補をそのまま採用する。
+ */
+export function arbitrateDate(
+  existing: DateExtractionResult,
+  candidate: string | null,
+  fullText: string
+): ArbitratedDateExtractionResult {
+  const candidateGrounded = isGroundedInText(candidate, fullText);
+
+  if (existing.date !== null) {
+    return { ...existing, provenance: { source: 'existing', candidateGrounded } };
+  }
+
+  if (!candidateGrounded || typeof candidate !== 'string') {
+    return { ...existing, provenance: { source: 'existing', candidateGrounded: false } };
+  }
+
+  // Geminiは日付候補を「原文の書式のまま」返すため、OCR全文が全角表記であれば
+  // 候補も全角のまま返る。extractDateCandidatesの正規表現は半角数字のみに
+  // マッチするため、他の呼び出し箇所（extractDateEnhanced）と同様に事前の
+  // 半角変換が必須（/code-review medium指摘・実証済み: 変換漏れにより全角日付が
+  // 一切パースされず日付補完が機能しないバグを修正）。
+  const dateCandidates = extractDateCandidates(convertFullWidthToHalfWidth(candidate));
+  if (dateCandidates.length === 0) {
+    return { ...existing, provenance: { source: 'existing', candidateGrounded: true } };
+  }
+
+  const best = dateCandidates[0]!;
+  const formattedDate = formatDateString(best.date.getFullYear(), best.date.getMonth() + 1, best.date.getDate());
+
+  return {
+    date: best.date,
+    formattedDate,
+    source: best.source,
+    pattern: `${best.pattern}(candidate)`,
+    confidence: best.confidence,
+    allCandidates: dateCandidates,
+    provenance: { source: 'candidate', candidateGrounded: true },
   };
 }

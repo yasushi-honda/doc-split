@@ -14,10 +14,17 @@ import {
   ensureCustomerEntry,
   extractAllInformation,
   computeCommonShortMasters,
+  arbitrateDocumentType,
+  arbitrateOfficeName,
+  arbitrateCustomerName,
+  arbitrateDate,
   DocumentMaster,
   OfficeMaster,
   CustomerMaster,
   OfficeExtractionResultWithCandidates,
+  DocumentExtractionResult,
+  CustomerExtractionResult,
+  DateExtractionResult,
 } from '../src/utils/extractors';
 
 // テスト用マスターデータ
@@ -945,5 +952,324 @@ describe('aggregateOfficeCandidates', () => {
     expect(result.bestMatch).to.be.null;
     expect(result.candidates.length).to.equal(0);
     expect(result.needsManualSelection).to.be.false;
+  });
+});
+
+// GOAL.md タスクC: OCR突合arbitration（既存の全文ベース結果とAI候補抽出結果の統合）
+describe('arbitrateDocumentType', () => {
+  const noneResult: DocumentExtractionResult = {
+    documentType: null,
+    category: null,
+    score: 0,
+    matchType: 'none',
+    keywords: [],
+  };
+
+  it('既存がnoneで候補がgrounding済み+exact一致なら候補に昇格する', () => {
+    const fullText = '--- Page 1 ---\n本日付にて請求書を送付いたします。';
+    const result = arbitrateDocumentType(noneResult, '請求書', documentMasters, fullText);
+
+    expect(result.documentType).to.equal('請求書');
+    expect(result.matchType).to.equal('exact');
+    expect(result.provenance.source).to.equal('candidate');
+    expect(result.provenance.candidateGrounded).to.be.true;
+  });
+
+  it('既存にマッチがあれば候補がexact一致でも上書きしない（誤マスター一致防止）', () => {
+    const existing: DocumentExtractionResult = {
+      documentType: '介護保険被保険者証',
+      category: '保険証',
+      score: 100,
+      matchType: 'exact',
+      keywords: [],
+    };
+    const fullText = '介護保険被保険者証の写しと共に請求書在中の封筒を同封します。';
+    const result = arbitrateDocumentType(existing, '請求書', documentMasters, fullText);
+
+    expect(result.documentType).to.equal('介護保険被保険者証');
+    expect(result.provenance.source).to.equal('existing');
+  });
+
+  it('候補がfullTextにgroundingされない場合(文字化け想定)は既存を維持する', () => {
+    const fullText = '本日付にて請求書を送付いたします。';
+    const result = arbitrateDocumentType(noneResult, '舅求書', documentMasters, fullText);
+
+    expect(result.documentType).to.be.null;
+    expect(result.provenance.source).to.equal('existing');
+    expect(result.provenance.candidateGrounded).to.be.false;
+  });
+
+  it('候補がgrounding済みでもキーワード一致(partial)止まりなら昇格しない(exact限定の回帰)', () => {
+    const fullText = '本日はケアプランについてご説明します。';
+    // 'ケアプラン' は doc2(居宅サービス計画書) の keywords に含まれるため
+    // extractDocumentTypeEnhanced への再入力ではキーワード加点でmatchType='partial'になる。
+    // exact未満のため昇格しないことを確認する。
+    const result = arbitrateDocumentType(noneResult, 'ケアプラン', documentMasters, fullText);
+
+    expect(result.documentType).to.be.null;
+    expect(result.provenance.source).to.equal('existing');
+  });
+
+  it('候補が空文字列の場合は既存を維持する', () => {
+    const fullText = '本日付にて請求書を送付いたします。';
+    const result = arbitrateDocumentType(noneResult, '', documentMasters, fullText);
+
+    expect(result.provenance.source).to.equal('existing');
+    expect(result.provenance.candidateGrounded).to.be.false;
+  });
+
+  it('候補がnullの場合は既存を維持する', () => {
+    const fullText = '本日付にて請求書を送付いたします。';
+    const result = arbitrateDocumentType(noneResult, null, documentMasters, fullText);
+
+    expect(result.provenance.source).to.equal('existing');
+    expect(result.provenance.candidateGrounded).to.be.false;
+  });
+
+  it('候補がfullText先頭300文字より後にのみ出現する場合は昇格しない(searchRange制約の回帰)', () => {
+    // extractDocumentTypeEnhancedは先頭300文字のみを検索範囲とする設計(既存の位置制約)。
+    // 候補文字列を単独で再入力すると300文字制約が実質無意味化する問題(/code-review medium
+    // 指摘・実証済み)への対策として、arbitrateDocumentTypeはgrounding判定自体に同じ
+    // searchRangeを適用する。
+    const padding = 'あ'.repeat(310);
+    const fullText = `${padding}請求書`;
+    const result = arbitrateDocumentType(noneResult, '請求書', documentMasters, fullText);
+
+    expect(result.documentType).to.be.null;
+    expect(result.provenance.source).to.equal('existing');
+    expect(result.provenance.candidateGrounded).to.be.false;
+  });
+
+  it('候補がfullText先頭300文字以内に出現する場合は従来通り昇格する', () => {
+    const padding = 'あ'.repeat(100);
+    const fullText = `${padding}請求書`;
+    const result = arbitrateDocumentType(noneResult, '請求書', documentMasters, fullText);
+
+    expect(result.documentType).to.equal('請求書');
+    expect(result.provenance.source).to.equal('candidate');
+  });
+
+  it('候補がexact一致でも他マスターとのコリジョンがある短いマスターへは昇格しない(#501対策の回帰)', () => {
+    // 「報告書」(3文字)が他の2マスター名のsubstringとして出現するためcommon short
+    // masterと判定され、exact match昇格から除外される(office系のみにあった#501対策を
+    // customer/documentにも適用、/code-review medium指摘)。
+    const collidingDocMasters: DocumentMaster[] = [
+      { id: 'd1', name: '報告書' },
+      { id: 'd2', name: '訪問看護報告書' },
+      { id: 'd3', name: '経過報告書類' },
+    ];
+    const fullText = '本日は報告書についてご説明します。';
+    const result = arbitrateDocumentType(noneResult, '報告書', collidingDocMasters, fullText);
+
+    expect(result.documentType).to.be.null;
+    expect(result.provenance.source).to.equal('existing');
+  });
+});
+
+describe('arbitrateOfficeName', () => {
+  const emptyResult: OfficeExtractionResultWithCandidates = {
+    bestMatch: null,
+    candidates: [],
+    hasMultipleCandidates: false,
+    needsManualSelection: false,
+  };
+
+  it('既存がbestMatchなしで候補がgrounding済み+exact一致なら昇格する', () => {
+    const fullText = '発行元: 株式会社テストケア\n電話: 03-1234-5678';
+    const result = arbitrateOfficeName(emptyResult, '株式会社テストケア', officeMasters, fullText);
+
+    expect(result.bestMatch?.id).to.equal('off1');
+    expect(result.provenance.source).to.equal('candidate');
+  });
+
+  it('既存にbestMatchがあれば候補がexact一致でも上書きしない（誤マスター一致防止）', () => {
+    const existing: OfficeExtractionResultWithCandidates = {
+      bestMatch: { id: 'off3', name: 'デイサービスさくら', score: 100, matchType: 'exact', isDuplicate: false },
+      candidates: [{ id: 'off3', name: 'デイサービスさくら', score: 100, matchType: 'exact', isDuplicate: false }],
+      hasMultipleCandidates: false,
+      needsManualSelection: false,
+    };
+    const fullText = 'デイサービスさくらのご利用者様へ。委託先: 株式会社テストケア';
+    const result = arbitrateOfficeName(existing, '株式会社テストケア', officeMasters, fullText);
+
+    expect(result.bestMatch?.id).to.equal('off3');
+    expect(result.provenance.source).to.equal('existing');
+  });
+
+  it('候補がfullTextにgroundingされない場合は既存を維持する', () => {
+    const fullText = '発行元: 株式会社テストケア';
+    const result = arbitrateOfficeName(emptyResult, '林式会社テストケア', officeMasters, fullText);
+
+    expect(result.bestMatch).to.be.null;
+    expect(result.provenance.candidateGrounded).to.be.false;
+  });
+
+  it('候補がnullの場合は既存を維持する', () => {
+    const fullText = '発行元: 株式会社テストケア';
+    const result = arbitrateOfficeName(emptyResult, null, officeMasters, fullText);
+
+    expect(result.provenance.source).to.equal('existing');
+  });
+
+  it('候補が短すぎる(3文字未満)場合はgroundingとみなさず既存を維持する(最小長ガードの回帰)', () => {
+    // 実サンプルマスターデータのshortName「ふじ」(2文字)を使用。無関係な文脈
+    // (顧客名「ふじたに」の一部)に偶然出現しただけでexact match昇格してしまう
+    // バグを/code-review mediumで実機再現済み。
+    const shortOfficeMasters: OfficeMaster[] = [{ id: 'shortoff1', name: 'ふじ福祉用具', shortName: 'ふじ', isDuplicate: false }];
+    const fullText = '請求書\nふじたに様\nご利用料金のご請求について';
+    const result = arbitrateOfficeName(emptyResult, 'ふじ', shortOfficeMasters, fullText);
+
+    expect(result.bestMatch).to.be.null;
+    expect(result.provenance.candidateGrounded).to.be.false;
+  });
+});
+
+describe('arbitrateCustomerName', () => {
+  const emptyResult: CustomerExtractionResult = {
+    bestMatch: null,
+    candidates: [],
+    hasMultipleCandidates: false,
+    needsManualSelection: false,
+  };
+
+  it('既存がbestMatchなしで候補がgrounding済み+exact一致なら昇格する', () => {
+    const fullText = '利用者様: 鈴木一郎様の記録です。';
+    const result = arbitrateCustomerName(emptyResult, '鈴木一郎', customerMasters, fullText);
+
+    expect(result.bestMatch?.id).to.equal('cust3');
+    expect(result.provenance.source).to.equal('candidate');
+  });
+
+  it('既存にbestMatchがあれば候補がexact一致でも上書きしない（誤マスター一致防止）', () => {
+    const existing: CustomerExtractionResult = {
+      bestMatch: {
+        id: 'cust1',
+        name: '山田太郎',
+        furigana: 'やまだたろう',
+        score: 100,
+        matchType: 'exact',
+        isDuplicate: false,
+      },
+      candidates: [
+        {
+          id: 'cust1',
+          name: '山田太郎',
+          furigana: 'やまだたろう',
+          score: 100,
+          matchType: 'exact',
+          isDuplicate: false,
+        },
+      ],
+      hasMultipleCandidates: false,
+      needsManualSelection: false,
+    };
+    // 主治医名として別の顧客氏名(鈴木一郎)が偶然文書内に記載されているケース
+    const fullText = '利用者: 山田太郎\n主治医: 鈴木一郎';
+    const result = arbitrateCustomerName(existing, '鈴木一郎', customerMasters, fullText);
+
+    expect(result.bestMatch?.id).to.equal('cust1');
+    expect(result.provenance.source).to.equal('existing');
+  });
+
+  it('候補がfullTextにgroundingされない場合は既存を維持する', () => {
+    const fullText = '利用者様: 鈴木一郎様の記録です。';
+    const result = arbitrateCustomerName(emptyResult, '鈴木一朗', customerMasters, fullText);
+
+    expect(result.bestMatch).to.be.null;
+    expect(result.provenance.candidateGrounded).to.be.false;
+  });
+
+  it('候補がexact一致でも他マスターとのコリジョンがある短いマスターへは昇格しない(#501対策の回帰)', () => {
+    // 「田中一」(3文字)が他の2マスター名のsubstringとして出現するためcommon short
+    // masterと判定され、exact match昇格から除外される。
+    const collidingCustomerMasters: CustomerMaster[] = [
+      { id: 'c1', name: '田中一', isDuplicate: false },
+      { id: 'c2', name: '田中一郎', isDuplicate: false },
+      { id: 'c3', name: '藤田田中一', isDuplicate: false },
+    ];
+    const fullText = '利用者: 田中一様のご記録です。';
+    const result = arbitrateCustomerName(emptyResult, '田中一', collidingCustomerMasters, fullText);
+
+    expect(result.bestMatch).to.be.null;
+    expect(result.provenance.source).to.equal('existing');
+  });
+});
+
+describe('arbitrateDate', () => {
+  const nullResult: DateExtractionResult = {
+    date: null,
+    formattedDate: null,
+    source: null,
+    pattern: null,
+    confidence: 0,
+    allCandidates: [],
+  };
+
+  it('既存がnullで候補がgrounding済み+パース可能なら採用する', () => {
+    const fullText = '発行日: 令和7年1月18日';
+    const result = arbitrateDate(nullResult, '令和7年1月18日', fullText);
+
+    expect(result.date).to.not.be.null;
+    expect(result.formattedDate).to.equal('2025/01/18');
+    expect(result.provenance.source).to.equal('candidate');
+  });
+
+  it('既存に日付があれば候補がgroundingされても上書きしない', () => {
+    const existingDate = new Date(2025, 0, 1);
+    const existing: DateExtractionResult = {
+      date: existingDate,
+      formattedDate: '2025/01/01',
+      source: '2025/01/01',
+      pattern: '西暦スラッシュ',
+      confidence: 90,
+      allCandidates: [],
+    };
+    const fullText = '発行日: 令和7年1月18日';
+    const result = arbitrateDate(existing, '令和7年1月18日', fullText);
+
+    expect(result.date).to.equal(existingDate);
+    expect(result.provenance.source).to.equal('existing');
+  });
+
+  it('候補がgrounding済みでもパース不能なフォーマットなら既存(null)を維持する', () => {
+    const fullText = '発行日: XXXX年不明';
+    const result = arbitrateDate(nullResult, 'XXXX年不明', fullText);
+
+    expect(result.date).to.be.null;
+    expect(result.provenance.source).to.equal('existing');
+    expect(result.provenance.candidateGrounded).to.be.true;
+  });
+
+  it('候補がfullTextにgroundingされない場合(文字化け想定)は既存を維持する', () => {
+    const fullText = '発行日: 令和7年1月18日';
+    const result = arbitrateDate(nullResult, '令和7年1月1蕗日', fullText);
+
+    expect(result.date).to.be.null;
+    expect(result.provenance.candidateGrounded).to.be.false;
+  });
+
+  it('候補が空文字列の場合は既存を維持する', () => {
+    const result = arbitrateDate(nullResult, '', '発行日: 令和7年1月18日');
+
+    expect(result.provenance.candidateGrounded).to.be.false;
+    expect(result.provenance.source).to.equal('existing');
+  });
+
+  it('候補がnullの場合は既存を維持する', () => {
+    const result = arbitrateDate(nullResult, null, '発行日: 令和7年1月18日');
+
+    expect(result.provenance.source).to.equal('existing');
+  });
+
+  it('候補が全角形式の日付でもパースして採用する(全角変換漏れの回帰)', () => {
+    // Geminiは日付候補を「原文の書式のまま」抽出するため、OCR全文が全角表記なら
+    // 候補も全角のまま返る。convertFullWidthToHalfWidth前処理漏れにより、全角日付が
+    // 一切パースされず日付補完が機能しないバグを/code-review mediumで実機確認・修正済み。
+    const fullText = '発行日: 令和７年１月１８日';
+    const result = arbitrateDate(nullResult, '令和７年１月１８日', fullText);
+
+    expect(result.date).to.not.be.null;
+    expect(result.formattedDate).to.equal('2025/01/18');
+    expect(result.provenance.source).to.equal('candidate');
   });
 });
