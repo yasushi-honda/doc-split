@@ -30,6 +30,10 @@ import {
   extractDateEnhanced,
   extractFilenameInfo,
   normalizeForMatching,
+  arbitrateDocumentType,
+  arbitrateOfficeName,
+  arbitrateCustomerName,
+  arbitrateDate,
 } from '../utils/extractors';
 import { generateDisplayFileName } from '../../../shared/generateDisplayFileName';
 import { loadMasterData } from '../utils/loadMasterData';
@@ -338,9 +342,32 @@ export async function processDocument(
     functionName: 'ocrProcessor',
   });
 
-  // 情報抽出（強化版エクストラクター使用）
-  const documentTypeResult = extractDocumentTypeEnhanced(ocrResult, documents);
-  const customerResult = extractCustomerCandidates(ocrResult, customers);
+  // タスクD (GOAL.md OCR突合精度向上ミッション): タスクB実装済みの候補抽出関数
+  // (既存ocrWithGemini()とは独立した第2Gemini呼出し)をprocessDocument()へ統合する。
+  // extractOcrCandidates自体がbest-effort設計でAPI失敗/JSON解析失敗時も例外を投げず
+  // 全項目nullを返す(同関数のdocコメント参照)ため、ここでの追加try/catchは不要。
+  const candidates = await extractOcrCandidates(ocrResult, docId);
+  totalInputTokens += candidates.inputTokens;
+  totalOutputTokens += candidates.outputTokens;
+  totalThinkingTokens += candidates.thinkingTokens;
+
+  // 情報抽出（強化版エクストラクター使用）+ タスクC実装済みのarbitrateXxxで候補抽出結果を
+  // 統合。既存の全文ベース結果に何らかのマッチがあれば候補側で絶対に上書きしない
+  // (保守的arbitration、既存動作へのフォールバックを兼ねる)。
+  const documentTypeBase = extractDocumentTypeEnhanced(ocrResult, documents);
+  const documentTypeResult = arbitrateDocumentType(
+    documentTypeBase,
+    candidates.documentTypeCandidate,
+    documents,
+    ocrResult
+  );
+  const customerBase = extractCustomerCandidates(ocrResult, customers);
+  const customerResult = arbitrateCustomerName(
+    customerBase,
+    candidates.customerNameCandidate,
+    customers,
+    ocrResult
+  );
 
   // ファイル名から事業所情報を抽出
   const fileName = docData.fileName as string | undefined;
@@ -348,9 +375,17 @@ export async function processDocument(
   console.log(`Filename info: ${JSON.stringify(filenameInfo)}`);
 
   // 事業所候補抽出
-  const officeResult = extractOfficeCandidates(ocrResult, offices, { filenameInfo });
+  const officeBase = extractOfficeCandidates(ocrResult, offices, { filenameInfo });
+  const officeResult = arbitrateOfficeName(
+    officeBase,
+    candidates.officeNameCandidate,
+    offices,
+    ocrResult,
+    { filenameInfo }
+  );
 
-  // ファイル名からの事業所登録提案
+  // ファイル名からの事業所登録提案 (arbitration後のofficeResultを使用。候補昇格で
+  // 既にマッチ済みの場合に誤って新規事業所登録を提案しないため)
   let suggestedNewOffice: string | null = null;
   if (filenameInfo?.prefixType === 'office_name' && filenameInfo.normalizedPrefix) {
     const ocrTextNormalized = normalizeForMatching(ocrResult);
@@ -363,11 +398,14 @@ export async function processDocument(
     }
   }
 
-  // dateMarker は型崩れしていても undefined に正規化済み (sanitizeDocumentMasters)
+  // dateMarker は型崩れしていても undefined に正規化済み (sanitizeDocumentMasters)。
+  // documentTypeResultはarbitration後の値のため、候補昇格が発生した場合はそちらの
+  // dateMarkerが優先される。
   const matchedDoc = documents.find((d) => d.name === documentTypeResult.documentType);
   const dateMarker = matchedDoc?.dateMarker;
   const firstPageText = pageResults.length > 0 ? pageResults[0]?.text : undefined;
-  const dateResult = extractDateEnhanced(ocrResult, dateMarker, firstPageText);
+  const dateBase = extractDateEnhanced(ocrResult, dateMarker, firstPageText);
+  const dateResult = arbitrateDate(dateBase, candidates.dateCandidate, ocrResult);
 
   // OCR結果が長い場合はCloud Storageに保存
   let ocrResultUrl: string | null = null;
