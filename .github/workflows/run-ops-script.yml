@@ -95,6 +95,7 @@ on:
           - compare-gemini-ocr-models
           - spike-candidate-extraction
           - verify-candidate-extraction-document-level
+          - compare-ocr-arbitration-logic
           - compare-gemini-ocr-models-confirmed --limit 30
           - compare-gemini-ocr-models-confirmed --limit 300
           - compare-gemini-ocr-models-confirmed --limit 5000
@@ -611,6 +612,7 @@ jobs:
                [ "$SCRIPT_NAME" = "compare-gemini-ocr-models" ] || \
                [ "$SCRIPT_NAME" = "spike-candidate-extraction" ] || \
                [ "$SCRIPT_NAME" = "verify-candidate-extraction-document-level" ] || \
+               [ "$SCRIPT_NAME" = "compare-ocr-arbitration-logic" ] || \
                [ "$SCRIPT_NAME" = "compare-gemini-ocr-models-confirmed" ] || \
                [ "$SCRIPT_NAME" = "diagnose-confirmed-replay-sampling" ] || \
                [ "$SCRIPT_NAME" = "backfill-detail-subcollection" ] || \
@@ -625,6 +627,10 @@ jobs:
             # verify-candidate-extraction-document-level (同ミッション タスクB) も同様に加え
             # functions/src/ocr/ocrProcessor.ts の extractOcrCandidates() に依存する
             # (admin.initializeApp()後の動的importで解決、measure-summary-costと同パターン)。
+            # compare-ocr-arbitration-logic (同ミッション タスクF) も同様の依存関係に加え
+            # scripts/fixtures/arbitrationCompareFixtures.ts / scripts/lib/ocrLogicCompareStats.ts
+            # に依存する。STORAGE_BUCKET は未使用(ローカルfixture読込のみ、Storageアクセスなし)だが
+            # 本分岐の他スクリプトと統一的に環境変数を渡す。
             # diagnose-confirmed-replay-sampling (#548 pilot実行0件原因調査用) は firebase-admin
             # のみ依存(functions/src非依存、STORAGE_BUCKET不使用)だが統一的にts-node経由で実行。
             # measure-summary-cost (#562) は functions/src/ocr/summaryGenerator.ts に依存するため同様。
