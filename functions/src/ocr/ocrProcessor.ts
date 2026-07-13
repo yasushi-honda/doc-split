@@ -798,7 +798,9 @@ ${ocrResult}
  * （functions/src/utils/extractors.ts、docs/handoff/GOAL.md タスクC）。
  */
 export async function extractOcrCandidates(ocrResult: string): Promise<OcrCandidateExtractionResult> {
-  if (!ocrResult) return EMPTY_CANDIDATE_RESULT;
+  // モジュールスコープ定数をそのまま返すと、呼出元が返り値を変更した際に以降の全呼出しへ
+  // 汚染が波及するため(/safe-refactor指摘)、常にスプレッドコピーを返す。
+  if (!ocrResult) return { ...EMPTY_CANDIDATE_RESULT };
 
   try {
     const rateLimiter = getRateLimiter();
@@ -885,7 +887,7 @@ export async function extractOcrCandidates(ocrResult: string): Promise<OcrCandid
       `[ocrProcessor] 候補抽出呼出しに失敗、既存の全文突合にフォールバック: ` +
         `${err instanceof Error ? err.message : String(err)}`
     );
-    return EMPTY_CANDIDATE_RESULT;
+    return { ...EMPTY_CANDIDATE_RESULT };
   }
 }
 

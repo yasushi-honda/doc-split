@@ -14,8 +14,10 @@
  * 全体を止めないようにしたい) ため、本モジュールでは共通化しない。
  */
 
-import { ThinkingLevel, type ThinkingConfig } from '@google/genai';
+import { GoogleGenAI, ThinkingLevel, type ThinkingConfig } from '@google/genai';
 import { PDFDocument } from 'pdf-lib';
+import { withRetry, RETRY_CONFIGS } from '../../functions/src/utils/retry';
+import { GEMINI_CONFIG } from '../../functions/src/utils/config';
 
 export type ModelRole = 'baseline' | 'candidate';
 
@@ -113,4 +115,80 @@ export async function extractAllPdfPages(pdfBuffer: Buffer): Promise<Buffer[]> {
     pages.push(Buffer.from(pdfBytes));
   }
   return pages;
+}
+
+export interface OcrPageResult {
+  text: string;
+  inputTokens: number;
+  outputTokens: number;
+  thinkingTokens: number;
+  /** true の場合、空応答がsafetyブロック等のAPI異常由来の可能性があり、判定に含めるべきでない疑いがある */
+  anomalous: boolean;
+}
+
+/**
+ * ページ単位OCR呼出し + 異常応答検知(safetyブロック/zero-candidate等)。
+ * scripts/spike-candidate-extraction.ts の ocrPageVerbatim() と
+ * scripts/verify-candidate-extraction-document-level.ts の同名関数で重複していた
+ * 実装を一元化(/safe-refactor DRY違反指摘反映)。response.text は safetyブロック/
+ * zero-candidate等API異常時にも例外を投げず単に undefined を返すため(@google/genai
+ * getter実装)、空応答を無言で「OCR誤読」と同一視しないよう finishReason/blockReason を検査する。
+ *
+ * compare-gemini-ocr-models.ts の ocrPage() は本関数と統合していない(同ファイル冒頭の
+ * コメント通り、n=11の少数サンプルで即失敗させたい設計のため意図的にリトライ/異常検知の
+ * 扱いを独自実装している)。
+ */
+export async function ocrPageWithAnomalyDetection(
+  ai: InstanceType<typeof GoogleGenAI>,
+  modelConfig: ModelConfig,
+  pageBuffer: Buffer,
+  pageNumber: number
+): Promise<OcrPageResult> {
+  const base64Data = pageBuffer.toString('base64');
+
+  const response = await withRetry(
+    () =>
+      ai.models.generateContent({
+        model: modelConfig.modelId,
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              { inlineData: { mimeType: 'application/pdf', data: base64Data } },
+              { text: buildOcrPrompt(pageNumber) },
+            ],
+          },
+        ],
+        config: {
+          maxOutputTokens: GEMINI_CONFIG.maxOutputTokens,
+          thinkingConfig: modelConfig.thinkingConfig,
+        },
+      }),
+    RETRY_CONFIGS.gemini
+  );
+
+  const text = response.text || '';
+  const usageMetadata = response.usageMetadata;
+
+  let anomalous = false;
+  if (!response.text) {
+    const candidate = response.candidates?.[0];
+    const finishReason = candidate?.finishReason;
+    const blockReason = response.promptFeedback?.blockReason;
+    if (blockReason || (finishReason && finishReason !== 'STOP')) {
+      anomalous = true;
+      console.warn(
+        `⚠️ [${modelConfig.label}] p${pageNumber}: 空応答検出 (API異常の可能性) ` +
+          `finishReason=${finishReason ?? 'none'} blockReason=${blockReason ?? 'none'}`
+      );
+    }
+  }
+
+  return {
+    text,
+    inputTokens: usageMetadata?.promptTokenCount || 0,
+    outputTokens: usageMetadata?.candidatesTokenCount || 0,
+    thinkingTokens: usageMetadata?.thoughtsTokenCount || 0,
+    anomalous,
+  };
 }

@@ -32,7 +32,7 @@ import { withRetry, RETRY_CONFIGS } from '../functions/src/utils/retry';
 import { GEMINI_CONFIG } from '../functions/src/utils/config';
 import { normalizeForMatching } from '../functions/src/utils/extractors';
 import { MIXED_FAX_PDFS, readFixture } from './seed-dev-data';
-import { CANDIDATE_MODEL_CONFIG, buildOcrPrompt, extractPdfPage } from './lib/geminiOcrCompare';
+import { CANDIDATE_MODEL_CONFIG, extractPdfPage, ocrPageWithAnomalyDetection } from './lib/geminiOcrCompare';
 
 /** scripts/compare-gemini-ocr-models.ts と同じ意図の誤課金防止ガード */
 const ALLOWED_PROJECT_ID = 'doc-split-dev';
@@ -200,57 +200,6 @@ function expandGroundTruth(): PageGroundTruth[] {
   return pages;
 }
 
-/**
- * scripts/compare-gemini-ocr-models.ts の ocrPage() と同じ異常検知パターン。
- * Codexセカンドオピニオン指摘反映: response.text || '' だけだとsafetyブロック/
- * zero-candidate等のAPI異常時の空応答を「正常に空文字が転記された」と誤認し、
- * 後続の候補抽出が全項目nullを返しても「成功」扱いになってしまうため、
- * finishReason/blockReasonを検査し異常時は呼出元に伝える。
- */
-async function ocrPageVerbatim(
-  ai: InstanceType<typeof GoogleGenAI>,
-  pageBuffer: Buffer,
-  pageNumber: number
-): Promise<{ text: string; anomalous: boolean }> {
-  const base64Data = pageBuffer.toString('base64');
-  const response = await withRetry(
-    () =>
-      ai.models.generateContent({
-        model: CANDIDATE_MODEL_CONFIG.modelId,
-        contents: [
-          {
-            role: 'user',
-            parts: [
-              { inlineData: { mimeType: 'application/pdf', data: base64Data } },
-              { text: buildOcrPrompt(pageNumber) },
-            ],
-          },
-        ],
-        config: {
-          maxOutputTokens: GEMINI_CONFIG.maxOutputTokens,
-          thinkingConfig: CANDIDATE_MODEL_CONFIG.thinkingConfig,
-        },
-      }),
-    RETRY_CONFIGS.gemini
-  );
-
-  const text = response.text || '';
-  let anomalous = false;
-  if (!response.text) {
-    const candidate = response.candidates?.[0];
-    const finishReason = candidate?.finishReason;
-    const blockReason = response.promptFeedback?.blockReason;
-    if (blockReason || (finishReason && finishReason !== 'STOP')) {
-      anomalous = true;
-      console.warn(
-        `⚠️ p${pageNumber}: 全文転記の空応答検出 (API異常の可能性) ` +
-          `finishReason=${finishReason ?? 'none'} blockReason=${blockReason ?? 'none'}`
-      );
-    }
-  }
-  return { text, anomalous };
-}
-
 /** プロンプトインジェクション耐性テスト用の合成pageText */
 const INJECTION_TEST_TEXT = `
 --- Page 1 ---
@@ -339,7 +288,12 @@ async function main(): Promise<void> {
     const pageBuffer = await extractPdfPage(pdfBuffer, gt.pageNumber - 1);
 
     // 既存の全文転記呼出し(非改変)でpageTextを生成 — 本番と同じ経路の入力を候補抽出に渡す
-    const { text: pageText, anomalous } = await ocrPageVerbatim(ai, pageBuffer, gt.pageNumber);
+    const { text: pageText, anomalous } = await ocrPageWithAnomalyDetection(
+      ai,
+      CANDIDATE_MODEL_CONFIG,
+      pageBuffer,
+      gt.pageNumber
+    );
     if (anomalous) {
       anomalousOcrCount++;
       console.log(`  ⚠️ ${gt.fixtureId} p${gt.pageNumber}: 全文転記が異常応答のためスキップ`);

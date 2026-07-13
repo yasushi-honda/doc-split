@@ -26,11 +26,9 @@
 
 import * as admin from 'firebase-admin';
 import { GoogleGenAI } from '@google/genai';
-import { withRetry, RETRY_CONFIGS } from '../functions/src/utils/retry';
-import { GEMINI_CONFIG } from '../functions/src/utils/config';
 import { normalizeForMatching } from '../functions/src/utils/extractors';
 import { MIXED_FAX_PDFS, readFixture } from './seed-dev-data';
-import { CANDIDATE_MODEL_CONFIG, buildOcrPrompt, extractAllPdfPages } from './lib/geminiOcrCompare';
+import { CANDIDATE_MODEL_CONFIG, extractAllPdfPages, ocrPageWithAnomalyDetection } from './lib/geminiOcrCompare';
 
 /** scripts/compare-gemini-ocr-models.ts と同じ意図の誤課金防止ガード */
 const ALLOWED_PROJECT_ID = 'doc-split-dev';
@@ -57,35 +55,6 @@ if (PROJECT_ID !== ALLOWED_PROJECT_ID) {
 // 静的importすると FirebaseAppError(no-app) になる。initializeApp後に動的importする。
 admin.initializeApp({ projectId: PROJECT_ID });
 
-async function ocrPageVerbatim(
-  ai: InstanceType<typeof GoogleGenAI>,
-  pageBuffer: Buffer,
-  pageNumber: number
-): Promise<string> {
-  const base64Data = pageBuffer.toString('base64');
-  const response = await withRetry(
-    () =>
-      ai.models.generateContent({
-        model: CANDIDATE_MODEL_CONFIG.modelId,
-        contents: [
-          {
-            role: 'user',
-            parts: [
-              { inlineData: { mimeType: 'application/pdf', data: base64Data } },
-              { text: buildOcrPrompt(pageNumber) },
-            ],
-          },
-        ],
-        config: {
-          maxOutputTokens: GEMINI_CONFIG.maxOutputTokens,
-          thinkingConfig: CANDIDATE_MODEL_CONFIG.thinkingConfig,
-        },
-      }),
-    RETRY_CONFIGS.gemini
-  );
-  return response.text || '';
-}
-
 async function main(): Promise<void> {
   console.log('=== 候補抽出ドキュメント単位実機検証 (docs/handoff/GOAL.md タスクB) ===');
   console.log(`プロジェクト: ${PROJECT_ID} / リージョン: ${LOCATION}`);
@@ -110,9 +79,15 @@ async function main(): Promise<void> {
 
     // 本番のprocessDocument()と同じ結合フォーマット(ocrProcessor.ts:331-333)を再現
     const pageTexts: string[] = [];
+    let anomalousPage = false;
     for (let i = 0; i < pageBuffers.length; i++) {
-      const text = await ocrPageVerbatim(ai, pageBuffers[i], i + 1);
-      pageTexts.push(`--- Page ${i + 1} ---\n${text}`);
+      const pageResult = await ocrPageWithAnomalyDetection(ai, CANDIDATE_MODEL_CONFIG, pageBuffers[i], i + 1);
+      if (pageResult.anomalous) anomalousPage = true;
+      pageTexts.push(`--- Page ${i + 1} ---\n${pageResult.text}`);
+    }
+    if (anomalousPage) {
+      console.log(`  ⚠️ ${mixed.id}: 全文転記に異常応答ページを含むためスキップ`);
+      continue;
     }
     const ocrResult = pageTexts.join('\n\n');
     console.log(
@@ -169,7 +144,12 @@ async function main(): Promise<void> {
     console.log(`候補抽出呼出しの概算コスト (試行${attemptCount}件、ドキュメント単位): $${costUsd.toFixed(6)}`);
   }
 
-  if (successCount < attemptCount) {
+  // spike-candidate-extraction.ts(タスクA)のCodexセカンドオピニオン指摘と同じ理由:
+  // attemptCount=0(全文書が異常応答でスキップ)のままだと何も検証していないのに成功扱いになる。
+  if (attemptCount === 0) {
+    console.log('\n❌ FAIL: 候補抽出呼出しの試行が0件(全文書が異常応答)。何も検証できていない');
+    process.exitCode = 1;
+  } else if (successCount < attemptCount) {
     process.exitCode = 1;
   }
 }
