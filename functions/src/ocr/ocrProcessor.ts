@@ -757,8 +757,11 @@ const EMPTY_CANDIDATE_RESULT: OcrCandidateExtractionResult = {
 
 /**
  * 候補抽出プロンプト。プロンプトインジェクション対策として、ocrResult はOCR転記結果で
- * あり指示ではないことを明示し、逐語抽出（要約・言い換え禁止）を強制する
- * (docs/handoff/GOAL.md タスクA スパイクで検証済みの文言、scripts/spike-candidate-extraction.ts と同一)。
+ * あり指示ではないことを明示し、逐語抽出（要約・言い換え禁止）を強制する。
+ * scripts/spike-candidate-extraction.ts の同名関数と、冒頭の文書粒度の言及
+ * （「文書ページ」→「文書」、本関数はページ単位ではなくドキュメント単位で1回呼ばれるため）
+ * 以外は同一の本文を使用。プロンプト文言を変更する場合はスパイク側も同期すること
+ * （scripts/lib/geminiOcrCompare.ts冒頭コメントと同じ「複製+同期」運用）。
  */
 function buildCandidateExtractionPrompt(ocrResult: string): string {
   return `
@@ -785,20 +788,24 @@ ${ocrResult}
 }
 
 /**
- * OCR全文(ocrResult、既存のocrWithGemini()で生成された複数ページ結合済みテキスト)から
- * documentType/customerName/officeName/dateの4候補を、responseSchemaによる構造化出力で
- * 抽出する独立した第2Gemini呼出し。既存のocrWithGemini()（全文転記）は一切変更しない
- * (docs/handoff/GOAL.md タスクB、Codexセカンドオピニオンのplan mode指摘「全文転記と
- * エンティティ抽出を別呼出しに分離」を反映した設計)。
+ * OCR全文(ocrResult、processDocument()がocrWithGemini()の複数回呼出し結果を
+ * `--- Page N ---`区切りで結合したテキスト)から、documentType/customerName/
+ * officeName/dateの4候補を、responseSchemaによる構造化出力で抽出する独立した
+ * 第2Gemini呼出し。既存のocrWithGemini()（全文転記）は一切変更しない。
+ *
+ * 全文転記とエンティティ抽出を同一Gemini呼出しにすると、PDF分割検出・全文表示・
+ * 要約生成が依存するpageResults[].textの内容が変化するリスクがあるため、意図的に
+ * 別呼出しに分離した設計（セカンドオピニオンレビューでの指摘を反映）。
  *
  * 候補抽出はbest-effortであり、本体のOCR処理（全文転記+既存の全文ベース突合）を
- * 絶対にブロックしない（GOAL.md不変条件）。API呼出し失敗・JSON解析失敗のいずれも
+ * 絶対にブロックしないという不変条件を守る。API呼出し失敗・JSON解析失敗のいずれも
  * 例外を投げず、4項目全てnullの結果を返して呼出元に既存動作へのフォールバックを促す。
- * grounding検証・既存突合とのbest-of選択（arbitration）は呼出元の責務
- * （functions/src/utils/extractors.ts、docs/handoff/GOAL.md タスクC）。
+ * grounding検証・既存突合とのbest-of選択（arbitration）は呼出元
+ * （functions/src/utils/extractors.ts）の責務であり、本関数はまだ本体の
+ * processDocument()には統合されていない（統合時は本関数にdocumentIdを渡す）。
  *
- * @param documentId errorsコレクションでの追跡用(任意)。processDocument()統合時
- * (タスクD)はdocIdを渡す想定。検証スクリプト等、実文書に紐付かない呼出しではundefinedのまま。
+ * @param documentId errorsコレクションでの追跡用(任意)。本体統合時は実docIdを渡す想定。
+ * 検証スクリプト等、実文書に紐付かない呼出しではundefinedのまま。
  */
 export async function extractOcrCandidates(
   ocrResult: string,
@@ -875,7 +882,17 @@ export async function extractOcrCandidates(
       >
     > = {};
     try {
-      parsed = JSON.parse(response.text || '');
+      const rawParsed = JSON.parse(response.text || '');
+      // /review-pr silent-failure-hunter指摘反映: JSON.parse自体は成功するが結果が
+      // オブジェクトでない場合(例: レスポンスが文字列"null")、ここでガードせずに下の
+      // プロパティアクセスへ進むとTypeErrorがouter catchに落ち、実際はJSON解析結果の
+      // 形状異常なのに'apiCallError'として誤分類されてしまう。ここで検知しinner catchへ
+      // 合流させることで、原因別のfunctionName tagging(jsonParseError/apiCallError)の
+      // 精度を保つ。
+      if (typeof rawParsed !== 'object' || rawParsed === null) {
+        throw new Error(`候補抽出レスポンスがオブジェクトではありません: ${typeof rawParsed}`);
+      }
+      parsed = rawParsed;
     } catch (err) {
       // /code-review medium指摘反映: console.warnのみだとCloud Logging alertに拾われず
       // (#283と同じ教訓、本ファイル既存のsafeLogError利用箇所参照)、Task D統合後に

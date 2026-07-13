@@ -32,6 +32,11 @@ OCR突合（documentType/customerName/officeName/date）の精度向上のため
     2. `extractOcrCandidates()`が毎回`new GoogleGenAI()`を構築(`ocrPageWithAnomalyDetection()`は呼出元から`ai`を受け取る設計と不統一、レート制限バイパスにはならないが認証コストの無駄)
     3. `candidateSchema`/`buildCandidateExtractionPrompt`が`scripts/spike-candidate-extraction.ts`と重複(コードベース既存の「複製+同期コメント」パターンの延長)
     4. `usageMetadata`からのトークン集計パターンが6箇所に重複(SDKフィールドアクセスのボイラープレート、リスク低)
+  - `/review-pr`(4エージェント並列: code-reviewer/comment-analyzer/silent-failure-hunter/type-design-analyzer)+ `/codex review`セカンドオピニオンも実施。Codexの唯一の指摘(P1「PROJECT_ID未伝播で全候補抽出呼出しが失敗」)は**REFUTED**: `google-github-actions/auth@v2`の`export_environment_variables: true`設定によりジョブ全体に`GCLOUD_PROJECT`/`GOOGLE_CLOUD_PROJECT`が自動エクスポートされることを実行ログで確認、実際の複数回成功実行(実測トークン数あり)とも整合。review-pr新規指摘のうちCONFIRMED相当3件は修正済み(本番コードのGOAL.mdタスク参照コメントをインライン化=将来のミッション圧縮でダングリング参照化するリスクを解消、プロンプト文言「同一」主張の事実誤認を訂正、JSON.parse成功後の型ガード追加でouter catchによるエラー誤分類=`apiCallError`と`jsonParseError`の取り違えを解消)
+  - **タスクC以降で対応する既知の限界（追加、review-pr検出）**:
+    5. `scripts/verify-candidate-extraction-document-level.ts:83`が`ocrProcessor.ts:331-333`という行番号を直接コメントで参照。将来ocrProcessor.ts上部が変更されるとサイレントに古びる(comment-analyzer指摘、優先度低)
+    6. `inputTokens`/`outputTokens`/`thinkingTokens`のトークン3つ組が`OcrProcessingResult`/`OcrCandidateExtractionResult`/`OcrPageResult`の3箇所で重複定義。共通サブ型への切り出しが可能(type-design-analyzer指摘、低リスクDRY改善)
+    7. Evaluator分離プロトコル(`rules/quality-gate.md`、5ファイル+新機能で発動条件)が本PRでは未実施(code-reviewer指摘、プロセス確認事項としてdecision-maker判断待ち)
 - [ ] C. `extractors.ts`拡張 + 保守的arbitration実装（同点全文優先・grounding必須・日付特別扱い・強根拠昇格ルール、Bと並列可能）
 - [ ] D. `processDocument()`統合（候補抽出+arbitration組込み、失敗時は既存動作へフォールバック、B,Cに依存）
 - [ ] E. 単体テスト追加（extractors.ts新関数・arbitrationロジック・フォールバックケース、C,Dに依存）
