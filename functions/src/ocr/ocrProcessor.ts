@@ -796,8 +796,14 @@ ${ocrResult}
  * 例外を投げず、4項目全てnullの結果を返して呼出元に既存動作へのフォールバックを促す。
  * grounding検証・既存突合とのbest-of選択（arbitration）は呼出元の責務
  * （functions/src/utils/extractors.ts、docs/handoff/GOAL.md タスクC）。
+ *
+ * @param documentId errorsコレクションでの追跡用(任意)。processDocument()統合時
+ * (タスクD)はdocIdを渡す想定。検証スクリプト等、実文書に紐付かない呼出しではundefinedのまま。
  */
-export async function extractOcrCandidates(ocrResult: string): Promise<OcrCandidateExtractionResult> {
+export async function extractOcrCandidates(
+  ocrResult: string,
+  documentId?: string
+): Promise<OcrCandidateExtractionResult> {
   // モジュールスコープ定数をそのまま返すと、呼出元が返り値を変更した際に以降の全呼出しへ
   // 汚染が波及するため(/safe-refactor指摘)、常にスプレッドコピーを返す。
   if (!ocrResult) return { ...EMPTY_CANDIDATE_RESULT };
@@ -858,16 +864,29 @@ export async function extractOcrCandidates(ocrResult: string): Promise<OcrCandid
     const outputTokens = usageMetadata?.candidatesTokenCount || 0;
     const thinkingTokens = usageMetadata?.thoughtsTokenCount || 0;
 
+    // /code-review medium指摘反映: フィールド名をここで独立して手書きせず
+    // OcrCandidateExtractionResultからPickして導出する(スキーマ側のキー名変更時に
+    // 型不整合をコンパイル時に検知できるようにする、Record手書きだとサイレントに
+    // 型チェックを通過してしまう)。
     let parsed: Partial<
-      Record<'documentTypeCandidate' | 'customerNameCandidate' | 'officeNameCandidate' | 'dateCandidate', string | null>
+      Pick<
+        OcrCandidateExtractionResult,
+        'documentTypeCandidate' | 'customerNameCandidate' | 'officeNameCandidate' | 'dateCandidate'
+      >
     > = {};
     try {
       parsed = JSON.parse(response.text || '');
     } catch (err) {
-      console.warn(
-        `[ocrProcessor] 候補抽出のJSON解析に失敗、既存の全文突合にフォールバック: ` +
-          `${err instanceof Error ? err.message : String(err)}`
-      );
+      // /code-review medium指摘反映: console.warnのみだとCloud Logging alertに拾われず
+      // (#283と同じ教訓、本ファイル既存のsafeLogError利用箇所参照)、Task D統合後に
+      // 系統的な失敗が発生しても運用側に気付かれない盲点になるため、safeLogErrorも呼ぶ。
+      const baseError = err instanceof Error ? err : new Error(String(err));
+      await safeLogError({
+        error: baseError,
+        source: 'ocr',
+        functionName: 'extractOcrCandidates:jsonParseError',
+        documentId: documentId,
+      });
       return { ...EMPTY_CANDIDATE_RESULT, inputTokens, outputTokens, thinkingTokens };
     }
 
@@ -883,10 +902,15 @@ export async function extractOcrCandidates(ocrResult: string): Promise<OcrCandid
   } catch (err) {
     // API呼出し自体の失敗(タイムアウト/レート制限等)。候補抽出はbest-effortのため、
     // ここで揉み消して既存動作へのフォールバックに委ねる(呼出元でのtry/catch不要)。
-    console.warn(
-      `[ocrProcessor] 候補抽出呼出しに失敗、既存の全文突合にフォールバック: ` +
-        `${err instanceof Error ? err.message : String(err)}`
-    );
+    // /code-review medium指摘反映: console.warnのみだとCloud Logging alertに拾われないため
+    // safeLogErrorも呼ぶ(例外は投げない=best-effort設計は維持したまま監視シグナルのみ追加)。
+    const baseError = err instanceof Error ? err : new Error(String(err));
+    await safeLogError({
+      error: baseError,
+      source: 'ocr',
+      functionName: 'extractOcrCandidates:apiCallError',
+      documentId: documentId,
+    });
     return { ...EMPTY_CANDIDATE_RESULT };
   }
 }
