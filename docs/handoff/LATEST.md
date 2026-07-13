@@ -1,8 +1,30 @@
 # ハンドオフメモ
 
-**更新日**: 2026-07-13 session120（Issue #526をclose。dev実装済みだった機能がkanameone/cocoro両本番へ既に展開済みであることをデプロイタイムスタンプで確認し、記録の古さを解消。A/Bテストコスト比率の「未解明の残差」も解明。詳細は下記session120サマリ参照）
+**更新日**: 2026-07-14 session123（GOAL.mdタスクD/F完遂、実機実行でA/B精度検証、PR #644マージ+dev自動デプロイ確認。タスクGはdecision-maker承認済みだがcontext残量のため次セッションへ持越し。詳細は下記session123サマリ参照）
 
-<!-- session115〜117はLATEST.md詳細サマリ未追記（GOAL.mdのみ更新、コミット6831e84/d7aa016/18f29fb）。#539完遂・#540完遂(OCR実行所有権ガード)・#625(OCR Storage孤児化解消)・#547 Phase E是正(Hostingデプロイ漏れ)の経緯はGOAL.md/ADR-0018/該当コミットメッセージで追跡可能なため遡及記載はROI低と判断、着手せず -->
+<!-- session115〜117・121・122はLATEST.md詳細サマリ未追記（GOAL.mdのみ更新）。#539完遂・#540完遂(OCR実行所有権ガード)・#625(OCR Storage孤児化解消)・#547 Phase E是正(Hostingデプロイ漏れ)、および候補抽出スパイク(タスクA、PR#641)・候補抽出呼出し実装(タスクB、PR#642)・arbitration実装(タスクC、PR#643)の経緯はGOAL.md/ADR-0018/該当コミットメッセージで追跡可能なため遡及記載はROI低と判断、着手せず -->
+
+## session123 サマリ（2026-07-14、GOAL.mdタスクD/F実装 + 実機A/B検証 + PR #644マージ + dev自動デプロイ確認）
+
+catchupの「次にやるとよいオススメ」2件（タスクD/F）にdecision-makerの番号単位認可を得ながら着手・完遂。
+
+### タスクD: `processDocument()`統合
+`functions/src/ocr/ocrProcessor.ts`の`processDocument()`に、タスクB実装済みの`extractOcrCandidates()`+タスクC実装済みの`arbitrateDocumentType`/`arbitrateCustomerName`/`arbitrateOfficeName`/`arbitrateDate`を統合。既存の全文ベース抽出結果を無条件に上書きしない設計を維持し、dateMarker解決はarbitration後のdocumentType結果を参照するよう順序調整（候補昇格時にdateMarkerも追従）。候補抽出呼出しのトークンを`totalInputTokens`等へ加算し`trackGeminiUsage`経由の本番コスト計測に反映。契約テスト(`ocrProcessorCandidateArbitrationWiringContract.test.ts`)で配線をlock-in。
+
+### タスクF: dev環境ロジックA/Bハーネス新規構築
+既存`compare-gemini-ocr-models.ts`(モデルA/B比較用、gemini-2.5 vs 3.5)とは軸が異なる「ロジックA/B比較」(同一モデルでbaseline=既存抽出のみ/candidate=候補抽出+arbitration統合後)として`scripts/compare-ocr-arbitration-logic.ts`を新規追加。documentType/customerName/officeName/dateの4項目全gate化。複数人名/複数日付の層化用に新規フィクスチャ2件(`scripts/fixtures/arbitrationCompareFixtures.ts`)を追加(既存`seed-dev-data.ts`は無改修で副作用回避)。「手書き」原稿は合成PDFでは再現不可のため既知の限界としてスコープ外。
+
+### 品質保証プロセス
+`/code-review low`を2回実施(タスクD/F各diff)、DRY違反1件検出・修正。変更が5ファイル以上(実コード)に及ぶため`rules/quality-gate.md`のEvaluator分離プロトコルに従い、独立evaluatorエージェント(前提知識なし)でAcceptance Criteria 10項目を個別検証、全PASS・HIGH/MEDIUM指摘0件を確認。
+
+### 実機実行結果・PR・デプロイ
+GitHub Actions "Run Operations Script"経由でdoc-split-devに対しread-only実行(run ID 29290104624)、結果: baseline/candidateとも5/5文書・4項目全100%一致(複数人名/複数日付distractorを含めて精度劣化なし)、候補抽出grounding失敗率10.0%(2/20件not-grounded、arbitrationの保守的設計により誤昇格には至らず)、候補抽出トークン増分input=2837/output=515/thinking=1322(5文書で概算$0.0208)。decision-makerの番号単位認可を得てPR #644を作成・マージ(main直pushではなくfeatureブランチ`feat/ocr-arbitration-task-d-f`経由)。main→dev自動デプロイ(CI+Deploy workflow、run 29291567996/29291567955)が発火し、両方SUCCESSで完了したことを確認済み。**kanameone/cocoroへの反映は未実施**(GOAL.mdの設計通り、タスクH/Iの番号単位認可を経てから実施する計画。今回のdev自動デプロイはkanameone/cocoroには一切影響しない)。
+
+### CodeRabbitの指摘(別対応として保留)
+PR #644のCodeRabbitレビューで、「既存の全文ベース抽出結果が4項目全てマッチ済みの場合、`extractOcrCandidates()`呼出し自体が完全な無駄コストになる」という指摘を独自に検証し正当と判断(arbitrate*は既存マッチがあれば候補を絶対に使わない設計のため)。GOAL.mdタスクCの既知の限界注記(候補昇格がほとんど発生しない可能性)と整合し、実際にコスト削減効果がある可能性が高い。decision-maker判断で「現状のPRのままマージ、最適化は別PRで対応」を選択済み。
+
+### 次のステップ
+decision-makerはタスクG(dev環境A/Bテスト本実行、対象文書数拡大)への着手を会話内で承認済み。ただしcontext残量が少なくなったため本セッションでは着手せず`/handoff`を実行して引き継ぐ。
 
 ## session120 サマリ（2026-07-13、GOAL.md記録漏れ解消 + A/Bテスト残差原因調査 + Issue #526 close）
 
