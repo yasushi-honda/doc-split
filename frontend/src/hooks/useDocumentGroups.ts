@@ -129,6 +129,24 @@ interface GroupDocumentsPage {
   hasMore: boolean;
 }
 
+/**
+ * fetchGroupDocumentsのクライアントサイドフィルタ述語。
+ * split除外に加え、CM未設定グループの場合はcustomerKeyが未確定
+ * （pending/processing/error等でOCR未完了）の書類も除外する。これらは
+ * careManagerKeyも空文字のためクエリだけでは一覧に混入するが、集計側
+ * (resolveGroupKeyAndDisplayのcanFallbackToUnassigned)ではCM未設定
+ * グループのcountに含まれていないため、除外しないと表示件数がcountと
+ * 食い違う（Codexレビュー指摘）。
+ */
+export function shouldIncludeInGroupDocuments(
+  data: { status?: string; customerKey?: string },
+  isUnassignedCareManagerGroup: boolean
+): boolean {
+  if (data.status === 'split') return false;
+  if (isUnassignedCareManagerGroup && !data.customerKey) return false;
+  return true;
+}
+
 async function fetchGroupDocuments(
   groupType: GroupType,
   groupKey: string,
@@ -158,18 +176,9 @@ async function fetchGroupDocuments(
 
   const snapshot = await getDocs(q);
 
-  // クライアントサイドでsplitを除外。CM未設定グループの場合は、集計側
-  // (resolveGroupKeyAndDisplayのcanFallbackToUnassigned)と同じ条件で、
-  // customerKeyが未確定（pending/processing/error等でOCR未完了）の書類も除外する。
-  // これらはcareManagerKeyも空文字のため素朴なクエリだと一覧に混入するが、
-  // 集計上はCM未設定グループのcountに含まれていないため、除外しないと
-  // 表示件数がcountと食い違う（Codexレビュー指摘）。
-  const allDocs = snapshot.docs.filter((docSnap) => {
-    const data = docSnap.data();
-    if (data.status === 'split') return false;
-    if (isUnassignedCareManagerGroup && !data.customerKey) return false;
-    return true;
-  });
+  const allDocs = snapshot.docs.filter((docSnap) =>
+    shouldIncludeInGroupDocuments(docSnap.data(), isUnassignedCareManagerGroup)
+  );
 
   const hasMore = allDocs.length > pageSize;
   const docs = allDocs.slice(0, pageSize);

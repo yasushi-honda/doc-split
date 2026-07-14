@@ -87,11 +87,14 @@ export function generateGroupId(groupType: GroupType, groupKey: string): string 
 
 /**
  * キーが空の場合に集計除外ではなく予約keyへフォールバックさせるgroupType。
- * customer/office/documentTypeはOCR抽出結果側で必ずフォールバック表示名
- * （「不明顧客」「未判定」等）が付与されるためキーが空になり得ないが、
- * careManagerは任意フィールドでフォールバックがないため、ここで明示的に
- * 「CM未設定」グループへ計上する（担当CM別集計が顧客別集計より大幅に
- * 少なく表示される非対称性バグの修正）。
+ * customer/office/documentTypeはOCR成功（status:'processed'への遷移）後は
+ * OCR抽出結果側で必ずフォールバック表示名（「不明顧客」「未判定」等）が
+ * 付与されるためキーが空になり得ない（pending/processing/error等の未処理
+ * 状態では他フィールド同様に空になり得る。このケースの扱いは下記
+ * resolveGroupKeyAndDisplay()のcanFallbackToUnassigned参照）。
+ * careManagerは処理完了後も任意フィールドでフォールバックがないため、ここで
+ * 明示的に「CM未設定」グループへ計上する（担当CM別集計が顧客別集計より
+ * 大幅に少なく表示される非対称性バグの修正）。
  */
 const UNASSIGNED_FALLBACK: Partial<Record<GroupType, { key: string; displayName: string }>> = {
   careManager: {
