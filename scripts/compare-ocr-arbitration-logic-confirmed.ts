@@ -439,6 +439,37 @@ ${ocrResult}
 }
 
 /**
+ * 候補抽出のGemini responseSchema。静的なスキーマのため呼出しごとの再構築を避け
+ * モジュールレベルで1回だけ定義する(候補抽出はN=300規模で最大300回呼ばれうる)。
+ */
+const CANDIDATE_SCHEMA = {
+  type: Type.OBJECT,
+  properties: {
+    documentTypeCandidate: {
+      type: Type.STRING,
+      nullable: true,
+      description: '書類の種別・タイトル（例: 介護保険負担割合証、請求書等）。記載がなければnull',
+    },
+    customerNameCandidate: {
+      type: Type.STRING,
+      nullable: true,
+      description: '利用者・患者・顧客の氏名。記載がなければnull',
+    },
+    officeNameCandidate: {
+      type: Type.STRING,
+      nullable: true,
+      description: '事業所・施設・差出人の名称。記載がなければnull',
+    },
+    dateCandidate: {
+      type: Type.STRING,
+      nullable: true,
+      description: '文書に記載された日付（発行日・作成日等、原文の書式のまま）。記載がなければnull',
+    },
+  },
+  required: ['documentTypeCandidate', 'customerNameCandidate', 'officeNameCandidate', 'dateCandidate'],
+};
+
+/**
  * functions/src/ocr/ocrProcessor.ts extractOcrCandidates() のread-only版。
  * 本番実装との差分はエラー時の扱いのみ: 本番はsafeLogError()経由でFirestore `errors`
  * コレクションへ書込むが、read-only厳守のため本関数はconsole.warnのみで完結させる
@@ -451,33 +482,6 @@ async function extractOcrCandidatesReadOnly(
 ): Promise<CandidateExtractionResult> {
   if (!ocrResult) return { ...EMPTY_CANDIDATE_RESULT };
 
-  const candidateSchema = {
-    type: Type.OBJECT,
-    properties: {
-      documentTypeCandidate: {
-        type: Type.STRING,
-        nullable: true,
-        description: '書類の種別・タイトル（例: 介護保険負担割合証、請求書等）。記載がなければnull',
-      },
-      customerNameCandidate: {
-        type: Type.STRING,
-        nullable: true,
-        description: '利用者・患者・顧客の氏名。記載がなければnull',
-      },
-      officeNameCandidate: {
-        type: Type.STRING,
-        nullable: true,
-        description: '事業所・施設・差出人の名称。記載がなければnull',
-      },
-      dateCandidate: {
-        type: Type.STRING,
-        nullable: true,
-        description: '文書に記載された日付（発行日・作成日等、原文の書式のまま）。記載がなければnull',
-      },
-    },
-    required: ['documentTypeCandidate', 'customerNameCandidate', 'officeNameCandidate', 'dateCandidate'],
-  };
-
   const result = await withSilentRetry(
     () =>
       ai.models.generateContent({
@@ -487,7 +491,7 @@ async function extractOcrCandidatesReadOnly(
           maxOutputTokens: GEMINI_CONFIG.maxOutputTokens,
           thinkingConfig: PRODUCTION_MODEL_CONFIG.thinkingConfig,
           responseMimeType: 'application/json',
-          responseSchema: candidateSchema,
+          responseSchema: CANDIDATE_SCHEMA,
         },
       }),
     RETRY_CONFIGS.gemini
@@ -577,63 +581,85 @@ async function processOneDocument(
 
   const ocrResult = pageTexts.join('\n\n');
   const filenameInfo = extractFilenameInfo(doc.fileName);
+  const sharedOcr = { inputTokens: ocrInput, outputTokens: ocrOutput, thinkingTokens: ocrThinking };
 
-  // baseline: 既存の全文抽出のみ(タスクD以前の挙動)
-  const baselineDocType = extractDocumentTypeEnhanced(ocrResult, masters.documents);
-  const baselineCustomer = extractCustomerCandidates(ocrResult, masters.customers);
-  const baselineOffice = extractOfficeCandidates(ocrResult, masters.offices, { filenameInfo });
+  // 抽出/arbitration自体の失敗(想定外のOCRテキスト形状等)で1文書がプロセス全体を
+  // 落とさないよう、compare-gemini-ocr-models-confirmed.ts processDocumentWithModel()
+  // と同じくtry/catchで囲みsuccess:falseとして扱う(code-review指摘反映: try/catchなしで
+  // 例外がrunWithConcurrency経由でmain()まで伝播しjob全体が失敗する経路があった)。
+  try {
+    // baseline: 既存の全文抽出のみ(タスクD以前の挙動)
+    const baselineDocType = extractDocumentTypeEnhanced(ocrResult, masters.documents);
+    const baselineCustomer = extractCustomerCandidates(ocrResult, masters.customers);
+    const baselineOffice = extractOfficeCandidates(ocrResult, masters.offices, { filenameInfo });
 
-  // candidate: 候補抽出+arbitration統合後(dateは本ハーネス非対象のためarbitrateDateは呼ばない)
-  const candidates = await extractOcrCandidatesReadOnly(ai, ocrResult);
-  const candDocType = arbitrateDocumentType(baselineDocType, candidates.documentTypeCandidate, masters.documents, ocrResult);
-  const candCustomer = arbitrateCustomerName(baselineCustomer, candidates.customerNameCandidate, masters.customers, ocrResult);
-  const candOffice = arbitrateOfficeName(baselineOffice, candidates.officeNameCandidate, masters.offices, ocrResult, {
-    filenameInfo,
-  });
+    // candidate: 候補抽出+arbitration統合後(dateは本ハーネス非対象のためarbitrateDateは呼ばない)
+    const candidates = await extractOcrCandidatesReadOnly(ai, ocrResult);
+    const candDocType = arbitrateDocumentType(baselineDocType, candidates.documentTypeCandidate, masters.documents, ocrResult);
+    const candCustomer = arbitrateCustomerName(baselineCustomer, candidates.customerNameCandidate, masters.customers, ocrResult);
+    const candOffice = arbitrateOfficeName(baselineOffice, candidates.officeNameCandidate, masters.offices, ocrResult, {
+      filenameInfo,
+    });
 
-  const candidateValues = [candidates.documentTypeCandidate, candidates.customerNameCandidate, candidates.officeNameCandidate];
-  const groundedFlags = [
-    candDocType.provenance.candidateGrounded,
-    candCustomer.provenance.candidateGrounded,
-    candOffice.provenance.candidateGrounded,
-  ];
-  let nonNullCandidateCount = 0;
-  let groundedCandidateCount = 0;
-  candidateValues.forEach((v, i) => {
-    if (v !== null) {
-      nonNullCandidateCount++;
-      if (groundedFlags[i]) groundedCandidateCount++;
-    }
-  });
+    // 候補値とgrounded判定を{value, grounded}のペアで保持する(index紐付けの配列2本に
+    // 分けると、将来どちらか一方だけ項目を増減した際に無言でズレるリスクがあるため)。
+    const candidatePairs = [
+      { value: candidates.documentTypeCandidate, grounded: candDocType.provenance.candidateGrounded },
+      { value: candidates.customerNameCandidate, grounded: candCustomer.provenance.candidateGrounded },
+      { value: candidates.officeNameCandidate, grounded: candOffice.provenance.candidateGrounded },
+    ];
+    let nonNullCandidateCount = 0;
+    let groundedCandidateCount = 0;
+    candidatePairs.forEach(({ value, grounded }) => {
+      if (value !== null) {
+        nonNullCandidateCount++;
+        if (grounded) groundedCandidateCount++;
+      }
+    });
 
-  // documentTypeはconfirmed値が空(participants未確定)のことがあるため、空文字列の場合は
-  // 参考値の一致判定自体をfalse固定にする(gate対象外のため判定結果は集計にのみ影響)。
-  const hasDocTypeGroundTruth = doc.confirmedDocumentType.length > 0;
+    // documentTypeはconfirmed値が空(participants未確定)のことがあるため、空文字列の場合は
+    // 参考値の一致判定自体をfalse固定にする(gate対象外のため判定結果は集計にのみ影響)。
+    const hasDocTypeGroundTruth = doc.confirmedDocumentType.length > 0;
 
-  const baseline: ArbitrationLogicOutcomeForSummary = {
-    success: true,
-    inputTokens: 0,
-    outputTokens: 0,
-    thinkingTokens: 0,
-    customerMatch: baselineCustomer.bestMatch?.name === doc.confirmedCustomerName,
-    officeMatch: baselineOffice.bestMatch?.name === doc.confirmedOfficeName,
-    docTypeMatchReferenceOnly: hasDocTypeGroundTruth && baselineDocType.documentType === doc.confirmedDocumentType,
-    groundedCandidateCount: 0,
-    nonNullCandidateCount: 0,
-  };
-  const candidate: ArbitrationLogicOutcomeForSummary = {
-    success: true,
-    inputTokens: candidates.inputTokens,
-    outputTokens: candidates.outputTokens,
-    thinkingTokens: candidates.thinkingTokens,
-    customerMatch: candCustomer.bestMatch?.name === doc.confirmedCustomerName,
-    officeMatch: candOffice.bestMatch?.name === doc.confirmedOfficeName,
-    docTypeMatchReferenceOnly: hasDocTypeGroundTruth && candDocType.documentType === doc.confirmedDocumentType,
-    groundedCandidateCount,
-    nonNullCandidateCount,
-  };
+    const baseline: ArbitrationLogicOutcomeForSummary = {
+      success: true,
+      inputTokens: 0,
+      outputTokens: 0,
+      thinkingTokens: 0,
+      customerMatch: baselineCustomer.bestMatch?.name === doc.confirmedCustomerName,
+      officeMatch: baselineOffice.bestMatch?.name === doc.confirmedOfficeName,
+      docTypeMatchReferenceOnly: hasDocTypeGroundTruth && baselineDocType.documentType === doc.confirmedDocumentType,
+      groundedCandidateCount: 0,
+      nonNullCandidateCount: 0,
+    };
+    const candidate: ArbitrationLogicOutcomeForSummary = {
+      success: true,
+      inputTokens: candidates.inputTokens,
+      outputTokens: candidates.outputTokens,
+      thinkingTokens: candidates.thinkingTokens,
+      customerMatch: candCustomer.bestMatch?.name === doc.confirmedCustomerName,
+      officeMatch: candOffice.bestMatch?.name === doc.confirmedOfficeName,
+      docTypeMatchReferenceOnly: hasDocTypeGroundTruth && candDocType.documentType === doc.confirmedDocumentType,
+      groundedCandidateCount,
+      nonNullCandidateCount,
+    };
 
-  return { baseline, candidate, sharedOcr: { inputTokens: ocrInput, outputTokens: ocrOutput, thinkingTokens: ocrThinking } };
+    return { baseline, candidate, sharedOcr };
+  } catch (err) {
+    console.warn(`[processOneDocument] 抽出/arbitration処理に失敗 (1件スキップ): ${describeErrorSafely(err)}`);
+    const failed: ArbitrationLogicOutcomeForSummary = {
+      success: false,
+      inputTokens: 0,
+      outputTokens: 0,
+      thinkingTokens: 0,
+      customerMatch: false,
+      officeMatch: false,
+      docTypeMatchReferenceOnly: false,
+      groundedCandidateCount: 0,
+      nonNullCandidateCount: 0,
+    };
+    return { baseline: failed, candidate: failed, sharedOcr };
+  }
 }
 
 function summarize(label: string, stats: ArbitrationLogicSummaryStats): void {

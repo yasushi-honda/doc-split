@@ -13,7 +13,7 @@
  * confirmedReplayStats.tsから再利用する(重複実装を避ける)。
  */
 
-import { pct } from './confirmedReplayStats';
+import { pct, computeMatchRate, computeOverallPass } from './confirmedReplayStats';
 
 export interface ArbitrationLogicOutcomeForSummary {
   success: boolean;
@@ -52,15 +52,12 @@ export interface ArbitrationLogicSummaryStats {
 }
 
 /**
- * 絶対件数ではなく成功文書中の一致率で比較する
- * (scripts/lib/confirmedReplayStats.ts computeMatchRate と同じ理由: baseline/candidateで
- * succeededDocsが異なりうるため、絶対件数比較だと誤判定しうる)。
+ * ArbitrationLogicSummaryStatsはconfirmedFieldsPass/succeededDocsを
+ * ModelSummaryStatsと同じ意味・同じフィールド名で持つため、
+ * scripts/lib/confirmedReplayStats.ts computeMatchRate をそのまま再利用する
+ * (重複実装を避ける。絶対件数ではなく成功文書中の一致率で比較する理由も同ファイル参照)。
  */
-export function computeArbitrationMatchRate(
-  stats: Pick<ArbitrationLogicSummaryStats, 'confirmedFieldsPass' | 'succeededDocs'>
-): number {
-  return stats.succeededDocs > 0 ? stats.confirmedFieldsPass / stats.succeededDocs : 0;
-}
+export const computeArbitrationMatchRate = computeMatchRate;
 
 /** grounding試行件数のうち失敗した割合(candidate側のみ意味を持つ、baseline側は常に0%) */
 export function computeGroundingFailureRate(
@@ -111,21 +108,9 @@ export function computeArbitrationLogicSummaryStats(
 }
 
 /**
- * 精度劣化(regressed)判定と失敗率ゲートを1つの総合PASS/FAIL判定に統合する
- * (scripts/lib/confirmedReplayStats.ts computeOverallPass と同じ設計意図)。
+ * パラメータ形状がscripts/lib/confirmedReplayStats.ts computeOverallPass と完全に
+ * 一致するため、そのまま再利用する(重複実装を避ける)。
  */
-export function computeOverallArbitrationPass(params: {
-  regressed: boolean;
-  baselineFailureRateExceeded: boolean;
-  candidateFailureRateExceeded: boolean;
-  downloadFailureRateExceeded: boolean;
-}): boolean {
-  return (
-    !params.regressed &&
-    !params.baselineFailureRateExceeded &&
-    !params.candidateFailureRateExceeded &&
-    !params.downloadFailureRateExceeded
-  );
-}
+export const computeOverallArbitrationPass = computeOverallPass;
 
 export { pct };
