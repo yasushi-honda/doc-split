@@ -12,10 +12,25 @@ catchupの「次にやるとよいオススメ」（タスクG着手、session12
 対象文書数拡大の手段は、dev環境に実運用データが存在しない（CLAUDE.md明記）ため「既存フィクスチャ追加」一択と判断（軽量プラン提示→承認待ちなしで着手）。`scripts/fixtures/arbitrationCompareFixtures.ts`に未使用CUSTOMERS6名を使った新規5文書を追加しN=5→N=10へ拡大。feature branch経由でGitHub Actions実行(run 29294375536)、結果: baseline/candidate両方4項目全一致10/10(100.0%)で精度劣化なし・再現性確認。PR #646作成・`/code-review low`(指摘0件)実施の上マージ。
 
 ### タスクH: kanameone confirmed-replay検証
-documentType/dateはkanameone実データにconfirmed相当のground truthが存在しない(documentTypeConfirmedはUI機能自体が本番未展開で実運用0件、dateには確定フラグの概念が無い)ため、customer/office先行検証のみ実施する決定(decision-maker選択)。新規スクリプト`compare-ocr-arbitration-logic-confirmed.ts`+`confirmedArbitrationStats.ts`を追加。**read-only厳守のため候補抽出ロジックを独立実装**: 本番`extractOcrCandidates()`は異常系で`safeLogError()`経由のFirestore書込みが発生するため直接呼ばず、既存`compare-gemini-ocr-models-confirmed.ts`が`loadMasterData.ts`について同じ理由で独立実装している既存パターンを踏襲。`/code-review medium`(8角度並列finder+1票検証)でCONFIRMED2件検出・修正: ①`processOneDocument()`の抽出/arbitration計算がtry/catchで囲まれておらず1文書の例外がjob全体をクラッシュさせる経路があった、②`success`が常時trueのハードコードで失敗率ゲートが機能していなかった(confirmedReplayStats.tsが記録する既知バグクラスの再発)。`confirmedArbitrationStats.test.ts`新規追加(scripts側テスト94 passing)。kanameone実機実行: pilot(`--limit 30`)でサンプリングN=2、本実行(`--limit 300`)でもN=12が母集団上限（`confirmedBy`/`officeConfirmedBy`非nullという人間確定条件の歩留まりが実データで約1.3%と極めて低い既知の制約、これ以上増やせない）。結果: baseline/candidate完全同一(顧客一致率33.3%=4/12、事業所41.7%=5/12)で精度劣化なし・PASS。候補抽出grounding失敗率0.0%。PR #647作成・マージ。
+documentType/dateはkanameone実データにconfirmed相当のground truthが存在しない(documentTypeConfirmedはUI機能自体が本番未展開で実運用0件、dateには確定フラグの概念が無い)ため、customer/office先行検証のみ実施する決定(decision-maker選択)。新規スクリプト`compare-ocr-arbitration-logic-confirmed.ts`+`confirmedArbitrationStats.ts`を追加。
+
+- **read-only厳守のため候補抽出ロジックを独立実装**: 本番`extractOcrCandidates()`は異常系で`safeLogError()`経由のFirestore書込みが発生するため直接呼ばず、既存`compare-gemini-ocr-models-confirmed.ts`が`loadMasterData.ts`について同じ理由で独立実装している既存パターンを踏襲
+- `/code-review medium`(8角度並列finder+1票検証)でCONFIRMED2件検出・修正: ①`processOneDocument()`の抽出/arbitration計算がtry/catchで囲まれておらず1文書の例外がjob全体をクラッシュさせる経路があった、②`success`が常時trueのハードコードで失敗率ゲートが機能していなかった(confirmedReplayStats.tsが記録する既知バグクラスの再発)
+- `confirmedArbitrationStats.test.ts`新規追加(scripts側テスト94 passing)
+- kanameone実機実行: pilot(`--limit 30`)でサンプリングN=2、本実行(`--limit 300`)でもN=12が母集団上限（`confirmedBy`/`officeConfirmedBy`非nullという人間確定条件の歩留まりが実データで約1.3%と極めて低い既知の制約、これ以上増やせない）
+- 結果: baseline/candidate完全同一(顧客一致率33.3%=4/12、事業所41.7%=5/12)で精度劣化なし・PASS。候補抽出grounding失敗率0.0%。PR #647作成・マージ
 
 ### タスクI: 本番展開判断 → 見送り（ミッションクローズ）
-GOAL.mdのタスクIは「本番展開判断+実施（Hが基準を満たす場合のみ、番号単位認可）」だったが、着手前にdecision-makerから「セカンドオピニオンを聞いてさらに検討したい」との指示。`/codex plan`（MCP、effort=high）を実施し、Codexから重要度High指摘4件を受領: ①GOAL.md完了の定義は4項目（documentType/customerName/officeName/date）同等以上を要求するが実施できたのはcustomer/officeの2項目のみで「4項目ACの代替にならない」、②タスクHの「baseline/candidate完全同一」という結果は集計がjoint一致率のみのため文書単位の入れ替わり（baseline正→candidate誤とその逆）が相殺されてもPASSに見える構造で「無劣化の完全証明ではない」、③N=12・回帰0件はrule of threeで真の回帰率の95%信頼上限が約25%相当と統計的信頼性が低い、④baseline自体の低一致率を原因不明のまま展開すると改善効果を測れず既存の根本問題も温存する。Claude側の独立評価でも指摘①〜④に同意（②は個人情報保護のため個別文書結果を非出力とした設計上、事後検証不能な点を含め見落としていた観点）。decision-maker最終判断:「品質は下げない、コスト圧縮は目指す、不安定さ・不十分さがあれば基本はしない選択をする」との原則を明示され、GOAL.md不変条件の撤退基準（AC未達時は無理に本番展開しない）を適用してミッションをクローズ。Codex提案の追加調査案（baseline不一致の原因分析／人手ラベリングでN拡大、約60件試算）は、いずれも新規の人手作業設計を要し方針と整合しないため見送り。タスクA〜D実装（マージ済み・dev動作確認済み）はrevertせず保持（実害なし、将来の再検討の土台）。kanameone/cocoroへの展開は行わない。PR #648でGOAL.md更新・マージ。
+GOAL.mdのタスクIは「本番展開判断+実施（Hが基準を満たす場合のみ、番号単位認可）」だったが、着手前にdecision-makerから「セカンドオピニオンを聞いてさらに検討したい」との指示。`/codex plan`（MCP、effort=high）を実施し、Codexから重要度High指摘4件を受領:
+
+1. GOAL.md完了の定義は4項目（documentType/customerName/officeName/date）同等以上を要求するが実施できたのはcustomer/officeの2項目のみで「4項目ACの代替にならない」
+2. タスクHの「baseline/candidate完全同一」という結果は集計がjoint一致率のみのため文書単位の入れ替わり（baseline正→candidate誤とその逆）が相殺されてもPASSに見える構造で「無劣化の完全証明ではない」
+3. N=12・回帰0件はrule of threeで真の回帰率の95%信頼上限が約25%相当と統計的信頼性が低い
+4. baseline自体の低一致率を原因不明のまま展開すると改善効果を測れず既存の根本問題も温存する
+
+Claude側の独立評価でも指摘①〜④に同意（②は個人情報保護のため個別文書結果を非出力とした設計上、事後検証不能な点を含め見落としていた観点）。decision-maker最終判断:「品質は下げない、コスト圧縮は目指す、不安定さ・不十分さがあれば基本はしない選択をする」との原則を明示され、GOAL.md不変条件の撤退基準（AC未達時は無理に本番展開しない）を適用してミッションをクローズ。
+
+Codex提案の追加調査案（baseline不一致の原因分析／人手ラベリングでN拡大、約60件試算）は、いずれも新規の人手作業設計を要し方針と整合しないため見送り。タスクA〜D実装（マージ済み・dev動作確認済み）はrevertせず保持（実害なし、将来の再検討の土台）。kanameone/cocoroへの展開は行わない。PR #648でGOAL.md更新・マージ。
 
 ### Issue Net
 Net 0（起票0/close 0。本ミッションはGitHub Issue非経由、GOAL.md駆動のため対象外）
