@@ -4,6 +4,18 @@
  *
  * 既存のdocumentsにグループキーを付与し、documentGroupsコレクションを初期構築
  *
+ * 注意: キー導出(normalizeGroupKey/generateGroupKeys)とグループ集計ロジック
+ * (resolveGroupKeyAndDisplay/rebuildAllGroupAggregations、careManager未設定書類の
+ * 「CM未設定」グループへのフォールバックを含む)は functions/src/utils/groupAggregation.ts
+ * を唯一の実装源とし、functions/lib/functions/src/utils/groupAggregation.js から直接
+ * requireする(scripts/diagnose-caremanager-group-gap.jsと同一パターン)。手書きコピーは
+ * 持たない — 本体だけ直して本スクリプトを直さないと、次回実行時に旧ロジックで
+ * documentGroupsが再構築され、修正済みの集計バグ(担当CM別集計の非対称性)が本番で
+ * 再発するため(GOAL.md タスクD)。
+ *
+ * 実行前に functions/ で `npm run build` を実行し lib/ を最新化すること
+ * (GitHub Actions run-ops-script.yml は実行前に自動でnpm run buildする)。
+ *
  * Usage:
  *   node scripts/migrate-document-groups.js [--project <project-id>]
  *
@@ -12,6 +24,7 @@
  *   --dry-run  実際には書き込まない
  */
 
+const path = require('path');
 const admin = require('firebase-admin');
 
 // コマンドライン引数解析
@@ -39,39 +52,15 @@ admin.initializeApp({
 
 const db = admin.firestore();
 
-/**
- * テキストを正規化してグループキーを生成
- */
-function normalizeGroupKey(value) {
-  if (!value) return '';
-
-  return value
-    .replace(/[Ａ-Ｚａ-ｚ０-９]/g, (s) =>
-      String.fromCharCode(s.charCodeAt(0) - 0xFEE0)
-    )
-    .toLowerCase()
-    .replace(/[\s\u3000]/g, '')
-    .trim();
-}
-
-/**
- * ドキュメントからグループキーを生成
- */
-function generateGroupKeys(data) {
-  return {
-    customerKey: normalizeGroupKey(data.customerName),
-    officeKey: normalizeGroupKey(data.officeName),
-    documentTypeKey: normalizeGroupKey(data.documentType),
-    careManagerKey: normalizeGroupKey(data.careManager),
-  };
-}
-
-/**
- * グループIDを生成
- */
-function generateGroupId(groupType, groupKey) {
-  return `${groupType}_${groupKey}`;
-}
+// groupAggregation.ts のSSoTを直接require（手書きコピー禁止）
+const {
+  generateGroupKeys,
+  generateGroupId,
+  resolveGroupKeyAndDisplay,
+  rebuildAllGroupAggregations,
+} = require(
+  path.resolve(__dirname, '../functions/lib/functions/src/utils/groupAggregation.js'),
+);
 
 /**
  * メイン処理
@@ -137,122 +126,85 @@ async function main() {
   // Phase 2: documentGroupsを再構築
   console.log('📊 Phase 2: グループ集計');
 
-  // 既存のdocumentGroupsを削除
-  if (!dryRun) {
-    const existingGroups = await db.collection('documentGroups').get();
-    if (!existingGroups.empty) {
-      console.log(`  既存グループ削除: ${existingGroups.size} 件`);
-      const deleteBatch = db.batch();
-      existingGroups.docs.forEach(doc => deleteBatch.delete(doc.ref));
-      await deleteBatch.commit();
-    }
-  }
+  let scanned;
+  let groupCount;
+  const typeCounts = { customer: 0, office: 0, documentType: 0, careManager: 0 };
 
-  // グループ集計用のマップ
-  const groupMap = new Map();
+  if (dryRun) {
+    // rebuildAllGroupAggregations()は削除+書き込みを行うためdry-runでは呼べない。
+    // 同一のkey導出・フォールバック関数(generateGroupKeys/resolveGroupKeyAndDisplay)を
+    // 使った読み取り専用プレビューで代替する(書き込みロジックはFirestoreへ触れない)。
+    const groupMap = new Map();
+    scanned = 0;
+    lastDoc = null;
 
-  // documentsを全件スキャン
-  processed = 0;
-  lastDoc = null;
+    while (true) {
+      let query = db.collection('documents')
+        .orderBy('processedAt', 'desc')
+        .limit(batchSize);
 
-  while (true) {
-    let query = db.collection('documents')
-      .orderBy('processedAt', 'desc')
-      .limit(batchSize);
-
-    if (lastDoc) {
-      query = query.startAfter(lastDoc);
-    }
-
-    const snapshot = await query.get();
-    if (snapshot.empty) break;
-
-    for (const docSnap of snapshot.docs) {
-      const data = docSnap.data();
-
-      // 分割済みはスキップ
-      if (data.status === 'split') {
-        processed++;
-        continue;
+      if (lastDoc) {
+        query = query.startAfter(lastDoc);
       }
 
-      const keys = generateGroupKeys(data);
+      const snapshot = await query.get();
+      if (snapshot.empty) break;
 
-      const types = [
-        { type: 'customer', key: keys.customerKey, display: data.customerName || '' },
-        { type: 'office', key: keys.officeKey, display: data.officeName || '' },
-        { type: 'documentType', key: keys.documentTypeKey, display: data.documentType || '' },
-        { type: 'careManager', key: keys.careManagerKey, display: data.careManager || '' },
-      ];
+      for (const docSnap of snapshot.docs) {
+        const data = docSnap.data();
 
-      for (const { type, key, display } of types) {
-        if (!key) continue;
-
-        const groupId = generateGroupId(type, key);
-        const existing = groupMap.get(groupId);
-
-        const previewDoc = {
-          id: docSnap.id,
-          fileName: data.fileName || '',
-          documentType: data.documentType || '',
-          processedAt: data.processedAt || admin.firestore.Timestamp.now(),
-        };
-
-        if (existing) {
-          existing.count++;
-          if (existing.latestDocs.length < 3) {
-            existing.latestDocs.push(previewDoc);
-          }
-          if (data.processedAt && data.processedAt.toMillis() > existing.latestAt.toMillis()) {
-            existing.latestAt = data.processedAt;
-          }
-        } else {
-          groupMap.set(groupId, {
-            groupType: type,
-            groupKey: key,
-            displayName: display || key,
-            count: 1,
-            latestAt: data.processedAt || admin.firestore.Timestamp.now(),
-            latestDocs: [previewDoc],
-          });
+        if (data.status === 'split') {
+          // rebuildAllGroupAggregations()のFirestoreクエリ(status !== 'split')と
+          // 同一母集団にするため、分割済みはカウントに含めない(実行モードと比較可能にする)
+          continue;
         }
+
+        const keys = generateGroupKeys(data);
+        const types = [
+          { type: 'customer', key: keys.customerKey, display: data.customerName },
+          { type: 'office', key: keys.officeKey, display: data.officeName },
+          { type: 'documentType', key: keys.documentTypeKey, display: data.documentType },
+          { type: 'careManager', key: keys.careManagerKey, display: data.careManager },
+        ];
+
+        for (const { type, key, display } of types) {
+          const resolved = resolveGroupKeyAndDisplay(type, key, display, !!keys.customerKey);
+          if (!resolved) continue;
+
+          const groupId = generateGroupId(type, resolved.key);
+          const existing = groupMap.get(groupId);
+          if (existing) {
+            existing.count++;
+          } else {
+            groupMap.set(groupId, { groupType: type, count: 1 });
+          }
+        }
+
+        scanned++;
       }
 
-      processed++;
+      console.log(`  スキャン: ${scanned} 件`);
+      lastDoc = snapshot.docs[snapshot.docs.length - 1];
     }
 
-    console.log(`  スキャン: ${processed} 件`);
-    lastDoc = snapshot.docs[snapshot.docs.length - 1];
-  }
+    groupCount = groupMap.size;
+    for (const { groupType } of groupMap.values()) {
+      typeCounts[groupType]++;
+    }
 
-  // グループデータをFirestoreに書き込み
-  if (!dryRun) {
-    let batchCount = 0;
-    let batch = db.batch();
-    let totalBatches = 0;
+    console.log('\n⚠️  ドライランのためdocumentGroupsは変更していません（プレビューのみ）。');
+  } else {
+    const result = await rebuildAllGroupAggregations(db, batchSize);
+    scanned = result.processed;
+    groupCount = result.groups;
 
-    for (const [groupId, data] of groupMap) {
-      const groupRef = db.collection('documentGroups').doc(groupId);
-      batch.set(groupRef, {
-        ...data,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
-
-      batchCount++;
-      if (batchCount >= 500) {
-        await batch.commit();
-        totalBatches++;
-        batch = db.batch();
-        batchCount = 0;
+    const groupsSnap = await db.collection('documentGroups').get();
+    groupsSnap.forEach((doc) => {
+      const groupType = doc.data().groupType;
+      if (typeCounts[groupType] !== undefined) {
+        typeCounts[groupType]++;
       }
-    }
-
-    if (batchCount > 0) {
-      await batch.commit();
-      totalBatches++;
-    }
-
-    console.log(`  バッチコミット: ${totalBatches} 回`);
+    });
   }
 
   // 結果サマリー
@@ -260,15 +212,10 @@ async function main() {
   console.log('\n' + '='.repeat(50));
   console.log('📊 マイグレーション結果');
   console.log('='.repeat(50));
-  console.log(`  処理ドキュメント: ${processed} 件`);
+  console.log(`  処理ドキュメント: ${scanned} 件`);
   console.log(`  キー更新: ${updated} 件`);
-  console.log(`  グループ作成: ${groupMap.size} 件`);
+  console.log(`  グループ作成: ${groupCount} 件`);
 
-  // グループタイプ別内訳
-  const typeCounts = { customer: 0, office: 0, documentType: 0, careManager: 0 };
-  for (const [, data] of groupMap) {
-    typeCounts[data.groupType]++;
-  }
   console.log('\n  グループ内訳:');
   console.log(`    - 顧客別: ${typeCounts.customer} グループ`);
   console.log(`    - 事業所別: ${typeCounts.office} グループ`);
