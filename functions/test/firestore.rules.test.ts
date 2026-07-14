@@ -269,6 +269,106 @@ describe('Firestore Security Rules', () => {
         }, { merge: true })
       );
     });
+
+    // ============================================
+    // 集計所属変更メンテナンスゲート (ADR-0019, GOAL.md タスクG)
+    // ============================================
+    it('メンテナンスフラグ未設定時、careManagerの更新は許可される(安全側デフォルト)', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'documents', 'doc-gate-default'), {
+          fileName: 'test.pdf',
+          status: 'processed',
+          careManager: '',
+        });
+      });
+
+      const docRef = doc(normalUser.firestore(), 'documents', 'doc-gate-default');
+      await assertSucceeds(
+        setDoc(docRef, { fileName: 'test.pdf', status: 'processed', careManager: '佐藤花子' }, { merge: true })
+      );
+    });
+
+    it('groupAggregationGateOpen: trueの場合、careManagerの更新は許可される', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        const db = context.firestore();
+        await setDoc(doc(db, 'documents', 'doc-gate-open'), {
+          fileName: 'test.pdf', status: 'processed', careManager: '',
+        });
+        await setDoc(doc(db, 'system', 'maintenanceFlags'), {
+          groupAggregationGateOpen: true,
+        });
+      });
+
+      const docRef = doc(normalUser.firestore(), 'documents', 'doc-gate-open');
+      await assertSucceeds(
+        setDoc(docRef, { fileName: 'test.pdf', status: 'processed', careManager: '佐藤花子' }, { merge: true })
+      );
+    });
+
+    it('groupAggregationGateOpen: falseの場合、careManagerの更新は拒否される(バックフィル中のFE直接編集を防止)', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        const db = context.firestore();
+        await setDoc(doc(db, 'documents', 'doc-gate-closed'), {
+          fileName: 'test.pdf', status: 'processed', careManager: '',
+        });
+        await setDoc(doc(db, 'system', 'maintenanceFlags'), {
+          groupAggregationGateOpen: false,
+        });
+      });
+
+      const docRef = doc(normalUser.firestore(), 'documents', 'doc-gate-closed');
+      await assertFails(
+        setDoc(docRef, { fileName: 'test.pdf', status: 'processed', careManager: '佐藤花子' }, { merge: true })
+      );
+    });
+
+    it('groupAggregationGateOpen: falseでも、customer/office/documentType/careManagerに触れない更新は許可される', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        const db = context.firestore();
+        await setDoc(doc(db, 'documents', 'doc-gate-closed-unrelated'), {
+          fileName: 'test.pdf', status: 'processed', verified: false,
+        });
+        await setDoc(doc(db, 'system', 'maintenanceFlags'), {
+          groupAggregationGateOpen: false,
+        });
+      });
+
+      const docRef = doc(normalUser.firestore(), 'documents', 'doc-gate-closed-unrelated');
+      await assertSucceeds(
+        setDoc(docRef, { fileName: 'test.pdf', status: 'processed', verified: true, verifiedBy: normalUid }, { merge: true })
+      );
+    });
+
+    it('groupAggregationGateOpen: falseの場合、customerName/officeName/documentTypeの更新も拒否される', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        const db = context.firestore();
+        await setDoc(doc(db, 'documents', 'doc-gate-closed-multi'), {
+          fileName: 'test.pdf', status: 'processed',
+          customerName: '不明顧客', officeName: '不明事業所', documentType: '未判定',
+        });
+        await setDoc(doc(db, 'system', 'maintenanceFlags'), {
+          groupAggregationGateOpen: false,
+        });
+      });
+
+      const docRef = doc(normalUser.firestore(), 'documents', 'doc-gate-closed-multi');
+      await assertFails(
+        setDoc(docRef, {
+          fileName: 'test.pdf', status: 'processed',
+          customerName: '山田太郎', officeName: '事業所A', documentType: '契約書',
+        }, { merge: true })
+      );
+    });
   });
 
   // ============================================

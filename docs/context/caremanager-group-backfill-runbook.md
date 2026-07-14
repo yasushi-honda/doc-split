@@ -24,12 +24,12 @@ PR #656(タスクA)で修正済みの集計ロジックにより、本番`docume
 
 | 経路 | ゲート対象 | 理由 |
 |------|-----------|------|
-| OCR完了確定・rescue(`processOCR.ts`) | ✅ 対象 | careManager/status確定の主経路 |
-| split(`pdfOperations.ts` `splitPdf`) | ✅ 対象 | 親status:split化+子文書careManager初期値決定 |
-| 顧客マスター同期(`syncCareManager.ts`) | ✅ 対象 | 最大500件バッチ更新によるトランザクション集中の主因 |
+| OCR完了確定・rescue(`processOCR.ts`) | ✅ 対象(コードレベル) | careManager/status確定の主経路 |
+| split(`pdfOperations.ts` `splitPdf`) | ✅ 対象(コードレベル) | 親status:split化+子文書careManager初期値決定 |
+| 顧客マスター同期(`syncCareManager.ts`) | ✅ 対象(コードレベル) | 最大500件バッチ更新によるトランザクション集中の主因 |
+| FE手動「再処理」ボタン・書類詳細画面の手動編集(`useDocumentEdit.ts`) | ✅ 対象(Firestore Rulesレベル) | Admin SDKを経由しないクライアント直接書込みのため、コードレベルゲートでは制御不可。`firestore.rules`で`customerName`/`officeName`/`documentType`/`careManager`変更をゲート閉中は一律拒否(Evaluatorレビューで見落とし発覚、session131で追加) |
 | Gmail取込・アップロード(pending文書作成) | ❌ 対象外 | customerKey未確定な段階は元々documentGroupsへの副作用を持たない |
-| FE手動「再処理」ボタン | ❌ 対象外(残存リスク、許容) | ブラウザ直接書込みのためCloud Function側で制御不可。低トラフィック時間帯実行で発生確率を低減 |
-| `scripts/`運用スクリプト(fix-stuck-documents等) | ❌ 対象外(残存リスク、許容) | workflow_dispatch手動トリガー、実行者が事前調整可能 |
+| `scripts/`運用スクリプト(fix-stuck-documents等) | ❌ 対象外(残存リスク、許容) | Admin SDK経由でFirestore Rules適用外。workflow_dispatch手動トリガーであり、実行者が事前調整可能 |
 
 ## 実行手順
 

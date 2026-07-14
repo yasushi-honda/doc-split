@@ -41,6 +41,7 @@ PR #656(GOAL.md タスクA)でこの本体ロジックを修正済み: `resolveG
 | OCR完了確定・rescue | `functions/src/ocr/processOCR.ts` (`processOCR` onSchedule) | スケジュール実行ハンドラの先頭(rescue処理より前) | `customerName`/`careManager`/`status`を確定させる唯一の書込み経路。ゲート中は当該サイクルを丸ごとスキップし、pending文書はそのまま残る(次回1分間隔実行でキャッチアップ) |
 | split | `functions/src/pdf/pdfOperations.ts` (`splitPdf` onCall) | 認証・バリデーション後、PDF読込等の重い処理の前 | 親`status:'split'`化+子文書の`careManager`初期値決定を行う |
 | 顧客マスター同期 | `functions/src/triggers/syncCareManager.ts` (`onCustomerMasterWrite`) | ハンドラ先頭、`documents`一括update前 | 最大500件バッチ更新によるCM未設定グループへのトランザクション集中の主因(Codexが最も強く懸念した経路) |
+| FE直接編集 | `frontend/src/hooks/useDocumentEdit.ts`(書類詳細画面の手動メタデータ編集)等、クライアントSDKから`documents`を直接書き換える経路全般 | `firestore.rules`の`documents/{docId}` update ルール | Cloud Functions(Admin SDK)はFirestore Rulesの適用対象外のため、上記3経路のコードレベルゲートでは制御できない。Evaluatorレビューで指摘(session131) — 当初のADR案では`appendReprocessClearToBatch`(再処理ボタン)のみを残存リスクとして許容していたが、日常的に使われる手動編集機能`useDocumentEdit.ts`が見落とされていたため、Firestore Rules側で`customerName`/`officeName`/`documentType`/`careManager`を変更する更新をゲート閉中は一律拒否する対策に変更した(`groupAggregationGateOpen()`/`affectsGroupAggregationFields()`関数を追加) |
 
 #### ゲート対象外(継続)
 
@@ -73,8 +74,9 @@ GOAL.md原文の「ロールバック手順(事前スナップショット取得
 
 ### 残存リスク(意図的な許容)
 
-- **FE経由の手動「再処理」トリガー**(`frontend/src/hooks/useDocuments.ts`の`appendReprocessClearToBatch`)はブラウザから直接Firestoreへ書き込むため、Cloud Function側のゲートでは制御できない。人間の明示的なボタン操作が必要なため、低トラフィック時間帯にバックフィルを実行すれば発生確率は極めて低いと判断し、許容する。
-- **`scripts/`配下の運用スクリプト**(`fix-stuck-documents.js`等、status:'pending'化を伴うもの)も同様にゲート対象外。いずれも`workflow_dispatch`の手動トリガーであり、バックフィル実行者が事前に把握・調整可能。
+- **`scripts/`配下の運用スクリプト**(`fix-stuck-documents.js`等、status:'pending'化を伴うもの)はAdmin SDK経由でFirestore Rulesの適用対象外のためゲート対象外。いずれも`workflow_dispatch`の手動トリガーであり、バックフィル実行者が事前に把握・調整可能。
+
+**FE経由の手動「再処理」トリガー**(`frontend/src/hooks/useDocuments.ts`の`appendReprocessClearToBatch`)・**書類詳細画面の手動メタデータ編集**(`useDocumentEdit.ts`)は、`customerName`/`officeName`/`documentType`/`careManager`いずれかの変更(削除含む)を伴うため、上記のFirestore Rules対策により**ゲート閉中は技術的にブロックされる**(意図しない残存リスクではなく、Rules側の対策で解消済み)。
 
 これらの残存リスクは、バックフィル実行前後で`scripts/diagnose-caremanager-group-gap.js`(groupId単位の個別比較に強化済み)を実行し、差分が説明可能であることを確認することで検知する。
 
