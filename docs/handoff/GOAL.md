@@ -1,72 +1,57 @@
 ---
 updated: 2026-07-14
 ---
-<!-- session121: 新ミッション着手。前ミッション(#547/#548運用コスト圧縮2トラック)は達成済みのためgit historyへ圧縮済み(git log -p docs/handoff/GOAL.md参照)。本ミッションはIssue #548「保留カード」(OCR全文転記→エンティティリスト化)の技術検証から派生。当初コスト削減目的だったが、保守的スコープではコスト削減効果がほぼ見込めないと判明したため「突合精度向上」に目的を再定義(decision-maker合意)。Codexセカンドオピニオン(plan mode)で2点の設計修正(呼出し分離+保守的arbitration)を反映済み -->
+<!-- session129: 新ミッション着手。前ミッション(OCR突合精度向上)はsession125クローズ済みのためLATEST.md/archive/2026-07-history.mdへ全文アーカイブ済み(git historyでも追跡可)。本ミッションはkanameoneからの「顧客別とCM別で利用者件数に差異がある」報告から着手。原因調査・Codexセカンドオピニオン(plan mode)を経て確定した実装計画。 -->
 
 ## 現在のミッション
-**クローズ済み（2026-07-14 session125、撤退基準適用）**: OCR突合（documentType/customerName/officeName/date）の精度向上のため、Geminiに文書内の候補テキストを独立呼出しで抽出させ、既存のマスター突合ロジック（`extractors.ts`）と保守的arbitrationで統合する。dev環境でA/B検証を固め、精度が現行を下回らないことを確認できた場合のみkanameone→cocoro本番展開する予定だったが、taskI(下記)の判断によりkanameone/cocoro本番展開は見送り、dev環境検証完了（タスクF/G、N=10・4項目100%一致）+ kanameone customer/office限定検証（タスクH、N=12・PASSだが4項目AC未達）までを最終到達点としてミッションを終了する。
+kanameone本番で「担当CM(ケアマネジャー)別」の書類集計が「顧客別」集計より大幅に少なく表示されるバグを修正する。`careManager`未設定の書類を「CM未設定」グループとして可視化(除外ではなく計上)し、顧客別/CM別の合計件数を一致させる。
 
 ## 背景・why
-- 前身のIssue #548「保留カード」（OCR全文転記→エンティティリスト化、コスト削減目的、−¥11,000/月級と試算）を技術検証した結果、保守的スコープ（PDF分割検出・全文表示・要約生成を維持）ではコスト削減効果はほぼ見込めないと判明し、目的を「突合精度向上」に再定義（decision-maker合意、session121）
-- Codexセカンドオピニオン（plan mode、session121）で2点の重大な指摘を受け計画に反映済み:
-  1. 全文転記とエンティティ抽出を同一Gemini呼出しにすると、PDF分割検出・全文表示・要約生成への「影響ゼロ」という前提が崩れる → **候補抽出を別呼出しに分離**（既存`ocrWithGemini()`は無改修、pageText結合テキストを入力とする新規呼出しを追加）
-  2. best-of選択（スコアが高い方を無条件採用）は、誤った候補が偶然マスターと完全一致した場合に正しい既存結果を上書きするリスクがある → **保守的arbitration**（同点は全文系優先、候補はpageText内への逐語的存在確認=grounding必須、日付は種別・根拠込みで特別扱い）
-- 不変条件（絶対）: 突合の精度劣化は一切禁止。候補抽出呼出しが失敗しても既存の全文ベース突合にフォールバックし、本体OCR処理は絶対にブロックしない
+- kanameoneから「顧客別と担当CM別で利用者件数に差異がある（CM別だと明らかに数字が小さい）」という報告があり調査した
+- 根本原因: `Document`型の`customerName`/`officeName`/`documentType`は必須フィールド(マッチ失敗時は`不明顧客`/`未判定`にフォールバック)だが、`careManager`は任意フィールドでフォールバックなし。集計ロジック`functions/src/utils/groupAggregation.ts`は正規化キーが空の場合そのgroupTypeの集計から丸ごと除外するため、careManager別集計だけが顧客別集計より大幅に少なくなる非対称性がある
+- kanameone実データ実測(2026-07-14): customer合計9,620件 vs careManager合計6,283件(差34.7%)。うち「不明顧客」グループが3,280件(34.1%)、実在顧客だがCM欠落が91件(customerIdなし62/マスターCM未設定22/**同期漏れ疑い7件**)
+- バグの発生源3箇所: `functions/src/ocr/ocrUpdatePayloadBuilder.ts`(OCR自動取込)・`functions/src/pdf/splitDocumentBuilder.ts`(手動分割)・`scripts/migrate-document-groups.js`(groupAggregation.tsのロジックを独立に再実装したコピー、本体だけ直すと手動再構築時にバグが再発する)
+- `/codex plan`セカンドオピニオン(MCP、effort=high)で以下の指摘を受け計画に反映済み:
+  1. 集計専用の予約keyを使うべき（`未設定`という表示名をそのままkeyにすると実在CM名との衝突リスクがある）
+  2. グループ生成だけでなく、グループをクリックして書類一覧を展開する経路（クエリロジック）にも同じ意味付けを持たせる必要がある
+  3. `getAffectedGroups`・全件再集計・移行スクリプト(`migrate-document-groups.js`)で同一のkey導出関数を使うべき（最低でも契約テストで出力一致を保証）
+  4. 本番バックフィルは同時更新競合対策・ロールバック手順（事前スナップショット、旧ロジックでの再構築手順）が必要
+  5. AC「既存17グループのcount不変」は同期漏れ7件を将来補正すると成立しなくなるため「今回の集計修正単独では不変」に限定する
+- GitHub Actions経由の新規診断スクリプト(`scripts/diagnose-caremanager-group-gap.js`, PR #654)で、Codex指摘の数値矛盾(9,620-3,371=6,249≠6,283)を実データ再検証。原因は前回集計スクリプトの母集団定義ミス(`status='split'`除外漏れ)と判明し、正しい母集団(`status !== 'split'`)では恒等式`customerKey非空 = careManagerKey非空 + careManagerKey欠損`が誤差0で一致することを実証した
+- 副次発見(未解明・スコープ外): `documentGroups`実測値と動的再計算の間にcustomer-1件/careManager-25件の微小なズレ(over-count疑い)。バックフィル設計（既存documentGroupsをクリアしてから再構築）で自然に解消される見込み
 
 ## 完了の定義
-- 候補抽出呼出しの追加が既存`ocrWithGemini()`/pageResults保存処理を一切変更しない（証明: git diffで`functions/src/ocr/ocrProcessor.ts`の既存OCR部分が無改修であることを確認）
-- 新ロジックが既存`extractDocumentTypeEnhanced`等のシグネチャを破壊しない（証明: `cd functions && npm test`で既存テスト全PASS）
-- 候補抽出呼出しが失敗/タイムアウト/スキーマ逸脱しても既存の全文ベース突合で処理継続する（証明: 単体テストで候補抽出例外ケースを追加しPASS）
-- arbitrationが「同点は全文系優先」「grounding必須」「日付は種別・根拠込みで判定」を満たす（証明: 単体テストで誤マスター一致による上書きシナリオを再現し防止できることを確認）
-- dev環境A/Bテストで書類種別/顧客/事業所/日付の4項目とも精度が現行を下回らない（証明: 拡張版`compare-gemini-ocr-models-confirmed.ts`相当のdev実行結果）
-- kanameone confirmed-replay検証（顧客/事業所は既存実データ、書類種別/日付は新規人手ラベル評価セット）で4項目とも精度が現行同等以上（証明: GitHub Actions実行ログ、read-only）
-- 出力トークン増分・コスト増が実測・可視化されている（証明: A/Bハーネスのトークン計測ログ）
+- dev環境でcareManagerが空文字/undefined/nullいずれのdocumentも、同一の予約key(例: `__UNASSIGNED_CARE_MANAGER__`)+表示名「CM未設定」で`documentGroups`に集計される（証明: 単体テストで境界値3パターンPASS）
+- 差分集計(`getAffectedGroups`)と全件再集計(`rebuildAllGroupAggregations`)が同一fixtureに対して完全一致する（証明: 契約テストPASS）
+- `scripts/migrate-document-groups.js`が独立コピーを持たず、`groupAggregation.ts`と同一のkey導出ロジックを使う（証明: `diagnose-caremanager-group-gap.js`で採用した`functions/lib/`経由requireパターンで統一、または契約テストでの出力一致確認）
+- フロントエンド「担当CM別」タブに「CM未設定」グループが表示され、クリックで該当書類一覧が正しく展開される（証明: Playwright実機確認、CLAUDE.md「UIコンポーネント変更時の確認」ルール準拠）
+- kanameone本番バックフィル実行前に、対象件数・予定グループ内訳をドライランで出力し、実行後に同レポートと比較して差分が説明可能である（証明: バックフィルスクリプトのdry-run/execute出力ログ）
+- kanameone本番バックフィル後、customer合計とcareManager合計(CM未設定含む)が誤差0件で一致する（証明: `diagnose-caremanager-group-gap.js`相当の再検証実行結果）
+- 今回の集計修正単独では、既存の実在CM名17グループのcountがバックフィル前後で変化しない（証明: バックフィル前後の診断スクリプト比較。同期漏れ7件を別途補正する場合はこの限りではない）
 - 本番展開後、kanameone/cocoro双方でエラー率が展開前と同水準（証明: `fix-stuck-documents --include-errors --dry-run`でエラー0件）
-- 不変条件: 上記いずれかのACが未達の場合、無理に本番展開しない（dev検証止まりで完了とする撤退基準）→ **2026-07-14 session125、本条件が発動しミッションをクローズ**（kanameone confirmed-replay検証のAC=4項目同等以上が未達=customer/office 2項目のみ実施のため。詳細はタスクI参照）
+- 不変条件: 同期漏れ7件の原因究明・documentType「未判定」過集中問題・careManagerの検索インデックス欠落は本ミッションのスコープに含めない（decision-maker確定、2026-07-14）
 
 ## 進行中のtasks
-- [x] A. 候補抽出用・第2Gemini呼出しのスパイク（完了、2026-07-13 session121）— `scripts/spike-candidate-extraction.ts`実装、GitHub Actions経由でdev環境実行。結果: 11/11ページ成功・JSON解析失敗0件、grounding率93〜95%(2回実行)、プロンプトインジェクション耐性PASS(2回)、候補抽出呼出し1回あたり概算$0.004(N=11件で$0.044〜0.047)。**重要な発見**: not-grounded事例は「別の妥当な値」ではなく候補抽出呼出し自体の文字レベル転記誤り(「請求書」→「舅求書」等)。Codex指摘のgrounding必須arbitrationが実害を防ぐことを実証。**既知の限界（タスクBで対応）**: Codexセカンドオピニオン(review-diff、1回目)指摘により、本スパイクは**ページ単位**で候補抽出を検証しており、計画上のタスクB実装（**ドキュメント単位**で結合pageTextを1回で処理）とは呼出し粒度が異なる。複数ページ文書の結合テキストでの本番想定プロンプトサイズ・トークンコスト・クロスページの候補選択挙動は未検証のため、タスクB実装時に改めてドキュメント単位での実測を行う。**既知の限界（本スクリプト単独ではスコープ外）**: Codexセカンドオピニオン(review、2回目)指摘により、`ocrPageVerbatim()`の異常応答検知ロジック(`response.candidates?.[0]?.finishReason`/`promptFeedback?.blockReason`ベース)は、zero-candidate応答(candidates配列が空でblockReason/finishReasonも両方undefined)を検知できないギャップがある。このロジックは`scripts/compare-gemini-ocr-models.ts`の`ocrPage()`から複製したもので、既存スクリプトにも同じギャップが存在する（本PRのスコープ外、修正する場合は既存スクリプト側の改修として別途decision-maker判断が必要）
-- [x] B. 候補抽出呼出し実装（完了、2026-07-13 session121）— `functions/src/ocr/ocrProcessor.ts`に`extractOcrCandidates(ocrResult, documentId?)`を新規追加（既存`ocrWithGemini()`は無改修、独立した第2Gemini呼出し）。候補抽出はbest-effort設計でAPI失敗/JSON解析失敗時は例外を投げず4項目全nullを返す。**タスクAの既知の限界（ページ単位検証と本番ドキュメント単位実装の粒度乖離）を解消**: `scripts/verify-candidate-extraction-document-level.ts`で実装済み関数を直接import(再実装ではない)しdev環境で実機検証、複数ページ結合テキスト(5-6ページ、662/579文字)で2/2成功・grounding8/8(100%、2回目実行では6/8=75%で「訪問看護報告書」→「舖商看艷報告昸」等のより激しい文字化けも観測、grounding必須arbitrationの必要性を追加裏付け)・ドキュメント単位1回あたり概算$0.0052〜0.0038を確認。`/safe-refactor`(DRY違反=`ocrPageVerbatim`重複を`scripts/lib/geminiOcrCompare.ts`の`ocrPageWithAnomalyDetection()`へ統合、共有可変オブジェクト参照リスク=スプレッドコピー化)、`/code-review medium`(8角度finder+1票検証、CONFIRMED 3件を修正: safeLogError未使用→追加・`documentId`引数追加、型重複→`Pick<OcrCandidateExtractionResult,...>`化、dev-guard重複→現状維持)を実施。functions側テスト1,735 passing・lint 0 errors
-  - **タスクC以降で対応する既知の限界（PLAUSIBLE判定4件、`/code-review medium`で検出・decision-maker判断によりdefer）**:
-    1. `ocrPageWithAnomalyDetection()`/`extractOcrCandidates()`とも`finishReason==='MAX_TOKENS'`による部分打切りを異常検知できない（`!response.text`の場合のみ検査、非空だが不完全なテキストは素通り）。特に`extractOcrCandidates()`は`finishReason`検査が一切ない
-    2. `extractOcrCandidates()`が毎回`new GoogleGenAI()`を構築(`ocrPageWithAnomalyDetection()`は呼出元から`ai`を受け取る設計と不統一、レート制限バイパスにはならないが認証コストの無駄)
-    3. `candidateSchema`/`buildCandidateExtractionPrompt`が`scripts/spike-candidate-extraction.ts`と重複(コードベース既存の「複製+同期コメント」パターンの延長)
-    4. `usageMetadata`からのトークン集計パターンが6箇所に重複(SDKフィールドアクセスのボイラープレート、リスク低)
-  - `/review-pr`(4エージェント並列: code-reviewer/comment-analyzer/silent-failure-hunter/type-design-analyzer)+ `/codex review`セカンドオピニオンも実施。Codexの唯一の指摘(P1「PROJECT_ID未伝播で全候補抽出呼出しが失敗」)は**REFUTED**: `google-github-actions/auth@v2`の`export_environment_variables: true`設定によりジョブ全体に`GCLOUD_PROJECT`/`GOOGLE_CLOUD_PROJECT`が自動エクスポートされることを実行ログで確認、実際の複数回成功実行(実測トークン数あり)とも整合。review-pr新規指摘のうちCONFIRMED相当3件は修正済み(本番コードのGOAL.mdタスク参照コメントをインライン化=将来のミッション圧縮でダングリング参照化するリスクを解消、プロンプト文言「同一」主張の事実誤認を訂正、JSON.parse成功後の型ガード追加でouter catchによるエラー誤分類=`apiCallError`と`jsonParseError`の取り違えを解消)
-  - **タスクC以降で対応する既知の限界（追加、review-pr検出）**:
-    5. `scripts/verify-candidate-extraction-document-level.ts:83`が`ocrProcessor.ts:331-333`という行番号を直接コメントで参照。将来ocrProcessor.ts上部が変更されるとサイレントに古びる(comment-analyzer指摘、優先度低)
-    6. `inputTokens`/`outputTokens`/`thinkingTokens`のトークン3つ組が`OcrProcessingResult`/`OcrCandidateExtractionResult`/`OcrPageResult`の3箇所で重複定義。共通サブ型への切り出しが可能(type-design-analyzer指摘、低リスクDRY改善)
-    7. Evaluator分離プロトコル(`rules/quality-gate.md`、5ファイル+新機能で発動条件)が本PRでは未実施(code-reviewer指摘、プロセス確認事項としてdecision-maker判断待ち)
-- [x] C. `extractors.ts`拡張 + 保守的arbitration実装（完了、2026-07-14 session122）— `functions/src/utils/extractors.ts`に`arbitrateDocumentType`/`arbitrateOfficeName`/`arbitrateCustomerName`/`arbitrateDate`を新規追加（既存4関数は無改修）。設計はCodexセカンドオピニオン(plan mode)反映: 既存が何らかのマッチ済みなら候補がどれだけ高スコアでも上書きしない、昇格対象は候補を既存関数へ再入力しexact matchの場合のみに限定、候補はOCR全文へのgrounding(逐語一致)必須。「弱い根拠」判定はdecision-maker選択により最も保守的な値(documentType: matchType==='none'のみ/officeName・customerName: bestMatch===nullのみ/date: date===nullのみ)を採用。`/code-review medium`(8角度finder+1票検証)でCONFIRMED 5件検出・修正: isGroundedInTextに最小長ガード追加(短い候補の誤昇格を実機再現・修正)、arbitrateDocumentTypeに既存searchRange=300制約を適用、documentType/customerNameのexact-match昇格に#501対策(computeCommonShortMasters)を適用しoffice系との非対称性を解消、arbitrateDateに全角→半角変換を追加(全角日付が機能しないバグを修正)、日付フォーマット処理を既存formatDateStringヘルパーに統一。functions側テスト1,760 passing・lint 0 errors。PR #643。
-  - **タスクD以降で対応する既知の限界（Codexセカンドオピニオン`/codex review-diff`検出、P1、decision-maker判断によりタスクGで実測してから判断）**: documentType/officeName/customerName/dateいずれも、「候補がgroundingされ、かつ候補単体の再照合でexact match」という昇格条件は、部分文字列包含関係の推移律により「既存の全文ベース抽出でも同じマッチが既に見つかっているはず」という関係と論理的に重なる。特にdocumentTypeは今回のsearchRange制約追加によりこの関係がより厳密に成立するため、候補側への昇格が実質的にほぼ発生しない(no-op化する)可能性がある。精度劣化はしない(不変条件維持)が、期待する精度向上効果も出ない可能性がある。タスクF/GのA/Bテストで実際の昇格頻度・効果を実測し、無意味と判明した場合は昇格条件（exact限定の緩和・searchRange制約の見直し等）を再設計する
-- [x] D. `processDocument()`統合（完了、2026-07-14 session123）— `functions/src/ocr/ocrProcessor.ts`の`processDocument()`に`extractOcrCandidates()`(タスクB)+`arbitrateDocumentType`/`arbitrateCustomerName`/`arbitrateOfficeName`/`arbitrateDate`(タスクC)を統合。既存の全文ベース抽出結果を無条件に上書きしない設計を維持し、dateMarker解決はarbitration後のdocumentType結果を参照するよう順序調整（候補昇格時にdateMarkerも追従）。候補抽出呼出しのトークンを`totalInputTokens`等へ加算し`trackGeminiUsage`経由の本番コスト計測に反映。契約テスト(`ocrProcessorCandidateArbitrationWiringContract.test.ts`)で配線をlock-in。functions側テスト1,770 passing・lint/tsc 0 errors。`/code-review low`+独立evaluatorエージェント(前提知識なし、AC 10項目個別検証)で全PASS確認済み(HIGH/MEDIUM指摘0件)。PR #644作成・マージ済み(main→dev自動デプロイCI/Deploy workflow両方SUCCESS確認済み、kanameone/cocoroには未反映)。PR上のCodeRabbit指摘(「既存4項目全マッチ時はextractOcrCandidates呼出しが無駄コスト」)は検証の上正当と判断、decision-maker判断で現状PRのままマージ・最適化は別対応で保留。
-- [ ] E. 単体テスト追加（extractors.ts新関数・arbitrationロジック・フォールバックケース、C,Dに依存）— **状況(2026-07-14 session123)**: arbitrate*関数のunit testはタスクCで既に追加済み(null候補フォールバックケース含む)、processDocument()統合の配線契約テストはタスクDで追加済み。残りうるスコープは`extractOcrCandidates()`自体のAPI例外/JSON解析失敗パスのmock unit test(現状はタスクA/Bの実機検証のみでカバー、Vertex AI依存のためlocal unit test化は別途モック設計が必要)。decision-maker判断で「実質完了」とみなすか、専用mock testを追加するか要確認
-- [x] F. A/Bテストハーネス拡張（完了、2026-07-14 session123）— `scripts/compare-ocr-arbitration-logic.ts`新規追加。既存`compare-gemini-ocr-models.ts`(モデルA/B比較用、gemini-2.5 vs 3.5)とは軸が異なる「ロジックA/B比較」(同一モデルでbaseline=既存抽出のみ/candidate=候補抽出+arbitration統合後)として、documentType/customerName/officeName/dateの4項目全gate化。既存`seed-dev-data.ts`のMIXED_FAX_PDFSを読み取り専用で再利用(日単位ground truthを持つ3segment、「提供月」表記のみの2segmentは日付評価不可のため対象外)し、複数人名/複数日付の層化用に新規フィクスチャ2件(`scripts/fixtures/arbitrationCompareFixtures.ts`)を追加(`seed-dev-data.ts`自体は無改修で副作用回避)。「手書き」原稿は合成PDFでは再現不可のため既知の限界としてスコープ外(decision-maker判断で必要になれば別途実スキャン素材を検討)。**GitHub Actions実機実行結果(doc-split-dev、run ID 29290104624)**: baseline 5/5文書・4項目全100%一致、candidate 5/5文書・4項目全100%一致(複数人名/複数日付distractorを含む5文書全てで精度劣化なし)、候補抽出grounding失敗率10.0%(非null候補20件中2件not-grounded、arbitrationの保守的設計により誤昇格には至らず)、候補抽出トークン増分input=2837/output=515/thinking=1322(5文書で概算$0.0208)。N=5のためdev一次スクリーニング止まり(タスクG本実行で追加検証)。scripts側テスト84 passing。独立evaluatorエージェントでAC 10項目全PASS確認済み。
-  - **タスクG以降への申し送り(evaluator指摘、LOW、AC対象外)**: `provenance`(既存/候補どちらの経路で解決したか)は`buildOcrExtractionUpdatePayload`の入力型に含まれず本番Firestoreへ永続化されない。本番でのarbitration有効性・grounding失敗率の継続観測が必要になった場合、別途observability追加を検討
-- [x] G. dev環境A/Bテスト実行（完了、2026-07-14 session124）— 対象文書数拡大の手段はdev環境に実運用データが存在しないため「既存フィクスチャ追加」一択と判断（軽量プラン提示→承認待ちなしで着手）。`scripts/fixtures/arbitrationCompareFixtures.ts`のARBITRATION_DISTRACTOR_DOCSに新規5文書を追加しN=5→N=10へ拡大（CUSTOMERS未使用6名を使用、通常ケース=distractorなし2件+複数人名/複数日付バリエーション追加1件ずつ+全角日付表記1件でタスクCの全角→半角変換修正の回帰確認も兼ねる）。feature branch(`feat/ocr-arbitration-taskg-fixtures`)を切りGitHub Actions "Run Operations Script"(environment: dev、script: compare-ocr-arbitration-logic)で実行(run 29294375536)。**結果**: baseline/candidate両方 4項目全一致 10/10(100.0%)、精度劣化なし・失敗率ゲート内で✅PASS。候補抽出grounding失敗率7.5%(非null候補40件中3件not-grounded、タスクFのN=5時点10.0%と同水準)。候補抽出トークン増分input=5393/output=910/thinking=3032(概算$0.043568、N=5時点比でほぼ線形にスケール)。N=10でも再現性を確認。PR #646作成・code-review low(指摘0件)実施の上マージ済み(main反映済み)。
-- [x] H. kanameone confirmed-replay検証（read-only、完了、2026-07-14 session124）— documentType/dateはkanameone実データにconfirmed相当のground truthが存在しない(documentTypeConfirmedはIssue #526本番未展開により実運用0件、dateには確定フラグ概念自体が不在)ため、新規人手ラベル評価セット作成を見送り**customer/office先行検証のみ実施**する決定(decision-maker選択)。新規スクリプト`scripts/compare-ocr-arbitration-logic-confirmed.ts`+`scripts/lib/confirmedArbitrationStats.ts`を追加。既存`compare-gemini-ocr-models-confirmed.ts`のサンプリング/read-only/個人情報保護パターンと`compare-ocr-arbitration-logic.ts`のbaseline/candidateロジック計算パターンを組合せ。**read-only厳守のため候補抽出ロジックを独立実装**: 本番`extractOcrCandidates()`は異常系で`safeLogError()`経由のFirestore書込みが発生するため直接呼ばず、`compare-gemini-ocr-models-confirmed.ts`が`loadMasterData.ts`について同じ理由で独立実装している既存パターンを踏襲。`/code-review medium`(8角度finder+1票検証)でCONFIRMED 2件検出・修正(try/catch欠落によりprocessOneDocument()の1文書失敗がjob全体をクラッシュさせる経路があった=`success`常時trueで失敗率ゲートも機能せず、confirmedReplayStats.tsが記録する既知バグクラスの再発／computeArbitrationMatchRate等の重複実装を既存関数の再利用に置換)、PLAUSIBLE 2件修正。`confirmedArbitrationStats.test.ts`新規追加(scripts側テスト94 passing)。functions側テスト1,770 passing・lint 0 errors。PR #647作成・マージ済み。**GitHub Actions実機実行結果(docsplit-kanameone)**: pilot(`--limit 30`)でサンプリングN=2(歩留まり1.3%相当の既知の制約、compare-gemini-ocr-models-confirmed.ts冒頭コメント参照)、本実行(`--limit 300`)でもサンプリングN=12(母集団上限に到達、これ以上サンプル数は増えない)。**結果**: baseline/candidate完全同一(顧客33.3%=4/12、事業所41.7%=5/12、確定2項目一致33.3%=4/12)で✅PASS(精度劣化なし)。候補抽出grounding失敗率0.0%(非null候補36件中0件not-grounded)。候補抽出トークン増分input=22346/output=830/thinking=567(概算$0.046092)。**重要な限界**: 母集団自体がN=12と極めて小さく統計的信頼性は限定的(rule of threeで劣化率上限を強く保証できない)。またbaseline自体の一致率が33.3%/41.7%と低い点は、本ミッション(candidateロジックがbaselineを下回らないことの検証)の範囲外の別問題の可能性がある(confirmedBy確定後のマスターデータ変更・表記揺れ等が疑われるが未調査、decision-maker判断で別途調査するか判断が必要)
-- [x] I. prod展開判断: **見送り（decision-maker最終判断、2026-07-14 session125）**— `/codex plan`セカンドオピニオン(MCP、effort=high)を実施した上での判断。Codex指摘(High 4件): ①GOAL.md完了の定義は4項目(documentType/customerName/officeName/date)同等以上を要求するが実施できたのはcustomer/officeの2項目のみで「4項目ACの代替にならない」②タスクHの「baseline/candidate完全同一」は集計がjoint一致率のみのため、文書単位の入れ替わり(baseline正→candidate誤とその逆)が相殺されてもPASSに見える構造で「無劣化の完全証明ではない」③N=12・回帰0件はrule of threeで真の回帰率の95%信頼上限が約25%相当、強い安全性保証にはならない④baseline自体の低一致率(顧客33.3%/事業所41.7%)を原因不明のまま展開すると改善効果を測れず既存の根本問題も温存する。Claude側の独立評価も指摘①〜④に同意(指摘②は個人情報保護のため個別文書結果を非出力とした設計上、事後検証不能な点も含め見落としていた観点)。decision-maker最終判断（session125）: 「品質は下げない、コスト圧縮は目指す、不安定さ・不十分さがあれば基本はしない選択をする」という原則を明示され、GOAL.md不変条件の撤退基準（AC未達時は無理に本番展開しない）を適用してミッションをクローズ。Codex提案のb(N=12不一致の原因分析)/c(追加人手ラベリングによるN拡大、約60件試算)は、いずれも新規の人手作業設計を要し「不安定さの解消に無理をしない」方針と整合しないため見送り。タスクA〜D実装（`extractOcrCandidates`/`arbitrateDocumentType`等）はマージ済みかつdev環境で動作確認済みのためrevertはしない（実害なし、将来baseline低精度の原因究明や再検証の土台として保持）。kanameone/cocoroへの展開は行わない。
+- [ ] A. `functions/src/utils/groupAggregation.ts`の集計ロジック修正 — `getAffectedGroups()`/`rebuildAllGroupAggregations()`で、careManagerKeyが空の場合も予約key(`__UNASSIGNED_CARE_MANAGER__`等)+表示名「CM未設定」で集計対象に含める。予約keyは実在CM名の正規化結果と衝突しないことを保証する設計にする（Codex指摘反映）
+- [ ] B. グループ展開経路の確認・対応 — フロントエンドで「CM未設定」グループをクリックした際に該当書類一覧を取得するクエリロジック(`CustomerSubGroup.tsx`等)が、予約keyと書類側の実際のcareManagerKey(空文字のまま)の対応関係を正しく扱えるか確認し、必要なら修正（Codex指摘反映、Aに依存）
+- [ ] C. 単体テスト追加 — careManagerKeyが空文字/undefined/null/空白文字("　"等)いずれのケースも同一の「CM未設定」グループに集約されることを検証。あわせてCM変更/クリア/削除/復元/customer変更等、全更新経路でincrement/decrementの対称性を確認するテストを追加（Codex指摘反映、Aに依存）
+- [ ] D. `scripts/migrate-document-groups.js`の同期修正 — `groupAggregation.ts`の独立コピーを解消。`diagnose-caremanager-group-gap.js`(PR #654)で採用した`functions/lib/functions/src/utils/groupAggregation.js`をrequireするパターンで統一する（Aに依存、並列可）
+- [ ] E. 差分集計 vs 全件再集計の一致性契約テスト — 同一fixtureに対して`getAffectedGroups`の差分適用結果と`rebuildAllGroupAggregations`の全件再構築結果が完全一致することを保証するテストを追加（Codex指摘反映、A,Dに依存）
+- [ ] F. dev環境リハーサル — careManager未設定のdocumentを意図的に作成し、documentGroupsへの反映・フロントエンド表示・クリック展開をPlaywright実機確認する（A,B,C完了後）
+- [ ] G. 本番バックフィル設計 — 同時更新競合対策(バックフィル中のOCR処理・手動分割等との競合をウォーターマーク方式等で回避)、ロールバック手順(事前スナップショット取得、旧ロジックでの再構築手順)、ドライラン/完了判定機構(対象件数・グループ内訳の事前出力と実行後比較)を設計・実装する（Codex指摘反映、A,D,E完了後）
+- [ ] H. kanameone本番バックフィル実行 — GitHub Actions経由、decision-maker承認後に実行。実行後`diagnose-caremanager-group-gap.js`で数値整合性を再検証する（F,G完了後）
+- [ ] I. cocoro本番バックフィル実行 — Hの効果確認後に同様の手順で展開する（H完了後）
 
 ## 🔄 中断点（in-flight）
 なし
 
-## 監視・確認事項（トリガー待ち、前ミッション#547/#548から継続）
+## 監視・確認事項（トリガー待ち、前ミッション#547/#548から継続、新ミッションでも引き続き有効）
 - egress実削減効果の翌月請求での実測確認（未実施。8月上旬の7月分請求書で確認）
 - #548試算（全対策後¥23,000/月）の実額最終確認（実額は7月分請求書確定後）
-- **【重要な発見、2026-07-14 session126】kanameone 7月請求のFirestore egress急増(+797%、月間予測が6月比約2.4倍に悪化)の原因を特定・記録**:
-  - decision-maker提供のGCP Billing Console画像（サービス別/SKU別/日別）から、egressの82.6%（¥2,692/¥3,258）が7/9単日に集中していることを確認
-  - GitHub Actions実行ログを追跡し、7/9 00:24 UTCに実行された`backfill-detail-subcollection --execute`（Phase C本番backfill、kanameone全9,388件）が原因と特定
-  - `scripts/backfill-detail-subcollection.ts`の`backfillOneDoc()`は`detail/main`書込みに加え必ず親ドキュメント(`documents/{docId}`)も`tx.update()`するため、`onDocumentWrite`/`onDocumentWriteSearchIndex`の2トリガーを毎回発火させる設計と判明（7/9 UTC実測: 18,960回/15,848回発火）
-  - この時点では「無関係な変更でもトリガーが連鎖する」問題への対策(`isAggregationUnchanged`、`functions/src/utils/groupAggregation.ts`)がまだ存在せず（対策はPhase E本体と同じPR #611、2026-07-10マージ）、重フィールド(ocrResult/pageResults)が親に残った状態でbefore/afterペイロードが大量配信されたことがegress急増の直接原因と強く推定される
-  - **結論**: 一過性の移行作業由来の副作用であり、対策は既に本番投入済みのため8月以降の再発は見込み低い。ただし数値の完全一致(153.99GiBぴったり)までは検証できておらず、最終確認は7月分確定請求を待つ（上記2項目と合わせて確認）
-- **【追加検証、2026-07-14 session127】Firestoreサイズ再計測+Gemini21日分実測でPhase E効果・コスト水準を直接確認**:
-  - `measure-field-byte-sizes --limit 300`をkanameoneに再実行。ドキュメント全体サイズ平均4,095B（Issue #547事前計測時点の19,831Bから79.4%削減）、`ocrResult`/`pageResults`ともにpresent=0/300（親から完全に削除済み）を確認。Phase Eの効果が完璧に機能していることを直接証明
-  - `check-gemini-cost-stats --days 21 --doc-limit 500`で6/24〜7/14の日次実測を取得。session114と同一手法（7/8 vs 7/10+7/11のOCR単体交絡排除比較）で単価倍率約5.17倍を再現確認（session114の5.068倍とほぼ一致）。移行後(7/9〜7/13)の絶対額（アプリ内推定値）は5日平均$0.82/日・月間換算約$25で、6月実績のVertex AIコスト(¥6,093)を下回る可能性がある水準
-  - **結論の更新**: 「2倍以内」達成の確度に関するdecision-makerとの対話ベースの主観評価を60-75%→80%程度に上方修正。Firestore側は実測でほぼ確証、Gemini側も独立した21日データで楽観的傾向を再現。ただし`estimatedCostUsd`はアプリ内推定値で実請求ではなく、月末までの残り期間の変動は未知数のため引き続き最終確認は7月分確定請求を待つ
-- **【追加検証②、2026-07-14 session128】Cloud Monitoring read_count実測+cocoro反映状況の直接確認**:
-  - Cloud Monitoring API（`firestore.googleapis.com/document/read_count`）でkanameoneの日次読み取り回数を実測。7/9=4,410,399回・7/10=2,568,891回（トリガーストーム集中）に対し、7/11以降は10〜18万回/日に収束（7/11:46,839 / 7/12:181,846 / 7/13:130,852）。Billing Console実測（egressの82.6%が7/9集中）と独立データソースで完全に整合し、トリガーストーム説をさらに裏付け
-  - cocoro環境でも同様のread-only検証3件を実施: `measure-field-byte-sizes --limit 300`（平均3,921B、`ocrResult`/`pageResults`ともにpresent=0/300でPhase E完全機能を確認）、`fix-stuck-documents --include-errors --dry-run`（対象文書0件）、`check-gemini-cost-stats --days 21 --doc-limit 500`（7/8→7/9の単価上昇パターンからモデル移行を間接確認）
-  - **結論**: dev実装・kanameone/cocoro両本番反映とも直接確認完了（コスト圧縮の確度評価はkanameone基準の80%程度で維持、本検証は反映状況の網羅確認が主目的）
+- 【重要な発見、2026-07-14 session126】kanameone 7月請求のFirestore egress急増(+797%)の原因を特定・記録: 7/9のPhase C本番backfill(`backfill-detail-subcollection --execute`)によるトリガーストームと判明。対策(`isAggregationUnchanged`)は既に本番投入済みで再発は見込み低い。最終確認は7月分確定請求を待つ（詳細: docs/handoff/archive/2026-07-history.md session126）
+- 【追加検証、2026-07-14 session127】Firestoreサイズ再計測+Gemini21日分実測: Phase E効果を直接証明、コスト圧縮確度を60-75%→80%程度に上方修正（詳細: 同archive session127）
+- 【追加検証②、2026-07-14 session128】Cloud Monitoring read_count実測+cocoro反映状況確認: トリガーストーム説をさらに裏付け、cocoro側も反映確認済み（詳細: 同archive session128）
 - dev環境のテストデータ`phase-e-devcheck-001`/`phase-e-devcheck-002`の後片付け（任意）
-- 前ミッション（#547/#548運用コスト圧縮2トラック）は2026-07-10技術完了・2026-07-12是正確認済み。詳細はgit history（`git log -p docs/handoff/GOAL.md`）およびdocs/handoff/LATEST.md/archive参照
-- （任意・着手指示なき限り不要）OCR突合精度向上ミッション（本ミッション、タスクIで撤退）で未解明のまま残った「kanameone confirmed-replayでbaseline自体の一致率が33.3%/41.7%と低い」原因。将来的に興味を持った場合の起点はGOAL.mdタスクH/Iの記録、および`scripts/compare-ocr-arbitration-logic-confirmed.ts`
+- 前ミッション（#547/#548運用コスト圧縮2トラック）は2026-07-10技術完了・2026-07-12是正確認済み。詳細はgit history（`git log -p docs/handoff/GOAL.md`）およびdocs/handoff/archive参照
+- （任意・着手指示なき限り不要）OCR突合精度向上ミッション（旧ミッション、session125で撤退）で未解明のまま残った「kanameone confirmed-replayでbaseline自体の一致率が33.3%/41.7%と低い」原因。将来的に興味を持った場合の起点はdocs/handoff/archive/2026-07-history.md（旧ミッションタスクH/Iの記録）、および`scripts/compare-ocr-arbitration-logic-confirmed.ts`
+- （任意・着手指示なき限り不要）本ミッションで発見された副次課題3件は別タスクとして扱う: ①同期漏れ7件(`syncCareManager.ts`のonCustomerMasterWriteトリガー反映漏れ、原因未解明) ②documentTypeの「未判定」が2,465件(25.6%)でcount降順ソートのタブ先頭を占有している疑い(実機未確認、過去Issue #501と同型の「単一グループへの過集中」リスク) ③careManagerがトークン検索インデックス対象外で検索窓から検索できない機能欠落

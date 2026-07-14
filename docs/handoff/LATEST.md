@@ -1,8 +1,34 @@
 # ハンドオフメモ
 
-**更新日**: 2026-07-14 session128（Cloud Monitoring read_count実測+cocoro反映状況の直接確認、LATEST.mdアーカイブ実施。詳細は下記session128サマリ参照）
+**更新日**: 2026-07-14 session129（GOAL.mdミッション交代: OCR突合精度向上ミッション→担当CM別集計バグ修正ミッション。旧ミッション全文を本ファイルにアーカイブ）
 
 <!-- session115〜117・121・122はLATEST.md詳細サマリ未追記（GOAL.mdのみ更新）。#539完遂・#540完遂(OCR実行所有権ガード)・#625(OCR Storage孤児化解消)・#547 Phase E是正(Hostingデプロイ漏れ)、および候補抽出スパイク(タスクA、PR#641)・候補抽出呼出し実装(タスクB、PR#642)・arbitration実装(タスクC、PR#643)の経緯はGOAL.md/ADR-0018/該当コミットメッセージで追跡可能なため遡及記載はROI低と判断、着手せず -->
+
+## session129 サマリ（2026-07-14、GOAL.mdミッション交代: OCR突合精度向上→担当CM別集計バグ修正）
+
+kanameoneから「顧客別と担当CM別で利用者件数に差異がある（CM別だと明らかに数字が小さい）」という報告を受け、調査の上で新ミッションに着手した。
+
+### 調査結果サマリ
+- **根本原因**: `Document`型の`customerName`/`officeName`/`documentType`は必須フィールド(マッチ失敗時は`不明顧客`/`未判定`にフォールバック)だが、`careManager`は任意フィールドでフォールバックなし。集計ロジック`functions/src/utils/groupAggregation.ts`は正規化キーが空の場合そのgroupTypeの集計から丸ごと除外するため、careManager別集計だけが顧客別集計より大幅に少なくなる非対称性がある
+- kanameone実データ実測: customer合計9,620件 vs careManager合計6,283件(差34.7%)。うち「不明顧客」グループが3,280件、実在顧客だがCM欠落が91件(customerIdなし62/マスターCM未設定22/**同期漏れ疑い7件**)
+- バグの発生源3箇所を特定: `functions/src/ocr/ocrUpdatePayloadBuilder.ts`(OCR自動取込)・`functions/src/pdf/splitDocumentBuilder.ts`(手動分割)・`scripts/migrate-document-groups.js`(groupAggregation.tsのロジックを別実装した独立コピー)
+- `/codex plan`セカンドオピニオンで数値矛盾(9,620-3,371=6,249≠6,283)を指摘され、GitHub Actions経由の新規診断スクリプト(`scripts/diagnose-caremanager-group-gap.js`, PR #654)で実データ再検証。原因は前回集計スクリプトの母集団定義ミス(`status='split'`除外漏れ)と判明し、正しい母集団では恒等式が誤差0で一致することを実証
+- 副次発見: `documentGroups`実測値と動的再計算の間にcustomer-1件/careManager-25件の微小なズレ(over-count疑い、原因未特定、バックフィル設計で解消見込み)
+
+### decision-maker確定事項
+- 修正方針: careManager未設定書類を「CM未設定」グループとして可視化(除外ではなく計上)、集計層のみで対処しDocument.careManagerフィールド自体は変更しない
+- スコープ: 同期漏れ7件の原因究明・documentType「未判定」過集中問題・careManager検索インデックス欠落は別タスクとして切り離す
+
+### 詳細な実装計画・タスク一覧
+docs/handoff/GOAL.md（本アーカイブ後に新ミッションとして記載）参照。
+
+### 引き継ぎ教訓
+- ローカルADCでのマルチクライアント確認は、ブラウザプロファイル切替のタイミングでログインURLの再表示が必要になり往復コストが高い。CLAUDE.md記載の「GitHub Actions経由推奨」を優先すべきという実地判断が今回確定した（decision-maker「もうADCではやりません、GHAでやります」）
+- read-only診断もGHA運用スクリプト(`scripts/`+`run-ops-script.yml`)として正式に追加すると、後続の再検証が容易になる(今回の数値矛盾の再検証で実際に効果を発揮)
+
+旧ミッション（OCR突合精度向上、session121〜125）の完全な記録は `docs/handoff/archive/2026-07-history.md` へ移動済み（監視・確認事項セクションはGOAL.mdに残置、新ミッションでも継続有効）。
+
+---
 
 ## session128 サマリ（2026-07-14、Cloud Monitoring実測+cocoro反映確認+アーカイブ）
 
