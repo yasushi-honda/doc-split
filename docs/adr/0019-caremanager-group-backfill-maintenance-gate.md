@@ -80,6 +80,15 @@ GOAL.md原文の「ロールバック手順(事前スナップショット取得
 
 これらの残存リスクは、バックフィル実行前後で`scripts/diagnose-caremanager-group-gap.js`(groupId単位の個別比較に強化済み)を実行し、差分が説明可能であることを確認することで検知する。
 
+### ゲート機構の撤去方針(/code-review high指摘)
+
+`isGroupAggregationGateOpen()`・`system/maintenanceFlags`・Firestore Rulesの`groupAggregationGateOpen()`は、本バックフィル専用ではなく汎用の「集計所属変更を伴う書込み経路を一時停止する」メンテナンスゲートとして実装した。理由は以下:
+
+- kanameone/cocoro双方のバックフィル実行(GOAL.md タスクH/I)で再利用する前提であり、実行完了後すぐに撤去すると再度同型の設計・レビューが必要になる。
+- 将来`rebuildAllGroupAggregations()`の全件再構築や同種の集計移行が発生した際にも同じゲートを流用できる。
+
+そのため**恒久インフラとして維持し、撤去は行わない**。ただし「開いている(true)」がデフォルトのため、通常運用時のコストはゲート判定read 1回分のみ(§得られたもの参照)。将来的にdocument-group集計方式自体を再設計する場合は、その時点でゲート機構ごと再評価する。
+
 ## 関連
 
 - [運用Runbook](../context/caremanager-group-backfill-runbook.md)
