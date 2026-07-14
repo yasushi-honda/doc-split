@@ -1,8 +1,26 @@
 # ハンドオフメモ
 
-**更新日**: 2026-07-14 session126（kanameone 7月請求急増の原因調査・特定、GOAL.md監視事項へ記録。詳細は下記session126サマリ参照）
+**更新日**: 2026-07-14 session127（kanameoneコスト圧縮の追加検証、Firestoreサイズ再計測+Gemini21日分実測。詳細は下記session127サマリ参照）
 
 <!-- session115〜117・121・122はLATEST.md詳細サマリ未追記（GOAL.mdのみ更新）。#539完遂・#540完遂(OCR実行所有権ガード)・#625(OCR Storage孤児化解消)・#547 Phase E是正(Hostingデプロイ漏れ)、および候補抽出スパイク(タスクA、PR#641)・候補抽出呼出し実装(タスクB、PR#642)・arbitration実装(タスクC、PR#643)の経緯はGOAL.md/ADR-0018/該当コミットメッセージで追跡可能なため遡及記載はROI低と判断、着手せず -->
+
+## session127 サマリ（2026-07-14、kanameoneコスト圧縮の追加検証）
+
+session126の調査結果（トリガーストーム特定）を踏まえ、decision-makerから「これ以上できること・ROIが良いこと」を問われ、read-only検証2件をGitHub Actions経由で実行。
+
+### 実行内容と結果
+- `measure-field-byte-sizes --limit 300`（kanameone）: ドキュメント全体サイズ平均4,095B（Issue #547事前計測時点の平均19,831Bから79.4%削減）。`ocrResult`/`pageResults`ともにpresent=0/300で親から完全削除済みを確認。Phase Eの効果が完璧に機能していることを直接証明する決定的な実測
+- `check-gemini-cost-stats --days 21 --doc-limit 500`（kanameone）: `stats/gemini/daily`の6/24〜7/14の日次実測を取得。session114と同一手法（7/8 vs 7/10+7/11のOCR単体交絡排除比較）で単価倍率約5.17倍を再現確認（session114の5.068倍とほぼ一致、独立データでの再現性を確認）。移行後(7/9〜7/13)の絶対額（アプリ内推定値`estimatedCostUsd`）は5日平均$0.82/日・月間換算約$25で、6月実績のVertex AIコスト(¥6,093)を下回る可能性がある水準
+
+### 結論
+「2倍以内」達成の確度に関する主観評価を60-75%→80%程度に上方修正。Firestore側は実測でほぼ確証、Gemini側も独立した21日データで楽観的傾向を再現した。ただし`estimatedCostUsd`はアプリ内推定値で実請求そのものではなく、月末までの残り期間の変動は未知数のため、最終確認は引き続き8月上旬の7月分確定請求を待つ（GOAL.md監視・確認事項に記録済み）。
+
+### Issue Net
+Net 0（GitHub Issue非経由、read-only調査のみ）
+
+### 引き継ぎ教訓
+- `check-gemini-cost-stats.js`は集計サマリーを計算する設計ではなく、`stats/gemini/daily`の生データと直近documentsの生データをそのまま出力する設計（72行の薄いスクリプト）。GitHub Actionsログを`tail`や末尾grepだけで見ると生データ（documents一覧）に隠れて日次統計セクションを見落とすため、`grep -n "=== "`等でセクション区切りを先に特定してから読むこと
+- Bashツールの実行間で環境変数`CLOUDSDK_ACTIVE_CONFIG_NAME`が想定外に持続するケースがあった（`switch-client.sh`が`export`する値が後続コマンドに残存）。gcloud named config切替が反映されない場合は、まず`unset CLOUDSDK_ACTIVE_CONFIG_NAME`してから`gcloud config configurations list`で確認するとよい
 
 ## session126 サマリ（2026-07-14、kanameone 7月請求急増の原因調査・特定）
 
