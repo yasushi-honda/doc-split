@@ -93,7 +93,11 @@ const { CONSTANTS } = require(
 );
 const CM_UNASSIGNED_GROUP_ID = generateGroupId('careManager', CONSTANTS.UNASSIGNED_CARE_MANAGER_KEY);
 
-const MAINTENANCE_FLAGS_DOC_PATH = 'system/maintenanceFlags';
+// system/maintenanceFlagsのパスもmaintenanceGate.tsのSSoTから直接require(手書きコピー禁止、
+// code-simplifier指摘)。
+const { MAINTENANCE_FLAGS_DOC_PATH } = require(
+  path.resolve(__dirname, '../functions/lib/functions/src/utils/maintenanceGate.js'),
+);
 
 async function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));

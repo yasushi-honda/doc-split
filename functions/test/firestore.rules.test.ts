@@ -389,6 +389,44 @@ describe('Firestore Security Rules', () => {
         }, { merge: true })
       );
     });
+
+    it('groupAggregationGateOpen: falseの場合、careManagerKeyのみの更新(careManagerを伴わない)も拒否される(comment-analyzer指摘: useDocumentEdit.tsのeditedFields.careManagerKey単独書込み経路の回帰防止)', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        const db = context.firestore();
+        await setDoc(doc(db, 'documents', 'doc-gate-closed-key-only'), {
+          fileName: 'test.pdf', status: 'processed', careManagerKey: '',
+        });
+        await setDoc(doc(db, 'system', 'maintenanceFlags'), {
+          groupAggregationGateOpen: false,
+        });
+      });
+
+      const docRef = doc(normalUser.firestore(), 'documents', 'doc-gate-closed-key-only');
+      await assertFails(
+        setDoc(docRef, { fileName: 'test.pdf', status: 'processed', careManagerKey: 'sato-hanako' }, { merge: true })
+      );
+    });
+
+    it('groupAggregationGateOpen: falseの場合、statusのみの更新(split遷移等)も拒否される(/codex review P2指摘: getAffectedGroups()はstatus:splitへの遷移を全グループからの除外として扱うため回帰防止)', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        const db = context.firestore();
+        await setDoc(doc(db, 'documents', 'doc-gate-closed-status-only'), {
+          fileName: 'test.pdf', status: 'processed', customerName: '山田太郎',
+        });
+        await setDoc(doc(db, 'system', 'maintenanceFlags'), {
+          groupAggregationGateOpen: false,
+        });
+      });
+
+      const docRef = doc(normalUser.firestore(), 'documents', 'doc-gate-closed-status-only');
+      await assertFails(
+        setDoc(docRef, { fileName: 'test.pdf', status: 'split', customerName: '山田太郎' }, { merge: true })
+      );
+    });
   });
 
   // ============================================

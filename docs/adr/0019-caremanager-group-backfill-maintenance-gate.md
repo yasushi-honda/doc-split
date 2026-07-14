@@ -80,6 +80,14 @@ GOAL.md原文の「ロールバック手順(事前スナップショット取得
 
 これらの残存リスクは、バックフィル実行前後で`scripts/diagnose-caremanager-group-gap.js`(groupId単位の個別比較に強化済み)を実行し、差分が説明可能であることを確認することで検知する。
 
+### 未解消の残存リスク: 集計トリガーの配信遅延(/codex review指摘)
+
+ドレイン待機(10分)は`processOCR`/`syncCareManager`/`splitPdf`という**書込み元**のCloud Functions最大実行時間を上回ることのみを保証する。書込みの結果として発火する`documentGroups`集計トリガー(`onDocumentWrite`、`updateDocumentGroups.ts`)自体はこのゲートの対象外であり、Firestore/Eventarcのイベント配信遅延やトリガー側のリトライにより、ドレイン待機が終わった後にこのトリガーが実行される可能性は理論上排除できていない。
+
+具体的な失敗シナリオ: ゲートを閉じる直前に書込みが完了した文書Xについて、その集計トリガーの発火がキューイングされたまま遅延し、バックフィルのスキャン(Xを「CM未設定」計上対象として読み取り、グループを新規作成)より後に実行されると、遅延トリガーが同じXに対して`updateGroupAggregation()`で`+1`を適用し、二重計上が発生しうる(`updateGroupAggregation()`は新規グループ作成時ではなく既存グループへの加算時はdeltaをそのまま適用するため)。
+
+この経路を完全に閉じるには集計トリガー自体をゲート対象にする必要があるが、その場合「ゲート閉中に発生した他グループ(customer/office/documentType/実在CM)の正当な集計更新も同時に失われ、かつ`processOCR`のような自然な再試行機構を持たない」という新たなリスクを生む。トリガー配信遅延がFirestore/Eventarcの典型的な遅延特性(通常は秒〜分オーダー)に対してドレイン待機10分は十分な安全マージンを持つと考えられるが、理論的な排除ではないため、**Runbook Step 4(`diagnose-caremanager-group-gap.js`によるgroupId単位の個別比較)を単なる確認ではなく、この残存リスクを検知するための必須の安全網として位置付ける**(Step 4で不一致が出た場合は「差分が新規書類到着で説明可能か」に加えて「トリガー配信遅延による二重計上の疑いがないか」も調査対象に含める)。この経路をコード側で完全に閉じるかどうかは、Task H(kanameone実本番実行)着手前にdecision-makerが判断する。
+
 ### ゲート機構の撤去方針(/code-review high指摘)
 
 `isGroupAggregationGateOpen()`・`system/maintenanceFlags`・Firestore Rulesの`groupAggregationGateOpen()`は、本バックフィル専用ではなく汎用の「集計所属変更を伴う書込み経路を一時停止する」メンテナンスゲートとして実装した。理由は以下:

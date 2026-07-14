@@ -37,11 +37,18 @@ service cloud.firestore {
         get(/databases/$(database)/documents/system/maintenanceFlags).data.groupAggregationGateOpen != false;
     }
 
-    // customer/office/documentType/careManagerのいずれかが変更される更新かどうか
-    // (documentGroupsの集計所属に影響しうるフィールド、ADR-0019のゲート対象と同一)
+    // documentGroupsの集計所属に影響しうるフィールドのいずれかが変更される更新かどうか
+    // (ADR-0019のゲート対象と同一)。表示名フィールド(customerName等)だけでなく、実際に
+    // 集計キーとして使われる正規化フィールド(customerKey等)とstatusも含める(/codex review
+    // P1/P2指摘、comment-analyzer指摘: useDocumentEdit.tsのeditedFields.careManagerKeyの
+    // ようにKeyフィールドをNameと独立に書き込める経路が型上reachableであり、Nameのみの
+    // チェックではゲートを迂回できてしまう。statusも'split'遷移でgetAffectedGroups()が
+    // 全グループから除外判定するため対象に含める)。
     function affectsGroupAggregationFields() {
       return request.resource.data.diff(resource.data).affectedKeys().hasAny([
-        'customerName', 'officeName', 'documentType', 'careManager'
+        'customerName', 'officeName', 'documentType', 'careManager',
+        'customerKey', 'officeKey', 'documentTypeKey', 'careManagerKey',
+        'status'
       ]);
     }
 

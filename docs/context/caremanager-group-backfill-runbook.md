@@ -57,16 +57,20 @@ gh workflow run 'Run Operations Script' -f environment=kanameone -f script='migr
 3. CM未設定グループの安全な作成(`backfillUnassignedCareManagerGroup()`)
 4. ゲートを`true`に戻す(成功・失敗いずれの場合も`finally`で実行される)
 
-### Step 4: 検証
+### Step 4: 検証(必須の安全網、単なる確認ではない)
 
 ```bash
 gh workflow run 'Run Operations Script' -f environment=kanameone -f script='diagnose-caremanager-group-gap'
 ```
 
+**このステップは省略不可**。ドレイン待機(10分)は書込み元Cloud Functions(processOCR/syncCareManager/splitPdf)の最大実行時間のみを保証し、それらの書込みが発火する`documentGroups`集計トリガー自体の配信遅延は理論上排除できていない([ADR-0019「未解消の残存リスク」](../adr/0019-caremanager-group-backfill-maintenance-gate.md)参照)。Step 4は、この配信遅延によるCM未設定グループの二重計上を検知するための唯一の安全網である。
+
 以下を確認する:
 - 「恒等式検証」セクション: `customer(顧客別合計) = careManager(実CM+CM未設定合計)`が✅一致
 - 「groupId単位の個別比較」セクション: 全groupIdで✅一致(相殺による見逃しがないことの確認)
-- 不一致がある場合、差分が「Step 1のドライラン後〜Step 3実行完了までに到着した少数の新規書類」で説明可能か確認する(ゲート対象外の残存リスクによる想定内の差)
+- 不一致がある場合、以下の2通りを切り分けて調査する:
+  1. 差分が「Step 1のドライラン後〜Step 3実行完了までに到着した少数の新規書類」で説明可能か(ゲート対象外の残存リスクによる想定内の差)
+  2. CM未設定グループのcountが期待値より**大きい**場合、トリガー配信遅延による二重計上を疑う(ADR-0019参照)。この場合は単純な差分では説明できないため、実行を中断し原因調査する
 
 ### Step 5: cocoro環境への展開(タスクI)
 
