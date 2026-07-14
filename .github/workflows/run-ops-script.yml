@@ -96,6 +96,8 @@ on:
           - spike-candidate-extraction
           - verify-candidate-extraction-document-level
           - compare-ocr-arbitration-logic
+          - compare-ocr-arbitration-logic-confirmed --limit 30
+          - compare-ocr-arbitration-logic-confirmed --limit 300
           - compare-gemini-ocr-models-confirmed --limit 30
           - compare-gemini-ocr-models-confirmed --limit 300
           - compare-gemini-ocr-models-confirmed --limit 5000
@@ -613,6 +615,7 @@ jobs:
                [ "$SCRIPT_NAME" = "spike-candidate-extraction" ] || \
                [ "$SCRIPT_NAME" = "verify-candidate-extraction-document-level" ] || \
                [ "$SCRIPT_NAME" = "compare-ocr-arbitration-logic" ] || \
+               [ "$SCRIPT_NAME" = "compare-ocr-arbitration-logic-confirmed" ] || \
                [ "$SCRIPT_NAME" = "compare-gemini-ocr-models-confirmed" ] || \
                [ "$SCRIPT_NAME" = "diagnose-confirmed-replay-sampling" ] || \
                [ "$SCRIPT_NAME" = "backfill-detail-subcollection" ] || \
@@ -631,6 +634,11 @@ jobs:
             # scripts/fixtures/arbitrationCompareFixtures.ts / scripts/lib/ocrLogicCompareStats.ts
             # に依存する。STORAGE_BUCKET は未使用(ローカルfixture読込のみ、Storageアクセスなし)だが
             # 本分岐の他スクリプトと統一的に環境変数を渡す。
+            # compare-ocr-arbitration-logic-confirmed (同ミッション タスクH) は
+            # compare-ocr-arbitration-logic のロジックA/B比較軸と compare-gemini-ocr-models-confirmed
+            # のconfirmed replayサンプリング/read-only/個人情報保護パターンを組み合わせたもの。
+            # kanameone/cocoro環境専用(customerConfirmed/officeConfirmedを持つ本番データが必要)。
+            # scripts/lib/confirmedArbitrationStats.ts に依存する。STORAGE_BUCKETを使用する。
             # diagnose-confirmed-replay-sampling (#548 pilot実行0件原因調査用) は firebase-admin
             # のみ依存(functions/src非依存、STORAGE_BUCKET不使用)だが統一的にts-node経由で実行。
             # measure-summary-cost (#562) は functions/src/ocr/summaryGenerator.ts に依存するため同様。
