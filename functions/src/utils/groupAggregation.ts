@@ -5,6 +5,7 @@
 
 import * as admin from 'firebase-admin';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
+import { CONSTANTS } from '../../../shared/types';
 
 // GroupType の定義（shared/types.ts からインポートできない場合のローカル定義）
 export type GroupType = 'customer' | 'office' | 'documentType' | 'careManager';
@@ -85,6 +86,54 @@ export function generateGroupId(groupType: GroupType, groupKey: string): string 
 }
 
 /**
+ * キーが空の場合に集計除外ではなく予約keyへフォールバックさせるgroupType。
+ * customer/office/documentTypeはOCR成功（status:'processed'への遷移）後は
+ * OCR抽出結果側で必ずフォールバック表示名（「不明顧客」「未判定」等）が
+ * 付与されるためキーが空になり得ない（pending/processing/error等の未処理
+ * 状態では他フィールド同様に空になり得る。このケースの扱いは下記
+ * resolveGroupKeyAndDisplay()のcanFallbackToUnassigned参照）。
+ * careManagerは処理完了後も任意フィールドでフォールバックがないため、ここで
+ * 明示的に「CM未設定」グループへ計上する（担当CM別集計が顧客別集計より
+ * 大幅に少なく表示される非対称性バグの修正）。
+ */
+const UNASSIGNED_FALLBACK: Partial<Record<GroupType, { key: string; displayName: string }>> = {
+  careManager: {
+    key: CONSTANTS.UNASSIGNED_CARE_MANAGER_KEY,
+    displayName: CONSTANTS.UNASSIGNED_CARE_MANAGER_DISPLAY_NAME,
+  },
+};
+
+/**
+ * groupTypeとキー・表示名から集計対象のgroupKey/displayNameを解決する。
+ * キーが空でも予約keyへのフォールバックが定義されたgroupTypeなら非nullを返す。
+ * getAffectedGroups()とrebuildAllGroupAggregations()で共通利用し、両者の
+ * key導出ロジックを単一の関数に集約する。
+ *
+ * `canFallbackToUnassigned` は customerKey（正規化後）が非空かどうかを渡す。
+ * customerName/officeName/documentTypeはOCR成功時のみ一括でフォールバック値が
+ * 付与される（status:'processed'への遷移と同一トランザクション）ため、
+ * pending/processing/error等の未処理状態ではcustomerKeyも含めて全キーが空になる。
+ * この状態でcareManagerだけ無条件に予約keyへ計上すると、担当CM別合計が顧客別
+ * 合計を一時的に上回る新たな非対称性を生む（本来の修正対象の逆パターン）。
+ * customerKeyの非空を条件にすることで、「顧客別集計に計上されるドキュメントは
+ * 必ず担当CM別集計にも（実CMまたはCM未設定として）計上される」という不変条件を
+ * status値の列挙に頼らず保証する。
+ */
+export function resolveGroupKeyAndDisplay(
+  type: GroupType,
+  rawKey: string | undefined,
+  rawDisplay: string | undefined,
+  canFallbackToUnassigned: boolean
+): { key: string; displayName: string } | null {
+  if (rawKey) {
+    return { key: rawKey, displayName: rawDisplay || rawKey };
+  }
+  if (!canFallbackToUnassigned) return null;
+  const fallback = UNASSIGNED_FALLBACK[type];
+  return fallback ? { ...fallback } : null;
+}
+
+/**
  * 集計に関わる全フィールド（グループキー・表示名・status）が before/after で
  * 完全に不変かどうかを判定する。
  *
@@ -137,23 +186,26 @@ export function getAffectedGroups(
     const beforeDisplay = before?.[displayField] as string | undefined;
     const afterDisplay = after?.[displayField] as string | undefined;
 
-    // 分割済みステータスは集計対象外
-    const beforeStatus = before?.status;
-    const afterStatus = after?.status;
-    const beforeValid = beforeKey && beforeStatus !== 'split';
-    const afterValid = afterKey && afterStatus !== 'split';
+    // 分割済みステータス、およびbefore/after自体が未定義（create/delete）の場合は
+    // resolveGroupKeyAndDisplayを呼ばず、その側を無効（null）として扱う
+    const beforeResolved = before && before.status !== 'split'
+      ? resolveGroupKeyAndDisplay(type, beforeKey, beforeDisplay, !!before.customerKey)
+      : null;
+    const afterResolved = after && after.status !== 'split'
+      ? resolveGroupKeyAndDisplay(type, afterKey, afterDisplay, !!after.customerKey)
+      : null;
 
-    if (beforeValid && afterValid && beforeKey === afterKey) {
+    if (beforeResolved && afterResolved && beforeResolved.key === afterResolved.key) {
       // キーが変わらない場合は更新のみ（latestDocs更新用）
-      affected.push({ groupType: type, groupKey: afterKey!, displayName: afterDisplay || afterKey!, delta: 0 });
+      affected.push({ groupType: type, groupKey: afterResolved.key, displayName: afterResolved.displayName, delta: 0 });
     } else {
       // 削除または変更：古いグループから-1
-      if (beforeValid) {
-        affected.push({ groupType: type, groupKey: beforeKey!, displayName: beforeDisplay || beforeKey!, delta: -1 });
+      if (beforeResolved) {
+        affected.push({ groupType: type, groupKey: beforeResolved.key, displayName: beforeResolved.displayName, delta: -1 });
       }
       // 追加または変更：新しいグループに+1
-      if (afterValid) {
-        affected.push({ groupType: type, groupKey: afterKey!, displayName: afterDisplay || afterKey!, delta: 1 });
+      if (afterResolved) {
+        affected.push({ groupType: type, groupKey: afterResolved.key, displayName: afterResolved.displayName, delta: 1 });
       }
     }
   }
@@ -292,9 +344,10 @@ export async function rebuildAllGroupAggregations(
       ];
 
       for (const { type, key, display } of types) {
-        if (!key) continue;
+        const resolved = resolveGroupKeyAndDisplay(type, key, display, !!keys.customerKey);
+        if (!resolved) continue;
 
-        const groupId = generateGroupId(type, key);
+        const groupId = generateGroupId(type, resolved.key);
         const existing = groupMap.get(groupId);
 
         const previewDoc: GroupPreviewDoc = {
@@ -316,8 +369,8 @@ export async function rebuildAllGroupAggregations(
         } else {
           groupMap.set(groupId, {
             groupType: type,
-            groupKey: key,
-            displayName: display || key,
+            groupKey: resolved.key,
+            displayName: resolved.displayName,
             count: 1,
             latestAt: data.processedAt || Timestamp.now(),
             latestDocs: [previewDoc],

@@ -654,6 +654,15 @@ export const CONSTANTS = {
 
   /** 不明顧客の代替文字列 */
   FILE_NAME_UNKNOWN_CUSTOMER: '不明顧客',
+
+  /**
+   * 担当CM未設定グループの予約key。normalizeGroupKey()は常に小文字化するため、
+   * 大文字を含むこの予約keyは実在CM名の正規化結果と理論的に衝突しない。
+   */
+  UNASSIGNED_CARE_MANAGER_KEY: '__UNASSIGNED_CARE_MANAGER__',
+
+  /** 担当CM未設定グループの表示名 */
+  UNASSIGNED_CARE_MANAGER_DISPLAY_NAME: 'CM未設定',
 } as const;
 
 // ============================================

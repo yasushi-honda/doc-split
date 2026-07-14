@@ -14,7 +14,8 @@
 
 import { expect } from 'chai';
 import { Timestamp } from 'firebase-admin/firestore';
-import { getAffectedGroups } from '../src/utils/groupAggregation';
+import { getAffectedGroups, normalizeGroupKey } from '../src/utils/groupAggregation';
+import { CONSTANTS } from '../../shared/types';
 
 /** テスト用の DocumentData ベースオブジェクト（集計対象フィールドを全て含む） */
 function baseDoc(overrides: Record<string, unknown> = {}) {
@@ -166,6 +167,221 @@ describe('getAffectedGroups (diff最適化 / Issue #547 Phase E)', () => {
       const result = getAffectedGroups(undefined, undefined);
 
       expect(result).to.deep.equal([]);
+    });
+  });
+});
+
+/**
+ * getAffectedGroups() の careManager未設定グループ集計テスト
+ *
+ * 背景: `careManager`は任意フィールドでフォールバックがなく、正規化キーが
+ * 空文字になり得る。従来の実装はキーが空のgroupTypeを集計から丸ごと除外して
+ * いたため、担当CM別集計が顧客別集計より大幅に少なく表示される非対称性バグ
+ * (kanameone実測 2026-07-14時点: customer合計9,620件 vs careManager合計6,283件、
+ * 本PRのバックフィル前スナップショット。数値は将来の本番バックフィルで変化する) が発生していた。
+ *
+ * 本テストは、careManagerKeyが空でも予約key(CONSTANTS.UNASSIGNED_CARE_MANAGER_KEY)+
+ * 表示名「CM未設定」で集計対象に含まれることをlock-inする。
+ */
+describe('getAffectedGroups (careManager未設定グループの集計 / 非対称性バグ修正)', () => {
+  describe('境界値: careManagerKeyが空の場合、予約keyで集計対象に含まれる', () => {
+    it('careManager: undefined, careManagerKey: "" → 予約keyでcareManagerグループにdelta+1', () => {
+      const after = baseDoc({ careManager: undefined, careManagerKey: '' });
+
+      const result = getAffectedGroups(undefined, after);
+
+      const cmEntry = result.find((r) => r.groupType === 'careManager');
+      expect(cmEntry).to.deep.equal({
+        groupType: 'careManager',
+        groupKey: CONSTANTS.UNASSIGNED_CARE_MANAGER_KEY,
+        displayName: CONSTANTS.UNASSIGNED_CARE_MANAGER_DISPLAY_NAME,
+        delta: 1,
+      });
+    });
+
+    it('careManagerKeyが空白文字のみ("　")を正規化した空文字 → 同一のCM未設定グループに集約される', () => {
+      // normalizeGroupKey(全角スペース)が''になることを前提とし、getAffectedGroups()側の
+      // 挙動としてはundefined/''と同じ扱いになることを検証する
+      expect(normalizeGroupKey('　')).to.equal('');
+
+      const after = baseDoc({ careManager: '　', careManagerKey: normalizeGroupKey('　') });
+
+      const result = getAffectedGroups(undefined, after);
+
+      const cmEntry = result.find((r) => r.groupType === 'careManager');
+      expect(cmEntry).to.deep.include({
+        groupKey: CONSTANTS.UNASSIGNED_CARE_MANAGER_KEY,
+        displayName: CONSTANTS.UNASSIGNED_CARE_MANAGER_DISPLAY_NAME,
+      });
+    });
+
+    it('customer/office/documentTypeのキーが空の場合は従来通り除外される（careManagerのみ特別扱い）', () => {
+      const after = baseDoc({ customerName: undefined, customerKey: '' });
+
+      const result = getAffectedGroups(undefined, after);
+
+      const customerEntry = result.find((r) => r.groupType === 'customer');
+      expect(customerEntry).to.be.undefined;
+      // 他の3タイプは通常通り集計される
+      expect(result).to.have.lengthOf(3);
+    });
+  });
+
+  describe('customerKey未確定時（pending/processing/error相当）の非対称性再発防止', () => {
+    it('customerKeyが空（OCR未完了相当）かつcareManagerKeyも空 → careManagerもcustomer同様に除外される（CM未設定へフォールバックしない）', () => {
+      // pending/processing/error状態はcustomerName/officeName/documentType/careManagerが
+      // 全て未設定（generateGroupKeys()経由でも全キーが空文字）。ここでcareManagerだけ
+      // 無条件に予約keyへフォールバックすると、担当CM別合計が顧客別合計を一時的に
+      // 上回る新たな非対称性を生む(本来の修正対象の逆パターン)。customerKeyが空の間は
+      // careManagerも除外を維持することを検証する。
+      const after = baseDoc({
+        customerName: undefined,
+        customerKey: '',
+        officeName: undefined,
+        officeKey: '',
+        documentType: undefined,
+        documentTypeKey: '',
+        careManager: undefined,
+        careManagerKey: '',
+        status: 'pending',
+      });
+
+      const result = getAffectedGroups(undefined, after);
+
+      expect(result).to.deep.equal([]);
+    });
+
+    it('customerKeyが空 → careManagerKeyが実在CM名でも通常通り計上される（rawKeyがある場合はfallback条件を経由しない）', () => {
+      const after = baseDoc({
+        customerName: undefined,
+        customerKey: '',
+        careManager: '佐藤花子',
+        careManagerKey: '佐藤花子',
+        status: 'pending',
+      });
+
+      const result = getAffectedGroups(undefined, after);
+
+      const cmEntry = result.find((r) => r.groupType === 'careManager');
+      expect(cmEntry).to.deep.equal({
+        groupType: 'careManager',
+        groupKey: '佐藤花子',
+        displayName: '佐藤花子',
+        delta: 1,
+      });
+    });
+
+    it('customerKeyが確定した瞬間（pending→processed相当）にcareManagerKeyが空ならCM未設定へ計上される', () => {
+      const before = baseDoc({
+        customerName: undefined,
+        customerKey: '',
+        careManager: undefined,
+        careManagerKey: '',
+        status: 'pending',
+      });
+      const after = baseDoc({
+        customerName: '山田太郎',
+        customerKey: '山田太郎',
+        careManager: undefined,
+        careManagerKey: '',
+        status: 'processed',
+      });
+
+      const result = getAffectedGroups(before, after);
+
+      const cmEntry = result.find((r) => r.groupType === 'careManager');
+      expect(cmEntry).to.deep.equal({
+        groupType: 'careManager',
+        groupKey: CONSTANTS.UNASSIGNED_CARE_MANAGER_KEY,
+        displayName: CONSTANTS.UNASSIGNED_CARE_MANAGER_DISPLAY_NAME,
+        delta: 1,
+      });
+    });
+  });
+
+  describe('増減対称性: 実在CM ⇄ CM未設定の変更', () => {
+    it('実在CMから未設定に変更 → 旧グループdelta-1 + CM未設定グループdelta+1', () => {
+      const before = baseDoc({ careManager: '佐藤花子', careManagerKey: '佐藤花子' });
+      const after = baseDoc({ careManager: undefined, careManagerKey: '' });
+
+      const result = getAffectedGroups(before, after);
+
+      const cmEntries = result.filter((r) => r.groupType === 'careManager');
+      expect(cmEntries).to.have.lengthOf(2);
+      expect(cmEntries).to.deep.include({
+        groupType: 'careManager',
+        groupKey: '佐藤花子',
+        displayName: '佐藤花子',
+        delta: -1,
+      });
+      expect(cmEntries).to.deep.include({
+        groupType: 'careManager',
+        groupKey: CONSTANTS.UNASSIGNED_CARE_MANAGER_KEY,
+        displayName: CONSTANTS.UNASSIGNED_CARE_MANAGER_DISPLAY_NAME,
+        delta: 1,
+      });
+    });
+
+    it('未設定から実在CMに変更 → CM未設定グループdelta-1 + 新グループdelta+1', () => {
+      const before = baseDoc({ careManager: undefined, careManagerKey: '' });
+      const after = baseDoc({ careManager: '鈴木一郎', careManagerKey: '鈴木一郎' });
+
+      const result = getAffectedGroups(before, after);
+
+      const cmEntries = result.filter((r) => r.groupType === 'careManager');
+      expect(cmEntries).to.have.lengthOf(2);
+      expect(cmEntries).to.deep.include({
+        groupType: 'careManager',
+        groupKey: CONSTANTS.UNASSIGNED_CARE_MANAGER_KEY,
+        displayName: CONSTANTS.UNASSIGNED_CARE_MANAGER_DISPLAY_NAME,
+        delta: -1,
+      });
+      expect(cmEntries).to.deep.include({
+        groupType: 'careManager',
+        groupKey: '鈴木一郎',
+        displayName: '鈴木一郎',
+        delta: 1,
+      });
+    });
+
+    it('careManager未設定のまま他フィールドのみ変更 → CM未設定グループはdelta:0で維持', () => {
+      const before = baseDoc({ careManager: undefined, careManagerKey: '', customerName: '山田太郎', customerKey: '山田太郎' });
+      const after = baseDoc({ careManager: undefined, careManagerKey: '', customerName: '鈴木一郎', customerKey: '鈴木一郎' });
+
+      const result = getAffectedGroups(before, after);
+
+      const cmEntry = result.find((r) => r.groupType === 'careManager');
+      expect(cmEntry).to.deep.equal({
+        groupType: 'careManager',
+        groupKey: CONSTANTS.UNASSIGNED_CARE_MANAGER_KEY,
+        displayName: CONSTANTS.UNASSIGNED_CARE_MANAGER_DISPLAY_NAME,
+        delta: 0,
+      });
+    });
+  });
+
+  describe('split状態との組み合わせ', () => {
+    it('careManager未設定の書類がstatus:splitに変化 → CM未設定グループはdelta-1のみ（追加なし）', () => {
+      const before = baseDoc({ careManager: undefined, careManagerKey: '', status: 'completed' });
+      const after = baseDoc({ careManager: undefined, careManagerKey: '', status: 'split' });
+
+      const result = getAffectedGroups(before, after);
+
+      const cmEntry = result.find((r) => r.groupType === 'careManager');
+      expect(cmEntry).to.deep.equal({
+        groupType: 'careManager',
+        groupKey: CONSTANTS.UNASSIGNED_CARE_MANAGER_KEY,
+        displayName: CONSTANTS.UNASSIGNED_CARE_MANAGER_DISPLAY_NAME,
+        delta: -1,
+      });
+    });
+  });
+
+  describe('予約keyの非衝突性（Codexセカンドオピニオン指摘①のlock-in）', () => {
+    it('予約key自身をnormalizeGroupKey()に通しても、予約keyと一致しない（大文字を含むため常に非衝突）', () => {
+      const normalized = normalizeGroupKey(CONSTANTS.UNASSIGNED_CARE_MANAGER_KEY);
+
+      expect(normalized).to.not.equal(CONSTANTS.UNASSIGNED_CARE_MANAGER_KEY);
     });
   });
 });
