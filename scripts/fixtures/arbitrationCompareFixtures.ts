@@ -48,6 +48,13 @@ export interface ArbitrationDistractorDoc {
  * 名前一覧)から、既存MIXED_FAX_PDFSで未使用の名前を使う(ground truthとdistractorの
  * 両方が実在マスター名であることで、「無関係な文字列」ではなく「別の実在候補との
  * 混同」という本来のarbitration頑健性テストになる)。
+ *
+ * タスクG(GOAL.md、dev環境A/Bテスト本実行)でN=5→N=10へ対象文書数を拡大するため、
+ * 以下5件を追加(id: arb-distractor-{multiname,multidate}-02、arb-plain-01〜03)。
+ * CUSTOMERS 12名中、上記2件+MIXED_FAX_PDFSで未使用の6名(江口冬美/大野正雄/黒田実/
+ * 小林梅子/島田花/鈴木蔵之助)を使用。plain系はdistractor行を持たない通常ケースで、
+ * タスクCの既知の限界(#41「exact-match昇格がno-op化する可能性」)の実測母数を増やす。
+ * multidate-02は全角数字表記を混在させ、タスクCで修正した全角→半角変換の回帰確認を兼ねる。
  */
 export const ARBITRATION_DISTRACTOR_DOCS: ArbitrationDistractorDoc[] = [
   {
@@ -73,6 +80,66 @@ export const ARBITRATION_DISTRACTOR_DOCS: ArbitrationDistractorDoc[] = [
     title: 'ケアプラン',
     bodyLines: ['利用者: 斎藤光 様', '事業所: あおぞらデイサービスセンター', '作成日: 2026年7月18日'],
     distractorLines: ['前回作成日: 2026年5月18日', '有効期限: 2026年10月17日'],
+  },
+  {
+    id: 'arb-distractor-multiname-02',
+    fixture: 'arb_multiname_02.pdf',
+    fileName: 'arb_複数人名_請求書.pdf',
+    docType: '請求書',
+    customer: '小林梅子',
+    office: 'あおぞらデイサービスセンター',
+    expectedDate: '2026/07/09',
+    title: '請求書',
+    bodyLines: ['利用者: 小林梅子 様', '事業所: あおぞらデイサービスセンター', '発行日: 2026年7月9日'],
+    distractorLines: ['ご請求先(ご家族): 島田花 様', '前回担当ケアマネ: 佐々木健'],
+  },
+  {
+    id: 'arb-distractor-multidate-02',
+    fixture: 'arb_multidate_02.pdf',
+    fileName: 'arb_複数日付全角_サービス提供票.pdf',
+    docType: 'ケアプラン',
+    customer: '鈴木蔵之助',
+    office: 'ひまわり訪問介護ステーション',
+    expectedDate: '2026/07/22',
+    title: 'ケアプラン',
+    bodyLines: ['利用者: 鈴木蔵之助 様', '事業所: ひまわり訪問介護ステーション', '作成日: ２０２６年７月２２日'],
+    distractorLines: ['前回作成日: ２０２６年４月２２日', '次回見直し予定: 2026年10月22日'],
+  },
+  {
+    id: 'arb-plain-01',
+    fixture: 'arb_plain_01.pdf',
+    fileName: 'arb_通常_ケアプラン.pdf',
+    docType: 'ケアプラン',
+    customer: '江口冬美',
+    office: 'ひまわり訪問介護ステーション',
+    expectedDate: '2026/07/03',
+    title: 'ケアプラン',
+    bodyLines: ['利用者: 江口冬美 様', '事業所: ひまわり訪問介護ステーション', '作成日: 2026年7月3日'],
+    distractorLines: [],
+  },
+  {
+    id: 'arb-plain-02',
+    fixture: 'arb_plain_02.pdf',
+    fileName: 'arb_通常_訪問看護報告書.pdf',
+    docType: '訪問看護報告書',
+    customer: '大野正雄',
+    office: 'あおぞらデイサービスセンター',
+    expectedDate: '2026/07/11',
+    title: '訪問看護報告書',
+    bodyLines: ['利用者: 大野正雄 様', '事業所: あおぞらデイサービスセンター', '報告日: 2026年7月11日'],
+    distractorLines: [],
+  },
+  {
+    id: 'arb-plain-03',
+    fixture: 'arb_plain_03.pdf',
+    fileName: 'arb_通常_請求書.pdf',
+    docType: '請求書',
+    customer: '黒田実',
+    office: 'あおぞらデイサービスセンター',
+    expectedDate: '2026/07/14',
+    title: '請求書',
+    bodyLines: ['利用者: 黒田実 様', '事業所: あおぞらデイサービスセンター', '発行日: 2026年7月14日'],
+    distractorLines: [],
   },
 ];
 
