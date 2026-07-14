@@ -269,6 +269,164 @@ describe('Firestore Security Rules', () => {
         }, { merge: true })
       );
     });
+
+    // ============================================
+    // 集計所属変更メンテナンスゲート (ADR-0019, GOAL.md タスクG)
+    // ============================================
+    it('メンテナンスフラグ未設定時、careManagerの更新は許可される(安全側デフォルト)', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'documents', 'doc-gate-default'), {
+          fileName: 'test.pdf',
+          status: 'processed',
+          careManager: '',
+        });
+      });
+
+      const docRef = doc(normalUser.firestore(), 'documents', 'doc-gate-default');
+      await assertSucceeds(
+        setDoc(docRef, { fileName: 'test.pdf', status: 'processed', careManager: '佐藤花子' }, { merge: true })
+      );
+    });
+
+    it('メンテナンスフラグdocは存在するがgroupAggregationGateOpenフィールド自体が未設定の場合も、careManagerの更新は許可される(安全側デフォルト、/code-review high指摘の回帰防止)', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        const db = context.firestore();
+        await setDoc(doc(db, 'documents', 'doc-gate-field-missing'), {
+          fileName: 'test.pdf', status: 'processed', careManager: '',
+        });
+        // フラグdoc自体は存在するが、groupAggregationGateOpenフィールドは設定されていない状態
+        // (Firestore Rulesは存在しないフィールドへの`.`アクセスで評価エラーになるため、
+        // `in`演算子での存在チェックがないと安全側デフォルトの意図に反し更新拒否側に倒れる)
+        await setDoc(doc(db, 'system', 'maintenanceFlags'), { someUnrelatedField: true });
+      });
+
+      const docRef = doc(normalUser.firestore(), 'documents', 'doc-gate-field-missing');
+      await assertSucceeds(
+        setDoc(docRef, { fileName: 'test.pdf', status: 'processed', careManager: '佐藤花子' }, { merge: true })
+      );
+    });
+
+    it('groupAggregationGateOpen: trueの場合、careManagerの更新は許可される', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        const db = context.firestore();
+        await setDoc(doc(db, 'documents', 'doc-gate-open'), {
+          fileName: 'test.pdf', status: 'processed', careManager: '',
+        });
+        await setDoc(doc(db, 'system', 'maintenanceFlags'), {
+          groupAggregationGateOpen: true,
+        });
+      });
+
+      const docRef = doc(normalUser.firestore(), 'documents', 'doc-gate-open');
+      await assertSucceeds(
+        setDoc(docRef, { fileName: 'test.pdf', status: 'processed', careManager: '佐藤花子' }, { merge: true })
+      );
+    });
+
+    it('groupAggregationGateOpen: falseの場合、careManagerの更新は拒否される(バックフィル中のFE直接編集を防止)', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        const db = context.firestore();
+        await setDoc(doc(db, 'documents', 'doc-gate-closed'), {
+          fileName: 'test.pdf', status: 'processed', careManager: '',
+        });
+        await setDoc(doc(db, 'system', 'maintenanceFlags'), {
+          groupAggregationGateOpen: false,
+        });
+      });
+
+      const docRef = doc(normalUser.firestore(), 'documents', 'doc-gate-closed');
+      await assertFails(
+        setDoc(docRef, { fileName: 'test.pdf', status: 'processed', careManager: '佐藤花子' }, { merge: true })
+      );
+    });
+
+    it('groupAggregationGateOpen: falseでも、customer/office/documentType/careManagerに触れない更新は許可される', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        const db = context.firestore();
+        await setDoc(doc(db, 'documents', 'doc-gate-closed-unrelated'), {
+          fileName: 'test.pdf', status: 'processed', verified: false,
+        });
+        await setDoc(doc(db, 'system', 'maintenanceFlags'), {
+          groupAggregationGateOpen: false,
+        });
+      });
+
+      const docRef = doc(normalUser.firestore(), 'documents', 'doc-gate-closed-unrelated');
+      await assertSucceeds(
+        setDoc(docRef, { fileName: 'test.pdf', status: 'processed', verified: true, verifiedBy: normalUid }, { merge: true })
+      );
+    });
+
+    it('groupAggregationGateOpen: falseの場合、customerName/officeName/documentTypeの更新も拒否される', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        const db = context.firestore();
+        await setDoc(doc(db, 'documents', 'doc-gate-closed-multi'), {
+          fileName: 'test.pdf', status: 'processed',
+          customerName: '不明顧客', officeName: '不明事業所', documentType: '未判定',
+        });
+        await setDoc(doc(db, 'system', 'maintenanceFlags'), {
+          groupAggregationGateOpen: false,
+        });
+      });
+
+      const docRef = doc(normalUser.firestore(), 'documents', 'doc-gate-closed-multi');
+      await assertFails(
+        setDoc(docRef, {
+          fileName: 'test.pdf', status: 'processed',
+          customerName: '山田太郎', officeName: '事業所A', documentType: '契約書',
+        }, { merge: true })
+      );
+    });
+
+    it('groupAggregationGateOpen: falseの場合、careManagerKeyのみの更新(careManagerを伴わない)も拒否される(comment-analyzer指摘: useDocumentEdit.tsのeditedFields.careManagerKey単独書込み経路の回帰防止)', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        const db = context.firestore();
+        await setDoc(doc(db, 'documents', 'doc-gate-closed-key-only'), {
+          fileName: 'test.pdf', status: 'processed', careManagerKey: '',
+        });
+        await setDoc(doc(db, 'system', 'maintenanceFlags'), {
+          groupAggregationGateOpen: false,
+        });
+      });
+
+      const docRef = doc(normalUser.firestore(), 'documents', 'doc-gate-closed-key-only');
+      await assertFails(
+        setDoc(docRef, { fileName: 'test.pdf', status: 'processed', careManagerKey: 'sato-hanako' }, { merge: true })
+      );
+    });
+
+    it('groupAggregationGateOpen: falseの場合、statusのみの更新(split遷移等)も拒否される(/codex review P2指摘: getAffectedGroups()はstatus:splitへの遷移を全グループからの除外として扱うため回帰防止)', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        const db = context.firestore();
+        await setDoc(doc(db, 'documents', 'doc-gate-closed-status-only'), {
+          fileName: 'test.pdf', status: 'processed', customerName: '山田太郎',
+        });
+        await setDoc(doc(db, 'system', 'maintenanceFlags'), {
+          groupAggregationGateOpen: false,
+        });
+      });
+
+      const docRef = doc(normalUser.firestore(), 'documents', 'doc-gate-closed-status-only');
+      await assertFails(
+        setDoc(docRef, { fileName: 'test.pdf', status: 'split', customerName: '山田太郎' }, { merge: true })
+      );
+    });
   });
 
   // ============================================

@@ -23,6 +23,7 @@ import {
   OcrProcessingResult,
 } from './ocrProcessor';
 import { OcrRunSupersededError, applySupersededOutcome } from './ocrRunGuard';
+import { isGroupAggregationGateOpen } from '../utils/maintenanceGate';
 // 定数は side-effect-free な constants.ts から import (#196 test drift 防止)
 import {
   MAX_RETRY_COUNT,
@@ -71,6 +72,15 @@ export const processOCR = onSchedule(
   },
   async () => {
     console.log('Starting OCR processing (polling)...');
+
+    // GOAL.md タスクG: 集計所属変更メンテナンスゲートが閉じている間は、OCR確定処理
+    // (rescue含む)を丸ごとスキップする。pending文書はそのまま残り、ゲート再開後の
+    // 次回スケジュール実行(1分間隔)で自然にキャッチアップされる。
+    if (!(await isGroupAggregationGateOpen(db))) {
+      console.log('[maintenanceGate] groupAggregation gate closed, skipping this OCR processing cycle');
+      return;
+    }
+
     const stats: ProcessingStats = {
       documentsProcessed: 0,
       pagesProcessed: 0,

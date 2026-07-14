@@ -410,3 +410,132 @@ export async function rebuildAllGroupAggregations(
 
   return { processed, groups: groupMap.size };
 }
+
+export interface BackfillUnassignedCareManagerGroupResult {
+  scanned: number;
+  matched: number;
+  count: number;
+  groupId: string;
+}
+
+/**
+ * CM未設定グループ(予約key)の安全な初期作成（GOAL.md タスクG）
+ *
+ * Task A(#656)の修正(careManagerKey空文字を集計から除外していたバグ)により
+ * 影響を受けるのは、新設のCM未設定グループ1件のみである。既存の顧客別/事業所別/
+ * 書類種別/実在CM別グループは、UNASSIGNED_FALLBACKがcareManagerにのみ定義されて
+ * いるため数学的に無影響であり、`rebuildAllGroupAggregations()`のような
+ * documentGroups全体の調停は不要（かつ、全削除を伴うため並行更新との競合面が
+ * 大きく、`/codex plan`セカンドオピニオンでも不採用と判断された）。
+ *
+ * 呼び出し前提: `functions/src/utils/maintenanceGate.ts`のゲートが閉じており、
+ * documentsへの集計所属変更を伴う書込み(OCR確定・split・顧客マスター同期)が
+ * 十分な時間（各書込み経路のCloud Functions最大実行時間を上回る待機）停止・
+ * ドレイン済みであること。この前提を満たさない場合、並行更新との競合により
+ * 誤ったcountになりうる（本関数自体はゲート状態を検証しない、呼び出し元の責務）。
+ *
+ * 母集団クエリは`rebuildAllGroupAggregations()`と同一の
+ * `where('status','!=','split').orderBy('status').orderBy('processedAt','desc')`
+ * を再利用し(既存の複合indexをそのまま使え、新規index不要)、
+ * careManagerKey/customerKeyの絞り込みはFirestoreの複数不等号クエリ制約
+ * (`!=`は1フィールドまで)のためJS側で行う。
+ */
+export async function backfillUnassignedCareManagerGroup(
+  db: admin.firestore.Firestore,
+  batchSize: number = 500
+): Promise<BackfillUnassignedCareManagerGroupResult> {
+  const groupType: GroupType = 'careManager';
+  const groupKey = CONSTANTS.UNASSIGNED_CARE_MANAGER_KEY;
+  const displayName = CONSTANTS.UNASSIGNED_CARE_MANAGER_DISPLAY_NAME;
+  const groupId = generateGroupId(groupType, groupKey);
+  const groupRef = db.collection('documentGroups').doc(groupId);
+
+  // 事前チェック: 既にグループが存在する場合は異常終了(上書きしない)。
+  // 想定外の並行作成、または誤った再実行を検知するための安全装置。
+  const existing = await groupRef.get();
+  if (existing.exists) {
+    throw new Error(
+      `backfillUnassignedCareManagerGroup: group ${groupId} already exists ` +
+      `(count=${existing.data()?.count}). Aborting to avoid overwriting. ` +
+      'Investigate the existing group before retrying.'
+    );
+  }
+
+  let scanned = 0;
+  let matched = 0;
+  let lastDoc: admin.firestore.QueryDocumentSnapshot | undefined;
+  const latestDocs: GroupPreviewDoc[] = [];
+  let latestAt: Timestamp | undefined;
+
+  while (true) {
+    let query = db.collection('documents')
+      .where('status', '!=', 'split')
+      .orderBy('status')
+      .orderBy('processedAt', 'desc')
+      .limit(batchSize);
+
+    if (lastDoc) {
+      query = query.startAfter(lastDoc);
+    }
+
+    const snapshot = await query.get();
+    if (snapshot.empty) break;
+
+    for (const docSnap of snapshot.docs) {
+      const data = docSnap.data() as DocumentData;
+      const keys = generateGroupKeys(data);
+
+      // resolveGroupKeyAndDisplay()を直接呼び、CM未設定グループへの判定条件を
+      // getAffectedGroups()/rebuildAllGroupAggregations()と完全に共有する(手書きコピー
+      // 禁止。/code-review high指摘: 条件をここで再実装すると、UNASSIGNED_FALLBACKの
+      // 定義が将来変わった際にこの関数だけ乖離する「独立コピー」リスクが再発する)。
+      const resolved = resolveGroupKeyAndDisplay('careManager', keys.careManagerKey, data.careManager, !!keys.customerKey);
+      if (resolved && resolved.key === groupKey) {
+        matched++;
+        if (latestDocs.length < 3) {
+          latestDocs.push({
+            id: docSnap.id,
+            fileName: data.fileName || '',
+            documentType: data.documentType || '',
+            processedAt: data.processedAt || Timestamp.now(),
+          });
+        }
+        if (data.processedAt && (!latestAt || data.processedAt.toMillis() > latestAt.toMillis())) {
+          latestAt = data.processedAt;
+        }
+      }
+
+      scanned++;
+    }
+
+    lastDoc = snapshot.docs[snapshot.docs.length - 1];
+  }
+
+  if (matched === 0) {
+    // 対象0件は異常ではない(既に全書類にcareManagerが設定済みの場合等)。作成不要。
+    return { scanned, matched, count: 0, groupId };
+  }
+
+  // 単一トランザクションでの安全な作成: スキャン中に並行作成されていないか再確認する
+  await db.runTransaction(async (transaction) => {
+    const snap = await transaction.get(groupRef);
+    if (snap.exists) {
+      throw new Error(
+        `backfillUnassignedCareManagerGroup: group ${groupId} was created concurrently ` +
+        `during scan (count=${snap.data()?.count}). Aborting to avoid overwriting.`
+      );
+    }
+    const newGroupData: DocumentGroupData = {
+      groupType,
+      groupKey,
+      displayName,
+      count: matched,
+      latestAt: latestAt || Timestamp.now(),
+      latestDocs,
+      updatedAt: Timestamp.now(),
+    };
+    transaction.set(groupRef, newGroupData);
+  });
+
+  return { scanned, matched, count: matched, groupId };
+}
