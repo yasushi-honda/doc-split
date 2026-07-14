@@ -53,6 +53,12 @@ updated: 2026-07-14
 ## 監視・確認事項（トリガー待ち、前ミッション#547/#548から継続）
 - egress実削減効果の翌月請求での実測確認（未実施。8月上旬の7月分請求書で確認）
 - #548試算（全対策後¥23,000/月）の実額最終確認（実額は7月分請求書確定後）
+- **【重要な発見、2026-07-14 session126】kanameone 7月請求のFirestore egress急増(+797%、月間予測が6月比約2.4倍に悪化)の原因を特定・記録**:
+  - decision-maker提供のGCP Billing Console画像（サービス別/SKU別/日別）から、egressの82.6%（¥2,692/¥3,258）が7/9単日に集中していることを確認
+  - GitHub Actions実行ログを追跡し、7/9 00:24 UTCに実行された`backfill-detail-subcollection --execute`（Phase C本番backfill、kanameone全9,388件）が原因と特定
+  - `scripts/backfill-detail-subcollection.ts`の`backfillOneDoc()`は`detail/main`書込みに加え必ず親ドキュメント(`documents/{docId}`)も`tx.update()`するため、`onDocumentWrite`/`onDocumentWriteSearchIndex`の2トリガーを毎回発火させる設計と判明（7/9 UTC実測: 18,960回/15,848回発火）
+  - この時点では「無関係な変更でもトリガーが連鎖する」問題への対策(`isAggregationUnchanged`、`functions/src/utils/groupAggregation.ts`)がまだ存在せず（対策はPhase E本体と同じPR #611、2026-07-10マージ）、重フィールド(ocrResult/pageResults)が親に残った状態でbefore/afterペイロードが大量配信されたことがegress急増の直接原因と強く推定される
+  - **結論**: 一過性の移行作業由来の副作用であり、対策は既に本番投入済みのため8月以降の再発は見込み低い。ただし数値の完全一致(153.99GiBぴったり)までは検証できておらず、最終確認は7月分確定請求を待つ（上記2項目と合わせて確認）
 - dev環境のテストデータ`phase-e-devcheck-001`/`phase-e-devcheck-002`の後片付け（任意）
 - 前ミッション（#547/#548運用コスト圧縮2トラック）は2026-07-10技術完了・2026-07-12是正確認済み。詳細はgit history（`git log -p docs/handoff/GOAL.md`）およびdocs/handoff/LATEST.md/archive参照
 - （任意・着手指示なき限り不要）OCR突合精度向上ミッション（本ミッション、タスクIで撤退）で未解明のまま残った「kanameone confirmed-replayでbaseline自体の一致率が33.3%/41.7%と低い」原因。将来的に興味を持った場合の起点はGOAL.mdタスクH/Iの記録、および`scripts/compare-ocr-arbitration-logic-confirmed.ts`

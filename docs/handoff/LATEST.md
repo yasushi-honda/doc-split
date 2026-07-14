@@ -1,8 +1,32 @@
 # ハンドオフメモ
 
-**更新日**: 2026-07-14 session124（GOAL.mdタスクG/H完遂 + タスクI判断でOCR突合精度向上ミッションをクローズ、PR #646/#647/#648マージ。詳細は下記session124サマリ参照）
+**更新日**: 2026-07-14 session126（kanameone 7月請求急増の原因調査・特定、GOAL.md監視事項へ記録。詳細は下記session126サマリ参照）
 
 <!-- session115〜117・121・122はLATEST.md詳細サマリ未追記（GOAL.mdのみ更新）。#539完遂・#540完遂(OCR実行所有権ガード)・#625(OCR Storage孤児化解消)・#547 Phase E是正(Hostingデプロイ漏れ)、および候補抽出スパイク(タスクA、PR#641)・候補抽出呼出し実装(タスクB、PR#642)・arbitration実装(タスクC、PR#643)の経緯はGOAL.md/ADR-0018/該当コミットメッセージで追跡可能なため遡及記載はROI低と判断、着手せず -->
+
+## session126 サマリ（2026-07-14、kanameone 7月請求急増の原因調査・特定）
+
+decision-makerからkanameoneの2026年7月請求（月中実績+予測）の確認依頼を受け、Gemini 3.5移行+Firestore圧縮（#547/#548）によるコスト圧縮効果が目標（2倍以内）に収まっているか調査。
+
+### 調査の経緯
+- 提供されたGCP Billing Console画像から、月間予測が当初¥26,677（6月比+106.3%）→再確認時¥31,180（+141.05%、約2.4倍）へ悪化していることを発見。特にFirestore egress SKU（App Engine表示）が前期間比+797%と異常
+- コード確認: Phase Eの一覧クエリ設計自体は正しく実装されている（親から重フィールド削除済み）
+- GitHub Actions実行ログ調査: Phase E本体（dry-run/execute/verify）の処理量だけでは153.99GiBを説明できない（合計1GiB未満、150倍以上の乖離）ことを定量的に確認
+- decision-maker提供のSKU別・日別グラフから、egressの82.6%（¥2,692/¥3,258）が7/9単日に集中していることを確認（継続的バグではなく単発イベントと判明）
+- Cloud Loggingで7/9の`onDocumentWrite`/`onDocumentWriteSearchIndex`トリガー発火回数（18,960回/15,848回）を確認、`functions/src/utils/groupAggregation.ts`内に「Issue #547 Phase E: ...トリガーストーム」を指す対策コード（`isAggregationUnchanged`、PR #611で2026-07-10マージ）を発見
+
+### 真因の特定
+`scripts/backfill-detail-subcollection.ts`の`backfillOneDoc()`が`detail/main`書込みに加え必ず親ドキュメントも`tx.update()`する設計であることをコード確認。GitHub Actions実行ログで、7/9 00:24 UTCにkanameoneで`backfill-detail-subcollection --execute`（Phase C本番backfill、全9,388件）が実行されたことを確認し、これがトリガーストーム対策実装前（PR #611マージは翌7/10）のタイミングで9,388件の親ドキュメント書込みを引き起こし、重フィールドを含むbefore/afterペイロードの大量配信がegress急増の直接原因と特定した。
+
+### 結論
+一過性の移行作業由来の副作用であり、対策（`isAggregationUnchanged`）は既に本番投入済みのため8月以降の再発は見込み低い。Issue #548当初試算（¥23,000/月、約1.81倍）に近い水準へ収束する可能性が高いと判断。ただし数値の完全一致までは検証できておらず、最終確認は8月上旬の7月分確定請求を待つ（GOAL.md監視・確認事項に記録済み）。
+
+### Issue Net
+Net 0（GitHub Issue非経由、read-only調査のみ）
+
+### 引き継ぎ教訓
+- decision-makerの「それ以外の理由がある具体的な可能性とは何か」という指摘が、状況証拠（実行回数の多さ）だけで満足せず定量検証（実際の読み取り量を計算）に進む重要な転換点になった。仮説と実測値の乖離（150倍以上）を無視せず追及したことで真因に到達できた
+- Firestoreの`onDocumentWritten`トリガーは変更前後のドキュメント全体をペイロードとして配信するため、重フィールドを含むドキュメントへの一括書込み処理（backfill/migration等）を伴う移行作業では、トリガー関数側の変更検知ロジック（早期return）が整備されていないと「トリガー発火コスト」がegress急増を引き起こしうる。今後同種の一括書込みを伴う移行作業を計画する際は、トリガー関数側の早期return設計を事前レビュー項目に含めるべき
 
 ## session124 サマリ（2026-07-14、GOAL.mdタスクG/H完遂 + タスクI判断でミッションクローズ + PR #646/#647/#648）
 
