@@ -5,14 +5,18 @@
  * 背景: kanameone本番で「顧客別の利用者件数とCM別の利用者件数に差異がある」という
  * 報告があり調査した結果、careManagerフィールドが任意(フォールバックなし)のため
  * 集計から除外されることが判明した(customerName/officeName/documentTypeは
- * 必須フィールドでフォールバック値があるため除外されない)。
+ * 必須フィールドでフォールバック値があるため除外されない)。Task A(#656)でこの
+ * 非対称性を修正し、careManagerKeyが空でもcustomerKeyが非空なら予約key
+ * (`__UNASSIGNED_CARE_MANAGER__`、表示名「CM未設定」)で集計対象に含めるよう
+ * functions/src/utils/groupAggregation.ts の resolveGroupKeyAndDisplay() を実装した。
  *
- * 本スクリプトは、functions/src/utils/groupAggregation.ts の
- * rebuildAllGroupAggregations() と同一の母集団定義(status !== 'split')・
- * 同一の正規化ロジック(normalizeGroupKey)で customer/office/documentType/
- * careManager の集計を再現し、documentGroups コレクションの実測値と突合する。
- * あわせて、careManagerKey欠損の内訳(不明顧客/customerIdなし/マスターCM未設定/
- * 同期漏れ疑い)を分類する。
+ * 本スクリプトは、rebuildAllGroupAggregations()/getAffectedGroups()と同一の
+ * generateGroupKeys()/resolveGroupKeyAndDisplay()をSSoTから直接requireして動的に
+ * 期待集計(groupId単位)を計算し、documentGroupsコレクションの実測値と突合する。
+ * 手書きの正規化ロジック(normalizeGroupKeyのみ参照)は使わない — Task A適用前は
+ * この方式だったため、A適用後にCM未設定フォールバックを考慮せず偽陽性の不一致を
+ * 報告していた(GOAL.md タスクG session131で修正、Codex指摘: 合計一致だけでは
+ * 別groupIdの過大・過小が相殺されて見逃すため、groupId単位の個別比較も追加)。
  *
  * 使用方法:
  *   FIREBASE_PROJECT_ID=docsplit-kanameone node scripts/diagnose-caremanager-group-gap.js
@@ -30,12 +34,13 @@ if (!projectId) {
 admin.initializeApp({ projectId });
 const db = admin.firestore();
 
-// normalizeGroupKey は functions/src/utils/groupAggregation.ts の SSoT を直接require する
+// generateGroupKeys/generateGroupId/resolveGroupKeyAndDisplay は
+// functions/src/utils/groupAggregation.ts の SSoT を直接require する
 // (scripts/lib/loadTokenizer.js と同じ「compiled lib/ を共有」パターン。手書きコピーは
 // scripts/migrate-document-groups.js に続く3つ目の独立コピーとなり、本番ロジック変更時に
 // 気づかず乖離するリスクがあるため避ける)。
 // run-ops-script.yml は本スクリプト実行前に `npm run build` (functions/) を実行済み。
-const { normalizeGroupKey } = require(
+const { generateGroupKeys, generateGroupId, resolveGroupKeyAndDisplay } = require(
   path.resolve(__dirname, '../functions/lib/functions/src/utils/groupAggregation.js'),
 );
 
@@ -48,9 +53,12 @@ async function main() {
   let totalAll = 0;
   let totalNonSplit = 0;
 
+  // groupId -> { groupType, groupKey, displayName, count }。resolveGroupKeyAndDisplay()の
+  // 判定を通過した(=documentGroupsに計上されるべき)組み合わせのみを積み上げる。
+  const expectedGroupMap = new Map();
   const recalculated = { customer: 0, office: 0, documentType: 0, careManager: 0 };
-  let fumeiCustomer = 0; // customerKey正規化後 '不明顧客' 相当
-  let cmMissing = 0;
+  let fumeiCustomer = 0; // customerNameが'不明顧客'相当
+  let cmMissing = 0; // careManagerKey空 かつ customerKey非空(=CM未設定に計上される母集団)
   let cmMissingRealCustomer = 0; // customerNameが'不明顧客'でない
   let cmMissingNoCustomerId = 0;
   let cmMissingWithCustomerIdSample = [];
@@ -62,20 +70,37 @@ async function main() {
     if (d.status === 'split') return;
     totalNonSplit++;
 
-    const custKey = normalizeGroupKey(d.customerName);
-    const officeKey = normalizeGroupKey(d.officeName);
-    const dtKey = normalizeGroupKey(d.documentType);
-    const cmKey = normalizeGroupKey(d.careManager);
+    const keys = generateGroupKeys(d);
+    const types = [
+      { type: 'customer', key: keys.customerKey, display: d.customerName },
+      { type: 'office', key: keys.officeKey, display: d.officeName },
+      { type: 'documentType', key: keys.documentTypeKey, display: d.documentType },
+      { type: 'careManager', key: keys.careManagerKey, display: d.careManager },
+    ];
 
-    if (custKey) recalculated.customer++;
-    if (officeKey) recalculated.office++;
-    if (dtKey) recalculated.documentType++;
-    if (cmKey) recalculated.careManager++;
+    for (const { type, key, display } of types) {
+      const resolved = resolveGroupKeyAndDisplay(type, key, display, !!keys.customerKey);
+      if (!resolved) continue;
+
+      recalculated[type]++;
+      const groupId = generateGroupId(type, resolved.key);
+      const existing = expectedGroupMap.get(groupId);
+      if (existing) {
+        existing.count++;
+      } else {
+        expectedGroupMap.set(groupId, {
+          groupType: type,
+          groupKey: resolved.key,
+          displayName: resolved.displayName,
+          count: 1,
+        });
+      }
+    }
 
     const custName = (d.customerName || '').trim();
     if (custName === '不明顧客') fumeiCustomer++;
 
-    if (!cmKey) {
+    if (keys.careManagerKey === '' && keys.customerKey !== '') {
       cmMissing++;
       if (custName && custName !== '不明顧客') {
         cmMissingRealCustomer++;
@@ -93,19 +118,26 @@ async function main() {
   console.log('status内訳:', statusBreakdown);
   console.log(`status!=='split' (documentGroups集計対象母集団): ${totalNonSplit}\n`);
 
-  console.log('=== customerName/officeName/documentType/careManager から動的再計算した集計 ===');
-  console.log(`customerKey非空: ${recalculated.customer}`);
-  console.log(`officeKey非空: ${recalculated.office}`);
-  console.log(`documentTypeKey非空: ${recalculated.documentType}`);
-  console.log(`careManagerKey非空: ${recalculated.careManager}`);
+  console.log('=== 動的再計算した期待集計(resolveGroupKeyAndDisplay経由、CM未設定フォールバック込み) ===');
+  console.log(`customer: ${recalculated.customer}`);
+  console.log(`office: ${recalculated.office}`);
+  console.log(`documentType: ${recalculated.documentType}`);
+  console.log(`careManager(実CM + CM未設定): ${recalculated.careManager}`);
   console.log(`(参考)customerNameが'不明顧客': ${fumeiCustomer}\n`);
 
-  // 2. documentGroupsコレクションの実測値
+  // 2. documentGroupsコレクションの実測値(groupId単位も保持)
   const groupsSnap = await db.collection('documentGroups').get();
+  const actualGroupMap = new Map();
   const groupTotals = {};
   const groupCounts = {};
   groupsSnap.forEach((doc) => {
     const d = doc.data();
+    actualGroupMap.set(doc.id, {
+      groupType: d.groupType,
+      groupKey: d.groupKey,
+      displayName: d.displayName,
+      count: d.count || 0,
+    });
     groupTotals[d.groupType] = (groupTotals[d.groupType] || 0) + (d.count || 0);
     groupCounts[d.groupType] = (groupCounts[d.groupType] || 0) + 1;
   });
@@ -113,8 +145,9 @@ async function main() {
   console.log('groupType別グループ数:', groupCounts);
   console.log('groupType別count合計:', groupTotals, '\n');
 
-  // 3. 突合(動的再計算 vs documentGroups実測)
-  console.log('=== 突合結果(動的再計算 vs documentGroups実測) ===');
+  // 3. 突合(type別合計)。合計一致は別groupIdの過大・過小が相殺されると成立してしまうため、
+  //    参考情報に留め、真の一致性確認は次のgroupId単位比較で行う。
+  console.log('=== 突合結果(動的再計算 vs documentGroups実測、type別合計) ===');
   for (const type of ['customer', 'office', 'documentType', 'careManager']) {
     const recalc = recalculated[type];
     const measured = groupTotals[type] || 0;
@@ -122,19 +155,41 @@ async function main() {
     console.log(`${type}: 動的再計算=${recalc} / documentGroups実測=${measured} / 一致=${match ? '✅' : `❌ (差${recalc - measured})`}`);
   }
 
-  // 4. careManagerKey欠損の内訳分類(Codex指摘の数値矛盾検証)
-  console.log('\n=== careManagerKey欠損の内訳(status!=split母集団) ===');
-  console.log(`careManagerKey欠損合計: ${cmMissing}`);
+  // 3.5. groupId単位の個別比較(Codex指摘反映: 合計一致だけでは相殺を見逃す)
+  console.log('\n=== groupId単位の個別比較(期待値 vs 実測値) ===');
+  const allGroupIds = new Set([...expectedGroupMap.keys(), ...actualGroupMap.keys()]);
+  let mismatchCount = 0;
+  for (const groupId of allGroupIds) {
+    const expected = expectedGroupMap.get(groupId);
+    const actual = actualGroupMap.get(groupId);
+    const expectedCount = expected ? expected.count : 0;
+    const actualCount = actual ? actual.count : 0;
+    if (expectedCount !== actualCount) {
+      mismatchCount++;
+      const label = (expected && expected.displayName) || (actual && actual.displayName) || groupId;
+      console.log(`  ❌ ${groupId} (${label}): 期待値=${expectedCount} 実測値=${actualCount} (差${expectedCount - actualCount})`);
+    }
+  }
+  console.log(
+    mismatchCount === 0
+      ? '  ✅ 全groupIdで一致(相殺による見逃しなし)'
+      : `  ⚠️  ${mismatchCount} 件のgroupIdで不一致を検出`
+  );
+
+  // 4. careManagerKey欠損の内訳分類(CM未設定に計上される母集団の内訳、Codex指摘の数値矛盾検証)
+  console.log('\n=== CM未設定計上対象(careManagerKey空 かつ customerKey非空)の内訳 ===');
+  console.log(`CM未設定計上対象合計: ${cmMissing}`);
   console.log(`  うち customerName='不明顧客': ${cmMissing - cmMissingRealCustomer}`);
   console.log(`  うち 実在顧客名: ${cmMissingRealCustomer}`);
   console.log(`    うち customerIdなし: ${cmMissingNoCustomerId}`);
   console.log(`    うち customerIdあり: ${cmMissingRealCustomer - cmMissingNoCustomerId}`);
 
-  // 5. 恒等式検証: customerKey非空(=顧客別合計) は 「careManagerKey非空(実在CM別合計)」+「careManagerKey欠損合計」に一致するはず
+  // 5. 恒等式検証: customer(顧客別合計)は必ずcareManager(実CM+CM未設定合計)と一致するはず
+  //    (Task Aの不変条件「顧客別に計上される書類は必ず担当CM別にも計上される」)
   console.log('\n=== 恒等式検証 ===');
   const lhs = recalculated.customer;
-  const rhs = recalculated.careManager + cmMissing;
-  console.log(`customerKey非空(${lhs}) = careManagerKey非空(${recalculated.careManager}) + careManagerKey欠損(${cmMissing}) = ${rhs}`);
+  const rhs = recalculated.careManager;
+  console.log(`customer(${lhs}) = careManager実CM+CM未設定合計(${rhs})`);
   console.log(`一致: ${lhs === rhs ? '✅' : `❌ (差${lhs - rhs})`}`);
 
   // customerIdありでCM欠落しているものの、マスターのcareManagerName有無を突合(同期漏れ検出)。

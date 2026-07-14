@@ -17,11 +17,24 @@
  * (GitHub Actions run-ops-script.yml は実行前に自動でnpm run buildする)。
  *
  * Usage:
- *   node scripts/migrate-document-groups.js [--project <project-id>]
+ *   node scripts/migrate-document-groups.js [--project <project-id>] [--dry-run]
+ *   node scripts/migrate-document-groups.js --backfill-cm-unassigned [--project <project-id>] [--dry-run]
  *
  * Options:
- *   --project  Firebase プロジェクトID (デフォルト: doc-split-dev)
- *   --dry-run  実際には書き込まない
+ *   --project                  Firebase プロジェクトID (デフォルト: doc-split-dev)
+ *   --dry-run                  実際には書き込まない
+ *   --backfill-cm-unassigned   GOAL.md タスクG: CM未設定グループ(担当CM別集計の
+ *                              非対称性バグ修正)のみを対象にした狭いスコープの
+ *                              バックフィル。既存のPhase1/Phase2(初期構築・全崩壊時
+ *                              再構築用)は実行しない。実行モードでは集計所属変更を
+ *                              伴う書込み経路(OCR確定/split/顧客マスター同期)を
+ *                              メンテナンスゲートで一時停止してから安全に作成する
+ *                              (functions/src/utils/maintenanceGate.ts、
+ *                              /codex plan セカンドオピニオンで設計確定)。
+ *   --drain-wait-ms <ms>       --backfill-cm-unassigned実行モードのドレイン待機時間
+ *                              (デフォルト: 600000 = 10分、Cloud Functions最大実行時間
+ *                              540秒を上回るバリア)。dev環境での動作確認や、Cloud
+ *                              Functionsのタイムアウト設定が変わった場合の調整用。
  */
 
 const path = require('path');
@@ -29,8 +42,13 @@ const admin = require('firebase-admin');
 
 // コマンドライン引数解析
 const args = process.argv.slice(2);
-let projectId = 'doc-split-dev';
+// GitHub Actions run-ops-script.yml の汎用フォールバック分岐は FIREBASE_PROJECT_ID 環境変数で
+// プロジェクトIDを渡す(diagnose-caremanager-group-gap.js等と同一convention)。--project未指定時は
+// これをフォールバックにする(--projectは引き続きローカル動作確認用に優先)。
+let projectId = process.env.FIREBASE_PROJECT_ID || 'doc-split-dev';
 let dryRun = false;
+let backfillCmUnassigned = false;
+let drainWaitMs = 10 * 60 * 1000;
 
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--project' && args[i + 1]) {
@@ -38,6 +56,11 @@ for (let i = 0; i < args.length; i++) {
     i++;
   } else if (args[i] === '--dry-run') {
     dryRun = true;
+  } else if (args[i] === '--backfill-cm-unassigned') {
+    backfillCmUnassigned = true;
+  } else if (args[i] === '--drain-wait-ms' && args[i + 1]) {
+    drainWaitMs = parseInt(args[i + 1], 10);
+    i++;
   }
 }
 
@@ -58,15 +81,114 @@ const {
   generateGroupId,
   resolveGroupKeyAndDisplay,
   rebuildAllGroupAggregations,
+  backfillUnassignedCareManagerGroup,
 } = require(
   path.resolve(__dirname, '../functions/lib/functions/src/utils/groupAggregation.js'),
 );
+
+const MAINTENANCE_FLAGS_DOC_PATH = 'system/maintenanceFlags';
+
+async function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * CM未設定グループのバックフィル対象を読み取り専用でプレビューする(書き込み・ゲート操作なし)
+ */
+async function previewBackfillCmUnassigned() {
+  const groupRef = db.collection('documentGroups').doc('careManager___UNASSIGNED_CARE_MANAGER__');
+  const existing = await groupRef.get();
+  console.log(`  CM未設定グループ: ${existing.exists ? `既存(count=${existing.data().count})` : '未作成'}`);
+
+  let scanned = 0;
+  let matched = 0;
+  let lastDoc = null;
+  const batchSize = 500;
+
+  while (true) {
+    let query = db.collection('documents')
+      .where('status', '!=', 'split')
+      .orderBy('status')
+      .orderBy('processedAt', 'desc')
+      .limit(batchSize);
+
+    if (lastDoc) {
+      query = query.startAfter(lastDoc);
+    }
+
+    const snapshot = await query.get();
+    if (snapshot.empty) break;
+
+    for (const docSnap of snapshot.docs) {
+      const data = docSnap.data();
+      const keys = generateGroupKeys(data);
+      if (keys.careManagerKey === '' && keys.customerKey !== '') {
+        matched++;
+      }
+      scanned++;
+    }
+
+    lastDoc = snapshot.docs[snapshot.docs.length - 1];
+  }
+
+  console.log(`  スキャン: ${scanned} 件 / CM未設定計上見込み: ${matched} 件`);
+  return { scanned, matched, alreadyExists: existing.exists };
+}
+
+/**
+ * CM未設定グループをメンテナンスゲート制御下で安全にバックフィルする
+ */
+async function executeBackfillCmUnassigned() {
+  console.log('🔒 メンテナンスゲートを閉じます...');
+  await db.doc(MAINTENANCE_FLAGS_DOC_PATH).set(
+    { groupAggregationGateOpen: false, gateClosedAt: admin.firestore.FieldValue.serverTimestamp() },
+    { merge: true }
+  );
+
+  // Cloud Functions最大実行時間(processOCR: 540秒)を上回るドレイン待機。ゲートクローズ前に
+  // 開始していた実行(OCR確定/split/顧客マスター同期)が確実に完了/タイムアウト済みである
+  // ことを保証するバリア(/codex plan指摘: 時間待ちに根拠を持たせる、デフォルト10分)。
+  console.log(`⏳ ドレイン確認のため ${drainWaitMs / 1000} 秒待機します(Cloud Functions最大実行時間を上回るバリア)...`);
+  await sleep(drainWaitMs);
+
+  console.log('📊 CM未設定グループを作成します...');
+  let result;
+  try {
+    result = await backfillUnassignedCareManagerGroup(db, 500);
+  } finally {
+    // バックフィル成功・失敗いずれでも必ずゲートを再開する(閉じたまま放置しない)
+    console.log('🔓 メンテナンスゲートを再開します...');
+    await db.doc(MAINTENANCE_FLAGS_DOC_PATH).set(
+      { groupAggregationGateOpen: true, gateOpenedAt: admin.firestore.FieldValue.serverTimestamp() },
+      { merge: true }
+    );
+  }
+
+  console.log(`\n✅ CM未設定グループ作成完了: スキャン ${result.scanned} 件 / 対象 ${result.matched} 件 / count ${result.count}`);
+  console.log('次のステップ: scripts/diagnose-caremanager-group-gap.js で customer合計とcareManager合計の一致を検証してください。');
+  return result;
+}
 
 /**
  * メイン処理
  */
 async function main() {
   const startTime = Date.now();
+
+  if (backfillCmUnassigned) {
+    console.log('🎯 モード: CM未設定グループ バックフィル(GOAL.md タスクG)\n');
+
+    if (dryRun) {
+      await previewBackfillCmUnassigned();
+      console.log('\n⚠️  ドライランモードで実行しました。ゲート操作・書き込みは行っていません。');
+    } else {
+      await executeBackfillCmUnassigned();
+    }
+
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    console.log(`\n⏱️  実行時間: ${elapsed} 秒`);
+    return;
+  }
 
   console.log('🚀 マイグレーション開始...\n');
 
@@ -139,7 +261,12 @@ async function main() {
     lastDoc = null;
 
     while (true) {
+      // rebuildAllGroupAggregations()と同一のFirestoreクエリに統一する(session131指摘④の解消)。
+      // JS側での`status === 'split'`除外はstatus未設定文書を誤って含めてしまう非対称性が
+      // あったため廃止し、Firestoreの`!=`クエリ(status未設定文書を自動的に除外する)に一本化する。
       let query = db.collection('documents')
+        .where('status', '!=', 'split')
+        .orderBy('status')
         .orderBy('processedAt', 'desc')
         .limit(batchSize);
 
@@ -152,12 +279,6 @@ async function main() {
 
       for (const docSnap of snapshot.docs) {
         const data = docSnap.data();
-
-        if (data.status === 'split') {
-          // rebuildAllGroupAggregations()のFirestoreクエリ(status !== 'split')と
-          // 同一母集団にするため、分割済みはカウントに含めない(実行モードと比較可能にする)
-          continue;
-        }
 
         const keys = generateGroupKeys(data);
         const types = [

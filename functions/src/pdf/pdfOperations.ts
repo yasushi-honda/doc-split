@@ -28,6 +28,7 @@ import { createSplitProvenance, createRotationProvenance } from './provenance';
 import { resolveDetailFields, readDocWithDetail } from '../ocr/documentDetail';
 import { mergeRotations } from './rotationMerge';
 import { shouldRejectRotateForBackfill } from './rotateGate';
+import { isGroupAggregationGateOpen } from '../utils/maintenanceGate';
 import { randomUUID } from 'node:crypto';
 import type { DocumentProvenance } from '../../../shared/types';
 import {
@@ -395,6 +396,14 @@ export const splitPdf = onCall(
     const userDoc = await db.doc(`users/${request.auth.uid}`).get();
     if (!userDoc.exists) {
       throw new HttpsError('permission-denied', 'User not in whitelist');
+    }
+
+    // GOAL.md タスクG: バックフィル中は分割(親status:split化+子文書のCM未設定計上)を停止する
+    if (!(await isGroupAggregationGateOpen(db))) {
+      throw new HttpsError(
+        'unavailable',
+        'システムメンテナンス中のため、しばらくしてから再度お試しください'
+      );
     }
 
     const { documentId, splitPoints, segments } = request.data as SplitRequest;

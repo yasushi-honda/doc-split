@@ -8,6 +8,7 @@
 import { onDocumentWritten } from 'firebase-functions/v2/firestore';
 import * as admin from 'firebase-admin';
 import { detectCareManagerChange, buildCareManagerUpdate } from './syncCareManagerLogic';
+import { isGroupAggregationGateOpen } from '../utils/maintenanceGate';
 
 const db = admin.firestore();
 
@@ -17,6 +18,13 @@ export const onCustomerMasterWrite = onDocumentWritten(
     region: 'asia-northeast1',
   },
   async (event) => {
+    // GOAL.md タスクG: バックフィル中はdocuments側のcareManager一括同期を停止する
+    // (最大500件バッチ更新によるCM未設定グループへのトランザクション集中を回避)
+    if (!(await isGroupAggregationGateOpen(db))) {
+      console.log('[maintenanceGate] groupAggregation gate closed, skipping careManager sync');
+      return;
+    }
+
     const beforeData = event.data?.before?.data() as { name?: string; careManagerName?: string } | undefined;
     const afterData = event.data?.after?.data() as { name?: string; careManagerName?: string } | undefined;
 

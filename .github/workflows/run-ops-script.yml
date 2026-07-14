@@ -117,6 +117,8 @@ on:
           - delete-legacy-ocr-fields --verify
           - delete-legacy-ocr-fields --rollback
           - diagnose-caremanager-group-gap
+          - migrate-document-groups --backfill-cm-unassigned --dry-run
+          - migrate-document-groups --backfill-cm-unassigned
       doc_id:
         description: 'Document ID (required when script contains --doc-id; ignored otherwise)'
         required: false
