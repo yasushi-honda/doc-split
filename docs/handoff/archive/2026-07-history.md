@@ -5,6 +5,56 @@ LATEST.md 60KB超過に伴い session95〜104 の詳細サマリを移動（2026
 
 LATEST.md 60KB超過に伴い session105〜110 の詳細サマリを追加移動（2026-07-12 session118 handoff時）。
 
+
+LATEST.md 60KB超過に伴い session112〜113 の詳細サマリを追加移動（2026-07-14 session128 handoff時）。
+
+## session113 サマリ（2026-07-10、#547 Phase E 本番実行完遂）
+
+decision-makerから「gemini3.5flashへの移行とFirestoreのコスト圧縮、その他コスト圧縮の対応は進んでいるか、最適コスト圧縮に正しく向かっているか」と問われ、session112の調査結果（GOAL.md/LATEST.md記載）を提示した上で、GOAL.mdの中断点（#547 Phase E本番実行、cocoro先行→kanameone後続）へ着手。
+
+### 前提検証（鵜呑み防止）
+session112 handoffの「cocoro/kanameoneへのdestructive delete実行はゼロ」という記述を、GitHub Actions実行ログの直接サンプル確認で裏取り（zshの単語分割仕様に起因する検証スクリプトの不具合により網羅的検証は途中で打ち切ったが、個別サンプル3件の確認+GOAL.mdの明示的な未完了チェックボックスの記録整合性から、記述は正確と判断）。
+
+### #547 Phase E本番実行（cocoro→kanameone、各ステップ番号単位認可）
+両環境とも同一手順（`--mark-preflight --marked-by yasushi-honda` → `--dry-run` → `--execute --limit 10`canary → `--verify`(中間、想定内FAIL) → `--execute`全件 → `--verify`最終確認）をGitHub Actions `run-ops-script.yml`経由で実施、各ステップ実行前にAskUserQuestionで番号単位認可を取得。
+
+- **cocoro**（1,055件）: canary10件成功/0エラー → 全量1,045件成功/0エラー（169秒）→ 最終verify **PASS**（親残存0・detail不在0）
+- **kanameone**（9,513件）: canary10件成功/0エラー → 全量9,503件成功/0エラー（1,432秒≈24分）→ 最終verify **PASS**（親残存0・detail不在0）
+- 全ステップ通じてエラー・異常skip 0件。detail/mainサブコレクションは両環境とも無傷。中間verifyのFAILは「全件削除完了」を判定基準とする仕様上の想定内の結果（canary分を除く残存件数が正しくカウントされていることを確認した上で継続）。
+
+### GOAL.md / LATEST.md更新
+GOAL.mdの完了の定義2点（#548 close済み・#547 Phase E完遂+egress実削減発生）が技術的に充足されたことを反映。同時に「重要な注記（コスト実態）」セクションを新設し、技術完了とコスト最適化達成が別物であることを明記（#548試算では全対策後も現状より高コスト、真の黒字化には保留中のエンティティリスト化判断が別途必要）。
+
+### 引き継ぎ教訓
+- GitHub Actions実行ログの網羅検証をバックグラウンドループで試みたが、zshの`for id in $VAR`が単語分割しない仕様（bashと異なる）により空ループになる不具合に遭遇。`while IFS= read -r id; do...done < file`方式で修正したが、100件近い個別ログ取得は時間がかかりすぎるため打ち切り、サンプル確認+文書記録の整合性で妥当性を判断する方針に切替えた。
+
+## session112 サマリ（2026-07-10、#547 Phase E コードmain統合 + コスト実態調査）
+
+session111の中断点（Phase E PR-E1/PR-E2実装完了、devリハーサル全項目PASS、PR未作成）から着手。
+
+### PR #611（Phase E本体）のレビュー・マージ
+- **Codex review-diff**（Bash版、effort high）で先行チェック: P2指摘2件（`--verify`のPASS/FAIL判定漏れ・detail取得の非効率）を検出・修正（コミット`85cf68d`）。
+- **`/code-review high`**（8 finder並列 + 重複排除後20件を1-vote独立検証）を実施。CONFIRMED 9件・PLAUSIBLE 6件・REFUTED 5件。
+- **Codex MCPセカンドオピニオン**（effort high）で「マージ前修正必須 vs follow-up」のバランス判定を依頼。指摘ごとに独立評価した上で、マージ前修正6件を確定・実装（コミット`2459986`）:
+  1. `runRollback`のsilent no-op（型不一致時に無音returnしexitCode 0になる欠陥）→ `typeMismatch`カウンタ+manifest件数との集計照合を追加
+  2. `deleteOneDoc`のswitch/default型安全性ギャップ → `DeletionOutcome` Record型で網羅性を保証（`backfill-detail-subcollection.ts`のパターンをミラー）
+  3. `canonicalHash`/`canonicalStringify`の重複実装 → `backfillDetailHelpers.ts`からのre-exportに置換
+  4. rollbackのPartial Updateテスト欠如 → `buildRollbackFieldUpdate()`新設+契約テスト追加
+  5. `shared/types.ts` `Document.ocrResult`の型/実態不一致 → optional化（唯一の影響箇所`useDocuments.ts:150`も安全なtypeof guardに修正）
+  6. `parseArgs`の`--marked-by`/`--run-id`引数swallowバグ → `pr-d4-backfill/index.ts`の`readArg`パターンをミラー
+  - follow-up 8件はPR #611コメントに記録（新規Issue化基準未達）。
+- **UI実機確認**: ローカルFirebase Emulators + Vite dev server + Playwright MCPで`DocumentDetailModal`/`PdfSplitModal`の正常系を確認、`ui-verified`ラベル付与（`isDetailError`矛盾表示のfollow-up項目は、firestore.rules一時変更がauto-mode権限classifierにブロックされたため未実施、session111時点で同手法により検証済みのためdecision-maker判断でスキップ）。
+- **PR #611マージ完了**（squash、コミット`b1e8297`、番号単位認可取得済み）。付随してPR #612（GOAL.md更新）・PR #613（ADR-0018整合性是正、handoffの§1.4チェックで検出）も番号単位認可の上マージ。
+
+### コスト圧縮の実態調査（decision-maker問いかけ「最適コスト圧縮に向かっているか」への回答）
+- **データ安全性確認**: GitHub Actions実行履歴を全件確認し、`delete-legacy-ocr-fields`（destructive）はdev環境のみで実行、cocoro/kanameoneへの実行はゼロと確認。
+- **重要な前提訂正**: Gemini 3.5 Flash移行はコスト削減策ではなく、2.5 Flash廃止（2026-10-16）+日本データレジデンシー要件による強制移行。3.5は単価が2.5比で入力×5・出力×3.6高い。Issue #548試算: 現状¥12,714/月 → 3.5移行・全対策後でも約¥23,000/月（現状より高い）。真の圧縮には保留中の「OCR出力エンティティリスト化」（−¥11,000/月級、decision-maker判断待ち・未着手）が別途必要。
+- **実測データ取得**（読み取り専用`check-gemini-cost-stats.js`をGitHub Actions経由でkanameone/cocoro向けに実行。**この実行はauto-mode権限classifierに一度ブロックされ、ユーザー承認を得てから結果確認**）: kanameoneで移行前(07-08)→移行後(07-10)のリクエスト単価が約9倍に上昇（試算の5.53倍よりさらに悪化、ただしサンプルは2日分と小さい）。**【session114で訂正】この「9倍」は移行前(07-08)データが旧・過小pricing定数のまま記録されていたための誤りで、正しい単価で再計算すると約6.7倍（#548試算の前提とほぼ整合）。詳細はsession114サマリ参照**。
+- **結論**: #547/#548以外に未着手のコスト圧縮施策なし（#546完了・#562見送り確認済み）。現時点は3.5移行による増コストが先行発生し、Firestore egress削減がまだ未実行という「最もコストが高い過渡期」にある。
+
+### 引き継ぎ教訓
+- 本セッションでauto-mode権限classifierに2回ブロックされた（firestore.rules一時変更／本番へのコスト計測クエリ新規ディスパッチ）。いずれも「読み取り専用 or 即revert」で実害はなかったが、ユーザーへの明示確認を経てから続行する運用が機能した。
+
 ## session110 サマリ（2026-07-09、#547 Phase D 本番展開完遂）
 
 ユーザー指示「ゴール目指して進めてください」を受け、GOAL.mdの中断点（dev E2E確認→cocoro展開→kanameone展開）から着手。

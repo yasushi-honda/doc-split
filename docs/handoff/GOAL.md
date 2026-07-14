@@ -63,6 +63,10 @@ updated: 2026-07-14
   - `measure-field-byte-sizes --limit 300`をkanameoneに再実行。ドキュメント全体サイズ平均4,095B（Issue #547事前計測時点の19,831Bから79.4%削減）、`ocrResult`/`pageResults`ともにpresent=0/300（親から完全に削除済み）を確認。Phase Eの効果が完璧に機能していることを直接証明
   - `check-gemini-cost-stats --days 21 --doc-limit 500`で6/24〜7/14の日次実測を取得。session114と同一手法（7/8 vs 7/10+7/11のOCR単体交絡排除比較）で単価倍率約5.17倍を再現確認（session114の5.068倍とほぼ一致）。移行後(7/9〜7/13)の絶対額（アプリ内推定値）は5日平均$0.82/日・月間換算約$25で、6月実績のVertex AIコスト(¥6,093)を下回る可能性がある水準
   - **結論の更新**: 「2倍以内」達成の確度に関するdecision-makerとの対話ベースの主観評価を60-75%→80%程度に上方修正。Firestore側は実測でほぼ確証、Gemini側も独立した21日データで楽観的傾向を再現。ただし`estimatedCostUsd`はアプリ内推定値で実請求ではなく、月末までの残り期間の変動は未知数のため引き続き最終確認は7月分確定請求を待つ
+- **【追加検証②、2026-07-14 session128】Cloud Monitoring read_count実測+cocoro反映状況の直接確認**:
+  - Cloud Monitoring API（`firestore.googleapis.com/document/read_count`）でkanameoneの日次読み取り回数を実測。7/9=4,410,399回・7/10=2,568,891回（トリガーストーム集中）に対し、7/11以降は10〜18万回/日に収束（7/11:46,839 / 7/12:181,846 / 7/13:130,852）。Billing Console実測（egressの82.6%が7/9集中）と独立データソースで完全に整合し、トリガーストーム説をさらに裏付け
+  - cocoro環境でも同様のread-only検証3件を実施: `measure-field-byte-sizes --limit 300`（平均3,921B、`ocrResult`/`pageResults`ともにpresent=0/300でPhase E完全機能を確認）、`fix-stuck-documents --include-errors --dry-run`（対象文書0件）、`check-gemini-cost-stats --days 21 --doc-limit 500`（7/8→7/9の単価上昇パターンからモデル移行を間接確認）
+  - **結論**: dev実装・kanameone/cocoro両本番反映とも直接確認完了（コスト圧縮の確度評価はkanameone基準の80%程度で維持、本検証は反映状況の網羅確認が主目的）
 - dev環境のテストデータ`phase-e-devcheck-001`/`phase-e-devcheck-002`の後片付け（任意）
 - 前ミッション（#547/#548運用コスト圧縮2トラック）は2026-07-10技術完了・2026-07-12是正確認済み。詳細はgit history（`git log -p docs/handoff/GOAL.md`）およびdocs/handoff/LATEST.md/archive参照
 - （任意・着手指示なき限り不要）OCR突合精度向上ミッション（本ミッション、タスクIで撤退）で未解明のまま残った「kanameone confirmed-replayでbaseline自体の一致率が33.3%/41.7%と低い」原因。将来的に興味を持った場合の起点はGOAL.mdタスクH/Iの記録、および`scripts/compare-ocr-arbitration-logic-confirmed.ts`
