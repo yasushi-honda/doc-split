@@ -18,6 +18,7 @@ import {
   Timestamp,
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
+import { CONSTANTS } from '@shared/types';
 import type { Document } from '@shared/types';
 
 // ============================================
@@ -136,11 +137,17 @@ async function fetchGroupDocuments(
 ): Promise<GroupDocumentsPage> {
   const keyField = GROUP_KEY_FIELD[groupType];
 
+  // documentGroups側は「CM未設定」等を予約keyで集計しているが、documents側の
+  // 実データは正規化キーが空文字のまま（予約keyは書き込まれない）。予約keyで
+  // クエリすると書類側と一致せず0件になるため、空文字に変換してからクエリする。
+  const isUnassignedCareManagerGroup = groupKey === CONSTANTS.UNASSIGNED_CARE_MANAGER_KEY;
+  const firestoreKeyValue = isUnassignedCareManagerGroup ? '' : groupKey;
+
   // シンプルなクエリ（splitのフィルタリングはクライアントサイドで実施）
   // 複合インデックス: {keyField} + processedAt DESC を使用
   let q = query(
     collection(db, 'documents'),
-    where(keyField, '==', groupKey),
+    where(keyField, '==', firestoreKeyValue),
     orderBy('processedAt', 'desc'),
     limit(pageSize * 2) // splitを除外する余地を確保
   );
@@ -151,10 +158,18 @@ async function fetchGroupDocuments(
 
   const snapshot = await getDocs(q);
 
-  // クライアントサイドでsplitを除外
-  const allDocs = snapshot.docs.filter(
-    (docSnap) => docSnap.data().status !== 'split'
-  );
+  // クライアントサイドでsplitを除外。CM未設定グループの場合は、集計側
+  // (resolveGroupKeyAndDisplayのcanFallbackToUnassigned)と同じ条件で、
+  // customerKeyが未確定（pending/processing/error等でOCR未完了）の書類も除外する。
+  // これらはcareManagerKeyも空文字のため素朴なクエリだと一覧に混入するが、
+  // 集計上はCM未設定グループのcountに含まれていないため、除外しないと
+  // 表示件数がcountと食い違う（Codexレビュー指摘）。
+  const allDocs = snapshot.docs.filter((docSnap) => {
+    const data = docSnap.data();
+    if (data.status === 'split') return false;
+    if (isUnassignedCareManagerGroup && !data.customerKey) return false;
+    return true;
+  });
 
   const hasMore = allDocs.length > pageSize;
   const docs = allDocs.slice(0, pageSize);
