@@ -18,6 +18,7 @@
  *   FIREBASE_PROJECT_ID=docsplit-kanameone node scripts/diagnose-caremanager-group-gap.js
  */
 
+const path = require('path');
 const admin = require('firebase-admin');
 
 const projectId = process.env.FIREBASE_PROJECT_ID;
@@ -29,15 +30,14 @@ if (!projectId) {
 admin.initializeApp({ projectId });
 const db = admin.firestore();
 
-// functions/src/utils/groupAggregation.ts の normalizeGroupKey と同一ロジック
-function normalizeGroupKey(value) {
-  if (!value) return '';
-  return value
-    .replace(/[Ａ-Ｚａ-ｚ０-９]/g, (s) => String.fromCharCode(s.charCodeAt(0) - 0xfee0))
-    .toLowerCase()
-    .replace(/[\s　]/g, '')
-    .trim();
-}
+// normalizeGroupKey は functions/src/utils/groupAggregation.ts の SSoT を直接require する
+// (scripts/lib/loadTokenizer.js と同じ「compiled lib/ を共有」パターン。手書きコピーは
+// scripts/migrate-document-groups.js に続く3つ目の独立コピーとなり、本番ロジック変更時に
+// 気づかず乖離するリスクがあるため避ける)。
+// run-ops-script.yml は本スクリプト実行前に `npm run build` (functions/) を実行済み。
+const { normalizeGroupKey } = require(
+  path.resolve(__dirname, '../functions/lib/functions/src/utils/groupAggregation.js'),
+);
 
 async function main() {
   // 1. documents全件走査(status別内訳を含む)。母集団はstatus!=='split'に統一する
@@ -137,13 +137,20 @@ async function main() {
   console.log(`customerKey非空(${lhs}) = careManagerKey非空(${recalculated.careManager}) + careManagerKey欠損(${cmMissing}) = ${rhs}`);
   console.log(`一致: ${lhs === rhs ? '✅' : `❌ (差${lhs - rhs})`}`);
 
-  // customerIdありでCM欠落しているものの、マスターのcareManagerName有無を突合(同期漏れ検出)
+  // customerIdありでCM欠落しているものの、マスターのcareManagerName有無を突合(同期漏れ検出)。
+  // 各取得は独立(前イテレーションの結果に依存しない)なのでPromise.allで並列化する。
   if (cmMissingWithCustomerIdSample.length > 0) {
     console.log(`\n=== customerIdありでCM欠落のサンプル最大50件、マスター突合 ===`);
+    const custDocs = await Promise.all(
+      cmMissingWithCustomerIdSample.map((item) =>
+        db.collection('masters/customers/items').doc(item.customerId).get(),
+      ),
+    );
+
     let syncGap = 0;
     let masterAlsoEmpty = 0;
-    for (const item of cmMissingWithCustomerIdSample) {
-      const custDoc = await db.collection('masters/customers/items').doc(item.customerId).get();
+    cmMissingWithCustomerIdSample.forEach((item, i) => {
+      const custDoc = custDocs[i];
       const masterCm = custDoc.exists ? (custDoc.data().careManagerName || '').trim() : '';
       if (masterCm) {
         syncGap++;
@@ -151,7 +158,7 @@ async function main() {
       } else {
         masterAlsoEmpty++;
       }
-    }
+    });
     console.log(`\nサンプル内訳: 同期漏れ疑い=${syncGap}件 / マスターもCM未設定=${masterAlsoEmpty}件`);
   }
 }
