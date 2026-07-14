@@ -88,12 +88,19 @@ describe('集計所属変更メンテナンスゲート配線契約 (GOAL.md タ
     expect(handlerBody, 'splitPdfハンドラ本体の抽出に失敗した').to.not.be.null;
     expect(handlerBody, 'ハンドラ内でゲートチェックが呼ばれていない').to.match(GATE_CHECK_PATTERN);
 
-    // ゲートチェックが認証・ホワイトリスト確認より後、実際のPDF分割処理(pdf-lib読込)より前に
-    // 配置されていること(未認証ユーザーにゲート状態を漏らさない、かつ無駄な重い処理を避ける)
+    // ゲートチェックが認証・ホワイトリスト確認・引数バリデーションより後、実際のPDF分割処理
+    // (ドキュメント読込・pdf-lib読込)より前に配置されていること(未認証/不正リクエストに
+    // ゲート状態を漏らさない・誤ってinvalid-argumentをunavailableに誤分類しない、かつ
+    // 無駄な重い処理を避ける)。/code-review high指摘: 以前はバリデーション前に配置されて
+    // おりこの契約に違反していたが、テスト自体もバリデーション位置を検証していなかった
+    // ため未検出だった。segmentsのページ範囲バリデーションの終端を明示的にlock-inする。
     const authIdx = handlerBody!.search(/permission-denied/);
+    const validationEndIdx = handlerBody!.search(/has invalid page range/);
     const gateCheckIdx = handlerBody!.search(GATE_CHECK_PATTERN);
     const heavyWorkIdx = handlerBody!.search(/PDFDocument\.load/);
     expect(authIdx).to.be.greaterThan(-1);
+    expect(validationEndIdx, 'segmentsページ範囲バリデーションが見つからない').to.be.greaterThan(-1);
+    expect(gateCheckIdx, 'ゲートチェックは引数バリデーションより後に配置する').to.be.greaterThan(validationEndIdx);
     expect(gateCheckIdx).to.be.greaterThan(-1);
     expect(gateCheckIdx, 'ゲートチェックは認証チェックより後に配置する').to.be.greaterThan(authIdx);
     if (heavyWorkIdx > -1) {

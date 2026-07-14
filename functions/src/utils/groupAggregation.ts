@@ -485,9 +485,12 @@ export async function backfillUnassignedCareManagerGroup(
       const data = docSnap.data() as DocumentData;
       const keys = generateGroupKeys(data);
 
-      // resolveGroupKeyAndDisplay()のUNASSIGNED_FALLBACK条件と同一の判定
-      // (careManagerKey空 かつ customerKey非空)をここで直接適用する。
-      if (keys.careManagerKey === '' && keys.customerKey !== '') {
+      // resolveGroupKeyAndDisplay()を直接呼び、CM未設定グループへの判定条件を
+      // getAffectedGroups()/rebuildAllGroupAggregations()と完全に共有する(手書きコピー
+      // 禁止。/code-review high指摘: 条件をここで再実装すると、UNASSIGNED_FALLBACKの
+      // 定義が将来変わった際にこの関数だけ乖離する「独立コピー」リスクが再発する)。
+      const resolved = resolveGroupKeyAndDisplay('careManager', keys.careManagerKey, data.careManager, !!keys.customerKey);
+      if (resolved && resolved.key === groupKey) {
         matched++;
         if (latestDocs.length < 3) {
           latestDocs.push({

@@ -398,14 +398,6 @@ export const splitPdf = onCall(
       throw new HttpsError('permission-denied', 'User not in whitelist');
     }
 
-    // GOAL.md タスクG: バックフィル中は分割(親status:split化+子文書のCM未設定計上)を停止する
-    if (!(await isGroupAggregationGateOpen(db))) {
-      throw new HttpsError(
-        'unavailable',
-        'システムメンテナンス中のため、しばらくしてから再度お試しください'
-      );
-    }
-
     const { documentId, splitPoints, segments } = request.data as SplitRequest;
 
     if (!documentId || !splitPoints || !segments) {
@@ -440,6 +432,18 @@ export const splitPdf = onCall(
           `segments[${i}] has invalid page range: start=${seg.startPage}, end=${seg.endPage}`
         );
       }
+    }
+
+    // GOAL.md タスクG: バックフィル中は分割(親status:split化+子文書のCM未設定計上)を停止する。
+    // 引数バリデーション後・重い処理(ドキュメント読込・PDF処理)の前に配置する
+    // (ADR-0019/配線契約テストの意図通り。/code-review high指摘: バリデーション前だと
+    // 不正な引数のリクエストがゲート閉中は'invalid-argument'ではなく'unavailable'に
+    // 誤分類される)。
+    if (!(await isGroupAggregationGateOpen(db))) {
+      throw new HttpsError(
+        'unavailable',
+        'システムメンテナンス中のため、しばらくしてから再度お試しください'
+      );
     }
 
     // 元ドキュメント取得

@@ -290,6 +290,26 @@ describe('Firestore Security Rules', () => {
       );
     });
 
+    it('メンテナンスフラグdocは存在するがgroupAggregationGateOpenフィールド自体が未設定の場合も、careManagerの更新は許可される(安全側デフォルト、/code-review high指摘の回帰防止)', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        const db = context.firestore();
+        await setDoc(doc(db, 'documents', 'doc-gate-field-missing'), {
+          fileName: 'test.pdf', status: 'processed', careManager: '',
+        });
+        // フラグdoc自体は存在するが、groupAggregationGateOpenフィールドは設定されていない状態
+        // (Firestore Rulesは存在しないフィールドへの`.`アクセスで評価エラーになるため、
+        // `in`演算子での存在チェックがないと安全側デフォルトの意図に反し更新拒否側に倒れる)
+        await setDoc(doc(db, 'system', 'maintenanceFlags'), { someUnrelatedField: true });
+      });
+
+      const docRef = doc(normalUser.firestore(), 'documents', 'doc-gate-field-missing');
+      await assertSucceeds(
+        setDoc(docRef, { fileName: 'test.pdf', status: 'processed', careManager: '佐藤花子' }, { merge: true })
+      );
+    });
+
     it('groupAggregationGateOpen: trueの場合、careManagerの更新は許可される', async () => {
       const normalUser = testEnv.authenticatedContext(normalUid);
 

@@ -67,7 +67,12 @@ async function main() {
     const d = doc.data();
     totalAll++;
     statusBreakdown[d.status] = (statusBreakdown[d.status] || 0) + 1;
-    if (d.status === 'split') return;
+    // rebuildAllGroupAggregations()/backfillUnassignedCareManagerGroup()が使う
+    // Firestoreの`where('status','!=','split')`クエリと同一の母集団にする。この不等号
+    // クエリはstatusフィールド自体が存在しない文書を自動的に除外するため、JS側でも
+    // `d.status === 'split'`のみのチェックでは不十分(status未設定文書を誤って含めてしまう
+    // 非対称性が生じる、/code-review high指摘)。
+    if (d.status === undefined || d.status === 'split') return;
     totalNonSplit++;
 
     const keys = generateGroupKeys(d);

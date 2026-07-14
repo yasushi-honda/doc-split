@@ -85,6 +85,13 @@ const {
 } = require(
   path.resolve(__dirname, '../functions/lib/functions/src/utils/groupAggregation.js'),
 );
+// CM未設定グループの予約key/groupIdは shared/types.ts の CONSTANTS + generateGroupId から
+// 導出する(文字列リテラルのハードコピー禁止。/code-review high指摘: ハードコードすると
+// CONSTANTS.UNASSIGNED_CARE_MANAGER_KEYが将来変わった際にdry-runプレビューだけ乖離する)。
+const { CONSTANTS } = require(
+  path.resolve(__dirname, '../functions/lib/shared/types.js'),
+);
+const CM_UNASSIGNED_GROUP_ID = generateGroupId('careManager', CONSTANTS.UNASSIGNED_CARE_MANAGER_KEY);
 
 const MAINTENANCE_FLAGS_DOC_PATH = 'system/maintenanceFlags';
 
@@ -96,7 +103,7 @@ async function sleep(ms) {
  * CM未設定グループのバックフィル対象を読み取り専用でプレビューする(書き込み・ゲート操作なし)
  */
 async function previewBackfillCmUnassigned() {
-  const groupRef = db.collection('documentGroups').doc('careManager___UNASSIGNED_CARE_MANAGER__');
+  const groupRef = db.collection('documentGroups').doc(CM_UNASSIGNED_GROUP_ID);
   const existing = await groupRef.get();
   console.log(`  CM未設定グループ: ${existing.exists ? `既存(count=${existing.data().count})` : '未作成'}`);
 
@@ -122,7 +129,10 @@ async function previewBackfillCmUnassigned() {
     for (const docSnap of snapshot.docs) {
       const data = docSnap.data();
       const keys = generateGroupKeys(data);
-      if (keys.careManagerKey === '' && keys.customerKey !== '') {
+      // resolveGroupKeyAndDisplay()を直接呼び、実行モード(backfillUnassignedCareManagerGroup)
+      // と完全に同じ判定条件を共有する(手書きコピー禁止)。
+      const resolved = resolveGroupKeyAndDisplay('careManager', keys.careManagerKey, data.careManager, !!keys.customerKey);
+      if (resolved && resolved.key === CONSTANTS.UNASSIGNED_CARE_MANAGER_KEY) {
         matched++;
       }
       scanned++;

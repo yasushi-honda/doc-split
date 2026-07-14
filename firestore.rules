@@ -27,7 +27,13 @@ service cloud.firestore {
     // フラグドキュメントが存在しない場合は安全側デフォルトとして「開いている」扱いにする
     // (functions/src/utils/maintenanceGate.ts の isGroupAggregationGateOpen() と同一の既定値)。
     function groupAggregationGateOpen() {
+      // フラグdocは存在するがgroupAggregationGateOpenフィールド自体が未設定のケースを
+      // 明示的に許可側へ倒す。Firestore Rulesは存在しないフィールドへの`.`アクセスで
+      // 評価エラー(deny)になるため、`in`演算子での存在チェックが必須
+      // (実機検証で確認: 未対応時「Property groupAggregationGateOpen is undefined on
+      // object」エラーにより安全側デフォルトの意図に反し更新拒否側に倒れることを確認済み)。
       return !exists(/databases/$(database)/documents/system/maintenanceFlags) ||
+        !('groupAggregationGateOpen' in get(/databases/$(database)/documents/system/maintenanceFlags).data) ||
         get(/databases/$(database)/documents/system/maintenanceFlags).data.groupAggregationGateOpen != false;
     }
 
