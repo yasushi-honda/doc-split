@@ -497,6 +497,161 @@ export async function rebuildAllGroupAggregations(
   return { processed, groups: groupMap.size };
 }
 
+export interface RebuildSingleGroupAggregationResult {
+  groupId: string;
+  count: number;
+  deleted: boolean;
+}
+
+export interface RebuildSingleGroupAggregationOptions {
+  batchSize?: number;
+  /** trueの場合、Firestoreへの書込みを行わず再計算結果のみ返す(--dry-run用) */
+  dryRun?: boolean;
+}
+
+/**
+ * 単一グループ(groupType/groupKey)を生データから完全再導出して置換する
+ * (Issue #660 派生ミッション タスクJ4、`/codex plan`セカンドオピニオン指摘)。
+ *
+ * `rebuildAllGroupAggregations()`(documentGroups全体の全削除+再構築)は、
+ * 実運用データが載った本番環境で影響範囲が過大かつ、全件再構築中はライブトリガーとの
+ * 競合リスクがある(ADR-0020)。Issue #660の非冪等トリガーによって蓄積したドリフトが
+ * 特定少数のgroupIdに局在している場合、対象groupIdだけを個別に生データから完全再導出
+ * して置換するほうが安全かつ影響範囲が小さい。
+ *
+ * `count`だけを補正する差分方式ではなく、`displayName`/`latestAt`/`latestDocs`を含めて
+ * 完全に再計算しset()で置換する(count=0ならdelete)。理由: 差分方式だと過去のイベント
+ * 非冪等性により蓄積した`latestDocs`のstaleなpreview(削除されたはずの古いdocumentが
+ * 残留する等)が補正されない。
+ *
+ * `latestDocs`は`rebuildAllGroupAggregations()`と異なり、対象groupIdに一致した全
+ * documentを一旦収集してから`processedAt`降順(同値時はdocId昇順でtie-break)に厳密
+ * ソートして先頭3件を採用する。`rebuildAllGroupAggregations()`のクエリは
+ * `orderBy('status').orderBy('processedAt', 'desc')`でstatusが第一ソートキーのため、
+ * status境界をまたぐと真のprocessedAt降順にならない(先着3件embed方式の既知の限界、
+ * 今回は対象groupが少数のため全件収集後ソートのコストが許容できる)。
+ *
+ * 呼び出し前提: `functions/src/utils/maintenanceGate.ts`のゲートが閉じており、
+ * documentsへの集計所属変更を伴う書込みが十分な時間停止・ドレイン済みであること
+ * (`backfillUnassignedCareManagerGroup()`と同じ前提、本関数自体はゲート状態を
+ * 検証しない、呼び出し元の責務)。
+ *
+ * 書込み前の並行更新検知(review指摘対応): documents全件スキャンには時間がかかるため、
+ * スキャン開始前と書込み直前でgroupドキュメントの`updatedAt`を比較し、スキャン中に
+ * 別の書込み(ゲート前提が崩れた場合の集計トリガー再開、または並行実行等)が発生して
+ * いないかをトランザクション内で再検証してから書込む。`backfillUnassignedCareManagerGroup()`
+ * と同水準の防御であり、ADR-0019の既知残存リスク(集計トリガーの配信遅延)を検知する
+ * 最後の砦として機能する(review指摘: 従来はトランザクションなしの単純set/deleteだった)。
+ */
+export async function rebuildSingleGroupAggregation(
+  db: admin.firestore.Firestore,
+  groupType: GroupType,
+  groupKey: string,
+  options: RebuildSingleGroupAggregationOptions = {}
+): Promise<RebuildSingleGroupAggregationResult> {
+  const batchSize = options.batchSize ?? 500;
+  const groupId = generateGroupId(groupType, groupKey);
+  const groupRef = db.collection('documentGroups').doc(groupId);
+
+  const beforeSnap = await groupRef.get();
+  const beforeUpdatedAt = beforeSnap.exists ? (beforeSnap.data() as DocumentGroupData).updatedAt : null;
+
+  let matched = 0;
+  let displayName = '';
+  let displayNameSet = false;
+  const candidates: GroupPreviewDoc[] = [];
+  let lastDoc: admin.firestore.QueryDocumentSnapshot | undefined;
+
+  // rebuildAllGroupAggregations()と同一クエリ(母集団定義の一貫性を保つ)
+  while (true) {
+    let query = db.collection('documents')
+      .where('status', '!=', 'split')
+      .orderBy('status')
+      .orderBy('processedAt', 'desc')
+      .limit(batchSize);
+
+    if (lastDoc) {
+      query = query.startAfter(lastDoc);
+    }
+
+    const snapshot = await query.get();
+    if (snapshot.empty) break;
+
+    for (const docSnap of snapshot.docs) {
+      const data = docSnap.data() as DocumentData;
+      const keys = generateGroupKeys(data);
+
+      const fieldByType: Record<GroupType, { key: string; display: string }> = {
+        customer: { key: keys.customerKey, display: data.customerName || '' },
+        office: { key: keys.officeKey, display: data.officeName || '' },
+        documentType: { key: keys.documentTypeKey, display: data.documentType || '' },
+        careManager: { key: keys.careManagerKey, display: data.careManager || '' },
+      };
+      const { key, display } = fieldByType[groupType];
+      const resolved = resolveGroupKeyAndDisplay(groupType, key, display, !!keys.customerKey);
+      if (!resolved || resolved.key !== groupKey) continue;
+
+      matched++;
+      if (!displayNameSet) {
+        displayName = resolved.displayName;
+        displayNameSet = true;
+      }
+      candidates.push({
+        id: docSnap.id,
+        fileName: data.fileName || '',
+        documentType: data.documentType || '',
+        processedAt: data.processedAt || Timestamp.now(),
+      });
+    }
+
+    lastDoc = snapshot.docs[snapshot.docs.length - 1];
+  }
+
+  if (options.dryRun) {
+    return { groupId, count: matched, deleted: matched === 0 };
+  }
+
+  candidates.sort((a, b) => {
+    const diff = b.processedAt.toMillis() - a.processedAt.toMillis();
+    return diff !== 0 ? diff : a.id.localeCompare(b.id);
+  });
+  const latestDocs = candidates.slice(0, 3);
+
+  const newGroupData: DocumentGroupData | null = matched === 0 ? null : {
+    groupType,
+    groupKey,
+    displayName,
+    count: matched,
+    latestAt: latestDocs[0].processedAt,
+    latestDocs,
+    updatedAt: Timestamp.now(),
+  };
+
+  await db.runTransaction(async (transaction) => {
+    const currentSnap = await transaction.get(groupRef);
+    const currentUpdatedAt = currentSnap.exists ? (currentSnap.data() as DocumentGroupData).updatedAt : null;
+    const unchanged = beforeUpdatedAt === null
+      ? !currentSnap.exists
+      : (currentSnap.exists && currentUpdatedAt !== null && currentUpdatedAt.isEqual(beforeUpdatedAt));
+    if (!unchanged) {
+      throw new Error(
+        `rebuildSingleGroupAggregation: documentGroups/${groupId} was modified concurrently during the ` +
+        'documents scan (updatedAt changed since scan start). This indicates the maintenance gate precondition ' +
+        'may not hold, or a concurrent rebuild is running. Aborting to avoid overwriting newer state — re-run ' +
+        'after the concurrent write settles.'
+      );
+    }
+
+    if (newGroupData === null) {
+      if (currentSnap.exists) transaction.delete(groupRef);
+      return;
+    }
+    transaction.set(groupRef, newGroupData);
+  });
+
+  return { groupId, count: matched, deleted: matched === 0 };
+}
+
 export interface BackfillUnassignedCareManagerGroupResult {
   scanned: number;
   matched: number;

@@ -19,6 +19,7 @@
  * Usage:
  *   node scripts/migrate-document-groups.js [--project <project-id>] [--dry-run]
  *   node scripts/migrate-document-groups.js --backfill-cm-unassigned [--project <project-id>] [--dry-run]
+ *   node scripts/migrate-document-groups.js --rebuild-groups <groupId1> [--rebuild-groups <groupId2> ...] [--project <project-id>] [--dry-run]
  *
  * Options:
  *   --project                  Firebase プロジェクトID (デフォルト: doc-split-dev)
@@ -31,10 +32,24 @@
  *                              メンテナンスゲートで一時停止してから安全に作成する
  *                              (functions/src/utils/maintenanceGate.ts、
  *                              /codex plan セカンドオピニオンで設計確定)。
- *   --drain-wait-ms <ms>       --backfill-cm-unassigned実行モードのドレイン待機時間
- *                              (デフォルト: 600000 = 10分、Cloud Functions最大実行時間
- *                              540秒を上回るバリア)。dev環境での動作確認や、Cloud
- *                              Functionsのタイムアウト設定が変わった場合の調整用。
+ *   --rebuild-groups <id>      Issue #660派生ミッション タスクJ4: Issue #660の非冪等
+ *                              トリガーによって蓄積したドリフトが特定少数のgroupIdに
+ *                              局在している場合、対象groupId(繰り返し指定、
+ *                              scripts/diagnose-caremanager-group-gap.jsの出力形式
+ *                              例: careManager_奥村敬子)のみを生データから完全再導出
+ *                              して置換する。documentGroups全体の全削除
+ *                              (rebuildAllGroupAggregations)は本番環境で影響範囲が
+ *                              過大なため、対象個別グループのみに限定した安全な代替
+ *                              (/codex plan セカンドオピニオンで設計確定)。カンマ区切り
+ *                              ではなく繰り返し引数形式にしているのは、groupKeyが
+ *                              自由入力の名前由来でカンマを含みうるため(codex review
+ *                              P1指摘、CSVだと誤分割されるリスクがある)。
+ *                              --backfill-cm-unassignedと同じメンテナンスゲート制御
+ *                              (クローズ→ドレイン待機→処理→finally再開)で実行する。
+ *   --drain-wait-ms <ms>       --backfill-cm-unassigned/--rebuild-groups実行モードの
+ *                              ドレイン待機時間(デフォルト: 600000 = 10分、Cloud
+ *                              Functions最大実行時間540秒を上回るバリア)。dev環境での
+ *                              動作確認や、タイムアウト設定が変わった場合の調整用。
  */
 
 const path = require('path');
@@ -49,6 +64,12 @@ let projectId = process.env.FIREBASE_PROJECT_ID || 'doc-split-dev';
 let dryRun = false;
 let backfillCmUnassigned = false;
 let drainWaitMs = 10 * 60 * 1000;
+// --rebuild-groupsは繰り返し引数形式(--rebuild-groups <id> --rebuild-groups <id> ...)。
+// review指摘対応: CSVのカンマ区切りだと、groupKeyが自由入力文字列由来のためカンマを
+// 含むケース(理論上ありうる)で誤分割される。繰り返し引数なら曖昧性がない
+// (codex review P1指摘)。CSV→複数--rebuild-groups引数への展開はGHA側(run-ops-script.yml)
+// の責務とする。
+const rebuildGroupIds = [];
 
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--project' && args[i + 1]) {
@@ -60,6 +81,17 @@ for (let i = 0; i < args.length; i++) {
     backfillCmUnassigned = true;
   } else if (args[i] === '--drain-wait-ms' && args[i + 1]) {
     drainWaitMs = parseInt(args[i + 1], 10);
+    i++;
+  } else if (args[i] === '--rebuild-groups') {
+    // review指摘対応(codex review P1): 値が欠落/空/次の引数が別フラグの場合、
+    // 危険な既定モード(全件再構築、Phase1でdocuments全件update)へ静かに
+    // フォールバックしないよう、ここで即座にエラー終了する。
+    const value = args[i + 1];
+    if (!value || value.startsWith('--')) {
+      console.error('❌ --rebuild-groups には値(groupId)を指定してください(例: --rebuild-groups careManager_佐藤花子)');
+      process.exit(1);
+    }
+    rebuildGroupIds.push(value);
     i++;
   }
 }
@@ -82,9 +114,38 @@ const {
   resolveGroupKeyAndDisplay,
   rebuildAllGroupAggregations,
   backfillUnassignedCareManagerGroup,
+  rebuildSingleGroupAggregation,
 } = require(
   path.resolve(__dirname, '../functions/lib/functions/src/utils/groupAggregation.js'),
 );
+
+// groupIdの逆パース用。GroupType自体はTypeScript型でJS実行時には存在しないため、
+// generateGroupId()が使う4種の既知prefixをローカルに列挙する(4値は互いに他の接頭辞
+// にならないため、先頭一致判定で一意にgroupType/groupKeyへ分解できる)。
+const GROUP_TYPES = ['customer', 'office', 'documentType', 'careManager'];
+
+function parseGroupId(groupId) {
+  for (const type of GROUP_TYPES) {
+    const prefix = `${type}_`;
+    if (groupId.startsWith(prefix)) {
+      const parsed = { groupType: type, groupKey: groupId.slice(prefix.length) };
+      // review指摘対応(type-design-analyzer): generateGroupId()との往復(round-trip)が
+      // 一致することをここで検証する。dry-run(previewRebuildGroups、生groupId文字列を
+      // 直接documentGroupsの参照に使う)と実行(executeRebuildGroups、parseGroupIdで
+      // 分解後generateGroupIdで再構築したgroupIdを使う)の対象特定経路が異なるため、
+      // 往復が一致しない場合に静かに別groupを操作してしまうリスクを実行時に検知する。
+      if (generateGroupId(parsed.groupType, parsed.groupKey) !== groupId) {
+        throw new Error(
+          `parseGroupId: groupId "${groupId}" の分解結果がgenerateGroupId()で再構築した値と一致しません ` +
+          `(groupType=${parsed.groupType}, groupKey=${parsed.groupKey})。往復不一致は対象取り違えの` +
+          'リスクがあるため中断します。'
+        );
+      }
+      return parsed;
+    }
+  }
+  throw new Error(`未知のgroupId形式です(customer_/office_/documentType_/careManager_のいずれのprefixにも一致しません): ${groupId}`);
+}
 // CM未設定グループの予約key/groupIdは shared/types.ts の CONSTANTS + generateGroupId から
 // 導出する(文字列リテラルのハードコピー禁止。/code-review high指摘: ハードコードすると
 // CONSTANTS.UNASSIGNED_CARE_MANAGER_KEYが将来変わった際にdry-runプレビューだけ乖離する)。
@@ -184,10 +245,130 @@ async function executeBackfillCmUnassigned() {
 }
 
 /**
+ * --rebuild-groups対象のgroupIdを読み取り専用でプレビューする(書き込み・ゲート操作なし)。
+ *
+ * review指摘対応(code-reviewer Critical): 単に既存の(ドリフトしている可能性がある)
+ * documentGroupsの現在値を表示するだけでは、実行したら何件になるか・削除されるかが
+ * 事前に分からずdry-runとして機能していなかった。rebuildSingleGroupAggregation()の
+ * dryRunオプションで実際に生データを再走査し、現在値→再構築後の値を対比表示する。
+ */
+async function previewRebuildGroups(groupIds) {
+  for (const groupId of groupIds) {
+    const { groupType, groupKey } = parseGroupId(groupId);
+    const groupRef = db.collection('documentGroups').doc(groupId);
+    const existing = await groupRef.get();
+    const beforeDesc = existing.exists ? `count=${existing.data().count}` : '未作成';
+
+    const result = await rebuildSingleGroupAggregation(db, groupType, groupKey, { dryRun: true });
+    const afterDesc = result.deleted ? '削除予定(対象0件)' : `count=${result.count}`;
+
+    console.log(`  ${groupId}: 現在(${beforeDesc}) → 再構築後(${afterDesc})`);
+  }
+}
+
+/**
+ * --rebuild-groups対象のgroupIdを、メンテナンスゲート制御下で個別に完全再構築する。
+ *
+ * review指摘対応(silent-failure-hunter H1): forループにtry/catchがなく1件失敗すると
+ * 残り全件が未処理のまま中断していたため、失敗groupIdをスキップして残りを処理継続する
+ * よう変更。成功/失敗を構造化して記録し、失敗があれば再実行対象を明示する。
+ *
+ * review指摘対応(silent-failure-hunter M1): groupIdのフォーマット検証(parseGroupId)が
+ * 従来ゲートクローズ+10分ドレイン待機の「後」で初めて行われていたため、CSV先頭要素の
+ * タイプミス1つで本番の集計関連書込み経路を10分間無駄に止めてから失敗していた。
+ * ゲートクローズより前に全groupIdを事前検証する。
+ */
+async function executeRebuildGroups(groupIds) {
+  // ゲートクローズ前の事前検証(silent-failure-hunter M1対応)
+  for (const groupId of groupIds) {
+    parseGroupId(groupId); // 不正な形式なら例外(ゲート操作前なのでゲートは閉じられない)
+  }
+
+  console.log('🔒 メンテナンスゲートを閉じます...');
+  await db.doc(MAINTENANCE_FLAGS_DOC_PATH).set(
+    { groupAggregationGateOpen: false, gateClosedAt: admin.firestore.FieldValue.serverTimestamp() },
+    { merge: true }
+  );
+
+  console.log(`⏳ ドレイン確認のため ${drainWaitMs / 1000} 秒待機します(Cloud Functions最大実行時間を上回るバリア)...`);
+  await sleep(drainWaitMs);
+
+  const succeeded = [];
+  const failed = [];
+  try {
+    for (const groupId of groupIds) {
+      try {
+        const { groupType, groupKey } = parseGroupId(groupId);
+        console.log(`📊 ${groupId} を再構築します...`);
+        const result = await rebuildSingleGroupAggregation(db, groupType, groupKey, { batchSize: 500 });
+        console.log(`  → ${result.deleted ? '削除(対象0件)' : `count=${result.count}`}`);
+        succeeded.push(result);
+      } catch (error) {
+        console.error(`  ❌ ${groupId} の再構築に失敗しました:`, error);
+        failed.push({ groupId, error: error.message });
+      }
+    }
+  } finally {
+    // 一部のgroup処理が失敗しても必ずゲートを再開する(閉じたまま放置しない)。
+    // review指摘対応(silent-failure-hunter H3): ゲート再開自体の書込み失敗でtry節の
+    // 元の例外が握りつぶされないよう、ここでcatchして両方を明示的にログ出力する。
+    console.log('🔓 メンテナンスゲートを再開します...');
+    try {
+      await db.doc(MAINTENANCE_FLAGS_DOC_PATH).set(
+        { groupAggregationGateOpen: true, gateOpenedAt: admin.firestore.FieldValue.serverTimestamp() },
+        { merge: true }
+      );
+    } catch (gateError) {
+      console.error(
+        '❌ メンテナンスゲートの再開に失敗しました。ゲートが閉じたままの可能性があります。' +
+        `system/maintenanceFlags の groupAggregationGateOpen を手動で true に戻してください: `,
+        gateError
+      );
+      throw gateError;
+    }
+  }
+
+  const allSucceeded = failed.length === 0;
+  console.log(`\n${allSucceeded ? '✅' : '⚠️ '} ${succeeded.length}/${groupIds.length} グループの再構築完了`);
+  if (!allSucceeded) {
+    console.log(`❌ 失敗したgroupId (${failed.length}件): ${failed.map((f) => f.groupId).join(', ')}`);
+    console.log('   失敗したgroupIdのみを対象に再実行してください(rebuildSingleGroupAggregationは冪等)。');
+  }
+  console.log('次のステップ: scripts/diagnose-caremanager-group-gap.js で全groupIdの一致を再検証してください。');
+
+  // review指摘対応(codex review P2): 一部groupIdの失敗をここで握りつぶしてnormal returnすると、
+  // main()の呼び出し元(GitHub Actions)はexit code 0(成功)として扱ってしまい、実際には
+  // 一部の補正が未適用のまま「ジョブ成功」と誤認される。ゲート再開(finally)が完了した後、
+  // 失敗が1件でもあれば明示的に例外を投げてexit code非0にする。
+  if (!allSucceeded) {
+    throw new Error(
+      `${failed.length}/${groupIds.length} グループの再構築に失敗しました: ` +
+      `${failed.map((f) => f.groupId).join(', ')}`
+    );
+  }
+  return { succeeded, failed };
+}
+
+/**
  * メイン処理
  */
 async function main() {
   const startTime = Date.now();
+
+  if (rebuildGroupIds.length > 0) {
+    console.log(`🎯 モード: 個別グループ再構築(GOAL.md タスクJ4、対象 ${rebuildGroupIds.length} 件)\n`);
+
+    if (dryRun) {
+      await previewRebuildGroups(rebuildGroupIds);
+      console.log('\n⚠️  ドライランモードで実行しました。ゲート操作・書き込みは行っていません。');
+    } else {
+      await executeRebuildGroups(rebuildGroupIds);
+    }
+
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    console.log(`\n⏱️  実行時間: ${elapsed} 秒`);
+    return;
+  }
 
   if (backfillCmUnassigned) {
     console.log('🎯 モード: CM未設定グループ バックフィル(GOAL.md タスクG)\n');
