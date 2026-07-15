@@ -221,4 +221,28 @@ describe('onDocumentWrite イベント冪等性 (Issue #660修正、ADR-0020)', 
     const ledgerSnap = await db.collection('documentAggregationEvents').doc('event-fault-trigger').get();
     expect(ledgerSnap.exists, 'トランザクション失敗時は台帳も作成されないべき(再試行可能性を保つ)').to.equal(false);
   });
+
+  it('AC7(write-then-deleteレース対応、codex review P2指摘): キー正規化対象documentが削除済みでも集計は正しく適用され、台帳も一度だけ作成される', async () => {
+    // documents/doc-race-deletedは意図的に作成しない(このイベント処理前に対象
+    // documentが削除された、またはまだ作成されていないレースを再現)。
+    // needsKeyUpdate=trueとなるafterData(customerKey/careManagerKey未設定)を渡すと、
+    // onDocumentWrite内のキー正規化自己書込みが実際にFirestore emulatorへ
+    // documents/doc-race-deletedのupdate()を試み、genuineなNOT_FOUNDが発生する。
+    const afterDataWithoutKeys = {
+      customerName: '中村誠', careManager: '小林由美',
+      status: 'processed', fileName: 'f.pdf', processedAt: Timestamp.now(),
+    };
+    const input = baseInput({ eventId: 'event-race-deleted', docId: 'doc-race-deleted', afterData: afterDataWithoutKeys });
+
+    // documents/doc-race-deletedへのキー更新自体はNOT_FOUNDで失敗するが、
+    // processDocumentAggregationEvent()全体は失敗せず、集計は正規化後の値で正しく適用される。
+    const result = await processDocumentAggregationEvent(db, input);
+    expect(result.skipped).to.equal(false);
+    expect(await careManagerGroupCount('小林由美'), 'documentが削除済みでも正規化後の値で正しく集計されるべき').to.equal(1);
+
+    // 台帳が正しく作成されており、再配信時には正しくskipされる(=永久リトライしない)
+    const redelivered = await processDocumentAggregationEvent(db, input);
+    expect(redelivered.skipped, '台帳が作成されていれば再配信は正しくskipされるべき').to.equal(true);
+    expect(await careManagerGroupCount('小林由美'), '再配信で二重計上されてはいけない').to.equal(1);
+  });
 });

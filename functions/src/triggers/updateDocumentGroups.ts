@@ -14,6 +14,7 @@ import {
   aggregationEventLedgerRef,
   buildAggregationEventLedgerEntry,
 } from '../utils/groupAggregation';
+import { isFirestoreNotFoundError } from '../utils/firestoreErrors';
 import { Timestamp } from 'firebase-admin/firestore';
 
 const db = admin.firestore();
@@ -78,6 +79,14 @@ export async function processDocumentAggregationEvent(
       // retry:trueを前提に、この書込みが失敗した場合もイベント処理全体を失敗させ
       // Cloud Functions側の再試行に委ねる(キー更新のみ成功扱いにして握りつぶすと、
       // documentsのキャッシュキーだけが恒久的に古いまま残る。/codex plan指摘)。
+      //
+      // 例外: NOT_FOUND(対象documentが既に削除済み)はこのcatchに限定して非致命として
+      // 継続する。write-then-deleteレース(このイベントの処理前に対象documentが削除
+      // される)でthrowすると、削除済みdocumentへの更新は再試行しても永久にNOT_FOUND
+      // し続け、このイベントの集計deltaが台帳TTL/最大再試行期間まで永久に適用されない
+      // まま、後続のdeleteイベントのdeltaだけが適用されドリフトする(codex review P2
+      // 指摘)。集計自体はevent.data.before/afterの凍結スナップショットから計算する
+      // ため、キー更新の成否とは独立して正しく実行できる。
       try {
         await db.collection('documents').doc(docId).update({
           customerKey: keys.customerKey,
@@ -87,8 +96,12 @@ export async function processDocumentAggregationEvent(
         });
         console.log(`[onDocumentWrite] Updated group keys for ${docId}`);
       } catch (error) {
-        console.error(`[onDocumentWrite] Failed to update keys for ${docId}:`, error);
-        throw error;
+        if (isFirestoreNotFoundError(error)) {
+          console.warn(`[onDocumentWrite] Document ${docId} deleted before key update, continuing aggregation`);
+        } else {
+          console.error(`[onDocumentWrite] Failed to update keys for ${docId}:`, error);
+          throw error;
+        }
       }
 
       // キー更新後のafterDataを再構築
