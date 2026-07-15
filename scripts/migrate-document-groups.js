@@ -19,6 +19,7 @@
  * Usage:
  *   node scripts/migrate-document-groups.js [--project <project-id>] [--dry-run]
  *   node scripts/migrate-document-groups.js --backfill-cm-unassigned [--project <project-id>] [--dry-run]
+ *   node scripts/migrate-document-groups.js --rebuild-groups <groupId1>,<groupId2>,... [--project <project-id>] [--dry-run]
  *
  * Options:
  *   --project                  Firebase プロジェクトID (デフォルト: doc-split-dev)
@@ -31,10 +32,21 @@
  *                              メンテナンスゲートで一時停止してから安全に作成する
  *                              (functions/src/utils/maintenanceGate.ts、
  *                              /codex plan セカンドオピニオンで設計確定)。
- *   --drain-wait-ms <ms>       --backfill-cm-unassigned実行モードのドレイン待機時間
- *                              (デフォルト: 600000 = 10分、Cloud Functions最大実行時間
- *                              540秒を上回るバリア)。dev環境での動作確認や、Cloud
- *                              Functionsのタイムアウト設定が変わった場合の調整用。
+ *   --rebuild-groups <ids>     Issue #660派生ミッション タスクJ4: Issue #660の非冪等
+ *                              トリガーによって蓄積したドリフトが特定少数のgroupIdに
+ *                              局在している場合、対象groupId(カンマ区切り、
+ *                              scripts/diagnose-caremanager-group-gap.jsの出力形式
+ *                              例: careManager_奥村敬子)のみを生データから完全再導出
+ *                              して置換する。documentGroups全体1191グループの全削除
+ *                              (rebuildAllGroupAggregations)は本番環境で影響範囲が
+ *                              過大なため、対象個別グループのみに限定した安全な代替
+ *                              (/codex plan セカンドオピニオンで設計確定)。
+ *                              --backfill-cm-unassignedと同じメンテナンスゲート制御
+ *                              (クローズ→ドレイン待機→処理→finally再開)で実行する。
+ *   --drain-wait-ms <ms>       --backfill-cm-unassigned/--rebuild-groups実行モードの
+ *                              ドレイン待機時間(デフォルト: 600000 = 10分、Cloud
+ *                              Functions最大実行時間540秒を上回るバリア)。dev環境での
+ *                              動作確認や、タイムアウト設定が変わった場合の調整用。
  */
 
 const path = require('path');
@@ -49,6 +61,7 @@ let projectId = process.env.FIREBASE_PROJECT_ID || 'doc-split-dev';
 let dryRun = false;
 let backfillCmUnassigned = false;
 let drainWaitMs = 10 * 60 * 1000;
+let rebuildGroupIds = null;
 
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--project' && args[i + 1]) {
@@ -60,6 +73,9 @@ for (let i = 0; i < args.length; i++) {
     backfillCmUnassigned = true;
   } else if (args[i] === '--drain-wait-ms' && args[i + 1]) {
     drainWaitMs = parseInt(args[i + 1], 10);
+    i++;
+  } else if (args[i] === '--rebuild-groups' && args[i + 1]) {
+    rebuildGroupIds = args[i + 1].split(',').map((s) => s.trim()).filter(Boolean);
     i++;
   }
 }
@@ -82,9 +98,25 @@ const {
   resolveGroupKeyAndDisplay,
   rebuildAllGroupAggregations,
   backfillUnassignedCareManagerGroup,
+  rebuildSingleGroupAggregation,
 } = require(
   path.resolve(__dirname, '../functions/lib/functions/src/utils/groupAggregation.js'),
 );
+
+// groupIdの逆パース用。GroupType自体はTypeScript型でJS実行時には存在しないため、
+// generateGroupId()が使う4種の既知prefixをローカルに列挙する(4値は互いに他の接頭辞
+// にならないため、先頭一致判定で一意にgroupType/groupKeyへ分解できる)。
+const GROUP_TYPES = ['customer', 'office', 'documentType', 'careManager'];
+
+function parseGroupId(groupId) {
+  for (const type of GROUP_TYPES) {
+    const prefix = `${type}_`;
+    if (groupId.startsWith(prefix)) {
+      return { groupType: type, groupKey: groupId.slice(prefix.length) };
+    }
+  }
+  throw new Error(`未知のgroupId形式です(customer_/office_/documentType_/careManager_のいずれのprefixにも一致しません): ${groupId}`);
+}
 // CM未設定グループの予約key/groupIdは shared/types.ts の CONSTANTS + generateGroupId から
 // 導出する(文字列リテラルのハードコピー禁止。/code-review high指摘: ハードコードすると
 // CONSTANTS.UNASSIGNED_CARE_MANAGER_KEYが将来変わった際にdry-runプレビューだけ乖離する)。
@@ -184,10 +216,73 @@ async function executeBackfillCmUnassigned() {
 }
 
 /**
+ * --rebuild-groups対象のgroupIdを読み取り専用でプレビューする(書き込み・ゲート操作なし)
+ */
+async function previewRebuildGroups(groupIds) {
+  for (const groupId of groupIds) {
+    const { groupType, groupKey } = parseGroupId(groupId);
+    const groupRef = db.collection('documentGroups').doc(groupId);
+    const existing = await groupRef.get();
+    console.log(`  ${groupId} (groupType=${groupType}, groupKey=${groupKey}): ${existing.exists ? `既存(count=${existing.data().count})` : '未作成'}`);
+  }
+}
+
+/**
+ * --rebuild-groups対象のgroupIdを、メンテナンスゲート制御下で個別に完全再構築する
+ */
+async function executeRebuildGroups(groupIds) {
+  console.log('🔒 メンテナンスゲートを閉じます...');
+  await db.doc(MAINTENANCE_FLAGS_DOC_PATH).set(
+    { groupAggregationGateOpen: false, gateClosedAt: admin.firestore.FieldValue.serverTimestamp() },
+    { merge: true }
+  );
+
+  console.log(`⏳ ドレイン確認のため ${drainWaitMs / 1000} 秒待機します(Cloud Functions最大実行時間を上回るバリア)...`);
+  await sleep(drainWaitMs);
+
+  const results = [];
+  try {
+    for (const groupId of groupIds) {
+      const { groupType, groupKey } = parseGroupId(groupId);
+      console.log(`📊 ${groupId} を再構築します...`);
+      const result = await rebuildSingleGroupAggregation(db, groupType, groupKey, 500);
+      console.log(`  → ${result.deleted ? '削除(対象0件)' : `count=${result.count}`}`);
+      results.push(result);
+    }
+  } finally {
+    // 一部のgroup処理が失敗しても必ずゲートを再開する(閉じたまま放置しない)
+    console.log('🔓 メンテナンスゲートを再開します...');
+    await db.doc(MAINTENANCE_FLAGS_DOC_PATH).set(
+      { groupAggregationGateOpen: true, gateOpenedAt: admin.firestore.FieldValue.serverTimestamp() },
+      { merge: true }
+    );
+  }
+
+  console.log(`\n✅ ${results.length}/${groupIds.length} グループの再構築完了`);
+  console.log('次のステップ: scripts/diagnose-caremanager-group-gap.js で全groupIdの一致を再検証してください。');
+  return results;
+}
+
+/**
  * メイン処理
  */
 async function main() {
   const startTime = Date.now();
+
+  if (rebuildGroupIds) {
+    console.log(`🎯 モード: 個別グループ再構築(GOAL.md タスクJ4、対象 ${rebuildGroupIds.length} 件)\n`);
+
+    if (dryRun) {
+      await previewRebuildGroups(rebuildGroupIds);
+      console.log('\n⚠️  ドライランモードで実行しました。ゲート操作・書き込みは行っていません。');
+    } else {
+      await executeRebuildGroups(rebuildGroupIds);
+    }
+
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    console.log(`\n⏱️  実行時間: ${elapsed} 秒`);
+    return;
+  }
 
   if (backfillCmUnassigned) {
     console.log('🎯 モード: CM未設定グループ バックフィル(GOAL.md タスクG)\n');

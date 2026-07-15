@@ -497,6 +497,126 @@ export async function rebuildAllGroupAggregations(
   return { processed, groups: groupMap.size };
 }
 
+export interface RebuildSingleGroupAggregationResult {
+  groupId: string;
+  matched: number;
+  count: number;
+  deleted: boolean;
+}
+
+/**
+ * 単一グループ(groupType/groupKey)を生データから完全再導出して置換する
+ * (Issue #660 派生ミッション タスクJ4、`/codex plan`セカンドオピニオン指摘)。
+ *
+ * `rebuildAllGroupAggregations()`(documentGroups全体1191グループの全削除+再構築)は、
+ * 実運用データが載った本番環境で影響範囲が過大かつ、全件再構築中はライブトリガーとの
+ * 競合リスクがある(ADR-0020)。Issue #660の非冪等トリガーによって蓄積したドリフトが
+ * 特定少数のgroupIdに局在している場合、対象groupIdだけを個別に生データから完全再導出
+ * して置換するほうが安全かつ影響範囲が小さい。
+ *
+ * `count`だけを補正する差分方式ではなく、`displayName`/`latestAt`/`latestDocs`を含めて
+ * 完全に再計算しset()で置換する(count=0ならdelete)。理由: 差分方式だと過去のイベント
+ * 非冪等性により蓄積した`latestDocs`のstaleなpreview(削除されたはずの古いdocumentが
+ * 残留する等)が補正されない。
+ *
+ * `latestDocs`は`rebuildAllGroupAggregations()`と異なり、対象groupIdに一致した全
+ * documentを一旦収集してから`processedAt`降順(同値時はdocId昇順でtie-break)に厳密
+ * ソートして先頭3件を採用する。`rebuildAllGroupAggregations()`のクエリは
+ * `orderBy('status').orderBy('processedAt', 'desc')`でstatusが第一ソートキーのため、
+ * status境界をまたぐと真のprocessedAt降順にならない(先着3件embed方式の既知の限界、
+ * 今回は対象groupが少数のため全件収集後ソートのコストが許容できる)。
+ *
+ * 呼び出し前提: `functions/src/utils/maintenanceGate.ts`のゲートが閉じており、
+ * documentsへの集計所属変更を伴う書込みが十分な時間停止・ドレイン済みであること
+ * (`backfillUnassignedCareManagerGroup()`と同じ前提、本関数自体はゲート状態を
+ * 検証しない、呼び出し元の責務)。
+ */
+export async function rebuildSingleGroupAggregation(
+  db: admin.firestore.Firestore,
+  groupType: GroupType,
+  groupKey: string,
+  batchSize: number = 500
+): Promise<RebuildSingleGroupAggregationResult> {
+  const groupId = generateGroupId(groupType, groupKey);
+  const groupRef = db.collection('documentGroups').doc(groupId);
+
+  let matched = 0;
+  let displayName = '';
+  let displayNameSet = false;
+  const candidates: GroupPreviewDoc[] = [];
+  let lastDoc: admin.firestore.QueryDocumentSnapshot | undefined;
+
+  // rebuildAllGroupAggregations()と同一クエリ(母集団定義の一貫性を保つ)
+  while (true) {
+    let query = db.collection('documents')
+      .where('status', '!=', 'split')
+      .orderBy('status')
+      .orderBy('processedAt', 'desc')
+      .limit(batchSize);
+
+    if (lastDoc) {
+      query = query.startAfter(lastDoc);
+    }
+
+    const snapshot = await query.get();
+    if (snapshot.empty) break;
+
+    for (const docSnap of snapshot.docs) {
+      const data = docSnap.data() as DocumentData;
+      const keys = generateGroupKeys(data);
+
+      const fieldByType: Record<GroupType, { key: string; display: string }> = {
+        customer: { key: keys.customerKey, display: data.customerName || '' },
+        office: { key: keys.officeKey, display: data.officeName || '' },
+        documentType: { key: keys.documentTypeKey, display: data.documentType || '' },
+        careManager: { key: keys.careManagerKey, display: data.careManager || '' },
+      };
+      const { key, display } = fieldByType[groupType];
+      const resolved = resolveGroupKeyAndDisplay(groupType, key, display, !!keys.customerKey);
+      if (!resolved || resolved.key !== groupKey) continue;
+
+      matched++;
+      if (!displayNameSet) {
+        displayName = resolved.displayName;
+        displayNameSet = true;
+      }
+      candidates.push({
+        id: docSnap.id,
+        fileName: data.fileName || '',
+        documentType: data.documentType || '',
+        processedAt: data.processedAt || Timestamp.now(),
+      });
+    }
+
+    lastDoc = snapshot.docs[snapshot.docs.length - 1];
+  }
+
+  if (matched === 0) {
+    await groupRef.delete();
+    return { groupId, matched: 0, count: 0, deleted: true };
+  }
+
+  candidates.sort((a, b) => {
+    const diff = b.processedAt.toMillis() - a.processedAt.toMillis();
+    return diff !== 0 ? diff : a.id.localeCompare(b.id);
+  });
+  const latestDocs = candidates.slice(0, 3);
+
+  const newGroupData: DocumentGroupData = {
+    groupType,
+    groupKey,
+    displayName,
+    count: matched,
+    latestAt: latestDocs[0].processedAt,
+    latestDocs,
+    updatedAt: Timestamp.now(),
+  };
+
+  await groupRef.set(newGroupData);
+
+  return { groupId, matched, count: matched, deleted: false };
+}
+
 export interface BackfillUnassignedCareManagerGroupResult {
   scanned: number;
   matched: number;

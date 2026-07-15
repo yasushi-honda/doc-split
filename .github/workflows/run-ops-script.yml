@@ -119,6 +119,8 @@ on:
           - diagnose-caremanager-group-gap
           - migrate-document-groups --backfill-cm-unassigned --dry-run
           - migrate-document-groups --backfill-cm-unassigned
+          - migrate-document-groups --rebuild-groups --dry-run
+          - migrate-document-groups --rebuild-groups
       doc_id:
         description: 'Document ID (required when script contains --doc-id; ignored otherwise)'
         required: false
@@ -194,6 +196,11 @@ on:
         default: ''
       run_id_for_rollback:
         description: 'delete-legacy-ocr-fields --rollback: 対象のrun-id (--execute実行結果ログに表示される値)'
+        required: false
+        type: string
+        default: ''
+      rebuild_group_ids:
+        description: 'migrate-document-groups --rebuild-groups: 対象groupId (CSV、例: careManager_奥村敬子,careManager___UNASSIGNED_CARE_MANAGER__。scripts/diagnose-caremanager-group-gap.jsの出力形式そのまま指定)'
         required: false
         type: string
         default: ''
@@ -437,6 +444,7 @@ jobs:
           OFFICE_IDS: ${{ github.event.inputs.office_ids }}
           MARKED_BY: ${{ github.event.inputs.marked_by }}
           RUN_ID_FOR_ROLLBACK: ${{ github.event.inputs.run_id_for_rollback }}
+          REBUILD_GROUP_IDS: ${{ github.event.inputs.rebuild_group_ids }}
         run: |
           set -euo pipefail
           if [ -z "$PROJECT_ID" ]; then
@@ -535,6 +543,29 @@ jobs:
             fi
             read -ra SUFFIX_ARGS <<< "$SCRIPT_ARGS"
             ARGS+=( "${SUFFIX_ARGS[@]}" )
+            NODE_PATH=./functions/node_modules \
+              FIREBASE_PROJECT_ID="$PROJECT_ID" \
+              node "scripts/${SCRIPT_NAME}.js" "${ARGS[@]}"
+          elif [ "$SCRIPT_NAME" = "migrate-document-groups" ] && echo "$SCRIPT_ARGS" | grep -q -- '--rebuild-groups'; then
+            # GOAL.md タスクJ4: 対象groupId(CSV)をrebuild_group_ids inputから受け取り
+            # --rebuild-groups <csv>形式に展開する(Issue #660派生ミッション、
+            # /codex plan セカンドオピニオンで設計確定)。
+            if [[ ! "$REBUILD_GROUP_IDS" =~ [^[:space:]] ]]; then
+              echo "ERROR: rebuild_group_ids input is required when script contains --rebuild-groups" >&2
+              exit 1
+            fi
+            # 「--」で始まる値は引数として誤解釈されるリスクがあるため reject (既存パターン踏襲)
+            IFS=',' read -ra GID_ARR <<< "$REBUILD_GROUP_IDS"
+            for gid in "${GID_ARR[@]}"; do
+              if [[ "$gid" == --* ]]; then
+                echo "ERROR: rebuild_group_ids 値が '--' で始まるためreject: \"$gid\"" >&2
+                exit 1
+              fi
+            done
+            ARGS=( --rebuild-groups "$REBUILD_GROUP_IDS" )
+            if echo "$SCRIPT_ARGS" | grep -q -- '--dry-run'; then
+              ARGS+=( --dry-run )
+            fi
             NODE_PATH=./functions/node_modules \
               FIREBASE_PROJECT_ID="$PROJECT_ID" \
               node "scripts/${SCRIPT_NAME}.js" "${ARGS[@]}"
