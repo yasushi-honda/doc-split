@@ -499,16 +499,21 @@ export async function rebuildAllGroupAggregations(
 
 export interface RebuildSingleGroupAggregationResult {
   groupId: string;
-  matched: number;
   count: number;
   deleted: boolean;
+}
+
+export interface RebuildSingleGroupAggregationOptions {
+  batchSize?: number;
+  /** trueの場合、Firestoreへの書込みを行わず再計算結果のみ返す(--dry-run用) */
+  dryRun?: boolean;
 }
 
 /**
  * 単一グループ(groupType/groupKey)を生データから完全再導出して置換する
  * (Issue #660 派生ミッション タスクJ4、`/codex plan`セカンドオピニオン指摘)。
  *
- * `rebuildAllGroupAggregations()`(documentGroups全体1191グループの全削除+再構築)は、
+ * `rebuildAllGroupAggregations()`(documentGroups全体の全削除+再構築)は、
  * 実運用データが載った本番環境で影響範囲が過大かつ、全件再構築中はライブトリガーとの
  * 競合リスクがある(ADR-0020)。Issue #660の非冪等トリガーによって蓄積したドリフトが
  * 特定少数のgroupIdに局在している場合、対象groupIdだけを個別に生データから完全再導出
@@ -530,15 +535,26 @@ export interface RebuildSingleGroupAggregationResult {
  * documentsへの集計所属変更を伴う書込みが十分な時間停止・ドレイン済みであること
  * (`backfillUnassignedCareManagerGroup()`と同じ前提、本関数自体はゲート状態を
  * 検証しない、呼び出し元の責務)。
+ *
+ * 書込み前の並行更新検知(review指摘対応): documents全件スキャンには時間がかかるため、
+ * スキャン開始前と書込み直前でgroupドキュメントの`updatedAt`を比較し、スキャン中に
+ * 別の書込み(ゲート前提が崩れた場合の集計トリガー再開、または並行実行等)が発生して
+ * いないかをトランザクション内で再検証してから書込む。`backfillUnassignedCareManagerGroup()`
+ * と同水準の防御であり、ADR-0019の既知残存リスク(集計トリガーの配信遅延)を検知する
+ * 最後の砦として機能する(review指摘: 従来はトランザクションなしの単純set/deleteだった)。
  */
 export async function rebuildSingleGroupAggregation(
   db: admin.firestore.Firestore,
   groupType: GroupType,
   groupKey: string,
-  batchSize: number = 500
+  options: RebuildSingleGroupAggregationOptions = {}
 ): Promise<RebuildSingleGroupAggregationResult> {
+  const batchSize = options.batchSize ?? 500;
   const groupId = generateGroupId(groupType, groupKey);
   const groupRef = db.collection('documentGroups').doc(groupId);
+
+  const beforeSnap = await groupRef.get();
+  const beforeUpdatedAt = beforeSnap.exists ? (beforeSnap.data() as DocumentGroupData).updatedAt : null;
 
   let matched = 0;
   let displayName = '';
@@ -591,9 +607,8 @@ export async function rebuildSingleGroupAggregation(
     lastDoc = snapshot.docs[snapshot.docs.length - 1];
   }
 
-  if (matched === 0) {
-    await groupRef.delete();
-    return { groupId, matched: 0, count: 0, deleted: true };
+  if (options.dryRun) {
+    return { groupId, count: matched, deleted: matched === 0 };
   }
 
   candidates.sort((a, b) => {
@@ -602,7 +617,7 @@ export async function rebuildSingleGroupAggregation(
   });
   const latestDocs = candidates.slice(0, 3);
 
-  const newGroupData: DocumentGroupData = {
+  const newGroupData: DocumentGroupData | null = matched === 0 ? null : {
     groupType,
     groupKey,
     displayName,
@@ -612,9 +627,29 @@ export async function rebuildSingleGroupAggregation(
     updatedAt: Timestamp.now(),
   };
 
-  await groupRef.set(newGroupData);
+  await db.runTransaction(async (transaction) => {
+    const currentSnap = await transaction.get(groupRef);
+    const currentUpdatedAt = currentSnap.exists ? (currentSnap.data() as DocumentGroupData).updatedAt : null;
+    const unchanged = beforeUpdatedAt === null
+      ? !currentSnap.exists
+      : (currentSnap.exists && currentUpdatedAt !== null && currentUpdatedAt.isEqual(beforeUpdatedAt));
+    if (!unchanged) {
+      throw new Error(
+        `rebuildSingleGroupAggregation: documentGroups/${groupId} was modified concurrently during the ` +
+        'documents scan (updatedAt changed since scan start). This indicates the maintenance gate precondition ' +
+        'may not hold, or a concurrent rebuild is running. Aborting to avoid overwriting newer state — re-run ' +
+        'after the concurrent write settles.'
+      );
+    }
 
-  return { groupId, matched, count: matched, deleted: false };
+    if (newGroupData === null) {
+      if (currentSnap.exists) transaction.delete(groupRef);
+      return;
+    }
+    transaction.set(groupRef, newGroupData);
+  });
+
+  return { groupId, count: matched, deleted: matched === 0 };
 }
 
 export interface BackfillUnassignedCareManagerGroupResult {
