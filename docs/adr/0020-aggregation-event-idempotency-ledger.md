@@ -69,17 +69,21 @@ documentAggregationEvents/{eventId}
 
 - 同一event.idの二重(逐次/並行)配信、順序不同の再配信、delete再配信のいずれに対しても、集計が正しく1回分のみ反映されることをintegration testでlock-in(`functions/test/updateDocumentGroupsIdempotencyIntegration.test.ts`、AC1〜AC5)
 - 一部グループの更新が失敗した場合、トランザクション全体がロールバックされ台帳も記録されないため、「部分成功状態」が残らない(Firestoreトランザクションのatomic性による)
+- `retry: true`により、トランザクション失敗時もCloud Functions/Eventarc側の再試行に委ねられ、イベントが静かにdropされて集計deltaが永久に失われることを防ぐ。ただしキー正規化自己書込みがwrite-then-deleteレース(このイベントの処理前に対象documentが削除される)でNOT_FOUNDになるケースは非致命として集計を継続する(AC7でlock-in)
 
 ### 残存リスク・今後の対応
 
 - **過去に蓄積したドリフトの是正は本ADRのスコープ外**(GOAL.md タスクJ4)。`rebuildAllGroupAggregations()`による全件再構築は、本冪等性修正を全環境(dev/kanameone/cocoro)へ配備しドレインした後に実施すべきであり、配備前の実行は安全でない(全件再構築中もライブトリガーが動作していると、削除・ライブdelta・最終setが競合するため)
 - トランザクション競合(同じcareManager等のホットグループを複数イベントが更新する場合、単一トランザクションへの統合により競合・リトライが増える可能性)は、正しさのために必要なトレードオフだが、本番デプロイ後にレイテンシ・abort率をログで監視することが望ましい
 - TTL(30日)はFirestore/Eventarcの最大再試行期間を十分に上回る期間として設定した。コスト削減目的であり、短くしすぎて冪等性の保証を失わないこと
+- **TTL(`expireAt`)はfield policyの別途provisioningが必須**(`expireAt`フィールドを書くだけではFirestore TTLは有効にならない)。dev環境では`gcloud firestore fields ttls update expireAt --collection-group=documentAggregationEvents --enable-ttl`を手動実行済み(`gcloud firestore fields ttls list`で`state: ACTIVE`確認済み)。kanameone/cocoroへの配備時(GOAL.md タスクJ3)にも同コマンドの実行が必須(codex review指摘、Runbook化が望ましい)
+- **既知の限界(Issue #664): document create/delete順序不同配信によるphantom count**。本ADRの冪等台帳は「同一event.idの重複排除」のみを保証し、「異なるevent.id間の配信順序」までは保証しない。キーなしdocumentのcreateイベント直後にdeleteされ、かつdeleteが先に配信される稀なケースでは、write-then-deleteレース対応(NOT_FOUND時の集計継続)により、削除済みdocumentへのcreateのdeltaが永久に残留しうる(codex review P1指摘)。この問題はIssue #660以前から存在した既知の限界であり、本ADRのNOT_FOUND対応が悪化させたものではない。根本対応にはdocument単位の順序状態を管理する新コレクション(`documentAggregationStates/{docId}`)が必要で、event.timeを配信順序の比較キーとして安全に使えるかの検証を含め、本ADRのスコープを超える設計判断のため別Issue化した
 
 ## 関連
 
 - [ADR-0019: 担当CM別集計バックフィルの並行更新対策(メンテナンスゲート方式)](0019-caremanager-group-backfill-maintenance-gate.md) — 本ADRとは別レイヤーの対策(ADR-0019は「書込み元の一時停止」、本ADRは「トリガー適用の冪等性」)であり、両立する
 - GOAL.md 派生ミッション(Issue #660) タスクJ1〜J4
+- Issue #664: document create/delete順序不同配信によるphantom count(既知の限界、別Issue化)
 - `functions/src/triggers/updateDocumentGroups.ts` (`processDocumentAggregationEvent`)
 - `functions/src/utils/groupAggregation.ts` (`applyAggregationDeltas`/`buildGroupRefs`/`aggregationEventLedgerRef`/`buildAggregationEventLedgerEntry`)
 - `functions/test/updateDocumentGroupsIdempotencyIntegration.test.ts`
