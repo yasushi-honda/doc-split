@@ -335,6 +335,17 @@ async function executeRebuildGroups(groupIds) {
     console.log('   失敗したgroupIdのみを対象に再実行してください(rebuildSingleGroupAggregationは冪等)。');
   }
   console.log('次のステップ: scripts/diagnose-caremanager-group-gap.js で全groupIdの一致を再検証してください。');
+
+  // review指摘対応(codex review P2): 一部groupIdの失敗をここで握りつぶしてnormal returnすると、
+  // main()の呼び出し元(GitHub Actions)はexit code 0(成功)として扱ってしまい、実際には
+  // 一部の補正が未適用のまま「ジョブ成功」と誤認される。ゲート再開(finally)が完了した後、
+  // 失敗が1件でもあれば明示的に例外を投げてexit code非0にする。
+  if (!allSucceeded) {
+    throw new Error(
+      `${failed.length}/${groupIds.length} グループの再構築に失敗しました: ` +
+      `${failed.map((f) => f.groupId).join(', ')}`
+    );
+  }
   return { succeeded, failed };
 }
 
