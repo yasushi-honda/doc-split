@@ -57,10 +57,18 @@ function fullDocData(overrides: Record<string, unknown> = {}) {
   };
 }
 
-async function careManagerGroupCount(name: string): Promise<number> {
-  const groupId = `careManager_${name}`;
+async function groupCount(groupType: string, name: string): Promise<number> {
+  const groupId = `${groupType}_${name}`;
   const snap = await db.collection('documentGroups').doc(groupId).get();
   return snap.exists ? (snap.data()!.count as number) : 0;
+}
+
+async function careManagerGroupCount(name: string): Promise<number> {
+  return groupCount('careManager', name);
+}
+
+async function customerGroupCount(name: string): Promise<number> {
+  return groupCount('customer', name);
 }
 
 describe('onDocumentWrite イベント冪等性 (Issue #660修正、ADR-0020)', () => {
@@ -173,5 +181,44 @@ describe('onDocumentWrite イベント冪等性 (Issue #660修正、ADR-0020)', 
     const docSnap = await db.collection('documents').doc('doc-key-normalize').get();
     expect(docSnap.data()?.careManagerKey).to.equal('森奈穂美');
     expect(docSnap.data()?.customerKey).to.equal('木村保');
+  });
+
+  it('AC6(アトミック性の実証、ADR-0020の核心的claim): 一部グループの更新が失敗した場合、他グループの更新も台帳作成もロールバックされる', async () => {
+    // 事前に正常な初期状態を作成(customer/careManager双方のグループがcount=1)
+    const initialData = fullDocData({
+      customerName: '伊藤浩二', customerKey: '伊藤浩二',
+      careManager: '佐藤花子', careManagerKey: '佐藤花子',
+    });
+    const initEvent = baseInput({ eventId: 'event-fault-init', docId: 'doc-fault-injection', beforeData: undefined, afterData: initialData });
+    await processDocumentAggregationEvent(db, initEvent);
+    expect(await customerGroupCount('伊藤浩二')).to.equal(1);
+    expect(await careManagerGroupCount('佐藤花子')).to.equal(1);
+
+    // careManagerを異常に長い名前(2000文字)に変更する。documentGroups/careManager_{2000文字}
+    // のdocument IDがFirestoreの1500バイト制限を超え、トランザクションのwrite phaseで
+    // 実際にINVALID_ARGUMENTエラーが発生する(モックではないgenuineなFirestoreエラー。
+    // firebase emulators:execで事前に`SET FAILED: 3 3 INVALID_ARGUMENT: The key path
+    // element name is longer than 1500 bytes.`を実測確認済み)。
+    const oversizedCareManager = 'x'.repeat(2000);
+    const faultAfterData = { ...initialData, careManager: oversizedCareManager, careManagerKey: oversizedCareManager };
+    const faultEvent = baseInput({
+      eventId: 'event-fault-trigger', docId: 'doc-fault-injection', beforeData: initialData, afterData: faultAfterData,
+    });
+
+    let thrown: unknown;
+    try {
+      await processDocumentAggregationEvent(db, faultEvent);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown, 'oversizedなgroupKeyへの書込みはトランザクション全体を失敗させるはず').to.not.equal(undefined);
+
+    // ロールバック確認: 同一トランザクション内の他グループ(customer)の更新も反映されていない
+    expect(await customerGroupCount('伊藤浩二'), 'アトミック性: 同一イベント内の他グループ更新もロールバックされるべき').to.equal(1);
+    // ロールバック確認: 削除対象だった旧careManagerグループの-1もロールバックされ、countが残る
+    expect(await careManagerGroupCount('佐藤花子'), 'アトミック性: 削除対象グループの-1もロールバックされるべき').to.equal(1);
+    // ロールバック確認: 台帳が作成されていない(再配信時に正しく再試行できる)
+    const ledgerSnap = await db.collection('documentAggregationEvents').doc('event-fault-trigger').get();
+    expect(ledgerSnap.exists, 'トランザクション失敗時は台帳も作成されないべき(再試行可能性を保つ)').to.equal(false);
   });
 });

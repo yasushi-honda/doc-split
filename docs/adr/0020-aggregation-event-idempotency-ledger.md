@@ -45,7 +45,9 @@ documentAggregationEvents/{eventId}
 
 1. **read phase**: `transaction.getAll(ledgerRef, ...groupRefs)`(公式API。複数の独立した`transaction.get()`呼出しの代わりに使用、affected groupは所属変更時に旧+新で最大8件)で、イベント台帳+全affected groupを一括読み取り
 2. 台帳が既に存在すれば集計を再適用せず即return(重複配信・リトライを無視)
-3. **write phase**: 全グループ更新(`applyAggregationDeltas()`) + 台帳`transaction.create()`(`set`ではなく`create`を使うことで、万一の競合時にALREADY_EXISTSで失敗させ、Firestoreの自動トランザクションリトライに委ねる防御的設計)を同一トランザクションでatomicに実行
+3. **write phase**: 全グループ更新(`applyAggregationDeltas()`) + 台帳`transaction.create()`を同一トランザクションでatomicに実行
+
+**同時実行時の実際の保護機構**: 競合防止は`create()`のALREADY_EXISTS自体ではなく、read phaseで`ledgerRef`を`transaction.getAll()`の読み取りセットに含めている点に由来する。同一event.idの並行トランザクションが競合すると、Firestoreは一方を`ABORTED`として検出しSDKが自動リトライする(`@google-cloud/firestore`の`isRetryableTransactionError()`が`ABORTED`/`CANCELLED`/`UNKNOWN`/`DEADLINE_EXCEEDED`等をリトライ対象とする一方、`ALREADY_EXISTS`はリトライ対象に含まれない)。再読取り時には先勝ちしたトランザクションの台帳が既に存在するため、後発は`ledgerSnap.exists`でskipに回る(AC4で並行実行を実測済み)。`create()`(`set()`ではなく)の採用は、万一この楽観的並行制御をすり抜けるロジックバグがあった場合に`ALREADY_EXISTS`で明示的に失敗させる防御的アサーションであり、競合防止そのものの主機構ではない。
 
 **集計差分は必ず`event.data.before`/`event.data.after`の凍結スナップショット(の正規化コピー)から計算する**。トランザクション内で「現在の」`documents`を再読込みして差分計算すると、配信順序が入れ替わった別イベントの状態を誤って基準にしてしまうため、この設計は必須（`/codex plan`指摘）。
 

@@ -52,11 +52,9 @@ export interface DocumentAggregationEventResult {
  * documents書込みイベント1件分の「グループキー正規化+集計反映」処理本体。
  *
  * `onDocumentWritten`(CloudEvent)のプラミング部分から独立させ、`event`オブジェクトの
- * 構築を必要とせず直接呼び出せるようにしている(Issue #660修正、ADR-0020)。理由:
- * `firebase-functions-test`はv1トリガーの`.wrap()`は充実しているが、v2 Firestore
- * トリガー(CloudEvent、特に`event.id`を任意の値に固定する必要がある冪等性テスト)への
- * 対応が薄く、本体ロジックをCloudEvent非依存にすることで実Firestore emulatorに対する
- * 直接的な統合テストが可能になる。
+ * 構築を必要とせず直接呼び出せるようにしている(Issue #660修正、ADR-0020)。これにより
+ * `event.id`を任意の値に固定した冪等性テストを、CloudEvent構築の複雑さを介さず実
+ * Firestore emulatorに対して直接実行できる。
  */
 export async function processDocumentAggregationEvent(
   db: admin.firestore.Firestore,
@@ -76,7 +74,10 @@ export async function processDocumentAggregationEvent(
       afterData.careManagerKey !== keys.careManagerKey;
 
     if (needsKeyUpdate) {
-      // グループキーを更新（再帰呼び出し防止のため、キーのみ更新）
+      // グループキーを更新（再帰呼び出し防止のため、キーのみ更新）。
+      // retry:trueを前提に、この書込みが失敗した場合もイベント処理全体を失敗させ
+      // Cloud Functions側の再試行に委ねる(キー更新のみ成功扱いにして握りつぶすと、
+      // documentsのキャッシュキーだけが恒久的に古いまま残る。/codex plan指摘)。
       try {
         await db.collection('documents').doc(docId).update({
           customerKey: keys.customerKey,
@@ -87,6 +88,7 @@ export async function processDocumentAggregationEvent(
         console.log(`[onDocumentWrite] Updated group keys for ${docId}`);
       } catch (error) {
         console.error(`[onDocumentWrite] Failed to update keys for ${docId}:`, error);
+        throw error;
       }
 
       // キー更新後のafterDataを再構築
@@ -125,10 +127,10 @@ export async function processDocumentAggregationEvent(
   const groupRefs = buildGroupRefs(db, affectedGroups);
   const docData = afterWithKeys ? { ...afterWithKeys, id: docId } : undefined;
 
-  let skipped = false;
+  let skipped: boolean;
 
   try {
-    await db.runTransaction(async (transaction) => {
+    skipped = await db.runTransaction(async (transaction) => {
       // read phase: 台帳 + 全affected groupを一括読み取り(全読み取り→全書込みの
       // 順序制約を満たすため、この時点で全読み取りを完了させる)
       const [ledgerSnap, ...groupSnaps] = await transaction.getAll(ledgerRef, ...groupRefs);
@@ -136,8 +138,7 @@ export async function processDocumentAggregationEvent(
       if (ledgerSnap.exists) {
         // 既に処理済みのイベント(再配信・リトライ) — 集計を再適用せずskip
         console.log(`[onDocumentWrite] event ${eventId} already processed for doc ${docId}, skipping`);
-        skipped = true;
-        return;
+        return true;
       }
 
       // write phase: 全グループ更新 + 台帳作成を同一トランザクションでatomicに実行。
@@ -150,6 +151,7 @@ export async function processDocumentAggregationEvent(
         eventTime,
         nowMillis,
       }));
+      return false;
     });
     if (!skipped) {
       console.log(`[onDocumentWrite] Updated ${affectedGroups.length} groups for doc ${docId} (event ${eventId})`);
@@ -164,11 +166,19 @@ export async function processDocumentAggregationEvent(
 
 /**
  * ドキュメント書き込み時にグループキーを設定し、グループ集計を更新
+ *
+ * `retry: true`(Issue #660修正、ADR-0020): 冪等台帳方式により同一event.idの
+ * 再試行は安全にskipされるため、処理失敗時はCloud Functions/Eventarc側の
+ * 自動再試行に委ねる。`retry: false`(既定)のままだと、トランザクション失敗
+ * (競合リトライ上限超過等)時にイベントが再試行されず静かにdropされ、その
+ * 1件分の集計deltaが永久に失われる — 本Issueが解決しようとしている
+ * ドリフトを別の入口から再導入してしまう(/codex plan指摘)。
  */
 export const onDocumentWrite = onDocumentWritten(
   {
     document: 'documents/{docId}',
     region: 'asia-northeast1',
+    retry: true,
   },
   async (event) => {
     await processDocumentAggregationEvent(db, {

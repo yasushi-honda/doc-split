@@ -248,6 +248,14 @@ export function applyAggregationDeltas(
   groupSnaps: admin.firestore.DocumentSnapshot[],
   docData?: DocumentData & { id?: string }
 ): void {
+  if (groupRefs.length !== deltas.length || groupSnaps.length !== deltas.length) {
+    throw new Error(
+      `applyAggregationDeltas: deltas/groupRefs/groupSnaps length mismatch ` +
+      `(${deltas.length}/${groupRefs.length}/${groupSnaps.length}). ` +
+      'groupRefs/groupSnaps must be derived from buildGroupRefs(db, deltas) in the same order.'
+    );
+  }
+
   deltas.forEach((d, i) => {
     if (!d.groupKey) return;
 
@@ -257,6 +265,12 @@ export function applyAggregationDeltas(
 
     if (groupSnap.exists) {
       const currentData = groupSnap.data() as DocumentGroupData;
+      if (!Number.isFinite(currentData.count)) {
+        throw new Error(
+          `applyAggregationDeltas: documentGroups/${groupRef.id} has non-finite count ` +
+          `(${currentData.count}). Refusing to compute a new count from corrupted data.`
+        );
+      }
       const newCount = Math.max(0, currentData.count + delta);
 
       if (newCount === 0) {
