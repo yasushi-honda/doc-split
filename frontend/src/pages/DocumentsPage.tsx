@@ -86,7 +86,7 @@ function SortableHeader({
 
   return (
     <th
-      className={`px-2 py-2 text-left text-xs font-medium text-gray-700 cursor-pointer hover:bg-gray-100 select-none sm:px-4 sm:py-3 sm:text-sm ${hideOnMobile ? 'hidden lg:table-cell' : ''}`}
+      className={`px-2 py-2 text-left text-xs font-medium text-gray-700 cursor-pointer hover:bg-gray-100 select-none whitespace-nowrap sm:px-4 sm:py-3 sm:text-sm ${hideOnMobile ? 'hidden lg:table-cell' : ''}`}
       onClick={() => onClick(field)}
     >
       <div className="flex items-center gap-1">
@@ -271,16 +271,16 @@ function DocumentRow({
       <td className="px-2 py-2 text-xs text-gray-700 sm:px-4 sm:py-3 sm:text-sm">{formatDateTime(document.processedAt)}</td>
       <td className="hidden px-4 py-3 text-gray-700 lg:table-cell">{formatTimestamp(document.fileDate)}</td>
       {/* ページ数 (#525): 0 は旧形式 doc (OCR 前の初期値) のため「-」表示 */}
-      <td className="hidden px-4 py-3 text-gray-700 xl:table-cell">
+      <td className="hidden whitespace-nowrap px-4 py-3 text-gray-700 xl:table-cell">
         {document.totalPages > 0 ? `${document.totalPages}` : '-'}
       </td>
-      <td className="px-2 py-2 sm:px-4 sm:py-3">
+      <td className="whitespace-nowrap px-2 py-2 sm:px-4 sm:py-3">
         {needsReview ? (
-          <Badge variant="outline" className="bg-orange-100 text-orange-800 border-orange-300 text-xs">
+          <Badge variant="outline" className="whitespace-nowrap bg-orange-100 text-orange-800 border-orange-300 text-xs">
             選択待ち
           </Badge>
         ) : (
-          <Badge variant={statusConfig.variant} className="text-xs sm:text-sm">{statusConfig.label}</Badge>
+          <Badge variant={statusConfig.variant} className="whitespace-nowrap text-xs sm:text-sm">{statusConfig.label}</Badge>
         )}
       </td>
       <td className="px-2 py-2 sm:px-3 sm:py-3 text-center">
@@ -918,7 +918,7 @@ export function DocumentsPage() {
                       <SortableHeader label="登録日" field="processedAt" currentField={sortField} currentOrder={sortOrder} onClick={handleSort} />
                       <SortableHeader label="書類日付" field="fileDate" currentField={sortField} currentOrder={sortOrder} onClick={handleSort} hideOnMobile />
                       {/* ページ数 (#525): xl 未満は非表示 (#424 教訓 — lg 帯 1024px は 7 列 940px + スクロールバーで限界のため列を増やさない) */}
-                      <th className="hidden px-4 py-3 text-left text-sm font-medium text-gray-700 xl:table-cell">ページ数</th>
+                      <th className="hidden whitespace-nowrap px-4 py-3 text-left text-sm font-medium text-gray-700 xl:table-cell">ページ数</th>
                       <SortableHeader label="ステータス" field="status" currentField={sortField} currentOrder={sortOrder} onClick={handleSort} />
                       <th className="px-2 py-2 text-center text-xs font-medium text-gray-700 sm:px-3 sm:py-3 sm:text-sm w-12">
                         <CheckCircle2 className="h-4 w-4 text-gray-400 inline-block" />
