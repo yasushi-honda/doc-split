@@ -426,3 +426,30 @@ session105のkanameone段階デプロイ完遂を前セッションのcompact跨
 - **GCPコスト分析（Fable 5で実施）**: kanameone 6月請求¥12,714の内訳確定 — Vertex AI ¥6,093 + **Firestore egress ¥4,645**（「App Engine」表示の実体。一覧表示が`ocrResult`/`pageResults`等の重フィールド込みでdoc全体を配信）で計84%。**両者とも「OCR全文をdoc本体に逐語保存」という単一設計判断に起因**。Gemini 2.5 Flash廃止（最速2026-10-16）+日本データレジデンシーで3.5 Flash一択（input×5/output×3.6）。7日間実測: 798docs/2,841pages、in 1,378/page・out 892/page、コストの約8割がoutput（単価×6〜8のため）。突合ロジックは100%ローカルコードでGeminiは転記+要約の2呼出のみと確認。**品質不劣化を絶対制約**とした圧縮プランを策定し #546（計測基盤+SDK移行+thinking制御）/ #547（egress削減=重フィールドのサブコレクション分離、destructive migration・Codexレビュー必須）/ #548（要約遅延化+3.5移行）を起票。到達見通し: 移行前¥8,000（−37%）→10月移行後¥23,000（無対策なら¥32,000+α）。
 - **計測の盲点2件発見**: `GEMINI_PRICING`定数が古い（$0.075/$0.30、実際は$0.30/$2.50=約1/8過小表示）+ thinkingトークン（`thoughtsTokenCount`）が完全未計測（output単価で課金されるのに不可視）。#546で是正。
 
+
+## session118 サマリ（2026-07-12、Issue #621完遂 + #526展開状態read-only確認）
+
+`/catchup`のオススメに沿って2本立てで着手: ①#526（手動分割後OCR再処理連携）の展開状態read-only確認、②#621（P1バグ）のdev実装・検証・本番反映。
+
+### #526展開状態のread-only確認
+kanameone/cocoro両環境のFunctionsデプロイrun・Hostingデプロイrunのhead SHAが、#526のPhase A/B/C/D（PR #541-544、`82becd3`）の子孫であることをgit系譜で確認。firebaserules APIで両環境の配信中firestore.rulesを直接取得しローカルmainと完全一致（`documentTypeConfirmed`フィールド含む）、配信中JSバンドルにも#526由来のFE文字列を確認。**#526は両本番環境に展開済みと確定**（LATEST.md条件待ち「#526 kanameone/cocoro展開」のtriggerが充足）。close判断・分割操作自粛アナウンスはdecision-maker領分のため提示のみに留めた。
+
+### Issue #621（splitPdf新エラーコードのFE未対応、P1）
+Issue本文の対策案通り、`callFunction.ts`にFirebaseError.code取得ヘルパー`getCallableErrorCode()`を新設し、`already-exists`/`aborted`をコード基準で判定するよう変更。`PdfSplitModal.tsx`のcatch節に文脈別の日本語文言を追加、`usePdfSplit.ts`の`useSplitPdf`に`onError`を追加してキャッシュ無効化。
+
+**品質ゲート3層で計4件のCONFIRMED回帰を検出・修正**（いずれも自分が今回追加したコードの新規バグ）:
+1. `/code-review medium`（8角度並列）: ①onErrorの`invalidateQueries`が確認ステップ中の分割ポイント初期化`useEffect`を再発火させ、ユーザー確定値を無言上書き ②未知エラーコードで有用な生メッセージ（not-found等）が汎用文言に丸められる情報損失
+2. `/codex review-diff`（P1）: 上記①の修正（`isConfirmStep`依存ガード）が「戻る」操作で同じ問題を復路でも再発させる設計欠陥 → docId単位の一度限り初期化(ref方式)に置換
+3. `/review-pr`（comment-analyzer + silent-failure-hunter + pr-test-analyzer + code-reviewer 4エージェント並列）: ①自作の「戻る」回帰テストが`splitSuggestions=[]`固定のため実際には判別能力がなく検出できていなかった（新旧実装両方に対しRED/GREENを実機検証して書き直し） ②`callFunction.ts`のリトライ処理がリトライ後の実エラーを握りつぶし元のerrをthrowしており、本PRのcode-basedルーティング前提を壊す実害シナリオがあった → 修正
+4. 残るHIGH/LOW指摘（`recheckParentBeforeRetry`のnot-foundにおけるdocId表示等）はrating中程度・実害未観測のためPRコメントに記録するに留めた（新規Issue化はtriage基準未達）
+
+**UI実機確認**: `.env.local`が本番cocoro向け設定のまま残っていた既知の地雷（session108と同根、gitignored local state）を一時退避・復元する安全な手順でdoc-split-devへ切替、Playwright MCPで分割モーダルの正常系（分割実行→バッジ「分割済」変化→モーダル自動クローズ、コンソールエラー0件）を確認。`ui-verified`ラベル付与のうえマージ。
+
+**マージ・展開**: PR #632を番号単位認可の上squash merge → Issue #621自動クローズ。mainマージでdev自動デプロイ成功後、kanameone（`deploy-hosting.yml`）・cocoro（ローカルFirebase CLI、`switch-client.sh`経由）両方へHosting展開、両環境ともHTTP 200・修正文言の配信をcurlで確認。対象がfrontend/src配下のみ（firestore.rules/Functions変更なし）のためHostingのみで完結した。
+
+### Issue Net
+close 1件（#621）、起票0件。**Net +1**。
+
+### 引き継ぎ教訓
+- 同一セッション内で3層の品質ゲート（code-review→codex review-diff→review-pr+codex）を通したところ、各層が異なる角度の回帰を検出した（層を重ねるほど収穫があった）。特にreview-prのcomment-analyzerが「自分が書いた回帰防止テストが実際には無意味だった」ことを検出したのは、テストの表面的なpass/failだけでなく判別能力（旧バグ版で本当にREDになるか）を検証する重要性を再確認させる事例だった
+- `.env.local`が本番プロジェクトを指したまま残る問題（session108で一度発見・暫定復元していたもの）が今回も再発していた。恒久対策（`.env`をdev固定にする規約明文化等）は依然未着手、継続の要注意事項
