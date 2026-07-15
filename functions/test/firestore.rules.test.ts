@@ -430,6 +430,50 @@ describe('Firestore Security Rules', () => {
   });
 
   // ============================================
+  // /documentAggregationEvents コレクション（集計イベント冪等台帳、Issue #660 / ADR-0020）
+  // ============================================
+  describe('/documentAggregationEvents collection', () => {
+    it('ホワイトリスト登録ユーザーでも台帳を読み取り不可（Cloud Functionsのみ）', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'documentAggregationEvents', 'event-1'), {
+          source: '//firestore.googleapis.com/projects/test/databases/(default)',
+          eventTime: '2026-07-15T00:00:00.000Z',
+        });
+      });
+
+      const docRef = doc(normalUser.firestore(), 'documentAggregationEvents', 'event-1');
+      await assertFails(getDoc(docRef));
+    });
+
+    it('管理者でも台帳を読み取り不可（Cloud Functionsのみ）', async () => {
+      const adminUser = testEnv.authenticatedContext(adminUid);
+
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'documentAggregationEvents', 'event-2'), {
+          source: '//firestore.googleapis.com/projects/test/databases/(default)',
+          eventTime: '2026-07-15T00:00:00.000Z',
+        });
+      });
+
+      const docRef = doc(adminUser.firestore(), 'documentAggregationEvents', 'event-2');
+      await assertFails(getDoc(docRef));
+    });
+
+    it('誰も台帳を作成・編集できない（Cloud Functionsのみ）', async () => {
+      const adminUser = testEnv.authenticatedContext(adminUid);
+      const docRef = doc(adminUser.firestore(), 'documentAggregationEvents', 'event-3');
+      await assertFails(
+        setDoc(docRef, {
+          source: '//firestore.googleapis.com/projects/test/databases/(default)',
+          eventTime: '2026-07-15T00:00:00.000Z',
+        })
+      );
+    });
+  });
+
+  // ============================================
   // /masters コレクション
   // ============================================
   describe('/masters collection', () => {

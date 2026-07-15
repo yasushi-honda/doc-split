@@ -15,7 +15,7 @@ import {
   type TokenField,
   type TokenInfo,
 } from '../utils/tokenizer';
-import { isFirestoreNotFoundError } from './errors';
+import { isFirestoreNotFoundError } from '../utils/firestoreErrors';
 
 const db = getFirestore();
 

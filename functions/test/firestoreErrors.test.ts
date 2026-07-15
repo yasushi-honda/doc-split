@@ -1,14 +1,16 @@
 /**
- * 検索インデックス: NOT_FOUND判定テスト
+ * Firestore NOT_FOUND判定ユーティリティ テスト
  *
- * 削除トリガーでインデックスエントリ不在を冪等削除として許容するため、
+ * 削除トリガーでインデックスエントリ不在を冪等削除として許容する用途(searchIndexer)、
+ * write-then-deleteレースで対象documentが既に削除された非致命的なケースを判別する用途
+ * (updateDocumentGroups、Issue #660)双方から共有される。
  * gRPC/REST/Firebase admin SDK の3形式の code を識別する必要がある。
  */
 
 import { expect } from 'chai';
-import { isFirestoreNotFoundError } from '../src/search/errors';
+import { isFirestoreNotFoundError } from '../src/utils/firestoreErrors';
 
-describe('searchIndexer: isFirestoreNotFoundError', () => {
+describe('isFirestoreNotFoundError', () => {
   it('gRPC code 5 (数値) を true と判定', () => {
     const error = Object.assign(new Error('Document not found'), { code: 5 });
     expect(isFirestoreNotFoundError(error)).to.be.true;

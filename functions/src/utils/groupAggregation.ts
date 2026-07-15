@@ -213,27 +213,64 @@ export function getAffectedGroups(
   return affected;
 }
 
+export interface AggregationDelta {
+  groupType: GroupType;
+  groupKey: string;
+  displayName: string;
+  delta: number;
+}
+
 /**
- * グループ集計を更新
+ * deltasの各要素に対応するdocumentGroupsのDocumentReferenceを、同じ順序で生成する。
+ * `transaction.getAll(...refs)`（read phase）と`applyAggregationDeltas()`（write phase）の
+ * 両方に同じ配列を渡すことで、インデックスの対応関係を保証する（Issue #660修正、ADR-0020）。
  */
-export async function updateGroupAggregation(
+export function buildGroupRefs(
   db: admin.firestore.Firestore,
-  groupType: GroupType,
-  groupKey: string,
-  displayName: string,
-  delta: number,
+  deltas: AggregationDelta[]
+): admin.firestore.DocumentReference[] {
+  return deltas.map((d) => db.collection('documentGroups').doc(generateGroupId(d.groupType, d.groupKey)));
+}
+
+/**
+ * 単一トランザクションのwrite phaseで、複数グループの集計を一括更新する（Issue #660修正）。
+ *
+ * Firestoreトランザクションは「全読み取り→全書込み」の順序制約があるため、本関数は
+ * read phase（`transaction.getAll(...groupRefs)`）を呼び出し元が事前に実行済みである
+ * ことを前提とし、write phaseのみを担当する。`groupRefs`/`groupSnaps`は`deltas`と
+ * 同じ順序・同じ長さであること（`buildGroupRefs(db, deltas)`で生成したrefsをそのまま
+ * `transaction.getAll()`に渡すことで順序を保証する）。
+ */
+export function applyAggregationDeltas(
+  transaction: admin.firestore.Transaction,
+  deltas: AggregationDelta[],
+  groupRefs: admin.firestore.DocumentReference[],
+  groupSnaps: admin.firestore.DocumentSnapshot[],
   docData?: DocumentData & { id?: string }
-): Promise<void> {
-  if (!groupKey) return;
+): void {
+  if (groupRefs.length !== deltas.length || groupSnaps.length !== deltas.length) {
+    throw new Error(
+      `applyAggregationDeltas: deltas/groupRefs/groupSnaps length mismatch ` +
+      `(${deltas.length}/${groupRefs.length}/${groupSnaps.length}). ` +
+      'groupRefs/groupSnaps must be derived from buildGroupRefs(db, deltas) in the same order.'
+    );
+  }
 
-  const groupId = generateGroupId(groupType, groupKey);
-  const groupRef = db.collection('documentGroups').doc(groupId);
+  deltas.forEach((d, i) => {
+    if (!d.groupKey) return;
 
-  await db.runTransaction(async (transaction) => {
-    const groupSnap = await transaction.get(groupRef);
+    const groupRef = groupRefs[i];
+    const groupSnap = groupSnaps[i];
+    const { groupType, groupKey, displayName, delta } = d;
 
     if (groupSnap.exists) {
       const currentData = groupSnap.data() as DocumentGroupData;
+      if (!Number.isFinite(currentData.count)) {
+        throw new Error(
+          `applyAggregationDeltas: documentGroups/${groupRef.id} has non-finite count ` +
+          `(${currentData.count}). Refusing to compute a new count from corrupted data.`
+        );
+      }
       const newCount = Math.max(0, currentData.count + delta);
 
       if (newCount === 0) {
@@ -258,7 +295,7 @@ export async function updateGroupAggregation(
           };
 
           // 既存のlatestDocsから重複を除去し、新しいドキュメントを先頭に追加
-          const existingDocs = (currentData.latestDocs || []).filter(d => d.id !== docData.id);
+          const existingDocs = (currentData.latestDocs || []).filter(dd => dd.id !== docData.id);
           const newLatestDocs = [newDoc, ...existingDocs].slice(0, 3);
 
           updateData.latestDocs = newLatestDocs;
@@ -289,6 +326,55 @@ export async function updateGroupAggregation(
       transaction.set(groupRef, newGroupData);
     }
   });
+}
+
+/**
+ * 集計イベント冪等台帳（`documentAggregationEvents`コレクション）関連のユーティリティ
+ * （Issue #660修正、ADR-0020）。
+ *
+ * Firestore/EventarcのCloudEventはat-least-once配信であり、`onDocumentWrite`が同一
+ * イベントに対して複数回呼び出される可能性がある。さらにこれらのイベントは順序も
+ * 保証されない。`documents/{docId}`に「直近処理済みevent.id」を1件だけ記録する方式
+ * （却下案）は、イベントA処理後にイベントBを処理し、その後Aが遅れて再配信された
+ * 場合に`last=B≠A`となり誤って再適用してしまうため不採用とした（/codex plan
+ * セカンドオピニオンで指摘）。event.idごとに独立したドキュメントを持つ台帳
+ * コレクションにすることで、配信順序に依存せず各イベントを厳密に一度だけ処理できる。
+ */
+export const AGGREGATION_EVENT_LEDGER_COLLECTION = 'documentAggregationEvents';
+const AGGREGATION_EVENT_LEDGER_TTL_DAYS = 30;
+
+export interface AggregationEventLedgerEntry {
+  source: string;
+  subject?: string;
+  eventTime: string;
+  processedAt: FirebaseFirestore.FieldValue;
+  expireAt: Timestamp;
+}
+
+export function aggregationEventLedgerRef(
+  db: admin.firestore.Firestore,
+  eventId: string
+): admin.firestore.DocumentReference {
+  return db.collection(AGGREGATION_EVENT_LEDGER_COLLECTION).doc(eventId);
+}
+
+/**
+ * TTLは冪等性保証のためのFirestore/Eventarcの最大再試行期間を十分に上回る期間とする
+ * （コスト削減目的であり、短くしすぎて冪等性の保証を失わないこと。/codex plan指摘）。
+ */
+export function buildAggregationEventLedgerEntry(params: {
+  source: string;
+  subject?: string;
+  eventTime: string;
+  nowMillis: number;
+}): AggregationEventLedgerEntry {
+  return {
+    source: params.source,
+    subject: params.subject,
+    eventTime: params.eventTime,
+    processedAt: FieldValue.serverTimestamp(),
+    expireAt: Timestamp.fromMillis(params.nowMillis + AGGREGATION_EVENT_LEDGER_TTL_DAYS * 24 * 60 * 60 * 1000),
+  };
 }
 
 /**

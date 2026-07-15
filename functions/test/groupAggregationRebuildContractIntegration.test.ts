@@ -26,7 +26,8 @@ import { cleanupCollections } from './helpers/cleanupEmulator';
 import {
   generateGroupKeys,
   getAffectedGroups,
-  updateGroupAggregation,
+  buildGroupRefs,
+  applyAggregationDeltas,
   rebuildAllGroupAggregations,
 } from '../src/utils/groupAggregation';
 
@@ -118,16 +119,21 @@ async function snapshotGroups(): Promise<Record<string, GroupSnapshotEntry>> {
   return out;
 }
 
-/** onDocumentWrite(updateDocumentGroups.ts)と同一手順でcreateイベントの差分をdocumentGroupsへ適用する */
+/**
+ * onDocumentWrite(updateDocumentGroups.ts)と同一手順(単一トランザクションでの
+ * read phase→write phase)でcreateイベントの差分をdocumentGroupsへ適用する。
+ * Issue #660修正(ADR-0020)で導入した冪等台帳(documentAggregationEvents)への
+ * 書込みは、本テストが検証するdocumentGroupsの状態には影響しないため省略する。
+ */
 async function applyCreateDiff(fixture: Fixture): Promise<void> {
   const withKeys = { ...fixture.data, ...generateGroupKeys(fixture.data) };
   const affected = getAffectedGroups(undefined, withKeys);
-  for (const { groupType, groupKey, displayName, delta } of affected) {
-    await updateGroupAggregation(db, groupType, groupKey, displayName, delta, {
-      ...withKeys,
-      id: fixture.id,
-    });
-  }
+  if (affected.length === 0) return;
+  const groupRefs = buildGroupRefs(db, affected);
+  await db.runTransaction(async (transaction) => {
+    const groupSnaps = await transaction.getAll(...groupRefs);
+    applyAggregationDeltas(transaction, affected, groupRefs, groupSnaps, { ...withKeys, id: fixture.id });
+  });
 }
 
 /** onDocumentWriteと同一手順でupdateイベントの差分をdocumentGroupsへ適用する */
@@ -135,12 +141,12 @@ async function applyUpdateDiff(before: Record<string, unknown>, after: Record<st
   const beforeWithKeys = { ...before, ...generateGroupKeys(before) };
   const afterWithKeys = { ...after, ...generateGroupKeys(after) };
   const affected = getAffectedGroups(beforeWithKeys, afterWithKeys);
-  for (const { groupType, groupKey, displayName, delta } of affected) {
-    await updateGroupAggregation(db, groupType, groupKey, displayName, delta, {
-      ...afterWithKeys,
-      id: docId,
-    });
-  }
+  if (affected.length === 0) return;
+  const groupRefs = buildGroupRefs(db, affected);
+  await db.runTransaction(async (transaction) => {
+    const groupSnaps = await transaction.getAll(...groupRefs);
+    applyAggregationDeltas(transaction, affected, groupRefs, groupSnaps, { ...afterWithKeys, id: docId });
+  });
 }
 
 describe('差分集計 vs 全件再集計の一致性契約 (getAffectedGroups vs rebuildAllGroupAggregations, GOAL.md タスクE)', () => {
