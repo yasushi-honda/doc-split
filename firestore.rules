@@ -289,6 +289,13 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // 集計イベント冪等台帳(Issue #660修正、ADR-0020)。onDocumentWriteが
+    // event.idごとの処理済みマーカーを記録する内部専用コレクション。
+    // FE/管理者いずれも読み書き不要(Cloud FunctionsはAdmin SDK経由でルール適用外)。
+    match /documentAggregationEvents/{eventId} {
+      allow read, write: if false;
+    }
+
     // 検索インデックス
     match /search_index/{tokenId} {
       allow read: if isWhitelisted();
