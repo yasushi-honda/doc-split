@@ -220,6 +220,89 @@ export interface AggregationDelta {
   delta: number;
 }
 
+export interface ContributionEntry {
+  groupType: GroupType;
+  groupKey: string;
+  displayName: string;
+}
+
+/**
+ * ライブなdocumentデータから、集計対象となる最大4件のgroup所属(contribution)を
+ * 算出する（Issue #664修正、ADR-0021）。
+ *
+ * `getAffectedGroups()`(旧: event.before/afterの保存済みキーを信頼する設計)とは異なり、
+ * 生フィールド(customerName/officeName/documentType/careManager)から`generateGroupKeys()`
+ * で毎回キーを再導出する。documentに保存されたcustomerKey等のキャッシュ値には依存しない
+ * （`rebuildAllGroupAggregations()`/`rebuildSingleGroupAggregation()`と同じ「生データから
+ * 再導出」パターンに統一）。これにより、キー正規化書込み(needsKeyUpdate)がまだ反映されて
+ * いない状態のライブ読込みに対しても正しいcontributionを返せる。
+ */
+export function buildContribution(data: DocumentData | undefined): ContributionEntry[] {
+  if (!data || data.status === 'split') return [];
+
+  const keys = generateGroupKeys(data);
+  const fields: Array<{ type: GroupType; key: string; display: string | undefined }> = [
+    { type: 'customer', key: keys.customerKey, display: data.customerName },
+    { type: 'office', key: keys.officeKey, display: data.officeName },
+    { type: 'documentType', key: keys.documentTypeKey, display: data.documentType },
+    { type: 'careManager', key: keys.careManagerKey, display: data.careManager },
+  ];
+
+  const contribution: ContributionEntry[] = [];
+  for (const { type, key, display } of fields) {
+    const resolved = resolveGroupKeyAndDisplay(type, key, display, !!keys.customerKey);
+    if (resolved) {
+      contribution.push({ groupType: type, groupKey: resolved.key, displayName: resolved.displayName });
+    }
+  }
+  return contribution;
+}
+
+/**
+ * 2つのcontribution(前回このトリガーが適用した寄与 / 現在のライブ状態が示す寄与)を比較し、
+ * documentGroupsへ適用すべきdeltaを算出する（Issue #664修正、ADR-0021）。
+ *
+ * 「event.before/afterの履歴差分」ではなく「前回適用済みcontribution → 現在のcontribution」
+ * の差分を取ることで、異なるevent.id間の配信順序に依存せず正しく収束する
+ * （`/codex plan`セカンドオピニオンで反例検証済み: 別文書が属する既存groupを、
+ * 無関係な順序不同イベントが誤って減算することがない）。
+ *
+ * 同一groupが両方に存在し、かつdisplayNameも変化していない場合はdeltaを一切積まない
+ * （真のno-opではFirestore書込みを発生させない。`isAggregationUnchanged()`の意図を
+ * 「event.before/after比較」から「contribution比較」に置き換えたもの）。
+ */
+export function diffContribution(
+  previous: ContributionEntry[],
+  target: ContributionEntry[]
+): AggregationDelta[] {
+  const previousMap = new Map(previous.map((e) => [generateGroupId(e.groupType, e.groupKey), e]));
+  const targetMap = new Map(target.map((e) => [generateGroupId(e.groupType, e.groupKey), e]));
+  const allGroupIds = new Set([...previousMap.keys(), ...targetMap.keys()]);
+
+  const deltas: AggregationDelta[] = [];
+  for (const groupId of allGroupIds) {
+    const prevEntry = previousMap.get(groupId);
+    const targetEntry = targetMap.get(groupId);
+
+    if (prevEntry && targetEntry) {
+      if (prevEntry.displayName !== targetEntry.displayName) {
+        deltas.push({
+          groupType: targetEntry.groupType,
+          groupKey: targetEntry.groupKey,
+          displayName: targetEntry.displayName,
+          delta: 0,
+        });
+      }
+    } else if (targetEntry) {
+      deltas.push({ groupType: targetEntry.groupType, groupKey: targetEntry.groupKey, displayName: targetEntry.displayName, delta: 1 });
+    } else if (prevEntry) {
+      deltas.push({ groupType: prevEntry.groupType, groupKey: prevEntry.groupKey, displayName: prevEntry.displayName, delta: -1 });
+    }
+  }
+
+  return deltas;
+}
+
 /**
  * deltasの各要素に対応するdocumentGroupsのDocumentReferenceを、同じ順序で生成する。
  * `transaction.getAll(...refs)`（read phase）と`applyAggregationDeltas()`（write phase）の
@@ -374,6 +457,48 @@ export function buildAggregationEventLedgerEntry(params: {
     eventTime: params.eventTime,
     processedAt: FieldValue.serverTimestamp(),
     expireAt: Timestamp.fromMillis(params.nowMillis + AGGREGATION_EVENT_LEDGER_TTL_DAYS * 24 * 60 * 60 * 1000),
+  };
+}
+
+/**
+ * 文書単位の「前回このトリガーが適用したcontribution」を保持する状態コレクション
+ * （Issue #664修正、ADR-0021）。
+ *
+ * `documentAggregationEvents`(event.idごとの処理済みマーカー)とは役割が異なる:
+ * こちらは docId ごとに1件持ち、直近適用したcontributionを記録することで、
+ * 「event.before/afterの履歴差分」ではなく「前回状態 → 現在のライブ状態」の差分を
+ * 計算できるようにする。これにより異なるevent.id間の配信順序に依存しなくなる。
+ *
+ * TTLは設定しない（documentAggregationEventsと異なり、対象docIdが存在する限り
+ * 永続的に必要な状態のため。文書が削除されてcontributionが空配列になった後も、
+ * docId再利用時の正しい差分計算のためレコード自体は保持する設計）。
+ */
+export const AGGREGATION_STATE_COLLECTION = 'documentAggregationStates';
+
+export interface AggregationStateData {
+  contribution: ContributionEntry[];
+  updatedAt: FirebaseFirestore.FieldValue | Timestamp;
+}
+
+export function aggregationStateRef(
+  db: admin.firestore.Firestore,
+  docId: string
+): admin.firestore.DocumentReference {
+  return db.collection(AGGREGATION_STATE_COLLECTION).doc(docId);
+}
+
+export function readAggregationStateContribution(
+  stateSnap: admin.firestore.DocumentSnapshot
+): ContributionEntry[] {
+  if (!stateSnap.exists) return [];
+  const data = stateSnap.data() as AggregationStateData | undefined;
+  return data?.contribution ?? [];
+}
+
+export function buildAggregationStateEntry(contribution: ContributionEntry[]): AggregationStateData {
+  return {
+    contribution,
+    updatedAt: FieldValue.serverTimestamp(),
   };
 }
 

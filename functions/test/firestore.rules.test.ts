@@ -474,6 +474,47 @@ describe('Firestore Security Rules', () => {
   });
 
   // ============================================
+  // /documentAggregationStates コレクション（contribution状態、Issue #664 / ADR-0021）
+  // ============================================
+  describe('/documentAggregationStates collection', () => {
+    it('ホワイトリスト登録ユーザーでも状態を読み取り不可（Cloud Functionsのみ）', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'documentAggregationStates', 'doc-1'), {
+          contribution: [],
+        });
+      });
+
+      const docRef = doc(normalUser.firestore(), 'documentAggregationStates', 'doc-1');
+      await assertFails(getDoc(docRef));
+    });
+
+    it('管理者でも状態を読み取り不可（Cloud Functionsのみ）', async () => {
+      const adminUser = testEnv.authenticatedContext(adminUid);
+
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'documentAggregationStates', 'doc-2'), {
+          contribution: [],
+        });
+      });
+
+      const docRef = doc(adminUser.firestore(), 'documentAggregationStates', 'doc-2');
+      await assertFails(getDoc(docRef));
+    });
+
+    it('誰も状態を作成・編集できない（Cloud Functionsのみ）', async () => {
+      const adminUser = testEnv.authenticatedContext(adminUid);
+      const docRef = doc(adminUser.firestore(), 'documentAggregationStates', 'doc-3');
+      await assertFails(
+        setDoc(docRef, {
+          contribution: [],
+        })
+      );
+    });
+  });
+
+  // ============================================
   // /masters コレクション
   // ============================================
   describe('/masters collection', () => {

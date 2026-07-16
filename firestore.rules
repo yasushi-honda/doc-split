@@ -296,6 +296,13 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // docIdごとに「前回このトリガーが適用したcontribution」を記録する内部専用
+    // コレクション(Issue #664修正、ADR-0021)。documentAggregationEventsと同様、
+    // FE/管理者いずれも読み書き不要。
+    match /documentAggregationStates/{docId} {
+      allow read, write: if false;
+    }
+
     // 検索インデックス
     match /search_index/{tokenId} {
       allow read: if isWhitelisted();

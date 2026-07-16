@@ -1,70 +1,97 @@
 ---
-updated: 2026-07-14
+updated: 2026-07-16
 ---
-<!-- session129: 新ミッション着手。前ミッション(OCR突合精度向上)はsession125クローズ済みのためLATEST.md/archive/2026-07-history.mdへ全文アーカイブ済み(git historyでも追跡可)。本ミッションはkanameoneからの「顧客別とCM別で利用者件数に差異がある」報告から着手。原因調査・Codexセカンドオピニオン(plan mode)を経て確定した実装計画。 -->
+<!-- session133: 新ミッション着手。前ミッション(kanameone担当CM別集計バグ修正+Issue #660過去ドリフト是正)はsession132で完全達成済み(全文はdocs/handoff/LATEST.md session132サマリ参照、git historyでも追跡可)。本ミッションは「複数顧客FAX複製機能」の設計相談から派生。相談の過程でIssue #664(session132では実害なしとして対応見送り判断済み)の優先度が再評価され、decision-maker判断により対応再開が決定された。 -->
 
 ## 現在のミッション
-kanameone本番で「担当CM(ケアマネジャー)別」の書類集計が「顧客別」集計より大幅に少なく表示されるバグを修正する。`careManager`未設定の書類を「CM未設定」グループとして可視化(除外ではなく計上)し、顧客別/CM別の合計件数を一致させる。
+
+Issue #664「documents create/delete順序不同配信でphantom countが起きうる」を恒久的に修正する。集計トリガー(`onDocumentWrite`)の計算モデルを「event.before/afterの履歴差分適用」から「documentsのライブ状態への収束(materialized projection)」に置き換える。dev環境で実装・検証完了後、kanameone/cocoro本番へ展開する。
 
 ## 背景・why
-- kanameoneから「顧客別と担当CM別で利用者件数に差異がある（CM別だと明らかに数字が小さい）」という報告があり調査した
-- 根本原因: `Document`型の`customerName`/`officeName`/`documentType`は必須フィールド(マッチ失敗時は`不明顧客`/`未判定`にフォールバック)だが、`careManager`は任意フィールドでフォールバックなし。集計ロジック`functions/src/utils/groupAggregation.ts`は正規化キーが空の場合そのgroupTypeの集計から丸ごと除外するため、careManager別集計だけが顧客別集計より大幅に少なくなる非対称性がある
-- kanameone実データ実測(2026-07-14): customer合計9,620件 vs careManager合計6,283件(差34.7%)。うち「不明顧客」グループが3,280件(34.1%)、実在顧客だがCM欠落が91件(customerIdなし62/マスターCM未設定22/**同期漏れ疑い7件**)
-- バグの発生源3箇所: `functions/src/ocr/ocrUpdatePayloadBuilder.ts`(OCR自動取込)・`functions/src/pdf/splitDocumentBuilder.ts`(手動分割)・`scripts/migrate-document-groups.js`(groupAggregation.tsのロジックを独立に再実装したコピー、本体だけ直すと手動再構築時にバグが再発する)
-- `/codex plan`セカンドオピニオン(MCP、effort=high)で以下の指摘を受け計画に反映済み:
-  1. 集計専用の予約keyを使うべき（`未設定`という表示名をそのままkeyにすると実在CM名との衝突リスクがある）
-  2. グループ生成だけでなく、グループをクリックして書類一覧を展開する経路（クエリロジック）にも同じ意味付けを持たせる必要がある
-  3. `getAffectedGroups`・全件再集計・移行スクリプト(`migrate-document-groups.js`)で同一のkey導出関数を使うべき（最低でも契約テストで出力一致を保証）
-  4. 本番バックフィルは同時更新競合対策・ロールバック手順（事前スナップショット、旧ロジックでの再構築手順）が必要
-  5. AC「既存17グループのcount不変」は同期漏れ7件を将来補正すると成立しなくなるため「今回の集計修正単独では不変」に限定する
-- GitHub Actions経由の新規診断スクリプト(`scripts/diagnose-caremanager-group-gap.js`, PR #654)で、Codex指摘の数値矛盾(9,620-3,371=6,249≠6,283)を実データ再検証。原因は前回集計スクリプトの母集団定義ミス(`status='split'`除外漏れ)と判明し、正しい母集団(`status !== 'split'`)では恒等式`customerKey非空 = careManagerKey非空 + careManagerKey欠損`が誤差0で一致することを実証した
-- 副次発見(未解明・スコープ外): `documentGroups`実測値と動的再計算の間にcustomer-1件/careManager-25件の微小なズレ(over-count疑い)。バックフィル設計（既存documentGroupsをクリアしてから再構築）で自然に解消される見込み
+
+- 発端は「複数顧客が写る1回の受信FAXを、検出した顧客の人数分だけ複製し、担当CMごとに後から選別してもらう」という現場提案(decision-maker経由)の設計相談。相談の中で、この運用が想定するdocument create/delete頻度の増加が、既存の未対応既知バグ(Issue #664)の発生条件(作成直後削除の配信順序不同)を「稀な理論値」から「日常的に踏みうる経路」に格上げすることが判明した
+- Issue #664自体は複製機能の採否によらず独立して対応すべき既存バグであり、decision-maker判断により本ミッションとして先行対応することになった(複製機能自体の設計・実装は本ミッションのスコープ外)
+- session132時点では「kanameone/cocoro本番で観測した実際のドリフトは全てIssue #660由来、Issue #664型の事例は0件」という実測を根拠に対応見送りと判断していたが、今回のスコープ拡大リスクを踏まえ再評価し、着手再開が決定された
+
+### 設計検討の経緯(`/codex plan`セカンドオピニオン2往復、MCP版・threadId `019f67fa-3775-7e02-aee2-9d364abf2050`)
+
+1. **1往復目**: Issue #664原文が想定していた「`documentAggregationStates/{docId}`にlatestEventTime/latestEventIdを持たせ、新しいstateがあれば古いイベントのdeltaをスキップする」という案をCodexへ検証依頼。以下2点が判明し、原案は不採用となった:
+   - `event.time`はFirestore/Eventarcの配信順序比較キーとして安全に使えない(公式ドキュメントで裏付け: at-least-once配信・順序非保証。`Document.updateTime`は同一文書内で単調増加するがdeleteイベントには適用できない)
+   - 「新しいstateがあれば古いイベントをスキップする」だけでは不正確。反例: グループAに別文書Yが1件存在する状態で、文書XのA→B属性変更イベントが文書X作成イベントより先に配信されると、単純スキップ方式は「作成イベントをスキップ」した上で「更新イベントのbefore=Aへの-1」を適用してしまい、Xとは無関係な文書Yの分まで誤って減算する
+   - Codexの提案: 書込み側(`documents/{docId}`への全書込み経路)が、実際の書込みと同一トランザクションでrevision付きmutationレコードを生成する「outboxパターン」(`documentAggregationMutations`新設)
+2. **全書込み経路の洗い出し(Exploreエージェント)**: outboxパターンを正しく実装するための前提として、`documents/{docId}`への書込み経路を全数調査した結果、**23箇所**判明(バックエンド10・フロントエンド5系統[Firestore Client SDK直接書込み、callable非経由]・スクリプト11本)。うち2箇所(`updateDocumentGroups.ts`自身のneedsKeyUpdate自己書込み、`searchIndexer.ts`という別トリガーの検索メタデータ自己書込み)は自己参照的に集計トリガーを再発火させる構造。outboxを正しく実装するには23箇所全てへの改修が必要となり、非現実的な規模と判断
+3. **2往復目**: 「書込み側を一切変更せず、集計トリガー側だけで完結させる」代替案(ライブ再読込み+文書単位のcontribution状態)を提案しCodexへ再検証依頼。Codexは反例チェック・並行実行安全性を検証した上で、この代替案を**正しく、かつoutbox案より実装規模が大幅に小さい**と評価し、採用が確定した
+
+## 採用設計
+
+### 計算モデルの変更(意味論の変更、ADR-0021で明文化予定)
+
+- **旧**: `event.data.before/after`という「このイベント固有の履歴差分」をdocumentGroupsに適用する(ADR-0020)
+- **新**: `documentGroups`は「現在のdocumentsの状態」に収束すべき派生データと再定義し、各イベント処理は「前回このトリガーが適用した寄与(`documentAggregationStates/{docId}.contribution`) → 現在のdocumentsのライブ再読込みが示す寄与」の差分をトランザクション内で適用する
+
+### なぜ安全か(Codex検証済み)
+
+- 並行書込み: `documentAggregationStates/{docId}`もトランザクションの読み取りセットに含まれるため、競合時はFirestoreの標準的なトランザクション再試行機構(ADR-0020と同じ仕組み)でシリアライズされ、リトライ後は最新state+最新documentsに収束する
+- ADR-0020の「トランザクション内でdocumentsを再読込みしない」制約は、旧モデル(このイベント固有の履歴差分を再現する必要がある)には必須だったが、新モデル(ライブ状態への収束が目的で、履歴差分の再現は目的としない)には適用されない
+- docId再利用(delete後の同一ID再作成)も、ライブ再読込みにより追加対策なしで自然に安全(outbox+revision方式ではincarnationId等の追加設計が必要だった)
+- 既存の`documentAggregationEvents`冪等台帳(ADR-0020)は、正しさの必須要件ではなくなるが、重複配信の早期skip最適化として維持する
+
+### 追加で必要な修正(Codex指摘)
+
+現行の`needsKeyUpdate`(`updateDocumentGroups.ts:91-96`)は、イベントの**古いafterData**を使ってトランザクション**外**で`documents/{docId}`へ事前updateしている。docId再利用後に古いイベントが遅延到着すると、新しい文書のキーを古いデータで上書きする恐れがあるため、ライブ再読込みデータ基準に直し、トランザクション内(write phase)に統合する。
 
 ## 完了の定義
-- dev環境でcareManagerが空文字/undefined/nullいずれのdocumentも、同一の予約key(例: `__UNASSIGNED_CARE_MANAGER__`)+表示名「CM未設定」で`documentGroups`に集計される（証明: 単体テストで境界値3パターンPASS）
-- 差分集計(`getAffectedGroups`)と全件再集計(`rebuildAllGroupAggregations`)が同一fixtureに対して完全一致する（証明: 契約テストPASS）
-- `scripts/migrate-document-groups.js`が独立コピーを持たず、`groupAggregation.ts`と同一のkey導出ロジックを使う（証明: `diagnose-caremanager-group-gap.js`で採用した`functions/lib/`経由requireパターンで統一、または契約テストでの出力一致確認）
-- フロントエンド「担当CM別」タブに「CM未設定」グループが表示され、クリックで該当書類一覧が正しく展開される（証明: Playwright実機確認、CLAUDE.md「UIコンポーネント変更時の確認」ルール準拠）
-- kanameone本番バックフィル実行前に、対象件数・予定グループ内訳をドライランで出力し、実行後に同レポートと比較して差分が説明可能である（証明: バックフィルスクリプトのdry-run/execute出力ログ）
-- kanameone本番バックフィル後、customer合計とcareManager合計(CM未設定含む)が誤差0件で一致する（証明: `diagnose-caremanager-group-gap.js`相当の再検証実行結果）
-- 今回の集計修正単独では、既存の実在CM名17グループのcountがバックフィル前後で変化しない（証明: バックフィル前後の診断スクリプト比較。同期漏れ7件を別途補正する場合はこの限りではない）
-- [x] 本番展開後、kanameone/cocoro双方でエラー率が展開前と同水準（証明: `fix-stuck-documents --include-errors --dry-run`でエラー0件、2026-07-15確認済み run 29408324706/29408329686、両環境とも「対象のドキュメントはありません」）
-- 不変条件: 同期漏れ7件の原因究明・documentType「未判定」過集中問題・careManagerの検索インデックス欠落は本ミッションのスコープに含めない（decision-maker確定、2026-07-14）
+
+- [x] AC1: 別文書Yがグループ内に存在する状態で、文書XのA→B更新イベントをX作成イベントより先に処理しても、Aのcountに影響なし・Bのみ+1になること → `updateDocumentGroupsIdempotencyIntegration.test.ts` AC1でPASS確認済み(Evaluatorによる独立実測でも再確認済み)
+- [x] AC2: 作成直後削除でdelete配信が先着しcreateが後着しても、対象グループにphantom countが残らないこと → 同ファイルAC2でPASS確認済み(Issue #664の核心シナリオ)
+- [x] AC3: 文書削除後の同一docId再利用で、古いイベントが遅延到着しても新しい内容のみ反映されること → 同ファイルAC3でPASS確認済み
+- [x] AC4: 既存の冪等性AC(同一event.id重複配信・並行実行・部分失敗ロールバック、ADR-0020のAC1〜7相当)が新設計でも全てPASSすること → AC4-1〜4-6(異なるevent.id間の真の並行実行・キー正規化のみの組合せを追加検証)全てPASS
+- [x] AC5: `needsKeyUpdate`がトランザクション内のライブデータ基準に統合され、トランザクション外の事前updateが存在しないこと → コードレビュー+AC5/AC5-2テストで確認済み
+- [x] AC6: dev環境で移行(state seed + documentGroups再構築)後、恒等式検証(診断スクリプト相当)で差分0件であること → devリハーサルで確認済み(customer/office/documentType/careManager全一致、groupId単位・恒等式検証も一致)
+- [x] AC7: kanameone/cocoro本番展開後、同様に差分0件であること → 両環境で診断スクリプト実行、customer/office/documentType/careManager全一致・groupId単位/恒等式検証も一致を確認済み。**未検証事項**: 「展開前後でエラー率が同水準」の明示的なログ比較は、kanameone側gcloud認証の再認証要求(非対話的セッションでは実行不可)により未実施。デプロイ自体はfirebase CLIがエラーなく完了と報告しており、diagnose-caremanager-group-gap.jsによる集計正しさの実測は完了しているため、実害の兆候はないが、次回のcatchup等でCloud Functionsのエラー率を目視確認することを推奨
+- 不変条件: 「複数顧客FAX複製機能」自体の設計・実装は本ミッションのスコープに含めない(decision-maker確定、2026-07-16)。Issue #664の過去ドリフト是正(本番で既に発生している可能性のあるphantom countの補正)も本ミッションのスコープ外(新規発生の防止のみが目的。既存tooling`rebuildSingleGroupAggregation()`による個別補正は必要になった時点で別途対応)
 
 ## 進行中のtasks
-- [x] A. `functions/src/utils/groupAggregation.ts`の集計ロジック修正 — `getAffectedGroups()`/`rebuildAllGroupAggregations()`で、careManagerKeyが空の場合も予約key(`__UNASSIGNED_CARE_MANAGER__`)+表示名「CM未設定」で集計対象に含める設計を実装（session130、PR作成準備完了）。`resolveGroupKeyAndDisplay()`に集約し予約keyの非衝突性もテストでlock-in済み。**実装中に発見した追加バグ**: careManagerだけ無条件にフォールバックすると、status:pending/processing/error（OCR未完了でcustomerKeyも空）の書類で担当CM別合計が顧客別合計を上回る新たな非対称性を再導入することが`/code-review high`の8角度並列レビューで判明・修正済み。`canFallbackToUnassigned`(customerKey非空)を条件に追加し、「顧客別に計上される書類は必ず担当CM別にも計上される」不変条件をstatus値の列挙に頼らず保証する設計にした
-- [x] B. グループ展開経路の確認・対応 — `useDocumentGroups.ts`の`fetchGroupDocuments`で予約keyを空文字に変換してクエリするよう修正済み。**Codex `/codex review-diff`指摘(P1)**: Aの追加修正でバックエンド集計対象が絞られた結果、フロントエンドクエリがcustomerKey条件を持たずpending書類まで一覧表示してしまう不整合が発生 → 同一条件をクライアントサイドフィルタに追加して解消済み
-- [x] C. 単体テスト追加 — careManagerKeyが空文字/undefined/空白文字("　"等)・customerKey未確定時の非対称性再発防止・予約keyの非衝突性を含む21件のテストで境界値をlock-in済み（null直接ケースはnormalizeGroupKeyが`!value`で吸収するため空文字と同一パスを通ることを確認済み、別立てテスト不要と判断）
-- [x] D. `scripts/migrate-document-groups.js`の同期修正 — `groupAggregation.ts`の独立コピー(`normalizeGroupKey`/`generateGroupKeys`/`generateGroupId`の手書き実装とPhase 2集計ロジック全体)を撤廃し、`functions/lib/functions/src/utils/groupAggregation.js`から`generateGroupKeys`/`generateGroupId`/`resolveGroupKeyAndDisplay`/`rebuildAllGroupAggregations`を直接requireするよう統一（session131、`diagnose-caremanager-group-gap.js`(PR #654)と同一パターン）。Firestoreエミュレータでシード5件(実CM1件・CM未設定2件・分割済み除外1件・customerKey未確定1件)を投入しdry-run/実行モード両方で「処理4件・グループ9件(顧客3/事業所2/書類種別2/担当CM2)」が完全一致することを確認、予約key`__UNASSIGNED_CARE_MANAGER__`が実CM名と衝突せず正しく計上されることも確認済み。`/code-review low`findings 0件
-- [x] E. 差分集計 vs 全件再集計の一致性契約テスト — `functions/test/groupAggregationRebuildContractIntegration.test.ts`を追加（session131）。Firestoreエミュレータ上でcreateイベント差分の逐次適用(`getAffectedGroups`+`updateGroupAggregation`)と全件再集計(`rebuildAllGroupAggregations`)が同一fixture(実CM/CM未設定2件/split除外/customerKey未確定2件を含む7件)に対して完全一致することを検証、加えてupdateイベント(実CM→CM未設定への変更)を含むシナリオでも一致することを検証。`npm run test:integration`に追加(9→10ファイル)、フルスイート98件PASS・既存unit test 1781件PASS・lint新規エラー0件を確認済み
-- [x] F. dev環境リハーサル — Firebase Emulator(auth/firestore/functions)+Playwright MCPで、careManager未設定の書類2件・実在CM書類1件をシードし、「担当CM別」タブに「CM未設定 2件」表示→クリック展開→顧客サブグループ→書類種別→実ファイル名まで正しく到達することを実機確認済み（session130）
-- [x] G. 本番バックフィル設計 — session131で`/impl-plan`フルモード+`/codex plan`セカンドオピニオン3往復を経て設計確定・decision-maker承認済み、実装完了(ADR-0019)。**確定設計**: Task Aのバグ(careManagerKey空文字を集計から除外)の影響範囲は新設の「CM未設定」グループ(`__UNASSIGNED_CARE_MANAGER__`)1件のみ(既存の顧客別/事業所別/書類種別/実在CM別グループは`resolveGroupKeyAndDisplay()`のUNASSIGNED_FALLBACKがcareManagerにのみ定義されているため数学的に無影響)と判明したため、バックフィルは「documentGroups全体の調停」ではなく「単一グループの安全な初期作成」に縮小。並行更新対策は、Codexが指摘した「delta加算の可換性を前提にした差分合成」「processedAt cutoff境界による時間区切り」「syncCareManagerのみ停止」「集計副作用のみのoutbox化」の4案がいずれもレース条件(スキャン中の所属変更・遅延ライブトリガーによる二重計上)を防げないと判明したため不採用。最終設計は「集計所属変更を伴う書込み経路(OCR完了/再処理・split・syncCareManager)のみを短時間ゲートし、Gmail取込によるpending文書作成は継続させる」方式(ドレイン確認はCloud Functions最大実行時間540秒を上回る10分待機をバリアとする)。ロールバック=「旧ロジックでの再構築」ではなく「documentGroupsは完全にdocuments生フィールドから導出可能な派生データであり、バグ修正後の再実行による自己収束」に定義を上書き（旧ロジック復元はタスクDで独立コピーを意図的に撤廃済みのため不可能かつ不要）。**実装完了(サブタスクA〜G)**: ①`functions/src/utils/maintenanceGate.ts`新設+`processOCR.ts`/`syncCareManager.ts`/`pdfOperations.ts`(splitPdf)へのゲート組込み ②`migrate-document-groups.js`/`rebuildAllGroupAggregations()`の母集団クエリ統一(status未設定文書の非対称除外を解消) ③`groupAggregation.ts`に`backfillUnassignedCareManagerGroup()`追加(事前チェック+単一トランザクション) ④`migrate-document-groups.js --backfill-cm-unassigned`モード追加(ゲート制御+ドレイン待機+実行、GHA `run-ops-script.yml`に選択肢登録済み) ⑤`diagnose-caremanager-group-gap.js`をresolveGroupKeyAndDisplay経由のgroupId単位比較に強化(旧「追加考慮事項①」解消) ⑥単体+emulator統合テスト12件追加(配線契約3件+ゲート状態5件+バックフィル関数3件、既存98件と合わせ106件PASS) ⑦ADR-0019+Runbook(`docs/context/caremanager-group-backfill-runbook.md`)作成。旧「追加考慮事項②③④」はこの確定設計に統合済み(②→ゲート方式で解消 ③→ドレイン待機ログで解消 ④→母集団クエリ統一で解消)。次はタスクH(kanameone本番実行、decision-maker番号単位認可必須)
-- [x] H. kanameone本番バックフィル実行 — decision-maker承認のうえGHA経由で実行完了(run 29377386736、スキャン9,634件/CM未設定計上3,372件/実行時間626.4秒/エラーなし)。Runbook Step 4検証(`diagnose-caremanager-group-gap`、run 29378019070→14.5分後にrun 29378821296で再確認)の結果、**恒等式`customer=careManager(実CM+CM未設定)`は一致し、CM未設定グループ自体も正しく作成された(Task G本来の目的は達成)**。一方、既存の実在CMグループ8件でdocumentGroups実測countとdocuments再計算値の持続的な不一致を発見(特にcareManager_奥村敬子は期待40実測80の正確に2倍)。当初「onDocumentWriteの自己再帰トリガーによる二重計上」と誤診断したが、`/codex plan`セカンドオピニオン(threadId `019f6334-58c2-7f11-9950-51182f124745`)のコード行単位トレースでこの仮説は棄却され、実際は「onDocumentWriteハンドラがevent.idによる重複排除を持たずFirestore/Eventarcのat-least-once配信・Promise.all部分失敗リトライに対して非冪等」という、Task Gとは独立の既存構造バグと判明。Issue化(#660)し、修正はTask Gのスコープ外として別途着手する方針
-- [x] H-2. kanameone/cocoro本番へのTask Gコード配備 — H実行時点でkanameone本番Functions/Firestore RulesがTask G以前(2026-07-12/07-08時点)のままデプロイされておらず、メンテナンスゲートが実質無効だったことが判明(session131末尾で発覚・decision-maker報告)。`gh workflow run "Deploy Cloud Functions"`(kanameone: run 29381680000 / cocoro: run 29382021716)+`firebase deploy --only firestore:rules -P <kanameone|cocoro>`で両環境とも再デプロイ完了、Functions 4件(processOCR/onCustomerMasterWrite/splitPdf/onDocumentWrite)の更新日時がデプロイ完了時刻と一致することを確認済み。**H自体の結果(CM未設定グループ作成・恒等式一致)への影響は限定的**(ゲート不在下でも新規グループの事前チェック+単一トランザクション防御は機能していたため)と考えられるが、確定はできない
-- [x] I. cocoro本番バックフィル実行 — **完了(2026-07-15、decision-maker番号単位認可済み)**。当初想定していた`--backfill-cm-unassigned`(Task G、初回作成専用)はdry-runプレビューで「CM未設定グループ既存(count=3)」と判明し、`backfillUnassignedCareManagerGroup()`の事前チェック(グループ既存時はエラー、functions/src/utils/groupAggregation.ts:694-703)により実行モードでは10分ドレイン待機後にエラー終了する設計上の問題を実行前に検出。J3コード配備後の通常フローで自然作成された小規模グループ(count=3、本来749件見込み)に対しては初回作成関数ではなく個別再構築が適切と判断し、J4と同じ`--rebuild-groups careManager___UNASSIGNED_CARE_MANAGER__`方式に切替(decision-maker承認)。dry-run(run 29407260477、現在count=3→再構築後count=749)→実行(run 29407396013、ゲート閉鎖→10分ドレイン待機→再構築→ゲート再開、605.9秒)→再診断(run 29408143613)。**結果: customer/office/documentType/careManagerの4type全てで動的再計算=documentGroups実測が✅一致(1085)、groupId単位の個別比較で全groupIdが一致、恒等式`customer(1085)=careManager実CM+CM未設定合計(1085)`が✅一致**。kanameone・cocoro両環境でCM未設定計上バグ修正+Issue #660過去ドリフト是正が完了
 
-## 派生ミッション: Issue #660(集計トリガーの非冪等性)の修正
+- [x] A. `buildContribution(liveDocData)`新設 — `groupAggregation.ts`。既存の`generateGroupKeys()`/`resolveGroupKeyAndDisplay()`/`status==='split'`除外ロジックを流用し、最大4件のgroup所属配列を返す
+- [x] B. `diffContribution(previous, target)`新設 — `groupAggregation.ts`。group単位でdelta統合(-1/0/+1)。同一グループが両方に存在し表示名も同一なら何も返さない(真のno-opでFirestore書込みを避ける)
+- [x] C. `documentAggregationStates`読み書きヘルパー — `groupAggregation.ts`(`aggregationStateRef`/`readAggregationStateContribution`/`buildAggregationStateEntry`)
+- [x] D. `processDocumentAggregationEvent()`刷新 — `updateDocumentGroups.ts`。event.before/after依存を廃止しライブ再読込み+state diffに統合、needsKeyUpdateをtx内のライブデータ基準へ統合。`DocumentAggregationEventInput`からbeforeData/afterDataを削除
+- [x] E. `applyAggregationDeltas()`の重複group ref対応確認 — diffContributionはgroupId単位でdedup済みの配列を返すため追加修正不要と確認(tsc型チェックPASSで検証)
+- [x] F. 単体テスト(buildContribution/diffContribution) — `groupAggregation.test.ts`に34件追加、全PASS(反例ケース含む)
+- [x] G. integration test拡張 — `updateDocumentGroupsIdempotencyIntegration.test.ts`を新インターフェースに合わせ全面書き換え。AC1(反例ケース)/AC2(Issue #664核心シナリオ)/AC3(docId再利用)/AC4-1〜4(既存冪等性ACの回帰確認)/AC5・AC5-2(needsKeyUpdateのライブ化)の9件全PASS。実装当初のテストfixture不備(大文字careManagerKeyがnormalizeGroupKeyで小文字化される不整合、およびAC4-4のstate非存在誤assertion)を実行結果から検出・修正済み
+- [x] H. `documentAggregationStates`のFirestore rules(deny-all)+テスト — `firestore.rules`/`firestore.rules.test.ts`、3件追加、全PASS
+- [x] I. migrationスクリプト — `scripts/migrate-document-groups.js --seed-aggregation-states`追加(既存`--backfill-cm-unassigned`と同じメンテナンスゲート制御)。GHA `run-ops-script.yml`に選択肢登録済み。エミュレータ上でdry-run→実行→検証のリハーサル実施、CM未設定フォールバック・split除外・ゲート再開全て確認済み
+- [x] J. ADR-0021作成 — `docs/adr/0021-live-read-aggregation-model.md`。Codexの「documentGroupsも同一スナップショットで再構築すべき」という提案には、直前ミッションでの個別再構築方針(全体再構築のリスク回避)を踏襲する形で意図的に逸脱した旨を明記
+- [x] K. devリハーサル — dev環境(doc-split-dev)で完了。
+  - デプロイ: `./scripts/deploy-to-project.sh dev --full`でFunctions(onDocumentWrite含む)+Firestore rules+Hosting成功
+  - **手順ミス(要記録)**: ADR-0021移行手順は「新トリガーコード配備の**前**にseedする」ことが必須だが、今回はデプロイ→seedの順で実行してしまった(逆順)。Cloud Functionsログで該当ウィンドウ(デプロイ完了〜seed完了、約12分間)の`onDocumentWrite`実行を確認した結果、書き込みイベントは0件で実害なしと確認。**L(本番展開)では絶対に正しい順序(seed→デプロイ)を守ること**
+  - `--seed-aggregation-states`実行(GHA、`fix/issue-664-live-read-aggregation`ブランチ経由): スキャン161件/state作成161件、エラーなし
+  - `diagnose-caremanager-group-gap.js`実行 → office/documentType/careManagerで既存ドリフト検出(customer=161✅ 一致、他3種は不一致)。**このドリフトは今回の変更とは無関係**(`--seed-aggregation-states`はdocumentGroupsを一切変更しないため)。dev環境が過去の複数セッションのテスト用データ(`--seed-doc-*`等)を蓄積した結果の既存ドリフムと判断
+  - GOAL.md AC6の「documentGroups再構築」を実施: `--rebuild-groups`(個別グループ再構築、対象5件: office_ひまわり訪問介護ステーション/documentType_ケアプラン/careManager_佐々木恵子/office_あおぞらデイサービスセンター/documentType_サービス提供票)をdry-run→実行、5/5成功
+  - 再度`diagnose-caremanager-group-gap.js`実行 → customer/office/documentType/careManager全てdynamic=161/実測=161で一致✅、groupId単位の個別比較も全一致、恒等式検証も一致✅。**AC6達成**
+- [x] L. kanameone/cocoro本番展開 — decision-maker承認後、Kの教訓(seed→デプロイの正しい順序)を厳守して実施。両環境で完了。
+  - **kanameone**: `--seed-aggregation-states`(9693件、dry-run→実行、エラーなし)→ Functions/rules/hostingデプロイ(`switch-client.sh kanameone`+`deploy-to-project.sh kanameone --full`)→ 診断スクリプトでcustomer/office/documentType/careManager全て9693件で一致✅、groupId単位・恒等式検証も一致✅(session132のドリフト是正が維持されており新規ドリフトなし)
+  - **cocoro**: `--seed-aggregation-states`(1090件、dry-run→実行、エラーなし。実行時に1件新規Gmail取込文書(pending、contribution空)が増えていたが、空contributionのためstate作成対象外=想定通りの無害な挙動)→ Functions/rulesデプロイ(`firebase deploy --only functions -P cocoro` / `firebase deploy --only firestore:rules,firestore:indexes,storage -P cocoro`、editorアカウントのため`deploy-to-project.sh`を使わず手動手順)→ 診断スクリプトで1091件全て一致✅、groupId単位・恒等式検証も一致✅
+  - 後片付け: Firebase CLIアカウント/gcloud構成をdev用に復帰済み
 
-Hの検証中に発見。`functions/src/triggers/updateDocumentGroups.ts`の`onDocumentWrite`ハンドラが`event.id`による重複排除を持たず、Firestore/Eventarcのat-least-once配信・`Promise.all()`部分失敗時のCloud Functionsリトライに対して非冪等なため、`documentGroups`のcountが本番で持続的にドリフトする(kanameoneで実測: careManager_奥村敬子が期待40件に対し実測80件の正確に2倍、他7グループも±1〜9件の差異)。Task G(メンテナンスゲート)とは独立した既存バグ。詳細・根本原因・Codexセカンドオピニオンの分析はIssue #660本文を参照。
+- [x] K-pre. `/code-review high`(8 finder agents)+Evaluator分離プロトコル実施、指摘への対応完了:
+  - CONFIRMED①(migrate-document-groups.jsのゲート制御3重複) — `withMaintenanceGate()`ヘルパーに統合、エミュレータリハーサルで再検証済み
+  - CONFIRMED②(`groupAggregationRebuildContractIntegration.test.ts`が本番未使用の`getAffectedGroups()`を検証しておりbuildContribution/diffContributionモデルの正しさを一切カバーしていなかった) — `processDocumentAggregationEvent()`本体を直接呼ぶ形に書き換え、母集団件数のnon-trivialアサーションを追加。エミュレータで2件PASS確認
+  - CONFIRMED③(CLAUDE.md「Partial Updateテストに更新対象外フィールド不変を含める」ルール未遵守) — AC5/AC5-2に不変フィールドのassertion追加
+  - CONFIRMED④(migration順序が実行時に強制されない) — ADR-0021の移行手順セクション(72行目)に既に明記済みのため、ADR-0019と同種の許容済み運用リスクとして現状維持
+  - Evaluator指摘MEDIUM(異なるevent.id間の真の並行実行がuntested、ADR-0021の中核安全性claim) — AC4-5追加。調査の結果、ローカルFirestoreエミュレータは「未存在ドキュメントへの`transaction.set()`」が絡む競合を確実には検知しないという既知の制約([firebase-tools#8120](https://github.com/firebase/firebase-tools/issues/8120))を実機で確認。本番はAdmin SDKデフォルトの悲観的ロックのためこの制約は適用されないが、emulatorでend-to-end検証できるのは「既存state/groupへの変更」の競合のみと判明。この経路(AC4-5)は3秒超のリトライ発生を伴い確実にPASS(3連続実行で決定的)。詳細はADR-0021残存リスクに追記
+  - Evaluator指摘LOW(keyUpdateのみ・集計変化なしの組み合わせがuntested) — AC4-6追加、PASS確認
+  - PLAUSIBLE指摘4件(trigger-storm読み取り増幅・seed scriptのorderBy省略[既存パターン踏襲]・diffContribution重複エントリ防御・generateGroupKeys冗長呼び出し) — severity低のため今回は現状維持(次にこのコードパスを触る際に再検討)
+  - 全品質ゲート再検証: `npm run lint`(0 errors)/`npm run build`(成功)/`npm run test`(1800 passing)/`npm run test:rules`(83 passing)/`npm run test:integration`(124 passing、既存122件+AC4-5/AC4-6の2件、回帰なし)
 
-- [x] J1. `/impl-plan`起票 — フルモードで計画確定・decision-maker承認済み(2026-07-15)。`/codex plan`セカンドオピニオン(threadId `019f6334-58c2-7f11-9950-51182f124745`)で当初案(`documents/{docId}.lastAggregationEventId`に直近1件のみ記録)が**順序不同の再配信(古いイベントが新しいイベントの後に遅れて届くケース)を防げない**と指摘され却下。**採用design**: 独立コレクション`documentAggregationEvents/{event.id}`をイベント処理済み台帳として新設し、`transaction.getAll()`で台帳+affected group(最大8件)を一括読み取り→未処理なら全グループ更新+台帳`create`を単一トランザクションでatomicに実行。集計差分は必ず`event.data.before/after`の凍結スナップショットから計算(トランザクション内で"現在の"documentsを再読込みして計算しない)。既存のキー正規化自己書込みはそのまま維持(「自己再帰の排除」は誤った前提とCodexに指摘され撤回、既存の`isAggregationUnchanged()`早期returnによる安全な有限no-op設計を活用)。タスク分解: A(groupAggregation.ts転置)→(B(updateDocumentGroups.ts統合), E(既存契約テスト対応)並列)→D(新規冪等性統合テスト)、C(firestore.rules)は独立並行、F(ADR作成)、G(Firestore TTLポリシー設定、J3時)。AC 7項目確定(特にAC2: A→B→A順序不同再配信で古いAを再適用しないことが核心ケース)
-- [x] J2. dev実装+検証+レビュー対応 — `documentAggregationEvents/{event.id}`冪等台帳を新設し、`onDocumentWrite`の集計反映部分を単一トランザクション化(`transaction.getAll()`によるread phase→`applyAggregationDeltas()`+台帳`create`のwrite phase)。CloudEvent構築の複雑さを避けるため本体ロジックを`processDocumentAggregationEvent()`として独立させ直接テスト可能にした。新規integration test(`updateDocumentGroupsIdempotencyIntegration.test.ts`)でAC1〜AC5を実装、特にAC2(A→B→A順序不同再配信、単一フィールド案では失敗する核心ケース)を含め全PASSを確認。dev環境のFirestore TTLポリシー(`documentAggregationEvents.expireAt`)設定・ACTIVE化も確認済み。**PR #663レビュー対応(review-pr相当6エージェント+codex review、2ラウンド)**: ①`retry: true`追加(Codexセカンドオピニオン承認、retry:falseのままだとトランザクション失敗時にイベントが静かにdropされドリフト再導入) ②needsKeyUpdate失敗のthrow化+NOT_FOUND(write-then-deleteレース)のみ非致命として継続する例外処理、`isFirestoreNotFoundError()`を`search/errors.ts`から`utils/firestoreErrors.ts`へ共有ユーティリティ化 ③ADR-0020のtransaction.create()/ALREADY_EXISTS記述の誤りを訂正(comment-analyzer+silent-failure-hunterが独立指摘、実際の保護機構はread時点の楽観的並行制御) ④fault-injection test追加(oversized careManagerKeyで実際のFirestore INVALID_ARGUMENTを発生させアトミック性を実証、AC6) ⑤write-then-deleteレース対応のAC7追加 ⑥documentAggregationEventsのrules deny-allテスト追加 ⑦retry:trueのregression guard契約テスト追加 ⑧count NaN防止ガード・並行配列長さアサーション追加。**2回目のcodex reviewでP1指摘(create/delete順序不同配信によるphantom count)が発覚、decision-maker判断によりPR#663のスコープ外としてIssue #664へ切り出し、ADR-0020に残存リスクとして明記**。全体検証: build/lint/unit 1787件/rules 80件/integration 113件全PASS
-- [x] J3. kanameone/cocoroへのデプロイ+検証 — 両環境とも「①GHA Functionsデプロイ→②Firestore rulesデプロイ→③TTLポリシー設定→④動作確認」の順で段階的に実施(decision-maker承認、kanameone完了確認後にcocoroへ進行)。**kanameone**: `gh workflow run "Deploy Cloud Functions" -f environment=kanameone`(run 29386419082、ログでdocsplit-kanameoneプロジェクト+`onDocumentWrite(asia-northeast1)`更新を実証)→`firebase deploy --only firestore:rules -P kanameone`成功(`hy.unimail.11@gmail.com`のままrules deployは認証チェックを経由せず実行可能と判明)→`gcloud firestore fields ttls update expireAt --collection-group=documentAggregationEvents --enable-ttl --project=docsplit-kanameone`実行、`state: ACTIVE`確認→Cloud Loggingで新規書込みイベントが実際に`[onDocumentWrite] Updated N groups for doc X (event Y)`という新フォーマット(event.id付き)で処理されていることを実証(旧フォーマットとの違いで新コード稼働を確認)。**cocoro**: 同様の手順で実施(run 29387115786、`docsplit-cocoro`プロジェクトへのデプロイ+`onDocumentWrite`更新を実証、rules deploy成功、TTL `state: ACTIVE`確認)。cocoroは直近1時間で新規ドキュメント書込みが発生せず実イベントでのログ確認はできなかった(本番データへの人為的なテストデータ投入は行わない方針のため)が、dev/kanameoneで同一コードの正確性を実イベントで確認済みのためデプロイ成功確認をもって完了と判断
-- [x] J4. 過去ドリフトの是正実行 — **完了**。J3完了後、`diagnose-caremanager-group-gap.js`をkanameoneで再実行し現状ドリフトを確認(9件のgroupIdで不一致、うち`careManager_奥村敬子`は期待40実測80の2倍)。全件再構築(`rebuildAllGroupAggregations()`、documentGroups全体削除)は影響範囲が過大なため、`/codex plan`セカンドオピニオンで「対象groupIdのみ生データから完全再導出して置換する」個別再構築方式を採用(PR #665、[x] J4-1)。
-  - [x] J4-1. 個別グループ再構築機能の実装 — `rebuildSingleGroupAggregation()`(単一groupType/groupKeyを対象に完全再導出しset/delete、書込み前にupdatedAt比較で並行更新検知するトランザクション化込み)+`migrate-document-groups.js --rebuild-groups`(繰り返し引数形式、メンテナンスゲート制御、部分失敗時の障害分離)+GHA対応(`run-ops-script.yml`、改行区切りinput)。review-pr相当6エージェント+codex review 3ラウンド+CodeRabbitの全指摘対応(詳細はPR #665参照)。build/lint/unit(1787)/rules(80)/integration(120)全PASS
-  - [x] J4-2a. dev環境フルリハーサル — 対象9グループ(`careManager_奥村敬子,careManager___UNASSIGNED_CARE_MANAGER__,careManager_宮崎幸代,careManager_牧野美雪,careManager_渡邉幸子,careManager_田端正樹,careManager_山田直子,careManager_飯田知美,customer_未判定`)に対し、GHA経由でdry-run(run 29403721464、13.7秒、9件全てプレビュー出力正常)→実行(run 29403944606、615.9秒、ゲート閉鎖→10分ドレイン待機→9/9グループ再構築完了→ゲート再開の全フロー正常動作、dry-run予測値と完全一致)→再診断(run 29404760385)を実施。恒等式`customer(161)=careManager実CM+CM未設定合計(161)`が✅で一致し、kanameone実行の判断材料が揃った。**副次的発見**: 再診断で対象9グループ**外**の5件(`office_ひまわり訪問介護ステーション`期待79実測49差30、`documentType_ケアプラン`期待40実測39差1、`careManager_佐々木恵子`期待125実測63差62(約2倍、kanameoneの奥村敬子ケースと同型)、`office_あおぞらデイサービスセンター`期待74実測53差21、`documentType_サービス提供票`期待40実測39差1)にIssue #660型の既存ドリフトを検出。dev環境はテストデータのみ(実運用データなし、CLAUDE.md記載)のため実害なし・対応不要、Issue #660バグがdev環境でも再現する記録として残すのみ
-  - [x] J4-2b. kanameone実行 — devリハーサル結果(J4-2a)を踏まえdecision-maker番号単位認可(2026-07-15)を得たうえで実施。dry-run(run 29405072337)で本番の実ドリフト値を確認(`careManager_奥村敬子`現在count=80→再構築後40、他7グループも±1〜9件差異、GOAL.mdタスクH記載のドリフトと整合)→実行(run 29405377012、ゲート閉鎖→10分ドレイン待機→9/9グループ再構築完了→ゲート再開、実行時間738.2秒、dry-run予測値と完全一致)→再診断(run 29406295294)。**結果: customer/office/documentType/careManagerの4type全てで動的再計算=documentGroups実測が✅一致(9666、officeのみ9663)、groupId単位の個別比較で全groupIdが一致(相殺による見逃しなし)、恒等式`customer(9666)=careManager実CM+CM未設定合計(9666)`が✅一致**。Issue #660(集計トリガー非冪等性)由来の過去ドリフトが完全是正され、J4(過去ドリフトの是正実行)完了。診断ログで同期漏れ7件(スコープ外、既知の副次課題)を再確認したのみで新規の問題なし
+## ✅ ミッション完了(2026-07-16)
 
-## 🔄 中断点（in-flight）
-なし
+A〜L・AC1〜AC7全て完了。Issue #664「documents create/delete順序不同配信でphantom countが起きうる」問題は、dev/kanameone/cocoro全環境で恒久的に修正された(ADR-0021)。
 
-## 監視・確認事項（トリガー待ち、前ミッション#547/#548から継続、新ミッションでも引き続き有効）
-- egress実削減効果の翌月請求での実測確認（未実施。8月上旬の7月分請求書で確認）
-- #548試算（全対策後¥23,000/月）の実額最終確認（実額は7月分請求書確定後）
-- 【重要な発見、2026-07-14 session126】kanameone 7月請求のFirestore egress急増(+797%)の原因を特定・記録: 7/9のPhase C本番backfill(`backfill-detail-subcollection --execute`)によるトリガーストームと判明。対策(`isAggregationUnchanged`)は既に本番投入済みで再発は見込み低い。最終確認は7月分確定請求を待つ（詳細: docs/handoff/archive/2026-07-history.md session126）
-- 【追加検証、2026-07-14 session127】Firestoreサイズ再計測+Gemini21日分実測: Phase E効果を直接証明、コスト圧縮確度を60-75%→80%程度に上方修正（詳細: 同archive session127）
-- 【追加検証②、2026-07-14 session128】Cloud Monitoring read_count実測+cocoro反映状況確認: トリガーストーム説をさらに裏付け、cocoro側も反映確認済み（詳細: 同archive session128）
-- dev環境のテストデータ`phase-e-devcheck-001`/`phase-e-devcheck-002`の後片付け（任意）
-- 前ミッション（#547/#548運用コスト圧縮2トラック）は2026-07-10技術完了・2026-07-12是正確認済み。詳細はgit history（`git log -p docs/handoff/GOAL.md`）およびdocs/handoff/archive参照
-- （任意・着手指示なき限り不要）OCR突合精度向上ミッション（旧ミッション、session125で撤退）で未解明のまま残った「kanameone confirmed-replayでbaseline自体の一致率が33.3%/41.7%と低い」原因。将来的に興味を持った場合の起点はdocs/handoff/archive/2026-07-history.md（旧ミッションタスクH/Iの記録）、および`scripts/compare-ocr-arbitration-logic-confirmed.ts`
-- （任意・着手指示なき限り不要）本ミッションで発見された副次課題3件は別タスクとして扱う: ①同期漏れ7件(`syncCareManager.ts`のonCustomerMasterWriteトリガー反映漏れ、原因未解明) ②documentTypeの「未判定」が2,465件(25.6%)でcount降順ソートのタブ先頭を占有している疑い(実機未確認、過去Issue #501と同型の「単一グループへの過集中」リスク) ③careManagerがトークン検索インデックス対象外で検索窓から検索できない機能欠落
+**未コミット**: 変更は`fix/issue-664-live-read-aggregation`ブランチにpush済み(mainへのPRは未作成、decision-maker判断待ち)。
+
+**次セッションへの申し送り**:
+- PRを作成してmainへマージするか、decision-maker判断待ち
+- AC7の「エラー率同水準」の明示的ログ比較は、kanameone gcloud認証の再認証要求により未実施。次回のcatchup等でCloud Functionsのエラー率(kanameone/cocoro双方)を目視確認することを推奨
+- K実施時の手順ミス(devでデプロイ→seedの順序を誤った、実害なしと確認済み)を教訓として記録済み。L実施時は正しい順序(seed→デプロイ)を徹底し、問題なく完了した

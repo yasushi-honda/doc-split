@@ -121,6 +121,10 @@ on:
           - migrate-document-groups --backfill-cm-unassigned
           - migrate-document-groups --rebuild-groups --dry-run
           - migrate-document-groups --rebuild-groups
+          - migrate-document-groups --seed-aggregation-states --dry-run
+          - migrate-document-groups --seed-aggregation-states
+          - migrate-document-groups --reopen-gate --dry-run
+          - migrate-document-groups --reopen-gate
       doc_id:
         description: 'Document ID (required when script contains --doc-id; ignored otherwise)'
         required: false
