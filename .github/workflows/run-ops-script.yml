@@ -776,12 +776,21 @@ jobs:
             fi
             SINCE=$(date -u -d "-${HOURS} hours" +%Y-%m-%dT%H:%M:%SZ)
             echo "=== Cloud Functions ERROR件数(関数別、過去${HOURS}時間、project=$PROJECT_ID) ==="
-            gcloud logging read "resource.type=\"cloud_run_revision\" AND severity>=ERROR AND timestamp>=\"$SINCE\"" \
-              --project="$PROJECT_ID" --format="value(resource.labels.service_name)" | sort | uniq -c | sort -rn
+            FUNC_COUNTS=$(gcloud logging read "resource.type=\"cloud_run_revision\" AND severity>=ERROR AND timestamp>=\"$SINCE\"" \
+              --project="$PROJECT_ID" --format="value(resource.labels.service_name)" | sort | uniq -c | sort -rn)
+            echo "$FUNC_COUNTS"
             echo ""
-            echo "=== onDocumentWrite 詳細(過去${HOURS}時間、Issue #664対象関数) ==="
-            gcloud logging read "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"ondocumentwrite\" AND severity>=ERROR AND timestamp>=\"$SINCE\"" \
-              --project="$PROJECT_ID" --format="table(timestamp,severity,textPayload)" --limit=50
+            echo "=== 関数別サンプルエラー内容(各上位3件、onDocumentWriteはIssue #664対象として必ず個別確認) ==="
+            SERVICES=$(echo "$FUNC_COUNTS" | awk '{print $2}')
+            if ! echo "$SERVICES" | grep -qx "ondocumentwrite"; then
+              SERVICES=$(printf '%s\nondocumentwrite' "$SERVICES")
+            fi
+            echo "$SERVICES" | while IFS= read -r svc; do
+              [ -z "$svc" ] && continue
+              echo "--- $svc ---"
+              gcloud logging read "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"$svc\" AND severity>=ERROR AND timestamp>=\"$SINCE\"" \
+                --project="$PROJECT_ID" --format="table(timestamp,severity,textPayload)" --limit=3
+            done
           elif [ "$SCRIPT_NAME" = "audit-session61-parent-provenance" ]; then
             # Issue #432 PR-C2-execution post-audit: log secret masking で `{` が
             # 置換されると JSON 再構成不能のため、artifact 経由で報告書を渡す。
