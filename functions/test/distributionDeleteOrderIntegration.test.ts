@@ -31,7 +31,7 @@ const SOURCE_TYPE = 'gmail';
  */
 async function deleteMember(docId: string): Promise<{ storageDeleted: boolean; logDeleted: boolean }> {
   const storageGuard = await canSafelyDeleteStorageFile(db, SHARED_FILE_URL, docId);
-  const logGuard = await canSafelyDeleteSourceLog(db, SOURCE_TYPE, SHARED_FILE_ID, docId);
+  const logGuard = await canSafelyDeleteSourceLog(db, SHARED_FILE_ID, docId);
 
   if (logGuard.canDelete) {
     await db.collection('gmailLogs').doc(SHARED_FILE_ID).delete();

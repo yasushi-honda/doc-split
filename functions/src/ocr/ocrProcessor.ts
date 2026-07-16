@@ -665,13 +665,22 @@ export async function applyOcrCompletionTransaction(input: {
         // ただしOCRテキストのoffload実体(ocrResultUrl)はD2の共有対象外(Codexセカンド
         // オピニオン指摘 P1): 元docのocrRunId配下を指したままだと、元docの以降の
         // 再処理でIssue #625成功パスcleanupが削除し、コピー側のgetOcrTextが
-        // not-foundになる。各コピー自身のdocId配下へ複製し独立させる。
+        // not-foundになる。各コピー専用のStorageパスへ複製し独立させる。
+        //
+        // 複製先キーはnewDocRef.id(トランザクション再試行毎に新規採番される非決定値)
+        // ではなく、`${docId}(元doc自身のid)-${assignment.customerId}`という再試行に
+        // 対して安定な値にする(CodeRabbit指摘: newDocRef.idを使うと、Firestore書込み
+        // 競合によるtransaction自動リトライ時にStorageコピーだけ複数回実行され、
+        // 前回試行分が孤児オブジェクトとして残る)。docId+customerIdは共に
+        // トランザクション開始前から確定済みの入力(customerCandidatesはFirestore
+        // read非依存の静的引数)のため、リトライで再実行されても同一パスに冪等に
+        // 上書きされるだけで済む。
         for (const assignment of restAssignments) {
           const newDocRef = db.collection('documents').doc();
           const memberOcrResultUrl = merged.ocrResultUrl
             ? await copyOcrResultForDistributionMember(
                 merged.ocrResultUrl,
-                newDocRef.id,
+                `${docId}-${assignment.customerId}`,
                 ownershipExpectation.ocrRunId
               )
             : merged.ocrResultUrl;
@@ -1186,22 +1195,27 @@ async function saveOcrResult(docId: string, ocrRunId: string, ocrResult: string)
 }
 
 /**
- * 複製配信メンバー用に、offload済みOCR結果オブジェクトを自身のdocId配下へ複製する
+ * 複製配信メンバー用に、offload済みOCR結果オブジェクトを自身専用のStorageパスへ複製する
  * (Codexセカンドオピニオン指摘 P1: 複製コピーが元docのStorage実体(ocr-results/{元docId}/...)
  * をそのまま参照すると、元docが後で再処理された際の成功パスcleanup(Issue #625、
  * `ocr-results/{docId}/`をdocId単位で所有する前提)が旧オブジェクトを削除してしまい、
  * コピー側のgetOcrTextがnot-foundになる)。GCSのserver-side copyでバイト再アップロードを
  * 避けつつ、「1 doc = 1 Storage実体」の前提を複製メンバーにも適用し、Issue #625の
  * cleanupロジック自体には一切手を入れない。
+ *
+ * destinationKeyは呼出元でnewDocRef.id(トランザクション再試行毎に非決定に変わる値)
+ * ではなく`${元docId}-${customerId}`を渡すこと(CodeRabbit指摘: destination pathが
+ * リトライ非決定だと、transaction自動リトライ時にStorageコピーだけ複数回実行され
+ * 前回試行分が孤児化する)。
  */
 async function copyOcrResultForDistributionMember(
   sourceUrl: string,
-  newDocId: string,
+  destinationKey: string,
   ocrRunId: string
 ): Promise<string> {
   const bucket = storage.bucket();
   const sourcePath = sourceUrl.replace(`gs://${bucket.name}/`, '');
-  const destPath = `ocr-results/${newDocId}/${ocrRunId}.txt`;
+  const destPath = `ocr-results/${destinationKey}/${ocrRunId}.txt`;
 
   await withRetry(
     () => bucket.file(sourcePath).copy(bucket.file(destPath)),

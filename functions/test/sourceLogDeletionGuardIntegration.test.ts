@@ -21,47 +21,55 @@ describe('canSafelyDeleteSourceLog (複数顧客FAX複製機能 gmailLogs/upload
     await cleanupCollections(db, COLLECTIONS_TO_CLEAN);
   });
 
-  it('自分自身のみが同一(sourceType, fileId)を参照 → canDelete: true', async () => {
+  it('自分自身のみが同一fileIdを参照 → canDelete: true', async () => {
     await db.collection('documents').doc('doc-self').set({ fileId: 'file-1', sourceType: 'gmail' });
 
-    const result = await canSafelyDeleteSourceLog(db, 'gmail', 'file-1', 'doc-self');
+    const result = await canSafelyDeleteSourceLog(db, 'file-1', 'doc-self');
     expect(result.canDelete).to.equal(true);
   });
 
   it('参照docが存在しない(自分自身も未書込) → canDelete: true', async () => {
-    const result = await canSafelyDeleteSourceLog(db, 'gmail', 'file-nonexistent', 'doc-self');
+    const result = await canSafelyDeleteSourceLog(db, 'file-nonexistent', 'doc-self');
     expect(result.canDelete).to.equal(true);
   });
 
-  it('同一(sourceType, fileId)を参照する他docが存在 → canDelete: false(複製兄弟doc、AC-h)', async () => {
+  it('同一fileIdを参照する他docが存在 → canDelete: false(複製兄弟doc、AC-h)', async () => {
     await db.collection('documents').doc('doc-original').set({ fileId: 'file-1', sourceType: 'gmail' });
     await db.collection('documents').doc('doc-copy').set({ fileId: 'file-1', sourceType: 'gmail' });
 
-    const result = await canSafelyDeleteSourceLog(db, 'gmail', 'file-1', 'doc-original');
+    const result = await canSafelyDeleteSourceLog(db, 'file-1', 'doc-original');
     expect(result.canDelete).to.equal(false);
     expect(result.sharingDocCountUpTo2).to.equal(2);
   });
 
-  it('同一fileIdだがsourceTypeが異なるdocは無関係(sourceType単位で分離)', async () => {
+  it('sourceTypeが異なる(gmail/upload)docが同一fileIdを参照していてもcanDelete: false(CodeRabbit指摘: sourceType複合キー絞り込みでの検知漏れ回帰防止)', async () => {
     await db.collection('documents').doc('doc-gmail').set({ fileId: 'file-1', sourceType: 'gmail' });
     await db.collection('documents').doc('doc-upload').set({ fileId: 'file-1', sourceType: 'upload' });
 
-    const result = await canSafelyDeleteSourceLog(db, 'gmail', 'file-1', 'doc-gmail');
-    expect(result.canDelete).to.equal(true);
-  });
-
-  it('sourceType未設定(legacy doc)同士はfileIdのみでフォールバック照合される', async () => {
-    await db.collection('documents').doc('doc-legacy-1').set({ fileId: 'file-legacy' });
-    await db.collection('documents').doc('doc-legacy-2').set({ fileId: 'file-legacy' });
-
-    const result = await canSafelyDeleteSourceLog(db, undefined, 'file-legacy', 'doc-legacy-1');
+    const result = await canSafelyDeleteSourceLog(db, 'file-1', 'doc-gmail');
     expect(result.canDelete).to.equal(false);
   });
 
-  it('sourceType未設定・単独参照のlegacy docはcanDelete: true', async () => {
-    await db.collection('documents').doc('doc-legacy-solo').set({ fileId: 'file-legacy-solo' });
+  it('sourceType未設定(legacy doc)の兄弟が同一fileIdを参照していてもcanDelete: false(CodeRabbit指摘: legacy doc検知漏れ回帰防止)', async () => {
+    await db.collection('documents').doc('doc-current').set({ fileId: 'file-1', sourceType: 'gmail' });
+    await db.collection('documents').doc('doc-legacy-sibling').set({ fileId: 'file-1' });
 
-    const result = await canSafelyDeleteSourceLog(db, undefined, 'file-legacy-solo', 'doc-legacy-solo');
+    const result = await canSafelyDeleteSourceLog(db, 'file-1', 'doc-current');
+    expect(result.canDelete).to.equal(false);
+  });
+
+  it('sourceType未設定(legacy doc)同士はfileIdのみで照合される', async () => {
+    await db.collection('documents').doc('doc-legacy-1').set({ fileId: 'file-legacy' });
+    await db.collection('documents').doc('doc-legacy-2').set({ fileId: 'file-legacy' });
+
+    const result = await canSafelyDeleteSourceLog(db, 'file-legacy', 'doc-legacy-1');
+    expect(result.canDelete).to.equal(false);
+  });
+
+  it('単独参照のdocはcanDelete: true', async () => {
+    await db.collection('documents').doc('doc-solo').set({ fileId: 'file-solo' });
+
+    const result = await canSafelyDeleteSourceLog(db, 'file-solo', 'doc-solo');
     expect(result.canDelete).to.equal(true);
   });
 });

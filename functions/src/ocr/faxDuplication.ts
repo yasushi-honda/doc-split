@@ -84,9 +84,12 @@ export function planFaxDuplication(input: PlanFaxDuplicationInput): FaxDuplicati
     };
   }
 
-  const exactNonDuplicate = input.candidates.filter(
-    (c) => c.matchType === 'exact' && !c.isDuplicate
-  );
+  // CodeRabbit指摘: score降順の保証を呼出元(extractors.tsのsort)の暗黙の前提だけに
+  // 委ねず、本関数自身でも明示的にソートしてから重複排除する(「先勝ち」dedupが
+  // 最高スコア以外を拾ってしまう回帰を、モジュール境界をまたいだ暗黙契約に頼らず防ぐ)。
+  const exactNonDuplicate = input.candidates
+    .filter((c) => c.matchType === 'exact' && !c.isDuplicate)
+    .sort((a, b) => b.score - a.score);
 
   const deduped = new Map<string, CustomerCandidate>();
   for (const c of exactNonDuplicate) {

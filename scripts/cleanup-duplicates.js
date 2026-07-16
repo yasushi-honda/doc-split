@@ -14,7 +14,7 @@
 const admin = require('firebase-admin');
 const fs = require('fs');
 const path = require('path');
-const { planGroupCleanup } = require('./lib/faxDuplicationCleanupHelpers');
+const { hasDistributionId, planGroupCleanup } = require('./lib/faxDuplicationCleanupHelpers');
 
 const projectId = process.env.FIREBASE_PROJECT_ID;
 if (!projectId) {
@@ -78,6 +78,18 @@ async function main() {
     byFileName[key].push({ id: doc.id, data });
   });
 
+  // 複製配信docのfileUrl(D2: Storage実体は共有)。同一fileNameグループ内の非配信重複を
+  // 削除する際、偶然同じfileUrlを参照していても複製配信doc側がまだ生きている限り
+  // Storage実体を削除してはならない(誤削除防止、AC-h)。
+  //
+  // CodeRabbit指摘反映: 重複グループのループ内でdistributedDocsをpushするだけだと、
+  // エスカレーション(複数distributionId混在)されたグループやfileName単独(重複と
+  // 判定されない)グループの複製配信docが取りこぼされる。全ドキュメントの完全な
+  // スナップショットから、重複グループ抽出より前に一括収集する。
+  const allDistributedFileUrls = snap.docs
+    .filter((doc) => hasDistributionId(doc.data()))
+    .map((doc) => doc.data().fileUrl);
+
   // 重複グループのみ抽出
   const duplicateGroups = Object.entries(byFileName)
     .filter(([, docs]) => docs.length > 1)
@@ -93,10 +105,6 @@ async function main() {
   const allToKeep = [];
   const allToDelete = [];
   const escalatedGroups = [];
-  // 複製配信docのfileUrl(D2: Storage実体は共有)。同一fileNameグループ内の非配信重複を
-  // 削除する際、偶然同じfileUrlを参照していても複製配信doc側がまだ生きている限り
-  // Storage実体を削除してはならない(誤削除防止、AC-h)。
-  const allDistributedFileUrls = [];
   const backupData = { exportedAt: new Date().toISOString(), projectId, groups: [] };
 
   for (const [fileName, docs] of duplicateGroups) {
@@ -122,7 +130,6 @@ async function main() {
         `【${fileName}】 ${docs.length}件中${distributedDocs.length}件は複製配信` +
           `(distributionId=${distributionIds[0]})のため削除対象から除外`
       );
-      allDistributedFileUrls.push(...distributedDocs.map((d) => d.data.fileUrl));
     }
 
     if (plainDocs.length <= 1) {

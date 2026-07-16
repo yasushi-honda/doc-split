@@ -151,7 +151,8 @@ export const deleteDocument = onCall(
     // 5. gmailLogs または uploadLogs 削除
     // 複数顧客FAX複製機能(kanameone現場要件、GOAL.md D2)により同一fileIdを複数docが
     // 共有しうるため、Storageファイル削除(上記4.)と同じfail-closedガードを
-    // (sourceType, fileId)単位で適用する(Codexセカンドオピニオン指摘#5)。
+    // fileId単位で適用する(Codexセカンドオピニオン指摘#5、CodeRabbit指摘反映:
+    // sourceType複合キー絞り込みはlegacy doc検知漏れの原因になるため撤去済み)。
     if (fileId && typeof fileId === 'string') {
       try {
         const logCollection = sourceType === 'upload' ? 'uploadLogs' : 'gmailLogs';
@@ -159,12 +160,7 @@ export const deleteDocument = onCall(
         let canDelete = false;
         let sharingDocCountUpTo2 = 0;
         try {
-          const guardResult = await canSafelyDeleteSourceLog(
-            db,
-            typeof sourceType === 'string' ? sourceType : undefined,
-            fileId,
-            documentId
-          );
+          const guardResult = await canSafelyDeleteSourceLog(db, fileId, documentId);
           canDelete = guardResult.canDelete;
           sharingDocCountUpTo2 = guardResult.sharingDocCountUpTo2;
         } catch (guardErr) {

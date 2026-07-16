@@ -145,6 +145,24 @@ describe('planFaxDuplication (D3: 複製トリガー条件)', () => {
     expect(result.reason).to.equal('insufficientExactCandidates');
   });
 
+  it('入力候補がscore降順でない場合でも、本関数自身がソートしてから重複排除する(CodeRabbit指摘: 呼出元のソート契約に依存しない)', () => {
+    const result = planFaxDuplication({
+      flagEnabled: true,
+      alreadyDistributed: false,
+      alreadyConfirmedOrVerified: false,
+      candidates: [
+        // score昇順(呼出元のsortが効いていない想定)で渡す
+        candidate({ id: 'c1', name: '田中太郎', score: 60 }),
+        candidate({ id: 'c1', name: '田中太郎(低スコア重複)', score: 40 }),
+        candidate({ id: 'c2', name: '田中花子', score: 90 }),
+      ],
+    });
+    expect(result.shouldDuplicate).to.equal(true);
+    // c1は最高スコア(60)の名前が採用され、低スコア重複(40)側は捨てられること
+    const c1Assignment = result.assignments.find((a) => a.customerId === 'c1');
+    expect(c1Assignment?.customerName).to.equal('田中太郎');
+  });
+
   it('同一customerIdが複数回出現しても重複排除される(1件として扱う)', () => {
     const result = planFaxDuplication({
       flagEnabled: true,
