@@ -190,7 +190,18 @@ export function GroupDocumentList({
 
   // カテゴリフォルダ表示用の書類マスター（書類種別タブと同一 queryKey でキャッシュ共有）。
   // 取得失敗時は undefined のまま渡し、CustomerSubGroup 側が書類種別表示にフォールバックする
-  const { data: documentMasters } = useDocumentTypes();
+  const {
+    data: documentMasters,
+    isError: isMasterError,
+    error: masterError,
+  } = useDocumentTypes();
+  if (groupType === 'careManager' && isMasterError) {
+    // 書類種別タブ (GroupList) と同じ診断ログ。サイレントに種別表示へ縮退させない
+    console.warn(
+      '[GroupDocumentList] 書類マスター取得失敗 → フォルダをカテゴリでなく書類種別で表示',
+      masterError
+    );
+  }
 
   // error 書類の「再試行」(#524): 行ボタン → 確認ダイアログ → 再処理
   const { reprocess, reprocessingId } = useReprocessDocument();

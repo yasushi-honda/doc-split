@@ -19,9 +19,9 @@ import { Button } from '@/components/ui/button';
 import { isCustomerConfirmed } from '@/hooks/useProcessingHistory';
 import { getStatusConfig, formatTimestamp } from '@/lib/documentUtils';
 import {
-  groupDocumentsByCategory,
-  isAllUncategorizedDocs,
-} from '@/lib/groupDocumentsByCategory';
+  buildCustomerFolderGroups,
+  type FolderGroup,
+} from '@/lib/buildCustomerFolderGroups';
 import type { Document, DocumentMaster } from '@shared/types';
 
 // ============================================
@@ -176,57 +176,11 @@ function DocumentRow({ document, onClick, onRetry }: DocumentRowProps) {
 // ============================================
 // フォルダサブグループ (#527: 担当CM → 利用者 → フォルダ → 書類 の第3階層)
 // フォルダの単位はカテゴリ（master.category、kaname要望 2026-07-16）。
-// カテゴリ未運用環境（全書類が未分類に解決）は従来の書類種別フォルダに
-// フォールバックする（書類種別タブ GroupList と同一規則）。
+// カテゴリ解決できない書類は種別名フォルダのまま残る。
+// 集約ロジック本体は lib/buildCustomerFolderGroups.ts（純粋関数・テスト済み）。
+// 件数は読み込み済みページ分のクライアント集約
+// (既存の顧客サブグループと同一方式。未読分は LoadMoreIndicator で可視)。
 // ============================================
-
-interface FolderGroup {
-  label: string;
-  documents: Document[];
-}
-
-const UNKNOWN_DOC_TYPE = '未判定';
-
-/**
- * 利用者配下の書類を書類種別ごとに集約する（カテゴリ未運用時のフォールバック）。
- * 並びは名前順 (ja locale。開くたびに順序が変わらない紙ファイリングのメンタルモデル優先)、
- * 「未判定」は末尾。件数は読み込み済みページ分のクライアント集約
- * (既存の顧客サブグループと同一方式。未読分は LoadMoreIndicator で可視)。
- */
-function groupByDocType(documents: Document[]): FolderGroup[] {
-  const groupMap = new Map<string, FolderGroup>();
-  for (const doc of documents) {
-    const docType = doc.documentType || UNKNOWN_DOC_TYPE;
-    if (!groupMap.has(docType)) {
-      groupMap.set(docType, { label: docType, documents: [] });
-    }
-    groupMap.get(docType)!.documents.push(doc);
-  }
-  return Array.from(groupMap.values()).sort((a, b) => {
-    if (a.label === UNKNOWN_DOC_TYPE) return 1;
-    if (b.label === UNKNOWN_DOC_TYPE) return -1;
-    return a.label.localeCompare(b.label, 'ja');
-  });
-}
-
-/**
- * 利用者配下の書類をカテゴリフォルダに集約する。
- * 全書類が「未分類」に解決される環境（マスター未取得・カテゴリ未運用）では
- * 書類種別フォルダにフォールバックする。
- */
-function buildFolderGroups(
-  documents: Document[],
-  documentMasters: DocumentMaster[] | undefined,
-): FolderGroup[] {
-  const categoryGroups = groupDocumentsByCategory(documents, documentMasters);
-  if (categoryGroups.length === 0 || isAllUncategorizedDocs(categoryGroups)) {
-    return groupByDocType(documents);
-  }
-  return categoryGroups.map((g) => ({
-    label: g.categoryName,
-    documents: [...g.documents],
-  }));
-}
 
 interface FolderGroupItemProps {
   group: FolderGroup;
@@ -303,7 +257,7 @@ function CustomerGroupItem({
   // フォルダサブグループの展開状態 (#527)。顧客を閉じると状態ごと破棄される
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
   const folderGroups = useMemo(
-    () => buildFolderGroups(group.documents, documentMasters),
+    () => buildCustomerFolderGroups(group.documents, documentMasters),
     [group.documents, documentMasters]
   );
 

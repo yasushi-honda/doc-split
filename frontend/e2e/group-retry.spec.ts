@@ -55,6 +55,9 @@ test.describe('グループビュー再試行 (#524) @emulator', () => {
 
     // 第3階層 (#527): 書類種別グループ (請求書/ケアプラン) が分離して表示される。
     // この時点で書類行はまだ見えない
+    // 注: フォルダラベルはカテゴリ優先 (buildCustomerFolderGroups)。seed-e2e-data.js は
+    //     masters/documents を投入しないため種別名ラベルになる。将来 seed に category 付き
+    //     書類マスターを追加する場合は本アサーションのラベルも追従させること
     // 注: エラー2 は先行の顧客別テストが再処理で消費する (workers=1 で順次実行) ため、
     //     本テストは残存するエラー1 を対象にする
     const docTypeHeader = page.locator('button', { hasText: '請求書' }).first();
