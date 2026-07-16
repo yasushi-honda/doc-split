@@ -453,3 +453,227 @@ close 1件（#621）、起票0件。**Net +1**。
 ### 引き継ぎ教訓
 - 同一セッション内で3層の品質ゲート（code-review→codex review-diff→review-pr+codex）を通したところ、各層が異なる角度の回帰を検出した（層を重ねるほど収穫があった）。特にreview-prのcomment-analyzerが「自分が書いた回帰防止テストが実際には無意味だった」ことを検出したのは、テストの表面的なpass/failだけでなく判別能力（旧バグ版で本当にREDになるか）を検証する重要性を再確認させる事例だった
 - `.env.local`が本番プロジェクトを指したまま残る問題（session108で一度発見・暫定復元していたもの）が今回も再発していた。恒久対策（`.env`をdev固定にする規約明文化等）は依然未着手、継続の要注意事項
+
+---
+
+<!-- 以下、session135(2026-07-17)のLATEST.mdサイズ超過(60KB)によるアーカイブでLATEST.mdから移動 -->
+
+## session127 サマリ（2026-07-14、kanameoneコスト圧縮の追加検証）
+
+session126の調査結果（トリガーストーム特定）を踏まえ、decision-makerから「これ以上できること・ROIが良いこと」を問われ、read-only検証2件をGitHub Actions経由で実行。
+
+### 実行内容と結果
+- `measure-field-byte-sizes --limit 300`（kanameone）: ドキュメント全体サイズ平均4,095B（Issue #547事前計測時点の平均19,831Bから79.4%削減）。`ocrResult`/`pageResults`ともにpresent=0/300で親から完全削除済みを確認。Phase Eの効果が完璧に機能していることを直接証明する決定的な実測
+- `check-gemini-cost-stats --days 21 --doc-limit 500`（kanameone）: `stats/gemini/daily`の6/24〜7/14の日次実測を取得。session114と同一手法（7/8 vs 7/10+7/11のOCR単体交絡排除比較）で単価倍率約5.17倍を再現確認（session114の5.068倍とほぼ一致、独立データでの再現性を確認）。移行後(7/9〜7/13)の絶対額（アプリ内推定値`estimatedCostUsd`）は5日平均$0.82/日・月間換算約$25で、6月実績のVertex AIコスト(¥6,093)を下回る可能性がある水準
+
+### 結論
+「2倍以内」達成の確度に関する主観評価を60-75%→80%程度に上方修正。Firestore側は実測でほぼ確証、Gemini側も独立した21日データで楽観的傾向を再現した。ただし`estimatedCostUsd`はアプリ内推定値で実請求そのものではなく、月末までの残り期間の変動は未知数のため、最終確認は引き続き8月上旬の7月分確定請求を待つ（GOAL.md監視・確認事項に記録済み）。
+
+### Issue Net
+Net 0（GitHub Issue非経由、read-only調査のみ）
+
+### 引き継ぎ教訓
+- `check-gemini-cost-stats.js`は集計サマリーを計算する設計ではなく、`stats/gemini/daily`の生データと直近documentsの生データをそのまま出力する設計（72行の薄いスクリプト）。GitHub Actionsログを`tail`や末尾grepだけで見ると生データ（documents一覧）に隠れて日次統計セクションを見落とすため、`grep -n "=== "`等でセクション区切りを先に特定してから読むこと
+- Bashツールの実行間で環境変数`CLOUDSDK_ACTIVE_CONFIG_NAME`が想定外に持続するケースがあった（`switch-client.sh`が`export`する値が後続コマンドに残存）。gcloud named config切替が反映されない場合は、まず`unset CLOUDSDK_ACTIVE_CONFIG_NAME`してから`gcloud config configurations list`で確認するとよい
+
+## session126 サマリ（2026-07-14、kanameone 7月請求急増の原因調査・特定）
+
+decision-makerからkanameoneの2026年7月請求（月中実績+予測）の確認依頼を受け、Gemini 3.5移行+Firestore圧縮（#547/#548）によるコスト圧縮効果が目標（2倍以内）に収まっているか調査。
+
+### 調査の経緯
+- 提供されたGCP Billing Console画像から、月間予測が当初¥26,677（6月比+106.3%）→再確認時¥31,180（+141.05%、約2.4倍）へ悪化していることを発見。特にFirestore egress SKU（App Engine表示）が前期間比+797%と異常
+- コード確認: Phase Eの一覧クエリ設計自体は正しく実装されている（親から重フィールド削除済み）
+- GitHub Actions実行ログ調査: Phase E本体（dry-run/execute/verify）の処理量だけでは153.99GiBを説明できない（合計1GiB未満、150倍以上の乖離）ことを定量的に確認
+- decision-maker提供のSKU別・日別グラフから、egressの82.6%（¥2,692/¥3,258）が7/9単日に集中していることを確認（継続的バグではなく単発イベントと判明）
+- Cloud Loggingで7/9の`onDocumentWrite`/`onDocumentWriteSearchIndex`トリガー発火回数（18,960回/15,848回）を確認、`functions/src/utils/groupAggregation.ts`内に「Issue #547 Phase E: ...トリガーストーム」を指す対策コード（`isAggregationUnchanged`、PR #611で2026-07-10マージ）を発見
+
+### 真因の特定
+`scripts/backfill-detail-subcollection.ts`の`backfillOneDoc()`が`detail/main`書込みに加え必ず親ドキュメントも`tx.update()`する設計であることをコード確認。GitHub Actions実行ログで、7/9 00:24 UTCにkanameoneで`backfill-detail-subcollection --execute`（Phase C本番backfill、全9,388件）が実行されたことを確認し、これがトリガーストーム対策実装前（PR #611マージは翌7/10）のタイミングで9,388件の親ドキュメント書込みを引き起こし、重フィールドを含むbefore/afterペイロードの大量配信がegress急増の直接原因と特定した。
+
+### 結論
+一過性の移行作業由来の副作用であり、対策（`isAggregationUnchanged`）は既に本番投入済みのため8月以降の再発は見込み低い。Issue #548当初試算（¥23,000/月、約1.81倍）に近い水準へ収束する可能性が高いと判断。ただし数値の完全一致までは検証できておらず、最終確認は8月上旬の7月分確定請求を待つ（GOAL.md監視・確認事項に記録済み）。
+
+### Issue Net
+Net 0（GitHub Issue非経由、read-only調査のみ）
+
+### 引き継ぎ教訓
+- decision-makerの「それ以外の理由がある具体的な可能性とは何か」という指摘が、状況証拠（実行回数の多さ）だけで満足せず定量検証（実際の読み取り量を計算）に進む重要な転換点になった。仮説と実測値の乖離（150倍以上）を無視せず追及したことで真因に到達できた
+- Firestoreの`onDocumentWritten`トリガーは変更前後のドキュメント全体をペイロードとして配信するため、重フィールドを含むドキュメントへの一括書込み処理（backfill/migration等）を伴う移行作業では、トリガー関数側の変更検知ロジック（早期return）が整備されていないと「トリガー発火コスト」がegress急増を引き起こしうる。今後同種の一括書込みを伴う移行作業を計画する際は、トリガー関数側の早期return設計を事前レビュー項目に含めるべき
+
+## session124 サマリ（2026-07-14、GOAL.mdタスクG/H完遂 + タスクI判断でミッションクローズ + PR #646/#647/#648）
+
+catchupの「次にやるとよいオススメ」（タスクG着手、session123でdecision-maker承認済み）に対し追加確認なしで着手。同一セッション内でタスクG→H→Iまで完遂（GOAL.mdコミットメッセージ上は便宜的にsession124/125と分けて記載した箇所があるが、実際は連続した1セッション）。
+
+### タスクG: dev環境A/Bテスト本実行
+対象文書数拡大の手段は、dev環境に実運用データが存在しない（CLAUDE.md明記）ため「既存フィクスチャ追加」一択と判断（軽量プラン提示→承認待ちなしで着手）。`scripts/fixtures/arbitrationCompareFixtures.ts`に未使用CUSTOMERS6名を使った新規5文書を追加しN=5→N=10へ拡大。feature branch経由でGitHub Actions実行(run 29294375536)、結果: baseline/candidate両方4項目全一致10/10(100.0%)で精度劣化なし・再現性確認。PR #646作成・`/code-review low`(指摘0件)実施の上マージ。
+
+### タスクH: kanameone confirmed-replay検証
+documentType/dateはkanameone実データにconfirmed相当のground truthが存在しない(documentTypeConfirmedはUI機能自体が本番未展開で実運用0件、dateには確定フラグの概念が無い)ため、customer/office先行検証のみ実施する決定(decision-maker選択)。新規スクリプト`compare-ocr-arbitration-logic-confirmed.ts`+`confirmedArbitrationStats.ts`を追加。
+
+- **read-only厳守のため候補抽出ロジックを独立実装**: 本番`extractOcrCandidates()`は異常系で`safeLogError()`経由のFirestore書込みが発生するため直接呼ばず、既存`compare-gemini-ocr-models-confirmed.ts`が`loadMasterData.ts`について同じ理由で独立実装している既存パターンを踏襲
+- `/code-review medium`(8角度並列finder+1票検証)でCONFIRMED2件検出・修正: ①`processOneDocument()`の抽出/arbitration計算がtry/catchで囲まれておらず1文書の例外がjob全体をクラッシュさせる経路があった、②`success`が常時trueのハードコードで失敗率ゲートが機能していなかった(confirmedReplayStats.tsが記録する既知バグクラスの再発)
+- `confirmedArbitrationStats.test.ts`新規追加(scripts側テスト94 passing)
+- kanameone実機実行: pilot(`--limit 30`)でサンプリングN=2、本実行(`--limit 300`)でもN=12が母集団上限（`confirmedBy`/`officeConfirmedBy`非nullという人間確定条件の歩留まりが実データで約1.3%と極めて低い既知の制約、これ以上増やせない）
+- 結果: baseline/candidate完全同一(顧客一致率33.3%=4/12、事業所41.7%=5/12)で精度劣化なし・PASS。候補抽出grounding失敗率0.0%。PR #647作成・マージ
+
+### タスクI: 本番展開判断 → 見送り（ミッションクローズ）
+GOAL.mdのタスクIは「本番展開判断+実施（Hが基準を満たす場合のみ、番号単位認可）」だったが、着手前にdecision-makerから「セカンドオピニオンを聞いてさらに検討したい」との指示。`/codex plan`（MCP、effort=high）を実施し、Codexから重要度High指摘4件を受領:
+
+1. GOAL.md完了の定義は4項目（documentType/customerName/officeName/date）同等以上を要求するが実施できたのはcustomer/officeの2項目のみで「4項目ACの代替にならない」
+2. タスクHの「baseline/candidate完全同一」という結果は集計がjoint一致率のみのため文書単位の入れ替わり（baseline正→candidate誤とその逆）が相殺されてもPASSに見える構造で「無劣化の完全証明ではない」
+3. N=12・回帰0件はrule of threeで真の回帰率の95%信頼上限が約25%相当と統計的信頼性が低い
+4. baseline自体の低一致率を原因不明のまま展開すると改善効果を測れず既存の根本問題も温存する
+
+Claude側の独立評価でも指摘①〜④に同意（②は個人情報保護のため個別文書結果を非出力とした設計上、事後検証不能な点を含め見落としていた観点）。decision-maker最終判断:「品質は下げない、コスト圧縮は目指す、不安定さ・不十分さがあれば基本はしない選択をする」との原則を明示され、GOAL.md不変条件の撤退基準（AC未達時は無理に本番展開しない）を適用してミッションをクローズ。
+
+Codex提案の追加調査案（baseline不一致の原因分析／人手ラベリングでN拡大、約60件試算）は、いずれも新規の人手作業設計を要し方針と整合しないため見送り。タスクA〜D実装（マージ済み・dev動作確認済み）はrevertせず保持（実害なし、将来の再検討の土台）。kanameone/cocoroへの展開は行わない。PR #648でGOAL.md更新・マージ。
+
+### Issue Net
+Net 0（起票0/close 0。本ミッションはGitHub Issue非経由、GOAL.md駆動のため対象外）
+
+### 引き継ぎ教訓
+- kanameone実データの`confirmedBy`/`officeConfirmedBy`歩留まりは約1.3%と極めて低く、confirmed-replay方式のサンプルサイズはこれ以上増やせない構造的制約。将来同種の検証を行う場合はこの制約を前提にすること
+- 本番環境の実データに対してread-only検証スクリプトを新規に書く際は、呼び出す既存の本番関数（`extractOcrCandidates`等）が異常系でFirestore書込みを行わないか必ず確認すること（`safeLogError`等の副作用パターン、`compare-gemini-ocr-models-confirmed.ts`が`loadMasterData.ts`について既に同じ問題を回避していた先例あり）
+- セカンドオピニオン（Codex）は「精度劣化なし」という集計結果の裏にある構造的な弱点（joint rateでの相殺リスク等）を見抜く上で有効だった。decision-maker自身も能動的にセカンドオピニオンを求める判断をした
+
+## session123 サマリ（2026-07-14、GOAL.mdタスクD/F実装 + 実機A/B検証 + PR #644マージ + dev自動デプロイ確認）
+
+catchupの「次にやるとよいオススメ」2件（タスクD/F）にdecision-makerの番号単位認可を得ながら着手・完遂。
+
+### タスクD: `processDocument()`統合
+`functions/src/ocr/ocrProcessor.ts`の`processDocument()`に、タスクB実装済みの`extractOcrCandidates()`+タスクC実装済みの`arbitrateDocumentType`/`arbitrateCustomerName`/`arbitrateOfficeName`/`arbitrateDate`を統合。既存の全文ベース抽出結果を無条件に上書きしない設計を維持し、dateMarker解決はarbitration後のdocumentType結果を参照するよう順序調整（候補昇格時にdateMarkerも追従）。候補抽出呼出しのトークンを`totalInputTokens`等へ加算し`trackGeminiUsage`経由の本番コスト計測に反映。契約テスト(`ocrProcessorCandidateArbitrationWiringContract.test.ts`)で配線をlock-in。
+
+### タスクF: dev環境ロジックA/Bハーネス新規構築
+既存`compare-gemini-ocr-models.ts`(モデルA/B比較用、gemini-2.5 vs 3.5)とは軸が異なる「ロジックA/B比較」(同一モデルでbaseline=既存抽出のみ/candidate=候補抽出+arbitration統合後)として`scripts/compare-ocr-arbitration-logic.ts`を新規追加。documentType/customerName/officeName/dateの4項目全gate化。複数人名/複数日付の層化用に新規フィクスチャ2件(`scripts/fixtures/arbitrationCompareFixtures.ts`)を追加(既存`seed-dev-data.ts`は無改修で副作用回避)。「手書き」原稿は合成PDFでは再現不可のため既知の限界としてスコープ外。
+
+### 品質保証プロセス
+`/code-review low`を2回実施(タスクD/F各diff)、DRY違反1件検出・修正。変更が5ファイル以上(実コード)に及ぶため`rules/quality-gate.md`のEvaluator分離プロトコルに従い、独立evaluatorエージェント(前提知識なし)でAcceptance Criteria 10項目を個別検証、全PASS・HIGH/MEDIUM指摘0件を確認。
+
+### 実機実行結果・PR・デプロイ
+GitHub Actions "Run Operations Script"経由でdoc-split-devに対しread-only実行(run ID 29290104624)、結果: baseline/candidateとも5/5文書・4項目全100%一致(複数人名/複数日付distractorを含めて精度劣化なし)、候補抽出grounding失敗率10.0%(2/20件not-grounded、arbitrationの保守的設計により誤昇格には至らず)、候補抽出トークン増分input=2837/output=515/thinking=1322(5文書で概算$0.0208)。decision-makerの番号単位認可を得てPR #644を作成・マージ(main直pushではなくfeatureブランチ`feat/ocr-arbitration-task-d-f`経由)。main→dev自動デプロイ(CI+Deploy workflow、run 29291567996/29291567955)が発火し、両方SUCCESSで完了したことを確認済み。**kanameone/cocoroへの反映は未実施**(GOAL.mdの設計通り、タスクH/Iの番号単位認可を経てから実施する計画。今回のdev自動デプロイはkanameone/cocoroには一切影響しない)。
+
+### CodeRabbitの指摘(別対応として保留)
+PR #644のCodeRabbitレビューで、「既存の全文ベース抽出結果が4項目全てマッチ済みの場合、`extractOcrCandidates()`呼出し自体が完全な無駄コストになる」という指摘を独自に検証し正当と判断(arbitrate*は既存マッチがあれば候補を絶対に使わない設計のため)。GOAL.mdタスクCの既知の限界注記(候補昇格がほとんど発生しない可能性)と整合し、実際にコスト削減効果がある可能性が高い。decision-maker判断で「現状のPRのままマージ、最適化は別PRで対応」を選択済み。
+
+### 次のステップ
+decision-makerはタスクG(dev環境A/Bテスト本実行、対象文書数拡大)への着手を会話内で承認済み。ただしcontext残量が少なくなったため本セッションでは着手せず`/handoff`を実行して引き継ぐ。
+
+## session120 サマリ（2026-07-13、GOAL.md記録漏れ解消 + A/Bテスト残差原因調査 + Issue #526 close）
+
+catchupの「次にやるとよいオススメ」3件全てに着手。
+
+### ① GOAL.md記録漏れのコミット
+前セッション（session119）が`docs/handoff/GOAL.md`にsession119サマリを追記したがコミットされないまま終了していた（`/handoff`未実行）。main直pushを避け、featureブランチ（`docs/handoff-session119-record`）経由でPR #637を作成・マージ。
+
+### ② A/Bテスト残差原因調査（GOAL.md監視事項、read-only）
+GOAL.mdに残っていた「A/Bテスト事前実測(3.7〜4倍)と本番実測クリーン版(5.07倍)の乖離が未解明」という監視事項を調査し解明。GitHub Actions実行ログ（run 28941729429、2026-07-08T12:19）を遡り、`confirmed-replay`方式（kanameone実データN=60、PR#592-594）のコスト比較結果「5.53倍」の生ログを発掘。この5.53倍はsession107（PR #596）で一度確定していた実測値だったが、以降のセッションで出典を見失い「理論上の前提」として扱われ、比較対象として引用していたPR#559のA/Bテスト（n=11、dev合成fixtureの清潔な2ファイルのみ）との乖離が「未解明の残差」として記録され続けていた。5.53倍（confirmed-replay、実データ）と5.07倍（本番実測クリーン版）は9%差に収まっており、残差はconfirmed-replayのサンプル母集団バイアス（人間確定=過去に訂正が必要だった難しい文書のみ、N=60）で説明可能な範囲。「未解明の残差」は測定誤差ではなく比較対象の選択ミス（小サンプル合成fixtureとの比較を続けていたこと）が原因だったと結論し、GOAL.mdへ反映（PR #637に含めてマージ）。
+
+### ③ Issue #526の着手判断 → 新規実装ではなく展開状況の再発見
+catchupは#526を「着手指示があれば`/impl-plan`から即開始可能」な新規実装タスクとして提示していたが、Issue本文を確認したところdev実装（PR1〜4、#541/#542/#543/#544）は2026-07-04時点で完了・dev実機E2E検証済みで、残っていたのは「kanameone/cocoro展開待ち」の記録のみだったと判明（**session118が同じ発見をread-only確認していたが、close判断待ちのまま条件待ちに留め置かれていた**）。`gcloud functions describe`（splitPdf/processOCR）・Firebase Hostingチャンネル・Firestore rules release APIでkanameone/cocoro両環境のデプロイタイムスタンプを実測したところ、いずれもPR1〜4のmerge時刻（2026-07-04T04:23〜）より後（2026-07-08〜07-12、#547/#548トラックの一括デプロイに便乗）で、`git merge-base --is-ancestor`でも現mainにPR#544が含まれることを確認。**両環境とも既に本番展開済みと確定**。
+
+本番UIでの実機機能確認は実施していない。`splitPdf`はIssue #432（P0データ破壊インシデント）の震源関数であり、Playwright MCPでkanameone本番へのログインを試みたがスタッフGoogleアカウントの認証情報を持たずブロックされた（サイレントSSOも未登録アカウントのため失敗）。decision-maker確認の上、dev実機検証（PR #544/PR5、実データE2Eで confirmed保護+OCR自動補完併存を実証済み）とデプロイ済みコードの同一性を根拠に実機テストを省略し、Issue #526へ状況をコメント記録の上closeした。
+
+### Issue Net
+close 1件（#526）、起票0件。**Net +1**。
+
+### 引き継ぎ教訓
+- Issueの進捗記録は「dev実装完了」と「本番展開完了」を分けて追跡しないと、既に展開済みの機能が「未着手」と誤認され続けるリスクがある（今回は2セッション連続で同じ発見を繰り返した: session118→session120）。次回同種の状況では、条件待ちに置いた時点でIssue本文自体に進捗コメントを残す運用が有効
+- ブラウザ操作ツール誤選択（`claude-in-chrome` MCPをロードしてしまい、グローバルルール「Playwright MCP一択」に反した）に気づき次第、その場で訂正しPlaywright MCPへ切替。ツール選択ミスは実行前に気づけば実害ゼロ
+
+## session119 サマリ（2026-07-12、#620/#622/#626完遂 + 本番2環境展開）
+
+catchupの「次にやるとよいオススメ」から#620/#622/#626の3件をユーザー選択、dev実装→prod展開まで一気通貫で完遂。
+
+- **#620**（`fix(pdf): splitPdf/rotatePdfPagesのNOT_FOUND誤診断メッセージを分離`、PR #634）: 親doc削除によるNOT_FOUNDが「二重split」と誤診断されるメッセージ精度問題を、`isFirestoreNotFound`ヘルパー追加で分離
+- **#622**（`test(pdf): splitPdfConcurrencyGuardContract.test.tsのvacuous test riskを解消`、PR #635）: grep contractがsplitPdf固有の配線を実質保証できていなかった問題を、`extractSplitPdfFunctionBody()`でsplitPdf本体スコープに限定して解消
+- **#626**（`perf(ocr): OCR実行の所有権チェックをPDFページループ内に前倒し`、PR #636）: 所有権チェックが最終tx時のみでsupersededされたrunがAPIコストを消費し切ってから破棄される問題を修正。3ファイル大規模のため`/codex review-diff --base main`も追加実施（findings 0）
+
+各PRは`/safe-refactor`→`/code-review low`（全件findings 0）、マージは番号単位認可（AskUserQuestionボタン）。squash mergeでmain反映。dev実機確認: `seed-dev-data --force-pending`でPDF2件（11ページ）を実OCR処理させ`documentsProcessed:2,errors:0,superseded:0`を確認（#626の新チェックロジックが11回とも正常通過）。GitHub Actions「Deploy Cloud Functions」でkanameone/cocoro両環境にデプロイ、`gcloud functions describe`の`updateTime`でデプロイ反映を確認。3件ともIssue自動クローズ済み。
+
+### Issue Net
+close 3件（#620, #622, #626）、起票0件。**Net +3**。
+
+### 引き継ぎ教訓
+本セッション終了時に`/handoff`が実行されず、GOAL.mdへの追記（コミット未実施）とLATEST.mdへのセッション記録の両方が次セッション（session120）まで持ち越された。`/handoff`は「セッション終了時に手動実行」だが、実装完了直後に会話が途切れるケースでは記録が漏れやすい。
+
+session95〜118の詳細は `docs/handoff/archive/2026-07-history.md` 参照。
+
+## 現在のフェーズ
+
+**🎯 GOAL.md「担当CM別集計バグ修正」ミッション + 派生ミッション「Issue #660（集計トリガー非冪等性）修正」は2026-07-15 session132で完全達成、GOAL.mdの進行中tasksチェックリスト全18項目が`[x]`化済み。** タスクA〜J4・タスクIの全てが完了し、kanameone/cocoro両本番環境で「顧客別=担当CM別（CM未設定含む）」の恒等式一致・過去ドリフトの完全是正を確認済み。**次のゴールへの更新 or GOAL.mdのクローズ（アーカイブ）をdecision-maker判断で検討する段階。**
+
+**GOAL.md「OCR突合精度向上」ミッション（session121〜124）は2026-07-14 session124でクローズ済み（撤退基準適用、本番展開は見送り）**。タスクA〜H（候補抽出+arbitration実装、dev環境A/B検証N=10、kanameone confirmed-replay検証N=12）は完遂・全てマージ済みだが、`/codex plan`セカンドオピニオンとdecision-maker最終判断により、kanameone/cocoroへの本番展開（タスクI）は行わないことを決定。実装済みコードはrevertせずdev環境に残る（実害なし）。
+
+前ミッション（#547/#548コスト圧縮2トラック）は2026-07-10 session113で技術的完遂、2026-07-12 session117でPhase E本番実行の是正を完了・全22項目`[x]`。並行してsession118〜120でIssue #621/#620/#622/#626/#526（splitPdf/OCR周辺のP1/P2バグ+kaname要望E）を完遂・本番2環境展開済み。積み残しはP2 enhancement（#503/#251/#238、いずれも明示指示待ち）のみ。ゴール全体はdocs/handoff/GOAL.md参照（SessionStart hook自動注入）。
+
+## 直近の変更（session89〜130、簡潔に）
+
+- **session130 (2026-07-14)**: 上記session130サマリ参照。**Net 0（GitHub Issue非経由、GOAL.md駆動ミッション）**。GOAL.mdタスクA/B/C/Fを実装、3層品質ゲート(code-review high→codex review-diff→review-pr 3エージェント)で計3件のバグ・不整合を検出・修正、PR #656マージ済み。
+- **session126〜128 (2026-07-14)**: 上記session126〜128サマリ参照。**Net 0（GitHub Issue非経由、read-only調査+ドキュメント整理のみ）**。decision-makerからkanameone7月請求急増（+797%）の確認依頼を受け、原因をFirestore移行作業由来の一過性「トリガーストーム」と特定（PR #651）。追加でFirestoreサイズ実測・Gemini21日分実測・Cloud Monitoring read_count実測・cocoro反映確認を実施し、「2倍以内」達成確度を60-75%→80%程度へ段階的に上方修正（PR #652。**注**: 本行は一時「82-85%」と誤記されていたが、session127/128本文の実際の記録「80%程度」と不整合だったため2026-07-15 session132で訂正）。LATEST.mdアーカイブも実施（session112〜113をarchiveへ移動）。
+- **session121〜124 (2026-07-13〜14)**: 上記session124サマリ参照。**Net 0（GitHub Issue非経由、GOAL.md駆動ミッション）**。OCR突合精度向上ミッション着手→タスクA〜H完遂（PR #641〜#647）→タスクIで`/codex plan`セカンドオピニオン実施の上、decision-maker判断によりGOAL.md撤退基準を適用しミッションクローズ（PR #648）。kanameone/cocoro本番展開は行わず、dev環境検証+kanameone customer/office限定検証までで終了。
+- **session120 (2026-07-13)**: 上記サマリ参照。**Net +1（起票0/close 1、#526）**。GOAL.md記録漏れをPR #637でコミット、A/Bテストコスト比率の「未解明の残差」を解明しGOAL.mdへ反映、Issue #526（実は展開済みだった）をコメント記録の上close。
+- **session119 (2026-07-12)**: 上記サマリ参照。**Net +3（起票0/close 3、#620/#622/#626）**。3件のP1/P2バグをdev実装→本番2環境展開まで一気通貫で完遂。`/handoff`未実行のままセッション終了し、GOAL.md追記がコミットされず・LATEST.md記録も欠落（session120で両方是正）。
+- **session118 (2026-07-12)**: 上記サマリ参照。**Net +1（起票0/close 1、#621）**。Issue #621（splitPdf新エラーコードFE未対応）をdev実装→3層品質ゲート(code-review/codex/review-pr)で計4件のCONFIRMED回帰検出・修正→PR #632マージ→kanameone/cocoro両本番Hosting展開完了。#526の展開状態read-only確認も実施（両環境展開済みと確定）。
+- **session110 (2026-07-09)**: archive参照。Net 0（起票0/close0）。#547 Phase D本番展開完遂(cocoro/kanameone両環境Hosting+Functions)、GOAL.md更新(PR #607/#608)。
+- **session109 (2026-07-09)**: archive参照。Net 0（起票0/close0）。#547 Phase D PR-D3(#601)/PR-D4(#602)実装+マージでPhase D実装フェーズ完遂、GOAL.md/ADR-0018のドキュメント整合性是正(PR #603/#604)。
+- **session108 (2026-07-09)**: archive参照。**Net +1（起票0/close 1、#548）**。#547 Phase C全環境完遂+Phase D計画承認+PR-D1/D2マージ+GOAL.md新設(PR #597/#598/#599)。
+- **session107 (2026-07-08〜09)**: archive参照。Net 0。#548統計検証完遂+#547 Phase C実装マージ(PR #592〜596)。
+- **session106 (2026-07-08)**: archive参照。Net 0。個人情報コンプライアンス3層対応(PR #588〜591)。
+- **session105 (2026-07-08)**: archive参照。Net 0。kanameone段階デプロイ・通常運用復帰。
+- **session104 (2026-07-08)**: archive参照。Net 0。
+- **session103 (2026-07-07)**: archive参照。**Net 1（起票0/close 1、#547）**。ADR-0018 Phase B (PR1〜PR5) 完遂によりIssue #547自体がclose、Netに正しく反映された数少ないセッション。
+- **session102 (2026-07-07)**: archive参照。Net 0（起票0/close0）。#547 Phase B継続、PR2(PR #571)完遂という実質進捗はIssue単位のNetに非反映（#547自体はPhase C以降も残るためopen継続）。
+- **session101 (2026-07-06)**: archive参照。Net 0（起票0/close0）。#547 Phase B着手、タスク0(PR #568)+PR1(PR #569)完遂という実質進捗はIssue単位のNetに非反映（#547自体はPhase C以降も残るためopen継続）。
+- **session100 (2026-07-06)**: archive参照。Net 0（起票1/close 1、#562のみ）。#548の主要スコープ(3.5移行スイッチ本体のdev実装+実機検証)を完遂したが、Issue #548自体は本番展開が残るためopenのまま継続（実質進捗はIssue単位のNetに非反映）。
+- **session99 (2026-07-06)**: archive参照。Net 0（起票0/close 0、#548 A/Bテストharness実装+実機PASS確認+Issue #548コメント記録という実質進捗はIssue単位のNetに非反映）。
+- **session98 (2026-07-06)**: archive参照。Net 0（起票0/close 0、#547事前計測完遂+ADR-0018起票+#548単価確認・A/B計画策定という実質進捗はIssue単位のNetに非反映）。
+- **session96 (2026-07-05)**: archive参照。Issue #546（計測基盤+SDK移行+thinking制御）実装完遂・PR #550マージ・dev環境デプロイ完了。Net -1（close #546のみ）。
+- **session95 (2026-07-04〜05)**: archive参照。Net -5（起票6/close 1、コスト3件はuser明示指示+実害根拠、バグ3件は#526設計中に発見した実バグでtriage充足）。
+- **session93 (2026-07-03)**: kaname新規要望B/C/D/E/F受領→B/D/F実装・merge・close。E(#526)は設計判断ゲート3点待ちで持越し（→session95で解消）。Net -1。
+- **session92 (2026-07-02〜03)**: #492 Ambiguous重複docs整理完遂→close。Net -1。
+- **session91 (2026-07-02)**: ADR-0017実戦実証（7.9hストーム自動吸収）→Accepted昇格。Net 0。
+- **session90 (2026-06-12)**: 429専用retry+rescue backstop（PR#516+ADR-0017）3環境deploy。Net 0。
+- **session89 (2026-05-20)**: #504/#402 close。Net -2。
+
+session29〜94の詳細は `docs/handoff/archive/2026-0{4,5,6}-history.md` 参照。
+
+## 次のアクション（3 分割・SKILL.md §2.5 参照、session132時点）
+
+**🎯 GOAL.md「担当CM別集計バグ修正」+ 派生ミッション「Issue #660修正」は完全達成済み（全18項目`[x]`）。executor領分の即着手タスクは0件。**
+
+### 即着手タスク
+
+なし（GOAL.mdミッション完全完遂、新規ミッションの起点はdecision-maker領分）。
+
+### 条件待ち（明示 trigger 付き）
+
+| # | 項目 | trigger | 充足時のタスク | 確認方法 |
+|---|------|---------|--------------|---------|
+| 1 | **#547/#548 egress実削減効果の請求確認（最終確定）** | 翌月請求発行（2026-08上旬想定） | kanameone/cocoro請求のFirestore項目（3.5移行前基準: ¥4,645/月egress）とPhase E実行前後を比較し実削減額を確認。session126〜128で確度80%程度まで上方修正済みのため、この最終確認は「確定判定」の意味合い。GOAL.mdに記録 | 請求ダッシュボード確認 |
+| 2 | Issue #664（documents create/delete順序不同配信によるphantom count） | 新規ドリフト観測（`diagnose-caremanager-group-gap.js`等でIssue #660では説明できない不一致） or Gmail/OCR処理フロー変更でcreate直後delete パターンが発生しうる変更が入る場合 | decision-maker判断で`/impl-plan`起票 or 継続見送り再確認 | Issue #664本文・コメント参照（2026-07-15見送りコメント記録済み） |
+| 3 | #548-B4 再処理「再突合のみ」モード | UI仕様のdecision-maker判断 | 2モード化実装 | user回答 |
+| 4 | 継承事項: PR#474 close / `.artifacts/`扱い / #503・#251・#238 / CLAUDE.md切り出し / **frontend/.envフォールバックの恒久対策**(session108発見、session118・session130でも再発を確認・一時退避/復元のみで暫定対応。`.env`をdev固定にする規約明文化等の恒久対策は依然未着手) | decision-maker明示指示 | 各項目参照 | — |
+| 5 | OCR突合精度向上ミッション（旧、タスクIでクローズ）でkanameone confirmed-replay検証時に判明した「baseline自体の一致率が低い（顧客33.3%/事業所41.7%）」原因未解明 | decision-maker明示指示 | 原因分類調査（マスター変更/表記差/OCR差/ロジック差）→再検証要否判断 | archive参照、着手指示があれば`scripts/compare-ocr-arbitration-logic-confirmed.ts`が起点 |
+| 6 | 本ミッション副次発見3件: 同期漏れ7件（`syncCareManager.ts`のonCustomerMasterWriteトリガー反映漏れ）・documentType「未判定」過集中(25.6%)・careManager検索インデックス欠落 | decision-maker明示指示 | 個別調査・対応方針決定 | GOAL.md不変条件参照（本ミッションのスコープ外と明記済み） |
+
+### 却下候補（記録のみ）
+
+| 項目 | 経緯 | 着手しない理由 |
+|------|------|--------------|
+| **OCR出力のエンティティリスト化（−¥11,000/月級）** | コスト分析で最大レバー。session112/113で「真の黒字化に必須」と再確認 | 3.5移行後の実測を見てdecision-makerが判断する保留カード（#548 closeコメントに記録済み）。GOAL.mdスコープ外 |
+| processOCR head-of-line blocking対策 | Codex指摘で実在確認 | 実害未観測。pending滞留観測時に別Issue化 |
+| detail/mainパスのヘルパー抽出（writer側9箇所） | Phase B以来の継続指摘。**読者側はPR-D2のreadDocWithDetailで部分集約済み** | writer側の3コンパイルコンテキスト共有はPhase F(cleanup)の設計判断。着手指示待ち |
+| #503/#251/#238（P2 enhancement） | rating 5-6相当の任意改善 | 明示指示なし |
+| **リポジトリ内実名記載（doc-split がpublicと判明、session132で発覚）** | Issue #664コメント投稿時、実在CM氏名を含む文面がauto mode classifierにブロックされ発覚。GOAL.md/ADR-0020には既に実名がコミット済み | 対応要否・対応方針はdecision-maker領分。今回はコメント側のみ匿名化して回避、リポジトリ内既存記述の是正は未着手・未指示 |
+
+### 残留プロセス（マシン全体スコープ、現在のプロジェクトに限らない）
+
+1プロセス検出: `node .../sanwa-houkai-app/web/node_modules/.bin/next build`（2026-07-15 21:35起動、**別プロジェクト(sanwa-houkai-app)由来**、doc-splitとは無関係）。起動時刻が直近であり別プロジェクトでの並行セッション実行中の可能性があるため、停止提案は行わず条件待ち（trigger=decision-makerからの停止指示）に留める。
+
+### 最終結論（session132末尾）
+
+✅ **セッション終了可** — OPEN PR 0件、git clean（GOAL.md/LATEST.mdのコミットのみ残、`.artifacts/`は既知の継続保留untracked）、即着手タスク0件・条件待ち6件、残留プロセス1件（別プロジェクト由来、対応不要）。**GOAL.mdミッション完全達成につき、次セッションはGOAL.mdの次ゴール設定（decision-maker起点）から開始する。**
+
+§4.6同根再発スキャン: 本セッションは修正PR作成なし（GHA運用スクリプト実行のみ）のため対象外。
+
+§4.7対症療法判定: 本セッションは修正PR作成なしのため対象外。
