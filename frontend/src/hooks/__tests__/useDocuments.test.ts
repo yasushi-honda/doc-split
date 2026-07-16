@@ -303,6 +303,23 @@ describe('firestoreToDocument', () => {
 
       expect(result.documentTypeConfirmed).toBeUndefined()
     })
+
+    it('distributionId を正しく変換する (GOAL.md task 6-1, PR-C)', () => {
+      const data = {
+        ...baseFirestoreData,
+        distributionId: 'orig-doc-1',
+      }
+
+      const result = firestoreToDocument('doc-001', data)
+
+      expect(result.distributionId).toBe('orig-doc-1')
+    })
+
+    it('distributionId が undefined の場合も正しく処理する (GOAL.md task 6-1, PR-C)', () => {
+      const result = firestoreToDocument('doc-001', baseFirestoreData)
+
+      expect(result.distributionId).toBeUndefined()
+    })
   })
 
   describe('summary フィールド (Issue #215 discriminated union + 後方互換読込)', () => {
@@ -484,6 +501,42 @@ describe('getReprocessClearFields (Issue #215: 旧3キー + 新summary 全て de
   it('documentTypeConfirmed を false にリセットする (Issue #526)', () => {
     const fields = getReprocessClearFields()
     expect(fields.documentTypeConfirmed).toBe(false)
+  })
+
+  // GOAL.md task 6-2 (PR-C): distributionId保持docは顧客系フィールドを再処理で
+  // 上書きしてはならない(BE側confirmedFieldMerge保護が機能する前提を崩さないため)
+  describe('preserveDistributionFields (GOAL.md task 6-2, PR-C)', () => {
+    it('デフォルト(引数省略)では customerId/customerName/customerConfirmed/careManager をクリア対象に含む', () => {
+      const fields = getReprocessClearFields()
+      expect(fields).toHaveProperty('customerId')
+      expect(fields).toHaveProperty('customerName')
+      expect(fields).toHaveProperty('careManager')
+      expect(fields.customerConfirmed).toBe(false)
+    })
+
+    it('preserveDistributionFields=false では通常どおりクリア対象に含む', () => {
+      const fields = getReprocessClearFields(false)
+      expect(fields).toHaveProperty('customerId')
+      expect(fields).toHaveProperty('customerName')
+      expect(fields).toHaveProperty('careManager')
+      expect(fields.customerConfirmed).toBe(false)
+    })
+
+    it('preserveDistributionFields=true では customerId/customerName/customerConfirmed/careManager をクリア対象から除外する', () => {
+      const fields = getReprocessClearFields(true)
+      expect(fields).not.toHaveProperty('customerId')
+      expect(fields).not.toHaveProperty('customerName')
+      expect(fields).not.toHaveProperty('careManager')
+      expect(fields).not.toHaveProperty('customerConfirmed')
+    })
+
+    it('preserveDistributionFields=true でも他の顧客系フィールド(officeId等)は通常どおりクリア対象に含む', () => {
+      const fields = getReprocessClearFields(true)
+      expect(fields).toHaveProperty('officeId')
+      expect(fields).toHaveProperty('officeName')
+      expect(fields.officeConfirmed).toBe(false)
+      expect(fields.verified).toBe(false)
+    })
   })
 })
 

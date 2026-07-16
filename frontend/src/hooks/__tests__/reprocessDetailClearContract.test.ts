@@ -28,7 +28,7 @@ describe('reprocess-clear detail/main 配線契約 (ADR-0018 PR4b)', () => {
       /export async function appendReprocessClearToBatch[\s\S]*?\n\}/
     )
     expect(helper, 'appendReprocessClearToBatch が定義されていること').not.toBeNull()
-    expect(helper![0]).toMatch(/status: 'pending',\s*\.\.\.getReprocessClearFields\(\)/)
+    expect(helper![0]).toMatch(/status: 'pending',\s*\.\.\.getReprocessClearFields\(hasDistributionId\)/)
   })
 
   it('ヘルパー: detail/main は存在確認(getDoc)の上、存在時のみ getReprocessDetailClearFields でクリアする', () => {

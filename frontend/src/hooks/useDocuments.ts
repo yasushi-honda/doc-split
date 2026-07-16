@@ -21,6 +21,7 @@ import {
   QueryConstraint,
   startAfter,
   DocumentSnapshot,
+  getCountFromServer,
 } from 'firebase/firestore'
 import { useState } from 'react'
 import { toast } from 'sonner'
@@ -209,7 +210,28 @@ export function firestoreToDocument(id: string, data: Record<string, unknown>): 
     needsManualCustomerSelection: data.needsManualCustomerSelection as boolean | undefined,
     // 書類種別確定フィールド（Issue #526）
     documentTypeConfirmed: data.documentTypeConfirmed as boolean | undefined,
+    // 複数顧客FAX複製機能 (GOAL.md D4): 元doc・全コピーに同一値を付与
+    distributionId: data.distributionId as string | undefined,
   }
+}
+
+/**
+ * distributionId兄弟doc(元doc+全コピー)の件数を取得するフック
+ * (GOAL.md task 6-3, PR-C)。詳細画面の「同一FAXをN名に配信・要整理」表示用。
+ * 件数のみ必要なため getCountFromServer の集計クエリを使い、ドキュメント本体の
+ * ダウンロードコストを避ける。
+ */
+export function useDistributionSiblingCount(distributionId: string | undefined) {
+  return useQuery({
+    queryKey: ['distributionSiblingCount', distributionId],
+    queryFn: async () => {
+      const q = query(collection(db, 'documents'), where('distributionId', '==', distributionId))
+      const snapshot = await getCountFromServer(q)
+      return snapshot.data().count
+    },
+    enabled: !!distributionId,
+    staleTime: 30 * 1000,
+  })
 }
 
 // ============================================
@@ -258,18 +280,15 @@ export function updateDocumentInListCache(
  * 直接の呼出元は appendReprocessClearToBatch のみ（再処理3経路は
  * ヘルパー経由で間接利用）。deleteField() はファクトリ関数内で毎回生成（安全性）
  *
- * TODO(GOAL.md task 6-2, PR-C): 複数顧客FAX複製機能(kanameone現場要件)により、
- * distributionIdを持つdoc(複製元・複製コピー)はcustomerId/customerName/careManagerが
- * 「OCRが自動抽出した提案値」ではなく「配信によって確定した顧客の識別子」である。
- * 現状この関数は無条件でcustomerConfirmed:false + customerId等をdeleteFieldするため、
- * distributionId保持docを本関数経由で再処理すると、BE側(functions/src/ocr/faxDuplication.ts
- * のalreadyConfirmedOrVerifiedガード・confirmedFieldMerge保護)が機能する前提
- * (=customerConfirmedがtrueのまま)が崩れ、次回OCR完了時にcustomerIdが上書きされてしまう
- * (Codexセカンドオピニオンで指摘済みの既知ギャップ、evaluator指摘で再確認)。
- * task 6-2でこの関数(または呼出元)にdistributionId分岐を追加し、複製メンバーのdocは
- * 顧客系フィールドをクリア対象から除外すること。flag ON展開(task 8)より前に完了必須。
+ * GOAL.md task 6-2 (PR-C): distributionIdを持つdoc(複製元・複製コピー)の
+ * customerId/customerName/customerConfirmed/careManagerは「OCRが自動抽出した提案値」
+ * ではなく「配信によって確定した顧客の識別子」のため、`preserveDistributionFields`
+ * がtrueの場合はこの4フィールドをクリア対象から除外する。customerConfirmedが
+ * trueのまま残ることで、BE側(functions/src/ocr/confirmedFieldMerge.ts)の既存
+ * confirmed保護マージがそのまま働き、次回OCR完了時にcustomerIdが上書きされるのを防ぐ
+ * (Codexセカンドオピニオンで指摘済みのギャップへの対応)。
  */
-export function getReprocessClearFields() {
+export function getReprocessClearFields(preserveDistributionFields: boolean = false) {
   const df = deleteField()
   return {
     // OCR結果
@@ -291,14 +310,13 @@ export function getReprocessClearFields() {
     // derivedObjectPath と実 Storage state が不整合になるため必ずクリアする
     provenance: df,
     // メタ情報
-    customerName: df,
-    customerId: df,
+    ...(preserveDistributionFields ? {} : { customerName: df, customerId: df }),
     officeName: df,
     officeId: df,
     documentType: df,
     fileDate: df,
     fileDateFormatted: df,
-    careManager: df,
+    ...(preserveDistributionFields ? {} : { careManager: df }),
     category: df,
     // 候補・スコア
     customerCandidates: df,
@@ -311,7 +329,7 @@ export function getReprocessClearFields() {
     allCustomerCandidates: df,
     suggestedNewOffice: df,
     // 確認ステータス
-    customerConfirmed: false,
+    ...(preserveDistributionFields ? {} : { customerConfirmed: false }),
     confirmedBy: null,
     confirmedAt: null,
     officeConfirmed: false,
@@ -375,20 +393,30 @@ export function getReprocessDetailClearFields() {
  * 確認と commit の間に detail が作成されるレース(並行OCR完了)はあり得るが、その場合も
  * 親クリアで status:'pending' になった doc を次の OCR パイプラインが dual-write で
  * 上書きするため自己修復する。
+ *
+ * distributionId (GOAL.md task 6-2, PR-C) の有無を判定するため親docを事前読込する。
+ * detail存在確認と同様に、読込と commit の間のレース(並行OCR完了によるdistributionId
+ * 付与)は次のOCRパイプラインが再度dual-writeで上書きするため自己修復する。
+ * 戻り値のhasDistributionIdは呼出元の楽観的更新(customerName等をブランクにしない)に使う。
  */
 export async function appendReprocessClearToBatch(
   batch: WriteBatch,
   documentId: string
-): Promise<void> {
-  batch.update(doc(db, 'documents', documentId), {
+): Promise<boolean> {
+  const docRef = doc(db, 'documents', documentId)
+  const docSnap = await getDoc(docRef)
+  const distributionId = docSnap.data()?.distributionId
+  const hasDistributionId = typeof distributionId === 'string' && distributionId.length > 0
+  batch.update(docRef, {
     status: 'pending',
-    ...getReprocessClearFields(),
+    ...getReprocessClearFields(hasDistributionId),
   })
   const detailRef = doc(db, 'documents', documentId, 'detail', 'main')
   const detailSnap = await getDoc(detailRef)
   if (detailSnap.exists()) {
     batch.update(detailRef, getReprocessDetailClearFields())
   }
+  return hasDistributionId
 }
 
 // ============================================
@@ -414,18 +442,18 @@ export function useReprocessDocument() {
       // ADR-0018 Phase D PR4b (Issue #547): 親docクリアと detail/main クリアを
       // 単一batchで原子的にコミット(他2箇所 useErrors/DocumentsPage と同一ヘルパー)
       const batch = writeBatch(db)
-      await appendReprocessClearToBatch(batch, documentId)
+      const hasDistributionId = await appendReprocessClearToBatch(batch, documentId)
       await batch.commit()
-      // 楽観的更新（即時UI反映）
+      // 楽観的更新（即時UI反映）。distributionId保持docはcustomerName/customerConfirmedを
+      // 実際にはクリアしない(GOAL.md task 6-2)ため、楽観的更新でも空表示にしない。
       updateDocumentInListCache(queryClient, documentId, {
         status: 'pending',
         ocrResult: '',
-        customerName: '',
         officeName: '',
         documentType: '',
-        customerConfirmed: false,
         officeConfirmed: false,
         verified: false,
+        ...(hasDistributionId ? {} : { customerName: '', customerConfirmed: false }),
       })
       queryClient.invalidateQueries({ queryKey: ['document', documentId] })
       // detail/main もクリア対象 (appendReprocessClearToBatch) のため、キャッシュ済み
