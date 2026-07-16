@@ -16,8 +16,15 @@ import {
   type TokenInfo,
 } from '../utils/tokenizer';
 import { isFirestoreNotFoundError } from '../utils/firestoreErrors';
+import { chunkArray } from '../utils/chunkArray';
 
 const db = getFirestore();
+
+/**
+ * db.getAll(...indexRefs) を一度に大量実行するとピークメモリが膨らむため
+ * (Issue #217、kanameone 512MiB OOM 201件既発)、この件数単位で逐次取得する。
+ */
+const GET_ALL_CHUNK_SIZE = 10;
 
 /** フィールドからマスクへの変換 */
 const FIELD_TO_MASK: Record<TokenField, number> = {
@@ -111,8 +118,9 @@ export const onDocumentWriteSearchIndex = onDocumentWritten(
 
 /**
  * ドキュメントを検索インデックスに追加
+ * (integration test から直接呼び出せるよう export。トリガー本体からの呼び出しは不変)
  */
-async function addDocumentToIndex(docId: string, tokens: TokenInfo[]): Promise<void> {
+export async function addDocumentToIndex(docId: string, tokens: TokenInfo[]): Promise<void> {
   const now = Timestamp.now();
 
   // トークンごとに集約
@@ -132,11 +140,16 @@ async function addDocumentToIndex(docId: string, tokens: TokenInfo[]): Promise<v
     }
   }
 
-  // 既存ドキュメントを一括取得
+  // 既存ドキュメントをチャンク単位で取得（ピークメモリ抑制、Issue #217）
   const tokenIds = Array.from(tokenMap.keys());
   const indexRefs = tokenIds.map(id => db.collection('search_index').doc(id));
-  const existingDocs = await db.getAll(...indexRefs);
-  const existingSet = new Set(existingDocs.filter(d => d.exists).map(d => d.id));
+  const existingSet = new Set<string>();
+  for (const refChunk of chunkArray(indexRefs, GET_ALL_CHUNK_SIZE)) {
+    const existingDocs = await db.getAll(...refChunk);
+    for (const d of existingDocs) {
+      if (d.exists) existingSet.add(d.id);
+    }
+  }
 
   // バッチ書き込み（新規と既存を分けて処理）
   const batch = db.batch();
