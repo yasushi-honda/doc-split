@@ -21,6 +21,7 @@ import {
 import { LoadMoreIndicator } from '@/components/LoadMoreIndicator';
 import { useInfiniteScroll } from '@/hooks/useInfiniteScroll';
 import { useReprocessDocument } from '@/hooks/useDocuments';
+import { useDocumentTypes } from '@/hooks/useMasters';
 import {
   useGroupDocuments,
   type GroupType,
@@ -187,6 +188,10 @@ export function GroupDocumentList({
   });
   const { loadMoreRef } = useInfiniteScroll({ hasNextPage: !!hasNextPage, isFetchingNextPage, fetchNextPage });
 
+  // カテゴリフォルダ表示用の書類マスター（書類種別タブと同一 queryKey でキャッシュ共有）。
+  // 取得失敗時は undefined のまま渡し、CustomerSubGroup 側が書類種別表示にフォールバックする
+  const { data: documentMasters } = useDocumentTypes();
+
   // error 書類の「再試行」(#524): 行ボタン → 確認ダイアログ → 再処理
   const { reprocess, reprocessingId } = useReprocessDocument();
   const [retryTarget, setRetryTarget] = useState<Document | null>(null);
@@ -272,6 +277,7 @@ export function GroupDocumentList({
         <CustomerSubGroup
           documents={allDocuments}
           furiganaMap={furiganaMap}
+          documentMasters={documentMasters}
           onDocumentSelect={onDocumentSelect}
           onRetry={setRetryTarget}
         />

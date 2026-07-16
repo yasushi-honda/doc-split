@@ -18,7 +18,11 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { isCustomerConfirmed } from '@/hooks/useProcessingHistory';
 import { getStatusConfig, formatTimestamp } from '@/lib/documentUtils';
-import type { Document } from '@shared/types';
+import {
+  groupDocumentsByCategory,
+  isAllUncategorizedDocs,
+} from '@/lib/groupDocumentsByCategory';
+import type { Document, DocumentMaster } from '@shared/types';
 
 // ============================================
 // 型定義
@@ -27,6 +31,8 @@ import type { Document } from '@shared/types';
 interface CustomerSubGroupProps {
   documents: Document[];
   furiganaMap?: Map<string, string>;
+  /** 書類マスター。カテゴリフォルダ表示の解決に使用（未取得時は書類種別表示にフォールバック） */
+  documentMasters?: DocumentMaster[];
   onDocumentSelect?: (documentId: string) => void;
   /** error 書類の「再試行」(#524)。未指定時はボタン非表示 */
   onRetry?: (document: Document) => void;
@@ -168,53 +174,75 @@ function DocumentRow({ document, onClick, onRetry }: DocumentRowProps) {
 }
 
 // ============================================
-// 書類種別サブグループ (#527: 担当CM → 利用者 → 書類種別 → 書類 の第3階層)
+// フォルダサブグループ (#527: 担当CM → 利用者 → フォルダ → 書類 の第3階層)
+// フォルダの単位はカテゴリ（master.category、kaname要望 2026-07-16）。
+// カテゴリ未運用環境（全書類が未分類に解決）は従来の書類種別フォルダに
+// フォールバックする（書類種別タブ GroupList と同一規則）。
 // ============================================
 
-interface DocTypeGroup {
-  docType: string;
+interface FolderGroup {
+  label: string;
   documents: Document[];
 }
 
 const UNKNOWN_DOC_TYPE = '未判定';
 
 /**
- * 利用者配下の書類を書類種別ごとに集約する。
+ * 利用者配下の書類を書類種別ごとに集約する（カテゴリ未運用時のフォールバック）。
  * 並びは名前順 (ja locale。開くたびに順序が変わらない紙ファイリングのメンタルモデル優先)、
  * 「未判定」は末尾。件数は読み込み済みページ分のクライアント集約
  * (既存の顧客サブグループと同一方式。未読分は LoadMoreIndicator で可視)。
  */
-function groupByDocType(documents: Document[]): DocTypeGroup[] {
-  const groupMap = new Map<string, DocTypeGroup>();
+function groupByDocType(documents: Document[]): FolderGroup[] {
+  const groupMap = new Map<string, FolderGroup>();
   for (const doc of documents) {
     const docType = doc.documentType || UNKNOWN_DOC_TYPE;
     if (!groupMap.has(docType)) {
-      groupMap.set(docType, { docType, documents: [] });
+      groupMap.set(docType, { label: docType, documents: [] });
     }
     groupMap.get(docType)!.documents.push(doc);
   }
   return Array.from(groupMap.values()).sort((a, b) => {
-    if (a.docType === UNKNOWN_DOC_TYPE) return 1;
-    if (b.docType === UNKNOWN_DOC_TYPE) return -1;
-    return a.docType.localeCompare(b.docType, 'ja');
+    if (a.label === UNKNOWN_DOC_TYPE) return 1;
+    if (b.label === UNKNOWN_DOC_TYPE) return -1;
+    return a.label.localeCompare(b.label, 'ja');
   });
 }
 
-interface DocTypeGroupItemProps {
-  group: DocTypeGroup;
+/**
+ * 利用者配下の書類をカテゴリフォルダに集約する。
+ * 全書類が「未分類」に解決される環境（マスター未取得・カテゴリ未運用）では
+ * 書類種別フォルダにフォールバックする。
+ */
+function buildFolderGroups(
+  documents: Document[],
+  documentMasters: DocumentMaster[] | undefined,
+): FolderGroup[] {
+  const categoryGroups = groupDocumentsByCategory(documents, documentMasters);
+  if (categoryGroups.length === 0 || isAllUncategorizedDocs(categoryGroups)) {
+    return groupByDocType(documents);
+  }
+  return categoryGroups.map((g) => ({
+    label: g.categoryName,
+    documents: [...g.documents],
+  }));
+}
+
+interface FolderGroupItemProps {
+  group: FolderGroup;
   isExpanded: boolean;
   onToggle: () => void;
   onDocumentSelect?: (documentId: string) => void;
   onRetry?: (document: Document) => void;
 }
 
-function DocTypeGroupItem({
+function FolderGroupItem({
   group,
   isExpanded,
   onToggle,
   onDocumentSelect,
   onRetry,
-}: DocTypeGroupItemProps) {
+}: FolderGroupItemProps) {
   return (
     <div className="border-b border-gray-50 last:border-0">
       <button
@@ -228,7 +256,7 @@ function DocTypeGroupItem({
         )}
         <FolderOpen className="h-4 w-4 flex-shrink-0 text-amber-500" />
         <div className="flex items-center gap-2 flex-1 min-w-0">
-          <span className="text-sm text-gray-800 truncate">{group.docType}</span>
+          <span className="text-sm text-gray-800 truncate">{group.label}</span>
           <Badge variant="outline" className="text-xs">
             {group.documents.length}件
           </Badge>
@@ -257,6 +285,7 @@ function DocTypeGroupItem({
 
 interface CustomerGroupItemProps {
   group: CustomerGroup;
+  documentMasters?: DocumentMaster[];
   isExpanded: boolean;
   onToggle: () => void;
   onDocumentSelect?: (documentId: string) => void;
@@ -265,22 +294,26 @@ interface CustomerGroupItemProps {
 
 function CustomerGroupItem({
   group,
+  documentMasters,
   isExpanded,
   onToggle,
   onDocumentSelect,
   onRetry,
 }: CustomerGroupItemProps) {
-  // 書類種別サブグループの展開状態 (#527)。顧客を閉じると状態ごと破棄される
-  const [expandedDocTypes, setExpandedDocTypes] = useState<Set<string>>(new Set());
-  const docTypeGroups = useMemo(() => groupByDocType(group.documents), [group.documents]);
+  // フォルダサブグループの展開状態 (#527)。顧客を閉じると状態ごと破棄される
+  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
+  const folderGroups = useMemo(
+    () => buildFolderGroups(group.documents, documentMasters),
+    [group.documents, documentMasters]
+  );
 
-  const toggleDocType = (docType: string) => {
-    setExpandedDocTypes((prev) => {
+  const toggleFolder = (label: string) => {
+    setExpandedFolders((prev) => {
       const next = new Set(prev);
-      if (next.has(docType)) {
-        next.delete(docType);
+      if (next.has(label)) {
+        next.delete(label);
       } else {
-        next.add(docType);
+        next.add(label);
       }
       return next;
     });
@@ -314,15 +347,15 @@ function CustomerGroupItem({
         </div>
       </button>
 
-      {/* 顧客グループ内の書類種別サブグループ（展開時、#527: 4 階層化） */}
+      {/* 顧客グループ内のフォルダサブグループ（展開時、#527: 4 階層化） */}
       {isExpanded && (
         <div className="bg-white border-t border-gray-50 ml-6">
-          {docTypeGroups.map((dtGroup) => (
-            <DocTypeGroupItem
-              key={dtGroup.docType}
-              group={dtGroup}
-              isExpanded={expandedDocTypes.has(dtGroup.docType)}
-              onToggle={() => toggleDocType(dtGroup.docType)}
+          {folderGroups.map((folder) => (
+            <FolderGroupItem
+              key={folder.label}
+              group={folder}
+              isExpanded={expandedFolders.has(folder.label)}
+              onToggle={() => toggleFolder(folder.label)}
               onDocumentSelect={onDocumentSelect}
               onRetry={onRetry}
             />
@@ -340,6 +373,7 @@ function CustomerGroupItem({
 export function CustomerSubGroup({
   documents,
   furiganaMap,
+  documentMasters,
   onDocumentSelect,
   onRetry,
 }: CustomerSubGroupProps) {
@@ -377,6 +411,7 @@ export function CustomerSubGroup({
         <CustomerGroupItem
           key={group.customerKey}
           group={group}
+          documentMasters={documentMasters}
           isExpanded={expandedGroups.has(group.customerKey)}
           onToggle={() => toggleGroup(group.customerKey)}
           onDocumentSelect={onDocumentSelect}
