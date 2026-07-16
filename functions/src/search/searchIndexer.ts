@@ -23,6 +23,11 @@ const db = getFirestore();
 /**
  * db.getAll(...indexRefs) を一度に大量実行するとピークメモリが膨らむため
  * (Issue #217、kanameone 512MiB OOM 201件既発)、この件数単位で逐次取得する。
+ *
+ * 1 doc あたりのトークン数上限は MAX_TOKENS_PER_FIELD(20) × 4 フィールド
+ * (customer/office/documentType/fileName) + 日付少数 ≈ 84 件(tokenizer.ts)。
+ * 10 は実測ではなく初期値であり、複製flag ON後にchunkサイズ・メモリ使用量を
+ * 観測して妥当性を再評価する(GOAL.md AC-e参照)。
  */
 const GET_ALL_CHUNK_SIZE = 10;
 
@@ -43,7 +48,9 @@ export const onDocumentWriteSearchIndex = onDocumentWritten(
     document: 'documents/{docId}',
     region: 'asia-northeast1',
     // Issue #217: 256MiB では db.getAll(...indexRefs) 時に境界を越えOOM頻発 (kanameone 04-14 12回+, 04-15 5回)。
-    // 応急で 512MiB に増強。本質対応 (getAll chunk化) は再発時に別Issueで検討。
+    // 応急で 512MiB に増強。本質対応 (getAll chunk化) は GET_ALL_CHUNK_SIZE 導入で実施済み
+    // (複数顧客FAX複製機能の前提整備、docs/handoff/GOAL.md参照)。複製flag ON後にchunkサイズ・
+    // メモリ使用量を再実測し、本設定の妥当性(縮小余地の有無)を評価する。
     memory: '512MiB',
     timeoutSeconds: 60,
   },
