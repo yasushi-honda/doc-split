@@ -73,37 +73,56 @@ describe('ocrProcessor OCR結果クリーンアップ配線契約 (Issue #625)',
    * processDocument内には capPageResultsAggregate 用の try/catch (Issue #293/#297) が
    * 先行して存在するため、`}\s*catch\s*\(\s*err\s*\)` を processDocumentBody 全体に対して
    * 素朴にマッチさせると先行 catch を誤って拾う(#622 と同種の vacuous risk)。
-   * `await db.runTransaction(` 以降にスコープを絞り、その直後のcatchのみを抽出する。
+   * `await applyOcrCompletionTransaction(` 以降にスコープを絞り、その直後のcatchのみを抽出する。
+   *
+   * kanameone現場要件「複数顧客FAX複製機能」(GOAL.md)対応で、最終transaction本体
+   * (`db.runTransaction(...)`)は processDocument から applyOcrCompletionTransaction() へ
+   * 抽出済み(OCR/Storage副作用を含まず単体でintegration test可能にするため)。
+   * processDocument側のtry/catch(補償削除の配線)自体は変更していないため、
+   * anchorを db.runTransaction( → applyOcrCompletionTransaction( に更新するのみで
+   * Issue #625の不変条件は引き続き同じテストで検証できる。
    */
   function extractRunTransactionCatchBlock(): string {
-    const runTransactionIdx = processDocumentBody.indexOf('await db.runTransaction(');
-    expect(runTransactionIdx, 'await db.runTransaction( が見つからない').to.be.greaterThan(-1);
-    const fromTransaction = processDocumentBody.slice(runTransactionIdx);
+    const callIdx = processDocumentBody.indexOf('await applyOcrCompletionTransaction(');
+    expect(callIdx, 'await applyOcrCompletionTransaction( が見つからない').to.be.greaterThan(-1);
+    const fromCall = processDocumentBody.slice(callIdx);
 
-    const transactionCallbackBlock = extractBraceBlock(
-      fromTransaction,
-      'await db.runTransaction(',
+    const callArgsBlock = extractBraceBlock(
+      fromCall,
+      'await applyOcrCompletionTransaction(',
       { anchorMode: 'after-match' }
     );
-    expect(transactionCallbackBlock, 'db.runTransactionコールバック本体の抽出に失敗した').to.not.be
+    expect(callArgsBlock, 'applyOcrCompletionTransaction呼出引数の抽出に失敗した').to.not.be
       .null;
 
-    const afterCallbackIdx = fromTransaction.indexOf(transactionCallbackBlock!) +
-      transactionCallbackBlock!.length;
-    const afterCallback = fromTransaction.slice(afterCallbackIdx);
+    const afterCallIdx = fromCall.indexOf(callArgsBlock!) + callArgsBlock!.length;
+    const afterCall = fromCall.slice(afterCallIdx);
 
-    const catchBlock = extractBraceBlock(afterCallback, /\}\s*catch\s*\(\s*err\s*\)\s*/, {
+    const catchBlock = extractBraceBlock(afterCall, /\}\s*catch\s*\(\s*err\s*\)\s*/, {
       anchorMode: 'after-match',
     });
-    expect(catchBlock, 'db.runTransaction直後のcatchブロックが抽出できない').to.not.be.null;
+    expect(catchBlock, 'applyOcrCompletionTransaction呼出直後のcatchブロックが抽出できない').to.not.be.null;
     return catchBlock!;
   }
 
   it('最終transactionはtry/catchで包まれている', () => {
-    expect(processDocumentBody).to.match(
-      /try\s*\{\s*await\s+db\.runTransaction\(/,
-      'db.runTransaction呼出がtry/catchで包まれていない — 失敗時の補償削除が配線されていない'
-    );
+    // kanameone現場要件対応(code-review high指摘)で、flag読取(isFaxDuplicationEnabled)を
+    // try直後・applyOcrCompletionTransaction呼出より前に配置したため、try{直後に
+    // 呼出が来ることを厳密に要求する旧アサーションは緩和する。processDocument内には
+    // capPageResultsAggregate用の先行try/catch(Issue #293/#297)も存在するため、
+    // 単純に最初の"try {"を拾うと誤検出する(#622同種のvacuous risk)。
+    // applyOcrCompletionTransaction呼出の直前にある"try {"まで遡り、その間に
+    // ブロックを閉じる"}"が挟まっていない(=同一tryブロック内である)ことを確認する。
+    const callIdx = processDocumentBody.indexOf('await applyOcrCompletionTransaction(');
+    expect(callIdx, 'await applyOcrCompletionTransaction( が見つからない').to.be.greaterThan(-1);
+    const beforeCall = processDocumentBody.slice(0, callIdx);
+    const lastTryIdx = beforeCall.lastIndexOf('try {');
+    expect(lastTryIdx, 'applyOcrCompletionTransaction呼出より前にtry {が見つからない').to.be.greaterThan(-1);
+    const between = processDocumentBody.slice(lastTryIdx, callIdx);
+    expect(
+      between,
+      'applyOcrCompletionTransaction呼出がtry/catchで包まれていない — 失敗時の補償削除が配線されていない'
+    ).to.not.match(/\}/);
   });
 
   it('catchブロックはocrResultUrlがある場合のみcompensateDeleteOnFailureを呼ぶ', () => {

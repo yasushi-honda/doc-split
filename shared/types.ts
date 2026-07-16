@@ -166,6 +166,16 @@ export interface Document {
   verified?: boolean;           // 確認済みフラグ（デフォルト: false）
   verifiedBy?: string | null;   // 確認者UID
   verifiedAt?: Timestamp | null; // 確認日時
+
+  /**
+   * 複数顧客FAX複製機能 (kanameone現場要件, ADR未採番 / GOAL.md D4, 2026-07-16)。
+   * OCRで複数顧客候補を検出したFAXの元doc・全コピーに同一値(元docのid)を付与する。
+   * `doc.id === doc.distributionId` で元doc判定。双方向配列(duplicatedFrom/duplicatedInto)は
+   * 削除時の孤児化を避けるため持たない。兄弟一覧は `where('distributionId','==',X)` で導出。
+   * 手動分割で生成される子docへは伝播しない(配信マーカーの役目は完了、子は顧客固有の精製物)。
+   * 「自動配信・要整理」の識別は `distributionId && !verified` から導出する。
+   */
+  distributionId?: string;
 }
 
 // ============================================
@@ -566,6 +576,14 @@ export interface ErrorRecord {
   errorType: ErrorType;
   fileName: string;
   fileId: string;
+  /**
+   * このエラーを実際に発生させたdocumentId(BEのerrors.documentIdをそのまま透過)。
+   * 複数顧客FAX複製機能(kanameone現場要件)により同一fileIdを複数documentが共有し
+   * うるため、再処理対象docの特定はfileIdではなくこちらを優先して使うこと
+   * (fileId単独では兄弟docのどれかを誤って再処理・クリアしてしまう、GOAL.md AC-h関連)。
+   * 古いerror記録ではdocumentIdが存在しない場合がある(BE側はoptional)。
+   */
+  documentId?: string;
   totalPages: number;
   successPages: number;
   failedPages: number;

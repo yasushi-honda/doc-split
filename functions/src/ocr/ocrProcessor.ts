@@ -34,6 +34,7 @@ import {
   arbitrateOfficeName,
   arbitrateCustomerName,
   arbitrateDate,
+  type CustomerCandidate,
 } from '../utils/extractors';
 import { generateDisplayFileName } from '../../../shared/generateDisplayFileName';
 import { loadMasterData } from '../utils/loadMasterData';
@@ -41,11 +42,16 @@ import {
   capPageResultsAggregate,
 } from '../utils/textCap';
 import { buildPageResult, type RawPageOcrResult } from './buildPageResult';
-import { buildOcrExtractionUpdatePayload } from './ocrUpdatePayloadBuilder';
+import {
+  buildOcrExtractionUpdatePayload,
+  type OcrExtractionUpdateFields,
+} from './ocrUpdatePayloadBuilder';
 import { validatePageResultsForReuse } from './pageResultsReuse';
 import { resolveDetailFields } from './documentDetail';
 import { applyConfirmedFieldProtection } from './confirmedFieldMerge';
 import { buildOcrExcerpt } from './ocrExcerpt';
+import { isFaxDuplicationEnabled } from '../utils/featureFlags';
+import { planFaxDuplication, buildFaxDuplicationMemberOverride } from './faxDuplication';
 import {
   computeOcrResultObjectsToDelete,
   shouldSkipCompensatingDelete,
@@ -442,7 +448,98 @@ export async function processDocument(
   // (Issue #626)で早期定義済みのためここでは再定義しない。
 
   try {
-    await db.runTransaction(async (tx) => {
+    // kanameone現場要件「複数顧客FAX複製機能」(GOAL.md D3)。flagはtx開始前に1回だけ読む
+    // (トランザクション再試行のたびに読み直す必要はない、config読取に過ぎず docRef のスナップ
+    // ショットとの整合性は不要なため)。try内に置くのはIssue #625の補償削除保護を
+    // このFirestore読取にも及ぼすため(code-review指摘: tryの外に置くとこの読取が失敗
+    // した場合にocrResultUrlのStorage孤児がcompensateDeleteOnFailureされずに残る)。
+    const faxDuplicationEnabled = await isFaxDuplicationEnabled(db);
+    await applyOcrCompletionTransaction({
+      db,
+      docRef,
+      docId,
+      ownershipExpectation,
+      extractionFields,
+      customerCandidates: customerResult.candidates,
+      fileDateFormatted: dateResult.formattedDate ?? undefined,
+      savedOcrResult,
+      pageResults,
+      ocrExcerpt,
+      faxDuplicationEnabled,
+      tokenCounts: {
+        inputTokens: totalInputTokens,
+        outputTokens: totalOutputTokens,
+        thinkingTokens: totalThinkingTokens,
+        pagesProcessed: totalPages,
+      },
+    });
+  } catch (err) {
+    // Issue #625: 最終transaction失敗時(supersede/ドキュメント削除/その他エラー)、
+    // 今回このrunがStorageに新規作成したオブジェクトをbest-effortで補償削除してから、
+    // 元のエラーをそのままre-throwする(呼出元processOCR.tsのsupersede/エラー処理は
+    // 一切変更しない)。
+    if (ocrResultUrl) {
+      await compensateDeleteOnFailure(docId, ocrRunId, functionName);
+    }
+    throw err;
+  }
+
+  // Issue #625: transaction成功後(=確実にcommit済み)、ocr-results/{docId}/配下を
+  // 正規化する。今回Storageに保存した場合はそのrunのみ残し、保存しなかった場合は
+  // (OCR結果がFirestore本体にインライン保持されている)配下の全オブジェクトを孤児と
+  // みなして削除する。
+  await cleanupOrphanedOcrResultObjects(docId, ocrRunId, ocrResultUrl ? ocrRunId : null, functionName);
+
+  return {
+    pagesProcessed: totalPages,
+    inputTokens: totalInputTokens,
+    outputTokens: totalOutputTokens,
+    thinkingTokens: totalThinkingTokens,
+  };
+}
+
+/**
+ * OCR完了時の最終Firestore書込み(confirmed保護マージ・複数顧客FAX複製・detail/main
+ * dual-write)を行う。processDocument()から抽出済み(Issue #626以前の巨大関数から分離)。
+ *
+ * OCR(Gemini呼出)・Storageダウンロードを一切含まないため、既にOCR抽出済みの入力さえ
+ * 与えれば単体でintegration test可能(emulatorのみで完結、AC-b/AC-c/AC-h参照)。
+ */
+export async function applyOcrCompletionTransaction(input: {
+  db: admin.firestore.Firestore;
+  docRef: FirebaseFirestore.DocumentReference;
+  docId: string;
+  ownershipExpectation: OcrRunExpectation;
+  extractionFields: OcrExtractionUpdateFields;
+  customerCandidates: CustomerCandidate[];
+  fileDateFormatted: string | undefined;
+  savedOcrResult: string;
+  pageResults: RawPageOcrResult[];
+  ocrExcerpt: string;
+  faxDuplicationEnabled: boolean;
+  tokenCounts: {
+    inputTokens: number;
+    outputTokens: number;
+    thinkingTokens: number;
+    pagesProcessed: number;
+  };
+}): Promise<void> {
+  const {
+    db,
+    docRef,
+    docId,
+    ownershipExpectation,
+    extractionFields,
+    customerCandidates,
+    fileDateFormatted,
+    savedOcrResult,
+    pageResults,
+    ocrExcerpt,
+    faxDuplicationEnabled,
+    tokenCounts,
+  } = input;
+
+  await db.runTransaction(async (tx) => {
       const freshSnap = await tx.get(docRef);
       // tryStartProcessing() と同じ存在チェックパターン。
       // ドキュメントが処理中に削除されると tx.update() は NOT_FOUND を投げるが、
@@ -467,10 +564,10 @@ export async function processDocument(
           docId,
           ownership.reason,
           {
-            inputTokens: totalInputTokens,
-            outputTokens: totalOutputTokens,
-            thinkingTokens: totalThinkingTokens,
-            pagesProcessed: totalPages,
+            inputTokens: tokenCounts.inputTokens,
+            outputTokens: tokenCounts.outputTokens,
+            thinkingTokens: tokenCounts.thinkingTokens,
+            pagesProcessed: tokenCounts.pagesProcessed,
           }
         );
       }
@@ -494,15 +591,138 @@ export async function processDocument(
         category: freshData.category,
       });
 
+      // displayFileName生成のヘルパー(通常/複製メンバー双方で使う。#178 Stage 1、Issue #526 D2で
+      // マージ後の最終メタから生成する規約はメンバー単位でも同様)。
+      const buildMemberDisplayFileName = (fields: {
+        documentType: string;
+        customerName: string;
+        officeName: string;
+      }) =>
+        generateDisplayFileName({
+          documentType: fields.documentType,
+          customerName: fields.customerName,
+          officeName: fields.officeName,
+          fileDate: fileDateFormatted,
+        });
+
+      // kanameone現場要件「複数顧客FAX複製機能」(GOAL.md D1-D5)。exact一致&&非isDuplicateの
+      // 顧客候補をcustomerId重複排除した結果が2件以上の場合、検出人数分の複製を生成し各コピー
+      // へ異なるcustomerIdを割り当てる。既にdistributionIdを持つdoc(複製元・複製コピー自身の
+      // 再処理)は対象外(再複製の無限ループ防止、AC-c)。flag OFF・候補1件以下時は現行の
+      // 手動選択フロー(needsManualCustomerSelection)のまま(下のelse節、既存挙動を完全維持)。
+      const alreadyDistributed =
+        typeof freshData.distributionId === 'string' && freshData.distributionId.length > 0;
+      // code-review high指摘(CONFIRMED): 人間が既に顧客を確定/確認済み(customerConfirmed
+      // またはverified)のdocは、ops script経由の再処理(customerConfirmedをクリアしない
+      // 経路)等で再度OCRが走っても複製対象にしてはならない。confirmedFieldMerge.tsの
+      // 保護と同じ精神で、確定済み割当の無条件上書き・意図しない分割を防ぐ。
+      const alreadyConfirmedOrVerified =
+        freshData.customerConfirmed === true || freshData.verified === true;
+      const distributionPlan = planFaxDuplication({
+        flagEnabled: faxDuplicationEnabled,
+        alreadyDistributed,
+        alreadyConfirmedOrVerified,
+        candidates: customerCandidates,
+      });
+      console.log(`[ocrProcessor] faxDuplication plan for ${docId}: ${distributionPlan.reason}`, {
+        operation: 'ocrProcessor',
+        event: 'faxDuplicationPlan',
+        documentId: docId,
+        reason: distributionPlan.reason,
+        distributedCount: distributionPlan.assignments.length,
+        consideredCandidates: distributionPlan.consideredCandidates,
+      });
+
+      if (distributionPlan.shouldDuplicate) {
+        const [firstAssignment, ...restAssignments] = distributionPlan.assignments;
+        const originalMember = {
+          ...merged,
+          ...buildFaxDuplicationMemberOverride(firstAssignment!, docId),
+        };
+        const originalDisplayFileName = buildMemberDisplayFileName(originalMember);
+
+        tx.update(docRef, {
+          ...originalMember,
+          ...(originalDisplayFileName ? { displayFileName: originalDisplayFileName } : {}),
+          summary: admin.firestore.FieldValue.delete(),
+          summaryTruncated: admin.firestore.FieldValue.delete(),
+          summaryOriginalLength: admin.firestore.FieldValue.delete(),
+          ocrExcerpt,
+          status: 'processed',
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        tx.set(docRef.collection('detail').doc('main'), {
+          ocrResult: savedOcrResult,
+          pageResults,
+        });
+
+        // コピーpayload構築 = allowlist方式(GOAL.md): 分割フロー(pdfOperations.tsのbatch.set+
+        // detail dual-write)を踏襲するが、ocrRunId/retry・error状態/search/集計キー/split系
+        // フィールド(isSplitSource等)/provenanceは引き継がない(mergedはこれらを元々含まない
+        // ため自然に除外される)。Storage実体は共有(D2)のためfileId/fileUrl/mimeType/fileName
+        // はfreshDataから引き継ぎ、新規Storageコピーは作成しない。
+        //
+        // ただしOCRテキストのoffload実体(ocrResultUrl)はD2の共有対象外(Codexセカンド
+        // オピニオン指摘 P1): 元docのocrRunId配下を指したままだと、元docの以降の
+        // 再処理でIssue #625成功パスcleanupが削除し、コピー側のgetOcrTextが
+        // not-foundになる。各コピー専用のStorageパスへ複製し独立させる。
+        //
+        // 複製先キーはnewDocRef.id(トランザクション再試行毎に新規採番される非決定値)
+        // ではなく、`${docId}(元doc自身のid)-${assignment.customerId}`という再試行に
+        // 対して安定な値にする(CodeRabbit指摘: newDocRef.idを使うと、Firestore書込み
+        // 競合によるtransaction自動リトライ時にStorageコピーだけ複数回実行され、
+        // 前回試行分が孤児オブジェクトとして残る)。docId+customerIdは共に
+        // トランザクション開始前から確定済みの入力(customerCandidatesはFirestore
+        // read非依存の静的引数)のため、リトライで再実行されても同一パスに冪等に
+        // 上書きされるだけで済む。
+        for (const assignment of restAssignments) {
+          const newDocRef = db.collection('documents').doc();
+          const memberOcrResultUrl = merged.ocrResultUrl
+            ? await copyOcrResultForDistributionMember(
+                merged.ocrResultUrl,
+                `${docId}-${assignment.customerId}`,
+                ownershipExpectation.ocrRunId
+              )
+            : merged.ocrResultUrl;
+          const memberFields = {
+            ...merged,
+            ...buildFaxDuplicationMemberOverride(assignment, docId),
+            ocrResultUrl: memberOcrResultUrl,
+          };
+          const memberDisplayFileName = buildMemberDisplayFileName(memberFields);
+
+          tx.set(newDocRef, {
+            ...memberFields,
+            ...(memberDisplayFileName ? { displayFileName: memberDisplayFileName } : {}),
+            id: newDocRef.id,
+            fileId: freshData.fileId,
+            fileName: freshData.fileName,
+            mimeType: freshData.mimeType,
+            fileUrl: freshData.fileUrl,
+            targetPageNumber: freshData.targetPageNumber,
+            ...(freshData.sourceType !== undefined ? { sourceType: freshData.sourceType } : {}),
+            ...(freshData.messageId !== undefined ? { messageId: freshData.messageId } : {}),
+            ocrExcerpt,
+            status: 'processed',
+            processedAt: admin.firestore.FieldValue.serverTimestamp(),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+          tx.set(newDocRef.collection('detail').doc('main'), {
+            ocrResult: savedOcrResult,
+            pageResults,
+          });
+        }
+
+        console.log(
+          `Document ${docId} distributed to ${distributionPlan.assignments.length} customers (faxDuplication)`
+        );
+        return;
+      }
+
       // displayFileName 生成 (#178 Stage 1、Issue #526 D2でマージ後の最終メタから生成)
       // 「未判定」「不明顧客」等のデフォルト値・日付のみでの識別不能な名前生成の抑制は
       // generateDisplayFileName内部で行うため、ここでは merged の値をそのまま渡す。
-      const displayFileName = generateDisplayFileName({
-        documentType: merged.documentType,
-        customerName: merged.customerName,
-        officeName: merged.officeName,
-        fileDate: dateResult.formattedDate ?? undefined,
-      });
+      const displayFileName = buildMemberDisplayFileName(merged);
 
       // ドキュメント更新
       // Issue #548-B1: 要約は自動生成しない (regenerateSummary onCall 経由の手動生成のみ)。
@@ -534,29 +754,6 @@ export async function processDocument(
         `Document ${docId} processed: ${merged.documentType}, ${merged.customerName}`
       );
     });
-  } catch (err) {
-    // Issue #625: 最終transaction失敗時(supersede/ドキュメント削除/その他エラー)、
-    // 今回このrunがStorageに新規作成したオブジェクトをbest-effortで補償削除してから、
-    // 元のエラーをそのままre-throwする(呼出元processOCR.tsのsupersede/エラー処理は
-    // 一切変更しない)。
-    if (ocrResultUrl) {
-      await compensateDeleteOnFailure(docId, ocrRunId, functionName);
-    }
-    throw err;
-  }
-
-  // Issue #625: transaction成功後(=確実にcommit済み)、ocr-results/{docId}/配下を
-  // 正規化する。今回Storageに保存した場合はそのrunのみ残し、保存しなかった場合は
-  // (OCR結果がFirestore本体にインライン保持されている)配下の全オブジェクトを孤児と
-  // みなして削除する。
-  await cleanupOrphanedOcrResultObjects(docId, ocrRunId, ocrResultUrl ? ocrRunId : null, functionName);
-
-  return {
-    pagesProcessed: totalPages,
-    inputTokens: totalInputTokens,
-    outputTokens: totalOutputTokens,
-    thinkingTokens: totalThinkingTokens,
-  };
 }
 
 // MAX_RETRY_COUNT は side-effect-free な constants.ts から re-export (#196)。
@@ -995,6 +1192,37 @@ async function saveOcrResult(docId: string, ocrRunId: string, ocrResult: string)
   );
 
   return `gs://${bucket.name}/${objectPath}`;
+}
+
+/**
+ * 複製配信メンバー用に、offload済みOCR結果オブジェクトを自身専用のStorageパスへ複製する
+ * (Codexセカンドオピニオン指摘 P1: 複製コピーが元docのStorage実体(ocr-results/{元docId}/...)
+ * をそのまま参照すると、元docが後で再処理された際の成功パスcleanup(Issue #625、
+ * `ocr-results/{docId}/`をdocId単位で所有する前提)が旧オブジェクトを削除してしまい、
+ * コピー側のgetOcrTextがnot-foundになる)。GCSのserver-side copyでバイト再アップロードを
+ * 避けつつ、「1 doc = 1 Storage実体」の前提を複製メンバーにも適用し、Issue #625の
+ * cleanupロジック自体には一切手を入れない。
+ *
+ * destinationKeyは呼出元でnewDocRef.id(トランザクション再試行毎に非決定に変わる値)
+ * ではなく`${元docId}-${customerId}`を渡すこと(CodeRabbit指摘: destination pathが
+ * リトライ非決定だと、transaction自動リトライ時にStorageコピーだけ複数回実行され
+ * 前回試行分が孤児化する)。
+ */
+async function copyOcrResultForDistributionMember(
+  sourceUrl: string,
+  destinationKey: string,
+  ocrRunId: string
+): Promise<string> {
+  const bucket = storage.bucket();
+  const sourcePath = sourceUrl.replace(`gs://${bucket.name}/`, '');
+  const destPath = `ocr-results/${destinationKey}/${ocrRunId}.txt`;
+
+  await withRetry(
+    () => bucket.file(sourcePath).copy(bucket.file(destPath)),
+    RETRY_CONFIGS.storage
+  );
+
+  return `gs://${bucket.name}/${destPath}`;
 }
 
 function createDefaultOcrResultStorageAdapter(): OcrResultStorageAdapter {

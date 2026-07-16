@@ -152,6 +152,7 @@ async function fetchErrors(
       ),
       fileName: (docData?.fileName as string) || (data.documentId as string) || '不明',
       fileId: (data.fileId as string) || '',
+      documentId: (data.documentId as string) || undefined,
       totalPages,
       successPages: 0,
       failedPages: totalPages,
@@ -217,17 +218,38 @@ export function useUpdateErrorStatus() {
 interface ReprocessParams {
   errorId: string
   fileId: string
+  /**
+   * このエラーを実際に発生させたdocumentId。存在する場合は必ずこちらを使う
+   * (複数顧客FAX複製機能によりfileIdは複数documentで共有されうるため、
+   * fileId単独のクエリでは無関係な兄弟docを誤って再処理・クリアする恐れがある)。
+   * 古いerror記録でdocumentId未設定の場合のみfileId検索にフォールバックする。
+   */
+  documentId?: string
 }
 
-async function requestReprocess({ errorId, fileId }: ReprocessParams): Promise<{ documentId: string | null }> {
-  // 対応するドキュメントを検索 (writeより先にread)
-  const docsQuery = query(
-    collection(db, 'documents'),
-    where('fileId', '==', fileId),
-    limit(1)
-  )
-  const snapshot = await getDocs(docsQuery)
-  const firstDoc = snapshot.docs[0]
+async function requestReprocess({
+  errorId,
+  fileId,
+  documentId,
+}: ReprocessParams): Promise<{ documentId: string | null }> {
+  // 対応するドキュメントを特定 (writeより先にread)。documentIdが分かっている場合は
+  // それを直接使う。fileId検索へのフォールバックは、documentId未記録の古いerrorのみ
+  // (複数顧客FAX複製機能導入後はfileId単独では兄弟docのどれかにヒットしうるため)。
+  let targetDocId: string | null = null
+  if (documentId) {
+    const docSnap = await getDoc(doc(db, 'documents', documentId))
+    if (docSnap.exists()) {
+      targetDocId = documentId
+    }
+  } else {
+    const docsQuery = query(
+      collection(db, 'documents'),
+      where('fileId', '==', fileId),
+      limit(1)
+    )
+    const snapshot = await getDocs(docsQuery)
+    targetDocId = snapshot.docs[0]?.id ?? null
+  }
 
   // ADR-0018 Phase D PR4b (Issue #547): エラーstatus更新・documentクリア・
   // detail/main クリアを単一batchで原子的に実行 (途中失敗による不整合状態を防ぐ)
@@ -235,11 +257,11 @@ async function requestReprocess({ errorId, fileId }: ReprocessParams): Promise<{
   const errorRef = doc(db, 'errors', errorId)
   batch.update(errorRef, { status: 'pending' })
 
-  if (firstDoc) {
-    await appendReprocessClearToBatch(batch, firstDoc.id)
+  if (targetDocId) {
+    await appendReprocessClearToBatch(batch, targetDocId)
   }
   await batch.commit()
-  return { documentId: firstDoc?.id ?? null }
+  return { documentId: targetDocId }
 }
 
 export function useReprocessError() {

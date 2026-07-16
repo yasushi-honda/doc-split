@@ -257,6 +257,17 @@ export function updateDocumentInListCache(
  * 再処理時にリセットすべき親docの全フィールドを返すファクトリ関数
  * 直接の呼出元は appendReprocessClearToBatch のみ（再処理3経路は
  * ヘルパー経由で間接利用）。deleteField() はファクトリ関数内で毎回生成（安全性）
+ *
+ * TODO(GOAL.md task 6-2, PR-C): 複数顧客FAX複製機能(kanameone現場要件)により、
+ * distributionIdを持つdoc(複製元・複製コピー)はcustomerId/customerName/careManagerが
+ * 「OCRが自動抽出した提案値」ではなく「配信によって確定した顧客の識別子」である。
+ * 現状この関数は無条件でcustomerConfirmed:false + customerId等をdeleteFieldするため、
+ * distributionId保持docを本関数経由で再処理すると、BE側(functions/src/ocr/faxDuplication.ts
+ * のalreadyConfirmedOrVerifiedガード・confirmedFieldMerge保護)が機能する前提
+ * (=customerConfirmedがtrueのまま)が崩れ、次回OCR完了時にcustomerIdが上書きされてしまう
+ * (Codexセカンドオピニオンで指摘済みの既知ギャップ、evaluator指摘で再確認)。
+ * task 6-2でこの関数(または呼出元)にdistributionId分岐を追加し、複製メンバーのdocは
+ * 顧客系フィールドをクリア対象から除外すること。flag ON展開(task 8)より前に完了必須。
  */
 export function getReprocessClearFields() {
   const df = deleteField()
