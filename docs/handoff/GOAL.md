@@ -1,42 +1,91 @@
 ---
 updated: 2026-07-16
 ---
-<!-- session134: 新ミッション着手。前ミッション(Issue #664 phantom count恒久修正、ADR-0021)はsession133で完全達成済み(全文はdocs/handoff/LATEST.md session133サマリ参照予定、git history PR #669/#670/#671でも追跡可)。本ミッションは前ミッションの発端だった「複数顧客FAX複製機能」の設計相談の本体で、Issue #664解決によりブロッカーが除去されたため着手。kanameone現場(平出さん)の要件確定(2026-07-16受領): ①複数利用者記載FAXは検出人数分複製して各利用者フォルダへ配信、後からCMが手動分割 ②担当CMタブの利用者配下フォルダ表記を書類種別名→カテゴリ名に変更。 -->
+<!-- session134: 新ミッション着手。前ミッション(Issue #664 phantom count恒久修正、ADR-0021)はsession133で完全達成済み(全文はdocs/handoff/LATEST.md session133サマリ参照予定、git history PR #669/#670/#671でも追跡可)。本ミッションは前ミッションの発端だった「複数顧客FAX複製機能」の設計相談の本体で、Issue #664解決によりブロッカーが除去されたため着手。kanameone現場(平出さん)の要件確定(2026-07-16受領): ①複数利用者記載FAXは検出人数分複製して各利用者フォルダへ配信、後からCMが手動分割 ②担当CMタブの利用者配下フォルダ表記を書類種別名→カテゴリ名に変更(タスク2で完了・PR #672)。 -->
 
 ## 現在のミッション
 
-kanameone現場要件2件を実装する。①「複数顧客FAX複製機能」: OCRで複数の顧客候補を検出した受信FAXを検出人数分複製し、各コピーに異なるcustomerIdを割り当てて各利用者フォルダへ配信する(後から担当CMが手動分割で整理する運用)。②「担当CMフォルダのカテゴリ表記化」: 担当CM別タブの利用者配下フォルダ表記を書類種別名からカテゴリ名(master.category)に変更する。
+kanameone現場要件「複数顧客FAX複製機能」を実装する。OCRで複数の顧客候補を検出した受信FAXを検出人数分複製し、各コピーに異なるcustomerIdを割り当てて各利用者フォルダへ配信する(後から担当CMが手動分割で整理する運用)。カテゴリ表記化(要件②)はPR #672で完了済み。
 
 ## 背景・why
 
 - 発端はsession133の設計相談。「ページ分割の自動提案は精度が低いため、複数利用者記載のFAXは分割せず全員に同じものを配信し、後で担当CMごとに操作してもらう方が良い」という現場提案(decision-maker経由)。前提整備としてIssue #664(create/delete順序不同のphantom count)をADR-0021(materialized projection)で先行解決済み
-- 2026-07-16に現場(平出さん)から要件が確定: 「利用者3名が記載されている4ページのFAXが届いた際、3名それぞれのフォルダに4ページのファイルが届くようにしてほしい。あとで手動で分割作業をするイメージ」+ カテゴリ表記化の新規要望
-- 現場報告のバグ「自動分割後に手動修正しても『分割内容の確認』ボタンで反映されない」は、主要経路はPR #632で修正済み。残存経路(手動修正後の自動検出再実行でインデックスキーのsegmentEditsが誤適用)が特定済みで、本ミッションで修正する
-- 実装前のFE/BE横断影響調査完了(session134、Explore 4並列)。要点: ①cleanup-duplicates.jsがfileName単独判定のため複製コピーを誤削除する破壊的リスク(実コード確認済み、複製実装と同一PRで判定キー拡張必須) ②複製注入点はOCR後(ocrProcessor最終tx内)が推奨=Gemini課金N倍回避 ③searchIndexerのgetAll未chunk化(kanameoneで512MiB OOM 201件既発)の前倒し対応が事実上必須 ④再処理経由の再複製無限ループのガード必須 ⑤FE: firestoreToDocument/getReprocessClearFields/useDocumentGroups.ts:189のas Document直キャスト経路への複製フィールド追加 ⑥手動顧客選択UI(選択待ちバッジ等)の意味変化
+- 2026-07-16に現場(平出さん)から要件が確定: 「利用者3名が記載されている4ページのFAXが届いた際、3名それぞれのフォルダに4ページのファイルが届くようにしてほしい。あとで手動で分割作業をするイメージ」
+- 実装前のFE/BE横断影響調査完了(session134、Explore 4並列)+ `/impl-plan`(フルモード)+ Codexセカンドオピニオン(plan mode, effort=high)を経て設計確定
+
+### 設計確定の経緯
+
+1. **影響調査(session134)**: cleanup-duplicates.jsがfileName単独判定のため複製コピーを誤削除する破壊的リスク(実コード確認済み)、複製注入点はOCR後(ocrProcessor最終tx内)が推奨=Gemini課金N倍回避、searchIndexerのgetAll未chunk化(kanameoneで512MiB OOM 201件既発)の前倒し対応が事実上必須、再処理経由の再複製無限ループのガード必須
+2. **Codexセカンドオピニオン(Critical指摘、実コード裏取りで確認)**:
+   - `getReprocessClearFields()`(useDocuments.ts:23-24,43)は`customerId`/`customerName`/`customerConfirmed`をクリアする実装であることを確認。コピーを再処理すると割当が消え元doc候補1に誤上書きされる、という指摘は事実 → **修正必須**
+   - `matchType==='exact'`(extractors.ts:284 `matchingText.includes(normalizedDocName)`)は正規化テキストの部分文字列一致であることを確認。家族名等の偽陽性リスクは実在 → `!isDuplicate`+customerId重複排除+判定ログで緩和
+3. **Fable5レビュー(Codex案からの簡素化)**: 新フィールドは`distributionId: string`1本のみ(元doc/コピー全メンバーに付与、`doc.id===doc.distributionId`で元doc判定)。双方向配列(`duplicatedFrom`/`duplicatedInto`)は削除時に孤児化するため不採用。`distributionStatus`等の新規statusフィールドも不採用 — 既存の`verified`(人手確認済みか)+`confirmedBy`(自動時null)で「自動配信/要整理」の識別は導出可能なため、既存プリミティブの重複実装を避けた
+
+## 採用設計
+
+### D1: 複製注入点 = OCR後
+`ocrProcessor.ts`最終トランザクション内(478-531行相当)。OCRは1回のみ実行し、結果を候補人数分のdocへ展開する。Gemini課金はN倍化しない。
+
+### D2: Storage実体 = 共有
+全コピーが同一`original/`のfileUrlを参照(独立コピーにしない、容量N倍を回避)。既存の`deleteDocument`共有fileUrl fail-closedガードを活用。gmailLogs**と**uploadLogsの削除は`(sourceType, fileId)`単位で他doc残存チェックを追加(Codex指摘#5、uploadLogsは見落としだった)。
+
+### D3: 複製トリガー条件
+`matchType==='exact' && !isDuplicate`の候補が2件以上 → customerIdで重複排除した上で全員に配信。構造化ログ(候補・スコア・配信数)を残し初週の過剰/過少配信を観測可能にする。flag OFF時は現行どおり`needsManualCustomerSelection`の手動選択フローのまま(同一条件の分岐として自然に書ける)。
+
+### D4: 複製識別フィールド = `distributionId`1本
+元doc・全コピーに同一値を付与。双方向配列は持たない(削除時の孤児化を構造的に回避)。兄弟一覧は`where('distributionId','==',X)`で導出。コピーを手動分割した場合、生成される子docへ`distributionId`は伝播しない(配信マーカーの役目は完了、子は顧客固有の精製物)。
+
+### D5: 元doc/コピーの状態
+`customerConfirmed:true`+`confirmedBy:null`+`verified:false`で生成(新規statusフィールド不要)。「自動配信・要整理」の識別は`distributionId && !verified`から導出、UIバッジ表示もこの式を使う。
+
+### 再処理時のcustomerId保持(Codex Critical#1対応)
+`getReprocessClearFields()`に分岐追加: `distributionId`を持つdocは`customerId`/`customerName`/`customerConfirmed`/`careManager`をクリア対象から除外する。既存の`confirmedFieldMerge`保護(customerConfirmed:true時に顧客フィールドを維持する既存機構)がそのまま働き、新しい保護機構は不要。
+
+### コピーpayload構築 = allowlist方式
+分割フロー(`pdfOperations.ts`のbatch.set+detail dual-write)を踏襲するが、`ocrRunId`/retry・error状態/`search`/集計キー/split系フィールド(`isSplitSource`等)/provenanceは引き継がない。
+
+### cleanup-duplicates.js対応 = v1中間案
+`distributionId`を持つdocは削除対象から除外。同一fileNameグループに複数distributionが混在した場合はWARNで人間にエスカレーション(自動処理はしない)。フル案(distributionId単位のスコアリング削除)は実際の複合事象が観測されてから。
+
+### 件数意味論の下流影響 = 実害なし判定
+kanameoneの請求はFirestore egressコストベース(#547)で書類件数ベースのKPI・請求は存在しないため確認済み。現場周知のみで技術対応は不要。
 
 ## 完了の定義
 
-- [x] AC-a: 担当CM別タブで利用者展開時のフォルダがカテゴリ名で表示され、カテゴリ未運用環境では従来の書類種別表示にフォールバックすること(証明: `frontend`で`npx vitest run src/lib/__tests__/groupDocumentsByCategory.test.ts` 10件PASS + ブラウザスクショ)
-- [ ] AC-b: 複数顧客候補を検出したFAXが検出人数分のdocumentとして各顧客に配信されること(証明: integration test PASS + dev環境実機確認)
-- [ ] AC-c: 複製コピーの再処理で再複製が発生しないこと(証明: ループガードのunit/integration test PASS)
-- [ ] AC-d: cleanup-duplicates.jsが意図的な複製コピーを削除対象にしないこと(証明: 判定キー拡張のテスト or dry-run実証)
-- [ ] AC-e: 複製導入後もkanameone/cocoroでsearchIndexerのOOMが増加しないこと(証明: getAll chunk化 + デプロイ後のエラーログ確認)
+- [x] AC-a: 担当CM別タブで利用者展開時のフォルダがカテゴリ名で表示され、カテゴリ未運用環境では従来の書類種別表示にフォールバックすること(証明: PR #672マージ済み、`npx vitest run src/lib/__tests__/buildCustomerFolderGroups.test.ts` 9件PASS + ブラウザスクショ4枚)
+- [ ] AC-b: exact候補2名以上(!isDuplicate、customerId重複排除後)+flag ON時、documents N件生成(各customerId、各detail/main、共通distributionId)。flag OFF時は複製されず従来どおり1件+needsManualCustomerSelection(証明: integration test PASS)
+- [ ] AC-c: 複製コピー(distributionId保持)を再処理しても、customerId/customerName/careManagerが不変であること。かつ再複製が発生しないこと(証明: integration test PASS、再処理前後のcustomerId比較アサーション含む)
+- [ ] AC-d: cleanup-duplicates.jsがdistributionId保持docを削除対象にせず、同一fileName内の複数distribution混在をWARNログで検知すること(証明: スクリプトテスト or dry-run実証)
+- [ ] AC-e: searchIndexerのgetAll chunk化後、kanameone展開後にchunkサイズ・1イベント当たりのメモリ使用量・再試行率を観測し、OOMエラーが増加しないこと(証明: getAll chunk化 + デプロイ後のエラーログ確認 + 観測メトリクス)
 - [ ] AC-f: 分割確認画面の残存バグ(手動修正後の自動検出再実行でsegmentEdits誤適用)が修正されること(証明: PdfSplitModal.test.tsxに再現テスト追加しPASS)
-- [ ] AC-g: 全テスト・lint・型チェック・buildがPASSし、kanameone本番(必要ならcocoro)へ展開されること(証明: 各コマンド実行結果 + デプロイ記録)
-- 不変条件: 複製機能はクライアント別feature flagで制御し、既定OFFで導入する(kanameoneのみON想定)。ADR-0021の集計モデル・ADR-0016のidentity設計(docId namespace)を変更しない
+- [ ] AC-h: 元→コピー、コピー→元のどちらの削除順序でも、Storage実体とgmailLogs/uploadLogsが最後の1件の削除まで残ること。複製コピーを手動分割した場合、生成される子docにdistributionIdが伝播しないこと(証明: integration test PASS)
+- [ ] AC-g: 全テスト・lint・型チェック・buildがPASSし、kanameone本番へdistributionId+flag ON展開されること(cocoroはflag OFFのまま展開)(証明: 各コマンド実行結果 + デプロイ記録)
+- 不変条件: 複製機能はクライアント別feature flagで制御し、既定OFFで導入する(kanameoneのみON想定)。ADR-0021の集計モデル・ADR-0016のidentity設計(docId namespace)を変更しない。新規statusフィールド(distributionStatus等)は追加しない(既存verified/confirmedByで代替)
 
 ## 進行中のtasks
 
 - [x] 0. FE/BE横断影響調査(Explore 4並列: BE/FE/カテゴリ/運用インフラ)+cleanup-duplicates.js破壊的リスクの実コード裏取り
-- [x] 1. カテゴリ表記化の実装(B案: documentTypeKey→master.category join、全未分類時は書類種別フォールバック)。`groupDocumentsByCategory.ts`新設+テスト10件、`CustomerSubGroup.tsx`フォルダ汎用化、`GroupDocumentList.tsx`にuseDocumentTypes注入。テスト343/lint 0/build PASS
-- [ ] 2. カテゴリ表記化のブラウザ確認(#193教訓)+PR作成+/code-review+ui-verifiedラベル+マージ(decision-maker認可)
-- [ ] 3. 複数顧客FAX複製機能の/impl-planフル計画(設計判断3点の確定: 注入点OCR後/Storage共有or独立コピー/件数N倍の意味論了承。承認後にタスク分解を本節へ追記)
-- [ ] 4. (impl-plan承認後に分解) 複製機能の実装・防御的改修・テスト・展開
-- [ ] 5. 分割確認画面の残存バグ修正(AC-f)
+- [x] 1. カテゴリ表記化の実装(B案→レビュー後: カテゴリ解決できない書類は種別名フォルダのまま残す設計)。`buildCustomerFolderGroups.ts`+テスト9件、`CustomerSubGroup.tsx`/`GroupDocumentList.tsx`改修
+- [x] 2. カテゴリ表記化のブラウザ確認(#193教訓)+PR作成+/code-review medium(8角度finder、CONFIRMED 6件全て修正)+ui-verifiedラベル+マージ完了。**PR #672マージ済み(2026-07-16)、dev環境へ自動デプロイ済み**
+- [x] 3. 複数顧客FAX複製機能の`/impl-plan`フルモード策定+Codexセカンドオピニオン(plan mode)+Fable5レビュー(distributionId簡素化)を経て設計確定。decision-maker承認済み(2026-07-16)
+- [ ] 4. PR-A: searchIndexerのdb.getAllをチャンク化(独立・先行。既存OOM対策の前倒し、複製導入前の前提)
+- [ ] 5. PR-B: 複製本体(BE)
+  - [ ] 5-1. `shared/types.ts`に`distributionId?: string`追加
+  - [ ] 5-2. BE feature flag読取ヘルパー(`settings/features.faxDuplication`、scheduled関数向け新設、既定OFF、fail-closed)
+  - [ ] 5-3. `ocrProcessor`複製ロジック(exact複数&&!isDuplicate判定+customerId重複排除+構造化ログ→分割フロー踏襲のbatch.set(allowlist payload)+detail/main dual-write+distributionId付与、最終tx内でflag評価)
+  - [ ] 5-4. `deleteDocument`のgmailLogs**と**uploadLogsに`(sourceType,fileId)`単位の他doc残存チェック追加
+  - [ ] 5-5. `cleanup-duplicates.js`: distributionId保持docを除外+同一fileName内の複数distribution混在をWARN
+  - [ ] 5-6. integration test(AC-b/AC-c/AC-d/AC-h)
+- [ ] 6. PR-C: FE表示(型→BE→FEの順序)
+  - [ ] 6-1. `firestoreToDocument`+`useDocumentGroups.ts:189`直キャスト経路へ`distributionId`マッピング追加
+  - [ ] 6-2. `getReprocessClearFields()`に分岐追加: distributionId保持docは顧客系フィールドをクリア対象から除外
+  - [ ] 6-3. 詳細画面に「同一FAXをN名に配信・要整理」表示(`distributionId && !verified`から導出、BE flag ONより先行デプロイ)
+- [ ] 7. PR-D: 分割確認画面の残存バグ修正(AC-f。独立・並列可、本機能のリリース判定から分離)
+- [ ] 8. 展開: dev環境でexact複数candidateのseedデータ+flag ONで実機検証 → kanameone展開+flag ON(`/deploy`スキル、decision-maker認可) → cocoroはflag OFFのまま展開。PR-Aは複製flag ON前にchunkサイズ・メモリ・再試行率を観測してから次段階に進む
 
 ## 🔄 中断点（in-flight）
 
-- 対象タスク: 2. カテゴリ表記化のブラウザ確認+PR
-- 直前の状態: feat/cm-folder-category-labelブランチで実装完了、全品質ゲートPASS、未コミット
-- 次の一手: コミット→ブラウザ確認(ローカルvite or dev環境)→PR作成
-- 検証コマンド: `git -C /Users/yyyhhh/Projects/doc-split status && cd frontend && npx vitest run src/lib/__tests__/groupDocumentsByCategory.test.ts`
+- 対象タスク: 4. PR-A(searchIndexerのdb.getAllチャンク化)
+- 直前の状態: 設計確定・GOAL.md登録完了。実装未着手
+- 次の一手: `functions/src/search/searchIndexer.ts`(onDocumentWriteSearchIndex)の`db.getAll(...indexRefs)`箇所を特定し、チャンク化を実装(TDD: Red→Green)
+- 検証コマンド: `git -C /Users/yyyhhh/Projects/doc-split status && grep -n "getAll" functions/src/search/searchIndexer.ts`

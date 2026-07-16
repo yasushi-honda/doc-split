@@ -16,8 +16,20 @@ import {
   type TokenInfo,
 } from '../utils/tokenizer';
 import { isFirestoreNotFoundError } from '../utils/firestoreErrors';
+import { chunkArray } from '../utils/chunkArray';
 
 const db = getFirestore();
+
+/**
+ * db.getAll(...indexRefs) を一度に大量実行するとピークメモリが膨らむため
+ * (Issue #217、kanameone 512MiB OOM 201件既発)、この件数単位で逐次取得する。
+ *
+ * 1 doc あたりのトークン数上限は MAX_TOKENS_PER_FIELD(20) × 4 フィールド
+ * (customer/office/documentType/fileName) + 日付少数 ≈ 84 件(tokenizer.ts)。
+ * 10 は実測ではなく初期値であり、複製flag ON後にchunkサイズ・メモリ使用量を
+ * 観測して妥当性を再評価する(GOAL.md AC-e参照)。
+ */
+const GET_ALL_CHUNK_SIZE = 10;
 
 /** フィールドからマスクへの変換 */
 const FIELD_TO_MASK: Record<TokenField, number> = {
@@ -36,7 +48,9 @@ export const onDocumentWriteSearchIndex = onDocumentWritten(
     document: 'documents/{docId}',
     region: 'asia-northeast1',
     // Issue #217: 256MiB では db.getAll(...indexRefs) 時に境界を越えOOM頻発 (kanameone 04-14 12回+, 04-15 5回)。
-    // 応急で 512MiB に増強。本質対応 (getAll chunk化) は再発時に別Issueで検討。
+    // 応急で 512MiB に増強。本質対応 (getAll chunk化) は GET_ALL_CHUNK_SIZE 導入で実施済み
+    // (複数顧客FAX複製機能の前提整備、docs/handoff/GOAL.md参照)。複製flag ON後にchunkサイズ・
+    // メモリ使用量を再実測し、本設定の妥当性(縮小余地の有無)を評価する。
     memory: '512MiB',
     timeoutSeconds: 60,
   },
@@ -111,8 +125,9 @@ export const onDocumentWriteSearchIndex = onDocumentWritten(
 
 /**
  * ドキュメントを検索インデックスに追加
+ * (integration test から直接呼び出せるよう export。トリガー本体からの呼び出しは不変)
  */
-async function addDocumentToIndex(docId: string, tokens: TokenInfo[]): Promise<void> {
+export async function addDocumentToIndex(docId: string, tokens: TokenInfo[]): Promise<void> {
   const now = Timestamp.now();
 
   // トークンごとに集約
@@ -132,11 +147,16 @@ async function addDocumentToIndex(docId: string, tokens: TokenInfo[]): Promise<v
     }
   }
 
-  // 既存ドキュメントを一括取得
+  // 既存ドキュメントをチャンク単位で取得（ピークメモリ抑制、Issue #217）
   const tokenIds = Array.from(tokenMap.keys());
   const indexRefs = tokenIds.map(id => db.collection('search_index').doc(id));
-  const existingDocs = await db.getAll(...indexRefs);
-  const existingSet = new Set(existingDocs.filter(d => d.exists).map(d => d.id));
+  const existingSet = new Set<string>();
+  for (const refChunk of chunkArray(indexRefs, GET_ALL_CHUNK_SIZE)) {
+    const existingDocs = await db.getAll(...refChunk);
+    for (const d of existingDocs) {
+      if (d.exists) existingSet.add(d.id);
+    }
+  }
 
   // バッチ書き込み（新規と既存を分けて処理）
   const batch = db.batch();
