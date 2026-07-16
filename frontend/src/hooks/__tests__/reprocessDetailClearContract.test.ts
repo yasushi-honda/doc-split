@@ -47,7 +47,7 @@ describe('reprocess-clear detail/main 配線契約 (ADR-0018 PR4b)', () => {
 
   it.each([
     ['useDocuments.ts useReprocessDocument', () => useDocumentsSrc, /await appendReprocessClearToBatch\(batch, documentId\)/],
-    ['useErrors.ts requestReprocess', () => useErrorsSrc, /await appendReprocessClearToBatch\(batch, firstDoc\.id\)/],
+    ['useErrors.ts requestReprocess', () => useErrorsSrc, /await appendReprocessClearToBatch\(batch, targetDocId\)/],
     ['DocumentsPage.tsx handleBulkReprocess', () => documentsPageSrc, /chunk\.map\(\(docId\) => appendReprocessClearToBatch\(batch, docId\)\)/],
   ])('%s はヘルパー経由でクリアする', (_name, getSrc, pattern) => {
     expect(getSrc()).toMatch(pattern)

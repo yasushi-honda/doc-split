@@ -14,6 +14,7 @@
 const admin = require('firebase-admin');
 const fs = require('fs');
 const path = require('path');
+const { planGroupCleanup } = require('./lib/faxDuplicationCleanupHelpers');
 
 const projectId = process.env.FIREBASE_PROJECT_ID;
 if (!projectId) {
@@ -91,11 +92,47 @@ async function main() {
 
   const allToKeep = [];
   const allToDelete = [];
+  const escalatedGroups = [];
+  // 複製配信docのfileUrl(D2: Storage実体は共有)。同一fileNameグループ内の非配信重複を
+  // 削除する際、偶然同じfileUrlを参照していても複製配信doc側がまだ生きている限り
+  // Storage実体を削除してはならない(誤削除防止、AC-h)。
+  const allDistributedFileUrls = [];
   const backupData = { exportedAt: new Date().toISOString(), projectId, groups: [] };
 
   for (const [fileName, docs] of duplicateGroups) {
-    // スコア計算してソート（高い順）
-    const scored = docs.map((d) => ({
+    // kanameone現場要件「複数顧客FAX複製機能」(GOAL.md D4/AC-d) v1中間案:
+    // distributionId保持docは削除対象から除外する。同一fileNameグループに複数の
+    // distributionId(=複数の複製グループ)が混在する場合は想定外の複合事象のため、
+    // 自動削除はせずWARNで人間にエスカレーションする(フル案=distributionId単位の
+    // スコアリング削除は、実際の複合事象が観測されてから検討する)。判定ロジック自体は
+    // lib/faxDuplicationCleanupHelpers.js に抽出しユニットテスト済み。
+    const { escalate, distributionIds, distributedDocs, plainDocs } = planGroupCleanup(docs);
+
+    if (escalate) {
+      console.warn(
+        `⚠️  【${fileName}】 同一ファイル名内に複数のdistributionId(複製グループ)が混在しています: ` +
+          `${distributionIds.join(', ')}。自動削除はスキップします。人手で確認してください。`
+      );
+      escalatedGroups.push({ fileName, distributionIds });
+      continue;
+    }
+
+    if (distributedDocs.length > 0) {
+      console.log(
+        `【${fileName}】 ${docs.length}件中${distributedDocs.length}件は複製配信` +
+          `(distributionId=${distributionIds[0]})のため削除対象から除外`
+      );
+      allDistributedFileUrls.push(...distributedDocs.map((d) => d.data.fileUrl));
+    }
+
+    if (plainDocs.length <= 1) {
+      // distributionId保持分を除くと重複ではない(複製配信のみのグループ等)
+      if (plainDocs.length === 1) console.log('');
+      continue;
+    }
+
+    // スコア計算してソート（高い順）: 以降はdistributionId非保持docのみを対象にする
+    const scored = plainDocs.map((d) => ({
       ...d,
       score: scoreDocument(d.data),
     })).sort((a, b) => b.score - a.score);
@@ -103,7 +140,7 @@ async function main() {
     const keeper = scored[0];
     const toDelete = scored.slice(1);
 
-    console.log(`【${fileName}】 ${docs.length}件 → 残す: ${keeper.id} (score=${keeper.score}, customer="${keeper.data.customerName}")`);
+    console.log(`【${fileName}】 ${plainDocs.length}件 → 残す: ${keeper.id} (score=${keeper.score}, customer="${keeper.data.customerName}")`);
     for (const d of toDelete) {
       console.log(`  削除: ${d.id} (score=${d.score}, customer="${d.data.customerName}")`);
     }
@@ -125,6 +162,12 @@ async function main() {
   console.log('---');
   console.log(`残す: ${allToKeep.length}件`);
   console.log(`削除対象: ${allToDelete.length}件`);
+  if (escalatedGroups.length > 0) {
+    console.log(`⚠️  エスカレーション(複数distributionId混在・要人手確認): ${escalatedGroups.length}件`);
+    for (const g of escalatedGroups) {
+      console.log(`  ${g.fileName}: ${g.distributionIds.join(', ')}`);
+    }
+  }
 
   // バックアップ保存
   const backupDir = path.join(__dirname, '..', 'backups');
@@ -173,7 +216,10 @@ async function main() {
   const storage = admin.storage();
   const bucket = storage.bucket();
 
-  const keeperFileUrls = new Set(allToKeep.map((d) => d.data.fileUrl));
+  const keeperFileUrls = new Set([
+    ...allToKeep.map((d) => d.data.fileUrl),
+    ...allDistributedFileUrls,
+  ]);
   let storageDeleted = 0;
   let storageSkipped = 0;
 

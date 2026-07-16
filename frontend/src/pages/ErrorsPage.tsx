@@ -259,6 +259,7 @@ function ErrorRow({ error }: ErrorRowProps) {
     await reprocess.mutateAsync({
       errorId: error.errorId,
       fileId: error.fileId,
+      documentId: error.documentId,
     })
     setIsReprocessConfirmOpen(false)
   }
