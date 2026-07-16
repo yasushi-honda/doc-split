@@ -84,7 +84,12 @@ export function isAllUncategorized(hierarchy: readonly CategoryHierarchy[]): boo
   return hierarchy.length === 1 && hierarchy[0]?.categoryName === UNCATEGORIZED_LABEL;
 }
 
-function buildMasterCategoryMap(
+/**
+ * master.name → normalizeGroupKey をキーに category を引くマップを構築する。
+ * 書類種別タブ (buildDocumentTypeCategoryGroups) と担当CM別タブ
+ * (groupDocumentsByCategory) で同一のカテゴリ解決規則を共有するため export。
+ */
+export function buildMasterCategoryMap(
   masters: readonly DocumentMaster[] | undefined,
 ): Map<string, string> {
   const map = new Map<string, string>();
