@@ -661,11 +661,24 @@ export async function applyOcrCompletionTransaction(input: {
         // フィールド(isSplitSource等)/provenanceは引き継がない(mergedはこれらを元々含まない
         // ため自然に除外される)。Storage実体は共有(D2)のためfileId/fileUrl/mimeType/fileName
         // はfreshDataから引き継ぎ、新規Storageコピーは作成しない。
+        //
+        // ただしOCRテキストのoffload実体(ocrResultUrl)はD2の共有対象外(Codexセカンド
+        // オピニオン指摘 P1): 元docのocrRunId配下を指したままだと、元docの以降の
+        // 再処理でIssue #625成功パスcleanupが削除し、コピー側のgetOcrTextが
+        // not-foundになる。各コピー自身のdocId配下へ複製し独立させる。
         for (const assignment of restAssignments) {
           const newDocRef = db.collection('documents').doc();
+          const memberOcrResultUrl = merged.ocrResultUrl
+            ? await copyOcrResultForDistributionMember(
+                merged.ocrResultUrl,
+                newDocRef.id,
+                ownershipExpectation.ocrRunId
+              )
+            : merged.ocrResultUrl;
           const memberFields = {
             ...merged,
             ...buildFaxDuplicationMemberOverride(assignment, docId),
+            ocrResultUrl: memberOcrResultUrl,
           };
           const memberDisplayFileName = buildMemberDisplayFileName(memberFields);
 
@@ -1170,6 +1183,32 @@ async function saveOcrResult(docId: string, ocrRunId: string, ocrResult: string)
   );
 
   return `gs://${bucket.name}/${objectPath}`;
+}
+
+/**
+ * 複製配信メンバー用に、offload済みOCR結果オブジェクトを自身のdocId配下へ複製する
+ * (Codexセカンドオピニオン指摘 P1: 複製コピーが元docのStorage実体(ocr-results/{元docId}/...)
+ * をそのまま参照すると、元docが後で再処理された際の成功パスcleanup(Issue #625、
+ * `ocr-results/{docId}/`をdocId単位で所有する前提)が旧オブジェクトを削除してしまい、
+ * コピー側のgetOcrTextがnot-foundになる)。GCSのserver-side copyでバイト再アップロードを
+ * 避けつつ、「1 doc = 1 Storage実体」の前提を複製メンバーにも適用し、Issue #625の
+ * cleanupロジック自体には一切手を入れない。
+ */
+async function copyOcrResultForDistributionMember(
+  sourceUrl: string,
+  newDocId: string,
+  ocrRunId: string
+): Promise<string> {
+  const bucket = storage.bucket();
+  const sourcePath = sourceUrl.replace(`gs://${bucket.name}/`, '');
+  const destPath = `ocr-results/${newDocId}/${ocrRunId}.txt`;
+
+  await withRetry(
+    () => bucket.file(sourcePath).copy(bucket.file(destPath)),
+    RETRY_CONFIGS.storage
+  );
+
+  return `gs://${bucket.name}/${destPath}`;
 }
 
 function createDefaultOcrResultStorageAdapter(): OcrResultStorageAdapter {
