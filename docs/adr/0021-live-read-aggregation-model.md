@@ -69,14 +69,19 @@ documentAggregationStates/{docId}
 
 ### 移行手順(本番展開時に必須)
 
-新トリガーコードを配備する**前**に、既存の全document(`status !== 'split'`)に対して`documentAggregationStates`をseedする必要がある。配備後に実行すると、配備直後〜seed完了までの間に発生したイベントがstate不在(`previousContribution=[]`)として扱われ、既に`documentGroups`へ計上済みの寄与を二重加算してしまう。
+新トリガーコードを配備する**前**に、既存の全document(`buildContribution()`のstatus==='split'判定に母集団定義を委ねる無条件フルスキャン)に対して`documentAggregationStates`をseedする必要がある。配備後に実行すると、配備直後〜seed完了までの間に発生したイベントがstate不在(`previousContribution=[]`)として扱われ、既に`documentGroups`へ計上済みの寄与を二重加算してしまう。
 
-`scripts/migrate-document-groups.js --seed-aggregation-states`(既存の`--backfill-cm-unassigned`/`--rebuild-groups`と同じメンテナンスゲート制御: クローズ→10分ドレイン待機→全document scan・seed→finally再開)を追加した。推奨シーケンス:
+`scripts/migrate-document-groups.js --seed-aggregation-states`(既存の`--backfill-cm-unassigned`/`--rebuild-groups`と同じメンテナンスゲート制御: クローズ→10分ドレイン待機→全document scan・seed)を追加した。推奨シーケンス(dev/kanameone/cocoro全環境で実施・検証済み。ただし後述の`--keep-gate-closed`/`--reopen-gate`はCodex review後の追加改善で、初回のdev/kanameone/cocoro実施時点では未実装だった):
 
-1. `--seed-aggregation-states`を実行(ゲートクローズ→ドレイン→seed→ゲート再開)
-2. 新トリガーコードをデプロイ(`gh workflow run "Deploy Cloud Functions"`)
-3. `scripts/diagnose-caremanager-group-gap.js`で恒等式検証
-4. 差分があれば既存の`rebuildSingleGroupAggregation()`(個別groupId再構築)で補正
+1. `--seed-aggregation-states --keep-gate-closed`を実行(ゲートクローズ→ドレイン→seed→**ゲートは閉じたまま維持**)
+2. 新トリガーコードをデプロイ(`gh workflow run "Deploy Cloud Functions"`)し、成功を確認
+3. `--reopen-gate`でメンテナンスゲートを明示的に再開
+4. `scripts/diagnose-caremanager-group-gap.js`で恒等式検証
+5. 差分があれば既存の`rebuildSingleGroupAggregation()`(個別groupId再構築)で補正
+
+**なぜ`--keep-gate-closed`が必要か(`/codex review`P1指摘、本番実施後に追加修正)**: 当初実装ではseed完了と同時にゲートが自動再開されていた。新トリガーコードのデプロイはこのスクリプトの責務外(運用者が別途実行する)であり、seed完了〜デプロイ完了の間隙でゲートが開いていると、集計所属変更(OCR確定/split/CM同期)を旧トリガーが処理して`documentGroups`を正しく更新するが`documentAggregationStates`には反映されない。デプロイ後にその文書が再び触られると、新トリガーが古いstateとの差分を「新規変化」と誤認し二重適用する。dev/kanameone/cocoroへの初回展開時点ではこの改善前のバージョンを使用したため理論上のリスク窓が存在したが、展開後に`diagnose-caremanager-group-gap.js`で恒等式検証を実施し差分0件を確認済み(=このリスクは顕在化していない)。将来の再実行(新規クライアント展開等)では`--keep-gate-closed`/`--reopen-gate`を使用すること。
+
+**seedスクリプトの母集団クエリ修正(`/codex review`P1指摘、本番実施後に追加修正)**: 当初実装は`rebuildAllGroupAggregations()`と同じ`where('status','!=','split').orderBy('status').orderBy('processedAt','desc')`クエリを使用していたが、Firestoreの`!=`/`orderBy`クエリは対象フィールドを持たない文書を暗黙に除外する。`buildContribution()`はstatus未設定文書を「split以外」として包含するため、この非対称性により`status`/`processedAt`が未設定のレガシー文書がseed対象から漏れうる。`scripts/diagnose-caremanager-group-gap.js`と同じ`FieldPath.documentId()`順の無条件フルスキャン+`buildContribution()`自身のstatus判定に統一した。dev/kanameone/cocoroの実際のデータには該当する文書が存在しなかった(診断スクリプトの恒等式検証で差分0件確認済み)ため実害はなかったが、将来の再実行時の潜在リスクを排除する。
 
 **Codexの提案(「documentGroupsも同一スナップショット基準で再構築する」)からの意図的な逸脱**: Codexは移行時にstate seedと同時に`documentGroups`全体も再構築することを推奨したが、本プロジェクトでは直前のミッション(Issue #660是正、GOAL.md タスクJ4)で`documentGroups`の恒等式一致を検証済みであり、`rebuildAllGroupAggregations()`(全削除+再構築)は影響範囲が過大なため本番で意図的に避けてきた経緯がある(Issue #660是正でも個別groupId再構築方式を採用)。本ADRでも同じ判断を踏襲し、`documentGroups`の全体再構築は行わず、state seedのみを事前に行い、事後検証で差分が見つかった場合にのみ個別補正する方針とした。
 

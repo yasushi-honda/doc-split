@@ -21,6 +21,8 @@
  *   node scripts/migrate-document-groups.js --backfill-cm-unassigned [--project <project-id>] [--dry-run]
  *   node scripts/migrate-document-groups.js --rebuild-groups <groupId1> [--rebuild-groups <groupId2> ...] [--project <project-id>] [--dry-run]
  *   node scripts/migrate-document-groups.js --seed-aggregation-states [--project <project-id>] [--dry-run]
+ *   node scripts/migrate-document-groups.js --seed-aggregation-states --keep-gate-closed [--project <project-id>]
+ *   node scripts/migrate-document-groups.js --reopen-gate [--project <project-id>]
  *
  * Options:
  *   --project                  Firebase プロジェクトID (デフォルト: doc-split-dev)
@@ -51,7 +53,12 @@
  *                              計算モデルを「event.before/afterの履歴差分適用」から
  *                              「documentAggregationStates(前回適用済みcontribution)
  *                              との差分」に変更するデプロイ前に必須。既存の全document
- *                              (status!=='split')に対してcontributionを算出し
+ *                              (`FieldPath.documentId()`順の無条件フルスキャン、
+ *                              status/processedAt未設定文書も含む。`buildContribution()`
+ *                              自身のstatus==='split'判定に母集団定義を委ねる。`/codex
+ *                              review`P1指摘: Firestoreの`where('status','!=','split')`
+ *                              クエリだとそれらのフィールドを持たない文書が暗黙に除外
+ *                              されていた)に対してcontributionを算出し
  *                              documentAggregationStates/{docId}をseedする。これを
  *                              新トリガーコード配備**前**に実行しないと、配備後の
  *                              最初のイベントでstate不在(previousContribution=[])
@@ -59,6 +66,19 @@
  *                              二重加算される(`/codex plan`セカンドオピニオン指摘)。
  *                              --backfill-cm-unassignedと同じメンテナンスゲート制御
  *                              で実行する。実行順序の詳細はADR-0021参照。
+ *   --keep-gate-closed         --seed-aggregation-states専用: seed完了後もメンテナンス
+ *                              ゲートを再開せず閉じたまま維持する。新トリガーコードの
+ *                              デプロイはこのスクリプトの責務外(運用者が別途実行)であり、
+ *                              seed完了と同時にゲートが再開されると、seed完了〜デプロイ
+ *                              完了までの間隙で発生した集計所属変更が旧トリガーで
+ *                              documentGroupsへ反映されつつdocumentAggregationStatesには
+ *                              反映されず、デプロイ後の次回イベントで二重適用される
+ *                              (`/codex review`P1指摘)。本番展開では必ずこのフラグを
+ *                              使い、デプロイ成功確認後に`--reopen-gate`を実行すること。
+ *   --reopen-gate              `--seed-aggregation-states --keep-gate-closed`実行・
+ *                              新トリガーコードのデプロイ完了確認後に、メンテナンス
+ *                              ゲートを明示的に再開する。ドレイン待機は不要(seed実行時
+ *                              に既に完了済み)。
  *   --drain-wait-ms <ms>       --backfill-cm-unassigned/--rebuild-groups/
  *                              --seed-aggregation-states実行モードのドレイン待機時間
  *                              (デフォルト: 600000 = 10分、Cloud Functions最大実行
@@ -78,6 +98,8 @@ let projectId = process.env.FIREBASE_PROJECT_ID || 'doc-split-dev';
 let dryRun = false;
 let backfillCmUnassigned = false;
 let seedAggregationStates = false;
+let keepGateClosed = false;
+let reopenGate = false;
 let drainWaitMs = 10 * 60 * 1000;
 // --rebuild-groupsは繰り返し引数形式(--rebuild-groups <id> --rebuild-groups <id> ...)。
 // review指摘対応: CSVのカンマ区切りだと、groupKeyが自由入力文字列由来のためカンマを
@@ -96,6 +118,10 @@ for (let i = 0; i < args.length; i++) {
     backfillCmUnassigned = true;
   } else if (args[i] === '--seed-aggregation-states') {
     seedAggregationStates = true;
+  } else if (args[i] === '--keep-gate-closed') {
+    keepGateClosed = true;
+  } else if (args[i] === '--reopen-gate') {
+    reopenGate = true;
   } else if (args[i] === '--drain-wait-ms' && args[i + 1]) {
     drainWaitMs = parseInt(args[i + 1], 10);
     i++;
@@ -111,6 +137,15 @@ for (let i = 0; i < args.length; i++) {
     rebuildGroupIds.push(value);
     i++;
   }
+}
+
+if (keepGateClosed && !seedAggregationStates) {
+  console.error('❌ --keep-gate-closed は --seed-aggregation-states と併用してください');
+  process.exit(1);
+}
+if (keepGateClosed && dryRun) {
+  console.error('❌ --keep-gate-closed は --dry-run と併用できません(dry-runはゲート操作を行いません)');
+  process.exit(1);
 }
 
 console.log(`📦 プロジェクト: ${projectId}`);
@@ -245,7 +280,18 @@ async function previewBackfillCmUnassigned() {
  * 開始していた実行(OCR確定/split/顧客マスター同期)が確実に完了/タイムアウト済みである
  * ことを保証するバリア(/codex plan指摘: 時間待ちに根拠を持たせる、デフォルト10分)。
  */
-async function withMaintenanceGate(drainWaitMsValue, fn) {
+/**
+ * @param {number} drainWaitMsValue
+ * @param {() => Promise<any>} fn
+ * @param {{ reopenAfter?: boolean }} [options] - `reopenAfter: false`の場合、fn完了後も
+ *   ゲートを閉じたまま維持する(呼び出し元が別途`--reopen-gate`等で明示的に再開する責務を負う)。
+ *   `--seed-aggregation-states --keep-gate-closed`用(`/codex review`P1指摘: seed完了と
+ *   同時にゲートが再開されると、デプロイ完了までの間隙で発生した集計所属変更が新旧トリガー間で
+ *   二重適用されるリスクがあるため)。
+ */
+async function withMaintenanceGate(drainWaitMsValue, fn, options = {}) {
+  const { reopenAfter = true } = options;
+
   console.log('🔒 メンテナンスゲートを閉じます...');
   await db.doc(MAINTENANCE_FLAGS_DOC_PATH).set(
     { groupAggregationGateOpen: false, gateClosedAt: admin.firestore.FieldValue.serverTimestamp() },
@@ -254,6 +300,11 @@ async function withMaintenanceGate(drainWaitMsValue, fn) {
 
   console.log(`⏳ ドレイン確認のため ${drainWaitMsValue / 1000} 秒待機します(Cloud Functions最大実行時間を上回るバリア)...`);
   await sleep(drainWaitMsValue);
+
+  if (!reopenAfter) {
+    // ゲートを閉じたまま維持する。fn失敗時も含め再開しない(呼び出し元の責務)。
+    return await fn();
+  }
 
   try {
     return await fn();
@@ -292,6 +343,15 @@ async function executeBackfillCmUnassigned() {
 
 /**
  * documentAggregationStatesのseed対象を読み取り専用でプレビューする(書き込み・ゲート操作なし)。
+ *
+ * `documents`コレクションを`FieldPath.documentId()`順で無条件フルスキャンする
+ * (`rebuildAllGroupAggregations()`等の`where('status','!=','split')`クエリとは異なる)。
+ * Firestoreの`!=`/`orderBy`クエリは対象フィールドを持たない文書を暗黙に除外するため、
+ * `status`/`processedAt`が未設定のレガシー文書がseed対象から漏れる(`/codex review`
+ * P1指摘)。本関数の目的は「ライブトリガー(`processDocumentAggregationEvent`→
+ * `buildContribution`、`status===undefined`を非split扱いで包含する)が今後計算する値」に
+ * 事前一致させることであり、`buildContribution()`自身のstatus判定に母集団定義を委ねる
+ * ほうが正確(`scripts/diagnose-caremanager-group-gap.js`の全件スキャン方式と同じ考え方)。
  */
 async function previewSeedAggregationStates() {
   let scanned = 0;
@@ -300,17 +360,12 @@ async function previewSeedAggregationStates() {
   const batchSize = 500;
 
   while (true) {
-    // rebuildAllGroupAggregations()と同一クエリ(母集団定義の一貫性を保つ。
-    // status:'split'の文書はbuildContribution()側でも空配列を返すため、
-    // ここで除外してもseed結果は変わらずスキャン量を削減できる)
     let query = db.collection('documents')
-      .where('status', '!=', 'split')
-      .orderBy('status')
-      .orderBy('processedAt', 'desc')
+      .orderBy(admin.firestore.FieldPath.documentId())
       .limit(batchSize);
 
     if (lastDoc) {
-      query = query.startAfter(lastDoc);
+      query = query.startAfter(lastDoc.id);
     }
 
     const snapshot = await query.get();
@@ -337,8 +392,20 @@ async function previewSeedAggregationStates() {
  * 実行すると、配備直後〜seed完了までの間に発生したイベントがstate不在として扱われ、
  * 既にdocumentGroupsへ計上済みの寄与を二重加算してしまう。
  *
+ * `previewSeedAggregationStates()`と同様、`FieldPath.documentId()`順の無条件フルスキャン
+ * を使う(`status`/`processedAt`未設定文書の取りこぼし防止、`/codex review`P1指摘)。
+ *
  * contributionが空配列の文書はstateを書かない(readAggregationStateContribution()は
  * state不在時も空配列を返すため、動作上の差はなくwrite数を削減できる)。
+ *
+ * `keepGateClosed=true`の場合、seed完了後もゲートを閉じたまま維持する(`withMaintenanceGate`の
+ * `reopenAfter: false`)。新トリガーコードのデプロイはこのスクリプトの責務外(運用者が別途
+ * 実行する別コマンド)であり、seed完了と同時にゲートが再開されると、seed完了〜デプロイ完了
+ * までの間隙で発生した集計所属変更(OCR確定/split/CM同期、いずれもゲート対象)が旧トリガーに
+ * よって`documentGroups`へ正しく反映されるが`documentAggregationStates`には反映されない。
+ * デプロイ後にその文書が再び触られると、新トリガーが古いstateとの差分を「新規変化」と誤認し
+ * 二重適用してしまう(`/codex review`P1指摘)。`--keep-gate-closed`でゲートを保持し、
+ * デプロイ完了確認後に`--reopen-gate`で明示的に再開することでこの間隙を解消する。
  */
 async function executeSeedAggregationStates() {
   // 新トリガーコードの配備自体は本スクリプトの責務外(運用者が別途デプロイする)。
@@ -351,13 +418,11 @@ async function executeSeedAggregationStates() {
 
     while (true) {
       let query = db.collection('documents')
-        .where('status', '!=', 'split')
-        .orderBy('status')
-        .orderBy('processedAt', 'desc')
+        .orderBy(admin.firestore.FieldPath.documentId())
         .limit(batchSize);
 
       if (lastDoc) {
-        query = query.startAfter(lastDoc);
+        query = query.startAfter(lastDoc.id);
       }
 
       const snapshot = await query.get();
@@ -385,12 +450,32 @@ async function executeSeedAggregationStates() {
     }
 
     return { scanned, seeded };
-  });
+  }, { reopenAfter: !keepGateClosed });
 
   console.log(`\n✅ documentAggregationStates seed完了: スキャン ${scanned} 件 / state作成 ${seeded} 件`);
-  console.log('次のステップ: 新トリガーコード(functions/src/triggers/updateDocumentGroups.ts)を配備し、');
-  console.log('scripts/diagnose-caremanager-group-gap.js で customer合計とcareManager合計の一致を検証してください。');
+  if (keepGateClosed) {
+    console.log('🔒 --keep-gate-closed指定のため、メンテナンスゲートは閉じたままです。');
+    console.log('次のステップ: 新トリガーコード(functions/src/triggers/updateDocumentGroups.ts)を配備し、');
+    console.log('デプロイ成功を確認した後、`--reopen-gate` でゲートを再開してください。');
+  } else {
+    console.log('次のステップ: 新トリガーコード(functions/src/triggers/updateDocumentGroups.ts)を配備し、');
+    console.log('scripts/diagnose-caremanager-group-gap.js で customer合計とcareManager合計の一致を検証してください。');
+  }
   return { scanned, seeded };
+}
+
+/**
+ * `--seed-aggregation-states --keep-gate-closed`実行後、新トリガーコードのデプロイ完了を
+ * 確認してからメンテナンスゲートを明示的に再開する(`/codex review`P1指摘対応)。
+ * ドレイン待機は不要(seed実行時に既に完了済みで、ゲートは閉じられたまま維持されている)。
+ */
+async function executeReopenGate() {
+  console.log('🔓 メンテナンスゲートを再開します...');
+  await db.doc(MAINTENANCE_FLAGS_DOC_PATH).set(
+    { groupAggregationGateOpen: true, gateOpenedAt: admin.firestore.FieldValue.serverTimestamp() },
+    { merge: true }
+  );
+  console.log('✅ メンテナンスゲートを再開しました。');
 }
 
 /**
@@ -480,6 +565,15 @@ async function executeRebuildGroups(groupIds) {
  */
 async function main() {
   const startTime = Date.now();
+
+  if (reopenGate) {
+    console.log('🎯 モード: メンテナンスゲート再開(--seed-aggregation-states --keep-gate-closed 実行後の手動再開)\n');
+    await executeReopenGate();
+
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    console.log(`\n⏱️  実行時間: ${elapsed} 秒`);
+    return;
+  }
 
   if (rebuildGroupIds.length > 0) {
     console.log(`🎯 モード: 個別グループ再構築(GOAL.md タスクJ4、対象 ${rebuildGroupIds.length} 件)\n`);

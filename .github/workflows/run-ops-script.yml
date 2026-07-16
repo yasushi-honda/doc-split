@@ -123,6 +123,8 @@ on:
           - migrate-document-groups --rebuild-groups
           - migrate-document-groups --seed-aggregation-states --dry-run
           - migrate-document-groups --seed-aggregation-states
+          - migrate-document-groups --seed-aggregation-states --keep-gate-closed
+          - migrate-document-groups --reopen-gate
       doc_id:
         description: 'Document ID (required when script contains --doc-id; ignored otherwise)'
         required: false
