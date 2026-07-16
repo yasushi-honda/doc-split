@@ -125,6 +125,9 @@ on:
           - migrate-document-groups --seed-aggregation-states
           - migrate-document-groups --reopen-gate --dry-run
           - migrate-document-groups --reopen-gate
+          - check-function-error-logs --hours 24
+          - check-function-error-logs --hours 72
+          - check-function-error-logs --hours 168
       doc_id:
         description: 'Document ID (required when script contains --doc-id; ignored otherwise)'
         required: false
@@ -761,6 +764,24 @@ jobs:
             NODE_PATH=./functions/node_modules \
               FIREBASE_PROJECT_ID="$PROJECT_ID" \
               node "scripts/${SCRIPT_NAME}.js" "${ARGS[@]}"
+          elif [ "$SCRIPT_NAME" = "check-function-error-logs" ]; then
+            # Issue #664 AC7フォローアップ: kanameoneはローカルgcloud認証(systemkaname@kanameone.com)が
+            # 非対話的な再認証を要求しブロックされるため、既存デプロイSA(GCP_SA_KEY_KANAMEONE)で
+            # GHA経由でCloud Functions(Cloud Run revision)のERROR件数を確認する。
+            # Node/firebase-adminには依存せずgcloud logging readのみで完結(read-only)。
+            HOURS=$(echo "$SCRIPT_ARGS" | grep -oE '[0-9]+' | head -1)
+            if [ -z "$HOURS" ]; then
+              echo "ERROR: --hours N が必要です" >&2
+              exit 1
+            fi
+            SINCE=$(date -u -d "-${HOURS} hours" +%Y-%m-%dT%H:%M:%SZ)
+            echo "=== Cloud Functions ERROR件数(関数別、過去${HOURS}時間、project=$PROJECT_ID) ==="
+            gcloud logging read "resource.type=\"cloud_run_revision\" AND severity>=ERROR AND timestamp>=\"$SINCE\"" \
+              --project="$PROJECT_ID" --format="value(resource.labels.service_name)" | sort | uniq -c | sort -rn
+            echo ""
+            echo "=== onDocumentWrite 詳細(過去${HOURS}時間、Issue #664対象関数) ==="
+            gcloud logging read "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"ondocumentwrite\" AND severity>=ERROR AND timestamp>=\"$SINCE\"" \
+              --project="$PROJECT_ID" --format="table(timestamp,severity,textPayload)" --limit=50
           elif [ "$SCRIPT_NAME" = "audit-session61-parent-provenance" ]; then
             # Issue #432 PR-C2-execution post-audit: log secret masking で `{` が
             # 置換されると JSON 再構成不能のため、artifact 経由で報告書を渡す。
