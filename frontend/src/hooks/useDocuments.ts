@@ -287,6 +287,10 @@ export function updateDocumentInListCache(
  * trueのまま残ることで、BE側(functions/src/ocr/confirmedFieldMerge.ts)の既存
  * confirmed保護マージがそのまま働き、次回OCR完了時にcustomerIdが上書きされるのを防ぐ
  * (Codexセカンドオピニオンで指摘済みのギャップへの対応)。
+ *
+ * distributionId自体はこの関数の戻り値に一切含めない(deleteField()もしない/常に
+ * 保持もしない)。update()にキーとして含まれないフィールドはFirestore側の既存値が
+ * そのまま残るため、意図的な省略により再処理を跨いで自然に保持される。
  */
 export function getReprocessClearFields(preserveDistributionFields: boolean = false) {
   const df = deleteField()
