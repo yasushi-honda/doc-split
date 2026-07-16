@@ -1,17 +1,24 @@
 /**
- * 差分集計(getAffectedGroups)と全件再集計(rebuildAllGroupAggregations)の
- * 一致性契約テスト (Firestore emulator, GOAL.md タスクE)
+ * 差分集計(processDocumentAggregationEvent)と全件再集計(rebuildAllGroupAggregations)の
+ * 一致性契約テスト (Firestore emulator, GOAL.md タスクE → Issue #664修正で更新)
  *
- * 背景: `functions/src/triggers/updateDocumentGroups.ts`(onDocumentWrite)は
- * documents書き込みのたびにgetAffectedGroups()の差分をdocumentGroupsへ逐次適用する。
- * 一方、`scripts/migrate-document-groups.js`等のマイグレーションはrebuildAllGroupAggregations()
- * でdocumentGroups全体を都度再構築する。両者は独立した実装(getAffectedGroups /
- * rebuildAllGroupAggregations)でありながら、同一のdocuments集合に対して常に同じ
- * documentGroups状態へ収束することが本番の集計整合性の前提になっている
- * (/codex plan セカンドオピニオン指摘③)。groupAggregation.test.tsの単体テストは
- * pure functionの戻り値のみを検証しFirestoreへの実書き込みを経由しないため、本テストは
- * 実際のFirestore emulator上で両経路を実行し、最終的なdocumentGroupsの内容
- * (groupType/groupKey/displayName/count)が完全一致することを検証する。
+ * 背景: `functions/src/triggers/updateDocumentGroups.ts`(onDocumentWrite)は、documents
+ * 書き込みのたびに`processDocumentAggregationEvent()`(ライブ再読込み+
+ * `documentAggregationStates`とのcontribution diff、ADR-0021)でdocumentGroupsを
+ * 逐次更新する。一方、`scripts/migrate-document-groups.js`等のマイグレーションは
+ * rebuildAllGroupAggregations()でdocumentGroups全体を都度再構築する。両者は独立した
+ * 実装でありながら、同一のdocuments集合に対して常に同じdocumentGroups状態へ収束する
+ * ことが本番の集計整合性の前提になっている(/codex plan セカンドオピニオン指摘③)。
+ * groupAggregation.test.tsの単体テストはpure functionの戻り値のみを検証し
+ * Firestoreへの実書き込みを経由しないため、本テストは実際のFirestore emulator上で
+ * 本番トリガーと同一の`processDocumentAggregationEvent()`を実行し、
+ * 全件再集計と最終的なdocumentGroupsの内容(groupType/groupKey/displayName/count)が
+ * 完全一致することを検証する。
+ *
+ * Issue #664修正(ADR-0021)により、本テストが実行する差分pathを旧`getAffectedGroups()`
+ * ベースの独自ヘルパーから`processDocumentAggregationEvent()`本体の直接呼び出しに更新した
+ * (code-review指摘: 旧ヘルパーは本番で使われなくなったコードパスを検証しており、
+ * buildContribution/diffContributionモデルの正しさを一切カバーしていなかった)。
  *
  * 実行: firebase emulators:exec --only firestore --project group-aggregation-rebuild-integration-test \
  *         'npm run test:integration'
@@ -23,16 +30,13 @@ import { expect } from 'chai';
 import * as admin from 'firebase-admin';
 import { Timestamp } from 'firebase-admin/firestore';
 import { cleanupCollections } from './helpers/cleanupEmulator';
-import {
-  generateGroupKeys,
-  getAffectedGroups,
-  buildGroupRefs,
-  applyAggregationDeltas,
-  rebuildAllGroupAggregations,
-} from '../src/utils/groupAggregation';
+import { rebuildAllGroupAggregations } from '../src/utils/groupAggregation';
+import { processDocumentAggregationEvent } from '../src/triggers/updateDocumentGroups';
 
 const db = admin.firestore();
-const COLLECTIONS_TO_CLEAN: readonly string[] = ['documents', 'documentGroups'];
+const COLLECTIONS_TO_CLEAN: readonly string[] = [
+  'documents', 'documentGroups', 'documentAggregationEvents', 'documentAggregationStates',
+];
 
 interface Fixture {
   id: string;
@@ -119,37 +123,28 @@ async function snapshotGroups(): Promise<Record<string, GroupSnapshotEntry>> {
   return out;
 }
 
+let eventCounter = 0;
+
 /**
- * onDocumentWrite(updateDocumentGroups.ts)と同一手順(単一トランザクションでの
- * read phase→write phase)でcreateイベントの差分をdocumentGroupsへ適用する。
- * Issue #660修正(ADR-0020)で導入した冪等台帳(documentAggregationEvents)への
- * 書込みは、本テストが検証するdocumentGroupsの状態には影響しないため省略する。
+ * `documents/{docId}`書込み1件分のイベントを、本番トリガーと同一の
+ * `processDocumentAggregationEvent()`で処理する。ライブ再読込みモデル(ADR-0021)の
+ * ため、create/updateを区別する必要はない(呼び出し時点のFirestore上の実データを
+ * 常に正として扱う)。呼び出し前にdocuments/{docId}への実際の書込み(set/update/delete)
+ * を済ませておくこと。
  */
-async function applyCreateDiff(fixture: Fixture): Promise<void> {
-  const withKeys = { ...fixture.data, ...generateGroupKeys(fixture.data) };
-  const affected = getAffectedGroups(undefined, withKeys);
-  if (affected.length === 0) return;
-  const groupRefs = buildGroupRefs(db, affected);
-  await db.runTransaction(async (transaction) => {
-    const groupSnaps = await transaction.getAll(...groupRefs);
-    applyAggregationDeltas(transaction, affected, groupRefs, groupSnaps, { ...withKeys, id: fixture.id });
+async function applyEvent(docId: string): Promise<void> {
+  eventCounter++;
+  await processDocumentAggregationEvent(db, {
+    docId,
+    eventId: `contract-event-${eventCounter}`,
+    eventSource: '//firestore.googleapis.com/projects/test/databases/(default)',
+    eventSubject: `documents/${docId}`,
+    eventTime: new Date().toISOString(),
+    nowMillis: Date.now(),
   });
 }
 
-/** onDocumentWriteと同一手順でupdateイベントの差分をdocumentGroupsへ適用する */
-async function applyUpdateDiff(before: Record<string, unknown>, after: Record<string, unknown>, docId: string): Promise<void> {
-  const beforeWithKeys = { ...before, ...generateGroupKeys(before) };
-  const afterWithKeys = { ...after, ...generateGroupKeys(after) };
-  const affected = getAffectedGroups(beforeWithKeys, afterWithKeys);
-  if (affected.length === 0) return;
-  const groupRefs = buildGroupRefs(db, affected);
-  await db.runTransaction(async (transaction) => {
-    const groupSnaps = await transaction.getAll(...groupRefs);
-    applyAggregationDeltas(transaction, affected, groupRefs, groupSnaps, { ...afterWithKeys, id: docId });
-  });
-}
-
-describe('差分集計 vs 全件再集計の一致性契約 (getAffectedGroups vs rebuildAllGroupAggregations, GOAL.md タスクE)', () => {
+describe('差分集計 vs 全件再集計の一致性契約 (processDocumentAggregationEvent vs rebuildAllGroupAggregations, GOAL.md タスクE / Issue #664)', () => {
   beforeEach(async () => {
     await cleanupCollections(db, COLLECTIONS_TO_CLEAN);
   });
@@ -164,9 +159,10 @@ describe('差分集計 vs 全件再集計の一致性契約 (getAffectedGroups v
     }
     await batch.commit();
 
-    // 差分path: onDocumentWriteのcreateイベントと同一手順でdocumentGroupsを構築
+    // 差分path: onDocumentWriteの本番ロジック(processDocumentAggregationEvent)と
+    // 同一手順でdocumentGroupsを構築
     for (const f of fixtures) {
-      await applyCreateDiff(f);
+      await applyEvent(f.id);
     }
     const diffResult = await snapshotGroups();
 
@@ -203,15 +199,13 @@ describe('差分集計 vs 全件再集計の一致性契約 (getAffectedGroups v
     await batch.commit();
 
     for (const f of fixtures) {
-      await applyCreateDiff(f);
+      await applyEvent(f.id);
     }
 
     // doc-cm-a(佐藤花子)のcareManagerを未設定に変更する差分を適用
     const target = fixtures.find((f) => f.id === 'doc-cm-a')!;
-    const beforeData = target.data;
-    const afterData = { ...target.data, careManager: '' };
     await db.collection('documents').doc(target.id).update({ careManager: '' });
-    await applyUpdateDiff(beforeData, afterData, target.id);
+    await applyEvent(target.id);
 
     const diffResult = await snapshotGroups();
 
