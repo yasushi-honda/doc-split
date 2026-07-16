@@ -102,11 +102,16 @@ export async function processDocumentAggregationEvent(
   const ledgerRef = aggregationEventLedgerRef(db, eventId);
   const stateRef = aggregationStateRef(db, docId);
 
-  let skipped = false;
-  let groupsUpdated = 0;
-
   try {
-    await db.runTransaction(async (transaction) => {
+    // review指摘対応(`/codex review`P3): skipped/groupsUpdatedはトランザクション
+    // コールバックの戻り値として返す(コールバック外の変数を書き換えない)。Firestore
+    // トランザクションはコミット時の競合(ABORTED)でコールバック全体を再実行することが
+    // あり、外側の変数に書き込む実装だと、ある試行が値をセットした後に別の試行が
+    // 異なる経路(例: 早期returnのtrue no-op)を通った場合、最終的な戻り値が
+    // 直近の試行と矛盾する古い値のまま残ってしまう。`db.runTransaction()`の戻り値は
+    // 実際にコミットされた(あるいは書込みなしで解決した)試行のコールバック戻り値と
+    // 保証されるため、これを直接呼び出し元へ返す。
+    const result = await db.runTransaction(async (transaction) => {
       // read phase 1: 台帳 + ライブdocument + 直前のcontribution状態を一括読み取り
       const [ledgerSnap, documentSnap, stateSnap] = await transaction.getAll(
         ledgerRef,
@@ -117,8 +122,7 @@ export async function processDocumentAggregationEvent(
       if (ledgerSnap.exists) {
         // 既に処理済みのイベント(再配信・リトライ) — 集計を再適用せずskip
         console.log(`[onDocumentWrite] event ${eventId} already processed for doc ${docId}, skipping`);
-        skipped = true;
-        return;
+        return { skipped: true, groupsUpdated: 0 };
       }
 
       const liveData = documentSnap.exists ? (documentSnap.data() as DocumentData) : undefined;
@@ -132,7 +136,7 @@ export async function processDocumentAggregationEvent(
         // Firestore書込みを一切発生させずreturnする(旧isAggregationUnchanged()の
         // 早期returnと同じ意図)。台帳も書かないため、同一event.idの再配信時も
         // 同じ判定を繰り返すだけで安全(冪等)。
-        return;
+        return { skipped: false, groupsUpdated: 0 };
       }
 
       // read phase 2: affected groupsを読み取り(全読み取り→全書込みの順序制約を
@@ -144,6 +148,7 @@ export async function processDocumentAggregationEvent(
       if (keyUpdate) {
         transaction.update(documentRef, keyUpdate);
       }
+      let groupsUpdated = 0;
       if (deltas.length > 0) {
         const docDataForPreview = liveData ? { ...liveData, id: docId } : undefined;
         applyAggregationDeltas(transaction, deltas, groupRefs, groupSnaps, docDataForPreview);
@@ -156,16 +161,16 @@ export async function processDocumentAggregationEvent(
         eventTime,
         nowMillis,
       }));
+      return { skipped: false, groupsUpdated };
     });
-    if (!skipped && groupsUpdated > 0) {
-      console.log(`[onDocumentWrite] Applied ${groupsUpdated} group deltas for doc ${docId} (event ${eventId})`);
+    if (!result.skipped && result.groupsUpdated > 0) {
+      console.log(`[onDocumentWrite] Applied ${result.groupsUpdated} group deltas for doc ${docId} (event ${eventId})`);
     }
+    return result;
   } catch (error) {
     console.error(`[onDocumentWrite] Failed to process event ${eventId} for doc ${docId}:`, error);
     throw error;
   }
-
-  return { skipped, groupsUpdated };
 }
 
 /**

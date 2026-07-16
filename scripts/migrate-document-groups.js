@@ -21,8 +21,7 @@
  *   node scripts/migrate-document-groups.js --backfill-cm-unassigned [--project <project-id>] [--dry-run]
  *   node scripts/migrate-document-groups.js --rebuild-groups <groupId1> [--rebuild-groups <groupId2> ...] [--project <project-id>] [--dry-run]
  *   node scripts/migrate-document-groups.js --seed-aggregation-states [--project <project-id>] [--dry-run]
- *   node scripts/migrate-document-groups.js --seed-aggregation-states --keep-gate-closed [--project <project-id>]
- *   node scripts/migrate-document-groups.js --reopen-gate [--project <project-id>]
+ *   node scripts/migrate-document-groups.js --reopen-gate [--project <project-id>] [--dry-run]
  *
  * Options:
  *   --project                  Firebase プロジェクトID (デフォルト: doc-split-dev)
@@ -64,21 +63,25 @@
  *                              最初のイベントでstate不在(previousContribution=[])
  *                              として扱われ、既にdocumentGroupsへ計上済みの寄与が
  *                              二重加算される(`/codex plan`セカンドオピニオン指摘)。
- *                              --backfill-cm-unassignedと同じメンテナンスゲート制御
- *                              で実行する。実行順序の詳細はADR-0021参照。
- *   --keep-gate-closed         --seed-aggregation-states専用: seed完了後もメンテナンス
- *                              ゲートを再開せず閉じたまま維持する。新トリガーコードの
+ *                              メンテナンスゲートはseed完了後も**閉じたまま維持**し、
+ *                              再開しない(`--backfill-cm-unassigned`/`--rebuild-groups`
+ *                              とは異なりfinallyで自動再開しない)。新トリガーコードの
  *                              デプロイはこのスクリプトの責務外(運用者が別途実行)であり、
  *                              seed完了と同時にゲートが再開されると、seed完了〜デプロイ
  *                              完了までの間隙で発生した集計所属変更が旧トリガーで
  *                              documentGroupsへ反映されつつdocumentAggregationStatesには
  *                              反映されず、デプロイ後の次回イベントで二重適用される
- *                              (`/codex review`P1指摘)。本番展開では必ずこのフラグを
- *                              使い、デプロイ成功確認後に`--reopen-gate`を実行すること。
- *   --reopen-gate              `--seed-aggregation-states --keep-gate-closed`実行・
- *                              新トリガーコードのデプロイ完了確認後に、メンテナンス
- *                              ゲートを明示的に再開する。ドレイン待機は不要(seed実行時
- *                              に既に完了済み)。
+ *                              (`/codex review`P1指摘、当初はオプトインの
+ *                              `--keep-gate-closed`フラグだったが、指定し忘れる
+ *                              フットガンを排除するため必須の既定動作に変更)。デプロイ
+ *                              成功確認後、`--reopen-gate`で明示的にゲートを再開すること。
+ *   --reopen-gate              `--seed-aggregation-states`実行・新トリガーコードの
+ *                              デプロイ完了確認後に、メンテナンスゲートを明示的に
+ *                              再開する。ドレイン待機は不要(seed実行時に既に完了済み)。
+ *                              `--dry-run`併用時は実際の書き込みを行わずプレビューのみ
+ *                              行う(`/codex review`P2指摘: dry-runなのに実際にゲートを
+ *                              再開してしまうと、他の全モードの「dry-runは書き込みなし」
+ *                              という契約に反する)。
  *   --drain-wait-ms <ms>       --backfill-cm-unassigned/--rebuild-groups/
  *                              --seed-aggregation-states実行モードのドレイン待機時間
  *                              (デフォルト: 600000 = 10分、Cloud Functions最大実行
@@ -98,7 +101,6 @@ let projectId = process.env.FIREBASE_PROJECT_ID || 'doc-split-dev';
 let dryRun = false;
 let backfillCmUnassigned = false;
 let seedAggregationStates = false;
-let keepGateClosed = false;
 let reopenGate = false;
 let drainWaitMs = 10 * 60 * 1000;
 // --rebuild-groupsは繰り返し引数形式(--rebuild-groups <id> --rebuild-groups <id> ...)。
@@ -118,8 +120,6 @@ for (let i = 0; i < args.length; i++) {
     backfillCmUnassigned = true;
   } else if (args[i] === '--seed-aggregation-states') {
     seedAggregationStates = true;
-  } else if (args[i] === '--keep-gate-closed') {
-    keepGateClosed = true;
   } else if (args[i] === '--reopen-gate') {
     reopenGate = true;
   } else if (args[i] === '--drain-wait-ms' && args[i + 1]) {
@@ -137,15 +137,6 @@ for (let i = 0; i < args.length; i++) {
     rebuildGroupIds.push(value);
     i++;
   }
-}
-
-if (keepGateClosed && !seedAggregationStates) {
-  console.error('❌ --keep-gate-closed は --seed-aggregation-states と併用してください');
-  process.exit(1);
-}
-if (keepGateClosed && dryRun) {
-  console.error('❌ --keep-gate-closed は --dry-run と併用できません(dry-runはゲート操作を行いません)');
-  process.exit(1);
 }
 
 console.log(`📦 プロジェクト: ${projectId}`);
@@ -284,10 +275,10 @@ async function previewBackfillCmUnassigned() {
  * @param {number} drainWaitMsValue
  * @param {() => Promise<any>} fn
  * @param {{ reopenAfter?: boolean }} [options] - `reopenAfter: false`の場合、fn完了後も
- *   ゲートを閉じたまま維持する(呼び出し元が別途`--reopen-gate`等で明示的に再開する責務を負う)。
- *   `--seed-aggregation-states --keep-gate-closed`用(`/codex review`P1指摘: seed完了と
- *   同時にゲートが再開されると、デプロイ完了までの間隙で発生した集計所属変更が新旧トリガー間で
- *   二重適用されるリスクがあるため)。
+ *   ゲートを閉じたまま維持する(呼び出し元が別途`--reopen-gate`で明示的に再開する責務を負う)。
+ *   `--seed-aggregation-states`用(`/codex review`P1指摘: seed完了と同時にゲートが再開される
+ *   と、デプロイ完了までの間隙で発生した集計所属変更が新旧トリガー間で二重適用されるリスクが
+ *   あるため、この移行モードでは常にゲートを閉じたまま維持する)。
  */
 async function withMaintenanceGate(drainWaitMsValue, fn, options = {}) {
   const { reopenAfter = true } = options;
@@ -398,14 +389,15 @@ async function previewSeedAggregationStates() {
  * contributionが空配列の文書はstateを書かない(readAggregationStateContribution()は
  * state不在時も空配列を返すため、動作上の差はなくwrite数を削減できる)。
  *
- * `keepGateClosed=true`の場合、seed完了後もゲートを閉じたまま維持する(`withMaintenanceGate`の
- * `reopenAfter: false`)。新トリガーコードのデプロイはこのスクリプトの責務外(運用者が別途
- * 実行する別コマンド)であり、seed完了と同時にゲートが再開されると、seed完了〜デプロイ完了
- * までの間隙で発生した集計所属変更(OCR確定/split/CM同期、いずれもゲート対象)が旧トリガーに
+ * seed完了後もゲートは閉じたまま維持し、再開しない(`withMaintenanceGate`の`reopenAfter:
+ * false`)。新トリガーコードのデプロイはこのスクリプトの責務外(運用者が別途実行する別
+ * コマンド)であり、seed完了と同時にゲートが再開されると、seed完了〜デプロイ完了までの
+ * 間隙で発生した集計所属変更(OCR確定/split/CM同期、いずれもゲート対象)が旧トリガーに
  * よって`documentGroups`へ正しく反映されるが`documentAggregationStates`には反映されない。
  * デプロイ後にその文書が再び触られると、新トリガーが古いstateとの差分を「新規変化」と誤認し
- * 二重適用してしまう(`/codex review`P1指摘)。`--keep-gate-closed`でゲートを保持し、
- * デプロイ完了確認後に`--reopen-gate`で明示的に再開することでこの間隙を解消する。
+ * 二重適用してしまう(`/codex review`P1指摘。当初は`--keep-gate-closed`という opt-in
+ * フラグだったが、指定し忘れるフットガンを排除するため必須の既定動作に変更した)。デプロイ
+ * 完了確認後に`--reopen-gate`で明示的に再開することでこの間隙を解消する。
  */
 async function executeSeedAggregationStates() {
   // 新トリガーコードの配備自体は本スクリプトの責務外(運用者が別途デプロイする)。
@@ -450,24 +442,20 @@ async function executeSeedAggregationStates() {
     }
 
     return { scanned, seeded };
-  }, { reopenAfter: !keepGateClosed });
+  }, { reopenAfter: false });
 
   console.log(`\n✅ documentAggregationStates seed完了: スキャン ${scanned} 件 / state作成 ${seeded} 件`);
-  if (keepGateClosed) {
-    console.log('🔒 --keep-gate-closed指定のため、メンテナンスゲートは閉じたままです。');
-    console.log('次のステップ: 新トリガーコード(functions/src/triggers/updateDocumentGroups.ts)を配備し、');
-    console.log('デプロイ成功を確認した後、`--reopen-gate` でゲートを再開してください。');
-  } else {
-    console.log('次のステップ: 新トリガーコード(functions/src/triggers/updateDocumentGroups.ts)を配備し、');
-    console.log('scripts/diagnose-caremanager-group-gap.js で customer合計とcareManager合計の一致を検証してください。');
-  }
+  console.log('🔒 メンテナンスゲートは閉じたままです(新トリガーコード配備前にゲートが再開されると、');
+  console.log('   デプロイ完了までの間隙で発生した集計所属変更が二重適用されるリスクがあるため)。');
+  console.log('次のステップ: 新トリガーコード(functions/src/triggers/updateDocumentGroups.ts)を配備し、');
+  console.log('デプロイ成功を確認した後、`--reopen-gate` でゲートを再開してください。');
   return { scanned, seeded };
 }
 
 /**
- * `--seed-aggregation-states --keep-gate-closed`実行後、新トリガーコードのデプロイ完了を
- * 確認してからメンテナンスゲートを明示的に再開する(`/codex review`P1指摘対応)。
- * ドレイン待機は不要(seed実行時に既に完了済みで、ゲートは閉じられたまま維持されている)。
+ * `--seed-aggregation-states`実行後、新トリガーコードのデプロイ完了を確認してから
+ * メンテナンスゲートを明示的に再開する(`/codex review`P1指摘対応)。ドレイン待機は
+ * 不要(seed実行時に既に完了済みで、ゲートは閉じられたまま維持されている)。
  */
 async function executeReopenGate() {
   console.log('🔓 メンテナンスゲートを再開します...');
@@ -476,6 +464,18 @@ async function executeReopenGate() {
     { merge: true }
   );
   console.log('✅ メンテナンスゲートを再開しました。');
+}
+
+/**
+ * `--reopen-gate --dry-run`のプレビュー: 現在のゲート状態を表示するのみで書き込みは
+ * 行わない(`/codex review`P2指摘: dry-runなのに実際にゲートを再開してしまうと、
+ * 他の全モードの「dry-runは書き込みなし」という契約に反する)。
+ */
+async function previewReopenGate() {
+  const snap = await db.doc(MAINTENANCE_FLAGS_DOC_PATH).get();
+  const isOpen = !snap.exists || snap.data()?.groupAggregationGateOpen !== false;
+  console.log(`  現在のゲート状態: ${isOpen ? '開(既に再開済み)' : '閉'}`);
+  console.log('  実行するとgroupAggregationGateOpen: trueに更新します。');
 }
 
 /**
@@ -567,8 +567,14 @@ async function main() {
   const startTime = Date.now();
 
   if (reopenGate) {
-    console.log('🎯 モード: メンテナンスゲート再開(--seed-aggregation-states --keep-gate-closed 実行後の手動再開)\n');
-    await executeReopenGate();
+    console.log('🎯 モード: メンテナンスゲート再開(--seed-aggregation-states 実行後の手動再開)\n');
+
+    if (dryRun) {
+      await previewReopenGate();
+      console.log('\n⚠️  ドライランモードで実行しました。ゲート操作・書き込みは行っていません。');
+    } else {
+      await executeReopenGate();
+    }
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     console.log(`\n⏱️  実行時間: ${elapsed} 秒`);

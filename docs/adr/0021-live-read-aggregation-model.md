@@ -71,15 +71,15 @@ documentAggregationStates/{docId}
 
 新トリガーコードを配備する**前**に、既存の全document(`buildContribution()`のstatus==='split'判定に母集団定義を委ねる無条件フルスキャン)に対して`documentAggregationStates`をseedする必要がある。配備後に実行すると、配備直後〜seed完了までの間に発生したイベントがstate不在(`previousContribution=[]`)として扱われ、既に`documentGroups`へ計上済みの寄与を二重加算してしまう。
 
-`scripts/migrate-document-groups.js --seed-aggregation-states`(既存の`--backfill-cm-unassigned`/`--rebuild-groups`と同じメンテナンスゲート制御: クローズ→10分ドレイン待機→全document scan・seed)を追加した。推奨シーケンス(dev/kanameone/cocoro全環境で実施・検証済み。ただし後述の`--keep-gate-closed`/`--reopen-gate`はCodex review後の追加改善で、初回のdev/kanameone/cocoro実施時点では未実装だった):
+`scripts/migrate-document-groups.js --seed-aggregation-states`(既存の`--backfill-cm-unassigned`/`--rebuild-groups`と同様のメンテナンスゲート制御: クローズ→10分ドレイン待機→全document scan・seed。ただしこのモードはseed完了後もゲートを**閉じたまま維持**し、finallyで自動再開しない点が他の2モードと異なる)を追加した。推奨シーケンス(dev/kanameone/cocoro全環境で実施・検証済み。ただし`--reopen-gate`はCodex review後の追加改善で、初回のdev/kanameone/cocoro実施時点では未実装だった):
 
-1. `--seed-aggregation-states --keep-gate-closed`を実行(ゲートクローズ→ドレイン→seed→**ゲートは閉じたまま維持**)
+1. `--seed-aggregation-states`を実行(ゲートクローズ→ドレイン→seed→**ゲートは閉じたまま維持**)
 2. 新トリガーコードをデプロイ(`gh workflow run "Deploy Cloud Functions"`)し、成功を確認
 3. `--reopen-gate`でメンテナンスゲートを明示的に再開
 4. `scripts/diagnose-caremanager-group-gap.js`で恒等式検証
 5. 差分があれば既存の`rebuildSingleGroupAggregation()`(個別groupId再構築)で補正
 
-**なぜ`--keep-gate-closed`が必要か(`/codex review`P1指摘、本番実施後に追加修正)**: 当初実装ではseed完了と同時にゲートが自動再開されていた。新トリガーコードのデプロイはこのスクリプトの責務外(運用者が別途実行する)であり、seed完了〜デプロイ完了の間隙でゲートが開いていると、集計所属変更(OCR確定/split/CM同期)を旧トリガーが処理して`documentGroups`を正しく更新するが`documentAggregationStates`には反映されない。デプロイ後にその文書が再び触られると、新トリガーが古いstateとの差分を「新規変化」と誤認し二重適用する。dev/kanameone/cocoroへの初回展開時点ではこの改善前のバージョンを使用したため理論上のリスク窓が存在したが、展開後に`diagnose-caremanager-group-gap.js`で恒等式検証を実施し差分0件を確認済み(=このリスクは顕在化していない)。将来の再実行(新規クライアント展開等)では`--keep-gate-closed`/`--reopen-gate`を使用すること。
+**なぜゲートをseed完了後も閉じたまま維持するか(`/codex review`P1指摘、本番実施後に追加修正)**: 当初実装ではseed完了と同時にゲートが自動再開されていた。新トリガーコードのデプロイはこのスクリプトの責務外(運用者が別途実行する)であり、seed完了〜デプロイ完了の間隙でゲートが開いていると、集計所属変更(OCR確定/split/CM同期)を旧トリガーが処理して`documentGroups`を正しく更新するが`documentAggregationStates`には反映されない。デプロイ後にその文書が再び触られると、新トリガーが古いstateとの差分を「新規変化」と誤認し二重適用する。dev/kanameone/cocoroへの初回展開時点ではこの改善前のバージョンを使用したため理論上のリスク窓が存在したが、展開後に`diagnose-caremanager-group-gap.js`で恒等式検証を実施し差分0件を確認済み(=このリスクは顕在化していない)。当初はオプトインの`--keep-gate-closed`フラグとして実装したが、指定し忘れるフットガンをCodex再レビューで指摘され、必須の既定動作(`--seed-aggregation-states`は常にゲートを閉じたまま維持)に変更した。
 
 **seedスクリプトの母集団クエリ修正(`/codex review`P1指摘、本番実施後に追加修正)**: 当初実装は`rebuildAllGroupAggregations()`と同じ`where('status','!=','split').orderBy('status').orderBy('processedAt','desc')`クエリを使用していたが、Firestoreの`!=`/`orderBy`クエリは対象フィールドを持たない文書を暗黙に除外する。`buildContribution()`はstatus未設定文書を「split以外」として包含するため、この非対称性により`status`/`processedAt`が未設定のレガシー文書がseed対象から漏れうる。`scripts/diagnose-caremanager-group-gap.js`と同じ`FieldPath.documentId()`順の無条件フルスキャン+`buildContribution()`自身のstatus判定に統一した。dev/kanameone/cocoroの実際のデータには該当する文書が存在しなかった(診断スクリプトの恒等式検証で差分0件確認済み)ため実害はなかったが、将来の再実行時の潜在リスクを排除する。
 
