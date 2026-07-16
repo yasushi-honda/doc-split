@@ -91,6 +91,8 @@ A〜L・AC1〜AC7全て完了。Issue #664「documents create/delete順序不同
 
 **PRマージ済み**: PR #669(`fix/issue-664-live-read-aggregation` → `main`)。`/codex review-diff`によるセカンドオピニオン3ラウンド(P1×3・P2×2・P3×1、いずれも修正済み)を経てdecision-maker明示承認のうえ squash merge、feature branch削除済み。local mainもfast-forward済み(`f9f8869`)。
 
-**次セッションへの申し送り**:
-- AC7の「エラー率同水準」の明示的ログ比較は、kanameone gcloud認証の再認証要求により未実施。次回のcatchup等でCloud Functionsのエラー率(kanameone/cocoro双方)を目視確認することを推奨
-- K実施時の手順ミス(devでデプロイ→seedの順序を誤った、実害なしと確認済み)を教訓として記録済み。L実施時は正しい順序(seed→デプロイ)を徹底し、問題なく完了した
+**AC7フォローアップも完了(2026-07-16、PR #670)**: kanameoneのローカルgcloud認証がブロックされていたため、GHA経由(`check-function-error-logs`スクリプト新設)で両環境の`onDocumentWrite`エラー率を確認。両環境とも過去7日間エラー0件。kanameoneの`ondocumentwritesearchindex`(別トリガー)に201件のOOM(07-10/07-12発生、直近24時間では0件=現在進行中ではない)を発見したが、Issue #664とは無関係の既存問題で、2026-04-17設定済みのCloud Monitoringアラート(`hy.unimail.11@gmail.com`通知)で既に監視対象化されていることを確認済み。追加対応不要と判断。
+
+**教訓(記録のみ、対応不要)**: K実施時の手順ミス(devでデプロイ→seedの順序を誤った、実害なしと確認済み)。L実施時は正しい順序(seed→デプロイ)を徹底し、問題なく完了した。
+
+**🎯 ミッション達成**: A〜L・AC1〜AC7全項目`[x]`。次のゴールへの更新 or 本ファイル削除を検討してください。
