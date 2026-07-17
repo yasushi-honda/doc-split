@@ -89,6 +89,11 @@ D2「Storage実体 = 共有」は複製元の**添付ファイル本体**(`fileU
 
 ## 🔄 中断点（in-flight）
 
-なし。task 8-1(dev実機検証)完了。残るは task 8-2(kanameone展開+flag ON)のみで、decision-makerの展開認可待ち。feat/task8-dev-verification-fax-duplicationブランチ(seed-dev-data.ts拡張+set-feature-flag.js)は未マージ、次セッションでPRマージ要否をdecision-makerに確認する。
+なし。task 8-1(dev実機検証)完了。dev-tooling(seed-dev-data.ts拡張+set-feature-flag.js)は3エージェントレビュー(code-reviewer/comment-analyzer/silent-failure-hunter)の指摘(flag名typo検知・dry-run・project ID照合の欠如)を修正のうえ**PR #679としてマージ済み(2026-07-17)**。残るは task 8-2(kanameone展開+flag ON)のみで、decision-makerの展開認可待ち。
+
+**申し送り事項**:
+- dev環境の`settings/features.faxDuplication`は検証後もtrueのまま(意図的、devは顧客非対面のため実害なし。ただしドキュメント記載の「既定OFF」とdevの実状態は乖離している)
+- `set-feature-flag`はGHAドロップダウン(`environment: kanameone`選択)だけで本番flagを切替可能。PRマージと違いworkflow_dispatch自体にhookゲートは無いため、task 8-2実行時は認可が出てから実行すること
+- ローカルADCは`hy.unimail.11@gmail.com`以外のアカウントに紐付いたままだが、運用方針上GHA主体でADCはほぼ使わないため修復不要(decision-maker確認済み、2026-07-17)
 
 - 検証コマンド: `git -C /Users/yyyhhh/Projects/doc-split status && git -C /Users/yyyhhh/Projects/doc-split log --oneline -3`
