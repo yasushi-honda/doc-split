@@ -30,7 +30,7 @@ import { PdfViewer } from '@/components/PdfViewer'
 import { PdfSplitModal } from '@/components/PdfSplitModal'
 import { MasterSelectField } from '@/components/MasterSelectField'
 import { ExtractionInfoPopover } from '@/components/ExtractionInfoPopover'
-import { useDocument, useDocumentDetail, useReprocessDocument, resolveDetailFields } from '@/hooks/useDocuments'
+import { useDocument, useDocumentDetail, useReprocessDocument, useDistributionSiblingCount, resolveDetailFields } from '@/hooks/useDocuments'
 import { useDocumentEdit } from '@/hooks/useDocumentEdit'
 import { useCustomers, useOffices, useDocumentTypes, useCareManagers } from '@/hooks/useMasters'
 import { useMasterAlias } from '@/hooks/useMasterAlias'
@@ -392,6 +392,11 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
   const [showReprocessDialog, setShowReprocessDialog] = useState(false)
   const { reprocess, reprocessingId } = useReprocessDocument()
   const isReprocessing = reprocessingId !== null && reprocessingId === documentId
+  // 複数顧客FAX複製機能 (GOAL.md D4): 「自動配信・要整理」の識別は distributionId && !verified
+  const isUnorganizedDistribution = !!document?.distributionId && !document?.verified
+  const { data: distributionSiblingCount } = useDistributionSiblingCount(
+    isUnorganizedDistribution ? document?.distributionId : undefined
+  )
   // 削除確認ダイアログ
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
@@ -1346,6 +1351,15 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                   <div className="mt-4 rounded-lg bg-yellow-50 p-3">
                     <p className="text-xs font-medium text-yellow-800">同姓同名の顧客が存在します</p>
                     <p className="mt-1 text-xs text-yellow-700">{document.allCustomerCandidates}</p>
+                  </div>
+                )}
+
+                {/* 複数顧客FAX複製 (GOAL.md task 6-3): 自動配信・要整理の識別表示 */}
+                {isUnorganizedDistribution && (
+                  <div className="mt-4 rounded-lg bg-blue-50 p-3">
+                    <p className="text-xs font-medium text-blue-800">
+                      同一FAXを{distributionSiblingCount ?? '…'}名に配信・要整理
+                    </p>
                   </div>
                 )}
 

@@ -486,7 +486,24 @@ export function DocumentsPage() {
 
     setIsBulkOperating(true)
     try {
-      const ids = Array.from(selectedIds)
+      // codex review指摘(PR #677): pending/processing中のdocを再処理すると、
+      // appendReprocessClearToBatchのdistributionId読込とOCR完了トランザクションの
+      // 競合(TOCTOU)でdistributionId保護が外れうる。既定の一覧フィルタは'processed'
+      // だが、フィルタを変更すればpending/processing中docも選択可能なため、実行時に
+      // 明示的に除外する(単体doc再処理ボタンは元々error/processedのみ表示のため対象外)。
+      const allDocsForStatusCheck = documentsData?.pages.flatMap(page => page.documents) ?? []
+      const inProgressIds = new Set(
+        allDocsForStatusCheck
+          .filter((d) => d.status === 'pending' || d.status === 'processing')
+          .map((d) => d.id)
+      )
+      const ids = Array.from(selectedIds).filter((id) => !inProgressIds.has(id))
+      const skippedCount = selectedIds.size - ids.length
+      if (ids.length === 0) {
+        toast.error(`選択した${skippedCount}件は処理中のため再処理をスキップしました`)
+        setIsBulkOperating(false)
+        return
+      }
       const CHUNK_SIZE = 250
       let succeededCount = 0
       let chunkFailed = false
@@ -532,7 +549,11 @@ export function DocumentsPage() {
         toast.error(`一括再処理が途中で失敗しました（${succeededCount}/${ids.length}件完了）`)
       } else {
         clearSelection()
-        toast.success(`${succeededCount}件を再処理キューに追加しました`)
+        toast.success(
+          skippedCount > 0
+            ? `${succeededCount}件を再処理キューに追加しました（処理中のため${skippedCount}件はスキップ）`
+            : `${succeededCount}件を再処理キューに追加しました`
+        )
       }
     } catch (error) {
       console.error('Bulk reprocess error:', error)
@@ -540,7 +561,7 @@ export function DocumentsPage() {
     } finally {
       setIsBulkOperating(false)
     }
-  }, [selectedIds, queryClient, clearSelection])
+  }, [selectedIds, queryClient, clearSelection, documentsData])
 
   // 一括削除
   const handleBulkDelete = useCallback(async () => {
