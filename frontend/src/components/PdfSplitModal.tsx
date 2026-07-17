@@ -200,12 +200,17 @@ export function PdfSplitModal({
   }, [document.totalPages, splitPoints, document.pageResults, segmentEdits, detectedSegments])
 
   // 分割候補を自動検出
+  // GOAL.md task 7 (AC-f): segmentEditsはセグメント配列のindexをキーに手動編集内容を
+  // 保持するが、再検出でセグメント構成(境界・内容)が丸ごと入れ替わるとindexの対応関係も
+  // 無効になる。クリアせずに残すと、新しいセグメントへ古いindexの編集内容が誤って
+  // 上書き適用されてしまう(手動修正後の自動検出再実行で発生する回帰)。
   const handleDetectSplitPoints = async () => {
     setDetectResultMessage(null)
     try {
       const result = await detectSplitPoints.mutateAsync(document.id)
       const points = result.suggestions.map((s) => s.afterPageNumber)
       setSplitPoints(points)
+      setSegmentEdits(new Map())
 
       // 検出されたセグメントを保存
       if (result.segments && result.segments.length > 0) {

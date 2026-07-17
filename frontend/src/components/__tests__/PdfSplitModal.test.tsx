@@ -38,8 +38,23 @@ vi.mock('@/components/PdfSplitPreview', () => ({
 // react-query hookを無条件に呼び出すため QueryClientProvider が別途必要になる。
 // 本テストの対象はセグメント編集UIではなく分割実行系ボタンのdisabled制御なので、
 // 表示用の最小スタブに置き換えてスコープ外の依存を切り離す。
+// segmentEdits誤適用の再現テスト(AC-f)では手動編集操作が必要なため、
+// onChangeを発火するボタンも併せてスタブする(既存テストは未参照のため影響なし)。
 vi.mock('@/components/MasterSelectField', () => ({
-  MasterSelectField: ({ value }: { value: string }) => <span>{value}</span>,
+  MasterSelectField: ({
+    type,
+    value,
+    onChange,
+  }: {
+    type: string
+    value: string
+    onChange: (v: string, item?: { id: string }) => void
+  }) => (
+    <div>
+      <span>{value}</span>
+      <button onClick={() => onChange(`手動編集-${type}`)}>{`edit-${type}`}</button>
+    </div>
+  ),
 }))
 
 // マスターデータ取得（Firestore getDocs 経由）をバイパス
@@ -55,11 +70,12 @@ vi.mock('@/hooks/useDocuments', async () => {
 
 // 分割系mutation（Cloud Functions呼び出し）をバイパス。isPending: false固定。
 const mockSplitPdfMutateAsync = vi.fn().mockResolvedValue({ success: true, createdDocuments: [] })
+const mockDetectSplitPointsMutateAsync = vi.fn()
 vi.mock('@/hooks/usePdfSplit', async () => {
   const actual = await vi.importActual<typeof import('@/hooks/usePdfSplit')>('@/hooks/usePdfSplit')
   return {
     ...actual,
-    useDetectSplitPoints: () => ({ mutateAsync: vi.fn(), isPending: false }),
+    useDetectSplitPoints: () => ({ mutateAsync: mockDetectSplitPointsMutateAsync, isPending: false }),
     useSplitPdf: () => ({ mutateAsync: mockSplitPdfMutateAsync, isPending: false }),
     useRotatePdfPages: () => ({ mutateAsync: vi.fn(), isPending: false }),
   }
@@ -322,6 +338,78 @@ describe('PdfSplitModal - detail取得状態によるボタン制御 (Issue #547
     // [1,2]で上書きされた=回帰再発を意味する
     expect(screen.getByText(/セグメント 2/)).toBeDefined()
     expect(screen.queryByText(/セグメント 3/)).toBeNull()
+  })
+})
+
+describe('PdfSplitModal - 自動検出再実行時のsegmentEdits誤適用 (GOAL.md task 7, AC-f)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('手動編集後に自動検出を再実行すると、新しいセグメントにindex経由で古い編集内容が誤適用されてはならない', async () => {
+    const initialDoc = makeDocument({
+      totalPages: 4,
+      splitSuggestions: [
+        { afterPageNumber: 2, reason: 'manual', confidence: 100, newDocumentType: null, newCustomerName: null },
+      ],
+    })
+    render(
+      <PdfSplitModal
+        document={initialDoc}
+        isOpen={true}
+        onClose={vi.fn()}
+        onSuccess={vi.fn()}
+        detailLoading={false}
+        detailError={false}
+      />
+    )
+
+    // 確認ステップに進み、セグメント1(index 0)の顧客名を手動編集する
+    fireEvent.click(screen.getByRole('button', { name: '次へ: 分割内容の確認' }))
+    await screen.findByRole('button', { name: /分割を実行/ })
+    fireEvent.click(screen.getAllByRole('button', { name: 'edit-customer' })[0]!)
+    expect(screen.getByText('手動編集-customer')).toBeDefined()
+
+    // 「戻る」で分割ポイント選択に戻り、自動検出を再実行する。
+    // 再検出結果は元のセグメント構成と全く異なる境界・内容
+    // (index 0 に別ドキュメントの検出結果が来るケースを模擬)
+    fireEvent.click(screen.getByRole('button', { name: '戻る' }))
+    mockDetectSplitPointsMutateAsync.mockResolvedValueOnce({
+      suggestions: [
+        { afterPageNumber: 1, reason: 'ai', confidence: 90, newDocumentType: '領収書', newCustomerName: '検出顧客B' },
+      ],
+      shouldSplit: true,
+      segments: [
+        {
+          startPage: 1,
+          endPage: 1,
+          documentType: '領収書',
+          customerName: '検出顧客B',
+          customerId: null,
+          officeName: '検出事業所',
+          officeId: null,
+        },
+        {
+          startPage: 2,
+          endPage: 4,
+          documentType: '請求書',
+          customerName: '検出顧客C',
+          customerId: null,
+          officeName: '検出事業所2',
+          officeId: null,
+        },
+      ],
+    })
+    fireEvent.click(screen.getByRole('button', { name: '自動検出' }))
+    await screen.findByText('1件の分割ポイントを検出しました')
+
+    // 確認ステップへ再度進む。新しく検出されたセグメントの顧客名が表示されるべきで、
+    // 手動編集前のindex 0編集(「手動編集-customer」)が誤って引き継がれてはならない
+    fireEvent.click(screen.getByRole('button', { name: '次へ: 分割内容の確認' }))
+    await screen.findByRole('button', { name: /分割を実行/ })
+
+    expect(screen.getByText('検出顧客B')).toBeDefined()
+    expect(screen.queryByText('手動編集-customer')).toBeNull()
   })
 })
 
