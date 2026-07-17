@@ -86,7 +86,9 @@ on:
           - seed-dev-data --dry-run
           - seed-dev-data
           - seed-dev-data --force-pending
+          - set-feature-flag --flag faxDuplication --value true --dry-run
           - set-feature-flag --flag faxDuplication --value true
+          - set-feature-flag --flag faxDuplication --value false --dry-run
           - set-feature-flag --flag faxDuplication --value false
           - check-gemini-cost-stats
           - check-gemini-cost-stats --days 3 --doc-limit 30

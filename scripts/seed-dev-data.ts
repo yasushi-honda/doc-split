@@ -114,10 +114,11 @@ function genericPdfFor(totalPages: number): string {
 
 /**
  * E 用: 複数書類混在 FAX PDF の構成定義。
- * seed-doc-pending-faxdup-01(GOAL.md task 8): 複数顧客FAX複製機能のdev実機検証用。
+ * seed-doc-pending-faxdup-01(GOAL.md task 8-1): 複数顧客FAX複製機能のdev実機検証用。
  * 同一書類種別(請求書)で異なる利用者3名を記載した現場実例相当のFAXを再現し、
- * flag ON時にexact候補3件(相沢一郎/井上春子/内田健三、いずれもisDuplicate:false)が
- * 検出されて distributionId 付きで3件複製されることを実OCRパイプラインで確認する。
+ * flag ON時にexact候補3件(相沢一郎/井上春子/内田健三、いずれも顧客マスタの
+ * isDuplicate:false。文書側フィールドのisDuplicateCustomerとは別物)が検出されて
+ * distributionId 付きで3件複製されることを実OCRパイプラインで確認する。
  */
 export const MIXED_FAX_PDFS = [
   {
