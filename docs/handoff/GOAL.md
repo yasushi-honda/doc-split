@@ -84,10 +84,11 @@ D2「Storage実体 = 共有」は複製元の**添付ファイル本体**(`fileU
   - [x] 6-2. `getReprocessClearFields()`に分岐追加: distributionId保持docは顧客系フィールドをクリア対象から除外
   - [x] 6-3. 詳細画面に「同一FAXをN名に配信・要整理」表示(`distributionId && !verified`から導出、BE flag ONより先行デプロイ)。Firebase Emulator + Playwright MCPでブラウザ確認済み(バッジ表示/非表示の両条件)
 - [x] 7. PR-D: 分割確認画面の残存バグ修正(AC-f。独立・並列可、本機能のリリース判定から分離)。**PR #678マージ済み(2026-07-17)**
-- [ ] 8. 展開: dev環境でexact複数candidateのseedデータ+flag ONで実機検証 → kanameone展開+flag ON(`/deploy`スキル、decision-maker認可) → cocoroはflag OFFのまま展開。PR-Aは複製flag ON前にchunkサイズ・メモリ・再試行率を観測してから次段階に進む
+- [x] 8-1. dev実機検証(session136): decision-maker承認(「dev実機検証のみ着手」)を受け、seed-dev-data.tsにexact3候補(相沢一郎/井上春子/内田健三、いずれもisDuplicate:false)の請求書FAX fixture(`seed_faxdup_test_01.pdf`)を追加+`set-feature-flag.js`新設(feat/task8-dev-verification-fax-duplicationブランチ、GHA run-ops-script経由でdevへ投入・実行、ADCアカウント不一致のためローカルADCは未使用)。dev Firestore `settings/features.faxDuplication=true` を設定し実OCRパイプライン(processOCR)で検証: 3候補全てexact matchで検出され、元doc(customerId:seed-cust-01)+コピー2件(seed-cust-02/03)が共通distributionId(`seed-doc-pending-faxdup-01`)・共有fileUrl・detail/main dual-writeで正しく生成されたことをFirestore実データで確認。該当期間のCloud Functionsエラーログ0件。FEバッジ表示はtask 6-3(PR #677)でEmulator+Playwright確認済みのロジック(`distributionId && !verified`)を再利用するため、今回はBEデータ確認をもって充足と decision-maker 判断
+- [ ] 8-2. kanameone展開+flag ON(`/deploy`スキル、decision-maker認可が別途必要) → cocoroはflag OFFのまま展開。PR-Aは複製flag ON前にchunkサイズ・メモリ・再試行率を観測してから次段階に進む(AC-e)
 
 ## 🔄 中断点（in-flight）
 
-なし。task 6(PR-C)・task 7(PR-D)ともPR #677/#678としてマージ済みで区切りが良い状態。残るは task 8(展開: dev実機検証→kanameone展開+flag ON→cocoroはflag OFF維持)のみ。次セッションはtask 8着手の要否・展開タイミングをdecision-makerに確認するところから始める。
+なし。task 8-1(dev実機検証)完了。残るは task 8-2(kanameone展開+flag ON)のみで、decision-makerの展開認可待ち。feat/task8-dev-verification-fax-duplicationブランチ(seed-dev-data.ts拡張+set-feature-flag.js)は未マージ、次セッションでPRマージ要否をdecision-makerに確認する。
 
 - 検証コマンド: `git -C /Users/yyyhhh/Projects/doc-split status && git -C /Users/yyyhhh/Projects/doc-split log --oneline -3`
