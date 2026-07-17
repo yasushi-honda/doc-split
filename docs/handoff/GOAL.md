@@ -1,11 +1,11 @@
 ---
-updated: 2026-07-16
+updated: 2026-07-17
 ---
 <!-- session134: 新ミッション着手。前ミッション(Issue #664 phantom count恒久修正、ADR-0021)はsession133で完全達成済み(全文はdocs/handoff/LATEST.md session133サマリ参照予定、git history PR #669/#670/#671でも追跡可)。本ミッションは前ミッションの発端だった「複数顧客FAX複製機能」の設計相談の本体で、Issue #664解決によりブロッカーが除去されたため着手。kanameone現場(平出さん)の要件確定(2026-07-16受領): ①複数利用者記載FAXは検出人数分複製して各利用者フォルダへ配信、後からCMが手動分割 ②担当CMタブの利用者配下フォルダ表記を書類種別名→カテゴリ名に変更(タスク2で完了・PR #672)。 -->
 
-## 現在のミッション
+## 現在のミッション（2026-07-17完了）
 
-kanameone現場要件「複数顧客FAX複製機能」を実装する。OCRで複数の顧客候補を検出した受信FAXを検出人数分複製し、各コピーに異なるcustomerIdを割り当てて各利用者フォルダへ配信する(後から担当CMが手動分割で整理する運用)。カテゴリ表記化(要件②)はPR #672で完了済み。
+kanameone現場要件「複数顧客FAX複製機能」を実装する。OCRで複数の顧客候補を検出した受信FAXを検出人数分複製し、各コピーに異なるcustomerIdを割り当てて各利用者フォルダへ配信する(後から担当CMが手動分割で整理する運用)。カテゴリ表記化(要件②)はPR #672で完了済み。**2026-07-17、両要件ともkanameone本番へ反映完了**(コード反映+faxDuplication flag ON、cocoroはflag OFF維持)。AC-e(searchIndexerチャンク化の実測)のみ未充足のフォローアップ事項として残存(詳細は下記中断点参照)。
 
 ## 背景・why
 
@@ -59,10 +59,10 @@ D2「Storage実体 = 共有」は複製元の**添付ファイル本体**(`fileU
 - [x] AC-b: exact候補2名以上(!isDuplicate、customerId重複排除後)+flag ON時、documents N件生成(各customerId、各detail/main、共通distributionId)。flag OFF時は複製されず従来どおり1件+needsManualCustomerSelection(証明: `ocrCompletionTransactionIntegration.test.ts` 2候補/3候補ケースPASS)
 - [x] AC-c: 複製コピー(distributionId保持)を再処理しても、customerId/customerName/careManagerが不変であること。かつ再複製が発生しないこと(証明: integration test PASS、再処理前後のcustomerId比較アサーション含む。customerConfirmed/verified済みdocの保護もcode-review high指摘で追加)
 - [x] AC-d: cleanup-duplicates.jsがdistributionId保持docを削除対象にせず、同一fileName内の複数distribution混在をWARNログで検知すること(証明: `faxDuplicationCleanupHelpers.test.ts` 9件PASS。ops-script-redirect.sh hookによりdry-run実証は不可のためスクリプトテストのみで充足、GOAL.md規定通り)
-- [ ] AC-e: searchIndexerのgetAll chunk化後、kanameone展開後にchunkサイズ・1イベント当たりのメモリ使用量・再試行率を観測し、OOMエラーが増加しないこと(証明: getAll chunk化 + デプロイ後のエラーログ確認 + 観測メトリクス)
+- [ ] AC-e: searchIndexerのgetAll chunk化後、kanameone展開後にchunkサイズ・1イベント当たりのメモリ使用量・再試行率を観測し、OOMエラーが増加しないこと(証明: getAll chunk化 + デプロイ後のエラーログ確認 + 観測メトリクス)。**未充足のまま2026-07-17にflag ON実行**(decision-maker判断: 「実測を待たず今すぐON」を選択。デプロイ直後の一般エラーログ0件確認のみで、chunkサイズ/メモリ/再試行率の実測は未実施。以後の実運用の中でのフォローアップ監視推奨)
 - [x] AC-f: 分割確認画面の残存バグ(手動修正後の自動検出再実行でsegmentEdits誤適用)が修正されること(証明: PdfSplitModal.test.tsxに再現テスト追加しPASS、PR #678マージ済み(2026-07-17))
 - [x] AC-h: 元→コピー、コピー→元のどちらの削除順序でも、Storage実体とgmailLogs/uploadLogsが最後の1件の削除まで残ること。複製コピーを手動分割した場合、生成される子docにdistributionIdが伝播しないこと(証明: `distributionDeleteOrderIntegration.test.ts` + `splitDistributionIdNonPropagationContract.test.ts` PASS)
-- [ ] AC-g: 全テスト・lint・型チェック・buildがPASSし、kanameone本番へdistributionId+flag ON展開されること(cocoroはflag OFFのまま展開)(証明: 各コマンド実行結果 + デプロイ記録)
+- [x] AC-g: 全テスト・lint・型チェック・buildがPASSし、kanameone本番へdistributionId+flag ON展開されること(cocoroはflag OFFのまま展開)(証明: CI green(f824cdb) + Deploy Cloud Functions/Deploy Firebase Hosting両GHA成功(2026-07-17) + set-feature-flag実行ログ`settings/features.faxDuplication: undefined→true`(kanameone) + cocoroはdry-run確認で`undefined`のまま未変更)
 - 不変条件: 複製機能はクライアント別feature flagで制御し、既定OFFで導入する(kanameoneのみON想定)。ADR-0021の集計モデル・ADR-0016のidentity設計(docId namespace)を変更しない。新規statusフィールド(distributionStatus等)は追加しない(既存verified/confirmedByで代替)
 
 ## 進行中のtasks
@@ -85,15 +85,16 @@ D2「Storage実体 = 共有」は複製元の**添付ファイル本体**(`fileU
   - [x] 6-3. 詳細画面に「同一FAXをN名に配信・要整理」表示(`distributionId && !verified`から導出、BE flag ONより先行デプロイ)。Firebase Emulator + Playwright MCPでブラウザ確認済み(バッジ表示/非表示の両条件)
 - [x] 7. PR-D: 分割確認画面の残存バグ修正(AC-f。独立・並列可、本機能のリリース判定から分離)。**PR #678マージ済み(2026-07-17)**
 - [x] 8-1. dev実機検証(session136): decision-maker承認(「dev実機検証のみ着手」)を受け、seed-dev-data.tsにexact3候補(相沢一郎/井上春子/内田健三、いずれもisDuplicate:false)の請求書FAX fixture(`seed_faxdup_test_01.pdf`)を追加+`set-feature-flag.js`新設(feat/task8-dev-verification-fax-duplicationブランチ、GHA run-ops-script経由でdevへ投入・実行、ADCアカウント不一致のためローカルADCは未使用)。dev Firestore `settings/features.faxDuplication=true` を設定し実OCRパイプライン(processOCR)で検証: 3候補全てexact matchで検出され、元doc(customerId:seed-cust-01)+コピー2件(seed-cust-02/03)が共通distributionId(`seed-doc-pending-faxdup-01`)・共有fileUrl・detail/main dual-writeで正しく生成されたことをFirestore実データで確認。該当期間のCloud Functionsエラーログ0件。FEバッジ表示はtask 6-3(PR #677)でEmulator+Playwright確認済みのロジック(`distributionId && !verified`)を再利用するため、今回はBEデータ確認をもって充足と decision-maker 判断
-- [ ] 8-2. kanameone展開+flag ON(`/deploy`スキル、decision-maker認可が別途必要) → cocoroはflag OFFのまま展開。PR-Aは複製flag ON前にchunkサイズ・メモリ・再試行率を観測してから次段階に進む(AC-e)
+- [x] 8-2. kanameone展開+flag ON。**2026-07-17完了**。decision-maker明示認可(「devの実装と検証をクリアしていれば段階的にprod反映を進めて」)を受け、Stage1(コード反映: Deploy Cloud Functions + Deploy Firebase Hosting、両GHA成功、直後エラーログ0件)→Stage2(flag ON確認質問で「実測を待たず今すぐON」選択)の順で実施。kanameone `settings/features.faxDuplication: undefined→true`、cocoroはdry-run確認で`undefined`のまま未変更。AC-e(chunkサイズ等の実測)は明示的に未充足のまま進行(上記AC-e注記参照)、今後の実運用中のフォローアップ監視が必要
 
 ## 🔄 中断点（in-flight）
 
-なし。task 8-1(dev実機検証)完了。dev-tooling(seed-dev-data.ts拡張+set-feature-flag.js)は3エージェントレビュー(code-reviewer/comment-analyzer/silent-failure-hunter)の指摘(flag名typo検知・dry-run・project ID照合の欠如)を修正のうえ**PR #679としてマージ済み(2026-07-17)**。残るは task 8-2(kanameone展開+flag ON)のみで、decision-makerの展開認可待ち。
+なし。task 8-2完了によりミッション本体は完了。**フォローアップ事項**: AC-eが未充足のままflag ONしたため、今後のセッションでkanameoneの実運用データに対しsearchIndexerのチャンクサイズ・メモリ使用量・再試行率・OOMエラー有無を観測すること(`check-function-error-logs`等で定期確認推奨)。
 
 **申し送り事項**:
 - dev環境の`settings/features.faxDuplication`は検証後もtrueのまま(意図的、devは顧客非対面のため実害なし。ただしドキュメント記載の「既定OFF」とdevの実状態は乖離している)
-- `set-feature-flag`はGHAドロップダウン(`environment: kanameone`選択)だけで本番flagを切替可能。PRマージと違いworkflow_dispatch自体にhookゲートは無いため、task 8-2実行時は認可が出てから実行すること
+- kanameoneのFirebase CLIローカルログイン(`systemkaname@kanameone.com`)は失効しておりbrowserない環境からは`login:use`不可と判明(2026-07-17)。今後のkanameone向けFunctions/Hostingデプロイは`deploy-functions.yml`/`deploy-hosting.yml`のGHA経由(SA鍵)を使うこと。ローカル`deploy-to-project.sh kanameone`手順は前提条件(CLIログイン)が崩れているため使用不可
+- kanameoneの`functions/.env.docsplit-kanameone`(gitignore対象・ローカル専用)は`GEMINI_MODEL_ID=gemini-2.5-flash`に明示固定されている(Issue #548移行検証保留のため)。GHA`Deploy Cloud Functions`実行時はこのファイルがGHA上に存在しないため、`gemini_model_id_override=gemini-2.5-flash`を明示指定しないと既定値(gemini-3.5-flash)に意図せず切り替わる。次回kanameoneデプロイ時も必ず明示指定すること
 - ローカルADCは`hy.unimail.11@gmail.com`以外のアカウントに紐付いたままだが、運用方針上GHA主体でADCはほぼ使わないため修復不要(decision-maker確認済み、2026-07-17)
 
 - 検証コマンド: `git -C /Users/yyyhhh/Projects/doc-split status && git -C /Users/yyyhhh/Projects/doc-split log --oneline -3`
