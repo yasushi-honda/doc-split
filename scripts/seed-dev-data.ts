@@ -112,7 +112,13 @@ function genericPdfFor(totalPages: number): string {
   return storagePathOf(entry.fixture);
 }
 
-/** E 用: 複数書類混在 FAX PDF の構成定義 */
+/**
+ * E 用: 複数書類混在 FAX PDF の構成定義。
+ * seed-doc-pending-faxdup-01(GOAL.md task 8): 複数顧客FAX複製機能のdev実機検証用。
+ * 同一書類種別(請求書)で異なる利用者3名を記載した現場実例相当のFAXを再現し、
+ * flag ON時にexact候補3件(相沢一郎/井上春子/内田健三、いずれもisDuplicate:false)が
+ * 検出されて distributionId 付きで3件複製されることを実OCRパイプラインで確認する。
+ */
 export const MIXED_FAX_PDFS = [
   {
     id: 'seed-doc-pending-mixed-01',
@@ -131,6 +137,16 @@ export const MIXED_FAX_PDFS = [
     segments: [
       { docType: '訪問看護報告書', customer: '加藤秋人', office: 'あおぞらデイサービスセンター', pages: 2, dateLabel: '報告日: 2026年6月15日' },
       { docType: 'サービス提供票', customer: '木村千代', office: 'ひまわり訪問介護ステーション', pages: 3, dateLabel: '提供月: 2026年6月' },
+    ],
+  },
+  {
+    id: 'seed-doc-pending-faxdup-01',
+    fixture: 'seed_faxdup_test_01.pdf',
+    fileName: 'seed_複数利用者FAX_01.pdf',
+    segments: [
+      { docType: '請求書', customer: '相沢一郎', office: 'ひまわり訪問介護ステーション', pages: 1, dateLabel: '発行日: 2026年7月17日' },
+      { docType: '請求書', customer: '井上春子', office: 'ひまわり訪問介護ステーション', pages: 1, dateLabel: '発行日: 2026年7月17日' },
+      { docType: '請求書', customer: '内田健三', office: 'ひまわり訪問介護ステーション', pages: 1, dateLabel: '発行日: 2026年7月17日' },
     ],
   },
 ];
