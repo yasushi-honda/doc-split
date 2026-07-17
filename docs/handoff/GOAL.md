@@ -5,7 +5,7 @@ updated: 2026-07-17
 
 ## 現在のミッション（2026-07-17完了）
 
-kanameone現場要件「複数顧客FAX複製機能」を実装する。OCRで複数の顧客候補を検出した受信FAXを検出人数分複製し、各コピーに異なるcustomerIdを割り当てて各利用者フォルダへ配信する(後から担当CMが手動分割で整理する運用)。カテゴリ表記化(要件②)はPR #672で完了済み。**2026-07-17、両要件ともkanameone本番へ反映完了**(コード反映+faxDuplication flag ON、cocoroはflag OFF維持)。AC-e(searchIndexerチャンク化の実測)のみ未充足のフォローアップ事項として残存(詳細は下記中断点参照)。
+kanameone現場要件「複数顧客FAX複製機能」を実装する。OCRで複数の顧客候補を検出した受信FAXを検出人数分複製し、各コピーに異なるcustomerIdを割り当てて各利用者フォルダへ配信する(後から担当CMが手動分割で整理する運用)。カテゴリ表記化(要件②)はPR #672で完了済み。**2026-07-17、両要件ともkanameone本番へ反映完了**(コード反映+faxDuplication flag ON、cocoroはflag OFF維持)。「devと同じ内容は全prodへ反映する」方針のもとcocoroへもコード反映済み(flag自体はクライアント別要件の不変条件によりOFF維持)。AC-e(searchIndexerチャンク化の実測)のみ未充足のフォローアップ事項として残存(詳細は下記中断点参照)。
 
 ## 背景・why
 
@@ -86,6 +86,7 @@ D2「Storage実体 = 共有」は複製元の**添付ファイル本体**(`fileU
 - [x] 7. PR-D: 分割確認画面の残存バグ修正(AC-f。独立・並列可、本機能のリリース判定から分離)。**PR #678マージ済み(2026-07-17)**
 - [x] 8-1. dev実機検証(session136): decision-maker承認(「dev実機検証のみ着手」)を受け、seed-dev-data.tsにexact3候補(相沢一郎/井上春子/内田健三、いずれもisDuplicate:false)の請求書FAX fixture(`seed_faxdup_test_01.pdf`)を追加+`set-feature-flag.js`新設(feat/task8-dev-verification-fax-duplicationブランチ、GHA run-ops-script経由でdevへ投入・実行、ADCアカウント不一致のためローカルADCは未使用)。dev Firestore `settings/features.faxDuplication=true` を設定し実OCRパイプライン(processOCR)で検証: 3候補全てexact matchで検出され、元doc(customerId:seed-cust-01)+コピー2件(seed-cust-02/03)が共通distributionId(`seed-doc-pending-faxdup-01`)・共有fileUrl・detail/main dual-writeで正しく生成されたことをFirestore実データで確認。該当期間のCloud Functionsエラーログ0件。FEバッジ表示はtask 6-3(PR #677)でEmulator+Playwright確認済みのロジック(`distributionId && !verified`)を再利用するため、今回はBEデータ確認をもって充足と decision-maker 判断
 - [x] 8-2. kanameone展開+flag ON。**2026-07-17完了**。decision-maker明示認可(「devの実装と検証をクリアしていれば段階的にprod反映を進めて」)を受け、Stage1(コード反映: Deploy Cloud Functions + Deploy Firebase Hosting、両GHA成功、直後エラーログ0件)→Stage2(flag ON確認質問で「実測を待たず今すぐON」選択)の順で実施。kanameone `settings/features.faxDuplication: undefined→true`、cocoroはdry-run確認で`undefined`のまま未変更。AC-e(chunkサイズ等の実測)は明示的に未充足のまま進行(上記AC-e注記参照)、今後の実運用中のフォローアップ監視が必要
+- [x] 8-3. cocoroへも同一コードを反映(decision-maker指示「devと同じ内容は全prodへ反映する方針」)。**2026-07-17完了**。Deploy Cloud Functions(environment=cocoro、GEMINI_MODEL_ID pin無し=code-default継続)+Hosting手動デプロイ(`firebase deploy --only hosting -P cocoro`、後片付け確認済み)を実施、直後エラーログ0件。`faxDuplication` flagは不変条件通りcocoroでは`undefined`(OFF)のまま維持(複製機能はkanameone専用のクライアント別要件のため、コード反映のみでflagは変更していない)
 
 ## 🔄 中断点（in-flight）
 
