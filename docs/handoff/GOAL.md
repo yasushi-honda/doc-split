@@ -60,7 +60,7 @@ D2「Storage実体 = 共有」は複製元の**添付ファイル本体**(`fileU
 - [x] AC-c: 複製コピー(distributionId保持)を再処理しても、customerId/customerName/careManagerが不変であること。かつ再複製が発生しないこと(証明: integration test PASS、再処理前後のcustomerId比較アサーション含む。customerConfirmed/verified済みdocの保護もcode-review high指摘で追加)
 - [x] AC-d: cleanup-duplicates.jsがdistributionId保持docを削除対象にせず、同一fileName内の複数distribution混在をWARNログで検知すること(証明: `faxDuplicationCleanupHelpers.test.ts` 9件PASS。ops-script-redirect.sh hookによりdry-run実証は不可のためスクリプトテストのみで充足、GOAL.md規定通り)
 - [ ] AC-e: searchIndexerのgetAll chunk化後、kanameone展開後にchunkサイズ・1イベント当たりのメモリ使用量・再試行率を観測し、OOMエラーが増加しないこと(証明: getAll chunk化 + デプロイ後のエラーログ確認 + 観測メトリクス)
-- [ ] AC-f: 分割確認画面の残存バグ(手動修正後の自動検出再実行でsegmentEdits誤適用)が修正されること(証明: PdfSplitModal.test.tsxに再現テスト追加しPASS)
+- [x] AC-f: 分割確認画面の残存バグ(手動修正後の自動検出再実行でsegmentEdits誤適用)が修正されること(証明: PdfSplitModal.test.tsxに再現テスト追加しPASS、PR #678マージ済み(2026-07-17))
 - [x] AC-h: 元→コピー、コピー→元のどちらの削除順序でも、Storage実体とgmailLogs/uploadLogsが最後の1件の削除まで残ること。複製コピーを手動分割した場合、生成される子docにdistributionIdが伝播しないこと(証明: `distributionDeleteOrderIntegration.test.ts` + `splitDistributionIdNonPropagationContract.test.ts` PASS)
 - [ ] AC-g: 全テスト・lint・型チェック・buildがPASSし、kanameone本番へdistributionId+flag ON展開されること(cocoroはflag OFFのまま展開)(証明: 各コマンド実行結果 + デプロイ記録)
 - 不変条件: 複製機能はクライアント別feature flagで制御し、既定OFFで導入する(kanameoneのみON想定)。ADR-0021の集計モデル・ADR-0016のidentity設計(docId namespace)を変更しない。新規statusフィールド(distributionStatus等)は追加しない(既存verified/confirmedByで代替)
@@ -79,15 +79,15 @@ D2「Storage実体 = 共有」は複製元の**添付ファイル本体**(`fileU
   - [x] 5-4. `deleteDocument`のgmailLogs**と**uploadLogsに`fileId`単位の他doc残存チェック追加(実装当初は`(sourceType,fileId)`複合キーだったが、legacy doc検知漏れのCodeRabbit指摘によりfileId単独照合に変更) — `functions/src/documents/sourceLogDeletionGuard.ts`
   - [x] 5-5. `cleanup-duplicates.js`: distributionId保持docを除外+同一fileName内の複数distribution混在をWARN。fileUrl保護収集は全スナップショットからの事前収集方式に変更(CodeRabbit指摘: escalated/単独fileNameグループの取りこぼし修正)
   - [x] 5-6. integration test(AC-b/AC-c/AC-d/AC-h)
-- [ ] 6. PR-C: FE表示(型→BE→FEの順序)
-  - [ ] 6-1. `firestoreToDocument`+`useDocumentGroups.ts:189`直キャスト経路へ`distributionId`マッピング追加
-  - [ ] 6-2. `getReprocessClearFields()`に分岐追加: distributionId保持docは顧客系フィールドをクリア対象から除外
-  - [ ] 6-3. 詳細画面に「同一FAXをN名に配信・要整理」表示(`distributionId && !verified`から導出、BE flag ONより先行デプロイ)
-- [ ] 7. PR-D: 分割確認画面の残存バグ修正(AC-f。独立・並列可、本機能のリリース判定から分離)
+- [x] 6. PR-C: FE表示(型→BE→FEの順序)。**PR #677マージ済み(2026-07-17)**。8角度code-review + review-pr(code-reviewer/test-analyzer) + `/codex review-diff`実施。codex P1指摘(TOCTOUレース: processing中docの一括再処理でdistributionId保護が競合により外れうる)を受け、DocumentsPage.tsxのhandleBulkReprocessにprocessing中doc除外ガードを追加して対応
+  - [x] 6-1. `firestoreToDocument`+`useDocumentGroups.ts:189`直キャスト経路へ`distributionId`マッピング追加
+  - [x] 6-2. `getReprocessClearFields()`に分岐追加: distributionId保持docは顧客系フィールドをクリア対象から除外
+  - [x] 6-3. 詳細画面に「同一FAXをN名に配信・要整理」表示(`distributionId && !verified`から導出、BE flag ONより先行デプロイ)。Firebase Emulator + Playwright MCPでブラウザ確認済み(バッジ表示/非表示の両条件)
+- [x] 7. PR-D: 分割確認画面の残存バグ修正(AC-f。独立・並列可、本機能のリリース判定から分離)。**PR #678マージ済み(2026-07-17)**
 - [ ] 8. 展開: dev環境でexact複数candidateのseedデータ+flag ONで実機検証 → kanameone展開+flag ON(`/deploy`スキル、decision-maker認可) → cocoroはflag OFFのまま展開。PR-Aは複製flag ON前にchunkサイズ・メモリ・再試行率を観測してから次段階に進む
 
 ## 🔄 中断点（in-flight）
 
-なし。task 5(PR-B)は5-1〜5-6全てマージ済みで区切りが良い状態。task 6(PR-C)は未着手(部分着手ではない)。次セッションはtask 6着手の要否をdecision-makerに確認するところから始める(§進行中のtasks参照)。
+なし。task 6(PR-C)・task 7(PR-D)ともPR #677/#678としてマージ済みで区切りが良い状態。残るは task 8(展開: dev実機検証→kanameone展開+flag ON→cocoroはflag OFF維持)のみ。次セッションはtask 8着手の要否・展開タイミングをdecision-makerに確認するところから始める。
 
 - 検証コマンド: `git -C /Users/yyyhhh/Projects/doc-split status && git -C /Users/yyyhhh/Projects/doc-split log --oneline -3`
