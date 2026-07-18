@@ -1,0 +1,63 @@
+name: Deploy Firestore Indexes
+
+# Firestore firestore.indexes.json(composite indexes + fieldOverrides)を
+# 対象環境へデプロイする。ローカルFirebase CLI/gcloudログインが失効している
+# 環境(kanameone等)向けに、deploy-functions.ymlと同じSA鍵認証パターンを再利用する。
+# Issue #680(search_index.postingsフィールドオーバーライド)対応で新設。
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment target'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - kanameone
+          - cocoro
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: |-
+            ${{ github.event.inputs.environment == 'kanameone' && secrets.GCP_SA_KEY_KANAMEONE ||
+                github.event.inputs.environment == 'dev' && secrets.GCP_SA_KEY_DEV ||
+                secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Install Firebase CLI
+        run: npm install -g firebase-tools
+
+      - name: Deploy Firestore indexes
+        run: |
+          if [ "${{ github.event.inputs.environment }}" == "cocoro" ]; then
+            PROJECT_ALIAS="cocoro"
+          elif [ "${{ github.event.inputs.environment }}" == "kanameone" ]; then
+            PROJECT_ALIAS="kanameone"
+          else
+            PROJECT_ALIAS="dev"
+          fi
+
+          echo "Deploying firestore:indexes to: $PROJECT_ALIAS"
+          firebase deploy --only firestore:indexes -P $PROJECT_ALIAS --force
+
+      - name: Notify deployment status
+        if: always()
+        run: |
+          if [ "${{ job.status }}" == 'success' ]; then
+            echo "✅ Firestore indexes deployment successful"
+          else
+            echo "❌ Firestore indexes deployment failed"
+          fi

@@ -295,5 +295,11 @@
       ]
     }
   ],
-  "fieldOverrides": []
+  "fieldOverrides": [
+    {
+      "collectionGroup": "search_index",
+      "fieldPath": "postings",
+      "indexes": []
+    }
+  ]
 }
