@@ -1,6 +1,18 @@
 # ハンドオフメモ
 
-**更新日**: 2026-07-18（複数顧客FAX複製機能ミッション完遂アーカイブ — GOAL.mdをIssue #680修正ミッションへ差し替えるため、旧ミッション全文をここに保全）
+**更新日**: 2026-07-19（Issue #680ミッション完遂アーカイブ — GOAL.mdを次ミッション待ちへ差し替えるため、旧ミッション全文をここに保全）
+
+## Issue #680ミッション 完遂サマリ（〜2026-07-19アーカイブ時点）
+
+kanameone本番の`search_index`肥大化による`too many index entries`エラー(searchIndexer機能停止、走査9770件中4391件=45%がdrift)を、Phase A(即時対症+復旧)・Phase B(tokenizer品質改善による再発防止)の2段階で完全解決した。
+
+- **Phase A**（PR #681、2026-07-18）: `firestore.indexes.json`に`search_index.postings`のfieldOverride追加。Firestoreの自動インデックスエントリ数上限そのものに抵触しないよう設定変更のみで対応。kanameone/cocoro両環境へ`deploy-firestore-indexes.yml`経由でデプロイ後、`force-reindex --all-drift --execute`で4389+161件(GHA 6時間タイムアウトのため2回実行、各回は冪等で実害なし)を復旧、最終dry-runで`drift: 0件`を確認。
+- **Phase B**（PR #684、2026-07-19本番反映）: `functions/src/utils/tokenizer.ts`の`generateFieldTokens()`に`includeBigrams`オプションを追加し、fileNameトークン化を`extractFilenameInfo()`のprefix経由に変更。`prefixType`(`office_name`のみbigram、`phone_number`/`document_id`/`unknown`はkeywordのみ)により高頻度語トークンの生成自体を抑制し、根本原因の再発を防止。tokenizer.test.ts新規テスト8件全PASS、`/review`+`/code-review medium`(findings 6件、CONFIRMED2件中1件は同PR内で半角カナoffice_name誤判定バグとして修正済み)実施。kanameone(run 29661871489)+cocoro(run 29662683899)へGHA経由でデプロイ完了(`gemini_model_id_override=code-default`指定、Issue #548で移行済みのgemini-3.5-flashを維持し意図しないモデル変更なし)。
+- **Issue #680クローズ**（2026-07-19、番号単位認可済み）: 全AC達成、両環境本番反映完了により完全解決と判断。
+
+**follow-up Issue起票（本ミッションのスコープ外、次ミッション候補として次回triage）**:
+- **#686**: `extractFilenameInfo()`の`-L\d+-`マッチが非fax由来ファイル名(例: `見積書-L1000-final.pdf`)に偶然一致するとprefixが切り詰められ検索インデックスから内容が脱落するCONFIRMEDバグ(`/code-review medium`で検出、本PRのスコープ外として修正未実施)
+- **#687**: `scripts/force-reindex.js`が非推奨のatomic batch writerを逐次実行しており(Phase A実行時の6時間タイムアウト直接原因)、将来の大規模復旧作業向けにBulkWriter化を検討する価値がある(ただし複数docが同一`search_index/{tokenId}`へ競合書き込みする構造のため並列化には設計が必要)
 
 ## 複数顧客FAX複製機能ミッション 完遂サマリ（〜2026-07-18アーカイブ時点）
 
