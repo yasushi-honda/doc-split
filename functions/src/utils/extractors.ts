@@ -192,8 +192,11 @@ export function extractFilenameInfo(filename: string): FilenameInfo {
   // 拡張子を除去
   const baseName = filename.replace(/\.[^.]+$/, '');
 
-  // -L1-, -L2- などのパターンを検出してプレフィックスを抽出
-  const match = baseName.match(/^(.+?)-L\d+-/);
+  // -L1-, -L2- などのパターンを検出してプレフィックスを抽出。
+  // fax gateway由来ファイル名は`{prefix}-L{レーン番号}-{YYYYMMDDHHMMSS}`形式(14桁タイムスタンプ
+  // 必須、tokenizer.ts参照)のため、直後が14桁タイムスタンプでない場合は非fax由来の偶然一致と
+  // みなしprefixを切り詰めない(Issue #686: 「見積書-L1000-final.pdf」等の誤マッチ防止)
+  const match = baseName.match(/^(.+?)-L\d+-(\d{14})$/);
   let prefix = match ? match[1] : baseName;
 
   // 半角カナを全角に、全角数字を半角に正規化

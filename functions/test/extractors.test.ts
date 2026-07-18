@@ -97,6 +97,19 @@ describe('extractFilenameInfo', () => {
     expect(info.prefix).to.equal('');
     expect(info.prefixType).to.equal('unknown');
   });
+
+  // Issue #686: fax gateway由来ファイル名は`{prefix}-L{レーン番号}-{YYYYMMDDHHMMSS}`形式
+  // (14桁タイムスタンプ必須)。非fax由来ファイル名が偶然`-L\d+-`様の部分文字列を含む場合、
+  // 後続が14桁タイムスタンプでなければfax由来と誤判定してはならない
+  it('-L\\d+-の直後が14桁タイムスタンプでない場合は誤判定せずbaseName全体をprefixとする', () => {
+    const info = extractFilenameInfo('見積書-L1000-final.pdf');
+    expect(info.prefix).to.equal('見積書-L1000-final');
+  });
+
+  it('-L\\d+-の直後の数字が14桁に満たない場合も誤判定せずbaseName全体をprefixとする', () => {
+    const info = extractFilenameInfo('資料-L5-2026.pdf');
+    expect(info.prefix).to.equal('資料-L5-2026');
+  });
 });
 
 describe('extractDocumentTypeEnhanced', () => {
