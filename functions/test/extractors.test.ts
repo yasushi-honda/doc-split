@@ -18,6 +18,7 @@ import {
   arbitrateOfficeName,
   arbitrateCustomerName,
   arbitrateDate,
+  extractFilenameInfo,
   DocumentMaster,
   OfficeMaster,
   CustomerMaster,
@@ -50,6 +51,53 @@ const customerMasters: CustomerMaster[] = [
   { id: 'cust4', name: '田中太郎', furigana: 'たなかたろう', isDuplicate: true },
   { id: 'cust5', name: '田中太郎', furigana: 'たなかたろう', isDuplicate: true },
 ];
+
+describe('extractFilenameInfo', () => {
+  it('数字のみのプレフィックスはphone_number型と判定する', () => {
+    const info = extractFilenameInfo('0529088423-L1-20260122104653.pdf');
+    expect(info.prefix).to.equal('0529088423');
+    expect(info.prefixType).to.equal('phone_number');
+  });
+
+  it('DOCで始まるプレフィックスはdocument_id型と判定する', () => {
+    const info = extractFilenameInfo('DOC260718-L1-20260718131435.pdf');
+    expect(info.prefix).to.equal('DOC260718');
+    expect(info.prefixType).to.equal('document_id');
+  });
+
+  it('全角文字を含むプレフィックスはoffice_name型と判定する', () => {
+    const info = extractFilenameInfo('西春内科在宅クリニック-L1-20260122101727.pdf');
+    expect(info.prefix).to.equal('西春内科在宅クリニック');
+    expect(info.prefixType).to.equal('office_name');
+  });
+
+  // code-review medium指摘・実証済み(Issue #680 Phase B): 半角カナのみのプレフィックスは
+  // 修正前は぀-ゟ等の全角判定regexに一致せずunknown型に誤分類され、
+  // tokenizer.ts側でbigram検索を失っていた
+  it('半角カナのみのプレフィックスもoffice_name型と判定する(レガシーFAX機器のJIS X 0201制約対応)', () => {
+    const info = extractFilenameInfo('ﾆｼﾊﾙﾅｲｶｸﾘﾆﾂｸ-L1-20260718131435.pdf');
+    expect(info.prefix).to.equal('ﾆｼﾊﾙﾅｲｶｸﾘﾆﾂｸ');
+    expect(info.prefixType).to.equal('office_name');
+  });
+
+  it('-L\\d+-パターンがない場合はbaseName全体をprefixとする', () => {
+    const info = extractFilenameInfo('田中太郎_介護保険.pdf');
+    expect(info.prefix).to.equal('田中太郎_介護保険');
+    expect(info.prefixType).to.equal('office_name');
+  });
+
+  it('拡張子のみの場合はunknown型・空prefixを返す', () => {
+    const info = extractFilenameInfo('.pdf');
+    expect(info.prefix).to.equal('');
+    expect(info.prefixType).to.equal('unknown');
+  });
+
+  it('空文字列の場合はエラーを投げずunknown型・空prefixを返す', () => {
+    const info = extractFilenameInfo('');
+    expect(info.prefix).to.equal('');
+    expect(info.prefixType).to.equal('unknown');
+  });
+});
 
 describe('extractDocumentTypeEnhanced', () => {
   it('完全一致で書類名を抽出', () => {

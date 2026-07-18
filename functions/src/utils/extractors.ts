@@ -210,8 +210,12 @@ export function extractFilenameInfo(filename: string): FilenameInfo {
   else if (/^doc\d/i.test(normalizedPrefix)) {
     prefixType = 'document_id';
   }
-  // 日本語を含む場合は事業所名
-  else if (/[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/.test(prefix)) {
+  // 日本語を含む場合は事業所名（半角カナも対象。レガシーFAX機器はJIS X 0201制約で
+  // 事業所名を半角カナ表記することがあるため、全角カナ・漢字・ひらがなと同様に
+  // 「日本語テキスト」として扱う必要がある。/code-review medium指摘・実証済み:
+  // 半角カナのみのプレフィックスがunknown型に誤分類され、tokenizer.ts側でbigram検索を
+  // 失っていた）
+  else if (/[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF\uFF61-\uFF9F]/.test(prefix)) {
     prefixType = 'office_name';
   }
 
