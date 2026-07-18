@@ -1,6 +1,27 @@
 # ハンドオフメモ
 
-**更新日**: 2026-07-17 session135（複数顧客FAX複製機能 PR-B(BE本体)完遂 — PR #675マージ、`/code-review`+Evaluator+`/codex review`+CodeRabbit4段レビュー完走）
+**更新日**: 2026-07-18（複数顧客FAX複製機能ミッション完遂アーカイブ — GOAL.mdをIssue #680修正ミッションへ差し替えるため、旧ミッション全文をここに保全）
+
+## 複数顧客FAX複製機能ミッション 完遂サマリ（〜2026-07-18アーカイブ時点）
+
+session135のPR-B(BE本体)完遂後、以下を経てミッション本体を完了した(詳細な設計判断・レビュー経緯は下記session135サマリおよび該当PR参照)。
+
+- **PR-C(FE表示、task6、PR #677マージ済み2026-07-17)**: `firestoreToDocument`/`useDocumentGroups.ts`への`distributionId`マッピング、`getReprocessClearFields()`のdistributionId保護分岐、詳細画面「同一FAXをN名に配信・要整理」バッジ表示。8角度code-review+review-pr+`/codex review-diff`実施、P1指摘(TOCTOUレース: 一括再処理時のdistributionId保護競合)を`handleBulkReprocess`のprocessing中doc除外ガードで対応。
+- **PR-D(分割確認画面バグ修正、task7、PR #678マージ済み2026-07-17)**: AC-f、独立並列タスク。再現テスト追加の上修正。
+- **dev実機検証(task8-1)**: `seed-dev-data.ts`に3候補fax fixture追加、`set-feature-flag.js`新設、dev Firestoreで実OCRパイプライン検証。3候補全てexact match検出、元doc+コピー2件が共通distributionId・共有fileUrl・detail/main dual-writeで正しく生成されたことを確認。
+- **kanameone本番展開(task8-2、2026-07-17完了)**: decision-maker明示認可を得て、Stage1(コード反映: GHA Deploy Cloud Functions/Hosting両成功)→Stage2(flag ON、「実測を待たず今すぐON」選択)の順で実施。`settings/features.faxDuplication: undefined→true`。
+- **cocoroへのコード反映(task8-3、2026-07-17完了)**: 「devと同じ内容は全prodへ反映する方針」に基づきコードのみ反映(flagは不変条件によりOFF/undefined維持)。
+- **AC-eフォローアップ観測(2026-07-18)**: flag ON後のOOM/searchIndexerチャンク化リスクを観測した結果、懸念していたリスクは0件(AC-e自体はクローズ判断可能)。観測中に**別種の既存障害を新規発見**: kanameone本番で`search_index/{tokenHash}`が「too many index entries」エラーで更新停止(2026-07-05以前から継続、flag ON/複製機能とは無関係)。**Issue #680として起票**。
+
+**ミッション完了の定義(GOAL.md旧版より、全AC達成状況)**: AC-a〜AC-h(AC-eの実測項目除く)は全て`[x]`達成。AC-eは上記フォローアップ観測により実質充足(懸念リスク0件)。不変条件(feature flagクライアント別制御、ADR-0021/ADR-0016非変更、新規statusフィールド不追加)も維持。
+
+**申し送り事項(継続監視、次ミッションでも有効)**:
+- dev環境の`settings/features.faxDuplication`は検証後もtrueのまま(意図的、devは顧客非対面のため実害なし)
+- kanameoneのFirebase CLIローカルログイン(`systemkaname@kanameone.com`)は失効、今後のkanameone向けデプロイはGHA経由(SA鍵)必須
+- kanameoneの`functions/.env.docsplit-kanameone`は`GEMINI_MODEL_ID=gemini-2.5-flash`固定、GHA実行時は`gemini_model_id_override=gemini-2.5-flash`明示指定必須
+- ローカルADCは`yasushi.honda@aozora-cg.com`に紐付いており(hy.unimail.11@gmail.comではない)、kanameone/cocoro等クライアント環境への権限なし。運用方針上GHA主体でADCはほぼ使わないため修復不要(decision-maker確認済み、2026-07-17)
+
+設計判断の詳細(D1〜D5、Codexセカンドオピニオン指摘事項、Evaluator分離協議、`/codex review`/CodeRabbit指摘の全内容)は本ファイル下記のsession135サマリ、および該当PR(#672, #673, #675, #677, #678)を参照。
 
 <!-- session115〜117・121・122はLATEST.md詳細サマリ未追記（GOAL.mdのみ更新）。#539完遂・#540完遂(OCR実行所有権ガード)・#625(OCR Storage孤児化解消)・#547 Phase E是正(Hostingデプロイ漏れ)、および候補抽出スパイク(タスクA、PR#641)・候補抽出呼出し実装(タスクB、PR#642)・arbitration実装(タスクC、PR#643)の経緯はGOAL.md/ADR-0018/該当コミットメッセージで追跡可能なため遡及記載はROI低と判断、着手せず -->
 

@@ -1,104 +1,71 @@
 ---
 updated: 2026-07-18
 ---
-<!-- session134: 新ミッション着手。前ミッション(Issue #664 phantom count恒久修正、ADR-0021)はsession133で完全達成済み(全文はdocs/handoff/LATEST.md session133サマリ参照予定、git history PR #669/#670/#671でも追跡可)。本ミッションは前ミッションの発端だった「複数顧客FAX複製機能」の設計相談の本体で、Issue #664解決によりブロッカーが除去されたため着手。kanameone現場(平出さん)の要件確定(2026-07-16受領): ①複数利用者記載FAXは検出人数分複製して各利用者フォルダへ配信、後からCMが手動分割 ②担当CMタブの利用者配下フォルダ表記を書類種別名→カテゴリ名に変更(タスク2で完了・PR #672)。 -->
+<!-- 前ミッション(複数顧客FAX複製機能)は全AC達成済みで2026-07-18に完遂アーカイブ。全文はdocs/handoff/LATEST.md「複数顧客FAX複製機能ミッション 完遂サマリ」参照。本ミッションはそのフォローアップ観測中に発見したIssue #680の修正。 -->
 
-## 現在のミッション（2026-07-17完了）
+## 現在のミッション
 
-kanameone現場要件「複数顧客FAX複製機能」を実装する。OCRで複数の顧客候補を検出した受信FAXを検出人数分複製し、各コピーに異なるcustomerIdを割り当てて各利用者フォルダへ配信する(後から担当CMが手動分割で整理する運用)。カテゴリ表記化(要件②)はPR #672で完了済み。**2026-07-17、両要件ともkanameone本番へ反映完了**(コード反映+faxDuplication flag ON、cocoroはflag OFF維持)。「devと同じ内容は全prodへ反映する」方針のもとcocoroへもコード反映済み(flag自体はクライアント別要件の不変条件によりOFF維持)。AC-e(searchIndexerチャンク化の実測)のみ未充足のフォローアップ事項として残存(詳細は下記中断点参照)。
+Issue #680（kanameone本番、`search_index`肥大化によるsearchIndexer機能停止）を修正する。走査9770件中4391件(45%)が検索インデックス未構築(drift)の状態を解消し、再発を防止する。
 
 ## 背景・why
 
-- 発端はsession133の設計相談。「ページ分割の自動提案は精度が低いため、複数利用者記載のFAXは分割せず全員に同じものを配信し、後で担当CMごとに操作してもらう方が良い」という現場提案(decision-maker経由)。前提整備としてIssue #664(create/delete順序不同のphantom count)をADR-0021(materialized projection)で先行解決済み
-- 2026-07-16に現場(平出さん)から要件が確定: 「利用者3名が記載されている4ページのFAXが届いた際、3名それぞれのフォルダに4ページのファイルが届くようにしてほしい。あとで手動で分割作業をするイメージ」
-- 実装前のFE/BE横断影響調査完了(session134、Explore 4並列)+ `/impl-plan`(フルモード)+ Codexセカンドオピニオン(plan mode, effort=high)を経て設計確定
+- 2026-07-18、複数顧客FAX複製機能のAC-eフォローアップ観測中に発見。`search_index/{tokenHash}`ドキュメントがFirestoreの「1ドキュメントあたりの自動インデックスエントリ数上限」を超過し`too many index entries`エラーで`batch.commit()`が失敗し続けている。2026-07-05以前から継続する既存障害で、複製機能のflag ONとは無関係。
+- 原因調査完了(Issue #680コメント参照): `search_index/00000644` = bigram`"26"`(fileNameの西暦下2桁)、`search_index/00000d45` = bigram`"l1"`(fax gatewayのレーン番号`-L1-`)。原因は`documents.fileName`(Gmail添付ファイル名=fax gateway命名規則`{prefix}-L{レーン番号}-{YYYYMMDDHHMMSS}.pdf`)が無条件でbigram化されていたこと。
+- `/impl-plan`フルモード+Codexセカンドオピニオン(plan mode, effort=high, 2回相談)を経て設計確定。
 
 ### 設計確定の経緯
 
-1. **影響調査(session134)**: cleanup-duplicates.jsがfileName単独判定のため複製コピーを誤削除する破壊的リスク(実コード確認済み)、複製注入点はOCR後(ocrProcessor最終tx内)が推奨=Gemini課金N倍回避、searchIndexerのgetAll未chunk化(kanameoneで512MiB OOM 201件既発)の前倒し対応が事実上必須、再処理経由の再複製無限ループのガード必須
-2. **Codexセカンドオピニオン(Critical指摘、実コード裏取りで確認)**:
-   - `getReprocessClearFields()`(useDocuments.ts:23-24,43)は`customerId`/`customerName`/`customerConfirmed`をクリアする実装であることを確認。コピーを再処理すると割当が消え元doc候補1に誤上書きされる、という指摘は事実 → **修正必須**
-   - `matchType==='exact'`(extractors.ts:284 `matchingText.includes(normalizedDocName)`)は正規化テキストの部分文字列一致であることを確認。家族名等の偽陽性リスクは実在 → `!isDuplicate`+customerId重複排除+判定ログで緩和
-3. **Fable5レビュー(Codex案からの簡素化)**: 新フィールドは`distributionId: string`1本のみ(元doc/コピー全メンバーに付与、`doc.id===doc.distributionId`で元doc判定)。双方向配列(`duplicatedFrom`/`duplicatedInto`)は削除時に孤児化するため不採用。`distributionStatus`等の新規statusフィールドも不採用 — 既存の`verified`(人手確認済みか)+`confirmedBy`(自動時null)で「自動配信/要整理」の識別は導出可能なため、既存プリミティブの重複実装を避けた
+1. **原因調査**: `force-reindex.js --all-drift --dry-run`(GHA経由、read-only)で実測、走査9770件中4391件がdrift(`hash (none)`＝検索インデックス未構築)。日付トークン(YYYY/YYYY-MM/YYYY-MM-DD、2015〜2035年総当たり)は該当せず、drift対象docの実fileNameから逆算して`"26"`/`"l1"`を特定。
+2. **Codexセカンドオピニオン1回目**: 4候補(1.tokenizer修正 2.フィールドオーバーライド 3.dfガード 4.組み合わせ)を提示、「1+2+3の段階導入」を推奨。
+3. **追加検証**: Firestore公式ドキュメント(map型フィールドのindex exemptionはサブフィールドに継承)+コードグレップ(`postings`への`where`/`orderBy`クエリなし)で案2の安全性を確認。また案1単独では`document_id`型prefix(`DOC260718`等、西暦下2桁を内包)から`"26"`を完全排除できないことが判明。
+4. **decision-maker判断**: ロールアウトを2フェーズ分割(Phase A=即時対症+復旧、Phase B=tokenizer品質改善を通常ペースで後続)に決定。
+5. **Codexセカンドオピニオン2回目**: 確定計画(Phase A/B分割+tokenizer設計詳細+AC)をレビュー、前回助言との整合性を確認。AC分割・追加テストケース(document_id由来の`"26"`非生成の明示テスト)・dfガードの再開条件明文化を反映して計画確定。
 
 ## 採用設計
 
-### D1: 複製注入点 = OCR後
-`ocrProcessor.ts`最終トランザクション内(478-531行相当)。OCRは1回のみ実行し、結果を候補人数分のdocへ展開する。Gemini課金はN倍化しない。
+### Phase A: 即時対症 + 復旧（config変更のみ）
+`firestore.indexes.json`に`search_index.postings`のfieldOverride追加。Firestoreの自動インデックスエントリ数上限そのものに抵触しないようにする(tokenizer.ts側のロジックは変更しない)。これにより4391件の復旧(`force-reindex.js`)が可能になる。
 
-### D2: Storage実体 = 共有
-全コピーが同一`original/`のfileUrlを参照(独立コピーにしない、容量N倍を回避)。既存の`deleteDocument`共有fileUrl fail-closedガードを活用。gmailLogs**と**uploadLogsの削除は`(sourceType, fileId)`単位で他doc残存チェックを追加(Codex指摘#5、uploadLogsは見落としだった)。
+### Phase B: tokenizer品質改善（Phase A完了後、通常ペースで着手）
+`functions/src/utils/tokenizer.ts`の`generateFieldTokens()`に`includeBigrams`オプションを追加。fileNameのトークン化を生fileNameではなく`functions/src/utils/extractors.ts`の既存関数`extractFilenameInfo()`が返す`prefix`経由に変更。**`prefixType === 'office_name'`(日本語テキスト)の場合のみbigram化を継続、`phone_number`/`document_id`/`unknown`の場合はkeywordのみ**(短い数字bigramは検索価値が低く汚染源になりやすい一方、長い完全一致keywordは文書ごとに一意性が高く安全かつ検索的に有用なため)。この設計により`document_id`型prefix(`DOC260718`)からも`"26"`が生成されなくなる(bigram自体を生成しないため)。
 
-### D3: 複製トリガー条件
-`matchType==='exact' && !isDuplicate`の候補が2件以上 → customerIdで重複排除した上で全員に配信。構造化ログ(候補・スコア・配信数)を残し初週の過剰/過少配信を観測可能にする。flag OFF時は現行どおり`needsManualCustomerSelection`の手動選択フローのまま(同一条件の分岐として自然に書ける)。
-
-### D4: 複製識別フィールド = `distributionId`1本
-元doc・全コピーに同一値を付与。双方向配列は持たない(削除時の孤児化を構造的に回避)。兄弟一覧は`where('distributionId','==',X)`で導出。コピーを手動分割した場合、生成される子docへ`distributionId`は伝播しない(配信マーカーの役目は完了、子は顧客固有の精製物)。
-
-### D5: 元doc/コピーの状態
-`customerConfirmed:true`+`confirmedBy:null`+`verified:false`で生成(新規statusフィールド不要)。「自動配信・要整理」の識別は`distributionId && !verified`から導出、UIバッジ表示もこの式を使う。
-
-### 再処理時のcustomerId保持(Codex Critical#1対応)
-`getReprocessClearFields()`に分岐追加: `distributionId`を持つdocは`customerId`/`customerName`/`customerConfirmed`/`careManager`をクリア対象から除外する。既存の`confirmedFieldMerge`保護(customerConfirmed:true時に顧客フィールドを維持する既存機構)がそのまま働き、新しい保護機構は不要。
-
-### コピーpayload構築 = allowlist方式
-分割フロー(`pdfOperations.ts`のbatch.set+detail dual-write)を踏襲するが、`ocrRunId`/retry・error状態/`search`/集計キー/split系フィールド(`isSplitSource`等)/provenanceは引き継がない。
-
-### cleanup-duplicates.js対応 = v1中間案
-`distributionId`を持つdocは削除対象から除外。同一fileNameグループに複数distributionが混在した場合はWARNで人間にエスカレーション(自動処理はしない)。フル案(distributionId単位のスコアリング削除)は実際の複合事象が観測されてから。
-
-### 件数意味論の下流影響 = 実害なし判定
-kanameoneの請求はFirestore egressコストベース(#547)で書類件数ベースのKPI・請求は存在しないため確認済み。現場周知のみで技術対応は不要。
-
-### OCRテキストoffload実体の複製要否(session135実装中判明、D2の適用範囲を精緻化)
-D2「Storage実体 = 共有」は複製元の**添付ファイル本体**(`fileUrl`)を指しており、これは設計通り全コピーで共有する。一方、OCR結果が長文でCloud Storageへoffloadされる場合の`ocrResultUrl`(`ocr-results/{docId}/{ocrRunId}.txt`)は**run単位の派生物**であり対象外だった。当初実装ではコピーが元docの`ocrResultUrl`をそのまま引き継いでいたため、元docの以降の再処理(Issue #625成功パスcleanup、docId単位所有前提)が旧オブジェクトを削除すると、コピー側の`getOcrText`が`not-found`になる欠陥があった(Codexセカンドオピニオン`/codex review`指摘、CONFIRMED)。各コピー専用のStorageパスへGCS server-side copyで複製する修正を実施。複製先キーは`newDocRef.id`(transaction自動リトライ毎に非決定)ではなく`${元docId}-${customerId}`(リトライ安定)を採用(CodeRabbit自動レビュー指摘、CONFIRMED)。Issue #625のcleanupロジック自体には一切手を入れていない。
+### スコープ外（別Issue起票候補、triage判断待ち）
+案3(高頻度トークンの実行時ガード、dfが閾値を超えたトークンへの書き込みスキップ)。再開条件: 特定トークンのdf・postingsサイズが閾値(例: df 10,000件 or ドキュメントサイズ500KB)を超えたら再検討する。
 
 ## 完了の定義
 
-- [x] AC-a: 担当CM別タブで利用者展開時のフォルダがカテゴリ名で表示され、カテゴリ未運用環境では従来の書類種別表示にフォールバックすること(証明: PR #672マージ済み、`npx vitest run src/lib/__tests__/buildCustomerFolderGroups.test.ts` 9件PASS + ブラウザスクショ4枚)
-- [x] AC-b: exact候補2名以上(!isDuplicate、customerId重複排除後)+flag ON時、documents N件生成(各customerId、各detail/main、共通distributionId)。flag OFF時は複製されず従来どおり1件+needsManualCustomerSelection(証明: `ocrCompletionTransactionIntegration.test.ts` 2候補/3候補ケースPASS)
-- [x] AC-c: 複製コピー(distributionId保持)を再処理しても、customerId/customerName/careManagerが不変であること。かつ再複製が発生しないこと(証明: integration test PASS、再処理前後のcustomerId比較アサーション含む。customerConfirmed/verified済みdocの保護もcode-review high指摘で追加)
-- [x] AC-d: cleanup-duplicates.jsがdistributionId保持docを削除対象にせず、同一fileName内の複数distribution混在をWARNログで検知すること(証明: `faxDuplicationCleanupHelpers.test.ts` 9件PASS。ops-script-redirect.sh hookによりdry-run実証は不可のためスクリプトテストのみで充足、GOAL.md規定通り)
-- [ ] AC-e: searchIndexerのgetAll chunk化後、kanameone展開後にchunkサイズ・1イベント当たりのメモリ使用量・再試行率を観測し、OOMエラーが増加しないこと(証明: getAll chunk化 + デプロイ後のエラーログ確認 + 観測メトリクス)。**未充足のまま2026-07-17にflag ON実行**(decision-maker判断: 「実測を待たず今すぐON」を選択。デプロイ直後の一般エラーログ0件確認のみで、chunkサイズ/メモリ/再試行率の実測は未実施。以後の実運用の中でのフォローアップ監視推奨)。**2026-07-18フォローアップ観測実施**: OOM・chunk化関連のエラーは0件(AC-e自体が懸念していたリスクは顕在化なし)。ただし観測中に**別種の既存障害**(`too many index entries for entity`、flag ONより前の7/5以前から継続、Issue #680)を発見。flag ON/複製機能とは無関係の既存問題のため、AC-eの合否判定には影響しない
-- [x] AC-f: 分割確認画面の残存バグ(手動修正後の自動検出再実行でsegmentEdits誤適用)が修正されること(証明: PdfSplitModal.test.tsxに再現テスト追加しPASS、PR #678マージ済み(2026-07-17))
-- [x] AC-h: 元→コピー、コピー→元のどちらの削除順序でも、Storage実体とgmailLogs/uploadLogsが最後の1件の削除まで残ること。複製コピーを手動分割した場合、生成される子docにdistributionIdが伝播しないこと(証明: `distributionDeleteOrderIntegration.test.ts` + `splitDistributionIdNonPropagationContract.test.ts` PASS)
-- [x] AC-g: 全テスト・lint・型チェック・buildがPASSし、kanameone本番へdistributionId+flag ON展開されること(cocoroはflag OFFのまま展開)(証明: CI green(f824cdb) + Deploy Cloud Functions/Deploy Firebase Hosting両GHA成功(2026-07-17) + set-feature-flag実行ログ`settings/features.faxDuplication: undefined→true`(kanameone) + cocoroはdry-run確認で`undefined`のまま未変更)
-- 不変条件: 複製機能はクライアント別feature flagで制御し、既定OFFで導入する(kanameoneのみON想定)。ADR-0021の集計モデル・ADR-0016のidentity設計(docId namespace)を変更しない。新規statusフィールド(distributionStatus等)は追加しない(既存verified/confirmedByで代替)
+- [ ] AC-A1: `firestore.indexes.json`のfieldOverrideがkanameone/cocoro両環境に反映済み(証明: `firebase deploy`実行ログ+Firebase Console目視)
+- [ ] AC-A2: `search_index/00000644`を含むcanary(5-10件)で書き込みが成功する(証明: force-reindex.js実行ログ、エラーゼロ)
+- [ ] AC-A3: 4391件の段階復旧で成功/失敗/未処理を集計し、未解決0件(証明: force-reindex.js実行結果集計)
+- [ ] AC-A4: 最終`force-reindex --all-drift --dry-run`が`drift: 0件`(証明: GHA実行結果)
+- [ ] AC-B1: `generateDocumentTokens({fileName: 'DOC260718-L1-20260718131435.pdf'})`のトークンに`"26"`・`"l1"`・時刻断片を含まない(証明: tokenizer.test.ts新規ケース)
+- [ ] AC-B2: `phone_number`/`document_id`/`office_name`/`unknown`の4分類それぞれを個別にテスト(証明: tokenizer.test.ts)
+- [ ] AC-B3: `田中太郎_介護保険.pdf`は従来通りbigram込み(回帰確認、証明: 既存テストケース)
+- [ ] AC-B4: prefix抽出失敗時(拡張子のみ・空文字)はエラーを投げず、かつ不正な空トークンも生成しない(証明: 境界値テスト)
+- 不変条件: `measure-field-byte-sizes`は1MiBサイズ上限の安全確認であり、index entry数上限問題の直接証明ではないことを記録する。復旧(Phase A)はtokenizer修正(Phase B)の完了を待たずに実施可能(field override単独でインデックス上限エラーは解消するため)。
 
 ## 進行中のtasks
 
-- [x] 0. FE/BE横断影響調査(Explore 4並列: BE/FE/カテゴリ/運用インフラ)+cleanup-duplicates.js破壊的リスクの実コード裏取り
-- [x] 1. カテゴリ表記化の実装(B案→レビュー後: カテゴリ解決できない書類は種別名フォルダのまま残す設計)。`buildCustomerFolderGroups.ts`+テスト9件、`CustomerSubGroup.tsx`/`GroupDocumentList.tsx`改修
-- [x] 2. カテゴリ表記化のブラウザ確認(#193教訓)+PR作成+/code-review medium(8角度finder、CONFIRMED 6件全て修正)+ui-verifiedラベル+マージ完了。**PR #672マージ済み(2026-07-16)、dev環境へ自動デプロイ済み**
-- [x] 3. 複数顧客FAX複製機能の`/impl-plan`フルモード策定+Codexセカンドオピニオン(plan mode)+Fable5レビュー(distributionId簡素化)を経て設計確定。decision-maker承認済み(2026-07-16)
-- [x] 4. PR-A: searchIndexerのdb.getAllをチャンク化(独立・先行。既存OOM対策の前倒し、複製導入前の前提)。`/code-review medium`実施(CONFIRMED+PLAUSIBLE各1件修正、残るPLAUSIBLE1件はchunk化以前から存在した既存設計の限界として記録のみ)。**PR #673マージ済み(2026-07-16)、dev環境へ自動デプロイ済み**。kanameone展開後のchunkサイズ・メモリ実測(AC-e)は複製flag ON検討時に実施
-- [x] 5. PR-B: 複製本体(BE)。**PR #675マージ済み(2026-07-16〜17, session135)、dev環境へ自動デプロイ済み**。`/code-review high`(CONFIRMED 3件修正)+Evaluator分離(HIGH 1件はtask 6-2へ明示スコープ外化・MEDIUM 1件は3候補テスト追加で対応)+`/codex review`(P1 1件: 複製コピーのOCRテキストoffload実体が元docの再処理で消える問題を修正)+CodeRabbit自動レビュー(実質4件: sourceType複合キー検知漏れ/transaction retry非決定/score契約/cleanup escalated group漏れ、全て修正)を経てマージ。functions unit 1840/integration 145/scripts 103/frontend 345 全PASS
-  - [x] 5-1. `shared/types.ts`に`distributionId?: string`追加
-  - [x] 5-2. BE feature flag読取ヘルパー(`settings/features.faxDuplication`、scheduled関数向け新設、既定OFF、fail-closed) — `functions/src/utils/featureFlags.ts`
-  - [x] 5-3. `ocrProcessor`複製ロジック(exact複数&&!isDuplicate判定+customerId重複排除+構造化ログ→分割フロー踏襲のbatch.set(allowlist payload)+detail/main dual-write+distributionId付与、最終tx内でflag評価) — `applyOcrCompletionTransaction`として`processDocument`から抽出、単体でintegration test可能に
-  - [x] 5-4. `deleteDocument`のgmailLogs**と**uploadLogsに`fileId`単位の他doc残存チェック追加(実装当初は`(sourceType,fileId)`複合キーだったが、legacy doc検知漏れのCodeRabbit指摘によりfileId単独照合に変更) — `functions/src/documents/sourceLogDeletionGuard.ts`
-  - [x] 5-5. `cleanup-duplicates.js`: distributionId保持docを除外+同一fileName内の複数distribution混在をWARN。fileUrl保護収集は全スナップショットからの事前収集方式に変更(CodeRabbit指摘: escalated/単独fileNameグループの取りこぼし修正)
-  - [x] 5-6. integration test(AC-b/AC-c/AC-d/AC-h)
-- [x] 6. PR-C: FE表示(型→BE→FEの順序)。**PR #677マージ済み(2026-07-17)**。8角度code-review + review-pr(code-reviewer/test-analyzer) + `/codex review-diff`実施。codex P1指摘(TOCTOUレース: processing中docの一括再処理でdistributionId保護が競合により外れうる)を受け、DocumentsPage.tsxのhandleBulkReprocessにprocessing中doc除外ガードを追加して対応
-  - [x] 6-1. `firestoreToDocument`+`useDocumentGroups.ts:189`直キャスト経路へ`distributionId`マッピング追加
-  - [x] 6-2. `getReprocessClearFields()`に分岐追加: distributionId保持docは顧客系フィールドをクリア対象から除外
-  - [x] 6-3. 詳細画面に「同一FAXをN名に配信・要整理」表示(`distributionId && !verified`から導出、BE flag ONより先行デプロイ)。Firebase Emulator + Playwright MCPでブラウザ確認済み(バッジ表示/非表示の両条件)
-- [x] 7. PR-D: 分割確認画面の残存バグ修正(AC-f。独立・並列可、本機能のリリース判定から分離)。**PR #678マージ済み(2026-07-17)**
-- [x] 8-1. dev実機検証(session136): decision-maker承認(「dev実機検証のみ着手」)を受け、seed-dev-data.tsにexact3候補(相沢一郎/井上春子/内田健三、いずれもisDuplicate:false)の請求書FAX fixture(`seed_faxdup_test_01.pdf`)を追加+`set-feature-flag.js`新設(feat/task8-dev-verification-fax-duplicationブランチ、GHA run-ops-script経由でdevへ投入・実行、ADCアカウント不一致のためローカルADCは未使用)。dev Firestore `settings/features.faxDuplication=true` を設定し実OCRパイプライン(processOCR)で検証: 3候補全てexact matchで検出され、元doc(customerId:seed-cust-01)+コピー2件(seed-cust-02/03)が共通distributionId(`seed-doc-pending-faxdup-01`)・共有fileUrl・detail/main dual-writeで正しく生成されたことをFirestore実データで確認。該当期間のCloud Functionsエラーログ0件。FEバッジ表示はtask 6-3(PR #677)でEmulator+Playwright確認済みのロジック(`distributionId && !verified`)を再利用するため、今回はBEデータ確認をもって充足と decision-maker 判断
-- [x] 8-2. kanameone展開+flag ON。**2026-07-17完了**。decision-maker明示認可(「devの実装と検証をクリアしていれば段階的にprod反映を進めて」)を受け、Stage1(コード反映: Deploy Cloud Functions + Deploy Firebase Hosting、両GHA成功、直後エラーログ0件)→Stage2(flag ON確認質問で「実測を待たず今すぐON」選択)の順で実施。kanameone `settings/features.faxDuplication: undefined→true`、cocoroはdry-run確認で`undefined`のまま未変更。AC-e(chunkサイズ等の実測)は明示的に未充足のまま進行(上記AC-e注記参照)、今後の実運用中のフォローアップ監視が必要
-- [x] 8-3. cocoroへも同一コードを反映(decision-maker指示「devと同じ内容は全prodへ反映する方針」)。**2026-07-17完了**。Deploy Cloud Functions(environment=cocoro、GEMINI_MODEL_ID pin無し=code-default継続)+Hosting手動デプロイ(`firebase deploy --only hosting -P cocoro`、後片付け確認済み)を実施、直後エラーログ0件。`faxDuplication` flagは不変条件通りcocoroでは`undefined`(OFF)のまま維持(複製機能はkanameone専用のクライアント別要件のため、コード反映のみでflagは変更していない)
+**Phase A（即時対症 + 復旧）**
+- [ ] A-1. `measure-field-byte-sizes`実行(kanameone, GHA, read-only)で`search_index/00000644`の実サイズ実測、1MiB上限への安全マージン確認
+- [ ] A-2. `firestore.indexes.json`の`fieldOverrides`に`search_index.postings`除外設定を追加(A-1と並列可)
+- [ ] A-3. dev環境で`firebase deploy --only firestore:indexes`実行+emulatorで検索機能の回帰確認
+- [ ] A-4. `/code-review low`(config変更のみ)
+- [ ] A-5. kanameone+cocoroへ`firestore:indexes`デプロイ(GHA)
+- [ ] A-6. kanameone本番で新規ドキュメント1件の正常インデックスを事後確認
+- [ ] A-7. `force-reindex.js` dry-run→canary(5-10件)→段階実行で4391件復旧
+- [ ] A-8. drift再scanで0件確認+Issue #680へ進捗コメント投稿
+
+**Phase B（tokenizer品質改善、Phase A完了後に通常ペースで着手）**
+- [ ] B-1. `tokenizer.ts`修正(`generateFieldTokens()`に`includeBigrams`オプション追加、fileNameを`extractFilenameInfo()`のprefix経由に変更、`prefixType`別bigram制御)
+- [ ] B-2. `tokenizer.test.ts`に単体テスト追加(AC-B1〜B4対応、B-1に依存)
+- [ ] B-3. dev環境でemulatorテスト全PASS確認+fax様fileNameパターンの手動処理確認
+- [ ] B-4. `/code-review`(実コード変更)
+- [ ] B-5. kanameone+cocoroへfunctionsデプロイ(GHA)
+- [ ] B-6. Issue #680クローズ+案3(dfガード)の別Issue起票要否をtriage判断(再開条件を明記)
 
 ## 🔄 中断点（in-flight）
 
-なし。task 8-2完了によりミッション本体は完了。**フォローアップ事項(2026-07-18更新)**: AC-eの観測を実施した結果、flag ON起因のOOM/chunk化リスクは確認されなかった(2026-07-18時点でクローズと判断してよい)。一方で観測中に**Issue #680**(kanameone本番、`search_index/00000644`の検索インデックス更新が2026-07-10から停止している既存障害、flag ONより前から継続)を新規発見し起票済み。次のアクション候補:
-- 原因調査: `search_index/00000644`が具体的にどのトークン(日付系年トークン等)に対応するか特定、影響ドキュメント数の実測
-- 修正方針検討: 高頻度トークンをpostingsマップ方式から除外 or Firestoreインデックスのフィールドオーバーライド適用
-- 詳細はIssue #680本文参照
-
-**申し送り事項**:
-- dev環境の`settings/features.faxDuplication`は検証後もtrueのまま(意図的、devは顧客非対面のため実害なし。ただしドキュメント記載の「既定OFF」とdevの実状態は乖離している)
-- kanameoneのFirebase CLIローカルログイン(`systemkaname@kanameone.com`)は失効しておりbrowserない環境からは`login:use`不可と判明(2026-07-17)。今後のkanameone向けFunctions/Hostingデプロイは`deploy-functions.yml`/`deploy-hosting.yml`のGHA経由(SA鍵)を使うこと。ローカル`deploy-to-project.sh kanameone`手順は前提条件(CLIログイン)が崩れているため使用不可
-- kanameoneの`functions/.env.docsplit-kanameone`(gitignore対象・ローカル専用)は`GEMINI_MODEL_ID=gemini-2.5-flash`に明示固定されている(Issue #548移行検証保留のため)。GHA`Deploy Cloud Functions`実行時はこのファイルがGHA上に存在しないため、`gemini_model_id_override=gemini-2.5-flash`を明示指定しないと既定値(gemini-3.5-flash)に意図せず切り替わる。次回kanameoneデプロイ時も必ず明示指定すること
-- ローカルADCは`hy.unimail.11@gmail.com`以外のアカウントに紐付いたままだが、運用方針上GHA主体でADCはほぼ使わないため修復不要(decision-maker確認済み、2026-07-17)
+なし。計画承認済み、Phase A-1から着手開始。
 
 - 検証コマンド: `git -C /Users/yyyhhh/Projects/doc-split status && git -C /Users/yyyhhh/Projects/doc-split log --oneline -3`
