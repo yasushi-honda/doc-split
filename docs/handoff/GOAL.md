@@ -1,5 +1,5 @@
 ---
-updated: 2026-07-17
+updated: 2026-07-18
 ---
 <!-- session134: 新ミッション着手。前ミッション(Issue #664 phantom count恒久修正、ADR-0021)はsession133で完全達成済み(全文はdocs/handoff/LATEST.md session133サマリ参照予定、git history PR #669/#670/#671でも追跡可)。本ミッションは前ミッションの発端だった「複数顧客FAX複製機能」の設計相談の本体で、Issue #664解決によりブロッカーが除去されたため着手。kanameone現場(平出さん)の要件確定(2026-07-16受領): ①複数利用者記載FAXは検出人数分複製して各利用者フォルダへ配信、後からCMが手動分割 ②担当CMタブの利用者配下フォルダ表記を書類種別名→カテゴリ名に変更(タスク2で完了・PR #672)。 -->
 
@@ -59,7 +59,7 @@ D2「Storage実体 = 共有」は複製元の**添付ファイル本体**(`fileU
 - [x] AC-b: exact候補2名以上(!isDuplicate、customerId重複排除後)+flag ON時、documents N件生成(各customerId、各detail/main、共通distributionId)。flag OFF時は複製されず従来どおり1件+needsManualCustomerSelection(証明: `ocrCompletionTransactionIntegration.test.ts` 2候補/3候補ケースPASS)
 - [x] AC-c: 複製コピー(distributionId保持)を再処理しても、customerId/customerName/careManagerが不変であること。かつ再複製が発生しないこと(証明: integration test PASS、再処理前後のcustomerId比較アサーション含む。customerConfirmed/verified済みdocの保護もcode-review high指摘で追加)
 - [x] AC-d: cleanup-duplicates.jsがdistributionId保持docを削除対象にせず、同一fileName内の複数distribution混在をWARNログで検知すること(証明: `faxDuplicationCleanupHelpers.test.ts` 9件PASS。ops-script-redirect.sh hookによりdry-run実証は不可のためスクリプトテストのみで充足、GOAL.md規定通り)
-- [ ] AC-e: searchIndexerのgetAll chunk化後、kanameone展開後にchunkサイズ・1イベント当たりのメモリ使用量・再試行率を観測し、OOMエラーが増加しないこと(証明: getAll chunk化 + デプロイ後のエラーログ確認 + 観測メトリクス)。**未充足のまま2026-07-17にflag ON実行**(decision-maker判断: 「実測を待たず今すぐON」を選択。デプロイ直後の一般エラーログ0件確認のみで、chunkサイズ/メモリ/再試行率の実測は未実施。以後の実運用の中でのフォローアップ監視推奨)
+- [ ] AC-e: searchIndexerのgetAll chunk化後、kanameone展開後にchunkサイズ・1イベント当たりのメモリ使用量・再試行率を観測し、OOMエラーが増加しないこと(証明: getAll chunk化 + デプロイ後のエラーログ確認 + 観測メトリクス)。**未充足のまま2026-07-17にflag ON実行**(decision-maker判断: 「実測を待たず今すぐON」を選択。デプロイ直後の一般エラーログ0件確認のみで、chunkサイズ/メモリ/再試行率の実測は未実施。以後の実運用の中でのフォローアップ監視推奨)。**2026-07-18フォローアップ観測実施**: OOM・chunk化関連のエラーは0件(AC-e自体が懸念していたリスクは顕在化なし)。ただし観測中に**別種の既存障害**(`too many index entries for entity`、flag ONより前の7/5以前から継続、Issue #680)を発見。flag ON/複製機能とは無関係の既存問題のため、AC-eの合否判定には影響しない
 - [x] AC-f: 分割確認画面の残存バグ(手動修正後の自動検出再実行でsegmentEdits誤適用)が修正されること(証明: PdfSplitModal.test.tsxに再現テスト追加しPASS、PR #678マージ済み(2026-07-17))
 - [x] AC-h: 元→コピー、コピー→元のどちらの削除順序でも、Storage実体とgmailLogs/uploadLogsが最後の1件の削除まで残ること。複製コピーを手動分割した場合、生成される子docにdistributionIdが伝播しないこと(証明: `distributionDeleteOrderIntegration.test.ts` + `splitDistributionIdNonPropagationContract.test.ts` PASS)
 - [x] AC-g: 全テスト・lint・型チェック・buildがPASSし、kanameone本番へdistributionId+flag ON展開されること(cocoroはflag OFFのまま展開)(証明: CI green(f824cdb) + Deploy Cloud Functions/Deploy Firebase Hosting両GHA成功(2026-07-17) + set-feature-flag実行ログ`settings/features.faxDuplication: undefined→true`(kanameone) + cocoroはdry-run確認で`undefined`のまま未変更)
@@ -90,7 +90,10 @@ D2「Storage実体 = 共有」は複製元の**添付ファイル本体**(`fileU
 
 ## 🔄 中断点（in-flight）
 
-なし。task 8-2完了によりミッション本体は完了。**フォローアップ事項**: AC-eが未充足のままflag ONしたため、今後のセッションでkanameoneの実運用データに対しsearchIndexerのチャンクサイズ・メモリ使用量・再試行率・OOMエラー有無を観測すること(`check-function-error-logs`等で定期確認推奨)。
+なし。task 8-2完了によりミッション本体は完了。**フォローアップ事項(2026-07-18更新)**: AC-eの観測を実施した結果、flag ON起因のOOM/chunk化リスクは確認されなかった(2026-07-18時点でクローズと判断してよい)。一方で観測中に**Issue #680**(kanameone本番、`search_index/00000644`の検索インデックス更新が2026-07-10から停止している既存障害、flag ONより前から継続)を新規発見し起票済み。次のアクション候補:
+- 原因調査: `search_index/00000644`が具体的にどのトークン(日付系年トークン等)に対応するか特定、影響ドキュメント数の実測
+- 修正方針検討: 高頻度トークンをpostingsマップ方式から除外 or Firestoreインデックスのフィールドオーバーライド適用
+- 詳細はIssue #680本文参照
 
 **申し送り事項**:
 - dev環境の`settings/features.faxDuplication`は検証後もtrueのまま(意図的、devは顧客非対面のため実害なし。ただしドキュメント記載の「既定OFF」とdevの実状態は乖離している)
