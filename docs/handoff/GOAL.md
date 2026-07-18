@@ -7,6 +7,10 @@ updated: 2026-07-19
 
 次ミッション未着手。decision-makerからの新規指示待ち。
 
+Issue #686(非fax由来ファイル名の`-L\d+-`偶然一致による検索インデックス脱落バグ)は2026-07-19 session136でTDD修正・PR #689マージ・クローズ済み(詳細: docs/handoff/LATEST.md「session136サマリ」)。
+
 follow-up候補(次ミッション起点として検討可、triage未実施):
-- Issue #686: 非fax由来ファイル名の`-L\d+-`偶然一致で検索インデックスから内容が脱落するCONFIRMEDバグ
 - Issue #687: `scripts/force-reindex.js`のBulkWriter化(将来の大規模復旧作業向け)
+
+## 🔄 中断点（in-flight）
+なし
