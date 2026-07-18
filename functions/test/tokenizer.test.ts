@@ -184,6 +184,67 @@ describe('generateDocumentTokens', () => {
     });
     expect(tokens.length).to.equal(0);
   });
+
+  // Issue #680: fileNameのbigram化がsearch_index肥大化(too many index entries)の
+  // 原因だったため、fax gateway命名規則由来のprefixType別にbigram生成を制御する
+  describe('Issue #680: fileNameトークン化のprefixType別制御', () => {
+    it('AC-B1: document_id型ファイル名から"26"・"l1"・時刻断片を含むトークンを生成しない', () => {
+      const tokens = generateDocumentTokens({ fileName: 'DOC260718-L1-20260718131435.pdf' });
+      const fileNameTokens = tokens.filter(t => t.field === 'fileName').map(t => t.token);
+      expect(fileNameTokens).to.not.include('26');
+      expect(fileNameTokens).to.not.include('l1');
+      expect(fileNameTokens).to.not.include('20260718131435');
+      expect(fileNameTokens).to.not.include('131435');
+    });
+
+    it('AC-B2: document_id型（DOC始まり）はkeywordのみ生成する', () => {
+      const tokens = generateDocumentTokens({ fileName: 'DOC260718-L1-20260718131435.pdf' });
+      const fileNameTokens = tokens.filter(t => t.field === 'fileName');
+      expect(fileNameTokens.some(t => t.token === 'doc260718')).to.be.true;
+      // bigram（1文字重複の断片）が生成されていないこと
+      expect(fileNameTokens.every(t => t.weight === FIELD_WEIGHTS.fileName)).to.be.true;
+    });
+
+    it('AC-B2: phone_number型（数字のみ）はkeywordのみ生成する', () => {
+      const tokens = generateDocumentTokens({ fileName: '0529088423-L1-20260122104653.pdf' });
+      const fileNameTokens = tokens.filter(t => t.field === 'fileName');
+      expect(fileNameTokens.some(t => t.token === '0529088423')).to.be.true;
+      expect(fileNameTokens.every(t => t.weight === FIELD_WEIGHTS.fileName)).to.be.true;
+    });
+
+    it('AC-B2: office_name型（日本語を含む）はbigram込みで生成する', () => {
+      const tokens = generateDocumentTokens({ fileName: '西春内科在宅クリニック-L1-20260122101727.pdf' });
+      const fileNameTokens = tokens.filter(t => t.field === 'fileName');
+      // bigram（重みが半分）が含まれること
+      expect(fileNameTokens.some(t => t.weight === FIELD_WEIGHTS.fileName * 0.5)).to.be.true;
+    });
+
+    it('AC-B2: unknown型（英数字のみ、DOC始まりでも数字のみでもない）はkeywordのみ生成する', () => {
+      const tokens = generateDocumentTokens({ fileName: 'invoice-L1-20260122101727.pdf' });
+      const fileNameTokens = tokens.filter(t => t.field === 'fileName');
+      expect(fileNameTokens.some(t => t.token === 'invoice')).to.be.true;
+      expect(fileNameTokens.every(t => t.weight === FIELD_WEIGHTS.fileName)).to.be.true;
+    });
+
+    it('AC-B3回帰: 日本語ファイル名（-L\\d+-パターンなし）は従来通りbigram込みで生成する', () => {
+      const tokens = generateDocumentTokens({ fileName: '田中太郎_介護保険.pdf' });
+      const fileNameTokens = tokens.filter(t => t.field === 'fileName');
+      expect(fileNameTokens.some(t => t.token === '田中')).to.be.true;
+      expect(fileNameTokens.some(t => t.weight === FIELD_WEIGHTS.fileName * 0.5)).to.be.true;
+    });
+
+    it('AC-B4境界値: 拡張子のみのファイル名はエラーを投げず空トークンも生成しない', () => {
+      const tokens = generateDocumentTokens({ fileName: '.pdf' });
+      const fileNameTokens = tokens.filter(t => t.field === 'fileName');
+      expect(fileNameTokens.length).to.equal(0);
+      expect(fileNameTokens.some(t => t.token === '')).to.be.false;
+    });
+
+    it('AC-B4境界値: 空文字のファイル名は無視される（fileNameフィールド自体を生成しない）', () => {
+      const tokens = generateDocumentTokens({ fileName: '' });
+      expect(tokens.filter(t => t.field === 'fileName').length).to.equal(0);
+    });
+  });
 });
 
 describe('tokenizeQuery', () => {

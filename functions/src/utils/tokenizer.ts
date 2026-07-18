@@ -9,6 +9,7 @@
  */
 
 import { convertFullWidthToHalfWidth } from './textNormalizer';
+import { extractFilenameInfo } from './extractors';
 
 /** トークン情報 */
 export interface TokenInfo {
@@ -234,10 +235,15 @@ export function generateDocumentTokens(metadata: DocumentMetadata): TokenInfo[] 
     }
   }
 
-  // ファイル名トークン（拡張子除去）
+  // ファイル名トークン（Issue #680: 生fileNameでなくextractFilenameInfo()のprefix経由。
+  // fax gateway命名規則(`{prefix}-L{レーン番号}-{YYYYMMDDHHMMSS}.pdf`)の時刻断片を除去し、
+  // prefixTypeが'office_name'(日本語テキスト)の場合のみbigram化する。'phone_number'/
+  // 'document_id'/'unknown'は短い数字bigramが検索汚染源になりやすいためkeywordのみ）
   if (metadata.fileName) {
-    const fileNameWithoutExt = metadata.fileName.replace(/\.[^.]+$/, '');
-    const fileNameTokens = generateFieldTokens(fileNameWithoutExt, 'fileName');
+    const { prefix, prefixType } = extractFilenameInfo(metadata.fileName);
+    const fileNameTokens = generateFieldTokens(prefix, 'fileName', {
+      includeBigrams: prefixType === 'office_name',
+    });
     tokens.push(...fileNameTokens.slice(0, MAX_TOKENS_PER_FIELD));
   }
 
@@ -249,9 +255,17 @@ export function generateDocumentTokens(metadata: DocumentMetadata): TokenInfo[] 
  *
  * @param value フィールド値
  * @param field フィールド種別
+ * @param options.includeBigrams bi-gramトークンも生成するか（既定true）。Issue #680:
+ *   fileNameのdocument_id/phone_number/unknown prefixは短い数字bigramが検索インデックス
+ *   肥大化の汚染源になりやすいため、呼び出し側でfalseを渡してkeywordのみにする
  * @returns トークン情報配列
  */
-function generateFieldTokens(value: string, field: TokenField): TokenInfo[] {
+function generateFieldTokens(
+  value: string,
+  field: TokenField,
+  options: { includeBigrams?: boolean } = {}
+): TokenInfo[] {
+  const { includeBigrams = true } = options;
   const tokens: TokenInfo[] = [];
   const weight = FIELD_WEIGHTS[field];
 
@@ -262,9 +276,11 @@ function generateFieldTokens(value: string, field: TokenField): TokenInfo[] {
   }
 
   // bi-gramトークン（キーワードより低い重み）
-  const bigrams = generateBigrams(value);
-  for (const bigram of bigrams) {
-    tokens.push({ token: bigram, field, weight: weight * 0.5 });
+  if (includeBigrams) {
+    const bigrams = generateBigrams(value);
+    for (const bigram of bigrams) {
+      tokens.push({ token: bigram, field, weight: weight * 0.5 });
+    }
   }
 
   return tokens;
