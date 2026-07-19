@@ -45,4 +45,4 @@ follow-up候補（本PRスコープ外、triage未実施）:
 - `--batch-size`と`--concurrency`が独立した軸として機能することの明示的なテスト追加
 
 ## 🔄 中断点（in-flight）
-なし（PR #691へ追加コミット完了、push・最終確認はdecision-maker承認待ち）
+なし（PR #691へ追加コミット・push完了(ca1408c)、CI実行中。マージはdecision-maker承認待ち）
