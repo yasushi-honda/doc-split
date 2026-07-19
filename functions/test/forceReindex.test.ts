@@ -42,6 +42,18 @@ function stubAuditLogging(projectId: string) {
   });
 }
 
+/** stubAuditLogging と同様だが、書き込まれた payload を capture して検証可能にする。 */
+function stubAuditLoggingWithCapture(projectId: string): any[] {
+  const captured: any[] = [];
+  auditLogger._setLoggingForTest(projectId, {
+    log: () => ({
+      entry: (_metadata: any, payload: any) => payload,
+      write: async (entry: any) => { captured.push(entry); },
+    }),
+  });
+  return captured;
+}
+
 /**
  * 実 Firestore の主要セマンティクスを模倣するインメモリモック (Issue #687)。
  * - bulkWriter.set(ref, data, {merge:true}): 既存ドキュメントとの再帰マージ
@@ -220,6 +232,16 @@ describe('force-reindex: parseArgs', () => {
     expect(args.batchSize).to.equal(250);
   });
 
+  it('--concurrency 未指定時は DEFAULT_CONCURRENCY を採用', () => {
+    const args = forceReindex.parseArgs(['--all-drift']);
+    expect(args.concurrency).to.equal(forceReindex.DEFAULT_CONCURRENCY);
+  });
+
+  it('--concurrency=8 を数値として受理', () => {
+    const args = forceReindex.parseArgs(['--all-drift', '--concurrency=8']);
+    expect(args.concurrency).to.equal(8);
+  });
+
   it('--dry-run はデフォルト動作のため無視される (互換性維持)', () => {
     const args = forceReindex.parseArgs(['--doc-id', 'abc', '--dry-run']);
     expect(args.execute).to.equal(false);
@@ -282,6 +304,24 @@ describe('force-reindex: parseArgs', () => {
   it('--batch-size に非数値はエラー', () => {
     expect(() => forceReindex.parseArgs(['--all-drift', '--batch-size=abc'])).to.throw(
       '--batch-size には正の整数を指定してください'
+    );
+  });
+
+  it('--concurrency に負数はエラー', () => {
+    expect(() => forceReindex.parseArgs(['--all-drift', '--concurrency=-1'])).to.throw(
+      '--concurrency には正の整数を指定してください'
+    );
+  });
+
+  it('--concurrency に 0 はエラー', () => {
+    expect(() => forceReindex.parseArgs(['--all-drift', '--concurrency=0'])).to.throw(
+      '--concurrency には正の整数を指定してください'
+    );
+  });
+
+  it('--concurrency に非数値はエラー', () => {
+    expect(() => forceReindex.parseArgs(['--all-drift', '--concurrency=abc'])).to.throw(
+      '--concurrency には正の整数を指定してください'
     );
   });
 
@@ -539,6 +579,94 @@ describe('force-reindex: reindexDocument (execute, BulkWriter 並行実行, Issu
     expect(setCallCount).to.equal(plan.tokenMap.size);
   });
 
+  it('同一stageで複数tokenが失敗した場合、settleOrThrow は全書込みを試行した上で失敗件数を集約したエラーを投げる (診断精度、code-review 2026-07-19 指摘)', async () => {
+    const tokenizer = loadTokenizer();
+    const mock = createFirestoreMock();
+    const bulkWriter = mock.createBulkWriter();
+    const originalSet = bulkWriter.set.bind(bulkWriter);
+    let setCallCount = 0;
+    bulkWriter.set = async (ref: any, data: any, options?: any) => {
+      setCallCount++;
+      // 3 token 中 2 件を失敗させる (旧実装は1件目のみ記録し2件目の失敗scopeが失われていた)
+      if (setCallCount <= 2) {
+        throw new Error(`simulated failure #${setCallCount}`);
+      }
+      return originalSet(ref, data, options);
+    };
+
+    const doc = { customerName: '3トークン生成用顧客名', officeName: '3トークン生成用事業所', fileName: 'triple-token.pdf' };
+    const plan = forceReindex.planReindex('docMulti', doc, tokenizer);
+    expect(plan.tokenMap.size).to.be.greaterThan(2);
+
+    let caught: any = null;
+    try {
+      await forceReindex.reindexDocument(mock.db, 'docMulti', doc, { execute: true, bulkWriter });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).to.exist;
+    expect(caught.reindexStage).to.equal('search_index_postings_write');
+    // 全 token への書込みが試行された (allSettled により drop されない)
+    expect(setCallCount).to.equal(plan.tokenMap.size);
+    // 失敗件数 (2件) がエラーメッセージに集約されている
+    expect(caught.message).to.include('2 件の書込みが失敗');
+    // 代表エラー (先頭の失敗) の情報を cause として保持している
+    expect(caught.cause?.message).to.equal('simulated failure #1');
+  });
+
+  it('新posting書込みが部分失敗した後に再実行すると postings/df が正しい最終状態に収束する (冪等性収束、code-review 2026-07-19 指摘)', async () => {
+    const tokenizer = loadTokenizer();
+    const mock = createFirestoreMock();
+    const bulkWriter = mock.createBulkWriter();
+    const originalSet = bulkWriter.set.bind(bulkWriter);
+    let setCallCount = 0;
+    let failFirstAttempt = true;
+    bulkWriter.set = async (ref: any, data: any, options?: any) => {
+      setCallCount++;
+      if (failFirstAttempt && setCallCount === 1) {
+        throw new Error('simulated write failure on first attempt only');
+      }
+      return originalSet(ref, data, options);
+    };
+
+    const doc = { customerName: '冪等性テスト顧客', officeName: '冪等性テスト事業所', fileName: 'idempotent.pdf' };
+    mock.seedDoc('documents', 'docIdem', doc);
+    const plan = forceReindex.planReindex('docIdem', doc, tokenizer);
+    expect(plan.tokenMap.size).to.be.greaterThan(1);
+
+    // 1回目: 1 token だけ失敗し、他の token は部分適用された状態で例外が投げられる
+    let firstError: any = null;
+    try {
+      await forceReindex.reindexDocument(mock.db, 'docIdem', doc, { execute: true, bulkWriter });
+    } catch (error) {
+      firstError = error;
+    }
+    expect(firstError, '1回目は部分失敗するはず').to.exist;
+    expect(firstError.reindexStage).to.equal('search_index_postings_write');
+
+    // documents.search はまだ更新されていない (step3 未到達の半端状態)
+    const documentsAfterFirst = mock.getStoredDoc('documents', 'docIdem');
+    expect(documentsAfterFirst.search).to.be.undefined;
+
+    // 2回目: 書込み失敗を解除して再実行 (運用手順通りの再実行)
+    failFirstAttempt = false;
+    const result = await forceReindex.reindexDocument(mock.db, 'docIdem', doc, { execute: true, bulkWriter });
+    expect(result.skipped).to.equal(false);
+
+    // 最終状態: 全 tokenId が postings.docIdem を持ち、df は二重加算されず 1 になっている
+    // (1回目に成功した token は hadPosting=true で再 increment されない、
+    //  1回目に失敗した token は 2回目で初めて作成され df=1 になる)
+    for (const tokenId of plan.tokenMap.keys()) {
+      const indexDoc = mock.getStoredDoc('search_index', tokenId);
+      expect(indexDoc, `tokenId=${tokenId} が存在しない`).to.exist;
+      expect(indexDoc.postings.docIdem, `tokenId=${tokenId} の posting が無い`).to.exist;
+      expect(indexDoc.df, `tokenId=${tokenId} の df が不正 (二重加算の疑い)`).to.equal(1);
+    }
+
+    const documentsAfterSecond = mock.getStoredDoc('documents', 'docIdem');
+    expect(documentsAfterSecond.search.tokenHash).to.equal(plan.tokenHash);
+  });
+
   it('execute=true には bulkWriter が必須 (未指定は明示的エラー)', async () => {
     const doc = { customerName: 'A社' };
     let caught: any = null;
@@ -549,6 +677,56 @@ describe('force-reindex: reindexDocument (execute, BulkWriter 並行実行, Issu
     }
     expect(caught).to.exist;
     expect(caught.message).to.include('bulkWriter');
+  });
+
+  it('既存 token から2つの docId が並行してpostingを削除しても df が正しく2減算される (create/increment側との対称テスト、code-review 2026-07-19 指摘)', async () => {
+    const tokenizer = loadTokenizer();
+    const mock = createFirestoreMock();
+    const bulkWriter = mock.createBulkWriter();
+
+    // docA/docB が旧 customerName で共通トークンを持っていた状態を用意する
+    const oldCustomerName = '共有太郎商店';
+    const planAOld = forceReindex.planReindex('docA', { customerName: oldCustomerName, fileName: 'a.pdf' }, tokenizer);
+    const planBOld = forceReindex.planReindex('docB', { customerName: oldCustomerName, fileName: 'b.pdf' }, tokenizer);
+    const commonTokenIds = [...planAOld.tokenMap.keys()].filter((id: string) => planBOld.tokenMap.has(id));
+    expect(commonTokenIds.length).to.be.greaterThan(0);
+
+    // 共通 token に両方の posting を事前 seed (df=2 相当)
+    for (const tokenId of commonTokenIds) {
+      const dataA = planAOld.tokenMap.get(tokenId);
+      const dataB = planBOld.tokenMap.get(tokenId);
+      mock.seedDoc('search_index', tokenId, {
+        df: 2,
+        postings: {
+          docA: { score: dataA.score, fieldsMask: dataA.fieldsMask },
+          docB: { score: dataB.score, fieldsMask: dataB.fieldsMask },
+        },
+      });
+    }
+
+    // 新ドキュメントでは customerName が変わり、共通トークンが完全に削除される想定
+    const docANew = {
+      customerName: '無関係な新顧客名A', fileName: 'a.pdf',
+      search: { tokens: planAOld.tokens.map((t: any) => t.token), tokenHash: 'stale-a' },
+    };
+    const docBNew = {
+      customerName: '無関係な新顧客名B', fileName: 'b.pdf',
+      search: { tokens: planBOld.tokens.map((t: any) => t.token), tokenHash: 'stale-b' },
+    };
+    mock.seedDoc('documents', 'docA', docANew);
+    mock.seedDoc('documents', 'docB', docBNew);
+
+    await Promise.all([
+      forceReindex.reindexDocument(mock.db, 'docA', docANew, { execute: true, bulkWriter }),
+      forceReindex.reindexDocument(mock.db, 'docB', docBNew, { execute: true, bulkWriter }),
+    ]);
+
+    for (const tokenId of commonTokenIds) {
+      const indexDoc = mock.getStoredDoc('search_index', tokenId);
+      expect(indexDoc.postings.docA, `tokenId=${tokenId} の postings.docA が残っている`).to.be.undefined;
+      expect(indexDoc.postings.docB, `tokenId=${tokenId} の postings.docB が残っている`).to.be.undefined;
+      expect(indexDoc.df, `tokenId=${tokenId} の df が不正 (並行 decrement の競合)`).to.equal(0);
+    }
   });
 
   it('同一 docId 内の削除→書込→documents更新の順序で書込みが行われる (段階の直列性)', async () => {
@@ -668,6 +846,45 @@ describe('force-reindex: reindexDocument (execute, BulkWriter 並行実行, Issu
     expect(exitCode).to.equal(forceReindex.EXIT_PARTIAL_FAILURE);
     expect(bulkWriter.closeCallCount).to.equal(1);
   });
+
+  it('runSingleDocId は reindexDocument 成功後に bulkWriter.close() が失敗しても EXIT_PARTIAL_FAILURE を返す (code-review 2026-07-19 指摘)', async () => {
+    stubAuditLogging('test');
+    const mock = createFirestoreMock();
+    const bulkWriter = mock.createBulkWriter();
+    bulkWriter.close = async () => {
+      throw new Error('simulated close failure');
+    };
+    mock.seedDoc('documents', 'docZ', { status: 'processed', customerName: 'close失敗テスト' });
+
+    const db: any = {
+      ...mock.db,
+      bulkWriter: () => bulkWriter,
+      collection: (name: string) => {
+        const base = mock.db.collection(name);
+        return {
+          ...base,
+          doc(id: string) {
+            const ref = base.doc(id);
+            return {
+              ...ref,
+              async get() {
+                const data = mock.getStoredDoc(name, id);
+                return { exists: data !== undefined, data: () => data };
+              },
+            };
+          },
+        };
+      },
+    };
+
+    const args = { docId: 'docZ', execute: true };
+    const auditCtx = { projectId: 'test', executedBy: 'tester' };
+    // close() が例外を投げても runSingleDocId 自体は throw せず exitCode で結果を返す
+    const exitCode = await forceReindex.runSingleDocId(db, args, auditCtx);
+
+    // reindexDocument 自体は成功したが close() 失敗により EXIT_PARTIAL_FAILURE に格上げされる
+    expect(exitCode).to.equal(forceReindex.EXIT_PARTIAL_FAILURE);
+  });
 });
 
 describe('force-reindex: runWithConcurrency (Issue #687)', () => {
@@ -713,34 +930,44 @@ describe('force-reindex: runWithConcurrency (Issue #687)', () => {
 });
 
 describe('force-reindex: runAllDrift (Issue #687)', () => {
-  /** documents コレクションに対する where/orderBy/limit クエリと doc(id) 取得の両方をサポートするモック */
-  function createDocumentsQueryableCollection(mock: ReturnType<typeof createFirestoreMock>, driftDocs: Array<{ id: string; data: any }>) {
-    let served = false;
-    const query: any = {
-      where() { return query; },
-      orderBy() { return query; },
-      limit() { return query; },
-      startAfter() { return query; },
-      async get() {
-        if (served) return { empty: true, docs: [] };
-        served = true;
-        return {
-          empty: driftDocs.length === 0,
-          docs: driftDocs.map((d) => ({ id: d.id, data: () => d.data })),
-        };
-      },
-      doc(id: string) {
-        const base = mock.db.collection('documents').doc(id);
-        return {
-          ...base,
-          async get() {
-            const data = mock.getStoredDoc('documents', id);
-            return { exists: data !== undefined, data: () => data };
-          },
-        };
-      },
-    };
-    return query;
+  /**
+   * documents コレクションに対する where/orderBy/limit/startAfter クエリと doc(id) 取得の
+   * 両方をサポートするモック。limit/startAfter を実際に allDocs 配列へ適用し、
+   * runAllDrift の複数ページ pagination (startAfter カーソル) を正確に模倣する
+   * (旧実装は毎回全件を1ページで返し2ページ目以降を検証できなかった、code-review 2026-07-19 指摘)。
+   */
+  function createDocumentsQueryableCollection(mock: ReturnType<typeof createFirestoreMock>, allDocs: Array<{ id: string; data: any }>) {
+    function makeQuery(state: { limit: number; startAfterId: string | null }): any {
+      return {
+        where() { return makeQuery(state); },
+        orderBy() { return makeQuery(state); },
+        limit(n: number) { return makeQuery({ ...state, limit: n }); },
+        startAfter(afterDocSnap: { id: string }) { return makeQuery({ ...state, startAfterId: afterDocSnap.id }); },
+        async get() {
+          let startIndex = 0;
+          if (state.startAfterId) {
+            const idx = allDocs.findIndex((d) => d.id === state.startAfterId);
+            startIndex = idx >= 0 ? idx + 1 : allDocs.length;
+          }
+          const page = allDocs.slice(startIndex, startIndex + state.limit);
+          return {
+            empty: page.length === 0,
+            docs: page.map((d) => ({ id: d.id, data: () => d.data })),
+          };
+        },
+        doc(id: string) {
+          const base = mock.db.collection('documents').doc(id);
+          return {
+            ...base,
+            async get() {
+              const data = mock.getStoredDoc('documents', id);
+              return { exists: data !== undefined, data: () => data };
+            },
+          };
+        },
+      };
+    }
+    return makeQuery({ limit: allDocs.length, startAfterId: null });
   }
 
   it('ページ内で個別 docId の reindexDocument が失敗しても処理を継続し、finally で bulkWriter.close() を一度だけ呼ぶ', async () => {
@@ -802,5 +1029,90 @@ describe('force-reindex: runAllDrift (Issue #687)', () => {
 
     expect(exitCode).to.equal(forceReindex.EXIT_OK);
     expect(bulkWriter.closeCallCount).to.equal(1);
+  });
+
+  it('複数ページに跨る複数 drift docs を pagination + runWithConcurrency 経由で漏れなく処理する (code-review 2026-07-19 指摘: PRの主目的である4389件規模スキャンの核心機構の検証)', async () => {
+    const captured = stubAuditLoggingWithCapture('test');
+    const mock = createFirestoreMock();
+    const bulkWriter = mock.createBulkWriter();
+
+    // 7件のドキュメント、全て tokenHash 未設定 (drift 判定) を用意し、
+    // batchSize=3 で 3 ページ (3+3+1件) に分割、concurrency=2 で並行処理させる。
+    const allDocs = Array.from({ length: 7 }, (_, i) => ({
+      id: `doc-${i}`,
+      data: {
+        customerName: `顧客${i}`,
+        status: 'processed',
+        processedAt: { toDate: () => new Date() },
+      },
+    }));
+    allDocs.forEach((d) => mock.seedDoc('documents', d.id, d.data));
+
+    const db: any = {
+      collection: (name: string) => {
+        if (name === 'documents') return createDocumentsQueryableCollection(mock, allDocs);
+        return mock.db.collection(name);
+      },
+      bulkWriter: () => bulkWriter,
+      getAll: mock.db.getAll,
+    };
+
+    const exitCode = await forceReindex.runAllDrift(
+      db,
+      { execute: true, batchSize: 3, concurrency: 2, sample: null },
+      { projectId: 'test', executedBy: 'tester' },
+    );
+
+    expect(exitCode).to.equal(forceReindex.EXIT_OK);
+
+    const batchSummary = captured.find((e) => e.event === 'force_reindex_batch_summary');
+    expect(batchSummary, 'BATCH_SUMMARY audit log が送信されていない').to.exist;
+    // 全 7 件が 3 ページに跨って重複・漏れなく走査・drift 判定・再 index されたことを確認
+    expect(batchSummary.counts.processed).to.equal(7);
+    expect(batchSummary.counts.drifted).to.equal(7);
+    expect(batchSummary.counts.reindexed).to.equal(7);
+    expect(batchSummary.counts.failed).to.equal(0);
+
+    // audit log の counts だけでなく実際の書込み結果 (documents.search) でも実効性を確認
+    for (const d of allDocs) {
+      const documentsDoc = mock.getStoredDoc('documents', d.id);
+      expect(documentsDoc.search?.tokenHash, `${d.id} が再 index されていない`).to.be.a('string');
+    }
+  });
+
+  it('bulkWriter.close() が失敗しても BATCH_SUMMARY 監査ログとサマリー出力に到達し EXIT_PARTIAL_FAILURE を返す (code-review 2026-07-19 指摘)', async () => {
+    const captured = stubAuditLoggingWithCapture('test');
+    const mock = createFirestoreMock();
+    const bulkWriter = mock.createBulkWriter();
+    bulkWriter.close = async () => {
+      throw new Error('simulated close failure');
+    };
+
+    const doc = { customerName: '成功顧客', status: 'processed', processedAt: { toDate: () => new Date() } };
+    mock.seedDoc('documents', 'doc-ok', doc);
+
+    const db: any = {
+      collection: (name: string) => {
+        if (name === 'documents') return createDocumentsQueryableCollection(mock, [{ id: 'doc-ok', data: doc }]);
+        return mock.db.collection(name);
+      },
+      bulkWriter: () => bulkWriter,
+      getAll: mock.db.getAll,
+    };
+
+    const exitCode = await forceReindex.runAllDrift(
+      db,
+      { execute: true, batchSize: 500, concurrency: 5, sample: null },
+      { projectId: 'test', executedBy: 'tester' },
+    );
+
+    // 個別 doc 処理自体は成功 (reindexed=1) だが close() 失敗により EXIT_PARTIAL_FAILURE
+    expect(exitCode).to.equal(forceReindex.EXIT_PARTIAL_FAILURE);
+    // close() 失敗後も BATCH_SUMMARY 監査ログに到達している (旧実装は finally 内 throw で未到達だった)
+    const batchSummary = captured.find((e) => e.event === 'force_reindex_batch_summary');
+    expect(batchSummary, 'BATCH_SUMMARY audit log が送信されていない').to.exist;
+    expect(batchSummary.counts.reindexed).to.equal(1);
+    // close 失敗自体も別イベントとして記録される
+    expect(captured.some((e) => e.event === 'force_reindex_bulkwriter_close_failed')).to.equal(true);
   });
 });

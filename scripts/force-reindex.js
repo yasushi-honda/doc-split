@@ -230,15 +230,32 @@ function planReindex(docId, docData, tokenizer = loadTokenizer()) {
  * Promise 群を allSettled で drain し、1件でも失敗があれば reindexStage を付けて throw する。
  * Promise.all だと最初の失敗で即 reject し、他の enqueue 済み write の結果を捕捉できないため
  * (BulkWriter は各 write が独立した Promise を返し、batch のような一括ロールバックがない)。
+ *
+ * 複数件が同時に失敗した場合、代表エラー (先頭) だけでなく失敗件数をメッセージに集約する。
+ * 旧実装は最初の1件のみを throw していたため、診断ログ (audit log の errorMessage) 上で
+ * 実際の失敗 scope が過小評価されていた (code-review 2026-07-19 指摘)。書込み自体は
+ * settleOrThrow 呼び出し時点で全 write が試行済みのため drop されない
+ * (idempotent retry で収束する。詳細: Runbook §4.5)。
  */
 async function settleOrThrow(promises, defaultStage) {
   const results = await Promise.allSettled(promises);
-  const failure = results.find(r => r.status === 'rejected');
-  if (failure) {
-    const error = failure.reason;
+  const failures = results.filter(r => r.status === 'rejected').map(r => r.reason);
+  if (failures.length === 0) return;
+
+  if (failures.length === 1) {
+    const error = failures[0];
     error.reindexStage = error.reindexStage || defaultStage;
     throw error;
   }
+
+  const primary = failures[0];
+  const aggregated = new Error(
+    `${failures.length} 件の書込みが失敗しました (代表: ${primary?.message ?? String(primary)})`,
+  );
+  aggregated.reindexStage = defaultStage;
+  aggregated.code = primary?.code;
+  aggregated.cause = primary;
+  throw aggregated;
 }
 
 /**
@@ -409,6 +426,36 @@ const EXIT_OK = 0;
 const EXIT_PRECONDITION = 1;
 const EXIT_PARTIAL_FAILURE = 2;
 
+/**
+ * BulkWriter.close() を安全に呼ぶ。close() は enqueue 済み write を drain してから
+ * 完了するため、失敗は「write が drop された」ではなく「drain 完了の確認ができなかった」
+ * ことを意味する (各 write 自体は settleOrThrow で個別に成否判定済み)。
+ * 失敗しても呼び出し元の処理結果 (exitCode 等) は握り潰さず、警告として記録した上で
+ * true を返す (呼び出し元は exitCode を EXIT_PARTIAL_FAILURE に格上げする判断に使う)。
+ * これにより close() 失敗時も BATCH_SUMMARY 等の事後ログ出力に必ず到達できる
+ * (code-review 2026-07-19 指摘: 旧実装は finally 内 throw で summary 出力に未到達だった)。
+ * @returns {Promise<boolean>} true なら close 失敗
+ */
+async function closeBulkWriterSafely(bulkWriter, mode, auditCtx) {
+  if (!bulkWriter) return false;
+  try {
+    await bulkWriter.close();
+    return false;
+  } catch (closeError) {
+    console.error(JSON.stringify({
+      severity: SEVERITIES.WARNING,
+      event: EVENTS.BULKWRITER_CLOSE_FAILED,
+      mode,
+      errorMessage: closeError?.message ?? String(closeError),
+    }));
+    await writeForceReindexAuditLog(
+      { event: EVENTS.BULKWRITER_CLOSE_FAILED, severity: SEVERITIES.WARNING, mode, dryRun: false },
+      auditCtx,
+    );
+    return true;
+  }
+}
+
 async function runSingleDocId(db, args, auditCtx) {
   const docRef = db.collection('documents').doc(args.docId);
   const snap = await docRef.get();
@@ -424,6 +471,7 @@ async function runSingleDocId(db, args, auditCtx) {
 
   console.log(`[MODE] 単一 docId (${args.execute ? '実行' : 'dry-run'}): ${args.docId}`);
   const bulkWriter = args.execute ? db.bulkWriter() : null;
+  let exitCode;
   try {
     const result = await reindexDocument(db, args.docId, data, { execute: args.execute, bulkWriter });
     console.log(
@@ -443,7 +491,7 @@ async function runSingleDocId(db, args, auditCtx) {
       },
       auditCtx,
     );
-    return EXIT_OK;
+    exitCode = EXIT_OK;
   } catch (error) {
     await emitFailureEvent({
       event: EVENTS.FAILED,
@@ -454,14 +502,15 @@ async function runSingleDocId(db, args, auditCtx) {
       dryRun: !args.execute,
       auditCtx,
     });
-    return EXIT_PARTIAL_FAILURE;
+    exitCode = EXIT_PARTIAL_FAILURE;
   } finally {
-    // close() は enqueue 済みの write を drain してから完了する。
     // BulkWriter インスタンスはこの関数内でのみ生成・使用するため一度だけ呼べばよい。
-    if (bulkWriter) {
-      await bulkWriter.close();
+    const closeFailed = await closeBulkWriterSafely(bulkWriter, 'doc-id', auditCtx);
+    if (closeFailed && exitCode === EXIT_OK) {
+      exitCode = EXIT_PARTIAL_FAILURE;
     }
   }
+  return exitCode;
 }
 
 async function runAllDrift(db, args, auditCtx) {
@@ -562,10 +611,19 @@ async function runAllDrift(db, args, auditCtx) {
       lastDoc = snapshot.docs[snapshot.docs.length - 1];
       if (snapshot.docs.length < limit) break;
     }
-  } finally {
-    if (bulkWriter) {
-      await bulkWriter.close();
-    }
+  } catch (error) {
+    // systemic error (aggregateTokens invariant 違反等) は close() の成否に関わらず
+    // 即座に中断する意図的な設計を維持する (サマリー出力には到達させない)。
+    // close() 自体は必ず試み、成否に関わらず元の error を再 throw する。
+    await closeBulkWriterSafely(bulkWriter, 'all-drift', auditCtx);
+    throw error;
+  }
+
+  // close() が失敗しても、全 write は個別に settleOrThrow で成否判定済みのため、
+  // ここで throw せずサマリー出力・監査ログには必ず到達させる
+  // (code-review 2026-07-19 指摘: 旧実装は finally 内 close() throw で summary 出力に未到達だった)。
+  if (await closeBulkWriterSafely(bulkWriter, 'all-drift', auditCtx)) {
+    failed++;
   }
 
   console.log('---');
