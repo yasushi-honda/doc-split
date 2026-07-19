@@ -1,6 +1,29 @@
 # ハンドオフメモ
 
-**更新日**: 2026-07-19（Issue #680ミッション完遂アーカイブ — GOAL.mdを次ミッション待ちへ差し替えるため、旧ミッション全文をここに保全）
+**更新日**: 2026-07-19（Issue #687ミッション完遂アーカイブ — GOAL.mdを次ミッション待ちへ差し替えるため、旧ミッション全文をここに保全）
+
+## Issue #687ミッション 完遂サマリ（〜2026-07-19アーカイブ時点）
+
+`scripts/force-reindex.js`が非推奨のatomic batch writerを逐次実行しており、Issue #680 Phase A実行時（4389件対象drift復旧）にGitHub Actions 6時間タイムアウトに抵触した問題（1回目実行がcancelled、冪等なため実害なし・2回目で完了）を、BulkWriter + bounded worker pool並行処理化により解消した。PR #691（squash merge、2026-07-19）。
+
+- **設計・実装前レビュー**: `/impl-plan`フルモードで計画策定後、Codex plan review（MCP経由、effort=high）でNO-GO判定を受けた（同一未作成`search_index/{tokenId}`への並列`set()`競合によるpostings消失リスクHigh、`Promise.all`早期reject問題High）。`merge:true`統一 + `Promise.allSettled()`drain設計へ計画修正の上で実装着手。
+- **実装**: `planReindex()`で書込み副作用前にsystemic error（aggregateTokens invariant違反）を全件事前検証しplanをreindexDocumentへpass-through、新posting書込みを`merge:true`のset()に統一、`runAllDrift()`をページ単位boundedワーカープールで並列化（デフォルト並行数5、`--concurrency=<n>`オプション追加）。
+- **`/code-review medium`実施**: Firestore emulatorでの実証により、削除対象トークン（`tokensToRemove`）の重複による`df`二重減算という新規の重大バグ（旧実装でも潜在していたが顕在化はBulkWriter移行時に発見）を発見・修正。既存`existingSet`→MapのO(n²)化解消、`getAll()`並列化、`Promise.allSettled`ヘルパー（`settleOrThrow`）共通化も実施。
+- **PR #691作成後のセカンドオピニオン**: 独立3エージェント（correctness/data-integrity/test-coverage、それぞれ実装意図を知らせず冷静にレビュー）+ `codex review --base main`を実施。3エージェントが共通して「`runAllDrift`の複数ページ・複数doc並行処理E2Eテストの欠如」を指摘（PRの存在理由に直結する重要なギャップ）。Codexへ「バランスの取れた対応方針」を追加相談し、確信度・ROIの高いものから実装：
+  - `--concurrency`のparseArgsバリデーションテスト追加
+  - `bulkWriter.close()`失敗時もBATCH_SUMMARY/監査ログに必ず到達するよう修正（`closeBulkWriterSafely`ヘルパー、`EVENTS.BULKWRITER_CLOSE_FAILED`新設）
+  - `runAllDrift`の複数ページ（`startAfter`カーソル）+複数doc並行処理E2Eテスト追加（PRの主目的である大規模スキャンの核心機構を初めて検証）
+  - 部分失敗→再実行の冪等性収束テスト追加
+  - 削除側（decrement）並行競合テスト追加（create/increment側との対称性検証）
+  - `settleOrThrow`の複数失敗集約（旧実装は最初の1件のみ記録、診断精度改善）
+- **最終検証**: 71テスト全PASS（新規27件追加）、lint 0エラー、`tsc --noEmit` exit 0、CI（lint-build-test/GitGuardian/CodeRabbit）全pass。PR #691番号単位の明示認可を得てsquash merge、Issue #687自動クローズ。
+
+**follow-up候補（本ミッションのスコープ外、次ミッション候補として次回triage）**:
+- GitHub Actions workflow（`run-ops-script.yml`）に`--concurrency`オプションのUI経由指定を追加（現状はデフォルト値5固定でGHA経由では調整不可）
+- `runWithConcurrency`が`compare-gemini-ocr-models-confirmed.ts`/`compare-ocr-arbitration-logic-confirmed.ts`/`backfill-detail-subcollection.ts`と重複、`scripts/lib/concurrency.js`への共通化検討
+- ホットトークン（同一tokenId）への書込み競合をtokenId単位のmutex/キューで構造的に防ぐ設計（現状はconcurrency全体制御のみ）
+- `documents_search_update` stageのcatch/stage-taggingロジックの単体テスト追加
+- `--batch-size`と`--concurrency`が独立した軸として機能することの明示的なテスト追加
 
 ## Issue #680ミッション 完遂サマリ（〜2026-07-19アーカイブ時点）
 
