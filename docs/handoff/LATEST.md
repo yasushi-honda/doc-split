@@ -1,6 +1,22 @@
 # ハンドオフメモ
 
-**更新日**: 2026-07-19（Issue #687ミッション完遂アーカイブ — GOAL.mdを次ミッション待ちへ差し替えるため、旧ミッション全文をここに保全）
+**更新日**: 2026-07-20（frontend/.env dev環境誤接続防止ミッション完遂）
+
+## frontend/.env dev環境誤接続防止ミッション 完遂サマリ（〜2026-07-20時点）
+
+decision-makerの「今着手できるROIの良いものは？」という相談を起点に、既存Issue候補(#503/#251/#238)は全てtrigger未成立と判断した上で、Codexへのセカンドオピニオン相談で新たに「`frontend/.env`(gitignoredのローカルフォールバック値)が本番kanameone値のまま放置され`npm run dev`が本番を向く」事故がsession108/118/130で3回再発していた問題（GitHub Issue未起票のまま継承事項リストにのみ残存）を発見し、plan mode で3層の恒久対策を設計・実装した。
+
+- **対策1（根本原因）**: `frontend/.env`をdev固定値でgit追跡下に置く（`.gitignore`に`!frontend/.env`例外追加）。Firebase web configは非機密（Vite公式ドキュメントで`process.env`優先の仕様も確認、CI/デプロイへの影響なしと裏付け済み）
+- **対策2（deploy script）**: `scripts/deploy-to-project.sh`のcleanup()を修正、デプロイ前に`.env.local`が無かった場合はデプロイ後に残置せず削除
+- **対策3（ランタイムガード）**: `frontend/src/lib/devProjectGuard.ts`新設、dev modeで`projectId`が`doc-split-dev`以外ならconsole.error+画面バナー警告（warn-only、意図的なclient向けdebugを妨げない設計）
+- **`/code-review medium`（8角度finder+verify）**: CONFIRMED4件（`deploy-to-project.sh`の`set -e`下`rm -f`失敗時exit code上書き/`HAD_ENV_LOCAL`フラグ冗長/`docs/setup-guide.md`のドキュメント前提崩れ/env-guardのテスト未追加）を全て本PRで反映。PLAUSIBLE3件（並行デプロイrace condition/allowlistハードコード二重管理/sonner toast重複）は現状の運用実績・severityを踏まえ見送り
+- **Codexセカンドオピニオン（2回）**: 1回目はROI判断への意見（3 Issue候補は保留妥当、frontend/.env問題を新規指摘）。2回目は実装diffへのセカンドオピニオンで、`scripts/setup-tenant.sh`の`.env.local`自動コピー残置（第3の書込み経路、CONFIRMED、本PRで対応）と`deploy-to-project.sh`のproject ID整合性検証欠如（別スコープと判断、Issue #693起票）を発見
+- **同根再発スキャン（handoff時）**: `frontend/.env`/`.env.local`への全書込み経路を再走査し、`scripts/run-e2e-tests.sh`にも1箇所あることを確認したが、扱う値が常に`doc-split-dev`固定のためリスクなしと判定（対応不要）
+- **検証**: typecheck/lint(0 errors)/test(24ファイル360件全PASS)/build全PASS、本番ビルドでdead code除去確認、Playwright MCPでダミーprojectIDによるガード発火の実機確認、bash再現実験でexit code修正を実証
+- **PR #694**（squash merge、2026-07-20）、**Issue #693起票**（deploy-to-project.shのproject ID整合性検証、P2・trigger未成立の任意改善として次ミッション候補に保持）
+
+**follow-up（本ミッションのスコープ外、次ミッション候補）**:
+- **#693**: `deploy-to-project.sh`が`.env.$ALIAS`の`VITE_FIREBASE_PROJECT_ID`と実際のデプロイ先プロジェクトIDの一致を検証していない。誤った`.env.kanameone`等で無警告の誤デプロイが起きうる。P2、trigger未成立
 
 ## Issue #687ミッション 完遂サマリ（〜2026-07-19アーカイブ時点）
 
