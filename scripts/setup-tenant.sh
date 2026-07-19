@@ -594,9 +594,13 @@ VITE_FIREBASE_STORAGE_BUCKET=$STORAGE_BUCKET
 VITE_FIREBASE_MESSAGING_SENDER_ID=$MESSAGING_SENDER_ID
 VITE_FIREBASE_APP_ID=$APP_ID
 EOF
-    # ローカル開発用にもコピー
-    cp "$ROOT_DIR/frontend/.env.$PROJECT_ID" "$ROOT_DIR/frontend/.env.local"
     log_success "frontend/.env.$PROJECT_ID を生成しました"
+    # 注意: .env.local への自動コピーはしない（dev環境誤接続防止の恒久対策 #503系follow-up）。
+    # .env.local は frontend/.env より優先されるため、ここで自動コピーして片付けずに残すと
+    # 次回以降の npm run dev がこのクライアント向け設定を向いたままになる。
+    # ローカルで動作確認したい場合は手動で以下を実行し、作業後は必ず削除するか dev に戻すこと:
+    #   cp "$ROOT_DIR/frontend/.env.$PROJECT_ID" "$ROOT_DIR/frontend/.env.local"
+    log_info "ローカルで動作確認する場合: cp frontend/.env.$PROJECT_ID frontend/.env.local （作業後は削除するか ./scripts/deploy-to-project.sh dev で dev に戻すこと）"
 else
     log_warn "frontend/.env.<project-id> の手動設定が必要です"
 fi

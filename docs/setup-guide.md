@@ -108,7 +108,7 @@ Firebase Consoleで以下を有効化:
 
 ### 3. 環境変数設定
 
-`frontend/.env` を作成:
+`frontend/.env.local` を作成（`frontend/.env` はdev固定値としてgit管理下にあるため、クライアント固有の値はここに書かないこと）:
 
 ```env
 VITE_FIREBASE_API_KEY=<api-key>
