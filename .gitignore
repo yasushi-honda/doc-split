@@ -25,6 +25,8 @@ pubsub-debug.log
 .env.*
 *.env
 !scripts/clients/*.env
+# frontend/.env は dev固定のフォールバック値として git 管理下に置く（本番誤接続防止、Firebase web configは非機密）
+!frontend/.env
 
 # IDE
 .idea/

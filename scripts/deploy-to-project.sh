@@ -169,7 +169,9 @@ fi
 
 log_info "環境変数ファイル: $(basename $ENV_FILE)"
 
-# 現在の.env.localをバックアップ
+# 現在の.env.localをバックアップ（元々存在しなかった場合は BACKUP_FILE="" のままとし、
+# デプロイ後に client 値の .env.local を残置しない。残置すると次の npm run dev が
+# 誤って本番プロジェクトを向くため: 恒久対策 #503系follow-up）
 BACKUP_FILE=""
 if [ -f "$FRONTEND_DIR/.env.local" ]; then
     BACKUP_FILE="$FRONTEND_DIR/.env.local.backup.$$"
@@ -178,11 +180,22 @@ if [ -f "$FRONTEND_DIR/.env.local" ]; then
 fi
 
 # クリーンアップ関数
+# set +e: rm -f/mv がここで失敗しても(例: .env.localがディレクトリ化している等)
+# set -eによりcleanup自体が中断し、trapの終了コードが本来のスクリプト終了コード
+# (例: npm run build失敗)を上書きしてしまうのを防ぐ
 cleanup() {
-    if [ -n "$BACKUP_FILE" ] && [ -f "$BACKUP_FILE" ]; then
-        mv "$BACKUP_FILE" "$FRONTEND_DIR/.env.local"
-        log_info ".env.local を復元しました"
+    local exit_code=$?
+    set +e
+    if [ -n "$BACKUP_FILE" ]; then
+        if [ -f "$BACKUP_FILE" ]; then
+            mv "$BACKUP_FILE" "$FRONTEND_DIR/.env.local"
+            log_info ".env.local を復元しました"
+        fi
+    else
+        rm -f "$FRONTEND_DIR/.env.local"
+        log_info ".env.local を削除しました（デプロイ前は未使用だったため、client値を残置しない）"
     fi
+    exit "$exit_code"
 }
 
 # エラー時もクリーンアップ

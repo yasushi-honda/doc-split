@@ -3,6 +3,7 @@ import { getAuth, GoogleAuthProvider, connectAuthEmulator, signInWithEmailAndPas
 import { getFirestore, connectFirestoreEmulator } from 'firebase/firestore'
 import { getStorage, connectStorageEmulator } from 'firebase/storage'
 import { getFunctions, connectFunctionsEmulator } from 'firebase/functions'
+import { checkDevProjectGuard } from './devProjectGuard'
 
 // Firebase設定（.envから読み込み）
 const firebaseConfig = {
@@ -13,6 +14,8 @@ const firebaseConfig = {
   messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
   appId: import.meta.env.VITE_FIREBASE_APP_ID,
 }
+
+checkDevProjectGuard(firebaseConfig.projectId, import.meta.env.DEV)
 
 // Firebase初期化
 export const app = initializeApp(firebaseConfig)
