@@ -31,6 +31,9 @@ const EVENTS = Object.freeze({
   LOGGING_CLOSE_FAILED: 'force_reindex_logging_close_failed',
   // #386 review C2: loggingService が undefined = library API 変更検知。#384 再発予兆
   LOGGING_CLOSE_UNAVAILABLE: 'force_reindex_logging_close_unavailable',
+  // Issue #687 code-review: Firestore BulkWriter (Cloud Logging とは別 client) の
+  // close() 失敗。全 write は settled 済みのため drop ではないが、運用者への警告として記録。
+  BULKWRITER_CLOSE_FAILED: 'force_reindex_bulkwriter_close_failed',
 });
 
 /** Severity SSoT (typo 防止)。Cloud Logging string severity と一致させる */

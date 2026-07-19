@@ -69,6 +69,11 @@ const admin = require('firebase-admin');
 
 // ========== Step 2: 引数パース (pure function) ==========
 
+/** --all-drift --execute 時の docId 並行処理数のデフォルト値。
+ *  Codex plan review 2026-07-19: ホット token (同一 tokenId への同時更新集中) の
+ *  ABORTED retry・性能悪化リスクを踏まえ保守的な値から開始し、--concurrency で調整可能にする。 */
+const DEFAULT_CONCURRENCY = 5;
+
 function parseArgs(argv) {
   const args = {
     docId: null,
@@ -76,6 +81,7 @@ function parseArgs(argv) {
     execute: false,
     sample: null,
     batchSize: 500,
+    concurrency: DEFAULT_CONCURRENCY,
     help: false,
   };
 
@@ -99,6 +105,11 @@ function parseArgs(argv) {
       args.batchSize = parseInt(arg.split('=')[1], 10);
       if (!Number.isFinite(args.batchSize) || args.batchSize <= 0) {
         throw new Error('--batch-size には正の整数を指定してください');
+      }
+    } else if (arg.startsWith('--concurrency=')) {
+      args.concurrency = parseInt(arg.split('=')[1], 10);
+      if (!Number.isFinite(args.concurrency) || args.concurrency <= 0) {
+        throw new Error('--concurrency には正の整数を指定してください');
       }
     } else if (arg === '--help' || arg === '-h') {
       args.help = true;
@@ -135,7 +146,11 @@ search_index drift 復旧スクリプト (ADR-0015 / Issue #229)
 オプション:
   --execute             実書き込みを行う (未指定時は dry-run)
   --sample=<n>          --all-drift 時に先頭 n 件のみ処理 (部分検証用)
-  --batch-size=<n>      バッチサイズ (デフォルト 500)
+  --batch-size=<n>      Firestore クエリのページング件数 (デフォルト 500。
+                        並行処理数とは別軸、--concurrency 参照)
+  --concurrency=<n>     --all-drift --execute 時の docId 並行処理数
+                        (デフォルト ${DEFAULT_CONCURRENCY}。ホット token への書込み集中を避けるため
+                        大きくしすぎない)
   --help, -h            このヘルプを表示
 
 環境変数:
@@ -188,11 +203,80 @@ function detectDrift(docData, tokenizer = loadTokenizer()) {
 // ========== Step 4: Firestore 操作 ==========
 
 /**
- * 指定 docId の search_index を強制再構築する。
+ * ドキュメントの再 index 化に必要な計算 (tokens/tokenHash/削除対象/集約) を
+ * 副作用なしで算出する。
+ *
+ * aggregateTokensByTokenId の invariant 違反 (プログラマエラー) はここで throw される。
+ * 呼び出し側 (runAllDrift) は書き込み開始前にページ内全件をこの関数で計算しきることで、
+ * systemic error 検知時に「まだ何も書き込んでいない」状態を保証できる
+ * (Codex plan review 2026-07-19 指摘: 旧実装は posting 削除後に集約していたため、
+ *  systemic error のドキュメントでも削除だけ済んでしまう余地があった)。
+ */
+function planReindex(docId, docData, tokenizer = loadTokenizer()) {
+  const { tokens, tokenHash } = computeExpectedIndex(docData, tokenizer);
+  const oldTokens = docData.search?.tokens || [];
+  const newTokenStrings = tokens.map(t => t.token);
+  // 重複排除必須 (code-review 2026-07-19 指摘): oldTokens は customerName/officeName 等
+  // 複数フィールドから同一トークン文字列が生成された場合に重複を含みうる。重複したまま
+  // tokensToRemove を使うと、同一 search_index doc への df:increment(-1) が2重に enqueue
+  // され、emulator 実証済みの通り Firestore は同一 batch/BulkWriter 内の複数 transform を
+  // 累積適用するため df が過剰に減算される (silent data corruption)。
+  const tokensToRemove = [...new Set(oldTokens.filter(t => !newTokenStrings.includes(t)))];
+  const tokenMap = aggregateTokensByTokenId(tokens, tokenizer.generateTokenId);
+  return { docId, tokens, tokenHash, newTokenStrings, tokensToRemove, tokenMap };
+}
+
+/**
+ * Promise 群を allSettled で drain し、1件でも失敗があれば reindexStage を付けて throw する。
+ * Promise.all だと最初の失敗で即 reject し、他の enqueue 済み write の結果を捕捉できないため
+ * (BulkWriter は各 write が独立した Promise を返し、batch のような一括ロールバックがない)。
+ *
+ * 複数件が同時に失敗した場合、代表エラー (先頭) だけでなく失敗件数をメッセージに集約する。
+ * 旧実装は最初の1件のみを throw していたため、診断ログ (audit log の errorMessage) 上で
+ * 実際の失敗 scope が過小評価されていた (code-review 2026-07-19 指摘)。書込み自体は
+ * settleOrThrow 呼び出し時点で全 write が試行済みのため drop されない
+ * (idempotent retry で収束する。詳細: Runbook §4.5)。
+ */
+async function settleOrThrow(promises, defaultStage) {
+  const results = await Promise.allSettled(promises);
+  const failures = results.filter(r => r.status === 'rejected').map(r => r.reason);
+  if (failures.length === 0) return;
+
+  if (failures.length === 1) {
+    const error = failures[0];
+    error.reindexStage = error.reindexStage || defaultStage;
+    throw error;
+  }
+
+  const primary = failures[0];
+  const aggregated = new Error(
+    `${failures.length} 件の書込みが失敗しました (代表: ${primary?.message ?? String(primary)})`,
+  );
+  aggregated.reindexStage = defaultStage;
+  aggregated.code = primary?.code;
+  aggregated.cause = primary;
+  throw aggregated;
+}
+
+/**
+ * 指定 docId の search_index を強制再構築する (BulkWriter 版)。
  * tokenHash 無視で以下を実行:
  *   1. 既存 posting (search.tokens が示す位置) を削除
  *   2. 新 posting を書き込み (再実行安全: 既存 posting 存在時は df 加算しない)
  *   3. documents.search を dot 記法で Partial Update
+ *
+ * BulkWriter 移行の設計 (Codex plan review 2026-07-19 反映):
+ *   - 同一 DocumentReference への 2 回目以降の書き込みは、1 回目の完了を待たずに
+ *     別バッチとして送信され順序は保証されない (googleapis/nodejs-firestore 実装挙動)。
+ *     そのため段階間 (削除→書込→documents更新) は各段階の Promise を明示的に待ってから
+ *     次段階に進むことで、同一 docId 内の順序性を保証する。
+ *   - 新 posting 書き込みは既存有無で set/update を分岐せず、`merge: true` の set に統一。
+ *     異なる docId が同一の未作成 tokenId へ並行して書き込んでも、Firestore 側で
+ *     postings map と df (server-side increment) が正しく合成される
+ *     (旧実装の非 merge set は並行実行で後着が前着の postings を消す risk があった)。
+ *   - 各段階は Promise.allSettled() で全 write を drain してから成否判定する
+ *     (Promise.all は最初の失敗で即 reject し、他の enqueue 済み write の結果を
+ *      捕捉できないため)。
  *
  * エラーポリシー:
  *   - NOT_FOUND: 冪等な無視 (旧 posting が既に削除済み)
@@ -202,13 +286,18 @@ function detectDrift(docData, tokenizer = loadTokenizer()) {
  *
  * 厳密な冪等ではない境界:
  *   - 手動で search_index から posting を削除した状態で 2 回実行すると df が負になる
- *   - 並列実行は未対応 (Runbook で禁止明記)
+ *   - 同一 docId への cross-process 同時実行は未対応 (Runbook で単一起動を明記)
+ *
+ * @param {Object} opts
+ * @param {Object} [opts.plan] - 呼び出し元が事前に planReindex() で計算済みの plan
+ *   (runAllDrift はページ全件を書き込み前に検証するため必ず渡す)。未指定時はここで
+ *   計算する (runSingleDocId や単体呼び出し用)。事前計算済み plan を再利用することで
+ *   systemic error 検証時の plan と実際に書き込む plan が同一オブジェクトになることを
+ *   保証する (二重計算による乖離・CPU 浪費を防ぐ、code-review 2026-07-19 指摘)。
  */
-async function reindexDocument(db, docId, docData, { execute }, tokenizer = loadTokenizer()) {
-  const { tokens, tokenHash } = computeExpectedIndex(docData, tokenizer);
-  const oldTokens = docData.search?.tokens || [];
-  const newTokenStrings = tokens.map(t => t.token);
-  const tokensToRemove = oldTokens.filter(t => !newTokenStrings.includes(t));
+async function reindexDocument(db, docId, docData, { execute, bulkWriter, plan } = {}, tokenizer = loadTokenizer()) {
+  const resolvedPlan = plan || planReindex(docId, docData, tokenizer);
+  const { tokens, tokenHash, newTokenStrings, tokensToRemove, tokenMap } = resolvedPlan;
 
   if (!execute) {
     return {
@@ -221,78 +310,76 @@ async function reindexDocument(db, docId, docData, { execute }, tokenizer = load
     };
   }
 
+  if (!bulkWriter) {
+    throw new Error('reindexDocument: execute=true には bulkWriter が必須です');
+  }
+
   const now = admin.firestore.Timestamp.now();
 
-  // 1. 旧 posting 削除: NOT_FOUND を事前 filter で除外してから batch。
-  //    事前 filter にすることで「1 件 NOT_FOUND → batch 全体ロールバック」を回避する。
-  if (tokensToRemove.length > 0) {
-    const removeTokenIds = tokensToRemove.map(t => tokenizer.generateTokenId(t));
-    const removeRefs = removeTokenIds.map(id => db.collection('search_index').doc(id));
-    const removeSnaps = await db.getAll(...removeRefs);
-    const removeBatch = db.batch();
-    let removeCount = 0;
+  // 削除対象・新規書込み対象の ref を先に構築する。両者は disjoint (tokensToRemove は
+  // newTokenStrings に含まれないトークンのみ) で互いに依存しないため、getAll を並列実行する
+  // (code-review 2026-07-19 指摘: 旧実装は逐次 await していた)。
+  const removeTokenIds = tokensToRemove.map(t => tokenizer.generateTokenId(t));
+  const removeRefs = removeTokenIds.map(id => db.collection('search_index').doc(id));
+  const tokenIds = Array.from(tokenMap.keys());
+  const indexRefs = tokenIds.map(id => db.collection('search_index').doc(id));
+
+  const [removeSnaps, existingDocs] = await Promise.all([
+    removeRefs.length > 0 ? db.getAll(...removeRefs) : Promise.resolve([]),
+    indexRefs.length > 0 ? db.getAll(...indexRefs) : Promise.resolve([]),
+  ]);
+  // O(1) ルックアップ用 Map (旧実装の existingDocs.find() は tokenMap サイズに対し O(n²)
+  // になっていた、code-review 2026-07-19 指摘)
+  const existingById = new Map(existingDocs.map(d => [d.id, d]));
+
+  // 1. 旧 posting 削除: NOT_FOUND を事前 filter で除外してから enqueue。
+  //    事前 filter にすることで「1 件 NOT_FOUND → 全体失敗」を回避する。
+  if (removeSnaps.length > 0) {
+    const removePromises = [];
     for (let i = 0; i < removeSnaps.length; i++) {
       const snap = removeSnaps[i];
       // 既に posting が無い (NOT_FOUND 相当) なら skip
       if (!snap.exists || snap.data()?.postings?.[docId] === undefined) continue;
-      removeBatch.update(snap.ref, {
-        [`postings.${docId}`]: admin.firestore.FieldValue.delete(),
-        df: admin.firestore.FieldValue.increment(-1),
-      });
-      removeCount++;
+      removePromises.push(
+        bulkWriter.update(snap.ref, {
+          [`postings.${docId}`]: admin.firestore.FieldValue.delete(),
+          df: admin.firestore.FieldValue.increment(-1),
+        }),
+      );
     }
-    if (removeCount > 0) {
-      // 事前 filter 後の batch 失敗は permanent error の可能性大 → throw で呼び出し元へ
-      await removeBatch.commit();
-    }
+    await settleOrThrow(removePromises, 'search_index_postings_remove');
   }
 
-  // 2. 新 posting 書き込み (同一 docId 再実行時は df を加算しない)
+  // 2. 新 posting 書き込み (再実行安全: 既に posting が存在するなら df 加算しない)。
   //    集約ロジックは scripts/lib/aggregateTokens.js を経由 (migrate-search-index.js と共有)
-  const tokenMap = aggregateTokensByTokenId(tokens, tokenizer.generateTokenId);
-
-  const tokenIds = Array.from(tokenMap.keys());
-  const indexRefs = tokenIds.map(id => db.collection('search_index').doc(id));
-  const existingDocs = tokenIds.length > 0 ? await db.getAll(...indexRefs) : [];
-  const existingSet = new Set(existingDocs.filter(d => d.exists).map(d => d.id));
-
-  const writeBatch = db.batch();
+  const writePromises = [];
   for (const [tokenId, data] of tokenMap) {
     const indexRef = db.collection('search_index').doc(tokenId);
     const posting = { score: data.score, fieldsMask: data.fieldsMask, updatedAt: now };
-    // 再実行安全: 既に posting が存在するなら df 加算しない
-    const existingDoc = existingDocs.find(d => d.id === tokenId);
+    const existingDoc = existingById.get(tokenId);
     const hadPosting = existingDoc?.data()?.postings?.[docId] !== undefined;
 
-    if (existingSet.has(tokenId)) {
-      writeBatch.update(indexRef, {
-        updatedAt: now,
-        ...(hadPosting ? {} : { df: admin.firestore.FieldValue.increment(1) }),
-        [`postings.${docId}`]: posting,
-      });
-    } else {
-      writeBatch.set(indexRef, {
-        updatedAt: now,
-        df: 1,
-        postings: { [docId]: posting },
-      });
-    }
+    writePromises.push(
+      bulkWriter.set(
+        indexRef,
+        {
+          updatedAt: now,
+          ...(hadPosting ? {} : { df: admin.firestore.FieldValue.increment(1) }),
+          postings: { [docId]: posting },
+        },
+        { merge: true },
+      ),
+    );
   }
-  // step 2/3 の失敗時に呼出元が stage を特定できるよう error を wrap する。
-  // 半端状態 (postings 新しいが tokenHash 古い) 発生時は
-  // Runbook §4.5 に基づき手動クリーンアップする。
-  try {
-    await writeBatch.commit();
-  } catch (error) {
-    error.reindexStage = 'search_index_postings_write';
-    throw error;
-  }
+  // 半端状態 (postings 一部/全部新しいが tokenHash 古い) 発生時は
+  // Runbook §4.5 に基づき手動クリーンアップ or 再実行する。
+  await settleOrThrow(writePromises, 'search_index_postings_write');
 
   // 3. documents.search を dot 記法で Partial Update
   //    search オブジェクト全体置換にすると将来追加フィールドが消える
   //    (CLAUDE.md MUST: Partial Update は対象外フィールド不変)。
   try {
-    await db.collection('documents').doc(docId).update({
+    await bulkWriter.update(db.collection('documents').doc(docId), {
       'search.version': 1,
       'search.tokens': newTokenStrings,
       'search.tokenHash': tokenHash,
@@ -314,12 +401,60 @@ async function reindexDocument(db, docId, docData, { execute }, tokenizer = load
   };
 }
 
+/**
+ * 外部依存 (p-limit 等) を追加しない自前の bounded worker pool。
+ * items を concurrency 件まで同時実行し、1 件完了するたびに次を取り出す。
+ * 全件を一度に enqueue しない設計 (BulkWriter 自体のスロットリングとは独立に、
+ * getAll・監査ログ生成量・ホット token への書き込み集中を制御するため)。
+ */
+async function runWithConcurrency(items, concurrency, worker) {
+  let nextIndex = 0;
+  async function runWorker() {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex++;
+      await worker(items[currentIndex], currentIndex);
+    }
+  }
+  const workerCount = Math.max(1, Math.min(concurrency, items.length));
+  await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
+}
+
 // ========== Step 5: モード実行 ==========
 
 /** exit code: 0=成功、1=事前検証エラー、2=部分失敗あり。main() で process.exit に反映。 */
 const EXIT_OK = 0;
 const EXIT_PRECONDITION = 1;
 const EXIT_PARTIAL_FAILURE = 2;
+
+/**
+ * BulkWriter.close() を安全に呼ぶ。close() は enqueue 済み write を drain してから
+ * 完了するため、失敗は「write が drop された」ではなく「drain 完了の確認ができなかった」
+ * ことを意味する (各 write 自体は settleOrThrow で個別に成否判定済み)。
+ * 失敗しても呼び出し元の処理結果 (exitCode 等) は握り潰さず、警告として記録した上で
+ * true を返す (呼び出し元は exitCode を EXIT_PARTIAL_FAILURE に格上げする判断に使う)。
+ * これにより close() 失敗時も BATCH_SUMMARY 等の事後ログ出力に必ず到達できる
+ * (code-review 2026-07-19 指摘: 旧実装は finally 内 throw で summary 出力に未到達だった)。
+ * @returns {Promise<boolean>} true なら close 失敗
+ */
+async function closeBulkWriterSafely(bulkWriter, mode, auditCtx) {
+  if (!bulkWriter) return false;
+  try {
+    await bulkWriter.close();
+    return false;
+  } catch (closeError) {
+    console.error(JSON.stringify({
+      severity: SEVERITIES.WARNING,
+      event: EVENTS.BULKWRITER_CLOSE_FAILED,
+      mode,
+      errorMessage: closeError?.message ?? String(closeError),
+    }));
+    await writeForceReindexAuditLog(
+      { event: EVENTS.BULKWRITER_CLOSE_FAILED, severity: SEVERITIES.WARNING, mode, dryRun: false },
+      auditCtx,
+    );
+    return true;
+  }
+}
 
 async function runSingleDocId(db, args, auditCtx) {
   const docRef = db.collection('documents').doc(args.docId);
@@ -335,8 +470,10 @@ async function runSingleDocId(db, args, auditCtx) {
   }
 
   console.log(`[MODE] 単一 docId (${args.execute ? '実行' : 'dry-run'}): ${args.docId}`);
+  const bulkWriter = args.execute ? db.bulkWriter() : null;
+  let exitCode;
   try {
-    const result = await reindexDocument(db, args.docId, data, { execute: args.execute });
+    const result = await reindexDocument(db, args.docId, data, { execute: args.execute, bulkWriter });
     console.log(
       `  [${args.execute ? 'OK' : 'DRY'}] ${result.docId}: ` +
       `+${result.tokensToAdd} / -${result.tokensToRemove} tokens, ` +
@@ -354,7 +491,7 @@ async function runSingleDocId(db, args, auditCtx) {
       },
       auditCtx,
     );
-    return EXIT_OK;
+    exitCode = EXIT_OK;
   } catch (error) {
     await emitFailureEvent({
       event: EVENTS.FAILED,
@@ -365,13 +502,21 @@ async function runSingleDocId(db, args, auditCtx) {
       dryRun: !args.execute,
       auditCtx,
     });
-    return EXIT_PARTIAL_FAILURE;
+    exitCode = EXIT_PARTIAL_FAILURE;
+  } finally {
+    // BulkWriter インスタンスはこの関数内でのみ生成・使用するため一度だけ呼べばよい。
+    const closeFailed = await closeBulkWriterSafely(bulkWriter, 'doc-id', auditCtx);
+    if (closeFailed && exitCode === EXIT_OK) {
+      exitCode = EXIT_PARTIAL_FAILURE;
+    }
   }
+  return exitCode;
 }
 
 async function runAllDrift(db, args, auditCtx) {
   console.log(`[MODE] 全 drift scan (${args.execute ? '実行' : 'dry-run'})` +
-    (args.sample ? `, sample=${args.sample}` : ''));
+    (args.sample ? `, sample=${args.sample}` : '') +
+    (args.execute ? `, concurrency=${args.concurrency}` : ''));
 
   let processed = 0;
   let drifted = 0;
@@ -380,78 +525,105 @@ async function runAllDrift(db, args, auditCtx) {
   let lastDoc = null;
   const maxDocs = args.sample ?? Infinity;
 
-  while (processed < maxDocs) {
-    const remaining = maxDocs - processed;
-    const limit = Math.min(args.batchSize, remaining);
-    // 注: processedAt 欠如ドキュメントはこのクエリから除外される (Firestore 仕様)。
-    // 既存運用で processedAt は書込必須のため許容。未設定が発生した場合は
-    // 別途 `--doc-id` で個別復旧する。
-    let query = db.collection('documents')
-      .where('status', '==', 'processed')
-      .orderBy('processedAt', 'desc')
-      .limit(limit);
-    if (lastDoc) query = query.startAfter(lastDoc);
+  // execute 時のみ生成し、全ページで使い回す (BulkWriter は 500/50/5 ルールで
+  // 自動スロットリングするため、実行全体で 1 インスタンスに集約する)。
+  const bulkWriter = args.execute ? db.bulkWriter() : null;
 
-    const snapshot = await query.get();
-    if (snapshot.empty) break;
+  try {
+    while (processed < maxDocs) {
+      const remaining = maxDocs - processed;
+      const limit = Math.min(args.batchSize, remaining);
+      // 注: processedAt 欠如ドキュメントはこのクエリから除外される (Firestore 仕様)。
+      // 既存運用で processedAt は書込必須のため許容。未設定が発生した場合は
+      // 別途 `--doc-id` で個別復旧する。
+      let query = db.collection('documents')
+        .where('status', '==', 'processed')
+        .orderBy('processedAt', 'desc')
+        .limit(limit);
+      if (lastDoc) query = query.startAfter(lastDoc);
 
-    for (const docSnap of snapshot.docs) {
-      processed++;
-      const data = docSnap.data();
-      const drift = detectDrift(data);
-      if (!drift.isDrifted) continue;
+      const snapshot = await query.get();
+      if (snapshot.empty) break;
 
-      drifted++;
-      console.log(
-        `  [DRIFT] ${docSnap.id}: hash ${drift.actualHash || '(none)'} → ${drift.expectedHash}`
-      );
+      const driftedInPage = [];
+      for (const docSnap of snapshot.docs) {
+        processed++;
+        const data = docSnap.data();
+        const drift = detectDrift(data);
+        if (!drift.isDrifted) continue;
 
-      if (args.execute) {
-        try {
-          const result = await reindexDocument(db, docSnap.id, data, { execute: true });
-          reindexed++;
-          console.log(`    [OK] 再 index 完了`);
-          await writeForceReindexAuditLog(
-            {
-              event: EVENTS.EXECUTED,
-              severity: SEVERITIES.NOTICE,
-              mode: 'all-drift',
-              dryRun: false,
-              docId: docSnap.id,
-              counts: { tokensAdded: result.tokensToAdd, tokensRemoved: result.tokensToRemove },
-              hashes: { oldHash: result.actualHash || null, newHash: result.expectedHash },
-            },
-            auditCtx,
-          );
-        } catch (error) {
-          // systemic programmer error (aggregateTokens の unknown TokenField 等) は
-          // per-doc failedCount に集約せず全体中止する。drift を silent に隠すと
-          // force-reindex が部分完了で exit 0 に見え、FIELD_TO_MASK の同期漏れ等の
-          // structural bug を見逃す。
-          if (error && typeof error.message === 'string' &&
-              error.message.startsWith('[aggregateTokens]')) {
-            console.error(
-              `[FATAL] aggregateTokens invariant violation on ${docSnap.id}: ${error.message}`,
-            );
-            throw error;
-          }
-          failed++;
-          // 個別失敗を監査可能にする (silent 続行で次回 scan 検出不能になるのを防ぐ)
-          await emitFailureEvent({
-            event: EVENTS.FAILED,
-            severity: SEVERITIES.ERROR,
-            mode: 'all-drift',
-            docId: docSnap.id,
-            error,
-            dryRun: !args.execute,
-            auditCtx,
-          });
-        }
+        drifted++;
+        console.log(
+          `  [DRIFT] ${docSnap.id}: hash ${drift.actualHash || '(none)'} → ${drift.expectedHash}`
+        );
+        driftedInPage.push({ docId: docSnap.id, data });
       }
-    }
 
-    lastDoc = snapshot.docs[snapshot.docs.length - 1];
-    if (snapshot.docs.length < limit) break;
+      if (args.execute && driftedInPage.length > 0) {
+        // systemic programmer error (aggregateTokens の unknown TokenField 等) を
+        // 書き込み開始前にページ全件検証する。ここで throw すればこのページは
+        // 書き込みゼロのまま中断できる (Codex plan review 2026-07-19 反映)。
+        // drift を silent に隠すと force-reindex が部分完了で exit 0 に見え、
+        // FIELD_TO_MASK の同期漏れ等の structural bug を見逃すため、全体中止する。
+        let plans;
+        try {
+          plans = driftedInPage.map(({ docId, data }) => ({ docId, data, plan: planReindex(docId, data) }));
+        } catch (error) {
+          console.error(`[FATAL] aggregateTokens invariant violation during planning: ${error.message}`);
+          throw error;
+        }
+
+        await runWithConcurrency(plans, args.concurrency, async ({ docId, data, plan }) => {
+          try {
+            // 事前検証済みの plan をそのまま渡す (二重計算防止 + 検証対象と実書込み対象の
+            // 同一性保証、code-review 2026-07-19 指摘)。
+            const result = await reindexDocument(db, docId, data, { execute: true, bulkWriter, plan });
+            reindexed++;
+            console.log(`    [OK] ${docId} 再 index 完了`);
+            await writeForceReindexAuditLog(
+              {
+                event: EVENTS.EXECUTED,
+                severity: SEVERITIES.NOTICE,
+                mode: 'all-drift',
+                dryRun: false,
+                docId,
+                counts: { tokensAdded: result.tokensToAdd, tokensRemoved: result.tokensToRemove },
+                hashes: { oldHash: result.actualHash || null, newHash: result.expectedHash },
+              },
+              auditCtx,
+            );
+          } catch (error) {
+            failed++;
+            // 個別失敗を監査可能にする (silent 続行で次回 scan 検出不能になるのを防ぐ)
+            await emitFailureEvent({
+              event: EVENTS.FAILED,
+              severity: SEVERITIES.ERROR,
+              mode: 'all-drift',
+              docId,
+              error,
+              dryRun: false,
+              auditCtx,
+            });
+          }
+        });
+      }
+
+      lastDoc = snapshot.docs[snapshot.docs.length - 1];
+      if (snapshot.docs.length < limit) break;
+    }
+  } catch (error) {
+    // systemic error (aggregateTokens invariant 違反等) は close() の成否に関わらず
+    // 即座に中断する意図的な設計を維持する (サマリー出力には到達させない)。
+    // close() 自体は必ず試み、成否に関わらず元の error を再 throw する。
+    await closeBulkWriterSafely(bulkWriter, 'all-drift', auditCtx);
+    throw error;
+  }
+
+  // close() が失敗しても、全 write は個別に settleOrThrow で成否判定済みのため、
+  // ここで throw せずサマリー出力・監査ログには必ず到達させる
+  // (code-review 2026-07-19 指摘: 旧実装は finally 内 close() throw で summary 出力に未到達だった)。
+  if (await closeBulkWriterSafely(bulkWriter, 'all-drift', auditCtx)) {
+    failed++;
   }
 
   console.log('---');
@@ -616,10 +788,15 @@ module.exports = {
   parseArgs,
   computeExpectedIndex,
   detectDrift,
+  planReindex,
   reindexDocument,
+  runWithConcurrency,
+  runSingleDocId,
+  runAllDrift,
   emitFailureEvent,
   buildAuditCtx,
   runEntrypoint,
+  DEFAULT_CONCURRENCY,
   EXIT_OK,
   EXIT_PRECONDITION,
   EXIT_PARTIAL_FAILURE,
