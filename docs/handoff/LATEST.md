@@ -1,6 +1,21 @@
 # ハンドオフメモ
 
-**更新日**: 2026-07-20（frontend/.env dev環境誤接続防止ミッション完遂）
+**更新日**: 2026-07-20（dev/kanameone/cocoro環境監査・保守検証セッション完遂）
+
+## dev/kanameone/cocoro環境監査・保守検証セッション 完遂サマリ（〜2026-07-20時点）
+
+decision-makerの「dev/prodで実装内容が揃い、検証・安全性対応も可能な限り行えた最適解の状態か」という確認を起点に、3環境（dev/kanameone/cocoro）の実装整合性とデプロイ健全性を監査した。新機能実装ではなく、直前ミッション（Issue #687/#694）完遂後の保守メンテナンスフェーズの棚卸し。
+
+- **発見1**: Cloud Functionsの直近デプロイ履歴（GitHub Actions実行ログのheadSha照合）から、Issue #686修正（fax由来ファイル名の`-L\d+-`誤判定、検索インデックス脱落バグ、PR #689）がkanameone/cocoro本番に未反映と判明（Hostingも2026-07-17時点で停止、devより2〜3日遅延）。
+- **影響範囲調査**: read-only調査スクリプト（`scripts/audit-filename-pattern-issue686.js`、PR #696でマージ、`run-ops-script.yml`に恒久登録）を追加し、dev/kanameone/cocoro全環境のdocumentsコレクションをスキャン。旧正規表現にマッチし新正規表現にマッチしない実データ（＝バグの影響を受けた実データ）は**3環境とも0件**（kanameone 9,818件・cocoro 1,106件・dev 167件走査）。実害なしと確認した上でCloud Functionsデプロイを実施（`gemini_model_id_override=code-default`、前回同様の設定を踏襲）。kanameone(run 29707201401)/cocoro(run 29707203873)ともコミット`0c829b5`で成功、3環境のFunctionsが最新mainで統一された。
+- **デプロイ後の健全性確認**: `check-function-error-logs`をkanameone/cocoro双方で実行。kanameoneは過去24時間エラー0件。cocoroはデプロイのロールアウト中（23:08頃、3関数=`getOcrText`/`exchangeGmailAuthCode`/`removeMasterAlias`にほぼ同時多発）に「Invalid request, unable to process.」エラー計5件を検出したが、17分後の再確認で新規エラーはゼロ、収束済みと確認（新旧リビジョン切り替え時の過渡的事象と判断）。
+- **Firebase Hosting未反映差分の実害精査**: kanameone/cocoroのHosting最終反映（2026-07-17時点）以降の`frontend/`差分はPR #694の`devProjectGuard.ts`のみ。`checkDevProjectGuard(projectId, isDev)`は`isDev`引数がfalse（本番ビルド）なら即returnする実装のため、未反映でも実害なしと実装レベルで確認（対応不要と判断）。
+- **Firestore Indexes/Rules**: kanameone/cocoro双方とも2026-07-18時点で最新反映済み、以降差分なしを確認。
+- **定常運用の健全性**: Health Report/Scheduled Master Auditの日次自動実行が直近5日間（2026-07-15〜19）連続success。
+- **Firestoreバックアップ**: `Setup Firestore Backup`workflowが2026-04-10に初回設定成功済み（Native Firestore backupのためCloud Scheduler等の外部依存なし、継続は自動）。ただし継続稼働の直接確認（`gcloud firestore backups schedules list`相当）はローカルCLI認証・ADC権限双方で403/再認証エラーとなり未実施（GitHub Actions側の確認スクリプトも未整備）。**follow-up候補として次項に記録**。
+
+**follow-up候補（本セッションのスコープ外、次ミッション候補として次回triage）**:
+- Firestoreバックアップの継続稼働状況（実際にバックアップが取得され続けているか）を、GitHub Actions経由のSA権限で確認する仕組みが未整備。初回設定（2026-04-10）は成功しているため緊急性は低いが、直接確認の手段がない状態
 
 ## frontend/.env dev環境誤接続防止ミッション 完遂サマリ（〜2026-07-20時点）
 
