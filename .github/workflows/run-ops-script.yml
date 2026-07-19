@@ -132,6 +132,7 @@ on:
           - check-function-error-logs --hours 24
           - check-function-error-logs --hours 72
           - check-function-error-logs --hours 168
+          - audit-filename-pattern-issue686
       doc_id:
         description: 'Document ID (required when script contains --doc-id; ignored otherwise)'
         required: false
