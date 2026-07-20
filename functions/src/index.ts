@@ -20,6 +20,9 @@ export { exchangeGmailAuthCode } from './gmail/exchangeGmailAuthCode';
 // Google Drive OAuth認証コード交換（Callable Function, ADR-0022）
 export { exchangeDriveAuthCode } from './drive/exchangeDriveAuthCode';
 
+// Google Drive エクスポート起動トリガー（verified false→true検知, ADR-0022）
+export { onDocumentWriteDriveExport } from './drive/driveExportTrigger';
+
 // OCR処理（定期実行 - メイン処理パス）
 export { processOCR } from './ocr/processOCR';
 
