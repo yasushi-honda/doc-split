@@ -1763,5 +1763,59 @@ describe('Firestore Security Rules', () => {
         })
       );
     });
+
+    // ============================================
+    // Google Drive連携設定 (ADR-0022, Phase 1)
+    // settings/drive の admin専用write権限テスト
+    // ============================================
+    it('ホワイトリスト登録ユーザーはsettings/driveを読み取り可能', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'settings', 'drive'), {
+          connectedEmail: 'drive-service@example.com',
+          rootFolderId: 'folder-abc',
+        });
+      });
+
+      const docRef = doc(normalUser.firestore(), 'settings', 'drive');
+      await assertSucceeds(getDoc(docRef));
+    });
+
+    it('未登録ユーザーはsettings/driveを読み取り不可', async () => {
+      const unknownUser = testEnv.authenticatedContext(unknownUid);
+
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'settings', 'drive'), {
+          connectedEmail: 'drive-service@example.com',
+        });
+      });
+
+      const docRef = doc(unknownUser.firestore(), 'settings', 'drive');
+      await assertFails(getDoc(docRef));
+    });
+
+    it('一般ユーザーはsettings/driveを編集不可', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+      const docRef = doc(normalUser.firestore(), 'settings', 'drive');
+      await assertFails(
+        setDoc(docRef, {
+          rootFolderId: 'folder-xyz',
+          rootFolderName: 'エクスポート先',
+        })
+      );
+    });
+
+    it('管理者はsettings/driveを編集可能', async () => {
+      const adminUser = testEnv.authenticatedContext(adminUid);
+      const docRef = doc(adminUser.firestore(), 'settings', 'drive');
+      await assertSucceeds(
+        setDoc(docRef, {
+          rootFolderId: 'folder-xyz',
+          rootFolderName: 'エクスポート先',
+          template: [{ type: 'customer', format: 'furiganaInitialSpaceName' }],
+        })
+      );
+    });
   });
 });
