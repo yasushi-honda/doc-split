@@ -8,6 +8,7 @@
 
 import * as testing from '@firebase/rules-unit-testing';
 import { doc, getDoc, setDoc, deleteDoc, updateDoc, deleteField } from 'firebase/firestore';
+import { expect } from 'chai';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
@@ -1043,7 +1044,9 @@ describe('Firestore Security Rules', () => {
           errorRescueCount: 1,
           lastRescuedAt: new Date(),
           // ADR-0022 (Google Drive連携 Phase1): エクスポート済みdocの再処理で
-          // 残存しうるフィールド
+          // 残存しうるフィールド。driveFileId は code-review xhigh指摘対応(2026-07-21)で
+          // 意図的にクリア対象から除外されたため、このテストでは deleteField() しない
+          // (下記assertSucceeds後、値が変化しないことを別途検証する)。
           driveExportStatus: 'exported',
           driveFileId: 'drive-file-id-123',
           driveExportedAt: new Date(),
@@ -1054,6 +1057,8 @@ describe('Firestore Security Rules', () => {
 
       const docRef = doc(normalUser.firestore(), 'documents', 'doc-reprocess-full');
       // getReprocessClearFields() と完全に同一のフィールドセットで更新
+      // (driveFileId は意図的に含めない。exportDocument.ts が move/rename/内容更新の
+      // 直接参照として使うため、reprocessを跨いで保持される必要がある)
       await assertSucceeds(
         updateDoc(docRef, {
           status: 'pending',
@@ -1092,7 +1097,6 @@ describe('Firestore Security Rules', () => {
           errorRescueCount: deleteField(),
           lastRescuedAt: deleteField(),
           driveExportStatus: deleteField(),
-          driveFileId: deleteField(),
           driveExportedAt: deleteField(),
           driveExportError: deleteField(),
           driveExportRunId: deleteField(),
@@ -1109,6 +1113,15 @@ describe('Firestore Security Rules', () => {
           verifiedAt: null,
         })
       );
+
+      // driveFileId は更新payloadに含めていないため、値は変化せず保持される
+      // (code-review xhigh指摘対応、2026-07-21)
+      let afterData: Record<string, unknown> | undefined;
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        const afterSnap = await getDoc(doc(context.firestore(), 'documents', 'doc-reprocess-full'));
+        afterData = afterSnap.data();
+      });
+      expect(afterData?.driveFileId).to.equal('drive-file-id-123');
     });
 
     it('サーバー専有フィールド(retryCount等)への新規値の上書きは拒否される（Codex review #569 P2反映）', async () => {

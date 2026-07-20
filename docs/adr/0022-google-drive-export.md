@@ -47,7 +47,9 @@ documentの`verified`フィールドがfalse→trueになる瞬間を、Cloud Fu
 
 `driveExportStatus`（`(フィールド不在) → exporting → exported`、失敗時`error`）と`driveFileId`/`driveExportedAt`/`driveExportError`/`driveExportRunId`を document に追加し、**通常時はCloud Functions（Admin SDK）からのみ書き込む**設計にする。フロントエンドからの再送は直接Firestore書き込みではなく、Callable Function（`retryDriveExport`）経由に限定する。
 
-例外として、`frontend/src/hooks/useDocuments.ts`の`getReprocessClearFields()`（再処理時のフィールドクリア）は、これら5フィールドを`deleteField()`で削除する。これは`documents` collectionの`firestore.rules` update許可フィールドリスト（`hasOnly([...])`方式）への追加が必要（`retryCount`/`provenance`等の既存の派生フィールドと同型）だが、削除または無変更のみを許可する専用ガードにより、FEが値を新規設定・上書きすることはできない（#178教訓の延長。再処理でDrive系フィールドが残存すると、訂正後の再確認がトリガーのクレームでスキップされ、二度と再エクスポートされなくなる不具合の再発防止）。
+例外として、`frontend/src/hooks/useDocuments.ts`の`getReprocessClearFields()`（再処理時のフィールドクリア）は、`driveExportStatus`/`driveExportedAt`/`driveExportError`/`driveExportRunId`の4フィールドを`deleteField()`で削除する。これは`documents` collectionの`firestore.rules` update許可フィールドリスト（`hasOnly([...])`方式）への追加が必要（`retryCount`/`provenance`等の既存の派生フィールドと同型）だが、削除または無変更のみを許可する専用ガードにより、FEが値を新規設定・上書きすることはできない（#178教訓の延長。再処理でDriveエクスポートのクレーム状態が残存すると、訂正後の再確認がトリガーのクレームでスキップされ、二度と再エクスポートされなくなる不具合の再発防止）。
+
+**`driveFileId`は例外的に再処理時もクリアしない**（code-review xhigh指摘対応、2026-07-21）。理由は次項参照。
 
 トリガー自身の書き戻し（`driveExportStatus`の更新）による再発火は、`before?.verified !== true && after.verified === true`という「立ち上がりエッジのみ」の判定で防ぐ（既存の`searchIndexer.ts`のハッシュ比較と同じ思想）。
 
@@ -64,6 +66,10 @@ stateDiagram-v2
 ```
 
 `exporting`から`exporting`への自己遷移（定期リトライによる再クレーム）は、新しい`driveExportRunId`を発行して所有権を移す。並行して実行されていた古い実行(古いrunId)が後から完了して書き戻そうとしても、書戻し直前に再読込した`driveExportRunId`が自分のものと一致しない場合は書き込みをスキップする(`functions/src/ocr/ocrRunGuard.ts`の`ocrRunId`所有権検証と同じ思想)。これにより、`exportDocument()`の`files.create()`前段の`appProperties`(`docSplitDocId`)による冪等性チェックと合わせて、リトライ時のDriveファイル重複作成・Firestore状態の二重書き込みを防ぐ。
+
+**`driveFileId`優先のmove/rename/内容更新**（code-review xhigh指摘対応、2026-07-21）: 当初の実装では`getReprocessClearFields()`が`driveFileId`も削除していたため、再処理でフォルダパスが変わる訂正（利用者取り違えの修正等）をすると、`exportDocument()`の`appProperties`検索が新しいフォルダ配下しか見ないため旧フォルダに誤配置ファイルが孤児として残り続け、フォルダパスが変わらない訂正では内容が更新されない（stale content）、という2つの不具合があった。`shared/types.ts`の`driveFileId`コメントが元々「重複防止・**再送先**の一意キー」としていた設計意図に立ち返り、`driveFileId`を再処理でもクリアせず保持するよう変更した。`exportDocument()`は`doc.driveFileId`がある場合、`drive.files.get()`で実体を確認したうえで`drive.files.update()`（`addParents`/`removeParents`でフォルダ移動、`requestBody.name`でリネーム、`media`で内容更新を1回のAPI呼び出しで実施）を直接行う。ファイルがDrive上に見つからない（404、手動削除等）場合のみ、従来の`appProperties`ベースのfind-or-create（`findOrUploadFile()`）にフォールバックする。
+
+**既知の残課題（本修正のスコープ外）**: 初回エクスポート時（`driveFileId`が未設定）に2つの実行が真に並走すると、`findOrUploadFile()`のlist-then-createがTOCTOU競合を起こし、Drive上に同一`docId`のファイルが重複作成されうる（以後`AmbiguousFileError`で恒久停止）。Phase 2以降でDrive側の排他制御（例: 作成前にFirestore側でアップロード試行中マーカーを持つ等）を検討する。
 
 ### 7. スコープはPhase 1（MVP）に限定
 

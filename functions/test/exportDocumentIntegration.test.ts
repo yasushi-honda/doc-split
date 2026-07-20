@@ -44,11 +44,23 @@ interface FakeFile {
 /**
  * `q`の内容でフォルダ検索(mimeType=folder)とファイル検索(appProperties経由の
  * docId冪等性チェック)を区別してfakeの応答を切り替える。
+ *
+ * `getFile`は`files.get()`(driveFileId優先解決の第一段)の応答を制御する:
+ * - `{ parents: [...] }`: そのidのファイルが指定の親フォルダ配下に存在する
+ * - `'not-found'`: 404(手動削除等を想定) → findOrUploadFileフォールバックへ
+ * - 省略: `doc.driveFileId`が無いテストケースでは呼ばれない想定
  */
-function makeFakeDrive(opts: { listFiles?: FakeFile[]; existingFiles?: FakeFile[]; createdIds?: string[] }) {
+function makeFakeDrive(opts: {
+  listFiles?: FakeFile[];
+  existingFiles?: FakeFile[];
+  createdIds?: string[];
+  getFile?: { parents: string[] } | 'not-found';
+}) {
   let createIndex = 0;
   const listCalls: Record<string, unknown>[] = [];
   const createCalls: Record<string, unknown>[] = [];
+  const getCalls: Record<string, unknown>[] = [];
+  const updateCalls: Record<string, unknown>[] = [];
 
   const drive = {
     files: {
@@ -66,10 +78,23 @@ function makeFakeDrive(opts: { listFiles?: FakeFile[]; existingFiles?: FakeFile[
         createIndex++;
         return { data: { id } };
       },
+      get: async (params: Record<string, unknown>) => {
+        getCalls.push(params);
+        if (opts.getFile === 'not-found') {
+          const notFound = new Error('File not found') as Error & { code: number };
+          notFound.code = 404;
+          throw notFound;
+        }
+        return { data: { parents: opts.getFile?.parents ?? [] } };
+      },
+      update: async (params: Record<string, unknown>) => {
+        updateCalls.push(params);
+        return { data: { id: params.fileId } };
+      },
     },
   } as unknown as drive_v3.Drive;
 
-  return { drive, listCalls, createCalls };
+  return { drive, listCalls, createCalls, getCalls, updateCalls };
 }
 
 async function seedDocument(overrides: Record<string, unknown> = {}): Promise<string> {
@@ -200,6 +225,92 @@ describe('exportDocument (ADR-0022 Phase 1)', () => {
     const data = (await db.doc(`documents/${docId}`).get()).data()!;
     expect(data.driveFileId).to.equal('orphaned-file-from-prior-run');
     expect(data.driveExportStatus).to.equal('exported');
+  });
+
+  // ADR-0022 code-review xhigh指摘対応(2026-07-21): reprocess時にdriveFileIdをクリア
+  // しない設計への変更に伴う回帰テスト群。driveFileIdが既にある場合はappProperties検索
+  // ではなくdriveFileIdを直接参照したmove/rename/内容更新に切り替わることを検証する。
+  describe('driveFileId優先のmove/rename/内容更新(code-review xhigh指摘対応)', () => {
+    it('driveFileIdあり+フォルダパス不変: files.updateで内容更新のみ行い、files.createは呼ばれず同一idを返す', async () => {
+      const docId = await seedDocument({ driveFileId: 'prior-file-id' });
+      await seedCustomer();
+      await seedDriveSettings();
+      const { drive, createCalls, getCalls, updateCalls } = makeFakeDrive({
+        createdIds: ['folder-office', 'folder-customer'], // フォルダのみ(ファイルcreateは発生しない想定)
+        getFile: { parents: ['folder-customer'] }, // 既に解決後の親フォルダ配下にある
+      });
+
+      await exportDocument(docId, TEST_RUN_ID, { drive, downloadFile: async () => Buffer.from('updated-bytes') });
+
+      expect(getCalls).to.have.lengthOf(1);
+      expect(getCalls[0].fileId).to.equal('prior-file-id');
+      expect(createCalls).to.have.lengthOf(2); // フォルダのみ、ファイルのcreateなし
+      expect(updateCalls).to.have.lengthOf(1);
+      expect(updateCalls[0].fileId).to.equal('prior-file-id');
+      expect(updateCalls[0].addParents).to.equal('folder-customer');
+      expect(updateCalls[0]).to.not.have.property('removeParents'); // 移動不要
+      expect((updateCalls[0].requestBody as { name: string }).name).to.equal('書類_事業所A_20260101_鈴木花子.pdf');
+      expect((updateCalls[0].media as { mimeType: string }).mimeType).to.equal('application/pdf');
+
+      const data = (await db.doc(`documents/${docId}`).get()).data()!;
+      expect(data.driveFileId).to.equal('prior-file-id');
+      expect(data.driveExportStatus).to.equal('exported');
+    });
+
+    it('driveFileIdあり+フォルダパス変化: files.updateがaddParents/removeParents付きで呼ばれ、旧フォルダに孤児が残らない', async () => {
+      const docId = await seedDocument({ driveFileId: 'prior-file-id' });
+      await seedCustomer();
+      await seedDriveSettings();
+      const { drive, createCalls, updateCalls } = makeFakeDrive({
+        createdIds: ['folder-office', 'folder-customer'],
+        getFile: { parents: ['old-folder-id'] }, // 訂正前は別フォルダに存在していた
+      });
+
+      await exportDocument(docId, TEST_RUN_ID, { drive, downloadFile: async () => Buffer.from('x') });
+
+      expect(createCalls).to.have.lengthOf(2); // ファイルのcreateは発生しない(移動のみ)
+      expect(updateCalls).to.have.lengthOf(1);
+      expect(updateCalls[0].fileId).to.equal('prior-file-id');
+      expect(updateCalls[0].addParents).to.equal('folder-customer');
+      expect(updateCalls[0].removeParents).to.equal('old-folder-id');
+
+      const data = (await db.doc(`documents/${docId}`).get()).data()!;
+      expect(data.driveFileId).to.equal('prior-file-id'); // 新規ファイルではなく同一idのまま(孤児化しない)
+    });
+
+    it('driveFileIdあり+files.getが404: findOrUploadFile(appPropertiesフォールバック)経路で新規アップロードする', async () => {
+      const docId = await seedDocument({ driveFileId: 'stale-file-id' }); // ユーザーがDrive上で手動削除した想定
+      await seedCustomer();
+      await seedDriveSettings();
+      const { drive, createCalls, updateCalls } = makeFakeDrive({
+        createdIds: ['folder-office', 'folder-customer', 'recreated-file-id'],
+        getFile: 'not-found',
+      });
+
+      await exportDocument(docId, TEST_RUN_ID, { drive, downloadFile: async () => Buffer.from('x') });
+
+      expect(updateCalls).to.have.lengthOf(0);
+      expect(createCalls).to.have.lengthOf(3); // フォルダ2件 + ファイル新規作成1件
+      const data = (await db.doc(`documents/${docId}`).get()).data()!;
+      expect(data.driveFileId).to.equal('recreated-file-id');
+    });
+
+    it('driveFileIdなし(初回エクスポート): files.get/files.updateは一切呼ばれず既存のfindOrUploadFile経路のまま動作する', async () => {
+      const docId = await seedDocument(); // driveFileId未設定(初回エクスポート)
+      await seedCustomer();
+      await seedDriveSettings();
+      const { drive, createCalls, getCalls, updateCalls } = makeFakeDrive({
+        createdIds: ['folder-office', 'folder-customer', 'first-export-file-id'],
+      });
+
+      await exportDocument(docId, TEST_RUN_ID, { drive, downloadFile: async () => Buffer.from('x') });
+
+      expect(getCalls).to.have.lengthOf(0);
+      expect(updateCalls).to.have.lengthOf(0);
+      expect(createCalls).to.have.lengthOf(3);
+      const data = (await db.doc(`documents/${docId}`).get()).data()!;
+      expect(data.driveFileId).to.equal('first-export-file-id');
+    });
   });
 
   it('appPropertiesに一致する既存ファイルが2件以上見つかった場合はAmbiguousFileErrorをthrowし、Firestore書込みは発生しない', async () => {

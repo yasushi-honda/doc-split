@@ -2,8 +2,19 @@
  * Google Drive エクスポート・オーケストレータ(ADR-0022 Phase 1)
  *
  * doc読込 → フォルダパス解決(folderPath.ts) → find-or-createで降りる
- * (findOrCreateFolder.ts) → StorageからPDF取得 → find-or-upload(appProperties経由の
- * 冪等性チェック付き) → driveFileId等を書戻し、の一連を実行する。
+ * (findOrCreateFolder.ts) → StorageからPDF取得 → Driveファイルの解決
+ * (resolveDriveFile、下記) → driveFileId等を書戻し、の一連を実行する。
+ *
+ * Driveファイルの解決は2段階(code-review xhigh指摘対応、2026-07-21):
+ * 1. `doc.driveFileId`が既にある場合(過去にエクスポート済みで、reprocessでも
+ *    クリアされずに保持されている参照。`frontend/src/hooks/useDocuments.ts`の
+ *    `getReprocessClearFields()`参照)は、そのファイルへ`files.update()`で
+ *    移動(フォルダパスが変わった場合)・リネーム・内容更新を直接行う。これにより、
+ *    再処理でフォルダパスが変わっても旧フォルダに孤児ファイルが残らず、フォルダパスが
+ *    変わらない訂正でも内容が最新化される。
+ * 2. `driveFileId`が無い(初回エクスポート)、またはユーザーがDrive上で手動削除した等で
+ *    404だった場合は、`findOrUploadFile()`(appProperties経由の冪等性チェック付き
+ *    find-or-create)にフォールバックする。
  *
  * `driveExportStatus`のexporting遷移とerror時の書込みは呼び出し元
  * (`executeDriveExport.ts`)の責務。本関数はFuriganaMissingError /
@@ -69,8 +80,9 @@ export class AmbiguousFileError extends Error {
 }
 
 /**
- * `parentId`直下から`appProperties.docSplitDocId===docId`のファイルを検索し、
- * 見つかればそのidを再利用(アップロードをスキップ)、0件なら新規アップロードする。
+ * `resolveDriveFile()`のフォールバック経路。`parentId`直下から
+ * `appProperties.docSplitDocId===docId`のファイルを検索し、見つかればそのidを
+ * 再利用(アップロードをスキップ)、0件なら新規アップロードする。
  *
  * 過去の実行がDriveへのアップロードに成功したがFirestoreへの書戻し前にクラッシュ/
  * 失敗した場合、`driveFileId`はFirestore側に記録されないため通常は再アップロードの
@@ -136,6 +148,61 @@ async function findOrUploadFile(
 }
 
 /**
+ * `doc.driveFileId`(過去にエクスポート済みの実体への参照。reprocessでもクリアされない)
+ * があれば、そのファイルへ移動(フォルダパスが変わった場合)・リネーム・内容更新を
+ * 1回の`files.update()`で行い、同じidを返す(code-review xhigh指摘対応、2026-07-21)。
+ * ファイルがDrive上で見つからない(手動削除等、404)場合は`findOrUploadFile()`
+ * (appProperties経由のfind-or-create)にフォールバックする。404以外のエラーは
+ * fail-visible方針のためそのままthrowする(呼び出し元がdriveExportStatus:'error'に遷移させる)。
+ */
+async function resolveDriveFile(
+  drive: drive_v3.Drive,
+  parentId: string,
+  docId: string,
+  doc: Document,
+  deps: Partial<ExportDocumentDeps>
+): Promise<string> {
+  if (doc.driveFileId) {
+    let currentParents: string[] | undefined;
+    try {
+      const getResponse = await drive.files.get({
+        fileId: doc.driveFileId,
+        fields: 'parents',
+        supportsAllDrives: true,
+      });
+      currentParents = getResponse.data.parents ?? [];
+    } catch (error) {
+      const code = (error as { code?: number }).code;
+      if (code !== 404) {
+        throw error;
+      }
+      // 404: ユーザーがDrive上で手動削除した等 → 新規アップロードにフォールバックする
+    }
+
+    if (currentParents) {
+      const removeParents = currentParents.filter((parent) => parent !== parentId);
+      const downloadFile = deps.downloadFile ?? defaultDownloadFile;
+      const buffer = await downloadFile(doc.fileUrl);
+      await drive.files.update({
+        fileId: doc.driveFileId,
+        addParents: parentId,
+        ...(removeParents.length > 0 ? { removeParents: removeParents.join(',') } : {}),
+        requestBody: { name: doc.displayFileName || doc.fileName },
+        media: {
+          mimeType: doc.mimeType,
+          body: Readable.from(buffer),
+        },
+        fields: 'id',
+        ...SUPPORTS_ALL_DRIVES,
+      });
+      return doc.driveFileId;
+    }
+  }
+
+  return findOrUploadFile(drive, parentId, docId, doc, deps);
+}
+
+/**
  * 1件のdocumentをGoogle Driveへエクスポートする。
  */
 export async function exportDocument(
@@ -184,7 +251,7 @@ export async function exportDocument(
     parentId = await findOrCreateFolder(drive, parentId, segmentName);
   }
 
-  const driveFileId = await findOrUploadFile(drive, parentId, docId, doc, deps);
+  const driveFileId = await resolveDriveFile(drive, parentId, docId, doc, deps);
 
   await db.runTransaction(async (tx) => {
     const snap = await tx.get(docRef);

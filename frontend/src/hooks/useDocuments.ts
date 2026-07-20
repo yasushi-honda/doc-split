@@ -212,6 +212,12 @@ export function firestoreToDocument(id: string, data: Record<string, unknown>): 
     documentTypeConfirmed: data.documentTypeConfirmed as boolean | undefined,
     // 複数顧客FAX複製機能 (GOAL.md D4): 元doc・全コピーに同一値を付与
     distributionId: data.distributionId as string | undefined,
+    // Google Drive エクスポート状態 (ADR-0022 Phase1)
+    driveExportStatus: data.driveExportStatus as Document['driveExportStatus'],
+    driveFileId: data.driveFileId as string | null | undefined,
+    driveExportedAt: data.driveExportedAt as Timestamp | null | undefined,
+    driveExportError: data.driveExportError as string | null | undefined,
+    driveExportRunId: data.driveExportRunId as string | null | undefined,
   }
 }
 
@@ -363,8 +369,14 @@ export function getReprocessClearFields(preserveDistributionFields: boolean = fa
     // functions/src/drive/driveExportTrigger.ts のクレームが既存ステータスを検知して
     // 再エクスポートをスキップしてしまう。firestore.rules 側は削除(deleteField)のみ許可
     // する専用ガードを追加済み。
+    //
+    // driveFileId は意図的にクリアしない(code-review xhigh指摘対応、2026-07-21): 削除する
+    // と functions/src/drive/exportDocument.ts が再エクスポート時に旧Driveファイルへの
+    // 参照を失い、フォルダパスが変わる訂正では新フォルダへの新規アップロードになり旧フォルダ
+    // に孤児ファイルが残置される(誤配置)。フォルダパスが変わらない訂正では内容が更新されない
+    // (stale content)。driveFileId を保持したまま渡すことで、exportDocument() が
+    // drive.files.update() でその実体を直接 移動/リネーム/内容更新 できるようにする。
     driveExportStatus: df,
-    driveFileId: df,
     driveExportedAt: df,
     driveExportError: df,
     driveExportRunId: df,
