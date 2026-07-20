@@ -16,11 +16,10 @@ const db = admin.firestore();
 export const DRIVE_SETTINGS_DOC_PATH = 'settings/drive';
 
 /**
- * `drive.file` スコープでは Shared Drive 内のファイル/フォルダ操作に
- * `supportsAllDrives: true` の付与が必須(実機検証済み、ADR-0022 Decision 2)。
- * Drive API呼び出し時は必ずこの値を展開すること。
+ * Drive API呼び出し時の`supportsAllDrives: true`定数は `drive/driveApiConstants.ts`
+ * に分離されている(Firestore非依存の呼び出し元が本ファイルの`admin.firestore()`
+ * 評価を巻き込まないため)。
  */
-export const SUPPORTS_ALL_DRIVES = { supportsAllDrives: true } as const;
 
 /**
  * Drive設定(`settings/drive`)を取得。
