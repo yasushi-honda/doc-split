@@ -23,6 +23,12 @@ export { exchangeDriveAuthCode } from './drive/exchangeDriveAuthCode';
 // Google Drive エクスポート起動トリガー（verified false→true検知, ADR-0022）
 export { onDocumentWriteDriveExport } from './drive/driveExportTrigger';
 
+// Google Drive エクスポート 手動リトライ（Callable Function, ADR-0022 Phase1 Task8）
+export { retryDriveExport } from './drive/retryDriveExport';
+
+// Google Drive エクスポート 定期リトライ（Cloud Scheduler: 15分間隔, ADR-0022 Phase1 Task8）
+export { driveExportScheduled } from './drive/driveExportScheduled';
+
 // OCR処理（定期実行 - メイン処理パス）
 export { processOCR } from './ocr/processOCR';
 

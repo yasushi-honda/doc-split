@@ -14,12 +14,16 @@
  * 発生した場合(確認ボタンの二重タップ等)に両方が素通りしexportDocument()が並行実行
  * され得るため、トランザクション内でのライブ再読込み+書込みにより二重エンキューを
  * 完全に閉じる。
+ *
+ * `pending`確保後の`exporting`遷移とexportDocument()実行・エラー時の書戻しは
+ * `executeDriveExport.ts`(Phase1 Task8で抽出、手動/定期リトライと共有)に委譲する。
  */
 
 import { onDocumentWritten } from 'firebase-functions/v2/firestore';
 import * as admin from 'firebase-admin';
 import { isDriveExportEnabled } from '../utils/featureFlags';
-import { exportDocument, ExportDocumentDeps } from './exportDocument';
+import { executeDriveExport } from './executeDriveExport';
+import { ExportDocumentDeps } from './exportDocument';
 
 const db = admin.firestore();
 
@@ -71,18 +75,7 @@ export async function processDriveExportTrigger(
     return;
   }
 
-  try {
-    await docRef.update({ driveExportStatus: 'exporting' });
-    await exportDocument(docId, exportDeps);
-    // 成功時のdriveFileId/driveExportedAt/driveExportStatus:'exported'書戻しはexportDocument()の責務
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error(`Drive export failed for document ${docId}: ${message}`);
-    await docRef.update({
-      driveExportStatus: 'error',
-      driveExportError: message,
-    });
-  }
+  await executeDriveExport(firestore, docId, exportDeps);
 }
 
 export const onDocumentWriteDriveExport = onDocumentWritten(
