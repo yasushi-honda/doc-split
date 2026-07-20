@@ -1,5 +1,5 @@
 ---
-updated: 2026-07-20
+updated: 2026-07-21
 ---
 <!-- 前ミッション(dev/kanameone/cocoro環境監査・保守検証)は2026-07-20完遂。全文はdocs/handoff/LATEST.md参照。 -->
 
