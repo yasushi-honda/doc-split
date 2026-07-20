@@ -9,3 +9,12 @@
  * 不要なFirestore初期化依存を持ち込まないようにするため。
  */
 export const SUPPORTS_ALL_DRIVES = { supportsAllDrives: true } as const;
+
+/**
+ * Drive API `q` パラメータ内の文字列リテラルをエスケープする。
+ * `findOrCreateFolder.ts`(フォルダ名検索)と`exportDocument.ts`(appProperties検索)の
+ * 両方から共有される。
+ */
+export function escapeQueryValue(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}

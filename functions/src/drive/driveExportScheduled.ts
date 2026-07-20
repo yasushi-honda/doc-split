@@ -80,7 +80,7 @@ export async function sweepStuckDriveExports(
 
     try {
       // eslint-disable-next-line no-await-in-loop
-      const claimed = await executeDriveExport(firestore, docSnapshot.id, exportDeps, [status]);
+      const claimed = await executeDriveExport(firestore, docSnapshot.id, exportDeps, status);
       if (claimed) {
         result.requeued++;
       } else {

@@ -45,9 +45,25 @@ documentの`verified`フィールドがfalse→trueになる瞬間を、Cloud Fu
 
 ### 6. Drive系フィールドはAdmin SDK専有、outboxパターンで状態管理
 
-`driveExportStatus`（`pending → exporting → exported`、失敗時`error`）と`driveFileId`/`driveExportedAt`/`driveExportError`を document に追加し、**Cloud Functions（Admin SDK）からのみ書き込む**設計にする。これにより `firestore.rules` の documents update許可フィールドリスト（`hasOnly([...])`方式）への変更が不要になり、改ざん可能面を広げない。フロントエンドからの再送は直接Firestore書き込みではなく、Callable Function（`retryDriveExport`）経由に限定する。
+`driveExportStatus`（`(フィールド不在) → exporting → exported`、失敗時`error`）と`driveFileId`/`driveExportedAt`/`driveExportError`/`driveExportRunId`を document に追加し、**通常時はCloud Functions（Admin SDK）からのみ書き込む**設計にする。フロントエンドからの再送は直接Firestore書き込みではなく、Callable Function（`retryDriveExport`）経由に限定する。
+
+例外として、`frontend/src/hooks/useDocuments.ts`の`getReprocessClearFields()`（再処理時のフィールドクリア）は、これら5フィールドを`deleteField()`で削除する。これは`documents` collectionの`firestore.rules` update許可フィールドリスト（`hasOnly([...])`方式）への追加が必要（`retryCount`/`provenance`等の既存の派生フィールドと同型）だが、削除または無変更のみを許可する専用ガードにより、FEが値を新規設定・上書きすることはできない（#178教訓の延長。再処理でDrive系フィールドが残存すると、訂正後の再確認がトリガーのクレームでスキップされ、二度と再エクスポートされなくなる不具合の再発防止）。
 
 トリガー自身の書き戻し（`driveExportStatus`の更新）による再発火は、`before?.verified !== true && after.verified === true`という「立ち上がりエッジのみ」の判定で防ぐ（既存の`searchIndexer.ts`のハッシュ比較と同じ思想）。
+
+**状態遷移図**（code-review CONFIRMED指摘対応で`pending`状態を廃止し2段階クレームを1段階へ統合、所有権トークン`driveExportRunId`を追加）:
+
+```mermaid
+stateDiagram-v2
+    [*] --> exporting: verified false→true検知\n(driveExportTrigger.ts、単一トランザクションでクレーム+runId発行)
+    exporting --> exported: exportDocument()成功\n(所有権チェック付き書戻し)
+    exporting --> error: exportDocument()失敗\n(所有権チェック付き書戻し)
+    error --> exporting: 手動リトライ(retryDriveExport)\nまたは定期リトライ(1時間経過、driveExportScheduled)
+    exporting --> exporting: 定期リトライ(10分経過、クラッシュ想定の再クレーム)\n※新runId発行、旧runIdの書戻しはsuperseded
+    exported --> [*]
+```
+
+`exporting`から`exporting`への自己遷移（定期リトライによる再クレーム）は、新しい`driveExportRunId`を発行して所有権を移す。並行して実行されていた古い実行(古いrunId)が後から完了して書き戻そうとしても、書戻し直前に再読込した`driveExportRunId`が自分のものと一致しない場合は書き込みをスキップする(`functions/src/ocr/ocrRunGuard.ts`の`ocrRunId`所有権検証と同じ思想)。これにより、`exportDocument()`の`files.create()`前段の`appProperties`(`docSplitDocId`)による冪等性チェックと合わせて、リトライ時のDriveファイル重複作成・Firestore状態の二重書き込みを防ぐ。
 
 ### 7. スコープはPhase 1（MVP）に限定
 

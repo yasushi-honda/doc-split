@@ -44,7 +44,7 @@ export async function retryDriveExportCore(
   docId: string,
   exportDeps: Partial<ExportDocumentDeps> = {}
 ): Promise<RetryDriveExportResult> {
-  const claimed = await executeDriveExport(firestore, docId, exportDeps, ['error']);
+  const claimed = await executeDriveExport(firestore, docId, exportDeps, 'error');
   if (!claimed) {
     throw new DriveExportNotRetryableError(docId);
   }

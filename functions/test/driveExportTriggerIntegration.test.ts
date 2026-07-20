@@ -100,7 +100,7 @@ describe('processDriveExportTrigger (ADR-0022 Phase 1)', () => {
     await cleanupCollections(db, COLLECTIONS_TO_CLEAN);
   });
 
-  it('ハッピーパス: verified false→true + flag ON + 設定済みでpending→exporting→exportedと遷移しdriveFileIdが書かれる', async () => {
+  it('ハッピーパス: verified false→true + flag ON + 設定済みでexporting→exportedと遷移しdriveFileIdが書かれる', async () => {
     const docId = await seedDocument();
     await seedCustomer();
     await seedDriveSettings();
@@ -223,8 +223,9 @@ describe('processDriveExportTrigger (ADR-0022 Phase 1)', () => {
     const { drive, createCalls } = makeFakeDrive({ createdIds: ['folder-office', 'exported-file-id'] });
 
     // 同一docIdに対し、確認ボタンの二重タップ等を模してprocessDriveExportTriggerを
-    // 並行実行する。トランザクションでの二重エンキュー防止が機能していれば、
-    // 片方のみがdriveExportStatus:'pending'を確保しexportDocument()を実行する。
+    // 並行実行する。executeDriveExport()内のトランザクションでの二重エンキュー防止が
+    // 機能していれば、片方のみがdriveExportStatus:'exporting'を確保しexportDocument()を
+    // 実行する。
     await Promise.all([
       processDriveExportTrigger(
         db,

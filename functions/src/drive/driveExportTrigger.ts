@@ -2,28 +2,25 @@
  * Google Drive エクスポート起動トリガー(ADR-0022 Decision 5/6)
  *
  * documentの`verified`がfalse→trueになった瞬間(確認ボタン押下)を検知し、
- * outboxパターン(pending → exporting → exported/error)でexportDocument()を実行する。
+ * outboxパターン((フィールド不在) → exporting → exported/error)でexportDocument()を
+ * 実行する。
  *
  * 自身のdrive系フィールド書戻しによる再発火は`justVerified`判定(立ち上がり
  * エッジのみ)で防ぎ、`driveExportStatus`の存在チェックで二重エンキューを防ぐ
  * (`functions/src/search/searchIndexer.ts`のハッシュ比較と同じ思想)。
  *
- * `driveExportStatus`の存在チェックと`'pending'`書込みはFirestoreトランザクションで
- * アトミックに行う(`/code-review low`指摘対応)。CloudEventスナップショット時点の
- * 1回のみのチェックだと、同一docIdへのverified false→true書込みがほぼ同時に2回
- * 発生した場合(確認ボタンの二重タップ等)に両方が素通りしexportDocument()が並行実行
- * され得るため、トランザクション内でのライブ再読込み+書込みにより二重エンキューを
- * 完全に閉じる。
- *
- * `pending`確保後の`exporting`遷移とexportDocument()実行・エラー時の書戻しは
- * `executeDriveExport.ts`(Phase1 Task8で抽出、手動/定期リトライと共有)に委譲する。
+ * クレーム(フィールド不在→'exporting')・所有権トークン発行・exportDocument()実行・
+ * エラー時の書戻しは全て`executeDriveExport.ts`に委譲する(手動/定期リトライと共有)。
+ * クレームは`executeDriveExport.ts`内の単一のFirestoreトランザクションでアトミックに
+ * 行われるため、同一docIdへのverified false→true書込みがほぼ同時に2回発生した場合
+ * (確認ボタンの二重タップ等)も、片方のみがクレームに成功しexportDocument()を実行する。
  */
 
 import { onDocumentWritten } from 'firebase-functions/v2/firestore';
 import * as admin from 'firebase-admin';
 import { isDriveExportEnabled } from '../utils/featureFlags';
 import { executeDriveExport } from './executeDriveExport';
-import { ExportDocumentDeps } from './exportDocument';
+import type { ExportDocumentDeps } from './exportDocument';
 
 const db = admin.firestore();
 
@@ -53,29 +50,10 @@ export async function processDriveExportTrigger(
     return; // Feature Flag OFF → 完全no-op(Drive API呼び出し・フィールド書込み一切なし)
   }
 
-  const docRef = firestore.doc(`documents/${docId}`);
-
-  // outboxマーカー永続化(クラッシュ回復用、driveExportScheduled.tsの再エンキュー対象になる)。
-  // 「driveExportStatus未設定の確認」と「'pending'書込み」をトランザクションでアトミックに
-  // 行うことで、同一docIdへのほぼ同時な2回のverified false→true書込みが両方とも
-  // ガードを素通りしてexportDocument()を並行実行する二重エンキューを防ぐ。
-  const claimed = await firestore.runTransaction(async (tx) => {
-    const snap = await tx.get(docRef);
-    if (!snap.exists) {
-      return false;
-    }
-    if (snap.data()?.driveExportStatus) {
-      return false; // 既に処理中/済み(二重エンキュー防止、ライブ状態で判定)
-    }
-    tx.update(docRef, { driveExportStatus: 'pending' });
-    return true;
-  });
-
-  if (!claimed) {
-    return;
-  }
-
-  await executeDriveExport(firestore, docId, exportDeps);
+  // driveExportStatusが未設定(フィールド不在)のdocのみをexportingへクレームする。
+  // 既にdriveExportStatusがある場合はexecuteDriveExport()の内部クレームが
+  // 失敗しfalseを返す(二重エンキュー防止、ライブ状態で判定)。
+  await executeDriveExport(firestore, docId, exportDeps, undefined);
 }
 
 export const onDocumentWriteDriveExport = onDocumentWritten(

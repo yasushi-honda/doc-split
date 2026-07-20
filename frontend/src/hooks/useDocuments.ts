@@ -358,6 +358,16 @@ export function getReprocessClearFields(preserveDistributionFields: boolean = fa
     // user 操作で解除可能にする。残存すると次回 429 で即「対象外」判定されてしまう。
     errorRescueCount: df,
     lastRescuedAt: df,
+    // Google Drive エクスポート状態 (ADR-0022 Phase1、#178教訓の延長): 再処理前の内容で
+    // エクスポート済み(driveExportStatus:'exported')のまま残ると、訂正後に再確認しても
+    // functions/src/drive/driveExportTrigger.ts のクレームが既存ステータスを検知して
+    // 再エクスポートをスキップしてしまう。firestore.rules 側は削除(deleteField)のみ許可
+    // する専用ガードを追加済み。
+    driveExportStatus: df,
+    driveFileId: df,
+    driveExportedAt: df,
+    driveExportError: df,
+    driveExportRunId: df,
   }
 }
 

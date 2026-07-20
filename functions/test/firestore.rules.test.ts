@@ -1042,6 +1042,13 @@ describe('Firestore Security Rules', () => {
           retryAfter: new Date(),
           errorRescueCount: 1,
           lastRescuedAt: new Date(),
+          // ADR-0022 (Google Drive連携 Phase1): エクスポート済みdocの再処理で
+          // 残存しうるフィールド
+          driveExportStatus: 'exported',
+          driveFileId: 'drive-file-id-123',
+          driveExportedAt: new Date(),
+          driveExportError: null,
+          driveExportRunId: 'run-id-abc',
         });
       });
 
@@ -1084,6 +1091,11 @@ describe('Firestore Security Rules', () => {
           retryAfter: deleteField(),
           errorRescueCount: deleteField(),
           lastRescuedAt: deleteField(),
+          driveExportStatus: deleteField(),
+          driveFileId: deleteField(),
+          driveExportedAt: deleteField(),
+          driveExportError: deleteField(),
+          driveExportRunId: deleteField(),
           // 値をリセット
           customerConfirmed: false,
           confirmedBy: null,
@@ -1125,6 +1137,29 @@ describe('Firestore Security Rules', () => {
       // retryCount/errorRescueCountを任意値に書き換えようとするケース
       await assertFails(updateDoc(docRef, { retryCount: 0 }));
       await assertFails(updateDoc(docRef, { errorRescueCount: 99 }));
+    });
+
+    it('Drive系フィールド(driveExportStatus等)への新規値の上書きは拒否される（ADR-0022 code-review CONFIRMED指摘対応）', async () => {
+      // getReprocessClearFields()はこれらをdeleteField()する用途のみで、値を新規設定・
+      // 上書きする経路はFEに存在しない。ホワイトリスト登録ユーザーがdriveExportStatus:
+      // 'exported'やdriveExportRunIdを偽装できると、実際にはエクスポートされていない
+      // のに完了扱いにしたり、executeDriveExport.tsの所有権チェックを迂回できてしまう。
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'documents', 'doc-drive-fields'), {
+          fileName: 'test.pdf',
+          status: 'processed',
+          verified: true,
+        });
+      });
+
+      const docRef = doc(normalUser.firestore(), 'documents', 'doc-drive-fields');
+      await assertFails(updateDoc(docRef, { driveExportStatus: 'exported' }));
+      await assertFails(updateDoc(docRef, { driveFileId: 'forged-file-id' }));
+      await assertFails(updateDoc(docRef, { driveExportRunId: 'forged-run-id' }));
+      await assertFails(updateDoc(docRef, { driveExportedAt: new Date() }));
+      await assertFails(updateDoc(docRef, { driveExportError: 'forged error' }));
     });
 
     it('サーバー専有フィールドの削除(deleteField)は引き続き許可される', async () => {

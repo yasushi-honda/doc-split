@@ -7,7 +7,7 @@
  */
 
 import { drive_v3 } from 'googleapis';
-import { SUPPORTS_ALL_DRIVES } from './driveApiConstants';
+import { SUPPORTS_ALL_DRIVES, escapeQueryValue } from './driveApiConstants';
 
 const FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder';
 
@@ -22,11 +22,6 @@ export class AmbiguousFolderError extends Error {
     );
     this.name = 'AmbiguousFolderError';
   }
-}
-
-/** Drive API `q` パラメータ内の文字列リテラルをエスケープする。 */
-function escapeQueryValue(value: string): string {
-  return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
 
 /**

@@ -503,6 +503,18 @@ describe('getReprocessClearFields (Issue #215: 旧3キー + 新summary 全て de
     expect(fields.documentTypeConfirmed).toBe(false)
   })
 
+  // ADR-0022 Phase1 code-review CONFIRMED指摘対応: エクスポート済み(driveExportStatus:
+  // 'exported')docを再処理してもフィールドが残存すると、訂正後の再確認でトリガーの
+  // クレームが既存ステータスを検知しスキップしてしまい、二度と再エクスポートされない
+  it('Drive エクスポート系5フィールドを含む (ADR-0022)', () => {
+    const fields = getReprocessClearFields()
+    expect(fields).toHaveProperty('driveExportStatus')
+    expect(fields).toHaveProperty('driveFileId')
+    expect(fields).toHaveProperty('driveExportedAt')
+    expect(fields).toHaveProperty('driveExportError')
+    expect(fields).toHaveProperty('driveExportRunId')
+  })
+
   // GOAL.md task 6-2 (PR-C): distributionId保持docは顧客系フィールドを再処理で
   // 上書きしてはならない(BE側confirmedFieldMerge保護が機能する前提を崩さないため)
   describe('preserveDistributionFields (GOAL.md task 6-2, PR-C)', () => {

@@ -13,9 +13,11 @@ export type DocumentStatus = 'pending' | 'processing' | 'processed' | 'error' | 
 
 /**
  * Google Drive エクスポート状態 (ADR-0022, Phase 1)。
- * outboxパターン: (フィールド不在) → pending → exporting → exported、失敗時は error（リトライで pending に戻す）。
+ * outboxパターン: (フィールド不在) → exporting → exported、失敗時は error（リトライで exporting に戻す）。
+ * クレームは `driveExportRunId` による所有権トークンで保護され、並行実行時に古い実行の
+ * 書戻しが新しい実行の状態を上書きしないようにする。
  */
-export type DriveExportStatus = 'pending' | 'exporting' | 'exported' | 'error';
+export type DriveExportStatus = 'exporting' | 'exported' | 'error';
 
 /** ドキュメントのソースタイプ */
 export type SourceType = 'gmail' | 'upload';
@@ -194,6 +196,8 @@ export interface Document {
   driveFileId?: string | null;       // Drive上のfileId（重複防止・再送先の一意キー）
   driveExportedAt?: Timestamp | null;
   driveExportError?: string | null;  // エラー一覧UI表示用の日本語メッセージ
+  /** クレーム時に発行される所有権トークン(randomUUID)。並行実行時の書戻し保護に使用。 */
+  driveExportRunId?: string | null;
 }
 
 // ============================================

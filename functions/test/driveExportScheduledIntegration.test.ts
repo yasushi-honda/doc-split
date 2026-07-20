@@ -173,7 +173,7 @@ describe('sweepStuckDriveExports (ADR-0022 Phase 1 Task8)', () => {
     expect(createCalls).to.have.lengthOf(0);
   });
 
-  it('pending/exported状態のdocは対象外(クエリで除外される)', async () => {
+  it('exported状態のdocは対象外(クエリで除外される)', async () => {
     await seedDocument({
       driveExportStatus: 'exported',
       driveFileId: 'already-done',
