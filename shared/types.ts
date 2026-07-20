@@ -11,6 +11,12 @@ import { Timestamp } from 'firebase/firestore';
 
 export type DocumentStatus = 'pending' | 'processing' | 'processed' | 'error' | 'split';
 
+/**
+ * Google Drive エクスポート状態 (ADR-0022, Phase 1)。
+ * outboxパターン: (フィールド不在) → pending → exporting → exported、失敗時は error（リトライで pending に戻す）。
+ */
+export type DriveExportStatus = 'pending' | 'exporting' | 'exported' | 'error';
+
 /** ドキュメントのソースタイプ */
 export type SourceType = 'gmail' | 'upload';
 
@@ -176,6 +182,18 @@ export interface Document {
    * 「自動配信・要整理」の識別は `distributionId && !verified` から導出する。
    */
   distributionId?: string;
+
+  /**
+   * Google Drive エクスポート状態 (ADR-0022, Phase 1)。
+   * `verified` が false→true になった瞬間、Cloud Functions トリガー
+   * (`functions/src/drive/driveExportTrigger.ts`) が自動エクスポートを開始する。
+   * FE から直接書き込まない（Admin SDK専有。firestore.rules の documents update
+   * 許可リストを汚染しない設計。エラー時の再送は Callable `retryDriveExport` 経由）。
+   */
+  driveExportStatus?: DriveExportStatus;
+  driveFileId?: string | null;       // Drive上のfileId（重複防止・再送先の一意キー）
+  driveExportedAt?: Timestamp | null;
+  driveExportError?: string | null;  // エラー一覧UI表示用の日本語メッセージ
 }
 
 // ============================================
@@ -633,6 +651,44 @@ export interface AppSettings {
   labelSearchOperator: LabelSearchOperator;
   errorNotificationEmails: string[];
   gmailAccount?: string; // 監視対象Gmailアカウント
+}
+
+// ============================================
+// Google Drive 連携 (ADR-0022, Phase 1)
+// ============================================
+
+/**
+ * フォルダ階層の1セグメントの定義。テナントごとに `DriveFolderTemplate`
+ * (このunion型の配列、順序=階層) として `settings/drive.template` に保存する。
+ * 判別可能union: `type` フィールドで分岐する。
+ */
+export type DriveFolderSegment =
+  | { type: 'fixed'; value: string }
+  | { type: 'careManager'; format: 'surnameInitialSpaceName' | 'nameOnly'; separator?: 'half' | 'full' }
+  | { type: 'customer'; format: 'furiganaInitialSpaceName' | 'nameOnly'; separator?: 'half' | 'full' }
+  | { type: 'documentCategory' }
+  | { type: 'date'; format: 'YYYY年MM月'; onlyForCategories: string[] };
+
+export type DriveFolderTemplate = DriveFolderSegment[];
+
+/**
+ * `settings/drive` ドキュメントのスキーマ。Gmail連携 (`GmailSettings`,
+ * `functions/src/utils/gmailAuth.ts`) とは独立した接続として管理する
+ * （同一Googleアカウントもデフォルトで選べるが、別アカウントでの接続も想定）。
+ * clientId/clientSecret/refreshToken は Secret Manager 保存のためここには含めない。
+ */
+export interface DriveSettings {
+  authMode?: 'oauth'; // Phase2でservice_account拡張
+  connectedEmail?: string; // 接続済みGoogleアカウント表示用
+  rootFolderId?: string; // Picker で選択したエクスポート先ルートフォルダ
+  rootFolderName?: string;
+  template?: DriveFolderTemplate;
+  /**
+   * `CustomerMaster.furigana` が欠損している利用者のフォルダ名を解決できない場合の挙動。
+   * デフォルト 'stop'（fail-visible: エクスポートを停止しエラー一覧に表示）。
+   * 'useNameInitial' は明示的にopt-inした場合のみ、氏名の先頭文字で代替する。
+   */
+  furiganaFallback?: 'stop' | 'useNameInitial';
 }
 
 // ============================================

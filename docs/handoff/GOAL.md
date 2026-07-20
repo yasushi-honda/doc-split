@@ -1,23 +1,46 @@
 ---
 updated: 2026-07-20
 ---
-<!-- 前ミッション(Issue #687: force-reindex.js BulkWriter化)は全AC達成済みで2026-07-19に完遂アーカイブ。全文はdocs/handoff/LATEST.md「Issue #687ミッション 完遂サマリ」参照。 -->
+<!-- 前ミッション(dev/kanameone/cocoro環境監査・保守検証)は2026-07-20完遂。全文はdocs/handoff/LATEST.md参照。 -->
 
 ## 現在のミッション
 
-次ミッション未着手。decision-makerからの新規指示待ち。
+Google Drive連携機能 Phase 1 (MVP) の実装。承認済み計画: `/Users/yyyhhh/.claude/plans/modular-enchanting-zephyr.md`、ADR: `docs/adr/0022-google-drive-export.md`。
 
-Issue #687（`scripts/force-reindex.js`のBulkWriter化）は2026-07-19、PR #691（squash merge）でクローズ済み（詳細: docs/handoff/LATEST.md「Issue #687ミッション 完遂サマリ」）。
+## 背景・why
 
-2026-07-20、dev/kanameone/cocoro環境監査・保守検証セッションを実施。Issue #686修正（PR #689）のkanameone/cocoro未反映を発見・対応（デプロイ完了、実データ影響0件確認済み）。詳細: docs/handoff/LATEST.md「dev/kanameone/cocoro環境監査・保守検証セッション 完遂サマリ」。
+cocoro/kanameから、書類（ケアプラン・医療・介護保険証等）のPDFを利用者ごとにGoogleドライブへ自動振り分けエクスポートしたいという要望（用途: NotebookLM投入、インターネットFAX送信）。両クライアントのフォルダ構成は非対称のため、個別対応ではなくデータ駆動のセグメント型テンプレートで共通化する方針。実機技術検証済み: `doc-split-dev`環境で`drive.file`スコープ+Picker(`setEnableDrives(true)`)+`supportsAllDrives=true`によるShared Drive内フォルダ作成の成功を確認済み。
 
-follow-up候補（次ミッション起点として検討可、triage未実施）:
+## 完了の定義
+
+- E2Eハッピーパス: かなめテンプレート設定で確認ボタン押下（verified false→true）から、Drive上の正しい階層にPDFが1回作成され、documentに`driveFileId`と`driveExportStatus:'exported'`が記録される（証明: dev環境での手動E2E実施記録）
+- フォルダ合流: 同一ケアマネ・同一利用者の2件目documentエクスポートで、フォルダが新規作成されず既存フォルダが再利用される（証明: 同上）
+- fail-visible: フリガナ欠損時・フォルダ名2件以上重複時にDrive書込みが発生せず、`driveExportStatus:'error'`でエラー一覧に表示される（証明: 同上）
+- Feature Flag OFF不変: `settings/features.driveExport`未設定/falseのテナントで確認ボタンを押してもDrive API呼び出し・Drive系フィールド書込みが一切発生しない（証明: Cloud Functionsログでの早期return確認）
+
+## 進行中のtasks
+- [x] 型定義 + data-model追記 + ADR-0022起票
+- [ ] 認証ヘルパー + Feature Flag追加（functions/src/utils/driveAuth.ts, featureFlags.ts）
+- [ ] Drive接続Callable実装（functions/src/drive/exchangeDriveAuthCode.ts）
+- [ ] フォルダパス解決ロジック実装（functions/src/drive/folderPath.ts + test）
+- [ ] find-or-createフォルダロジック実装（functions/src/drive/findOrCreateFolder.ts + test）
+- [ ] エクスポート・オーケストレータ実装（functions/src/drive/exportDocument.ts + test）
+- [ ] Firestoreトリガー実装（functions/src/drive/driveExportTrigger.ts + test）
+- [ ] リトライCallable + 定期リトライ実装（functions/src/drive/retryDriveExport.ts, driveExportScheduled.ts）
+- [ ] Firestoreルールテスト追加（functions/test/firestore.rules.test.ts）
+- [ ] FE設定フック実装（frontend/src/hooks/useDriveSettings.ts）
+- [ ] FE Drive接続 + Picker UI実装（frontend/src/pages/SettingsPage.tsx）
+- [ ] FEフォルダテンプレートエディタ実装
+- [ ] FEエラー一覧 + リトライUI実装
+- [ ] E2E疎通確認（dev環境で完了の定義4項目を通す）
+
+## 🔄 中断点（in-flight）
+なし（Task1は完全完了。Task2以降は未着手のため部分着手状態のタスクなし）
+
+## 参考: 前ミッション期のfollow-up候補（triage未実施、Drive連携完了後に再検討）
 - GitHub Actions workflow（run-ops-script.yml）に`--concurrency`オプションのUI経由指定を追加
 - `runWithConcurrency`が`compare-gemini-ocr-models-confirmed.ts`/`compare-ocr-arbitration-logic-confirmed.ts`/`backfill-detail-subcollection.ts`と重複、`scripts/lib/concurrency.js`への共通化検討
 - ホットトークン（同一tokenId）への書込み競合をtokenId単位のmutex/キューで構造的に防ぐ設計
 - `documents_search_update` stageのcatch/stage-taggingロジックの単体テスト追加
 - `--batch-size`と`--concurrency`が独立した軸として機能することの明示的なテスト追加
 - Firestoreバックアップ（2026-04-10初回設定済み）の継続稼働状況を、GitHub Actions経由のSA権限で確認する仕組みが未整備（ローカルCLI認証・ADC双方で403、次回SA権限確認 or 確認スクリプト整備が必要）
-
-## 🔄 中断点（in-flight）
-なし

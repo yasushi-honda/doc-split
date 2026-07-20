@@ -23,7 +23,7 @@ DocSplitのデータはすべてCloud Firestoreに格納される。
 | `gmailLogs` | Gmail受信ログ | Cloud Functions |
 | `uploadLogs` | アップロードログ | Cloud Functions |
 | `users` | ユーザー管理 | Firebase Auth連携 / 管理者 |
-| `settings` | アプリ設定（app / auth / gmail） | 管理者 |
+| `settings` | アプリ設定（app / auth / gmail / drive） | 管理者 |
 | `search_index` | 検索インデックス（反転インデックス + TF-IDF） | Cloud Functions（onDocumentWriteSearchIndexトリガー） |
 | `customerResolutionLogs` | 顧客解決監査ログ | フロントエンド |
 | `officeResolutionLogs` | 事業所解決監査ログ | フロントエンド |
@@ -121,6 +121,17 @@ DocSplitのデータはすべてCloud Firestoreに格納される。
 | verified | boolean | No | 確認済みフラグ（デフォルト: false） |
 | verifiedBy | string \| null | No | 確認者UID |
 | verifiedAt | timestamp \| null | No | 確認日時 |
+
+### Drive Export状態（ADR-0022、onDocumentWriteDriveExportトリガーで自動設定）
+
+`verified` が false→true になった瞬間、Cloud Functions トリガーが `settings/features.driveExport` フラグ有効なテナントに限り自動エクスポートを開始する。Admin SDK専有フィールドであり、フロントエンドから直接書き込まない（`firestore.rules` の documents update 許可リストに含めない）。
+
+| フィールド | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| driveExportStatus | string | No | `pending` \| `exporting` \| `exported` \| `error`（outboxパターン） |
+| driveFileId | string \| null | No | Drive上のfileId（重複防止・再送先の一意キー） |
+| driveExportedAt | timestamp \| null | No | エクスポート完了日時 |
+| driveExportError | string \| null | No | エラー一覧UI表示用の日本語メッセージ |
 
 ### PDF分割・回転
 
@@ -355,7 +366,7 @@ Gmail添付ファイル取得ログ。重複検知用のMD5ハッシュを含む
 
 ## /settings/{settingId}
 
-アプリケーション設定。3つのサブドキュメントで構成される。
+アプリケーション設定。4つのサブドキュメントで構成される。
 
 ### /settings/app
 
@@ -386,7 +397,23 @@ Gmail認証方式の設定。`gmailAuth.ts` が参照する。
 
 > OAuth認証情報（clientId, clientSecret, refreshToken）はSecret Managerに保存。Firestoreには格納しない。
 
-### Firestoreセキュリティルール
+### /settings/drive
+
+Google Drive連携設定（ADR-0022、Phase 1）。Gmail連携（`settings/gmail`）とは独立した接続として管理する（同一Googleアカウントもデフォルトで選べるが、別アカウントでの接続も想定）。
+
+| フィールド | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| authMode | string | No | `oauth`（Phase2でservice_account拡張予定） |
+| connectedEmail | string | No | 接続済みGoogleアカウント表示用 |
+| rootFolderId | string | No | Google Picker で選択したエクスポート先ルートフォルダID |
+| rootFolderName | string | No | 同上フォルダ名（UI表示用） |
+| template | DriveFolderTemplate | No | フォルダ階層のセグメント定義（テナントごとに可変、`shared/types.ts` 参照） |
+| furiganaFallback | string | No | `stop`（デフォルト、フリガナ欠損時はエクスポート停止） \| `useNameInitial`（氏名頭文字で代替、opt-in） |
+
+> OAuth認証情報（clientId, clientSecret, refreshToken）はSecret Manager (`drive-oauth-client-id`/`-secret`/`-refresh-token`) に保存。Firestoreには格納しない。
+> スコープは `drive.file` で確定（実機検証済み、Picker経由で選択したフォルダへのShared Drive内フォルダ作成が成功することを確認）。フル `drive` スコープは不要。
+
+### Firestoreセキュリティルール（settings共通）
 
 - **read（settings/auth）**: 認証済みユーザー（ドメイン許可チェック用、users未登録でも可）
 - **read（settings/auth以外）**: ホワイトリスト登録ユーザー
