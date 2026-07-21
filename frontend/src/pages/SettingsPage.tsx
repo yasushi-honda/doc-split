@@ -39,11 +39,13 @@ import { useSettings, useUpdateSettings, useUsers, useAddUser, useDeleteUser, us
 import { useDriveSettings, useUpdateDriveSettings, DRIVE_SETTINGS_QUERY_KEY } from '@/hooks/useDriveSettings'
 import { useGooglePickerScript } from '@/hooks/useGooglePickerScript'
 import { openFolderPicker } from '@/lib/googlePicker'
+import { DriveFolderTemplateEditor } from '@/components/DriveFolderTemplateEditor'
+import { validateTemplate } from '@/lib/driveFolderTemplate'
 import { doc, getDoc } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import { callFunction, getCallableErrorMessage } from '@/lib/callFunction'
 import { useQueryClient } from '@tanstack/react-query'
-import type { UserRole } from '@shared/types'
+import type { UserRole, DriveFolderTemplate } from '@shared/types'
 
 export function SettingsPage() {
   return (
@@ -703,6 +705,7 @@ function DriveSettingsTab() {
       <CardContent className="space-y-4">
         <GoogleDriveConnect />
         <DriveFolderPicker />
+        <DriveFolderTemplateSection />
       </CardContent>
     </Card>
   )
@@ -989,6 +992,94 @@ function DriveFolderPicker() {
           {error}
         </div>
       )}
+    </div>
+  )
+}
+
+/** フォルダ階層テンプレート(`settings/drive.template`)編集。GmailSettingsと同じ保存UXパターン */
+function DriveFolderTemplateSection() {
+  const { data: drive, isLoading } = useDriveSettings()
+  const updateDriveSettings = useUpdateDriveSettings()
+  const [template, setTemplate] = useState<DriveFolderTemplate>([])
+  const [furiganaFallback, setFuriganaFallback] = useState<'stop' | 'useNameInitial'>('stop')
+  const [hasChanges, setHasChanges] = useState(false)
+  const [isInitialized, setIsInitialized] = useState(false)
+  const [saveMessage, setSaveMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+
+  useEffect(() => {
+    if (drive && !isInitialized) {
+      setTemplate(drive.template ?? [])
+      setFuriganaFallback(drive.furiganaFallback ?? 'stop')
+      setIsInitialized(true)
+    }
+  }, [drive, isInitialized])
+
+  useEffect(() => {
+    if (saveMessage) {
+      const timer = setTimeout(() => setSaveMessage(null), 3000)
+      return () => clearTimeout(timer)
+    }
+  }, [saveMessage])
+
+  const handleSave = async () => {
+    const warnings = validateTemplate(template)
+    if (warnings.length > 0) {
+      setSaveMessage({ type: 'error', text: warnings.join(' / ') })
+      return
+    }
+    try {
+      await updateDriveSettings.mutateAsync({ template, furiganaFallback })
+      setHasChanges(false)
+      setSaveMessage({ type: 'success', text: '保存しました' })
+    } catch (err) {
+      setSaveMessage({ type: 'error', text: getCallableErrorMessage(err, '保存に失敗しました') })
+    }
+  }
+
+  if (isLoading) {
+    return null
+  }
+
+  return (
+    <div className="rounded-lg border p-4 space-y-3">
+      <div className="space-y-0.5">
+        <Label className="text-base font-medium">フォルダ階層テンプレート</Label>
+        <p className="text-xs text-gray-500">
+          エクスポート先フォルダ配下の階層構成を設定します（例: 事業所 → ケアマネ → 利用者 → 書類カテゴリ）
+        </p>
+      </div>
+
+      <DriveFolderTemplateEditor
+        template={template}
+        furiganaFallback={furiganaFallback}
+        onChange={(t) => {
+          setTemplate(t)
+          setHasChanges(true)
+        }}
+        onFuriganaFallbackChange={(v) => {
+          setFuriganaFallback(v)
+          setHasChanges(true)
+        }}
+      />
+
+      <div className="flex items-center justify-end gap-4">
+        {saveMessage && (
+          <div className={`flex items-center gap-2 text-sm ${
+            saveMessage.type === 'success' ? 'text-green-600' : 'text-red-600'
+          }`}>
+            {saveMessage.type === 'success' ? (
+              <CheckCircle className="h-4 w-4" />
+            ) : (
+              <AlertCircle className="h-4 w-4" />
+            )}
+            {saveMessage.text}
+          </div>
+        )}
+        <Button onClick={handleSave} disabled={!hasChanges || updateDriveSettings.isPending}>
+          <Save className="h-4 w-4 mr-2" />
+          {updateDriveSettings.isPending ? '保存中...' : '設定を保存'}
+        </Button>
+      </div>
     </div>
   )
 }

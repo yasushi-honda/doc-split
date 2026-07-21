@@ -6,7 +6,7 @@
  * アクセスは行わない(呼び出し元がCustomerMaster等の結合済みデータを渡す)。
  */
 
-import { DriveFolderSegment, DriveFolderTemplate } from '../../../shared/types';
+import { DriveFolderSegment, DriveFolderTemplate, DRIVE_SEGMENT_SEPARATOR_DEFAULT } from '../../../shared/types';
 
 /**
  * フリガナ欠損時のフォールバック挙動(`DriveSettings.furiganaFallback`)。
@@ -56,7 +56,7 @@ function resolveCareManagerSegment(
     return doc.careManagerName;
   }
   const initial = doc.careManagerName.charAt(0);
-  return joinInitialAndName(initial, doc.careManagerName, segment.separator ?? 'half');
+  return joinInitialAndName(initial, doc.careManagerName, segment.separator ?? DRIVE_SEGMENT_SEPARATOR_DEFAULT.careManager);
 }
 
 function resolveCustomerSegment(
@@ -78,7 +78,7 @@ function resolveCustomerSegment(
     throw new FuriganaMissingError(doc.customerName);
   }
 
-  return joinInitialAndName(initial, doc.customerName, segment.separator ?? 'full');
+  return joinInitialAndName(initial, doc.customerName, segment.separator ?? DRIVE_SEGMENT_SEPARATOR_DEFAULT.customer);
 }
 
 function resolveDateSegment(

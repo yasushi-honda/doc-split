@@ -676,6 +676,16 @@ export type DriveFolderSegment =
 export type DriveFolderTemplate = DriveFolderSegment[];
 
 /**
+ * `careManager`/`customer`セグメントの`separator`未設定時のデフォルト値。
+ * `functions/src/drive/folderPath.ts`の実解決ロジックとFE編集UI(プレビュー表示)の
+ * 双方から参照する単一の真実源（非対称: careManagerは半角、customerは全角）。
+ */
+export const DRIVE_SEGMENT_SEPARATOR_DEFAULT: { careManager: 'half'; customer: 'full' } = {
+  careManager: 'half',
+  customer: 'full',
+}
+
+/**
  * `settings/drive` ドキュメントのスキーマ。Gmail連携 (`GmailSettings`,
  * `functions/src/utils/gmailAuth.ts`) とは独立した接続として管理する
  * （同一Googleアカウントもデフォルトで選べるが、別アカウントでの接続も想定）。
