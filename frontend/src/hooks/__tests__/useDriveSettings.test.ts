@@ -23,6 +23,7 @@ describe('normalizeDriveSettings', () => {
     const result = normalizeDriveSettings({
       authMode: 'oauth',
       connectedEmail: 'drive-service@example.com',
+      oauthClientId: '123456-abc.apps.googleusercontent.com',
       rootFolderId: 'folder-abc',
       rootFolderName: 'エクスポート先',
       template,
@@ -32,11 +33,21 @@ describe('normalizeDriveSettings', () => {
     expect(result).toEqual({
       authMode: 'oauth',
       connectedEmail: 'drive-service@example.com',
+      oauthClientId: '123456-abc.apps.googleusercontent.com',
       rootFolderId: 'folder-abc',
       rootFolderName: 'エクスポート先',
       template,
       furiganaFallback: 'useNameInitial',
     })
+  })
+
+  it('部分データ（oauthClientIdのみ） → FE接続/Picker初期化に必要な値のみ保持し他はundefined', () => {
+    const result = normalizeDriveSettings({ oauthClientId: '123456-abc.apps.googleusercontent.com' })
+
+    expect(result.oauthClientId).toBe('123456-abc.apps.googleusercontent.com')
+    expect(result.authMode).toBeUndefined()
+    expect(result.connectedEmail).toBeUndefined()
+    expect(result.rootFolderId).toBeUndefined()
   })
 
   it('部分データ（rootFolderIdのみ） → 指定フィールドのみ保持し他はundefined', () => {
@@ -45,6 +56,7 @@ describe('normalizeDriveSettings', () => {
     expect(result.rootFolderId).toBe('folder-xyz')
     expect(result.authMode).toBeUndefined()
     expect(result.connectedEmail).toBeUndefined()
+    expect(result.oauthClientId).toBeUndefined()
     expect(result.rootFolderName).toBeUndefined()
     expect(result.template).toBeUndefined()
     expect(result.furiganaFallback).toBeUndefined()

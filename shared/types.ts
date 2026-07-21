@@ -679,11 +679,16 @@ export type DriveFolderTemplate = DriveFolderSegment[];
  * `settings/drive` ドキュメントのスキーマ。Gmail連携 (`GmailSettings`,
  * `functions/src/utils/gmailAuth.ts`) とは独立した接続として管理する
  * （同一Googleアカウントもデフォルトで選べるが、別アカウントでの接続も想定）。
- * clientId/clientSecret/refreshToken は Secret Manager 保存のためここには含めない。
+ * clientSecret/refreshToken は Secret Manager 専有のためここには含めないが、
+ * oauthClientId は公開値であり FE の接続(code flow)/Picker(token flow)が必要と
+ * するため Firestore にも保持する（`settings/gmail.oauthClientId` と同型。
+ * Secret Manager `drive-oauth-client-id` と同一値であること — FEが送るcodeを
+ * BEが異なるclientの秘密鍵で交換するとinvalid_grantになるため）。
  */
 export interface DriveSettings {
   authMode?: 'oauth'; // Phase2でservice_account拡張
   connectedEmail?: string; // 接続済みGoogleアカウント表示用
+  oauthClientId?: string; // FE接続(code flow)+Picker(token flow)用のOAuth Web クライアントID
   rootFolderId?: string; // Picker で選択したエクスポート先ルートフォルダ
   rootFolderName?: string;
   template?: DriveFolderTemplate;

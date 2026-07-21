@@ -7,7 +7,8 @@ import { doc, getDoc, setDoc } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import type { DriveSettings } from '@shared/types'
 
-const DRIVE_SETTINGS_QUERY_KEY = ['settings', 'drive']
+/** settings/drive のTanStack Query key。接続成功時等、フック外から明示invalidateする際にも使う */
+export const DRIVE_SETTINGS_QUERY_KEY = ['settings', 'drive']
 
 /** Firestore生データをDriveSettingsへ正規化する（ドキュメント未作成/フィールド欠損はundefinedのまま許容） */
 export function normalizeDriveSettings(data: Record<string, unknown> | undefined): DriveSettings {
@@ -15,6 +16,7 @@ export function normalizeDriveSettings(data: Record<string, unknown> | undefined
   return {
     authMode: data.authMode as DriveSettings['authMode'],
     connectedEmail: data.connectedEmail as string | undefined,
+    oauthClientId: data.oauthClientId as string | undefined,
     rootFolderId: data.rootFolderId as string | undefined,
     rootFolderName: data.rootFolderName as string | undefined,
     template: data.template as DriveSettings['template'],
