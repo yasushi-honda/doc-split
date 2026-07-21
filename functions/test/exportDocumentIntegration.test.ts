@@ -43,18 +43,22 @@ interface FakeFile {
 
 /**
  * `q`の内容でフォルダ検索(mimeType=folder)とファイル検索(appProperties経由の
- * docId冪等性チェック)を区別してfakeの応答を切り替える。
+ * docId冪等性チェック。driveFileId優先パスの重複再確認も同じqの形を使う)を
+ * 区別してfakeの応答を切り替える。
  *
  * `getFile`は`files.get()`(driveFileId優先解決の第一段)の応答を制御する:
- * - `{ parents: [...] }`: そのidのファイルが指定の親フォルダ配下に存在する
- * - `'not-found'`: 404(手動削除等を想定) → findOrUploadFileフォールバックへ
+ * - `{ parents: [...], trashed?: boolean }`: そのidのファイルが指定の親フォルダ配下に
+ *   存在する。`trashed: true`はゴミ箱移動済みを表す
+ * - `'not-found'`: 404、`error.code`のみに設定(手動削除等を想定) → フォールバックへ
+ * - `'not-found-status-shape'`: 404、実際のgaxiosエラー形状を模して`error.status`
+ *   のみに設定(`error.code`は無し) → フォールバックへ
  * - 省略: `doc.driveFileId`が無いテストケースでは呼ばれない想定
  */
 function makeFakeDrive(opts: {
   listFiles?: FakeFile[];
   existingFiles?: FakeFile[];
   createdIds?: string[];
-  getFile?: { parents: string[] } | 'not-found';
+  getFile?: { parents: string[]; trashed?: boolean } | 'not-found' | 'not-found-status-shape';
 }) {
   let createIndex = 0;
   const listCalls: Record<string, unknown>[] = [];
@@ -85,7 +89,14 @@ function makeFakeDrive(opts: {
           notFound.code = 404;
           throw notFound;
         }
-        return { data: { parents: opts.getFile?.parents ?? [] } };
+        if (opts.getFile === 'not-found-status-shape') {
+          // 実際のgaxios GaxiosErrorの形状: HTTPステータスはstatusにのみ設定され、
+          // codeはnetwork層エラー専用でHTTP 404では設定されない
+          const notFound = new Error('File not found') as Error & { status: number };
+          notFound.status = 404;
+          throw notFound;
+        }
+        return { data: { parents: opts.getFile?.parents ?? [], trashed: opts.getFile?.trashed ?? false } };
       },
       update: async (params: Record<string, unknown>) => {
         updateCalls.push(params);
@@ -293,6 +304,78 @@ describe('exportDocument (ADR-0022 Phase 1)', () => {
       expect(createCalls).to.have.lengthOf(3); // フォルダ2件 + ファイル新規作成1件
       const data = (await db.doc(`documents/${docId}`).get()).data()!;
       expect(data.driveFileId).to.equal('recreated-file-id');
+    });
+
+    // /code-review high指摘対応(2026-07-21): 実際のgaxios GaxiosErrorはHTTPステータスを
+    // error.statusに設定し、error.codeはnetwork層エラー専用でHTTP 404には使われない。
+    // 単純な`error.code===404`比較では本番で常にfalseになり、404フォールバックが
+    // 死んだコードパスになっていた(実装のnode_modules/gaxios確認で判明)。
+    it('driveFileIdあり+files.getが実際のgaxios形状(error.statusのみに404、codeは未設定)で失敗: findOrUploadFileにフォールバックする', async () => {
+      const docId = await seedDocument({ driveFileId: 'stale-file-id-status-shape' });
+      await seedCustomer();
+      await seedDriveSettings();
+      const { drive, createCalls, updateCalls } = makeFakeDrive({
+        createdIds: ['folder-office', 'folder-customer', 'recreated-file-id-status-shape'],
+        getFile: 'not-found-status-shape',
+      });
+
+      await exportDocument(docId, TEST_RUN_ID, { drive, downloadFile: async () => Buffer.from('x') });
+
+      expect(updateCalls).to.have.lengthOf(0);
+      expect(createCalls).to.have.lengthOf(3);
+      const data = (await db.doc(`documents/${docId}`).get()).data()!;
+      expect(data.driveFileId).to.equal('recreated-file-id-status-shape');
+    });
+
+    // /code-review high指摘対応(2026-07-21): drive.fileスコープでは完全削除ができず
+    // ゴミ箱移動(trashed:true)のみ許可される(ADR-0022 Decision2)。files.get()はtrashed
+    // ファイルでも200で成功するため、trashedを見ないとゴミ箱内のファイルへ不可視のまま
+    // 上書きし続けるsilent failureになっていた。
+    it('driveFileIdあり+Drive上でゴミ箱移動(trashed)されている: files.updateを呼ばずfindOrUploadFileにフォールバックする', async () => {
+      const docId = await seedDocument({ driveFileId: 'trashed-file-id' });
+      await seedCustomer();
+      await seedDriveSettings();
+      const { drive, createCalls, updateCalls } = makeFakeDrive({
+        createdIds: ['folder-office', 'folder-customer', 'recreated-after-trash-file-id'],
+        getFile: { parents: ['folder-customer'], trashed: true },
+      });
+
+      await exportDocument(docId, TEST_RUN_ID, { drive, downloadFile: async () => Buffer.from('x') });
+
+      expect(updateCalls).to.have.lengthOf(0); // ゴミ箱内ファイルへは書き込まない
+      expect(createCalls).to.have.lengthOf(3);
+      const data = (await db.doc(`documents/${docId}`).get()).data()!;
+      expect(data.driveFileId).to.equal('recreated-after-trash-file-id');
+    });
+
+    // /code-review high指摘対応(2026-07-21): driveFileId確定後は、findOrUploadFile()が
+    // 持つappPropertiesベースの重複検知(AmbiguousFileError)を永久に経由しなくなっていた。
+    // ADRの「以後AmbiguousFileErrorで恒久停止」という記述を毎回のエクスポートで再現する。
+    it('driveFileIdあり+同じappPropertiesを持つ別ファイルが対象フォルダに存在する: AmbiguousFileErrorをthrowしfiles.updateは呼ばれない', async () => {
+      const docId = await seedDocument({ driveFileId: 'known-file-id' });
+      await seedCustomer();
+      await seedDriveSettings();
+      const { drive, createCalls, updateCalls } = makeFakeDrive({
+        createdIds: ['folder-office', 'folder-customer'],
+        getFile: { parents: ['folder-customer'] },
+        existingFiles: [
+          { id: 'known-file-id', name: '書類_事業所A_20260101_鈴木花子.pdf' },
+          { id: 'orphan-duplicate-id', name: '書類_事業所A_20260101_鈴木花子.pdf' },
+        ],
+      });
+
+      try {
+        await exportDocument(docId, TEST_RUN_ID, { drive, downloadFile: async () => Buffer.from('x') });
+        expect.fail('AmbiguousFileErrorがthrowされるべき');
+      } catch (error) {
+        expect(error).to.be.instanceOf(AmbiguousFileError);
+      }
+
+      expect(updateCalls).to.have.lengthOf(0); // 重複検知で停止、内容更新は発生しない
+      expect(createCalls).to.have.lengthOf(2); // フォルダのみ
+      const data = (await db.doc(`documents/${docId}`).get()).data()!;
+      expect(data.driveFileId).to.equal('known-file-id'); // 元の値のまま変化なし
+      expect(data.driveExportStatus).to.equal('exporting'); // seedDocumentの初期値のまま
     });
 
     it('driveFileIdなし(初回エクスポート): files.get/files.updateは一切呼ばれず既存のfindOrUploadFile経路のまま動作する', async () => {

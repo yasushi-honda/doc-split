@@ -5,16 +5,20 @@
  * (findOrCreateFolder.ts) → StorageからPDF取得 → Driveファイルの解決
  * (resolveDriveFile、下記) → driveFileId等を書戻し、の一連を実行する。
  *
- * Driveファイルの解決は2段階(code-review xhigh指摘対応、2026-07-21):
+ * Driveファイルの解決は2段階(code-review xhigh指摘対応、2026-07-21。trashed
+ * チェック・404判定・重複検知の再確認は/code-review high指摘対応、同日):
  * 1. `doc.driveFileId`が既にある場合(過去にエクスポート済みで、reprocessでも
  *    クリアされずに保持されている参照。`frontend/src/hooks/useDocuments.ts`の
- *    `getReprocessClearFields()`参照)は、そのファイルへ`files.update()`で
- *    移動(フォルダパスが変わった場合)・リネーム・内容更新を直接行う。これにより、
- *    再処理でフォルダパスが変わっても旧フォルダに孤児ファイルが残らず、フォルダパスが
- *    変わらない訂正でも内容が最新化される。
- * 2. `driveFileId`が無い(初回エクスポート)、またはユーザーがDrive上で手動削除した等で
- *    404だった場合は、`findOrUploadFile()`(appProperties経由の冪等性チェック付き
- *    find-or-create)にフォールバックする。
+ *    `getReprocessClearFields()`参照)は、そのファイルが生きていて(404でない)
+ *    ゴミ箱移動もされていない(`trashed`でない)ことを確認したうえで、同じ
+ *    `appProperties`を持つ他ファイルが無いか再確認(過去のTOCTOU競合による
+ *    孤児ファイル検知)してから、`files.update()`で移動(フォルダパスが変わった
+ *    場合)・リネーム・内容更新を直接行う。これにより、再処理でフォルダパスが
+ *    変わっても旧フォルダに孤児ファイルが残らず、フォルダパスが変わらない訂正でも
+ *    内容が最新化される。
+ * 2. `driveFileId`が無い(初回エクスポート)、ユーザーがDrive上で手動削除した(404)、
+ *    またはゴミ箱移動した(trashed)場合は、`findOrUploadFile()`(appProperties経由の
+ *    冪等性チェック付きfind-or-create)にフォールバックする。
  *
  * `driveExportStatus`のexporting遷移とerror時の書込みは呼び出し元
  * (`executeDriveExport.ts`)の責務。本関数はFuriganaMissingError /
@@ -148,12 +152,63 @@ async function findOrUploadFile(
 }
 
 /**
+ * Drive APIの`files.get()`がファイル参照切れ(404)を返したかどうかを判定する。
+ *
+ * googleapis/gaxiosのエラーオブジェクトは、HTTPステータスを`error.status`
+ * (まれに`error.response.status`)に設定し、`error.code`はnetwork層エラー
+ * (例:'ECONNRESET')専用でHTTPステータスには使われない(実機のgaxios実装で確認済み)。
+ * `error.code`のみを見る単純な数値比較では本番で常にfalseになり、意図した
+ * フォールバックが機能しない(`is429Error`/`functions/src/utils/retry.ts`と同じ懸念)。
+ */
+function isDriveFileNotFoundError(error: unknown): boolean {
+  const err = error as { code?: number | string; status?: number; response?: { status?: number } };
+  return err?.status === 404 || err?.code === 404 || err?.response?.status === 404;
+}
+
+/**
+ * `parentId`直下に`docId`の`appProperties.docSplitDocId`と一致する`knownFileId`
+ * 以外のファイルが存在する場合、`AmbiguousFileError`をthrowする。
+ *
+ * `driveFileId`優先パス(`resolveDriveFile()`)は、`findOrUploadFile()`が持つ
+ * appPropertiesベースの重複検知を経由しないため、driveFileId確定後の全ての
+ * エクスポートで重複検知が恒久的にスキップされてしまう(過去のTOCTOU競合等で
+ * 生成された孤児ファイルが未検知のまま放置される)。ADRのfail-visible方針
+ * (「以後AmbiguousFileErrorで恒久停止」)を毎回再確認する。
+ */
+async function assertNoDuplicateFile(
+  drive: drive_v3.Drive,
+  parentId: string,
+  docId: string,
+  knownFileId: string
+): Promise<void> {
+  const q =
+    `'${parentId}' in parents and appProperties has ` +
+    `{ key='docSplitDocId' and value='${escapeQueryValue(docId)}' } and trashed=false`;
+
+  const listResponse = await drive.files.list({
+    q,
+    fields: 'files(id, name)',
+    includeItemsFromAllDrives: true,
+    ...SUPPORTS_ALL_DRIVES,
+  });
+
+  const files = listResponse.data.files ?? [];
+  const others = files.filter((file) => file.id !== knownFileId);
+  if (others.length > 0) {
+    throw new AmbiguousFileError(docId, parentId, files.length);
+  }
+}
+
+/**
  * `doc.driveFileId`(過去にエクスポート済みの実体への参照。reprocessでもクリアされない)
  * があれば、そのファイルへ移動(フォルダパスが変わった場合)・リネーム・内容更新を
  * 1回の`files.update()`で行い、同じidを返す(code-review xhigh指摘対応、2026-07-21)。
- * ファイルがDrive上で見つからない(手動削除等、404)場合は`findOrUploadFile()`
- * (appProperties経由のfind-or-create)にフォールバックする。404以外のエラーは
- * fail-visible方針のためそのままthrowする(呼び出し元がdriveExportStatus:'error'に遷移させる)。
+ * ファイルがDrive上で見つからない(手動削除、404)場合や、ゴミ箱移動済み(`trashed`)
+ * の場合は`findOrUploadFile()`(appProperties経由のfind-or-create)にフォールバック
+ * する(`drive.file`スコープでは完全削除不可・ゴミ箱移動のみ許可のため、ADR-0022
+ * Decision2、trashedを見逃すとゴミ箱内ファイルへ不可視のまま上書きし続けるsilent
+ * failureになる)。404以外のエラーはfail-visible方針のためそのままthrowする
+ * (呼び出し元がdriveExportStatus:'error'に遷移させる)。
  */
 async function resolveDriveFile(
   drive: drive_v3.Drive,
@@ -167,19 +222,22 @@ async function resolveDriveFile(
     try {
       const getResponse = await drive.files.get({
         fileId: doc.driveFileId,
-        fields: 'parents',
+        fields: 'parents, trashed',
         supportsAllDrives: true,
       });
-      currentParents = getResponse.data.parents ?? [];
+      if (!getResponse.data.trashed) {
+        currentParents = getResponse.data.parents ?? [];
+      }
+      // trashed: currentParentsをundefinedのまま残し、下のfindOrUploadFile()へフォールバックする
     } catch (error) {
-      const code = (error as { code?: number }).code;
-      if (code !== 404) {
+      if (!isDriveFileNotFoundError(error)) {
         throw error;
       }
       // 404: ユーザーがDrive上で手動削除した等 → 新規アップロードにフォールバックする
     }
 
     if (currentParents) {
+      await assertNoDuplicateFile(drive, parentId, docId, doc.driveFileId);
       const removeParents = currentParents.filter((parent) => parent !== parentId);
       const downloadFile = deps.downloadFile ?? defaultDownloadFile;
       const buffer = await downloadFile(doc.fileUrl);
