@@ -67,6 +67,21 @@ describe('getCallableErrorMessage - Issue #621 already-exists/aborted', () => {
     const err = makeFunctionsError('unknown', 'something went wrong')
     expect(getCallableErrorMessage(err, 'デフォルトエラー')).toBe('デフォルトエラー')
   })
+
+  it('code=failed-preconditionのとき、BEが投げた日本語メッセージをそのまま返す(defaultMessageに丸めない)', () => {
+    const err = makeFunctionsError(
+      'failed-precondition',
+      'リトライ対象外です(ドキュメントが存在しないか、エラー状態ではありません)'
+    )
+    expect(getCallableErrorMessage(err, 'デフォルトエラー')).toBe(
+      'リトライ対象外です(ドキュメントが存在しないか、エラー状態ではありません)'
+    )
+  })
+
+  it('code=failed-preconditionの別メッセージ(Feature Flag OFF)もそのまま返す', () => {
+    const err = makeFunctionsError('failed-precondition', 'Google Drive連携機能が無効です')
+    expect(getCallableErrorMessage(err)).toBe('Google Drive連携機能が無効です')
+  })
 })
 
 describe('callFunction - リトライ動作 (silent-failure-hunterレビュー指摘)', () => {
