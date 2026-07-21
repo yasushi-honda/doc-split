@@ -1,6 +1,40 @@
 # ハンドオフメモ
 
-**更新日**: 2026-07-20（Google Drive連携機能 新規ミッション着手・Task1完了）
+**更新日**: 2026-07-21（Google Drive連携機能Phase1、FE実装+`/code-review high`修正）
+
+<!-- session138相当（session137後、Task2-10実装 + /code-review medium・bare(xhigh)修正）はLATEST.md詳細サマリ未追記（GOAL.mdのみ更新、commit 28cbc9c〜d715e26で追跡可能）。本エントリは2026-07-21のFirestoreルールテスト追加〜/code-review high修正までを記載。 -->
+
+## Google Drive連携Phase1: FE実装 + Firestoreルールテスト + `/code-review high`修正セッション（2026-07-21）
+
+`/catchup`が提示したGOAL.md由来の未完了タスク先頭項目から、decision-makerがAskUserQuestionで都度選択する形で以下を順次実装した。
+
+### Firestoreルールテスト追加（commit 2cbe21c）
+`settings/drive`のadmin専用write権限テスト4件を追加（読取: ホワイトリスト登録ユーザー可/未登録ユーザー不可、書込: 一般ユーザー不可/管理者可）。エミュレータで88件全PASS確認。
+
+### FE設定フック実装（commit 54a78a5）
+`frontend/src/hooks/useDriveSettings.ts`。既存`useSettings.ts`のTanStack Queryパターンを踏襲し`useDriveSettings()`/`useUpdateDriveSettings()`+正規化関数`normalizeDriveSettings()`を実装。単体テスト5件追加。
+
+### FE Drive接続 + Picker UI実装（commit d3bbf1b, 5b0f64a）
+実コード5ファイル+新機能+アーキテクチャ判断（Google Picker API新規統合）に該当したためplan mode経由で実装。設計時に2つの重大なギャップを発見・解決:
+- session137のスパイクで作成した`spike-test.html`（Picker実機検証の唯一の参照実装）はgit未コミットで復元不可能と判明。Google公式Picker/GIS仕様（context7+WebFetch）から再構築した
+- Drive接続のFE `client_id`供給元をGmail用と共用する案は、`exchangeDriveAuthCode`がSecret Manager `drive-oauth-client-id`でcode交換する制約上`invalid_grant`になり技術的に不成立と判明。`DriveSettings.oauthClientId`をFirestore新設フィールドとして解決（`shared/types.ts`、Gmail同型パターン）
+
+実装: `GoogleDriveConnect`(code flow接続)/`DriveFolderPicker`(token flow+Picker)。`frontend/src/lib/googlePicker.ts`の純粋関数`pickerResponseToRootFolder`で`window.google`依存部を分離しテスト可能にした。単体テスト9件追加、tsc/lint/frontend全378件PASS・build成功。
+
+evaluatorエージェントによるAC検証でHIGH指摘1件（Picker側キャンセル時に`onPicked`のみが`picking`状態を解除しておりUIが操作不能に固着）+MEDIUM指摘1件（GIS `error_callback`未設定でポップアップブロック時に同種の固着）を検出。自分で実装を直接確認したうえで修正: `openFolderPicker`に`onCancel`コールバックを追加し、`isPickerCancelled`純粋関数でPicker表示完了の中間イベント(`loaded`)とキャンセル確定(`cancel`)を区別。単体テスト5件追加(計14件)。
+
+### `/code-review high`実行 + resolveDriveFile()修正（commit f78304c）
+decision-maker実行の`/code-review high`（feature/drive-export-phase1ブランチ全体34ファイル・約3744行）で8角度finder並列実行→18件のユニーク候補を1票制verifyでCONFIRMED 13件/PLAUSIBLE 1件/REFUTED 2件に判定。decision-maker選択で`resolveDriveFile()`（`functions/src/drive/exportDocument.ts`、前セッションのd715e26で新規導入）に集中する最重要3件のみ修正:
+
+1. **trashed未チェック**: `files.get()`成功時にゴミ箱移動(`trashed`)を一切確認しておらず、`drive.file`スコープでは完全削除不可でゴミ箱移動のみ許可という制約下で、ゴミ箱内ファイルへ不可視のまま上書きし続けるsilent failureになっていた
+2. **404判定の型不整合**: `error.code===404`のみに依存していたが、`node_modules/gaxios`の実装を直接確認した結果、実際のGaxiosErrorはHTTPステータスを`error.status`に設定し`error.code`はnetwork層エラー専用と判明。本番で常にfalseとなり404フォールバックが死んだコードパスだった
+3. **重複検知の恒久バイパス**: driveFileId確定後は`findOrUploadFile()`のappProperties重複検知(`AmbiguousFileError`)を永久に経由しなくなっており、ADR本文の「以後AmbiguousFileErrorで恒久停止」という記述と矛盾していた
+
+`isDriveFileNotFoundError()`(status/code両対応、`is429Error`/retry.tsと同型)と`assertNoDuplicateFile()`(driveFileId優先パスでも毎回重複再確認)を追加。回帰テスト3件追加。exportDocument統合テスト18件・Drive関連統合テスト計45件・functions unit1903件・rules88件・tsc/lint全PASS確認済み。
+
+**同根再発の観察**: `resolveDriveFile()`は前セッション(d715e26)で「reprocess時の孤児ファイル問題」の緊急修正として導入されたばかりで、今回わずか1日でさらに3件のバグが見つかった。新しい状態解決パス(driveFileId優先)を追加した際に、既存の`findOrUploadFile()`が持っていた安全装置(trashedフィルタ・重複検知)を機械的に移植し忘れるという同型パターンが2回連続した形。次に同じパターンが出るとすれば、残っているCONFIRMED指摘（feature flag OFF時の永久回収不能・sweep 40件上限飽和）も「新しい状態遷移経路を追加する際に既存の安全装置(sweep/retry/エラー可視化)を横展開し忘れる」という同型の構造的リスクを持つため、着手時は注意。gaxios error-shapeの調査はWebSearchでも裏付け確認済み（AIP-193標準に基づく`status`/`code`の意味の違いは既知の安定した仕様で、外部要因の急な変化ではなく実装時の見落としと判断）。
+
+残りCONFIRMED 7件+PLAUSIBLE 1件は、Drive Phase1が未マージのため（GitHub Issue化ではなく）GOAL.mdの「進行中のtasks」に追記しtriage済み（commit 1d8a551）。
 
 ## dev/kanameone/cocoro環境監査・保守検証セッション 完遂サマリ（〜2026-07-20時点）
 
