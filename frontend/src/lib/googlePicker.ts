@@ -41,22 +41,45 @@ export function pickerResponseToRootFolder(data: unknown): PickedFolder | null {
 }
 
 /**
+ * Pickerのcallbackが「ユーザーが選択せずに閉じた」ことを表しているかを判定する
+ * （純粋関数、window.google非依存）。
+ *
+ * `google.picker.Action.CANCEL` の実値は `'cancel'`。Pickerのcallbackは表示完了時
+ * （`Action.LOADED === 'loaded'`）にも呼ばれるため、`!== 'picked'`だけでキャンセル
+ * 確定とは判定できない（code-reviewエージェント指摘対応: `loaded`をキャンセル扱い
+ * すると、ユーザーがまだ操作中のPicker表示中に呼び出し元の状態がリセットされてしまう）。
+ */
+export function isPickerCancelled(data: unknown): boolean {
+  const response = data as { action?: string }
+  return response?.action === 'cancel'
+}
+
+/**
  * Google Picker(フォルダ選択専用View)を構築して表示する。
  * `drive.file`スコープのaccess_token取得後に呼び出すこと。
  *
  * Shared Drive内フォルダの表示には`setEnableDrives(true)`が必須（ADR-0022 Decision 2、
  * `doc-split-dev`環境での実機検証済み）。Shared Driveのルート自体は選択不可なので、
  * 呼び出し元UIで「1階層以上のサブフォルダを選択」の制約文言を案内すること。
+ *
+ * `onCancel`は、ユーザーがフォルダを選ばずPickerを閉じた場合と、Pickerライブラリが
+ * 何らかの理由で利用不能だった場合の両方で呼ばれる（呼び出し元は`picking`等の
+ * 進行中状態をリセットすること。code-reviewエージェント指摘対応: 以前は`onPicked`
+ * のみでしか進行中状態を解除できず、キャンセル時にUIが操作不能な状態で固着した）。
  */
 export function openFolderPicker(options: {
   accessToken: string
   developerKey: string
   appId: string
   onPicked: (folder: PickedFolder) => void
+  onCancel: () => void
 }): void {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const google = (window as any).google
-  if (!google?.picker) return
+  if (!google?.picker) {
+    options.onCancel()
+    return
+  }
 
   const view = new google.picker.DocsView(google.picker.ViewId.FOLDERS)
     .setSelectFolderEnabled(true)
@@ -70,7 +93,14 @@ export function openFolderPicker(options: {
     .setAppId(options.appId)
     .setCallback((data: unknown) => {
       const folder = pickerResponseToRootFolder(data)
-      if (folder) options.onPicked(folder)
+      if (folder) {
+        options.onPicked(folder)
+        return
+      }
+      if (isPickerCancelled(data)) {
+        options.onCancel()
+      }
+      // 'loaded'等それ以外のactionはPicker表示中の中間イベントのため無視する
     })
     .build()
 

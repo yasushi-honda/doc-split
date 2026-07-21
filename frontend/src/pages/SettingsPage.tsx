@@ -758,6 +758,11 @@ function GoogleDriveConnect() {
           setConnecting(false)
         }
       },
+      // ポップアップブロック・ユーザーによる手動クローズはcallbackが発火しないため
+      // error_callbackで明示的に捕捉する(evaluator指摘対応)
+      error_callback: () => {
+        setError('認証がキャンセルされました')
+      },
     })
 
     client.requestCode()
@@ -907,7 +912,17 @@ function DriveFolderPicker() {
             })
             setPicking(false)
           },
+          // Pickerをフォルダ未選択で閉じた場合。evaluator指摘対応:
+          // 以前はonPickedでしかpicking状態を解除できず、キャンセル時にボタンが
+          // 操作不能なまま固着した
+          onCancel: () => setPicking(false),
         })
+      },
+      // ポップアップブロック・ユーザーによる手動クローズはcallbackが発火しないため
+      // error_callbackで明示的に捕捉し、pickingの固着を防ぐ(evaluator指摘対応)
+      error_callback: () => {
+        setError('フォルダ選択がキャンセルされました')
+        setPicking(false)
       },
     })
 
