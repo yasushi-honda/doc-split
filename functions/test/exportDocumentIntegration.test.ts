@@ -21,7 +21,7 @@ import * as admin from 'firebase-admin';
 import { drive_v3 } from 'googleapis';
 import { cleanupCollections } from './helpers/cleanupEmulator';
 import { exportDocument, DriveSettingsIncompleteError, AmbiguousFileError } from '../src/drive/exportDocument';
-import { FuriganaMissingError } from '../src/drive/folderPath';
+import { FuriganaMissingError, FileDateMissingError } from '../src/drive/folderPath';
 import { AmbiguousFolderError } from '../src/drive/findOrCreateFolder';
 import { MASTER_PATHS } from '../src/utils/masterPaths';
 import type { DriveFolderTemplate } from '../../shared/types';
@@ -474,6 +474,30 @@ describe('exportDocument (ADR-0022 Phase 1)', () => {
 
     const customerCall = createCalls[1].requestBody as { name: string };
     expect(customerCall.name).to.equal('鈴　鈴木花子');
+  });
+
+  it('fileDateがnullでdateセグメント対象カテゴリの場合はFileDateMissingErrorをthrowし、Drive/Firestore書込みは一切発生しない(#45)', async () => {
+    const docId = await seedDocument({ fileDate: null });
+    await seedCustomer();
+    const templateWithDate: DriveFolderTemplate = [
+      ...TEMPLATE,
+      { type: 'date', format: 'YYYY年MM月', onlyForCategories: ['ケアプラン'] },
+    ];
+    await seedDriveSettings({ template: templateWithDate });
+    const { drive, listCalls, createCalls } = makeFakeDrive({});
+
+    try {
+      await exportDocument(docId, TEST_RUN_ID, { drive, downloadFile: async () => Buffer.from('x') });
+      expect.fail('FileDateMissingErrorがthrowされるべき');
+    } catch (error) {
+      expect(error).to.be.instanceOf(FileDateMissingError);
+    }
+
+    expect(listCalls).to.have.lengthOf(0);
+    expect(createCalls).to.have.lengthOf(0);
+    const docSnap = await db.doc(`documents/${docId}`).get();
+    expect(docSnap.data()!.driveFileId).to.be.undefined;
+    expect(docSnap.data()!.driveExportStatus).to.equal('exporting'); // seedDocumentの初期値のまま
   });
 
   it('同名フォルダが2件以上の場合はAmbiguousFolderErrorをthrowし、Drive/Firestore書込みは一切発生しない', async () => {

@@ -28,6 +28,41 @@ export class FuriganaMissingError extends Error {
   }
 }
 
+/**
+ * careManagerセグメント解決時、`careManagerName`が空文字/空白のみの場合にthrow。
+ * `FuriganaMissingError`と同じくfail-visible優先（空白のみのフォルダ名を黙って
+ * 生成しない）。呼び出し元（トリガー）はこれを捕捉し `driveExportStatus: 'error'` に遷移させる。
+ */
+export class CareManagerMissingError extends Error {
+  constructor() {
+    super('ケアマネージャー名が未設定のためフォルダ名を解決できません');
+    this.name = 'CareManagerMissingError';
+  }
+}
+
+/**
+ * documentCategoryセグメント解決時、値が空文字/空白のみの場合にthrow。
+ * customerセグメントの`FuriganaMissingError`と非対称だった保護を揃える。
+ */
+export class DocumentCategoryMissingError extends Error {
+  constructor() {
+    super('書類カテゴリが未設定のためフォルダ名を解決できません');
+    this.name = 'DocumentCategoryMissingError';
+  }
+}
+
+/**
+ * dateセグメント解決時（`onlyForCategories`該当時のみ）、`fileDate`が未設定(null)の
+ * 場合にthrow。UIから書類日付をクリア保存する経路が実在するため、`.getFullYear()`等の
+ * 呼び出しで無防備にクラッシュさせず、fail-visibleに倒す。
+ */
+export class FileDateMissingError extends Error {
+  constructor() {
+    super('書類日付が未設定のため年月フォルダ名を解決できません');
+    this.name = 'FileDateMissingError';
+  }
+}
+
 /** `resolveFolderSegments` への入力。表示名は呼び出し元が解決済みの値を渡す。 */
 export interface FolderPathDocInput {
   careManagerName: string;
@@ -36,7 +71,8 @@ export interface FolderPathDocInput {
   customerFurigana?: string;
   /** `Document.documentType`（書類カテゴリ、masters/documents/items参照）。 */
   documentCategory: string;
-  fileDate: Date;
+  /** `Document.fileDate`。UIから書類日付をクリア保存する経路が実在するためnull許容。 */
+  fileDate: Date | null;
 }
 
 function joinInitialAndName(
@@ -52,6 +88,9 @@ function resolveCareManagerSegment(
   doc: FolderPathDocInput,
   segment: Extract<DriveFolderSegment, { type: 'careManager' }>
 ): string {
+  if (!doc.careManagerName.trim()) {
+    throw new CareManagerMissingError();
+  }
   if (segment.format === 'nameOnly') {
     return doc.careManagerName;
   }
@@ -88,6 +127,9 @@ function resolveDateSegment(
   if (!segment.onlyForCategories.includes(doc.documentCategory)) {
     return null;
   }
+  if (doc.fileDate === null) {
+    throw new FileDateMissingError();
+  }
   const year = doc.fileDate.getFullYear();
   const month = String(doc.fileDate.getMonth() + 1).padStart(2, '0');
   return `${year}年${month}月`;
@@ -117,6 +159,9 @@ export function resolveFolderSegments(
         segments.push(resolveCustomerSegment(doc, segment, opts));
         break;
       case 'documentCategory':
+        if (!doc.documentCategory.trim()) {
+          throw new DocumentCategoryMissingError();
+        }
         segments.push(doc.documentCategory);
         break;
       case 'date': {

@@ -22,6 +22,7 @@
  *
  * `driveExportStatus`のexporting遷移とerror時の書込みは呼び出し元
  * (`executeDriveExport.ts`)の責務。本関数はFuriganaMissingError /
+ * CareManagerMissingError / DocumentCategoryMissingError / FileDateMissingError /
  * AmbiguousFolderError / AmbiguousFileError / DriveSettingsIncompleteErrorを
  * そのままthrowし、呼び出し元がdriveExportStatus:'error'への遷移に使う
  * (fail-visible、Drive書き込みは発生しない)。
@@ -296,7 +297,11 @@ export async function exportDocument(
     customerName: doc.customerName,
     customerFurigana,
     documentCategory: doc.documentType,
-    fileDate: doc.fileDate.toDate(),
+    // doc.fileDateは型上Timestamp必須だが、UIから書類日付をクリア保存する経路が実在し
+    // 実行時にnull/undefinedになりうる(searchIndexer.ts等の既存箇所と同じ防御的読み取り)。
+    // .toDate()の無条件呼び出しによるTypeError回避、欠損時の扱いはfolderPath.tsの
+    // resolveDateSegment()がFileDateMissingErrorとしてfail-visibleに処理する。
+    fileDate: doc.fileDate ? doc.fileDate.toDate() : null,
   };
 
   const segments = resolveFolderSegments(docInput, template, {

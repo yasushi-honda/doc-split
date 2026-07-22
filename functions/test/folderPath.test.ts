@@ -6,6 +6,9 @@ import { expect } from 'chai';
 import {
   resolveFolderSegments,
   FuriganaMissingError,
+  CareManagerMissingError,
+  DocumentCategoryMissingError,
+  FileDateMissingError,
   FolderPathDocInput,
 } from '../src/drive/folderPath';
 import type { DriveFolderTemplate } from '../../shared/types';
@@ -109,5 +112,43 @@ describe('resolveFolderSegments', () => {
   it('fixedセグメントはdocの値に関わらず常に同じ文字列を返す', () => {
     const template: DriveFolderTemplate = [{ type: 'fixed', value: '固定フォルダ' }];
     expect(resolveFolderSegments(makeDoc(), template)).to.deep.equal(['固定フォルダ']);
+  });
+
+  it('careManagerNameが空文字の場合はCareManagerMissingErrorをthrowする', () => {
+    const doc = makeDoc({ careManagerName: '' });
+    expect(() => resolveFolderSegments(doc, KANAME_TEMPLATE)).to.throw(CareManagerMissingError);
+  });
+
+  it('careManagerNameが空白のみの場合もCareManagerMissingErrorをthrowする', () => {
+    const doc = makeDoc({ careManagerName: '   ' });
+    expect(() => resolveFolderSegments(doc, KANAME_TEMPLATE)).to.throw(CareManagerMissingError);
+  });
+
+  it('careManagerNameが空でもnameOnly形式で同様にCareManagerMissingErrorをthrowする', () => {
+    const doc = makeDoc({ careManagerName: '' });
+    expect(() => resolveFolderSegments(doc, COCORO_TEMPLATE)).to.throw(CareManagerMissingError);
+  });
+
+  it('documentCategoryが空文字の場合はDocumentCategoryMissingErrorをthrowする', () => {
+    const doc = makeDoc({ documentCategory: '' });
+    const template: DriveFolderTemplate = [{ type: 'documentCategory' }];
+    expect(() => resolveFolderSegments(doc, template)).to.throw(DocumentCategoryMissingError);
+  });
+
+  it('documentCategoryが空白のみの場合もDocumentCategoryMissingErrorをthrowする', () => {
+    const doc = makeDoc({ documentCategory: '  ' });
+    const template: DriveFolderTemplate = [{ type: 'documentCategory' }];
+    expect(() => resolveFolderSegments(doc, template)).to.throw(DocumentCategoryMissingError);
+  });
+
+  it('fileDateがnullでもdateセグメントが対象外カテゴリならエラーにならない(セグメント自体を持たない)', () => {
+    const doc = makeDoc({ documentCategory: '医療費', fileDate: null });
+    const result = resolveFolderSegments(doc, KANAME_TEMPLATE);
+    expect(result).to.deep.equal(['北名古屋事業所', '田 田中太郎', 'ス　鈴木花子', '医療費']);
+  });
+
+  it('fileDateがnullでdateセグメントが対象カテゴリの場合はFileDateMissingErrorをthrowする', () => {
+    const doc = makeDoc({ documentCategory: 'ケアプラン', fileDate: null });
+    expect(() => resolveFolderSegments(doc, KANAME_TEMPLATE)).to.throw(FileDateMissingError);
   });
 });
