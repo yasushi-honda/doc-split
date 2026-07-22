@@ -60,6 +60,7 @@ import {
   useRetryDriveExport,
   type DriveExportErrorRow,
 } from '@/hooks/useDriveExportErrors'
+import { toast } from 'sonner'
 import { getCallableErrorMessage } from '@/lib/callFunction'
 import { useAuthStore } from '@/stores/authStore'
 import type { ErrorRecord, ErrorStatus, ErrorType } from '@shared/types'
@@ -588,7 +589,6 @@ function DriveExportErrorRow({ row }: DriveExportErrorRowProps) {
   const retry = useRetryDriveExport()
   const [isDetailOpen, setIsDetailOpen] = useState(false)
   const [isRetryConfirmOpen, setIsRetryConfirmOpen] = useState(false)
-  const [retryMessage, setRetryMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
 
   const handleRetry = async () => {
     setIsRetryConfirmOpen(false)
@@ -597,13 +597,19 @@ function DriveExportErrorRow({ row }: DriveExportErrorRowProps) {
       // retryDriveExportは「呼び出し成功だが再エクスポートも失敗」をthrowではなく
       // success:falseのresolveで返すtri-state契約(functions/src/drive/retryDriveExport.ts)。
       // ここで分岐しないとこの再失敗が握り潰される。
+      //
+      // code-review指摘#63対応(2026-07-22): 以前はrow-local stateでバナー表示していたが、
+      // 成功時はuseRetryDriveExportのonSuccessによる一覧再取得でこの行自体が
+      // (driveExportStatus:'exported'へ遷移し一覧から外れて)アンマウントされ、
+      // メッセージが表示直後に消えていた。sonnerのtoastはRowのライフサイクルから独立した
+      // ポータルへ描画されるため、この問題を回避できる。
       if (result.success) {
-        setRetryMessage({ type: 'success', text: 'エクスポートに成功しました' })
+        toast.success('エクスポートに成功しました')
       } else {
-        setRetryMessage({ type: 'error', text: result.error || '再エクスポートに失敗しました' })
+        toast.error(result.error || '再エクスポートに失敗しました')
       }
     } catch (err) {
-      setRetryMessage({ type: 'error', text: getCallableErrorMessage(err, 'リトライに失敗しました') })
+      toast.error(getCallableErrorMessage(err, 'リトライに失敗しました'))
     }
   }
 
@@ -735,27 +741,6 @@ function DriveExportErrorRow({ row }: DriveExportErrorRowProps) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-
-      {retryMessage && (
-        <TableRow>
-          <TableCell colSpan={6} className="py-1">
-            <div
-              className={`flex items-center gap-2 text-xs rounded px-2 py-1 ${
-                retryMessage.type === 'success'
-                  ? 'text-green-600 bg-green-50'
-                  : 'text-red-600 bg-red-50'
-              }`}
-            >
-              {retryMessage.type === 'success' ? (
-                <CheckCircle2 className="h-3.5 w-3.5 flex-shrink-0" />
-              ) : (
-                <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" />
-              )}
-              {retryMessage.text}
-            </div>
-          </TableCell>
-        </TableRow>
-      )}
     </>
   )
 }

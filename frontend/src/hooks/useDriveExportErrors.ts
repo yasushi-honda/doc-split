@@ -85,5 +85,13 @@ export function useRetryDriveExport() {
       queryClient.invalidateQueries({ queryKey: ['documentsInfinite'] })
       queryClient.invalidateQueries({ queryKey: ['documentDetail', docId] })
     },
+    // code-review指摘#64対応(2026-07-22): 呼び出し自体がthrowするケース(例:
+    // DriveExportNotRetryableErrorに由来するfailed-precondition「リトライ対象外です…
+    // エラー状態ではありません」)は、クリック〜実行の間に別の定期スイープ(driveExportScheduled.ts)
+    // や別管理者のリトライで既に解決済みだった場合に発生しうる。invalidateしないと
+    // 解決済みの行が一覧に古いまま残り続けるため、失敗時も無効化して自己修復させる。
+    onError: () => {
+      queryClient.invalidateQueries({ queryKey: DRIVE_EXPORT_ERRORS_QUERY_KEY })
+    },
   })
 }

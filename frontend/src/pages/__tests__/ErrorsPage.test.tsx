@@ -8,9 +8,21 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, within } from '@testing-library/react'
+import { render, screen, fireEvent, within, waitFor } from '@testing-library/react'
 import { ErrorsPage } from '../ErrorsPage'
 import type { DriveExportErrorRow, RetryDriveExportResult } from '@/hooks/useDriveExportErrors'
+
+// code-review指摘#63対応(2026-07-22): リトライ結果メッセージがrow-local stateの
+// バナーからsonner toastへ移行したため(一覧再取得によるRowアンマウントで即座に
+// メッセージが消える問題を解消)、DOM上のテキストではなくtoast呼び出しをアサートする。
+const mockToastSuccess = vi.fn()
+const mockToastError = vi.fn()
+vi.mock('sonner', () => ({
+  toast: {
+    success: (...args: unknown[]) => mockToastSuccess(...args),
+    error: (...args: unknown[]) => mockToastError(...args),
+  },
+}))
 
 // @testing-library/jest-dom は未導入のため、disabled 判定はネイティブDOMプロパティで検証する
 const isDisabled = (el: HTMLElement): boolean => (el as HTMLButtonElement).disabled
@@ -61,6 +73,8 @@ describe('ErrorsPage - Driveエクスポートエラータブ', () => {
     mockIsAdmin = true
     mockIsPending = false
     mockMutateAsync.mockReset()
+    mockToastSuccess.mockClear()
+    mockToastError.mockClear()
   })
 
   it('タブをクリックするとDriveエクスポートエラー一覧が表示される', () => {
@@ -119,7 +133,7 @@ describe('ErrorsPage - Driveエクスポートエラータブ', () => {
     expect(isDisabled(screen.getByRole('button', { name: 'リトライ' }))).toBe(true)
   })
 
-  it('success:trueの場合、成功メッセージが表示される(tri-state)', async () => {
+  it('success:trueの場合、成功toastが表示される(tri-state)', async () => {
     mockRows = [sampleRow]
     mockMutateAsync.mockResolvedValue({ success: true, status: 'exported', error: null })
     render(<ErrorsPage />)
@@ -128,10 +142,10 @@ describe('ErrorsPage - Driveエクスポートエラータブ', () => {
     fireEvent.click(screen.getByRole('button', { name: 'リトライ' }))
     fireEvent.click(screen.getByText('リトライを実行'))
 
-    expect(await screen.findByText('エクスポートに成功しました')).toBeDefined()
+    await waitFor(() => expect(mockToastSuccess).toHaveBeenCalledWith('エクスポートに成功しました'))
   })
 
-  it('success:falseの場合、例外にならずresult.errorが表示される(tri-state最重要ケース)', async () => {
+  it('success:falseの場合、例外にならずresult.errorがtoastで表示される(tri-state最重要ケース)', async () => {
     mockRows = [sampleRow]
     mockMutateAsync.mockResolvedValue({
       success: false,
@@ -144,12 +158,14 @@ describe('ErrorsPage - Driveエクスポートエラータブ', () => {
     fireEvent.click(screen.getByRole('button', { name: 'リトライ' }))
     fireEvent.click(screen.getByText('リトライを実行'))
 
-    expect(
-      await screen.findByText('フリガナが未設定のため利用者フォルダ名を解決できません: 鈴木花子')
-    ).toBeDefined()
+    await waitFor(() =>
+      expect(mockToastError).toHaveBeenCalledWith(
+        'フリガナが未設定のため利用者フォルダ名を解決できません: 鈴木花子'
+      )
+    )
   })
 
-  it('failed-preconditionでthrowされた場合、BEの日本語メッセージがそのまま表示される(getCallableErrorMessage回帰防止)', async () => {
+  it('failed-preconditionでthrowされた場合、BEの日本語メッセージがそのままtoastで表示される(getCallableErrorMessage回帰防止)', async () => {
     mockRows = [sampleRow]
     const err = new Error('Google Drive連携機能が無効です')
     ;(err as Error & { code: string }).code = 'functions/failed-precondition'
@@ -160,10 +176,10 @@ describe('ErrorsPage - Driveエクスポートエラータブ', () => {
     fireEvent.click(screen.getByRole('button', { name: 'リトライ' }))
     fireEvent.click(screen.getByText('リトライを実行'))
 
-    expect(await screen.findByText('Google Drive連携機能が無効です')).toBeDefined()
+    await waitFor(() => expect(mockToastError).toHaveBeenCalledWith('Google Drive連携機能が無効です'))
   })
 
-  it('permission-deniedでthrowされた場合、「権限がありません。」が表示される', async () => {
+  it('permission-deniedでthrowされた場合、「権限がありません。」がtoastで表示される', async () => {
     mockRows = [sampleRow]
     const err = new Error('Admin permission required')
     ;(err as Error & { code: string }).code = 'functions/permission-denied'
@@ -174,7 +190,7 @@ describe('ErrorsPage - Driveエクスポートエラータブ', () => {
     fireEvent.click(screen.getByRole('button', { name: 'リトライ' }))
     fireEvent.click(screen.getByText('リトライを実行'))
 
-    expect(await screen.findByText('権限がありません。')).toBeDefined()
+    await waitFor(() => expect(mockToastError).toHaveBeenCalledWith('権限がありません。'))
   })
 
   it('詳細ダイアログにdriveExportErrorの生文字列が<pre>表示される', () => {
