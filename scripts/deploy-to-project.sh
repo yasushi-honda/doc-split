@@ -231,6 +231,26 @@ if [ "$FULL_DEPLOY" = true ]; then
     echo ""
     log_info "Cloud Functions デプロイ中..."
     cd "$ROOT_DIR"
+
+    # STORAGE_BUCKET: functions/src/index.ts の admin.initializeApp() が
+    # process.env.STORAGE_BUCKET に依存しているが、functions/.env.<project-id> が
+    # 存在しない/不整合だとStorageを直接読み書きするFunctionsが
+    # "Bucket name not specified or invalid" で失敗する(.github/workflows/deploy-functions.yml
+    # で2026-07-08に同根本原因を修正済みだが、本スクリプトには未反映で2026-07-22のDrive機能
+    # E2E疎通確認で再発覚)。scripts/clients/<alias>.env (このスクリプト冒頭でsource済み)を
+    # 単一の真実源とし、既存の.env.<project-id>の他設定(GEMINI_MODEL_ID等)は保持したまま
+    # STORAGE_BUCKET行のみ更新する。
+    if [ -z "$STORAGE_BUCKET" ]; then
+        log_error "STORAGE_BUCKET が未設定です ($CLIENT_ENV を確認してください)"
+        exit 1
+    fi
+    FUNCTIONS_ENV_FILE="$ROOT_DIR/functions/.env.${PROJECT_ID}"
+    touch "$FUNCTIONS_ENV_FILE"
+    grep -v '^STORAGE_BUCKET=' "$FUNCTIONS_ENV_FILE" > "${FUNCTIONS_ENV_FILE}.tmp" || true
+    echo "STORAGE_BUCKET=${STORAGE_BUCKET}" >> "${FUNCTIONS_ENV_FILE}.tmp"
+    mv "${FUNCTIONS_ENV_FILE}.tmp" "$FUNCTIONS_ENV_FILE"
+    log_success "functions/.env.${PROJECT_ID} に STORAGE_BUCKET=${STORAGE_BUCKET} を設定"
+
     firebase deploy --only functions -P "$PROJECT_ALIAS"
     log_success "Functions デプロイ完了"
 
