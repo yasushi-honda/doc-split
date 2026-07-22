@@ -240,6 +240,82 @@ describe('findOrCreateFolder (ADR-0022)', () => {
       expect(createCalls).to.have.lengthOf(0);
     });
 
+    it('ロック獲得後の再検索で2件以上見つかった場合もAmbiguousFolderErrorをthrowする(code-review high指摘#2対応)', async () => {
+      let listCallCount = 0;
+      const createCalls: Record<string, unknown>[] = [];
+      const drive = {
+        files: {
+          list: async () => {
+            listCallCount++;
+            if (listCallCount === 1) {
+              return { data: { files: [] } };
+            }
+            return {
+              data: {
+                files: [
+                  { id: 'dup-1', name: '再検索重複太郎' },
+                  { id: 'dup-2', name: '再検索重複太郎' },
+                ],
+              },
+            };
+          },
+          create: async (params: Record<string, unknown>) => {
+            createCalls.push(params);
+            return { data: { id: 'should-not-be-used' } };
+          },
+        },
+      } as unknown as drive_v3.Drive;
+
+      try {
+        await findOrCreateFolder(drive, db, 'parent-recheck-dup', '再検索重複太郎');
+        expect.fail('AmbiguousFolderErrorがthrowされるべき');
+      } catch (error) {
+        expect(error).to.be.instanceOf(AmbiguousFolderError);
+      }
+      expect(createCalls).to.have.lengthOf(0);
+
+      // 曖昧な状態で停止した場合もロックは解放される(finally節)
+      const lockSnap = await lockDocRef('parent-recheck-dup', '再検索重複太郎').get();
+      expect(lockSnap.exists).to.equal(false);
+    });
+
+    it('release時に他の実行へロックが既に引き継がれていた場合は削除しない(fencing token、code-review high指摘#1対応)', async () => {
+      let releaseCreateGate: (() => void) | undefined;
+      const createGate = new Promise<void>((resolve) => {
+        releaseCreateGate = resolve;
+      });
+
+      const drive = {
+        files: {
+          list: async () => ({ data: { files: [] } }),
+          create: async () => {
+            // ロック保有中に別プロセスがロックを奪ったことをシミュレートできるよう、
+            // create()完了をゲートで足止めする
+            await createGate;
+            return { data: { id: 'original-holder-id' } };
+          },
+        },
+      } as unknown as drive_v3.Drive;
+
+      const findPromise = findOrCreateFolder(drive, db, 'parent-fencing', '横取太郎');
+
+      // findOrCreateFolderがロックを獲得しcreate()内で足止めされるのを待ってから、
+      // 別プロセスが(staleと誤判定して)ロックを奪ったのと同じ状態を直接書き込む
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const lockRef = lockDocRef('parent-fencing', '横取太郎');
+      await lockRef.set({ claimedAtMs: Date.now(), lockToken: 'someone-elses-token' });
+
+      releaseCreateGate?.();
+      const result = await findPromise;
+      expect(result).to.equal('original-holder-id');
+
+      // 元の実行のfinally節はlockTokenが一致しないため削除をスキップし、
+      // 別プロセス(を模した書込み)のロックがそのまま残っているはず
+      const lockSnap = await lockRef.get();
+      expect(lockSnap.exists).to.equal(true);
+      expect(lockSnap.data()?.lockToken).to.equal('someone-elses-token');
+    });
+
     // 注: 真の同時実行(Promise.allで2つのfindOrCreateFolderを未ゲート実行)による
     // レース再現は、Firestore emulatorの新規(未作成)ドキュメントに対するトランザクション
     // 競合検知が実行タイミングにより不安定(検証時に複数回試行し再現したりしなかったり

@@ -21,6 +21,7 @@
 
 import { drive_v3 } from 'googleapis';
 import * as admin from 'firebase-admin';
+import { randomUUID } from 'node:crypto';
 import { SUPPORTS_ALL_DRIVES, escapeQueryValue } from './driveApiConstants';
 
 const FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder';
@@ -64,37 +65,54 @@ function buildFolderLockId(parentId: string, name: string): string {
   return Buffer.from(`${parentId}/${name}`).toString('base64url');
 }
 
+/**
+ * ロックを取得し、所有権トークン(`lockToken`)を返す。`releaseFolderLock`は
+ * このトークンが現在のロック保有者と一致する場合のみ削除する
+ * (code-review high指摘#1対応、2026-07-22): 従来は`claimedAtMs`のみで判定して
+ * おり、staleとみなされ別の実行にロックを奪われた後、元の実行が完了時に
+ * 無条件で`.delete()`すると新しい保有者のロックまで削除してしまっていた
+ * (`executeDriveExport.ts`の`driveExportRunId`と同型の所有権トークンで解決)。
+ */
 async function acquireFolderLock(
   firestore: admin.firestore.Firestore,
   parentId: string,
   name: string
-): Promise<void> {
+): Promise<string> {
   const lockRef = firestore
     .collection(FOLDER_LOCKS_COLLECTION)
     .doc(buildFolderLockId(parentId, name));
+  const lockToken = randomUUID();
   const acquired = await firestore.runTransaction(async (tx) => {
     const snap = await tx.get(lockRef);
     const claimedAtMs = snap.data()?.claimedAtMs as number | undefined;
     if (claimedAtMs !== undefined && Date.now() - claimedAtMs < FOLDER_LOCK_STALE_MS) {
       return false;
     }
-    tx.set(lockRef, { claimedAtMs: Date.now() });
+    tx.set(lockRef, { claimedAtMs: Date.now(), lockToken });
     return true;
   });
   if (!acquired) {
     throw new FolderCreationInProgressError(name, parentId);
   }
+  return lockToken;
 }
 
 async function releaseFolderLock(
   firestore: admin.firestore.Firestore,
   parentId: string,
-  name: string
+  name: string,
+  lockToken: string
 ): Promise<void> {
-  await firestore
+  const lockRef = firestore
     .collection(FOLDER_LOCKS_COLLECTION)
-    .doc(buildFolderLockId(parentId, name))
-    .delete();
+    .doc(buildFolderLockId(parentId, name));
+  await firestore.runTransaction(async (tx) => {
+    const snap = await tx.get(lockRef);
+    if (snap.data()?.lockToken !== lockToken) {
+      return; // 既に他の実行に引き継がれている(superseded) → 削除しない
+    }
+    tx.delete(lockRef);
+  });
 }
 
 /**
@@ -131,12 +149,18 @@ export async function findOrCreateFolder(
   }
 
   // 0件マッチ = 新規作成が必要。異なるdocId間の競合を防ぐためロックを取得する。
-  await acquireFolderLock(firestore, parentId, name);
+  const lockToken = await acquireFolderLock(firestore, parentId, name);
   try {
-    // ロック獲得後に再検索(直前のロック保有者が既に作成済みの可能性があるため)
+    // ロック獲得後に再検索(直前のロック保有者が既に作成済みの可能性があるため)。
+    // 2件以上見つかった場合も、pre-lockの検索と同様にAmbiguousFolderErrorで
+    // 停止する(code-review high指摘#2対応: 従来は`>=1`のみで判定しており、
+    // 2件以上を観測してもfiles[0]を無条件採用し曖昧な状態を見逃していた)。
     const recheckResponse = await drive.files.list(listParams);
     const recheckFiles = recheckResponse.data.files ?? [];
-    if (recheckFiles.length >= 1) {
+    if (recheckFiles.length > 1) {
+      throw new AmbiguousFolderError(name, parentId, recheckFiles.length);
+    }
+    if (recheckFiles.length === 1) {
       const existingId = recheckFiles[0].id;
       if (!existingId) {
         throw new Error(`既存フォルダのidが取得できません: "${name}"`);
@@ -160,6 +184,6 @@ export async function findOrCreateFolder(
     }
     return createdId;
   } finally {
-    await releaseFolderLock(firestore, parentId, name);
+    await releaseFolderLock(firestore, parentId, name, lockToken);
   }
 }
