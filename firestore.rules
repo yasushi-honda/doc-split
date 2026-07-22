@@ -177,8 +177,17 @@ service cloud.firestore {
         // deleteField()でのみ操作する想定(#9参照)。
         && (!('driveExportStatus' in request.resource.data)
             || (('driveExportStatus' in resource.data) && request.resource.data.driveExportStatus == resource.data.driveExportStatus))
-        && (!('driveFileId' in request.resource.data)
-            || (('driveFileId' in resource.data) && request.resource.data.driveFileId == resource.data.driveFileId))
+        // driveFileIdは他4フィールドと異なり削除(deleteField)すら許可しない(様子見#47対応、
+        // 2026-07-22): getReprocessClearFields()/getDriveExportClearFields()のいずれも
+        // driveFileIdを意図的にクリア対象から除外しており(exportDocument.tsのresolveDriveFile()
+        // が内容最新化・重複防止に利用するため)、クライアントSDK経由での削除を正当化する
+        // 業務フローが存在しない。アプリコード側の1箇所(クリア対象からの除外)のみに依存せず、
+        // ルール層でも「削除も含め一切の変更を禁止」する多層防御とする。フィールドの存在有無
+        // 自体の遷移(追加/削除)を禁止したうえで、存在する場合は値も不変を要求する
+        // (Codex review #569 2nd round P2で修正されたnull注入経路と同型の抜け穴を作らないため、
+        // `.get(key, null)`同士の等価比較だけに頼らず`in`の存在判定を主に用いる)。
+        && (('driveFileId' in request.resource.data) == ('driveFileId' in resource.data))
+        && (!('driveFileId' in request.resource.data) || request.resource.data.driveFileId == resource.data.driveFileId)
         && (!('driveExportedAt' in request.resource.data)
             || (('driveExportedAt' in resource.data) && request.resource.data.driveExportedAt == resource.data.driveExportedAt))
         && (!('driveExportError' in request.resource.data)

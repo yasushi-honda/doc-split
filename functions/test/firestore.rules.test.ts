@@ -1175,6 +1175,30 @@ describe('Firestore Security Rules', () => {
       await assertFails(updateDoc(docRef, { driveExportError: 'forged error' }));
     });
 
+    it('driveFileIdの削除(deleteField)はdriveExportStatus等の他4フィールドと異なり拒否される(様子見#47対応、2026-07-22)', async () => {
+      // getReprocessClearFields()/getDriveExportClearFields()のいずれもdriveFileIdを
+      // クリア対象から意図的に除外している(exportDocument.tsのresolveDriveFile()が
+      // 内容最新化・重複防止に利用するため)。クライアントSDK経由での削除を正当化する
+      // 業務フローが存在しないため、ルール層でも削除自体を拒否する多層防御を検証する。
+      // driveExportStatus等の他4フィールドの削除が引き続き許可されることは、上記の
+      // 「エクスポート済みdocの再処理」テスト(driveExportStatus/driveExportedAt/
+      // driveExportError/driveExportRunIdをdeleteField()する既存assertSucceeds)で
+      // カバー済みのためここでは重複させない。
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'documents', 'doc-drive-file-id-delete'), {
+          fileName: 'test.pdf',
+          status: 'processed',
+          verified: true,
+          driveFileId: 'existing-drive-file-id',
+        });
+      });
+
+      const docRef = doc(normalUser.firestore(), 'documents', 'doc-drive-file-id-delete');
+      await assertFails(updateDoc(docRef, { driveFileId: deleteField() }));
+    });
+
     it('サーバー専有フィールドの削除(deleteField)は引き続き許可される', async () => {
       const normalUser = testEnv.authenticatedContext(normalUid);
 

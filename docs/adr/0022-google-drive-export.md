@@ -51,6 +51,8 @@ documentの`verified`フィールドがfalse→trueになる瞬間を、Cloud Fu
 
 例外として、`frontend/src/hooks/useDocuments.ts`の`getReprocessClearFields()`（再処理時のフィールドクリア）は、`driveExportStatus`/`driveExportedAt`/`driveExportError`/`driveExportRunId`の4フィールドを`deleteField()`で削除する。これは`documents` collectionの`firestore.rules` update許可フィールドリスト（`hasOnly([...])`方式）への追加が必要（`retryCount`/`provenance`等の既存の派生フィールドと同型）だが、削除または無変更のみを許可する専用ガードにより、FEが値を新規設定・上書きすることはできない（#178教訓の延長。再処理でDriveエクスポートのクレーム状態が残存すると、訂正後の再確認がトリガーのクレームでスキップされ、二度と再エクスポートされなくなる不具合の再発防止）。
 
+**`driveFileId`は削除(deleteField)自体も拒否する**（様子見#47対応、2026-07-22）: 上記4フィールドは「削除または無変更のみ許可」だが、`driveFileId`は次項の通り再処理でも意図的にクリアしないため、クライアントSDK経由での削除を正当化する業務フローが存在しない。`firestore.rules`側で`driveFileId`のみ「存在有無の遷移(追加/削除)自体を禁止し、存在する場合は値も不変」という一段厳しいガードに変更し、アプリコード側（クリア対象からの除外）1箇所のみに依存しない多層防御とした。
+
 **`driveFileId`は例外的に再処理時もクリアしない**（code-review xhigh指摘対応、2026-07-21）。理由は次項参照。
 
 トリガー自身の書き戻し（`driveExportStatus`の更新）による再発火は、`before?.verified !== true && after.verified === true`という「立ち上がりエッジのみ」の判定で防ぐ（既存の`searchIndexer.ts`のハッシュ比較と同じ思想）。
@@ -75,6 +77,10 @@ stateDiagram-v2
 **`driveFileId`優先のmove/rename/内容更新**（code-review xhigh指摘対応、2026-07-21）: 当初の実装では`getReprocessClearFields()`が`driveFileId`も削除していたため、再処理でフォルダパスが変わる訂正（利用者取り違えの修正等）をすると、`exportDocument()`の`appProperties`検索が新しいフォルダ配下しか見ないため旧フォルダに誤配置ファイルが孤児として残り続け、フォルダパスが変わらない訂正では内容が更新されない（stale content）、という2つの不具合があった。`shared/types.ts`の`driveFileId`コメントが元々「重複防止・**再送先**の一意キー」としていた設計意図に立ち返り、`driveFileId`を再処理でもクリアせず保持するよう変更した。`exportDocument()`は`doc.driveFileId`がある場合、`drive.files.get()`で実体を確認したうえで`drive.files.update()`（`addParents`/`removeParents`でフォルダ移動、`requestBody.name`でリネーム、`media`で内容更新を1回のAPI呼び出しで実施）を直接行う。ファイルがDrive上に見つからない（404、手動削除等）場合のみ、従来の`appProperties`ベースのfind-or-create（`findOrUploadFile()`）にフォールバックする。
 
 **既知の残課題（本修正のスコープ外）**: 初回エクスポート時（`driveFileId`が未設定）に2つの実行が真に並走すると、`findOrUploadFile()`のlist-then-createがTOCTOU競合を起こし、Drive上に同一`docId`のファイルが重複作成されうる（以後`AmbiguousFileError`で恒久停止）。Phase 2以降でDrive側の排他制御（例: 作成前にFirestore側でアップロード試行中マーカーを持つ等）を検討する。
+
+**`findOrUploadFile()`のappProperties一致ファイル再利用時も内容(media)を最新化する**（様子見#54対応、2026-07-22）: `driveFileId`が404/`trashed`でフォールバックした場合、または初回エクスポートで過去の孤児アップロードと一致した場合、以前は該当ファイルのidだけを再利用し内容は更新していなかった。この孤児ファイルが`resolveDriveFile()`のフォールバック経由で見つかった場合、現在の`fileUrl`の内容と一致する保証がない（過去の失敗実行時点の内容のまま古くなっている可能性がある）ため、idを再利用する場合も`files.update()`で内容を必ず最新化するよう変更し、`driveFileId`優先パスと同じ「内容は常に最新」という保証を両経路で揃えた。
+
+**Phase1の既知の制約: `verified`維持のままの編集では再エクスポートされない**（PLAUSIBLE#49、2026-07-22決定）: `driveExportTrigger.ts`の`justVerified`判定（`verified`のfalse→true立ち上がりエッジのみ）は、`verified:true`のまま`customerName`/`documentType`等を編集した場合には反応しない設計である。バグではなく意図的な設計判断として本ADRに明記する: Phase1スコープでは、エクスポート後に内容を訂正する場合は運用上「一旦`verified:false`に戻してから再確認する」フローを前提とし、`verified`を維持したままの編集は再エクスポートの対象外とする。この制約を解消する自動再エクスポートの仕組みはPhase2以降で検討する。
 
 ### 7. スコープはPhase 1（MVP）に限定
 
