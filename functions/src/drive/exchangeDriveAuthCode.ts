@@ -12,6 +12,12 @@
  * 4. refresh_tokenをSecret Managerに保存
  * 5. Firestore settings/drive.authMode を 'oauth' に更新
  * 6. Drive APIで疎通確認(about.get)
+ *
+ * `exchangeDriveAuthCodeCore`は外部依存(Secret Manager/OAuth2/Drive API)をDI
+ * (`ExchangeDriveAuthCodeDeps`)で注入する(`retryDriveExportCore`と同型パターン)。
+ * このファイルにはOAuth外部依存をモックする手段(`jest.mock`等)が無く、統合テストで
+ * `settings/drive`への部分書込みの安全性(CLAUDE.md MUST)を検証するために必要
+ * (code-review指摘#48対応、2026-07-22)。
  */
 
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
@@ -21,6 +27,100 @@ import { getSecretValue, setSecretValue } from '../utils/gmailAuth';
 import { DRIVE_SETTINGS_DOC_PATH } from '../utils/driveAuth';
 
 const db = admin.firestore();
+
+/**
+ * `exchangeCode`がrefresh_tokenを返さなかった場合にthrowするマーカーエラー。
+ * 「既にこのアプリを認可済み」等でGoogleがrefresh_tokenを再発行しないケースを表す。
+ * メッセージ自体がユーザー向け日本語文言(onCallラッパーがfailed-preconditionへ
+ * そのまま変換して返す、code-review指摘#65対応: 英語メッセージのGmail回帰を修正)。
+ */
+export class DriveRefreshTokenMissingError extends Error {
+  constructor() {
+    super(
+      'リフレッシュトークンを取得できませんでした。既にこのアプリを認可済みの可能性があります。' +
+        'https://myaccount.google.com/permissions でアクセスを解除してから、' +
+        'もう一度「Google Drive連携」ボタンを押してください。'
+    );
+    this.name = 'DriveRefreshTokenMissingError';
+  }
+}
+
+export interface ExchangeDriveAuthCodeDeps {
+  /** Secret Managerから値を取得。テストでは固定値を返すfakeに差し替える。 */
+  getSecret: (name: string) => Promise<string>;
+  /** Secret Managerへ値を保存。テストでは呼び出し記録のみのfakeに差し替える。 */
+  setSecret: (name: string, value: string) => Promise<void>;
+  /** OAuth認証コードをrefresh_tokenに交換する(GIS popupフローの`postmessage`redirect_uri)。 */
+  exchangeCode: (params: {
+    clientId: string;
+    clientSecret: string;
+    code: string;
+  }) => Promise<{ refreshToken: string | null }>;
+  /** refresh_tokenでDrive APIの疎通確認(about.get)を行い、接続先メールアドレスを返す。 */
+  fetchConnectedEmail: (params: {
+    clientId: string;
+    clientSecret: string;
+    refreshToken: string;
+  }) => Promise<string>;
+}
+
+export interface ExchangeDriveAuthCodeResult {
+  success: true;
+  email: string;
+}
+
+/**
+ * 交換本体ロジック(認証・admin権限チェック・onCall配管から独立、テスト容易性のため
+ * `retryDriveExportCore`と同型パターン)。
+ */
+export async function exchangeDriveAuthCodeCore(
+  firestore: admin.firestore.Firestore,
+  code: string,
+  deps: ExchangeDriveAuthCodeDeps
+): Promise<ExchangeDriveAuthCodeResult> {
+  const [clientId, clientSecret] = await Promise.all([
+    deps.getSecret('drive-oauth-client-id'),
+    deps.getSecret('drive-oauth-client-secret'),
+  ]);
+
+  const { refreshToken } = await deps.exchangeCode({ clientId, clientSecret, code });
+  if (!refreshToken) {
+    throw new DriveRefreshTokenMissingError();
+  }
+
+  await deps.setSecret('drive-oauth-refresh-token', refreshToken);
+
+  // Firestore settings/drive.authMode を 'oauth' に更新(部分書込み1/2)
+  await firestore.doc(DRIVE_SETTINGS_DOC_PATH).set({ authMode: 'oauth' }, { merge: true });
+
+  const email = await deps.fetchConnectedEmail({ clientId, clientSecret, refreshToken });
+
+  // connectedEmailも更新(部分書込み2/2)
+  await firestore.doc(DRIVE_SETTINGS_DOC_PATH).set({ connectedEmail: email }, { merge: true });
+
+  return { success: true, email };
+}
+
+const productionDeps: ExchangeDriveAuthCodeDeps = {
+  getSecret: getSecretValue,
+  setSecret: setSecretValue,
+  exchangeCode: async ({ clientId, clientSecret, code }) => {
+    const oauth2Client = new google.auth.OAuth2(
+      clientId,
+      clientSecret,
+      'postmessage' // GIS popup flow uses 'postmessage' as redirect_uri
+    );
+    const { tokens } = await oauth2Client.getToken(code);
+    return { refreshToken: tokens.refresh_token ?? null };
+  },
+  fetchConnectedEmail: async ({ clientId, clientSecret, refreshToken }) => {
+    const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, 'postmessage');
+    oauth2Client.setCredentials({ refresh_token: refreshToken });
+    const drive = google.drive({ version: 'v3', auth: oauth2Client });
+    const about = await drive.about.get({ fields: 'user' });
+    return about.data.user?.emailAddress || '';
+  },
+};
 
 export const exchangeDriveAuthCode = onCall(
   { region: 'asia-northeast1', timeoutSeconds: 60 },
@@ -46,61 +146,20 @@ export const exchangeDriveAuthCode = onCall(
     }
 
     try {
-      // 4. Secret Managerからclient-id/client-secretを取得
-      const [clientId, clientSecret] = await Promise.all([
-        getSecretValue('drive-oauth-client-id'),
-        getSecretValue('drive-oauth-client-secret'),
-      ]);
-
-      // 5. auth code → tokens交換
-      const oauth2Client = new google.auth.OAuth2(
-        clientId,
-        clientSecret,
-        'postmessage' // GIS popup flow uses 'postmessage' as redirect_uri
-      );
-
-      const { tokens } = await oauth2Client.getToken(code);
-
-      if (!tokens.refresh_token) {
-        throw new HttpsError(
-          'failed-precondition',
-          'No refresh token returned. The user may have already authorized this app. ' +
-          'Please revoke access at https://myaccount.google.com/permissions and try again.'
-        );
-      }
-
-      // 6. refresh_tokenをSecret Managerに保存
-      await setSecretValue('drive-oauth-refresh-token', tokens.refresh_token);
-
-      // 7. Firestore settings/drive.authMode を 'oauth' に更新
-      await db.doc(DRIVE_SETTINGS_DOC_PATH).set(
-        { authMode: 'oauth' },
-        { merge: true }
-      );
-
-      // 8. Drive API疎通確認
-      oauth2Client.setCredentials(tokens);
-      const drive = google.drive({ version: 'v3', auth: oauth2Client });
-      const about = await drive.about.get({ fields: 'user' });
-      const email = about.data.user?.emailAddress || '';
-
-      // 9. connectedEmailも更新
-      await db.doc(DRIVE_SETTINGS_DOC_PATH).set(
-        { connectedEmail: email },
-        { merge: true }
-      );
+      const result = await exchangeDriveAuthCodeCore(db, code, productionDeps);
 
       const callerEmail = request.auth.token.email || request.auth.uid;
-      console.log(`Drive OAuth connected successfully for: ${email} by user: ${callerEmail}`);
+      console.log(`Drive OAuth connected successfully for: ${result.email} by user: ${callerEmail}`);
 
-      return {
-        success: true,
-        email,
-      };
+      return result;
     } catch (error) {
       // HttpsErrorはそのまま再throw
       if (error instanceof HttpsError) {
         throw error;
+      }
+
+      if (error instanceof DriveRefreshTokenMissingError) {
+        throw new HttpsError('failed-precondition', error.message);
       }
 
       const message = error instanceof Error ? error.message : String(error);
