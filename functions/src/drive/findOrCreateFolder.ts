@@ -184,6 +184,18 @@ export async function findOrCreateFolder(
     }
     return createdId;
   } finally {
-    await releaseFolderLock(firestore, parentId, name, lockToken);
+    // releaseFolderLock自体の失敗がtryブロックの戻り値/エラーを握りつぶさないよう、
+    // 独立したtry/catchで囲む(rules/error-handling.md §1: 状態復旧・エラーハンドラの
+    // 各ステップは独立させ、他のステップの失敗に影響されないようにする)。
+    // 解放に失敗してもFOLDER_LOCK_STALE_MS経過後は次の呼び出しが上書き取得できるため、
+    // 自己修復可能(orphanしたロックが恒久的にブロックし続けることはない)。
+    try {
+      await releaseFolderLock(firestore, parentId, name, lockToken);
+    } catch (releaseError) {
+      console.error(
+        `[findOrCreateFolder] ロック解放に失敗しました("${name}"、親フォルダ: ${parentId}):`,
+        releaseError
+      );
+    }
   }
 }
