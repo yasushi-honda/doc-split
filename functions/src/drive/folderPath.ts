@@ -52,6 +52,18 @@ export class DocumentCategoryMissingError extends Error {
 }
 
 /**
+ * customerセグメント解決時、`customerName`が空文字/空白のみの場合にthrow
+ * (code-review xhigh指摘#6対応)。`CareManagerMissingError`/`DocumentCategoryMissingError`
+ * と対をなす、fail-visible優先のガード。
+ */
+export class CustomerNameMissingError extends Error {
+  constructor() {
+    super('利用者名が未設定のためフォルダ名を解決できません');
+    this.name = 'CustomerNameMissingError';
+  }
+}
+
+/**
  * dateセグメント解決時（`onlyForCategories`該当時のみ）、`fileDate`が未設定(null)の
  * 場合にthrow。UIから書類日付をクリア保存する経路が実在するため、`.getFullYear()`等の
  * 呼び出しで無防備にクラッシュさせず、fail-visibleに倒す。
@@ -88,14 +100,19 @@ function resolveCareManagerSegment(
   doc: FolderPathDocInput,
   segment: Extract<DriveFolderSegment, { type: 'careManager' }>
 ): string {
-  if (!doc.careManagerName.trim()) {
+  // trim済みの値を以降すべてで使う(code-review xhigh指摘#5対応、2026-07-22): 元は
+  // untrimmedの careManagerName でガード判定した後もuntrimmedのまま使っていたため、
+  // 先頭/末尾に空白のみを含む値(例:" 田中")がガードを通過しつつ空白始まりの
+  // 壊れたフォルダ名を生成していた。
+  const careManagerName = doc.careManagerName.trim();
+  if (!careManagerName) {
     throw new CareManagerMissingError();
   }
   if (segment.format === 'nameOnly') {
-    return doc.careManagerName;
+    return careManagerName;
   }
-  const initial = doc.careManagerName.charAt(0);
-  return joinInitialAndName(initial, doc.careManagerName, segment.separator ?? DRIVE_SEGMENT_SEPARATOR_DEFAULT.careManager);
+  const initial = careManagerName.charAt(0);
+  return joinInitialAndName(initial, careManagerName, segment.separator ?? DRIVE_SEGMENT_SEPARATOR_DEFAULT.careManager);
 }
 
 function resolveCustomerSegment(
@@ -103,8 +120,16 @@ function resolveCustomerSegment(
   segment: Extract<DriveFolderSegment, { type: 'customer' }>,
   opts: FolderPathOptions
 ): string {
+  // customerName自体の空/空白チェック(code-review xhigh指摘#6対応、2026-07-22):
+  // 元はfuriganaのみガードしておりcustomerNameが空文字/空白のみでも素通りしていた
+  // (careManager/documentCategoryの同種ガードと非対称だった)。
+  const customerName = doc.customerName.trim();
+  if (!customerName) {
+    throw new CustomerNameMissingError();
+  }
+
   if (segment.format === 'nameOnly') {
-    return doc.customerName;
+    return customerName;
   }
 
   const furigana = doc.customerFurigana?.trim();
@@ -112,12 +137,12 @@ function resolveCustomerSegment(
   if (furigana) {
     initial = furigana.charAt(0);
   } else if ((opts.furiganaFallback ?? 'stop') === 'useNameInitial') {
-    initial = doc.customerName.charAt(0);
+    initial = customerName.charAt(0);
   } else {
-    throw new FuriganaMissingError(doc.customerName);
+    throw new FuriganaMissingError(customerName);
   }
 
-  return joinInitialAndName(initial, doc.customerName, segment.separator ?? DRIVE_SEGMENT_SEPARATOR_DEFAULT.customer);
+  return joinInitialAndName(initial, customerName, segment.separator ?? DRIVE_SEGMENT_SEPARATOR_DEFAULT.customer);
 }
 
 function resolveDateSegment(

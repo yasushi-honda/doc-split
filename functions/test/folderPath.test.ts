@@ -7,6 +7,7 @@ import {
   resolveFolderSegments,
   FuriganaMissingError,
   CareManagerMissingError,
+  CustomerNameMissingError,
   DocumentCategoryMissingError,
   FileDateMissingError,
   FolderPathDocInput,
@@ -127,6 +128,35 @@ describe('resolveFolderSegments', () => {
   it('careManagerNameが空でもnameOnly形式で同様にCareManagerMissingErrorをthrowする', () => {
     const doc = makeDoc({ careManagerName: '' });
     expect(() => resolveFolderSegments(doc, COCORO_TEMPLATE)).to.throw(CareManagerMissingError);
+  });
+
+  it('careManagerNameが先頭空白+実データの場合はガードを通過するがtrim済みの値からフォルダ名が生成される(code-review xhigh指摘#5対応)', () => {
+    const doc = makeDoc({ careManagerName: ' 田中太郎' });
+    expect(() => resolveFolderSegments(doc, KANAME_TEMPLATE)).to.not.throw();
+    const result = resolveFolderSegments(doc, KANAME_TEMPLATE);
+    // 頭文字が空白ではなく"田"になっていること(untrimmedのままだと頭文字が空白になる)
+    expect(result[1]).to.equal('田 田中太郎');
+  });
+
+  it('careManagerNameが先頭空白+実データの場合、nameOnly形式でもtrim済みの値を返す', () => {
+    const doc = makeDoc({ careManagerName: ' 田中太郎' });
+    const result = resolveFolderSegments(doc, COCORO_TEMPLATE);
+    expect(result[1]).to.equal('田中太郎');
+  });
+
+  it('customerNameが空文字の場合はCustomerNameMissingErrorをthrowする', () => {
+    const doc = makeDoc({ customerName: '' });
+    expect(() => resolveFolderSegments(doc, KANAME_TEMPLATE)).to.throw(CustomerNameMissingError);
+  });
+
+  it('customerNameが空白のみの場合もCustomerNameMissingErrorをthrowする', () => {
+    const doc = makeDoc({ customerName: '   ' });
+    expect(() => resolveFolderSegments(doc, KANAME_TEMPLATE)).to.throw(CustomerNameMissingError);
+  });
+
+  it('customerNameが空でもnameOnly形式で同様にCustomerNameMissingErrorをthrowする(code-review xhigh指摘#6対応)', () => {
+    const doc = makeDoc({ customerName: '' });
+    expect(() => resolveFolderSegments(doc, COCORO_TEMPLATE)).to.throw(CustomerNameMissingError);
   });
 
   it('documentCategoryが空文字の場合はDocumentCategoryMissingErrorをthrowする', () => {
