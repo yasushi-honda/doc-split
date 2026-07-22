@@ -12,6 +12,7 @@ import {
   normalizeSummary,
   getReprocessClearFields,
   getReprocessDetailClearFields,
+  getDriveExportClearFields,
   resolveDetailFields,
   applySearchTextFilter,
 } from '../useDocuments'
@@ -586,6 +587,33 @@ describe('getReprocessClearFields (Issue #215: 旧3キー + 新summary 全て de
       expect(fields.officeConfirmed).toBe(false)
       expect(fields.verified).toBe(false)
     })
+  })
+})
+
+// ADR-0022 Phase1、code-review指摘#42対応(2026-07-22): getReprocessClearFields()と
+// useDocumentVerification.tsのmarkAsUnverifiedの両方から呼ばれる共通ヘルパー
+describe('getDriveExportClearFields (ADR-0022 code-review指摘#42対応)', () => {
+  it('Drive系4フィールド(driveExportStatus/driveExportedAt/driveExportError/driveExportRunId)のみを返す', () => {
+    const fields = getDriveExportClearFields()
+    expect(Object.keys(fields).sort()).toEqual([
+      'driveExportError',
+      'driveExportRunId',
+      'driveExportStatus',
+      'driveExportedAt',
+    ])
+  })
+
+  it('driveFileId は含まない(旧Driveファイルへの参照を保持する必要があるため)', () => {
+    const fields = getDriveExportClearFields()
+    expect(fields).not.toHaveProperty('driveFileId')
+  })
+
+  it('4フィールドとも deleteField sentinel (firestore.rulesは削除または無変更のみ許可)', () => {
+    const fields = getDriveExportClearFields()
+    expect(deleteField().isEqual(fields.driveExportStatus)).toBe(true)
+    expect(deleteField().isEqual(fields.driveExportedAt)).toBe(true)
+    expect(deleteField().isEqual(fields.driveExportError)).toBe(true)
+    expect(deleteField().isEqual(fields.driveExportRunId)).toBe(true)
   })
 })
 

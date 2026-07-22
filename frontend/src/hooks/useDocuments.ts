@@ -282,6 +282,27 @@ export function updateDocumentInListCache(
 // ============================================
 
 /**
+ * Google Driveエクスポート状態フィールドのクリア用ファクトリ関数(ADR-0022 Phase1、
+ * code-review指摘#42対応、2026-07-22)。`getReprocessClearFields()`(再処理時)と
+ * `useDocumentVerification.ts`の`markAsUnverified`(未確認に戻す時)の両方から呼ばれる
+ * 共通ロジック。deleteField()を毎回生成する理由・`driveFileId`を意図的にクリアしない
+ * 理由は`getReprocessClearFields()`本体のDrive系フィールドのコメント参照。
+ *
+ * firestore.rules側はこの5フィールドについて削除(deleteField)または無変更のみを許可する
+ * 専用ガードを持つため、値の新規設定・上書きにはならないこの関数の戻り値はそのまま
+ * update()に渡せる(rules変更不要)。
+ */
+export function getDriveExportClearFields() {
+  const df = deleteField()
+  return {
+    driveExportStatus: df,
+    driveExportedAt: df,
+    driveExportError: df,
+    driveExportRunId: df,
+  }
+}
+
+/**
  * 再処理時にリセットすべき親docの全フィールドを返すファクトリ関数
  * 直接の呼出元は appendReprocessClearToBatch のみ（再処理3経路は
  * ヘルパー経由で間接利用）。deleteField() はファクトリ関数内で毎回生成（安全性）
@@ -376,10 +397,7 @@ export function getReprocessClearFields(preserveDistributionFields: boolean = fa
     // に孤児ファイルが残置される(誤配置)。フォルダパスが変わらない訂正では内容が更新されない
     // (stale content)。driveFileId を保持したまま渡すことで、exportDocument() が
     // drive.files.update() でその実体を直接 移動/リネーム/内容更新 できるようにする。
-    driveExportStatus: df,
-    driveExportedAt: df,
-    driveExportError: df,
-    driveExportRunId: df,
+    ...getDriveExportClearFields(),
   }
 }
 
