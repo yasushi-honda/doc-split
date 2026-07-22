@@ -21,9 +21,10 @@
  *    冪等性チェック付きfind-or-create)にフォールバックする。
  *
  * `driveExportStatus`のexporting遷移とerror時の書込みは呼び出し元
- * (`executeDriveExport.ts`)の責務。本関数はFuriganaMissingError /
+ * (`executeDriveExport.ts`)の責務。本関数はFuriganaMissingError / CustomerNameMissingError /
  * CareManagerMissingError / DocumentCategoryMissingError / FileDateMissingError /
- * AmbiguousFolderError / AmbiguousFileError / DriveSettingsIncompleteErrorを
+ * AmbiguousFolderError / FolderCreationInProgressError / AmbiguousFileError /
+ * DriveSettingsIncompleteErrorを
  * そのままthrowし、呼び出し元がdriveExportStatus:'error'への遷移に使う
  * (fail-visible、Drive書き込みは発生しない)。
  *
@@ -311,7 +312,7 @@ export async function exportDocument(
   const drive = deps.drive ?? (await getDriveClient());
   let parentId = rootFolderId;
   for (const segmentName of segments) {
-    parentId = await findOrCreateFolder(drive, parentId, segmentName);
+    parentId = await findOrCreateFolder(drive, db, parentId, segmentName);
   }
 
   const driveFileId = await resolveDriveFile(drive, parentId, docId, doc, deps);
