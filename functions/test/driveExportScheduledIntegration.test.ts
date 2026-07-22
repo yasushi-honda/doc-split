@@ -17,13 +17,16 @@ import { cleanupCollections } from './helpers/cleanupEmulator';
 import {
   sweepStuckDriveExports,
   DRIVE_EXPORT_SCHEDULED_BATCH_SIZE,
+  DRIVE_EXPORT_SCHEDULED_PAGE_SIZE,
   DRIVE_EXPORT_ERROR_RETRY_THRESHOLD_MS,
   DRIVE_EXPORT_STUCK_EXPORTING_THRESHOLD_MS,
 } from '../src/drive/driveExportScheduled';
 import { MASTER_PATHS } from '../src/utils/masterPaths';
 
 const db = admin.firestore();
-const COLLECTIONS_TO_CLEAN: readonly string[] = ['documents', 'settings', MASTER_PATHS.customers];
+// 'internal'はページネーションカーソル(internal/driveExportSweepState)の永続化先。
+// テスト間でカーソルが残留するとページング挙動が汚染されるため必ずクリーンアップする。
+const COLLECTIONS_TO_CLEAN: readonly string[] = ['documents', 'settings', MASTER_PATHS.customers, 'internal'];
 // 境界より確実に過去/未来になるよう +60s のバッファ
 const BUFFER_MS = 60_000;
 
@@ -247,5 +250,64 @@ describe('sweepStuckDriveExports (ADR-0022 Phase 1 Task8)', () => {
 
     expect(result).to.deep.equal({ requeued: 0, skipped: 0 });
     expect(createCalls).to.have.lengthOf(0);
+  });
+
+  describe('ページネーション(code-review high指摘#44対応)', () => {
+    it('starvation回帰: PAGE_SIZEを超えるbacklogでも2回のスイープでカーソルが前進し先頭ページ外のdocにも届く', async () => {
+      const staleUpdatedAt = admin.firestore.Timestamp.fromMillis(
+        Date.now() - DRIVE_EXPORT_ERROR_RETRY_THRESHOLD_MS - BUFFER_MS
+      );
+      const totalCount = DRIVE_EXPORT_SCHEDULED_PAGE_SIZE + 5; // 45件、40件のページを超えるbacklog
+      const docIds = await Promise.all(
+        Array.from({ length: totalCount }, () =>
+          seedDocument({ driveExportStatus: 'error', updatedAt: staleUpdatedAt })
+        )
+      );
+      // orderBy(FieldPath.documentId())と同じ並び順(文字列昇順)で末尾のdocIdを特定する。
+      // 45件中末尾5件は1回目のページ(先頭40件)には含まれず、旧実装(orderBy無し+
+      // カーソル無し)では2回目以降のスイープでも同じ~40件が返り続け永久に処理されない。
+      const sortedIds = [...docIds].sort();
+      const tailDocId = sortedIds[sortedIds.length - 1];
+      const { drive } = makeFakeDrive({
+        createdIds: Array.from({ length: totalCount * 2 }, (_, i) => `id-${i}`),
+      });
+
+      const first = await sweepStuckDriveExports(db, {
+        drive,
+        downloadFile: async () => Buffer.from('x'),
+      });
+      expect(first.requeued).to.equal(DRIVE_EXPORT_SCHEDULED_BATCH_SIZE);
+      // 1回目終了時点では末尾のdocはまだ先頭ページの外にあり未処理のはず
+      expect((await getDoc(tailDocId)).driveExportStatus).to.equal('error');
+
+      const second = await sweepStuckDriveExports(db, {
+        drive,
+        downloadFile: async () => Buffer.from('x'),
+      });
+      expect(second.requeued).to.be.greaterThan(0);
+      // 2回目のスイープでカーソルが前進し、末尾のdocも処理対象に入ったことを確認
+      expect((await getDoc(tailDocId)).driveExportStatus).to.equal('exported');
+    });
+
+    it('ページ末尾(スキャン件数がPAGE_SIZE未満)に達したらカーソルをリセットし次回は先頭から周回する', async () => {
+      const staleUpdatedAt = admin.firestore.Timestamp.fromMillis(
+        Date.now() - DRIVE_EXPORT_ERROR_RETRY_THRESHOLD_MS - BUFFER_MS
+      );
+      await Promise.all(
+        Array.from({ length: 3 }, () =>
+          seedDocument({ driveExportStatus: 'error', updatedAt: staleUpdatedAt })
+        )
+      );
+      const { drive } = makeFakeDrive({ createdIds: ['a', 'b', 'c', 'd', 'e', 'f'] });
+
+      const result = await sweepStuckDriveExports(db, {
+        drive,
+        downloadFile: async () => Buffer.from('x'),
+      });
+      expect(result.requeued).to.equal(3);
+
+      const cursorSnap = await db.doc('internal/driveExportSweepState').get();
+      expect(cursorSnap.data()?.lastDocId ?? null).to.be.null;
+    });
   });
 });

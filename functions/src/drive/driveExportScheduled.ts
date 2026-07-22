@@ -8,6 +8,14 @@
  * `driveExportStatus`は単一フィールドの`in`クエリのみで絞り込み(複合indexが不要な
  * equality query)、`updatedAt`によるスタック判定はアプリ側でフィルタする
  * (件数が少ない想定のため、複合indexデプロイの運用負荷を避ける設計選択)。
+ *
+ * ページネーション(code-review high指摘#44対応、2026-07-22): 旧実装は`.limit(40)`
+ * のみで`orderBy`が無く、backlogが40件を超えると同じ~40件(Firestoreの既定順序)が
+ * 毎回返り続け、それ以降のdocumentが永久に処理されない(starvation)。
+ * `orderBy(FieldPath.documentId())`はFirestoreの既定順序と一致し、`in`フィルタと
+ * 組み合わせても複合indexが不要なため、`internal/driveExportSweepState`に持続する
+ * カーソル(`lastDocId`)でページを進める。ページ末尾(スキャン件数がPAGE_SIZE未満)に
+ * 達したらカーソルをリセットし、次回実行は先頭から周回する。
  */
 
 import { onSchedule } from 'firebase-functions/v2/scheduler';
@@ -21,6 +29,27 @@ const db = admin.firestore();
 
 /** 1回のスケジュール実行で再エンキューする最大件数 */
 export const DRIVE_EXPORT_SCHEDULED_BATCH_SIZE = 10;
+
+/** 1回のスケジュール実行でスキャンする件数(ページサイズ)。旧`.limit(40)`と同じ値を維持。 */
+export const DRIVE_EXPORT_SCHEDULED_PAGE_SIZE = DRIVE_EXPORT_SCHEDULED_BATCH_SIZE * 4;
+
+/** ページネーションカーソルの永続化先。Admin SDK専有(firestore.rules変更不要)。 */
+const SWEEP_STATE_DOC_PATH = 'internal/driveExportSweepState';
+
+async function readSweepCursor(firestore: admin.firestore.Firestore): Promise<string | null> {
+  const snap = await firestore.doc(SWEEP_STATE_DOC_PATH).get();
+  return (snap.data()?.lastDocId as string | undefined) ?? null;
+}
+
+async function writeSweepCursor(
+  firestore: admin.firestore.Firestore,
+  lastDocId: string | null
+): Promise<void> {
+  await firestore.doc(SWEEP_STATE_DOC_PATH).set({
+    lastDocId,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+}
 
 /**
  * `error`滞留の再試行間隔。直後の連続リトライ(手動リトライ直後の二重実行等)を避ける。
@@ -47,14 +76,24 @@ export async function sweepStuckDriveExports(
   firestore: admin.firestore.Firestore,
   exportDeps: Partial<ExportDocumentDeps> = {}
 ): Promise<SweepResult> {
-  const candidates = await firestore
+  const cursor = await readSweepCursor(firestore);
+
+  let query = firestore
     .collection('documents')
     .where('driveExportStatus', 'in', ['error', 'exporting'])
-    .limit(DRIVE_EXPORT_SCHEDULED_BATCH_SIZE * 4)
-    .get();
+    .orderBy(admin.firestore.FieldPath.documentId())
+    .limit(DRIVE_EXPORT_SCHEDULED_PAGE_SIZE);
+  if (cursor) {
+    query = query.startAfter(cursor);
+  }
+  const candidates = await query.get();
 
   const result: SweepResult = { requeued: 0, skipped: 0 };
   if (candidates.empty) {
+    // ページ末尾(または対象0件)。次回実行は先頭から周回する。
+    if (cursor) {
+      await writeSweepCursor(firestore, null);
+    }
     return result;
   }
 
@@ -91,6 +130,15 @@ export async function sweepStuckDriveExports(
       result.skipped++;
     }
   }
+
+  // カーソルは「このページで最後にスキャンしたdocId」まで進める(requeue成否に関わらず)。
+  // これにより非staleなdocが毎回スキャンされ続けることを避け、前進を保証する。
+  // ページが丸ごとPAGE_SIZE未満(=末尾に到達)なら次回周回のためリセットする。
+  const lastScannedId = candidates.docs[candidates.docs.length - 1].id;
+  await writeSweepCursor(
+    firestore,
+    candidates.size < DRIVE_EXPORT_SCHEDULED_PAGE_SIZE ? null : lastScannedId
+  );
 
   return result;
 }
