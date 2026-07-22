@@ -1,5 +1,5 @@
 /**
- * pickerResponseToRootFolder / isPickerCancelled 単体テスト
+ * pickerResponseToRootFolder / isPickerLoadedEvent 単体テスト
  *
  * Google PickerのcallbackがonPickedへ渡すResponseObjectを、
  * settings/drive保存用ペイロード({rootFolderId, rootFolderName})へ変換する
