@@ -98,11 +98,17 @@ export async function sweepStuckDriveExports(
   }
 
   const now = Date.now();
+  // 実際に走査した最後のdocId(取得しただけで未走査のdocは含まない)。
+  // カーソルはこの値まで進める(code-review xhigh指摘#1対応、2026-07-22):
+  // 取得ページ全体の最後のdocIdを使うと、BATCH_SIZE到達で早期breakした際に
+  // 走査されなかった中間のdocが恒久的に読み飛ばされてしまう(starvation再発)。
+  let lastVisitedId: string | null = null;
 
   for (const docSnapshot of candidates.docs) {
     if (result.requeued >= DRIVE_EXPORT_SCHEDULED_BATCH_SIZE) {
       break;
     }
+    lastVisitedId = docSnapshot.id;
 
     const data = docSnapshot.data();
     const status = data.driveExportStatus as DriveExportStatus;
@@ -131,13 +137,12 @@ export async function sweepStuckDriveExports(
     }
   }
 
-  // カーソルは「このページで最後にスキャンしたdocId」まで進める(requeue成否に関わらず)。
+  // カーソルは「実際に走査した最後のdocId」まで進める(requeue成否に関わらず)。
   // これにより非staleなdocが毎回スキャンされ続けることを避け、前進を保証する。
   // ページが丸ごとPAGE_SIZE未満(=末尾に到達)なら次回周回のためリセットする。
-  const lastScannedId = candidates.docs[candidates.docs.length - 1].id;
   await writeSweepCursor(
     firestore,
-    candidates.size < DRIVE_EXPORT_SCHEDULED_PAGE_SIZE ? null : lastScannedId
+    candidates.size < DRIVE_EXPORT_SCHEDULED_PAGE_SIZE ? null : lastVisitedId
   );
 
   return result;

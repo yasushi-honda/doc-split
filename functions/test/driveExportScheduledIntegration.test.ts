@@ -253,7 +253,13 @@ describe('sweepStuckDriveExports (ADR-0022 Phase 1 Task8)', () => {
   });
 
   describe('ページネーション(code-review high指摘#44対応)', () => {
-    it('starvation回帰: PAGE_SIZEを超えるbacklogでも2回のスイープでカーソルが前進し先頭ページ外のdocにも届く', async () => {
+    it('starvation回帰: PAGE_SIZEを超えるbacklogでも複数回のスイープで全件処理され、取りこぼしが発生しない', async () => {
+      // code-review xhigh指摘#1対応(2026-07-22)に伴い改訂: 旧テストは「2回のスイープで
+      // 末尾docが処理される」ことのみ確認していたが、これは実は旧実装のバグ(カーソルが
+      // 走査済み位置ではなく取得ページ全体の末尾まで進む)により11〜40件目が読み飛ばされた
+      // 結果、たまたま末尾(41〜45件目)だけが2回目のスイープで拾われていた挙動だった。
+      // 修正後は1スイープにつきBATCH_SIZE(10)件ずつ着実に進むため、45件全件を取りこぼし
+      // なく処理できることを確認する(中間の11〜40件目も含む)。
       const staleUpdatedAt = admin.firestore.Timestamp.fromMillis(
         Date.now() - DRIVE_EXPORT_ERROR_RETRY_THRESHOLD_MS - BUFFER_MS
       );
@@ -263,13 +269,43 @@ describe('sweepStuckDriveExports (ADR-0022 Phase 1 Task8)', () => {
           seedDocument({ driveExportStatus: 'error', updatedAt: staleUpdatedAt })
         )
       );
-      // orderBy(FieldPath.documentId())と同じ並び順(文字列昇順)で末尾のdocIdを特定する。
-      // 45件中末尾5件は1回目のページ(先頭40件)には含まれず、旧実装(orderBy無し+
-      // カーソル無し)では2回目以降のスイープでも同じ~40件が返り続け永久に処理されない。
-      const sortedIds = [...docIds].sort();
-      const tailDocId = sortedIds[sortedIds.length - 1];
       const { drive } = makeFakeDrive({
         createdIds: Array.from({ length: totalCount * 2 }, (_, i) => `id-${i}`),
+      });
+
+      let totalRequeued = 0;
+      // 45件をBATCH_SIZE(10)件ずつ処理するには最大5回のスイープで足りるが、
+      // 安全マージンを見て十分な回数まで繰り返す
+      for (let i = 0; i < 10; i++) {
+        const result = await sweepStuckDriveExports(db, {
+          drive,
+          downloadFile: async () => Buffer.from('x'),
+        });
+        totalRequeued += result.requeued;
+        if (result.requeued === 0 && result.skipped === 0) break; // 対象0件=全件処理済み
+      }
+
+      expect(totalRequeued).to.equal(totalCount);
+      const allDocs = await Promise.all(docIds.map((id) => getDoc(id)));
+      expect(allDocs.every((d) => d.driveExportStatus === 'exported')).to.equal(true);
+    });
+
+    it('取りこぼし回帰(code-review xhigh指摘#1対応): 1ページ内でrequeue上限に達し早期breakしても中間のdocが読み飛ばされない', async () => {
+      const staleUpdatedAt = admin.firestore.Timestamp.fromMillis(
+        Date.now() - DRIVE_EXPORT_ERROR_RETRY_THRESHOLD_MS - BUFFER_MS
+      );
+      // ちょうどPAGE_SIZE(40)件のbacklog。1回目のスイープは全件を1ページで取得するが、
+      // BATCH_SIZE(10)件requeueした時点でbreakするため、11件目以降(30件)は未走査のまま残る。
+      const docIds = await Promise.all(
+        Array.from({ length: DRIVE_EXPORT_SCHEDULED_PAGE_SIZE }, () =>
+          seedDocument({ driveExportStatus: 'error', updatedAt: staleUpdatedAt })
+        )
+      );
+      const sortedIds = [...docIds].sort();
+      // 11件目(0-indexed: BATCH_SIZE番目)は1回目のスイープでは未走査のはず
+      const untouchedDocId = sortedIds[DRIVE_EXPORT_SCHEDULED_BATCH_SIZE];
+      const { drive } = makeFakeDrive({
+        createdIds: Array.from({ length: DRIVE_EXPORT_SCHEDULED_PAGE_SIZE * 2 }, (_, i) => `id-${i}`),
       });
 
       const first = await sweepStuckDriveExports(db, {
@@ -277,16 +313,17 @@ describe('sweepStuckDriveExports (ADR-0022 Phase 1 Task8)', () => {
         downloadFile: async () => Buffer.from('x'),
       });
       expect(first.requeued).to.equal(DRIVE_EXPORT_SCHEDULED_BATCH_SIZE);
-      // 1回目終了時点では末尾のdocはまだ先頭ページの外にあり未処理のはず
-      expect((await getDoc(tailDocId)).driveExportStatus).to.equal('error');
+      expect((await getDoc(untouchedDocId)).driveExportStatus).to.equal('error');
 
       const second = await sweepStuckDriveExports(db, {
         drive,
         downloadFile: async () => Buffer.from('x'),
       });
-      expect(second.requeued).to.be.greaterThan(0);
-      // 2回目のスイープでカーソルが前進し、末尾のdocも処理対象に入ったことを確認
-      expect((await getDoc(tailDocId)).driveExportStatus).to.equal('exported');
+      // 修正前はカーソルがページ末尾(40件目)まで進み、2回目のクエリはstartAfter(40件目)と
+      // なって0件を返す(11〜40件目が永久に読み飛ばされる)。修正後はカーソルが「実際に
+      // 走査した最後(10件目)」に留まるため、2回目のスイープで11件目以降が正しく処理される。
+      expect(second.requeued).to.equal(DRIVE_EXPORT_SCHEDULED_BATCH_SIZE);
+      expect((await getDoc(untouchedDocId)).driveExportStatus).to.equal('exported');
     });
 
     it('ページ末尾(スキャン件数がPAGE_SIZE未満)に達したらカーソルをリセットし次回は先頭から周回する', async () => {
