@@ -171,6 +171,18 @@ describe('resolveFolderSegments', () => {
     expect(() => resolveFolderSegments(doc, template)).to.throw(DocumentCategoryMissingError);
   });
 
+  it('documentCategoryが前後空白+実データの場合はガードを通過しtrim済みの値がフォルダ名として使われる(code-review high指摘#3対応)', () => {
+    const doc = makeDoc({ documentCategory: ' ケアプラン ' });
+    const template: DriveFolderTemplate = [{ type: 'documentCategory' }];
+    expect(resolveFolderSegments(doc, template)).to.deep.equal(['ケアプラン']);
+  });
+
+  it('documentCategoryに前後空白が付与されていてもonlyForCategoriesとの一致判定はtrim済みの値で行われ、対象カテゴリのdateセグメントが欠落しない(code-review high指摘#3対応)', () => {
+    const doc = makeDoc({ documentCategory: 'ケアプラン ' });
+    const result = resolveFolderSegments(doc, KANAME_TEMPLATE);
+    expect(result).to.include('2026年07月');
+  });
+
   it('fileDateがnullでもdateセグメントが対象外カテゴリならエラーにならない(セグメント自体を持たない)', () => {
     const doc = makeDoc({ documentCategory: '医療費', fileDate: null });
     const result = resolveFolderSegments(doc, KANAME_TEMPLATE);

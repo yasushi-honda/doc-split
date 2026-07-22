@@ -149,7 +149,10 @@ function resolveDateSegment(
   doc: FolderPathDocInput,
   segment: Extract<DriveFolderSegment, { type: 'date' }>
 ): string | null {
-  if (!segment.onlyForCategories.includes(doc.documentCategory)) {
+  // documentCategoryをtrimしてから比較する(code-review high指摘#3対応、2026-07-22):
+  // untrimmedのまま比較すると、値に付随する空白でonlyForCategoriesとの一致判定が
+  // 崩れ、本来含めるべき年月セグメントが黙って欠落しうる。
+  if (!segment.onlyForCategories.includes(doc.documentCategory.trim())) {
     return null;
   }
   if (doc.fileDate === null) {
@@ -183,12 +186,16 @@ export function resolveFolderSegments(
       case 'customer':
         segments.push(resolveCustomerSegment(doc, segment, opts));
         break;
-      case 'documentCategory':
-        if (!doc.documentCategory.trim()) {
+      case 'documentCategory': {
+        // trim済みの値を以降すべてで使う(code-review high指摘#3対応、2026-07-22):
+        // 元はガード判定のみtrimしており、careManager/customerと非対称だった。
+        const documentCategory = doc.documentCategory.trim();
+        if (!documentCategory) {
           throw new DocumentCategoryMissingError();
         }
-        segments.push(doc.documentCategory);
+        segments.push(documentCategory);
         break;
+      }
       case 'date': {
         const resolved = resolveDateSegment(doc, segment);
         if (resolved !== null) segments.push(resolved);
