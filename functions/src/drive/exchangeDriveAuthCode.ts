@@ -75,9 +75,15 @@ export interface ExchangeDriveAuthCodeResult {
  */
 export async function exchangeDriveAuthCodeCore(
   firestore: admin.firestore.Firestore,
-  code: string,
+  rawCode: string,
   deps: ExchangeDriveAuthCodeDeps
 ): Promise<ExchangeDriveAuthCodeResult> {
+  // trim済みの値を以降すべてで使う(code-review xhigh指摘#7対応、2026-07-22): onCall
+  // ラッパーの検証は`!code.trim()`のみでuntrimmedのcodeをそのまま渡していたため、
+  // 前後に空白を含むcodeがOAuthトークン交換エンドポイントへ送られ、有効なコードでも
+  // invalid_grant相当のエラーになりえた。
+  const code = rawCode.trim();
+
   const [clientId, clientSecret] = await Promise.all([
     deps.getSecret('drive-oauth-client-id'),
     deps.getSecret('drive-oauth-client-secret'),
@@ -90,13 +96,15 @@ export async function exchangeDriveAuthCodeCore(
 
   await deps.setSecret('drive-oauth-refresh-token', refreshToken);
 
-  // Firestore settings/drive.authMode を 'oauth' に更新(部分書込み1/2)
-  await firestore.doc(DRIVE_SETTINGS_DOC_PATH).set({ authMode: 'oauth' }, { merge: true });
-
   const email = await deps.fetchConnectedEmail({ clientId, clientSecret, refreshToken });
 
-  // connectedEmailも更新(部分書込み2/2)
-  await firestore.doc(DRIVE_SETTINGS_DOC_PATH).set({ connectedEmail: email }, { merge: true });
+  // 疎通確認(fetchConnectedEmail)まで成功したことを確認してから単一書込み
+  // (code-review xhigh指摘#3対応、2026-07-22): 旧実装はauthModeとconnectedEmailを
+  // 2段階で書き込んでおり、fetchConnectedEmailが失敗するとauthMode:'oauth'だけが
+  // コミット済みで残り、FEの接続判定(authMode==='oauth')が「連携済み」と誤表示していた。
+  // 単一ドキュメントへのsetは元々アトミックなため、成功確定後にまとめて書くことで
+  // 部分書込みの不整合状態が構造的に発生しなくなる(ロールバック処理は不要)。
+  await firestore.doc(DRIVE_SETTINGS_DOC_PATH).set({ authMode: 'oauth', connectedEmail: email }, { merge: true });
 
   return { success: true, email };
 }
@@ -139,7 +147,9 @@ export const exchangeDriveAuthCode = onCall(
       throw new HttpsError('permission-denied', 'Admin permission required');
     }
 
-    // 3. パラメータ検証
+    // 3. パラメータ検証(実際のtrim済み値の利用はexchangeDriveAuthCodeCore側で行う。
+    // #7対応: 元はここでのvalidationのみtrimしており、実際に使われる値はuntrimmedの
+    // ままだった)
     const { code } = request.data as { code?: string };
     if (!code || typeof code !== 'string' || !code.trim()) {
       throw new HttpsError('invalid-argument', 'Authorization code is required');

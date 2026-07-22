@@ -133,6 +133,43 @@ describe('exchangeDriveAuthCodeCore (ADR-0022)', () => {
     expect(deps.setSecretCalls).to.deep.equal([]);
   });
 
+  it('fetchConnectedEmailが失敗した場合、settings/driveにauthModeが一切書き込まれない(code-review xhigh指摘#3対応)', async () => {
+    await seedDriveSettings();
+    const deps = makeFakeDeps();
+    deps.fetchConnectedEmail = async () => {
+      throw new Error('Drive about.get failed (transient)');
+    };
+
+    try {
+      await exchangeDriveAuthCodeCore(db, 'auth-code-1', deps);
+      expect.fail('fetchConnectedEmailの例外が伝播するべき');
+    } catch (error) {
+      expect((error as Error).message).to.equal('Drive about.get failed (transient)');
+    }
+
+    // 旧実装はauthModeを先に書き込んでいたため、ここでコミット済みになってしまっていた。
+    // 現在は単一書込みに変更したため、疎通確認が失敗した場合はauthMode/connectedEmail
+    // いずれも書き込まれない(FEが「連携済み」と誤表示することはない)。
+    const settings = (await db.doc(DRIVE_SETTINGS_DOC_PATH).get()).data();
+    expect(settings?.authMode).to.be.undefined;
+    expect(settings?.connectedEmail).to.be.undefined;
+  });
+
+  it('codeの前後に空白がある場合はtrim済みの値でexchangeCode/fetchConnectedEmailへ渡す(code-review xhigh指摘#7対応)', async () => {
+    await seedDriveSettings();
+    const deps = makeFakeDeps();
+
+    await exchangeDriveAuthCodeCore(db, '  auth-code-with-whitespace  \n', deps);
+
+    expect(deps.exchangeCodeCalls).to.deep.equal([
+      {
+        clientId: 'fake-secret-value-for-drive-oauth-client-id',
+        clientSecret: 'fake-secret-value-for-drive-oauth-client-secret',
+        code: 'auth-code-with-whitespace',
+      },
+    ]);
+  });
+
   it('client-id/client-secretはgetSecret経由で取得しexchangeCodeへ渡す', async () => {
     await seedDriveSettings();
     const deps = makeFakeDeps();
