@@ -133,6 +133,8 @@ on:
           - check-function-error-logs --hours 72
           - check-function-error-logs --hours 168
           - audit-filename-pattern-issue686
+          - backfill-drive-export --dry-run
+          - backfill-drive-export
       doc_id:
         description: 'Document ID (required when script contains --doc-id; ignored otherwise)'
         required: false
@@ -680,7 +682,8 @@ jobs:
                [ "$SCRIPT_NAME" = "diagnose-confirmed-replay-sampling" ] || \
                [ "$SCRIPT_NAME" = "backfill-detail-subcollection" ] || \
                [ "$SCRIPT_NAME" = "measure-summary-cost" ] || \
-               [ "$SCRIPT_NAME" = "create-pending-doc" ]; then
+               [ "$SCRIPT_NAME" = "create-pending-doc" ] || \
+               [ "$SCRIPT_NAME" = "backfill-drive-export" ]; then
             # Issue #432 PR-C 系 script は scripts/lib/* (TypeScript)、seed-dev-data (#528) は
             # shared/*.ts に依存するため ts-node 経由で実行。compare-gemini-ocr-models (#548) は
             # functions/src/utils/* (extractors.ts/retry.ts) に依存するため同様に ts-node 経由。
@@ -706,6 +709,9 @@ jobs:
             # functions/src/ocr/ocrExcerpt.ts + scripts/lib/* に依存するため同様。
             # create-pending-doc (#562) はfirebase-adminのみ依存(functions/src非依存)だが、
             # 統一的にscriptsディレクトリからts-node経由で実行する。
+            # backfill-drive-export (ADR-0022 code-review指摘#43対応、2026-07-22) は
+            # firebase-adminのみ依存(functions/src非依存、STORAGE_BUCKET不使用。Drive API/
+            # Storageアクセスは行わずdriveExportStatus:'error'のマークのみ行う設計)。
             # STORAGE_BUCKET は resolve step で env 化済。
             EXTRA_ARGS=""
             if [ "$SCRIPT_NAME" = "classify-collision-docs" ]; then

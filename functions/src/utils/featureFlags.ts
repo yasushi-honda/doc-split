@@ -22,3 +22,16 @@ export async function isFaxDuplicationEnabled(
   if (!snap.exists) return false;
   return snap.data()?.faxDuplication === true;
 }
+
+/**
+ * Google Drive連携機能(ADR-0022)が有効かどうかを返す。
+ * フラグドキュメントが存在しない場合、またはdriveExportが明示的にtrueでない
+ * 場合は「無効」を安全側デフォルトとする(fail-closed、Drive API呼び出しを起動させない)。
+ */
+export async function isDriveExportEnabled(
+  db: admin.firestore.Firestore
+): Promise<boolean> {
+  const snap = await db.doc(FEATURE_FLAGS_DOC_PATH).get();
+  if (!snap.exists) return false;
+  return snap.data()?.driveExport === true;
+}

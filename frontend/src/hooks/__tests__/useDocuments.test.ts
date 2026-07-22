@@ -12,6 +12,7 @@ import {
   normalizeSummary,
   getReprocessClearFields,
   getReprocessDetailClearFields,
+  getDriveExportClearFields,
   resolveDetailFields,
   applySearchTextFilter,
 } from '../useDocuments'
@@ -58,6 +59,34 @@ describe('firestoreToDocument', () => {
     it('ocrExcerpt が未設定の場合は undefined', () => {
       const result = firestoreToDocument('doc-001', baseFirestoreData)
       expect(result.ocrExcerpt).toBeUndefined()
+    })
+
+    // ADR-0022 Phase1 (code-review xhigh CONFIRMED指摘対応、#178教訓): Drive系5フィールドが
+    // firestoreToDocument()でマッピングされないと、Functions側が書込んでもFEで永久に読めなくなる
+    it('Google Drive エクスポート状態(driveExportStatus等)を正しく変換する (ADR-0022 Phase1)', () => {
+      const data = {
+        ...baseFirestoreData,
+        driveExportStatus: 'exported',
+        driveFileId: 'drive-file-id-1',
+        driveExportedAt: Timestamp.now(),
+        driveExportError: null,
+        driveExportRunId: 'run-id-1',
+      }
+      const result = firestoreToDocument('doc-001', data)
+      expect(result.driveExportStatus).toBe('exported')
+      expect(result.driveFileId).toBe('drive-file-id-1')
+      expect(result.driveExportedAt).toBe(data.driveExportedAt)
+      expect(result.driveExportError).toBeNull()
+      expect(result.driveExportRunId).toBe('run-id-1')
+    })
+
+    it('Drive系フィールドが未設定の場合は undefined', () => {
+      const result = firestoreToDocument('doc-001', baseFirestoreData)
+      expect(result.driveExportStatus).toBeUndefined()
+      expect(result.driveFileId).toBeUndefined()
+      expect(result.driveExportedAt).toBeUndefined()
+      expect(result.driveExportError).toBeUndefined()
+      expect(result.driveExportRunId).toBeUndefined()
     })
   })
 
@@ -503,6 +532,27 @@ describe('getReprocessClearFields (Issue #215: 旧3キー + 新summary 全て de
     expect(fields.documentTypeConfirmed).toBe(false)
   })
 
+  // ADR-0022 Phase1 code-review CONFIRMED指摘対応: エクスポート済み(driveExportStatus:
+  // 'exported')docを再処理してもクレーム状態が残存すると、訂正後の再確認でトリガーの
+  // クレームが既存ステータスを検知しスキップしてしまい、二度と再エクスポートされない
+  it('Drive エクスポートのクレーム状態4フィールドを含む (ADR-0022)', () => {
+    const fields = getReprocessClearFields()
+    expect(fields).toHaveProperty('driveExportStatus')
+    expect(fields).toHaveProperty('driveExportedAt')
+    expect(fields).toHaveProperty('driveExportError')
+    expect(fields).toHaveProperty('driveExportRunId')
+  })
+
+  // ADR-0022 Phase1 code-review xhigh指摘対応(2026-07-21): driveFileId は意図的に
+  // クリア対象から除外する。削除すると再エクスポート時に旧Driveファイルへの参照が
+  // 失われ、フォルダパスが変わる訂正で旧フォルダに孤児ファイルが残置される(誤配置)。
+  // exportDocument.ts が driveFileId を直接参照し files.update() で移動/内容更新する
+  // 設計のため、この値は再処理を跨いで保持される必要がある。
+  it('driveFileId はクリア対象に含まない (ADR-0022 code-review xhigh対応)', () => {
+    const fields = getReprocessClearFields()
+    expect(fields).not.toHaveProperty('driveFileId')
+  })
+
   // GOAL.md task 6-2 (PR-C): distributionId保持docは顧客系フィールドを再処理で
   // 上書きしてはならない(BE側confirmedFieldMerge保護が機能する前提を崩さないため)
   describe('preserveDistributionFields (GOAL.md task 6-2, PR-C)', () => {
@@ -537,6 +587,33 @@ describe('getReprocessClearFields (Issue #215: 旧3キー + 新summary 全て de
       expect(fields.officeConfirmed).toBe(false)
       expect(fields.verified).toBe(false)
     })
+  })
+})
+
+// ADR-0022 Phase1、code-review指摘#42対応(2026-07-22): getReprocessClearFields()と
+// useDocumentVerification.tsのmarkAsUnverifiedの両方から呼ばれる共通ヘルパー
+describe('getDriveExportClearFields (ADR-0022 code-review指摘#42対応)', () => {
+  it('Drive系4フィールド(driveExportStatus/driveExportedAt/driveExportError/driveExportRunId)のみを返す', () => {
+    const fields = getDriveExportClearFields()
+    expect(Object.keys(fields).sort()).toEqual([
+      'driveExportError',
+      'driveExportRunId',
+      'driveExportStatus',
+      'driveExportedAt',
+    ])
+  })
+
+  it('driveFileId は含まない(旧Driveファイルへの参照を保持する必要があるため)', () => {
+    const fields = getDriveExportClearFields()
+    expect(fields).not.toHaveProperty('driveFileId')
+  })
+
+  it('4フィールドとも deleteField sentinel (firestore.rulesは削除または無変更のみ許可)', () => {
+    const fields = getDriveExportClearFields()
+    expect(deleteField().isEqual(fields.driveExportStatus)).toBe(true)
+    expect(deleteField().isEqual(fields.driveExportedAt)).toBe(true)
+    expect(deleteField().isEqual(fields.driveExportError)).toBe(true)
+    expect(deleteField().isEqual(fields.driveExportRunId)).toBe(true)
   })
 })
 

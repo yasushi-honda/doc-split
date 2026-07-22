@@ -8,7 +8,7 @@ import { useState, useCallback } from 'react'
 import { doc, updateDoc, serverTimestamp, Timestamp } from 'firebase/firestore'
 import { useQueryClient } from '@tanstack/react-query'
 import { db, auth } from '../lib/firebase'
-import { updateDocumentInListCache } from './useDocuments'
+import { updateDocumentInListCache, getDriveExportClearFields } from './useDocuments'
 import type { Document } from '../../../shared/types'
 
 interface UseDocumentVerificationResult {
@@ -89,6 +89,12 @@ export function useDocumentVerification(
         verifiedBy: null,
         verifiedAt: null,
         updatedAt: serverTimestamp(),
+        // ADR-0022 Phase1、code-review指摘#42対応(2026-07-22): 未確認に戻す時点でDrive
+        // エクスポート状態をクリアしないと、訂正後の再確認でdriveExportTrigger.tsのクレーム
+        // (driveExportStatus不在のdocのみ対象)が古い'exported'値を検知してスキップされ、
+        // 二度と再エクスポートされなくなる。driveFileIdは意図的にクリアしない
+        // (getDriveExportClearFields()のコメント参照、旧Driveファイルへの参照を保持する)。
+        ...getDriveExportClearFields(),
       })
       return true
     } catch (err) {

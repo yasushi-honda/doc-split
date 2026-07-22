@@ -17,6 +17,7 @@ import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
 import { google } from 'googleapis';
 import { getSecretValue, setSecretValue } from '../utils/gmailAuth';
+import { GMAIL_REFRESH_TOKEN_MISSING_MESSAGE } from './gmailAuthMessages';
 
 const db = admin.firestore();
 
@@ -60,11 +61,7 @@ export const exchangeGmailAuthCode = onCall(
       const { tokens } = await oauth2Client.getToken(code);
 
       if (!tokens.refresh_token) {
-        throw new HttpsError(
-          'failed-precondition',
-          'No refresh token returned. The user may have already authorized this app. ' +
-          'Please revoke access at https://myaccount.google.com/permissions and try again.'
-        );
+        throw new HttpsError('failed-precondition', GMAIL_REFRESH_TOKEN_MISSING_MESSAGE);
       }
 
       // 6. refresh_tokenをSecret Managerに保存

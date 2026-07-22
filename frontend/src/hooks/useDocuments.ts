@@ -212,6 +212,12 @@ export function firestoreToDocument(id: string, data: Record<string, unknown>): 
     documentTypeConfirmed: data.documentTypeConfirmed as boolean | undefined,
     // 複数顧客FAX複製機能 (GOAL.md D4): 元doc・全コピーに同一値を付与
     distributionId: data.distributionId as string | undefined,
+    // Google Drive エクスポート状態 (ADR-0022 Phase1)
+    driveExportStatus: data.driveExportStatus as Document['driveExportStatus'],
+    driveFileId: data.driveFileId as string | null | undefined,
+    driveExportedAt: data.driveExportedAt as Timestamp | null | undefined,
+    driveExportError: data.driveExportError as string | null | undefined,
+    driveExportRunId: data.driveExportRunId as string | null | undefined,
   }
 }
 
@@ -274,6 +280,27 @@ export function updateDocumentInListCache(
 // ============================================
 // 再処理時クリアフィールド
 // ============================================
+
+/**
+ * Google Driveエクスポート状態フィールドのクリア用ファクトリ関数(ADR-0022 Phase1、
+ * code-review指摘#42対応、2026-07-22)。`getReprocessClearFields()`(再処理時)と
+ * `useDocumentVerification.ts`の`markAsUnverified`(未確認に戻す時)の両方から呼ばれる
+ * 共通ロジック。deleteField()を毎回生成する理由・`driveFileId`を意図的にクリアしない
+ * 理由は`getReprocessClearFields()`本体のDrive系フィールドのコメント参照。
+ *
+ * firestore.rules側はこの5フィールドについて削除(deleteField)または無変更のみを許可する
+ * 専用ガードを持つため、値の新規設定・上書きにはならないこの関数の戻り値はそのまま
+ * update()に渡せる(rules変更不要)。
+ */
+export function getDriveExportClearFields() {
+  const df = deleteField()
+  return {
+    driveExportStatus: df,
+    driveExportedAt: df,
+    driveExportError: df,
+    driveExportRunId: df,
+  }
+}
 
 /**
  * 再処理時にリセットすべき親docの全フィールドを返すファクトリ関数
@@ -358,6 +385,19 @@ export function getReprocessClearFields(preserveDistributionFields: boolean = fa
     // user 操作で解除可能にする。残存すると次回 429 で即「対象外」判定されてしまう。
     errorRescueCount: df,
     lastRescuedAt: df,
+    // Google Drive エクスポート状態 (ADR-0022 Phase1、#178教訓の延長): 再処理前の内容で
+    // エクスポート済み(driveExportStatus:'exported')のまま残ると、訂正後に再確認しても
+    // functions/src/drive/driveExportTrigger.ts のクレームが既存ステータスを検知して
+    // 再エクスポートをスキップしてしまう。firestore.rules 側は削除(deleteField)のみ許可
+    // する専用ガードを追加済み。
+    //
+    // driveFileId は意図的にクリアしない(code-review xhigh指摘対応、2026-07-21): 削除する
+    // と functions/src/drive/exportDocument.ts が再エクスポート時に旧Driveファイルへの
+    // 参照を失い、フォルダパスが変わる訂正では新フォルダへの新規アップロードになり旧フォルダ
+    // に孤児ファイルが残置される(誤配置)。フォルダパスが変わらない訂正では内容が更新されない
+    // (stale content)。driveFileId を保持したまま渡すことで、exportDocument() が
+    // drive.files.update() でその実体を直接 移動/リネーム/内容更新 できるようにする。
+    ...getDriveExportClearFields(),
   }
 }
 

@@ -118,7 +118,15 @@ service cloud.firestore {
           'errorRescueCount',
           'lastRescuedAt',
           // ADR-0018 (Issue #547): detail/main サブコレクション分離に伴う軽量抜粋フィールド
-          'ocrExcerpt'
+          'ocrExcerpt',
+          // ADR-0022 (Google Drive連携 Phase1): Drive系フィールドはCloud Functions
+          // (Admin SDK)専有。FEはgetReprocessClearFields()のdeleteField()でのみ
+          // 操作する想定(#9参照)のため、値の新規設定・上書きは下記ガードで禁止する。
+          'driveExportStatus',
+          'driveFileId',
+          'driveExportedAt',
+          'driveExportError',
+          'driveExportRunId'
         ])
         // confirmedBy は自分のUIDのみ設定可能（事業所解決時は含まれない場合あり）
         && (request.resource.data.confirmedBy == request.auth.uid
@@ -164,6 +172,19 @@ service cloud.firestore {
         // FEはgetReprocessClearFields()のdeleteField()でのみ操作する想定(#9参照)。
         && (!('ocrExcerpt' in request.resource.data)
             || (('ocrExcerpt' in resource.data) && request.resource.data.ocrExcerpt == resource.data.ocrExcerpt))
+        // ADR-0022 (Google Drive連携 Phase1): Drive系フィールドもFunctions
+        // (executeDriveExport.ts等)専有の派生フィールド。FEはgetReprocessClearFields()の
+        // deleteField()でのみ操作する想定(#9参照)。
+        && (!('driveExportStatus' in request.resource.data)
+            || (('driveExportStatus' in resource.data) && request.resource.data.driveExportStatus == resource.data.driveExportStatus))
+        && (!('driveFileId' in request.resource.data)
+            || (('driveFileId' in resource.data) && request.resource.data.driveFileId == resource.data.driveFileId))
+        && (!('driveExportedAt' in request.resource.data)
+            || (('driveExportedAt' in resource.data) && request.resource.data.driveExportedAt == resource.data.driveExportedAt))
+        && (!('driveExportError' in request.resource.data)
+            || (('driveExportError' in resource.data) && request.resource.data.driveExportError == resource.data.driveExportError))
+        && (!('driveExportRunId' in request.resource.data)
+            || (('driveExportRunId' in resource.data) && request.resource.data.driveExportRunId == resource.data.driveExportRunId))
         // ADR-0019 (GOAL.md タスクG): 集計所属変更メンテナンスゲートが閉じている間は、
         // customer/office/documentType/careManagerを変更するクライアント直接書込み
         // (useDocumentEdit.ts等)を拒否する。Cloud Functions(Admin SDK経由)はルール適用外の
@@ -279,7 +300,17 @@ service cloud.firestore {
       allow read: if settingId == 'auth' && isAuthenticated();
       // その他の設定はホワイトリスト登録済みユーザーのみ
       allow read: if settingId != 'auth' && isWhitelisted();
-      allow write: if isAdmin();
+      // ADR-0022 (code-review xhigh指摘#4対応、2026-07-22): settings/drive.authMode/
+      // connectedEmailはexchangeDriveAuthCode.ts(Admin SDK専有)のみが書き込む派生
+      // フィールド。documentsコレクションのDrive系フィールド(121-129行目・178-187行目)と
+      // 同型のガードで、クライアントからの新規設定・上書きを禁止する(削除または無変更のみ許可)。
+      // これが無いと、FEのバグや誤操作で実際のOAuthハンドシェイクを経由せず
+      // 「連携済み」状態を直接偽装できてしまう。
+      allow write: if isAdmin()
+        && (!('authMode' in request.resource.data)
+            || (('authMode' in resource.data) && request.resource.data.authMode == resource.data.authMode))
+        && (!('connectedEmail' in request.resource.data)
+            || (('connectedEmail' in resource.data) && request.resource.data.connectedEmail == resource.data.connectedEmail));
     }
 
     // Phase 8: ドキュメントグループ（サマリー集計）

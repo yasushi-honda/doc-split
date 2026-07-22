@@ -13,6 +13,7 @@ import {
   XCircle,
   ExternalLink,
   Filter,
+  HardDrive,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -46,6 +47,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
   useErrors,
   useErrorStats,
@@ -53,22 +55,62 @@ import {
   useReprocessError,
   type ErrorFilters,
 } from '@/hooks/useErrors'
+import {
+  useDriveExportErrors,
+  useRetryDriveExport,
+  type DriveExportErrorRow,
+} from '@/hooks/useDriveExportErrors'
+import { toast } from 'sonner'
+import { getCallableErrorMessage } from '@/lib/callFunction'
+import { useAuthStore } from '@/stores/authStore'
 import type { ErrorRecord, ErrorStatus, ErrorType } from '@shared/types'
 
 export function ErrorsPage() {
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl font-bold text-gray-900">エラー履歴</h1>
+        <p className="mt-1 text-sm text-gray-500">
+          処理エラーを確認し、再処理を実行できます
+        </p>
+      </div>
+
+      <Tabs defaultValue="ocr" className="space-y-4">
+        <TabsList>
+          <TabsTrigger value="ocr" className="gap-2">
+            <FileText className="h-4 w-4" />
+            OCRエラー
+          </TabsTrigger>
+          <TabsTrigger value="drive" className="gap-2">
+            <HardDrive className="h-4 w-4" />
+            Driveエクスポートエラー
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="ocr">
+          <OcrErrorsTab />
+        </TabsContent>
+
+        <TabsContent value="drive">
+          <DriveExportErrorsTab />
+        </TabsContent>
+      </Tabs>
+    </div>
+  )
+}
+
+// ============================================
+// OCRエラータブ
+// ============================================
+
+function OcrErrorsTab() {
   const [filters, setFilters] = useState<ErrorFilters>({})
   const { data: errors, isLoading, refetch } = useErrors({ filters })
   const { data: stats } = useErrorStats()
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">エラー履歴</h1>
-          <p className="mt-1 text-sm text-gray-500">
-            OCR処理のエラーを確認し、再処理を実行できます
-          </p>
-        </div>
+      <div className="flex items-center justify-end">
         <Button variant="outline" onClick={() => refetch()}>
           <RefreshCw className="h-4 w-4 mr-2" />
           更新
@@ -475,6 +517,226 @@ function ErrorRow({ error }: ErrorRowProps) {
             <Button onClick={handleReprocess} disabled={reprocess.isPending}>
               <RefreshCw className="h-4 w-4 mr-2" />
               {reprocess.isPending ? '処理中...' : '再処理を実行'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  )
+}
+
+// ============================================
+// Driveエクスポートエラータブ(ADR-0022 Phase1 Task13)
+// ============================================
+
+function DriveExportErrorsTab() {
+  const { data: rows, isLoading, refetch } = useDriveExportErrors()
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-end">
+        <Button variant="outline" onClick={() => refetch()}>
+          <RefreshCw className="h-4 w-4 mr-2" />
+          更新
+        </Button>
+      </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Driveエクスポートエラー一覧</CardTitle>
+          <CardDescription>
+            {rows?.length ?? 0}件のエラーが見つかりました。1時間毎の自動リトライでも解消されなかった場合、手動でリトライできます
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {isLoading ? (
+            <div className="text-center py-8">読み込み中...</div>
+          ) : rows?.length === 0 ? (
+            <div className="text-center py-8 text-gray-500">
+              エラーはありません
+            </div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>更新日時</TableHead>
+                  <TableHead>ファイル名</TableHead>
+                  <TableHead>利用者名</TableHead>
+                  <TableHead>書類種別</TableHead>
+                  <TableHead>エラー内容</TableHead>
+                  <TableHead className="w-[100px]">操作</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {rows?.map((row) => (
+                  <DriveExportErrorRow key={row.id} row={row} />
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  )
+}
+
+interface DriveExportErrorRowProps {
+  row: DriveExportErrorRow
+}
+
+function DriveExportErrorRow({ row }: DriveExportErrorRowProps) {
+  const isAdmin = useAuthStore((s) => s.isAdmin)
+  const retry = useRetryDriveExport()
+  const [isDetailOpen, setIsDetailOpen] = useState(false)
+  const [isRetryConfirmOpen, setIsRetryConfirmOpen] = useState(false)
+
+  const handleRetry = async () => {
+    setIsRetryConfirmOpen(false)
+    try {
+      const result = await retry.mutateAsync(row.id)
+      // retryDriveExportは「呼び出し成功だが再エクスポートも失敗」をthrowではなく
+      // success:falseのresolveで返すtri-state契約(functions/src/drive/retryDriveExport.ts)。
+      // ここで分岐しないとこの再失敗が握り潰される。
+      //
+      // code-review指摘#63対応(2026-07-22): 以前はrow-local stateでバナー表示していたが、
+      // 成功時はuseRetryDriveExportのonSuccessによる一覧再取得でこの行自体が
+      // (driveExportStatus:'exported'へ遷移し一覧から外れて)アンマウントされ、
+      // メッセージが表示直後に消えていた。sonnerのtoastはRowのライフサイクルから独立した
+      // ポータルへ描画されるため、この問題を回避できる。
+      if (result.success) {
+        toast.success('エクスポートに成功しました')
+      } else {
+        toast.error(result.error || '再エクスポートに失敗しました')
+      }
+    } catch (err) {
+      toast.error(getCallableErrorMessage(err, 'リトライに失敗しました'))
+    }
+  }
+
+  return (
+    <>
+      <TableRow>
+        <TableCell className="whitespace-nowrap">
+          {row.updatedAt?.toLocaleString('ja-JP') ?? '-'}
+        </TableCell>
+        <TableCell className="max-w-[200px] truncate" title={row.fileName}>
+          {row.fileName}
+        </TableCell>
+        <TableCell>{row.customerName}</TableCell>
+        <TableCell>{row.documentType}</TableCell>
+        <TableCell className="max-w-[240px] truncate" title={row.driveExportError}>
+          {row.driveExportError}
+        </TableCell>
+        <TableCell>
+          <TooltipProvider delayDuration={300}>
+            <div className="flex gap-1">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    aria-label="詳細を表示"
+                    onClick={() => setIsDetailOpen(true)}
+                  >
+                    <FileText className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p>詳細を表示</p>
+                </TooltipContent>
+              </Tooltip>
+              {isAdmin && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      aria-label="リトライ"
+                      onClick={() => setIsRetryConfirmOpen(true)}
+                      disabled={retry.isPending}
+                    >
+                      <RefreshCw className="h-4 w-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>リトライ</p>
+                  </TooltipContent>
+                </Tooltip>
+              )}
+            </div>
+          </TooltipProvider>
+        </TableCell>
+      </TableRow>
+
+      {/* 詳細ダイアログ */}
+      <Dialog open={isDetailOpen} onOpenChange={setIsDetailOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Driveエクスポートエラー詳細</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <p className="text-sm text-gray-500">更新日時</p>
+                <p>{row.updatedAt?.toLocaleString('ja-JP') ?? '-'}</p>
+              </div>
+              <div>
+                <p className="text-sm text-gray-500">ファイル名</p>
+                <p>{row.fileName}</p>
+              </div>
+              <div>
+                <p className="text-sm text-gray-500">利用者名</p>
+                <p>{row.customerName}</p>
+              </div>
+              <div>
+                <p className="text-sm text-gray-500">事業所</p>
+                <p>{row.officeName}</p>
+              </div>
+              <div>
+                <p className="text-sm text-gray-500">ケアマネ</p>
+                <p>{row.careManager}</p>
+              </div>
+              <div>
+                <p className="text-sm text-gray-500">書類種別</p>
+                <p>{row.documentType}</p>
+              </div>
+            </div>
+            <div>
+              <p className="text-sm text-gray-500">エラー詳細</p>
+              <pre className="mt-1 p-3 bg-gray-100 rounded-md text-sm overflow-auto max-h-48 whitespace-pre-wrap break-all">
+                {row.driveExportError}
+              </pre>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsDetailOpen(false)}>
+              閉じる
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* リトライ確認ダイアログ */}
+      <Dialog open={isRetryConfirmOpen} onOpenChange={setIsRetryConfirmOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>リトライの確認</DialogTitle>
+            <DialogDescription>
+              このドキュメントのGoogle Driveエクスポートを再試行します。よろしいですか？
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-4">
+            <p className="text-sm">
+              <span className="text-gray-500">ファイル名:</span> {row.fileName}
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsRetryConfirmOpen(false)}>
+              キャンセル
+            </Button>
+            <Button onClick={handleRetry} disabled={retry.isPending}>
+              <RefreshCw className="h-4 w-4 mr-2" />
+              {retry.isPending ? '処理中...' : 'リトライを実行'}
             </Button>
           </DialogFooter>
         </DialogContent>

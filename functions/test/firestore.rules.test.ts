@@ -8,6 +8,7 @@
 
 import * as testing from '@firebase/rules-unit-testing';
 import { doc, getDoc, setDoc, deleteDoc, updateDoc, deleteField } from 'firebase/firestore';
+import { expect } from 'chai';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
@@ -1042,11 +1043,22 @@ describe('Firestore Security Rules', () => {
           retryAfter: new Date(),
           errorRescueCount: 1,
           lastRescuedAt: new Date(),
+          // ADR-0022 (Google Drive連携 Phase1): エクスポート済みdocの再処理で
+          // 残存しうるフィールド。driveFileId は code-review xhigh指摘対応(2026-07-21)で
+          // 意図的にクリア対象から除外されたため、このテストでは deleteField() しない
+          // (下記assertSucceeds後、値が変化しないことを別途検証する)。
+          driveExportStatus: 'exported',
+          driveFileId: 'drive-file-id-123',
+          driveExportedAt: new Date(),
+          driveExportError: null,
+          driveExportRunId: 'run-id-abc',
         });
       });
 
       const docRef = doc(normalUser.firestore(), 'documents', 'doc-reprocess-full');
       // getReprocessClearFields() と完全に同一のフィールドセットで更新
+      // (driveFileId は意図的に含めない。exportDocument.ts が move/rename/内容更新の
+      // 直接参照として使うため、reprocessを跨いで保持される必要がある)
       await assertSucceeds(
         updateDoc(docRef, {
           status: 'pending',
@@ -1084,6 +1096,10 @@ describe('Firestore Security Rules', () => {
           retryAfter: deleteField(),
           errorRescueCount: deleteField(),
           lastRescuedAt: deleteField(),
+          driveExportStatus: deleteField(),
+          driveExportedAt: deleteField(),
+          driveExportError: deleteField(),
+          driveExportRunId: deleteField(),
           // 値をリセット
           customerConfirmed: false,
           confirmedBy: null,
@@ -1097,6 +1113,15 @@ describe('Firestore Security Rules', () => {
           verifiedAt: null,
         })
       );
+
+      // driveFileId は更新payloadに含めていないため、値は変化せず保持される
+      // (code-review xhigh指摘対応、2026-07-21)
+      let afterData: Record<string, unknown> | undefined;
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        const afterSnap = await getDoc(doc(context.firestore(), 'documents', 'doc-reprocess-full'));
+        afterData = afterSnap.data();
+      });
+      expect(afterData?.driveFileId).to.equal('drive-file-id-123');
     });
 
     it('サーバー専有フィールド(retryCount等)への新規値の上書きは拒否される（Codex review #569 P2反映）', async () => {
@@ -1125,6 +1150,29 @@ describe('Firestore Security Rules', () => {
       // retryCount/errorRescueCountを任意値に書き換えようとするケース
       await assertFails(updateDoc(docRef, { retryCount: 0 }));
       await assertFails(updateDoc(docRef, { errorRescueCount: 99 }));
+    });
+
+    it('Drive系フィールド(driveExportStatus等)への新規値の上書きは拒否される（ADR-0022 code-review CONFIRMED指摘対応）', async () => {
+      // getReprocessClearFields()はこれらをdeleteField()する用途のみで、値を新規設定・
+      // 上書きする経路はFEに存在しない。ホワイトリスト登録ユーザーがdriveExportStatus:
+      // 'exported'やdriveExportRunIdを偽装できると、実際にはエクスポートされていない
+      // のに完了扱いにしたり、executeDriveExport.tsの所有権チェックを迂回できてしまう。
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'documents', 'doc-drive-fields'), {
+          fileName: 'test.pdf',
+          status: 'processed',
+          verified: true,
+        });
+      });
+
+      const docRef = doc(normalUser.firestore(), 'documents', 'doc-drive-fields');
+      await assertFails(updateDoc(docRef, { driveExportStatus: 'exported' }));
+      await assertFails(updateDoc(docRef, { driveFileId: 'forged-file-id' }));
+      await assertFails(updateDoc(docRef, { driveExportRunId: 'forged-run-id' }));
+      await assertFails(updateDoc(docRef, { driveExportedAt: new Date() }));
+      await assertFails(updateDoc(docRef, { driveExportError: 'forged error' }));
     });
 
     it('サーバー専有フィールドの削除(deleteField)は引き続き許可される', async () => {
@@ -1714,6 +1762,109 @@ describe('Firestore Security Rules', () => {
           labelSearchOperator: 'AND',
         })
       );
+    });
+
+    // ============================================
+    // Google Drive連携設定 (ADR-0022, Phase 1)
+    // settings/drive の admin専用write権限テスト
+    // ============================================
+    it('ホワイトリスト登録ユーザーはsettings/driveを読み取り可能', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'settings', 'drive'), {
+          connectedEmail: 'drive-service@example.com',
+          rootFolderId: 'folder-abc',
+        });
+      });
+
+      const docRef = doc(normalUser.firestore(), 'settings', 'drive');
+      await assertSucceeds(getDoc(docRef));
+    });
+
+    it('未登録ユーザーはsettings/driveを読み取り不可', async () => {
+      const unknownUser = testEnv.authenticatedContext(unknownUid);
+
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'settings', 'drive'), {
+          connectedEmail: 'drive-service@example.com',
+        });
+      });
+
+      const docRef = doc(unknownUser.firestore(), 'settings', 'drive');
+      await assertFails(getDoc(docRef));
+    });
+
+    it('一般ユーザーはsettings/driveを編集不可', async () => {
+      const normalUser = testEnv.authenticatedContext(normalUid);
+      const docRef = doc(normalUser.firestore(), 'settings', 'drive');
+      await assertFails(
+        setDoc(docRef, {
+          rootFolderId: 'folder-xyz',
+          rootFolderName: 'エクスポート先',
+        })
+      );
+    });
+
+    it('管理者はsettings/driveを編集可能', async () => {
+      const adminUser = testEnv.authenticatedContext(adminUid);
+      const docRef = doc(adminUser.firestore(), 'settings', 'drive');
+      await assertSucceeds(
+        setDoc(docRef, {
+          rootFolderId: 'folder-xyz',
+          rootFolderName: 'エクスポート先',
+          template: [{ type: 'customer', format: 'furiganaInitialSpaceName' }],
+        })
+      );
+    });
+
+    // code-review xhigh指摘#4対応(2026-07-22): settings/drive.authMode/connectedEmailは
+    // exchangeDriveAuthCode.ts(Admin SDK専有)のみが書き込む派生フィールド。管理者権限が
+    // あっても、実際のOAuthハンドシェイクを経由しない直接偽装を拒否する必要がある。
+    it('管理者でもsettings/drive.authModeへの新規値の上書きは拒否される', async () => {
+      const adminUser = testEnv.authenticatedContext(adminUid);
+
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'settings', 'drive'), {
+          rootFolderId: 'folder-abc',
+          authMode: 'oauth',
+          connectedEmail: 'real@example.com',
+        });
+      });
+
+      const docRef = doc(adminUser.firestore(), 'settings', 'drive');
+      await assertFails(updateDoc(docRef, { authMode: 'oauth', connectedEmail: 'forged@example.com' }));
+    });
+
+    it('管理者でもsettings/drive.authModeが未設定のdocへ新規設定するのは拒否される（実OAuthハンドシェイクを経由しない偽装の防止）', async () => {
+      const adminUser = testEnv.authenticatedContext(adminUid);
+
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'settings', 'drive'), {
+          rootFolderId: 'folder-abc',
+        });
+      });
+
+      const docRef = doc(adminUser.firestore(), 'settings', 'drive');
+      await assertFails(updateDoc(docRef, { authMode: 'oauth', connectedEmail: 'forged@example.com' }));
+    });
+
+    it('settings/drive.authMode/connectedEmailと同値での書込み、または他フィールドのみの更新は引き続き許可される', async () => {
+      const adminUser = testEnv.authenticatedContext(adminUid);
+
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'settings', 'drive'), {
+          rootFolderId: 'folder-abc',
+          authMode: 'oauth',
+          connectedEmail: 'real@example.com',
+        });
+      });
+
+      const docRef = doc(adminUser.firestore(), 'settings', 'drive');
+      // 他フィールド(rootFolderId)のみの更新はauthMode/connectedEmailに触れないため許可
+      await assertSucceeds(updateDoc(docRef, { rootFolderId: 'folder-xyz' }));
+      // 既存と同値での書込みは「無変更」扱いのため許可
+      await assertSucceeds(updateDoc(docRef, { authMode: 'oauth', connectedEmail: 'real@example.com' }));
     });
   });
 });
