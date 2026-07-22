@@ -4,7 +4,7 @@
  *
  * Feature Flag(`settings/features.driveExport`)がOFFの間にverifiedされたdocumentは、
  * `functions/src/drive/driveExportTrigger.ts`が早期return(完全no-op)するため
- * `driveExportStatus`フィールド自体が一切書き込まれない。флаgをONにした後も、この
+ * `driveExportStatus`フィールド自体が一切書き込まれない。フラグをONにした後も、この
  * 「フィールド不在」のdocumentはトリガー(verified false→trueのrising edge検知のみ)にも
  * 定期スイープ(`driveExportScheduled.ts`、`driveExportStatus in ['error','exporting']`
  * のみが対象)にも一生乗らない — cocoro/kanameoneが「既存の確認済み書類を後から

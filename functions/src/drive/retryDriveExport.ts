@@ -1,7 +1,8 @@
 /**
  * Google Drive エクスポート 手動リトライ Callable Function(ADR-0022 Phase 1 Task8)
  *
- * エラー一覧UI(Task13で実装予定)の「リトライ」ボタンから呼ばれる。FE直接updateDocは
+ * エラー一覧UI(`frontend/src/pages/ErrorsPage.tsx`、Task13)の「リトライ」ボタンから
+ * 呼ばれる(`frontend/src/hooks/useDriveExportErrors.ts`経由)。FE直接updateDocは
  * 使わず、Admin SDK専有の原則(ADR-0022 Decision 6)を保つためCallable経由に限定する。
  *
  * `driveExportStatus==='error'`のdocのみリトライ対象とする。`executeDriveExport.ts`
