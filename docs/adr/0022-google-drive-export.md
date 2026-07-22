@@ -58,12 +58,15 @@ documentの`verified`フィールドがfalse→trueになる瞬間を、Cloud Fu
 ```mermaid
 stateDiagram-v2
     [*] --> exporting: verified false→true検知\n(driveExportTrigger.ts、単一トランザクションでクレーム+runId発行)
+    [*] --> error: バックフィル(scripts/backfill-drive-export.ts)\n※flag OFF時にverifiedされたdocの遡及対応、下記参照
     exporting --> exported: exportDocument()成功\n(所有権チェック付き書戻し)
     exporting --> error: exportDocument()失敗\n(所有権チェック付き書戻し)
     error --> exporting: 手動リトライ(retryDriveExport)\nまたは定期リトライ(1時間経過、driveExportScheduled)
     exporting --> exporting: 定期リトライ(10分経過、クラッシュ想定の再クレーム)\n※新runId発行、旧runIdの書戻しはsuperseded
     exported --> [*]
 ```
+
+**flag OFF→ON時のバックフィル（code-review指摘#43対応、2026-07-22）**: `driveExportTrigger.ts`はFeature Flag OFF中は完全no-op（`driveExportStatus`フィールド自体を一切書き込まない）ため、OFF期間中にverifiedされたdocumentは`(フィールド不在)`のまま取り残される。トリガーは`verified`のrising edgeのみを見るため再度発火せず、定期スイープ（`driveExportScheduled.ts`）も`driveExportStatus in ['error','exporting']`のみを対象とするため`(フィールド不在)`のdocを一生拾わない。`scripts/backfill-drive-export.ts`（管理スクリプト、`--dry-run`対応）が`verified==true`かつ`driveExportStatus`フィールド不在のdocを見つけ、`driveExportStatus:'error'`に一時的にマークすることで、上記の既存`error`リトライ経路に乗せる（新規Cloud Functionは作らない。実際のDrive API呼び出しは定期スイープが通常通り実行する）。
 
 `exporting`から`exporting`への自己遷移（定期リトライによる再クレーム）は、新しい`driveExportRunId`を発行して所有権を移す。並行して実行されていた古い実行(古いrunId)が後から完了して書き戻そうとしても、書戻し直前に再読込した`driveExportRunId`が自分のものと一致しない場合は書き込みをスキップする(`functions/src/ocr/ocrRunGuard.ts`の`ocrRunId`所有権検証と同じ思想)。これにより、`exportDocument()`の`files.create()`前段の`appProperties`(`docSplitDocId`)による冪等性チェックと合わせて、リトライ時のDriveファイル重複作成・Firestore状態の二重書き込みを防ぐ。
 
