@@ -155,6 +155,28 @@ describe('exchangeDriveAuthCodeCore (ADR-0022)', () => {
     expect(settings?.connectedEmail).to.be.undefined;
   });
 
+  it('fetchConnectedEmailが失敗した場合、Secret Managerへのrefresh_token保存も一切発生しない(codex review指摘対応)', async () => {
+    // setSecretはSecret Managerの新バージョンを即座にlatestへ昇格させるため、
+    // 疎通確認より先に保存すると、失敗時(別アカウント宛の誤ったrefresh_token等)でも
+    // 以後の実際のエクスポート処理が新しい未検証のrefresh_tokenを使ってしまい、
+    // Firestore上は旧アカウントの表示のまま実体は別アカウント宛にエクスポートされる
+    // split-brain状態になりうる。疎通確認を保存より先に行うことでこれを防ぐ。
+    await seedDriveSettings();
+    const deps = makeFakeDeps();
+    deps.fetchConnectedEmail = async () => {
+      throw new Error('別アカウント宛のrefresh_tokenで疎通確認に失敗');
+    };
+
+    try {
+      await exchangeDriveAuthCodeCore(db, 'auth-code-1', deps);
+      expect.fail('fetchConnectedEmailの例外が伝播するべき');
+    } catch {
+      // 上のテストで例外内容は確認済み
+    }
+
+    expect(deps.setSecretCalls).to.deep.equal([]);
+  });
+
   it('codeの前後に空白がある場合はtrim済みの値でexchangeCode/fetchConnectedEmailへ渡す(code-review xhigh指摘#7対応)', async () => {
     await seedDriveSettings();
     const deps = makeFakeDeps();

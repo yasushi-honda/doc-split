@@ -94,11 +94,19 @@ export async function exchangeDriveAuthCodeCore(
     throw new DriveRefreshTokenMissingError();
   }
 
-  await deps.setSecret('drive-oauth-refresh-token', refreshToken);
-
+  // 疎通確認(fetchConnectedEmail)を、Secret Managerへの保存より先に行う(codex review
+  // 指摘対応、2026-07-22): `setSecret`はSecret Managerの新バージョンを即座に`latest`に
+  // 昇格させるため、これを先に実行すると、fetchConnectedEmailが失敗した場合でも
+  // (別アカウント宛の誤ったrefresh_token・失効済み等)、以後の`getDriveClient()`
+  // (実際のエクスポート処理)が新しい未検証のrefresh_tokenを使ってしまい、Firestore上は
+  // 旧アカウントのまま「連携済み」表示なのに実体は別アカウント宛にエクスポートされる
+  // というsplit-brain状態になりうる。疎通確認をrefreshToken単体(未保存)に対して直接
+  // 行うことで、失敗時はSecret Manager・Firestoreのいずれも変更されないまま維持される。
   const email = await deps.fetchConnectedEmail({ clientId, clientSecret, refreshToken });
 
-  // 疎通確認(fetchConnectedEmail)まで成功したことを確認してから単一書込み
+  await deps.setSecret('drive-oauth-refresh-token', refreshToken);
+
+  // 疎通確認・Secret Manager保存の両方が成功したことを確認してから単一書込み
   // (code-review xhigh指摘#3対応、2026-07-22): 旧実装はauthModeとconnectedEmailを
   // 2段階で書き込んでおり、fetchConnectedEmailが失敗するとauthMode:'oauth'だけが
   // コミット済みで残り、FEの接続判定(authMode==='oauth')が「連携済み」と誤表示していた。
