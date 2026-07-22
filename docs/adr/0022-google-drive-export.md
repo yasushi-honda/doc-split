@@ -39,6 +39,8 @@ Accepted (2026-07-20)
 
 各セグメントの子フォルダ検索で、0件なら作成・1件なら再利用・**2件以上なら`AmbiguousFolderError`を投げて停止**する。これにより、「既存フォルダ構造への合流」と「新規ルートからの作成」の両ケースを、単一のロジックで一律に処理できる（ルートに空フォルダを選べば実質新規、既存構造のあるフォルダを選べば実質合流）。曖昧な状態での自動選択は誤配置リスクがあるため、常に停止を優先する。
 
+同一parent+nameに解決する**異なるdocument**が近接タイミングで検証されると、双方が0件マッチを観測して`files.create()`を呼び、重複フォルダが作成されうる（決定4本文の「同名2件以上は停止」は同一検索内の話であり、この異docId間の競合は別問題）。これを防ぐため、0件マッチ時のみ`driveFolderLocks`コレクション（Admin SDK専有）へのFirestoreトランザクションで所有権を主張してから作成する。所有権トークン（fencing token）は決定6の`driveExportRunId`クレーム機構と同型で、staleとみなされ他の実行にロックを奪われた場合でも元の実行が誤って新しい保有者のロックを削除しないようにする。ロック獲得に失敗した場合は`FolderCreationInProgressError`をthrowし、新しい待機/リトライ機構は作らず既存のcatch-and-set-error機構（`driveExportStatus:'error'`→次回スケジュールスイープで自動リトライ）に委ねる（`functions/src/drive/findOrCreateFolder.ts`）。
+
 ### 5. 同期トリガーは「確認ボタン」押下（`verified` false→true）
 
 documentの`verified`フィールドがfalse→trueになる瞬間を、Cloud Functions側のFirestoreトリガー（`onDocumentWritten('documents/{docId}')`）で検知してエクスポートを開始する。OCR誤読・利用者取り違えが確定する前の情報を外部Driveへ誤って流出させるリスクを、人間のレビュー完了という明示的なゲートで防ぐ。この方式はcocoro側で承認済み。既存の確認フロー（`useDocumentVerification.ts`の`markAsVerified`、3つの呼び出し元）には一切変更を加えない。
