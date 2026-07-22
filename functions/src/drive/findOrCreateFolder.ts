@@ -44,9 +44,12 @@ export class AmbiguousFolderError extends Error {
 
 /**
  * 同一parent+nameのフォルダ作成が別の実行で進行中の場合にthrow。
- * 呼び出し元（トリガー）はこれを捕捉し `driveExportStatus: 'error'` に遷移させ、
- * 次回スケジュールスイープでの自動リトライに委ねる(その時点では先行の作成が
- * 完了しているため、通常のfind分岐で解決する)。
+ * 呼び出し元（トリガー）はこれを捕捉し `driveExportStatus: 'error'` に遷移させる。
+ * この状態は`error`扱いのため、他の恒久エラーと同じ`DRIVE_EXPORT_ERROR_RETRY_THRESHOLD_MS`
+ * (1時間、`driveExportScheduled.ts`)が適用され自動リトライまで最大1時間かかる
+ * (/review-pr指摘、2026-07-22: 当初のコメントは次回スイープ=15分後に解決するかの
+ * ように読めたが、実際には1時間のcooldownが効く。管理者による手動リトライは
+ * cooldown無しで即座に成功する)。
  */
 export class FolderCreationInProgressError extends Error {
   constructor(name: string, parentId: string) {
