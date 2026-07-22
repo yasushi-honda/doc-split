@@ -41,17 +41,22 @@ export function pickerResponseToRootFolder(data: unknown): PickedFolder | null {
 }
 
 /**
- * Pickerのcallbackが「ユーザーが選択せずに閉じた」ことを表しているかを判定する
+ * Pickerのcallbackが「表示完了直後の中間イベント」であるかを判定する
  * （純粋関数、window.google非依存）。
  *
- * `google.picker.Action.CANCEL` の実値は `'cancel'`。Pickerのcallbackは表示完了時
- * （`Action.LOADED === 'loaded'`）にも呼ばれるため、`!== 'picked'`だけでキャンセル
- * 確定とは判定できない（code-reviewエージェント指摘対応: `loaded`をキャンセル扱い
- * すると、ユーザーがまだ操作中のPicker表示中に呼び出し元の状態がリセットされてしまう）。
+ * `google.picker.Action.LOADED` の実値は `'loaded'`。ユーザー操作を伴わずPicker表示時に
+ * 一度呼ばれるイベントで、呼び出し元はこの場合のみ`onPicked`/`onCancel`のどちらも呼ばず
+ * 無視すべきである。
+ *
+ * それ以外の全てのケース（`action:'cancel'`はもちろん、`action:'picked'`だが
+ * `docs`が空/`id`欠損という不正応答も含む）は`onCancel`相当として扱う（様子見#56対応、
+ * 2026-07-23: 以前は`isPickerCancelled(data)`で`action==='cancel'`のみを見ていたため、
+ * `picked`だが不正な応答の場合に`onPicked`/`onCancel`いずれの条件にも合致せず、
+ * 呼び出し元の`picking`状態が永久固着するバグがあった）。
  */
-export function isPickerCancelled(data: unknown): boolean {
+export function isPickerLoadedEvent(data: unknown): boolean {
   const response = data as { action?: string }
-  return response?.action === 'cancel'
+  return response?.action === 'loaded'
 }
 
 /**
@@ -97,10 +102,11 @@ export function openFolderPicker(options: {
         options.onPicked(folder)
         return
       }
-      if (isPickerCancelled(data)) {
+      if (!isPickerLoadedEvent(data)) {
+        // 'cancel'、または'picked'だがdocs空/id欠損等の不正応答は全てonCancel扱いにする
+        // (様子見#56対応、2026-07-23。詳細はisPickerLoadedEvent()のコメント参照)
         options.onCancel()
       }
-      // 'loaded'等それ以外のactionはPicker表示中の中間イベントのため無視する
     })
     .build()
 

@@ -201,6 +201,14 @@ export function resolveFolderSegments(
         if (resolved !== null) segments.push(resolved);
         break;
       }
+      default: {
+        // 様子見#57対応(2026-07-23): 将来segment種別追加時にcase追加を忘れると
+        // ここでコンパイルエラーになる(exhaustiveness check)。tsc --strictで
+        // segmentがnever型でなければ型エラーになるため、caseの実装漏れを実行時
+        // ではなくビルド時に検知できる。
+        const exhaustiveCheck: never = segment;
+        throw new Error(`未対応のsegment種別です: ${JSON.stringify(exhaustiveCheck)}`);
+      }
     }
   }
 
