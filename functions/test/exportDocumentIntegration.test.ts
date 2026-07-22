@@ -220,19 +220,26 @@ describe('exportDocument (ADR-0022 Phase 1)', () => {
     expect(data.careManager).to.equal('不変太郎');
   });
 
-  it('appPropertiesに一致する既存ファイルが1件見つかった場合はアップロードをスキップしそのidを再利用する(重複作成防止)', async () => {
+  it('appPropertiesに一致する既存ファイルが1件見つかった場合はidを再利用しつつ内容を最新化する(#54孤児ファイルstale内容対応)', async () => {
     const docId = await seedDocument();
     await seedCustomer();
     await seedDriveSettings();
-    const { drive, createCalls } = makeFakeDrive({
+    const { drive, createCalls, updateCalls } = makeFakeDrive({
       createdIds: ['folder-office', 'folder-customer'], // フォルダ用の2件のみ(ファイルは既存流用のため未使用)
       existingFiles: [{ id: 'orphaned-file-from-prior-run', name: '書類_事業所A_20260101_鈴木花子.pdf' }],
     });
 
-    await exportDocument(docId, TEST_RUN_ID, { drive, downloadFile: async () => Buffer.from('x') });
+    await exportDocument(docId, TEST_RUN_ID, { drive, downloadFile: async () => Buffer.from('fresh-bytes') });
 
-    // フォルダ作成2回のみ(ファイルのcreateは呼ばれない)
+    // フォルダ作成2回のみ(ファイルのcreateは呼ばれない、既存idを再利用)
     expect(createCalls).to.have.lengthOf(2);
+    // #54対応: idを再利用する場合も内容(media)を最新化する(このorphanが
+    // resolveDriveFile()のtrashed/404フォールバック経由で見つかった古い版の
+    // 可能性があり、内容が現在のfileUrlと一致する保証がないため)
+    expect(updateCalls).to.have.lengthOf(1);
+    expect(updateCalls[0].fileId).to.equal('orphaned-file-from-prior-run');
+    expect((updateCalls[0].media as { mimeType: string }).mimeType).to.equal('application/pdf');
+
     const data = (await db.doc(`documents/${docId}`).get()).data()!;
     expect(data.driveFileId).to.equal('orphaned-file-from-prior-run');
     expect(data.driveExportStatus).to.equal('exported');

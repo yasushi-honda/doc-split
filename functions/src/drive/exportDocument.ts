@@ -126,6 +126,22 @@ async function findOrUploadFile(
     if (!existingId) {
       throw new Error(`既存ファイルのidが取得できません: docId=${docId}`);
     }
+    // idは再利用しつつ内容(media)は最新化する(#54対応、2026-07-22): この分岐は
+    // resolveDriveFile()のtrashed/404フォールバック経由でも到達しうるため、
+    // 見つかった孤児ファイルが現在のfileUrlの内容と一致する保証がない
+    // (過去の失敗実行時点の内容のまま古くなっている可能性がある)。
+    const downloadFile = deps.downloadFile ?? defaultDownloadFile;
+    const buffer = await downloadFile(doc.fileUrl);
+    await drive.files.update({
+      fileId: existingId,
+      requestBody: { name: doc.displayFileName || doc.fileName },
+      media: {
+        mimeType: doc.mimeType,
+        body: Readable.from(buffer),
+      },
+      fields: 'id',
+      ...SUPPORTS_ALL_DRIVES,
+    });
     return existingId;
   }
 
