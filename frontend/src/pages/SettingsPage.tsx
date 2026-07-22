@@ -743,10 +743,10 @@ function GoogleDriveConnect() {
       callback: async (response: { code?: string; error?: string }) => {
         if (response.error || !response.code) {
           setError(response.error || '認証がキャンセルされました')
+          setConnecting(false)
           return
         }
 
-        setConnecting(true)
         try {
           const result = await callFunction<
             { code: string },
@@ -765,9 +765,16 @@ function GoogleDriveConnect() {
       // error_callbackで明示的に捕捉する(evaluator指摘対応)
       error_callback: () => {
         setError('認証がキャンセルされました')
+        setConnecting(false)
       },
     })
 
+    // ポップアップ表示前(requestCode()直前)にconnectingをtrueにする(様子見#55対応、
+    // 2026-07-23): 以前はGISのcallback内(ポップアップでのユーザー操作完了後)でしか
+    // trueにしていなかったため、ポップアップ表示中はボタンが無効化されず、連打すると
+    // requestCode()が複数回呼ばれ複数ポップアップ/複数exchangeDriveAuthCode呼び出しが
+    // 発生しえた。兄弟コンポーネントDriveFolderPicker.handlePickFolderと同じタイミングに揃える。
+    setConnecting(true)
     client.requestCode()
   }, [gisLoaded, clientId, queryClient])
 

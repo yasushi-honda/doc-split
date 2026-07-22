@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { pickerResponseToRootFolder, isPickerCancelled } from '../googlePicker'
+import { pickerResponseToRootFolder, isPickerLoadedEvent } from '../googlePicker'
 
 describe('pickerResponseToRootFolder', () => {
   it('action:pickedかつdocs[0]にid/nameがある → {rootFolderId, rootFolderName}を返す', () => {
@@ -61,25 +61,25 @@ describe('pickerResponseToRootFolder', () => {
   })
 })
 
-describe('isPickerCancelled', () => {
-  it('action:cancel → trueを返す', () => {
-    expect(isPickerCancelled({ action: 'cancel' })).toBe(true)
+describe('isPickerLoadedEvent', () => {
+  it('action:loaded（Picker表示完了の中間イベント） → trueを返す', () => {
+    expect(isPickerLoadedEvent({ action: 'loaded' })).toBe(true)
   })
 
-  it('action:picked → falseを返す（選択成功はキャンセルではない）', () => {
-    expect(isPickerCancelled({ action: 'picked', docs: [{ id: 'folder-abc' }] })).toBe(false)
+  it('action:cancel → falseを返す（中間イベントではなく確定イベント）', () => {
+    expect(isPickerLoadedEvent({ action: 'cancel' })).toBe(false)
   })
 
-  it('action:loaded（Picker表示完了の中間イベント） → falseを返す（キャンセル確定ではない）', () => {
-    expect(isPickerCancelled({ action: 'loaded' })).toBe(false)
+  it('action:picked → falseを返す（中間イベントではなく確定イベント）', () => {
+    expect(isPickerLoadedEvent({ action: 'picked', docs: [{ id: 'folder-abc' }] })).toBe(false)
   })
 
   it('actionが未定義 → falseを返す', () => {
-    expect(isPickerCancelled({})).toBe(false)
+    expect(isPickerLoadedEvent({})).toBe(false)
   })
 
   it('dataがnull/undefined → falseを返す（例外を投げない）', () => {
-    expect(isPickerCancelled(null)).toBe(false)
-    expect(isPickerCancelled(undefined)).toBe(false)
+    expect(isPickerLoadedEvent(null)).toBe(false)
+    expect(isPickerLoadedEvent(undefined)).toBe(false)
   })
 })
