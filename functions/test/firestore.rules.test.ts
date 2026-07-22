@@ -1817,5 +1817,54 @@ describe('Firestore Security Rules', () => {
         })
       );
     });
+
+    // code-review xhigh指摘#4対応(2026-07-22): settings/drive.authMode/connectedEmailは
+    // exchangeDriveAuthCode.ts(Admin SDK専有)のみが書き込む派生フィールド。管理者権限が
+    // あっても、実際のOAuthハンドシェイクを経由しない直接偽装を拒否する必要がある。
+    it('管理者でもsettings/drive.authModeへの新規値の上書きは拒否される', async () => {
+      const adminUser = testEnv.authenticatedContext(adminUid);
+
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'settings', 'drive'), {
+          rootFolderId: 'folder-abc',
+          authMode: 'oauth',
+          connectedEmail: 'real@example.com',
+        });
+      });
+
+      const docRef = doc(adminUser.firestore(), 'settings', 'drive');
+      await assertFails(updateDoc(docRef, { authMode: 'oauth', connectedEmail: 'forged@example.com' }));
+    });
+
+    it('管理者でもsettings/drive.authModeが未設定のdocへ新規設定するのは拒否される（実OAuthハンドシェイクを経由しない偽装の防止）', async () => {
+      const adminUser = testEnv.authenticatedContext(adminUid);
+
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'settings', 'drive'), {
+          rootFolderId: 'folder-abc',
+        });
+      });
+
+      const docRef = doc(adminUser.firestore(), 'settings', 'drive');
+      await assertFails(updateDoc(docRef, { authMode: 'oauth', connectedEmail: 'forged@example.com' }));
+    });
+
+    it('settings/drive.authMode/connectedEmailと同値での書込み、または他フィールドのみの更新は引き続き許可される', async () => {
+      const adminUser = testEnv.authenticatedContext(adminUid);
+
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'settings', 'drive'), {
+          rootFolderId: 'folder-abc',
+          authMode: 'oauth',
+          connectedEmail: 'real@example.com',
+        });
+      });
+
+      const docRef = doc(adminUser.firestore(), 'settings', 'drive');
+      // 他フィールド(rootFolderId)のみの更新はauthMode/connectedEmailに触れないため許可
+      await assertSucceeds(updateDoc(docRef, { rootFolderId: 'folder-xyz' }));
+      // 既存と同値での書込みは「無変更」扱いのため許可
+      await assertSucceeds(updateDoc(docRef, { authMode: 'oauth', connectedEmail: 'real@example.com' }));
+    });
   });
 });
