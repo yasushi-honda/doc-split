@@ -121,4 +121,9 @@ describe('getDriveExportGate (allowlist込みgate、Phase D/E再設計 Codex Fin
       .set({ driveExport: true, driveExportAllowlist: ['docA', 123] as unknown });
     expect(await getDriveExportGate(db)).to.deep.equal({ enabled: true, allowlist: [] });
   });
+
+  it('driveExportAllowlistフィールドが明示的にnullの場合、フィールド不在とは区別しfail-closedでallowlist:[](全拒否)を返す(codex review P1指摘対応: コンソール誤操作等でnullが書き込まれても制限なし扱いにならない)', async () => {
+    await db.doc(FEATURE_FLAGS_DOC_PATH).set({ driveExport: true, driveExportAllowlist: null });
+    expect(await getDriveExportGate(db)).to.deep.equal({ enabled: true, allowlist: [] });
+  });
 });

@@ -61,10 +61,14 @@ export async function getDriveExportGate(
   const data = snap.data();
   const enabled = data?.driveExport === true;
 
-  const rawAllowlist = data?.driveExportAllowlist;
-  if (rawAllowlist == null) {
+  // フィールドが「存在しない」場合のみ制限なし(null)とする。フィールドが存在するが
+  // 値がnull(コンソール誤操作等)の場合は、undefinedと`==null`で同一視すると
+  // fail-closed方針から漏れてしまうため、不正値と同じくfail-closed側(空配列)へ倒す
+  // (codex review P1指摘対応、2026-07-23)。
+  if (!data || !('driveExportAllowlist' in data)) {
     return { enabled, allowlist: null };
   }
+  const rawAllowlist = data.driveExportAllowlist;
   if (!Array.isArray(rawAllowlist) || rawAllowlist.some((v) => typeof v !== 'string')) {
     console.error(
       `[featureFlags] driveExportAllowlist が不正な形式です(配列/文字列以外): ${JSON.stringify(rawAllowlist)}。fail-closedで全docId拒否として扱います。`
