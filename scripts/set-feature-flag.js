@@ -23,7 +23,7 @@ const path = require('path');
 const admin = require('firebase-admin');
 
 /** functions/src/utils/featureFlags.ts が読むフラグ名と同期させること */
-const KNOWN_FLAGS = ['faxDuplication'];
+const KNOWN_FLAGS = ['faxDuplication', 'driveExport'];
 
 const projectId = process.env.FIREBASE_PROJECT_ID;
 if (!projectId) {

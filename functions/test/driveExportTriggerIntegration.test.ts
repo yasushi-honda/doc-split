@@ -90,6 +90,10 @@ async function enableDriveExportFlag(): Promise<void> {
   await db.doc('settings/features').set({ driveExport: true }, { merge: true });
 }
 
+async function setDriveExportAllowlist(allowlist: unknown): Promise<void> {
+  await db.doc('settings/features').set({ driveExportAllowlist: allowlist }, { merge: true });
+}
+
 async function getDoc(docId: string) {
   const snap = await db.doc(`documents/${docId}`).get();
   return snap.data()!;
@@ -277,5 +281,132 @@ describe('processDriveExportTrigger (ADR-0022 Phase 1)', () => {
     expect(data.driveExportStatus).to.equal('error');
     expect(data.driveExportError).to.be.a('string').and.not.empty;
     expect(data.driveFileId).to.be.undefined;
+  });
+
+  describe('driveExportAllowlist (Phase D/E再設計、Codex Finding1対応: コントロールテスト巻き込み回避)', () => {
+    it('allowlist不在(制限なし)の場合、従来通りexportされる(dev全展開挙動を保持)', async () => {
+      const docId = await seedDocument();
+      await seedCustomer();
+      await seedDriveSettings();
+      await enableDriveExportFlag();
+      const { drive, createCalls } = makeFakeDrive({ createdIds: ['folder-office', 'exported-file-id'] });
+
+      await processDriveExportTrigger(
+        db,
+        docId,
+        { verified: false },
+        { verified: true },
+        { drive, downloadFile: async () => Buffer.from('fake-pdf-bytes') }
+      );
+
+      expect(createCalls).to.have.lengthOf(2);
+      const data = await getDoc(docId);
+      expect(data.driveExportStatus).to.equal('exported');
+    });
+
+    it('allowlistに対象docIdが含まれる場合、exportされる', async () => {
+      const docId = await seedDocument();
+      await seedCustomer();
+      await seedDriveSettings();
+      await enableDriveExportFlag();
+      await setDriveExportAllowlist([docId]);
+      const { drive, createCalls } = makeFakeDrive({ createdIds: ['folder-office', 'exported-file-id'] });
+
+      await processDriveExportTrigger(
+        db,
+        docId,
+        { verified: false },
+        { verified: true },
+        { drive, downloadFile: async () => Buffer.from('fake-pdf-bytes') }
+      );
+
+      expect(createCalls).to.have.lengthOf(2);
+      const data = await getDoc(docId);
+      expect(data.driveExportStatus).to.equal('exported');
+    });
+
+    it('allowlistに対象docIdが含まれない場合、Drive API呼び出し・フィールド書込みが一切発生しない(driveExportStatusは不在のまま)', async () => {
+      const docId = await seedDocument();
+      await seedCustomer();
+      await seedDriveSettings();
+      await enableDriveExportFlag();
+      await setDriveExportAllowlist(['other-doc-id']);
+      const { drive, createCalls } = makeFakeDrive({ createdIds: ['folder-office', 'exported-file-id'] });
+
+      await processDriveExportTrigger(
+        db,
+        docId,
+        { verified: false },
+        { verified: true },
+        { drive, downloadFile: async () => Buffer.from('fake-pdf-bytes') }
+      );
+
+      expect(createCalls).to.have.lengthOf(0);
+      const data = await getDoc(docId);
+      expect(data.driveExportStatus).to.be.undefined;
+    });
+
+    it('allowlistが空配列(block-all)の場合、どのdocIdもexportされない', async () => {
+      const docId = await seedDocument();
+      await seedCustomer();
+      await seedDriveSettings();
+      await enableDriveExportFlag();
+      await setDriveExportAllowlist([]);
+      const { drive, createCalls } = makeFakeDrive();
+
+      await processDriveExportTrigger(
+        db,
+        docId,
+        { verified: false },
+        { verified: true },
+        { drive, downloadFile: async () => Buffer.from('x') }
+      );
+
+      expect(createCalls).to.have.lengthOf(0);
+      const data = await getDoc(docId);
+      expect(data.driveExportStatus).to.be.undefined;
+    });
+
+    it('allowlistが不正値(非配列)の場合、fail-closedでexportされない', async () => {
+      const docId = await seedDocument();
+      await seedCustomer();
+      await seedDriveSettings();
+      await enableDriveExportFlag();
+      await setDriveExportAllowlist(docId); // 配列でなく文字列単体(誤操作を模す)
+      const { drive, createCalls } = makeFakeDrive();
+
+      await processDriveExportTrigger(
+        db,
+        docId,
+        { verified: false },
+        { verified: true },
+        { drive, downloadFile: async () => Buffer.from('x') }
+      );
+
+      expect(createCalls).to.have.lengthOf(0);
+      const data = await getDoc(docId);
+      expect(data.driveExportStatus).to.be.undefined;
+    });
+
+    it('flag OFF + allowlistに対象docIdが含まれる場合でも、flagが優先されexportされない', async () => {
+      const docId = await seedDocument();
+      await seedCustomer();
+      await seedDriveSettings();
+      await setDriveExportAllowlist([docId]);
+      // enableDriveExportFlag() を呼ばない = flag OFF
+      const { drive, createCalls } = makeFakeDrive();
+
+      await processDriveExportTrigger(
+        db,
+        docId,
+        { verified: false },
+        { verified: true },
+        { drive, downloadFile: async () => Buffer.from('x') }
+      );
+
+      expect(createCalls).to.have.lengthOf(0);
+      const data = await getDoc(docId);
+      expect(data.driveExportStatus).to.be.undefined;
+    });
   });
 });

@@ -70,6 +70,15 @@ jobs:
         # 解決済み。node --test ランナーで軽量実行(外部依存なし、数秒)。
         run: cd scripts && npm test
 
+      - name: Run Drive export backfill integration tests (Firestore emulator)
+        # scripts/backfill-drive-export.ts はkanameone/cocoro本番展開で使うPartial
+        # Update スクリプト(CLAUDE.md MUST: 更新対象外フィールド不変テスト必須、
+        # code-review high指摘#2対応)。実Firestore書込みを伴うため、scripts/lib
+        # 配下のemulator非依存unitテスト(npm test)とは別立てのnpmスクリプトにする。
+        run: cd scripts && firebase emulators:exec --only firestore 'npm run test:integration'
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+
       - name: Install Playwright browsers
         run: cd frontend && npx playwright install --with-deps chromium
 

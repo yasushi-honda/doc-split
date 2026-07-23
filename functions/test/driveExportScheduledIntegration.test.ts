@@ -123,6 +123,29 @@ describe('sweepStuckDriveExports (ADR-0022 Phase 1 Task8)', () => {
     expect(data.driveExportStatus).to.equal('exported');
   });
 
+  it('settings/features.driveExportAllowlistが設定されていても、対象外docIdのerror状態docは通常通り再エンキューされる(sweepはallowlist非対象という設計、Phase D/E再設計 Codex Finding1対応)', async () => {
+    const docId = await seedDocument({
+      driveExportStatus: 'error',
+      driveExportError: '古いエラー',
+      updatedAt: admin.firestore.Timestamp.fromMillis(
+        Date.now() - DRIVE_EXPORT_ERROR_RETRY_THRESHOLD_MS - BUFFER_MS
+      ),
+    });
+    // コントロールテスト運用を模し、docIdとは無関係な別docのみをallowlistに設定
+    await db.doc('settings/features').set({ driveExportAllowlist: ['some-other-doc-id'] }, { merge: true });
+    const { drive, createCalls } = makeFakeDrive({ createdIds: ['folder-office', 'exported-file-id'] });
+
+    const result = await sweepStuckDriveExports(db, {
+      drive,
+      downloadFile: async () => Buffer.from('x'),
+    });
+
+    expect(result).to.deep.equal({ requeued: 1, skipped: 0 });
+    expect(createCalls).to.have.lengthOf(2);
+    const data = await getDoc(docId);
+    expect(data.driveExportStatus).to.equal('exported');
+  });
+
   it('error状態でまだ閾値未満のdocはスキップされる(直近の失敗を連続リトライしない)', async () => {
     await seedDocument({
       driveExportStatus: 'error',
