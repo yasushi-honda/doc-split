@@ -397,6 +397,68 @@ function AdminGuide() {
         </ol>
       </section>
 
+      <section id="admin-section-2b" className="guide-section">
+        <h2><span className="section-number">&#x1f4c1;</span>Google Drive連携</h2>
+        <p>
+          確認済み（✓）にした書類PDFを、利用者ごとのGoogleドライブフォルダへ自動でエクスポートする機能です。
+          生成AIツールへの読み込みやインターネットFAX送信など、ドライブ上でのファイル活用に利用できます。
+        </p>
+
+        <div className="info-box">
+          <h4>この機能を使うには</h4>
+          <p>設定画面の「Google Drive連携」カードから、以下の3ステップで設定します。</p>
+        </div>
+
+        <h3>1. Drive接続</h3>
+        <ol className="steps-list">
+          <li>設定画面の「Google Drive連携」カードを開く</li>
+          <li>「Google Driveと連携する」ボタンをクリック</li>
+          <li>表示されたGoogleアカウントの選択画面で、エクスポート先として使うアカウントを選び、アクセスを許可する</li>
+          <li>連携が完了すると「連携済み」バッジと連携したアカウントのメールアドレスが表示される</li>
+        </ol>
+
+        <div className="info-box">
+          <h4>アクセス範囲について</h4>
+          <p>
+            DocSplitがアクセスできるのは<strong>この機能で作成・エクスポートしたファイルのみ</strong>です
+            （Googleの「drive.file」スコープ）。連携したアカウントの他のドライブファイルには一切アクセスしません。
+          </p>
+        </div>
+
+        <h3>2. エクスポート先フォルダの選択</h3>
+        <ol className="steps-list">
+          <li>「フォルダを選択する」ボタンをクリック</li>
+          <li>表示されたフォルダ選択画面で、書類の振り分け先となるルートフォルダを選ぶ</li>
+          <li>選択したフォルダ名が「選択中: 〇〇」と表示される</li>
+        </ol>
+        <p className="note">※共有ドライブのルート直下は選択できません。1階層以上のサブフォルダを選択してください。</p>
+
+        <h3>3. フォルダ階層テンプレートの設定</h3>
+        <p>
+          書類がドライブ上でどのような階層構造に振り分けられるかを設定します。
+          「かなめ式で初期化」「cocoro式で初期化」ボタンで、それぞれの標準構成をワンクリックで反映できます
+          （反映後、必要に応じて個別にカスタマイズも可能です）。
+        </p>
+        <ol className="steps-list">
+          <li>プリセットボタンをクリックしてテンプレートを初期化する（または個別に階層を組み立てる）</li>
+          <li>内容を確認し「保存」をクリック</li>
+        </ol>
+
+        <div className="info-box">
+          <h4>設定完了後の動作</h4>
+          <ul>
+            <li>3ステップの設定が完了すると、以後、書類を「確認済み」にするたびに自動でGoogleドライブへエクスポートされます</li>
+            <li>同一利用者の書類は、同じフォルダにまとめて格納されます</li>
+            <li>フリガナ未設定など、フォルダ名を決定できない場合はエラーとなり、「エラー履歴」画面の「Driveエクスポートエラー」タブに表示されます</li>
+          </ul>
+        </div>
+
+        <p className="note">
+          ※この機能の利用を開始する際、既存の確認済み書類については運営チームが別途まとめてエクスポート対応します。
+          設定完了後に新しく確認する書類は自動的に対象になります。
+        </p>
+      </section>
+
       <section id="admin-section-3" className="guide-section">
         <h2><span className="section-number">3</span>マスターデータ管理</h2>
 
@@ -1061,6 +1123,7 @@ function TableOfContents({ activeTab }: { activeTab: string }) {
   const adminToc = [
     { id: 'admin-section-1', title: '管理者機能' },
     { id: 'admin-section-2', title: '設定画面' },
+    { id: 'admin-section-2b', title: 'Google Drive連携' },
     { id: 'admin-section-3', title: 'マスターデータ管理' },
     { id: 'admin-section-4', title: '自動処理スケジュール' },
     { id: 'admin-section-5', title: 'トラブルシューティング' },
