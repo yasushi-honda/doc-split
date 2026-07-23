@@ -82,6 +82,16 @@ stateDiagram-v2
 
 **Phase1の既知の制約: `verified`維持のままの編集では再エクスポートされない**（PLAUSIBLE#49、2026-07-22決定）: `driveExportTrigger.ts`の`justVerified`判定（`verified`のfalse→true立ち上がりエッジのみ）は、`verified:true`のまま`customerName`/`documentType`等を編集した場合には反応しない設計である。バグではなく意図的な設計判断として本ADRに明記する: Phase1スコープでは、エクスポート後に内容を訂正する場合は運用上「一旦`verified:false`に戻してから再確認する」フローを前提とし、`verified`を維持したままの編集は再エクスポートの対象外とする。この制約を解消する自動再エクスポートの仕組みはPhase2以降で検討する。
 
+**kanameone/cocoro本番展開 Phase D/E再設計（Codex High指摘5件対応、2026-07-23）**: dev環境実装完了後、kanameone(876件)/cocoro(93件)への本番展開設計をCodexセカンドオピニオン（MCP, effort=high）がレビューし、以下5件のHigh指摘を受けて再設計した。
+
+- **flag ON時のallowlist機構**（指摘: flag ON直後は他ユーザーの通常確認操作も全てDrive書込みトリガー対象になり、1件だけのコントロールテストが成立しない）: `settings/features.driveExportAllowlist`（string配列）を新設し、`getDriveExportGate()`（`functions/src/utils/featureFlags.ts`）が単一snapshotで`{enabled, allowlist}`を返す。`driveExportTrigger.ts`のみがこのallowlistでゲートされる（`allowlist!==null && !allowlist.includes(docId)`なら早期return）。**sweep(`driveExportScheduled.ts`)・手動retry(`retryDriveExport.ts`)は意図的にallowlist非対象**（sweepのスコープはbackfillの`--limit`が決め、retryはadmin個別操作でmass export不可なため）。allowlist契約: フィールド不在=null=制限なし（dev環境の全展開挙動を保持）、空配列=block-all（staging用）、不正値（非配列/非string混在）はfail-closedで空配列扱い。**空配列にすることと全展開は別**（空配列は全拒否）: 全展開時は`--remove`でフィールド自体を削除すること（`scripts/set-drive-allowlist.js`の`--set`/`--clear-empty`/`--remove`）。
+- **backfillのcanary機構**（指摘: `scripts/backfill-drive-export.ts`に`--limit`/`--expected-count`/manifest/選択的rollbackが無く、cocoro先行実行も全量投入でしかなくcanaryにならない）: `--limit N`（対象を先頭N件に制限）、`--expected-count N`（対象件数が一致することを**書込み前に**アサート、不一致なら書込みゼロで中断）、`--manifest-out <path>`（`{runId, projectId, timestamp, docIds[]}`をJSON出力）、`--rollback <manifest>`（manifest記載docIdのうち、まだbackfillのsentinelエラーマーカーのままのものだけを`FieldValue.delete()`でfield-absentへ復帰。exported/exporting/実エラーへ進んだdocは意図的にskip）を追加。
+- **race修正**（指摘: 通常の確認操作とbackfillが競合し`driveExportStatus`を書き戻すリスク）: 従来の無条件`batch.update`を、各docの`updateTime`（Firestore Timestampオブジェクトをそのまま渡す）を`lastUpdateTime`preconditionとする個別`update()`に置換。read→write間に別の書込みが入ると`FAILED_PRECONDITION`(code 9)でskip・ログ出力し、相手の状態を上書きしない。**注意**: precondition値をISO文字列等へ変換して往復させるとnanosecond精度が失われ常に不一致になり全書込みが無言で失敗する（emulatorで実証済みの罠、`Timestamp`オブジェクトを直接渡すことが必須）。
+- **ロールバック意味論の明記**（指摘:「flag OFF」はロールバックではない）: flag OFFは**新規開始のみ停止**する。`driveExportTrigger.ts`/`driveExportScheduled.ts`のflagチェックは各実行の開始時点のみで、既に`exporting`へクレーム済みのexportは完走し、**作成済みのDrive上のPDFは自動削除されない**（`appProperties`/`docSplitDocId`による冪等性チェックがあるため、再度flag ONにしても重複作成はされない）。`backfill --rollback`はFirestoreの`driveExportStatus`/`driveExportError`マーカーのみを復帰する操作であり、Drive上の実体には一切関与しない。
+- **完了時間・異常停止基準**（指摘: 未定義）: `scripts/drive-export-status-report.ts`（read-only）が`verified==true`の状態分布（exported/exporting/error内訳をbackfillマーカーと実エラーに分割/フィールド不在）を集計する。主シグナルは**exported数の単調増加**（定期スイープ10件/15分が目安）、副シグナルは実エラー比率（>20%で警告表示）。Stage D（コントロールテスト）着手前は本レポートで`error=0`かつ`exporting=0`（既存の滞留docがないこと）を確認するentry gateとする。
+
+段階的展開runbook（Stage D: allowlist+1件コントロールテスト → Stage E1: `--limit`小規模canary backfill → Stage E2: allowlist `--remove`＋残り全件backfill、cocoro先行→kanameone）は`docs/handoff/GOAL.md`に記録し、実際のflag ON/backfill本実行はPhase C（各クライアントのGoogle Drive OAuth接続完了）確認後、番号単位の明示認可で別途実施する。
+
 ### 7. スコープはPhase 1（MVP）に限定
 
 Phase 1 = OAuth接続 + Picker + セグメント型テンプレート設定 + 確認ボタン起点のoutboxエクスポート + fileId記録によるfind-or-createの重複防止 + エラー一覧UI + 定期リトライ（Cloud Scheduler）。

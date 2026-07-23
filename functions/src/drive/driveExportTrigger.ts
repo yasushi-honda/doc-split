@@ -18,7 +18,7 @@
 
 import { onDocumentWritten } from 'firebase-functions/v2/firestore';
 import * as admin from 'firebase-admin';
-import { isDriveExportEnabled } from '../utils/featureFlags';
+import { getDriveExportGate } from '../utils/featureFlags';
 import { executeDriveExport } from './executeDriveExport';
 import type { ExportDocumentDeps } from './exportDocument';
 
@@ -46,8 +46,19 @@ export async function processDriveExportTrigger(
     return;
   }
 
-  if (!(await isDriveExportEnabled(firestore))) {
+  const { enabled, allowlist } = await getDriveExportGate(firestore);
+  if (!enabled) {
     return; // Feature Flag OFF → 完全no-op(Drive API呼び出し・フィールド書込み一切なし)
+  }
+
+  // allowlist(settings/features.driveExportAllowlist)によるコントロールテスト時の
+  // 巻き込み回避(Phase D/E再設計、Codex Finding1対応)。null(フィールド不在)は
+  // 「制限なし」を意味し、既存の全展開挙動を保持する。空配列を含む配列が設定されて
+  // いる場合はallowlistに含まれるdocIdのみexportを許可する(段階的展開のcanary用)。
+  // sweep(driveExportScheduled.ts)・手動retry(retryDriveExport.ts)はこのallowlistの
+  // 対象外(意図的、スコープはbackfillの--limitやadmin個別操作で制御する設計)。
+  if (allowlist !== null && !allowlist.includes(docId)) {
+    return;
   }
 
   // driveExportStatusが未設定(フィールド不在)のdocのみをexportingへクレームする。
