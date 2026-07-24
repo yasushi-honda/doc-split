@@ -1,6 +1,40 @@
 # ハンドオフメモ
 
-**更新日**: 2026-07-24（Geminiモデル運用の実データ検証・doc-audit対応、Drive Phase1ミッションとは独立）
+**更新日**: 2026-07-24（kanameone UXフィードバック①〜⑤対応 + セカンドオピニオン修正 + ヘルプ精度是正、Drive Phase1ミッションとは独立）
+
+## kanameone UXフィードバック①〜⑤対応 + セカンドオピニオン修正 + ヘルプページ精度是正（2026-07-24、Drive Phase1ミッションとは無関係の独立セッション）
+
+kanameoneの実担当者から届いた6件のUXフィードバック（担当CM別ファイル名表示・事業所別欠落・テーブル列幅・五十音順要望・キーワード検索・Drive保存タイミング）に対応した。decision-maker指定の優先順位（①②③最優先→⑤→⑥はDrive連携本番稼働後）に沿って実施。
+
+**① 担当CM別ファイル名表示バグ**: `CustomerSubGroup.tsx`のDocumentRowが`getDisplayFileName()`を呼ばず生の`fileName`（内部ID風文字列）を表示していた欠陥を修正。
+
+**② 事業所別・担当CM別ビューの100件キャップ**: `GroupList.tsx`が`sortBy:'count', limitCount:100`のサーバークエリを使っており、書類数の少ない事業所（実例:「ヘルパーステーションダチョウ」）が恒久的に非表示になっていた。顧客別・書類種別と同様の全件取得+クライアントソートに統一。
+
+**③ テーブル列幅・ステータス列見切れ**: `DocumentsPage.tsx`の書類一覧テーブルがファイル名列に幅制約を持たず`table-layout:auto`で長いファイル名（区切り文字なしのID風文字列）が列を肥大化させステータス列を画面外に押し出していた。`max-width`+`break-words`で折り返し表示に変更。
+
+**④→⑤ 五十音順要望はキーワード検索で代替**: クライアント自身が「⑤があれば④は不要」と結論。⑤として事業所別・書類種別・担当CM別・顧客別ビューにグループ名フリーテキスト検索を新規実装（`frontend/src/lib/filterGroupsByName.ts`、全角/半角・大小文字・旧字体を吸収する`normalizeName`ベースの正規化）。
+
+以上をPR #717（5 files, +170/-17）としてマージ。`/code-review`で3件（書類種別フラット表示の100件キャップが名前フィルターより先に適用され101件目以降が検索できないバグ・displayNameがundefinedの場合のクラッシュ・NFKC正規化の重複実装）を検出・同PRで修正済み。
+
+**セカンドオピニオン（`/codex review-diff`）→ PR #718**: マージ後の追加チェックで、書類種別のカテゴリ階層表示時（`useCategoryHierarchy=true`）は⑤の検索欄自体が非表示になる設計漏れをP2指摘。「カテゴリ階層表示は通常の設定済みケース」というCodexの主張を鵜呑みにせず、kanameone/cocoro本番の`masters/documents/items`を実測したところ**両クライアントとも100%（kanameone 126/126件、cocoro 27/27件）でcategory運用済み**と判明し、指摘が正確な事実だったことを確認。`filterCategoryHierarchyByName()`を追加してカテゴリ内グループも検索対象に拡張（PR #718、`/code-review`指摘0件）。
+
+**ヘルプページ精度是正（PR #719）**: 別件（cocoroのGoogleドライブ接続案内通知文の作成）に先立ち、`/help`管理者ガイドのGoogle Drive連携セクションが実装と一致しているか実機（Playwright MCP）で確認したところ、2件の乖離を発見・修正: (1) 「設定画面の『Google Drive連携』カードから」という記載が、実際は上部タブから「Google Drive」を選ぶ操作（デフォルトタブは「Gmail設定」）が必要な点に触れていなかった (2) フォルダ階層テンプレートの保存ボタンの実ラベルは「設定を保存」だが「保存」と誤記載していた。
+
+**cocoroのfaxDuplication機能ON化**: 設定差分調査で`settings/features.faxDuplication`がkanameone=true・cocoro=未設定（コード上「kanameone専用機能」と明記）という差異を発見・報告したところ、decision-makerから「cocoroも同機能を使いたい」との明示指示を受け、`scripts/set-feature-flag.js`をGitHub Actions「Run Operations Script」経由（dry-run確認後に本実行）でcocoroに適用。Firestore直接読み取りで反映確認済み。
+
+**デプロイ**: PR #717・#718・#719（計3件）をdev（CI自動）+ kanameone・cocoro（`Deploy Cloud Functions`/`Deploy Firebase Hosting`のGitHub Actions、cocoro Hostingのみ`/deploy`スキルのローカル手順）へ展開。全デプロイについて配信バンドルへの`curl`直接アクセスで新機能の文字列・修正後の文言が実際に含まれることを検証済み（Functions側はバックエンド変更なしのため全て"Skipped (No changes detected)"で正常）。
+
+UI変更を含む3PRとも`ui-verified`ラベル付与前にPlaywright MCPでの実機確認証跡をPRコメントに記録（viewport・確認手順・確認結果を明記）。
+
+decision-maker向けに社内進捗ダッシュボードHTML、非エンジニアクライアント向け進捗レポートHTML、Googleドライブ接続依頼の通知文（コピーボタン付きHTML）の3点をローカル生成（スクラッチパス、リポジトリ非管理）で提供。
+
+### Issue Net
+Net +0（Close 0件・起票0件。GitHub Issue化は行わず、PR完結）
+
+### 同根再発スキャン・対症療法判定（handoff §4.6/§4.7）
+- 過去7日のhandoffアーカイブで「担当CM別」「GroupList」キーワードが1件ヒット（session128〜132「担当CM別集計バグ修正」、2026-07-14〜15）したが、内容を確認した結果、対象は**バックエンド集計トリガーのcount不整合**（`canFallbackToUnassigned`条件漏れ）であり、今回のフロントエンド表示・クエリキャップ・レイアウトバグとは異なるサブシステム・異なる原因クラスと判断（同根ではない）
+- PR #717→#718は同一ファイル（GroupList.tsx/filterGroupsByName.ts）を連続して触れているが、これは`/codex review-diff`指摘を受けた同日内の意図的な機能完成（scope拡張）であり、独立した修正試行の繰り返し（同根再発）には該当しない
+- 対症療法判定: 4基準（retry/fallback限定修正・外部要因調査欠如・過去30日同症状PR・smoke限定検証）いずれにも該当せず。全修正は根本原因を特定した上での実装、検証もFirestore実データ+Playwright実機確認+本番配信バンドルの直接照合と、smoke testを超える水準
 
 ## Geminiモデル運用調査・thinkingLevel最適化・doc-audit対応（2026-07-24、Drive Phase1ミッションとは無関係の独立セッション）
 
