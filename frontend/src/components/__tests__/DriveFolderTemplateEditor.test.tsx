@@ -5,7 +5,7 @@
 import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { DriveFolderTemplateEditor } from '../DriveFolderTemplateEditor'
-import { KANAME_PRESET_TEMPLATE, COCORO_PRESET_TEMPLATE } from '@/lib/driveFolderTemplate'
+import { buildDetailed5TierPreset, SIMPLE_3TIER_PRESET_TEMPLATE } from '@/lib/driveFolderTemplate'
 import type { DriveFolderTemplate } from '@shared/types'
 
 // @testing-library/jest-dom は未導入のため、disabled 判定はネイティブDOMプロパティで検証する
@@ -54,7 +54,7 @@ describe('DriveFolderTemplateEditor', () => {
   }
 
   it('各セグメント種別のミニフォームが描画される', () => {
-    renderEditor(KANAME_PRESET_TEMPLATE)
+    renderEditor(buildDetailed5TierPreset(['何か']))
     expect(screen.getByLabelText('固定文字列')).toBeDefined()
     expect(screen.getByLabelText('ケアマネの表示形式')).toBeDefined()
     expect(screen.getByLabelText('利用者の表示形式')).toBeDefined()
@@ -175,15 +175,36 @@ describe('DriveFolderTemplateEditor', () => {
     expect(onFuriganaFallbackChange).toHaveBeenCalledWith('useNameInitial')
   })
 
-  it('「かなめ式で初期化」でKANAME_PRESET_TEMPLATEがonChangeされる', () => {
+  it('「5階層（詳細）」プリセットカードは、企業名を含まない汎用ラベルで表示される', () => {
     renderEditor([])
-    fireEvent.click(screen.getByText('かなめ式で初期化'))
-    expect(onChange).toHaveBeenCalledWith(KANAME_PRESET_TEMPLATE)
+    expect(screen.getByText('5階層（詳細）')).toBeDefined()
+    expect(screen.getByText('3階層（シンプル）')).toBeDefined()
+    expect(screen.queryByText(/かなめ|cocoro/)).toBeNull()
   })
 
-  it('「cocoro式で初期化」でCOCORO_PRESET_TEMPLATEがonChangeされる', () => {
+  it('「5階層（詳細）」カードをクリックすると、現行の書類マスタ名がdateセグメントのonlyForCategoriesに反映されたテンプレートでonChangeされる', () => {
     renderEditor([])
-    fireEvent.click(screen.getByText('cocoro式で初期化'))
-    expect(onChange).toHaveBeenCalledWith(COCORO_PRESET_TEMPLATE)
+    fireEvent.click(screen.getByRole('button', { name: /5階層（詳細）を適用/ }))
+    expect(onChange).toHaveBeenCalledWith(
+      buildDetailed5TierPreset(['居宅サービス計画書（1）', '主治医意見書'])
+    )
+  })
+
+  it('「3階層（シンプル）」カードをクリックするとSIMPLE_3TIER_PRESET_TEMPLATEがonChangeされる', () => {
+    renderEditor([])
+    fireEvent.click(screen.getByRole('button', { name: /3階層（シンプル）を適用/ }))
+    expect(onChange).toHaveBeenCalledWith(SIMPLE_3TIER_PRESET_TEMPLATE)
+  })
+
+  it('書類マスタが空の場合、「5階層（詳細）」カード適用後のdateセグメントはonlyForCategoriesが空配列になる', () => {
+    mockDocumentMastersData = []
+    renderEditor([])
+    fireEvent.click(screen.getByRole('button', { name: /5階層（詳細）を適用/ }))
+    expect(onChange).toHaveBeenCalledWith(buildDetailed5TierPreset([]))
+  })
+
+  it('プリセット適用直後相当の(固定文字列が空欄の)テンプレートは、保存前バリデーション警告が表示される', () => {
+    renderEditor(buildDetailed5TierPreset(['何か']))
+    expect(screen.getByText('1階層目（固定文字列）に文字列が入力されていません')).toBeDefined()
   })
 })

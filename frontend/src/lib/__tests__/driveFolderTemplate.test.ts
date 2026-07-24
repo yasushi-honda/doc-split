@@ -12,8 +12,8 @@ import {
   updateSegment,
   describeSegment,
   validateTemplate,
-  KANAME_PRESET_TEMPLATE,
-  COCORO_PRESET_TEMPLATE,
+  buildDetailed5TierPreset,
+  SIMPLE_3TIER_PRESET_TEMPLATE,
 } from '../driveFolderTemplate'
 import type { DriveFolderTemplate } from '@shared/types'
 
@@ -224,11 +224,28 @@ describe('validateTemplate', () => {
 })
 
 describe('プリセットテンプレート', () => {
-  it('KANAME_PRESET_TEMPLATEはバリデーションを通過する', () => {
-    expect(validateTemplate(KANAME_PRESET_TEMPLATE)).toEqual([])
+  it('buildDetailed5TierPresetは渡したdocumentCategoryNamesをdateセグメントのonlyForCategoriesへ反映する', () => {
+    const template = buildDetailed5TierPreset(['書類A', '書類B'])
+    const dateSegment = template.find((s) => s.type === 'date')
+    expect(dateSegment).toMatchObject({ onlyForCategories: ['書類A', '書類B'] })
   })
 
-  it('COCORO_PRESET_TEMPLATEはバリデーションを通過する', () => {
-    expect(validateTemplate(COCORO_PRESET_TEMPLATE)).toEqual([])
+  it('buildDetailed5TierPresetは固定文字列が空欄のため、書類種別を渡しても保存前バリデーションで警告される', () => {
+    const warnings = validateTemplate(buildDetailed5TierPreset(['書類A']))
+    expect(warnings).toEqual(['1階層目（固定文字列）に文字列が入力されていません'])
+  })
+
+  it('buildDetailed5TierPresetに空配列を渡すと、日付階層の対象書類種別未選択警告も追加される', () => {
+    const warnings = validateTemplate(buildDetailed5TierPreset([]))
+    expect(warnings).toEqual([
+      '1階層目（固定文字列）に文字列が入力されていません',
+      '5階層目（日付）は対象書類種別が未選択のため、この階層は常に生成されません',
+    ])
+  })
+
+  it('SIMPLE_3TIER_PRESET_TEMPLATEは固定文字列が空欄のため保存前バリデーションで警告される', () => {
+    expect(validateTemplate(SIMPLE_3TIER_PRESET_TEMPLATE)).toEqual([
+      '1階層目（固定文字列）に文字列が入力されていません',
+    ])
   })
 })
