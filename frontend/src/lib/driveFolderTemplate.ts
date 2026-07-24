@@ -146,28 +146,33 @@ export function validateTemplate(template: DriveFolderTemplate): string[] {
 }
 
 /**
- * かなめ（北名古屋事業所）実運用テンプレート例。5階層。
- * セグメント構成はfunctions/test/folderPath.test.tsのKANAME_TEMPLATEと同一だが、
- * dateセグメントのonlyForCategoriesは同テストのfixture値'ケアプラン'（大分類カテゴリ、
- * DocumentMaster.category）をそのまま使わない。実際にresolveFolderSegments/exportDocument.tsが
- * 突合するのはDocumentMaster.name（書類種別名）のため、scripts/setup-tenant.shのseedデータで
- * category:'ケアプラン'に属する書類種別名を明示する。
+ * 詳細プリセット(5階層)の静的部分。セグメント種別の並びはfunctions/test/folderPath.test.tsの
+ * KANAME_TEMPLATEを参考にしているが、値そのものは汎用化のため異なる(fixedは空欄、dateは
+ * buildDetailed5TierPresetで動的に組み立てる)。
  */
-export const KANAME_PRESET_TEMPLATE: DriveFolderTemplate = [
-  { type: 'fixed', value: '北名古屋事業所' },
+export const DETAILED_5TIER_PRESET_BASE: DriveFolderSegment[] = [
+  { type: 'fixed', value: '' },
   { type: 'careManager', format: 'surnameInitialSpaceName' },
   { type: 'customer', format: 'furiganaInitialSpaceName' },
   { type: 'documentCategory' },
-  {
-    type: 'date',
-    format: 'YYYY年MM月',
-    onlyForCategories: ['居宅サービス計画書（1）', '居宅サービス計画書（2）'],
-  },
 ]
 
-/** cocoro実運用テンプレート例。3階層。functions/test/folderPath.test.tsのCOCORO_TEMPLATEと同一 */
-export const COCORO_PRESET_TEMPLATE: DriveFolderTemplate = [
-  { type: 'fixed', value: '共有フォルダ' },
+/**
+ * 詳細プリセット(5階層)を組み立てるファクトリ関数。
+ * dateセグメントのonlyForCategoriesは、実際にresolveFolderSegments/exportDocument.tsが
+ * 突合するDocumentMaster.name(書類種別名)をテナントごとに動的に渡す必要がある
+ * (ハードコードすると他テナントの書類種別名と一致せず、日付階層が常に生成されなくなるため)。
+ */
+export function buildDetailed5TierPreset(documentCategoryNames: string[]): DriveFolderTemplate {
+  return [
+    ...DETAILED_5TIER_PRESET_BASE,
+    { type: 'date', format: 'YYYY年MM月', onlyForCategories: documentCategoryNames },
+  ]
+}
+
+/** シンプルプリセット(3階層)。セグメント構成はfunctions/test/folderPath.test.tsのCOCORO_TEMPLATEを参考 */
+export const SIMPLE_3TIER_PRESET_TEMPLATE: DriveFolderTemplate = [
+  { type: 'fixed', value: '' },
   { type: 'careManager', format: 'nameOnly' },
   { type: 'customer', format: 'nameOnly' },
 ]
