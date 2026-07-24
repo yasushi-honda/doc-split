@@ -54,7 +54,7 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    PDF["PDF"] --> Gemini["Gemini 2.5 Flash"]
+    PDF["PDF"] --> Gemini["Gemini 3.5 Flash"]
     Gemini --> Extract["情報抽出"]
     Extract --> Customer["顧客名"]
     Extract --> DocType["書類種別"]

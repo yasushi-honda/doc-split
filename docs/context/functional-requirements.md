@@ -2,7 +2,7 @@
 title: "機能要件"
 description: "書類管理ビューアーアプリの機能要件定義"
 status: completed
-updated: "2026-04-27"
+updated: "2026-07-24"
 ---
 
 # 機能要件
@@ -139,7 +139,7 @@ flowchart TD
 
     subgraph OCR["2. OCR処理"]
         GCS1 -->|トリガー| CF2[Cloud Functions<br/>OCR処理]
-        CF2 -->|API呼出| Gemini[Vertex AI<br/>Gemini 2.5 Flash]
+        CF2 -->|API呼出| Gemini[Vertex AI<br/>Gemini 3.5 Flash]
         Gemini -->|解析結果| CF2
         CF2 -->|リネーム| GCS2[Cloud Storage<br/>整理済み]
         CF2 -->|メタ情報| FS[Firestore<br/>書類データ]

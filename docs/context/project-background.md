@@ -2,7 +2,7 @@
 title: "プロジェクト背景"
 description: "DocSplitプロジェクトの背景と元システム概要"
 status: completed
-updated: "2026-02-08"
+updated: "2026-07-24"
 created_at: "2026-01-17"
 ---
 
@@ -45,7 +45,7 @@ created_at: "2026-01-17"
 - **バックエンド**: Cloud Functions (2nd gen) + Firestore + Cloud Storage
 - **フロントエンド**: Firebase Hosting + React + Vite + TypeScript
 - **認証**: Firebase Authentication (Googleログイン + ホワイトリスト)
-- **OCR**: Vertex AI Gemini 2.5 Flash
+- **OCR**: Vertex AI Gemini 3.5 Flash
 
 ### 納品形態
 - GCPプロジェクト移譲（シングルテナント）

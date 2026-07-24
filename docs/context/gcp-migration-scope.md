@@ -3,7 +3,7 @@ title: "GCP移行スコープ"
 description: "AppSheet→GCP移行の対象範囲と要件定義"
 purpose: "AI駆動開発時のコンテキストとして優先読込"
 status: completed
-updated: "2026-02-07"
+updated: "2026-07-24"
 ---
 
 # GCP移行スコープ
@@ -22,7 +22,7 @@ updated: "2026-02-07"
 ### OCR処理
 | 項目 | 選定 | 理由 |
 |------|------|------|
-| エンジン | **Vertex AI Gemini 2.5 Flash** | AI OCR、高精度 |
+| エンジン | **Vertex AI Gemini 3.5 Flash** | AI OCR、高精度 |
 | リージョン | **asia-northeast1（東京）** | データ国内保持 |
 | 認証方式 | **Workload Identity** | APIキー不使用、セキュア |
 
@@ -90,7 +90,7 @@ flowchart TD
 
     subgraph OCR["OCR処理"]
         C --> D[Cloud Functions]
-        D -->|Workload Identity| E[Vertex AI<br/>Gemini 2.5 Flash<br/>asia-northeast1]
+        D -->|Workload Identity| E[Vertex AI<br/>Gemini 3.5 Flash<br/>asia-northeast1]
         E --> F[OCR結果]
     end
 
@@ -128,7 +128,7 @@ flowchart TD
 |------|---------|
 | Gmail添付ファイル取得（ラベル指定） | Gmail API + Cloud Scheduler + Cloud Functions |
 | Cloud Storage保存 | Cloud Functions |
-| AI OCR処理 | Vertex AI Gemini 2.5 Flash |
+| AI OCR処理 | Vertex AI Gemini 3.5 Flash |
 | 自動リネーム・メタ情報抽出 | Cloud Functions |
 | 書類一覧・検索・フィルタ・グルーピング | Firebase Hosting (React SPA) |
 | PDFビューアー | react-pdf (pdf.js) |

@@ -7,7 +7,7 @@
 | Googleログイン | P0 | ✅ | Firebase Authentication |
 | ホワイトリスト認証 | P0 | ✅ | 登録ユーザーのみアクセス可 |
 | Gmail添付取得 | P0 | ✅ | 定期自動取得 |
-| AI OCR | P0 | ✅ | Gemini 2.5 Flash |
+| AI OCR | P0 | ✅ | Gemini 3.5 Flash |
 | **AI要約** | P1 | ✅ | OCR結果からAI要約を生成 |
 | 書類一覧表示 | P0 | ✅ | 検索・フィルター付き |
 | PDFビューアー | P0 | ✅ | react-pdf |

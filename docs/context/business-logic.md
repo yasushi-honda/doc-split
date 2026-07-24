@@ -3,7 +3,7 @@ title: "ビジネスロジック概要"
 description: "書類管理アプリの主要ワークフローとアクションを要約"
 purpose: "AI駆動開発時のコンテキストとして優先読込"
 status: completed
-updated: "2026-02-08"
+updated: "2026-07-24"
 ---
 
 # ビジネスロジック概要
@@ -155,10 +155,10 @@ AppSheetからGoogle Apps Script (GAS) を呼び出して処理：
 | AppSheet自動化 | Cloud Functions + Cloud Scheduler |
 | GAS連携 | Cloud Functions (Node.js/Python) |
 | Gmail監視 | Gmail API + Pub/Sub |
-| OCR処理 | **Vertex AI Gemini 2.5 Flash** (asia-northeast1) |
+| OCR処理 | **Vertex AI Gemini 3.5 Flash** (asia-northeast1) |
 | ファイル操作 | Cloud Storage |
 
-> **Note**: OCRはCloud Vision APIではなくGemini 2.5 Flashを採用。
+> **Note**: OCRはCloud Vision APIではなくGemini 3.5 Flashを採用（2026-07-09にGemini 2.5 Flashから移行済み、Issue #548）。
 > AI OCRとして高精度、書類分類も同時に可能。詳細は `adr/0001-tech-stack-selection.md` 参照。
 
 ## 参照
