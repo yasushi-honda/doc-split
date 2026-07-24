@@ -49,7 +49,7 @@ import {
   summarizeCategoryGroups,
   type CategoryHierarchy,
 } from '@/lib/buildDocumentTypeCategoryGroups';
-import { filterGroupsByName } from '@/lib/filterGroupsByName';
+import { filterGroupsByName, filterCategoryHierarchyByName } from '@/lib/filterGroupsByName';
 import { GroupDocumentList } from './GroupDocumentList';
 import type { DateRange } from '@/components/DateRangeFilter';
 
@@ -275,15 +275,22 @@ export function GroupList({ groupType, dateFilter, onDocumentSelect }: GroupList
   // カテゴリ未運用テナントでは未分類 1 件にまとまるため、階層 UI を出さず従来のフラット表示に戻す
   const useCategoryHierarchy =
     isDocumentTypeView && categoryHierarchy.length > 0 && !isAllUncategorized(categoryHierarchy);
-  // 書類種別のカテゴリ階層表示はグループを再構成するため、フリーテキスト絞り込みの対象外
-  const showNameFilter = !(isDocumentTypeView && useCategoryHierarchy);
+
+  // カテゴリ階層表示時のフリーテキスト絞り込み: カテゴリ内のグループをそれぞれ絞り込み、
+  // 一致するグループが0件になったカテゴリは表示から除外する
+  // (/codex review-diff指摘: kanameone 126/126・cocoro 27/27件でcategory運用済みのため
+  //  「カテゴリ階層表示時は検索欄非表示」のままだと両クライアントで検索機能が実質使えなかった)
+  const filteredCategoryHierarchy = useMemo(() => {
+    if (!useCategoryHierarchy) return categoryHierarchy;
+    return filterCategoryHierarchyByName(categoryHierarchy, nameFilter);
+  }, [categoryHierarchy, useCategoryHierarchy, nameFilter]);
 
   // 顧客別: あいうえお順ソート + フィルター
   // furiganaMap未準備時はソート・フィルターをスキップ（空結果防止）
   // 書類種別タブ・階層省略時: 全件取得しているので件数降順 + 上位 100 件で従来表示と同等にする
   const displayGroups = useMemo(() => {
     if (!groups) return [];
-    // カテゴリ階層表示は内部でグループを再構成するため、フリーテキスト絞り込みは対象外
+    // カテゴリ階層表示は filteredCategoryHierarchy 側で絞り込むため、ここでは元のgroupsをそのまま返す
     if (isDocumentTypeView && useCategoryHierarchy) return groups;
 
     // フリーテキスト絞り込みは、書類種別フラット表示の上位100件キャップより先に適用する。
@@ -371,6 +378,13 @@ export function GroupList({ groupType, dateFilter, onDocumentSelect }: GroupList
     );
   }
 
+  // カテゴリ階層表示・フラット表示のどちらでも同じ基準で「絞り込み後の件数」「絞り込み結果0件」を扱う
+  const matchedGroupCount = useCategoryHierarchy
+    ? filteredCategoryHierarchy.reduce((sum, category) => sum + category.groups.length, 0)
+    : displayGroups.length;
+  const isNameFilterActive = nameFilter.trim().length > 0;
+  const isNameFilterEmptyResult = isNameFilterActive && matchedGroupCount === 0;
+
   return (
     <div className="space-y-4">
       {/* 統計情報 */}
@@ -388,29 +402,27 @@ export function GroupList({ groupType, dateFilter, onDocumentSelect }: GroupList
         </div>
       )}
 
-      {/* グループ名フリーテキスト絞り込み（書類種別のカテゴリ階層表示時は対象外） */}
-      {showNameFilter && (
-        <div className="relative max-w-sm">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            type="text"
-            placeholder={`${config.label}の名前で絞り込み...`}
-            value={nameFilter}
-            onChange={(e) => setNameFilter(e.target.value)}
-            className="pl-9 pr-9"
-          />
-          {nameFilter && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="absolute right-1 top-1/2 h-7 w-7 -translate-y-1/2 p-0"
-              onClick={() => setNameFilter('')}
-            >
-              <X className="h-4 w-4" />
-            </Button>
-          )}
-        </div>
-      )}
+      {/* グループ名フリーテキスト絞り込み（書類種別のカテゴリ階層表示時も対象） */}
+      <div className="relative max-w-sm">
+        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+        <Input
+          type="text"
+          placeholder={`${config.label}の名前で絞り込み...`}
+          value={nameFilter}
+          onChange={(e) => setNameFilter(e.target.value)}
+          className="pl-9 pr-9"
+        />
+        {nameFilter && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="absolute right-1 top-1/2 h-7 w-7 -translate-y-1/2 p-0"
+            onClick={() => setNameFilter('')}
+          >
+            <X className="h-4 w-4" />
+          </Button>
+        )}
+      </div>
 
       {/* あかさたなフィルター（顧客別のみ） */}
       {isCustomerView && (
@@ -430,12 +442,12 @@ export function GroupList({ groupType, dateFilter, onDocumentSelect }: GroupList
       {/* グループ一覧 */}
       <Card>
         {/* フィルター適用時の件数表示 */}
-        {((isCustomerView && selectedKanaRow) || (showNameFilter && nameFilter)) && (
+        {((isCustomerView && selectedKanaRow) || isNameFilterActive) && (
           <div className="px-4 py-2 text-xs text-gray-500 border-b border-gray-100">
-            {displayGroups.length}件 / {groups.length}件
+            {matchedGroupCount}件 / {groups.length}件
           </div>
         )}
-        {showNameFilter && nameFilter && displayGroups.length === 0 ? (
+        {isNameFilterEmptyResult ? (
           <div className="flex flex-col items-center justify-center py-16 text-gray-500">
             <Search className="mb-4 h-12 w-12 text-gray-300" />
             <p className="text-lg font-medium">該当する{config.label}が見つかりません</p>
@@ -444,7 +456,7 @@ export function GroupList({ groupType, dateFilter, onDocumentSelect }: GroupList
         ) : (
         <div className="divide-y divide-gray-100">
           {useCategoryHierarchy
-            ? categoryHierarchy.map((category) => (
+            ? filteredCategoryHierarchy.map((category) => (
                 <CategoryItem
                   key={category.categoryName}
                   category={category}
@@ -477,7 +489,7 @@ export function GroupList({ groupType, dateFilter, onDocumentSelect }: GroupList
         </div>
         )}
         {/* あかさたなフィルターで結果0件の場合（名前絞り込みが0件表示を出している間は重複表示しない） */}
-        {isCustomerView && selectedKanaRow && displayGroups.length === 0 && !nameFilter && (
+        {isCustomerView && selectedKanaRow && displayGroups.length === 0 && !isNameFilterActive && (
           <div className="py-8 text-center text-sm text-gray-500">
             「{selectedKanaRow}」行の顧客はいません
           </div>
