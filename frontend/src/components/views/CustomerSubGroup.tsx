@@ -18,6 +18,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { isCustomerConfirmed } from '@/hooks/useProcessingHistory';
 import { getStatusConfig, formatTimestamp } from '@/lib/documentUtils';
+import { getDisplayFileName } from '@/utils/getDisplayFileName';
 import {
   buildCustomerFolderGroups,
   type FolderGroup,
@@ -124,7 +125,7 @@ function DocumentRow({ document, onClick, onRetry }: DocumentRowProps) {
       <FileText className="h-4 w-4 flex-shrink-0 text-gray-400" />
       <div className="flex-1 min-w-0">
         <p className="text-sm font-medium text-gray-900 truncate">
-          {document.fileName}
+          {getDisplayFileName(document)}
         </p>
         <p className="text-xs text-gray-500 truncate">
           {document.documentType || '未判定'}

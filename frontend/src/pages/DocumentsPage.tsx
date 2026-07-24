@@ -258,10 +258,10 @@ function DocumentRow({
         </td>
       )}
       <td className="px-2 py-2 sm:px-4 sm:py-3">
-        <div className="flex items-center gap-2 sm:gap-3">
+        <div className="flex items-start gap-2 sm:gap-3">
           <FileText className="h-4 w-4 flex-shrink-0 text-gray-400 sm:h-5 sm:w-5" />
-          <div className="min-w-0">
-            <p className="truncate text-sm font-medium text-gray-900 sm:text-base">{getDisplayFileName(document)}</p>
+          <div className="min-w-0 max-w-[160px] sm:max-w-[240px]">
+            <p className="break-words text-sm font-medium text-gray-900 sm:text-base">{getDisplayFileName(document)}</p>
             <p className="truncate text-xs text-gray-500 sm:text-sm">{document.documentType || '未判定'}</p>
           </div>
         </div>
