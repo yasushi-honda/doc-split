@@ -943,10 +943,14 @@ ${pageNumber ? `\nこれは${pageNumber}ページ目です。` : ''}
           // thinkingを最小化しコストを削減する。gemini-2.5-flashはthinkingBudget方式
           // (既定0、GEMINI_OCR_THINKING_BUDGET環境変数でfeature flag化、GEMINI_CONFIG参照)。
           // Issue #548: gemini-3.5-flashはthinkingBudget非対応でthinkingLevel方式のみサポートのため、
-          // A/Bテストharness(PR #559、実機3回PASS・精度劣化なし)で実証済みのthinkingLevel.LOWを使用する。
+          // thinkingLevel.MINIMALを使用する(2026-07-24、LOWから変更)。2.5-flash時代の
+          // thinkingBudget=0という運用方針との一貫性を優先し、devフィクスチャ(14件)+
+          // kanameone/cocoro本番confirmed実データ(計18件)の計32件で精度検証(全件LOWと
+          // 完全一致、劣化ゼロ)、thinkingトークンは全件0でコスト16〜32%減を確認済み。
+          // 詳細はIssue #714コメント参照。
           // ロールバックは`GEMINI_MODEL_ID=gemini-2.5-flash`設定+functions再deployのみ(コード変更不要)。
           thinkingConfig: IS_35_MODEL
-            ? { thinkingLevel: ThinkingLevel.LOW }
+            ? { thinkingLevel: ThinkingLevel.MINIMAL }
             : { thinkingBudget: GEMINI_CONFIG.ocrThinkingBudget },
         },
       });
@@ -1092,7 +1096,7 @@ export async function extractOcrCandidates(
           config: {
             maxOutputTokens: GEMINI_MAX_OUTPUT_TOKENS,
             thinkingConfig: IS_35_MODEL
-              ? { thinkingLevel: ThinkingLevel.LOW }
+              ? { thinkingLevel: ThinkingLevel.MINIMAL }
               : { thinkingBudget: GEMINI_CONFIG.ocrThinkingBudget },
             responseMimeType: 'application/json',
             responseSchema: candidateSchema,
