@@ -406,12 +406,12 @@ function AdminGuide() {
 
         <div className="info-box">
           <h4>この機能を使うには</h4>
-          <p>設定画面の「Google Drive連携」カードから、以下の3ステップで設定します。</p>
+          <p>「設定」画面上部のタブから「Google Drive」を選ぶと表示される「Google Drive連携」カードで、以下の3ステップで設定します。</p>
         </div>
 
         <h3>1. Drive接続</h3>
         <ol className="steps-list">
-          <li>設定画面の「Google Drive連携」カードを開く</li>
+          <li>「設定」画面を開き、上部のタブから「Google Drive」を選ぶ</li>
           <li>「Google Driveと連携する」ボタンをクリック</li>
           <li>表示されたGoogleアカウントの選択画面で、エクスポート先として使うアカウントを選び、アクセスを許可する</li>
           <li>連携が完了すると「連携済み」バッジと連携したアカウントのメールアドレスが表示される</li>
@@ -441,7 +441,7 @@ function AdminGuide() {
         </p>
         <ol className="steps-list">
           <li>プリセットボタンをクリックしてテンプレートを初期化する（または個別に階層を組み立てる）</li>
-          <li>内容を確認し「保存」をクリック</li>
+          <li>内容を確認し「設定を保存」をクリック</li>
         </ol>
 
         <div className="info-box">
