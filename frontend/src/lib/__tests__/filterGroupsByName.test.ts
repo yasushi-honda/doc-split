@@ -31,6 +31,15 @@ describe('normalizeForNameFilter', () => {
   it('大文字小文字を区別しない', () => {
     expect(normalizeForNameFilter('Helper')).toBe('helper');
   });
+
+  it('旧字体(外字)を新字体に正規化する', () => {
+    expect(normalizeForNameFilter('髙橋')).toBe('高橋');
+  });
+
+  it('undefined/nullを渡してもクラッシュせず空文字を返す', () => {
+    expect(normalizeForNameFilter(undefined as unknown as string)).toBe('');
+    expect(normalizeForNameFilter(null as unknown as string)).toBe('');
+  });
 });
 
 describe('filterGroupsByName', () => {
@@ -56,5 +65,12 @@ describe('filterGroupsByName', () => {
 
   it('一致しない場合は空配列を返す', () => {
     expect(filterGroupsByName(groups, '存在しない事業所')).toEqual([]);
+  });
+
+  it('displayNameがundefinedのグループが混在していてもクラッシュしない（異常系）', () => {
+    const withMissingName = [...groups, makeGroup(undefined as unknown as string)];
+    expect(() => filterGroupsByName(withMissingName, 'ダチョウ')).not.toThrow();
+    const result = filterGroupsByName(withMissingName, 'ダチョウ');
+    expect(result.map((g) => g.displayName)).toEqual(['ヘルパーステーションダチョウ']);
   });
 });

@@ -283,23 +283,26 @@ export function GroupList({ groupType, dateFilter, onDocumentSelect }: GroupList
   // 書類種別タブ・階層省略時: 全件取得しているので件数降順 + 上位 100 件で従来表示と同等にする
   const displayGroups = useMemo(() => {
     if (!groups) return [];
-    let result: DocumentGroup[];
-    if (isCustomerView) {
-      if (!isFuriganaReady) return groups;
-      const sorted = sortGroupsByFurigana(groups, furiganaMap);
-      result = filterGroupsByKanaRow(sorted, selectedKanaRow, furiganaMap);
-    } else if (isDocumentTypeView && !useCategoryHierarchy) {
-      result = [...groups].sort((a, b) => b.count - a.count).slice(0, 100);
-    } else if (isDocumentTypeView) {
-      result = groups;
-    } else {
-      // 事業所別・担当CM別: サーバー側の上位100件キャップを廃止したため、
-      // 従来の表示順（件数降順）をクライアント側で維持する（全件表示、上限なし）
-      result = [...groups].sort((a, b) => b.count - a.count);
-    }
     // カテゴリ階層表示は内部でグループを再構成するため、フリーテキスト絞り込みは対象外
-    if (isDocumentTypeView && useCategoryHierarchy) return result;
-    return filterGroupsByName(result, nameFilter);
+    if (isDocumentTypeView && useCategoryHierarchy) return groups;
+
+    // フリーテキスト絞り込みは、書類種別フラット表示の上位100件キャップより先に適用する。
+    // 先に上位100件へ切り詰めてしまうと、101件目以降にしか存在しない書類種別を検索しても
+    // 常に0件になる不具合が起きるため（/code-review指摘）。
+    const nameFiltered = filterGroupsByName(groups, nameFilter);
+
+    if (isCustomerView) {
+      if (!isFuriganaReady) return nameFiltered;
+      const sorted = sortGroupsByFurigana(nameFiltered, furiganaMap);
+      return filterGroupsByKanaRow(sorted, selectedKanaRow, furiganaMap);
+    }
+    if (isDocumentTypeView) {
+      // 書類種別タブ・階層省略時: 件数降順 + 上位100件で従来表示と同等にする
+      return [...nameFiltered].sort((a, b) => b.count - a.count).slice(0, 100);
+    }
+    // 事業所別・担当CM別: サーバー側の上位100件キャップを廃止したため、
+    // 従来の表示順（件数降順）をクライアント側で維持する（全件表示、上限なし）
+    return [...nameFiltered].sort((a, b) => b.count - a.count);
   }, [groups, isCustomerView, isDocumentTypeView, useCategoryHierarchy, isFuriganaReady, furiganaMap, selectedKanaRow, nameFilter]);
 
   const config = GROUP_TYPE_CONFIG[groupType];
