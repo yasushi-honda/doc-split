@@ -30,7 +30,7 @@ flowchart TB
 
     subgraph External["外部サービス"]
         Gmail["Gmail API"]
-        Gemini["Gemini 2.5 Flash<br/>(Vertex AI)"]
+        Gemini["Gemini 3.5 Flash<br/>(Vertex AI)"]
     end
 
     Browser --> Hosting
@@ -85,7 +85,7 @@ sequenceDiagram
     participant Scheduler as Cloud Scheduler
     participant ProcessOCR as processOCR
     participant Storage as Cloud Storage
-    participant Gemini as Gemini 2.5 Flash
+    participant Gemini as Gemini 3.5 Flash
     participant Firestore as Firestore
 
     Note over Scheduler,ProcessOCR: 1分間隔ポーリング（ADR-0010: processOCROnCreate廃止）
@@ -99,6 +99,32 @@ sequenceDiagram
         ProcessOCR->>Firestore: マスターデータ照合
         ProcessOCR->>Firestore: 書類更新(status: processed)
     end
+```
+
+### Google Driveエクスポートフロー（ADR-0022、Phase1 MVP）
+
+```mermaid
+sequenceDiagram
+    participant User as ユーザー（確認ボタン押下）
+    participant Firestore as Firestore
+    participant Trigger as onDocumentWriteDriveExport
+    participant Drive as Google Drive API
+    participant Scheduled as driveExportScheduled
+
+    User->>Firestore: verified: false→true
+    Firestore->>Trigger: Firestore Trigger発火
+    Trigger->>Firestore: feature flag/allowlist確認
+    alt flag ON かつ allowlist対象
+        Trigger->>Drive: find-or-createフォルダ + ファイルアップロード
+        Drive-->>Trigger: driveFileId
+        Trigger->>Firestore: driveExportStatus: exported + driveFileId
+    else flag OFFまたはallowlist対象外
+        Trigger-->>Firestore: no-op（書込みなし）
+    end
+
+    Note over Scheduled: 15分間隔で並走
+    Scheduled->>Firestore: driveExportStatus: exporting停滞docをスキャン
+    Scheduled->>Firestore: requeue（再エクスポート対象に戻す）
 ```
 
 ## コンポーネント詳細
@@ -127,6 +153,10 @@ sequenceDiagram
 | `registerAdminUser` | Callable | 管理者ユーザー登録 |
 | `onCustomerMasterWrite` | Firestore Trigger | 顧客マスター変更時にドキュメント再照合 |
 | `exchangeGmailAuthCode` | Callable | Gmail OAuth認証コード交換 |
+| `exchangeDriveAuthCode` | Callable | Google Drive OAuth認証コード交換（ADR-0022） |
+| `onDocumentWriteDriveExport` | Firestore Trigger | `verified`確定時にGoogle Driveへ自動エクスポート（outboxパターン、ADR-0022） |
+| `retryDriveExport` | Callable | Driveエクスポート失敗時の手動リトライ |
+| `driveExportScheduled` | Scheduled (15分) | エクスポート停滞docの定期requeue（sweep） |
 
 ### Firestore コレクション
 
