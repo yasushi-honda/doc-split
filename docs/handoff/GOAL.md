@@ -1,5 +1,5 @@
 ---
-updated: 2026-07-23
+updated: 2026-07-24
 ---
 <!-- 前ミッション(dev/kanameone/cocoro環境監査・保守検証)は2026-07-20完遂。全文はdocs/handoff/LATEST.md参照。 -->
 <!-- Google Drive連携Phase1 (MVP)実装ミッションは2026-07-22完了(PR#700マージ)。詳細は本ファイル末尾「Google Drive連携Phase1完遂」節+docs/handoff/LATEST.md参照。 -->
@@ -21,6 +21,7 @@ kanameone・cocoroへのGoogle Drive連携Phase1本番展開。承認済み計�
 - [x] ヘルプマニュアルへのGoogle Drive連携ガイド追加（2026-07-23、PR #711マージ済み）: `frontend/src/pages/HelpPage.tsx`管理者ガイドに新セクション「Google Drive連携」を追加（Drive接続→フォルダ選択→テンプレート設定の3ステップ、SettingsPage.tsx実装の実UI文言を踏襲）。decision-maker指摘によりGoogle Workspace公式ブログ（2026-07-16付）でNotebookLMがGemini Notebookへ改称されたことを確認、外部製品名の陳腐化リスクを避け「生成AIツール」という汎用表現に修正。Playwright MCPでdev環境の実際のレンダリングを確認済み
 - [x] PR #710/#711のkanameone・cocoro本番反映漏れを発見・解消（2026-07-23）: catchupのcurl試行がauto mode classifierにブロックされた事象を発端に、decision-maker明示許可で`settings/drive`をread-only確認したところPhase C未着手を確認。その過程でPRマージ時刻とkanameone/cocoro側の実デプロイ時刻（Functions/Hosting）を突合し、PR #710（Phase D/E再設計コード）・PR #711（ヘルプマニュアル）がmainマージ済みにもかかわらず両クライアント環境へは未反映（直近デプロイがPRマージより前）と判明。decision-maker承認を得て`gh workflow run "Deploy Cloud Functions"`(kanameone/cocoro)+`"Deploy Firebase Hosting"`(kanameone、GHA限定)+手動`firebase deploy --only hosting -P cocoro`（`/deploy`スキルのcocoro手順通り、`.env.local`後片付け含む）を実行、4件とも成功。Functions updateTime・Hosting releaseTimeがPRマージ時刻より後であることをground truthで検証し反映確認済み
 - [x] Phase C事前安全性検証（2026-07-23、Playwright MCPでGoogle Auth Platform Console確認・設定変更は一切なし）: decision-maker質問「クライアント操作で即発覚するバグはないか」を受けExploreエージェントで調査した結果、OAuth接続フロー自体（PR #710の対象外）に懸念点はないが、kanameoneのOAuth同意画面が「Testing」ステータスだと(a)テストユーザー未登録で管理者接続時に403 access_denied (b)Testing状態はリフレッシュトークンが同意から7日で失効（公式ソース: support.google.com/cloud/answer/15549945で確認）という2つの潜在リスクを特定。Playwright MCPで実際にConsole確認した結果、**kanameoneは既に「公開ステータス: 本番環境」に到達済み**（テスト昇格操作は不要・7日失効リスクなし）、データアクセスページのスコープ登録0件（Gmail連携との競合懸念も該当なし）、「DocSplit Drive」クライアントのAuthorized JavaScript origins(`https://docsplit-kanameone.web.app`)・Firestore `settings/drive.oauthClientId`ともに実クライアントIDと完全一致を確認。cocoroは「ユーザーの種類: 内部」でTesting/Production概念自体が対象外と確認。Phase C（クライアント操作）は安全に案内可能な状態
+- [x] Phase C事前確認セッションで新規発見・修正（2026-07-24、PR #721マージ済み）: decision-maker依頼の「クライアント操作で誰でも気づく不具合はないか」再確認で、Firebase Emulator+Playwright MCPの実機テスト中に、フォルダ階層テンプレートの「かなめ式で初期化」「cocoro式で初期化」プリセットボタンがテナント判定なしに両クライアント環境へ無条件表示されている問題（cocoro管理者にも「かなめ式」ボタンが見える等）を発見。decision-maker指摘「短絡的な企業名付けをやめ、SVG図解で分かりやすく」を受けplan mode承認済み計画で対応: ①ラベルを「5階層（詳細）」「3階層（シンプル）」に汎用化+lucide-reactアイコンによるフォルダツリー図解プレビューカード化 ②プリセット適用後の固定文字列初期値を空欄化 ③Codexセカンドオピニオンで発見した「日付階層のonlyForCategoriesが特定書類種別名にハードコードされ他テナントで発火しない」問題を`buildDetailed5TierPreset(documentCategoryNames)`ファクトリ関数化で解消。`/code-review`（10角度並列+検証+gap sweep、1回目はストールし2回目で完了）でCONFIRMED 9件中優先度上位3件（図解ラベルと編集エリアの用語不一致・aria-labelによるスクリーンリーダー向けdescription欠落・ヘルプ文言矛盾）を追加修正。tsc/lint/該当テスト58件/frontend全体484件PASS、Firebase Emulator+Playwright MCPで実機確認（新カード表示・動的反映・aria-describedby紐付き等）済み。PR #721作成→CI全PASS→ui-verified付与→マージ→**dev（CI自動）・kanameone（GHA `Deploy Firebase Hosting`）・cocoro（`/deploy`スキル手順の手動デプロイ）の3環境すべてへデプロイ完了確認済み**。これによりPhase C案内時にクライアントが目にする画面の懸念は解消
 
 ## 【完了・2026-07-22】Google Drive連携Phase1 (MVP)実装ミッション
 
@@ -102,9 +103,9 @@ cocoro/kanameから、書類（ケアプラン・医療・介護保険証等）�
 
 **対象タスク**: 現在のミッション「kanameone・cocoroへのGoogle Drive連携Phase1本番展開」の Phase C、および Phase D/E の実行（設計・実装は完了済み）。
 
-**直前の状態（2026-07-23更新）**: Phase A・B完了に加え、Phase D/E再設計（Codex High 5指摘対応）の設計・コード実装・テスト・ADR更新まで完了。さらに本セッションで、PR #710/#711のkanameone・cocoro本番反映漏れを発見・解消し、Phase C事前安全性検証（OAuth同意画面のPublishing Status等）も完了（詳細は上記「現在のミッション」節の直近2エントリ）。両環境とも「クライアントが設定画面でGoogle Drive連携ボタンを押せる状態」に到達しており、Phase C実施時に想定される即時エラー（403 access_denied・7日後のトークン失効）のリスクは調査済みで解消済み（kanameoneは既にOAuth本番環境ステータス）。`settings/features.driveExport`は両環境ともflag OFF（未設定）のまま維持しており、現状は無害。allowlist機構・backfillのcanary/rollback機構もコードとして存在するが、**まだ本番環境への適用（flag ON等）はしていない**。
+**直前の状態（2026-07-24更新）**: Phase A・B・Phase D/E再設計に加え、PR #710/#711のkanameone・cocoro本番反映漏れ解消、Phase C事前安全性検証（OAuth同意画面のPublishing Status等）も完了済み。**本セッションで追加**: Phase C事前確認の実機テスト中に発見した「かなめ式で初期化」等の企業名混入プリセット問題をPR #721で修正し、dev・kanameone・cocoroの3環境すべてへデプロイ完了確認済み（詳細は上記「現在のミッション」節の直近エントリ）。両環境とも「クライアントが設定画面でGoogle Drive連携ボタンを押せる状態」に到達しており、Phase C実施時に想定される即時エラー（403 access_denied・7日後のトークン失効・企業名混入の見た目上の懸念）はすべて調査・解消済み（kanameoneは既にOAuth本番環境ステータス）。`settings/features.driveExport`は両環境ともflag OFF（未設定）のまま維持しており、現状は無害。allowlist機構・backfillのcanary/rollback機構もコードとして存在するが、**まだ本番環境への適用（flag ON等）はしていない**。
 
-**次の一手**: 残るはPhase C（外部依存、executor代行不可）のみ。kanameone/cocoro各管理者にGoogle Drive連携の操作手順（Drive連携ボタン押下→OAuth同意→フォルダ選択→テンプレート保存）を案内し、実施を待つ。安全性検証済みのため、案内自体はいつでも実施可能。Phase Cの完了確認後、GOAL.md「現在のミッション」節のPhase D/E再設計エントリに記載のrunbook（Stage D: allowlist+1件コントロールテスト → Stage E1: canary backfill → Stage E2: 全展開）に沿って、番号単位の明示認可を得ながら実行する。
+**次の一手**: 残るはPhase C（外部依存、executor代行不可）のみ。kanameone/cocoro各管理者にGoogle Drive連携の操作手順（Drive連携ボタン押下→OAuth同意→フォルダ選択→テンプレート保存）を案内し、実施を待つ。安全性検証・UX懸念解消・全環境デプロイ済みのため、案内自体はいつでも実施可能な状態。Phase Cの完了確認後、GOAL.md「現在のミッション」節のPhase D/E再設計エントリに記載のrunbook（Stage D: allowlist+1件コントロールテスト → Stage E1: canary backfill → Stage E2: 全展開）に沿って、番号単位の明示認可を得ながら実行する。
 
 **検証コマンド**（再開時に現状確認）:
 ```bash
