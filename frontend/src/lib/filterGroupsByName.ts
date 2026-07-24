@@ -6,6 +6,7 @@
  */
 
 import type { DocumentGroup } from '@/hooks/useDocumentGroups';
+import type { CategoryHierarchy } from '@/lib/buildDocumentTypeCategoryGroups';
 import { normalizeName } from '@/lib/textNormalizer';
 
 /**
@@ -17,8 +18,26 @@ export function normalizeForNameFilter(value: string): string {
   return normalizeName(value).toLowerCase();
 }
 
-export function filterGroupsByName(groups: DocumentGroup[], filterText: string): DocumentGroup[] {
+export function filterGroupsByName(groups: readonly DocumentGroup[], filterText: string): DocumentGroup[] {
   const normalized = normalizeForNameFilter(filterText.trim());
-  if (!normalized) return groups;
+  if (!normalized) return [...groups];
   return groups.filter((g) => normalizeForNameFilter(g.displayName).includes(normalized));
+}
+
+/**
+ * カテゴリ階層表示（書類種別タブでカテゴリマスターが運用されているテナント）向けの
+ * フリーテキスト絞り込み。各カテゴリ内のグループを絞り込み、一致するグループが
+ * 0件になったカテゴリは結果から除外する。
+ */
+export function filterCategoryHierarchyByName(
+  hierarchy: readonly CategoryHierarchy[],
+  filterText: string,
+): CategoryHierarchy[] {
+  if (!filterText.trim()) return [...hierarchy];
+  return hierarchy
+    .map((category) => ({
+      ...category,
+      groups: filterGroupsByName(category.groups, filterText),
+    }))
+    .filter((category) => category.groups.length > 0);
 }

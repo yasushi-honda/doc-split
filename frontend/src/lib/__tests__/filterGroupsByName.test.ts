@@ -6,8 +6,9 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { filterGroupsByName, normalizeForNameFilter } from '../filterGroupsByName';
+import { filterGroupsByName, filterCategoryHierarchyByName, normalizeForNameFilter } from '../filterGroupsByName';
 import type { DocumentGroup } from '@/hooks/useDocumentGroups';
+import type { CategoryHierarchy } from '../buildDocumentTypeCategoryGroups';
 import { Timestamp } from 'firebase/firestore';
 
 function makeGroup(displayName: string): DocumentGroup {
@@ -72,5 +73,40 @@ describe('filterGroupsByName', () => {
     expect(() => filterGroupsByName(withMissingName, 'ダチョウ')).not.toThrow();
     const result = filterGroupsByName(withMissingName, 'ダチョウ');
     expect(result.map((g) => g.displayName)).toEqual(['ヘルパーステーションダチョウ']);
+  });
+});
+
+describe('filterCategoryHierarchyByName', () => {
+  const hierarchy: CategoryHierarchy[] = [
+    {
+      categoryName: '報告書',
+      groups: [makeGroup('FAX送り状'), makeGroup('FAX送信確認')],
+    },
+    {
+      categoryName: 'アセスメント',
+      groups: [makeGroup('アセスメントシート')],
+    },
+  ];
+
+  it('カテゴリ内のグループを絞り込み、一致するグループがないカテゴリは除外する', () => {
+    const result = filterCategoryHierarchyByName(hierarchy, 'FAX送り状');
+    expect(result).toHaveLength(1);
+    expect(result.at(0)?.categoryName).toBe('報告書');
+    expect(result.at(0)?.groups.map((g) => g.displayName)).toEqual(['FAX送り状']);
+  });
+
+  it('カテゴリをまたいで一致する場合は両カテゴリとも残る', () => {
+    const result = filterCategoryHierarchyByName(hierarchy, 'FAX');
+    expect(result).toHaveLength(1);
+    expect(result.at(0)?.groups).toHaveLength(2);
+  });
+
+  it('空文字の場合は元の階層をそのまま返す', () => {
+    const result = filterCategoryHierarchyByName(hierarchy, '');
+    expect(result).toEqual(hierarchy);
+  });
+
+  it('一致しない場合は空配列を返す（全カテゴリが除外される）', () => {
+    expect(filterCategoryHierarchyByName(hierarchy, '存在しない書類種別')).toEqual([]);
   });
 });
