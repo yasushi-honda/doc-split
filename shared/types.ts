@@ -200,6 +200,14 @@ export interface Document {
   driveExportRunId?: string | null;
 }
 
+/**
+ * `CustomerUnconfirmedError`(`functions/src/drive/exportDocument.ts`)の
+ * `driveExportError`メッセージprefix。`scripts/drive-export-status-report.ts`が
+ * このprefixで「顧客未確定によるブロック」と「実際のDrive APIエラー」を分類する
+ * 安定文字列として、functions/scripts双方から参照できるsharedに定数化する。
+ */
+export const DRIVE_EXPORT_CUSTOMER_UNCONFIRMED_MESSAGE_PREFIX = '顧客が未確定のため';
+
 // ============================================
 // ADR-0018: Firestore egress削減のためのサブコレクション分離 (Issue #547)
 // ============================================

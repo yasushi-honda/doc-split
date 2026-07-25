@@ -1,9 +1,10 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useRef, useEffect } from 'react'
 import { doc, updateDoc, collection, addDoc, serverTimestamp, Timestamp, deleteField } from 'firebase/firestore'
 import { useQueryClient } from '@tanstack/react-query'
 import { db, auth } from '../lib/firebase'
 import { updateDocumentInListCache } from './useDocuments'
 import { isValidCustomerSelection, isValidOfficeSelection, isValidDocumentTypeSelection } from '../lib/documentUtils'
+import { findSameNameCollisionNames } from '@shared/customerIdentity'
 import { generateDisplayFileName } from '@shared/generateDisplayFileName'
 import type { Document } from '../../../shared/types'
 
@@ -43,15 +44,38 @@ interface UseDocumentEditResult {
   error: string | null
 }
 
-export function useDocumentEdit(document: Document | null | undefined): UseDocumentEditResult {
+export function useDocumentEdit(
+  document: Document | null | undefined,
+  customerMasters?: Array<{ name: string }>
+): UseDocumentEditResult {
   const [isEditing, setIsEditing] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [editedFields, setEditedFields] = useState<EditableFields>({})
   const queryClient = useQueryClient()
 
+  // 同姓同名の顧客欄が実際に人間に触られた(touched)かを追跡する(ADR-0022顧客未確定ゲート
+  // 再設計、2026-07-25)。useStateではなくuseRefで持つ: useCallbackのdeps経由で参照すると
+  // stale closureにより「同じ値で再選択して保存」がtouchedを反映できず、ブロックされたdocを
+  // ユーザーが解除する手段が恒久的に失われるリスクがある(Plan agent検証で発覚)。
+  const touchedFields = useRef<Set<keyof EditableFields>>(new Set())
+
+  // DocumentDetailModalはdocumentId変更時に再マウントされない(downloadUrlの手動リセット
+  // effectが既存で存在することが根拠)。touchedFieldsをstartEditing/cancelEditingだけで
+  // リセットすると、別docへ切り替わった際に前docのtouched状態が漏れ、Finding 1(無関係な
+  // 保存でcustomerConfirmedが立つ)が見えにくい形で再発する(Plan agent検証で発覚)。
+  useEffect(() => {
+    touchedFields.current = new Set()
+    setIsEditing(false)
+    setEditedFields({})
+    // 前docの保存失敗errorが残っていると、切替後すぐの詳細表示に別docのエラーが漏れる
+    // (code-review high Finding 3、2026-07-25)。
+    setError(null)
+  }, [document?.id])
+
   const startEditing = useCallback(() => {
     if (!document) return
+    touchedFields.current = new Set()
     setEditedFields({
       customerName: document.customerName || '',
       customerId: document.customerId || '',
@@ -73,6 +97,7 @@ export function useDocumentEdit(document: Document | null | undefined): UseDocum
   }, [document])
 
   const cancelEditing = useCallback(() => {
+    touchedFields.current = new Set()
     setIsEditing(false)
     setEditedFields({})
     setError(null)
@@ -82,6 +107,7 @@ export function useDocumentEdit(document: Document | null | undefined): UseDocum
     field: K,
     value: EditableFields[K]
   ) => {
+    touchedFields.current.add(field)
     setEditedFields(prev => ({ ...prev, [field]: value }))
   }, [])
 
@@ -107,6 +133,18 @@ export function useDocumentEdit(document: Document | null | undefined): UseDocum
           field: 'customerName',
           oldValue: document.customerName || null,
           newValue: editedFields.customerName || null,
+        })
+      }
+
+      // 顧客ID(同姓同名の別人が同一Driveフォルダへ合流するリスク対応、2026-07-25):
+      // customerNameは不変のまま同姓同名の別マスターへ付け替える保存(ID-onlyの変更)でも、
+      // ここでchangesにpushすることでchanges.length===0によるsaveChangesの早期return
+      // (下記shouldSetCustomerConfirmed等のガード)をすり抜けず更新データに含める。
+      if (editedFields.customerId !== (document.customerId || '')) {
+        changes.push({
+          field: 'customerId',
+          oldValue: document.customerId || null,
+          newValue: editedFields.customerId || null,
         })
       }
 
@@ -168,8 +206,22 @@ export function useDocumentEdit(document: Document | null | undefined): UseDocum
       // 既存値を上書きしない（false への退行を防ぐ）。
       const finalCustomerName = editedFields.customerName ?? document.customerName ?? ''
       const finalOfficeName = editedFields.officeName ?? document.officeName ?? ''
+      // ADR-0022顧客未確定ゲート再設計(2026-07-25): 単純に「有効値なら確定」とすると、
+      // 同姓同名候補を選び直さず無関係なフィールド(例:書類日付)だけ直して保存しても
+      // customerConfirmed:trueになり、Driveエクスポートの顧客未確定ゲートを素通りしてしまう
+      // (Finding 1)。曖昧な顧客名(同名マスターが2件以上存在する)の場合のみ、顧客欄への
+      // 明示的なtouchを要求する。曖昧でない大多数のケースでは既存のIssue #396 AC5「保存=確定」
+      // 挙動を維持し、選択待ちバッジの点灯頻度への影響を最小化する。
+      // finalCustomerNameは前後空白を含みうる一方、マスター名はnormalizeName()でtrim済みのため、
+      // trimせず照合するとBE(customerAmbiguityGate.ts)がtrim後に検出する衝突をFEだけ見逃す
+      // (code-review high Finding 1、2026-07-25)。
+      const isAmbiguousCustomerName = findSameNameCollisionNames(customerMasters ?? []).has(finalCustomerName.trim())
+      const customerFieldTouched =
+        touchedFields.current.has('customerName') || touchedFields.current.has('customerId')
       const shouldSetCustomerConfirmed =
-        isValidCustomerSelection(finalCustomerName) && document.customerConfirmed !== true
+        isValidCustomerSelection(finalCustomerName) &&
+        document.customerConfirmed !== true &&
+        (!isAmbiguousCustomerName || customerFieldTouched)
       const shouldSetOfficeConfirmed =
         isValidOfficeSelection(finalOfficeName) && document.officeConfirmed !== true
       const finalDocumentType = editedFields.documentType ?? document.documentType ?? ''
@@ -202,7 +254,15 @@ export function useDocumentEdit(document: Document | null | undefined): UseDocum
       // （customerConfirmed=true で判定優先されるため、新規フィールド作成を避ける）。
       if (shouldSetCustomerConfirmed) {
         updateData.customerConfirmed = true
+        // confirmedBy/confirmedAtの書込み(ADR-0022再設計、2026-07-25): 従来は書いておらず
+        // officeConfirmed側(下記)との非対称があった。「誰がいつ確定したか」を記録することで、
+        // 診断スクリプト(diagnose-confirmed-replay-sampling.ts等)がconfirmedByの有無で
+        // 人間確定を再判別する必要をなくす。
+        updateData.confirmedBy = auth.currentUser.uid
+        updateData.confirmedAt = serverTimestamp()
         optimisticData.customerConfirmed = true
+        optimisticData.confirmedBy = auth.currentUser.uid
+        optimisticData.confirmedAt = Timestamp.now()
         // #398: 確定フラグ変更を editLogs に記録（silent failure 検知用）
         changes.push({
           field: 'customerConfirmed',
@@ -362,6 +422,8 @@ export function useDocumentEdit(document: Document | null | undefined): UseDocum
         // 確定フラグもロールバック対象（楽観的更新で立てた値を元に戻す）
         if (shouldSetCustomerConfirmed) {
           rollbackData.customerConfirmed = document.customerConfirmed
+          rollbackData.confirmedBy = document.confirmedBy
+          rollbackData.confirmedAt = document.confirmedAt
           if (document.needsManualCustomerSelection !== undefined) {
             rollbackData.needsManualCustomerSelection = document.needsManualCustomerSelection
           }
@@ -405,7 +467,7 @@ export function useDocumentEdit(document: Document | null | undefined): UseDocum
     } finally {
       setIsSaving(false)
     }
-  }, [document, editedFields, queryClient])
+  }, [document, editedFields, queryClient, customerMasters])
 
   return {
     isEditing,

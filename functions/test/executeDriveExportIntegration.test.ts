@@ -93,11 +93,26 @@ async function seedDocument(overrides: Record<string, unknown> = {}): Promise<st
   return docRef.id;
 }
 
-async function seedCustomer(): Promise<void> {
+async function seedCustomer(name = '鈴木花子'): Promise<void> {
   await db.doc(`${MASTER_PATHS.customers}/customer-1`).set({
-    name: '鈴木花子',
+    name,
     furigana: 'スズキハナコ',
   });
+}
+
+/**
+ * 同名の顧客マスターを`count`件登録する(顧客未確定ゲートの曖昧性判定テスト用、
+ * ADR-0022再設計)。1件目のidは`customer-1`(seedDocumentの既定customerIdと一致)。
+ */
+async function seedCollidingCustomers(name: string, count: number): Promise<void> {
+  await Promise.all(
+    Array.from({ length: count }, (_, i) =>
+      db.doc(`${MASTER_PATHS.customers}/customer-${i + 1}`).set({
+        name,
+        ...(i === 0 ? { furigana: 'スズキハナコ' } : {}),
+      })
+    )
+  );
 }
 
 async function seedDriveSettings(): Promise<void> {
@@ -218,6 +233,25 @@ describe('executeDriveExport (ADR-0022 code-review CONFIRMED指摘対応: 所有
     expect(createCallsB).to.have.lengthOf(2);
   });
 
+  it('顧客未確定の書類はCustomerUnconfirmedErrorでerror遷移し、driveExportErrorが「顧客が未確定のため」で始まる(同姓同名リスク対応、2026-07-25再設計: 同名マスター2件で曖昧性ありのケース)', async () => {
+    const docId = await seedDocument({ customerConfirmed: false });
+    await seedCollidingCustomers('鈴木花子', 2); // beforeEachのseedCustomer()に加え、同名衝突を作る
+    const { drive } = makeFakeDrive({});
+
+    const result = await executeDriveExport(
+      db,
+      docId,
+      { drive, downloadFile: async () => Buffer.from('x') },
+      undefined
+    );
+
+    expect(result).to.equal(true); // クレーム自体は成功、その後のexportDocument()内でthrow
+    const after = await getDoc(docId);
+    expect(after.driveExportStatus).to.equal('error');
+    expect(after.driveExportError).to.be.a('string');
+    expect(after.driveExportError as string).to.match(/^顧客が未確定のため/);
+  });
+
   it('更新対象外フィールド(customerName/careManager/officeName等)の値が変化しない(CLAUDE.md MUST)', async () => {
     const docId = await seedDocument({
       driveExportStatus: 'error',
@@ -225,7 +259,9 @@ describe('executeDriveExport (ADR-0022 code-review CONFIRMED指摘対応: 所有
       customerName: '不変花子',
       officeName: '不変事業所',
       careManager: '不変太郎',
+      customerConfirmed: true,
     });
+    await seedCustomer('不変花子'); // doc.customerNameと一致させる(name↔id乖離チェック対策)
     const { drive } = makeFakeDrive({ createdIds: ['folder-x', 'file-x'] });
 
     await executeDriveExport(db, docId, { drive, downloadFile: async () => Buffer.from('x') }, 'error');

@@ -7,6 +7,8 @@
  * (scripts/lib/backfillDetailHelpers.ts と同じ分離パターン)。
  */
 
+import { DRIVE_EXPORT_CUSTOMER_UNCONFIRMED_MESSAGE_PREFIX } from '../../shared/types';
+
 /** backfillが一時的にセットするdriveExportErrorのsentinel文字列。rollback判定にも使う。 */
 export const BACKFILL_ERROR_MESSAGE =
   '[backfill] Feature Flag有効化前にverifiedされたdocumentの遡及エクスポート待ち';
@@ -18,6 +20,28 @@ export const BACKFILL_ERROR_MESSAGE =
  */
 export function isBackfillCandidate(data: Record<string, unknown>): boolean {
   return !('driveExportStatus' in data);
+}
+
+/**
+ * `driveExportError`メッセージの分類(同姓同名リスク対応、2026-07-25)。
+ * `drive-export-status-report.ts`が「backfillの一時マーカー」「顧客未確定による
+ * ブロック(exportDocument.ts の `CustomerUnconfirmedError`)」「実際のDrive APIエラー」
+ * の3種を分離集計するために使う。顧客未確定は運用課題であり Drive API 異常のシグナル
+ * ではないため、実エラー比率(異常停止基準)には含めない。
+ */
+export type DriveExportErrorClass = 'backfill-marker' | 'customer-unconfirmed' | 'real';
+
+export function classifyDriveExportError(driveExportError: unknown): DriveExportErrorClass {
+  if (driveExportError === BACKFILL_ERROR_MESSAGE) {
+    return 'backfill-marker';
+  }
+  if (
+    typeof driveExportError === 'string' &&
+    driveExportError.startsWith(DRIVE_EXPORT_CUSTOMER_UNCONFIRMED_MESSAGE_PREFIX)
+  ) {
+    return 'customer-unconfirmed';
+  }
+  return 'real';
 }
 
 /**

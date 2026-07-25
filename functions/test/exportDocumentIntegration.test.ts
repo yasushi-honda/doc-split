@@ -20,7 +20,12 @@ import { expect } from 'chai';
 import * as admin from 'firebase-admin';
 import { drive_v3 } from 'googleapis';
 import { cleanupCollections } from './helpers/cleanupEmulator';
-import { exportDocument, DriveSettingsIncompleteError, AmbiguousFileError } from '../src/drive/exportDocument';
+import {
+  exportDocument,
+  DriveSettingsIncompleteError,
+  AmbiguousFileError,
+  CustomerUnconfirmedError,
+} from '../src/drive/exportDocument';
 import { FuriganaMissingError, FileDateMissingError } from '../src/drive/folderPath';
 import { AmbiguousFolderError } from '../src/drive/findOrCreateFolder';
 import { MASTER_PATHS } from '../src/utils/masterPaths';
@@ -134,11 +139,33 @@ async function seedDocument(overrides: Record<string, unknown> = {}): Promise<st
   return docRef.id;
 }
 
-async function seedCustomer(furigana: string | undefined = 'スズキハナコ'): Promise<void> {
+async function seedCustomer(
+  furigana: string | undefined = 'スズキハナコ',
+  name = '鈴木花子'
+): Promise<void> {
   await db.doc(`${MASTER_PATHS.customers}/customer-1`).set({
-    name: '鈴木花子',
+    name,
     ...(furigana !== undefined ? { furigana } : {}),
   });
+}
+
+/**
+ * 同名の顧客マスターを`count`件登録する(顧客未確定ゲートの曖昧性判定テスト用、
+ * ADR-0022再設計)。1件目のidは`customer-1`(seedDocumentの既定customerIdと一致)。
+ */
+async function seedCollidingCustomers(
+  name: string,
+  count: number,
+  furigana: string | undefined = 'スズキハナコ'
+): Promise<void> {
+  await Promise.all(
+    Array.from({ length: count }, (_, i) =>
+      db.doc(`${MASTER_PATHS.customers}/customer-${i + 1}`).set({
+        name,
+        ...(i === 0 && furigana !== undefined ? { furigana } : {}),
+      })
+    )
+  );
 }
 
 async function seedDriveSettings(overrides: Record<string, unknown> = {}): Promise<void> {
@@ -205,7 +232,7 @@ describe('exportDocument (ADR-0022 Phase 1)', () => {
       officeName: '不変事業所',
       careManager: '不変太郎',
     });
-    await seedCustomer();
+    await seedCustomer('スズキハナコ', '不変花子'); // doc.customerNameと一致させる(name↔id乖離チェック対策)
     await seedDriveSettings();
     const { drive } = makeFakeDrive({
       createdIds: ['folder-office', 'folder-customer', 'exported-file-id'],
@@ -572,5 +599,214 @@ describe('exportDocument (ADR-0022 Phase 1)', () => {
     } catch (error) {
       expect((error as Error).message).to.include('non-existent-doc-id');
     }
+  });
+
+  describe('顧客未確定ゲート(同姓同名リスク対応、2026-07-25再設計)', () => {
+    // 再設計の経緯: 初回実装(customerConfirmed/needsManualCustomerSelectionのdual-readのみ
+    // でブロック)は/code-reviewで「無関係な保存でも過確定されゲートを素通りする」「OCRが
+    // 一意認識しても人間が触らなければ恒久ブロックされる」という2つの致命的破綻を指摘された。
+    // 再設計後は「未確定」と判定された場合でも、実際に同名マスターが2件以上存在する
+    // (customerAmbiguityGate.ts参照)場合のみブロックする。
+
+    it('customerConfirmed:false + 同名マスター2件の場合はCustomerUnconfirmedErrorをthrowし、Drive/Firestore書込みは一切発生しない', async () => {
+      const docId = await seedDocument({ customerConfirmed: false });
+      await seedCollidingCustomers('鈴木花子', 2);
+      await seedDriveSettings();
+      const { drive, listCalls, createCalls } = makeFakeDrive({});
+
+      try {
+        await exportDocument(docId, TEST_RUN_ID, { drive, downloadFile: async () => Buffer.from('x') });
+        expect.fail('CustomerUnconfirmedErrorがthrowされるべき');
+      } catch (error) {
+        expect(error).to.be.instanceOf(CustomerUnconfirmedError);
+        expect((error as Error).message).to.include('顧客が未確定のため');
+        expect((error as Error).message).to.include('鈴木花子');
+      }
+      expect(listCalls).to.have.length(0);
+      expect(createCalls).to.have.length(0);
+      const docSnap = await db.collection('documents').doc(docId).get();
+      expect(docSnap.data()!.driveExportStatus).to.equal('exporting'); // seedDocumentの初期値のまま
+    });
+
+    it('customerConfirmed:false + 同名マスター1件のみの場合はゲートを通過する(過剰ブロックの解消、Finding 2)', async () => {
+      const docId = await seedDocument({ customerConfirmed: false });
+      await seedCustomer(); // 「鈴木花子」1件のみ、衝突なし
+      await seedDriveSettings();
+      const { drive, createCalls } = makeFakeDrive({ createdIds: ['created-folder', 'created-file'] });
+
+      await exportDocument(docId, TEST_RUN_ID, { drive, downloadFile: async () => Buffer.from('x') });
+
+      expect(createCalls.length).to.be.greaterThan(0);
+      const docSnap = await db.collection('documents').doc(docId).get();
+      expect(docSnap.data()!.driveExportStatus).to.equal('exported');
+    });
+
+    it('customerConfirmed:false + マスター未登録の自由入力名の場合はゲートを通過する(衝突マスターが実在しないため)', async () => {
+      const docId = await seedDocument({
+        customerConfirmed: false,
+        customerId: null,
+        customerName: '自由入力太郎',
+      });
+      await seedDriveSettings({ furiganaFallback: 'useNameInitial' }); // customerId無し→フリガナ欠損を頭文字代用で吸収
+      const { drive, createCalls } = makeFakeDrive({ createdIds: ['created-folder', 'created-file'] });
+
+      await exportDocument(docId, TEST_RUN_ID, { drive, downloadFile: async () => Buffer.from('x') });
+
+      expect(createCalls.length).to.be.greaterThan(0);
+    });
+
+    it('needsManualCustomerSelection:true(レガシーdoc、customerConfirmed未設定) + 同名2件の場合はCustomerUnconfirmedErrorをthrowする', async () => {
+      const docId = await seedDocument({ needsManualCustomerSelection: true });
+      await seedCollidingCustomers('鈴木花子', 2);
+      await seedDriveSettings();
+      const { drive, listCalls, createCalls } = makeFakeDrive({});
+
+      try {
+        await exportDocument(docId, TEST_RUN_ID, { drive, downloadFile: async () => Buffer.from('x') });
+        expect.fail('CustomerUnconfirmedErrorがthrowされるべき');
+      } catch (error) {
+        expect(error).to.be.instanceOf(CustomerUnconfirmedError);
+      }
+      expect(listCalls).to.have.length(0);
+      expect(createCalls).to.have.length(0);
+    });
+
+    it('customerConfirmed:true + 同名2件の場合でもゲートを通過する(人間確定が曖昧性より優先)', async () => {
+      const docId = await seedDocument({ customerConfirmed: true });
+      await seedCollidingCustomers('鈴木花子', 2);
+      await seedDriveSettings();
+      const { drive, createCalls } = makeFakeDrive({ createdIds: ['created-folder', 'created-file'] });
+
+      await exportDocument(docId, TEST_RUN_ID, { drive, downloadFile: async () => Buffer.from('x') });
+
+      expect(createCalls.length).to.be.greaterThan(0);
+      const docSnap = await db.collection('documents').doc(docId).get();
+      expect(docSnap.data()!.driveExportStatus).to.equal('exported');
+    });
+
+    it('customerConfirmed:true + needsManualCustomerSelection:true(不整合状態) + 同名2件の場合はcustomerConfirmed優先でゲートを通過する(UIから復旧不能な永久ブロックを避けるための設計判断)', async () => {
+      const docId = await seedDocument({ customerConfirmed: true, needsManualCustomerSelection: true });
+      await seedCollidingCustomers('鈴木花子', 2);
+      await seedDriveSettings();
+      const { drive, createCalls } = makeFakeDrive({ createdIds: ['created-folder', 'created-file'] });
+
+      await exportDocument(docId, TEST_RUN_ID, { drive, downloadFile: async () => Buffer.from('x') });
+
+      expect(createCalls.length).to.be.greaterThan(0);
+    });
+
+    it('customerConfirmed/needsManualCustomerSelectionとも未設定(Phase 6以前のレガシーdoc)+ 衝突なしの場合はゲートを通過する(後方互換)', async () => {
+      const docId = await seedDocument(); // 既定値には両フィールドとも含まれない
+      await seedCustomer(); // 「鈴木花子」1件のみ、衝突なし
+      await seedDriveSettings();
+      const { drive, createCalls } = makeFakeDrive({ createdIds: ['created-folder', 'created-file'] });
+
+      await exportDocument(docId, TEST_RUN_ID, { drive, downloadFile: async () => Buffer.from('x') });
+
+      expect(createCalls.length).to.be.greaterThan(0);
+    });
+
+    it('customerConfirmed/needsManualCustomerSelectionとも未設定(レガシーdoc)でも、同名2件の場合はCustomerUnconfirmedErrorをthrowする(ambiguity-aware化に伴う仕様変更、ADR-0022参照)', async () => {
+      const docId = await seedDocument(); // 既定値には両フィールドとも含まれない
+      await seedCollidingCustomers('鈴木花子', 2);
+      await seedDriveSettings();
+      const { drive, listCalls, createCalls } = makeFakeDrive({});
+
+      try {
+        await exportDocument(docId, TEST_RUN_ID, { drive, downloadFile: async () => Buffer.from('x') });
+        expect.fail('CustomerUnconfirmedErrorがthrowされるべき');
+      } catch (error) {
+        expect(error).to.be.instanceOf(CustomerUnconfirmedError);
+      }
+      expect(listCalls).to.have.length(0);
+      expect(createCalls).to.have.length(0);
+    });
+
+    it('customerName:空文字の場合は生のFirestore/クエリエラーにならず未確定扱い(sentinel)でCustomerUnconfirmedErrorをthrowする', async () => {
+      const docId = await seedDocument({ customerConfirmed: false, customerName: '' });
+      await seedDriveSettings();
+      const { drive, createCalls } = makeFakeDrive({});
+
+      try {
+        await exportDocument(docId, TEST_RUN_ID, { drive, downloadFile: async () => Buffer.from('x') });
+        expect.fail('CustomerUnconfirmedErrorがthrowされるべき');
+      } catch (error) {
+        expect(error).to.be.instanceOf(CustomerUnconfirmedError);
+      }
+      expect(createCalls).to.have.length(0);
+    });
+
+    it('customerName:「不明顧客」(OCR未マッチsentinel)の場合はCustomerUnconfirmedErrorをthrowする', async () => {
+      const docId = await seedDocument({
+        customerConfirmed: false,
+        customerId: null,
+        customerName: '不明顧客',
+      });
+      await seedDriveSettings();
+      const { drive, createCalls } = makeFakeDrive({});
+
+      try {
+        await exportDocument(docId, TEST_RUN_ID, { drive, downloadFile: async () => Buffer.from('x') });
+        expect.fail('CustomerUnconfirmedErrorがthrowされるべき');
+      } catch (error) {
+        expect(error).to.be.instanceOf(CustomerUnconfirmedError);
+      }
+      expect(createCalls).to.have.length(0);
+    });
+
+    it('customerNameが前後空白付き(" 鈴木花子 ")でも、trimして同名衝突を正しく検出しCustomerUnconfirmedErrorをthrowする(folderPath.tsのtrim処理との整合)', async () => {
+      const docId = await seedDocument({ customerConfirmed: false, customerName: ' 鈴木花子 ' });
+      await seedCollidingCustomers('鈴木花子', 2);
+      await seedDriveSettings();
+      const { drive, createCalls } = makeFakeDrive({});
+
+      try {
+        await exportDocument(docId, TEST_RUN_ID, { drive, downloadFile: async () => Buffer.from('x') });
+        expect.fail('CustomerUnconfirmedErrorがthrowされるべき');
+      } catch (error) {
+        expect(error).to.be.instanceOf(CustomerUnconfirmedError);
+      }
+      expect(createCalls).to.have.length(0);
+    });
+
+    it('customerId:trueで確定済みでも、customerIdの指すマスター名とdoc.customerNameが乖離している場合はCustomerUnconfirmedErrorをthrowする(マスター改名の取り残し検知)', async () => {
+      const docId = await seedDocument({ customerConfirmed: true, customerName: '旧姓花子' });
+      await seedCustomer(); // customer-1の実際のnameは「鈴木花子」(改名後)
+      await seedDriveSettings();
+      const { drive, createCalls } = makeFakeDrive({});
+
+      try {
+        await exportDocument(docId, TEST_RUN_ID, { drive, downloadFile: async () => Buffer.from('x') });
+        expect.fail('CustomerUnconfirmedErrorがthrowされるべき');
+      } catch (error) {
+        expect(error).to.be.instanceOf(CustomerUnconfirmedError);
+      }
+      expect(createCalls).to.have.length(0);
+    });
+
+    it('ブロック後に衝突マスターを1件削除して再実行すると、ゲートを通過する(自己回復)', async () => {
+      const docId = await seedDocument({ customerConfirmed: false });
+      await seedCollidingCustomers('鈴木花子', 2);
+      await seedDriveSettings();
+
+      {
+        const { drive } = makeFakeDrive({});
+        try {
+          await exportDocument(docId, TEST_RUN_ID, { drive, downloadFile: async () => Buffer.from('x') });
+          expect.fail('1回目はCustomerUnconfirmedErrorがthrowされるべき');
+        } catch (error) {
+          expect(error).to.be.instanceOf(CustomerUnconfirmedError);
+        }
+      }
+
+      // マスター統合(重複登録を削除)して衝突を解消
+      await db.doc(`${MASTER_PATHS.customers}/customer-2`).delete();
+
+      const { drive, createCalls } = makeFakeDrive({ createdIds: ['created-folder', 'created-file'] });
+      await exportDocument(docId, TEST_RUN_ID, { drive, downloadFile: async () => Buffer.from('x') });
+      expect(createCalls.length).to.be.greaterThan(0);
+      const docSnap = await db.collection('documents').doc(docId).get();
+      expect(docSnap.data()!.driveExportStatus).to.equal('exported');
+    });
   });
 });

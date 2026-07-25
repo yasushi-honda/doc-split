@@ -92,6 +92,31 @@ stateDiagram-v2
 
 段階的展開runbook（Stage D: allowlist+1件コントロールテスト → Stage E1: `--limit`小規模canary backfill → Stage E2: allowlist `--remove`＋残り全件backfill、cocoro先行→kanameone）は`docs/handoff/GOAL.md`に記録し、実際のflag ON/backfill本実行はPhase C（各クライアントのGoogle Drive OAuth接続完了）確認後、番号単位の明示認可で別途実施する。
 
+**顧客未確定ゲート（同姓同名リスク対応、2026-07-25）**: Phase C事前確認の過程で、クライアントから「利用者フォルダの表記ゆれ」を懸念する質問を受けて調査した結果、決定3（フォルダ構成）に本質的な盲点があることが判明した。`resolveCustomerSegment()`（`functions/src/drive/folderPath.ts`）が生成する利用者フォルダ名は`doc.customerName`文字列（+フリガナ由来の頭文字）のみで決まり、`customerId`を一切参照しない。同姓同名の別人が手動選択未解決のまま`verified: true`にされた場合、決定5の「確認ボタン起点」ゲートは顧客同一性の確認までは保証しないため、OCRが仮に選んだ顧客情報のまま外部Driveへエクスポートされてしまう。フリガナ欠損時に停止する既存のfail-visible設計（決定3）と非対称なギャップだった。
+
+初回実装（`customerConfirmed`/`needsManualCustomerSelection`のデュアルリードのみでブロック）は`/code-review`（10角度並列xhigh）で2つの致命的な破綻を指摘され、パッチではなく再設計した:
+- **過確定・素通り**: `useDocumentEdit.ts`の`shouldSetCustomerConfirmed`は「現在の顧客名が有効値」でありさえすれば、同姓同名候補を選び直さず無関係なフィールド（例: 書類日付）だけ直して保存しても`customerConfirmed:true`にしてしまい、ゲートを素通りする。
+- **過剰ブロック**: 分割フロー（`splitDocumentBuilder.ts`/`documentUtils.ts`）は「人間がそのフィールドを実際に編集(touched)したか」でのみ判定するため、OCRが正しく一意認識していても人間が顧客欄を触らなければ`customerConfirmed`が恒久的にfalseのままになり、kanameoneの主要機能である複数顧客FAX複製フローが実質ブロックされうる。
+
+**最終設計**: ゲートの守備範囲を「**同姓同名マスターの衝突のみ**」に絞った（decision-maker承認済み。OCRが別名を取り違えるスコア僅差誤認識は明示的にOut of Scope、下記参照）。マスターの`isDuplicate`フラグは登録時のみ自動付与され事後の追加・改名では更新されない（`MastersPage.tsx`の`handleForceAdd`は新規レコードのみに付与、`useMasters.ts`の`updateCustomer`は重複チェック自体が無い）ため信用せず、`functions/src/drive/customerAmbiguityGate.ts`が`exportDocument()`のdoc取得直後（Drive API/Storage呼び出し前）で以下を順に判定する:
+
+1. sentinel値（「不明顧客」「未判定」）・空文字は常に未確定扱い。
+2. `doc.customerId`の指すマスター名と`doc.customerName`が乖離している場合（マスター改名の取り残し等）も未確定扱い（`furigana`取得のため既に読み込み済みのマスターdocを再利用、追加読み込みコストゼロ）。
+3. 既存の人間確定デュアルリード（`customerConfirmed !== undefined ? customerConfirmed : needsManualCustomerSelection !== undefined ? !needsManualCustomerSelection : false`、両方undefinedのレガシーdocは「未確定」として扱い次段の曖昧性チェックに委ねる〈後述〉、`customerConfirmed:true`+`needsManualCustomerSelection:true`という不整合docは通過）で確定済みならここで終了。
+4. 未確定と判定された場合のみ、`masters/customers/items`への`where('name','==',...).limit(2)`ライブクエリで実際に同名マスターが2件以上存在するかを確認し、存在する場合のみ`CustomerUnconfirmedError`をthrowする。
+
+この設計により「同姓同名マスターが実在し未選択」のみを正確にブロックし、「分割フローでOCRが正しく一意認識し人間が触らなかった」ケースは通過するようになった（過剰ブロックの解消）。過確定の解消は`useDocumentEdit.ts`側で対応: `shouldSetCustomerConfirmed`は、顧客名が同名マスター衝突を持つ（曖昧な）場合のみ、顧客欄(`customerName`/`customerId`)への明示的なtouchを要求する。曖昧でない大多数のケース（推定95%超）では既存のIssue #396 AC5「保存=確定」挙動を維持し、選択待ちバッジの点灯頻度への影響を最小化した。あわせて`confirmedBy`/`confirmedAt`を書き込むよう修正した（従来`officeConfirmed`側との非対称があり、`confirmedBy`が空のため診断スクリプトが人間確定を正しく再判別できなかった）。
+
+FAX複製フロー（`functions/src/ocr/faxDuplication.ts`）はこのゲートを経由しない別の書込経路であり、`buildFaxDuplicationMemberOverride()`が無条件で`customerConfirmed:true`を書き込む。同名マスター2件（`isDuplicate`未設定）を「別人2名」と誤認して複製すると、新ゲートの人間確定判定で即通過しライブクエリすら実行されず、Finding修正後も別人2名の書類が同一フォルダへ合流しうる致命的な穴だった。対策として`planFaxDuplication`自体に同名衝突候補の除外を追加した（`ocrProcessor.ts`が既にメモリ上に持つ顧客マスター全件から`sameNameCollisionNames`を計算して渡す、追加I/Oなし）。
+
+調査の過程で、Drive連携とは独立に存在していた既存バグも発見した: 同姓同名候補の手動選択UI（`MasterSelectField`、`DocumentDetailModal.tsx`）は選んだマスターの`customerId`を保存せず`customerName`のみを保存していた。これによりcustomerNameが不変のままID-onlyで顧客を付け替える保存が、`useDocumentEdit.ts`の`saveChanges`早期return（`changes.length===0`判定）でsilentにスキップされる問題もあわせて修正した（`onChange`で`customerId`も同期、`changes`検知にcustomerId比較を追加）。
+
+`scripts/drive-export-status-report.ts`は「顧客未確定」による`error`を独立集計する新バケットを持つ（`classifyDriveExportError()`、`scripts/lib/driveExportBackfillHelpers.ts`）。Stage D entry gateの`error=0`判定には含めるが（滞留docゼロという意図を維持）、異常停止基準の実エラー比率（20%閾値）からは除外する（顧客未確定は運用課題でありDrive API異常のシグナルではないため）。Phase D（flag ON）着手前の運用として、新設の`scripts/check-customer-master-integrity.js`（read-only）でkanameone/cocoroの同姓同名マスター重複・フリガナ欠損・顧客未確定doc数を可視化し、現場での確定作業・マスタークリーンアップを先行させる。**両フィールド未設定のレガシーdocも、曖昧性が実在すればブロック対象になる**（従来は後方互換で無条件通過だったが、ambiguity-aware化に伴い仕様変更した。この事前クリーンアップ運用で吸収する設計）。
+
+**運用上の限界**: 本ゲートは「衝突を防止する」のではなく「人間が一度確認したことを保証する」に留まる。`MasterSelectField`は`notes`（区別用補足情報）未設定の同名候補を表示上区別できない（cmdkの`value`も名前ベースで衝突する）ため、ユーザーが区別不能な2択から誤って選んでも、選択済みという理由でゲートは通過してしまう。同名マスターには`notes`設定を運用上推奨する。また、既に`exported`状態のdocは再評価されない（マスター追加で事後的に同名衝突が生じても対象外）。既に合流したフォルダの検出は`check-customer-master-integrity.js`のオフライン監査が唯一の手段。
+
+**Out of Scope（本対応では扱わない）**: OCRが別名（例:「田中一郎」/「田中一朗」）をスコア僅差で取り違えるケース（`extractors.ts`の`needsManualSelection`が上位2候補のスコア差≤10で立つ条件のうち、同名マスター衝突以外の分岐）は、既存のOCR精度課題として別途扱い、本ゲートの保護対象外とする（decision-maker承認済み）。フォルダ名への識別子付与（真性の同姓同名・同一ケアマネ担当という構造的衝突への対策）は、現時点でこのパターンの実在が確認できていないため見送った。`furiganaFallback:'useNameInitial'`を選択したテナントでは、`customerId`がnull（「該当なし」選択）のdocがフリガナ参照をスキップしゲートを素通りしうる点も、opt-in済みのリスク面として本対応のスコープ外とする（kanameoneは`'stop'`を維持）。
+
 ### 7. スコープはPhase 1（MVP）に限定
 
 Phase 1 = OAuth接続 + Picker + セグメント型テンプレート設定 + 確認ボタン起点のoutboxエクスポート + fileId記録によるfind-or-createの重複防止 + エラー一覧UI + 定期リトライ（Cloud Scheduler）。

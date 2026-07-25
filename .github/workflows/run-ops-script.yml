@@ -32,6 +32,7 @@ on:
         options:
           - check-master-data
           - check-master-data --fix
+          - check-customer-master-integrity
           - fix-stuck-documents --dry-run
           - fix-stuck-documents
           - fix-stuck-documents --include-errors --dry-run
