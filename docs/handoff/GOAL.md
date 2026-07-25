@@ -16,7 +16,7 @@ kanameone・cocoroへのGoogle Drive連携Phase1本番展開。承認済み計�
 - [x] Phase A: Codexセカンドオピニオン（MCP、effort=high）実施。Phase Bは条件付きGO、Phase D/Eは複数High指摘により現計画のままでは実行不可と判定
 - [x] Phase B（kanameone）: インフラ準備完了・検証済み（Functions 4関数デプロイ/Firestore rules,indexes/Picker API有効化/OAuth Client作成/Secret Manager 3件/IAMバインド4件/実行SA一致確認/STORAGE_BUCKET確認/`settings/drive.oauthClientId`投入/flag OFF確認）。実行時に追加発見: Firebase自動生成Browser API Keyの制限リストに`picker.googleapis.com`が含まれておらず追加修正
 - [x] Phase B（cocoro）: 同上、認証主体差分（OAuth Console操作=`hy.unimail.11@gmail.com`、Secret作成・IAMバインド=SA`docsplit-deployer@docsplit-cocoro.iam.gserviceaccount.com`）を踏まえ完了・検証済み。同じPicker API制限問題も発見・修正
-- [ ] Phase C（クライアント自己完結、外部依存）: kanameone/cocoro各管理者によるGoogle Drive OAuth接続・フォルダ選択・テンプレート保存。executor代行不可、着手待ち
+- [ ] Phase C（クライアント自己完結、外部依存）: kanameone/cocoro各管理者によるGoogle Drive OAuth接続・フォルダ選択・テンプレート保存。executor代行不可。**decision-makerがクライアント側の代理対応者へ案内文書を送付済み（2026-07-25）**、先方の実施待ち
 - [x] Phase D/E再設計（2026-07-23、plan mode承認済み計画 `/Users/yyyhhh/.claude/plans/breezy-tickling-sifakis.md`）: Codex High 5件（①flag ON直後の全ユーザー巻き込み ②backfillにcanary機構欠如 ③flag OFFはロールバックにならない ④通常操作とbackfillの競合 ⑤完了時間・異常停止基準未定義）に対応するコード・テスト・ADR更新を実装完了。①allowlist機構(`settings/features.driveExportAllowlist`、`getDriveExportGate()`が`driveExportTrigger.ts`のみをゲート、sweep/手動retryは意図的に非対象)+設定スクリプト`scripts/set-drive-allowlist.js`(`--set`/`--clear-empty`/`--remove`) ②`scripts/backfill-drive-export.ts`に`--limit`/`--expected-count`(書込み前アサート)/`--manifest-out`/`--rollback`を追加 ③④`lastUpdateTime`precondition個別updateへの置換(Timestampオブジェクトを直接渡す設計。ISO文字列round-tripは精度損失で全書込み無言失敗になる罠をFirestore emulatorで実証済み) ⑤read-only状態分布レポート`scripts/drive-export-status-report.ts`新設。functions unit1909/integration237/rules92全PASS、scripts単体テスト(`scripts/lib/driveExportBackfillHelpers.test.ts`)8件PASS、Firestore emulatorでbackfill/rollback/limit/expected-count/manifestの実シナリオをend-to-end実行し結果確認済み。ADR-0022に設計判断・ロールバック意味論・runbookを追記。**実際のflag ON/allowlist設定/backfill本実行はいずれも未実施**(Phase C完了確認後、番号単位の明示認可で別セッション実施)。PR #710としてmainへマージ済み（`/code-review high`4件+`/codex review`1件（allowlist明示null値のfail-closed漏れ）も同PRで解消）
 - [x] ヘルプマニュアルへのGoogle Drive連携ガイド追加（2026-07-23、PR #711マージ済み）: `frontend/src/pages/HelpPage.tsx`管理者ガイドに新セクション「Google Drive連携」を追加（Drive接続→フォルダ選択→テンプレート設定の3ステップ、SettingsPage.tsx実装の実UI文言を踏襲）。decision-maker指摘によりGoogle Workspace公式ブログ（2026-07-16付）でNotebookLMがGemini Notebookへ改称されたことを確認、外部製品名の陳腐化リスクを避け「生成AIツール」という汎用表現に修正。Playwright MCPでdev環境の実際のレンダリングを確認済み
 - [x] PR #710/#711のkanameone・cocoro本番反映漏れを発見・解消（2026-07-23）: catchupのcurl試行がauto mode classifierにブロックされた事象を発端に、decision-maker明示許可で`settings/drive`をread-only確認したところPhase C未着手を確認。その過程でPRマージ時刻とkanameone/cocoro側の実デプロイ時刻（Functions/Hosting）を突合し、PR #710（Phase D/E再設計コード）・PR #711（ヘルプマニュアル）がmainマージ済みにもかかわらず両クライアント環境へは未反映（直近デプロイがPRマージより前）と判明。decision-maker承認を得て`gh workflow run "Deploy Cloud Functions"`(kanameone/cocoro)+`"Deploy Firebase Hosting"`(kanameone、GHA限定)+手動`firebase deploy --only hosting -P cocoro`（`/deploy`スキルのcocoro手順通り、`.env.local`後片付け含む）を実行、4件とも成功。Functions updateTime・Hosting releaseTimeがPRマージ時刻より後であることをground truthで検証し反映確認済み
@@ -102,36 +102,24 @@ cocoro/kanameから、書類（ケアプラン・医療・介護保険証等）�
 
 ## 🔄 中断点（in-flight）
 
-**対象タスク**: 「同姓同名（別人）のDrive誤配置リスク対応」— 実装・`/code-review high`(4件)・`/codex review`(2件)の全指摘解消・全テストPASSまで完了。コミット→PR作成の直前（詳細は上記「進捗」節の該当行参照）。Phase C（クライアント側OAuth接続、外部依存）は状態変化なし、下記参照。
+**対象タスク**: 「同姓同名（別人）のDrive誤配置リスク対応」は**完了・マージ済み**（PR #723: ゲート本体、PR #724: ヘルプマニュアル追記）。次の中断点はPhase C（クライアント側OAuth接続）。
 
-**実装内容（承認済み計画 `/Users/yyyhhh/.claude/plans/nested-fluttering-robin.md`）**:
+**同姓同名対応の実装内容（承認済み計画 `/Users/yyyhhh/.claude/plans/nested-fluttering-robin.md`）**:
 1. 新規`shared/customerIdentity.ts`（`isValidCustomerSelection`をdocumentUtils.tsから移設+`findSameNameCollisionNames`新設）
 2. 新規`functions/src/drive/customerAmbiguityGate.ts`: ゲートを「sentinel判定→name↔id乖離チェック(exportDocument.tsが既に読込済みのmaster docを再利用、追加read 0)→既存の人間確定dual-read→未確定の場合のみFirestoreライブクエリで同名衝突2件以上を確認」の順に再設計。**両方undefinedのレガシーdocは「未確定」として扱い曖昧性チェックに委ねる**(`humanConfirmed`計算の最終分岐を`true`→`false`に変更、これが前回の過剰な後方互換パス=Findings再発の温床だった)
 3. `functions/src/ocr/faxDuplication.ts`+`ocrProcessor.ts`: `planFaxDuplication`に`sameNameCollisionNames`引数を追加し、同名マスター衝突を持つ候補を`isDuplicate`フラグに依存せず除外（根本修正、追加I/O無し。`buildFaxDuplicationMemberOverride`が無条件`customerConfirmed:true`を書くため、この根本修正がないと新ゲートが即座に迂回されていた）
 4. `frontend/src/hooks/useDocumentEdit.ts`: `touchedFields`を`useRef`で管理（`useState`だとstale closureでブロック解除不能になるリスクをPlan agentが検出）、リセットは`startEditing`/`cancelEditing`/`document.id`変更検知effectの3箇所。`shouldSetCustomerConfirmed`は**曖昧な顧客名の場合のみ**touch要件を課し、曖昧でない場合は既存のAC5「保存=確定」挙動を非破壊のまま維持
 5. `check-customer-master-integrity.js`・ADR-0022を新設計に同期
-6. `/code-review high`4件+`/codex review`2件の指摘修正（詳細は上記「進捗」節参照）: FE顧客名trim漏れ・保存ボタンのfail-openガード・別docへのエラー残留・監査スクリプトのtrim不整合+customerId↔name乖離チェック追加
+6. `/code-review high`4件+`/codex review`2件の指摘修正: FE顧客名trim漏れ・保存ボタンのfail-openガード（さらにcodex reviewでクエリ失敗時の別ルート穴を追加検出）・別docへのエラー残留・監査スクリプトのtrim不整合+customerId↔name乖離チェック追加
+7. Firebase Emulator+Playwright MCPで実機確認（編集モーダルの保存ボタン動作、PR #723）+ヘルプマニュアルの新セクション表示（PR #724）、`ui-verified`ラベル付与
 
-**検証結果**: functions unit 1922件+integration(Firestore emulator) 252件全PASS、frontend 496件全PASS（回帰テスト+2）、tsc/lint(functions/frontend双方)0 errors。Evaluator（独立コンテキストエージェント）がAC1-5全てPASSと判定、`/code-review high`・`/codex review`とも別コンテキストで実施し指摘は全てソースコードを自ら読んで検証してから修正（鵜呑みにせず）。
-
-**未実施**: ブラウザでの実機確認（Firebase Emulator+Playwright MCP）は、JSXの視覚変更が無いこと・自動テストカバレッジが厚いことを理由に今回省略。実施するかは次セッションでdecision-maker判断。
-
-**次の一手**: コミット→PR作成→CI確認→（decision-maker承認を得て）マージ。
-
-**再開時の判断**: PRが未作成/未マージのまま中断した場合、`git log`でこのタスクのコミットが存在するか、`gh pr list`でPRの有無・状態を確認してから再開する。
-
-**検証コマンド**（再開時に現状確認）:
-```bash
-git status --short   # featureブランチ、コミット済みか確認
-git branch --show-current   # fix/drive-export-customer-confirmation-gate のままか確認
-gh pr list --head fix/drive-export-customer-confirmation-gate   # PRの有無・状態確認
-```
+**検証結果**: functions unit 1922件+integration(Firestore emulator) 252件全PASS、frontend 496件全PASS（回帰テスト+2）、tsc/lint(functions/frontend双方)0 errors。Evaluator・`/code-review high`・`/codex review`とも別コンテキストで実施し、指摘は全てソースコードを自ら読んで検証してから修正（鵜呑みにせず）。PR #723・#724ともCI全PASS・マージ済み・mainへ反映確認済み（GitHub Actions `CI`/`Deploy`ワークフローsuccess、`https://doc-split-dev.web.app/`疎通確認済み）。
 
 ---
 
-**Phase C（クライアント側OAuth接続、外部依存）の状態は変化なし**: kanameone/cocoro各管理者にGoogle Drive連携の操作手順を案内し実施を待つのみ（executor代行不可）。安全性検証・UX懸念解消・全環境デプロイは完了済みで、案内自体はいつでも実施可能。ただし上記の同姓同名ゲート再設計が完了するまでは、Phase Cが完了しても**Phase D（flag ON）には進まないこと**（現在flag OFFのため実害なし、急ぐ理由なし）。
+**Phase C（クライアント側OAuth接続、外部依存）の状態が進展**: decision-makerがkanameone/cocoroの代理対応者へ操作案内文書を送付済み（2026-07-25）。executor代行不可のため、先方の実施（Google Drive OAuth接続・フォルダ選択・テンプレート保存）を待つ。安全性検証・UX懸念解消・全環境デプロイは完了済み。**Phase D（flag ON・kanameone 876件/cocoro 93件のbackfill本実行）には、Phase C完了確認後、番号単位の明示認可で別途着手すること**（現在flag OFFのため実害なし、急ぐ理由なし）。
 
-**検証コマンド**:
+**検証コマンド**（次セッション再開時、Phase Cの進捗確認）:
 ```bash
 gcloud functions list --project=docsplit-kanameone --account=hy.unimail.11@gmail.com --format="table(name,updateTime,state)" | grep -i drive
 gcloud functions list --project=docsplit-cocoro --account=hy.unimail.11@gmail.com --format="table(name,updateTime,state)" | grep -i drive
