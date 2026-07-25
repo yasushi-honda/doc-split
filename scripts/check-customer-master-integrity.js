@@ -106,7 +106,7 @@ async function fetchVerifiedDocuments() {
 /** `functions/src/drive/customerAmbiguityGate.ts`のCUSTOMER_INVALID_SENTINELSと同一値。 */
 const CUSTOMER_INVALID_SENTINELS = new Set(['未判定', '不明顧客']);
 
-/** `isCustomerUnconfirmed()`がdocを未確定と判定した理由(内訳集計・個別doc診断用)。 */
+/** `classifyCustomerConfirmation()`がdocを未確定と判定した理由(内訳集計・個別doc診断用)。 */
 const UNCONFIRMED_REASON = {
   INVALID_NAME: '顧客名未設定/sentinel値',
   NAME_ID_MISMATCH: 'customerId↔name乖離',
