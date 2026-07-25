@@ -18,7 +18,7 @@
  */
 
 import * as admin from 'firebase-admin';
-import { BACKFILL_ERROR_MESSAGE } from './lib/driveExportBackfillHelpers';
+import { classifyDriveExportError } from './lib/driveExportBackfillHelpers';
 
 const projectId = process.env.FIREBASE_PROJECT_ID;
 if (!projectId) {
@@ -36,6 +36,7 @@ interface StatusCounts {
   exported: number;
   exporting: number;
   errorBackfillMarker: number;
+  errorCustomerUnconfirmed: number;
   errorReal: number;
   fieldAbsent: number;
 }
@@ -46,6 +47,7 @@ async function computeStatusCounts(): Promise<StatusCounts> {
     exported: 0,
     exporting: 0,
     errorBackfillMarker: 0,
+    errorCustomerUnconfirmed: 0,
     errorReal: 0,
     fieldAbsent: 0,
   };
@@ -78,8 +80,11 @@ async function computeStatusCounts(): Promise<StatusCounts> {
       } else if (status === 'exporting') {
         counts.exporting++;
       } else if (status === 'error') {
-        if (data.driveExportError === BACKFILL_ERROR_MESSAGE) {
+        const errorClass = classifyDriveExportError(data.driveExportError);
+        if (errorClass === 'backfill-marker') {
           counts.errorBackfillMarker++;
+        } else if (errorClass === 'customer-unconfirmed') {
+          counts.errorCustomerUnconfirmed++;
         } else {
           counts.errorReal++;
         }
@@ -107,12 +112,20 @@ async function main(): Promise<void> {
   console.log(`  exported:                  ${counts.exported}件`);
   console.log(`  exporting(処理中):          ${counts.exporting}件`);
   console.log(`  error(backfillマーカー):    ${counts.errorBackfillMarker}件`);
+  console.log(
+    `  error(顧客未確定):          ${counts.errorCustomerUnconfirmed}件  → 書類詳細で顧客を確定すると自動再試行されます(同姓同名リスク対応)`
+  );
   console.log(`  error(実エラー):            ${counts.errorReal}件  (実エラー比率: ${(realErrorRatio * 100).toFixed(1)}%)`);
   console.log(`  フィールド不在(未backfill): ${counts.fieldAbsent}件`);
   console.log('---');
+  // entry gateの error=0 条件には顧客未確定分も含める(滞留docゼロという意図を維持)。
+  // 一方、realErrorRatio(異常停止基準)には含めない(顧客未確定は運用課題でありDrive API異常のシグナルではないため)。
   console.log(
     `Stage D entry gate(flag ON前提): error=0 かつ exporting=0 ${
-      counts.exporting === 0 && counts.errorBackfillMarker === 0 && counts.errorReal === 0
+      counts.exporting === 0 &&
+      counts.errorBackfillMarker === 0 &&
+      counts.errorCustomerUnconfirmed === 0 &&
+      counts.errorReal === 0
         ? '✅ 満たしている'
         : '❌ 満たしていない(既存の滞留docがあるため、flag ONで意図しないdocも巻き込まれうる)'
     }`

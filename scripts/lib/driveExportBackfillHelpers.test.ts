@@ -10,6 +10,7 @@ import {
   ExpectedCountMismatchError,
   buildManifest,
   estimateSweepEta,
+  classifyDriveExportError,
 } from './driveExportBackfillHelpers';
 
 test('isBackfillCandidate: driveExportStatusフィールドが無いdocのみ対象', () => {
@@ -96,4 +97,28 @@ test('estimateSweepEta: ceil(target/batchSize)回 × intervalMinutes分を返す
   assert.deepEqual(estimateSweepEta(10, 10, 15), { estimatedRuns: 1, estimatedMinutes: 15 });
   assert.deepEqual(estimateSweepEta(1, 10, 15), { estimatedRuns: 1, estimatedMinutes: 15 });
   assert.deepEqual(estimateSweepEta(0, 10, 15), { estimatedRuns: 0, estimatedMinutes: 0 });
+});
+
+test('classifyDriveExportError: backfillのsentinelメッセージはbackfill-markerに分類する', () => {
+  assert.equal(classifyDriveExportError(BACKFILL_ERROR_MESSAGE), 'backfill-marker');
+});
+
+test('classifyDriveExportError: 「顧客が未確定のため」で始まるメッセージはcustomer-unconfirmedに分類する(同姓同名リスク対応)', () => {
+  assert.equal(
+    classifyDriveExportError(
+      '顧客が未確定のためGoogle Driveへエクスポートできません(書類詳細で顧客を選択・保存して確定すると自動で再試行されます): 山田太郎'
+    ),
+    'customer-unconfirmed'
+  );
+});
+
+test('classifyDriveExportError: それ以外の文字列は実エラー(real)に分類する', () => {
+  assert.equal(classifyDriveExportError('Google Drive API error: quota exceeded'), 'real');
+  assert.equal(classifyDriveExportError('フリガナが未設定のため利用者フォルダ名を解決できません: 田中花子'), 'real');
+});
+
+test('classifyDriveExportError: 非string値(undefined/null/数値等)も実エラー(real)扱いでfail-closedにする', () => {
+  assert.equal(classifyDriveExportError(undefined), 'real');
+  assert.equal(classifyDriveExportError(null), 'real');
+  assert.equal(classifyDriveExportError(123), 'real');
 });

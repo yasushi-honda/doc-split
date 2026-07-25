@@ -19,6 +19,16 @@
  * confirmedFieldMerge.tsの既存保護機構と同じ精神で、複製によって上書き・分割されて
  * はならない(ops script経由の再処理等でcustomerConfirmedがクリアされずにOCRが再実行
  * された場合、複製が人間の確定済み割当を無条件で上書きしてしまう問題への対策)。
+ *
+ * 同姓同名マスター衝突の除外(ADR-0022顧客未確定ゲート再設計、2026-07-25。Plan agent検証で
+ * 発覚した致命的な穴への対応): `!c.isDuplicate`だけでは、マスター側の`isDuplicate`フラグが
+ * 未設定(登録時に自動付与されるが事後の追加・改名では更新されない、
+ * `frontend/src/pages/MastersPage.tsx`の`handleForceAdd`参照)の同姓同名2件を「別人2名」と
+ * 誤認し、`buildFaxDuplicationMemberOverride()`が無条件で`customerConfirmed:true`を書き込む
+ * ため、Drive エクスポートの顧客未確定ゲート(`functions/src/drive/customerAmbiguityGate.ts`)を
+ * 完全に迂回してしまう。呼出元が`sameNameCollisionNames`(同名マスターが2件以上存在する名前の
+ * 集合、`shared/customerIdentity.ts`の`findSameNameCollisionNames()`で計算)を渡し、
+ * `isDuplicate`フラグに依存せず候補自体を除外することで根本から塞ぐ。
  */
 
 import type { CustomerCandidate } from '../utils/extractors';
@@ -59,6 +69,13 @@ export interface PlanFaxDuplicationInput {
   /** freshData.customerConfirmed === true || freshData.verified === true */
   alreadyConfirmedOrVerified: boolean;
   candidates: CustomerCandidate[];
+  /**
+   * 同名マスターが2件以上存在する顧客名の集合(`shared/customerIdentity.ts`の
+   * `findSameNameCollisionNames()`で計算、呼出元がロード済みの顧客マスター全件から
+   * 追加読み込みなしで算出する)。この集合に含まれる名前の候補は、`isDuplicate`フラグの
+   * 値によらず複製対象から除外する(上記モジュールJSDoc参照)。
+   */
+  sameNameCollisionNames: ReadonlySet<string>;
 }
 
 export function planFaxDuplication(input: PlanFaxDuplicationInput): FaxDuplicationPlan {
@@ -88,7 +105,7 @@ export function planFaxDuplication(input: PlanFaxDuplicationInput): FaxDuplicati
   // 委ねず、本関数自身でも明示的にソートしてから重複排除する(「先勝ち」dedupが
   // 最高スコア以外を拾ってしまう回帰を、モジュール境界をまたいだ暗黙契約に頼らず防ぐ)。
   const exactNonDuplicate = input.candidates
-    .filter((c) => c.matchType === 'exact' && !c.isDuplicate)
+    .filter((c) => c.matchType === 'exact' && !c.isDuplicate && !input.sameNameCollisionNames.has(c.name))
     .sort((a, b) => b.score - a.score);
 
   const deduped = new Map<string, CustomerCandidate>();

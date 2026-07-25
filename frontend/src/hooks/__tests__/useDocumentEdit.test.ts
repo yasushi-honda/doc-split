@@ -1078,3 +1078,284 @@ describe('useDocumentEdit - 確定フラグ editLogs 記録 (#398)', () => {
     })
   })
 })
+
+// 同姓同名の別人が同一Driveフォルダへ合流するリスク対応(2026-07-25):
+// 手動選択UIが選んだマスターのcustomerIdを保存し、かつcustomerConfirmed=trueの
+// 書類でcustomerNameが不変のままID-onlyで付け替える保存が早期returnで
+// silentにスキップされないことを担保する。
+describe('useDocumentEdit - customerId保存(同姓同名リスク対応、2026-07-25)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  const findLog = (fieldName: string) => {
+    const calls = mockAddDoc.mock.calls
+    return calls.find(
+      (call: unknown[]) => (call[1] as Record<string, unknown>)?.fieldName === fieldName
+    ) as unknown[] | undefined
+  }
+
+  it('customerIdを選択(更新)すると、updateDocのcustomerIdに反映されeditLogsに記録される', async () => {
+    const doc = makeDocument({ customerName: '田村 勝義', customerId: 'master-A', customerConfirmed: true })
+    const { result } = renderHook(() => useDocumentEdit(doc))
+
+    act(() => result.current.startEditing())
+    act(() => result.current.updateField('customerId', 'master-B'))
+
+    let success = false
+    await act(async () => {
+      success = await result.current.saveChanges()
+    })
+
+    expect(success).toBe(true)
+    expect(mockUpdateDoc).toHaveBeenCalledTimes(1)
+    const updateData = mockUpdateDoc.mock.calls[0]?.[1] as Record<string, unknown>
+    expect(updateData.customerId).toBe('master-B')
+
+    const log = findLog('customerId')
+    expect(log).toBeDefined()
+    const payload = log![1] as Record<string, unknown>
+    expect(payload.oldValue).toBe('master-A')
+    expect(payload.newValue).toBe('master-B')
+  })
+
+  it('確定済み書類(customerConfirmed:true)でcustomerNameが不変のままcustomerIdだけ付け替える保存でも、早期returnでスキップされずupdateDocが呼ばれる(early-return回帰)', async () => {
+    // officeConfirmed/documentTypeConfirmedを明示的にtrueにする(GOAL.md Finding 4対応):
+    // makeDocument()の既定値はofficeConfirmedが未設定(undefined)のため、明示しないと
+    // shouldSetOfficeConfirmedが独立にtrueになり、customerId変更を検知するchanges.push
+    // (useDocumentEdit.ts:117-123)を外してもこのテストが偽陽性で通ってしまう。
+    const doc = makeDocument({
+      customerName: '末田 俊雄',
+      customerId: 'master-A',
+      customerConfirmed: true,
+      officeConfirmed: true,
+      documentTypeConfirmed: true,
+    })
+    const { result } = renderHook(() => useDocumentEdit(doc))
+
+    act(() => result.current.startEditing())
+    // customerNameは変更せず、同姓同名の別マスターのIDだけ選び直す想定
+    act(() => result.current.updateField('customerId', 'master-B'))
+
+    let success = false
+    await act(async () => {
+      success = await result.current.saveChanges()
+    })
+
+    expect(success).toBe(true)
+    expect(mockUpdateDoc).toHaveBeenCalledTimes(1) // 早期return(未修正時はここが0回)
+    const updateData = mockUpdateDoc.mock.calls[0]?.[1] as Record<string, unknown>
+    expect(updateData.customerId).toBe('master-B')
+  })
+
+  it('customerIdを変更せず他フィールドのみ編集した場合、editLogsにcustomerIdエントリは記録されない', async () => {
+    const doc = makeDocument({ customerName: '田村 勝義', customerId: 'master-A', customerConfirmed: true })
+    const { result } = renderHook(() => useDocumentEdit(doc))
+
+    act(() => result.current.startEditing())
+    act(() => result.current.updateField('careManager', '長谷川 由紀'))
+
+    await act(async () => {
+      await result.current.saveChanges()
+    })
+
+    expect(findLog('customerId')).toBeUndefined()
+  })
+
+  it('customerIdがnullのドキュメントで他フィールドのみ編集しても、null vs ""の差異でcustomerId変更が誤検知されない', async () => {
+    const doc = makeDocument({ customerName: '田村 勝義', customerId: null, customerConfirmed: true })
+    const { result } = renderHook(() => useDocumentEdit(doc))
+
+    act(() => result.current.startEditing())
+    act(() => result.current.updateField('careManager', '長谷川 由紀'))
+
+    await act(async () => {
+      await result.current.saveChanges()
+    })
+
+    expect(findLog('customerId')).toBeUndefined()
+  })
+
+  it('Firestore書き込み失敗時、キャッシュのcustomerIdが元の値にロールバックされる', async () => {
+    mockUpdateDoc.mockRejectedValueOnce(new Error('network error'))
+    const doc = makeDocument({ customerName: '田村 勝義', customerId: 'master-A', customerConfirmed: true })
+    const { result } = renderHook(() => useDocumentEdit(doc))
+
+    act(() => result.current.startEditing())
+    act(() => result.current.updateField('customerId', 'master-B'))
+
+    await act(async () => {
+      await result.current.saveChanges()
+    })
+
+    // updateDocumentInListCacheが2回呼ばれる（楽観的更新 + ロールバック）
+    const { updateDocumentInListCache } = await import('../useDocuments')
+    const calls = vi.mocked(updateDocumentInListCache).mock.calls
+    expect(calls.length).toBe(2)
+    // 2回目（ロールバック）でcustomerIdが元の値に復元
+    const rollbackData = calls[1]?.[2] as Record<string, unknown>
+    expect(rollbackData.customerId).toBe('master-A')
+  })
+})
+
+// ADR-0022顧客未確定ゲート再設計(2026-07-25): Finding 1(過確定・素通り)の根本修正。
+// 曖昧な顧客名(同名マスターが2件以上存在する)の場合のみ、顧客欄への明示的なtouchを
+// 要求する。曖昧でない場合(customerMasters未指定/衝突なし)は上記までの全テストが示す
+// 通りAC5「保存=確定」挙動を維持する(非破壊)。
+describe('useDocumentEdit - 曖昧な顧客名のtouch要件(ADR-0022顧客未確定ゲート再設計)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  const AMBIGUOUS_MASTERS = [{ name: '鈴木花子' }, { name: '鈴木花子' }]
+
+  it('曖昧な顧客名+ 顧客欄をtouchせず他フィールドのみ変更した場合、customerConfirmedはupdateDataに含まれない(Finding 1回帰テスト)', async () => {
+    const doc = makeDocument({ customerName: '鈴木花子', customerConfirmed: false })
+    const { result } = renderHook(() => useDocumentEdit(doc, AMBIGUOUS_MASTERS))
+
+    act(() => result.current.startEditing())
+    act(() => result.current.updateField('fileName', 'renamed.pdf')) // 顧客欄は触らない
+
+    await act(async () => {
+      await result.current.saveChanges()
+    })
+
+    const updateData = mockUpdateDoc.mock.calls[0]?.[1] as Record<string, unknown>
+    expect(updateData.customerConfirmed).toBeUndefined()
+    expect(updateData.confirmedBy).toBeUndefined()
+  })
+
+  it('曖昧な顧客名+顧客欄を同じ値で再選択(touch)して保存すると、customerConfirmed:true + confirmedBy/confirmedAtが書き込まれる(ブロック解除の唯一経路)', async () => {
+    const doc = makeDocument({ customerName: '鈴木花子', customerConfirmed: false })
+    const { result } = renderHook(() => useDocumentEdit(doc, AMBIGUOUS_MASTERS))
+
+    act(() => result.current.startEditing())
+    act(() => result.current.updateField('customerName', '鈴木花子')) // 同じ値でも明示的に選び直す
+    act(() => result.current.updateField('customerId', 'master-selected'))
+
+    await act(async () => {
+      await result.current.saveChanges()
+    })
+
+    const updateData = mockUpdateDoc.mock.calls[0]?.[1] as Record<string, unknown>
+    expect(updateData.customerConfirmed).toBe(true)
+    expect(updateData.confirmedBy).toBe('user-001')
+    expect(updateData.confirmedAt).toBe('SERVER_TIMESTAMP')
+  })
+
+  it('曖昧でない顧客名(customerMasters未指定)なら、顧客欄をtouchしない保存でも従来通りcustomerConfirmed:trueになる(AC5非破壊の確認)', async () => {
+    const doc = makeDocument({ customerName: '田村 勝義', customerConfirmed: false })
+    const { result } = renderHook(() => useDocumentEdit(doc)) // customerMasters省略
+
+    act(() => result.current.startEditing())
+    act(() => result.current.updateField('fileName', 'renamed.pdf'))
+
+    await act(async () => {
+      await result.current.saveChanges()
+    })
+
+    const updateData = mockUpdateDoc.mock.calls[0]?.[1] as Record<string, unknown>
+    expect(updateData.customerConfirmed).toBe(true)
+  })
+
+  it('別docへの切替(documentプロパティ変更)で前docのtouched状態が引き継がれない(モーダル継続マウント対策)', async () => {
+    const docA = makeDocument({ id: 'doc-A', customerName: '鈴木花子', customerConfirmed: false })
+    const docB = makeDocument({ id: 'doc-B', customerName: '鈴木花子', customerConfirmed: false })
+    const { result, rerender } = renderHook(
+      ({ document }) => useDocumentEdit(document, AMBIGUOUS_MASTERS),
+      { initialProps: { document: docA as Document | null } }
+    )
+
+    // doc Aで顧客欄をtouchして保存(成功)
+    act(() => result.current.startEditing())
+    act(() => result.current.updateField('customerName', '鈴木花子'))
+    act(() => result.current.updateField('customerId', 'master-a-selected'))
+    await act(async () => {
+      await result.current.saveChanges()
+    })
+    mockUpdateDoc.mockClear()
+
+    // 同一モーダルインスタンスのままdoc Bへ切替(documentプロパティのみ変更、unmountしない)
+    rerender({ document: docB })
+
+    act(() => result.current.startEditing())
+    act(() => result.current.updateField('fileName', 'renamed-b.pdf')) // doc Bの顧客欄は触らない
+    await act(async () => {
+      await result.current.saveChanges()
+    })
+
+    const updateData = mockUpdateDoc.mock.calls[0]?.[1] as Record<string, unknown>
+    // doc Aのtouchedがリークしていれば誤ってtrueになる
+    expect(updateData.customerConfirmed).toBeUndefined()
+  })
+
+  it('document.id変更時のリセットeffect単体の検証: startEditing()を再度呼ばずに切替後すぐ保存しても、前docのtouchedが引き継がれない', async () => {
+    const docA = makeDocument({ id: 'doc-A', customerName: '鈴木花子', customerConfirmed: false })
+    const docB = makeDocument({ id: 'doc-B', customerName: '鈴木花子', customerConfirmed: false })
+    const { result, rerender } = renderHook(
+      ({ document }) => useDocumentEdit(document, AMBIGUOUS_MASTERS),
+      { initialProps: { document: docA as Document | null } }
+    )
+
+    // doc Aで顧客欄をtouchする(保存はしない、touchedFieldsに残った状態を作る)
+    act(() => result.current.startEditing())
+    act(() => result.current.updateField('customerName', '鈴木花子'))
+    act(() => result.current.updateField('customerId', 'master-a-selected'))
+
+    // startEditing()を再度呼ばずにdoc Bへ切替(document.id変更検知effectのみに依存)
+    rerender({ document: docB })
+
+    act(() => result.current.updateField('fileName', 'renamed-b.pdf'))
+    await act(async () => {
+      await result.current.saveChanges()
+    })
+
+    const updateData = mockUpdateDoc.mock.calls[0]?.[1] as Record<string, unknown>
+    expect(updateData.customerConfirmed).toBeUndefined()
+    expect(updateData.fileName).toBe('renamed-b.pdf')
+  })
+
+  // /code-review high 指摘(2026-07-25)の回帰テスト
+  it('customerNameが前後空白付き(" 鈴木花子 ")でも、trim後のマスター名と照合して同名衝突として検出される(Finding 1: BEのcustomerAmbiguityGate.tsはtrimして照合するのに対しFEが未trimで照合していた非対称の解消)', async () => {
+    const doc = makeDocument({ customerName: ' 鈴木花子 ', customerConfirmed: false })
+    const { result } = renderHook(() => useDocumentEdit(doc, AMBIGUOUS_MASTERS))
+
+    act(() => result.current.startEditing())
+    act(() => result.current.updateField('fileName', 'renamed.pdf')) // 顧客欄は触らない
+
+    await act(async () => {
+      await result.current.saveChanges()
+    })
+
+    const updateData = mockUpdateDoc.mock.calls[0]?.[1] as Record<string, unknown>
+    expect(updateData.customerConfirmed).toBeUndefined()
+  })
+})
+
+// /code-review high 指摘(2026-07-25)の回帰テスト: Finding 3
+describe('useDocumentEdit - エラー状態のリセット(code-review high Finding 3)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('保存失敗でerrorがセットされた後、別docへ切替(document.id変更)するとerrorがリセットされる(前docのエラーが別docの詳細表示に漏れるのを防止)', async () => {
+    mockUpdateDoc.mockRejectedValueOnce(new Error('network error'))
+    const docA = makeDocument({ id: 'doc-A' })
+    const docB = makeDocument({ id: 'doc-B' })
+    const { result, rerender } = renderHook(
+      ({ document }) => useDocumentEdit(document),
+      { initialProps: { document: docA as Document | null } }
+    )
+
+    act(() => result.current.startEditing())
+    act(() => result.current.updateField('fileName', 'renamed.pdf'))
+    await act(async () => {
+      await result.current.saveChanges()
+    })
+    expect(result.current.error).not.toBeNull()
+
+    rerender({ document: docB })
+
+    expect(result.current.error).toBeNull()
+  })
+})

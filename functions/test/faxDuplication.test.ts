@@ -29,6 +29,7 @@ describe('planFaxDuplication (D3: 複製トリガー条件)', () => {
       flagEnabled: false,
       alreadyDistributed: false,
       alreadyConfirmedOrVerified: false,
+      sameNameCollisionNames: new Set(),
       candidates: [candidate({ id: 'c1', name: '田中太郎' }), candidate({ id: 'c2', name: '田中花子' })],
     });
     expect(result.shouldDuplicate).to.equal(false);
@@ -41,6 +42,7 @@ describe('planFaxDuplication (D3: 複製トリガー条件)', () => {
       flagEnabled: true,
       alreadyDistributed: true,
       alreadyConfirmedOrVerified: false,
+      sameNameCollisionNames: new Set(),
       candidates: [candidate({ id: 'c1', name: '田中太郎' }), candidate({ id: 'c2', name: '田中花子' })],
     });
     expect(result.shouldDuplicate).to.equal(false);
@@ -52,6 +54,7 @@ describe('planFaxDuplication (D3: 複製トリガー条件)', () => {
       flagEnabled: true,
       alreadyDistributed: false,
       alreadyConfirmedOrVerified: true,
+      sameNameCollisionNames: new Set(),
       candidates: [candidate({ id: 'c1', name: '田中太郎' }), candidate({ id: 'c2', name: '田中花子' })],
     });
     expect(result.shouldDuplicate).to.equal(false);
@@ -64,6 +67,7 @@ describe('planFaxDuplication (D3: 複製トリガー条件)', () => {
       flagEnabled: true,
       alreadyDistributed: false,
       alreadyConfirmedOrVerified: false,
+      sameNameCollisionNames: new Set(),
       candidates: [candidate({ id: 'c1', name: '田中太郎' })],
     });
     expect(result.shouldDuplicate).to.equal(false);
@@ -76,6 +80,7 @@ describe('planFaxDuplication (D3: 複製トリガー条件)', () => {
       flagEnabled: true,
       alreadyDistributed: false,
       alreadyConfirmedOrVerified: false,
+      sameNameCollisionNames: new Set(),
       candidates: [],
     });
     expect(result.shouldDuplicate).to.equal(false);
@@ -87,6 +92,7 @@ describe('planFaxDuplication (D3: 複製トリガー条件)', () => {
       flagEnabled: true,
       alreadyDistributed: false,
       alreadyConfirmedOrVerified: false,
+      sameNameCollisionNames: new Set(),
       candidates: [
         candidate({ id: 'c1', name: '田中太郎', careManagerName: '五十嵐恵' }),
         candidate({ id: 'c2', name: '田中花子' }),
@@ -105,6 +111,7 @@ describe('planFaxDuplication (D3: 複製トリガー条件)', () => {
       flagEnabled: true,
       alreadyDistributed: false,
       alreadyConfirmedOrVerified: false,
+      sameNameCollisionNames: new Set(),
       candidates: [
         candidate({ id: 'c1', name: '田中太郎' }),
         candidate({ id: 'c2', name: '田中花子' }),
@@ -121,6 +128,7 @@ describe('planFaxDuplication (D3: 複製トリガー条件)', () => {
       flagEnabled: true,
       alreadyDistributed: false,
       alreadyConfirmedOrVerified: false,
+      sameNameCollisionNames: new Set(),
       candidates: [
         candidate({ id: 'c1', name: '田中太郎', matchType: 'exact' }),
         candidate({ id: 'c2', name: '田中花子', matchType: 'fuzzy' }),
@@ -136,6 +144,7 @@ describe('planFaxDuplication (D3: 複製トリガー条件)', () => {
       flagEnabled: true,
       alreadyDistributed: false,
       alreadyConfirmedOrVerified: false,
+      sameNameCollisionNames: new Set(),
       candidates: [
         candidate({ id: 'c1', name: '田中太郎', isDuplicate: false }),
         candidate({ id: 'c2', name: '田中太郎', isDuplicate: true }),
@@ -145,11 +154,42 @@ describe('planFaxDuplication (D3: 複製トリガー条件)', () => {
     expect(result.reason).to.equal('insufficientExactCandidates');
   });
 
+  it('同名マスターが2件以上存在する候補は、isDuplicateフラグが両方未設定でも複製対象に含めない(ADR-0022顧客未確定ゲート再設計 致命的1の回帰防止: マスターのisDuplicateフラグは登録時のみ付与され事後の追加では更新されないため、フラグに頼らずsameNameCollisionNamesで除外する)', () => {
+    const result = planFaxDuplication({
+      flagEnabled: true,
+      alreadyDistributed: false,
+      alreadyConfirmedOrVerified: false,
+      sameNameCollisionNames: new Set(['田中太郎']),
+      candidates: [
+        candidate({ id: 'c1', name: '田中太郎', isDuplicate: false }),
+        candidate({ id: 'c2', name: '田中花子', isDuplicate: false }),
+      ],
+    });
+    expect(result.shouldDuplicate).to.equal(false);
+    expect(result.reason).to.equal('insufficientExactCandidates');
+  });
+
+  it('sameNameCollisionNamesに含まれない名前の候補は、従来通り複製対象に含める(除外は衝突している名前のみに限定されること)', () => {
+    const result = planFaxDuplication({
+      flagEnabled: true,
+      alreadyDistributed: false,
+      alreadyConfirmedOrVerified: false,
+      sameNameCollisionNames: new Set(['佐藤次郎']), // 候補とは無関係な名前
+      candidates: [
+        candidate({ id: 'c1', name: '田中太郎' }),
+        candidate({ id: 'c2', name: '田中花子' }),
+      ],
+    });
+    expect(result.shouldDuplicate).to.equal(true);
+    expect(result.assignments.map((a) => a.customerId)).to.deep.equal(['c1', 'c2']);
+  });
+
   it('入力候補がscore降順でない場合でも、本関数自身がソートしてから重複排除する(CodeRabbit指摘: 呼出元のソート契約に依存しない)', () => {
     const result = planFaxDuplication({
       flagEnabled: true,
       alreadyDistributed: false,
       alreadyConfirmedOrVerified: false,
+      sameNameCollisionNames: new Set(),
       candidates: [
         // score昇順(呼出元のsortが効いていない想定)で渡す
         candidate({ id: 'c1', name: '田中太郎', score: 60 }),
@@ -168,6 +208,7 @@ describe('planFaxDuplication (D3: 複製トリガー条件)', () => {
       flagEnabled: true,
       alreadyDistributed: false,
       alreadyConfirmedOrVerified: false,
+      sameNameCollisionNames: new Set(),
       candidates: [
         candidate({ id: 'c1', name: '田中太郎' }),
         candidate({ id: 'c1', name: '田中太郎' }),
@@ -184,6 +225,7 @@ describe('planFaxDuplication (D3: 複製トリガー条件)', () => {
       flagEnabled: true,
       alreadyDistributed: false,
       alreadyConfirmedOrVerified: false,
+      sameNameCollisionNames: new Set(),
       candidates: [
         candidate({ id: 'c1', name: '田中太郎', score: 100 }),
         candidate({ id: 'c2', name: '田中花子', score: 95, matchType: 'fuzzy' }),

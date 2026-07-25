@@ -24,7 +24,7 @@
  * (`executeDriveExport.ts`)の責務。本関数はFuriganaMissingError / CustomerNameMissingError /
  * CareManagerMissingError / DocumentCategoryMissingError / FileDateMissingError /
  * AmbiguousFolderError / FolderCreationInProgressError / AmbiguousFileError /
- * DriveSettingsIncompleteErrorを
+ * DriveSettingsIncompleteError / CustomerUnconfirmedErrorを
  * そのままthrowし、呼び出し元がdriveExportStatus:'error'への遷移に使う
  * (fail-visible、Drive書き込みは発生しない)。
  *
@@ -43,6 +43,8 @@ import { resolveFolderSegments, FolderPathDocInput } from './folderPath';
 import { findOrCreateFolder } from './findOrCreateFolder';
 import { MASTER_PATHS } from '../utils/masterPaths';
 import type { Document, CustomerMaster, DriveFolderTemplate } from '../../../shared/types';
+import { DRIVE_EXPORT_CUSTOMER_UNCONFIRMED_MESSAGE_PREFIX } from '../../../shared/types';
+import { isCustomerUnconfirmed } from './customerAmbiguityGate';
 
 const db = admin.firestore();
 const storage = admin.storage();
@@ -69,6 +71,30 @@ export class DriveSettingsIncompleteError extends Error {
   constructor(missingField: string) {
     super(`Google Drive連携の設定が未完了です(${missingField}が未設定)`);
     this.name = 'DriveSettingsIncompleteError';
+  }
+}
+
+/**
+ * 顧客が未確定(同姓同名マスターの衝突が実在し、かつ人間による明示的選択が確認できない)
+ * ままエクスポートが試みられた場合にthrow(同姓同名リスク対応、2026-07-25)。Driveフォルダ名は
+ * `doc.customerName`文字列のみで決まりcustomerIdを参照しないため、顧客未確定のまま
+ * エクスポートすると、OCRが任意に選んだ顧客情報のまま外部Driveへ書類が渡ってしまう。
+ *
+ * 守備範囲は「同姓同名マスターの衝突のみ」(decision-maker承認済み)。OCRが別名(例:
+ * 「田中一郎」/「田中一朗」)をスコア僅差で取り違えるケースは対象外(既存のOCR精度課題として
+ * 別途扱う、ADR-0022参照)。判定の詳細は`customerAmbiguityGate.ts`を参照。
+ *
+ * 呼び出し元（トリガー）はこれを捕捉し `driveExportStatus: 'error'` に遷移させる。
+ * ユーザーが書類詳細で顧客を確定・保存すれば、次回の定期リトライ(または手動リトライ)で
+ * 自動的に再試行される(fail-visible、Drive書き込みは発生しない)。
+ */
+export class CustomerUnconfirmedError extends Error {
+  constructor(customerName: string) {
+    super(
+      `${DRIVE_EXPORT_CUSTOMER_UNCONFIRMED_MESSAGE_PREFIX}Google Driveへエクスポートできません` +
+        `(書類詳細で顧客を選択・保存して確定すると自動で再試行されます): ${customerName}`
+    );
+    this.name = 'CustomerUnconfirmedError';
   }
 }
 
@@ -293,6 +319,11 @@ export async function exportDocument(
   }
   const doc = docSnap.data() as Document;
 
+  // 元の並び(settings確認が最初)を維持する: 顧客確定ゲート導入前はここでgetDriveSettings()
+  // を呼んでいた。並行実行の所有権テスト(executeDriveExportIntegration.test.tsの「並行実行」
+  // 系)はexportDocument()内のawaitの相対位置に依存した厳密なタイミングを前提にしており、
+  // ゲート挿入位置を早めるとレースの発現有無が変わってしまうことが実測で判明したため、
+  // settings確認 → マスター読み込み(furigana取得と共用) → ゲート、の順を保つ。
   const settings = await getDriveSettings();
   const { rootFolderId } = settings;
   if (!rootFolderId) {
@@ -303,10 +334,19 @@ export async function exportDocument(
     throw new DriveSettingsIncompleteError('template');
   }
 
+  // furigana取得と同じ1回のマスター読み込みを、顧客未確定ゲートのname↔id乖離チェック
+  // (customerAmbiguityGate.ts参照)にも再利用する(追加読み込みコストゼロ)。
   let customerFurigana: string | undefined;
+  let customerMasterName: string | null = null;
   if (doc.customerId) {
     const customerSnap = await db.doc(`${MASTER_PATHS.customers}/${doc.customerId}`).get();
-    customerFurigana = (customerSnap.data() as CustomerMaster | undefined)?.furigana;
+    const customerMaster = customerSnap.data() as CustomerMaster | undefined;
+    customerFurigana = customerMaster?.furigana;
+    customerMasterName = customerMaster?.name ?? null;
+  }
+
+  if (await isCustomerUnconfirmed(doc, { firestore: db, customerMasterName })) {
+    throw new CustomerUnconfirmedError(doc.customerName || '未判定');
   }
 
   const docInput: FolderPathDocInput = {

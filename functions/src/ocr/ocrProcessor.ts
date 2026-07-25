@@ -37,6 +37,7 @@ import {
   type CustomerCandidate,
 } from '../utils/extractors';
 import { generateDisplayFileName } from '../../../shared/generateDisplayFileName';
+import { findSameNameCollisionNames } from '../../../shared/customerIdentity';
 import { loadMasterData } from '../utils/loadMasterData';
 import {
   capPageResultsAggregate,
@@ -454,6 +455,10 @@ export async function processDocument(
     // このFirestore読取にも及ぼすため(code-review指摘: tryの外に置くとこの読取が失敗
     // した場合にocrResultUrlのStorage孤児がcompensateDeleteOnFailureされずに残る)。
     const faxDuplicationEnabled = await isFaxDuplicationEnabled(db);
+    // ADR-0022顧客未確定ゲート再設計(2026-07-25、Plan agent検証で発覚した致命的な穴への
+    // 対応): マスターの`isDuplicate`フラグは事後の追加・改名で更新されないため信用せず、
+    // 既にロード済みの`customers`(:346)からライブに同名衝突を数え直す(追加読み込みなし)。
+    const sameNameCollisionNames = findSameNameCollisionNames(customers);
     await applyOcrCompletionTransaction({
       db,
       docRef,
@@ -461,6 +466,7 @@ export async function processDocument(
       ownershipExpectation,
       extractionFields,
       customerCandidates: customerResult.candidates,
+      sameNameCollisionNames,
       fileDateFormatted: dateResult.formattedDate ?? undefined,
       savedOcrResult,
       pageResults,
@@ -512,6 +518,8 @@ export async function applyOcrCompletionTransaction(input: {
   ownershipExpectation: OcrRunExpectation;
   extractionFields: OcrExtractionUpdateFields;
   customerCandidates: CustomerCandidate[];
+  /** `shared/customerIdentity.ts`の`findSameNameCollisionNames()`で計算済みの同名衝突集合。 */
+  sameNameCollisionNames: ReadonlySet<string>;
   fileDateFormatted: string | undefined;
   savedOcrResult: string;
   pageResults: RawPageOcrResult[];
@@ -531,6 +539,7 @@ export async function applyOcrCompletionTransaction(input: {
     ownershipExpectation,
     extractionFields,
     customerCandidates,
+    sameNameCollisionNames,
     fileDateFormatted,
     savedOcrResult,
     pageResults,
@@ -623,6 +632,7 @@ export async function applyOcrCompletionTransaction(input: {
         alreadyDistributed,
         alreadyConfirmedOrVerified,
         candidates: customerCandidates,
+        sameNameCollisionNames,
       });
       console.log(`[ocrProcessor] faxDuplication plan for ${docId}: ${distributionPlan.reason}`, {
         operation: 'ocrProcessor',

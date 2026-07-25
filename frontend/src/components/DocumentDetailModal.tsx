@@ -429,6 +429,14 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
     markAsUnverified,
   } = useDocumentVerification(document)
 
+  // マスターデータ取得（編集時のドロップダウン用）
+  // useDocumentEditより前に呼ぶ: customersを渡して同姓同名の曖昧性判定に使う(ADR-0022
+  // 顧客未確定ゲート再設計、2026-07-25)。
+  const { data: customers } = useCustomers()
+  const { data: offices } = useOffices()
+  const { data: documentTypes } = useDocumentTypes()
+  const { data: careManagers } = useCareManagers()
+
   // 編集機能
   const {
     isEditing,
@@ -439,13 +447,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
     updateField,
     saveChanges,
     error: editError,
-  } = useDocumentEdit(document)
-
-  // マスターデータ取得（編集時のドロップダウン用）
-  const { data: customers } = useCustomers()
-  const { data: offices } = useOffices()
-  const { data: documentTypes } = useDocumentTypes()
-  const { data: careManagers } = useCareManagers()
+  } = useDocumentEdit(document, customers)
 
   // エイリアス登録
   const { addAlias, isAdding: isAddingAlias } = useMasterAlias()
@@ -1056,7 +1058,12 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                         variant="default"
                         size="sm"
                         onClick={handleSave}
-                        disabled={isSaving || isAddingAlias}
+                        // customerMasters(customers)が未ロードの間は保存を防ぐ(code-review high Finding 2
+                        // + codex review P1、2026-07-25): useDocumentEditの同姓同名衝突判定は空配列を
+                        // 「衝突なし」と誤判定するため、customers===undefinedの間(初回ロード中・クエリ
+                        // 失敗時の両方を含む)は保存不可にする。isLoadingで判定するとクエリ失敗時に
+                        // false に戻り(dataはundefinedのまま)ガードが外れてしまうため使わない。
+                        disabled={isSaving || isAddingAlias || customers === undefined}
                       >
                         {isSaving || isAddingAlias ? (
                           <Loader2 className="h-4 w-4 animate-spin" />
@@ -1124,8 +1131,14 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                             value={editedFields.customerName || ''}
                             items={customerItems}
                             suggestedItems={suggestedCustomerItems.length > 0 ? suggestedCustomerItems : undefined}
-                            onChange={(v) => {
+                            onChange={(v, item) => {
                               updateField('customerName', v)
+                              // 同姓同名の別人が同一Driveフォルダへ合流するリスク対応(2026-07-25):
+                              // customerIdをcustomerNameと無条件同期する(documentUtils.tsの
+                              // applySegmentFieldEditと同じ規約)。itemなし経路は現状存在しない
+                              // (MasterSelectFieldは必ずid付きitemを渡す)が、将来の経路追加で
+                              // IDだけ古いまま残る乖離を防ぐため無条件同期にする。
+                              updateField('customerId', item?.id ?? '')
                               // 担当ケアマネは「空欄のときのみ」自動補完。
                               // 既存値（手動編集含む）があれば顧客変更でも保持する。
                               const cm = resolveCareManager(v, customers || [])

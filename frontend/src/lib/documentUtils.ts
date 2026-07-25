@@ -8,6 +8,13 @@ import { format } from 'date-fns';
 import { ja } from 'date-fns/locale';
 import { Timestamp } from 'firebase/firestore';
 import type { DocumentStatus, SplitSegment } from '@shared/types';
+// isValidCustomerSelection は元々ここに定義されていたが、functions/src/drive/customerAmbiguityGate.ts
+// (Driveエクスポートの顧客未確定ゲート、2026-07-25再設計)も同じsentinel判定を必要とするため
+// shared/customerIdentity.ts へ移設した。ここでは同一ファイル内(buildSegmentConfirmedFlags等)
+// からも使うためimportし、既存importerが無修正で動くようre-exportも兼ねる。
+import { isValidCustomerSelection } from '@shared/customerIdentity';
+
+export { isValidCustomerSelection };
 
 // ============================================
 // ステータス表示設定
@@ -68,22 +75,11 @@ export function formatTimestamp(
 // 編集モーダル保存時に「選択確定フラグ」(customerConfirmed/officeConfirmed/
 // documentTypeConfirmed) を true にするか判定するために使用する。Sentinel 値
 // （'未判定'/'不明顧客'/'不明事業所'/'不明文書'）は OCR 失敗・未判定状態を示すため、
-// 選択として無効扱いにする。
+// 選択として無効扱いにする。CUSTOMER_INVALID_SENTINELS/isValidCustomerSelection は
+// shared/customerIdentity.ts へ移設済み(上記re-export参照)。
 
-const CUSTOMER_INVALID_SENTINELS: ReadonlySet<string> = new Set(['未判定', '不明顧客']);
 const OFFICE_INVALID_SENTINELS: ReadonlySet<string> = new Set(['未判定', '不明事業所']);
 const DOCUMENT_TYPE_INVALID_SENTINELS: ReadonlySet<string> = new Set(['未判定', '不明文書']);
-
-/**
- * 顧客名が「確定可能な有効値」かを判定する。
- * 空文字・null・undefined・空白のみ・sentinel 値（'未判定'/'不明顧客'）は false を返す。
- */
-export function isValidCustomerSelection(name: string | null | undefined): boolean {
-  if (name == null) return false;
-  const trimmed = name.trim();
-  if (trimmed === '') return false;
-  return !CUSTOMER_INVALID_SENTINELS.has(trimmed);
-}
 
 /**
  * 事業所名が「確定可能な有効値」かを判定する。
