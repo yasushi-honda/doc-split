@@ -98,14 +98,14 @@ stateDiagram-v2
 - **過確定・素通り**: `useDocumentEdit.ts`の`shouldSetCustomerConfirmed`は「現在の顧客名が有効値」でありさえすれば、同姓同名候補を選び直さず無関係なフィールド（例: 書類日付）だけ直して保存しても`customerConfirmed:true`にしてしまい、ゲートを素通りする。
 - **過剰ブロック**: 分割フロー（`splitDocumentBuilder.ts`/`documentUtils.ts`）は「人間がそのフィールドを実際に編集(touched)したか」でのみ判定するため、OCRが正しく一意認識していても人間が顧客欄を触らなければ`customerConfirmed`が恒久的にfalseのままになり、kanameoneの主要機能である複数顧客FAX複製フローが実質ブロックされうる。
 
-**最終設計**: ゲートの守備範囲を「**同姓同名マスターの衝突のみ**」に絞った（decision-maker承認済み。OCRが別名を取り違えるスコア僅差誤認識は明示的にOut of Scope、下記参照）。マスターの`isDuplicate`フラグは登録時のみ自動付与され事後の追加・改名では更新されない（`MastersPage.tsx`の`handleForceAdd`は新規レコードのみに付与、`useMasters.ts`の`updateCustomer`は重複チェック自体が無い）ため信用せず、`functions/src/drive/customerAmbiguityGate.ts`が`exportDocument()`のdoc取得直後（Drive API/Storage呼び出し前）で以下を順に判定する:
+**最終設計**: ゲートは「同姓同名マスターが実在し人間確認が済んでいない」ケースへの対応を主眼としつつ、顧客名未設定/sentinel値・customerId↔name乖離（マスター改名の取り残し等）も併せてブロック対象とした（decision-maker承認済み。OCRが別名を取り違えるスコア僅差誤認識は明示的にOut of Scope、下記参照。**2026-07-25追記**: 当初本文は「守備範囲は同姓同名マスターの衝突のみ」と要約していたが、実データ監査でcocoro〈同名衝突0組〉でも顧客未確定docが36件検出されたことから要約が実態と乖離していたと判明し訂正した。下記1-4の判定順序自体は初出時点から変更なし）。マスターの`isDuplicate`フラグは登録時のみ自動付与され事後の追加・改名では更新されない（`MastersPage.tsx`の`handleForceAdd`は新規レコードのみに付与、`useMasters.ts`の`updateCustomer`は重複チェック自体が無い）ため信用せず、`functions/src/drive/customerAmbiguityGate.ts`が`exportDocument()`のdoc取得直後（Drive API/Storage呼び出し前）で以下を順に判定する:
 
 1. sentinel値（「不明顧客」「未判定」）・空文字は常に未確定扱い。
 2. `doc.customerId`の指すマスター名と`doc.customerName`が乖離している場合（マスター改名の取り残し等）も未確定扱い（`furigana`取得のため既に読み込み済みのマスターdocを再利用、追加読み込みコストゼロ）。
 3. 既存の人間確定デュアルリード（`customerConfirmed !== undefined ? customerConfirmed : needsManualCustomerSelection !== undefined ? !needsManualCustomerSelection : false`、両方undefinedのレガシーdocは「未確定」として扱い次段の曖昧性チェックに委ねる〈後述〉、`customerConfirmed:true`+`needsManualCustomerSelection:true`という不整合docは通過）で確定済みならここで終了。
 4. 未確定と判定された場合のみ、`masters/customers/items`への`where('name','==',...).limit(2)`ライブクエリで実際に同名マスターが2件以上存在するかを確認し、存在する場合のみ`CustomerUnconfirmedError`をthrowする。
 
-この設計により「同姓同名マスターが実在し未選択」のみを正確にブロックし、「分割フローでOCRが正しく一意認識し人間が触らなかった」ケースは通過するようになった（過剰ブロックの解消）。過確定の解消は`useDocumentEdit.ts`側で対応: `shouldSetCustomerConfirmed`は、顧客名が同名マスター衝突を持つ（曖昧な）場合のみ、顧客欄(`customerName`/`customerId`)への明示的なtouchを要求する。曖昧でない大多数のケース（推定95%超）では既存のIssue #396 AC5「保存=確定」挙動を維持し、選択待ちバッジの点灯頻度への影響を最小化した。あわせて`confirmedBy`/`confirmedAt`を書き込むよう修正した（従来`officeConfirmed`側との非対称があり、`confirmedBy`が空のため診断スクリプトが人間確定を正しく再判別できなかった）。
+この設計により、顧客名未設定/sentinel値・customerId↔name乖離・同名マスターが実在し未選択、の3系統を正確にブロックしつつ、「分割フローでOCRが正しく一意認識し人間が触らなかった」ケースは通過するようになった（過剰ブロックの解消）。過確定の解消は`useDocumentEdit.ts`側で対応: `shouldSetCustomerConfirmed`は、顧客名が同名マスター衝突を持つ（曖昧な）場合のみ、顧客欄(`customerName`/`customerId`)への明示的なtouchを要求する。曖昧でない大多数のケース（推定95%超）では既存のIssue #396 AC5「保存=確定」挙動を維持し、選択待ちバッジの点灯頻度への影響を最小化した。あわせて`confirmedBy`/`confirmedAt`を書き込むよう修正した（従来`officeConfirmed`側との非対称があり、`confirmedBy`が空のため診断スクリプトが人間確定を正しく再判別できなかった）。
 
 FAX複製フロー（`functions/src/ocr/faxDuplication.ts`）はこのゲートを経由しない別の書込経路であり、`buildFaxDuplicationMemberOverride()`が無条件で`customerConfirmed:true`を書き込む。同名マスター2件（`isDuplicate`未設定）を「別人2名」と誤認して複製すると、新ゲートの人間確定判定で即通過しライブクエリすら実行されず、Finding修正後も別人2名の書類が同一フォルダへ合流しうる致命的な穴だった。対策として`planFaxDuplication`自体に同名衝突候補の除外を追加した（`ocrProcessor.ts`が既にメモリ上に持つ顧客マスター全件から`sameNameCollisionNames`を計算して渡す、追加I/Oなし）。
 
