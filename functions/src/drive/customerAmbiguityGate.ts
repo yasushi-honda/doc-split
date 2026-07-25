@@ -51,8 +51,8 @@ export interface IsCustomerUnconfirmedDeps {
 }
 
 /**
- * 顧客が未確定(同姓同名マスターの衝突が実在し、かつ人間による明示的選択が確認できない)
- * かどうかを判定する。
+ * 顧客が未確定(顧客名未設定/sentinel値・customerId↔name乖離・同姓同名マスターの衝突が実在し
+ * 人間による明示的選択が確認できない、のいずれか)かどうかを判定する。
  */
 export async function isCustomerUnconfirmed(
   doc: Document,

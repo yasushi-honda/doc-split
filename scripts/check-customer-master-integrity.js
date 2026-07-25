@@ -43,6 +43,11 @@ function asString(value) {
 async function fetchAllCustomers() {
   const snap = await db.collection('masters/customers/items').get();
   const malformed = [];
+  // customerAmbiguityGate.ts側は`customerMaster?.name ?? null`(name↔id乖離チェックの対象)を
+  // 使うため、undefined/null(フィールド欠損)はnullとして区別して保持する(code-review指摘、
+  // 2026-07-25: asString()でtrim済みnameだけを使うと欠損が空文字に潰れ、実際にはBEがスキップする
+  // 判定を「乖離」と誤分類してしまう)。
+  const idToRawName = new Map();
   const customers = snap.docs.map((d) => {
     const data = d.data();
     if (typeof data.name !== 'undefined' && typeof data.name !== 'string') malformed.push(`${d.id}.name`);
@@ -50,6 +55,7 @@ async function fetchAllCustomers() {
     if (typeof data.careManagerName !== 'undefined' && typeof data.careManagerName !== 'string') {
       malformed.push(`${d.id}.careManagerName`);
     }
+    idToRawName.set(d.id, typeof data.name === 'string' ? data.name : null);
     return {
       id: d.id,
       // customerAmbiguityGate.ts側はdoc.customerNameをtrimしてから照合するため、name側も
@@ -61,7 +67,7 @@ async function fetchAllCustomers() {
       isDuplicate: data.isDuplicate === true,
     };
   });
-  return { customers, malformed };
+  return { customers, malformed, idToRawName };
 }
 
 /**
@@ -124,8 +130,9 @@ const UNCONFIRMED_REASON = {
  * いたため訂正。ADR-0022・customerAmbiguityGate.tsのコメントも同様に訂正済み)。
  *
  * `collisionNames`はバケット[A]で既に計算済みの同名グループ集合(呼出元main()参照)。
- * `idToName`は`fetchAllCustomers()`で既に全件フェッチ済みのマスター一覧から構築するMap
- * (id→name、追加Firestore読み込みなし)。
+ * `idToName`は`fetchAllCustomers()`が返す`idToRawName`(id→raw name、フィールド欠損/非文字列は
+ * null、追加Firestore読み込みなし)。trim済みの`customers[].name`ではなくraw値を使う理由は
+ * name↔id乖離チェック内のコメント参照(code-review指摘、2026-07-25)。
  * 曖昧性の判定に保存済み`isDuplicate`フラグを使わない理由は本ファイル冒頭のコメント参照。
  *
  * @returns 確定済みなら`{ unconfirmed: false, reason: null }`、未確定ならreasonに理由を格納
@@ -142,9 +149,13 @@ function classifyCustomerConfirmation(doc, collisionNames, idToName) {
   // 全マスターのid/nameを既にメモリ上に保持しているため、追加読み込みなしで同じ判定を再現できる
   // (codex review指摘、2026-07-25: 従来はこのチェックを省略しており、乖離を持つdocが実際には
   // Phase Dでブロックされるにも関わらず監査結果で過小報告される穴があった)。
+  // idToNameはid→raw name(フィールド欠損/非文字列はnull、customerAmbiguityGate.tsの
+  // `customerMaster?.name ?? null`と同一のnull集合)。Map miss(id不明)のundefinedと
+  // 欠損のnullを両方skip扱いにしないと、マスターdocのname未設定を「乖離」と誤分類する
+  // (code-review指摘、2026-07-25)。
   if (doc.customerId) {
     const masterName = idToName.get(doc.customerId);
-    if (masterName !== undefined && masterName !== name) {
+    if (masterName !== undefined && masterName !== null && masterName !== name) {
       return { unconfirmed: true, reason: UNCONFIRMED_REASON.NAME_ID_MISMATCH };
     }
   }
@@ -178,7 +189,7 @@ async function main() {
   console.log('モード: read-only(書込みなし)');
   console.log('---\n');
 
-  const { customers, malformed } = await fetchAllCustomers();
+  const { customers, malformed, idToRawName } = await fetchAllCustomers();
   console.log(`顧客マスター総数: ${customers.length}件`);
   if (malformed.length > 0) {
     console.log(
@@ -221,11 +232,10 @@ async function main() {
 
   // (d) verified済み未確定doc数(ゲートと同一ロジック)
   const collisionNames = new Set(exactGroups.map(([name]) => name));
-  const idToName = new Map(customers.map((c) => [c.id, c.name]));
   const verifiedDocs = await fetchVerifiedDocuments();
   console.log(`\nverified済みdocument総数: ${verifiedDocs.length}件`);
 
-  const classified = verifiedDocs.map((d) => ({ doc: d, ...classifyCustomerConfirmation(d, collisionNames, idToName) }));
+  const classified = verifiedDocs.map((d) => ({ doc: d, ...classifyCustomerConfirmation(d, collisionNames, idToRawName) }));
   const unconfirmed = classified.filter((c) => c.unconfirmed);
   console.log(`[D] 顧客未確定(customerAmbiguityGate.tsのゲートと同一ロジック、Phase D以降ブロック対象): ${unconfirmed.length}件`);
   const reasonCounts = new Map();
