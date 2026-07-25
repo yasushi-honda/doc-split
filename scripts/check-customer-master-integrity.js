@@ -106,19 +106,35 @@ async function fetchVerifiedDocuments() {
 /** `functions/src/drive/customerAmbiguityGate.ts`のCUSTOMER_INVALID_SENTINELSと同一値。 */
 const CUSTOMER_INVALID_SENTINELS = new Set(['未判定', '不明顧客']);
 
+/** `isCustomerUnconfirmed()`がdocを未確定と判定した理由(内訳集計・個別doc診断用)。 */
+const UNCONFIRMED_REASON = {
+  INVALID_NAME: '顧客名未設定/sentinel値',
+  NAME_ID_MISMATCH: 'customerId↔name乖離',
+  UNCONFIRMED_COLLISION: '同名衝突未確定',
+};
+
 /**
  * `functions/src/drive/customerAmbiguityGate.ts`の`isCustomerUnconfirmed()`と同一ロジック
- * (ADR-0022顧客未確定ゲート再設計、2026-07-25。守備範囲は同姓同名マスターの衝突+name↔id乖離)。
- * ゲートが実際にブロックするdocを事前に特定する。
+ * (ADR-0022顧客未確定ゲート再設計、2026-07-25)。ゲートが実際にブロックするdocと、その理由を
+ * 事前に特定する。
+ *
+ * 守備範囲は「同姓同名マスターの衝突」だけでなく、顧客名未設定/sentinel値・customerId↔name乖離の
+ * 3系統(decision-maker確認済み、2026-07-25追記: 当初「同姓同名の衝突のみ」と要約していたが、
+ * 実データ監査でcocoro(同名衝突0組)でも36件ブロックされることが判明し、要約が実態と乖離して
+ * いたため訂正。ADR-0022・customerAmbiguityGate.tsのコメントも同様に訂正済み)。
  *
  * `collisionNames`はバケット[A]で既に計算済みの同名グループ集合(呼出元main()参照)。
  * `idToName`は`fetchAllCustomers()`で既に全件フェッチ済みのマスター一覧から構築するMap
  * (id→name、追加Firestore読み込みなし)。
  * 曖昧性の判定に保存済み`isDuplicate`フラグを使わない理由は本ファイル冒頭のコメント参照。
+ *
+ * @returns 確定済みなら`{ unconfirmed: false, reason: null }`、未確定ならreasonに理由を格納
  */
-function isCustomerUnconfirmed(doc, collisionNames, idToName) {
+function classifyCustomerConfirmation(doc, collisionNames, idToName) {
   const name = (doc.customerName || '').trim();
-  if (!name || CUSTOMER_INVALID_SENTINELS.has(name)) return true;
+  if (!name || CUSTOMER_INVALID_SENTINELS.has(name)) {
+    return { unconfirmed: true, reason: UNCONFIRMED_REASON.INVALID_NAME };
+  }
 
   // customerIdが指すマスター名とdoc.customerNameが乖離(マスター改名の取り残し等)している場合、
   // customerAmbiguityGate.tsはhumanConfirmed判定より先にこれを検知しブロックする(exportDocument.ts
@@ -128,7 +144,9 @@ function isCustomerUnconfirmed(doc, collisionNames, idToName) {
   // Phase Dでブロックされるにも関わらず監査結果で過小報告される穴があった)。
   if (doc.customerId) {
     const masterName = idToName.get(doc.customerId);
-    if (masterName !== undefined && masterName !== name) return true;
+    if (masterName !== undefined && masterName !== name) {
+      return { unconfirmed: true, reason: UNCONFIRMED_REASON.NAME_ID_MISMATCH };
+    }
   }
 
   const humanConfirmed = doc.customerConfirmed !== undefined
@@ -136,9 +154,12 @@ function isCustomerUnconfirmed(doc, collisionNames, idToName) {
     : doc.needsManualCustomerSelection !== undefined
       ? !doc.needsManualCustomerSelection
       : false; // 両方未設定(レガシーdoc)は「未確定」として扱い、曖昧性チェックに委ねる(customerAmbiguityGate.tsと同一規約)
-  if (humanConfirmed) return false;
+  if (humanConfirmed) return { unconfirmed: false, reason: null };
 
-  return collisionNames.has(name);
+  if (collisionNames.has(name)) {
+    return { unconfirmed: true, reason: UNCONFIRMED_REASON.UNCONFIRMED_COLLISION };
+  }
+  return { unconfirmed: false, reason: null };
 }
 
 function groupBy(items, keyFn) {
@@ -204,10 +225,19 @@ async function main() {
   const verifiedDocs = await fetchVerifiedDocuments();
   console.log(`\nverified済みdocument総数: ${verifiedDocs.length}件`);
 
-  const unconfirmed = verifiedDocs.filter((d) => isCustomerUnconfirmed(d, collisionNames, idToName));
+  const classified = verifiedDocs.map((d) => ({ doc: d, ...classifyCustomerConfirmation(d, collisionNames, idToName) }));
+  const unconfirmed = classified.filter((c) => c.unconfirmed);
   console.log(`[D] 顧客未確定(customerAmbiguityGate.tsのゲートと同一ロジック、Phase D以降ブロック対象): ${unconfirmed.length}件`);
-  for (const d of unconfirmed.slice(0, 20)) {
-    console.log(`  - ${d.id.slice(0, 12)}… customerName=「${d.customerName}」`);
+  const reasonCounts = new Map();
+  for (const c of unconfirmed) {
+    reasonCounts.set(c.reason, (reasonCounts.get(c.reason) ?? 0) + 1);
+  }
+  const reasonSummary = Object.values(UNCONFIRMED_REASON)
+    .map((reason) => `${reason}=${reasonCounts.get(reason) ?? 0}件`)
+    .join(', ');
+  console.log(`  内訳: ${reasonSummary}`);
+  for (const c of unconfirmed.slice(0, 20)) {
+    console.log(`  - ${c.doc.id.slice(0, 12)}… customerName=「${c.doc.customerName}」 理由=${c.reason}`);
   }
   if (unconfirmed.length > 20) console.log(`  …他${unconfirmed.length - 20}件`);
 
