@@ -33,6 +33,8 @@ on:
           - check-master-data
           - check-master-data --fix
           - check-customer-master-integrity
+          - merge-notation-duplicate-masters
+          - merge-notation-duplicate-masters --execute
           - fix-stuck-documents --dry-run
           - fix-stuck-documents
           - fix-stuck-documents --include-errors --dry-run
@@ -684,7 +686,8 @@ jobs:
                [ "$SCRIPT_NAME" = "backfill-detail-subcollection" ] || \
                [ "$SCRIPT_NAME" = "measure-summary-cost" ] || \
                [ "$SCRIPT_NAME" = "create-pending-doc" ] || \
-               [ "$SCRIPT_NAME" = "backfill-drive-export" ]; then
+               [ "$SCRIPT_NAME" = "backfill-drive-export" ] || \
+               [ "$SCRIPT_NAME" = "merge-notation-duplicate-masters" ]; then
             # Issue #432 PR-C 系 script は scripts/lib/* (TypeScript)、seed-dev-data (#528) は
             # shared/*.ts に依存するため ts-node 経由で実行。compare-gemini-ocr-models (#548) は
             # functions/src/utils/* (extractors.ts/retry.ts) に依存するため同様に ts-node 経由。
@@ -714,6 +717,9 @@ jobs:
             # firebase-adminのみ依存(functions/src非依存、STORAGE_BUCKET不使用。Drive API/
             # Storageアクセスは行わずdriveExportStatus:'error'のマークのみ行う設計)。
             # STORAGE_BUCKET は resolve step で env 化済。
+            # merge-notation-duplicate-masters (2026-07-27、表記ゆれ重複マスター統合)は
+            # scripts/lib/notationDuplicateMerge.ts(純粋関数)に依存、STORAGE_BUCKET不使用。
+            # 既定はdry-run、--executeフラグ時のみ書込みを行う。
             EXTRA_ARGS=""
             if [ "$SCRIPT_NAME" = "classify-collision-docs" ]; then
               # ログマスキングで `{` が `***` に置換されるため、plan JSON を
