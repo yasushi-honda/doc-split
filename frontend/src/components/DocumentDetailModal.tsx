@@ -602,9 +602,13 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
       })
     : null
   const isSameNameCollision = unconfirmedReason === 'same-name-collision'
-  // 同名衝突の候補一覧(フリガナ・担当ケアマネ併記、staleな`allCustomerCandidates`より情報量が多い)
+  // 同名衝突の候補一覧(フリガナ・担当ケアマネ併記、staleな`allCustomerCandidates`より情報量が多い)。
+  // typeof c.name === 'string'ガード: useCustomers()はFirestore生データをname: doc.data().name as stringで
+  // castしており実行時保証がない。name欠損マスターが1件でもあるとc.name.trim()がTypeErrorでモーダル自体が
+  // クラッシュする(shared/customerIdentity.tsのfindSameNameCollisionNamesと同種のregression、Codex
+  // review-diff plan mode指摘で発覚、2026-07-26)
   const collidingMasters = isSameNameCollision && document
-    ? (customers ?? []).filter(c => c.name.trim() === (document.customerName ?? '').trim())
+    ? (customers ?? []).filter(c => typeof c.name === 'string' && c.name.trim() === (document.customerName ?? '').trim())
     : []
 
   // ドキュメントが変わったらdownloadUrlをリセット
