@@ -246,7 +246,19 @@ async function main() {
     .map((reason) => `${reason}=${reasonCounts.get(reason) ?? 0}件`)
     .join(', ');
   console.log(`  内訳: ${reasonSummary}`);
-  for (const c of unconfirmed.slice(0, 20)) {
+  // 個別一覧は同名衝突未確定(件数が少なく最も対応優先度が高い)→customerId↔name乖離→
+  // 顧客名未設定/sentinel値(大半を占めるレガシーdebt)の順にソートする。Firestore取得順の
+  // ままだと大量のsentinel値docに埋もれ、先頭20件のプレビューに真に対応が必要な同名衝突が
+  // 一件も表示されないことがある(decision-maker指摘、2026-07-26)。
+  const REASON_PRIORITY = [
+    UNCONFIRMED_REASON.UNCONFIRMED_COLLISION,
+    UNCONFIRMED_REASON.NAME_ID_MISMATCH,
+    UNCONFIRMED_REASON.INVALID_NAME,
+  ];
+  const sortedUnconfirmed = [...unconfirmed].sort(
+    (a, b) => REASON_PRIORITY.indexOf(a.reason) - REASON_PRIORITY.indexOf(b.reason)
+  );
+  for (const c of sortedUnconfirmed.slice(0, 20)) {
     console.log(`  - ${c.doc.id.slice(0, 12)}… customerName=「${c.doc.customerName}」 理由=${c.reason}`);
   }
   if (unconfirmed.length > 20) console.log(`  …他${unconfirmed.length - 20}件`);
