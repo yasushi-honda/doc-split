@@ -241,6 +241,34 @@ function UserGuide() {
         </div>
       </section>
 
+      <section id="user-section-6b" className="guide-section">
+        <h2><span className="section-number">6b</span>「同姓同名」バッジ対応</h2>
+        <p>
+          完全に同じ名前（姓名一致）の顧客マスターが複数登録されている場合、書類一覧や処理履歴に
+          <strong>「同姓同名」バッジ</strong>が表示されます。これは通常の「選択待ち」バッジとは別に、
+          <strong>顧客を誤って別人のフォルダへ振り分けてしまうリスクがある書類</strong>を優先的に
+          知らせるための表示です。
+        </p>
+
+        <h3>対応手順</h3>
+        <ol className="steps-list">
+          <li>「同姓同名」バッジが付いた書類をクリックして詳細を開く</li>
+          <li>詳細画面に表示される候補一覧（フリガナ・担当ケアマネ併記）から、正しい顧客を確認</li>
+          <li>顧客欄で正しい顧客を選び直して保存する（Google Drive連携が有効な場合、保存後に自動で再エクスポートされます）</li>
+        </ol>
+
+        <div className="info-box">
+          <h4>「選択待ち」バッジとの違い</h4>
+          <p>
+            「選択待ち」はOCRが顧客・事業所を確定できなかった書類全般に表示されます。「同姓同名」は
+            その中でも特に、<strong>Google Driveエクスポートが実際にブロックされる同名衝突</strong>
+            がある書類にのみ表示されます。両方に該当する書類は「同姓同名」が優先表示されます。
+          </p>
+        </div>
+
+        <p className="note">※顧客マスターの追加・変更がこの判定へ反映されるまで、最大5分程度かかる場合があります（画面を開いたままの場合はさらに時間がかかることがあります）。急ぎ確認したい場合は画面を再読み込みしてください。</p>
+      </section>
+
       <section id="user-section-7" className="guide-section">
         <h2><span className="section-number">7</span>表記ゆれ対応（エイリアス学習）</h2>
         <p>
@@ -343,6 +371,16 @@ function UserGuide() {
             A: 書類詳細から手動で修正できます（管理者権限が必要な場合があります）。
             なお、同姓同名（完全一致）の顧客マスターが複数存在する場合、どちらの顧客か確定できないため、
             自動複製（同一書類を複数の顧客に紐づける機能）の対象からは自動的に除外されます。
+          </p>
+        </div>
+
+        <div className="faq-item">
+          <h4>Q: 「同姓同名」バッジは何を意味していますか</h4>
+          <p>
+            A: 完全に同じ名前の顧客マスターが複数登録されており、どちらの顧客の書類か
+            まだ確定していないことを示しています。放置するとGoogle Driveへのエクスポートが
+            ブロックされ続けます。書類詳細を開き、正しい顧客を選び直して保存してください
+            （詳細は「6b. 同姓同名バッジ対応」を参照）。
           </p>
         </div>
       </section>
@@ -1123,6 +1161,7 @@ function TableOfContents({ activeTab }: { activeTab: string }) {
     { id: 'user-section-4', title: '書類詳細画面' },
     { id: 'user-section-5', title: 'PDFアップロード' },
     { id: 'user-section-6', title: '選択待ち対応' },
+    { id: 'user-section-6b', title: '「同姓同名」バッジ対応' },
     { id: 'user-section-7', title: '表記ゆれ対応' },
     { id: 'user-section-8', title: 'よくある質問' },
   ]

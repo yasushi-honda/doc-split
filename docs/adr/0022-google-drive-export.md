@@ -117,6 +117,10 @@ FAX複製フロー（`functions/src/ocr/faxDuplication.ts`）はこのゲート�
 
 **Out of Scope（本対応では扱わない）**: OCRが別名（例:「田中一郎」/「田中一朗」）をスコア僅差で取り違えるケース（`extractors.ts`の`needsManualSelection`が上位2候補のスコア差≤10で立つ条件のうち、同名マスター衝突以外の分岐）は、既存のOCR精度課題として別途扱い、本ゲートの保護対象外とする（decision-maker承認済み）。フォルダ名への識別子付与（真性の同姓同名・同一ケアマネ担当という構造的衝突への対策）は、現時点でこのパターンの実在が確認できていないため見送った。`furiganaFallback:'useNameInitial'`を選択したテナントでは、`customerId`がnull（「該当なし」選択）のdocがフリガナ参照をスキップしゲートを素通りしうる点も、opt-in済みのリスク面として本対応のスコープ外とする（kanameoneは`'stop'`を維持）。
 
+**プロアクティブ通知UI追加（2026-07-26）**: 上記ゲートはDriveエクスポートを正しくブロックするが、現場管理者が能動的に気づける経路が存在しない（Driveエラー一覧はflag OFF時無表示、既存の「選択待ち」バッジはBEゲートと矛盾する規約でレガシーdocを確定済み扱いにする）ことが判明した。`shared/customerIdentity.ts`に`precheckCustomerIdentity`/`resolveCustomerUnconfirmedReason`を新設し、本ゲート（BE、委譲・挙動不変）とFE側の「同姓同名」バッジ（書類一覧/担当CM別/顧客別/処理履歴/詳細モーダルの5箇所）が同一の判定ロジックを共有するようにした。新規Cloud Function・Scheduler・Firestoreフィールドは追加せず、FEは`useCustomers()`の既存キャッシュ（`staleTime: 5分`）を再利用したライブ判定で実現している。**顧客マスターの追加・改名は最大5分（画面を開いたままならさらに長く）反映が遅れる**——安全性（Driveエクスポートのブロック）は本ゲートのライブクエリが保証するため実害はないが、通知の即時性としては制約として残る。
+
+実装過程で、本ゲートと同型の`c.name.trim()`（trimしない前提のFirestore生データへの無条件アクセス）を3箇所で横展開したが、うち1箇所（`DocumentDetailModal.tsx`の候補一覧表示）は当初の実装で型ガードが漏れ、`name`フィールド欠損マスターが存在すると詳細モーダルがクラッシュするregressionを含んでいた。Codexセカンドオピニオン（plan mode）で発見し別PRで修正済み。また、FE側の同名衝突判定（`findSameNameCollisionNames`）はマスター名をtrimしてから集計するが、本ゲートのFirestoreクエリ（上記4.参照）は生値のまま完全一致検索するため、**マスター名に前後空白が付与された場合、FE通知とBEブロックの挙動が食い違いうる**（Codex review-diff指摘）。kanameone/cocoro実データでは前後空白付きマスター名は0件と実測確認済みだが、恒久対応（クエリ側の正規化またはマスター書込み経路への制約強制）は未実施で、`check-customer-master-integrity.js`の手動実行による検出に留まる（日次自動監視は`scheduled-audit.yml`の対象外、office短マスター検出専用のため）。
+
 ### 7. スコープはPhase 1（MVP）に限定
 
 Phase 1 = OAuth接続 + Picker + セグメント型テンプレート設定 + 確認ボタン起点のoutboxエクスポート + fileId記録によるfind-or-createの重複防止 + エラー一覧UI + 定期リトライ（Cloud Scheduler）。
