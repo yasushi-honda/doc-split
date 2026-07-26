@@ -104,26 +104,33 @@ cocoro/kanameから、書類（ケアプラン・医療・介護保険証等）�
 
 ## 🔄 中断点（in-flight）
 
-**対象タスク**: 「同姓同名プロアクティブ通知UI追加」（承認済み計画 `/Users/yyyhhh/.claude/plans/noble-booping-leaf.md`）。**PR #733がCI全PASS・`ui-verified`ラベル付与済みでオープン中だが、`/code-review high main...HEAD`が未完了のためマージ不可**（CLAUDE.md MUST: 実コード3ファイル以上/100行以上→code-review必須、PR #733は13ファイル・+776/-58行で該当）。
+**対象タスク**: 「同姓同名プロアクティブ通知UI追加」（承認済み計画 `/Users/yyyhhh/.claude/plans/noble-booping-leaf.md`）。**PR #733は2026-07-26マージ済み**（squash、`f7b4ad9`、16 files, +860/-59）。残るin-flightはPR-3（ヘルプ・ドキュメント更新）とdev→kanameone→cocoroへの本番反映。
 
-**中断の経緯**: decision-makerが `/code-review high main...HEAD` を起動し6つのfinderサブエージェントが並列実行を開始したが、**decision-makerが手動で6エージェント全てを停止**（理由未確認）。executor（Claude）は`disable-model-invocation`により代行実行不可能。
+**特記: `/code-review`が3回連続未完了だった経緯（次回同種事象の判断材料として記録）**:
+1. 1回目（`high`）: 6finderサブエージェント並列実行中にdecision-makerが手動で6エージェント全て停止（理由未確認）
+2. 2回目（`high`再実行）: 6finderは完了したが、後続の5検証(verify)エージェントの完了待ちでメインエージェント自身がタイムアウトし、`ReportFindings`を呼ばずに終了（sleep loopの末に「ポーリングをやめる」で自然終了、既知の不安定挙動 [reference_code_review_finder_agent_reliability.md] 参照）
+3. 3回目（`low`）: 検証フェーズの5エージェントが再びdecision-makerにより手動停止
 
-**次の一手**: decision-makerに「`/code-review high main...HEAD` を再実行するか、それとも別の理由で中断したか」を確認する。再実行の場合はそのままのコマンドを再提示する。
+2回目の未完了時、executorが検証待ちだった5候補のプロンプトをトランスクリプトファイルから直接読み、自らコードを読んで検証した結果、**実在する2件のバグを確認**:
+- **crash risk**: `shared/customerIdentity.ts`の`findSameNameCollisionNames()`が`c.name.trim()`を無条件実行しており、Firestore生データの`name`フィールドが実行時にstring型でない場合（欠損、過去に本番で実在確認済み — `check-customer-master-integrity.js`の`idToRawName`導入経緯参照）TypeErrorでクラッシュするregression（trim追加前のmainブランチはクラッシュしなかった）
+- **JSDoc矛盾**: `useProcessingHistory.ts`の`applyConfirmedFilter`のJSDocが「customerConfirmed:trueでも同名衝突があれば未確定に残す」と書いていたが、実装（`precheckCustomerIdentity`のhumanConfirmed優先ロジック）は衝突チェック前に確定扱いで返すため実現していなかった（既存の`precheckCustomerIdentity`単体テストでも「人間確定優先」が意図通りと確認済みのため、実装ではなくJSDoc側の記述ミスと判定）
 
-**検証コマンド**（次セッション再開時、PR状態確認）:
-```bash
-gh pr view 733 --json state,mergeable,labels,statusCheckRollup
-gh pr checks 733
-```
+続けて`/codex review-diff --base main`（Bash版、effort=high）でセカンドオピニオンを取得。上記2件には言及がなかったが、別の1件（P2）を検出: FE（`findSameNameCollisionNames`）のみtrim適用、BE `customerAmbiguityGate.ts`・FAX複製`faxDuplication.ts`は生値比較のままのため、whitespace variantなマスター名でFE警告とBE実際のブロック挙動が食い違いうる（`firestore.rules`の`masters/{masterId}/items/{itemId}`が`isAdmin()`のみでフィールド内容を制約していない点を根拠に指摘）。
 
-**背景（本セッションの経緯）**: 前回セッションの「同姓同名（別人）のDrive誤配置リスク対応」（PR #723/#724/#727/#729、全て**完了・マージ済み・dev/kanameone/cocoro全環境反映済み**）で、BEゲート（`customerAmbiguityGate.ts`）自体は処理をブロックする機能として正しく稼働していた。しかし本セッションでdecision-maker質問「同名衝突未確定3件はシステム上でアラートになっているか」を検証した結果、**現場管理者がその状態に気づける経路が事実上存在しない**ことが判明した（Driveエラー一覧はflag OFF時に無表示・FE「選択待ち」バッジがBEと矛盾する規約でレガシーdocを確定済み扱い・詳細モーダルのバナーはstaleなOCR時点スナップショット依存）。**AIの当初回答は不正確だった**: 監査スクリプトを独立実行した結果、kanameoneの対象3件は実際には`customerConfirmed=false`（明示設定）のため汎用「選択待ち」バッジ自体は表示されていたが、「同姓同名」固有の警告ではなく現場が通常のOCR未確定と同じ注意力でしか見られない、という点が本質的なギャップと訂正した。
+decision-maker承認のもと3件とも修正: ①`findSameNameCollisionNames`に`typeof c.name === 'string'`型ガード追加 ②`faxDuplication.ts`の`planFaxDuplication`をtrim比較に統一（BE `customerAmbiguityGate.ts`のFirestoreクエリ設計は複合インデックス不要のメリットを保持するため変更せず、監査スクリプトの`whitespaceIssues`検出による継続監視で許容する判断をコメントに明記） ③JSDocコメントを実装の実際の挙動に合わせて訂正+従来一切カバーされていなかった`identityLookup`付き回帰テストを新規追加。functions unit1945件/frontend unit504件/BE統合テスト(emulator)32件、tsc/lint双方0 errors、全PASS確認後commit・push・CI再PASS確認。3回目の`/code-review low`も停止されたため、decision-maker判断で`/code-review`完了を待たずにマージ（自己検証+Codex review-diffによる代替検証で十分と判断）。
 
 **実装内容**（承認済み計画 `noble-booping-leaf.md`、Codex plan review反映済み）:
 1. **PR #731**（マージ済み）: `scripts/check-customer-master-integrity.js`に完全doc ID・生フィールド値・FE/BE乖離件数の出力を追加（計測用）
 2. **PR #732**（マージ済み）: 顧客マスターname前後空白検出を追加、kanameone/cocoro実データで**0件**と確認（Codex plan review指摘の`findSameNameCollisionNames`trim追加によるFE/BE canonicalization不一致リスクを実測で解消）
-3. **PR #733**（オープン中、code-review未完了）: `shared/customerIdentity.ts`に`precheckCustomerIdentity`/`resolveCustomerUnconfirmedReason`を新設し、BEゲート（委譲・挙動不変）とFEバッジ5箇所（書類一覧/担当CM別/顧客別/処理履歴/詳細モーダル）が同一ロジックを共有。新規Cloud Function・Scheduler・Firestoreフィールドは追加しない（FEライブ判定+`useCustomers()`キャッシュ共有方式）。Codex plan review指摘4点を反映: needsReview合成（顧客+事業所）による事業所側要対応の隠蔽対策（title属性への全理由列挙）・処理履歴確定/未確定フィルターの不整合解消・エイリアス保存が同姓同名時に名前一致の先頭1件へ誤登録するバグの同時修正・BE統合テスト(顧客未確定ゲート13ケース)のCI化（`ci.yml`にstep追加）。functions unit1943件/BE統合テスト(emulator)32件/frontend unit501件、全PASS。実dev cloud project(`doc-split-dev`)+ローカル`npm run dev`+Playwright MCPで5箇所全て実機確認済み（`ui-verified`ラベル付与済み、確認証跡はPR #733コメントに記録）
+3. **PR #733**（マージ済み）: `shared/customerIdentity.ts`に`precheckCustomerIdentity`/`resolveCustomerUnconfirmedReason`を新設し、BEゲート（委譲・挙動不変）とFEバッジ5箇所（書類一覧/担当CM別/顧客別/処理履歴/詳細モーダル）が同一ロジックを共有。新規Cloud Function・Scheduler・Firestoreフィールドは追加しない（FEライブ判定+`useCustomers()`キャッシュ共有方式）。Codex plan review指摘4点＋マージ直前に追加修正した3件（crash risk・trim不整合・JSDoc矛盾、上記参照）を反映。実dev cloud project(`doc-split-dev`)+ローカル`npm run dev`+Playwright MCPで5箇所全て実機確認済み（`ui-verified`ラベル付与済み、確認証跡はPR #733コメントに記録）
 
 **マージ後にやること**: PR-3（ヘルプ・ドキュメント更新: `HelpPage.tsx`/`docs/operation/user-guide.md`/ADR-0022/本GOAL.md）→ dev自動デプロイ確認 → kanameone/cocoro本番反映（`gcloud functions describe`/Hosting releaseTimeでground truth検証）。**kanameoneの同名衝突未確定3件自体の人間による選び直しは、本UIマージ後も引き続き現場管理者/decision-maker領分**（executor代行不可、本UIは「見つけやすくする」ものであり3件の解決そのものではない）。
+
+**検証コマンド**（次セッション再開時、マージ確認）:
+```bash
+git log --oneline -3   # f7b4ad9 (#733) が含まれていることを確認
+gh pr view 733 --json state,mergedAt
+```
 
 ---
 
