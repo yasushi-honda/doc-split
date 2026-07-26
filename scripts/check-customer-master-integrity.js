@@ -173,6 +173,18 @@ function classifyCustomerConfirmation(doc, collisionNames, idToName) {
   return { unconfirmed: false, reason: null };
 }
 
+/**
+ * `frontend/src/hooks/useProcessingHistory.ts:69-82`の`isCustomerConfirmed()`と同一ロジック
+ * (差分計測専用の一時複製、2026-07-26: 「同姓同名」プロアクティブ通知UI追加の計測用)。
+ * BEゲート(`classifyCustomerConfirmation`)とFE現状表示の乖離を可視化し、新設バッジの
+ * 配線スコープ判断材料にする。FE本体を変更するものではない。
+ */
+function isCustomerConfirmedFeCurrent(doc) {
+  if (doc.customerConfirmed !== undefined) return doc.customerConfirmed;
+  if (doc.needsManualCustomerSelection !== undefined) return !doc.needsManualCustomerSelection;
+  return true; // 両方未設定のレガシーdocを「確定済み」扱い(BEゲートとの既知の非対称)
+}
+
 function groupBy(items, keyFn) {
   const map = new Map();
   for (const item of items) {
@@ -246,6 +258,23 @@ async function main() {
     .map((reason) => `${reason}=${reasonCounts.get(reason) ?? 0}件`)
     .join(', ');
   console.log(`  内訳: ${reasonSummary}`);
+
+  // FE現状バッジ(選択待ち)とBEゲートの乖離計測(2026-07-26追加)。「同姓同名」プロアクティブ
+  // 通知UIをどの理由まで配線すべきかの判断材料(承認済み計画 noble-booping-leaf.md 参照)。
+  const silentBlocked = unconfirmed.filter((c) => isCustomerConfirmedFeCurrent(c.doc));
+  const silentReasonCounts = new Map();
+  for (const c of silentBlocked) {
+    silentReasonCounts.set(c.reason, (silentReasonCounts.get(c.reason) ?? 0) + 1);
+  }
+  const silentSummary = Object.values(UNCONFIRMED_REASON)
+    .map((reason) => `${reason}=${silentReasonCounts.get(reason) ?? 0}件`)
+    .join(', ');
+  console.log(`  現状FE未表示かつゲートブロック: ${silentSummary}`);
+
+  const confirmedByGate = classified.filter((c) => !c.unconfirmed);
+  const overWarned = confirmedByGate.filter((c) => !isCustomerConfirmedFeCurrent(c.doc));
+  console.log(`  (参考)現状FE表示だがゲートは通過: ${overWarned.length}件`);
+
   // 個別一覧は同名衝突未確定(件数が少なく最も対応優先度が高い)→customerId↔name乖離→
   // 顧客名未設定/sentinel値(大半を占めるレガシーdebt)の順にソートする。Firestore取得順の
   // ままだと大量のsentinel値docに埋もれ、先頭20件のプレビューに真に対応が必要な同名衝突が
@@ -259,7 +288,15 @@ async function main() {
     (a, b) => REASON_PRIORITY.indexOf(a.reason) - REASON_PRIORITY.indexOf(b.reason)
   );
   for (const c of sortedUnconfirmed.slice(0, 20)) {
-    console.log(`  - ${c.doc.id.slice(0, 12)}… customerName=「${c.doc.customerName}」 理由=${c.reason}`);
+    // 同名衝突未確定のみ完全doc IDと生フィールド値を出力する(件数が少なく、inspect-document.js
+    // が customerConfirmed/needsManualCustomerSelection を出力しないため他手段で追跡できない、
+    // 2026-07-26追加)。他理由は従来通り12文字切り詰め(ログ肥大防止)。
+    const isCollision = c.reason === UNCONFIRMED_REASON.UNCONFIRMED_COLLISION;
+    const idLabel = isCollision ? c.doc.id : `${c.doc.id.slice(0, 12)}…`;
+    const rawFields = isCollision
+      ? ` customerConfirmed=${String(c.doc.customerConfirmed)} needsManualCustomerSelection=${String(c.doc.needsManualCustomerSelection)} customerId=${c.doc.customerId || '(なし)'}`
+      : '';
+    console.log(`  - ${idLabel} customerName=「${c.doc.customerName}」 理由=${c.reason}${rawFields}`);
   }
   if (unconfirmed.length > 20) console.log(`  …他${unconfirmed.length - 20}件`);
 
