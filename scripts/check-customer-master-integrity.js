@@ -48,6 +48,11 @@ async function fetchAllCustomers() {
   // 2026-07-25: asString()でtrim済みnameだけを使うと欠損が空文字に潰れ、実際にはBEがスキップする
   // 判定を「乖離」と誤分類してしまう)。
   const idToRawName = new Map();
+  // BEの同名衝突クエリ(customerAmbiguityGate.ts)は`where('name','==',trimmedDocName)`の完全一致で、
+  // マスターのFirestore上の生nameフィールドと直接比較する。マスター名に前後空白が残っていると、
+  // FE側(将来findSameNameCollisionNamesにtrimを追加する場合)とBE側で衝突判定が食い違いうる
+  // (Codex plan review指摘、2026-07-26)。実害範囲を計測するため、生name!=trim後nameのdocを検出する。
+  const whitespaceIssues = [];
   const customers = snap.docs.map((d) => {
     const data = d.data();
     if (typeof data.name !== 'undefined' && typeof data.name !== 'string') malformed.push(`${d.id}.name`);
@@ -56,6 +61,10 @@ async function fetchAllCustomers() {
       malformed.push(`${d.id}.careManagerName`);
     }
     idToRawName.set(d.id, typeof data.name === 'string' ? data.name : null);
+    const rawName = asString(data.name);
+    if (rawName !== rawName.trim()) {
+      whitespaceIssues.push(`${d.id.slice(0, 12)}… 「${rawName}」`);
+    }
     return {
       id: d.id,
       // customerAmbiguityGate.ts側はdoc.customerNameをtrimしてから照合するため、name側も
@@ -67,7 +76,7 @@ async function fetchAllCustomers() {
       isDuplicate: data.isDuplicate === true,
     };
   });
-  return { customers, malformed, idToRawName };
+  return { customers, malformed, idToRawName, whitespaceIssues };
 }
 
 /**
@@ -201,7 +210,7 @@ async function main() {
   console.log('モード: read-only(書込みなし)');
   console.log('---\n');
 
-  const { customers, malformed, idToRawName } = await fetchAllCustomers();
+  const { customers, malformed, idToRawName, whitespaceIssues } = await fetchAllCustomers();
   console.log(`顧客マスター総数: ${customers.length}件`);
   if (malformed.length > 0) {
     console.log(
@@ -210,6 +219,12 @@ async function main() {
     for (const m of malformed.slice(0, 20)) console.log(`  - ${m}`);
     if (malformed.length > 20) console.log(`  …他${malformed.length - 20}件`);
   }
+  console.log(
+    `顧客マスターname前後空白検出(生値ベース、trim前): ${whitespaceIssues.length}件`
+    + `（同姓同名バッジ通知UI追加時のFE/BE canonicalization不一致リスク計測、Codex plan review指摘 2026-07-26）`
+  );
+  for (const w of whitespaceIssues.slice(0, 20)) console.log(`  - ${w}`);
+  if (whitespaceIssues.length > 20) console.log(`  …他${whitespaceIssues.length - 20}件`);
   console.log('');
 
   // (a) 完全一致の同姓同名グループ + (c) isDuplicateフラグ突合
