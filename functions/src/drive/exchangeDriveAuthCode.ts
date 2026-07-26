@@ -106,6 +106,15 @@ export async function exchangeDriveAuthCodeCore(
 
   await deps.setSecret('drive-oauth-refresh-token', refreshToken);
 
+  // 既知の残存リスク(2026-07-22発見、2026-07-27調査済み・対応不要と確定): setSecret成功後に
+  // 下記のFirestore set()自体が失敗すると、Secret Manager側は新refresh_tokenがlatestに
+  // 昇格済みなのにFirestore側のauthMode/connectedEmailは更新されないsplit-brain状態になりうる。
+  // ただしこの例外は握りつぶされずCallable呼び出し元(onCallハンドラのcatch節)まで伝播し
+  // HttpsError('internal', ...)としてFEにエラー表示されるため「静かに」残ることはなく、
+  // ユーザーが再試行すれば同じ値の再書込みで自然に解消する(setSecret/この set() とも
+  // 同一値の再実行で冪等)。エクスポート処理はSecret Manager側の値を参照するため、この
+  // 窓の間もエクスポート機能自体は途切れない。以上により恒久的な補償ロジックの追加は
+  // 費用対効果が見合わないと判断し、対応不要で確定。
   // 疎通確認・Secret Manager保存の両方が成功したことを確認してから単一書込み
   // (code-review xhigh指摘#3対応、2026-07-22): 旧実装はauthModeとconnectedEmailを
   // 2段階で書き込んでおり、fetchConnectedEmailが失敗するとauthMode:'oauth'だけが
