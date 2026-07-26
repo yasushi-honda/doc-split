@@ -70,6 +70,24 @@ jobs:
         # 解決済み。node --test ランナーで軽量実行(外部依存なし、数秒)。
         run: cd scripts && npm test
 
+      - name: Run frontend unit tests
+        # frontend/src/**/__tests__/*.test.tsx (vitest) はこれまでCIで未実行だった
+        # (同姓同名プロアクティブ通知UI追加、2026-07-26、Codex plan review指摘)。
+        # 依存は上のnpm ciで解決済み、emulator不要で数秒。
+        run: cd frontend && npm test
+
+      - name: Run customer identity gate integration tests (Firestore emulator)
+        # functions/test/exportDocumentIntegration.test.tsの顧客未確定ゲート13ケースは
+        # test/*Integration.test.tsがnpm run test:functionsの対象外(functions/package.json)
+        # のためこれまでCIで未実行だった(同姓同名プロアクティブ通知UI追加、2026-07-26、
+        # Codex plan review指摘)。customerAmbiguityGate.tsをshared/customerIdentity.tsへ
+        # 委譲するリファクタの回帰をCIで守るために追加。
+        run: |
+          cd functions && firebase emulators:exec --only firestore \
+            'npx mocha --require ts-node/register --timeout 15000 test/exportDocumentIntegration.test.ts'
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+
       - name: Run Drive export backfill integration tests (Firestore emulator)
         # scripts/backfill-drive-export.ts はkanameone/cocoro本番展開で使うPartial
         # Update スクリプト(CLAUDE.md MUST: 更新対象外フィールド不変テスト必須、

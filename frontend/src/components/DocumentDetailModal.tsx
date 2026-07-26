@@ -32,7 +32,8 @@ import { MasterSelectField } from '@/components/MasterSelectField'
 import { ExtractionInfoPopover } from '@/components/ExtractionInfoPopover'
 import { useDocument, useDocumentDetail, useReprocessDocument, useDistributionSiblingCount, resolveDetailFields } from '@/hooks/useDocuments'
 import { useDocumentEdit } from '@/hooks/useDocumentEdit'
-import { useCustomers, useOffices, useDocumentTypes, useCareManagers } from '@/hooks/useMasters'
+import { useCustomers, useOffices, useDocumentTypes, useCareManagers, useCustomerIdentityLookup } from '@/hooks/useMasters'
+import { resolveCustomerUnconfirmedReason } from '@shared/customerIdentity'
 import { useMasterAlias } from '@/hooks/useMasterAlias'
 import { useAliasLearningHistory, useInvalidateAliasLearningHistory } from '@/hooks/useAliasLearningHistory'
 import { isCustomerConfirmed } from '@/hooks/useProcessingHistory'
@@ -505,7 +506,14 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
     if (rememberCustomerNotation && document && editedFields.customerName) {
       const originalCustomer = document.customerName || ''
       const newCustomerName = editedFields.customerName
-      const selectedCustomer = customers?.find(c => c.name === newCustomerName)
+      // MasterSelectFieldの選択時にeditedFields.customerIdが常に同期される(:1141参照)ため、
+      // それを優先してcustomerIdで特定する。名前一致のみ(customers?.find(c => c.name === ...))
+      // だと同姓同名の別人が存在する場合に先頭の1件へ誤ってエイリアス登録しうる
+      // (Codex plan review指摘、2026-07-26。フリーテキスト入力等でcustomerIdが空の場合のみ
+      // 名前一致にフォールバックする)。
+      const selectedCustomer = editedFields.customerId
+        ? customers?.find(c => c.id === editedFields.customerId)
+        : customers?.find(c => c.name === newCustomerName)
       if (selectedCustomer && originalCustomer !== newCustomerName) {
         try {
           await addAlias('customer', selectedCustomer.id, originalCustomer)
@@ -582,6 +590,22 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
   const needsOfficeConfirmation = document
     ? document.officeConfirmed === false && document.officeCandidates && document.officeCandidates.length > 0
     : false
+
+  // 同姓同名判定(2026-07-26追加)。useCustomers()のキャッシュ共有により追加フェッチなし
+  const identityLookup = useCustomerIdentityLookup()
+  const unconfirmedReason = document
+    ? resolveCustomerUnconfirmedReason(document, {
+        customerMasterName: document.customerId
+          ? (identityLookup.customerMasterNameById.get(document.customerId) ?? null)
+          : null,
+        sameNameCollisionNames: identityLookup.sameNameCollisionNames,
+      })
+    : null
+  const isSameNameCollision = unconfirmedReason === 'same-name-collision'
+  // 同名衝突の候補一覧(フリガナ・担当ケアマネ併記、staleな`allCustomerCandidates`より情報量が多い)
+  const collidingMasters = isSameNameCollision && document
+    ? (customers ?? []).filter(c => c.name.trim() === (document.customerName ?? '').trim())
+    : []
 
   // ドキュメントが変わったらdownloadUrlをリセット
   useEffect(() => {
@@ -1188,9 +1212,15 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                         <div className="flex items-center gap-2">
                           <span className="truncate text-sm text-gray-900">{document.customerName || '未判定'}</span>
                           <ExtractionInfoPopover fieldType="customer" document={document} />
-                          {needsCustomerConfirmation && (
-                            <Badge variant="outline" className="bg-orange-100 text-orange-800 border-orange-300 text-xs">
-                              選択待ち
+                          {(needsCustomerConfirmation || isSameNameCollision) && (
+                            <Badge
+                              variant="outline"
+                              className="bg-orange-100 text-orange-800 border-orange-300 text-xs"
+                              title={isSameNameCollision
+                                ? '同姓同名の顧客マスターが複数あります。正しい顧客を選び直してください'
+                                : undefined}
+                            >
+                              {isSameNameCollision ? '同姓同名' : '選択待ち'}
                             </Badge>
                           )}
                         </div>
@@ -1359,11 +1389,22 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                   <MetaRow icon={FileText} label="ページ数" value={`${document.totalPages} ページ`} />
                 </div>
 
-                {/* 重複警告 */}
-                {document.isDuplicateCustomer && document.allCustomerCandidates && (
+                {/* 重複警告(2026-07-26: staleなisDuplicateCustomer依存からライブ判定へ置換。
+                    OCR処理時点のスナップショットは後からマスターが追加された衝突に追従しないため、
+                    isSameNameCollision(useCustomerIdentityLookup経由の常に最新の判定)に統一する) */}
+                {isSameNameCollision && (
                   <div className="mt-4 rounded-lg bg-yellow-50 p-3">
                     <p className="text-xs font-medium text-yellow-800">同姓同名の顧客が存在します</p>
-                    <p className="mt-1 text-xs text-yellow-700">{document.allCustomerCandidates}</p>
+                    <p className="mt-1 text-xs text-yellow-700">
+                      正しい顧客を選び直して保存してください（この書類はGoogle Driveへエクスポートされません）
+                    </p>
+                    <ul className="mt-1 space-y-0.5 text-xs text-yellow-700">
+                      {collidingMasters.map((c) => (
+                        <li key={c.id}>
+                          {c.name}（{c.furigana || 'フリガナ未登録'} / 担当: {c.careManagerName || '未設定'}）
+                        </li>
+                      ))}
+                    </ul>
                   </div>
                 )}
 

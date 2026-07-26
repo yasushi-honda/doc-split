@@ -23,7 +23,9 @@ import {
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import type { Document, DocumentStatus, CustomerCandidateInfo } from '@shared/types';
+import { resolveCustomerUnconfirmedReason } from '@shared/customerIdentity';
 import { firestoreToDocument } from './useDocuments';
+import type { CustomerIdentityLookup } from './useMasters';
 
 // ============================================
 // 定数
@@ -124,14 +126,38 @@ function getPeriodDate(period: PeriodFilter): Date | null {
 }
 
 /**
+ * docが「同姓同名の可能性があるため要確認」かどうかを判定する。`identityLookup`未指定時は
+ * 常にfalse(呼出元がuseCustomerIdentityLookup()を持たない場合の後方互換)。
+ */
+function isSameNameCollisionDoc(doc: Document, identityLookup: CustomerIdentityLookup): boolean {
+  const reason = resolveCustomerUnconfirmedReason(doc, {
+    customerMasterName: doc.customerId
+      ? (identityLookup.customerMasterNameById.get(doc.customerId) ?? null)
+      : null,
+    sameNameCollisionNames: identityLookup.sameNameCollisionNames,
+  });
+  return reason === 'same-name-collision';
+}
+
+/**
  * 顧客確定フィルターを適用（クライアント側）
  *
  * #273: unit test 可能化のため export。hook 内部でのみ使用される helper。
+ *
+ * `identityLookup`を渡すと、`customerConfirmed:true`（人間確定済み）でも同姓同名の
+ * 衝突が実在する書類は「未確定」側に残す(2026-07-26追加、Codex plan review指摘)。
+ * 一覧画面の「同姓同名」バッジと表示の一貫性を保つため。省略時は従来通り
+ * `isCustomerConfirmed()`のみで判定する。
  */
-export function applyConfirmedFilter(docs: Document[], filter: ConfirmedFilter): Document[] {
+export function applyConfirmedFilter(
+  docs: Document[],
+  filter: ConfirmedFilter,
+  identityLookup?: CustomerIdentityLookup
+): Document[] {
   if (filter === 'all') return docs;
   return docs.filter(doc => {
-    const confirmed = isCustomerConfirmed(doc);
+    const confirmed = isCustomerConfirmed(doc)
+      && !(identityLookup && isSameNameCollisionDoc(doc, identityLookup));
     return filter === 'confirmed' ? confirmed : !confirmed;
   });
 }
@@ -140,7 +166,16 @@ export function applyConfirmedFilter(docs: Document[], filter: ConfirmedFilter):
 // メインフック
 // ============================================
 
-export function useProcessingHistory(filters: ProcessingHistoryFilters): ProcessingHistoryResult {
+/**
+ * `identityLookup`は「同姓同名」確定フィルター判定(applyConfirmedFilter参照)に使う。
+ * `queryKey`には含めていないため、`useCustomers()`の初回ロードが本フックの初回queryより
+ * 遅れて完了した場合、その回のフィルター結果には反映されない(次のフィルター変更・
+ * 更新ボタン・staleTime経過後の再取得で解消)。既存の5分キャッシュ許容方針と同じ判断。
+ */
+export function useProcessingHistory(
+  filters: ProcessingHistoryFilters,
+  identityLookup?: CustomerIdentityLookup
+): ProcessingHistoryResult {
   const queryClient = useQueryClient();
 
   // 内部状態
@@ -185,7 +220,7 @@ export function useProcessingHistory(filters: ProcessingHistoryFilters): Process
     setNoMoreFirestoreDocs(snapshot.docs.length < FETCH_SIZE);
 
     // クライアント側フィルター適用
-    const filteredDocs = applyConfirmedFilter(docs, filters.confirmed);
+    const filteredDocs = applyConfirmedFilter(docs, filters.confirmed, identityLookup);
 
     // 表示用とバッファに分割
     const displayDocs = filteredDocs.slice(0, PAGE_SIZE);
@@ -195,7 +230,7 @@ export function useProcessingHistory(filters: ProcessingHistoryFilters): Process
     setBuffer(remainingDocs);
 
     return displayDocs;
-  }, [filters.period, filters.status, filters.confirmed, filters.sortOrder]);
+  }, [filters.period, filters.status, filters.confirmed, filters.sortOrder, identityLookup]);
 
   // React Query
   const { data: queryData, isLoading, error } = useQuery({
@@ -283,7 +318,7 @@ export function useProcessingHistory(filters: ProcessingHistoryFilters): Process
         );
 
         // クライアント側フィルター適用
-        const filteredDocs = applyConfirmedFilter(fetchedDocs, filters.confirmed);
+        const filteredDocs = applyConfirmedFilter(fetchedDocs, filters.confirmed, identityLookup);
         currentBuffer.push(...filteredDocs);
       }
 
@@ -300,7 +335,7 @@ export function useProcessingHistory(filters: ProcessingHistoryFilters): Process
     } finally {
       setIsFetchingMore(false);
     }
-  }, [buffer, lastFirestoreDoc, noMoreFirestoreDocs, isFetchingMore, filters]);
+  }, [buffer, lastFirestoreDoc, noMoreFirestoreDocs, isFetchingMore, filters, identityLookup]);
 
   // hasMore 判定
   const hasMore = useMemo(() => {

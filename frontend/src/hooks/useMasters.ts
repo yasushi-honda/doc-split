@@ -3,6 +3,7 @@
  * 顧客・書類・事業所・ケアマネのCRUD操作
  */
 
+import { useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   collection,
@@ -23,6 +24,7 @@ import type {
   CareManagerMaster,
 } from '@shared/types'
 import { validateOfficeMasterImport } from '@shared/officeMasterValidation'
+import { findSameNameCollisionNames } from '@shared/customerIdentity'
 
 // 重複エラークラス
 export class DuplicateError extends Error {
@@ -80,6 +82,36 @@ export function useCustomers() {
     queryFn: fetchCustomers,
     staleTime: 5 * 60 * 1000,
   })
+}
+
+/**
+ * 現場管理者への「同姓同名」プロアクティブ通知UI用の共通lookup(2026-07-26)。
+ * useCustomers()のキャッシュ(queryKey: ['masters','customers'])をそのまま利用するため
+ * 追加フェッチは発生しない。TanStack Queryのstaletime(5分)内はマスター追加が即時反映
+ * されない点に注意(BE customerAmbiguityGate.tsはFirestoreへライブクエリのため常に最新)。
+ *
+ * コンテナ層のみで呼び出し、行コンポーネントへはpropで結果を渡すこと(単体テスト容易性のため)。
+ */
+export interface CustomerIdentityLookup {
+  /** 完全一致で2件以上あるマスター名の集合(shared/customerIdentity.tsのfindSameNameCollisionNames)。 */
+  sameNameCollisionNames: ReadonlySet<string>
+  /**
+   * customerId → マスターのname。フィールド欠損・非文字列はnull(functions/src/drive/
+   * customerAmbiguityGate.tsの`customerMaster?.name ?? null`と同一のnull集合)。
+   * Map miss(id不明)はundefinedになり、customerId↔name乖離チェックをスキップする
+   * (呼出元がresolveCustomerUnconfirmedReasonへ渡す際は`?? null`で吸収する)。
+   */
+  customerMasterNameById: ReadonlyMap<string, string | null>
+}
+
+export function useCustomerIdentityLookup(): CustomerIdentityLookup {
+  const { data: customers } = useCustomers()
+  return useMemo(() => ({
+    sameNameCollisionNames: findSameNameCollisionNames(customers ?? []),
+    customerMasterNameById: new Map(
+      (customers ?? []).map((c) => [c.id, typeof c.name === 'string' ? c.name : null])
+    ),
+  }), [customers])
 }
 
 interface AddCustomerParams {

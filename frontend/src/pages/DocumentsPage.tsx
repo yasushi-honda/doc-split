@@ -52,9 +52,10 @@ import { db } from '@/lib/firebase'
 import { callFunction } from '@/lib/callFunction'
 import { Checkbox } from '@/components/ui/checkbox'
 import { useInfiniteDocuments, useDocumentStats, useDocumentMasters, appendReprocessClearToBatch, type DocumentFilters, type SortField, type SortOrder } from '@/hooks/useDocuments'
-import { useCareManagers } from '@/hooks/useMasters'
+import { useCareManagers, useCustomerIdentityLookup, type CustomerIdentityLookup } from '@/hooks/useMasters'
 import { DateRangeFilter, type DateRange } from '@/components/DateRangeFilter'
 import { isCustomerConfirmed } from '@/hooks/useProcessingHistory'
+import { resolveCustomerUnconfirmedReason } from '@shared/customerIdentity'
 import { DocumentDetailModal } from '@/components/DocumentDetailModal'
 import { AliasLearningHistoryModal } from '@/components/AliasLearningHistoryModal'
 import { PdfUploadModal } from '@/components/PdfUploadModal'
@@ -210,6 +211,7 @@ function DocumentRow({
   onSelectChange,
   showCheckbox,
   isProcessing,
+  identityLookup,
 }: {
   document: Document
   onClick: () => void
@@ -217,6 +219,7 @@ function DocumentRow({
   onSelectChange: (checked: boolean) => void
   showCheckbox: boolean
   isProcessing: boolean
+  identityLookup?: CustomerIdentityLookup
 }) {
   const statusConfig = STATUS_CONFIG[document.status] || { label: '不明', variant: 'secondary' as const }
 
@@ -226,7 +229,29 @@ function DocumentRow({
     document.officeConfirmed === false &&
     document.officeCandidates &&
     document.officeCandidates.length > 0
-  const needsReview = needsCustomerConfirmation || needsOfficeConfirmation
+
+  // 同姓同名判定(2026-07-26追加)
+  const unconfirmedReason = identityLookup
+    ? resolveCustomerUnconfirmedReason(document, {
+        customerMasterName: document.customerId
+          ? (identityLookup.customerMasterNameById.get(document.customerId) ?? null)
+          : null,
+        sameNameCollisionNames: identityLookup.sameNameCollisionNames,
+      })
+    : null
+  const isSameNameCollision = unconfirmedReason === 'same-name-collision'
+  const needsReview = needsCustomerConfirmation || needsOfficeConfirmation || isSameNameCollision
+
+  // バッジ文言優先順位: 同姓同名 > 選択待ち。title は該当する全理由を列挙し、needsReview合成
+  // による「事業所要対応が同姓同名バッジの裏で隠れる」ことを防ぐ(Codex plan review指摘)。
+  const reviewReasons: string[] = []
+  if (isSameNameCollision) {
+    reviewReasons.push('同姓同名の顧客マスターが複数あります。書類詳細で正しい顧客を選び直してください')
+  }
+  if (needsOfficeConfirmation) {
+    reviewReasons.push('事業所が未選択です')
+  }
+  const reviewTitle = reviewReasons.length > 0 ? reviewReasons.join('。') : undefined
 
   // OCR未確認
   const isUnverified = !document.verified
@@ -276,8 +301,13 @@ function DocumentRow({
       </td>
       <td className="whitespace-nowrap px-2 py-2 sm:px-4 sm:py-3">
         {needsReview ? (
-          <Badge variant="outline" className="whitespace-nowrap bg-orange-100 text-orange-800 border-orange-300 text-xs">
-            選択待ち
+          <Badge
+            variant="outline"
+            className="whitespace-nowrap bg-orange-100 text-orange-800 border-orange-300 text-xs"
+            title={reviewTitle}
+          >
+            {isSameNameCollision && <Users className="mr-1 h-3 w-3 inline" />}
+            {isSameNameCollision ? '同姓同名' : '選択待ち'}
           </Badge>
         ) : (
           <Badge variant={statusConfig.variant} className="whitespace-nowrap text-xs sm:text-sm">{statusConfig.label}</Badge>
@@ -401,6 +431,10 @@ export function DocumentsPage() {
   const { data: stats } = useDocumentStats()
   const { data: documentMasters } = useDocumentMasters()
   const { data: careManagers } = useCareManagers()
+
+  // 同姓同名バッジ判定用(2026-07-26追加)。書類一覧(テーブルビュー)は5箇所のうち唯一
+  // useCustomers()の新規読込が増える画面(kanameone 1355件、staleTime5分キャッシュ共有)
+  const identityLookup = useCustomerIdentityLookup()
 
   // ソートハンドラ
   const handleSort = useCallback((field: SortField) => {
@@ -956,6 +990,7 @@ export function DocumentsPage() {
                         onSelectChange={(checked) => handleSelectToggle(doc.id, checked)}
                         showCheckbox={!!selectionMode}
                         isProcessing={isBulkOperating}
+                        identityLookup={identityLookup}
                       />
                     ))}
                   </tbody>

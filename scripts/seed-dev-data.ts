@@ -89,6 +89,15 @@ export const CUSTOMERS = [
 ];
 
 /**
+ * 同姓同名バッジ通知UI検証用(2026-07-26追加、承認済み計画 noble-booping-leaf.md)。
+ * seed-cust-08(黒田実)と完全同名だがフリガナ・担当CMが異なる別人としてseed-cust-13を追加し、
+ * 実際に同名衝突が発生する状態を再現する。CUSTOMERS配列には含めない
+ * (buildBulkDocs()のCM別件数はコメントに明記の固定件数を前提にしており、
+ * 顧客追加は無関係なページング境界検証を壊しうるため)。
+ */
+export const COLLISION_CUSTOMER = { id: 'seed-cust-13', name: '黒田実', furigana: 'くろだまこと', cm: 2 };
+
+/**
  * totalPages のバリエーション。各値に対応する実ページ数の generic PDF を用意し、
  * Firestore の totalPages と fileUrl の実体ページ数を常に一致させる
  * (不一致だと詳細モーダル/分割プレビューのページ遷移が実 PDF と矛盾し、偽の不具合を生む)。
@@ -416,6 +425,73 @@ function buildBulkDocs(storageBucket: string): SeedDoc[] {
   return docs;
 }
 
+/**
+ * 同姓同名バッジ通知UI検証用の2件(2026-07-26追加)。COLLISION_CUSTOMER(seed-cust-13)と
+ * seed-cust-08(黒田実)の完全同名衝突を再現する。
+ * - collision-legacy-01: customerConfirmed/needsManualCustomerSelectionとも未設定
+ *   (Phase 6以前のレガシーdoc相当)。BEゲート・FEバッジとも「未確定」として同名衝突を検知し、
+ *   一覧に「同姓同名」バッジが点灯することを検証する対象(本件の中核ギャップ)
+ * - collision-confirmed-01: customerConfirmed:true(人間確定済み)。同名衝突が実在しても
+ *   人間確定が優先されバッジが出ないこと(customerAmbiguityGate.tsの設計判断と同一)を検証する対象
+ */
+function buildCollisionDocs(storageBucket: string, index: number): SeedDoc[] {
+  const { Timestamp } = admin.firestore;
+  const office = OFFICES[0];
+  const docType = DOC_TYPES[0];
+  const fileDate = spreadDate(index);
+  const createdAt = spreadDate(index + 2);
+
+  const base = {
+    processedAt: Timestamp.fromDate(createdAt),
+    mimeType: 'application/pdf',
+    documentType: docType.name,
+    customerName: '黒田実',
+    officeName: office.name,
+    fileUrl: `gs://${storageBucket}/${genericPdfFor(1)}`,
+    fileDate: Timestamp.fromDate(fileDate),
+    isDuplicateCustomer: false,
+    totalPages: 1,
+    targetPageNumber: 1,
+    status: 'processed' as const,
+    sourceType: 'upload',
+    careManager: CARE_MANAGERS[COLLISION_CUSTOMER.cm].name,
+    officeId: office.id,
+    officeConfirmed: true,
+    verified: true,
+    createdAt: Timestamp.fromDate(createdAt),
+  };
+
+  const legacyId = 'seed-doc-collision-legacy-01';
+  const confirmedId = 'seed-doc-collision-confirmed-01';
+
+  return [
+    {
+      id: legacyId,
+      data: {
+        ...base,
+        id: legacyId,
+        fileId: legacyId,
+        fileName: 'seed_同姓同名レガシー_01.pdf',
+        ocrResult: `${docType.name}\n利用者: 黒田実 様\n事業所: ${office.name}\n(seed データ・同姓同名検証用)`,
+        customerId: 'seed-cust-08',
+        // customerConfirmed/needsManualCustomerSelectionとも意図的に未設定
+      },
+    },
+    {
+      id: confirmedId,
+      data: {
+        ...base,
+        id: confirmedId,
+        fileId: confirmedId,
+        fileName: 'seed_同姓同名確定済み_01.pdf',
+        ocrResult: `${docType.name}\n利用者: 黒田実 様\n事業所: ${office.name}\n(seed データ・人間確定済み検証用)`,
+        customerId: COLLISION_CUSTOMER.id,
+        customerConfirmed: true,
+      },
+    },
+  ];
+}
+
 /** E 用 pending 書類 (uploadPdf.ts の payload 形状を踏襲。実 OCR パイプラインが処理する) */
 function buildPendingDoc(mixed: (typeof MIXED_FAX_PDFS)[number], storageBucket: string): SeedDoc {
   const { Timestamp } = admin.firestore;
@@ -489,14 +565,20 @@ async function seed(): Promise<void> {
   console.log(`モード: ${dryRun ? 'DRY RUN (書込なし)' : '実行'}${forcePending ? ' + force-pending' : ''}`);
   console.log('---');
 
-  const bulkDocs = buildBulkDocs(storageBucket);
+  // collisionDocsをbulkDocs自体に統合する(下のbulkDocs.flatMap呼出しは
+  // seedDevDataDetailDualWriteContract.test.tsがソース文字列レベルでlock-inしているため、
+  // 呼出し箇所を`[...bulkDocs, ...collisionDocs].flatMap`等に変更すると契約テストが壊れる)。
+  const baseBulkDocs = buildBulkDocs(storageBucket);
+  const collisionDocs = buildCollisionDocs(storageBucket, baseBulkDocs.length);
+  const bulkDocs = [...baseBulkDocs, ...collisionDocs];
   const pendingDocs = MIXED_FAX_PDFS.map((m) => buildPendingDoc(m, storageBucket));
   const zeroPageCount = bulkDocs.filter((d) => d.data.totalPages === 0).length;
   const errorCount = bulkDocs.filter((d) => d.data.status === 'error').length;
   const cm1Count = bulkDocs.filter((d) => d.data.careManager === CARE_MANAGERS[0].name).length;
 
   console.log('投入プラン:');
-  console.log(`  マスター: ケアマネ ${CARE_MANAGERS.length} / 顧客 ${CUSTOMERS.length} / 事業所 ${OFFICES.length} / 書類種別 ${DOC_TYPES.length}`);
+  console.log(`  マスター: ケアマネ ${CARE_MANAGERS.length} / 顧客 ${CUSTOMERS.length + 1}(同姓同名検証用+1) / 事業所 ${OFFICES.length} / 書類種別 ${DOC_TYPES.length}`);
+  console.log(`  書類: 同姓同名バッジ検証用 ${collisionDocs.length} 件 (レガシーdoc相当1 + 人間確定済み1)`);
   console.log(`  Storage PDF: 汎用 ${GENERIC_PDFS.length} + 混在FAX ${MIXED_FAX_PDFS.length} (fixtures/seed/ から)`);
   console.log(`  書類: processed/error ${bulkDocs.length} 件 (うち totalPages:0 ${zeroPageCount} / error ${errorCount} / ${CARE_MANAGERS[0].name} 配下 ${cm1Count})`);
   console.log(`  書類: pending ${pendingDocs.length} 件 (既存はスキップ。--force-pending で再投入 = 再 OCR 課金)`);
@@ -524,13 +606,16 @@ async function seed(): Promise<void> {
       ref: db.collection('masters').doc('caremanagers').collection('items').doc(cm.id),
       data: { name: cm.name, aliases: [] as string[] },
     })),
-    ...CUSTOMERS.map((c) => ({
+    ...[...CUSTOMERS, COLLISION_CUSTOMER].map((c) => ({
       ref: db.collection('masters').doc('customers').collection('items').doc(c.id),
       data: {
         name: c.name,
         furigana: c.furigana,
         careManagerName: CARE_MANAGERS[c.cm].name,
-        isDuplicate: false,
+        // seed-cust-08と完全同名の別人であることをisDuplicateで明示(2026-07-26追加)。
+        // customerAmbiguityGate.tsはisDuplicateフラグを信用せずライブクエリで衝突判定するため
+        // 動作には影響しないが、実データの慣習(MastersPage.tsx handleForceAdd)に合わせる。
+        isDuplicate: c.id === COLLISION_CUSTOMER.id || c.id === 'seed-cust-08',
         aliases: [] as string[],
         notes: 'seed データ',
       },
