@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import {
   CustomerRecord,
   groupNotationDuplicates,
+  findExcludedNotationGroups,
   pickCanonical,
   buildMergedMasterUpdate,
   buildDocumentRepointPayload,
@@ -12,6 +13,7 @@ function customer(overrides: Partial<CustomerRecord> & { id: string; name: strin
   return {
     furigana: '',
     careManagerName: '',
+    notes: '',
     aliases: [],
     isDuplicate: false,
     ...overrides,
@@ -47,6 +49,37 @@ test('groupNotationDuplicates: 全角スペース・半角スペース・中黒�
   const groups = groupNotationDuplicates(customers);
   assert.equal(groups.length, 1);
   assert.equal(groups[0].members.length, 3);
+});
+
+test('groupNotationDuplicates: 完全一致のペアが1組でも混在するグループは対象外とする(真の同姓同名の別人を誤統合しないため)', () => {
+  // personA1/personA2は生名が完全一致(真の同姓同名候補、[A]相当)。personA3は表記ゆれ。
+  // 正規化キーは3件とも同一になるが、内部に完全一致サブグループを含むため
+  // groupNotationDuplicatesの対象外(evaluator指摘・独立再現済み、2026-07-27)。
+  const customers = [
+    customer({ id: 'personA1', name: '田中太郎' }),
+    customer({ id: 'personA2', name: '田中太郎' }),
+    customer({ id: 'personA3', name: '田中 太郎' }),
+  ];
+  assert.equal(groupNotationDuplicates(customers).length, 0);
+});
+
+test('findExcludedNotationGroups: 完全一致サブグループを含む(=手動確認が必要な)グループを検出する', () => {
+  const customers = [
+    customer({ id: 'personA1', name: '田中太郎' }),
+    customer({ id: 'personA2', name: '田中太郎' }),
+    customer({ id: 'personA3', name: '田中 太郎' }),
+  ];
+  const excluded = findExcludedNotationGroups(customers);
+  assert.equal(excluded.length, 1);
+  assert.deepEqual(
+    excluded[0].members.map((c: CustomerRecord) => c.id).sort(),
+    ['personA1', 'personA2', 'personA3']
+  );
+});
+
+test('findExcludedNotationGroups: 通常の表記ゆれグループ(完全一致サブグループなし)は含めない', () => {
+  const customers = [customer({ id: 'a', name: '奥村 志づ子' }), customer({ id: 'b', name: '奥村志づ子' })];
+  assert.equal(findExcludedNotationGroups(customers).length, 0);
 });
 
 test('pickCanonical: 紐づく書類数が多い方を正式表記(canonical)として選ぶ', () => {
@@ -139,6 +172,25 @@ test('buildMergedMasterUpdate: 双方に値が無いフィールドはundefined�
   const update = buildMergedMasterUpdate(choice);
   assert.equal(update.furigana, undefined);
   assert.equal(update.careManagerName, undefined);
+  assert.equal(update.notes, undefined);
+});
+
+test('buildMergedMasterUpdate: canonicalのnotes欠損時、敗者の値で補完する(区別用補足情報の消失防止)', () => {
+  const choice = {
+    canonical: customer({ id: 'a', name: '奥村 志づ子', notes: '' }),
+    losers: [customer({ id: 'b', name: '奥村志づ子', notes: '北名古屋在住' })],
+  };
+  const update = buildMergedMasterUpdate(choice);
+  assert.equal(update.notes, '北名古屋在住');
+});
+
+test('buildMergedMasterUpdate: canonicalに既にnotesがある場合は上書きしない', () => {
+  const choice = {
+    canonical: customer({ id: 'a', name: '奥村 志づ子', notes: '既存の補足' }),
+    losers: [customer({ id: 'b', name: '奥村志づ子', notes: '北名古屋在住' })],
+  };
+  const update = buildMergedMasterUpdate(choice);
+  assert.equal(update.notes, undefined);
 });
 
 test('buildDocumentRepointPayload: customerId/customerNameの2キーのみを持つペイロードを返す(Partial Update不変、CLAUDE.md MUST)', () => {

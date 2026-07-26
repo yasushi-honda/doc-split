@@ -23,6 +23,7 @@ export interface CustomerRecord {
   name: string;
   furigana: string;
   careManagerName: string;
+  notes: string;
   aliases: string[];
   isDuplicate: boolean;
 }
@@ -32,10 +33,22 @@ export interface NotationDuplicateGroup {
 }
 
 /**
- * 正規化後は一致するが生文字列が異なるグループを検出する。
- * 完全一致([A]、真の同姓同名候補)は対象外(呼出元が別途扱う)。
+ * グループ内に生名(name)が完全一致するメンバーが2件以上含まれるか判定する。
+ * 完全一致するメンバーは[A](真の同姓同名候補、別人の可能性)であり、本モジュールの
+ * 統合対象外。正規化後は同一グループに入りうる(例:「田中太郎」×2 + 「田中 太郎」)ため、
+ * グループ単位でこのチェックを行い、該当グループ全体を安全側で対象外にする
+ * (evaluator指摘・2026-07-27: distinctNames.size>1だけでは、完全一致のサブグループが
+ * 紛れ込んだ場合に真の別人まで誤って統合してしまう致命的な穴があった)。
  */
-export function groupNotationDuplicates(customers: CustomerRecord[]): NotationDuplicateGroup[] {
+function hasExactMatchSubset(members: CustomerRecord[]): boolean {
+  const nameCounts = new Map<string, number>();
+  for (const m of members) {
+    nameCounts.set(m.name, (nameCounts.get(m.name) ?? 0) + 1);
+  }
+  return [...nameCounts.values()].some((count) => count > 1);
+}
+
+function groupByNormalizedName(customers: CustomerRecord[]): NotationDuplicateGroup[] {
   const byNormalized = new Map<string, CustomerRecord[]>();
   for (const c of customers) {
     const key = normalizeName(c.name);
@@ -55,6 +68,25 @@ export function groupNotationDuplicates(customers: CustomerRecord[]): NotationDu
   return groups;
 }
 
+/**
+ * 正規化後は一致するが生文字列が異なるグループを検出する。
+ * 完全一致([A]、真の同姓同名候補)のみのグループは対象外(呼出元が別途扱う)。
+ * グループ内に完全一致のサブグループが紛れ込んでいる場合も、安全側でグループ全体を
+ * 対象外にする(`findExcludedNotationGroups`で個別に検出・手動確認へ回す)。
+ */
+export function groupNotationDuplicates(customers: CustomerRecord[]): NotationDuplicateGroup[] {
+  return groupByNormalizedName(customers).filter((g) => !hasExactMatchSubset(g.members));
+}
+
+/**
+ * `groupNotationDuplicates`が完全一致サブグループの混在を理由に除外したグループを返す。
+ * 自動統合はできないが、手動確認の対象として可視化するために使う
+ * (呼出元のオーケストレーションスクリプトがコンソール出力・件数集計に使用)。
+ */
+export function findExcludedNotationGroups(customers: CustomerRecord[]): NotationDuplicateGroup[] {
+  return groupByNormalizedName(customers).filter((g) => hasExactMatchSubset(g.members));
+}
+
 export interface CanonicalChoice {
   canonical: CustomerRecord;
   losers: CustomerRecord[];
@@ -63,8 +95,9 @@ export interface CanonicalChoice {
 /**
  * グループ内から正式表記(canonical)を1件選ぶ。
  * ポリシー(decision-maker確認済み、2026-07-27): 紐づく書類数が多い方を優先し、
- * 書類の付け替え件数を最小化する。同数の場合はスペースを含む表記を優先する
- * (このグループの構造上、必ずスペース有/無の一方に決まる)。
+ * 書類の付け替え件数を最小化する。書類数が同数の場合はスペースを含む表記を優先する
+ * (3件以上のグループでスペースを含む表記が複数ある場合は、さらにid昇順でタイブレークする。
+ * evaluator指摘で「必ず一方に決まる」という旧コメントの不正確さを訂正、2026-07-27)。
  */
 export function pickCanonical(
   group: NotationDuplicateGroup,
@@ -88,6 +121,7 @@ export interface MergedMasterUpdate {
   aliasesToAdd: string[];
   furigana?: string;
   careManagerName?: string;
+  notes?: string;
 }
 
 /**
@@ -111,6 +145,13 @@ export function buildMergedMasterUpdate(choice: CanonicalChoice): MergedMasterUp
   if (!choice.canonical.careManagerName) {
     const careManagerFromLoser = choice.losers.find((l) => l.careManagerName)?.careManagerName;
     if (careManagerFromLoser) update.careManagerName = careManagerFromLoser;
+  }
+
+  // notes(区別用補足情報、shared/types.ts CustomerMaster)は敗者マスター削除で消失しうるため、
+  // furigana/careManagerNameと同じ欠損時補完ポリシーの対象に含める(evaluator指摘、2026-07-27)。
+  if (!choice.canonical.notes) {
+    const notesFromLoser = choice.losers.find((l) => l.notes)?.notes;
+    if (notesFromLoser) update.notes = notesFromLoser;
   }
 
   return update;

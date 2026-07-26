@@ -735,6 +735,11 @@ jobs:
             elif [ "$SCRIPT_NAME" = "verify-pdf-determinism" ]; then
               # Issue #432 PR-C3a: determinism verdict も JSON で artifact 化する。
               EXTRA_ARGS="--out ${GITHUB_WORKSPACE}/scripts/verify-pdf-determinism-output.json"
+            elif [ "$SCRIPT_NAME" = "merge-notation-duplicate-masters" ]; then
+              # 削除前バックアップ(cleanup-ambiguous-collision-docs.tsと同型)。dry-runでも
+              # 出力されレビュー材料になる。log secret maskingで内容が欠落しうるため
+              # artifact経由で取得する。
+              EXTRA_ARGS="--backup-out ${GITHUB_WORKSPACE}/scripts/merge-notation-duplicate-masters-backup.json"
             fi
             cd scripts
             NODE_PATH=../functions/node_modules \
@@ -872,6 +877,18 @@ jobs:
           # fixture 系 run では backup が出ないため error にはしないが、
           # --execute run で backup 不在なら気付けるよう warn (ignore は復旧材料の
           # 消失を無音化するため不可 — silent-failure review 反映)
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Upload merge-notation-duplicate-masters backup artifact
+        # 2026-07-27: 表記ゆれ重複マスター統合の削除前バックアップ(敗者マスター全フィールド+
+        # 付け替え対象書類ID)。destructive操作の復旧材料のためretentionを長めに取る。
+        # dry-runでも出力されるためレビュー材料としても使える。
+        if: ${{ startsWith(github.event.inputs.script, 'merge-notation-duplicate-masters') && always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: merge-notation-duplicate-masters-backup-${{ github.event.inputs.environment }}-${{ github.run_id }}
+          path: scripts/merge-notation-duplicate-masters-backup.json
           if-no-files-found: warn
           retention-days: 90
 

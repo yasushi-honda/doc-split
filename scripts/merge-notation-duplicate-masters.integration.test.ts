@@ -10,8 +10,10 @@
  */
 
 import assert from 'node:assert/strict';
-import { test, before, beforeEach } from 'node:test';
+import { test, before, beforeEach, afterEach } from 'node:test';
 import { execFileSync } from 'node:child_process';
+import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import * as admin from 'firebase-admin';
 
@@ -27,6 +29,9 @@ const db = admin.firestore();
 
 const SCRIPT_PATH = path.join(__dirname, 'merge-notation-duplicate-masters.ts');
 
+let tmpDir: string;
+let backupPath: string;
+
 before(() => {
   // このプロジェクトIDを使う他の統合テストと衝突しないよう、専用IDを使用。
 });
@@ -37,6 +42,13 @@ beforeEach(async () => {
     db.collection('documents').get(),
   ]);
   await Promise.all(collections.flatMap((snap) => snap.docs.map((d) => d.ref.delete())));
+
+  tmpDir = mkdtempSync(path.join(tmpdir(), 'merge-notation-test-'));
+  backupPath = path.join(tmpDir, 'backup.json');
+});
+
+afterEach(() => {
+  rmSync(tmpDir, { recursive: true, force: true });
 });
 
 interface RunResult {
@@ -45,7 +57,7 @@ interface RunResult {
 }
 
 function runScript(args: string[]): RunResult {
-  const stdout = execFileSync('npx', ['ts-node', SCRIPT_PATH, ...args], {
+  const stdout = execFileSync('npx', ['ts-node', SCRIPT_PATH, ...args, '--backup-out', backupPath], {
     cwd: __dirname,
     env: { ...process.env, FIREBASE_PROJECT_ID: PROJECT_ID },
     encoding: 'utf-8',
@@ -154,4 +166,46 @@ test('--execute: 完全一致([A]相当)の同姓同名グループは統合し�
   const personASnap = await db.doc('masters/customers/items/personA').get();
   const personBSnap = await db.doc('masters/customers/items/personB').get();
   assert.ok(personASnap.exists && personBSnap.exists, '完全一致の同姓同名は両方とも残る(統合しない)');
+});
+
+test('--execute: 完全一致サブグループを含む3件混在グループは警告表示のうえ誰も統合・削除しない(evaluator指摘対応)', async () => {
+  // personA1/personA2は生名が完全一致(真の同姓同名候補)。personA3は表記ゆれ。
+  await seedCustomer('personA1', { name: '田中太郎' });
+  await seedCustomer('personA2', { name: '田中太郎' });
+  await seedCustomer('personA3', { name: '田中 太郎' });
+  await seedDocument('doc1', { customerId: 'personA1', customerName: '田中太郎', ...unrelatedDocFields() });
+  await seedDocument('doc2', { customerId: 'personA2', customerName: '田中太郎', ...unrelatedDocFields() });
+  await seedDocument('doc3', { customerId: 'personA3', customerName: '田中 太郎', ...unrelatedDocFields() });
+
+  const result = runScript(['--execute']);
+  assert.match(result.stdout, /完全一致サブグループ.*含むため自動統合の対象外/);
+  assert.match(result.stdout, /対象なし/);
+
+  for (const id of ['personA1', 'personA2', 'personA3']) {
+    const snap = await db.doc(`masters/customers/items/${id}`).get();
+    assert.ok(snap.exists, `${id} は削除されず残る`);
+  }
+  for (const docId of ['doc1', 'doc2', 'doc3']) {
+    const snap = await db.doc(`documents/${docId}`).get();
+    assert.equal(snap.data()?.customerId, docId.replace('doc', 'personA'), `${docId} のcustomerIdは変化しない`);
+  }
+});
+
+test('バックアップJSONに敗者マスターの全フィールドと付け替え対象書類IDが記録される(dry-runでも出力)', async () => {
+  await seedCustomer('winner', { name: '奥村 志づ子' });
+  await seedCustomer('loser', { name: '奥村志づ子', furigana: 'オクムラシヅコ', notes: '北名古屋在住' });
+  await seedDocument('doc-winner-1', { customerId: 'winner', customerName: '奥村 志づ子', ...unrelatedDocFields() });
+  await seedDocument('doc-loser-1', { customerId: 'loser', customerName: '奥村志づ子', ...unrelatedDocFields() });
+
+  runScript([]); // dry-run
+
+  assert.ok(existsSync(backupPath), 'dry-runでもバックアップJSONが出力される');
+  const backup = JSON.parse(readFileSync(backupPath, 'utf-8'));
+  assert.equal(backup.mode, 'dry-run');
+  assert.equal(backup.groups.length, 1);
+  const loserEntry = backup.groups[0].losers[0];
+  assert.equal(loserEntry.master.id, 'loser');
+  assert.equal(loserEntry.master.furigana, 'オクムラシヅコ');
+  assert.equal(loserEntry.master.notes, '北名古屋在住');
+  assert.deepEqual(loserEntry.affectedDocumentIds, ['doc-loser-1']);
 });
