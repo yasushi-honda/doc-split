@@ -24,7 +24,7 @@ kanameone・cocoroへのGoogle Drive連携Phase1本番展開。承認済み計�
 - [x] Phase C事前確認セッションで新規発見・修正（2026-07-24、PR #721マージ済み）: decision-maker依頼の「クライアント操作で誰でも気づく不具合はないか」再確認で、Firebase Emulator+Playwright MCPの実機テスト中に、フォルダ階層テンプレートの「かなめ式で初期化」「cocoro式で初期化」プリセットボタンがテナント判定なしに両クライアント環境へ無条件表示されている問題（cocoro管理者にも「かなめ式」ボタンが見える等）を発見。decision-maker指摘「短絡的な企業名付けをやめ、SVG図解で分かりやすく」を受けplan mode承認済み計画で対応: ①ラベルを「5階層（詳細）」「3階層（シンプル）」に汎用化+lucide-reactアイコンによるフォルダツリー図解プレビューカード化 ②プリセット適用後の固定文字列初期値を空欄化 ③Codexセカンドオピニオンで発見した「日付階層のonlyForCategoriesが特定書類種別名にハードコードされ他テナントで発火しない」問題を`buildDetailed5TierPreset(documentCategoryNames)`ファクトリ関数化で解消。`/code-review`（10角度並列+検証+gap sweep、1回目はストールし2回目で完了）でCONFIRMED 9件中優先度上位3件（図解ラベルと編集エリアの用語不一致・aria-labelによるスクリーンリーダー向けdescription欠落・ヘルプ文言矛盾）を追加修正。tsc/lint/該当テスト58件/frontend全体484件PASS、Firebase Emulator+Playwright MCPで実機確認（新カード表示・動的反映・aria-describedby紐付き等）済み。PR #721作成→CI全PASS→ui-verified付与→マージ→**dev（CI自動）・kanameone（GHA `Deploy Firebase Hosting`）・cocoro（`/deploy`スキル手順の手動デプロイ）の3環境すべてへデプロイ完了確認済み**。これによりPhase C案内時にクライアントが目にする画面の懸念は解消
 - [x] **同姓同名（別人）のDrive誤配置リスク対応（2026-07-25開始→再設計→`/code-review high`+`/codex review`全指摘解消→PR #723/#724マージ→dev/kanameone/cocoro全環境デプロイ完了）**: クライアントからの「利用者フォルダの表記ゆれ」質問を起点にした調査で、Driveフォルダ名が`doc.customerName`文字列のみで決まりcustomerIdを一切参照しない設計上の盲点を発見。初回実装（`/Users/yyyhhh/.claude/plans/abstract-forging-sky.md`）は`/code-review`でゲート条件自体の致命的破綻（過確定・過剰ブロック）を指摘され再設計が必要と判明。**同日中に再設計・実装完了**（承認済み計画`/Users/yyyhhh/.claude/plans/nested-fluttering-robin.md`）: ゲートを「既存の人間確定dual-read判定→未確定の場合のみ実際に同名マスターが2件以上あるかをFirestoreライブクエリで確認」の2段構成に再設計し「曖昧なものだけ止める」を徹底。設計段階のPlan agent批判的検証で、FAX複製フロー(`faxDuplication.ts`)が新ゲートを完全に迂回する致命的な穴を追加発見・根本修正（`planFaxDuplication`に`sameNameCollisionNames`除外ロジック追加）。新規`shared/customerIdentity.ts`+`functions/src/drive/customerAmbiguityGate.ts`切り出し、`useDocumentEdit.ts`は曖昧な顧客名の場合のみtouch要件を課す設計（曖昧でない場合はAC5「保存=確定」を非破壊）。Evaluator（独立コンテキスト）がAC1-5全てPASSと確認、MEDIUM指摘2件も同セッションで修正済み。**次セッションで`/code-review high`結果を確認・全4件を修正**（①FE顧客名比較のtrim漏れでBEゲートと非対称 ②customerMasters未ロード中の保存でfail-open ③別docへの切替でエラーメッセージが残留 ④監査スクリプトのtrim不整合）、回帰テスト2件追加。続けて`/codex review --uncommitted`（effort=high）で2件追加検出（P1: customerクエリ失敗時`isLoading`が`false`に戻り②のガードが再度外れる穴、`customers===undefined`判定に修正／P2: 監査スクリプトがBEのcustomerId↔name乖離チェックを未再現で過小報告するリスク、`fetchAllCustomers()`の既存データからid→nameのMapを構築し追加読込ゼロで解消）。functions unit1922+integration252件、frontend496件（回帰テスト+2）、tsc/lint双方0 errors、全PASS確認済み。PR #723・#724とも`ui-verified`ラベル付与のうえマージ済み。**decision-maker指摘**（Phase Cの案内文書送付が完了しておりkanameone/cocoroが古いコードのまま先方の接続作業に入るリスク）を受け、GitHub Actions `Deploy Cloud Functions`(kanameone/cocoro)+`Deploy Firebase Hosting`(kanameone、GHA)+手動`firebase deploy --only hosting -P cocoro`を実行、4件とも成功。Drive関連4関数(`driveExportScheduled`/`exchangeDriveAuthCode`/`onDocumentWriteDriveExport`/`retryDriveExport`)のupdateTimeがPRマージ後の実デプロイ時刻と一致することを`gcloud functions list`実測で確認、両Hosting URLもHTTP 200で疎通確認済み。dev/kanameone/cocoro全3環境への反映完了（GOAL.md進捗記録はPR #725でマージ済み）
 - [x] **同姓同名ゲートのヌケモレ対応（2026-07-26、PR #727マージ・全環境反映済み）**: decision-makerから「抜け落ち・ヌケモレはなかったか」と問われ、kanameone/cocoroの実データに`check-customer-master-integrity.js`を初めて実行した結果、①監査未実施の情報ギャップ（実行するまで実数不明だった）②ADR-0022/`customerAmbiguityGate.ts`コメントの「守備範囲は同姓同名の衝突のみ」という不正確な要約（実際は顧客名未設定/sentinel値・customerId↔name乖離も含む3系統）③ヘルプマニュアルにFAX複製除外・編集確定の挙動変更説明が皆無、の3ギャップが判明。plan mode承認済み計画で対応: 監査スクリプトに理由別breakdown追加、ADR・コード3箇所（`exportDocument.ts`/`customerAmbiguityGate.ts`のコメント2箇所）・ヘルプ2箇所（`HelpPage.tsx`のDriveエラー説明・FAQ）の記述訂正、`docs/operation/user-guide.md`重複FAQも同期。`/code-review medium`+`/review-pr`（code-reviewer/comment-analyzer/pr-test-analyzer並列）で②の訂正漏れ2箇所（`exportDocument.ts`・`customerAmbiguityGate.ts`関数JSDoc）+HelpPage.tsxのDriveエラー説明の同一問題を追加検出、さらに監査スクリプトの実質バグ（マスターdocの`name`フィールド欠損時に`customerAmbiguityGate.ts`の`?? null`skip判定と乖離し「customerId↔name乖離」と誤分類）を検出・修正（`idToRawName`導入、9件の合成データ検証で修正前後の挙動差を確認）。全指摘修正後、functions unit1922件・frontend tsc/lint 0 errors、Firebase Emulator+Playwright MCPで実機確認、CI全PASS・ui-verified付与のうえマージ、kanameone/cocoro双方へFunctions+Hosting反映・ground truth確認済み。**マージ後に修正版スクリプトを再実行し確定した実数**: kanameone [D]182件の内訳=顧客名未設定/sentinel値159件・customerId↔name乖離20件・**同名衝突未確定は3件のみ**（[A]同名衝突9組のうち大半は既に人間確定済みと判明）。cocoro [D]36件の内訳=顧客名未設定/sentinel値35件・customerId↔name乖離1件・同名衝突未確定0件（[A]=0組と整合、内訳合計も両環境とも[D]総数と一致）。Phase D着手前に必要な「実際に同姓同名で人間確認が必要な書類」はkanameone3件・cocoro0件と、当初の182件/36件という数字よりはるかに小さいことが判明。**追加でPR #729（マージ・kanameoneで再実行確認済み）**: `[D]`個別一覧がFirestore取得順のままだと大量のsentinel値debtに埋もれ先頭20件プレビューに同名衝突未確定が一件も表示されない問題を発見、同名衝突未確定→customerId↔name乖離→sentinel値の優先度順にソートするよう改善。再実行結果、kanameoneの同名衝突未確定3件を特定: doc `68bfCSaIAUTY…`(customerName=「松本 実」)・`7ILXy9TvcvQ3…`(customerName=「渡辺 淳次」)・`sOfgRVSo1fcX…`(customerName=「松本 実」)。**この3件は書類詳細画面で正しい顧客を選び直す人間判断が必要**（AIによる自動判定は対象外、decision-maker/現場管理者が対応）。cocoroは対象0件
-- [ ] **同姓同名プロアクティブ通知UI追加（2026-07-26開始、承認済み計画 `/Users/yyyhhh/.claude/plans/noble-booping-leaf.md`）**: decision-maker質問「同名衝突未確定3件はシステム上でアラートになっているか」を発端に検証した結果、`customerAmbiguityGate.ts`のブロッキングゲート自体は機能していたが、現場管理者が能動的に気づける経路が存在しないことが判明（Driveエラー一覧はflag OFF時無表示・FE「選択待ち」バッジがBEと矛盾する規約でレガシーdocを確定済み扱い・詳細モーダルのバナーはstaleなOCR時点スナップショット依存）。AIの当初回答（「3件とも無表示」）は不正確で、監査スクリプト実測により「対象3件は`customerConfirmed=false`のため汎用『選択待ち』は既に表示されていたが、同姓同名固有の警告ではない」と訂正した経緯あり。Codex plan review（MCP、effort=high）でセカンドオピニオンを取得し4点を計画へ反映（「遅延ゼロ」表現訂正・`findSameNameCollisionNames`のtrim追加によるFE/BE不整合リスクをkanameone/cocoro実データで0件と実測・BE統合テストのCI化・needsReview合成による事業所側要対応の隠蔽対策）。詳細は本ファイル「🔄 中断点」節参照
+- [ ] **同姓同名プロアクティブ通知UI追加（2026-07-26開始→dev/kanameone/cocoro全環境反映完了、承認済み計画 `/Users/yyyhhh/.claude/plans/noble-booping-leaf.md`）**: decision-maker質問「同名衝突未確定3件はシステム上でアラートになっているか」を発端に実装。PR #731/#732/#733/#736の4PRとも マージ済み。`/code-review`3回連続未完了→自己検証+Codexセカンドオピニオン(review-diff→plan mode)で計4件のバグ(crash risk×2・trim不整合・JSDoc矛盾)を発見・修正。段階的ロールアウト(cocoro先行→kanameone)でground truth確認済み。**残タスクはPR-3（ヘルプ・ドキュメント更新）のみ**。詳細は本ファイル「🔄 中断点」節参照
 
 ## 【完了・2026-07-22】Google Drive連携Phase1 (MVP)実装ミッション
 
@@ -104,32 +104,40 @@ cocoro/kanameから、書類（ケアプラン・医療・介護保険証等）�
 
 ## 🔄 中断点（in-flight）
 
-**対象タスク**: 「同姓同名プロアクティブ通知UI追加」（承認済み計画 `/Users/yyyhhh/.claude/plans/noble-booping-leaf.md`）。**PR #733は2026-07-26マージ済み**（squash、`f7b4ad9`、16 files, +860/-59）。残るin-flightはPR-3（ヘルプ・ドキュメント更新）とdev→kanameone→cocoroへの本番反映。
+**対象タスク**: 「同姓同名プロアクティブ通知UI追加」（承認済み計画 `/Users/yyyhhh/.claude/plans/noble-booping-leaf.md`）。**PR #733・#736ともマージ済み、dev/kanameone/cocoro全3環境への本番反映完了（2026-07-26）**。残るin-flightは**PR-3（ヘルプ・ドキュメント更新）のみ**。
 
-**特記: `/code-review`が3回連続未完了だった経緯（次回同種事象の判断材料として記録）**:
+**特記1: `/code-review`が3回連続未完了だった経緯（次回同種事象の判断材料として記録）**:
 1. 1回目（`high`）: 6finderサブエージェント並列実行中にdecision-makerが手動で6エージェント全て停止（理由未確認）
-2. 2回目（`high`再実行）: 6finderは完了したが、後続の5検証(verify)エージェントの完了待ちでメインエージェント自身がタイムアウトし、`ReportFindings`を呼ばずに終了（sleep loopの末に「ポーリングをやめる」で自然終了、既知の不安定挙動 [reference_code_review_finder_agent_reliability.md] 参照）
+2. 2回目（`high`再実行）: 6finderは完了したが、後続の5検証(verify)エージェントの完了待ちでメインエージェント自身がタイムアウトし、`ReportFindings`を呼ばずに終了（既知の不安定挙動 [reference_code_review_finder_agent_reliability.md] 参照）
 3. 3回目（`low`）: 検証フェーズの5エージェントが再びdecision-makerにより手動停止
 
-2回目の未完了時、executorが検証待ちだった5候補のプロンプトをトランスクリプトファイルから直接読み、自らコードを読んで検証した結果、**実在する2件のバグを確認**:
-- **crash risk**: `shared/customerIdentity.ts`の`findSameNameCollisionNames()`が`c.name.trim()`を無条件実行しており、Firestore生データの`name`フィールドが実行時にstring型でない場合（欠損、過去に本番で実在確認済み — `check-customer-master-integrity.js`の`idToRawName`導入経緯参照）TypeErrorでクラッシュするregression（trim追加前のmainブランチはクラッシュしなかった）
-- **JSDoc矛盾**: `useProcessingHistory.ts`の`applyConfirmedFilter`のJSDocが「customerConfirmed:trueでも同名衝突があれば未確定に残す」と書いていたが、実装（`precheckCustomerIdentity`のhumanConfirmed優先ロジック）は衝突チェック前に確定扱いで返すため実現していなかった（既存の`precheckCustomerIdentity`単体テストでも「人間確定優先」が意図通りと確認済みのため、実装ではなくJSDoc側の記述ミスと判定）
+2回目の未完了時、executorが検証待ちだった5候補のプロンプトをトランスクリプトファイルから直接読み、自らコードを読んで検証した結果、**実在する2件のバグを確認**: ①`findSameNameCollisionNames()`の`c.name.trim()`無条件実行によるcrash risk（Firestore生データの`name`フィールド欠損時にTypeError） ②`useProcessingHistory.ts`の`applyConfirmedFilter`のJSDocが実装（`precheckCustomerIdentity`のhumanConfirmed優先ロジック）と矛盾していた（既存テストで「人間確定優先」が意図通りと確認済みのため、JSDoc側の記述ミスと判定）。
 
-続けて`/codex review-diff --base main`（Bash版、effort=high）でセカンドオピニオンを取得。上記2件には言及がなかったが、別の1件（P2）を検出: FE（`findSameNameCollisionNames`）のみtrim適用、BE `customerAmbiguityGate.ts`・FAX複製`faxDuplication.ts`は生値比較のままのため、whitespace variantなマスター名でFE警告とBE実際のブロック挙動が食い違いうる（`firestore.rules`の`masters/{masterId}/items/{itemId}`が`isAdmin()`のみでフィールド内容を制約していない点を根拠に指摘）。
+続けて`/codex review-diff --base main`（Bash版、effort=high）でセカンドオピニオンを取得、別の1件（P2、trim不整合）を検出。上記2件+この1件、計3件を修正しfunctions unit1945件/frontend unit504件/BE統合テスト32件全PASS確認後、PR #733を`/code-review`完了を待たずにマージ（自己検証+Codex review-diffによる代替検証で十分と判断）。
 
-decision-maker承認のもと3件とも修正: ①`findSameNameCollisionNames`に`typeof c.name === 'string'`型ガード追加 ②`faxDuplication.ts`の`planFaxDuplication`をtrim比較に統一（BE `customerAmbiguityGate.ts`のFirestoreクエリ設計は複合インデックス不要のメリットを保持するため変更せず、監査スクリプトの`whitespaceIssues`検出による継続監視で許容する判断をコメントに明記） ③JSDocコメントを実装の実際の挙動に合わせて訂正+従来一切カバーされていなかった`identityLookup`付き回帰テストを新規追加。functions unit1945件/frontend unit504件/BE統合テスト(emulator)32件、tsc/lint双方0 errors、全PASS確認後commit・push・CI再PASS確認。3回目の`/code-review low`も停止されたため、decision-maker判断で`/code-review`完了を待たずにマージ（自己検証+Codex review-diffによる代替検証で十分と判断）。
+**特記2: kanameone本番反映前の追加Codexセカンドオピニオン（plan mode、effort=high）で発見した4件目のバグ（PR #736）**:
+cocoro先行反映完了後、kanameone反映の可否についてCodexに`plan`モードでセカンドオピニオンを依頼した結果、**`DocumentDetailModal.tsx:607`に`findSameNameCollisionNames`と同種のcrash riskが未修正のまま残存している**ことを指摘された（`collidingMasters`計算の`c.name.trim()`に型ガードなし）。自分でコード確認し実在するバグと確定、型ガード追加+devローカル実機確認（Playwright MCP、同名衝突モーダルが正しく2件のマスター候補を表示しクラッシュしないことを確認）を経てPR #736として単独マージ・dev自動デプロイ確認済み。**この発見により、kanameoneの対象3件を書類詳細画面で開いた際にクラッシュする可能性のあったリスクを、本番反映前に解消できた**。
 
-**実装内容**（承認済み計画 `noble-booping-leaf.md`、Codex plan review反映済み）:
-1. **PR #731**（マージ済み）: `scripts/check-customer-master-integrity.js`に完全doc ID・生フィールド値・FE/BE乖離件数の出力を追加（計測用）
-2. **PR #732**（マージ済み）: 顧客マスターname前後空白検出を追加、kanameone/cocoro実データで**0件**と確認（Codex plan review指摘の`findSameNameCollisionNames`trim追加によるFE/BE canonicalization不一致リスクを実測で解消）
-3. **PR #733**（マージ済み）: `shared/customerIdentity.ts`に`precheckCustomerIdentity`/`resolveCustomerUnconfirmedReason`を新設し、BEゲート（委譲・挙動不変）とFEバッジ5箇所（書類一覧/担当CM別/顧客別/処理履歴/詳細モーダル）が同一ロジックを共有。新規Cloud Function・Scheduler・Firestoreフィールドは追加しない（FEライブ判定+`useCustomers()`キャッシュ共有方式）。Codex plan review指摘4点＋マージ直前に追加修正した3件（crash risk・trim不整合・JSDoc矛盾、上記参照）を反映。実dev cloud project(`doc-split-dev`)+ローカル`npm run dev`+Playwright MCPで5箇所全て実機確認済み（`ui-verified`ラベル付与済み、確認証跡はPR #733コメントに記録）
+Codexは併せて「trim不整合を監査で継続監視とした判断は言い過ぎ」と指摘（`scheduled-audit.yml`はofficeの短名称検出のみが対象で顧客名前後空白検出は手動実行のみと自分で確認済み）。この指摘を受け、kanameone本番反映前に`check-customer-master-integrity.js`を再実行し**whitespaceIssues=0・型崩れ(malformed name)=0を確認済み**。
 
-**マージ後にやること**: PR-3（ヘルプ・ドキュメント更新: `HelpPage.tsx`/`docs/operation/user-guide.md`/ADR-0022/本GOAL.md）→ dev自動デプロイ確認 → kanameone/cocoro本番反映（`gcloud functions describe`/Hosting releaseTimeでground truth検証）。**kanameoneの同名衝突未確定3件自体の人間による選び直しは、本UIマージ後も引き続き現場管理者/decision-maker領分**（executor代行不可、本UIは「見つけやすくする」ものであり3件の解決そのものではない）。
+**実装内容**（承認済み計画 `noble-booping-leaf.md`、Codex指摘反映済み）:
+1. **PR #731**（マージ済み）: 監査スクリプトに完全doc ID・生フィールド値・FE/BE乖離件数の出力を追加（計測用）
+2. **PR #732**（マージ済み）: 顧客マスターname前後空白検出を追加、kanameone/cocoro実データで**0件**と確認
+3. **PR #733**（マージ済み）: `shared/customerIdentity.ts`に`precheckCustomerIdentity`/`resolveCustomerUnconfirmedReason`を新設し、BEゲート（委譲・挙動不変）とFEバッジ5箇所が同一ロジックを共有。新規Cloud Function・Scheduler・Firestoreフィールドは追加しない
+4. **PR #736**（マージ済み）: `DocumentDetailModal.tsx`のcrash risk修正（上記特記2参照）
 
-**検証コマンド**（次セッション再開時、マージ確認）:
+**本番反映結果（2026-07-26、段階的ロールアウト: cocoro先行→kanameone）**:
+- **cocoro**: Functions 25関数全て`Successful update operation`（`onDocumentWriteDriveExport`/`processOCR`のupdateTime確認済み）、Hosting release complete・HTTP 200。本番UIへのログイン認証情報がなくPlaywright MCPでの直接UI確認は未実施（`feedback_deploy_proactive_verification.md`の原則に従い、ビルド成功+release complete+エラーログ0件で反映完了と判断）
+- **kanameone**: 同様にFunctions/Hosting反映完了、ground truth確認済み（updateTime・HTTP 200）。**対象3件への「同姓同名」バッジ実機表示確認は、kanameone本番の認証情報（Google Workspace `systemkaname@kanameone.com`）をexecutorが持たないため未実施**。decision-maker判断でデプロイground truth確認をもって完了とした（Codexは「肯定系を本番で検証したわけではない」と指摘済み、次回現場管理者確認時の参考情報として残す）
+
+**判明した技術的知見（次回セッションへの申し送り）**: このセッション中、`switch-client.sh kanameone`実行後、Bashツールのセッションに環境変数`CLOUDSDK_ACTIVE_CONFIG_NAME=kanameone`が固定的に残留し、`.envrc.client`をdevに書き戻しても新しいBashコマンド呼び出しのたびに`kanameone`が優先されてしまう現象を確認（`~/.config/gcloud/active_config`ファイル自体は正しく`doc-split`）。原因未特定（direnvのキャッシュ無効化が`.envrc.client`のsource先変更を検知していない可能性）。次回gcloud操作時、`gcloud config configurations list`で`kanameone`/`cocoro`がTrueのまま残っていないか要確認、該当時は`unset CLOUDSDK_ACTIVE_CONFIG_NAME && gcloud config configurations activate doc-split`で都度是正が必要。
+
+**残タスク**: PR-3（ヘルプ・ドキュメント更新: `HelpPage.tsx`/`docs/operation/user-guide.md`/ADR-0022/本GOAL.md）。**kanameoneの同名衝突未確定3件自体の人間による選び直しは、本UIの全環境反映完了後も引き続き現場管理者/decision-maker領分**（executor代行不可）。
+
+**検証コマンド**（次セッション再開時）:
 ```bash
-git log --oneline -3   # f7b4ad9 (#733) が含まれていることを確認
-gh pr view 733 --json state,mergedAt
+git log --oneline -5   # d6eb262 (#736)・f7b4ad9 (#733) が含まれていることを確認
+gcloud config configurations list --account=hy.unimail.11@gmail.com  # kanameone/cocoroが残留していないか確認
 ```
 
 ---
