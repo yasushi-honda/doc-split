@@ -37,11 +37,13 @@ import {
   type ConfirmedFilter,
   type ProcessingHistoryFilters,
 } from '@/hooks/useProcessingHistory';
+import { useCustomerIdentityLookup, type CustomerIdentityLookup } from '@/hooks/useMasters';
+import { resolveCustomerUnconfirmedReason } from '@shared/customerIdentity';
 import { DocumentDetailModal } from '@/components/DocumentDetailModal';
 import { LoadMoreIndicator } from '@/components/LoadMoreIndicator';
 import { useInfiniteScroll } from '@/hooks/useInfiniteScroll';
 import type { Document as DocType, DocumentStatus } from '@shared/types';
-import { Loader2, RefreshCw, ChevronDown, ChevronUp, AlertCircle } from 'lucide-react';
+import { Loader2, RefreshCw, ChevronDown, ChevronUp, AlertCircle, Users } from 'lucide-react';
 
 // ============================================
 // ステータスバッジコンポーネント
@@ -64,8 +66,31 @@ function StatusBadge({ status }: { status: DocumentStatus }) {
 // 選択待ちバッジコンポーネント
 // ============================================
 
-function UnconfirmedBadge({ doc }: { doc: DocType }) {
-  if (isCustomerConfirmed(doc)) return null;
+function UnconfirmedBadge({ doc, identityLookup }: { doc: DocType; identityLookup?: CustomerIdentityLookup }) {
+  const unconfirmedReason = identityLookup
+    ? resolveCustomerUnconfirmedReason(doc, {
+        customerMasterName: doc.customerId
+          ? (identityLookup.customerMasterNameById.get(doc.customerId) ?? null)
+          : null,
+        sameNameCollisionNames: identityLookup.sameNameCollisionNames,
+      })
+    : null;
+  const isSameNameCollision = unconfirmedReason === 'same-name-collision';
+
+  if (!isSameNameCollision && isCustomerConfirmed(doc)) return null;
+
+  if (isSameNameCollision) {
+    return (
+      <Badge
+        variant="outline"
+        className="bg-orange-100 text-orange-800 border-orange-300"
+        title="同姓同名の顧客マスターが複数あります。書類詳細で正しい顧客を選び直してください"
+      >
+        <Users className="mr-1 h-3 w-3 inline" />
+        同姓同名
+      </Badge>
+    );
+  }
   return (
     <Badge variant="outline" className="bg-orange-100 text-orange-800 border-orange-300">
       選択待ち
@@ -89,6 +114,9 @@ export function ProcessingHistoryPage() {
   // 選択中のドキュメントID（詳細モーダル用）
   const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(null);
 
+  // 同姓同名バッジ判定用(2026-07-26追加)
+  const identityLookup = useCustomerIdentityLookup();
+
   // データ取得
   const {
     documents,
@@ -98,7 +126,7 @@ export function ProcessingHistoryPage() {
     error,
     fetchNextPage,
     refetch,
-  } = useProcessingHistory(filters);
+  } = useProcessingHistory(filters, identityLookup);
   const { loadMoreRef } = useInfiniteScroll({ hasNextPage: hasMore, isFetchingNextPage: isFetchingMore, fetchNextPage });
 
   // 日付グルーピング
@@ -266,7 +294,7 @@ export function ProcessingHistoryPage() {
                           <TableCell>
                             <div className="flex items-center gap-2">
                               <span className="truncate max-w-[100px]">{doc.customerName}</span>
-                              <UnconfirmedBadge doc={doc} />
+                              <UnconfirmedBadge doc={doc} identityLookup={identityLookup} />
                             </div>
                           </TableCell>
                           <TableCell className="text-sm">{doc.documentType}</TableCell>

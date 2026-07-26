@@ -17,12 +17,14 @@ import { Timestamp } from 'firebase/firestore';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { isCustomerConfirmed } from '@/hooks/useProcessingHistory';
+import type { CustomerIdentityLookup } from '@/hooks/useMasters';
 import { getStatusConfig, formatTimestamp } from '@/lib/documentUtils';
 import { getDisplayFileName } from '@/utils/getDisplayFileName';
 import {
   buildCustomerFolderGroups,
   type FolderGroup,
 } from '@/lib/buildCustomerFolderGroups';
+import { resolveCustomerUnconfirmedReason } from '@shared/customerIdentity';
 import type { Document, DocumentMaster } from '@shared/types';
 
 // ============================================
@@ -37,6 +39,8 @@ interface CustomerSubGroupProps {
   onDocumentSelect?: (documentId: string) => void;
   /** error 書類の「再試行」(#524)。未指定時はボタン非表示 */
   onRetry?: (document: Document) => void;
+  /** 同姓同名バッジ判定用(未指定時は「選択待ち」のみ、同姓同名バッジは出さない) */
+  identityLookup?: CustomerIdentityLookup;
 }
 
 interface CustomerGroup {
@@ -101,9 +105,10 @@ interface DocumentRowProps {
   document: Document;
   onClick: () => void;
   onRetry?: (document: Document) => void;
+  identityLookup?: CustomerIdentityLookup;
 }
 
-function DocumentRow({ document, onClick, onRetry }: DocumentRowProps) {
+function DocumentRow({ document, onClick, onRetry, identityLookup }: DocumentRowProps) {
   const statusConfig = getStatusConfig(document.status);
 
   // 選択待ち判定
@@ -112,7 +117,30 @@ function DocumentRow({ document, onClick, onRetry }: DocumentRowProps) {
     document.officeConfirmed === false &&
     document.officeCandidates &&
     document.officeCandidates.length > 0;
-  const needsReview = needsCustomerConfirmation || needsOfficeConfirmation;
+
+  // 同姓同名判定(2026-07-26追加)。identityLookup未指定時はDrive未接続テナント等を想定しnull扱い。
+  const unconfirmedReason = identityLookup
+    ? resolveCustomerUnconfirmedReason(document, {
+        customerMasterName: document.customerId
+          ? (identityLookup.customerMasterNameById.get(document.customerId) ?? null)
+          : null,
+        sameNameCollisionNames: identityLookup.sameNameCollisionNames,
+      })
+    : null;
+  const isSameNameCollision = unconfirmedReason === 'same-name-collision';
+  const needsReview = needsCustomerConfirmation || needsOfficeConfirmation || isSameNameCollision;
+
+  // バッジ文言優先順位: 同姓同名(実害が大きい) > 選択待ち。title は該当する全理由を列挙し、
+  // needsReview合成による「事業所要対応が同姓同名バッジの裏で隠れる」ことを防ぐ
+  // (Codex plan review指摘、2026-07-26)。
+  const reviewReasons: string[] = [];
+  if (isSameNameCollision) {
+    reviewReasons.push('同姓同名の顧客マスターが複数あります。書類詳細で正しい顧客を選び直してください');
+  }
+  if (needsOfficeConfirmation) {
+    reviewReasons.push('事業所が未選択です');
+  }
+  const reviewTitle = reviewReasons.length > 0 ? reviewReasons.join('。') : undefined;
 
   // OCR未確認
   const isUnverified = !document.verified;
@@ -142,8 +170,13 @@ function DocumentRow({ document, onClick, onRetry }: DocumentRowProps) {
           {formatTimestamp(document.fileDate)}
         </span>
         {needsReview ? (
-          <Badge variant="outline" className="bg-orange-100 text-orange-800 border-orange-300 text-xs">
-            選択待ち
+          <Badge
+            variant="outline"
+            className="bg-orange-100 text-orange-800 border-orange-300 text-xs"
+            title={reviewTitle}
+          >
+            {isSameNameCollision && <Users className="mr-1 h-3 w-3 inline" />}
+            {isSameNameCollision ? '同姓同名' : '選択待ち'}
           </Badge>
         ) : (
           <Badge variant={statusConfig.variant} className="text-xs">
@@ -189,6 +222,7 @@ interface FolderGroupItemProps {
   onToggle: () => void;
   onDocumentSelect?: (documentId: string) => void;
   onRetry?: (document: Document) => void;
+  identityLookup?: CustomerIdentityLookup;
 }
 
 function FolderGroupItem({
@@ -197,6 +231,7 @@ function FolderGroupItem({
   onToggle,
   onDocumentSelect,
   onRetry,
+  identityLookup,
 }: FolderGroupItemProps) {
   return (
     <div className="border-b border-gray-50 last:border-0">
@@ -226,6 +261,7 @@ function FolderGroupItem({
               document={doc}
               onClick={() => onDocumentSelect?.(doc.id)}
               onRetry={onRetry}
+              identityLookup={identityLookup}
             />
           ))}
         </div>
@@ -245,6 +281,7 @@ interface CustomerGroupItemProps {
   onToggle: () => void;
   onDocumentSelect?: (documentId: string) => void;
   onRetry?: (document: Document) => void;
+  identityLookup?: CustomerIdentityLookup;
 }
 
 function CustomerGroupItem({
@@ -254,6 +291,7 @@ function CustomerGroupItem({
   onToggle,
   onDocumentSelect,
   onRetry,
+  identityLookup,
 }: CustomerGroupItemProps) {
   // フォルダサブグループの展開状態 (#527)。顧客を閉じると状態ごと破棄される
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
@@ -313,6 +351,7 @@ function CustomerGroupItem({
               onToggle={() => toggleFolder(folder.label)}
               onDocumentSelect={onDocumentSelect}
               onRetry={onRetry}
+              identityLookup={identityLookup}
             />
           ))}
         </div>
@@ -331,6 +370,7 @@ export function CustomerSubGroup({
   documentMasters,
   onDocumentSelect,
   onRetry,
+  identityLookup,
 }: CustomerSubGroupProps) {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
 
@@ -371,6 +411,7 @@ export function CustomerSubGroup({
           onToggle={() => toggleGroup(group.customerKey)}
           onDocumentSelect={onDocumentSelect}
           onRetry={onRetry}
+          identityLookup={identityLookup}
         />
       ))}
     </div>

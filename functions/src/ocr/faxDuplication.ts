@@ -104,8 +104,11 @@ export function planFaxDuplication(input: PlanFaxDuplicationInput): FaxDuplicati
   // CodeRabbit指摘: score降順の保証を呼出元(extractors.tsのsort)の暗黙の前提だけに
   // 委ねず、本関数自身でも明示的にソートしてから重複排除する(「先勝ち」dedupが
   // 最高スコア以外を拾ってしまう回帰を、モジュール境界をまたいだ暗黙契約に頼らず防ぐ)。
+  // c.name.trim(): sameNameCollisionNamesはfindSameNameCollisionNames()がtrim済みキーで
+  // 返す集合のため、c.name側もtrimしてから照合しないと前後空白付きマスター名の同名衝突を
+  // 見逃す(Codex review-diff P2指摘、2026-07-26)。インメモリ処理のため追加コストなし。
   const exactNonDuplicate = input.candidates
-    .filter((c) => c.matchType === 'exact' && !c.isDuplicate && !input.sameNameCollisionNames.has(c.name))
+    .filter((c) => c.matchType === 'exact' && !c.isDuplicate && !input.sameNameCollisionNames.has(c.name.trim()))
     .sort((a, b) => b.score - a.score);
 
   const deduped = new Map<string, CustomerCandidate>();

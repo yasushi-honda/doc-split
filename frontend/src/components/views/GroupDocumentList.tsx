@@ -6,7 +6,7 @@
  */
 
 import { useMemo, useState } from 'react';
-import { FileText, Loader2, RefreshCw } from 'lucide-react';
+import { FileText, Loader2, RefreshCw, Users } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -21,7 +21,7 @@ import {
 import { LoadMoreIndicator } from '@/components/LoadMoreIndicator';
 import { useInfiniteScroll } from '@/hooks/useInfiniteScroll';
 import { useReprocessDocument } from '@/hooks/useDocuments';
-import { useDocumentTypes } from '@/hooks/useMasters';
+import { useDocumentTypes, useCustomerIdentityLookup, type CustomerIdentityLookup } from '@/hooks/useMasters';
 import {
   useGroupDocuments,
   type GroupType,
@@ -30,6 +30,7 @@ import { isCustomerConfirmed } from '@/hooks/useProcessingHistory';
 import { CustomerSubGroup } from './CustomerSubGroup';
 import { getStatusConfig, formatTimestamp } from '@/lib/documentUtils';
 import { getDisplayFileName } from '@/utils/getDisplayFileName';
+import { resolveCustomerUnconfirmedReason } from '@shared/customerIdentity';
 import type { Document } from '@shared/types';
 import type { DateRange } from '@/components/DateRangeFilter';
 
@@ -56,9 +57,10 @@ interface DocumentRowProps {
   onClick: () => void;
   /** error 書類の「再試行」(#524)。未指定時はボタン非表示 */
   onRetry?: (document: Document) => void;
+  identityLookup?: CustomerIdentityLookup;
 }
 
-function DocumentRow({ document, groupType, onClick, onRetry }: DocumentRowProps) {
+function DocumentRow({ document, groupType, onClick, onRetry, identityLookup }: DocumentRowProps) {
   const statusConfig = getStatusConfig(document.status);
 
   // 選択待ち判定（顧客・事業所）
@@ -67,7 +69,29 @@ function DocumentRow({ document, groupType, onClick, onRetry }: DocumentRowProps
     document.officeConfirmed === false &&
     document.officeCandidates &&
     document.officeCandidates.length > 0;
-  const needsReview = needsCustomerConfirmation || needsOfficeConfirmation;
+
+  // 同姓同名判定(2026-07-26追加)
+  const unconfirmedReason = identityLookup
+    ? resolveCustomerUnconfirmedReason(document, {
+        customerMasterName: document.customerId
+          ? (identityLookup.customerMasterNameById.get(document.customerId) ?? null)
+          : null,
+        sameNameCollisionNames: identityLookup.sameNameCollisionNames,
+      })
+    : null;
+  const isSameNameCollision = unconfirmedReason === 'same-name-collision';
+  const needsReview = needsCustomerConfirmation || needsOfficeConfirmation || isSameNameCollision;
+
+  // バッジ文言優先順位: 同姓同名 > 選択待ち。title は該当する全理由を列挙し、needsReview合成
+  // による「事業所要対応が同姓同名バッジの裏で隠れる」ことを防ぐ(Codex plan review指摘)。
+  const reviewReasons: string[] = [];
+  if (isSameNameCollision) {
+    reviewReasons.push('同姓同名の顧客マスターが複数あります。書類詳細で正しい顧客を選び直してください');
+  }
+  if (needsOfficeConfirmation) {
+    reviewReasons.push('事業所が未選択です');
+  }
+  const reviewTitle = reviewReasons.length > 0 ? reviewReasons.join('。') : undefined;
 
   // OCR未確認
   const isUnverified = !document.verified;
@@ -111,8 +135,13 @@ function DocumentRow({ document, groupType, onClick, onRetry }: DocumentRowProps
           {formatTimestamp(document.fileDate)}
         </span>
         {needsReview ? (
-          <Badge variant="outline" className="bg-orange-100 text-orange-800 border-orange-300 text-xs">
-            選択待ち
+          <Badge
+            variant="outline"
+            className="bg-orange-100 text-orange-800 border-orange-300 text-xs"
+            title={reviewTitle}
+          >
+            {isSameNameCollision && <Users className="mr-1 h-3 w-3 inline" />}
+            {isSameNameCollision ? '同姓同名' : '選択待ち'}
           </Badge>
         ) : (
           <Badge variant={statusConfig.variant} className="text-xs">
@@ -195,6 +224,9 @@ export function GroupDocumentList({
     isError: isMasterError,
     error: masterError,
   } = useDocumentTypes();
+
+  // 同姓同名バッジ判定用(2026-07-26追加)。useCustomers()のキャッシュ共有により追加フェッチなし
+  const identityLookup = useCustomerIdentityLookup();
   if (groupType === 'careManager' && isMasterError) {
     // 書類種別タブ (GroupList) と同じ診断ログ。サイレントに種別表示へ縮退させない
     console.warn(
@@ -291,6 +323,7 @@ export function GroupDocumentList({
           documentMasters={documentMasters}
           onDocumentSelect={onDocumentSelect}
           onRetry={setRetryTarget}
+          identityLookup={identityLookup}
         />
 
         <LoadMoreIndicator
@@ -316,6 +349,7 @@ export function GroupDocumentList({
             groupType={groupType}
             onClick={() => onDocumentSelect?.(doc.id)}
             onRetry={setRetryTarget}
+            identityLookup={identityLookup}
           />
         ))}
       </div>

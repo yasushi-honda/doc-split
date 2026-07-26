@@ -34,10 +34,16 @@
  * FAX複製フロー(`functions/src/ocr/faxDuplication.ts`)はこのゲートを経由しない別の書込
  * 経路であり、本モジュールとは独立に同名衝突の除外が必要(`planFaxDuplication`の
  * `sameNameCollisionNames`引数を参照)。
+ *
+ * 上記1-4の判定順序(sentinel→name↔id乖離→customerConfirmed優先のdual-read)は
+ * `shared/customerIdentity.ts`の`precheckCustomerIdentity()`へ移設した(現場管理者への
+ * 「同姓同名」プロアクティブ通知UI追加、2026-07-26。FEバッジと同一実装を共有するため)。
+ * 本関数はその判定に「衝突確認が必要」と判定された場合のみFirestoreへライブクエリを撃つ
+ * BE固有の短絡ロジックを残す。挙動・外部契約(戻り値boolean)は不変。
  */
 
 import type * as admin from 'firebase-admin';
-import { isValidCustomerSelection } from '../../../shared/customerIdentity';
+import { precheckCustomerIdentity } from '../../../shared/customerIdentity';
 import { MASTER_PATHS } from '../utils/masterPaths';
 import type { Document } from '../../../shared/types';
 
@@ -58,33 +64,29 @@ export async function isCustomerUnconfirmed(
   doc: Document,
   deps: IsCustomerUnconfirmedDeps
 ): Promise<boolean> {
-  const name = (doc.customerName ?? '').trim();
-  if (!isValidCustomerSelection(name)) {
-    return true; // sentinel値(「不明顧客」「未判定」)・空文字は常に未確定扱い
+  const pre = precheckCustomerIdentity(doc, { customerMasterName: deps.customerMasterName });
+  if (pre.outcome === 'unconfirmed') {
+    return true; // sentinel値・空文字、またはcustomerId↔name乖離
   }
-
-  // trim済みnameと比較する(doc.customerNameの生値と比較すると、マスター名は
-  // normalizeName()でtrim済みのため、前後空白が付いただけの正常docまで誤って
-  // 乖離扱いになってしまう)。
-  if (deps.customerMasterName !== null && deps.customerMasterName !== name) {
-    return true; // customerIdの指すマスター名とdoc.customerNameが乖離(マスター改名の取り残し等)
-  }
-
-  const humanConfirmed = doc.customerConfirmed !== undefined
-    ? doc.customerConfirmed
-    : doc.needsManualCustomerSelection !== undefined
-      ? !doc.needsManualCustomerSelection
-      : false; // 両方未設定(レガシーdoc)は「未確定」として扱い、曖昧性チェックに委ねる
-  if (humanConfirmed) {
+  if (pre.outcome === 'confirmed') {
     return false;
   }
 
   // 未確定と判定された場合のみ、実際に同名マスターが2件以上存在するかをライブ確認する
   // (曖昧なものだけ止める、decision-maker承認済み方針)。単一フィールド等価検索のため
   // 複合インデックス不要。
+  //
+  // trim不整合の残存リスク(Codex review-diff P2指摘、2026-07-26): このクエリは
+  // Firestore上のマスター`name`の生値との完全一致検索のため、マスター名に前後空白が
+  // 付与されている場合(FE`findSameNameCollisionNames()`はtrim済みで衝突検出するのに
+  // このクエリは0件ヒットで通過する)、FE通知とBEブロックの挙動が食い違いうる。全件
+  // フェッチしてJS側でtrim比較する案は複合インデックス不要という本設計のメリットを
+  // 失うため採用せず、`check-customer-master-integrity.js`のwhitespaceIssues検出
+  // (PR #732、本番マスターデータで前後空白付きnameは0件と実測済み)による継続監視で
+  // 許容する判断とした。
   const collisionSnap = await deps.firestore
     .collection(MASTER_PATHS.customers)
-    .where('name', '==', name)
+    .where('name', '==', pre.trimmedName)
     .limit(2)
     .get();
   return collisionSnap.size > 1;
