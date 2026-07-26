@@ -75,6 +75,15 @@ export async function isCustomerUnconfirmed(
   // 未確定と判定された場合のみ、実際に同名マスターが2件以上存在するかをライブ確認する
   // (曖昧なものだけ止める、decision-maker承認済み方針)。単一フィールド等価検索のため
   // 複合インデックス不要。
+  //
+  // trim不整合の残存リスク(Codex review-diff P2指摘、2026-07-26): このクエリは
+  // Firestore上のマスター`name`の生値との完全一致検索のため、マスター名に前後空白が
+  // 付与されている場合(FE`findSameNameCollisionNames()`はtrim済みで衝突検出するのに
+  // このクエリは0件ヒットで通過する)、FE通知とBEブロックの挙動が食い違いうる。全件
+  // フェッチしてJS側でtrim比較する案は複合インデックス不要という本設計のメリットを
+  // 失うため採用せず、`check-customer-master-integrity.js`のwhitespaceIssues検出
+  // (PR #732、本番マスターデータで前後空白付きnameは0件と実測済み)による継続監視で
+  // 許容する判断とした。
   const collisionSnap = await deps.firestore
     .collection(MASTER_PATHS.customers)
     .where('name', '==', pre.trimmedName)

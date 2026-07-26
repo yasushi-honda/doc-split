@@ -23,6 +23,7 @@ import {
 } from '../useProcessingHistory';
 import { firestoreToDocument } from '../useDocuments';
 import type { Document } from '@shared/types';
+import type { CustomerIdentityLookup } from '../useMasters';
 
 // Document 最小 fixture factory。必要フィールドのみ上書きする。
 function makeDoc(overrides: Partial<Document> = {}): Document {
@@ -165,6 +166,39 @@ describe('applyConfirmedFilter (#273)', () => {
     expect(applyConfirmedFilter([], 'all')).to.deep.equal([]);
     expect(applyConfirmedFilter([], 'confirmed')).to.deep.equal([]);
     expect(applyConfirmedFilter([], 'unconfirmed')).to.deep.equal([]);
+  });
+});
+
+// applyConfirmedFilterのJSDocが実装と矛盾していた(/code-review high候補で発覚、2026-07-26)。
+// identityLookup付きの挙動が単体テストで一切カバーされていなかったため追加。
+describe('applyConfirmedFilter with identityLookup (2026-07-26追加)', () => {
+  function makeLookup(sameNameCollisionNames: string[]): CustomerIdentityLookup {
+    return {
+      sameNameCollisionNames: new Set(sameNameCollisionNames),
+      customerMasterNameById: new Map(),
+    };
+  }
+
+  it('レガシーdoc(customerConfirmed/needsManualCustomerSelectionとも未設定) + 同名衝突ありはunconfirmed側に残る', () => {
+    const legacyCollisionDoc = makeDoc({ id: 'legacy-collision', customerName: '田中太郎' });
+    const result = applyConfirmedFilter([legacyCollisionDoc], 'confirmed', makeLookup(['田中太郎']));
+    expect(result).to.deep.equal([]);
+  });
+
+  it('customerConfirmed:true + 同名衝突ありは、人間確定優先のためconfirmed側に残る(precheckCustomerIdentityの設計通り。JSDoc訂正の対象だった挙動をlock-inする)', () => {
+    const confirmedCollisionDoc = makeDoc({
+      id: 'confirmed-collision',
+      customerName: '田中太郎',
+      customerConfirmed: true,
+    });
+    const result = applyConfirmedFilter([confirmedCollisionDoc], 'confirmed', makeLookup(['田中太郎']));
+    expect(result.map(d => d.id)).to.deep.equal(['confirmed-collision']);
+  });
+
+  it('identityLookup省略時は従来通りisCustomerConfirmed()のみで判定する(後方互換)', () => {
+    const legacyCollisionDoc = makeDoc({ id: 'legacy-collision', customerName: '田中太郎' });
+    const result = applyConfirmedFilter([legacyCollisionDoc], 'confirmed');
+    expect(result.map(d => d.id)).to.deep.equal(['legacy-collision']);
   });
 });
 

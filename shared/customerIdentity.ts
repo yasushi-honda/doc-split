@@ -144,6 +144,12 @@ export function isValidCustomerSelection(name: string | null | undefined): boole
 export function findSameNameCollisionNames(customers: Array<{ name: string }>): Set<string> {
   const counts = new Map<string, number>();
   for (const c of customers) {
+    // 呼出元の型`Array<{ name: string }>`は実行時保証がない。Firestoreの生データを
+    // `as string`でキャストして渡す呼出元(useMasters.tsのfetchCustomers等)があるため、
+    // nameフィールド欠損マスター(過去に本番で実在確認済み、check-customer-master-integrity.js
+    // のidToRawName導入経緯参照)が1件でもあると、型ガードなしでは`.trim()`がTypeErrorで
+    // クラッシュする(2026-07-26、/code-review high候補で発覚)。
+    if (typeof c.name !== 'string') continue;
     // BE(customerAmbiguityGate.ts)はtrim済みのdoc.customerNameで完全一致クエリするため、
     // マスター名もtrimしてから集計しないと判定が食い違いうる(2026-07-26、本番マスターデータ
     // (kanameone/cocoro双方)で前後空白付きnameが実在しないことは確認済み。addCustomer()の

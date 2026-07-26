@@ -144,10 +144,15 @@ function isSameNameCollisionDoc(doc: Document, identityLookup: CustomerIdentityL
  *
  * #273: unit test 可能化のため export。hook 内部でのみ使用される helper。
  *
- * `identityLookup`を渡すと、`customerConfirmed:true`（人間確定済み）でも同姓同名の
- * 衝突が実在する書類は「未確定」側に残す(2026-07-26追加、Codex plan review指摘)。
- * 一覧画面の「同姓同名」バッジと表示の一貫性を保つため。省略時は従来通り
- * `isCustomerConfirmed()`のみで判定する。
+ * `identityLookup`を渡すと、レガシーdoc（`customerConfirmed`/`needsManualCustomerSelection`
+ * とも未設定）で同姓同名の衝突が実在する書類は「未確定」側に残す(2026-07-26追加、
+ * Codex plan review指摘)。`customerConfirmed:true`（人間確定済み）の書類は、同名衝突が
+ * 実在しても`resolveCustomerUnconfirmedReason()`(shared/customerIdentity.ts)が人間確定を
+ * 優先し衝突チェックへ到達しないため対象外のまま「確定」側に残る — 一覧画面の「同姓同名」
+ * バッジ(同一関数を使用)が同じ理由で表示されないため、表示との一貫性は保たれる
+ * (2026-07-26、/code-review high候補で当初のJSDocが「customerConfirmed:trueでも未確定に
+ * 残す」と誤記していたため実装に合わせて訂正)。省略時は従来通り`isCustomerConfirmed()`
+ * のみで判定する。
  */
 export function applyConfirmedFilter(
   docs: Document[],

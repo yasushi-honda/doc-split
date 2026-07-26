@@ -169,6 +169,21 @@ describe('planFaxDuplication (D3: 複製トリガー条件)', () => {
     expect(result.reason).to.equal('insufficientExactCandidates');
   });
 
+  it('候補名に前後空白が付いていても、trimしたうえでsameNameCollisionNamesと照合し除外する(Codex review-diff P2指摘の回帰防止、2026-07-26)', () => {
+    const result = planFaxDuplication({
+      flagEnabled: true,
+      alreadyDistributed: false,
+      alreadyConfirmedOrVerified: false,
+      sameNameCollisionNames: new Set(['田中太郎']), // findSameNameCollisionNames()はtrim済みキーを返す
+      candidates: [
+        candidate({ id: 'c1', name: ' 田中太郎 ', isDuplicate: false }), // マスター側の生値がuntrimmedのケース
+        candidate({ id: 'c2', name: '田中花子', isDuplicate: false }),
+      ],
+    });
+    expect(result.shouldDuplicate).to.equal(false);
+    expect(result.reason).to.equal('insufficientExactCandidates');
+  });
+
   it('sameNameCollisionNamesに含まれない名前の候補は、従来通り複製対象に含める(除外は衝突している名前のみに限定されること)', () => {
     const result = planFaxDuplication({
       flagEnabled: true,

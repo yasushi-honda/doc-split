@@ -95,6 +95,17 @@ describe('findSameNameCollisionNames', () => {
     ]);
     expect([...result]).to.deep.equal(['田中太郎']);
   });
+
+  it('nameフィールドが実行時にstringでない(欠損等)マスターがあってもクラッシュせずスキップする(2026-07-26追加、/code-review high候補で発覚したcrash risk回帰テスト)', () => {
+    const malformed = [
+      { name: '田中太郎' },
+      { name: undefined },
+      { name: '田中太郎' },
+      { name: null },
+    ] as unknown as Array<{ name: string }>;
+    expect(() => findSameNameCollisionNames(malformed)).to.not.throw();
+    expect([...findSameNameCollisionNames(malformed)]).to.deep.equal(['田中太郎']);
+  });
 });
 
 describe('precheckCustomerIdentity', () => {
