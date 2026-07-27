@@ -169,6 +169,31 @@ fi
 
 log_info "環境変数ファイル: $(basename $ENV_FILE)"
 
+# ===========================================
+# プロジェクトID整合性検証 (Issue #693)
+# ===========================================
+# $ENV_FILE の VITE_FIREBASE_PROJECT_ID が .firebaserc 由来の正しいプロジェクトID
+# ($PROJECT_ID)と一致するか、ビルド前に検証する。不一致のまま進めると、誤った
+# Firebase設定を埋め込んだUIが無警告でデプロイされる(import.meta.env.DEVは
+# ビルド時falseに固定されるため、devサーバー向けランタイムガードも本番ビルドでは
+# 効かない)。
+ENV_PROJECT_ID=$(grep -E '^VITE_FIREBASE_PROJECT_ID=' "$ENV_FILE" | head -1 | cut -d '=' -f2- | tr -d '[:space:]')
+if [ -z "$ENV_PROJECT_ID" ]; then
+    log_error "$(basename "$ENV_FILE") に VITE_FIREBASE_PROJECT_ID が見つかりません"
+    exit 1
+fi
+if [ "$ENV_PROJECT_ID" != "$PROJECT_ID" ]; then
+    log_error "プロジェクトID不整合を検出しました。デプロイを中止します。"
+    echo "  $(basename "$ENV_FILE") の VITE_FIREBASE_PROJECT_ID: $ENV_PROJECT_ID"
+    echo "  .firebaserc の '$PROJECT_ALIAS' エイリアス:          $PROJECT_ID"
+    echo ""
+    echo "誤ったプロジェクト向けのFirebase設定を埋め込んだままビルド・デプロイすると、"
+    echo "別クライアント向けUIが対象環境にデプロイされる危険があります。"
+    echo "$(basename "$ENV_FILE") の内容を確認してください。"
+    exit 1
+fi
+log_success "プロジェクトID整合性チェック通過 ($PROJECT_ALIAS: $ENV_PROJECT_ID)"
+
 # 現在の.env.localをバックアップ（元々存在しなかった場合は BACKUP_FILE="" のままとし、
 # デプロイ後に client 値の .env.local を残置しない。残置すると次の npm run dev が
 # 誤って本番プロジェクトを向くため: 恒久対策 #503系follow-up）
