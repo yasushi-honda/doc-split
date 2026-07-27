@@ -76,6 +76,21 @@ function unrelatedDocFields() {
   };
 }
 
+/**
+ * canonicalマスターの「更新対象外フィールド」に使う固定値セット(CLAUDE.md MUST検証用)。
+ * `shared/types.ts`のCustomerMaster型が持つフィールド(name/furigana/careManagerName/
+ * aliases/notes/isDuplicate)以外の任意フィールドが実運用のFirestoreドキュメントに
+ * 存在しても、tx.update()による部分更新で消えないことを検証する(code-review 11巡目
+ * 指摘対応、2026-07-27: documents側にはunrelatedDocFields()による同種の検証があったが、
+ * canonicalマスター側のtx.update(canonicalRef, masterUpdate)には対応する検証がなかった)。
+ */
+function unrelatedMasterFields() {
+  return {
+    createdAt: '2026-01-01T00:00:00.000Z',
+    customField: 'untouched-value',
+  };
+}
+
 async function seedCustomer(id: string, fields: Record<string, unknown>) {
   await db.doc(`masters/customers/items/${id}`).set(fields);
 }
@@ -140,6 +155,24 @@ test('--execute: 書類が多い方をcanonicalとして残し、書類を付け
 
   const winnerDocSnap = await db.doc('documents/doc-winner-1').get();
   assert.equal(winnerDocSnap.data()?.customerId, 'winner', 'canonical側の書類は変更されない');
+});
+
+test('--execute: canonicalマスターの更新対象外フィールドは変化しない(CLAUDE.md MUST、code-review 11巡目指摘対応)', async () => {
+  await seedCustomer('winner', { name: '奥村 志づ子', ...unrelatedMasterFields() }); // furigana欠損
+  await seedCustomer('loser', { name: '奥村志づ子', furigana: 'オクムラシヅコ' });
+  await seedDocument('doc-winner-1', { customerId: 'winner', customerName: '奥村 志づ子', ...unrelatedDocFields() });
+  await seedDocument('doc-winner-2', { customerId: 'winner', customerName: '奥村 志づ子', ...unrelatedDocFields() });
+  await seedDocument('doc-loser-1', { customerId: 'loser', customerName: '奥村志づ子', ...unrelatedDocFields() });
+
+  runScript(['--execute']);
+
+  const winnerSnap = await db.doc('masters/customers/items/winner').get();
+  const data = winnerSnap.data();
+  assert.equal(data?.furigana, 'オクムラシヅコ', '敗者から補完されaliases/furiganaが更新されること自体は確認済み');
+  const unrelated = unrelatedMasterFields();
+  for (const [key, value] of Object.entries(unrelated)) {
+    assert.deepEqual(data?.[key], value, `更新対象外フィールド ${key} が変化していないこと`);
+  }
 });
 
 test('--execute: 敗者から付け替えられた書類のcareManager/careManagerKeyがcanonical側の値に更新される(code-review指摘対応、2026-07-27)', async () => {

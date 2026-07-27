@@ -121,6 +121,30 @@ async function countDocumentsByCustomerId(customerId: string): Promise<number> {
   return snap.data().count;
 }
 
+/**
+ * documentのcustomerIdが書込み直前時点でも依然として`expectedCustomerId`のままであれば
+ * `payload`を書込み、そうでなければ何もせずfalseを返す(純粋なcustomerId一致判定+書込みの
+ * 組)。書類付け替え・careManagerName再補正の両方で同一の「書込み直前トランザクション
+ * 再検証」パターンを使っていたため、1箇所に集約する(code-review 11巡目指摘対応、
+ * 2026-07-27: 重複実装のままだと、将来の再検証ロジック変更(precondition追加・リトライ等)を
+ * 片方だけに適用してしまうリスクがあった。実際、round7で書類付け替えループに追加した
+ * 再検証がround8まで補正ループへ適用漏れになっていた前例がある)。
+ */
+async function repointDocumentIfCustomerIdMatches(
+  docRef: FirebaseFirestore.DocumentReference,
+  expectedCustomerId: string,
+  payload: ReturnType<typeof buildDocumentRepointPayload>
+): Promise<boolean> {
+  return db.runTransaction(async (tx) => {
+    const snap = await tx.get(docRef);
+    if (!snap.exists || snap.data()?.customerId !== expectedCustomerId) {
+      return false;
+    }
+    tx.update(docRef, payload);
+    return true;
+  });
+}
+
 interface BackupGroupEntry {
   canonical: CustomerRecord;
   losers: Array<{ master: CustomerRecord; affectedDocumentIds: string[] }>;
@@ -323,14 +347,7 @@ async function main(): Promise<void> {
           let skippedCount = 0;
           for (const docId of loserEntry.affectedDocumentIds) {
             const docRef = db.doc(`documents/${docId}`);
-            const wasRepointed = await db.runTransaction(async (tx) => {
-              const snap = await tx.get(docRef);
-              if (!snap.exists || snap.data()?.customerId !== loserEntry.master.id) {
-                return false;
-              }
-              tx.update(docRef, payload);
-              return true;
-            });
+            const wasRepointed = await repointDocumentIfCustomerIdMatches(docRef, loserEntry.master.id, payload);
             if (wasRepointed) {
               repointedDocumentIds.add(docId);
               repointedCount++;
@@ -394,14 +411,7 @@ async function main(): Promise<void> {
           let correctionSkippedCount = 0;
           for (const docId of repointedDocumentIds) {
             const docRef = db.doc(`documents/${docId}`);
-            const wasCorrected = await db.runTransaction(async (tx) => {
-              const snap = await tx.get(docRef);
-              if (!snap.exists || snap.data()?.customerId !== choice.canonical.id) {
-                return false;
-              }
-              tx.update(docRef, correctedPayload);
-              return true;
-            });
+            const wasCorrected = await repointDocumentIfCustomerIdMatches(docRef, choice.canonical.id, correctedPayload);
             if (wasCorrected) {
               correctedCount++;
             } else {
