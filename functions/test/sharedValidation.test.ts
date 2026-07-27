@@ -175,5 +175,18 @@ describe('#506 shared/officeMasterValidation', () => {
       const masters = [{ id: '', name: '' }];
       expect(computeIdEqualsNameMasters(masters).size).to.equal(0);
     });
+
+    it('複数件のid===nameマスターが混在する場合、全件をSetに蓄積する（ループ処理の回帰防止）', () => {
+      const masters = [
+        { id: 'かいと', name: 'かいと' },
+        { id: '福の里', name: '福の里' },
+        { id: 'auto-id-1', name: 'デイサービスさくら' },
+      ];
+      const result = computeIdEqualsNameMasters(masters);
+      expect(result.size).to.equal(2);
+      expect(result.has('かいと')).to.be.true;
+      expect(result.has('福の里')).to.be.true;
+      expect(result.has('auto-id-1')).to.be.false;
+    });
   });
 });

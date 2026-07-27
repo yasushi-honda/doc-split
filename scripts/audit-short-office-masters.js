@@ -130,6 +130,13 @@ async function main() {
   console.log(`=== doc.id === name パターン (Issue #707): ${idEqualsNameIds.size}件 ===\n`);
   if (idEqualsNameIds.size === 0) {
     console.log('該当なし\n');
+  } else if (!failOnIdEqualsName) {
+    // --fail-on-id-equals-name 未指定時 (scheduled audit の日次実行はこちら) は
+    // legitimate なケース(サンプルマスター等)でも件数が出るため、関連 documents の
+    // count クエリを伴う詳細表示は省略し、件数のみ記録する (code-reviewer指摘対応:
+    // 無関係な運用コスト・ログノイズを削減)。詳細確認は
+    // `--fail-on-id-equals-name` 付きで手動実行すること。
+    console.log(`(詳細表示は --fail-on-id-equals-name 指定時のみ。件数のみ記録)\n`);
   } else {
     for (const id of idEqualsNameIds) {
       const data = masterById.get(id) || {};
