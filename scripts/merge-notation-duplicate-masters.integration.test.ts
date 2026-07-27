@@ -222,6 +222,18 @@ test('--execute: furiganaが食い違うグループは統合しない(code-revi
   const aSnap = await db.doc('masters/customers/items/a').get();
   const bSnap = await db.doc('masters/customers/items/b').get();
   assert.ok(aSnap.exists && bSnap.exists, 'furigana食い違いは削除されず両方残る');
+
+  // 自動統合可能なグループが0件でも、手動確認が必要なexcludedGroupsが存在する場合は
+  // バックアップJSONを書き出す(code-review 6巡目指摘対応、2026-07-27: 従来はgroups.length
+  // ===0で即process.exit()しており、excludedGroupsの内容がstdoutにしか残らなかった)。
+  assert.ok(existsSync(backupPath), '自動統合対象が0件でもバックアップJSONは書き出される');
+  const backup = JSON.parse(readFileSync(backupPath, 'utf-8'));
+  assert.equal(backup.groups.length, 0);
+  assert.equal(backup.excludedGroups.length, 1);
+  assert.deepEqual(
+    backup.excludedGroups[0].members.map((m: { id: string }) => m.id).sort(),
+    ['a', 'b']
+  );
 });
 
 test('--execute: 完全一致([A]相当)の同姓同名グループは統合しない(守備範囲外)', async () => {
@@ -259,6 +271,11 @@ test('--execute: 完全一致サブグループを含む3件混在グループ�
     const snap = await db.doc(`documents/${docId}`).get();
     assert.equal(snap.data()?.customerId, docId.replace('doc', 'personA'), `${docId} のcustomerIdは変化しない`);
   }
+
+  assert.ok(existsSync(backupPath), '自動統合対象が0件でもバックアップJSONは書き出される(code-review 6巡目指摘対応)');
+  const backup = JSON.parse(readFileSync(backupPath, 'utf-8'));
+  assert.equal(backup.groups.length, 0);
+  assert.equal(backup.excludedGroups.length, 1);
 });
 
 test('バックアップJSONに敗者マスターの全フィールドと付け替え対象書類IDが記録される(dry-runでも出力)', async () => {

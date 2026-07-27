@@ -115,11 +115,16 @@ interface BackupGroupEntry {
   update: ReturnType<typeof buildMergedMasterUpdate>;
   // Phase 3実行後にのみ設定される。Phase1の`update`(全敗者ベースの計画)とは異なり、
   // 削除直前の再検証で確定したconfirmedLosersを基準にした「実際に適用された」内容
-  // (code-review 4巡目指摘対応、2026-07-27)。
+  // (code-review 4巡目指摘対応、2026-07-27)。グループ処理中に例外が発生した場合も
+  // 必ず設定する(error/repointedDocumentIdsのみ入る)。未設定のままだと、バックアップ
+  // JSON(復旧材料)だけを見た運用者が「Phase3が実行されなかった」のか「実行され途中で
+  // 失敗した」のか区別できない(code-review 6巡目指摘対応、2026-07-27)。
   appliedResult?: {
     confirmedLoserIds: string[];
     skippedLoserIds: string[];
     appliedUpdate: ReturnType<typeof buildMergedMasterUpdate> | null;
+    error?: string;
+    repointedDocumentIds?: string[];
   };
 }
 
@@ -159,8 +164,14 @@ async function main(): Promise<void> {
   console.log(`[B] 表記ゆれ重複候補: ${groups.length}組\n`);
 
   if (groups.length === 0) {
-    console.log('対象なし。終了します。');
-    process.exit(0);
+    // ここでprocess.exit()して早期returnしない。excludedGroups(手動確認が必要な候補)が
+    // 存在する場合、Phase2のバックアップ書き出しをスキップすると唯一の永続的なレビュー
+    // 材料が失われる(code-review 6巡目指摘対応、2026-07-27: run-ops-script.ymlの
+    // upload-artifactは`if-no-files-found: warn`のためファイル未生成時は警告のみで
+    // 継続し、stdoutはCI上のsecret maskingで欠落しうるためレビュー材料として信頼できない、
+    // 既存の`--backup-out`採用理由と同じ)。Phase1のループは0件のため実質no-opで、
+    // Phase2は空のgroups(または既存のexcludedGroups)を含むバックアップを書き出す。
+    console.log('対象なし(自動統合可能な表記ゆれグループはありません)。');
   }
 
   // Phase 1: 計画フェーズ。全グループの統合計画(canonical/losers/付け替え対象書類ID)を
@@ -245,6 +256,11 @@ async function main(): Promise<void> {
 
   if (execute) {
     for (const { choice, entry } of plannedGroups) {
+      // try/catchの外で宣言し、例外発生時もcatch節から参照できるようにする
+      // (code-review 6巡目指摘対応、2026-07-27: 途中まで書類が付け替え済みの状態で
+      // 例外が発生した場合、appliedResultに記録がないと復旧材料(バックアップJSON)から
+      // 「どの書類が既に付け替え済みか」を判別できなかった)。
+      const repointedDocumentIds = new Set<string>();
       try {
         // 書類付け替え。canonical自身のcareManagerNameが既に設定されていればそれを、
         // 未設定ならPhase1で全敗者(entry.update、confirmedLosers確定前)から計算した
@@ -265,6 +281,7 @@ async function main(): Promise<void> {
         for (const loserEntry of entry.losers) {
           for (const docId of loserEntry.affectedDocumentIds) {
             await db.doc(`documents/${docId}`).update(payload);
+            repointedDocumentIds.add(docId);
           }
           console.log(`  ✔ 「${loserEntry.master.name}」の書類${loserEntry.affectedDocumentIds.length}件を付け替え済み`);
         }
@@ -348,6 +365,16 @@ async function main(): Promise<void> {
       } catch (err) {
         failedGroups.push(choice.canonical.name);
         console.error(`  ❌ 「${choice.canonical.name}」グループの処理中にエラーが発生しました:`, err);
+        // 例外発生時もappliedResultを必ず設定する(code-review 6巡目指摘対応、2026-07-27)。
+        // repointedDocumentIdsにより、例外発生までに書類の付け替え自体は完了していた
+        // ケースを復旧材料(バックアップJSON)から判別できるようにする。
+        entry.appliedResult = {
+          confirmedLoserIds: [],
+          skippedLoserIds: [],
+          appliedUpdate: null,
+          error: err instanceof Error ? err.message : String(err),
+          repointedDocumentIds: [...repointedDocumentIds],
+        };
       }
       console.log('');
     }
