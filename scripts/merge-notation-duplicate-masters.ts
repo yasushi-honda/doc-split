@@ -328,11 +328,13 @@ async function main(): Promise<void> {
         // からマージ内容を計算して無条件でcanonicalへ反映した後に削除可否を個別判定して
         // いたため、削除がスキップされた敗者の生名/furigana等がcanonicalへ既に取り込まれ、
         // 削除されず生き残った敗者マスターとcanonicalの両方が同一人物のデータを保持する
-        // 不整合が生じえた)。
-        const recheckCounts = new Map<string, number>();
-        for (const loser of choice.losers) {
-          recheckCounts.set(loser.id, await countDocumentsByCustomerId(loser.id));
-        }
+        // 不整合が生じえた)。敗者間のクエリは互いに独立(読み取り専用)のため並列実行する
+        // (code-review 8巡目指摘対応、2026-07-27: Phase1の同型クエリ(code-review 5巡目
+        // 指摘対応)は並列化済みだったが、この再検証ループは適用漏れで直列のままだった)。
+        const recheckEntries = await Promise.all(
+          choice.losers.map(async (loser) => [loser.id, await countDocumentsByCustomerId(loser.id)] as const)
+        );
+        const recheckCounts = new Map<string, number>(recheckEntries);
         const { confirmedLosers, skippedLosers } = resolveConfirmedLosers(choice, recheckCounts);
         for (const loser of skippedLosers) {
           console.log(
@@ -357,12 +359,34 @@ async function main(): Promise<void> {
             careManagerName: finalCareManagerName,
           });
           // 上記の再検証でスキップされた書類(既に敗者から離れている)は対象に含めない。
-          // 実際に付け替え済み(repointedDocumentIds)の書類のみを補正する。
+          // 実際に付け替え済み(repointedDocumentIds)の書類のみを補正する。ここでも書込み
+          // 直前にcustomerIdがcanonicalのままかをトランザクション内で再検証する
+          // (code-review 8巡目指摘対応、2026-07-27: 直前の付け替えループはトランザクション
+          // 再検証を追加済みだったが、この補正ループは素の.update()のままで、同じレース
+          // クラス(第三者への再割当を上書きしてしまう)が残っていた)。
+          let correctedCount = 0;
+          let correctionSkippedCount = 0;
           for (const docId of repointedDocumentIds) {
-            await db.doc(`documents/${docId}`).update(correctedPayload);
+            const docRef = db.doc(`documents/${docId}`);
+            const wasCorrected = await db.runTransaction(async (tx) => {
+              const snap = await tx.get(docRef);
+              if (!snap.exists || snap.data()?.customerId !== choice.canonical.id) {
+                return false;
+              }
+              tx.update(docRef, correctedPayload);
+              return true;
+            });
+            if (wasCorrected) {
+              correctedCount++;
+            } else {
+              correctionSkippedCount++;
+            }
           }
           console.log(
-            `  ⚠️ 再検証でcareManagerName補完元が変わったため、付け替え済み書類のcareManagerを再補正しました(「${initialCareManagerName || '(空)'}」→「${finalCareManagerName || '(空)'}」)`
+            `  ⚠️ 再検証でcareManagerName補完元が変わったため、付け替え済み書類${correctedCount}件のcareManagerを再補正しました(「${initialCareManagerName || '(空)'}」→「${finalCareManagerName || '(空)'}」)` +
+              (correctionSkippedCount > 0
+                ? `(${correctionSkippedCount}件は再補正直前の再検証でcustomerIdがcanonicalから変化していたためスキップ)`
+                : '')
           );
         }
 
