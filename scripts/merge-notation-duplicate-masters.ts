@@ -120,8 +120,10 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
+  // Phase 1: 計画フェーズ。全グループの統合計画(canonical/losers/付け替え対象書類ID)を
+  // 読み取り専用で確定させる。書込みは一切行わない。
   let totalDocsRepointed = 0;
-  const backupEntries: BackupGroupEntry[] = [];
+  const plannedGroups: Array<{ choice: ReturnType<typeof pickCanonical>; entry: BackupGroupEntry }> = [];
 
   for (const group of groups) {
     const counts = new Map<string, number>();
@@ -151,34 +153,52 @@ async function main(): Promise<void> {
     if (update.furigana) console.log(`  → furigana補完: 「${update.furigana}」`);
     if (update.careManagerName) console.log(`  → careManagerName補完: 「${update.careManagerName}」`);
     if (update.notes) console.log(`  → notes補完: 「${update.notes}」`);
+    console.log('');
 
-    backupEntries.push({ canonical: choice.canonical, losers: loserEntries, update });
+    plannedGroups.push({ choice, entry: { canonical: choice.canonical, losers: loserEntries, update } });
+  }
 
-    if (execute) {
+  // Phase 2: バックアップ書き出し。破壊的な書込み(Phase 3)より必ず前に行う
+  // (evaluator指摘対応、2026-07-27: 従来はグループ単位のexecute直後に書き出しており、
+  // 途中のグループで例外が発生すると復旧材料が一切残らなかった)。dry-runでも出力され
+  // レビュー材料として使える。
+  const backupPayload = {
+    exportedAt: new Date().toISOString(),
+    projectId,
+    mode: execute ? 'execute' : 'dry-run',
+    excludedGroups: excludedGroups.map((g) => ({ members: g.members })),
+    groups: plannedGroups.map((p) => p.entry),
+  };
+  fs.writeFileSync(backupOut, JSON.stringify(backupPayload, null, 2));
+  console.log(`バックアップ/レビュー用JSONを保存しました: ${backupOut}\n`);
+
+  // Phase 3: 実行フェーズ(--executeのみ)。Phase 1で確定済みの計画に基づき書込みを行う。
+  if (execute) {
+    for (const { choice, entry } of plannedGroups) {
       const payload = buildDocumentRepointPayload(choice.canonical);
-      for (const loserEntry of loserEntries) {
+      for (const loserEntry of entry.losers) {
         for (const docId of loserEntry.affectedDocumentIds) {
           await db.doc(`documents/${docId}`).update(payload);
         }
-        console.log(`  ✔ 書類${loserEntry.affectedDocumentIds.length}件を付け替え済み`);
+        console.log(`  ✔ 「${loserEntry.master.name}」の書類${loserEntry.affectedDocumentIds.length}件を付け替え済み`);
       }
 
       const masterUpdate: Record<string, unknown> = {};
-      if (update.aliasesToAdd.length > 0) {
-        masterUpdate.aliases = admin.firestore.FieldValue.arrayUnion(...update.aliasesToAdd);
+      if (entry.update.aliasesToAdd.length > 0) {
+        masterUpdate.aliases = admin.firestore.FieldValue.arrayUnion(...entry.update.aliasesToAdd);
       }
-      if (update.furigana) masterUpdate.furigana = update.furigana;
-      if (update.careManagerName) masterUpdate.careManagerName = update.careManagerName;
-      if (update.notes) masterUpdate.notes = update.notes;
+      if (entry.update.furigana) masterUpdate.furigana = entry.update.furigana;
+      if (entry.update.careManagerName) masterUpdate.careManagerName = entry.update.careManagerName;
+      if (entry.update.notes) masterUpdate.notes = entry.update.notes;
       if (Object.keys(masterUpdate).length > 0) {
         await db.doc(`masters/customers/items/${choice.canonical.id}`).update(masterUpdate);
-        console.log('  ✔ canonicalマスターを更新済み');
+        console.log(`  ✔ 「${choice.canonical.name}」のcanonicalマスターを更新済み`);
       }
 
       for (const loser of choice.losers) {
-        // 削除直前の再検証(evaluator指摘対応): 書類再取得〜削除の間に新規docが
-        // このcustomerIdへ割り当てられていないか確認する。見つかった場合は削除のみ
-        // スキップする(付け替え自体は上記で既に完了済みのため実害は限定的)。
+        // 削除直前の再検証: 書類再取得〜削除の間に新規docがこのcustomerIdへ割り当て
+        // られていないか確認する。見つかった場合は削除のみスキップする(付け替え自体は
+        // 上記で既に完了済みのため実害は限定的)。
         const remaining = await countDocumentsByCustomerId(loser.id);
         if (remaining > 0) {
           console.log(
@@ -189,21 +209,11 @@ async function main(): Promise<void> {
         await db.doc(`masters/customers/items/${loser.id}`).delete();
         console.log(`  ✔ 敗者マスター(${loser.id.slice(0, 12)}…)を削除済み`);
       }
+      console.log('');
     }
-    console.log('');
   }
 
-  const backupPayload = {
-    exportedAt: new Date().toISOString(),
-    projectId,
-    mode: execute ? 'execute' : 'dry-run',
-    excludedGroups: excludedGroups.map((g) => ({ members: g.members })),
-    groups: backupEntries,
-  };
-  fs.writeFileSync(backupOut, JSON.stringify(backupPayload, null, 2));
-  console.log(`バックアップ/レビュー用JSONを保存しました: ${backupOut}`);
-
-  console.log(`\n合計: ${groups.length}組、書類${totalDocsRepointed}件${execute ? 'を付け替え' : 'が付け替え対象'}`);
+  console.log(`合計: ${groups.length}組、書類${totalDocsRepointed}件${execute ? 'を付け替え' : 'が付け替え対象'}`);
   console.log(`\n=== ${projectId} ${execute ? '実行完了' : 'dry-run完了(書き込みゼロ)'} ===`);
   process.exit(0);
 }
