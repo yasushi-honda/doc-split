@@ -52,6 +52,27 @@ test('groupNotationDuplicates: 全角スペース・半角スペース・中黒�
   assert.equal(groups[0].members.length, 3);
 });
 
+test('groupNotationDuplicates: いずれかのメンバーにisDuplicate:trueが立っている場合は対象外とする(code-review指摘対応、2026-07-27: 人間がforce-add UIで既に同姓同名の可能性を明示的に認識・登録した記録は自動統合しない)', () => {
+  const customers = [
+    customer({ id: 'a', name: '奥村 志づ子' }),
+    customer({ id: 'b', name: '奥村志づ子', isDuplicate: true }),
+  ];
+  assert.equal(groupNotationDuplicates(customers).length, 0);
+});
+
+test('findExcludedNotationGroups: isDuplicate:trueが立っているグループも除外グループとして可視化する', () => {
+  const customers = [
+    customer({ id: 'a', name: '奥村 志づ子' }),
+    customer({ id: 'b', name: '奥村志づ子', isDuplicate: true }),
+  ];
+  const excluded = findExcludedNotationGroups(customers);
+  assert.equal(excluded.length, 1);
+  assert.deepEqual(
+    excluded[0].members.map((c: CustomerRecord) => c.id).sort(),
+    ['a', 'b']
+  );
+});
+
 test('groupNotationDuplicates: 完全一致のペアが1組でも混在するグループは対象外とする(真の同姓同名の別人を誤統合しないため)', () => {
   // personA1/personA2は生名が完全一致(真の同姓同名候補、[A]相当)。personA3は表記ゆれ。
   // 正規化キーは3件とも同一になるが、内部に完全一致サブグループを含むため

@@ -135,9 +135,17 @@ async function main(): Promise<void> {
   const plannedGroups: Array<{ choice: ReturnType<typeof pickCanonical>; entry: BackupGroupEntry }> = [];
 
   for (const group of groups) {
+    // 全メンバーの書類一覧を`.get()`で1回だけ取得し、件数(canonical選定用)と
+    // 実際のdocument ID一覧(敗者の付け替え用)の両方をここから導出する
+    // (code-review指摘対応、2026-07-27: 旧実装は全メンバーにcount()を実行した後、
+    // 敗者についてのみ同一条件で改めて`.get()`しており、敗者分は毎回二重クエリだった)。
     const counts = new Map<string, number>();
+    const docsByMemberId = new Map<string, string[]>();
     for (const member of group.members) {
-      counts.set(member.id, await countDocumentsByCustomerId(member.id));
+      const docsSnap = await db.collection('documents').where('customerId', '==', member.id).get();
+      const docIds = docsSnap.docs.map((d) => d.id);
+      counts.set(member.id, docIds.length);
+      docsByMemberId.set(member.id, docIds);
     }
 
     const choice = pickCanonical(group, counts);
@@ -148,8 +156,7 @@ async function main(): Promise<void> {
 
     const loserEntries: BackupGroupEntry['losers'] = [];
     for (const loser of choice.losers) {
-      const docsSnap = await db.collection('documents').where('customerId', '==', loser.id).get();
-      const affectedDocumentIds = docsSnap.docs.map((d) => d.id);
+      const affectedDocumentIds = docsByMemberId.get(loser.id) ?? [];
       loserEntries.push({ master: loser, affectedDocumentIds });
       console.log(
         `  → 敗者: 「${loser.name}」(id=${loser.id.slice(0, 12)}…, 書類${affectedDocumentIds.length}件を付け替え)`

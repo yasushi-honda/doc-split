@@ -3,7 +3,11 @@
  *
  * `check-customer-master-integrity.js`の[B]表記ゆれ重複候補(正規化後は一致するが生文字列は
  * 相違、姓名間スペースの有無等)は、明示的な`isDuplicate`フラグが立たない=同姓同名の別人
- * ではないという判断(decision-maker確認済み)のもと、1件のマスターへ統合する。
+ * ではないという判断(decision-maker確認済み)のもと、1件のマスターへ統合する。この
+ * 「isDuplicateフラグが立っていないこと」は自動統合の必須条件であり、いずれかのメンバーに
+ * `isDuplicate:true`が立っているグループは`hasIsDuplicateFlag`により対象外にする
+ * (code-review指摘対応、2026-07-27: 旧実装はこの条件をコメントにのみ記述し実装では
+ * 一切チェックしていなかった)。
  *
  * 既存の「許容表記」機構(`CustomerMaster.aliases`、`functions/src/admin/masterOperations.ts`の
  * `addMasterAlias`と同型)を再利用し、敗者側の生名を勝者(canonical)のaliasesへ追加する。
@@ -48,6 +52,20 @@ function hasExactMatchSubset(members: CustomerRecord[]): boolean {
   return [...nameCounts.values()].some((count) => count > 1);
 }
 
+/**
+ * グループ内のいずれかのメンバーに`isDuplicate:true`が立っているか判定する(code-review
+ * 指摘対応、2026-07-27)。decision-maker指示の原文「同姓同名フラグが明示的になくて、
+ * 漢字などスペース以外は完全一致なら、それは同姓同名差分ではないと判断」は、isDuplicate
+ * フラグが明示的に立っている場合を自動統合の対象から除く前提条件を含んでいたが、旧実装は
+ * `isDuplicate`フィールドを`CustomerRecord`へ読み込むだけで実際には一切参照していなかった。
+ * `isDuplicate:true`は`MastersPage.tsx`の`handleForceAdd`(force-add UI)経由で人間が
+ * 「衝突警告を確認したうえで別レコードとして意図的に追加した」ことを示す記録であり、
+ * このフラグが立っているグループは自動統合せず`findExcludedNotationGroups`で手動確認へ回す。
+ */
+function hasIsDuplicateFlag(members: CustomerRecord[]): boolean {
+  return members.some((m) => m.isDuplicate);
+}
+
 function groupByNormalizedName(customers: CustomerRecord[]): NotationDuplicateGroup[] {
   const byNormalized = new Map<string, CustomerRecord[]>();
   for (const c of customers) {
@@ -80,9 +98,10 @@ export function partitionNotationGroups(customers: CustomerRecord[]): {
   excluded: NotationDuplicateGroup[];
 } {
   const all = groupByNormalizedName(customers);
+  const isExcluded = (members: CustomerRecord[]) => hasExactMatchSubset(members) || hasIsDuplicateFlag(members);
   return {
-    included: all.filter((g) => !hasExactMatchSubset(g.members)),
-    excluded: all.filter((g) => hasExactMatchSubset(g.members)),
+    included: all.filter((g) => !isExcluded(g.members)),
+    excluded: all.filter((g) => isExcluded(g.members)),
   };
 }
 
