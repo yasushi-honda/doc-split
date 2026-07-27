@@ -21,6 +21,7 @@ import { capPageText, MAX_SUMMARY_LENGTH } from '../utils/textCap';
 import type { SummaryField } from '../../../shared/types';
 import { buildSummaryGenerationRequest } from './summaryRequestBuilder';
 import { buildSummaryPrompt } from './summaryPromptBuilder';
+import { extractBlockedSummaryDetails, SummaryBlockedError } from './summaryErrorClassification';
 
 const PROJECT_ID = GCP_CONFIG.projectId;
 const LOCATION = GCP_CONFIG.location;
@@ -34,7 +35,9 @@ export const MIN_OCR_LENGTH_FOR_SUMMARY = 100;
  *
  * - 呼び出し前提: `ocrResult` は非空文字列。短文ガード (例: `length < 100`) は caller 責任。
  * - エラー時: throw する (catch は caller 責任)。
- *   - regenerateSummary: console.error 後 rethrow し onCall handler が internal error 化
+ *   - regenerateSummary: safeLogError 記録後 rethrow し onCall handler が HttpsError 化
+ *   - 空/ブロック応答 (安全フィルタ等) は SummaryBlockedError として throw する (#251 Scope3)。
+ *     空文字のまま返すと finishReason/safetyRatings が失われ silent failure になるため。
  */
 export async function generateSummaryCore(
   ocrResult: string,
@@ -64,6 +67,10 @@ export async function generateSummaryCore(
   );
 
   const rawSummary = (response.text || '').trim();
+
+  if (!rawSummary) {
+    throw new SummaryBlockedError(extractBlockedSummaryDetails(response));
+  }
 
   const usageMetadata = response.usageMetadata;
   // Issue #546: awaitしないとCloud Functions v2のコンテナ凍結でFirestore書込が

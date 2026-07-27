@@ -1,8 +1,8 @@
 /**
  * summary 経路 catch 句 logError 呼出契約テスト (Issue #266)
  *
- * 目的: regenerateSummary の summary 生成失敗 catch 句で、console.error だけで
- * なく logError (errors collection + 通知) が呼ばれ続けることを静的に lock-in する。
+ * 目的: regenerateSummary の summary 生成失敗 catch 句で logError (errors collection +
+ * 通知) が呼ばれ続けることを静的に lock-in する。
  * Issue #548-B1: ocrProcessor.ts の自動要約生成 (summaryPromise) は削除されたため、
  * 本契約の対象は regenerateSummary.ts のみ。ocrProcessor.ts 自体の safeLogError 呼出は
  * 下記 'logError/safeLogError params shape contract' で別途 lock-in する。
@@ -11,9 +11,11 @@
  * されると、documents は status:processed で完了し「summary が空」としか見えない。6 ヶ月後の
  * デバッグで原因不明となる silent failure を構造的に防ぐ。
  *
- * 方式: grep-based (docs/context/test-strategy.md §2.1 参照)。console.error メッセージを
- * anchor に、近傍 (±ANCHOR_WINDOW_LINES 行) の logError 呼出を検知する。anchor メッセージ変更で
- * test が失敗するが、意図的変更のメンテナンス負荷は silent swallow 防止の価値と trade-off。
+ * 方式: grep-based (docs/context/test-strategy.md §2.1 参照)。危険な外部呼出
+ * (`generateSummaryCore(`) を anchor に、近傍 (±ANCHOR_WINDOW_LINES 行) の logError 呼出を
+ * 検知する。Issue #251 Scope3 で console.error の重複 (safeLogError が内部で console.error も
+ * 出すため) を解消した際、anchor を console.error メッセージから呼出自体に付け替えた
+ * (console.error 削除に追従してテストが空振りしないよう設計)。
  *
  * 将来委譲: 現時点で委譲先なし (#178/#209 型 silent swallow 防止は summary 生成 catch 句の
  *          source 構造保護が本質のため恒久 contract として保持)
@@ -26,13 +28,13 @@ import { SAFE_LOG_ERROR_CALL } from './helpers/patterns';
 
 /**
  * summary 生成失敗 catch 句のアンカー定義。
- * anchor メッセージは console.error(...) 内の固定文字列で、catch 句内に残す前提。
- * console.error を削除して logError のみに移行する場合は本契約の設計見直しが必要。
+ * anchor は危険な外部呼出 (`generateSummaryCore(`) 自体で、try 句内に残る前提。
+ * generateSummaryCore の呼出箇所自体をリネーム/削除する場合は本契約の設計見直しが必要。
  */
 const SUMMARY_CATCH_ANCHORS = [
   {
     file: 'src/ocr/regenerateSummary.ts',
-    anchor: 'Failed to generate summary',
+    anchor: 'generateSummaryCore(',
     context: 'regenerateSummary rethrow-preceding catch',
   },
 ] as const;
@@ -101,7 +103,7 @@ describe('summary catch logError contract (#266)', () => {
       const absPath = resolve(process.cwd(), file);
       const source = readFileSync(absPath, 'utf-8');
 
-      it(`アンカー '${anchor}' が console.error 内に存在する`, () => {
+      it(`アンカー '${anchor}' が ${file} 内に存在する`, () => {
         expect(source).to.include(anchor);
       });
 
@@ -111,7 +113,7 @@ describe('summary catch logError contract (#266)', () => {
         expect(result.occurrenceCount).to.be.greaterThan(
           0,
           `アンカー '${anchor}' が ${file} に見つからない (0 occurrence)。` +
-            `catch 句の console.error メッセージが変更された可能性あり。`
+            `generateSummaryCore の呼出箇所がリネーム/削除された可能性あり。`
         );
 
         expect(result.ok).to.equal(

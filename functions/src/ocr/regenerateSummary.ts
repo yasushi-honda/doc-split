@@ -12,6 +12,7 @@ import { safeLogError } from '../utils/errorLogger';
 import type { SummaryField } from '../../../shared/types';
 import { buildSummaryFields } from './summaryRequestBuilder';
 import { generateSummaryCore, MIN_OCR_LENGTH_FOR_SUMMARY } from './summaryGenerator';
+import { classifySummaryError } from './summaryErrorClassification';
 import { resolveDetailFields, readDocWithDetail } from './documentDetail';
 
 const LOCATION = GCP_CONFIG.location;
@@ -74,27 +75,45 @@ export const regenerateSummary = functions.https.onCall(
       );
     }
 
-    // 要約生成 (Issue #214: 共通コアに委譲。本経路は error を rethrow して onCall の internal error 化)
+    // 要約生成 (Issue #214: 共通コアに委譲。本経路は error を rethrow して onCall の HttpsError 化)
     // Issue #266: rethrow 前に safeLogError で errors collection + 通知による検知を確保。
     // 順序根拠 (rules/error-handling.md § 1): 本経路は "状態復旧なし + 即 rethrow" のため、
     // ログ記録 → rethrow の順を採る。safeLogError は内部で try/catch 済、caller に波及しない。
+    // safeLogError呼出は内部でlogError経由のconsole.errorも出すため、ここでの重複 console.error は行わない。
     // onCall 呼出の client 側タイムアウトは Firebase 標準 70s、logError Firestore 書込 ~500ms で影響軽微。
+    // Issue #251 Scope3: 空/ブロック応答は generateSummaryCore が SummaryBlockedError を throw するため
+    // (finishReason/safetyRatings を保持したまま)、ここで !summary.text を再チェックする必要はない。
+    // quota/transient/blocked をエラー種別で HttpsError コードへ細分化し、client 側の再試行判断を助ける。
     let summary: SummaryField;
     try {
       summary = await generateSummaryCore(ocrResult, documentType);
     } catch (error) {
-      console.error('Failed to generate summary:', error);
+      const err = error instanceof Error ? error : new Error(String(error));
       await safeLogError({
-        error: error instanceof Error ? error : new Error(String(error)),
+        error: err,
         source: 'ocr',
         functionName: 'regenerateSummary',
         documentId: docId,
       });
-      throw error;
-    }
-
-    if (!summary.text) {
-      throw new functions.https.HttpsError('internal', '要約の生成に失敗しました');
+      switch (classifySummaryError(err)) {
+        case 'quota':
+          throw new functions.https.HttpsError(
+            'resource-exhausted',
+            'AI要約生成の割当上限に達しました。しばらく待って再試行してください'
+          );
+        case 'transient':
+          throw new functions.https.HttpsError(
+            'unavailable',
+            'AI要約生成サービスが一時的に利用できません。しばらく待って再試行してください'
+          );
+        case 'blocked':
+          throw new functions.https.HttpsError(
+            'failed-precondition',
+            'この書類の内容から要約を生成できませんでした'
+          );
+        default:
+          throw err;
+      }
     }
 
     // ドキュメント更新（Issue #209: 切り詰めメタデータも保存し後追い検出を可能にする）
