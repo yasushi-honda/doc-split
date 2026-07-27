@@ -15,6 +15,7 @@
  */
 
 import { normalizeText } from '../../functions/src/utils/similarity';
+import { buildCareManagerUpdate } from '../../functions/src/triggers/syncCareManagerLogic';
 
 // [B]検出の正規化は、既存のOCR名寄せロジック(functions/src/utils/similarity.ts)と
 // 同一の`normalizeText()`を再利用する(code-review指摘対応、2026-07-27: 従来は
@@ -196,13 +197,33 @@ export function buildMergedMasterUpdate(choice: CanonicalChoice): MergedMasterUp
 
 /**
  * 敗者マスターに紐づいていたdocumentへ適用するPartial Update payload。
- * customerId/customerNameの2キーのみ(CLAUDE.md MUST: 更新対象外フィールド不変)。
+ * customerId/customerName/careManager/careManagerKeyの4キーのみ
+ * (CLAUDE.md MUST: 更新対象外フィールド不変)。
+ *
+ * careManager/careManagerKeyの必要性(code-review指摘対応、2026-07-27):
+ * `functions/src/triggers/syncCareManager.ts`はcustomer masterの`careManagerName`が
+ * 変更された時のみ、その顧客に紐づくdocumentの`careManager`/`careManagerKey`を一括更新する
+ * トリガーである。本スクリプトが敗者の書類をcanonicalへ付け替える際、canonicalの
+ * `careManagerName`自体が変化しなければ(既に値が設定されているケース)このトリガーは
+ * 発火しないため、付け替えられた書類は敗者側の古い担当ケアマネのままになりうる。
+ * `buildCareManagerUpdate`(syncCareManagerLogic.tsのSSoT)を直接使い、書類の付け替えと
+ * 同時にcanonical側の正しい担当ケアマネへ揃える。
+ *
+ * 呼出元は`canonical`にPhase1時点の値ではなく、`buildMergedMasterUpdate`による
+ * careManagerName補完後の最終値を渡すこと(補完でcanonical側が初めて設定される
+ * ケースを正しく反映するため)。
  */
 export function buildDocumentRepointPayload(canonical: CustomerRecord): {
   customerId: string;
   customerName: string;
+  careManager: string | null;
+  careManagerKey: string;
 } {
-  return { customerId: canonical.id, customerName: canonical.name };
+  return {
+    customerId: canonical.id,
+    customerName: canonical.name,
+    ...buildCareManagerUpdate(canonical.careManagerName),
+  };
 }
 
 export interface ConfirmedLosersResult {

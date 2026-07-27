@@ -142,6 +142,62 @@ test('--execute: 書類が多い方をcanonicalとして残し、書類を付け
   assert.equal(winnerDocSnap.data()?.customerId, 'winner', 'canonical側の書類は変更されない');
 });
 
+test('--execute: 敗者から付け替えられた書類のcareManager/careManagerKeyがcanonical側の値に更新される(code-review指摘対応、2026-07-27)', async () => {
+  await seedCustomer('winner', { name: '奥村 志づ子', careManagerName: '佐藤 花子' });
+  await seedCustomer('loser', { name: '奥村志づ子', careManagerName: '田端 正樹' });
+  await seedDocument('doc-winner-1', {
+    customerId: 'winner',
+    customerName: '奥村 志づ子',
+    careManager: '佐藤 花子',
+    careManagerKey: '佐藤 花子',
+    ...unrelatedDocFields(),
+  });
+  // 敗者の書類は元々syncCareManagerトリガーで敗者の担当ケアマネ「田端 正樹」が反映されていた想定。
+  await seedDocument('doc-loser-1', {
+    customerId: 'loser',
+    customerName: '奥村志づ子',
+    careManager: '田端 正樹',
+    careManagerKey: '田端 正樹',
+    ...unrelatedDocFields(),
+  });
+
+  runScript(['--execute']);
+
+  const docSnap = await db.doc('documents/doc-loser-1').get();
+  const data = docSnap.data();
+  assert.equal(data?.customerId, 'winner');
+  assert.equal(data?.careManager, '佐藤 花子', '敗者側の古い担当ケアマネではなくcanonical側の値になること');
+  assert.equal(data?.careManagerKey, '佐藤 花子');
+
+  // canonical側の書類は変更されない
+  const winnerDocSnap = await db.doc('documents/doc-winner-1').get();
+  assert.equal(winnerDocSnap.data()?.careManager, '佐藤 花子');
+});
+
+test('--execute: canonicalのcareManagerName欠損時、敗者から補完された値が付け替え後の書類のcareManagerにも反映される', async () => {
+  await seedCustomer('winner', { name: '奥村 志づ子' }); // careManagerName欠損
+  await seedCustomer('loser', { name: '奥村志づ子', careManagerName: '田端 正樹' });
+  // winnerの書類数をloserより多くし、書類数ポリシーでwinnerが確実にcanonicalに選ばれるようにする
+  await seedDocument('doc-winner-1', { customerId: 'winner', customerName: '奥村 志づ子', ...unrelatedDocFields() });
+  await seedDocument('doc-winner-2', { customerId: 'winner', customerName: '奥村 志づ子', ...unrelatedDocFields() });
+  await seedDocument('doc-loser-1', {
+    customerId: 'loser',
+    customerName: '奥村志づ子',
+    careManager: '田端 正樹',
+    careManagerKey: '田端 正樹',
+    ...unrelatedDocFields(),
+  });
+
+  runScript(['--execute']);
+
+  const winnerSnap = await db.doc('masters/customers/items/winner').get();
+  assert.equal(winnerSnap.data()?.careManagerName, '田端 正樹');
+
+  const docSnap = await db.doc('documents/doc-loser-1').get();
+  assert.equal(docSnap.data()?.careManager, '田端 正樹');
+  assert.equal(docSnap.data()?.careManagerKey, '田端 正樹');
+});
+
 test('--execute: canonicalのfurigana欠損時のみ敗者の値で補完し、既存値は上書きしない', async () => {
   await seedCustomer('winner', { name: '奥村 志づ子' }); // furigana欠損
   await seedCustomer('loser', { name: '奥村志づ子', furigana: 'オクムラシヅコ' });

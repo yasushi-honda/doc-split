@@ -18,11 +18,18 @@
  * - `--execute`前に、`cleanup-ambiguous-collision-docs.ts`と同型の`--backup-out`で
  *   敗者マスターの全フィールド+付け替え対象書類IDをJSONへ書き出す(dry-runでも出力、
  *   レビュー材料兼復旧材料)。
- * - 敗者マスター削除の直前に、そのcustomerIdを参照するdocumentが新たに増えていないか
- *   再検証する(本番kanameoneはGmail取込が継続稼働中のため、書類再取得と削除の間に
- *   新規docがloserのcustomerIdへ割り当てられるレースを完全には排除できない。再検証で
- *   検出した場合はそのグループの削除のみスキップし、書類の付け替え自体は既に完了済みの
- *   ため実害は限定的)。
+ * - 敗者マスター削除の直前(書類付け替え・canonicalマスター更新の直後)に、そのcustomerId
+ *   を参照するdocumentが新たに増えていないか再検証する(本番kanameoneはGmail取込が継続
+ *   稼働中のため、書類再取得と削除の間に新規docがloserのcustomerIdへ割り当てられる
+ *   レースを完全には排除できない)。検出した場合はその敗者の削除・マージのみスキップし、
+ *   書類の付け替え自体は既に完了済みのため実害は限定的。再検証は必ず書類付け替えの
+ *   「後」に行うこと(2026-07-27実装時に自己検出: 付け替えより前に行うと、まだ
+ *   付け替えていない敗者自身の既知の書類を「新規レース」と誤検知してしまう)。
+ * - 書類付け替え時のcareManager/careManagerKeyは、canonical自身の値があればそれを、
+ *   なければPhase1時点(全敗者、confirmedLosers確定前)の補完値を使う(code-review指摘
+ *   対応、2026-07-27: `functions/src/triggers/syncCareManager.ts`はcanonical自身の
+ *   careManagerNameが変化した時のみ発火するトリガーのため、旧実装はcustomerId/
+ *   customerNameのみ更新し敗者側の古い担当ケアマネの値が書類に残り続けていた)。
  * - 計画(Phase1)→バックアップ書出し(Phase2)→実行(Phase3)の3段階構成(evaluator再指摘
  *   対応、2026-07-27: 旧実装はグループ単位のexecute直後にバックアップを書き出しており、
  *   途中のグループで例外が発生すると復旧材料が一切残らなかった)。この分離により、複数
@@ -198,7 +205,21 @@ async function main(): Promise<void> {
   if (execute) {
     for (const { choice, entry } of plannedGroups) {
       try {
-        const payload = buildDocumentRepointPayload(choice.canonical);
+        // 書類付け替え。canonical自身のcareManagerNameが既に設定されていればそれを、
+        // 未設定ならPhase1で全敗者(entry.update、confirmedLosers確定前)から計算した
+        // 補完値を使う(code-review指摘対応、2026-07-27: 旧実装はcustomerId/customerName
+        // のみ更新しcareManager/careManagerKeyへ触れず、敗者側の古い担当ケアマネの値が
+        // 付け替え後も残ってしまっていた。functions/src/triggers/syncCareManager.tsは
+        // canonical自身のcareManagerName値が変化した時のみ発火するため、既に値が設定済み
+        // のcanonicalへ統合する場合はトリガーが発火せず書類側が永久に古いままになりえた)。
+        // ここでconfirmedLosers確定前のPhase1計算値を使うのは、削除直前の再検証(後述)を
+        // 書類付け替えの「後」・削除の直前という一等最小の間隔に保つため(1回目の
+        // 再検証を書類付け替えより先に行うと、まだ付け替えていない敗者自身の既知の書類を
+        // 「新規レース」と誤検知してしまう設計上の罠があった、2026-07-27実装時に自己検出)。
+        const payload = buildDocumentRepointPayload({
+          ...choice.canonical,
+          careManagerName: choice.canonical.careManagerName || entry.update.careManagerName || '',
+        });
         for (const loserEntry of entry.losers) {
           for (const docId of loserEntry.affectedDocumentIds) {
             await db.doc(`documents/${docId}`).update(payload);
@@ -206,10 +227,13 @@ async function main(): Promise<void> {
           console.log(`  ✔ 「${loserEntry.master.name}」の書類${loserEntry.affectedDocumentIds.length}件を付け替え済み`);
         }
 
-        // 削除直前の再検証を先に行い、確定した敗者(confirmedLosers)のみをマージ・削除
-        // 対象にする(code-review指摘対応、2026-07-27: 旧実装はPhase1時点の全敗者から
-        // マージ内容を計算して無条件でcanonicalへ反映した後に削除可否を個別判定していた
-        // ため、削除がスキップされた敗者の生名/furigana等がcanonicalへ既に取り込まれ、
+        // 削除直前の再検証: 書類再取得〜削除の間に新規docがこのcustomerIdへ割り当て
+        // られていないか確認する。書類付け替えの直後・削除の直前に行うことで、
+        // 「まだ付け替えていない自分自身の既知の書類」を誤って検知しない
+        // (evaluator指摘対応、2026-07-27)。確定した敗者(confirmedLosers)のみをマージ・
+        // 削除対象にする(code-review指摘対応、2026-07-27: 旧実装はPhase1時点の全敗者
+        // からマージ内容を計算して無条件でcanonicalへ反映した後に削除可否を個別判定して
+        // いたため、削除がスキップされた敗者の生名/furigana等がcanonicalへ既に取り込まれ、
         // 削除されず生き残った敗者マスターとcanonicalの両方が同一人物のデータを保持する
         // 不整合が生じえた)。
         const recheckCounts = new Map<string, number>();

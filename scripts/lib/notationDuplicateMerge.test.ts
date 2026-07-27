@@ -215,11 +215,32 @@ test('buildMergedMasterUpdate: canonicalに既にnotesがある場合は上書�
   assert.equal(update.notes, undefined);
 });
 
-test('buildDocumentRepointPayload: customerId/customerNameの2キーのみを持つペイロードを返す(Partial Update不変、CLAUDE.md MUST)', () => {
-  const canonical = customer({ id: 'a', name: '奥村 志づ子' });
+test('buildDocumentRepointPayload: customerId/customerName/careManager/careManagerKeyの4キーのみを持つペイロードを返す(Partial Update不変、CLAUDE.md MUST)', () => {
+  const canonical = customer({ id: 'a', name: '奥村 志づ子', careManagerName: '佐藤 花子' });
   const payload = buildDocumentRepointPayload(canonical);
-  assert.deepEqual(Object.keys(payload).sort(), ['customerId', 'customerName']);
-  assert.deepEqual(payload, { customerId: 'a', customerName: '奥村 志づ子' });
+  assert.deepEqual(Object.keys(payload).sort(), ['careManager', 'careManagerKey', 'customerId', 'customerName']);
+  assert.deepEqual(payload, {
+    customerId: 'a',
+    customerName: '奥村 志づ子',
+    careManager: '佐藤 花子',
+    careManagerKey: '佐藤 花子',
+  });
+});
+
+test('buildDocumentRepointPayload: careManagerName未設定のcanonicalではcareManager:null/careManagerKey:\'\'を返す(functions/src/triggers/syncCareManagerLogic.tsのbuildCareManagerUpdateと同一契約)', () => {
+  const canonical = customer({ id: 'a', name: '奥村 志づ子', careManagerName: '' });
+  const payload = buildDocumentRepointPayload(canonical);
+  assert.equal(payload.careManager, null);
+  assert.equal(payload.careManagerKey, '');
+});
+
+test('buildDocumentRepointPayload: 敗者から付け替えられた書類はcanonical側のcareManagerで上書きされる(code-review指摘対応、2026-07-27: 従来はcustomerId/customerNameのみ更新しcareManager/careManagerKeyが敗者側の古い値のまま残っていた)', () => {
+  // 敗者の書類には元々「田端 正樹」(敗者の担当ケアマネ)がsyncCareManagerトリガーで反映されていた想定。
+  // canonicalの担当ケアマネは「佐藤 花子」で、customerAmbiguityGate.tsのcareManagerName補完は
+  // 発生しない(canonical側は既に設定済みのため)。付け替え後の書類はcanonical側の値を持つべき。
+  const canonical = customer({ id: 'a', name: '奥村 志づ子', careManagerName: '佐藤 花子' });
+  const payload = buildDocumentRepointPayload(canonical);
+  assert.equal(payload.careManager, '佐藤 花子', '敗者側の古い担当ケアマネ「田端 正樹」ではなくcanonical側の値になること');
 });
 
 test('resolveConfirmedLosers: 削除直前の再検証で参照書類が0件の敗者のみconfirmedLosersに含める', () => {
