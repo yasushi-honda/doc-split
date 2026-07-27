@@ -210,6 +210,20 @@ test('--execute: canonicalのfurigana欠損時のみ敗者の値で補完し、�
   assert.equal(winnerSnap.data()?.furigana, 'オクムラシヅコ');
 });
 
+test('--execute: furiganaが食い違うグループは統合しない(code-review 5巡目指摘対応、2026-07-27: isDuplicateフラグに依存しない安全網)', async () => {
+  await seedCustomer('a', { name: '奥村 志づ子', furigana: 'オクムラシヅコ' });
+  await seedCustomer('b', { name: '奥村志づ子', furigana: 'オクムラユキコ' });
+  await seedDocument('doc-a', { customerId: 'a', customerName: '奥村 志づ子', ...unrelatedDocFields() });
+  await seedDocument('doc-b', { customerId: 'b', customerName: '奥村志づ子', ...unrelatedDocFields() });
+
+  const result = runScript(['--execute']);
+  assert.match(result.stdout, /対象なし/);
+
+  const aSnap = await db.doc('masters/customers/items/a').get();
+  const bSnap = await db.doc('masters/customers/items/b').get();
+  assert.ok(aSnap.exists && bSnap.exists, 'furigana食い違いは削除されず両方残る');
+});
+
 test('--execute: 完全一致([A]相当)の同姓同名グループは統合しない(守備範囲外)', async () => {
   await seedCustomer('personA', { name: '田中太郎' });
   await seedCustomer('personB', { name: '田中太郎' });
@@ -234,7 +248,7 @@ test('--execute: 完全一致サブグループを含む3件混在グループ�
   await seedDocument('doc3', { customerId: 'personA3', customerName: '田中 太郎', ...unrelatedDocFields() });
 
   const result = runScript(['--execute']);
-  assert.match(result.stdout, /完全一致サブグループ.*含むため自動統合の対象外/);
+  assert.match(result.stdout, /自動統合の対象外です\(完全一致の同姓同名候補混在\/isDuplicateフラグ\/furigana食い違いのいずれか\)/);
   assert.match(result.stdout, /対象なし/);
 
   for (const id of ['personA1', 'personA2', 'personA3']) {

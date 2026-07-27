@@ -75,6 +75,43 @@ test('findExcludedNotationGroups: isDuplicate:trueが立っているグループ
   );
 });
 
+test('groupNotationDuplicates: furiganaが2件以上で食い違うグループは対象外とする(code-review 5巡目指摘対応、2026-07-27: isDuplicateフラグが立たないまま別人が登録されうる経路への安全網)', () => {
+  const customers = [
+    customer({ id: 'a', name: '奥村 志づ子', furigana: 'オクムラシヅコ' }),
+    customer({ id: 'b', name: '奥村志づ子', furigana: 'オクムラユキコ' }),
+  ];
+  assert.equal(groupNotationDuplicates(customers).length, 0);
+});
+
+test('findExcludedNotationGroups: furigana食い違いグループも除外グループとして可視化する', () => {
+  const customers = [
+    customer({ id: 'a', name: '奥村 志づ子', furigana: 'オクムラシヅコ' }),
+    customer({ id: 'b', name: '奥村志づ子', furigana: 'オクムラユキコ' }),
+  ];
+  const excluded = findExcludedNotationGroups(customers);
+  assert.equal(excluded.length, 1);
+  assert.deepEqual(
+    excluded[0].members.map((c: CustomerRecord) => c.id).sort(),
+    ['a', 'b']
+  );
+});
+
+test('groupNotationDuplicates: 片方のみfuriganaが欠損している場合は食い違い扱いにしない(欠損側は補完対象)', () => {
+  const customers = [
+    customer({ id: 'a', name: '奥村 志づ子' }), // furigana欠損
+    customer({ id: 'b', name: '奥村志づ子', furigana: 'オクムラシヅコ' }),
+  ];
+  assert.equal(groupNotationDuplicates(customers).length, 1, 'furiganaが両方揃って食い違う場合のみ対象外にする');
+});
+
+test('groupNotationDuplicates: 双方furiganaが同一なら食い違い扱いにしない(通常の表記ゆれ)', () => {
+  const customers = [
+    customer({ id: 'a', name: '奥村 志づ子', furigana: 'オクムラシヅコ' }),
+    customer({ id: 'b', name: '奥村志づ子', furigana: 'オクムラシヅコ' }),
+  ];
+  assert.equal(groupNotationDuplicates(customers).length, 1);
+});
+
 test('groupNotationDuplicates: 完全一致のペアが1組でも混在するグループは対象外とする(真の同姓同名の別人を誤統合しないため)', () => {
   // personA1/personA2は生名が完全一致(真の同姓同名候補、[A]相当)。personA3は表記ゆれ。
   // 正規化キーは3件とも同一になるが、内部に完全一致サブグループを含むため

@@ -15,6 +15,11 @@
  * - 完全一致([A]、真の同姓同名候補)がグループ内に紛れ込んでいる場合は
  *   `groupNotationDuplicates`が丸ごと対象外にする。除外グループは`findExcludedNotationGroups`
  *   で可視化し、コンソールへ警告出力する(自動統合はせず手動確認へ回す)。
+ * - `isDuplicate`フラグは自動統合を許可する側の唯一の安全網にはできない(force-addは衝突
+ *   ペアの片側にしか付与せず、`updateCustomer`には重複チェックが一切ないことが
+ *   `functions/src/drive/customerAmbiguityGate.ts`で既に文書化されている)ため、furigana
+ *   (読み仮名)が2件以上で食い違うグループも対象外にする(code-review 5巡目指摘対応、
+ *   2026-07-27)。
  * - `--execute`前に、`cleanup-ambiguous-collision-docs.ts`と同型の`--backup-out`で
  *   敗者マスターの全フィールド+付け替え対象書類IDをJSONへ書き出す(dry-runでも出力、
  *   レビュー材料兼復旧材料)。
@@ -130,11 +135,23 @@ async function main(): Promise<void> {
   const { included: groups, excluded: excludedGroups } = partitionNotationGroups(customers);
 
   if (excludedGroups.length > 0) {
+    // 除外理由は完全一致サブグループ混在/isDuplicateフラグ/furigana食い違いのいずれか
+    // (partitionNotationGroupsのisExcluded参照)。手動確認しやすいよう、check-customer
+    // -master-integrity.jsの[A]診断出力と同様にfurigana/isDuplicateを併記する
+    // (code-review 5巡目指摘対応、2026-07-27: furigana食い違い安全網の追加により
+    // 除外理由が「完全一致サブグループ」固定のメッセージでは不正確になったため)。
     console.log(
-      `⚠️ ${excludedGroups.length}組は完全一致サブグループ(真の同姓同名候補)を含むため自動統合の対象外です。手動確認してください:`
+      `⚠️ ${excludedGroups.length}組は自動統合の対象外です(完全一致の同姓同名候補混在/isDuplicateフラグ/furigana食い違いのいずれか)。手動確認してください:`
     );
     for (const g of excludedGroups) {
-      console.log(`  ${g.members.map((m) => `「${m.name}」(id=${m.id.slice(0, 12)}…)`).join(' / ')}`);
+      console.log(
+        `  ${g.members
+          .map(
+            (m) =>
+              `「${m.name}」(id=${m.id.slice(0, 12)}…, isDuplicate=${m.isDuplicate}, フリガナ=${m.furigana || '(欠損)'})`
+          )
+          .join(' / ')}`
+      );
     }
     console.log('');
   }
@@ -156,13 +173,20 @@ async function main(): Promise<void> {
     // 実際のdocument ID一覧(敗者の付け替え用)の両方をここから導出する
     // (code-review指摘対応、2026-07-27: 旧実装は全メンバーにcount()を実行した後、
     // 敗者についてのみ同一条件で改めて`.get()`しており、敗者分は毎回二重クエリだった)。
+    // メンバー間のクエリは互いに独立(読み取り専用・書込みなし)のため並列実行する
+    // (code-review 5巡目指摘対応、2026-07-27: 旧実装はfor文内でawaitしておりN件の
+    // メンバーがいるグループではN回分のラウンドトリップが直列に積み上がっていた)。
     const counts = new Map<string, number>();
     const docsByMemberId = new Map<string, string[]>();
-    for (const member of group.members) {
-      const docsSnap = await db.collection('documents').where('customerId', '==', member.id).get();
-      const docIds = docsSnap.docs.map((d) => d.id);
-      counts.set(member.id, docIds.length);
-      docsByMemberId.set(member.id, docIds);
+    const memberDocs = await Promise.all(
+      group.members.map(async (member) => {
+        const docsSnap = await db.collection('documents').where('customerId', '==', member.id).get();
+        return { memberId: member.id, docIds: docsSnap.docs.map((d) => d.id) };
+      })
+    );
+    for (const { memberId, docIds } of memberDocs) {
+      counts.set(memberId, docIds.length);
+      docsByMemberId.set(memberId, docIds);
     }
 
     const choice = pickCanonical(group, counts);

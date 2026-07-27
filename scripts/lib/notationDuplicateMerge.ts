@@ -9,6 +9,13 @@
  * (code-review指摘対応、2026-07-27: 旧実装はこの条件をコメントにのみ記述し実装では
  * 一切チェックしていなかった)。
  *
+ * `isDuplicate`フラグは自動統合を許可する側の唯一の安全網にはできない(`customerAmbiguityGate.ts`
+ * が既に文書化している通り、force-addは衝突ペアの片側にしか付与せず、`updateCustomer`には
+ * 重複チェックが一切ない)ため、furigana(読み仮名)が2件以上で食い違うグループも
+ * `hasConflictingFurigana`により対象外にする(code-review 5巡目指摘対応、2026-07-27:
+ * スペースの有無だけが異なる別人がフロントエンドの重複チェックを経由せず登録されうる
+ * 経路が既存コードに存在するため、独立したシグナルで安全網を補強する)。
+ *
  * 既存の「許容表記」機構(`CustomerMaster.aliases`、`functions/src/admin/masterOperations.ts`の
  * `addMasterAlias`と同型)を再利用し、敗者側の生名を勝者(canonical)のaliasesへ追加する。
  * 新規の仕組みは導入しない。
@@ -67,6 +74,27 @@ function hasIsDuplicateFlag(members: CustomerRecord[]): boolean {
   return members.some((m) => m.isDuplicate);
 }
 
+/**
+ * グループ内の2件以上が、furigana(読み仮名)を共に保持しているにも関わらず異なる値を
+ * 持つか判定する(code-review 5巡目指摘対応、2026-07-27)。
+ *
+ * `isDuplicate`フラグを自動統合の唯一の安全網にできない理由: `functions/src/drive/
+ * customerAmbiguityGate.ts`が既に文書化している通り、(1)`MastersPage.tsx`の
+ * `handleForceAdd`は衝突ペアの新規追加側にのみ`isDuplicate:true`を付与し既存側は
+ * 更新しない、(2)`useMasters.ts`の`updateCustomer`(改名含む)には重複チェックが
+ * 一切ない、(3)`checkCustomerDuplicate`が使う`normalizeName`(`frontend/src/lib/
+ * textNormalizer.ts`)はスペースを圧縮するのみで内部の単一スペースは除去しないため
+ * (本モジュールが使う`normalizeText`は全スペースを除去する非対称性がある)、スペースの
+ * 有無だけが異なる別人がフロントエンドの重複チェックを一度も経由せず登録されうる。
+ * furiganaは同一人物であれば通常一致するはずの独立フィールドであり、`isDuplicate`に
+ * 依存しない「別人の疑い」シグナルとして使う。careManagerName(担当ケアマネ異動により
+ * 正当に変わりうる)は対象に含めない。
+ */
+function hasConflictingFurigana(members: CustomerRecord[]): boolean {
+  const furiganaValues = members.map((m) => m.furigana).filter((f) => f !== '');
+  return new Set(furiganaValues).size > 1;
+}
+
 function groupByNormalizedName(customers: CustomerRecord[]): NotationDuplicateGroup[] {
   const byNormalized = new Map<string, CustomerRecord[]>();
   for (const c of customers) {
@@ -99,7 +127,8 @@ export function partitionNotationGroups(customers: CustomerRecord[]): {
   excluded: NotationDuplicateGroup[];
 } {
   const all = groupByNormalizedName(customers);
-  const isExcluded = (members: CustomerRecord[]) => hasExactMatchSubset(members) || hasIsDuplicateFlag(members);
+  const isExcluded = (members: CustomerRecord[]) =>
+    hasExactMatchSubset(members) || hasIsDuplicateFlag(members) || hasConflictingFurigana(members);
   return {
     included: all.filter((g) => !isExcluded(g.members)),
     excluded: all.filter((g) => isExcluded(g.members)),
