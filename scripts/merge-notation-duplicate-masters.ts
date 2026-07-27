@@ -44,11 +44,11 @@ import * as fs from 'fs';
 import * as path from 'path';
 import {
   CustomerRecord,
-  groupNotationDuplicates,
-  findExcludedNotationGroups,
+  partitionNotationGroups,
   pickCanonical,
   buildMergedMasterUpdate,
   buildDocumentRepointPayload,
+  resolveConfirmedLosers,
 } from './lib/notationDuplicateMerge';
 
 const projectId = process.env.FIREBASE_PROJECT_ID;
@@ -107,8 +107,10 @@ async function main(): Promise<void> {
   console.log('---\n');
 
   const customers = await fetchAllCustomers();
-  const groups = groupNotationDuplicates(customers);
-  const excludedGroups = findExcludedNotationGroups(customers);
+  // partitionNotationGroups()は1回のグルーピングでincluded/excludedを同時に返す
+  // (code-review指摘対応、2026-07-27: groupNotationDuplicates/findExcludedNotationGroupsを
+  // 続けて呼ぶと同じグルーピング処理が2回走っていた)。
+  const { included: groups, excluded: excludedGroups } = partitionNotationGroups(customers);
 
   if (excludedGroups.length > 0) {
     console.log(
@@ -180,49 +182,77 @@ async function main(): Promise<void> {
   console.log(`バックアップ/レビュー用JSONを保存しました: ${backupOut}\n`);
 
   // Phase 3: 実行フェーズ(--executeのみ)。Phase 1で確定済みの計画に基づき書込みを行う。
+  // グループ単位でtry/catchし、1グループの失敗が残り全グループを無音で巻き込まないように
+  // する(code-review指摘対応、2026-07-27: 旧実装は例外がmain().catch()まで伝播し
+  // process.exit(1)するのみで、途中グループの成功/失敗が要約されなかった)。
+  let succeededGroupCount = 0;
+  const failedGroups: string[] = [];
+
   if (execute) {
     for (const { choice, entry } of plannedGroups) {
-      const payload = buildDocumentRepointPayload(choice.canonical);
-      for (const loserEntry of entry.losers) {
-        for (const docId of loserEntry.affectedDocumentIds) {
-          await db.doc(`documents/${docId}`).update(payload);
+      try {
+        const payload = buildDocumentRepointPayload(choice.canonical);
+        for (const loserEntry of entry.losers) {
+          for (const docId of loserEntry.affectedDocumentIds) {
+            await db.doc(`documents/${docId}`).update(payload);
+          }
+          console.log(`  ✔ 「${loserEntry.master.name}」の書類${loserEntry.affectedDocumentIds.length}件を付け替え済み`);
         }
-        console.log(`  ✔ 「${loserEntry.master.name}」の書類${loserEntry.affectedDocumentIds.length}件を付け替え済み`);
-      }
 
-      const masterUpdate: Record<string, unknown> = {};
-      if (entry.update.aliasesToAdd.length > 0) {
-        masterUpdate.aliases = admin.firestore.FieldValue.arrayUnion(...entry.update.aliasesToAdd);
-      }
-      if (entry.update.furigana) masterUpdate.furigana = entry.update.furigana;
-      if (entry.update.careManagerName) masterUpdate.careManagerName = entry.update.careManagerName;
-      if (entry.update.notes) masterUpdate.notes = entry.update.notes;
-      if (Object.keys(masterUpdate).length > 0) {
-        await db.doc(`masters/customers/items/${choice.canonical.id}`).update(masterUpdate);
-        console.log(`  ✔ 「${choice.canonical.name}」のcanonicalマスターを更新済み`);
-      }
-
-      for (const loser of choice.losers) {
-        // 削除直前の再検証: 書類再取得〜削除の間に新規docがこのcustomerIdへ割り当て
-        // られていないか確認する。見つかった場合は削除のみスキップする(付け替え自体は
-        // 上記で既に完了済みのため実害は限定的)。
-        const remaining = await countDocumentsByCustomerId(loser.id);
-        if (remaining > 0) {
+        // 削除直前の再検証を先に行い、確定した敗者(confirmedLosers)のみをマージ・削除
+        // 対象にする(code-review指摘対応、2026-07-27: 旧実装はPhase1時点の全敗者から
+        // マージ内容を計算して無条件でcanonicalへ反映した後に削除可否を個別判定していた
+        // ため、削除がスキップされた敗者の生名/furigana等がcanonicalへ既に取り込まれ、
+        // 削除されず生き残った敗者マスターとcanonicalの両方が同一人物のデータを保持する
+        // 不整合が生じえた)。
+        const recheckCounts = new Map<string, number>();
+        for (const loser of choice.losers) {
+          recheckCounts.set(loser.id, await countDocumentsByCustomerId(loser.id));
+        }
+        const { confirmedLosers, skippedLosers } = resolveConfirmedLosers(choice, recheckCounts);
+        for (const loser of skippedLosers) {
           console.log(
-            `  ⚠️ 敗者マスター(${loser.id.slice(0, 12)}…)は削除直前の再検証で${remaining}件の書類が新たに検出されたため削除をスキップしました(手動確認要)`
+            `  ⚠️ 敗者マスター(${loser.id.slice(0, 12)}…)は削除直前の再検証で${recheckCounts.get(loser.id)}件の書類が新たに検出されたため、削除・マージ双方をスキップしました(手動確認要)`
           );
-          continue;
         }
-        await db.doc(`masters/customers/items/${loser.id}`).delete();
-        console.log(`  ✔ 敗者マスター(${loser.id.slice(0, 12)}…)を削除済み`);
+
+        if (confirmedLosers.length > 0) {
+          const confirmedUpdate = buildMergedMasterUpdate({ canonical: choice.canonical, losers: confirmedLosers });
+          const masterUpdate: Record<string, unknown> = {};
+          if (confirmedUpdate.aliasesToAdd.length > 0) {
+            masterUpdate.aliases = admin.firestore.FieldValue.arrayUnion(...confirmedUpdate.aliasesToAdd);
+          }
+          if (confirmedUpdate.furigana) masterUpdate.furigana = confirmedUpdate.furigana;
+          if (confirmedUpdate.careManagerName) masterUpdate.careManagerName = confirmedUpdate.careManagerName;
+          if (confirmedUpdate.notes) masterUpdate.notes = confirmedUpdate.notes;
+          if (Object.keys(masterUpdate).length > 0) {
+            await db.doc(`masters/customers/items/${choice.canonical.id}`).update(masterUpdate);
+            console.log(`  ✔ 「${choice.canonical.name}」のcanonicalマスターを更新済み`);
+          }
+
+          for (const loser of confirmedLosers) {
+            await db.doc(`masters/customers/items/${loser.id}`).delete();
+            console.log(`  ✔ 敗者マスター(${loser.id.slice(0, 12)}…)を削除済み`);
+          }
+        }
+        succeededGroupCount++;
+      } catch (err) {
+        failedGroups.push(choice.canonical.name);
+        console.error(`  ❌ 「${choice.canonical.name}」グループの処理中にエラーが発生しました:`, err);
       }
       console.log('');
     }
   }
 
   console.log(`合計: ${groups.length}組、書類${totalDocsRepointed}件${execute ? 'を付け替え' : 'が付け替え対象'}`);
+  if (execute) {
+    console.log(`実行結果: 成功${succeededGroupCount}組 / 失敗${failedGroups.length}組`);
+    if (failedGroups.length > 0) {
+      console.log(`失敗したグループ: ${failedGroups.map((n) => `「${n}」`).join(', ')}(バックアップJSONから復旧・再実行してください)`);
+    }
+  }
   console.log(`\n=== ${projectId} ${execute ? '実行完了' : 'dry-run完了(書き込みゼロ)'} ===`);
-  process.exit(0);
+  process.exit(execute && failedGroups.length > 0 ? 1 : 0);
 }
 
 main().catch((err) => {

@@ -7,6 +7,7 @@ import {
   pickCanonical,
   buildMergedMasterUpdate,
   buildDocumentRepointPayload,
+  resolveConfirmedLosers,
 } from './notationDuplicateMerge';
 
 function customer(overrides: Partial<CustomerRecord> & { id: string; name: string }): CustomerRecord {
@@ -198,4 +199,68 @@ test('buildDocumentRepointPayload: customerId/customerNameの2キーのみを持
   const payload = buildDocumentRepointPayload(canonical);
   assert.deepEqual(Object.keys(payload).sort(), ['customerId', 'customerName']);
   assert.deepEqual(payload, { customerId: 'a', customerName: '奥村 志づ子' });
+});
+
+test('resolveConfirmedLosers: 削除直前の再検証で参照書類が0件の敗者のみconfirmedLosersに含める', () => {
+  const choice = {
+    canonical: customer({ id: 'a', name: '奥村 志づ子' }),
+    losers: [customer({ id: 'b', name: '奥村志づ子' }), customer({ id: 'c', name: 'オクムラ志づ子' })],
+  };
+  const recheckCounts = new Map([
+    ['b', 0],
+    ['c', 0],
+  ]);
+  const result = resolveConfirmedLosers(choice, recheckCounts);
+  assert.deepEqual(
+    result.confirmedLosers.map((l: CustomerRecord) => l.id),
+    ['b', 'c']
+  );
+  assert.deepEqual(result.skippedLosers, []);
+});
+
+test('resolveConfirmedLosers: 再検証で参照書類が残っている敗者はskippedLosersへ回し、confirmedLosersから除外する(code-review指摘対応、2026-07-27)', () => {
+  const choice = {
+    canonical: customer({ id: 'a', name: '奥村 志づ子' }),
+    losers: [customer({ id: 'b', name: '奥村志づ子' }), customer({ id: 'c', name: 'オクムラ志づ子' })],
+  };
+  const recheckCounts = new Map([
+    ['b', 0],
+    ['c', 1], // レースで新規docが検出された想定
+  ]);
+  const result = resolveConfirmedLosers(choice, recheckCounts);
+  assert.deepEqual(
+    result.confirmedLosers.map((l: CustomerRecord) => l.id),
+    ['b']
+  );
+  assert.deepEqual(
+    result.skippedLosers.map((l: CustomerRecord) => l.id),
+    ['c']
+  );
+});
+
+test('resolveConfirmedLosers: skippedLosersのデータはbuildMergedMasterUpdateの入力に含まれないため、canonicalのaliasesへ混入しない', () => {
+  const choice = {
+    canonical: customer({ id: 'a', name: '奥村 志づ子' }),
+    losers: [customer({ id: 'b', name: '奥村志づ子' }), customer({ id: 'c', name: 'オクムラ志づ子' })],
+  };
+  const recheckCounts = new Map([
+    ['b', 0],
+    ['c', 1],
+  ]);
+  const { confirmedLosers } = resolveConfirmedLosers(choice, recheckCounts);
+  const update = buildMergedMasterUpdate({ canonical: choice.canonical, losers: confirmedLosers });
+  assert.deepEqual(update.aliasesToAdd, ['奥村志づ子']);
+  assert.ok(!update.aliasesToAdd.includes('オクムラ志づ子'), '削除がスキップされた敗者の生名はaliasesへ追加されない');
+});
+
+test('resolveConfirmedLosers: recheckCountsにエントリが無い敗者は0件として扱う(count()クエリ結果が省略されるケースを想定しない安全側デフォルト)', () => {
+  const choice = {
+    canonical: customer({ id: 'a', name: '奥村 志づ子' }),
+    losers: [customer({ id: 'b', name: '奥村志づ子' })],
+  };
+  const result = resolveConfirmedLosers(choice, new Map());
+  assert.deepEqual(
+    result.confirmedLosers.map((l: CustomerRecord) => l.id),
+    ['b']
+  );
 });

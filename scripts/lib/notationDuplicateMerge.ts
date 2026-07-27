@@ -10,13 +10,13 @@
  * 新規の仕組みは導入しない。
  */
 
-/** [B]検出に使うのと同一の正規化(`functions/src/utils/similarity.ts`の`normalizeText()`と同一)。 */
-function normalizeName(text: string): string {
-  return text
-    .replace(/[\s　]+/g, '')
-    .replace(/[・．.]/g, '')
-    .toLowerCase();
-}
+import { normalizeText } from '../../functions/src/utils/similarity';
+
+// [B]検出の正規化は、既存のOCR名寄せロジック(functions/src/utils/similarity.ts)と
+// 同一の`normalizeText()`を再利用する(code-review指摘対応、2026-07-27: 従来は
+// scripts/check-customer-master-integrity.jsに続き3箇所目の独立コピーになっていた。
+// 判定基準が乖離するリスクを避けるため、既存precedent(scripts/*.tsからfunctions/src/*
+// への直接import、例: verify-candidate-extraction-document-level.ts)に倣いimportに統一)。
 
 export interface CustomerRecord {
   id: string;
@@ -51,7 +51,7 @@ function hasExactMatchSubset(members: CustomerRecord[]): boolean {
 function groupByNormalizedName(customers: CustomerRecord[]): NotationDuplicateGroup[] {
   const byNormalized = new Map<string, CustomerRecord[]>();
   for (const c of customers) {
-    const key = normalizeName(c.name);
+    const key = normalizeText(c.name);
     if (!key) continue;
     const group = byNormalized.get(key) ?? [];
     group.push(c);
@@ -69,13 +69,31 @@ function groupByNormalizedName(customers: CustomerRecord[]): NotationDuplicateGr
 }
 
 /**
+ * 正規化後は一致するグループを、統合可能([B]、表記ゆれのみ)と統合不可
+ * (完全一致サブグループを含む、[A]相当の真の同姓同名候補が混在)に一括で振り分ける。
+ * `groupByNormalizedName`を1回だけ実行する(code-review指摘対応、2026-07-27:
+ * `groupNotationDuplicates`/`findExcludedNotationGroups`を続けて呼ぶと同じグルーピング
+ * 処理が2回走っていた)。
+ */
+export function partitionNotationGroups(customers: CustomerRecord[]): {
+  included: NotationDuplicateGroup[];
+  excluded: NotationDuplicateGroup[];
+} {
+  const all = groupByNormalizedName(customers);
+  return {
+    included: all.filter((g) => !hasExactMatchSubset(g.members)),
+    excluded: all.filter((g) => hasExactMatchSubset(g.members)),
+  };
+}
+
+/**
  * 正規化後は一致するが生文字列が異なるグループを検出する。
  * 完全一致([A]、真の同姓同名候補)のみのグループは対象外(呼出元が別途扱う)。
  * グループ内に完全一致のサブグループが紛れ込んでいる場合も、安全側でグループ全体を
  * 対象外にする(`findExcludedNotationGroups`で個別に検出・手動確認へ回す)。
  */
 export function groupNotationDuplicates(customers: CustomerRecord[]): NotationDuplicateGroup[] {
-  return groupByNormalizedName(customers).filter((g) => !hasExactMatchSubset(g.members));
+  return partitionNotationGroups(customers).included;
 }
 
 /**
@@ -84,7 +102,7 @@ export function groupNotationDuplicates(customers: CustomerRecord[]): NotationDu
  * (呼出元のオーケストレーションスクリプトがコンソール出力・件数集計に使用)。
  */
 export function findExcludedNotationGroups(customers: CustomerRecord[]): NotationDuplicateGroup[] {
-  return groupByNormalizedName(customers).filter((g) => hasExactMatchSubset(g.members));
+  return partitionNotationGroups(customers).excluded;
 }
 
 export interface CanonicalChoice {
@@ -166,4 +184,38 @@ export function buildDocumentRepointPayload(canonical: CustomerRecord): {
   customerName: string;
 } {
   return { customerId: canonical.id, customerName: canonical.name };
+}
+
+export interface ConfirmedLosersResult {
+  confirmedLosers: CustomerRecord[];
+  skippedLosers: CustomerRecord[];
+}
+
+/**
+ * 敗者マスター削除直前の再検証結果(`recheckCounts`: 敗者id→その時点で参照している
+ * document数)から、実際に削除・マージしてよい敗者(confirmedLosers)と、レース発生の
+ * 疑いがあるため削除・マージを見送る敗者(skippedLosers)を振り分ける(純粋関数)。
+ *
+ * (code-review指摘対応、2026-07-27): 旧実装はPhase1時点の全敗者から`buildMergedMasterUpdate`
+ * で更新内容を計算し無条件でcanonicalへ反映した「後」に、敗者ごとの削除可否を個別判定
+ * していた。そのため再検証で削除がスキップされた敗者の生名/furigana等が、削除されず
+ * 生き残った敗者マスターとcanonicalの双方に同時に存在する不整合状態になりえた。
+ * 呼出元は本関数の`confirmedLosers`のみを`buildMergedMasterUpdate`へ渡すことで、
+ * 実際に削除される敗者のデータのみがcanonicalへ反映されるようにする。
+ */
+export function resolveConfirmedLosers(
+  choice: CanonicalChoice,
+  recheckCounts: Map<string, number>
+): ConfirmedLosersResult {
+  const confirmedLosers: CustomerRecord[] = [];
+  const skippedLosers: CustomerRecord[] = [];
+  for (const loser of choice.losers) {
+    const remaining = recheckCounts.get(loser.id) ?? 0;
+    if (remaining > 0) {
+      skippedLosers.push(loser);
+    } else {
+      confirmedLosers.push(loser);
+    }
+  }
+  return { confirmedLosers, skippedLosers };
 }
