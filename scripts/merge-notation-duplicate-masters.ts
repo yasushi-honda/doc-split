@@ -268,6 +268,15 @@ async function main(): Promise<void> {
       // 例外が発生した場合、appliedResultに記録がないと復旧材料(バックアップJSON)から
       // 「どの書類が既に付け替え済みか」を判別できなかった)。
       const repointedDocumentIds = new Set<string>();
+      // 敗者マスター削除は複数件を順次実行するため、途中で例外が発生すると一部の敗者は
+      // 既に削除済み(不可逆)という状態になりうる。canonicalマスター自身への更新は削除
+      // ループより前に完了しているため、例外発生時点で「canonical更新は完了済みか」
+      // 「どの敗者まで削除が完了したか」を正確に記録する必要がある(code-review 9巡目
+      // 指摘対応、2026-07-27: 未修正だと途中で例外が発生した場合にappliedResult.
+      // confirmedLoserIdsが空配列になり、実際には削除済みの敗者マスターが「削除されて
+      // いない」ものとしてバックアップJSONに記録されてしまっていた)。
+      const deletedLoserIds = new Set<string>();
+      let canonicalMasterUpdateApplied: ReturnType<typeof buildMergedMasterUpdate> | null = null;
       try {
         // 書類付け替え。canonical自身のcareManagerNameが既に設定されていればそれを、
         // 未設定ならPhase1で全敗者(entry.update、confirmedLosers確定前)から計算した
@@ -391,20 +400,39 @@ async function main(): Promise<void> {
         }
 
         if (confirmedUpdate) {
-          const masterUpdate: Record<string, unknown> = {};
-          if (confirmedUpdate.aliasesToAdd.length > 0) {
-            masterUpdate.aliases = admin.firestore.FieldValue.arrayUnion(...confirmedUpdate.aliasesToAdd);
-          }
-          if (confirmedUpdate.furigana) masterUpdate.furigana = confirmedUpdate.furigana;
-          if (confirmedUpdate.careManagerName) masterUpdate.careManagerName = confirmedUpdate.careManagerName;
-          if (confirmedUpdate.notes) masterUpdate.notes = confirmedUpdate.notes;
-          if (Object.keys(masterUpdate).length > 0) {
-            await db.doc(`masters/customers/items/${choice.canonical.id}`).update(masterUpdate);
+          // furigana/careManagerName/notesは、書込み直前時点でcanonicalが依然として
+          // 欠損している場合のみ適用する(code-review 9巡目指摘対応、2026-07-27: Phase1
+          // 時点のスナップショット(choice.canonical)だけを基準に無条件で上書きすると、
+          // Phase1〜Phase3の間に運用者が管理画面から正当にfurigana等を設定していた場合、
+          // その値をこのスクリプトが黙って上書きしてしまう。documentのcustomerId再検証
+          // (上記)と同じ理由でトランザクション内の再読込みに基づき判定する)。aliasesは
+          // FieldValue.arrayUnionが並行書込みに対して安全なため再検証不要。
+          const canonicalRef = db.doc(`masters/customers/items/${choice.canonical.id}`);
+          const wasCanonicalUpdated = await db.runTransaction(async (tx) => {
+            const snap = await tx.get(canonicalRef);
+            if (!snap.exists) return false;
+            const current = snap.data() ?? {};
+            const masterUpdate: admin.firestore.UpdateData<admin.firestore.DocumentData> = {};
+            if (confirmedUpdate.aliasesToAdd.length > 0) {
+              masterUpdate.aliases = admin.firestore.FieldValue.arrayUnion(...confirmedUpdate.aliasesToAdd);
+            }
+            if (!asString(current.furigana) && confirmedUpdate.furigana) masterUpdate.furigana = confirmedUpdate.furigana;
+            if (!asString(current.careManagerName) && confirmedUpdate.careManagerName) {
+              masterUpdate.careManagerName = confirmedUpdate.careManagerName;
+            }
+            if (!asString(current.notes) && confirmedUpdate.notes) masterUpdate.notes = confirmedUpdate.notes;
+            if (Object.keys(masterUpdate).length === 0) return false;
+            tx.update(canonicalRef, masterUpdate);
+            return true;
+          });
+          canonicalMasterUpdateApplied = confirmedUpdate;
+          if (wasCanonicalUpdated) {
             console.log(`  ✔ 「${choice.canonical.name}」のcanonicalマスターを更新済み`);
           }
 
           for (const loser of confirmedLosers) {
             await db.doc(`masters/customers/items/${loser.id}`).delete();
+            deletedLoserIds.add(loser.id);
             console.log(`  ✔ 敗者マスター(${loser.id.slice(0, 12)}…)を削除済み`);
           }
         }
@@ -415,7 +443,9 @@ async function main(): Promise<void> {
         // Losersから除外された敗者のaliases/furigana/careManagerName/notesが「適用された」
         // ものとしてバックアップ上に見えてしまい、手動確認の材料として誤解を招いていた)。
         entry.appliedResult = {
-          confirmedLoserIds: confirmedLosers.map((l) => l.id),
+          // deletedLoserIdsを使う(confirmedLosers.map(...)と成功時は同一集合になるはずだが、
+          // 実際に削除できた敗者のみを記録する一意な情報源として統一する)。
+          confirmedLoserIds: [...deletedLoserIds],
           skippedLoserIds: skippedLosers.map((l) => l.id),
           appliedUpdate: confirmedUpdate,
           // Phase1計画(entry.losers[].affectedDocumentIds)より少ない場合、書込み直前の
@@ -427,12 +457,16 @@ async function main(): Promise<void> {
         failedGroups.push(choice.canonical.name);
         console.error(`  ❌ 「${choice.canonical.name}」グループの処理中にエラーが発生しました:`, err);
         // 例外発生時もappliedResultを必ず設定する(code-review 6巡目指摘対応、2026-07-27)。
-        // repointedDocumentIdsにより、例外発生までに書類の付け替え自体は完了していた
-        // ケースを復旧材料(バックアップJSON)から判別できるようにする。
+        // repointedDocumentIds/deletedLoserIds/canonicalMasterUpdateAppliedにより、例外
+        // 発生までに完了していた処理(書類付け替え・canonicalマスター更新・敗者削除の
+        // 一部)を復旧材料(バックアップJSON)から判別できるようにする(code-review 9巡目
+        // 指摘対応、2026-07-27: 未修正だと、複数敗者の削除ループ途中で例外が発生した場合、
+        // 既に削除済み(不可逆)の敗者もconfirmedLoserIds:[]として記録され、バックアップJSON
+        // だけを見た運用者が「その敗者マスターはまだ存在する」と誤認しえた)。
         entry.appliedResult = {
-          confirmedLoserIds: [],
+          confirmedLoserIds: [...deletedLoserIds],
           skippedLoserIds: [],
-          appliedUpdate: null,
+          appliedUpdate: canonicalMasterUpdateApplied,
           error: err instanceof Error ? err.message : String(err),
           repointedDocumentIds: [...repointedDocumentIds],
         };
