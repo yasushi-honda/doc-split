@@ -41,7 +41,12 @@
  *   なければPhase1時点(全敗者、confirmedLosers確定前)の補完値を使う(code-review指摘
  *   対応、2026-07-27: `functions/src/triggers/syncCareManager.ts`はcanonical自身の
  *   careManagerNameが変化した時のみ発火するトリガーのため、旧実装はcustomerId/
- *   customerNameのみ更新し敗者側の古い担当ケアマネの値が書類に残り続けていた)。
+ *   customerNameのみ更新し敗者側の古い担当ケアマネの値が書類に残り続けていた)。canonical
+ *   自身のcareManagerNameは、このグループのPhase3処理開始直前に再取得する(code-review
+ *   10巡目指摘対応、2026-07-27: choice.canonicalはPhase1時点のスナップショットのため、
+ *   複数グループ処理の間に運用者が管理画面でcanonicalのcareManagerNameを更新していても
+ *   検知できず、古い値を書類へ焼き付けてしまっていた。canonicalマスター自身の更新(後述)
+ *   は既にトランザクション再検証済みだったが、書類側のペイロード構築には未適用だった)。
  * - 計画(Phase1)→バックアップ書出し(Phase2)→実行(Phase3)の3段階構成(evaluator再指摘
  *   対応、2026-07-27: 旧実装はグループ単位のexecute直後にバックアップを書き出しており、
  *   途中のグループで例外が発生すると復旧材料が一切残らなかった)。この分離により、複数
@@ -289,7 +294,19 @@ async function main(): Promise<void> {
         // 書類付け替えの「後」・削除の直前という一等最小の間隔に保つため(1回目の
         // 再検証を書類付け替えより先に行うと、まだ付け替えていない敗者自身の既知の書類を
         // 「新規レース」と誤検知してしまう設計上の罠があった、2026-07-27実装時に自己検出)。
-        const initialCareManagerName = resolveInitialCareManagerName(choice.canonical, entry.update);
+        // canonical自身のcareManagerNameは、Phase1(全グループの計画読み取り)からこの
+        // グループのPhase3処理開始までの間に、運用者が管理画面から更新している可能性が
+        // ある。choice.canonical(Phase1スナップショット)をそのまま使うと、canonicalマスター
+        // 自身の更新(下記、code-review 9巡目指摘対応でトランザクション再検証済み)とは
+        // 異なり、書類へ古い値を焼き付けてしまう(code-review 10巡目指摘対応、2026-07-27)。
+        // ここで取得した値をこのグループの付け替え・補正の両方で一貫して使う。
+        const canonicalRef = db.doc(`masters/customers/items/${choice.canonical.id}`);
+        const freshCanonicalSnap = await canonicalRef.get();
+        const freshCanonical = {
+          ...choice.canonical,
+          careManagerName: asString(freshCanonicalSnap.data()?.careManagerName),
+        };
+        const initialCareManagerName = resolveInitialCareManagerName(freshCanonical, entry.update);
         const payload = buildDocumentRepointPayload({
           ...choice.canonical,
           careManagerName: initialCareManagerName,
@@ -361,7 +378,7 @@ async function main(): Promise<void> {
         // 食い違いうる(code-review 4巡目指摘対応、2026-07-27: 未修正だと書類側のcareManager
         // とcanonicalマスター自身のcareManagerNameが異なる値のまま残ってしまっていた)。
         // 既に付け替え済みの書類をconfirmedLosers確定後の最終値へ再補正する。
-        const finalCareManagerName = resolveFinalCareManagerName(choice.canonical, confirmedUpdate);
+        const finalCareManagerName = resolveFinalCareManagerName(freshCanonical, confirmedUpdate);
         if (finalCareManagerName !== initialCareManagerName) {
           const correctedPayload = buildDocumentRepointPayload({
             ...choice.canonical,
@@ -407,7 +424,7 @@ async function main(): Promise<void> {
           // その値をこのスクリプトが黙って上書きしてしまう。documentのcustomerId再検証
           // (上記)と同じ理由でトランザクション内の再読込みに基づき判定する)。aliasesは
           // FieldValue.arrayUnionが並行書込みに対して安全なため再検証不要。
-          const canonicalRef = db.doc(`masters/customers/items/${choice.canonical.id}`);
+          // canonicalRefは書類付け替えループ冒頭で既に宣言済み(code-review 10巡目指摘対応)。
           const wasCanonicalUpdated = await db.runTransaction(async (tx) => {
             const snap = await tx.get(canonicalRef);
             if (!snap.exists) return false;
@@ -482,7 +499,20 @@ async function main(): Promise<void> {
     console.log(`実行結果を反映したバックアップ/レビュー用JSONを再保存しました: ${backupOut}\n`);
   }
 
-  console.log(`合計: ${groups.length}組、書類${totalDocsRepointed}件${execute ? 'を付け替え' : 'が付け替え対象'}`);
+  // execute時はtotalDocsRepointed(Phase1計画値)ではなく実際に付け替えた件数を表示する
+  // (code-review 10巡目指摘対応、2026-07-27: 書込み直前のcustomerId再検証でスキップされた
+  // 書類がある場合、Phase1計画値のままだと実際より多く書類を付け替えたかのように見えていた)。
+  const totalDocsActuallyRepointed = plannedGroups.reduce(
+    (sum, p) => sum + (p.entry.appliedResult?.repointedDocumentIds?.length ?? 0),
+    0
+  );
+  const reportedDocsCount = execute ? totalDocsActuallyRepointed : totalDocsRepointed;
+  console.log(
+    `合計: ${groups.length}組、書類${reportedDocsCount}件${execute ? 'を付け替え' : 'が付け替え対象'}` +
+      (execute && totalDocsActuallyRepointed !== totalDocsRepointed
+        ? `(Phase1計画時点は${totalDocsRepointed}件、書込み直前の再検証でスキップされた分は除く)`
+        : '')
+  );
   if (execute) {
     console.log(`実行結果: 成功${succeededGroupCount}組 / 失敗${failedGroups.length}組`);
     if (failedGroups.length > 0) {
