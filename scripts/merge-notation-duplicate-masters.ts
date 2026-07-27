@@ -30,6 +30,13 @@
  *   書類の付け替え自体は既に完了済みのため実害は限定的。再検証は必ず書類付け替えの
  *   「後」に行うこと(2026-07-27実装時に自己検出: 付け替えより前に行うと、まだ
  *   付け替えていない敗者自身の既知の書類を「新規レース」と誤検知してしまう)。
+ * - 書類付け替えの書込み直前に、documentのcustomerIdが依然として敗者のままかを
+ *   トランザクション内で再検証する(code-review 7巡目指摘対応、2026-07-27: 敗者削除直前の
+ *   再検証は敗者へ新規docが増えたケースのみを検知し、Phase1の書類一覧取得〜Phase3の
+ *   書込みの間に他プロセス(継続稼働中のGmail取込によるOCR再分類・人間による手動再割当)が
+ *   documentのcustomerIdを敗者から第三者へ変更していた場合、それを検知せず誤って
+ *   canonicalへ上書きしてしまう穴があった)。変化を検知した書類は付け替えをスキップし
+ *   手動確認へ回す。
  * - 書類付け替え時のcareManager/careManagerKeyは、canonical自身の値があればそれを、
  *   なければPhase1時点(全敗者、confirmedLosers確定前)の補完値を使う(code-review指摘
  *   対応、2026-07-27: `functions/src/triggers/syncCareManager.ts`はcanonical自身の
@@ -278,12 +285,39 @@ async function main(): Promise<void> {
           ...choice.canonical,
           careManagerName: initialCareManagerName,
         });
+        // Phase1の書類一覧取得(上記)からこの書込みまでの間に、他プロセス(継続稼働中の
+        // Gmail取込によるOCR再分類・人間による手動再割当)がdocumentのcustomerIdを敗者から
+        // 第三者(canonical/敗者いずれでもない別顧客)へ変更している可能性がある。書込み
+        // 直前にトランザクション内でcustomerIdが依然として敗者のままかを再検証し、
+        // 変化していれば付け替えをスキップする(code-review 7巡目指摘対応、2026-07-27:
+        // 唯一実装済みの再検証(削除直前のconfirmedLosers判定)は敗者へ新規docが増えた
+        // ケースのみを検知し、敗者から離れたdocumentの誤った付け替え上書きは検知外だった)。
         for (const loserEntry of entry.losers) {
+          let repointedCount = 0;
+          let skippedCount = 0;
           for (const docId of loserEntry.affectedDocumentIds) {
-            await db.doc(`documents/${docId}`).update(payload);
-            repointedDocumentIds.add(docId);
+            const docRef = db.doc(`documents/${docId}`);
+            const wasRepointed = await db.runTransaction(async (tx) => {
+              const snap = await tx.get(docRef);
+              if (!snap.exists || snap.data()?.customerId !== loserEntry.master.id) {
+                return false;
+              }
+              tx.update(docRef, payload);
+              return true;
+            });
+            if (wasRepointed) {
+              repointedDocumentIds.add(docId);
+              repointedCount++;
+            } else {
+              skippedCount++;
+            }
           }
-          console.log(`  ✔ 「${loserEntry.master.name}」の書類${loserEntry.affectedDocumentIds.length}件を付け替え済み`);
+          console.log(
+            `  ✔ 「${loserEntry.master.name}」の書類${repointedCount}件を付け替え済み` +
+              (skippedCount > 0
+                ? `(${skippedCount}件は書込み直前の再検証でcustomerIdが敗者から変化していたためスキップ、手動確認要)`
+                : '')
+          );
         }
 
         // 削除直前の再検証: 書類再取得〜削除の間に新規docがこのcustomerIdへ割り当て
@@ -322,10 +356,10 @@ async function main(): Promise<void> {
             ...choice.canonical,
             careManagerName: finalCareManagerName,
           });
-          for (const loserEntry of entry.losers) {
-            for (const docId of loserEntry.affectedDocumentIds) {
-              await db.doc(`documents/${docId}`).update(correctedPayload);
-            }
+          // 上記の再検証でスキップされた書類(既に敗者から離れている)は対象に含めない。
+          // 実際に付け替え済み(repointedDocumentIds)の書類のみを補正する。
+          for (const docId of repointedDocumentIds) {
+            await db.doc(`documents/${docId}`).update(correctedPayload);
           }
           console.log(
             `  ⚠️ 再検証でcareManagerName補完元が変わったため、付け替え済み書類のcareManagerを再補正しました(「${initialCareManagerName || '(空)'}」→「${finalCareManagerName || '(空)'}」)`
@@ -360,6 +394,9 @@ async function main(): Promise<void> {
           confirmedLoserIds: confirmedLosers.map((l) => l.id),
           skippedLoserIds: skippedLosers.map((l) => l.id),
           appliedUpdate: confirmedUpdate,
+          // Phase1計画(entry.losers[].affectedDocumentIds)より少ない場合、書込み直前の
+          // customerId再検証でスキップされた書類が存在することを示す。
+          repointedDocumentIds: [...repointedDocumentIds],
         };
         succeededGroupCount++;
       } catch (err) {
