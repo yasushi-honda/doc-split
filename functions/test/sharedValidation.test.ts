@@ -10,6 +10,7 @@ import { expect } from 'chai';
 import {
   validateOfficeMasterImport,
   computeCommonShortMasters,
+  computeIdEqualsNameMasters,
   normalizeForMatching as sharedNormalize,
   COMMON_SHORT_LENGTH_THRESHOLD,
   COMMON_SHORT_COLLISION_THRESHOLD,
@@ -139,6 +140,40 @@ describe('#506 shared/officeMasterValidation', () => {
       expect(common.has('bug-care')).to.be.true;
       expect(common.has('legit')).to.be.false;
       expect(common.has('long-1')).to.be.false;
+    });
+  });
+
+  describe('computeIdEqualsNameMasters (Issue #707)', () => {
+    it('id===name の短マスターを検出する', () => {
+      const masters = [
+        { id: 'かいと', name: 'かいと' },
+        { id: 'auto-id-1', name: 'デイサービスさくら' },
+      ];
+      const result = computeIdEqualsNameMasters(masters);
+      expect(result.has('かいと')).to.be.true;
+      expect(result.has('auto-id-1')).to.be.false;
+    });
+
+    it('name が7文字でもid===nameなら検出する（length<=3フィルタの網の穴対応）', () => {
+      const masters = [
+        { id: '訪問介護かいと', name: '訪問介護かいと' },
+        { id: '1a0zN2OehohAdvFo7kdH', name: '訪問介護さくら' },
+      ];
+      const result = computeIdEqualsNameMasters(masters);
+      expect(result.has('訪問介護かいと')).to.be.true;
+      expect(result.size).to.equal(1);
+    });
+
+    it('通常のauto-ID (id!==name) は検出しない', () => {
+      const masters = [
+        { id: '1a0zN2OehohAdvFo7kdH', name: 'デイサービスさくら' },
+      ];
+      expect(computeIdEqualsNameMasters(masters).size).to.equal(0);
+    });
+
+    it('name が空文字の場合は検出しない（id===""は通常発生しないが念のため除外）', () => {
+      const masters = [{ id: '', name: '' }];
+      expect(computeIdEqualsNameMasters(masters).size).to.equal(0);
     });
   });
 });
