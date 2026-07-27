@@ -88,11 +88,14 @@ jobs:
         env:
           FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
 
-      - name: Run Drive export backfill integration tests (Firestore emulator)
-        # scripts/backfill-drive-export.ts はkanameone/cocoro本番展開で使うPartial
-        # Update スクリプト(CLAUDE.md MUST: 更新対象外フィールド不変テスト必須、
-        # code-review high指摘#2対応)。実Firestore書込みを伴うため、scripts/lib
-        # 配下のemulator非依存unitテスト(npm test)とは別立てのnpmスクリプトにする。
+      - name: Run scripts integration tests (Firestore emulator)
+        # scripts配下のPartial Updateスクリプト(backfill-drive-export.ts・
+        # merge-notation-duplicate-masters.ts等)向け統合テスト(CLAUDE.md MUST: 更新対象外
+        # フィールド不変テスト必須)。実Firestore書込みを伴うため、scripts/lib配下の
+        # emulator非依存unitテスト(npm test)とは別立てのnpmスクリプトにする。
+        # test:integrationは*.integration.test.tsグロブのため、scripts/直下に
+        # 新規追加した統合テストは自動的にこのステップに含まれる(2026-07-27、
+        # code-review指摘対応: 旧ステップ名がbackfill-drive-export専用のまま陳腐化していた)。
         run: cd scripts && firebase emulators:exec --only firestore 'npm run test:integration'
         env:
           FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
