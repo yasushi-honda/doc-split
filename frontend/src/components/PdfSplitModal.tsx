@@ -425,9 +425,9 @@ export function PdfSplitModal({
 
         {!isConfirmStep ? (
           // ステップ1: 分割ポイント設定
-          <div className="flex-1 overflow-hidden flex gap-4">
+          <div className="flex-1 overflow-y-auto flex flex-col sm:flex-row sm:overflow-hidden gap-4">
             {/* 左側: PDFプレビュー */}
-            <div className="w-1/2 flex flex-col min-h-[400px]">
+            <div className="w-full sm:w-1/2 flex flex-col min-h-[400px]">
               {/* 回転ボタン */}
               <div className="flex items-center justify-between mb-2">
                 <span className="text-sm font-medium text-gray-600">
@@ -496,7 +496,7 @@ export function PdfSplitModal({
             </div>
 
             {/* 右側: 分割ポイント一覧 */}
-            <div className="w-1/2 flex flex-col overflow-hidden">
+            <div className="w-full sm:w-1/2 flex flex-col overflow-hidden">
               <div className="flex items-center justify-between mb-2">
                 <span className="text-sm font-medium">分割ポイント</span>
                 <Button
