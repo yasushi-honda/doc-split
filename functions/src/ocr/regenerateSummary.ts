@@ -79,16 +79,19 @@ export const regenerateSummary = functions.https.onCall(
     // Issue #266: rethrow 前に safeLogError で errors collection + 通知による検知を確保。
     // 順序根拠 (rules/error-handling.md § 1): 本経路は "状態復旧なし + 即 rethrow" のため、
     // ログ記録 → rethrow の順を採る。safeLogError は内部で try/catch 済、caller に波及しない。
-    // safeLogError呼出は内部でlogError経由のconsole.errorも出すため、ここでの重複 console.error は行わない。
     // onCall 呼出の client 側タイムアウトは Firebase 標準 70s、logError Firestore 書込 ~500ms で影響軽微。
     // Issue #251 Scope3: 空/ブロック応答は generateSummaryCore が SummaryBlockedError を throw するため
     // (finishReason/safetyRatings を保持したまま)、ここで !summary.text を再チェックする必要はない。
     // quota/transient/blocked をエラー種別で HttpsError コードへ細分化し、client 側の再試行判断を助ける。
+    // console.error(error) はここで先に実行する (rules/error-handling.md § 1「最低限のconsole.error
+    // はtry-catch外で先に実行」)。safeLogError内部のconsole.errorはerrorCode/message等の flat summary
+    // のみでスタックトレースを含まないため (/code-review指摘)、Cloud Logging上のstack可視性はこちらが担う。
     let summary: SummaryField;
     try {
       summary = await generateSummaryCore(ocrResult, documentType);
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
+      console.error('Failed to generate summary:', err);
       await safeLogError({
         error: err,
         source: 'ocr',

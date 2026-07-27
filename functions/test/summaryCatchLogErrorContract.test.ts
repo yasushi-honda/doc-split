@@ -13,9 +13,9 @@
  *
  * 方式: grep-based (docs/context/test-strategy.md §2.1 参照)。危険な外部呼出
  * (`generateSummaryCore(`) を anchor に、近傍 (±ANCHOR_WINDOW_LINES 行) の logError 呼出を
- * 検知する。Issue #251 Scope3 で console.error の重複 (safeLogError が内部で console.error も
- * 出すため) を解消した際、anchor を console.error メッセージから呼出自体に付け替えた
- * (console.error 削除に追従してテストが空振りしないよう設計)。
+ * 検知する。Issue #251 Scope3 で anchor を console.error メッセージから呼出自体に付け替えた
+ * (catch 句内の console.error メッセージ文言変更でテストが空振りしないよう、より安定した
+ * 呼出自体を anchor にする設計。console.error 自体は stack trace 可視性のため引き続き残置)。
  *
  * 将来委譲: 現時点で委譲先なし (#178/#209 型 silent swallow 防止は summary 生成 catch 句の
  *          source 構造保護が本質のため恒久 contract として保持)

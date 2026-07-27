@@ -11,7 +11,7 @@ import { ref, getDownloadURL } from 'firebase/storage'
 import { Download, ExternalLink, Loader2, FileText, User, UserCheck, Building, Calendar, Tag, AlertCircle, Info, Scissors, Pencil, Save, X, BookMarked, History, ChevronUp, ChevronDown, Sparkles, RefreshCw, CheckCircle, XCircle, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { storage } from '@/lib/firebase'
-import { callFunction } from '@/lib/callFunction'
+import { callFunction, getCallableErrorCode, getCallableErrorMessage } from '@/lib/callFunction'
 import { useAuthStore } from '@/stores/authStore'
 import { useQueryClient } from '@tanstack/react-query'
 import {
@@ -578,6 +578,16 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
       await refetch()
     } catch (err) {
       console.error('Failed to generate summary:', err)
+      // Issue #251 Scope3: BE(regenerateSummary.ts)がquota/transient/blockedをHttpsErrorの
+      // resource-exhausted/unavailable/failed-preconditionへ細分化し、状況別の具体的な日本語
+      // メッセージをmessageに詰めて投げる運用のため、これらはgetCallableErrorMessageの汎用文言に
+      // 丸めずそのまま表示する(PdfSplitModal.tsxのfailed-precondition表示と同じパターン)。
+      const code = getCallableErrorCode(err)
+      const message =
+        code === 'resource-exhausted' || code === 'unavailable' || code === 'failed-precondition'
+          ? (err instanceof Error ? err.message : '要約の生成に失敗しました')
+          : getCallableErrorMessage(err, '要約の生成に失敗しました')
+      toast.error(message)
     } finally {
       setIsGeneratingSummary(false)
     }
