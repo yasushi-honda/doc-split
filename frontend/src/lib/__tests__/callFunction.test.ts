@@ -82,6 +82,26 @@ describe('getCallableErrorMessage - Issue #621 already-exists/aborted', () => {
     const err = makeFunctionsError('failed-precondition', 'Google Drive連携機能が無効です')
     expect(getCallableErrorMessage(err)).toBe('Google Drive連携機能が無効です')
   })
+
+  it('code=resource-exhaustedのとき、BEが投げた日本語メッセージをそのまま返す(Issue #251 Scope3)', () => {
+    const err = makeFunctionsError(
+      'resource-exhausted',
+      'AI要約生成の割当上限に達しました。しばらく待って再試行してください'
+    )
+    expect(getCallableErrorMessage(err, 'デフォルトエラー')).toBe(
+      'AI要約生成の割当上限に達しました。しばらく待って再試行してください'
+    )
+  })
+
+  it('code=unavailableのとき、BEが投げた日本語メッセージをそのまま返す(Issue #251 Scope3)', () => {
+    const err = makeFunctionsError(
+      'unavailable',
+      'AI要約生成サービスが一時的に利用できません。しばらく待って再試行してください'
+    )
+    expect(getCallableErrorMessage(err, 'デフォルトエラー')).toBe(
+      'AI要約生成サービスが一時的に利用できません。しばらく待って再試行してください'
+    )
+  })
 })
 
 describe('callFunction - リトライ動作 (silent-failure-hunterレビュー指摘)', () => {
@@ -120,5 +140,25 @@ describe('callFunction - リトライ動作 (silent-failure-hunterレビュー�
 
     await expect(callFunction('splitPdf', {})).resolves.toEqual({ success: true })
     expect(mockCallableImpl).toHaveBeenCalledTimes(2)
+  })
+
+  it('code=unavailableは一時的エラーとしてリトライ対象になる(Issue #251 Scope3 /code-review指摘: 従来はinternal化により暗黙にリトライされていた自己修復動作の維持)', async () => {
+    const err = makeFunctionsError('unavailable', 'AI要約生成サービスが一時的に利用できません')
+    mockCallableImpl
+      .mockRejectedValueOnce(err)
+      .mockResolvedValueOnce({ data: { success: true } })
+
+    await expect(callFunction('regenerateSummary', {})).resolves.toEqual({ success: true })
+    expect(mockGetIdToken).toHaveBeenCalledWith(true)
+    expect(mockCallableImpl).toHaveBeenCalledTimes(2)
+  })
+
+  it('code=resource-exhaustedはquota枯渇のためリトライ対象外(即時悪化防止)', async () => {
+    const err = makeFunctionsError('resource-exhausted', 'AI要約生成の割当上限に達しました')
+    mockCallableImpl.mockRejectedValueOnce(err)
+
+    await expect(callFunction('regenerateSummary', {})).rejects.toBe(err)
+    expect(mockGetIdToken).not.toHaveBeenCalled()
+    expect(mockCallableImpl).toHaveBeenCalledTimes(1)
   })
 })

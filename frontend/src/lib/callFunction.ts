@@ -30,7 +30,13 @@ function isRetryableError(err: unknown): boolean {
   const code = getCallableErrorCode(err)
   return code === 'unauthenticated' ||
     code === 'deadline-exceeded' ||
-    code === 'internal'
+    code === 'internal' ||
+    // Issue #251 Scope3 (/code-review指摘): 従来はVertex AI等の一時的エラーもBE側で
+    // rethrowされ Firebase の既定ラップで'internal'化されていたため、ここで暗黙にリトライ
+    // されていた。エラーコードを細分化した際に'unavailable'を対象から漏らすと、
+    // 一時的エラーの自己修復リトライが失われる(resource-exhaustedはquota枯渇のため
+    // 即時リトライで悪化しうるので対象外のまま)。
+    code === 'unavailable'
 }
 
 /**
@@ -79,9 +85,11 @@ export function getCallableErrorMessage(err: unknown, defaultMessage = '処理�
   if (code === 'unauthenticated' || msg.includes('unauthenticated')) return 'ログインセッションが切れました。ページを再読み込みしてください。'
   if (code === 'deadline-exceeded' || code === 'internal' || msg.includes('deadline-exceeded') || msg.includes('internal')) return '通信エラーが発生しました。電波状況を確認して再度お試しください。'
   if (code === 'permission-denied' || msg.includes('permission-denied') || msg.includes('not in whitelist')) return '権限がありません。'
-  // failed-preconditionはBE側が状況別の具体的な日本語文言をHttpsErrorのmessageに
-  // 詰めて投げる運用のため(例: retryDriveExport.tsの「リトライ対象外です…」
-  // 「Google Drive連携機能が無効です」)、defaultMessageに丸めずそのまま返す
-  if (code === 'failed-precondition') return msg
+  // failed-precondition/resource-exhausted/unavailableはBE側が状況別の具体的な日本語文言を
+  // HttpsErrorのmessageに詰めて投げる運用のため(例: retryDriveExport.tsの「リトライ対象外です…」
+  // 「Google Drive連携機能が無効です」、regenerateSummary.tsの「割当上限に達しました」
+  // 「一時的に利用できません」、pdfOperations.tsの「システムメンテナンス中のため…」)、
+  // defaultMessageに丸めずそのまま返す
+  if (code === 'failed-precondition' || code === 'resource-exhausted' || code === 'unavailable') return msg
   return defaultMessage
 }
