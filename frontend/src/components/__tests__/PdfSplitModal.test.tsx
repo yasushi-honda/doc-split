@@ -509,3 +509,36 @@ describe('PdfSplitModal - splitPdfエラーハンドリング (Issue #621)', () 
     expect(lastToastErrorMessage()).toContain('Document has no updateTime')
   })
 })
+
+describe('PdfSplitModal - ステップ1レイアウトのモバイル対応 (Issue #744回帰防止)', () => {
+  it('左右カラムが固定w-1/2ではなく、sm未満で縦積みになるレスポンシブクラスを持つ', () => {
+    render(
+      <PdfSplitModal
+        document={makeDocument()}
+        isOpen={true}
+        onClose={vi.fn()}
+        onSuccess={vi.fn()}
+        detailLoading={false}
+        detailError={false}
+      />
+    )
+
+    // 右カラム（「分割ポイント」見出しを含むdiv）
+    const splitPointsHeading = screen.getByText('分割ポイント')
+    const rightColumn = splitPointsHeading.parentElement?.parentElement
+    expect(rightColumn?.className).toContain('w-full')
+    expect(rightColumn?.className).toContain('sm:w-1/2')
+    expect(rightColumn?.className).not.toMatch(/(?<!sm:)\bw-1\/2\b/)
+
+    // 左カラム（サムネイル選択エリア）
+    const thumbnailLabel = screen.getByText('サムネイルをクリックでページ選択')
+    const leftColumn = thumbnailLabel.parentElement?.parentElement
+    expect(leftColumn?.className).toContain('w-full')
+    expect(leftColumn?.className).toContain('sm:w-1/2')
+
+    // 2カラムを包む親コンテナがsm未満でflex-col、sm以上でflex-row
+    const columnsContainer = rightColumn?.parentElement
+    expect(columnsContainer?.className).toContain('flex-col')
+    expect(columnsContainer?.className).toContain('sm:flex-row')
+  })
+})
