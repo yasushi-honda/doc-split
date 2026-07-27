@@ -265,3 +265,20 @@ test('バックアップJSONに敗者マスターの全フィールドと付け�
   assert.equal(loserEntry.master.notes, '北名古屋在住');
   assert.deepEqual(loserEntry.affectedDocumentIds, ['doc-loser-1']);
 });
+
+test('--execute: バックアップJSONにPhase3完了後の実際の適用結果(appliedResult/appliedAt)が反映される(code-review 4巡目指摘対応、2026-07-27)', async () => {
+  await seedCustomer('winner', { name: '奥村 志づ子' });
+  await seedCustomer('loser', { name: '奥村志づ子', careManagerName: '田端 正樹' });
+  await seedDocument('doc-winner-1', { customerId: 'winner', customerName: '奥村 志づ子', ...unrelatedDocFields() });
+  await seedDocument('doc-winner-2', { customerId: 'winner', customerName: '奥村 志づ子', ...unrelatedDocFields() });
+  await seedDocument('doc-loser-1', { customerId: 'loser', customerName: '奥村志づ子', ...unrelatedDocFields() });
+
+  runScript(['--execute']);
+
+  const backup = JSON.parse(readFileSync(backupPath, 'utf-8'));
+  assert.ok(backup.appliedAt, 'Phase3完了後にappliedAtが設定される');
+  const groupEntry = backup.groups[0];
+  assert.deepEqual(groupEntry.appliedResult.confirmedLoserIds, ['loser'], 'レースが発生しない通常経路では敗者は全員confirmedLosersに含まれる');
+  assert.deepEqual(groupEntry.appliedResult.skippedLoserIds, []);
+  assert.equal(groupEntry.appliedResult.appliedUpdate.careManagerName, '田端 正樹', '実際に適用された内容(confirmedLosersベース)が記録される');
+});

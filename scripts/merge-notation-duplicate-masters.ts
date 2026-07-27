@@ -56,6 +56,8 @@ import {
   buildMergedMasterUpdate,
   buildDocumentRepointPayload,
   resolveConfirmedLosers,
+  resolveInitialCareManagerName,
+  resolveFinalCareManagerName,
 } from './lib/notationDuplicateMerge';
 
 const projectId = process.env.FIREBASE_PROJECT_ID;
@@ -106,6 +108,14 @@ interface BackupGroupEntry {
   canonical: CustomerRecord;
   losers: Array<{ master: CustomerRecord; affectedDocumentIds: string[] }>;
   update: ReturnType<typeof buildMergedMasterUpdate>;
+  // Phase 3実行後にのみ設定される。Phase1の`update`(全敗者ベースの計画)とは異なり、
+  // 削除直前の再検証で確定したconfirmedLosersを基準にした「実際に適用された」内容
+  // (code-review 4巡目指摘対応、2026-07-27)。
+  appliedResult?: {
+    confirmedLoserIds: string[];
+    skippedLoserIds: string[];
+    appliedUpdate: ReturnType<typeof buildMergedMasterUpdate> | null;
+  };
 }
 
 async function main(): Promise<void> {
@@ -185,7 +195,14 @@ async function main(): Promise<void> {
   // (evaluator指摘対応、2026-07-27: 従来はグループ単位のexecute直後に書き出しており、
   // 途中のグループで例外が発生すると復旧材料が一切残らなかった)。dry-runでも出力され
   // レビュー材料として使える。
-  const backupPayload = {
+  const backupPayload: {
+    exportedAt: string;
+    appliedAt?: string;
+    projectId: string | undefined;
+    mode: string;
+    excludedGroups: Array<{ members: CustomerRecord[] }>;
+    groups: BackupGroupEntry[];
+  } = {
     exportedAt: new Date().toISOString(),
     projectId,
     mode: execute ? 'execute' : 'dry-run',
@@ -216,9 +233,10 @@ async function main(): Promise<void> {
         // 書類付け替えの「後」・削除の直前という一等最小の間隔に保つため(1回目の
         // 再検証を書類付け替えより先に行うと、まだ付け替えていない敗者自身の既知の書類を
         // 「新規レース」と誤検知してしまう設計上の罠があった、2026-07-27実装時に自己検出)。
+        const initialCareManagerName = resolveInitialCareManagerName(choice.canonical, entry.update);
         const payload = buildDocumentRepointPayload({
           ...choice.canonical,
-          careManagerName: choice.canonical.careManagerName || entry.update.careManagerName || '',
+          careManagerName: initialCareManagerName,
         });
         for (const loserEntry of entry.losers) {
           for (const docId of loserEntry.affectedDocumentIds) {
@@ -247,8 +265,33 @@ async function main(): Promise<void> {
           );
         }
 
-        if (confirmedLosers.length > 0) {
-          const confirmedUpdate = buildMergedMasterUpdate({ canonical: choice.canonical, losers: confirmedLosers });
+        const confirmedUpdate =
+          confirmedLosers.length > 0
+            ? buildMergedMasterUpdate({ canonical: choice.canonical, losers: confirmedLosers })
+            : null;
+
+        // 再検証でcareManagerName補完元の敗者がskipされた場合、書類付け替え時(上記)に
+        // 使ったPhase1時点の値(initialCareManagerName)とconfirmedLosers確定後の値が
+        // 食い違いうる(code-review 4巡目指摘対応、2026-07-27: 未修正だと書類側のcareManager
+        // とcanonicalマスター自身のcareManagerNameが異なる値のまま残ってしまっていた)。
+        // 既に付け替え済みの書類をconfirmedLosers確定後の最終値へ再補正する。
+        const finalCareManagerName = resolveFinalCareManagerName(choice.canonical, confirmedUpdate);
+        if (finalCareManagerName !== initialCareManagerName) {
+          const correctedPayload = buildDocumentRepointPayload({
+            ...choice.canonical,
+            careManagerName: finalCareManagerName,
+          });
+          for (const loserEntry of entry.losers) {
+            for (const docId of loserEntry.affectedDocumentIds) {
+              await db.doc(`documents/${docId}`).update(correctedPayload);
+            }
+          }
+          console.log(
+            `  ⚠️ 再検証でcareManagerName補完元が変わったため、付け替え済み書類のcareManagerを再補正しました(「${initialCareManagerName || '(空)'}」→「${finalCareManagerName || '(空)'}」)`
+          );
+        }
+
+        if (confirmedUpdate) {
           const masterUpdate: Record<string, unknown> = {};
           if (confirmedUpdate.aliasesToAdd.length > 0) {
             masterUpdate.aliases = admin.firestore.FieldValue.arrayUnion(...confirmedUpdate.aliasesToAdd);
@@ -266,6 +309,17 @@ async function main(): Promise<void> {
             console.log(`  ✔ 敗者マスター(${loser.id.slice(0, 12)}…)を削除済み`);
           }
         }
+
+        // Phase2時点のバックアップ(entry.update)はPhase1計画(全敗者ベース)のみを記録して
+        // いるため、再検証結果(confirmedLosers/skippedLosers)とPhase3で実際に適用した内容を
+        // 追記する(code-review 4巡目指摘対応、2026-07-27: 未修正だと、再検証でconfirmed
+        // Losersから除外された敗者のaliases/furigana/careManagerName/notesが「適用された」
+        // ものとしてバックアップ上に見えてしまい、手動確認の材料として誤解を招いていた)。
+        entry.appliedResult = {
+          confirmedLoserIds: confirmedLosers.map((l) => l.id),
+          skippedLoserIds: skippedLosers.map((l) => l.id),
+          appliedUpdate: confirmedUpdate,
+        };
         succeededGroupCount++;
       } catch (err) {
         failedGroups.push(choice.canonical.name);
@@ -273,6 +327,13 @@ async function main(): Promise<void> {
       }
       console.log('');
     }
+
+    // Phase3完了後、実際に適用された結果(appliedResult)をバックアップJSONへ反映する
+    // (code-review 4巡目指摘対応、2026-07-27)。Phase2時点の初回書き出しは例外発生時の
+    // 復旧材料として残したままにし、ここでは実行結果を追記した最終版として上書きする。
+    backupPayload.appliedAt = new Date().toISOString();
+    fs.writeFileSync(backupOut, JSON.stringify(backupPayload, null, 2));
+    console.log(`実行結果を反映したバックアップ/レビュー用JSONを再保存しました: ${backupOut}\n`);
   }
 
   console.log(`合計: ${groups.length}組、書類${totalDocsRepointed}件${execute ? 'を付け替え' : 'が付け替え対象'}`);

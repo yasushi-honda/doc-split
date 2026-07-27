@@ -8,6 +8,8 @@ import {
   buildMergedMasterUpdate,
   buildDocumentRepointPayload,
   resolveConfirmedLosers,
+  resolveInitialCareManagerName,
+  resolveFinalCareManagerName,
 } from './notationDuplicateMerge';
 
 function customer(overrides: Partial<CustomerRecord> & { id: string; name: string }): CustomerRecord {
@@ -305,4 +307,48 @@ test('resolveConfirmedLosers: recheckCountsにエントリが無い敗者は0件
     result.confirmedLosers.map((l: CustomerRecord) => l.id),
     ['b']
   );
+});
+
+test('resolveInitialCareManagerName: canonical自身に値がある場合はそれを優先する', () => {
+  const canonical = customer({ id: 'a', name: '奥村 志づ子', careManagerName: '佐藤 花子' });
+  const phase1Update = buildMergedMasterUpdate({
+    canonical,
+    losers: [customer({ id: 'b', name: '奥村志づ子', careManagerName: '田端 正樹' })],
+  });
+  assert.equal(resolveInitialCareManagerName(canonical, phase1Update), '佐藤 花子');
+});
+
+test('resolveInitialCareManagerName: canonical欠損時はPhase1時点(全敗者ベース)の補完値を使う', () => {
+  const canonical = customer({ id: 'a', name: '奥村 志づ子' });
+  const phase1Update = buildMergedMasterUpdate({
+    canonical,
+    losers: [customer({ id: 'b', name: '奥村志づ子', careManagerName: '田端 正樹' })],
+  });
+  assert.equal(resolveInitialCareManagerName(canonical, phase1Update), '田端 正樹');
+});
+
+test('resolveFinalCareManagerName: confirmedUpdateがnull(全敗者がskip)の場合、canonical自身の値のみを使う', () => {
+  const canonicalWithValue = customer({ id: 'a', name: '奥村 志づ子', careManagerName: '佐藤 花子' });
+  assert.equal(resolveFinalCareManagerName(canonicalWithValue, null), '佐藤 花子');
+
+  const canonicalWithoutValue = customer({ id: 'a', name: '奥村 志づ子' });
+  assert.equal(resolveFinalCareManagerName(canonicalWithoutValue, null), '');
+});
+
+test('resolveInitialCareManagerName/resolveFinalCareManagerNameの乖離: careManagerName補完元の敗者が再検証でskipされると、書類付け替え時のinitial値とcanonicalマスターへ反映されるfinal値が異なる(code-review 4巡目指摘対応、2026-07-27で検出・修正)', () => {
+  const canonical = customer({ id: 'a', name: '奥村 志づ子' }); // careManagerName欠損
+  const loserB = customer({ id: 'b', name: '奥村志づ子', careManagerName: '田端 正樹' });
+  const loserC = customer({ id: 'c', name: 'オクムラ志づ子' }); // careManagerNameなし
+
+  // Phase1: 全敗者(b, c)ベースでinitial値を計算 → bのcareManagerNameが採用される
+  const phase1Update = buildMergedMasterUpdate({ canonical, losers: [loserB, loserC] });
+  const initial = resolveInitialCareManagerName(canonical, phase1Update);
+  assert.equal(initial, '田端 正樹');
+
+  // 再検証でloser b(careManagerName補完元)がskipされ、confirmedLosersはcのみになる
+  const confirmedUpdate = buildMergedMasterUpdate({ canonical, losers: [loserC] });
+  const final = resolveFinalCareManagerName(canonical, confirmedUpdate);
+  assert.equal(final, '', 'confirmedLosersにcareManagerNameを持つ敗者がいないため空のまま');
+
+  assert.notEqual(initial, final, '既に書類へ書き込み済みのinitial値とcanonicalマスターへ反映されるfinal値が乖離する(呼出元が再補正すべきケース)');
 });

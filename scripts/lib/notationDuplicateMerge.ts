@@ -209,9 +209,13 @@ export function buildMergedMasterUpdate(choice: CanonicalChoice): MergedMasterUp
  * `buildCareManagerUpdate`(syncCareManagerLogic.tsのSSoT)を直接使い、書類の付け替えと
  * 同時にcanonical側の正しい担当ケアマネへ揃える。
  *
- * 呼出元は`canonical`にPhase1時点の値ではなく、`buildMergedMasterUpdate`による
- * careManagerName補完後の最終値を渡すこと(補完でcanonical側が初めて設定される
- * ケースを正しく反映するため)。
+ * 呼出元は`canonical`のcareManagerNameに、補完済みの値(`resolveInitialCareManagerName`/
+ * `resolveFinalCareManagerName`の戻り値)を渡すこと(canonical自身が欠損しており敗者からの
+ * 補完で初めて設定されるケースを正しく反映するため)。書類付け替え(Phase3、confirmedLosers
+ * 確定前)には`resolveInitialCareManagerName`を、削除直前の再検証後にconfirmedLosersベースの
+ * 値へ補正する場合は`resolveFinalCareManagerName`を使う(両者は一致しないことがあるため、
+ * 呼出元は差分を検知して既に付け替え済みの書類を再補正すること、code-review 4巡目指摘対応、
+ * 2026-07-27)。
  */
 export function buildDocumentRepointPayload(canonical: CustomerRecord): {
   customerId: string;
@@ -224,6 +228,33 @@ export function buildDocumentRepointPayload(canonical: CustomerRecord): {
     customerName: canonical.name,
     ...buildCareManagerUpdate(canonical.careManagerName),
   };
+}
+
+/**
+ * 書類付け替え時(Phase3、confirmedLosers確定前)に使うcareManagerNameを算出する(純粋関数)。
+ * canonical自身の値があればそれを優先し、なければPhase1時点(全敗者ベース)の
+ * `buildMergedMasterUpdate`補完値を使う。
+ */
+export function resolveInitialCareManagerName(canonical: CustomerRecord, phase1Update: MergedMasterUpdate): string {
+  return canonical.careManagerName || phase1Update.careManagerName || '';
+}
+
+/**
+ * 削除直前の再検証で確定したconfirmedLosersベースの`confirmedUpdate`(全敗者が
+ * skipされconfirmedLosersが空の場合はnull)から、canonicalマスター自身に反映される
+ * 最終的なcareManagerNameを算出する(純粋関数)。
+ *
+ * `resolveInitialCareManagerName`が返す値(書類付け替え時に使用済み)と異なりうる
+ * (careManagerName補完元の敗者が再検証でskipされた場合)。呼出元はその差分を検知して
+ * 既に付け替え済みの書類を再補正すること(code-review 4巡目指摘対応、2026-07-27:
+ * 未修正だと書類側のcareManagerとcanonicalマスター自身のcareManagerNameが異なる値の
+ * まま残ってしまっていた)。
+ */
+export function resolveFinalCareManagerName(
+  canonical: CustomerRecord,
+  confirmedUpdate: MergedMasterUpdate | null
+): string {
+  return canonical.careManagerName || confirmedUpdate?.careManagerName || '';
 }
 
 export interface ConfirmedLosersResult {
