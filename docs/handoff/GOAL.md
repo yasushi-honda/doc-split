@@ -104,7 +104,20 @@ cocoro/kanameから、書類（ケアプラン・医療・介護保険証等）�
 
 ## 🔄 中断点（in-flight）
 
-なし（「同姓同名プロアクティブ通知UI追加」はPR #731/#732/#733/#736/#738の5PR全てマージ済み・dev/kanameone/cocoro全環境反映完了、詳細は上記チェックリスト該当項目参照）。
+**PR #741（表記ゆれ重複顧客マスターの統合スクリプト新規追加）が未マージのまま中断（2026-07-27、ctx上限のためhandoff）。**
+
+- **branch**: `feat/merge-notation-duplicate-masters` / **最新commit**: `af38837e` / **PR**: https://github.com/yasushi-honda/doc-split/pull/741 （state=OPEN, mergeable=MERGEABLE）
+- **背景**: [D]監査の[B]表記ゆれ重複候補（姓名間スペース有無等、明示的`isDuplicate`フラグなし）をkanameoneで10組検出。decision-maker指示「同姓同名フラグが明示的になくて、漢字などスペース以外は完全一致なら、それは同姓同名差分ではないと判断して、1つとして対応してあげるのが良い」を受け、統合スクリプトを新規実装。canonical選定は「紐づく書類数が多い方」（decision-maker確認済み）。既存の「許容表記」機構（`CustomerMaster.aliases`）を再利用。
+- **新規ファイル**: `scripts/lib/notationDuplicateMerge.ts`（純粋関数）+`.test.ts`（27件PASS）、`scripts/merge-notation-duplicate-masters.ts`（オーケストレーション、既定dry-run/`--execute`要フラグ）+`.integration.test.ts`（14件PASS、Firestore emulator）。`.github/workflows/run-ops-script.yml`に`merge-notation-duplicate-masters`/`--execute`オプション追加済み（`--backup-out`で削除前バックアップJSON自動出力、artifact retention 90日）。`.github/workflows/ci.yml`のstep名も更新済み。
+- **レビュー実績**: evaluator 3ラウンド（3回目でAPPROVE、完全一致誤統合バグ・バックアップ欠如・notes消失・バックアップ書出し順序を検出・修正）。`/code-review medium`を3ラウンド実施、計10件検出（isDuplicateフラグが実装で一切参照されていなかった致命的な指摘・careManager/careManagerKey同期漏れ含む）、全て修正・再テストPASS済み。**4ラウンド目の`/code-review`をユーザーへ依頼済みだが、結果が返ってくる前にctx上限でhandoffとなった**。
+- **次セッションで最初にやること**:
+  1. `gh pr view 741 --json state,mergeable,statusCheckRollup` でPR状態とCI再確認（CIはlint-build-test含め直近commitで全PASS済み、ただし時間経過後の再確認推奨）
+  2. 4ラウンド目`/code-review medium main...feat/merge-notation-duplicate-masters`の結果が既に会話外で出ていないか確認、未実施ならユーザーに再依頼
+  3. 指摘なし、またはあっても軽微なら、PR番号単位の明示認可を得てマージ（`gh pr merge 741 --squash --delete-branch`）
+  4. マージ後、`gh workflow run "Run Operations Script" -f environment=kanameone -f script='merge-notation-duplicate-masters'`でdry-run実行 → 結果確認（isDuplicateチェック追加により10組から減る可能性あり、想定内） → decision-maker明示認可を得て`--execute`
+- **設計上の重要な既知トレードオフ（実装済み・マージブロック対象外、evaluator/code-review確認済み）**: Phase1(計画)→Phase2(バックアップ)→Phase3(実行)の3段階構成により、複数グループ実行時は「書類読み取り」〜「実際の付け替え」の間隔が単純逐次実装より広がる。削除直前の再検証（書類付け替えの直後・削除の直前に1回）が安全網として機能するため実害は「削除スキップ→手動確認」止まりで、データ消失やdangling referenceには至らない設計。
+
+**（アーカイブ済み、参考）**「同姓同名プロアクティブ通知UI追加」はPR #731/#732/#733/#736/#738の5PR全てマージ済み・dev/kanameone/cocoro全環境反映完了、詳細は上記チェックリスト該当項目参照。
 
 **判明した技術的知見（次回セッションへの申し送り、期限なし）**: `switch-client.sh kanameone`実行後、Bashツールのセッションに環境変数`CLOUDSDK_ACTIVE_CONFIG_NAME=kanameone`が固定的に残留し、`.envrc.client`をdevに書き戻しても新しいBashコマンド呼び出しのたびに`kanameone`が優先されてしまう現象を確認（`~/.config/gcloud/active_config`ファイル自体は正しく`doc-split`）。原因未特定（direnvのキャッシュ無効化が`.envrc.client`のsource先変更を検知していない可能性）。次回gcloud操作時、`gcloud config configurations list`で`kanameone`/`cocoro`がTrueのまま残っていないか要確認、該当時は`unset CLOUDSDK_ACTIVE_CONFIG_NAME && gcloud config configurations activate doc-split`で都度是正が必要。
 
