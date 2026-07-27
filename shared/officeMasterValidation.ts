@@ -47,6 +47,37 @@ export interface OfficeMasterLike {
 }
 
 /**
+ * Firestore doc ID が name 文字列そのものになっている「id===name」signature を
+ * 持つマスターの id 集合を返す (Issue #707)。
+ *
+ * CSV import 由来の contamination（kanameone環境の「かいと」「福の里」等、
+ * Issue #704/#699/#698 参照）は通常の auto-ID (`1a0zN2OehohAdvFo7kdH` 等) ではなく
+ * doc ID が name と一致する異常パターンを持つ。この signature は name の文字数に
+ * 依存せず発生しうるため（例: 7文字の「訪問介護かいと」）、
+ * computeCommonShortMasters の短マスター (length<4) 限定の collision 判定とは
+ * 独立したチェックとして提供する。
+ *
+ * 注意 (#707 調査結果): id===name は contamination の必要十分条件ではない。
+ * dev環境の scripts/samples/offices.csv 由来サンプルマスター等、legitimate な
+ * データでも同じ signature が成立しうることを実データで確認済み。実際の
+ * contamination 確定には #704 のように「同一/類似名の正規 auto-ID マスターが
+ * 別途存在するか」の手動確認が必要なため、本関数の出力は自動 fail 判定ではなく
+ * 手動調査の絞り込みに用いること。
+ *
+ * @param masters 全 office マスター (現状 Firestore データ)
+ * @returns id===name パターンに該当する master id の Set
+ */
+export function computeIdEqualsNameMasters(masters: OfficeMasterLike[]): Set<string> {
+  const ids = new Set<string>();
+  for (const master of masters) {
+    if (master.name.length > 0 && master.id === master.name) {
+      ids.add(master.id);
+    }
+  }
+  return ids;
+}
+
+/**
  * マスター name 同士の substring 衝突から「common short master」id 集合を返す。
  *
  * 短マスター (normalize 後 length < COMMON_SHORT_LENGTH_THRESHOLD) について、他マスター

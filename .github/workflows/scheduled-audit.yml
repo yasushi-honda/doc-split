@@ -76,6 +76,14 @@ jobs:
           # #507 review Critical #2: --fail-on-collision を使うことで legitimate な
           # 短マスター ("ピース"・"わかば" 等) では false-positive Issue を抑制。
           # collision 検出 (PR #502 v2 と同じ判定) のみで通知発火する。
+          #
+          # 注意 (#707 調査結果): --fail-on-id-equals-name はここでは使わない。
+          # doc.id===name 単体は「CSV import 由来の汚染」の必要十分条件ではなく、
+          # scripts/samples/offices.csv 由来の正規サンプルマスター (dev環境に実在) 等
+          # legitimate なケースでも成立するため、自動fail条件に使うと false-positive
+          # Issue を量産する。手動調査用途では
+          # `node scripts/audit-short-office-masters.js --fail-on-id-equals-name`
+          # (run-ops-script.yml 経由) で検出結果を確認できる。
           NODE_PATH=./functions/node_modules \
             FIREBASE_PROJECT_ID="$PROJECT_ID" \
             node scripts/audit-short-office-masters.js \
