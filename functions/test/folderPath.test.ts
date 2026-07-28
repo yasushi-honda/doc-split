@@ -193,4 +193,38 @@ describe('resolveFolderSegments', () => {
     const doc = makeDoc({ documentCategory: 'ケアプラン', fileDate: null });
     expect(() => resolveFolderSegments(doc, KANAME_TEMPLATE)).to.throw(FileDateMissingError);
   });
+
+  describe('姓名間スペースの表記ゆれ正規化(実データ確認例: 「鬼頭 京子」/「鬼頭京子」)', () => {
+    it('customerNameに半角スペースが含まれていてもnameOnly形式ではスペースなしの表記と同じフォルダ名になる', () => {
+      const withSpace = resolveFolderSegments(makeDoc({ customerName: '鬼頭 京子' }), COCORO_TEMPLATE);
+      const withoutSpace = resolveFolderSegments(makeDoc({ customerName: '鬼頭京子' }), COCORO_TEMPLATE);
+      expect(withSpace).to.deep.equal(withoutSpace);
+      expect(withSpace[2]).to.equal('鬼頭京子');
+    });
+
+    it('customerNameに全角スペースが含まれていてもnameOnly形式ではスペースなしの表記と同じフォルダ名になる', () => {
+      const withSpace = resolveFolderSegments(makeDoc({ customerName: '鬼頭　京子' }), COCORO_TEMPLATE);
+      const withoutSpace = resolveFolderSegments(makeDoc({ customerName: '鬼頭京子' }), COCORO_TEMPLATE);
+      expect(withSpace).to.deep.equal(withoutSpace);
+    });
+
+    it('customerNameのスペース表記ゆれはfuriganaInitialSpaceName形式でも吸収され同じフォルダ名になる', () => {
+      const withSpace = resolveFolderSegments(
+        makeDoc({ customerName: '藤 正義', customerFurigana: 'フジマサヨシ' }),
+        KANAME_TEMPLATE
+      );
+      const withoutSpace = resolveFolderSegments(
+        makeDoc({ customerName: '藤正義', customerFurigana: 'フジマサヨシ' }),
+        KANAME_TEMPLATE
+      );
+      expect(withSpace).to.deep.equal(withoutSpace);
+      expect(withSpace[2]).to.equal('フ　藤正義');
+    });
+
+    it('careManagerNameのスペース表記ゆれもnameOnly形式で吸収され同じフォルダ名になる', () => {
+      const withSpace = resolveFolderSegments(makeDoc({ careManagerName: '田中 太郎' }), COCORO_TEMPLATE);
+      const withoutSpace = resolveFolderSegments(makeDoc({ careManagerName: '田中太郎' }), COCORO_TEMPLATE);
+      expect(withSpace).to.deep.equal(withoutSpace);
+    });
+  });
 });

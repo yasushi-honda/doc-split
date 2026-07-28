@@ -96,6 +96,18 @@ function joinInitialAndName(
   return `${initial}${separatorChar}${name}`;
 }
 
+/**
+ * 姓名間の全角/半角スペース有無・欠落表記ゆれ(実データ確認例: 「鬼頭 京子」/「鬼頭京子」)は
+ * customerName/careManagerNameに残ったまま`findOrCreateFolder`の完全一致クエリに渡ると、
+ * 表記の違うレコードが同一人物でも別々のフォルダとして黙って作成/参照されてしまう
+ * (AmbiguousFolderErrorは同一の完全一致文字列が2件以上ヒットした場合にのみ発火するため、
+ * この表記ゆれ自体は検知対象外)。フォルダ名解決の入力段階で内部の空白を除去し、
+ * 表記ゆれのある同一人物が常に同じフォルダ名に解決されるようにする。
+ */
+function stripInternalSpaces(name: string): string {
+  return name.replace(/[\s　]+/g, '');
+}
+
 function resolveCareManagerSegment(
   doc: FolderPathDocInput,
   segment: Extract<DriveFolderSegment, { type: 'careManager' }>
@@ -104,7 +116,7 @@ function resolveCareManagerSegment(
   // untrimmedの careManagerName でガード判定した後もuntrimmedのまま使っていたため、
   // 先頭/末尾に空白のみを含む値(例:" 田中")がガードを通過しつつ空白始まりの
   // 壊れたフォルダ名を生成していた。
-  const careManagerName = doc.careManagerName.trim();
+  const careManagerName = stripInternalSpaces(doc.careManagerName.trim());
   if (!careManagerName) {
     throw new CareManagerMissingError();
   }
@@ -123,7 +135,7 @@ function resolveCustomerSegment(
   // customerName自体の空/空白チェック(code-review xhigh指摘#6対応、2026-07-22):
   // 元はfuriganaのみガードしておりcustomerNameが空文字/空白のみでも素通りしていた
   // (careManager/documentCategoryの同種ガードと非対称だった)。
-  const customerName = doc.customerName.trim();
+  const customerName = stripInternalSpaces(doc.customerName.trim());
   if (!customerName) {
     throw new CustomerNameMissingError();
   }
