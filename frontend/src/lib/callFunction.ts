@@ -25,7 +25,16 @@ export function getCallableErrorCode(err: unknown): string | undefined {
   return typeof code === 'string' ? code.replace(/^functions\//, '') : undefined
 }
 
-/** リトライ対象のエラーかどうか判定 */
+/**
+ * リトライ対象のエラーかどうか判定
+ *
+ * Issue #251 Scope3 (/code-review指摘・二度目の再検証): 一度 'unavailable' を追加したが、
+ * この判定は callFunction() 全体で共有されるため、regenerateSummary 以外の既存 caller
+ * (例: pdfOperations.ts のメンテナンスゲート閉時 'unavailable') にも波及する。ゲート閉は
+ * 秒単位で解消しないため即時リトライは効果がなくCloud Function呼出を倍加させるだけであり、
+ * Scope3の対象外(summary生成のエラー分類)を超えた副作用だったため revert した。
+ * regenerateSummary の一時的エラーは要約再生成ボタンをユーザーが再クリックすれば足りる。
+ */
 function isRetryableError(err: unknown): boolean {
   const code = getCallableErrorCode(err)
   return code === 'unauthenticated' ||
@@ -79,9 +88,11 @@ export function getCallableErrorMessage(err: unknown, defaultMessage = '処理�
   if (code === 'unauthenticated' || msg.includes('unauthenticated')) return 'ログインセッションが切れました。ページを再読み込みしてください。'
   if (code === 'deadline-exceeded' || code === 'internal' || msg.includes('deadline-exceeded') || msg.includes('internal')) return '通信エラーが発生しました。電波状況を確認して再度お試しください。'
   if (code === 'permission-denied' || msg.includes('permission-denied') || msg.includes('not in whitelist')) return '権限がありません。'
-  // failed-preconditionはBE側が状況別の具体的な日本語文言をHttpsErrorのmessageに
-  // 詰めて投げる運用のため(例: retryDriveExport.tsの「リトライ対象外です…」
-  // 「Google Drive連携機能が無効です」)、defaultMessageに丸めずそのまま返す
-  if (code === 'failed-precondition') return msg
+  // failed-precondition/resource-exhausted/unavailableはBE側が状況別の具体的な日本語文言を
+  // HttpsErrorのmessageに詰めて投げる運用のため(例: retryDriveExport.tsの「リトライ対象外です…」
+  // 「Google Drive連携機能が無効です」、regenerateSummary.tsの「割当上限に達しました」
+  // 「一時的に利用できません」、pdfOperations.tsの「システムメンテナンス中のため…」)、
+  // defaultMessageに丸めずそのまま返す
+  if (code === 'failed-precondition' || code === 'resource-exhausted' || code === 'unavailable') return msg
   return defaultMessage
 }

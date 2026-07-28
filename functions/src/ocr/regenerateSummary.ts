@@ -12,6 +12,7 @@ import { safeLogError } from '../utils/errorLogger';
 import type { SummaryField } from '../../../shared/types';
 import { buildSummaryFields } from './summaryRequestBuilder';
 import { generateSummaryCore, MIN_OCR_LENGTH_FOR_SUMMARY } from './summaryGenerator';
+import { classifySummaryError, mapSummaryErrorToHttpsError } from './summaryErrorClassification';
 import { resolveDetailFields, readDocWithDetail } from './documentDetail';
 
 const LOCATION = GCP_CONFIG.location;
@@ -74,27 +75,37 @@ export const regenerateSummary = functions.https.onCall(
       );
     }
 
-    // 要約生成 (Issue #214: 共通コアに委譲。本経路は error を rethrow して onCall の internal error 化)
+    // 要約生成 (Issue #214: 共通コアに委譲。本経路は error を rethrow して onCall の HttpsError 化)
     // Issue #266: rethrow 前に safeLogError で errors collection + 通知による検知を確保。
     // 順序根拠 (rules/error-handling.md § 1): 本経路は "状態復旧なし + 即 rethrow" のため、
     // ログ記録 → rethrow の順を採る。safeLogError は内部で try/catch 済、caller に波及しない。
     // onCall 呼出の client 側タイムアウトは Firebase 標準 70s、logError Firestore 書込 ~500ms で影響軽微。
+    // Issue #251 Scope3: 空/ブロック応答は generateSummaryCore が SummaryBlockedError を throw するため
+    // (finishReason/safetyRatings を保持したまま)、ここで !summary.text を再チェックする必要はない。
+    // quota/transient/blocked をエラー種別で HttpsError コードへ細分化し、client 側の再試行判断を助ける。
+    // console.error(error) はここで先に実行する (rules/error-handling.md § 1「最低限のconsole.error
+    // はtry-catch外で先に実行」)。safeLogError内部のconsole.errorはerrorCode/message等の flat summary
+    // のみでスタックトレースを含まないため (/code-review指摘)、Cloud Logging上のstack可視性はこちらが担う。
+    // classifySummaryErrorには生のerror(catch句の引数)をそのまま渡す。console.error/safeLogError用に
+    // 作る `new Error(String(error))` ラップ値を渡すと、is429Error/isTransientErrorが読む
+    // .code/.status/.cause.codeが失われ'unknown'に落ちるため (/code-review指摘)。
     let summary: SummaryField;
     try {
       summary = await generateSummaryCore(ocrResult, documentType);
     } catch (error) {
-      console.error('Failed to generate summary:', error);
+      const err = error instanceof Error ? error : new Error(String(error));
+      console.error('Failed to generate summary:', err);
       await safeLogError({
-        error: error instanceof Error ? error : new Error(String(error)),
+        error: err,
         source: 'ocr',
         functionName: 'regenerateSummary',
         documentId: docId,
       });
-      throw error;
-    }
-
-    if (!summary.text) {
-      throw new functions.https.HttpsError('internal', '要約の生成に失敗しました');
+      const mapping = mapSummaryErrorToHttpsError(classifySummaryError(error));
+      if (mapping) {
+        throw new functions.https.HttpsError(mapping.code, mapping.message);
+      }
+      throw err;
     }
 
     // ドキュメント更新（Issue #209: 切り詰めメタデータも保存し後追い検出を可能にする）
