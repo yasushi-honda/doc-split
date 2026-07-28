@@ -25,18 +25,21 @@ export function getCallableErrorCode(err: unknown): string | undefined {
   return typeof code === 'string' ? code.replace(/^functions\//, '') : undefined
 }
 
-/** リトライ対象のエラーかどうか判定 */
+/**
+ * リトライ対象のエラーかどうか判定
+ *
+ * Issue #251 Scope3 (/code-review指摘・二度目の再検証): 一度 'unavailable' を追加したが、
+ * この判定は callFunction() 全体で共有されるため、regenerateSummary 以外の既存 caller
+ * (例: pdfOperations.ts のメンテナンスゲート閉時 'unavailable') にも波及する。ゲート閉は
+ * 秒単位で解消しないため即時リトライは効果がなくCloud Function呼出を倍加させるだけであり、
+ * Scope3の対象外(summary生成のエラー分類)を超えた副作用だったため revert した。
+ * regenerateSummary の一時的エラーは要約再生成ボタンをユーザーが再クリックすれば足りる。
+ */
 function isRetryableError(err: unknown): boolean {
   const code = getCallableErrorCode(err)
   return code === 'unauthenticated' ||
     code === 'deadline-exceeded' ||
-    code === 'internal' ||
-    // Issue #251 Scope3 (/code-review指摘): 従来はVertex AI等の一時的エラーもBE側で
-    // rethrowされ Firebase の既定ラップで'internal'化されていたため、ここで暗黙にリトライ
-    // されていた。エラーコードを細分化した際に'unavailable'を対象から漏らすと、
-    // 一時的エラーの自己修復リトライが失われる(resource-exhaustedはquota枯渇のため
-    // 即時リトライで悪化しうるので対象外のまま)。
-    code === 'unavailable'
+    code === 'internal'
 }
 
 /**

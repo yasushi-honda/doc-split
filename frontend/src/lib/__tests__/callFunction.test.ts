@@ -142,15 +142,13 @@ describe('callFunction - リトライ動作 (silent-failure-hunterレビュー�
     expect(mockCallableImpl).toHaveBeenCalledTimes(2)
   })
 
-  it('code=unavailableは一時的エラーとしてリトライ対象になる(Issue #251 Scope3 /code-review指摘: 従来はinternal化により暗黙にリトライされていた自己修復動作の維持)', async () => {
-    const err = makeFunctionsError('unavailable', 'AI要約生成サービスが一時的に利用できません')
-    mockCallableImpl
-      .mockRejectedValueOnce(err)
-      .mockResolvedValueOnce({ data: { success: true } })
+  it('code=unavailableはリトライ対象外(Issue #251 Scope3 /code-review二度目の指摘: pdfOperations.tsのメンテナンスゲート閉等、既存callerへの副作用を避けるためrevert)', async () => {
+    const err = makeFunctionsError('unavailable', 'システムメンテナンス中のため、しばらくしてから再度お試しください')
+    mockCallableImpl.mockRejectedValueOnce(err)
 
-    await expect(callFunction('regenerateSummary', {})).resolves.toEqual({ success: true })
-    expect(mockGetIdToken).toHaveBeenCalledWith(true)
-    expect(mockCallableImpl).toHaveBeenCalledTimes(2)
+    await expect(callFunction('splitPdf', {})).rejects.toBe(err)
+    expect(mockGetIdToken).not.toHaveBeenCalled()
+    expect(mockCallableImpl).toHaveBeenCalledTimes(1)
   })
 
   it('code=resource-exhaustedはquota枯渇のためリトライ対象外(即時悪化防止)', async () => {
