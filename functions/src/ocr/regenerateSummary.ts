@@ -12,7 +12,7 @@ import { safeLogError } from '../utils/errorLogger';
 import type { SummaryField } from '../../../shared/types';
 import { buildSummaryFields } from './summaryRequestBuilder';
 import { generateSummaryCore, MIN_OCR_LENGTH_FOR_SUMMARY } from './summaryGenerator';
-import { classifySummaryError } from './summaryErrorClassification';
+import { classifySummaryError, mapSummaryErrorToHttpsError } from './summaryErrorClassification';
 import { resolveDetailFields, readDocWithDetail } from './documentDetail';
 
 const LOCATION = GCP_CONFIG.location;
@@ -86,6 +86,9 @@ export const regenerateSummary = functions.https.onCall(
     // console.error(error) はここで先に実行する (rules/error-handling.md § 1「最低限のconsole.error
     // はtry-catch外で先に実行」)。safeLogError内部のconsole.errorはerrorCode/message等の flat summary
     // のみでスタックトレースを含まないため (/code-review指摘)、Cloud Logging上のstack可視性はこちらが担う。
+    // classifySummaryErrorには生のerror(catch句の引数)をそのまま渡す。console.error/safeLogError用に
+    // 作る `new Error(String(error))` ラップ値を渡すと、is429Error/isTransientErrorが読む
+    // .code/.status/.cause.codeが失われ'unknown'に落ちるため (/code-review指摘)。
     let summary: SummaryField;
     try {
       summary = await generateSummaryCore(ocrResult, documentType);
@@ -98,25 +101,11 @@ export const regenerateSummary = functions.https.onCall(
         functionName: 'regenerateSummary',
         documentId: docId,
       });
-      switch (classifySummaryError(err)) {
-        case 'quota':
-          throw new functions.https.HttpsError(
-            'resource-exhausted',
-            'AI要約生成の割当上限に達しました。しばらく待って再試行してください'
-          );
-        case 'transient':
-          throw new functions.https.HttpsError(
-            'unavailable',
-            'AI要約生成サービスが一時的に利用できません。しばらく待って再試行してください'
-          );
-        case 'blocked':
-          throw new functions.https.HttpsError(
-            'failed-precondition',
-            'この書類の内容から要約を生成できませんでした'
-          );
-        default:
-          throw err;
+      const mapping = mapSummaryErrorToHttpsError(classifySummaryError(error));
+      if (mapping) {
+        throw new functions.https.HttpsError(mapping.code, mapping.message);
       }
+      throw err;
     }
 
     // ドキュメント更新（Issue #209: 切り詰めメタデータも保存し後追い検出を可能にする）

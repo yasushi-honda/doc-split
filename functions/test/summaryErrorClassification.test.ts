@@ -17,6 +17,7 @@ import {
   extractBlockedSummaryDetails,
   SummaryBlockedError,
   classifySummaryError,
+  mapSummaryErrorToHttpsError,
 } from '../src/ocr/summaryErrorClassification';
 
 describe('extractBlockedSummaryDetails (#251 Scope3)', () => {
@@ -90,5 +91,37 @@ describe('classifySummaryError (#251 Scope3)', () => {
   it('Error以外の非オブジェクトthrow値も例外を投げず unknown に分類される', () => {
     expect(classifySummaryError('not an error')).to.equal('unknown');
     expect(classifySummaryError(undefined)).to.equal('unknown');
+  });
+});
+
+describe('mapSummaryErrorToHttpsError (#251 Scope3 /code-review指摘: regenerateSummary.ts本体は' +
+  'firebase-admin依存でテストプールから直接検証できないため、コード/メッセージ対応をここで担保する)', () => {
+  it('quotaは resource-exhausted + 割当上限メッセージへマップされる', () => {
+    const mapping = mapSummaryErrorToHttpsError('quota');
+    expect(mapping?.code).to.equal('resource-exhausted');
+    expect(mapping?.message).to.include('割当上限');
+  });
+
+  it('transientは unavailable + 一時的に利用できないメッセージへマップされる', () => {
+    const mapping = mapSummaryErrorToHttpsError('transient');
+    expect(mapping?.code).to.equal('unavailable');
+    expect(mapping?.message).to.include('一時的に利用できません');
+  });
+
+  it('blockedは failed-precondition + 内容起因メッセージへマップされる', () => {
+    const mapping = mapSummaryErrorToHttpsError('blocked');
+    expect(mapping?.code).to.equal('failed-precondition');
+    expect(mapping?.message).to.include('内容から要約を生成できませんでした');
+  });
+
+  it('unknownは null を返し caller 側で元エラーの rethrow を促す', () => {
+    expect(mapSummaryErrorToHttpsError('unknown')).to.equal(null);
+  });
+
+  it('quota/transient/blockedの3コードは互いに異なるHttpsErrorコードを持つ (取り違え防止)', () => {
+    const codes = (['quota', 'transient', 'blocked'] as const).map(
+      (c) => mapSummaryErrorToHttpsError(c)?.code
+    );
+    expect(new Set(codes).size).to.equal(3);
   });
 });
