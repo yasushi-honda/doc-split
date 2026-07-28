@@ -132,3 +132,97 @@ jobs:
             --title "[scheduled-audit] 短 office マスター検出 (${TODAY})" \
             --label "bug,P2" \
             --body "$BODY"
+
+  cocoro-hosting-lag:
+    # cocoro Hosting は deploy-hosting.yml 非対応(Secrets未登録)でローカル手動デプロイが
+    # 正規経路のため、frontend/ 変更の反映漏れをCIの外側で検知する手段がなかった (2026-07-28)。
+    runs-on: ubuntu-latest
+    outputs:
+      lag_detected: ${{ steps.check.outputs.exit_code == '1' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Authenticate to Google Cloud (cocoro)
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Check cocoro Hosting reflection lag
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set +e
+          node scripts/audit-cocoro-hosting-lag.js --threshold-hours 48
+          code=$?
+          set -e
+          # スクリプトの exit code は 0=OK / 1=遅延検知 / 2=API障害等の実行エラー の3値。
+          # ここを区別しないと、GCP認証やGitHub APIの一時的なエラー(exit 2)まで
+          # 「遅延検知」(exit 1)と誤認して誤ったissueを量産してしまう(finder指摘)。
+          # exit 2 はissue化せずworkflow annotationとして可視化するに留める。
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          if [ "$code" != "0" ] && [ "$code" != "1" ]; then
+            echo "::warning::cocoro-hosting-lag audit script failed unexpectedly (exit $code) — infra error, not a lag detection"
+          fi
+
+  notify-cocoro-hosting-lag:
+    needs: cocoro-hosting-lag
+    runs-on: ubuntu-latest
+    if: always() && needs.cocoro-hosting-lag.outputs.lag_detected == 'true'
+    permissions:
+      issues: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Skip if an open issue already exists
+        id: existing
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          COUNT=$(gh issue list --state open --json title \
+            --jq '[.[] | select(.title | startswith("[scheduled-audit] cocoro Hosting未反映"))] | length')
+          echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+
+      - name: Create issue for cocoro Hosting lag
+        if: steps.existing.outputs.count == '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          TODAY=$(date -u +%Y-%m-%d)
+          BODY=$(cat <<EOF
+          ## cocoro Hosting反映が閾値(48時間)を超えて遅延
+
+          [Workflow run](${RUN_URL}) で、frontend/ の最新マージ済みcommitに対し
+          cocoroのFirebase Hosting反映が48時間以上遅延していることを検知しました。
+
+          ## 背景
+          cocoro Hostingは .github/workflows/deploy-hosting.yml の対象外
+          (VITE_FIREBASE_*_COCORO Secrets未登録)のため、ローカル手動
+          \`./scripts/switch-client.sh cocoro && ./scripts/deploy-to-project.sh cocoro\`
+          が正規デプロイ経路です。
+
+          ## 確認手順
+          1. workflow run ログでlag時間・commit時刻・release時刻を確認
+          2. 反映が必要なら上記コマンドでcocoro Hostingを手動デプロイ
+          3. 意図的な保留(リリース待ち等)なら本issueに理由を記載しpostponedラベルを付与
+          EOF
+          )
+          # shellcheck disable=SC2001
+          BODY=$(echo "$BODY" | sed 's/^          //')
+          gh issue create \
+            --title "[scheduled-audit] cocoro Hosting未反映 (${TODAY})" \
+            --label "bug,P2" \
+            --body "$BODY"
