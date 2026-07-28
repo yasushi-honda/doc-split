@@ -138,7 +138,7 @@ jobs:
     # 正規経路のため、frontend/ 変更の反映漏れをCIの外側で検知する手段がなかった (2026-07-28)。
     runs-on: ubuntu-latest
     outputs:
-      lag_detected: ${{ steps.check.outcome == 'failure' }}
+      lag_detected: ${{ steps.check.outputs.exit_code == '1' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -158,10 +158,21 @@ jobs:
 
       - name: Check cocoro Hosting reflection lag
         id: check
-        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: node scripts/audit-cocoro-hosting-lag.js --threshold-hours 48
+        run: |
+          set +e
+          node scripts/audit-cocoro-hosting-lag.js --threshold-hours 48
+          code=$?
+          set -e
+          # スクリプトの exit code は 0=OK / 1=遅延検知 / 2=API障害等の実行エラー の3値。
+          # ここを区別しないと、GCP認証やGitHub APIの一時的なエラー(exit 2)まで
+          # 「遅延検知」(exit 1)と誤認して誤ったissueを量産してしまう(finder指摘)。
+          # exit 2 はissue化せずworkflow annotationとして可視化するに留める。
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          if [ "$code" != "0" ] && [ "$code" != "1" ]; then
+            echo "::warning::cocoro-hosting-lag audit script failed unexpectedly (exit $code) — infra error, not a lag detection"
+          fi
 
   notify-cocoro-hosting-lag:
     needs: cocoro-hosting-lag
