@@ -139,6 +139,7 @@ on:
           - audit-filename-pattern-issue686
           - backfill-drive-export --dry-run
           - backfill-drive-export
+          - audit-drive-folder-space-variants
       doc_id:
         description: 'Document ID (required when script contains --doc-id; ignored otherwise)'
         required: false
