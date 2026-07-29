@@ -1,6 +1,28 @@
 # ハンドオフメモ
 
-**更新日**: 2026-07-24（kanameone UXフィードバック①〜⑤対応 + セカンドオピニオン修正 + ヘルプ精度是正、Drive Phase1ミッションとは独立）
+**更新日**: 2026-07-29（kanameone Drive連携OAuth不具合対応・Phase B完了条件の教訓反映）
+
+## kanameone Drive連携OAuth不具合対応・Phase B完了条件の教訓反映（2026-07-29）
+
+kanameone担当者(katsumihiraide@kanameone.com)から「Google Driveと連携する」ボタン押下後「認証コードが無効または期限切れです」と表示され連携できない旨の実機スクリーンショット付き報告を受け調査した。
+
+**真因**: `drive.googleapis.com`（Google Drive API本体）がkanameone/cocoro/dev全3環境で未有効化だった。Phase Bで有効化していたのは`picker.googleapis.com`（フォルダ選択UI用）のみで、実データ操作用の本体APIが完了条件チェックリスト自体に含まれていなかった。
+
+**失敗メカニズム**（Cloud Loggingの実測ログで確認）: OAuth認可コード交換自体は成功するが、後続のDrive API疎通確認(`fetchConnectedEmail`)で`Google Drive API has not been used...or it is disabled`エラー発生→汎用`internal`エラーとしてFEに返る→`frontend/src/lib/callFunction.ts`の自動リトライが**使用済み認可コードで再送**→2回目は`invalid_grant`（非リトライ対象の`failed-precondition`）となりこれが最終的にユーザー画面へ表示、という2段階のエラー連鎖だった。
+
+**対処**: kanameone/cocoro/dev全3環境で`gcloud services enable drive.googleapis.com`を実行し解消（非破壊的操作）。dev環境では実際にFirestoreの`seed-doc-0002`を`verified:true`に更新してDriveエクスポートを実トリガーし、`driveExportStatus:'exported'`・`driveFileId`付与を確認、根本原因の解消をend-to-endで実証した。kanameone本番は担当者への再検証依頼文書（コピーボタン付きHTML、ローカル生成）を送付済み、実際の再試行結果は次回確認。
+
+**再発防止**: `scripts/setup-tenant.sh`のAPI有効化リストに`drive.googleapis.com`/`picker.googleapis.com`を追加（PR #756マージ済み）。GOAL.mdに教訓化したPhase B完了条件チェックリスト修正版を追記（PR #757マージ済み）。副次的に発見したリトライ設計課題（後続処理失敗時に使用済みOAuth codeで再送してしまう構造）はIssue #755として起票（P2、緊急性なし）。
+
+### Issue Net
+Net -1（Close 0件・起票1件(#755)）。#755は今回発見した副次的なリトライ設計課題の記録目的の起票で、triage基準（実バグ・再現条件明確）を満たす。本流の不具合対応自体は3環境のAPI有効化+dev環境でのend-to-end実証により完全に解決済みで、Net -1は品質改善の記録であり後退ではない。
+
+### 同根再発スキャン・対症療法判定（handoff §4.6/§4.7）
+- **同根候補を検出（STOP該当）**: 過去7日のアーカイブ(`docs/handoff/archive/2026-07-history.md:113`)に、2026-07-20のスパイクテスト時「GCP Console上でOAuth ClientへのlocalhostOrigin追加、**Drive API/Picker API有効化**、API Key制限へのAPI追加を実施」という記述がある。しかし今回の調査でdev環境は2026-07-29時点で`drive.googleapis.com`が未有効化だったと実測確認済みであり、この記述と矛盾する。
+- **真のroot causeの仮説（3つ以上）**: ①最も可能性が高い仮説: session137の「Drive API/Picker API有効化」という記述は実際には`picker.googleapis.com`のみを指す省略表現で、Drive API本体は最初から有効化されていなかった（＝今回発見した「2つのAPIの名前的混同」という認知パターンが、記録レベルで2026-07-20の時点から既に存在していた） ②2026-07-20のスパイクテスト後の後片付け（テストフォルダのゴミ箱移動等）の過程で誤ってAPI自体も無効化された ③プロジェクト請求先アカウント変更等でAPIが自動的にリセットされた（可能性は低い）
+- **もう1件同根が出るとしたらどの経路か**: 今回のPR #756でsetup-tenant.shに両API追加、PR #757でGOAL.mdにチェックリスト化したことで機械的な抜けは防止したが、手動のGCP Console操作（新規クライアントのPhase B相当作業やスパイク検証）に頼る限り、担当者が「Drive関連のAPI」を一括りに捉えて実際にはPicker APIしか有効化しない、という同じ認知パターンが再発しうる。GCP Console上でAPI名が似ているため、有効化直後の一覧確認（`gcloud services list --enabled | grep drive`）を都度実施する運用が必要
+- **対症療法判定**: 4基準（retry/fallback限定修正・外部要因調査欠如・過去30日同症状PR・smoke限定検証）いずれにも該当せず。修正は根本原因（プロジェクト単位のAPI有効化状態）を直接是正しており、検証もdev環境での実際のDrive書き込みend-to-end実証（smokeを超える水準）。「なぜ今起きたか」も、Phase C（kanameone担当者による実接続）が2026-07-29に初めて実施されたタイミングで初めてこのコードパスが本番相当条件で実行されたためと明確に説明できる
+- **結論**: 同根候補は「過去の記録の不正確さ」に起因するものであり、今回の対処（API有効化+チェックリスト化+スクリプト修正）で機械的な再発は防止済み。ただし手動オペレーション時の認知的混同リスクは完全には消えないため、次回同様のインフラ準備作業では`gcloud services list --enabled`での機械的突合を都度実施することを推奨する
 
 ## kanameone UXフィードバック①〜⑤対応 + セカンドオピニオン修正 + ヘルプページ精度是正（2026-07-24、Drive Phase1ミッションとは無関係の独立セッション）
 
