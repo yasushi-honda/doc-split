@@ -121,9 +121,19 @@ cocoro/kanameから、書類（ケアプラン・医療・介護保険証等）�
 
 ## 🔄 中断点（in-flight）
 
-なし。PR #752（利用者フォルダ名のスペース表記ゆれ正規化）は2026-07-28にマージ完了、kanameone・cocoro双方へFunctions反映済み（詳細は上記チェックリスト該当項目参照）。
+**対象タスク**: kanameone Drive連携OAuth不具合対応（2026-07-29、GOAL.md「進行中のtasks」該当項目参照）
 
-**次のアクション**: なし（このミッションは完了）。Phase C（kanameone/cocoroクライアント側Drive OAuth接続、外部依存）は引き続き先方実施待ち。将来ニーズとして「顧客マスター手動統合UI」が話題に上ったが、Drive Phase1がflag OFFの現状では実装の緊急性なし、Phase C/D完了後にDriveの実挙動を見てから設計する方針（実装は未着手・メモのみ）。
+**直前の状態**: kanameone担当者から「認証コードが無効または期限切れです」との不具合報告を受け調査、真因（`drive.googleapis.com`未有効化）を特定し、kanameone/cocoro/dev全3環境で`gcloud services enable drive.googleapis.com`を実行済み。dev環境では`seed-doc-0002`を使い実際にDriveエクスポートをトリガーし成功（`driveExportStatus:'exported'`）を実証済み。再発防止（PR #756）・GOAL.md教訓化（PR #757）・副次バグのIssue化（#755）は完了。**kanameone担当者へ再検証依頼文書（コピーボタン付きHTML、ローカル生成、リポジトリ非管理）を作成しdecision-makerが送付済み（2026-07-29）**。
+
+**次の一手**: kanameone担当者からの返信・再試行結果を待つ。返信が来たら以下の検証コマンドでCloud LoggingとFirestoreを確認し、実際に接続が成功したか（`settings/drive.authMode`/`connectedEmail`が新規に書き込まれているか）を実測で確認する。
+
+**検証コマンド**（再開時）:
+```bash
+gcloud functions logs read exchangeDriveAuthCode --project=docsplit-kanameone --account=hy.unimail.11@gmail.com --region=asia-northeast1 --gen2 --limit=20
+curl -s -X GET -H "Authorization: Bearer $(gcloud auth print-access-token --account=hy.unimail.11@gmail.com)" "https://firestore.googleapis.com/v1/projects/docsplit-kanameone/databases/(default)/documents/settings/drive"
+```
+
+**次のアクション**: 上記trigger（担当者からの返信）待ち。Phase C（kanameone/cocoroクライアント側Drive OAuth接続、外部依存）は引き続き先方実施待ち。将来ニーズとして「顧客マスター手動統合UI」が話題に上ったが、Drive Phase1がflag OFFの現状では実装の緊急性なし、Phase C/D完了後にDriveの実挙動を見てから設計する方針（実装は未着手・メモのみ）。
 
 **フォローアップ課題（Issue #753、P2・実害未確認）**: PR #752の`/code-review low`で「別人がスペース違いのみで同一漢字名の場合に誤って同一フォルダへ収束するリスク」が指摘された。既存の同姓同名衝突検知(`shared/customerIdentity.ts`の`findSameNameCollisionNames`)も同じくスペース非正規化のため元々検知できておらず、新規リスクではなく既存ギャップ。同関数はOCR紐付け(`ocrProcessor.ts`)・FAX重複検知(`faxDuplication.ts`)・同姓同名UIに跨る横断利用のため、拡張の要否は影響範囲評価込みで別Issueに切り出し済み。実例は現時点で未確認、着手判断はdecision-maker待ち。
 
