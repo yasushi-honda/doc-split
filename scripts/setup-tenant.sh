@@ -327,6 +327,8 @@ APIS=(
     "cloudscheduler.googleapis.com"
     "cloudbuild.googleapis.com"
     "identitytoolkit.googleapis.com"
+    "drive.googleapis.com"
+    "picker.googleapis.com"
 )
 
 for api in "${APIS[@]}"; do
