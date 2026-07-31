@@ -110,9 +110,10 @@ PR #452 は **「過去破壊の修復アルゴリズム」**であって、**�
 
 8. **MUST** (genesis provenance、2026-07-31 本 ADR 改訂で追加): 分割を経ていない doc (Gmail 添付取込 / 手動アップロードのみで完結、`fileUrl` が `original/` 直下、`parentDocumentId` 不在) は、そもそも split 由来の provenance を持ち得ない。PR-D4 backfill (MUST 6/7、Phase A の `NeedsManualReview` classify) はこれらを構造的に永久救済不可としているため、`rotatePdfPages` は当該 doc に対し回転時点でその場で起点 provenance を実測合成する ("genesis provenance")。
 
-   **適格条件** (`functions/src/pdf/genesisEligibility.ts` の `isGenesisEligible()` で判定、3つ全て満たす場合のみ):
+   **適格条件** (`functions/src/pdf/genesisEligibility.ts` の `isGenesisEligible()` で判定、4つ全て満たす場合のみ):
    - `provenance` が不在
    - `parentDocumentId` が不在
+   - `isSplitSource` が true でない (`splitPdf` が親 doc に書く `status:'split'`/`isSplitSource:true` は `fileUrl`/`provenance`/`parentDocumentId` を一切変更しないため、上記2条件だけでは「分割済みの記録として非アクティブ化された親 doc」を除外できない。この doc に genesis 合成を許すと `splitInto` を持つ親と回転済み子が矛盾した状態になる、code-review 指摘で追加)
    - `fileUrl` の object name が `original/` 直下 (Gmail 添付取込 `checkGmailAttachments.ts` / 手動アップロード `uploadPdf.ts` の 2 箇所でのみ生成される prefix。`Date.now()` ベースの命名で衝突経路が存在せず、Issue #432 の被害対象になり得ない)
 
    `processed/` 配下の legacy doc (Issue #432 の被害候補) は明示的に対象外とし、従来通り `failed-precondition` で reject する (PR-D4 backfill の領分として温存)。
