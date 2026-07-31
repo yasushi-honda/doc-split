@@ -8,10 +8,11 @@ name: Run Operations Script
 
 on:
   # 注: workflow_dispatch.inputs は GitHub Actions の仕様上 25 個まで定義可能
-  # (2025-12-04 拡張、それ以前は 10 個上限)。現在 15 個使用中（environment / script /
-  # doc_id / file_name / name1 / name2 / from_name / to_name / delete_from_master /
-  # expected_count / exec_args_json / survey_artifact_run_id / delete_ids /
-  # office_names / office_ids）、残り 10。
+  # (2025-12-04 拡張、それ以前は 10 個上限)。現在 19 個使用中（environment / script /
+  # backfill_limit / doc_id / file_name / name1 / name2 / from_name / to_name /
+  # delete_from_master / expected_count / delete_ids / office_names / office_ids /
+  # exec_args_json / survey_artifact_run_id / marked_by / run_id_for_rollback /
+  # rebuild_group_ids）、残り 6。
   # スクリプト固有の引数追加で上限が窮屈になる場合は、共通 inputs を JSON 文字列に
   # 統合する設計（例: script_args_json）への移行を検討。
   workflow_dispatch:
@@ -151,6 +152,13 @@ on:
           - set-drive-allowlist --clear-empty
           - set-drive-allowlist --remove --dry-run
           - set-drive-allowlist --remove
+          - backfill-drive-export --dry-run --limit --expected-count
+          - backfill-drive-export --limit --expected-count
+      backfill_limit:
+        description: 'backfill-drive-export --limit: canary実行時のマーク上限件数(数値のみ)'
+        required: false
+        type: string
+        default: ''
       doc_id:
         description: 'Document ID (required when script contains --doc-id or set-drive-allowlist --set; ignored otherwise)'
         required: false
@@ -300,6 +308,8 @@ jobs:
         env:
           INPUT: ${{ github.event.inputs.script }}
           DOC_ID: ${{ github.event.inputs.doc_id }}
+          EXPECTED_COUNT: ${{ github.event.inputs.expected_count }}
+          BACKFILL_LIMIT: ${{ github.event.inputs.backfill_limit }}
         run: |
           set -euo pipefail
           SCRIPT_NAME=$(echo "$INPUT" | awk '{print $1}')
@@ -334,6 +344,26 @@ jobs:
               exit 1
             fi
             SCRIPT_ARGS=$(echo "$SCRIPT_ARGS" | sed "s/--set/--set $DOC_ID/")
+          fi
+
+          # backfill-drive-export --limit/--expected-count はStage E1 canary安全策
+          # (breezy-tickling-sifakis.md runbook)。値省略は誤操作(無制限全件処理)に
+          # つながるため、既存の--doc-id置換と同一パターンでinputからの明示値を必須化する。
+          if [ "$SCRIPT_NAME" = "backfill-drive-export" ]; then
+            if echo "$SCRIPT_ARGS" | grep -q -- '--limit'; then
+              if [ -z "$BACKFILL_LIMIT" ] || ! echo "$BACKFILL_LIMIT" | grep -qE '^[0-9]+$'; then
+                echo "ERROR: backfill_limit must be a non-negative integer when script contains --limit" >&2
+                exit 1
+              fi
+              SCRIPT_ARGS=$(echo "$SCRIPT_ARGS" | sed "s/--limit/--limit $BACKFILL_LIMIT/")
+            fi
+            if echo "$SCRIPT_ARGS" | grep -q -- '--expected-count'; then
+              if [ -z "$EXPECTED_COUNT" ] || ! echo "$EXPECTED_COUNT" | grep -qE '^[0-9]+$'; then
+                echo "ERROR: expected_count must be a non-negative integer when script contains --expected-count" >&2
+                exit 1
+              fi
+              SCRIPT_ARGS=$(echo "$SCRIPT_ARGS" | sed "s/--expected-count/--expected-count $EXPECTED_COUNT/")
+            fi
           fi
 
           echo "script_name=$SCRIPT_NAME" >> "$GITHUB_OUTPUT"
@@ -744,7 +774,9 @@ jobs:
             # backfill-drive-export (ADR-0022 code-review指摘#43対応、2026-07-22) は
             # firebase-adminのみ依存(functions/src非依存、STORAGE_BUCKET不使用。Drive API/
             # Storageアクセスは行わずdriveExportStatus:'error'のマークのみ行う設計)。
-            # STORAGE_BUCKET は resolve step で env 化済。
+            # STORAGE_BUCKET は resolve step で env 化済。--limit/--expected-countは
+            # backfill_limit/expected_count入力からParse段階で値注入済み(Stage E1 canary安全策)。
+            # --manifest-outは常時付与しartifact経由で取得(rollback時の対象docId一覧として必須)。
             # drive-export-status-report (Phase D/E再設計、Codex High指摘#5対応、2026-07-25) は
             # read-only。scripts/lib/driveExportBackfillHelpers.tsに依存するためts-node経由。
             # 引数なし(全てのモードで固定クエリ)、STORAGE_BUCKET不使用。
@@ -771,6 +803,9 @@ jobs:
               # 出力されレビュー材料になる。log secret maskingで内容が欠落しうるため
               # artifact経由で取得する。
               EXTRA_ARGS="--backup-out ${GITHUB_WORKSPACE}/scripts/merge-notation-duplicate-masters-backup.json"
+            elif [ "$SCRIPT_NAME" = "backfill-drive-export" ]; then
+              # rollback時の対象docId一覧(--rollback <manifest>)として必須のため常時出力。
+              EXTRA_ARGS="--manifest-out ${GITHUB_WORKSPACE}/scripts/backfill-drive-export-manifest.json"
             fi
             cd scripts
             NODE_PATH=../functions/node_modules \
@@ -920,6 +955,17 @@ jobs:
         with:
           name: merge-notation-duplicate-masters-backup-${{ github.event.inputs.environment }}-${{ github.run_id }}
           path: scripts/merge-notation-duplicate-masters-backup.json
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Upload backfill-drive-export manifest artifact
+        # Phase D/E再設計(breezy-tickling-sifakis.md): --rollbackの対象docId一覧として必須の
+        # 復旧材料。dry-runでも出力されるため canary の事前レビュー材料としても使える。
+        if: ${{ startsWith(github.event.inputs.script, 'backfill-drive-export') && always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: backfill-drive-export-manifest-${{ github.event.inputs.environment }}-${{ github.run_id }}
+          path: scripts/backfill-drive-export-manifest.json
           if-no-files-found: warn
           retention-days: 90
 
