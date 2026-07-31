@@ -48,11 +48,17 @@ function isRetryableError(err: unknown): boolean {
  * @param name - Cloud Function名
  * @param data - リクエストデータ
  * @param options.timeout - クライアント側タイムアウト（ms）。Cloud Functions側と合わせること。
+ * @param options.retryable - false指定時は自動リトライを完全に無効化する（デフォルトtrue）。
+ *   Issue #755: OAuth認証コード交換(exchangeGmailAuthCode/exchangeDriveAuthCode)は
+ *   codeが1回しか使えないため、'internal'等リトライ対象コードで失敗した場合でも
+ *   同一codeでの再送は必ず`invalid_grant`となり、後続処理側の本来のエラー
+ *   (例: 対象APIが未有効化)を「認証コードが無効または期限切れです」という
+ *   誤ったメッセージで覆い隠してしまう。
  */
 export async function callFunction<TReq, TRes>(
   name: string,
   data: TReq,
-  options?: { timeout?: number }
+  options?: { timeout?: number; retryable?: boolean }
 ): Promise<TRes> {
   const callable = httpsCallable<TReq, TRes>(
     functions,
@@ -64,7 +70,7 @@ export async function callFunction<TReq, TRes>(
     const result = await callable(data)
     return result.data
   } catch (err) {
-    if (isRetryableError(err) && auth.currentUser) {
+    if (options?.retryable !== false && isRetryableError(err) && auth.currentUser) {
       // silent-failure-hunterレビュー指摘: リトライ後の呼び出しをtry/catchで
       // 包んで元のerrをthrowすると、getCallableErrorCode/onErrorベースの
       // 分岐(Issue #621)がリトライ後の真のコード(例: already-exists)を

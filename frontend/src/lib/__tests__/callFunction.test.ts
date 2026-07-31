@@ -159,4 +159,31 @@ describe('callFunction - リトライ動作 (silent-failure-hunterレビュー�
     expect(mockGetIdToken).not.toHaveBeenCalled()
     expect(mockCallableImpl).toHaveBeenCalledTimes(1)
   })
+
+  describe('options.retryable=false (Issue #755: OAuth認証コード交換の誤リトライ防止)', () => {
+    it.each(['unauthenticated', 'deadline-exceeded', 'internal'])(
+      'code=%s でもretryable:falseならリトライせず元のエラーをthrowする',
+      async (code) => {
+        const err = makeFunctionsError(code, 'transient failure')
+        mockCallableImpl.mockRejectedValueOnce(err)
+
+        await expect(
+          callFunction('exchangeDriveAuthCode', {}, { retryable: false })
+        ).rejects.toBe(err)
+        expect(mockGetIdToken).not.toHaveBeenCalled()
+        expect(mockCallableImpl).toHaveBeenCalledTimes(1)
+      }
+    )
+
+    it('retryable省略時(デフォルト)は従来通りcode=internalでリトライする(後方互換)', async () => {
+      const err = makeFunctionsError('internal', 'network blip')
+      mockCallableImpl
+        .mockRejectedValueOnce(err)
+        .mockResolvedValueOnce({ data: { success: true } })
+
+      await expect(callFunction('splitPdf', {})).resolves.toEqual({ success: true })
+      expect(mockGetIdToken).toHaveBeenCalledWith(true)
+      expect(mockCallableImpl).toHaveBeenCalledTimes(2)
+    })
+  })
 })

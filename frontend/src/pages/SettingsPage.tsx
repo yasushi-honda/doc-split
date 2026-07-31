@@ -580,7 +580,7 @@ function GmailOAuthConnect() {
           const result = await callFunction<
             { code: string },
             { success: boolean; email: string }
-          >('exchangeGmailAuthCode', { code: response.code })
+          >('exchangeGmailAuthCode', { code: response.code }, { retryable: false })
 
           setSuccessEmail(result.email)
           await refetch()
@@ -751,7 +751,7 @@ function GoogleDriveConnect() {
           const result = await callFunction<
             { code: string },
             { success: boolean; email: string }
-          >('exchangeDriveAuthCode', { code: response.code })
+          >('exchangeDriveAuthCode', { code: response.code }, { retryable: false })
 
           setSuccessEmail(result.email)
           queryClient.invalidateQueries({ queryKey: DRIVE_SETTINGS_QUERY_KEY })
