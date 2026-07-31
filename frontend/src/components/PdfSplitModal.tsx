@@ -285,10 +285,32 @@ export function PdfSplitModal({
 
   // ページ回転
   const handleRotatePage = async (degrees: 90 | 180 | 270) => {
-    await rotatePdf.mutateAsync({
-      documentId: document.id,
-      rotations: [{ pageNumber: currentPage, degrees }],
-    })
+    try {
+      await rotatePdf.mutateAsync({
+        documentId: document.id,
+        rotations: [{ pageNumber: currentPage, degrees }],
+      })
+    } catch (error) {
+      console.error('Rotate error:', error)
+      // handleSplit と同じ方針(Issue #621): aborted はBE側メッセージに内部情報が
+      // 含まれるため文脈に応じた文言に翻訳し、それ以外は生メッセージを表示する
+      // (failed-precondition の provenance 不足メッセージ等、具体的な原因情報を保持するため)
+      const code = getCallableErrorCode(error)
+      let message: string
+      if (code === 'aborted') {
+        message = '別の操作と競合したため回転を中断しました。時間をおいて再度お試しください。'
+      } else if (
+        code === 'unauthenticated' ||
+        code === 'deadline-exceeded' ||
+        code === 'internal' ||
+        code === 'permission-denied'
+      ) {
+        message = getCallableErrorMessage(error, '回転処理に失敗しました')
+      } else {
+        message = error instanceof Error ? error.message : '回転処理に失敗しました'
+      }
+      toast.error(`回転エラー: ${message}`)
+    }
   }
 
   // 分割実行

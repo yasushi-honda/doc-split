@@ -1084,11 +1084,16 @@ export const rotatePdfPages = onCall(
     let baseProvenance = startData.provenance as DocumentProvenance | undefined;
     const hasParentDocumentId =
       typeof startData.parentDocumentId === 'string' && startData.parentDocumentId.length > 0;
+    // code-review指摘: splitPdfが親docに書く status:'split'/isSplitSource:true は
+    // fileUrl/provenance/parentDocumentIdを変更しないため、上記2条件だけでは
+    // 「分割済みの記録として非アクティブ化された親doc」を除外できない。
+    const isSplitSource = startData.isSplitSource === true;
     const isGenesis =
       !baseProvenance &&
       isGenesisEligible({
         hasProvenance: false,
         hasParentDocumentId,
+        isSplitSource,
         fileUrl,
         bucketName: bucket.name,
       });

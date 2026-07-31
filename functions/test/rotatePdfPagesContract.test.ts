@@ -228,6 +228,14 @@ describe('rotatePdfPages source code grep contract (PR-D3 AC3 拡張)', () => {
       expect(rotateBody).to.include('hasParentDocumentId');
     });
 
+    it('ADR-0016 MUST 8 (code-review指摘反映): 分割済み親doc (isSplitSource) を genesis 適格判定に渡す', () => {
+      // splitPdfが親docに書くstatus:'split'/isSplitSource:trueはfileUrl/provenance/
+      // parentDocumentIdを変更しないため、isSplitSourceの明示チェックが無いと
+      // 分割済みの記録として非アクティブ化された親docがgenesis適格と誤判定されうる
+      expect(rotateBody).to.match(/isSplitSource\s*=\s*startData\.isSplitSource\s*===\s*true/);
+      expect(rotateBody).to.include('isSplitSource,');
+    });
+
     it('ADR-0016 MUST 8: genesis 分岐は identity drift 検証をスキップし acquireSourceSnapshot で観測する', () => {
       // genesis doc には照合対象の既存 provenance が無いため、通常分岐の identity drift 検証
       // (filePath !== baseProvenance!.derivedObjectPath 等) を通さず、その場で観測する
