@@ -10,10 +10,12 @@ import { expect } from 'chai';
 import { Timestamp } from 'firebase-admin/firestore';
 import {
   CreateBackfillProvenanceInput,
+  CreateGenesisProvenanceInput,
   CreateSplitProvenanceInput,
   ProvenanceValidationError,
   assertValidProvenanceInput,
   createBackfillProvenance,
+  createGenesisProvenance,
   createSplitProvenance,
 } from '../src/pdf/provenance';
 
@@ -530,5 +532,102 @@ describe('createBackfillProvenance (ADR-0016 MUST 6 factory)', () => {
         .to.throw(ProvenanceValidationError)
         .with.property('field', 'evidence.childSha256ComputedAtBackfill');
     });
+  });
+});
+
+function makeGenesisInput(
+  overrides: Partial<CreateGenesisProvenanceInput> = {}
+): CreateGenesisProvenanceInput {
+  return {
+    observedObjectPath: 'original/1785120783129_test.pdf',
+    observedBucket: 'docsplit-kanameone.firebasestorage.app',
+    observedGeneration: '1700000000000001',
+    observedMetageneration: '1',
+    observedSha256: 'c'.repeat(64),
+    hadParentDocumentId: false,
+    ...overrides,
+  };
+}
+
+describe('createGenesisProvenance (ADR-0016 MUST 8 factory)', () => {
+  it('source* === derived* (自己参照) で provenance を構築する', () => {
+    const { provenance } = createGenesisProvenance(makeGenesisInput());
+    expect(provenance.sourcePath).to.equal(provenance.derivedObjectPath);
+    expect(provenance.sourceSha256).to.equal(provenance.derivedSha256);
+    expect(provenance.sourceGeneration).to.equal(provenance.derivedGeneration);
+    expect(provenance.sourceMetageneration).to.equal(provenance.derivedMetageneration);
+    expect(provenance.sourcePath).to.equal('original/1785120783129_test.pdf');
+    expect(provenance.sourceSha256).to.equal('c'.repeat(64));
+  });
+
+  it('observedAt 省略時は Timestamp.now() を provenance.createdAt と provenanceOrigin.observedAt 両方に採用する', () => {
+    const before = Timestamp.now();
+    const { provenance, provenanceOrigin } = createGenesisProvenance(makeGenesisInput());
+    const after = Timestamp.now();
+    const createdAtMs = (provenance.createdAt as unknown as Timestamp).toMillis();
+    const observedAtMs = (provenanceOrigin.observedAt as unknown as Timestamp).toMillis();
+    expect(createdAtMs).to.be.at.least(before.toMillis()).and.at.most(after.toMillis());
+    expect(observedAtMs).to.equal(createdAtMs);
+  });
+
+  it('observedAt 明示指定時はその値を採用する', () => {
+    const fixedAt = Timestamp.fromMillis(1700000000000);
+    const { provenance, provenanceOrigin } = createGenesisProvenance(
+      makeGenesisInput({ observedAt: fixedAt })
+    );
+    expect((provenance.createdAt as unknown as Timestamp).toMillis()).to.equal(1700000000000);
+    expect((provenanceOrigin.observedAt as unknown as Timestamp).toMillis()).to.equal(
+      1700000000000
+    );
+  });
+
+  it('provenanceOrigin.method は常に "rotate-genesis"', () => {
+    const { provenanceOrigin } = createGenesisProvenance(makeGenesisInput());
+    expect(provenanceOrigin.method).to.equal('rotate-genesis');
+  });
+
+  it('callableVersion 省略時は "rotate-genesis-v1" を採用する', () => {
+    const { provenanceOrigin } = createGenesisProvenance(makeGenesisInput());
+    expect(provenanceOrigin.callableVersion).to.equal('rotate-genesis-v1');
+  });
+
+  it('callableVersion 明示指定時はその値を採用する', () => {
+    const { provenanceOrigin } = createGenesisProvenance(
+      makeGenesisInput({ callableVersion: 'rotate-genesis-v2' })
+    );
+    expect(provenanceOrigin.callableVersion).to.equal('rotate-genesis-v2');
+  });
+
+  it('hadParentDocumentId をそのまま provenanceOrigin へ引き継ぐ (監査用)', () => {
+    const { provenanceOrigin } = createGenesisProvenance(
+      makeGenesisInput({ hadParentDocumentId: true })
+    );
+    expect(provenanceOrigin.hadParentDocumentId).to.be.true;
+  });
+
+  it('observedObjectPath が空文字なら ProvenanceValidationError (既存 assertValidProvenanceInput 委譲)', () => {
+    expect(() =>
+      createGenesisProvenance(makeGenesisInput({ observedObjectPath: '' }))
+    ).to.throw(ProvenanceValidationError);
+  });
+
+  it('observedSha256 が非 hex なら ProvenanceValidationError', () => {
+    expect(() =>
+      createGenesisProvenance(makeGenesisInput({ observedSha256: 'not-a-hex-string' }))
+    ).to.throw(ProvenanceValidationError);
+  });
+
+  it('observedGeneration が非数値文字列なら ProvenanceValidationError', () => {
+    expect(() =>
+      createGenesisProvenance(makeGenesisInput({ observedGeneration: 'abc' }))
+    ).to.throw(ProvenanceValidationError);
+  });
+
+  it('sha256 は lowercase に正規化される (既存 createSplitProvenance と同じ挙動)', () => {
+    const { provenance } = createGenesisProvenance(
+      makeGenesisInput({ observedSha256: 'C'.repeat(64) })
+    );
+    expect(provenance.sourceSha256).to.equal('c'.repeat(64));
+    expect(provenance.derivedSha256).to.equal('c'.repeat(64));
   });
 });

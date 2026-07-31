@@ -71,13 +71,14 @@ vi.mock('@/hooks/useDocuments', async () => {
 // 分割系mutation（Cloud Functions呼び出し）をバイパス。isPending: false固定。
 const mockSplitPdfMutateAsync = vi.fn().mockResolvedValue({ success: true, createdDocuments: [] })
 const mockDetectSplitPointsMutateAsync = vi.fn()
+const mockRotatePdfMutateAsync = vi.fn().mockResolvedValue({ success: true })
 vi.mock('@/hooks/usePdfSplit', async () => {
   const actual = await vi.importActual<typeof import('@/hooks/usePdfSplit')>('@/hooks/usePdfSplit')
   return {
     ...actual,
     useDetectSplitPoints: () => ({ mutateAsync: mockDetectSplitPointsMutateAsync, isPending: false }),
     useSplitPdf: () => ({ mutateAsync: mockSplitPdfMutateAsync, isPending: false }),
-    useRotatePdfPages: () => ({ mutateAsync: vi.fn(), isPending: false }),
+    useRotatePdfPages: () => ({ mutateAsync: mockRotatePdfMutateAsync, isPending: false }),
   }
 })
 
@@ -442,6 +443,20 @@ async function executeSplit() {
   fireEvent.click(executeButton)
 }
 
+function executeRotate() {
+  render(
+    <PdfSplitModal
+      document={makeDocument()}
+      isOpen={true}
+      onClose={vi.fn()}
+      onSuccess={vi.fn()}
+      detailLoading={false}
+      detailError={false}
+    />
+  )
+  fireEvent.click(screen.getByRole('button', { name: '回転' }))
+}
+
 describe('PdfSplitModal - splitPdfエラーハンドリング (Issue #621)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -507,6 +522,50 @@ describe('PdfSplitModal - splitPdfエラーハンドリング (Issue #621)', () 
 
     await vi.waitFor(() => expect(mockToastError).toHaveBeenCalled())
     expect(lastToastErrorMessage()).toContain('Document has no updateTime')
+  })
+})
+
+describe('PdfSplitModal - rotatePdfPagesエラーハンドリング (code-review指摘反映: handleRotatePageが未処理rejectだった)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('aborted エラー時、内部情報を含まない日本語メッセージをtoast表示する', async () => {
+    mockRotatePdfMutateAsync.mockRejectedValueOnce(
+      makeFunctionsError('aborted', 'Source object changed during genesis observation: generation drift')
+    )
+
+    executeRotate()
+
+    await vi.waitFor(() => expect(mockToastError).toHaveBeenCalled())
+    const shownMessage = lastToastErrorMessage()
+    expect(shownMessage).not.toMatch(/genesis observation|generation drift/i)
+    expect(shownMessage).toContain('競合')
+  })
+
+  it('failed-precondition エラー時(ADR-0016 MUST 8 genesis 適格外reject等)は具体的な原因情報を保持するため生メッセージを表示する', async () => {
+    mockRotatePdfMutateAsync.mockRejectedValueOnce(
+      makeFunctionsError(
+        'failed-precondition',
+        'Document is missing provenance fields; backfill required (Issue #445 PR-D4) before rotation'
+      )
+    )
+
+    executeRotate()
+
+    await vi.waitFor(() => expect(mockToastError).toHaveBeenCalled())
+    expect(lastToastErrorMessage()).toContain('backfill required')
+  })
+
+  it('その他のエラー(internal)時はgetCallableErrorMessageのフォールバック文言を表示する', async () => {
+    mockRotatePdfMutateAsync.mockRejectedValueOnce(makeFunctionsError('internal', 'network glitch'))
+
+    executeRotate()
+
+    await vi.waitFor(() => expect(mockToastError).toHaveBeenCalled())
+    const shownMessage = lastToastErrorMessage()
+    expect(shownMessage).not.toMatch(/network glitch/i)
+    expect(shownMessage).toContain('通信エラー')
   })
 })
 

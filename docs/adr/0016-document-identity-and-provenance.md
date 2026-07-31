@@ -2,11 +2,12 @@
 
 ## Status
 
-Accepted (2026-05-14、PR-D3 完遂時点で MUST 1/2/3/5 の実装完成 — splitPdf + rotatePdfPages 双方が provenance 10 fields + docId namespace identity を強制)。**2026-05-14 改訂 (session70)**: PR-D4 Codex MCP 1st review NO-GO 指摘 (Critical 8 + Important 7) 反映で **MUST 6/7 追加** (legacy backfill の `provenanceBackfill` metadata 必須化 + 既存 valid provenance 上書き禁止) + **SHOULD 1 を 5 段階 classify + 4 phase 構造に書換** + **MUST 3 に rotate gate 拡張 (backfilled `derived-bytes-verified` のみ rotate 許可)** を追記。PR-D4 実装は別 PR、本改訂は ADR 設計合意のみ。
+Accepted (2026-05-14、PR-D3 完遂時点で MUST 1/2/3/5 の実装完成 — splitPdf + rotatePdfPages 双方が provenance 10 fields + docId namespace identity を強制)。**2026-05-14 改訂 (session70)**: PR-D4 Codex MCP 1st review NO-GO 指摘 (Critical 8 + Important 7) 反映で **MUST 6/7 追加** (legacy backfill の `provenanceBackfill` metadata 必須化 + 既存 valid provenance 上書き禁止) + **SHOULD 1 を 5 段階 classify + 4 phase 構造に書換** + **MUST 3 に rotate gate 拡張 (backfilled `derived-bytes-verified` のみ rotate 許可)** を追記。PR-D4 実装は別 PR、本改訂は ADR 設計合意のみ。**2026-07-31 改訂**: kanameone 本番実データ (全 11,108 docs 中 provenance 保有 1.9%、`parentDocumentId` 保有 4%) で「PR-D4 backfill が救済できるのは分割由来 doc のみ (全体の 4%)、残り 96% (分割を経ていない doc) は構造的に永久救済不可」と判明。回転処理の書込先が既に `processed/{documentId}/rotations/{uuid}.pdf` という文書ID単位の名前空間に分離済み (PR-D3) であり、Issue #432 の被害対象になり得ない `original/` 直下の doc に対しては provenance 要求が過剰防御になっていたため、**MUST 8 追加 (genesis provenance: 回転時にその場で起点 provenance を実測合成)** し、重い legacy backfill インフラなしで影響の大部分を解消する設計に変更。
 
 - Proposed: 2026-05-13 (PR-D1、設計合意)
 - Accepted: 2026-05-14 (PR-D3、rotatePdfPages 改修で MUST 3 実装完遂、PR-D4 backfill / PR-D5 lint 強化は別 PR で継続)
 - Amended: 2026-05-14 session70 (PR-D4 Codex 1st review 反映、MUST 6/7 追加 + SHOULD 1 改訂 + MUST 3 拡張、PR-D4 impl-plan 詳細は `docs/specs/pr-d4-backfill-impl-plan.md`)
+- Amended: 2026-07-31 (MUST 8 追加、genesis provenance。kanameone 書類回転ブロッカーの実害調査を発端に、PR-D4 backfill が救済不能な 96% を対象とした新機構を追加。`functions/src/pdf/genesisEligibility.ts` / `createGenesisProvenance()` / `shared/types.ts` `ProvenanceOriginMetadata` で実装)
 
 ## Context
 
@@ -106,6 +107,24 @@ PR #452 は **「過去破壊の修復アルゴリズム」**であって、**�
    **Consumer contract (Codex 2nd review C4 反映)**: `provenance` 10 fields を read する全 consumer (rotate gate 以外: 自動復旧 gate / migration script / future PR 等) は **`provenanceBackfill` field の存在を必ず確認** し、存在する場合は **「legacy backfilled、split 時点正当 provenance ではない」** として扱う。`provenance` 単独で「verified split-time origin」と判定してはならない。本契約は contract test で構造的に検証する (PR-D4 BF20)。
 
 7. **MUST** (PR-D4 Codex 1st review Critical 8 反映、本 ADR 改訂で追加): backfill script は **既存 `provenance` (10 fields) を持つ doc (`provenanceBackfill` field absent = verified) を上書きしてはならない**。Phase C atomic batch の precondition で **`provenance` field exists && `provenanceBackfill` field absent** を検出した doc は **immutable skip** とする (Codex 2nd review I1 反映、null vs absent の混同回避)。理由: PR-D2/D3 で生成された verified provenance を低信頼度 backfill で破壊する経路を構造的に閉鎖する。
+
+8. **MUST** (genesis provenance、2026-07-31 本 ADR 改訂で追加): 分割を経ていない doc (Gmail 添付取込 / 手動アップロードのみで完結、`fileUrl` が `original/` 直下、`parentDocumentId` 不在) は、そもそも split 由来の provenance を持ち得ない。PR-D4 backfill (MUST 6/7、Phase A の `NeedsManualReview` classify) はこれらを構造的に永久救済不可としているため、`rotatePdfPages` は当該 doc に対し回転時点でその場で起点 provenance を実測合成する ("genesis provenance")。
+
+   **適格条件** (`functions/src/pdf/genesisEligibility.ts` の `isGenesisEligible()` で判定、4つ全て満たす場合のみ):
+   - `provenance` が不在
+   - `parentDocumentId` が不在
+   - `isSplitSource` が true でない (`splitPdf` が親 doc に書く `status:'split'`/`isSplitSource:true` は `fileUrl`/`provenance`/`parentDocumentId` を一切変更しないため、上記2条件だけでは「分割済みの記録として非アクティブ化された親 doc」を除外できない。この doc に genesis 合成を許すと `splitInto` を持つ親と回転済み子が矛盾した状態になる、code-review 指摘で追加)
+   - `fileUrl` の object name が `original/` 直下 (Gmail 添付取込 `checkGmailAttachments.ts` / 手動アップロード `uploadPdf.ts` の 2 箇所でのみ生成される prefix。`Date.now()` ベースの命名で衝突経路が存在せず、Issue #432 の被害対象になり得ない)
+
+   `processed/` 配下の legacy doc (Issue #432 の被害候補) は明示的に対象外とし、従来通り `failed-precondition` で reject する (PR-D4 backfill の領分として温存)。
+
+   **合成方法**: `acquireSourceSnapshot()` (MUST 5 と同じ 3-stage metadata-download-metadata パターン) で現在の bytes を観測し、`createGenesisProvenance()` (`functions/src/pdf/provenance.ts`) で `source* === derived*` (自己参照) の `DocumentProvenance` を構築する。download 中の差し替えは `SourceDriftError` で検出し、リトライせず即 abort する (回転はユーザー起点の安価な再実行操作のため)。
+
+   **`provenanceOrigin` marker**: 合成結果には `provenance` 10 fields と併せて `provenanceOrigin` (`method: 'rotate-genesis'`、observedAt/observedObjectPath/observedGeneration/hadParentDocumentId/callableVersion) を記録する。**`provenanceBackfill` (MUST 6) とは別フィールドであり意味論が正反対**: `provenanceBackfill` は「品質が低い可能性のある legacy backfill」を示すのに対し、`provenanceOrigin` は「品質は最高 (回転直前の実測) だが祖先情報が無い」ことを示す。`rotateGate.ts` の `shouldRejectRotateForBackfill()` は `provenanceOrigin` を一切参照しない (genesis doc は `provenanceBackfill` が absent のため、既存の split-time origin と同じく常に allow)。
+
+   **再処理との関係**: `provenance` を消去する既存の再処理クリアフィールド (`getReprocessClearFields()`) は `provenanceOrigin` も同時に消去する (マーカーだけ残る不整合を防ぐ)。再処理後に再度回転すれば、genesis 適格条件を満たす限り再度合成される (自己修復的)。
+
+   **2回目以降の回転**: genesis 合成された `provenance` は通常の `DocumentProvenance` と同型のため、以降の回転は既存の identity drift 検証 (MUST 3, `filePath === provenance.derivedObjectPath` + bytes sha256 照合) にそのまま合流する。特別な分岐は不要。
 
 ### SHOULD (推奨遵守)
 

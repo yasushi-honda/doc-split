@@ -211,15 +211,48 @@ describe('rotatePdfPages source code grep contract (PR-D3 AC3 拡張)', () => {
 
     it('Codex 2nd MEDIUM: fileUrl ↔ provenance.derivedObjectPath identity drift 検証 (Issue #432 root cause prevention)', () => {
       // AC15 (新規): identity 整合性検証で別 object 誤 rotate による silent provenance corruption を防止
-      expect(rotateBody).to.match(/filePath !== baseProvenance\.derivedObjectPath/);
+      // ADR-0016 MUST 8 (genesis provenance) 導入で baseProvenance は `let` + 非 null assertion (`!`) に変更
+      expect(rotateBody).to.match(/filePath !== baseProvenance!\.derivedObjectPath/);
       expect(rotateBody).to.match(/identity drift detected/i);
     });
 
     it('Codex 2nd MEDIUM: download 後 buffer の sha256 と provenance.derivedSha256 照合 (bytes identity)', () => {
       // AC16 (新規): bytes identity check で path 一致 + bytes 改竄なしの両方を担保
       expect(rotateBody).to.match(/sha256Hex\(buffer\)/);
-      expect(rotateBody).to.match(/baseProvenance\.derivedSha256\.toLowerCase\(\)/);
+      expect(rotateBody).to.match(/baseProvenance!\.derivedSha256\.toLowerCase\(\)/);
       expect(rotateBody).to.match(/bytes identity drift detected/i);
+    });
+
+    it('ADR-0016 MUST 8: genesis 適格判定は isGenesisEligible helper に委譲する', () => {
+      expect(rotateBody).to.include('isGenesisEligible(');
+      expect(rotateBody).to.include('hasParentDocumentId');
+    });
+
+    it('ADR-0016 MUST 8 (code-review指摘反映): 分割済み親doc (isSplitSource) を genesis 適格判定に渡す', () => {
+      // splitPdfが親docに書くstatus:'split'/isSplitSource:trueはfileUrl/provenance/
+      // parentDocumentIdを変更しないため、isSplitSourceの明示チェックが無いと
+      // 分割済みの記録として非アクティブ化された親docがgenesis適格と誤判定されうる
+      expect(rotateBody).to.match(/isSplitSource\s*=\s*startData\.isSplitSource\s*===\s*true/);
+      expect(rotateBody).to.include('isSplitSource,');
+    });
+
+    it('ADR-0016 MUST 8: genesis 分岐は identity drift 検証をスキップし acquireSourceSnapshot で観測する', () => {
+      // genesis doc には照合対象の既存 provenance が無いため、通常分岐の identity drift 検証
+      // (filePath !== baseProvenance!.derivedObjectPath 等) を通さず、その場で観測する
+      expect(rotateBody).to.include('if (isGenesis) {');
+      expect(rotateBody).to.include('acquireSourceSnapshot(file)');
+      expect(rotateBody).to.include('createGenesisProvenance(');
+    });
+
+    it('ADR-0016 MUST 8: genesis 観測中の SourceDriftError は即 abort (リトライしない)', () => {
+      expect(rotateBody).to.match(/downloadErr instanceof SourceDriftError/);
+      expect(rotateBody).to.include("'aborted'");
+    });
+
+    it('ADR-0016 MUST 8: genesis doc の update payload にのみ provenanceOrigin を含める (条件付き spread)', () => {
+      const updateMatch = rotateBody.match(/docRef\.update\(\s*\{[\s\S]*?\}\s*,\s*\{\s*lastUpdateTime/);
+      expect(updateMatch, 'docRef.update 呼出が見つからない').to.not.be.null;
+      expect(updateMatch![0]).to.match(/\.\.\.\(provenanceOrigin \? \{ provenanceOrigin \} : \{\}\)/);
     });
 
     it('PR-D4 BF12/BF13: shouldRejectRotateForBackfill helper で provenanceBackfill gate を実装', () => {

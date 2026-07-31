@@ -1008,6 +1008,7 @@ describe('Firestore Security Rules', () => {
           pageResults: [{ pageNumber: 1, text: 'page text' }],
           displayFileName: '請求書_山田太郎_20260115.pdf',
           provenance: { sourcePath: 'original/foo.pdf' },
+          provenanceOrigin: { method: 'rotate-genesis' },
           customerName: '山田太郎',
           customerId: 'cust-001',
           officeName: 'テスト事業所',
@@ -1072,6 +1073,7 @@ describe('Firestore Security Rules', () => {
           pageResults: deleteField(),
           displayFileName: deleteField(),
           provenance: deleteField(),
+          provenanceOrigin: deleteField(),
           customerName: deleteField(),
           customerId: deleteField(),
           officeName: deleteField(),
@@ -1139,6 +1141,7 @@ describe('Firestore Security Rules', () => {
           retryAfter: new Date('2026-01-01'),
           errorRescueCount: 0,
           provenance: { sourcePath: 'original/legit.pdf' },
+          provenanceOrigin: { method: 'rotate-genesis', observedObjectPath: 'original/legit.pdf' },
         });
       });
 
@@ -1147,6 +1150,12 @@ describe('Firestore Security Rules', () => {
       await assertFails(updateDoc(docRef, { retryAfter: new Date('2099-01-01') }));
       // provenanceを改ざんしようとするケース
       await assertFails(updateDoc(docRef, { provenance: { sourcePath: 'original/tampered.pdf' } }));
+      // provenanceOriginを改ざんしようとするケース (ADR-0016 MUST 8)
+      await assertFails(
+        updateDoc(docRef, {
+          provenanceOrigin: { method: 'rotate-genesis', observedObjectPath: 'original/tampered.pdf' },
+        })
+      );
       // retryCount/errorRescueCountを任意値に書き換えようとするケース
       await assertFails(updateDoc(docRef, { retryCount: 0 }));
       await assertFails(updateDoc(docRef, { errorRescueCount: 99 }));
@@ -1211,6 +1220,7 @@ describe('Firestore Security Rules', () => {
           errorRescueCount: 0,
           lastRescuedAt: new Date('2026-01-01'),
           provenance: { sourcePath: 'original/legit.pdf' },
+          provenanceOrigin: { method: 'rotate-genesis' },
         });
       });
 
@@ -1222,6 +1232,7 @@ describe('Firestore Security Rules', () => {
           errorRescueCount: deleteField(),
           lastRescuedAt: deleteField(),
           provenance: deleteField(),
+          provenanceOrigin: deleteField(),
         })
       );
     });
@@ -1238,12 +1249,13 @@ describe('Firestore Security Rules', () => {
         await setDoc(doc(context.firestore(), 'documents', 'doc-no-server-fields-yet'), {
           fileName: 'test.pdf',
           status: 'processed',
-          // retryCount/retryAfter/errorRescueCount/lastRescuedAt/provenance はいずれも未設定
+          // retryCount/retryAfter/errorRescueCount/lastRescuedAt/provenance/provenanceOrigin はいずれも未設定
         });
       });
 
       const docRef = doc(normalUser.firestore(), 'documents', 'doc-no-server-fields-yet');
       await assertFails(updateDoc(docRef, { provenance: null }));
+      await assertFails(updateDoc(docRef, { provenanceOrigin: null }));
       await assertFails(updateDoc(docRef, { retryCount: null }));
       await assertFails(updateDoc(docRef, { retryAfter: null }));
       await assertFails(updateDoc(docRef, { errorRescueCount: null }));

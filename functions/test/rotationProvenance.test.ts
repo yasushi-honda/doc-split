@@ -19,6 +19,7 @@ import {
   CreateRotationProvenanceInput,
   ProvenanceValidationError,
   assertValidRotationProvenanceInput,
+  createGenesisProvenance,
   createRotationProvenance,
 } from '../src/pdf/provenance';
 // PR-D3 pr-test-analyzer Critical: mergeRotations の unit test 用 import
@@ -455,5 +456,72 @@ describe('mergeRotations (PR-D3 pr-test-analyzer Critical: 3 branch coverage)', 
         mergeRotations(docId, [], [{ pageNumber: 1, degrees: 45 }])
       ).to.throw(/45/);
     });
+  });
+});
+
+describe('genesis provenance → 通常回転チェーンの合流 (ADR-0016 MUST 8)', () => {
+  it('初回 genesis 合成 → 2回目回転 (createRotationProvenance) が既存フローと同じ検証で成功する', () => {
+    // Step 1: 初回回転 (genesis 分岐相当)。分割を経ていない doc の観測値から起点 provenance を合成。
+    const { provenance: genesisBase, provenanceOrigin } = createGenesisProvenance({
+      observedObjectPath: 'original/1785120783129_test.pdf',
+      observedBucket: 'docsplit-kanameone.firebasestorage.app',
+      observedGeneration: '1700000000000001',
+      observedMetageneration: '1',
+      observedSha256: 'a'.repeat(64),
+      hadParentDocumentId: false,
+    });
+    expect(provenanceOrigin.method).to.equal('rotate-genesis');
+
+    // Step 2: 2回目回転 (通常フロー)。genesisBase を base として渡すだけで、
+    // rotatePdfPages の通常分岐 (identity drift 検証 → createRotationProvenance) に
+    // そのまま合流できることを確認する。
+    const secondRotation = createRotationProvenance({
+      base: genesisBase,
+      newDerived: {
+        derivedObjectPath: 'processed/doc-id-xyz/rotations/rotation-id-2.pdf',
+        derivedGeneration: '1700000000000003',
+        derivedMetageneration: '1',
+        derivedSha256: 'b'.repeat(64),
+      },
+    });
+
+    // source 5 + createdAt は genesis 合成時の自己参照値のまま不変 (AC2/AC14 と同じ不変条件)
+    expect(secondRotation.sourcePath).to.equal('original/1785120783129_test.pdf');
+    expect(secondRotation.sourceSha256).to.equal('a'.repeat(64));
+    expect(secondRotation.sourceGeneration).to.equal('1700000000000001');
+    expect(secondRotation.createdAt).to.deep.equal(genesisBase.createdAt);
+    // derived 4 のみ 2回目の回転結果に更新される
+    expect(secondRotation.derivedObjectPath).to.equal(
+      'processed/doc-id-xyz/rotations/rotation-id-2.pdf'
+    );
+    expect(secondRotation.derivedSha256).to.equal('b'.repeat(64));
+  });
+
+  it('3回目以降も同じチェーンで合流し続ける (rotation chain の一般性)', () => {
+    const { provenance: genesisBase } = createGenesisProvenance({
+      observedObjectPath: 'original/test.pdf',
+      observedBucket: 'bucket',
+      observedGeneration: '1',
+      observedMetageneration: '1',
+      observedSha256: 'c'.repeat(64),
+      hadParentDocumentId: false,
+    });
+
+    let current = genesisBase;
+    for (let i = 0; i < 3; i++) {
+      current = createRotationProvenance({
+        base: current,
+        newDerived: {
+          derivedObjectPath: `processed/doc-id-xyz/rotations/rotation-${i}.pdf`,
+          derivedGeneration: String(i + 2),
+          derivedMetageneration: '1',
+          derivedSha256: 'd'.repeat(64),
+        },
+      });
+    }
+    // source は genesis 観測時点のまま不変 (何度回転しても崩れない)
+    expect(current.sourcePath).to.equal('original/test.pdf');
+    expect(current.sourceSha256).to.equal('c'.repeat(64));
+    expect(current.derivedObjectPath).to.equal('processed/doc-id-xyz/rotations/rotation-2.pdf');
   });
 });

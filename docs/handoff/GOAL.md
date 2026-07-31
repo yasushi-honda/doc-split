@@ -16,7 +16,7 @@ kanameone・cocoroへのGoogle Drive連携Phase1本番展開。承認済み計�
 - [x] Phase A: Codexセカンドオピニオン（MCP、effort=high）実施。Phase Bは条件付きGO、Phase D/Eは複数High指摘により現計画のままでは実行不可と判定
 - [x] Phase B（kanameone）: インフラ準備完了・検証済み（Functions 4関数デプロイ/Firestore rules,indexes/Picker API有効化/OAuth Client作成/Secret Manager 3件/IAMバインド4件/実行SA一致確認/STORAGE_BUCKET確認/`settings/drive.oauthClientId`投入/flag OFF確認）。実行時に追加発見: Firebase自動生成Browser API Keyの制限リストに`picker.googleapis.com`が含まれておらず追加修正
 - [x] Phase B（cocoro）: 同上、認証主体差分（OAuth Console操作=`hy.unimail.11@gmail.com`、Secret作成・IAMバインド=SA`docsplit-deployer@docsplit-cocoro.iam.gserviceaccount.com`）を踏まえ完了・検証済み。同じPicker API制限問題も発見・修正
-- [ ] Phase C（クライアント自己完結、外部依存）: kanameone/cocoro各管理者によるGoogle Drive OAuth接続・フォルダ選択・テンプレート保存。executor代行不可。**decision-makerがクライアント側の代理対応者へ案内文書を送付済み（2026-07-25）**、先方の実施待ち
+- [ ] Phase C（クライアント自己完結、外部依存）: kanameone/cocoro各管理者によるGoogle Drive OAuth接続・フォルダ選択・テンプレート保存。executor代行不可。**decision-makerがクライアント側の代理対応者へ案内文書を送付済み（2026-07-25）**。**kanameoneは完了（2026-07-31 catchupで実測確認、`settings/drive.authMode:'oauth'`/`connectedEmail`/`rootFolderId`/`template`ともに設定済み、接続日時2026-07-30）**。**cocoroは未着手のまま**（`settings/drive`が2026-07-23のPhase Bインフラ準備時点から未変更）、先方の実施待ち
 - [x] Phase D/E再設計（2026-07-23、plan mode承認済み計画 `/Users/yyyhhh/.claude/plans/breezy-tickling-sifakis.md`）: Codex High 5件（①flag ON直後の全ユーザー巻き込み ②backfillにcanary機構欠如 ③flag OFFはロールバックにならない ④通常操作とbackfillの競合 ⑤完了時間・異常停止基準未定義）に対応するコード・テスト・ADR更新を実装完了。①allowlist機構(`settings/features.driveExportAllowlist`、`getDriveExportGate()`が`driveExportTrigger.ts`のみをゲート、sweep/手動retryは意図的に非対象)+設定スクリプト`scripts/set-drive-allowlist.js`(`--set`/`--clear-empty`/`--remove`) ②`scripts/backfill-drive-export.ts`に`--limit`/`--expected-count`(書込み前アサート)/`--manifest-out`/`--rollback`を追加 ③④`lastUpdateTime`precondition個別updateへの置換(Timestampオブジェクトを直接渡す設計。ISO文字列round-tripは精度損失で全書込み無言失敗になる罠をFirestore emulatorで実証済み) ⑤read-only状態分布レポート`scripts/drive-export-status-report.ts`新設。functions unit1909/integration237/rules92全PASS、scripts単体テスト(`scripts/lib/driveExportBackfillHelpers.test.ts`)8件PASS、Firestore emulatorでbackfill/rollback/limit/expected-count/manifestの実シナリオをend-to-end実行し結果確認済み。ADR-0022に設計判断・ロールバック意味論・runbookを追記。**実際のflag ON/allowlist設定/backfill本実行はいずれも未実施**(Phase C完了確認後、番号単位の明示認可で別セッション実施)。PR #710としてmainへマージ済み（`/code-review high`4件+`/codex review`1件（allowlist明示null値のfail-closed漏れ）も同PRで解消）
 - [x] ヘルプマニュアルへのGoogle Drive連携ガイド追加（2026-07-23、PR #711マージ済み）: `frontend/src/pages/HelpPage.tsx`管理者ガイドに新セクション「Google Drive連携」を追加（Drive接続→フォルダ選択→テンプレート設定の3ステップ、SettingsPage.tsx実装の実UI文言を踏襲）。decision-maker指摘によりGoogle Workspace公式ブログ（2026-07-16付）でNotebookLMがGemini Notebookへ改称されたことを確認、外部製品名の陳腐化リスクを避け「生成AIツール」という汎用表現に修正。Playwright MCPでdev環境の実際のレンダリングを確認済み
 - [x] PR #710/#711のkanameone・cocoro本番反映漏れを発見・解消（2026-07-23）: catchupのcurl試行がauto mode classifierにブロックされた事象を発端に、decision-maker明示許可で`settings/drive`をread-only確認したところPhase C未着手を確認。その過程でPRマージ時刻とkanameone/cocoro側の実デプロイ時刻（Functions/Hosting）を突合し、PR #710（Phase D/E再設計コード）・PR #711（ヘルプマニュアル）がmainマージ済みにもかかわらず両クライアント環境へは未反映（直近デプロイがPRマージより前）と判明。decision-maker承認を得て`gh workflow run "Deploy Cloud Functions"`(kanameone/cocoro)+`"Deploy Firebase Hosting"`(kanameone、GHA限定)+手動`firebase deploy --only hosting -P cocoro`（`/deploy`スキルのcocoro手順通り、`.env.local`後片付け含む）を実行、4件とも成功。Functions updateTime・Hosting releaseTimeがPRマージ時刻より後であることをground truthで検証し反映確認済み
@@ -121,19 +121,25 @@ cocoro/kanameから、書類（ケアプラン・医療・介護保険証等）�
 
 ## 🔄 中断点（in-flight）
 
-**対象タスク**: kanameone Drive連携OAuth不具合対応（2026-07-29、GOAL.md「進行中のtasks」該当項目参照）
+**対象タスク**: kanameone Drive連携OAuth不具合対応（2026-07-29発生）→ **kanameone側は解消・接続完了を実測確認済み（2026-07-31 catchup時点）**
 
-**直前の状態**: kanameone担当者から「認証コードが無効または期限切れです」との不具合報告を受け調査、真因（`drive.googleapis.com`未有効化）を特定し、kanameone/cocoro/dev全3環境で`gcloud services enable drive.googleapis.com`を実行済み。dev環境では`seed-doc-0002`を使い実際にDriveエクスポートをトリガーし成功（`driveExportStatus:'exported'`）を実証済み。再発防止（PR #756）・GOAL.md教訓化（PR #757）・副次バグのIssue化（#755）は完了。**kanameone担当者へ再検証依頼文書（コピーボタン付きHTML、ローカル生成、リポジトリ非管理）を作成しdecision-makerが送付済み（2026-07-29）**。
+**経緯**: kanameone担当者から「認証コードが無効または期限切れです」との不具合報告を受け調査、真因（`drive.googleapis.com`未有効化）を特定し、kanameone/cocoro/dev全3環境で`gcloud services enable drive.googleapis.com`を実行済み。再発防止（PR #756）・GOAL.md教訓化（PR #757）・副次バグのIssue化（#755）は完了。kanameone担当者へ再検証依頼文書（コピーボタン付きHTML、ローカル生成、リポジトリ非管理）を作成しdecision-makerが送付済み（2026-07-29）。
 
-**次の一手**: kanameone担当者からの返信・再試行結果を待つ。返信が来たら以下の検証コマンドでCloud LoggingとFirestoreを確認し、実際に接続が成功したか（`settings/drive.authMode`/`connectedEmail`が新規に書き込まれているか）を実測で確認する。
+**2026-07-31 catchupでの実測確認結果（read-only検証コマンド実行）**:
+- `gcloud functions logs read exchangeDriveAuthCode`（kanameone）: `2026-07-30 03:26:19`/`03:26:52`に`Drive OAuth connected successfully for: katsumihiraide@kanameone.com`を確認（2026-07-29 05:39の失敗ログとは別の新しい成功ログ）
+- Firestore `settings/drive`（kanameone）: `authMode: oauth`、`connectedEmail: systemkaname@kanameone.com`、`rootFolderId`・`template`（かなめ式5階層）ともに設定済み、`updateTime: 2026-07-30T08:54:59Z`
+- **kanameoneはPhase C（OAuth接続＋フォルダ選択＋テンプレート保存）を完了済み**
+- 一方**cocoro側は`settings/drive`が2026-07-23（Phase Bインフラ準備時点）のまま未変更**、`authMode`等は依然未設定。cocoroのPhase Cは未着手
 
-**検証コマンド**（再開時）:
+**次の一手**: cocoro担当者からのPhase C実施（OAuth接続・フォルダ選択・テンプレート保存）を待つ。着手を促す連絡は現時点では見送り（decision-maker判断、2026-07-31）。cocoro側が動いたかは以下の検証コマンドで確認可能。
+
+**検証コマンド**（次回再開時、cocoro Phase C進捗確認）:
 ```bash
-gcloud functions logs read exchangeDriveAuthCode --project=docsplit-kanameone --account=hy.unimail.11@gmail.com --region=asia-northeast1 --gen2 --limit=20
-curl -s -X GET -H "Authorization: Bearer $(gcloud auth print-access-token --account=hy.unimail.11@gmail.com)" "https://firestore.googleapis.com/v1/projects/docsplit-kanameone/databases/(default)/documents/settings/drive"
+gcloud functions logs read exchangeDriveAuthCode --project=docsplit-cocoro --account=hy.unimail.11@gmail.com --region=asia-northeast1 --gen2 --limit=20
+curl -s -X GET -H "Authorization: Bearer $(gcloud auth print-access-token --account=hy.unimail.11@gmail.com)" "https://firestore.googleapis.com/v1/projects/docsplit-cocoro/databases/(default)/documents/settings/drive"
 ```
 
-**次のアクション**: 上記trigger（担当者からの返信）待ち。Phase C（kanameone/cocoroクライアント側Drive OAuth接続、外部依存）は引き続き先方実施待ち。将来ニーズとして「顧客マスター手動統合UI」が話題に上ったが、Drive Phase1がflag OFFの現状では実装の緊急性なし、Phase C/D完了後にDriveの実挙動を見てから設計する方針（実装は未着手・メモのみ）。
+**次のアクション**: cocoro Phase C（外部依存）のtrigger（先方の接続完了、`settings/drive.authMode`書込みで検知可）待ち。kanameone側はPhase Cが完了したため、Phase D（flag ON・backfill本実行）着手の是非をkanameone単独先行 or cocoro待ち継続のいずれにするかはdecision-maker判断待ち（未着手、番号単位の明示認可が必要）。将来ニーズとして「顧客マスター手動統合UI」が話題に上ったが、Drive Phase1がflag OFFの現状では実装の緊急性なし、Phase C/D完了後にDriveの実挙動を見てから設計する方針（実装は未着手・メモのみ）。
 
 **フォローアップ課題（Issue #753、P2・実害未確認）**: PR #752の`/code-review low`で「別人がスペース違いのみで同一漢字名の場合に誤って同一フォルダへ収束するリスク」が指摘された。既存の同姓同名衝突検知(`shared/customerIdentity.ts`の`findSameNameCollisionNames`)も同じくスペース非正規化のため元々検知できておらず、新規リスクではなく既存ギャップ。同関数はOCR紐付け(`ocrProcessor.ts`)・FAX重複検知(`faxDuplication.ts`)・同姓同名UIに跨る横断利用のため、拡張の要否は影響範囲評価込みで別Issueに切り出し済み。実例は現時点で未確認、着手判断はdecision-maker待ち。
 
