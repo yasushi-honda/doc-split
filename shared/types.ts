@@ -130,6 +130,20 @@ export interface Document {
    */
   provenanceBackfill?: ProvenanceBackfillMetadata;
 
+  /**
+   * genesis provenance metadata (ADR-0016 MUST 8 / 非分割 doc の回転対応)
+   *
+   * 意味論:
+   * - field absent = 通常の split-time / backfill 由来 provenance、またはそもそも provenance 自体が無い
+   * - field exists = `rotatePdfPages` が「分割を経ていない doc (`original/` 直下、provenance 不在)」に対し
+   *   回転時点の実バイトを実測して起点 provenance をその場で合成したことを示す
+   *
+   * `provenanceBackfill` (品質が低い可能性のある legacy backfill) とは意味論が正反対 (品質は最高だが
+   * 祖先情報が無い) のため、別フィールドとして扱う。`rotateGate.ts` の判定には一切関与しない
+   * (provenanceOrigin exists でも provenanceBackfill が absent なら通常の split-time 相当として allow)。
+   */
+  provenanceOrigin?: ProvenanceOriginMetadata;
+
   // Phase 7: 顧客確定機能
   //
   // customerConfirmed/officeConfirmed/documentTypeConfirmed 共通の注意点（2026-07-04訂正）:
@@ -381,6 +395,28 @@ export interface ProvenanceBackfillMetadata {
     /** PR-C3c classifier 出力 (Codex 2nd review I7 反映) */
     classifierCategory: BackfillClassifierCategory;
   };
+}
+
+/**
+ * genesis provenance metadata (ADR-0016 MUST 8)
+ *
+ * 分割を経ていない doc (`original/` 直下、`provenance` 不在、`parentDocumentId` 不在) の初回回転時に、
+ * `rotatePdfPages` がその場で観測した起点証拠を記録する。source* = derived* (自己参照) の
+ * `DocumentProvenance` と併記され、2回目以降の回転は通常の identity drift 検証にそのまま乗る。
+ */
+export interface ProvenanceOriginMetadata {
+  /** genesis 合成方法 (enum、将来拡張余地) */
+  method: 'rotate-genesis';
+  /** genesis provenance 観測・合成時刻 */
+  observedAt: Timestamp;
+  /** 観測時点の fileUrl object name (bucket 内、`gs://` prefix 含まない) */
+  observedObjectPath: string;
+  /** 観測時点の Storage object generation */
+  observedGeneration: string;
+  /** 観測時点で `parentDocumentId` を保持していたか (監査用、常に false 想定) */
+  hadParentDocumentId: boolean;
+  /** genesis 合成ロジックのバージョン (例: 'rotate-genesis-v1') */
+  callableVersion: string;
 }
 
 // ============================================

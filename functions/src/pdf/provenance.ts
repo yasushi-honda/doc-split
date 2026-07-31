@@ -15,6 +15,7 @@ import type {
   BackfillConfidence,
   DocumentProvenance,
   ProvenanceBackfillMetadata,
+  ProvenanceOriginMetadata,
 } from '../../../shared/types';
 
 const SHA256_HEX_RE = /^[0-9a-fA-F]{64}$/;
@@ -374,5 +375,72 @@ export function createBackfillProvenance(input: CreateBackfillProvenanceInput): 
   return {
     provenance,
     provenanceBackfill: provenanceBackfill as unknown as ProvenanceBackfillMetadata,
+  };
+}
+
+// ============================================================
+// createGenesisProvenance (ADR-0016 MUST 8 / 非分割 doc の回転対応)
+// ============================================================
+
+/**
+ * createGenesisProvenance() の入力型。
+ *
+ * 分割を経ていない doc (`original/` 直下、`provenance` 不在) の初回回転時、`rotatePdfPages` が
+ * 回転前の現 fileUrl を `acquireSourceSnapshot()` で観測した結果をそのまま渡す。source 系/derived 系
+ * を別々に受け取らせない設計 (caller に同一性を壊す余地を与えない、defense in depth)。
+ */
+export interface CreateGenesisProvenanceInput {
+  observedObjectPath: string;
+  observedBucket: string;
+  observedGeneration: string;
+  observedMetageneration: string;
+  observedSha256: string;
+  /** genesis 適格判定時点で parentDocumentId を保持していたか (監査用、通常 false) */
+  hadParentDocumentId: boolean;
+  /** 省略時 Timestamp.now() (= genesis 観測時刻、provenance.createdAt と provenanceOrigin.observedAt 両方に使う) */
+  observedAt?: Timestamp;
+  /** 省略時 'rotate-genesis-v1' */
+  callableVersion?: string;
+}
+
+/**
+ * 分割を経ていない doc に対し、回転時点の実バイトを起点として `provenance` + `provenanceOrigin`
+ * を合成する factory (ADR-0016 MUST 8)。
+ *
+ * 不変条件: source* === derived* (自己参照)。入力型が観測値を 1 組しか受け取らないため、
+ * `createSplitProvenance()` に委譲する時点で構造的にこの不変条件が保証される
+ * (source/derived を個別に渡す既存 factory と異なり、caller が意図せず崩す余地がない)。
+ *
+ * `provenanceBackfill` とは別フィールドを返す (PR-D4 legacy backfill の「品質が低い可能性」
+ * とは意味論が正反対 = 「品質は最高だが祖先情報が無い」。`rotateGate.ts` の判定対象外)。
+ */
+export function createGenesisProvenance(input: CreateGenesisProvenanceInput): {
+  provenance: DocumentProvenance;
+  provenanceOrigin: ProvenanceOriginMetadata;
+} {
+  const observedAt = input.observedAt ?? Timestamp.now();
+  const provenance = createSplitProvenance({
+    sourceGeneration: input.observedGeneration,
+    sourceMetageneration: input.observedMetageneration,
+    sourceSha256: input.observedSha256,
+    sourcePath: input.observedObjectPath,
+    sourceBucket: input.observedBucket,
+    derivedObjectPath: input.observedObjectPath,
+    derivedGeneration: input.observedGeneration,
+    derivedMetageneration: input.observedMetageneration,
+    derivedSha256: input.observedSha256,
+    createdAt: observedAt,
+  });
+  const provenanceOrigin = {
+    method: 'rotate-genesis' as const,
+    observedAt,
+    observedObjectPath: input.observedObjectPath,
+    observedGeneration: input.observedGeneration,
+    hadParentDocumentId: input.hadParentDocumentId,
+    callableVersion: input.callableVersion ?? 'rotate-genesis-v1',
+  };
+  return {
+    provenance,
+    provenanceOrigin: provenanceOrigin as unknown as ProvenanceOriginMetadata,
   };
 }

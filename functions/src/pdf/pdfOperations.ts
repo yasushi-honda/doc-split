@@ -24,13 +24,14 @@ import { generateDisplayFileName } from '../../../shared/generateDisplayFileName
 import { timestampToDateString } from '../utils/timestampHelpers';
 import { loadMasterData } from '../utils/loadMasterData';
 import { sanitizeFilenameForStorage } from '../utils/fileNaming';
-import { createSplitProvenance, createRotationProvenance } from './provenance';
+import { createSplitProvenance, createRotationProvenance, createGenesisProvenance } from './provenance';
 import { resolveDetailFields, readDocWithDetail } from '../ocr/documentDetail';
 import { mergeRotations } from './rotationMerge';
 import { shouldRejectRotateForBackfill } from './rotateGate';
+import { isGenesisEligible } from './genesisEligibility';
 import { isGroupAggregationGateOpen } from '../utils/maintenanceGate';
 import { randomUUID } from 'node:crypto';
-import type { DocumentProvenance } from '../../../shared/types';
+import type { DocumentProvenance, ProvenanceOriginMetadata } from '../../../shared/types';
 import {
   SourceDriftError,
   acquireSourceSnapshot,
@@ -1069,10 +1070,29 @@ export const rotatePdfPages = onCall(
       throw new HttpsError('not-found', 'Document not found');
     }
     const startData = startSnapshot.data()!;
+    const startUpdateTime = startSnapshot.updateTime;
+    const fileUrl = startData.fileUrl as string;
+    if (!fileUrl) {
+      throw new HttpsError('failed-precondition', 'Document has no fileUrl');
+    }
+    const bucket = storage.bucket();
 
-    // AC12: legacy provenance 無し doc は reject (PR-D4 backfill 完了後に再 rotation 可能)
-    const baseProvenance = startData.provenance as DocumentProvenance | undefined;
-    if (!baseProvenance) {
+    // AC12 (ADR-0016 MUST 3) + MUST 8 (genesis provenance): legacy provenance 無し doc は
+    // 原則 reject するが、分割を経ていない doc (`original/` 直下、parentDocumentId 不在) は
+    // genesis 適格として下記 Step 2 でその場で起点 provenance を合成する (PR-D4 backfill 対象外の
+    // 96% を、重い legacy backfill インフラなしで救済する)。
+    let baseProvenance = startData.provenance as DocumentProvenance | undefined;
+    const hasParentDocumentId =
+      typeof startData.parentDocumentId === 'string' && startData.parentDocumentId.length > 0;
+    const isGenesis =
+      !baseProvenance &&
+      isGenesisEligible({
+        hasProvenance: false,
+        hasParentDocumentId,
+        fileUrl,
+        bucketName: bucket.name,
+      });
+    if (!baseProvenance && !isGenesis) {
       console.warn('rotatePdfPages: legacy doc without provenance, rejecting', {
         operation: 'rotatePdfPages',
         stage: 'provenance_check',
@@ -1087,6 +1107,7 @@ export const rotatePdfPages = onCall(
     // PR-D4 BF12/BF13 (ADR-0016 MUST 3 拡張): backfilled doc は confidence 'derived-bytes-verified'
     // のみ rotate 許可。malformed (null 含む) や低信頼度 confidence は failed-precondition で reject。
     // 壊れた legacy bytes を正規 rotation 経路で昇格させる経路を構造的に閉鎖する (Codex 7th Critical 6)。
+    // genesis doc は provenanceBackfill を持たない (absent) ため常に allow。
     const backfillRejection = shouldRejectRotateForBackfill(startData.provenanceBackfill);
     if (backfillRejection != null) {
       console.warn('rotatePdfPages: backfill confidence guard rejected', {
@@ -1097,17 +1118,8 @@ export const rotatePdfPages = onCall(
       });
       throw new HttpsError('failed-precondition', backfillRejection);
     }
-    const startUpdateTime = startSnapshot.updateTime;
-    const fileUrl = startData.fileUrl as string;
-    if (!fileUrl) {
-      throw new HttpsError('failed-precondition', 'Document has no fileUrl');
-    }
 
-    // Step 2: 親 PDF identity 整合性検証 + download
-    // Codex 2nd MEDIUM: fileUrl と baseProvenance.derivedObjectPath の一致検証で identity drift を防ぐ。
-    // Issue #432 root cause 再発リスク (stale fileUrl で別 object を rotate しつつ provenance source を保持 →
-    // silent provenance corruption) を構造的に排除。
-    const bucket = storage.bucket();
+    // Step 2: 親 PDF identity 整合性検証 (通常 doc) または genesis provenance 観測 (genesis doc) + download
     let filePath: string;
     try {
       const parsed = parseGcsUri(fileUrl, bucket.name);
@@ -1118,29 +1130,72 @@ export const rotatePdfPages = onCall(
         `Source fileUrl is not a valid gs:// URI in bucket "${bucket.name}": ${unwrapErrorMessage(parseErr)}`
       );
     }
-    if (filePath !== baseProvenance.derivedObjectPath) {
-      throw new HttpsError(
-        'failed-precondition',
-        `fileUrl path "${filePath}" does not match provenance.derivedObjectPath "${baseProvenance.derivedObjectPath}"; identity drift detected (Issue #432 root cause prevention)`
-      );
-    }
     const file = bucket.file(filePath);
     let buffer: Buffer;
-    try {
-      [buffer] = await file.download();
-    } catch (downloadErr) {
-      throw new HttpsError('internal', `PDF download failed: ${unwrapErrorMessage(downloadErr)}`);
-    }
-    console.log('Downloaded PDF, size:', buffer.length);
+    let provenanceOrigin: ProvenanceOriginMetadata | undefined;
 
-    // Codex 2nd MEDIUM (続き): download 後 buffer の sha256 を provenance.derivedSha256 と照合。
-    // 不一致 = identity drift (parseGcsUri は path だけ、ここで bytes identity も検証)。
-    const sourceSha256 = sha256Hex(buffer);
-    if (sourceSha256 !== baseProvenance.derivedSha256.toLowerCase()) {
-      throw new HttpsError(
-        'failed-precondition',
-        `Source PDF sha256 "${sourceSha256}" does not match provenance.derivedSha256 "${baseProvenance.derivedSha256}"; bytes identity drift detected (Issue #432 root cause prevention)`
-      );
+    if (isGenesis) {
+      // genesis 分岐 (ADR-0016 MUST 8): 前回書込みとの照合対象が存在しないため、
+      // acquireSourceSnapshot() (MUST 5 と同じ 3-stage metadata-download-metadata パターン) で
+      // 現在の bytes をその場で観測し、起点 provenance を合成する。download 中の差し替えは
+      // SourceDriftError で検出し、リトライせず即 abort する (回転はユーザー起点の安価な再実行操作)。
+      let snapshot: { buffer: Buffer; generation: string; metageneration: string };
+      try {
+        snapshot = await acquireSourceSnapshot(file);
+      } catch (downloadErr) {
+        if (downloadErr instanceof SourceDriftError) {
+          throw new HttpsError(
+            'aborted',
+            `Source object changed during genesis observation: ${downloadErr.message}`
+          );
+        }
+        throw new HttpsError('internal', `PDF download failed: ${unwrapErrorMessage(downloadErr)}`);
+      }
+      buffer = snapshot.buffer;
+      console.log('Downloaded PDF (genesis observation), size:', buffer.length);
+
+      const observedSha256 = sha256Hex(buffer);
+      const genesis = createGenesisProvenance({
+        observedObjectPath: filePath,
+        observedBucket: bucket.name,
+        observedGeneration: snapshot.generation,
+        observedMetageneration: snapshot.metageneration,
+        observedSha256,
+        hadParentDocumentId: hasParentDocumentId,
+      });
+      baseProvenance = genesis.provenance;
+      provenanceOrigin = genesis.provenanceOrigin;
+    } else {
+      // 通常分岐: Codex 2nd MEDIUM: fileUrl と baseProvenance.derivedObjectPath の一致検証で
+      // identity drift を防ぐ。Issue #432 root cause 再発リスク (stale fileUrl で別 object を
+      // rotate しつつ provenance source を保持 → silent provenance corruption) を構造的に排除。
+      if (filePath !== baseProvenance!.derivedObjectPath) {
+        throw new HttpsError(
+          'failed-precondition',
+          `fileUrl path "${filePath}" does not match provenance.derivedObjectPath "${baseProvenance!.derivedObjectPath}"; identity drift detected (Issue #432 root cause prevention)`
+        );
+      }
+      try {
+        [buffer] = await file.download();
+      } catch (downloadErr) {
+        throw new HttpsError('internal', `PDF download failed: ${unwrapErrorMessage(downloadErr)}`);
+      }
+      console.log('Downloaded PDF, size:', buffer.length);
+
+      // Codex 2nd MEDIUM (続き): download 後 buffer の sha256 を provenance.derivedSha256 と照合。
+      // 不一致 = identity drift (parseGcsUri は path だけ、ここで bytes identity も検証)。
+      const sourceSha256 = sha256Hex(buffer);
+      if (sourceSha256 !== baseProvenance!.derivedSha256.toLowerCase()) {
+        throw new HttpsError(
+          'failed-precondition',
+          `Source PDF sha256 "${sourceSha256}" does not match provenance.derivedSha256 "${baseProvenance!.derivedSha256}"; bytes identity drift detected (Issue #432 root cause prevention)`
+        );
+      }
+    }
+
+    if (!baseProvenance) {
+      // 構造的に到達しない: 非 genesis 分岐は Step 1 で reject 済み、genesis 分岐は必ず設定する。
+      throw new HttpsError('internal', 'Unexpected state: baseProvenance still undefined after Step 2');
     }
 
     // Step 3: PDF load + rotation (page 範囲 validation 込)
@@ -1244,6 +1299,9 @@ export const rotatePdfPages = onCall(
           pageRotations: updatedRotations,
           rotatedAt: admin.firestore.FieldValue.serverTimestamp(),
           provenance: newProvenance,
+          // genesis doc のみ provenanceOrigin を併記 (ADR-0016 MUST 8)。単一 atomic update で
+          // provenance + provenanceOrigin を一括書込し、中間状態を作らない。
+          ...(provenanceOrigin ? { provenanceOrigin } : {}),
         },
         { lastUpdateTime: startUpdateTime }
       );

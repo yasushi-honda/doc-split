@@ -532,6 +532,14 @@ describe('getReprocessClearFields (Issue #215: 旧3キー + 新summary 全て de
     expect(fields.documentTypeConfirmed).toBe(false)
   })
 
+  // ADR-0016 MUST 8 (genesis provenance): provenance と provenanceOrigin は同時にクリアしないと
+  // 「マーカーだけ残るが provenance は無い」不整合な中間状態が生じる
+  it('provenance / provenanceOrigin を含む (ADR-0016 MUST 8)', () => {
+    const fields = getReprocessClearFields()
+    expect(fields).toHaveProperty('provenance')
+    expect(fields).toHaveProperty('provenanceOrigin')
+  })
+
   // ADR-0022 Phase1 code-review CONFIRMED指摘対応: エクスポート済み(driveExportStatus:
   // 'exported')docを再処理してもクレーム状態が残存すると、訂正後の再確認でトリガーの
   // クレームが既存ステータスを検知しスキップしてしまい、二度と再エクスポートされない

@@ -110,6 +110,7 @@ service cloud.firestore {
           'allCustomerCandidates',
           'suggestedNewOffice',
           'provenance',
+          'provenanceOrigin',
           'error',
           'lastErrorMessage',
           'lastErrorId',
@@ -168,6 +169,10 @@ service cloud.firestore {
             || (('lastRescuedAt' in resource.data) && request.resource.data.lastRescuedAt == resource.data.lastRescuedAt))
         && (!('provenance' in request.resource.data)
             || (('provenance' in resource.data) && request.resource.data.provenance == resource.data.provenance))
+        // ADR-0016 MUST 8 (genesis provenance): provenance と同型のサーバー専有フィールド。
+        // FEはgetReprocessClearFields()のdeleteField()でのみ操作する想定。
+        && (!('provenanceOrigin' in request.resource.data)
+            || (('provenanceOrigin' in resource.data) && request.resource.data.provenanceOrigin == resource.data.provenanceOrigin))
         // ADR-0018 (Issue #547): ocrExcerptもFunctions(ocrProcessor.ts)専有の派生フィールド。
         // FEはgetReprocessClearFields()のdeleteField()でのみ操作する想定(#9参照)。
         && (!('ocrExcerpt' in request.resource.data)

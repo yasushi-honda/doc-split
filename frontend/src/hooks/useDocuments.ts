@@ -340,6 +340,9 @@ export function getReprocessClearFields(preserveDistributionFields: boolean = fa
     // 分割 PDF provenance (#445 ADR-0016): 再処理時に古い snapshot を残すと
     // derivedObjectPath と実 Storage state が不整合になるため必ずクリアする
     provenance: df,
+    // genesis provenance marker (ADR-0016 MUST 8): provenance と同時にクリアしないと
+    // 「マーカーだけ残るが provenance は無い」不整合な中間状態が生じる
+    provenanceOrigin: df,
     // メタ情報
     ...(preserveDistributionFields ? {} : { customerName: df, customerId: df }),
     officeName: df,
