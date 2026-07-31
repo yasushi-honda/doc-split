@@ -33,7 +33,7 @@ import { ExtractionInfoPopover } from '@/components/ExtractionInfoPopover'
 import { useDocument, useDocumentDetail, useReprocessDocument, useDistributionSiblingCount, resolveDetailFields } from '@/hooks/useDocuments'
 import { useDocumentEdit } from '@/hooks/useDocumentEdit'
 import { useCustomers, useOffices, useDocumentTypes, useCareManagers, useCustomerIdentityLookup } from '@/hooks/useMasters'
-import { resolveCustomerUnconfirmedReason } from '@shared/customerIdentity'
+import { resolveCustomerUnconfirmedReason, stripInternalSpaces } from '@shared/customerIdentity'
 import { useMasterAlias } from '@/hooks/useMasterAlias'
 import { useAliasLearningHistory, useInvalidateAliasLearningHistory } from '@/hooks/useAliasLearningHistory'
 import { isCustomerConfirmed } from '@/hooks/useProcessingHistory'
@@ -611,9 +611,16 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
   // typeof c.name === 'string'ガード: useCustomers()はFirestore生データをname: doc.data().name as stringで
   // castしており実行時保証がない。name欠損マスターが1件でもあるとc.name.trim()がTypeErrorでモーダル自体が
   // クラッシュする(shared/customerIdentity.tsのfindSameNameCollisionNamesと同種のregression、Codex
-  // review-diff plan mode指摘で発覚、2026-07-26)
+  // review-diff plan mode指摘で発覚、2026-07-26)。
+  // stripInternalSpaces正規化後で比較する(Issue #753対応、2026-08-01): isSameNameCollision
+  // (findSameNameCollisionNames経由)が内部スペース表記ゆれ(例:「鬼頭 京子」/「鬼頭京子」)も
+  // 衝突として検出するよう拡張されたため、ここも同じ正規化で揃えないと「バッジは点灯するが
+  // 候補一覧が空」という不整合UIになる。
   const collidingMasters = isSameNameCollision && document
-    ? (customers ?? []).filter(c => typeof c.name === 'string' && c.name.trim() === (document.customerName ?? '').trim())
+    ? (customers ?? []).filter(c =>
+        typeof c.name === 'string'
+        && stripInternalSpaces(c.name.trim()) === stripInternalSpaces((document.customerName ?? '').trim())
+      )
     : []
 
   // ドキュメントが変わったらdownloadUrlをリセット

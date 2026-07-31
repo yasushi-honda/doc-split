@@ -135,14 +135,33 @@ export function isValidCustomerSelection(name: string | null | undefined): boole
 }
 
 /**
- * 顧客マスター一覧から、同名(完全一致)が2件以上存在する名前の集合を返す。
+ * 姓名間の全角/半角スペース有無・欠落表記ゆれ(実データ確認例: 「鬼頭 京子」/「鬼頭京子」)を
+ * 除去する正規化。`functions/src/drive/folderPath.ts`のフォルダ名解決入力と
+ * `findSameNameCollisionNames`の同名衝突判定が同じ正規化を必要とするため(Issue #753、
+ * 2026-08-01)、重複実装を避けてここに集約する。folderPath.ts側はここからimportする。
+ */
+export function stripInternalSpaces(name: string): string {
+  return name.replace(/[\s　]+/g, '');
+}
+
+/**
+ * 顧客マスター一覧から、同名衝突(スペース表記ゆれを正規化した上で2件以上)が存在する
+ * 「生のtrimmed名」(表記ゆれのバリアント全て)の集合を返す。
  *
  * 「同姓同名の別人が同一 Drive フォルダへ合流するリスク」の判定に使う。マスターの
  * `isDuplicate` フラグ(登録時に自動付与されるが事後の追加・改名では更新されない)には
  * 依存せず、渡された一覧そのものから毎回数え直す。
+ *
+ * 戻り値は正規化後キーではなく生のtrimmed名を返す(Issue #753対応、2026-08-01):
+ * 呼出元(`useDocumentEdit.ts`/`faxDuplication.ts`/`resolveCustomerUnconfirmedReason`)は
+ * いずれも`.has(document.customerNameのtrimmed値)`という生の表記で照合するため、正規化後
+ * キーそのものを返しても照合に使えない。「鬼頭 京子」「鬼頭京子」のように内部スペースの
+ * 有無だけが異なる2件のマスターも同名衝突として検出できるよう、正規化キーでグルーピングした
+ * 上で、そのグループに属する全ての生表記(variant)を結果Setに含める。
  */
 export function findSameNameCollisionNames(customers: Array<{ name: string }>): Set<string> {
   const counts = new Map<string, number>();
+  const rawVariantsByKey = new Map<string, Set<string>>();
   for (const c of customers) {
     // 呼出元の型`Array<{ name: string }>`は実行時保証がない。Firestoreの生データを
     // `as string`でキャストして渡す呼出元(useMasters.tsのfetchCustomers等)があるため、
@@ -155,7 +174,19 @@ export function findSameNameCollisionNames(customers: Array<{ name: string }>): 
     // (kanameone/cocoro双方)で前後空白付きnameが実在しないことは確認済み。addCustomer()の
     // normalizeName()・import-masters.jsのCSVパースが書込み時に既にtrimしているため)。
     const trimmed = c.name.trim();
-    counts.set(trimmed, (counts.get(trimmed) ?? 0) + 1);
+    // 正規化キー(内部スペース除去後)でグルーピングする。総件数(count)はdistinct variant数
+    // ではなく生の出現回数で数える必要がある(同一表記2件の従来ケースをdistinct=1で
+    // 見逃さないため)。
+    const key = stripInternalSpaces(trimmed);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+    if (!rawVariantsByKey.has(key)) rawVariantsByKey.set(key, new Set());
+    rawVariantsByKey.get(key)!.add(trimmed);
   }
-  return new Set([...counts].filter(([, count]) => count > 1).map(([name]) => name));
+  const result = new Set<string>();
+  for (const [key, count] of counts) {
+    if (count > 1) {
+      for (const raw of rawVariantsByKey.get(key)!) result.add(raw);
+    }
+  }
+  return result;
 }
