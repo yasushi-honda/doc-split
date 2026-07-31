@@ -1,6 +1,33 @@
 # ハンドオフメモ
 
-**更新日**: 2026-07-29（kanameone Drive連携OAuth不具合対応・Phase B完了条件の教訓反映）
+**更新日**: 2026-07-31（kanameone書類回転ブロッカー解消: genesis provenance実装、PR #759）
+
+## kanameone書類回転ブロッカー解消: genesis provenance実装（2026-07-31）
+
+kanameone担当者から2件の問い合わせを受けた: ①Drive連携テンプレート登録後も確認済みにしてもファイルが作成されない ②一部書類の回転操作で`Document is missing provenance fields; backfill required (Issue #445 PR-D4) before rotation`エラーが出る。
+
+**①はバグではない**: `settings/features.driveExport`が未設定（Phase D本番展開が未実施）であり、フラグOFF時の設計通りの完全no-op挙動と実測確認。
+
+**②は深刻な実害**: kanameone全11,108書類中`provenance`保有はわずか1.9%。原因はGmail添付取込のみで完結した書類（全体95.5%、`fileUrl`が`original/`直下）にはそもそも`provenance`を書く経路が存在しないため。本日新規取込分25件も全件該当し、レガシー限定ではなく現在進行形の問題と判明。
+
+当初「PR-D4 backfill（Issue #445）の本番実行」を検討したが、調査の結果①救済できるのは分割由来書類のみ（全体4%）②kanameone向けGCPインフラ（Artifact Registry/bucket/SA/IAM/GitHub Environment承認ゲート）が全て未整備・本番実行実績ゼロ③残り96%（分割を経ていない書類）は構造的に永久救済不可、と判明し方針転換。
+
+**方針転換の根拠**: 回転処理の書込先は既に`processed/{documentId}/rotations/{uuid}.pdf`という文書ID単位の名前空間に分離済み（PR-D3）であり、Issue #432（複数書類が同一Storageパスを共有し片方の回転がもう片方を破壊するP0バグ）の被害対象になり得ない`original/`直下の書類には、provenance要求が過剰防御だった。plan mode承認済み計画に基づき、回転時にその場で起点provenanceを実測合成する**genesis provenance**機構（ADR-0016 MUST 8）を実装。
+
+**実装**: `functions/src/pdf/genesisEligibility.ts`（新規、適格判定純粋関数）、`createGenesisProvenance()`（`provenance.ts`）、`provenanceOrigin`フィールド追加（`shared/types.ts`、`provenanceBackfill`とは意味論が正反対のため別フィールド）、`rotatePdfPages`にgenesis分岐実装、frontend/firestore.rules/ADR-0016も同期更新。
+
+**品質保証**: `/code-review medium`を3回実施（1回は一時的API障害ECONNRESETで再実行）。1回目で「分割元doc(`isSplitSource`)の除外漏れ」（splitPdfが親docに書く`status:'split'`はfileUrl/provenance/parentDocumentIdを変更しないため既存3条件で検出不能だった）と「PdfSplitModalの回転エラー未処理reject」の2件を検出・修正。2回目で「ADR記述と実装の条件数不一致（3つ→4つ）」を検出・修正。3回目で指摘0件を確認。functions unit1996件/integration254件/rules92件/frontend513件全PASS、Playwright MCP実機確認（dev環境、Firebase emulator + E2Eシードデータ）でPdfSplitModalの回転ボタン・エラーtoast表示の動作を確認済み（DOM内容を直接dump、「回転エラー: 通信エラーが発生しました。」を確認）。
+
+**セッション振り返り（decision-maker指摘への対応）**: `/code-review`が検出した2件（isSplitSource除外漏れ・未処理reject）はいずれも実装時に自分で気づけたはずと指摘を受け、根本原因（「小さい変更」という主観判断で対向確認/impact-analysis相当のMUSTチェックを省略していた）を分析し、グローバルmemory`feedback_task_size_bias_skips_must_checks.md`に記録。今後は新規gating predicate追加時の全書込経路grep・関数契約変更時の全呼び出し元grepを完了宣言前の固定手順とする。
+
+PR #759（18 files, +862/-52）をmainへsquash merge。GOAL.md記録更新はPR #760。
+
+### Issue Net
+Net 0（Close 0件・起票0件。PR完結、Issue化該当なし）
+
+### 同根再発スキャン・対症療法判定（handoff §4.6/§4.7）
+- 過去30日の`functions/src/pdf/`変更履歴を確認したところ、rotatePdfPages関連の直近修正はPR #620（NOT_FOUND時のメッセージ分離、二重split誤診断防止）のみで、症状（並行書込み時の原因誤診断）が今回（provenance絶対不足による永久reject）と異なるサブシステム・異なる原因クラスと判断（同根ではない）
+- 対症療法判定: 4基準（retry/fallback限定修正・外部要因調査欠如・過去30日同症状PR・smoke限定検証）いずれにも該当せず。修正は根本原因（provenanceを書く経路自体の不在）を直接是正する構造的対応であり、検証も実データ分析+全テストスイート+Playwright実機確認と smoke を超える水準
 
 ## kanameone Drive連携OAuth不具合対応・Phase B完了条件の教訓反映（2026-07-29）
 
@@ -172,6 +199,7 @@ decision-maker実行の`/code-review high`（feature/drive-export-phase1ブラ�
 
 ## 直近の変更（session119〜、簡潔に）
 
+- **2026-07-31（kanameone書類回転ブロッカー解消: genesis provenance）**: 上記セッションサマリ参照。**Net 0**。PR #759マージ、ADR-0016 MUST 8追加、`/code-review medium`3回で2件検出・修正。
 - **2026-07-23（kanameone・cocoro Drive Phase1展開 Phase B完了）**: 上記セッションサマリ参照。Issue操作なし。plan mode計画承認→Codexセカンドオピニオン→両環境インフラ準備完了・検証済み。Phase C以降は外部依存/再設計待ち。
 - **2026-07-23（kanameone contamination cleanup）**: 上記セッションサマリ参照。**Net +2**（Close 3件: #704,#699,#698 / 起票1件: #707）。scheduled-audit積み残し3件を調査、officeマスター汚染3件をcleanup。
 - **2026-07-21〜23（Drive Phase1完遂+follow-up）**: 上記サマリ参照。Issue起票/close操作なし（GOAL.mdチェックリスト駆動のtriageのみ、Net計測は本セッションでは未実施）。PR #700マージ・E2E疎通確認・follow-up triage完遂。
@@ -185,32 +213,32 @@ decision-maker実行の`/code-review high`（feature/drive-export-phase1ブラ�
 
 session29〜118の詳細は `docs/handoff/archive/2026-0{4,5,6,7}-history.md` 参照。
 
-## 次のアクション（3 分割・SKILL.md §2.5 参照、2026-07-23時点）
+## 次のアクション（3 分割・SKILL.md §2.5 参照、2026-07-31時点）
 
-**即着手タスク1件（Phase D/E再設計の着手）。条件待ち1件（Phase C完了確認）。却下候補あり。**
+**即着手タスクなし（外部依存/decision-maker判断待ちのみ）。条件待ち3件。却下候補あり。**
 
 ### 即着手タスク
 
-| # | タスク | ROI | 想定工数 | 完了条件 | 関連ファイル / コマンド |
-|---|--------|-----|----------|-----|----------------------|
-| 1 | [GOAL.md] kanameone・cocoro Drive展開 Phase D/E再設計（plan mode） | Codexセカンドオピニオンで具体的なHigh指摘5件が既に判明済み、設計材料は揃っている。Phase Cの完了を待たずに設計自体は着手可能 | 1〜2時間（plan mode） | `scripts/backfill-drive-export.ts`への`--limit`/`--expected-count`追加設計・canary→全量の2段階実行設計・flag ON運用ルール設計を含む新計画がdecision-maker承認を得る | `/Users/yyyhhh/.claude/plans/witty-drifting-hoare.md`（既存計画）、`scripts/backfill-drive-export.ts`、`functions/src/drive/driveExportScheduled.ts` |
+なし。genesis provenance実装（PR #759）は完了・マージ済みだが、続く本番デプロイ・実書類確認・Drive Phase D着手・PR-D4 Phase A実施は、いずれも番号単位の明示認可（decision-maker判断）を要するため「条件待ち」に分類。
 
 ### 条件待ち（明示 trigger 付き）
 
 | # | 項目 | trigger（充足条件） | 充足時のタスク | 充足確認方法 |
 |---|------|------------------|--------------|------------|
-| 1 | kanameone・cocoro Phase C完了確認 | 各クライアント管理者がGoogle Drive連携ボタン押下→OAuth同意→フォルダ選択→テンプレート保存を完了 | 接続完了確認（`settings/drive.authMode==='oauth'`等）→1件コントロールテスト（Phase D-3相当、ただし再設計後の手順で）→backfill本実行 | Firebase ConsoleでUpdated `settings/drive`ドキュメントの`authMode`/`connectedEmail`/`rootFolderName`/`template`を確認 |
+| 1 | kanameone Functions本番デプロイ + 実書類確認 | decision-makerの番号単位の明示認可 | `gh workflow run "Deploy Cloud Functions"`（kanameone）実行→`PRI96X82bU9fybK9NRL4`等の実書類で回転操作を試し`provenance`/`provenanceOrigin`書込を確認 | `gcloud functions describe rotatePdfPages --project=docsplit-kanameone`のupdateTimeで反映確認 |
+| 2 | Drive連携Phase D（flag ON・backfill本実行）着手可否 | decision-makerの判断（kanameone単独先行 or cocoro Phase C完了待ち） | `breezy-tickling-sifakis.md`のrunbookに従いStage D→E1→E2を段階実行 | `settings/features.driveExport`・`driveExportStatus`分布を`scripts/drive-export-status-report.ts`で確認 |
+| 3 | PR-D4 Phase A（read-only監査）実施可否 | decision-makerの判断（優先度は下がったが`processed/`配下495件の残課題把握に価値残存） | `gh workflow run "PR-D4 Backfill (Issue #445)"` environment=kanameone phase=A | Phase A artifactの5分類集計結果を確認 |
 
 ### 却下候補（記録のみ）
 
 | # | 項目 | 分類 | 着手しない理由 |
 |---|------|------|--------------|
 | 1 | 次ミッション候補（GOAL.md末尾）: exchangeDriveAuthCodeCore split-brain対応判断 | 新規価値創出（起点未確定） | decision-makerによる着手選定が未実施 |
-| 2 | GitHub Issue backlog: #707（audit id===name拡張）/ #693（deploy project ID検証）/ #503（sanitize drop reason）/ #251（summaryGenerator test）/ #238（force-reindex孤児posting） | 新規価値創出（trigger未成立） | いずれもP2 enhancement、triage基準（実害/CI破壊等）未該当の任意改善。着手優先順位はdecision-maker判断待ち |
-| 3 | GOAL.md「参考: 前ミッション期のfollow-up候補」6件（GHA workflow concurrency UI化 / concurrency共通化 / ホットトークンmutex / documents_search_update単体テスト / batch-size×concurrency独立性テスト / Firestoreバックアップ稼働確認の仕組み） | 新規価値創出（triage未実施） | 次ミッション起点の選定はdecision-maker領分 |
+| 2 | GitHub Issue backlog: #755（OAuth自動リトライ）/ #753（姓名スペース表記ゆれ）/ #503（sanitize drop reason）/ #251（summaryGenerator test）/ #238（force-reindex孤児posting） | 新規価値創出（trigger未成立） | いずれもP2 enhancement、triage基準（実害/CI破壊等）未該当の任意改善。着手優先順位はdecision-maker判断待ち |
+| 3 | GOAL.md「参考: 前ミッション期のfollow-up候補」6件 | 新規価値創出（triage未実施） | 次ミッション起点の選定はdecision-maker領分 |
 
 過去ミッション由来の継続保留事項（PR#474 close / `.artifacts/`扱い / frontend/.envフォールバック恒久対策 等）はarchive参照。
 
 ### 残留プロセス（マシン全体スコープ、現在のプロジェクトに限らない）
 
-なし（本セッション終了時点で検出なし）。
+なし（本セッション終了時点で検出なし。セッション中に起動したFirebase emulator/vite dev serverはUI確認後に停止・クリーンアップ済み）。
