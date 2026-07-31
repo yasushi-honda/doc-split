@@ -140,8 +140,19 @@ on:
           - backfill-drive-export --dry-run
           - backfill-drive-export
           - audit-drive-folder-space-variants
+          - drive-export-status-report
+          - set-feature-flag --flag driveExport --value true --dry-run
+          - set-feature-flag --flag driveExport --value true
+          - set-feature-flag --flag driveExport --value false --dry-run
+          - set-feature-flag --flag driveExport --value false
+          - set-drive-allowlist --set --dry-run
+          - set-drive-allowlist --set
+          - set-drive-allowlist --clear-empty --dry-run
+          - set-drive-allowlist --clear-empty
+          - set-drive-allowlist --remove --dry-run
+          - set-drive-allowlist --remove
       doc_id:
-        description: 'Document ID (required when script contains --doc-id; ignored otherwise)'
+        description: 'Document ID (required when script contains --doc-id or set-drive-allowlist --set; ignored otherwise)'
         required: false
         type: string
         default: ''
@@ -309,6 +320,20 @@ jobs:
               exit 1
             fi
             SCRIPT_ARGS=$(echo "$SCRIPT_ARGS" | sed "s/--doc-id/--doc-id $DOC_ID/")
+          fi
+
+          # set-drive-allowlist --set は単一docIdをdoc_id入力から受け取る(Phase D Stage D
+          # コントロールテスト用、複数指定はスコープ外)。既存の--doc-id置換と同一パターン。
+          if [ "$SCRIPT_NAME" = "set-drive-allowlist" ] && echo "$SCRIPT_ARGS" | grep -q -- '--set'; then
+            if [ -z "$DOC_ID" ]; then
+              echo "ERROR: doc_id input is required when script contains set-drive-allowlist --set" >&2
+              exit 1
+            fi
+            if ! echo "$DOC_ID" | grep -qE '^[A-Za-z0-9_-]+$'; then
+              echo "ERROR: doc_id must contain only alphanumeric, underscore, hyphen characters" >&2
+              exit 1
+            fi
+            SCRIPT_ARGS=$(echo "$SCRIPT_ARGS" | sed "s/--set/--set $DOC_ID/")
           fi
 
           echo "script_name=$SCRIPT_NAME" >> "$GITHUB_OUTPUT"
@@ -689,6 +714,7 @@ jobs:
                [ "$SCRIPT_NAME" = "measure-summary-cost" ] || \
                [ "$SCRIPT_NAME" = "create-pending-doc" ] || \
                [ "$SCRIPT_NAME" = "backfill-drive-export" ] || \
+               [ "$SCRIPT_NAME" = "drive-export-status-report" ] || \
                [ "$SCRIPT_NAME" = "merge-notation-duplicate-masters" ]; then
             # Issue #432 PR-C 系 script は scripts/lib/* (TypeScript)、seed-dev-data (#528) は
             # shared/*.ts に依存するため ts-node 経由で実行。compare-gemini-ocr-models (#548) は
@@ -719,6 +745,9 @@ jobs:
             # firebase-adminのみ依存(functions/src非依存、STORAGE_BUCKET不使用。Drive API/
             # Storageアクセスは行わずdriveExportStatus:'error'のマークのみ行う設計)。
             # STORAGE_BUCKET は resolve step で env 化済。
+            # drive-export-status-report (Phase D/E再設計、Codex High指摘#5対応、2026-07-25) は
+            # read-only。scripts/lib/driveExportBackfillHelpers.tsに依存するためts-node経由。
+            # 引数なし(全てのモードで固定クエリ)、STORAGE_BUCKET不使用。
             # merge-notation-duplicate-masters (2026-07-27、表記ゆれ重複マスター統合)は
             # scripts/lib/notationDuplicateMerge.ts(純粋関数)に依存、STORAGE_BUCKET不使用。
             # 既定はdry-run、--executeフラグ時のみ書込みを行う。
