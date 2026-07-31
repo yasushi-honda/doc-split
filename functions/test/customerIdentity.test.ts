@@ -106,6 +106,44 @@ describe('findSameNameCollisionNames', () => {
     expect(() => findSameNameCollisionNames(malformed)).to.not.throw();
     expect([...findSameNameCollisionNames(malformed)]).to.deep.equal(['田中太郎']);
   });
+
+  it('内部スペース有無の表記ゆれ(例:「鬼頭 京子」/「鬼頭京子」)は正規化後に同名衝突とみなし、両方のraw表記を結果に含める(Issue #753対応、2026-08-01)', () => {
+    const result = findSameNameCollisionNames([
+      { name: '鬼頭 京子' },
+      { name: '鬼頭京子' },
+    ]);
+    expect([...result].sort()).to.deep.equal(['鬼頭京子', '鬼頭 京子'].sort());
+  });
+
+  it('全角スペースの表記ゆれも正規化後に同名衝突とみなす', () => {
+    const result = findSameNameCollisionNames([
+      { name: '鬼頭　京子' },
+      { name: '鬼頭京子' },
+    ]);
+    expect([...result].sort()).to.deep.equal(['鬼頭京子', '鬼頭　京子'].sort());
+  });
+
+  it('表記ゆれの相手が存在しない(1件のみ)場合は衝突扱いにしない', () => {
+    const result = findSameNameCollisionNames([{ name: '鬼頭 京子' }]);
+    expect(result.size).to.equal(0);
+  });
+
+  it('同一表記2件(従来ケース)は表記ゆれ拡張後も引き続き衝突として検出する(regression)', () => {
+    const result = findSameNameCollisionNames([
+      { name: '田中太郎' },
+      { name: '田中太郎' },
+    ]);
+    expect([...result]).to.deep.equal(['田中太郎']);
+  });
+
+  it('3表記混在(完全一致2件+表記ゆれ1件)は正規化キー配下の全variantを結果に含める', () => {
+    const result = findSameNameCollisionNames([
+      { name: '鬼頭 京子' },
+      { name: '鬼頭 京子' },
+      { name: '鬼頭京子' },
+    ]);
+    expect([...result].sort()).to.deep.equal(['鬼頭京子', '鬼頭 京子'].sort());
+  });
 });
 
 describe('precheckCustomerIdentity', () => {

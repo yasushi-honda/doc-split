@@ -7,6 +7,7 @@
  */
 
 import { DriveFolderSegment, DriveFolderTemplate, DRIVE_SEGMENT_SEPARATOR_DEFAULT } from '../../../shared/types';
+import { stripInternalSpaces } from '../../../shared/customerIdentity';
 
 /**
  * フリガナ欠損時のフォールバック挙動(`DriveSettings.furiganaFallback`)。
@@ -94,18 +95,6 @@ function joinInitialAndName(
 ): string {
   const separatorChar = separator === 'full' ? '　' : ' ';
   return `${initial}${separatorChar}${name}`;
-}
-
-/**
- * 姓名間の全角/半角スペース有無・欠落表記ゆれ(実データ確認例: 「鬼頭 京子」/「鬼頭京子」)は
- * customerName/careManagerNameに残ったまま`findOrCreateFolder`の完全一致クエリに渡ると、
- * 表記の違うレコードが同一人物でも別々のフォルダとして黙って作成/参照されてしまう
- * (AmbiguousFolderErrorは同一の完全一致文字列が2件以上ヒットした場合にのみ発火するため、
- * この表記ゆれ自体は検知対象外)。フォルダ名解決の入力段階で内部の空白を除去し、
- * 表記ゆれのある同一人物が常に同じフォルダ名に解決されるようにする。
- */
-function stripInternalSpaces(name: string): string {
-  return name.replace(/[\s　]+/g, '');
 }
 
 function resolveCareManagerSegment(
