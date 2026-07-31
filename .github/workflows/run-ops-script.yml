@@ -154,6 +154,8 @@ on:
           - set-drive-allowlist --remove
           - backfill-drive-export --dry-run --limit --expected-count
           - backfill-drive-export --limit --expected-count
+          - backfill-drive-export --dry-run --expected-count
+          - backfill-drive-export --expected-count
       backfill_limit:
         description: 'backfill-drive-export --limit: canary実行時のマーク上限件数(数値のみ)'
         required: false
