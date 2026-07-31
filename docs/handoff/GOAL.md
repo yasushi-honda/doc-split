@@ -142,7 +142,13 @@ cocoro/kanameから、書類（ケアプラン・医療・介護保険証等）�
 4. Firestore直接操作でverified false→true（rising edge）を発生させ、対象書類のみ`driveExportStatus:exported`・`driveFileId`付与を確認（13秒で完了）
 5. 状態分布を再確認し、**allowlist制限が正しく機能（exported=1件のみ、他1,286件は無影響のまま0件を維持）していることを実測確認**
 
-**次の一手**: Stage E1（canary backfill、`--limit`小規模）・Stage E2（全展開、kanameone 876件相当・約22時間drain見込み）は別途番号単位の明示認可が必要（段階的展開・監視を要するため自動連鎖しない設計）。cocoro側はPhase C（クライアントOAuth接続）が未完了のため対象外、外部依存で待機継続。
+**Stage E1実施結果（kanameone canary backfill、2026-07-31、decision-maker「Stage E1に進む」で着手）**:
+- インフラギャップ（`--limit`/`--expected-count`/`--manifest-out`もGHA workflow未配線）を追加発見・解消（PR #766、`backfill_limit`入力新設+既存`expected_count`再利用+manifest artifact 90日保持）
+- `backfill-drive-export --dry-run --limit 10 --expected-count 10`実行 → 候補10件を確認（期待値と一致）
+- `backfill-drive-export --limit 10 --expected-count 10`実行（実書込み）→ マーク成功10件、manifest出力・artifact保存済み（run 30630425182、artifact ID 8793144475）
+- 定期スイープ（15分毎）による実処理を待機後、状態分布を再確認: **exported 10件（9件が本canary由来+既存Stage D control test分1件）、error(顧客未確定)1件（同姓同名リスク対応の既存ガード、顧客確定後に自動再試行される想定内の状態）、実エラー0件**。race-safe書込み・manifest出力・スイープ連携が本番で正しく機能することを実測確認
+
+**次の一手**: Stage E2（全展開、kanameone残り約866件相当・約22時間drain見込み）は別途番号単位の明示認可が必要（長時間・監視を要するため自動連鎖しない設計）。cocoro側はPhase C（クライアントOAuth接続）が未完了のため対象外、外部依存で待機継続。
 
 **副次的に残る判断事項**:
 - PR-D4 Phase A（read-only監査）: genesis provenance実装により`processed/`配下の残課題（495件、Issue #432被害候補）の真の救済可能性を把握する価値は残るが、優先度は下がった（96%はgenesisで既に解消見込みのため）
