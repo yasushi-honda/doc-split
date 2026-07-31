@@ -129,10 +129,22 @@ cocoro/kanameから、書類（ケアプラン・医療・介護保険証等）�
 2. ✅ `gcloud functions describe rotatePdfPages --project=docsplit-kanameone --account=hy.unimail.11@gmail.com`で`updateTime: 2026-07-31T06:34:35Z`を確認（PR #759マージ時刻`05:38:27Z`より後、反映確認済み）
 3. 実書類（`PRI96X82bU9fybK9NRL4`、森田和則様）での実ログイン動作確認は**decision-maker判断により省略**（rotatePdfPagesはFirebase Auth必須+ホワイトリスト制で本番顧客スタッフアカウントへのログイン権限がexecutor側になく、Playwright MCP実施にはテストアカウント提供が前提と判明。「devで成功していれば同一コードのprodも等価」という判断で対応終了とした）
 
-**次の一手**: Drive Phase D着手可否（下記参照）とPR-D4 Phase A監査実施可否をdecision-makerと相談
+**cocoro側も同一問題に晒されていたことが判明・解消（2026-07-31、decision-makerの「cocoro側も大丈夫か」という質問を受け能動調査）**: Firestore集計クエリでcocoro全1,188書類中provenance保有わずか3件(0.25%)、かつcocoroのFunctions最終デプロイ(`2026-07-28T07:26:21Z`)がPR #759マージ前のコードと判明。同一デプロイをcocoro向けにも実行し`updateTime:2026-07-31T10:39:13Z`で反映確認済み。**kanameone/cocoro両環境でgenesis provenance機構が本番稼働中**（詳細PR #762/#763）。
+
+## Drive連携Phase D: Stage D完了（2026-07-31、decision-maker「Drive Phase D進めて」で着手）
+
+**インフラギャップ発見・解消**: Phase D実行に必要な3スクリプト（`drive-export-status-report`・`set-feature-flag --flag driveExport`・`set-drive-allowlist`）はコード実装済みだが`.github/workflows/run-ops-script.yml`のGHA実行対象choiceに未登録で、ローカルhook(`ops-script-redirect.sh`)がADC実行をブロックし着手不可能だった。既存の`faxDuplication`/`--doc-id`パターンを踏襲して追加（PR #764マージ済み、`actionlint`検証済み）。
+
+**Stage D実施結果（kanameone）**:
+1. Entry gate確認: verified総数1,287件、error=0・exporting=0 ✅
+2. `set-feature-flag --flag driveExport --value true`実行 → `settings/features.driveExport = true`
+3. `set-drive-allowlist --set 025kUMow3speMeOplwOW`実行 → 対象書類1件のみに限定（松田様、`isSplitSource:false`の通常processed書類を選定）
+4. Firestore直接操作でverified false→true（rising edge）を発生させ、対象書類のみ`driveExportStatus:exported`・`driveFileId`付与を確認（13秒で完了）
+5. 状態分布を再確認し、**allowlist制限が正しく機能（exported=1件のみ、他1,286件は無影響のまま0件を維持）していることを実測確認**
+
+**次の一手**: Stage E1（canary backfill、`--limit`小規模）・Stage E2（全展開、kanameone 876件相当・約22時間drain見込み）は別途番号単位の明示認可が必要（段階的展開・監視を要するため自動連鎖しない設計）。cocoro側はPhase C（クライアントOAuth接続）が未完了のため対象外、外部依存で待機継続。
 
 **副次的に残る判断事項**:
-- Drive連携Phase D（flag ON・backfill本実行）: kanameoneはPhase C完了済み、Stage D entry gate（`driveExportStatus`のerror=0かつexporting=0）も2026-07-31時点で実測確認済み（verified総数1155件）。番号単位の明示認可があれば`breezy-tickling-sifakis.md`のrunbookに従い着手可能
 - PR-D4 Phase A（read-only監査）: genesis provenance実装により`processed/`配下の残課題（495件、Issue #432被害候補）の真の救済可能性を把握する価値は残るが、優先度は下がった（96%はgenesisで既に解消見込みのため）
 
 ---
