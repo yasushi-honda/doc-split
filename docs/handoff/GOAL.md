@@ -4,6 +4,10 @@ updated: 2026-07-31
 <!-- 前ミッション(dev/kanameone/cocoro環境監査・保守検証)は2026-07-20完遂。全文はdocs/handoff/LATEST.md参照。 -->
 <!-- Google Drive連携Phase1 (MVP)実装ミッションは2026-07-22完了(PR#700マージ)。詳細は本ファイル末尾「Google Drive連携Phase1完遂」節+docs/handoff/LATEST.md参照。 -->
 
+## 📋 空き時間バックログ（現在のミッションとは無関係、doc-audit 2026-08-01指摘）
+
+- [ ] `docs/context/gemini-rate-limiting.md`のレート制限値をGemini 3.5 Flash運用下で再検証する。2026-07-09のモデル移行後、ファイル自身が「3.5移行後の再検証は未実施」と自己申告したまま未着手（実測作業=負荷テスト等が必要なため、Drive連携ミッションの空き時間に着手）
+
 ## 現在のミッション【進行中・2026-07-23開始】
 
 kanameone・cocoroへのGoogle Drive連携Phase1本番展開。承認済み計画: `/Users/yyyhhh/.claude/plans/witty-drifting-hoare.md`。
