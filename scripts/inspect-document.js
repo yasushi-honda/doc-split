@@ -4,7 +4,8 @@
  *
  * Storage 404 / fileUrl 不整合 / 孤児ドキュメント等の調査に使用する。
  * documents コレクションを fileName 完全一致で検索し、エラー原因究明に必要な
- * フィールド一式（status / fileUrl / parentDocumentId / splitFromPages / pageRotations 等）
+ * フィールド一式（status / fileUrl / parentDocumentId / splitFromPages / pageRotations /
+ * provenance / provenanceBackfill / provenanceOrigin / driveExportStatus 等）
  * を JSON で出力する。書き込みは一切行わない。
  *
  * 使用方法:
@@ -75,6 +76,19 @@ function summarize(doc) {
     lastErrorMessage: d.lastErrorMessage,
     confirmedBy: d.confirmedBy,
     confirmedAt: tsToIso(d.confirmedAt),
+    // ADR-0016 (Issue #445 PR-D4 / genesis provenance) rotate gate 調査用。
+    provenance: d.provenance,
+    provenanceBackfill: d.provenanceBackfill,
+    provenanceOrigin: d.provenanceOrigin,
+    // ADR-0022 (Drive export) 調査用。
+    verified: d.verified,
+    customerId: d.customerId,
+    officeId: d.officeId,
+    driveExportStatus: d.driveExportStatus,
+    driveFileId: d.driveFileId,
+    driveExportedAt: tsToIso(d.driveExportedAt),
+    driveExportError: d.driveExportError,
+    driveExportRunId: d.driveExportRunId,
   };
 }
 
