@@ -155,6 +155,18 @@ Select、Combobox、Modal、Popover等のUIコンポーネントを変更・置�
 - **マージフロー（2026-07-03〜）**: `.tsx/.css` を含む PR は `ui-change-merge-check.sh` hook が「CI 全 PASS + `ui-verified` ラベル」の両方を満たす場合のみマージを許可する。確認証跡（確認内容・viewport・スクリーンショット）を PR コメント/body に記録した上で `gh pr edit <番号> --add-label ui-verified` を付与してからマージする
 - devはmainへのpush時にCI自動デプロイされるため、push後の実環境確認も可能
 
+## 既存データへの新規ゲート追加時の注意（Issue #445/PR-D3教訓）
+
+**新しい前提条件（precondition）を既存の本番documentsに課すfail-closedゲートを追加する場合、有効化前に対象コレクションの実データに対して「新条件を満たす件数/満たさない件数」を集計クエリで確認すること。**
+
+- 教訓: rotate機能にprovenance必須ゲート（ADR-0016 MUST 3、PR-D3）を追加した際、事前の実データ確認をしなかった結果、kanameone全11,108書類中provenance保有はわずか1.9%と判明（有効化直後からほぼ全既存書類で回転不可の状態が発生）。クライアントからの問い合わせで初めて気づいた（本来はデプロイ前に検知すべきだった）
+- 確認方法: Firestore集計クエリ（`runAggregationQuery`等）またはread-only調査スクリプト（`scripts/inspect-document.js`等）で、対象コレクションの新条件充足率を事前に把握する
+- 影響が大きい場合（目安: 実データの一定割合以上が新条件を満たさない）は、fail-closedにする前に以下を検討する:
+  - 救済/backfill経路の用意（例: 既存data向けbest-effort backfill）
+  - その場で条件を合成する代替経路（例: `functions/src/pdf/genesisEligibility.ts`のgenesis provenance、非侵襲的なケースのみ対象）
+  - 段階導入（allowlist等によるcanary展開）
+- 適用範囲: `documents`コレクションに限らず、既存の本番データに新しい必須フィールド・新しいバリデーション・新しいアクセスゲートを追加する変更全般
+
 ## 危険な操作の禁止事項
 
 ### Firestoreデータ削除（ADR-0008）
