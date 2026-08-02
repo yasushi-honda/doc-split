@@ -1,5 +1,5 @@
 ---
-updated: 2026-07-31
+updated: 2026-08-02
 ---
 <!-- 前ミッション(dev/kanameone/cocoro環境監査・保守検証)は2026-07-20完遂。全文はdocs/handoff/LATEST.md参照。 -->
 <!-- Google Drive連携Phase1 (MVP)実装ミッションは2026-07-22完了(PR#700マージ)。詳細は本ファイル末尾「Google Drive連携Phase1完遂」節+docs/handoff/LATEST.md参照。 -->
@@ -50,6 +50,25 @@ kanameone・cocoroへのGoogle Drive連携Phase1本番展開。承認済み計�
   - [ ] `settings/drive.oauthClientId`存在
   - [ ] flag OFF維持
   - [ ] **（新規）静的存在確認だけでなく、可能な範囲で実際にAPIを呼び出す動作確認を行う**: 今回のようにAPI有効化漏れは「Cloud Functionsの状態」「Secret/IAMの存在」等の静的チェックでは検出できず、クライアントが実際にOAuthフローを最後まで動かした瞬間にしか顕在化しなかった。理想はテスト用アカウントで一度OAuth接続を通すことだが、それが難しい場合は最低限`gcloud services list --enabled`の機械的突合を完了条件に含める
+
+## 【完了・2026-08-02】OCR処理タイムアウト予防策（processOCR実行時間予算再設計）
+
+kanameone健全性レポートで発覚した書類1件のOCRタイムアウトエラー（`Px4myB4Y3t7jCFZSqS5J`、71ページPDF、"Processing timed out, max retries exceeded (5/5)"）を発端に、decision-makerの「今後予防可能か」という質問を受けて調査・plan mode承認済み計画（Step0実測→PR1計測ログ→PR2タイムアウト値引き上げ→PR3後処理軽量化）で予防策を実装、kanameone本番デプロイ・実機検証まで完遂。
+
+- **Step0実測（read-only）**: kanameoneの`processOCR`の`maxInstanceRequestConcurrency`が明示未設定（デフォルト80）であることを発見。「実行中は1分tickがスキップされる」という既存コードコメントの前提が厳密には成立していない可能性を示唆する実測結果（`concurrency:1`明示設定は副作用検証が必要なため今回はスコープ外、ADR-0023に記録）。マスター件数実測: customers 1,352件/offices 981件/documentTypes 132件
+- **PR #780（マージ済み）**: `processDocument`にフェーズ別処理時間の構造化ログ（`phaseTimings`/`phaseTimingsPreCommit`）を追加。挙動変更なし
+- **PR #781（マージ済み）**: `processOCR`の`timeoutSeconds`を540秒→900秒に引き上げ（[ADR-0023](../adr/0023-process-ocr-execution-budget.md)、1800秒上限は検知遅延・ドレイン待機の観点で不採用と判断）。連動する`STUCK_PROCESSING_THRESHOLD_MS`（`PROCESS_OCR_TIMEOUT_SECONDS`から導出する構造に変更）・ADR-0019のメンテナンスゲートドレイン待機（10分→20分）・`scripts/migrate-document-groups.js`・api-reference.md等を整合させて更新。契約テスト`processOCREndpointContract.test.ts`新設。`codex review`（medium effort）findings 0件
+- **PR #782（マージ済み）**: 実機検証で`officeMatchMs`が全体の37%（295秒/789秒）を占めることが判明したため、`calculateKeywordMatchScore`（`functions/src/utils/extractors.ts`）が事業所マスター1件ごと（kanameone981件）にOCR全文の正規化・キーワード抽出を再計算していた重複をループ外へホイスト。`extractPdfPage`のページごとPDF再パースも解消。いずれも挙動不変（既存テスト・キーワードマッチング系列・`#506`本番bugパターン回帰テスト含め無変更で全PASS）。`codex review`（medium effort）findings 0件
+- **kanameone実機検証結果**（該当書類`Px4myB4Y3t7jCFZSqS5J`の実処理、pending化→実OCR再実行で確認）:
+
+  | | 変更前 | PR2適用後 | PR2+PR3適用後 |
+  |---|---|---|---|
+  | 総処理時間 | タイムアウト（540秒超過） | 789秒 | 617秒 |
+  | officeMatchMs | ─ | 295秒 | 223秒 |
+  | 900秒予算に対する余裕 | ─ | 111秒 | 283秒 |
+
+- **さらなる最適化余地**: `calculateKeywordMatchScore`内部の事業所ごとキーワード突合せループ自体（O(N_offices×N_keywords)）はまだ残存（223秒）。マスター件数増加で再度圧迫されうる構造的リスクのため、[Issue #783](https://github.com/yasushi-honda/doc-split/issues/783)に起票済み（優先度中、decision-maker明示指示があれば次回セッションで着手）
+- **スコープ外として記録**（ADR-0023参照）: 自動rescue対象へのタイムアウトエラー追加（ADR-0017の意図的限定を覆す判断）、監視・アラートの早期化、`concurrency`明示設定
 
 ## 【完了・2026-07-22】Google Drive連携Phase1 (MVP)実装ミッション
 
