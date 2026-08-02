@@ -970,12 +970,15 @@ export function extractOfficeCandidates(
 
     // ファイル名ボーナスを適用（スコアが閾値以上の場合のみ）
     // ファイル名だけでのマッチは避け、OCRでもある程度マッチした場合にブーストする
+    // (Issue #787: この `minScore - 10` は上記ステップ5のfloor算出根拠でもある。
+    //  ここを変更する場合はステップ5の`floor`算出ロジックも合わせて見直すこと)
     if (score >= minScore - 10 && filenameBoost > 0) {
       score = Math.min(100, score + filenameBoost);
       // ファイル名ブーストでスコアが閾値を超えた場合のみ候補に
     }
 
     // 閾値以上の場合、候補に追加
+    // (Issue #787: この `minScore` も上記ステップ5のfloor算出根拠。同上)
     if (score >= minScore) {
       candidates.push({
         id: office.id,

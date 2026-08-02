@@ -123,7 +123,8 @@ export function bestFuzzyWindowScore(
 ): number {
   const windowSize = Math.min(needle.length + windowPad, text.length);
 
-  // 元実装のfor条件 `i <= text.length - windowSize` が1回も回らないケース
+  // 元実装のfor条件 `i <= text.length - windowSize` が1回も回らないケース。
+  // windowSize = Math.min(..., text.length) により通常は到達不能(防御的コード)。
   if (windowSize > text.length) return 0;
 
   // 退化ケース: ウィンドウが空文字列(このときi=0の1回のみ)。M=0でのゼロ除算を避けるため
