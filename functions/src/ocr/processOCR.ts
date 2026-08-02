@@ -36,6 +36,7 @@ import {
   ERROR_RESCUE_SCAN_INTERVAL_MS,
   MAX_ERROR_RESCUE_COUNT,
   RESCUE_STATE_DOC_PATH,
+  PROCESS_OCR_TIMEOUT_SECONDS,
 } from './constants';
 
 const db = admin.firestore();
@@ -66,7 +67,7 @@ export const processOCR = onSchedule(
   {
     schedule: 'every 1 minutes',
     region: 'asia-northeast1',
-    timeoutSeconds: 540,
+    timeoutSeconds: PROCESS_OCR_TIMEOUT_SECONDS,
     memory: '1GiB',
     maxInstances: 1,
   },
@@ -201,8 +202,9 @@ export const processOCR = onSchedule(
 /**
  * processing状態で長時間スタックしたドキュメントをpendingに戻す
  *
- * Functionタイムアウト（540秒）等でprocessing状態のまま放置されたドキュメントを救済。
- * updatedAtが10分以上前のprocessingドキュメントを対象とする。
+ * Functionタイムアウト（PROCESS_OCR_TIMEOUT_SECONDS、ADR-0023）等でprocessing状態のまま
+ * 放置されたドキュメントを救済。updatedAtが STUCK_PROCESSING_THRESHOLD_MS 以上前の
+ * processingドキュメントを対象とする。
  *
  * #360: per-doc を runTransaction 化して handleProcessingError と整合させ、
  * per-doc catch でも safeLogError を呼んで silent failure を観測可能にする。

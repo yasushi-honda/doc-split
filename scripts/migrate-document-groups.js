@@ -84,8 +84,12 @@
  *                              という契約に反する)。
  *   --drain-wait-ms <ms>       --backfill-cm-unassigned/--rebuild-groups/
  *                              --seed-aggregation-states実行モードのドレイン待機時間
- *                              (デフォルト: 600000 = 10分、Cloud Functions最大実行
- *                              時間540秒を上回るバリア)。dev環境での動作確認や、
+ *                              (デフォルト: 1200000 = 20分、functions/src/ocr/constants.ts の
+ *                              STUCK_PROCESSING_THRESHOLD_MS = processOCR timeoutSeconds(900秒,
+ *                              ADR-0023) + margin(5分) 以上に保つ必要がある。本ファイルは
+ *                              functions/src/ 配下の定数を直接importできないJSスクリプトのため、
+ *                              値の同期は functions/test/processOCREndpointContract.test.ts の
+ *                              契約テストが静的に検証する)。dev環境での動作確認や、
  *                              タイムアウト設定が変わった場合の調整用。
  */
 
@@ -102,7 +106,7 @@ let dryRun = false;
 let backfillCmUnassigned = false;
 let seedAggregationStates = false;
 let reopenGate = false;
-let drainWaitMs = 10 * 60 * 1000;
+let drainWaitMs = 20 * 60 * 1000;
 // --rebuild-groupsは繰り返し引数形式(--rebuild-groups <id> --rebuild-groups <id> ...)。
 // review指摘対応: CSVのカンマ区切りだと、groupKeyが自由入力文字列由来のためカンマを
 // 含むケース(理論上ありうる)で誤分割される。繰り返し引数なら曖昧性がない
@@ -267,9 +271,10 @@ async function previewBackfillCmUnassigned() {
  * いた。他の2箇所には未適用のまま残っており、直し忘れによる事故のリスクがあったため、
  * 単一のヘルパーに統合しfnを渡す形に統一する。
  *
- * Cloud Functions最大実行時間(processOCR: 540秒)を上回るドレイン待機は、ゲートクローズ前に
- * 開始していた実行(OCR確定/split/顧客マスター同期)が確実に完了/タイムアウト済みである
- * ことを保証するバリア(/codex plan指摘: 時間待ちに根拠を持たせる、デフォルト10分)。
+ * Cloud Functions最大実行時間(processOCR: PROCESS_OCR_TIMEOUT_SECONDS、ADR-0023)を
+ * 上回るドレイン待機は、ゲートクローズ前に開始していた実行(OCR確定/split/顧客マスター同期)が
+ * 確実に完了/タイムアウト済みであることを保証するバリア(/codex plan指摘: 時間待ちに
+ * 根拠を持たせる、デフォルト20分)。
  */
 /**
  * @param {number} drainWaitMsValue

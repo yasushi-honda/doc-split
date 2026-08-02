@@ -18,6 +18,7 @@ import {
   RETRY_DELAYS_429_MS,
   RETRY_JITTER_FACTOR,
   STUCK_RESCUE_RETRY_AFTER_MS,
+  STUCK_PROCESSING_THRESHOLD_MS,
 } from '../src/ocr/constants';
 
 describe('ocrProcessor', () => {
@@ -480,16 +481,17 @@ describe('ocrProcessor', () => {
   });
 
   describe('processingスタック救済ロジック検証', () => {
-    const STUCK_THRESHOLD_MS = 10 * 60 * 1000; // 10分
+    // #PR2 (ADR-0023): 実装値を import して drift 防止 (旧: test-local `10 * 60 * 1000` ハードコード)。
+    const STUCK_THRESHOLD_MS = STUCK_PROCESSING_THRESHOLD_MS;
 
-    it('10分以上前のprocessingドキュメントは救済対象', () => {
-      const updatedAt = new Date(Date.now() - 11 * 60 * 1000); // 11分前
+    it('閾値を超えて前のprocessingドキュメントは救済対象', () => {
+      const updatedAt = new Date(Date.now() - (STUCK_THRESHOLD_MS + 60 * 1000)); // 閾値+1分前
       const threshold = new Date(Date.now() - STUCK_THRESHOLD_MS);
       expect(updatedAt < threshold).to.be.true;
     });
 
-    it('5分前のprocessingドキュメントは救済対象外', () => {
-      const updatedAt = new Date(Date.now() - 5 * 60 * 1000); // 5分前
+    it('閾値の半分しか経過していないprocessingドキュメントは救済対象外', () => {
+      const updatedAt = new Date(Date.now() - STUCK_THRESHOLD_MS / 2); // 閾値の半分前
       const threshold = new Date(Date.now() - STUCK_THRESHOLD_MS);
       expect(updatedAt < threshold).to.be.false;
     });

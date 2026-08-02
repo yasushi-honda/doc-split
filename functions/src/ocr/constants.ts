@@ -15,12 +15,35 @@ export const MAX_RETRY_COUNT = 5;
 export const STUCK_RESCUE_RETRY_AFTER_MS = 3 * 60 * 1000;
 
 /**
- * processingスタック救済の閾値 (ms): この時間を超えて processing 状態の
- * ドキュメントを rescue 対象とする。10 分。
- * Function タイムアウト上限 540s (9 分) より長く設定し、真にタイムアウトした
- * ドキュメントのみを対象化する (正常終了間際の誤救済を避ける)。
+ * processOCR (functions/src/ocr/processOCR.ts) の onSchedule timeoutSeconds。
+ * ADR-0023参照。900秒(15分)。gen2のscheduled functionは最大1800秒まで設定可能だが、
+ * 1800秒を採ると STUCK_PROCESSING_THRESHOLD_MS 等の派生値が線形に伸び、スタック検知・
+ * error確定までの総時間・ADR-0019メンテナンスゲートのドレイン待機がいずれも
+ * 許容しがたいほど長くなるため中間値を採用した。
  */
-export const STUCK_PROCESSING_THRESHOLD_MS = 10 * 60 * 1000;
+export const PROCESS_OCR_TIMEOUT_SECONDS = 900;
+
+/**
+ * STUCK_PROCESSING_THRESHOLD_MS の安全マージン (ms): cold start・claim遅延・clock skew・
+ * rescue scan cadence(1分)を吸収する。5分。
+ */
+export const STUCK_PROCESSING_MARGIN_MS = 5 * 60 * 1000;
+
+/**
+ * processingスタック救済の閾値 (ms): この時間を超えて processing 状態の
+ * ドキュメントを rescue 対象とする。
+ *
+ * 【不変条件】必ず `PROCESS_OCR_TIMEOUT_SECONDS * 1000` より大きくなければならない。
+ * tryStartProcessing が status:'processing' 書込み時に updatedAt を設定した後、処理中は
+ * 一切ハートビート更新されない (次に updatedAt が動くのは完了 transaction 時)。そのため
+ * この閾値が timeoutSeconds 以下だと、Cloud Functions 側でまだ正当に実行中の run を
+ * rescueStuckProcessingDocs が誤って pending に戻してしまい、その run が最終
+ * transaction の evaluateOcrRunOwnership で OcrRunSupersededError となって
+ * 数百秒分の Gemini 呼出しコストが丸ごと破棄される (rescue 側は retryCount も +1 済み)。
+ * `processOCREndpointContract.test.ts` がこの不変条件を契約テストとして固定している。
+ */
+export const STUCK_PROCESSING_THRESHOLD_MS =
+  PROCESS_OCR_TIMEOUT_SECONDS * 1000 + STUCK_PROCESSING_MARGIN_MS;
 
 /**
  * rescue の pending 分岐で書き込む lastErrorMessage。

@@ -53,7 +53,7 @@ gh workflow run 'Run Operations Script' -f environment=kanameone -f script='migr
 
 このコマンドは内部で以下を自動実行する(手動操作不要):
 1. `system/maintenanceFlags.groupAggregationGateOpen`を`false`に設定
-2. 10分間のドレイン待機(Cloud Functions最大実行時間540秒を上回るバリア、[ADR-0019](../adr/0019-caremanager-group-backfill-maintenance-gate.md)参照)
+2. 20分間のドレイン待機(Cloud Functions最大実行時間900秒(ADR-0023)を上回るバリア、[ADR-0019](../adr/0019-caremanager-group-backfill-maintenance-gate.md)参照)
 3. CM未設定グループの安全な作成(`backfillUnassignedCareManagerGroup()`)
 4. ゲートを`true`に戻す(成功・失敗いずれの場合も`finally`で実行される)
 
