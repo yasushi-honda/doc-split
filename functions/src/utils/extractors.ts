@@ -784,11 +784,15 @@ function calculateKeywordMatchScore(
       matchedLength += officeKw.length;
     } else {
       // 部分一致チェック（短すぎるサブストリングマッチを防ぐ）
+      // Issue #783 (H2): overlapRatio(長さ比較のみ、O(1))を先に判定し、falseなら
+      // 高コストなString#includes(O(文字列長))を評価せず次のocrKwへ進む。&&は元々
+      // 両条件が真の場合のみtrueになるため、判定順序を入れ替えても最終的なmatchedWeight/
+      // matchedLength/breakのタイミングは完全に不変(挙動不変、計算コストのみ削減)。
       for (const ocrKw of ocrKeywords) {
         const shorter = Math.min(ocrKw.length, officeKw.length);
         const longer = Math.max(ocrKw.length, officeKw.length);
         const overlapRatio = shorter / longer;
-        if ((ocrKw.includes(officeKw) || officeKw.includes(ocrKw)) && overlapRatio >= 0.65) {
+        if (overlapRatio >= 0.65 && (ocrKw.includes(officeKw) || officeKw.includes(ocrKw))) {
           matchedWeight += weight * 0.8;
           matchedLength += Math.min(ocrKw.length, officeKw.length);
           break;
