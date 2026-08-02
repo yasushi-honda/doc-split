@@ -63,7 +63,9 @@ describe('ocrProcessor PDFページOCRループ早期所有権チェック配線
 
   it('checkOcrRunStillOwned の呼出しが extractPdfPage / ocrWithGemini より前にある', () => {
     const checkCallIdx = pdfPageLoopBody.indexOf('await checkOcrRunStillOwned(');
-    const extractPdfPageIdx = pdfPageLoopBody.indexOf('await extractPdfPage(buffer, i)');
+    // PR3 (ADR-0023関連): extractPdfPage は毎ページ再パースを避けるため、bufferではなく
+    // ループ外で事前ロード済みの pdfDoc を受け取る形に変更した (挙動不変)。
+    const extractPdfPageIdx = pdfPageLoopBody.indexOf('await extractPdfPage(pdfDoc, i)');
     const ocrWithGeminiIdx = pdfPageLoopBody.indexOf("await ocrWithGemini(pageBuffer, 'application/pdf'");
     expect(checkCallIdx, 'checkOcrRunStillOwned呼出しが見つからない').to.be.greaterThan(-1);
     expect(extractPdfPageIdx, 'extractPdfPage呼出しが見つからない').to.be.greaterThan(checkCallIdx);

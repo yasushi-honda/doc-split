@@ -746,15 +746,23 @@ function extractKeywordsForMatching(text: string): string[] {
  * キーワードベースの類似度スコアを計算
  * マッチ率とマッチした文字数の両方を考慮
  *
- * @param ocrText OCRテキスト
+ * PR3 (ADR-0023関連, kanameone実測でofficeMatchMs=295秒/71ページ文書と判明): OCRテキスト側の
+ * キーワード抽出・正規化(extractKeywordsForMatching(ocrText) / normalizeForMatching(ocrText))は
+ * officeName に依存せず入力(ocrText)が同一である限り毎回同じ結果になるため、呼び出し元
+ * (extractOfficeCandidates)のループ外で1回だけ計算した値を受け取る形に変更した(挙動不変、
+ * 引数の受け渡し方法のみの変更)。旧実装は事業所マスター1件ごとにOCR全文(最大20万文字)への
+ * 正規化・キーワード抽出を再実行しており、マスター件数に比例してコストが増大する構造だった。
+ *
+ * @param ocrKeywords extractKeywordsForMatching(ocrText) の事前計算結果
+ * @param normalizedOcrText normalizeForMatching(ocrText) の事前計算結果
  * @param officeName 事業所名
  * @returns スコアオブジェクト
  */
 function calculateKeywordMatchScore(
-  ocrText: string,
+  ocrKeywords: string[],
+  normalizedOcrText: string,
   officeName: string
 ): { score: number; matchedLength: number } {
-  const ocrKeywords = extractKeywordsForMatching(ocrText);
   const officeKeywords = extractKeywordsForMatching(officeName);
 
   if (officeKeywords.length === 0) {
@@ -764,8 +772,6 @@ function calculateKeywordMatchScore(
   let matchedWeight = 0;
   let totalWeight = 0;
   let matchedLength = 0;
-
-  const normalizedOcrText = normalizeForMatching(ocrText);
 
   for (const officeKw of officeKeywords) {
     // キーワードの長さに応じた重み（長いキーワードほど重要）
@@ -839,6 +845,12 @@ export function extractOfficeCandidates(
   // exact match path から除外する (legitimate な短マスターは collision なしで通過する)
   const commonShortIds = computeCommonShortMasters(officeMasters);
 
+  // PR3 (ADR-0023関連): calculateKeywordMatchScore が事業所マスター1件ごとに再計算していた
+  // OCR全文側のキーワード抽出・正規化をループ外で1回だけ計算する(挙動不変)。ocrTextは
+  // このループ内で変化しないため、事業所間で完全に同一の値になる。
+  const ocrKeywordsForOfficeMatch = extractKeywordsForMatching(ocrText);
+  const normalizedOcrTextForOfficeMatch = normalizeForMatching(ocrText);
+
   // ファイル名プレフィックスの正規化（事業所名タイプの場合のみ使用）
   const useFilenameForMatching = filenameInfo && filenameInfo.prefixType === 'office_name';
   const filenamePrefix = useFilenameForMatching ? filenameInfo.normalizedPrefix : '';
@@ -904,7 +916,11 @@ export function extractOfficeCandidates(
 
     // 3. キーワードマッチング（事業所名の構成要素で照合）
     if (matchType === 'none') {
-      const keywordResult = calculateKeywordMatchScore(ocrText, office.name);
+      const keywordResult = calculateKeywordMatchScore(
+        ocrKeywordsForOfficeMatch,
+        normalizedOcrTextForOfficeMatch,
+        office.name
+      );
       if (keywordResult.score >= 70) {
         // キーワードマッチスコアをベースにして、マッチした文字数でボーナス
         // マッチした文字数が多いほど信頼度が高い
