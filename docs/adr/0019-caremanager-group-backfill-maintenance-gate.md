@@ -50,7 +50,7 @@ PR #656(GOAL.md タスクA)でこの本体ロジックを修正済み: `resolveG
 #### メカニズム
 
 1. `system/maintenanceFlags`ドキュメントの`groupAggregationGateOpen`フィールド(`functions/src/utils/maintenanceGate.ts`)で開閉を制御。フラグ未設定時は「開いている(true)」を安全側デフォルトとする。
-2. ゲートを閉じてから、**Cloud Functions最大実行時間(`processOCR`: 540秒)を上回る待機(デフォルト10分、`scripts/migrate-document-groups.js --drain-wait-ms`で調整可)** をドレイン確認バリアとする。これにより、ゲートクローズ前に開始していた実行を含め、集計所属変更を伴う書込みが全て完了/タイムアウト済みであることを技術的根拠を持って保証する(単なる時間待ちではなく、Cloud Functionsの実行時間上限という具体的な制約に基づく)。
+2. ゲートを閉じてから、**Cloud Functions最大実行時間(`processOCR`: `PROCESS_OCR_TIMEOUT_SECONDS`、ADR-0023参照。2026-08時点900秒)を上回る待機(デフォルト20分、`scripts/migrate-document-groups.js --drain-wait-ms`で調整可)** をドレイン確認バリアとする。これにより、ゲートクローズ前に開始していた実行を含め、集計所属変更を伴う書込みが全て完了/タイムアウト済みであることを技術的根拠を持って保証する(単なる時間待ちではなく、Cloud Functionsの実行時間上限という具体的な制約に基づく)。具体的な秒数・分数の正は`functions/src/ocr/constants.ts`とADR-0023側にあり、本ADRの決定(ゲート機構そのもの)は変更していない。
 3. 静止状態で`documents`を`where('status','!=','split').orderBy('status').orderBy('processedAt','desc')`(既存の複合indexを再利用、新規index不要)で全件スキャンし、`careManagerKey==''`かつ`customerKey!==''`の書類を対象にCM未設定グループの`count`/`latestDocs`/`latestAt`を計算する。
 4. **事前チェック+単一トランザクション内での再チェック**の二段構えで、既にグループが存在する場合(想定外の並行作成、または誤った再実行)は上書きせず異常終了する(`functions/src/utils/groupAggregation.ts` `backfillUnassignedCareManagerGroup()`)。
 5. バックフィル成功・失敗にかかわらず`finally`でゲートを必ず再開する(閉じたまま放置しない)。
@@ -103,3 +103,4 @@ GOAL.md原文の「ロールバック手順(事前スナップショット取得
 - GOAL.md タスクA(PR #656)・D(PR #658)・G(本ADR)
 - `functions/src/utils/maintenanceGate.ts` / `functions/src/utils/groupAggregation.ts` (`backfillUnassignedCareManagerGroup`)
 - `functions/test/maintenanceGateWiringContract.test.ts` / `maintenanceGateIntegration.test.ts` / `backfillUnassignedCareManagerGroupIntegration.test.ts`
+- [ADR-0023: processOCR実行時間予算](./0023-process-ocr-execution-budget.md) — 本ADRが参照する`processOCR`のタイムアウト秒数・ドレイン待機分数の決定根拠

@@ -1,7 +1,8 @@
 /**
  * OCR実行の所有権(ocrRunId)・入力世代(fileUrl/mimeType)検証 (Issue #540)
  *
- * processOCRのポーリング間隔(1分)より処理時間(最大540秒)の方が長いため、単一ドキュメントに
+ * processOCRのポーリング間隔(1分)より処理時間(最大PROCESS_OCR_TIMEOUT_SECONDS、ADR-0023)の
+ * 方が長いため、単一ドキュメントに
  * 対して「先行するOCR実行がまだ完了していない間に、reprocess等で新しい実行が始まる」
  * 状況が起こりうる。この時、先行実行が古い抽出結果で後発実行の結果を上書きしないよう、
  * ocrProcessor.ts の最終Firestore transaction内で本モジュールの純粋関数を使い、

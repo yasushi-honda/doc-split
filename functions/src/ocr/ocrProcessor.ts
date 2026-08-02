@@ -611,7 +611,8 @@ export async function applyOcrCompletionTransaction(input: {
       const freshData = freshSnap.data()!;
 
       // Issue #540: 所有権(ocrRunId)・入力世代(fileUrl/mimeType)検証。処理開始からOCR完了
-      // までの間(最大540秒)に、reprocess等で別の実行が同一docIdに対して開始されている、
+      // までの間(最大PROCESS_OCR_TIMEOUT_SECONDS、ADR-0023)に、reprocess等で別の実行が
+      // 同一docIdに対して開始されている、
       // またはfileUrl/mimeTypeが変化している場合、この実行の抽出結果はもはや正しい対象を
       // 表していない。書込みを一切行わずOcrRunSupersededErrorをthrowしてabortする
       // (呼出元processOCR.tsはこれをエラーではなく正常なsupersedeとして扱う)。
