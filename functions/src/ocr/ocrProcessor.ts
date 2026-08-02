@@ -260,7 +260,7 @@ export async function processDocument(
 
         console.log(`Processing page ${pageNumber}/${totalPages}`);
 
-        const pageBuffer = await extractPdfPage(buffer, i);
+        const pageBuffer = await extractPdfPage(pdfDoc, i);
         const result = await ocrWithGemini(pageBuffer, 'application/pdf', pageNumber);
 
         pageResults.push(buildPageResult(result, pageNumber, `Page ${pageNumber}/${totalPages}`));
@@ -938,9 +938,12 @@ export async function handleProcessingError(
 
 /**
  * PDFから単一ページを抽出
+ *
+ * PR3 (ADR-0023関連): 呼び出し元(processDocument)が既にページ数取得のためロード済みの
+ * PDFDocument を受け取る形に変更した(挙動不変)。旧実装はページごとに `PDFDocument.load()`
+ * でPDF全体を再パースしており、71ページなら71回のフルパースが発生していた。
  */
-async function extractPdfPage(pdfBuffer: Buffer, pageIndex: number): Promise<Buffer> {
-  const pdfDoc = await PDFDocument.load(pdfBuffer);
+async function extractPdfPage(pdfDoc: PDFDocument, pageIndex: number): Promise<Buffer> {
   const newPdf = await PDFDocument.create();
   const [copiedPage] = await newPdf.copyPages(pdfDoc, [pageIndex]);
   newPdf.addPage(copiedPage);
