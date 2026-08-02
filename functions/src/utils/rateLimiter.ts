@@ -19,9 +19,15 @@ export interface RateLimiterConfig {
   minInterval: number; // リクエスト間の最小間隔（ms）
 }
 
-/** デフォルト設定（Gemini 2.5 Flash向け） */
+/**
+ * デフォルト設定
+ *
+ * Gemini 3.5 FlashはDynamic Shared Quota化により固定RPM/TPMが存在しない
+ * (docs/context/gemini-rate-limiting.md §1.1、2026-08-02公式再検証)。
+ * 以下は固定クォータの代替として、429を未然に防ぐための自主的な安全マージン。
+ */
 export const GEMINI_RATE_LIMIT_CONFIG: RateLimiterConfig = {
-  maxTokens: 100, // 安全マージンを持たせた値（実際は1000 RPM）
+  maxTokens: 100, // 安全マージンを持たせた値
   refillRate: 1.67, // 100/60秒
   minInterval: 600, // 最小600ms間隔
 };

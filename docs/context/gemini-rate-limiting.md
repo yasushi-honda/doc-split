@@ -2,23 +2,29 @@
 title: "Gemini APIレート制限設計"
 description: "Vertex AI Gemini 3.5 Flashのレート制限対策とコスト管理"
 status: completed
-updated: "2026-07-24"
+updated: "2026-08-02"
 ---
 
 # Gemini APIレート制限設計
 
 ## 1. Gemini 3.5 Flash レート制限
 
-### 1.1 制限値（2026年2月時点、Gemini 2.5 Flash運用時に策定。3.5移行後の再検証は未実施）
+### 1.1 制限値（2026-08-02、Vertex AI公式ドキュメント・モデルカードで再検証済み）
 
 | リソース | 制限 | 備考 |
 |---------|------|------|
-| RPM（Requests/分） | 1,000 | リージョン共通 |
-| TPM（Tokens/分） | 4,000,000 | 入力+出力 |
+| RPM（Requests/分） | **固定値なし（Dynamic Shared Quota）** | Gemini 2.0以降のモデルはDSQ化されており、旧来の固定RPM/TPM割り当ては廃止済み。全顧客で共有される容量プールから動的配分される（サービス品質は保証されない）。429発生時はリトライ／指数バックオフで対応（本ドキュメント§3） |
+| TPM（Tokens/分） | **固定値なし（Dynamic Shared Quota）** | 同上 |
 | TPD（Tokens/日） | 無制限 | 課金対象 |
-| 最大入力トークン | 1,048,576 | 約100万 |
-| 最大出力トークン | 8,192 | |
-| 最大画像サイズ | 20MB | PDF含む |
+| 最大入力トークン（コンテキストウィンドウ） | 1,048,576 | 約100万。Vertex AI公式モデルカードで確認済み、値に変更なし |
+| 最大出力トークン（モデル上限） | 65,536 | モデル自体の上限。旧記載の8,192はGemini 2.5 Flash時代の値の誤転記 |
+| 最大出力トークン（アプリ設定値） | **8,192**（`functions/src/utils/config.ts` `GEMINI_CONFIG.maxOutputTokens`） | モデル上限とは別に、Vertex AI暴走対策としてアプリ側で意図的に絞っている値（Issue #205）。上記モデル上限65,536とは目的が異なるため区別して管理する |
+| 最大ファイルサイズ（PDF、API/inlineData経由） | 50MB | doc-splitはページ単位でinlineData（`application/pdf`）送信（`functions/src/ocr/ocrProcessor.ts`）。旧記載の20MBは実際の制限値と不一致だった |
+| 最大ファイルサイズ（画像、inlineData経由） | 7MB | Cloud Storage経由の場合は30MB |
+
+> **出典**: [Vertex AI（Gemini Enterprise Agent Platform）Gemini 3.5 Flashモデルカード](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/3-5-flash)（2026-07-30更新）/ [割り当てとシステム上限](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/quotas) / [使用オプション](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/deploy/consumption-options)。2026-08-02にPlaywright実測で確認（`docs.cloud.google.com`はJSレンダリングのためWebFetch本文抽出不可、`tech-selection.md`の手順に従いブラウザ直接レンダリングで取得）。
+>
+> **未確定の注記**: 上記モデルカードの「サポートされるリージョン」表では、「標準従量課金（Standard PayGo）」の対応が `global` / `us` / `eu` のみ明記され、doc-split実運用リージョンの `asia-northeast1` が個別記載されていない。一方、kanameone/cocoro本番では `asia-northeast1` 固定（`functions/src/utils/config.ts` `GCP_CONFIG.location`）で日次OCR処理が現に稼働中であり、実害は確認されていない。表の記載意図（グローバルエンドポイント限定の話か、真にリージョナルStandard PayGo非対応かは不明）は二次情報のみで断定せず、次回の類似調査時に個別確認する。
 
 ### 1.2 OCR処理の想定トークン消費
 
@@ -38,10 +44,12 @@ updated: "2026-07-24"
 - 出力: 250 × 2,000 = 500,000 tokens
 - 合計: 2,000,000 tokens/日
 
-レート制限余裕:
-- RPM: 250 / (8h × 60min) = 0.5 RPM（余裕あり）
-- TPM: 2,000,000 / (8h × 60min) = 4,167 TPM（余裕あり）
+処理頻度の目安:
+- リクエスト数: 250 / (8h × 60min) ≈ 0.5 req/min
+- トークン量: 2,000,000 / (8h × 60min) ≈ 4,167 tokens/min
 ```
+
+> **注**: §1.1の通りRPM/TPMはDSQ化により固定値が存在しないため、上記は「レート制限に対する余裕」ではなく単純な処理頻度の参考値。実際のスロットリング要否は§2のトークンバケット実装とレスポンスの429エラー発生状況（`stats/gemini`の実測）で判断する。
 
 ## 2. スロットリング実装
 
@@ -347,6 +355,8 @@ interface GeminiLogEntry {
 
 ## 参照
 
-- Vertex AI Gemini Quotas: https://cloud.google.com/vertex-ai/generative-ai/docs/quotas
+- Vertex AI Gemini 3.5 Flash モデルカード: https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/3-5-flash
+- Vertex AI 割り当てとシステム上限: https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/quotas
+- Vertex AI 使用オプション（Dynamic Shared Quota概要含む）: https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/deploy/consumption-options
 - エラーハンドリング: `context/error-handling-policy.md`
 - OCR処理: `functions/src/ocr/processOCR.ts`
