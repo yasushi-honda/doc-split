@@ -33,6 +33,77 @@ describe('Similarity Utilities', () => {
     it('日本語も正しく計算', () => {
       expect(levenshteinDistance('山田太郎', '山田次郎')).to.equal(1);
     });
+
+    // Issue #787: rolling row化(O(min(n,m))バッファ)への置換に伴うオラクル差分テスト。
+    // 旧実装(フルO(n×m)行列)の逐語コピーを比較対象とし、決定的PRNG(線形合同法)で
+    // 生成した多数のランダム文字列ペアで戻り値が完全一致することを確認する。
+    describe('rolling row実装のオラクル差分テスト', () => {
+      function naiveLevenshteinDistance(a: string, b: string): number {
+        if (a.length === 0) return b.length;
+        if (b.length === 0) return a.length;
+        const matrix: number[][] = [];
+        for (let i = 0; i <= b.length; i++) matrix[i] = [i];
+        for (let j = 0; j <= a.length; j++) matrix[0]![j] = j;
+        for (let i = 1; i <= b.length; i++) {
+          for (let j = 1; j <= a.length; j++) {
+            if (b.charAt(i - 1) === a.charAt(j - 1)) {
+              matrix[i]![j] = matrix[i - 1]![j - 1]!;
+            } else {
+              matrix[i]![j] = Math.min(
+                matrix[i - 1]![j - 1]! + 1,
+                matrix[i]![j - 1]! + 1,
+                matrix[i - 1]![j]! + 1
+              );
+            }
+          }
+        }
+        return matrix[b.length]![a.length]!;
+      }
+
+      // 線形合同法(LCG)による決定的疑似乱数。テスト実行環境間で再現性を持たせるため
+      // Math.randomは使わない。
+      function makeLcg(seed: number): () => number {
+        let state = seed >>> 0;
+        return () => {
+          state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+          return state / 0xffffffff;
+        };
+      }
+
+      function randomString(rand: () => number, alphabet: string, maxLen: number): string {
+        const len = Math.floor(rand() * (maxLen + 1));
+        let s = '';
+        for (let i = 0; i < len; i++) {
+          s += alphabet[Math.floor(rand() * alphabet.length)];
+        }
+        return s;
+      }
+
+      it('ランダム文字列ペア4000件で旧実装(オラクル)と完全一致する', () => {
+        const rand = makeLcg(20260803);
+        // アルファベットは小さく保ち、近似一致(部分的に共通する文字列)の発生頻度を上げる
+        const alphabet = 'abcあいう';
+        for (let i = 0; i < 4000; i++) {
+          const a = randomString(rand, alphabet, 20);
+          const b = randomString(rand, alphabet, 20);
+          expect(levenshteinDistance(a, b), `a=${JSON.stringify(a)} b=${JSON.stringify(b)}`).to.equal(
+            naiveLevenshteinDistance(a, b)
+          );
+        }
+      });
+
+      it('サロゲートペアを含む文字列でも旧実装と完全一致する', () => {
+        const cases: Array<[string, string]> = [
+          ['𠮷田太郎', '吉田太郎'],
+          ['𠮷野家', '𠮷野家'],
+          ['a𠮷b', 'a吉b'],
+          ['𠮷𠮷𠮷', ''],
+        ];
+        for (const [a, b] of cases) {
+          expect(levenshteinDistance(a, b)).to.equal(naiveLevenshteinDistance(a, b));
+        }
+      });
+    });
   });
 
   describe('similarityScore', () => {

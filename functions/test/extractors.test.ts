@@ -695,6 +695,65 @@ TEL: 052-509-2292
     }
   });
 
+  // Issue #787: ステップ5(ファジーマッチ)を実際に経由するcharacterization test。
+  // リポジトリ全体を検索してもこの経路(完全一致・キーワード一致・部分一致の全てに失敗し、
+  // スライディングウィンドウ+Levenshtein距離のみでマッチする経路)を実行するテストが
+  // 存在しなかったため、性能最適化(bag distance枝刈り等)着手前の安全網として追加する。
+  // スコアはgreaterThanではなく実測した具体的な数値で固定し、丸め・枝刈り境界のズレを検出する。
+  describe('Issue #787: ファジーマッチ(ステップ5)経由の候補抽出', () => {
+    it('1文字誤り(OCR誤読)でも閾値を超えてfuzzyマッチする(陽性ケース)', () => {
+      const testMasters: OfficeMaster[] = [
+        { id: 'o1', name: '社会福祉法人みどり会介護老人保健施設あおばの丘', isDuplicate: false },
+      ];
+      // 「人」→「八」の1文字誤り。完全一致・キーワード一致・部分一致のいずれにも該当しない
+      const ocrText = '送付先: 社会福祉法人みどり会介護老八保健施設あおばの丘 様';
+      const result = extractOfficeCandidates(ocrText, testMasters);
+
+      expect(result.bestMatch).to.not.be.null;
+      expect(result.bestMatch!.id).to.equal('o1');
+      expect(result.bestMatch!.score).to.equal(79);
+      expect(result.bestMatch!.matchType).to.equal('fuzzy');
+    });
+
+    it('短い事業所名は誤読があってもファジーマッチの閾値に届かない(陰性ケース)', () => {
+      const testMasters: OfficeMaster[] = [
+        { id: 'o1', name: '特別養護老人ホームさくらのさと', isDuplicate: false },
+      ];
+      const ocrText = '当該書類の送付先は 特別養護老八ホームさくらのさと 御中 です';
+      const result = extractOfficeCandidates(ocrText, testMasters);
+
+      expect(result.candidates).to.have.lengthOf(0);
+      expect(result.bestMatch).to.be.null;
+    });
+
+    it('ファジーマッチ単体では閾値未満だが、filenameInfoブーストで閾値を超えて候補になる', () => {
+      const officeName = '介護支援センターさくら';
+      const testMasters: OfficeMaster[] = [{ id: 'o1', name: officeName, isDuplicate: false }];
+      const ocrText = 'A介語支援センタ差くらB';
+
+      // ブーストなし: 閾値(70)未満のため候補なし
+      const withoutBoost = extractOfficeCandidates(ocrText, testMasters);
+      expect(withoutBoost.candidates).to.have.lengthOf(0);
+
+      // ブーストあり: filenamePrefixが事業所名を包含 → filenameBoost=15
+      // 元スコア(62) + 15 = 77 で閾値を超える。この境界(score>=minScore-10でのみブースト適用)は
+      // ステップ5をヘルパ化する際、floorをminScoreではなくminScore-10にする実装ミスを検出する
+      // 唯一のテストケースであるため重要。
+      const withBoost = extractOfficeCandidates(ocrText, testMasters, {
+        filenameInfo: {
+          prefix: officeName,
+          prefixType: 'office_name',
+          normalizedPrefix: officeName,
+          originalFilename: `${officeName}-L1-20260101120000.pdf`,
+        },
+      });
+      expect(withBoost.bestMatch).to.not.be.null;
+      expect(withBoost.bestMatch!.id).to.equal('o1');
+      expect(withBoost.bestMatch!.score).to.equal(77);
+      expect(withBoost.bestMatch!.matchType).to.equal('fuzzy');
+    });
+  });
+
   // #501 v2: 短文字列マスター ("ケア" / "ニック" 等) が長マスター name の substring に
   // 頻出する場合 (collision >= 2) は「common short master」と判定し exact match から除外。
   // length 単独でなく collision 数で動的判定するため legitimate 短マスター ("ピース" "てらす"

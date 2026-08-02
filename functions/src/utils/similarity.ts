@@ -26,37 +26,49 @@ export const SIMILARITY_THRESHOLDS = {
  * レーベンシュタイン距離を計算
  *
  * 2つの文字列間の編集距離を計算
+ *
+ * Issue #787: DPの漸化式は直前の1行しか参照しないため、O(a.length×b.length)の
+ * 2次元配列(行列)をO(min(a.length,b.length))の2行バッファに縮小した(rolling row)。
+ * 編集距離は対称(ed(a,b)=ed(b,a)。挿入と削除が互いに逆操作、置換は自己対称なため、
+ * 編集スクリプトを反転すれば同じコストの逆向きスクリプトになる)なので、短い方を
+ * バッファ長に使うため必要なら入れ替える。戻り値は旧実装と数学的に完全に同一。
  */
 export function levenshteinDistance(a: string, b: string): number {
   if (a.length === 0) return b.length;
   if (b.length === 0) return a.length;
 
-  const matrix: number[][] = [];
-
-  // 行列を初期化
-  for (let i = 0; i <= b.length; i++) {
-    matrix[i] = [i];
+  // 対称性より、短い方をバッファ長(内側次元)にする
+  if (a.length > b.length) {
+    const tmp = a;
+    a = b;
+    b = tmp;
   }
-  for (let j = 0; j <= a.length; j++) {
-    matrix[0]![j] = j;
-  }
+  const n = a.length; // n <= b.length
 
-  // 行列を埋める
+  let prev = new Int32Array(n + 1);
+  let cur = new Int32Array(n + 1);
+  for (let j = 0; j <= n; j++) prev[j] = j;
+
   for (let i = 1; i <= b.length; i++) {
-    for (let j = 1; j <= a.length; j++) {
-      if (b.charAt(i - 1) === a.charAt(j - 1)) {
-        matrix[i]![j] = matrix[i - 1]![j - 1]!;
+    cur[0] = i;
+    const bChar = b.charCodeAt(i - 1);
+    for (let j = 1; j <= n; j++) {
+      if (bChar === a.charCodeAt(j - 1)) {
+        cur[j] = prev[j - 1]!;
       } else {
-        matrix[i]![j] = Math.min(
-          matrix[i - 1]![j - 1]! + 1, // 置換
-          matrix[i]![j - 1]! + 1, // 挿入
-          matrix[i - 1]![j]! + 1 // 削除
+        cur[j] = Math.min(
+          prev[j - 1]! + 1, // 置換
+          cur[j - 1]! + 1, // 挿入
+          prev[j]! + 1 // 削除
         );
       }
     }
+    const swap = prev;
+    prev = cur;
+    cur = swap;
   }
 
-  return matrix[b.length]![a.length]!;
+  return prev[n]!;
 }
 
 /**
@@ -71,6 +83,117 @@ export function similarityScore(a: string, b: string): number {
   const distance = levenshteinDistance(a, b);
   const maxLength = Math.max(a.length, b.length);
   return Math.round((1 - distance / maxLength) * 100);
+}
+
+/**
+ * テキスト中の固定幅スライディングウィンドウについて、needleとの最良ファジーマッチ
+ * スコアを探索する(Issue #787)。
+ *
+ * 素朴な実装(各ウィンドウ位置でtext.slice()して毎回similarityScore()を呼ぶ)と
+ * 数学的に完全に同一の結果を返す。等価性の根拠:
+ *
+ * 1. windowSize = min(needle.length + windowPad, text.length) はneedleごとに一定。
+ *    M = max(windowSize, needle.length) も一定であり、window(常にwindowSize文字)と
+ *    needleの類似度スコアは score(d) = round((1 - d/M) * 100) (d=編集距離) という
+ *    dについて単調非増加な関数になる(similarityScoreと同一式)。
+ * 2. bag distance(文字多重集合差分の下界) bag(window,needle) は編集距離の厳密な下界
+ *    (bag <= d が常に成立。1回の編集操作で文字の多重集合差分は高々1しか縮まらないため)。
+ *    windowの文字数は一定(windowSize)なので P-N(=文字超過数-文字不足数)は
+ *    windowSize-needle.lengthで一定となり、bag = N + max(windowSize-needle.length, 0)
+ *    (N=needleの文字のうちwindowに含まれない文字数)としてNだけを追跡すれば十分。
+ * 3. bagから決まるscoreの上界がこれまでの最良スコアを超えられないウィンドウは、
+ *    フルLevenshtein計算を行っても最良スコアを更新し得ない(scoreはdについて単調
+ *    非増加、bag<=dより score(bag)>=score(d))。よってこれらはスキップしてよい。
+ *
+ * @param text 探索対象の正規化済みテキスト
+ * @param needle 探索する正規化済み文字列(事業所名・顧客名等)
+ * @param windowPad ウィンドウ幅 = needle.length + windowPad (元実装のスライディング窓幅)
+ * @param minAcceptableScore この値未満のスコアは0として扱ってよい場合に指定する
+ *   (呼び出し元でその範囲のスコアが観測不可能であることを呼び出し元が保証すること)。
+ *   既定0は完全等価モード(素朴な実装と1件も違わない、needle自体が空の場合や
+ *   text.length<windowSizeとなる退化ケースも含めて元の`similarityScore`の特別扱いと
+ *   一致する)。
+ * @returns 最良スコア(0-100)。マッチなし、またはminAcceptableScore未満の場合は0
+ */
+export function bestFuzzyWindowScore(
+  text: string,
+  needle: string,
+  windowPad: number,
+  minAcceptableScore = 0
+): number {
+  const windowSize = Math.min(needle.length + windowPad, text.length);
+
+  // 元実装のfor条件 `i <= text.length - windowSize` が1回も回らないケース
+  if (windowSize > text.length) return 0;
+
+  // 退化ケース: ウィンドウが空文字列(このときi=0の1回のみ)。M=0でのゼロ除算を避けるため
+  // similarityScoreの特別扱い(a===b等)にそのまま委譲する。
+  if (windowSize === 0) {
+    const s = similarityScore('', needle);
+    return s > 0 ? s : 0;
+  }
+
+  const L = needle.length;
+  const M = Math.max(windowSize, L);
+
+  // 距離→スコアの変換テーブル。similarityScoreと同一式で丸めの一致を保証する。
+  const scoreByDist = new Int32Array(M + 1);
+  for (let d = 0; d <= M; d++) {
+    scoreByDist[d] = Math.round((1 - d / M) * 100);
+  }
+
+  let best = Math.max(0, minAcceptableScore - 1);
+  let updated = false;
+
+  // needleの文字ヒストグラム(needleに含まれる文字コードのみ追跡)
+  const needleCount = new Map<number, number>();
+  for (let k = 0; k < L; k++) {
+    const c = needle.charCodeAt(k);
+    needleCount.set(c, (needleCount.get(c) ?? 0) + 1);
+  }
+  // delta[c] = (windowでのcの出現数) - (needleでのcの出現数)。needleに出現する文字のみ管理。
+  const delta = new Map<number, number>();
+  for (const [c, cnt] of needleCount) delta.set(c, -cnt);
+  let n = L; // ウィンドウ未構築時点では全文字が不足 → N = L
+
+  const addChar = (c: number): void => {
+    if (!needleCount.has(c)) return;
+    const before = delta.get(c) ?? 0;
+    delta.set(c, before + 1);
+    if (before < 0) n--;
+  };
+  const removeChar = (c: number): void => {
+    if (!needleCount.has(c)) return;
+    const before = delta.get(c) ?? 0;
+    delta.set(c, before - 1);
+    if (before <= 0) n++;
+  };
+
+  // 初期ウィンドウ [0, windowSize) を構築
+  for (let k = 0; k < windowSize; k++) addChar(text.charCodeAt(k));
+
+  const wMinusL = Math.max(windowSize - L, 0);
+  const lastStart = text.length - windowSize;
+
+  for (let i = 0; i <= lastStart; i++) {
+    if (i > 0) {
+      removeChar(text.charCodeAt(i - 1));
+      addChar(text.charCodeAt(i + windowSize - 1));
+    }
+    const bag = n + wMinusL; // 常に 0 <= bag <= M (証明はコメント冒頭参照)
+    const upperBoundScore = scoreByDist[bag]!;
+    if (upperBoundScore > best) {
+      const window = text.slice(i, i + windowSize);
+      const d = levenshteinDistance(window, needle);
+      const s = scoreByDist[d]!;
+      if (s > best) {
+        best = s;
+        updated = true;
+      }
+    }
+  }
+
+  return updated ? best : 0;
 }
 
 /**

@@ -23,7 +23,7 @@ import {
   formatDateString,
   DateCandidate,
 } from './textNormalizer';
-import { similarityScore, SIMILARITY_THRESHOLDS } from './similarity';
+import { similarityScore, bestFuzzyWindowScore, SIMILARITY_THRESHOLDS } from './similarity';
 
 // Re-export for use in other modules
 export { normalizeForMatching } from './textNormalizer';
@@ -951,15 +951,20 @@ export function extractOfficeCandidates(
     }
 
     // 5. ファジーマッチ
+    // Issue #787: 素朴なスライディングウィンドウ実装は事業所981件×OCR全文15万文字超の
+    // 本番相当データで実測99.86%のコストを占めるボトルネックだった。bestFuzzyWindowScore
+    // (bag distanceによるbranch-and-bound + 静的floorスキップ、functions/src/utils/similarity.ts)
+    // に置き換える。floorは後段2つの観測点(下記ブースト分岐・candidates push分岐)未満の
+    // スコアが一切外部から観測されないことに基づく(この時点でscoreは常に0、
+    // filenameBoost>0ならminScore-10未満、そうでなければminScore未満のスコアは
+    // どちらの分岐にも到達しないため、floor未満として扱ってよい)。差分テストで
+    // 素朴な実装との完全一致を6000ケースで検証済み(similarityFuzzyWindow.test.ts)。
     if (matchType === 'none') {
-      const windowSize = Math.min(normalizedOfficeName.length + 5, matchingText.length);
-      for (let i = 0; i <= matchingText.length - windowSize; i++) {
-        const window = matchingText.slice(i, i + windowSize);
-        const fuzzyScore = similarityScore(window, normalizedOfficeName);
-        if (fuzzyScore > score) {
-          score = fuzzyScore;
-          matchType = 'fuzzy';
-        }
+      const floor = filenameBoost > 0 ? minScore - 10 : minScore;
+      const fuzzyScore = bestFuzzyWindowScore(matchingText, normalizedOfficeName, 5, floor);
+      if (fuzzyScore > 0) {
+        score = fuzzyScore;
+        matchType = 'fuzzy';
       }
     }
 
