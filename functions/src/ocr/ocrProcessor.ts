@@ -156,6 +156,14 @@ export async function processDocument(
   ocrRunId: string
 ): Promise<OcrProcessingResult> {
   console.log(`Processing document: ${docId}`);
+  const phaseStart = Date.now();
+  const phaseTimingsMs: Record<string, number> = {};
+  let lastPhaseMark = phaseStart;
+  const markPhase = (phase: string): void => {
+    const now = Date.now();
+    phaseTimingsMs[phase] = now - lastPhaseMark;
+    lastPhaseMark = now;
+  };
 
   // Issue #626: PDFページOCRループ内で早期所有権チェックに使うため、最終transaction用
   // (元は363行目付近で定義)より前方に移動。db.doc()自体はFirestore read副作用を持たない
@@ -337,6 +345,7 @@ export async function processDocument(
       documentId: docId,
     });
   }
+  markPhase('pageLoopMs');
 
   // OCR結果を結合
   const ocrResult = pageResults
@@ -348,6 +357,7 @@ export async function processDocument(
     source: 'ocr',
     functionName: 'ocrProcessor',
   });
+  markPhase('masterLoadMs');
 
   // タスクD (GOAL.md OCR突合精度向上ミッション): タスクB実装済みの候補抽出関数
   // (既存ocrWithGemini()とは独立した第2Gemini呼出し)をprocessDocument()へ統合する。
@@ -357,6 +367,7 @@ export async function processDocument(
   totalInputTokens += candidates.inputTokens;
   totalOutputTokens += candidates.outputTokens;
   totalThinkingTokens += candidates.thinkingTokens;
+  markPhase('candidateGeminiMs');
 
   // 情報抽出（強化版エクストラクター使用）+ タスクC実装済みのarbitrateXxxで候補抽出結果を
   // 統合。既存の全文ベース結果に何らかのマッチがあれば候補側で絶対に上書きしない
@@ -368,6 +379,7 @@ export async function processDocument(
     documents,
     ocrResult
   );
+  markPhase('documentTypeMs');
   const customerBase = extractCustomerCandidates(ocrResult, customers);
   const customerResult = arbitrateCustomerName(
     customerBase,
@@ -375,6 +387,7 @@ export async function processDocument(
     customers,
     ocrResult
   );
+  markPhase('customerMatchMs');
 
   // ファイル名から事業所情報を抽出
   const fileName = docData.fileName as string | undefined;
@@ -404,6 +417,7 @@ export async function processDocument(
       console.log(`Suggested new office from filename: ${suggestedNewOffice}`);
     }
   }
+  markPhase('officeMatchMs');
 
   // dateMarker は型崩れしていても undefined に正規化済み (sanitizeDocumentMasters)。
   // documentTypeResultはarbitration後の値のため、候補昇格が発生した場合はそちらの
@@ -413,6 +427,7 @@ export async function processDocument(
   const firstPageText = pageResults.length > 0 ? pageResults[0]?.text : undefined;
   const dateBase = extractDateEnhanced(ocrResult, dateMarker, firstPageText);
   const dateResult = arbitrateDate(dateBase, candidates.dateCandidate, ocrResult);
+  markPhase('dateMs');
 
   // OCR結果が長い場合はCloud Storageに保存
   let ocrResultUrl: string | null = null;
@@ -422,6 +437,7 @@ export async function processDocument(
     ocrResultUrl = await saveOcrResult(docId, ocrRunId, ocrResult);
     savedOcrResult = '';
   }
+  markPhase('saveOcrResultMs');
 
   // ADR-0018 (Issue #547) Phase B: 一覧系UI用の軽量抜粋。算出式は Phase C backfill と
   // 共有するため ocrExcerpt.ts に抽出済み (詳細は同ファイルの doc comment 参照)。
@@ -447,6 +463,24 @@ export async function processDocument(
   // スナップショット)をそのまま使うと、処理中にユーザーが編集した内容と競合する
   // stale snapshot問題が起きる(Issue #526本文の設計要件)。docRef自体は関数冒頭
   // (Issue #626)で早期定義済みのためここでは再定義しない。
+
+  // PR1計測: 最終transaction呼出直前の時点でフェーズ内訳を出しておく。tx中に強制終了された
+  // 場合でもこのログは残るため、"Filename info"止まりだった今回のような事象で
+  // どのフェーズが予算を消費したかを次回以降は実測で特定できる。try節の外に置くのは、
+  // このオブジェクトリテラルの閉じ括弧がtry/catch配線契約テスト
+  // (ocrProcessorOcrResultCleanupWiringContract.test.ts)の単純な字句マッチングを
+  // 誤検出させないため。
+  console.log(`[ocrProcessor] phaseTimingsPreCommit for ${docId}`, {
+    operation: 'ocrProcessor',
+    event: 'phaseTimingsPreCommit',
+    documentId: docId,
+    pages: totalPages,
+    ocrChars: ocrResult.length,
+    customersCount: customers.length,
+    officesCount: offices.length,
+    documentsCount: documents.length,
+    ...phaseTimingsMs,
+  });
 
   try {
     // kanameone現場要件「複数顧客FAX複製機能」(GOAL.md D3)。flagはtx開始前に1回だけ読む
@@ -489,12 +523,27 @@ export async function processDocument(
     }
     throw err;
   }
+  markPhase('txMs');
 
   // Issue #625: transaction成功後(=確実にcommit済み)、ocr-results/{docId}/配下を
   // 正規化する。今回Storageに保存した場合はそのrunのみ残し、保存しなかった場合は
   // (OCR結果がFirestore本体にインライン保持されている)配下の全オブジェクトを孤児と
   // みなして削除する。
   await cleanupOrphanedOcrResultObjects(docId, ocrRunId, ocrResultUrl ? ocrRunId : null, functionName);
+  markPhase('cleanupMs');
+
+  console.log(`[ocrProcessor] phaseTimings for ${docId}`, {
+    operation: 'ocrProcessor',
+    event: 'phaseTimings',
+    documentId: docId,
+    pages: totalPages,
+    ocrChars: ocrResult.length,
+    customersCount: customers.length,
+    officesCount: offices.length,
+    documentsCount: documents.length,
+    totalMs: Date.now() - phaseStart,
+    ...phaseTimingsMs,
+  });
 
   return {
     pagesProcessed: totalPages,
