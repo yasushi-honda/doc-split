@@ -1,5 +1,5 @@
 ---
-updated: 2026-08-02
+updated: 2026-08-03
 ---
 <!-- 前ミッション(dev/kanameone/cocoro環境監査・保守検証)は2026-07-20完遂。全文はdocs/handoff/LATEST.md参照。 -->
 <!-- Google Drive連携Phase1 (MVP)実装ミッションは2026-07-22完了(PR#700マージ)。詳細は本ファイル末尾「Google Drive連携Phase1完遂」節+docs/handoff/LATEST.md参照。 -->
@@ -80,6 +80,15 @@ kanameone健全性レポートで発覚した書類1件のOCRタイムアウト�
 - **全環境デプロイ完了**: dev（CI自動デプロイ、実機OCR3件で動作確認）→kanameone（`Deploy Cloud Functions`、実本番データで確認）→cocoro（`Deploy Cloud Functions`、ビルド成功・updateTime確認のみ。自然トラフィックが少なく実機OCRでの確認は未達だが、同一コードパスがdev/kanameoneで実データ検証済みのため十分と判断）
 - **スコープ外・followup**: 調査の過程で`extractCustomerCandidates`（顧客照合、マスター1,352件）と旧`extractOfficeNameEnhanced`にも同一構造のボトルネックが存在すると判明（kanameone実本番ログでcustomerMatchMs=56〜63秒/71ページ文書を確認）。[Issue #789](https://github.com/yasushi-honda/doc-split/issues/789)として起票済み（未着手、次のROIが高い候補）
 - **さらなるスケーリングリスク（未着手・証拠待ち）**: `pageLoopMs`（Gemini OCR呼び出し自体）は今回一切改善されておらず、71ページで334〜427秒と総処理時間の過半を占める。160ページ超級の文書では単独で900秒予算に迫る可能性があり、ADR-0023が示唆する通り「タイムアウト値の引き上げでは解決しない」領域（Cloud Run Job化等のアーキテクチャ変更が必要）。ただしkanameone/cocoroの実文書にそこまでの規模のものが実際に現れているかは未確認のため、証拠が出るまで着手は保留
+
+## 【完了・2026-08-03】Issue #789: customerMatchMs/officeMatchMs(旧)最適化の水平展開
+
+decision-maker明示指示によりIssue #789（上記followupで起票済み）に着手。`extractCustomerCandidates`（顧客照合、1,352件）と`extractOfficeNameEnhanced`（事業所照合旧版、981件）のファジーマッチが、Issue #787/PR #788で最適化した`extractOfficeCandidates`ステップ5と全く同一構造のO(テキスト長)スライディングウィンドウ+毎回フルLevenshtein計算のボトルネックだったため、PR #788で既に数学的等価性を証明済みの`bestFuzzyWindowScore`（bag distance branch-and-bound、`windowPad=3/5`とも既存の6000件超差分テストでカバー済み）へ置き換え。挙動不変。
+
+- **PR #792（マージ済み）**: 実質差分1ファイル33行（コメント込み）。floor計算はいずれも「`matchType==='none'`到達時点でscoreは常に0」「下流の唯一の観測点はminScore以上かどうかの判定のみ」という条件から`minScore`として導出（ブースト分岐なし、`extractOfficeCandidates`より単純）。既存107件（`extractors.test.ts`）+8件（`similarityFuzzyWindow.test.ts`）+全体2021件、無変更で全PASS。CI（`lint-build-test`/GitGuardian/CodeRabbit）全PASS、手動チェックリストレビュー（1ファイル/33行のsmallティア）findings 0件
+- **合成ベンチマーク**（顧客1,352件/事業所981件×OCR全文174,690文字相当、ランダム日本語テキストのfuzzy段のみ比較。リポジトリには含めない使い捨てスクリプトで実施）: 顧客照合7.6倍・事業所照合12.7倍の高速化を確認。本番実データでは文字列類似度分布の違いによりPR #788（officeMatchMs実測805倍）に近い、より大きい効果が見込まれる
+- **全環境デプロイ完了**（2026-08-03）: dev（push自動デプロイ）→kanameone・cocoro両環境とも`gh workflow run "Deploy Cloud Functions"`実行、`processOCR`の`updateTime`実測（`2026-08-03T07:20:27Z`、ワークフロー完了時刻と一致）で反映確認済み
+- **未確認（監視中・次回以降のタイミングでよい）**: 実際の`customerMatchMs`短縮幅は、71ページ級の実文書がkanameoneに来た際のOCRログで後日確認する（PR #788の`officeMatchMs`実測223秒→177msに相当する改善が見込まれる）。番号単位の追加認可は不要、監視のみ
 
 ## 【完了・2026-07-22】Google Drive連携Phase1 (MVP)実装ミッション
 
