@@ -435,16 +435,15 @@ export function extractOfficeNameEnhanced(
     }
 
     // ファジーマッチ
+    // Issue #789: extractOfficeCandidates(Issue #787/PR #788)と同一構造のボトルネックのため
+    // bestFuzzyWindowScoreへ置き換え。floorはこの時点でscoreが常に0(matchType==='none')であり、
+    // 下流の唯一の観測点が「score>=minScoreならbestResult更新」であることに基づく
+    // (minScore未満のfuzzyScoreはどんな値でもbestResult更新に寄与しないため区別不要)。
     if (matchType === 'none') {
-      // スライディングウィンドウで最良マッチを探す
-      const windowSize = Math.min(normalizedOfficeName.length + 5, matchingText.length);
-      for (let i = 0; i <= matchingText.length - windowSize; i++) {
-        const window = matchingText.slice(i, i + windowSize);
-        const fuzzyScore = similarityScore(window, normalizedOfficeName);
-        if (fuzzyScore > score && fuzzyScore >= minScore) {
-          score = fuzzyScore;
-          matchType = 'fuzzy';
-        }
+      const fuzzyScore = bestFuzzyWindowScore(matchingText, normalizedOfficeName, 5, minScore);
+      if (fuzzyScore > 0) {
+        score = fuzzyScore;
+        matchType = 'fuzzy';
       }
     }
 
@@ -544,15 +543,15 @@ export function extractCustomerCandidates(
 
     // 3. ファジーマッチ（類似度検索）
     // GAS版と同様：完全一致・ふりがな一致がない場合のみ類似度で判定
+    // Issue #789: extractOfficeCandidates(Issue #787/PR #788)と同一構造のボトルネックのため
+    // bestFuzzyWindowScoreへ置き換え。floorはこの時点でscoreが常に0(matchType==='none')であり、
+    // 下流の唯一の観測点が後段の「score>=minScoreならcandidates.push」であることに基づく
+    // (minScore未満のfuzzyScoreはどんな値でもpush判定に寄与しないため区別不要、ブースト分岐なし)。
     if (matchType === 'none') {
-      const windowSize = Math.min(normalizedName.length + 3, matchingText.length);
-      for (let i = 0; i <= matchingText.length - windowSize; i++) {
-        const window = matchingText.slice(i, i + windowSize);
-        const fuzzyScore = similarityScore(window, normalizedName);
-        if (fuzzyScore > score) {
-          score = fuzzyScore;
-          matchType = 'fuzzy';
-        }
+      const fuzzyScore = bestFuzzyWindowScore(matchingText, normalizedName, 3, minScore);
+      if (fuzzyScore > 0) {
+        score = fuzzyScore;
+        matchType = 'fuzzy';
       }
     }
 
