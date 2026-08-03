@@ -168,7 +168,7 @@ cocoro/kanameから、書類（ケアプラン・医療・介護保険証等）�
 
 ## 🔄 中断点（in-flight）
 
-なし。本セッション（2026-08-02〜03）の作業（Issue #783→#787→#788のofficeMatchMs最適化、全環境デプロイ）は完全に完了した状態で終了（詳細は上記「【完了・2026-08-02】officeMatchMs残存コストの真因特定・bag distance最適化」節参照）。次のROIが高い候補はIssue #789（未着手・起票のみ、着手はdecision-maker判断待ち）。
+なし。本セッション（2026-08-02〜03）の作業（Issue #783→#787→#788→#789のofficeMatchMs/customerMatchMs最適化、全環境デプロイ）は完全に完了した状態で終了（詳細は上記「【完了・2026-08-03】Issue #789」節参照）。executor側で着手可能な残タスクはなし。cocoro側Drive連携Phase C（クライアント自身のOAuth接続）は外部依存待ち。
 
 ## Drive連携Phase D: Stage D完了（2026-07-31、decision-maker「Drive Phase D進めて」で着手）
 
