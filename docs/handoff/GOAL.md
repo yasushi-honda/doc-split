@@ -6,7 +6,7 @@ updated: 2026-08-02
 
 ## 📋 空き時間バックログ（現在のミッションとは無関係、doc-audit 2026-08-01指摘）
 
-- [ ] `docs/context/gemini-rate-limiting.md`のレート制限値をGemini 3.5 Flash運用下で再検証する。2026-07-09のモデル移行後、ファイル自身が「3.5移行後の再検証は未実施」と自己申告したまま未着手（実測作業=負荷テスト等が必要なため、Drive連携ミッションの空き時間に着手）
+- [x] `docs/context/gemini-rate-limiting.md`のレート制限値をGemini 3.5 Flash運用下で再検証する（2026-08-02、PR #785マージ済み）。Playwright MCPでVertex AI公式モデルカードを実測確認し、RPM/TPMがDynamic Shared Quota化され固定値が存在しないこと・最大出力トークンがモデル上限65,536（旧記載8,192はアプリの暴走対策キャップとの混同）・PDF最大ファイルサイズがAPI経由で50MB（旧記載20MBは不一致）と判明、ドキュメントを修正
 
 ## 現在のミッション【進行中・2026-07-23開始】
 
@@ -67,8 +67,19 @@ kanameone健全性レポートで発覚した書類1件のOCRタイムアウト�
   | officeMatchMs | ─ | 295秒 | 223秒 |
   | 900秒予算に対する余裕 | ─ | 111秒 | 283秒 |
 
-- **さらなる最適化余地**: `calculateKeywordMatchScore`内部の事業所ごとキーワード突合せループ自体（O(N_offices×N_keywords)）はまだ残存（223秒）。マスター件数増加で再度圧迫されうる構造的リスクのため、[Issue #783](https://github.com/yasushi-honda/doc-split/issues/783)に起票済み（優先度中、decision-maker明示指示があれば次回セッションで着手）
 - **スコープ外として記録**（ADR-0023参照）: 自動rescue対象へのタイムアウトエラー追加（ADR-0017の意図的限定を覆す判断）、監視・アラートの早期化、`concurrency`明示設定
+
+## 【完了・2026-08-02】officeMatchMs残存コストの真因特定・bag distance最適化（Issue #783→#787→#788）
+
+上記予防策の残存最適化余地として起票した[Issue #783](https://github.com/yasushi-honda/doc-split/issues/783)（`calculateKeywordMatchScore`のさらなる最適化）に着手したところ、**当初の想定が誤りだったことが実測で判明**し、真因調査から新規最適化・全環境デプロイまで完遂した。
+
+- **Issue #783着手→誤りの発見**: `calculateKeywordMatchScore`（ステップ3キーワードマッチ）のO(1)ショートサーキット最適化をPR #786で実装・マージ（挙動不変、テスト全PASS、`codex review`findings 0件）。しかし本番相当ベンチマーク（OCR全文174,690文字×事業所981件、kanameone実測値に基づく合成データ）で計測したところ、この関数のコストは全体（約80秒）のわずか**0.09%（69.3ms）**に過ぎないと判明。Issue #783は誤ったボトルネック箇所を対象にしていた
+- **真因特定**: 診断計測により、`extractOfficeCandidates`のステップ5「ファジーマッチ」（OCR全文へのスライディングウィンドウ+毎回フルLevenshtein計算）が実測**99.86%（79,454ms）**を占める真のボトルネックと判明。[Issue #787](https://github.com/yasushi-honda/doc-split/issues/787)として起票（ベンチマークデータで裏付け済み）
+- **PR #788（マージ済み・Issue #787をクローズ）**: plan mode承認済み計画（`elegant-waddling-cake.md`）に基づき、数学的に完全等価な3層最適化を実装。①`levenshteinDistance`をO(min(n,m))空間のInt32Array rolling row化 ②bag distance（文字多重集合差分が編集距離の厳密な下界であることを利用）によるbranch-and-bound枝刈り+静的floorスキップを行う新規`bestFuzzyWindowScore`ヘルパ ③ステップ5を新ヘルパ呼び出しに差し替え。安全網: 変更前のcharacterization test3件・決定的PRNGによる差分テスト6000+ケース（不一致0件）・本番相当ベンチマークでのbefore/after候補リスト完全一致比較・`codex review`（medium effort、findings 0件）・`code-reviewer`セカンドオピニオン（HIGH/MEDIUM 0件、LOW指摘2件は反映済み）
+- **効果**: 本番相当ベンチマークで79,864.6ms→99.2ms（**約805倍**）。**kanameone実本番データでも確認済み**（デプロイ後の自然トラフィック、1〜2ページ文書でofficeMatchMsが1,053〜3,610ms→177〜178msに改善、エラーなく完走）
+- **全環境デプロイ完了**: dev（CI自動デプロイ、実機OCR3件で動作確認）→kanameone（`Deploy Cloud Functions`、実本番データで確認）→cocoro（`Deploy Cloud Functions`、ビルド成功・updateTime確認のみ。自然トラフィックが少なく実機OCRでの確認は未達だが、同一コードパスがdev/kanameoneで実データ検証済みのため十分と判断）
+- **スコープ外・followup**: 調査の過程で`extractCustomerCandidates`（顧客照合、マスター1,352件）と旧`extractOfficeNameEnhanced`にも同一構造のボトルネックが存在すると判明（kanameone実本番ログでcustomerMatchMs=56〜63秒/71ページ文書を確認）。[Issue #789](https://github.com/yasushi-honda/doc-split/issues/789)として起票済み（未着手、次のROIが高い候補）
+- **さらなるスケーリングリスク（未着手・証拠待ち）**: `pageLoopMs`（Gemini OCR呼び出し自体）は今回一切改善されておらず、71ページで334〜427秒と総処理時間の過半を占める。160ページ超級の文書では単独で900秒予算に迫る可能性があり、ADR-0023が示唆する通り「タイムアウト値の引き上げでは解決しない」領域（Cloud Run Job化等のアーキテクチャ変更が必要）。ただしkanameone/cocoroの実文書にそこまでの規模のものが実際に現れているかは未確認のため、証拠が出るまで着手は保留
 
 ## 【完了・2026-07-22】Google Drive連携Phase1 (MVP)実装ミッション
 
@@ -148,14 +159,7 @@ cocoro/kanameから、書類（ケアプラン・医療・介護保険証等）�
 
 ## 🔄 中断点（in-flight）
 
-**対象タスク（2026-07-31完了）**: kanameone書類回転ブロッカー解消（genesis provenance、PR #759マージ済み）は**実装・本番デプロイ・反映確認まで完了**。
-
-**実施内容（2026-07-31、decision-maker番号単位認可）**:
-1. ✅ kanameone Functions本番デプロイ実施（`gh workflow run "Deploy Cloud Functions"` kanameone、run ID 30609669833、8m5sで成功）
-2. ✅ `gcloud functions describe rotatePdfPages --project=docsplit-kanameone --account=hy.unimail.11@gmail.com`で`updateTime: 2026-07-31T06:34:35Z`を確認（PR #759マージ時刻`05:38:27Z`より後、反映確認済み）
-3. 実書類（`PRI96X82bU9fybK9NRL4`、森田和則様）での実ログイン動作確認は**decision-maker判断により省略**（rotatePdfPagesはFirebase Auth必須+ホワイトリスト制で本番顧客スタッフアカウントへのログイン権限がexecutor側になく、Playwright MCP実施にはテストアカウント提供が前提と判明。「devで成功していれば同一コードのprodも等価」という判断で対応終了とした）
-
-**cocoro側も同一問題に晒されていたことが判明・解消（2026-07-31、decision-makerの「cocoro側も大丈夫か」という質問を受け能動調査）**: Firestore集計クエリでcocoro全1,188書類中provenance保有わずか3件(0.25%)、かつcocoroのFunctions最終デプロイ(`2026-07-28T07:26:21Z`)がPR #759マージ前のコードと判明。同一デプロイをcocoro向けにも実行し`updateTime:2026-07-31T10:39:13Z`で反映確認済み。**kanameone/cocoro両環境でgenesis provenance機構が本番稼働中**（詳細PR #762/#763）。
+なし。本セッション（2026-08-02〜03）の作業（Issue #783→#787→#788のofficeMatchMs最適化、全環境デプロイ）は完全に完了した状態で終了（詳細は上記「【完了・2026-08-02】officeMatchMs残存コストの真因特定・bag distance最適化」節参照）。次のROIが高い候補はIssue #789（未着手・起票のみ、着手はdecision-maker判断待ち）。
 
 ## Drive連携Phase D: Stage D完了（2026-07-31、decision-maker「Drive Phase D進めて」で着手）
 
