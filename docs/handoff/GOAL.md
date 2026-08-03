@@ -184,8 +184,9 @@ cocoro/kanameから、書類（ケアプラン・医療・介護保険証等）�
 - `backfill-drive-export --dry-run --expected-count 1276`で全走査し候補1,276件を確認（期待値と一致）
 - `backfill-drive-export --expected-count 1276`実行（実書込み）→ **マーク成功1,276件**、manifest出力・artifact保存済み（runId=1e11a81f-d527-4079-8fa3-dc610717dabc）
 - 初回スイープ後(約16分経過時点)のスポットチェック: exported 19件(単調増加を確認)、backfillマーカー残1,256件、error(顧客未確定)6件、**実エラー6件(比率0.5%、異常停止基準20%を大幅に下回り健全)**。実エラー6件の内訳を個別確認し、全て既存データ不備由来(顧客未確定・フリガナ未設定・ケアマネ名未設定・書類日付未設定)でDrive連携コード自体のバグやAmbiguousFolderError等の異常スパイクではないことを実測確認
+- 2回目スポットチェック(2026-08-03、GHA `run-ops-script.yml`経由): verified総数1,621件中、exported 1,299件(19件から大幅に単調増加、80.1%)、exporting 0件、error(backfillマーカー)20件、error(顧客未確定)192件、**error(実エラー)109件(比率6.7%、異常停止基準20%を大幅に下回り健全)**、フィールド不在(未backfill)1件でbackfillマーキングはほぼ完了段階。①単調増加②実エラー比率20%未満③異常spikeなし、いずれも異常なしと確認。cocoro側`settings/drive`はFirestore REST APIで直接確認(decision-maker明示許可済み)、`oauthClientId`のみで`authMode`等未設定・`updateTime`も2026-07-23のまま変化なし、Phase C未着手を再確認
 
-**次の一手（監視継続、番号単位の追加認可は不要・自然経過を見守る）**: 定期スイープ(15分毎・10件/回)により残り約1,256件が自動でdrainされる(残存ペースなら数十時間規模の見込み、876件想定のrunbook記載22時間より母数が多いため長め)。次回セッション/catchup時に`drive-export-status-report`で状態分布を再確認し、①exported数が単調増加しているか②実エラー比率が20%を超えていないか③`AmbiguousFolderError`/`AmbiguousFile Error`等のspikeがないかを確認する。異常時は`set-feature-flag --flag driveExport --value false`で新規停止(in-flightは完走、Drive PDFは自動削除されない)。cocoro側はPhase C（クライアントOAuth接続）が未完了のため対象外、外部依存で待機継続。
+**次の一手（監視継続、番号単位の追加認可は不要・自然経過を見守る）**: 定期スイープ(15分毎・10件/回)により残りのbackfillマーカー分が自動でdrainされる。次回セッション/catchup時に`drive-export-status-report`で状態分布を再確認し、①exported数が単調増加しているか②実エラー比率が20%を超えていないか③`AmbiguousFolderError`/`AmbiguousFile Error`等のspikeがないかを確認する。異常時は`set-feature-flag --flag driveExport --value false`で新規停止(in-flightは完走、Drive PDFは自動削除されない)。cocoro側はPhase C（クライアントOAuth接続）が未完了のため対象外、外部依存で待機継続。
 
 **副次的に残る判断事項**:
 - PR-D4 Phase A（read-only監査）: genesis provenance実装により`processed/`配下の残課題（495件、Issue #432被害候補）の真の救済可能性を把握する価値は残るが、優先度は下がった（96%はgenesisで既に解消見込みのため）
