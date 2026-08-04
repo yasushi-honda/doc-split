@@ -37,6 +37,8 @@ Accepted (2026-07-20)
 
 `documentCategory`セグメントのフォルダ名は`doc.category`（masters/documentsの書類カテゴリ、例:「保険証類」）を優先し、欠損時のみ`doc.documentType`（書類種別、例:「介護保険被保険者証」）へフォールバックする（2026-08-05修正、kanameoneからの「書類名ではなくカテゴリ名で分類してほしい」という要望対応）。`doc.category`はoptionalで欠損しうる（Issue #338と同型、2026-08-05時点でkanameone verified documentの17.2%が空/欠損）。フリガナと異なりこちらはfail-visibleにせずフォールバックを採用した: 書類カテゴリの欠損は「誤った顧客への配置」のような安全上の懸念を伴わず、既存の成功エクスポートを新規にfail-closedへ倒す方が実害が大きいと判断したため。
 
+`date`セグメントの`onlyForCategories`は書類種別名の配列として運用されており（`buildDetailed5TierPreset(documentCategoryNames)`参照）、上記の表示用`documentCategory`（category優先）とは別概念である。この2つを同一フィールドで扱うと、documentCategoryの表示値をcategory優先化した際にdateセグメントの一致判定まで巻き込まれ、既存テンプレートのdateセグメントが無言で欠落する回帰を生む（`codex review`P1指摘、2026-08-05）。`FolderPathDocInput`では`documentCategory`（表示名）と`documentType`（date判定専用）を独立フィールドとして分離し、この2つの意味的乖離を型レベルで表現している。
+
 ### 4. フォルダの解決は find-or-create、同名2件以上は停止
 
 各セグメントの子フォルダ検索で、0件なら作成・1件なら再利用・**2件以上なら`AmbiguousFolderError`を投げて停止**する。これにより、「既存フォルダ構造への合流」と「新規ルートからの作成」の両ケースを、単一のロジックで一律に処理できる（ルートに空フォルダを選べば実質新規、既存構造のあるフォルダを選べば実質合流）。曖昧な状態での自動選択は誤配置リスクがあるため、常に停止を優先する。

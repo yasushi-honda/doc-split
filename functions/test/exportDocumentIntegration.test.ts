@@ -588,6 +588,48 @@ describe('exportDocument (ADR-0022 Phase 1)', () => {
       const categoryCall = createCalls[2].requestBody as { name: string };
       expect(categoryCall.name).to.equal('ケアプラン');
     });
+
+    it('doc.categoryが空白のみの場合もdocumentTypeへフォールバックする(codex review P2指摘対応)', async () => {
+      const docId = await seedDocument({ category: '   ' });
+      await seedCustomer();
+      const templateWithCategory: DriveFolderTemplate = [
+        ...TEMPLATE,
+        { type: 'documentCategory' },
+      ];
+      await seedDriveSettings({ template: templateWithCategory });
+      const { drive, createCalls } = makeFakeDrive({
+        createdIds: ['folder-office', 'folder-customer', 'folder-category', 'exported-file-id'],
+      });
+
+      await exportDocument(docId, TEST_RUN_ID, { drive, downloadFile: async () => Buffer.from('x') });
+
+      const categoryCall = createCalls[2].requestBody as { name: string };
+      expect(categoryCall.name).to.equal('ケアプラン');
+    });
+
+    it('doc.categoryとdocumentTypeが異なる場合、dateセグメントの判定はdocumentTypeで行われる(codex review P1指摘対応)', async () => {
+      // documentType:'ケアプラン'(seedDocument既定、onlyForCategories該当) + category:'保険証類'(非該当文字列)。
+      // フォルダ名にはcategoryが使われつつ、dateセグメントはdocumentTypeとの一致判定により生成されることを確認する。
+      const docId = await seedDocument({ category: '保険証類' });
+      await seedCustomer();
+      const templateWithDateAndCategory: DriveFolderTemplate = [
+        ...TEMPLATE,
+        { type: 'documentCategory' },
+        { type: 'date', format: 'YYYY年MM月', onlyForCategories: ['ケアプラン'] },
+      ];
+      await seedDriveSettings({ template: templateWithDateAndCategory });
+      const { drive, createCalls } = makeFakeDrive({
+        createdIds: ['folder-office', 'folder-customer', 'folder-category', 'folder-date', 'exported-file-id'],
+      });
+
+      await exportDocument(docId, TEST_RUN_ID, { drive, downloadFile: async () => Buffer.from('x') });
+
+      expect(createCalls).to.have.lengthOf(5); // office/customer/category/date/fileの5回
+      const categoryCall = createCalls[2].requestBody as { name: string };
+      expect(categoryCall.name).to.equal('保険証類');
+      const dateCall = createCalls[3].requestBody as { name: string };
+      expect(dateCall.name).to.match(/^\d{4}年\d{2}月$/);
+    });
   });
 
   it('同名フォルダが2件以上の場合はAmbiguousFolderErrorをthrowし、Drive/Firestore書込みは一切発生しない', async () => {

@@ -358,7 +358,12 @@ export async function exportDocument(
     // doc.categoryはoptionalでkanameone実データの17.2%(2026-08-05時点)で空/欠損(#338)。
     // documentType(書類種別、ほぼ全件に値あり)へのフォールバックにより、カテゴリ名優先
     // という要望を満たしつつ、既存の成功エクスポートが新規にfail-closedになる回帰を防ぐ。
-    documentCategory: doc.category || doc.documentType,
+    // trim後に判定する(空白のみのcategoryを誤って採用しない、codex review P2指摘対応)。
+    documentCategory: doc.category?.trim() || doc.documentType,
+    // dateセグメントのonlyForCategoriesは書類種別名の配列として運用されており、表示用の
+    // documentCategory(category優先)とは別概念のため独立して渡す(codex review P1指摘対応、
+    // folderPath.tsのFolderPathDocInput.documentTypeコメント参照)。
+    documentType: doc.documentType,
     // doc.fileDateは型上Timestamp必須だが、UIから書類日付をクリア保存する経路が実在し
     // 実行時にnull/undefinedになりうる(searchIndexer.ts等の既存箇所と同じ防御的読み取り)。
     // .toDate()の無条件呼び出しによるTypeError回避、欠損時の扱いはfolderPath.tsの
