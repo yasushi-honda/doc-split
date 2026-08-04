@@ -355,7 +355,10 @@ export async function exportDocument(
     careManagerName: doc.careManager ?? '',
     customerName: doc.customerName,
     customerFurigana,
-    documentCategory: doc.documentType,
+    // doc.categoryはoptionalでkanameone実データの17.2%(2026-08-05時点)で空/欠損(#338)。
+    // documentType(書類種別、ほぼ全件に値あり)へのフォールバックにより、カテゴリ名優先
+    // という要望を満たしつつ、既存の成功エクスポートが新規にfail-closedになる回帰を防ぐ。
+    documentCategory: doc.category || doc.documentType,
     // doc.fileDateは型上Timestamp必須だが、UIから書類日付をクリア保存する経路が実在し
     // 実行時にnull/undefinedになりうる(searchIndexer.ts等の既存箇所と同じ防御的読み取り)。
     // .toDate()の無条件呼び出しによるTypeError回避、欠損時の扱いはfolderPath.tsの

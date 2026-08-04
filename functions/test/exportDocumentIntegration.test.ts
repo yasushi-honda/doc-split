@@ -534,6 +534,62 @@ describe('exportDocument (ADR-0022 Phase 1)', () => {
     expect(docSnap.data()!.driveExportStatus).to.equal('exporting'); // seedDocumentの初期値のまま
   });
 
+  describe('documentCategoryセグメントのフォルダ名解決(doc.category優先+documentTypeフォールバック、2026-08-05修正)', () => {
+    it('doc.categoryが設定済みの場合はcategoryの値がフォルダ名として使われる(documentTypeではない)', async () => {
+      const docId = await seedDocument({ category: '保険証類' }); // documentType:'ケアプラン'(seedDocument既定)とは別値
+      await seedCustomer();
+      const templateWithCategory: DriveFolderTemplate = [
+        ...TEMPLATE,
+        { type: 'documentCategory' },
+      ];
+      await seedDriveSettings({ template: templateWithCategory });
+      const { drive, createCalls } = makeFakeDrive({
+        createdIds: ['folder-office', 'folder-customer', 'folder-category', 'exported-file-id'],
+      });
+
+      await exportDocument(docId, TEST_RUN_ID, { drive, downloadFile: async () => Buffer.from('x') });
+
+      const categoryCall = createCalls[2].requestBody as { name: string };
+      expect(categoryCall.name).to.equal('保険証類');
+    });
+
+    it('doc.categoryが未設定(欠損)の場合はdocumentTypeへフォールバックする(#338同型、既存エクスポートの回帰防止)', async () => {
+      const docId = await seedDocument(); // categoryフィールド自体を設定しない、documentType:'ケアプラン'
+      await seedCustomer();
+      const templateWithCategory: DriveFolderTemplate = [
+        ...TEMPLATE,
+        { type: 'documentCategory' },
+      ];
+      await seedDriveSettings({ template: templateWithCategory });
+      const { drive, createCalls } = makeFakeDrive({
+        createdIds: ['folder-office', 'folder-customer', 'folder-category', 'exported-file-id'],
+      });
+
+      await exportDocument(docId, TEST_RUN_ID, { drive, downloadFile: async () => Buffer.from('x') });
+
+      const categoryCall = createCalls[2].requestBody as { name: string };
+      expect(categoryCall.name).to.equal('ケアプラン');
+    });
+
+    it('doc.categoryが空文字の場合もdocumentTypeへフォールバックする', async () => {
+      const docId = await seedDocument({ category: '' });
+      await seedCustomer();
+      const templateWithCategory: DriveFolderTemplate = [
+        ...TEMPLATE,
+        { type: 'documentCategory' },
+      ];
+      await seedDriveSettings({ template: templateWithCategory });
+      const { drive, createCalls } = makeFakeDrive({
+        createdIds: ['folder-office', 'folder-customer', 'folder-category', 'exported-file-id'],
+      });
+
+      await exportDocument(docId, TEST_RUN_ID, { drive, downloadFile: async () => Buffer.from('x') });
+
+      const categoryCall = createCalls[2].requestBody as { name: string };
+      expect(categoryCall.name).to.equal('ケアプラン');
+    });
+  });
+
   it('同名フォルダが2件以上の場合はAmbiguousFolderErrorをthrowし、Drive/Firestore書込みは一切発生しない', async () => {
     const docId = await seedDocument();
     await seedCustomer();
