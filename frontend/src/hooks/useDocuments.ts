@@ -277,6 +277,26 @@ export function updateDocumentInListCache(
   )
 }
 
+/**
+ * 書類本体を更新する全mutation(編集保存/再処理/汎用更新)が共通で呼ぶキャッシュ
+ * invalidateヘルパー。customerName/careManagerName等グルーピングキーに使われる
+ * フィールドはどの更新経路でも変わりうるため、documentsInfinite/document本体だけでなく
+ * documentGroups/groupDocuments/groupStats(担当CM別・利用者別グループ表示)も必ず
+ * 合わせて無効化する。
+ *
+ * 各mutationが個別にinvalidateQueriesを手書きしていた旧実装では、useDocumentEdit.ts
+ * (Issue #793)とuseReprocessDocument双方で独立にgroupStatsのinvalidate漏れが発生し、
+ * さらにuseUpdateDocumentはグループ系キャッシュを一切invalidateしていなかった(2026-08-06
+ * 発見)。呼び出し箇所ごとに漏れが再発する構造的な問題だったため、一本化して解消する。
+ */
+export function invalidateDocumentAndGroupQueries(queryClient: QueryClient, documentId: string): void {
+  queryClient.invalidateQueries({ queryKey: ['documentsInfinite'] })
+  queryClient.invalidateQueries({ queryKey: ['document', documentId] })
+  queryClient.invalidateQueries({ queryKey: ['documentGroups'] })
+  queryClient.invalidateQueries({ queryKey: ['groupDocuments'] })
+  queryClient.invalidateQueries({ queryKey: ['groupStats'] })
+}
+
 // ============================================
 // 再処理時クリアフィールド
 // ============================================
@@ -502,13 +522,10 @@ export function useReprocessDocument() {
         verified: false,
         ...(hasDistributionId ? {} : { customerName: '', customerConfirmed: false }),
       })
-      queryClient.invalidateQueries({ queryKey: ['document', documentId] })
       // detail/main もクリア対象 (appendReprocessClearToBatch) のため、キャッシュ済み
       // detailの古いOCR内容がポーリング再開(3秒後)まで表示され続けるのを防ぐ
       queryClient.invalidateQueries({ queryKey: ['documentDetail', documentId] })
-      queryClient.invalidateQueries({ queryKey: ['documentsInfinite'] })
-      queryClient.invalidateQueries({ queryKey: ['groupDocuments'] })
-      queryClient.invalidateQueries({ queryKey: ['documentGroups'] })
+      invalidateDocumentAndGroupQueries(queryClient, documentId)
       toast.success('再処理をリクエストしました。処理完了まで画面が自動更新されます。', { duration: 5000 })
       return true
     } catch (err) {
@@ -758,9 +775,8 @@ export function useUpdateDocument() {
   return useMutation({
     mutationFn: updateDocument,
     onSuccess: (_, { documentId }) => {
-      // 関連キャッシュを無効化
-      queryClient.invalidateQueries({ queryKey: ['documentsInfinite'] })
-      queryClient.invalidateQueries({ queryKey: ['document', documentId] })
+      // 関連キャッシュを無効化(グループ表示キャッシュも含む、invalidateDocumentAndGroupQueries参照)
+      invalidateDocumentAndGroupQueries(queryClient, documentId)
     },
   })
 }

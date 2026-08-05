@@ -60,6 +60,11 @@ describe('useSplitPdf - Issue #621 already-exists/aborted時のキャッシュ�
 
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['documentsInfinite'] })
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['document'] })
+    // 2026-08-06: 分割元書類がグループ表示に含まれていた場合の表示崩れを防ぐため、
+    // グループ系キャッシュも合わせてinvalidateする(useDocumentEdit等と同型の漏れの予防)
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['documentGroups'] })
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['groupDocuments'] })
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['groupStats'] })
   })
 
   it('aborted で失敗した場合、documentsInfinite/document を invalidate する', async () => {
@@ -75,6 +80,9 @@ describe('useSplitPdf - Issue #621 already-exists/aborted時のキャッシュ�
 
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['documentsInfinite'] })
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['document'] })
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['documentGroups'] })
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['groupDocuments'] })
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['groupStats'] })
   })
 
   it('internal 等の他コードで失敗した場合は invalidate しない', async () => {
@@ -100,5 +108,8 @@ describe('useSplitPdf - Issue #621 already-exists/aborted時のキャッシュ�
 
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['documentsInfinite'] })
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['document'] })
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['documentGroups'] })
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['groupDocuments'] })
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['groupStats'] })
   })
 })

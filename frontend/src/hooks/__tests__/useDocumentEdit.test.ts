@@ -48,9 +48,16 @@ vi.mock('@tanstack/react-query', () => ({
   }),
 }))
 
-vi.mock('../useDocuments', () => ({
-  updateDocumentInListCache: vi.fn(),
-}))
+vi.mock('../useDocuments', async (importOriginal) => {
+  // invalidateDocumentAndGroupQueriesは実装をそのまま使う(モックでinvalidate対象キーの
+  // リストを重複定義すると、実装変更時にテストと実装が非同期にドリフトするため)。
+  // updateDocumentInListCacheのみ従来通りモック化する。
+  const actual = await importOriginal<typeof import('../useDocuments')>()
+  return {
+    ...actual,
+    updateDocumentInListCache: vi.fn(),
+  }
+})
 
 import { useDocumentEdit } from '../useDocumentEdit'
 

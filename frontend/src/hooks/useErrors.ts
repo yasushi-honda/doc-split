@@ -22,7 +22,7 @@ import {
   QueryConstraint,
 } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
-import { appendReprocessClearToBatch } from './useDocuments'
+import { appendReprocessClearToBatch, invalidateDocumentAndGroupQueries } from './useDocuments'
 import type { ErrorRecord, ErrorStatus, ErrorType } from '@shared/types'
 
 // ============================================
@@ -272,12 +272,18 @@ export function useReprocessError() {
     onSuccess: ({ documentId }) => {
       queryClient.invalidateQueries({ queryKey: ['errors'] })
       queryClient.invalidateQueries({ queryKey: ['errorStats'] })
-      queryClient.invalidateQueries({ queryKey: ['documentsInfinite'] })
-      // detail/main もクリア対象 (appendReprocessClearToBatch) のため、キャッシュ済み
-      // documentDetailが古いOCR内容を残さないよう無効化する (useDocuments.ts
-      // useReprocessDocument と同じ理由、Issue #547)
       if (documentId) {
+        // detail/main もクリア対象 (appendReprocessClearToBatch) のため、キャッシュ済み
+        // documentDetailが古いOCR内容を残さないよう無効化する (useDocuments.ts
+        // useReprocessDocument と同じ理由、Issue #547)。
+        // document本体・グループ表示キャッシュも合わせて無効化する
+        // (invalidateDocumentAndGroupQueries参照。本フックはuseReprocessDocumentと同じ
+        // メタクリア(appendReprocessClearToBatch)を行うにもかかわらず、documentIdが
+        // 取得できた場合でもdocumentsInfinite以外を無効化していなかった漏れを2026-08-06に解消)
         queryClient.invalidateQueries({ queryKey: ['documentDetail', documentId] })
+        invalidateDocumentAndGroupQueries(queryClient, documentId)
+      } else {
+        queryClient.invalidateQueries({ queryKey: ['documentsInfinite'] })
       }
     },
   })

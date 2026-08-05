@@ -43,15 +43,27 @@ vi.mock('../../lib/firebase', () => ({
 }))
 
 const mockAppendReprocessClearToBatch = vi.fn().mockResolvedValue(undefined)
+const mockInvalidateDocumentAndGroupQueries = vi.fn()
 vi.mock('../useDocuments', () => ({
   appendReprocessClearToBatch: (...args: unknown[]) => mockAppendReprocessClearToBatch(...args),
+  invalidateDocumentAndGroupQueries: (...args: unknown[]) => mockInvalidateDocumentAndGroupQueries(...args),
 }))
 
 const mockInvalidateQueries = vi.fn()
 vi.mock('@tanstack/react-query', () => ({
   useQueryClient: () => ({ invalidateQueries: mockInvalidateQueries }),
-  useMutation: (opts: { mutationFn: (params: unknown) => Promise<unknown> }) => ({
-    mutateAsync: opts.mutationFn,
+  // 実際のreact-queryと同様、mutationFn成功後にonSuccessを呼ぶ(2026-08-06: onSuccessでの
+  // グループキャッシュinvalidate漏れ(useErrors.ts)を検証するため、旧実装のonSuccessバイパス
+  // を修正)
+  useMutation: (opts: {
+    mutationFn: (params: unknown) => Promise<unknown>
+    onSuccess?: (data: unknown) => void
+  }) => ({
+    mutateAsync: async (params: unknown) => {
+      const result = await opts.mutationFn(params)
+      opts.onSuccess?.(result)
+      return result
+    },
   }),
 }))
 
@@ -102,5 +114,31 @@ describe('useReprocessError / requestReprocess', () => {
     expect(mockAppendReprocessClearToBatch).not.toHaveBeenCalled()
     expect(mockBatchCommit).toHaveBeenCalledTimes(1)
     expect(response).toEqual({ documentId: null })
+  })
+
+  describe('グループ表示キャッシュのinvalidate (2026-08-06: useDocumentEdit/useReprocessDocumentと同型の漏れを解消)', () => {
+    it('documentIdが取得できた場合、document本体・グループ表示キャッシュ(documentGroups/groupDocuments/groupStats)もinvalidateされる', async () => {
+      mockGetDoc.mockResolvedValue({ exists: () => true })
+      const { result } = renderHook(() => useReprocessError())
+
+      await act(async () =>
+        result.current.mutateAsync({ errorId: 'err-1', fileId: 'shared-file-1', documentId: 'the-actual-doc' })
+      )
+
+      expect(mockInvalidateDocumentAndGroupQueries).toHaveBeenCalledWith(expect.anything(), 'the-actual-doc')
+      expect(mockInvalidateQueries).toHaveBeenCalledWith({ queryKey: ['documentDetail', 'the-actual-doc'] })
+    })
+
+    it('documentIdが取得できない場合(doc削除済み等)、グループキャッシュのinvalidateは呼ばれない(documentsInfiniteのみ)', async () => {
+      mockGetDoc.mockResolvedValue({ exists: () => false })
+      const { result } = renderHook(() => useReprocessError())
+
+      await act(async () =>
+        result.current.mutateAsync({ errorId: 'err-3', fileId: 'shared-file-1', documentId: 'deleted-doc' })
+      )
+
+      expect(mockInvalidateDocumentAndGroupQueries).not.toHaveBeenCalled()
+      expect(mockInvalidateQueries).toHaveBeenCalledWith({ queryKey: ['documentsInfinite'] })
+    })
   })
 })
