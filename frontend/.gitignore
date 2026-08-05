@@ -3,3 +3,9 @@
 test-results/
 playwright-report/
 .playwright/
+
+# Issue #794 検証用一時ファイル(Phase完了後に削除予定、誤commit防止)
+/type3-test.html
+/type3-test-component.html
+/type3-test-component.tsx
+/public/tmp-type3-test/

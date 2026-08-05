@@ -83,6 +83,8 @@ cors-*.json
 
 # Screenshots（開発用スクリーンショット）
 *.png
+# 例外: Issue #794 OCR検証用のラスタライズ済みテストフィクスチャ(スクリーンショットではない)
+!scripts/fixtures/with-type3-font-rasterized.png
 
 # Claude Code settings（認証情報を含む）
 .claude/settings.local.json

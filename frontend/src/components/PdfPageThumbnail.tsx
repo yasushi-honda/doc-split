@@ -5,6 +5,7 @@
 
 import { useState, memo } from 'react'
 import { Page } from 'react-pdf'
+import '@/lib/pdfWorker'
 import { Loader2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 

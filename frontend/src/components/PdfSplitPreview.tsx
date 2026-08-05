@@ -4,13 +4,11 @@
  */
 
 import { useState, useCallback, useRef, useEffect } from 'react'
-import { Document, Page, pdfjs } from 'react-pdf'
+import { Document, Page } from 'react-pdf'
+import '@/lib/pdfWorker'
 import { Loader2, ZoomIn, ZoomOut } from 'lucide-react'
 import { PdfPageThumbnail } from './PdfPageThumbnail'
 import { Button } from '@/components/ui/button'
-
-// PDF.js worker設定
-pdfjs.GlobalWorkerOptions.workerSrc = `//unpkg.com/pdfjs-dist@${pdfjs.version}/build/pdf.worker.min.mjs`
 
 interface PdfSplitPreviewProps {
   fileUrl: string
