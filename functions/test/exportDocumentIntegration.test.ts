@@ -32,7 +32,12 @@ import { MASTER_PATHS } from '../src/utils/masterPaths';
 import type { DriveFolderTemplate } from '../../shared/types';
 
 const db = admin.firestore();
-const COLLECTIONS_TO_CLEAN: readonly string[] = ['documents', 'settings', MASTER_PATHS.customers];
+const COLLECTIONS_TO_CLEAN: readonly string[] = [
+  'documents',
+  'settings',
+  MASTER_PATHS.customers,
+  MASTER_PATHS.documents,
+];
 
 const TEMPLATE: DriveFolderTemplate = [
   { type: 'fixed', value: '事業所A' },
@@ -146,6 +151,21 @@ async function seedCustomer(
   await db.doc(`${MASTER_PATHS.customers}/customer-1`).set({
     name,
     ...(furigana !== undefined ? { furigana } : {}),
+  });
+}
+
+/**
+ * documentCategoryセグメントのフォルダ名解決(codex review P1指摘対応、2026-08-05)用に
+ * masters/documents/itemsへ書類種別マスターを登録する。`name`はdoc.documentTypeと
+ * 一致させる想定(exportDocument.tsが`where('name', '==', doc.documentType)`で引く)。
+ */
+async function seedDocumentTypeMaster(
+  name: string,
+  category: string | undefined
+): Promise<void> {
+  await db.collection(MASTER_PATHS.documents).add({
+    name,
+    ...(category !== undefined ? { category } : {}),
   });
 }
 
@@ -532,6 +552,133 @@ describe('exportDocument (ADR-0022 Phase 1)', () => {
     const docSnap = await db.doc(`documents/${docId}`).get();
     expect(docSnap.data()!.driveFileId).to.be.undefined;
     expect(docSnap.data()!.driveExportStatus).to.equal('exporting'); // seedDocumentの初期値のまま
+  });
+
+  describe('documentCategoryセグメントのフォルダ名解決(masters/documents都度解決優先+documentTypeフォールバック、2026-08-05修正)', () => {
+    it('doc.documentTypeに対応するmastersのcategoryが設定済みの場合はそのcategoryの値がフォルダ名として使われる(documentTypeではない)', async () => {
+      const docId = await seedDocument(); // documentType:'ケアプラン'(seedDocument既定)
+      await seedCustomer();
+      await seedDocumentTypeMaster('ケアプラン', '保険証類'); // 意図的にdocumentTypeと異なるcategoryを設定
+      const templateWithCategory: DriveFolderTemplate = [
+        ...TEMPLATE,
+        { type: 'documentCategory' },
+      ];
+      await seedDriveSettings({ template: templateWithCategory });
+      const { drive, createCalls } = makeFakeDrive({
+        createdIds: ['folder-office', 'folder-customer', 'folder-category', 'exported-file-id'],
+      });
+
+      await exportDocument(docId, TEST_RUN_ID, { drive, downloadFile: async () => Buffer.from('x') });
+
+      const categoryCall = createCalls[2].requestBody as { name: string };
+      expect(categoryCall.name).to.equal('保険証類');
+    });
+
+    it('該当するmastersドキュメント自体が存在しない場合はdocumentTypeへフォールバックする(#338同型、既存エクスポートの回帰防止)', async () => {
+      const docId = await seedDocument(); // documentType:'ケアプラン'、masters/documentsは未登録
+      await seedCustomer();
+      const templateWithCategory: DriveFolderTemplate = [
+        ...TEMPLATE,
+        { type: 'documentCategory' },
+      ];
+      await seedDriveSettings({ template: templateWithCategory });
+      const { drive, createCalls } = makeFakeDrive({
+        createdIds: ['folder-office', 'folder-customer', 'folder-category', 'exported-file-id'],
+      });
+
+      await exportDocument(docId, TEST_RUN_ID, { drive, downloadFile: async () => Buffer.from('x') });
+
+      const categoryCall = createCalls[2].requestBody as { name: string };
+      expect(categoryCall.name).to.equal('ケアプラン');
+    });
+
+    it('mastersのcategoryが空文字の場合もdocumentTypeへフォールバックする', async () => {
+      const docId = await seedDocument();
+      await seedCustomer();
+      await seedDocumentTypeMaster('ケアプラン', '');
+      const templateWithCategory: DriveFolderTemplate = [
+        ...TEMPLATE,
+        { type: 'documentCategory' },
+      ];
+      await seedDriveSettings({ template: templateWithCategory });
+      const { drive, createCalls } = makeFakeDrive({
+        createdIds: ['folder-office', 'folder-customer', 'folder-category', 'exported-file-id'],
+      });
+
+      await exportDocument(docId, TEST_RUN_ID, { drive, downloadFile: async () => Buffer.from('x') });
+
+      const categoryCall = createCalls[2].requestBody as { name: string };
+      expect(categoryCall.name).to.equal('ケアプラン');
+    });
+
+    it('mastersのcategoryが空白のみの場合もdocumentTypeへフォールバックする(codex review P2指摘対応)', async () => {
+      const docId = await seedDocument();
+      await seedCustomer();
+      await seedDocumentTypeMaster('ケアプラン', '   ');
+      const templateWithCategory: DriveFolderTemplate = [
+        ...TEMPLATE,
+        { type: 'documentCategory' },
+      ];
+      await seedDriveSettings({ template: templateWithCategory });
+      const { drive, createCalls } = makeFakeDrive({
+        createdIds: ['folder-office', 'folder-customer', 'folder-category', 'exported-file-id'],
+      });
+
+      await exportDocument(docId, TEST_RUN_ID, { drive, downloadFile: async () => Buffer.from('x') });
+
+      const categoryCall = createCalls[2].requestBody as { name: string };
+      expect(categoryCall.name).to.equal('ケアプラン');
+    });
+
+    it('documentCategory(masters由来)とdocumentTypeが異なる場合、dateセグメントの判定はdocumentTypeで行われる(codex review P1指摘対応)', async () => {
+      // documentType:'ケアプラン'(seedDocument既定、onlyForCategories該当) + masters category:'保険証類'(非該当文字列)。
+      // フォルダ名にはcategoryが使われつつ、dateセグメントはdocumentTypeとの一致判定により生成されることを確認する。
+      const docId = await seedDocument();
+      await seedCustomer();
+      await seedDocumentTypeMaster('ケアプラン', '保険証類');
+      const templateWithDateAndCategory: DriveFolderTemplate = [
+        ...TEMPLATE,
+        { type: 'documentCategory' },
+        { type: 'date', format: 'YYYY年MM月', onlyForCategories: ['ケアプラン'] },
+      ];
+      await seedDriveSettings({ template: templateWithDateAndCategory });
+      const { drive, createCalls } = makeFakeDrive({
+        createdIds: ['folder-office', 'folder-customer', 'folder-category', 'folder-date', 'exported-file-id'],
+      });
+
+      await exportDocument(docId, TEST_RUN_ID, { drive, downloadFile: async () => Buffer.from('x') });
+
+      expect(createCalls).to.have.lengthOf(5); // office/customer/category/date/fileの5回
+      const categoryCall = createCalls[2].requestBody as { name: string };
+      expect(categoryCall.name).to.equal('保険証類');
+      const dateCall = createCalls[3].requestBody as { name: string };
+      expect(dateCall.name).to.match(/^\d{4}年\d{2}月$/);
+    });
+
+    it('documentTypeを手動訂正した後にエクスポートすると、訂正後のdocumentTypeに対応するmastersのcategoryが使われる(古いdoc.categoryへの追従漏れ回帰防止、codex review P1指摘の核心シナリオ)', async () => {
+      // OCR時点では「介護保険被保険者証」(category:'保険証類')と判定されたが、ユーザーが
+      // 書類詳細でdocumentTypeを「ケアプラン」に手動訂正した状況を再現する。旧設計では
+      // doc.categoryフィールドがOCR時点の'保険証類'のまま残留していたため誤フォルダに
+      // 配置されるリスクがあったが、masters都度解決によりcategory:'計画書類'
+      // (documentType:'ケアプラン'に対応する現在のcategory)が正しく使われることを確認する。
+      const docId = await seedDocument({ category: '保険証類' }); // 訂正前のOCRスナップショットを模す
+      await seedCustomer();
+      await seedDocumentTypeMaster('介護保険被保険者証', '保険証類');
+      await seedDocumentTypeMaster('ケアプラン', '計画書類');
+      const templateWithCategory: DriveFolderTemplate = [
+        ...TEMPLATE,
+        { type: 'documentCategory' },
+      ];
+      await seedDriveSettings({ template: templateWithCategory });
+      const { drive, createCalls } = makeFakeDrive({
+        createdIds: ['folder-office', 'folder-customer', 'folder-category', 'exported-file-id'],
+      });
+
+      await exportDocument(docId, TEST_RUN_ID, { drive, downloadFile: async () => Buffer.from('x') });
+
+      const categoryCall = createCalls[2].requestBody as { name: string };
+      expect(categoryCall.name).to.equal('計画書類');
+    });
   });
 
   it('同名フォルダが2件以上の場合はAmbiguousFolderErrorをthrowし、Drive/Firestore書込みは一切発生しない', async () => {

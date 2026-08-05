@@ -35,6 +35,10 @@ Accepted (2026-07-20)
 
 フリガナ欠損時（`CustomerMaster.furigana`は既知の欠損ケースがある、Issue #338）は、デフォルトで**エクスポートを停止**（`furiganaFallback:'stop'`）し、エラー一覧に表示する（fail-visible）。テナントが明示的にopt-inした場合のみ、氏名の先頭文字で代替する（`useNameInitial`）。誤った利用者フォルダへの配置は「配置されない」より遥かに危険という判断による。
 
+`documentCategory`セグメントのフォルダ名は、`doc.category`（OCR実行時点のmastersスナップショット）ではなく**export実行時点で`masters/documents/items`を`doc.documentType`で都度引き直した`category`**を優先し、欠損時のみ`doc.documentType`（書類種別、例:「介護保険被保険者証」）へフォールバックする（2026-08-05修正、kanameoneからの「書類名ではなくカテゴリ名で分類してほしい」という要望対応）。`doc.category`ではなく都度解決を採用した理由（`codex review`P1指摘、2026-08-05）: OCR完了後にユーザーが書類詳細で`documentType`のみを手動訂正しても、`useDocumentEdit.ts`は`documentType`/`documentTypeKey`のみ更新し`doc.category`は追従しないため、`doc.category`をそのまま使うと訂正前の書類種別に対応する古いカテゴリでエクスポートされ誤ったフォルダに配置されるリスクがあった。masters側のcategoryもoptionalで欠損しうる（Issue #338と同型）ため、フリガナと異なりこちらはfail-visibleにせずdocumentTypeへのフォールバックを採用した: 書類カテゴリの欠損は「誤った顧客への配置」のような安全上の懸念を伴わず、既存の成功エクスポートを新規にfail-closedへ倒す方が実害が大きいと判断したため。
+
+`date`セグメントの`onlyForCategories`は書類種別名の配列として運用されており（`buildDetailed5TierPreset(documentCategoryNames)`参照）、上記の表示用`documentCategory`（category優先）とは別概念である。この2つを同一フィールドで扱うと、documentCategoryの表示値をcategory優先化した際にdateセグメントの一致判定まで巻き込まれ、既存テンプレートのdateセグメントが無言で欠落する回帰を生む（`codex review`P1指摘、2026-08-05）。`FolderPathDocInput`では`documentCategory`（表示名）と`documentType`（date判定専用）を独立フィールドとして分離し、この2つの意味的乖離を型レベルで表現している。
+
 ### 4. フォルダの解決は find-or-create、同名2件以上は停止
 
 各セグメントの子フォルダ検索で、0件なら作成・1件なら再利用・**2件以上なら`AmbiguousFolderError`を投げて停止**する。これにより、「既存フォルダ構造への合流」と「新規ルートからの作成」の両ケースを、単一のロジックで一律に処理できる（ルートに空フォルダを選べば実質新規、既存構造のあるフォルダを選べば実質合流）。曖昧な状態での自動選択は誤配置リスクがあるため、常に停止を優先する。

@@ -82,8 +82,21 @@ export interface FolderPathDocInput {
   customerName: string;
   /** `CustomerMaster.furigana`。欠損ケースあり(#338)。 */
   customerFurigana?: string;
-  /** `Document.documentType`（書類カテゴリ、masters/documents/items参照）。 */
+  /**
+   * documentCategoryセグメントのフォルダ名として使う値。`Document.category`
+   * （書類カテゴリ、masters/documents/items参照）優先、欠損時は`Document.documentType`
+   * へフォールバックした値を呼び出し元が解決して渡す。
+   */
   documentCategory: string;
+  /**
+   * dateセグメントの`onlyForCategories`判定に使う値。`Document.documentType`
+   * （書類種別、masters/documents/items参照）。テンプレート設定の`onlyForCategories`は
+   * 書類種別名の配列として運用されており、`documentCategory`（表示用フォルダ名、
+   * `doc.category`優先に変更済み）とは別概念のため独立フィールドとして保持する
+   * （2026-08-05、codex review P1指摘対応。`documentCategory`表示値をcategory優先化した際、
+   * date判定まで巻き込むと既存テンプレートのdateセグメントが無言で欠落する回帰があった）。
+   */
+  documentType: string;
   /** `Document.fileDate`。UIから書類日付をクリア保存する経路が実在するためnull許容。 */
   fileDate: Date | null;
 }
@@ -150,10 +163,11 @@ function resolveDateSegment(
   doc: FolderPathDocInput,
   segment: Extract<DriveFolderSegment, { type: 'date' }>
 ): string | null {
-  // documentCategoryをtrimしてから比較する(code-review high指摘#3対応、2026-07-22):
+  // documentTypeをtrimしてから比較する(code-review high指摘#3対応、2026-07-22。
+  // 2026-08-05: 判定対象をdocumentCategoryからdocumentTypeへ分離、codex review P1指摘対応):
   // untrimmedのまま比較すると、値に付随する空白でonlyForCategoriesとの一致判定が
   // 崩れ、本来含めるべき年月セグメントが黙って欠落しうる。
-  if (!segment.onlyForCategories.includes(doc.documentCategory.trim())) {
+  if (!segment.onlyForCategories.includes(doc.documentType.trim())) {
     return null;
   }
   if (doc.fileDate === null) {

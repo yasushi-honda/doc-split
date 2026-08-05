@@ -34,6 +34,7 @@ function makeDoc(overrides: Partial<FolderPathDocInput> = {}): FolderPathDocInpu
     customerName: '鈴木花子',
     customerFurigana: 'スズキハナコ',
     documentCategory: 'ケアプラン',
+    documentType: 'ケアプラン',
     fileDate: new Date(2026, 6, 20), // 2026-07-20 (month is 0-indexed)
     ...overrides,
   };
@@ -53,7 +54,7 @@ describe('resolveFolderSegments', () => {
 
   it('かなめテンプレート: ケアプラン以外は年月階層を持たない(4階層)', () => {
     const result = resolveFolderSegments(
-      makeDoc({ documentCategory: '医療費' }),
+      makeDoc({ documentCategory: '医療費', documentType: '医療費' }),
       KANAME_TEMPLATE
     );
     expect(result).to.deep.equal(['北名古屋事業所', '田 田中太郎', 'ス　鈴木花子', '医療費']);
@@ -177,21 +178,41 @@ describe('resolveFolderSegments', () => {
     expect(resolveFolderSegments(doc, template)).to.deep.equal(['ケアプラン']);
   });
 
-  it('documentCategoryに前後空白が付与されていてもonlyForCategoriesとの一致判定はtrim済みの値で行われ、対象カテゴリのdateセグメントが欠落しない(code-review high指摘#3対応)', () => {
-    const doc = makeDoc({ documentCategory: 'ケアプラン ' });
+  it('documentTypeに前後空白が付与されていてもonlyForCategoriesとの一致判定はtrim済みの値で行われ、対象カテゴリのdateセグメントが欠落しない(code-review high指摘#3対応、2026-08-05: 判定対象をdocumentCategoryから分離)', () => {
+    const doc = makeDoc({ documentType: 'ケアプラン ' });
     const result = resolveFolderSegments(doc, KANAME_TEMPLATE);
     expect(result).to.include('2026年07月');
   });
 
   it('fileDateがnullでもdateセグメントが対象外カテゴリならエラーにならない(セグメント自体を持たない)', () => {
-    const doc = makeDoc({ documentCategory: '医療費', fileDate: null });
+    const doc = makeDoc({ documentCategory: '医療費', documentType: '医療費', fileDate: null });
     const result = resolveFolderSegments(doc, KANAME_TEMPLATE);
     expect(result).to.deep.equal(['北名古屋事業所', '田 田中太郎', 'ス　鈴木花子', '医療費']);
   });
 
   it('fileDateがnullでdateセグメントが対象カテゴリの場合はFileDateMissingErrorをthrowする', () => {
-    const doc = makeDoc({ documentCategory: 'ケアプラン', fileDate: null });
+    const doc = makeDoc({ documentCategory: 'ケアプラン', documentType: 'ケアプラン', fileDate: null });
     expect(() => resolveFolderSegments(doc, KANAME_TEMPLATE)).to.throw(FileDateMissingError);
+  });
+
+  describe('documentCategory(表示名)とdocumentType(dateセグメント判定)の分離(codex review P1指摘対応、2026-08-05)', () => {
+    it('documentCategoryとdocumentTypeが異なる場合、dateセグメントの判定はdocumentTypeで行われる(documentCategoryの値に引きずられない)', () => {
+      const doc = makeDoc({ documentCategory: '保険証類', documentType: 'ケアプラン' });
+      const result = resolveFolderSegments(doc, KANAME_TEMPLATE);
+      expect(result).to.deep.equal([
+        '北名古屋事業所',
+        '田 田中太郎',
+        'ス　鈴木花子',
+        '保険証類',
+        '2026年07月',
+      ]);
+    });
+
+    it('documentCategoryがonlyForCategories該当文字列と同じでも、documentTypeが対象外ならdateセグメントを持たない', () => {
+      const doc = makeDoc({ documentCategory: 'ケアプラン', documentType: '医療費' });
+      const result = resolveFolderSegments(doc, KANAME_TEMPLATE);
+      expect(result).to.deep.equal(['北名古屋事業所', '田 田中太郎', 'ス　鈴木花子', 'ケアプラン']);
+    });
   });
 
   describe('姓名間スペースの表記ゆれ正規化(実データ確認例: 「鬼頭 京子」/「鬼頭京子」)', () => {

@@ -351,11 +351,37 @@ export async function exportDocument(
     throw new CustomerUnconfirmedError(doc.customerName || '未判定');
   }
 
+  // documentCategoryセグメントのフォルダ名は、doc.category(OCR実行時点のmastersスナップショット)
+  // ではなく、export実行時点のmasters/documents/itemsを都度引いて解決する(codex review P1指摘対応、
+  // 2026-08-05)。doc.categoryはOCR完了後にユーザーが書類詳細でdocumentTypeのみを手動訂正しても
+  // 追従して更新されない(`useDocumentEdit.ts`はdocumentType/documentTypeKeyのみ更新)ため、
+  // doc.categoryをそのまま使うと訂正前の書類種別に対応する古いカテゴリでエクスポートされてしまう。
+  let resolvedCategory: string | undefined;
+  if (doc.documentType) {
+    const documentMasterSnap = await db
+      .collection(MASTER_PATHS.documents)
+      .where('name', '==', doc.documentType)
+      .limit(1)
+      .get();
+    const masterCategory = documentMasterSnap.empty
+      ? undefined
+      : (documentMasterSnap.docs[0].data() as { category?: string }).category;
+    resolvedCategory = masterCategory?.trim() || undefined;
+  }
+
   const docInput: FolderPathDocInput = {
     careManagerName: doc.careManager ?? '',
     customerName: doc.customerName,
     customerFurigana,
-    documentCategory: doc.documentType,
+    // masters側にcategory未設定/該当マスターなしの場合はdocumentType(書類種別)へフォールバック
+    // する(#338同型、categoryはmasters実データでも欠損しうる)。既存の成功エクスポートが
+    // 新規にfail-closedになる回帰を防ぐ(codex review P2指摘対応、resolvedCategoryは
+    // trim済みの非空文字列のみ)。
+    documentCategory: resolvedCategory || doc.documentType,
+    // dateセグメントのonlyForCategoriesは書類種別名の配列として運用されており、表示用の
+    // documentCategory(masters由来のcategory優先)とは別概念のため独立して渡す
+    // (folderPath.tsのFolderPathDocInput.documentTypeコメント参照)。
+    documentType: doc.documentType,
     // doc.fileDateは型上Timestamp必須だが、UIから書類日付をクリア保存する経路が実在し
     // 実行時にnull/undefinedになりうる(searchIndexer.ts等の既存箇所と同じ防御的読み取り)。
     // .toDate()の無条件呼び出しによるTypeError回避、欠損時の扱いはfolderPath.tsの
