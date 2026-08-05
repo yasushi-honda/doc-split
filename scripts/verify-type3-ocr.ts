@@ -147,7 +147,17 @@ async function main() {
   }
 
   const groupA = summary['A'];
+  const groupB = summary['B'];
   console.log('\n=== Phase 2 要否判定 ===');
+  if (groupB.found < groupB.total) {
+    // 対照群(標準フォント)が失敗する場合、モデル/プロンプト/API側の異常であり
+    // harness自体が無効。群Aの結果だけを見てType3固有の結論を出してはならない
+    console.error(
+      `❌ 群B(対照PDF)が${groupB.found}/${groupB.total}で全成功しなかったため、本実行は無効(harness自体の異常の疑い)。` +
+        '群A(Type3)の結果からPhase 2要否を判定できない。原因調査後に再実行すること。'
+    );
+    process.exit(1);
+  }
   if (groupA.found === 0) {
     console.log('群A(Type3 PDF)が全滅 → OCRもType3で失敗することが確定。Phase 2(サーバー側ラスタライズ)が必要。');
   } else if (groupA.found < groupA.total) {

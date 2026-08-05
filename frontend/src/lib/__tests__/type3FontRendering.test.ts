@@ -27,18 +27,24 @@ describe('Type3フォントPDFのレンダリング(Issue #794回帰)', () => {
   it('フォント読込エラーなしにoperatorListを生成できる', async () => {
     const data = new Uint8Array(fs.readFileSync(FIXTURE_PATH))
 
+    // pdf.jsのwarn()はソース上console.warnを呼ぶが、legacy Node buildの
+    // fake worker実行パスでは実際にはconsole.log経由で出力されることを実機確認済み
+    // (Node 24 + pdfjs-dist 4.8.69/5.4.296双方で検証)。環境差異に頑健にするため両方フックする
     const logs: string[] = []
     const originalLog = console.log
-    console.log = (...args: unknown[]) => {
+    const originalWarn = console.warn
+    const capture = (...args: unknown[]) => {
       logs.push(args.join(' '))
-      originalLog(...args)
     }
+    console.log = capture
+    console.warn = capture
 
     const doc = await pdfjs.getDocument({ data }).promise
     const page = await doc.getPage(1)
     const opList = await page.getOperatorList()
 
     console.log = originalLog
+    console.warn = originalWarn
 
     // 罫線(パス描画)は常に生成されるため、operatorList自体は空にならない
     expect(opList.fnArray.length).toBeGreaterThan(0)
