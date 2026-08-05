@@ -133,8 +133,9 @@ async function main() {
     for (let i = 1; i <= REPEATS; i++) {
       const { tokenFound, text } = await ocrOnce(ai, buffer, group.mimeType);
       if (tokenFound) summary[group.key].found++;
+      // 応答内容は完全に合成データ(個人情報なし)のため、原因切り分けのため全文をログに出す
       console.log(
-        `[群${group.key}: ${group.label}] 試行${i}/${REPEATS}: トークン検出=${tokenFound ? 'YES' : 'NO'} (応答${text.length}文字)`
+        `[群${group.key}: ${group.label}] 試行${i}/${REPEATS}: トークン検出=${tokenFound ? 'YES' : 'NO'} (応答${text.length}文字): ${JSON.stringify(text)}`
       );
     }
   }

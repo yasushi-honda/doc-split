@@ -28,8 +28,41 @@ const { PDFDocument, PDFName, PDFRawStream, StandardFonts, rgb } = require('pdf-
 const TOKEN = 'TESTCASE4821';
 const UNIQUE_CHARS = [...new Set(TOKEN.split(''))];
 
+// 5x7ドットマトリクス字形(判読可能な字形が必要: OCR判定(Phase 0-3)では単なる
+// 塗りつぶし矩形だと「文字として読めない画像」になり、Type3の不具合とは無関係に
+// 常にOCR失敗するため、機械的な描画有無判定(Phase 0-2)用途にも共用できる
+// 最小限の判読可能字形に統一する)
+const GLYPH_BITMAPS = {
+  T: ['#####', '..#..', '..#..', '..#..', '..#..', '..#..', '..#..'],
+  E: ['#####', '#....', '#....', '####.', '#....', '#....', '#####'],
+  S: ['.####', '#....', '#....', '.###.', '....#', '....#', '####.'],
+  C: ['.####', '#....', '#....', '#....', '#....', '#....', '.####'],
+  A: ['..#..', '.#.#.', '#...#', '#####', '#...#', '#...#', '#...#'],
+  4: ['...#.', '..##.', '.#.#.', '#..#.', '#####', '...#.', '...#.'],
+  8: ['.###.', '#...#', '#...#', '.###.', '#...#', '#...#', '.###.'],
+  2: ['.###.', '#...#', '....#', '...#.', '..#..', '.#...', '#####'],
+  1: ['..#..', '.##..', '..#..', '..#..', '..#..', '..#..', '#####'],
+};
+const CELL_SIZE = 100; // 5列x7行 = 500x700 unit(FontBBox/Widthsの700枠内に収まる)
+
 function textBytes(str) {
   return Uint8Array.from(Buffer.from(str, 'latin1'));
+}
+
+/** 5x7ビットマップを d1 + 矩形塗りつぶしのCharProcストリームへ変換する */
+function buildGlyphContent(bitmap) {
+  const lines = ['700 0 0 0 700 700 d1'];
+  bitmap.forEach((row, rowIndex) => {
+    const y = (bitmap.length - 1 - rowIndex) * CELL_SIZE; // PDF座標系は下が原点のため上下反転
+    row.split('').forEach((cell, colIndex) => {
+      if (cell === '#') {
+        const x = colIndex * CELL_SIZE;
+        lines.push(`${x} ${y} ${CELL_SIZE} ${CELL_SIZE} re`);
+      }
+    });
+  });
+  lines.push('f', '');
+  return lines.join('\n');
 }
 
 async function buildType3Fixture() {
@@ -37,13 +70,15 @@ async function buildType3Fixture() {
   const context = pdfDoc.context;
   const page = pdfDoc.addPage([612, 792]);
 
-  // 各グリフは 700x700 の塗りつぶし矩形(実際の字形は不要、描画有無の判定のみが目的)
+  // 各グリフは5x7ドットマトリクスの判読可能な字形
   const glyphNameForChar = {};
   const charProcsEntries = {};
   UNIQUE_CHARS.forEach((ch, i) => {
     const glyphName = `g${i + 1}`;
     glyphNameForChar[ch] = glyphName;
-    const charProcContent = ['700 0 0 0 700 700 d1', '0 0 700 700 re', 'f', ''].join('\n');
+    const bitmap = GLYPH_BITMAPS[ch];
+    if (!bitmap) throw new Error(`GLYPH_BITMAPSに文字'${ch}'の字形定義がありません`);
+    const charProcContent = buildGlyphContent(bitmap);
     const streamRef = context.register(PDFRawStream.of(context.obj({}), textBytes(charProcContent)));
     charProcsEntries[glyphName] = streamRef;
   });
