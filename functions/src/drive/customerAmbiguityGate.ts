@@ -84,6 +84,21 @@ export async function isCustomerUnconfirmed(
   // 失うため採用せず、`check-customer-master-integrity.js`のwhitespaceIssues検出
   // (PR #732、本番マスターデータで前後空白付きnameは0件と実測済み)による継続監視で
   // 許容する判断とした。
+  //
+  // 内部スペース表記ゆれの残存リスク(Issue #774、2026-08-06追記): 上記と同種のギャップが
+  // 姓名間スペースの有無(例:「鬼頭 京子」/「鬼頭京子」)にも存在する
+  // (`shared/customerIdentity.ts`の`findSameNameCollisionNames`はスペース正規化して衝突検出
+  // するが、このクエリは生の`name`完全一致のため検出できない)。ただし本件は上記のtrim
+  // 不整合とは異なりスキーマ変更(`normalizedName`フィールド追加等)の検討も一度行った上で、
+  // 同じ判断(全件フェッチ回避・継続監視で許容)を踏襲する決定とした。理由:
+  // ①既知の実例(PR #741監査、kanameone2組)は`merge-notation-duplicate-masters.ts --execute`
+  // (2026-07-27実行、run 30257992453)で統合済み、cocoroは対象0組
+  // ②残る除外8組(furigana食い違い等で自動統合対象外)も精査済みで、別人が表記ゆれのみで
+  // 衝突した実例はこれまで一度も確認されていない(1件のみ読み表記自体の違い(ズ/ヅ)で実害なし)
+  // ③`merge-notation-duplicate-masters.ts`/`check-customer-master-integrity.js`は
+  // `workflow_dispatch`専用で定期実行の自動化はまだ無いため、次回手動監査までの間に新規の
+  // 表記ゆれが発生する理論上のリスクは残る。実例が確認された場合は速やかにP1へ昇格し
+  // 再検討する(Issue #774参照)。
   const collisionSnap = await deps.firestore
     .collection(MASTER_PATHS.customers)
     .where('name', '==', pre.trimmedName)
