@@ -51,7 +51,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { db } from '@/lib/firebase'
 import { callFunction } from '@/lib/callFunction'
 import { Checkbox } from '@/components/ui/checkbox'
-import { useInfiniteDocuments, useDocumentStats, useDocumentMasters, appendReprocessClearToBatch, type DocumentFilters, type SortField, type SortOrder } from '@/hooks/useDocuments'
+import { useInfiniteDocuments, useDocumentStats, useDocumentMasters, appendReprocessClearToBatch, invalidateGroupQueries, type DocumentFilters, type SortField, type SortOrder } from '@/hooks/useDocuments'
 import { useCareManagers, useCustomerIdentityLookup, type CustomerIdentityLookup } from '@/hooks/useMasters'
 import { DateRangeFilter, type DateRange } from '@/components/DateRangeFilter'
 import { isCustomerConfirmed } from '@/hooks/useProcessingHistory'
@@ -563,6 +563,10 @@ export function DocumentsPage() {
       // 一覧をリフレッシュ (部分的成功分も反映)
       queryClient.invalidateQueries({ queryKey: ['documentsInfinite'] })
       queryClient.invalidateQueries({ queryKey: ['documentStats'] })
+      // customerName/careManagerName等をクリアするためグルーピングキーから外れる書類が
+      // 生じる。単体再処理(useReprocessDocument)と同じ理由でグループ表示キャッシュも
+      // 無効化する(2026-08-06、PR #802セカンドオピニオンレビューで発覚した漏れを解消)
+      invalidateGroupQueries(queryClient)
       setBulkOperation(null)
 
       // detail/main もクリア対象 (appendReprocessClearToBatch) のため、成功分の
@@ -654,7 +658,9 @@ export function DocumentsPage() {
       }
 
       queryClient.invalidateQueries({ queryKey: ['documentStats'] })
-      queryClient.invalidateQueries({ queryKey: ['documentGroups'] })
+      // documentGroupsだけでなくgroupDocuments/groupStatsも無効化する
+      // (2026-08-06、PR #802セカンドオピニオンレビューで発覚した漏れを解消)
+      invalidateGroupQueries(queryClient)
     } catch (error) {
       console.error('Bulk delete error:', error)
       toast.error('一括削除に失敗しました')
