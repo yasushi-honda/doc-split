@@ -456,6 +456,13 @@ export function useDocumentEdit(
       // サーバー確定値で同期
       queryClient.invalidateQueries({ queryKey: ['documentsInfinite'] })
       queryClient.invalidateQueries({ queryKey: ['document', document.id] })
+      // customerName/careManager等グルーピングキーに使うフィールドが変わりうるため、
+      // グループ表示のキャッシュも合わせて無効化する(Issue #793: 編集後にCM別・利用者別
+      // グループ表示から書類が消えたように見える不具合対応。useReprocessDocumentの
+      // 既存パターン(useDocuments.ts)と同様だが、groupStatsが漏れていたため追加)
+      queryClient.invalidateQueries({ queryKey: ['documentGroups'] })
+      queryClient.invalidateQueries({ queryKey: ['groupDocuments'] })
+      queryClient.invalidateQueries({ queryKey: ['groupStats'] })
 
       setIsEditing(false)
       setEditedFields({})

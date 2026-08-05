@@ -225,6 +225,46 @@ describe('useDocumentEdit - careManager自動補完', () => {
     })
   })
 
+  describe('グループ表示キャッシュのinvalidate (Issue #793: 編集後にCM別・利用者別グループ表示から消える)', () => {
+    it('careManager変更を保存すると、documentGroups/groupDocuments/groupStatsもinvalidateされる', async () => {
+      const doc = makeDocument({ careManager: '板垣 亜紀子' })
+      const { result } = renderHook(() => useDocumentEdit(doc))
+
+      act(() => result.current.startEditing())
+      act(() => result.current.updateField('careManager', '長谷川 由紀'))
+
+      await act(async () => {
+        await result.current.saveChanges()
+      })
+
+      const invalidatedKeys = mockInvalidateQueries.mock.calls.map(
+        (call) => (call[0] as { queryKey: unknown[] }).queryKey[0]
+      )
+      expect(invalidatedKeys).toContain('documentGroups')
+      expect(invalidatedKeys).toContain('groupDocuments')
+      expect(invalidatedKeys).toContain('groupStats')
+    })
+
+    it('customerName変更を保存すると、documentGroups/groupDocuments/groupStatsもinvalidateされる', async () => {
+      const doc = makeDocument({ customerName: '田村 勝義' })
+      const { result } = renderHook(() => useDocumentEdit(doc))
+
+      act(() => result.current.startEditing())
+      act(() => result.current.updateField('customerName', '鈴木 花子'))
+
+      await act(async () => {
+        await result.current.saveChanges()
+      })
+
+      const invalidatedKeys = mockInvalidateQueries.mock.calls.map(
+        (call) => (call[0] as { queryKey: unknown[] }).queryKey[0]
+      )
+      expect(invalidatedKeys).toContain('documentGroups')
+      expect(invalidatedKeys).toContain('groupDocuments')
+      expect(invalidatedKeys).toContain('groupStats')
+    })
+  })
+
   describe('ロールバック', () => {
     it('Firestore書き込み失敗時にcareManagerがロールバックされる', async () => {
       mockUpdateDoc.mockRejectedValueOnce(new Error('write failed'))
