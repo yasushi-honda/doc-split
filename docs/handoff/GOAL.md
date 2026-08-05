@@ -59,7 +59,7 @@ kanameoneから3件の相談（①Google Drive出力フォルダをカテゴリ�
 
 **②担当CM別・利用者別グループ表示の不安定化（完了、PR #796、Issue #793クローズ済み）**: `useDocumentEdit.ts`の`saveChanges()`が保存後に`['documentsInfinite']`/`['document', id]`のみinvalidateしており、グループ表示が使う`['documentGroups']`/`['groupDocuments']`/`['groupStats']`が漏れていた（`useReprocessDocument`の既存パターンでも`groupStats`が漏れていたため併せて修正）。TDD Red→Green、frontend全519件PASS。dev(CI自動)・kanameone(Deploy Firebase Hosting、GHA)・cocoro(firebase deploy --only hosting手動)の全3環境へ反映完了。
 
-**③特定PDFで記入文字が消える（根本原因特定済み、実装は未了、Issue #794 OPEN）**: 実物PDFファイルは外部チャネル経由で受領不可という制約のもと、報告画面に写っていたファイル名を手がかりにkanameone本番のFirestore/Storageから既存read-only権限で該当ドキュメント（`documents/KqLtLI5V0bDInr6XSgcw`）を直接特定。PDFの記入内容（個人情報）には一切触れず、技術的構造（フォント種別・content streamのオペレータ種別）のみを抽出するスクリプトで調査（ダウンロードしたバイト列はパイプ経由でメモリ上のみ処理、ディスク非保存）。全32ページでテキスト描画に`Type3`フォントを使用しており、これはpdf.js側で既知の脆弱なレンダリング経路（[mozilla/pdf.js#12705](https://github.com/mozilla/pdf.js/issues/12705)、[#19634](https://github.com/mozilla/pdf.js/issues/19634)）と判明。罫線はパスストロークでフォント非依存のため常に表示され、テキストのみ消える症状と完全に整合。`renderForms={true}`は部分的な緩和策（non-readOnly + NeedAppearances欠如ケースは解決するが、readOnly + 外観ストリームなしのケースは解決しない）と検証したが、今回の実PDFはAcroForm自体が存在しないため無関係と判明・撤回。恒久対応（react-pdf/pdfjs-distのバージョンアップ確認、サーバー側ラスタライズ導入検討等）は設計判断が必要なため次セッションへ持ち越し。詳細はIssue #794の全コメント参照。
+**③特定PDFで記入文字が消える（完了、PR #798、Issue #794クローズ済み）**: 根本原因はpdf.js既知バグ（[mozilla/pdf.js#19954](https://github.com/mozilla/pdf.js/issues/19954)、`/FontDescriptor`に`/FontName`が無いType3フォントでフォント読込が失敗しグリフが描画されない）と特定。個人情報を含まない合成Type3フォントPDFを生成し、Playwright MCPで`pdfjs-dist` 4.8.69での再現（コンソール警告・ピクセルレベル両方）と5.4.296（PR#19955で修正済み）での解消を機械的に確認。`react-pdf` 9.2.1→10.4.1へアップグレードし（内包`pdfjs-dist`が4.8.69→5.4.296）、workerSrcもCDN実行時取得からViteのローカルバンドルへ変更。OCR側は別途GitHub Actions（`verify-type3-ocr`）でVertex AI Gemini（`gemini-3.5-flash`）が同フィクスチャを問題なく読み取れることを確認し（3/3成功）、「OCR分析にも失敗する」というIssue本文の記述はフロントエンド表示不具合との混同と判断、サーバー側ラスタライズは実装不要と結論。`codex review`+セカンドオピニオンエージェントの両方が指摘した回帰テストの`console.warn`未捕捉を修正・再検証済み。frontend全520件PASS、CI全PASS、`ui-verified`ラベル付与のうえマージ完了。
 
 ## 【完了・2026-08-02】OCR処理タイムアウト予防策（processOCR実行時間予算再設計）
 
@@ -178,7 +178,7 @@ cocoro/kanameから、書類（ケアプラン・医療・介護保険証等）�
 
 ## 🔄 中断点（in-flight）
 
-**Issue #794（③kanameone報告PDFのType3フォント文字消失）**: 根本原因は確定済み（実際のkanameone本番documentで全32ページType3フォント使用を確認、pdf.js既知の脆弱経路[mozilla/pdf.js#12705](https://github.com/mozilla/pdf.js/issues/12705)/[#19634](https://github.com/mozilla/pdf.js/issues/19634)と特定）。実装は未着手。次の一手: 恒久対応方針（react-pdf/pdfjs-distのバージョンアップでType3描画が改善されているか確認、またはサーバー側ラスタライズ導入検討）をplan mode等で計画してから着手する。検証コマンド: `gh issue view 794 --comments`で調査ログ全文を確認。**制約厳守**: 実物PDFの中身（個人情報）は外部チャネル経由は元より、私自身も画面表示・スクリーンショット等で視覚的に受け取ってはならない。技術的構造のみを抽出する調査パターン（PDFバイト列を`gcloud storage cat`でパイプ経由メモリ処理、ディスク非保存、フィールド名/値を一切出力しない）を踏襲すること。
+**Issue #794（③kanameone報告PDFのType3フォント文字消失）**: 2026-08-06 PR #798マージによりクローズ済み。詳細は上記「kanameoneからの相談3件対応」節③参照。
 
 cocoro側Drive連携Phase C（クライアント自身のOAuth接続）は外部依存待ち（継続、変更なし）。
 
