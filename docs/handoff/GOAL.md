@@ -51,6 +51,16 @@ kanameone・cocoroへのGoogle Drive連携Phase1本番展開。承認済み計�
   - [ ] flag OFF維持
   - [ ] **（新規）静的存在確認だけでなく、可能な範囲で実際にAPIを呼び出す動作確認を行う**: 今回のようにAPI有効化漏れは「Cloud Functionsの状態」「Secret/IAMの存在」等の静的チェックでは検出できず、クライアントが実際にOAuthフローを最後まで動かした瞬間にしか顕在化しなかった。理想はテスト用アカウントで一度OAuth接続を通すことだが、それが難しい場合は最低限`gcloud services list --enabled`の機械的突合を完了条件に含める
 
+## 【完了・2026-08-05】kanameoneからの相談3件対応（①②完了、③根本原因特定・実装は未了）
+
+kanameoneから3件の相談（①Google Drive出力フォルダをカテゴリ名で分類してほしい、②書類編集後に担当CM別・利用者別グループ表示が不安定、③特定PDFで記入文字が消える）が届き、triage→調査→実装→検証→デプロイまで対応した。
+
+**①Drive出力フォルダのカテゴリ名分類（完了、PR #795）**: `functions/src/drive/exportDocument.ts`の`documentCategory`セグメントが実際には`doc.documentType`（書類種別）を渡しておりUI表示（「書類カテゴリ」）との意味的ギャップがあった問題を修正。codex review 3ラウンドを経てP1指摘2件（date segmentの`onlyForCategories`判定が書類種別名で運用されているため`documentCategory`表示値の変更に巻き込まれる回帰／`doc.category`はOCR時点のスナップショットで手動訂正に追従しない）を解消し、`documentCategory`（表示名）と`documentType`（date判定専用）を`FolderPathDocInput`で分離、export実行時点で`masters/documents/items`を都度解決する設計に変更。unit 31件+integration 38件PASS、dev環境で実際にDrive exportをトリガーしフォルダ階層を視認確認（`documentCategory`と`documentType`が異なる書類でも両方が正しく機能することを実証）。kanameone・cocoro両本番へFunctionsデプロイ完了、4関数のupdateTimeで反映確認済み。
+
+**②担当CM別・利用者別グループ表示の不安定化（完了、PR #796、Issue #793クローズ済み）**: `useDocumentEdit.ts`の`saveChanges()`が保存後に`['documentsInfinite']`/`['document', id]`のみinvalidateしており、グループ表示が使う`['documentGroups']`/`['groupDocuments']`/`['groupStats']`が漏れていた（`useReprocessDocument`の既存パターンでも`groupStats`が漏れていたため併せて修正）。TDD Red→Green、frontend全519件PASS。dev(CI自動)・kanameone(Deploy Firebase Hosting、GHA)・cocoro(firebase deploy --only hosting手動)の全3環境へ反映完了。
+
+**③特定PDFで記入文字が消える（根本原因特定済み、実装は未了、Issue #794 OPEN）**: 実物PDFファイルは外部チャネル経由で受領不可という制約のもと、報告画面に写っていたファイル名を手がかりにkanameone本番のFirestore/Storageから既存read-only権限で該当ドキュメント（`documents/KqLtLI5V0bDInr6XSgcw`）を直接特定。PDFの記入内容（個人情報）には一切触れず、技術的構造（フォント種別・content streamのオペレータ種別）のみを抽出するスクリプトで調査（ダウンロードしたバイト列はパイプ経由でメモリ上のみ処理、ディスク非保存）。全32ページでテキスト描画に`Type3`フォントを使用しており、これはpdf.js側で既知の脆弱なレンダリング経路（[mozilla/pdf.js#12705](https://github.com/mozilla/pdf.js/issues/12705)、[#19634](https://github.com/mozilla/pdf.js/issues/19634)）と判明。罫線はパスストロークでフォント非依存のため常に表示され、テキストのみ消える症状と完全に整合。`renderForms={true}`は部分的な緩和策（non-readOnly + NeedAppearances欠如ケースは解決するが、readOnly + 外観ストリームなしのケースは解決しない）と検証したが、今回の実PDFはAcroForm自体が存在しないため無関係と判明・撤回。恒久対応（react-pdf/pdfjs-distのバージョンアップ確認、サーバー側ラスタライズ導入検討等）は設計判断が必要なため次セッションへ持ち越し。詳細はIssue #794の全コメント参照。
+
 ## 【完了・2026-08-02】OCR処理タイムアウト予防策（processOCR実行時間予算再設計）
 
 kanameone健全性レポートで発覚した書類1件のOCRタイムアウトエラー（`Px4myB4Y3t7jCFZSqS5J`、71ページPDF、"Processing timed out, max retries exceeded (5/5)"）を発端に、decision-makerの「今後予防可能か」という質問を受けて調査・plan mode承認済み計画（Step0実測→PR1計測ログ→PR2タイムアウト値引き上げ→PR3後処理軽量化）で予防策を実装、kanameone本番デプロイ・実機検証まで完遂。
@@ -168,7 +178,9 @@ cocoro/kanameから、書類（ケアプラン・医療・介護保険証等）�
 
 ## 🔄 中断点（in-flight）
 
-なし。本セッション（2026-08-02〜03）の作業（Issue #783→#787→#788→#789のofficeMatchMs/customerMatchMs最適化、全環境デプロイ）は完全に完了した状態で終了（詳細は上記「【完了・2026-08-03】Issue #789」節参照）。executor側で着手可能な残タスクはなし。cocoro側Drive連携Phase C（クライアント自身のOAuth接続）は外部依存待ち。
+**Issue #794（③kanameone報告PDFのType3フォント文字消失）**: 根本原因は確定済み（実際のkanameone本番documentで全32ページType3フォント使用を確認、pdf.js既知の脆弱経路[mozilla/pdf.js#12705](https://github.com/mozilla/pdf.js/issues/12705)/[#19634](https://github.com/mozilla/pdf.js/issues/19634)と特定）。実装は未着手。次の一手: 恒久対応方針（react-pdf/pdfjs-distのバージョンアップでType3描画が改善されているか確認、またはサーバー側ラスタライズ導入検討）をplan mode等で計画してから着手する。検証コマンド: `gh issue view 794 --comments`で調査ログ全文を確認。**制約厳守**: 実物PDFの中身（個人情報）は外部チャネル経由は元より、私自身も画面表示・スクリーンショット等で視覚的に受け取ってはならない。技術的構造のみを抽出する調査パターン（PDFバイト列を`gcloud storage cat`でパイプ経由メモリ処理、ディスク非保存、フィールド名/値を一切出力しない）を踏襲すること。
+
+cocoro側Drive連携Phase C（クライアント自身のOAuth接続）は外部依存待ち（継続、変更なし）。
 
 ## Drive連携Phase D: Stage D完了（2026-07-31、decision-maker「Drive Phase D進めて」で着手）
 
