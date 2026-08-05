@@ -30,7 +30,7 @@ import { PdfViewer } from '@/components/PdfViewer'
 import { PdfSplitModal } from '@/components/PdfSplitModal'
 import { MasterSelectField } from '@/components/MasterSelectField'
 import { ExtractionInfoPopover } from '@/components/ExtractionInfoPopover'
-import { useDocument, useDocumentDetail, useReprocessDocument, useDistributionSiblingCount, resolveDetailFields } from '@/hooks/useDocuments'
+import { useDocument, useDocumentDetail, useReprocessDocument, useDistributionSiblingCount, resolveDetailFields, invalidateGroupQueries } from '@/hooks/useDocuments'
 import { useDocumentEdit } from '@/hooks/useDocumentEdit'
 import { useCustomers, useOffices, useDocumentTypes, useCareManagers, useCustomerIdentityLookup } from '@/hooks/useMasters'
 import { resolveCustomerUnconfirmedReason, stripInternalSpaces } from '@shared/customerIdentity'
@@ -765,7 +765,9 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
         }
       )
       queryClient.invalidateQueries({ queryKey: ['documentStats'] })
-      queryClient.invalidateQueries({ queryKey: ['documentGroups'] })
+      // documentGroupsだけでなくgroupDocuments/groupStatsも無効化する
+      // (2026-08-06、PR #802セカンドオピニオンレビューで発覚した漏れを解消)
+      invalidateGroupQueries(queryClient)
       setShowDeleteDialog(false)
       onOpenChange(false)
       toast.success('書類を削除しました')

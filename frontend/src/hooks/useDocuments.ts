@@ -277,6 +277,40 @@ export function updateDocumentInListCache(
   )
 }
 
+/**
+ * 担当CM別・利用者別グループ表示が使う3種類のキャッシュ(documentGroups/groupDocuments/
+ * groupStats)を無効化する。customerName/careManagerName等グルーピングキーに使われる
+ * フィールドが変わりうる操作(単体編集・再処理・一括操作・削除)全てから共通で呼ぶ。
+ *
+ * 一覧の対象書類が1件に定まらない一括操作(一括再処理・一括削除、DocumentsPage.tsx)
+ * ではdocumentIdを持たないため、単体操作用の`invalidateDocumentAndGroupQueries`とは
+ * 別にこちらを直接呼ぶ(2026-08-06: PR #802のセカンドオピニオンレビューで、
+ * DocumentsPage.tsxの一括再処理・一括削除・DocumentDetailModal.tsxの個別削除が
+ * documentGroups等の一部または全部を無効化しておらず、単体編集/再処理と同型の
+ * 表示崩れが残っていたと判明したため分離・共通化)。
+ */
+export function invalidateGroupQueries(queryClient: QueryClient): void {
+  queryClient.invalidateQueries({ queryKey: ['documentGroups'] })
+  queryClient.invalidateQueries({ queryKey: ['groupDocuments'] })
+  queryClient.invalidateQueries({ queryKey: ['groupStats'] })
+}
+
+/**
+ * 書類本体を更新する全mutation(編集保存/再処理/汎用更新)が共通で呼ぶキャッシュ
+ * invalidateヘルパー。documentsInfinite/document本体に加え、上記`invalidateGroupQueries`
+ * も必ず合わせて無効化する。
+ *
+ * 各mutationが個別にinvalidateQueriesを手書きしていた旧実装では、useDocumentEdit.ts
+ * (Issue #793)とuseReprocessDocument双方で独立にgroupStatsのinvalidate漏れが発生し、
+ * さらにuseUpdateDocumentはグループ系キャッシュを一切invalidateしていなかった(2026-08-06
+ * 発見)。呼び出し箇所ごとに漏れが再発する構造的な問題だったため、一本化して解消する。
+ */
+export function invalidateDocumentAndGroupQueries(queryClient: QueryClient, documentId: string): void {
+  queryClient.invalidateQueries({ queryKey: ['documentsInfinite'] })
+  queryClient.invalidateQueries({ queryKey: ['document', documentId] })
+  invalidateGroupQueries(queryClient)
+}
+
 // ============================================
 // 再処理時クリアフィールド
 // ============================================
@@ -502,13 +536,10 @@ export function useReprocessDocument() {
         verified: false,
         ...(hasDistributionId ? {} : { customerName: '', customerConfirmed: false }),
       })
-      queryClient.invalidateQueries({ queryKey: ['document', documentId] })
       // detail/main もクリア対象 (appendReprocessClearToBatch) のため、キャッシュ済み
       // detailの古いOCR内容がポーリング再開(3秒後)まで表示され続けるのを防ぐ
       queryClient.invalidateQueries({ queryKey: ['documentDetail', documentId] })
-      queryClient.invalidateQueries({ queryKey: ['documentsInfinite'] })
-      queryClient.invalidateQueries({ queryKey: ['groupDocuments'] })
-      queryClient.invalidateQueries({ queryKey: ['documentGroups'] })
+      invalidateDocumentAndGroupQueries(queryClient, documentId)
       toast.success('再処理をリクエストしました。処理完了まで画面が自動更新されます。', { duration: 5000 })
       return true
     } catch (err) {
@@ -758,9 +789,8 @@ export function useUpdateDocument() {
   return useMutation({
     mutationFn: updateDocument,
     onSuccess: (_, { documentId }) => {
-      // 関連キャッシュを無効化
-      queryClient.invalidateQueries({ queryKey: ['documentsInfinite'] })
-      queryClient.invalidateQueries({ queryKey: ['document', documentId] })
+      // 関連キャッシュを無効化(グループ表示キャッシュも含む、invalidateDocumentAndGroupQueries参照)
+      invalidateDocumentAndGroupQueries(queryClient, documentId)
     },
   })
 }

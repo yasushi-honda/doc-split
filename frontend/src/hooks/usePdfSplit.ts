@@ -5,6 +5,7 @@
 
 import { useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { callFunction, getCallableErrorCode } from '@/lib/callFunction'
+import { invalidateGroupQueries } from './useDocuments'
 import type { SplitSuggestion, SplitSegment } from '@shared/types'
 
 // ============================================
@@ -122,6 +123,10 @@ async function splitPdf(request: SplitPdfRequest): Promise<SplitPdfResponse> {
 function invalidateSplitQueries(queryClient: QueryClient): void {
   queryClient.invalidateQueries({ queryKey: ['documentsInfinite'] })
   queryClient.invalidateQueries({ queryKey: ['document'] })
+  // 分割元書類がグループ表示(担当CM別・利用者別)に含まれていた場合、分割後は
+  // 分割元が消え新規書類が現れるため、グループ系キャッシュも無効化する
+  // (useDocuments.tsと同種の漏れを2026-08-06に予防的に解消)
+  invalidateGroupQueries(queryClient)
 }
 
 export function useSplitPdf() {

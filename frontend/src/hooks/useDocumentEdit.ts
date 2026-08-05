@@ -2,7 +2,7 @@ import { useState, useCallback, useRef, useEffect } from 'react'
 import { doc, updateDoc, collection, addDoc, serverTimestamp, Timestamp, deleteField } from 'firebase/firestore'
 import { useQueryClient } from '@tanstack/react-query'
 import { db, auth } from '../lib/firebase'
-import { updateDocumentInListCache } from './useDocuments'
+import { updateDocumentInListCache, invalidateDocumentAndGroupQueries } from './useDocuments'
 import { isValidCustomerSelection, isValidOfficeSelection, isValidDocumentTypeSelection } from '../lib/documentUtils'
 import { findSameNameCollisionNames } from '@shared/customerIdentity'
 import { generateDisplayFileName } from '@shared/generateDisplayFileName'
@@ -453,16 +453,10 @@ export function useDocumentEdit(
         })
       }
 
-      // サーバー確定値で同期
-      queryClient.invalidateQueries({ queryKey: ['documentsInfinite'] })
-      queryClient.invalidateQueries({ queryKey: ['document', document.id] })
-      // customerName/careManager等グルーピングキーに使うフィールドが変わりうるため、
-      // グループ表示のキャッシュも合わせて無効化する(Issue #793: 編集後にCM別・利用者別
-      // グループ表示から書類が消えたように見える不具合対応。useReprocessDocumentの
-      // 既存パターン(useDocuments.ts)と同様だが、groupStatsが漏れていたため追加)
-      queryClient.invalidateQueries({ queryKey: ['documentGroups'] })
-      queryClient.invalidateQueries({ queryKey: ['groupDocuments'] })
-      queryClient.invalidateQueries({ queryKey: ['groupStats'] })
+      // サーバー確定値で同期(グループ表示キャッシュも含む、invalidateDocumentAndGroupQueries参照。
+      // Issue #793で本フックのgroupStats漏れが発覚した際、useReprocessDocumentにも同型の漏れが
+      // 独立に存在していたため、2026-08-06に共通ヘルパーへ一本化した)
+      invalidateDocumentAndGroupQueries(queryClient, document.id)
 
       setIsEditing(false)
       setEditedFields({})

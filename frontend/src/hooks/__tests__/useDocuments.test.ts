@@ -5,7 +5,8 @@
  * - officeConfirmed / officeCandidates フィールドが正しく変換されること
  */
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
+import type { QueryClient } from '@tanstack/react-query'
 import { deleteField, Timestamp } from 'firebase/firestore'
 import {
   firestoreToDocument,
@@ -15,6 +16,7 @@ import {
   getDriveExportClearFields,
   resolveDetailFields,
   applySearchTextFilter,
+  invalidateDocumentAndGroupQueries,
 } from '../useDocuments'
 import type { Document } from '@shared/types'
 
@@ -716,5 +718,24 @@ describe('applySearchTextFilter (ADR-0018 Phase D、Issue #547: ocrResult条件�
     })
     expect(() => applySearchTextFilter(docsWithoutOcrResult, '山田')).not.toThrow()
     expect(applySearchTextFilter(docsWithoutOcrResult, '山田')).toEqual([docsWithoutOcrResult[0]])
+  })
+})
+
+describe('invalidateDocumentAndGroupQueries (2026-08-06: useDocumentEdit/useReprocessDocument/useUpdateDocument/useReprocessErrorで独立に発生していたグループ表示キャッシュinvalidate漏れの一本化)', () => {
+  it('documentsInfinite/document本体/documentGroups/groupDocuments/groupStatsの5種類を全てinvalidateする', () => {
+    const invalidateQueries = vi.fn()
+    const queryClient = { invalidateQueries } as unknown as QueryClient
+
+    invalidateDocumentAndGroupQueries(queryClient, 'doc-123')
+
+    const invalidatedKeys = invalidateQueries.mock.calls.map(
+      (call) => (call[0] as { queryKey: unknown[] }).queryKey
+    )
+    expect(invalidatedKeys).toContainEqual(['documentsInfinite'])
+    expect(invalidatedKeys).toContainEqual(['document', 'doc-123'])
+    expect(invalidatedKeys).toContainEqual(['documentGroups'])
+    expect(invalidatedKeys).toContainEqual(['groupDocuments'])
+    expect(invalidatedKeys).toContainEqual(['groupStats'])
+    expect(invalidateQueries).toHaveBeenCalledTimes(5)
   })
 })
