@@ -51,7 +51,7 @@ kanameone・cocoroへのGoogle Drive連携Phase1本番展開。承認済み計�
   - [ ] flag OFF維持
   - [ ] **（新規）静的存在確認だけでなく、可能な範囲で実際にAPIを呼び出す動作確認を行う**: 今回のようにAPI有効化漏れは「Cloud Functionsの状態」「Secret/IAMの存在」等の静的チェックでは検出できず、クライアントが実際にOAuthフローを最後まで動かした瞬間にしか顕在化しなかった。理想はテスト用アカウントで一度OAuth接続を通すことだが、それが難しい場合は最低限`gcloud services list --enabled`の機械的突合を完了条件に含める
 
-## 【完了・2026-08-05】kanameoneからの相談3件対応（①②完了、③根本原因特定・実装は未了）
+## 【完了・2026-08-05】kanameoneからの相談3件対応（①②③完了、全環境反映済み）
 
 kanameoneから3件の相談（①Google Drive出力フォルダをカテゴリ名で分類してほしい、②書類編集後に担当CM別・利用者別グループ表示が不安定、③特定PDFで記入文字が消える）が届き、triage→調査→実装→検証→デプロイまで対応した。
 
@@ -59,7 +59,7 @@ kanameoneから3件の相談（①Google Drive出力フォルダをカテゴリ�
 
 **②担当CM別・利用者別グループ表示の不安定化（完了、PR #796、Issue #793クローズ済み）**: `useDocumentEdit.ts`の`saveChanges()`が保存後に`['documentsInfinite']`/`['document', id]`のみinvalidateしており、グループ表示が使う`['documentGroups']`/`['groupDocuments']`/`['groupStats']`が漏れていた（`useReprocessDocument`の既存パターンでも`groupStats`が漏れていたため併せて修正）。TDD Red→Green、frontend全519件PASS。dev(CI自動)・kanameone(Deploy Firebase Hosting、GHA)・cocoro(firebase deploy --only hosting手動)の全3環境へ反映完了。
 
-**③特定PDFで記入文字が消える（完了、PR #798、Issue #794クローズ済み）**: 根本原因はpdf.js既知バグ（[mozilla/pdf.js#19954](https://github.com/mozilla/pdf.js/issues/19954)、`/FontDescriptor`に`/FontName`が無いType3フォントでフォント読込が失敗しグリフが描画されない）と特定。個人情報を含まない合成Type3フォントPDFを生成し、Playwright MCPで`pdfjs-dist` 4.8.69での再現（コンソール警告・ピクセルレベル両方）と5.4.296（PR#19955で修正済み）での解消を機械的に確認。`react-pdf` 9.2.1→10.4.1へアップグレードし（内包`pdfjs-dist`が4.8.69→5.4.296）、workerSrcもCDN実行時取得からViteのローカルバンドルへ変更。OCR側は別途GitHub Actions（`verify-type3-ocr`）でVertex AI Gemini（`gemini-3.5-flash`）が同フィクスチャを問題なく読み取れることを確認し（3/3成功）、「OCR分析にも失敗する」というIssue本文の記述はフロントエンド表示不具合との混同と判断、サーバー側ラスタライズは実装不要と結論。`codex review`+セカンドオピニオンエージェントの両方が指摘した回帰テストの`console.warn`未捕捉を修正・再検証済み。frontend全520件PASS、CI全PASS、`ui-verified`ラベル付与のうえマージ完了。
+**③特定PDFで記入文字が消える（完了、PR #798、Issue #794クローズ済み）**: 根本原因はpdf.js既知バグ（[mozilla/pdf.js#19954](https://github.com/mozilla/pdf.js/issues/19954)、`/FontDescriptor`に`/FontName`が無いType3フォントでフォント読込が失敗しグリフが描画されない）と特定。個人情報を含まない合成Type3フォントPDFを生成し、Playwright MCPで`pdfjs-dist` 4.8.69での再現（コンソール警告・ピクセルレベル両方）と5.4.296（PR#19955で修正済み）での解消を機械的に確認。`react-pdf` 9.2.1→10.4.1へアップグレードし（内包`pdfjs-dist`が4.8.69→5.4.296）、workerSrcもCDN実行時取得からViteのローカルバンドルへ変更。OCR側は別途GitHub Actions（`verify-type3-ocr`）でVertex AI Gemini（`gemini-3.5-flash`）が同フィクスチャを問題なく読み取れることを確認し（3/3成功）、「OCR分析にも失敗する」というIssue本文の記述はフロントエンド表示不具合との混同と判断、サーバー側ラスタライズは実装不要と結論。`codex review`+セカンドオピニオンエージェントの両方が指摘した回帰テストの`console.warn`未捕捉を修正・再検証済み。frontend全520件PASS、CI全PASS、`ui-verified`ラベル付与のうえマージ完了。**マージ直後はdevのみ反映（kanameone/cocoro Hostingの直近デプロイがPR #798マージ時刻より前と判明）で本番未反映のギャップがあったが、2026-08-05中にdecision-maker承認のうえ両クライアントへ反映**: kanameoneはGitHub Actions「Deploy Firebase Hosting」実行（success、マージ後の再デプロイと確認済み）、cocoroは`/deploy`スキル手順の手動デプロイ（`firebase deploy --only hosting -P cocoro`、後片付けチェックリスト確認済み）で対応。これによりkanameoneからの相談3件（①②③）は全てdev/kanameone/cocoro全3環境への反映が完了。
 
 ## 【完了・2026-08-02】OCR処理タイムアウト予防策（processOCR実行時間予算再設計）
 
