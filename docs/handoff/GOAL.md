@@ -184,9 +184,9 @@ cocoro/kanameから、書類（ケアプラン・医療・介護保険証等）�
 
 **対象タスク**: kanameone backfillマーカー20件滞留の原因調査・修正（下記「Drive連携Phase D」節参照）
 
-**直前の状態**: PR #804（`sweepStuckDriveExports`のrequeuedカウンタ修正）はマージ済み・kanameone/cocoro両環境へデプロイ済み（2026-08-06 03:10/03:21）。デプロイ直後のCloud Loggingで修正の有効性は実測確認済み（`requeued=1, failed=39`で1ページ40件を丸ごと走査、カーソルindex 140→209へ前進）。backfillマーカー20件の完全解消（0件化）は自然進行中で未確認。
+**直前の状態**: PR #804（`sweepStuckDriveExports`のrequeuedカウンタ修正）はマージ済み・kanameone/cocoro両環境へデプロイ済み（2026-08-06 03:10/03:21）。デプロイ直後のCloud Loggingで修正の有効性は実測確認済み（`requeued=1, failed=39`で1ページ40件を丸ごと走査、カーソルindex 140→209へ前進）。**2026-08-06 04:32 UTC時点の再確認でbackfillマーカーは20件→9件に減少**（04:22:53のsweep実行で`requeued=10, failed=5`を記録し末尾のbackfillマーカー群に到達・10件成功、カーソルは末尾到達により`null`へリセットされ次回は先頭から周回）。順調に解消が進行中だが完全解消（0件化）は未確認。
 
-**次の一手**: `ScheduleWakeup`で2026-08-06 13:32 JST頃に本セッションが自動再開し、Firestore REST APIで`docsplit-kanameone`の`documents`コレクション中`driveExportError`に`[backfill]`を含むdocの件数を再確認する設定済み。セッションが既に終了している場合は次回catchup時に以下で手動確認:
+**次の一手**: `ScheduleWakeup`で2026-08-06 14:33 JST頃に本セッションが自動再開し、Firestore REST APIで`docsplit-kanameone`の`documents`コレクション中`driveExportError`に`[backfill]`を含むdocの件数を再確認する設定済み。セッションが既に終了している場合は次回catchup時に以下で手動確認:
 
 ```bash
 TOKEN=$(gcloud auth print-access-token --account=hy.unimail.11@gmail.com)
