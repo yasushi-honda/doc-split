@@ -1,5 +1,5 @@
 ---
-updated: 2026-08-03
+updated: 2026-08-06
 ---
 <!-- 前ミッション(dev/kanameone/cocoro環境監査・保守検証)は2026-07-20完遂。全文はdocs/handoff/LATEST.md参照。 -->
 <!-- Google Drive連携Phase1 (MVP)実装ミッションは2026-07-22完了(PR#700マージ)。詳細は本ファイル末尾「Google Drive連携Phase1完遂」節+docs/handoff/LATEST.md参照。 -->
@@ -182,6 +182,20 @@ cocoro/kanameから、書類（ケアプラン・医療・介護保険証等）�
 
 ## 🔄 中断点（in-flight）
 
+**対象タスク**: kanameone backfillマーカー20件滞留の原因調査・修正（下記「Drive連携Phase D」節参照）
+
+**直前の状態**: PR #804（`sweepStuckDriveExports`のrequeuedカウンタ修正）はマージ済み・kanameone/cocoro両環境へデプロイ済み（2026-08-06 03:10/03:21）。デプロイ直後のCloud Loggingで修正の有効性は実測確認済み（`requeued=1, failed=39`で1ページ40件を丸ごと走査、カーソルindex 140→209へ前進）。backfillマーカー20件の完全解消（0件化）は自然進行中で未確認。
+
+**次の一手**: `ScheduleWakeup`で2026-08-06 13:32 JST頃に本セッションが自動再開し、Firestore REST APIで`docsplit-kanameone`の`documents`コレクション中`driveExportError`に`[backfill]`を含むdocの件数を再確認する設定済み。セッションが既に終了している場合は次回catchup時に以下で手動確認:
+
+```bash
+TOKEN=$(gcloud auth print-access-token --account=hy.unimail.11@gmail.com)
+curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"structuredQuery":{"from":[{"collectionId":"documents"}],"where":{"fieldFilter":{"field":{"fieldPath":"driveExportStatus"},"op":"IN","value":{"arrayValue":{"values":[{"stringValue":"error"},{"stringValue":"exporting"}]}}}},"select":{"fields":[{"fieldPath":"driveExportError"}]},"limit":2000}}' \
+  "https://firestore.googleapis.com/v1/projects/docsplit-kanameone/databases/(default)/documents:runQuery" \
+  | grep -o '\[backfill\]' | wc -l
+```
+
 **Issue #794（③kanameone報告PDFのType3フォント文字消失）**: 2026-08-06 PR #798マージによりクローズ済み。詳細は上記「kanameoneからの相談3件対応」節③参照。
 
 cocoro側Drive連携Phase C（クライアント自身のOAuth接続）は外部依存待ち（継続、変更なし）。
@@ -212,6 +226,10 @@ cocoro側Drive連携Phase C（クライアント自身のOAuth接続）は外部
 - 2回目スポットチェック(2026-08-03、GHA `run-ops-script.yml`経由): verified総数1,621件中、exported 1,299件(19件から大幅に単調増加、80.1%)、exporting 0件、error(backfillマーカー)20件、error(顧客未確定)192件、**error(実エラー)109件(比率6.7%、異常停止基準20%を大幅に下回り健全)**、フィールド不在(未backfill)1件でbackfillマーキングはほぼ完了段階。①単調増加②実エラー比率20%未満③異常spikeなし、いずれも異常なしと確認。cocoro側`settings/drive`はFirestore REST APIで直接確認(decision-maker明示許可済み)、`oauthClientId`のみで`authMode`等未設定・`updateTime`も2026-07-23のまま変化なし、Phase C未着手を再確認
 
 **次の一手（監視継続、番号単位の追加認可は不要・自然経過を見守る）**: 定期スイープ(15分毎・10件/回)により残りのbackfillマーカー分が自動でdrainされる。次回セッション/catchup時に`drive-export-status-report`で状態分布を再確認し、①exported数が単調増加しているか②実エラー比率が20%を超えていないか③`AmbiguousFolderError`/`AmbiguousFile Error`等のspikeがないかを確認する。異常時は`set-feature-flag --flag driveExport --value false`で新規停止(in-flightは完走、Drive PDFは自動削除されない)。cocoro側はPhase C（クライアントOAuth接続）が未完了のため対象外、外部依存で待機継続。
+
+**backfillマーカー20件が3日間不変だった根本原因を特定・修正（2026-08-06、PR #804マージ・kanameone/cocoro両環境デプロイ完了）**: 2026-08-03スポットチェックのbackfillマーカー20件が2026-08-06のcatchup再確認でも同数のまま不変だったため、decision-maker指示で調査に着手。Firestore実測（`driveExportSweepState`カーソル位置とerror/exporting全354件のdocId順比較）・Cloud Logging実測（直近実行が毎回`requeued=10`固定、内訳が全て`Drive export failed`）により、`sweepStuckDriveExports()`の`requeued`カウンタが「claim試行の成功」を「exportDocument()の実際の成功」と混同しており、恒久的に失敗し続けるdoc（顧客未確定192件・フォルダ名解決不可等）がdocumentId順で先行するため毎回の実行(15分毎)がその10件だけでBATCH_SIZE上限に達し、backfillマーカー20件（docId順で末尾に集中）へ永久に到達できないstarvationが根本原因と確定。TDDで恒久失敗10件が先行する回帰テストを追加しRed確認後、`requeued`を実際に`exported`へ遷移した件数のみに限定する修正でGreen化（claim成功かつexport失敗は新設の`failed`で別集計）。functions単体テスト2023件・integration13件全PASS、`build`/`lint`0エラー、CI全PASS。PR #804マージ後kanameone・cocoro双方へGitHub Actions経由でFunctionsデプロイ完了（updateTime実測確認済み）。**デプロイ直後のCloud Loggingで修正の有効性を実測確認**（旧: `requeued=10, skipped=0`で1ページ40件中10件しか走査できず早期break → 新: `requeued=1, failed=39, skipped=0`で1ページ40件を丸ごと走査、カーソルがindex 140→209へ一気に前進）。backfillマーカー20件の完全解消はスイープの自然進行で今後1時間程度を見込み、2026-08-06 13:32 JST頃にセッション内`ScheduleWakeup`で自動再確認予定（対応済みの証跡は次回catchup時のFirestore再確認でも可）。
+
+**申し送り（次回`/checkup`等の技術的負債点検向け、decision-maker判断待ちのため即着手化しない）**: `sweepStuckDriveExports`のバッチ/カーソル処理ロジックは2026-07-22（cursor未実装→追加、page末尾までの前進によるdoc取りこぼし→lastVisitedId方式へ修正）と今回2026-08-06（claim成功とexport成功の混同）で、同一関数に対し計3回の設計起因バグ修正が発生している。CLAUDE.md Debug Protocol「同一機能に対するバグ修正PRが3件連続→元PRの設計を再レビュー」に該当しうる。今回の調査で追加発見した未修正の残存挙動（正確性には影響しないが効率に影響）: `candidates.size < PAGE_SIZE`条件でのカーソルリセットが早期break時にも無条件発火するため、docId順で末尾かつ大量の恒久失敗docに隣接する少数doc群がある場合、複数回のスイープ往復が必要になりうる（今回のPR #804で実害は解消済みだが、将来同型のdoc分布が再現した場合に処理が遅延する可能性は残る）。設計の再レビュー要否はdecision-maker判断。
 
 **副次的に残る判断事項**:
 - PR-D4 Phase A（read-only監査）: genesis provenance実装により`processed/`配下の残課題（495件、Issue #432被害候補）の真の救済可能性を把握する価値は残るが、優先度は下がった（96%はgenesisで既に解消見込みのため）
