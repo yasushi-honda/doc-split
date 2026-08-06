@@ -117,7 +117,7 @@ describe('sweepStuckDriveExports (ADR-0022 Phase 1 Task8)', () => {
       downloadFile: async () => Buffer.from('x'),
     });
 
-    expect(result).to.deep.equal({ requeued: 1, skipped: 0 });
+    expect(result).to.deep.equal({ requeued: 1, failed: 0, skipped: 0 });
     expect(createCalls).to.have.lengthOf(2);
     const data = await getDoc(docId);
     expect(data.driveExportStatus).to.equal('exported');
@@ -140,7 +140,7 @@ describe('sweepStuckDriveExports (ADR-0022 Phase 1 Task8)', () => {
       downloadFile: async () => Buffer.from('x'),
     });
 
-    expect(result).to.deep.equal({ requeued: 1, skipped: 0 });
+    expect(result).to.deep.equal({ requeued: 1, failed: 0, skipped: 0 });
     expect(createCalls).to.have.lengthOf(2);
     const data = await getDoc(docId);
     expect(data.driveExportStatus).to.equal('exported');
@@ -159,7 +159,7 @@ describe('sweepStuckDriveExports (ADR-0022 Phase 1 Task8)', () => {
       downloadFile: async () => Buffer.from('x'),
     });
 
-    expect(result).to.deep.equal({ requeued: 0, skipped: 1 });
+    expect(result).to.deep.equal({ requeued: 0, failed: 0, skipped: 1 });
     expect(createCalls).to.have.lengthOf(0);
   });
 
@@ -177,7 +177,7 @@ describe('sweepStuckDriveExports (ADR-0022 Phase 1 Task8)', () => {
       downloadFile: async () => Buffer.from('x'),
     });
 
-    expect(result).to.deep.equal({ requeued: 1, skipped: 0 });
+    expect(result).to.deep.equal({ requeued: 1, failed: 0, skipped: 0 });
     expect(createCalls).to.have.lengthOf(2);
     const data = await getDoc(docId);
     expect(data.driveExportStatus).to.equal('exported');
@@ -195,7 +195,7 @@ describe('sweepStuckDriveExports (ADR-0022 Phase 1 Task8)', () => {
       downloadFile: async () => Buffer.from('x'),
     });
 
-    expect(result).to.deep.equal({ requeued: 0, skipped: 1 });
+    expect(result).to.deep.equal({ requeued: 0, failed: 0, skipped: 1 });
     expect(createCalls).to.have.lengthOf(0);
   });
 
@@ -212,7 +212,7 @@ describe('sweepStuckDriveExports (ADR-0022 Phase 1 Task8)', () => {
       downloadFile: async () => Buffer.from('x'),
     });
 
-    expect(result).to.deep.equal({ requeued: 0, skipped: 0 });
+    expect(result).to.deep.equal({ requeued: 0, failed: 0, skipped: 0 });
     expect(createCalls).to.have.lengthOf(0);
   });
 
@@ -271,8 +271,66 @@ describe('sweepStuckDriveExports (ADR-0022 Phase 1 Task8)', () => {
       downloadFile: async () => Buffer.from('x'),
     });
 
-    expect(result).to.deep.equal({ requeued: 0, skipped: 0 });
+    expect(result).to.deep.equal({ requeued: 0, failed: 0, skipped: 0 });
     expect(createCalls).to.have.lengthOf(0);
+  });
+
+  it('claimに成功してもexportDocument()が失敗したdocはfailedとして数え、requeued(実成功件数)には含めない(sweepカウンタの成功/失敗混同によるstarvation回帰)', async () => {
+    const staleUpdatedAt = admin.firestore.Timestamp.fromMillis(
+      Date.now() - DRIVE_EXPORT_ERROR_RETRY_THRESHOLD_MS - BUFFER_MS
+    );
+    // documentIdの辞書順でfailingDocsがsuccessDocより必ず先に来るよう明示IDを使う。
+    const failingIds = Array.from({ length: DRIVE_EXPORT_SCHEDULED_BATCH_SIZE }, (_, i) => `a-fail-${i}`);
+    const successId = 'z-success';
+    const baseDoc = {
+      fileId: 'gmail-file-1',
+      fileName: 'original.pdf',
+      mimeType: 'application/pdf',
+      documentType: 'ケアプラン',
+      customerName: '鈴木花子',
+      officeName: '事業所A',
+      fileDate: admin.firestore.Timestamp.fromDate(new Date(2026, 0, 1)),
+      isDuplicateCustomer: false,
+      totalPages: 1,
+      targetPageNumber: 1,
+      status: 'processed',
+      careManager: '田中太郎',
+      customerId: 'customer-1',
+      verified: true,
+      driveExportStatus: 'error',
+      updatedAt: staleUpdatedAt,
+    };
+    await Promise.all(
+      failingIds.map((id) =>
+        db.doc(`documents/${id}`).set({
+          ...baseDoc,
+          fileUrl: 'gs://test-bucket/original/fail.pdf',
+          driveExportError: '恒久的に失敗するエラー(顧客未確定等を模擬)',
+        })
+      )
+    );
+    await db.doc(`documents/${successId}`).set({
+      ...baseDoc,
+      fileUrl: 'gs://test-bucket/original/success.pdf',
+      driveExportError: '[backfill] Feature Flag有効化前にverifiedされたdocumentの遡及エクスポート待ち',
+    });
+    const { drive } = makeFakeDrive();
+
+    const result = await sweepStuckDriveExports(db, {
+      drive,
+      downloadFile: async (fileUrl: string) => {
+        if (fileUrl.includes('fail')) {
+          throw new Error('恒久的に失敗するエラー(simulated)');
+        }
+        return Buffer.from('x');
+      },
+    });
+
+    // 修正前: claim成功時点でrequeued++するため、恒久失敗10件だけでBATCH_SIZE上限に
+    // 達しsuccessIdへ到達する前にbreakしていた(successIdはerrorのまま取り残される)。
+    expect((await getDoc(successId)).driveExportStatus).to.equal('exported');
+    expect(result.requeued).to.equal(1);
+    expect(result.failed).to.equal(DRIVE_EXPORT_SCHEDULED_BATCH_SIZE);
   });
 
   describe('ページネーション(code-review high指摘#44対応)', () => {

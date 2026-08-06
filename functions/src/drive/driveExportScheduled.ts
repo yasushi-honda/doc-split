@@ -64,7 +64,10 @@ export const DRIVE_EXPORT_ERROR_RETRY_THRESHOLD_MS = 60 * 60 * 1000;
 export const DRIVE_EXPORT_STUCK_EXPORTING_THRESHOLD_MS = 10 * 60 * 1000;
 
 export interface SweepResult {
+  /** exportDocument()が実際に成功しexportedへ遷移した件数(BATCH_SIZE上限の判定対象)。 */
   requeued: number;
+  /** claimには成功したがexportDocument()が失敗し再度errorへ戻った件数。 */
+  failed: number;
   skipped: number;
 }
 
@@ -88,7 +91,7 @@ export async function sweepStuckDriveExports(
   }
   const candidates = await query.get();
 
-  const result: SweepResult = { requeued: 0, skipped: 0 };
+  const result: SweepResult = { requeued: 0, failed: 0, skipped: 0 };
   if (candidates.empty) {
     // ページ末尾(または対象0件)。次回実行は先頭から周回する。
     if (cursor) {
@@ -126,10 +129,21 @@ export async function sweepStuckDriveExports(
     try {
       // eslint-disable-next-line no-await-in-loop
       const claimed = await executeDriveExport(firestore, docSnapshot.id, exportDeps, status);
-      if (claimed) {
+      if (!claimed) {
+        result.skipped++; // クレーム失敗(並行して他呼び出しが処理済み等)
+        continue;
+      }
+      // executeDriveExport()はexportDocument()が失敗してもclaim成立のみでtrueを返すため、
+      // claimed(試行)とexported(成功)を混同するとBATCH_SIZE上限が恒久的に失敗し続ける
+      // doc(顧客未確定等)だけで消費され、その先の正常docに永久に到達できない
+      // (starvation、kanameone本番でbackfillマーカー20件が滞留した実障害の根本原因)。
+      // requeuedは実際にexportedへ遷移した件数のみを数える。
+      // eslint-disable-next-line no-await-in-loop
+      const finalSnap = await docSnapshot.ref.get();
+      if (finalSnap.data()?.driveExportStatus === 'exported') {
         result.requeued++;
       } else {
-        result.skipped++; // クレーム失敗(並行して他呼び出しが処理済み等)
+        result.failed++;
       }
     } catch (error) {
       console.error(`[driveExportScheduled] requeue failed for ${docSnapshot.id}:`, error);
@@ -163,7 +177,7 @@ export const driveExportScheduled = onSchedule(
 
     const result = await sweepStuckDriveExports(db);
     console.log(
-      `[driveExportScheduled] completed: requeued=${result.requeued}, skipped=${result.skipped}`
+      `[driveExportScheduled] completed: requeued=${result.requeued}, failed=${result.failed}, skipped=${result.skipped}`
     );
   }
 );
