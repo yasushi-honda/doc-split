@@ -65,6 +65,16 @@ kanameoneから3件の相談（①Google Drive出力フォルダをカテゴリ�
 
 decision-makerから「クライアント指摘で初めて分かる問題を今後無くしたい」と相談を受け、②(Issue #793)の根本原因(React Queryキャッシュinvalidate漏れ)が他にも同型で残存していないか調査。過去の同種インシデント(2026-02のqueryKey不一致修正)も踏まえ、以下4箇所に独立して同じ漏れが現存していると判明: `useReprocessDocument`(groupStats欠落)・`useUpdateDocument`(グループ系全欠落)・`useReprocessError`(document本体+グループ系全欠落)。さらに`codex review`後のセカンドオピニオン(`pr-review-toolkit:code-reviewer`)が`DocumentsPage.tsx`の`handleBulkReprocess`(一括再処理、confidence 93)・`handleBulkDelete`/`DocumentDetailModal.tsx`の`handleDelete`(confidence 84)にも同型の漏れを追加発見。共通ヘルパー`invalidateDocumentAndGroupQueries`/`invalidateGroupQueries`を`useDocuments.ts`に新設し計6箇所を一本化。`pr-review-toolkit:pr-test-analyzer`の指摘(rating 8、バグの本丸2箇所`useReprocessDocument`/`useUpdateDocument`にrenderHookベースの検証テストが皆無)を受け回帰テストも追加。`codex review`は初回(medium)→large tier再判定によるhigh effort再実行→修正反映後の再実行の計3回すべて指摘0件。frontend全526件PASS。Firebase Emulator+Playwright MCPで実機確認（担当CM別グループビューで再処理・削除の両方を実行し、ページリロードなしで統計・グループ内訳がリアルタイムに正しく更新されることを確認、`ui-verified`ラベル付与）。PR #802マージ後、kanameone(GitHub Actions)・cocoro(`/deploy`スキル手動手順)へ即日デプロイ完了。`DocumentsPage.tsx`/`DocumentDetailModal.tsx`は既存のテストファイル自体が存在しない構造的ギャップがあり、本PRのスコープでは新規テスト基盤構築は見送り(コード修正のみ)。
 
+## 【完了・2026-08-06】Issue #503実装（sanitize drop reason付与、PR #808）+ #251/#238 ROI判断・#774既完了確認
+
+catchup後、積み残しIssueのうちdecision-maker選定の#774(BE Drive export gateの表記ゆれ正規化)へ着手しようとしたところ、**#774は既にPR #800(2026-08-06)でコード改修なしの調査結論として対応完了済み**（`customerAmbiguityGate.ts`にコメント追記のみ）と判明、追加作業不要と確認。
+
+続けて#503(sanitize droppedIdsにdrop reason付与、observability改善)を軽量インラインプランで実装: `sanitizeMasterData.ts`の3サニタイザ(customer/office/document)が`droppedEntries: {id, reason: 'invalid-type'|'empty-name'}[]`を返すよう拡張、既存`droppedIds`は`droppedEntries`から導出する後方互換フィールドとして維持（`scripts/compare-*.ts`等の既存callerは無改修）。`loadMasterData.ts`の`reportSanitizeDrops`のwarn/safeLogErrorメッセージにreason内訳を追加（例: `offices: 3/450 (invalid-type: 1, empty-name: 2; ids: id1, id2, id3)`）。TDD Red→Greenで新規テスト7件追加、functions全体2027 passing（回帰なし）、tsc/lint 0 errors、`codex review --base main -c model_reasoning_effort=medium` findings 0件。PR #808作成→CI全PASS→マージ・Issue #503クローズ済み。
+
+**#251(summaryGenerator runtime unit test)・#238(force-reindex孤児posting検出)は着手見送り**: 両方とも該当Issue本文に明示的な待機条件が記載されている（#251はsinon/proxyquire未導入によるVertex AI mock化コストが伴うため「他タスクでバンドル化するまで待機」、#238は実害未観測のP2でトリガー未発火）。decision-makerに状況を説明しROI判断を委ねた結果、両方とも今回は見送りで合意。
+
+**kanameone/cocoro反映状況（実測確認）**: PR #808はmain→dev自動デプロイのみ完了、**kanameone/cocoroへは未反映**（`Deploy Cloud Functions`workflow_dispatchが必要）。直近のクライアント環境デプロイは2026-08-06 03:05(kanameone)/03:13(cocoro)のPR #804(sweep starvationバグ修正)時点で止まっている。#503自体はobservability向上のみで本番挙動に影響しないため、decision-maker判断で即時デプロイは見送り、次回の`Deploy Cloud Functions`実行時に他の変更とまとめて反映する方針。
+
 ## 【完了・2026-08-02】OCR処理タイムアウト予防策（processOCR実行時間予算再設計）
 
 kanameone健全性レポートで発覚した書類1件のOCRタイムアウトエラー（`Px4myB4Y3t7jCFZSqS5J`、71ページPDF、"Processing timed out, max retries exceeded (5/5)"）を発端に、decision-makerの「今後予防可能か」という質問を受けて調査・plan mode承認済み計画（Step0実測→PR1計測ログ→PR2タイムアウト値引き上げ→PR3後処理軽量化）で予防策を実装、kanameone本番デプロイ・実機検証まで完遂。
