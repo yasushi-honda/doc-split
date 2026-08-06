@@ -61,6 +61,23 @@ describe('sanitizeMasterData', () => {
       expect(result.droppedIds).to.deep.equal(['c1', 'c2']);
     });
 
+    it('droppedEntriesにdropの理由(reason)が付与される(#503)', () => {
+      const input = [
+        { id: 'c1', name: '' }, // 空文字 → empty-name
+        { id: 'c2', name: undefined as unknown as string }, // 欠落 → invalid-type
+        { id: 'c3', name: { text: '鈴木' } as unknown as string }, // オブジェクト → invalid-type
+        { id: 'c4', name: '鈴木一郎' },
+      ];
+      const result = sanitizeCustomerMasters(input);
+      expect(result.droppedEntries).to.deep.equal([
+        { id: 'c1', reason: 'empty-name' },
+        { id: 'c2', reason: 'invalid-type' },
+        { id: 'c3', reason: 'invalid-type' },
+      ]);
+      // droppedIds は droppedEntries から導出される後方互換フィールド
+      expect(result.droppedIds).to.deep.equal(result.droppedEntries.map((e) => e.id));
+    });
+
     it('aliasesが文字列の場合、配列に変換する', () => {
       const input = [{
         id: 'c1',
@@ -114,6 +131,19 @@ describe('sanitizeMasterData', () => {
       }];
       const result = sanitizeOfficeMasters(input);
       expect(result.items[0].shortName).to.equal('さくら');
+    });
+
+    it('droppedEntriesにdropの理由(reason)が付与される(#503)', () => {
+      const input = [
+        { id: 'o1', name: '' }, // 空文字 → empty-name
+        { id: 'o2', name: 123 as unknown as string }, // 数値 → invalid-type
+        { id: 'o3', name: 'デイサービスさくら' },
+      ];
+      const result = sanitizeOfficeMasters(input);
+      expect(result.droppedEntries).to.deep.equal([
+        { id: 'o1', reason: 'empty-name' },
+        { id: 'o2', reason: 'invalid-type' },
+      ]);
     });
 
   });
@@ -211,6 +241,19 @@ describe('sanitizeMasterData', () => {
       }];
       const result = sanitizeDocumentMasters(input);
       expect(result.items[0].dateMarker).to.be.undefined;
+    });
+
+    it('droppedEntriesにdropの理由(reason)が付与される(#503)', () => {
+      const input = [
+        { id: 'd1', name: '' }, // 空文字 → empty-name
+        { id: 'd2', name: ['介護保険証'] as unknown as string }, // 配列 → invalid-type
+        { id: 'd3', name: '介護保険証' },
+      ];
+      const result = sanitizeDocumentMasters(input);
+      expect(result.droppedEntries).to.deep.equal([
+        { id: 'd1', reason: 'empty-name' },
+        { id: 'd2', reason: 'invalid-type' },
+      ]);
     });
   });
 });

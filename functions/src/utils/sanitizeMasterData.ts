@@ -8,14 +8,26 @@
  *
  * #344: silent drop を observable にするため、戻り値に droppedIds を含める。
  *       caller 側 (loadMasterData) が drop 件数に応じて safeLogError を発火する契約。
+ * #503: drop 理由 (型崩れ vs 空文字) を区別できるよう droppedEntries を追加。
+ *       droppedIds は droppedEntries から導出される後方互換フィールド (既存 caller 無改修)。
  */
 
 import type { CustomerMaster, OfficeMaster, DocumentMaster } from './extractors';
 
-/** サニタイズ結果 envelope (items + drop された id 一覧) */
+/** name が非文字列 (invalid-type) か空文字 (empty-name) かの drop 理由 */
+export type DropReason = 'invalid-type' | 'empty-name';
+
+/** drop されたレコードの id と理由 */
+export interface SanitizeDropEntry {
+  id: string;
+  reason: DropReason;
+}
+
+/** サニタイズ結果 envelope (items + drop された id 一覧 + drop 理由付き明細) */
 export interface SanitizeResult<T> {
   items: T[];
   droppedIds: string[];
+  droppedEntries: SanitizeDropEntry[];
 }
 
 /** 値が文字列であればそのまま、配列なら先頭要素、それ以外はundefined */
@@ -51,11 +63,16 @@ function safeId(raw: { id?: unknown }): string {
   return typeof raw.id === 'string' && raw.id.length > 0 ? raw.id : '(unknown)';
 }
 
+/** name の drop 理由を判定する (空文字は empty-name、それ以外の非文字列は invalid-type) */
+function dropReasonForName(name: unknown): DropReason {
+  return name === '' ? 'empty-name' : 'invalid-type';
+}
+
 export function sanitizeCustomerMasters(
   raw: CustomerMaster[]
 ): SanitizeResult<CustomerMaster> {
   const items: CustomerMaster[] = [];
-  const droppedIds: string[] = [];
+  const droppedEntries: SanitizeDropEntry[] = [];
   for (const c of raw) {
     if (typeof c.name === 'string' && c.name.length > 0) {
       items.push({
@@ -67,17 +84,17 @@ export function sanitizeCustomerMasters(
         aliases: toOptionalStringArray(c.aliases),
       });
     } else {
-      droppedIds.push(safeId(c));
+      droppedEntries.push({ id: safeId(c), reason: dropReasonForName(c.name) });
     }
   }
-  return { items, droppedIds };
+  return { items, droppedIds: droppedEntries.map((e) => e.id), droppedEntries };
 }
 
 export function sanitizeOfficeMasters(
   raw: OfficeMaster[]
 ): SanitizeResult<OfficeMaster> {
   const items: OfficeMaster[] = [];
-  const droppedIds: string[] = [];
+  const droppedEntries: SanitizeDropEntry[] = [];
   for (const o of raw) {
     if (typeof o.name === 'string' && o.name.length > 0) {
       items.push({
@@ -88,17 +105,17 @@ export function sanitizeOfficeMasters(
         aliases: toOptionalStringArray(o.aliases),
       });
     } else {
-      droppedIds.push(safeId(o));
+      droppedEntries.push({ id: safeId(o), reason: dropReasonForName(o.name) });
     }
   }
-  return { items, droppedIds };
+  return { items, droppedIds: droppedEntries.map((e) => e.id), droppedEntries };
 }
 
 export function sanitizeDocumentMasters(
   raw: DocumentMaster[]
 ): SanitizeResult<DocumentMaster> {
   const items: DocumentMaster[] = [];
-  const droppedIds: string[] = [];
+  const droppedEntries: SanitizeDropEntry[] = [];
   for (const d of raw) {
     if (typeof d.name === 'string' && d.name.length > 0) {
       items.push({
@@ -110,8 +127,8 @@ export function sanitizeDocumentMasters(
         dateMarker: toOptionalNonEmptyString(d.dateMarker),
       });
     } else {
-      droppedIds.push(safeId(d));
+      droppedEntries.push({ id: safeId(d), reason: dropReasonForName(d.name) });
     }
   }
-  return { items, droppedIds };
+  return { items, droppedIds: droppedEntries.map((e) => e.id), droppedEntries };
 }
