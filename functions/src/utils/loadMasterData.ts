@@ -17,6 +17,7 @@ import {
   sanitizeCustomerMasters,
   sanitizeDocumentMasters,
   sanitizeOfficeMasters,
+  type SanitizeDropEntry,
 } from './sanitizeMasterData';
 
 type RawDoc = FirebaseFirestore.DocumentData;
@@ -99,23 +100,35 @@ function isFirebaseFunctionsRuntime(): boolean {
  * Why always async:
  * 戻り値を `Promise<void>` 統一 (evaluator/silent-failure-hunter 指摘)。caller は常に await
  * で待機する契約で、将来 safeLogError が sync になっても型安全が崩れない。
+ *
+ * #503: id 一覧に加え reason (invalid-type/empty-name) ごとの内訳を summary に含める。
+ * SRE が `firestore export` なしで「なぜこの id が drop されたか」を判別できるようにする。
  */
 async function reportSanitizeDrops(
-  reports: Array<{ kind: 'documents' | 'customers' | 'offices'; rawCount: number; droppedIds: string[] }>,
+  reports: Array<{ kind: 'documents' | 'customers' | 'offices'; rawCount: number; droppedEntries: SanitizeDropEntry[] }>,
   context: { source: ErrorSource; functionName: string },
 ): Promise<void> {
-  const dropped = reports.filter((r) => r.droppedIds.length > 0);
+  const dropped = reports.filter((r) => r.droppedEntries.length > 0);
   if (dropped.length === 0) return;
 
-  const hasAllDroppedKind = dropped.some((r) => r.rawCount > 0 && r.rawCount === r.droppedIds.length);
-  // ログの可読性のため先頭 5 件のみ列挙、超過分は '...' で省略する (droppedIds.length > 5 の時のみ付与)。
-  // 全 droppedIds は fallback 時のデバッグ用に別途保持 (L87 allDroppedIds)。
+  const hasAllDroppedKind = dropped.some((r) => r.rawCount > 0 && r.rawCount === r.droppedEntries.length);
+  // ログの可読性のため id は先頭 5 件のみ列挙、超過分は '...' で省略する (5 件超過時のみ付与)。
+  // 全 id は fallback 時のデバッグ用に別途保持 (L87 allDroppedIds)。
   const summary = dropped
-    .map((r) => `${r.kind}: ${r.droppedIds.length}/${r.rawCount} (ids: ${r.droppedIds.slice(0, 5).join(', ')}${r.droppedIds.length > 5 ? ', ...' : ''})`)
+    .map((r) => {
+      const ids = r.droppedEntries.map((e) => e.id);
+      const reasonCounts = new Map<string, number>();
+      for (const entry of r.droppedEntries) {
+        reasonCounts.set(entry.reason, (reasonCounts.get(entry.reason) ?? 0) + 1);
+      }
+      const reasonSummary = [...reasonCounts.entries()].map(([reason, count]) => `${reason}: ${count}`).join(', ');
+      const idList = `${ids.slice(0, 5).join(', ')}${ids.length > 5 ? ', ...' : ''}`;
+      return `${r.kind}: ${ids.length}/${r.rawCount} (${reasonSummary}; ids: ${idList})`;
+    })
     .join('; ');
   const prefix = hasAllDroppedKind ? 'ALL RECORDS DROPPED' : 'Records dropped during sanitize';
   const message = `${prefix}: ${summary}`;
-  const allDroppedIds = dropped.flatMap((r) => r.droppedIds);
+  const allDroppedIds = dropped.flatMap((r) => r.droppedEntries.map((e) => e.id));
 
   console.warn(`[loadMasterData] ${message}`);
 
@@ -172,9 +185,9 @@ export async function loadMasterData(
 
   await reportSanitizeDrops(
     [
-      { kind: 'documents', rawCount: documentRaw.length, droppedIds: documentResult.droppedIds },
-      { kind: 'customers', rawCount: customerRaw.length, droppedIds: customerResult.droppedIds },
-      { kind: 'offices', rawCount: officeRaw.length, droppedIds: officeResult.droppedIds },
+      { kind: 'documents', rawCount: documentRaw.length, droppedEntries: documentResult.droppedEntries },
+      { kind: 'customers', rawCount: customerRaw.length, droppedEntries: customerResult.droppedEntries },
+      { kind: 'offices', rawCount: officeRaw.length, droppedEntries: officeResult.droppedEntries },
     ],
     { source, functionName },
   );

@@ -167,6 +167,31 @@ describe('loadMasterData', () => {
     }
   });
 
+  it('drop 理由 (reason) の内訳が warn メッセージに含まれる (#503)', async () => {
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (msg: unknown) => warnings.push(String(msg));
+    try {
+      const stub = createFirestoreStub({
+        'masters/documents/items': [],
+        'masters/customers/items': [],
+        'masters/offices/items': [
+          { id: 'o1', data: { name: '事業所A' } },
+          { id: 'o2', data: {} }, // name 欠落 → invalid-type
+          { id: 'o3', data: { name: '' } }, // name 空文字 → empty-name
+          { id: 'o4', data: { name: 123 } }, // name 型崩れ → invalid-type
+        ],
+      });
+      await loadMasterData(stub);
+      expect(warnings).to.have.length(1);
+      expect(warnings[0]).to.include('offices: 3/4');
+      expect(warnings[0]).to.include('invalid-type: 2');
+      expect(warnings[0]).to.include('empty-name: 1');
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
   it('全レコード drop のケースでは ALL RECORDS DROPPED prefix になる (#344)', async () => {
     const warnings: string[] = [];
     const originalWarn = console.warn;
