@@ -191,6 +191,10 @@ async function isDescendantOfOrEqual(
   return false;
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function sameStringSet(a: string[], b: string[]): boolean {
   if (a.length !== b.length) return false;
   const sa = [...a].sort();
@@ -278,21 +282,35 @@ async function main(): Promise<void> {
   // root自体)がclassify後にrename/移動/復元されていても検知できない。特に末尾の
   // 統合済みリネーム処理は`dupProvenance.name`(classify時点の古い名前)を前提に動くため、
   // 全rootを事前に再検証しfail-closedにする。
+  //
+  // devリハーサル2周目(冪等性確認)で発覚した相互作用バグへの対応: 1周目のexecuteが
+  // このrootを空判定→「(統合済み_YYYYMMDD)」へリネームした場合、同じplanを使った
+  // 2周目はこのgateが無条件でFATALしてしまい、Gate5の per-file idempotency チェック
+  // (「already migrated」skip)へ到達できなかった。「元名 + (統合済み_8桁日付)」パターン
+  // への一致も許容値として扱う。
+  const alreadyConsolidatedNameByDupId = new Map<string, boolean>();
   for (const dupProvenance of plan.sourceFolderProvenance) {
     const dupCheck = await drive.files.get({
       fileId: dupProvenance.id,
       fields: 'id, name, parents, trashed',
       ...SUPPORTS_ALL_DRIVES,
     });
+    const liveName = dupCheck.data.name ?? '';
+    const consolidatedPattern = new RegExp(
+      `^${escapeRegExp(dupProvenance.name)} \\(統合済み_\\d{8}\\)$`
+    );
+    const isAlreadyConsolidated = consolidatedPattern.test(liveName);
+    alreadyConsolidatedNameByDupId.set(dupProvenance.id, isAlreadyConsolidated);
+    const nameOk = liveName === dupProvenance.name || isAlreadyConsolidated;
     if (
-      dupCheck.data.name !== dupProvenance.name ||
+      !nameOk ||
       dupCheck.data.trashed !== dupProvenance.trashed ||
       !sameStringSet(dupCheck.data.parents ?? [], dupProvenance.parents)
     ) {
       console.error(
         `FATAL: duplicateFolderId ${dupProvenance.id} drift since classify ` +
           `(plan: name="${dupProvenance.name}" trashed=${dupProvenance.trashed} parents=${JSON.stringify(dupProvenance.parents)}, ` +
-          `runtime: name="${dupCheck.data.name}" trashed=${dupCheck.data.trashed} parents=${JSON.stringify(dupCheck.data.parents)}). Re-run classify.`
+          `runtime: name="${liveName}" trashed=${dupCheck.data.trashed} parents=${JSON.stringify(dupCheck.data.parents)}). Re-run classify.`
       );
       process.exit(2);
     }
@@ -718,6 +736,9 @@ async function main(): Promise<void> {
     // このtry/catchで吸収し、1フォルダの失敗が後続フォルダのリネーム処理や、既に
     // 書き込み済みのmanifest(上のチェックポイント参照)を失わせないようにする。
     try {
+      // 冪等性対応: 前回runで既に「(統合済み_YYYYMMDD)」へリネーム済みのrootは、
+      // 二重サフィックス付与や無駄なDrive書込みを避けるため再リネームしない。
+      if (alreadyConsolidatedNameByDupId.get(dupProvenance.id)) continue;
       const empty = await isFolderTreeEmpty(dupProvenance.id);
       if (!empty) continue;
       const newName = `${dupProvenance.name} (統合済み_${renameStamp})`;

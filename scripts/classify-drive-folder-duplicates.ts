@@ -48,6 +48,10 @@ if (!projectId) {
   process.exit(1);
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function getOpt(name: string): string | null {
   const i = process.argv.indexOf(name);
   return i >= 0 && i + 1 < process.argv.length ? process.argv[i + 1] : null;
@@ -215,8 +219,33 @@ async function main(): Promise<void> {
     } while (pageToken);
   }
   const expectedIds = new Set([canonicalFolderId, ...duplicateFolderIds]);
-  const missingFromScan = [...expectedIds].filter((id) => !rootScanIds.has(id));
+  let missingFromScan = [...expectedIds].filter((id) => !rootScanIds.has(id));
   const extraInScan = [...rootScanIds].filter((id) => !expectedIds.has(id));
+
+  // devリハーサル2周目(冪等性確認)で発覚した相互作用対応: 前回executeが既に空判定→
+  // 「(統合済み_YYYYMMDD)」へリネーム済みのduplicateフォルダは、canonicalNameでの
+  // name一致検索にヒットしなくなり「missing」と誤検知される。--duplicate-idsに
+  // 残したまま再classifyできるよう、この命名パターンに一致する場合は完全性チェック
+  // 上「アカウント済み」として扱う(fail-closedを緩めるのはこの1パターンのみ)。
+  if (missingFromScan.length > 0) {
+    const consolidatedPattern = new RegExp(`^${escapeRegExp(canonicalName)} \\(統合済み_\\d{8}\\)$`);
+    const stillMissing: string[] = [];
+    for (const id of missingFromScan) {
+      if (id === canonicalFolderId) {
+        stillMissing.push(id);
+        continue;
+      }
+      const g = await drive.files.get({
+        fileId: id,
+        fields: 'id, name, trashed',
+        ...SUPPORTS_ALL_DRIVES,
+      });
+      const isAlreadyConsolidated = !!g.data.trashed && consolidatedPattern.test(g.data.name ?? '');
+      if (!isAlreadyConsolidated) stillMissing.push(id);
+    }
+    missingFromScan = stillMissing;
+  }
+
   if (missingFromScan.length > 0 || extraInScan.length > 0) {
     console.error(
       `FATAL: canonicalの親フォルダ配下の "${canonicalName}" 名フォルダ再走査が --canonical-id/--duplicate-ids と一致しません。` +
