@@ -256,9 +256,16 @@ export function PdfUploadModal({ open, onOpenChange, onSuccess }: PdfUploadModal
         step: 'error',
         error: '予期しない応答が返されました。再試行してください。',
       } : f)))
+      // documentIdが発行されず終端したため、onSnapshot経由の解放が発生しない。ここで明示的に解放する
+      setClaimedFileNames((prev) => releaseRowClaims(prev, id))
     } catch (err) {
       console.error('Upload error:', err)
       setFiles((prev) => prev.map((f) => (f.id === id ? { ...f, step: 'error', error: resolveUploadErrorMessage(err) } : f)))
+      // callFunction自体が失敗した場合も同様にdocumentIdが発行されないため、ここで明示的に解放する
+      // (codex review指摘: 別名で保存の確定リクエストがネットワークエラー等で失敗すると、
+      //  claimedFileNamesの予約がリークし、他の重複行が永久に「他のファイルの処理完了後に再試行」に
+      //  ブロックされ続けていた)
+      setClaimedFileNames((prev) => releaseRowClaims(prev, id))
     }
   }, [])
 

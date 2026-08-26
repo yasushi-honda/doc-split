@@ -281,6 +281,43 @@ describe('PdfUploadModal — claimedFileNames同名衝突防止(Issue #815)', ()
     //  呼び出し回数を汚染する)
     await waitFor(() => expect(mockCallFunction).toHaveBeenCalledTimes(3))
   })
+
+  it('別名で保存の確定リクエストが失敗した場合、予約が解放され他の行が再試行できる(codex review指摘の回帰テスト)', async () => {
+    let callCount = 0
+    mockCallFunction.mockImplementation((_name: string, data: { fileName: string; confirmDuplicate?: boolean }) => {
+      callCount++
+      if (data.fileName === 'dup.pdf' && !data.confirmDuplicate) {
+        return Promise.resolve({
+          success: true,
+          duplicate: true,
+          existingFileName: 'dup.pdf',
+          suggestedFileName: 'dup_2.pdf',
+        })
+      }
+      if (data.confirmDuplicate) {
+        // 別名で保存の確定リクエスト自体が失敗するケース(ネットワークエラー等)
+        return Promise.reject(new Error('network error'))
+      }
+      return Promise.resolve({ success: true, documentId: `doc-${callCount}` })
+    })
+
+    render(<PdfUploadModal open onOpenChange={vi.fn()} />)
+    const fileA = new File(['aaaa'], 'dup.pdf', { type: 'application/pdf' })
+    const fileB = new File(['bbbb'], 'dup.pdf', { type: 'application/pdf' })
+    selectFiles(getFileInput(), [fileA, fileB])
+
+    fireEvent.click(screen.getByRole('button', { name: /アップロード/ }))
+    await waitFor(() => expect(screen.getAllByText(/同名ファイルが存在します/).length).toBe(2))
+
+    // 1件目の「別名で保存」を確定 → APIが失敗してerror行になる
+    fireEvent.click(screen.getAllByRole('button', { name: /^別名で保存$/ })[0]!)
+    await waitFor(() => expect(screen.getByText('アップロードに失敗しました')).toBeDefined())
+
+    // 失敗した1件目が保持していた予約(dup_2.pdf)は解放され、2件目は
+    // 「他のファイルの処理完了後に再試行」に固定されたままにならず、再び「別名で保存」を選べる
+    await waitFor(() => expect(screen.getByRole('button', { name: /^別名で保存$/ })).toBeDefined())
+    expect(screen.queryByRole('button', { name: /他のファイルの処理完了後に再試行/ })).toBeNull()
+  })
 })
 
 describe('PdfUploadModal — claimedFileNames 予約ロジック(純粋関数、Issue #815)', () => {
