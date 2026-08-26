@@ -64,7 +64,6 @@ async function main(): Promise<void> {
         const res = await drive.files.get({
           fileId: id,
           fields: 'id,name,createdTime,modifiedTime,trashed,trashedTime,trashingUser(displayName,emailAddress),parents',
-          supportsAllDrives: true,
           ...SUPPORTS_ALL_DRIVES,
         });
         const d = res.data;
