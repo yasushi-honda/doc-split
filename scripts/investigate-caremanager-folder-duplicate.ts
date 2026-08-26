@@ -242,12 +242,13 @@ async function main(): Promise<void> {
         skipped.push({ docId, reason: 'driveFileIdに親フォルダが存在しない(parents空)' });
         continue;
       }
-      let ancestorName: string | null = null;
-      let ancestorTrashed = false;
+      // levelsUp回、親を辿ってcareManager階層まで遡る。この時点のfetchは「次の親id」を
+      // 得るためだけに使い、name/trashedは読まない(codex review指摘: ここでname/trashedを
+      // 読むと、ループ最終回はcurrentId移動前=1段子側のフォルダのメタデータを記録してしまい、
+      // 実際に返すancestorIdの1段下のフォルダの名前・trashed状態を誤って表示してしまう)。
+      // careManager階層フォルダ自身のname/trashedは、ループ終了後に改めて1回取得する。
       for (let i = 0; i < levelsUp; i++) {
-        const folderGet = await drive.files.get({ fileId: currentId, fields: 'parents,name,trashed', supportsAllDrives: true });
-        ancestorName = folderGet.data.name ?? null;
-        ancestorTrashed = !!folderGet.data.trashed;
+        const folderGet = await drive.files.get({ fileId: currentId, fields: 'parents', supportsAllDrives: true });
         const nextParents = folderGet.data.parents ?? [];
         if (nextParents.length === 0) {
           skipped.push({ docId, reason: `祖先チェーンがcareManager階層に到達する前にrootへ達した(${i + 1}/${levelsUp}段目で親なし)` });
@@ -258,12 +259,9 @@ async function main(): Promise<void> {
       }
       if (!currentId) continue;
 
-      if (levelsUp === 0) {
-        // careManagerがleaf(document直下)の場合、file自身の親がそのままcareManagerフォルダ
-        const selfGet = await drive.files.get({ fileId: currentId, fields: 'name,trashed', supportsAllDrives: true });
-        ancestorName = selfGet.data.name ?? null;
-        ancestorTrashed = !!selfGet.data.trashed;
-      }
+      const ancestorGet = await drive.files.get({ fileId: currentId, fields: 'name,trashed', supportsAllDrives: true });
+      const ancestorName = ancestorGet.data.name ?? null;
+      const ancestorTrashed = !!ancestorGet.data.trashed;
 
       results.push({
         docId,
@@ -311,7 +309,10 @@ async function main(): Promise<void> {
     const cmSegments = expectedKey.split('/');
     const expected = await resolveExpectedPath(cmSegments);
     if (expected.ambiguousAt) {
-      console.log(`  ⚠️  現在の設定・ロジックで検索した結果、"${expected.ambiguousAt}"の段階で同名フォルダが複数件ヒットしました(それ自体が重複の直接証拠)。`);
+      // codex review指摘: 検索時点で同名フォルダが複数ヒットした場合、それ自体が重複の
+      // 直接証拠であり、後続のbyAncestorId.size(==1になりうる)だけで判定すると見逃す。
+      anyDuplicationFound = true;
+      console.log(`  ❌ 現在の設定・ロジックで検索した結果、"${expected.ambiguousAt}"の段階で同名フォルダが複数件ヒットしました(それ自体が重複の直接証拠)。`);
     } else if (expected.id === null) {
       console.log('  現在の設定・ロジックでは該当フォルダがまだ存在しません(0件ヒット、新規exportで作成される想定)。');
     } else {
@@ -328,8 +329,19 @@ async function main(): Promise<void> {
     if (byAncestorId.size > 1) {
       anyDuplicationFound = true;
       console.log('  ❌ 複数の異なる物理フォルダに分散しています(重複の可能性が高い):');
+    } else if (
+      byAncestorId.size === 1 &&
+      expected.id !== null &&
+      !byAncestorId.has(expected.id)
+    ) {
+      // codex review指摘: 全documentが単一フォルダに収束していても、それが「現在の設定・
+      // ロジックが解決する期待フォルダ」と異なる場合は要注意(既存documentが古い/別のフォルダを
+      // 指したまま残っている可能性=まさに本調査が検出したいシナリオの一つ)。単一収束だから
+      // 安全、とは即断しない。
+      anyDuplicationFound = true;
+      console.log('  ❌ 単一の物理フォルダに収束していますが、現在の設定・ロジックが解決する"期待フォルダ"とは異なります(古いフォルダを指している可能性):');
     } else {
-      console.log('  ✅ 単一の物理フォルダに収束しています。');
+      console.log('  ✅ 単一の物理フォルダに収束しており、期待フォルダとも一致しています(または期待フォルダ未作成)。');
     }
 
     for (const [ancestorId, docs] of byAncestorId.entries()) {
