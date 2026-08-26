@@ -76,7 +76,12 @@ function buildFolderLockId(parentId: string, name: string): string {
  * 無条件で`.delete()`すると新しい保有者のロックまで削除してしまっていた
  * (`executeDriveExport.ts`の`driveExportRunId`と同型の所有権トークンで解決)。
  */
-async function acquireFolderLock(
+/**
+ * codex review 9巡目P1指摘対応: `childFolderResolver.ts`(Phase B Part A)の0件マッチ
+ * →作成パスも、本番exportトリガーと同じ`driveFolderLocks`ロックを使って競合を防ぐ
+ * 必要があるため、export可視にする(ロジックの複製を避ける)。
+ */
+export async function acquireFolderLock(
   firestore: admin.firestore.Firestore,
   parentId: string,
   name: string
@@ -100,7 +105,7 @@ async function acquireFolderLock(
   return lockToken;
 }
 
-async function releaseFolderLock(
+export async function releaseFolderLock(
   firestore: admin.firestore.Firestore,
   parentId: string,
   name: string,

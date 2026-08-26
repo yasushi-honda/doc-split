@@ -14,14 +14,20 @@
  *   - 1件マッチかつtrashedなら`files.update({trashed:false})`で復元してから返す
  *   - 2件以上マッチならfail-closedで`AmbiguousChildFolderError`をthrowする(新規作成・
  *     復元のどちらも行わない)
- *   - `driveFolderLocks`によるトランザクションロックは実装しない。Part Aはスクリプトの
- *     単一プロセス逐次実行を前提とするため、Cloud Functions同時実行(findOrCreateFolder.ts
- *     が対処する競合)は起こり得ない(plan前提、[[reference]]参照なし・本ファイルコメントで
- *     明記するのみ)。
+ *   - 0件マッチ→新規作成パスは`findOrCreateFolder.ts`と同じ`driveFolderLocks`
+ *     ロック+再検索プロトコルを再利用する(codex review 9巡目P1指摘対応)。当初は
+ *     「Part Aは単一プロセス逐次実行のため競合は起こり得ない」という前提で未実装
+ *     だったが、この前提はPart A自身の中での競合のみを見ており、移行期間中に
+ *     本番`driveExport`エクスポート処理(`exportDocument.ts`→`findOrCreateFolder.ts`)
+ *     が並行稼働した場合の競合(承認済みplanの前提=移行期間中はdriveExportフラグOFF、
+ *     という運用手順が万一守られなかった場合)を見落としていた。ロックを共有すること
+ *     で、運用手順への依存を減らし多層防御にする。
  */
 
 import type { drive_v3 } from 'googleapis';
+import type * as admin from 'firebase-admin';
 import { SUPPORTS_ALL_DRIVES, escapeQueryValue } from './driveApiConstants';
+import { acquireFolderLock, releaseFolderLock } from './findOrCreateFolder';
 
 const FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder';
 
@@ -71,6 +77,7 @@ export interface ResolvedChildFolder {
 
 export async function resolveChildFolder(
   drive: drive_v3.Drive,
+  firestore: admin.firestore.Firestore,
   parentId: string,
   name: string
 ): Promise<ResolvedChildFolder> {
@@ -97,20 +104,55 @@ export async function resolveChildFolder(
     return { id: existing.id, restored: false, created: false };
   }
 
-  const createResponse = await drive.files.create({
-    requestBody: {
-      name,
-      mimeType: FOLDER_MIME_TYPE,
-      parents: [parentId],
-    },
-    fields: 'id',
-    ...SUPPORTS_ALL_DRIVES,
-  });
-  const createdId = createResponse.data.id;
-  if (!createdId) {
-    throw new Error(`[Phase B Part A] 子フォルダの作成に失敗しました(idが返却されませんでした): "${name}"`);
+  // 0件マッチ = 新規作成が必要。findOrCreateFolder.tsと同じロック+再検索
+  // プロトコルで、並行稼働しうる本番exportとの二重作成競合を防ぐ。
+  const lockToken = await acquireFolderLock(firestore, parentId, name);
+  try {
+    const recheckFiles = await listAllMatchingFolders(drive, parentId, name);
+    if (recheckFiles.length > 1) {
+      throw new AmbiguousChildFolderError(name, parentId, recheckFiles.length);
+    }
+    if (recheckFiles.length === 1) {
+      const existing = recheckFiles[0];
+      if (!existing.id) {
+        throw new Error(`[Phase B Part A] 既存子フォルダのidが取得できません: "${name}"`);
+      }
+      if (existing.trashed) {
+        await drive.files.update({
+          fileId: existing.id,
+          requestBody: { trashed: false },
+          fields: 'id',
+          ...SUPPORTS_ALL_DRIVES,
+        });
+        return { id: existing.id, restored: true, created: false };
+      }
+      return { id: existing.id, restored: false, created: false };
+    }
+
+    const createResponse = await drive.files.create({
+      requestBody: {
+        name,
+        mimeType: FOLDER_MIME_TYPE,
+        parents: [parentId],
+      },
+      fields: 'id',
+      ...SUPPORTS_ALL_DRIVES,
+    });
+    const createdId = createResponse.data.id;
+    if (!createdId) {
+      throw new Error(`[Phase B Part A] 子フォルダの作成に失敗しました(idが返却されませんでした): "${name}"`);
+    }
+    return { id: createdId, restored: false, created: true };
+  } finally {
+    try {
+      await releaseFolderLock(firestore, parentId, name, lockToken);
+    } catch (releaseError) {
+      console.error(
+        `[Phase B Part A] ロック解放に失敗しました("${name}"、親フォルダ: ${parentId}):`,
+        releaseError
+      );
+    }
   }
-  return { id: createdId, restored: false, created: true };
 }
 
 export interface ResolvedChildFolderPath {
@@ -145,6 +187,7 @@ export class PartialChildFolderPathError extends Error {
  */
 export async function resolveChildFolderPath(
   drive: drive_v3.Drive,
+  firestore: admin.firestore.Firestore,
   rootId: string,
   segments: string[]
 ): Promise<ResolvedChildFolderPath> {
@@ -154,7 +197,7 @@ export async function resolveChildFolderPath(
   for (const segment of segments) {
     let result: ResolvedChildFolder;
     try {
-      result = await resolveChildFolder(drive, currentId, segment);
+      result = await resolveChildFolder(drive, firestore, currentId, segment);
     } catch (err) {
       // 直前までのsegmentで実際にuntrash/作成済みのフォルダは、この呼び出しが
       // 失敗してもDrive上では既にactive化されている。呼び出し元がmanifestへ

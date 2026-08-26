@@ -18,6 +18,18 @@
  *     [--execute] [--manifest-out manifest-output.json]
  *
  *   --execute なし: dry-run (Drive/Firestoreへの書込みゼロ、preflightのみ)
+ *
+ * 既知の残存リスク(codex review 9巡目P2指摘、意図的に見送り): drive.files.update()の
+ * API成功とfileMoves.push()+manifest書込みの間はすべて同期的なJS処理(awaitを挟まない)
+ * であり実質的なwindowはほぼ無いが、理論上はこの区間でプロセスがabruptに強制終了
+ * (SIGKILL等)されるとそのfile移動がmanifestに記録されない可能性がゼロではない。
+ * 完全な対処には書込み前にpending intentを別途journalする設計(write-ahead log)が
+ * 必要だが、以下の理由で本Issueのスコープでは見送る: (1)各operationは移動直前に
+ * fetchLiveSnapshot/checkFirestoreDrift/conflict再確認等、複数回のawaitを挟む
+ * Drive/Firestore呼び出しを経るため、この極小windowで強制終了する確率は他のawait点
+ * より著しく低い (2) 万一発生しても、次回classify実行時にそのfileは既にcanonical配下
+ * にあるため`move-to-canonical`の対象から自然に外れる(idempotent、データの不整合や
+ * 二重処理は起きない)。影響はその1fileがrollback manifestに載らない点のみに限定される。
  */
 
 import * as admin from 'firebase-admin';
@@ -479,6 +491,7 @@ async function main(): Promise<void> {
     try {
       const { id: targetFolderId, restoredFolderIds, createdFolderIds } = await resolveChildFolderPath(
         drive,
+        db,
         plan.canonicalFolderId,
         op.targetSegments
       );
