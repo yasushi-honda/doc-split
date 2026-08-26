@@ -26,9 +26,15 @@ export interface FileEvidence {
    * で常に`true`になり、分類の判断材料として使えない(過去に一度「ファイル自身が
    * trashedならmanual-review」という判定を追加したが、この理由で全件manual-reviewに
    * 倒れる回帰を引き起こし、devリハーサルで発覚・revertした)。この情報は保持するが
-   * 分類ロジックでは参照しない。
+   * 分類ロジックでは参照しない。個別削除の検知には`explicitlyTrashed`を使う。
    */
   trashed: boolean;
+  /**
+   * Drive v3固有: ファイル自身が明示的にtrashedされたか(祖先フォルダ経由の継承
+   * trashedとは区別される)。`trashed`と異なり、祖先が原因でtrueになることはない
+   * ため、ユーザーが個別に削除した意図を安全に検知できる(codex review指摘対応)。
+   */
+  explicitlyTrashed: boolean;
   /** appProperties.docSplitDocId(未設定ならnull) */
   docSplitDocId: string | null;
   /** docSplitDocIdから解決したFirestore document(存在しない/未紐付けならnull) */
@@ -49,6 +55,13 @@ export interface ClassificationResult {
 export function classifyDuplicateFile(evidence: FileEvidence): ClassificationResult {
   if (evidence.mimeType === SHORTCUT_MIME_TYPE) {
     return manualReview(evidence, 'shortcut: not a regular file entity, requires manual handling');
+  }
+
+  if (evidence.explicitlyTrashed) {
+    return manualReview(
+      evidence,
+      'explicitly-trashed: the file itself was individually trashed (not merely inherited from an already-trashed duplicate root), may have been intentionally deleted by a user, refusing to auto-restore'
+    );
   }
 
   if (evidence.parents.length !== 1) {

@@ -16,6 +16,7 @@ function baseEvidence(overrides: Partial<FileEvidence> = {}): FileEvidence {
     mimeType: 'application/pdf',
     parents: ['parent-1'],
     trashed: false,
+    explicitlyTrashed: false,
     docSplitDocId: 'doc-1',
     firestoreDoc: { docId: 'doc-1', careManagerName: '森 奈穂美' },
     targetCareManagerName: '森 奈穂美',
@@ -90,6 +91,15 @@ describe('classifyDuplicateFile', () => {
     expect(result.recommendedAction).to.equal('move-to-canonical');
   });
 
+  it('routes explicitly-trashed files to manual-review (individual deletion, distinct from inherited trashed)', () => {
+    // Drive v3の`explicitlyTrashed`は祖先経由の継承では決してtrueにならないため、
+    // `trashed`と異なりユーザーが個別に削除した意図を安全に検知できる(codex review指摘対応)。
+    const result = classifyDuplicateFile(baseEvidence({ trashed: true, explicitlyTrashed: true }));
+    expect(result.classification).to.equal('ManualReviewRequired');
+    expect(result.recommendedAction).to.equal('manual-review');
+    expect(result.reason).to.match(/explicitly-trashed/);
+  });
+
   it('never returns move-to-canonical for ManualReviewRequired classification (defense-in-depth precondition)', () => {
     const cases: Partial<FileEvidence>[] = [
       { mimeType: 'application/vnd.google-apps.shortcut' },
@@ -98,6 +108,7 @@ describe('classifyDuplicateFile', () => {
       { firestoreDoc: null },
       { firestoreDoc: { docId: 'doc-1', careManagerName: '別 担当者' } },
       { destinationConflict: true },
+      { explicitlyTrashed: true },
     ];
     for (const override of cases) {
       const result = classifyDuplicateFile(baseEvidence(override));

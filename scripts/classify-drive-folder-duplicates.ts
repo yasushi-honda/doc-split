@@ -89,6 +89,13 @@ interface RawDriveFile {
   mimeType: string;
   parents: string[];
   trashed: boolean;
+  /**
+   * Drive v3固有: ファイル自身が明示的にtrashedされたか(祖先フォルダ経由の
+   * 継承trashedとは区別される)。codex review指摘対応: `trashed`は祖先由来でも
+   * 継承されて`true`になるため分類に使えないが、`explicitlyTrashed`はファイル自身への
+   * 操作でのみtrueになるため、ユーザーが個別に削除したファイルを正しく検知できる。
+   */
+  explicitlyTrashed: boolean;
   version: string;
   md5Checksum: string | null;
   headRevisionId: string | null;
@@ -303,7 +310,7 @@ async function main(): Promise<void> {
       const res = await drive.files.list({
         q: `'${folderId}' in parents`,
         fields:
-          'nextPageToken, files(id, name, mimeType, parents, trashed, version, md5Checksum, headRevisionId, appProperties)',
+          'nextPageToken, files(id, name, mimeType, parents, trashed, explicitlyTrashed, version, md5Checksum, headRevisionId, appProperties)',
         includeItemsFromAllDrives: true,
         pageSize: 100,
         pageToken,
@@ -317,6 +324,7 @@ async function main(): Promise<void> {
           mimeType: f.mimeType,
           parents: f.parents ?? [],
           trashed: !!f.trashed,
+          explicitlyTrashed: !!f.explicitlyTrashed,
           version: f.version,
           md5Checksum: f.md5Checksum ?? null,
           headRevisionId: f.headRevisionId ?? null,
@@ -524,6 +532,7 @@ async function main(): Promise<void> {
       mimeType: file.mimeType,
       parents: file.parents,
       trashed: file.trashed,
+      explicitlyTrashed: file.explicitlyTrashed,
       docSplitDocId,
       firestoreDoc: firestoreDocForClassifier,
       targetCareManagerName: canonicalName,

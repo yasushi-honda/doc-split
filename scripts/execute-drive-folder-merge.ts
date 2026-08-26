@@ -191,8 +191,18 @@ async function isDescendantOfOrEqual(
   return false;
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/**
+ * 統合済みduplicateフォルダの終端rename処理が付与する末尾サフィックス
+ * (`"<元名> (統合済み_YYYYMMDD)"`)を検出・除去するための共有パターン。
+ * plan.sourceFolderProvenance[].nameがサフィックス付き/なしのどちらの状態で
+ * 記録されていても、両者からサフィックスを剥がして比較すれば「本質的に同じ名前か」
+ * を一貫して判定できる(codex review指摘対応、2重サフィックス付与バグの修正)。
+ */
+const CONSOLIDATED_SUFFIX_PATTERN = /^(.*) \(統合済み_\d{8}\)$/;
+
+function stripConsolidatedSuffix(name: string): string {
+  const m = CONSOLIDATED_SUFFIX_PATTERN.exec(name);
+  return m ? m[1] : name;
 }
 
 function sameStringSet(a: string[], b: string[]): boolean {
@@ -286,8 +296,13 @@ async function main(): Promise<void> {
   // devリハーサル2周目(冪等性確認)で発覚した相互作用バグへの対応: 1周目のexecuteが
   // このrootを空判定→「(統合済み_YYYYMMDD)」へリネームした場合、同じplanを使った
   // 2周目はこのgateが無条件でFATALしてしまい、Gate5の per-file idempotency チェック
-  // (「already migrated」skip)へ到達できなかった。「元名 + (統合済み_8桁日付)」パターン
-  // への一致も許容値として扱う。
+  // (「already migrated」skip)へ到達できなかった。「(統合済み_8桁日付)」という末尾
+  // サフィックスの有無で「本質的に同じ名前」かを判定する(codex review追加指摘対応:
+  // 当初はdupProvenance.nameが常に無サフィックスの前提で`${dupProvenance.name} (統合済み_...)$`
+  // という固定パターンのみ許容していたが、これだと「1周目execute実行後に再classifyし、
+  // 既にサフィックス付きの名前がplanへ記録された」ケースを考慮できず、2重サフィックス
+  // 付与のバグを生んでいた。両方の名前からサフィックスを剥がして比較することで、
+  // planの記録がサフィックス付き/なしのどちらでも同じ判定になるようにする)。
   const alreadyConsolidatedNameByDupId = new Map<string, boolean>();
   for (const dupProvenance of plan.sourceFolderProvenance) {
     const dupCheck = await drive.files.get({
@@ -296,10 +311,9 @@ async function main(): Promise<void> {
       ...SUPPORTS_ALL_DRIVES,
     });
     const liveName = dupCheck.data.name ?? '';
-    const consolidatedPattern = new RegExp(
-      `^${escapeRegExp(dupProvenance.name)} \\(統合済み_\\d{8}\\)$`
-    );
-    const isAlreadyConsolidated = consolidatedPattern.test(liveName);
+    const isAlreadyConsolidated =
+      CONSOLIDATED_SUFFIX_PATTERN.test(liveName) &&
+      stripConsolidatedSuffix(liveName) === stripConsolidatedSuffix(dupProvenance.name);
     alreadyConsolidatedNameByDupId.set(dupProvenance.id, isAlreadyConsolidated);
     const nameOk = liveName === dupProvenance.name || isAlreadyConsolidated;
     if (
@@ -741,7 +755,7 @@ async function main(): Promise<void> {
       if (alreadyConsolidatedNameByDupId.get(dupProvenance.id)) continue;
       const empty = await isFolderTreeEmpty(dupProvenance.id);
       if (!empty) continue;
-      const newName = `${dupProvenance.name} (統合済み_${renameStamp})`;
+      const newName = `${stripConsolidatedSuffix(dupProvenance.name)} (統合済み_${renameStamp})`;
       await drive.files.update({
         fileId: dupProvenance.id,
         requestBody: { name: newName },
