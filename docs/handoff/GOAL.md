@@ -1,5 +1,5 @@
 ---
-updated: 2026-08-06
+updated: 2026-08-26
 ---
 <!-- 前ミッション(dev/kanameone/cocoro環境監査・保守検証)は2026-07-20完遂。全文はdocs/handoff/LATEST.md参照。 -->
 <!-- Google Drive連携Phase1 (MVP)実装ミッションは2026-07-22完了(PR#700マージ)。詳細は本ファイル末尾「Google Drive連携Phase1完遂」節+docs/handoff/LATEST.md参照。 -->
@@ -74,6 +74,25 @@ catchup後、積み残しIssueのうちdecision-maker選定の#774(BE Drive expo
 **#251(summaryGenerator runtime unit test)・#238(force-reindex孤児posting検出)は着手見送り**: 両方とも該当Issue本文に明示的な待機条件が記載されている（#251はsinon/proxyquire未導入によるVertex AI mock化コストが伴うため「他タスクでバンドル化するまで待機」、#238は実害未観測のP2でトリガー未発火）。decision-makerに状況を説明しROI判断を委ねた結果、両方とも今回は見送りで合意。
 
 **kanameone/cocoro反映状況（実測確認）**: PR #808はmain→dev自動デプロイのみ完了、**kanameone/cocoroへは未反映**（`Deploy Cloud Functions`workflow_dispatchが必要）。直近のクライアント環境デプロイは2026-08-06 03:05(kanameone)/03:13(cocoro)のPR #804(sweep starvationバグ修正)時点で止まっている。#503自体はobservability向上のみで本番挙動に影響しないため、decision-maker判断で即時デプロイは見送り、次回の`Deploy Cloud Functions`実行時に他の変更とまとめて反映する方針。
+
+## 【進行中・2026-08-26開始】kanameoneクライアントフィードバック8件対応（P1 2/3完了、P2未着手）
+
+kanameoneから8件のフィードバック（①TOP画面のCM表示 ②「不明」「不明顧客」表記の不統一 ③複数名FAX分割時の元データ残存 ④PDF複数アップロード不可 ⑤ローディング時間 ⑥ケアマネフォルダ重複 ⑦日付フィルタに今日/昨日追加 ⑧氏名異体字マッチング）が届き、triage→Issue #810〜#817起票→P1優先（decision-maker承認）で対応中。
+
+**Issue #810（検索インデックスのsplitドキュメント漏れ、PR #818マージ・dev/kanameone/cocoro全反映完了）**: FAX分割元の複合ドキュメント（他利用者情報が混在）が`status:'split'`に変更されるのみで検索インデックスから削除されず、検索結果に露出し続けていた問題。`searchDocuments.ts`にstatusフィルタ追加＋`searchIndexer.ts`のトリガーロジックを`processSearchIndexTrigger`として切り出し状態遷移時にインデックス削除するよう修正。`codex review`で2件指摘（キャッシュ無効化漏れ・df二重減算）を受け同PRで解消。
+
+**Issue #811（kanameoneケアマネフォルダ重複、調査中・未完了）**: 実データ調査の結果、当初仮説（コード側の表記ゆれ未対応）はPR #752（2026-07-28マージ）で既に修正済みと判明。実データはcareManagerName「森 奈穂美」（姓名間スペース）に統一されており生データの表記ゆれは無い。plan-crossreview（grip+codex 2巡）で「documentの直接親フォルダはケアマネ階層と異なる（顧客名/書類種別/年月が最下層）ため単純比較では判定できない」という設計上の欠陥を発見、Phase A（Drive API直接調査スクリプト）の設計を訂正済みだが**未実装**。次回セッションで`scripts/investigate-caremanager-folder-duplicate.ts`を実装しGitHub Actions経由でkanameone実Driveフォルダ構造を調査するところから再開。
+
+**Issue #812（氏名異体字マッチング、PR #820マージ・dev/kanameone/cocoro全反映完了）**: 顧客マスタ登録時はFE側`GAIJI_MAP`で新字体へ自動変換される（渡邉→渡辺等）が、OCRマッチング側にはこの変換がなくFAX原文の異体字表記が不明顧客化していた。fuzzy matchは日本人氏名の一般的な長さでは異体字1文字差を閾値調整では救済できない構造的限界があり実測不要と判断、正規化での対応に。`GAIJI_MAP`を`shared/gaijiMap.ts`へ移設し顧客名マッチング専用`normalizeCustomerNameForMatching()`を新設（汎用`normalizeForMatching()`は不変、`shared/officeMasterValidation.ts`の独立コピーとの同等性契約を壊さないため）。plan-crossreviewで当初案「汎用関数に混ぜる」設計の重大な欠陥を事前発見・修正できた。`codex review`は1回目usage limit中断→再実行で指摘0件。dev検証はビルド成果物（`functions/lib`）を直接requireして実証（ts-node直接呼び出しは「デプロイ済みコードの検証にならない」というcodex指摘を踏まえた対応）、`shared/`が`functions/lib/shared/`へ正しくコンパイルされ相対import解決も実証済み。
+
+**スコープ外として明示的に切り出した項目（次のアクション候補）**:
+- 既存の「不明顧客」滞留ドキュメントへの遡及的救済（新規OCR分のみ救済、過去分は`customerConfirmed:true`保護により単純な再OCRでは安全に再マッチできず別途設計が必要）
+- `ocrUpdatePayloadBuilder.ts`の`customerConfirmed`フラグ不整合（bestMatch nullでもconfirmed:trueになりFE `isCustomerConfirmed()`が誤表示する実害あり）→別Issue化を提案済み、未起票
+- P2の5件（①②④⑤⑦、Issue #813〜#817）は未着手
+
+**副次的に解消**: 本ミッションのkanameone/cocoro Functionsデプロイ実行時に、以前から未反映だったPR #808（sanitize drop reason付与、line68参照）も同時に反映された。
+
+**手法上の教訓**: 本ミッションは5ファイル以上の変更を含むためplan mode必須のケースで、`/plan-crossreview`（grip自白可視化+codex 2巡診断）を計2回実施。1回目で「汎用正規化関数へのGAIJI混入」という重大な設計欠陥、2回目で「dev→prod展開フローの欠落」（decision-maker指摘で発覚）と「#811判定ロジックの欠陥」を発見でき、実装前の段階でのクロスレビューが高い価値を発揮した。
 
 ## 【完了・2026-08-02】OCR処理タイムアウト予防策（processOCR実行時間予算再設計）
 
