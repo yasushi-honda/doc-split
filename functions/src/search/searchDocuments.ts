@@ -123,6 +123,18 @@ function setCache(key: string, result: SearchResult): void {
   });
 }
 
+/**
+ * 検索結果キャッシュ(10分TTL)を全消去する。
+ *
+ * Issue #810 codex review指摘(PR #818): ドキュメントがsplit等processed以外へ
+ * 遷移する前にキャッシュされた検索結果は、split除外フィルタ(下記)を経由せず
+ * そのままservedされ続けてしまう。searchIndexer.tsのprocessSearchIndexTriggerが
+ * status遷移でインデックスを削除するのと同時にこれを呼び、混在情報の残留露出を防ぐ。
+ */
+export function invalidateSearchCache(): void {
+  cache.clear();
+}
+
 // ============================================
 // 検索ロジック
 // ============================================

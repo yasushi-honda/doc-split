@@ -17,6 +17,7 @@ import {
 } from '../utils/tokenizer';
 import { isFirestoreNotFoundError } from '../utils/firestoreErrors';
 import { chunkArray } from '../utils/chunkArray';
+import { invalidateSearchCache } from './searchDocuments';
 
 const db = getFirestore();
 
@@ -66,6 +67,14 @@ export async function processSearchIndexTrigger(
   if (after.status !== 'processed') {
     if (before?.search?.tokens) {
       await removeDocumentFromIndex(docId, before.search.tokens);
+      // codex review指摘(PR #818, P2): search メタデータをクリアしないと、同一
+      // ドキュメント(status='split'のまま)への後続書込みで before.search.tokens が
+      // 残り続け、次回もこの分岐に入って df を二重減算してしまう(負値化しうる)。
+      await db.doc(`documents/${docId}`).update({ search: FieldValue.delete() });
+      // codex review指摘(PR #818, P1): 検索結果キャッシュ(10分TTL)は遷移前に
+      // 計算済みの結果を持ち越すため、インデックス削除だけでは split ドキュメントが
+      // 混在情報を含んだまま served され続けてしまう。索引削除と同時に全消去する。
+      invalidateSearchCache();
       console.log(
         `Search index removed for document (status changed to ${String(after.status)}): ${docId}`
       );
