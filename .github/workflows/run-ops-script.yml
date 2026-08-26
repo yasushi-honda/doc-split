@@ -54,6 +54,7 @@ on:
           - investigate-office-duplicate
           - investigate-caremanager-duplicate
           - investigate-caremanager-folder-duplicate
+          - investigate-issue811-root-cause
           - audit-short-office-masters
           - audit-short-office-masters --max-length 3
           - audit-short-office-masters --max-length 4
@@ -223,7 +224,7 @@ on:
         type: string
         default: ''
       exec_args_json:
-        description: 'execute-collision-migration: JSON {"planRunId":"<classify run id>","approvedOperationIds":["op-0001",...]}'
+        description: 'execute-collision-migration: JSON {"planRunId":"<classify run id>","approvedOperationIds":["op-0001",...]} / investigate-issue811-root-cause: JSON {"folderIds":[...],"docIds":[...]}'
         required: false
         type: string
         default: ''
@@ -524,6 +525,7 @@ jobs:
           MARKED_BY: ${{ github.event.inputs.marked_by }}
           RUN_ID_FOR_ROLLBACK: ${{ github.event.inputs.run_id_for_rollback }}
           REBUILD_GROUP_IDS: ${{ github.event.inputs.rebuild_group_ids }}
+          EXEC_ARGS_JSON: ${{ github.event.inputs.exec_args_json }}
         run: |
           set -euo pipefail
           if [ -z "$PROJECT_ID" ]; then
@@ -560,6 +562,39 @@ jobs:
             NODE_PATH=../functions/node_modules \
               FIREBASE_PROJECT_ID="$PROJECT_ID" \
               npx ts-node investigate-caremanager-folder-duplicate.ts --name "$NAME1"
+          elif [ "$SCRIPT_NAME" = "investigate-issue811-root-cause" ]; then
+            # Issue #811再オープン後の根本原因調査(read-only)。exec_args_jsonで
+            # {"folderIds":["id1",...],"docIds":["docA",...]}を渡す(いずれか片方でも可)。
+            if [ -z "$EXEC_ARGS_JSON" ]; then
+              echo "ERROR: exec_args_json is required for investigate-issue811-root-cause" >&2
+              exit 1
+            fi
+            if ! echo "$EXEC_ARGS_JSON" | jq empty 2>/dev/null; then
+              echo "ERROR: exec_args_json is not valid JSON" >&2
+              exit 1
+            fi
+            FOLDER_IDS=$(echo "$EXEC_ARGS_JSON" | jq -r '.folderIds // empty | join(",")')
+            DOC_IDS=$(echo "$EXEC_ARGS_JSON" | jq -r '.docIds // empty | join(",")')
+            if [ -z "$FOLDER_IDS" ] && [ -z "$DOC_IDS" ]; then
+              echo "ERROR: exec_args_json must contain non-empty folderIds and/or docIds array" >&2
+              exit 1
+            fi
+            # Drive file ID / Firestore doc ID とも英数字・ハイフン・アンダースコアのみを許容(injection防止)
+            if [ -n "$FOLDER_IDS" ] && ! echo "$FOLDER_IDS" | grep -qE '^[A-Za-z0-9_-]+(,[A-Za-z0-9_-]+)*$'; then
+              echo "ERROR: folderIds must each match ^[A-Za-z0-9_-]+$ (got: $FOLDER_IDS)" >&2
+              exit 1
+            fi
+            if [ -n "$DOC_IDS" ] && ! echo "$DOC_IDS" | grep -qE '^[A-Za-z0-9_-]+(,[A-Za-z0-9_-]+)*$'; then
+              echo "ERROR: docIds must each match ^[A-Za-z0-9_-]+$ (got: $DOC_IDS)" >&2
+              exit 1
+            fi
+            ARGS=()
+            if [ -n "$FOLDER_IDS" ]; then ARGS+=( --folder-ids "$FOLDER_IDS" ); fi
+            if [ -n "$DOC_IDS" ]; then ARGS+=( --doc-ids "$DOC_IDS" ); fi
+            cd scripts
+            NODE_PATH=../functions/node_modules \
+              FIREBASE_PROJECT_ID="$PROJECT_ID" \
+              npx ts-node investigate-issue811-root-cause.ts "${ARGS[@]}"
           elif [ "$SCRIPT_NAME" = "delete-office-master" ]; then
             # delete_ids (CSV) を --id 引数列に展開 (Issue #504)
             if [ -z "${DELETE_IDS:-}" ]; then
