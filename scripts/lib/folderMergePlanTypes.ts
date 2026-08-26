@@ -171,6 +171,20 @@ export function verifyFolderProvenanceMatch(
 export interface FirestoreSnapshotFields {
   careManager: string;
   customerName: string;
+  /**
+   * customerId(masters/customers/itemsの利用者ID)。codex review P2指摘対応:
+   * customerセグメントのfurigana初期字はcustomerId経由でmastersから引くため、
+   * 同姓同名customerへの付け替え(customerName不変でもcustomerIdが変わるケース)を
+   * 検知するために独立してhashへ含める。
+   */
+  customerId: string | null;
+  /**
+   * customer masterのfurigana。furiganaInitialSpaceName形式のテンプレートでは
+   * customerセグメントの頭文字に使われるため、classify後にmaster側で訂正されると
+   * targetSegmentsが変わりうる(codex review P2指摘対応)。
+   */
+  customerFurigana: string | null;
+  /** masters/documents/itemsで解決済みのcategory(resolveExportCategory()の出力、生のdoc.categoryではない) */
   documentCategory: string;
   documentType: string;
   /** ISO文字列化したfileDate、未設定ならnull */
@@ -181,6 +195,8 @@ export function computeFirestoreSnapshotHash(fields: FirestoreSnapshotFields): s
   const payload = [
     fields.careManager,
     fields.customerName,
+    fields.customerId ?? '<null>',
+    fields.customerFurigana ?? '<null>',
     fields.documentCategory,
     fields.documentType,
     fields.fileDateIso ?? '<null>',

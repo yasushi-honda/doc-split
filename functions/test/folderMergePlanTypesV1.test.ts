@@ -127,6 +127,8 @@ describe('computeFirestoreSnapshotHash', () => {
   const fields = {
     careManager: '森 奈穂美',
     customerName: 'テスト利用者',
+    customerId: 'cust-1',
+    customerFurigana: 'テストリヨウシャ',
     documentCategory: '請求書',
     documentType: '請求書',
     fileDateIso: '2026-07-01T00:00:00.000Z',
@@ -143,6 +145,16 @@ describe('computeFirestoreSnapshotHash', () => {
 
   it('changes when fileDateIso changes to null', () => {
     const changed = computeFirestoreSnapshotHash({ ...fields, fileDateIso: null });
+    expect(changed).to.not.equal(computeFirestoreSnapshotHash(fields));
+  });
+
+  it('changes when customerId changes (same-name customer reassignment detection)', () => {
+    const changed = computeFirestoreSnapshotHash({ ...fields, customerId: 'cust-2' });
+    expect(changed).to.not.equal(computeFirestoreSnapshotHash(fields));
+  });
+
+  it('changes when customerFurigana changes (master correction detection)', () => {
+    const changed = computeFirestoreSnapshotHash({ ...fields, customerFurigana: 'ベツノフリガナ' });
     expect(changed).to.not.equal(computeFirestoreSnapshotHash(fields));
   });
 });

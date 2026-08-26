@@ -42,4 +42,10 @@ export interface ExecutionManifest {
    * name復元を行う(file単位の部分rollbackでは復元しない、folderRenameManifest.ts参照)。
    */
   folderRenames: FolderRenameManifestEntry[];
+  /**
+   * canonical配下でtrashedだったカテゴリ/顧客フォルダをchildFolderResolver.tsが
+   * untrashした記録(codex review P2指摘対応)。rollback時、対応するfile移動が全て
+   * revertされ、かつこのフォルダが空になった場合のみ再trashedにする。
+   */
+  restoredTargetFolderIds: string[];
 }

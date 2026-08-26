@@ -37,6 +37,7 @@ import {
 } from './lib/folderMergePlanTypes';
 import { readDriveApiVersionSnapshot, verifyDriveApiVersionMatch } from './lib/driveApiVersionGate';
 import type { FileMoveManifestEntry, FolderRenameManifestEntry, ExecutionManifest } from './lib/folderMergeManifest';
+import { resolveExportCategory } from './lib/resolveExportCategory';
 
 const DRIFT_RUNBOOK = `
 [precondition drift 発生時の再開手順]
@@ -166,15 +167,28 @@ async function checkFirestoreDrift(
     return { ok: false, reason: 'firestore doc no longer exists' };
   }
   const data = snap.data()!;
+  // classify側(resolveExportCategory + customer furigana取得)と完全に同一のロジックで
+  // 再計算する(codex review P1/P2指摘対応: 生のdoc.categoryや、customerId/furigana抜きの
+  // hashだと、documentType手動訂正・同姓同名customer付け替え・furigana訂正を見逃す)。
+  const documentTypeRaw = (data.documentType as string | undefined) ?? '';
+  const documentCategory = await resolveExportCategory(db, documentTypeRaw);
+  const customerId = (data.customerId as string | null | undefined) ?? null;
+  let customerFurigana: string | null = null;
+  if (customerId) {
+    const customerSnap = await db.doc(`masters/customers/items/${customerId}`).get();
+    customerFurigana = customerSnap.exists ? ((customerSnap.data() as { furigana?: string }).furigana ?? null) : null;
+  }
   const currentHash = computeFirestoreSnapshotHash({
     careManager: (data.careManager as string | undefined) ?? '',
     customerName: (data.customerName as string | undefined) ?? '',
-    documentCategory: (data.category as string | undefined) || (data.documentType as string | undefined) || '',
-    documentType: (data.documentType as string | undefined) ?? '',
+    customerId,
+    customerFurigana,
+    documentCategory,
+    documentType: documentTypeRaw,
     fileDateIso: data.fileDate ? (data.fileDate as admin.firestore.Timestamp).toDate().toISOString() : null,
   });
   if (currentHash !== op.expectedFirestoreSnapshotHash) {
-    return { ok: false, reason: 'firestore snapshot drift (careManager/customerName/category/fileDate changed since classify)' };
+    return { ok: false, reason: 'firestore snapshot drift (careManager/customerName/customerId/customerFurigana/category/fileDate changed since classify)' };
   }
   return { ok: true, reason: 'firestore snapshot matched' };
 }
@@ -216,8 +230,35 @@ async function main(): Promise<void> {
     }
   }
 
+  // === duplicateフォルダ(root)群の再健全性確認(codex review P1指摘対応) ===
+  // 個々のfile移動のGate5(precondition drift)はfile自身のparents/trashed/nameしか見ない
+  // ため、file の直接の親フォルダ「ID」さえ変わらなければ、その祖先(duplicateフォルダ
+  // root自体)がclassify後にrename/移動/復元されていても検知できない。特に末尾の
+  // 統合済みリネーム処理は`dupProvenance.name`(classify時点の古い名前)を前提に動くため、
+  // 全rootを事前に再検証しfail-closedにする。
+  for (const dupProvenance of plan.sourceFolderProvenance) {
+    const dupCheck = await drive.files.get({
+      fileId: dupProvenance.id,
+      fields: 'id, name, parents, trashed',
+      ...SUPPORTS_ALL_DRIVES,
+    });
+    if (
+      dupCheck.data.name !== dupProvenance.name ||
+      dupCheck.data.trashed !== dupProvenance.trashed ||
+      !sameStringSet(dupCheck.data.parents ?? [], dupProvenance.parents)
+    ) {
+      console.error(
+        `FATAL: duplicateFolderId ${dupProvenance.id} drift since classify ` +
+          `(plan: name="${dupProvenance.name}" trashed=${dupProvenance.trashed} parents=${JSON.stringify(dupProvenance.parents)}, ` +
+          `runtime: name="${dupCheck.data.name}" trashed=${dupCheck.data.trashed} parents=${JSON.stringify(dupCheck.data.parents)}). Re-run classify.`
+      );
+      process.exit(2);
+    }
+  }
+
   const fileMoves: FileMoveManifestEntry[] = [];
   const folderRenames: FolderRenameManifestEntry[] = [];
+  const restoredTargetFolderIdSet = new Set<string>();
 
   async function processOperation(op: Operation, currentlyExecuting: boolean): Promise<OperationOutcome> {
     // Gate 0 (defense-in-depth)
@@ -380,7 +421,12 @@ async function main(): Promise<void> {
 
     // === 実行 ===
     try {
-      const targetFolderId = await resolveChildFolderPath(drive, plan.canonicalFolderId, op.targetSegments);
+      const { id: targetFolderId, restoredFolderIds } = await resolveChildFolderPath(
+        drive,
+        plan.canonicalFolderId,
+        op.targetSegments
+      );
+      for (const id of restoredFolderIds) restoredTargetFolderIdSet.add(id);
       await drive.files.update({
         fileId: op.driveFileId,
         addParents: targetFolderId,
@@ -484,13 +530,20 @@ async function main(): Promise<void> {
   console.log('\n=== Write Summary ===');
   console.log(JSON.stringify(writeSummary, null, 2));
 
+  function buildManifest(): ExecutionManifest {
+    return {
+      planId: plan.planId,
+      environment: plan.environment,
+      fileMoves,
+      folderRenames,
+      restoredTargetFolderIds: [...restoredTargetFolderIdSet],
+    };
+  }
+
   // チェックポイント書き込み(codex review P1指摘対応): 後続の統合済みリネーム走査
   // (isFolderTreeEmptyの再帰列挙)が一時的なDrive APIエラー等でthrowした場合でも、
   // ここまでに成功したfile移動のmanifestを確実に残す(rollbackに必須の記録)。
-  fs.writeFileSync(
-    manifestOutFile,
-    JSON.stringify({ planId: plan.planId, environment: plan.environment, fileMoves, folderRenames }, null, 2)
-  );
+  fs.writeFileSync(manifestOutFile, JSON.stringify(buildManifest(), null, 2));
 
   const writeSkippedDrift = writeOutcomes.filter(
     (o) => o.status === 'skipped' && o.reason.startsWith('precondition mismatch')
@@ -502,10 +555,7 @@ async function main(): Promise<void> {
     }
     console.error('');
     console.error(DRIFT_RUNBOOK);
-    fs.writeFileSync(
-      manifestOutFile,
-      JSON.stringify({ planId: plan.planId, environment: plan.environment, fileMoves, folderRenames }, null, 2)
-    );
+    fs.writeFileSync(manifestOutFile, JSON.stringify(buildManifest(), null, 2));
     await admin.app().delete();
     process.exit(1);
   }
@@ -562,14 +612,10 @@ async function main(): Promise<void> {
     }
   }
 
-  const manifest: ExecutionManifest = {
-    planId: plan.planId,
-    environment: plan.environment,
-    fileMoves,
-    folderRenames,
-  };
-  fs.writeFileSync(manifestOutFile, JSON.stringify(manifest, null, 2));
-  console.log(`\nManifest written to ${manifestOutFile} (${fileMoves.length} file moves, ${folderRenames.length} folder renames)`);
+  fs.writeFileSync(manifestOutFile, JSON.stringify(buildManifest(), null, 2));
+  console.log(
+    `\nManifest written to ${manifestOutFile} (${fileMoves.length} file moves, ${folderRenames.length} folder renames, ${restoredTargetFolderIdSet.size} restored target folders)`
+  );
 
   await admin.app().delete();
 

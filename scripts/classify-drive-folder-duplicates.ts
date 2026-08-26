@@ -40,6 +40,7 @@ import {
   type RecommendedAction,
 } from './lib/folderMergePlanTypes';
 import { readDriveApiVersionSnapshot } from './lib/driveApiVersionGate';
+import { resolveExportCategory } from './lib/resolveExportCategory';
 
 const projectId = process.env.FIREBASE_PROJECT_ID;
 if (!projectId) {
@@ -371,6 +372,12 @@ async function main(): Promise<void> {
     let targetSegments: string[] = [];
     let destinationConflict = false;
     let expectedCareManagerFolderName: string | null = null;
+    // codex review P1/P2指摘対応: hash計算にも使うため、if-block外の変数として保持する
+    // (以前はhash側が生のdoc.category/customerFurigana欠如のまま計算しておりtargetSegments
+    // 解決と異なる入力を使っていた)。
+    let resolvedCustomerId: string | null = null;
+    let resolvedCustomerFurigana: string | null = null;
+    let resolvedDocumentCategory: string = '';
 
     if (firestoreData) {
       const careManagerRaw = (firestoreData.careManager as string | undefined) ?? '';
@@ -392,23 +399,27 @@ async function main(): Promise<void> {
         firestoreDocForClassifier.careManagerName = expectedCareManagerFolderName ?? '<unresolved>';
       }
 
+      // documentCategoryは`masters/documents/items`をdocumentType名で引いて解決する
+      // (exportDocument.tsと同一ロジック、codex review P1指摘対応: 生のdoc.categoryは
+      // documentType手動訂正後に追従更新されず古い配置先になりうる)。careManagerの
+      // 一致・不一致に関わらず、hash用に常に解決しておく。
+      const documentTypeRaw = (firestoreData.documentType as string | undefined) ?? '';
+      resolvedDocumentCategory = await resolveExportCategory(db, documentTypeRaw);
+
+      resolvedCustomerId = (firestoreData.customerId as string | null | undefined) ?? null;
+      if (resolvedCustomerId) {
+        resolvedCustomerFurigana = (await getCustomerFurigana(resolvedCustomerId)) ?? null;
+      }
+
       if (expectedCareManagerFolderName === canonicalName) {
         // customer/documentCategory以降のセグメントを解決(担当ケアマネが一致する場合のみ、
-        // 無駄なFirestore/Drive呼び出しを避ける)
-        let customerFurigana: string | undefined;
-        const customerId = firestoreData.customerId as string | null | undefined;
-        if (customerId) {
-          customerFurigana = await getCustomerFurigana(customerId);
-        }
+        // 無駄なDrive呼び出しを避ける)
         const fullDocInput: FolderPathDocInput = {
           careManagerName: careManagerRaw,
           customerName: (firestoreData.customerName as string | undefined) ?? '',
-          customerFurigana,
-          documentCategory:
-            (firestoreData.category as string | undefined) ||
-            (firestoreData.documentType as string | undefined) ||
-            '',
-          documentType: (firestoreData.documentType as string | undefined) ?? '',
+          customerFurigana: resolvedCustomerFurigana ?? undefined,
+          documentCategory: resolvedDocumentCategory,
+          documentType: documentTypeRaw,
           fileDate: firestoreData.fileDate ? (firestoreData.fileDate as admin.firestore.Timestamp).toDate() : null,
         };
         try {
@@ -454,10 +465,9 @@ async function main(): Promise<void> {
         ? computeFirestoreSnapshotHash({
             careManager: (firestoreData.careManager as string | undefined) ?? '',
             customerName: (firestoreData.customerName as string | undefined) ?? '',
-            documentCategory:
-              (firestoreData.category as string | undefined) ||
-              (firestoreData.documentType as string | undefined) ||
-              '',
+            customerId: resolvedCustomerId,
+            customerFurigana: resolvedCustomerFurigana,
+            documentCategory: resolvedDocumentCategory,
             documentType: (firestoreData.documentType as string | undefined) ?? '',
             fileDateIso: firestoreData.fileDate
               ? (firestoreData.fileDate as admin.firestore.Timestamp).toDate().toISOString()

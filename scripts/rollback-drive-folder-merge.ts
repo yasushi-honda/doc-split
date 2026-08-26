@@ -188,6 +188,38 @@ async function main(): Promise<void> {
     }
   }
 
+  // ─── 復元済みtarget folderの再trashed化(codex review P2指摘対応) ────────
+  // childFolderResolver.tsがcanonical配下でuntrashしたカテゴリ/顧客フォルダは、
+  // rollbackでfileが戻された後もactiveなまま放置されると、rollback前の状態
+  // (trashed)を完全には復元できない。空になったfolderのみ、安全側で再trashedにする
+  // (他に無関係なfileが後から追加されていれば空ではなくなっているため自然にskipされる)。
+  if (execute) {
+    for (const folderId of manifest.restoredTargetFolderIds ?? []) {
+      try {
+        const listRes = await drive.files.list({
+          q: `'${folderId}' in parents`,
+          fields: 'files(id)',
+          includeItemsFromAllDrives: true,
+          pageSize: 1,
+          ...SUPPORTS_ALL_DRIVES,
+        });
+        if ((listRes.data.files ?? []).length > 0) {
+          console.log(`⏭️  folder ${folderId} の再trashed化をskip(配下に他fileが残存)`);
+          continue;
+        }
+        await drive.files.update({
+          fileId: folderId,
+          requestBody: { trashed: true },
+          fields: 'id',
+          ...SUPPORTS_ALL_DRIVES,
+        });
+        console.log(`✅ folder ${folderId} を再trashed化(rollback前は復元済み状態だった)`);
+      } catch (err) {
+        console.error(`❌ folder ${folderId} の再trashed化に失敗: ${(err as Error).message}`);
+      }
+    }
+  }
+
   await admin.app().delete();
 
   const errorCount = outcomes.filter((o) => o.status === 'error').length;
