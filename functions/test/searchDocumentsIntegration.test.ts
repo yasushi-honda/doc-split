@@ -951,4 +951,27 @@ describe('searchDocuments handler integration (#401a, Closes #401)', () => {
       expect(ids).to.deep.equal(expectedTopIds);
     }).timeout(60000);
   });
+
+  // ----------------------------------------
+  // AC11: split ステータスドキュメントの除外 (Issue #810)
+  // ----------------------------------------
+  describe('AC11: split ステータスドキュメントの除外', () => {
+    it('search_index に posting が残留していても status=split の doc は結果・total から除外される', async () => {
+      // 分割元ドキュメントが検索インデックスに滞留しているケース (トリガーの
+      // 削除漏れ・過去データ) を模擬。documents 側は存在するが status='split'。
+      await seedUser();
+      await seedSearchIndex('ac11splitword', {
+        'live-1': { score: 1.0, fieldsMask: 8 },
+        'split-1': { score: 1.0, fieldsMask: 8 },
+      });
+      await seedDocument('live-1', { fileDate: ts('2026-04-27') });
+      await seedDocument('split-1', { fileDate: ts('2026-04-28'), status: 'split' });
+
+      const result = await callSearch({ query: 'ac11splitword' });
+
+      expect(result.total).to.equal(1);
+      expect(result.documents.map((d) => d.id)).to.deep.equal(['live-1']);
+      expect(result.documents.map((d) => d.id)).to.not.include('split-1');
+    });
+  });
 });

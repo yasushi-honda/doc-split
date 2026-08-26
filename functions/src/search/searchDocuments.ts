@@ -123,6 +123,18 @@ function setCache(key: string, result: SearchResult): void {
   });
 }
 
+/**
+ * 検索結果キャッシュ(10分TTL)を全消去する。
+ *
+ * Issue #810 codex review指摘(PR #818): ドキュメントがsplit等processed以外へ
+ * 遷移する前にキャッシュされた検索結果は、split除外フィルタ(下記)を経由せず
+ * そのままservedされ続けてしまう。searchIndexer.tsのprocessSearchIndexTriggerが
+ * status遷移でインデックスを削除するのと同時にこれを呼び、混在情報の残留露出を防ぐ。
+ */
+export function invalidateSearchCache(): void {
+  cache.clear();
+}
+
 // ============================================
 // 検索ロジック
 // ============================================
@@ -320,6 +332,14 @@ export const searchDocuments = onCall<SearchRequest>(
         continue;
       }
       const data = snapshot.data()!;
+      // Issue #810: 分割元ドキュメント(status='split')は他利用者情報が混在した
+      // 複合PDFであり検索結果に露出させてはならない。onDocumentWriteSearchIndex
+      // トリガー側でも新規遷移時にインデックス削除するが、遷移前に登録済みの
+      // 滞留エントリを確実に除外するため取得後にも防御的にフィルタする。
+      if (data.status === 'split') {
+        orphanedDocIds.push(docId);
+        continue;
+      }
       sortableDocs.push({
         docId,
         score: filteredDocs[i]!.score,
