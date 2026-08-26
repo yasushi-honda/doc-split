@@ -79,6 +79,13 @@ describe('classifyDuplicateFile', () => {
     expect(result.reason).to.match(/conflict/);
   });
 
+  it('routes individually-trashed files to manual-review (does not auto-restore user deletions)', () => {
+    const result = classifyDuplicateFile(baseEvidence({ trashed: true }));
+    expect(result.classification).to.equal('ManualReviewRequired');
+    expect(result.recommendedAction).to.equal('manual-review');
+    expect(result.reason).to.match(/trashed/);
+  });
+
   it('never returns move-to-canonical for ManualReviewRequired classification (defense-in-depth precondition)', () => {
     const cases: Partial<FileEvidence>[] = [
       { mimeType: 'application/vnd.google-apps.shortcut' },
@@ -87,6 +94,7 @@ describe('classifyDuplicateFile', () => {
       { firestoreDoc: null },
       { firestoreDoc: { docId: 'doc-1', careManagerName: '別 担当者' } },
       { destinationConflict: true },
+      { trashed: true },
     ];
     for (const override of cases) {
       const result = classifyDuplicateFile(baseEvidence(override));

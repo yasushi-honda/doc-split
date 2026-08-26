@@ -207,8 +207,12 @@ async function main(): Promise<void> {
     ].reverse();
     for (const folderId of targetFoldersToCleanup) {
       try {
+        // codex review 5巡目P2指摘対応: trashed=false条件を付けないと、逆順処理で
+        // 直前に子folder自身をtrashed化した直後でも一覧に残り続け(Drive APIは
+        // trashed条件を明示しない限りtrashed済みファイルも返す)、親が常に
+        // 「空でない」と誤判定されskipされてしまう。activeな子のみを対象にする。
         const listRes = await drive.files.list({
-          q: `'${folderId}' in parents`,
+          q: `'${folderId}' in parents and trashed=false`,
           fields: 'files(id)',
           includeItemsFromAllDrives: true,
           pageSize: 1,

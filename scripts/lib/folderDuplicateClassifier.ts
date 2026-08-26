@@ -41,6 +41,17 @@ export function classifyDuplicateFile(evidence: FileEvidence): ClassificationRes
     return manualReview(evidence, 'shortcut: not a regular file entity, requires manual handling');
   }
 
+  // codex review 5巡目P1指摘対応: duplicateフォルダ自体がtrashedであることと、
+  // その配下の個々のファイルがtrashedであることは別事象。ユーザーが意図的に
+  // ファイル単体を削除していた場合、自動移動(trashed:falseへの復元を伴う)は
+  // その削除意図を無視してしまう。ファイル自身がtrashedならmanual-reviewへ倒す。
+  if (evidence.trashed) {
+    return manualReview(
+      evidence,
+      'trashed: the file itself is trashed (may have been intentionally deleted by a user), refusing to auto-restore'
+    );
+  }
+
   if (evidence.parents.length !== 1) {
     return manualReview(
       evidence,
