@@ -7,6 +7,7 @@ import {
   convertFullWidthToHalfWidth,
   normalizeTextEnhanced,
   normalizeForMatching,
+  normalizeCustomerNameForMatching,
   convertEraToWesternYear,
   extractDateCandidates,
   selectMostReasonableDate,
@@ -57,6 +58,33 @@ describe('normalizeForMatching', () => {
 
   it('小文字化', () => {
     expect(normalizeForMatching('ABC会社')).to.equal('abc会社');
+  });
+});
+
+describe('normalizeCustomerNameForMatching (Issue #812)', () => {
+  it('異体字(旧字体)を新字体に正規化してから通常のマッチング正規化を適用する', () => {
+    // 渡邉→渡辺、古澤→古沢(GAIJI_MAP)。normalizeForMatchingと同じ結果になる
+    expect(normalizeCustomerNameForMatching('渡邉花子')).to.equal(normalizeForMatching('渡辺花子'));
+    expect(normalizeCustomerNameForMatching('古澤太郎')).to.equal(normalizeForMatching('古沢太郎'));
+  });
+
+  it('新字体で登録済みの名前と異体字表記の名前が同一の正規化結果になる(症状の再現確認)', () => {
+    const registered = normalizeCustomerNameForMatching('渡辺花子'); // マスタ登録済み(新字体)
+    const ocrOriginal = normalizeCustomerNameForMatching('渡邉花子'); // FAX原文(異体字)
+    expect(ocrOriginal).to.equal(registered);
+  });
+
+  it('通常のnormalizeForMatchingの処理(全半角統一・空白除去・小文字化)も維持する', () => {
+    expect(normalizeCustomerNameForMatching('渡邉 花子')).to.equal('渡辺花子');
+    expect(normalizeCustomerNameForMatching('ABC渡邉')).to.equal('abc渡辺');
+  });
+
+  it('空文字列は空文字列を返す', () => {
+    expect(normalizeCustomerNameForMatching('')).to.equal('');
+  });
+
+  it('異体字を含まない文字列はnormalizeForMatchingと同じ結果になる(非回帰)', () => {
+    expect(normalizeCustomerNameForMatching('鈴木一郎')).to.equal(normalizeForMatching('鈴木一郎'));
   });
 });
 

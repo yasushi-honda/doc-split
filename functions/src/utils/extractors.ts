@@ -16,6 +16,7 @@
 
 import {
   normalizeForMatching,
+  normalizeCustomerNameForMatching,
   normalizeTextEnhanced,
   convertFullWidthToHalfWidth,
   extractDateCandidates,
@@ -505,13 +506,18 @@ export function extractCustomerCandidates(
   }
 
   // 前処理
+  // Issue #812: 顧客名マッチングはnormalizeCustomerNameForMatchingを使い、
+  // OCR原文に含まれる異体字(渡邉等)を新字体(渡辺等)へ正規化してから比較する
+  // (顧客マスタ登録時は既にFE側で新字体化されているため、双方を同じ基準へ揃える)。
+  // この正規化は本関数内の顧客名マッチングのみに閉じており、事業所名等の
+  // 他のnormalizeForMatching呼び出し箇所には一切影響しない。
   const normalizedText = normalizeTextEnhanced(ocrText);
-  const matchingText = normalizeForMatching(normalizedText);
+  const matchingText = normalizeCustomerNameForMatching(normalizedText);
 
   const candidates: CustomerCandidate[] = [];
 
   for (const customer of customerMasters) {
-    const normalizedName = normalizeForMatching(customer.name);
+    const normalizedName = normalizeCustomerNameForMatching(customer.name);
     let score = 0;
     let matchType: MatchType = 'none';
 
@@ -522,7 +528,7 @@ export function extractCustomerCandidates(
     }
     // 2. ふりがなでの一致
     else if (customer.furigana) {
-      const normalizedFurigana = normalizeForMatching(customer.furigana);
+      const normalizedFurigana = normalizeCustomerNameForMatching(customer.furigana);
       if (matchingText.includes(normalizedFurigana)) {
         score = 95;
         matchType = 'exact';
@@ -532,7 +538,7 @@ export function extractCustomerCandidates(
     // 2.5. エイリアス（許容表記）での一致
     if (matchType === 'none' && customer.aliases && customer.aliases.length > 0) {
       for (const alias of customer.aliases) {
-        const normalizedAlias = normalizeForMatching(alias);
+        const normalizedAlias = normalizeCustomerNameForMatching(alias);
         if (matchingText.includes(normalizedAlias)) {
           score = 98; // 正式名称一致に近いスコア
           matchType = 'exact';

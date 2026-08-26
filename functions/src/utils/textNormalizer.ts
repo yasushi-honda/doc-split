@@ -14,6 +14,8 @@
  * - convertEraToWesternYear_()
  */
 
+import { normalizeGaiji } from '../../../shared/gaijiMap';
+
 /** 日付候補 */
 export interface DateCandidate {
   date: Date;
@@ -112,6 +114,24 @@ export function normalizeForMatching(text: string): string {
     .toLowerCase();
 
   return normalized;
+}
+
+/**
+ * 顧客名マッチング専用の正規化(Issue #812)。
+ *
+ * `normalizeForMatching` は事業所名・書類種別・ふりがな等でも共用される汎用関数で
+ * あり、また `shared/officeMasterValidation.ts` に独立した同名関数が存在し
+ * `functions/test/sharedValidation.test.ts` で両者の同等性をdrift検出テストして
+ * いる。GAIJI正規化(渡邉→渡辺等の異体字吸収)をそちらへ混ぜると、事業所名等の
+ * マッチング挙動が意図せず変わるほか、上記の同等性契約を壊す。そのため
+ * `normalizeForMatching` 自体は変更せず、顧客名マッチング呼び出し箇所
+ * (`extractors.ts` の `extractCustomerCandidates`)専用にこの合成関数を用意する。
+ *
+ * @param text 正規化対象テキスト(顧客名・ふりがな・エイリアス、またはOCR原文)
+ * @returns 正規化後のテキスト
+ */
+export function normalizeCustomerNameForMatching(text: string): string {
+  return normalizeForMatching(normalizeGaiji(text));
 }
 
 /**
