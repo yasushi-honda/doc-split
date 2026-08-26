@@ -139,3 +139,27 @@ describe('SearchBar — OOM ガード発動時バナー (Issue #497)', () => {
     expect(screen.queryByRole('status')).toBeNull()
   })
 })
+
+describe('SearchBar — 書類種別「不明」表記の共有sentinel統一 (Issue #814)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('documentTypeが空文字のとき、共有sentinel定数「不明文書」を表示する', () => {
+    setupMockedSearch({
+      results: [
+        {
+          id: 'doc-2',
+          fileName: 'sample2.pdf',
+          customerName: 'テスト顧客',
+          officeName: 'テスト事業所',
+          documentType: '',
+          fileDate: '2026-05-17',
+          score: 1.0,
+        },
+      ],
+    })
+    renderAndOpen()
+    expect(screen.getByText('不明文書')).toBeDefined()
+  })
+})

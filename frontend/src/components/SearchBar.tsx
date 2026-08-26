@@ -15,6 +15,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { useDebouncedSearch, type SearchResultDocument } from '@/hooks/useSearch';
+import { CONSTANTS } from '@shared/types';
 
 interface SearchBarProps {
   onResultClick?: (documentId: string) => void;
@@ -206,7 +207,7 @@ function SearchResultItem({
               {document.customerName || '不明顧客'}
             </span>
             <Badge variant="outline" className="text-xs shrink-0">
-              {document.documentType || '不明'}
+              {document.documentType || CONSTANTS.FILE_NAME_UNKNOWN_DOCUMENT}
             </Badge>
           </div>
           <div className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground">
