@@ -53,6 +53,7 @@ on:
           - force-reindex --doc-id --execute
           - investigate-office-duplicate
           - investigate-caremanager-duplicate
+          - investigate-caremanager-folder-duplicate
           - audit-short-office-masters
           - audit-short-office-masters --max-length 3
           - audit-short-office-masters --max-length 4
@@ -174,7 +175,7 @@ on:
         type: string
         default: ''
       name1:
-        description: 'Name 1 (required for investigate-office-duplicate / investigate-caremanager-duplicate; ignored otherwise)'
+        description: 'Name 1 (required for investigate-office-duplicate / investigate-caremanager-duplicate / investigate-caremanager-folder-duplicate; ignored otherwise)'
         required: false
         type: string
         default: ''
@@ -547,6 +548,18 @@ jobs:
             NODE_PATH=./functions/node_modules \
               FIREBASE_PROJECT_ID="$PROJECT_ID" \
               node "scripts/${SCRIPT_NAME}.js" "${ARGS[@]}"
+          elif [ "$SCRIPT_NAME" = "investigate-caremanager-folder-duplicate" ]; then
+            # Issue #811 Phase A: 実Driveフォルダの物理状態確認(read-only)。
+            # functions/src/drive/{driveAuth,folderPath,driveApiConstants}.ts に依存するため
+            # 上記jsスクリプト群(node直接実行)とは異なりts-node経由で実行する。
+            if [[ ! "$NAME1" =~ [^[:space:]] ]]; then
+              echo "ERROR: name1 must contain non-whitespace characters for investigate-caremanager-folder-duplicate" >&2
+              exit 1
+            fi
+            cd scripts
+            NODE_PATH=../functions/node_modules \
+              FIREBASE_PROJECT_ID="$PROJECT_ID" \
+              npx ts-node investigate-caremanager-folder-duplicate.ts --name "$NAME1"
           elif [ "$SCRIPT_NAME" = "delete-office-master" ]; then
             # delete_ids (CSV) を --id 引数列に展開 (Issue #504)
             if [ -z "${DELETE_IDS:-}" ]; then
