@@ -81,6 +81,10 @@ async function main(): Promise<void> {
 
   const outcomes: RollbackOutcome[] = [];
   const revertedOperationIds = new Set<string>();
+  // codex review 6巡目P2指摘対応: folder名復元・target folder再trashed化の失敗は
+  // console.errorのみでexit codeに反映されていなかった。file move分のerrorCountだけを
+  // 見て「rollback成功」と誤判定しないよう、folder操作の失敗も別途カウントする。
+  let folderOperationErrorCount = 0;
 
   for (const entry of targetMoves) {
     try {
@@ -183,6 +187,7 @@ async function main(): Promise<void> {
         });
         console.log(`✅ folder ${rename.folderId} のname復元: "${rename.newName}" → "${rename.oldName}"`);
       } catch (err) {
+        folderOperationErrorCount++;
         console.error(`❌ folder ${rename.folderId} のname復元に失敗: ${(err as Error).message}`);
       }
     }
@@ -230,6 +235,7 @@ async function main(): Promise<void> {
         });
         console.log(`✅ folder ${folderId} を再trashed化(rollback前は復元済み状態だった)`);
       } catch (err) {
+        folderOperationErrorCount++;
         console.error(`❌ folder ${folderId} の再trashed化に失敗: ${(err as Error).message}`);
       }
     }
@@ -238,7 +244,10 @@ async function main(): Promise<void> {
   await admin.app().delete();
 
   const errorCount = outcomes.filter((o) => o.status === 'error').length;
-  if (errorCount > 0) {
+  if (folderOperationErrorCount > 0) {
+    console.error(`\n${folderOperationErrorCount} folder操作(name復元/再trashed化)が失敗しました。Driveの状態を確認してください。`);
+  }
+  if (errorCount > 0 || folderOperationErrorCount > 0) {
     process.exit(1);
   }
 }

@@ -564,16 +564,25 @@ jobs:
             exit 1
           fi
           PLAN_RUN_ID=$(echo "$EXEC_ARGS_JSON" | jq -r '.planRunId // empty')
-          OPERATION_IDS=$(echo "$EXEC_ARGS_JSON" | jq -r '.approvedOperationIds // empty | join(",")')
-          if [ -z "$PLAN_RUN_ID" ] || [ -z "$OPERATION_IDS" ]; then
-            echo "ERROR: exec_args_json must contain planRunId (string) and approvedOperationIds (array)" >&2
+          if [ -z "$PLAN_RUN_ID" ]; then
+            echo "ERROR: exec_args_json must contain planRunId (string)" >&2
             exit 1
           fi
           if ! echo "$PLAN_RUN_ID" | grep -qE '^[0-9]+$'; then
             echo "ERROR: planRunId must be a numeric run id (got: $PLAN_RUN_ID)" >&2
             exit 1
           fi
-          if ! echo "$OPERATION_IDS" | grep -qE '^op-[0-9]+(,op-[0-9]+)*$'; then
+          # codex review 6巡目P2指摘対応: duplicateフォルダが既にfile 0件(classify結果が
+          # operations 0件)の場合、approvedOperationIdsは正当に空配列になりうる
+          # (rename-onlyの最終確定に必要)。空配列自体をエラー扱いにしない。フィールド
+          # 自体が存在しない/配列でない場合のみエラーとする。
+          HAS_VALID_OP_IDS_FIELD=$(echo "$EXEC_ARGS_JSON" | jq '(.approvedOperationIds // null) | type == "array"')
+          if [ "$HAS_VALID_OP_IDS_FIELD" != "true" ]; then
+            echo "ERROR: exec_args_json must contain approvedOperationIds (array, may be empty for a zero-operation plan)" >&2
+            exit 1
+          fi
+          OPERATION_IDS=$(echo "$EXEC_ARGS_JSON" | jq -r '.approvedOperationIds | join(",")')
+          if [ -n "$OPERATION_IDS" ] && ! echo "$OPERATION_IDS" | grep -qE '^op-[0-9]+(,op-[0-9]+)*$'; then
             echo "ERROR: approvedOperationIds must each match ^op-[0-9]+$ (got: $OPERATION_IDS)" >&2
             exit 1
           fi
@@ -604,7 +613,15 @@ jobs:
             echo "ERROR: plan-output.json not found at $PLAN_FILE" >&2
             exit 1
           fi
-          OP_IDS_JSON=$(echo "$OPERATION_IDS_CSV" | jq -R 'split(",")')
+          # codex review 6巡目P2指摘対応: OPERATION_IDS_CSVが空文字列の場合
+          # `jq -R 'split(",")'` は`[""]`(空文字列1件の配列)を返してしまい、
+          # 意図した`[]`(0件承認=zero-operation plan)にならない。空の場合は
+          # 明示的に`[]`とする。
+          if [ -z "$OPERATION_IDS_CSV" ]; then
+            OP_IDS_JSON='[]'
+          else
+            OP_IDS_JSON=$(echo "$OPERATION_IDS_CSV" | jq -R 'split(",")')
+          fi
           jq --argjson opids "$OP_IDS_JSON" '
             {
               planId: .planId,
@@ -751,10 +768,11 @@ jobs:
           elif [ "$SCRIPT_NAME" = "execute-drive-folder-merge" ]; then
             # Issue #811 Phase B Part A: 承認制の実行。plan + approval は前段stepでartifact取得+生成。
             # SCRIPT_ARGS は workflow_dispatch の choice に応じて "--dry-run" or "--execute"。
-            if [ -z "${DRIVE_OPERATION_IDS_CSV:-}" ]; then
-              echo "ERROR: drive_operation_ids_csv is empty (should be set by Parse execute-drive-folder-merge args step)" >&2
-              exit 1
-            fi
+            # codex review 6巡目P2指摘対応: DRIVE_OPERATION_IDS_CSVは空文字列でも正当
+            # (duplicateフォルダが既にfile 0件でrename-onlyを確定させる場合)。
+            # execute-drive-folder-merge.tsは--operationsに空文字列を渡されると
+            # フィルタなし(=plan.operations全件、この場合は元々0件)として扱うため
+            # そのまま渡してよい。空チェックはしない。
             cd scripts
             NODE_PATH=../functions/node_modules \
               FIREBASE_PROJECT_ID="$PROJECT_ID" \

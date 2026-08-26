@@ -149,6 +149,36 @@ async function fetchLiveSnapshot(
   };
 }
 
+/**
+ * codex review 6巡目P1指摘対応: `folderId`(通常はfileの直接の親)から親を辿り、
+ * `ancestorId`(duplicateフォルダroot=op.sourceFolderId)に到達するか確認する。
+ * classify後に中間フォルダ(顧客/カテゴリ階層)が別の場所へ移動された場合、file自身の
+ * parents/trashed/nameは変化しないためGate5のdrift検知をすり抜けてしまう。
+ * その場合でもfileが「本当にこのduplicate root配下にまだ属しているか」を
+ * 実行直前に再確認するための独立ゲート。
+ */
+async function isDescendantOfOrEqual(
+  drive: drive_v3.Drive,
+  folderId: string,
+  ancestorId: string,
+  SUPPORTS_ALL_DRIVES: Record<string, boolean>,
+  maxDepth = 10
+): Promise<boolean> {
+  let currentId: string | null = folderId;
+  for (let i = 0; i < maxDepth && currentId; i++) {
+    if (currentId === ancestorId) return true;
+    const fileId: string = currentId;
+    const res: { data: { parents?: string[] | null } } = await drive.files.get({
+      fileId,
+      fields: 'parents',
+      ...SUPPORTS_ALL_DRIVES,
+    });
+    const parents = res.data.parents ?? [];
+    currentId = parents[0] ?? null;
+  }
+  return false;
+}
+
 function sameStringSet(a: string[], b: string[]): boolean {
   if (a.length !== b.length) return false;
   const sa = [...a].sort();
@@ -344,6 +374,31 @@ async function main(): Promise<void> {
         reason: `precondition mismatch: drive drift (parents=${JSON.stringify(liveForIdempotency.parents)} vs expected=${JSON.stringify(op.expectedParents)}, trashed=${liveForIdempotency.trashed} vs expected=${op.expectedTrashed}, name="${liveForIdempotency.name}" vs expected="${op.expectedName}")`,
       };
     }
+
+    // codex review 6巡目P1指摘対応: 上のparentsMatchはfile自身のparentsが
+    // classify時点と同一かのみを見る。classify後に中間フォルダ(顧客/カテゴリ階層)
+    // 自体がduplicate root配下から別の場所へ移動された場合、file自身のparentsは
+    // 変化しないためこのdrift検知をすり抜ける。fileの直接の親が今も
+    // op.sourceFolderId配下に実在するか、親を辿って再確認する。
+    const directParent = liveForIdempotency.parents[0];
+    if (directParent) {
+      const stillUnderSource = await isDescendantOfOrEqual(
+        drive,
+        directParent,
+        op.sourceFolderId,
+        SUPPORTS_ALL_DRIVES
+      );
+      if (!stillUnderSource) {
+        return {
+          operationId: op.operationId,
+          docId: op.docId,
+          action: op.recommendedAction,
+          status: 'skipped',
+          reason: `precondition mismatch: file's containing folder ${directParent} is no longer nested under source duplicate root ${op.sourceFolderId} (an intermediate folder may have been reparented since classification)`,
+        };
+      }
+    }
+
     const firestoreDrift = await checkFirestoreDrift(op);
     if (!firestoreDrift.ok) {
       return {
