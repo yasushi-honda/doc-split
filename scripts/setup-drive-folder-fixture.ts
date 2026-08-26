@@ -53,6 +53,7 @@ const db = admin.firestore();
 const FIXTURE_PREFIX = 'pr-x-fixture';
 const FIXTURE_DOC_MATCH = `${FIXTURE_PREFIX}-doc-match`;
 const FIXTURE_DOC_REASSIGNED = `${FIXTURE_PREFIX}-doc-reassigned`;
+const FIXTURE_CUSTOMER_ID = `${FIXTURE_PREFIX}-customer-match`;
 // cleanup時の広域sweep用(実行毎のランダムsuffixに関わらず、過去runの残骸を全て対象にする)
 const FIXTURE_NAME_SWEEP_TOKEN = 'フィクスチャ';
 
@@ -132,6 +133,7 @@ async function main(): Promise<void> {
     for (const docId of [FIXTURE_DOC_MATCH, FIXTURE_DOC_REASSIGNED]) {
       await db.doc(`documents/${docId}`).delete().catch(() => undefined);
     }
+    await db.doc(`masters/customers/items/${FIXTURE_CUSTOMER_ID}`).delete().catch(() => undefined);
     let pageToken: string | undefined;
     const toDelete: string[] = [];
     do {
@@ -185,12 +187,24 @@ async function main(): Promise<void> {
   }
   console.log(`careManager raw値(match): "${careManagerRawMatch}" → 解決フォルダ名: "${canonicalName}"`);
 
+  // ─── masters/customers/items fixture(furigana解決用) ──────────────
+  // dev実機検証(2026-08-27)で判明: customerセグメントがfurigana必須format
+  // (furiganaFallback='stop'がデフォルト)の場合、customerFuriganaが解決できないと
+  // resolveFolderSegments()がFuriganaMissingErrorをthrowし、classify側は安全側で
+  // destinationConflict=trueへ倒す(=常にmanual-review)。従来customerId:nullで
+  // furigana未提供だったため、move-to-canonical期待のfixture-match.txtが
+  // 意図通りに分類されず、devリハーサルで発覚した。
+  await db.doc(`masters/customers/items/${FIXTURE_CUSTOMER_ID}`).set({
+    name: 'フィクスチャ利用者A',
+    furigana: 'フィクスチャリヨウシャエー',
+  });
+
   // ─── Firestore fixture documents ───────────────────────
   const now = admin.firestore.Timestamp.now();
   await db.doc(`documents/${FIXTURE_DOC_MATCH}`).set({
     careManager: careManagerRawMatch,
     customerName: 'フィクスチャ利用者A',
-    customerId: null,
+    customerId: FIXTURE_CUSTOMER_ID,
     category: 'フィクスチャ書類',
     documentType: 'フィクスチャ書類',
     fileDate: now,

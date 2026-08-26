@@ -239,6 +239,20 @@ async function main(): Promise<void> {
       console.error(`FATAL: duplicate-id ${dupId} はフォルダではありません`);
       process.exit(2);
     }
+    // codex review(回帰修正後の追加指摘)対応: 「duplicateフォルダ配下のファイルは
+    // trashedフィールドが祖先由来で無条件trueになるため分類に使えない」という前提は、
+    // duplicateフォルダroot自体が必ずtrashedであることに依存している。この前提を
+    // 検証せず活性(trashed=false)なフォルダを--duplicate-idsに誤って渡された場合、
+    // そのフォルダ配下で個別にtrashedされたファイル(=ユーザーが意図的に削除した
+    // ファイル)まで見分けられずmove-to-canonicalへ分類され、実行時にtrashed:falseで
+    // 復元されてしまう。duplicate-idsの各要素は必ずtrashedであることをfail-closedで
+    // 強制する。
+    if (!g.data.trashed) {
+      console.error(
+        `FATAL: duplicate-id ${dupId} (name="${g.data.name}") がtrashed状態ではありません。--duplicate-idsは統合元(trashed済み重複フォルダ)のみを指定してください。`
+      );
+      process.exit(2);
+    }
     sourceFolderProvenance.push({
       id: dupId,
       name: g.data.name ?? '<unknown>',
