@@ -105,16 +105,16 @@ firebase deploy --only firestore:rules,firestore:indexes,storage -P cocoro
 ./scripts/deploy-all-clients.sh [--rules|--full] [--dry-run]
 ```
 
-**既知の制約**: 内部で`deploy-to-project.sh`を各クライアントに対して呼ぶだけのため、kanameone/cocoroどちらのローカル認証ギャップ（上記参照）も解消しない。Hostingを複数環境へ一括反映したい場合は、下記「複数環境への一括デプロイ」の通り、GitHub Actionsのdispatchを環境ごとに実行する（`--all`のような単一dispatchでの同時実行はスコープ外）。
+**既知の制約**: 内部で`deploy-to-project.sh`を各クライアントに対して呼ぶだけのため、kanameone/cocoroどちらのローカル認証ギャップ（上記参照）も解消しない。Hostingを複数環境へ一括反映したい場合は、下記「複数環境への一括デプロイ」の通り、`/deploy --all --hosting`等の明示指定でGitHub Actionsのdispatchを環境ごとに（順次）実行する（1回のGHA workflow実行で複数環境を同時デプロイするmatrix戦略はスコープ外。あくまで/deploy側が複数回dispatchを順に呼ぶ）。
 
 ## 複数環境への一括デプロイ
 
 複数環境（kanameone・cocoro等）へ同時に反映したい場合は、対象を**明示的に指定**する。会話の承認履歴から対象を暗黙に拡大解釈することはしない：
 
-- 対象を1つずつ明示して複数回`/deploy`を実行する（例: `/deploy kanameone --hosting` → `/deploy cocoro --hosting`）
-- Hosting反映はGitHub Actions経由（`gh workflow run "Deploy Firebase Hosting" -f environment=<env>`）を環境ごとに実行するのが最も確実
+- **単一コマンドでの明示的な複数指定**: `$ARGUMENTS`がカンマ区切り（例: `/deploy kanameone,cocoro --hosting`）または`--all`（例: `/deploy --all --hosting`、`.firebaserc`のdev/default以外の全クライアントが対象）を含む場合、対象一覧を先にユーザーへ確認表示してから、各環境についてHosting GHA dispatch（`gh workflow run "Deploy Firebase Hosting" -f environment=<env>`）を順に実行し、環境ごとにrun IDを特定して`gh run watch <run-id> --exit-status`で成功を確認する
+- 単一環境ずつ確認しながら進めたい場合は、`/deploy`を環境ごとに複数回実行してもよい（例: `/deploy kanameone --hosting` → `/deploy cocoro --hosting`）
 
-単一環境向けの`/deploy <1環境>`は、会話内で複数環境の話題が出ていたとしても当該1環境のみを対象とする。複数環境への反映が必要な場合は、その都度対象を明示すること。
+単一環境向けの`/deploy <1環境>`（カンマ区切り・`--all`を含まない）は、会話内で複数環境の話題が出ていたとしても当該1環境のみを対象とする。複数環境への反映は、コマンド自体にその対象を明示した場合にのみ行う。
 
 ## 変更内容別コマンド早見表
 
