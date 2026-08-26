@@ -181,12 +181,40 @@ async function checkFirestoreDrift(
 
 async function main(): Promise<void> {
   const { getDriveClient } = await import('../functions/src/utils/driveAuth');
-  const { SUPPORTS_ALL_DRIVES } = await import('../functions/src/drive/driveApiConstants');
+  const { SUPPORTS_ALL_DRIVES, escapeQueryValue } = await import('../functions/src/drive/driveApiConstants');
   const { resolveChildFolderPath, resolveChildFolderPathReadOnly } = await import(
     '../functions/src/drive/childFolderResolver'
   );
 
   const drive: drive_v3.Drive = await getDriveClient();
+
+  // === canonicalフォルダの再健全性確認(codex review P1指摘対応) ===
+  // classify時点の健全性確認(active・rootFolderId直下)はPlanに記録されるだけで、
+  // execute時には再検証されていなかった。承認からexecute実行までの間にcanonicalが
+  // 移動・trashed化された場合、無効な場所へファイルを移動し続けてしまうリスクがあった。
+  {
+    const canonicalCheck = await drive.files.get({
+      fileId: plan.canonicalFolderId,
+      fields: 'id, name, parents, trashed',
+      ...SUPPORTS_ALL_DRIVES,
+    });
+    if (canonicalCheck.data.trashed) {
+      console.error(`FATAL: canonicalFolderId (${plan.canonicalFolderId}) is now trashed. Re-run classify to confirm current state.`);
+      process.exit(2);
+    }
+    if (canonicalCheck.data.name !== plan.canonicalProvenance.name) {
+      console.error(
+        `FATAL: canonicalFolderId name drift (plan="${plan.canonicalProvenance.name}", runtime="${canonicalCheck.data.name}"). Re-run classify.`
+      );
+      process.exit(2);
+    }
+    if (!sameStringSet(canonicalCheck.data.parents ?? [], plan.canonicalProvenance.parents)) {
+      console.error(
+        `FATAL: canonicalFolderId parents drift (plan=${JSON.stringify(plan.canonicalProvenance.parents)}, runtime=${JSON.stringify(canonicalCheck.data.parents)}). Re-run classify.`
+      );
+      process.exit(2);
+    }
+  }
 
   const fileMoves: FileMoveManifestEntry[] = [];
   const folderRenames: FolderRenameManifestEntry[] = [];
@@ -283,6 +311,29 @@ async function main(): Promise<void> {
         status: 'skipped',
         reason: `precondition mismatch: ${firestoreDrift.reason}`,
       };
+    }
+
+    // 移動先の競合を再確認(codex review P1指摘対応): classify時点では競合なしと
+    // 判定されていても、承認からexecute実行までの間に別のエクスポート等が同一
+    // docSplitDocIdのファイルを移動先へ作成している可能性がある。readOnlyTargetIdが
+    // 既に存在する場合のみ、そこに他ファイルが無いか再確認する。
+    if (readOnlyTargetId !== null && op.docId !== '<unresolved>') {
+      const conflictCheck = await drive.files.list({
+        q: `'${readOnlyTargetId}' in parents and appProperties has { key='docSplitDocId' and value='${escapeQueryValue(op.docId)}' }`,
+        fields: 'files(id)',
+        includeItemsFromAllDrives: true,
+        ...SUPPORTS_ALL_DRIVES,
+      });
+      const conflictingFiles = (conflictCheck.data.files ?? []).filter((f) => f.id !== op.driveFileId);
+      if (conflictingFiles.length > 0) {
+        return {
+          operationId: op.operationId,
+          docId: op.docId,
+          action: op.recommendedAction,
+          status: 'skipped',
+          reason: `precondition mismatch: destination conflict detected at execution time (${conflictingFiles.length} other file(s) with same docSplitDocId already at target)`,
+        };
+      }
     }
 
     // Gate 9a/9b: provenance completeness + runtime再照合(Gate5と同一fetch結果を再利用、
@@ -433,6 +484,14 @@ async function main(): Promise<void> {
   console.log('\n=== Write Summary ===');
   console.log(JSON.stringify(writeSummary, null, 2));
 
+  // チェックポイント書き込み(codex review P1指摘対応): 後続の統合済みリネーム走査
+  // (isFolderTreeEmptyの再帰列挙)が一時的なDrive APIエラー等でthrowした場合でも、
+  // ここまでに成功したfile移動のmanifestを確実に残す(rollbackに必須の記録)。
+  fs.writeFileSync(
+    manifestOutFile,
+    JSON.stringify({ planId: plan.planId, environment: plan.environment, fileMoves, folderRenames }, null, 2)
+  );
+
   const writeSkippedDrift = writeOutcomes.filter(
     (o) => o.status === 'skipped' && o.reason.startsWith('precondition mismatch')
   );
@@ -478,10 +537,13 @@ async function main(): Promise<void> {
 
   const renameStamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
   for (const dupProvenance of plan.sourceFolderProvenance) {
-    const empty = await isFolderTreeEmpty(dupProvenance.id);
-    if (!empty) continue;
-    const newName = `${dupProvenance.name} (統合済み_${renameStamp})`;
+    // codex review P1指摘対応: isFolderTreeEmpty自体のthrow(一時的なDrive APIエラー等)も
+    // このtry/catchで吸収し、1フォルダの失敗が後続フォルダのリネーム処理や、既に
+    // 書き込み済みのmanifest(上のチェックポイント参照)を失わせないようにする。
     try {
+      const empty = await isFolderTreeEmpty(dupProvenance.id);
+      if (!empty) continue;
+      const newName = `${dupProvenance.name} (統合済み_${renameStamp})`;
       await drive.files.update({
         fileId: dupProvenance.id,
         requestBody: { name: newName },
@@ -496,7 +558,7 @@ async function main(): Promise<void> {
       });
       console.log(`📁 統合済みリネーム: ${dupProvenance.id} "${dupProvenance.name}" → "${newName}"`);
     } catch (err) {
-      console.error(`⚠️  duplicateフォルダ ${dupProvenance.id} のリネームに失敗: ${(err as Error).message}`);
+      console.error(`⚠️  duplicateフォルダ ${dupProvenance.id} の空判定/リネームに失敗: ${(err as Error).message}`);
     }
   }
 

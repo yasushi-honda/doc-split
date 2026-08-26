@@ -90,12 +90,20 @@ async function main(): Promise<void> {
         ...SUPPORTS_ALL_DRIVES,
       });
       const liveParents = live.data.parents ?? [];
-      if (!liveParents.includes(entry.newParentId)) {
+      // codex review P1指摘対応: parentsの一致だけでは、移行後にname変更・再trashed化された
+      // fileも無条件でmanifestの値へ上書きしてしまう(正当な事後変更を破壊しうる)。
+      // executeが移動時に必ずname不変・trashed:falseにする設計を前提に、その2点も
+      // 「移行直後の期待状態」として検証する。
+      if (
+        !liveParents.includes(entry.newParentId) ||
+        live.data.trashed !== false ||
+        live.data.name !== entry.oldName
+      ) {
         outcomes.push({
           driveFileId: entry.driveFileId,
           operationId: entry.operationId,
           status: 'skipped',
-          reason: `current parents (${JSON.stringify(liveParents)}) do not include expected post-migration parent (${entry.newParentId}); state changed since migration, not rolling back`,
+          reason: `current state (parents=${JSON.stringify(liveParents)}, trashed=${live.data.trashed}, name="${live.data.name}") does not match expected post-migration state (parents include ${entry.newParentId}, trashed=false, name="${entry.oldName}"); state changed since migration, not rolling back`,
         });
         continue;
       }
@@ -144,8 +152,12 @@ async function main(): Promise<void> {
   if (execute) {
     for (const rename of manifest.folderRenames) {
       const allMovesForRoot = manifest.fileMoves.filter((m) => m.sourceRootId === rename.folderId);
+      // codex review P2指摘対応: allMovesForRoot.length===0(元々空だったフォルダ、
+      // classify時点でfile moveが1件も無かったケース)は.every()が空配列でtrueを返すため
+      // 本来「全件revert済み(vacuously true)」として復元してよい。以前は0件チェックを
+      // 明示的にskip条件へ加えており、空フォルダのリネームが永久に復元不能だった。
       const allIncludedInThisRun = allMovesForRoot.every((m) => revertedOperationIds.has(m.operationId));
-      if (allMovesForRoot.length === 0 || !allIncludedInThisRun) {
+      if (!allIncludedInThisRun) {
         console.log(
           `⏭️  folder ${rename.folderId} のname復元をskip(このrunで全${allMovesForRoot.length}件のfile moveをrevertしていない)`
         );
