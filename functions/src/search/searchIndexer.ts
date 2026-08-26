@@ -41,6 +41,88 @@ const FIELD_TO_MASK: Record<TokenField, number> = {
 };
 
 /**
+ * トリガーの状態遷移ロジック本体。`onDocumentWritten`のCloudEvent配管から
+ * 独立させることでテスト容易性を確保する(`driveExportTrigger.ts`の
+ * `processDriveExportTrigger`と同型パターン)。
+ */
+export async function processSearchIndexTrigger(
+  docId: string,
+  before: FirebaseFirestore.DocumentData | undefined,
+  after: FirebaseFirestore.DocumentData | undefined
+): Promise<void> {
+  // 削除の場合
+  if (!after) {
+    if (before?.search?.tokens) {
+      await removeDocumentFromIndex(docId, before.search.tokens);
+      console.log(`Search index removed for document: ${docId}`);
+    }
+    return;
+  }
+
+  // 処理完了したドキュメントのみインデックス更新。processed 以外へ遷移した場合
+  // (例: FAX分割による status='split') は既存インデックスを持ち越さず削除する。
+  // Issue #810: これを怠ると分割元ドキュメント(他利用者情報混在の複合PDF)の
+  // インデックスエントリが残留し、検索結果に露出し続ける。
+  if (after.status !== 'processed') {
+    if (before?.search?.tokens) {
+      await removeDocumentFromIndex(docId, before.search.tokens);
+      console.log(
+        `Search index removed for document (status changed to ${String(after.status)}): ${docId}`
+      );
+    }
+    return;
+  }
+
+  // トークン生成
+  const fileDate = after.fileDate?.toDate?.() || null;
+  const tokens = generateDocumentTokens({
+    customerName: after.customerName || null,
+    officeName: after.officeName || null,
+    documentType: after.documentType || null,
+    fileDate,
+    fileName: after.fileName || null,
+  });
+
+  if (tokens.length === 0) {
+    return;
+  }
+
+  // ハッシュで変更チェック（idempotent）
+  const newHash = generateTokensHash(tokens);
+  const oldHash = before?.search?.tokenHash || null;
+
+  if (newHash === oldHash) {
+    console.log(`Search index unchanged for document: ${docId}`);
+    return;
+  }
+
+  // 古いトークンを削除
+  if (before?.search?.tokens) {
+    const oldTokens = before.search.tokens as string[];
+    const newTokenStrings = tokens.map(t => t.token);
+    const tokensToRemove = oldTokens.filter(t => !newTokenStrings.includes(t));
+    if (tokensToRemove.length > 0) {
+      await removeTokensFromIndex(docId, tokensToRemove);
+    }
+  }
+
+  // 新しいトークンをインデックスに追加
+  await addDocumentToIndex(docId, tokens);
+
+  // ドキュメントに検索メタデータを保存（idempotent用）
+  await db.doc(`documents/${docId}`).update({
+    search: {
+      version: 1,
+      tokens: tokens.map(t => t.token),
+      tokenHash: newHash,
+      indexedAt: Timestamp.now(),
+    },
+  });
+
+  console.log(`Search index updated for document: ${docId}, tokens: ${tokens.length}`);
+}
+
+/**
  * ドキュメント変更時に検索インデックスを更新
  */
 export const onDocumentWriteSearchIndex = onDocumentWritten(
@@ -58,68 +140,7 @@ export const onDocumentWriteSearchIndex = onDocumentWritten(
     const docId = event.params.docId;
     const before = event.data?.before?.data();
     const after = event.data?.after?.data();
-
-    // 削除の場合
-    if (!after) {
-      if (before?.search?.tokens) {
-        await removeDocumentFromIndex(docId, before.search.tokens);
-        console.log(`Search index removed for document: ${docId}`);
-      }
-      return;
-    }
-
-    // 処理完了したドキュメントのみインデックス更新
-    if (after.status !== 'processed') {
-      return;
-    }
-
-    // トークン生成
-    const fileDate = after.fileDate?.toDate?.() || null;
-    const tokens = generateDocumentTokens({
-      customerName: after.customerName || null,
-      officeName: after.officeName || null,
-      documentType: after.documentType || null,
-      fileDate,
-      fileName: after.fileName || null,
-    });
-
-    if (tokens.length === 0) {
-      return;
-    }
-
-    // ハッシュで変更チェック（idempotent）
-    const newHash = generateTokensHash(tokens);
-    const oldHash = before?.search?.tokenHash || null;
-
-    if (newHash === oldHash) {
-      console.log(`Search index unchanged for document: ${docId}`);
-      return;
-    }
-
-    // 古いトークンを削除
-    if (before?.search?.tokens) {
-      const oldTokens = before.search.tokens as string[];
-      const newTokenStrings = tokens.map(t => t.token);
-      const tokensToRemove = oldTokens.filter(t => !newTokenStrings.includes(t));
-      if (tokensToRemove.length > 0) {
-        await removeTokensFromIndex(docId, tokensToRemove);
-      }
-    }
-
-    // 新しいトークンをインデックスに追加
-    await addDocumentToIndex(docId, tokens);
-
-    // ドキュメントに検索メタデータを保存（idempotent用）
-    await db.doc(`documents/${docId}`).update({
-      search: {
-        version: 1,
-        tokens: tokens.map(t => t.token),
-        tokenHash: newHash,
-        indexedAt: Timestamp.now(),
-      },
-    });
-
-    console.log(`Search index updated for document: ${docId}, tokens: ${tokens.length}`);
+    await processSearchIndexTrigger(docId, before, after);
   }
 );
 
