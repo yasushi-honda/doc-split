@@ -195,10 +195,16 @@ async function main(): Promise<void> {
   // では完全削除できないため、restored分と同じく「空なら安全側でtrashed」で扱う
   // (他に無関係なfileが後から追加されていれば空ではなくなっているため自然にskipされる)。
   if (execute) {
+    // codex review 4巡目P2指摘対応: resolveChildFolderPath()はcustomer/category等の
+    // 階層を親→子の順にrestored/createdFolderIdsへpushする。記録順のまま親から
+    // 処理すると、子がまだ存在するせいで親が「空でない」と判定されskipされ、
+    // その後子がtrashedになっても親は再試行されず放置される。配下の空判定は
+    // 子から親へ辿る必要があるため、記録順を反転(=深い階層から浅い階層へ)してから
+    // 処理する(重複IDはexecute側で既にSetによりdedupe済み)。
     const targetFoldersToCleanup = [
       ...(manifest.restoredTargetFolderIds ?? []),
       ...(manifest.createdTargetFolderIds ?? []),
-    ];
+    ].reverse();
     for (const folderId of targetFoldersToCleanup) {
       try {
         const listRes = await drive.files.list({

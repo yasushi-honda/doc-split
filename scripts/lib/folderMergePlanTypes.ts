@@ -52,6 +52,21 @@ export function verifyActionProvenanceInvariant(
   action: RecommendedAction,
   provenanceRequired: boolean
 ): { ok: true } | { ok: false; reason: string } {
+  // codex review 4巡目P1指摘対応: planはJSONパース直後の値であり、TypeScriptの型
+  // (RecommendedAction/boolean)は実行時に強制されない。改竄・破損planでactionが
+  // 未知の文字列/undefined、あるいはprovenanceRequiredがundefinedの場合、
+  // PROVENANCE_REQUIRED_BY_ACTION[action]もprovenanceRequiredも共にundefinedとなり
+  // `undefined === undefined`でinvariantを素通りしてしまう(gateの意味喪失)。
+  // action・provenanceRequiredそれぞれを明示的に検証してからlookupする。
+  if (action !== 'move-to-canonical' && action !== 'manual-review') {
+    return { ok: false, reason: `schema invariant violated: unknown action '${String(action)}'` };
+  }
+  if (typeof provenanceRequired !== 'boolean') {
+    return {
+      ok: false,
+      reason: `schema invariant violated: provenanceRequired must be boolean, got ${typeof provenanceRequired}`,
+    };
+  }
   const expected = PROVENANCE_REQUIRED_BY_ACTION[action];
   if (expected === provenanceRequired) return { ok: true };
   return {

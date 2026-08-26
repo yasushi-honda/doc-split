@@ -196,7 +196,7 @@ async function checkFirestoreDrift(
 async function main(): Promise<void> {
   const { getDriveClient } = await import('../functions/src/utils/driveAuth');
   const { SUPPORTS_ALL_DRIVES, escapeQueryValue } = await import('../functions/src/drive/driveApiConstants');
-  const { resolveChildFolderPath, resolveChildFolderPathReadOnly } = await import(
+  const { resolveChildFolderPath, resolveChildFolderPathReadOnly, PartialChildFolderPathError } = await import(
     '../functions/src/drive/childFolderResolver'
   );
 
@@ -482,6 +482,14 @@ async function main(): Promise<void> {
         details: { newParentId: targetFolderId },
       };
     } catch (err) {
+      // codex review 4巡目P2指摘対応: 階層の途中でresolveChildFolderPathが失敗した
+      // 場合でも、それまでにDrive上でuntrash/作成済みのフォルダはPartialChildFolderPathError
+      // 経由で伝搬されるため、失敗理由をerror outcomeにする前にmanifestへ確実に記録する
+      // (記録漏れがあるとrollbackで復元できない孤立フォルダになる)。
+      if (err instanceof PartialChildFolderPathError) {
+        for (const id of err.restoredFolderIds) restoredTargetFolderIdSet.add(id);
+        for (const id of err.createdFolderIds) createdTargetFolderIdSet.add(id);
+      }
       return {
         operationId: op.operationId,
         docId: op.docId,
@@ -552,6 +560,11 @@ async function main(): Promise<void> {
     const outcome = await processOperation(op, true);
     writeOutcomes.push(outcome);
     console.log(`${OUTCOME_SYMBOLS[outcome.status] ?? '?'} ${outcome.operationId} ${outcome.docId}: ${outcome.reason}`);
+    // codex review 4巡目P1指摘対応: writeループはsequentialなので(Promise.allしていない)、
+    // 各file移動の直後にmanifestを永続化して安全(このoutcomeがexecutedでなくても
+    // 冪等な上書きなのでコスト無視できる)。ループの途中でプロセスがクラッシュ/kill
+    // された場合でも、それまでに成功したfile移動をrollback可能な状態にする。
+    fs.writeFileSync(manifestOutFile, JSON.stringify(buildManifest(), null, 2));
   }
   const writeSummary = summarize(writeOutcomes);
   console.log('\n=== Write Summary ===');

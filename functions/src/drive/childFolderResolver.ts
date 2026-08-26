@@ -122,6 +122,25 @@ export interface ResolvedChildFolderPath {
 }
 
 /**
+ * `resolveChildFolderPath`が階層の途中(2segment目以降)で失敗した場合に投げるerror。
+ * 失敗までに実際にDrive側でuntrash/作成済みのフォルダID(rollback記録に必須)を
+ * 呼び出し元へ伝搬する(codex review 4巡目P2指摘対応)。
+ */
+export class PartialChildFolderPathError extends Error {
+  readonly restoredFolderIds: string[];
+  readonly createdFolderIds: string[];
+  readonly cause: unknown;
+  constructor(cause: unknown, restoredFolderIds: string[], createdFolderIds: string[]) {
+    const causeMessage = cause instanceof Error ? cause.message : String(cause);
+    super(`[Phase B Part A] 子フォルダpath解決が途中で失敗しました: ${causeMessage}`);
+    this.name = 'PartialChildFolderPathError';
+    this.restoredFolderIds = restoredFolderIds;
+    this.createdFolderIds = createdFolderIds;
+    this.cause = cause;
+  }
+}
+
+/**
  * `segments`配列を`rootId`から順にfind-or-createで辿り、最終フォルダIDを返す。
  */
 export async function resolveChildFolderPath(
@@ -133,7 +152,15 @@ export async function resolveChildFolderPath(
   const restoredFolderIds: string[] = [];
   const createdFolderIds: string[] = [];
   for (const segment of segments) {
-    const result = await resolveChildFolder(drive, currentId, segment);
+    let result: ResolvedChildFolder;
+    try {
+      result = await resolveChildFolder(drive, currentId, segment);
+    } catch (err) {
+      // 直前までのsegmentで実際にuntrash/作成済みのフォルダは、この呼び出しが
+      // 失敗してもDrive上では既にactive化されている。呼び出し元がmanifestへ
+      // 記録できるよう、蓄積済みのIDを失敗理由と一緒に伝搬する。
+      throw new PartialChildFolderPathError(err, restoredFolderIds, createdFolderIds);
+    }
     currentId = result.id;
     if (result.restored) restoredFolderIds.push(result.id);
     if (result.created) createdFolderIds.push(result.id);
