@@ -52,6 +52,13 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+function sameStringSet(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  const sa = [...a].sort();
+  const sb = [...b].sort();
+  return sa.every((v, i) => v === sb[i]);
+}
+
 function getOpt(name: string): string | null {
   const i = process.argv.indexOf(name);
   return i >= 0 && i + 1 < process.argv.length ? process.argv[i + 1] : null;
@@ -244,10 +251,17 @@ async function main(): Promise<void> {
       }
       const g = await drive.files.get({
         fileId: id,
-        fields: 'id, name, trashed',
+        fields: 'id, name, trashed, parents',
         ...SUPPORTS_ALL_DRIVES,
       });
-      const isAlreadyConsolidated = !!g.data.trashed && consolidatedPattern.test(g.data.name ?? '');
+      // codex review追加指摘対応: name+trashedのみの緩和は、統合済みフォルダが
+      // 一旦復元→別の場所へ移動→再度trashedされた場合でも(名前が同じパターンで
+      // あれば)「アカウント済み」と誤って通してしまう。canonicalの直接の親配下に
+      // 現在も実在することも必須条件にする(移動されたsubtreeを誤って有効な
+      // duplicate rootとして扱わないため)。
+      const parentsOk = sameStringSet(g.data.parents ?? [], [expectedCanonicalParentId]);
+      const isAlreadyConsolidated =
+        !!g.data.trashed && parentsOk && consolidatedPattern.test(g.data.name ?? '');
       if (!isAlreadyConsolidated) stillMissing.push(id);
     }
     missingFromScan = stillMissing;
