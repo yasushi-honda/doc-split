@@ -75,13 +75,13 @@ catchup後、積み残しIssueのうちdecision-maker選定の#774(BE Drive expo
 
 **kanameone/cocoro反映状況（実測確認）**: PR #808はmain→dev自動デプロイのみ完了、**kanameone/cocoroへは未反映**（`Deploy Cloud Functions`workflow_dispatchが必要）。直近のクライアント環境デプロイは2026-08-06 03:05(kanameone)/03:13(cocoro)のPR #804(sweep starvationバグ修正)時点で止まっている。#503自体はobservability向上のみで本番挙動に影響しないため、decision-maker判断で即時デプロイは見送り、次回の`Deploy Cloud Functions`実行時に他の変更とまとめて反映する方針。
 
-## 【進行中・2026-08-26開始】kanameoneクライアントフィードバック8件対応（P1 2/3完了、P2未着手）
+## 【進行中・2026-08-26開始】kanameoneクライアントフィードバック8件対応（P1 3/3完了、P2未着手）
 
 kanameoneから8件のフィードバック（①TOP画面のCM表示 ②「不明」「不明顧客」表記の不統一 ③複数名FAX分割時の元データ残存 ④PDF複数アップロード不可 ⑤ローディング時間 ⑥ケアマネフォルダ重複 ⑦日付フィルタに今日/昨日追加 ⑧氏名異体字マッチング）が届き、triage→Issue #810〜#817起票→P1優先（decision-maker承認）で対応中。
 
 **Issue #810（検索インデックスのsplitドキュメント漏れ、PR #818マージ・dev/kanameone/cocoro全反映完了）**: FAX分割元の複合ドキュメント（他利用者情報が混在）が`status:'split'`に変更されるのみで検索インデックスから削除されず、検索結果に露出し続けていた問題。`searchDocuments.ts`にstatusフィルタ追加＋`searchIndexer.ts`のトリガーロジックを`processSearchIndexTrigger`として切り出し状態遷移時にインデックス削除するよう修正。`codex review`で2件指摘（キャッシュ無効化漏れ・df二重減算）を受け同PRで解消。
 
-**Issue #811（kanameoneケアマネフォルダ重複、調査中・未完了）**: 実データ調査の結果、当初仮説（コード側の表記ゆれ未対応）はPR #752（2026-07-28マージ）で既に修正済みと判明。実データはcareManagerName「森 奈穂美」（姓名間スペース）に統一されており生データの表記ゆれは無い。plan-crossreview（grip+codex 2巡）で「documentの直接親フォルダはケアマネ階層と異なる（顧客名/書類種別/年月が最下層）ため単純比較では判定できない」という設計上の欠陥を発見、Phase A（Drive API直接調査スクリプト）の設計を訂正済みだが**未実装**。次回セッションで`scripts/investigate-caremanager-folder-duplicate.ts`を実装しGitHub Actions経由でkanameone実Driveフォルダ構造を調査するところから再開。
+**Issue #811（kanameoneケアマネフォルダ重複、Phase A調査完了・close済み）**: 実データ調査の結果、当初仮説（コード側の表記ゆれ未対応）はPR #752（2026-07-28マージ）で既に修正済みと判明。実データはcareManagerName「森 奈穂美」（姓名間スペース）に統一されており生データの表記ゆれは無い。plan-crossreview（grip+codex 2巡）で「documentの直接親フォルダはケアマネ階層と異なる（顧客名/書類種別/年月が最下層）ため単純比較では判定できない」という設計上の欠陥を発見、Phase A（Drive API直接調査スクリプト）の設計を訂正。`scripts/investigate-caremanager-folder-duplicate.ts`を実装（PR #822、`codex review`3件+`pr-review-toolkit`セカンドオピニオン反映済み。同一の祖先メタデータ取得バグを両者が独立検出、収束シグナルとして扱えた）し、GitHub Actions経由でkanameone実Driveフォルダ構造を調査。**初回実行は`docsplit-cloud-build@docsplit-kanameone`ビルドSAにDrive OAuthシークレット(`drive-oauth-*`)へのSecret Manager読み取り権限が無く403で停止**（decision-maker承認を得て、3シークレット限定で`roles/secretmanager.secretAccessor`を付与してから再実行）。**結果**: 対象704件のうち物理チェック成功175件は全て単一の祖先フォルダID（現在のロジックが解決する"期待フォルダ"と完全一致）に収束、フォルダ重複は検出されず。Issue #811はこの結果を添えてclose。**副次的に判明**: 残り529件（75%）はdriveFileIdがゴミ箱内（260件）またはDrive上に存在しない（404、269件）で物理チェック不能。フォルダ重複とは別種の事象・規模が大きいため[Issue #823](https://github.com/yasushi-honda/doc-split/issues/823)として新規起票（未着手）。
 
 **Issue #812（氏名異体字マッチング、PR #820マージ・dev/kanameone/cocoro全反映完了）**: 顧客マスタ登録時はFE側`GAIJI_MAP`で新字体へ自動変換される（渡邉→渡辺等）が、OCRマッチング側にはこの変換がなくFAX原文の異体字表記が不明顧客化していた。fuzzy matchは日本人氏名の一般的な長さでは異体字1文字差を閾値調整では救済できない構造的限界があり実測不要と判断、正規化での対応に。`GAIJI_MAP`を`shared/gaijiMap.ts`へ移設し顧客名マッチング専用`normalizeCustomerNameForMatching()`を新設（汎用`normalizeForMatching()`は不変、`shared/officeMasterValidation.ts`の独立コピーとの同等性契約を壊さないため）。plan-crossreviewで当初案「汎用関数に混ぜる」設計の重大な欠陥を事前発見・修正できた。`codex review`は1回目usage limit中断→再実行で指摘0件。dev検証はビルド成果物（`functions/lib`）を直接requireして実証（ts-node直接呼び出しは「デプロイ済みコードの検証にならない」というcodex指摘を踏まえた対応）、`shared/`が`functions/lib/shared/`へ正しくコンパイルされ相対import解決も実証済み。
 
