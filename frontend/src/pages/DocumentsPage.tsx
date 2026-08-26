@@ -291,7 +291,13 @@ function DocumentRow({
           </div>
         </div>
       </td>
-      <td className="px-2 py-2 text-xs text-gray-700 sm:px-4 sm:py-3 sm:text-sm">{document.customerName || '未判定'}</td>
+      <td className="px-2 py-2 text-xs text-gray-700 sm:px-4 sm:py-3 sm:text-sm">
+        <div>{document.customerName || '未判定'}</div>
+        {/* 担当CM表示 (Issue #813)。#424教訓により列は増やさず、既存の顧客名セル内に小さく併記する */}
+        {document.careManager && (
+          <div className="truncate text-[11px] text-gray-400">担当CM: {document.careManager}</div>
+        )}
+      </td>
       <td className="hidden px-4 py-3 text-gray-700 lg:table-cell">{document.officeName || '-'}</td>
       <td className="px-2 py-2 text-xs text-gray-700 sm:px-4 sm:py-3 sm:text-sm">{formatDateTime(document.processedAt)}</td>
       <td className="hidden px-4 py-3 text-gray-700 lg:table-cell">{formatTimestamp(document.fileDate)}</td>
