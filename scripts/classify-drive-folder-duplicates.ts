@@ -125,6 +125,44 @@ async function main(): Promise<void> {
 
   const drive: drive_v3.Drive = await getDriveClient();
 
+  // ─── canonicalフォルダの期待される直接の親を、テンプレートから解決する ──────
+  // codex review 7巡目P1指摘対応: 従来はcanonicalの親を常にrootFolderId直下と
+  // 決め打っていたが、ADR-0022記載の通りかなめ環境は「事業所（固定）→ ケアマネ→…」
+  // という5階層で、careManagerセグメントの前に'fixed'階層が存在する。この場合
+  // canonicalの実際の親はrootFolderIdではなくその固定階層フォルダであり、
+  // 決め打ちのままでは本番の実レイアウトに対し常にFATAL誤検知してclassifyが
+  // 実行不能になる。careManagerセグメントより前の'fixed'セグメントを
+  // rootFolderIdから順に解決し、期待される親IDを導出する。
+  const preCmSegments = template.slice(0, cmIndex);
+  const fixedPrefixNames: string[] = [];
+  for (const seg of preCmSegments) {
+    if (seg.type !== 'fixed') {
+      console.error(
+        `❌ careManagerセグメントより前に'fixed'以外のsegment種別("${seg.type}")があり、canonical親フォルダの解決方法が未対応です。`
+      );
+      process.exit(1);
+    }
+    fixedPrefixNames.push(seg.value);
+  }
+  let expectedCanonicalParentId = rootFolderId;
+  for (const name of fixedPrefixNames) {
+    const fixedQuery: string = `'${expectedCanonicalParentId}' in parents and name='${escapeQueryValue(name)}' and mimeType='${FOLDER_MIME_TYPE}'`;
+    const fixedListResult: { data: { files?: { id?: string | null }[] } } = await drive.files.list({
+      q: fixedQuery,
+      fields: 'files(id)',
+      includeItemsFromAllDrives: true,
+      ...SUPPORTS_ALL_DRIVES,
+    });
+    const fixedFiles = fixedListResult.data.files ?? [];
+    if (fixedFiles.length !== 1 || !fixedFiles[0].id) {
+      console.error(
+        `❌ テンプレートの固定階層"${name}"を親フォルダ${expectedCanonicalParentId}配下で一意に解決できません(${fixedFiles.length}件マッチ)。`
+      );
+      process.exit(1);
+    }
+    expectedCanonicalParentId = fixedFiles[0].id;
+  }
+
   // ─── canonicalフォルダの健全性確認(fail-closed) ─────────────────
   const canonicalGet = await drive.files.get({
     fileId: canonicalFolderId,
@@ -140,9 +178,9 @@ async function main(): Promise<void> {
     process.exit(2);
   }
   const canonicalParents = canonicalGet.data.parents ?? [];
-  if (canonicalParents.length !== 1 || canonicalParents[0] !== rootFolderId) {
+  if (canonicalParents.length !== 1 || canonicalParents[0] !== expectedCanonicalParentId) {
     console.error(
-      `FATAL: canonicalフォルダがrootFolderId直下にありません(parents=${JSON.stringify(canonicalParents)}, expected=[${rootFolderId}])`
+      `FATAL: canonicalフォルダが期待される親フォルダ配下にありません(parents=${JSON.stringify(canonicalParents)}, expected=[${expectedCanonicalParentId}]${fixedPrefixNames.length > 0 ? ` = rootFolderId配下の固定階層 ${fixedPrefixNames.join(' > ')}` : ' = rootFolderId'})`
     );
     process.exit(2);
   }
@@ -153,13 +191,17 @@ async function main(): Promise<void> {
   }
   console.log(`canonical健全性確認OK: name="${canonicalName}"`);
 
-  // ─── rootFolderId直下の名前重複を再走査(duplicate-idsの完全性確認) ──────
+  // ─── canonicalの親フォルダ配下の名前重複を再走査(duplicate-idsの完全性確認) ──
+  // codex review 7巡目P1指摘対応: 重複フォルダはcanonicalと同じ直接の親を持つ
+  // (findOrCreateFolder.tsのバグはcanonicalと同じ場所へ兄弟フォルダを作り続ける)。
+  // 固定階層がある場合、rootFolderId直下ではなくexpectedCanonicalParentId配下を
+  // 再走査しなければ重複を見逃す。
   const rootScanIds = new Set<string>();
   {
     let pageToken: string | undefined;
     do {
       const res = await drive.files.list({
-        q: `'${rootFolderId}' in parents and name='${escapeQueryValue(canonicalName)}' and mimeType='${FOLDER_MIME_TYPE}'`,
+        q: `'${expectedCanonicalParentId}' in parents and name='${escapeQueryValue(canonicalName)}' and mimeType='${FOLDER_MIME_TYPE}'`,
         fields: 'nextPageToken, files(id, trashed)',
         includeItemsFromAllDrives: true,
         pageSize: 100,
@@ -177,13 +219,13 @@ async function main(): Promise<void> {
   const extraInScan = [...rootScanIds].filter((id) => !expectedIds.has(id));
   if (missingFromScan.length > 0 || extraInScan.length > 0) {
     console.error(
-      `FATAL: rootFolderId直下の "${canonicalName}" 名フォルダ再走査が --canonical-id/--duplicate-ids と一致しません。` +
+      `FATAL: canonicalの親フォルダ配下の "${canonicalName}" 名フォルダ再走査が --canonical-id/--duplicate-ids と一致しません。` +
         ` missing=${JSON.stringify(missingFromScan)} extra=${JSON.stringify(extraInScan)}`
     );
     console.error('前回調査から状態が変化している可能性があります。investigate-issue811-root-cause.ts --scan-root-duplicates を再実行してください。');
     process.exit(2);
   }
-  console.log(`rootFolderId直下の名前重複再走査OK: ${rootScanIds.size}件が --canonical-id/--duplicate-ids と一致`);
+  console.log(`canonicalの親フォルダ配下の名前重複再走査OK: ${rootScanIds.size}件が --canonical-id/--duplicate-ids と一致`);
 
   // ─── duplicateフォルダのprovenance(健全性スナップショット)取得 ─────────
   const sourceFolderProvenance: FolderProvenanceSnapshot[] = [];

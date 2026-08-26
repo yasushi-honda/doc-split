@@ -32,6 +32,13 @@ if (!projectId) {
   process.exit(1);
 }
 
+function sameStringSet(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  const sa = [...a].sort();
+  const sb = [...b].sort();
+  return sa.every((v, i) => v === sb[i]);
+}
+
 function getOpt(name: string): string | null {
   const i = process.argv.indexOf(name);
   return i >= 0 && i + 1 < process.argv.length ? process.argv[i + 1] : null;
@@ -103,6 +110,24 @@ async function main(): Promise<void> {
         live.data.trashed !== false ||
         live.data.name !== entry.oldName
       ) {
+        // codex review 7巡目P2指摘対応: 部分成功したrollbackを再実行した場合、前回の
+        // 実行で既にrevert済みのentryは(name自体は移動前後で不変のため)parents/trashedが
+        // oldParents/oldTrashedと一致する状態になっており、上のpost-migration状態
+        // チェックには一致しない。これを「予期しない状態変化で中断」と区別せず
+        // revertedOperationIdsに含めないと、folder名復元判定(全fileMove revert済みか)が
+        // 永久にfalseのまま、統合済みリネームが二度と復元されない。
+        const matchesAlreadyRevertedState =
+          sameStringSet(liveParents, entry.oldParents) && live.data.trashed === entry.oldTrashed;
+        if (matchesAlreadyRevertedState) {
+          revertedOperationIds.add(entry.operationId);
+          outcomes.push({
+            driveFileId: entry.driveFileId,
+            operationId: entry.operationId,
+            status: 'skipped',
+            reason: `already reverted in a prior run (current state matches expected pre-migration state: parents=${JSON.stringify(entry.oldParents)}, trashed=${entry.oldTrashed})`,
+          });
+          continue;
+        }
         outcomes.push({
           driveFileId: entry.driveFileId,
           operationId: entry.operationId,

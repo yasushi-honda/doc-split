@@ -79,8 +79,51 @@ async function main(): Promise<void> {
   const cmTemplatePrefix = template.slice(0, cmIndex + 1);
   const opts = { furiganaFallback: settings.furiganaFallback };
 
+  // ─── careManagerセグメントより前の'fixed'階層をfind-or-createで解決する ──
+  // codex review 7巡目P1指摘対応(classify-drive-folder-duplicates.ts側の修正と対)。
+  // かなめ本番相当(事業所固定→ケアマネ→…)のレイアウトをdevリハーサルでも再現しないと、
+  // 修正後のclassifyが期待する「canonicalの親は固定階層配下」という前提を検証できない。
+  const preCmSegments = template.slice(0, cmIndex);
+  const fixedPrefixNames: string[] = [];
+  for (const seg of preCmSegments) {
+    if (seg.type !== 'fixed') {
+      console.error(
+        `❌ careManagerセグメントより前に'fixed'以外のsegment種別("${seg.type}")があり、fixtureの配置方法が未対応です。`
+      );
+      process.exit(1);
+    }
+    fixedPrefixNames.push(seg.value);
+  }
+  let fixtureParentId = rootFolderId;
+  for (const name of fixedPrefixNames) {
+    const query: string = `'${fixtureParentId}' in parents and name='${escapeQueryValue(name)}' and mimeType='${FOLDER_MIME_TYPE}'`;
+    const listResult: { data: { files?: { id?: string | null }[] } } = await drive.files.list({
+      q: query,
+      fields: 'files(id)',
+      includeItemsFromAllDrives: true,
+      ...SUPPORTS_ALL_DRIVES,
+    });
+    const files = listResult.data.files ?? [];
+    if (files.length > 1) {
+      console.error(`❌ 固定階層"${name}"が親フォルダ${fixtureParentId}配下で複数件マッチし解決できません。`);
+      process.exit(1);
+    }
+    if (files.length === 1 && files[0].id) {
+      fixtureParentId = files[0].id;
+      continue;
+    }
+    const createRes = await drive.files.create({
+      requestBody: { name, mimeType: FOLDER_MIME_TYPE, parents: [fixtureParentId] },
+      fields: 'id',
+      ...SUPPORTS_ALL_DRIVES,
+    });
+    if (!createRes.data.id) throw new Error(`固定階層フォルダの作成に失敗: ${name}`);
+    fixtureParentId = createRes.data.id;
+  }
+
   console.log(`プロジェクト: ${projectId}`);
   console.log(`rootFolderId: ${rootFolderId}`);
+  console.log(`fixtureParentId(固定階層解決後): ${fixtureParentId}${fixedPrefixNames.length > 0 ? ` (= ${fixedPrefixNames.join(' > ')})` : ' (= rootFolderId、固定階層なし)'}`);
   console.log(cleanup ? 'モード: cleanup' : 'モード: cleanup → 再投入(idempotent)');
   console.log('---');
 
@@ -93,7 +136,7 @@ async function main(): Promise<void> {
     const toDelete: string[] = [];
     do {
       const res = await drive.files.list({
-        q: `'${rootFolderId}' in parents and name contains '${escapeQueryValue(FIXTURE_NAME_SWEEP_TOKEN)}' and mimeType='${FOLDER_MIME_TYPE}'`,
+        q: `'${fixtureParentId}' in parents and name contains '${escapeQueryValue(FIXTURE_NAME_SWEEP_TOKEN)}' and mimeType='${FOLDER_MIME_TYPE}'`,
         fields: 'nextPageToken, files(id)',
         includeItemsFromAllDrives: true,
         pageSize: 100,
@@ -198,14 +241,14 @@ async function main(): Promise<void> {
     return id;
   }
 
-  const canonicalId = await createFolder(canonicalName, rootFolderId, false);
+  const canonicalId = await createFolder(canonicalName, fixtureParentId, false);
 
-  const duplicateAId = await createFolder(canonicalName, rootFolderId, true);
+  const duplicateAId = await createFolder(canonicalName, fixtureParentId, true);
   const dupASubfolder = await createFolder('フィクスチャ利用者A', duplicateAId, true);
   const dupACategory = await createFolder('フィクスチャ書類', dupASubfolder, true);
   await createFixtureFile(dupACategory, 'fixture-match.txt', FIXTURE_DOC_MATCH);
 
-  const duplicateBId = await createFolder(canonicalName, rootFolderId, true);
+  const duplicateBId = await createFolder(canonicalName, fixtureParentId, true);
   const dupBSubfolder = await createFolder('フィクスチャ利用者B', duplicateBId, true);
   const dupBCategory = await createFolder('フィクスチャ書類', dupBSubfolder, true);
   await createFixtureFile(dupBCategory, 'fixture-reassigned.txt', FIXTURE_DOC_REASSIGNED);
