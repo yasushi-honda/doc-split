@@ -1,12 +1,14 @@
 name: Deploy Firebase Hosting
 
-# kanameone は Firebase CLI ローカルログイン(systemkaname@kanameone.com)が前提だが、
-# セッション失効時にブラウザ再認証が必要でAI実行環境からは対応不能
-# (Issue #547 Phase D session110)。GitHub Actions経由ならSA鍵で完結できるため、
-# deploy-functions.yml と同じ SA 認証パターンで Hosting のみを対象に追加。
+# kanameone/cocoro は Firebase CLI ローカルログインがセッション失効等でブロックされる
+# ケースがあり、AI実行環境からは対応不能な場合がある(Issue #547 Phase D session110)。
+# GitHub Actions経由ならSA鍵で完結できるため、deploy-functions.yml と同じ SA 認証
+# パターンで Hosting のみを対象に追加。
 #
-# cocoroは対象外(cocoro用 VITE_FIREBASE_*_COCORO Secretsは未登録。既存のローカル
-# 手動デプロイ手順が機能しているため。追加する場合はSecrets登録 + choice追加が必要)。
+# kanameone用SAは docsplit-cloud-build@docsplit-kanameone、cocoro用SAは
+# docsplit-cloud-build@docsplit-cocoro（いずれも roles/firebase.admin 保有、
+# 2026-08-26 IAM実測確認済み）。環境ごとにジョブを分け、既存のkanameone用ジョブは
+# 無変更のまま維持している。
 
 on:
   workflow_dispatch:
@@ -18,9 +20,11 @@ on:
         type: choice
         options:
           - kanameone
+          - cocoro
 
 jobs:
-  deploy:
+  deploy-kanameone:
+    if: github.event.inputs.environment == 'kanameone'
     runs-on: ubuntu-latest
 
     steps:
@@ -56,7 +60,55 @@ jobs:
         run: npm install -g firebase-tools
 
       - name: Deploy to Firebase Hosting
-        run: firebase deploy --only hosting -P ${{ github.event.inputs.environment }} --force
+        run: firebase deploy --only hosting -P kanameone --force
+
+      - name: Notify deployment status
+        if: always()
+        run: |
+          if [ "${{ job.status }}" == 'success' ]; then
+            echo "✅ Deployment successful"
+          else
+            echo "❌ Deployment failed"
+          fi
+
+  deploy-cocoro:
+    if: github.event.inputs.environment == 'cocoro'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: ./frontend
+        run: npm run build
+        env:
+          VITE_FIREBASE_API_KEY: ${{ secrets.VITE_FIREBASE_API_KEY_COCORO }}
+          VITE_FIREBASE_AUTH_DOMAIN: ${{ secrets.VITE_FIREBASE_AUTH_DOMAIN_COCORO }}
+          VITE_FIREBASE_PROJECT_ID: ${{ secrets.VITE_FIREBASE_PROJECT_ID_COCORO }}
+          VITE_FIREBASE_STORAGE_BUCKET: ${{ secrets.VITE_FIREBASE_STORAGE_BUCKET_COCORO }}
+          VITE_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.VITE_FIREBASE_MESSAGING_SENDER_ID_COCORO }}
+          VITE_FIREBASE_APP_ID: ${{ secrets.VITE_FIREBASE_APP_ID_COCORO }}
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Install Firebase CLI
+        run: npm install -g firebase-tools
+
+      - name: Deploy to Firebase Hosting
+        run: firebase deploy --only hosting -P cocoro --force
 
       - name: Notify deployment status
         if: always()
