@@ -185,6 +185,19 @@ describe('extractOfficeNameEnhanced', () => {
     expect(result.officeName).to.be.null;
     expect(result.matchType).to.equal('none');
   });
+
+  it('Issue #812非回帰: 事業所名マッチングはGAIJI(異体字)正規化の影響を受けない', () => {
+    // 「高橋商店」で登録、OCR原文には異体字の「髙橋商店」(髙=U+9AD9)のみが出現する
+    // ケース。顧客名マッチング専用のGAIJI正規化が事業所名側に波及していれば
+    // exact一致してしまうが、正しくは波及しないためexactにはならない。
+    const gaijiOfficeMasters: OfficeMaster[] = [
+      { id: 'off-gaiji', name: '高橋商店', isDuplicate: false },
+    ];
+    const ocrText = '発行元: 髙橋商店\n電話: 03-0000-0000';
+    const result = extractOfficeNameEnhanced(ocrText, gaijiOfficeMasters);
+
+    expect(result.matchType, 'GAIJI正規化が事業所名マッチングに波及していればexactになってしまう').to.not.equal('exact');
+  });
 });
 
 describe('extractCustomerCandidates', () => {
@@ -234,6 +247,36 @@ describe('extractCustomerCandidates', () => {
 
     expect(result.bestMatch).to.be.null;
     expect(result.candidates.length).to.equal(0);
+  });
+
+  describe('Issue #812: 氏名異体字マッチング', () => {
+    const gaijiCustomerMasters: CustomerMaster[] = [
+      { id: 'gaiji1', name: '渡辺花子', furigana: 'わたなべはなこ' }, // マスタ登録は新字体(FE側GAIJI変換済み想定)
+    ];
+
+    it('FAX原文の異体字(渡邉)が新字体登録済み顧客(渡辺)にexactマッチする(症状の再現確認)', () => {
+      const ocrText = 'ご利用者様: 渡邉花子 様\n住所: 東京都';
+      const result = extractCustomerCandidates(ocrText, gaijiCustomerMasters);
+
+      expect(result.bestMatch).to.not.be.null;
+      expect(result.bestMatch!.name).to.equal('渡辺花子');
+      expect(result.bestMatch!.matchType).to.equal('exact');
+      expect(result.needsManualSelection).to.be.false;
+    });
+
+    it('正規化後に衝突する別マスタが共存する場合は自動確定せず手動選択になる', () => {
+      // 別々の顧客として登録された2件が、GAIJI正規化後に同一名になってしまうケース
+      const collidingMasters: CustomerMaster[] = [
+        { id: 'collideA', name: '渡辺花子', furigana: 'わたなべはなこ' },
+        { id: 'collideB', name: '渡邊花子', furigana: 'わたなべはなこ' },
+      ];
+      const ocrText = 'ご利用者様: 渡邉花子 様';
+      const result = extractCustomerCandidates(ocrText, collidingMasters);
+
+      expect(result.needsManualSelection, '正規化後に2件が同スコアで衝突するため手動選択が必要').to.be.true;
+      expect(result.candidates.length).to.equal(2);
+      expect(result.candidates.every((c) => c.matchType === 'exact')).to.be.true;
+    });
   });
 });
 
