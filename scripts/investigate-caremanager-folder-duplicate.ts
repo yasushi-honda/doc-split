@@ -70,6 +70,7 @@ const MASTER_PATHS_CUSTOMERS = 'masters/customers/items';
 interface AncestorResult {
   docId: string;
   driveFileId: string;
+  driveFileTrashed: boolean; // driveFileId自体がゴミ箱内か(Issue #823: trashedでもparentsは保持されるため物理チェック続行)
   ancestorId: string;
   ancestorName: string | null;
   ancestorTrashed: boolean;
@@ -233,14 +234,23 @@ async function main(): Promise<void> {
 
     try {
       const fileGet = await drive.files.get({ fileId: driveFileId, fields: 'parents,trashed', supportsAllDrives: true });
-      if (fileGet.data.trashed) {
-        skipped.push({ docId, reason: 'driveFileId自体がゴミ箱内(trashed) — 親フォルダ調査をスキップ' });
-        continue;
-      }
+      const driveFileTrashed = !!fileGet.data.trashed;
+      // Issue #823: 従来はtrashed=trueを無条件スキップしていたが、Drive APIはtrashed後もparentsを
+      // 返す可能性があるため、まず取得を試み実際に空かどうかで判定する(下のparents空チェックに委譲)。
+      // 「ゴミ箱に入れられる前にどのフォルダにあったか」は重複判定に有効な情報であり、trashedというだけで
+      // 一律に捨てる理由がない。
       let currentId = (fileGet.data.parents ?? [])[0];
       if (!currentId) {
-        skipped.push({ docId, reason: 'driveFileIdに親フォルダが存在しない(parents空)' });
+        skipped.push({
+          docId,
+          reason: driveFileTrashed
+            ? 'driveFileIdはゴミ箱内かつparentsも空(完全削除に近い状態か、trashed後にparentsがクリアされた可能性)'
+            : 'driveFileIdに親フォルダが存在しない(parents空)',
+        });
         continue;
+      }
+      if (driveFileTrashed) {
+        console.log(`  ℹ️  docId=${docId}: driveFileIdはゴミ箱内だがparentsは保持されていたため物理チェックを継続`);
       }
       // levelsUp回、親を辿ってcareManager階層まで遡る。この時点のfetchは「次の親id」を
       // 得るためだけに使い、name/trashedは読まない(codex review指摘: ここでname/trashedを
@@ -266,6 +276,7 @@ async function main(): Promise<void> {
       results.push({
         docId,
         driveFileId,
+        driveFileTrashed,
         ancestorId: currentId,
         ancestorName,
         ancestorTrashed,
@@ -277,7 +288,8 @@ async function main(): Promise<void> {
     }
   }
 
-  console.log(`物理チェック完了: 成功${results.length}件 / スキップ${skipped.length}件`);
+  const recoveredTrashedCount = results.filter((r) => r.driveFileTrashed).length;
+  console.log(`物理チェック完了: 成功${results.length}件(うちdriveFileIdがゴミ箱内でもparentsから復旧できた件数: ${recoveredTrashedCount}件) / スキップ${skipped.length}件`);
   console.log('---');
 
   if (skipped.length > 0) {
