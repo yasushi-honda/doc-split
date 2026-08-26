@@ -870,6 +870,13 @@ export interface DocumentStats {
   split: number
 }
 
+/**
+ * ステータス別件数を取得する(Issue #816)。従来は`getDocs()`(全件フェッチ)×5並列で
+ * `.size`を数えるだけの実装だったため、processedの累積件数が多いほど全文書データを
+ * ダウンロードしてしまい、TOP画面ロード毎(+30秒毎の自動再取得)に不要な通信コストが
+ * 発生していた。`getCountFromServer()`（`useDistributionSiblingCount`と同じ集計クエリ、
+ * :234-235参照）に置き換え、ドキュメント本体のダウンロードを回避する。
+ */
 async function fetchDocumentStats(): Promise<DocumentStats> {
   const stats: DocumentStats = {
     total: 0,
@@ -885,9 +892,10 @@ async function fetchDocumentStats(): Promise<DocumentStats> {
   await Promise.all(
     statuses.map(async (status) => {
       const q = query(collection(db, 'documents'), where('status', '==', status))
-      const snapshot = await getDocs(q)
-      stats[status] = snapshot.size
-      stats.total += snapshot.size
+      const snapshot = await getCountFromServer(q)
+      const count = snapshot.data().count
+      stats[status] = count
+      stats.total += count
     })
   )
 
