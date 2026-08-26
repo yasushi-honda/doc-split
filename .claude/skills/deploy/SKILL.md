@@ -33,7 +33,8 @@ Deploy to: $ARGUMENTS
 | AUTH_TYPE | personal | personal | **service_account** |
 | 組織制約 | なし | なし | Google Workspace（`cocoro-mgnt.com`）|
 | CI自動デプロイ | ✅ mainへのpush時 | ❌ | ❌ |
-| `deploy-to-project.sh` | ✅ | ✅ | ⚠️ SA認証チェックで弾かれる場合あり |
+| `deploy-to-project.sh` | ✅ | ✅（ただしFirebase CLIセッション失効に弱い） | ⚠️ SA認証チェックで弾かれる場合あり |
+| Hosting GitHub Actions | — | ✅ `Deploy Firebase Hosting`（推奨） | ✅ `Deploy Firebase Hosting`（推奨、2026-08-26対応） |
 
 ### dev（自動 or 手動）
 
@@ -42,9 +43,11 @@ mainへのpush時にCI（`.github/workflows/deploy.yml`）が自動デプロイ�
 ./scripts/deploy-to-project.sh dev
 ```
 
-### kanameone（`deploy-to-project.sh`）
+### kanameone（GitHub Actions経由が推奨、`deploy-to-project.sh`はフォールバック）
 
-**MUST**: `deploy-to-project.sh` は冒頭で gcloud 構成チェックを行うため、`switch-client.sh kanameone` を先に実行しないと「gcloud構成が不一致です」エラーで一発失敗する（session48 教訓）。
+**推奨**: Hostingデプロイは`gh workflow run "Deploy Firebase Hosting" -f environment=kanameone`（下記「GitHub Actions経由のHostingデプロイ」節参照）。kanameoneのFirebase CLIローカルログイン（`systemkaname@kanameone.com`）はセッション失効時にブラウザ再認証が必要でAI実行環境から対応不能なため、GitHub Actions経由が安定する。
+
+以下はGitHub Actionsが使えない場合のフォールバック手順。**MUST**: `deploy-to-project.sh` は冒頭で gcloud 構成チェックを行うため、`switch-client.sh kanameone` を先に実行しないと「gcloud構成が不一致です」エラーで一発失敗する（session48 教訓）。
 
 ```bash
 firebase login:use systemkaname@kanameone.com
@@ -56,9 +59,11 @@ firebase login:use hy.unimail.11@gmail.com         # dev用に戻す
 ./scripts/switch-client.sh dev                     # MUST: gcloud構成をdevに戻す
 ```
 
-### cocoro（手動手順）
+### cocoro（GitHub Actions経由が推奨、手動手順はフォールバック）
 
-cocoro環境は`deploy-to-project.sh`の認証チェックがSA（`docsplit-deployer@...`）を期待するため、
+**推奨**: Hostingデプロイは`gh workflow run "Deploy Firebase Hosting" -f environment=cocoro`（下記「GitHub Actions経由のHostingデプロイ」節参照）。cocoro用SA（`docsplit-cloud-build@docsplit-cocoro`）は`roles/firebase.admin`を保有しており（2026-08-26 IAM実測確認済み）、ローカルFirebase CLIセッションの状態に依存せず反映できる。
+
+以下はGitHub Actionsが使えない場合のフォールバック手順。cocoro環境は`deploy-to-project.sh`の認証チェックがSA（`docsplit-deployer@...`）を期待するため、
 editorアカウントでは認証チェックで弾かれる場合がある。その場合は手動で実施：
 
 **MUST**: 各コマンドは doc-split ルート CWD で実行する。`cd frontend` を Bash で直接実行すると CWD が永続化し、後続の `rm frontend/.env.local` が失敗する（session48 教訓。`npm run build` はルートの package.json が内部で `cd frontend` するので Bash 側で `cd` しない）。
@@ -100,15 +105,47 @@ firebase deploy --only firestore:rules,firestore:indexes,storage -P cocoro
 ./scripts/deploy-all-clients.sh [--rules|--full] [--dry-run]
 ```
 
+**既知の制約**: 内部で`deploy-to-project.sh`を各クライアントに対して呼ぶだけのため、kanameone/cocoroどちらのローカル認証ギャップ（上記参照）も解消しない。Hostingを複数環境へ一括反映したい場合は、下記「複数環境への一括デプロイ」の通り、GitHub Actionsのdispatchを環境ごとに実行する（`--all`のような単一dispatchでの同時実行はスコープ外）。
+
+## 複数環境への一括デプロイ
+
+複数環境（kanameone・cocoro等）へ同時に反映したい場合は、対象を**明示的に指定**する。会話の承認履歴から対象を暗黙に拡大解釈することはしない：
+
+- 対象を1つずつ明示して複数回`/deploy`を実行する（例: `/deploy kanameone --hosting` → `/deploy cocoro --hosting`）
+- Hosting反映はGitHub Actions経由（`gh workflow run "Deploy Firebase Hosting" -f environment=<env>`）を環境ごとに実行するのが最も確実
+
+単一環境向けの`/deploy <1環境>`は、会話内で複数環境の話題が出ていたとしても当該1環境のみを対象とする。複数環境への反映が必要な場合は、その都度対象を明示すること。
+
 ## 変更内容別コマンド早見表
 
 | 変更内容 | ローカル | GitHub Actions |
 |---------|---------|----------------|
-| フロントエンドのみ | `deploy-to-project.sh <alias>` | — |
+| フロントエンドのみ（Hosting） | `deploy-to-project.sh <alias>`（フォールバック） | **Deploy Firebase Hosting**（推奨、kanameone/cocoro対応） |
 | Firestoreルール | `deploy-to-project.sh <alias> --rules` | — |
 | Functions変更 | `deploy-to-project.sh <alias> --full` | **Deploy Cloud Functions**（推奨） |
 | Functionsのみ | `firebase deploy --only functions -P <alias>` | **Deploy Cloud Functions**（推奨） |
-| 全クライアント一括 | `deploy-all-clients.sh [--rules|--full]` | — |
+| 全クライアント一括 | `deploy-all-clients.sh [--rules|--full]` | 環境ごとに個別dispatch（上記「複数環境への一括デプロイ」参照） |
+
+## GitHub Actions経由のHostingデプロイ（推奨、kanameone/cocoro対応）
+
+kanameoneはFirebase CLIローカルログインのセッション失効、cocoroは元々SA認証チェックで`deploy-to-project.sh`が弾かれる場合があるため、**Hostingデプロイは原則GitHub Actions経由**で実施する。
+
+### 実行方法
+```bash
+gh workflow run "Deploy Firebase Hosting" -f environment=<kanameone|cocoro>
+gh run list --workflow="Deploy Firebase Hosting" --limit=3 --json databaseId,status,conclusion   # run ID確認
+gh run watch <run-id> --exit-status                                                                # 完了待ち（`gh run list --limit 1`より確実）
+gh run view <run-id> --log-failed                                                                   # 失敗時のログ
+```
+
+### SA構成（環境別、Functionsと同じSAをHosting認証にも再利用）
+
+| 環境 | GitHub Secret | SA |
+|------|--------------|-----|
+| kanameone | `GCP_SA_KEY_KANAMEONE` | `docsplit-cloud-build@docsplit-kanameone`（`roles/firebase.admin`） |
+| cocoro | `GCP_SA_KEY` | `docsplit-cloud-build@docsplit-cocoro`（`roles/firebase.admin`、2026-08-26 IAM実測確認済み） |
+
+devはmainへのpush時にCIが自動デプロイするため対象外。
 
 ## GitHub Actions経由のFunctionsデプロイ（推奨）
 
@@ -165,5 +202,5 @@ Firebase/GCP操作には3つの独立した認証があり、混同しないこ�
 
 ## 注意事項
 
-- **IMPORTANT**: マルチ環境デプロイ時は可能な限りスクリプトを使用。手動`firebase deploy`は`.env.local`の設定で誤った環境にデプロイされる危険がある
-- cocoro環境の`deploy-to-project.sh`対応は今後の改善候補（SA認証チェックの柔軟化）
+- **IMPORTANT**: マルチ環境デプロイ時は可能な限りスクリプトまたはGitHub Actionsを使用。手動`firebase deploy`は`.env.local`の設定で誤った環境にデプロイされる危険がある
+- `deploy-to-project.sh`/`deploy-all-clients.sh`のアカウントチェック改修（kanameoneのセッション失効・cocoroのSA前提を緩和）自体は未着手のまま残っている。Hostingは本節のGitHub Actions経由に一本化することで実害を回避しているが、ローカルスクリプト自体の改善は引き続き今後の改善候補
