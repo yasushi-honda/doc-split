@@ -75,7 +75,7 @@ catchup後、積み残しIssueのうちdecision-maker選定の#774(BE Drive expo
 
 **kanameone/cocoro反映状況（実測確認）**: PR #808はmain→dev自動デプロイのみ完了、**kanameone/cocoroへは未反映**（`Deploy Cloud Functions`workflow_dispatchが必要）。直近のクライアント環境デプロイは2026-08-06 03:05(kanameone)/03:13(cocoro)のPR #804(sweep starvationバグ修正)時点で止まっている。#503自体はobservability向上のみで本番挙動に影響しないため、decision-maker判断で即時デプロイは見送り、次回の`Deploy Cloud Functions`実行時に他の変更とまとめて反映する方針。
 
-## 【進行中・2026-08-26開始】kanameoneクライアントフィードバック8件対応（P1 3/3完了、P2未着手）
+## 【完了・2026-08-26】kanameoneクライアントフィードバック8件対応（P1 3/3・P2 5/5完了、8/8全件完了）
 
 kanameoneから8件のフィードバック（①TOP画面のCM表示 ②「不明」「不明顧客」表記の不統一 ③複数名FAX分割時の元データ残存 ④PDF複数アップロード不可 ⑤ローディング時間 ⑥ケアマネフォルダ重複 ⑦日付フィルタに今日/昨日追加 ⑧氏名異体字マッチング）が届き、triage→Issue #810〜#817起票→P1優先（decision-maker承認）で対応中。
 
@@ -85,10 +85,18 @@ kanameoneから8件のフィードバック（①TOP画面のCM表示 ②「不�
 
 **Issue #812（氏名異体字マッチング、PR #820マージ・dev/kanameone/cocoro全反映完了）**: 顧客マスタ登録時はFE側`GAIJI_MAP`で新字体へ自動変換される（渡邉→渡辺等）が、OCRマッチング側にはこの変換がなくFAX原文の異体字表記が不明顧客化していた。fuzzy matchは日本人氏名の一般的な長さでは異体字1文字差を閾値調整では救済できない構造的限界があり実測不要と判断、正規化での対応に。`GAIJI_MAP`を`shared/gaijiMap.ts`へ移設し顧客名マッチング専用`normalizeCustomerNameForMatching()`を新設（汎用`normalizeForMatching()`は不変、`shared/officeMasterValidation.ts`の独立コピーとの同等性契約を壊さないため）。plan-crossreviewで当初案「汎用関数に混ぜる」設計の重大な欠陥を事前発見・修正できた。`codex review`は1回目usage limit中断→再実行で指摘0件。dev検証はビルド成果物（`functions/lib`）を直接requireして実証（ts-node直接呼び出しは「デプロイ済みコードの検証にならない」というcodex指摘を踏まえた対応）、`shared/`が`functions/lib/shared/`へ正しくコンパイルされ相対import解決も実証済み。
 
+**P2の5件（Issue #813/#814/#816/#817/#815）はいずれも軽量プラン（#815のみ5ファイル以上に該当せずインライン軽量プランで対応、実装は配列化を伴う中規模改修）でマージ済み・全環境反映済み**:
+- **Issue #814（PR #825）**: SearchBarの書類種別「不明」表示が`'不明'`のハードコード文字列で、`shared/types.ts`の`CONSTANTS.FILE_NAME_UNKNOWN_DOCUMENT`（'不明文書'）と不統一だった問題を共有sentinel定数へ統一
+- **Issue #817（PR #827）**: `DateRangeFilter`の期間プリセットに「今日」「昨日」を追加。月初1日の「昨日」が前月末日へ正しく解決することを含む回帰テスト3件追加
+- **Issue #816（PR #828）**: TOP画面統計取得が`getDocs()`による全件フェッチ（`processed`ステータスが増えるほど不要な通信コスト増）だったのを、既存の`useDistributionSiblingCount`と同型の`getCountFromServer()`集計クエリへ置換
+- **Issue #813（PR #829）**: TOP画面(書類一覧)の顧客名セルに担当CM（ケアマネジャー）を併記。新規テーブル列は追加せず（lg/1024px幅制約の既存コメント#424参照）、顧客名の下に小さく表示する設計
+- **Issue #815（PR #830、PDF複数ファイル同時アップロード）**: `PdfUploadModal.tsx`の状態モデルを単一ファイルから配列(`FileUploadItem[]`)へ全面再設計。5ファイル以上の変更に該当しplan mode→`/plan-crossreview`（grip自白可視化+codex 2巡診断）を実施。1巡目で「バッチ実行中の二重起動」「同名ファイル2件の代替名衝突」「onSnapshot終端未解除」等4件のHigh指摘を反映後、2巡目でさらに「claimedFileNamesが通常アップロード行の元ファイル名を予約対象に含めていない」「isBatchRunningの適用範囲が行単位操作(別名で保存/再試行)に及んでいない」という設計上の穴を発見・修正（`isAnyUploadInFlight`という単一の排他ロックへ統合、`claimedFileNames`を`Set`から`候補名→行ID`の`Map`へ変更）。別タブ/別ユーザー間の最終名衝突（BE契約変更が必要）とOCR完了通知の早期クローズ後喪失（既存30秒ポーリングで実質解決済みと判明）の2件はスコープ外として明記。実装後の`codex review`でさらに1件（別名で保存の確定リクエスト失敗時に`claimedFileNames`の予約が解放されず他行が永久にブロックされる）を検出・修正、`pr-review-toolkit`セカンドオピニオンが独立に同修正の正しさを確認。新規テスト17件・既存556件（回帰なし）・実機確認（Playwright MCP、実機確認中に「処理完了」表示の二重描画バグを追加発見・修正）済み
+
 **スコープ外として明示的に切り出した項目（次のアクション候補）**:
 - 既存の「不明顧客」滞留ドキュメントへの遡及的救済（新規OCR分のみ救済、過去分は`customerConfirmed:true`保護により単純な再OCRでは安全に再マッチできず別途設計が必要）
 - `ocrUpdatePayloadBuilder.ts`の`customerConfirmed`フラグ不整合（bestMatch nullでもconfirmed:trueになりFE `isCustomerConfirmed()`が誤表示する実害あり）→別Issue化を提案済み、未起票
-- P2の5件（①②④⑤⑦、Issue #813〜#817）は未着手
+- Issue #815の別タブ/別ユーザー間の最終ファイル名衝突（BE契約追加が必要、実害は表示名重複のみでdocIdはユニーク）→対応せず明示スコープ外
+- Issue #823（kanameone driveFileIdの75%がゴミ箱/404、Issue #811調査の副次的発見）→未着手
 
 **副次的に解消**: 本ミッションのkanameone/cocoro Functionsデプロイ実行時に、以前から未反映だったPR #808（sanitize drop reason付与、line68参照）も同時に反映された。
 
