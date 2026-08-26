@@ -259,6 +259,7 @@ async function main(): Promise<void> {
   const fileMoves: FileMoveManifestEntry[] = [];
   const folderRenames: FolderRenameManifestEntry[] = [];
   const restoredTargetFolderIdSet = new Set<string>();
+  const createdTargetFolderIdSet = new Set<string>();
 
   async function processOperation(op: Operation, currentlyExecuting: boolean): Promise<OperationOutcome> {
     // Gate 0 (defense-in-depth)
@@ -421,12 +422,38 @@ async function main(): Promise<void> {
 
     // === 実行 ===
     try {
-      const { id: targetFolderId, restoredFolderIds } = await resolveChildFolderPath(
+      const { id: targetFolderId, restoredFolderIds, createdFolderIds } = await resolveChildFolderPath(
         drive,
         plan.canonicalFolderId,
         op.targetSegments
       );
       for (const id of restoredFolderIds) restoredTargetFolderIdSet.add(id);
+      for (const id of createdFolderIds) createdTargetFolderIdSet.add(id);
+
+      // 書込み直前の最終競合再確認(codex review 3巡目P2指摘対応): 上のGate5後の競合
+      // チェックはreadOnlyTargetIdがnull(移動先パス未作成)の場合skipしていた。
+      // resolveChildFolderPathがこの間にパスを新規作成した場合、その一瞬の隙間で
+      // 別プロセスが同一docSplitDocIdのファイルを同じ場所へ作成している可能性を
+      // 排除できないため、実際の書込み直前にtargetFolderId基準で再確認する。
+      if (op.docId !== '<unresolved>') {
+        const finalConflictCheck = await drive.files.list({
+          q: `'${targetFolderId}' in parents and appProperties has { key='docSplitDocId' and value='${escapeQueryValue(op.docId)}' }`,
+          fields: 'files(id)',
+          includeItemsFromAllDrives: true,
+          ...SUPPORTS_ALL_DRIVES,
+        });
+        const finalConflicts = (finalConflictCheck.data.files ?? []).filter((f) => f.id !== op.driveFileId);
+        if (finalConflicts.length > 0) {
+          return {
+            operationId: op.operationId,
+            docId: op.docId,
+            action: op.recommendedAction,
+            status: 'skipped',
+            reason: `precondition mismatch: destination conflict detected immediately before write (${finalConflicts.length} other file(s) with same docSplitDocId already at target)`,
+          };
+        }
+      }
+
       await drive.files.update({
         fileId: op.driveFileId,
         addParents: targetFolderId,
@@ -537,6 +564,7 @@ async function main(): Promise<void> {
       fileMoves,
       folderRenames,
       restoredTargetFolderIds: [...restoredTargetFolderIdSet],
+      createdTargetFolderIds: [...createdTargetFolderIdSet],
     };
   }
 
@@ -614,7 +642,7 @@ async function main(): Promise<void> {
 
   fs.writeFileSync(manifestOutFile, JSON.stringify(buildManifest(), null, 2));
   console.log(
-    `\nManifest written to ${manifestOutFile} (${fileMoves.length} file moves, ${folderRenames.length} folder renames, ${restoredTargetFolderIdSet.size} restored target folders)`
+    `\nManifest written to ${manifestOutFile} (${fileMoves.length} file moves, ${folderRenames.length} folder renames, ${restoredTargetFolderIdSet.size} restored target folders, ${createdTargetFolderIdSet.size} created target folders)`
   );
 
   await admin.app().delete();

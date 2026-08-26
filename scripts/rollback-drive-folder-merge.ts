@@ -188,13 +188,18 @@ async function main(): Promise<void> {
     }
   }
 
-  // ─── 復元済みtarget folderの再trashed化(codex review P2指摘対応) ────────
-  // childFolderResolver.tsがcanonical配下でuntrashしたカテゴリ/顧客フォルダは、
-  // rollbackでfileが戻された後もactiveなまま放置されると、rollback前の状態
-  // (trashed)を完全には復元できない。空になったfolderのみ、安全側で再trashedにする
+  // ─── 復元・新規作成済みtarget folderの再trashed化(codex review P2/3巡目P2指摘対応) ──
+  // childFolderResolver.tsがcanonical配下でuntrashまたは新規作成したカテゴリ/顧客
+  // フォルダは、rollbackでfileが戻された後もactiveなまま放置されると、rollback前の
+  // 状態(trashedまたは未存在)を完全には復元できない。新規作成分はdrive.fileスコープ
+  // では完全削除できないため、restored分と同じく「空なら安全側でtrashed」で扱う
   // (他に無関係なfileが後から追加されていれば空ではなくなっているため自然にskipされる)。
   if (execute) {
-    for (const folderId of manifest.restoredTargetFolderIds ?? []) {
+    const targetFoldersToCleanup = [
+      ...(manifest.restoredTargetFolderIds ?? []),
+      ...(manifest.createdTargetFolderIds ?? []),
+    ];
+    for (const folderId of targetFoldersToCleanup) {
       try {
         const listRes = await drive.files.list({
           q: `'${folderId}' in parents`,

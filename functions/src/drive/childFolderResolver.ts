@@ -65,6 +65,8 @@ export interface ResolvedChildFolder {
   id: string;
   /** trashedだったフォルダをこの呼び出しでuntrashしたか(rollback記録用、codex review P2指摘対応) */
   restored: boolean;
+  /** この呼び出しで新規作成したフォルダか(rollback記録用、codex review 3巡目P2指摘対応) */
+  created: boolean;
 }
 
 export async function resolveChildFolder(
@@ -90,9 +92,9 @@ export async function resolveChildFolder(
         fields: 'id',
         ...SUPPORTS_ALL_DRIVES,
       });
-      return { id: existing.id, restored: true };
+      return { id: existing.id, restored: true, created: false };
     }
-    return { id: existing.id, restored: false };
+    return { id: existing.id, restored: false, created: false };
   }
 
   const createResponse = await drive.files.create({
@@ -108,13 +110,15 @@ export async function resolveChildFolder(
   if (!createdId) {
     throw new Error(`[Phase B Part A] 子フォルダの作成に失敗しました(idが返却されませんでした): "${name}"`);
   }
-  return { id: createdId, restored: false };
+  return { id: createdId, restored: false, created: true };
 }
 
 export interface ResolvedChildFolderPath {
   id: string;
   /** このpath解決の過程でtrashedから復元したフォルダID一覧(rollback記録用) */
   restoredFolderIds: string[];
+  /** このpath解決の過程で新規作成したフォルダID一覧(rollback記録用、codex review 3巡目P2指摘対応) */
+  createdFolderIds: string[];
 }
 
 /**
@@ -127,12 +131,14 @@ export async function resolveChildFolderPath(
 ): Promise<ResolvedChildFolderPath> {
   let currentId = rootId;
   const restoredFolderIds: string[] = [];
+  const createdFolderIds: string[] = [];
   for (const segment of segments) {
     const result = await resolveChildFolder(drive, currentId, segment);
     currentId = result.id;
     if (result.restored) restoredFolderIds.push(result.id);
+    if (result.created) createdFolderIds.push(result.id);
   }
-  return { id: currentId, restoredFolderIds };
+  return { id: currentId, restoredFolderIds, createdFolderIds };
 }
 
 /**

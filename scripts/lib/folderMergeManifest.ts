@@ -48,4 +48,12 @@ export interface ExecutionManifest {
    * revertされ、かつこのフォルダが空になった場合のみ再trashedにする。
    */
   restoredTargetFolderIds: string[];
+  /**
+   * canonical配下に存在しなかったためchildFolderResolver.tsが新規作成した
+   * カテゴリ/顧客フォルダの記録(codex review 3巡目P2指摘対応)。rollback時、
+   * このフォルダが空になった場合のみtrashedにする(drive.fileスコープでは
+   * 完全削除不可のため、restoredTargetFolderIdsと同じ「空なら安全側でtrashed」
+   * 経路で処理する)。
+   */
+  createdTargetFolderIds: string[];
 }
