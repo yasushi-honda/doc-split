@@ -18,6 +18,16 @@ export interface FileEvidence {
   name: string;
   mimeType: string;
   parents: string[];
+  /**
+   * dev環境実機検証(2026-08-27)で確定した既知の制約: Google Drive APIの`trashed`
+   * フィールドは祖先フォルダがtrashedの場合も継承されて`true`を返す(ファイル自身が
+   * 個別に削除されたかとは無関係)。classify-drive-folder-duplicates.tsはtrashed済み
+   * のduplicateフォルダ配下のみをスキャンするため、`trashed`はスキャン対象の全ファイル
+   * で常に`true`になり、分類の判断材料として使えない(過去に一度「ファイル自身が
+   * trashedならmanual-review」という判定を追加したが、この理由で全件manual-reviewに
+   * 倒れる回帰を引き起こし、devリハーサルで発覚・revertした)。この情報は保持するが
+   * 分類ロジックでは参照しない。
+   */
   trashed: boolean;
   /** appProperties.docSplitDocId(未設定ならnull) */
   docSplitDocId: string | null;
@@ -39,17 +49,6 @@ export interface ClassificationResult {
 export function classifyDuplicateFile(evidence: FileEvidence): ClassificationResult {
   if (evidence.mimeType === SHORTCUT_MIME_TYPE) {
     return manualReview(evidence, 'shortcut: not a regular file entity, requires manual handling');
-  }
-
-  // codex review 5巡目P1指摘対応: duplicateフォルダ自体がtrashedであることと、
-  // その配下の個々のファイルがtrashedであることは別事象。ユーザーが意図的に
-  // ファイル単体を削除していた場合、自動移動(trashed:falseへの復元を伴う)は
-  // その削除意図を無視してしまう。ファイル自身がtrashedならmanual-reviewへ倒す。
-  if (evidence.trashed) {
-    return manualReview(
-      evidence,
-      'trashed: the file itself is trashed (may have been intentionally deleted by a user), refusing to auto-restore'
-    );
   }
 
   if (evidence.parents.length !== 1) {

@@ -79,11 +79,15 @@ describe('classifyDuplicateFile', () => {
     expect(result.reason).to.match(/conflict/);
   });
 
-  it('routes individually-trashed files to manual-review (does not auto-restore user deletions)', () => {
+  it('confirms move-to-canonical even when trashed=true (inherited from an already-trashed duplicate root, dev rehearsal 2026-08-27 regression)', () => {
+    // classify-drive-folder-duplicates.tsはtrashed済みduplicateフォルダ配下のみを
+    // スキャンするため、Drive APIの`trashed`継承仕様によりスキャン対象の全ファイルで
+    // 常にtrashed=trueになる。trashed=trueを理由にmanual-reviewへ倒すと全件が
+    // manual-review化し、Part Aの自動移行が機能しなくなる(過去に一度この回帰を
+    // 起こしdevリハーサルで発覚)。
     const result = classifyDuplicateFile(baseEvidence({ trashed: true }));
-    expect(result.classification).to.equal('ManualReviewRequired');
-    expect(result.recommendedAction).to.equal('manual-review');
-    expect(result.reason).to.match(/trashed/);
+    expect(result.classification).to.equal('ConfirmedMatch');
+    expect(result.recommendedAction).to.equal('move-to-canonical');
   });
 
   it('never returns move-to-canonical for ManualReviewRequired classification (defense-in-depth precondition)', () => {
@@ -94,7 +98,6 @@ describe('classifyDuplicateFile', () => {
       { firestoreDoc: null },
       { firestoreDoc: { docId: 'doc-1', careManagerName: '別 担当者' } },
       { destinationConflict: true },
-      { trashed: true },
     ];
     for (const override of cases) {
       const result = classifyDuplicateFile(baseEvidence(override));
