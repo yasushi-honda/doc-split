@@ -76,6 +76,13 @@ on:
           - audit-storage-mismatch --no-collisions
           - audit-storage-mismatch --show-creation-times
           - audit-session61-parent-provenance
+          - classify-drive-folder-duplicates
+          - setup-drive-folder-fixture --dev
+          - setup-drive-folder-fixture --dev --cleanup
+          - execute-drive-folder-merge --dry-run
+          - execute-drive-folder-merge --execute
+          - rollback-drive-folder-merge --dry-run
+          - rollback-drive-folder-merge --execute
           - classify-collision-docs
           - setup-collision-fixture --dev
           - setup-collision-fixture --dev --cleanup
@@ -226,7 +233,7 @@ on:
         type: string
         default: ''
       exec_args_json:
-        description: 'execute-collision-migration: JSON {"planRunId":"<classify run id>","approvedOperationIds":["op-0001",...]} / investigate-issue811-root-cause: JSON {"folderIds":[...],"docIds":[...]}'
+        description: 'execute-collision-migration: JSON {"planRunId":"<classify run id>","approvedOperationIds":["op-0001",...]} / investigate-issue811-root-cause: JSON {"folderIds":[...],"docIds":[...]} / classify-drive-folder-duplicates: JSON {"canonicalFolderId":"...","duplicateFolderIds":["id1","id2"]} / execute-drive-folder-merge: JSON {"planRunId":"<classify-drive-folder-duplicates run id>","approvedOperationIds":["op-0001",...]} / rollback-drive-folder-merge: JSON {"manifestRunId":"<execute-drive-folder-merge run id>","approvedOperationIds":["op-0001",...]}(approvedOperationIds省略時はmanifest全件を対象)'
         required: false
         type: string
         default: ''
@@ -505,6 +512,180 @@ jobs:
             exit 1
           fi
 
+      - name: Parse classify-drive-folder-duplicates args
+        # Issue #811 Phase B: exec_args_json から canonicalFolderId/duplicateFolderIds を抽出する。
+        id: parse_classify_drive
+        if: ${{ github.event.inputs.script == 'classify-drive-folder-duplicates' }}
+        env:
+          EXEC_ARGS_JSON: ${{ github.event.inputs.exec_args_json }}
+        run: |
+          set -euo pipefail
+          if [ -z "$EXEC_ARGS_JSON" ]; then
+            echo "ERROR: exec_args_json is required when script is classify-drive-folder-duplicates" >&2
+            exit 1
+          fi
+          if ! echo "$EXEC_ARGS_JSON" | jq empty 2>/dev/null; then
+            echo "ERROR: exec_args_json is not valid JSON" >&2
+            exit 1
+          fi
+          CANONICAL_ID=$(echo "$EXEC_ARGS_JSON" | jq -r '.canonicalFolderId // empty')
+          DUPLICATE_IDS=$(echo "$EXEC_ARGS_JSON" | jq -r '.duplicateFolderIds // empty | join(",")')
+          if [ -z "$CANONICAL_ID" ] || [ -z "$DUPLICATE_IDS" ]; then
+            echo "ERROR: exec_args_json must contain canonicalFolderId (string) and duplicateFolderIds (array)" >&2
+            exit 1
+          fi
+          # Drive file id は英数字/ハイフン/アンダースコアのみ許可(コマンドインジェクション対策)
+          if ! echo "$CANONICAL_ID" | grep -qE '^[A-Za-z0-9_-]+$'; then
+            echo "ERROR: canonicalFolderId contains invalid characters" >&2
+            exit 1
+          fi
+          if ! echo "$DUPLICATE_IDS" | grep -qE '^[A-Za-z0-9_-]+(,[A-Za-z0-9_-]+)*$'; then
+            echo "ERROR: duplicateFolderIds contains invalid characters" >&2
+            exit 1
+          fi
+          echo "canonical_folder_id=$CANONICAL_ID" >> "$GITHUB_OUTPUT"
+          echo "duplicate_folder_ids_csv=$DUPLICATE_IDS" >> "$GITHUB_OUTPUT"
+
+      - name: Parse execute-drive-folder-merge args
+        # Issue #811 Phase B: exec_args_json から planRunId(classify-drive-folder-duplicates run id)
+        # と approvedOperationIds を抽出する。execute-collision-migration の parse_exec と同型。
+        id: parse_exec_drive
+        if: ${{ startsWith(github.event.inputs.script, 'execute-drive-folder-merge') }}
+        env:
+          EXEC_ARGS_JSON: ${{ github.event.inputs.exec_args_json }}
+        run: |
+          set -euo pipefail
+          if [ -z "$EXEC_ARGS_JSON" ]; then
+            echo "ERROR: exec_args_json is required when script is execute-drive-folder-merge" >&2
+            exit 1
+          fi
+          if ! echo "$EXEC_ARGS_JSON" | jq empty 2>/dev/null; then
+            echo "ERROR: exec_args_json is not valid JSON" >&2
+            exit 1
+          fi
+          PLAN_RUN_ID=$(echo "$EXEC_ARGS_JSON" | jq -r '.planRunId // empty')
+          if [ -z "$PLAN_RUN_ID" ]; then
+            echo "ERROR: exec_args_json must contain planRunId (string)" >&2
+            exit 1
+          fi
+          if ! echo "$PLAN_RUN_ID" | grep -qE '^[0-9]+$'; then
+            echo "ERROR: planRunId must be a numeric run id (got: $PLAN_RUN_ID)" >&2
+            exit 1
+          fi
+          # codex review 6巡目P2指摘対応: duplicateフォルダが既にfile 0件(classify結果が
+          # operations 0件)の場合、approvedOperationIdsは正当に空配列になりうる
+          # (rename-onlyの最終確定に必要)。空配列自体をエラー扱いにしない。フィールド
+          # 自体が存在しない/配列でない場合のみエラーとする。
+          HAS_VALID_OP_IDS_FIELD=$(echo "$EXEC_ARGS_JSON" | jq '(.approvedOperationIds // null) | type == "array"')
+          if [ "$HAS_VALID_OP_IDS_FIELD" != "true" ]; then
+            echo "ERROR: exec_args_json must contain approvedOperationIds (array, may be empty for a zero-operation plan)" >&2
+            exit 1
+          fi
+          OPERATION_IDS=$(echo "$EXEC_ARGS_JSON" | jq -r '.approvedOperationIds | join(",")')
+          if [ -n "$OPERATION_IDS" ] && ! echo "$OPERATION_IDS" | grep -qE '^op-[0-9]+(,op-[0-9]+)*$'; then
+            echo "ERROR: approvedOperationIds must each match ^op-[0-9]+$ (got: $OPERATION_IDS)" >&2
+            exit 1
+          fi
+          echo "plan_run_id=$PLAN_RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "operation_ids_csv=$OPERATION_IDS" >> "$GITHUB_OUTPUT"
+
+      - name: Download classify-drive-folder-duplicates plan artifact
+        if: ${{ startsWith(github.event.inputs.script, 'execute-drive-folder-merge') }}
+        uses: actions/download-artifact@v4
+        with:
+          name: classify-drive-folder-duplicates-plan-${{ github.event.inputs.environment }}-${{ steps.parse_exec_drive.outputs.plan_run_id }}
+          path: ${{ github.workspace }}/.drive-merge-plan
+          run-id: ${{ steps.parse_exec_drive.outputs.plan_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate approval JSON from drive folder merge plan + approved operation ids
+        # plan-output.json の operations 配列から approvedOperationIds に該当する op を抽出し、
+        # planId + opIds + (expectedParents[0]/driveFileId を drive://folderId/fileId で展開) を
+        # approval.json に書き出す。execute-drive-folder-merge.ts の Gate 1-3 を満たす形式。
+        if: ${{ startsWith(github.event.inputs.script, 'execute-drive-folder-merge') }}
+        env:
+          OPERATION_IDS_CSV: ${{ steps.parse_exec_drive.outputs.operation_ids_csv }}
+        run: |
+          set -euo pipefail
+          PLAN_FILE="${GITHUB_WORKSPACE}/.drive-merge-plan/plan-output.json"
+          APPROVAL_FILE="${GITHUB_WORKSPACE}/.drive-merge-plan/approval.json"
+          if [ ! -f "$PLAN_FILE" ]; then
+            echo "ERROR: plan-output.json not found at $PLAN_FILE" >&2
+            exit 1
+          fi
+          # codex review 6巡目P2指摘対応: OPERATION_IDS_CSVが空文字列の場合
+          # `jq -R 'split(",")'` は`[""]`(空文字列1件の配列)を返してしまい、
+          # 意図した`[]`(0件承認=zero-operation plan)にならない。空の場合は
+          # 明示的に`[]`とする。
+          if [ -z "$OPERATION_IDS_CSV" ]; then
+            OP_IDS_JSON='[]'
+          else
+            OP_IDS_JSON=$(echo "$OPERATION_IDS_CSV" | jq -R 'split(",")')
+          fi
+          jq --argjson opids "$OP_IDS_JSON" '
+            {
+              planId: .planId,
+              approvedOperationIds: $opids,
+              approvedPaths: [
+                .operations[]
+                | select(.operationId as $id | $opids | index($id))
+                | select(.expectedParents[0] != null)
+                | "drive://\(.expectedParents[0])/\(.driveFileId)"
+              ] | unique
+            }
+          ' "$PLAN_FILE" > "$APPROVAL_FILE"
+          echo "=== Generated approval.json ==="
+          cat "$APPROVAL_FILE"
+          echo "==============================="
+          INPUT_COUNT=$(echo "$OP_IDS_JSON" | jq 'length')
+          MATCHED_COUNT=$(jq '[.operations[] | select(.operationId as $id | ('"$OP_IDS_JSON"' | index($id))) ] | length' "$PLAN_FILE")
+          if [ "$INPUT_COUNT" != "$MATCHED_COUNT" ]; then
+            echo "ERROR: $INPUT_COUNT operation ids requested but only $MATCHED_COUNT matched in plan" >&2
+            exit 1
+          fi
+
+      - name: Parse rollback-drive-folder-merge args
+        id: parse_rollback_drive
+        if: ${{ startsWith(github.event.inputs.script, 'rollback-drive-folder-merge') }}
+        env:
+          EXEC_ARGS_JSON: ${{ github.event.inputs.exec_args_json }}
+        run: |
+          set -euo pipefail
+          if [ -z "$EXEC_ARGS_JSON" ]; then
+            echo "ERROR: exec_args_json is required when script is rollback-drive-folder-merge" >&2
+            exit 1
+          fi
+          if ! echo "$EXEC_ARGS_JSON" | jq empty 2>/dev/null; then
+            echo "ERROR: exec_args_json is not valid JSON" >&2
+            exit 1
+          fi
+          MANIFEST_RUN_ID=$(echo "$EXEC_ARGS_JSON" | jq -r '.manifestRunId // empty')
+          if [ -z "$MANIFEST_RUN_ID" ]; then
+            echo "ERROR: exec_args_json must contain manifestRunId (string)" >&2
+            exit 1
+          fi
+          if ! echo "$MANIFEST_RUN_ID" | grep -qE '^[0-9]+$'; then
+            echo "ERROR: manifestRunId must be a numeric run id (got: $MANIFEST_RUN_ID)" >&2
+            exit 1
+          fi
+          # approvedOperationIds は省略可(省略時はmanifest全件をrollback対象にする)
+          OPERATION_IDS=$(echo "$EXEC_ARGS_JSON" | jq -r '.approvedOperationIds // empty | join(",")')
+          if [ -n "$OPERATION_IDS" ] && ! echo "$OPERATION_IDS" | grep -qE '^op-[0-9]+(,op-[0-9]+)*$'; then
+            echo "ERROR: approvedOperationIds must each match ^op-[0-9]+$ (got: $OPERATION_IDS)" >&2
+            exit 1
+          fi
+          echo "manifest_run_id=$MANIFEST_RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "operation_ids_csv=$OPERATION_IDS" >> "$GITHUB_OUTPUT"
+
+      - name: Download execute-drive-folder-merge manifest artifact
+        if: ${{ startsWith(github.event.inputs.script, 'rollback-drive-folder-merge') }}
+        uses: actions/download-artifact@v4
+        with:
+          name: execute-drive-folder-merge-manifest-${{ github.event.inputs.environment }}-${{ steps.parse_rollback_drive.outputs.manifest_run_id }}
+          path: ${{ github.workspace }}/.drive-merge-manifest
+          run-id: ${{ steps.parse_rollback_drive.outputs.manifest_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Run script
         env:
           ENVIRONMENT: ${{ github.event.inputs.environment }}
@@ -528,6 +709,11 @@ jobs:
           RUN_ID_FOR_ROLLBACK: ${{ github.event.inputs.run_id_for_rollback }}
           REBUILD_GROUP_IDS: ${{ github.event.inputs.rebuild_group_ids }}
           EXEC_ARGS_JSON: ${{ github.event.inputs.exec_args_json }}
+          CANONICAL_FOLDER_ID: ${{ steps.parse_classify_drive.outputs.canonical_folder_id }}
+          DUPLICATE_FOLDER_IDS_CSV: ${{ steps.parse_classify_drive.outputs.duplicate_folder_ids_csv }}
+          DRIVE_OPERATION_IDS_CSV: ${{ steps.parse_exec_drive.outputs.operation_ids_csv }}
+          MANIFEST_RUN_ID: ${{ steps.parse_rollback_drive.outputs.manifest_run_id }}
+          ROLLBACK_OPERATION_IDS_CSV: ${{ steps.parse_rollback_drive.outputs.operation_ids_csv }}
         run: |
           set -euo pipefail
           if [ -z "$PROJECT_ID" ]; then
@@ -564,6 +750,59 @@ jobs:
             NODE_PATH=../functions/node_modules \
               FIREBASE_PROJECT_ID="$PROJECT_ID" \
               npx ts-node investigate-caremanager-folder-duplicate.ts --name "$NAME1"
+          elif [ "$SCRIPT_NAME" = "classify-drive-folder-duplicates" ]; then
+            # Issue #811 Phase B Part A: Driveフォルダ重複統合の分類(read-only)。
+            # ログマスキングで `{` が `***` に置換されるため、plan JSON をファイル出力 →
+            # upload-artifact で取得する経路を必須化(classify-collision-docsと同型)。
+            if [ -z "${CANONICAL_FOLDER_ID:-}" ] || [ -z "${DUPLICATE_FOLDER_IDS_CSV:-}" ]; then
+              echo "ERROR: canonical_folder_id/duplicate_folder_ids_csv is empty (should be set by Parse classify-drive-folder-duplicates args step)" >&2
+              exit 1
+            fi
+            cd scripts
+            NODE_PATH=../functions/node_modules \
+              FIREBASE_PROJECT_ID="$PROJECT_ID" \
+              npx ts-node classify-drive-folder-duplicates.ts \
+                --canonical-id "$CANONICAL_FOLDER_ID" \
+                --duplicate-ids "$DUPLICATE_FOLDER_IDS_CSV" \
+                --out "${GITHUB_WORKSPACE}/scripts/plan-output.json"
+          elif [ "$SCRIPT_NAME" = "execute-drive-folder-merge" ]; then
+            # Issue #811 Phase B Part A: 承認制の実行。plan + approval は前段stepでartifact取得+生成。
+            # SCRIPT_ARGS は workflow_dispatch の choice に応じて "--dry-run" or "--execute"。
+            # codex review 6巡目P2指摘対応: DRIVE_OPERATION_IDS_CSVは空文字列でも正当
+            # (duplicateフォルダが既にfile 0件でrename-onlyを確定させる場合)。
+            # execute-drive-folder-merge.tsは--operationsに空文字列を渡されると
+            # フィルタなし(=plan.operations全件、この場合は元々0件)として扱うため
+            # そのまま渡してよい。空チェックはしない。
+            cd scripts
+            NODE_PATH=../functions/node_modules \
+              FIREBASE_PROJECT_ID="$PROJECT_ID" \
+              npx ts-node execute-drive-folder-merge.ts \
+                --plan "${GITHUB_WORKSPACE}/.drive-merge-plan/plan-output.json" \
+                --approval "${GITHUB_WORKSPACE}/.drive-merge-plan/approval.json" \
+                --operations "$DRIVE_OPERATION_IDS_CSV" \
+                --manifest-out "${GITHUB_WORKSPACE}/scripts/manifest-output.json" \
+                $SCRIPT_ARGS
+          elif [ "$SCRIPT_NAME" = "rollback-drive-folder-merge" ]; then
+            # Issue #811 Phase B: execute-drive-folder-mergeのmanifestを巻き戻す。
+            # approvedOperationIds省略時(ROLLBACK_OPERATION_IDS_CSVが空)はmanifest全件を対象にする。
+            if [ -z "${MANIFEST_RUN_ID:-}" ]; then
+              echo "ERROR: manifest_run_id is empty (should be set by Parse rollback-drive-folder-merge args step)" >&2
+              exit 1
+            fi
+            cd scripts
+            ARGS=( --manifest "${GITHUB_WORKSPACE}/.drive-merge-manifest/manifest-output.json" )
+            if [ -n "${ROLLBACK_OPERATION_IDS_CSV:-}" ]; then
+              ARGS+=( --operations "$ROLLBACK_OPERATION_IDS_CSV" )
+            fi
+            NODE_PATH=../functions/node_modules \
+              FIREBASE_PROJECT_ID="$PROJECT_ID" \
+              npx ts-node rollback-drive-folder-merge.ts "${ARGS[@]}" $SCRIPT_ARGS
+          elif [ "$SCRIPT_NAME" = "setup-drive-folder-fixture" ]; then
+            # Issue #811 Phase B: devリハーサル用fixture投入(ADR-0016 devリハーサル規律を踏襲)。
+            cd scripts
+            NODE_PATH=../functions/node_modules \
+              FIREBASE_PROJECT_ID="$PROJECT_ID" \
+              npx ts-node setup-drive-folder-fixture.ts $SCRIPT_ARGS
           elif [ "$SCRIPT_NAME" = "investigate-issue811-root-cause" ] && echo "$SCRIPT_ARGS" | grep -q -- '--scan-root-duplicates'; then
             # kanameone全体でケアマネ階層フォルダの同名重複がないか安価に走査(exec_args_json不要)
             cd scripts
@@ -993,6 +1232,28 @@ jobs:
           path: scripts/plan-output.json
           if-no-files-found: warn
           retention-days: 30
+
+      - name: Upload classify-drive-folder-duplicates plan artifact
+        # Issue #811 Phase B: classify-collision-docsと同型(log secret maskingでplan JSONが
+        # 欠落するためartifact経由で受け渡す)。
+        if: ${{ github.event.inputs.script == 'classify-drive-folder-duplicates' && always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: classify-drive-folder-duplicates-plan-${{ github.event.inputs.environment }}-${{ github.run_id }}
+          path: scripts/plan-output.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload execute-drive-folder-merge manifest artifact
+        # Issue #811 Phase B: destructive migrationのrollback材料のためretentionを長めに取る
+        # (backfill-drive-export manifest / cleanup-ambiguous backupと同型)。
+        if: ${{ startsWith(github.event.inputs.script, 'execute-drive-folder-merge') && always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: execute-drive-folder-merge-manifest-${{ github.event.inputs.environment }}-${{ github.run_id }}
+          path: scripts/manifest-output.json
+          if-no-files-found: warn
+          retention-days: 90
 
       - name: Upload pdf-feature-survey report artifact
         # Issue #432 PR-C3a: PDF feature 分布調査の survey JSON を artifact 経由で取得。
