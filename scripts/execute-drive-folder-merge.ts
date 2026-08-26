@@ -509,14 +509,32 @@ async function main(): Promise<void> {
         }
       }
 
-      await drive.files.update({
-        fileId: op.driveFileId,
-        addParents: targetFolderId,
-        removeParents: liveForIdempotency.parents.join(','),
-        requestBody: { trashed: false },
-        fields: 'id, parents, trashed',
-        ...SUPPORTS_ALL_DRIVES,
-      });
+      try {
+        await drive.files.update({
+          fileId: op.driveFileId,
+          addParents: targetFolderId,
+          removeParents: liveForIdempotency.parents.join(','),
+          requestBody: { trashed: false },
+          fields: 'id, parents, trashed',
+          ...SUPPORTS_ALL_DRIVES,
+        });
+      } catch (updateErr) {
+        // codex review 8巡目P1指摘対応: タイムアウト/切断でawaitが例外を投げても、
+        // Drive側では実際に移動が成功している可能性がある(server-sideの変更は適用済み
+        // だがclient側がレスポンスを受け取れなかったケース)。この場合そのままerror扱い
+        // にすると、fileMovesへ記録されない「rollback不能な成功move」が発生し、後続の
+        // 空判定によるフォルダrenameも誤爆しうる。例外を即座に再送出せず、まず現在の
+        // 実際の状態を再確認し、既に移動が成功していれば通常のexecuted経路へ合流させる。
+        const reconciled = await fetchLiveSnapshot(drive, op.driveFileId, SUPPORTS_ALL_DRIVES).catch(() => null);
+        const alreadyMoved =
+          reconciled !== null && reconciled.parents.includes(targetFolderId) && reconciled.trashed === false;
+        if (!alreadyMoved) {
+          throw updateErr;
+        }
+        console.log(
+          `⚠️  ${op.operationId} ${op.docId}: drive.files.update()がclient側で例外を返しましたが、再確認の結果Drive側では移動が成功していました(reconciled)`
+        );
+      }
       fileMoves.push({
         operationId: op.operationId,
         docId: op.docId,
