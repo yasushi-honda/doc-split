@@ -76,9 +76,27 @@ function isExact(value) {
   return names.includes(value);
 }
 
+/**
+ * 全角/半角カタカナ等の差異はLevenshtein距離が大きくなりやすく(例: "ﾀﾅｶ" vs "タナカ"は
+ * 距離3)、デフォルトしきい値では検知漏れになる(codex review指摘、PR #819)。
+ * NFKC正規化後に一致するかを独立にチェックすることで、この種の表記ゆれを距離しきい値に
+ * 依存せず確実に検出する。
+ */
+function isNormalizedMatch(value) {
+  if (!value) return false;
+  return names.some((name) => value !== name && value.normalize('NFKC') === name.normalize('NFKC'));
+}
+
 function isCandidate(value) {
   if (!value) return false;
   return names.some((name) => value !== name && levenshtein(value, name) <= maxDistance);
+}
+
+function classify(value) {
+  if (isExact(value)) return '完全一致';
+  if (isNormalizedMatch(value)) return '正規化一致(全角半角等)';
+  if (isCandidate(value)) return '類似候補';
+  return null;
 }
 
 function printGroup(label, entries) {
@@ -87,7 +105,7 @@ function printGroup(label, entries) {
     return;
   }
   for (const [name, ids] of entries) {
-    const tag = isExact(name) ? '完全一致' : '類似候補';
+    const tag = classify(name) || '類似候補';
     console.log(`  [${tag}] "${name}" (hex=${hexOf(name)}) : ${ids.length}件 (例: ${ids.slice(0, SAMPLE_LIMIT).join(', ')})`);
   }
 }
@@ -105,8 +123,8 @@ async function main() {
   for (const doc of cmSnap.docs) {
     const d = doc.data();
     const name = d.name || '';
-    if (isExact(name) || isCandidate(name)) {
-      const tag = isExact(name) ? '完全一致' : '類似候補';
+    const tag = classify(name);
+    if (tag) {
       console.log(`  [${tag}] id=${doc.id} name="${name}" (hex=${hexOf(name)}) office="${d.office || ''}"`);
       cmMatches.push({ id: doc.id, name });
     }
@@ -122,7 +140,7 @@ async function main() {
   const custByName = new Map();
   for (const doc of custSnap.docs) {
     const cmName = doc.data().careManagerName || '';
-    if (isExact(cmName) || isCandidate(cmName)) {
+    if (classify(cmName)) {
       if (!custByName.has(cmName)) custByName.set(cmName, []);
       custByName.get(cmName).push(doc.id);
     }
@@ -142,7 +160,7 @@ async function main() {
     for (const doc of snap.docs) {
       scanned++;
       const cmName = doc.data().careManager || '';
-      if (isExact(cmName) || isCandidate(cmName)) {
+      if (classify(cmName)) {
         if (!docsByName.has(cmName)) docsByName.set(cmName, []);
         docsByName.get(cmName).push(doc.id);
       }
