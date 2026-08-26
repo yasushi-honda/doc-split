@@ -16,6 +16,7 @@ function baseEvidence(overrides: Partial<FileEvidence> = {}): FileEvidence {
     mimeType: 'application/pdf',
     parents: ['parent-1'],
     trashed: false,
+    explicitlyTrashed: false,
     docSplitDocId: 'doc-1',
     firestoreDoc: { docId: 'doc-1', careManagerName: '森 奈穂美' },
     targetCareManagerName: '森 奈穂美',
@@ -79,11 +80,24 @@ describe('classifyDuplicateFile', () => {
     expect(result.reason).to.match(/conflict/);
   });
 
-  it('routes individually-trashed files to manual-review (does not auto-restore user deletions)', () => {
+  it('confirms move-to-canonical even when trashed=true (inherited from an already-trashed duplicate root, dev rehearsal 2026-08-27 regression)', () => {
+    // classify-drive-folder-duplicates.tsはtrashed済みduplicateフォルダ配下のみを
+    // スキャンするため、Drive APIの`trashed`継承仕様によりスキャン対象の全ファイルで
+    // 常にtrashed=trueになる。trashed=trueを理由にmanual-reviewへ倒すと全件が
+    // manual-review化し、Part Aの自動移行が機能しなくなる(過去に一度この回帰を
+    // 起こしdevリハーサルで発覚)。
     const result = classifyDuplicateFile(baseEvidence({ trashed: true }));
+    expect(result.classification).to.equal('ConfirmedMatch');
+    expect(result.recommendedAction).to.equal('move-to-canonical');
+  });
+
+  it('routes explicitly-trashed files to manual-review (individual deletion, distinct from inherited trashed)', () => {
+    // Drive v3の`explicitlyTrashed`は祖先経由の継承では決してtrueにならないため、
+    // `trashed`と異なりユーザーが個別に削除した意図を安全に検知できる(codex review指摘対応)。
+    const result = classifyDuplicateFile(baseEvidence({ trashed: true, explicitlyTrashed: true }));
     expect(result.classification).to.equal('ManualReviewRequired');
     expect(result.recommendedAction).to.equal('manual-review');
-    expect(result.reason).to.match(/trashed/);
+    expect(result.reason).to.match(/explicitly-trashed/);
   });
 
   it('never returns move-to-canonical for ManualReviewRequired classification (defense-in-depth precondition)', () => {
@@ -94,7 +108,7 @@ describe('classifyDuplicateFile', () => {
       { firestoreDoc: null },
       { firestoreDoc: { docId: 'doc-1', careManagerName: '別 担当者' } },
       { destinationConflict: true },
-      { trashed: true },
+      { explicitlyTrashed: true },
     ];
     for (const override of cases) {
       const result = classifyDuplicateFile(baseEvidence(override));

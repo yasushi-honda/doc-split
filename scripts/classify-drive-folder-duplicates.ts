@@ -48,6 +48,17 @@ if (!projectId) {
   process.exit(1);
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function sameStringSet(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  const sa = [...a].sort();
+  const sb = [...b].sort();
+  return sa.every((v, i) => v === sb[i]);
+}
+
 function getOpt(name: string): string | null {
   const i = process.argv.indexOf(name);
   return i >= 0 && i + 1 < process.argv.length ? process.argv[i + 1] : null;
@@ -85,6 +96,13 @@ interface RawDriveFile {
   mimeType: string;
   parents: string[];
   trashed: boolean;
+  /**
+   * Drive v3固有: ファイル自身が明示的にtrashedされたか(祖先フォルダ経由の
+   * 継承trashedとは区別される)。codex review指摘対応: `trashed`は祖先由来でも
+   * 継承されて`true`になるため分類に使えないが、`explicitlyTrashed`はファイル自身への
+   * 操作でのみtrueになるため、ユーザーが個別に削除したファイルを正しく検知できる。
+   */
+  explicitlyTrashed: boolean;
   version: string;
   md5Checksum: string | null;
   headRevisionId: string | null;
@@ -215,8 +233,40 @@ async function main(): Promise<void> {
     } while (pageToken);
   }
   const expectedIds = new Set([canonicalFolderId, ...duplicateFolderIds]);
-  const missingFromScan = [...expectedIds].filter((id) => !rootScanIds.has(id));
+  let missingFromScan = [...expectedIds].filter((id) => !rootScanIds.has(id));
   const extraInScan = [...rootScanIds].filter((id) => !expectedIds.has(id));
+
+  // devリハーサル2周目(冪等性確認)で発覚した相互作用対応: 前回executeが既に空判定→
+  // 「(統合済み_YYYYMMDD)」へリネーム済みのduplicateフォルダは、canonicalNameでの
+  // name一致検索にヒットしなくなり「missing」と誤検知される。--duplicate-idsに
+  // 残したまま再classifyできるよう、この命名パターンに一致する場合は完全性チェック
+  // 上「アカウント済み」として扱う(fail-closedを緩めるのはこの1パターンのみ)。
+  if (missingFromScan.length > 0) {
+    const consolidatedPattern = new RegExp(`^${escapeRegExp(canonicalName)} \\(統合済み_\\d{8}\\)$`);
+    const stillMissing: string[] = [];
+    for (const id of missingFromScan) {
+      if (id === canonicalFolderId) {
+        stillMissing.push(id);
+        continue;
+      }
+      const g = await drive.files.get({
+        fileId: id,
+        fields: 'id, name, trashed, parents',
+        ...SUPPORTS_ALL_DRIVES,
+      });
+      // codex review追加指摘対応: name+trashedのみの緩和は、統合済みフォルダが
+      // 一旦復元→別の場所へ移動→再度trashedされた場合でも(名前が同じパターンで
+      // あれば)「アカウント済み」と誤って通してしまう。canonicalの直接の親配下に
+      // 現在も実在することも必須条件にする(移動されたsubtreeを誤って有効な
+      // duplicate rootとして扱わないため)。
+      const parentsOk = sameStringSet(g.data.parents ?? [], [expectedCanonicalParentId]);
+      const isAlreadyConsolidated =
+        !!g.data.trashed && parentsOk && consolidatedPattern.test(g.data.name ?? '');
+      if (!isAlreadyConsolidated) stillMissing.push(id);
+    }
+    missingFromScan = stillMissing;
+  }
+
   if (missingFromScan.length > 0 || extraInScan.length > 0) {
     console.error(
       `FATAL: canonicalの親フォルダ配下の "${canonicalName}" 名フォルダ再走査が --canonical-id/--duplicate-ids と一致しません。` +
@@ -237,6 +287,20 @@ async function main(): Promise<void> {
     });
     if (g.data.mimeType !== FOLDER_MIME_TYPE) {
       console.error(`FATAL: duplicate-id ${dupId} はフォルダではありません`);
+      process.exit(2);
+    }
+    // codex review(回帰修正後の追加指摘)対応: 「duplicateフォルダ配下のファイルは
+    // trashedフィールドが祖先由来で無条件trueになるため分類に使えない」という前提は、
+    // duplicateフォルダroot自体が必ずtrashedであることに依存している。この前提を
+    // 検証せず活性(trashed=false)なフォルダを--duplicate-idsに誤って渡された場合、
+    // そのフォルダ配下で個別にtrashedされたファイル(=ユーザーが意図的に削除した
+    // ファイル)まで見分けられずmove-to-canonicalへ分類され、実行時にtrashed:falseで
+    // 復元されてしまう。duplicate-idsの各要素は必ずtrashedであることをfail-closedで
+    // 強制する。
+    if (!g.data.trashed) {
+      console.error(
+        `FATAL: duplicate-id ${dupId} (name="${g.data.name}") がtrashed状態ではありません。--duplicate-idsは統合元(trashed済み重複フォルダ)のみを指定してください。`
+      );
       process.exit(2);
     }
     sourceFolderProvenance.push({
@@ -260,7 +324,7 @@ async function main(): Promise<void> {
       const res = await drive.files.list({
         q: `'${folderId}' in parents`,
         fields:
-          'nextPageToken, files(id, name, mimeType, parents, trashed, version, md5Checksum, headRevisionId, appProperties)',
+          'nextPageToken, files(id, name, mimeType, parents, trashed, explicitlyTrashed, version, md5Checksum, headRevisionId, appProperties)',
         includeItemsFromAllDrives: true,
         pageSize: 100,
         pageToken,
@@ -274,6 +338,7 @@ async function main(): Promise<void> {
           mimeType: f.mimeType,
           parents: f.parents ?? [],
           trashed: !!f.trashed,
+          explicitlyTrashed: !!f.explicitlyTrashed,
           version: f.version,
           md5Checksum: f.md5Checksum ?? null,
           headRevisionId: f.headRevisionId ?? null,
@@ -481,6 +546,7 @@ async function main(): Promise<void> {
       mimeType: file.mimeType,
       parents: file.parents,
       trashed: file.trashed,
+      explicitlyTrashed: file.explicitlyTrashed,
       docSplitDocId,
       firestoreDoc: firestoreDocForClassifier,
       targetCareManagerName: canonicalName,

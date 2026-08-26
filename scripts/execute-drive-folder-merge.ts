@@ -191,6 +191,20 @@ async function isDescendantOfOrEqual(
   return false;
 }
 
+/**
+ * 統合済みduplicateフォルダの終端rename処理が付与する末尾サフィックス
+ * (`"<元名> (統合済み_YYYYMMDD)"`)を検出・除去するための共有パターン。
+ * plan.sourceFolderProvenance[].nameがサフィックス付き/なしのどちらの状態で
+ * 記録されていても、両者からサフィックスを剥がして比較すれば「本質的に同じ名前か」
+ * を一貫して判定できる(codex review指摘対応、2重サフィックス付与バグの修正)。
+ */
+const CONSOLIDATED_SUFFIX_PATTERN = /^(.*) \(統合済み_\d{8}\)$/;
+
+function stripConsolidatedSuffix(name: string): string {
+  const m = CONSOLIDATED_SUFFIX_PATTERN.exec(name);
+  return m ? m[1] : name;
+}
+
 function sameStringSet(a: string[], b: string[]): boolean {
   if (a.length !== b.length) return false;
   const sa = [...a].sort();
@@ -278,21 +292,39 @@ async function main(): Promise<void> {
   // root自体)がclassify後にrename/移動/復元されていても検知できない。特に末尾の
   // 統合済みリネーム処理は`dupProvenance.name`(classify時点の古い名前)を前提に動くため、
   // 全rootを事前に再検証しfail-closedにする。
+  //
+  // devリハーサル2周目(冪等性確認)で発覚した相互作用バグへの対応: 1周目のexecuteが
+  // このrootを空判定→「(統合済み_YYYYMMDD)」へリネームした場合、同じplanを使った
+  // 2周目はこのgateが無条件でFATALしてしまい、Gate5の per-file idempotency チェック
+  // (「already migrated」skip)へ到達できなかった。「(統合済み_8桁日付)」という末尾
+  // サフィックスの有無で「本質的に同じ名前」かを判定する(codex review追加指摘対応:
+  // 当初はdupProvenance.nameが常に無サフィックスの前提で`${dupProvenance.name} (統合済み_...)$`
+  // という固定パターンのみ許容していたが、これだと「1周目execute実行後に再classifyし、
+  // 既にサフィックス付きの名前がplanへ記録された」ケースを考慮できず、2重サフィックス
+  // 付与のバグを生んでいた。両方の名前からサフィックスを剥がして比較することで、
+  // planの記録がサフィックス付き/なしのどちらでも同じ判定になるようにする)。
+  const alreadyConsolidatedNameByDupId = new Map<string, boolean>();
   for (const dupProvenance of plan.sourceFolderProvenance) {
     const dupCheck = await drive.files.get({
       fileId: dupProvenance.id,
       fields: 'id, name, parents, trashed',
       ...SUPPORTS_ALL_DRIVES,
     });
+    const liveName = dupCheck.data.name ?? '';
+    const isAlreadyConsolidated =
+      CONSOLIDATED_SUFFIX_PATTERN.test(liveName) &&
+      stripConsolidatedSuffix(liveName) === stripConsolidatedSuffix(dupProvenance.name);
+    alreadyConsolidatedNameByDupId.set(dupProvenance.id, isAlreadyConsolidated);
+    const nameOk = liveName === dupProvenance.name || isAlreadyConsolidated;
     if (
-      dupCheck.data.name !== dupProvenance.name ||
+      !nameOk ||
       dupCheck.data.trashed !== dupProvenance.trashed ||
       !sameStringSet(dupCheck.data.parents ?? [], dupProvenance.parents)
     ) {
       console.error(
         `FATAL: duplicateFolderId ${dupProvenance.id} drift since classify ` +
           `(plan: name="${dupProvenance.name}" trashed=${dupProvenance.trashed} parents=${JSON.stringify(dupProvenance.parents)}, ` +
-          `runtime: name="${dupCheck.data.name}" trashed=${dupCheck.data.trashed} parents=${JSON.stringify(dupCheck.data.parents)}). Re-run classify.`
+          `runtime: name="${liveName}" trashed=${dupCheck.data.trashed} parents=${JSON.stringify(dupCheck.data.parents)}). Re-run classify.`
       );
       process.exit(2);
     }
@@ -718,9 +750,12 @@ async function main(): Promise<void> {
     // このtry/catchで吸収し、1フォルダの失敗が後続フォルダのリネーム処理や、既に
     // 書き込み済みのmanifest(上のチェックポイント参照)を失わせないようにする。
     try {
+      // 冪等性対応: 前回runで既に「(統合済み_YYYYMMDD)」へリネーム済みのrootは、
+      // 二重サフィックス付与や無駄なDrive書込みを避けるため再リネームしない。
+      if (alreadyConsolidatedNameByDupId.get(dupProvenance.id)) continue;
       const empty = await isFolderTreeEmpty(dupProvenance.id);
       if (!empty) continue;
-      const newName = `${dupProvenance.name} (統合済み_${renameStamp})`;
+      const newName = `${stripConsolidatedSuffix(dupProvenance.name)} (統合済み_${renameStamp})`;
       await drive.files.update({
         fileId: dupProvenance.id,
         requestBody: { name: newName },
