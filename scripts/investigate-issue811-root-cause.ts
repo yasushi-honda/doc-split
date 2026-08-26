@@ -31,6 +31,7 @@ if (!projectId) {
 const args = process.argv.slice(2);
 let folderIdsArg: string | undefined;
 let docIdsArg: string | undefined;
+let scanRootDuplicates = false;
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--folder-ids' && args[i + 1]) {
     folderIdsArg = args[i + 1];
@@ -38,10 +39,12 @@ for (let i = 0; i < args.length; i++) {
   } else if (args[i] === '--doc-ids' && args[i + 1]) {
     docIdsArg = args[i + 1];
     i++;
+  } else if (args[i] === '--scan-root-duplicates') {
+    scanRootDuplicates = true;
   }
 }
-if (!folderIdsArg && !docIdsArg) {
-  console.error('--folder-ids または --doc-ids の少なくとも一方を指定してください');
+if (!folderIdsArg && !docIdsArg && !scanRootDuplicates) {
+  console.error('--folder-ids / --doc-ids / --scan-root-duplicates のいずれかを指定してください');
   process.exit(1);
 }
 
@@ -49,11 +52,63 @@ admin.initializeApp({ projectId });
 const db = admin.firestore();
 
 async function main(): Promise<void> {
-  const { getDriveClient } = await import('../functions/src/utils/driveAuth');
+  const { getDriveClient, getDriveSettings } = await import('../functions/src/utils/driveAuth');
   const { SUPPORTS_ALL_DRIVES } = await import('../functions/src/drive/driveApiConstants');
 
   console.log(`プロジェクト: ${projectId}`);
   console.log('---');
+
+  if (scanRootDuplicates) {
+    const drive = await getDriveClient();
+    const settings = await getDriveSettings();
+    const { rootFolderId } = settings;
+    if (!rootFolderId) {
+      console.error('❌ settings/drive の rootFolderId が未設定です。');
+      process.exit(1);
+    }
+    console.log(`=== rootFolderId直下(ケアマネ階層)の同名フォルダ走査 ===`);
+    console.log(`rootFolderId: ${rootFolderId}`);
+    // Drive API v3のfiles.listはデフォルトでtrashedも含む(除外するには明示的にtrashed=falseの
+    // 指定が必要、公式ドキュメント確認済み: developers.google.com/workspace/drive/api/reference/rest/v3/files/list)。
+    // ここでは意図的にtrashed条件を付けず、trashed込みの全フォルダを一覧してactive/trashed両方の
+    // 名前重複を安価に検出する(1回のlist呼び出しで済み、ドキュメント単位の物理チェックより遥かに軽量)。
+    const byName = new Map<string, { id: string; trashed: boolean }[]>();
+    let pageToken: string | undefined;
+    let totalScanned = 0;
+    do {
+      const res = await drive.files.list({
+        q: `'${rootFolderId}' in parents and mimeType='application/vnd.google-apps.folder'`,
+        fields: 'nextPageToken, files(id, name, trashed)',
+        pageSize: 1000,
+        pageToken,
+        includeItemsFromAllDrives: true,
+        ...SUPPORTS_ALL_DRIVES,
+      });
+      for (const f of res.data.files ?? []) {
+        totalScanned++;
+        const name = f.name ?? '(名前なし)';
+        if (!byName.has(name)) byName.set(name, []);
+        byName.get(name)!.push({ id: f.id!, trashed: !!f.trashed });
+      }
+      pageToken = res.data.nextPageToken ?? undefined;
+    } while (pageToken);
+
+    console.log(`走査したケアマネ階層フォルダ総数(active+trashed): ${totalScanned}`);
+    const duplicates = [...byName.entries()].filter(([, items]) => items.length > 1);
+    console.log(`同名フォルダが複数存在するケアマネ名: ${duplicates.length}件`);
+    if (duplicates.length > 0) {
+      console.log('--- 内訳 ---');
+      for (const [name, items] of duplicates) {
+        const activeCount = items.filter((i) => !i.trashed).length;
+        const trashedCount = items.filter((i) => i.trashed).length;
+        console.log(
+          `  "${name}": 物理フォルダ${items.length}件(active=${activeCount}, trashed=${trashedCount}) ` +
+            `ids=${items.map((i) => `${i.id}${i.trashed ? '(trashed)' : ''}`).join(', ')}`
+        );
+      }
+    }
+    console.log('---');
+  }
 
   if (folderIdsArg) {
     const drive = await getDriveClient();
