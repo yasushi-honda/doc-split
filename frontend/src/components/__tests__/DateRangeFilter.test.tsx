@@ -23,10 +23,43 @@ describe('DateRangeFilter', () => {
 
   it('プリセットボタンが表示される', () => {
     render(<DateRangeFilter value={defaultValue} onChange={onChange} />)
+    expect(screen.getByText('今日')).toBeDefined()
+    expect(screen.getByText('昨日')).toBeDefined()
     expect(screen.getByText('今月')).toBeDefined()
     expect(screen.getByText('今年')).toBeDefined()
     expect(screen.getByText('過去3ヶ月')).toBeDefined()
     expect(screen.getByText('カスタム')).toBeDefined()
+  })
+
+  it('今日プリセットをクリックすると今日1日分の範囲が設定される(Issue #817)', () => {
+    render(<DateRangeFilter value={defaultValue} onChange={onChange} />)
+    fireEvent.click(screen.getByText('今日'))
+
+    const call = onChange.mock.calls[0]![0]!
+    expect(call.dateFrom).toEqual(new Date(2026, 1, 6)) // 2/6 00:00:00
+    expect(call.dateTo!.getFullYear()).toBe(2026)
+    expect(call.dateTo!.getMonth()).toBe(1)
+    expect(call.dateTo!.getDate()).toBe(6)
+    expect(call.dateTo!.getHours()).toBe(23)
+  })
+
+  it('昨日プリセットをクリックすると昨日1日分の範囲が設定される(Issue #817)', () => {
+    render(<DateRangeFilter value={defaultValue} onChange={onChange} />)
+    fireEvent.click(screen.getByText('昨日'))
+
+    const call = onChange.mock.calls[0]![0]!
+    expect(call.dateFrom).toEqual(new Date(2026, 1, 5)) // 2/5 00:00:00
+    expect(call.dateTo).toEqual(new Date(2026, 1, 5, 23, 59, 59))
+  })
+
+  it('月初(1日)に昨日プリセットをクリックすると前月末日になる(Issue #817、月境界)', () => {
+    vi.setSystemTime(new Date(2026, 1, 1)) // 2026-02-01
+    render(<DateRangeFilter value={defaultValue} onChange={onChange} />)
+    fireEvent.click(screen.getByText('昨日'))
+
+    const call = onChange.mock.calls[0]![0]!
+    expect(call.dateFrom).toEqual(new Date(2026, 0, 31)) // 1/31 00:00:00
+    expect(call.dateTo).toEqual(new Date(2026, 0, 31, 23, 59, 59))
   })
 
   it('日付種別ボタンが表示される', () => {

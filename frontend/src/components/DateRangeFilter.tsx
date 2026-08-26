@@ -13,7 +13,7 @@ import { Button } from '@/components/ui/button'
 // ============================================
 
 export type DateField = 'fileDate' | 'processedAt'
-export type DatePreset = 'thisMonth' | 'thisYear' | 'last3Months' | 'custom' | null
+export type DatePreset = 'today' | 'yesterday' | 'thisMonth' | 'thisYear' | 'last3Months' | 'custom' | null
 
 export interface DateRange {
   dateFrom: Date | undefined
@@ -35,6 +35,15 @@ function getPresetRange(preset: DatePreset): { dateFrom: Date | undefined; dateT
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59)
 
   switch (preset) {
+    case 'today': {
+      const from = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+      return { dateFrom: from, dateTo: today }
+    }
+    case 'yesterday': {
+      const from = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1)
+      const to = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1, 23, 59, 59)
+      return { dateFrom: from, dateTo: to }
+    }
     case 'thisMonth': {
       const from = new Date(now.getFullYear(), now.getMonth(), 1)
       return { dateFrom: from, dateTo: today }
@@ -75,7 +84,7 @@ function fromDateInputValue(value: string): Date | undefined {
 function detectPreset(dateFrom: Date | undefined, dateTo: Date | undefined): DatePreset {
   if (!dateFrom && !dateTo) return null
 
-  const presets: DatePreset[] = ['thisMonth', 'thisYear', 'last3Months']
+  const presets: DatePreset[] = ['today', 'yesterday', 'thisMonth', 'thisYear', 'last3Months']
   for (const preset of presets) {
     const range = getPresetRange(preset)
     if (
@@ -99,6 +108,8 @@ function detectPreset(dateFrom: Date | undefined, dateTo: Date | undefined): Dat
 // ============================================
 
 const PRESET_OPTIONS: { value: DatePreset; label: string }[] = [
+  { value: 'today', label: '今日' },
+  { value: 'yesterday', label: '昨日' },
   { value: 'thisMonth', label: '今月' },
   { value: 'thisYear', label: '今年' },
   { value: 'last3Months', label: '過去3ヶ月' },
