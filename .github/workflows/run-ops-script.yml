@@ -52,6 +52,7 @@ on:
           - force-reindex --doc-id
           - force-reindex --doc-id --execute
           - investigate-office-duplicate
+          - investigate-caremanager-duplicate
           - audit-short-office-masters
           - audit-short-office-masters --max-length 3
           - audit-short-office-masters --max-length 4
@@ -173,12 +174,12 @@ on:
         type: string
         default: ''
       name1:
-        description: 'Office name 1 (required for investigate-office-duplicate; ignored otherwise)'
+        description: 'Name 1 (required for investigate-office-duplicate / investigate-caremanager-duplicate; ignored otherwise)'
         required: false
         type: string
         default: ''
       name2:
-        description: 'Office name 2 (optional, for paired comparison; e.g. duplicate candidate variant like the trailing-zero suffix case)'
+        description: 'Name 2 (optional, for paired comparison; e.g. duplicate candidate variant like the trailing-zero suffix case)'
         required: false
         type: string
         default: ''
@@ -535,10 +536,10 @@ jobs:
           echo "Args: $SCRIPT_ARGS"
           echo "========================="
 
-          if [ "$SCRIPT_NAME" = "investigate-office-duplicate" ]; then
+          if [ "$SCRIPT_NAME" = "investigate-office-duplicate" ] || [ "$SCRIPT_NAME" = "investigate-caremanager-duplicate" ]; then
             # 空文字 / 空白のみの NAME1 を弾く（trim せずに非空白文字の存在チェック）
             if [[ ! "$NAME1" =~ [^[:space:]] ]]; then
-              echo "ERROR: name1 must contain non-whitespace characters for investigate-office-duplicate" >&2
+              echo "ERROR: name1 must contain non-whitespace characters for ${SCRIPT_NAME}" >&2
               exit 1
             fi
             ARGS=( --name "$NAME1" )
