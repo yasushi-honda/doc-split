@@ -32,6 +32,7 @@ const args = process.argv.slice(2);
 let folderIdsArg: string | undefined;
 let docIdsArg: string | undefined;
 let scanRootDuplicates = false;
+let fullChainDocIdsArg: string | undefined;
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--folder-ids' && args[i + 1]) {
     folderIdsArg = args[i + 1];
@@ -41,10 +42,13 @@ for (let i = 0; i < args.length; i++) {
     i++;
   } else if (args[i] === '--scan-root-duplicates') {
     scanRootDuplicates = true;
+  } else if (args[i] === '--full-chain' && args[i + 1]) {
+    fullChainDocIdsArg = args[i + 1];
+    i++;
   }
 }
-if (!folderIdsArg && !docIdsArg && !scanRootDuplicates) {
-  console.error('--folder-ids / --doc-ids / --scan-root-duplicates のいずれかを指定してください');
+if (!folderIdsArg && !docIdsArg && !scanRootDuplicates && !fullChainDocIdsArg) {
+  console.error('--folder-ids / --doc-ids / --scan-root-duplicates / --full-chain のいずれかを指定してください');
   process.exit(1);
 }
 
@@ -105,6 +109,63 @@ async function main(): Promise<void> {
           `  "${name}": 物理フォルダ${items.length}件(active=${activeCount}, trashed=${trashedCount}) ` +
             `ids=${items.map((i) => `${i.id}${i.trashed ? '(trashed)' : ''}`).join(', ')}`
         );
+      }
+    }
+    console.log('---');
+  }
+
+  if (fullChainDocIdsArg) {
+    const drive = await getDriveClient();
+    const docIds = fullChainDocIdsArg.split(',').map((s) => s.trim()).filter(Boolean);
+    console.log(`=== 完全チェーン調査(root到達まで、${docIds.length}件) ===`);
+    for (const docId of docIds) {
+      const snap = await db.collection('documents').doc(docId).get();
+      if (!snap.exists) {
+        console.log(`docId=${docId}: Firestoreに存在しません`);
+        continue;
+      }
+      const data = snap.data()!;
+      const driveFileId = data.driveFileId as string | undefined;
+      if (!driveFileId) {
+        console.log(`docId=${docId}: driveFileId未設定`);
+        continue;
+      }
+      console.log(`--- docId=${docId} driveFileId=${driveFileId} ---`);
+      try {
+        const fileGet = await drive.files.get({
+          fileId: driveFileId,
+          fields: 'id,name,mimeType,parents,trashed,createdTime,shortcutDetails,appProperties',
+          ...SUPPORTS_ALL_DRIVES,
+        });
+        console.log(
+          `  [file] id=${driveFileId} name="${fileGet.data.name}" mimeType=${fileGet.data.mimeType} ` +
+            `trashed=${fileGet.data.trashed} createdTime=${fileGet.data.createdTime} ` +
+            `shortcutDetails=${JSON.stringify(fileGet.data.shortcutDetails ?? null)} ` +
+            `appProperties=${JSON.stringify(fileGet.data.appProperties ?? null)}`
+        );
+        let currentId = (fileGet.data.parents ?? [])[0];
+        let depth = 0;
+        const MAX_DEPTH = 15; // 安全弁(無限ループ防止)
+        while (currentId && depth < MAX_DEPTH) {
+          const folderGet = await drive.files.get({
+            fileId: currentId,
+            fields: 'id,name,mimeType,parents,trashed,createdTime',
+            ...SUPPORTS_ALL_DRIVES,
+          });
+          depth++;
+          console.log(
+            `  [${depth}ホップ上] id=${currentId} name="${folderGet.data.name}" mimeType=${folderGet.data.mimeType} ` +
+              `trashed=${folderGet.data.trashed} createdTime=${folderGet.data.createdTime}`
+          );
+          currentId = (folderGet.data.parents ?? [])[0];
+        }
+        if (depth >= MAX_DEPTH) {
+          console.log(`  ⚠️ MAX_DEPTH(${MAX_DEPTH})に到達、打ち切り`);
+        } else {
+          console.log(`  root到達(親なし)`);
+        }
+      } catch (err) {
+        console.log(`  エラー: ${(err as Error).message}`);
       }
     }
     console.log('---');

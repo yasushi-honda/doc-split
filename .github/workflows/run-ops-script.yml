@@ -56,6 +56,7 @@ on:
           - investigate-caremanager-folder-duplicate
           - investigate-issue811-root-cause
           - investigate-issue811-root-cause --scan-root-duplicates
+          - investigate-issue811-root-cause --full-chain
           - audit-short-office-masters
           - audit-short-office-masters --max-length 3
           - audit-short-office-masters --max-length 4
@@ -569,6 +570,29 @@ jobs:
             NODE_PATH=../functions/node_modules \
               FIREBASE_PROJECT_ID="$PROJECT_ID" \
               npx ts-node investigate-issue811-root-cause.ts --scan-root-duplicates
+          elif [ "$SCRIPT_NAME" = "investigate-issue811-root-cause" ] && echo "$SCRIPT_ARGS" | grep -q -- '--full-chain'; then
+            # サンプルdocumentのdriveFileIdからroot到達まで完全にチェーンを辿る(exec_args_json.docIds必須)
+            if [ -z "$EXEC_ARGS_JSON" ]; then
+              echo "ERROR: exec_args_json is required for investigate-issue811-root-cause --full-chain" >&2
+              exit 1
+            fi
+            if ! echo "$EXEC_ARGS_JSON" | jq empty 2>/dev/null; then
+              echo "ERROR: exec_args_json is not valid JSON" >&2
+              exit 1
+            fi
+            DOC_IDS=$(echo "$EXEC_ARGS_JSON" | jq -r '.docIds // empty | join(",")')
+            if [ -z "$DOC_IDS" ]; then
+              echo "ERROR: exec_args_json must contain non-empty docIds array for --full-chain" >&2
+              exit 1
+            fi
+            if ! echo "$DOC_IDS" | grep -qE '^[A-Za-z0-9_-]+(,[A-Za-z0-9_-]+)*$'; then
+              echo "ERROR: docIds must each match ^[A-Za-z0-9_-]+$ (got: $DOC_IDS)" >&2
+              exit 1
+            fi
+            cd scripts
+            NODE_PATH=../functions/node_modules \
+              FIREBASE_PROJECT_ID="$PROJECT_ID" \
+              npx ts-node investigate-issue811-root-cause.ts --full-chain "$DOC_IDS"
           elif [ "$SCRIPT_NAME" = "investigate-issue811-root-cause" ]; then
             # Issue #811再オープン後の根本原因調査(read-only)。exec_args_jsonで
             # {"folderIds":["id1",...],"docIds":["docA",...]}を渡す(いずれか片方でも可)。
