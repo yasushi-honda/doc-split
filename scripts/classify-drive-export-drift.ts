@@ -512,7 +512,14 @@ async function main(): Promise<void> {
         // exists()呼び出しがfalseを返す(「実体が無い」という誤った断定)。プレフィックスが
         // 一致しない場合はnull(不明)として区別し、falseで断定しない。
         const expectedPrefix = `gs://${bucket.name}/`;
-        if (!doc.fileUrl.startsWith(expectedPrefix)) {
+        // codex review(PR #849最終レビュー2回目)指摘: doc.fileUrlが欠損/非string
+        // (Firestore上のデータ不整合)の場合、`.startsWith()`呼び出し自体がTypeErrorを
+        // throwする。この時点で既にclassificationRows(数行上)へは記録済みのため、
+        // 外側のcatch(I1)が同一documentをapi-errorとしてもう一度push
+        // してしまい、summary/byCareManagerで二重カウントされ、かつtargetsへは
+        // 一切追加されない(せっかく確定した404/trashed等の分類が失われる)。
+        // 文字列でない場合はexists()を呼ばず、確認不能(null)として扱う。
+        if (typeof doc.fileUrl !== 'string' || !doc.fileUrl.startsWith(expectedPrefix)) {
           console.log(
             `  ⚠️  docId=${docId}: fileUrl(${doc.fileUrl})が設定中のバケット(${bucket.name})と異なる形式のため確認不能`
           );
