@@ -30,6 +30,17 @@
  *   FIREBASE_PROJECT_ID=doc-split-dev npx ts-node scripts/setup-drive-folder-fixture.ts [--cleanup]
  *
  * --cleanup: fixtureを削除する(再投入前のリセット用)
+ *
+ * --repair-scenario: Issue #811/#823 remediation(`scripts/classify-drive-export-drift.ts`)の
+ *   devリハーサル用fixtureを投入する(上記の重複統合フレームワーク用fixtureとは独立、
+ *   `--cleanup`とは併用不可でどちらか一方を指定する)。exported かつ driveFileId が
+ *   trashed/404/healthy の3document(`driveExportStatus`/`driveFileId`/`fileUrl`等の
+ *   フィールドを持たない既存fixtureでは今回のシナリオを再現できないため新設)を投入する:
+ *     - repair-healthy: 正しいフォルダに実体があるファイル(healthy判定の陰性対照)
+ *     - repair-trashed: 実体はあるがゴミ箱内にあるファイル(trashed判定)
+ *     - repair-404: driveFileIdがDrive上に存在しない(missing-404判定。#823調査で判明した
+ *       「404以外の例外も混ざりうる」懸念(R1)を、実際のDrive APIレスポンスで確定させる
+ *       のがこのfixtureの主目的)
  */
 
 import * as admin from 'firebase-admin';
@@ -46,14 +57,25 @@ if (!projectId.includes('dev')) {
 }
 
 const cleanup = process.argv.includes('--cleanup');
+const repairScenario = process.argv.includes('--repair-scenario');
+if (repairScenario && cleanup) {
+  console.error('❌ --repair-scenario と --cleanup は併用できません(cleanupは常に両fixture種別を対象に実施されるため、--repair-scenario単体では不要です)。');
+  process.exit(1);
+}
 
-admin.initializeApp({ projectId });
+admin.initializeApp({ projectId, storageBucket: process.env.STORAGE_BUCKET });
 const db = admin.firestore();
 
 const FIXTURE_PREFIX = 'pr-x-fixture';
 const FIXTURE_DOC_MATCH = `${FIXTURE_PREFIX}-doc-match`;
 const FIXTURE_DOC_REASSIGNED = `${FIXTURE_PREFIX}-doc-reassigned`;
 const FIXTURE_CUSTOMER_ID = `${FIXTURE_PREFIX}-customer-match`;
+const REPAIR_FIXTURE_DOC_HEALTHY = `${FIXTURE_PREFIX}-doc-repair-healthy`;
+const REPAIR_FIXTURE_DOC_TRASHED = `${FIXTURE_PREFIX}-doc-repair-trashed`;
+const REPAIR_FIXTURE_DOC_404 = `${FIXTURE_PREFIX}-doc-repair-404`;
+// 実在しないことが保証されたDrive fileId(Drive IDは英数字+'-'/'_'のbase64url類似形式、
+// 44文字前後が一般的。この文字列が偶然実在のファイルと衝突する確率は無視できる)。
+const REPAIR_FIXTURE_FAKE_404_FILE_ID = '1FIXTURE404-does-not-exist-0000000000000';
 // cleanup時の広域sweep用(実行毎のランダムsuffixに関わらず、過去runの残骸を全て対象にする)
 const FIXTURE_NAME_SWEEP_TOKEN = 'フィクスチャ';
 
@@ -130,10 +152,22 @@ async function main(): Promise<void> {
 
   // ─── cleanup: 既存fixtureを削除(広域sweep、実行毎のsuffixに関わらず全runの残骸を対象) ──
   async function doCleanup(): Promise<void> {
-    for (const docId of [FIXTURE_DOC_MATCH, FIXTURE_DOC_REASSIGNED]) {
+    for (const docId of [
+      FIXTURE_DOC_MATCH,
+      FIXTURE_DOC_REASSIGNED,
+      REPAIR_FIXTURE_DOC_HEALTHY,
+      REPAIR_FIXTURE_DOC_TRASHED,
+      REPAIR_FIXTURE_DOC_404,
+    ]) {
       await db.doc(`documents/${docId}`).delete().catch(() => undefined);
     }
     await db.doc(`masters/customers/items/${FIXTURE_CUSTOMER_ID}`).delete().catch(() => undefined);
+    await admin
+      .storage()
+      .bucket()
+      .file(`original/${FIXTURE_PREFIX}-repair.txt`)
+      .delete()
+      .catch(() => undefined);
     let pageToken: string | undefined;
     const toDelete: string[] = [];
     do {
@@ -161,8 +195,95 @@ async function main(): Promise<void> {
     console.log(`cleanup完了: Drive fixtureフォルダ${toDelete.length}件をtrashed化、Firestore fixture doc 2件削除`);
   }
 
+  // ─── --repair-scenario: Issue #811/#823 remediation用fixture投入 ──────────
+  async function setupRepairScenario(): Promise<void> {
+    const { findOrCreateFolder } = await import('../functions/src/drive/findOrCreateFolder');
+
+    const runSuffix = crypto.randomBytes(3).toString('hex');
+    const careManagerRaw = `フィクスチャ修復${runSuffix}`;
+    const customerName = 'フィクスチャ利用者A';
+
+    await db.doc(`masters/customers/items/${FIXTURE_CUSTOMER_ID}`).set({
+      name: customerName,
+      furigana: 'フィクスチャリヨウシャエー',
+    });
+
+    const now = admin.firestore.Timestamp.now();
+    const docInput: import('../functions/src/drive/folderPath').FolderPathDocInput = {
+      careManagerName: careManagerRaw,
+      customerName,
+      customerFurigana: 'フィクスチャリヨウシャエー',
+      documentCategory: 'フィクスチャ書類',
+      documentType: 'フィクスチャ書類',
+      fileDate: now.toDate(),
+    };
+    const segments = resolveFolderSegments(docInput, template!, opts);
+
+    let leafFolderId = fixtureParentId;
+    for (const name of segments) {
+      leafFolderId = await findOrCreateFolder(drive, db, leafFolderId, name);
+    }
+    console.log(`repair-scenario leafFolderId(正しいフォルダ): ${leafFolderId}`);
+
+    // Storage実体を1件だけ用意し、healthy/trashedの両fixtureで共有する(classifyの
+    // storageObjectExistsチェック対象。404 fixtureは意図的にStorage側の実在有無を問わない
+    // -- driveFileId自体が存在しないため、その手前のDrive files.get()で判定が完結する)。
+    const storagePath = `original/${FIXTURE_PREFIX}-repair.txt`;
+    await admin.storage().bucket().file(storagePath).save('repair-scenario fixture file', {
+      contentType: 'text/plain',
+    });
+    const fileUrl = `gs://${admin.storage().bucket().name}/${storagePath}`;
+
+    const healthyFileId = await createFixtureFile(leafFolderId, 'repair-healthy.txt', REPAIR_FIXTURE_DOC_HEALTHY);
+
+    const trashedFileId = await createFixtureFile(leafFolderId, 'repair-trashed.txt', REPAIR_FIXTURE_DOC_TRASHED);
+    await drive.files.update({
+      fileId: trashedFileId,
+      requestBody: { trashed: true },
+      fields: 'id',
+      ...SUPPORTS_ALL_DRIVES,
+    });
+
+    const baseDoc = {
+      careManager: careManagerRaw,
+      customerName,
+      customerId: FIXTURE_CUSTOMER_ID,
+      category: 'フィクスチャ書類',
+      documentType: 'フィクスチャ書類',
+      fileDate: now,
+      status: 'processed',
+      verified: true,
+      driveExportStatus: 'exported',
+      driveExportedAt: now,
+      fileUrl,
+      mimeType: 'text/plain',
+      fileName: 'repair-fixture.txt',
+      displayFileName: 'repair-fixture.txt',
+    };
+    await db.doc(`documents/${REPAIR_FIXTURE_DOC_HEALTHY}`).set({ ...baseDoc, driveFileId: healthyFileId });
+    await db.doc(`documents/${REPAIR_FIXTURE_DOC_TRASHED}`).set({ ...baseDoc, driveFileId: trashedFileId });
+    await db
+      .doc(`documents/${REPAIR_FIXTURE_DOC_404}`)
+      .set({ ...baseDoc, driveFileId: REPAIR_FIXTURE_FAKE_404_FILE_ID });
+
+    console.log('\nrepair-scenario投入完了:');
+    console.log(`  careManager: "${careManagerRaw}"`);
+    console.log(`  ${REPAIR_FIXTURE_DOC_HEALTHY}: healthy期待(driveFileId=${healthyFileId})`);
+    console.log(`  ${REPAIR_FIXTURE_DOC_TRASHED}: trashed期待(driveFileId=${trashedFileId})`);
+    console.log(`  ${REPAIR_FIXTURE_DOC_404}: missing-404期待(driveFileId=${REPAIR_FIXTURE_FAKE_404_FILE_ID})`);
+    console.log(
+      `\n検証コマンド: FIREBASE_PROJECT_ID=${projectId} npx ts-node scripts/classify-drive-export-drift.ts --care-manager "${careManagerRaw}" --out /tmp/repair-scenario-plan.json`
+    );
+  }
+
   await doCleanup();
   if (cleanup) {
+    await admin.app().delete();
+    return;
+  }
+
+  if (repairScenario) {
+    await setupRepairScenario();
     await admin.app().delete();
     return;
   }

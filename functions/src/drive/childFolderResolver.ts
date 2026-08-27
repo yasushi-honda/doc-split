@@ -78,7 +78,7 @@ async function listMatchingFolders(
  *    `AmbiguousChildFolderError`。
  * 両段階とも0件ならnullを返す。
  */
-async function resolveExistingChildFile(
+export async function resolveExistingChildFile(
   drive: drive_v3.Drive,
   parentId: string,
   name: string

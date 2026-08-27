@@ -172,8 +172,11 @@ on:
           - backfill-drive-export --limit --expected-count
           - backfill-drive-export --dry-run --expected-count
           - backfill-drive-export --expected-count
+          - classify-drive-export-drift
+          - classify-drive-export-drift --care-manager
+          - classify-drive-export-drift --care-manager --limit
       backfill_limit:
-        description: 'backfill-drive-export --limit: canary実行時のマーク上限件数(数値のみ)'
+        description: 'backfill-drive-export --limit: canary実行時のマーク上限件数(数値のみ) / classify-drive-export-drift --limit: 検査対象document数の上限(数値のみ)'
         required: false
         type: string
         default: ''
@@ -188,7 +191,7 @@ on:
         type: string
         default: ''
       name1:
-        description: 'Name 1 (required for investigate-office-duplicate / investigate-caremanager-duplicate / investigate-caremanager-folder-duplicate; ignored otherwise)'
+        description: 'Name 1 (required for investigate-office-duplicate / investigate-caremanager-duplicate / investigate-caremanager-folder-duplicate; classify-drive-export-drift --care-manager 指定時のケアマネ名; ignored otherwise)'
         required: false
         type: string
         default: ''
@@ -381,6 +384,22 @@ jobs:
                 exit 1
               fi
               SCRIPT_ARGS=$(echo "$SCRIPT_ARGS" | sed "s/--expected-count/--expected-count $EXPECTED_COUNT/")
+            fi
+          fi
+
+          # classify-drive-export-drift --limit(Issue #811/#823 remediation)。数値のみなので
+          # backfill-drive-exportと同一パターンでbackfill_limit入力をここで安全に置換できる。
+          # --care-manager(ケアマネ名、スペースを含みうる)はここではsed置換しない
+          # (置換後にSCRIPT_ARGSをunquotedでword-split展開すると名前がスペースで分割されて
+          # 壊れるため、investigate-caremanager-folder-duplicateと同様にRun scriptステップ側で
+          # bash配列として`"$NAME1"`をクォート付きで直接組み立てる)。
+          if [ "$SCRIPT_NAME" = "classify-drive-export-drift" ]; then
+            if echo "$SCRIPT_ARGS" | grep -q -- '--limit'; then
+              if [ -z "$BACKFILL_LIMIT" ] || ! echo "$BACKFILL_LIMIT" | grep -qE '^[0-9]+$'; then
+                echo "ERROR: backfill_limit must be a non-negative integer when script contains --limit" >&2
+                exit 1
+              fi
+              SCRIPT_ARGS=$(echo "$SCRIPT_ARGS" | sed "s/--limit/--limit $BACKFILL_LIMIT/")
             fi
           fi
 
@@ -753,6 +772,29 @@ jobs:
             NODE_PATH=../functions/node_modules \
               FIREBASE_PROJECT_ID="$PROJECT_ID" \
               npx ts-node investigate-caremanager-folder-duplicate.ts --name "$NAME1"
+          elif [ "$SCRIPT_NAME" = "classify-drive-export-drift" ]; then
+            # Issue #811/#823 remediation: exported documentの物理状態検査(read-only)。
+            # ログマスキングで `{` が `***` に置換されるため、plan JSON をファイル出力 →
+            # upload-artifactで取得する経路を必須化(classify-drive-folder-duplicatesと同型)。
+            # --care-manager(スペースを含みうるケアマネ名)はbash配列で`"$NAME1"`をクォート付きで
+            # 渡す(investigate-caremanager-folder-duplicateと同型。sed置換+unquoted展開は
+            # word-splitで名前が壊れるため使わない)。--limitはParse段階で数値置換済みなので
+            # そのままSCRIPT_ARGSから--care-managerを除いた残りを渡してよい(数値のみで安全)。
+            ARGS=( --out "${GITHUB_WORKSPACE}/scripts/plan-output.json" )
+            REMAINING_ARGS="$SCRIPT_ARGS"
+            if echo "$SCRIPT_ARGS" | grep -q -- '--care-manager'; then
+              if [[ ! "$NAME1" =~ [^[:space:]] ]]; then
+                echo "ERROR: name1 must contain non-whitespace characters when script contains --care-manager" >&2
+                exit 1
+              fi
+              ARGS+=( --care-manager "$NAME1" )
+              REMAINING_ARGS=$(echo "$REMAINING_ARGS" | sed 's/--care-manager//')
+            fi
+            cd scripts
+            NODE_PATH=../functions/node_modules \
+              FIREBASE_PROJECT_ID="$PROJECT_ID" \
+              STORAGE_BUCKET="$STORAGE_BUCKET" \
+              npx ts-node classify-drive-export-drift.ts "${ARGS[@]}" $REMAINING_ARGS
           elif [ "$SCRIPT_NAME" = "classify-drive-folder-duplicates" ]; then
             # Issue #811 Phase B Part A: Driveフォルダ重複統合の分類(read-only)。
             # ログマスキングで `{` が `***` に置換されるため、plan JSON をファイル出力 →
@@ -1262,6 +1304,17 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: classify-collision-docs-plan-${{ github.event.inputs.environment }}-${{ github.run_id }}
+          path: scripts/plan-output.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload classify-drive-export-drift plan artifact
+        # Issue #811/#823 remediation: classify-drive-folder-duplicatesと同型(log secret
+        # maskingでplan JSONが欠落するためartifact経由で受け渡す)。
+        if: ${{ startsWith(github.event.inputs.script, 'classify-drive-export-drift') && always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: classify-drive-export-drift-plan-${{ github.event.inputs.environment }}-${{ github.run_id }}
           path: scripts/plan-output.json
           if-no-files-found: warn
           retention-days: 30
