@@ -157,6 +157,7 @@ on:
           - backfill-drive-export
           - audit-drive-folder-space-variants
           - drive-export-status-report
+          - drive-export-status-report --breakdown
           - set-feature-flag --flag driveExport --value true --dry-run
           - set-feature-flag --flag driveExport --value true
           - set-feature-flag --flag driveExport --value false --dry-run
