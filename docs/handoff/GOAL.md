@@ -51,6 +51,19 @@ kanameone・cocoroへのGoogle Drive連携Phase1本番展開。承認済み計�
   - [ ] flag OFF維持
   - [ ] **（新規）静的存在確認だけでなく、可能な範囲で実際にAPIを呼び出す動作確認を行う**: 今回のようにAPI有効化漏れは「Cloud Functionsの状態」「Secret/IAMの存在」等の静的チェックでは検出できず、クライアントが実際にOAuthフローを最後まで動かした瞬間にしか顕在化しなかった。理想はテスト用アカウントで一度OAuth接続を通すことだが、それが難しい場合は最低限`gcloud services list --enabled`の機械的突合を完了条件に含める
 
+## 【訂正・2026-08-27】Issue #811「Part A完了」宣言の訂正+Issue #823規模確定（再オープン、remediation未着手）
+
+下記「Issue #811 Phase B」節の「kanameone本番データ移行（Part A実行）完了」は不正確だった。Issue #823（規模の妥当性確認）の一環で`investigate-caremanager-folder-duplicate.ts`をkanameoneで再実行したところ、Part Aが根拠にした「root-duplicate再走査で実質重複0件」はrootFolderId直下のトップレベルフォルダ名重複のみを見た確認で、個々のdocumentのdriveFileIdから実際の祖先フォルダを辿ると依然として大量の破損データが残存していると判明した。
+
+**確定した規模**（森奈穂美、`driveExportStatus=exported`729件時点）:
+- 正しいフォルダに収束（正常）: 258件（35.4%）
+- 古い/重複/ゴミ箱フォルダに紐づいたまま（要救済）: 183件（25.1%、Part Aのスキャン範囲=直下ファイルのみだったため見落とされた深い階層のdocument）
+- Drive上に存在しない404（要救済）: 288件（39.5%）
+
+正常な状態は35.4%のみ。Issue #811を再オープンし、[訂正コメント](https://github.com/yasushi-honda/doc-split/issues/811#issuecomment-5437480863)を追記。Issue #823にも[規模確定コメント](https://github.com/yasushi-honda/doc-split/issues/823#issuecomment-5437712394)を追記済み。
+
+**現状**: 根本原因修正（PR #840/#842、trashed込み2段階検索）は有効で今後の新規発生は防止されている。過去に壊れた471件の遡及救済（backfill/再export等）は未着手・未設計。remediation方針の検討は別途plan modeセッションで行う。他のケアマネへの横展開有無（森奈穂美以外での同種事象）も未検証。
+
 ## 【完了・2026-08-27】Issue #811 Phase B: kanameone森奈穂美フォルダ重複の根本原因修正+データ統合(PR #838〜#844)
 
 kanameoneのケアマネフォルダ「森奈穂美」が物理6重複(active1+trashed5)していた根本原因（`functions/src/drive/findOrCreateFolder.ts`が`trashed=false`固定検索のため手動ゴミ箱移動を「存在しない」と誤判定し新規作成し続ける）を修正し、既存重複データを統合。4回の独立診断(grip+codex計4回)で承認された計画（Issue #432の collision-migration フレームワーク流用）に基づき実装。
@@ -113,7 +126,7 @@ kanameoneから8件のフィードバック（①TOP画面のCM表示 ②「不�
 - 既存の「不明顧客」滞留ドキュメントへの遡及的救済（新規OCR分のみ救済、過去分は`customerConfirmed:true`保護により単純な再OCRでは安全に再マッチできず別途設計が必要）
 - `ocrUpdatePayloadBuilder.ts`の`customerConfirmed`フラグ不整合（bestMatch nullでもconfirmed:trueになりFE `isCustomerConfirmed()`が誤表示する実害あり）→別Issue化を提案済み、未起票
 - Issue #815の別タブ/別ユーザー間の最終ファイル名衝突（BE契約追加が必要、実害は表示名重複のみでdocIdはユニーク）→対応せず明示スコープ外
-- Issue #823（kanameone driveFileIdの75%がゴミ箱/404、Issue #811調査の副次的発見）→未着手
+- Issue #823（kanameone driveFileIdの75%がゴミ箱/404、Issue #811調査の副次的発見）→2026-08-27に規模確定（正常35.4%/要救済64.6%）、remediation未着手（詳細は上部「【訂正・2026-08-27】」節参照）
 
 **副次的に解消**: 本ミッションのkanameone/cocoro Functionsデプロイ実行時に、以前から未反映だったPR #808（sanitize drop reason付与、line68参照）も同時に反映された。
 
