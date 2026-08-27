@@ -18,6 +18,9 @@
  * オプション（いずれか片方だけの指定も可）:
  *   --folder-ids <カンマ区切り>  metadata(createdTime/trashedTime/trashingUser)を取得するフォルダID群
  *   --doc-ids <カンマ区切り>     Firestoreフィールドを確認するdocument ID群
+ *   --list-children <folderId>  指定フォルダ直下の子フォルダをtrashed込みで一覧(2026-08-27追加、
+ *                               Part Bデプロイ後にAmbiguousFolderErrorで判明した個別ケースの
+ *                               active/trashed内訳確認用)
  */
 
 import * as admin from 'firebase-admin';
@@ -33,6 +36,7 @@ let folderIdsArg: string | undefined;
 let docIdsArg: string | undefined;
 let scanRootDuplicates = false;
 let fullChainDocIdsArg: string | undefined;
+let listChildrenFolderId: string | undefined;
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--folder-ids' && args[i + 1]) {
     folderIdsArg = args[i + 1];
@@ -45,10 +49,15 @@ for (let i = 0; i < args.length; i++) {
   } else if (args[i] === '--full-chain' && args[i + 1]) {
     fullChainDocIdsArg = args[i + 1];
     i++;
+  } else if (args[i] === '--list-children' && args[i + 1]) {
+    listChildrenFolderId = args[i + 1];
+    i++;
   }
 }
-if (!folderIdsArg && !docIdsArg && !scanRootDuplicates && !fullChainDocIdsArg) {
-  console.error('--folder-ids / --doc-ids / --scan-root-duplicates / --full-chain のいずれかを指定してください');
+if (!folderIdsArg && !docIdsArg && !scanRootDuplicates && !fullChainDocIdsArg && !listChildrenFolderId) {
+  console.error(
+    '--folder-ids / --doc-ids / --scan-root-duplicates / --full-chain / --list-children のいずれかを指定してください'
+  );
   process.exit(1);
 }
 
@@ -110,6 +119,32 @@ async function main(): Promise<void> {
             `ids=${items.map((i) => `${i.id}${i.trashed ? '(trashed)' : ''}`).join(', ')}`
         );
       }
+    }
+    console.log('---');
+  }
+
+  if (listChildrenFolderId) {
+    const drive = await getDriveClient();
+    console.log(`=== フォルダ直下の子フォルダ一覧(trashed込み): ${listChildrenFolderId} ===`);
+    const files: { id: string; name: string; trashed: boolean }[] = [];
+    let pageToken: string | undefined;
+    do {
+      const res = await drive.files.list({
+        q: `'${listChildrenFolderId}' in parents and mimeType='application/vnd.google-apps.folder'`,
+        fields: 'nextPageToken, files(id, name, trashed)',
+        pageSize: 1000,
+        pageToken,
+        includeItemsFromAllDrives: true,
+        ...SUPPORTS_ALL_DRIVES,
+      });
+      for (const f of res.data.files ?? []) {
+        files.push({ id: f.id!, name: f.name ?? '(名前なし)', trashed: !!f.trashed });
+      }
+      pageToken = res.data.nextPageToken ?? undefined;
+    } while (pageToken);
+    console.log(`子フォルダ総数(active+trashed): ${files.length}`);
+    for (const f of files) {
+      console.log(`  id=${f.id} name="${f.name}" trashed=${f.trashed}`);
     }
     console.log('---');
   }
