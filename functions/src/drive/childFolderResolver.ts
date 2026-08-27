@@ -8,7 +8,11 @@
  * 移行処理自身が新たな重複を作りうる」と指摘されたための専用実装。
  *
  * findOrCreateFolder.tsとの差分:
- *   - `trashed=false`条件を外し、trashed込みで検索する
+ *   - 検索は2段階(まずactiveのみ、0件の場合のみtrashed込みで再検索、2026-08-27訂正。
+ *     単純な無条件trashed込み検索は、過去に整理された無関係な同名trashedフォルダが
+ *     残っているだけの正常なケース(active 1件+trashedの残骸複数)まで
+ *     `AmbiguousChildFolderError`にしてしまう回帰をkanameone本番で引き起こした。
+ *     詳細は`findOrCreateFolder.ts`のコメント参照。同じ設計をここにも適用する)
  *   - `files.list`のページネーションを明示的に処理する(1ページ目のみで打ち切らない。
  *     findOrCreateFolder.tsの既存の穴でもある、codex Medium指摘)
  *   - 1件マッチかつtrashedなら`files.update({trashed:false})`で復元してから返す
@@ -40,12 +44,13 @@ export class AmbiguousChildFolderError extends Error {
   }
 }
 
-async function listAllMatchingFolders(
+async function listMatchingFolders(
   drive: drive_v3.Drive,
   parentId: string,
-  name: string
+  name: string,
+  trashed: boolean
 ): Promise<drive_v3.Schema$File[]> {
-  const q = `'${parentId}' in parents and name='${escapeQueryValue(name)}' and mimeType='${FOLDER_MIME_TYPE}'`;
+  const q = `'${parentId}' in parents and name='${escapeQueryValue(name)}' and mimeType='${FOLDER_MIME_TYPE}' and trashed=${trashed}`;
   const files: drive_v3.Schema$File[] = [];
   let pageToken: string | undefined;
   do {
@@ -64,6 +69,39 @@ async function listAllMatchingFolders(
 }
 
 /**
+ * `parentId`直下で`name`と一致する既存フォルダを2段階で解決する
+ * (`findOrCreateFolder.ts`の`resolveExistingFolder`と同型)。
+ * 1. activeのみで検索: 1件ならそのファイルを返す(無関係なtrashedの同名フォルダは
+ *    一切考慮しない)。2件以上なら`AmbiguousChildFolderError`。
+ * 2. active 0件の場合のみtrashed込みで再検索: 1件ならそのファイル(trashed=true)を
+ *    返す(呼び出し元がrestoreするかは呼び出し元の責務)。2件以上なら
+ *    `AmbiguousChildFolderError`。
+ * 両段階とも0件ならnullを返す。
+ */
+async function resolveExistingChildFile(
+  drive: drive_v3.Drive,
+  parentId: string,
+  name: string
+): Promise<drive_v3.Schema$File | null> {
+  const activeFiles = await listMatchingFolders(drive, parentId, name, false);
+  if (activeFiles.length > 1) {
+    throw new AmbiguousChildFolderError(name, parentId, activeFiles.length);
+  }
+  if (activeFiles.length === 1) {
+    return activeFiles[0];
+  }
+
+  const trashedFiles = await listMatchingFolders(drive, parentId, name, true);
+  if (trashedFiles.length > 1) {
+    throw new AmbiguousChildFolderError(name, parentId, trashedFiles.length);
+  }
+  if (trashedFiles.length === 1) {
+    return trashedFiles[0];
+  }
+  return null;
+}
+
+/**
  * `parentId`直下でtrashed込みの`name`一致フォルダをfind-or-createする(Part A専用)。
  * 0件なら新規作成、1件(trashedなら復元)なら再利用、2件以上ならfail-closedでthrowする。
  */
@@ -75,58 +113,44 @@ export interface ResolvedChildFolder {
   created: boolean;
 }
 
+async function toResolvedExisting(
+  drive: drive_v3.Drive,
+  existing: drive_v3.Schema$File,
+  name: string
+): Promise<ResolvedChildFolder> {
+  if (!existing.id) {
+    throw new Error(`[Phase B Part A] 既存子フォルダのidが取得できません: "${name}"`);
+  }
+  if (existing.trashed) {
+    await drive.files.update({
+      fileId: existing.id,
+      requestBody: { trashed: false },
+      fields: 'id',
+      ...SUPPORTS_ALL_DRIVES,
+    });
+    return { id: existing.id, restored: true, created: false };
+  }
+  return { id: existing.id, restored: false, created: false };
+}
+
 export async function resolveChildFolder(
   drive: drive_v3.Drive,
   firestore: admin.firestore.Firestore,
   parentId: string,
   name: string
 ): Promise<ResolvedChildFolder> {
-  const files = await listAllMatchingFolders(drive, parentId, name);
-
-  if (files.length > 1) {
-    throw new AmbiguousChildFolderError(name, parentId, files.length);
-  }
-
-  if (files.length === 1) {
-    const existing = files[0];
-    if (!existing.id) {
-      throw new Error(`[Phase B Part A] 既存子フォルダのidが取得できません: "${name}"`);
-    }
-    if (existing.trashed) {
-      await drive.files.update({
-        fileId: existing.id,
-        requestBody: { trashed: false },
-        fields: 'id',
-        ...SUPPORTS_ALL_DRIVES,
-      });
-      return { id: existing.id, restored: true, created: false };
-    }
-    return { id: existing.id, restored: false, created: false };
+  const existing = await resolveExistingChildFile(drive, parentId, name);
+  if (existing) {
+    return toResolvedExisting(drive, existing, name);
   }
 
   // 0件マッチ = 新規作成が必要。findOrCreateFolder.tsと同じロック+再検索
   // プロトコルで、並行稼働しうる本番exportとの二重作成競合を防ぐ。
   const lockToken = await acquireFolderLock(firestore, parentId, name);
   try {
-    const recheckFiles = await listAllMatchingFolders(drive, parentId, name);
-    if (recheckFiles.length > 1) {
-      throw new AmbiguousChildFolderError(name, parentId, recheckFiles.length);
-    }
-    if (recheckFiles.length === 1) {
-      const existing = recheckFiles[0];
-      if (!existing.id) {
-        throw new Error(`[Phase B Part A] 既存子フォルダのidが取得できません: "${name}"`);
-      }
-      if (existing.trashed) {
-        await drive.files.update({
-          fileId: existing.id,
-          requestBody: { trashed: false },
-          fields: 'id',
-          ...SUPPORTS_ALL_DRIVES,
-        });
-        return { id: existing.id, restored: true, created: false };
-      }
-      return { id: existing.id, restored: false, created: false };
+    const recheckExisting = await resolveExistingChildFile(drive, parentId, name);
+    if (recheckExisting) {
+      return toResolvedExisting(drive, recheckExisting, name);
     }
 
     const createResponse = await drive.files.create({
@@ -224,14 +248,10 @@ export async function resolveChildFolderPathReadOnly(
 ): Promise<string | null> {
   let currentId = rootId;
   for (const segment of segments) {
-    const files = await listAllMatchingFolders(drive, currentId, segment);
-    if (files.length > 1) {
-      throw new AmbiguousChildFolderError(segment, currentId, files.length);
-    }
-    if (files.length === 0) {
+    const existing = await resolveExistingChildFile(drive, currentId, segment);
+    if (!existing) {
       return null;
     }
-    const existing = files[0];
     if (!existing.id) {
       throw new Error(`[Phase B Part A] 既存子フォルダのidが取得できません: "${segment}"`);
     }

@@ -47,7 +47,13 @@ function makeFakeDrive(opts: {
     files: {
       list: async (params: Record<string, unknown>) => {
         listCalls.push(params);
-        return { data: { files: opts.listFiles } };
+        // 実Drive APIと同様、クエリのtrashed条件でフィルタする(2段階検索の
+        // active/trashed両フェーズを区別するため。実装がどちらの段階の呼び出しかは
+        // クエリ文字列でしか判別できない)
+        const q = params.q as string;
+        const wantTrashed = q.includes('trashed=true');
+        const filtered = opts.listFiles.filter((f) => !!f.trashed === wantTrashed);
+        return { data: { files: filtered } };
       },
       create: async (params: Record<string, unknown>) => {
         createCalls.push(params);
@@ -147,6 +153,8 @@ describe('findOrCreateFolder (ADR-0022)', () => {
     });
 
     it('ロック獲得後の再検索で1件かつtrashedだった場合も復元してから再利用する', async () => {
+      // 呼び出し順: 1=pre-lock active(0件) 2=pre-lock trashed(0件) →ロック取得→
+      // 3=post-lock active(0件) 4=post-lock trashed(1件、ここで復元)
       let listCallCount = 0;
       const updateCalls: Record<string, unknown>[] = [];
       const createCalls: Record<string, unknown>[] = [];
@@ -154,7 +162,7 @@ describe('findOrCreateFolder (ADR-0022)', () => {
         files: {
           list: async () => {
             listCallCount++;
-            if (listCallCount === 1) {
+            if (listCallCount <= 3) {
               return { data: { files: [] } };
             }
             return { data: { files: [{ id: 'concurrently-trashed-id', name: '再検索太郎', trashed: true }] } };
@@ -175,6 +183,27 @@ describe('findOrCreateFolder (ADR-0022)', () => {
       expect(result).to.equal('concurrently-trashed-id');
       expect(updateCalls).to.have.lengthOf(1);
       expect(createCalls).to.have.lengthOf(0);
+    });
+
+    it('activeが1件見つかれば、無関係なtrashedの同名フォルダが他に残っていても一切考慮せずそのidを返す(kanameone本番回帰の再発防止、2026-08-27)', async () => {
+      // 顧客「大橋のぶ子」配下の「報告書」フォルダで実際に発生した回帰: active 1件+
+      // trashedの残骸1件が同名で存在するケースで、初版はtrashedも検索対象に含めて
+      // AmbiguousFolderErrorにしてしまっていた。2段階検索ではactiveが1件見つかった
+      // 時点でtrashed側を一切検索しないため、この回帰が再発しないことを固定する。
+      const { drive, listCalls, updateCalls, createCalls } = makeFakeDrive({
+        listFiles: [
+          { id: 'active-report-id', name: '報告書', trashed: false },
+          { id: 'stale-trashed-report-id', name: '報告書', trashed: true },
+        ],
+      });
+
+      const result = await findOrCreateFolder(drive, db, 'parent-customer', '報告書');
+
+      expect(result).to.equal('active-report-id');
+      expect(updateCalls).to.have.lengthOf(0);
+      expect(createCalls).to.have.lengthOf(0);
+      // trashed側の検索クエリが一度も発行されていないこと(activeの1件で即確定するため)
+      expect(listCalls.every((c) => !(c.q as string).includes('trashed=true'))).to.equal(true);
     });
   });
 
@@ -197,15 +226,21 @@ describe('findOrCreateFolder (ADR-0022)', () => {
     expect(createCalls).to.have.lengthOf(0);
   });
 
-  it('検索クエリはparentId・name・folder mimeTypeを含み、trashed込み(trashed条件なし)で検索する(Issue #811根本原因修正)', async () => {
+  it('検索は2段階(まずactiveのみ、0件ならtrashed込みで再検索)で行う(Issue #811根本原因修正、2026-08-27訂正)', async () => {
     const { drive, listCalls } = makeFakeDrive({ listFiles: [] });
     await findOrCreateFolder(drive, db, 'parent-xyz', '鈴木花子');
 
-    const q = listCalls[0].q as string;
-    expect(q).to.include(`'parent-xyz' in parents`);
-    expect(q).to.include(`name='鈴木花子'`);
-    expect(q).to.include(`mimeType='application/vnd.google-apps.folder'`);
-    expect(q).to.not.include('trashed');
+    // 1段階目(pre-lock active検索)
+    const q1 = listCalls[0].q as string;
+    expect(q1).to.include(`'parent-xyz' in parents`);
+    expect(q1).to.include(`name='鈴木花子'`);
+    expect(q1).to.include(`mimeType='application/vnd.google-apps.folder'`);
+    expect(q1).to.include('trashed=false');
+
+    // 2段階目(1段階目が0件だったためtrashed込みで再検索)
+    const q2 = listCalls[1].q as string;
+    expect(q2).to.include(`'parent-xyz' in parents`);
+    expect(q2).to.include('trashed=true');
   });
 
   it('name内のシングルクォートはクエリ内でエスケープされる', async () => {
@@ -302,15 +337,15 @@ describe('findOrCreateFolder (ADR-0022)', () => {
     });
 
     it('ロック獲得後の再検索で既に他の実行が作成済みだった場合はそのidを再利用し、二重作成しない', async () => {
-      // 1回目のlist呼び出し(0件)はロック取得前、2回目の再検索(ロック取得後)では
-      // 別プロセスが既に作成済みのシナリオを模倣して1件返す
+      // 呼び出し順: 1=pre-lock active(0件) 2=pre-lock trashed(0件) →ロック取得→
+      // 3=post-lock active(1件、別プロセスが既に作成済み、ここで確定しtrashed側は検索しない)
       let listCallCount = 0;
       const createCalls: Record<string, unknown>[] = [];
       const drive = {
         files: {
           list: async () => {
             listCallCount++;
-            if (listCallCount === 1) {
+            if (listCallCount <= 2) {
               return { data: { files: [] } };
             }
             return { data: { files: [{ id: 'concurrently-created-id', name: '再検索太郎' }] } };
@@ -329,13 +364,15 @@ describe('findOrCreateFolder (ADR-0022)', () => {
     });
 
     it('ロック獲得後の再検索で2件以上見つかった場合もAmbiguousFolderErrorをthrowする(code-review high指摘#2対応)', async () => {
+      // 呼び出し順: 1=pre-lock active(0件) 2=pre-lock trashed(0件) →ロック取得→
+      // 3=post-lock active(2件、ここでAmbiguousFolderError)
       let listCallCount = 0;
       const createCalls: Record<string, unknown>[] = [];
       const drive = {
         files: {
           list: async () => {
             listCallCount++;
-            if (listCallCount === 1) {
+            if (listCallCount <= 2) {
               return { data: { files: [] } };
             }
             return {

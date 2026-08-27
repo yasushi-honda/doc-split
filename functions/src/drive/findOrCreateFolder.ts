@@ -9,8 +9,18 @@
  * 固定検索だったため、手動でゴミ箱に入れたフォルダを次回エクスポート時に
  * 「存在しない」と誤判定し新規作成し続け、物理フォルダ重複を生んでいた
  * (kanameone「森奈穂美」フォルダで6重複・241件のdocumentが影響を受けた実害を
- * Phase B Part Aで移行済み)。trashed込みで検索し、1件マッチかつtrashedなら
- * `files.update({trashed:false})`で復元してから返す。復元APIが失敗した場合は
+ * Phase B Part Aで移行済み)。
+ *
+ * 検索は2段階で行う(2026-08-27、初版の単純なtrashed込み検索をkanameone本番の
+ * 実運用で検出した回帰を受けて訂正): まずactiveのみで検索し、1件ならそれを
+ * 即座に返す(過去に整理された無関係なtrashedの同名フォルダが他に残っていても
+ * 一切考慮しない)。active 0件の場合のみtrashed込みで再検索し、1件なら
+ * `files.update({trashed:false})`で復元してから返す。各段階で2件以上見つかった
+ * 場合は`AmbiguousFolderError`で停止する。初版はtrashed込み検索を無条件に行って
+ * いたため、「active 1件+無関係なtrashedの残骸が複数」という従来は問題なく
+ * 解決できていたケースまで誤ってAmbiguousFolderErrorにしてしまう回帰を
+ * kanameone本番で引き起こした(顧客「大橋のぶ子」配下の「報告書」フォルダ、
+ * PR #840マージ直後に実エクスポートで発覚)。復元APIが失敗した場合は
  * 新規作成へフォールバックせず例外を再送出する(同名フォルダが実際には既に
  * 存在するため、フォールバックすると新たな重複を作りかねない)。
  *
@@ -133,15 +143,16 @@ export async function releaseFolderLock(
 }
 
 /**
- * `parentId`直下でtrashed込みの`name`一致フォルダを全ページ列挙する。
+ * `parentId`直下で`name`一致・`trashed`条件一致のフォルダを全ページ列挙する。
  * 1ページ目のみで打ち切ると多数の同名フォルダが存在する親配下で見落としうる。
  */
-async function listAllMatchingFolders(
+async function listMatchingFolders(
   drive: drive_v3.Drive,
   parentId: string,
-  name: string
+  name: string,
+  trashed: boolean
 ): Promise<drive_v3.Schema$File[]> {
-  const q = `'${parentId}' in parents and name='${escapeQueryValue(name)}' and mimeType='${FOLDER_MIME_TYPE}'`;
+  const q = `'${parentId}' in parents and name='${escapeQueryValue(name)}' and mimeType='${FOLDER_MIME_TYPE}' and trashed=${trashed}`;
   const files: drive_v3.Schema$File[] = [];
   let pageToken: string | undefined;
   do {
@@ -160,35 +171,56 @@ async function listAllMatchingFolders(
 }
 
 /**
- * 1件マッチしたフォルダを返す。trashedなら`files.update({trashed:false})`で
- * 復元してから返す。復元APIが失敗した場合は例外をそのまま再送出する(新規作成への
- * フォールバックは行わない。同名フォルダが実在するため、フォールバックは新たな
- * 重複を作りかねない)。
+ * `parentId`直下で`name`と一致する既存フォルダを2段階で解決する。
+ * 1. activeのみで検索: 1件ならそのidを返す(過去の無関係なtrashed同名フォルダは
+ *    一切考慮しない)。2件以上なら`AmbiguousFolderError`。
+ * 2. active 0件の場合のみtrashed込みで再検索: 1件なら`files.update({trashed:false})`
+ *    で復元してから返す(復元API失敗時は例外を再送出、新規作成へフォールバックしない)。
+ *    2件以上なら`AmbiguousFolderError`。
+ * 両段階とも0件ならnullを返す(呼び出し元が新規作成する)。
  */
-async function restoreIfTrashedAndReturn(
+async function resolveExistingFolder(
   drive: drive_v3.Drive,
-  file: drive_v3.Schema$File,
+  parentId: string,
   name: string
-): Promise<string> {
-  const existingId = file.id;
-  if (!existingId) {
-    throw new Error(`既存フォルダのidが取得できません: "${name}"`);
+): Promise<string | null> {
+  const activeFiles = await listMatchingFolders(drive, parentId, name, false);
+  if (activeFiles.length > 1) {
+    throw new AmbiguousFolderError(name, parentId, activeFiles.length);
   }
-  if (file.trashed) {
+  if (activeFiles.length === 1) {
+    const existingId = activeFiles[0].id;
+    if (!existingId) {
+      throw new Error(`既存フォルダのidが取得できません: "${name}"`);
+    }
+    return existingId;
+  }
+
+  const trashedFiles = await listMatchingFolders(drive, parentId, name, true);
+  if (trashedFiles.length > 1) {
+    throw new AmbiguousFolderError(name, parentId, trashedFiles.length);
+  }
+  if (trashedFiles.length === 1) {
+    const existingId = trashedFiles[0].id;
+    if (!existingId) {
+      throw new Error(`既存フォルダのidが取得できません: "${name}"`);
+    }
     await drive.files.update({
       fileId: existingId,
       requestBody: { trashed: false },
       fields: 'id',
       ...SUPPORTS_ALL_DRIVES,
     });
+    return existingId;
   }
-  return existingId;
+
+  return null;
 }
 
 /**
  * `parentId` 直下で `name` と一致するフォルダを検索し、そのidを返す。
- * 0件なら新規作成、1件なら再利用(trashedなら復元)、2件以上なら
- * `AmbiguousFolderError` をthrowする。
+ * 0件なら新規作成、1件なら再利用(activeで0件の場合のみtrashedを確認し復元)、
+ * いずれかの段階で2件以上なら `AmbiguousFolderError` をthrowする。
  */
 export async function findOrCreateFolder(
   drive: drive_v3.Drive,
@@ -196,14 +228,9 @@ export async function findOrCreateFolder(
   parentId: string,
   name: string
 ): Promise<string> {
-  const files = await listAllMatchingFolders(drive, parentId, name);
-
-  if (files.length > 1) {
-    throw new AmbiguousFolderError(name, parentId, files.length);
-  }
-
-  if (files.length === 1) {
-    return restoreIfTrashedAndReturn(drive, files[0], name);
+  const existingId = await resolveExistingFolder(drive, parentId, name);
+  if (existingId) {
+    return existingId;
   }
 
   // 0件マッチ = 新規作成が必要。異なるdocId間の競合を防ぐためロックを取得する。
@@ -213,12 +240,9 @@ export async function findOrCreateFolder(
     // 2件以上見つかった場合も、pre-lockの検索と同様にAmbiguousFolderErrorで
     // 停止する(code-review high指摘#2対応: 従来は`>=1`のみで判定しており、
     // 2件以上を観測してもfiles[0]を無条件採用し曖昧な状態を見逃していた)。
-    const recheckFiles = await listAllMatchingFolders(drive, parentId, name);
-    if (recheckFiles.length > 1) {
-      throw new AmbiguousFolderError(name, parentId, recheckFiles.length);
-    }
-    if (recheckFiles.length === 1) {
-      return restoreIfTrashedAndReturn(drive, recheckFiles[0], name);
+    const recheckId = await resolveExistingFolder(drive, parentId, name);
+    if (recheckId) {
+      return recheckId;
     }
 
     const createResponse = await drive.files.create({
