@@ -31,11 +31,17 @@ const COLLECTIONS_TO_CLEAN: readonly string[] = ['driveFolderLocks'];
 interface FakeFile {
   id: string;
   name: string;
+  trashed?: boolean;
 }
 
-function makeFakeDrive(opts: { listFiles: FakeFile[]; createdId?: string | null }) {
+function makeFakeDrive(opts: {
+  listFiles: FakeFile[];
+  createdId?: string | null;
+  updateImpl?: (params: Record<string, unknown>) => Promise<{ data: { id: string | null } }>;
+}) {
   const listCalls: Record<string, unknown>[] = [];
   const createCalls: Record<string, unknown>[] = [];
+  const updateCalls: Record<string, unknown>[] = [];
 
   const drive = {
     files: {
@@ -47,10 +53,17 @@ function makeFakeDrive(opts: { listFiles: FakeFile[]; createdId?: string | null 
         createCalls.push(params);
         return { data: { id: opts.createdId === undefined ? 'new-folder-id' : opts.createdId } };
       },
+      update: async (params: Record<string, unknown>) => {
+        updateCalls.push(params);
+        if (opts.updateImpl) {
+          return opts.updateImpl(params);
+        }
+        return { data: { id: params.fileId as string } };
+      },
     },
   } as unknown as drive_v3.Drive;
 
-  return { drive, listCalls, createCalls };
+  return { drive, listCalls, createCalls, updateCalls };
 }
 
 describe('findOrCreateFolder (ADR-0022)', () => {
@@ -90,6 +103,81 @@ describe('findOrCreateFolder (ADR-0022)', () => {
     expect(createCalls).to.have.lengthOf(0);
   });
 
+  describe('trashedフォルダの自動復元(Issue #811根本原因修正、2026-08-27)', () => {
+    it('1件見つかりtrashedでない場合はfiles.updateを呼ばずそのidを返す', async () => {
+      const { drive, updateCalls } = makeFakeDrive({
+        listFiles: [{ id: 'existing-id', name: '田中太郎', trashed: false }],
+      });
+
+      const result = await findOrCreateFolder(drive, db, 'parent-1', '田中太郎');
+
+      expect(result).to.equal('existing-id');
+      expect(updateCalls).to.have.lengthOf(0);
+    });
+
+    it('1件見つかりtrashedの場合はfiles.update({trashed:false})で復元してからそのidを返す', async () => {
+      const { drive, updateCalls, createCalls } = makeFakeDrive({
+        listFiles: [{ id: 'trashed-id', name: '田中太郎', trashed: true }],
+      });
+
+      const result = await findOrCreateFolder(drive, db, 'parent-1', '田中太郎');
+
+      expect(result).to.equal('trashed-id');
+      expect(updateCalls).to.have.lengthOf(1);
+      expect(updateCalls[0].fileId).to.equal('trashed-id');
+      expect(updateCalls[0].requestBody).to.deep.equal({ trashed: false });
+      expect(createCalls).to.have.lengthOf(0);
+    });
+
+    it('復元API(files.update)が失敗した場合は新規作成へフォールバックせず例外を再送出する', async () => {
+      const { drive, createCalls } = makeFakeDrive({
+        listFiles: [{ id: 'trashed-id', name: '田中太郎', trashed: true }],
+        updateImpl: async () => {
+          throw new Error('simulated Drive API failure');
+        },
+      });
+
+      try {
+        await findOrCreateFolder(drive, db, 'parent-1', '田中太郎');
+        expect.fail('復元失敗時の例外がthrowされるべき');
+      } catch (error) {
+        expect((error as Error).message).to.include('simulated Drive API failure');
+      }
+      expect(createCalls).to.have.lengthOf(0);
+    });
+
+    it('ロック獲得後の再検索で1件かつtrashedだった場合も復元してから再利用する', async () => {
+      let listCallCount = 0;
+      const updateCalls: Record<string, unknown>[] = [];
+      const createCalls: Record<string, unknown>[] = [];
+      const drive = {
+        files: {
+          list: async () => {
+            listCallCount++;
+            if (listCallCount === 1) {
+              return { data: { files: [] } };
+            }
+            return { data: { files: [{ id: 'concurrently-trashed-id', name: '再検索太郎', trashed: true }] } };
+          },
+          create: async (params: Record<string, unknown>) => {
+            createCalls.push(params);
+            return { data: { id: 'should-not-be-used' } };
+          },
+          update: async (params: Record<string, unknown>) => {
+            updateCalls.push(params);
+            return { data: { id: params.fileId as string } };
+          },
+        },
+      } as unknown as drive_v3.Drive;
+
+      const result = await findOrCreateFolder(drive, db, 'parent-recheck-trashed', '再検索太郎');
+
+      expect(result).to.equal('concurrently-trashed-id');
+      expect(updateCalls).to.have.lengthOf(1);
+      expect(createCalls).to.have.lengthOf(0);
+    });
+  });
+
   it('2件以上見つかった場合はAmbiguousFolderErrorをthrowし、作成は呼ばない', async () => {
     const { drive, createCalls } = makeFakeDrive({
       listFiles: [
@@ -109,7 +197,7 @@ describe('findOrCreateFolder (ADR-0022)', () => {
     expect(createCalls).to.have.lengthOf(0);
   });
 
-  it('検索クエリはparentId・name・folder mimeType・trashed=falseを含む', async () => {
+  it('検索クエリはparentId・name・folder mimeTypeを含み、trashed込み(trashed条件なし)で検索する(Issue #811根本原因修正)', async () => {
     const { drive, listCalls } = makeFakeDrive({ listFiles: [] });
     await findOrCreateFolder(drive, db, 'parent-xyz', '鈴木花子');
 
@@ -117,7 +205,7 @@ describe('findOrCreateFolder (ADR-0022)', () => {
     expect(q).to.include(`'parent-xyz' in parents`);
     expect(q).to.include(`name='鈴木花子'`);
     expect(q).to.include(`mimeType='application/vnd.google-apps.folder'`);
-    expect(q).to.include('trashed=false');
+    expect(q).to.not.include('trashed');
   });
 
   it('name内のシングルクォートはクエリ内でエスケープされる', async () => {
