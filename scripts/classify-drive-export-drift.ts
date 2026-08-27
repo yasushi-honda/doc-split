@@ -89,6 +89,15 @@ function requireNonNegativeIntValue(flag: string, index: number): number {
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--care-manager') {
     careManager = requireValue('--care-manager', i);
+    // codex review(PR #849最終レビュー)指摘: `--care-manager ''`(空文字列/空白のみ)は
+    // requireValue()自体は通過するが、後段の`if (careManager) {...}`が空文字列をfalsyと
+    // 判定してフィルタごとスキップし、絞り込みのつもりが無言でテナント全体スキャンに
+    // 広がってしまう。GitHub Actions経由(run-ops-script.yml)は既に非空白チェック済みだが、
+    // ローカル直接実行にはこのガードが無かった。
+    if (!careManager.trim()) {
+      console.error('--care-manager には空でない値を指定してください(空文字列は絞り込みなし全件スキャンと誤解されるおそれがあります)');
+      process.exit(1);
+    }
     i++;
   } else if (args[i] === '--limit') {
     limit = requireNonNegativeIntValue('--limit', i);
