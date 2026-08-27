@@ -226,6 +226,24 @@ describe('findOrCreateFolder (ADR-0022)', () => {
     expect(createCalls).to.have.lengthOf(0);
   });
 
+  it('active 0件・trashedが2件以上見つかった場合もAmbiguousFolderErrorをthrowする(2段階目の分岐)', async () => {
+    const { drive, createCalls } = makeFakeDrive({
+      listFiles: [
+        { id: 'trashed-dup-1', name: '田中太郎', trashed: true },
+        { id: 'trashed-dup-2', name: '田中太郎', trashed: true },
+      ],
+    });
+
+    try {
+      await findOrCreateFolder(drive, db, 'parent-1', '田中太郎');
+      expect.fail('AmbiguousFolderErrorがthrowされるべき');
+    } catch (error) {
+      expect(error).to.be.instanceOf(AmbiguousFolderError);
+      expect((error as Error).message).to.include('2件');
+    }
+    expect(createCalls).to.have.lengthOf(0);
+  });
+
   it('検索は2段階(まずactiveのみ、0件ならtrashed込みで再検索)で行う(Issue #811根本原因修正、2026-08-27訂正)', async () => {
     const { drive, listCalls } = makeFakeDrive({ listFiles: [] });
     await findOrCreateFolder(drive, db, 'parent-xyz', '鈴木花子');
