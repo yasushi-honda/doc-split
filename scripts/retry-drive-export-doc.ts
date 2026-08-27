@@ -33,7 +33,8 @@ if (!docId) {
   process.exit(1);
 }
 
-admin.initializeApp({ projectId });
+const storageBucket = process.env.STORAGE_BUCKET;
+admin.initializeApp({ projectId, storageBucket });
 const db = admin.firestore();
 
 async function main(): Promise<void> {
