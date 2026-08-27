@@ -1,5 +1,5 @@
 ---
-updated: 2026-08-26
+updated: 2026-08-27
 ---
 <!-- 前ミッション(dev/kanameone/cocoro環境監査・保守検証)は2026-07-20完遂。全文はdocs/handoff/LATEST.md参照。 -->
 <!-- Google Drive連携Phase1 (MVP)実装ミッションは2026-07-22完了(PR#700マージ)。詳細は本ファイル末尾「Google Drive連携Phase1完遂」節+docs/handoff/LATEST.md参照。 -->
@@ -50,6 +50,20 @@ kanameone・cocoroへのGoogle Drive連携Phase1本番展開。承認済み計�
   - [ ] `settings/drive.oauthClientId`存在
   - [ ] flag OFF維持
   - [ ] **（新規）静的存在確認だけでなく、可能な範囲で実際にAPIを呼び出す動作確認を行う**: 今回のようにAPI有効化漏れは「Cloud Functionsの状態」「Secret/IAMの存在」等の静的チェックでは検出できず、クライアントが実際にOAuthフローを最後まで動かした瞬間にしか顕在化しなかった。理想はテスト用アカウントで一度OAuth接続を通すことだが、それが難しい場合は最低限`gcloud services list --enabled`の機械的突合を完了条件に含める
+
+## 【完了・2026-08-27】Issue #811 Phase B: kanameone森奈穂美フォルダ重複の根本原因修正+データ統合(PR #838〜#844)
+
+kanameoneのケアマネフォルダ「森奈穂美」が物理6重複(active1+trashed5)していた根本原因（`functions/src/drive/findOrCreateFolder.ts`が`trashed=false`固定検索のため手動ゴミ箱移動を「存在しない」と誤判定し新規作成し続ける）を修正し、既存重複データを統合。4回の独立診断(grip+codex計4回)で承認された計画（Issue #432の collision-migration フレームワーク流用）に基づき実装。
+
+**Part A（データ移行フレームワーク・PR #838/#839）**: `folder-merge-plan-v1`スキーマの classify/execute/rollback スクリプト群を新規実装（schemaVersion照合・precondition drift検知・2-phase preflight・冪等性）。devリハーサルで重大回帰を発見・修正: ①Google Drive APIの`trashed`フィールドは祖先フォルダ経由で継承されるため「ファイル自身がtrashed」の判定に使えず、Drive v3の`explicitlyTrashed`フィールドに訂正 ②「統合済み」リネームと再実行時のdrift検知ゲートが誤って衝突する相互作用バグを解消。
+
+**kanameone本番データ移行（Part A実行）**: classify（5つのtrashed重複フォルダから58ファイルをスキャン、全件ConfirmedMatch）→canary4件→本実行54件、計58件成功・error 0件。5つの重複フォルダを「森奈穂美 (統合済み_20260826)」へリネーム統合。
+
+**Part B（根本原因コード修正・PR #840→回帰発覚→PR #842で訂正）**: `findOrCreateFolder.ts`をtrashed込み検索に修正しPR #840としてkanameoneへデプロイした直後、**別の顧客「大橋のぶ子」配下の「報告書」フォルダで新たな回帰を発生**（active 1件+無関係なtrashed残骸1件という、旧コードでは無害に解決できていたケースを誤って`AmbiguousFolderError`にしてしまった）。即日、検索を2段階（まずactiveのみ→0件時のみtrashed込みで再検索）に訂正するPR #842を作成、codex review(2回、findings 0件)+code-reviewerセカンドオピニオン(HIGH1件+MEDIUM2件を追加対応、Part A専用`childFolderResolver.ts`の同型バグ修正+テスト新設)を経てマージ・kanameoneへ再デプロイ。実際に失敗していたdocument(`CaHY72YWfJjR1qZPG6M5`)を専用ops script(PR #843/#844)で本番リトライし、`success=true, status=exported`を確認。
+
+**教訓（重要）**: 「無条件でtrashed込み検索にする」という一見自然な修正が、Drive API のtrashed継承・過去の整理残骸の存在という実データの複雑さを見落とし、同日中に別の実害を生んだ。フィルタ条件を緩める修正は、その条件が過去に無害に働いていた別のケースを壊しうることを前提に、実データでの検証を経てから展開する必要がある。
+
+**関連PR**: #838 #839 #840 #841(調査用`--list-children`追加) #842 #843 #844。Issue #811はPR #840マージ時点(`Closes #811`)で自動クローズ済みだったため、完全な経緯（回帰発覚〜本番検証まで）を[issueコメント](https://github.com/yasushi-honda/doc-split/issues/811#issuecomment-5434070242)として追記済み。ADR-0022 Decision 4を2段階検索設計+回帰の経緯で更新済み。
 
 ## 【完了・2026-08-05】kanameoneからの相談3件対応（①②③完了、全環境反映済み）
 
