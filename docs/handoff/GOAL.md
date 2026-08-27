@@ -1,5 +1,5 @@
 ---
-updated: 2026-08-27
+updated: 2026-08-28
 ---
 <!-- 前ミッション(dev/kanameone/cocoro環境監査・保守検証)は2026-07-20完遂。全文はdocs/handoff/LATEST.md参照。 -->
 <!-- Google Drive連携Phase1 (MVP)実装ミッションは2026-07-22完了(PR#700マージ)。詳細は本ファイル末尾「Google Drive連携Phase1完遂」節+docs/handoff/LATEST.md参照。 -->
@@ -64,6 +64,23 @@ kanameone・cocoroへのGoogle Drive連携Phase1本番展開。承認済み計�
 
 **現状**: 根本原因修正（PR #840/#842、trashed込み2段階検索）は有効で今後の新規発生は防止されている。過去に壊れた471件の遡及救済（backfill/再export等）は未着手・未設計。remediation方針の検討は別途plan modeセッションで行う。他のケアマネへの横展開有無（森奈穂美以外での同種事象）も未検証。
 
+## 【訂正・2026-08-28】Issue #823 Phase 2a: read-only classify実行完了、「288件missing-404」は誤検出と判明
+
+上記【訂正・2026-08-27】節の「確定した規模」（258健全/183旧フォルダ/288 missing-404）を、より正確な検出ロジックの実行結果でさらに訂正する。
+
+**経緯**: 上記数値の算出元だった`investigate-caremanager-folder-duplicate.ts`は`drive.files.get()`の例外を全て無差別に「404の可能性」としてログしており、403/5xx等の別エラーと真の404を区別できていなかった（設計上の既知の欠陥、plan-crossreview時点で識別済み）。decision-maker承認（「read-only設計+森奈穂美の確認classifyまで」に今回のセッションのスコープを縮小）のもと、本番の`exportDocument.ts`が実際に使う`isDriveFileNotFoundError()`と同一判定ロジックで検出するclassifierを新規実装（PR #849、`scripts/lib/driveExportDriftClassifier.ts`+`scripts/classify-drive-export-drift.ts`、read-only・書き込み一切なし）。`codex review`を4回連続実施しP1×1/P2×5の実指摘を反映（うち1件は本番の`resolveDriveFile()`がparents件数に関わらず無条件で修復可能なため、`multi-parent`を個別blockedにせずmisplacedへ統合すべきという指摘）、`pr-review-toolkit:code-reviewer`セカンドオピニオンもCritical2件/Important7件を全反映。devで404/trashed/healthy各1件のfixtureリハーサルを実施し、404が`api-error`ではなく`missing-404`に正しく分類されることを実測確認してからkanameone本番へ適用（GitHub Actions run [33120381461](https://github.com/yasushi-honda/doc-split/actions/runs/33120381461)）。
+
+**確定した規模（訂正後、森奈穂美・`driveExportStatus=exported`729件時点）**:
+- healthy（正常）: 241件（33.1%）
+- trashed（ゴミ箱内）: 202件（27.7%）
+- misplaced（現在の親フォルダが期待値と不一致）: 139件（19.1%）
+- missing-404: **0件（0%）** ← 旧報告の288件は誤検出だったと確定
+- blocked: target-path-not-created（driveFileIdは生存・非trashedだが期待配置先フォルダがDrive上に未作成のため判定不能、実質misplacedに近い性質）: 147件（20.2%）
+
+`wouldRestoreFolders`（修復実行時にゴミ箱から復元されうるフォルダ）は0件。Issue #823へ[訂正コメント](https://github.com/yasushi-honda/doc-split/issues/823#issuecomment-5445772707)を追記済み。
+
+**今回のセッションのスコープはここまで**（decision-maker明示選択）。write/execute実行（修復）・全ケアマネへの横展開（Phase 3）・cocoroへの適用（Phase 4）は未着手。計画: `~/.claude/plans/sharded-mapping-squid.md`（「codexレビュー由来の設計修正」節に執行フェーズ実装時の必須反映事項を記録済み）。
+
 ## 【完了・2026-08-27】Issue #811 Phase B: kanameone森奈穂美フォルダ重複の根本原因修正+データ統合(PR #838〜#844)
 
 kanameoneのケアマネフォルダ「森奈穂美」が物理6重複(active1+trashed5)していた根本原因（`functions/src/drive/findOrCreateFolder.ts`が`trashed=false`固定検索のため手動ゴミ箱移動を「存在しない」と誤判定し新規作成し続ける）を修正し、既存重複データを統合。4回の独立診断(grip+codex計4回)で承認された計画（Issue #432の collision-migration フレームワーク流用）に基づき実装。
@@ -126,7 +143,7 @@ kanameoneから8件のフィードバック（①TOP画面のCM表示 ②「不�
 - 既存の「不明顧客」滞留ドキュメントへの遡及的救済（新規OCR分のみ救済、過去分は`customerConfirmed:true`保護により単純な再OCRでは安全に再マッチできず別途設計が必要）
 - `ocrUpdatePayloadBuilder.ts`の`customerConfirmed`フラグ不整合（bestMatch nullでもconfirmed:trueになりFE `isCustomerConfirmed()`が誤表示する実害あり）→別Issue化を提案済み、未起票
 - Issue #815の別タブ/別ユーザー間の最終ファイル名衝突（BE契約追加が必要、実害は表示名重複のみでdocIdはユニーク）→対応せず明示スコープ外
-- Issue #823（kanameone driveFileIdの75%がゴミ箱/404、Issue #811調査の副次的発見）→2026-08-27に規模確定（正常35.4%/要救済64.6%）、remediation未着手（詳細は上部「【訂正・2026-08-27】」節参照）
+- Issue #823（kanameone driveFileIdの75%がゴミ箱/404/誤配置、Issue #811調査の副次的発見）→2026-08-28にread-only classify実行完了(PR #849)、確定内訳=healthy 33.1%/trashed 27.7%/misplaced 19.1%/missing-404 0%(旧報告288件は誤検出)/blocked 20.2%。remediation(write実行)未着手（詳細は上部「【訂正・2026-08-28】」節参照）
 
 **副次的に解消**: 本ミッションのkanameone/cocoro Functionsデプロイ実行時に、以前から未反映だったPR #808（sanitize drop reason付与、line68参照）も同時に反映された。
 
