@@ -15,6 +15,12 @@
  *
  * 使用方法:
  *   FIREBASE_PROJECT_ID=doc-split-dev npx ts-node scripts/drive-export-status-report.ts
+ *   FIREBASE_PROJECT_ID=doc-split-dev npx ts-node scripts/drive-export-status-report.ts --breakdown
+ *
+ * オプション:
+ *   --breakdown  error(実エラー)をdriveExportErrorメッセージの先頭40文字でグルーピングし、
+ *                件数・最古/最新updatedAtを表示する(2026-08-27追加。PR #840の一時的な回帰
+ *                (AmbiguousFolderError)がどの程度の実エラー滞留に寄与しているか切り分ける用途)
  */
 
 import * as admin from 'firebase-admin';
@@ -25,6 +31,8 @@ if (!projectId) {
   console.error('FIREBASE_PROJECT_ID 環境変数を設定してください');
   process.exit(1);
 }
+
+const showBreakdown = process.argv.includes('--breakdown');
 
 admin.initializeApp({ projectId });
 const db = admin.firestore();
@@ -39,6 +47,7 @@ interface StatusCounts {
   errorCustomerUnconfirmed: number;
   errorReal: number;
   fieldAbsent: number;
+  realErrorEntries: { message: string; updatedAtMs: number | null }[];
 }
 
 async function computeStatusCounts(): Promise<StatusCounts> {
@@ -50,6 +59,7 @@ async function computeStatusCounts(): Promise<StatusCounts> {
     errorCustomerUnconfirmed: 0,
     errorReal: 0,
     fieldAbsent: 0,
+    realErrorEntries: [],
   };
 
   let lastDoc: FirebaseFirestore.QueryDocumentSnapshot | null = null;
@@ -87,6 +97,13 @@ async function computeStatusCounts(): Promise<StatusCounts> {
           counts.errorCustomerUnconfirmed++;
         } else {
           counts.errorReal++;
+          if (showBreakdown) {
+            const updatedAt = data.updatedAt as FirebaseFirestore.Timestamp | undefined;
+            counts.realErrorEntries.push({
+              message: String(data.driveExportError ?? '(メッセージなし)'),
+              updatedAtMs: updatedAt?.toMillis?.() ?? null,
+            });
+          }
         }
       } else {
         counts.fieldAbsent++;
@@ -132,6 +149,28 @@ async function main(): Promise<void> {
   );
   if (realErrorRatio > 0.2) {
     console.log('⚠️  実エラー比率が20%を超えています。異常停止基準(Codex High指摘#5)に該当する可能性があります。');
+  }
+
+  if (showBreakdown) {
+    console.log('---');
+    console.log('=== error(実エラー)内訳(メッセージ先頭40文字でグルーピング) ===');
+    const groups = new Map<string, { count: number; oldestMs: number | null; newestMs: number | null }>();
+    for (const entry of counts.realErrorEntries) {
+      const key = entry.message.slice(0, 40);
+      const g = groups.get(key) ?? { count: 0, oldestMs: null, newestMs: null };
+      g.count++;
+      if (entry.updatedAtMs !== null) {
+        if (g.oldestMs === null || entry.updatedAtMs < g.oldestMs) g.oldestMs = entry.updatedAtMs;
+        if (g.newestMs === null || entry.updatedAtMs > g.newestMs) g.newestMs = entry.updatedAtMs;
+      }
+      groups.set(key, g);
+    }
+    const sorted = [...groups.entries()].sort((a, b) => b[1].count - a[1].count);
+    for (const [key, g] of sorted) {
+      const oldest = g.oldestMs !== null ? new Date(g.oldestMs).toISOString() : '(不明)';
+      const newest = g.newestMs !== null ? new Date(g.newestMs).toISOString() : '(不明)';
+      console.log(`  ${g.count}件  最古=${oldest} 最新=${newest}  "${key}..."`);
+    }
   }
 
   process.exit(0);
