@@ -45,6 +45,8 @@ Accepted (2026-07-20)
 
 同一parent+nameに解決する**異なるdocument**が近接タイミングで検証されると、双方が0件マッチを観測して`files.create()`を呼び、重複フォルダが作成されうる（決定4本文の「同名2件以上は停止」は同一検索内の話であり、この異docId間の競合は別問題）。これを防ぐため、0件マッチ時のみ`driveFolderLocks`コレクション（Admin SDK専有）へのFirestoreトランザクションで所有権を主張してから作成する。所有権トークン（fencing token）は決定6の`driveExportRunId`クレーム機構と同型で、staleとみなされ他の実行にロックを奪われた場合でも元の実行が誤って新しい保有者のロックを削除しないようにする。ロック獲得に失敗した場合は`FolderCreationInProgressError`をthrowし、新しい待機/リトライ機構は作らず既存のcatch-and-set-error機構（`driveExportStatus:'error'`→次回スケジュールスイープで自動リトライ）に委ねる（`functions/src/drive/findOrCreateFolder.ts`）。
 
+**根本原因の修正（Issue #811、2026-08-27）**: 初版の検索クエリは`trashed=false`固定だった。ユーザーが手動でフォルダをゴミ箱に入れると、次回のエクスポート時に「0件マッチ」と誤判定され新規フォルダが作成され続け、同名フォルダの物理重複を生んでいた（kanameoneの「森奈穂美」ケアマネフォルダで6重複が発生し、241件のdocumentがtrashed配下に取り残される実害が確認された。データ移行はPhase B Part Aの専用スクリプト群で実施済み）。修正後は検索をtrashed込みに変更し、1件マッチかつtrashedの場合は`files.update({trashed:false})`で復元してから再利用する。復元APIが失敗した場合は新規作成へフォールバックせず例外を再送出する（同名フォルダが実在するため、フォールバックは新たな重複を作りかねない）。あわせて、1ページ目のみで打ち切っていた`files.list`のページネーションも全ページ列挙に修正した。
+
 ### 5. 同期トリガーは「確認ボタン」押下（`verified` false→true）
 
 documentの`verified`フィールドがfalse→trueになる瞬間を、Cloud Functions側のFirestoreトリガー（`onDocumentWritten('documents/{docId}')`）で検知してエクスポートを開始する。OCR誤読・利用者取り違えが確定する前の情報を外部Driveへ誤って流出させるリスクを、人間のレビュー完了という明示的なゲートで防ぐ。この方式はcocoro側で承認済み。既存の確認フロー（`useDocumentVerification.ts`の`markAsVerified`、3つの呼び出し元）には一切変更を加えない。
