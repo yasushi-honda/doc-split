@@ -62,6 +62,20 @@ if (repairScenario && cleanup) {
   console.error('❌ --repair-scenario と --cleanup は併用できません(cleanupは常に両fixture種別を対象に実施されるため、--repair-scenario単体では不要です)。');
   process.exit(1);
 }
+// codex review P2指摘(セカンドオピニオンI7で「暗黙フォールバック」という当初の理解自体が
+// 不正確と判明・訂正): --repair-scenarioはfixtureのfileUrl/Storage実体を実際に書き込むため、
+// STORAGE_BUCKET未設定のままadmin.storage().bucket()を呼ぶとFirebase Admin SDKが
+// `storage/invalid-argument`をthrowする(暗黙に`<projectId>.appspot.com`等へ
+// フォールバックすることはない、node_modules/firebase-admin/lib/storage/storage.js
+// で実装を直接確認済み)。SDKの生の例外は原因が分かりにくいため、先回りして案内する。
+if (repairScenario && !process.env.STORAGE_BUCKET) {
+  console.error(
+    'STORAGE_BUCKET 環境変数を設定してください(scripts/clients/dev.env のSTORAGE_BUCKET参照。' +
+      '未設定のまま実行するとFirebase Admin SDKの`admin.storage().bucket()`が' +
+      '`storage/invalid-argument`エラーで失敗します)'
+  );
+  process.exit(1);
+}
 
 admin.initializeApp({ projectId, storageBucket: process.env.STORAGE_BUCKET });
 const db = admin.firestore();
@@ -162,12 +176,21 @@ async function main(): Promise<void> {
       await db.doc(`documents/${docId}`).delete().catch(() => undefined);
     }
     await db.doc(`masters/customers/items/${FIXTURE_CUSTOMER_ID}`).delete().catch(() => undefined);
-    await admin
-      .storage()
-      .bucket()
-      .file(`original/${FIXTURE_PREFIX}-repair.txt`)
-      .delete()
-      .catch(() => undefined);
+    // codex review(13回目)P1指摘: doCleanup()はmain()冒頭で常に(--repair-scenario未指定・
+    // STORAGE_BUCKET未設定の通常呼び出しでも)実行される。admin.storage().bucket()を
+    // 無条件で呼ぶと、ファイル冒頭に記載の元々の標準的な呼び出し(STORAGE_BUCKET不要、
+    // `FIREBASE_PROJECT_ID=doc-split-dev npx ts-node scripts/setup-drive-folder-fixture.ts`)
+    // がFirebase Admin SDKの`storage/invalid-argument`で落ちてしまう(--repair-scenarioを
+    // 一度も使っていない環境ではそもそも削除対象のStorageオブジェクトも存在しない)。
+    // STORAGE_BUCKET設定時のみ試みる。
+    if (process.env.STORAGE_BUCKET) {
+      await admin
+        .storage()
+        .bucket()
+        .file(`original/${FIXTURE_PREFIX}-repair.txt`)
+        .delete()
+        .catch(() => undefined);
+    }
     let pageToken: string | undefined;
     const toDelete: string[] = [];
     do {
@@ -219,7 +242,13 @@ async function main(): Promise<void> {
     };
     const segments = resolveFolderSegments(docInput, template!, opts);
 
-    let leafFolderId = fixtureParentId;
+    // codex review P2指摘: resolveFolderSegments()はtemplate全段(careManagerより前の
+    // 'fixed'階層も含む)を返すため、既に固定階層解決後を指す`fixtureParentId`から
+    // 辿ると固定階層が二重(root/固定/固定/...)になる。classify-drive-export-drift.tsは
+    // rootFolderIdから全segmentsを辿る設計(exportDocument.tsと同一)のため、fixtureも
+    // rootFolderIdから辿らないと期待leafフォルダが一致せずtarget-path-not-createdに
+    // 誤判定される。
+    let leafFolderId = rootFolderId!;
     for (const name of segments) {
       leafFolderId = await findOrCreateFolder(drive, db, leafFolderId, name);
     }
@@ -272,7 +301,10 @@ async function main(): Promise<void> {
     console.log(`  ${REPAIR_FIXTURE_DOC_TRASHED}: trashed期待(driveFileId=${trashedFileId})`);
     console.log(`  ${REPAIR_FIXTURE_DOC_404}: missing-404期待(driveFileId=${REPAIR_FIXTURE_FAKE_404_FILE_ID})`);
     console.log(
-      `\n検証コマンド: FIREBASE_PROJECT_ID=${projectId} npx ts-node scripts/classify-drive-export-drift.ts --care-manager "${careManagerRaw}" --out /tmp/repair-scenario-plan.json`
+      // codex review(13回目)P2指摘: STORAGE_BUCKETを省いたコマンドをそのまま実行すると、
+      // classify-drive-export-drift.ts側のSTORAGE_BUCKET必須ガードに即座に弾かれる
+      // (このスクリプト自身が--repair-scenario実行のために要求した値をそのまま案内する)。
+      `\n検証コマンド: FIREBASE_PROJECT_ID=${projectId} STORAGE_BUCKET=${process.env.STORAGE_BUCKET} npx ts-node scripts/classify-drive-export-drift.ts --care-manager "${careManagerRaw}" --out /tmp/repair-scenario-plan.json`
     );
   }
 
