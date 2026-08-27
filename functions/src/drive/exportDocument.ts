@@ -206,7 +206,7 @@ async function findOrUploadFile(
  * `error.code`のみを見る単純な数値比較では本番で常にfalseになり、意図した
  * フォールバックが機能しない(`is429Error`/`functions/src/utils/retry.ts`と同じ懸念)。
  */
-function isDriveFileNotFoundError(error: unknown): boolean {
+export function isDriveFileNotFoundError(error: unknown): boolean {
   const err = error as { code?: number | string; status?: number; response?: { status?: number } };
   return err?.status === 404 || err?.code === 404 || err?.response?.status === 404;
 }
