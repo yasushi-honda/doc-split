@@ -26,6 +26,7 @@ import { toast } from 'sonner'
 import { format } from 'date-fns'
 import { ja } from 'date-fns/locale'
 import { Timestamp } from 'firebase/firestore'
+import { formatTimestamp } from '@/lib/documentUtils'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -181,16 +182,6 @@ const STATUS_CONFIG: Record<DocumentStatus, { label: string; variant: 'default' 
   processed: { label: '完了', variant: 'success' },
   error: { label: 'エラー', variant: 'destructive' },
   split: { label: '分割済', variant: 'default' },
-}
-
-// Timestampを日付文字列に変換
-function formatTimestamp(timestamp: Timestamp | undefined): string {
-  if (!timestamp) return '-'
-  try {
-    return format(timestamp.toDate(), 'yyyy/MM/dd', { locale: ja })
-  } catch {
-    return '-'
-  }
 }
 
 // Timestampを日時文字列に変換（登録日用）
