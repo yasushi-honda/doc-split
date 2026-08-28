@@ -175,8 +175,12 @@ on:
           - classify-drive-export-drift
           - classify-drive-export-drift --care-manager
           - classify-drive-export-drift --care-manager --limit
+          - execute-drive-export-repair --dry-run
+          - execute-drive-export-repair --dry-run --limit --expected-count
+          - execute-drive-export-repair --execute --limit --expected-count
+          - execute-drive-export-repair --execute --expected-count
       backfill_limit:
-        description: 'backfill-drive-export --limit: canary実行時のマーク上限件数(数値のみ) / classify-drive-export-drift --limit: 検査対象document数の上限(数値のみ)'
+        description: 'backfill-drive-export --limit: canary実行時のマーク上限件数(数値のみ) / classify-drive-export-drift --limit: 検査対象document数の上限(数値のみ) / execute-drive-export-repair --limit: 修復対象候補数の上限(数値のみ)'
         required: false
         type: string
         default: ''
@@ -219,7 +223,7 @@ on:
           - 'false'
           - 'true'
       expected_count:
-        description: 'cleanup-office-name / delete-office-master / reset-documents-by-office: 影響件数の事前確認（数値；省略時はチェック無効、指定時は不一致で中断）'
+        description: 'cleanup-office-name / delete-office-master / reset-documents-by-office: 影響件数の事前確認（数値；省略時はチェック無効、指定時は不一致で中断）/ execute-drive-export-repair --expected-count: --limit適用後の修復対象件数の事前確認(数値)'
         required: false
         type: string
         default: ''
@@ -239,7 +243,7 @@ on:
         type: string
         default: ''
       exec_args_json:
-        description: 'execute-collision-migration: JSON {"planRunId":"<classify run id>","approvedOperationIds":["op-0001",...]} / investigate-issue811-root-cause: JSON {"folderIds":[...],"docIds":[...]} / classify-drive-folder-duplicates: JSON {"canonicalFolderId":"...","duplicateFolderIds":["id1","id2"]} / execute-drive-folder-merge: JSON {"planRunId":"<classify-drive-folder-duplicates run id>","approvedOperationIds":["op-0001",...]} / rollback-drive-folder-merge: JSON {"manifestRunId":"<execute-drive-folder-merge run id>","approvedOperationIds":["op-0001",...]}(approvedOperationIds省略時はmanifest全件を対象)'
+        description: 'execute-collision-migration: JSON {"planRunId":"<classify run id>","approvedOperationIds":["op-0001",...]} / investigate-issue811-root-cause: JSON {"folderIds":[...],"docIds":[...]} / classify-drive-folder-duplicates: JSON {"canonicalFolderId":"...","duplicateFolderIds":["id1","id2"]} / execute-drive-folder-merge: JSON {"planRunId":"<classify-drive-folder-duplicates run id>","approvedOperationIds":["op-0001",...]} / rollback-drive-folder-merge: JSON {"manifestRunId":"<execute-drive-folder-merge run id>","approvedOperationIds":["op-0001",...]}(approvedOperationIds省略時はmanifest全件を対象) / execute-drive-export-repair: JSON {"planRunId":"<classify-drive-export-drift run id>","expectedTotal":488,"acknowledgeRestoreFolders":false}(planRunId必須、expectedTotal/acknowledgeRestoreFoldersは省略可)'
         required: false
         type: string
         default: ''
@@ -400,6 +404,28 @@ jobs:
                 exit 1
               fi
               SCRIPT_ARGS=$(echo "$SCRIPT_ARGS" | sed "s/--limit/--limit $BACKFILL_LIMIT/")
+            fi
+          fi
+
+          # execute-drive-export-repair --limit/--expected-count(Issue #811/#823
+          # remediation Phase 2b)。backfill-drive-exportと同一パターン(数値のみなので
+          # sed置換で安全)。--plan(classify plan artifact)/--expected-total/
+          # --acknowledge-restore-foldersはexec_args_json経由でParse execute-drive-export-repair
+          # argsステップが扱う(このステップでは--limit/--expected-countのみ)。
+          if [ "$SCRIPT_NAME" = "execute-drive-export-repair" ]; then
+            if echo "$SCRIPT_ARGS" | grep -q -- '--limit'; then
+              if [ -z "$BACKFILL_LIMIT" ] || ! echo "$BACKFILL_LIMIT" | grep -qE '^[0-9]+$'; then
+                echo "ERROR: backfill_limit must be a non-negative integer when script contains --limit" >&2
+                exit 1
+              fi
+              SCRIPT_ARGS=$(echo "$SCRIPT_ARGS" | sed "s/--limit/--limit $BACKFILL_LIMIT/")
+            fi
+            if echo "$SCRIPT_ARGS" | grep -q -- '--expected-count'; then
+              if [ -z "$EXPECTED_COUNT" ] || ! echo "$EXPECTED_COUNT" | grep -qE '^[0-9]+$'; then
+                echo "ERROR: expected_count must be a non-negative integer when script contains --expected-count" >&2
+                exit 1
+              fi
+              SCRIPT_ARGS=$(echo "$SCRIPT_ARGS" | sed "s/--expected-count/--expected-count $EXPECTED_COUNT/")
             fi
           fi
 
@@ -620,6 +646,54 @@ jobs:
           run-id: ${{ steps.parse_exec_drive.outputs.plan_run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Parse execute-drive-export-repair args
+        # Issue #811/#823 remediation Phase 2b: exec_args_json から
+        # planRunId(classify-drive-export-drift run id、必須)・expectedTotal(任意、H5の
+        # limit適用前母数ガード)・acknowledgeRestoreFolders(任意、D7)を抽出する。
+        # execute-drive-folder-mergeのparse_exec_driveと同型だが、D5の方針(approval.json級の
+        # 重量ゲートは不採用)により承認オペレーションID抽出は行わない。
+        id: parse_exec_repair
+        if: ${{ startsWith(github.event.inputs.script, 'execute-drive-export-repair') }}
+        env:
+          EXEC_ARGS_JSON: ${{ github.event.inputs.exec_args_json }}
+        run: |
+          set -euo pipefail
+          if [ -z "$EXEC_ARGS_JSON" ]; then
+            echo "ERROR: exec_args_json is required when script is execute-drive-export-repair" >&2
+            exit 1
+          fi
+          if ! echo "$EXEC_ARGS_JSON" | jq empty 2>/dev/null; then
+            echo "ERROR: exec_args_json is not valid JSON" >&2
+            exit 1
+          fi
+          PLAN_RUN_ID=$(echo "$EXEC_ARGS_JSON" | jq -r '.planRunId // empty')
+          if [ -z "$PLAN_RUN_ID" ]; then
+            echo "ERROR: exec_args_json must contain planRunId (string)" >&2
+            exit 1
+          fi
+          if ! echo "$PLAN_RUN_ID" | grep -qE '^[0-9]+$'; then
+            echo "ERROR: planRunId must be a numeric run id (got: $PLAN_RUN_ID)" >&2
+            exit 1
+          fi
+          EXPECTED_TOTAL=$(echo "$EXEC_ARGS_JSON" | jq -r '.expectedTotal // empty')
+          if [ -n "$EXPECTED_TOTAL" ] && ! echo "$EXPECTED_TOTAL" | grep -qE '^[0-9]+$'; then
+            echo "ERROR: expectedTotal must be a non-negative integer when present (got: $EXPECTED_TOTAL)" >&2
+            exit 1
+          fi
+          ACKNOWLEDGE_RESTORE=$(echo "$EXEC_ARGS_JSON" | jq -r '.acknowledgeRestoreFolders // false')
+          echo "plan_run_id=$PLAN_RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "expected_total=$EXPECTED_TOTAL" >> "$GITHUB_OUTPUT"
+          echo "acknowledge_restore=$ACKNOWLEDGE_RESTORE" >> "$GITHUB_OUTPUT"
+
+      - name: Download classify-drive-export-drift plan artifact for execute-drive-export-repair
+        if: ${{ startsWith(github.event.inputs.script, 'execute-drive-export-repair') }}
+        uses: actions/download-artifact@v4
+        with:
+          name: classify-drive-export-drift-plan-${{ github.event.inputs.environment }}-${{ steps.parse_exec_repair.outputs.plan_run_id }}
+          path: ${{ github.workspace }}/.drive-export-repair-plan
+          run-id: ${{ steps.parse_exec_repair.outputs.plan_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Generate approval JSON from drive folder merge plan + approved operation ids
         # plan-output.json の operations 配列から approvedOperationIds に該当する op を抽出し、
         # planId + opIds + (expectedParents[0]/driveFileId を drive://folderId/fileId で展開) を
@@ -736,6 +810,8 @@ jobs:
           DRIVE_OPERATION_IDS_CSV: ${{ steps.parse_exec_drive.outputs.operation_ids_csv }}
           MANIFEST_RUN_ID: ${{ steps.parse_rollback_drive.outputs.manifest_run_id }}
           ROLLBACK_OPERATION_IDS_CSV: ${{ steps.parse_rollback_drive.outputs.operation_ids_csv }}
+          REPAIR_EXPECTED_TOTAL: ${{ steps.parse_exec_repair.outputs.expected_total }}
+          REPAIR_ACKNOWLEDGE_RESTORE: ${{ steps.parse_exec_repair.outputs.acknowledge_restore }}
         run: |
           set -euo pipefail
           if [ -z "$PROJECT_ID" ]; then
@@ -795,6 +871,28 @@ jobs:
               FIREBASE_PROJECT_ID="$PROJECT_ID" \
               STORAGE_BUCKET="$STORAGE_BUCKET" \
               npx ts-node classify-drive-export-drift.ts "${ARGS[@]}" $REMAINING_ARGS
+          elif [ "$SCRIPT_NAME" = "execute-drive-export-repair" ]; then
+            # Issue #811/#823 remediation Phase 2b: 破損documentの実修復(read-write)。
+            # --planはDownload classify-drive-export-drift plan artifact for
+            # execute-drive-export-repairステップが取得済みのplan-output.jsonを指す。
+            # --limit/--expected-countはParse段階で数値置換済みのためSCRIPT_ARGSにそのまま
+            # 含まれる(--care-manager等スペースを含む値はこのscriptには存在しないため
+            # bash配列組み立ては不要、classify-drive-export-driftほど複雑ではない)。
+            ARGS=(
+              --plan "${GITHUB_WORKSPACE}/.drive-export-repair-plan/plan-output.json"
+              --manifest-out "${GITHUB_WORKSPACE}/scripts/execute-drive-export-repair-manifest.json"
+            )
+            if [ -n "${REPAIR_EXPECTED_TOTAL:-}" ]; then
+              ARGS+=( --expected-total "$REPAIR_EXPECTED_TOTAL" )
+            fi
+            if [ "${REPAIR_ACKNOWLEDGE_RESTORE:-false}" = "true" ]; then
+              ARGS+=( --acknowledge-restore-folders )
+            fi
+            cd scripts
+            NODE_PATH=../functions/node_modules \
+              FIREBASE_PROJECT_ID="$PROJECT_ID" \
+              STORAGE_BUCKET="$STORAGE_BUCKET" \
+              npx ts-node execute-drive-export-repair.ts "${ARGS[@]}" $SCRIPT_ARGS
           elif [ "$SCRIPT_NAME" = "classify-drive-folder-duplicates" ]; then
             # Issue #811 Phase B Part A: Driveフォルダ重複統合の分類(read-only)。
             # ログマスキングで `{` が `***` に置換されるため、plan JSON をファイル出力 →
@@ -1318,6 +1416,17 @@ jobs:
           path: scripts/plan-output.json
           if-no-files-found: warn
           retention-days: 30
+
+      - name: Upload execute-drive-export-repair manifest artifact
+        # Issue #811/#823 remediation Phase 2b: execute-drive-folder-merge manifestと同型
+        # (修復結果の監査証跡・将来のrollback材料のためretentionを長めに取る)。
+        if: ${{ startsWith(github.event.inputs.script, 'execute-drive-export-repair') && always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: execute-drive-export-repair-manifest-${{ github.event.inputs.environment }}-${{ github.run_id }}
+          path: scripts/execute-drive-export-repair-manifest.json
+          if-no-files-found: warn
+          retention-days: 90
 
       - name: Upload classify-drive-folder-duplicates plan artifact
         # Issue #811 Phase B: classify-collision-docsと同型(log secret maskingでplan JSONが

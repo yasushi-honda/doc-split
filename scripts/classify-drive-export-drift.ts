@@ -159,9 +159,11 @@ const PAGE_SIZE = 500;
 // できていなかった。将来の執行フェーズ(execute-drive-export-repair.ts)が「新規フォルダ
 // 作成して良いか/絶対に触るべきでないか」を判断するために必須の情報のため、targetにも
 // (blockedと同様に)明示する。
-type ExpectedPathStatus = 'resolved' | 'not-created' | 'unresolved-ambiguous' | 'unresolved-api-error';
+// execute-drive-export-repair.ts(修復実行スクリプト)がplan JSONを読み込む際に
+// 同じ型を再利用するためexport する(挙動変更なし)。
+export type ExpectedPathStatus = 'resolved' | 'not-created' | 'unresolved-ambiguous' | 'unresolved-api-error';
 
-interface TargetEntry {
+export interface TargetEntry {
   docId: string;
   careManager: string;
   customerName: string;
@@ -175,11 +177,27 @@ interface TargetEntry {
   storageObjectExists: boolean | null;
 }
 
-interface BlockedEntry {
+export interface BlockedEntry {
   docId: string;
   careManager: string;
   reason: BlockedReason;
   detail?: string;
+}
+
+// execute-drive-export-repair.tsがplan JSONをパースする際の完全な型(このファイルの
+// main()が最後にwriteFileSyncする`plan`オブジェクトの構造と一致させる)。
+export interface DriftPlan {
+  schemaVersion: string;
+  planId: string;
+  projectId: string;
+  generatedAt: string;
+  scope: { careManager: string | null; limit: number | null; storageChecked: boolean };
+  driveSettings: { rootFolderId: string; template: unknown; furiganaFallback: string | null };
+  summary: ReturnType<typeof summarizeClassifications>;
+  byCareManager: ReturnType<typeof summarizeByCareManager>;
+  wouldRestoreFolders: { folderId: string; name: string; parentId: string; affectedDocCount: number }[];
+  targets: TargetEntry[];
+  blocked: BlockedEntry[];
 }
 
 async function sleep(ms: number): Promise<void> {
