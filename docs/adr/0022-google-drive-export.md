@@ -55,7 +55,11 @@ Accepted (2026-07-20)
 
 修復ロジックには以下の安全機構を組み込んでいる: ①misplaced修復パスはStorage上の内容を無条件にDrive側へ書き戻すため、Drive側`modifiedTime`が`driveExportedAt`より新しい場合（Drive上で当アプリ以外の経路による更新があった可能性）は対象から除外する（手編集による無言破壊の防止）②plan（分類結果）の鮮度ゲート（既定24時間）③classify〜execute間に対象documentのDrive状態が既に修復済み(healthy)へ変化していた場合、live状態を再検証し無駄な再書き込みを回避する。実行結果、9件（Drive側modifiedTimeが直近だったため上記①で除外）が意図的に未修復のまま残った。Cloud Loggingで該当documentへのdoc-split側Cloud Function実行履歴を確認したが、該当時刻（2026-08-14T03:09台に7件が15秒以内で集中）に該当する実行は一切見つからず、原因はdoc-split側の処理では説明がつかない（Drive側での外部要因が疑われるが未特定）。この9件は安全側に倒して未修復のまま保留し、必要に応じて個別確認する運用とした。
 
-森奈穂美以外のケアマネへの横展開・cocoroテナントへの適用は本対応のスコープ外（同種の破損の有無は未検証）。詳細な設計判断・crossreview対応の経緯は`~/.claude/plans/sharded-mapping-squid.md`、実行記録は`docs/handoff/GOAL.md`「Issue #811/#823 remediation Phase 2b-1/2b-2」節を参照。
+**kanameone全ケアマネへの横展開（Phase 3、2026-08-28完了）**: 森奈穂美分の修復後、read-onlyのclassifyを`--care-manager`指定なし（テナント全体）で実行したところ、同種の破損が**kanameone全16人のケアマネ全員**に及んでいることが判明した（scanned=4245、healthy=2580=60.8%のみ）。同一の修復スクリプトをテナント全体（候補1644件）へ適用し、正常状態は**99.0%**（4213/4257件）まで改善した。canary実行時、森奈穂美分にはなかった`wouldRestoreFolders`（ゴミ箱内フォルダの復元対象、3件・影響document4件）がテナント全体では検出され、decision-maker明示承認（`--acknowledge-restore-folders`）を得てから本実行した。最終的に`skippedPossibleManualEdit`（D9除外）は21件、その他blocked（フォルダ構造の曖昧性・顧客未確定等、本スクリプトの対象外）21件が未修復のまま残る。
+
+**cocoroテナントへの適用（Phase 4）は対象外と確定**: cocoroは`settings/drive`が未設定（Google Drive連携自体を未接続、Phase C未完了の既知の状態）であり、Drive書き出しが一度も発生していないため、今回の破損とは無関係と確認できた。
+
+詳細な設計判断・crossreview対応の経緯は`~/.claude/plans/sharded-mapping-squid.md`、実行記録は`docs/handoff/GOAL.md`「Issue #811/#823 remediation Phase 2b-1/2b-2/3」節を参照。
 
 ### 5. 同期トリガーは「確認ボタン」押下（`verified` false→true）
 
