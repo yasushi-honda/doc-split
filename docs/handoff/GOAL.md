@@ -297,11 +297,15 @@ cocoro/kanameから、書類（ケアプラン・医療・介護保険証等）�
 
 ## 🔄 中断点（in-flight）
 
-**Issue #811/#823 remediation（次セッション再開点）**: Phase 2b-1（PR #851実装マージ・devリハーサル）・Phase 2b-2（kanameone本番書き込み実行、healthy 33.1%→98.8%）とも完了済み（詳細は上記2節参照）。次に必要なのは以下のいずれか、decision-maker判断待ち:
-- kanameone担当者への報告文書作成（今回のセッションで着手予定）
-- 残る非healthy 9件（skippedPossibleManualEdit8+skippedDrift由来の残存分）の原因調査要否判断（2026-08-14T03:09台に集中した謎のバッチ処理痕跡、実害なしのまま放置可能）
+**Issue #811/#823 remediation（次セッション再開点）**: Phase 2b-1（PR #851実装マージ・devリハーサル）・Phase 2b-2（kanameone本番書き込み実行、healthy 33.1%→98.8%）・Phase 5（ADR-0022更新PR #854マージ・Issue #811/#823クローズ）とも完了済み（詳細は上記各節参照）。
+
+**残り9件の原因調査（2026-08-28実施・打ち切り）**: 2026-08-14T03:09台に7件が15秒以内に集中していた謎のバッチ処理痕跡について、Cloud Logging（kanameone、`gcloud logging read`）で該当4docIdを個別に確認したが、該当時刻にdoc-split側のCloud Function実行履歴が一切見つからなかった（直近ログは8/5〜8/6の書類取込・インデックス処理のみ）。**doc-split側の処理では説明がつかない=Drive側での外部要因（人間操作かGoogle内部処理か不明）の可能性が高い**という結論に至り、これ以上の特定にはGoogle Workspace管理者監査ログ（Drive Activity API）へのアクセスが必要なためここで調査を打ち切った。ADR-0022・Issue #823クローズコメントにこの結論を記録済み。9件は実害なく安全側に保留されたまま。
+
+**kanameone担当者への報告文書**: `/private/tmp/.../scratchpad/brief-20260828-drive-repair-report.html`（html-briefスキルで作成、実機検証済み）として作成済み。**送付はdecision-maker自身が行う**（送付操作はexecutor権限外）。
+
+**次に必要なのは以下のいずれか、decision-maker判断待ち**:
+- 報告文書の送付（内容は送信可能と判断済み）
 - 全ケアマネへの横展開（Phase 3、森奈穂美以外での同種事象の有無は未検証）・cocoroへの適用（Phase 4）の要否判断
-- Phase 5（ADR-0022更新・Issue #811/#823クローズ検討）
 
 **完了記録**: kanameone backfillマーカー20件滞留の原因調査・修正は完遂した。PR #804（`sweepStuckDriveExports`のrequeuedカウンタ修正）をkanameone/cocoro両環境へデプロイ後（2026-08-06 03:10/03:21）、自然経過での解消をFirestore/Cloud Loggingで継続監視: 20件(04:22 UTC)→9件(04:32〜06:35 UTC、customer-unconfirmed/real-errorの塊をカーソルが順次走査するため一時的に足踏み)→**0件（06:37:41 UTCの`requeued=8, failed=16`実行で末尾のbackfillマーカー群を処理し完全解消、07:02 UTC時点でFirestore実測`{"customer-unconfirmed":218,"real-error":117}`とbackfillカテゴリなしを確認）**。約3.5時間で修正の効果が完全に実証された。
 
