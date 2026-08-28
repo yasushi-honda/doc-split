@@ -81,6 +81,20 @@ kanameone・cocoroへのGoogle Drive連携Phase1本番展開。承認済み計�
 
 **今回のセッションのスコープはここまで**（decision-maker明示選択）。write/execute実行（修復）・全ケアマネへの横展開（Phase 3）・cocoroへの適用（Phase 4）は未着手。計画: `~/.claude/plans/sharded-mapping-squid.md`（「codexレビュー由来の設計修正」節に執行フェーズ実装時の必須反映事項を記録済み）。
 
+## 【完了・2026-08-28】Issue #811/#823 remediation Phase 2b-1: execute-drive-export-repair.ts実装・PR #851マージ・devリハーサル完了
+
+decision-maker明示承認（「ctxは余裕あります。提案内容について続けることは可能ですか？」）を受け、上記Phase 2a classify結果（森奈穂美729件中488件=trashed202+misplaced139+blocked:target-path-not-created147が要修復）を実際に修復する`execute-drive-export-repair.ts`をplan mode経由で設計・実装した。
+
+**plan-crossreview（grip自白×codex 2巡、`~/.claude/plans/sharded-mapping-squid.md`）でHigh指摘多数**（misplaced修復パスがStorage内容を無条件にDrive側へ上書きするため、Drive上での人間による直接編集があれば無言で破壊されうる懸念等）。decision-maker確認: kanameone/cocoroスタッフはエクスポート済みファイルをDrive上で直接手編集しない運用のはず（断定ではないため、Drive側modifiedTimeがdriveExportedAtより新しい場合は候補から除外する防御ロジックをD9として追加）。decision-makerから明示的マンデート「絶対に今回でなんらかの対応をします。今日はこれで終わりにはなりません」を受け、クロスレビュー指摘を全て設計へ反映したうえで実装に進んだ。
+
+**実装・quality gate**: pure-logic層`scripts/lib/driveExportRepairTargets.ts`（対象抽出D3・plan鮮度ゲートD10・手編集検知D9・drift再検証`isNowHealthy()`等）+本体`scripts/execute-drive-export-repair.ts`（dry-run既定・pre-flight検証・サーキットブレーカー・原子的manifest書き込み）。`codex review --base main -c model_reasoning_effort=medium`を**5巡**実施し収束: 1巡目GHA未配線+`tagRepairError()`結果のFirestore未反映／2巡目ファイル未検出偽陽性(未staged起因、`git add`で解消)／3巡目`blocked[target-path-not-created]`候補がStorage確認ガードを迂回できる穴／4巡目**classify〜execute間に対象documentが既に修復済み(healthy)になっていた場合、live Drive状態を再検証せず無駄な再書き込みをしてしまう穴**（`isNowHealthy()`追加で解消）／5巡目指摘0件。unit test 34件・Firestore emulator integration test 32件（実装分17件含む）全PASS。`.github/workflows/run-ops-script.yml`にGHA実行経路（dry-run/execute×limit/expected-count、classify plan artifactのdownload込み）を配線。
+
+**devリハーサル（doc-split-dev、実Drive/Storage）**: `setup-drive-folder-fixture.ts --repair-scenario`でhealthy/trashed/missing-404の3fixture投入→classify(scanned=3, healthy=1/trashed=1/missing404=1、想定通り)→dry-run(候補2件、healthy除外を確認)→`--execute`(attempted=2 repaired=2 failed=0、manifestに旧/新driveFileIdが正確に記録)→修復後classify再実行でhealthy=3を確認→**同一planで`--execute`を再実行し、両document とも「既にhealthyのためスキップ」と正しく判定されることを実機確認**（4巡目で追加した`isNowHealthy()`の実機検証、冪等性が実証された）。fixtureは`--cleanup`で削除済み。
+
+**PR #851**として`feat/issue823-drive-export-repair-execute`ブランチからmainへマージ完了（squash、8f401fd7）。
+
+**本番(kanameone/cocoro)への実際の書き込み実行(canary含む)は本Phase 2b-1の範囲外のまま**。plan Phase 2b-2（`--limit 10`でのcanary実行→canary対象への`classify-drive-export-drift`再実行によるhealthy遷移確認→decision-maker確認のうえ残り全件実行）は別途、番号単位の明示認可を得てから着手する。全ケアマネへの横展開（Phase 3）・cocoroへの適用（Phase 4）・執行後の記録（Phase 5: ADR-0022更新・GOAL.md記録・Issue #811/#823クローズ検討）も未着手。kanameone担当者への報告文書（「修復メカニズムの実装・検証が完了し、実行待ちの状態」）は本セッションでは未作成（次アクション候補）。
+
 ## 【完了・2026-08-27】Issue #811 Phase B: kanameone森奈穂美フォルダ重複の根本原因修正+データ統合(PR #838〜#844)
 
 kanameoneのケアマネフォルダ「森奈穂美」が物理6重複(active1+trashed5)していた根本原因（`functions/src/drive/findOrCreateFolder.ts`が`trashed=false`固定検索のため手動ゴミ箱移動を「存在しない」と誤判定し新規作成し続ける）を修正し、既存重複データを統合。4回の独立診断(grip+codex計4回)で承認された計画（Issue #432の collision-migration フレームワーク流用）に基づき実装。
@@ -268,7 +282,10 @@ cocoro/kanameから、書類（ケアプラン・医療・介護保険証等）�
 
 ## 🔄 中断点（in-flight）
 
-なし。
+**Issue #811/#823 remediation Phase 2b-2（次セッション再開点）**: `execute-drive-export-repair.ts`はPhase 2b-1でPR #851としてmainへマージ済み・devリハーサル実機確認済み（詳細は上記「Issue #811/#823 remediation Phase 2b-1」節）。次に必要なのは以下のいずれか、decision-maker判断待ち:
+- kanameone本番への実際の書き込み実行（plan `~/.claude/plans/sharded-mapping-squid.md` Phase 2b-2、`--limit 10`でのcanary→検証→残り全件488件）の番号単位明示認可
+- kanameone担当者への報告文書（「修復メカニズムの実装・検証が完了し、実行待ちの状態」）作成
+- 全ケアマネへの横展開（Phase 3）・cocoroへの適用（Phase 4）の要否判断
 
 **完了記録**: kanameone backfillマーカー20件滞留の原因調査・修正は完遂した。PR #804（`sweepStuckDriveExports`のrequeuedカウンタ修正）をkanameone/cocoro両環境へデプロイ後（2026-08-06 03:10/03:21）、自然経過での解消をFirestore/Cloud Loggingで継続監視: 20件(04:22 UTC)→9件(04:32〜06:35 UTC、customer-unconfirmed/real-errorの塊をカーソルが順次走査するため一時的に足踏み)→**0件（06:37:41 UTCの`requeued=8, failed=16`実行で末尾のbackfillマーカー群を処理し完全解消、07:02 UTC時点でFirestore実測`{"customer-unconfirmed":218,"real-error":117}`とbackfillカテゴリなしを確認）**。約3.5時間で修正の効果が完全に実証された。
 
