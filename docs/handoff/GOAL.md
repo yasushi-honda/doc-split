@@ -306,7 +306,6 @@ cocoro/kanameから、書類（ケアプラン・医療・介護保険証等）�
 **次に必要なのは以下のいずれか、decision-maker判断待ち**:
 - 報告文書の送付（内容は送信可能と判断済み）
 - 全ケアマネへの横展開（Phase 3、森奈穂美以外での同種事象の有無は未検証）・cocoroへの適用（Phase 4）の要否判断
-- Phase 5（ADR-0022更新・Issue #811/#823クローズ検討）
 
 **完了記録**: kanameone backfillマーカー20件滞留の原因調査・修正は完遂した。PR #804（`sweepStuckDriveExports`のrequeuedカウンタ修正）をkanameone/cocoro両環境へデプロイ後（2026-08-06 03:10/03:21）、自然経過での解消をFirestore/Cloud Loggingで継続監視: 20件(04:22 UTC)→9件(04:32〜06:35 UTC、customer-unconfirmed/real-errorの塊をカーソルが順次走査するため一時的に足踏み)→**0件（06:37:41 UTCの`requeued=8, failed=16`実行で末尾のbackfillマーカー群を処理し完全解消、07:02 UTC時点でFirestore実測`{"customer-unconfirmed":218,"real-error":117}`とbackfillカテゴリなしを確認）**。約3.5時間で修正の効果が完全に実証された。
 
