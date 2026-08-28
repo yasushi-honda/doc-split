@@ -3,8 +3,6 @@
  */
 
 import { useState, useEffect } from 'react';
-import { format } from 'date-fns';
-import { ja } from 'date-fns/locale';
 import { History, User, Building, FileText, Loader2, ChevronDown } from 'lucide-react';
 import {
   Dialog,
@@ -17,8 +15,8 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useAliasLearningHistory } from '@/hooks/useAliasLearningHistory';
+import { formatTimestamp } from '@/lib/documentUtils';
 import type { AliasLearningLog, AliasLearningMasterType } from '@shared/types';
-import type { Timestamp } from 'firebase/firestore';
 
 interface AliasLearningHistoryModalProps {
   open: boolean;
@@ -31,16 +29,6 @@ const MASTER_TYPE_CONFIG: Record<AliasLearningMasterType, { label: string; icon:
   office: { label: '事業所', icon: Building, color: 'bg-green-100 text-green-800' },
   document: { label: '書類種別', icon: FileText, color: 'bg-purple-100 text-purple-800' },
 };
-
-// Timestampを日付文字列に変換
-function formatTimestamp(timestamp: Timestamp | undefined): string {
-  if (!timestamp) return '-';
-  try {
-    return format(timestamp.toDate(), 'MM/dd HH:mm', { locale: ja });
-  } catch {
-    return '-';
-  }
-}
 
 // 履歴行コンポーネント
 function HistoryRow({ log }: { log: AliasLearningLog }) {
@@ -63,7 +51,7 @@ function HistoryRow({ log }: { log: AliasLearningLog }) {
           「{log.alias}」を許容表記として登録
         </p>
         <p className="text-xs text-gray-400 mt-0.5">
-          {formatTimestamp(log.learnedAt)}
+          {formatTimestamp(log.learnedAt, 'MM/dd HH:mm')}
         </p>
       </div>
     </div>

@@ -5,13 +5,12 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { format } from 'date-fns'
-import { ja } from 'date-fns/locale'
-import { Timestamp } from 'firebase/firestore'
 import { ref, getDownloadURL } from 'firebase/storage'
 import { Download, ExternalLink, Loader2, FileText, User, UserCheck, Building, Calendar, Tag, AlertCircle, Info, Scissors, Pencil, Save, X, BookMarked, History, ChevronUp, ChevronDown, Sparkles, RefreshCw, CheckCircle, XCircle, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { storage } from '@/lib/firebase'
 import { callFunction, getCallableErrorMessage } from '@/lib/callFunction'
+import { formatTimestamp } from '@/lib/documentUtils'
 import { useAuthStore } from '@/stores/authStore'
 import { useQueryClient } from '@tanstack/react-query'
 import {
@@ -293,16 +292,6 @@ const STATUS_CONFIG: Record<DocumentStatus, { label: string; variant: 'default' 
   processed: { label: '完了', variant: 'success' },
   error: { label: 'エラー', variant: 'destructive' },
   split: { label: '分割済', variant: 'default' },
-}
-
-// Timestampを日付文字列に変換
-function formatTimestamp(timestamp: Timestamp | undefined, formatStr = 'yyyy年MM月dd日'): string {
-  if (!timestamp) return '-'
-  try {
-    return format(timestamp.toDate(), formatStr, { locale: ja })
-  } catch {
-    return '-'
-  }
 }
 
 // メタ情報行
@@ -1378,7 +1367,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                   <EditableMetaRow
                     icon={Calendar}
                     label="書類日付"
-                    value={formatTimestamp(document.fileDate)}
+                    value={formatTimestamp(document.fileDate, 'yyyy年MM月dd日')}
                     editValue={editedFields.fileDate ? format(editedFields.fileDate, 'yyyy-MM-dd') : ''}
                     isEditing={isEditing}
                     onChange={(v) => updateField('fileDate', v ? new Date(v) : null)}

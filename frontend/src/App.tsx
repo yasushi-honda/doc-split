@@ -8,7 +8,6 @@ import { ProcessingHistoryPage } from '@/pages/ProcessingHistoryPage'
 import { SettingsPage } from '@/pages/SettingsPage'
 import { ErrorsPage } from '@/pages/ErrorsPage'
 import { MastersPage } from '@/pages/MastersPage'
-import { AdminPage } from '@/pages/AdminPage'
 import { HelpPage } from '@/pages/HelpPage'
 import { Layout } from '@/components/Layout'
 
@@ -81,14 +80,6 @@ export default function App() {
             element={
               <AdminRoute>
                 <MastersPage />
-              </AdminRoute>
-            }
-          />
-          <Route
-            path="admin"
-            element={
-              <AdminRoute>
-                <AdminPage />
               </AdminRoute>
             }
           />

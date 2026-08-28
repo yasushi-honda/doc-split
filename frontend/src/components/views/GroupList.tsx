@@ -22,9 +22,6 @@ import {
   Search,
   X,
 } from 'lucide-react';
-import { format } from 'date-fns';
-import { ja } from 'date-fns/locale';
-import { Timestamp } from 'firebase/firestore';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
@@ -50,6 +47,7 @@ import {
   type CategoryHierarchy,
 } from '@/lib/buildDocumentTypeCategoryGroups';
 import { filterGroupsByName, filterCategoryHierarchyByName } from '@/lib/filterGroupsByName';
+import { formatTimestamp } from '@/lib/documentUtils';
 import { GroupDocumentList } from './GroupDocumentList';
 import type { DateRange } from '@/components/DateRangeFilter';
 
@@ -92,19 +90,6 @@ const GROUP_TYPE_CONFIG: Record<
     emptyMessage: 'ケアマネジャーデータがありません',
   },
 };
-
-// ============================================
-// Timestampフォーマット
-// ============================================
-
-function formatTimestamp(timestamp: Timestamp | undefined): string {
-  if (!timestamp) return '-';
-  try {
-    return format(timestamp.toDate(), 'yyyy/MM/dd', { locale: ja });
-  } catch {
-    return '-';
-  }
-}
 
 // ============================================
 // グループアイテムコンポーネント
