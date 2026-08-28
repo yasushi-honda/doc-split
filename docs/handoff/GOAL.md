@@ -95,6 +95,21 @@ decision-maker明示承認（「ctxは余裕あります。提案内容につい
 
 **本番(kanameone/cocoro)への実際の書き込み実行(canary含む)は本Phase 2b-1の範囲外のまま**。plan Phase 2b-2（`--limit 10`でのcanary実行→canary対象への`classify-drive-export-drift`再実行によるhealthy遷移確認→decision-maker確認のうえ残り全件実行）は別途、番号単位の明示認可を得てから着手する。全ケアマネへの横展開（Phase 3）・cocoroへの適用（Phase 4）・執行後の記録（Phase 5: ADR-0022更新・GOAL.md記録・Issue #811/#823クローズ検討）も未着手。kanameone担当者への報告文書（「修復メカニズムの実装・検証が完了し、実行待ちの状態」）は本セッションでは未作成（次アクション候補）。
 
+## 【完了・2026-08-28】Issue #811/#823 remediation Phase 2b-2: kanameone本番書き込み実行完了（森奈穂美、healthy 33.1%→98.8%）
+
+decision-maker明示承認（AskUserQuestion「kanameone本番canary実行に進む」）を受け、plan Phase 2b-2の手順通りに本番書き込みを実行した。
+
+**手順と結果**（すべてGitHub Actions `Run Operations Script`経由、kanameone環境）:
+1. **classify再実行**（run [33142574732](https://github.com/yasushi-honda/doc-split/actions/runs/33142574732)、鮮度確保のためPhase 2aのplanを使い回さず再取得）: `scanned=762 healthy=273 trashed=202 misplaced=144 blocked:target-path-not-created=143`（要修復489件、`wouldRestoreFolders`0件）
+2. **canary実行**（run [33143014553](https://github.com/yasushi-honda/doc-split/actions/runs/33143014553)、`--limit 10 --expected-count 10`）: `attempted=10 repaired=10 failed=0`
+3. **canary検証**（run [33143254512](https://github.com/yasushi-honda/doc-split/actions/runs/33143254512)、`classify-drive-export-drift`再実行）: canary対象10件のdocIdを個別に照合し、全件`category=healthy`への遷移を確認（plan-crossreview codex High#4指摘対応の検証ステップ、実機で機能）
+4. **残り全件実行**（run [33143783783](https://github.com/yasushi-honda/doc-split/actions/runs/33143783783)、同一plan・`--expected-count 489`・`--limit`なし）: `attempted=476 repaired=476 failed=0 skippedDrift=5 skippedPossibleManualEdit=8`（canary分含め累計失敗0件）。所要時間約47分（1件あたりDrive API呼び出し込みで平均約6秒）
+5. **最終検証classify**（run [33146215032](https://github.com/yasushi-honda/doc-split/actions/runs/33146215032)）: `scanned=764 healthy=755(98.8%) trashed=1 misplaced=8 blocked:target-path-not-created=0`
+
+**skippedPossibleManualEdit=8件（D9の手編集検知ロジックが発動、実行対象から除外）**: このうち7件（misplaced）は2026-08-14T03:09:00〜03:09:15という15秒以内の極めて狭い時間帯にDrive側`modifiedTime`が集中しており、個別の人為編集というよりバッチ処理的な痕跡に見える。1件（trashed）は2026-08-03T07:20:44。git履歴に該当時期の関連コミットなし、原因は未特定のまま。**設計通り「疑わしきは触らない」でfail-closedに除外された結果であり、実害はない**（修復されず現状維持のまま。原因調査・対応要否はdecision-maker/kanameone側の人間判断に委ねる）。最終検証classifyの`misplaced=8`/`trashed=1`はこの8+1件とほぼ一致しており、意図通りの結果。
+
+**関連PR**: なし（コード変更は伴わない実行フェーズ、Phase 2b-1のPR #851で完結済み）。ADR-0022更新・Issue #811/#823クローズ検討（plan記載のPhase 5）は未着手。全ケアマネへの横展開（Phase 3）・cocoroへの適用（Phase 4）も未着手（森奈穂美以外での同種事象の有無は依然未検証）。
+
 ## 【完了・2026-08-27】Issue #811 Phase B: kanameone森奈穂美フォルダ重複の根本原因修正+データ統合(PR #838〜#844)
 
 kanameoneのケアマネフォルダ「森奈穂美」が物理6重複(active1+trashed5)していた根本原因（`functions/src/drive/findOrCreateFolder.ts`が`trashed=false`固定検索のため手動ゴミ箱移動を「存在しない」と誤判定し新規作成し続ける）を修正し、既存重複データを統合。4回の独立診断(grip+codex計4回)で承認された計画（Issue #432の collision-migration フレームワーク流用）に基づき実装。
@@ -282,10 +297,11 @@ cocoro/kanameから、書類（ケアプラン・医療・介護保険証等）�
 
 ## 🔄 中断点（in-flight）
 
-**Issue #811/#823 remediation Phase 2b-2（次セッション再開点）**: `execute-drive-export-repair.ts`はPhase 2b-1でPR #851としてmainへマージ済み・devリハーサル実機確認済み（詳細は上記「Issue #811/#823 remediation Phase 2b-1」節）。次に必要なのは以下のいずれか、decision-maker判断待ち:
-- kanameone本番への実際の書き込み実行（plan `~/.claude/plans/sharded-mapping-squid.md` Phase 2b-2、`--limit 10`でのcanary→検証→残り全件488件）の番号単位明示認可
-- kanameone担当者への報告文書（「修復メカニズムの実装・検証が完了し、実行待ちの状態」）作成
-- 全ケアマネへの横展開（Phase 3）・cocoroへの適用（Phase 4）の要否判断
+**Issue #811/#823 remediation（次セッション再開点）**: Phase 2b-1（PR #851実装マージ・devリハーサル）・Phase 2b-2（kanameone本番書き込み実行、healthy 33.1%→98.8%）とも完了済み（詳細は上記2節参照）。次に必要なのは以下のいずれか、decision-maker判断待ち:
+- kanameone担当者への報告文書作成（今回のセッションで着手予定）
+- 残る非healthy 9件（skippedPossibleManualEdit8+skippedDrift由来の残存分）の原因調査要否判断（2026-08-14T03:09台に集中した謎のバッチ処理痕跡、実害なしのまま放置可能）
+- 全ケアマネへの横展開（Phase 3、森奈穂美以外での同種事象の有無は未検証）・cocoroへの適用（Phase 4）の要否判断
+- Phase 5（ADR-0022更新・Issue #811/#823クローズ検討）
 
 **完了記録**: kanameone backfillマーカー20件滞留の原因調査・修正は完遂した。PR #804（`sweepStuckDriveExports`のrequeuedカウンタ修正）をkanameone/cocoro両環境へデプロイ後（2026-08-06 03:10/03:21）、自然経過での解消をFirestore/Cloud Loggingで継続監視: 20件(04:22 UTC)→9件(04:32〜06:35 UTC、customer-unconfirmed/real-errorの塊をカーソルが順次走査するため一時的に足踏み)→**0件（06:37:41 UTCの`requeued=8, failed=16`実行で末尾のbackfillマーカー群を処理し完全解消、07:02 UTC時点でFirestore実測`{"customer-unconfirmed":218,"real-error":117}`とbackfillカテゴリなしを確認）**。約3.5時間で修正の効果が完全に実証された。
 
