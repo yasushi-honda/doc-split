@@ -51,6 +51,12 @@ Accepted (2026-07-20)
 
 **2段階化に至った回帰の経緯（2026-08-27）**: 初版（無条件trashed込み単一検索）をkanameone本番へデプロイした直後、実エクスポートで顧客「大橋のぶ子」配下の「報告書」フォルダが`AmbiguousFolderError`で失敗した。実データはactive 1件＋過去に整理されたtrashedの残骸1件という構成で、旧コード（`trashed=false`固定）ではtrashedを無視してactiveの1件だけを見つけ問題なく成功していたケースだった。初版の無条件trashed込み検索はこの無関係な残骸まで候補に数えてしまい、Issue #811の対象外だった正常ケースを壊していた。2段階化により、activeで解決できるケースはtrashedの残骸を一切考慮しなくなり、この回帰は解消された。Part A専用の子階層resolver（`functions/src/drive/childFolderResolver.ts`）にも同じ設計だったため同様に2段階化した。
 
+**遡及的データ修復（Issue #823、2026-08-28完了）**: 上記の根本原因修正は今後の新規発生を防止するのみで、修正前に発生していた過去分の破損（driveExportStatusは`exported`のままDrive上ではtrashed/誤配置/配置先フォルダ未作成）は別途遡及修復が必要だった。read-only分類器（`scripts/classify-drive-export-drift.ts`、`isDriveFileNotFoundError()`と同一判定で404/trashed/misplacedを検出）とread-write修復スクリプト（`scripts/execute-drive-export-repair.ts`、既存の`executeDriveExport()`を対象docIdへ逐次直接呼び出す）を新規実装し、devリハーサル・plan-crossreview（grip自白×codex 2巡）・`codex review`5巡を経てkanameoneの「森奈穂美」担当分（729件）へ適用した。修復前は正常状態が33.1%（241件）だったのに対し、canary10件→残り476件の本番実行（失敗0件）を経て、修復後は98.8%まで改善した。
+
+修復ロジックには以下の安全機構を組み込んでいる: ①misplaced修復パスはStorage上の内容を無条件にDrive側へ書き戻すため、Drive側`modifiedTime`が`driveExportedAt`より新しい場合（Drive上で当アプリ以外の経路による更新があった可能性）は対象から除外する（手編集による無言破壊の防止）②plan（分類結果）の鮮度ゲート（既定24時間）③classify〜execute間に対象documentのDrive状態が既に修復済み(healthy)へ変化していた場合、live状態を再検証し無駄な再書き込みを回避する。実行結果、9件（Drive側modifiedTimeが直近だったため上記①で除外）が意図的に未修復のまま残った。Cloud Loggingで該当documentへのdoc-split側Cloud Function実行履歴を確認したが、該当時刻（2026-08-14T03:09台に7件が15秒以内で集中）に該当する実行は一切見つからず、原因はdoc-split側の処理では説明がつかない（Drive側での外部要因が疑われるが未特定）。この9件は安全側に倒して未修復のまま保留し、必要に応じて個別確認する運用とした。
+
+森奈穂美以外のケアマネへの横展開・cocoroテナントへの適用は本対応のスコープ外（同種の破損の有無は未検証）。詳細な設計判断・crossreview対応の経緯は`~/.claude/plans/sharded-mapping-squid.md`、実行記録は`docs/handoff/GOAL.md`「Issue #811/#823 remediation Phase 2b-1/2b-2」節を参照。
+
 ### 5. 同期トリガーは「確認ボタン」押下（`verified` false→true）
 
 documentの`verified`フィールドがfalse→trueになる瞬間を、Cloud Functions側のFirestoreトリガー（`onDocumentWritten('documents/{docId}')`）で検知してエクスポートを開始する。OCR誤読・利用者取り違えが確定する前の情報を外部Driveへ誤って流出させるリスクを、人間のレビュー完了という明示的なゲートで防ぐ。この方式はcocoro側で承認済み。既存の確認フロー（`useDocumentVerification.ts`の`markAsVerified`、3つの呼び出し元）には一切変更を加えない。
