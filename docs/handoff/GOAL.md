@@ -1,5 +1,5 @@
 ---
-updated: 2026-08-28
+updated: 2026-08-29
 ---
 <!-- 前ミッション(dev/kanameone/cocoro環境監査・保守検証)は2026-07-20完遂。全文はdocs/handoff/LATEST.md参照。 -->
 <!-- Google Drive連携Phase1 (MVP)実装ミッションは2026-07-22完了(PR#700マージ)。詳細は本ファイル末尾「Google Drive連携Phase1完遂」節+docs/handoff/LATEST.md参照。 -->
@@ -320,19 +320,33 @@ cocoro/kanameから、書類（ケアプラン・医療・介護保険証等）�
 
 **Issue #811/#823 remediation（次セッション再開点）**: Phase 2b-1（PR #851実装マージ・devリハーサル）・Phase 2b-2（森奈穂美分本番実行、healthy 33.1%→98.8%）・Phase 5（ADR-0022更新PR #854マージ・Issue #811/#823クローズ）・**Phase 3（kanameone全ケアマネへ横展開、healthy 60.8%→99.0%）**・**Phase 4（cocoroはDrive未接続のため対象外と確定）**、全て完了済み（詳細は上記「Issue #811/#823 remediation Phase 3」節参照）。**kanameoneのDrive export破損document remediationはこれで実質完了**。
 
-**残り23件（trashed9+misplaced11+target-path-not-created3）の原因調査（2026-08-28実施・打ち切り）**: `skippedPossibleManualEdit`は最終的に21件（森奈穂美分8件+他ケアマネ分13件）、複数日（8/3・8/4・8/5・8/12・8/14・8/16）に分散し数秒〜数十秒の小さなクラスタを形成。複数クラスタでCloud Logging（kanameone、`gcloud logging read`）を確認したが、該当時刻にdoc-split側のCloud Function実行履歴が一切見つからなかった（`processocr`/`checkgmailattachments`の通常ポーリングのみ）。**doc-split側の処理では説明がつかない=Drive側での外部要因（人間操作かGoogle内部処理か不明）の可能性が高いという結論を複数クラスタで再現・補強**。これ以上の特定にはGoogle Workspace管理者監査ログ（Drive Activity API）へのアクセスが必要なため調査を打ち切った。他blocked21件（segment-unresolvable17/ambiguous-path3/customer-unconfirmed1）は元々execute-drive-export-repair.tsの対象外（フォルダ構造の曖昧性解消・顧客確定という別種の人間作業が必要）。
-
-**kanameone担当者への報告文書**: `/private/tmp/.../scratchpad/brief-20260828-drive-repair-report.html`（html-briefスキルで作成、実機検証済み）として作成済みだが、**Phase 3の発見（森奈穂美固有ではなくkanameone全社的な問題だった）を反映しておらず、送付前に内容の書き直しが必要**（送付はdecision-maker自身が行う）。
-
-**次に必要なのは以下のいずれか、decision-maker判断待ち**:
-- 報告文書の内容更新（Phase 3の全社的な規模・結果を反映）→送付
-- 残存23件+その他blocked21件（計44件）の個別対応要否判断
+**残り23件（trashed9+misplaced11+target-path-not-created3）の原因調査（2026-08-28実施・打ち切り）**: `skippedPossibleManualEdit`は最終的に21件（森奈穂美分8件+他ケアマネ分13件）、複数日（8/3・8/4・8/5・8/12・8/14・8/16）に分散し数秒〜数十秒の小さなクラスタを形成。複数クラスタでCloud Logging（kanameone、`gcloud logging read`）を確認したが、該当時刻にdoc-split側のCloud Function実行履歴が一切見つからなかった（`processocr`/`checkgmailattachments`の通常ポーリングのみ）。**doc-split側の処理では説明がつかない=Drive側での外部要因（人間操作かGoogle内部処理か不明）の可能性が高いという結論を複数クラスタで再現・補強**。これ以上の特定にはGoogle Workspace管理者監査ログ（Drive Activity API）へのアクセスが必要なため調査を打ち切った。他blocked21件（segment-unresolvable17/ambiguous-path3/customer-unconfirmed1）は元々execute-drive-export-repair.tsの対象外（フォルダ構造の曖昧性解消・顧客確定という別種の人間作業が必要）。**→ 2026-08-29に実体解明済み、詳細は下記「残存44件(→49件)の実態解明」節参照**。
 
 **完了記録**: kanameone backfillマーカー20件滞留の原因調査・修正は完遂した。PR #804（`sweepStuckDriveExports`のrequeuedカウンタ修正）をkanameone/cocoro両環境へデプロイ後（2026-08-06 03:10/03:21）、自然経過での解消をFirestore/Cloud Loggingで継続監視: 20件(04:22 UTC)→9件(04:32〜06:35 UTC、customer-unconfirmed/real-errorの塊をカーソルが順次走査するため一時的に足踏み)→**0件（06:37:41 UTCの`requeued=8, failed=16`実行で末尾のbackfillマーカー群を処理し完全解消、07:02 UTC時点でFirestore実測`{"customer-unconfirmed":218,"real-error":117}`とbackfillカテゴリなしを確認）**。約3.5時間で修正の効果が完全に実証された。
 
 **Issue #794（③kanameone報告PDFのType3フォント文字消失）**: 2026-08-06 PR #798マージによりクローズ済み。詳細は上記「kanameoneからの相談3件対応」節③参照。
 
 cocoro側Drive連携Phase C（クライアント自身のOAuth接続）は外部依存待ち（継続、変更なし）。
+
+## 【完了・2026-08-29】残存44件(→49件)の実態解明+kanameone担当者への確認依頼を報告文書に反映(送付は未実施)
+
+上記「次に必要なのは以下のいずれか」の両方に対応した。**kanameone側でDrive export破損documentが継続的に発生していないか、`classify-drive-export-drift`を`--care-manager`省略でテナント全体に対し再実行**（GitHub Actions run [33183923836](https://github.com/yasushi-honda/doc-split/actions/runs/33183923836)）したところ、Phase 3最終確認（8/28、44件）からわずか約1.5時間で残存が49件（trashed9+misplaced14+target-path-not-created5=28件、他blocked21件=segment-unresolvable17+ambiguous-path3+customer-unconfirmed1）へ自然増していることを確認。**新たに`wouldRestoreFolders`1件（「ケアプラン」フォルダ、影響3書類）も検出**（Phase 3実行時にはなかった別インスタンス）。
+
+**segment-unresolvable 17件の実体を特定**: 全件`FuriganaMissingError`で、集約すると4顧客（佐藤綾子10件/牧野美雪担当・津田ヒデ子4件/宮崎幸代担当・加藤和子2件/渡邉幸子担当・渡辺淳次1件/平出勝己担当）のフリガナ未登録が原因と判明。kanameoneのDriveフォルダテンプレートは`customer: furiganaInitialSpaceName`（フリガナ頭文字であいうえお順フォルダ分類、意図的設計）を使用しており、代替設定`furiganaFallback: useNameInitial`はグローバル設定のため影響範囲が広く将来登録者全体に及ぶうえ漢字頭文字は五十音順と一致しないため、正攻法（kanameone側にフリガナ確認を依頼）を採用。
+
+**ambiguous-path 3件 + target-path-not-created 5件（計8件、全て平出勝己担当）の実体を特定**: read-only調査（`investigate-issue811-root-cause --list-children`/`--folder-ids`）で、対象顧客配下の「ケアプラン」フォルダがtrashed状態で2つ存在（active無し）と判明。metadata取得の結果、**両フォルダとも平出勝己さん本人（`katsumihiraide@kanameone.com`）が手動で作成→翌日ゴミ箱移動した実際のDrive操作**（8/18作成→8/19移動、8/19作成→8/20移動）であり、システムの不具合ではないことを確認。これは③（D9除外23件）の「原因不明のDrive側変更」判断が妥当だったことの実証でもある。書き込み系操作（復元・統合、マスタ修正）は一切実施していない。
+
+**kanameone担当者への報告文書を更新**（`brief-20260828-drive-repair-report.html`、Playwright MCPで再レンダリング確認済み）: Phase 3の全社的結果（60.8%→99.0%）に加え、上記2件の具体的な確認依頼（フリガナ4名の表、平出勝己さんの「ケアプラン」フォルダ確認依頼）を追加。**送付はdecision-maker自身が実施（未送付）**。
+
+**残る21件のうち customer-unconfirmed 1件**（牧野美雪担当）は通常のdoc-split UI操作（顧客確定）で解消見込み、Issue #774の`customerAmbiguityGate.ts`と関連。**D9除外23〜28件**（trashed/misplaced）と**wouldRestoreFolders新規1件**は「様子見・現状維持」でdecision-maker確定済み（原因不明のDrive側変更を無言で上書きしない設計判断）。
+
+## 【完了・2026-08-29】未使用の/adminスタブ削除+formatTimestamp重複統合（PR #858、Driveミッションとは別件）
+
+着手可能なGitHub Issueが0件（#774/#251/#238いずれも issue本文明記のトリガー未発火、#714はpostponed）だったため、decision-maker承認「ROIが良ければ進めて」を受けExploreエージェントで低コスト高ROIな未Issue化の改善点を探索。3候補中2件（低コスト・高ROI）に着手:
+- 未使用の`/admin`ルート・`AdminPage.tsx`削除（4タブ全てTODOのみの空実装、ナビゲーション未接続で約7ヶ月放置。機能は既にMastersPage/SettingsPage/ErrorsPageに実装済み）
+- `formatTimestamp`のロジック重複4箇所（GroupList/DocumentDetailModal/DocumentsPage/AliasLearningHistoryModal）を既存共通実装（`documentUtils.ts`）への呼び出しに統合。デフォルトフォーマット文字列が異なる箇所は呼び出し側で明示指定し挙動を維持
+
+tsc/lint/build/test（38ファイル557件）全PASS、Playwright MCPで実機確認（`/admin`リダイレクト・顧客別タブ・書類詳細モーダルの日付表示）。large tier（6ファイル）のためCLAUDE.md CRITICAL規定に従い`codex review`を medium effort（push前）・high effort+`--strict-config`（PR作成後）の2回実施+`pr-review-toolkit:code-reviewer`セカンドオピニオン、いずれも指摘0件。CI全PASS・ブラウザ確認証跡をPRコメントに記録・`ui-verified`ラベル付与のうえ、番号単位の明示認可を得てマージ（`f7186a2e`）。3件目の候補（`updateDoc(...,  as any)`重複3箇所の型安全性ヘルパー化）は緊急性低いため見送り。
 
 ## Drive連携Phase D: Stage D完了（2026-07-31、decision-maker「Drive Phase D進めて」で着手）
 
