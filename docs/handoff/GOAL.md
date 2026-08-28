@@ -108,7 +108,28 @@ decision-maker明示承認（AskUserQuestion「kanameone本番canary実行に進
 
 **skippedPossibleManualEdit=8件（D9の手編集検知ロジックが発動、実行対象から除外）**: このうち7件（misplaced）は2026-08-14T03:09:00〜03:09:15という15秒以内の極めて狭い時間帯にDrive側`modifiedTime`が集中しており、個別の人為編集というよりバッチ処理的な痕跡に見える。1件（trashed）は2026-08-03T07:20:44。git履歴に該当時期の関連コミットなし、原因は未特定のまま。**設計通り「疑わしきは触らない」でfail-closedに除外された結果であり、実害はない**（修復されず現状維持のまま。原因調査・対応要否はdecision-maker/kanameone側の人間判断に委ねる）。最終検証classifyの`misplaced=8`/`trashed=1`はこの8+1件とほぼ一致しており、意図通りの結果。
 
-**関連PR**: なし（コード変更は伴わない実行フェーズ、Phase 2b-1のPR #851で完結済み）。ADR-0022更新・Issue #811/#823クローズ検討（plan記載のPhase 5）は未着手。全ケアマネへの横展開（Phase 3）・cocoroへの適用（Phase 4）も未着手（森奈穂美以外での同種事象の有無は依然未検証）。
+**関連PR**: なし（コード変更は伴わない実行フェーズ、Phase 2b-1のPR #851で完結済み）。
+
+## 【完了・2026-08-28】Issue #811/#823 remediation Phase 3: kanameone全ケアマネへ横展開（healthy 60.8%→99.0%）+ Phase 4: cocoroは対象外と確定 + Phase 5完了
+
+Phase 2b-2完了後、decision-maker指示「今できる事はありますか？」を受け、森奈穂美以外のケアマネで同種の破損が無いかをread-only（`classify-drive-export-drift --care-manager`指定なし=全ケアマネ対象）で確認したところ、**kanameone16人のケアマネ全員に同種の破損が広がっている**ことが判明した（scanned=4245、healthy=2580=60.8%のみ。森奈穂美は今回の修復で764/776=98.5%健全化済みだったが、他15人は軒並み正常率50〜70%程度）。当初の想定（森奈穂美固有の問題）を覆す規模の発見であり、decision-maker承認を得てその場でPhase 3（kanameone全体への横展開）に着手した。
+
+**手順と結果**（すべてGitHub Actions `Run Operations Script`経由、kanameone環境）:
+1. **全体classify**（run [33158267872](https://github.com/yasushi-honda/doc-split/actions/runs/33158267872)、`--care-manager`省略でテナント全体対象）: `scanned=4245 healthy=2580 trashed=18 misplaced=611 blocked:target-path-not-created=1015`（他blocked21件除く）
+2. **全体dry-run**（run [33160629731](https://github.com/yasushi-honda/doc-split/actions/runs/33160629731)）: 候補1644件確定、storage未確認による除外0件
+3. **canary実行**（run [33160835936](https://github.com/yasushi-honda/doc-split/actions/runs/33160835936)、`--limit 10`）: **D7ゲート発動、exit 1で書き込みゼロ停止**。森奈穂美単独の時と異なり、`wouldRestoreFolders`が3件（ゴミ箱内フォルダ「未判定」×2・「ケアプラン」×1、影響document計4件）非空だったため。decision-makerへ内容を提示し、AskUserQuestionで復元の明示承認を取得
+4. **canary再実行**（run [33162398461](https://github.com/yasushi-honda/doc-split/actions/runs/33162398461)、`--acknowledge-restore-folders`付与）: `attempted=10 repaired=10 failed=0`
+5. **canary検証**（run [33162657395](https://github.com/yasushi-honda/doc-split/actions/runs/33162657395)）: canary対象10件全件`healthy`遷移を個別docId照合で確認
+6. **残り全件実行**（run [33164719730](https://github.com/yasushi-honda/doc-split/actions/runs/33164719730)、同一plan・`--expected-count 1644`・`--limit`なし）: `attempted=1613 repaired=1613 failed=0 skippedDrift=10 skippedPossibleManualEdit=21`（累計失敗0件）。所要時間約3時間15分（1613件、平均約7.2秒/件）
+7. **最終検証classify**（run [33178487794](https://github.com/yasushi-honda/doc-split/actions/runs/33178487794)）: `scanned=4257 healthy=4213(99.0%) trashed=9 misplaced=11 blocked:target-path-not-created=3`（他blocked21件は元々対象外のまま）
+
+**skippedPossibleManualEdit=21件（D9発動、実行対象から除外）**: 森奈穂美分の8件を含む形で全体では21件。日付は2026-08-03/08-04/08-05/08-12/08-14/08-16の複数日に分散し、多くが数秒〜数十秒以内の小さなクラスタ（例: 08-16T00:00:09〜00:00:35の3件）を形成している。うち2026-08-16T00:00台のクラスタについてCloud Loggingを追加確認したが、同時刻に稼働していたのは通常の`processocr`/`checkgmailattachments`の毎分ポーリングのみで、Drive export関連のCloud Function実行は一切見つからなかった（森奈穂美分8件で先に確認した結果と同じ結論が別クラスタでも再現）。**doc-split側の処理では説明がつかない=Drive側の外部要因の可能性が高いという結論を複数クラスタで補強**。これ以上の特定にはGoogle Workspace管理者監査ログが必要なため調査は打ち切り、21件は安全側に未修復のまま保留。
+
+**Phase 4（cocoro）は対象外と確定**: cocoro向けにも同じread-only classifyを実行（run [33164998116](https://github.com/yasushi-honda/doc-split/actions/runs/33164998116)）したところ、`settings/drive`のrootFolderId/templateが未設定でエラー終了。**cocoroはGoogle Drive連携自体を未接続**（Phase C未完了、既知の状態）のため、そもそもDrive書き出しが一度も発生しておらず、今回の問題とは無関係と確定した。
+
+**Phase 5（ADR-0022更新・Issue #811/#823クローズ）は本Phase 3着手前に完了済み**（PR #854、Issue #811/#823クローズコメント参照）。Phase 3の結果を反映したADR追記・GOAL.md記録の追加更新は本セクション自体で対応。
+
+**kanameone担当者への報告文書は、本Phase 3の発見（森奈穂美固有ではなくテナント全体の問題だった）を反映して書き直しが必要**（Phase 2b-2完了時点で作成した`brief-20260828-drive-repair-report.html`は森奈穂美限定の内容のまま、送付前に要更新）。
 
 ## 【完了・2026-08-27】Issue #811 Phase B: kanameone森奈穂美フォルダ重複の根本原因修正+データ統合(PR #838〜#844)
 
@@ -297,15 +318,15 @@ cocoro/kanameから、書類（ケアプラン・医療・介護保険証等）�
 
 ## 🔄 中断点（in-flight）
 
-**Issue #811/#823 remediation（次セッション再開点）**: Phase 2b-1（PR #851実装マージ・devリハーサル）・Phase 2b-2（kanameone本番書き込み実行、healthy 33.1%→98.8%）・Phase 5（ADR-0022更新PR #854マージ・Issue #811/#823クローズ）とも完了済み（詳細は上記各節参照）。
+**Issue #811/#823 remediation（次セッション再開点）**: Phase 2b-1（PR #851実装マージ・devリハーサル）・Phase 2b-2（森奈穂美分本番実行、healthy 33.1%→98.8%）・Phase 5（ADR-0022更新PR #854マージ・Issue #811/#823クローズ）・**Phase 3（kanameone全ケアマネへ横展開、healthy 60.8%→99.0%）**・**Phase 4（cocoroはDrive未接続のため対象外と確定）**、全て完了済み（詳細は上記「Issue #811/#823 remediation Phase 3」節参照）。**kanameoneのDrive export破損document remediationはこれで実質完了**。
 
-**残り9件の原因調査（2026-08-28実施・打ち切り）**: 2026-08-14T03:09台に7件が15秒以内に集中していた謎のバッチ処理痕跡について、Cloud Logging（kanameone、`gcloud logging read`）で該当4docIdを個別に確認したが、該当時刻にdoc-split側のCloud Function実行履歴が一切見つからなかった（直近ログは8/5〜8/6の書類取込・インデックス処理のみ）。**doc-split側の処理では説明がつかない=Drive側での外部要因（人間操作かGoogle内部処理か不明）の可能性が高い**という結論に至り、これ以上の特定にはGoogle Workspace管理者監査ログ（Drive Activity API）へのアクセスが必要なためここで調査を打ち切った。ADR-0022・Issue #823クローズコメントにこの結論を記録済み。9件は実害なく安全側に保留されたまま。
+**残り23件（trashed9+misplaced11+target-path-not-created3）の原因調査（2026-08-28実施・打ち切り）**: `skippedPossibleManualEdit`は最終的に21件（森奈穂美分8件+他ケアマネ分13件）、複数日（8/3・8/4・8/5・8/12・8/14・8/16）に分散し数秒〜数十秒の小さなクラスタを形成。複数クラスタでCloud Logging（kanameone、`gcloud logging read`）を確認したが、該当時刻にdoc-split側のCloud Function実行履歴が一切見つからなかった（`processocr`/`checkgmailattachments`の通常ポーリングのみ）。**doc-split側の処理では説明がつかない=Drive側での外部要因（人間操作かGoogle内部処理か不明）の可能性が高いという結論を複数クラスタで再現・補強**。これ以上の特定にはGoogle Workspace管理者監査ログ（Drive Activity API）へのアクセスが必要なため調査を打ち切った。他blocked21件（segment-unresolvable17/ambiguous-path3/customer-unconfirmed1）は元々execute-drive-export-repair.tsの対象外（フォルダ構造の曖昧性解消・顧客確定という別種の人間作業が必要）。
 
-**kanameone担当者への報告文書**: `/private/tmp/.../scratchpad/brief-20260828-drive-repair-report.html`（html-briefスキルで作成、実機検証済み）として作成済み。**送付はdecision-maker自身が行う**（送付操作はexecutor権限外）。
+**kanameone担当者への報告文書**: `/private/tmp/.../scratchpad/brief-20260828-drive-repair-report.html`（html-briefスキルで作成、実機検証済み）として作成済みだが、**Phase 3の発見（森奈穂美固有ではなくkanameone全社的な問題だった）を反映しておらず、送付前に内容の書き直しが必要**（送付はdecision-maker自身が行う）。
 
 **次に必要なのは以下のいずれか、decision-maker判断待ち**:
-- 報告文書の送付（内容は送信可能と判断済み）
-- 全ケアマネへの横展開（Phase 3、森奈穂美以外での同種事象の有無は未検証）・cocoroへの適用（Phase 4）の要否判断
+- 報告文書の内容更新（Phase 3の全社的な規模・結果を反映）→送付
+- 残存23件+その他blocked21件（計44件）の個別対応要否判断
 
 **完了記録**: kanameone backfillマーカー20件滞留の原因調査・修正は完遂した。PR #804（`sweepStuckDriveExports`のrequeuedカウンタ修正）をkanameone/cocoro両環境へデプロイ後（2026-08-06 03:10/03:21）、自然経過での解消をFirestore/Cloud Loggingで継続監視: 20件(04:22 UTC)→9件(04:32〜06:35 UTC、customer-unconfirmed/real-errorの塊をカーソルが順次走査するため一時的に足踏み)→**0件（06:37:41 UTCの`requeued=8, failed=16`実行で末尾のbackfillマーカー群を処理し完全解消、07:02 UTC時点でFirestore実測`{"customer-unconfirmed":218,"real-error":117}`とbackfillカテゴリなしを確認）**。約3.5時間で修正の効果が完全に実証された。
 
