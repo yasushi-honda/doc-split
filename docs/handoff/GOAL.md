@@ -336,7 +336,7 @@ cocoro側Drive連携Phase C（クライアント自身のOAuth接続）は外部
 
 **ambiguous-path 3件 + target-path-not-created 5件（計8件、全て平出勝己担当）の実体を特定**: read-only調査（`investigate-issue811-root-cause --list-children`/`--folder-ids`）で、対象顧客配下の「ケアプラン」フォルダがtrashed状態で2つ存在（active無し）と判明。metadata取得の結果、**両フォルダとも平出勝己さん本人（`katsumihiraide@kanameone.com`）が手動で作成→翌日ゴミ箱移動した実際のDrive操作**（8/18作成→8/19移動、8/19作成→8/20移動）であり、システムの不具合ではないことを確認。これは③（D9除外23件）の「原因不明のDrive側変更」判断が妥当だったことの実証でもある。書き込み系操作（復元・統合、マスタ修正）は一切実施していない。
 
-**kanameone担当者への報告文書を更新**（`brief-20260828-drive-repair-report.html`、Playwright MCPで再レンダリング確認済み）: Phase 3の全社的結果（60.8%→99.0%）に加え、上記2件の具体的な確認依頼（フリガナ4名の表、平出勝己さんの「ケアプラン」フォルダ確認依頼）を追加。**送付はdecision-maker自身が実施（未送付）**。
+**kanameone担当者への報告文書を更新**（`brief-20260828-drive-repair-report.html`、Playwright MCPで再レンダリング確認済み）: Phase 3の全社的結果（60.8%→99.0%）に加え、上記2件の具体的な確認依頼（フリガナ4名の表、平出勝己さんの「ケアプラン」フォルダ確認依頼）を追加。**decision-makerが2026-08-29に先方へ送付済み**。**次のアクション**: kanameone側からの回答待ち（①4名分のフリガナ ②平出勝己さんの「ケアプラン」フォルダ整理方針）。回答があれば①はマスタへのフリガナ登録、②は先方の指示に従いフォルダ復元/統合を検討（executor側での無断実行はしない）。
 
 **残る21件のうち customer-unconfirmed 1件**（牧野美雪担当）は通常のdoc-split UI操作（顧客確定）で解消見込み、Issue #774の`customerAmbiguityGate.ts`と関連。**D9除外23〜28件**（trashed/misplaced）と**wouldRestoreFolders新規1件**は「様子見・現状維持」でdecision-maker確定済み（原因不明のDrive側変更を無言で上書きしない設計判断）。
 
