@@ -1053,6 +1053,10 @@ describe('Firestore Security Rules', () => {
           driveExportedAt: new Date(),
           driveExportError: null,
           driveExportRunId: 'run-id-abc',
+          // 複数人記載検出 (PR-A/PR-B、2026-08-30): getReprocessClearFields()が無条件で
+          // deleteField()する対象。preserveDistributionFieldsの値によらず常にクリアされる。
+          multiCustomerDetected: true,
+          multiCustomerCount: 2,
         });
       });
 
@@ -1102,6 +1106,8 @@ describe('Firestore Security Rules', () => {
           driveExportedAt: deleteField(),
           driveExportError: deleteField(),
           driveExportRunId: deleteField(),
+          multiCustomerDetected: deleteField(),
+          multiCustomerCount: deleteField(),
           // 値をリセット
           customerConfirmed: false,
           confirmedBy: null,
@@ -1182,6 +1188,55 @@ describe('Firestore Security Rules', () => {
       await assertFails(updateDoc(docRef, { driveExportRunId: 'forged-run-id' }));
       await assertFails(updateDoc(docRef, { driveExportedAt: new Date() }));
       await assertFails(updateDoc(docRef, { driveExportError: 'forged error' }));
+    });
+
+    it('複数人記載検出フィールド(multiCustomerDetected/multiCustomerCount)への新規値の上書きは拒否され、削除(deleteField)のみ許可される(PR-A/PR-B、2026-08-30)', async () => {
+      // getReprocessClearFields()はこれらをdeleteField()する用途のみで、値を新規設定・
+      // 上書きする経路はFEに存在しない。ホワイトリスト登録ユーザーがmultiCustomerDetected:
+      // trueを偽装できると、実際には複数人記載でない書類にバッジ・フィルターを誤誘導できる。
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'documents', 'doc-multi-customer-fields'), {
+          fileName: 'test.pdf',
+          status: 'processed',
+          verified: true,
+          multiCustomerDetected: true,
+          multiCustomerCount: 2,
+        });
+      });
+
+      // 同一RulesTestContextから.firestore()を複数回呼ぶと
+      // 「Firestore has already been started and its settings can no longer be changed」
+      // で失敗するため、一度だけ取得して使い回す(他のテストにあるdocRef単発取得パターンとの相違点)。
+      const normalFirestore = normalUser.firestore();
+      const docRef = doc(normalFirestore, 'documents', 'doc-multi-customer-fields');
+      // 値の新規設定・上書きは拒否される
+      await assertFails(updateDoc(docRef, { multiCustomerDetected: false }));
+      await assertFails(updateDoc(docRef, { multiCustomerCount: 5 }));
+
+      // フィールド不在のdocへの新規注入(偽装)も拒否される
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'documents', 'doc-multi-customer-forge'), {
+          fileName: 'test2.pdf',
+          status: 'processed',
+          verified: true,
+        });
+      });
+      const forgeDocRef = doc(normalFirestore, 'documents', 'doc-multi-customer-forge');
+      await assertFails(updateDoc(forgeDocRef, { multiCustomerDetected: true, multiCustomerCount: 2 }));
+
+      // 削除(deleteField)は許可される
+      await assertSucceeds(
+        updateDoc(docRef, { multiCustomerDetected: deleteField(), multiCustomerCount: deleteField() })
+      );
+      let afterData: Record<string, unknown> | undefined;
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        const afterSnap = await getDoc(doc(context.firestore(), 'documents', 'doc-multi-customer-fields'));
+        afterData = afterSnap.data();
+      });
+      expect('multiCustomerDetected' in (afterData ?? {})).to.equal(false);
+      expect('multiCustomerCount' in (afterData ?? {})).to.equal(false);
     });
 
     it('driveFileIdの削除(deleteField)はdriveExportStatus等の他4フィールドと異なり拒否される(様子見#47対応、2026-07-22)', async () => {

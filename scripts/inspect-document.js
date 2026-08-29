@@ -89,6 +89,13 @@ function summarize(doc) {
     driveExportedAt: tsToIso(d.driveExportedAt),
     driveExportError: d.driveExportError,
     driveExportRunId: d.driveExportRunId,
+    // 複数顧客FAX複製機能(GOAL.md D4)。従来summarize()に未収録だったギャップを
+    // PR-A/PR-B(複数人記載FAX、2026-08-30)対応時に補完。
+    distributionId: d.distributionId,
+    // 複数人記載検出(PR-A/PR-B、2026-08-30)。multiCustomerDetectionフラグ無効テナントでは
+    // フィールド自体が存在しないためundefinedになる。
+    multiCustomerDetected: d.multiCustomerDetected,
+    multiCustomerCount: d.multiCustomerCount,
   };
 }
 
