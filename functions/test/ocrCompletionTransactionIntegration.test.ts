@@ -19,6 +19,7 @@ import * as admin from 'firebase-admin';
 import { cleanupCollections } from './helpers/cleanupEmulator';
 import { applyOcrCompletionTransaction } from '../src/ocr/ocrProcessor';
 import { buildOcrExtractionUpdatePayload } from '../src/ocr/ocrUpdatePayloadBuilder';
+import { buildMultiCustomerDetectionFields } from '../../shared/multiCustomerDetection';
 import type {
   CustomerExtractionResult,
   DocumentExtractionResult,
@@ -158,6 +159,7 @@ describe('applyOcrCompletionTransaction (複数顧客FAX複製機能 AC-b/AC-c)'
       pageResults,
       ocrExcerpt: 'excerpt',
       faxDuplicationEnabled: true,
+      multiCustomerDetectionEnabled: false,
       tokenCounts: { inputTokens: 10, outputTokens: 5, thinkingTokens: 0, pagesProcessed: 1 },
     });
 
@@ -216,6 +218,7 @@ describe('applyOcrCompletionTransaction (複数顧客FAX複製機能 AC-b/AC-c)'
       pageResults,
       ocrExcerpt: 'excerpt',
       faxDuplicationEnabled: true,
+      multiCustomerDetectionEnabled: false,
       tokenCounts: { inputTokens: 10, outputTokens: 5, thinkingTokens: 0, pagesProcessed: 1 },
     });
 
@@ -259,6 +262,7 @@ describe('applyOcrCompletionTransaction (複数顧客FAX複製機能 AC-b/AC-c)'
       pageResults,
       ocrExcerpt: 'excerpt',
       faxDuplicationEnabled: false,
+      multiCustomerDetectionEnabled: false,
       tokenCounts: { inputTokens: 10, outputTokens: 5, thinkingTokens: 0, pagesProcessed: 1 },
     });
 
@@ -302,6 +306,7 @@ describe('applyOcrCompletionTransaction (複数顧客FAX複製機能 AC-b/AC-c)'
       pageResults,
       ocrExcerpt: 'excerpt',
       faxDuplicationEnabled: true,
+      multiCustomerDetectionEnabled: false,
       tokenCounts: { inputTokens: 10, outputTokens: 5, thinkingTokens: 0, pagesProcessed: 1 },
     });
 
@@ -343,6 +348,7 @@ describe('applyOcrCompletionTransaction (複数顧客FAX複製機能 AC-b/AC-c)'
       pageResults,
       ocrExcerpt: 'excerpt',
       faxDuplicationEnabled: true,
+      multiCustomerDetectionEnabled: false,
       tokenCounts: { inputTokens: 10, outputTokens: 5, thinkingTokens: 0, pagesProcessed: 1 },
     });
 
@@ -354,5 +360,126 @@ describe('applyOcrCompletionTransaction (複数顧客FAX複製機能 AC-b/AC-c)'
     expect(updated.customerName).to.equal('人間が選択した顧客');
     expect(updated.confirmedBy, '確定者の監査証跡が消えないこと').to.equal('admin-uid-1');
     expect(updated.distributionId, 'distributionIdは付与されない').to.equal(undefined);
+  });
+});
+
+describe('applyOcrCompletionTransaction (複数人記載検出 PR-A、multiCustomerDetectionEnabledの消去挙動)', () => {
+  beforeEach(async () => {
+    await cleanupCollections(db, COLLECTIONS_TO_CLEAN);
+  });
+
+  it('flag ONで検出済みのdocをflag OFFで再処理すると、古いmultiCustomerDetected/multiCustomerCountが消去される(codex review P1指摘対応)', async () => {
+    const docId = 'stale-detection-doc';
+    const docRef = await seedProcessingDoc(docId, {
+      multiCustomerDetected: true,
+      multiCustomerCount: 2,
+    });
+
+    const customerResult = twoExactCandidatesResult();
+
+    await applyOcrCompletionTransaction({
+      db,
+      docRef,
+      docId,
+      ownershipExpectation: OWNERSHIP,
+      extractionFields: buildExtractionFields(customerResult),
+      customerCandidates: customerResult.candidates,
+      sameNameCollisionNames: new Set(),
+      fileDateFormatted: dateResult.formattedDate ?? undefined,
+      savedOcrResult: 'raw ocr text (reprocessed after flag off)',
+      pageResults,
+      ocrExcerpt: 'excerpt',
+      faxDuplicationEnabled: false,
+      multiCustomerDetectionEnabled: false,
+      tokenCounts: { inputTokens: 10, outputTokens: 5, thinkingTokens: 0, pagesProcessed: 1 },
+    });
+
+    const updated = (await docRef.get()).data()!;
+    expect('multiCustomerDetected' in updated, '古い検出フラグがdeleteFieldで消去されること').to.equal(false);
+    expect('multiCustomerCount' in updated, '古い検出人数がdeleteFieldで消去されること').to.equal(false);
+  });
+
+  it('flag ONのまま再処理される場合、multiCustomerDetected/multiCustomerCountは最新のOCR結果で上書きされる(消去ロジックは発火しない)', async () => {
+    const docId = 'still-on-doc';
+    const docRef = await seedProcessingDoc(docId, {
+      multiCustomerDetected: true,
+      multiCustomerCount: 2,
+    });
+
+    // 再処理でexact候補が1件のみに変わったケース(前回2件検出→今回は1件のみ)
+    const customerResult: CustomerExtractionResult = {
+      bestMatch: { id: 'cust-a', name: '田中太郎', score: 100, matchType: 'exact', isDuplicate: false },
+      candidates: [{ id: 'cust-a', name: '田中太郎', score: 100, matchType: 'exact', isDuplicate: false }],
+      hasMultipleCandidates: false,
+      needsManualSelection: false,
+    };
+    // multiCustomerFieldsの計算・マージはapplyOcrCompletionTransaction()の責務ではなく
+    // 呼出元(ocrProcessor.tsのprocessDocument())が行う設計(PR-A)。本testはprocessDocument()
+    // を経由しないため、実際の呼出元と同じ手順を明示的に再現する。
+    const multiCustomerFields = buildMultiCustomerDetectionFields(
+      customerResult.candidates.map((c) => ({
+        customerId: c.id,
+        customerName: c.name,
+        score: c.score,
+        matchType: c.matchType,
+        isDuplicate: c.isDuplicate,
+      })),
+      new Set(),
+      true
+    );
+
+    await applyOcrCompletionTransaction({
+      db,
+      docRef,
+      docId,
+      ownershipExpectation: OWNERSHIP,
+      extractionFields: { ...buildExtractionFields(customerResult), ...multiCustomerFields },
+      customerCandidates: customerResult.candidates,
+      sameNameCollisionNames: new Set(),
+      fileDateFormatted: dateResult.formattedDate ?? undefined,
+      savedOcrResult: 'raw ocr text (reprocessed, still flag on)',
+      pageResults,
+      ocrExcerpt: 'excerpt',
+      faxDuplicationEnabled: false,
+      multiCustomerDetectionEnabled: true,
+      tokenCounts: { inputTokens: 10, outputTokens: 5, thinkingTokens: 0, pagesProcessed: 1 },
+    });
+
+    const updated = (await docRef.get()).data()!;
+    expect(updated.multiCustomerDetected, '最新のOCR結果(候補1件)に基づきfalseへ更新される').to.equal(false);
+    expect(updated.multiCustomerCount, '最新の候補数(1件)へ更新される').to.equal(1);
+  });
+
+  it('flag OFFかつdocが元々multiCustomerDetectedを持たない場合、余計な消去書込みは発生しない(freshDataにフィールドが無ければcleanupは空)', async () => {
+    const docId = 'never-detected-doc';
+    const docRef = await seedProcessingDoc(docId);
+
+    const customerResult: CustomerExtractionResult = {
+      bestMatch: { id: 'cust-a', name: '田中太郎', score: 100, matchType: 'exact', isDuplicate: false },
+      candidates: [{ id: 'cust-a', name: '田中太郎', score: 100, matchType: 'exact', isDuplicate: false }],
+      hasMultipleCandidates: false,
+      needsManualSelection: false,
+    };
+
+    await applyOcrCompletionTransaction({
+      db,
+      docRef,
+      docId,
+      ownershipExpectation: OWNERSHIP,
+      extractionFields: buildExtractionFields(customerResult),
+      customerCandidates: customerResult.candidates,
+      sameNameCollisionNames: new Set(),
+      fileDateFormatted: dateResult.formattedDate ?? undefined,
+      savedOcrResult: 'raw ocr text',
+      pageResults,
+      ocrExcerpt: 'excerpt',
+      faxDuplicationEnabled: false,
+      multiCustomerDetectionEnabled: false,
+      tokenCounts: { inputTokens: 10, outputTokens: 5, thinkingTokens: 0, pagesProcessed: 1 },
+    });
+
+    const updated = (await docRef.get()).data()!;
+    expect('multiCustomerDetected' in updated, 'キー自体が書き込まれないこと(cocoro/devの挙動不変)').to.equal(false);
+    expect('multiCustomerCount' in updated).to.equal(false);
   });
 });

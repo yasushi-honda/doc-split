@@ -29,9 +29,21 @@
  * 完全に迂回してしまう。呼出元が`sameNameCollisionNames`(同名マスターが2件以上存在する名前の
  * 集合、`shared/customerIdentity.ts`の`findSameNameCollisionNames()`で計算)を渡し、
  * `isDuplicate`フラグに依存せず候補自体を除外することで根本から塞ぐ。
+ *
+ * 候補フィルタ本体(2026-08-30、PR-A「複数人記載FAX: 複製廃止→検出バッジへの置換」)は
+ * `shared/multiCustomerDetection.ts`の`selectDistinctExactCandidates()`へ移植した。
+ * 「人数分複製する」機能の縮退版として「複数人記載であることをバッジで示すだけ」の機能
+ * (`multiCustomerDetection` feature flag)を新設するにあたり、両者が同一の検出基準を
+ * 共有する必要があるため。本関数のシグネチャ・reason enum・戻り値は無改変
+ * (`functions/test/faxDuplication.test.ts`は1行も変更していない)。
  */
 
 import type { CustomerCandidate } from '../utils/extractors';
+import {
+  selectDistinctExactCandidates,
+  isMultiCustomerDetected,
+  type MultiCustomerCandidateLike,
+} from '../../../shared/multiCustomerDetection';
 
 export interface FaxDuplicationAssignment {
   customerId: string;
@@ -101,28 +113,28 @@ export function planFaxDuplication(input: PlanFaxDuplicationInput): FaxDuplicati
     };
   }
 
-  // CodeRabbit指摘: score降順の保証を呼出元(extractors.tsのsort)の暗黙の前提だけに
-  // 委ねず、本関数自身でも明示的にソートしてから重複排除する(「先勝ち」dedupが
-  // 最高スコア以外を拾ってしまう回帰を、モジュール境界をまたいだ暗黙契約に頼らず防ぐ)。
-  // c.name.trim(): sameNameCollisionNamesはfindSameNameCollisionNames()がtrim済みキーで
-  // 返す集合のため、c.name側もtrimしてから照合しないと前後空白付きマスター名の同名衝突を
-  // 見逃す(Codex review-diff P2指摘、2026-07-26)。インメモリ処理のため追加コストなし。
-  const exactNonDuplicate = input.candidates
-    .filter((c) => c.matchType === 'exact' && !c.isDuplicate && !input.sameNameCollisionNames.has(c.name.trim()))
-    .sort((a, b) => b.score - a.score);
+  // 候補フィルタ本体(exact && 非isDuplicate && 非同名衝突、score降順→customerIdでfirst-wins
+  // 重複排除)は shared/multiCustomerDetection.ts の selectDistinctExactCandidates() へ移植済み
+  // (挙動不変。ソートを呼出元(extractors.tsのsort)の暗黙の前提だけに委ねない、というCodeRabbit
+  // 指摘の意図・c.name.trim()によるsameNameCollisionNamesとの照合(前後空白付きマスター名対応、
+  // Codex review-diff P2指摘、2026-07-26)は共有関数側にそのまま引き継いでいる)。
+  //
+  // MultiCustomerCandidateLike互換の形へ一時マッピングする(id→customerId、name→customerName)。
+  // careManagerNameは検出述語には不要だが、複製先へ割当を返すため元のCustomerCandidateごと
+  // 保持して返してもらう(selectDistinctExactCandidatesはジェネリックで余剰フィールドを保持)。
+  const candidatesForDetection: Array<MultiCustomerCandidateLike & { source: CustomerCandidate }> =
+    input.candidates.map((c) => ({
+      customerId: c.id,
+      customerName: c.name,
+      score: c.score,
+      matchType: c.matchType,
+      isDuplicate: c.isDuplicate,
+      source: c,
+    }));
 
-  const deduped = new Map<string, CustomerCandidate>();
-  for (const c of exactNonDuplicate) {
-    if (!deduped.has(c.id)) deduped.set(c.id, c);
-  }
+  const distinct = selectDistinctExactCandidates(candidatesForDetection, input.sameNameCollisionNames);
 
-  const assignments: FaxDuplicationAssignment[] = Array.from(deduped.values()).map((c) => ({
-    customerId: c.id,
-    customerName: c.name,
-    careManagerName: c.careManagerName ?? null,
-  }));
-
-  if (assignments.length < 2) {
+  if (!isMultiCustomerDetected(distinct.map((c) => c.customerId as string))) {
     return {
       shouldDuplicate: false,
       assignments: [],
@@ -130,6 +142,12 @@ export function planFaxDuplication(input: PlanFaxDuplicationInput): FaxDuplicati
       consideredCandidates,
     };
   }
+
+  const assignments: FaxDuplicationAssignment[] = distinct.map((c) => ({
+    customerId: c.customerId as string,
+    customerName: c.customerName,
+    careManagerName: c.source.careManagerName ?? null,
+  }));
 
   return {
     shouldDuplicate: true,

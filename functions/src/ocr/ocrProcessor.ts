@@ -52,7 +52,13 @@ import { resolveDetailFields } from './documentDetail';
 import { applyConfirmedFieldProtection } from './confirmedFieldMerge';
 import { buildOcrExcerpt } from './ocrExcerpt';
 import { isFaxDuplicationEnabled } from '../utils/featureFlags';
+import { isMultiCustomerDetectionEnabled } from '../utils/featureFlags';
 import { planFaxDuplication, buildFaxDuplicationMemberOverride } from './faxDuplication';
+import {
+  buildMultiCustomerDetectionFields,
+  type MultiCustomerCandidateLike,
+  type MultiCustomerDetectionFields,
+} from '../../../shared/multiCustomerDetection';
 import {
   computeOcrResultObjectsToDelete,
   shouldSkipCompensatingDelete,
@@ -489,16 +495,33 @@ export async function processDocument(
     // このFirestore読取にも及ぼすため(code-review指摘: tryの外に置くとこの読取が失敗
     // した場合にocrResultUrlのStorage孤児がcompensateDeleteOnFailureされずに残る)。
     const faxDuplicationEnabled = await isFaxDuplicationEnabled(db);
+    // 複数人記載検出(kanameone現場要件、PR-A「複数人記載FAX: 複製廃止→検出バッジへの置換」、
+    // 2026-08-30)。faxDuplication(人数分複製)とは意図的に独立したフラグ。複製発火条件と
+    // 厳密に同一の検出基準(shared/multiCustomerDetection.ts)を使う。flag OFF時は
+    // multiCustomerFieldsが空オブジェクトになりキー自体を書き込まないため、無効テナント
+    // (cocoro/dev)の書込みペイロードは従来と完全に同一のまま。
+    const multiCustomerDetectionEnabled = await isMultiCustomerDetectionEnabled(db);
     // ADR-0022顧客未確定ゲート再設計(2026-07-25、Plan agent検証で発覚した致命的な穴への
     // 対応): マスターの`isDuplicate`フラグは事後の追加・改名で更新されないため信用せず、
     // 既にロード済みの`customers`(:346)からライブに同名衝突を数え直す(追加読み込みなし)。
     const sameNameCollisionNames = findSameNameCollisionNames(customers);
+    // Issue #625配線契約(ocrProcessorOcrResultCleanupWiringContract.test.ts)が、tryブロック
+    // 開始からこのtransaction呼出までの間に閉じ中括弧が現れないことをソース文字列レベルで
+    // 検証しているため(該当文字そのものをこのコメントに書くとテストが誤検出するため引用しない)、
+    // この2行は中括弧を含まない関数呼び出しのみで完結させている(実体はshared側、ocrProcessor.ts
+    // 側のヘルパーはprocessDocument関数の外で定義)。
+    const multiCustomerCandidates = customerResult.candidates.map(toMultiCustomerCandidateLike);
+    const multiCustomerFields = buildMultiCustomerDetectionFields(
+      multiCustomerCandidates,
+      sameNameCollisionNames,
+      multiCustomerDetectionEnabled
+    );
     await applyOcrCompletionTransaction({
       db,
       docRef,
       docId,
       ownershipExpectation,
-      extractionFields,
+      extractionFields: { ...extractionFields, ...multiCustomerFields },
       customerCandidates: customerResult.candidates,
       sameNameCollisionNames,
       fileDateFormatted: dateResult.formattedDate ?? undefined,
@@ -506,6 +529,7 @@ export async function processDocument(
       pageResults,
       ocrExcerpt,
       faxDuplicationEnabled,
+      multiCustomerDetectionEnabled,
       tokenCounts: {
         inputTokens: totalInputTokens,
         outputTokens: totalOutputTokens,
@@ -565,7 +589,14 @@ export async function applyOcrCompletionTransaction(input: {
   docRef: FirebaseFirestore.DocumentReference;
   docId: string;
   ownershipExpectation: OcrRunExpectation;
-  extractionFields: OcrExtractionUpdateFields;
+  /**
+   * 複数人記載検出フィールド(multiCustomerDetected/multiCustomerCount)は
+   * `OcrExtractionUpdateFields` 自体には含めない(ocrUpdatePayloadBuilder.tsは検出ロジックを
+   * 知らない、責務分離)。呼出元(ocrProcessor.ts)がflag有効時のみ`Partial<...>`をspreadで
+   * 合成して渡す。`applyConfirmedFieldProtection`は`{...proposed}`のoverride方式のため
+   * 余剰フィールドもそのまま`merged`へ伝播する(functions/src/ocr/confirmedFieldMerge.ts参照)。
+   */
+  extractionFields: OcrExtractionUpdateFields & Partial<MultiCustomerDetectionFields>;
   customerCandidates: CustomerCandidate[];
   /** `shared/customerIdentity.ts`の`findSameNameCollisionNames()`で計算済みの同名衝突集合。 */
   sameNameCollisionNames: ReadonlySet<string>;
@@ -574,6 +605,14 @@ export async function applyOcrCompletionTransaction(input: {
   pageResults: RawPageOcrResult[];
   ocrExcerpt: string;
   faxDuplicationEnabled: boolean;
+  /**
+   * 複数人記載検出(PR-A)フラグ。トランザクション内で「以前はフラグONで検出済みだったが
+   * 今はOFFになっているdoc」を検知し、古い検出結果を消去する(codex review P1指摘対応、
+   * 2026-08-30: 「flag OFF時はキーを書かない」設計だけでは、既にフィールドを持つdocが
+   * 再処理されても古い値がFirestoreに残り続けてしまう。FEはsettings/featuresを読まない
+   * 設計のため、この消去はBE側の責務にする必要がある)。
+   */
+  multiCustomerDetectionEnabled: boolean;
   tokenCounts: {
     inputTokens: number;
     outputTokens: number;
@@ -594,6 +633,7 @@ export async function applyOcrCompletionTransaction(input: {
     pageResults,
     ocrExcerpt,
     faxDuplicationEnabled,
+    multiCustomerDetectionEnabled,
     tokenCounts,
   } = input;
 
@@ -650,6 +690,22 @@ export async function applyOcrCompletionTransaction(input: {
         category: freshData.category,
       });
 
+      // 複数人記載検出(PR-A)フラグがOFFへ切り替わった後にdocが再処理された場合、以前ONの
+      // ときに書き込まれた古い検出結果をここで消去する(codex review P1指摘対応、2026-08-30:
+      // 「flag OFF時はキーを書かない」設計だけでは、既にフィールドを持つdocが再処理されても
+      // Firestore上の古い値がそのまま残ってしまう。FEはsettings/featuresを読まない設計の
+      // ため、この消去はBE側の責務にする必要がある)。flag ON時・またはfreshDataに元々
+      // フィールドが存在しない場合は空オブジェクト(余計な書込みを増やさない)。
+      // 注意: FieldValue.delete()は`tx.update()`でのみ有効で、複製コピー用の`tx.set()`
+      // (mergeなし新規作成)に混ぜると実行時エラーになるため、update呼出にのみ適用すること。
+      const multiCustomerCleanup: Record<string, FirebaseFirestore.FieldValue> =
+        !multiCustomerDetectionEnabled && freshData.multiCustomerDetected !== undefined
+          ? {
+              multiCustomerDetected: admin.firestore.FieldValue.delete(),
+              multiCustomerCount: admin.firestore.FieldValue.delete(),
+            }
+          : {};
+
       // displayFileName生成のヘルパー(通常/複製メンバー双方で使う。#178 Stage 1、Issue #526 D2で
       // マージ後の最終メタから生成する規約はメンバー単位でも同様)。
       const buildMemberDisplayFileName = (fields: {
@@ -703,6 +759,7 @@ export async function applyOcrCompletionTransaction(input: {
 
         tx.update(docRef, {
           ...originalMember,
+          ...multiCustomerCleanup,
           ...(originalDisplayFileName ? { displayFileName: originalDisplayFileName } : {}),
           summary: admin.firestore.FieldValue.delete(),
           summaryTruncated: admin.firestore.FieldValue.delete(),
@@ -793,6 +850,7 @@ export async function applyOcrCompletionTransaction(input: {
       // 後2者はIssue #215以前の旧フラット形式の残骸クリーンアップ(前方互換とは無関係)。
       tx.update(docRef, {
         ...merged,
+        ...multiCustomerCleanup,
         ...(displayFileName ? { displayFileName } : {}),
         summary: admin.firestore.FieldValue.delete(),
         summaryTruncated: admin.firestore.FieldValue.delete(),
@@ -1290,6 +1348,24 @@ async function copyOcrResultForDistributionMember(
   );
 
   return `gs://${bucket.name}/${destPath}`;
+}
+
+/**
+ * `CustomerCandidate`(extractors.ts) → `MultiCustomerCandidateLike`(shared/multiCustomerDetection.ts)
+ * への変換(複数人記載検出用、PR-A)。`processDocument` 関数の外で定義しているのは、
+ * Issue #625配線契約テスト(ocrProcessorOcrResultCleanupWiringContract.test.ts)が
+ * try{からapplyOcrCompletionTransaction呼出までの間に`}`(インラインアロー関数の
+ * オブジェクトリテラル等)が現れないことをソース文字列レベルで検証しているため、
+ * 呼出側は`.map(toMultiCustomerCandidateLike)`という中括弧を含まない1行で完結させる必要がある。
+ */
+function toMultiCustomerCandidateLike(c: CustomerCandidate): MultiCustomerCandidateLike {
+  return {
+    customerId: c.id,
+    customerName: c.name,
+    score: c.score,
+    matchType: c.matchType,
+    isDuplicate: c.isDuplicate,
+  };
 }
 
 function createDefaultOcrResultStorageAdapter(): OcrResultStorageAdapter {

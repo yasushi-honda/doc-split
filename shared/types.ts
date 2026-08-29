@@ -200,6 +200,22 @@ export interface Document {
   distributionId?: string;
 
   /**
+   * 複数人記載検出(kanameone現場要件、PR-A「複数人記載FAX: 複製廃止→検出バッジへの置換」、
+   * 2026-08-30)。`multiCustomerDetection` feature flag が有効なテナントのみ、OCR完了の都度
+   * `shared/multiCustomerDetection.ts` の `selectDistinctExactCandidates()` で再計算して
+   * 書き込む(`distributionId` を使う複製機能と全く同じ検出基準)。フラグ無効テナントでは
+   * キー自体を書き込まない(false すら書かない、書込みペイロードを従来と完全一致させるため)。
+   * 検出時 `multiCustomerDetected: true` を明示的に書く(非検出時も `false` を明示し、
+   * フィールド不在にしない — フロント側の `where`/フィルタ実装がフィールド不在docを
+   * 除外してしまう問題を避けるため)。再処理時は毎回OCRから再計算される値のため、
+   * `frontend/src/hooks/useDocuments.ts` の `getReprocessClearFields()` で無条件に
+   * `deleteField()` する(`customerConfirmed`等と異なり確定保護の対象ではない)。
+   */
+  multiCustomerDetected?: boolean;
+  /** `multiCustomerDetected` の元になった distinct-exact 候補数。不変条件: `multiCustomerDetected === (multiCustomerCount >= 2)`。 */
+  multiCustomerCount?: number;
+
+  /**
    * Google Drive エクスポート状態 (ADR-0022, Phase 1)。
    * `verified` が false→true になった瞬間、Cloud Functions トリガー
    * (`functions/src/drive/driveExportTrigger.ts`) が自動エクスポートを開始する。
