@@ -1,5 +1,5 @@
 ---
-updated: 2026-08-29
+updated: 2026-08-30
 ---
 <!-- 前ミッション(dev/kanameone/cocoro環境監査・保守検証)は2026-07-20完遂。全文はdocs/handoff/LATEST.md参照。 -->
 <!-- Google Drive連携Phase1 (MVP)実装ミッションは2026-07-22完了(PR#700マージ)。詳細は本ファイル末尾「Google Drive連携Phase1完遂」節+docs/handoff/LATEST.md参照。 -->
@@ -7,6 +7,22 @@ updated: 2026-08-29
 ## 📋 空き時間バックログ（現在のミッションとは無関係、doc-audit 2026-08-01指摘）
 
 - [x] `docs/context/gemini-rate-limiting.md`のレート制限値をGemini 3.5 Flash運用下で再検証する（2026-08-02、PR #785マージ済み）。Playwright MCPでVertex AI公式モデルカードを実測確認し、RPM/TPMがDynamic Shared Quota化され固定値が存在しないこと・最大出力トークンがモデル上限65,536（旧記載8,192はアプリの暴走対策キャップとの混同）・PDF最大ファイルサイズがAPI経由で50MB（旧記載20MBは不一致）と判明、ドキュメントを修正
+
+## 【進行中・2026-08-29開始】複数人記載FAX: 複製廃止→検出バッジへの置換（kanameone、Stage 1監視中）
+
+kanameoneから「1FAXに複数人分の書類がまとまっている場合の人数分複製表示（`faxDuplication`機能）を廃止し、代わりに一目で複数人記載と分かる検出バッジに置き換えたい」という仕様変更依頼を受け、plan mode承認済み計画（`/Users/yyyhhh/.claude/plans/merry-drifting-seal.md`、grip+codex plan-crossreview実施済み）に基づき実装・展開した。
+
+**方針**: 既存`faxDuplication`フラグは維持し、新設`multiCustomerDetection`フラグ（検出のみ・複製はしない）を追加。複製ON+検出ONの併走期間で「検出集合==複製発火集合」を本番データで実測してから複製をOFFにする段階展開（Stage 0 dev → Stage 1 kanameone併走 → Stage 2 kanameone複製OFF → Stage 3 棚卸し）。
+
+**完了（2026-08-29）**:
+- [x] PR-A（BE検出ロジック+新フィールド書込み+フラグ基盤、`shared/multiCustomerDetection.ts`）: `codex review`実施、PR #864としてマージ
+- [x] PR-B（FE表示・フィルター、`MultiCustomerBadge.tsx`）: `codex review`+Firebase Emulator/Vite/Playwright MCPでの実機UI確認+`ui-verified`ラベル付与、PR #867としてマージ（PR #865はPR #864のsquash-merge時のbase branch削除で自動クローズされたため、rebase後に新規PR化）
+- [x] PR-D（既存複製doc read-only棚卸しスクリプト、`scripts/audit-fax-duplication-inventory.ts`）: `codex review`2巡（P1/P2指摘を修正）+`pr-review-toolkit:code-reviewer`/`pr-test-analyzer`セカンドオピニオン（テストカバレッジ不足3件を修正）、PR #868としてマージ（PR #866も同様の理由で自動クローズ→再PR化）
+- [x] Stage 0（dev）: `/deploy dev --rules`実行、フラグON確認、実機で「複数名の可能性 (N名)」バッジ・フィルターの動作確認済み
+- [x] CI基盤整備: kanameone向けFirestore/Storage rulesデプロイがFirebase CLIローカルセッション失効（`systemkaname@kanameone.com`のブラウザ再認証が必要でexecutorから対応不能）でブロックされた際、decision-maker指示「GHAで対応」に従い新規GitHub Actions workflow `deploy-firestore-rules.yml`を追加（既存`deploy-firestore-indexes.yml`と同型のSA鍵認証パターン、PR #869としてマージ）
+- [x] Stage 1開始（kanameone）: `/deploy kanameone --full`でFunctions/Hosting/Rules全反映（`--rules`のみだとFunctionsが更新されずStage1の検出ロジック自体が動かないギャップを事前に発見しdecision-makerへ確認済み）、Firestore rulesは新設GHA workflow経由で反映、`multiCustomerDetection`フラグをkanameoneでON（`faxDuplication`はtrueのまま併走）
+
+**Stage 1併走期間の詳細は下記「🔄 中断点」参照**（最低5件の検出サンプルが揃うまで、目安1〜3営業日の待機）。
 
 ## 現在のミッション【進行中・2026-07-23開始】
 
@@ -317,6 +333,8 @@ cocoro/kanameから、書類（ケアプラン・医療・介護保険証等）�
 - [ ] 【対応不要】[PLAUSIBLE、現状実害なし] useRetryDriveExportのonSuccessが`['document', docId]`クエリを無効化しておらず将来的にDrive状態を読むuseDocument(docId)呼び出しが古いキャッシュを表示しうる（frontend/src/hooks/useDriveExportErrors.ts:86。現時点でuseDocument(docId)の唯一の呼び出し元DocumentDetailModal.tsxはDrive系フィールドを読んでいないため実害なし）
 
 ## 🔄 中断点（in-flight）
+
+**複数人記載FAX検出（Stage 1併走、次セッション再開点）**: 対象タスクは上記「【進行中・2026-08-29開始】複数人記載FAX」節。直前の状態: 2026-08-29にkanameoneで`multiCustomerDetection`フラグをONにし（`faxDuplication`はtrueのまま併走）、待機を開始した直後。次の一手: **1〜3営業日経過後（目安2026-09-01以降）**、`audit-fax-duplication-inventory`をGitHub Actions `Run Operations Script`経由でkanameone向けに実行し、`--json-out`のdetectionStatsで`multiCustomerDetected:true`のdoc数が**5件以上**に達しているか確認する。5件未満ならAC-9に従い検証期間を延長する（即着手化しない）。5件以上に達していれば、Cloud Loggingの`faxDuplicationPlan`ログで`reason: exactCandidatesDistributed`の件数と突合し、検出集合が複製発火集合と一致するかを確認したうえでStage 2（kanameone複製OFF、計画書「段階展開」節のADR-0019 `groupAggregationGateOpen`メンテナンスゲート手順）着手をdecision-makerへ諮る。検証コマンド: `gh workflow run "Run Operations Script" -f environment=kanameone -f script=audit-fax-duplication-inventory`（または`--full-scan`版）→ 完了後`gh run list`でrun ID特定→artifactの`audit-fax-duplication-inventory-output.json`をダウンロードして`detectionStats.totalDetectedCount`を確認。
 
 **Issue #811/#823 remediation（次セッション再開点）**: Phase 2b-1（PR #851実装マージ・devリハーサル）・Phase 2b-2（森奈穂美分本番実行、healthy 33.1%→98.8%）・Phase 5（ADR-0022更新PR #854マージ・Issue #811/#823クローズ）・**Phase 3（kanameone全ケアマネへ横展開、healthy 60.8%→99.0%）**・**Phase 4（cocoroはDrive未接続のため対象外と確定）**、全て完了済み（詳細は上記「Issue #811/#823 remediation Phase 3」節参照）。**kanameoneのDrive export破損document remediationはこれで実質完了**。
 
