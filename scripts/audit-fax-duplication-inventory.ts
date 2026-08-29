@@ -211,17 +211,26 @@ function printReport(docs: InventoryDoc[], groups: GroupSummary[], detectionStat
   console.log('---');
 
   console.log('=== 新旧突合(multiCustomerDetectedとの比較、Stage1併走検証用) ===');
-  console.log(`multiCustomerDetected:true の総件数: ${detectionStats.totalDetectedCount}`);
+  // イベント(=1複製グループ or 1検出のみdoc)単位で比較する。複製グループのメンバー全員に
+  // multiCustomerDetected:trueが伝播するため、doc実数(totalDetectedCount)をそのまま
+  // グループ数と比較すると人数分に水増しされ偽の不一致に見える(codex review P2指摘対応)。
+  const groupsWithoutDetection = agg.groupCount - agg.groupsWithMultiCustomerDetectedMemberCount;
+  console.log(`複製グループ総数: ${agg.groupCount}件`);
+  console.log(`  うち検出も伴う(multiCustomerDetected:trueのメンバーを含む): ${agg.groupsWithMultiCustomerDetectedMemberCount}件`);
   console.log(
-    `  うち複製グループ(distributionId)に属する: ${detectionStats.totalDetectedCount - detectionStats.detectionOnlyCount}件`
+    `  うち検出を伴わない: ${groupsWithoutDetection}件` +
+      '(Stage1開始=multiCustomerDetectionフラグ有効化より前に処理された既存グループはこちらに入るのが正常。' +
+      'Stage1開始後に生成されたグループでこの値が増える場合は検出条件と複製発火条件のズレを疑う)'
   );
   console.log(
-    `  うち検出のみ(distributionId無し、複製は発火していない): ${detectionStats.detectionOnlyCount}件` +
-      '(Stage1併走以前は複製自体が起きないため、この件数がdetectionOnlyCountの全てになるのが正常)'
+    `検出のみ(distributionId無し、複製は発火していない)doc数: ${detectionStats.detectionOnlyCount}件` +
+      '(検出条件==複製発火条件のため、Stage1併走中はこの件数が0付近で推移するのが正常。' +
+      '増加傾向が続く場合は検出条件と複製発火条件のズレを疑う)'
   );
   console.log(
-    `multiCustomerDetected:trueのメンバーを含む複製グループ数: ${agg.groupsWithMultiCustomerDetectedMemberCount}` +
-      '(検出集合と複製発火集合が一致していれば、multiCustomerDetected総件数 ≒ 複製グループ数 になるはず)'
+    `参考: multiCustomerDetected:trueが立っているdoc実数(document-level): ${detectionStats.totalDetectedCount}件` +
+      '(複製が同時発火している場合、1件のグループに対して複数docへ同じフラグが伝播するため、' +
+      '上記のイベント単位の件数とは一致しない。直接比較しないこと)'
   );
   console.log('---');
 
