@@ -6,6 +6,7 @@ import {
   summarizeGroup,
   summarizeAllGroups,
   aggregateGroups,
+  computeDetectionOnlyStats,
   type InventoryDoc,
 } from './faxDuplicationInventory';
 
@@ -197,6 +198,36 @@ test('aggregateGroups: 新旧突合(multiCustomerDetectedを含むグループ�
   ];
   const agg = aggregateGroups(groups);
   assert.equal(agg.groupsWithMultiCustomerDetectedMemberCount, 1);
+});
+
+test('computeDetectionOnlyStats: distributionId無しでmultiCustomerDetected:trueのdocを検出のみ(複製未発火)として数える(codex review P1指摘対応)', () => {
+  const docs: InventoryDoc[] = [
+    { id: 'detection-only-1', multiCustomerDetected: true }, // distributionId無し
+    { id: 'detection-only-2', multiCustomerDetected: true, distributionId: '' }, // 空文字も無し扱い
+    { id: 'grouped-and-detected', distributionId: 'orig-1', multiCustomerDetected: true }, // 複製グループに属する検出
+    { id: 'grouped-not-detected', distributionId: 'orig-1', multiCustomerDetected: false },
+    { id: 'not-detected', multiCustomerDetected: false },
+  ];
+  const stats = computeDetectionOnlyStats(docs);
+  assert.equal(stats.totalDetectedCount, 3); // detection-only-1/2 + grouped-and-detected
+  assert.equal(stats.detectionOnlyCount, 2); // detection-only-1/2のみ(distributionId無し)
+});
+
+test('computeDetectionOnlyStats: 空配列は全項目ゼロ', () => {
+  const stats = computeDetectionOnlyStats([]);
+  assert.equal(stats.totalDetectedCount, 0);
+  assert.equal(stats.detectionOnlyCount, 0);
+});
+
+test('computeDetectionOnlyStats: multiCustomerDetectedが全てfalse/未設定なら検出0件', () => {
+  const docs: InventoryDoc[] = [
+    { id: 'a', multiCustomerDetected: false },
+    { id: 'b' },
+    { id: 'c', distributionId: 'orig-1', multiCustomerDetected: false },
+  ];
+  const stats = computeDetectionOnlyStats(docs);
+  assert.equal(stats.totalDetectedCount, 0);
+  assert.equal(stats.detectionOnlyCount, 0);
 });
 
 test('aggregateGroups: 全グループを通した時系列の最古/最新を算出する', () => {
