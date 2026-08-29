@@ -36,6 +36,34 @@ export function hasDistributionId(doc: Pick<InventoryDoc, 'distributionId'>): bo
 }
 
 /**
+ * Firestoreドキュメントの生データ(`snapshot.data()`相当)を`InventoryDoc`へ変換する。
+ * 呼出元(CLI)の`toInventoryDoc()`から純粋ロジックとして切り出したもの
+ * (pr-review-toolkit:pr-test-analyzer指摘対応、2026-08-30: 集計結果の信頼性を
+ * 左右するフィールドマッピングが未テストだった)。
+ *
+ * `firebase-admin`/`FirebaseFirestore`型に依存しない(本ファイル全体の「Firestore I/O
+ * 非依存」設計を維持するため、Timestampはduck typing(`toMillis`関数の有無)で判定する)。
+ */
+export function mapDocumentDataToInventoryDoc(id: string, data: Record<string, unknown>): InventoryDoc {
+  const processedAtCandidate = data.processedAt as { toMillis?: () => number } | undefined;
+  const processedAtMs =
+    processedAtCandidate != null && typeof processedAtCandidate.toMillis === 'function'
+      ? processedAtCandidate.toMillis()
+      : null;
+
+  return {
+    id,
+    distributionId: (data.distributionId as string | undefined) ?? null,
+    customerConfirmed: data.customerConfirmed === true,
+    verified: data.verified === true,
+    driveExportStatus: (data.driveExportStatus as string | undefined) ?? null,
+    multiCustomerDetected: data.multiCustomerDetected === true,
+    multiCustomerCount: typeof data.multiCustomerCount === 'number' ? data.multiCustomerCount : null,
+    processedAtMs,
+  };
+}
+
+/**
  * ドキュメント配列を `distributionId` でグルーピングする。
  * `distributionId` を持たないドキュメントは無視する(呼出元が事前にフィルタ済みでなくてもよい)。
  */
