@@ -1415,6 +1415,20 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                   </div>
                 )}
 
+                {/* 複数人記載検出 (PR-B「複数人記載FAX: 複製廃止→検出バッジへの置換」、2026-08-30):
+                    distributionId(複製済み)を持つdocでは下の「自動配信・要整理」表示が
+                    代わりに出るため、こちらは非表示にする */}
+                {document?.multiCustomerDetected && !document?.distributionId && (
+                  <div className="mt-4 rounded-lg bg-indigo-50 p-3">
+                    <p className="text-xs font-medium text-indigo-800">
+                      複数名の可能性{typeof document.multiCustomerCount === 'number' ? `（${document.multiCustomerCount}名）` : ''}
+                    </p>
+                    <p className="mt-1 text-xs text-indigo-700">
+                      OCRで複数の顧客名が完全一致で検出されました。1つの書類に複数人が記載されていないか確認してください。
+                    </p>
+                  </div>
+                )}
+
                 {/* 複数顧客FAX複製 (GOAL.md task 6-3): 自動配信・要整理の識別表示 */}
                 {isUnorganizedDistribution && (
                   <div className="mt-4 rounded-lg bg-blue-50 p-3">

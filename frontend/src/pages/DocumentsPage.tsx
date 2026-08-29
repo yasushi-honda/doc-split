@@ -58,6 +58,7 @@ import { DateRangeFilter, type DateRange } from '@/components/DateRangeFilter'
 import { isCustomerConfirmed } from '@/hooks/useProcessingHistory'
 import { resolveCustomerUnconfirmedReason } from '@shared/customerIdentity'
 import { DocumentDetailModal } from '@/components/DocumentDetailModal'
+import { MultiCustomerBadge } from '@/components/MultiCustomerBadge'
 import { AliasLearningHistoryModal } from '@/components/AliasLearningHistoryModal'
 import { PdfUploadModal } from '@/components/PdfUploadModal'
 import { GroupList } from '@/components/views'
@@ -288,6 +289,7 @@ function DocumentRow({
         {document.careManager && (
           <div className="truncate text-[11px] text-gray-400">担当CM: {document.careManager}</div>
         )}
+        <MultiCustomerBadge document={document} />
       </td>
       <td className="hidden px-4 py-3 text-gray-700 lg:table-cell">{document.officeName || '-'}</td>
       <td className="px-2 py-2 text-xs text-gray-700 sm:px-4 sm:py-3 sm:text-sm">{formatDateTime(document.processedAt)}</td>
@@ -365,6 +367,11 @@ export function DocumentsPage() {
   const [showFilters, setShowFilters] = useState(false)
   const [showSplit, setShowSplit] = useState(false) // 分割済み表示フラグ
   const [showUnverifiedOnly, setShowUnverifiedOnly] = useState(false) // 未確認のみ表示フラグ
+  // 複数人記載の可能性のみ表示(PR-B、2026-08-30)。showUnverifiedOnly/showSplitと同型の
+  // クライアント側JSフィルタ。multiCustomerDetectionフラグを持たないテナントではdocに
+  // フィールド自体が存在せず常にfalse相当になるため、チェックしても該当0件になるだけで
+  // 無害(Firestore whereを使わない理由は同ファイルのdocumentsフィルタ処理コメント参照)。
+  const [showMultiCustomerOnly, setShowMultiCustomerOnly] = useState(false)
   const [dateRange, setDateRange] = useState<DateRange>({
     dateFrom: undefined,
     dateTo: undefined,
@@ -688,8 +695,16 @@ export function DocumentsPage() {
       docs = docs.filter(doc => !doc.verified)
     }
 
+    // 複数人記載の可能性のみ表示(PR-B、2026-08-30)。Firestore whereではなくクライアント側
+    // フィルタにしている理由: multiCustomerDetectedフィールドを持たない既存doc(先方が
+    // 初日に見たい母集団そのもの)をwhereで絞ると全件サイレント除外してしまうため
+    // (showUnverifiedOnly/showSplitと同型のトレードオフを踏襲)
+    if (showMultiCustomerOnly) {
+      docs = docs.filter(doc => doc.multiCustomerDetected === true)
+    }
+
     return docs
-  }, [allDocuments, showSplit, showUnverifiedOnly])
+  }, [allDocuments, showSplit, showUnverifiedOnly, showMultiCustomerOnly])
 
   // 全選択/全解除（documentsの後に定義する必要あり）
   const handleSelectAll = useCallback((checked: boolean) => {
@@ -921,6 +936,15 @@ export function DocumentsPage() {
                       />
                       分割元も表示
                     </label>
+                    <label className="flex cursor-pointer items-center gap-2 text-xs text-gray-500">
+                      <input
+                        type="checkbox"
+                        checked={showMultiCustomerOnly}
+                        onChange={(e) => setShowMultiCustomerOnly(e.target.checked)}
+                        className="h-3.5 w-3.5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                      />
+                      複数名の可能性のみ
+                    </label>
                   </div>
                 </div>
               )}
@@ -951,10 +975,25 @@ export function DocumentsPage() {
                 <FileText className="mb-4 h-12 w-12 text-gray-300" />
                 <p className="text-lg font-medium">書類がありません</p>
                 <p className="mt-1 text-sm">
-                  {statusFilter !== 'all' || documentTypeFilter !== 'all' || careManagerFilter !== 'all'
+                  {showMultiCustomerOnly && hasNextPage
+                    ? '表示中のページに該当する書類はありません。さらに読み込むと見つかる可能性があります'
+                    : statusFilter !== 'all' || documentTypeFilter !== 'all' || careManagerFilter !== 'all'
                     ? '条件に一致する書類がありません'
                     : 'Gmailから添付ファイルが取得されると、ここに表示されます'}
                 </p>
+                {/* 複数名の可能性フィルタ(PR-B)はクライアント側フィルタのため、現在のページに
+                    該当0件でも後続ページに該当があり得る。documents.length===0でも
+                    LoadMoreIndicatorを出し続けてfetchNextPageが呼ばれ続けるようにする
+                    (codex review P1指摘対応: 未対応だとこの分岐でLoadMoreIndicatorがunmount
+                    されscrollトリガーが失われ、実質ページネーションが停止してしまう) */}
+                {showMultiCustomerOnly && hasNextPage && (
+                  <LoadMoreIndicator
+                    ref={loadMoreRef}
+                    hasNextPage={hasNextPage}
+                    isFetchingNextPage={isFetchingNextPage}
+                    className="mt-2"
+                  />
+                )}
               </div>
             ) : (
               <>

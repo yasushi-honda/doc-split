@@ -25,6 +25,7 @@ import {
   type FolderGroup,
 } from '@/lib/buildCustomerFolderGroups';
 import { resolveCustomerUnconfirmedReason } from '@shared/customerIdentity';
+import { MultiCustomerBadge } from '@/components/MultiCustomerBadge';
 import type { Document, DocumentMaster } from '@shared/types';
 
 // ============================================
@@ -158,6 +159,7 @@ function DocumentRow({ document, onClick, onRetry, identityLookup }: DocumentRow
         <p className="text-xs text-gray-500 truncate">
           {document.documentType || '未判定'}
         </p>
+        <MultiCustomerBadge document={document} />
       </div>
       <div className="flex items-center gap-2 flex-shrink-0">
         {/* ページ数 (#525): 0 (旧形式 doc) は非表示 */}

@@ -212,6 +212,11 @@ export function firestoreToDocument(id: string, data: Record<string, unknown>): 
     documentTypeConfirmed: data.documentTypeConfirmed as boolean | undefined,
     // 複数顧客FAX複製機能 (GOAL.md D4): 元doc・全コピーに同一値を付与
     distributionId: data.distributionId as string | undefined,
+    // 複数人記載検出 (PR-A「複数人記載FAX: 複製廃止→検出バッジへの置換」、2026-08-30):
+    // multiCustomerDetectionフラグ有効テナントのみ書き込まれる。無効テナントではキー自体が
+    // 存在しないためundefinedになる(codex review P1指摘対応でBE側の消去ロジックも実装済み)。
+    multiCustomerDetected: data.multiCustomerDetected as boolean | undefined,
+    multiCustomerCount: data.multiCustomerCount as number | undefined,
     // Google Drive エクスポート状態 (ADR-0022 Phase1)
     driveExportStatus: data.driveExportStatus as Document['driveExportStatus'],
     driveFileId: data.driveFileId as string | null | undefined,
@@ -435,6 +440,15 @@ export function getReprocessClearFields(preserveDistributionFields: boolean = fa
     // (stale content)。driveFileId を保持したまま渡すことで、exportDocument() が
     // drive.files.update() でその実体を直接 移動/リネーム/内容更新 できるようにする。
     ...getDriveExportClearFields(),
+    // 複数人記載検出 (PR-A、2026-08-30): distributionId系フィールドと異なり
+    // `preserveDistributionFields` による分岐はしない。検出結果はOCRのたびに再計算される
+    // べき事実であり、「配信によって確定した識別子」ではないため常に無条件でクリアする
+    // (BE側は再処理完了時に multiCustomerDetectionEnabled の現在値で書き直す。
+    // functions/src/ocr/ocrProcessor.ts の cleanup ロジックとは独立した経路だが、
+    // ここで先にクリアしておくことで再処理中は一時的にバッジが消え、完了後に再計算された
+    // 値で再表示される。customerCandidates 等の他の派生フィールドと同じ挙動)。
+    multiCustomerDetected: df,
+    multiCustomerCount: df,
   }
 }
 

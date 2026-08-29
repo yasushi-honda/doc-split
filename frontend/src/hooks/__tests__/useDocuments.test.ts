@@ -351,6 +351,26 @@ describe('firestoreToDocument', () => {
 
       expect(result.distributionId).toBeUndefined()
     })
+
+    it('multiCustomerDetected/multiCustomerCount を正しく変換する (PR-A/PR-B, 2026-08-30)', () => {
+      const data = {
+        ...baseFirestoreData,
+        multiCustomerDetected: true,
+        multiCustomerCount: 2,
+      }
+
+      const result = firestoreToDocument('doc-001', data)
+
+      expect(result.multiCustomerDetected).toBe(true)
+      expect(result.multiCustomerCount).toBe(2)
+    })
+
+    it('multiCustomerDetected/multiCustomerCount が undefined の場合も正しく処理する(multiCustomerDetectionフラグ無効テナント、PR-A/PR-B)', () => {
+      const result = firestoreToDocument('doc-001', baseFirestoreData)
+
+      expect(result.multiCustomerDetected).toBeUndefined()
+      expect(result.multiCustomerCount).toBeUndefined()
+    })
   })
 
   describe('summary フィールド (Issue #215 discriminated union + 後方互換読込)', () => {
@@ -596,6 +616,15 @@ describe('getReprocessClearFields (Issue #215: 旧3キー + 新summary 全て de
       expect(fields).toHaveProperty('officeName')
       expect(fields.officeConfirmed).toBe(false)
       expect(fields.verified).toBe(false)
+    })
+
+    it('multiCustomerDetected/multiCustomerCount は preserveDistributionFields の値によらず常にクリア対象に含む(PR-A/PR-B, 2026-08-30: 検出結果は配信で確定した識別子ではなく毎回再計算されるべきOCR由来の事実のため)', () => {
+      const preserved = getReprocessClearFields(true)
+      const notPreserved = getReprocessClearFields(false)
+      expect(deleteField().isEqual(preserved.multiCustomerDetected)).toBe(true)
+      expect(deleteField().isEqual(preserved.multiCustomerCount)).toBe(true)
+      expect(deleteField().isEqual(notPreserved.multiCustomerDetected)).toBe(true)
+      expect(deleteField().isEqual(notPreserved.multiCustomerCount)).toBe(true)
     })
   })
 })

@@ -127,7 +127,13 @@ service cloud.firestore {
           'driveFileId',
           'driveExportedAt',
           'driveExportError',
-          'driveExportRunId'
+          'driveExportRunId',
+          // 複数人記載検出 (PR-A/PR-B「複数人記載FAX: 複製廃止→検出バッジへの置換」、
+          // 2026-08-30): Cloud Functions (ocrProcessor.ts) 専有の派生フィールド。FEは
+          // getReprocessClearFields()のdeleteField()でのみ操作する想定(#9参照)のため、
+          // 値の新規設定・上書きは下記ガードで禁止する。
+          'multiCustomerDetected',
+          'multiCustomerCount'
         ])
         // confirmedBy は自分のUIDのみ設定可能（事業所解決時は含まれない場合あり）
         && (request.resource.data.confirmedBy == request.auth.uid
@@ -199,6 +205,15 @@ service cloud.firestore {
             || (('driveExportError' in resource.data) && request.resource.data.driveExportError == resource.data.driveExportError))
         && (!('driveExportRunId' in request.resource.data)
             || (('driveExportRunId' in resource.data) && request.resource.data.driveExportRunId == resource.data.driveExportRunId))
+        // 複数人記載検出 (PR-A/PR-B、2026-08-30): ocrProcessor.ts専有の派生フィールド。
+        // FEはgetReprocessClearFields()のdeleteField()でのみ操作する想定(#9参照)。
+        // driveExportStatus等と同じ「削除または無変更のみ許可、値の新規設定・上書きは
+        // 禁止」ガード。これが無いとクライアントが任意のcustomerIdで
+        // multiCustomerDetected:trueを偽装し、バッジ・フィルターを誤誘導できてしまう。
+        && (!('multiCustomerDetected' in request.resource.data)
+            || (('multiCustomerDetected' in resource.data) && request.resource.data.multiCustomerDetected == resource.data.multiCustomerDetected))
+        && (!('multiCustomerCount' in request.resource.data)
+            || (('multiCustomerCount' in resource.data) && request.resource.data.multiCustomerCount == resource.data.multiCustomerCount))
         // ADR-0019 (GOAL.md タスクG): 集計所属変更メンテナンスゲートが閉じている間は、
         // customer/office/documentType/careManagerを変更するクライアント直接書込み
         // (useDocumentEdit.ts等)を拒否する。Cloud Functions(Admin SDK経由)はルール適用外の
