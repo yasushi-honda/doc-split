@@ -529,6 +529,7 @@ export async function processDocument(
       pageResults,
       ocrExcerpt,
       faxDuplicationEnabled,
+      multiCustomerDetectionEnabled,
       tokenCounts: {
         inputTokens: totalInputTokens,
         outputTokens: totalOutputTokens,
@@ -604,6 +605,14 @@ export async function applyOcrCompletionTransaction(input: {
   pageResults: RawPageOcrResult[];
   ocrExcerpt: string;
   faxDuplicationEnabled: boolean;
+  /**
+   * 複数人記載検出(PR-A)フラグ。トランザクション内で「以前はフラグONで検出済みだったが
+   * 今はOFFになっているdoc」を検知し、古い検出結果を消去する(codex review P1指摘対応、
+   * 2026-08-30: 「flag OFF時はキーを書かない」設計だけでは、既にフィールドを持つdocが
+   * 再処理されても古い値がFirestoreに残り続けてしまう。FEはsettings/featuresを読まない
+   * 設計のため、この消去はBE側の責務にする必要がある)。
+   */
+  multiCustomerDetectionEnabled: boolean;
   tokenCounts: {
     inputTokens: number;
     outputTokens: number;
@@ -624,6 +633,7 @@ export async function applyOcrCompletionTransaction(input: {
     pageResults,
     ocrExcerpt,
     faxDuplicationEnabled,
+    multiCustomerDetectionEnabled,
     tokenCounts,
   } = input;
 
@@ -680,6 +690,22 @@ export async function applyOcrCompletionTransaction(input: {
         category: freshData.category,
       });
 
+      // 複数人記載検出(PR-A)フラグがOFFへ切り替わった後にdocが再処理された場合、以前ONの
+      // ときに書き込まれた古い検出結果をここで消去する(codex review P1指摘対応、2026-08-30:
+      // 「flag OFF時はキーを書かない」設計だけでは、既にフィールドを持つdocが再処理されても
+      // Firestore上の古い値がそのまま残ってしまう。FEはsettings/featuresを読まない設計の
+      // ため、この消去はBE側の責務にする必要がある)。flag ON時・またはfreshDataに元々
+      // フィールドが存在しない場合は空オブジェクト(余計な書込みを増やさない)。
+      // 注意: FieldValue.delete()は`tx.update()`でのみ有効で、複製コピー用の`tx.set()`
+      // (mergeなし新規作成)に混ぜると実行時エラーになるため、update呼出にのみ適用すること。
+      const multiCustomerCleanup: Record<string, FirebaseFirestore.FieldValue> =
+        !multiCustomerDetectionEnabled && freshData.multiCustomerDetected !== undefined
+          ? {
+              multiCustomerDetected: admin.firestore.FieldValue.delete(),
+              multiCustomerCount: admin.firestore.FieldValue.delete(),
+            }
+          : {};
+
       // displayFileName生成のヘルパー(通常/複製メンバー双方で使う。#178 Stage 1、Issue #526 D2で
       // マージ後の最終メタから生成する規約はメンバー単位でも同様)。
       const buildMemberDisplayFileName = (fields: {
@@ -733,6 +759,7 @@ export async function applyOcrCompletionTransaction(input: {
 
         tx.update(docRef, {
           ...originalMember,
+          ...multiCustomerCleanup,
           ...(originalDisplayFileName ? { displayFileName: originalDisplayFileName } : {}),
           summary: admin.firestore.FieldValue.delete(),
           summaryTruncated: admin.firestore.FieldValue.delete(),
@@ -823,6 +850,7 @@ export async function applyOcrCompletionTransaction(input: {
       // 後2者はIssue #215以前の旧フラット形式の残骸クリーンアップ(前方互換とは無関係)。
       tx.update(docRef, {
         ...merged,
+        ...multiCustomerCleanup,
         ...(displayFileName ? { displayFileName } : {}),
         summary: admin.firestore.FieldValue.delete(),
         summaryTruncated: admin.firestore.FieldValue.delete(),
