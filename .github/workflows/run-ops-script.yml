@@ -162,6 +162,8 @@ on:
           - audit-drive-folder-space-variants
           - drive-export-status-report
           - drive-export-status-report --breakdown
+          - audit-fax-duplication-inventory
+          - audit-fax-duplication-inventory --full-scan
           - set-feature-flag --flag driveExport --value true --dry-run
           - set-feature-flag --flag driveExport --value true
           - set-feature-flag --flag driveExport --value false --dry-run
@@ -1244,6 +1246,7 @@ jobs:
                [ "$SCRIPT_NAME" = "create-pending-doc" ] || \
                [ "$SCRIPT_NAME" = "backfill-drive-export" ] || \
                [ "$SCRIPT_NAME" = "drive-export-status-report" ] || \
+               [ "$SCRIPT_NAME" = "audit-fax-duplication-inventory" ] || \
                [ "$SCRIPT_NAME" = "merge-notation-duplicate-masters" ] || \
                [ "$SCRIPT_NAME" = "verify-type3-ocr" ]; then
             # Issue #432 PR-C 系 script は scripts/lib/* (TypeScript)、seed-dev-data (#528) は
@@ -1286,6 +1289,9 @@ jobs:
             # verify-type3-ocr (Issue #794 Phase 0-3) は functions/src/utils/{config,retry}.ts に
             # 依存するためts-node経由。合成フィクスチャ(scripts/fixtures/with-type3-font*)のみを
             # 扱いFirestore/Storage書込は行わない。ALLOWED_PROJECT_ID='doc-split-dev'固定ガードあり。
+            # audit-fax-duplication-inventory (PR-D、docs/adr/0024-multi-customer-detection.md
+            # Stage3) は read-only。scripts/lib/faxDuplicationInventory.tsに依存するためts-node
+            # 経由。--full-scanはSCRIPT_ARGS経由でそのまま渡る。STORAGE_BUCKET不使用。
             EXTRA_ARGS=""
             if [ "$SCRIPT_NAME" = "classify-collision-docs" ]; then
               # ログマスキングで `{` が `***` に置換されるため、plan JSON を
@@ -1309,6 +1315,10 @@ jobs:
             elif [ "$SCRIPT_NAME" = "backfill-drive-export" ]; then
               # rollback時の対象docId一覧(--rollback <manifest>)として必須のため常時出力。
               EXTRA_ARGS="--manifest-out ${GITHUB_WORKSPACE}/scripts/backfill-drive-export-manifest.json"
+            elif [ "$SCRIPT_NAME" = "audit-fax-duplication-inventory" ]; then
+              # 棚卸し結果(グループ一覧込み)をartifact経由で取得(log secret maskingで`{`が
+              # 伏字になる既知問題の回避、drive-export-status-reportと同種の対策)。常時出力。
+              EXTRA_ARGS="--json-out ${GITHUB_WORKSPACE}/scripts/audit-fax-duplication-inventory-output.json"
             fi
             cd scripts
             NODE_PATH=../functions/node_modules \
@@ -1524,5 +1534,16 @@ jobs:
         with:
           name: audit-session61-parent-provenance-${{ github.event.inputs.environment }}-${{ github.run_id }}
           path: scripts/audit-session61-parent-provenance-output.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload audit-fax-duplication-inventory report artifact
+        # PR-D(docs/adr/0024-multi-customer-detection.md Stage3)。read-only棚卸し結果
+        # (グループ一覧込み)をartifact経由で取得(log secret masking回避)。
+        if: ${{ startsWith(github.event.inputs.script, 'audit-fax-duplication-inventory') && always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-fax-duplication-inventory-${{ github.event.inputs.environment }}-${{ github.run_id }}
+          path: scripts/audit-fax-duplication-inventory-output.json
           if-no-files-found: warn
           retention-days: 30
