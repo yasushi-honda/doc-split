@@ -28,6 +28,7 @@ import {
 } from '@/hooks/useDocumentGroups';
 import { isCustomerConfirmed } from '@/hooks/useProcessingHistory';
 import { CustomerSubGroup } from './CustomerSubGroup';
+import { MultiCustomerBadge } from '@/components/MultiCustomerBadge';
 import { getStatusConfig, formatTimestamp } from '@/lib/documentUtils';
 import { getDisplayFileName } from '@/utils/getDisplayFileName';
 import { resolveCustomerUnconfirmedReason } from '@shared/customerIdentity';
@@ -123,6 +124,7 @@ function DocumentRow({ document, groupType, onClick, onRetry, identityLookup }: 
           {getDisplayFileName(document)}
         </p>
         <p className="text-xs text-gray-500 truncate">{getSubInfo()}</p>
+        <MultiCustomerBadge document={document} />
       </div>
       <div className="flex items-center gap-2 flex-shrink-0">
         {/* ページ数 (#525): 0 (旧形式 doc) は非表示 */}
