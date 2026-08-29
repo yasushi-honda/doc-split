@@ -975,10 +975,25 @@ export function DocumentsPage() {
                 <FileText className="mb-4 h-12 w-12 text-gray-300" />
                 <p className="text-lg font-medium">書類がありません</p>
                 <p className="mt-1 text-sm">
-                  {statusFilter !== 'all' || documentTypeFilter !== 'all' || careManagerFilter !== 'all'
+                  {showMultiCustomerOnly && hasNextPage
+                    ? '表示中のページに該当する書類はありません。さらに読み込むと見つかる可能性があります'
+                    : statusFilter !== 'all' || documentTypeFilter !== 'all' || careManagerFilter !== 'all'
                     ? '条件に一致する書類がありません'
                     : 'Gmailから添付ファイルが取得されると、ここに表示されます'}
                 </p>
+                {/* 複数名の可能性フィルタ(PR-B)はクライアント側フィルタのため、現在のページに
+                    該当0件でも後続ページに該当があり得る。documents.length===0でも
+                    LoadMoreIndicatorを出し続けてfetchNextPageが呼ばれ続けるようにする
+                    (codex review P1指摘対応: 未対応だとこの分岐でLoadMoreIndicatorがunmount
+                    されscrollトリガーが失われ、実質ページネーションが停止してしまう) */}
+                {showMultiCustomerOnly && hasNextPage && (
+                  <LoadMoreIndicator
+                    ref={loadMoreRef}
+                    hasNextPage={hasNextPage}
+                    isFetchingNextPage={isFetchingNextPage}
+                    className="mt-2"
+                  />
+                )}
               </div>
             ) : (
               <>
