@@ -117,6 +117,38 @@ export function summarizeAllGroups(docs: readonly InventoryDoc[]): GroupSummary[
   );
 }
 
+export interface DetectionOnlyStats {
+  /** multiCustomerDetected:true の総件数(distributionId有無を問わない)。 */
+  totalDetectedCount: number;
+  /**
+   * multiCustomerDetected:true かつ distributionId無し(検出はされたが複製は発火していない)の件数。
+   * Stage1併走検証(検出集合と複製発火集合の一致率を実測する)の核心シグナル。
+   * `summarizeAllGroups`/`aggregateGroups`はdistributionId無しdocを丸ごと無視するため、
+   * この件数は別途本関数で算出する必要がある(codex review P1指摘対応、2026-08-30)。
+   */
+  detectionOnlyCount: number;
+}
+
+/**
+ * 新旧突合(Stage1併走検証)向けの検出統計を算出する。
+ * 呼出元は「multiCustomerDetected有無を問わず全docを含む配列」を渡すこと
+ * (distributionId保持docのみにフィルタ済みの配列を渡すと detectionOnlyCount は常に0になり、
+ * 検出のみでdistributionId無しのdocを見落とす)。
+ */
+export function computeDetectionOnlyStats(docs: readonly InventoryDoc[]): DetectionOnlyStats {
+  let totalDetectedCount = 0;
+  let detectionOnlyCount = 0;
+  for (const doc of docs) {
+    if (doc.multiCustomerDetected === true) {
+      totalDetectedCount++;
+      if (!hasDistributionId(doc)) {
+        detectionOnlyCount++;
+      }
+    }
+  }
+  return { totalDetectedCount, detectionOnlyCount };
+}
+
 export interface InventoryAggregate {
   groupCount: number;
   totalDocCount: number;

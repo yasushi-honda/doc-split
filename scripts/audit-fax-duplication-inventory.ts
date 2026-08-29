@@ -33,8 +33,10 @@ import * as admin from 'firebase-admin';
 import {
   summarizeAllGroups,
   aggregateGroups,
+  computeDetectionOnlyStats,
   type InventoryDoc,
   type GroupSummary,
+  type DetectionOnlyStats,
 } from './lib/faxDuplicationInventory';
 
 const projectId = process.env.FIREBASE_PROJECT_ID;
@@ -127,11 +129,46 @@ async function fetchAllDocsFullScan(): Promise<InventoryDoc[]> {
   return results;
 }
 
+/**
+ * 新旧突合(Stage1併走検証)用: multiCustomerDetected===trueのdocのみを対象クエリで取得する。
+ * デフォルトのdistributionId効率スキャンはdistributionId保持docしか返さないため、
+ * 「検出はされたが複製は発火していない」docを見るには本関数の専用クエリが必須
+ * (codex review P1指摘対応、2026-08-30)。--full-scan時は既に全件取得済みのため呼ばない。
+ */
+async function fetchMultiCustomerDetectedDocs(): Promise<InventoryDoc[]> {
+  const results: InventoryDoc[] = [];
+  let lastDoc: FirebaseFirestore.QueryDocumentSnapshot | null = null;
+  let hasMore = true;
+
+  while (hasMore) {
+    let query = db
+      .collection('documents')
+      .where('multiCustomerDetected', '==', true)
+      .orderBy(admin.firestore.FieldPath.documentId())
+      .limit(PAGE_SIZE);
+    if (lastDoc) {
+      query = query.startAfter(lastDoc);
+    }
+    const snapshot = await query.get();
+    if (snapshot.empty) {
+      hasMore = false;
+      break;
+    }
+    for (const docSnap of snapshot.docs) {
+      results.push(toInventoryDoc(docSnap));
+    }
+    lastDoc = snapshot.docs[snapshot.docs.length - 1];
+    hasMore = snapshot.docs.length === PAGE_SIZE;
+  }
+
+  return results;
+}
+
 function msToIso(ms: number | null): string {
   return ms !== null ? new Date(ms).toISOString() : '(不明)';
 }
 
-function printReport(docs: InventoryDoc[], groups: GroupSummary[]): void {
+function printReport(docs: InventoryDoc[], groups: GroupSummary[], detectionStats: DetectionOnlyStats): void {
   const agg = aggregateGroups(groups);
 
   console.log(`プロジェクト: ${projectId}`);
@@ -173,10 +210,18 @@ function printReport(docs: InventoryDoc[], groups: GroupSummary[]): void {
   console.log(`Drive出力済みメンバー総数: ${agg.totalDriveExportedMemberCount}`);
   console.log('---');
 
-  console.log('=== 新旧突合(multiCustomerDetectedとの比較) ===');
+  console.log('=== 新旧突合(multiCustomerDetectedとの比較、Stage1併走検証用) ===');
+  console.log(`multiCustomerDetected:true の総件数: ${detectionStats.totalDetectedCount}`);
+  console.log(
+    `  うち複製グループ(distributionId)に属する: ${detectionStats.totalDetectedCount - detectionStats.detectionOnlyCount}件`
+  );
+  console.log(
+    `  うち検出のみ(distributionId無し、複製は発火していない): ${detectionStats.detectionOnlyCount}件` +
+      '(Stage1併走以前は複製自体が起きないため、この件数がdetectionOnlyCountの全てになるのが正常)'
+  );
   console.log(
     `multiCustomerDetected:trueのメンバーを含む複製グループ数: ${agg.groupsWithMultiCustomerDetectedMemberCount}` +
-      '(Stage1併走以前は0が正常。Stage1中は複製発火集合との一致率確認に使う)'
+      '(検出集合と複製発火集合が一致していれば、multiCustomerDetected総件数 ≒ 複製グループ数 になるはず)'
   );
   console.log('---');
 
@@ -189,7 +234,13 @@ async function main(): Promise<void> {
   const docs = fullScan ? await fetchAllDocsFullScan() : await fetchDistributedDocs();
   const groups = summarizeAllGroups(docs);
 
-  printReport(docs, groups);
+  // --full-scan時はdocsに既に全件(distributionId無しも含む)が含まれているため追加クエリ不要。
+  // デフォルト経路はdistributionId保持docしか取得していないため、検出のみ(distributionId無し)の
+  // docを見るために専用クエリを別途実行する(codex review P1指摘対応)。
+  const detectionSourceDocs = fullScan ? docs : await fetchMultiCustomerDetectedDocs();
+  const detectionStats = computeDetectionOnlyStats(detectionSourceDocs);
+
+  printReport(docs, groups, detectionStats);
 
   if (jsonOutPath) {
     const agg = aggregateGroups(groups);
@@ -201,6 +252,7 @@ async function main(): Promise<void> {
           fullScan,
           scannedDocCount: docs.length,
           aggregate: agg,
+          detectionStats,
           groups,
         },
         null,
