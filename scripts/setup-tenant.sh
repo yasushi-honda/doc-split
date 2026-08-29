@@ -678,6 +678,20 @@ async function main() {
     });
     console.log('✓ settings/gmail を作成 (service_account 初期値)');
 
+    // Feature flag初期化(ADR-0009「オプション機能は汎用的に設計し、Feature Flag名は
+    // settings/featuresのフィールドとして追加、setup-tenant.shにデフォルト値(通常false)を
+    // 追加する」規約。functions/src/utils/featureFlags.tsのfail-closed設計上、本来この
+    // ドキュメント自体が無くても安全側デフォルト(false)で動作するが、新規テナントで
+    // 「どのフラグが存在するか」を一覧できるようにするため明示的にfalseで初期化する)。
+    await db.doc('settings/features').set({
+        faxDuplication: false,
+        multiCustomerDetection: false,
+        driveExport: false,
+        createdAt: new Date(),
+        updatedAt: new Date()
+    });
+    console.log('✓ settings/features を作成 (全フラグfalseで初期化)');
+
     // 管理者ユーザー（Firebase Authにユーザーがいれば取得）
     let uid = 'pending_admin';
     try {

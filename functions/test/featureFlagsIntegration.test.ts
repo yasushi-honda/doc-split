@@ -13,6 +13,7 @@ import * as admin from 'firebase-admin';
 import { cleanupCollections } from './helpers/cleanupEmulator';
 import {
   isFaxDuplicationEnabled,
+  isMultiCustomerDetectionEnabled,
   isDriveExportEnabled,
   getDriveExportGate,
   FEATURE_FLAGS_DOC_PATH,
@@ -48,6 +49,41 @@ describe('isFaxDuplicationEnabled (複数顧客FAX複製機能 feature flag)', (
   it('faxDuplicationが文字列"true"等truthyな非boolean値の場合も、無効(false)を返す(fail-closed)', async () => {
     await db.doc(FEATURE_FLAGS_DOC_PATH).set({ faxDuplication: 'true' as unknown as boolean });
     expect(await isFaxDuplicationEnabled(db)).to.equal(false);
+  });
+});
+
+describe('isMultiCustomerDetectionEnabled (複数人記載検出 feature flag、PR-A「複数人記載FAX: 複製廃止→検出バッジへの置換」)', () => {
+  beforeEach(async () => {
+    await cleanupCollections(db, COLLECTIONS_TO_CLEAN);
+  });
+
+  it('フラグドキュメントが存在しない場合、安全側デフォルトとして無効(false)を返す', async () => {
+    expect(await isMultiCustomerDetectionEnabled(db)).to.equal(false);
+  });
+
+  it('フラグドキュメントは存在するがmultiCustomerDetectionフィールドがない場合、無効(false)を返す', async () => {
+    await db.doc(FEATURE_FLAGS_DOC_PATH).set({ unrelatedField: 'x' });
+    expect(await isMultiCustomerDetectionEnabled(db)).to.equal(false);
+  });
+
+  it('multiCustomerDetection: trueの場合、有効(true)を返す', async () => {
+    await db.doc(FEATURE_FLAGS_DOC_PATH).set({ multiCustomerDetection: true });
+    expect(await isMultiCustomerDetectionEnabled(db)).to.equal(true);
+  });
+
+  it('multiCustomerDetection: falseの場合、無効(false)を返す', async () => {
+    await db.doc(FEATURE_FLAGS_DOC_PATH).set({ multiCustomerDetection: false });
+    expect(await isMultiCustomerDetectionEnabled(db)).to.equal(false);
+  });
+
+  it('multiCustomerDetectionが文字列"true"等truthyな非boolean値の場合も、無効(false)を返す(fail-closed)', async () => {
+    await db.doc(FEATURE_FLAGS_DOC_PATH).set({ multiCustomerDetection: 'true' as unknown as boolean });
+    expect(await isMultiCustomerDetectionEnabled(db)).to.equal(false);
+  });
+
+  it('faxDuplicationがtrueでもmultiCustomerDetectionが未設定なら無効(false)を返す(フラグ独立性、併走ステージの前提)', async () => {
+    await db.doc(FEATURE_FLAGS_DOC_PATH).set({ faxDuplication: true });
+    expect(await isMultiCustomerDetectionEnabled(db)).to.equal(false);
   });
 });
 

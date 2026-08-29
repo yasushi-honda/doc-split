@@ -24,6 +24,22 @@ export async function isFaxDuplicationEnabled(
 }
 
 /**
+ * 複数人記載検出機能(kanameone現場要件、PR-A「複数人記載FAX: 複製廃止→検出バッジへの置換」、
+ * 2026-08-30)が有効かどうかを返す。`faxDuplication`(人数分複製)とは意図的に別フラグにして
+ * いる: 両方ONの「併走ステージ」(複製ONのまま検出だけONにして本番データで検出集合==複製
+ * 発火集合を実測する)を作れるようにするため。フラグドキュメントが存在しない場合、または
+ * multiCustomerDetectionが明示的にtrueでない場合は「無効」を安全側デフォルトとする
+ * (fail-closed、kanameoneのみ明示ONを想定)。
+ */
+export async function isMultiCustomerDetectionEnabled(
+  db: admin.firestore.Firestore
+): Promise<boolean> {
+  const snap = await db.doc(FEATURE_FLAGS_DOC_PATH).get();
+  if (!snap.exists) return false;
+  return snap.data()?.multiCustomerDetection === true;
+}
+
+/**
  * Google Drive連携機能(ADR-0022)が有効かどうかを返す。
  * フラグドキュメントが存在しない場合、またはdriveExportが明示的にtrueでない
  * 場合は「無効」を安全側デフォルトとする(fail-closed、Drive API呼び出しを起動させない)。

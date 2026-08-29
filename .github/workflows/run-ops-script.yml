@@ -109,6 +109,10 @@ on:
           - set-feature-flag --flag faxDuplication --value true
           - set-feature-flag --flag faxDuplication --value false --dry-run
           - set-feature-flag --flag faxDuplication --value false
+          - set-feature-flag --flag multiCustomerDetection --value true --dry-run
+          - set-feature-flag --flag multiCustomerDetection --value true
+          - set-feature-flag --flag multiCustomerDetection --value false --dry-run
+          - set-feature-flag --flag multiCustomerDetection --value false
           - check-gemini-cost-stats
           - check-gemini-cost-stats --days 3 --doc-limit 30
           - check-gemini-cost-stats --days 21 --doc-limit 500

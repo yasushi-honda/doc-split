@@ -132,6 +132,20 @@ DocSplitのデータはすべてCloud Firestoreに格納される。
 | driveFileId | string \| null | No | Drive上のfileId（重複防止・再送先の一意キー） |
 | driveExportedAt | timestamp \| null | No | エクスポート完了日時 |
 | driveExportError | string \| null | No | エラー一覧UI表示用の日本語メッセージ |
+| driveExportRunId | string \| null | No | クレーム時に発行される所有権トークン(randomUUID)。並行実行時の書戻し保護に使用 |
+
+### 複数人記載FAX（`settings/features` のクライアント別 feature flag で制御）
+
+`functions/src/ocr/faxDuplication.ts`（複数顧客FAX複製機能、`settings/features.faxDuplication`）と
+`shared/multiCustomerDetection.ts`（複数人記載検出、`settings/features.multiCustomerDetection`）は
+同一の検出基準（exactマッチ2件以上・同姓同名衝突除外・customerIdでdedup）を共有する、直交する
+2機能。前者は検出人数分docを複製し、後者は複製せず単一doc上にバッジ表示用フラグを立てる。
+
+| フィールド | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| distributionId | string | No | 複数顧客FAX複製機能（`faxDuplication`フラグ有効時）で、元doc・全コピーに同一値（元docのid）を付与する。`doc.id === doc.distributionId` で元doc判定。兄弟一覧は `where('distributionId','==',X)` で導出（双方向配列は削除時の孤児化を避けるため持たない）。手動分割で生成される子docへは伝播しない |
+| multiCustomerDetected | boolean | No | 複数人記載検出機能（`multiCustomerDetection`フラグ有効時のみ書込み）。検出時true、非検出時も明示的にfalse（フィールド不在にしない）。フラグ無効テナントではキー自体が書き込まれない |
+| multiCustomerCount | number | No | `multiCustomerDetected`の元になったdistinct-exact候補数。不変条件: `multiCustomerDetected === (multiCustomerCount >= 2)` |
 
 ### PDF分割・回転
 
@@ -366,7 +380,7 @@ Gmail添付ファイル取得ログ。重複検知用のMD5ハッシュを含む
 
 ## /settings/{settingId}
 
-アプリケーション設定。4つのサブドキュメントで構成される。
+アプリケーション設定。5つのサブドキュメントで構成される。
 
 ### /settings/app
 
@@ -412,6 +426,22 @@ Google Drive連携設定（ADR-0022、Phase 1）。Gmail連携（`settings/gmail
 
 > OAuth認証情報（clientId, clientSecret, refreshToken）はSecret Manager (`drive-oauth-client-id`/`-secret`/`-refresh-token`) に保存。Firestoreには格納しない。
 > スコープは `drive.file` で確定（実機検証済み、Picker経由で選択したフォルダへのShared Drive内フォルダ作成が成功することを確認）。フル `drive` スコープは不要。
+
+### /settings/features
+
+クライアント別 feature flag（ADR-0009）。`functions/src/utils/featureFlags.ts` が読む。**fail-closed**:
+ドキュメント不在・フィールド不在・非boolean値（`'true'`文字列等）はいずれも無効(false)として扱う。書込みは
+`scripts/set-feature-flag.js`（GitHub Actions「Run Operations Script」経由、ローカル実行は
+`.claude/hooks/ops-script-redirect.sh` がブロック）のみ。フロントエンドはこのドキュメントを読まない
+（各フラグの効果はBE側の書込み内容の差としてのみ現れる設計）。新規テナントは `scripts/setup-tenant.sh`
+が全フラグ `false` で初期化する。
+
+| フィールド | 型 | 必須 | 説明 |
+|-----------|-----|------|------|
+| faxDuplication | boolean | No | 複数顧客FAX複製機能。有効テナントのみ、1ファイルに複数人記載時に人数分docを複製する |
+| multiCustomerDetection | boolean | No | 複数人記載検出機能。`faxDuplication`とは独立したフラグ（併走ステージを作れるようにするため）。有効テナントのみ`multiCustomerDetected`/`multiCustomerCount`を書き込む |
+| driveExport | boolean | No | Google Drive連携（ADR-0022）のトリガー有効化 |
+| driveExportAllowlist | string[] \| 不在 | No | Drive連携のtrigger専用allowlist。不在=制限なし、空配列=全docId拒否、詳細は `functions/src/utils/featureFlags.ts` の `getDriveExportGate()` 参照 |
 
 ### Firestoreセキュリティルール（settings共通）
 

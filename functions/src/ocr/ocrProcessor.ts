@@ -52,7 +52,13 @@ import { resolveDetailFields } from './documentDetail';
 import { applyConfirmedFieldProtection } from './confirmedFieldMerge';
 import { buildOcrExcerpt } from './ocrExcerpt';
 import { isFaxDuplicationEnabled } from '../utils/featureFlags';
+import { isMultiCustomerDetectionEnabled } from '../utils/featureFlags';
 import { planFaxDuplication, buildFaxDuplicationMemberOverride } from './faxDuplication';
+import {
+  buildMultiCustomerDetectionFields,
+  type MultiCustomerCandidateLike,
+  type MultiCustomerDetectionFields,
+} from '../../../shared/multiCustomerDetection';
 import {
   computeOcrResultObjectsToDelete,
   shouldSkipCompensatingDelete,
@@ -489,16 +495,33 @@ export async function processDocument(
     // このFirestore読取にも及ぼすため(code-review指摘: tryの外に置くとこの読取が失敗
     // した場合にocrResultUrlのStorage孤児がcompensateDeleteOnFailureされずに残る)。
     const faxDuplicationEnabled = await isFaxDuplicationEnabled(db);
+    // 複数人記載検出(kanameone現場要件、PR-A「複数人記載FAX: 複製廃止→検出バッジへの置換」、
+    // 2026-08-30)。faxDuplication(人数分複製)とは意図的に独立したフラグ。複製発火条件と
+    // 厳密に同一の検出基準(shared/multiCustomerDetection.ts)を使う。flag OFF時は
+    // multiCustomerFieldsが空オブジェクトになりキー自体を書き込まないため、無効テナント
+    // (cocoro/dev)の書込みペイロードは従来と完全に同一のまま。
+    const multiCustomerDetectionEnabled = await isMultiCustomerDetectionEnabled(db);
     // ADR-0022顧客未確定ゲート再設計(2026-07-25、Plan agent検証で発覚した致命的な穴への
     // 対応): マスターの`isDuplicate`フラグは事後の追加・改名で更新されないため信用せず、
     // 既にロード済みの`customers`(:346)からライブに同名衝突を数え直す(追加読み込みなし)。
     const sameNameCollisionNames = findSameNameCollisionNames(customers);
+    // Issue #625配線契約(ocrProcessorOcrResultCleanupWiringContract.test.ts)が、tryブロック
+    // 開始からこのtransaction呼出までの間に閉じ中括弧が現れないことをソース文字列レベルで
+    // 検証しているため(該当文字そのものをこのコメントに書くとテストが誤検出するため引用しない)、
+    // この2行は中括弧を含まない関数呼び出しのみで完結させている(実体はshared側、ocrProcessor.ts
+    // 側のヘルパーはprocessDocument関数の外で定義)。
+    const multiCustomerCandidates = customerResult.candidates.map(toMultiCustomerCandidateLike);
+    const multiCustomerFields = buildMultiCustomerDetectionFields(
+      multiCustomerCandidates,
+      sameNameCollisionNames,
+      multiCustomerDetectionEnabled
+    );
     await applyOcrCompletionTransaction({
       db,
       docRef,
       docId,
       ownershipExpectation,
-      extractionFields,
+      extractionFields: { ...extractionFields, ...multiCustomerFields },
       customerCandidates: customerResult.candidates,
       sameNameCollisionNames,
       fileDateFormatted: dateResult.formattedDate ?? undefined,
@@ -565,7 +588,14 @@ export async function applyOcrCompletionTransaction(input: {
   docRef: FirebaseFirestore.DocumentReference;
   docId: string;
   ownershipExpectation: OcrRunExpectation;
-  extractionFields: OcrExtractionUpdateFields;
+  /**
+   * 複数人記載検出フィールド(multiCustomerDetected/multiCustomerCount)は
+   * `OcrExtractionUpdateFields` 自体には含めない(ocrUpdatePayloadBuilder.tsは検出ロジックを
+   * 知らない、責務分離)。呼出元(ocrProcessor.ts)がflag有効時のみ`Partial<...>`をspreadで
+   * 合成して渡す。`applyConfirmedFieldProtection`は`{...proposed}`のoverride方式のため
+   * 余剰フィールドもそのまま`merged`へ伝播する(functions/src/ocr/confirmedFieldMerge.ts参照)。
+   */
+  extractionFields: OcrExtractionUpdateFields & Partial<MultiCustomerDetectionFields>;
   customerCandidates: CustomerCandidate[];
   /** `shared/customerIdentity.ts`の`findSameNameCollisionNames()`で計算済みの同名衝突集合。 */
   sameNameCollisionNames: ReadonlySet<string>;
@@ -1290,6 +1320,24 @@ async function copyOcrResultForDistributionMember(
   );
 
   return `gs://${bucket.name}/${destPath}`;
+}
+
+/**
+ * `CustomerCandidate`(extractors.ts) → `MultiCustomerCandidateLike`(shared/multiCustomerDetection.ts)
+ * への変換(複数人記載検出用、PR-A)。`processDocument` 関数の外で定義しているのは、
+ * Issue #625配線契約テスト(ocrProcessorOcrResultCleanupWiringContract.test.ts)が
+ * try{からapplyOcrCompletionTransaction呼出までの間に`}`(インラインアロー関数の
+ * オブジェクトリテラル等)が現れないことをソース文字列レベルで検証しているため、
+ * 呼出側は`.map(toMultiCustomerCandidateLike)`という中括弧を含まない1行で完結させる必要がある。
+ */
+function toMultiCustomerCandidateLike(c: CustomerCandidate): MultiCustomerCandidateLike {
+  return {
+    customerId: c.id,
+    customerName: c.name,
+    score: c.score,
+    matchType: c.matchType,
+    isDuplicate: c.isDuplicate,
+  };
 }
 
 function createDefaultOcrResultStorageAdapter(): OcrResultStorageAdapter {
