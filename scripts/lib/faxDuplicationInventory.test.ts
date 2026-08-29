@@ -7,8 +7,71 @@ import {
   summarizeAllGroups,
   aggregateGroups,
   computeDetectionOnlyStats,
+  mapDocumentDataToInventoryDoc,
   type InventoryDoc,
 } from './faxDuplicationInventory';
+
+test('mapDocumentDataToInventoryDoc: 全フィールドが揃ったFirestore生データを正しく変換する', () => {
+  const fakeTimestamp = { toMillis: () => 123456 };
+  const doc = mapDocumentDataToInventoryDoc('doc-1', {
+    distributionId: 'orig-1',
+    customerConfirmed: true,
+    verified: true,
+    driveExportStatus: 'exported',
+    multiCustomerDetected: true,
+    multiCustomerCount: 3,
+    processedAt: fakeTimestamp,
+  });
+  assert.deepEqual(doc, {
+    id: 'doc-1',
+    distributionId: 'orig-1',
+    customerConfirmed: true,
+    verified: true,
+    driveExportStatus: 'exported',
+    multiCustomerDetected: true,
+    multiCustomerCount: 3,
+    processedAtMs: 123456,
+  });
+});
+
+test('mapDocumentDataToInventoryDoc: フィールド全欠落時は安全側のデフォルト値になる', () => {
+  const doc = mapDocumentDataToInventoryDoc('doc-1', {});
+  assert.deepEqual(doc, {
+    id: 'doc-1',
+    distributionId: null,
+    customerConfirmed: false,
+    verified: false,
+    driveExportStatus: null,
+    multiCustomerDetected: false,
+    multiCustomerCount: null,
+    processedAtMs: null,
+  });
+});
+
+test('mapDocumentDataToInventoryDoc: customerConfirmed/verified/multiCustomerDetectedはtrue以外(文字列"true"等)はfalseに正規化する', () => {
+  const doc = mapDocumentDataToInventoryDoc('doc-1', {
+    customerConfirmed: 'true',
+    verified: 1,
+    multiCustomerDetected: 'yes',
+  });
+  assert.equal(doc.customerConfirmed, false);
+  assert.equal(doc.verified, false);
+  assert.equal(doc.multiCustomerDetected, false);
+});
+
+test('mapDocumentDataToInventoryDoc: multiCustomerCountが数値でない場合はnullにフォールバックする', () => {
+  const doc = mapDocumentDataToInventoryDoc('doc-1', { multiCustomerCount: '2' });
+  assert.equal(doc.multiCustomerCount, null);
+});
+
+test('mapDocumentDataToInventoryDoc: processedAtがtoMillis()を持たない値の場合はnullにフォールバックする(壊れたTimestamp防御)', () => {
+  const doc1 = mapDocumentDataToInventoryDoc('doc-1', { processedAt: 'not-a-timestamp' });
+  assert.equal(doc1.processedAtMs, null);
+  const doc2 = mapDocumentDataToInventoryDoc('doc-2', { processedAt: {} });
+  assert.equal(doc2.processedAtMs, null);
+  const doc3 = mapDocumentDataToInventoryDoc('doc-3', { processedAt: null });
+  assert.equal(doc3.processedAtMs, null);
+});
 
 test('hasDistributionId: 非空文字列のみtrue(空文字列/undefined/nullはfalse)', () => {
   assert.equal(hasDistributionId({ distributionId: 'orig-1' }), true);
@@ -83,6 +146,27 @@ test('summarizeGroup: processedAtMs欠落メンバーは時系列集計から除
   const summary = summarizeGroup('orig-1', members);
   assert.equal(summary.oldestProcessedAtMs, null);
   assert.equal(summary.newestProcessedAtMs, null);
+});
+
+test('summarizeGroup: 一部メンバーのみprocessedAtMs欠落(混在)でも、値を持つメンバーだけでoldest/newestを算出する', () => {
+  const members: InventoryDoc[] = [
+    { id: 'orig-1', distributionId: 'orig-1', processedAtMs: 2000 },
+    { id: 'copy-1', distributionId: 'orig-1' }, // 欠落
+    { id: 'copy-2', distributionId: 'orig-1', processedAtMs: 1000 },
+  ];
+  const summary = summarizeGroup('orig-1', members);
+  assert.equal(summary.oldestProcessedAtMs, 1000);
+  assert.equal(summary.newestProcessedAtMs, 2000);
+});
+
+test('summarizeGroup: processedAtMs===0(falsyだが有効な値、epoch)は欠落として扱わない', () => {
+  const members: InventoryDoc[] = [
+    { id: 'orig-1', distributionId: 'orig-1', processedAtMs: 0 },
+    { id: 'copy-1', distributionId: 'orig-1', processedAtMs: 500 },
+  ];
+  const summary = summarizeGroup('orig-1', members);
+  assert.equal(summary.oldestProcessedAtMs, 0); // nullではなく0であるべき(=== nullガードの回帰防止)
+  assert.equal(summary.newestProcessedAtMs, 500);
 });
 
 test('summarizeGroup: multiCustomerDetected:trueのメンバーをカウントする(新旧突合用)', () => {
@@ -168,6 +252,21 @@ test('aggregateGroups: 確定/確認状態は全員一致(fully)と一部一致(
   assert.equal(agg.fullyVerifiedGroupCount, 1);
   assert.equal(agg.partiallyVerifiedGroupCount, 0);
   assert.equal(agg.totalVerifiedMemberCount, 2); // g1:2のみ
+});
+
+test('aggregateGroups: verifiedもconfirmedと独立にpartially判定される(pr-test-analyzer指摘対応: verified側のpartially分岐が未検証だった)', () => {
+  const groups = [
+    // confirmedは全員trueだが、verifiedは一部のみtrue(confirmed/verifiedが独立に動くことの確認)
+    summarizeGroup('g1', [
+      { id: 'g1', distributionId: 'g1', customerConfirmed: true, verified: true },
+      { id: 'g1-c1', distributionId: 'g1', customerConfirmed: true, verified: false },
+    ]),
+  ];
+  const agg = aggregateGroups(groups);
+  assert.equal(agg.fullyConfirmedGroupCount, 1);
+  assert.equal(agg.partiallyConfirmedGroupCount, 0);
+  assert.equal(agg.fullyVerifiedGroupCount, 0);
+  assert.equal(agg.partiallyVerifiedGroupCount, 1);
 });
 
 test('aggregateGroups: Drive出力済みメンバーを含むグループ数と総メンバー数を集計する', () => {

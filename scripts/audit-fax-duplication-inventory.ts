@@ -34,6 +34,7 @@ import {
   summarizeAllGroups,
   aggregateGroups,
   computeDetectionOnlyStats,
+  mapDocumentDataToInventoryDoc,
   type InventoryDoc,
   type GroupSummary,
   type DetectionOnlyStats,
@@ -59,18 +60,7 @@ const db = admin.firestore();
 const PAGE_SIZE = 500;
 
 function toInventoryDoc(docSnap: FirebaseFirestore.QueryDocumentSnapshot): InventoryDoc {
-  const data = docSnap.data();
-  const processedAt = data.processedAt as FirebaseFirestore.Timestamp | undefined;
-  return {
-    id: docSnap.id,
-    distributionId: (data.distributionId as string | undefined) ?? null,
-    customerConfirmed: data.customerConfirmed === true,
-    verified: data.verified === true,
-    driveExportStatus: (data.driveExportStatus as string | undefined) ?? null,
-    multiCustomerDetected: data.multiCustomerDetected === true,
-    multiCustomerCount: typeof data.multiCustomerCount === 'number' ? data.multiCustomerCount : null,
-    processedAtMs: processedAt?.toMillis?.() ?? null,
-  };
+  return mapDocumentDataToInventoryDoc(docSnap.id, docSnap.data());
 }
 
 /** デフォルト経路: distributionIdを持つdocのみをorderBy('distributionId')で効率的に取得する。 */
