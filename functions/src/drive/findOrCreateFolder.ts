@@ -261,6 +261,37 @@ export async function findOrCreateFolder(
     return (await verifyFolderClaim(drive, firestore, parentId, name, claim, runId)).folderId;
   }
 
+  // codex review指摘対応(6巡目、P2): 読み経路が無効(shadowロールアウト中、既定)でも、
+  // 直前にchildFolderResolver.ts(Phase B移行スクリプト)や他の並行実行がクラッシュし
+  // 'creating'状態の孤児claim(リース失効済みだがattemptIdタグ付きフォルダは未確定)を
+  // 残している可能性がある。beginCreation()自身はリース失効時に無条件で上書きして
+  // 新規createへ進んでしまう(Driveへのタグ検索は行わない)ため、それをそのまま許すと
+  // 孤児フォルダを見落として二重作成しうる。childFolderResolver.ts側は3巡目で対応済み
+  // だったが、本来の(hot path側の)findOrCreateFolder.tsに対称的に適用されていなかった。
+  if (!readEnabled) {
+    const preCreateClaim = await readClaim(firestore, parentId, name);
+    if (preCreateClaim?.state === 'creating' && preCreateClaim.attempt) {
+      const outcome = await reconcileAttempt(
+        drive,
+        firestore,
+        parentId,
+        name,
+        preCreateClaim as FolderClaimDoc & { attempt: FolderClaimAttempt },
+        runId
+      );
+      if (outcome.status === 'adopt') {
+        await commitResolvedWithRetry(firestore, parentId, name, preCreateClaim.attempt.attemptId, outcome.folderId);
+        return outcome.folderId;
+      }
+      if (outcome.status === 'wait') {
+        throw new FolderCreationInProgressError(name, parentId);
+      }
+      // status === 'clear' → claimはinvalidated化された。以降はbeginCreation()へ進んでよい
+    }
+    // 'creating'かつattemptが無い(旧形式残骸)場合は、下のbeginCreation()自身の
+    // staleness判定(claimedAtMs)に委ねる(read有効時の分岐と同型)。
+  }
+
   // 0件マッチ = 新規作成が必要。異なるdocId間の競合を防ぐためclaimを予約する。
   const begun = await beginCreation(firestore, parentId, name, runId);
   if (begun.status === 'blocked') {

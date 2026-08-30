@@ -25,6 +25,7 @@ import {
 import {
   DivergentFolderClaimError,
   buildFolderLockId,
+  commitResolvedWithRetry,
   invalidateResolvedClaimByFolderId,
   invalidateCreatingClaimByAttemptId,
 } from '../src/drive/driveFolderClaim';
@@ -378,6 +379,83 @@ describe('driveFolderClaim プロトコル(Issue #871)', () => {
       const snap = await claimDocRef('parent-shadow-stale-creating', '孤児太郎').get();
       expect(snap.data()?.state).to.equal('resolved');
       expect(snap.data()?.folderId).to.equal('orphan-created-id');
+    });
+
+    it('完全再検索が進行中の他プロセスの"creating"claimをfencingトークン汚染なしに温存する(codex review P1指摘対応、6巡目)', async () => {
+      // シナリオ: 本番exportが同じparent+nameに対しbeginCreationでcreating claimを
+      // 確保した直後(files.create()呼び出し前)。この間隙で、childFolderResolver.tsの
+      // 完全再検索が(無関係に)別の既存フォルダを見つけ、recordFullScanResolutionを
+      // 呼ぶ。修正前は既存attempt(exporterのattemptId)を騙って'resolved'へ上書きして
+      // いたため、後でexporter自身がcommitResolvedWithRetryを呼ぶとfencingが
+      // (誤って)一致と判定し、2つの物理フォルダが確定してしまっていた。
+      await claimDocRef('parent-race', '競合太郎').set({
+        state: 'creating',
+        attempt: { attemptId: 'exporter-attempt-id', startedAtMs: Date.now(), runId: 'exporter-run' },
+        parentId: 'parent-race',
+        name: '競合太郎',
+      });
+      const { drive } = makeFakeDrive({
+        files: [{ id: 'unrelated-existing-id', name: '競合太郎', parents: ['parent-race'], trashed: false }],
+      });
+
+      const result = await resolveChildFolder(drive, db, 'parent-race', '競合太郎');
+      expect(result).to.deep.equal({ id: 'unrelated-existing-id', restored: false, created: false });
+
+      // claimはexporterのcreating attemptのまま温存され、上書きされていないこと
+      const midSnap = await claimDocRef('parent-race', '競合太郎').get();
+      expect(midSnap.data()?.state).to.equal('creating');
+      expect(midSnap.data()?.attempt?.attemptId).to.equal('exporter-attempt-id');
+
+      // exporter自身が後でfiles.create()を完了しcommitResolvedWithRetryを呼んでも、
+      // fencingトークンが汚染されていないため正しく自分のfolderIdで確定できる
+      // (poisoningされていた場合は "unrelated-existing-id" 側のattemptと誤って
+      // 一致判定され、以下のcommitが正常系として通ってしまっていた)。
+      await commitResolvedWithRetry(db, 'parent-race', '競合太郎', 'exporter-attempt-id', 'exporter-created-id');
+      const finalSnap = await claimDocRef('parent-race', '競合太郎').get();
+      expect(finalSnap.data()?.state).to.equal('resolved');
+      expect(finalSnap.data()?.folderId).to.equal('exporter-created-id');
+    });
+  });
+
+  describe('findOrCreateFolder: shadowモードでの期限切れ"creating"claim回収(codex review P2指摘対応、6巡目)', () => {
+    it('shadowモード(driveFolderClaimRead未設定)でも、期限切れの"creating"claim(クラッシュ後の孤児)をreconcileAttemptで回収し二重作成しない', async () => {
+      await claimDocRef('parent-fofc-stale-creating', '孤児二郎').set({
+        state: 'creating',
+        attempt: { attemptId: 'orphan-attempt-fofc', startedAtMs: Date.now() - 20 * 60 * 1000, runId: 'crashed-run' },
+        parentId: 'parent-fofc-stale-creating',
+        name: '孤児二郎',
+      });
+      const { drive: baseDrive, createCalls } = makeFakeDrive({
+        files: [
+          {
+            id: 'orphan-created-id-fofc',
+            name: '孤児二郎',
+            parents: ['parent-fofc-stale-creating'],
+            trashed: false,
+            appProperties: { docSplitFolderClaim: 'orphan-attempt-fofc' },
+          },
+        ],
+      });
+      const drive = {
+        files: {
+          ...baseDrive.files,
+          list: async (params: Record<string, unknown>) => {
+            const q = params.q as string;
+            if (q.includes('appProperties has')) {
+              return baseDrive.files.list(params);
+            }
+            return { data: { files: [] } };
+          },
+        },
+      } as unknown as drive_v3.Drive;
+
+      const result = await findOrCreateFolder(drive, db, 'parent-fofc-stale-creating', '孤児二郎');
+
+      expect(result).to.equal('orphan-created-id-fofc');
+      expect(createCalls).to.have.lengthOf(0);
+      const snap = await claimDocRef('parent-fofc-stale-creating', '孤児二郎').get();
+      expect(snap.data()?.state).to.equal('resolved');
+      expect(snap.data()?.folderId).to.equal('orphan-created-id-fofc');
     });
   });
 

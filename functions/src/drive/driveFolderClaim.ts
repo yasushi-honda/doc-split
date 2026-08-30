@@ -266,6 +266,24 @@ function ttlTimestamp(): admin.firestore.Timestamp {
   return admin.firestore.Timestamp.fromMillis(Date.now() + CLAIM_TTL_DAYS * 24 * 60 * 60 * 1000);
 }
 
+/**
+ * `existing`が'creating'状態かつリースがまだ有効(=別プロセスが現在進行中とみなせる)かを
+ * 判定する共通ヘルパー(codex review P1指摘対応、6巡目)。`beginCreation`・
+ * `recordFullScanResolution`・`recordVerification`が同じ基準を共有する。
+ *
+ * `FOLDER_LOCK_STALE_MS`(10分)はCloud Functionsの`timeoutSeconds`(120秒)より
+ * 十分長く設定されている(driveExportScheduled.ts等)ため、リースが失効している時点で
+ * その所有プロセスは強制終了済みと確定できる——「失効後にその古いattemptIdが目覚めて
+ * 完了する」ことは起こり得ない。したがって、失効済みclaimのattemptIdを新しいresolved
+ * 記録へそのまま引き継いでも安全(commitResolvedWithRetryのfencing判定を汚染しない)。
+ * 保護が必要なのは有効なリース内(=本当にまだ進行中の可能性がある)の場合のみ。
+ */
+function hasValidInFlightCreatingLease(existing: FolderClaimDoc | null): boolean {
+  if (existing?.state !== 'creating') return false;
+  const leaseAnchorMs = existing.attempt?.startedAtMs ?? existing.claimedAtMs ?? 0;
+  return Date.now() - leaseAnchorMs < FOLDER_LOCK_STALE_MS;
+}
+
 /** 旧形式(`state`欠損)のドキュメントを`state:'creating', attempt:null`として解釈する。 */
 function normalizeClaim(
   data: admin.firestore.DocumentData,
@@ -384,12 +402,8 @@ export async function beginCreation(
       return { kind: 'resolved', claim: existing as ResolvedFolderClaim };
     }
 
-    if (existing) {
-      const leaseAnchorMs = existing.attempt?.startedAtMs ?? existing.claimedAtMs ?? 0;
-      const leaseValid = Date.now() - leaseAnchorMs < FOLDER_LOCK_STALE_MS;
-      if (existing.state === 'creating' && leaseValid) {
-        return { kind: 'blocked' };
-      }
+    if (hasValidInFlightCreatingLease(existing)) {
+      return { kind: 'blocked' };
     }
 
     const attempt: FolderClaimAttempt = { attemptId, startedAtMs, runId };
@@ -490,6 +504,22 @@ export async function recordFullScanResolution(
     if (existing?.state === 'divergent') {
       console.warn(
         `[driveFolderClaim] divergent状態のclaimを完全再検索の結果で上書きしません(人手介入待ち): "${name}"（親フォルダ: ${parentId}）`
+      );
+      return;
+    }
+
+    // codex review P1指摘対応(6巡目): 有効なリース内の'creating'(=別プロセスが現在
+    // 進行中とみなせるattempt)を検知した場合、そのattemptIdをこの完全再検索の結果へ
+    // そのまま引き継いで'resolved'へ書き込んではならない。引き継ぐと、後で進行中の
+    // プロセス自身がfiles.create()を完了しcommitResolvedWithRetryを呼んだ際、
+    // fencing判定(attemptId一致チェック)が「自分のattemptだ」と誤判定して上書きを
+    // 許してしまい、この完全再検索が見つけた既存フォルダとは別の新しいフォルダが
+    // 二重に確定される(呼び出し元は既にこの既存フォルダのidを返却済みのため、
+    // 整合性が崩れる)。claim記録はスキップする(呼び出し元が見つけた既存フォルダ自体の
+    // 採用は妨げない、claimの更新だけを見送る)。
+    if (hasValidInFlightCreatingLease(existing)) {
+      console.warn(
+        `[driveFolderClaim] 進行中の他attemptのclaimを完全再検索の結果で上書きしません(fencingトークン汚染防止): "${name}"（親フォルダ: ${parentId}）`
       );
       return;
     }
@@ -708,6 +738,19 @@ async function recordVerification(
   await firestore.runTransaction(async (tx) => {
     const snap = await tx.get(ref);
     const existing = snap.exists ? normalizeClaim(snap.data()!, parentId, name) : null;
+
+    // codex review P1指摘対応(6巡目、recordFullScanResolutionと同じ理由): 呼び出し元が
+    // 直前に'resolved'を確認してからこの書込みまでの間隙で、別プロセスが有効なリース内の
+    // 'creating'attemptを開始していた場合、そのattemptIdを引き継いで上書きしてはならない
+    // (fencingトークン汚染防止)。files.getで確認済みの健全性そのものは変わらないため、
+    // 呼び出し元(verifyFolderClaim)はこの記録スキップに関わらず結果を返してよい。
+    if (hasValidInFlightCreatingLease(existing)) {
+      console.warn(
+        `[driveFolderClaim] 進行中の他attemptのclaimをverify結果で上書きしません(fencingトークン汚染防止): "${name}"（親フォルダ: ${parentId}）`
+      );
+      return;
+    }
+
     const nowMs = Date.now();
     const doc = stripUndefined({
       state: 'resolved' as const,
