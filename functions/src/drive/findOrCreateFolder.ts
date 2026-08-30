@@ -312,7 +312,7 @@ export async function findOrCreateFolder(
     // §1、状態復旧の失敗が本来のエラーを隠さないようにする)。
     await invalidateAttempt(firestore, parentId, name, attemptId).catch((invalidateError) =>
       console.error(
-        `[findOrCreateFolder] claim invalidateに失敗しました(\"${name}\"、親フォルダ: ${parentId}):`,
+        `[findOrCreateFolder] claim invalidateに失敗しました("${name}"、親フォルダ: ${parentId}):`,
         invalidateError
       )
     );

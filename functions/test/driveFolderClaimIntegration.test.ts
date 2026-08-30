@@ -112,7 +112,7 @@ function makeFakeDrive(opts: FakeDriveOptions = {}) {
           err.status = 404;
           throw err;
         }
-        return { data: { id: file.id, trashed: file.trashed, parents: file.parents } };
+        return { data: { id: file.id, name: file.name, trashed: file.trashed, parents: file.parents } };
       },
     },
   } as unknown as drive_v3.Drive;
@@ -434,6 +434,33 @@ describe('driveFolderClaim プロトコル(Issue #871)', () => {
       }
       const snap = await claimDocRef('parent-403', '権限太郎').get();
       expect(snap.data()?.state).to.equal('resolved');
+    });
+
+    it('name不一致(Drive UI上でのリネーム): divergentへ遷移しDivergentFolderClaimErrorをthrowする(codex review指摘対応)', async () => {
+      await enableClaimRead();
+      await claimDocRef('parent-rename', '旧名太郎').set({
+        state: 'resolved',
+        folderId: 'renamed-id',
+        attempt: null,
+        resolvedAtMs: Date.now() - 2 * 60 * 1000,
+        verifiedAtMs: Date.now() - 2 * 60 * 1000,
+        parentId: 'parent-rename',
+        name: '旧名太郎',
+      });
+      // Drive UI上で「新名太郎」へリネームされたが、親フォルダは変わっていないケース
+      const { drive, createCalls } = makeFakeDrive({
+        files: [{ id: 'renamed-id', name: '新名太郎', parents: ['parent-rename'], trashed: false }],
+      });
+
+      try {
+        await findOrCreateFolder(drive, db, 'parent-rename', '旧名太郎');
+        expect.fail('DivergentFolderClaimErrorがthrowされるべき');
+      } catch (error) {
+        expect(error).to.be.instanceOf(DivergentFolderClaimError);
+      }
+      expect(createCalls).to.have.lengthOf(0);
+      const snap = await claimDocRef('parent-rename', '旧名太郎').get();
+      expect(snap.data()?.state).to.equal('divergent');
     });
 
     it('parents不一致(人力移動): divergentへ遷移しDivergentFolderClaimErrorをthrowする(削除も再作成もしない)', async () => {

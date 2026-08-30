@@ -621,9 +621,11 @@ async function recordMiss(
 
 /**
  * resolved claimの健全性を`files.get`で確認する(§3の分類表に従いfail-closedで処理する)。
- * 200・trashed=falseかつparents一致 → 健全、folderIdを返す。
- * 200・trashed=true → untrashして返す(untrash失敗は再throw)。
- * 200・parents不一致 → 'divergent'にして`DivergentFolderClaimError`をthrow。
+ * 200・trashed=falseかつname/parents一致 → 健全、folderIdを返す。
+ * 200・trashed=true(name一致) → untrashして返す(untrash失敗は再throw)。
+ * 200・parents不一致、またはname不一致(codex review指摘対応: Drive UI上でのリネームを
+ *   検知しないと、要求された名前とは異なるフォルダへ際限なくエクスポートし続けてしまう)
+ *   → 'divergent'にして`DivergentFolderClaimError`をthrow。
  * 404 → missCountを記録し、常に`FolderVerificationPendingError`をthrow(invalidate
  *       するかどうかに関わらず、当該呼び出しはtransientとして扱う。invalidateされて
  *       いれば次回呼び出しで従来経路に自然にフォールバックする)。
@@ -644,7 +646,7 @@ export async function verifyFolderClaim(
       () =>
         drive.files.get({
           fileId: claim.folderId,
-          fields: 'id, trashed, parents',
+          fields: 'id, name, trashed, parents',
           ...SUPPORTS_ALL_DRIVES,
         }),
       3,
@@ -665,6 +667,15 @@ export async function verifyFolderClaim(
   }
 
   const data = getResult.data;
+
+  // codex review指摘対応: フォルダ名が変更されている(親は同じまま)場合を検知する。
+  // parentsのみ確認していると、リネームされた同一IDのフォルダをそのまま信用してしまい、
+  // 要求された名前とは異なるフォルダへエクスポートし続けてしまう。
+  if (data.name !== undefined && data.name !== name) {
+    await markDivergent(firestore, parentId, name, 'name-mismatch');
+    throw new DivergentFolderClaimError(name, parentId, claim.folderId);
+  }
+
   if (data.trashed) {
     await drive.files.update({
       fileId: claim.folderId,
