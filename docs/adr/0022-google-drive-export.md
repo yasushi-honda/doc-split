@@ -61,6 +61,17 @@ Accepted (2026-07-20)
 
 詳細な設計判断・crossreview対応の経緯は`~/.claude/plans/sharded-mapping-squid.md`、実行記録は`docs/handoff/GOAL.md`「Issue #811/#823 remediation Phase 2b-1/2b-2/3」節を参照。
 
+**claimプロトコルによる恒久対策（Issue #871、2026-08-30、PR #875）**: 決定4本文の異docId間ロック（`driveFolderLocks`、fencing token）は排他制御のみで「作成事実」を記録しなかったため、`files.list`の結果整合性遅延（`files.create`直後の検索で新規作成分が返らないことがある）に対しては無力だった——1件目が作成→ロック解放→数秒後に2件目が同じparent+nameを検索して0件（索引未反映）→ロックを自由に獲得→再検索も0件→再作成、という経路を防げなかった。kanameone本番で真の物理フォルダ重複5件が確認され（8/21の異常バースト、`onDocumentWriteDriveExport`が1時間で1,111回発火、との時刻一致で結果整合性遅延が誘発要因と裏付け）、`functions/src/drive/driveFolderClaim.ts`で「作成の予約（creating）→確定（resolved）」を単一Firestoreドキュメント・単一トランザクションで扱うclaim状態機械へ拡張した。
+
+- 状態: `creating → resolved`（正常系）、`invalidated`（`files.list`探索へフォールバック許可）、`divergent`（claimと実体が食い違う、人手介入待ち、削除も再作成もしない）
+- 3段ラダーでDrive API呼び出しを短絡する: resolvedから60秒未満はDrive API無呼出、60秒〜5分は`files.get`のみ、5分超は完全な`files.list`検索（現行と同等の重複検知力を維持）
+- 中断復旧: `files.create`時にappProperties冪等キー（`docSplitFolderClaim`）を刻み、プロセスが強制終了しても次回呼び出しがタグ検索で作成事実を回収できる（reconcileAttempt）
+- 段階導入: `settings/features.driveFolderClaimRead`フラグで既定shadowモード（claim書き込みのみ、既存挙動への影響ゼロ）。読み経路を有効化する前に、本番で claim/`files.get`/`files.list` の3者一致率を検証する
+- claimドキュメントは解決後も削除せず`expireAt`（180日、Firestoreネイティブ TTL）で自然消滅させる方針に変更（従来の`releaseFolderLock`は成功時に即座に削除していた）。**TTLは`expireAt`フィールドの書き込みだけでは有効化されず、環境ごとに`gcloud firestore fields ttls update`等での別途プロビジョニングが必要**（`firestore.indexes.json`と同様CI/CD対象外の手動手順、dev環境は2026-08-30に設定済み・cocoro/kanameoneは未実施）
+- `childFolderResolver.ts`（Part A専用の子階層resolver）自体のclaimプロトコル移行は別PR（PR-4、未着手）。それまでは旧来の`acquireFolderLock`/`releaseFolderLock`（排他制御のみ、claimの`state`は関知しない）で運用を継続する
+
+詳細設計は`~/.claude/plans/moonlit-jumping-alpaca.md`、実装・レビュー経緯は`docs/handoff/GOAL.md`「PR-3完了・次セッション再開点」節を参照。
+
 ### 5. 同期トリガーは「確認ボタン」押下（`verified` false→true）
 
 documentの`verified`フィールドがfalse→trueになる瞬間を、Cloud Functions側のFirestoreトリガー（`onDocumentWritten('documents/{docId}')`）で検知してエクスポートを開始する。OCR誤読・利用者取り違えが確定する前の情報を外部Driveへ誤って流出させるリスクを、人間のレビュー完了という明示的なゲートで防ぐ。この方式はcocoro側で承認済み。既存の確認フロー（`useDocumentVerification.ts`の`markAsVerified`、3つの呼び出し元）には一切変更を加えない。
