@@ -45,8 +45,19 @@ import { SUPPORTS_ALL_DRIVES, escapeQueryValue } from './driveApiConstants';
 
 const FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder';
 
-/** ロック保有中とみなす期間。Drive API呼び出し(list+create)の想定所要時間より十分大きい値。 */
-const FOLDER_LOCK_STALE_MS = 2 * 60 * 1000;
+/**
+ * ロック保有中とみなす期間。
+ *
+ * Issue #871是正(2026-08-30): 従来値(2分)は`driveExportTrigger.ts`/`retryDriveExport.ts`の
+ * `timeoutSeconds:120`(=2分)と完全に一致しており、「関数がタイムアウト死する瞬間」と
+ * 「ロックが失効し他の実行に奪われる瞬間」が同時に来る設計になっていた。Drive API呼び出しの
+ * 応答待ちで関数が強制終了させられると、Drive側では作成が成功しているかもしれないのに
+ * ロックの記録が残らず、直後に別の実行がロックを奪って再作成できてしまう
+ * (kanameone本番でのフォルダ重複急増の代替原因候補、Issue #871参照)。
+ * `driveExportScheduled.ts`の`DRIVE_EXPORT_STUCK_EXPORTING_THRESHOLD_MS`と同値の10分へ是正し、
+ * リースが常にプロセス最大寿命(120秒)より十分長くなるようにする。
+ */
+const FOLDER_LOCK_STALE_MS = 10 * 60 * 1000;
 
 /**
  * 同名フォルダが2件以上見つかった場合にthrow。
