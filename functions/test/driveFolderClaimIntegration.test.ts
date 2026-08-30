@@ -129,6 +129,30 @@ async function enableClaimRead(): Promise<void> {
   await db.doc('settings/features').set({ driveFolderClaimRead: true });
 }
 
+/**
+ * `runTransaction`だけを差し替えたfirestoreラッパ。`collection`/`doc`は実dbへ委譲するため、
+ * 返される参照は実dbのFirestore emulatorに対して有効。commitResolvedWithRetryの
+ * リトライ(withBackoffRetry)を意図的に失敗させ、「files.create()成功後にFirestoreへの
+ * 確定書込みだけが失敗する」状況(codex review P1指摘)を再現するために使う。
+ */
+function makeFailingCommitFirestore(
+  realDb: admin.firestore.Firestore,
+  failTxCallIndices: readonly number[]
+): admin.firestore.Firestore {
+  let txCalls = 0;
+  return {
+    collection: (path: string) => realDb.collection(path),
+    doc: (path: string) => realDb.doc(path),
+    runTransaction: async (updateFn: (tx: admin.firestore.Transaction) => Promise<unknown>) => {
+      txCalls++;
+      if (failTxCallIndices.includes(txCalls)) {
+        throw new Error(`simulated Firestore transaction failure (call #${txCalls})`);
+      }
+      return realDb.runTransaction(updateFn);
+    },
+  } as unknown as admin.firestore.Firestore;
+}
+
 function claimDocRef(parentId: string, name: string) {
   return db.collection('driveFolderLocks').doc(buildFolderLockId(parentId, name));
 }
@@ -650,6 +674,86 @@ describe('driveFolderClaim プロトコル(Issue #871)', () => {
       const snap = await claimDocRef('parent-div2', '発散花子').get();
       expect(snap.data()?.state).to.equal('divergent');
       expect(snap.data()?.folderId).to.equal('old-divergent-id');
+    });
+  });
+
+  describe('codex review 2巡目指摘対応(commit失敗時の回収・trashed回収)', () => {
+    it('files.create()成功後にcommitResolvedWithRetryが失敗しても、claimは"creating"のまま残り、次回呼び出しのreconcileAttemptが実フォルダを回収し重複作成しない(P1指摘対応)', async () => {
+      await enableClaimRead();
+      const { drive: baseDrive, store, createCalls } = makeFakeDrive();
+      // 名前ベースの検索(files.list)は常に0件(索引未反映を模擬)だが、appProperties
+      // タグ検索はstoreを正しく参照する(reconcileAttemptの回収経路のみ機能する状況)。
+      const drive = {
+        files: {
+          ...baseDrive.files,
+          list: async (params: Record<string, unknown>) => {
+            const q = params.q as string;
+            if (q.includes('appProperties has')) {
+              return baseDrive.files.list(params);
+            }
+            return { data: { files: [] } };
+          },
+        },
+      } as unknown as drive_v3.Drive;
+
+      // beginCreation(1回目のtx)は成功させ、commitResolvedWithRetryの3回のリトライ
+      // (2〜4回目のtx)を全て失敗させる。
+      const failingDb = makeFailingCommitFirestore(db, [2, 3, 4]);
+
+      let firstError: unknown;
+      try {
+        await findOrCreateFolder(drive, failingDb, 'parent-p1fix', 'コミット失敗太郎');
+        expect.fail('エラーがthrowされるべき');
+      } catch (error) {
+        firstError = error;
+      }
+      expect((firstError as Error).name).to.equal('FolderClaimCommitError');
+      expect(createCalls).to.have.lengthOf(1); // Drive側の作成自体は1回成功している
+
+      const claimBeforeRetry = await claimDocRef('parent-p1fix', 'コミット失敗太郎').get();
+      expect(claimBeforeRetry.data()?.state).to.equal('creating'); // invalidatedにされていない(P1指摘の核心)
+
+      // 次回呼び出し(正常なfirestore)は、名前検索が依然0件でも重複作成せず、
+      // reconcileAttemptがattemptIdタグで実フォルダを回収する。
+      const result = await findOrCreateFolder(drive, db, 'parent-p1fix', 'コミット失敗太郎');
+      expect(result).to.equal(store[0].id);
+      expect(createCalls).to.have.lengthOf(1); // 2回目もfiles.createは呼ばれていない(重複作成なし)
+
+      const claimAfter = await claimDocRef('parent-p1fix', 'コミット失敗太郎').get();
+      expect(claimAfter.data()?.state).to.equal('resolved');
+      expect(claimAfter.data()?.folderId).to.equal(store[0].id);
+    });
+
+    it('reconcileAttemptが回収したフォルダがtrashedの場合、untrashしてから採用する(P2指摘対応)', async () => {
+      await enableClaimRead();
+      await claimDocRef('parent-trash-reconcile', 'ゴミ箱回収太郎').set({
+        state: 'creating',
+        attempt: { attemptId: 'attempt-trashed', startedAtMs: Date.now() - 11 * 60 * 1000, runId: 'old-run' },
+        parentId: 'parent-trash-reconcile',
+        name: 'ゴミ箱回収太郎',
+      });
+      // attemptIdタグ付きの実フォルダは存在するが、commit前にゴミ箱へ移動されていた
+      const { drive, store, updateCalls, createCalls } = makeFakeDrive({
+        files: [
+          {
+            id: 'trashed-recovered-id',
+            name: 'ゴミ箱回収太郎',
+            parents: ['parent-trash-reconcile'],
+            trashed: true,
+            appProperties: { docSplitFolderClaim: 'attempt-trashed' },
+          },
+        ],
+      });
+
+      const result = await findOrCreateFolder(drive, db, 'parent-trash-reconcile', 'ゴミ箱回収太郎');
+
+      expect(result).to.equal('trashed-recovered-id');
+      expect(createCalls).to.have.lengthOf(0);
+      expect(updateCalls).to.have.lengthOf(1);
+      expect(updateCalls[0].fileId).to.equal('trashed-recovered-id');
+      expect(updateCalls[0].requestBody).to.deep.equal({ trashed: false });
+      const recovered = store.find((f) => f.id === 'trashed-recovered-id');
+      expect(recovered?.trashed).to.equal(false);
     });
   });
 });

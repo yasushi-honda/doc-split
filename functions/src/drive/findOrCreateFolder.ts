@@ -296,6 +296,14 @@ export async function findOrCreateFolder(
     throw new DivergentFolderClaimError(name, parentId, begun.claim.folderId);
   }
   const { attemptId } = begun;
+  // codex review P1指摘対応: files.create()が成功しattemptIdタグ付きの実フォルダが
+  // 既にDrive側に存在する状態でcommitResolvedWithRetryだけが失敗した場合、catch節で
+  // 無条件にinvalidateすると、そのタグへの唯一の参照(attempt)が失われ次回呼び出しの
+  // reconcileAttemptが回収できなくなる。索引未反映(完全再検索が0件)と重なると、
+  // このPRが塞ごうとしている重複作成が再発しうる。「このattemptで実際にfiles.create()
+  // した(=タグ付き実体が存在する)かどうか」を追跡し、その場合だけinvalidateを
+  // スキップしてreconcileAttemptによる回収に委ねる。
+  let createdViaThisAttempt: string | null = null;
   try {
     // 予約後に再検索(直前の予約保有者が既に作成済みの可能性があるため)。
     const recheckId = await resolveExistingFolder(drive, parentId, name);
@@ -319,12 +327,24 @@ export async function findOrCreateFolder(
     if (!createdId) {
       throw new Error(`フォルダの作成に失敗しました(idが返却されませんでした): "${name}"`);
     }
+    createdViaThisAttempt = createdId;
     await commitResolvedWithRetry(firestore, parentId, name, attemptId, createdId);
     return createdId;
   } catch (error) {
-    // 作成失敗時はattemptを無効化し、次回呼び出しがFOLDER_LOCK_STALE_MSの経過を待たず
-    // 即座にリトライできるようにする(invalidate自体の失敗は握り潰す: rules/error-handling.md
-    // §1、状態復旧の失敗が本来のエラーを隠さないようにする)。
+    if (createdViaThisAttempt !== null) {
+      // files.create()自体は成功済み(Drive側にattemptIdタグ付きの実フォルダが存在する)。
+      // claimは'creating'のまま残し、次回呼び出しのreconcileAttempt(タグ検索)による
+      // 回収に委ねる。invalidateしない。
+      console.error(
+        `[findOrCreateFolder] claim確定書込みに失敗しました(Drive側の作成は成功済み、次回呼び出しのreconcileAttemptで回収されます): "${name}"（親フォルダ: ${parentId}、folderId: ${createdViaThisAttempt}）:`,
+        error
+      );
+      throw error;
+    }
+    // Drive側の作成(または再検索での既存フォルダ発見)自体が失敗した場合のみ、attemptを
+    // 無効化し、次回呼び出しがFOLDER_LOCK_STALE_MSの経過を待たず即座にリトライできる
+    // ようにする(invalidate自体の失敗は握り潰す: rules/error-handling.md §1、状態復旧の
+    // 失敗が本来のエラーを隠さないようにする)。
     await invalidateAttempt(firestore, parentId, name, attemptId).catch((invalidateError) =>
       console.error(
         `[findOrCreateFolder] claim invalidateに失敗しました("${name}"、親フォルダ: ${parentId}):`,

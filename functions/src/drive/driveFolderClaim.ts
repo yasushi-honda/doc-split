@@ -57,7 +57,19 @@ export const SOFT_TTL_MS = 5 * 60 * 1000;
 /** 'creating'のリース失効後、attemptId検索で作成事実を回収するまでの猶予。 */
 export const RECONCILE_GRACE_MS = 10 * 60 * 1000;
 
-/** claimドキュメントのネイティブTTL(Firestore `expireAt`)。日数。 */
+/**
+ * claimドキュメントのネイティブTTL(Firestore `expireAt`)。日数。
+ *
+ * codex review P2指摘: `expireAt`フィールドへの書き込みだけではFirestoreは自動削除しない。
+ * 環境ごとに`firestore.indexes.json`のインデックス変更と同様CI/CD対象外の手動手順として、
+ * `driveFolderLocks`コレクションに対しTTLポリシーを別途プロビジョニングする必要がある
+ * (例: `gcloud firestore fields ttls update expireAt --collection-group=driveFolderLocks
+ * --enable-ttl --project=<project-id>`、またはFirebase/GCPコンソール)。未実施の環境では
+ * `expireAt`は単なるデータであり、resolved/divergentのclaimは無期限に蓄積し続ける
+ * (計画`~/.claude/plans/moonlit-jumping-alpaca.md`のロールアウトPhase 1でdev/cocoro/
+ * kanameone各環境へのrules配備と併せて実施することになっている手順、PR-3のコード
+ * デプロイだけでは完結しない)。
+ */
 export const CLAIM_TTL_DAYS = 180;
 
 /** 404が何回連続したらclaimを`invalidated`にしてよいか。 */
@@ -504,6 +516,18 @@ export async function reconcileAttempt(
     const id = files[0].id;
     if (!id) {
       throw new Error(`reconcile対象フォルダのidが取得できません: attemptId=${attemptId}`);
+    }
+    // codex review P2指摘対応: files.create()後・commit前に(人力操作等で)ゴミ箱へ
+    // 移動されていた場合、通常の名前解決経路(resolveExistingFolder)は必ずuntrashして
+    // から返すのに対し、reconcile経由だけがtrashed状態のまま採用してしまう非対称を
+    // 解消する。復元に失敗した場合はfail-closedで再throwする(既存のtrashed復元と同じ方針)。
+    if (files[0].trashed) {
+      await drive.files.update({
+        fileId: id,
+        requestBody: { trashed: false },
+        fields: 'id',
+        ...SUPPORTS_ALL_DRIVES,
+      });
     }
     return { status: 'adopt', folderId: id };
   }
