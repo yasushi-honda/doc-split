@@ -8,7 +8,7 @@ updated: 2026-08-30
 
 - [x] `docs/context/gemini-rate-limiting.md`のレート制限値をGemini 3.5 Flash運用下で再検証する（2026-08-02、PR #785マージ済み）。Playwright MCPでVertex AI公式モデルカードを実測確認し、RPM/TPMがDynamic Shared Quota化され固定値が存在しないこと・最大出力トークンがモデル上限65,536（旧記載8,192はアプリの暴走対策キャップとの混同）・PDF最大ファイルサイズがAPI経由で50MB（旧記載20MBは不一致）と判明、ドキュメントを修正
 
-## 【進行中・2026-08-29開始】複数人記載FAX: 複製廃止→検出バッジへの置換（kanameone、Stage 1監視中）
+## 【完了・2026-08-29開始→2026-08-30完了】複数人記載FAX: 複製廃止→検出バッジへの置換（kanameone、Stage 0〜3完了）
 
 kanameoneから「1FAXに複数人分の書類がまとまっている場合の人数分複製表示（`faxDuplication`機能）を廃止し、代わりに一目で複数人記載と分かる検出バッジに置き換えたい」という仕様変更依頼を受け、plan mode承認済み計画（`/Users/yyyhhh/.claude/plans/merry-drifting-seal.md`、grip+codex plan-crossreview実施済み）に基づき実装・展開した。
 
@@ -23,6 +23,13 @@ kanameoneから「1FAXに複数人分の書類がまとまっている場合の�
 - [x] Stage 1開始（kanameone）: `/deploy kanameone --full`でFunctions/Hosting/Rules全反映（`--rules`のみだとFunctionsが更新されずStage1の検出ロジック自体が動かないギャップを事前に発見しdecision-makerへ確認済み）、Firestore rulesは新設GHA workflow経由で反映、`multiCustomerDetection`フラグをkanameoneでON（`faxDuplication`はtrueのまま併走）
 
 **Stage 1併走期間の詳細は下記「🔄 中断点」参照**（最低5件の検出サンプルが揃うまで、目安1〜3営業日の待機）。
+
+**【完了・2026-08-30】Stage 2着手・完了（kanameone複製処理の廃止）**: decision-maker指示「完了まで進める必要がありますね。計画をたてて進めましょう」を受け、Stage1併走の実測検証とStage2切替を同日中に実施した。
+
+- **AC-9検証（検出集合と複製発火集合の一致）**: `audit-fax-duplication-inventory`をkanameone向けに再実行（run [33312493363](https://github.com/yasushi-honda/doc-split/actions/runs/33312493363)）、検出サンプル`detectionStats.totalDetectedCount: 91件`(document単位)/`groupsWithMultiCustomerDetectedMemberCount: 20件`(グループ単位、最低条件5件を大きく超過)を確認。Cloud Loggingで`faxDuplicationPlan`ログの`reason: exactCandidatesDistributed`件数（フラグON化した8/29 19:11 UTC以降）を実測したところ**20件**で、audit結果のグループ単位検出数(20件)と完全一致。検出のみ(複製されなかった)doc数も0件。両方向で不一致ゼロを確認し、「検出集合==複製発火集合」を本番データで実測できた
+- **Stage 2切替（計画書の手順通り、全てFirestore/GHA直接操作）**: ①`system/maintenanceFlags.groupAggregationGateOpen`を`false`に設定（12:55 UTC）②20分ドレイン待機 ③`documents`コレクションの`status:processing`件数が0件であることを集計クエリで確認 ④`set-feature-flag --flag faxDuplication --value false --dry-run`で`現在値:true → 新値:false`を確認後、`--dry-run`を外して本実行（13:19 UTC、`settings/features.faxDuplication`が実際に`false`へ変わったことを実測確認）⑤`groupAggregationGateOpen`を`true`に戻す（13:20 UTC、ゲート閉鎖時間は合計約25分）
+- **未完了の確認項目**: 計画書AC-8拡張「切替時刻以後に作成された`distributionId`グループが0件であること」は、新規の複数人記載FAXが実際に到着してからでないと検証できない。次回、複数人記載FAXが到着した際にCloud Loggingで`reason: flagDisabled`になっていること・新規`distributionId`グループが作られていないことを確認する
+- **Stage 3（棚卸し記録）完了**: `audit-fax-duplication-inventory`の結果（スキャン対象3,203件・複製グループ1,016・Drive出力済みメンバーを含むグループ747）をADR-0024「ロールアウト実績」節に記録済み。「Drive出力済みメンバーを含むグループ数」は将来のPR-C（既存doc向けFE導出フォールバック）再検討の入力として残した
 
 ## 現在のミッション【進行中・2026-07-23開始】
 
@@ -378,8 +385,9 @@ plan mode（Opus 5、grip+codex 2パスクロスレビュー）で恒久対策�
 decision-maker判断（2026-08-30）: 本セッションはdev検証（Stage 1・2）完了で区切り、cocoro/kanameoneへの本番展開は次セッション以降に改めて着手判断する。
 
 次の一手（**次セッション再開点・要decision-maker判断**）: 計画のロールアウト表の残り段階。
-1. cocoro→kanameoneの順で段階展開（各環境rules+TTL設定→shadow→24-72h観察→read有効化）。kanameone read有効化後は60時間後に`classify-drive-export-drift`をベースラインと比較し`misplaced`が増加していないことを確認
-2. `childFolderResolver.ts`自体のclaimプロトコル移行（PR-4、計画書§5）は本ロールアウトと独立に着手可能（未着手）
+1. ~~cocoro→kanameoneの順で段階展開~~ → **2026-08-30訂正・着手**: cocoroはPhase C（OAuth接続）未完了でDrive連携自体が稼働していない（`settings/drive`が2026-07-23から未変更と実測再確認）ため、cocoro先行の「観察による安全確認」が機能しないと判明。decision-maker判断で**kanameoneを先行させる**方針に変更。kanameoneのshadow展開着手・進捗は下記「Issue #871 kanameone本番展開」節参照。cocoroはPhase C完了後に別途展開
+2. ~~`childFolderResolver.ts`自体のclaimプロトコル移行（PR-4、計画書§5）は本ロールアウトと独立に着手可能（未着手）~~ → **2026-08-30完了、詳細は下記「Issue #871 PR-4完了」節参照**
+3. **2026-08-30追加**: 計画書PR-5（`driveExportErrorKind`フィールド新設、transient/permanentエラー再試行閾値短縮）はPR-3/PR-4実装時にスコープアウトされ未実装のまま判明。claimプロトコル本体（重複防止）とは独立した改善項目のため、Issue #881として起票しfollow-up化（P3、緊急性なし）
 
 **Issue #811/#823 remediation（次セッション再開点）**: Phase 2b-1（PR #851実装マージ・devリハーサル）・Phase 2b-2（森奈穂美分本番実行、healthy 33.1%→98.8%）・Phase 5（ADR-0022更新PR #854マージ・Issue #811/#823クローズ）・**Phase 3（kanameone全ケアマネへ横展開、healthy 60.8%→99.0%）**・**Phase 4（cocoroはDrive未接続のため対象外と確定）**、全て完了済み（詳細は上記「Issue #811/#823 remediation Phase 3」節参照）。**kanameoneのDrive export破損document remediationはこれで実質完了**。
 
@@ -390,6 +398,39 @@ decision-maker判断（2026-08-30）: 本セッションはdev検証（Stage 1�
 **Issue #794（③kanameone報告PDFのType3フォント文字消失）**: 2026-08-06 PR #798マージによりクローズ済み。詳細は上記「kanameoneからの相談3件対応」節③参照。
 
 cocoro側Drive連携Phase C（クライアント自身のOAuth接続）は外部依存待ち（継続、変更なし）。
+
+## 【完了・2026-08-30】Issue #871 PR-4: childFolderResolver.tsのclaimプロトコル完全移行(PR #879マージ)
+
+上記「🔄 中断点」節の「次の一手」2番目（`childFolderResolver.ts`自体のclaimプロトコル移行）を実装・完了した。承認済み計画`~/.claude/plans/moonlit-jumping-alpaca.md`§5に基づき、`resolveChildFolder()`を旧`acquireFolderLock`/`releaseFolderLock`方式からclaimプロトコル完全参加型へ全面書き換え。`findOrCreateFolder.ts`との間で状態機械駆動ロジックの対称性を確保（shadowモードの新規作成直前防御・孤児claim回収・divergent保護等）。
+
+**品質ゲート**: `codex review --base main -c model_reasoning_effort=high`を9ラウンド実施（TOCTOU競合の根絶・fencingトークン汚染防止[データ破損級]を含む）、`pr-review-toolkit`（code-reviewer/silent-failure-hunter）セカンドオピニオンで追加修正。PR作成後のhook強制レビュー（実質10巡目）でさらに1件（`invalidated`状態の保護漏れ、rollback実行時に並行exportが誤って上書きしうる穴）を検出・修正。
+
+**CIで発覚した既存テストの穴を追加修正**: `driveFolderLocks`コレクションのクリーンアップ漏れ（5テストファイル、テスト間でclaimが残留しDivergentFolderClaimErrorを誘発）、fakeドライブの`files.get`未実装（4ファイル、beginCreationがresolved検知時に呼ぶverifyFolderClaimが動かず失敗）、claimプロトコルが正しく機能した結果古くなった並行実行テストの前提（2件、フォルダ重複作成を期待していたassertionを、後続実行が既存フォルダを再利用する新しい正しい挙動に合わせて書き換え）。functions unit 2104件・integration 344件、全PASS確認済み。
+
+PR #879としてmainへマージ完了（squash、`issue-871-pr4-child-folder-resolver-claim`ブランチは削除済み）。
+
+**follow-up**: `findOrCreateFolder.ts`と`childFolderResolver.ts`に状態機械駆動ロジックの重複が残っている（code-reviewerエージェント指摘、今回のPRでも見落とし[fencingトークン汚染対応の片側漏れ]を実際に引き起こした実害あり）ため、Issue #880として起票済み（P2、リファクタリング候補、緊急性なし）。
+
+**次の一手**: PR-4完了により、計画のロールアウト表残り段階（cocoro→kanameoneの順で段階展開、詳細は上記「🔄 中断点」節「次の一手」1番目参照）が唯一の残タスク。
+
+## 【進行中・2026-08-30着手】Issue #871 kanameone本番展開（shadowモード開始、次セッション再開点）
+
+decision-maker承認（「正しいことを段階的かつ計画的にうっかり取りこぼしなく」）を受け、計画`moonlit-jumping-alpaca.md`のロールアウト表 段階4（kanameone）に着手した。
+
+**着手前に発見・対応した2点の取りこぼし**:
+1. cocoro先行はDrive未接続のため観察に意味がないと判明（上記「次の一手」1番目参照）→ kanameone先行へ変更
+2. PR-5（`driveExportErrorKind`）が計画記載のまま未実装と判明 → Issue #881としてfollow-up化
+
+**実施内容（2026-08-30、全て`hy.unimail.11@gmail.com`アカウントで実行）**:
+1. Firestore TTLポリシー設定: `gcloud firestore fields ttls update expireAt --collection-group=driveFolderLocks --enable-ttl --project=docsplit-kanameone`実行、`ttlConfig.state: ACTIVE`を実測確認
+2. GitHub Actions「Deploy Cloud Functions」（`-f environment=kanameone`）経由でrun [33307932980](https://github.com/yasushi-honda/doc-split/actions/runs/33307932980)完走。`onDocumentWriteDriveExport`のupdateTime(`2026-08-30T11:09:16Z`)がPR #879マージ時刻(`10:33:54Z`)より後であることを確認し、claimプロトコル一式(PR-3+PR-4)の反映を確認
+3. `settings/features.driveFolderClaimRead`が未設定（=既定OFF=shadowモード）のままであることを実測確認 — claim書き込みのみ開始、既存挙動への影響なし
+
+**作業中に遭遇した既知のインフラ問題（GOAL.md既存記録と同一パターン、再現）**: `switch-client.sh kanameone`実行後も`CLOUDSDK_ACTIVE_CONFIG_NAME`環境変数が`doc-split`のまま残留し、`gcloud config configurations activate`が効かなかった。加えて`systemkaname@kanameone.com`アカウントでの操作は`Reauthentication failed. cannot prompt during non-interactive execution`でブロックされた（ブラウザ再認証が必要、executorから対応不可）。**対処**: named config切替を諦め、`--account=hy.unimail.11@gmail.com --project=docsplit-kanameone`を明示指定する形で全コマンドを実行し回避（このアカウントはkanameoneへの読み取り・TTL設定権限を保持していることを実測確認）。
+
+**次の一手（次セッション再開点）**: shadowモードで24〜72時間観察後、`driveFolderLocks`コレクションのclaim健全性（`state:'divergent'`が0件、`missCount>0`が異常発生していないか）をFirestoreで確認してから、`settings/features.driveFolderClaimRead: true`で読み経路を有効化する。有効化後は60時間後に`classify-drive-export-drift`をベースラインと比較し`misplaced`が増加していないことを確認（計画書AC）。
+
+**追記（2026-08-30、同日中）**: decision-maker確認「cocoroも同じ問題があるなら等しくアップデートすべきか」を受け整理。cocoroはDrive連携自体が未接続のため今この問題は発生し得ないが、Phase C完了後は同じ結果整合性の問題が理屈上起こりうる。**コードのデプロイ・TTLポリシー設定はshadowモードのため既存挙動に影響ゼロと判断し、cocoroにも先行して適用**（Firestore TTLポリシー`ACTIVE`実測確認、GitHub Actions「Deploy Cloud Functions」run [33308561046](https://github.com/yasushi-honda/doc-split/actions/runs/33308561046)完走、`onDocumentWriteDriveExport`updateTime`2026-08-30T11:25:24Z`でclaimプロトコル一式の反映を確認、`driveFolderClaimRead`未設定=shadowモードのままであることも確認）。**shadow観察・読み経路有効化はPhase C完了を待って改めて着手**（今観察しても実データが流れないため無意味）。
 
 ## 【完了・2026-08-29】残存44件(→49件)の実態解明+kanameone担当者への確認依頼を報告文書に反映(送付は未実施)
 
