@@ -598,6 +598,15 @@ export async function reconcileAttempt(
     if (!id) {
       throw new Error(`reconcile対象フォルダのidが取得できません: attemptId=${attemptId}`);
     }
+    // codex review P2指摘対応(9巡目): プロセスクラッシュ後にユーザーがこのフォルダを
+    // 手動でリネームしていた場合、`verifyFolderClaim`が持つname不一致のfail-closed判定
+    // (divergent遷移)を、attemptIdタグ検索だけで採用するreconcile経路がバイパスして
+    // しまい、要求された名前とは異なるフォルダへ後続exportが配置され続けてしまう。
+    // files.listで既に取得済みのnameフィールドと突合する(追加API呼び出し不要)。
+    if (files[0].name !== undefined && files[0].name !== name) {
+      await markDivergent(firestore, parentId, name, 'reconcile-name-mismatch');
+      throw new DivergentFolderClaimError(name, parentId, undefined, id);
+    }
     // codex review P2指摘対応: files.create()後・commit前に(人力操作等で)ゴミ箱へ
     // 移動されていた場合、通常の名前解決経路(resolveExistingFolder)は必ずuntrashして
     // から返すのに対し、reconcile経由だけがtrashed状態のまま採用してしまう非対称を
@@ -647,11 +656,16 @@ export async function invalidateResolvedClaimByFolderId(
 
   let invalidatedCount = 0;
   for (const doc of snap.docs) {
-    await firestore.runTransaction(async (tx) => {
+    // codex review P2指摘対応(9巡目): fencingで早期returnした(=実際には書き込んで
+    // いない)場合でも、従来はループ側で無条件にinvalidatedCount++していたため、
+    // 呼び出し元(rollback-drive-folder-merge.ts)が「invalidate成功」と誤認しうる
+    // (ロールバック直後にreconcile中の別プロセスがこのclaimを'resolved'へ確定させて
+    // いた場合等)。トランザクションの戻り値で実際に書き込んだかどうかを伝播する。
+    const didInvalidate = await firestore.runTransaction(async (tx) => {
       const fresh = await tx.get(doc.ref);
       const data = fresh.data();
       if (!fresh.exists || data?.state !== 'resolved' || data?.folderId !== folderId) {
-        return; // fencing: 別処理が既に状態を変えている
+        return false; // fencing: 別処理が既に状態を変えている
       }
       const doc2 = stripUndefined({
         state: 'invalidated' as const,
@@ -661,8 +675,11 @@ export async function invalidateResolvedClaimByFolderId(
         expireAt: ttlTimestamp(),
       });
       tx.set(fresh.ref, doc2);
+      return true;
     });
-    invalidatedCount++;
+    if (didInvalidate) {
+      invalidatedCount++;
+    }
   }
   return invalidatedCount;
 }
@@ -691,11 +708,13 @@ export async function invalidateCreatingClaimByAttemptId(
 
   let invalidatedCount = 0;
   for (const doc of snap.docs) {
-    await firestore.runTransaction(async (tx) => {
+    // codex review P2指摘対応(9巡目、invalidateResolvedClaimByFolderIdと同じ理由):
+    // トランザクションの戻り値で実際に書き込んだかどうかを伝播する。
+    const didInvalidate = await firestore.runTransaction(async (tx) => {
       const fresh = await tx.get(doc.ref);
       const data = fresh.data();
       if (!fresh.exists || data?.state !== 'creating' || data?.attempt?.attemptId !== attemptId) {
-        return; // fencing: 別処理が既に状態を変えている
+        return false; // fencing: 別処理が既に状態を変えている
       }
       const doc2 = stripUndefined({
         state: 'invalidated' as const,
@@ -705,8 +724,11 @@ export async function invalidateCreatingClaimByAttemptId(
         expireAt: ttlTimestamp(),
       });
       tx.set(fresh.ref, doc2);
+      return true;
     });
-    invalidatedCount++;
+    if (didInvalidate) {
+      invalidatedCount++;
+    }
   }
   return invalidatedCount;
 }

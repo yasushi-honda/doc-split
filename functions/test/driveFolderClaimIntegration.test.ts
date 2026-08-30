@@ -164,6 +164,30 @@ function claimDocRef(parentId: string, name: string) {
   return db.collection('driveFolderLocks').doc(buildFolderLockId(parentId, name));
 }
 
+/**
+ * `runTransaction`だけを差し替えたfirestoreラッパ。最初の呼び出しの直前に`beforeFirstTx`
+ * を実行してから実dbへ委譲する。「クエリのsnapshot取得後、実際のトランザクション直前に
+ * 別プロセスがドキュメントを変更した」というレースを模擬するために使う
+ * (codex review P2指摘対応、9巡目: fencingでスキップされた場合のカウント精度検証用)。
+ */
+function makeRaceSimulatingFirestore(
+  realDb: admin.firestore.Firestore,
+  beforeFirstTx: () => Promise<void>
+): admin.firestore.Firestore {
+  let called = false;
+  return {
+    collection: (path: string) => realDb.collection(path),
+    doc: (path: string) => realDb.doc(path),
+    runTransaction: async (updateFn: (tx: admin.firestore.Transaction) => Promise<unknown>) => {
+      if (!called) {
+        called = true;
+        await beforeFirstTx();
+      }
+      return realDb.runTransaction(updateFn);
+    },
+  } as unknown as admin.firestore.Firestore;
+}
+
 describe('driveFolderClaim プロトコル(Issue #871)', () => {
   beforeEach(async () => {
     await cleanupCollections(db, COLLECTIONS_TO_CLEAN);
@@ -622,6 +646,43 @@ describe('driveFolderClaim プロトコル(Issue #871)', () => {
         expect(error).to.be.instanceOf(AmbiguousFolderError);
       }
     });
+
+    it('タグ付きフォルダが見つかっても名前が要求と異なる場合、untrashせずdivergentへ遷移する(codex review P2指摘対応、9巡目)', async () => {
+      // プロセスクラッシュ後、files.create()には成功しclaim確定書込み前だったフォルダを
+      // ユーザーが手動でリネーム(かつゴミ箱へ移動)していたケース。attemptIdタグ検索
+      // だけで採用すると、verifyFolderClaimが持つname不一致のfail-closed判定を
+      // バイパスしてしまい、要求された名前とは異なるフォルダへ後続exportが配置され続ける。
+      await enableClaimRead();
+      await claimDocRef('parent-crash5', '要求名太郎').set({
+        state: 'creating',
+        attempt: { attemptId: 'attempt-5', startedAtMs: Date.now() - 2 * 60 * 1000, runId: 'old-run' },
+        parentId: 'parent-crash5',
+        name: '要求名太郎',
+      });
+      const { drive, updateCalls, createCalls } = makeFakeDrive({
+        files: [
+          {
+            id: 'renamed-id',
+            name: '手動リネーム後太郎',
+            parents: ['parent-crash5'],
+            trashed: true,
+            appProperties: { docSplitFolderClaim: 'attempt-5' },
+          },
+        ],
+      });
+
+      try {
+        await findOrCreateFolder(drive, db, 'parent-crash5', '要求名太郎');
+        expect.fail('DivergentFolderClaimErrorがthrowされるべき');
+      } catch (error) {
+        expect(error).to.be.instanceOf(DivergentFolderClaimError);
+      }
+      // untrash(files.update)も新規作成も行われないこと
+      expect(updateCalls).to.have.lengthOf(0);
+      expect(createCalls).to.have.lengthOf(0);
+      const snap = await claimDocRef('parent-crash5', '要求名太郎').get();
+      expect(snap.data()?.state).to.equal('divergent');
+    });
   });
 
   describe('fail-closedなfiles.getエラー分類(§3)', () => {
@@ -891,6 +952,25 @@ describe('driveFolderClaim プロトコル(Issue #871)', () => {
       const snap = await claimDocRef('parent-invalidate2', '発散太郎').get();
       expect(snap.data()?.state).to.equal('divergent');
     });
+
+    it('クエリのsnapshot取得後、トランザクション直前に別プロセスがclaimを別folderIdへ変更していた場合、fencingでスキップされ0を返す(codex review P2指摘対応、9巡目)', async () => {
+      const { drive } = makeFakeDrive();
+      const folderId = await findOrCreateFolder(drive, db, 'parent-race-invalidate', '競合無効化太郎');
+      const raceDb = makeRaceSimulatingFirestore(db, async () => {
+        // クエリはこの前に実行済み(folderId一致でヒット)。トランザクション直前に
+        // 別プロセス(reconcile中の別解決者)が別のfolderIdへ確定させた状況を模擬する。
+        await claimDocRef('parent-race-invalidate', '競合無効化太郎').update({ folderId: 'different-winner-id' });
+      });
+
+      const count = await invalidateResolvedClaimByFolderId(raceDb, folderId);
+
+      // 実際には書き込んでいない(fencingでスキップされた)ため0を返すべき
+      // (修正前は無条件で1を返し、rollbackスクリプトが誤ってcleanup成功と判定していた)
+      expect(count).to.equal(0);
+      const snap = await claimDocRef('parent-race-invalidate', '競合無効化太郎').get();
+      expect(snap.data()?.state).to.equal('resolved'); // invalidatedへ遷移していない
+      expect(snap.data()?.folderId).to.equal('different-winner-id'); // 別プロセスの値のまま
+    });
   });
 
   describe('invalidateCreatingClaimByAttemptId(Issue #871 PR-4、rollback-drive-folder-merge.ts用、codex review P2指摘対応、5巡目)', () => {
@@ -931,6 +1011,36 @@ describe('driveFolderClaim プロトコル(Issue #871)', () => {
       const snap = await claimDocRef('parent-resolved-race', '確定済太郎').get();
       expect(snap.data()?.state).to.equal('resolved');
       expect(snap.data()?.folderId).to.equal('winner-folder-id');
+    });
+
+    it('クエリのsnapshot取得後、トランザクション直前に別プロセスがresolvedへ確定させていた場合、fencingでスキップされ0を返す(codex review P2指摘対応、9巡目)', async () => {
+      // 上の「既にresolved確定済み」テストとの違い: あちらはクエリ自体が0件(シード時点で
+      // 既にresolved)なのに対し、本テストはクエリ時点ではcreatingでヒットし、
+      // トランザクション直前(クエリ後)に別プロセスが確定させる、というより厳密な
+      // レース窓を再現する。
+      await claimDocRef('parent-race-creating', '競合作成太郎').set({
+        state: 'creating',
+        attempt: { attemptId: 'attempt-race', startedAtMs: Date.now(), runId: 'run-race' },
+        parentId: 'parent-race-creating',
+        name: '競合作成太郎',
+      });
+      const raceDb = makeRaceSimulatingFirestore(db, async () => {
+        await claimDocRef('parent-race-creating', '競合作成太郎').set({
+          state: 'resolved',
+          folderId: 'concurrently-resolved-id',
+          attempt: { attemptId: 'attempt-race', startedAtMs: Date.now(), runId: 'run-race' },
+          resolvedAtMs: Date.now(),
+          parentId: 'parent-race-creating',
+          name: '競合作成太郎',
+        });
+      });
+
+      const count = await invalidateCreatingClaimByAttemptId(raceDb, 'attempt-race');
+
+      expect(count).to.equal(0);
+      const snap = await claimDocRef('parent-race-creating', '競合作成太郎').get();
+      expect(snap.data()?.state).to.equal('resolved'); // invalidatedへ遷移していない
+      expect(snap.data()?.folderId).to.equal('concurrently-resolved-id');
     });
   });
 
