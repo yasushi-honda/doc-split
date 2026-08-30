@@ -322,7 +322,7 @@ describe('findOrCreateFolder (ADR-0022)', () => {
     });
 
     it('staleなロック(FOLDER_LOCK_STALE_MS超過)が残留していても上書き取得して新規作成できる', async () => {
-      const staleMs = 3 * 60 * 1000; // FOLDER_LOCK_STALE_MS(2分)より確実に過去
+      const staleMs = 11 * 60 * 1000; // FOLDER_LOCK_STALE_MS(10分)より確実に過去
       await lockDocRef('parent-stale', '陳腐化太郎').set({ claimedAtMs: Date.now() - staleMs });
       const { drive, createCalls } = makeFakeDrive({ listFiles: [], createdId: 'after-stale-lock' });
 
@@ -330,6 +330,25 @@ describe('findOrCreateFolder (ADR-0022)', () => {
 
       expect(result).to.equal('after-stale-lock');
       expect(createCalls).to.have.lengthOf(1);
+    });
+
+    it('Issue #871是正: 実行時間timeoutSeconds(120秒)級の遅延が経過してもロックは失効せず、他の実行に奪われない', async () => {
+      // 是正前はFOLDER_LOCK_STALE_MSがdriveExportTrigger.ts/retryDriveExport.tsの
+      // timeoutSeconds:120と完全に一致しており、関数がタイムアウト死する瞬間とロック失効が
+      // 同時に来ていた。120秒経過時点ではまだ有効(=奪われない)ことを確認する回帰テスト。
+      const elapsedMs = 120 * 1000;
+      await lockDocRef('parent-still-locked', '継続保持太郎').set({
+        claimedAtMs: Date.now() - elapsedMs,
+      });
+      const { drive, createCalls } = makeFakeDrive({ listFiles: [] });
+
+      try {
+        await findOrCreateFolder(drive, db, 'parent-still-locked', '継続保持太郎');
+        expect.fail('120秒経過時点ではロックはまだ有効で、FolderCreationInProgressErrorがthrowされるべき');
+      } catch (error) {
+        expect(error).to.be.instanceOf(FolderCreationInProgressError);
+      }
+      expect(createCalls).to.have.lengthOf(0);
     });
 
     it('正常完了後はロックドキュメントが解放され残留しない', async () => {
