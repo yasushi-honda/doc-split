@@ -354,6 +354,19 @@ plan mode（Opus 5、grip+codex 2パスクロスレビュー）で恒久対策�
 - **因果**: 真の重複5件のうち4件は、新フォルダの`createdTime`が**2026-08-21 12:53〜12:55の約2分間**に集中。Cloud Loggingで同時刻帯の`onDocumentWriteDriveExport`発火回数を確認したところ、12:00〜13:00の1時間で**1,111回**（通常は数回/時間）という明確な異常バーストを検出した。ただしこのバーストの発生源はGitHub Actions実行履歴・git commit履歴のいずれにも痕跡がなく特定できなかった。**Phase3（2026-08-27〜28）とは全く別の日付・別のイベントであり、「Phase3が原因」という当初の因果仮説はこの5件については支持されない**
 - **結論**: 「高頻度バーストがDrive API検索結果整合性を崩し重複を誘発する」という核心メカニズム自体は8/21の実バーストとの時刻一致で裏付けが強まったが、規模が当初報告より大幅に小さいため**Issue #871の優先度をP1→P2へ変更**。恒久対策（claimプロトコル、計画のPR-3）は規模を踏まえた緊急度で実装を継続する方針（decision-maker承認済み）。8/21バーストの発生源特定は費用対効果が見合わずスコープ外とした。詳細はIssue #871コメント参照。
 
+**【2026-08-30・PR-3完了・次セッション再開点】claimプロトコル本体実装がマージ完了**: 承認済み計画`~/.claude/plans/moonlit-jumping-alpaca.md`のPR-3を実装・PR #875としてマージ完了（squash、`fix/issue-871-folder-claim-protocol`ブランチは削除済み）。
+
+- 実装: `functions/src/drive/driveFolderClaim.ts`（新規、claim状態機械creating/resolved/invalidated/divergent、3段ラダーCREATE_TRUST_MS/SOFT_TTL_MS、中断復旧reconcileAttempt、fail-closedなDrive APIエラー分類）＋`findOrCreateFolder.ts`書き換え（既存検索・trashed復元ロジックは無改変で再利用）＋`driveFolderClaimRead`機能フラグ（既定shadowモード、claim書き込みのみ・既存挙動への影響ゼロ）
+- 品質ゲート: codex review 3巡実施（1巡目P1 1件・2巡目P1 1件+P2 2件、全てコード修正、TTLプロビジョニング指摘のみ運用手順としてコメント明記・3巡目で収束確認）、`pr-review-toolkit:code-reviewer`セカンドオピニオンでCritical 1件（旧`acquireFolderLock`/`releaseFolderLock`がclaimプロトコル管理下のドキュメントを誤って破壊・削除する穴）・Important 2件（divergent状態の無条件上書き、commit失敗時の振る舞い＝decision-maker判断で計画通り維持）を検出、Critical+Important 1件を修正
+- テスト: unit test 2104件・integration test 317件、全PASS
+
+次の一手（**未実施・要decision-maker判断**）: 計画のロールアウト表（Phase 1〜4）に従い、以下を順に実施する必要がある。**PR-3のコードはまだどの環境にもshadowモードすら有効化されていない**（マージされただけで、実行中のCloud Functionsは次回`firebase deploy --only functions`まで旧コードのまま）。
+1. **Firestore TTLポリシーの手動プロビジョニング**（`driveFolderLocks`コレクション、`expireAt`フィールド。`gcloud firestore fields ttls update expireAt --collection-group=driveFolderLocks --enable-ttl --project=<project-id>`または各コンソール。dev/cocoro/kanameone各環境で個別に必要、`firestore.indexes.json`同様CI/CD対象外）
+2. dev環境: 上記TTL設定→`firebase deploy --only functions -P doc-split`→（`driveFolderClaimRead`は未設定=既定OFFのままでよい、shadow書き込みは自動的に始まる）→手動エクスポートでclaim不一致0件を確認
+3. dev環境で読み経路も有効化（`settings/features`に`driveFolderClaimRead: true`）→trash/rename後の再エクスポート等の陳腐化シナリオを手動確認
+4. cocoro→kanameoneの順で段階展開（各環境rules+TTL設定→shadow→24-72h観察→read有効化）。kanameone read有効化後は60時間後に`classify-drive-export-drift`をベースラインと比較し`misplaced`が増加していないことを確認
+5. `childFolderResolver.ts`自体のclaimプロトコル移行（PR-4、計画書§5）は本ロールアウトと独立に着手可能（未着手）
+
 **Issue #811/#823 remediation（次セッション再開点）**: Phase 2b-1（PR #851実装マージ・devリハーサル）・Phase 2b-2（森奈穂美分本番実行、healthy 33.1%→98.8%）・Phase 5（ADR-0022更新PR #854マージ・Issue #811/#823クローズ）・**Phase 3（kanameone全ケアマネへ横展開、healthy 60.8%→99.0%）**・**Phase 4（cocoroはDrive未接続のため対象外と確定）**、全て完了済み（詳細は上記「Issue #811/#823 remediation Phase 3」節参照）。**kanameoneのDrive export破損document remediationはこれで実質完了**。
 
 **残り23件（trashed9+misplaced11+target-path-not-created3）の原因調査（2026-08-28実施・打ち切り）**: `skippedPossibleManualEdit`は最終的に21件（森奈穂美分8件+他ケアマネ分13件）、複数日（8/3・8/4・8/5・8/12・8/14・8/16）に分散し数秒〜数十秒の小さなクラスタを形成。複数クラスタでCloud Logging（kanameone、`gcloud logging read`）を確認したが、該当時刻にdoc-split側のCloud Function実行履歴が一切見つからなかった（`processocr`/`checkgmailattachments`の通常ポーリングのみ）。**doc-split側の処理では説明がつかない=Drive側での外部要因（人間操作かGoogle内部処理か不明）の可能性が高いという結論を複数クラスタで再現・補強**。これ以上の特定にはGoogle Workspace管理者監査ログ（Drive Activity API）へのアクセスが必要なため調査を打ち切った。他blocked21件（segment-unresolvable17/ambiguous-path3/customer-unconfirmed1）は元々execute-drive-export-repair.tsの対象外（フォルダ構造の曖昧性解消・顧客確定という別種の人間作業が必要）。**→ 2026-08-29に実体解明済み、詳細は下記「残存44件(→49件)の実態解明」節参照**。
