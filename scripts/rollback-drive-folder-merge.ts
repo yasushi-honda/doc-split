@@ -75,8 +75,10 @@ interface RollbackOutcome {
 
 async function main(): Promise<void> {
   const { getDriveClient } = await import('../functions/src/utils/driveAuth');
-  const { SUPPORTS_ALL_DRIVES } = await import('../functions/src/drive/driveApiConstants');
-  const { invalidateResolvedClaimByFolderId } = await import('../functions/src/drive/driveFolderClaim');
+  const { SUPPORTS_ALL_DRIVES, DOCSPLIT_FOLDER_CLAIM_KEY } = await import('../functions/src/drive/driveApiConstants');
+  const { invalidateResolvedClaimByFolderId, invalidateCreatingClaimByAttemptId } = await import(
+    '../functions/src/drive/driveFolderClaim'
+  );
   const drive: drive_v3.Drive = await getDriveClient();
   const db = admin.firestore();
 
@@ -271,6 +273,27 @@ async function main(): Promise<void> {
           const invalidatedCount = await invalidateResolvedClaimByFolderId(db, folderId);
           if (invalidatedCount > 0) {
             console.log(`✅ folder ${folderId} のclaim記録を${invalidatedCount}件invalidatedへ遷移`);
+          } else {
+            // codex review P2指摘対応(5巡目): このfolderIdがChildFolderCreatedButUncommittedError/
+            // ChildFolderRestoredButUncommittedError経由でmanifestに記録された場合、claim確定
+            // 書込み自体が失敗しているためclaimは'creating'のままfolderIdフィールドを持たず、
+            // 上記のfolderIdクエリでは見つからない。放置すると、後で別解決者のreconcileAttemptが
+            // appPropertiesタグ検索でこのtrashed済みフォルダを見つけてuntrashし、rollbackが
+            // 実質的に取り消されてしまう。files.create時に刻んだattemptIdタグから逆引きする。
+            const fileMeta = await drive.files.get({
+              fileId: folderId,
+              fields: 'appProperties',
+              ...SUPPORTS_ALL_DRIVES,
+            });
+            const attemptId = fileMeta.data.appProperties?.[DOCSPLIT_FOLDER_CLAIM_KEY];
+            if (attemptId) {
+              const creatingInvalidatedCount = await invalidateCreatingClaimByAttemptId(db, attemptId);
+              if (creatingInvalidatedCount > 0) {
+                console.log(
+                  `✅ folder ${folderId} の'creating'claim記録(attemptId経由)を${creatingInvalidatedCount}件invalidatedへ遷移`
+                );
+              }
+            }
           }
         } catch (claimErr) {
           console.error(

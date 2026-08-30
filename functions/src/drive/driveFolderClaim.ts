@@ -627,6 +627,50 @@ export async function invalidateResolvedClaimByFolderId(
   return invalidatedCount;
 }
 
+/**
+ * `attemptId`(`files.create`時に刻んだappProperties冪等キー)が指す'creating'状態の
+ * claimを'invalidated'にする(fencing: attemptId一致のみ、codex review P2指摘対応、5巡目)。
+ * `rollback-drive-folder-merge.ts`が、`ChildFolderCreatedButUncommittedError`/
+ * `ChildFolderRestoredButUncommittedError`経由でmanifestに記録された(=claim確定書込みが
+ * 失敗し'creating'のままfolderIdフィールドを持たない)フォルダを再trashed化する際に使う。
+ * `invalidateResolvedClaimByFolderId`はfolderIdフィールドで問い合わせるため、'creating'の
+ * ままfolderIdを持たないこのケースを検知できない——放置すると、rollback後に別解決者の
+ * `reconcileAttempt`がタグ検索でこのtrashed済みフォルダを見つけてuntrashし、rollbackが
+ * 実質的に取り消されてしまう。`attempt.attemptId`はネストフィールドの単純等価クエリの
+ * ため、こちらも追加のcomposite index設定は不要。
+ */
+export async function invalidateCreatingClaimByAttemptId(
+  firestore: admin.firestore.Firestore,
+  attemptId: string
+): Promise<number> {
+  const snap = await firestore
+    .collection(FOLDER_LOCKS_COLLECTION)
+    .where('attempt.attemptId', '==', attemptId)
+    .where('state', '==', 'creating')
+    .get();
+
+  let invalidatedCount = 0;
+  for (const doc of snap.docs) {
+    await firestore.runTransaction(async (tx) => {
+      const fresh = await tx.get(doc.ref);
+      const data = fresh.data();
+      if (!fresh.exists || data?.state !== 'creating' || data?.attempt?.attemptId !== attemptId) {
+        return; // fencing: 別処理が既に状態を変えている
+      }
+      const doc2 = stripUndefined({
+        state: 'invalidated' as const,
+        attempt: null,
+        parentId: data.parentId as string,
+        name: data.name as string,
+        expireAt: ttlTimestamp(),
+      });
+      tx.set(fresh.ref, doc2);
+    });
+    invalidatedCount++;
+  }
+  return invalidatedCount;
+}
+
 /** 'creating'状態のclaimを'invalidated'にする(fencing: attemptIdが一致する場合のみ)。 */
 export async function invalidateAttempt(
   firestore: admin.firestore.Firestore,

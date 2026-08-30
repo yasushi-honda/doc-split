@@ -26,6 +26,7 @@ import {
   DivergentFolderClaimError,
   buildFolderLockId,
   invalidateResolvedClaimByFolderId,
+  invalidateCreatingClaimByAttemptId,
 } from '../src/drive/driveFolderClaim';
 import { resolveChildFolder } from '../src/drive/childFolderResolver';
 
@@ -779,6 +780,47 @@ describe('driveFolderClaim プロトコル(Issue #871)', () => {
       expect(count).to.equal(0);
       const snap = await claimDocRef('parent-invalidate2', '発散太郎').get();
       expect(snap.data()?.state).to.equal('divergent');
+    });
+  });
+
+  describe('invalidateCreatingClaimByAttemptId(Issue #871 PR-4、rollback-drive-folder-merge.ts用、codex review P2指摘対応、5巡目)', () => {
+    it('attemptId一致する"creating"状態(claim確定書込み失敗でfolderId未確定)のclaimをinvalidatedへ遷移させる', async () => {
+      await claimDocRef('parent-orphan-attempt', '未確定太郎').set({
+        state: 'creating',
+        attempt: { attemptId: 'orphan-attempt-id', startedAtMs: Date.now(), runId: 'run-x' },
+        parentId: 'parent-orphan-attempt',
+        name: '未確定太郎',
+      });
+
+      const count = await invalidateCreatingClaimByAttemptId(db, 'orphan-attempt-id');
+
+      expect(count).to.equal(1);
+      const snap = await claimDocRef('parent-orphan-attempt', '未確定太郎').get();
+      expect(snap.data()?.state).to.equal('invalidated');
+      expect(snap.data()?.attempt).to.equal(null);
+    });
+
+    it('attemptIdが一致するclaimが無い場合は何もせず0を返す', async () => {
+      const count = await invalidateCreatingClaimByAttemptId(db, 'no-such-attempt-id');
+      expect(count).to.equal(0);
+    });
+
+    it('既にresolved確定済み(別attemptがcommitResolvedWithRetryで確定させた)claimはfencingにより無変更のまま残る', async () => {
+      await claimDocRef('parent-resolved-race', '確定済太郎').set({
+        state: 'resolved',
+        folderId: 'winner-folder-id',
+        attempt: { attemptId: 'loser-attempt-id', startedAtMs: Date.now(), runId: 'run-y' },
+        resolvedAtMs: Date.now(),
+        parentId: 'parent-resolved-race',
+        name: '確定済太郎',
+      });
+
+      const count = await invalidateCreatingClaimByAttemptId(db, 'loser-attempt-id');
+
+      expect(count).to.equal(0);
+      const snap = await claimDocRef('parent-resolved-race', '確定済太郎').get();
+      expect(snap.data()?.state).to.equal('resolved');
+      expect(snap.data()?.folderId).to.equal('winner-folder-id');
     });
   });
 
