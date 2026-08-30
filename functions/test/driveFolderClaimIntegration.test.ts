@@ -19,11 +19,15 @@ import { drive_v3 } from 'googleapis';
 import { cleanupCollections } from './helpers/cleanupEmulator';
 import {
   findOrCreateFolder,
-  acquireFolderLock,
   AmbiguousFolderError,
   FolderCreationInProgressError,
 } from '../src/drive/findOrCreateFolder';
-import { DivergentFolderClaimError, buildFolderLockId } from '../src/drive/driveFolderClaim';
+import {
+  DivergentFolderClaimError,
+  buildFolderLockId,
+  invalidateResolvedClaimByFolderId,
+} from '../src/drive/driveFolderClaim';
+import { resolveChildFolder } from '../src/drive/childFolderResolver';
 
 const db = admin.firestore();
 const COLLECTIONS_TO_CLEAN: readonly string[] = ['driveFolderLocks', 'settings'];
@@ -582,54 +586,68 @@ describe('driveFolderClaim プロトコル(Issue #871)', () => {
     });
   });
 
-  describe('childFolderResolver.ts(旧acquireFolderLock/releaseFolderLock)との相互作用(second-opinionレビューCritical指摘対応)', () => {
-    it('acquireFolderLockはclaimプロトコル管理下(stateフィールドあり)のドキュメントを上書きせずFolderCreationInProgressErrorをthrowする', async () => {
-      const { drive } = makeFakeDrive();
-      // findOrCreateFolderで正規のresolved claimを作る
+  describe('childFolderResolver.tsとのclaim共有(Issue #871 PR-4、旧acquireFolderLock/releaseFolderLockを置き換え)', () => {
+    it('findOrCreateFolderが確定したresolved claimを、直後のresolveChildFolderが(読み経路有効時)再作成せず引き継ぐ', async () => {
+      await enableClaimRead();
+      const { drive, createCalls } = makeFakeDrive();
       const folderId = await findOrCreateFolder(drive, db, 'parent-cross', '相互作用太郎');
-      const beforeSnap = await claimDocRef('parent-cross', '相互作用太郎').get();
+      expect(createCalls).to.have.lengthOf(1);
+
+      const result = await resolveChildFolder(drive, db, 'parent-cross', '相互作用太郎');
+
+      expect(result).to.deep.equal({ id: folderId, restored: false, created: false });
+      // CREATE_TRUST_MS内のためfiles.createは呼ばれない(1回のまま)
+      expect(createCalls).to.have.lengthOf(1);
+    });
+
+    it('resolveChildFolderが確定したresolved claimを、直後のfindOrCreateFolderが(読み経路有効時)再作成せず引き継ぐ(逆方向)', async () => {
+      await enableClaimRead();
+      const { drive, createCalls } = makeFakeDrive();
+      const created = await resolveChildFolder(drive, db, 'parent-cross-rev', '逆方向太郎');
+      expect(created.created).to.equal(true);
+      expect(createCalls).to.have.lengthOf(1);
+
+      const folderId = await findOrCreateFolder(drive, db, 'parent-cross-rev', '逆方向太郎');
+
+      expect(folderId).to.equal(created.id);
+      expect(createCalls).to.have.lengthOf(1);
+    });
+  });
+
+  describe('invalidateResolvedClaimByFolderId(Issue #871 PR-4、rollback-drive-folder-merge.ts用)', () => {
+    it('folderId一致するresolved claimをinvalidatedへ遷移させる', async () => {
+      const { drive } = makeFakeDrive();
+      const folderId = await findOrCreateFolder(drive, db, 'parent-invalidate', '無効化太郎');
+      const beforeSnap = await claimDocRef('parent-invalidate', '無効化太郎').get();
       expect(beforeSnap.data()?.state).to.equal('resolved');
 
-      // childFolderResolver.ts相当が(旧経路で)同じparent+nameのロックを取得しようとする
-      try {
-        await acquireFolderLock(db, 'parent-cross', '相互作用太郎');
-        expect.fail('FolderCreationInProgressErrorがthrowされるべき');
-      } catch (error) {
-        expect(error).to.be.instanceOf(FolderCreationInProgressError);
-      }
+      const count = await invalidateResolvedClaimByFolderId(db, folderId);
 
-      // resolved claimの記録(folderId等)が破壊・削除されていないこと
-      const afterSnap = await claimDocRef('parent-cross', '相互作用太郎').get();
-      expect(afterSnap.exists).to.equal(true);
-      expect(afterSnap.data()?.state).to.equal('resolved');
-      expect(afterSnap.data()?.folderId).to.equal(folderId);
+      expect(count).to.equal(1);
+      const afterSnap = await claimDocRef('parent-invalidate', '無効化太郎').get();
+      expect(afterSnap.data()?.state).to.equal('invalidated');
+      expect(afterSnap.data()?.attempt).to.equal(null);
     });
 
-    it('acquireFolderLockは"creating"状態(進行中のattempt)も上書きせずFolderCreationInProgressErrorをthrowする', async () => {
-      await claimDocRef('parent-cross2', '進行中太郎').set({
-        state: 'creating',
-        attempt: { attemptId: 'attempt-x', startedAtMs: Date.now(), runId: 'r1' },
-        parentId: 'parent-cross2',
-        name: '進行中太郎',
+    it('folderIdが一致するclaimが無い場合は何もせず0を返す(TTL消滅済み・claim未生成の両方が正常系)', async () => {
+      const count = await invalidateResolvedClaimByFolderId(db, 'no-such-folder-id');
+      expect(count).to.equal(0);
+    });
+
+    it('divergent状態のclaimはfolderIdが一致してもresolved限定のクエリに一致せず、無変更のまま残る', async () => {
+      await claimDocRef('parent-invalidate2', '発散太郎').set({
+        state: 'divergent',
+        folderId: 'divergent-folder-id',
+        attempt: null,
+        parentId: 'parent-invalidate2',
+        name: '発散太郎',
       });
 
-      try {
-        await acquireFolderLock(db, 'parent-cross2', '進行中太郎');
-        expect.fail('FolderCreationInProgressErrorがthrowされるべき');
-      } catch (error) {
-        expect(error).to.be.instanceOf(FolderCreationInProgressError);
-      }
+      const count = await invalidateResolvedClaimByFolderId(db, 'divergent-folder-id');
 
-      const snap = await claimDocRef('parent-cross2', '進行中太郎').get();
-      expect(snap.data()?.state).to.equal('creating');
-    });
-
-    it('claimドキュメントが存在しない場合、acquireFolderLockは従来通り取得できる(回帰なし)', async () => {
-      const lockToken = await acquireFolderLock(db, 'parent-cross3', '新規太郎');
-      expect(lockToken).to.be.a('string');
-      const snap = await claimDocRef('parent-cross3', '新規太郎').get();
-      expect(snap.data()?.state).to.equal(undefined);
-      expect(snap.data()?.lockToken).to.equal(lockToken);
+      expect(count).to.equal(0);
+      const snap = await claimDocRef('parent-invalidate2', '発散太郎').get();
+      expect(snap.data()?.state).to.equal('divergent');
     });
   });
 

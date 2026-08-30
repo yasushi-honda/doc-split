@@ -489,7 +489,11 @@ export async function reconcileAttempt(
   name: string,
   claim: FolderClaimDoc & { attempt: FolderClaimAttempt },
   runId: string
-): Promise<{ status: 'adopt'; folderId: string } | { status: 'wait' } | { status: 'clear' }> {
+): Promise<
+  | { status: 'adopt'; folderId: string; restored: boolean }
+  | { status: 'wait' }
+  | { status: 'clear' }
+> {
   const attemptId = claim.attempt.attemptId;
   const q =
     `'${parentId}' in parents and appProperties has ` +
@@ -521,7 +525,8 @@ export async function reconcileAttempt(
     // 移動されていた場合、通常の名前解決経路(resolveExistingFolder)は必ずuntrashして
     // から返すのに対し、reconcile経由だけがtrashed状態のまま採用してしまう非対称を
     // 解消する。復元に失敗した場合はfail-closedで再throwする(既存のtrashed復元と同じ方針)。
-    if (files[0].trashed) {
+    const restored = !!files[0].trashed;
+    if (restored) {
       await drive.files.update({
         fileId: id,
         requestBody: { trashed: false },
@@ -529,7 +534,7 @@ export async function reconcileAttempt(
         ...SUPPORTS_ALL_DRIVES,
       });
     }
-    return { status: 'adopt', folderId: id };
+    return { status: 'adopt', folderId: id, restored };
   }
 
   const elapsedMs = Date.now() - claim.attempt.startedAtMs;
@@ -540,6 +545,49 @@ export async function reconcileAttempt(
   await invalidateAttempt(firestore, parentId, name, attemptId);
   void runId;
   return { status: 'clear' };
+}
+
+/**
+ * `folderId`が指す'resolved'状態のclaimを'invalidated'にする(fencing: folderId一致のみ)。
+ * `rollback-drive-folder-merge.ts`が、ロールバックで再trashed化したtarget folderの
+ * claim記録を明示的に無効化するために使う(PR-4)。manifestはparentId/nameを持たず
+ * folderIdのみ記録しているため、`parentId`/`name`をキーにする`invalidateAttempt`とは
+ * 別にfolderIdでの問い合わせを提供する(単純な等価フィルタ2つのみのクエリのため、
+ * Firestoreの自動単一フィールド索引で完結し追加のcomposite index設定は不要)。
+ * 残置しても次回exportの`files.get`404累積判定(最大10分)で自然に解消されるため、
+ * この呼び出し自体の失敗はbest-effortとして扱ってよい(呼び出し元の判断)。
+ * マッチした件数を返す(0件はclaim未生成またはTTL消滅済みで正常)。
+ */
+export async function invalidateResolvedClaimByFolderId(
+  firestore: admin.firestore.Firestore,
+  folderId: string
+): Promise<number> {
+  const snap = await firestore
+    .collection(FOLDER_LOCKS_COLLECTION)
+    .where('folderId', '==', folderId)
+    .where('state', '==', 'resolved')
+    .get();
+
+  let invalidatedCount = 0;
+  for (const doc of snap.docs) {
+    await firestore.runTransaction(async (tx) => {
+      const fresh = await tx.get(doc.ref);
+      const data = fresh.data();
+      if (!fresh.exists || data?.state !== 'resolved' || data?.folderId !== folderId) {
+        return; // fencing: 別処理が既に状態を変えている
+      }
+      const doc2 = stripUndefined({
+        state: 'invalidated' as const,
+        attempt: null,
+        parentId: data.parentId as string,
+        name: data.name as string,
+        expireAt: ttlTimestamp(),
+      });
+      tx.set(fresh.ref, doc2);
+    });
+    invalidatedCount++;
+  }
+  return invalidatedCount;
 }
 
 /** 'creating'状態のclaimを'invalidated'にする(fencing: attemptIdが一致する場合のみ)。 */
@@ -676,10 +724,17 @@ async function recordMiss(
   });
 }
 
+/** `verifyFolderClaim`の返り値。`restored`は呼び出し元(rollback manifest記録用)が
+ * この呼び出し自体でuntrashを行ったかどうかを示す。 */
+export interface VerifiedFolderClaim {
+  folderId: string;
+  restored: boolean;
+}
+
 /**
  * resolved claimの健全性を`files.get`で確認する(§3の分類表に従いfail-closedで処理する)。
- * 200・trashed=falseかつname/parents一致 → 健全、folderIdを返す。
- * 200・trashed=true(name一致) → untrashして返す(untrash失敗は再throw)。
+ * 200・trashed=falseかつname/parents一致 → 健全、folderIdを返す(restored: false)。
+ * 200・trashed=true(name一致) → untrashして返す(restored: true。untrash失敗は再throw)。
  * 200・parents不一致、またはname不一致(codex review指摘対応: Drive UI上でのリネームを
  *   検知しないと、要求された名前とは異なるフォルダへ際限なくエクスポートし続けてしまう)
  *   → 'divergent'にして`DivergentFolderClaimError`をthrow。
@@ -696,7 +751,7 @@ export async function verifyFolderClaim(
   name: string,
   claim: ResolvedFolderClaim,
   runId: string
-): Promise<string> {
+): Promise<VerifiedFolderClaim> {
   let getResult;
   try {
     getResult = await withBackoffRetry(
@@ -741,7 +796,7 @@ export async function verifyFolderClaim(
       ...SUPPORTS_ALL_DRIVES,
     });
     await recordVerification(firestore, parentId, name, claim.folderId);
-    return claim.folderId;
+    return { folderId: claim.folderId, restored: true };
   }
 
   const parents = data.parents ?? [];
@@ -751,5 +806,5 @@ export async function verifyFolderClaim(
   }
 
   await recordVerification(firestore, parentId, name, claim.folderId);
-  return claim.folderId;
+  return { folderId: claim.folderId, restored: false };
 }

@@ -85,62 +85,6 @@ export {
   buildFolderLockId,
 };
 
-/**
- * `childFolderResolver.ts`(PR-4でclaimプロトコルへ移行予定)が使う旧来のロック取得。
- * `driveFolderClaim.ts`の`FOLDER_LOCKS_COLLECTION`/`buildFolderLockId`と同じ
- * ドキュメント空間を共有する、単純な排他制御(claimの`state`は関知しない)。
- */
-export async function acquireFolderLock(
-  firestore: admin.firestore.Firestore,
-  parentId: string,
-  name: string
-): Promise<string> {
-  const lockRef = firestore.collection(FOLDER_LOCKS_COLLECTION).doc(buildFolderLockId(parentId, name));
-  const lockToken = randomUUID();
-  const acquired = await firestore.runTransaction(async (tx) => {
-    const snap = await tx.get(lockRef);
-    const data = snap.data();
-    // second-opinionレビュー指摘(Critical)対応: claimプロトコル管理下のドキュメント
-    // (`state`フィールドを持つ、driveFolderClaim.tsのbeginCreation/commitResolvedWithRetry
-    // 等が書いたもの)には`claimedAtMs`が含まれないため、素通しすると常に「未ロック」と
-    // 誤判定して無条件set(全体上書き)→releaseFolderLockのtx.deleteで完全削除してしまう。
-    // resolved/invalidated/divergentいずれの状態であってもclaimの記録(folderId・
-    // missCount等の履歴)を握り潰してはならないため、`state`フィールドが存在する限り
-    // (staleness・状態の種類を問わず)常にblockedとし、claimプロトコルへの移行が
-    // 完了するまでの間は素通りさせない。
-    if (data?.state !== undefined) {
-      return false;
-    }
-    const claimedAtMs = data?.claimedAtMs as number | undefined;
-    if (claimedAtMs !== undefined && Date.now() - claimedAtMs < FOLDER_LOCK_STALE_MS) {
-      return false;
-    }
-    tx.set(lockRef, { claimedAtMs: Date.now(), lockToken });
-    return true;
-  });
-  if (!acquired) {
-    throw new FolderCreationInProgressError(name, parentId);
-  }
-  return lockToken;
-}
-
-/** `acquireFolderLock`と対の解放。`childFolderResolver.ts`用(§互換性維持)。 */
-export async function releaseFolderLock(
-  firestore: admin.firestore.Firestore,
-  parentId: string,
-  name: string,
-  lockToken: string
-): Promise<void> {
-  const lockRef = firestore.collection(FOLDER_LOCKS_COLLECTION).doc(buildFolderLockId(parentId, name));
-  await firestore.runTransaction(async (tx) => {
-    const snap = await tx.get(lockRef);
-    if (snap.data()?.lockToken !== lockToken) {
-      return; // 既に他の実行に引き継がれている(superseded) → 削除しない
-    }
-    tx.delete(lockRef);
-  });
-}
-
 async function listMatchingFolders(
   drive: drive_v3.Drive,
   parentId: string,
@@ -231,7 +175,7 @@ export async function findOrCreateFolder(
         return claim.folderId;
       }
       if (elapsedMs < SOFT_TTL_MS) {
-        return verifyFolderClaim(drive, firestore, parentId, name, claim, runId);
+        return (await verifyFolderClaim(drive, firestore, parentId, name, claim, runId)).folderId;
       }
       // elapsedMs >= SOFT_TTL_MS → 下の完全再検索に合流(claimとの突合はそちらで行う)
     }
@@ -284,7 +228,7 @@ export async function findOrCreateFolder(
 
   // 0件。read時にresolved claimが存在する場合は、それを信用する(§4の要、詳細はモジュール冒頭コメント参照)
   if (readEnabled && isResolvedWithFolderId(claim)) {
-    return verifyFolderClaim(drive, firestore, parentId, name, claim, runId);
+    return (await verifyFolderClaim(drive, firestore, parentId, name, claim, runId)).folderId;
   }
 
   // 0件マッチ = 新規作成が必要。異なるdocId間の競合を防ぐためclaimを予約する。

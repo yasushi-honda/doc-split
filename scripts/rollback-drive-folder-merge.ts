@@ -76,7 +76,9 @@ interface RollbackOutcome {
 async function main(): Promise<void> {
   const { getDriveClient } = await import('../functions/src/utils/driveAuth');
   const { SUPPORTS_ALL_DRIVES } = await import('../functions/src/drive/driveApiConstants');
+  const { invalidateResolvedClaimByFolderId } = await import('../functions/src/drive/driveFolderClaim');
   const drive: drive_v3.Drive = await getDriveClient();
+  const db = admin.firestore();
 
   const targetMoves = operationsFilter
     ? manifest.fileMoves.filter((m) => operationsFilter.has(m.operationId))
@@ -259,6 +261,22 @@ async function main(): Promise<void> {
           ...SUPPORTS_ALL_DRIVES,
         });
         console.log(`✅ folder ${folderId} を再trashed化(rollback前は復元済み状態だった)`);
+
+        // Issue #871 PR-4: この再trashed化でDrive側の状態がclaim(driveFolderLocks)の
+        // 記録と食い違う(claimはこのfolderIdをresolvedのまま指し続ける)。残置すると
+        // 次回exportがfiles.getの404累積判定(最大10分)を待つことになるため、ここで
+        // 明示的にinvalidatedへ倒す。失敗してもDrive側のrollback自体は完了しているため
+        // best-effort(exit codeには反映しない、404累積判定で自然に解消されるため)。
+        try {
+          const invalidatedCount = await invalidateResolvedClaimByFolderId(db, folderId);
+          if (invalidatedCount > 0) {
+            console.log(`✅ folder ${folderId} のclaim記録を${invalidatedCount}件invalidatedへ遷移`);
+          }
+        } catch (claimErr) {
+          console.error(
+            `⚠️  folder ${folderId} のclaim invalidateに失敗(Drive側のrollbackは完了済み、次回exportのfiles.get 404累積判定で自然に解消されます): ${(claimErr as Error).message}`
+          );
+        }
       } catch (err) {
         folderOperationErrorCount++;
         console.error(`❌ folder ${folderId} の再trashed化に失敗: ${(err as Error).message}`);

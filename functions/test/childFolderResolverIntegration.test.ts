@@ -9,6 +9,12 @@
  * `childFolderResolver.ts`はコードレビューで「同じ回帰を引き起こしうる設計であるにもかかわらず
  * テストが一切存在しない」と指摘され、本ファイルで穴を埋める。
  *
+ * 2026-08-30追加(Issue #871 PR-4): `resolveChildFolder()`をclaimプロトコルへ完全移行した。
+ * claim固有の状態機械(3段ラダー・中断復旧・fail-closedエラー分類)自体は
+ * `driveFolderClaimIntegration.test.ts`で網羅済みのため、本ファイルでは「resolveChildFolder()
+ * がその状態機械を正しく呼び出しているか」「read-only関数が引き続きclaimコレクションに
+ * 無関係のままか」に焦点を当てて追加する。
+ *
  * 実行: firebase emulators:exec --only firestore --project find-or-create-folder-test \
  *         'npm run test:integration'
  */
@@ -23,11 +29,12 @@ import {
   resolveChildFolder,
   resolveChildFolderPath,
   resolveChildFolderPathReadOnly,
+  resolveExistingChildFile,
   AmbiguousChildFolderError,
 } from '../src/drive/childFolderResolver';
 
 const db = admin.firestore();
-const COLLECTIONS_TO_CLEAN: readonly string[] = ['driveFolderLocks'];
+const COLLECTIONS_TO_CLEAN: readonly string[] = ['driveFolderLocks', 'settings'];
 
 interface FakeFile {
   id: string;
@@ -269,5 +276,223 @@ describe('resolveChildFolderPathReadOnly (Issue #811 Phase B Part A)', () => {
     } catch (error) {
       expect(error).to.be.instanceOf(AmbiguousChildFolderError);
     }
+  });
+});
+
+/**
+ * `driveFolderClaimIntegration.test.ts`と同型の、状態を保持するfake Drive
+ * (`files.get`・appPropertiesタグ検索対応)。claimプロトコルの結果整合性再現・
+ * 中断復旧テストにはfiles.create()の結果がfiles.list()へ反映される状態遷移が必要なため、
+ * 上のシンプルなfakeとは別に用意する。
+ */
+interface ClaimAwareFakeFile {
+  id: string;
+  name: string;
+  trashed?: boolean;
+  parents: string[];
+  appProperties?: Record<string, string>;
+}
+
+function parseParentId(q: string): string {
+  const m = q.match(/^'([^']+)' in parents/);
+  if (!m) throw new Error(`テストfakeが解釈できないクエリです: ${q}`);
+  return m[1];
+}
+
+function makeClaimAwareFakeDrive(opts: { files?: ClaimAwareFakeFile[]; listReturnsEmpty?: boolean } = {}) {
+  const store: ClaimAwareFakeFile[] = opts.files ?? [];
+  const listCalls: Record<string, unknown>[] = [];
+  const createCalls: Record<string, unknown>[] = [];
+  const getCalls: Record<string, unknown>[] = [];
+  let createSeq = 0;
+
+  const drive = {
+    files: {
+      list: async (params: Record<string, unknown>) => {
+        listCalls.push(params);
+        // 結果整合性遅延の再現(索引未反映): このモードでは常に0件を返す。
+        if (opts.listReturnsEmpty) {
+          return { data: { files: [] } };
+        }
+        const q = params.q as string;
+        const parentId = parseParentId(q);
+        if (q.includes('appProperties has')) {
+          const valueMatch = q.match(/value='([^']*)'/);
+          const value = valueMatch ? valueMatch[1] : '';
+          const matches = store.filter(
+            (f) => f.parents.includes(parentId) && f.appProperties?.docSplitFolderClaim === value
+          );
+          return { data: { files: matches.map((f) => ({ id: f.id, name: f.name, trashed: f.trashed })) } };
+        }
+        const nameMatch = q.match(/name='((?:[^'\\]|\\.)*)'/);
+        const name = nameMatch ? nameMatch[1].replace(/\\'/g, "'").replace(/\\\\/g, '\\') : '';
+        const wantTrashed = q.includes('trashed=true');
+        const matches = store.filter(
+          (f) => f.parents.includes(parentId) && f.name === name && !!f.trashed === wantTrashed
+        );
+        return { data: { files: matches.map((f) => ({ id: f.id, name: f.name, trashed: f.trashed })) } };
+      },
+      create: async (params: Record<string, unknown>) => {
+        createCalls.push(params);
+        const requestBody = params.requestBody as {
+          name: string;
+          parents: string[];
+          appProperties?: Record<string, string>;
+        };
+        const id = `created-${++createSeq}`;
+        store.push({
+          id,
+          name: requestBody.name,
+          parents: requestBody.parents,
+          trashed: false,
+          appProperties: requestBody.appProperties,
+        });
+        return { data: { id } };
+      },
+      update: async (params: Record<string, unknown>) => {
+        const fileId = params.fileId as string;
+        const requestBody = params.requestBody as { trashed?: boolean };
+        const file = store.find((f) => f.id === fileId);
+        if (file && requestBody.trashed !== undefined) {
+          file.trashed = requestBody.trashed;
+        }
+        return { data: { id: fileId } };
+      },
+      get: async (params: Record<string, unknown>) => {
+        getCalls.push(params);
+        const fileId = params.fileId as string;
+        const file = store.find((f) => f.id === fileId);
+        if (!file) {
+          const err = new Error('File not found') as Error & { status: number };
+          err.status = 404;
+          throw err;
+        }
+        return { data: { id: file.id, name: file.name, trashed: file.trashed, parents: file.parents } };
+      },
+    },
+  } as unknown as drive_v3.Drive;
+
+  return { drive, store, listCalls, createCalls, getCalls };
+}
+
+async function enableClaimRead(): Promise<void> {
+  await db.doc('settings/features').set({ driveFolderClaimRead: true });
+}
+
+describe('resolveChildFolder: claimプロトコルへの参加(Issue #871 PR-4)', () => {
+  beforeEach(async () => {
+    await cleanupCollections(db, COLLECTIONS_TO_CLEAN);
+  });
+
+  it('files.listが索引未反映で常に0件を返す状況でも、逐次呼び出しでfiles.createはちょうど1回だけ実行される', async () => {
+    await enableClaimRead();
+    const { drive, createCalls } = makeClaimAwareFakeDrive({ listReturnsEmpty: true });
+
+    const first = await resolveChildFolder(drive, db, 'parent-burst', '結果整合性太郎');
+    expect(first.created).to.equal(true);
+    expect(createCalls).to.have.lengthOf(1);
+
+    for (let i = 0; i < 4; i++) {
+      const result = await resolveChildFolder(drive, db, 'parent-burst', '結果整合性太郎');
+      expect(result.id).to.equal(first.id);
+    }
+
+    expect(createCalls).to.have.lengthOf(1);
+  });
+
+  it('SOFT_TTL超過後にfiles.listが0件でも、resolved claimを信用してfiles.createを呼ばない(§4の要)', async () => {
+    await enableClaimRead();
+    // files.list()は索引未反映で0件を返し続けるが、files.get(id)は健全に解決できる状況
+    // (実Drive APIの典型的な結果整合性遅延: list検索は遅延するがget直接参照は強整合)。
+    const { drive, createCalls } = makeClaimAwareFakeDrive({
+      listReturnsEmpty: true,
+      files: [{ id: 'already-resolved-id', name: '陳腐化太郎', parents: ['parent-stale'], trashed: false }],
+    });
+    await db
+      .collection('driveFolderLocks')
+      .doc(Buffer.from('parent-stale/陳腐化太郎').toString('base64url'))
+      .set({
+        state: 'resolved',
+        folderId: 'already-resolved-id',
+        attempt: null,
+        resolvedAtMs: Date.now() - 10 * 60 * 1000,
+        verifiedAtMs: Date.now() - 10 * 60 * 1000, // SOFT_TTL_MS(5分)超過 → 完全再検索へ
+        parentId: 'parent-stale',
+        name: '陳腐化太郎',
+      });
+
+    const result = await resolveChildFolder(drive, db, 'parent-stale', '陳腐化太郎');
+
+    expect(result).to.deep.equal({ id: 'already-resolved-id', restored: false, created: false });
+    expect(createCalls).to.have.lengthOf(0);
+  });
+
+  it('SOFT_TTL窓内でclaimのfolderIdがtrashed済みと判明した場合、復元しrestored:trueで返す(rollback manifest用フラグの伝播)', async () => {
+    await enableClaimRead();
+    const { drive } = makeClaimAwareFakeDrive({
+      files: [{ id: 'trashed-claim-id', name: '復元太郎', parents: ['parent-verify'], trashed: true }],
+    });
+    await db
+      .collection('driveFolderLocks')
+      .doc(Buffer.from('parent-verify/復元太郎').toString('base64url'))
+      .set({
+        state: 'resolved',
+        folderId: 'trashed-claim-id',
+        attempt: null,
+        resolvedAtMs: Date.now() - 2 * 60 * 1000,
+        verifiedAtMs: Date.now() - 2 * 60 * 1000, // CREATE_TRUST_MS超過・SOFT_TTL_MS未満 → files.getのみ
+        parentId: 'parent-verify',
+        name: '復元太郎',
+      });
+
+    const result = await resolveChildFolder(drive, db, 'parent-verify', '復元太郎');
+
+    expect(result).to.deep.equal({ id: 'trashed-claim-id', restored: true, created: false });
+  });
+
+  it('shadowモード(driveFolderClaimRead未設定)でもclaimは書き込まれる(既存挙動には影響しない)', async () => {
+    const { drive, createCalls } = makeClaimAwareFakeDrive();
+
+    const result = await resolveChildFolder(drive, db, 'parent-shadow', '影太郎');
+
+    expect(result.created).to.equal(true);
+    expect(createCalls).to.have.lengthOf(1);
+    const snap = await db
+      .collection('driveFolderLocks')
+      .doc(Buffer.from('parent-shadow/影太郎').toString('base64url'))
+      .get();
+    expect(snap.exists).to.equal(true);
+    expect(snap.data()?.state).to.equal('resolved');
+    expect(snap.data()?.folderId).to.equal(result.id);
+  });
+});
+
+describe('read-only関数はclaimコレクションに一切アクセスしない(診断の独立性の回帰防止)', () => {
+  beforeEach(async () => {
+    await cleanupCollections(db, COLLECTIONS_TO_CLEAN);
+  });
+
+  it('resolveExistingChildFileを繰り返し呼んでもdriveFolderLocksに書き込みが発生しない', async () => {
+    const { drive } = makeClaimAwareFakeDrive({
+      files: [{ id: 'active-id', name: '読取太郎', parents: ['parent-readonly'], trashed: false }],
+    });
+
+    for (let i = 0; i < 3; i++) {
+      await resolveExistingChildFile(drive, 'parent-readonly', '読取太郎');
+    }
+
+    const snap = await db.collection('driveFolderLocks').get();
+    expect(snap.empty).to.equal(true);
+  });
+
+  it('resolveChildFolderPathReadOnlyを呼んでもdriveFolderLocksに書き込みが発生しない', async () => {
+    const { drive } = makeClaimAwareFakeDrive({
+      files: [{ id: 'active-id', name: '読取太郎', parents: ['root-id'], trashed: false }],
+    });
+
+    await resolveChildFolderPathReadOnly(drive, 'root-id', ['読取太郎']);
+
+    const snap = await db.collection('driveFolderLocks').get();
+    expect(snap.empty).to.equal(true);
   });
 });
