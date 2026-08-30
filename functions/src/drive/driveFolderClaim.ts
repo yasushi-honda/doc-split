@@ -173,6 +173,7 @@ export class DivergentFolderClaimError extends Error {
 
 /** `commitResolvedWithRetry`がリトライ後も失敗した。呼び出し元は`error`ステータスへ遷移させる。 */
 export class FolderClaimCommitError extends Error {
+  readonly folderId: string;
   constructor(name: string, parentId: string, folderId: string, cause: unknown) {
     super(
       `claimの確定書込みに失敗しました(リトライ後も失敗): "${name}"（親フォルダ: ${parentId}、folderId: ${folderId}）: ${
@@ -180,6 +181,28 @@ export class FolderClaimCommitError extends Error {
       }`
     );
     this.name = 'FolderClaimCommitError';
+    this.folderId = folderId;
+  }
+}
+
+/**
+ * `verifyFolderClaim`がuntrash(Drive側の書込み)自体には成功したが、直後のFirestore記録
+ * (`recordVerification`)に失敗した場合に投げる(codex review P2指摘対応、2巡目)。
+ * `findOrCreateFolder.ts`はこの型を無視して既存の一般的なエラー処理に任せてよいが、
+ * `childFolderResolver.ts`はrollback manifest(restoredFolderIds)追跡のため
+ * `folderId`を取り出して使う。
+ */
+export class FolderClaimRestoreCommitError extends Error {
+  readonly folderId: string;
+  readonly cause: unknown;
+  constructor(name: string, parentId: string, folderId: string, cause: unknown) {
+    const causeMessage = cause instanceof Error ? cause.message : String(cause);
+    super(
+      `フォルダの復元(untrash)自体は成功しましたがclaim記録に失敗しました: "${name}"（親フォルダ: ${parentId}、folderId: ${folderId}）: ${causeMessage}`
+    );
+    this.name = 'FolderClaimRestoreCommitError';
+    this.folderId = folderId;
+    this.cause = cause;
   }
 }
 
@@ -807,7 +830,16 @@ export async function verifyFolderClaim(
       fields: 'id',
       ...SUPPORTS_ALL_DRIVES,
     });
-    await recordVerification(firestore, parentId, name, claim.folderId);
+    // codex review指摘対応(2巡目、P2): untrash(Drive側の書込み)自体は成功したのに、
+    // 直後のrecordVerification(Firestore書込み)が失敗すると、この関数を呼んだ
+    // `childFolderResolver.ts`は「実はDrive側で復元が起きた」事実を知る手段を失い、
+    // rollback manifest(restoredFolderIds)からこの復元事実が漏れる。folderIdを運べる
+    // 専用errorで包み、呼び出し元が判断できるようにする。
+    try {
+      await recordVerification(firestore, parentId, name, claim.folderId);
+    } catch (recordError) {
+      throw new FolderClaimRestoreCommitError(name, parentId, claim.folderId, recordError);
+    }
     return { folderId: claim.folderId, restored: true };
   }
 

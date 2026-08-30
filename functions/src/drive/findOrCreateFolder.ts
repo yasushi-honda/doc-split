@@ -109,21 +109,31 @@ async function listMatchingFolders(
   return files;
 }
 
-async function resolveExistingFolder(
+interface MatchedFolder {
+  id: string;
+  trashed: boolean;
+}
+
+/**
+ * 副作用なしの検索のみ(claimとの突合を先に行うため、`materializeExistingFolder`と
+ * 分離している。codex review P2指摘対応: 突合前にtrashedからの復元を行うと、claimとは
+ * 無関係な同名trashedフォルダをfail-closedの判定確定前にuntrashしてしまう)。
+ */
+async function findExistingFolder(
   drive: drive_v3.Drive,
   parentId: string,
   name: string
-): Promise<string | null> {
+): Promise<MatchedFolder | null> {
   const activeFiles = await listMatchingFolders(drive, parentId, name, false);
   if (activeFiles.length > 1) {
     throw new AmbiguousFolderError(name, parentId, activeFiles.length);
   }
   if (activeFiles.length === 1) {
-    const existingId = activeFiles[0].id;
-    if (!existingId) {
+    const id = activeFiles[0].id;
+    if (!id) {
       throw new Error(`既存フォルダのidが取得できません: "${name}"`);
     }
-    return existingId;
+    return { id, trashed: false };
   }
 
   const trashedFiles = await listMatchingFolders(drive, parentId, name, true);
@@ -131,20 +141,37 @@ async function resolveExistingFolder(
     throw new AmbiguousFolderError(name, parentId, trashedFiles.length);
   }
   if (trashedFiles.length === 1) {
-    const existingId = trashedFiles[0].id;
-    if (!existingId) {
+    const id = trashedFiles[0].id;
+    if (!id) {
       throw new Error(`既存フォルダのidが取得できません: "${name}"`);
     }
+    return { id, trashed: true };
+  }
+
+  return null;
+}
+
+/** trashedなら復元してidを返す(副作用あり)。 */
+async function materializeExistingFolder(drive: drive_v3.Drive, match: MatchedFolder): Promise<string> {
+  if (match.trashed) {
     await drive.files.update({
-      fileId: existingId,
+      fileId: match.id,
       requestBody: { trashed: false },
       fields: 'id',
       ...SUPPORTS_ALL_DRIVES,
     });
-    return existingId;
   }
+  return match.id;
+}
 
-  return null;
+async function resolveExistingFolder(
+  drive: drive_v3.Drive,
+  parentId: string,
+  name: string
+): Promise<string | null> {
+  const match = await findExistingFolder(drive, parentId, name);
+  if (!match) return null;
+  return materializeExistingFolder(drive, match);
 }
 
 function isResolvedWithFolderId(claim: FolderClaimDoc | null): claim is ResolvedFolderClaim {
@@ -202,9 +229,9 @@ export async function findOrCreateFolder(
   }
 
   // --- 完全再検索(shadow時は常時ここから開始。read時はここまでfall throughした場合のみ) ---
-  let existingId: string | null;
+  let match: MatchedFolder | null;
   try {
-    existingId = await resolveExistingFolder(drive, parentId, name);
+    match = await findExistingFolder(drive, parentId, name);
   } catch (error) {
     if (readEnabled && isResolvedWithFolderId(claim) && error instanceof AmbiguousFolderError) {
       await markDivergent(firestore, parentId, name, 'ambiguous-full-scan').catch(() => {});
@@ -212,11 +239,14 @@ export async function findOrCreateFolder(
     throw error;
   }
 
-  if (existingId) {
-    if (readEnabled && isResolvedWithFolderId(claim) && claim.folderId !== existingId) {
+  if (match) {
+    // codex review P2指摘対応: claimとの突合(divergent判定)を、trashedからの復元
+    // (materializeExistingFolder、Drive側への書込み)より先に行う。
+    if (readEnabled && isResolvedWithFolderId(claim) && claim.folderId !== match.id) {
       await markDivergent(firestore, parentId, name, 'full-scan-mismatch').catch(() => {});
-      throw new DivergentFolderClaimError(name, parentId, claim.folderId, existingId);
+      throw new DivergentFolderClaimError(name, parentId, claim.folderId, match.id);
     }
+    const existingId = await materializeExistingFolder(drive, match);
     await recordFullScanResolution(firestore, parentId, name, existingId, runId).catch((error) =>
       console.error(
         `[findOrCreateFolder] claim記録に失敗しました(結果には影響しません): "${name}"（親フォルダ: ${parentId}）`,

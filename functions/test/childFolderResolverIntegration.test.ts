@@ -32,7 +32,9 @@ import {
   resolveExistingChildFile,
   AmbiguousChildFolderError,
   ChildFolderCreatedButUncommittedError,
+  ChildFolderRestoredButUncommittedError,
   PartialChildFolderPathError,
+  DivergentFolderClaimError,
 } from '../src/drive/childFolderResolver';
 
 const db = admin.firestore();
@@ -450,6 +452,72 @@ describe('resolveChildFolder: claimプロトコルへの参加(Issue #871 PR-4)'
     const result = await resolveChildFolder(drive, db, 'parent-verify', '復元太郎');
 
     expect(result).to.deep.equal({ id: 'trashed-claim-id', restored: true, created: false });
+  });
+
+  it('完全再検索がclaimと異なるtrashedフォルダを見つけた場合、untrashせずdivergentへ遷移する(codex review P2指摘対応、2巡目)', async () => {
+    await enableClaimRead();
+    await db
+      .collection('driveFolderLocks')
+      .doc(Buffer.from('parent-scanmismatch/再検索不一致太郎').toString('base64url'))
+      .set({
+        state: 'resolved',
+        folderId: 'claimed-id',
+        attempt: null,
+        resolvedAtMs: Date.now() - 10 * 60 * 1000,
+        verifiedAtMs: Date.now() - 10 * 60 * 1000, // SOFT_TTL_MS超過 → 完全再検索へ
+        parentId: 'parent-scanmismatch',
+        name: '再検索不一致太郎',
+      });
+    const { drive, store, createCalls } = makeClaimAwareFakeDrive({
+      files: [
+        { id: 'different-trashed-id', name: '再検索不一致太郎', parents: ['parent-scanmismatch'], trashed: true },
+      ],
+    });
+
+    try {
+      await resolveChildFolder(drive, db, 'parent-scanmismatch', '再検索不一致太郎');
+      expect.fail('DivergentFolderClaimErrorがthrowされるべき');
+    } catch (error) {
+      expect(error).to.be.instanceOf(DivergentFolderClaimError);
+    }
+    // claimと無関係なフォルダをDrive側で書き換えていないこと(untrashしていないこと)
+    expect(store.find((f) => f.id === 'different-trashed-id')?.trashed).to.equal(true);
+    expect(createCalls).to.have.lengthOf(0);
+  });
+
+  it('reconcileAttemptの復元(untrash)後にcommitResolvedWithRetryが失敗すると、ChildFolderRestoredButUncommittedErrorでfolderIdが伝播する(codex review P2指摘対応、2巡目)', async () => {
+    await enableClaimRead();
+    await db
+      .collection('driveFolderLocks')
+      .doc(Buffer.from('parent-reconcile-restore/回収復元太郎').toString('base64url'))
+      .set({
+        state: 'creating',
+        attempt: { attemptId: 'attempt-reconcile-restore', startedAtMs: Date.now() - 2 * 60 * 1000, runId: 'old-run' },
+        parentId: 'parent-reconcile-restore',
+        name: '回収復元太郎',
+      });
+    const { drive, store } = makeClaimAwareFakeDrive({
+      files: [
+        {
+          id: 'tagged-trashed-id',
+          name: '回収復元太郎',
+          parents: ['parent-reconcile-restore'],
+          trashed: true,
+          appProperties: { docSplitFolderClaim: 'attempt-reconcile-restore' },
+        },
+      ],
+    });
+    const failingDb = makeFailingCommitFirestore(db, [1, 2, 3]);
+
+    try {
+      await resolveChildFolder(drive, failingDb, 'parent-reconcile-restore', '回収復元太郎');
+      expect.fail('ChildFolderRestoredButUncommittedErrorがthrowされるべき');
+    } catch (error) {
+      expect(error).to.be.instanceOf(ChildFolderRestoredButUncommittedError);
+      expect((error as ChildFolderRestoredButUncommittedError).restoredFolderId).to.equal('tagged-trashed-id');
+    }
+    // Drive側のuntrash自体は成功していること(claim確定書込みの失敗とは独立)
+    expect(store.find((f) => f.id === 'tagged-trashed-id')?.trashed).to.equal(false);
   });
 
   it('shadowモード(driveFolderClaimRead未設定)でもclaimは書き込まれる(既存挙動には影響しない)', async () => {

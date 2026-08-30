@@ -280,6 +280,53 @@ describe('driveFolderClaim プロトコル(Issue #871)', () => {
       expect(listCalls.length).to.be.greaterThan(0);
       expect(getCalls).to.have.lengthOf(0);
     });
+
+    it('完全再検索がclaimと異なるtrashedフォルダを見つけた場合、untrashせずdivergentへ遷移する(codex review P2指摘対応、2巡目)', async () => {
+      await enableClaimRead();
+      await claimDocRef('parent-scanmismatch', '再検索不一致太郎').set({
+        state: 'resolved',
+        folderId: 'claimed-id',
+        attempt: null,
+        resolvedAtMs: Date.now() - 10 * 60 * 1000,
+        verifiedAtMs: Date.now() - 10 * 60 * 1000, // SOFT_TTL_MS超過 → 完全再検索へ
+        parentId: 'parent-scanmismatch',
+        name: '再検索不一致太郎',
+      });
+      const { drive, updateCalls, createCalls } = makeFakeDrive({
+        files: [
+          { id: 'different-trashed-id', name: '再検索不一致太郎', parents: ['parent-scanmismatch'], trashed: true },
+        ],
+      });
+
+      try {
+        await findOrCreateFolder(drive, db, 'parent-scanmismatch', '再検索不一致太郎');
+        expect.fail('DivergentFolderClaimErrorがthrowされるべき');
+      } catch (error) {
+        expect(error).to.be.instanceOf(DivergentFolderClaimError);
+      }
+      // untrash(files.update)も新規作成も行われないこと(claimと無関係なフォルダをDrive側で書き換えない)
+      expect(updateCalls).to.have.lengthOf(0);
+      expect(createCalls).to.have.lengthOf(0);
+      const snap = await claimDocRef('parent-scanmismatch', '再検索不一致太郎').get();
+      expect(snap.data()?.state).to.equal('divergent');
+    });
+  });
+
+  describe('childFolderResolver.tsとのclaim共有 — shadowモードのクロスリゾルバ保護(codex review P1指摘対応、2巡目)', () => {
+    it('shadowモード(driveFolderClaimRead未設定)でも、findOrCreateFolderが確定済みのresolved claimを直後のresolveChildFolderが再作成しない(旧acquireFolderLockの多層防御を復元)', async () => {
+      const { drive, createCalls } = makeFakeDrive();
+      // files.list は常に0件を返す(索引未反映を模擬)。この防御が無いと、shadowモードの
+      // beginCreation()がresolved claimを無条件上書きし2重作成してしまう。
+      (drive.files as unknown as { list: unknown }).list = async () => ({ data: { files: [] } });
+
+      const folderId = await findOrCreateFolder(drive, db, 'parent-shadow-cross', '影連携太郎');
+      expect(createCalls).to.have.lengthOf(1);
+
+      const result = await resolveChildFolder(drive, db, 'parent-shadow-cross', '影連携太郎');
+
+      expect(result).to.deep.equal({ id: folderId, restored: false, created: false });
+      expect(createCalls).to.have.lengthOf(1);
+    });
   });
 
   describe('SOFT_TTL超過後の完全再検索が0件のケース(§4の要)', () => {
