@@ -432,6 +432,8 @@ decision-maker承認（「正しいことを段階的かつ計画的にうっか
 
 **追記（2026-08-30、同日中）**: decision-maker確認「cocoroも同じ問題があるなら等しくアップデートすべきか」を受け整理。cocoroはDrive連携自体が未接続のため今この問題は発生し得ないが、Phase C完了後は同じ結果整合性の問題が理屈上起こりうる。**コードのデプロイ・TTLポリシー設定はshadowモードのため既存挙動に影響ゼロと判断し、cocoroにも先行して適用**（Firestore TTLポリシー`ACTIVE`実測確認、GitHub Actions「Deploy Cloud Functions」run [33308561046](https://github.com/yasushi-honda/doc-split/actions/runs/33308561046)完走、`onDocumentWriteDriveExport`updateTime`2026-08-30T11:25:24Z`でclaimプロトコル一式の反映を確認、`driveFolderClaimRead`未設定=shadowモードのままであることも確認）。**shadow観察・読み経路有効化はPhase C完了を待って改めて着手**（今観察しても実データが流れないため無意味）。
 
+**追記（2026-08-30、セッション終盤）**: kanameone担当者向けに、複数種類のFAX処理（対応完了）とフォルダ重複作成の不具合（中間報告・段階展開中）をまとめた統合HTML報告書（`html-brief`スキル、非エンジニア向け平易表現、内部用語なし）を作成・Playwright MCPで実機検証（コンソールエラー0件・コピーボタン8個全て正常動作）のうえdecision-makerへ送信完了。続けて残タスク（本Issue #871のshadow観察、複数人記載FAXの新規到着確認、Issue #881）を3分類で確認したところ、Issue #871・複数人記載FAXはいずれも外部trigger（時間経過／新規FAX到着）待ちで今は着手不可、**Issue #881はdecision-maker判断で見送り**（次回の定期作業枠で扱う、AskUserQuestion経由で確認済み）となり、即着手タスクなしでセッション終了。
+
 ## 【完了・2026-08-29】残存44件(→49件)の実態解明+kanameone担当者への確認依頼を報告文書に反映(送付は未実施)
 
 上記「次に必要なのは以下のいずれか」の両方に対応した。**kanameone側でDrive export破損documentが継続的に発生していないか、`classify-drive-export-drift`を`--care-manager`省略でテナント全体に対し再実行**（GitHub Actions run [33183923836](https://github.com/yasushi-honda/doc-split/actions/runs/33183923836)）したところ、Phase 3最終確認（8/28、44件）からわずか約1.5時間で残存が49件（trashed9+misplaced14+target-path-not-created5=28件、他blocked21件=segment-unresolvable17+ambiguous-path3+customer-unconfirmed1）へ自然増していることを確認。**新たに`wouldRestoreFolders`1件（「ケアプラン」フォルダ、影響3書類）も検出**（Phase 3実行時にはなかった別インスタンス）。
