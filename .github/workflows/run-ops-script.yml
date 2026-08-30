@@ -185,6 +185,7 @@ on:
           - execute-drive-export-repair --dry-run --limit --expected-count
           - execute-drive-export-repair --execute --limit --expected-count
           - execute-drive-export-repair --execute --expected-count
+          - diagnose-drive-folder-duplicate-causality
       backfill_limit:
         description: 'backfill-drive-export --limit: canary実行時のマーク上限件数(数値のみ) / classify-drive-export-drift --limit: 検査対象document数の上限(数値のみ) / execute-drive-export-repair --limit: 修復対象候補数の上限(数値のみ)'
         required: false
@@ -249,7 +250,7 @@ on:
         type: string
         default: ''
       exec_args_json:
-        description: 'execute-collision-migration: JSON {"planRunId":"<classify run id>","approvedOperationIds":["op-0001",...]} / investigate-issue811-root-cause: JSON {"folderIds":[...],"docIds":[...]} / classify-drive-folder-duplicates: JSON {"canonicalFolderId":"...","duplicateFolderIds":["id1","id2"]} / execute-drive-folder-merge: JSON {"planRunId":"<classify-drive-folder-duplicates run id>","approvedOperationIds":["op-0001",...]} / rollback-drive-folder-merge: JSON {"manifestRunId":"<execute-drive-folder-merge run id>","approvedOperationIds":["op-0001",...]}(approvedOperationIds省略時はmanifest全件を対象) / execute-drive-export-repair: JSON {"planRunId":"<classify-drive-export-drift run id>","expectedTotal":488,"acknowledgeRestoreFolders":false}(planRunId必須、expectedTotal/acknowledgeRestoreFoldersは省略可)'
+        description: 'execute-collision-migration: JSON {"planRunId":"<classify run id>","approvedOperationIds":["op-0001",...]} / investigate-issue811-root-cause: JSON {"folderIds":[...],"docIds":[...]} / classify-drive-folder-duplicates: JSON {"canonicalFolderId":"...","duplicateFolderIds":["id1","id2"]} / execute-drive-folder-merge: JSON {"planRunId":"<classify-drive-folder-duplicates run id>","approvedOperationIds":["op-0001",...]} / rollback-drive-folder-merge: JSON {"manifestRunId":"<execute-drive-folder-merge run id>","approvedOperationIds":["op-0001",...]}(approvedOperationIds省略時はmanifest全件を対象) / execute-drive-export-repair: JSON {"planRunId":"<classify-drive-export-drift run id>","expectedTotal":488,"acknowledgeRestoreFolders":false}(planRunId必須、expectedTotal/acknowledgeRestoreFoldersは省略可) / diagnose-drive-folder-duplicate-causality: JSON {"folderIds":["id1","id2",...]}'
         required: false
         type: string
         default: ''
@@ -899,6 +900,33 @@ jobs:
               FIREBASE_PROJECT_ID="$PROJECT_ID" \
               STORAGE_BUCKET="$STORAGE_BUCKET" \
               npx ts-node execute-drive-export-repair.ts "${ARGS[@]}" $SCRIPT_ARGS
+          elif [ "$SCRIPT_NAME" = "diagnose-drive-folder-duplicate-causality" ]; then
+            # Issue #871実装前ゲート: フォルダ重複の因果診断(read-only)。
+            # exec_args_jsonで{"folderIds":["id1",...]}を渡す(investigate-issue811-root-cause
+            # と同型)。結果はrun-summaryとして表示するのみでなく、artifactとしても保存する。
+            if [ -z "$EXEC_ARGS_JSON" ]; then
+              echo "ERROR: exec_args_json is required for diagnose-drive-folder-duplicate-causality" >&2
+              exit 1
+            fi
+            if ! echo "$EXEC_ARGS_JSON" | jq empty 2>/dev/null; then
+              echo "ERROR: exec_args_json is not valid JSON" >&2
+              exit 1
+            fi
+            FOLDER_IDS=$(echo "$EXEC_ARGS_JSON" | jq -r '.folderIds // empty | join(",")')
+            if [ -z "$FOLDER_IDS" ]; then
+              echo "ERROR: exec_args_json must contain non-empty folderIds array" >&2
+              exit 1
+            fi
+            if ! echo "$FOLDER_IDS" | grep -qE '^[A-Za-z0-9_-]+(,[A-Za-z0-9_-]+)*$'; then
+              echo "ERROR: folderIds must each match ^[A-Za-z0-9_-]+$ (got: $FOLDER_IDS)" >&2
+              exit 1
+            fi
+            cd scripts
+            NODE_PATH=../functions/node_modules \
+              FIREBASE_PROJECT_ID="$PROJECT_ID" \
+              npx ts-node diagnose-drive-folder-duplicate-causality.ts \
+                --folder-ids "$FOLDER_IDS" \
+                --out "${GITHUB_WORKSPACE}/scripts/diagnose-drive-folder-duplicate-causality-output.json"
           elif [ "$SCRIPT_NAME" = "classify-drive-folder-duplicates" ]; then
             # Issue #811 Phase B Part A: Driveフォルダ重複統合の分類(read-only)。
             # ログマスキングで `{` が `***` に置換されるため、plan JSON をファイル出力 →
@@ -1441,6 +1469,16 @@ jobs:
           path: scripts/execute-drive-export-repair-manifest.json
           if-no-files-found: warn
           retention-days: 90
+
+      - name: Upload diagnose-drive-folder-duplicate-causality report artifact
+        # Issue #871実装前ゲート: 因果診断結果(read-only)を他の診断成果物と同型でartifact保存。
+        if: ${{ startsWith(github.event.inputs.script, 'diagnose-drive-folder-duplicate-causality') && always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagnose-drive-folder-duplicate-causality-${{ github.event.inputs.environment }}-${{ github.run_id }}
+          path: scripts/diagnose-drive-folder-duplicate-causality-output.json
+          if-no-files-found: warn
+          retention-days: 30
 
       - name: Upload classify-drive-folder-duplicates plan artifact
         # Issue #811 Phase B: classify-collision-docsと同型(log secret maskingでplan JSONが
