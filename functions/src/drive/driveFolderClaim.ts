@@ -284,6 +284,19 @@ function hasValidInFlightCreatingLease(existing: FolderClaimDoc | null): boolean
   return Date.now() - leaseAnchorMs < FOLDER_LOCK_STALE_MS;
 }
 
+/**
+ * codex review P2指摘対応(10巡目): 'divergent'(人手介入待ち)と'invalidated'
+ * (rollbackやmiss累積で意図的に無効化された状態)はどちらも「この書込みで無条件に
+ * 'resolved'へ上書きしてはならない」終端状態という点で同じ扱いが必要。特にrollback
+ * スクリプトがresolved claimをinvalidatedへ遷移させた直後、既にfiles.getで健全性を
+ * 確認済みの並行exportがrecordVerification/recordFullScanResolutionへ到達すると、
+ * このガードがなければrollbackの無効化を無条件に'resolved'へ書き戻してしまい、
+ * rollbackが意図的にtrashしたフォルダが復活しうる。
+ */
+function isFencedTerminalState(existing: FolderClaimDoc | null): boolean {
+  return existing?.state === 'divergent' || existing?.state === 'invalidated';
+}
+
 /** 旧形式(`state`欠損)のドキュメントを`state:'creating', attempt:null`として解釈する。 */
 function normalizeClaim(
   data: admin.firestore.DocumentData,
@@ -511,9 +524,11 @@ export async function recordFullScanResolution(
     // second-opinionレビュー指摘(Important)対応: beginCreationと同様、shadowモードや
     // read無効化直後の経路では呼び出し元がclaimを事前確認していないため、divergent
     // (人手介入待ち)をこの完全再検索の記録で無条件に'resolved'へ上書きしてはならない。
-    if (existing?.state === 'divergent') {
+    // codex review P2指摘対応(10巡目): invalidated(rollback等による意図的な無効化)も
+    // 同様に保護しないと、rollbackの無効化が並行exportにより'resolved'へ書き戻される。
+    if (isFencedTerminalState(existing)) {
       console.warn(
-        `[driveFolderClaim] divergent状態のclaimを完全再検索の結果で上書きしません(人手介入待ち): "${name}"（親フォルダ: ${parentId}）`
+        `[driveFolderClaim] divergent/invalidated状態のclaimを完全再検索の結果で上書きしません: "${name}"（親フォルダ: ${parentId}）`
       );
       return;
     }
@@ -776,9 +791,11 @@ async function recordVerification(
     // 人手介入待ちシグナルを無条件で'resolved'へ戻してはならない。files.getで確認済みの
     // 健全性そのものは変わらないため、呼び出し元(verifyFolderClaim)はこの記録スキップに
     // 関わらず結果を返してよい(claimのメタデータ更新だけを見送る)。
-    if (existing?.state === 'divergent') {
+    // codex review P2指摘対応(10巡目): invalidated(rollback等による意図的な無効化)も
+    // 同様に保護しないと、rollbackの無効化が並行exportにより'resolved'へ書き戻される。
+    if (isFencedTerminalState(existing)) {
       console.warn(
-        `[driveFolderClaim] divergent状態のclaimをverify結果で上書きしません(人手介入待ち): "${name}"（親フォルダ: ${parentId}）`
+        `[driveFolderClaim] divergent/invalidated状態のclaimをverify結果で上書きしません: "${name}"（親フォルダ: ${parentId}）`
       );
       return;
     }
