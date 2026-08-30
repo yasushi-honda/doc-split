@@ -19,7 +19,10 @@ import { retryDriveExportCore, DriveExportNotRetryableError } from '../src/drive
 import { MASTER_PATHS } from '../src/utils/masterPaths';
 
 const db = admin.firestore();
-const COLLECTIONS_TO_CLEAN: readonly string[] = ['documents', 'settings', MASTER_PATHS.customers];
+// Issue #871 claimプロトコル(PR-4): findOrCreateFolderが書き込むdriveFolderLocksを
+// クリアしないと、テスト間で残留したclaimが後続テストのfake drive状態と食い違い、
+// DivergentFolderClaimErrorで失敗する。
+const COLLECTIONS_TO_CLEAN: readonly string[] = ['documents', 'settings', MASTER_PATHS.customers, 'driveFolderLocks'];
 
 interface FakeFile {
   id: string;

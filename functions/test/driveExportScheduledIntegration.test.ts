@@ -26,7 +26,15 @@ import { MASTER_PATHS } from '../src/utils/masterPaths';
 const db = admin.firestore();
 // 'internal'はページネーションカーソル(internal/driveExportSweepState)の永続化先。
 // テスト間でカーソルが残留するとページング挙動が汚染されるため必ずクリーンアップする。
-const COLLECTIONS_TO_CLEAN: readonly string[] = ['documents', 'settings', MASTER_PATHS.customers, 'internal'];
+// 'driveFolderLocks'はIssue #871 claimプロトコル(PR-4)の書込み先。クリアしないと
+// テスト間で残留したclaimが後続テストのfake drive状態と食い違い、DivergentFolderClaimErrorで失敗する。
+const COLLECTIONS_TO_CLEAN: readonly string[] = [
+  'documents',
+  'settings',
+  MASTER_PATHS.customers,
+  'internal',
+  'driveFolderLocks',
+];
 // 境界より確実に過去/未来になるよう +60s のバッファ
 const BUFFER_MS = 60_000;
 

@@ -37,6 +37,10 @@ const COLLECTIONS_TO_CLEAN: readonly string[] = [
   'settings',
   MASTER_PATHS.customers,
   MASTER_PATHS.documents,
+  // Issue #871 claimプロトコル(PR-4): findOrCreateFolderが書き込むdriveFolderLocksを
+  // クリアしないと、あるテストが確定させたclaim(folderId=folder-office等)が次のテストの
+  // fake drive状態と食い違い、DivergentFolderClaimErrorで軒並み失敗する。
+  'driveFolderLocks',
 ];
 
 const TEMPLATE: DriveFolderTemplate = [
