@@ -360,12 +360,26 @@ plan mode（Opus 5、grip+codex 2パスクロスレビュー）で恒久対策�
 - 品質ゲート: codex review 3巡実施（1巡目P1 1件・2巡目P1 1件+P2 2件、全てコード修正、TTLプロビジョニング指摘のみ運用手順としてコメント明記・3巡目で収束確認）、`pr-review-toolkit:code-reviewer`セカンドオピニオンでCritical 1件（旧`acquireFolderLock`/`releaseFolderLock`がclaimプロトコル管理下のドキュメントを誤って破壊・削除する穴）・Important 2件（divergent状態の無条件上書き、commit失敗時の振る舞い＝decision-maker判断で計画通り維持）を検出、Critical+Important 1件を修正
 - テスト: unit test 2104件・integration test 317件、全PASS
 
-次の一手（**未実施・要decision-maker判断**）: 計画のロールアウト表（Phase 1〜4）に従い、以下を順に実施する必要がある。**PR-3のコードはまだどの環境にもshadowモードすら有効化されていない**（マージされただけで、実行中のCloud Functionsは次回`firebase deploy --only functions`まで旧コードのまま）。
-1. **Firestore TTLポリシーの手動プロビジョニング**（`driveFolderLocks`コレクション、`expireAt`フィールド。`gcloud firestore fields ttls update expireAt --collection-group=driveFolderLocks --enable-ttl --project=<project-id>`または各コンソール。dev/cocoro/kanameone各環境で個別に必要、`firestore.indexes.json`同様CI/CD対象外）
-2. dev環境: 上記TTL設定→`firebase deploy --only functions -P doc-split`→（`driveFolderClaimRead`は未設定=既定OFFのままでよい、shadow書き込みは自動的に始まる）→手動エクスポートでclaim不一致0件を確認
-3. dev環境で読み経路も有効化（`settings/features`に`driveFolderClaimRead: true`）→trash/rename後の再エクスポート等の陳腐化シナリオを手動確認
-4. cocoro→kanameoneの順で段階展開（各環境rules+TTL設定→shadow→24-72h観察→read有効化）。kanameone read有効化後は60時間後に`classify-drive-export-drift`をベースラインと比較し`misplaced`が増加していないことを確認
-5. `childFolderResolver.ts`自体のclaimプロトコル移行（PR-4、計画書§5）は本ロールアウトと独立に着手可能（未着手）
+**【2026-08-30・dev Stage 1完了・次セッション再開点】ロールアウトdev Stage 1（TTL+shadow deploy）完了**: 計画のロールアウト表（段階1）を実施。
+
+- Firestore TTLポリシー: `gcloud firestore fields ttls update expireAt --collection-group=driveFolderLocks --enable-ttl --project=doc-split-dev`実行、`ttlConfig.state: ACTIVE`を実測確認
+- devデプロイ: GitHub Actions「Deploy Cloud Functions」（`-f environment=dev`）経由でrun 33296927036完走（7m53s）。`gcloud functions describe onDocumentWriteDriveExport --project=doc-split-dev`のupdateTimeがデプロイ時刻と一致し反映を確認。`driveFolderClaimRead`は`settings/features`に未設定=既定OFFのまま（shadowモード）
+- 手動エクスポート検証: devのseedテストデータ（`井上春子`等、実運用データではない）で未検証doc 2件をFirestore経由で`verified:true`へ切替しexportをトリガー。2件とも`driveExportStatus:exported`で成功、`driveFolderLocks`に事業所→ケアマネ→顧客→書類種別の4階層claimが書き込まれ**全件`state:resolved`・`missCount:0`**（不一致0件）。Cloud Logging（`ondocumentwritedriveexport`）にERROR/WARNINGなし
+- 副次的発見（Issue #871スコープ外・要フォローアップ検討）: 3件目のテストdoc（`UjPO01QBlPvRaCLIrHRr`、複数人記載FAX検出用のseed fixture）は`driveExportStatus`が**フィールド不在ではなく明示的な`null`値**で保存されており、`executeDriveExport.ts:49`の`currentStatus !== claimFromStatus`（`claimFromStatus`は`undefined`）判定に一致せず、verified:true化してもクレームされず静かにno-opした。claimプロトコルとは無関係の既存挙動（PR-2/PR-3で変更していない箇所）。実運用documentでこの明示的`null`状態が発生しうるか（バグかseedデータ特有か）は未調査、次回`/checkup`または関連作業時に確認候補
+
+**【2026-08-30・dev Stage 2完了】読み経路有効化+陳腐化シナリオ手動確認、全PASS**:
+
+- `settings/features.driveFolderClaimRead: true`をdevで有効化
+- **高速パス（<CREATE_TRUST_MS 60秒）**: 同一customer+category（「計画」フォルダ、実体はケアプラン/サービス提供票が共有）へ12秒間隔で2件連続エクスポートを実行し、両方とも`exported`成功。claim重複なし（5件のまま）。Drive API実測（`files.list`で「計画」フォルダ配下を直接確認）でも**物理フォルダは1個のみ**、3ファイルが正しく格納されていることを確認（=Issue #871の再現パターンをdevで再現し、claimプロトコルが正しく1回のcreateに収束させることを実証）
+- **trash検知・復元**: 「計画」フォルダをDrive APIで手動trash後に再エクスポート→`exported`成功、claim.verifiedAtMs更新、`files.get`実測でフォルダが`trashed:false`に復元されていることを確認（§3の200・trashed=true分岐が正しく動作）
+- **divergent検知（人力移動）**: 「計画」フォルダをDrive APIで別parentへ手動移動後に再エクスポート→`driveExportStatus:error`（「フォルダの記録(claim)と実体が食い違っています」）、claim.state:`divergent`・`divergentReason:parents-mismatch`に遷移。**削除も再作成もされず**、fail-closed設計（§4）が意図通り動作
+- 後片付け: 移動したフォルダを元の親へ復元、divergent化したclaimドキュメントを削除（cold path再解決に委ねる設計のため安全）、テストで使ったdocument（`seed-doc-0026`）を`verified:false`+export関連フィールド削除で試験前状態に復元
+
+decision-maker判断（2026-08-30）: 本セッションはdev検証（Stage 1・2）完了で区切り、cocoro/kanameoneへの本番展開は次セッション以降に改めて着手判断する。
+
+次の一手（**次セッション再開点・要decision-maker判断**）: 計画のロールアウト表の残り段階。
+1. cocoro→kanameoneの順で段階展開（各環境rules+TTL設定→shadow→24-72h観察→read有効化）。kanameone read有効化後は60時間後に`classify-drive-export-drift`をベースラインと比較し`misplaced`が増加していないことを確認
+2. `childFolderResolver.ts`自体のclaimプロトコル移行（PR-4、計画書§5）は本ロールアウトと独立に着手可能（未着手）
 
 **Issue #811/#823 remediation（次セッション再開点）**: Phase 2b-1（PR #851実装マージ・devリハーサル）・Phase 2b-2（森奈穂美分本番実行、healthy 33.1%→98.8%）・Phase 5（ADR-0022更新PR #854マージ・Issue #811/#823クローズ）・**Phase 3（kanameone全ケアマネへ横展開、healthy 60.8%→99.0%）**・**Phase 4（cocoroはDrive未接続のため対象外と確定）**、全て完了済み（詳細は上記「Issue #811/#823 remediation Phase 3」節参照）。**kanameoneのDrive export破損document remediationはこれで実質完了**。
 
