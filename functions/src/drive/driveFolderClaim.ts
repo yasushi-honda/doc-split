@@ -733,11 +733,13 @@ export interface VerifiedFolderClaim {
 
 /**
  * resolved claimの健全性を`files.get`で確認する(§3の分類表に従いfail-closedで処理する)。
- * 200・trashed=falseかつname/parents一致 → 健全、folderIdを返す(restored: false)。
- * 200・trashed=true(name一致) → untrashして返す(restored: true。untrash失敗は再throw)。
- * 200・parents不一致、またはname不一致(codex review指摘対応: Drive UI上でのリネームを
- *   検知しないと、要求された名前とは異なるフォルダへ際限なくエクスポートし続けてしまう)
+ * 200・name不一致(codex review指摘対応: Drive UI上でのリネームを検知しないと、要求された
+ *   名前とは異なるフォルダへ際限なくエクスポートし続けてしまう)、または(trashed状態に
+ *   かかわらず)parents不一致(codex review指摘対応: 別の親へ移動後にゴミ箱へ入れられた
+ *   フォルダをtrashed判定より先に検知しないと、untrashして誤った場所を採用してしまう)
  *   → 'divergent'にして`DivergentFolderClaimError`をthrow。
+ * 200・trashed=false・parents一致 → 健全、folderIdを返す(restored: false)。
+ * 200・trashed=true・parents一致 → untrashして返す(restored: true。untrash失敗は再throw)。
  * 404 → missCountを記録し、常に`FolderVerificationPendingError`をthrow(invalidate
  *       するかどうかに関わらず、当該呼び出しはtransientとして扱う。invalidateされて
  *       いれば次回呼び出しで従来経路に自然にフォールバックする)。
@@ -788,6 +790,16 @@ export async function verifyFolderClaim(
     throw new DivergentFolderClaimError(name, parentId, claim.folderId);
   }
 
+  // codex review指摘対応: parents確認をtrashed分岐より先に行う。誤った順序だと、
+  // 手動で別の親フォルダへ移動されてからゴミ箱に入れられたフォルダを、parents不一致に
+  // 気付かないままuntrashして採用してしまい(移動先の誤配置を検知できない)、移行処理が
+  // 誤った場所にドキュメントを配置しうる。
+  const parents = data.parents ?? [];
+  if (!parents.includes(parentId)) {
+    await markDivergent(firestore, parentId, name, 'parents-mismatch');
+    throw new DivergentFolderClaimError(name, parentId, claim.folderId);
+  }
+
   if (data.trashed) {
     await drive.files.update({
       fileId: claim.folderId,
@@ -797,12 +809,6 @@ export async function verifyFolderClaim(
     });
     await recordVerification(firestore, parentId, name, claim.folderId);
     return { folderId: claim.folderId, restored: true };
-  }
-
-  const parents = data.parents ?? [];
-  if (!parents.includes(parentId)) {
-    await markDivergent(firestore, parentId, name, 'parents-mismatch');
-    throw new DivergentFolderClaimError(name, parentId, claim.folderId);
   }
 
   await recordVerification(firestore, parentId, name, claim.folderId);

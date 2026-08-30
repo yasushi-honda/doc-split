@@ -522,6 +522,39 @@ describe('driveFolderClaim プロトコル(Issue #871)', () => {
       expect(snap.data()?.state).to.equal('divergent');
     });
 
+    it('parents不一致かつtrashed=trueの組み合わせでも、untrashせずdivergentへ遷移する(codex review P1指摘対応)', async () => {
+      // 別の親フォルダへ手動移動された「後」にゴミ箱へ入れられたケース。trashed判定を
+      // parents確認より先に行う実装だと、parents不一致に気付かないままuntrashして
+      // 誤った場所のフォルダを採用してしまう(移行処理が誤配置になる)。
+      await enableClaimRead();
+      await claimDocRef('parent-orig2', '移動後ゴミ箱太郎').set({
+        state: 'resolved',
+        folderId: 'moved-then-trashed-id',
+        attempt: null,
+        resolvedAtMs: Date.now() - 2 * 60 * 1000,
+        verifiedAtMs: Date.now() - 2 * 60 * 1000,
+        parentId: 'parent-orig2',
+        name: '移動後ゴミ箱太郎',
+      });
+      const { drive, createCalls, updateCalls } = makeFakeDrive({
+        files: [
+          { id: 'moved-then-trashed-id', name: '移動後ゴミ箱太郎', parents: ['some-other-parent'], trashed: true },
+        ],
+      });
+
+      try {
+        await findOrCreateFolder(drive, db, 'parent-orig2', '移動後ゴミ箱太郎');
+        expect.fail('DivergentFolderClaimErrorがthrowされるべき');
+      } catch (error) {
+        expect(error).to.be.instanceOf(DivergentFolderClaimError);
+      }
+      // untrash(files.update)も新規作成も行われないこと
+      expect(updateCalls).to.have.lengthOf(0);
+      expect(createCalls).to.have.lengthOf(0);
+      const snap = await claimDocRef('parent-orig2', '移動後ゴミ箱太郎').get();
+      expect(snap.data()?.state).to.equal('divergent');
+    });
+
     it('404累積: missCountが閾値(3回)・経過時間(10分)・異なるrunId(2件)を全て満たして初めてinvalidatedになる', async () => {
       await enableClaimRead();
       const ref = claimDocRef('parent-miss', '累積太郎');

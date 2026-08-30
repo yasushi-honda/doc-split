@@ -31,6 +31,8 @@ import {
   resolveChildFolderPathReadOnly,
   resolveExistingChildFile,
   AmbiguousChildFolderError,
+  ChildFolderCreatedButUncommittedError,
+  PartialChildFolderPathError,
 } from '../src/drive/childFolderResolver';
 
 const db = admin.firestore();
@@ -494,5 +496,66 @@ describe('read-only関数はclaimコレクションに一切アクセスしな�
 
     const snap = await db.collection('driveFolderLocks').get();
     expect(snap.empty).to.equal(true);
+  });
+});
+
+/**
+ * `runTransaction`だけを差し替えたfirestoreラッパ。`collection`/`doc`は実dbへ委譲するため、
+ * 返される参照は実dbのFirestore emulatorに対して有効。`driveFolderClaimIntegration.test.ts`の
+ * 同名ヘルパーと同型(「files.create()成功後にFirestoreへの確定書込みだけが失敗する」状況を
+ * 再現するため)。
+ */
+function makeFailingCommitFirestore(
+  realDb: admin.firestore.Firestore,
+  failTxCallIndices: readonly number[]
+): admin.firestore.Firestore {
+  let txCalls = 0;
+  return {
+    collection: (path: string) => realDb.collection(path),
+    doc: (path: string) => realDb.doc(path),
+    runTransaction: async (updateFn: (tx: admin.firestore.Transaction) => Promise<unknown>) => {
+      txCalls++;
+      if (failTxCallIndices.includes(txCalls)) {
+        throw new Error(`simulated Firestore transaction failure (call #${txCalls})`);
+      }
+      return realDb.runTransaction(updateFn);
+    },
+  } as unknown as admin.firestore.Firestore;
+}
+
+describe('resolveChildFolder: claim確定書込み失敗時のfolderId伝播(codex review P2指摘対応)', () => {
+  beforeEach(async () => {
+    await cleanupCollections(db, COLLECTIONS_TO_CLEAN);
+  });
+
+  it('files.create()成功後にcommitResolvedWithRetryが失敗すると、ChildFolderCreatedButUncommittedErrorでfolderIdが伝播する', async () => {
+    const { drive, createCalls } = makeClaimAwareFakeDrive({ listReturnsEmpty: true });
+    // beginCreation(1回目のtx)は成功させ、commitResolvedWithRetryの3回のリトライ
+    // (2〜4回目のtx)を全て失敗させる(driveFolderClaimIntegration.test.tsと同じ配置)。
+    const failingDb = makeFailingCommitFirestore(db, [2, 3, 4]);
+
+    try {
+      await resolveChildFolder(drive, failingDb, 'parent-commitfail', 'コミット失敗太郎');
+      expect.fail('ChildFolderCreatedButUncommittedErrorがthrowされるべき');
+    } catch (error) {
+      expect(error).to.be.instanceOf(ChildFolderCreatedButUncommittedError);
+      expect((error as ChildFolderCreatedButUncommittedError).createdFolderId).to.equal('created-1');
+    }
+    expect(createCalls).to.have.lengthOf(1); // Drive側の作成自体は1回成功している
+  });
+
+  it('resolveChildFolderPath経由でも、作成済みfolderIdがPartialChildFolderPathError.createdFolderIdsに含まれる(rollback manifest漏れ防止)', async () => {
+    const { drive } = makeClaimAwareFakeDrive({ listReturnsEmpty: true });
+    const failingDb = makeFailingCommitFirestore(db, [2, 3, 4]);
+
+    try {
+      await resolveChildFolderPath(drive, failingDb, 'root-commitfail', ['コミット失敗太郎']);
+      expect.fail('PartialChildFolderPathErrorがthrowされるべき');
+    } catch (error) {
+      expect(error).to.be.instanceOf(PartialChildFolderPathError);
+      const partialError = error as PartialChildFolderPathError;
+      expect(partialError.createdFolderIds).to.deep.equal(['created-1']);
+      expect(partialError.restoredFolderIds).to.deep.equal([]);
+    }
   });
 });

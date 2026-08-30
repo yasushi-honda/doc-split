@@ -62,6 +62,28 @@ export { FolderCreationInProgressError, DivergentFolderClaimError };
 
 const FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder';
 
+/**
+ * `resolveChildFolder`が`files.create()`自体は成功したがclaim確定書込み(`commitResolvedWithRetry`)
+ * に失敗した場合に投げる(codex review P2指摘対応)。呼び出し元`resolveChildFolderPath`は
+ * このerrorを検知し、Drive側で実際に作成済みの`createdFolderId`を`createdFolderIds`
+ * (rollback manifest用)へ確実に含めてから`PartialChildFolderPathError`へ包み直す。
+ * この専用errorを経由しないと、素の`error`だけが伝播しfolderIdが失われ、rollback対象から
+ * この作成済みフォルダが漏れる(rollback-drive-folder-merge.tsが再trashed化できなくなる)。
+ */
+export class ChildFolderCreatedButUncommittedError extends Error {
+  readonly createdFolderId: string;
+  readonly cause: unknown;
+  constructor(name: string, parentId: string, createdFolderId: string, cause: unknown) {
+    const causeMessage = cause instanceof Error ? cause.message : String(cause);
+    super(
+      `[Phase B Part A] 子フォルダの作成には成功しましたがclaim確定書込みに失敗しました: "${name}"（親フォルダ: ${parentId}、folderId: ${createdFolderId}）: ${causeMessage}`
+    );
+    this.name = 'ChildFolderCreatedButUncommittedError';
+    this.createdFolderId = createdFolderId;
+    this.cause = cause;
+  }
+}
+
 export class AmbiguousChildFolderError extends Error {
   constructor(name: string, parentId: string, count: number) {
     super(
@@ -290,11 +312,15 @@ export async function resolveChildFolder(
     if (createdViaThisAttempt !== null) {
       // Drive側の作成自体は成功済み。claimは'creating'のまま残し、次回呼び出しの
       // reconcileAttempt(タグ検索)による回収に委ねる。invalidateしない。
+      // codex review P2指摘対応: この場合`resolveChildFolder`はResolvedChildFolderを
+      // 返せないため、素の`error`を再throwすると呼び出し元(`resolveChildFolderPath`)が
+      // 「このattemptで実際にfiles.create()した」事実を知る手段を失い、rollback manifest
+      // (createdFolderIds)からこの作成済みフォルダが漏れる。folderIdを運べる専用errorで包む。
       console.error(
         `[Phase B Part A] claim確定書込みに失敗しました(Drive側の作成は成功済み、次回呼び出しのreconcileAttemptで回収されます): "${name}"（親フォルダ: ${parentId}、folderId: ${createdViaThisAttempt}）:`,
         error
       );
-      throw error;
+      throw new ChildFolderCreatedButUncommittedError(name, parentId, createdViaThisAttempt, error);
     }
     await invalidateAttempt(firestore, parentId, name, attemptId).catch((invalidateError) =>
       console.error(
@@ -353,6 +379,12 @@ export async function resolveChildFolderPath(
       // 直前までのsegmentで実際にuntrash/作成済みのフォルダは、この呼び出しが
       // 失敗してもDrive上では既にactive化されている。呼び出し元がmanifestへ
       // 記録できるよう、蓄積済みのIDを失敗理由と一緒に伝搬する。
+      // codex review P2指摘対応: 今回失敗したsegment自身がfiles.create()には成功して
+      // いた場合(ChildFolderCreatedButUncommittedError)も、そのfolderIdをcreatedFolderIds
+      // へ含める(でなければDrive側に実在する孤立フォルダがrollback対象から漏れる)。
+      if (err instanceof ChildFolderCreatedButUncommittedError) {
+        createdFolderIds.push(err.createdFolderId);
+      }
       throw new PartialChildFolderPathError(err, restoredFolderIds, createdFolderIds);
     }
     currentId = result.id;
