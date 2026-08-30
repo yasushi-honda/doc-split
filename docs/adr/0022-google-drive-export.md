@@ -68,7 +68,7 @@ Accepted (2026-07-20)
 - 中断復旧: `files.create`時にappProperties冪等キー（`docSplitFolderClaim`）を刻み、プロセスが強制終了しても次回呼び出しがタグ検索で作成事実を回収できる（reconcileAttempt）
 - 段階導入: `settings/features.driveFolderClaimRead`フラグで既定shadowモード（claim書き込みのみ、既存挙動への影響ゼロ）。読み経路を有効化する前に、本番で claim/`files.get`/`files.list` の3者一致率を検証する
 - claimドキュメントは解決後も削除せず`expireAt`（180日、Firestoreネイティブ TTL）で自然消滅させる方針に変更（従来の`releaseFolderLock`は成功時に即座に削除していた）。**TTLは`expireAt`フィールドの書き込みだけでは有効化されず、環境ごとに`gcloud firestore fields ttls update`等での別途プロビジョニングが必要**（`firestore.indexes.json`と同様CI/CD対象外の手動手順、dev環境は2026-08-30に設定済み・cocoro/kanameoneは未実施）
-- `childFolderResolver.ts`（Part A専用の子階層resolver）自体のclaimプロトコル移行は別PR（PR-4、未着手）。それまでは旧来の`acquireFolderLock`/`releaseFolderLock`（排他制御のみ、claimの`state`は関知しない）で運用を継続する
+- `childFolderResolver.ts`（Part A専用の子階層resolver）の`resolveChildFolder()`もPR-4（2026-08-30）でclaimプロトコルの完全な参加者（読み書き両方、`findOrCreateFolder.ts`と同じ状態機械・同じFirestoreドキュメント空間を共有）へ移行済み。旧来の`acquireFolderLock`/`releaseFolderLock`（排他制御のみ、claimの`state`は関知しない）は用済みのため削除した。rollback（`scripts/rollback-drive-folder-merge.ts`）は再trashed化したtarget folderのclaim記録を`invalidateResolvedClaimByFolderId()`で明示的に無効化する
 
 詳細設計は`~/.claude/plans/moonlit-jumping-alpaca.md`、実装・レビュー経緯は`docs/handoff/GOAL.md`「PR-3完了・次セッション再開点」節を参照。
 

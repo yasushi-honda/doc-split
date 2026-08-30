@@ -75,8 +75,12 @@ interface RollbackOutcome {
 
 async function main(): Promise<void> {
   const { getDriveClient } = await import('../functions/src/utils/driveAuth');
-  const { SUPPORTS_ALL_DRIVES } = await import('../functions/src/drive/driveApiConstants');
+  const { SUPPORTS_ALL_DRIVES, DOCSPLIT_FOLDER_CLAIM_KEY } = await import('../functions/src/drive/driveApiConstants');
+  const { invalidateResolvedClaimByFolderId, invalidateCreatingClaimByAttemptId } = await import(
+    '../functions/src/drive/driveFolderClaim'
+  );
   const drive: drive_v3.Drive = await getDriveClient();
+  const db = admin.firestore();
 
   const targetMoves = operationsFilter
     ? manifest.fileMoves.filter((m) => operationsFilter.has(m.operationId))
@@ -259,6 +263,55 @@ async function main(): Promise<void> {
           ...SUPPORTS_ALL_DRIVES,
         });
         console.log(`✅ folder ${folderId} を再trashed化(rollback前は復元済み状態だった)`);
+
+        // Issue #871 PR-4: この再trashed化でDrive側の状態がclaim(driveFolderLocks)の
+        // 記録と食い違う(claimはこのfolderIdをresolvedのまま指し続ける)。残置すると、
+        // 読み経路有効化後にverifyFolderClaim()がこのfolderIdへfiles.getし、
+        // trashed=trueを200で受け取って"自動的にuntrashして採用"してしまい、rollbackが
+        // 実質的に取り消される(codex review P2指摘対応、8巡目: 404累積判定で自然解消
+        // されるという当初の前提は誤りだった——verifyFolderClaim()は404ではなく
+        // 200+trashed:trueとして扱うため、404累積の入り口にすら立たない)。よって
+        // invalidate失敗はbest-effortではなくrollback失敗として扱い、exit codeへ反映する。
+        try {
+          const invalidatedCount = await invalidateResolvedClaimByFolderId(db, folderId);
+          if (invalidatedCount > 0) {
+            console.log(`✅ folder ${folderId} のclaim記録を${invalidatedCount}件invalidatedへ遷移`);
+          } else {
+            // codex review P2指摘対応(5巡目): このfolderIdがChildFolderCreatedButUncommittedError/
+            // ChildFolderRestoredButUncommittedError経由でmanifestに記録された場合、claim確定
+            // 書込み自体が失敗しているためclaimは'creating'のままfolderIdフィールドを持たず、
+            // 上記のfolderIdクエリでは見つからない。放置すると、後で別解決者のreconcileAttemptが
+            // appPropertiesタグ検索でこのtrashed済みフォルダを見つけてuntrashし、rollbackが
+            // 実質的に取り消されてしまう。files.create時に刻んだattemptIdタグから逆引きする。
+            const fileMeta = await drive.files.get({
+              fileId: folderId,
+              fields: 'appProperties',
+              ...SUPPORTS_ALL_DRIVES,
+            });
+            const attemptId = fileMeta.data.appProperties?.[DOCSPLIT_FOLDER_CLAIM_KEY];
+            if (attemptId) {
+              const creatingInvalidatedCount = await invalidateCreatingClaimByAttemptId(db, attemptId);
+              if (creatingInvalidatedCount > 0) {
+                console.log(
+                  `✅ folder ${folderId} の'creating'claim記録(attemptId経由)を${creatingInvalidatedCount}件invalidatedへ遷移`
+                );
+              }
+            }
+          }
+        } catch (claimErr) {
+          // codex review P2指摘対応(8巡目): claim invalidateの失敗は「放置しても自然
+          // 解消される」ものではない(verifyFolderClaim()がtrashed済みフォルダを
+          // 200+trashed:trueで受け取り自動untrashしてしまうため)。folderOperationErrorCount
+          // へ計上し、rollback全体の失敗としてexit codeに反映する。
+          folderOperationErrorCount++;
+          // silent-failure-hunterレビュー指摘対応: messageのみの文字列展開だとスタック
+          // トレースが失われ、claimErrがErrorインスタンスでない場合もundefined表示になる。
+          // 生のerrorオブジェクトも第2引数で渡し障害調査時の情報を残す。
+          console.error(
+            `❌ folder ${folderId} のclaim invalidateに失敗(Drive側のrollbackは完了しているが、claim記録が食い違ったまま残ります。次回export時に誤って復元される可能性があるため手動確認が必要です):`,
+            claimErr
+          );
+        }
       } catch (err) {
         folderOperationErrorCount++;
         console.error(`❌ folder ${folderId} の再trashed化に失敗: ${(err as Error).message}`);

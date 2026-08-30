@@ -173,6 +173,7 @@ export class DivergentFolderClaimError extends Error {
 
 /** `commitResolvedWithRetry`がリトライ後も失敗した。呼び出し元は`error`ステータスへ遷移させる。 */
 export class FolderClaimCommitError extends Error {
+  readonly folderId: string;
   constructor(name: string, parentId: string, folderId: string, cause: unknown) {
     super(
       `claimの確定書込みに失敗しました(リトライ後も失敗): "${name}"（親フォルダ: ${parentId}、folderId: ${folderId}）: ${
@@ -180,6 +181,28 @@ export class FolderClaimCommitError extends Error {
       }`
     );
     this.name = 'FolderClaimCommitError';
+    this.folderId = folderId;
+  }
+}
+
+/**
+ * `verifyFolderClaim`がuntrash(Drive側の書込み)自体には成功したが、直後のFirestore記録
+ * (`recordVerification`)に失敗した場合に投げる(codex review P2指摘対応、2巡目)。
+ * `findOrCreateFolder.ts`はこの型を無視して既存の一般的なエラー処理に任せてよいが、
+ * `childFolderResolver.ts`はrollback manifest(restoredFolderIds)追跡のため
+ * `folderId`を取り出して使う。
+ */
+export class FolderClaimRestoreCommitError extends Error {
+  readonly folderId: string;
+  readonly cause: unknown;
+  constructor(name: string, parentId: string, folderId: string, cause: unknown) {
+    const causeMessage = cause instanceof Error ? cause.message : String(cause);
+    super(
+      `フォルダの復元(untrash)自体は成功しましたがclaim記録に失敗しました: "${name}"（親フォルダ: ${parentId}、folderId: ${folderId}）: ${causeMessage}`
+    );
+    this.name = 'FolderClaimRestoreCommitError';
+    this.folderId = folderId;
+    this.cause = cause;
   }
 }
 
@@ -241,6 +264,37 @@ export function buildFolderLockId(parentId: string, name: string): string {
 
 function ttlTimestamp(): admin.firestore.Timestamp {
   return admin.firestore.Timestamp.fromMillis(Date.now() + CLAIM_TTL_DAYS * 24 * 60 * 60 * 1000);
+}
+
+/**
+ * `existing`が'creating'状態かつリースがまだ有効(=別プロセスが現在進行中とみなせる)かを
+ * 判定する共通ヘルパー(codex review P1指摘対応、6巡目)。`beginCreation`・
+ * `recordFullScanResolution`・`recordVerification`が同じ基準を共有する。
+ *
+ * `FOLDER_LOCK_STALE_MS`(10分)はCloud Functionsの`timeoutSeconds`(120秒)より
+ * 十分長く設定されている(driveExportScheduled.ts等)ため、リースが失効している時点で
+ * その所有プロセスは強制終了済みと確定できる——「失効後にその古いattemptIdが目覚めて
+ * 完了する」ことは起こり得ない。したがって、失効済みclaimのattemptIdを新しいresolved
+ * 記録へそのまま引き継いでも安全(commitResolvedWithRetryのfencing判定を汚染しない)。
+ * 保護が必要なのは有効なリース内(=本当にまだ進行中の可能性がある)の場合のみ。
+ */
+function hasValidInFlightCreatingLease(existing: FolderClaimDoc | null): boolean {
+  if (existing?.state !== 'creating') return false;
+  const leaseAnchorMs = existing.attempt?.startedAtMs ?? existing.claimedAtMs ?? 0;
+  return Date.now() - leaseAnchorMs < FOLDER_LOCK_STALE_MS;
+}
+
+/**
+ * codex review P2指摘対応(10巡目): 'divergent'(人手介入待ち)と'invalidated'
+ * (rollbackやmiss累積で意図的に無効化された状態)はどちらも「この書込みで無条件に
+ * 'resolved'へ上書きしてはならない」終端状態という点で同じ扱いが必要。特にrollback
+ * スクリプトがresolved claimをinvalidatedへ遷移させた直後、既にfiles.getで健全性を
+ * 確認済みの並行exportがrecordVerification/recordFullScanResolutionへ到達すると、
+ * このガードがなければrollbackの無効化を無条件に'resolved'へ書き戻してしまい、
+ * rollbackが意図的にtrashしたフォルダが復活しうる。
+ */
+function isFencedTerminalState(existing: FolderClaimDoc | null): boolean {
+  return existing?.state === 'divergent' || existing?.state === 'invalidated';
 }
 
 /** 旧形式(`state`欠損)のドキュメントを`state:'creating', attempt:null`として解釈する。 */
@@ -307,10 +361,12 @@ export async function readClaim(
 
 /**
  * 'creating'状態のclaimを原子的に確保する。既存claimが有効なリース中(state='creating'かつ
- * リース内)の場合のみblocked。resolved/divergent/リース失効/未知形式は上書きしてよい
- * (呼び出し元がresolved/divergentを信用するかどうかは、beginCreation呼び出し前に
- * 判断済みという前提。shadowモードではresolvedを無条件で上書きしうるが、これは
- * 既存挙動(claim導入前の重複作成リスク)を変えないための意図的な設計)。
+ * リース内)の場合はblocked。divergentは'divergent'を、resolvedは'resolved'をそのまま
+ * 返す(いずれも上書きしない。codex review指摘対応、4巡目: shadow/read経路のロールアウト
+ * 段階に関わらず常にresolvedを保護する。呼び出し元がclaimを事前に読んでからこの関数を
+ * 呼ぶまでの間隙で別の呼び出し元がresolvedへ確定させるTOCTOUを、この関数自身の
+ * トランザクション内で検知することでのみ完全に塞げるため)。リース失効/未知形式のみ
+ * 上書きしてよい。
  */
 export async function beginCreation(
   firestore: admin.firestore.Firestore,
@@ -321,6 +377,7 @@ export async function beginCreation(
   | { status: 'begun'; attemptId: string }
   | { status: 'blocked' }
   | { status: 'divergent'; claim: FolderClaimDoc }
+  | { status: 'resolved'; claim: ResolvedFolderClaim }
 > {
   const ref = claimRef(firestore, parentId, name);
   const attemptId = randomUUID();
@@ -331,7 +388,8 @@ export async function beginCreation(
   ): Promise<
     | { kind: 'blocked' }
     | { kind: 'divergent'; claim: FolderClaimDoc }
-    | { kind: 'begun'; overwritten: FolderClaimDoc | null }
+    | { kind: 'resolved'; claim: ResolvedFolderClaim }
+    | { kind: 'begun' }
   > => {
     const snap = await tx.get(ref);
     const existing = snap.exists ? normalizeClaim(snap.data()!, parentId, name) : null;
@@ -345,12 +403,20 @@ export async function beginCreation(
       return { kind: 'divergent', claim: existing };
     }
 
-    if (existing) {
-      const leaseAnchorMs = existing.attempt?.startedAtMs ?? existing.claimedAtMs ?? 0;
-      const leaseValid = Date.now() - leaseAnchorMs < FOLDER_LOCK_STALE_MS;
-      if (existing.state === 'creating' && leaseValid) {
-        return { kind: 'blocked' };
-      }
+    // codex review指摘対応(4巡目、P1): 従来はresolved claimをshadow/未読取経路で
+    // 無条件に上書きしていた(claim導入前の重複作成リスクを変えないための意図的設計
+    // だったが、findOrCreateFolder.tsとchildFolderResolver.tsが同じparent+nameを
+    // 取り合うケースでは、呼び出し元が事前にclaimを読んでからこの関数を呼ぶまでの
+    // 間隙で別解決者がresolvedへ確定させるTOCTOUを塞げなかった)。予約の可否判定と
+    // 「既にresolved済みか」の確認を同一トランザクション内でatomicに行い、resolved
+    // ならそれを採用させる(呼び出し元は`verifyFolderClaim`等で健全性確認してから
+    // 使う)よう、常にresolvedを保護する形に統一する。
+    if (existing?.state === 'resolved' && typeof existing.folderId === 'string') {
+      return { kind: 'resolved', claim: existing as ResolvedFolderClaim };
+    }
+
+    if (hasValidInFlightCreatingLease(existing)) {
+      return { kind: 'blocked' };
     }
 
     const attempt: FolderClaimAttempt = { attemptId, startedAtMs, runId };
@@ -364,7 +430,7 @@ export async function beginCreation(
       expireAt: ttlTimestamp(),
     });
     tx.set(ref, doc);
-    return { kind: 'begun', overwritten: existing?.state === 'resolved' ? existing : null };
+    return { kind: 'begun' };
   });
 
   if (result.kind === 'blocked') {
@@ -373,10 +439,8 @@ export async function beginCreation(
   if (result.kind === 'divergent') {
     return { status: 'divergent', claim: result.claim };
   }
-  if (result.overwritten) {
-    console.warn(
-      `[driveFolderClaim] 既に${result.overwritten.state}だったclaimを新規作成attemptで上書きします(shadow/未読取経路、重複作成の可能性): "${name}"（親フォルダ: ${parentId}、旧folderId: ${result.overwritten.folderId ?? '(不明)'}）`
-    );
+  if (result.kind === 'resolved') {
+    return { status: 'resolved', claim: result.claim };
   }
   return { status: 'begun', attemptId };
 }
@@ -400,6 +464,16 @@ export async function commitResolvedWithRetry(
         await firestore.runTransaction(async (tx) => {
           const snap = await tx.get(ref);
           const existing = snap.exists ? normalizeClaim(snap.data()!, parentId, name) : null;
+          // second-opinionレビュー指摘対応(read-only, 7巡目相当): divergent(人手介入待ち)は
+          // attemptIdの一致判定に関わらず常に保護する。既存のfencing(creating/resolvedの
+          // attemptId不一致チェック)はdivergent状態を素通りしてしまい、無条件で'resolved'
+          // 上書きするバグが残っていた。
+          if (existing?.state === 'divergent') {
+            console.warn(
+              `[driveFolderClaim] divergent状態のclaimをcommit結果で上書きしません(人手介入待ち): "${name}"（親フォルダ: ${parentId}）`
+            );
+            return;
+          }
           if (existing?.state === 'creating' && existing.attempt?.attemptId !== attemptId) {
             return; // 既に別のattemptに引き継がれている(fencing) → 何もしない
           }
@@ -450,9 +524,27 @@ export async function recordFullScanResolution(
     // second-opinionレビュー指摘(Important)対応: beginCreationと同様、shadowモードや
     // read無効化直後の経路では呼び出し元がclaimを事前確認していないため、divergent
     // (人手介入待ち)をこの完全再検索の記録で無条件に'resolved'へ上書きしてはならない。
-    if (existing?.state === 'divergent') {
+    // codex review P2指摘対応(10巡目): invalidated(rollback等による意図的な無効化)も
+    // 同様に保護しないと、rollbackの無効化が並行exportにより'resolved'へ書き戻される。
+    if (isFencedTerminalState(existing)) {
       console.warn(
-        `[driveFolderClaim] divergent状態のclaimを完全再検索の結果で上書きしません(人手介入待ち): "${name}"（親フォルダ: ${parentId}）`
+        `[driveFolderClaim] divergent/invalidated状態のclaimを完全再検索の結果で上書きしません: "${name}"（親フォルダ: ${parentId}）`
+      );
+      return;
+    }
+
+    // codex review P1指摘対応(6巡目): 有効なリース内の'creating'(=別プロセスが現在
+    // 進行中とみなせるattempt)を検知した場合、そのattemptIdをこの完全再検索の結果へ
+    // そのまま引き継いで'resolved'へ書き込んではならない。引き継ぐと、後で進行中の
+    // プロセス自身がfiles.create()を完了しcommitResolvedWithRetryを呼んだ際、
+    // fencing判定(attemptId一致チェック)が「自分のattemptだ」と誤判定して上書きを
+    // 許してしまい、この完全再検索が見つけた既存フォルダとは別の新しいフォルダが
+    // 二重に確定される(呼び出し元は既にこの既存フォルダのidを返却済みのため、
+    // 整合性が崩れる)。claim記録はスキップする(呼び出し元が見つけた既存フォルダ自体の
+    // 採用は妨げない、claimの更新だけを見送る)。
+    if (hasValidInFlightCreatingLease(existing)) {
+      console.warn(
+        `[driveFolderClaim] 進行中の他attemptのclaimを完全再検索の結果で上書きしません(fencingトークン汚染防止): "${name}"（親フォルダ: ${parentId}）`
       );
       return;
     }
@@ -489,7 +581,11 @@ export async function reconcileAttempt(
   name: string,
   claim: FolderClaimDoc & { attempt: FolderClaimAttempt },
   runId: string
-): Promise<{ status: 'adopt'; folderId: string } | { status: 'wait' } | { status: 'clear' }> {
+): Promise<
+  | { status: 'adopt'; folderId: string; restored: boolean }
+  | { status: 'wait' }
+  | { status: 'clear' }
+> {
   const attemptId = claim.attempt.attemptId;
   const q =
     `'${parentId}' in parents and appProperties has ` +
@@ -517,11 +613,21 @@ export async function reconcileAttempt(
     if (!id) {
       throw new Error(`reconcile対象フォルダのidが取得できません: attemptId=${attemptId}`);
     }
+    // codex review P2指摘対応(9巡目): プロセスクラッシュ後にユーザーがこのフォルダを
+    // 手動でリネームしていた場合、`verifyFolderClaim`が持つname不一致のfail-closed判定
+    // (divergent遷移)を、attemptIdタグ検索だけで採用するreconcile経路がバイパスして
+    // しまい、要求された名前とは異なるフォルダへ後続exportが配置され続けてしまう。
+    // files.listで既に取得済みのnameフィールドと突合する(追加API呼び出し不要)。
+    if (files[0].name !== undefined && files[0].name !== name) {
+      await markDivergent(firestore, parentId, name, 'reconcile-name-mismatch');
+      throw new DivergentFolderClaimError(name, parentId, undefined, id);
+    }
     // codex review P2指摘対応: files.create()後・commit前に(人力操作等で)ゴミ箱へ
     // 移動されていた場合、通常の名前解決経路(resolveExistingFolder)は必ずuntrashして
     // から返すのに対し、reconcile経由だけがtrashed状態のまま採用してしまう非対称を
     // 解消する。復元に失敗した場合はfail-closedで再throwする(既存のtrashed復元と同じ方針)。
-    if (files[0].trashed) {
+    const restored = !!files[0].trashed;
+    if (restored) {
       await drive.files.update({
         fileId: id,
         requestBody: { trashed: false },
@@ -529,7 +635,7 @@ export async function reconcileAttempt(
         ...SUPPORTS_ALL_DRIVES,
       });
     }
-    return { status: 'adopt', folderId: id };
+    return { status: 'adopt', folderId: id, restored };
   }
 
   const elapsedMs = Date.now() - claim.attempt.startedAtMs;
@@ -540,6 +646,106 @@ export async function reconcileAttempt(
   await invalidateAttempt(firestore, parentId, name, attemptId);
   void runId;
   return { status: 'clear' };
+}
+
+/**
+ * `folderId`が指す'resolved'状態のclaimを'invalidated'にする(fencing: folderId一致のみ)。
+ * `rollback-drive-folder-merge.ts`が、ロールバックで再trashed化したtarget folderの
+ * claim記録を明示的に無効化するために使う(PR-4)。manifestはparentId/nameを持たず
+ * folderIdのみ記録しているため、`parentId`/`name`をキーにする`invalidateAttempt`とは
+ * 別にfolderIdでの問い合わせを提供する(単純な等価フィルタ2つのみのクエリのため、
+ * Firestoreの自動単一フィールド索引で完結し追加のcomposite index設定は不要)。
+ * 残置しても次回exportの`files.get`404累積判定(最大10分)で自然に解消されるため、
+ * この呼び出し自体の失敗はbest-effortとして扱ってよい(呼び出し元の判断)。
+ * マッチした件数を返す(0件はclaim未生成またはTTL消滅済みで正常)。
+ */
+export async function invalidateResolvedClaimByFolderId(
+  firestore: admin.firestore.Firestore,
+  folderId: string
+): Promise<number> {
+  const snap = await firestore
+    .collection(FOLDER_LOCKS_COLLECTION)
+    .where('folderId', '==', folderId)
+    .where('state', '==', 'resolved')
+    .get();
+
+  let invalidatedCount = 0;
+  for (const doc of snap.docs) {
+    // codex review P2指摘対応(9巡目): fencingで早期returnした(=実際には書き込んで
+    // いない)場合でも、従来はループ側で無条件にinvalidatedCount++していたため、
+    // 呼び出し元(rollback-drive-folder-merge.ts)が「invalidate成功」と誤認しうる
+    // (ロールバック直後にreconcile中の別プロセスがこのclaimを'resolved'へ確定させて
+    // いた場合等)。トランザクションの戻り値で実際に書き込んだかどうかを伝播する。
+    const didInvalidate = await firestore.runTransaction(async (tx) => {
+      const fresh = await tx.get(doc.ref);
+      const data = fresh.data();
+      if (!fresh.exists || data?.state !== 'resolved' || data?.folderId !== folderId) {
+        return false; // fencing: 別処理が既に状態を変えている
+      }
+      const doc2 = stripUndefined({
+        state: 'invalidated' as const,
+        attempt: null,
+        parentId: data.parentId as string,
+        name: data.name as string,
+        expireAt: ttlTimestamp(),
+      });
+      tx.set(fresh.ref, doc2);
+      return true;
+    });
+    if (didInvalidate) {
+      invalidatedCount++;
+    }
+  }
+  return invalidatedCount;
+}
+
+/**
+ * `attemptId`(`files.create`時に刻んだappProperties冪等キー)が指す'creating'状態の
+ * claimを'invalidated'にする(fencing: attemptId一致のみ、codex review P2指摘対応、5巡目)。
+ * `rollback-drive-folder-merge.ts`が、`ChildFolderCreatedButUncommittedError`/
+ * `ChildFolderRestoredButUncommittedError`経由でmanifestに記録された(=claim確定書込みが
+ * 失敗し'creating'のままfolderIdフィールドを持たない)フォルダを再trashed化する際に使う。
+ * `invalidateResolvedClaimByFolderId`はfolderIdフィールドで問い合わせるため、'creating'の
+ * ままfolderIdを持たないこのケースを検知できない——放置すると、rollback後に別解決者の
+ * `reconcileAttempt`がタグ検索でこのtrashed済みフォルダを見つけてuntrashし、rollbackが
+ * 実質的に取り消されてしまう。`attempt.attemptId`はネストフィールドの単純等価クエリの
+ * ため、こちらも追加のcomposite index設定は不要。
+ */
+export async function invalidateCreatingClaimByAttemptId(
+  firestore: admin.firestore.Firestore,
+  attemptId: string
+): Promise<number> {
+  const snap = await firestore
+    .collection(FOLDER_LOCKS_COLLECTION)
+    .where('attempt.attemptId', '==', attemptId)
+    .where('state', '==', 'creating')
+    .get();
+
+  let invalidatedCount = 0;
+  for (const doc of snap.docs) {
+    // codex review P2指摘対応(9巡目、invalidateResolvedClaimByFolderIdと同じ理由):
+    // トランザクションの戻り値で実際に書き込んだかどうかを伝播する。
+    const didInvalidate = await firestore.runTransaction(async (tx) => {
+      const fresh = await tx.get(doc.ref);
+      const data = fresh.data();
+      if (!fresh.exists || data?.state !== 'creating' || data?.attempt?.attemptId !== attemptId) {
+        return false; // fencing: 別処理が既に状態を変えている
+      }
+      const doc2 = stripUndefined({
+        state: 'invalidated' as const,
+        attempt: null,
+        parentId: data.parentId as string,
+        name: data.name as string,
+        expireAt: ttlTimestamp(),
+      });
+      tx.set(fresh.ref, doc2);
+      return true;
+    });
+    if (didInvalidate) {
+      invalidatedCount++;
+    }
+  }
+  return invalidatedCount;
 }
 
 /** 'creating'状態のclaimを'invalidated'にする(fencing: attemptIdが一致する場合のみ)。 */
@@ -579,6 +785,32 @@ async function recordVerification(
   await firestore.runTransaction(async (tx) => {
     const snap = await tx.get(ref);
     const existing = snap.exists ? normalizeClaim(snap.data()!, parentId, name) : null;
+
+    // second-opinionレビュー指摘対応(read-only, 7巡目相当): 直前に'resolved'を確認して
+    // からこの書込みまでの間隙で、別プロセスがdivergentへ遷移させていた場合、その
+    // 人手介入待ちシグナルを無条件で'resolved'へ戻してはならない。files.getで確認済みの
+    // 健全性そのものは変わらないため、呼び出し元(verifyFolderClaim)はこの記録スキップに
+    // 関わらず結果を返してよい(claimのメタデータ更新だけを見送る)。
+    // codex review P2指摘対応(10巡目): invalidated(rollback等による意図的な無効化)も
+    // 同様に保護しないと、rollbackの無効化が並行exportにより'resolved'へ書き戻される。
+    if (isFencedTerminalState(existing)) {
+      console.warn(
+        `[driveFolderClaim] divergent/invalidated状態のclaimをverify結果で上書きしません: "${name}"（親フォルダ: ${parentId}）`
+      );
+      return;
+    }
+
+    // codex review P1指摘対応(6巡目、recordFullScanResolutionと同じ理由): 直前に
+    // 'resolved'を確認してからこの書込みまでの間隙で、別プロセスが有効なリース内の
+    // 'creating'attemptを開始していた場合、そのattemptIdを引き継いで上書きしてはならない
+    // (fencingトークン汚染防止)。
+    if (hasValidInFlightCreatingLease(existing)) {
+      console.warn(
+        `[driveFolderClaim] 進行中の他attemptのclaimをverify結果で上書きしません(fencingトークン汚染防止): "${name}"（親フォルダ: ${parentId}）`
+      );
+      return;
+    }
+
     const nowMs = Date.now();
     const doc = stripUndefined({
       state: 'resolved' as const,
@@ -608,6 +840,14 @@ export async function markDivergent(
   await firestore.runTransaction(async (tx) => {
     const snap = await tx.get(ref);
     const existing = snap.exists ? normalizeClaim(snap.data()!, parentId, name) : null;
+
+    // second-opinionレビュー指摘対応(read-only, 7巡目相当): 既にdivergent状態のclaimを
+    // 再書込みすると、最初に検知した`divergentReason`(人手介入時の調査手がかり)が
+    // 別の理由で上書きされ、証拠が失われてしまう。冪等に扱い、最初の検知を保持する。
+    if (existing?.state === 'divergent') {
+      return;
+    }
+
     const doc = stripUndefined({
       state: 'divergent' as const,
       folderId: existing?.folderId,
@@ -635,6 +875,37 @@ async function recordMiss(
   return firestore.runTransaction(async (tx) => {
     const snap = await tx.get(ref);
     const existing = snap.exists ? normalizeClaim(snap.data()!, parentId, name) : null;
+
+    // second-opinionレビュー指摘対応(read-only, 7巡目相当): 呼び出し元(verifyFolderClaim)が
+    // resolved claimを読んでからこのmiss記録までの間隙で、別プロセスがdivergentへ遷移
+    // させていた場合、無条件で上書きしてはならない(人手介入待ちシグナルの消失防止)。
+    if (existing?.state === 'divergent') {
+      console.warn(
+        `[driveFolderClaim] divergent状態のclaimをmiss記録で上書きしません(人手介入待ち): "${name}"（親フォルダ: ${parentId}）`
+      );
+      return { invalidated: false };
+    }
+    // 同様に、有効なリース内の'creating'(別プロセスの進行中attempt)を検知した場合も
+    // 上書きしない(fencingトークン汚染防止、他の書込み関数と同じ理由)。
+    if (hasValidInFlightCreatingLease(existing)) {
+      console.warn(
+        `[driveFolderClaim] 進行中の他attemptのclaimをmiss記録で上書きしません(fencingトークン汚染防止): "${name}"（親フォルダ: ${parentId}）`
+      );
+      return { invalidated: false };
+    }
+    // `existing`が既にresolvedなfolderIdを持たない(claim消滅・未resolved・invalidated
+    // 済み等)場合、`existing?.folderId`はundefinedになる。これを`state:'resolved'`の
+    // まま書き込むと、`isResolvedWithFolderId()`が'resolved'として認識できない不正な
+    // ドキュメントが残り、`invalidateAttempt`(state==='creating'のみ対象)でも
+    // 回収できない永久に詰まったclaimになる。このケースはmiss記録自体が無意味なので
+    // スキップする。
+    if (!existing || typeof existing.folderId !== 'string') {
+      console.warn(
+        `[driveFolderClaim] resolved folderIdを持たないclaimへのmiss記録をスキップします(既に無効化/未解決): "${name}"（親フォルダ: ${parentId}）`
+      );
+      return { invalidated: false };
+    }
+
     const nowMs = Date.now();
     const missCount = (existing?.missCount ?? 0) + 1;
     const firstMissAtMs = existing?.missCount ? (existing.firstMissAtMs ?? nowMs) : nowMs;
@@ -676,13 +947,22 @@ async function recordMiss(
   });
 }
 
+/** `verifyFolderClaim`の返り値。`restored`は呼び出し元(rollback manifest記録用)が
+ * この呼び出し自体でuntrashを行ったかどうかを示す。 */
+export interface VerifiedFolderClaim {
+  folderId: string;
+  restored: boolean;
+}
+
 /**
  * resolved claimの健全性を`files.get`で確認する(§3の分類表に従いfail-closedで処理する)。
- * 200・trashed=falseかつname/parents一致 → 健全、folderIdを返す。
- * 200・trashed=true(name一致) → untrashして返す(untrash失敗は再throw)。
- * 200・parents不一致、またはname不一致(codex review指摘対応: Drive UI上でのリネームを
- *   検知しないと、要求された名前とは異なるフォルダへ際限なくエクスポートし続けてしまう)
+ * 200・name不一致(codex review指摘対応: Drive UI上でのリネームを検知しないと、要求された
+ *   名前とは異なるフォルダへ際限なくエクスポートし続けてしまう)、または(trashed状態に
+ *   かかわらず)parents不一致(codex review指摘対応: 別の親へ移動後にゴミ箱へ入れられた
+ *   フォルダをtrashed判定より先に検知しないと、untrashして誤った場所を採用してしまう)
  *   → 'divergent'にして`DivergentFolderClaimError`をthrow。
+ * 200・trashed=false・parents一致 → 健全、folderIdを返す(restored: false)。
+ * 200・trashed=true・parents一致 → untrashして返す(restored: true。untrash失敗は再throw)。
  * 404 → missCountを記録し、常に`FolderVerificationPendingError`をthrow(invalidate
  *       するかどうかに関わらず、当該呼び出しはtransientとして扱う。invalidateされて
  *       いれば次回呼び出しで従来経路に自然にフォールバックする)。
@@ -696,7 +976,7 @@ export async function verifyFolderClaim(
   name: string,
   claim: ResolvedFolderClaim,
   runId: string
-): Promise<string> {
+): Promise<VerifiedFolderClaim> {
   let getResult;
   try {
     getResult = await withBackoffRetry(
@@ -733,6 +1013,16 @@ export async function verifyFolderClaim(
     throw new DivergentFolderClaimError(name, parentId, claim.folderId);
   }
 
+  // codex review指摘対応: parents確認をtrashed分岐より先に行う。誤った順序だと、
+  // 手動で別の親フォルダへ移動されてからゴミ箱に入れられたフォルダを、parents不一致に
+  // 気付かないままuntrashして採用してしまい(移動先の誤配置を検知できない)、移行処理が
+  // 誤った場所にドキュメントを配置しうる。
+  const parents = data.parents ?? [];
+  if (!parents.includes(parentId)) {
+    await markDivergent(firestore, parentId, name, 'parents-mismatch');
+    throw new DivergentFolderClaimError(name, parentId, claim.folderId);
+  }
+
   if (data.trashed) {
     await drive.files.update({
       fileId: claim.folderId,
@@ -740,16 +1030,19 @@ export async function verifyFolderClaim(
       fields: 'id',
       ...SUPPORTS_ALL_DRIVES,
     });
-    await recordVerification(firestore, parentId, name, claim.folderId);
-    return claim.folderId;
-  }
-
-  const parents = data.parents ?? [];
-  if (!parents.includes(parentId)) {
-    await markDivergent(firestore, parentId, name, 'parents-mismatch');
-    throw new DivergentFolderClaimError(name, parentId, claim.folderId);
+    // codex review指摘対応(2巡目、P2): untrash(Drive側の書込み)自体は成功したのに、
+    // 直後のrecordVerification(Firestore書込み)が失敗すると、この関数を呼んだ
+    // `childFolderResolver.ts`は「実はDrive側で復元が起きた」事実を知る手段を失い、
+    // rollback manifest(restoredFolderIds)からこの復元事実が漏れる。folderIdを運べる
+    // 専用errorで包み、呼び出し元が判断できるようにする。
+    try {
+      await recordVerification(firestore, parentId, name, claim.folderId);
+    } catch (recordError) {
+      throw new FolderClaimRestoreCommitError(name, parentId, claim.folderId, recordError);
+    }
+    return { folderId: claim.folderId, restored: true };
   }
 
   await recordVerification(firestore, parentId, name, claim.folderId);
-  return claim.folderId;
+  return { folderId: claim.folderId, restored: false };
 }

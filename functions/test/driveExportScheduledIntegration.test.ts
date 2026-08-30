@@ -26,7 +26,15 @@ import { MASTER_PATHS } from '../src/utils/masterPaths';
 const db = admin.firestore();
 // 'internal'はページネーションカーソル(internal/driveExportSweepState)の永続化先。
 // テスト間でカーソルが残留するとページング挙動が汚染されるため必ずクリーンアップする。
-const COLLECTIONS_TO_CLEAN: readonly string[] = ['documents', 'settings', MASTER_PATHS.customers, 'internal'];
+// 'driveFolderLocks'はIssue #871 claimプロトコル(PR-4)の書込み先。クリアしないと
+// テスト間で残留したclaimが後続テストのfake drive状態と食い違い、DivergentFolderClaimErrorで失敗する。
+const COLLECTIONS_TO_CLEAN: readonly string[] = [
+  'documents',
+  'settings',
+  MASTER_PATHS.customers,
+  'internal',
+  'driveFolderLocks',
+];
 // 境界より確実に過去/未来になるよう +60s のバッファ
 const BUFFER_MS = 60_000;
 
@@ -38,6 +46,11 @@ interface FakeFile {
 function makeFakeDrive(opts: { listFiles?: FakeFile[]; createdIds?: string[] } = {}) {
   let createIndex = 0;
   const createCalls: Record<string, unknown>[] = [];
+  // Issue #871 claimプロトコル(PR-4): beginCreationが「既にresolved」を検知した場合
+  // (同じフォルダ名を複数documentが要求する本テストで頻発する)、verifyFolderClaimが
+  // files.getで健全性確認する。作成時のparentsを記憶し、そのfileIdへのgetに正しく
+  // 応答できるようにする(未対応だと"drive.files.get is not a function"で全滅する)。
+  const idToParents = new Map<string, string[]>();
   const drive = {
     files: {
       list: async () => ({ data: { files: opts.listFiles ?? [] } }),
@@ -45,8 +58,13 @@ function makeFakeDrive(opts: { listFiles?: FakeFile[]; createdIds?: string[] } =
         createCalls.push(params);
         const id = opts.createdIds?.[createIndex] ?? `created-${createIndex}`;
         createIndex++;
+        const requestBody = params.requestBody as { parents?: string[] } | undefined;
+        idToParents.set(id, requestBody?.parents ?? []);
         return { data: { id } };
       },
+      get: async (params: Record<string, unknown>) => ({
+        data: { parents: idToParents.get(params.fileId as string) ?? [], trashed: false },
+      }),
     },
   } as unknown as drive_v3.Drive;
   return { drive, createCalls };

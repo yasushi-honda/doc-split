@@ -21,7 +21,10 @@ import { MASTER_PATHS } from '../src/utils/masterPaths';
 import type { DriveFolderTemplate } from '../../shared/types';
 
 const db = admin.firestore();
-const COLLECTIONS_TO_CLEAN: readonly string[] = ['documents', 'settings', MASTER_PATHS.customers];
+// Issue #871 claimプロトコル(PR-4): findOrCreateFolderが書き込むdriveFolderLocksを
+// クリアしないと、テスト間で残留したclaimが後続テストのfake drive状態と食い違い、
+// DivergentFolderClaimErrorで失敗する。
+const COLLECTIONS_TO_CLEAN: readonly string[] = ['documents', 'settings', MASTER_PATHS.customers, 'driveFolderLocks'];
 
 const TEMPLATE: DriveFolderTemplate = [{ type: 'fixed', value: '事業所A' }];
 
@@ -33,6 +36,11 @@ interface FakeFile {
 function makeFakeDrive(opts: { listFiles?: FakeFile[]; createdIds?: string[] } = {}) {
   let createIndex = 0;
   const createCalls: Record<string, unknown>[] = [];
+  // Issue #871 claimプロトコル(PR-4): beginCreationが「既にresolved」を検知した場合、
+  // verifyFolderClaimがfiles.getで健全性確認する。作成時のparentsを記憶し、そのfileId
+  // へのgetに正しく応答できるようにする(未対応だと"drive.files.get is not a function"
+  // で失敗する)。
+  const idToParents = new Map<string, string[]>();
   const drive = {
     files: {
       list: async () => ({ data: { files: opts.listFiles ?? [] } }),
@@ -40,8 +48,13 @@ function makeFakeDrive(opts: { listFiles?: FakeFile[]; createdIds?: string[] } =
         createCalls.push(params);
         const id = opts.createdIds?.[createIndex] ?? `created-${createIndex}`;
         createIndex++;
+        const requestBody = params.requestBody as { parents?: string[] } | undefined;
+        idToParents.set(id, requestBody?.parents ?? []);
         return { data: { id } };
       },
+      get: async (params: Record<string, unknown>) => ({
+        data: { parents: idToParents.get(params.fileId as string) ?? [], trashed: false },
+      }),
     },
   } as unknown as drive_v3.Drive;
   return { drive, createCalls };

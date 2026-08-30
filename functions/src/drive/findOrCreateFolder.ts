@@ -85,62 +85,6 @@ export {
   buildFolderLockId,
 };
 
-/**
- * `childFolderResolver.ts`(PR-4でclaimプロトコルへ移行予定)が使う旧来のロック取得。
- * `driveFolderClaim.ts`の`FOLDER_LOCKS_COLLECTION`/`buildFolderLockId`と同じ
- * ドキュメント空間を共有する、単純な排他制御(claimの`state`は関知しない)。
- */
-export async function acquireFolderLock(
-  firestore: admin.firestore.Firestore,
-  parentId: string,
-  name: string
-): Promise<string> {
-  const lockRef = firestore.collection(FOLDER_LOCKS_COLLECTION).doc(buildFolderLockId(parentId, name));
-  const lockToken = randomUUID();
-  const acquired = await firestore.runTransaction(async (tx) => {
-    const snap = await tx.get(lockRef);
-    const data = snap.data();
-    // second-opinionレビュー指摘(Critical)対応: claimプロトコル管理下のドキュメント
-    // (`state`フィールドを持つ、driveFolderClaim.tsのbeginCreation/commitResolvedWithRetry
-    // 等が書いたもの)には`claimedAtMs`が含まれないため、素通しすると常に「未ロック」と
-    // 誤判定して無条件set(全体上書き)→releaseFolderLockのtx.deleteで完全削除してしまう。
-    // resolved/invalidated/divergentいずれの状態であってもclaimの記録(folderId・
-    // missCount等の履歴)を握り潰してはならないため、`state`フィールドが存在する限り
-    // (staleness・状態の種類を問わず)常にblockedとし、claimプロトコルへの移行が
-    // 完了するまでの間は素通りさせない。
-    if (data?.state !== undefined) {
-      return false;
-    }
-    const claimedAtMs = data?.claimedAtMs as number | undefined;
-    if (claimedAtMs !== undefined && Date.now() - claimedAtMs < FOLDER_LOCK_STALE_MS) {
-      return false;
-    }
-    tx.set(lockRef, { claimedAtMs: Date.now(), lockToken });
-    return true;
-  });
-  if (!acquired) {
-    throw new FolderCreationInProgressError(name, parentId);
-  }
-  return lockToken;
-}
-
-/** `acquireFolderLock`と対の解放。`childFolderResolver.ts`用(§互換性維持)。 */
-export async function releaseFolderLock(
-  firestore: admin.firestore.Firestore,
-  parentId: string,
-  name: string,
-  lockToken: string
-): Promise<void> {
-  const lockRef = firestore.collection(FOLDER_LOCKS_COLLECTION).doc(buildFolderLockId(parentId, name));
-  await firestore.runTransaction(async (tx) => {
-    const snap = await tx.get(lockRef);
-    if (snap.data()?.lockToken !== lockToken) {
-      return; // 既に他の実行に引き継がれている(superseded) → 削除しない
-    }
-    tx.delete(lockRef);
-  });
-}
-
 async function listMatchingFolders(
   drive: drive_v3.Drive,
   parentId: string,
@@ -165,21 +109,31 @@ async function listMatchingFolders(
   return files;
 }
 
-async function resolveExistingFolder(
+interface MatchedFolder {
+  id: string;
+  trashed: boolean;
+}
+
+/**
+ * 副作用なしの検索のみ(claimとの突合を先に行うため、`materializeExistingFolder`と
+ * 分離している。codex review P2指摘対応: 突合前にtrashedからの復元を行うと、claimとは
+ * 無関係な同名trashedフォルダをfail-closedの判定確定前にuntrashしてしまう)。
+ */
+async function findExistingFolder(
   drive: drive_v3.Drive,
   parentId: string,
   name: string
-): Promise<string | null> {
+): Promise<MatchedFolder | null> {
   const activeFiles = await listMatchingFolders(drive, parentId, name, false);
   if (activeFiles.length > 1) {
     throw new AmbiguousFolderError(name, parentId, activeFiles.length);
   }
   if (activeFiles.length === 1) {
-    const existingId = activeFiles[0].id;
-    if (!existingId) {
+    const id = activeFiles[0].id;
+    if (!id) {
       throw new Error(`既存フォルダのidが取得できません: "${name}"`);
     }
-    return existingId;
+    return { id, trashed: false };
   }
 
   const trashedFiles = await listMatchingFolders(drive, parentId, name, true);
@@ -187,20 +141,37 @@ async function resolveExistingFolder(
     throw new AmbiguousFolderError(name, parentId, trashedFiles.length);
   }
   if (trashedFiles.length === 1) {
-    const existingId = trashedFiles[0].id;
-    if (!existingId) {
+    const id = trashedFiles[0].id;
+    if (!id) {
       throw new Error(`既存フォルダのidが取得できません: "${name}"`);
     }
+    return { id, trashed: true };
+  }
+
+  return null;
+}
+
+/** trashedなら復元してidを返す(副作用あり)。 */
+async function materializeExistingFolder(drive: drive_v3.Drive, match: MatchedFolder): Promise<string> {
+  if (match.trashed) {
     await drive.files.update({
-      fileId: existingId,
+      fileId: match.id,
       requestBody: { trashed: false },
       fields: 'id',
       ...SUPPORTS_ALL_DRIVES,
     });
-    return existingId;
   }
+  return match.id;
+}
 
-  return null;
+async function resolveExistingFolder(
+  drive: drive_v3.Drive,
+  parentId: string,
+  name: string
+): Promise<string | null> {
+  const match = await findExistingFolder(drive, parentId, name);
+  if (!match) return null;
+  return materializeExistingFolder(drive, match);
 }
 
 function isResolvedWithFolderId(claim: FolderClaimDoc | null): claim is ResolvedFolderClaim {
@@ -214,7 +185,18 @@ export async function findOrCreateFolder(
   name: string
 ): Promise<string> {
   const runId = randomUUID();
-  const readEnabled = await isDriveFolderClaimReadEnabled(firestore).catch(() => false);
+  // silent-failure-hunterレビュー指摘対応: shadowモードへのfail-closedフォールバック自体は
+  // 妥当だが、直後にも同じfirestore引数でreadClaim等のFirestore操作が続くため、ここで
+  // 起きたエラーが一過性か、Firestoreへの接続自体が本質的に壊れているか(IAM設定ミス等)の
+  // 区別がつかない。ログを残さないと、本番運用でこの障害が「単にshadowモードのまま動いて
+  // いる」ように見えてしまい検知できない。
+  const readEnabled = await isDriveFolderClaimReadEnabled(firestore).catch((error) => {
+    console.error(
+      `[findOrCreateFolder] driveFolderClaimReadフラグの読取に失敗しました(shadowモードへfail-closed): "${name}"（親フォルダ: ${parentId}）`,
+      error
+    );
+    return false;
+  });
   let claim: FolderClaimDoc | null = null;
 
   if (readEnabled) {
@@ -231,7 +213,7 @@ export async function findOrCreateFolder(
         return claim.folderId;
       }
       if (elapsedMs < SOFT_TTL_MS) {
-        return verifyFolderClaim(drive, firestore, parentId, name, claim, runId);
+        return (await verifyFolderClaim(drive, firestore, parentId, name, claim, runId)).folderId;
       }
       // elapsedMs >= SOFT_TTL_MS → 下の完全再検索に合流(claimとの突合はそちらで行う)
     }
@@ -258,21 +240,38 @@ export async function findOrCreateFolder(
   }
 
   // --- 完全再検索(shadow時は常時ここから開始。read時はここまでfall throughした場合のみ) ---
-  let existingId: string | null;
+  let match: MatchedFolder | null;
   try {
-    existingId = await resolveExistingFolder(drive, parentId, name);
+    match = await findExistingFolder(drive, parentId, name);
   } catch (error) {
     if (readEnabled && isResolvedWithFolderId(claim) && error instanceof AmbiguousFolderError) {
-      await markDivergent(firestore, parentId, name, 'ambiguous-full-scan').catch(() => {});
+      // silent-failure-hunterレビュー指摘対応: divergentマーカーの永続化はこの状態機械
+      // 唯一の「人手介入が必要」シグナル。書込み自体が失敗すると、claimドキュメントには
+      // 反映されないままこの呼び出しだけ異常終了し、次回以降の呼び出しがこの矛盾を
+      // 検知できなくなる。best-effort(投げない)のままだが、ログだけは必ず残す。
+      await markDivergent(firestore, parentId, name, 'ambiguous-full-scan').catch((markError) =>
+        console.error(
+          `[findOrCreateFolder] divergent記録に失敗しました("${name}"、親フォルダ: ${parentId}）: 次回呼び出しがこの矛盾を検知できない可能性があります`,
+          markError
+        )
+      );
     }
     throw error;
   }
 
-  if (existingId) {
-    if (readEnabled && isResolvedWithFolderId(claim) && claim.folderId !== existingId) {
-      await markDivergent(firestore, parentId, name, 'full-scan-mismatch').catch(() => {});
-      throw new DivergentFolderClaimError(name, parentId, claim.folderId, existingId);
+  if (match) {
+    // codex review P2指摘対応: claimとの突合(divergent判定)を、trashedからの復元
+    // (materializeExistingFolder、Drive側への書込み)より先に行う。
+    if (readEnabled && isResolvedWithFolderId(claim) && claim.folderId !== match.id) {
+      await markDivergent(firestore, parentId, name, 'full-scan-mismatch').catch((markError) =>
+        console.error(
+          `[findOrCreateFolder] divergent記録に失敗しました("${name}"、親フォルダ: ${parentId}）: 次回呼び出しがこの矛盾を検知できない可能性があります`,
+          markError
+        )
+      );
+      throw new DivergentFolderClaimError(name, parentId, claim.folderId, match.id);
     }
+    const existingId = await materializeExistingFolder(drive, match);
     await recordFullScanResolution(firestore, parentId, name, existingId, runId).catch((error) =>
       console.error(
         `[findOrCreateFolder] claim記録に失敗しました(結果には影響しません): "${name}"（親フォルダ: ${parentId}）`,
@@ -284,7 +283,38 @@ export async function findOrCreateFolder(
 
   // 0件。read時にresolved claimが存在する場合は、それを信用する(§4の要、詳細はモジュール冒頭コメント参照)
   if (readEnabled && isResolvedWithFolderId(claim)) {
-    return verifyFolderClaim(drive, firestore, parentId, name, claim, runId);
+    return (await verifyFolderClaim(drive, firestore, parentId, name, claim, runId)).folderId;
+  }
+
+  // codex review指摘対応(6巡目、P2): 読み経路が無効(shadowロールアウト中、既定)でも、
+  // 直前にchildFolderResolver.ts(Phase B移行スクリプト)や他の並行実行がクラッシュし
+  // 'creating'状態の孤児claim(リース失効済みだがattemptIdタグ付きフォルダは未確定)を
+  // 残している可能性がある。beginCreation()自身はリース失効時に無条件で上書きして
+  // 新規createへ進んでしまう(Driveへのタグ検索は行わない)ため、それをそのまま許すと
+  // 孤児フォルダを見落として二重作成しうる。childFolderResolver.ts側は3巡目で対応済み
+  // だったが、本来の(hot path側の)findOrCreateFolder.tsに対称的に適用されていなかった。
+  if (!readEnabled) {
+    const preCreateClaim = await readClaim(firestore, parentId, name);
+    if (preCreateClaim?.state === 'creating' && preCreateClaim.attempt) {
+      const outcome = await reconcileAttempt(
+        drive,
+        firestore,
+        parentId,
+        name,
+        preCreateClaim as FolderClaimDoc & { attempt: FolderClaimAttempt },
+        runId
+      );
+      if (outcome.status === 'adopt') {
+        await commitResolvedWithRetry(firestore, parentId, name, preCreateClaim.attempt.attemptId, outcome.folderId);
+        return outcome.folderId;
+      }
+      if (outcome.status === 'wait') {
+        throw new FolderCreationInProgressError(name, parentId);
+      }
+      // status === 'clear' → claimはinvalidated化された。以降はbeginCreation()へ進んでよい
+    }
+    // 'creating'かつattemptが無い(旧形式残骸)場合は、下のbeginCreation()自身の
+    // staleness判定(claimedAtMs)に委ねる(read有効時の分岐と同型)。
   }
 
   // 0件マッチ = 新規作成が必要。異なるdocId間の競合を防ぐためclaimを予約する。
@@ -294,6 +324,12 @@ export async function findOrCreateFolder(
   }
   if (begun.status === 'divergent') {
     throw new DivergentFolderClaimError(name, parentId, begun.claim.folderId);
+  }
+  if (begun.status === 'resolved') {
+    // codex review指摘対応(4巡目、P1): この完全再検索の直後〜beginCreation呼び出しの
+    // 間隙で、別の呼び出し元(childFolderResolver.ts等)が既にresolvedへ確定させていた。
+    // beginCreation自身のトランザクションで検知できたためTOCTOUなく採用できる。
+    return (await verifyFolderClaim(drive, firestore, parentId, name, begun.claim, runId)).folderId;
   }
   const { attemptId } = begun;
   // codex review P1指摘対応: files.create()が成功しattemptIdタグ付きの実フォルダが

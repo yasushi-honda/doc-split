@@ -20,11 +20,15 @@ import * as admin from 'firebase-admin';
 import { drive_v3 } from 'googleapis';
 import { cleanupCollections } from './helpers/cleanupEmulator';
 import { executeDriveExport } from '../src/drive/executeDriveExport';
+import { buildFolderLockId, FOLDER_LOCKS_COLLECTION } from '../src/drive/driveFolderClaim';
 import { MASTER_PATHS } from '../src/utils/masterPaths';
 import type { DriveFolderTemplate } from '../../shared/types';
 
 const db = admin.firestore();
-const COLLECTIONS_TO_CLEAN: readonly string[] = ['documents', 'settings', MASTER_PATHS.customers];
+// Issue #871 claimプロトコル(PR-4): findOrCreateFolderが書き込むdriveFolderLocksを
+// クリアしないと、テスト間で残留したclaimが後続テストのfake drive状態と食い違い、
+// DivergentFolderClaimErrorで失敗する。
+const COLLECTIONS_TO_CLEAN: readonly string[] = ['documents', 'settings', MASTER_PATHS.customers, 'driveFolderLocks'];
 
 const TEMPLATE: DriveFolderTemplate = [{ type: 'fixed', value: '事業所A' }];
 
@@ -33,9 +37,16 @@ interface FakeFile {
   name: string;
 }
 
-function makeFakeDrive(opts: { createdIds?: string[] } = {}) {
+function makeFakeDrive(opts: { createdIds?: string[]; sharedIdToParents?: Map<string, string[]> } = {}) {
   let createIndex = 0;
   const createCalls: Record<string, unknown>[] = [];
+  // Issue #871 claimプロトコル(PR-4): beginCreationが「既にresolved」を検知した場合、
+  // verifyFolderClaimがfiles.getで健全性確認する。作成時のparentsを記憶し、そのfileId
+  // へのgetに正しく応答できるようにする(未対応だと"drive.files.get is not a function"
+  // で並行実行テストが全滅する)。並行実行テストではRun A/Run Bが別々のdriveインスタンス
+  // を持つが実Drive上は同じフォルダを指すため、sharedIdToParentsで状態を共有できるように
+  // する(共有しないと、他方が作成したfolderIdへのgetがparents不一致でdivergent誤判定になる)。
+  const idToParents = opts.sharedIdToParents ?? new Map<string, string[]>();
   const drive = {
     files: {
       list: async () => ({ data: { files: [] as FakeFile[] } }),
@@ -43,8 +54,13 @@ function makeFakeDrive(opts: { createdIds?: string[] } = {}) {
         createCalls.push(params);
         const id = opts.createdIds?.[createIndex] ?? `created-${createIndex}`;
         createIndex++;
+        const requestBody = params.requestBody as { parents?: string[] } | undefined;
+        idToParents.set(id, requestBody?.parents ?? []);
         return { data: { id } };
       },
+      get: async (params: Record<string, unknown>) => ({
+        data: { parents: idToParents.get(params.fileId as string) ?? [], trashed: false },
+      }),
     },
   } as unknown as drive_v3.Drive;
   return { drive, createCalls };
@@ -68,6 +84,25 @@ async function waitForRunIdClaim(docId: string): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error(`driveExportRunId claim not observed for ${docId} within timeout`);
+}
+
+/**
+ * Issue #871 claimプロトコル(PR-4)導入後、並行実行テストがRun A/Bどちらが先に
+ * フォルダclaimをresolvedへ確定させるかは非決定的になる(waitForRunIdClaimはクレーム
+ * トランザクション完了のみを見ており、その後のfindOrCreateFolder完了は保証しない)。
+ * Run Aの完了(claim resolved)を明示的に待ってからRun Bを実行することで、
+ * createCalls件数のassertionを決定論的にする。
+ */
+async function waitForFolderClaimResolved(parentId: string, name: string): Promise<void> {
+  const ref = db.collection(FOLDER_LOCKS_COLLECTION).doc(buildFolderLockId(parentId, name));
+  for (let i = 0; i < 100; i++) {
+    const snap = await ref.get();
+    if (snap.data()?.state === 'resolved') {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`folder claim not resolved for ${parentId}/${name} within timeout`);
 }
 
 async function seedDocument(overrides: Record<string, unknown> = {}): Promise<string> {
@@ -160,8 +195,18 @@ describe('executeDriveExport (ADR-0022 code-review CONFIRMED指摘対応: 所有
   it('並行実行: 後から完了した古い実行(runId不一致)の成功書戻しは、先に完了した新しい実行のexported状態を上書きしない', async () => {
     const docId = await seedDocument({ driveExportStatus: 'exporting' }); // スイープによる再クレームを想定
     const blockA = makeDeferred<void>();
-    const { drive: driveA, createCalls: createCallsA } = makeFakeDrive({ createdIds: ['folder-a', 'file-a'] });
-    const { drive: driveB, createCalls: createCallsB } = makeFakeDrive({ createdIds: ['folder-b', 'file-b'] });
+    // Issue #871 claimプロトコル(PR-4)対応: Run A/Bは同じdocId(=同じフォルダパス)を
+    // 扱うため、実Drive上は同一フォルダを共有する。sharedIdToParentsでその状態を模倣する。
+    const sharedIdToParents = new Map<string, string[]>();
+    const { drive: driveA, createCalls: createCallsA } = makeFakeDrive({
+      createdIds: ['folder-a', 'file-a'],
+      sharedIdToParents,
+    });
+    // Run BはRun Aが先に確定させたclaim(folder-a)を再利用するため、フォルダは作成しない。
+    const { drive: driveB, createCalls: createCallsB } = makeFakeDrive({
+      createdIds: ['file-b'],
+      sharedIdToParents,
+    });
 
     // Run A: クレームには成功するが、downloadFileでブロックされ完了しない
     const runAPromise = executeDriveExport(
@@ -171,6 +216,11 @@ describe('executeDriveExport (ADR-0022 code-review CONFIRMED指摘対応: 所有
       'exporting'
     );
     await waitForRunIdClaim(docId);
+    // claimプロトコル導入後、フォルダclaim確定(findOrCreateFolder完了)はrunIdクレームより
+    // 後で非同期に進むため、Run Aのフォルダ作成が完了するまで待ってからRun Bを実行する
+    // (待たないとRun A/Bどちらが先にfolder確定するか非決定的になり、createCalls件数の
+    // assertionがflakyになる)。
+    await waitForFolderClaimResolved('root-folder-id', '事業所A');
 
     // Run B: 同じ'exporting'状態を再クレーム(driveExportScheduled.tsの再クレームを模す)。ブロックなしで即完了。
     const claimedB = await executeDriveExport(
@@ -183,7 +233,7 @@ describe('executeDriveExport (ADR-0022 code-review CONFIRMED指摘対応: 所有
 
     const afterB = await getDoc(docId);
     expect(afterB.driveExportStatus).to.equal('exported');
-    expect(afterB.driveFileId).to.equal('file-b'); // makeFakeDrive内のcreatedIds順(folder→file)で2番目
+    expect(afterB.driveFileId).to.equal('file-b');
     const runIdAfterB = afterB.driveExportRunId;
     expect(runIdAfterB).to.be.a('string');
 
@@ -196,15 +246,19 @@ describe('executeDriveExport (ADR-0022 code-review CONFIRMED指摘対応: 所有
     expect(afterA.driveExportStatus).to.equal('exported');
     expect(afterA.driveFileId).to.equal('file-b');
     expect(afterA.driveExportRunId).to.equal(runIdAfterB);
-    expect(createCallsA).to.have.lengthOf(2); // Run A自体はDrive APIを実行している(冪等性チェックはexportDocument側の別懸念)
-    expect(createCallsB).to.have.lengthOf(2);
+    expect(createCallsA).to.have.lengthOf(2); // Run A: フォルダ作成(claim確定)+ファイル作成
+    // Run B: claimプロトコルによりRun Aが確定済みのフォルダを再利用するため、
+    // 新規フォルダ作成は発生しない(まさにIssue #871が防ぎたかった重複作成)。ファイルのみ新規作成。
+    expect(createCallsB).to.have.lengthOf(1);
   });
 
   it('並行実行: 後から完了した古い実行(runId不一致)のエラー書戻しは、先に完了した新しい実行のexported状態を上書きしない', async () => {
     const docId = await seedDocument({ driveExportStatus: 'exporting' });
     const blockA = makeDeferred<void>();
-    const { drive: driveA } = makeFakeDrive({ createdIds: ['folder-a'] });
-    const { drive: driveB, createCalls: createCallsB } = makeFakeDrive({ createdIds: ['folder-b', 'file-b'] });
+    const sharedIdToParents = new Map<string, string[]>();
+    const { drive: driveA } = makeFakeDrive({ createdIds: ['folder-a'], sharedIdToParents });
+    // Run BはRun Aが先に確定させたclaim(folder-a)を再利用するため、フォルダは作成しない。
+    const { drive: driveB, createCalls: createCallsB } = makeFakeDrive({ createdIds: ['file-b'], sharedIdToParents });
 
     // Run A: クレーム成功後ブロックし、解放後にエラーをthrowする
     const runAPromise = executeDriveExport(
@@ -214,6 +268,7 @@ describe('executeDriveExport (ADR-0022 code-review CONFIRMED指摘対応: 所有
       'exporting'
     );
     await waitForRunIdClaim(docId);
+    await waitForFolderClaimResolved('root-folder-id', '事業所A');
 
     // Run B: 再クレームして正常完了
     await executeDriveExport(db, docId, { drive: driveB, downloadFile: async () => Buffer.from('b') }, 'exporting');
@@ -230,7 +285,9 @@ describe('executeDriveExport (ADR-0022 code-review CONFIRMED指摘対応: 所有
     expect(afterA.driveExportStatus).to.equal('exported'); // 'error'に巻き戻っていない
     expect(afterA.driveExportRunId).to.equal(runIdAfterB);
     expect(afterA.driveExportError).to.be.undefined;
-    expect(createCallsB).to.have.lengthOf(2);
+    // Run B: claimプロトコルによりRun Aが確定済みのフォルダを再利用するため、
+    // 新規フォルダ作成は発生しない。ファイルのみ新規作成。
+    expect(createCallsB).to.have.lengthOf(1);
   });
 
   it('顧客未確定の書類はCustomerUnconfirmedErrorでerror遷移し、driveExportErrorが「顧客が未確定のため」で始まる(同姓同名リスク対応、2026-07-25再設計: 同名マスター2件で曖昧性ありのケース)', async () => {
