@@ -10,6 +10,15 @@
  */
 export const SUPPORTS_ALL_DRIVES = { supportsAllDrives: true } as const;
 
+/** Google Drive フォルダのMIMEタイプ(`findOrCreateFolder.ts`/`driveFolderClaim.ts`共有)。 */
+export const FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder';
+
+/**
+ * フォルダ作成の冪等キー用appPropertiesキー(Issue #871 claimプロトコル、`driveFolderClaim.ts`)。
+ * `exportDocument.ts`の`docSplitDocId`と同じcamelCase規約に揃える。
+ */
+export const DOCSPLIT_FOLDER_CLAIM_KEY = 'docSplitFolderClaim';
+
 /**
  * Drive API `q` パラメータ内の文字列リテラルをエスケープする。
  * `findOrCreateFolder.ts`(フォルダ名検索)と`exportDocument.ts`(appProperties検索)の

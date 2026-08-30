@@ -26,7 +26,10 @@ import {
 } from '../src/drive/findOrCreateFolder';
 
 const db = admin.firestore();
-const COLLECTIONS_TO_CLEAN: readonly string[] = ['driveFolderLocks'];
+// 'settings' はclaimプロトコルの読み経路フラグ(driveFolderClaimRead)を他ファイルの
+// integration test(featureFlagsIntegration.test.ts等)から汚染されないよう掃除する。
+// 本ファイルのテストは意図的にフラグ未設定=shadowモードの挙動を検証する。
+const COLLECTIONS_TO_CLEAN: readonly string[] = ['driveFolderLocks', 'settings'];
 
 interface FakeFile {
   id: string;
@@ -84,12 +87,18 @@ describe('findOrCreateFolder (ADR-0022)', () => {
 
     expect(result).to.equal('new-folder-id');
     expect(createCalls).to.have.lengthOf(1);
-    const body = createCalls[0].requestBody as { name: string; mimeType: string; parents: string[] };
-    expect(body).to.deep.equal({
-      name: '田中太郎',
-      mimeType: 'application/vnd.google-apps.folder',
-      parents: ['parent-1'],
-    });
+    // Issue #871 claimプロトコル: appProperties.docSplitFolderClaimは冪等キー(UUID)の
+    // ためキー存在のみ検証する(値はattemptIdごとに変わる)。
+    const body = createCalls[0].requestBody as {
+      name: string;
+      mimeType: string;
+      parents: string[];
+      appProperties?: Record<string, string>;
+    };
+    expect(body.name).to.equal('田中太郎');
+    expect(body.mimeType).to.equal('application/vnd.google-apps.folder');
+    expect(body.parents).to.deep.equal(['parent-1']);
+    expect(body.appProperties?.docSplitFolderClaim).to.be.a('string');
   });
 
   it('作成リクエストにsupportsAllDrivesがtrueで付与される', async () => {
@@ -351,15 +360,18 @@ describe('findOrCreateFolder (ADR-0022)', () => {
       expect(createCalls).to.have.lengthOf(0);
     });
 
-    it('正常完了後はロックドキュメントが解放され残留しない', async () => {
+    it('正常完了後はclaimが"resolved"として永続される(Issue #871: TTL方針により削除されない)', async () => {
       const { drive } = makeFakeDrive({ listFiles: [], createdId: 'first-id' });
-      await findOrCreateFolder(drive, db, 'parent-seq', '順次作成太郎');
+      const result = await findOrCreateFolder(drive, db, 'parent-seq', '順次作成太郎');
 
+      expect(result).to.equal('first-id');
       const lockSnap = await lockDocRef('parent-seq', '順次作成太郎').get();
-      expect(lockSnap.exists).to.equal(false);
+      expect(lockSnap.exists).to.equal(true);
+      expect(lockSnap.data()?.state).to.equal('resolved');
+      expect(lockSnap.data()?.folderId).to.equal('first-id');
     });
 
-    it('作成失敗時もロックドキュメントは解放される(finally節)', async () => {
+    it('作成失敗時はclaimが"invalidated"になる(削除ではなく無効化、次回呼び出しが即座にリトライできる)', async () => {
       const { drive } = makeFakeDrive({ listFiles: [], createdId: null });
 
       try {
@@ -370,7 +382,8 @@ describe('findOrCreateFolder (ADR-0022)', () => {
       }
 
       const lockSnap = await lockDocRef('parent-fail', '失敗太郎').get();
-      expect(lockSnap.exists).to.equal(false);
+      expect(lockSnap.exists).to.equal(true);
+      expect(lockSnap.data()?.state).to.equal('invalidated');
     });
 
     it('ロック獲得後の再検索で既に他の実行が作成済みだった場合はそのidを再利用し、二重作成しない', async () => {
@@ -436,9 +449,10 @@ describe('findOrCreateFolder (ADR-0022)', () => {
       }
       expect(createCalls).to.have.lengthOf(0);
 
-      // 曖昧な状態で停止した場合もロックは解放される(finally節)
+      // 曖昧な状態で停止した場合もclaimは"invalidated"になる(削除ではなく無効化)
       const lockSnap = await lockDocRef('parent-recheck-dup', '再検索重複太郎').get();
-      expect(lockSnap.exists).to.equal(false);
+      expect(lockSnap.exists).to.equal(true);
+      expect(lockSnap.data()?.state).to.equal('invalidated');
     });
 
     it('release時に他の実行へロックが既に引き継がれていた場合は削除しない(fencing token、code-review high指摘#1対応)', async () => {

@@ -93,3 +93,19 @@ export async function getDriveExportGate(
   }
   return { enabled, allowlist: rawAllowlist as string[] };
 }
+
+/**
+ * Drive フォルダclaimプロトコル(Issue #871、`driveFolderClaim.ts`)の読み経路が
+ * 有効かどうかを返す。書き込み(claim記録)は常時行う(shadowモード、既存挙動へ
+ * 影響ゼロ)。このフラグは「記録済みclaimを信用して`files.list`をスキップ/
+ * 短絡してよいか」だけを制御する。フラグドキュメントが存在しない場合、または
+ * driveFolderClaimReadが明示的にtrueでない場合は「無効」を安全側デフォルトとする
+ * (fail-closed、段階導入の既定はshadow)。
+ */
+export async function isDriveFolderClaimReadEnabled(
+  db: admin.firestore.Firestore
+): Promise<boolean> {
+  const snap = await db.doc(FEATURE_FLAGS_DOC_PATH).get();
+  if (!snap.exists) return false;
+  return snap.data()?.driveFolderClaimRead === true;
+}
