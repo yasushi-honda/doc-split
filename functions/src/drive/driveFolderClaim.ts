@@ -330,10 +330,12 @@ export async function readClaim(
 
 /**
  * 'creating'状態のclaimを原子的に確保する。既存claimが有効なリース中(state='creating'かつ
- * リース内)の場合のみblocked。resolved/divergent/リース失効/未知形式は上書きしてよい
- * (呼び出し元がresolved/divergentを信用するかどうかは、beginCreation呼び出し前に
- * 判断済みという前提。shadowモードではresolvedを無条件で上書きしうるが、これは
- * 既存挙動(claim導入前の重複作成リスク)を変えないための意図的な設計)。
+ * リース内)の場合はblocked。divergentは'divergent'を、resolvedは'resolved'をそのまま
+ * 返す(いずれも上書きしない。codex review指摘対応、4巡目: shadow/read経路のロールアウト
+ * 段階に関わらず常にresolvedを保護する。呼び出し元がclaimを事前に読んでからこの関数を
+ * 呼ぶまでの間隙で別の呼び出し元がresolvedへ確定させるTOCTOUを、この関数自身の
+ * トランザクション内で検知することでのみ完全に塞げるため)。リース失効/未知形式のみ
+ * 上書きしてよい。
  */
 export async function beginCreation(
   firestore: admin.firestore.Firestore,
@@ -344,6 +346,7 @@ export async function beginCreation(
   | { status: 'begun'; attemptId: string }
   | { status: 'blocked' }
   | { status: 'divergent'; claim: FolderClaimDoc }
+  | { status: 'resolved'; claim: ResolvedFolderClaim }
 > {
   const ref = claimRef(firestore, parentId, name);
   const attemptId = randomUUID();
@@ -354,7 +357,8 @@ export async function beginCreation(
   ): Promise<
     | { kind: 'blocked' }
     | { kind: 'divergent'; claim: FolderClaimDoc }
-    | { kind: 'begun'; overwritten: FolderClaimDoc | null }
+    | { kind: 'resolved'; claim: ResolvedFolderClaim }
+    | { kind: 'begun' }
   > => {
     const snap = await tx.get(ref);
     const existing = snap.exists ? normalizeClaim(snap.data()!, parentId, name) : null;
@@ -366,6 +370,18 @@ export async function beginCreation(
     // このtx自体でも自己防衛する。
     if (existing?.state === 'divergent') {
       return { kind: 'divergent', claim: existing };
+    }
+
+    // codex review指摘対応(4巡目、P1): 従来はresolved claimをshadow/未読取経路で
+    // 無条件に上書きしていた(claim導入前の重複作成リスクを変えないための意図的設計
+    // だったが、findOrCreateFolder.tsとchildFolderResolver.tsが同じparent+nameを
+    // 取り合うケースでは、呼び出し元が事前にclaimを読んでからこの関数を呼ぶまでの
+    // 間隙で別解決者がresolvedへ確定させるTOCTOUを塞げなかった)。予約の可否判定と
+    // 「既にresolved済みか」の確認を同一トランザクション内でatomicに行い、resolved
+    // ならそれを採用させる(呼び出し元は`verifyFolderClaim`等で健全性確認してから
+    // 使う)よう、常にresolvedを保護する形に統一する。
+    if (existing?.state === 'resolved' && typeof existing.folderId === 'string') {
+      return { kind: 'resolved', claim: existing as ResolvedFolderClaim };
     }
 
     if (existing) {
@@ -387,7 +403,7 @@ export async function beginCreation(
       expireAt: ttlTimestamp(),
     });
     tx.set(ref, doc);
-    return { kind: 'begun', overwritten: existing?.state === 'resolved' ? existing : null };
+    return { kind: 'begun' };
   });
 
   if (result.kind === 'blocked') {
@@ -396,10 +412,8 @@ export async function beginCreation(
   if (result.kind === 'divergent') {
     return { status: 'divergent', claim: result.claim };
   }
-  if (result.overwritten) {
-    console.warn(
-      `[driveFolderClaim] 既に${result.overwritten.state}だったclaimを新規作成attemptで上書きします(shadow/未読取経路、重複作成の可能性): "${name}"（親フォルダ: ${parentId}、旧folderId: ${result.overwritten.folderId ?? '(不明)'}）`
-    );
+  if (result.kind === 'resolved') {
+    return { status: 'resolved', claim: result.claim };
   }
   return { status: 'begun', attemptId };
 }

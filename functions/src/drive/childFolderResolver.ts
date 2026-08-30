@@ -334,26 +334,20 @@ export async function resolveChildFolder(
     return { id: verified.folderId, restored: verified.restored, created: false };
   }
 
-  // codex review P1指摘対応(2巡目): 読み経路が無効(shadowロールアウト中、既定)でも、
-  // 直前にfindOrCreateFolder.ts(本番export)が既にこの同じparent+nameをresolved/
-  // creating済みの可能性がある(files.listの結果整合性遅延で、ここまでの完全再検索が
-  // 0件を返し続けた場合)。beginCreation()自体はshadowモードでresolved claimを無条件
-  // 上書きしてよい設計だが(findOrCreateFolder.ts自身が同一resolver内の逐次呼び出しで
-  // 許容している既知のトレードオフ)、それをそのままchildFolderResolver.tsに適用すると、
-  // 旧acquireFolderLock(`state`フィールドの有無だけで常時blockしていた)が持っていた
-  // 「移行期間中にdriveExportフラグが誤ってONのままだった場合の多層防御」を失い、
-  // 本番exportとの間で物理フォルダ重複を新たに作りうる。childFolderResolver.tsは
-  // 操作者が制御するPhase B移行スクリプトであり、読み経路のロールアウト段階に関わらず
-  // 既存claimを信用してよいため、ここでは常にclaimを読み直してから判断する。
+  // codex review P2指摘対応(3巡目): 読み経路が無効(shadowロールアウト中、既定)でも、
+  // 直前にfindOrCreateFolder.ts(本番export)がクラッシュし'creating'状態の孤児claim
+  // (リース失効済みだがattemptIdタグ付きフォルダは未確定)を残している可能性がある。
+  // beginCreation()自身はリース失効時に無条件で上書きして新規createへ進んでしまう
+  // (driveへのタグ検索は行わない)ため、それをそのまま許すと孤児フォルダを見落として
+  // 二重作成しうる。childFolderResolver.tsは操作者が制御するPhase B移行スクリプトで
+  // あり、読み経路のロールアウト段階に関わらず既存claimを信用してよいため、ここでは
+  // 常にclaimを読み直し、'creating'状態ならread有効時と同じreconcileAttemptベースの
+  // 回収ロジックに委ねる。
+  // ('resolved'状態のclaim保護はTOCTOUなしにbeginCreation()自身のトランザクション内で
+  //  atomicに行われる — codex review P1指摘対応、4巡目 — ため、ここでは扱わない)
   if (!readEnabled) {
     const preCreateClaim = await readClaim(firestore, parentId, name);
     if (preCreateClaim?.state === 'creating' && preCreateClaim.attempt) {
-      // codex review P2指摘対応(3巡目): 'creating'状態を発見しただけで無条件にblockすると、
-      // プロセスクラッシュ後の孤児claim(リース失効済みだがattemptIdタグ付きフォルダは
-      // 未確定)が180日TTLまで永久にFolderCreationInProgressErrorを返し続けてしまう
-      // (beginCreation自身はリース失効を検知して再取得できるのに、この防御チェックだけが
-      // それより手前で無条件throwしていた)。read有効時の通常経路と同じreconcileAttempt
-      // ベースの回収ロジックを再利用する。
       const reconciled = await reconcileCreatingClaim(
         drive,
         firestore,
@@ -366,12 +360,9 @@ export async function resolveChildFolder(
         return reconciled;
       }
       // 'clear'(invalidated化)された → 下のbeginCreation()へ進んでよい
-    } else if (isResolvedWithFolderId(preCreateClaim)) {
-      const verified = await verifyFolderClaim(drive, firestore, parentId, name, preCreateClaim, runId);
-      return { id: verified.folderId, restored: verified.restored, created: false };
     }
-    // preCreateClaim?.state==='creating'かつattemptが無い(旧形式残骸)場合は、下の
-    // beginCreation()自身のstaleness判定(claimedAtMs)に委ねる(read有効時の分岐と同型)。
+    // 'creating'かつattemptが無い(旧形式残骸)場合は、下のbeginCreation()自身の
+    // staleness判定(claimedAtMs)に委ねる(read有効時の分岐と同型)。
   }
 
   // 0件マッチ = 新規作成が必要。異なる呼び出し間(並行稼働しうる本番export含む)の
@@ -382,6 +373,13 @@ export async function resolveChildFolder(
   }
   if (begun.status === 'divergent') {
     throw new DivergentFolderClaimError(name, parentId, begun.claim.folderId);
+  }
+  if (begun.status === 'resolved') {
+    // codex review指摘対応(4巡目、P1): 直前の完全再検索〜beginCreation呼び出しの
+    // 間隙で、別の呼び出し元(findOrCreateFolder.ts等)が既にresolvedへ確定させていた。
+    // beginCreation自身のトランザクションで検知できたためTOCTOUなく採用できる。
+    const verified = await verifyFolderClaim(drive, firestore, parentId, name, begun.claim, runId);
+    return { id: verified.folderId, restored: verified.restored, created: false };
   }
   const { attemptId } = begun;
   // findOrCreateFolder.tsと同じ理由(コミット失敗時にDrive側の作成事実を握り潰さない)で、

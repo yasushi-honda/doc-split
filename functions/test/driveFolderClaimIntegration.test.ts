@@ -179,15 +179,22 @@ describe('driveFolderClaim プロトコル(Issue #871)', () => {
       expect(snap.data()?.folderId).to.equal('created-1');
     });
 
-    it('shadowモードでは結果整合性の遅延を防げず、files.listが0件を返し続ける限り複数回作成されうる(read有効化前の既知の限界)', async () => {
+    it('shadowモードでも、beginCreation自身がresolved claimをatomicに保護するため結果整合性の遅延下で二重作成されない(codex review P1指摘対応、4巡目)', async () => {
+      // 従来はshadowモード(claimの読み経路が無効)ではbeginCreation()がresolved claimを
+      // 無条件上書きしていたため、files.listが索引未反映で0件を返し続ける限り呼び出す
+      // たびに新規作成されていた(旧仕様、テスト名変更前の期待値)。codex reviewで
+      // 「読み経路の有無に関わらずresolved claimは保護すべき」との指摘を受け、
+      // beginCreation自身のトランザクション内でatomicに保護するよう修正した結果、
+      // shadowモードでもこの二重作成は起きなくなった。
       const { drive, createCalls } = makeFakeDrive();
       // files.list が常に0件を返す(索引未反映を模擬)よう、listだけ差し替える
       (drive.files as unknown as { list: unknown }).list = async () => ({ data: { files: [] } });
 
-      await findOrCreateFolder(drive, db, 'parent-lag', '遅延太郎');
-      await findOrCreateFolder(drive, db, 'parent-lag', '遅延太郎');
+      const first = await findOrCreateFolder(drive, db, 'parent-lag', '遅延太郎');
+      const second = await findOrCreateFolder(drive, db, 'parent-lag', '遅延太郎');
 
-      expect(createCalls).to.have.lengthOf(2);
+      expect(createCalls).to.have.lengthOf(1);
+      expect(second).to.equal(first);
     });
   });
 

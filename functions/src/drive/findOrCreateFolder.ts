@@ -269,6 +269,12 @@ export async function findOrCreateFolder(
   if (begun.status === 'divergent') {
     throw new DivergentFolderClaimError(name, parentId, begun.claim.folderId);
   }
+  if (begun.status === 'resolved') {
+    // codex review指摘対応(4巡目、P1): この完全再検索の直後〜beginCreation呼び出しの
+    // 間隙で、別の呼び出し元(childFolderResolver.ts等)が既にresolvedへ確定させていた。
+    // beginCreation自身のトランザクションで検知できたためTOCTOUなく採用できる。
+    return (await verifyFolderClaim(drive, firestore, parentId, name, begun.claim, runId)).folderId;
+  }
   const { attemptId } = begun;
   // codex review P1指摘対応: files.create()が成功しattemptIdタグ付きの実フォルダが
   // 既にDrive側に存在する状態でcommitResolvedWithRetryだけが失敗した場合、catch節で
