@@ -305,20 +305,39 @@ export async function beginCreation(
   parentId: string,
   name: string,
   runId: string
-): Promise<{ status: 'begun'; attemptId: string } | { status: 'blocked' }> {
+): Promise<
+  | { status: 'begun'; attemptId: string }
+  | { status: 'blocked' }
+  | { status: 'divergent'; claim: FolderClaimDoc }
+> {
   const ref = claimRef(firestore, parentId, name);
   const attemptId = randomUUID();
   const startedAtMs = Date.now();
 
-  const overwrittenExisting = await firestore.runTransaction(async (tx) => {
+  const result = await firestore.runTransaction(async (
+    tx
+  ): Promise<
+    | { kind: 'blocked' }
+    | { kind: 'divergent'; claim: FolderClaimDoc }
+    | { kind: 'begun'; overwritten: FolderClaimDoc | null }
+  > => {
     const snap = await tx.get(ref);
     const existing = snap.exists ? normalizeClaim(snap.data()!, parentId, name) : null;
+
+    // second-opinionレビュー指摘(Important)対応: divergent(人手介入待ち)は
+    // shadowモード(呼び出し元がclaimを事前読取しない経路)や、read有効化後に
+    // shadowへ戻された場合(フラグの一時ロールバック等)でも、無条件に上書きして
+    // 新規作成attemptへ進んではならない。plan §4の「削除も再作成もしない」を
+    // このtx自体でも自己防衛する。
+    if (existing?.state === 'divergent') {
+      return { kind: 'divergent', claim: existing };
+    }
 
     if (existing) {
       const leaseAnchorMs = existing.attempt?.startedAtMs ?? existing.claimedAtMs ?? 0;
       const leaseValid = Date.now() - leaseAnchorMs < FOLDER_LOCK_STALE_MS;
       if (existing.state === 'creating' && leaseValid) {
-        return undefined; // blocked扱い(下でstatus判定)
+        return { kind: 'blocked' };
       }
     }
 
@@ -333,15 +352,18 @@ export async function beginCreation(
       expireAt: ttlTimestamp(),
     });
     tx.set(ref, doc);
-    return existing?.state === 'resolved' || existing?.state === 'divergent' ? existing : null;
+    return { kind: 'begun', overwritten: existing?.state === 'resolved' ? existing : null };
   });
 
-  if (overwrittenExisting === undefined) {
+  if (result.kind === 'blocked') {
     return { status: 'blocked' };
   }
-  if (overwrittenExisting) {
+  if (result.kind === 'divergent') {
+    return { status: 'divergent', claim: result.claim };
+  }
+  if (result.overwritten) {
     console.warn(
-      `[driveFolderClaim] 既に${overwrittenExisting.state}だったclaimを新規作成attemptで上書きします(shadow/未読取経路、重複作成の可能性): "${name}"（親フォルダ: ${parentId}、旧folderId: ${overwrittenExisting.folderId ?? '(不明)'}）`
+      `[driveFolderClaim] 既に${result.overwritten.state}だったclaimを新規作成attemptで上書きします(shadow/未読取経路、重複作成の可能性): "${name}"（親フォルダ: ${parentId}、旧folderId: ${result.overwritten.folderId ?? '(不明)'}）`
     );
   }
   return { status: 'begun', attemptId };
@@ -412,6 +434,17 @@ export async function recordFullScanResolution(
   await firestore.runTransaction(async (tx) => {
     const snap = await tx.get(ref);
     const existing = snap.exists ? normalizeClaim(snap.data()!, parentId, name) : null;
+
+    // second-opinionレビュー指摘(Important)対応: beginCreationと同様、shadowモードや
+    // read無効化直後の経路では呼び出し元がclaimを事前確認していないため、divergent
+    // (人手介入待ち)をこの完全再検索の記録で無条件に'resolved'へ上書きしてはならない。
+    if (existing?.state === 'divergent') {
+      console.warn(
+        `[driveFolderClaim] divergent状態のclaimを完全再検索の結果で上書きしません(人手介入待ち): "${name}"（親フォルダ: ${parentId}）`
+      );
+      return;
+    }
+
     const nowMs = Date.now();
     const doc = stripUndefined({
       state: 'resolved' as const,

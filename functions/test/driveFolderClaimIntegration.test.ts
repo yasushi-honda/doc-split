@@ -17,7 +17,12 @@ import { expect } from 'chai';
 import * as admin from 'firebase-admin';
 import { drive_v3 } from 'googleapis';
 import { cleanupCollections } from './helpers/cleanupEmulator';
-import { findOrCreateFolder, AmbiguousFolderError, FolderCreationInProgressError } from '../src/drive/findOrCreateFolder';
+import {
+  findOrCreateFolder,
+  acquireFolderLock,
+  AmbiguousFolderError,
+  FolderCreationInProgressError,
+} from '../src/drive/findOrCreateFolder';
 import { DivergentFolderClaimError, buildFolderLockId } from '../src/drive/driveFolderClaim';
 
 const db = admin.firestore();
@@ -550,6 +555,101 @@ describe('driveFolderClaim プロトコル(Issue #871)', () => {
 
       expect(result).to.equal('created-1');
       expect(createCalls).to.have.lengthOf(1);
+    });
+  });
+
+  describe('childFolderResolver.ts(旧acquireFolderLock/releaseFolderLock)との相互作用(second-opinionレビューCritical指摘対応)', () => {
+    it('acquireFolderLockはclaimプロトコル管理下(stateフィールドあり)のドキュメントを上書きせずFolderCreationInProgressErrorをthrowする', async () => {
+      const { drive } = makeFakeDrive();
+      // findOrCreateFolderで正規のresolved claimを作る
+      const folderId = await findOrCreateFolder(drive, db, 'parent-cross', '相互作用太郎');
+      const beforeSnap = await claimDocRef('parent-cross', '相互作用太郎').get();
+      expect(beforeSnap.data()?.state).to.equal('resolved');
+
+      // childFolderResolver.ts相当が(旧経路で)同じparent+nameのロックを取得しようとする
+      try {
+        await acquireFolderLock(db, 'parent-cross', '相互作用太郎');
+        expect.fail('FolderCreationInProgressErrorがthrowされるべき');
+      } catch (error) {
+        expect(error).to.be.instanceOf(FolderCreationInProgressError);
+      }
+
+      // resolved claimの記録(folderId等)が破壊・削除されていないこと
+      const afterSnap = await claimDocRef('parent-cross', '相互作用太郎').get();
+      expect(afterSnap.exists).to.equal(true);
+      expect(afterSnap.data()?.state).to.equal('resolved');
+      expect(afterSnap.data()?.folderId).to.equal(folderId);
+    });
+
+    it('acquireFolderLockは"creating"状態(進行中のattempt)も上書きせずFolderCreationInProgressErrorをthrowする', async () => {
+      await claimDocRef('parent-cross2', '進行中太郎').set({
+        state: 'creating',
+        attempt: { attemptId: 'attempt-x', startedAtMs: Date.now(), runId: 'r1' },
+        parentId: 'parent-cross2',
+        name: '進行中太郎',
+      });
+
+      try {
+        await acquireFolderLock(db, 'parent-cross2', '進行中太郎');
+        expect.fail('FolderCreationInProgressErrorがthrowされるべき');
+      } catch (error) {
+        expect(error).to.be.instanceOf(FolderCreationInProgressError);
+      }
+
+      const snap = await claimDocRef('parent-cross2', '進行中太郎').get();
+      expect(snap.data()?.state).to.equal('creating');
+    });
+
+    it('claimドキュメントが存在しない場合、acquireFolderLockは従来通り取得できる(回帰なし)', async () => {
+      const lockToken = await acquireFolderLock(db, 'parent-cross3', '新規太郎');
+      expect(lockToken).to.be.a('string');
+      const snap = await claimDocRef('parent-cross3', '新規太郎').get();
+      expect(snap.data()?.state).to.equal(undefined);
+      expect(snap.data()?.lockToken).to.equal(lockToken);
+    });
+  });
+
+  describe('divergent状態の保護(second-opinionレビューImportant指摘対応)', () => {
+    it('shadowモードでも、既存のdivergent claimを新規作成attemptで上書きしない(DivergentFolderClaimError)', async () => {
+      await claimDocRef('parent-div1', '発散太郎').set({
+        state: 'divergent',
+        folderId: 'old-divergent-id',
+        attempt: null,
+        parentId: 'parent-div1',
+        name: '発散太郎',
+      });
+      const { drive, createCalls } = makeFakeDrive({ files: [] }); // 完全検索は0件(=通常なら新規作成に進むケース)
+
+      try {
+        await findOrCreateFolder(drive, db, 'parent-div1', '発散太郎');
+        expect.fail('DivergentFolderClaimErrorがthrowされるべき');
+      } catch (error) {
+        expect(error).to.be.instanceOf(DivergentFolderClaimError);
+      }
+      expect(createCalls).to.have.lengthOf(0);
+      const snap = await claimDocRef('parent-div1', '発散太郎').get();
+      expect(snap.data()?.state).to.equal('divergent');
+    });
+
+    it('shadowモードでも、既存のdivergent claimを完全再検索の成功結果で"resolved"へ上書きしない', async () => {
+      await claimDocRef('parent-div2', '発散花子').set({
+        state: 'divergent',
+        folderId: 'old-divergent-id',
+        attempt: null,
+        parentId: 'parent-div2',
+        name: '発散花子',
+      });
+      // 完全検索では別のfolderIdが1件見つかる(=通常なら成功として記録されるケース)
+      const { drive } = makeFakeDrive({
+        files: [{ id: 'found-by-scan', name: '発散花子', parents: ['parent-div2'], trashed: false }],
+      });
+
+      const result = await findOrCreateFolder(drive, db, 'parent-div2', '発散花子');
+
+      expect(result).to.equal('found-by-scan');
+      const snap = await claimDocRef('parent-div2', '発散花子').get();
+      expect(snap.data()?.state).to.equal('divergent');
+      expect(snap.data()?.folderId).to.equal('old-divergent-id');
     });
   });
 });

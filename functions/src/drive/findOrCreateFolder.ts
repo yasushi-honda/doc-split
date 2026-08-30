@@ -99,7 +99,19 @@ export async function acquireFolderLock(
   const lockToken = randomUUID();
   const acquired = await firestore.runTransaction(async (tx) => {
     const snap = await tx.get(lockRef);
-    const claimedAtMs = snap.data()?.claimedAtMs as number | undefined;
+    const data = snap.data();
+    // second-opinionレビュー指摘(Critical)対応: claimプロトコル管理下のドキュメント
+    // (`state`フィールドを持つ、driveFolderClaim.tsのbeginCreation/commitResolvedWithRetry
+    // 等が書いたもの)には`claimedAtMs`が含まれないため、素通しすると常に「未ロック」と
+    // 誤判定して無条件set(全体上書き)→releaseFolderLockのtx.deleteで完全削除してしまう。
+    // resolved/invalidated/divergentいずれの状態であってもclaimの記録(folderId・
+    // missCount等の履歴)を握り潰してはならないため、`state`フィールドが存在する限り
+    // (staleness・状態の種類を問わず)常にblockedとし、claimプロトコルへの移行が
+    // 完了するまでの間は素通りさせない。
+    if (data?.state !== undefined) {
+      return false;
+    }
+    const claimedAtMs = data?.claimedAtMs as number | undefined;
     if (claimedAtMs !== undefined && Date.now() - claimedAtMs < FOLDER_LOCK_STALE_MS) {
       return false;
     }
@@ -279,6 +291,9 @@ export async function findOrCreateFolder(
   const begun = await beginCreation(firestore, parentId, name, runId);
   if (begun.status === 'blocked') {
     throw new FolderCreationInProgressError(name, parentId);
+  }
+  if (begun.status === 'divergent') {
+    throw new DivergentFolderClaimError(name, parentId, begun.claim.folderId);
   }
   const { attemptId } = begun;
   try {
