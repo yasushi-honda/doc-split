@@ -217,19 +217,29 @@ describe('exportDocument (ADR-0022 Phase 1)', () => {
 
     expect(createCalls).to.have.lengthOf(3);
 
-    const officeCall = createCalls[0].requestBody as { name: string; parents: string[] };
-    expect(officeCall).to.deep.equal({
-      name: '事業所A',
-      mimeType: 'application/vnd.google-apps.folder',
-      parents: ['root-folder-id'],
-    });
+    // フォルダ作成リクエストにはIssue #871 claimプロトコル(docSplitFolderClaim)の
+    // 冪等キーが付与される(値はattemptIdごとのUUIDのため、キー存在のみ検証する)。
+    const officeCall = createCalls[0].requestBody as {
+      name: string;
+      mimeType: string;
+      parents: string[];
+      appProperties?: Record<string, string>;
+    };
+    expect(officeCall.name).to.equal('事業所A');
+    expect(officeCall.mimeType).to.equal('application/vnd.google-apps.folder');
+    expect(officeCall.parents).to.deep.equal(['root-folder-id']);
+    expect(officeCall.appProperties?.docSplitFolderClaim).to.be.a('string');
 
-    const customerCall = createCalls[1].requestBody as { name: string; parents: string[] };
-    expect(customerCall).to.deep.equal({
-      name: 'ス　鈴木花子',
-      mimeType: 'application/vnd.google-apps.folder',
-      parents: ['folder-office'],
-    });
+    const customerCall = createCalls[1].requestBody as {
+      name: string;
+      mimeType: string;
+      parents: string[];
+      appProperties?: Record<string, string>;
+    };
+    expect(customerCall.name).to.equal('ス　鈴木花子');
+    expect(customerCall.mimeType).to.equal('application/vnd.google-apps.folder');
+    expect(customerCall.parents).to.deep.equal(['folder-office']);
+    expect(customerCall.appProperties?.docSplitFolderClaim).to.be.a('string');
 
     const fileCall = createCalls[2];
     const fileBody = fileCall.requestBody as { name: string; parents: string[]; appProperties: Record<string, string> };
