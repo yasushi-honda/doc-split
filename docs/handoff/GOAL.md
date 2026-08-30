@@ -344,6 +344,16 @@ cocoro/kanameから、書類（ケアプラン・医療・介護保険証等）�
 
 次の一手: 田中幹子のケアマネフォルダが物理的に複数存在していないか（`investigate-caremanager-folder-duplicate --name "田中 幹子"`、run 33285636973、実行中）を確認し、重複フォルダの`createdTime`がPhase 3実行window（2026-08-27 深夜〜2026-08-28、run 33164719730の実行時間帯）と一致するかで最終確認する。一致すれば、対策の焦点は「人間の手動操作対策」ではなく「`findOrCreateFolder`が高頻度・連続呼び出し下でのDrive API検索一貫性をどう担保するか」（例: 作成直前の再検索リトライ、作成後の確認的re-fetch等）に絞り込む。
 
+**2026-08-30追記（実装前ゲート実行結果・規模認識の訂正）**: 田中幹子のケアマネフォルダ調査（run 33285636973）は**重複なし**（337件全件が単一物理フォルダに収束）と判明。ケアマネ階層は健全で、重複は顧客/書類種別階層に限定されると確認。
+
+plan mode（Opus 5、grip+codex 2パスクロスレビュー）で恒久対策を`~/.claude/plans/moonlit-jumping-alpaca.md`として再設計し承認済み。PR-2（`FOLDER_LOCK_STALE_MS`120秒→10分是正、Issue #871と無関係に単独是正すべき不具合、PR #872）は実装・マージ完了。
+
+続けてPR-1（`scripts/diagnose-drive-folder-duplicate-causality.ts`、実装前ゲートの因果検証スクリプト）を実装し、kanameone実データで実行した結果、**当初の規模認識・因果仮説の両方に重大な訂正が必要**と判明:
+
+- **規模**: misplaced 42件のうちユニークな(旧,新)フォルダペア32件を精査すると、78%（25件）は名前が異なる「byte-mismatch」＝書類カテゴリの再分類ドリフト（バグではない可能性が高い）であり、**真の物理フォルダ重複は5件・森奈穂美担当のみ**（42件・6ケアマネという当初報告は過大評価だった）
+- **因果**: 真の重複5件のうち4件は、新フォルダの`createdTime`が**2026-08-21 12:53〜12:55の約2分間**に集中。Cloud Loggingで同時刻帯の`onDocumentWriteDriveExport`発火回数を確認したところ、12:00〜13:00の1時間で**1,111回**（通常は数回/時間）という明確な異常バーストを検出した。ただしこのバーストの発生源はGitHub Actions実行履歴・git commit履歴のいずれにも痕跡がなく特定できなかった。**Phase3（2026-08-27〜28）とは全く別の日付・別のイベントであり、「Phase3が原因」という当初の因果仮説はこの5件については支持されない**
+- **結論**: 「高頻度バーストがDrive API検索結果整合性を崩し重複を誘発する」という核心メカニズム自体は8/21の実バーストとの時刻一致で裏付けが強まったが、規模が当初報告より大幅に小さいため**Issue #871の優先度をP1→P2へ変更**。恒久対策（claimプロトコル、計画のPR-3）は規模を踏まえた緊急度で実装を継続する方針（decision-maker承認済み）。8/21バーストの発生源特定は費用対効果が見合わずスコープ外とした。詳細はIssue #871コメント参照。
+
 **Issue #811/#823 remediation（次セッション再開点）**: Phase 2b-1（PR #851実装マージ・devリハーサル）・Phase 2b-2（森奈穂美分本番実行、healthy 33.1%→98.8%）・Phase 5（ADR-0022更新PR #854マージ・Issue #811/#823クローズ）・**Phase 3（kanameone全ケアマネへ横展開、healthy 60.8%→99.0%）**・**Phase 4（cocoroはDrive未接続のため対象外と確定）**、全て完了済み（詳細は上記「Issue #811/#823 remediation Phase 3」節参照）。**kanameoneのDrive export破損document remediationはこれで実質完了**。
 
 **残り23件（trashed9+misplaced11+target-path-not-created3）の原因調査（2026-08-28実施・打ち切り）**: `skippedPossibleManualEdit`は最終的に21件（森奈穂美分8件+他ケアマネ分13件）、複数日（8/3・8/4・8/5・8/12・8/14・8/16）に分散し数秒〜数十秒の小さなクラスタを形成。複数クラスタでCloud Logging（kanameone、`gcloud logging read`）を確認したが、該当時刻にdoc-split側のCloud Function実行履歴が一切見つからなかった（`processocr`/`checkgmailattachments`の通常ポーリングのみ）。**doc-split側の処理では説明がつかない=Drive側での外部要因（人間操作かGoogle内部処理か不明）の可能性が高いという結論を複数クラスタで再現・補強**。これ以上の特定にはGoogle Workspace管理者監査ログ（Drive Activity API）へのアクセスが必要なため調査を打ち切った。他blocked21件（segment-unresolvable17/ambiguous-path3/customer-unconfirmed1）は元々execute-drive-export-repair.tsの対象外（フォルダ構造の曖昧性解消・顧客確定という別種の人間作業が必要）。**→ 2026-08-29に実体解明済み、詳細は下記「残存44件(→49件)の実態解明」節参照**。
