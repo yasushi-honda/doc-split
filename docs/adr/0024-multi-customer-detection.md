@@ -3,7 +3,8 @@
 ## Status
 
 Accepted (2026-08-30)。plan-crossreview（grip自白可視化 + codex 2パス独立診断）を経て設計確定、
-decision-maker承認済み。PR-A実装完了。
+decision-maker承認済み。PR-A実装完了。**Stage1〜2完了、kanameoneで複製機能を廃止済み**
+（詳細は下記「ロールアウト実績」参照）。
 
 ## Context
 
@@ -67,6 +68,27 @@ Stage3（棚卸し実行）で対象件数を実測してから再導入を別�
   複製が1件も発生しないことを保証する。当初「Gmail取込トリガーを一時停止する」案を検討したが、
   `checkGmailAttachments`を止めても既にpending状態のdocは`processOCR`でOCR処理が継続され複製ロジックが
   発火するため的外れと判明し、この既存ゲートへの流用に訂正した
+
+## ロールアウト実績（2026-08-30）
+
+**Stage 1（kanameone併走、8/29〜8/30）**: `multiCustomerDetection`フラグをON（`faxDuplication`はtrueのまま併走）にしてから約1.5日で検出サンプル91件（document単位）/20件（グループ単位）に到達し、AC-9の最低条件（5件以上）を満たした。Cloud Loggingで`faxDuplicationPlan`ログの`reason: exactCandidatesDistributed`件数（フラグON後）を実測したところ20件で、棚卸しスクリプトの「検出も伴う複製グループ数」（20件）と完全一致。「検出のみで複製されなかった」doc数も0件だった。両方向で不一致ゼロを確認し、「検出集合 == 複製発火集合」を本番データで実測できた。
+
+**Stage 2（kanameone複製OFF切替、8/30 12:55〜13:20 UTC）**: 上記Decision節記載の手順通り実施。①`system/maintenanceFlags.groupAggregationGateOpen`を`false`に設定 ②20分ドレイン待機（ADR-0019のバリア方式を踏襲）③`documents`の`status:processing`件数が0件であることを確認 ④`set-feature-flag --flag faxDuplication --value false`をdry-run確認後に本実行 ⑤ゲートを`true`に戻す。ゲート閉鎖時間は合計約25分。切替後、`settings/features.faxDuplication: false`を実測確認済み。
+
+**Stage 3（棚卸し結果、`audit-fax-duplication-inventory`、kanameone、8/30時点）**:
+
+| 指標 | 値 |
+|---|---|
+| スキャン対象doc数 | 3,203件 |
+| 複製グループ数（`distributionId`を持つ） | 1,016グループ |
+| グループサイズ分布 | 1名:46 / 2名:566 / 3名:154 / 4名:71 / 5名:46 / 6名:33 / 7名:31 / 8名:23 / 9名:10 / 10名:36 |
+| 元doc欠落グループ | 23件 |
+| Drive出力済みメンバーを含むグループ数 | 747グループ（totalDriveExportedMemberCount: 1,566件） |
+| 検出（`multiCustomerDetected:true`）doc数 | 91件 |
+
+「Drive出力済みメンバーを含むグループ数」（747グループ）は、PR-C（既存doc向けFE導出フォールバック）の再導入要否を判断する際の入力として記録する。複製フラグ導入（2026-07-17）より前に蓄積された既存docのうち、既にDrive出力済みのものが大部分を占める場合、バッジ表示の恩恵を受けられない既存docの規模がそれだけ大きいことを意味する。
+
+**未検証項目**: Stage2切替後、実際に新しい複数人記載FAXが到着した際の最終挙動確認（複製されず検出バッジのみになること、Cloud Loggingで`reason: flagDisabled`になること）は、8/30時点でまだ到着実績がなく未実施。次回到着時に確認する。
 
 ## 関連
 
