@@ -265,10 +265,13 @@ async function main(): Promise<void> {
         console.log(`✅ folder ${folderId} を再trashed化(rollback前は復元済み状態だった)`);
 
         // Issue #871 PR-4: この再trashed化でDrive側の状態がclaim(driveFolderLocks)の
-        // 記録と食い違う(claimはこのfolderIdをresolvedのまま指し続ける)。残置すると
-        // 次回exportがfiles.getの404累積判定(最大10分)を待つことになるため、ここで
-        // 明示的にinvalidatedへ倒す。失敗してもDrive側のrollback自体は完了しているため
-        // best-effort(exit codeには反映しない、404累積判定で自然に解消されるため)。
+        // 記録と食い違う(claimはこのfolderIdをresolvedのまま指し続ける)。残置すると、
+        // 読み経路有効化後にverifyFolderClaim()がこのfolderIdへfiles.getし、
+        // trashed=trueを200で受け取って"自動的にuntrashして採用"してしまい、rollbackが
+        // 実質的に取り消される(codex review P2指摘対応、8巡目: 404累積判定で自然解消
+        // されるという当初の前提は誤りだった——verifyFolderClaim()は404ではなく
+        // 200+trashed:trueとして扱うため、404累積の入り口にすら立たない)。よって
+        // invalidate失敗はbest-effortではなくrollback失敗として扱い、exit codeへ反映する。
         try {
           const invalidatedCount = await invalidateResolvedClaimByFolderId(db, folderId);
           if (invalidatedCount > 0) {
@@ -296,11 +299,16 @@ async function main(): Promise<void> {
             }
           }
         } catch (claimErr) {
+          // codex review P2指摘対応(8巡目): claim invalidateの失敗は「放置しても自然
+          // 解消される」ものではない(verifyFolderClaim()がtrashed済みフォルダを
+          // 200+trashed:trueで受け取り自動untrashしてしまうため)。folderOperationErrorCount
+          // へ計上し、rollback全体の失敗としてexit codeに反映する。
+          folderOperationErrorCount++;
           // silent-failure-hunterレビュー指摘対応: messageのみの文字列展開だとスタック
           // トレースが失われ、claimErrがErrorインスタンスでない場合もundefined表示になる。
           // 生のerrorオブジェクトも第2引数で渡し障害調査時の情報を残す。
           console.error(
-            `⚠️  folder ${folderId} のclaim invalidateに失敗(Drive側のrollbackは完了済み、次回exportのfiles.get 404累積判定で自然に解消されます):`,
+            `❌ folder ${folderId} のclaim invalidateに失敗(Drive側のrollbackは完了しているが、claim記録が食い違ったまま残ります。次回export時に誤って復元される可能性があるため手動確認が必要です):`,
             claimErr
           );
         }
