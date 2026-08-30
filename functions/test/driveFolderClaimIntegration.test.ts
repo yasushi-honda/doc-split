@@ -327,6 +327,50 @@ describe('driveFolderClaim プロトコル(Issue #871)', () => {
       expect(result).to.deep.equal({ id: folderId, restored: false, created: false });
       expect(createCalls).to.have.lengthOf(1);
     });
+
+    it('shadowモード(driveFolderClaimRead未設定)でも、期限切れの"creating"claim(クラッシュ後の孤児)を永久にblockせずreconcileAttemptで回収する(codex review P2指摘対応、3巡目)', async () => {
+      await claimDocRef('parent-shadow-stale-creating', '孤児太郎').set({
+        state: 'creating',
+        attempt: { attemptId: 'orphan-attempt', startedAtMs: Date.now() - 20 * 60 * 1000, runId: 'crashed-run' },
+        parentId: 'parent-shadow-stale-creating',
+        name: '孤児太郎',
+      });
+      const { drive: baseDrive, createCalls } = makeFakeDrive({
+        files: [
+          {
+            id: 'orphan-created-id',
+            name: '孤児太郎',
+            parents: ['parent-shadow-stale-creating'],
+            trashed: false,
+            appProperties: { docSplitFolderClaim: 'orphan-attempt' },
+          },
+        ],
+      });
+      // 名前ベースの検索(files.list)は常に0件(索引未反映を模擬)だが、appProperties
+      // タグ検索はstoreを正しく参照する(reconcileAttemptの回収経路のみ機能する状況、
+      // 既存の同型テストと同じ手法)。
+      const drive = {
+        files: {
+          ...baseDrive.files,
+          list: async (params: Record<string, unknown>) => {
+            const q = params.q as string;
+            if (q.includes('appProperties has')) {
+              return baseDrive.files.list(params);
+            }
+            return { data: { files: [] } };
+          },
+        },
+      } as unknown as drive_v3.Drive;
+
+      const result = await resolveChildFolder(drive, db, 'parent-shadow-stale-creating', '孤児太郎');
+
+      expect(result).to.deep.equal({ id: 'orphan-created-id', restored: false, created: false });
+      // タグ検索で既存フォルダを回収したので新規作成は発生しない
+      expect(createCalls).to.have.lengthOf(0);
+      const snap = await claimDocRef('parent-shadow-stale-creating', '孤児太郎').get();
+      expect(snap.data()?.state).to.equal('resolved');
+      expect(snap.data()?.folderId).to.equal('orphan-created-id');
+    });
   });
 
   describe('SOFT_TTL超過後の完全再検索が0件のケース(§4の要)', () => {

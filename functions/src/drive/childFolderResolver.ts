@@ -209,6 +209,44 @@ function isResolvedWithFolderId(claim: FolderClaimDoc | null): claim is Resolved
   return claim?.state === 'resolved' && typeof claim.folderId === 'string';
 }
 
+/**
+ * `claim`が'creating'状態(進行中のattempt)の場合に、`reconcileAttempt`で回収・確定を
+ * 試みる共通ロジック(codex review P2指摘対応、3巡目)。read有効時の通常経路と、shadow時の
+ * 新規作成直前防御チェックの両方から呼ばれる — 重複実装すると挙動がずれるリスクがあるため
+ * 一本化した。'adopt'ならResolvedChildFolderを返し、'wait'なら
+ * FolderCreationInProgressErrorをthrow、'clear'(claimがinvalidated化された)ならnullを
+ * 返す(呼び出し元は以降claim無しとして後続処理へ進む)。
+ */
+async function reconcileCreatingClaim(
+  drive: drive_v3.Drive,
+  firestore: admin.firestore.Firestore,
+  parentId: string,
+  name: string,
+  claim: FolderClaimDoc & { attempt: FolderClaimAttempt },
+  runId: string
+): Promise<ResolvedChildFolder | null> {
+  const outcome = await reconcileAttempt(drive, firestore, parentId, name, claim, runId);
+  if (outcome.status === 'adopt') {
+    // reconcileAttemptが内部でuntrash済み(outcome.restored===true)の場合、直後の
+    // commitResolvedWithRetryが失敗するとDrive側の復元事実がresolveChildFolderPathの
+    // restoredFolderIds(rollback manifest用)から漏れる。folderIdを運べる専用errorへ包む。
+    try {
+      await commitResolvedWithRetry(firestore, parentId, name, claim.attempt.attemptId, outcome.folderId);
+    } catch (commitError) {
+      if (outcome.restored) {
+        throw new ChildFolderRestoredButUncommittedError(name, parentId, outcome.folderId, commitError);
+      }
+      throw commitError;
+    }
+    return { id: outcome.folderId, restored: outcome.restored, created: false };
+  }
+  if (outcome.status === 'wait') {
+    throw new FolderCreationInProgressError(name, parentId);
+  }
+  // status === 'clear' → claimはinvalidated化された。呼び出し元にclaim無しとして委ねる
+  return null;
+}
+
 export async function resolveChildFolder(
   drive: drive_v3.Drive,
   firestore: admin.firestore.Firestore,
@@ -240,7 +278,7 @@ export async function resolveChildFolder(
     }
 
     if (claim?.state === 'creating' && claim.attempt) {
-      const outcome = await reconcileAttempt(
+      const reconciled = await reconcileCreatingClaim(
         drive,
         firestore,
         parentId,
@@ -248,26 +286,10 @@ export async function resolveChildFolder(
         claim as FolderClaimDoc & { attempt: FolderClaimAttempt },
         runId
       );
-      if (outcome.status === 'adopt') {
-        // codex review P2指摘対応(2巡目): reconcileAttemptが内部でuntrash済み
-        // (outcome.restored===true)の場合、直後のcommitResolvedWithRetryが失敗すると
-        // Drive側の復元事実がresolveChildFolderPathのrestoredFolderIds(rollback
-        // manifest用)から漏れる。呼び出し元がoutcome.restoredを知っている今のうちに
-        // folderIdを運べる専用errorへ包む。
-        try {
-          await commitResolvedWithRetry(firestore, parentId, name, claim.attempt.attemptId, outcome.folderId);
-        } catch (commitError) {
-          if (outcome.restored) {
-            throw new ChildFolderRestoredButUncommittedError(name, parentId, outcome.folderId, commitError);
-          }
-          throw commitError;
-        }
-        return { id: outcome.folderId, restored: outcome.restored, created: false };
+      if (reconciled) {
+        return reconciled;
       }
-      if (outcome.status === 'wait') {
-        throw new FolderCreationInProgressError(name, parentId);
-      }
-      // status === 'clear' → claimはinvalidated化された。以降はclaim無しとして扱う
+      // 'clear'(invalidated化)された。以降はclaim無しとして扱う
       claim = null;
     }
   }
@@ -325,13 +347,31 @@ export async function resolveChildFolder(
   // 既存claimを信用してよいため、ここでは常にclaimを読み直してから判断する。
   if (!readEnabled) {
     const preCreateClaim = await readClaim(firestore, parentId, name);
-    if (preCreateClaim?.state === 'creating') {
-      throw new FolderCreationInProgressError(name, parentId);
-    }
-    if (isResolvedWithFolderId(preCreateClaim)) {
+    if (preCreateClaim?.state === 'creating' && preCreateClaim.attempt) {
+      // codex review P2指摘対応(3巡目): 'creating'状態を発見しただけで無条件にblockすると、
+      // プロセスクラッシュ後の孤児claim(リース失効済みだがattemptIdタグ付きフォルダは
+      // 未確定)が180日TTLまで永久にFolderCreationInProgressErrorを返し続けてしまう
+      // (beginCreation自身はリース失効を検知して再取得できるのに、この防御チェックだけが
+      // それより手前で無条件throwしていた)。read有効時の通常経路と同じreconcileAttempt
+      // ベースの回収ロジックを再利用する。
+      const reconciled = await reconcileCreatingClaim(
+        drive,
+        firestore,
+        parentId,
+        name,
+        preCreateClaim as FolderClaimDoc & { attempt: FolderClaimAttempt },
+        runId
+      );
+      if (reconciled) {
+        return reconciled;
+      }
+      // 'clear'(invalidated化)された → 下のbeginCreation()へ進んでよい
+    } else if (isResolvedWithFolderId(preCreateClaim)) {
       const verified = await verifyFolderClaim(drive, firestore, parentId, name, preCreateClaim, runId);
       return { id: verified.folderId, restored: verified.restored, created: false };
     }
+    // preCreateClaim?.state==='creating'かつattemptが無い(旧形式残骸)場合は、下の
+    // beginCreation()自身のstaleness判定(claimedAtMs)に委ねる(read有効時の分岐と同型)。
   }
 
   // 0件マッチ = 新規作成が必要。異なる呼び出し間(並行稼働しうる本番export含む)の
