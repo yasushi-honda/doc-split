@@ -254,7 +254,18 @@ export async function resolveChildFolder(
   name: string
 ): Promise<ResolvedChildFolder> {
   const runId = randomUUID();
-  const readEnabled = await isDriveFolderClaimReadEnabled(firestore).catch(() => false);
+  // silent-failure-hunterレビュー指摘対応: shadowモードへのfail-closedフォールバック自体は
+  // 妥当だが、直後にも同じfirestore引数でreadClaim等のFirestore操作が続くため、ここで
+  // 起きたエラーが一過性か、Firestoreへの接続自体が本質的に壊れているか(IAM設定ミス等)の
+  // 区別がつかない。ログを残さないと、本番運用でこの障害が「単にshadowモードのまま動いて
+  // いる」ように見えてしまい検知できない。
+  const readEnabled = await isDriveFolderClaimReadEnabled(firestore).catch((error) => {
+    console.error(
+      `[Phase B Part A] driveFolderClaimReadフラグの読取に失敗しました(shadowモードへfail-closed): "${name}"（親フォルダ: ${parentId}）`,
+      error
+    );
+    return false;
+  });
   let claim: FolderClaimDoc | null = null;
 
   if (readEnabled) {
@@ -300,7 +311,16 @@ export async function resolveChildFolder(
     existing = await resolveExistingChildFile(drive, parentId, name);
   } catch (error) {
     if (readEnabled && isResolvedWithFolderId(claim) && error instanceof AmbiguousChildFolderError) {
-      await markDivergent(firestore, parentId, name, 'ambiguous-full-scan').catch(() => {});
+      // silent-failure-hunterレビュー指摘対応: divergentマーカーの永続化はこの状態機械
+      // 唯一の「人手介入が必要」シグナル。書込み自体が失敗すると、claimドキュメントには
+      // 反映されないままこの呼び出しだけ異常終了し、次回以降の呼び出しがこの矛盾を
+      // 検知できなくなる。best-effort(投げない)のままだが、ログだけは必ず残す。
+      await markDivergent(firestore, parentId, name, 'ambiguous-full-scan').catch((markError) =>
+        console.error(
+          `[Phase B Part A] divergent記録に失敗しました("${name}"、親フォルダ: ${parentId}）: 次回呼び出しがこの矛盾を検知できない可能性があります`,
+          markError
+        )
+      );
     }
     throw error;
   }
@@ -315,7 +335,12 @@ export async function resolveChildFolder(
     // 無関係な(たまたま同名でtrashedの)フォルダをfail-closedの判定が確定する前に
     // untrashしてしまい、判定結果に関わらずDrive側を書き換えてしまう。
     if (readEnabled && isResolvedWithFolderId(claim) && claim.folderId !== existingId) {
-      await markDivergent(firestore, parentId, name, 'full-scan-mismatch').catch(() => {});
+      await markDivergent(firestore, parentId, name, 'full-scan-mismatch').catch((markError) =>
+        console.error(
+          `[Phase B Part A] divergent記録に失敗しました("${name}"、親フォルダ: ${parentId}）: 次回呼び出しがこの矛盾を検知できない可能性があります`,
+          markError
+        )
+      );
       throw new DivergentFolderClaimError(name, parentId, claim.folderId, existingId);
     }
     const resolved = await toResolvedExisting(drive, existing, name);

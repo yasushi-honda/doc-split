@@ -296,8 +296,12 @@ async function main(): Promise<void> {
             }
           }
         } catch (claimErr) {
+          // silent-failure-hunterレビュー指摘対応: messageのみの文字列展開だとスタック
+          // トレースが失われ、claimErrがErrorインスタンスでない場合もundefined表示になる。
+          // 生のerrorオブジェクトも第2引数で渡し障害調査時の情報を残す。
           console.error(
-            `⚠️  folder ${folderId} のclaim invalidateに失敗(Drive側のrollbackは完了済み、次回exportのfiles.get 404累積判定で自然に解消されます): ${(claimErr as Error).message}`
+            `⚠️  folder ${folderId} のclaim invalidateに失敗(Drive側のrollbackは完了済み、次回exportのfiles.get 404累積判定で自然に解消されます):`,
+            claimErr
           );
         }
       } catch (err) {

@@ -33,6 +33,7 @@ import {
   AmbiguousChildFolderError,
   ChildFolderCreatedButUncommittedError,
   ChildFolderRestoredButUncommittedError,
+  FolderClaimRestoreCommitError,
   PartialChildFolderPathError,
   DivergentFolderClaimError,
 } from '../src/drive/childFolderResolver';
@@ -452,6 +453,76 @@ describe('resolveChildFolder: claimプロトコルへの参加(Issue #871 PR-4)'
     const result = await resolveChildFolder(drive, db, 'parent-verify', '復元太郎');
 
     expect(result).to.deep.equal({ id: 'trashed-claim-id', restored: true, created: false });
+  });
+
+  it('SOFT_TTL窓内でtrashedからの復元(untrash)自体は成功したが、直後のrecordVerification確定書込みに失敗するとFolderClaimRestoreCommitErrorをthrowする(second-opinionレビュー指摘対応、テストカバレッジ欠如の解消)', async () => {
+    await enableClaimRead();
+    const { drive, store } = makeClaimAwareFakeDrive({
+      files: [
+        { id: 'trashed-restorecommitfail-id', name: '復元コミット失敗太郎', parents: ['parent-restorecommitfail'], trashed: true },
+      ],
+    });
+    await db
+      .collection('driveFolderLocks')
+      .doc(Buffer.from('parent-restorecommitfail/復元コミット失敗太郎').toString('base64url'))
+      .set({
+        state: 'resolved',
+        folderId: 'trashed-restorecommitfail-id',
+        attempt: null,
+        resolvedAtMs: Date.now() - 2 * 60 * 1000,
+        verifiedAtMs: Date.now() - 2 * 60 * 1000,
+        parentId: 'parent-restorecommitfail',
+        name: '復元コミット失敗太郎',
+      });
+    // recordVerification自体はリトライなしの単発runTransactionのため、1回目を失敗させれば十分。
+    const failingDb = makeFailingCommitFirestore(db, [1]);
+
+    try {
+      await resolveChildFolder(drive, failingDb, 'parent-restorecommitfail', '復元コミット失敗太郎');
+      expect.fail('FolderClaimRestoreCommitErrorがthrowされるべき');
+    } catch (error) {
+      expect(error).to.be.instanceOf(FolderClaimRestoreCommitError);
+      expect((error as FolderClaimRestoreCommitError).folderId).to.equal('trashed-restorecommitfail-id');
+    }
+    // Drive側のuntrash自体は成功していること(claim確定書込みの失敗とは独立)
+    expect(store.find((f) => f.id === 'trashed-restorecommitfail-id')?.trashed).to.equal(false);
+  });
+
+  it('resolveChildFolderPath経由でも、FolderClaimRestoreCommitError由来のfolderIdがrestoredFolderIdsに含まれる(rollback manifest漏れ防止)', async () => {
+    await enableClaimRead();
+    const { drive } = makeClaimAwareFakeDrive({
+      files: [
+        {
+          id: 'trashed-restorecommitfail-path-id',
+          name: '復元コミット失敗二郎',
+          parents: ['root-restorecommitfail'],
+          trashed: true,
+        },
+      ],
+    });
+    await db
+      .collection('driveFolderLocks')
+      .doc(Buffer.from('root-restorecommitfail/復元コミット失敗二郎').toString('base64url'))
+      .set({
+        state: 'resolved',
+        folderId: 'trashed-restorecommitfail-path-id',
+        attempt: null,
+        resolvedAtMs: Date.now() - 2 * 60 * 1000,
+        verifiedAtMs: Date.now() - 2 * 60 * 1000,
+        parentId: 'root-restorecommitfail',
+        name: '復元コミット失敗二郎',
+      });
+    const failingDb = makeFailingCommitFirestore(db, [1]);
+
+    try {
+      await resolveChildFolderPath(drive, failingDb, 'root-restorecommitfail', ['復元コミット失敗二郎']);
+      expect.fail('PartialChildFolderPathErrorがthrowされるべき');
+    } catch (error) {
+      expect(error).to.be.instanceOf(PartialChildFolderPathError);
+      const partialError = error as PartialChildFolderPathError;
+      expect(partialError.restoredFolderIds).to.deep.equal(['trashed-restorecommitfail-path-id']);
+      expect(partialError.createdFolderIds).to.deep.equal([]);
+    }
   });
 
   it('完全再検索がclaimと異なるtrashedフォルダを見つけた場合、untrashせずdivergentへ遷移する(codex review P2指摘対応、2巡目)', async () => {

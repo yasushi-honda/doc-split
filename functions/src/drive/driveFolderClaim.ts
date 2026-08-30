@@ -451,6 +451,16 @@ export async function commitResolvedWithRetry(
         await firestore.runTransaction(async (tx) => {
           const snap = await tx.get(ref);
           const existing = snap.exists ? normalizeClaim(snap.data()!, parentId, name) : null;
+          // second-opinionレビュー指摘対応(read-only, 7巡目相当): divergent(人手介入待ち)は
+          // attemptIdの一致判定に関わらず常に保護する。既存のfencing(creating/resolvedの
+          // attemptId不一致チェック)はdivergent状態を素通りしてしまい、無条件で'resolved'
+          // 上書きするバグが残っていた。
+          if (existing?.state === 'divergent') {
+            console.warn(
+              `[driveFolderClaim] divergent状態のclaimをcommit結果で上書きしません(人手介入待ち): "${name}"（親フォルダ: ${parentId}）`
+            );
+            return;
+          }
           if (existing?.state === 'creating' && existing.attempt?.attemptId !== attemptId) {
             return; // 既に別のattemptに引き継がれている(fencing) → 何もしない
           }
@@ -739,11 +749,22 @@ async function recordVerification(
     const snap = await tx.get(ref);
     const existing = snap.exists ? normalizeClaim(snap.data()!, parentId, name) : null;
 
-    // codex review P1指摘対応(6巡目、recordFullScanResolutionと同じ理由): 呼び出し元が
-    // 直前に'resolved'を確認してからこの書込みまでの間隙で、別プロセスが有効なリース内の
+    // second-opinionレビュー指摘対応(read-only, 7巡目相当): 直前に'resolved'を確認して
+    // からこの書込みまでの間隙で、別プロセスがdivergentへ遷移させていた場合、その
+    // 人手介入待ちシグナルを無条件で'resolved'へ戻してはならない。files.getで確認済みの
+    // 健全性そのものは変わらないため、呼び出し元(verifyFolderClaim)はこの記録スキップに
+    // 関わらず結果を返してよい(claimのメタデータ更新だけを見送る)。
+    if (existing?.state === 'divergent') {
+      console.warn(
+        `[driveFolderClaim] divergent状態のclaimをverify結果で上書きしません(人手介入待ち): "${name}"（親フォルダ: ${parentId}）`
+      );
+      return;
+    }
+
+    // codex review P1指摘対応(6巡目、recordFullScanResolutionと同じ理由): 直前に
+    // 'resolved'を確認してからこの書込みまでの間隙で、別プロセスが有効なリース内の
     // 'creating'attemptを開始していた場合、そのattemptIdを引き継いで上書きしてはならない
-    // (fencingトークン汚染防止)。files.getで確認済みの健全性そのものは変わらないため、
-    // 呼び出し元(verifyFolderClaim)はこの記録スキップに関わらず結果を返してよい。
+    // (fencingトークン汚染防止)。
     if (hasValidInFlightCreatingLease(existing)) {
       console.warn(
         `[driveFolderClaim] 進行中の他attemptのclaimをverify結果で上書きしません(fencingトークン汚染防止): "${name}"（親フォルダ: ${parentId}）`
@@ -780,6 +801,14 @@ export async function markDivergent(
   await firestore.runTransaction(async (tx) => {
     const snap = await tx.get(ref);
     const existing = snap.exists ? normalizeClaim(snap.data()!, parentId, name) : null;
+
+    // second-opinionレビュー指摘対応(read-only, 7巡目相当): 既にdivergent状態のclaimを
+    // 再書込みすると、最初に検知した`divergentReason`(人手介入時の調査手がかり)が
+    // 別の理由で上書きされ、証拠が失われてしまう。冪等に扱い、最初の検知を保持する。
+    if (existing?.state === 'divergent') {
+      return;
+    }
+
     const doc = stripUndefined({
       state: 'divergent' as const,
       folderId: existing?.folderId,
@@ -807,6 +836,37 @@ async function recordMiss(
   return firestore.runTransaction(async (tx) => {
     const snap = await tx.get(ref);
     const existing = snap.exists ? normalizeClaim(snap.data()!, parentId, name) : null;
+
+    // second-opinionレビュー指摘対応(read-only, 7巡目相当): 呼び出し元(verifyFolderClaim)が
+    // resolved claimを読んでからこのmiss記録までの間隙で、別プロセスがdivergentへ遷移
+    // させていた場合、無条件で上書きしてはならない(人手介入待ちシグナルの消失防止)。
+    if (existing?.state === 'divergent') {
+      console.warn(
+        `[driveFolderClaim] divergent状態のclaimをmiss記録で上書きしません(人手介入待ち): "${name}"（親フォルダ: ${parentId}）`
+      );
+      return { invalidated: false };
+    }
+    // 同様に、有効なリース内の'creating'(別プロセスの進行中attempt)を検知した場合も
+    // 上書きしない(fencingトークン汚染防止、他の書込み関数と同じ理由)。
+    if (hasValidInFlightCreatingLease(existing)) {
+      console.warn(
+        `[driveFolderClaim] 進行中の他attemptのclaimをmiss記録で上書きしません(fencingトークン汚染防止): "${name}"（親フォルダ: ${parentId}）`
+      );
+      return { invalidated: false };
+    }
+    // `existing`が既にresolvedなfolderIdを持たない(claim消滅・未resolved・invalidated
+    // 済み等)場合、`existing?.folderId`はundefinedになる。これを`state:'resolved'`の
+    // まま書き込むと、`isResolvedWithFolderId()`が'resolved'として認識できない不正な
+    // ドキュメントが残り、`invalidateAttempt`(state==='creating'のみ対象)でも
+    // 回収できない永久に詰まったclaimになる。このケースはmiss記録自体が無意味なので
+    // スキップする。
+    if (!existing || typeof existing.folderId !== 'string') {
+      console.warn(
+        `[driveFolderClaim] resolved folderIdを持たないclaimへのmiss記録をスキップします(既に無効化/未解決): "${name}"（親フォルダ: ${parentId}）`
+      );
+      return { invalidated: false };
+    }
+
     const nowMs = Date.now();
     const missCount = (existing?.missCount ?? 0) + 1;
     const firstMissAtMs = existing?.missCount ? (existing.firstMissAtMs ?? nowMs) : nowMs;

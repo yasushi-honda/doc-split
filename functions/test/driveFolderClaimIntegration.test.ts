@@ -24,6 +24,7 @@ import {
 } from '../src/drive/findOrCreateFolder';
 import {
   DivergentFolderClaimError,
+  FolderClaimRestoreCommitError,
   buildFolderLockId,
   commitResolvedWithRetry,
   invalidateResolvedClaimByFolderId,
@@ -260,6 +261,37 @@ describe('driveFolderClaim プロトコル(Issue #871)', () => {
       expect(result).to.equal('verify-id');
       expect(getCalls).to.have.lengthOf(1);
       expect(listCalls).to.have.lengthOf(0);
+    });
+
+    it('SOFT_TTL窓内でtrashedからの復元(untrash)自体は成功したが、直後のrecordVerification確定書込みに失敗するとFolderClaimRestoreCommitErrorをthrowする(second-opinionレビュー指摘対応、テストカバレッジ欠如の解消)', async () => {
+      await enableClaimRead();
+      await claimDocRef('parent-restorecommitfail', '復元失敗太郎').set({
+        state: 'resolved',
+        folderId: 'trashed-restore-fail-id',
+        attempt: null,
+        resolvedAtMs: Date.now() - 2 * 60 * 1000,
+        verifiedAtMs: Date.now() - 2 * 60 * 1000, // CREATE_TRUST_MS超過・SOFT_TTL_MS未満 → files.getのみ
+        parentId: 'parent-restorecommitfail',
+        name: '復元失敗太郎',
+      });
+      const { drive, updateCalls } = makeFakeDrive({
+        files: [
+          { id: 'trashed-restore-fail-id', name: '復元失敗太郎', parents: ['parent-restorecommitfail'], trashed: true },
+        ],
+      });
+      // recordVerification自体はリトライなしの単発runTransactionのため、1回目を失敗させれば十分。
+      const failingDb = makeFailingCommitFirestore(db, [1]);
+
+      try {
+        await findOrCreateFolder(drive, failingDb, 'parent-restorecommitfail', '復元失敗太郎');
+        expect.fail('FolderClaimRestoreCommitErrorがthrowされるべき');
+      } catch (error) {
+        expect(error).to.be.instanceOf(FolderClaimRestoreCommitError);
+        expect((error as FolderClaimRestoreCommitError).folderId).to.equal('trashed-restore-fail-id');
+      }
+      // Drive側のuntrash自体は成功していること(claim確定書込みの失敗とは独立)
+      expect(updateCalls).to.have.lengthOf(1);
+      expect(updateCalls[0].fileId).to.equal('trashed-restore-fail-id');
     });
 
     it('SOFT_TTL_MS(5分)超過後は完全検索(files.list)が復活し、AmbiguousFolderErrorの検知力も戻る', async () => {
