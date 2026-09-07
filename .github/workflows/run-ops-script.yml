@@ -168,6 +168,10 @@ on:
           - set-feature-flag --flag driveExport --value true
           - set-feature-flag --flag driveExport --value false --dry-run
           - set-feature-flag --flag driveExport --value false
+          - set-feature-flag --flag driveFolderClaimRead --value true --dry-run
+          - set-feature-flag --flag driveFolderClaimRead --value true
+          - set-feature-flag --flag driveFolderClaimRead --value false --dry-run
+          - set-feature-flag --flag driveFolderClaimRead --value false
           - set-drive-allowlist --set --dry-run
           - set-drive-allowlist --set
           - set-drive-allowlist --clear-empty --dry-run
