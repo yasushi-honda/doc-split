@@ -441,6 +441,15 @@ decision-maker承認（「正しいことを段階的かつ計画的にうっか
 
 **次の一手（次セッション再開点）**: 有効化から60時間後（目安2026-09-10 23:10 UTC以降）に`classify-drive-export-drift`をkanameoneで実行し、有効化前のベースライン（Phase 3最終確認、misplaced 42件〜49件台で推移）と比較して`misplaced`が増加していないことを確認する（計画書AC）。異常があれば`settings/features.driveFolderClaimRead: false`で即座にロールバック可能（shadowモードへ復帰、claim書き込みは継続するため既存挙動への影響はない）。
 
+**【知見・2026-09-08】cocoro Phase C待ちの間の事前点検（read-only、コード変更なし）**: kanameoneのロールアウト完了を受け、cocoro側でPhase C（クライアント側Drive OAuth接続）完了時に備えて先行点検を実施した。
+
+- コード鮮度: `functions/src/drive`配下、cocoroの最終デプロイ（2026-08-30、claimプロトコルPR-3+PR-4含む）以降に新規コミットなし。追加デプロイ不要
+- TTLポリシー: `driveFolderLocks.expireAt`は`ACTIVE`のまま維持を確認（ドリフトなし）
+- `driveExport`/`driveFolderClaimRead`とも未設定（Drive未接続の想定通り）
+- `check-customer-master-integrity`（read-only、Phase D=Drive export flag ON前の同姓同名衝突リスク可視化ツール）をcocoroで初実行: 顧客マスター86件、完全一致同姓同名[A]0組・表記ゆれ重複候補[B]0組（kanameoneのような衝突リスクなし）。ただしverified済み103件中**45件が顧客未確定でDrive export gateにブロックされる状態**（内訳: 顧客名未設定/sentinel値44件、customerId↔name乖離1件）。Drive連携とは無関係の既存運用バックログであり、Phase C完了後もこの45件は自動エクスポートされない(fail-visible設計通り)
+- customerId↔name乖離1件（`NeVG6FlTfuyntSl6NwUa`、customerName="冨山 マサ"）を個別調査: Firestore実測で原因判明。`customerCandidates`に同一ケアマネ(板垣亜紀子)配下の同姓別人2名(冨山瑞男`F8Utnydi44sHWbS4oaxs`/冨山マサ`NlHmL46fPTAxB3TvptoT`)が両方score100・exact matchで並び、システムは1件目customerIdを仮保持したまま`needsManualCustomerSelection:true`で人手確認待ちにしていた。`customerAmbiguityGate.ts`のgateは意図通りこれをブロック済みで、コード修正は不要と判断（decision-maker確認済み、AskUserQuestion経由）
+- **decision-maker判断**: 45件の顧客未確定バックログ解消は既存のFEレビューフロー任せとし、今回はIssue化・着手ともに見送り。Phase C完了作業の一部として着手判断する必要はない
+
 ## 【完了・2026-08-29】残存44件(→49件)の実態解明+kanameone担当者への確認依頼を報告文書に反映(送付は未実施)
 
 上記「次に必要なのは以下のいずれか」の両方に対応した。**kanameone側でDrive export破損documentが継続的に発生していないか、`classify-drive-export-drift`を`--care-manager`省略でテナント全体に対し再実行**（GitHub Actions run [33183923836](https://github.com/yasushi-honda/doc-split/actions/runs/33183923836)）したところ、Phase 3最終確認（8/28、44件）からわずか約1.5時間で残存が49件（trashed9+misplaced14+target-path-not-created5=28件、他blocked21件=segment-unresolvable17+ambiguous-path3+customer-unconfirmed1）へ自然増していることを確認。**新たに`wouldRestoreFolders`1件（「ケアプラン」フォルダ、影響3書類）も検出**（Phase 3実行時にはなかった別インスタンス）。
