@@ -450,6 +450,16 @@ decision-maker承認（「正しいことを段階的かつ計画的にうっか
 - customerId↔name乖離1件（`NeVG6FlTfuyntSl6NwUa`、customerName="冨山 マサ"）を個別調査: Firestore実測で原因判明。`customerCandidates`に同一ケアマネ(板垣亜紀子)配下の同姓別人2名(冨山瑞男`F8Utnydi44sHWbS4oaxs`/冨山マサ`NlHmL46fPTAxB3TvptoT`)が両方score100・exact matchで並び、システムは1件目customerIdを仮保持したまま`needsManualCustomerSelection:true`で人手確認待ちにしていた。`customerAmbiguityGate.ts`のgateは意図通りこれをブロック済みで、コード修正は不要と判断（decision-maker確認済み、AskUserQuestion経由）
 - **decision-maker判断**: 45件の顧客未確定バックログ解消は既存のFEレビューフロー任せとし、今回はIssue化・着手ともに見送り。Phase C完了作業の一部として着手判断する必要はない
 
+## 【要注意・2026-09-08】Gemini 3.5 Flash: asia-northeast1での従量課金は公式サポート対象外と判明（本番は継続稼働中、未解決の矛盾）
+
+decision-makerから「Gemini 3.5 FlashがGemini Enterprise Agent Platformで今の従量課金のまま使えなくなり、Googleとの個別契約が必要になる変更がありそうか」との質問を受け、公式ページ群をPlaywright MCPで直接確認した（一般知見は[[reference_vertex_ai_to_gemini_enterprise_2026]]参照）。
+
+**確認結果**: Standard/Priority/Flex PayGoの3ティア全て、gemini-3.5-flashは`global`エンドポイントのみ対応で、`asia-northeast1`を含むリージョナル/マルチリージョンエンドポイントは非対応と公式ドキュメント（最終更新2026-08-08 UTC、1ヶ月以上変化なし）に明記されている。日本(asia-northeast1)でのGemini推論を公式にサポートする唯一の経路は「シングルゾーン プロビジョンド スループット」で、これは購入にGoogle Cloudアカウント担当者への問い合わせ（個別契約）が必須。
+
+**doc-splitとの矛盾**: `functions/src/utils/config.ts`は`location: 'asia-northeast1'`を明示指定してVertex AI呼び出しを行っており、dev/kanameone/cocoro全環境で実際に**gemini-3.5-flashを継続的に呼び出し、過去7日間エラー0件で正常稼働中**（2026-09-08実測）。Provisioned Throughputの契約が結ばれている記録はCLAUDE.md/ADR/GOAL.mdのどこにも存在しない。つまり**公式には非サポートの構成が、理由不明のまま実際には動いている**状態。将来Googleがこれを技術的に締め出した場合、選択肢は(a)Single-Zone Provisioned Throughputをaccount rep経由で契約する(b)`global`エンドポイントに切替える(ただし日本データレジデンシー要件を満たせなくなり、要配慮個人情報を扱う本アプリのコンプライアンス方針と抵触しうる)の二択に絞られる。
+
+**現状**: 明確な将来アナウンス（廃止予告等）は見つからず、リスクは「今後変わるかも」ではなく「現状すでに公式非サポートの構成で本番運用中」という既存リスクとして扱うべき。decision-maker判断待ちにつき対応は未着手（Google Cloudアカウント担当者への確認、代替リージョン戦略の検討等は次回以降）。
+
 ## 【完了・2026-08-29】残存44件(→49件)の実態解明+kanameone担当者への確認依頼を報告文書に反映(送付は未実施)
 
 上記「次に必要なのは以下のいずれか」の両方に対応した。**kanameone側でDrive export破損documentが継続的に発生していないか、`classify-drive-export-drift`を`--care-manager`省略でテナント全体に対し再実行**（GitHub Actions run [33183923836](https://github.com/yasushi-honda/doc-split/actions/runs/33183923836)）したところ、Phase 3最終確認（8/28、44件）からわずか約1.5時間で残存が49件（trashed9+misplaced14+target-path-not-created5=28件、他blocked21件=segment-unresolvable17+ambiguous-path3+customer-unconfirmed1）へ自然増していることを確認。**新たに`wouldRestoreFolders`1件（「ケアプラン」フォルダ、影響3書類）も検出**（Phase 3実行時にはなかった別インスタンス）。
