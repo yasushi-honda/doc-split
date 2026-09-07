@@ -1,5 +1,5 @@
 ---
-updated: 2026-08-30
+updated: 2026-09-08
 ---
 <!-- 前ミッション(dev/kanameone/cocoro環境監査・保守検証)は2026-07-20完遂。全文はdocs/handoff/LATEST.md参照。 -->
 <!-- Google Drive連携Phase1 (MVP)実装ミッションは2026-07-22完了(PR#700マージ)。詳細は本ファイル末尾「Google Drive連携Phase1完遂」節+docs/handoff/LATEST.md参照。 -->
@@ -433,6 +433,13 @@ decision-maker承認（「正しいことを段階的かつ計画的にうっか
 **追記（2026-08-30、同日中）**: decision-maker確認「cocoroも同じ問題があるなら等しくアップデートすべきか」を受け整理。cocoroはDrive連携自体が未接続のため今この問題は発生し得ないが、Phase C完了後は同じ結果整合性の問題が理屈上起こりうる。**コードのデプロイ・TTLポリシー設定はshadowモードのため既存挙動に影響ゼロと判断し、cocoroにも先行して適用**（Firestore TTLポリシー`ACTIVE`実測確認、GitHub Actions「Deploy Cloud Functions」run [33308561046](https://github.com/yasushi-honda/doc-split/actions/runs/33308561046)完走、`onDocumentWriteDriveExport`updateTime`2026-08-30T11:25:24Z`でclaimプロトコル一式の反映を確認、`driveFolderClaimRead`未設定=shadowモードのままであることも確認）。**shadow観察・読み経路有効化はPhase C完了を待って改めて着手**（今観察しても実データが流れないため無意味）。
 
 **追記（2026-08-30、セッション終盤）**: kanameone担当者向けに、複数種類のFAX処理（対応完了）とフォルダ重複作成の不具合（中間報告・段階展開中）をまとめた統合HTML報告書（`html-brief`スキル、非エンジニア向け平易表現、内部用語なし）を作成・Playwright MCPで実機検証（コンソールエラー0件・コピーボタン8個全て正常動作）のうえdecision-makerへ送信完了。続けて残タスク（本Issue #871のshadow観察、複数人記載FAXの新規到着確認、Issue #881）を3分類で確認したところ、Issue #871・複数人記載FAXはいずれも外部trigger（時間経過／新規FAX到着）待ちで今は着手不可、**Issue #881はdecision-maker判断で見送り**（次回の定期作業枠で扱う、AskUserQuestion経由で確認済み）となり、即着手タスクなしでセッション終了。
+
+**【完了・2026-09-08】読み経路有効化（Phase 2）**: `/catchup`でFirestore実測（kanameone`driveFolderLocks`全1,609件→`state:resolved`100%・divergent 0件・missCount異常0件、shadow観察9日経過）により、計画書AC（claim/`files.get`/`files.list`の3者一致率）の健全性条件を充足したと判定。decision-maker明示認可（AskUserQuestion経由）を得て有効化した。
+
+- 前提整備: `driveFolderClaimRead`が`scripts/set-feature-flag.js`のKNOWN_FLAGSと`.github/workflows/run-ops-script.yml`のscript dropdownに未登録だったため、既存の`driveExport`と同型のエントリを追加（PR #884、decision-maker明示認可のうえマージ）
+- 実行: GitHub Actions「Run Operations Script」（`environment=kanameone`）で`set-feature-flag --flag driveFolderClaimRead --value true --dry-run`（run 34168756294、現在値`undefined`を確認）→`--dry-run`なし（run 34168906202）を実行し、`settings/features.driveFolderClaimRead: true`への反映を実測確認（`docsplit-kanameone`の`settings/features`全体: `driveExport:true, multiCustomerDetection:true, faxDuplication:false, driveFolderClaimRead:true`）
+
+**次の一手（次セッション再開点）**: 有効化から60時間後（目安2026-09-10 23:10 UTC以降）に`classify-drive-export-drift`をkanameoneで実行し、有効化前のベースライン（Phase 3最終確認、misplaced 42件〜49件台で推移）と比較して`misplaced`が増加していないことを確認する（計画書AC）。異常があれば`settings/features.driveFolderClaimRead: false`で即座にロールバック可能（shadowモードへ復帰、claim書き込みは継続するため既存挙動への影響はない）。
 
 ## 【完了・2026-08-29】残存44件(→49件)の実態解明+kanameone担当者への確認依頼を報告文書に反映(送付は未実施)
 
