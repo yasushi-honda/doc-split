@@ -61,6 +61,7 @@ import {
   updateDocumentInListCache,
   documentsInfiniteQueryKey,
   resetDocumentsInfiniteToFirstPage,
+  markDocumentsInfiniteVariantsDirty,
   type DocumentFilters,
   type SortField,
   type SortOrder,
@@ -448,7 +449,6 @@ export function DocumentsPage() {
     fetchNextPage,
     hasNextPage,
     isFetchingNextPage,
-    isStale: isDocumentsListStale,
     refetch: refetchDocuments,
   } = useInfiniteDocuments({ filters, pageSize: DOCUMENTS_PAGE_SIZE })
   // reset処理中(1ページ目へのリセット中)はIntersectionObserverによる自動次ページ取得を
@@ -469,25 +469,32 @@ export function DocumentsPage() {
     () => documentsInfiniteQueryKey(filters, DOCUMENTS_PAGE_SIZE),
     [filters]
   )
-  const filtersKey = useMemo(() => JSON.stringify(filters), [filters])
   const {
     hasUpdates: hasListUpdates,
     message: listUpdateMessage,
     resetBaseline: resetListUpdateBaseline,
-  } = useDocumentListRefresh({ isStale: isDocumentsListStale, filtersKey })
+  } = useDocumentListRefresh({ filters, pageSize: DOCUMENTS_PAGE_SIZE })
 
   /**
    * 一覧を1ページ目へ明示的にリセットする共通処理(2026-09-08、crossreview反映)。
    * バナー押下・アップロード成功(デバウンス後)・一括削除部分失敗の3箇所から共通で
    * 呼ばれる。スクロールを先に行う理由・isResettingの意図はuseInfiniteScroll.ts/
    * resetDocumentsInfiniteToFirstPageのコメント参照。
+   *
+   * 2026-09-08追記(codex review P2指摘): `documentStats`の再取得を明示的にawaitして
+   * から`resetListUpdateBaseline()`を呼ぶ。fire-and-forgetのinvalidateQueriesだけだと
+   * baseline確定時点でstatsキャッシュがまだ古いままの場合があり、直後にstatsが
+   * 反映されるとベースラインとの差分で誤って「更新があります」バナーが再表示されうる。
    */
   const refreshDocumentList = useCallback(async () => {
     setIsResetting(true)
     try {
       window.scrollTo({ top: 0 })
       await resetDocumentsInfiniteToFirstPage(queryClient, activeDocumentsQueryKey)
-      await refetchDocuments()
+      await Promise.all([
+        refetchDocuments(),
+        queryClient.refetchQueries({ queryKey: ['documentStats'] }),
+      ])
       resetListUpdateBaseline()
     } finally {
       setIsResetting(false)
@@ -516,7 +523,8 @@ export function DocumentsPage() {
   // refreshDocumentList()を呼ぶ(lodash未導入のため自前実装)。
   const uploadSuccessDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const handleUploadSuccess = useCallback(() => {
-    queryClient.invalidateQueries({ queryKey: ['documentStats'] })
+    // documentStatsの再取得はrefreshDocumentList内でawait付きで行う(codex review P2指摘、
+    // resetBaselineのタイミング参照)ため、ここでの個別invalidateは不要
     if (uploadSuccessDebounceRef.current) {
       clearTimeout(uploadSuccessDebounceRef.current)
     }
@@ -524,7 +532,7 @@ export function DocumentsPage() {
       uploadSuccessDebounceRef.current = null
       void refreshDocumentList()
     }, 300)
-  }, [queryClient, refreshDocumentList])
+  }, [refreshDocumentList])
 
   // 一括選択のトグル
   const handleSelectToggle = useCallback((docId: string, checked: boolean) => {
@@ -585,6 +593,9 @@ export function DocumentsPage() {
       })
       // 安全網: staleマークのみ(refetchType:'none')。表示更新は上記パッチが担う
       queryClient.invalidateQueries({ queryKey: ['documentsInfinite'], refetchType: 'none' })
+      // 2026-09-08追記(crossreview codex review P1指摘): isInvalidatedは他ミューテーションの
+      // setQueriesDataで暗黙にクリアされうるため、独立トラッキングも併用する
+      markDocumentsInfiniteVariantsDirty(queryClient)
       queryClient.invalidateQueries({ queryKey: ['documentStats'] })
       clearSelection()
       setBulkOperation(null)
@@ -666,8 +677,12 @@ export function DocumentsPage() {
       }
 
       // 表示は上記チャンクごとのパッチが既に反映済みのため、ここは安全網(stale
-      // マークのみ、即時再取得はしない)
+      // マークのみ、即時再取得はしない)。ステータス変更によりstatusフィルタ済み
+      // variantのメンバーシップが変わりうる(updateDocumentInListCacheは値のみ書換え、
+      // フィルタ離脱による非表示化はしない)ため、非アクティブな他variantを独立
+      // トラッキングでdirty化する(crossreview codex review P1指摘反映)。
       queryClient.invalidateQueries({ queryKey: ['documentsInfinite'], refetchType: 'none' })
+      markDocumentsInfiniteVariantsDirty(queryClient)
       queryClient.invalidateQueries({ queryKey: ['documentStats'] })
       // customerName/careManagerName等をクリアするためグルーピングキーから外れる書類が
       // 生じる。単体再処理(useReprocessDocument)と同じ理由でグループ表示キャッシュも
@@ -761,8 +776,9 @@ export function DocumentsPage() {
         void refreshDocumentList()
       } else {
         toast.success(`${results.length}件を削除しました`)
-        // 全件成功時は既存の楽観的削除の見た目のままでよい。安全網としてstale
-        // マークのみ行う(即時再取得はしない)
+        // 全件成功時は既存の楽観的削除の見た目のままでよい(削除は全variantから既に
+        // 除去済みのため、他variantを追加でdirty化する必要はない)。安全網として
+        // staleマークのみ行う(即時再取得はしない)
         queryClient.invalidateQueries({ queryKey: ['documentsInfinite'], refetchType: 'none' })
       }
 

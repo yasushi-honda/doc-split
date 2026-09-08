@@ -316,6 +316,12 @@ export function invalidateGroupQueries(queryClient: QueryClient): void {
  */
 export function invalidateDocumentAndGroupQueries(queryClient: QueryClient, documentId: string): void {
   queryClient.invalidateQueries({ queryKey: ['documentsInfinite'], refetchType: 'none' })
+  // 2026-09-08追記(crossreview codex review P1指摘): 上記invalidateQueriesの
+  // isInvalidatedは、呼び出し元が併せて行うupdateDocumentInListCache(setQueriesData)で
+  // 暗黙にクリアされてしまう(全variant一律、TanStack Query v5の仕様として実機確認済み)。
+  // フィルタ切替検知用のシグナルはmarkDocumentsInfiniteVariantsDirty(独立トラッキング、
+  // アクティブなvariantは自動的に除外される)を正とする。
+  markDocumentsInfiniteVariantsDirty(queryClient)
   queryClient.invalidateQueries({ queryKey: ['document', documentId] })
   invalidateGroupQueries(queryClient)
 }
@@ -676,6 +682,77 @@ export function documentsInfiniteQueryKey(filters: DocumentFilters, pageSize: nu
   return ['documentsInfinite', filters, pageSize] as const
 }
 
+// ============================================
+// documentsInfinite variant「dirty(要更新)」トラッキング
+// ============================================
+//
+// 2026-09-08追記(/plan-crossreview経由のcodex review P1指摘、実機検証で確認):
+// TanStack Query v5の`setQueryData`/`setQueriesData`は、書込み成功時に対象queryの
+// `isInvalidated`を暗黙にfalseへリセットする。これは`updateDocumentInListCache`
+// (編集保存・単体/一括再処理・一括確認等、非常に高頻度に呼ばれる)が`['documentsInfinite']`
+// 部分一致で全variantへ`setQueriesData`するたびに、無関係な操作で他variantの
+// staleマーク(invalidateQueries(...,{refetchType:'none'})によるフィルタ切替検知用の
+// シグナル)を意図せず消してしまうことを意味する。TanStack内部のisInvalidated/isStale
+// はこの用途の永続的なシグナルとして信頼できないため、意図的に独立させた
+// 軽量トラッキングを用意する。
+//
+// 「現在画面表示中(observerが付いている)のvariantは、対応するミューテーションが
+// updateDocumentInListCacheで既にパッチ済み」という既存の呼び出し規約を前提に、
+// `query.isActive()`でアクティブなvariantを判定しdirty化の対象から除外する
+// (アクティブなvariantを誤ってdirty化すると、編集直後にもかかわらず不要な
+// 「更新があります」バナーが出てしまう)。
+
+type DirtyStoreListener = () => void
+
+const dirtyDocumentsInfiniteVariants = new Set<string>()
+const dirtyStoreListeners = new Set<DirtyStoreListener>()
+
+function dirtyKeyOf(queryKey: readonly unknown[]): string {
+  return JSON.stringify(queryKey)
+}
+
+function notifyDirtyStoreListeners(): void {
+  dirtyStoreListeners.forEach((listener) => listener())
+}
+
+/**
+ * 現在observerが付いていない(=画面に表示されていない)全`documentsInfinite`variantを
+ * dirty化する。単体編集・単体/一括再処理・一括確認・PDF分割・Driveエクスポート再試行等、
+ * `documentsInfinite`へ影響しうる全てのミューテーション成功/失敗ハンドラから呼ぶ。
+ */
+export function markDocumentsInfiniteVariantsDirty(queryClient: QueryClient): void {
+  const queries = queryClient.getQueryCache().findAll({ queryKey: ['documentsInfinite'] })
+  let changed = false
+  queries.forEach((q) => {
+    if (q.isActive()) return
+    const key = dirtyKeyOf(q.queryKey)
+    if (!dirtyDocumentsInfiniteVariants.has(key)) {
+      dirtyDocumentsInfiniteVariants.add(key)
+      changed = true
+    }
+  })
+  if (changed) notifyDirtyStoreListeners()
+}
+
+/** 指定したqueryKeyのdirtyフラグを解除する(バナー経由のリセットが成功した後に呼ぶ) */
+export function clearDocumentsInfiniteVariantDirty(queryKey: readonly unknown[]): void {
+  if (dirtyDocumentsInfiniteVariants.delete(dirtyKeyOf(queryKey))) {
+    notifyDirtyStoreListeners()
+  }
+}
+
+export function isDocumentsInfiniteVariantDirty(queryKey: readonly unknown[]): boolean {
+  return dirtyDocumentsInfiniteVariants.has(dirtyKeyOf(queryKey))
+}
+
+/** `useSyncExternalStore`用のsubscribe関数(`useDocumentListRefresh.ts`が使用) */
+export function subscribeDocumentsInfiniteDirtyStore(listener: DirtyStoreListener): () => void {
+  dirtyStoreListeners.add(listener)
+  return () => {
+    dirtyStoreListeners.delete(listener)
+  }
+}
+
 /**
  * 無限スクロール対応版の書類一覧取得
  *
@@ -749,14 +826,24 @@ export async function resetDocumentsInfiniteToFirstPage(
   await queryClient.cancelQueries({ queryKey: activeQueryKey })
 
   // 2. ['documentsInfinite']部分一致の全variant(アクティブなものも含む)を一律stale化する。
-  //    refetchType:'none'のため即時再取得はしない。
+  //    refetchType:'none'のため即時再取得はしない。TanStack内部のisInvalidatedは
+  //    他のミューテーションのsetQueriesData呼び出しで後から意図せず消えうる
+  //    (下記3参照)ため、フィルタ切替検知の主シグナルとしては信頼せず、
+  //    markDocumentsInfiniteVariantsDirty(独立トラッキング)を正とする。
   queryClient.invalidateQueries({ queryKey: ['documentsInfinite'], refetchType: 'none' })
 
+  // 2026-09-08追記(crossreview codex review P1指摘): 非アクティブな他variantを
+  // 独立したdirtyストアでもマークする(このvariantが表示されていない間に別の
+  // ミューテーションがsetQueriesDataでisInvalidatedを暗黙にクリアしても、
+  // このシグナルは影響を受けない)。アクティブなvariant自身は対象外
+  // (query.isActive()で自動的にスキップされる)。
+  markDocumentsInfiniteVariantsDirty(queryClient)
+  // アクティブなvariantはこの後すぐ切り詰め→呼び出し側のrefetch()で最新化されるため、
+  // 万一過去にdirty化されていた場合に備えて明示的に解除しておく。
+  clearDocumentsInfiniteVariantDirty(activeQueryKey)
+
   // 3. アクティブなvariantのみ、pages/pageParamsとも先頭1件に切り詰める。他のvariantの
-  //    データは一切書き換えない(手順2でstale化されたまま残す。呼び出し側のrefetch()が
-  //    成功すればこのvariantのstaleは解消されるが、他variantはstaleのまま残り、後で
-  //    そのフィルタへ切り替えた際にuseDocumentListRefreshのhasUpdatesがtrueになって
-  //    バナーが自然に出る)。
+  //    データは一切書き換えない。
   queryClient.setQueryData(
     activeQueryKey,
     (old: { pages: DocumentListResult[]; pageParams: unknown[] } | undefined) => {

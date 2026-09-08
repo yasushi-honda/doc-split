@@ -12,6 +12,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { collection, query, where, getDocs, Timestamp } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import { callFunction } from '@/lib/callFunction'
+import { markDocumentsInfiniteVariantsDirty } from './useDocuments'
 import type { DriveExportStatus } from '@shared/types'
 
 export interface DriveExportErrorRow {
@@ -86,6 +87,9 @@ export function useRetryDriveExport() {
       // 再取得は発火させない)。一覧表示自体はこのエラー一覧画面から遷移しないと
       // 見えないため、バナー経由のユーザー起点リセットで十分。
       queryClient.invalidateQueries({ queryKey: ['documentsInfinite'], refetchType: 'none' })
+      // 2026-09-08追記(crossreview codex review P1指摘): isInvalidatedは他ミューテーションの
+      // setQueriesDataで暗黙にクリアされうるため、独立トラッキングも併用する
+      markDocumentsInfiniteVariantsDirty(queryClient)
       queryClient.invalidateQueries({ queryKey: ['documentDetail', docId] })
     },
     // code-review指摘#64対応(2026-07-22): 呼び出し自体がthrowするケース(例:

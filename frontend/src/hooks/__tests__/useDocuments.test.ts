@@ -752,10 +752,19 @@ describe('applySearchTextFilter (ADR-0018 Phase D、Issue #547: ocrResult条件�
   })
 })
 
+// markDocumentsInfiniteVariantsDirty(queryClient.getQueryCache().findAll(...)を使う)向けの
+// 最小スタブ。invalidateDocumentAndGroupQueries等、内部でこれを呼ぶ関数のテストで共通利用する。
+function withGetQueryCacheStub(invalidateQueries: ReturnType<typeof vi.fn>): QueryClient {
+  return {
+    invalidateQueries,
+    getQueryCache: () => ({ findAll: () => [] }),
+  } as unknown as QueryClient
+}
+
 describe('invalidateDocumentAndGroupQueries (2026-08-06: useDocumentEdit/useReprocessDocument/useUpdateDocument/useReprocessErrorで独立に発生していたグループ表示キャッシュinvalidate漏れの一本化)', () => {
   it('documentsInfinite/document本体/documentGroups/groupDocuments/groupStatsの5種類を全てinvalidateする', () => {
     const invalidateQueries = vi.fn()
-    const queryClient = { invalidateQueries } as unknown as QueryClient
+    const queryClient = withGetQueryCacheStub(invalidateQueries)
 
     invalidateDocumentAndGroupQueries(queryClient, 'doc-123')
 
@@ -773,7 +782,7 @@ describe('invalidateDocumentAndGroupQueries (2026-08-06: useDocumentEdit/useRepr
 
   it('documentsInfiniteのみrefetchType:noneを指定する(2026-09-08: Firestore読み取り過大バグ修正。全ページ再取得を自動発火させないため)', () => {
     const invalidateQueries = vi.fn()
-    const queryClient = { invalidateQueries } as unknown as QueryClient
+    const queryClient = withGetQueryCacheStub(invalidateQueries)
 
     invalidateDocumentAndGroupQueries(queryClient, 'doc-123')
 
@@ -810,6 +819,9 @@ describe('resetDocumentsInfiniteToFirstPage (crossreview High #3反映)', () => 
       cancelQueries: vi.fn().mockResolvedValue(undefined),
       invalidateQueries: vi.fn(),
       setQueryData: vi.fn(),
+      // markDocumentsInfiniteVariantsDirty/clearDocumentsInfiniteVariantDirty
+      // (独立トラッキング、crossreview codex review P1指摘反映)向けの最小スタブ
+      getQueryCache: () => ({ findAll: () => [] }),
     } as unknown as QueryClient & {
       cancelQueries: ReturnType<typeof vi.fn>
       invalidateQueries: ReturnType<typeof vi.fn>

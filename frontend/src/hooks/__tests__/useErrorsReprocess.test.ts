@@ -45,10 +45,12 @@ vi.mock('../../lib/firebase', () => ({
 const mockAppendReprocessClearToBatch = vi.fn().mockResolvedValue(false)
 const mockInvalidateDocumentAndGroupQueries = vi.fn()
 const mockUpdateDocumentInListCache = vi.fn()
+const mockMarkDocumentsInfiniteVariantsDirty = vi.fn()
 vi.mock('../useDocuments', () => ({
   appendReprocessClearToBatch: (...args: unknown[]) => mockAppendReprocessClearToBatch(...args),
   invalidateDocumentAndGroupQueries: (...args: unknown[]) => mockInvalidateDocumentAndGroupQueries(...args),
   updateDocumentInListCache: (...args: unknown[]) => mockUpdateDocumentInListCache(...args),
+  markDocumentsInfiniteVariantsDirty: (...args: unknown[]) => mockMarkDocumentsInfiniteVariantsDirty(...args),
 }))
 
 const mockInvalidateQueries = vi.fn()
