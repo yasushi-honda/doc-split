@@ -19,6 +19,9 @@ import {
   invalidateDocumentAndGroupQueries,
   resetDocumentsInfiniteToFirstPage,
   documentsInfiniteQueryKey,
+  markDocumentsInfiniteVariantsDirty,
+  isDocumentsInfiniteVariantDirty,
+  clearDocumentsInfiniteVariantDirty,
 } from '../useDocuments'
 import type { Document } from '@shared/types'
 
@@ -892,5 +895,51 @@ describe('resetDocumentsInfiniteToFirstPage (crossreview High #3反映)', () => 
     await resetDocumentsInfiniteToFirstPage(queryClient, activeKey)
 
     expect(callOrder).toEqual(['cancelQueries', 'invalidateQueries', 'setQueryData'])
+  })
+})
+
+// 2026-09-08追記: codex reviewが3周にわたって発見した指摘(古いisStale依存、
+// アクティブvariant除外による膜シップ変更見落とし、refetch失敗時の早すぎるdirty解除)を
+// 踏まえ、「documentsInfiniteに影響しうる操作は全variantを一律dirty化し、解除は対象
+// variantの実際のfetch成功を確認してから呼び出し側が行う」という単純なルールに統一した。
+// ここではその単純化されたルール自体を実際のQueryClientで検証する(モックの
+// getQueryCacheスタブでは検証できないため、実物を使う)。
+describe('markDocumentsInfiniteVariantsDirty / isDocumentsInfiniteVariantDirty / clearDocumentsInfiniteVariantDirty (crossreview codex review 3周目反映)', () => {
+  // 注意: dirtyDocumentsInfiniteVariantsはモジュールレベルの共有状態のため、他describe
+  // ブロック(resetDocumentsInfiniteToFirstPage等)と衝突しないよう、ここでのみ使う
+  // 一意なfiltersを使う(customerNameにマーカー文字列を仕込む)。
+  it('["documentsInfinite"]部分一致の全variantをdirty化する(画面表示中かどうかを問わない)', async () => {
+    const { QueryClient } = await import('@tanstack/react-query')
+    const queryClient = new QueryClient()
+    const keyA = documentsInfiniteQueryKey({ customerName: 'dirty-store-test-marker-a' as const }, 100)
+    const keyB = documentsInfiniteQueryKey({ customerName: 'dirty-store-test-marker-b' as const }, 100)
+    queryClient.setQueryData(keyA, { pages: [], pageParams: [] })
+    queryClient.setQueryData(keyB, { pages: [], pageParams: [] })
+
+    markDocumentsInfiniteVariantsDirty(queryClient)
+
+    expect(isDocumentsInfiniteVariantDirty(keyA)).toBe(true)
+    expect(isDocumentsInfiniteVariantDirty(keyB)).toBe(true)
+
+    queryClient.clear()
+  })
+
+  it('dirty化されたvariantはclearDocumentsInfiniteVariantDirtyを呼ぶまでdirtyのまま残る(refetch失敗時にバナーが消えないことの根拠)', async () => {
+    const { QueryClient } = await import('@tanstack/react-query')
+    const queryClient = new QueryClient()
+    const key = documentsInfiniteQueryKey({ customerName: 'dirty-store-test-marker-c' as const }, 100)
+    queryClient.setQueryData(key, { pages: [], pageParams: [] })
+
+    markDocumentsInfiniteVariantsDirty(queryClient)
+    expect(isDocumentsInfiniteVariantDirty(key)).toBe(true)
+
+    // refetch失敗を模して、あえてclearを呼ばない → dirtyのまま
+    expect(isDocumentsInfiniteVariantDirty(key)).toBe(true)
+
+    // refetch成功を模して明示的にclearを呼ぶ → dirty解除
+    clearDocumentsInfiniteVariantDirty(key)
+    expect(isDocumentsInfiniteVariantDirty(key)).toBe(false)
+
+    queryClient.clear()
   })
 })

@@ -320,7 +320,8 @@ export function invalidateDocumentAndGroupQueries(queryClient: QueryClient, docu
   // isInvalidatedは、呼び出し元が併せて行うupdateDocumentInListCache(setQueriesData)で
   // 暗黙にクリアされてしまう(全variant一律、TanStack Query v5の仕様として実機確認済み)。
   // フィルタ切替検知用のシグナルはmarkDocumentsInfiniteVariantsDirty(独立トラッキング、
-  // アクティブなvariantは自動的に除外される)を正とする。
+  // アクティブなvariantも含めて全variantをdirty化する。バナー押下時にrefetch成功を
+  // 確認してから呼び出し側がアクティブなvariantのみ明示的に解除する)を正とする。
   markDocumentsInfiniteVariantsDirty(queryClient)
   queryClient.invalidateQueries({ queryKey: ['document', documentId] })
   invalidateGroupQueries(queryClient)
@@ -686,7 +687,7 @@ export function documentsInfiniteQueryKey(filters: DocumentFilters, pageSize: nu
 // documentsInfinite variant「dirty(要更新)」トラッキング
 // ============================================
 //
-// 2026-09-08追記(/plan-crossreview経由のcodex review P1指摘、実機検証で確認):
+// 2026-09-08追記(/plan-crossreview経由のcodex review 3周にわたる指摘、実機検証で確認):
 // TanStack Query v5の`setQueryData`/`setQueriesData`は、書込み成功時に対象queryの
 // `isInvalidated`を暗黙にfalseへリセットする。これは`updateDocumentInListCache`
 // (編集保存・単体/一括再処理・一括確認等、非常に高頻度に呼ばれる)が`['documentsInfinite']`
@@ -696,11 +697,19 @@ export function documentsInfiniteQueryKey(filters: DocumentFilters, pageSize: nu
 // はこの用途の永続的なシグナルとして信頼できないため、意図的に独立させた
 // 軽量トラッキングを用意する。
 //
-// 「現在画面表示中(observerが付いている)のvariantは、対応するミューテーションが
-// updateDocumentInListCacheで既にパッチ済み」という既存の呼び出し規約を前提に、
-// `query.isActive()`でアクティブなvariantを判定しdirty化の対象から除外する
-// (アクティブなvariantを誤ってdirty化すると、編集直後にもかかわらず不要な
-// 「更新があります」バナーが出てしまう)。
+// 設計方針(単純化): 当初は`query.isActive()`でアクティブなvariant(画面表示中)を
+// dirty化の対象から除外していたが、これは「アクティブなvariantは対応するミューテーションが
+// updateDocumentInListCacheで既にパッチ済み」という前提に依存しており、実際には
+// 値の書換えのみでメンバーシップ変更(例: statusフィルタ中の書類を再処理してstatusが
+// 変わった場合、そのフィルタから外れるべきだが行としては残り続ける)を反映できない
+// ケースで、表示中の一覧が古いまま気付かれない不具合を生んだ(codex review 3周目 P1指摘)。
+// **「documentsInfiniteに影響しうる操作は、アクティブ/非アクティブを問わず全variantを
+// dirty化する。dirtyフラグは対象variantの実際のfetchが成功したことを呼び出し側
+// (DocumentsPage.tsx `refreshDocumentList`)が確認してから明示的に解除する」という
+// 単純だが安全側に倒したルールに統一する**。トレードオフとして、自分で行った編集の
+// 直後にも「更新があります」バナーが出ることがあるが、バナー押下は1ページ分の
+// 軽量な再取得に過ぎず、これは許容する(cf. 今回のバグ本体である「読み込み済み全ページの
+// 自動再取得」とは全く異なるコスト規模)。
 
 type DirtyStoreListener = () => void
 
@@ -716,15 +725,14 @@ function notifyDirtyStoreListeners(): void {
 }
 
 /**
- * 現在observerが付いていない(=画面に表示されていない)全`documentsInfinite`variantを
- * dirty化する。単体編集・単体/一括再処理・一括確認・PDF分割・Driveエクスポート再試行等、
+ * `['documentsInfinite']`部分一致の全variant(画面表示中のものを含む)をdirty化する。
+ * 単体編集・単体/一括再処理・一括確認・PDF分割・Driveエクスポート再試行等、
  * `documentsInfinite`へ影響しうる全てのミューテーション成功/失敗ハンドラから呼ぶ。
  */
 export function markDocumentsInfiniteVariantsDirty(queryClient: QueryClient): void {
   const queries = queryClient.getQueryCache().findAll({ queryKey: ['documentsInfinite'] })
   let changed = false
   queries.forEach((q) => {
-    if (q.isActive()) return
     const key = dirtyKeyOf(q.queryKey)
     if (!dirtyDocumentsInfiniteVariants.has(key)) {
       dirtyDocumentsInfiniteVariants.add(key)
@@ -734,7 +742,13 @@ export function markDocumentsInfiniteVariantsDirty(queryClient: QueryClient): vo
   if (changed) notifyDirtyStoreListeners()
 }
 
-/** 指定したqueryKeyのdirtyフラグを解除する(バナー経由のリセットが成功した後に呼ぶ) */
+/**
+ * 指定したqueryKeyのdirtyフラグを解除する。
+ * **呼び出し側は対象variantの実際のfetchが成功したことを確認してから呼ぶこと**
+ * (2026-09-08追記、codex review 3周目 P2指摘: refetch失敗時にdirtyフラグだけ先に
+ * 解除してしまうと、自動再取得を全て無効化した現設計では他に「要更新」を知らせる
+ * 手段がなくなり、バナーが永久に出なくなる)。
+ */
 export function clearDocumentsInfiniteVariantDirty(queryKey: readonly unknown[]): void {
   if (dirtyDocumentsInfiniteVariants.delete(dirtyKeyOf(queryKey))) {
     notifyDirtyStoreListeners()
@@ -809,7 +823,11 @@ export function useInfiniteDocuments(options: UseDocumentsOptions = {}) {
  *    画面が下にスクロールされたままだと`IntersectionObserver`が反応し次ページ取得が
  *    再発火するため、呼び出し側は`useInfiniteScroll`の`disabled`をtrueにした上で呼ぶ)
  * 2. 本関数を呼ぶ(cancelQueries→全variant一律stale化→アクティブvariantのみ切り詰め)
- * 3. 呼び出し側が`refetch()`をアクティブなvariantに対して実行する
+ * 3. 呼び出し側が`refetch()`をアクティブなvariantに対して実行し、**成功を確認してから**
+ *    `clearDocumentsInfiniteVariantDirty(activeQueryKey)`を呼ぶ(本関数はこのvariantの
+ *    dirtyフラグをここでは解除しない。2026-09-08追記、codex review 3周目 P2指摘:
+ *    refetch失敗時にフラグだけ先に解除すると、自動再取得を全廃した現設計では
+ *    「要更新」を知らせる手段が失われバナーが永久に出なくなる)
  *
  * `activeQueryKey`は`documentsInfiniteQueryKey(filters, pageSize)`で組み立てた、
  * 現在表示中のvariantと完全一致するqueryKey。
@@ -832,15 +850,9 @@ export async function resetDocumentsInfiniteToFirstPage(
   //    markDocumentsInfiniteVariantsDirty(独立トラッキング)を正とする。
   queryClient.invalidateQueries({ queryKey: ['documentsInfinite'], refetchType: 'none' })
 
-  // 2026-09-08追記(crossreview codex review P1指摘): 非アクティブな他variantを
-  // 独立したdirtyストアでもマークする(このvariantが表示されていない間に別の
-  // ミューテーションがsetQueriesDataでisInvalidatedを暗黙にクリアしても、
-  // このシグナルは影響を受けない)。アクティブなvariant自身は対象外
-  // (query.isActive()で自動的にスキップされる)。
+  // 独立したdirtyストアでも全variant(アクティブなものも含む)をマークする。呼び出し側が
+  // refetch成功を確認した後にアクティブなvariantのみ明示的に解除する(上記の呼び出し手順3参照)。
   markDocumentsInfiniteVariantsDirty(queryClient)
-  // アクティブなvariantはこの後すぐ切り詰め→呼び出し側のrefetch()で最新化されるため、
-  // 万一過去にdirty化されていた場合に備えて明示的に解除しておく。
-  clearDocumentsInfiniteVariantDirty(activeQueryKey)
 
   // 3. アクティブなvariantのみ、pages/pageParamsとも先頭1件に切り詰める。他のvariantの
   //    データは一切書き換えない。

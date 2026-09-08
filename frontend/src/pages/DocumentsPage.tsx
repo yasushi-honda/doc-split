@@ -62,6 +62,7 @@ import {
   documentsInfiniteQueryKey,
   resetDocumentsInfiniteToFirstPage,
   markDocumentsInfiniteVariantsDirty,
+  clearDocumentsInfiniteVariantDirty,
   type DocumentFilters,
   type SortField,
   type SortOrder,
@@ -485,17 +486,26 @@ export function DocumentsPage() {
    * から`resetListUpdateBaseline()`を呼ぶ。fire-and-forgetのinvalidateQueriesだけだと
    * baseline確定時点でstatsキャッシュがまだ古いままの場合があり、直後にstatsが
    * 反映されるとベースラインとの差分で誤って「更新があります」バナーが再表示されうる。
+   *
+   * 2026-09-08追記(codex review 3周目 P2指摘): TanStack Queryの`refetch()`はデフォルトでは
+   * 失敗してもPromiseをrejectしない(`QueryObserverResult`を解決値として返すだけ)。
+   * そのため`try/catch`ではなく戻り値の`isSuccess`を明示的に確認してから
+   * dirtyフラグ解除・baseline更新を行う。失敗時はどちらも据え置き、バナーが
+   * 表示され続けて再試行を促す(自動再取得を全廃した現設計での唯一の「要更新」通知経路)。
    */
   const refreshDocumentList = useCallback(async () => {
     setIsResetting(true)
     try {
       window.scrollTo({ top: 0 })
       await resetDocumentsInfiniteToFirstPage(queryClient, activeDocumentsQueryKey)
-      await Promise.all([
+      const [documentsResult] = await Promise.all([
         refetchDocuments(),
         queryClient.refetchQueries({ queryKey: ['documentStats'] }),
       ])
-      resetListUpdateBaseline()
+      if (documentsResult.isSuccess) {
+        clearDocumentsInfiniteVariantDirty(activeDocumentsQueryKey)
+        resetListUpdateBaseline()
+      }
     } finally {
       setIsResetting(false)
     }

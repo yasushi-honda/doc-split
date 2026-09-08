@@ -19,13 +19,18 @@ import {
  *
  * 検知シグナルは2種類のORで構成する:
  * 1. `isDocumentsInfiniteVariantDirty`(useDocuments.tsの独立トラッキング):
- *    フィルタを切り替えて以前訪れたvariantに戻った際に、他フィルタ表示中に行われた
- *    更新を検知する。2026-09-08追記(codex review P1指摘): 当初はTanStack Query
- *    自体の`isStale`を使っていたが、`setQueriesData`(`updateDocumentInListCache`等が
- *    高頻度に使う)が対象variantの`isInvalidated`を暗黙にクリアしてしまうため
- *    (実機検証で確認)、フィルタ切替検知の永続シグナルとしては信頼できないと判明。
- *    TanStackの内部状態から独立したトラッキングに置き換えた。
- * 2. `useDocumentStats()`（既存の軽量集計、30秒間隔で既に稼働中）のシグネチャ変化。
+ *    現在表示中のvariant自身を含め、`documentsInfinite`に影響しうる操作が行われる
+ *    たびにdirty化される。解除は対象variantの実際のfetchが成功した時のみ
+ *    (`DocumentsPage.tsx`の`refreshDocumentList`参照)。2026-09-08追記
+ *    (codex review 3周にわたる指摘): 当初はTanStack Query自体の`isStale`を使い、
+ *    さらに「画面表示中のvariantは除外する」最適化を試みたが、いずれも
+ *    (1) `setQueriesData`(`updateDocumentInListCache`等が高頻度に使う)が対象variantの
+ *    `isInvalidated`を暗黙にクリアする、(2) 除外したアクティブなvariant自身の
+ *    メンバーシップ変更(statusフィルタ中の書類のstatusが変わった場合等)を
+ *    検知できなくなる、という2つの実害を招いた。「全variant一律dirty化、解除は
+ *    確認済み成功のみ」という単純だが安全側に倒したルールに統一した。
+ * 2. `useDocumentStats()`（既存の軽量集計、30秒間隔で既に稼働中、フィルタに関わらず
+ *    全体件数を見るグローバルな指標）のシグネチャ変化。
  *
  * 既知の限界: 件数が変わらない編集(他ユーザーによる顧客名修正等)は検知できない。
  * バナー文言は「処理状況・件数の変化」に限定し、「すべての更新」を保証する表現には
@@ -70,7 +75,6 @@ export function useDocumentListRefresh({
   const { data: stats } = useDocumentStats()
 
   const activeQueryKey = documentsInfiniteQueryKey(filters, pageSize)
-  const filtersKey = JSON.stringify(activeQueryKey)
 
   const isDirty = useSyncExternalStore(
     subscribeDocumentsInfiniteDirtyStore,
@@ -78,28 +82,21 @@ export function useDocumentListRefresh({
   )
 
   const baselineRef = useRef<{ signature: string; total: number } | null>(null)
-  const prevFiltersKeyRef = useRef<string>(filtersKey)
-  // ベースライン未設定 / フィルタ変化を検知した瞬間に再計算するためのトリガー
+  // ベースライン未設定の間、stats到着時に再計算するためのトリガー
   const [, forceRecompute] = useState(0)
 
-  // 初回のstats到着時にベースラインを確定する
+  // 初回のstats到着時にベースラインを確定する。
+  // 2026-09-08追記(codex review 3周目 P2指摘の反証的検証で判明): `useDocumentStats()`は
+  // 現在のフィルタに関わらず全ステータス横断のグローバル件数を返すため、フィルタ切替時に
+  // ベースラインを再計算する必要はない(以前はフィルタ変更のたびにリセットしていたが、
+  // これは「フィルタを切り替えて元に戻ると、切替前に検知していた更新シグナルが失われる」
+  // 不具合の原因だったため撤去した)。
   useEffect(() => {
     if (baselineRef.current === null && stats) {
       baselineRef.current = { signature: buildStatsSignature(stats) as string, total: stats.total }
       forceRecompute((n) => n + 1)
     }
   }, [stats])
-
-  // フィルタ変更を検知したらベースラインをリセットする
-  useEffect(() => {
-    if (prevFiltersKeyRef.current !== filtersKey) {
-      prevFiltersKeyRef.current = filtersKey
-      if (stats) {
-        baselineRef.current = { signature: buildStatsSignature(stats) as string, total: stats.total }
-        forceRecompute((n) => n + 1)
-      }
-    }
-  }, [filtersKey, stats])
 
   const currentSignature = buildStatsSignature(stats)
   const baseline = baselineRef.current
