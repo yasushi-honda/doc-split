@@ -460,6 +460,22 @@ decision-makerから「Gemini 3.5 FlashがGemini Enterprise Agent Platformで今
 
 **現状**: 明確な将来アナウンス（廃止予告等）は見つからず、リスクは「今後変わるかも」ではなく「現状すでに公式非サポートの構成で本番運用中」という既存リスクとして扱うべき。decision-maker判断待ちにつき対応は未着手（Google Cloudアカウント担当者への確認、代替リージョン戦略の検討等は次回以降）。
 
+## 【要修正・2026-09-08】kanameoneの請求内訳調査で判明: 無限スクロール自動再取得によるFirestore読み取り過多
+
+decision-makerがGCP費用の表（kanameone 2026年8月請求、合計¥100,760）を提示。内訳は App Engine ¥71,859(71.3%)・Vertex AI ¥19,236(19.1%)・税金 ¥9,160。**「App Engine」はGoogleの請求カテゴリ上の名称で、実体はCloud Firestoreの費用**（Firestoreの前身Datastoreの経緯によりBilling Catalog上も同一service ID配下、Cloud Billing Catalog APIで確認）。
+
+**実測（Cloud Monitoring、2026年8月）**:
+- ドキュメント読み取り: **4億6,301万回/月**（書き込み132万回・削除5,088回は正常範囲、ストレージ1.79GBも軽微）
+- 読み取り種別の内訳: QUERY(`.where()`等の集合クエリ) 4億6,038万9,845回(99.4%) / LOOKUP(ID直接取得) 231万回(0.5%)
+- 時間帯パターン: 深夜1〜8時JSTは約2,000〜3,400回/時（アイドル）、9〜24時JSTは常時130万〜330万回/時
+- 同時接続数: ピークでも1〜3（多数タブではなく少数セッションの長時間滞在）
+
+**除外できた候補**（コード確認・実測で反証）: リアルタイムリスナー(`onSnapshot`、アクティブ0件)、`searchDocuments`検索機能(月888回のみ)、`rebuildAllGroupAggregations`等の全件スキャン関数(呼び出し元が存在せず未使用)、`processOCR`のレスキュークエリ群(全て`.limit()`付き)。Cloud Traceでの過去分追跡も試みたが、対象関数がイベント/スケジュールトリガーで詳細トレースが記録されておらず不可能だった。
+
+**確定した根本原因**（ローカルFirebaseエミュレータ+実コードで再現実験、本番非接触）: `frontend/src/hooks/useDocuments.ts`の`useInfiniteDocuments`（`DocumentsPage.tsx`のメイン書類一覧が使用、無限スクロール）に`refetchInterval: 30000`が設定されており、**TanStack Query v5の`useInfiniteQuery`は自動再取得のたびに読み込み済みの全ページを再取得する**仕様。370件のテストデータで4ページ分スクロール済みの状態を再現したところ、30秒ごとに正確に368件（101+101+101+65）が再取得される定常パターンを3サイクル連続で確認。本番(11,108件)でスタッフが一覧を深くスクロールするほど、この再取得コストは線形に増加する。同時接続数1〜3・QUERY型99.4%・業務時間帯相関という実測パターンと完全に整合する。
+
+**次の一手（decision-maker判断待ち、未着手）**: 修正方針の候補は①1ページ目のみ再取得するよう変更②再取得間隔を大幅に延長③ポーリングをリアルタイムリスナー(`onSnapshot`)に置き換え、のいずれか。現在の30秒間隔ポーリングは「OCR処理中のステータス更新をリアルタイムに近い形で反映する」目的（コード内コメント記載）のため、UX低下を避けつつ修正する設計判断が必要。
+
 ## 【完了・2026-08-29】残存44件(→49件)の実態解明+kanameone担当者への確認依頼を報告文書に反映(送付は未実施)
 
 上記「次に必要なのは以下のいずれか」の両方に対応した。**kanameone側でDrive export破損documentが継続的に発生していないか、`classify-drive-export-drift`を`--care-manager`省略でテナント全体に対し再実行**（GitHub Actions run [33183923836](https://github.com/yasushi-honda/doc-split/actions/runs/33183923836)）したところ、Phase 3最終確認（8/28、44件）からわずか約1.5時間で残存が49件（trashed9+misplaced14+target-path-not-created5=28件、他blocked21件=segment-unresolvable17+ambiguous-path3+customer-unconfirmed1）へ自然増していることを確認。**新たに`wouldRestoreFolders`1件（「ケアプラン」フォルダ、影響3書類）も検出**（Phase 3実行時にはなかった別インスタンス）。
