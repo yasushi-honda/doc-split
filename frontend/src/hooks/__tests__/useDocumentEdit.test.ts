@@ -45,6 +45,10 @@ const mockInvalidateQueries = vi.fn()
 vi.mock('@tanstack/react-query', () => ({
   useQueryClient: () => ({
     invalidateQueries: mockInvalidateQueries,
+    // 2026-09-08追記: invalidateDocumentAndGroupQueriesが呼ぶ
+    // markDocumentsInfiniteVariantsDirty(getQueryCache().findAll(...)を使う)向けの
+    // 最小スタブ(実装は実物を使うため、getQueryCache欠如でTypeErrorになるのを防ぐ)
+    getQueryCache: () => ({ findAll: () => [] }),
   }),
 }))
 

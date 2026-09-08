@@ -58,7 +58,7 @@ describe('useSplitPdf - Issue #621 already-exists/aborted時のキャッシュ�
 
     await waitFor(() => expect(result.current.isError).toBe(true))
 
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['documentsInfinite'] })
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['documentsInfinite'], refetchType: 'none' })
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['document'] })
     // 2026-08-06: 分割元書類がグループ表示に含まれていた場合の表示崩れを防ぐため、
     // グループ系キャッシュも合わせてinvalidateする(useDocumentEdit等と同型の漏れの予防)
@@ -78,7 +78,7 @@ describe('useSplitPdf - Issue #621 already-exists/aborted時のキャッシュ�
 
     await waitFor(() => expect(result.current.isError).toBe(true))
 
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['documentsInfinite'] })
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['documentsInfinite'], refetchType: 'none' })
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['document'] })
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['documentGroups'] })
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['groupDocuments'] })
@@ -106,7 +106,7 @@ describe('useSplitPdf - Issue #621 already-exists/aborted時のキャッシュ�
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
 
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['documentsInfinite'] })
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['documentsInfinite'], refetchType: 'none' })
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['document'] })
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['documentGroups'] })
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['groupDocuments'] })

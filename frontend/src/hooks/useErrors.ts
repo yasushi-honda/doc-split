@@ -22,7 +22,12 @@ import {
   QueryConstraint,
 } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
-import { appendReprocessClearToBatch, invalidateDocumentAndGroupQueries } from './useDocuments'
+import {
+  appendReprocessClearToBatch,
+  invalidateDocumentAndGroupQueries,
+  updateDocumentInListCache,
+  markDocumentsInfiniteStale,
+} from './useDocuments'
 import type { ErrorRecord, ErrorStatus, ErrorType } from '@shared/types'
 
 // ============================================
@@ -231,7 +236,7 @@ async function requestReprocess({
   errorId,
   fileId,
   documentId,
-}: ReprocessParams): Promise<{ documentId: string | null }> {
+}: ReprocessParams): Promise<{ documentId: string | null; hasDistributionId: boolean }> {
   // 対応するドキュメントを特定 (writeより先にread)。documentIdが分かっている場合は
   // それを直接使う。fileId検索へのフォールバックは、documentId未記録の古いerrorのみ
   // (複数顧客FAX複製機能導入後はfileId単独では兄弟docのどれかにヒットしうるため)。
@@ -257,11 +262,12 @@ async function requestReprocess({
   const errorRef = doc(db, 'errors', errorId)
   batch.update(errorRef, { status: 'pending' })
 
+  let hasDistributionId = false
   if (targetDocId) {
-    await appendReprocessClearToBatch(batch, targetDocId)
+    hasDistributionId = await appendReprocessClearToBatch(batch, targetDocId)
   }
   await batch.commit()
-  return { documentId: targetDocId }
+  return { documentId: targetDocId, hasDistributionId }
 }
 
 export function useReprocessError() {
@@ -269,7 +275,7 @@ export function useReprocessError() {
 
   return useMutation({
     mutationFn: requestReprocess,
-    onSuccess: ({ documentId }) => {
+    onSuccess: ({ documentId, hasDistributionId }) => {
       queryClient.invalidateQueries({ queryKey: ['errors'] })
       queryClient.invalidateQueries({ queryKey: ['errorStats'] })
       if (documentId) {
@@ -282,8 +288,24 @@ export function useReprocessError() {
         // 取得できた場合でもdocumentsInfinite以外を無効化していなかった漏れを2026-08-06に解消)
         queryClient.invalidateQueries({ queryKey: ['documentDetail', documentId] })
         invalidateDocumentAndGroupQueries(queryClient, documentId)
+        // 2026-09-08 Firestore読み取り過大バグ修正: invalidateDocumentAndGroupQueriesの
+        // documentsInfinite部分がrefetchType:'none'(即時再取得しない)になったため、
+        // 一覧の表示更新はこのパッチが担う(以前は再取得完了まで待つ見た目上の演出だったが
+        // 今や必須。useReprocessDocumentと同一フィールド集合)。この呼び出しが漏れていたため
+        // 従来は再処理後に一覧が古いステータスのまま止まっていた。
+        updateDocumentInListCache(queryClient, documentId, {
+          status: 'pending',
+          ocrResult: '',
+          officeName: '',
+          documentType: '',
+          officeConfirmed: false,
+          verified: false,
+          ...(hasDistributionId ? {} : { customerName: '', customerConfirmed: false }),
+        })
       } else {
-        queryClient.invalidateQueries({ queryKey: ['documentsInfinite'] })
+        // documentIdが解決できなかった場合はキャッシュパッチのしようがないため、
+        // staleマークのみ行いバナー経由のユーザー起点リセットに委ねる
+        markDocumentsInfiniteStale(queryClient)
       }
     },
   })

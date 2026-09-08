@@ -302,16 +302,27 @@ export function invalidateGroupQueries(queryClient: QueryClient): void {
 
 /**
  * 書類本体を更新する全mutation(編集保存/再処理/汎用更新)が共通で呼ぶキャッシュ
- * invalidateヘルパー。documentsInfinite/document本体に加え、上記`invalidateGroupQueries`
- * も必ず合わせて無効化する。
+ * invalidateヘルパー。document本体・`invalidateGroupQueries`は引き続きここで
+ * 無効化する(1件読み取りで安価、詳細モーダルに確定値を渡すため必要)。
  *
- * 各mutationが個別にinvalidateQueriesを手書きしていた旧実装では、useDocumentEdit.ts
- * (Issue #793)とuseReprocessDocument双方で独立にgroupStatsのinvalidate漏れが発生し、
- * さらにuseUpdateDocumentはグループ系キャッシュを一切invalidateしていなかった(2026-08-06
- * 発見)。呼び出し箇所ごとに漏れが再発する構造的な問題だったため、一本化して解消する。
+ * `documentsInfinite`のみ`refetchType:'none'`を指定する(2026-09-08、Firestore読み取り
+ * 過大バグ修正、docs/handoff/GOAL.md「【要修正・2026-09-08】」参照)。理由:
+ * `useInfiniteDocuments`はrefetchOnWindowFocus/refetchOnMount/refetchOnReconnectを
+ * 全て無効化しており(全ページ再取得を絶対に自動発火させないため)、通常の
+ * `invalidateQueries`(refetchType未指定=デフォルト'active')を呼ぶとここが
+ * その場で全ページ再取得の引き金になってしまう。ここではstaleマークのみ行い、
+ * 表示更新は呼び出し元が一覧キャッシュを`updateDocumentInListCache`等で
+ * 事前にパッチしておく責務を負う(このファイルの`useReprocessDocument`が実例)。
  */
 export function invalidateDocumentAndGroupQueries(queryClient: QueryClient, documentId: string): void {
-  queryClient.invalidateQueries({ queryKey: ['documentsInfinite'] })
+  // `invalidateQueries(refetchType:'none')`のisInvalidatedは、呼び出し元が併せて行う
+  // updateDocumentInListCache(setQueriesData)で暗黙にクリアされてしまう(全variant
+  // 一律、実機検証で確認済み。公式ドキュメントに明記された契約ではなく本コードベースでの
+  // 実機観測に基づく)。フィルタ切替検知用のシグナルはmarkDocumentsInfiniteStale内の
+  // markDocumentsInfiniteVariantsDirty(独立トラッキング、アクティブなvariantも含めて
+  // 全variantをdirty化する。バナー押下時にrefetch成功を確認してから呼び出し側が
+  // アクティブなvariantのみ明示的に解除する)を正とする。
+  markDocumentsInfiniteStale(queryClient)
   queryClient.invalidateQueries({ queryKey: ['document', documentId] })
   invalidateGroupQueries(queryClient)
 }
@@ -525,6 +536,12 @@ export async function appendReprocessClearToBatch(
  * 一覧・グループビューの両キャッシュを invalidate する
  * (メタクリアで customerKey/careManagerKey が空になり、再処理中は
  * グループ集計から外れるため、グループ側の再取得が必須)。
+ *
+ * 2026-09-08追記: `updateDocumentInListCache`によるこの楽観的パッチは、以前は
+ * 「invalidateQueriesによる再取得完了までの見た目上の演出」に過ぎなかったが、
+ * Firestore読み取り過大バグ修正で`invalidateDocumentAndGroupQueries`の
+ * `documentsInfinite`invalidateが`refetchType:'none'`になった(再取得しない)ため、
+ * 今やこのパッチ自体が一覧の表示更新を担う必須の仕組みになっている。
  */
 export function useReprocessDocument() {
   const queryClient = useQueryClient()
@@ -554,7 +571,11 @@ export function useReprocessDocument() {
       // detailの古いOCR内容がポーリング再開(3秒後)まで表示され続けるのを防ぐ
       queryClient.invalidateQueries({ queryKey: ['documentDetail', documentId] })
       invalidateDocumentAndGroupQueries(queryClient, documentId)
-      toast.success('再処理をリクエストしました。処理完了まで画面が自動更新されます。', { duration: 5000 })
+      // 2026-09-08修正: Firestore読み取り過大バグ修正で一覧の自動再取得を全廃したため、
+      // 「画面が自動更新されます」は実態と乖離する(一覧上のこの行はこの直後の
+      // updateDocumentInListCacheパッチで即時反映されるが、OCR完了時の状態遷移
+      // (pending→processed)は一覧上には自動反映されない。バナー経由の明示更新が必要)。
+      toast.success('再処理をリクエストしました。処理完了後は一覧の更新バナーからご確認ください。', { duration: 5000 })
       return true
     } catch (err) {
       console.error('Failed to reprocess:', err)
@@ -657,33 +678,235 @@ async function fetchDocuments(
   }
 }
 
-export function useDocuments(options: UseDocumentsOptions = {}) {
-  const { filters = {}, pageSize = 20, enabled = true } = options
+/**
+ * 一覧のqueryKeyを組み立てるヘルパー。`useInfiniteDocuments`本体と
+ * `resetDocumentsInfiniteToFirstPage`呼び出し元(DocumentsPage.tsx)の両方が
+ * 完全に同じ形のqueryKeyを組み立てられるよう共通化する(2026-09-08)。
+ */
+export function documentsInfiniteQueryKey(filters: DocumentFilters, pageSize: number) {
+  return ['documentsInfinite', filters, pageSize] as const
+}
 
-  return useQuery({
-    queryKey: ['documents', filters, pageSize],
-    queryFn: () => fetchDocuments(filters, pageSize),
-    enabled,
-    staleTime: 30000, // 30秒間はキャッシュを使用
-    refetchInterval: 30000, // 30秒ごとに自動再取得（ステータス更新反映）
-  })
+// ============================================
+// documentsInfinite variant「dirty(要更新)」トラッキング
+// ============================================
+//
+// 2026-09-08追記(/plan-crossreview経由のcodex review 3周にわたる指摘、実機検証で確認):
+// TanStack Query v5の`setQueryData`/`setQueriesData`は、書込み成功時に対象queryの
+// `isInvalidated`を暗黙にfalseへリセットする。これは`updateDocumentInListCache`
+// (編集保存・単体/一括再処理・一括確認等、非常に高頻度に呼ばれる)が`['documentsInfinite']`
+// 部分一致で全variantへ`setQueriesData`するたびに、無関係な操作で他variantの
+// staleマーク(invalidateQueries(...,{refetchType:'none'})によるフィルタ切替検知用の
+// シグナル)を意図せず消してしまうことを意味する。TanStack内部のisInvalidated/isStale
+// はこの用途の永続的なシグナルとして信頼できないため、意図的に独立させた
+// 軽量トラッキングを用意する。
+//
+// 設計方針(単純化): 当初は`query.isActive()`でアクティブなvariant(画面表示中)を
+// dirty化の対象から除外していたが、これは「アクティブなvariantは対応するミューテーションが
+// updateDocumentInListCacheで既にパッチ済み」という前提に依存しており、実際には
+// 値の書換えのみでメンバーシップ変更(例: statusフィルタ中の書類を再処理してstatusが
+// 変わった場合、そのフィルタから外れるべきだが行としては残り続ける)を反映できない
+// ケースで、表示中の一覧が古いまま気付かれない不具合を生んだ(codex review 3周目 P1指摘)。
+// **「documentsInfiniteに影響しうる操作は、アクティブ/非アクティブを問わず全variantを
+// dirty化する。dirtyフラグは対象variantの実際のfetchが成功したことを呼び出し側
+// (DocumentsPage.tsx `refreshDocumentList`)が確認してから明示的に解除する」という
+// 単純だが安全側に倒したルールに統一する**。トレードオフとして、自分で行った編集の
+// 直後にも「更新があります」バナーが出ることがあるが、バナー押下は1ページ分の
+// 軽量な再取得に過ぎず、これは許容する(cf. 今回のバグ本体である「読み込み済み全ページの
+// 自動再取得」とは全く異なるコスト規模)。
+
+// 既知の限界(second-opinionレビュー指摘、2026-09-08): このSetはqueryがgcTimeで
+// QueryClientのキャッシュから破棄された後もエントリを自動削除しない(pruning未実装)。
+// 単一QueryClientインスタンス・ブラウザタブ単位のセッション(ページリロードでリセット)
+// というこのアプリの実運用では、フィルタの組み合わせ数は現実的に有限で、文字列キー
+// 1件のメモリコストも軽微なため実害はないと判断しているが、将来的にフィルタの
+// 組み合わせが動的に無制限生成されるような変更が入る場合は要再検討。
+type DirtyStoreListener = () => void
+
+const dirtyDocumentsInfiniteVariants = new Set<string>()
+const dirtyStoreListeners = new Set<DirtyStoreListener>()
+
+function dirtyKeyOf(queryKey: readonly unknown[]): string {
+  return JSON.stringify(queryKey)
+}
+
+function notifyDirtyStoreListeners(): void {
+  dirtyStoreListeners.forEach((listener) => listener())
+}
+
+/**
+ * `['documentsInfinite']`部分一致の全variant(画面表示中のものを含む)をdirty化する。
+ * 単体編集・単体/一括再処理・一括確認・PDF分割・Driveエクスポート再試行等、
+ * `documentsInfinite`へ影響しうる全てのミューテーション成功/失敗ハンドラから呼ぶ。
+ *
+ * この関数は**絶対に例外を投げない**(second-opinionレビュー指摘反映、2026-09-08):
+ * 呼び出し元の多くは`useMutation`の`onSuccess`内であり、TanStack Query v5の
+ * `Mutation`実装は`mutationFn`と`onSuccess`を同一tryブロックで囲むため、
+ * `onSuccess`内で例外が発生するとFirestore/Cloud Functionの処理自体は成功していても
+ * mutation全体が"error"扱いになり、ユーザーに誤った失敗通知が出てしまう
+ * (実際に`@tanstack/query-core`のソースで確認済み)。一覧更新バナーの表示是非という
+ * 補助的なUXシグナルのために、本体の成功報告を壊すことがあってはならないため、
+ * 内部で例外を捕捉してconsole.errorに留める(呼び出し元には伝播させない)。
+ */
+export function markDocumentsInfiniteVariantsDirty(queryClient: QueryClient): void {
+  try {
+    const queries = queryClient.getQueryCache().findAll({ queryKey: ['documentsInfinite'] })
+    let changed = false
+    queries.forEach((q) => {
+      const key = dirtyKeyOf(q.queryKey)
+      if (!dirtyDocumentsInfiniteVariants.has(key)) {
+        dirtyDocumentsInfiniteVariants.add(key)
+        changed = true
+      }
+    })
+    if (changed) notifyDirtyStoreListeners()
+  } catch (err) {
+    console.error('[markDocumentsInfiniteVariantsDirty] unexpected error (ignored, banner UX only):', err)
+  }
+}
+
+/**
+ * `documentsInfinite`を「即時再取得しないがstale化する」ための定型2行
+ * (`invalidateQueries(refetchType:'none')` + `markDocumentsInfiniteVariantsDirty`)を
+ * 1箇所にまとめたヘルパー(second-opinionレビュー指摘反映、2026-09-08)。
+ *
+ * この2行は本来別々の目的を持つ: `invalidateQueries`はTanStack内部の`isInvalidated`を
+ * 立てる(現状これを読む本番コードは無いが、将来`refetchOnMount`等を再度有効化する
+ * 変更が入った場合に備えた保険として残す)。実際にバナー表示を駆動するのは
+ * `markDocumentsInfiniteVariantsDirty`(独立トラッキング)の方。
+ *
+ * 呼び出し元がこの2行を個別に手書きすると、`invalidateDocumentAndGroupQueries`が
+ * かつて複数箇所で個別にinvalidateQueriesを手書きしていた頃と同じ「1箇所だけ書き漏れる」
+ * 再発リスクを抱える(このファイルの`invalidateDocumentAndGroupQueries`のコメント参照)ため、
+ * 単一ヘルパーに統一する。
+ */
+export function markDocumentsInfiniteStale(queryClient: QueryClient): void {
+  queryClient.invalidateQueries({ queryKey: ['documentsInfinite'], refetchType: 'none' })
+  markDocumentsInfiniteVariantsDirty(queryClient)
+}
+
+/**
+ * 指定したqueryKeyのdirtyフラグを解除する。
+ * **呼び出し側は対象variantの実際のfetchが成功したことを確認してから呼ぶこと**
+ * (2026-09-08追記、codex review 3周目 P2指摘: refetch失敗時にdirtyフラグだけ先に
+ * 解除してしまうと、自動再取得を全て無効化した現設計では他に「要更新」を知らせる
+ * 手段がなくなり、バナーが永久に出なくなる)。
+ */
+export function clearDocumentsInfiniteVariantDirty(queryKey: readonly unknown[]): void {
+  if (dirtyDocumentsInfiniteVariants.delete(dirtyKeyOf(queryKey))) {
+    notifyDirtyStoreListeners()
+  }
+}
+
+export function isDocumentsInfiniteVariantDirty(queryKey: readonly unknown[]): boolean {
+  return dirtyDocumentsInfiniteVariants.has(dirtyKeyOf(queryKey))
+}
+
+/** `useSyncExternalStore`用のsubscribe関数(`useDocumentListRefresh.ts`が使用) */
+export function subscribeDocumentsInfiniteDirtyStore(listener: DirtyStoreListener): () => void {
+  dirtyStoreListeners.add(listener)
+  return () => {
+    dirtyStoreListeners.delete(listener)
+  }
 }
 
 /**
  * 無限スクロール対応版の書類一覧取得
+ *
+ * 2026-09-08 Firestore読み取り過大バグ修正 (docs/handoff/GOAL.md「【要修正・2026-09-08】」):
+ * kanameone環境で月4.6億回のFirestore読み取りが発生していた根本原因が本フックの
+ * `refetchInterval: 30000`だった。TanStack Query v5の`useInfiniteQuery`は自動再取得の
+ * たびに「読み込み済みの全ページ」を再取得する仕様のため、深くスクロールするほど
+ * 定常的なコストが線形に増加していた(ローカルFirebaseエミュレータでの実機再現、
+ * `@tanstack/query-core`ソースコード直接確認で確定)。
+ *
+ * 対策として一覧の自動再取得経路を完全に塞ぐ:
+ * - `refetchInterval`を削除(そもそもの発火源)
+ * - `refetchOnWindowFocus`/`refetchOnMount`/`refetchOnReconnect`を無効化
+ *   (これらを無効化しないと、`invalidateQueries(..., {refetchType:'none'})`で
+ *   即時再取得を止めても、次にウィンドウへフォーカスが戻った瞬間や再マウント時に
+ *   同じ「全ページ再取得」が起きる。TanStack Query v4時代の`refetchPage`述語による
+ *   「特定ページのみ再取得」はv5で公式に廃止されており使用不可)
+ * - `staleTime: Infinity`で`isStale`を「invalidateされたか」の純粋なシグナルにする
+ * - `gcTime: 60_000`で、一覧画面がunmountしてから1分経過後はキャッシュを破棄する
+ *   (再訪時は必ず1ページ目のみの取得になる)
+ *
+ * 更新の反映は「ミューテーションがキャッシュを直接パッチする」か「更新通知バナー経由の
+ * ユーザー起点の明示的リセット」のいずれかに委ねる(`DocumentsPage.tsx`
+ * `refreshDocumentList`/`resetDocumentsInfiniteToFirstPage`参照)。
  */
 export function useInfiniteDocuments(options: UseDocumentsOptions = {}) {
   const { filters = {}, pageSize = 100, enabled = true } = options
 
   return useInfiniteQuery({
-    queryKey: ['documentsInfinite', filters, pageSize],
+    queryKey: documentsInfiniteQueryKey(filters, pageSize),
     queryFn: ({ pageParam }) => fetchDocuments(filters, pageSize, pageParam as DocumentSnapshot | undefined),
     initialPageParam: undefined as DocumentSnapshot | undefined,
     getNextPageParam: (lastPage) => lastPage.hasMore ? lastPage.lastDoc : undefined,
     enabled,
-    staleTime: 30000,
-    refetchInterval: 30000,
+    staleTime: Infinity,
+    gcTime: 60_000,
+    refetchOnWindowFocus: false,
+    refetchOnMount: false,
+    refetchOnReconnect: false,
   })
+}
+
+/**
+ * バナー押下(またはアップロード成功・一括削除部分失敗)によるユーザー起点の明示的
+ * 一覧リセット。カーソルベースページネーション(`startAfter`)の下では部分的な再取得は
+ * 境界での重複・欠落を生みうるため、「アクティブなvariantは全ページ破棄→1ページ目のみ
+ * 再取得」「非アクティブな他variantはデータを書き換えずstaleマークのみ」という設計にする
+ * (2026-09-08、/plan-crossreview経由のCodexレビューで、全variant一律切り詰めだと
+ * 非アクティブvariantが「staleマークなしの古い1ページデータ」のまま固着する
+ * High指摘を受けて設計変更)。
+ *
+ * 呼び出し手順(DocumentsPage.tsx `refreshDocumentList`が実行する):
+ * 1. 本関数を呼ぶ前に画面を先頭へスクロールしておくこと(呼び出し側の責務。切り詰め後に
+ *    画面が下にスクロールされたままだと`IntersectionObserver`が反応し次ページ取得が
+ *    再発火するため、呼び出し側は`useInfiniteScroll`の`disabled`をtrueにした上で呼ぶ)
+ * 2. 本関数を呼ぶ(cancelQueries→全variant一律stale化→アクティブvariantのみ切り詰め)
+ * 3. 呼び出し側が`refetch()`をアクティブなvariantに対して実行し、**成功を確認してから**
+ *    `clearDocumentsInfiniteVariantDirty(activeQueryKey)`を呼ぶ(本関数はこのvariantの
+ *    dirtyフラグをここでは解除しない。2026-09-08追記、codex review 3周目 P2指摘:
+ *    refetch失敗時にフラグだけ先に解除すると、自動再取得を全廃した現設計では
+ *    「要更新」を知らせる手段が失われバナーが永久に出なくなる)
+ *
+ * `activeQueryKey`は`documentsInfiniteQueryKey(filters, pageSize)`で組み立てた、
+ * 現在表示中のvariantと完全一致するqueryKey。
+ */
+export async function resetDocumentsInfiniteToFirstPage(
+  queryClient: QueryClient,
+  activeQueryKey: readonly [string, DocumentFilters, number]
+): Promise<void> {
+  // 1. 進行中のfetchNextPage(無限スクロールの次ページ取得)を破棄する。TanStack Queryは
+  //    cancelQueriesでマークしたフェッチの結果を無視するため、この後の切り詰めに
+  //    その結果が再合流してページが復活する事故を防げる。Firestore側への実際の
+  //    ネットワークリクエスト自体は中断されないため、その分の読み取りは一度だけ発生する
+  //    (これは「毎回全ページ再取得される」定常コストとは異なる一回限りの残余コスト)。
+  await queryClient.cancelQueries({ queryKey: activeQueryKey })
+
+  // 2. ['documentsInfinite']部分一致の全variant(アクティブなものも含む)を一律stale化する。
+  //    TanStack内部のisInvalidatedは他のミューテーションのsetQueriesData呼び出しで
+  //    後から意図せず消えうるため、フィルタ切替検知の主シグナルとしては信頼せず、
+  //    markDocumentsInfiniteStale内のmarkDocumentsInfiniteVariantsDirty(独立トラッキング)
+  //    を正とする。呼び出し側がrefetch成功を確認した後にアクティブなvariantのみ
+  //    明示的に解除する(上記の呼び出し手順3参照)。
+  markDocumentsInfiniteStale(queryClient)
+
+  // 3. アクティブなvariantのみ、pages/pageParamsとも先頭1件に切り詰める。他のvariantの
+  //    データは一切書き換えない。
+  queryClient.setQueryData(
+    activeQueryKey,
+    (old: { pages: DocumentListResult[]; pageParams: unknown[] } | undefined) => {
+      if (!old?.pages?.length) return old
+      return {
+        ...old,
+        pages: old.pages.slice(0, 1),
+        pageParams: old.pageParams.slice(0, 1),
+      }
+    }
+  )
 }
 
 // ============================================

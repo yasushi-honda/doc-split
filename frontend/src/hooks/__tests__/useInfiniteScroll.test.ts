@@ -123,6 +123,49 @@ describe('useInfiniteScroll', () => {
     expect(fetchNextPage).not.toHaveBeenCalled()
   })
 
+  // 2026-09-08 Firestore読み取り過大バグ修正(/plan-crossreview経由のCodexレビュー
+  // High #1): 一覧の1ページ目リセット処理中に交差検知が発火すると、切り詰めた
+  // 直後にfetchNextPageが再発火してreset処理自体が無意味になる回帰テスト
+  it('disabled=trueのときhasNextPage=trueで要素がvisibleでもfetchNextPageが呼ばれない', () => {
+    const fetchNextPage = vi.fn()
+
+    renderHook(() =>
+      useInfiniteScroll({
+        hasNextPage: true,
+        isFetchingNextPage: false,
+        fetchNextPage,
+        disabled: true,
+      }),
+    )
+
+    observerCallback(
+      [{ isIntersecting: true } as IntersectionObserverEntry],
+      {} as IntersectionObserver,
+    )
+
+    expect(fetchNextPage).not.toHaveBeenCalled()
+  })
+
+  it('disabled=falseのときは従来通りfetchNextPageが呼ばれる', () => {
+    const fetchNextPage = vi.fn()
+
+    renderHook(() =>
+      useInfiniteScroll({
+        hasNextPage: true,
+        isFetchingNextPage: false,
+        fetchNextPage,
+        disabled: false,
+      }),
+    )
+
+    observerCallback(
+      [{ isIntersecting: true } as IntersectionObserverEntry],
+      {} as IntersectionObserver,
+    )
+
+    expect(fetchNextPage).toHaveBeenCalledOnce()
+  })
+
   it('アンマウント時にunobserveが呼ばれる', () => {
     const { unmount } = renderHook(() =>
       useInfiniteScroll({

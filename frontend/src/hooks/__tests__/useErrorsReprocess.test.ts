@@ -42,11 +42,15 @@ vi.mock('../../lib/firebase', () => ({
   db: { type: 'firestore' },
 }))
 
-const mockAppendReprocessClearToBatch = vi.fn().mockResolvedValue(undefined)
+const mockAppendReprocessClearToBatch = vi.fn().mockResolvedValue(false)
 const mockInvalidateDocumentAndGroupQueries = vi.fn()
+const mockUpdateDocumentInListCache = vi.fn()
+const mockMarkDocumentsInfiniteStale = vi.fn()
 vi.mock('../useDocuments', () => ({
   appendReprocessClearToBatch: (...args: unknown[]) => mockAppendReprocessClearToBatch(...args),
   invalidateDocumentAndGroupQueries: (...args: unknown[]) => mockInvalidateDocumentAndGroupQueries(...args),
+  updateDocumentInListCache: (...args: unknown[]) => mockUpdateDocumentInListCache(...args),
+  markDocumentsInfiniteStale: (...args: unknown[]) => mockMarkDocumentsInfiniteStale(...args),
 }))
 
 const mockInvalidateQueries = vi.fn()
@@ -86,7 +90,7 @@ describe('useReprocessError / requestReprocess', () => {
     expect(mockGetDoc).toHaveBeenCalledTimes(1)
     expect(mockGetDocs).not.toHaveBeenCalled()
     expect(mockAppendReprocessClearToBatch).toHaveBeenCalledWith(expect.anything(), 'the-actual-doc')
-    expect(response).toEqual({ documentId: 'the-actual-doc' })
+    expect(response).toEqual({ documentId: 'the-actual-doc', hasDistributionId: false })
   })
 
   it('documentId未指定(旧error記録)の場合のみ、fileIdでの検索にフォールバックする', async () => {
@@ -100,7 +104,7 @@ describe('useReprocessError / requestReprocess', () => {
     expect(mockGetDocs).toHaveBeenCalledTimes(1)
     expect(mockGetDoc).not.toHaveBeenCalled()
     expect(mockAppendReprocessClearToBatch).toHaveBeenCalledWith(expect.anything(), 'fallback-doc')
-    expect(response).toEqual({ documentId: 'fallback-doc' })
+    expect(response).toEqual({ documentId: 'fallback-doc', hasDistributionId: false })
   })
 
   it('documentIdが渡されたがdocが存在しない場合、クリア対象なしでerror status更新のみ行う(クラッシュしない)', async () => {
@@ -113,7 +117,7 @@ describe('useReprocessError / requestReprocess', () => {
 
     expect(mockAppendReprocessClearToBatch).not.toHaveBeenCalled()
     expect(mockBatchCommit).toHaveBeenCalledTimes(1)
-    expect(response).toEqual({ documentId: null })
+    expect(response).toEqual({ documentId: null, hasDistributionId: false })
   })
 
   describe('グループ表示キャッシュのinvalidate (2026-08-06: useDocumentEdit/useReprocessDocumentと同型の漏れを解消)', () => {
@@ -129,7 +133,43 @@ describe('useReprocessError / requestReprocess', () => {
       expect(mockInvalidateQueries).toHaveBeenCalledWith({ queryKey: ['documentDetail', 'the-actual-doc'] })
     })
 
-    it('documentIdが取得できない場合(doc削除済み等)、グループキャッシュのinvalidateは呼ばれない(documentsInfiniteのみ)', async () => {
+    // 2026-09-08 Firestore読み取り過大バグ修正: invalidateDocumentAndGroupQueriesの
+    // documentsInfinite部分がrefetchType:'none'(即時再取得しない)になったため、
+    // 一覧の表示更新は本来updateDocumentInListCacheのパッチが担う必要がある
+    // (以前はこの呼び出し自体が漏れており、再処理後に一覧が古いステータスのまま
+    // 止まっていたバグの回帰テスト)。
+    it('documentIdが取得できた場合、一覧キャッシュもstatus:pendingへパッチする(パッチ漏れの回帰テスト)', async () => {
+      mockGetDoc.mockResolvedValue({ exists: () => true })
+      mockAppendReprocessClearToBatch.mockResolvedValueOnce(false)
+      const { result } = renderHook(() => useReprocessError())
+
+      await act(async () =>
+        result.current.mutateAsync({ errorId: 'err-1', fileId: 'shared-file-1', documentId: 'the-actual-doc' })
+      )
+
+      expect(mockUpdateDocumentInListCache).toHaveBeenCalledWith(
+        expect.anything(),
+        'the-actual-doc',
+        expect.objectContaining({ status: 'pending', customerName: '', customerConfirmed: false })
+      )
+    })
+
+    it('distributionId保持docの場合、一覧キャッシュパッチはcustomerName/customerConfirmedをクリアしない', async () => {
+      mockGetDoc.mockResolvedValue({ exists: () => true })
+      mockAppendReprocessClearToBatch.mockResolvedValueOnce(true)
+      const { result } = renderHook(() => useReprocessError())
+
+      await act(async () =>
+        result.current.mutateAsync({ errorId: 'err-1', fileId: 'shared-file-1', documentId: 'dist-doc' })
+      )
+
+      const patch = mockUpdateDocumentInListCache.mock.calls[0]![2]
+      expect(patch).not.toHaveProperty('customerName')
+      expect(patch).not.toHaveProperty('customerConfirmed')
+      expect(patch.status).toBe('pending')
+    })
+
+    it('documentIdが取得できない場合(doc削除済み等)、グループキャッシュのinvalidateもパッチも呼ばれない(documentsInfiniteのstaleマークのみ)', async () => {
       mockGetDoc.mockResolvedValue({ exists: () => false })
       const { result } = renderHook(() => useReprocessError())
 
@@ -138,7 +178,8 @@ describe('useReprocessError / requestReprocess', () => {
       )
 
       expect(mockInvalidateDocumentAndGroupQueries).not.toHaveBeenCalled()
-      expect(mockInvalidateQueries).toHaveBeenCalledWith({ queryKey: ['documentsInfinite'] })
+      expect(mockUpdateDocumentInListCache).not.toHaveBeenCalled()
+      expect(mockMarkDocumentsInfiniteStale).toHaveBeenCalledWith(expect.anything())
     })
   })
 })

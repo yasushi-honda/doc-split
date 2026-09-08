@@ -8,7 +8,7 @@ import { useState, useCallback } from 'react'
 import { doc, updateDoc, serverTimestamp, Timestamp } from 'firebase/firestore'
 import { useQueryClient } from '@tanstack/react-query'
 import { db, auth } from '../lib/firebase'
-import { updateDocumentInListCache, getDriveExportClearFields } from './useDocuments'
+import { updateDocumentInListCache, getDriveExportClearFields, markDocumentsInfiniteVariantsDirty } from './useDocuments'
 import type { Document } from '../../../shared/types'
 
 interface UseDocumentVerificationResult {
@@ -34,6 +34,13 @@ export function useDocumentVerification(
       verifiedBy: verified ? auth.currentUser?.uid : null,
       verifiedAt: verified ? Timestamp.now() : null,
     })
+    // 2026-09-08追記(codex review 5周目 P2指摘): この書類が現在`documentsInfinite`の
+    // どのvariantにもキャッシュされていない場合(グループ表示やdeep linkから開いた場合等)、
+    // 上記パッチは無言のno-opになる。また「未確認のみ表示」はクライアント側フィルタ
+    // (documentStatsには反映されない)のため、確認状態の変更だけでは更新バナーの
+    // 通常の検知シグナルが一切発火しない。dirty化して、少なくともバナー経由で
+    // 気付けるようにする。
+    markDocumentsInfiniteVariantsDirty(queryClient)
   }, [document, queryClient])
 
   const markAsVerified = useCallback(async (): Promise<boolean> => {
@@ -45,11 +52,18 @@ export function useDocumentVerification(
     setIsUpdating(true)
     setError(null)
 
-    // 楽観的更新（即座にUIに反映）
+    // ロールバック用に変更前の値を保持(documentは以降optimisticUpdateで変異しない
+    // オブジェクトのため、try内外どちらで読んでも同じ値になる)
     const previousVerified = document.verified
-    optimisticUpdate(true)
 
     try {
+      // 楽観的更新（即座にUIに反映）
+      // 2026-09-08追記(second-opinionレビュー指摘): この呼び出しをtryブロックの外に
+      // 置くと、内部のmarkDocumentsInfiniteVariantsDirty等が万一例外を投げた場合に
+      // finally(isUpdatingのリセット)が実行されず、確認トグルが永久disabledになる
+      // 恐れがあった。tryブロック内へ移動して対称性を確保する。
+      optimisticUpdate(true)
+
       const docRef = doc(db, 'documents', document.id)
       await updateDoc(docRef, {
         verified: true,
@@ -78,11 +92,13 @@ export function useDocumentVerification(
     setIsUpdating(true)
     setError(null)
 
-    // 楽観的更新（即座にUIに反映）
+    // ロールバック用に変更前の値を保持
     const previousVerified = document.verified
-    optimisticUpdate(false)
 
     try {
+      // 楽観的更新（即座にUIに反映）。tryブロック内に置く理由はmarkAsVerified参照。
+      optimisticUpdate(false)
+
       const docRef = doc(db, 'documents', document.id)
       await updateDoc(docRef, {
         verified: false,

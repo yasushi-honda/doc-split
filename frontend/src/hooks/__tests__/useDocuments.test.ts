@@ -17,6 +17,12 @@ import {
   resolveDetailFields,
   applySearchTextFilter,
   invalidateDocumentAndGroupQueries,
+  resetDocumentsInfiniteToFirstPage,
+  documentsInfiniteQueryKey,
+  markDocumentsInfiniteVariantsDirty,
+  markDocumentsInfiniteStale,
+  isDocumentsInfiniteVariantDirty,
+  clearDocumentsInfiniteVariantDirty,
 } from '../useDocuments'
 import type { Document } from '@shared/types'
 
@@ -750,21 +756,224 @@ describe('applySearchTextFilter (ADR-0018 Phase D、Issue #547: ocrResult条件�
   })
 })
 
+// markDocumentsInfiniteVariantsDirty(queryClient.getQueryCache().findAll(...)を使う)向けの
+// 最小スタブ。invalidateDocumentAndGroupQueries等、内部でこれを呼ぶ関数のテストで共通利用する。
+function withGetQueryCacheStub(invalidateQueries: ReturnType<typeof vi.fn>): QueryClient {
+  return {
+    invalidateQueries,
+    getQueryCache: () => ({ findAll: () => [] }),
+  } as unknown as QueryClient
+}
+
 describe('invalidateDocumentAndGroupQueries (2026-08-06: useDocumentEdit/useReprocessDocument/useUpdateDocument/useReprocessErrorで独立に発生していたグループ表示キャッシュinvalidate漏れの一本化)', () => {
   it('documentsInfinite/document本体/documentGroups/groupDocuments/groupStatsの5種類を全てinvalidateする', () => {
     const invalidateQueries = vi.fn()
-    const queryClient = { invalidateQueries } as unknown as QueryClient
+    const queryClient = withGetQueryCacheStub(invalidateQueries)
 
     invalidateDocumentAndGroupQueries(queryClient, 'doc-123')
 
-    const invalidatedKeys = invalidateQueries.mock.calls.map(
-      (call) => (call[0] as { queryKey: unknown[] }).queryKey
+    const calls = invalidateQueries.mock.calls.map(
+      (call) => call[0] as { queryKey: unknown[]; refetchType?: string }
     )
+    const invalidatedKeys = calls.map((c) => c.queryKey)
     expect(invalidatedKeys).toContainEqual(['documentsInfinite'])
     expect(invalidatedKeys).toContainEqual(['document', 'doc-123'])
     expect(invalidatedKeys).toContainEqual(['documentGroups'])
     expect(invalidatedKeys).toContainEqual(['groupDocuments'])
     expect(invalidatedKeys).toContainEqual(['groupStats'])
     expect(invalidateQueries).toHaveBeenCalledTimes(5)
+  })
+
+  it('documentsInfiniteのみrefetchType:noneを指定する(2026-09-08: Firestore読み取り過大バグ修正。全ページ再取得を自動発火させないため)', () => {
+    const invalidateQueries = vi.fn()
+    const queryClient = withGetQueryCacheStub(invalidateQueries)
+
+    invalidateDocumentAndGroupQueries(queryClient, 'doc-123')
+
+    const calls = invalidateQueries.mock.calls.map(
+      (call) => call[0] as { queryKey: unknown[]; refetchType?: string }
+    )
+    const documentsInfiniteCall = calls.find(
+      (c) => JSON.stringify(c.queryKey) === JSON.stringify(['documentsInfinite'])
+    )
+    expect(documentsInfiniteCall?.refetchType).toBe('none')
+
+    const otherCalls = calls.filter(
+      (c) => JSON.stringify(c.queryKey) !== JSON.stringify(['documentsInfinite'])
+    )
+    otherCalls.forEach((c) => {
+      expect(c.refetchType).toBeUndefined()
+    })
+  })
+})
+
+describe('documentsInfiniteQueryKey', () => {
+  it('["documentsInfinite", filters, pageSize]の形でqueryKeyを組み立てる', () => {
+    const filters = { status: 'processed' as const }
+    expect(documentsInfiniteQueryKey(filters, 100)).toEqual(['documentsInfinite', filters, 100])
+  })
+})
+
+// 2026-09-08 Firestore読み取り過大バグ修正、/plan-crossreview経由のCodexレビュー
+// High #3の回帰テスト: 全variant一律切り詰めをやめ、アクティブなvariantのみ切り詰め、
+// 他のvariantはデータを書き換えずstaleマークのみにする設計に変更した。
+describe('resetDocumentsInfiniteToFirstPage (crossreview High #3反映)', () => {
+  function createMockQueryClient() {
+    return {
+      cancelQueries: vi.fn().mockResolvedValue(undefined),
+      invalidateQueries: vi.fn(),
+      setQueryData: vi.fn(),
+      // markDocumentsInfiniteVariantsDirty/clearDocumentsInfiniteVariantDirty
+      // (独立トラッキング、crossreview codex review P1指摘反映)向けの最小スタブ
+      getQueryCache: () => ({ findAll: () => [] }),
+    } as unknown as QueryClient & {
+      cancelQueries: ReturnType<typeof vi.fn>
+      invalidateQueries: ReturnType<typeof vi.fn>
+      setQueryData: ReturnType<typeof vi.fn>
+    }
+  }
+
+  const activeKey = documentsInfiniteQueryKey({ status: 'processed' as const }, 100)
+
+  it('アクティブなqueryKeyに対してcancelQueriesを呼ぶ(進行中のfetchNextPage結果を破棄するため)', async () => {
+    const queryClient = createMockQueryClient()
+    await resetDocumentsInfiniteToFirstPage(queryClient, activeKey)
+    expect(queryClient.cancelQueries).toHaveBeenCalledWith({ queryKey: activeKey })
+  })
+
+  it('["documentsInfinite"]部分一致の全variantをrefetchType:noneでstale化する(アクティブなものも含む)', async () => {
+    const queryClient = createMockQueryClient()
+    await resetDocumentsInfiniteToFirstPage(queryClient, activeKey)
+    expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ['documentsInfinite'],
+      refetchType: 'none',
+    })
+  })
+
+  it('アクティブなqueryKeyに対してのみsetQueryDataを呼ぶ(他のvariantのデータは書き換えない)', async () => {
+    const queryClient = createMockQueryClient()
+    await resetDocumentsInfiniteToFirstPage(queryClient, activeKey)
+    expect(queryClient.setQueryData).toHaveBeenCalledTimes(1)
+    expect(queryClient.setQueryData.mock.calls[0]![0]).toEqual(activeKey)
+  })
+
+  it('setQueryDataのupdater関数はpages/pageParamsを先頭1件のみに切り詰める', async () => {
+    const queryClient = createMockQueryClient()
+    await resetDocumentsInfiniteToFirstPage(queryClient, activeKey)
+
+    const updater = queryClient.setQueryData.mock.calls[0]![1] as (old: unknown) => unknown
+    const oldData = {
+      pages: [{ documents: ['doc-1'] }, { documents: ['doc-2'] }, { documents: ['doc-3'] }],
+      pageParams: [undefined, 'cursor-1', 'cursor-2'],
+    }
+    const result = updater(oldData) as typeof oldData
+
+    expect(result.pages).toEqual([{ documents: ['doc-1'] }])
+    expect(result.pageParams).toEqual([undefined])
+  })
+
+  it('setQueryDataのupdater関数はキャッシュ未存在(undefined)の場合はundefinedのまま返す', async () => {
+    const queryClient = createMockQueryClient()
+    await resetDocumentsInfiniteToFirstPage(queryClient, activeKey)
+
+    const updater = queryClient.setQueryData.mock.calls[0]![1] as (old: unknown) => unknown
+    expect(updater(undefined)).toBeUndefined()
+  })
+
+  it('呼び出し順序はcancelQueries→invalidateQueries→setQueryDataの順(競合防止のため)', async () => {
+    const queryClient = createMockQueryClient()
+    const callOrder: string[] = []
+    queryClient.cancelQueries.mockImplementation(async () => {
+      callOrder.push('cancelQueries')
+    })
+    queryClient.invalidateQueries.mockImplementation(() => {
+      callOrder.push('invalidateQueries')
+    })
+    queryClient.setQueryData.mockImplementation(() => {
+      callOrder.push('setQueryData')
+    })
+
+    await resetDocumentsInfiniteToFirstPage(queryClient, activeKey)
+
+    expect(callOrder).toEqual(['cancelQueries', 'invalidateQueries', 'setQueryData'])
+  })
+})
+
+// 2026-09-08追記: codex reviewが3周にわたって発見した指摘(古いisStale依存、
+// アクティブvariant除外によるメンバーシップ変更見落とし、refetch失敗時の早すぎるdirty解除)を
+// 踏まえ、「documentsInfiniteに影響しうる操作は全variantを一律dirty化し、解除は対象
+// variantの実際のfetch成功を確認してから呼び出し側が行う」という単純なルールに統一した。
+// ここではその単純化されたルール自体を実際のQueryClientで検証する(モックの
+// getQueryCacheスタブでは検証できないため、実物を使う)。
+describe('markDocumentsInfiniteVariantsDirty / isDocumentsInfiniteVariantDirty / clearDocumentsInfiniteVariantDirty (crossreview codex review 3周目反映)', () => {
+  // 注意: dirtyDocumentsInfiniteVariantsはモジュールレベルの共有状態のため、他describe
+  // ブロック(resetDocumentsInfiniteToFirstPage等)と衝突しないよう、ここでのみ使う
+  // 一意なfiltersを使う(customerNameにマーカー文字列を仕込む)。
+  it('["documentsInfinite"]部分一致の全variantをdirty化する(画面表示中かどうかを問わない)', async () => {
+    const { QueryClient } = await import('@tanstack/react-query')
+    const queryClient = new QueryClient()
+    const keyA = documentsInfiniteQueryKey({ customerName: 'dirty-store-test-marker-a' as const }, 100)
+    const keyB = documentsInfiniteQueryKey({ customerName: 'dirty-store-test-marker-b' as const }, 100)
+    queryClient.setQueryData(keyA, { pages: [], pageParams: [] })
+    queryClient.setQueryData(keyB, { pages: [], pageParams: [] })
+
+    markDocumentsInfiniteVariantsDirty(queryClient)
+
+    expect(isDocumentsInfiniteVariantDirty(keyA)).toBe(true)
+    expect(isDocumentsInfiniteVariantDirty(keyB)).toBe(true)
+
+    queryClient.clear()
+  })
+
+  it('dirty化されたvariantはclearDocumentsInfiniteVariantDirtyを呼ぶまでdirtyのまま残る(refetch失敗時にバナーが消えないことの根拠)', async () => {
+    const { QueryClient } = await import('@tanstack/react-query')
+    const queryClient = new QueryClient()
+    const key = documentsInfiniteQueryKey({ customerName: 'dirty-store-test-marker-c' as const }, 100)
+    queryClient.setQueryData(key, { pages: [], pageParams: [] })
+
+    markDocumentsInfiniteVariantsDirty(queryClient)
+    expect(isDocumentsInfiniteVariantDirty(key)).toBe(true)
+
+    // refetch失敗を模して、あえてclearを呼ばない → dirtyのまま
+    expect(isDocumentsInfiniteVariantDirty(key)).toBe(true)
+
+    // refetch成功を模して明示的にclearを呼ぶ → dirty解除
+    clearDocumentsInfiniteVariantDirty(key)
+    expect(isDocumentsInfiniteVariantDirty(key)).toBe(false)
+
+    queryClient.clear()
+  })
+
+  // 2026-09-08追記(second-opinionレビュー指摘): markDocumentsInfiniteVariantsDirtyの
+  // 呼び出し元の多くはuseMutationのonSuccess内であり、TanStack Query v5は
+  // mutationFnとonSuccessを同一tryブロックで囲むため、onSuccess内の例外はmutation全体を
+  // "error"扱いにしてしまう(実際に@tanstack/query-coreのソースで確認済み)。この関数は
+  // 一覧更新バナー表示という補助的なUXシグナルのためだけに存在するため、本体の成功報告を
+  // 壊してはならない。内部で例外を握り潰すことを検証する。
+  it('queryClient.getQueryCache()が例外を投げても、markDocumentsInfiniteVariantsDirty自体は例外を伝播しない', () => {
+    const brokenQueryClient = {
+      getQueryCache: () => {
+        throw new Error('queryCache is broken')
+      },
+    } as unknown as QueryClient
+
+    expect(() => markDocumentsInfiniteVariantsDirty(brokenQueryClient)).not.toThrow()
+  })
+})
+
+describe('markDocumentsInfiniteStale (second-opinionレビュー指摘: 定型2行の重複解消)', () => {
+  it('invalidateQueries(refetchType:none)とmarkDocumentsInfiniteVariantsDirtyの両方を実行する', async () => {
+    const { QueryClient } = await import('@tanstack/react-query')
+    const queryClient = new QueryClient()
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries')
+    const key = documentsInfiniteQueryKey({ customerName: 'mark-stale-test-marker' as const }, 100)
+    queryClient.setQueryData(key, { pages: [], pageParams: [] })
+
+    markDocumentsInfiniteStale(queryClient)
+
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['documentsInfinite'], refetchType: 'none' })
+    expect(isDocumentsInfiniteVariantDirty(key)).toBe(true)
+
+    queryClient.clear()
   })
 })

@@ -12,6 +12,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { collection, query, where, getDocs, Timestamp } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import { callFunction } from '@/lib/callFunction'
+import { markDocumentsInfiniteStale } from './useDocuments'
 import type { DriveExportStatus } from '@shared/types'
 
 export interface DriveExportErrorRow {
@@ -82,7 +83,10 @@ export function useRetryDriveExport() {
       // success:true/falseいずれもdriveExportStatusが変わっている(exported or error再書込み)
       // ためinvalidateが必要。falseはtri-state(呼び出し自体は成功、再エクスポートが失敗)。
       queryClient.invalidateQueries({ queryKey: DRIVE_EXPORT_ERRORS_QUERY_KEY })
-      queryClient.invalidateQueries({ queryKey: ['documentsInfinite'] })
+      // 2026-09-08 Firestore読み取り過大バグ修正: staleマークのみ(即時の全ページ
+      // 再取得は発火させない)。一覧表示自体はこのエラー一覧画面から遷移しないと
+      // 見えないため、バナー経由のユーザー起点リセットで十分。
+      markDocumentsInfiniteStale(queryClient)
       queryClient.invalidateQueries({ queryKey: ['documentDetail', docId] })
     },
     // code-review指摘#64対応(2026-07-22): 呼び出し自体がthrowするケース(例:

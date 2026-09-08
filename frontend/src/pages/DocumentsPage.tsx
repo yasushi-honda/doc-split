@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from 'react'
+import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { doc, writeBatch, serverTimestamp } from 'firebase/firestore'
@@ -52,7 +52,23 @@ import { useAuthStore } from '@/stores/authStore'
 import { db } from '@/lib/firebase'
 import { callFunction } from '@/lib/callFunction'
 import { Checkbox } from '@/components/ui/checkbox'
-import { useInfiniteDocuments, useDocumentStats, useDocumentMasters, appendReprocessClearToBatch, invalidateGroupQueries, type DocumentFilters, type SortField, type SortOrder } from '@/hooks/useDocuments'
+import {
+  useInfiniteDocuments,
+  useDocumentStats,
+  useDocumentMasters,
+  appendReprocessClearToBatch,
+  invalidateGroupQueries,
+  updateDocumentInListCache,
+  documentsInfiniteQueryKey,
+  resetDocumentsInfiniteToFirstPage,
+  markDocumentsInfiniteStale,
+  clearDocumentsInfiniteVariantDirty,
+  type DocumentFilters,
+  type SortField,
+  type SortOrder,
+} from '@/hooks/useDocuments'
+import { useDocumentListRefresh } from '@/hooks/useDocumentListRefresh'
+import { DocumentListUpdateBanner } from '@/components/DocumentListUpdateBanner'
 import { useCareManagers, useCustomerIdentityLookup, type CustomerIdentityLookup } from '@/hooks/useMasters'
 import { DateRangeFilter, type DateRange } from '@/components/DateRangeFilter'
 import { isCustomerConfirmed } from '@/hooks/useProcessingHistory'
@@ -422,6 +438,10 @@ export function DocumentsPage() {
   }), [effectiveStatusFilter, documentTypeFilter, careManagerFilter, dateFrom, dateTo, dateField, sortField, sortOrder])
 
   // データ取得（無限スクロール対応）
+  // 2026-09-08: pageSizeは`useInfiniteDocuments`の既定値(100)と一致させる必要があるため
+  // 明示的に渡す(activeQueryKeyの組み立てと`resetDocumentsInfiniteToFirstPage`が
+  // 完全一致のqueryKeyを要求するため、暗黙のデフォルト値に依存しない)。
+  const DOCUMENTS_PAGE_SIZE = 100
   const {
     data: documentsData,
     isLoading,
@@ -430,11 +450,76 @@ export function DocumentsPage() {
     fetchNextPage,
     hasNextPage,
     isFetchingNextPage,
-  } = useInfiniteDocuments({ filters })
-  const { loadMoreRef } = useInfiniteScroll({ hasNextPage: !!hasNextPage, isFetchingNextPage, fetchNextPage })
+    refetch: refetchDocuments,
+  } = useInfiniteDocuments({ filters, pageSize: DOCUMENTS_PAGE_SIZE })
+  // reset処理中(1ページ目へのリセット中)はIntersectionObserverによる自動次ページ取得を
+  // 止める(crossreview High #1、useInfiniteScroll.ts参照)
+  const [isResetting, setIsResetting] = useState(false)
+  const { loadMoreRef } = useInfiniteScroll({
+    hasNextPage: !!hasNextPage,
+    isFetchingNextPage,
+    fetchNextPage,
+    disabled: isResetting,
+  })
   const { data: stats } = useDocumentStats()
   const { data: documentMasters } = useDocumentMasters()
   const { data: careManagers } = useCareManagers()
+
+  // 現在のfilters/pageSizeに完全一致するqueryKey(resetDocumentsInfiniteToFirstPageへ渡す)
+  const activeDocumentsQueryKey = useMemo(
+    () => documentsInfiniteQueryKey(filters, DOCUMENTS_PAGE_SIZE),
+    [filters]
+  )
+  const {
+    hasUpdates: hasListUpdates,
+    message: listUpdateMessage,
+    resetBaseline: resetListUpdateBaseline,
+  } = useDocumentListRefresh({ filters, pageSize: DOCUMENTS_PAGE_SIZE })
+
+  /**
+   * 一覧を1ページ目へ明示的にリセットする共通処理(2026-09-08、crossreview反映)。
+   * バナー押下・アップロード成功(デバウンス後)・一括削除部分失敗の3箇所から共通で
+   * 呼ばれる。スクロールを先に行う理由・isResettingの意図はuseInfiniteScroll.ts/
+   * resetDocumentsInfiniteToFirstPageのコメント参照。
+   *
+   * 2026-09-08追記(codex review P2指摘): `documentStats`の再取得を明示的にawaitして
+   * から`resetListUpdateBaseline()`を呼ぶ。fire-and-forgetのinvalidateQueriesだけだと
+   * baseline確定時点でstatsキャッシュがまだ古いままの場合があり、直後にstatsが
+   * 反映されるとベースラインとの差分で誤って「更新があります」バナーが再表示されうる。
+   *
+   * 2026-09-08追記(codex review 3周目 P2指摘): TanStack Queryの`refetch()`はデフォルトでは
+   * 失敗してもPromiseをrejectしない(`QueryObserverResult`を解決値として返すだけ)。
+   * そのため`try/catch`ではなく戻り値の`isSuccess`を明示的に確認してから
+   * dirtyフラグ解除・baseline更新を行う。失敗時はどちらも据え置き、バナーが
+   * 表示され続けて再試行を促す(自動再取得を全廃した現設計での唯一の「要更新」通知経路)。
+   */
+  const refreshDocumentList = useCallback(async () => {
+    setIsResetting(true)
+    try {
+      window.scrollTo({ top: 0 })
+      await resetDocumentsInfiniteToFirstPage(queryClient, activeDocumentsQueryKey)
+      const [documentsResult] = await Promise.all([
+        refetchDocuments(),
+        queryClient.refetchQueries({ queryKey: ['documentStats'] }),
+      ])
+      if (documentsResult.isSuccess) {
+        clearDocumentsInfiniteVariantDirty(activeDocumentsQueryKey)
+        // second-opinionレビュー指摘反映(2026-09-08): queryClient.refetchQueries()は
+        // 内部でエラーを握りつぶすため(TanStack Query仕様、失敗してもPromiseはresolveする)、
+        // documentStatsの再取得が実は失敗していても気付けない。resetBaseline()が
+        // 古い統計値でbaselineを確定してしまうと直後にバナーが再表示されうるので、
+        // 失敗時は可視化だけしておく(自己修復は既存の30秒ポーリングに委ねる。実害は
+        // 「バナーが最大30秒程度余計に出る」程度で、データ不整合はない)。
+        const statsState = queryClient.getQueryState(['documentStats'])
+        if (statsState?.status === 'error') {
+          console.error('[refreshDocumentList] documentStats refetch failed; baseline may use stale stats', statsState.error)
+        }
+        resetListUpdateBaseline()
+      }
+    } finally {
+      setIsResetting(false)
+    }
+  }, [queryClient, activeDocumentsQueryKey, refetchDocuments, resetListUpdateBaseline])
 
   // 同姓同名バッジ判定用(2026-07-26追加)。書類一覧(テーブルビュー)は5箇所のうち唯一
   // useCustomers()の新規読込が増える画面(kanameone 1355件、staleTime5分キャッシュ共有)
@@ -451,11 +536,35 @@ export function DocumentsPage() {
   }, [sortField])
 
   // アップロード成功時のハンドラ
+  // 2026-09-08 crossreview反映: `PdfUploadModal`の`onSuccess`はアップロードAPI成功時
+  // ではなく、ファイルごとのOCR完了時に個別発火する(PdfUploadModal.tsx
+  // handleRowStatusUpdate、step==='processed')。複数ファイル同時アップロードだと
+  // 短時間に複数回呼ばれるため、300ms trailingデバウンスでまとめて1回だけ
+  // refreshDocumentList()を呼ぶ(lodash未導入のため自前実装)。
+  const uploadSuccessDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const handleUploadSuccess = useCallback(() => {
-    // ドキュメント一覧と統計をリフレッシュ
-    queryClient.invalidateQueries({ queryKey: ['documentsInfinite'] })
-    queryClient.invalidateQueries({ queryKey: ['documentStats'] })
-  }, [queryClient])
+    // documentStatsの再取得はrefreshDocumentList内でawait付きで行う(codex review P2指摘、
+    // resetBaselineのタイミング参照)ため、ここでの個別invalidateは不要
+    if (uploadSuccessDebounceRef.current) {
+      clearTimeout(uploadSuccessDebounceRef.current)
+    }
+    uploadSuccessDebounceRef.current = setTimeout(() => {
+      uploadSuccessDebounceRef.current = null
+      void refreshDocumentList()
+    }, 300)
+  }, [refreshDocumentList])
+
+  // 2026-09-08追記(codex review 4周目 P2指摘): OCR完了(=アップロード成功)から300ms以内に
+  // 別画面へ遷移されると、unmount後にこのタイマーが発火し、既にアンマウント済みの
+  // コンポーネントに対してscrollTo・Firestore再取得・setState(isResetting)を実行してしまう。
+  // unmount時に保留中のタイマーを破棄する。
+  useEffect(() => {
+    return () => {
+      if (uploadSuccessDebounceRef.current) {
+        clearTimeout(uploadSuccessDebounceRef.current)
+      }
+    }
+  }, [])
 
   // 一括選択のトグル
   const handleSelectToggle = useCallback((docId: string, checked: boolean) => {
@@ -483,6 +592,11 @@ export function DocumentsPage() {
   }, [])
 
   // 一括確認済み
+  // 2026-09-08 crossreview反映: writeBatchは単一batchのため部分失敗はしない
+  // (batch.commit()は全体成功/全体失敗のいずれか)。invalidateQueriesによる全ページ
+  // 再取得はやめ、commit成功後に対象全idへ直接キャッシュパッチする。verifiedAtの
+  // クライアント近似(Timestamp.now())は単体確認の既存楽観更新(useDocumentVerification.ts)
+  // と同じパターンを踏襲する(一覧表示はverifiedのみ参照しverifiedAtは表示に使わない)。
   const handleBulkVerify = useCallback(async () => {
     if (selectedIds.size === 0 || !user) return
 
@@ -498,10 +612,19 @@ export function DocumentsPage() {
         })
       }
       const count = selectedIds.size
+      const targetIds = Array.from(selectedIds)
       await batch.commit()
 
-      // 一覧をリフレッシュ
-      queryClient.invalidateQueries({ queryKey: ['documentsInfinite'] })
+      const verifiedAtApprox = Timestamp.now()
+      targetIds.forEach((docId) => {
+        updateDocumentInListCache(queryClient, docId, {
+          verified: true,
+          verifiedBy: user.uid,
+          verifiedAt: verifiedAtApprox,
+        })
+      })
+      // 安全網: staleマークのみ(refetchType:'none')。表示更新は上記パッチが担う
+      markDocumentsInfiniteStale(queryClient)
       queryClient.invalidateQueries({ queryKey: ['documentStats'] })
       clearSelection()
       setBulkOperation(null)
@@ -553,10 +676,28 @@ export function DocumentsPage() {
         // succeededCountの情報が失われるのを防ぐ)
         try {
           const batch = writeBatch(db)
-          // detail/main の存在確認(ヘルパー内のgetDoc)はチャンク内で並列実行
-          await Promise.all(chunk.map((docId) => appendReprocessClearToBatch(batch, docId)))
+          // detail/main の存在確認(ヘルパー内のgetDoc)はチャンク内で並列実行。
+          // 2026-09-08 crossreview High #2反映: 戻り値(id単位のhasDistributionId)を
+          // 保持し、commit成功後(=このチャンクが確定した後)にのみキャッシュへ
+          // パッチする。commit前にパッチすると、後続チャンクが失敗した場合に
+          // 未確定の文書まで見た目上「再処理済み」になってしまうため。
+          const chunkHasDistributionId = await Promise.all(
+            chunk.map((docId) => appendReprocessClearToBatch(batch, docId))
+          )
           await batch.commit()
           succeededCount += chunk.length
+          // 単体再処理(useReprocessDocument)と同一フィールド集合でパッチする
+          chunk.forEach((docId, idx) => {
+            updateDocumentInListCache(queryClient, docId, {
+              status: 'pending',
+              ocrResult: '',
+              officeName: '',
+              documentType: '',
+              officeConfirmed: false,
+              verified: false,
+              ...(chunkHasDistributionId[idx] ? {} : { customerName: '', customerConfirmed: false }),
+            })
+          })
         } catch (chunkError) {
           console.error('Bulk reprocess chunk error:', chunkError)
           chunkFailed = true
@@ -564,8 +705,12 @@ export function DocumentsPage() {
         }
       }
 
-      // 一覧をリフレッシュ (部分的成功分も反映)
-      queryClient.invalidateQueries({ queryKey: ['documentsInfinite'] })
+      // 表示は上記チャンクごとのパッチが既に反映済みのため、ここは安全網(stale
+      // マークのみ、即時再取得はしない)。ステータス変更によりstatusフィルタ済み
+      // variantのメンバーシップが変わりうる(updateDocumentInListCacheは値のみ書換え、
+      // フィルタ離脱による非表示化はしない)ため、非アクティブな他variantを独立
+      // トラッキングでdirty化する。
+      markDocumentsInfiniteStale(queryClient)
       queryClient.invalidateQueries({ queryKey: ['documentStats'] })
       // customerName/careManagerName等をクリアするためグルーピングキーから外れる書類が
       // 生じる。単体再処理(useReprocessDocument)と同じ理由でグループ表示キャッシュも
@@ -649,11 +794,23 @@ export function DocumentsPage() {
         .flatMap(r => r.value.warnings ?? [])
 
       if (failed > 0) {
-        // 部分失敗: サーバーの実際の状態で一覧を更新
+        // 部分失敗: 楽観的に消した全idのうち、実際には削除されていない(失敗した)idが
+        // 一覧から消えたままになる。2026-09-08 crossreview High #2反映:
+        // カーソルベースページネーションでは失敗idを元の位置へ正確に戻すことが
+        // 構造的に不可能なため、中途半端な部分復元は行わず、
+        // refreshDocumentList()(バナー押下と同じ共通reset)でサーバー確定状態の
+        // 1ページ目を再取得して確実に復元する。
         toast.warning(`${results.length - failed}件削除、${failed}件失敗しました`)
-        queryClient.invalidateQueries({ queryKey: ['documentsInfinite'] })
+        void refreshDocumentList()
       } else {
         toast.success(`${results.length}件を削除しました`)
+        // 2026-09-08追記: カーソルベースページネーションでは「削除で見た目上詰まった
+        // 行数」を後続ページの取得が埋め合わせない(次ページのカーソルは削除前の
+        // 最後のドキュメントの値のまま変わらないため、削除件数分のドキュメントが
+        // 以後一切表示されなくなる)。以前は30秒毎の全ページ自動再取得がこの欠落を
+        // 自己修復していたが、それを全廃した現設計では修復手段がバナー経由の
+        // リセットしかない。dirty化してバナーで気付けるようにする。
+        markDocumentsInfiniteStale(queryClient)
       }
 
       if (allWarnings.length > 0) {
@@ -673,7 +830,7 @@ export function DocumentsPage() {
         queryClient.setQueryData(queryKey, data)
       })
     }
-  }, [selectedIds, queryClient, clearSelection])
+  }, [selectedIds, queryClient, clearSelection, refreshDocumentList])
 
   // 全ページのドキュメントをフラット化
   const allDocuments = useMemo(() => {
@@ -959,6 +1116,15 @@ export function DocumentsPage() {
         <TabsContent value="list" className="space-y-4">
           {/* 書類リスト */}
           <Card>
+            <DocumentListUpdateBanner
+              hasUpdates={hasListUpdates}
+              message={listUpdateMessage}
+              isRefreshing={isResetting}
+              onRefresh={() => {
+                clearSelection()
+                void refreshDocumentList()
+              }}
+            />
             {isLoading ? (
               <div className="flex items-center justify-center py-16">
                 <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
