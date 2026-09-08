@@ -44,6 +44,7 @@ vi.mock('@tanstack/react-query', () => ({
 
 vi.mock('../useDocuments', () => ({
   updateDocumentInListCache: vi.fn(),
+  markDocumentsInfiniteVariantsDirty: vi.fn(),
   getDriveExportClearFields: vi.fn(() => {
     const df = deleteField()
     return {

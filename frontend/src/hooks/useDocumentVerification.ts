@@ -8,7 +8,7 @@ import { useState, useCallback } from 'react'
 import { doc, updateDoc, serverTimestamp, Timestamp } from 'firebase/firestore'
 import { useQueryClient } from '@tanstack/react-query'
 import { db, auth } from '../lib/firebase'
-import { updateDocumentInListCache, getDriveExportClearFields } from './useDocuments'
+import { updateDocumentInListCache, getDriveExportClearFields, markDocumentsInfiniteVariantsDirty } from './useDocuments'
 import type { Document } from '../../../shared/types'
 
 interface UseDocumentVerificationResult {
@@ -34,6 +34,13 @@ export function useDocumentVerification(
       verifiedBy: verified ? auth.currentUser?.uid : null,
       verifiedAt: verified ? Timestamp.now() : null,
     })
+    // 2026-09-08追記(codex review 5周目 P2指摘): この書類が現在`documentsInfinite`の
+    // どのvariantにもキャッシュされていない場合(グループ表示やdeep linkから開いた場合等)、
+    // 上記パッチは無言のno-opになる。また「未確認のみ表示」はクライアント側フィルタ
+    // (documentStatsには反映されない)のため、確認状態の変更だけでは更新バナーの
+    // 通常の検知シグナルが一切発火しない。dirty化して、少なくともバナー経由で
+    // 気付けるようにする。
+    markDocumentsInfiniteVariantsDirty(queryClient)
   }, [document, queryClient])
 
   const markAsVerified = useCallback(async (): Promise<boolean> => {
