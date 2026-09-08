@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useRef } from 'react'
+import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { doc, writeBatch, serverTimestamp } from 'firebase/firestore'
@@ -544,6 +544,18 @@ export function DocumentsPage() {
     }, 300)
   }, [refreshDocumentList])
 
+  // 2026-09-08追記(codex review 4周目 P2指摘): OCR完了(=アップロード成功)から300ms以内に
+  // 別画面へ遷移されると、unmount後にこのタイマーが発火し、既にアンマウント済みの
+  // コンポーネントに対してscrollTo・Firestore再取得・setState(isResetting)を実行してしまう。
+  // unmount時に保留中のタイマーを破棄する。
+  useEffect(() => {
+    return () => {
+      if (uploadSuccessDebounceRef.current) {
+        clearTimeout(uploadSuccessDebounceRef.current)
+      }
+    }
+  }, [])
+
   // 一括選択のトグル
   const handleSelectToggle = useCallback((docId: string, checked: boolean) => {
     setSelectedIds(prev => {
@@ -786,10 +798,14 @@ export function DocumentsPage() {
         void refreshDocumentList()
       } else {
         toast.success(`${results.length}件を削除しました`)
-        // 全件成功時は既存の楽観的削除の見た目のままでよい(削除は全variantから既に
-        // 除去済みのため、他variantを追加でdirty化する必要はない)。安全網として
-        // staleマークのみ行う(即時再取得はしない)
+        // 2026-09-08追記(codex review 4周目 P1指摘): カーソルベースページネーションでは
+        // 「削除で見た目上詰まった行数」を後続ページの取得が埋め合わせない
+        // (次ページのカーソルは削除前の最後のドキュメントの値のまま変わらないため、
+        // 削除件数分のドキュメントが以後一切表示されなくなる)。以前は30秒毎の全ページ
+        // 自動再取得がこの欠落を自己修復していたが、それを全廃した現設計では
+        // 修復手段がバナー経由のリセットしかない。dirty化してバナーで気付けるようにする。
         queryClient.invalidateQueries({ queryKey: ['documentsInfinite'], refetchType: 'none' })
+        markDocumentsInfiniteVariantsDirty(queryClient)
       }
 
       if (allWarnings.length > 0) {

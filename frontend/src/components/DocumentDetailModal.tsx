@@ -29,7 +29,15 @@ import { PdfViewer } from '@/components/PdfViewer'
 import { PdfSplitModal } from '@/components/PdfSplitModal'
 import { MasterSelectField } from '@/components/MasterSelectField'
 import { ExtractionInfoPopover } from '@/components/ExtractionInfoPopover'
-import { useDocument, useDocumentDetail, useReprocessDocument, useDistributionSiblingCount, resolveDetailFields, invalidateGroupQueries } from '@/hooks/useDocuments'
+import {
+  useDocument,
+  useDocumentDetail,
+  useReprocessDocument,
+  useDistributionSiblingCount,
+  resolveDetailFields,
+  invalidateGroupQueries,
+  markDocumentsInfiniteVariantsDirty,
+} from '@/hooks/useDocuments'
 import { useDocumentEdit } from '@/hooks/useDocumentEdit'
 import { useCustomers, useOffices, useDocumentTypes, useCareManagers, useCustomerIdentityLookup } from '@/hooks/useMasters'
 import { resolveCustomerUnconfirmedReason, stripInternalSpaces } from '@shared/customerIdentity'
@@ -753,6 +761,14 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
           }
         }
       )
+      // 2026-09-08追記(codex review 4周目 P1指摘): カーソルベースページネーションでは
+      // 削除で詰まった行数を後続ページ取得が埋め合わせない(次ページのカーソンが
+      // 削除前の値のまま変わらないため、削除件数分のドキュメントが以後表示されなくなる)。
+      // 以前は30秒毎の全ページ自動再取得が自己修復していたが全廃したため、
+      // dirty化してバナー経由で気付けるようにする(documentsInfinite自体のinvalidateは
+      // 元々このハンドラに存在しなかった。DocumentsPage.tsxのバナーに合わせて追加)。
+      queryClient.invalidateQueries({ queryKey: ['documentsInfinite'], refetchType: 'none' })
+      markDocumentsInfiniteVariantsDirty(queryClient)
       queryClient.invalidateQueries({ queryKey: ['documentStats'] })
       // documentGroupsだけでなくgroupDocuments/groupStatsも無効化する
       // (2026-08-06、PR #802セカンドオピニオンレビューで発覚した漏れを解消)
