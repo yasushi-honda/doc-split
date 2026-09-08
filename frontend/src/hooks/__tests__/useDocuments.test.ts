@@ -17,6 +17,8 @@ import {
   resolveDetailFields,
   applySearchTextFilter,
   invalidateDocumentAndGroupQueries,
+  resetDocumentsInfiniteToFirstPage,
+  documentsInfiniteQueryKey,
 } from '../useDocuments'
 import type { Document } from '@shared/types'
 
@@ -757,14 +759,126 @@ describe('invalidateDocumentAndGroupQueries (2026-08-06: useDocumentEdit/useRepr
 
     invalidateDocumentAndGroupQueries(queryClient, 'doc-123')
 
-    const invalidatedKeys = invalidateQueries.mock.calls.map(
-      (call) => (call[0] as { queryKey: unknown[] }).queryKey
+    const calls = invalidateQueries.mock.calls.map(
+      (call) => call[0] as { queryKey: unknown[]; refetchType?: string }
     )
+    const invalidatedKeys = calls.map((c) => c.queryKey)
     expect(invalidatedKeys).toContainEqual(['documentsInfinite'])
     expect(invalidatedKeys).toContainEqual(['document', 'doc-123'])
     expect(invalidatedKeys).toContainEqual(['documentGroups'])
     expect(invalidatedKeys).toContainEqual(['groupDocuments'])
     expect(invalidatedKeys).toContainEqual(['groupStats'])
     expect(invalidateQueries).toHaveBeenCalledTimes(5)
+  })
+
+  it('documentsInfiniteのみrefetchType:noneを指定する(2026-09-08: Firestore読み取り過大バグ修正。全ページ再取得を自動発火させないため)', () => {
+    const invalidateQueries = vi.fn()
+    const queryClient = { invalidateQueries } as unknown as QueryClient
+
+    invalidateDocumentAndGroupQueries(queryClient, 'doc-123')
+
+    const calls = invalidateQueries.mock.calls.map(
+      (call) => call[0] as { queryKey: unknown[]; refetchType?: string }
+    )
+    const documentsInfiniteCall = calls.find(
+      (c) => JSON.stringify(c.queryKey) === JSON.stringify(['documentsInfinite'])
+    )
+    expect(documentsInfiniteCall?.refetchType).toBe('none')
+
+    const otherCalls = calls.filter(
+      (c) => JSON.stringify(c.queryKey) !== JSON.stringify(['documentsInfinite'])
+    )
+    otherCalls.forEach((c) => {
+      expect(c.refetchType).toBeUndefined()
+    })
+  })
+})
+
+describe('documentsInfiniteQueryKey', () => {
+  it('["documentsInfinite", filters, pageSize]の形でqueryKeyを組み立てる', () => {
+    const filters = { status: 'processed' as const }
+    expect(documentsInfiniteQueryKey(filters, 100)).toEqual(['documentsInfinite', filters, 100])
+  })
+})
+
+// 2026-09-08 Firestore読み取り過大バグ修正、/plan-crossreview経由のCodexレビュー
+// High #3の回帰テスト: 全variant一律切り詰めをやめ、アクティブなvariantのみ切り詰め、
+// 他のvariantはデータを書き換えずstaleマークのみにする設計に変更した。
+describe('resetDocumentsInfiniteToFirstPage (crossreview High #3反映)', () => {
+  function createMockQueryClient() {
+    return {
+      cancelQueries: vi.fn().mockResolvedValue(undefined),
+      invalidateQueries: vi.fn(),
+      setQueryData: vi.fn(),
+    } as unknown as QueryClient & {
+      cancelQueries: ReturnType<typeof vi.fn>
+      invalidateQueries: ReturnType<typeof vi.fn>
+      setQueryData: ReturnType<typeof vi.fn>
+    }
+  }
+
+  const activeKey = documentsInfiniteQueryKey({ status: 'processed' as const }, 100)
+
+  it('アクティブなqueryKeyに対してcancelQueriesを呼ぶ(進行中のfetchNextPage結果を破棄するため)', async () => {
+    const queryClient = createMockQueryClient()
+    await resetDocumentsInfiniteToFirstPage(queryClient, activeKey)
+    expect(queryClient.cancelQueries).toHaveBeenCalledWith({ queryKey: activeKey })
+  })
+
+  it('["documentsInfinite"]部分一致の全variantをrefetchType:noneでstale化する(アクティブなものも含む)', async () => {
+    const queryClient = createMockQueryClient()
+    await resetDocumentsInfiniteToFirstPage(queryClient, activeKey)
+    expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ['documentsInfinite'],
+      refetchType: 'none',
+    })
+  })
+
+  it('アクティブなqueryKeyに対してのみsetQueryDataを呼ぶ(他のvariantのデータは書き換えない)', async () => {
+    const queryClient = createMockQueryClient()
+    await resetDocumentsInfiniteToFirstPage(queryClient, activeKey)
+    expect(queryClient.setQueryData).toHaveBeenCalledTimes(1)
+    expect(queryClient.setQueryData.mock.calls[0]![0]).toEqual(activeKey)
+  })
+
+  it('setQueryDataのupdater関数はpages/pageParamsを先頭1件のみに切り詰める', async () => {
+    const queryClient = createMockQueryClient()
+    await resetDocumentsInfiniteToFirstPage(queryClient, activeKey)
+
+    const updater = queryClient.setQueryData.mock.calls[0]![1] as (old: unknown) => unknown
+    const oldData = {
+      pages: [{ documents: ['doc-1'] }, { documents: ['doc-2'] }, { documents: ['doc-3'] }],
+      pageParams: [undefined, 'cursor-1', 'cursor-2'],
+    }
+    const result = updater(oldData) as typeof oldData
+
+    expect(result.pages).toEqual([{ documents: ['doc-1'] }])
+    expect(result.pageParams).toEqual([undefined])
+  })
+
+  it('setQueryDataのupdater関数はキャッシュ未存在(undefined)の場合はundefinedのまま返す', async () => {
+    const queryClient = createMockQueryClient()
+    await resetDocumentsInfiniteToFirstPage(queryClient, activeKey)
+
+    const updater = queryClient.setQueryData.mock.calls[0]![1] as (old: unknown) => unknown
+    expect(updater(undefined)).toBeUndefined()
+  })
+
+  it('呼び出し順序はcancelQueries→invalidateQueries→setQueryDataの順(競合防止のため)', async () => {
+    const queryClient = createMockQueryClient()
+    const callOrder: string[] = []
+    queryClient.cancelQueries.mockImplementation(async () => {
+      callOrder.push('cancelQueries')
+    })
+    queryClient.invalidateQueries.mockImplementation(() => {
+      callOrder.push('invalidateQueries')
+    })
+    queryClient.setQueryData.mockImplementation(() => {
+      callOrder.push('setQueryData')
+    })
+
+    await resetDocumentsInfiniteToFirstPage(queryClient, activeKey)
+
+    expect(callOrder).toEqual(['cancelQueries', 'invalidateQueries', 'setQueryData'])
   })
 })

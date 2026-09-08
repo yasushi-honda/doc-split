@@ -121,7 +121,11 @@ async function splitPdf(request: SplitPdfRequest): Promise<SplitPdfResponse> {
 }
 
 function invalidateSplitQueries(queryClient: QueryClient): void {
-  queryClient.invalidateQueries({ queryKey: ['documentsInfinite'] })
+  // 2026-09-08 Firestore読み取り過大バグ修正: documentsInfiniteはrefetchType:'none'で
+  // staleマークのみ行う(即時の全ページ再取得を発火させないため、useDocuments.ts
+  // invalidateDocumentAndGroupQueriesと同じ方針)。分割元/分割先の一覧表示は
+  // バナー経由のユーザー起点リセットに委ねる。
+  queryClient.invalidateQueries({ queryKey: ['documentsInfinite'], refetchType: 'none' })
   queryClient.invalidateQueries({ queryKey: ['document'] })
   // 分割元書類がグループ表示(担当CM別・利用者別)に含まれていた場合、分割後は
   // 分割元が消え新規書類が現れるため、グループ系キャッシュも無効化する
