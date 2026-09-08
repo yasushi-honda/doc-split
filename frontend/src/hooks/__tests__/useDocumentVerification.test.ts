@@ -42,9 +42,11 @@ vi.mock('@tanstack/react-query', () => ({
   }),
 }))
 
+const mockUpdateDocumentInListCache = vi.fn()
+const mockMarkDocumentsInfiniteVariantsDirty = vi.fn()
 vi.mock('../useDocuments', () => ({
-  updateDocumentInListCache: vi.fn(),
-  markDocumentsInfiniteVariantsDirty: vi.fn(),
+  updateDocumentInListCache: (...args: unknown[]) => mockUpdateDocumentInListCache(...args),
+  markDocumentsInfiniteVariantsDirty: (...args: unknown[]) => mockMarkDocumentsInfiniteVariantsDirty(...args),
   getDriveExportClearFields: vi.fn(() => {
     const df = deleteField()
     return {
@@ -143,6 +145,80 @@ describe('useDocumentVerification', () => {
       expect('driveExportedAt' in updateData).toBe(false)
       expect('driveExportError' in updateData).toBe(false)
       expect('driveExportRunId' in updateData).toBe(false)
+    })
+  })
+
+  // 2026-09-08追記(second-opinionレビュー指摘、Firestore読み取り過大バグ修正):
+  // この書類がdocumentsInfiniteのどのvariantにもキャッシュされていない場合(グループ
+  // 表示やdeep linkから開いた場合等)、updateDocumentInListCacheのパッチは無言のno-opに
+  // なる。また確認状態の変更はdocumentStatsに反映されないクライアント側フィルタ
+  // (「未確認のみ表示」)対象のため、markDocumentsInfiniteVariantsDirtyを呼ばない限り
+  // 更新バナーの検知シグナルが一切発火しない回帰テスト。
+  describe('markDocumentsInfiniteVariantsDirtyの呼び出し(更新バナー検知シグナル)', () => {
+    it('markAsVerified成功時、確認・ロールバックいずれの経路でもdirty化する', async () => {
+      const doc = makeDocument({ verified: false })
+      const { result } = renderHook(() => useDocumentVerification(doc))
+
+      await act(async () => {
+        await result.current.markAsVerified()
+      })
+
+      expect(mockMarkDocumentsInfiniteVariantsDirty).toHaveBeenCalled()
+    })
+
+    it('markAsUnverified成功時もdirty化する', async () => {
+      const doc = makeDocument({ verified: true })
+      const { result } = renderHook(() => useDocumentVerification(doc))
+
+      await act(async () => {
+        await result.current.markAsUnverified()
+      })
+
+      expect(mockMarkDocumentsInfiniteVariantsDirty).toHaveBeenCalled()
+    })
+  })
+
+  // 2026-09-08追記(second-opinionレビュー指摘): 楽観的更新(optimisticUpdate、内部で
+  // updateDocumentInListCache/markDocumentsInfiniteVariantsDirtyを呼ぶ)がtryブロックの
+  // 外にあると、これらが例外を投げた場合にfinally(isUpdatingのリセット)が実行されず、
+  // 確認トグルが永久disabledになる回帰テスト。
+  describe('optimisticUpdate失敗時もisUpdatingが固着しない', () => {
+    it('markAsVerified: 楽観的更新(updateDocumentInListCache)が例外を投げても、isUpdatingがfalseに戻りfalseを返す(rejectしない)', async () => {
+      mockUpdateDocumentInListCache.mockImplementationOnce(() => {
+        throw new Error('unexpected cache error')
+      })
+      const doc = makeDocument({ verified: false })
+      const { result } = renderHook(() => useDocumentVerification(doc))
+
+      let returned: boolean | undefined
+      await act(async () => {
+        returned = await result.current.markAsVerified()
+      })
+
+      // tryブロック内に移動したため例外はcatchで捕捉され、finally(isUpdating=false)が
+      // 必ず実行される。ここでrejectしてしまう(=finallyがスキップされる)のが
+      // 修正前の不具合だった。
+      expect(returned).toBe(false)
+      expect(result.current.isUpdating).toBe(false)
+      // Firestoreへの書込み自体は行われていないはず(optimisticUpdate段階で失敗したため)
+      expect(mockUpdateDoc).not.toHaveBeenCalled()
+    })
+
+    it('markAsUnverified: 楽観的更新(updateDocumentInListCache)が例外を投げても、isUpdatingがfalseに戻りfalseを返す(rejectしない)', async () => {
+      mockUpdateDocumentInListCache.mockImplementationOnce(() => {
+        throw new Error('unexpected cache error')
+      })
+      const doc = makeDocument({ verified: true })
+      const { result } = renderHook(() => useDocumentVerification(doc))
+
+      let returned: boolean | undefined
+      await act(async () => {
+        returned = await result.current.markAsUnverified()
+      })
+
+      expect(returned).toBe(false)
+      expect(result.current.isUpdating).toBe(false)
+      expect(mockUpdateDoc).not.toHaveBeenCalled()
     })
   })
 })

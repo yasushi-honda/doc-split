@@ -26,7 +26,7 @@ import {
   appendReprocessClearToBatch,
   invalidateDocumentAndGroupQueries,
   updateDocumentInListCache,
-  markDocumentsInfiniteVariantsDirty,
+  markDocumentsInfiniteStale,
 } from './useDocuments'
 import type { ErrorRecord, ErrorStatus, ErrorType } from '@shared/types'
 
@@ -305,10 +305,7 @@ export function useReprocessError() {
       } else {
         // documentIdが解決できなかった場合はキャッシュパッチのしようがないため、
         // staleマークのみ行いバナー経由のユーザー起点リセットに委ねる
-        queryClient.invalidateQueries({ queryKey: ['documentsInfinite'], refetchType: 'none' })
-        // 2026-09-08追記(crossreview codex review P1指摘): isInvalidatedは他ミューテーション
-        // のsetQueriesDataで暗黙にクリアされうるため、独立トラッキングも併用する
-        markDocumentsInfiniteVariantsDirty(queryClient)
+        markDocumentsInfiniteStale(queryClient)
       }
     },
   })

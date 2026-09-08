@@ -61,7 +61,7 @@ import {
   updateDocumentInListCache,
   documentsInfiniteQueryKey,
   resetDocumentsInfiniteToFirstPage,
-  markDocumentsInfiniteVariantsDirty,
+  markDocumentsInfiniteStale,
   clearDocumentsInfiniteVariantDirty,
   type DocumentFilters,
   type SortField,
@@ -504,6 +504,16 @@ export function DocumentsPage() {
       ])
       if (documentsResult.isSuccess) {
         clearDocumentsInfiniteVariantDirty(activeDocumentsQueryKey)
+        // second-opinionレビュー指摘反映(2026-09-08): queryClient.refetchQueries()は
+        // 内部でエラーを握りつぶすため(TanStack Query仕様、失敗してもPromiseはresolveする)、
+        // documentStatsの再取得が実は失敗していても気付けない。resetBaseline()が
+        // 古い統計値でbaselineを確定してしまうと直後にバナーが再表示されうるので、
+        // 失敗時は可視化だけしておく(自己修復は既存の30秒ポーリングに委ねる。実害は
+        // 「バナーが最大30秒程度余計に出る」程度で、データ不整合はない)。
+        const statsState = queryClient.getQueryState(['documentStats'])
+        if (statsState?.status === 'error') {
+          console.error('[refreshDocumentList] documentStats refetch failed; baseline may use stale stats', statsState.error)
+        }
         resetListUpdateBaseline()
       }
     } finally {
@@ -614,10 +624,7 @@ export function DocumentsPage() {
         })
       })
       // 安全網: staleマークのみ(refetchType:'none')。表示更新は上記パッチが担う
-      queryClient.invalidateQueries({ queryKey: ['documentsInfinite'], refetchType: 'none' })
-      // 2026-09-08追記(crossreview codex review P1指摘): isInvalidatedは他ミューテーションの
-      // setQueriesDataで暗黙にクリアされうるため、独立トラッキングも併用する
-      markDocumentsInfiniteVariantsDirty(queryClient)
+      markDocumentsInfiniteStale(queryClient)
       queryClient.invalidateQueries({ queryKey: ['documentStats'] })
       clearSelection()
       setBulkOperation(null)
@@ -702,9 +709,8 @@ export function DocumentsPage() {
       // マークのみ、即時再取得はしない)。ステータス変更によりstatusフィルタ済み
       // variantのメンバーシップが変わりうる(updateDocumentInListCacheは値のみ書換え、
       // フィルタ離脱による非表示化はしない)ため、非アクティブな他variantを独立
-      // トラッキングでdirty化する(crossreview codex review P1指摘反映)。
-      queryClient.invalidateQueries({ queryKey: ['documentsInfinite'], refetchType: 'none' })
-      markDocumentsInfiniteVariantsDirty(queryClient)
+      // トラッキングでdirty化する。
+      markDocumentsInfiniteStale(queryClient)
       queryClient.invalidateQueries({ queryKey: ['documentStats'] })
       // customerName/careManagerName等をクリアするためグルーピングキーから外れる書類が
       // 生じる。単体再処理(useReprocessDocument)と同じ理由でグループ表示キャッシュも
@@ -798,14 +804,13 @@ export function DocumentsPage() {
         void refreshDocumentList()
       } else {
         toast.success(`${results.length}件を削除しました`)
-        // 2026-09-08追記(codex review 4周目 P1指摘): カーソルベースページネーションでは
-        // 「削除で見た目上詰まった行数」を後続ページの取得が埋め合わせない
-        // (次ページのカーソルは削除前の最後のドキュメントの値のまま変わらないため、
-        // 削除件数分のドキュメントが以後一切表示されなくなる)。以前は30秒毎の全ページ
-        // 自動再取得がこの欠落を自己修復していたが、それを全廃した現設計では
-        // 修復手段がバナー経由のリセットしかない。dirty化してバナーで気付けるようにする。
-        queryClient.invalidateQueries({ queryKey: ['documentsInfinite'], refetchType: 'none' })
-        markDocumentsInfiniteVariantsDirty(queryClient)
+        // 2026-09-08追記: カーソルベースページネーションでは「削除で見た目上詰まった
+        // 行数」を後続ページの取得が埋め合わせない(次ページのカーソルは削除前の
+        // 最後のドキュメントの値のまま変わらないため、削除件数分のドキュメントが
+        // 以後一切表示されなくなる)。以前は30秒毎の全ページ自動再取得がこの欠落を
+        // 自己修復していたが、それを全廃した現設計では修復手段がバナー経由の
+        // リセットしかない。dirty化してバナーで気付けるようにする。
+        markDocumentsInfiniteStale(queryClient)
       }
 
       if (allWarnings.length > 0) {

@@ -36,7 +36,7 @@ import {
   useDistributionSiblingCount,
   resolveDetailFields,
   invalidateGroupQueries,
-  markDocumentsInfiniteVariantsDirty,
+  markDocumentsInfiniteStale,
 } from '@/hooks/useDocuments'
 import { useDocumentEdit } from '@/hooks/useDocumentEdit'
 import { useCustomers, useOffices, useDocumentTypes, useCareManagers, useCustomerIdentityLookup } from '@/hooks/useMasters'
@@ -761,14 +761,13 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
           }
         }
       )
-      // 2026-09-08追記(codex review 4周目 P1指摘): カーソルベースページネーションでは
-      // 削除で詰まった行数を後続ページ取得が埋め合わせない(次ページのカーソンが
-      // 削除前の値のまま変わらないため、削除件数分のドキュメントが以後表示されなくなる)。
-      // 以前は30秒毎の全ページ自動再取得が自己修復していたが全廃したため、
-      // dirty化してバナー経由で気付けるようにする(documentsInfinite自体のinvalidateは
-      // 元々このハンドラに存在しなかった。DocumentsPage.tsxのバナーに合わせて追加)。
-      queryClient.invalidateQueries({ queryKey: ['documentsInfinite'], refetchType: 'none' })
-      markDocumentsInfiniteVariantsDirty(queryClient)
+      // 2026-09-08追記: カーソルベースページネーションでは削除で詰まった行数を
+      // 後続ページ取得が埋め合わせない(次ページのカーソルが削除前の値のまま変わらない
+      // ため、削除件数分のドキュメントが以後表示されなくなる)。以前は30秒毎の全ページ
+      // 自動再取得が自己修復していたが全廃したため、dirty化してバナー経由で気付ける
+      // ようにする(documentsInfinite自体のinvalidateは元々このハンドラに存在しなかった。
+      // DocumentsPage.tsxのバナーに合わせて追加)。
+      markDocumentsInfiniteStale(queryClient)
       queryClient.invalidateQueries({ queryKey: ['documentStats'] })
       // documentGroupsだけでなくgroupDocuments/groupStatsも無効化する
       // (2026-08-06、PR #802セカンドオピニオンレビューで発覚した漏れを解消)

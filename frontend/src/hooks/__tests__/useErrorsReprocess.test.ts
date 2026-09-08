@@ -45,12 +45,12 @@ vi.mock('../../lib/firebase', () => ({
 const mockAppendReprocessClearToBatch = vi.fn().mockResolvedValue(false)
 const mockInvalidateDocumentAndGroupQueries = vi.fn()
 const mockUpdateDocumentInListCache = vi.fn()
-const mockMarkDocumentsInfiniteVariantsDirty = vi.fn()
+const mockMarkDocumentsInfiniteStale = vi.fn()
 vi.mock('../useDocuments', () => ({
   appendReprocessClearToBatch: (...args: unknown[]) => mockAppendReprocessClearToBatch(...args),
   invalidateDocumentAndGroupQueries: (...args: unknown[]) => mockInvalidateDocumentAndGroupQueries(...args),
   updateDocumentInListCache: (...args: unknown[]) => mockUpdateDocumentInListCache(...args),
-  markDocumentsInfiniteVariantsDirty: (...args: unknown[]) => mockMarkDocumentsInfiniteVariantsDirty(...args),
+  markDocumentsInfiniteStale: (...args: unknown[]) => mockMarkDocumentsInfiniteStale(...args),
 }))
 
 const mockInvalidateQueries = vi.fn()
@@ -179,7 +179,7 @@ describe('useReprocessError / requestReprocess', () => {
 
       expect(mockInvalidateDocumentAndGroupQueries).not.toHaveBeenCalled()
       expect(mockUpdateDocumentInListCache).not.toHaveBeenCalled()
-      expect(mockInvalidateQueries).toHaveBeenCalledWith({ queryKey: ['documentsInfinite'], refetchType: 'none' })
+      expect(mockMarkDocumentsInfiniteStale).toHaveBeenCalledWith(expect.anything())
     })
   })
 })

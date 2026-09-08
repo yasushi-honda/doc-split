@@ -20,6 +20,7 @@ import {
   resetDocumentsInfiniteToFirstPage,
   documentsInfiniteQueryKey,
   markDocumentsInfiniteVariantsDirty,
+  markDocumentsInfiniteStale,
   isDocumentsInfiniteVariantDirty,
   clearDocumentsInfiniteVariantDirty,
 } from '../useDocuments'
@@ -899,7 +900,7 @@ describe('resetDocumentsInfiniteToFirstPage (crossreview High #3反映)', () => 
 })
 
 // 2026-09-08追記: codex reviewが3周にわたって発見した指摘(古いisStale依存、
-// アクティブvariant除外による膜シップ変更見落とし、refetch失敗時の早すぎるdirty解除)を
+// アクティブvariant除外によるメンバーシップ変更見落とし、refetch失敗時の早すぎるdirty解除)を
 // 踏まえ、「documentsInfiniteに影響しうる操作は全variantを一律dirty化し、解除は対象
 // variantの実際のfetch成功を確認してから呼び出し側が行う」という単純なルールに統一した。
 // ここではその単純化されたルール自体を実際のQueryClientで検証する(モックの
@@ -939,6 +940,39 @@ describe('markDocumentsInfiniteVariantsDirty / isDocumentsInfiniteVariantDirty /
     // refetch成功を模して明示的にclearを呼ぶ → dirty解除
     clearDocumentsInfiniteVariantDirty(key)
     expect(isDocumentsInfiniteVariantDirty(key)).toBe(false)
+
+    queryClient.clear()
+  })
+
+  // 2026-09-08追記(second-opinionレビュー指摘): markDocumentsInfiniteVariantsDirtyの
+  // 呼び出し元の多くはuseMutationのonSuccess内であり、TanStack Query v5は
+  // mutationFnとonSuccessを同一tryブロックで囲むため、onSuccess内の例外はmutation全体を
+  // "error"扱いにしてしまう(実際に@tanstack/query-coreのソースで確認済み)。この関数は
+  // 一覧更新バナー表示という補助的なUXシグナルのためだけに存在するため、本体の成功報告を
+  // 壊してはならない。内部で例外を握り潰すことを検証する。
+  it('queryClient.getQueryCache()が例外を投げても、markDocumentsInfiniteVariantsDirty自体は例外を伝播しない', () => {
+    const brokenQueryClient = {
+      getQueryCache: () => {
+        throw new Error('queryCache is broken')
+      },
+    } as unknown as QueryClient
+
+    expect(() => markDocumentsInfiniteVariantsDirty(brokenQueryClient)).not.toThrow()
+  })
+})
+
+describe('markDocumentsInfiniteStale (second-opinionレビュー指摘: 定型2行の重複解消)', () => {
+  it('invalidateQueries(refetchType:none)とmarkDocumentsInfiniteVariantsDirtyの両方を実行する', async () => {
+    const { QueryClient } = await import('@tanstack/react-query')
+    const queryClient = new QueryClient()
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries')
+    const key = documentsInfiniteQueryKey({ customerName: 'mark-stale-test-marker' as const }, 100)
+    queryClient.setQueryData(key, { pages: [], pageParams: [] })
+
+    markDocumentsInfiniteStale(queryClient)
+
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['documentsInfinite'], refetchType: 'none' })
+    expect(isDocumentsInfiniteVariantDirty(key)).toBe(true)
 
     queryClient.clear()
   })

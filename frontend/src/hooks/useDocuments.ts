@@ -315,14 +315,14 @@ export function invalidateGroupQueries(queryClient: QueryClient): void {
  * 事前にパッチしておく責務を負う(このファイルの`useReprocessDocument`が実例)。
  */
 export function invalidateDocumentAndGroupQueries(queryClient: QueryClient, documentId: string): void {
-  queryClient.invalidateQueries({ queryKey: ['documentsInfinite'], refetchType: 'none' })
-  // 2026-09-08追記(crossreview codex review P1指摘): 上記invalidateQueriesの
-  // isInvalidatedは、呼び出し元が併せて行うupdateDocumentInListCache(setQueriesData)で
-  // 暗黙にクリアされてしまう(全variant一律、TanStack Query v5の仕様として実機確認済み)。
-  // フィルタ切替検知用のシグナルはmarkDocumentsInfiniteVariantsDirty(独立トラッキング、
-  // アクティブなvariantも含めて全variantをdirty化する。バナー押下時にrefetch成功を
-  // 確認してから呼び出し側がアクティブなvariantのみ明示的に解除する)を正とする。
-  markDocumentsInfiniteVariantsDirty(queryClient)
+  // `invalidateQueries(refetchType:'none')`のisInvalidatedは、呼び出し元が併せて行う
+  // updateDocumentInListCache(setQueriesData)で暗黙にクリアされてしまう(全variant
+  // 一律、実機検証で確認済み。公式ドキュメントに明記された契約ではなく本コードベースでの
+  // 実機観測に基づく)。フィルタ切替検知用のシグナルはmarkDocumentsInfiniteStale内の
+  // markDocumentsInfiniteVariantsDirty(独立トラッキング、アクティブなvariantも含めて
+  // 全variantをdirty化する。バナー押下時にrefetch成功を確認してから呼び出し側が
+  // アクティブなvariantのみ明示的に解除する)を正とする。
+  markDocumentsInfiniteStale(queryClient)
   queryClient.invalidateQueries({ queryKey: ['document', documentId] })
   invalidateGroupQueries(queryClient)
 }
@@ -571,7 +571,11 @@ export function useReprocessDocument() {
       // detailの古いOCR内容がポーリング再開(3秒後)まで表示され続けるのを防ぐ
       queryClient.invalidateQueries({ queryKey: ['documentDetail', documentId] })
       invalidateDocumentAndGroupQueries(queryClient, documentId)
-      toast.success('再処理をリクエストしました。処理完了まで画面が自動更新されます。', { duration: 5000 })
+      // 2026-09-08修正: Firestore読み取り過大バグ修正で一覧の自動再取得を全廃したため、
+      // 「画面が自動更新されます」は実態と乖離する(一覧上のこの行はこの直後の
+      // updateDocumentInListCacheパッチで即時反映されるが、OCR完了時の状態遷移
+      // (pending→processed)は一覧上には自動反映されない。バナー経由の明示更新が必要)。
+      toast.success('再処理をリクエストしました。処理完了後は一覧の更新バナーからご確認ください。', { duration: 5000 })
       return true
     } catch (err) {
       console.error('Failed to reprocess:', err)
@@ -711,6 +715,12 @@ export function documentsInfiniteQueryKey(filters: DocumentFilters, pageSize: nu
 // 軽量な再取得に過ぎず、これは許容する(cf. 今回のバグ本体である「読み込み済み全ページの
 // 自動再取得」とは全く異なるコスト規模)。
 
+// 既知の限界(second-opinionレビュー指摘、2026-09-08): このSetはqueryがgcTimeで
+// QueryClientのキャッシュから破棄された後もエントリを自動削除しない(pruning未実装)。
+// 単一QueryClientインスタンス・ブラウザタブ単位のセッション(ページリロードでリセット)
+// というこのアプリの実運用では、フィルタの組み合わせ数は現実的に有限で、文字列キー
+// 1件のメモリコストも軽微なため実害はないと判断しているが、将来的にフィルタの
+// 組み合わせが動的に無制限生成されるような変更が入る場合は要再検討。
 type DirtyStoreListener = () => void
 
 const dirtyDocumentsInfiniteVariants = new Set<string>()
@@ -728,18 +738,51 @@ function notifyDirtyStoreListeners(): void {
  * `['documentsInfinite']`部分一致の全variant(画面表示中のものを含む)をdirty化する。
  * 単体編集・単体/一括再処理・一括確認・PDF分割・Driveエクスポート再試行等、
  * `documentsInfinite`へ影響しうる全てのミューテーション成功/失敗ハンドラから呼ぶ。
+ *
+ * この関数は**絶対に例外を投げない**(second-opinionレビュー指摘反映、2026-09-08):
+ * 呼び出し元の多くは`useMutation`の`onSuccess`内であり、TanStack Query v5の
+ * `Mutation`実装は`mutationFn`と`onSuccess`を同一tryブロックで囲むため、
+ * `onSuccess`内で例外が発生するとFirestore/Cloud Functionの処理自体は成功していても
+ * mutation全体が"error"扱いになり、ユーザーに誤った失敗通知が出てしまう
+ * (実際に`@tanstack/query-core`のソースで確認済み)。一覧更新バナーの表示是非という
+ * 補助的なUXシグナルのために、本体の成功報告を壊すことがあってはならないため、
+ * 内部で例外を捕捉してconsole.errorに留める(呼び出し元には伝播させない)。
  */
 export function markDocumentsInfiniteVariantsDirty(queryClient: QueryClient): void {
-  const queries = queryClient.getQueryCache().findAll({ queryKey: ['documentsInfinite'] })
-  let changed = false
-  queries.forEach((q) => {
-    const key = dirtyKeyOf(q.queryKey)
-    if (!dirtyDocumentsInfiniteVariants.has(key)) {
-      dirtyDocumentsInfiniteVariants.add(key)
-      changed = true
-    }
-  })
-  if (changed) notifyDirtyStoreListeners()
+  try {
+    const queries = queryClient.getQueryCache().findAll({ queryKey: ['documentsInfinite'] })
+    let changed = false
+    queries.forEach((q) => {
+      const key = dirtyKeyOf(q.queryKey)
+      if (!dirtyDocumentsInfiniteVariants.has(key)) {
+        dirtyDocumentsInfiniteVariants.add(key)
+        changed = true
+      }
+    })
+    if (changed) notifyDirtyStoreListeners()
+  } catch (err) {
+    console.error('[markDocumentsInfiniteVariantsDirty] unexpected error (ignored, banner UX only):', err)
+  }
+}
+
+/**
+ * `documentsInfinite`を「即時再取得しないがstale化する」ための定型2行
+ * (`invalidateQueries(refetchType:'none')` + `markDocumentsInfiniteVariantsDirty`)を
+ * 1箇所にまとめたヘルパー(second-opinionレビュー指摘反映、2026-09-08)。
+ *
+ * この2行は本来別々の目的を持つ: `invalidateQueries`はTanStack内部の`isInvalidated`を
+ * 立てる(現状これを読む本番コードは無いが、将来`refetchOnMount`等を再度有効化する
+ * 変更が入った場合に備えた保険として残す)。実際にバナー表示を駆動するのは
+ * `markDocumentsInfiniteVariantsDirty`(独立トラッキング)の方。
+ *
+ * 呼び出し元がこの2行を個別に手書きすると、`invalidateDocumentAndGroupQueries`が
+ * かつて複数箇所で個別にinvalidateQueriesを手書きしていた頃と同じ「1箇所だけ書き漏れる」
+ * 再発リスクを抱える(このファイルの`invalidateDocumentAndGroupQueries`のコメント参照)ため、
+ * 単一ヘルパーに統一する。
+ */
+export function markDocumentsInfiniteStale(queryClient: QueryClient): void {
+  queryClient.invalidateQueries({ queryKey: ['documentsInfinite'], refetchType: 'none' })
+  markDocumentsInfiniteVariantsDirty(queryClient)
 }
 
 /**
@@ -844,15 +887,12 @@ export async function resetDocumentsInfiniteToFirstPage(
   await queryClient.cancelQueries({ queryKey: activeQueryKey })
 
   // 2. ['documentsInfinite']部分一致の全variant(アクティブなものも含む)を一律stale化する。
-  //    refetchType:'none'のため即時再取得はしない。TanStack内部のisInvalidatedは
-  //    他のミューテーションのsetQueriesData呼び出しで後から意図せず消えうる
-  //    (下記3参照)ため、フィルタ切替検知の主シグナルとしては信頼せず、
-  //    markDocumentsInfiniteVariantsDirty(独立トラッキング)を正とする。
-  queryClient.invalidateQueries({ queryKey: ['documentsInfinite'], refetchType: 'none' })
-
-  // 独立したdirtyストアでも全variant(アクティブなものも含む)をマークする。呼び出し側が
-  // refetch成功を確認した後にアクティブなvariantのみ明示的に解除する(上記の呼び出し手順3参照)。
-  markDocumentsInfiniteVariantsDirty(queryClient)
+  //    TanStack内部のisInvalidatedは他のミューテーションのsetQueriesData呼び出しで
+  //    後から意図せず消えうるため、フィルタ切替検知の主シグナルとしては信頼せず、
+  //    markDocumentsInfiniteStale内のmarkDocumentsInfiniteVariantsDirty(独立トラッキング)
+  //    を正とする。呼び出し側がrefetch成功を確認した後にアクティブなvariantのみ
+  //    明示的に解除する(上記の呼び出し手順3参照)。
+  markDocumentsInfiniteStale(queryClient)
 
   // 3. アクティブなvariantのみ、pages/pageParamsとも先頭1件に切り詰める。他のvariantの
   //    データは一切書き換えない。
