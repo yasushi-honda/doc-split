@@ -480,6 +480,8 @@ decision-makerがGCP費用の表（kanameone 2026年8月請求、合計¥100,760
 
 **次の一手（監視待ち、番号単位の追加認可は不要）**: 翌月（2026年10月）の請求額でkanameoneのFirestore読み取り数削減を確認する。同型リスクとして`useGroupDocuments`（グループ別一覧）にも同様の構造が疑われるため、follow-up Issue #891を起票済み（水平展開要否は別途調査）。
 
+**kanameone担当者への報告完了（2026-09-09）**: クラウド利用料増大への対策実施と見込まれるコスト圧縮効果について、書類件数増加という自然な経緯として荒立てず伝え、対策済みで安心してよい旨を強調した報告文書（HTML、ローカル生成、リポジトリ非管理）を作成し、decision-makerが送付済み。正式な効果は10月請求で確認予定（上記「次の一手」と同一マイルストーン）。
+
 ## 【完了・2026-08-29】残存44件(→49件)の実態解明+kanameone担当者への確認依頼を報告文書に反映(送付は未実施)
 
 上記「次に必要なのは以下のいずれか」の両方に対応した。**kanameone側でDrive export破損documentが継続的に発生していないか、`classify-drive-export-drift`を`--care-manager`省略でテナント全体に対し再実行**（GitHub Actions run [33183923836](https://github.com/yasushi-honda/doc-split/actions/runs/33183923836)）したところ、Phase 3最終確認（8/28、44件）からわずか約1.5時間で残存が49件（trashed9+misplaced14+target-path-not-created5=28件、他blocked21件=segment-unresolvable17+ambiguous-path3+customer-unconfirmed1）へ自然増していることを確認。**新たに`wouldRestoreFolders`1件（「ケアプラン」フォルダ、影響3書類）も検出**（Phase 3実行時にはなかった別インスタンス）。
