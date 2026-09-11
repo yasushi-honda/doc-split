@@ -11,7 +11,7 @@
  *   FIREBASE_PROJECT_ID=<project-id> node scripts/inspect-ocr-volume-stats.js [--days N] [--sample-limit N]
  *
  * オプション:
- *   --days N          集計対象期間 (createdAt >= N日前、default: 30)
+ *   --days N          集計対象期間 (processedAt >= N日前、default: 30)
  *   --sample-limit N  totalPages分布のサンプル取得上限件数 (default: 2000、Firestore read課金に注意)
  *
  * 出力: 文書数(count()集計、courtesy無料枠内)、totalPagesのsum/avg/max、
@@ -67,7 +67,7 @@ async function main() {
 
   console.log(`=== OCRボリューム統計 (project=${projectId}, 直近${days}日) ===\n`);
 
-  const countSnap = await col.where('createdAt', '>=', since).count().get();
+  const countSnap = await col.where('processedAt', '>=', since).count().get();
   const totalCount = countSnap.data().count;
   console.log(`対象期間内 documents件数: ${totalCount}`);
 
@@ -78,7 +78,7 @@ async function main() {
 
   // totalPagesの分布はcount()集計だけでは取得できないため、フィールド限定read(select)で
   // サンプル取得する。全件走査ではなくsampleLimitで上限を切り、read課金を抑える。
-  const snap = await col.where('createdAt', '>=', since).select('totalPages').limit(sampleLimit).get();
+  const snap = await col.where('processedAt', '>=', since).select('totalPages').limit(sampleLimit).get();
   const pages = snap.docs.map((d) => d.get('totalPages')).filter((p) => typeof p === 'number' && p > 0);
 
   console.log(`ページ数サンプル取得件数: ${pages.length} (上限${sampleLimit}件、totalCountの${((pages.length / totalCount) * 100).toFixed(1)}%相当)`);
