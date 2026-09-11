@@ -22,11 +22,14 @@
  * - status=='processed'でのフィルタが必須(codex P1同種指摘)。processedAtはpending作成時にも
  *   付与される(functions/src/gmail/checkGmailAttachments.ts等)ため、フィルタ無しではpending/
  *   error文書(totalPages:0)が母集団に混入し、統計が歪む
- * - --sample-limitで打ち切られたサンプルはFirestoreのデフォルト順序(ドキュメントID順)であり、
- *   ランダムサンプリングではない(codex P2指摘)。IDがテナント/インポート経路と相関する場合、
- *   系統的な偏りを生みうる。このため「全期間推定合計ページ数」の外挿は、サンプルが母集団を
- *   完全にカバーしている場合(pages.length >= totalCount)のみ行う。打ち切られた場合は
- *   サンプル内統計のみを表示し、外挿はしない(不正確な確信を持った数値を出さない)
+ * - --sample-limitで打ち切られたサンプルは、`processedAt`への不等号フィルタによりFirestoreが
+ *   暗黙に`processedAt`昇順でソートするため、「期間内で最も古い側」に偏ったサンプルになる
+ *   (ランダムサンプリングではない、codex P2指摘・2回目の指摘で順序の実態を訂正)。時期によって
+ *   文書量・ページ数分布に傾向がある場合、系統的な偏りを生みうる。このため「全期間推定合計
+ *   ページ数」の外挿は、サンプルが母集団を完全にカバーしている場合(pages.length >= totalCount)
+ *   のみ行う。打ち切られた場合はサンプル内統計のみを表示し、外挿はしない(不正確な確信を
+ *   持った数値を出さない)。母集団全体の傾向を正確に知りたい場合は--sample-limitを
+ *   totalCount以上に設定して完全カバーさせること
  */
 
 const admin = require('firebase-admin');
@@ -91,13 +94,14 @@ async function main() {
 
   // totalPagesの分布はcount()集計だけでは取得できないため、フィールド限定read(select)で
   // サンプル取得する。全件走査ではなくsampleLimitで上限を切り、read課金を抑える。
-  // 注意: orderByを指定していないためFirestoreの既定順序(ドキュメントID昇順)で返る。
-  // これはランダムサンプリングではない(下記の外挿判定を参照)。
+  // 注意: orderByを明示していないが、processedAtへの不等号フィルタによりFirestoreは
+  // 暗黙にprocessedAt昇順でソートする。つまり打ち切られた場合は「期間内で最も古い側」の
+  // サンプルになり、ランダムサンプリングではない(下記の外挿判定を参照)。
   const snap = await baseQuery.select('totalPages').limit(sampleLimit).get();
   const isFullPopulation = snap.size >= totalCount;
   const pages = snap.docs.map((d) => d.get('totalPages')).filter((p) => typeof p === 'number' && p > 0);
 
-  console.log(`ページ数サンプル取得件数: ${pages.length} (上限${sampleLimit}件、totalCountの${((pages.length / totalCount) * 100).toFixed(1)}%相当${isFullPopulation ? '、母集団を完全カバー' : '、ID順での打ち切りサンプルのため外挿は行わない'})`);
+  console.log(`ページ数サンプル取得件数: ${pages.length} (上限${sampleLimit}件、totalCountの${((pages.length / totalCount) * 100).toFixed(1)}%相当${isFullPopulation ? '、母集団を完全カバー' : '、processedAt昇順(期間内最古側)の打ち切りサンプルのため外挿は行わない'})`);
 
   if (pages.length === 0) {
     console.log('totalPagesを持つ文書が見つかりませんでした。');
@@ -123,14 +127,15 @@ async function main() {
   }
 
   // Cloud Run CPU秒の粗い見積もり材料。母集団を完全カバーしている場合のみ外挿する
-  // (打ち切りサンプルはID順でランダムでないため、外挿すると系統的な偏りを持ちうる。codex review指摘対応)。
+  // (打ち切りサンプルはprocessedAt昇順=期間内最古側に偏っておりランダムでないため、
+  // 外挿すると系統的な偏りを持ちうる。codex review指摘対応)。
   // 実際のCloud Run実機レイテンシ(コールドスタート込み)はADR-0025本文で別途負荷試験により確定する。
   if (isFullPopulation) {
     const estimatedTotalPages = sum; // サンプル=母集団なのでそのまま合計値を使う
     console.log(`\n[参考] 全期間合計ページ数(母集団完全カバー): ${estimatedTotalPages}`);
     console.log(`[参考] ローカル実測6-8秒/ページで換算した場合の推定CPU秒: ${(estimatedTotalPages * 6).toFixed(0)}〜${(estimatedTotalPages * 8).toFixed(0)}秒/${days}日`);
   } else {
-    console.log(`\n[注意] サンプルが打ち切られており(${pages.length}/${totalCount}件)ID順で母集団を代表する保証がないため、全期間への外挿は行いません。`);
+    console.log(`\n[注意] サンプルが打ち切られており(${pages.length}/${totalCount}件)、期間内最古側に偏ったサンプルで母集団を代表する保証がないため、全期間への外挿は行いません。`);
     console.log(`       桁感が必要な場合は --sample-limit ${totalCount} 以上を指定して母集団を完全カバーしたうえで再実行してください。`);
   }
 }
