@@ -202,6 +202,9 @@ export function firestoreToDocument(id: string, data: Record<string, unknown>): 
     // 抽出スコア・詳細
     extractionScores: data.extractionScores as Document['extractionScores'],
     extractionDetails: data.extractionDetails as Document['extractionDetails'],
+    // Pass2昇格の可観測化 (ADR-0025 PR2、CLAUDE.md #178教訓対応: firestoreToDocument()に
+    // マッピングしないとFEから読めなくなるため、現状FE表示用途は無くとも必ず追加する)
+    pass2Promotion: data.pass2Promotion as Document['pass2Promotion'],
     // OCR結果確認ステータス
     verified: data.verified as boolean | undefined,
     verifiedBy: data.verifiedBy as string | null | undefined,

@@ -183,6 +183,8 @@ export interface Document {
   extractionScores?: ExtractionScores;
   // 抽出詳細（マッチ方法・キーワード等）
   extractionDetails?: ExtractionDetails;
+  // Pass2昇格の可観測化 (ADR-0025 PR2)
+  pass2Promotion?: Pass2Promotion;
 
   // OCR結果確認ステータス（人によるチェック状態）
   verified?: boolean;           // 確認済みフラグ（デフォルト: false）
@@ -476,6 +478,23 @@ export interface ExtractionDetails {
   officeMatchType: string;       // 事業所名のマッチタイプ
   datePattern?: string | null;   // 日付の抽出パターン
   dateSource?: string | null;    // 日付の抽出元
+}
+
+/**
+ * Pass2(LLM候補抽出)の候補がarbitrationで昇格したか(=全文ベース抽出を上書きしたか)を
+ * フィールドごとに記録する(ADR-0025 PR2)。個人情報は一切含まない(昇格有無のブール値のみ)。
+ * Pass2廃止の可否判断に必要な実データ(昇格率)を実運用ログから計測するための可観測化。
+ *
+ * 複数顧客FAX複製機能(faxDuplication、ADR-0024)有効時は、1回のOCR/Pass2実行の結果が
+ * distributionIdを共有する複数documentsエントリ(元doc+顧客ごとの複製)に同一値でコピー
+ * される。集計時は distributionId (無ければ doc.id) でグルーピングして重複計上を避けること
+ * (`scripts/inspect-ocr-volume-stats.js` の totalPages 集計と同じ扱い)。
+ */
+export interface Pass2Promotion {
+  documentType: boolean;
+  customerName: boolean;
+  officeName: boolean;
+  date: boolean;
 }
 
 // ============================================

@@ -154,6 +154,16 @@ export interface OcrExtractionUpdateFields {
    * (氏名・事業所名等の実値はここに書かない)。Pass2廃止の可否判断に必要な実データ
    * (昇格率)を実運用ログから計測するための可観測化であり、この値自体は仲裁結果に
    * 一切影響しない(read-only な記録用フィールド)。
+   *
+   * 【集計時の注意(codex review指摘)】複数顧客FAX複製機能(faxDuplication、ADR-0024)
+   * 有効時は、1回のOCR/Pass2実行の結果がdistributionIdを共有する複数documentsエントリ
+   * (元doc+顧客ごとの複製)に同一値でコピーされる(applyOcrCompletionTransaction()が
+   * mergedを全複製メンバーへspreadするため)。これは他の抽出結果フィールド(totalPages等)
+   * と同じ仕様であり意図的(各複製は同じOCR実行結果を正しく反映している)。ただし
+   * collection全体で昇格率を集計する際は、distributionId(無ければdoc.id)でグルーピング
+   * してから計算しないと、複数顧客宛のFAXの実行結果が複製メンバー数だけ多重計上され、
+   * Pass2廃止の可否判断を誤らせる(`scripts/inspect-ocr-volume-stats.js`のtotalPages集計と
+   * 同じdedup処理が必要)。
    */
   pass2Promotion: {
     documentType: boolean;
