@@ -501,4 +501,95 @@ describe('buildOcrExtractionUpdatePayload', () => {
     );
     expect(payload.ocrExtraction.extractedAt).to.deep.equal(customExtractedAt);
   });
+
+  describe('Issue #895修正: 候補ゼロ(bestMatch===null)時の空確定防止', () => {
+    it('customerResult.bestMatchがnullかつneedsManualSelectionがfalse(候補ゼロの実際の挙動)でも、customerConfirmedはfalseになる', () => {
+      // extractCustomerCandidates()は候補0件の場合、bestMatch:nullかつ
+      // needsManualSelection:false を返す(手動選択が必要な「複数候補」の状態ではないため)。
+      // 修正前はこの組み合わせで !needsManualSelection === true となり、
+      // customerId:nullのままcustomerConfirmed:trueという「空確定」バグが発生していた。
+      const payload = buildOcrExtractionUpdatePayload(
+        makeInputs({
+          customerResult: {
+            bestMatch: null,
+            candidates: [],
+            hasMultipleCandidates: false,
+            needsManualSelection: false,
+          },
+        })
+      );
+
+      expect(payload.customerConfirmed).to.equal(false);
+      expect(payload.customerId).to.equal(null);
+      expect(payload.customerName).to.equal('不明顧客');
+    });
+
+    it('officeResult.bestMatchがnullかつneedsManualSelectionがfalse(候補ゼロの実際の挙動)でも、officeConfirmedはfalseになる', () => {
+      const payload = buildOcrExtractionUpdatePayload(
+        makeInputs({
+          officeResult: {
+            bestMatch: null,
+            candidates: [],
+            hasMultipleCandidates: false,
+            needsManualSelection: false,
+          },
+        })
+      );
+
+      expect(payload.officeConfirmed).to.equal(false);
+      expect(payload.officeId).to.equal(null);
+      expect(payload.officeName).to.equal('未判定');
+    });
+
+    it('bestMatchが存在しneedsManualSelectionがfalseの通常ケースでは、従来通りConfirmed:trueになる(回帰確認)', () => {
+      const payload = buildOcrExtractionUpdatePayload(makeInputs());
+      expect(payload.customerConfirmed).to.equal(true);
+      expect(payload.officeConfirmed).to.equal(true);
+    });
+  });
+
+  describe('ADR-0025 PR2: pass2Promotion(Pass2昇格の可観測化)', () => {
+    it('provenanceが未指定(arbitrationを経ていない呼び出し)の場合、全フィールドfalseになる', () => {
+      const payload = buildOcrExtractionUpdatePayload(makeInputs());
+      expect(payload.pass2Promotion).to.deep.equal({
+        documentType: false,
+        customerName: false,
+        officeName: false,
+        date: false,
+      });
+    });
+
+    it('provenance.source==="existing"の場合、該当フィールドはfalseになる', () => {
+      const payload = buildOcrExtractionUpdatePayload(
+        makeInputs({
+          customerResult: {
+            ...makeInputs().customerResult,
+            provenance: { source: 'existing', candidateGrounded: true },
+          },
+        })
+      );
+      expect(payload.pass2Promotion.customerName).to.equal(false);
+    });
+
+    it('provenance.source==="candidate"の場合、該当フィールドのみtrueになる(他フィールドは影響を受けない)', () => {
+      const payload = buildOcrExtractionUpdatePayload(
+        makeInputs({
+          customerResult: {
+            ...makeInputs().customerResult,
+            provenance: { source: 'candidate', candidateGrounded: true },
+          },
+          officeResult: {
+            ...makeInputs().officeResult,
+            provenance: { source: 'candidate', candidateGrounded: true },
+          },
+        })
+      );
+      expect(payload.pass2Promotion).to.deep.equal({
+        documentType: false,
+        customerName: true,
+        officeName: true,
+        date: false,
+      });
+    });
+  });
 });

@@ -32,14 +32,25 @@ import type {
   CustomerExtractionResult,
   OfficeExtractionResultWithCandidates,
   DateExtractionResult,
+  ArbitrationProvenance,
   MatchType,
 } from '../utils/extractors';
 
+/**
+ * arbitrate*() が返す結果は基底の *ExtractionResult に `provenance` を追加した
+ * Arbitrated*ExtractionResult 型だが、本モジュールは基底型のみを要求してきた
+ * (provenanceは構造的に無視されていた)。Pass2昇格の可観測化(PR2)のため、
+ * provenanceを任意プロパティとして受け取れるよう型を拡張する。
+ * オプショナルにしているのは、arbitrationを経ていない呼び出し元(既存テスト等)との
+ * 後方互換性を保つため。
+ */
+type WithOptionalProvenance<T> = T & { provenance?: ArbitrationProvenance };
+
 export interface OcrUpdatePayloadInputs {
-  documentTypeResult: DocumentExtractionResult;
-  customerResult: CustomerExtractionResult;
-  officeResult: OfficeExtractionResultWithCandidates;
-  dateResult: DateExtractionResult;
+  documentTypeResult: WithOptionalProvenance<DocumentExtractionResult>;
+  customerResult: WithOptionalProvenance<CustomerExtractionResult>;
+  officeResult: WithOptionalProvenance<OfficeExtractionResultWithCandidates>;
+  dateResult: WithOptionalProvenance<DateExtractionResult>;
   ocrResultUrl: string | null;
   totalPages: number;
   suggestedNewOffice: string | null;
@@ -137,6 +148,19 @@ export interface OcrExtractionUpdateFields {
     dateSource: string | null;
   };
   ocrExtraction: OcrExtractionMeta;
+  /**
+   * ADR-0025 PR2: Pass2(LLM候補抽出)の候補がarbitrationで昇格したか(=全文ベース抽出を
+   * 上書きしたか)をフィールドごとに記録する。個人情報を一切含まないブール値のみ
+   * (氏名・事業所名等の実値はここに書かない)。Pass2廃止の可否判断に必要な実データ
+   * (昇格率)を実運用ログから計測するための可観測化であり、この値自体は仲裁結果に
+   * 一切影響しない(read-only な記録用フィールド)。
+   */
+  pass2Promotion: {
+    documentType: boolean;
+    customerName: boolean;
+    officeName: boolean;
+    date: boolean;
+  };
 }
 
 /** 顧客/事業所候補は表示・課金コスト抑制のため先頭5件のみ保持する (#178 既存挙動) */
@@ -173,7 +197,11 @@ export function buildOcrExtractionUpdatePayload(
     fileDateFormatted: dateResult.formattedDate ?? null,
     isDuplicateCustomer: customerResult.bestMatch?.isDuplicate || false,
     needsManualCustomerSelection: customerResult.needsManualSelection ?? false,
-    customerConfirmed: !customerResult.needsManualSelection,
+    // Issue #895修正: bestMatch===null(候補ゼロ)の場合、needsManualSelectionは
+    // false(仲裁ロジック上「手動選択が必要な複数候補」の状態ではないため)のままだが、
+    // これは「確定してよい」ことを意味しない。bestMatch !== nullを明示条件に追加し、
+    // 候補ゼロ時に誤ってcustomerConfirmed:trueになる空確定を防ぐ(ADR-0025 PR2)。
+    customerConfirmed: !customerResult.needsManualSelection && customerResult.bestMatch !== null,
     confirmedBy: null,
     confirmedAt: null,
     allCustomerCandidates: customerCandidateNames.join(','),
@@ -185,7 +213,8 @@ export function buildOcrExtractionUpdatePayload(
       matchType: c.matchType ?? 'none',
       careManagerName: c.careManagerName ?? null,
     })),
-    officeConfirmed: !officeResult.needsManualSelection,
+    // Issue #895修正: customerConfirmedと同じ理由でbestMatch !== nullを明示条件に追加(ADR-0025 PR2)。
+    officeConfirmed: !officeResult.needsManualSelection && officeResult.bestMatch !== null,
     officeConfirmedBy: null,
     officeConfirmedAt: null,
     officeCandidates: officeResult.candidates.slice(0, MAX_CANDIDATES).map((o) => ({
@@ -235,6 +264,12 @@ export function buildOcrExtractionUpdatePayload(
         confidence: documentTypeResult.score ?? 0,
         matchType: documentTypeResult.matchType ?? 'none',
       },
+    },
+    pass2Promotion: {
+      documentType: documentTypeResult.provenance?.source === 'candidate',
+      customerName: customerResult.provenance?.source === 'candidate',
+      officeName: officeResult.provenance?.source === 'candidate',
+      date: dateResult.provenance?.source === 'candidate',
     },
   };
 }
