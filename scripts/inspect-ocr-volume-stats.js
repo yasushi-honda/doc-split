@@ -14,9 +14,19 @@
  *   --days N          集計対象期間 (processedAt >= N日前、default: 30)
  *   --sample-limit N  totalPages分布のサンプル取得上限件数 (default: 2000、Firestore read課金に注意)
  *
- * 出力: 文書数(count()集計、courtesy無料枠内)、totalPagesのsum/avg/max、
+ * 出力: status=='processed'の文書数(count()集計、courtesy無料枠内)、totalPagesのsum/avg/max、
  *       ページ数帯ごとの分布(1/2-20/21-50/51-100/101+)。
  * 全てread-only。書き込みは一切行わない。
+ *
+ * 既知の限界(codex review指摘、対応方針):
+ * - status=='processed'でのフィルタが必須(codex P1同種指摘)。processedAtはpending作成時にも
+ *   付与される(functions/src/gmail/checkGmailAttachments.ts等)ため、フィルタ無しではpending/
+ *   error文書(totalPages:0)が母集団に混入し、統計が歪む
+ * - --sample-limitで打ち切られたサンプルはFirestoreのデフォルト順序(ドキュメントID順)であり、
+ *   ランダムサンプリングではない(codex P2指摘)。IDがテナント/インポート経路と相関する場合、
+ *   系統的な偏りを生みうる。このため「全期間推定合計ページ数」の外挿は、サンプルが母集団を
+ *   完全にカバーしている場合(pages.length >= totalCount)のみ行う。打ち切られた場合は
+ *   サンプル内統計のみを表示し、外挿はしない(不正確な確信を持った数値を出さない)
  */
 
 const admin = require('firebase-admin');
@@ -65,23 +75,29 @@ async function main() {
   const since = admin.firestore.Timestamp.fromMillis(Date.now() - days * 24 * 3600 * 1000);
   const col = db.collection('documents');
 
-  console.log(`=== OCRボリューム統計 (project=${projectId}, 直近${days}日) ===\n`);
+  console.log(`=== OCRボリューム統計 (project=${projectId}, 直近${days}日, status=processed) ===\n`);
 
-  const countSnap = await col.where('processedAt', '>=', since).count().get();
+  // status=='processed'限定(pending/error文書のtotalPages:0混入を排除、codex review指摘対応)
+  const baseQuery = col.where('processedAt', '>=', since).where('status', '==', 'processed');
+
+  const countSnap = await baseQuery.count().get();
   const totalCount = countSnap.data().count;
-  console.log(`対象期間内 documents件数: ${totalCount}`);
+  console.log(`対象期間内 processed文書件数: ${totalCount}`);
 
   if (totalCount === 0) {
-    console.log('対象期間内に文書が存在しないため、ページ数分布の集計をスキップします。');
+    console.log('対象期間内にprocessed文書が存在しないため、ページ数分布の集計をスキップします。');
     return;
   }
 
   // totalPagesの分布はcount()集計だけでは取得できないため、フィールド限定read(select)で
   // サンプル取得する。全件走査ではなくsampleLimitで上限を切り、read課金を抑える。
-  const snap = await col.where('processedAt', '>=', since).select('totalPages').limit(sampleLimit).get();
+  // 注意: orderByを指定していないためFirestoreの既定順序(ドキュメントID昇順)で返る。
+  // これはランダムサンプリングではない(下記の外挿判定を参照)。
+  const snap = await baseQuery.select('totalPages').limit(sampleLimit).get();
+  const isFullPopulation = snap.size >= totalCount;
   const pages = snap.docs.map((d) => d.get('totalPages')).filter((p) => typeof p === 'number' && p > 0);
 
-  console.log(`ページ数サンプル取得件数: ${pages.length} (上限${sampleLimit}件、totalCountの${((pages.length / totalCount) * 100).toFixed(1)}%相当)`);
+  console.log(`ページ数サンプル取得件数: ${pages.length} (上限${sampleLimit}件、totalCountの${((pages.length / totalCount) * 100).toFixed(1)}%相当${isFullPopulation ? '、母集団を完全カバー' : '、ID順での打ち切りサンプルのため外挿は行わない'})`);
 
   if (pages.length === 0) {
     console.log('totalPagesを持つ文書が見つかりませんでした。');
@@ -106,12 +122,17 @@ async function main() {
     console.log(`  ${b}: ${c}件 (${((c / pages.length) * 100).toFixed(1)}%)`);
   }
 
-  // Cloud Run CPU秒の粗い見積もり材料: サンプル内の合計ページ数 × ローカル実測レイテンシ幅(6-8秒/ページ)
-  // を全期間の推定文書数(totalCount)にスケールして概算する。あくまで粗い見積もりであり、
+  // Cloud Run CPU秒の粗い見積もり材料。母集団を完全カバーしている場合のみ外挿する
+  // (打ち切りサンプルはID順でランダムでないため、外挿すると系統的な偏りを持ちうる。codex review指摘対応)。
   // 実際のCloud Run実機レイテンシ(コールドスタート込み)はADR-0025本文で別途負荷試験により確定する。
-  const estimatedTotalPages = totalCount * avg;
-  console.log(`\n[参考] 全期間推定合計ページ数(サンプル平均×全体件数): ${estimatedTotalPages.toFixed(0)}`);
-  console.log(`[参考] ローカル実測6-8秒/ページで換算した場合の推定CPU秒: ${(estimatedTotalPages * 6).toFixed(0)}〜${(estimatedTotalPages * 8).toFixed(0)}秒/${days}日`);
+  if (isFullPopulation) {
+    const estimatedTotalPages = sum; // サンプル=母集団なのでそのまま合計値を使う
+    console.log(`\n[参考] 全期間合計ページ数(母集団完全カバー): ${estimatedTotalPages}`);
+    console.log(`[参考] ローカル実測6-8秒/ページで換算した場合の推定CPU秒: ${(estimatedTotalPages * 6).toFixed(0)}〜${(estimatedTotalPages * 8).toFixed(0)}秒/${days}日`);
+  } else {
+    console.log(`\n[注意] サンプルが打ち切られており(${pages.length}/${totalCount}件)ID順で母集団を代表する保証がないため、全期間への外挿は行いません。`);
+    console.log(`       桁感が必要な場合は --sample-limit ${totalCount} 以上を指定して母集団を完全カバーしたうえで再実行してください。`);
+  }
 }
 
 main()
