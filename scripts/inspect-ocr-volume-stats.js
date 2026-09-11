@@ -149,7 +149,9 @@ async function main() {
   }
 
   const sum = pages.reduce((a, b) => a + b, 0);
-  const max = Math.max(...pages);
+  // Math.max(...pages)は引数展開のためpages件数が多い(kanameone全件カバー等)と
+  // RangeErrorになりうる(codex review指摘)。reduceで逐次計算する。
+  const max = pages.reduce((a, b) => (b > a ? b : a), 0);
   const avg = sum / pages.length;
 
   console.log(`合計ページ数(サンプル内): ${sum}`);
