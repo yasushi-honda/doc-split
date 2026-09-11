@@ -26,10 +26,13 @@
  *   暗黙に`processedAt`昇順でソートするため、「期間内で最も古い側」に偏ったサンプルになる
  *   (ランダムサンプリングではない、codex P2指摘・2回目の指摘で順序の実態を訂正)。時期によって
  *   文書量・ページ数分布に傾向がある場合、系統的な偏りを生みうる。このため「全期間推定合計
- *   ページ数」の外挿は、サンプルが母集団を完全にカバーしている場合(pages.length >= totalCount)
- *   のみ行う。打ち切られた場合はサンプル内統計のみを表示し、外挿はしない(不正確な確信を
- *   持った数値を出さない)。母集団全体の傾向を正確に知りたい場合は--sample-limitを
- *   totalCount以上に設定して完全カバーさせること
+ *   ページ数」の外挿は、取得したドキュメントが母集団を完全にカバーしている場合のみ行う
+ * - status=='processed'でも`totalPages:0`や欠損値を持つレガシー文書が存在しうる
+ *   (`scripts/seed-e2e-data.js`のシードデータ等、codex P2指摘3回目)。これらはページ数分布の
+ *   集計対象から除外するため、"全期間合計ページ数の完全カバー"を名乗るのは「取得件数の全てが
+ *   有効なtotalPagesを持つ場合」に限定する。無効値が1件でも混入していれば、除外分だけ合計が
+ *   過小評価されるため、完全カバーの表示はせず「有効ページ数を持つ文書のみの合計」として
+ *   カバレッジ(除外件数)を明示する
  */
 
 const admin = require('firebase-admin');
@@ -98,13 +101,22 @@ async function main() {
   // 暗黙にprocessedAt昇順でソートする。つまり打ち切られた場合は「期間内で最も古い側」の
   // サンプルになり、ランダムサンプリングではない(下記の外挿判定を参照)。
   const snap = await baseQuery.select('totalPages').limit(sampleLimit).get();
-  const isFullPopulation = snap.size >= totalCount;
-  const pages = snap.docs.map((d) => d.get('totalPages')).filter((p) => typeof p === 'number' && p > 0);
+  const fetchedCount = snap.size;
+  const isFullPopulation = fetchedCount >= totalCount;
+  const rawValues = snap.docs.map((d) => d.get('totalPages'));
+  const pages = rawValues.filter((p) => typeof p === 'number' && p > 0);
+  const invalidCount = fetchedCount - pages.length;
+  // 取得した全件が有効なtotalPagesを持つ場合のみ「完全カバー」を名乗る(codex P2指摘3回目対応)。
+  // 1件でもtotalPages:0/欠損があれば、その分だけ合計が過小評価されるため区別する。
+  const isCompleteCoverage = isFullPopulation && invalidCount === 0;
 
-  console.log(`ページ数サンプル取得件数: ${pages.length} (上限${sampleLimit}件、totalCountの${((pages.length / totalCount) * 100).toFixed(1)}%相当${isFullPopulation ? '、母集団を完全カバー' : '、processedAt昇順(期間内最古側)の打ち切りサンプルのため外挿は行わない'})`);
+  console.log(`ページ数サンプル取得件数: ${fetchedCount} (うち有効totalPages: ${pages.length}件、無効/0: ${invalidCount}件、上限${sampleLimit}件、totalCountの${((fetchedCount / totalCount) * 100).toFixed(1)}%相当${isFullPopulation ? '' : '、processedAt昇順(期間内最古側)の打ち切りサンプル'})`);
+  if (invalidCount > 0) {
+    console.log(`[注意] ${invalidCount}件がtotalPages:0または欠損のため、以下の合計・平均から除外しています(過小評価の要因になりうる)。`);
+  }
 
   if (pages.length === 0) {
-    console.log('totalPagesを持つ文書が見つかりませんでした。');
+    console.log('有効なtotalPagesを持つ文書が見つかりませんでした。');
     return;
   }
 
@@ -126,17 +138,24 @@ async function main() {
     console.log(`  ${b}: ${c}件 (${((c / pages.length) * 100).toFixed(1)}%)`);
   }
 
-  // Cloud Run CPU秒の粗い見積もり材料。母集団を完全カバーしている場合のみ外挿する
-  // (打ち切りサンプルはprocessedAt昇順=期間内最古側に偏っておりランダムでないため、
-  // 外挿すると系統的な偏りを持ちうる。codex review指摘対応)。
-  // 実際のCloud Run実機レイテンシ(コールドスタート込み)はADR-0025本文で別途負荷試験により確定する。
-  if (isFullPopulation) {
-    const estimatedTotalPages = sum; // サンプル=母集団なのでそのまま合計値を使う
-    console.log(`\n[参考] 全期間合計ページ数(母集団完全カバー): ${estimatedTotalPages}`);
+  // Cloud Run CPU秒の粗い見積もり材料。「取得件数が母集団と一致」かつ「無効値0件」の
+  // 場合のみ完全カバーとして外挿する(打ち切りサンプルはprocessedAt昇順=期間内最古側に
+  // 偏っておりランダムでない、かつtotalPages:0混入があれば過小評価になるため。
+  // codex review指摘2件対応)。実際のCloud Run実機レイテンシ(コールドスタート込み)は
+  // ADR-0025本文で別途負荷試験により確定する。
+  if (isCompleteCoverage) {
+    const estimatedTotalPages = sum; // 取得件数=母集団かつ全件有効なのでそのまま合計値を使う
+    console.log(`\n[参考] 全期間合計ページ数(母集団完全カバー・無効値なし): ${estimatedTotalPages}`);
     console.log(`[参考] ローカル実測6-8秒/ページで換算した場合の推定CPU秒: ${(estimatedTotalPages * 6).toFixed(0)}〜${(estimatedTotalPages * 8).toFixed(0)}秒/${days}日`);
   } else {
-    console.log(`\n[注意] サンプルが打ち切られており(${pages.length}/${totalCount}件)、期間内最古側に偏ったサンプルで母集団を代表する保証がないため、全期間への外挿は行いません。`);
-    console.log(`       桁感が必要な場合は --sample-limit ${totalCount} 以上を指定して母集団を完全カバーしたうえで再実行してください。`);
+    const reason = !isFullPopulation
+      ? `サンプルが打ち切られており(${fetchedCount}/${totalCount}件)、期間内最古側に偏ったサンプルで母集団を代表する保証がない`
+      : `取得件数は母集団と一致するが、${invalidCount}件がtotalPages:0/欠損のため合計が過小評価される`;
+    console.log(`\n[注意] ${reason}ため、全期間への外挿は行いません。`);
+    console.log(`       参考値としては「有効ページ数を持つ${pages.length}件の合計${sum}」のみ(全期間の完全な合計ではない)。`);
+    if (!isFullPopulation) {
+      console.log(`       桁感が必要な場合は --sample-limit ${totalCount} 以上を指定して母集団を完全カバーしたうえで再実行してください。`);
+    }
   }
 }
 
