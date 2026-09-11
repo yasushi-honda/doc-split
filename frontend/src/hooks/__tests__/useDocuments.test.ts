@@ -560,6 +560,14 @@ describe('getReprocessClearFields (Issue #215: 旧3キー + 新summary 全て de
     expect(fields.documentTypeConfirmed).toBe(false)
   })
 
+  // ADR-0025 PR2: Pass2昇格の可観測化フィールド。再処理が失敗/pendingのまま残ると
+  // 前回実行時の昇格結果が残存し昇格率の計測が汚染されるため、他の抽出メタデータ
+  // (extractionScores等)と同様にクリアする(codex review指摘)
+  it('pass2Promotion も含む (ADR-0025 PR2)', () => {
+    const fields = getReprocessClearFields()
+    expect(fields).toHaveProperty('pass2Promotion')
+  })
+
   // ADR-0016 MUST 8 (genesis provenance): provenance と provenanceOrigin は同時にクリアしないと
   // 「マーカーだけ残るが provenance は無い」不整合な中間状態が生じる
   it('provenance / provenanceOrigin を含む (ADR-0016 MUST 8)', () => {

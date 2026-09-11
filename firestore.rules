@@ -107,6 +107,10 @@ service cloud.firestore {
           'officeCandidates',
           'extractionScores',
           'extractionDetails',
+          // ADR-0025 PR2: Pass2昇格の可観測化フィールド。extractionScores等と同種の
+          // 抽出メタデータであり、getReprocessClearFields()経由のdeleteField()でのみ
+          // 操作する想定(#9参照)。個人情報は含まない(昇格有無のブール値のみ)。
+          'pass2Promotion',
           'allCustomerCandidates',
           'suggestedNewOffice',
           'provenance',

@@ -1023,6 +1023,8 @@ describe('Firestore Security Rules', () => {
           officeCandidates: [{ id: 'office-001', name: 'テスト事業所', score: 0.9 }],
           extractionScores: { customer: 0.9, office: 0.9, documentType: 0.9 },
           extractionDetails: { reason: 'test' },
+          // ADR-0025 PR2: Pass2昇格の可観測化フィールド
+          pass2Promotion: { documentType: false, customerName: true, officeName: false, date: false },
           isDuplicateCustomer: false,
           needsManualCustomerSelection: false,
           allCustomerCandidates: [{ id: 'cust-001', name: '山田太郎', score: 0.9 }],
@@ -1091,6 +1093,7 @@ describe('Firestore Security Rules', () => {
           officeCandidates: deleteField(),
           extractionScores: deleteField(),
           extractionDetails: deleteField(),
+          pass2Promotion: deleteField(),
           isDuplicateCustomer: deleteField(),
           needsManualCustomerSelection: deleteField(),
           allCustomerCandidates: deleteField(),
