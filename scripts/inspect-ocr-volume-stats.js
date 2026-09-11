@@ -33,6 +33,17 @@
  *   有効なtotalPagesを持つ場合」に限定する。無効値が1件でも混入していれば、除外分だけ合計が
  *   過小評価されるため、完全カバーの表示はせず「有効ページ数を持つ文書のみの合計」として
  *   カバレッジ(除外件数)を明示する
+ * - 複数顧客FAX複製機能(`faxDuplication`、ADR-0024)が有効な場合、1回のOCR実行の結果が
+ *   `distributionId`を共有する複数の`documents`エントリ(元doc+顧客ごとの複製)に同一の
+ *   totalPagesでコピーされる。単純に文書単位で合計するとOCR実行1回分を複製メンバー数だけ
+ *   多重計上し、PaddleOCRのCPU見積もりを実態より過大評価する(codex P2指摘4回目)。
+ *   このため`distributionId`(無ければdoc.id)でグルーピングし、実際のOCR実行回数(=ユニーク
+ *   グループ数)を基準にページ数を集計する
+ * - `processedAt`はOCR完了時刻ではなく文書取込(pending作成)時刻であり、通常のOCR完了処理
+ *   では更新されない(codex P2指摘4回目)。このため--daysで指定する期間は厳密には「OCR完了
+ *   期間」ではなく「取込期間」の近似値である。リトライ/再処理で古い文書のtotalPagesが
+ *   更新された場合、その文書は取込時刻ベースでは対象期間外として扱われる可能性がある。
+ *   月次コスト概算という用途では取込期間を近似として許容するが、この限界を明示しておく
  */
 
 const admin = require('firebase-admin');
@@ -100,17 +111,34 @@ async function main() {
   // 注意: orderByを明示していないが、processedAtへの不等号フィルタによりFirestoreは
   // 暗黙にprocessedAt昇順でソートする。つまり打ち切られた場合は「期間内で最も古い側」の
   // サンプルになり、ランダムサンプリングではない(下記の外挿判定を参照)。
-  const snap = await baseQuery.select('totalPages').limit(sampleLimit).get();
+  const snap = await baseQuery.select('totalPages', 'distributionId').limit(sampleLimit).get();
   const fetchedCount = snap.size;
   const isFullPopulation = fetchedCount >= totalCount;
-  const rawValues = snap.docs.map((d) => d.get('totalPages'));
+
+  // 複数顧客FAX複製(faxDuplication、ADR-0024)対策: distributionIdを共有する複製メンバーは
+  // 同一OCR実行の結果を複製しただけなので、グループごとに1件だけ数える(codex review指摘対応)。
+  // distributionId未設定の文書は複製されていない単独文書なのでdoc.idをキーにしてそのまま扱う。
+  const groupMap = new Map();
+  for (const d of snap.docs) {
+    const key = d.get('distributionId') || d.id;
+    if (!groupMap.has(key)) {
+      groupMap.set(key, d.get('totalPages'));
+    }
+  }
+  const dedupedCount = groupMap.size;
+  const duplicateMemberCount = fetchedCount - dedupedCount;
+
+  const rawValues = Array.from(groupMap.values());
   const pages = rawValues.filter((p) => typeof p === 'number' && p > 0);
-  const invalidCount = fetchedCount - pages.length;
+  const invalidCount = dedupedCount - pages.length;
   // 取得した全件が有効なtotalPagesを持つ場合のみ「完全カバー」を名乗る(codex P2指摘3回目対応)。
   // 1件でもtotalPages:0/欠損があれば、その分だけ合計が過小評価されるため区別する。
   const isCompleteCoverage = isFullPopulation && invalidCount === 0;
 
-  console.log(`ページ数サンプル取得件数: ${fetchedCount} (うち有効totalPages: ${pages.length}件、無効/0: ${invalidCount}件、上限${sampleLimit}件、totalCountの${((fetchedCount / totalCount) * 100).toFixed(1)}%相当${isFullPopulation ? '' : '、processedAt昇順(期間内最古側)の打ち切りサンプル'})`);
+  console.log(`ページ数サンプル取得件数: ${fetchedCount} (FAX複製排除後の実OCR実行数: ${dedupedCount}件、複製メンバー除外: ${duplicateMemberCount}件、うち有効totalPages: ${pages.length}件、無効/0: ${invalidCount}件、上限${sampleLimit}件、totalCountの${((fetchedCount / totalCount) * 100).toFixed(1)}%相当${isFullPopulation ? '' : '、processedAt昇順(期間内最古側)の打ち切りサンプル'})`);
+  if (duplicateMemberCount > 0) {
+    console.log(`[注意] ${duplicateMemberCount}件がfaxDuplicationによる複製メンバーのため、OCR実行回数の重複計上を避けて除外しています。`);
+  }
   if (invalidCount > 0) {
     console.log(`[注意] ${invalidCount}件がtotalPages:0または欠損のため、以下の合計・平均から除外しています(過小評価の要因になりうる)。`);
   }
