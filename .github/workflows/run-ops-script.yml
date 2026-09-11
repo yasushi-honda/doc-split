@@ -63,6 +63,8 @@ on:
           - audit-short-office-masters --max-length 3
           - audit-short-office-masters --max-length 4
           - audit-short-office-masters --fail-on-id-equals-name
+          - inspect-ocr-volume-stats
+          - inspect-ocr-volume-stats --days 90
           - delete-office-master --dry-run
           - delete-office-master --execute
           - reset-documents-by-office --dry-run
