@@ -1,0 +1,377 @@
+name: Deploy PaddleOCR Cloud Run Service (ADR-0025 PR4b)
+
+# devのみ対応。kanameone/cocoroはGitHub Environment承認設定・実値が未確定のため対象外
+# (pr-d4-backfill.ymlと同様の環境別分岐は将来のクライアント展開PRで追加)。
+#
+# 設計判断(/plan-crossreview反映、ADR-0025 PR4b、~/.claude/plans/fuzzy-moseying-book.md参照):
+# - concurrency: 同一devへの手動dispatch並走を防ぐ(pr-d4-backfill.yml:62-64パターン)
+# - resolve_field()/resolve_field_optional(): <TBD>等のプレースホルダー検知
+#   (pr-d4-backfill.yml:148-164パターン、PADDLE_OCR_URL用に許容版を追加)
+# - Cloud Build async+polling+digest固定(pr-d4-backfill.yml:229-296パターン)
+# - step-level env規約: 全てのinputs.*/secrets.*/github.shaは必ずenv:経由でenv var化、
+#   run:内で${{ }}直接展開なし(workflow injection防止)
+# - Cloud BuildのSA構造(crossreview pass1指摘): GitHub deploy SA(docsplit-cloud-build@...)と
+#   実際にCloud Build内でコンテナビルドを行うSAは別物。dev環境でのPR-D4実績(session78確認済み)
+#   では後者はCompute Engine default SA(既にroles/editor保有)。事前の一律付与はせず、
+#   ビルド後に実際のSAをログ出力するに留める(scripts/pr-d4-backfill/README.md:129-137の
+#   「IAM三層必要権限表」を踏襲)。
+# - cloudbuild.googleapis.com有効化はこのワークフロー内で行わない(crossreview pass1指摘)。
+#   PR3のbootstrapスクリプトの領分であり、デプロイSAへserviceusage.services.enableを
+#   日常的に持たせる根拠が薄いため、未有効ならfail-loudしてbootstrap手順を案内する。
+# - --update-env-varsを使う(--set-env-varsではない、crossreview pass1指摘): 後続PRが追加した
+#   環境変数を反復デプロイで消さないため。
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment(現時点ではdevのみ対応)'
+        required: true
+        type: choice
+        options:
+          - dev
+      first_deploy:
+        description: 'true = 初回デプロイ(PADDLE_OCR_URL未設定の状態から)。false = 既存URLとの一致検証'
+        required: true
+        type: choice
+        default: 'false'
+        options:
+          - 'false'
+          - 'true'
+
+concurrency:
+  group: deploy-paddle-ocr-${{ github.event.inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate inputs
+        env:
+          ENVIRONMENT: ${{ github.event.inputs.environment }}
+        run: |
+          set -euo pipefail
+          if [ "$ENVIRONMENT" != "dev" ]; then
+            echo "ERROR: 現時点ではdevのみ対応(got: $ENVIRONMENT)。kanameone/cocoroはGitHub Environment承認設定が未確定のため対象外です" >&2
+            exit 1
+          fi
+
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY_DEV }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies (model hash drift guardに必要)
+        run: npm ci
+
+      - name: Model hash drift guard (scripts/lib/paddleOcrModelHashes.test.ts)
+        # manifest.jsonとexpected-model-hashes.jsonのfileHashesが完全一致することを
+        # デプロイ前に再確認する(scripts配下の既存テスト一式を実行、CIと同じ経路)。
+        run: cd scripts && npm test
+
+      - name: Resolve project / region / URL
+        id: resolve
+        env:
+          ENVIRONMENT: ${{ github.event.inputs.environment }}
+        run: |
+          set -euo pipefail
+          ENV_FILE="scripts/clients/${ENVIRONMENT}.env"
+          if [ ! -f "$ENV_FILE" ]; then
+            echo "ERROR: $ENV_FILE not found" >&2
+            exit 1
+          fi
+          resolve_field() {
+            local field="$1"
+            local file="$2"
+            local val
+            val=$(grep -E "^${field}=" "$file" | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'")
+            val="${val#"${val%%[![:space:]]*}"}"
+            val="${val%"${val##*[![:space:]]}"}"
+            case "$val" in
+              ""|"<TBD>"|"TBD"|"tbd"|"<TODO>"|"TODO"|"todo"|"<FIXME>"|"FIXME"|"fixme"|"null"|"NULL"|"undefined"|"UNDEFINED"|"xxx"|"XXX"|"<PLACEHOLDER>")
+                echo "ERROR: ${field} not configured for $ENVIRONMENT (value=\"$val\"); see services/paddle-ocr/README.md" >&2
+                exit 1
+                ;;
+            esac
+            echo "$val"
+          }
+          # PADDLE_OCR_URLは初回デプロイ前は<TBD>のまま許容する(resolve_fieldと違いexitしない)。
+          resolve_field_optional() {
+            local field="$1"
+            local file="$2"
+            local val
+            val=$(grep -E "^${field}=" "$file" | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'")
+            val="${val#"${val%%[![:space:]]*}"}"
+            val="${val%"${val##*[![:space:]]}"}"
+            case "$val" in
+              ""|"<TBD>"|"TBD"|"tbd"|"<TODO>"|"TODO"|"todo"|"<FIXME>"|"FIXME"|"fixme"|"null"|"NULL"|"undefined"|"UNDEFINED"|"xxx"|"XXX"|"<PLACEHOLDER>")
+                echo ""
+                ;;
+              *)
+                echo "$val"
+                ;;
+            esac
+          }
+          PROJECT_ID=$(node scripts/helpers/firebaserc-helper.js get-project "$ENVIRONMENT")
+          CLOUD_RUN_LOCATION=$(resolve_field CLOUD_RUN_LOCATION "$ENV_FILE")
+          PADDLE_OCR_URL=$(resolve_field_optional PADDLE_OCR_URL "$ENV_FILE")
+          {
+            echo "project_id=$PROJECT_ID"
+            echo "cloud_run_location=$CLOUD_RUN_LOCATION"
+            echo "paddle_ocr_url=$PADDLE_OCR_URL"
+          } >> "$GITHUB_OUTPUT"
+          echo "Resolved: project=$PROJECT_ID region=$CLOUD_RUN_LOCATION url=${PADDLE_OCR_URL:-<未設定>}"
+
+      - name: Validate first_deploy / URL consistency
+        env:
+          FIRST_DEPLOY: ${{ github.event.inputs.first_deploy }}
+          PADDLE_OCR_URL: ${{ steps.resolve.outputs.paddle_ocr_url }}
+        run: |
+          set -euo pipefail
+          if [ "$FIRST_DEPLOY" = "true" ] && [ -n "$PADDLE_OCR_URL" ]; then
+            echo "ERROR: PADDLE_OCR_URL は既に設定済みです ($PADDLE_OCR_URL) が first_deploy=true が指定されました。ドリフト検証の迂回は許可しません。first_deploy=false で実行してください" >&2
+            exit 1
+          fi
+          if [ "$FIRST_DEPLOY" = "false" ] && [ -z "$PADDLE_OCR_URL" ]; then
+            echo "ERROR: PADDLE_OCR_URL が未設定です。初回デプロイの場合は first_deploy=true を明示してください" >&2
+            exit 1
+          fi
+          echo "OK: first_deploy=$FIRST_DEPLOY, existing_url=${PADDLE_OCR_URL:-<未設定>}"
+
+      - name: Preflight (Artifact Registry / runtime SA / Cloud Build API)
+        env:
+          PROJECT_ID: ${{ steps.resolve.outputs.project_id }}
+          CLOUD_RUN_LOCATION: ${{ steps.resolve.outputs.cloud_run_location }}
+        run: |
+          set -euo pipefail
+          if ! gcloud artifacts repositories describe paddle-ocr \
+              --project="$PROJECT_ID" --location="$CLOUD_RUN_LOCATION" >/dev/null 2>&1; then
+            echo "ERROR: Artifact Registry 'paddle-ocr' が存在しません。scripts/setup-paddle-ocr-infra.sh dev を先に実行してください" >&2
+            exit 1
+          fi
+          if ! gcloud iam service-accounts describe "paddle-ocr-runtime@${PROJECT_ID}.iam.gserviceaccount.com" \
+              --project="$PROJECT_ID" >/dev/null 2>&1; then
+            echo "ERROR: runtime SA 'paddle-ocr-runtime@${PROJECT_ID}.iam.gserviceaccount.com' が存在しません。scripts/setup-paddle-ocr-infra.sh dev を先に実行してください" >&2
+            exit 1
+          fi
+          CLOUDBUILD_ENABLED=$(gcloud services list --enabled --project="$PROJECT_ID" \
+              --filter='config.name:cloudbuild.googleapis.com' --format='value(config.name)')
+          if [ -z "$CLOUDBUILD_ENABLED" ]; then
+            echo "ERROR: cloudbuild.googleapis.com が有効化されていません。bootstrap手順(一時権限)で有効化してください: gcloud services enable cloudbuild.googleapis.com --project=$PROJECT_ID" >&2
+            exit 1
+          fi
+          echo "Preflight OK: Artifact Registry 'paddle-ocr' / runtime SA / Cloud Build API を確認しました"
+
+      - name: Compute image tag
+        id: compute
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          TS=$(date -u +%Y%m%dT%H%M%SZ)
+          SHORT_SHA="${COMMIT_SHA:0:7}"
+          IMAGE_TAG="${TS}-${SHORT_SHA}"
+          echo "image_tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+          echo "Computed image_tag=$IMAGE_TAG"
+
+      - name: Build container image (Cloud Build, async + polling) + digest pinning
+        id: build
+        env:
+          PROJECT_ID: ${{ steps.resolve.outputs.project_id }}
+          CLOUD_RUN_LOCATION: ${{ steps.resolve.outputs.cloud_run_location }}
+          IMAGE_TAG: ${{ steps.compute.outputs.image_tag }}
+        run: |
+          set -euo pipefail
+          IMAGE_URI="${CLOUD_RUN_LOCATION}-docker.pkg.dev/${PROJECT_ID}/paddle-ocr/paddle-ocr:${IMAGE_TAG}"
+          echo "Submitting Cloud Build (async): $IMAGE_URI"
+          # ビルドコンテキストはservices/paddle-ocrを明示指定
+          # (リポジトリルートの既存Dockerfile=PR-D4のNode.jsジョブ用と衝突させないため)。
+          BUILD_ID=$(gcloud builds submit services/paddle-ocr \
+            --tag="$IMAGE_URI" \
+            --project="$PROJECT_ID" \
+            --timeout=2400s \
+            --async \
+            --format='value(id)')
+          if [ -z "$BUILD_ID" ]; then
+            echo "ERROR: failed to obtain BUILD_ID" >&2
+            exit 1
+          fi
+          echo "BUILD_ID: $BUILD_ID"
+          POLL_INTERVAL=15
+          MAX_ITERATIONS=240
+          ITERATION=0
+          while [ "$ITERATION" -lt "$MAX_ITERATIONS" ]; do
+            STATUS=$(gcloud builds describe "$BUILD_ID" --project="$PROJECT_ID" --format='value(status)' 2>/dev/null || echo "UNKNOWN")
+            case "$STATUS" in
+              SUCCESS)
+                echo "Build succeeded after ${ITERATION} polls"
+                break
+                ;;
+              FAILURE|CANCELLED|TIMEOUT|EXPIRED|INTERNAL_ERROR)
+                echo "ERROR: Build failed with status: $STATUS" >&2
+                echo "Logs: https://console.cloud.google.com/cloud-build/builds/${BUILD_ID}?project=${PROJECT_ID}" >&2
+                exit 1
+                ;;
+              QUEUED|WORKING|PENDING)
+                echo "[${ITERATION}/${MAX_ITERATIONS}] Status: $STATUS, waiting ${POLL_INTERVAL}s..."
+                sleep "$POLL_INTERVAL"
+                ITERATION=$((ITERATION + 1))
+                ;;
+              *)
+                echo "WARN: Unexpected status '$STATUS', waiting ${POLL_INTERVAL}s and retrying..." >&2
+                sleep "$POLL_INTERVAL"
+                ITERATION=$((ITERATION + 1))
+                ;;
+            esac
+          done
+          if [ "$ITERATION" -ge "$MAX_ITERATIONS" ]; then
+            echo "ERROR: Build polling timed out after $((MAX_ITERATIONS * POLL_INTERVAL))s" >&2
+            exit 1
+          fi
+          # 実際のCloud Build実行SAをログに出力する(GitHub deploy SAとは別物、上記コメント参照)。
+          # 権限不足で失敗した場合は、ここに表示されるSAへ個別に対応する(事前の一律付与はしない)。
+          BUILD_SA=$(gcloud builds describe "$BUILD_ID" --project="$PROJECT_ID" --format='value(serviceAccount)' 2>/dev/null || echo "unknown")
+          echo "actual Cloud Build execution SA: $BUILD_SA"
+          IMAGE_DIGEST=$(gcloud artifacts docker images describe "$IMAGE_URI" \
+            --format='value(image_summary.fully_qualified_digest)' \
+            --project="$PROJECT_ID")
+          if [ -z "$IMAGE_DIGEST" ]; then
+            echo "ERROR: failed to resolve image digest for $IMAGE_URI" >&2
+            exit 1
+          fi
+          echo "image_digest=$IMAGE_DIGEST" >> "$GITHUB_OUTPUT"
+          echo "Built: $IMAGE_URI"
+          echo "Digest: $IMAGE_DIGEST"
+
+      - name: Deploy Cloud Run service
+        id: deploy
+        env:
+          PROJECT_ID: ${{ steps.resolve.outputs.project_id }}
+          CLOUD_RUN_LOCATION: ${{ steps.resolve.outputs.cloud_run_location }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.image_digest }}
+        run: |
+          set -euo pipefail
+          RUNTIME_SA="paddle-ocr-runtime@${PROJECT_ID}.iam.gserviceaccount.com"
+          # --ingress=allの理由: VPCコネクタが存在しないため internal にすると
+          # Functionsから到達不能になる。善意の「internalの方が安全」という
+          # 後日修正を防ぐため明記する。
+          #
+          # probe値(startup 120秒窓・liveness 300秒窓)はPR4b時点では暫定値。
+          # Cloud Run実機での単一ページ処理時間の実測(このワークフロー実行後、
+          # 下記Verifyステップで記録)を踏まえ、PR4c完了後に最終値を確定する
+          # (services/paddle-ocr/README.md「Cloud Run liveness probe」節参照)。
+          gcloud run deploy paddle-ocr \
+            --image="$IMAGE_DIGEST" \
+            --region="$CLOUD_RUN_LOCATION" \
+            --project="$PROJECT_ID" \
+            --no-allow-unauthenticated \
+            --ingress=all \
+            --service-account="$RUNTIME_SA" \
+            --cpu=2 \
+            --memory=4Gi \
+            --concurrency=1 \
+            --min-instances=0 \
+            --max-instances=3 \
+            --timeout=300 \
+            --cpu-boost \
+            --startup-probe="httpGet.path=/healthz,httpGet.port=8080,periodSeconds=5,timeoutSeconds=3,failureThreshold=24" \
+            --liveness-probe="httpGet.path=/healthz,httpGet.port=8080,periodSeconds=30,timeoutSeconds=5,failureThreshold=10" \
+            --update-env-vars="PADDLE_PDF_RENDER_DPI=200,MAX_PAGES=8,MAX_PIXELS=40000000,MAX_PROCESSING_SECONDS=240,IMAGE_DIGEST=${IMAGE_DIGEST}"
+          SERVICE_URL=$(gcloud run services describe paddle-ocr \
+            --region="$CLOUD_RUN_LOCATION" --project="$PROJECT_ID" --format='value(status.url)')
+          if [ -z "$SERVICE_URL" ]; then
+            echo "ERROR: failed to resolve service URL" >&2
+            exit 1
+          fi
+          echo "service_url=$SERVICE_URL" >> "$GITHUB_OUTPUT"
+          echo "Deployed: $SERVICE_URL"
+
+      - name: Grant run.invoker to processOCR's execution SA
+        env:
+          PROJECT_ID: ${{ steps.resolve.outputs.project_id }}
+          CLOUD_RUN_LOCATION: ${{ steps.resolve.outputs.cloud_run_location }}
+        run: |
+          set -euo pipefail
+          # --gen2必須(setup-paddle-ocr-infra.sh:372-377の案内echoと一致させる)。
+          FUNCTIONS_SA=$(gcloud functions describe processOCR --gen2 \
+            --region="$CLOUD_RUN_LOCATION" --project="$PROJECT_ID" \
+            --format='value(serviceConfig.serviceAccountEmail)' 2>/dev/null || echo "")
+          if [ -z "$FUNCTIONS_SA" ]; then
+            echo "ERROR: processOCR functionが見つかりません(--gen2)。先にFunctionsをデプロイしてください" >&2
+            exit 1
+          fi
+          echo "processOCR execution SA: $FUNCTIONS_SA"
+          gcloud run services add-iam-policy-binding paddle-ocr \
+            --region="$CLOUD_RUN_LOCATION" --project="$PROJECT_ID" \
+            --member="serviceAccount:${FUNCTIONS_SA}" \
+            --role="roles/run.invoker"
+          echo "Granted roles/run.invoker to $FUNCTIONS_SA"
+
+      - name: Verify
+        env:
+          PROJECT_ID: ${{ steps.resolve.outputs.project_id }}
+          CLOUD_RUN_LOCATION: ${{ steps.resolve.outputs.cloud_run_location }}
+          SERVICE_URL: ${{ steps.deploy.outputs.service_url }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.image_digest }}
+        run: |
+          set -euo pipefail
+          TOKEN=$(gcloud auth print-identity-token --audiences="$SERVICE_URL")
+
+          echo "=== /healthz ==="
+          HEALTHZ_BODY=$(curl -sS -H "Authorization: Bearer ${TOKEN}" "${SERVICE_URL}/healthz")
+          echo "$HEALTHZ_BODY"
+          echo "$HEALTHZ_BODY" | grep -q '"modelLoaded":true' || { echo "ERROR: modelLoaded is not true" >&2; exit 1; }
+          echo "$HEALTHZ_BODY" | grep -q "\"imageDigest\":\"${IMAGE_DIGEST}\"" || { echo "ERROR: imageDigest does not match deployed digest" >&2; exit 1; }
+
+          echo "=== probe設定確認 ==="
+          gcloud run services describe paddle-ocr \
+            --region="$CLOUD_RUN_LOCATION" --project="$PROJECT_ID" \
+            --format='yaml(spec.template.spec.containers[0].startupProbe,spec.template.spec.containers[0].livenessProbe)'
+
+          echo "=== golden fixture 1件でのOCR疎通確認 ==="
+          FIXTURE=scripts/fixtures/paddle-ocr-golden/golden_plain_01.pdf
+          STARTED=$(date +%s)
+          OCR_BODY=$(curl -sS -H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/pdf" \
+            --data-binary "@${FIXTURE}" "${SERVICE_URL}/ocr")
+          ELAPSED=$(( $(date +%s) - STARTED ))
+          echo "$OCR_BODY" | node -e '
+            const data = JSON.parse(require("fs").readFileSync(0, "utf-8"));
+            const expected = JSON.parse(require("fs").readFileSync("scripts/fixtures/paddle-ocr-golden/golden-plain-01.pages.json", "utf-8"))[0];
+            if (data.pages?.[0] !== expected) {
+              console.error("ERROR: OCR text does not match golden fixture");
+              console.error("expected:", expected);
+              console.error("actual:", data.pages?.[0]);
+              process.exit(1);
+            }
+            console.log("OK: golden fixture matched");
+          '
+          echo "実処理時間: ${ELAPSED}秒(liveness検知窓300秒に対する安全マージンの参考値。cold start込みのため単発値であることに留意)"
+
+      - name: Summary
+        env:
+          SERVICE_URL: ${{ steps.deploy.outputs.service_url }}
+          FIRST_DEPLOY: ${{ github.event.inputs.first_deploy }}
+          ENVIRONMENT: ${{ github.event.inputs.environment }}
+        run: |
+          {
+            echo "## PaddleOCR Cloud Run デプロイ完了"
+            echo ""
+            echo "- environment: ${ENVIRONMENT}"
+            echo "- service URL: ${SERVICE_URL}"
+            echo ""
+            if [ "$FIRST_DEPLOY" = "true" ]; then
+              echo "**初回デプロイです。\`scripts/clients/${ENVIRONMENT}.env\` の \`PADDLE_OCR_URL\` を上記URLへ手動で更新し、別コミットでコミットしてください。**"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -205,6 +205,50 @@ gcloud projects add-iam-policy-binding <project-id> \
 
 `roles/run.admin`はPR3では付与しない(Cloud Runサービスのデプロイを一切行わないため不要)。PR4でCloud Runサービスを実際にデプロイする段階で、必要性・付与範囲・撤去条件を改めて設計する。
 
+#### PaddleOCR Cloud Runデプロイ(ADR-0025 PR4b)のGitHub Actions デプロイSA権限(恒久)
+
+`.github/workflows/deploy-paddle-ocr.yml`(`workflow_dispatch`、反復実行される)が使う GitHub deploy SA(`docsplit-cloud-build@{project-id}.iam.gserviceaccount.com`、`secrets.GCP_SA_KEY_DEV`のidentity)向けの権限。上記のbootstrap権限(一時付与)とは異なり、このワークフローは繰り返し実行されるため**恒久的に付与**する。
+
+**重要な注意(実装時に必ず確認すること)**: 「GitHub deploy SA」と「実際にCloud Build内でコンテナビルドを行うSA」は**別物**である。`scripts/pr-d4-backfill/README.md:129-137`の既存「IAM三層必要権限表」を参照。dev環境でのPR-D4実績(session78確認済み)では、後者は`217393576593-compute@developer.gserviceaccount.com`(Compute Engine default SA)であり、既に`roles/editor`を保有しているため追加付与が不要な可能性が高いが、これは確認するまで確定しない(組織ポリシーでCompute Engine defaultから外れている環境もありうる)。初回デプロイ実行後、`gcloud builds describe ${BUILD_ID} --format='value(serviceAccount)'`で実際のビルドSAを確認し、不足があればその場で個別対応する(事前の一律付与はしない)。
+
+- `roles/run.admin`(Cloud Runサービスのデプロイ・`gcloud run services add-iam-policy-binding`によるIAM binding付与に必要。PR-D4の`roles/run.developer`ではサービスのIAMポリシー変更`services.setIamPolicy`が含まれないため不足)
+- `roles/artifactregistry.writer`(イメージpush)
+- `roles/artifactregistry.reader`(2025-01-13以降必須。Cloud Run/Cloud Run functionsデプロイ時にprincipal自身がcontainer imageにアクセスするため)
+- `roles/storage.admin`(Cloud Buildのsource staging bucketへのcreate/write用。`scripts/pr-d4-backfill/README.md`のGitHub deploy SA行に同様の記載あり)
+- `roles/iam.serviceAccountUser`(runtime SA `paddle-ocr-runtime@{project-id}.iam.gserviceaccount.com`への`actAs`用。`--service-account=X`フラグがこの権限を要求するため見落としやすい。対象を`paddle-ocr-runtime`に限定したconditional bindingが望ましい)
+- `roles/cloudbuild.builds.editor`(ビルド起動・状態取得)
+- `roles/cloudfunctions.viewer`(`processOCR`のSA参照用describe、`--gen2`)
+
+**実装時にまず現在の権限を確認し、不足分のみ追加すること**(`docsplit-cloud-build@...`は既に他ワークフロー(PR-D4等)で複数ロールを保有している可能性があるため):
+```bash
+gcloud projects get-iam-policy <project-id> \
+  --flatten="bindings[].members" \
+  --filter="bindings.members:docsplit-cloud-build@<project-id>.iam.gserviceaccount.com" \
+  --format="table(bindings.role)"
+```
+
+付与(不足分のみ、例):
+```bash
+for role in \
+  "roles/run.admin" \
+  "roles/artifactregistry.writer" \
+  "roles/artifactregistry.reader" \
+  "roles/storage.admin" \
+  "roles/cloudbuild.builds.editor" \
+  "roles/cloudfunctions.viewer"; do
+  gcloud projects add-iam-policy-binding <project-id> \
+    --member="serviceAccount:docsplit-cloud-build@<project-id>.iam.gserviceaccount.com" \
+    --role="$role"
+done
+gcloud iam service-accounts add-iam-policy-binding \
+  paddle-ocr-runtime@<project-id>.iam.gserviceaccount.com \
+  --member="serviceAccount:docsplit-cloud-build@<project-id>.iam.gserviceaccount.com" \
+  --role="roles/iam.serviceAccountUser" \
+  --project=<project-id>
+```
+
+`cloudbuild.googleapis.com`の有効化は`deploy-paddle-ocr.yml`自身では行わない(デプロイSAへ`serviceusage.services.enable`を日常的に持たせる根拠が薄いため)。未有効な場合は、上記のPR3 bootstrap権限(一時付与)を使って`gcloud services enable cloudbuild.googleapis.com --project=<project-id>`を実行する。
+
 ---
 
 ### Gmail連携方式の選択ガイド

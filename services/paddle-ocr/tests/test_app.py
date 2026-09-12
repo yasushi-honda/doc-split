@@ -72,9 +72,13 @@ def client():
 
 
 def test_healthz_reports_engine_not_loaded_when_engine_is_none(client):
+    """ADR-0025 PR4b: ENGINE未初期化時は503を返す(startup/liveness probe対応)。
+    以前は200を返していたが、これはprobeの誤判定防止としては不要と判明済み
+    (lifespan startup完了までTCP接続自体がリッスンされないため)。定常状態の
+    ヘルスチェック応答をより正確にするための防御的な変更として503化した。"""
     app_module.ENGINE = None
     resp = client.get("/healthz")
-    assert resp.status_code == 200
+    assert resp.status_code == 503
     body = resp.json()
     assert body["modelLoaded"] is False
     assert body["status"] == "starting"

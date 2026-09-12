@@ -80,7 +80,12 @@ def _error_response(status_code: int, code: str, message: str, *, limit: Optiona
 
 @app.get("/healthz")
 def healthz():
-    return {
+    # ADR-0025 PR4b: ENGINE未初期化時は503を返す(以前は常に200)。ASGI lifespanの
+    # startup完了までTCP接続自体がリッスンされないため(実測確認済み)、Cloud Runの
+    # startup/liveness probeがこの分岐に到達することは通常起こらない — 503化は
+    # 「probeの誤判定を防ぐ」ためではなく、定常状態のヘルスチェック応答をより正確に
+    # するための防御的な変更(services/paddle-ocr/README.md「既知の限界」節参照)。
+    body = {
         "status": "ok" if ENGINE is not None else "starting",
         "engine": "paddleocr",
         "modelVersion": ENGINE.model_version if ENGINE is not None else None,
@@ -88,6 +93,7 @@ def healthz():
         "imageDigest": IMAGE_DIGEST,
         "modelLoaded": ENGINE is not None,
     }
+    return JSONResponse(status_code=200 if ENGINE is not None else 503, content=body)
 
 
 async def _read_body_with_limit(request: Request) -> bytes:
