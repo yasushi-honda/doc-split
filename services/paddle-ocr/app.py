@@ -86,7 +86,7 @@ def _error_response(status_code: int, code: str, message: str, *, limit: Optiona
 
 
 @app.get("/health")
-def healthz():
+def health():
     # ADR-0025 PR4b: ENGINE未初期化時は503を返す(以前は常に200)。ASGI lifespanの
     # startup完了までTCP接続自体がリッスンされないため(実測確認済み)、Cloud Runの
     # startup/liveness probeがこの分岐に到達することは通常起こらない — 503化は

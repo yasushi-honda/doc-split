@@ -432,15 +432,15 @@ jobs:
           # 外部リクエストのみGoogle Frontend側の404で弾かれ続ける現象を確認した(内部probe疎通は
           # 正常、公式ドキュメントは外部到達可能と明記、原因不明)。回避策として"/health"に変更した
           # (services/paddle-ocr/README.md「Cloud Run liveness probeによるインスタンス強制入れ替え」節参照)。
-          HEALTHZ_STATUS=$(curl -sS -o /tmp/healthz_body.json -w '%{http_code}' -H "Authorization: Bearer ${TOKEN}" "${SERVICE_URL}/health")
-          HEALTHZ_BODY=$(cat /tmp/healthz_body.json)
-          echo "$HEALTHZ_BODY"
-          if [ "$HEALTHZ_STATUS" != "200" ]; then
-            echo "ERROR: /health が HTTP ${HEALTHZ_STATUS} を返しました(期待値: 200): $HEALTHZ_BODY" >&2
+          HEALTH_STATUS=$(curl -sS -o /tmp/health_body.json -w '%{http_code}' -H "Authorization: Bearer ${TOKEN}" "${SERVICE_URL}/health")
+          HEALTH_BODY=$(cat /tmp/health_body.json)
+          echo "$HEALTH_BODY"
+          if [ "$HEALTH_STATUS" != "200" ]; then
+            echo "ERROR: /health が HTTP ${HEALTH_STATUS} を返しました(期待値: 200): $HEALTH_BODY" >&2
             exit 1
           fi
-          echo "$HEALTHZ_BODY" | grep -q '"modelLoaded":true' || { echo "ERROR: modelLoaded is not true" >&2; exit 1; }
-          echo "$HEALTHZ_BODY" | grep -q "\"imageDigest\":\"${IMAGE_DIGEST}\"" || { echo "ERROR: imageDigest does not match deployed digest" >&2; exit 1; }
+          echo "$HEALTH_BODY" | grep -q '"modelLoaded":true' || { echo "ERROR: modelLoaded is not true" >&2; exit 1; }
+          echo "$HEALTH_BODY" | grep -q "\"imageDigest\":\"${IMAGE_DIGEST}\"" || { echo "ERROR: imageDigest does not match deployed digest" >&2; exit 1; }
 
           echo "=== probe設定確認 ==="
           gcloud run services describe paddle-ocr \
