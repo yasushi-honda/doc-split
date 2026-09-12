@@ -28,29 +28,27 @@
  */
 
 import type {
-  DocumentExtractionResult,
-  CustomerExtractionResult,
-  OfficeExtractionResultWithCandidates,
-  DateExtractionResult,
-  ArbitrationProvenance,
+  ArbitratedDocumentExtractionResult,
+  ArbitratedCustomerExtractionResult,
+  ArbitratedOfficeExtractionResult,
+  ArbitratedDateExtractionResult,
   MatchType,
 } from '../utils/extractors';
-
-/**
- * arbitrate*() が返す結果は基底の *ExtractionResult に `provenance` を追加した
- * Arbitrated*ExtractionResult 型だが、本モジュールは基底型のみを要求してきた
- * (provenanceは構造的に無視されていた)。Pass2昇格の可観測化(PR2)のため、
- * provenanceを任意プロパティとして受け取れるよう型を拡張する。
- * オプショナルにしているのは、arbitrationを経ていない呼び出し元(既存テスト等)との
- * 後方互換性を保つため。
- */
-type WithOptionalProvenance<T> = T & { provenance?: ArbitrationProvenance };
+import type { Pass2Promotion } from '../../../shared/types';
 
 export interface OcrUpdatePayloadInputs {
-  documentTypeResult: WithOptionalProvenance<DocumentExtractionResult>;
-  customerResult: WithOptionalProvenance<CustomerExtractionResult>;
-  officeResult: WithOptionalProvenance<OfficeExtractionResultWithCandidates>;
-  dateResult: WithOptionalProvenance<DateExtractionResult>;
+  /**
+   * 呼出元(ocrProcessor.ts)は必ずarbitrate*()の戻り値(provenance必須)を渡す。
+   * 基底の*ExtractionResult型ではなくArbitrated*ExtractionResultを要求することで、
+   * 「provenance未計測」と「計測した結果existing」が型レベルで区別され、
+   * pass2Promotionの誤った既定値falseへの静かな収束を防ぐ(type-design-analyzer指摘)。
+   * テスト用フィクスチャは`withProvenance()`ヘルパー(テストファイル側)で明示的に
+   * provenanceを付与する。
+   */
+  documentTypeResult: ArbitratedDocumentExtractionResult;
+  customerResult: ArbitratedCustomerExtractionResult;
+  officeResult: ArbitratedOfficeExtractionResult;
+  dateResult: ArbitratedDateExtractionResult;
   ocrResultUrl: string | null;
   totalPages: number;
   suggestedNewOffice: string | null;
@@ -164,13 +162,11 @@ export interface OcrExtractionUpdateFields {
    * してから計算しないと、複数顧客宛のFAXの実行結果が複製メンバー数だけ多重計上され、
    * Pass2廃止の可否判断を誤らせる(`scripts/inspect-ocr-volume-stats.js`のtotalPages集計と
    * 同じdedup処理が必要)。
+   *
+   * 型は`shared/types.ts`の`Pass2Promotion`をそのまま使用する(type-design-analyzer指摘:
+   * インライン複製は構造ドリフトを検知できない)。
    */
-  pass2Promotion: {
-    documentType: boolean;
-    customerName: boolean;
-    officeName: boolean;
-    date: boolean;
-  };
+  pass2Promotion: Pass2Promotion;
 }
 
 /** 顧客/事業所候補は表示・課金コスト抑制のため先頭5件のみ保持する (#178 既存挙動) */
@@ -276,10 +272,10 @@ export function buildOcrExtractionUpdatePayload(
       },
     },
     pass2Promotion: {
-      documentType: documentTypeResult.provenance?.source === 'candidate',
-      customerName: customerResult.provenance?.source === 'candidate',
-      officeName: officeResult.provenance?.source === 'candidate',
-      date: dateResult.provenance?.source === 'candidate',
+      documentType: documentTypeResult.provenance.source === 'candidate',
+      customerName: customerResult.provenance.source === 'candidate',
+      officeName: officeResult.provenance.source === 'candidate',
+      date: dateResult.provenance.source === 'candidate',
     },
   };
 }

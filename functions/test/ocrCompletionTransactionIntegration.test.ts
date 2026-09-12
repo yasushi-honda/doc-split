@@ -21,7 +21,8 @@ import { applyOcrCompletionTransaction } from '../src/ocr/ocrProcessor';
 import { buildOcrExtractionUpdatePayload } from '../src/ocr/ocrUpdatePayloadBuilder';
 import { buildMultiCustomerDetectionFields } from '../../shared/multiCustomerDetection';
 import type {
-  CustomerExtractionResult,
+  ArbitratedCustomerExtractionResult,
+  ArbitrationProvenance,
   DocumentExtractionResult,
   OfficeExtractionResultWithCandidates,
   DateExtractionResult,
@@ -31,28 +32,38 @@ import type { RawPageOcrResult } from '../src/ocr/buildPageResult';
 const db = admin.firestore();
 const COLLECTIONS_TO_CLEAN: readonly string[] = ['documents'];
 
-const documentTypeResult: DocumentExtractionResult = {
+/**
+ * OcrUpdatePayloadInputsはprovenance必須のArbitrated*ExtractionResult型を要求する
+ * (ADR-0025 PR2、type-design-analyzer指摘)。本ファイルのFAX複製シナリオは
+ * Pass2昇格の有無自体を検証対象にしていないため、既定はexisting(全文ベース採用)にする。
+ */
+const EXISTING_PROVENANCE: ArbitrationProvenance = { source: 'existing', candidateGrounded: false };
+
+const documentTypeResult: DocumentExtractionResult & { provenance: ArbitrationProvenance } = {
   documentType: '請求書',
   category: null,
   score: 100,
   matchType: 'exact',
   keywords: [],
+  provenance: EXISTING_PROVENANCE,
 };
 
-const officeResult: OfficeExtractionResultWithCandidates = {
+const officeResult: OfficeExtractionResultWithCandidates & { provenance: ArbitrationProvenance } = {
   bestMatch: { id: 'office-1', name: 'ケアサポートきらり', score: 100, matchType: 'exact', isDuplicate: false },
   candidates: [{ id: 'office-1', name: 'ケアサポートきらり', score: 100, matchType: 'exact', isDuplicate: false }],
   hasMultipleCandidates: false,
   needsManualSelection: false,
+  provenance: EXISTING_PROVENANCE,
 };
 
-const dateResult: DateExtractionResult = {
+const dateResult: DateExtractionResult & { provenance: ArbitrationProvenance } = {
   date: new Date('2026-07-01T00:00:00.000Z'),
   formattedDate: '2026-07-01',
   source: 'body',
   pattern: 'test',
   confidence: 90,
   allCandidates: [],
+  provenance: EXISTING_PROVENANCE,
 };
 
 const pageResults: RawPageOcrResult[] = [
@@ -60,7 +71,10 @@ const pageResults: RawPageOcrResult[] = [
 ];
 
 /** exact一致&&非isDuplicateの候補2件(田中太郎/田中花子)を持つcustomerResultを構築する */
-function twoExactCandidatesResult(needsManualSelection = false): CustomerExtractionResult {
+function twoExactCandidatesResult(
+  needsManualSelection = false,
+  provenance: ArbitrationProvenance = EXISTING_PROVENANCE
+): ArbitratedCustomerExtractionResult {
   return {
     bestMatch: {
       id: 'cust-a',
@@ -83,11 +97,12 @@ function twoExactCandidatesResult(needsManualSelection = false): CustomerExtract
     ],
     hasMultipleCandidates: true,
     needsManualSelection,
+    provenance,
   };
 }
 
 /** exact一致&&非isDuplicateの候補3件(GOAL.md現場要件の実例: 利用者3名記載FAX)を持つcustomerResultを構築する */
-function threeExactCandidatesResult(): CustomerExtractionResult {
+function threeExactCandidatesResult(): ArbitratedCustomerExtractionResult {
   return {
     bestMatch: { id: 'cust-a', name: '田中太郎', score: 100, matchType: 'exact', isDuplicate: false },
     candidates: [
@@ -97,10 +112,11 @@ function threeExactCandidatesResult(): CustomerExtractionResult {
     ],
     hasMultipleCandidates: true,
     needsManualSelection: false,
+    provenance: EXISTING_PROVENANCE,
   };
 }
 
-function buildExtractionFields(customerResult: CustomerExtractionResult) {
+function buildExtractionFields(customerResult: ArbitratedCustomerExtractionResult) {
   return buildOcrExtractionUpdatePayload({
     documentTypeResult,
     customerResult,
@@ -144,7 +160,13 @@ describe('applyOcrCompletionTransaction (複数顧客FAX複製機能 AC-b/AC-c)'
   it('AC-b: flag ON + exact候補2件(customerId重複排除後) → 元doc含め2件生成され、共通distributionId・各customerId・各detail/mainを持つ', async () => {
     const docId = 'orig-doc-1';
     const docRef = await seedProcessingDoc(docId);
-    const customerResult = twoExactCandidatesResult();
+    // pass2Promotion(ADR-0025 PR2)の複製伝播をあわせて検証するため、customerNameのみ
+    // Pass2候補昇格(source:'candidate')とする(pr-test-analyzer指摘: 複製メンバー間で
+    // 同一値になることが未検証だった)。
+    const customerResult = twoExactCandidatesResult(false, {
+      source: 'candidate',
+      candidateGrounded: true,
+    });
 
     await applyOcrCompletionTransaction({
       db,
@@ -185,6 +207,14 @@ describe('applyOcrCompletionTransaction (複数顧客FAX複製機能 AC-b/AC-c)'
       expect(d.data.needsManualCustomerSelection, '自動配信のため手動選択不要').to.equal(false);
       expect(d.data.isDuplicateCustomer).to.equal(false);
       expect(d.data.status).to.equal('processed');
+      // ADR-0025 PR2 / pr-test-analyzer指摘: pass2Promotionは他の抽出結果メタデータ
+      // (totalPages等)と同じ汎用spreadで複製されるため、全複製メンバーで同一値になるはず。
+      expect(d.data.pass2Promotion, `${d.id}のpass2Promotionが元OCR実行結果と一致すること`).to.deep.equal({
+        documentType: false,
+        customerName: true,
+        officeName: false,
+        date: false,
+      });
 
       const detailSnap = await db.doc(`documents/${d.id}/detail/main`).get();
       expect(detailSnap.exists, `${d.id}/detail/mainが存在すること`).to.equal(true);
@@ -407,11 +437,12 @@ describe('applyOcrCompletionTransaction (複数人記載検出 PR-A、multiCusto
     });
 
     // 再処理でexact候補が1件のみに変わったケース(前回2件検出→今回は1件のみ)
-    const customerResult: CustomerExtractionResult = {
+    const customerResult: ArbitratedCustomerExtractionResult = {
       bestMatch: { id: 'cust-a', name: '田中太郎', score: 100, matchType: 'exact', isDuplicate: false },
       candidates: [{ id: 'cust-a', name: '田中太郎', score: 100, matchType: 'exact', isDuplicate: false }],
       hasMultipleCandidates: false,
       needsManualSelection: false,
+      provenance: EXISTING_PROVENANCE,
     };
     // multiCustomerFieldsの計算・マージはapplyOcrCompletionTransaction()の責務ではなく
     // 呼出元(ocrProcessor.tsのprocessDocument())が行う設計(PR-A)。本testはprocessDocument()
@@ -454,11 +485,12 @@ describe('applyOcrCompletionTransaction (複数人記載検出 PR-A、multiCusto
     const docId = 'never-detected-doc';
     const docRef = await seedProcessingDoc(docId);
 
-    const customerResult: CustomerExtractionResult = {
+    const customerResult: ArbitratedCustomerExtractionResult = {
       bestMatch: { id: 'cust-a', name: '田中太郎', score: 100, matchType: 'exact', isDuplicate: false },
       candidates: [{ id: 'cust-a', name: '田中太郎', score: 100, matchType: 'exact', isDuplicate: false }],
       hasMultipleCandidates: false,
       needsManualSelection: false,
+      provenance: EXISTING_PROVENANCE,
     };
 
     await applyOcrCompletionTransaction({

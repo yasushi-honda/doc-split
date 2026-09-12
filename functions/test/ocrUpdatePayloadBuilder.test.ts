@@ -11,19 +11,41 @@ import {
   buildOcrExtractionUpdatePayload,
   type OcrUpdatePayloadInputs,
 } from '../src/ocr/ocrUpdatePayloadBuilder';
+import type {
+  ArbitrationProvenance,
+  DocumentExtractionResult,
+  CustomerExtractionResult,
+  OfficeExtractionResultWithCandidates,
+  DateExtractionResult,
+} from '../src/utils/extractors';
 
 const FIXED_EXTRACTED_AT = admin.firestore.FieldValue.serverTimestamp();
 
+/**
+ * OcrUpdatePayloadInputsの各結果フィールドはArbitrated*ExtractionResult(provenance必須)
+ * を要求する(type-design-analyzer指摘、ADR-0025 PR2)。フィクスチャ側でprovenanceを
+ * 明示付与するためのテスト専用ヘルパー。デフォルトは「全文ベース抽出を採用(Pass2未昇格)」
+ * を表すexisting。
+ */
+const DEFAULT_PROVENANCE: ArbitrationProvenance = { source: 'existing', candidateGrounded: false };
+
+function withProvenance<T extends object>(
+  result: T,
+  provenance: ArbitrationProvenance = DEFAULT_PROVENANCE
+): T & { provenance: ArbitrationProvenance } {
+  return { ...result, provenance };
+}
+
 function makeInputs(overrides: Partial<OcrUpdatePayloadInputs> = {}): OcrUpdatePayloadInputs {
   return {
-    documentTypeResult: {
+    documentTypeResult: withProvenance<DocumentExtractionResult>({
       documentType: '請求書',
       category: 'billing',
       score: 90,
       matchType: 'exact',
       keywords: ['請求'],
-    },
-    customerResult: {
+    }),
+    customerResult: withProvenance<CustomerExtractionResult>({
       bestMatch: {
         id: 'cust-1',
         name: '山田太郎',
@@ -44,8 +66,8 @@ function makeInputs(overrides: Partial<OcrUpdatePayloadInputs> = {}): OcrUpdateP
       ],
       hasMultipleCandidates: false,
       needsManualSelection: false,
-    },
-    officeResult: {
+    }),
+    officeResult: withProvenance<OfficeExtractionResultWithCandidates>({
       bestMatch: {
         id: 'office-1',
         name: 'テスト事業所',
@@ -66,15 +88,15 @@ function makeInputs(overrides: Partial<OcrUpdatePayloadInputs> = {}): OcrUpdateP
       ],
       hasMultipleCandidates: false,
       needsManualSelection: false,
-    },
-    dateResult: {
+    }),
+    dateResult: withProvenance<DateExtractionResult>({
       date: new Date('2026-01-15T00:00:00Z'),
       formattedDate: '2026-01-15',
       source: 'ocr',
       pattern: 'yyyy-mm-dd',
       confidence: 80,
       allCandidates: [],
-    },
+    }),
     ocrResultUrl: null,
     totalPages: 1,
     suggestedNewOffice: null,
@@ -172,12 +194,12 @@ describe('buildOcrExtractionUpdatePayload', () => {
   it('customerResult.bestMatchがnullの場合、デフォルト値(不明顧客/null)にフォールバックする', () => {
     const payload = buildOcrExtractionUpdatePayload(
       makeInputs({
-        customerResult: {
+        customerResult: withProvenance<CustomerExtractionResult>({
           bestMatch: null,
           candidates: [],
           hasMultipleCandidates: false,
           needsManualSelection: true,
-        },
+        }),
       })
     );
 
@@ -202,12 +224,12 @@ describe('buildOcrExtractionUpdatePayload', () => {
   it('officeResult.bestMatchがnullの場合、デフォルト値(未判定/null)にフォールバックする', () => {
     const payload = buildOcrExtractionUpdatePayload(
       makeInputs({
-        officeResult: {
+        officeResult: withProvenance<OfficeExtractionResultWithCandidates>({
           bestMatch: null,
           candidates: [],
           hasMultipleCandidates: false,
           needsManualSelection: true,
-        },
+        }),
       })
     );
 
@@ -222,13 +244,13 @@ describe('buildOcrExtractionUpdatePayload', () => {
   it('documentTypeResult.documentTypeがnullの場合、"未判定"にフォールバックする', () => {
     const payload = buildOcrExtractionUpdatePayload(
       makeInputs({
-        documentTypeResult: {
+        documentTypeResult: withProvenance<DocumentExtractionResult>({
           documentType: null,
           category: null,
           score: 0,
           matchType: 'none',
           keywords: [],
-        },
+        }),
       })
     );
 
@@ -240,7 +262,7 @@ describe('buildOcrExtractionUpdatePayload', () => {
   it('bestMatchは存在するがcareManagerName/shortNameが未設定の場合、nullにフォールバックする', () => {
     const payload = buildOcrExtractionUpdatePayload(
       makeInputs({
-        customerResult: {
+        customerResult: withProvenance<CustomerExtractionResult>({
           bestMatch: {
             id: 'cust-2',
             name: '鈴木花子',
@@ -260,8 +282,8 @@ describe('buildOcrExtractionUpdatePayload', () => {
           ],
           hasMultipleCandidates: false,
           needsManualSelection: false,
-        },
-        officeResult: {
+        }),
+        officeResult: withProvenance<OfficeExtractionResultWithCandidates>({
           bestMatch: {
             id: 'office-2',
             name: '第二事業所',
@@ -281,7 +303,7 @@ describe('buildOcrExtractionUpdatePayload', () => {
           ],
           hasMultipleCandidates: false,
           needsManualSelection: false,
-        },
+        }),
       })
     );
 
@@ -293,7 +315,7 @@ describe('buildOcrExtractionUpdatePayload', () => {
   it('isDuplicate=trueが顧客/事業所の両方で正しく伝播する', () => {
     const payload = buildOcrExtractionUpdatePayload(
       makeInputs({
-        customerResult: {
+        customerResult: withProvenance<CustomerExtractionResult>({
           bestMatch: {
             id: 'cust-3',
             name: '同姓同名太郎',
@@ -306,8 +328,8 @@ describe('buildOcrExtractionUpdatePayload', () => {
           ],
           hasMultipleCandidates: true,
           needsManualSelection: true,
-        },
-        officeResult: {
+        }),
+        officeResult: withProvenance<OfficeExtractionResultWithCandidates>({
           bestMatch: {
             id: 'office-3',
             name: '重複事業所',
@@ -320,26 +342,31 @@ describe('buildOcrExtractionUpdatePayload', () => {
           ],
           hasMultipleCandidates: true,
           needsManualSelection: true,
-        },
+        }),
       })
     );
 
     expect(payload.isDuplicateCustomer).to.equal(true);
     expect(payload.customerCandidates[0]?.isDuplicate).to.equal(true);
     expect(payload.officeCandidates[0]?.isDuplicate).to.equal(true);
+    // pr-test-analyzer指摘: bestMatch存在+needsManualSelection=trueの組み合わせは
+    // isDuplicate伝播の検証はあったが、Confirmedフラグ(4象限の残り1つ)が未検証だった。
+    // needsManualSelection=trueである以上、bestMatchが存在してもConfirmed:falseになるべき。
+    expect(payload.customerConfirmed).to.equal(false);
+    expect(payload.officeConfirmed).to.equal(false);
   });
 
   it('dateResultのdate/formattedDateがnullでも他の抽出結果には影響しない', () => {
     const payload = buildOcrExtractionUpdatePayload(
       makeInputs({
-        dateResult: {
+        dateResult: withProvenance<DateExtractionResult>({
           date: null,
           formattedDate: null,
           source: null,
           pattern: null,
           confidence: 0,
           allCandidates: [],
-        },
+        }),
       })
     );
 
@@ -373,18 +400,18 @@ describe('buildOcrExtractionUpdatePayload', () => {
 
     const payload = buildOcrExtractionUpdatePayload(
       makeInputs({
-        customerResult: {
+        customerResult: withProvenance<CustomerExtractionResult>({
           bestMatch: fiveCustomers[0] ?? null,
           candidates: fiveCustomers,
           hasMultipleCandidates: true,
           needsManualSelection: true,
-        },
-        officeResult: {
+        }),
+        officeResult: withProvenance<OfficeExtractionResultWithCandidates>({
           bestMatch: fiveOffices[0] ?? null,
           candidates: fiveOffices,
           hasMultipleCandidates: true,
           needsManualSelection: true,
-        },
+        }),
       })
     );
 
@@ -405,18 +432,18 @@ describe('buildOcrExtractionUpdatePayload', () => {
 
     const payload = buildOcrExtractionUpdatePayload(
       makeInputs({
-        customerResult: {
+        customerResult: withProvenance<CustomerExtractionResult>({
           bestMatch: sixCustomers[0] ?? null,
           candidates: sixCustomers,
           hasMultipleCandidates: true,
           needsManualSelection: true,
-        },
-        officeResult: {
+        }),
+        officeResult: withProvenance<OfficeExtractionResultWithCandidates>({
           bestMatch: sixOffices[0] ?? null,
           candidates: sixOffices,
           hasMultipleCandidates: true,
           needsManualSelection: true,
-        },
+        }),
       })
     );
 
@@ -442,18 +469,18 @@ describe('buildOcrExtractionUpdatePayload', () => {
 
     const payload = buildOcrExtractionUpdatePayload(
       makeInputs({
-        customerResult: {
+        customerResult: withProvenance<CustomerExtractionResult>({
           bestMatch: manyCustomers[0] ?? null,
           candidates: manyCustomers,
           hasMultipleCandidates: true,
           needsManualSelection: true,
-        },
-        officeResult: {
+        }),
+        officeResult: withProvenance<OfficeExtractionResultWithCandidates>({
           bestMatch: manyOffices[0] ?? null,
           candidates: manyOffices,
           hasMultipleCandidates: true,
           needsManualSelection: true,
-        },
+        }),
       })
     );
 
@@ -510,12 +537,12 @@ describe('buildOcrExtractionUpdatePayload', () => {
       // customerId:nullのままcustomerConfirmed:trueという「空確定」バグが発生していた。
       const payload = buildOcrExtractionUpdatePayload(
         makeInputs({
-          customerResult: {
+          customerResult: withProvenance<CustomerExtractionResult>({
             bestMatch: null,
             candidates: [],
             hasMultipleCandidates: false,
             needsManualSelection: false,
-          },
+          }),
         })
       );
 
@@ -527,12 +554,12 @@ describe('buildOcrExtractionUpdatePayload', () => {
     it('officeResult.bestMatchがnullかつneedsManualSelectionがfalse(候補ゼロの実際の挙動)でも、officeConfirmedはfalseになる', () => {
       const payload = buildOcrExtractionUpdatePayload(
         makeInputs({
-          officeResult: {
+          officeResult: withProvenance<OfficeExtractionResultWithCandidates>({
             bestMatch: null,
             candidates: [],
             hasMultipleCandidates: false,
             needsManualSelection: false,
-          },
+          }),
         })
       );
 
@@ -549,7 +576,12 @@ describe('buildOcrExtractionUpdatePayload', () => {
   });
 
   describe('ADR-0025 PR2: pass2Promotion(Pass2昇格の可観測化)', () => {
-    it('provenanceが未指定(arbitrationを経ていない呼び出し)の場合、全フィールドfalseになる', () => {
+    // type-design-analyzer指摘への対応(PR899): OcrUpdatePayloadInputsはprovenance必須の
+    // Arbitrated*ExtractionResult型を要求するため、「provenance未指定」という状態自体が
+    // 型レベルで構築不能になった(「未計測」と「計測してexisting」が静かに同じfalseへ
+    // 収束するリスクを構造的に排除)。従って本テストは基底フィクスチャの既定値である
+    // provenance.source==="existing"のケースとして検証する。
+    it('provenance.source==="existing"(基底フィクスチャの既定)の場合、全フィールドfalseになる', () => {
       const payload = buildOcrExtractionUpdatePayload(makeInputs());
       expect(payload.pass2Promotion).to.deep.equal({
         documentType: false,
