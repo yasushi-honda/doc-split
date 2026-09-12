@@ -42,10 +42,16 @@ def pdf_pages_to_rgb(data: bytes, *, dpi: int, limits: RasterLimits) -> Iterator
 
     try:
         pdf = pdfium.PdfDocument(data)
+        page_count = len(pdf)
     except Exception as e:
         raise InputRejected("INVALID_PDF", f"PDFの読み込みに失敗しました: {e}") from e
 
-    page_count = len(pdf)
+    if page_count == 0:
+        # silent-failure-hunter指摘反映: 0ページのPDFは「正常な空文書」ではなく
+        # 破損・切り詰めの兆候である可能性が高いため、暗黙に空のtext/pages(200成功)を
+        # 返さず明示的なエラーにする。
+        raise InputRejected("INVALID_PDF", "PDFにページが1つも含まれていません")
+
     if page_count > limits.max_pages:
         raise InputRejected(
             "PAGE_LIMIT_EXCEEDED",
@@ -55,10 +61,14 @@ def pdf_pages_to_rgb(data: bytes, *, dpi: int, limits: RasterLimits) -> Iterator
         )
 
     for i in range(page_count):
-        page = pdf[i]
-        width_pt, height_pt = page.get_size()
-        scale = dpi / 72
-        pixel_count = int(width_pt * scale) * int(height_pt * scale)
+        try:
+            page = pdf[i]
+            width_pt, height_pt = page.get_size()
+            scale = dpi / 72
+            pixel_count = int(width_pt * scale) * int(height_pt * scale)
+        except pdfium.PdfiumError as e:
+            raise InputRejected("INVALID_PDF", f"ページ{i + 1}の読み込みに失敗しました: {e}") from e
+
         if pixel_count > limits.max_pixels:
             raise InputRejected(
                 "PIXEL_LIMIT_EXCEEDED",
@@ -66,9 +76,19 @@ def pdf_pages_to_rgb(data: bytes, *, dpi: int, limits: RasterLimits) -> Iterator
                 limit=limits.max_pixels,
                 actual=pixel_count,
             )
-        bitmap = page.render(scale=scale)
-        pil_image = bitmap.to_pil()
-        yield np.array(pil_image.convert("RGB"))
+
+        try:
+            # silent-failure-hunter指摘反映: pypdfium2.PdfiumErrorはRuntimeErrorの
+            # サブクラス(実機確認済み)のため、ここを無保護にするとapp.py側の
+            # except RuntimeErrorに捕まり、入力由来の問題が500(エンジン異常)として
+            # 誤分類される。ページ単位のレンダリング失敗も422/INVALID_PDFに変換する。
+            bitmap = page.render(scale=scale)
+            pil_image = bitmap.to_pil()
+            rgb_array = np.array(pil_image.convert("RGB"))
+        except pdfium.PdfiumError as e:
+            raise InputRejected("INVALID_PDF", f"ページ{i + 1}のレンダリングに失敗しました: {e}") from e
+
+        yield rgb_array
 
 
 def image_to_rgb(data: bytes, *, limits: RasterLimits) -> Iterator["object"]:
@@ -86,12 +106,14 @@ def image_to_rgb(data: bytes, *, limits: RasterLimits) -> Iterator["object"]:
         # デコードしない(codex review指摘反映: 以前はここで img.load() を呼びフレーム0を
         # 即座に全展開していたため、max_pixels超過の画像でもチェック前に確保が発生していた)。
         img = Image.open(_bytes_io(data))
+        # silent-failure-hunter指摘反映: n_framesは一部コーデックでメタデータの遅延
+        # パースを伴い例外を送出しうるため、Image.open()と同じtryブロックで保護する。
+        frame_count = getattr(img, "n_frames", 1)
     except (UnidentifiedImageError, OSError) as e:
         raise InputRejected("INVALID_IMAGE", f"画像の読み込みに失敗しました: {e}") from e
     except Image.DecompressionBombError as e:
         raise InputRejected("INVALID_IMAGE", f"画像の展開後サイズが異常です: {e}") from e
 
-    frame_count = getattr(img, "n_frames", 1)
     if frame_count > limits.max_pages:
         raise InputRejected(
             "PAGE_LIMIT_EXCEEDED",
@@ -103,7 +125,7 @@ def image_to_rgb(data: bytes, *, limits: RasterLimits) -> Iterator["object"]:
     for i in range(frame_count):
         try:
             img.seek(i)
-        except (OSError, EOFError) as e:
+        except (OSError, EOFError, ValueError) as e:
             raise InputRejected("INVALID_IMAGE", f"フレーム{i + 1}の読み込みに失敗しました: {e}") from e
         width, height = img.size
         pixel_count = width * height
@@ -116,7 +138,7 @@ def image_to_rgb(data: bytes, *, limits: RasterLimits) -> Iterator["object"]:
             )
         try:
             yield np.array(img.convert("RGB"))
-        except (OSError, Image.DecompressionBombError) as e:
+        except (OSError, ValueError, Image.DecompressionBombError) as e:
             raise InputRejected("INVALID_IMAGE", f"フレーム{i + 1}のデコードに失敗しました: {e}") from e
 
 

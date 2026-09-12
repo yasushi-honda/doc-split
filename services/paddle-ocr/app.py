@@ -18,17 +18,21 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import os
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from raster import InputRejected, RasterLimits, image_to_rgb, pdf_pages_to_rgb
+
+logger = logging.getLogger("paddle-ocr")
 
 MODEL_ROOT = Path(os.environ.get("PADDLE_MODEL_DIR", "/opt/paddle-ocr/models"))
 EXPECTED_HASHES_PATH = Path(os.environ.get("PADDLE_EXPECTED_HASHES", "/app/expected-model-hashes.json"))
@@ -55,11 +59,9 @@ ENGINE = None  # lifespan内でセットする(モジュールimport時にpaddle
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global ENGINE
-    import json as _json
-
     from ocr_engine import build_engine
 
-    expected_hashes = _json.loads(EXPECTED_HASHES_PATH.read_text(encoding="utf-8"))
+    expected_hashes = json.loads(EXPECTED_HASHES_PATH.read_text(encoding="utf-8"))
     ENGINE = build_engine(MODEL_ROOT, expected_hashes)
     yield
 
@@ -109,6 +111,14 @@ async def _read_body_with_limit(request: Request) -> bytes:
 
 @app.post("/ocr")
 async def ocr(request: Request):
+    # silent-failure-hunter指摘反映: 予算の起点をbody読み取り開始前に置く(以前は
+    # body読み取り完了後だったため、低速なクライアント送信(意図的なslow-loris含む)が
+    # サイズ上限内で無期限に引き延ばされても504契約が発動しなかった)。
+    started = time.monotonic()
+
+    def _timed_out() -> bool:
+        return time.monotonic() - started > MAX_PROCESSING_SECONDS
+
     if ENGINE is None:
         return _error_response(500, "OCR_ENGINE_ERROR", "エンジンが初期化されていません")
 
@@ -122,18 +132,21 @@ async def ocr(request: Request):
         )
 
     try:
-        data = await _read_body_with_limit(request)
+        remaining = max(MAX_PROCESSING_SECONDS - (time.monotonic() - started), 0)
+        data = await asyncio.wait_for(_read_body_with_limit(request), timeout=remaining)
+    except asyncio.TimeoutError:
+        logger.warning("PROCESSING_TIMEOUT: リクエスト受信が制限時間を超過しました")
+        return _error_response(
+            504, "PROCESSING_TIMEOUT", f"リクエスト受信が制限時間を超過しました(上限: {MAX_PROCESSING_SECONDS}秒)"
+        )
     except InputRejected as e:
+        logger.warning("%s: %s", e.code, e.message)
         return _error_response(413, e.code, e.message, limit=e.limit, actual=e.actual)
 
     if not data:
         return _error_response(400, "EMPTY_BODY", "リクエストbodyが空です")
 
     kind = ALLOWED_CONTENT_TYPES[content_type]
-    started = time.monotonic()
-
-    def _timed_out() -> bool:
-        return time.monotonic() - started > MAX_PROCESSING_SECONDS
 
     if kind == "pdf":
         rgb_page_iter = pdf_pages_to_rgb(data, dpi=RENDER_DPI, limits=LIMITS)
@@ -163,9 +176,21 @@ async def ocr(request: Request):
                     f"OCR処理が制限時間を超過しました(上限: {MAX_PROCESSING_SECONDS}秒)",
                 )
     except InputRejected as e:
+        logger.warning("%s: %s", e.code, e.message)
         return _error_response(422, e.code, e.message, limit=e.limit, actual=e.actual)
     except RuntimeError as e:
+        # pypdfium2.PdfiumErrorはRuntimeErrorのサブクラスだが、raster.py側で既に
+        # InputRejectedへ変換済みのため、ここに到達するのはエンジン層の異常のみ
+        # (silent-failure-hunter指摘反映)。
+        logger.exception("OCR_ENGINE_ERROR")
         return _error_response(500, "OCR_ENGINE_ERROR", str(e))
+    except Exception:
+        # silent-failure-hunter指摘反映: predict()やPillow/pdfiumがInputRejected/
+        # RuntimeErrorのいずれにも属さない例外(ValueError等)を投げた場合でも、
+        # 文書化されたエラー契約({"error":{...}})を必ず守り、スタックトレースを
+        # ログに残す(Starletteの既定500ではログが残らず、実運用で原因追跡できなくなるため)。
+        logger.exception("OCR_ENGINE_ERROR (unexpected)")
+        return _error_response(500, "OCR_ENGINE_ERROR", "予期しないエラーが発生しました")
 
     processing_ms = int((time.monotonic() - started) * 1000)
 

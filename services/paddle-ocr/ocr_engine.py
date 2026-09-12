@@ -17,18 +17,13 @@ scripts/generate-paddle-ocr-golden-text.pyの再実行による再検証が必�
 
 from __future__ import annotations
 
-import hashlib
 import threading
 from pathlib import Path
 
+from hashutil import sha256_file
+
 DET_MODEL_NAME = "PP-OCRv6_medium_det"
 REC_MODEL_NAME = "PP-OCRv6_medium_rec"
-
-
-def _sha256_file(path: Path) -> str:
-    h = hashlib.sha256()
-    h.update(path.read_bytes())
-    return h.hexdigest()
 
 
 def _verify_model_hashes(model_root: Path, expected: dict) -> None:
@@ -48,7 +43,7 @@ def _verify_model_hashes(model_root: Path, expected: dict) -> None:
                     f"モデルファイルが見つかりません: {fpath}。"
                     "download_models.pyがビルド時に正しく実行されたか確認してください。"
                 )
-            actual_hash = _sha256_file(fpath)
+            actual_hash = sha256_file(fpath)
             if actual_hash != expected_hash:
                 raise RuntimeError(
                     f"モデルファイルのSHA-256が不一致です: {fpath}\n"

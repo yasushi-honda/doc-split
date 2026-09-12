@@ -29,7 +29,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # モデル取得+SHA-256検証(ビルド時専用、fail-loud)。HOME=/tmp/paddle-buildでHFキャッシュを
 # 隔離し、同一RUN内で削除することで最終イメージにキャッシュが残らないようにする。
-COPY expected-model-hashes.json download_models.py ./
+# hashutil.pyはdownload_models.py(ビルド時)とocr_engine.py(実行時)の両方が共有する
+# 依存ゼロのSHA-256ヘルパー(code-review指摘反映、重複実装の解消)。
+COPY expected-model-hashes.json download_models.py hashutil.py ./
 RUN HOME=/tmp/paddle-build python3 download_models.py \
       --dest "$PADDLE_MODEL_DIR" --expected expected-model-hashes.json \
     && rm -rf /tmp/paddle-build

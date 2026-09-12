@@ -56,6 +56,24 @@ def test_pdf_pages_to_rgb_rejects_page_count_exceeding_limit():
     assert exc_info.value.actual == 3
 
 
+def test_pdf_pages_to_rgb_rejects_zero_page_pdf():
+    """silent-failure-hunter指摘反映: 0ページのPDFは「正常な空文書」として暗黙に
+    空リストを返さず、明示的なエラーにする(破損・切り詰めの兆候の可能性が高いため)。"""
+    limits = RasterLimits(max_pages=8, max_pixels=40_000_000)
+    empty_pdf_bytes = _make_pdf_bytes(0)
+    with pytest.raises(InputRejected) as exc_info:
+        list(pdf_pages_to_rgb(empty_pdf_bytes, dpi=200, limits=limits))
+    assert exc_info.value.code == "INVALID_PDF"
+
+
+def test_pdf_pages_to_rgb_at_exact_page_limit_succeeds():
+    """境界値: ページ数がちょうどmax_pagesの場合は拒否されないこと。"""
+    limits = RasterLimits(max_pages=3, max_pixels=40_000_000)
+    pdf_bytes = _make_pdf_bytes(3)
+    pages = list(pdf_pages_to_rgb(pdf_bytes, dpi=200, limits=limits))
+    assert len(pages) == 3
+
+
 def test_pdf_pages_to_rgb_rejects_pixel_count_exceeding_limit():
     # 200DPIで巨大な物理ページサイズを指定し、ピクセル数上限に到達させる
     limits = RasterLimits(max_pages=8, max_pixels=1000)

@@ -11,6 +11,7 @@ import io
 import pypdfium2 as pdfium
 import pytest
 from fastapi.testclient import TestClient
+from PIL import Image
 
 import app as app_module
 
@@ -39,6 +40,20 @@ def _make_pdf_bytes(page_count: int, *, width: float = 200, height: float = 300)
         pdf.new_page(width, height)
     buf = io.BytesIO()
     pdf.save(buf)
+    return buf.getvalue()
+
+
+def _make_png_bytes(width: int = 100, height: int = 100) -> bytes:
+    img = Image.new("RGB", (width, height), color=(255, 0, 0))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _make_gif_bytes(frame_count: int, *, width: int = 50, height: int = 50) -> bytes:
+    frames = [Image.new("RGB", (width, height), color=(i * 10 % 255, 0, 0)) for i in range(frame_count)]
+    buf = io.BytesIO()
+    frames[0].save(buf, format="GIF", save_all=True, append_images=frames[1:])
     return buf.getvalue()
 
 
@@ -135,7 +150,135 @@ def test_ocr_payload_too_large_returns_413(client, monkeypatch):
     app_module.ENGINE = StubEngine()
     resp = client.post("/ocr", content=b"x" * 1000, headers={"content-type": "application/pdf"})
     assert resp.status_code == 413
-    assert resp.json()["error"]["code"] == "PAYLOAD_TOO_LARGE"
+    body = resp.json()
+    assert body["error"]["code"] == "PAYLOAD_TOO_LARGE"
+    assert body["error"]["limit"] == 10
+    assert body["error"]["actual"] == 1000
+
+
+def test_ocr_zero_page_pdf_returns_422(client):
+    """pr-test-analyzer/silent-failure-hunter指摘反映: 0ページのPDFは「正常な空文書」
+    として200を返さず、明示的にエラーとする(破損・切り詰めの兆候である可能性が高いため)。"""
+    app_module.ENGINE = StubEngine()
+    empty_pdf = pdfium.PdfDocument.new()
+    buf = io.BytesIO()
+    empty_pdf.save(buf)
+    resp = client.post("/ocr", content=buf.getvalue(), headers={"content-type": "application/pdf"})
+    assert resp.status_code == 422
+    assert resp.json()["error"]["code"] == "INVALID_PDF"
+
+
+def test_ocr_returns_500_when_engine_raises_runtime_error(client):
+    """pr-test-analyzer指摘反映: エンジン内部異常(RuntimeError)が500として
+    正しく応答されることを確認する(現状は422/504系の異常系のみ網羅されていた)。"""
+
+    class FailingStubEngine(StubEngine):
+        def page_text(self, rgb_array) -> str:
+            raise RuntimeError("PaddleOCR実行結果の形状が想定外です: dummy")
+
+    app_module.ENGINE = FailingStubEngine()
+    pdf_bytes = _make_pdf_bytes(1)
+    resp = client.post("/ocr", content=pdf_bytes, headers={"content-type": "application/pdf"})
+    assert resp.status_code == 500
+    assert resp.json()["error"]["code"] == "OCR_ENGINE_ERROR"
+
+
+def test_ocr_returns_500_when_engine_raises_unexpected_exception(client):
+    """silent-failure-hunter指摘反映: InputRejected/RuntimeErrorのいずれにも属さない
+    例外(ValueError等)でも、文書化されたエラー契約({"error":{...}})を守ること。"""
+
+    class WeirdStubEngine(StubEngine):
+        def page_text(self, rgb_array) -> str:
+            raise ValueError("想定外の内部エラー")
+
+    app_module.ENGINE = WeirdStubEngine()
+    pdf_bytes = _make_pdf_bytes(1)
+    resp = client.post("/ocr", content=pdf_bytes, headers={"content-type": "application/pdf"})
+    assert resp.status_code == 500
+    body = resp.json()
+    assert body["error"]["code"] == "OCR_ENGINE_ERROR"
+    assert "想定外の内部エラー" not in body["error"]["message"]  # 内部例外メッセージをそのまま漏らさない
+
+
+def test_ocr_returns_500_when_engine_is_none(client):
+    """pr-test-analyzer指摘反映: /healthzは既にENGINE=Noneをテスト済みだが、/ocr側の
+    同分岐は未テストだった。起動直後にリクエストが到達するレースを想定した防御を確認する。"""
+    app_module.ENGINE = None
+    pdf_bytes = _make_pdf_bytes(1)
+    resp = client.post("/ocr", content=pdf_bytes, headers={"content-type": "application/pdf"})
+    assert resp.status_code == 500
+    assert resp.json()["error"]["code"] == "OCR_ENGINE_ERROR"
+
+
+def test_ocr_png_content_type_end_to_end(client):
+    """pr-test-analyzer指摘反映: 画像系Content-Type(png/gif等)がHTTPレベルで
+    エンドツーエンド検証されていなかった(raster.py単体テストのみ)。"""
+    app_module.ENGINE = StubEngine(texts_by_call=["PNGからのテキスト"])
+    resp = client.post("/ocr", content=_make_png_bytes(), headers={"content-type": "image/png"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["text"] == "PNGからのテキスト"
+    assert body["pageCount"] == 1
+
+
+def test_ocr_gif_multi_frame_content_type_end_to_end(client):
+    """複数フレームGIFが全フレームpageCountとして処理されることをHTTPレベルで確認する。"""
+    app_module.ENGINE = StubEngine(texts_by_call=["フレーム1", "フレーム2", "フレーム3"])
+    resp = client.post("/ocr", content=_make_gif_bytes(3), headers={"content-type": "image/gif"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["pageCount"] == 3
+    assert body["pages"] == ["フレーム1", "フレーム2", "フレーム3"]
+
+
+def test_ocr_gif_frame_count_exceeding_limit_returns_422_end_to_end(client, monkeypatch):
+    monkeypatch.setattr(app_module, "LIMITS", app_module.RasterLimits(max_pages=2, max_pixels=app_module.MAX_PIXELS))
+    app_module.ENGINE = StubEngine()
+    resp = client.post("/ocr", content=_make_gif_bytes(3), headers={"content-type": "image/gif"})
+    assert resp.status_code == 422
+    body = resp.json()
+    assert body["error"]["code"] == "PAGE_LIMIT_EXCEEDED"
+    assert body["error"]["actual"] == 3
+
+
+def test_ocr_content_type_with_charset_parameter_is_accepted(client):
+    """Content-Typeにパラメータが付与された場合(例: application/pdf; charset=binary)も
+    正しく許可されることを確認する。"""
+    app_module.ENGINE = StubEngine(texts_by_call=["テキスト"])
+    pdf_bytes = _make_pdf_bytes(1)
+    resp = client.post(
+        "/ocr", content=pdf_bytes, headers={"content-type": "application/pdf; charset=binary"}
+    )
+    assert resp.status_code == 200
+
+
+def test_ocr_missing_content_type_header_returns_415(client):
+    app_module.ENGINE = StubEngine()
+    # TestClientはcontentのみ渡すとContent-Typeを自動付与するため、明示的に空にする
+    resp = client.post("/ocr", content=b"dummy", headers={"content-type": ""})
+    assert resp.status_code == 415
+    assert resp.json()["error"]["code"] == "UNSUPPORTED_MEDIA_TYPE"
+
+
+def test_ocr_pdf_at_exact_page_limit_succeeds(client, monkeypatch):
+    """境界値: ページ数がちょうどmax_pagesの場合は拒否されず成功すること
+    (> と >= の取り違えのような回帰の検知)。"""
+    monkeypatch.setattr(app_module, "LIMITS", app_module.RasterLimits(max_pages=2, max_pixels=app_module.MAX_PIXELS))
+    app_module.ENGINE = StubEngine(texts_by_call=["1p", "2p"])
+    pdf_bytes = _make_pdf_bytes(2)
+    resp = client.post("/ocr", content=pdf_bytes, headers={"content-type": "application/pdf"})
+    assert resp.status_code == 200
+    assert resp.json()["pageCount"] == 2
+
+
+def test_ocr_payload_at_exact_size_limit_succeeds(client, monkeypatch):
+    """境界値: アップロードサイズがちょうどMAX_UPLOAD_BYTESの場合は拒否されず
+    処理が進むこと(空PDFではないため422になるが、413にはならないことを確認する)。"""
+    pdf_bytes = _make_pdf_bytes(1)
+    monkeypatch.setattr(app_module, "MAX_UPLOAD_BYTES", len(pdf_bytes))
+    app_module.ENGINE = StubEngine(texts_by_call=["ok"])
+    resp = client.post("/ocr", content=pdf_bytes, headers={"content-type": "application/pdf"})
+    assert resp.status_code != 413
 
 
 def test_ocr_times_out_after_last_page_inference_exceeds_budget(client, monkeypatch):

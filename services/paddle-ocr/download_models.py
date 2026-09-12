@@ -23,11 +23,12 @@ PP-OCRv6 medium det/recモデルを取得し、SHA-256を検証したうえで�
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import shutil
 import sys
 from pathlib import Path
+
+from hashutil import sha256_file
 
 # 重み本体として厳格に検証する必須ファイル。README.md/.gitattributes等の付随ファイルは
 # 上流のドキュメント更新で変わりうり同一性とは無関係なため、検証対象に含めない。
@@ -37,12 +38,6 @@ MODEL_KINDS = {
     "textDetection": "PP-OCRv6_medium_det",
     "textRecognition": "PP-OCRv6_medium_rec",
 }
-
-
-def sha256_file(path: Path) -> str:
-    h = hashlib.sha256()
-    h.update(path.read_bytes())
-    return h.hexdigest()
 
 
 def download_and_verify(dest: Path, expected: dict) -> None:
@@ -60,10 +55,11 @@ def download_and_verify(dest: Path, expected: dict) -> None:
             snapshot_download(repo_id=repo_id, revision=revision, allow_patterns=["*.json", "*.pdiparams", "*.yml"])
         )
 
-        target_dir = dest / dirname
-        target_dir.mkdir(parents=True, exist_ok=True)
-
+        # silent-failure-hunter指摘反映: 全ファイルのハッシュを検証してから配置する
+        # (検証前にコピーすると、"fail-loud"という設計意図に反して不一致ファイルが
+        # 一部でも配置されてしまう余地が残るため)。
         mismatches: list[str] = []
+        verified: list[tuple[Path, Path]] = []
         for fname in REQUIRED_FILES:
             src = local_dir / fname
             if not src.exists():
@@ -74,7 +70,8 @@ def download_and_verify(dest: Path, expected: dict) -> None:
             print(f"  {fname}: {actual_hash} [{status}]")
             if actual_hash != expected_hash:
                 mismatches.append(f"{fname} (expected={expected_hash}, actual={actual_hash})")
-            shutil.copy2(src, target_dir / fname)
+            else:
+                verified.append((src, fname))
 
         if mismatches:
             sys.exit(
@@ -86,6 +83,11 @@ def download_and_verify(dest: Path, expected: dict) -> None:
                 "services/paddle-ocr/expected-model-hashes.json を同時更新してください。"
                 "無検証での上書きは禁止です。"
             )
+
+        target_dir = dest / dirname
+        target_dir.mkdir(parents=True, exist_ok=True)
+        for src, fname in verified:
+            shutil.copy2(src, target_dir / fname)
 
     print(f"✓ 全モデルファイルのハッシュ検証に成功しました: {dest}")
 
