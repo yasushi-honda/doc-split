@@ -179,6 +179,30 @@ jobs:
           fi
           echo "Preflight OK: Artifact Registry 'paddle-ocr' / runtime SA / Cloud Build API を確認しました"
 
+      - name: Verify PADDLE_OCR_URL matches current service URL (pre-deploy drift guard)
+        # codex review指摘: デプロイ後にURL比較すると、不一致が判明した時点で既に新リビジョンが
+        # ライブになってしまう(ワークフローが失敗扱いになるだけで実害は残る)。ビルド/デプロイの
+        # 前に、既存サービスの現在のURLを取得して比較し、不一致ならここで停止する。
+        if: ${{ github.event.inputs.first_deploy == 'false' }}
+        env:
+          PROJECT_ID: ${{ steps.resolve.outputs.project_id }}
+          CLOUD_RUN_LOCATION: ${{ steps.resolve.outputs.cloud_run_location }}
+          EXPECTED_URL: ${{ steps.resolve.outputs.paddle_ocr_url }}
+        run: |
+          set -euo pipefail
+          if ! CURRENT_URL=$(gcloud run services describe paddle-ocr \
+              --region="$CLOUD_RUN_LOCATION" --project="$PROJECT_ID" \
+              --format='value(status.url)' 2>&1); then
+            echo "ERROR: 既存のpaddle-ocrサービスの取得に失敗しました: $CURRENT_URL" >&2
+            echo "ERROR: PADDLE_OCR_URLが設定済みなのにサービスが存在しない場合、設定ドリフトの可能性があります" >&2
+            exit 1
+          fi
+          if [ "$EXPECTED_URL" != "$CURRENT_URL" ]; then
+            echo "ERROR: scripts/clients/<env>.env のPADDLE_OCR_URL ($EXPECTED_URL) が現在のservice URL ($CURRENT_URL) と一致しません。ビルド/デプロイ前に停止します" >&2
+            exit 1
+          fi
+          echo "OK: PADDLE_OCR_URL matches current service URL ($CURRENT_URL)"
+
       - name: Compute image tag
         id: compute
         env:
@@ -327,22 +351,11 @@ jobs:
           fi
           echo "service_url=$SERVICE_URL" >> "$GITHUB_OUTPUT"
           echo "Deployed: $SERVICE_URL"
-
-      - name: Verify PADDLE_OCR_URL matches deployed service URL (drift guard)
-        # codex review指摘: first_deploy=falseの場合、.envのURLが実デプロイ後のservice URLと
-        # 完全一致することを検証する(上記「Validate first_deploy / URL consistency」ステップは
-        # URLの有無しかチェックしておらず、値そのものの一致は未検証だった)。
-        if: ${{ github.event.inputs.first_deploy == 'false' }}
-        env:
-          EXPECTED_URL: ${{ steps.resolve.outputs.paddle_ocr_url }}
-          ACTUAL_URL: ${{ steps.deploy.outputs.service_url }}
-        run: |
-          set -euo pipefail
-          if [ "$EXPECTED_URL" != "$ACTUAL_URL" ]; then
-            echo "ERROR: scripts/clients/<env>.env のPADDLE_OCR_URL ($EXPECTED_URL) が実際のデプロイ後service URL ($ACTUAL_URL) と一致しません。設定ドリフトの可能性があります" >&2
-            exit 1
-          fi
-          echo "OK: PADDLE_OCR_URL matches deployed service URL ($ACTUAL_URL)"
+          # PADDLE_OCR_URLのドリフト検証は「Verify PADDLE_OCR_URL matches current service URL
+          # (pre-deploy drift guard)」ステップでビルド/デプロイ前に完了済み(codex review指摘:
+          # デプロイ後に検証すると、不一致判明時には既に新リビジョンがライブになってしまうため、
+          # 事前検証に変更した)。Cloud Runのservice URLは同一serviceのリビジョン間で不変のため、
+          # デプロイ後の再検証は不要。
 
       - name: Grant run.invoker to processOCR's execution SA
         env:
