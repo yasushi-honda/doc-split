@@ -1,0 +1,62 @@
+{
+  "generatedAt": "2026-09-12T07:17:12.890375+00:00",
+  "generatorGitCommit": "fba3540b64565694ea58fd8895ec799338e4da9e",
+  "renderDpi": 200,
+  "engine": "paddleocr",
+  "textDetectionModelName": "PP-OCRv6_medium_det",
+  "textRecognitionModelName": "PP-OCRv6_medium_rec",
+  "textDetectionModelDir": "/Users/yyyhhh/.paddlex/official_models/PP-OCRv6_medium_det",
+  "textRecognitionModelDir": "/Users/yyyhhh/.paddlex/official_models/PP-OCRv6_medium_rec",
+  "textDetectionModelFileHashes": {
+    ".gitattributes": "a3a43406012ee8c7b9b38dfab1b11610f33e8245cd864a9a9302d042616a859e",
+    "README.md": "59f37b08a9a49aa6c1275e7b0363991353582f4dc7676539a5d2b05aab57e744",
+    "inference.json": "0f1a7ec35da36173529c7a60238b7f7919e3831929c3f700ad90ad4896adecd5",
+    "inference.pdiparams": "85218d2e3d98f5a21c58b4220627be923a97aee5db3cc71f39536ab31ac53960",
+    "inference.yml": "7298d5ead546584af2504d03355f881ac7a7bc0eb1e282d3e159277c1d0af871"
+  },
+  "textRecognitionModelFileHashes": {
+    ".gitattributes": "a3a43406012ee8c7b9b38dfab1b11610f33e8245cd864a9a9302d042616a859e",
+    "README.md": "75ff9c4853ed171f36224127805062f9bcd1cfbbcacae3d577344866df74f6d3",
+    "inference.json": "0b2e25e990bd072f1bf77d59d67d508bce6c4bd44af6624e0fb27d6da2cd00e8",
+    "inference.pdiparams": "1b01c79a914587933f615569e75de54f2e638ebb5d3f3b3c1b38c24ede8c7319",
+    "inference.yml": "991b700facf5b50a7de193468207d5f4255b538dde0d312ae3b7c7a9b6873129"
+  },
+  "paddleocrVersion": "3.7.0",
+  "paddlepaddleVersion": "3.3.1",
+  "pypdfium2Version": "4.30.0",
+  "pythonVersion": "3.12.12 (main, Oct  9 2025, 11:07:00) [Clang 17.0.0 (clang-1700.4.4.1)]",
+  "platform": "macOS-26.6.2-arm64-arm-64bit",
+  "fixtures": {
+    "golden-plain-01": {
+      "sourcePdfSha256": {
+        "golden_plain_01.pdf": "b18a8d4a9fb93a2f29675c956aa17805ff9689f30f710f9d057f5984a1438d3a"
+      },
+      "pageCount": 1
+    },
+    "golden-plain-02": {
+      "sourcePdfSha256": {
+        "golden_plain_02.pdf": "053691d48ab4b0fbabdf61c42f3db143fdaba8b1b330653d5844ea6b5d052b4e"
+      },
+      "pageCount": 1
+    },
+    "golden-oldkanji-01": {
+      "sourcePdfSha256": {
+        "golden_oldkanji_01.pdf": "617554a3800aef52b5cb079ce23833a00d6c5f097dabbf979437a39d54a06d09"
+      },
+      "pageCount": 1
+    },
+    "golden-oldkanji-02": {
+      "sourcePdfSha256": {
+        "golden_oldkanji_02.pdf": "6f83f2a720ab183bfddb77312e3fb0eae5d073f92a362ab7dac9450e69a6ed7b"
+      },
+      "pageCount": 1
+    },
+    "golden-multipage-01": {
+      "sourcePdfSha256": {
+        "golden_multipage_01-p1.pdf": "71f24bcbe26e5c89e694d8fd9353092a9f230b15d34c1770d6d6fe3dd8027aff",
+        "golden_multipage_01-p2.pdf": "59980c2760eca08c22725bc259c273207cd59762335e720ccc7a74c938c45356"
+      },
+      "pageCount": 2
+    }
+  }
+}
