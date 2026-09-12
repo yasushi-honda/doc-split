@@ -28,18 +28,27 @@
  */
 
 import type {
-  DocumentExtractionResult,
-  CustomerExtractionResult,
-  OfficeExtractionResultWithCandidates,
-  DateExtractionResult,
+  ArbitratedDocumentExtractionResult,
+  ArbitratedCustomerExtractionResult,
+  ArbitratedOfficeExtractionResult,
+  ArbitratedDateExtractionResult,
   MatchType,
 } from '../utils/extractors';
+import type { Pass2Promotion } from '../../../shared/types';
 
 export interface OcrUpdatePayloadInputs {
-  documentTypeResult: DocumentExtractionResult;
-  customerResult: CustomerExtractionResult;
-  officeResult: OfficeExtractionResultWithCandidates;
-  dateResult: DateExtractionResult;
+  /**
+   * 呼出元(ocrProcessor.ts)は必ずarbitrate*()の戻り値(provenance必須)を渡す。
+   * 基底の*ExtractionResult型ではなくArbitrated*ExtractionResultを要求することで、
+   * 「provenance未計測」と「計測した結果existing」が型レベルで区別され、
+   * pass2Promotionの誤った既定値falseへの静かな収束を防ぐ(type-design-analyzer指摘)。
+   * テスト用フィクスチャは`withProvenance()`ヘルパー(テストファイル側)で明示的に
+   * provenanceを付与する。
+   */
+  documentTypeResult: ArbitratedDocumentExtractionResult;
+  customerResult: ArbitratedCustomerExtractionResult;
+  officeResult: ArbitratedOfficeExtractionResult;
+  dateResult: ArbitratedDateExtractionResult;
   ocrResultUrl: string | null;
   totalPages: number;
   suggestedNewOffice: string | null;
@@ -137,6 +146,27 @@ export interface OcrExtractionUpdateFields {
     dateSource: string | null;
   };
   ocrExtraction: OcrExtractionMeta;
+  /**
+   * ADR-0025 PR2: Pass2(LLM候補抽出)の候補がarbitrationで昇格したか(=全文ベース抽出を
+   * 上書きしたか)をフィールドごとに記録する。個人情報を一切含まないブール値のみ
+   * (氏名・事業所名等の実値はここに書かない)。Pass2廃止の可否判断に必要な実データ
+   * (昇格率)を実運用ログから計測するための可観測化であり、この値自体は仲裁結果に
+   * 一切影響しない(read-only な記録用フィールド)。
+   *
+   * 【集計時の注意(codex review指摘)】複数顧客FAX複製機能(faxDuplication、ADR-0024)
+   * 有効時は、1回のOCR/Pass2実行の結果がdistributionIdを共有する複数documentsエントリ
+   * (元doc+顧客ごとの複製)に同一値でコピーされる(applyOcrCompletionTransaction()が
+   * mergedを全複製メンバーへspreadするため)。これは他の抽出結果フィールド(totalPages等)
+   * と同じ仕様であり意図的(各複製は同じOCR実行結果を正しく反映している)。ただし
+   * collection全体で昇格率を集計する際は、distributionId(無ければdoc.id)でグルーピング
+   * してから計算しないと、複数顧客宛のFAXの実行結果が複製メンバー数だけ多重計上され、
+   * Pass2廃止の可否判断を誤らせる(`scripts/inspect-ocr-volume-stats.js`のtotalPages集計と
+   * 同じdedup処理が必要)。
+   *
+   * 型は`shared/types.ts`の`Pass2Promotion`をそのまま使用する(type-design-analyzer指摘:
+   * インライン複製は構造ドリフトを検知できない)。
+   */
+  pass2Promotion: Pass2Promotion;
 }
 
 /** 顧客/事業所候補は表示・課金コスト抑制のため先頭5件のみ保持する (#178 既存挙動) */
@@ -173,7 +203,11 @@ export function buildOcrExtractionUpdatePayload(
     fileDateFormatted: dateResult.formattedDate ?? null,
     isDuplicateCustomer: customerResult.bestMatch?.isDuplicate || false,
     needsManualCustomerSelection: customerResult.needsManualSelection ?? false,
-    customerConfirmed: !customerResult.needsManualSelection,
+    // Issue #895修正: bestMatch===null(候補ゼロ)の場合、needsManualSelectionは
+    // false(仲裁ロジック上「手動選択が必要な複数候補」の状態ではないため)のままだが、
+    // これは「確定してよい」ことを意味しない。bestMatch !== nullを明示条件に追加し、
+    // 候補ゼロ時に誤ってcustomerConfirmed:trueになる空確定を防ぐ(ADR-0025 PR2)。
+    customerConfirmed: !customerResult.needsManualSelection && customerResult.bestMatch !== null,
     confirmedBy: null,
     confirmedAt: null,
     allCustomerCandidates: customerCandidateNames.join(','),
@@ -185,7 +219,8 @@ export function buildOcrExtractionUpdatePayload(
       matchType: c.matchType ?? 'none',
       careManagerName: c.careManagerName ?? null,
     })),
-    officeConfirmed: !officeResult.needsManualSelection,
+    // Issue #895修正: customerConfirmedと同じ理由でbestMatch !== nullを明示条件に追加(ADR-0025 PR2)。
+    officeConfirmed: !officeResult.needsManualSelection && officeResult.bestMatch !== null,
     officeConfirmedBy: null,
     officeConfirmedAt: null,
     officeCandidates: officeResult.candidates.slice(0, MAX_CANDIDATES).map((o) => ({
@@ -235,6 +270,12 @@ export function buildOcrExtractionUpdatePayload(
         confidence: documentTypeResult.score ?? 0,
         matchType: documentTypeResult.matchType ?? 'none',
       },
+    },
+    pass2Promotion: {
+      documentType: documentTypeResult.provenance.source === 'candidate',
+      customerName: customerResult.provenance.source === 'candidate',
+      officeName: officeResult.provenance.source === 'candidate',
+      date: dateResult.provenance.source === 'candidate',
     },
   };
 }

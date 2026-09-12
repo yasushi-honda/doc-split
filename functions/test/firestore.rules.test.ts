@@ -1023,6 +1023,8 @@ describe('Firestore Security Rules', () => {
           officeCandidates: [{ id: 'office-001', name: 'テスト事業所', score: 0.9 }],
           extractionScores: { customer: 0.9, office: 0.9, documentType: 0.9 },
           extractionDetails: { reason: 'test' },
+          // ADR-0025 PR2: Pass2昇格の可観測化フィールド
+          pass2Promotion: { documentType: false, customerName: true, officeName: false, date: false },
           isDuplicateCustomer: false,
           needsManualCustomerSelection: false,
           allCustomerCandidates: [{ id: 'cust-001', name: '山田太郎', score: 0.9 }],
@@ -1091,6 +1093,7 @@ describe('Firestore Security Rules', () => {
           officeCandidates: deleteField(),
           extractionScores: deleteField(),
           extractionDetails: deleteField(),
+          pass2Promotion: deleteField(),
           isDuplicateCustomer: deleteField(),
           needsManualCustomerSelection: deleteField(),
           allCustomerCandidates: deleteField(),
@@ -1237,6 +1240,55 @@ describe('Firestore Security Rules', () => {
       });
       expect('multiCustomerDetected' in (afterData ?? {})).to.equal(false);
       expect('multiCustomerCount' in (afterData ?? {})).to.equal(false);
+    });
+
+    it('pass2Promotionフィールドへの新規値の上書きは拒否され、削除(deleteField)のみ許可される(ADR-0025 PR2, codex review指摘)', async () => {
+      // getReprocessClearFields()はpass2PromotionをdeleteField()する用途のみで、値を
+      // 新規設定・上書きする経路はFEに存在しない。ホワイトリスト登録ユーザーが任意の
+      // 値を書き込めると、Pass2昇格率の観測データ(廃止可否判断の根拠)を偽装できてしまう。
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'documents', 'doc-pass2-promotion'), {
+          fileName: 'test.pdf',
+          status: 'processed',
+          verified: true,
+          pass2Promotion: { documentType: false, customerName: false, officeName: false, date: false },
+        });
+      });
+
+      const normalFirestore = normalUser.firestore();
+      const docRef = doc(normalFirestore, 'documents', 'doc-pass2-promotion');
+      // 値の新規設定・上書きは拒否される
+      await assertFails(
+        updateDoc(docRef, {
+          pass2Promotion: { documentType: true, customerName: true, officeName: true, date: true },
+        })
+      );
+
+      // フィールド不在のdocへの新規注入(偽装)も拒否される
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'documents', 'doc-pass2-promotion-forge'), {
+          fileName: 'test2.pdf',
+          status: 'processed',
+          verified: true,
+        });
+      });
+      const forgeDocRef = doc(normalFirestore, 'documents', 'doc-pass2-promotion-forge');
+      await assertFails(
+        updateDoc(forgeDocRef, {
+          pass2Promotion: { documentType: false, customerName: false, officeName: false, date: false },
+        })
+      );
+
+      // 削除(deleteField)は許可される
+      await assertSucceeds(updateDoc(docRef, { pass2Promotion: deleteField() }));
+      let afterData: Record<string, unknown> | undefined;
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        const afterSnap = await getDoc(doc(context.firestore(), 'documents', 'doc-pass2-promotion'));
+        afterData = afterSnap.data();
+      });
+      expect('pass2Promotion' in (afterData ?? {})).to.equal(false);
     });
 
     it('driveFileIdの削除(deleteField)はdriveExportStatus等の他4フィールドと異なり拒否される(様子見#47対応、2026-07-22)', async () => {

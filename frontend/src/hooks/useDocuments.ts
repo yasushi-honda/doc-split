@@ -202,6 +202,9 @@ export function firestoreToDocument(id: string, data: Record<string, unknown>): 
     // 抽出スコア・詳細
     extractionScores: data.extractionScores as Document['extractionScores'],
     extractionDetails: data.extractionDetails as Document['extractionDetails'],
+    // Pass2昇格の可観測化 (ADR-0025 PR2、CLAUDE.md #178教訓対応: firestoreToDocument()に
+    // マッピングしないとFEから読めなくなるため、現状FE表示用途は無くとも必ず追加する)
+    pass2Promotion: data.pass2Promotion as Document['pass2Promotion'],
     // OCR結果確認ステータス
     verified: data.verified as boolean | undefined,
     verifiedBy: data.verifiedBy as string | null | undefined,
@@ -407,6 +410,10 @@ export function getReprocessClearFields(preserveDistributionFields: boolean = fa
     officeCandidates: df,
     extractionScores: df,
     extractionDetails: df,
+    // ADR-0025 PR2: Pass2昇格の可観測化フィールド。再処理が失敗/pendingのまま
+    // 残ると前回実行時の昇格結果が残存し、昇格率の計測が汚染されるため他の
+    // 抽出メタデータ(extractionScores等)と同様にクリアする(codex review指摘)。
+    pass2Promotion: df,
     // フラグ
     isDuplicateCustomer: df,
     needsManualCustomerSelection: df,

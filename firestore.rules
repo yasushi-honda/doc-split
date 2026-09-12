@@ -107,6 +107,10 @@ service cloud.firestore {
           'officeCandidates',
           'extractionScores',
           'extractionDetails',
+          // ADR-0025 PR2: Pass2昇格の可観測化フィールド(個人情報は含まない、昇格有無の
+          // ブール値のみ)。値の新規設定・上書きは下記の削除/無変更専用ガードで禁止する
+          // (codex review指摘: 単純な許可リスト登録だけでは観測データを偽装できてしまう)。
+          'pass2Promotion',
           'allCustomerCandidates',
           'suggestedNewOffice',
           'provenance',
@@ -183,6 +187,13 @@ service cloud.firestore {
         // FEはgetReprocessClearFields()のdeleteField()でのみ操作する想定(#9参照)。
         && (!('ocrExcerpt' in request.resource.data)
             || (('ocrExcerpt' in resource.data) && request.resource.data.ocrExcerpt == resource.data.ocrExcerpt))
+        // ADR-0025 PR2: pass2PromotionもFunctions(ocrProcessor.ts)専有の派生フィールド。
+        // 単純な許可リスト登録(#108-113)だけでは値の新規設定・上書きを防げず、
+        // ホワイトリスト登録ユーザーが任意の値を書き込んでPass2昇格率の観測データを
+        // 偽装できてしまう(codex review指摘)。ocrExcerpt等と同じ削除/無変更のみ許可する
+        // ガードを適用し、FEはgetReprocessClearFields()のdeleteField()でのみ操作する。
+        && (!('pass2Promotion' in request.resource.data)
+            || (('pass2Promotion' in resource.data) && request.resource.data.pass2Promotion == resource.data.pass2Promotion))
         // ADR-0022 (Google Drive連携 Phase1): Drive系フィールドもFunctions
         // (executeDriveExport.ts等)専有の派生フィールド。FEはgetReprocessClearFields()の
         // deleteField()でのみ操作する想定(#9参照)。

@@ -45,6 +45,11 @@ async function resetDoc(docRef, data) {
     lastRescuedAt: admin.firestore.FieldValue.delete(),
     retryAfter: admin.firestore.FieldValue.delete(),
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    // ADR-0025 PR2: Pass2昇格の可観測化フィールド。本スクリプトはCLAUDE.mdに明記された
+    // 標準の復旧経路(processing/errorスタック文書のpending復帰)であり、
+    // reset-documents-by-office.jsと同じ理由(再処理が失敗/pendingのまま残ると前回実行時の
+    // 値が計測を汚染する)でクリアする(code-reviewerエージェント指摘)。
+    pass2Promotion: admin.firestore.FieldValue.delete(),
   });
   console.log(`    → pendingに変更（retryCount: 0, rescue state cleared）`);
 }

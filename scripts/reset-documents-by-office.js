@@ -183,6 +183,12 @@ async function main() {
         retryCount: 0,
         lastErrorMessage: null,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        // ADR-0025 PR2: Pass2昇格の可観測化フィールド。このスクリプトは他の抽出メタデータ
+        // (extractionScores等)も同様に再処理完了までクリアしない既存挙動だが、
+        // pass2PromotionはPass2廃止可否判断の実データ計測に使うため、再処理が失敗/pending
+        // のまま残った場合に前回実行時の値が計測を汚染するのを避けるためここだけ明示的に
+        // クリアする(codex review指摘)。他の抽出メタデータ全体のクリアはこのPRのスコープ外。
+        pass2Promotion: admin.firestore.FieldValue.delete(),
       });
     }
     try {
