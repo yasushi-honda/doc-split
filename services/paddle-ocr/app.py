@@ -109,6 +109,18 @@ async def _read_body_with_limit(request: Request) -> bytes:
     return b"".join(chunks)
 
 
+def _log_late_page_result(future: "asyncio.Future[str]") -> None:
+    """タイムアウト応答を返した後もバックグラウンドで実行が続く推論の結果を破棄しつつ、
+    例外だけはログに残す(add_done_callbackが失敗を握り潰す=silent failureにしないため)。
+    """
+    try:
+        future.result()
+    except asyncio.CancelledError:
+        pass
+    except Exception:
+        logger.exception("OCR_ENGINE_ERROR (タイムアウト応答後に完了した推論で例外)")
+
+
 @app.post("/ocr")
 async def ocr(request: Request):
     # silent-failure-hunter指摘反映: 予算の起点をbody読み取り開始前に置く(以前は
@@ -153,6 +165,8 @@ async def ocr(request: Request):
     else:
         rgb_page_iter = image_to_rgb(data, limits=LIMITS)
 
+    loop = asyncio.get_running_loop()
+
     try:
         pages: list[str] = []
         # raster側のgeneratorを1ページずつ消費し、OCR後は次ページの参照を保持しない
@@ -165,16 +179,47 @@ async def ocr(request: Request):
                     "PROCESSING_TIMEOUT",
                     f"ラスタライズ処理が制限時間を超過しました(上限: {MAX_PROCESSING_SECONDS}秒)",
                 )
-            pages.append(ENGINE.page_text(rgb))
-            # codex review指摘: page_text呼び出し後にも再チェックする。呼び出し前だけの
-            # チェックでは、最終ページ(または単一ページ)のOCR自体が予算を超過した場合に
-            # 200で成功応答してしまい、504タイムアウト契約を満たさないため。
-            if _timed_out():
+            remaining = max(MAX_PROCESSING_SECONDS - (time.monotonic() - started), 0)
+            # codex review指摘: ENGINE.page_text()は同期・CPUバウンドな呼び出しであり、
+            # async def内でそのまま呼ぶとイベントループをその呼び出しが完了するまで
+            # ブロックしてしまう。以前は呼び出し後に_timed_out()を確認していたが、
+            # それは「呼び出し自体が予算を超過して完了するまで発火し得ない」事後
+            # チェックに過ぎず、タイムアウトを実質的に強制できていなかった。
+            #
+            # run_in_executorで別スレッドに逃がし、asyncio.wait(..., timeout=remaining)で
+            # pendingなFutureを待たず即座に制御を返すことで、GILが(det/rec推論の合間などで)
+            # 断続的に解放される通常の遅延に対しては、応答が予算通り504で返る
+            # (asyncio.wait_for()でも実測上は同様に即座に返ることを確認済み。以前
+            # 「wait_for()は内部でキャンセル完了を待つため機能しない」と記載していたが、
+            # これは誤りだった。実測が2秒待っていたのはTestClientをwith文なしで使う際に
+            # リクエストごとに生成・破棄されるanyio blocking portalの破棄処理が
+            # shutdown_default_executor()相当でexecutorのFutureの完了を待ってしまう
+            # というテストハーネス側の交絡であり、wait_for/wait自体の差ではなかった。
+            # 直接コルーチン呼び出しの回帰テストで検証済み)。
+            #
+            # 既知の限界(実機プローブで確認済み、README.md「既知の限界」節参照):
+            # PaddleOCRのCPU推論はdet→rec推論全体を通じてGILをほぼ連続的に保持する
+            # (実測: 約81秒の推論中94%にあたる約76秒間、メインスレッドが完全に停止)。
+            # そのため真に推論がハングした場合、この仕組みは無力で、バックグラウンドの
+            # 推論はGILを渡さずCPUを専有し続け、ENGINE内のLockにより後続リクエストも
+            # ブロックされうる。この場合の実質的な防波堤はCloud Run自体のリクエスト
+            # --timeoutであり、インスタンス自体の入れ替えはPR4bで導入予定のCloud Run
+            # liveness probe(追跡: 別途起票するIssue参照)に委ねる。アプリ層でLock取得に
+            # 短いタイムアウトを設けて503を返す代替案も検討したが、GIL連続保持時には
+            # その待機自体もGILが取れず機能せず、中途半端に導入すると「幽霊推論が
+            # 終わるまで503を連発する劣化インスタンス」を作るだけで根本解決にならない
+            # ため見送った(セカンドオピニオン2件の一致した結論)。
+            page_future = loop.run_in_executor(None, ENGINE.page_text, rgb)
+            _, pending = await asyncio.wait({page_future}, timeout=remaining)
+            if pending:
+                page_future.add_done_callback(_log_late_page_result)
+                logger.warning("PROCESSING_TIMEOUT: OCR推論が制限時間を超過しました")
                 return _error_response(
                     504,
                     "PROCESSING_TIMEOUT",
                     f"OCR処理が制限時間を超過しました(上限: {MAX_PROCESSING_SECONDS}秒)",
                 )
+            pages.append(page_future.result())
     except InputRejected as e:
         logger.warning("%s: %s", e.code, e.message)
         return _error_response(422, e.code, e.message, limit=e.limit, actual=e.actual)

@@ -6,7 +6,9 @@ conftest.pyの通り、`TestClient(app)`をwith文なしで生成することで
 
 from __future__ import annotations
 
+import asyncio
 import io
+import json
 
 import pypdfium2 as pdfium
 import pytest
@@ -282,14 +284,20 @@ def test_ocr_payload_at_exact_size_limit_succeeds(client, monkeypatch):
 
 
 def test_ocr_times_out_after_last_page_inference_exceeds_budget(client, monkeypatch):
-    """codex review指摘反映: page_text呼び出し前だけのチェックでは、最終ページ(または
-    単一ページ)のOCR自体が予算を超過した場合に200で成功応答してしまっていた。
-    呼び出し後にも再チェックすることで504が返ることを確認する。"""
+    """codex review指摘反映(2回目): 最終ページ(または単一ページ)のOCR呼び出し自体が
+    予算を超過する場合、以前は呼び出し完了を待ってから事後チェックで504を返していたため、
+    呼び出しがハングまたは非常に長時間かかると事実上タイムアウトが機能しなかった
+    (呼び出しが返るまでレスポンスも返せないため)。ここではステータス/ボディのみ確認する
+    (応答時間の実測はtest_ocr_timeout_does_not_wait_for_slow_inference_to_completeで行う。
+    TestClientはwith文なし利用時、リクエストごとにanyioのblocking portalを都度生成・破棄し、
+    その破棄処理がbackgroundで走り続けるrun_in_executorのFutureの完了を待ってしまうため、
+    このテストで応答時間を測ると本番のuvicorn常駐イベントループでは起きない待機が
+    混入し誤った失敗になる)。"""
     import time as time_module
 
     class SlowStubEngine(StubEngine):
         def page_text(self, rgb_array) -> str:
-            time_module.sleep(0.1)
+            time_module.sleep(0.2)
             return super().page_text(rgb_array)
 
     monkeypatch.setattr(app_module, "MAX_PROCESSING_SECONDS", 0.05)
@@ -298,6 +306,54 @@ def test_ocr_times_out_after_last_page_inference_exceeds_budget(client, monkeypa
     resp = client.post("/ocr", content=pdf_bytes, headers={"content-type": "application/pdf"})
     assert resp.status_code == 504
     assert resp.json()["error"]["code"] == "PROCESSING_TIMEOUT"
+
+
+def test_ocr_timeout_does_not_wait_for_slow_inference_to_complete(monkeypatch):
+    """codex review指摘反映(2回目)の中核: MAX_PROCESSING_SECONDSを超える推論に対して、
+    レスポンスが推論の完了を待たずに返ることを、TestClientのportal破棄処理を経由しない
+    直接のコルーチン呼び出しで実測する(上記テストのコメント参照、本番のuvicorn常駐
+    イベントループに近い条件で検証するため)。"""
+    import time as time_module
+
+    from starlette.requests import Request
+
+    class SlowStubEngine(StubEngine):
+        def page_text(self, rgb_array) -> str:
+            time_module.sleep(2.0)
+            return super().page_text(rgb_array)
+
+    monkeypatch.setattr(app_module, "MAX_PROCESSING_SECONDS", 0.05)
+    app_module.ENGINE = SlowStubEngine()
+    pdf_bytes = _make_pdf_bytes(1)
+
+    async def run_once() -> tuple[float, object]:
+        sent = False
+
+        async def receive():
+            nonlocal sent
+            if not sent:
+                sent = True
+                return {"type": "http.request", "body": pdf_bytes, "more_body": False}
+            return {"type": "http.disconnect"}
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/ocr",
+            "headers": [(b"content-type", b"application/pdf")],
+        }
+        request = Request(scope, receive)
+        started = time_module.monotonic()
+        result = await app_module.ocr(request)
+        return time_module.monotonic() - started, result
+
+    elapsed, result = asyncio.run(run_once())
+
+    assert result.status_code == 504
+    body = json.loads(result.body)
+    assert body["error"]["code"] == "PROCESSING_TIMEOUT"
+    # 推論の完了(2.0秒)を待たずに、予算超過時点(0.05秒)で応答が返っていること。
+    assert elapsed < 1.0
 
 
 def test_error_message_does_not_leak_input_content(client):
