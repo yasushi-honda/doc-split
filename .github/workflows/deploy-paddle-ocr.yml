@@ -298,6 +298,22 @@ jobs:
           echo "service_url=$SERVICE_URL" >> "$GITHUB_OUTPUT"
           echo "Deployed: $SERVICE_URL"
 
+      - name: Verify PADDLE_OCR_URL matches deployed service URL (drift guard)
+        # codex review指摘: first_deploy=falseの場合、.envのURLが実デプロイ後のservice URLと
+        # 完全一致することを検証する(上記「Validate first_deploy / URL consistency」ステップは
+        # URLの有無しかチェックしておらず、値そのものの一致は未検証だった)。
+        if: ${{ github.event.inputs.first_deploy == 'false' }}
+        env:
+          EXPECTED_URL: ${{ steps.resolve.outputs.paddle_ocr_url }}
+          ACTUAL_URL: ${{ steps.deploy.outputs.service_url }}
+        run: |
+          set -euo pipefail
+          if [ "$EXPECTED_URL" != "$ACTUAL_URL" ]; then
+            echo "ERROR: scripts/clients/<env>.env のPADDLE_OCR_URL ($EXPECTED_URL) が実際のデプロイ後service URL ($ACTUAL_URL) と一致しません。設定ドリフトの可能性があります" >&2
+            exit 1
+          fi
+          echo "OK: PADDLE_OCR_URL matches deployed service URL ($ACTUAL_URL)"
+
       - name: Grant run.invoker to processOCR's execution SA
         env:
           PROJECT_ID: ${{ steps.resolve.outputs.project_id }}
