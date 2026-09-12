@@ -138,6 +138,25 @@ def test_ocr_payload_too_large_returns_413(client, monkeypatch):
     assert resp.json()["error"]["code"] == "PAYLOAD_TOO_LARGE"
 
 
+def test_ocr_times_out_after_last_page_inference_exceeds_budget(client, monkeypatch):
+    """codex review指摘反映: page_text呼び出し前だけのチェックでは、最終ページ(または
+    単一ページ)のOCR自体が予算を超過した場合に200で成功応答してしまっていた。
+    呼び出し後にも再チェックすることで504が返ることを確認する。"""
+    import time as time_module
+
+    class SlowStubEngine(StubEngine):
+        def page_text(self, rgb_array) -> str:
+            time_module.sleep(0.1)
+            return super().page_text(rgb_array)
+
+    monkeypatch.setattr(app_module, "MAX_PROCESSING_SECONDS", 0.05)
+    app_module.ENGINE = SlowStubEngine()
+    pdf_bytes = _make_pdf_bytes(1)
+    resp = client.post("/ocr", content=pdf_bytes, headers={"content-type": "application/pdf"})
+    assert resp.status_code == 504
+    assert resp.json()["error"]["code"] == "PROCESSING_TIMEOUT"
+
+
 def test_error_message_does_not_leak_input_content(client):
     """個人情報保護: エラーメッセージに入力内容が含まれないことを確認する。"""
     app_module.ENGINE = StubEngine()

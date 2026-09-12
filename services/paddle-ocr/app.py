@@ -132,31 +132,38 @@ async def ocr(request: Request):
     kind = ALLOWED_CONTENT_TYPES[content_type]
     started = time.monotonic()
 
-    try:
-        if kind == "pdf":
-            rgb_pages = list(pdf_pages_to_rgb(data, dpi=RENDER_DPI, limits=LIMITS))
-        else:
-            rgb_pages = list(image_to_rgb(data, limits=LIMITS))
-    except InputRejected as e:
-        return _error_response(422, e.code, e.message, limit=e.limit, actual=e.actual)
+    def _timed_out() -> bool:
+        return time.monotonic() - started > MAX_PROCESSING_SECONDS
 
-    if time.monotonic() - started > MAX_PROCESSING_SECONDS:
-        return _error_response(
-            504,
-            "PROCESSING_TIMEOUT",
-            f"ラスタライズ処理が制限時間を超過しました(上限: {MAX_PROCESSING_SECONDS}秒)",
-        )
+    if kind == "pdf":
+        rgb_page_iter = pdf_pages_to_rgb(data, dpi=RENDER_DPI, limits=LIMITS)
+    else:
+        rgb_page_iter = image_to_rgb(data, limits=LIMITS)
 
     try:
         pages: list[str] = []
-        for rgb in rgb_pages:
-            if time.monotonic() - started > MAX_PROCESSING_SECONDS:
+        # raster側のgeneratorを1ページずつ消費し、OCR後は次ページの参照を保持しない
+        # (codex review指摘: list()で全ページを先に確保すると、8ページ×4000万ピクセルで
+        # 約960MBを同時保持しラスタライズのメモリ上限設計が無効化されるため)。
+        for rgb in rgb_page_iter:
+            if _timed_out():
+                return _error_response(
+                    504,
+                    "PROCESSING_TIMEOUT",
+                    f"ラスタライズ処理が制限時間を超過しました(上限: {MAX_PROCESSING_SECONDS}秒)",
+                )
+            pages.append(ENGINE.page_text(rgb))
+            # codex review指摘: page_text呼び出し後にも再チェックする。呼び出し前だけの
+            # チェックでは、最終ページ(または単一ページ)のOCR自体が予算を超過した場合に
+            # 200で成功応答してしまい、504タイムアウト契約を満たさないため。
+            if _timed_out():
                 return _error_response(
                     504,
                     "PROCESSING_TIMEOUT",
                     f"OCR処理が制限時間を超過しました(上限: {MAX_PROCESSING_SECONDS}秒)",
                 )
-            pages.append(ENGINE.page_text(rgb))
+    except InputRejected as e:
+        return _error_response(422, e.code, e.message, limit=e.limit, actual=e.actual)
     except RuntimeError as e:
         return _error_response(500, "OCR_ENGINE_ERROR", str(e))
 

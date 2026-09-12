@@ -82,8 +82,10 @@ def image_to_rgb(data: bytes, *, limits: RasterLimits) -> Iterator["object"]:
     from PIL import Image, UnidentifiedImageError
 
     try:
+        # Image.open()はヘッダ(サイズ・フレーム数)のみを読み、ピクセルデータはこの時点では
+        # デコードしない(codex review指摘反映: 以前はここで img.load() を呼びフレーム0を
+        # 即座に全展開していたため、max_pixels超過の画像でもチェック前に確保が発生していた)。
         img = Image.open(_bytes_io(data))
-        img.load()
     except (UnidentifiedImageError, OSError) as e:
         raise InputRejected("INVALID_IMAGE", f"画像の読み込みに失敗しました: {e}") from e
     except Image.DecompressionBombError as e:
@@ -99,7 +101,10 @@ def image_to_rgb(data: bytes, *, limits: RasterLimits) -> Iterator["object"]:
         )
 
     for i in range(frame_count):
-        img.seek(i)
+        try:
+            img.seek(i)
+        except (OSError, EOFError) as e:
+            raise InputRejected("INVALID_IMAGE", f"フレーム{i + 1}の読み込みに失敗しました: {e}") from e
         width, height = img.size
         pixel_count = width * height
         if pixel_count > limits.max_pixels:
@@ -109,7 +114,10 @@ def image_to_rgb(data: bytes, *, limits: RasterLimits) -> Iterator["object"]:
                 limit=limits.max_pixels,
                 actual=pixel_count,
             )
-        yield np.array(img.convert("RGB"))
+        try:
+            yield np.array(img.convert("RGB"))
+        except (OSError, Image.DecompressionBombError) as e:
+            raise InputRejected("INVALID_IMAGE", f"フレーム{i + 1}のデコードに失敗しました: {e}") from e
 
 
 def _bytes_io(data: bytes):

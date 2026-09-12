@@ -90,6 +90,18 @@ def test_image_to_rgb_single_frame_png():
     assert pages[0].shape[2] == 3
 
 
+def test_image_to_rgb_rejects_pixel_count_exceeding_limit_without_full_decode():
+    """codex review指摘反映: サイズ判定がフル展開(np.array(img.convert("RGB")))より
+    前に行われることを確認する(以前はImage.load()でフレーム0を即時全展開してから
+    チェックしていたため、上限を超える画像でも展開自体は防げなかった)。"""
+    limits = RasterLimits(max_pages=8, max_pixels=1000)
+    png_bytes = _make_png_bytes(width=2000, height=2000)
+    with pytest.raises(InputRejected) as exc_info:
+        list(image_to_rgb(png_bytes, limits=limits))
+    assert exc_info.value.code == "PIXEL_LIMIT_EXCEEDED"
+    assert exc_info.value.limit == 1000
+
+
 def test_image_to_rgb_multi_frame_gif_yields_all_frames():
     """GIF/TIFFの複数フレームは全て処理する(データ欠落よりデータ保全を優先する安全側の設計)。"""
     limits = RasterLimits(max_pages=8, max_pixels=40_000_000)
