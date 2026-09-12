@@ -176,6 +176,35 @@ done
 
 **参考**: https://cloud.google.com/resource-manager/docs/secure-by-default-organizations
 
+#### PaddleOCR基盤準備(ADR-0025 PR3)のbootstrap権限(一時付与、上記の最小権限6ロールには含めない)
+
+`scripts/setup-paddle-ocr-infra.sh`を各クライアントへ実行する前に、実行者アカウントへ一時的に以下2ロールを付与し、対象クライアントへの適用完了後に剥奪する。継続運用に必要な権限ではないため、上記の恒久的な最小権限6ロールには含めない。
+
+- `roles/artifactregistry.admin`(Artifact Registry repo作成+クリーンアップポリシー設定に必要。`.writer`では`repositories.create`を含まないため不足)
+- `roles/iam.serviceAccountCreator`(無権限runtime SA `paddle-ocr-runtime`の作成に必要。`serviceAccountAdmin`より狭い権限で、他SAのIAM policy管理権限は持たない)
+
+**注意**: `--member`のprincipal種別はクライアントごとの実行者アカウント種別に合わせること。dev/kanameoneは個人Googleアカウント(`user:<account>`)、cocoroはサービスアカウント(`serviceAccount:docsplit-deployer@docsplit-cocoro.iam.gserviceaccount.com`)である(`.claude/rules/gcloud-multi-client-ops.md`参照)。誤った種別を指定すると、実際にスクリプトを実行するidentityにロールが付与されない。
+
+付与(dev/kanameoneの例、個人アカウント):
+```bash
+gcloud projects add-iam-policy-binding <project-id> \
+  --member="user:<account>" --role="roles/artifactregistry.admin"
+gcloud projects add-iam-policy-binding <project-id> \
+  --member="user:<account>" --role="roles/iam.serviceAccountCreator"
+```
+
+付与(cocoroの例、サービスアカウント):
+```bash
+gcloud projects add-iam-policy-binding <project-id> \
+  --member="serviceAccount:docsplit-deployer@docsplit-cocoro.iam.gserviceaccount.com" --role="roles/artifactregistry.admin"
+gcloud projects add-iam-policy-binding <project-id> \
+  --member="serviceAccount:docsplit-deployer@docsplit-cocoro.iam.gserviceaccount.com" --role="roles/iam.serviceAccountCreator"
+```
+
+対象クライアントへの適用完了後、`add-iam-policy-binding`と同じ`--member`を使い`remove-iam-policy-binding`で剥奪する。
+
+`roles/run.admin`はPR3では付与しない(Cloud Runサービスのデプロイを一切行わないため不要)。PR4でCloud Runサービスを実際にデプロイする段階で、必要性・付与範囲・撤去条件を改めて設計する。
+
 ---
 
 ### Gmail連携方式の選択ガイド
