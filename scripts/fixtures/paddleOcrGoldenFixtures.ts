@@ -160,17 +160,6 @@ export const GOLDEN_FIXTURES: GoldenFixtureDoc[] = [
   },
 ];
 
-export function readGoldenFixturePdf(fixtureFileName: string): Buffer {
-  const p = path.join(FIXTURE_DIR, fixtureFileName);
-  if (!fs.existsSync(p)) {
-    throw new Error(
-      `PDF fixture が見つかりません: ${p}\n` +
-        'ローカルで `npx ts-node scripts/fixtures/paddleOcrGoldenFixtures.ts --generate-pdfs` を実行してコミットしてください。'
-    );
-  }
-  return fs.readFileSync(p);
-}
-
 /**
  * pdf-lib / fontkit は fixture 生成時のみ必要なため dynamic import にする
  * (scripts/fixtures/arbitrationCompareFixtures.ts と同じ設計意図)。

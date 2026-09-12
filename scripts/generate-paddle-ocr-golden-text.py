@@ -70,8 +70,11 @@ def sha256_dir_files(dir_path: Path) -> dict:
 
 def git_commit_hash() -> str:
     try:
-        return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT).decode().strip()
-    except Exception:
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, stderr=subprocess.PIPE
+        ).decode().strip()
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError) as e:
+        print(f"WARNING: git commit hash取得失敗、manifest.jsonには'unknown'を記録します: {e}", file=sys.stderr)
         return "unknown"
 
 
@@ -115,9 +118,11 @@ def build_ocr_engine():
 
 def ocr_single_page_pdf(engine, pdf_path: Path) -> str:
     img_array = render_pdf_page_to_rgb_array(pdf_path)
-    result = engine.predict(img_array)
-    rec_texts = result[0]["rec_texts"]
-    return "\n".join(rec_texts)
+    try:
+        result = engine.predict(img_array)
+        return "\n".join(result[0]["rec_texts"])
+    except (KeyError, IndexError, TypeError) as e:
+        raise RuntimeError(f"PaddleOCR実行結果の形状が想定外です: {pdf_path} ({e})") from e
 
 
 def join_pages_like_production(page_texts: list[str]) -> str:
