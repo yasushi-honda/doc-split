@@ -8,6 +8,25 @@ updated: 2026-09-08
 
 - [x] `docs/context/gemini-rate-limiting.md`のレート制限値をGemini 3.5 Flash運用下で再検証する（2026-08-02、PR #785マージ済み）。Playwright MCPでVertex AI公式モデルカードを実測確認し、RPM/TPMがDynamic Shared Quota化され固定値が存在しないこと・最大出力トークンがモデル上限65,536（旧記載8,192はアプリの暴走対策キャップとの混同）・PDF最大ファイルサイズがAPI経由で50MB（旧記載20MBは不一致）と判明、ドキュメントを修正
 
+## 【進行中・2026-09-12開始】ADR-0025 PaddleOCR PR4b: devデプロイ完了、残タスクはD-1検証+PR4c（現在のミッションとは別件・並行トラック）
+
+Gemini(Vertex AI日本リージョン非公式動作)からの移行として、自前ホスティングPaddleOCR(PP-OCRv6 medium)をCloud Run上でHTTPサービス化するADR-0025の一環。親計画`~/.claude/plans/shiny-knitting-flamingo.md`のPR4フェーズ（詳細設計は`~/.claude/plans/fuzzy-moseying-book.md`、`/plan-crossreview`実施済み）。PR1〜PR3・PR4a(サービス本体、PR #903)は完了済み。本セッションでPR4b(devへの初回デプロイ+デプロイワークフロー)を完遂した。
+
+**完了（2026-09-12）**:
+- [x] `.github/workflows/deploy-paddle-ocr.yml`新規実装、codex review 5ラウンド+pr-review-toolkit(code-reviewer/silent-failure-hunter/pr-test-analyzer)並列レビュー実施、PR #904マージ
+- [x] `first_deploy=true`実デプロイ実行 → `first_deploy=true`ガードのNOT_FOUND判定バグを発見（実際のgcloud CLIエラー文言が想定と不一致）、修正しPR #905マージ
+- [x] 再デプロイ → `/healthz`(完全一致パス)への外部リクエストのみGoogle Frontend側404で弾かれる未文書化のCloud Runインフラ挙動を発見(内部probe疎通は正常、20分待機・2回のrevision強制作成でも再現)。`/health`へリネームして解決、codex review 3ラウンド+pr-review-toolkit(code-reviewer/pr-test-analyzer)実施、PR #906マージ
+- [x] `scripts/clients/dev.env`のPADDLE_OCR_URL反映、PR #907マージ
+- [x] `first_deploy=false`での最終再デプロイ成功: `/health` 200・`modelLoaded:true`・imageDigest一致、startup/liveness probe設定反映確認、golden fixture完全一致、実処理時間97秒(liveness検知窓300秒に対し十分な安全マージン)、`run.invoker`をprocessOCR実行SAへ付与確認
+
+**サービスURL(dev)**: `https://paddle-ocr-whfgr6jwaa-an.a.run.app`（`scripts/clients/dev.env`の`PADDLE_OCR_URL`参照）
+
+**残タスク（次セッション、詳細はplanファイル参照）**:
+- [ ] D-1(liveness probe)実効性検証: テスト専用の隔離revision(`--no-traffic`)で`/health`を決定論的に失敗させ、liveness probeがインスタンスを強制入れ替えすることをCloud Runログで確認（`fuzzy-moseying-book.md`「PR4b-4. 受け入れ確認」④参照）
+- [ ] PR4c: `scripts/paddle-ocr-verify.ts`による1/20/71/160ページ負荷試験・golden/png精度検証、PR6着手可否のゲート判定（`fuzzy-moseying-book.md`§4参照）
+
+**現在のミッション（下記「現在のミッション」節、Google Drive連携）との関係**: 完全に独立した並行トラック。優先度判断はdecision-maker領分。
+
 ## 【完了・2026-08-29開始→2026-08-30完了】複数人記載FAX: 複製廃止→検出バッジへの置換（kanameone、Stage 0〜3完了）
 
 kanameoneから「1FAXに複数人分の書類がまとまっている場合の人数分複製表示（`faxDuplication`機能）を廃止し、代わりに一目で複数人記載と分かる検出バッジに置き換えたい」という仕様変更依頼を受け、plan mode承認済み計画（`/Users/yyyhhh/.claude/plans/merry-drifting-seal.md`、grip+codex plan-crossreview実施済み）に基づき実装・展開した。
