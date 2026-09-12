@@ -209,6 +209,9 @@ jobs:
         # first_deploy=trueを選ぶと、上記のドリフト検証がifでスキップされ、既存サービスへ
         # そのまま新リビジョンをデプロイできてしまう。サービスが未存在(NOT_FOUND)であることを
         # 明示的に確認し、存在する場合は停止する(認証/権限エラーとは区別する)。
+        # 実機検証で判明(2026-09-12): `gcloud run services describe`が未存在サービスに対して
+        # 返す実際のエラー文言は生のAPIステータス文字列"NOT_FOUND"ではなく、CLIが整形した
+        # "Cannot find service [X]"だった。両方を許容する。
         if: ${{ github.event.inputs.first_deploy == 'true' }}
         env:
           PROJECT_ID: ${{ steps.resolve.outputs.project_id }}
@@ -221,8 +224,8 @@ jobs:
             echo "ERROR: first_deploy=true が指定されましたが、paddle-ocr サービスは既に存在します(URL: ${DESCRIBE_OUT})。PADDLE_OCR_URLが誤って<TBD>のままになっている可能性があります。first_deploy=false で実行してください" >&2
             exit 1
           fi
-          if ! echo "$DESCRIBE_OUT" | grep -qi 'NOT_FOUND'; then
-            echo "ERROR: paddle-ocr サービスの存在確認に失敗しました(NOT_FOUND以外のエラー): $DESCRIBE_OUT" >&2
+          if ! echo "$DESCRIBE_OUT" | grep -qiE 'NOT_FOUND|Cannot find service'; then
+            echo "ERROR: paddle-ocr サービスの存在確認に失敗しました(未存在以外のエラー): $DESCRIBE_OUT" >&2
             exit 1
           fi
           echo "OK: paddle-ocr サービスは未存在です(初回デプロイとして進めます)"
