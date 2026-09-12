@@ -127,19 +127,42 @@ REQUIRED_PERMISSIONS=(
   "artifactregistry.repositories.create"
   "artifactregistry.repositories.update"
   "iam.serviceAccounts.create"
+  "resourcemanager.projects.getIamPolicy"
 )
 
 if [ "$DRY_RUN" != true ]; then
   # gcloud に project レベルの testIamPermissions を直接叩くサブコマンドが存在しないため
   # (`gcloud projects test-iam-permissions` は無効なコマンド、実測確認済み)、
   # Cloud Resource Manager API v3 を直接叩く。
+  #
+  # silent-failure-hunter指摘(CRITICAL)反映: curlはHTTPエラー(401/403/404/429/5xx)でも
+  # 有効なJSONエラーボディをexit 0で返すため、-w '%{http_code}' で明示的にHTTPステータスを
+  # 確認する。確認しないと、認証切れ等の実エラーが「4権限とも権限不足」という誤った
+  # 診断に化けてしまう(実際には権限があってもトークン失効等で誤検知しうる)。
+  # トークン取得もcurl引数内のnested command substitutionにせず独立したstatementにする
+  # (set -e下でネストした$()の失敗はエラーとして伝播しないため)。
+  ACCESS_TOKEN=$(gcloud auth print-access-token --account="$EXPECTED_ACCOUNT")
   PERMISSIONS_JSON=$(printf '"%s",' "${REQUIRED_PERMISSIONS[@]}")
   PERMISSIONS_JSON="[${PERMISSIONS_JSON%,}]"
-  HELD_PERMISSIONS=$(curl -s -X POST \
-    -H "Authorization: Bearer $(gcloud auth print-access-token --account="$EXPECTED_ACCOUNT")" \
+
+  TESTIAM_RESPONSE_FILE="$(mktemp)"
+  HTTP_STATUS=$(curl -s -o "$TESTIAM_RESPONSE_FILE" -w '%{http_code}' \
+    --connect-timeout 10 --max-time 30 \
+    -X POST \
+    -H "Authorization: Bearer ${ACCESS_TOKEN}" \
     -H "Content-Type: application/json" \
     "https://cloudresourcemanager.googleapis.com/v3/projects/${PROJECT_ID}:testIamPermissions" \
-    -d "{\"permissions\": ${PERMISSIONS_JSON}}" | jq -r '.permissions[]? // empty')
+    -d "{\"permissions\": ${PERMISSIONS_JSON}}")
+
+  if [ "$HTTP_STATUS" != "200" ]; then
+    echo "ERROR: testIamPermissions API呼出しが失敗しました(HTTP $HTTP_STATUS)" >&2
+    cat "$TESTIAM_RESPONSE_FILE" >&2
+    rm -f "$TESTIAM_RESPONSE_FILE"
+    exit 1
+  fi
+
+  HELD_PERMISSIONS=$(jq -r '.permissions[]? // empty' "$TESTIAM_RESPONSE_FILE")
+  rm -f "$TESTIAM_RESPONSE_FILE"
 
   MISSING_PERMISSIONS=()
   for perm in "${REQUIRED_PERMISSIONS[@]}"; do
@@ -163,8 +186,11 @@ echo ""
 # ==================================================
 echo "--- API有効化 ---"
 for api in run.googleapis.com artifactregistry.googleapis.com; do
+  # silent-failure-hunter指摘(HIGH)反映: `2>/dev/null || true`だと認証切れ等の実エラーも
+  # 「未有効」と誤認しうる。set -euo pipefailの下でエラーをそのまま伝播させる
+  # (「未有効」は空出力+exit 0であり、これはエラー扱いにならない)。
   ENABLED=$(gcloud services list --enabled --project="$PROJECT_ID" --account="$EXPECTED_ACCOUNT" \
-    --filter="config.name:$api" --format="value(config.name)" 2>/dev/null || true)
+    --filter="config.name:$api" --format="value(config.name)")
   if [ -n "$ENABLED" ]; then
     echo "✓ $api は既に有効 (skip)"
   else
@@ -210,32 +236,57 @@ fi
 
 # cleanup policy: repoを本スクリプトが新規作成した場合のみ無条件適用。
 # 既存repoの場合は期待値と一致するか確認し、異なれば --replace-cleanup-policy 必須。
+#
+# code-reviewer指摘(Important)反映: 比較ロジック自体はread-onlyなので、
+# --dry-run でも常に実行する(以前は`[ "$DRY_RUN" != true ]`で丸ごとスキップしており、
+# 既存repoに対する--dry-runが実際には何もチェックせず常に汎用的な
+# "適用する予定"メッセージを出すだけになっていた)。mutatingな
+# set-cleanup-policies 呼出のみを DRY_RUN で個別にガードする。
 APPLY_POLICY=false
-if [ "$DRY_RUN" != true ]; then
-  if [ "$REPO_EXISTS" = false ]; then
-    APPLY_POLICY=true
+if [ "$REPO_EXISTS" = false ]; then
+  if [ "$DRY_RUN" = true ]; then
+    echo "[DRY-RUN] cleanup policy(keep-latest-2 + delete-all-others)を新規repoに適用する予定"
   else
-    CURRENT_POLICY_JSON=$(gcloud artifacts repositories describe "$REPO" --location="$REGION" \
-      --project="$PROJECT_ID" --account="$EXPECTED_ACCOUNT" --format="json(cleanupPolicies)" 2>/dev/null)
-    CURRENT_KEEP_COUNT=$(echo "$CURRENT_POLICY_JSON" | jq -r '.cleanupPolicies["keep-latest-2"].mostRecentVersions.keepCount // empty')
-    CURRENT_KEEP_TYPE=$(echo "$CURRENT_POLICY_JSON" | jq -r '.cleanupPolicies["keep-latest-2"].action // empty')
-    CURRENT_DELETE_TAGSTATE=$(echo "$CURRENT_POLICY_JSON" | jq -r '.cleanupPolicies["delete-all-others"].condition.tagState // empty')
-    CURRENT_DELETE_TYPE=$(echo "$CURRENT_POLICY_JSON" | jq -r '.cleanupPolicies["delete-all-others"].action // empty')
+    APPLY_POLICY=true
+  fi
+else
+  CURRENT_POLICY_JSON=$(gcloud artifacts repositories describe "$REPO" --location="$REGION" \
+    --project="$PROJECT_ID" --account="$EXPECTED_ACCOUNT" --format="json(cleanupPolicies)")
 
-    if [ "$CURRENT_KEEP_COUNT" = "$EXPECTED_KEEP_COUNT" ] && [ "$CURRENT_KEEP_TYPE" = "KEEP" ] \
-        && [ "$CURRENT_DELETE_TAGSTATE" = "$EXPECTED_DELETE_TAGSTATE" ] && [ "$CURRENT_DELETE_TYPE" = "DELETE" ]; then
-      echo "✓ cleanup policyは既に期待値と一致 (skip)"
-    elif [ "$REPLACE_CLEANUP_POLICY" = true ]; then
-      echo "既存repoのcleanup policyが期待値と異なりますが、--replace-cleanup-policy指定のため上書きします"
-      echo "  現在値: keepCount=$CURRENT_KEEP_COUNT keepType=$CURRENT_KEEP_TYPE deleteTagState=$CURRENT_DELETE_TAGSTATE deleteType=$CURRENT_DELETE_TYPE"
-      APPLY_POLICY=true
+  # 部分一致(特定フィールドのみ比較)だと、余分な条件(olderThan/packageNamePrefixes等)や
+  # 余分なポリシーの追加を見逃す(codex review high effort指摘)。cleanupPolicies全体を
+  # 正規化(キーソート)した上で完全一致比較する。
+  EXPECTED_POLICIES_JSON=$(jq -n \
+    --argjson keepCount "$EXPECTED_KEEP_COUNT" \
+    --arg tagState "$EXPECTED_DELETE_TAGSTATE" \
+    '{
+      "delete-all-others": {"action": "DELETE", "condition": {"tagState": $tagState}, "id": "delete-all-others"},
+      "keep-latest-2": {"action": "KEEP", "id": "keep-latest-2", "mostRecentVersions": {"keepCount": $keepCount}}
+    }')
+  CURRENT_POLICIES_NORMALIZED=$(echo "$CURRENT_POLICY_JSON" | jq -S '.cleanupPolicies // {}')
+  EXPECTED_POLICIES_NORMALIZED=$(echo "$EXPECTED_POLICIES_JSON" | jq -S '.')
+
+  if [ "$CURRENT_POLICIES_NORMALIZED" = "$EXPECTED_POLICIES_NORMALIZED" ]; then
+    echo "✓ cleanup policyは既に期待値と完全一致 (skip)"
+  elif [ "$REPLACE_CLEANUP_POLICY" = true ]; then
+    if [ "$DRY_RUN" = true ]; then
+      echo "[DRY-RUN] 既存repoのcleanup policyが期待値と異なります。--replace-cleanup-policy指定のため上書きする予定"
+      echo "  現在値: $(echo "$CURRENT_POLICIES_NORMALIZED" | jq -c '.')"
+      echo "  適用予定値: $(echo "$EXPECTED_POLICIES_NORMALIZED" | jq -c '.')"
     else
-      echo "ERROR: 既存repo '$REPO' のcleanup policyが期待値と異なります" >&2
-      echo "  現在値: keepCount=$CURRENT_KEEP_COUNT keepType=$CURRENT_KEEP_TYPE deleteTagState=$CURRENT_DELETE_TAGSTATE deleteType=$CURRENT_DELETE_TYPE" >&2
-      echo "  期待値: keepCount=$EXPECTED_KEEP_COUNT keepType=KEEP deleteTagState=$EXPECTED_DELETE_TAGSTATE deleteType=DELETE" >&2
-      echo "  上書きする場合は --replace-cleanup-policy を明示指定してください" >&2
+      echo "既存repoのcleanup policyが期待値と異なりますが、--replace-cleanup-policy指定のため上書きします"
+      echo "  現在値: $(echo "$CURRENT_POLICIES_NORMALIZED" | jq -c '.')"
+      APPLY_POLICY=true
+    fi
+  else
+    echo "ERROR: 既存repo '$REPO' のcleanup policyが期待値と完全には一致しません(余分な条件・余分なポリシーの可能性を含む)" >&2
+    echo "  現在値: $(echo "$CURRENT_POLICIES_NORMALIZED" | jq -c '.')" >&2
+    echo "  期待値: $(echo "$EXPECTED_POLICIES_NORMALIZED" | jq -c '.')" >&2
+    echo "  上書きする場合は --replace-cleanup-policy を明示指定してください" >&2
+    if [ "$DRY_RUN" != true ]; then
       exit 1
     fi
+    echo "  [DRY-RUN] 実際の実行ではここで上記エラーにより失敗します" >&2
   fi
 fi
 
@@ -252,8 +303,6 @@ EOF
     --location="$REGION" --project="$PROJECT_ID" --account="$EXPECTED_ACCOUNT" \
     --policy="$POLICY_FILE" --no-dry-run
   echo "✓ cleanup policyを適用しました(keep-latest-2 + delete-all-others)"
-elif [ "$DRY_RUN" = true ]; then
-  echo "[DRY-RUN] cleanup policy(keep-latest-2 + delete-all-others)を適用する予定"
 fi
 echo ""
 
@@ -270,7 +319,27 @@ if gcloud iam service-accounts describe "$RUNTIME_SA" \
 fi
 
 if [ "$SA_EXISTS" = true ]; then
-  echo "✓ runtime SA は既存 (skip): $RUNTIME_SA"
+  # 「無権限runtime SA」という前提が事後的なrole付与で崩れていないか確認する
+  # (codex review high effort指摘: 既存SAを無条件でskipすると、手動/部分プロビジョニング
+  # 等で付与済みのStorage/Firestore/Vertex等のroleがPR4のCloud Run実行にそのまま残る)
+  #
+  # code-reviewer指摘(Important)反映: `2>/dev/null || true`だと
+  # resourcemanager.projects.getIamPolicy権限が欠けている場合(cocoro等の狭いスコープの
+  # 実行者)でもエラーが握り潰され「role無し」と誤認して偽の"確認済み"表示に化ける
+  # (silent-failure-hunterが排除させたのと同一のfail-openパターンの再導入だったため削除)。
+  # 同権限はREQUIRED_PERMISSIONSに追加済みでpreflightが先に保証するが、二重の安全として
+  # ここでもエラーはset -e下でそのまま伝播させる。
+  EXISTING_ROLES=$(gcloud projects get-iam-policy "$PROJECT_ID" --flatten="bindings[].members" \
+    --filter="bindings.members:${RUNTIME_SA}" --format="value(bindings.role)" \
+    --account="$EXPECTED_ACCOUNT")
+  if [ -n "$EXISTING_ROLES" ]; then
+    echo "ERROR: 既存runtime SA '$RUNTIME_SA' に以下のプロジェクトレベルroleが付与されています(無権限という前提が崩れています)" >&2
+    while IFS= read -r role; do echo "  - $role" >&2; done <<< "$EXISTING_ROLES"
+    echo "  意図しない権限であれば手動で剥奪してください:" >&2
+    echo "  gcloud projects remove-iam-policy-binding $PROJECT_ID --member=serviceAccount:$RUNTIME_SA --role=<role>" >&2
+    exit 1
+  fi
+  echo "✓ runtime SA は既存 (skip): $RUNTIME_SA (プロジェクトレベルroleなしを確認済み)"
 else
   if [ "$DRY_RUN" = true ]; then
     echo "[DRY-RUN] runtime SA '$RUNTIME_SA' を作成する予定(role付与なし)"
