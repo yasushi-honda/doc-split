@@ -105,6 +105,12 @@ def build_ocr_engine():
         )
     # lang指定はtext_detection_model_name/text_recognition_model_name指定時は無視される
     # (実行時にUserWarningで確認済み)ため渡さない。モデルは名前+ディレクトリで完全に固定する。
+    #
+    # enable_mkldnn=False(ADR-0025 PR4a実機検証で追加): linux/amd64コンテナ(Cloud Run想定
+    # 環境)でmkldnn実行パスが例外終了する不具合を確認したため無効化した(services/paddle-ocr/
+    # ocr_engine.py参照)。arm64(Mac)ではmkldnnが元々使われないため本スクリプトの出力(golden
+    # text)には影響しないが、services/paddle-ocr/ocr_engine.pyとの「一字一句一致」を保つため
+    # 本スクリプトにも反映する。
     return PaddleOCR(
         text_detection_model_name=DET_MODEL_NAME,
         text_detection_model_dir=str(DET_MODEL_DIR),
@@ -113,6 +119,7 @@ def build_ocr_engine():
         use_doc_orientation_classify=False,
         use_doc_unwarping=False,
         use_textline_orientation=False,
+        enable_mkldnn=False,
     )
 
 

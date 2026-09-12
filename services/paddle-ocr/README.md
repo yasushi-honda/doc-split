@@ -1,0 +1,87 @@
+# PaddleOCR Cloud Runサービス
+
+ADR-0025(PaddleOCR移行)のPR4: 自前ホスティングPaddleOCR(PP-OCRv6 medium)をCloud Run上でHTTPサービスとして提供する。詳細な意思決定の経緯は[`docs/adr/0025-paddleocr-migration.md`](../../docs/adr/0025-paddleocr-migration.md)を参照。
+
+## 本サービスが証明すること/しないこと
+
+- **証明すること**: 固定済みPaddleOCRモデル(重みSHA-256で同一性を担保)を使い、本番と同一の入力形式(PDF/JPEG/PNG/TIFF/GIF)・ページ分割経路でOCRを実行できること。
+- **証明しないこと**: Cloud Run実機でのコスト・精度・レイテンシの定量評価。これはPR4c(`scripts/paddle-ocr-verify.ts`)の実測結果、およびPR6着手可否のゲート判定をもって成立する。実測値は本ファイル末尾に追記する。
+
+## エンドポイント契約
+
+### `GET /healthz`
+
+```json
+{
+  "status": "ok",
+  "engine": "paddleocr",
+  "modelVersion": "PP-OCRv6_medium/det:<hash12>/rec:<hash12>",
+  "renderDpi": 200,
+  "imageDigest": "<deploy時に--set-env-varsで注入>",
+  "modelLoaded": true
+}
+```
+
+### `POST /ocr`
+
+生バイナリbody。`Content-Type`は`application/pdf`/`image/jpeg`/`image/png`/`image/tiff`/`image/gif`の5種類のみ受理する(本番`functions/src/upload/uploadPdf.ts`の受理MIMEタイプと同期)。
+
+```json
+{
+  "text": "1ページ目\n\n2ページ目",
+  "pages": ["1ページ目", "2ページ目"],
+  "pageCount": 2,
+  "engine": "paddleocr",
+  "modelVersion": "PP-OCRv6_medium/det:<hash12>/rec:<hash12>",
+  "lang": "japan",
+  "renderDpi": 200,
+  "processingMs": 1234
+}
+```
+
+**契約上の重要な決定**: `text`は常に`pages.join("\n\n")`(ページヘッダなし)。本番の`ocrProcessor.ts:356-359`がFunctions側で`--- Page N ---`ヘッダを付けるため、サービス側で付けると二重になる。本番は常に1ページずつ送るため、実運用では`text === pages[0]`になる。
+
+エラー時は`{"error": {"code": "...", "message": "...", "limit": <任意>, "actual": <任意>}}`。
+
+| HTTPステータス | code | 意味 |
+|---|---|---|
+| 400 | `EMPTY_BODY` | リクエストbodyが空 |
+| 413 | `PAYLOAD_TOO_LARGE` | `MAX_UPLOAD_BYTES`超過 |
+| 415 | `UNSUPPORTED_MEDIA_TYPE` | 未対応のContent-Type |
+| 422 | `PAGE_LIMIT_EXCEEDED` / `PIXEL_LIMIT_EXCEEDED` / `INVALID_PDF` / `INVALID_IMAGE` | 入力データ自体の問題 |
+| 500 | `OCR_ENGINE_ERROR` | エンジン異常 |
+| 504 | `PROCESSING_TIMEOUT` | 処理時間超過(入力由来ではないため、422ではなく504としリトライ対象にする) |
+
+## モデル同一性担保
+
+`expected-model-hashes.json`にHugging Faceリポジトリのimmutable revisionと重み本体3ファイル(`inference.json`/`inference.pdiparams`/`inference.yml`)のSHA-256を固定している。値は[`scripts/fixtures/paddle-ocr-golden/manifest.json`](../../scripts/fixtures/paddle-ocr-golden/manifest.json)の実測値(24文書PoCで94/96正解を出した重みそのもの)と同一。`download_models.py`がビルド時にこのrevisionから取得・検証し、`ocr_engine.py`が起動時に再検証する(fail-loud)。
+
+値を変更する場合は`scripts/generate-paddle-ocr-golden-text.py`をローカル再実行して精度を再検証し、`manifest.json`と`expected-model-hashes.json`を同時更新すること(無検証での更新は禁止)。
+
+## PR4a実装時の実機検証で判明した事項
+
+- **linux/amd64でのmkldnn実行パスの不具合**: デフォルト設定(`enable_mkldnn`未指定)でamd64コンテナ上で推論を実行すると`(Unimplemented) ConvertPirAttribute2RuntimeAttribute not support [...]`(`onednn_instruction.cc`)で例外終了することを確認した(QEMUエミュレーション環境での検証、実Cloud Run実機での再現有無はPR4bで要確認)。`enable_mkldnn=False`で回避し、`ocr_engine.py`・`scripts/generate-paddle-ocr-golden-text.py`の両方に反映済み。mkldnnはCPU推論の高速化オプションであり正解性には影響しない。
+- **arm64/amd64のOCR結果一致(重要なリスク解消)**: ADR-0025 PR4計画のv2で「未検証のリスク」として明記していた「arm64(Mac)生成のgolden textとamd64(Cloud Run想定)推論結果が完全一致するか」について、ローカルDocker(linux/amd64、QEMUエミュレーション)上で5 fixture全て(6ページ)を検証し、**文字単位で完全一致**することを確認した。ただし実Cloud Run実機(エミュレーションではない実x86_64ハードウェア)での再確認はPR4bで実施する。
+- **イメージサイズ**: 725MB(単一ステージ、python:3.12-slimベース)。ADR-0025 PR4計画v1が見積もっていた「3〜4GB級」は過大な推測だったことが確定した。
+
+## PR4c実測値(未実施)
+
+Cloud Run実機での1/20/71/160ページ負荷試験結果は、PR4c完了後にここへ追記する。
+
+## ローカル開発
+
+```bash
+# ビルド(Cloud Run想定のlinux/amd64を明示)
+docker buildx build --platform linux/amd64 -t paddle-ocr-local --load .
+
+# 起動
+docker run -p 8080:8080 paddle-ocr-local
+
+# 動作確認
+curl http://127.0.0.1:8080/healthz
+curl -X POST http://127.0.0.1:8080/ocr -H "Content-Type: application/pdf" --data-binary @sample.pdf
+
+# テスト(paddleocr/paddlepaddle不要、軽量)
+pip install -r requirements-test.txt
+pytest tests/
+```
