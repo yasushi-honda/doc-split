@@ -85,8 +85,13 @@ def test_healthz_reports_engine_not_loaded_when_engine_is_none(client):
 
 
 def test_healthz_reports_model_version_when_engine_loaded(client):
+    """pr-test-analyzer指摘: ENGINE=Noneケース(503)は既にstatus_codeを検証しているが、
+    loadedケース(200)側はstatus_codeを検証しておらず非対称だった。Cloud Run probeは
+    HTTPステータスのみで健全性判定するため(bodyのmodelLoadedは見ない)、両方向の
+    契約を回帰検知できるようにする。"""
     app_module.ENGINE = StubEngine()
     resp = client.get("/healthz")
+    assert resp.status_code == 200
     body = resp.json()
     assert body["modelLoaded"] is True
     assert body["modelVersion"] == "stub-model-version"

@@ -156,14 +156,19 @@ jobs:
           CLOUD_RUN_LOCATION: ${{ steps.resolve.outputs.cloud_run_location }}
         run: |
           set -euo pipefail
-          if ! gcloud artifacts repositories describe paddle-ocr \
-              --project="$PROJECT_ID" --location="$CLOUD_RUN_LOCATION" >/dev/null 2>&1; then
-            echo "ERROR: Artifact Registry 'paddle-ocr' が存在しません。scripts/setup-paddle-ocr-infra.sh dev を先に実行してください" >&2
+          # silent-failure-hunter指摘: stderrを破棄すると「本当に存在しない」と「権限/認証エラーで
+          # describeコマンド自体が失敗した」を区別できず、誤った改善案内(setup-paddle-ocr-infra.sh
+          # を実行せよ)を出してしまう。stderrを捕捉して両方のケースを表示する。
+          if ! ARTIFACT_REGISTRY_OUT=$(gcloud artifacts repositories describe paddle-ocr \
+              --project="$PROJECT_ID" --location="$CLOUD_RUN_LOCATION" 2>&1); then
+            echo "ERROR: Artifact Registry 'paddle-ocr' の確認に失敗しました: $ARTIFACT_REGISTRY_OUT" >&2
+            echo "ERROR: 存在しない場合は scripts/setup-paddle-ocr-infra.sh dev を先に実行してください。権限/認証エラーの場合は上記メッセージを確認してください" >&2
             exit 1
           fi
-          if ! gcloud iam service-accounts describe "paddle-ocr-runtime@${PROJECT_ID}.iam.gserviceaccount.com" \
-              --project="$PROJECT_ID" >/dev/null 2>&1; then
-            echo "ERROR: runtime SA 'paddle-ocr-runtime@${PROJECT_ID}.iam.gserviceaccount.com' が存在しません。scripts/setup-paddle-ocr-infra.sh dev を先に実行してください" >&2
+          if ! RUNTIME_SA_OUT=$(gcloud iam service-accounts describe "paddle-ocr-runtime@${PROJECT_ID}.iam.gserviceaccount.com" \
+              --project="$PROJECT_ID" 2>&1); then
+            echo "ERROR: runtime SA 'paddle-ocr-runtime@${PROJECT_ID}.iam.gserviceaccount.com' の確認に失敗しました: $RUNTIME_SA_OUT" >&2
+            echo "ERROR: 存在しない場合は scripts/setup-paddle-ocr-infra.sh dev を先に実行してください。権限/認証エラーの場合は上記メッセージを確認してください" >&2
             exit 1
           fi
           CLOUDBUILD_ENABLED=$(gcloud services list --enabled --project="$PROJECT_ID" \
@@ -212,8 +217,28 @@ jobs:
           POLL_INTERVAL=15
           MAX_ITERATIONS=240
           ITERATION=0
+          DESCRIBE_FAILURES=0
+          MAX_DESCRIBE_FAILURES=5
           while [ "$ITERATION" -lt "$MAX_ITERATIONS" ]; do
-            STATUS=$(gcloud builds describe "$BUILD_ID" --project="$PROJECT_ID" --format='value(status)' 2>/dev/null || echo "UNKNOWN")
+            # silent-failure-hunter指摘: describeコマンド自体が失敗した場合(認証切れ・IAM権限剥奪・
+            # API障害等)を、単に「未知のステータス文字列」と区別せずに同じリトライループへ落とすと、
+            # 恒久的な失敗が最大60分(MAX_ITERATIONS×POLL_INTERVAL)分の空リトライの末に、原因不明な
+            # タイムアウトとして報告される。describe自体の失敗は別カウンタで区別し、閾値超過で
+            # 即座にfail-loudする(stderrも握り潰さず表示する)。
+            # stdoutとstderrを分離して捕捉する(2>&1でまとめると、成功時にgcloudの偶発的な
+            # stderr出力(非推奨警告等)がSTATUSへ混入し、case文の完全一致判定を壊しうるため)。
+            if ! STATUS=$(gcloud builds describe "$BUILD_ID" --project="$PROJECT_ID" --format='value(status)' 2>/tmp/build_describe_err.log); then
+              DESCRIBE_FAILURES=$((DESCRIBE_FAILURES + 1))
+              echo "WARN: gcloud builds describe failed (${DESCRIBE_FAILURES}/${MAX_DESCRIBE_FAILURES}): $(cat /tmp/build_describe_err.log)" >&2
+              if [ "$DESCRIBE_FAILURES" -ge "$MAX_DESCRIBE_FAILURES" ]; then
+                echo "ERROR: gcloud builds describe が${MAX_DESCRIBE_FAILURES}回連続で失敗しました。認証・IAM権限・Cloud Build APIの状態を確認してください" >&2
+                exit 1
+              fi
+              sleep "$POLL_INTERVAL"
+              ITERATION=$((ITERATION + 1))
+              continue
+            fi
+            DESCRIBE_FAILURES=0
             case "$STATUS" in
               SUCCESS)
                 echo "Build succeeded after ${ITERATION} polls"
@@ -242,7 +267,12 @@ jobs:
           fi
           # 実際のCloud Build実行SAをログに出力する(GitHub deploy SAとは別物、上記コメント参照)。
           # 権限不足で失敗した場合は、ここに表示されるSAへ個別に対応する(事前の一律付与はしない)。
-          BUILD_SA=$(gcloud builds describe "$BUILD_ID" --project="$PROJECT_ID" --format='value(serviceAccount)' 2>/dev/null || echo "unknown")
+          # silent-failure-hunter指摘: このdescribe呼び出し自体が失敗した場合にstderrを捨てて
+          # "unknown"とだけ表示すると、まさにこの行が助けようとしている「権限不足の原因調査」を
+          # 妨げてしまう(自己矛盾)。stderrも表示する。
+          if ! BUILD_SA=$(gcloud builds describe "$BUILD_ID" --project="$PROJECT_ID" --format='value(serviceAccount)' 2>/tmp/build_sa_err.log); then
+            BUILD_SA="unknown ($(cat /tmp/build_sa_err.log))"
+          fi
           echo "actual Cloud Build execution SA: $BUILD_SA"
           IMAGE_DIGEST=$(gcloud artifacts docker images describe "$IMAGE_URI" \
             --format='value(image_summary.fully_qualified_digest)' \
@@ -321,11 +351,19 @@ jobs:
         run: |
           set -euo pipefail
           # --gen2必須(setup-paddle-ocr-infra.sh:372-377の案内echoと一致させる)。
-          FUNCTIONS_SA=$(gcloud functions describe processOCR --gen2 \
-            --region="$CLOUD_RUN_LOCATION" --project="$PROJECT_ID" \
-            --format='value(serviceConfig.serviceAccountEmail)' 2>/dev/null || echo "")
+          # silent-failure-hunter指摘: stderrを破棄して空文字にフォールバックすると、
+          # 「processOCRが本当に未デプロイ」と「IAM権限不足/API無効化/認証切れでdescribe自体が
+          # 失敗した」を区別できず、後者の場合でも常に「先にFunctionsをデプロイしてください」という
+          # 誤った改善案内を出してしまう。stderrを捕捉し、実際の失敗理由を表示する。
+          if ! FUNCTIONS_SA=$(gcloud functions describe processOCR --gen2 \
+              --region="$CLOUD_RUN_LOCATION" --project="$PROJECT_ID" \
+              --format='value(serviceConfig.serviceAccountEmail)' 2>/tmp/functions_describe_err.log); then
+            echo "ERROR: processOCR functionの確認に失敗しました: $(cat /tmp/functions_describe_err.log)" >&2
+            echo "ERROR: 未デプロイの場合は先にFunctionsをデプロイしてください。権限/認証エラーの場合は上記メッセージを確認してください" >&2
+            exit 1
+          fi
           if [ -z "$FUNCTIONS_SA" ]; then
-            echo "ERROR: processOCR functionが見つかりません(--gen2)。先にFunctionsをデプロイしてください" >&2
+            echo "ERROR: processOCR functionは見つかりましたが、serviceAccountEmailが空でした(想定外)" >&2
             exit 1
           fi
           echo "processOCR execution SA: $FUNCTIONS_SA"
@@ -346,8 +384,17 @@ jobs:
           TOKEN=$(gcloud auth print-identity-token --audiences="$SERVICE_URL")
 
           echo "=== /healthz ==="
-          HEALTHZ_BODY=$(curl -sS -H "Authorization: Bearer ${TOKEN}" "${SERVICE_URL}/healthz")
+          # silent-failure-hunter指摘: curlは-f/--failを付けない限り、401/403/500/503等の
+          # 非2xxレスポンスでも終了コード0を返す。bodyの文字列一致だけで判定すると、認証切れ・
+          # run.invoker未反映・Cloud Run側の異常等のHTTPレベルの問題を「アプリのバグ」として
+          # 誤診断してしまう。HTTPステータスを明示的に取得し、body判定の前にゲートする。
+          HEALTHZ_STATUS=$(curl -sS -o /tmp/healthz_body.json -w '%{http_code}' -H "Authorization: Bearer ${TOKEN}" "${SERVICE_URL}/healthz")
+          HEALTHZ_BODY=$(cat /tmp/healthz_body.json)
           echo "$HEALTHZ_BODY"
+          if [ "$HEALTHZ_STATUS" != "200" ]; then
+            echo "ERROR: /healthz が HTTP ${HEALTHZ_STATUS} を返しました(期待値: 200): $HEALTHZ_BODY" >&2
+            exit 1
+          fi
           echo "$HEALTHZ_BODY" | grep -q '"modelLoaded":true' || { echo "ERROR: modelLoaded is not true" >&2; exit 1; }
           echo "$HEALTHZ_BODY" | grep -q "\"imageDigest\":\"${IMAGE_DIGEST}\"" || { echo "ERROR: imageDigest does not match deployed digest" >&2; exit 1; }
 
@@ -359,12 +406,28 @@ jobs:
           echo "=== golden fixture 1件でのOCR疎通確認 ==="
           FIXTURE=scripts/fixtures/paddle-ocr-golden/golden_plain_01.pdf
           STARTED=$(date +%s)
-          OCR_BODY=$(curl -sS -H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/pdf" \
+          OCR_STATUS=$(curl -sS -o /tmp/ocr_body.json -w '%{http_code}' -H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/pdf" \
             --data-binary "@${FIXTURE}" "${SERVICE_URL}/ocr")
           ELAPSED=$(( $(date +%s) - STARTED ))
-          echo "$OCR_BODY" | node -e '
-            const data = JSON.parse(require("fs").readFileSync(0, "utf-8"));
-            const expected = JSON.parse(require("fs").readFileSync("scripts/fixtures/paddle-ocr-golden/golden-plain-01.pages.json", "utf-8"))[0];
+          if [ "$OCR_STATUS" != "200" ]; then
+            echo "ERROR: /ocr が HTTP ${OCR_STATUS} を返しました(期待値: 200): $(cat /tmp/ocr_body.json)" >&2
+            exit 1
+          fi
+          # silent-failure-hunter指摘: 非JSONボディ(中間プロキシのHTMLエラーページ等)が返った場合、
+          # JSON.parseが素のスタックトレースで例外終了する。try/catchで捕捉し、生bodyを添えた
+          # わかりやすいエラーメッセージにする。
+          node -e '
+            const fs = require("fs");
+            const raw = fs.readFileSync("/tmp/ocr_body.json", "utf-8");
+            let data;
+            try {
+              data = JSON.parse(raw);
+            } catch (e) {
+              console.error("ERROR: /ocr のレスポンスがJSONとしてパースできませんでした:", e.message);
+              console.error("raw body:", raw);
+              process.exit(1);
+            }
+            const expected = JSON.parse(fs.readFileSync("scripts/fixtures/paddle-ocr-golden/golden-plain-01.pages.json", "utf-8"))[0];
             if (data.pages?.[0] !== expected) {
               console.error("ERROR: OCR text does not match golden fixture");
               console.error("expected:", expected);
