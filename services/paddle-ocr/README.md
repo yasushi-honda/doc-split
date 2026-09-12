@@ -9,7 +9,9 @@ ADR-0025(PaddleOCR移行)のPR4: 自前ホスティングPaddleOCR(PP-OCRv6 medi
 
 ## エンドポイント契約
 
-### `GET /healthz`
+### `GET /health`
+
+> **命名の経緯(PR4b実機検証)**: 当初`/healthz`だったが、devのCloud Run実機で外部リクエストのみGoogle Frontend側の404で弾かれ続ける現象を確認した(内部のstartup/liveness probeからの疎通・末尾スラッシュ付き`/healthz/`は外部からも正常、新規revision作成でも再現、公式ドキュメントは外部到達可能と明記)。原因は特定できていない(未文書化のGoogle側インフラ挙動の可能性)が、回避策として`/health`に変更した。詳細は下記「Cloud Run liveness probeによるインスタンス強制入れ替え」節。
 
 ```json
 {
@@ -80,7 +82,9 @@ ADR-0025(PaddleOCR移行)のPR4: 自前ホスティングPaddleOCR(PP-OCRv6 medi
 
 ## Cloud Run liveness probeによるインスタンス強制入れ替え(PR4b)
 
-上記の通りアプリ層では真のハングを止められないため、Cloud Runの**liveness probe**(`GET /healthz`、既定`periodSeconds=30,timeoutSeconds=5,failureThreshold=10`=検知窓300秒)を導入し、`/healthz`自体が応答不能になった凍結インスタンスをプラットフォーム側からSIGKILL+強制置換する設計にした。probe失敗時の挙動(Cloud Run公式ドキュメントで確認済み): コンテナはSIGKILLで停止、処理中のリクエストはHTTP 503で終了、オートスケーリングが同一リビジョン内で新インスタンスを起動する(新リビジョン不要)。
+上記の通りアプリ層では真のハングを止められないため、Cloud Runの**liveness probe**(`GET /health`、既定`periodSeconds=30,timeoutSeconds=5,failureThreshold=10`=検知窓300秒)を導入し、`/health`自体が応答不能になった凍結インスタンスをプラットフォーム側からSIGKILL+強制置換する設計にした。probe失敗時の挙動(Cloud Run公式ドキュメントで確認済み): コンテナはSIGKILLで停止、処理中のリクエストはHTTP 503で終了、オートスケーリングが同一リビジョン内で新インスタンスを起動する(新リビジョン不要)。
+
+**エンドポイント名を`/healthz`から`/health`へ変更した経緯(PR4b実機デプロイ時)**: devへの`first_deploy=true`実デプロイで、Cloud Run内部のprobeトラフィック(`169.254.169.126`)からの`/healthz`疎通は200 OKで安定していたが、外部(curl・GitHub Actionsワークフロー)からの`/healthz`(完全一致パス)へのリクエストのみがGoogle Frontend側で404となりアプリに到達しない現象を確認した。`/healthz/`(末尾スラッシュ)や`/`・`/docs`等の他パスは外部からも正常にCloud Run/アプリ層まで到達しており、20分の待機・2回の新規revision作成でも再現し続けたため、伝播遅延やrevision固有のキャッシュではないと判断した。Cloud Run公式ドキュメントは「health checkエンドポイントは他の外部公開エンドポイントと同様に外部到達可能」と明記しており、この挙動の根本原因はGCP側の未文書化のインフラ挙動である可能性が高いが特定できていない。実務上の回避策としてエンドポイント名を`/health`に変更した。
 
 **この仕組みの限界(重要)**: liveness probeは「凍結した単一インスタンスを隔離する」防波堤であり、「リトライすれば必ず成功する」ことを保証する仕組みではない。同一の入力(特定の破損パターンを持つ画像など)が毎回ネイティブ推論をハングさせ、呼び出し元が同じ入力を再送し続ける場合、「503→リトライ→新インスタンスも同じ入力で再びハング」という置換ループが理論上起こりうる。この無限ループを防ぐ最終防波堤は、Functions側の既存リトライ上限(`maxRetries`到達で`status: error`に確定させる設計)である(PR5/PR6でPaddleOCRクライアントがこの既存基盤を使う前提、契約テストで担保すべき)。
 
@@ -102,7 +106,7 @@ docker buildx build --platform linux/amd64 -t paddle-ocr-local --load .
 docker run -p 8080:8080 paddle-ocr-local
 
 # 動作確認
-curl http://127.0.0.1:8080/healthz
+curl http://127.0.0.1:8080/health
 curl -X POST http://127.0.0.1:8080/ocr -H "Content-Type: application/pdf" --data-binary @sample.pdf
 
 # テスト(paddleocr/paddlepaddle不要、軽量)

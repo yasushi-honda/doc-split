@@ -71,31 +71,42 @@ def client():
     return TestClient(app_module.app)
 
 
-def test_healthz_reports_engine_not_loaded_when_engine_is_none(client):
+def test_health_reports_engine_not_loaded_when_engine_is_none(client):
     """ADR-0025 PR4b: ENGINE未初期化時は503を返す(startup/liveness probe対応)。
     以前は200を返していたが、これはprobeの誤判定防止としては不要と判明済み
     (lifespan startup完了までTCP接続自体がリッスンされないため)。定常状態の
     ヘルスチェック応答をより正確にするための防御的な変更として503化した。"""
     app_module.ENGINE = None
-    resp = client.get("/healthz")
+    resp = client.get("/health")
     assert resp.status_code == 503
     body = resp.json()
     assert body["modelLoaded"] is False
     assert body["status"] == "starting"
 
 
-def test_healthz_reports_model_version_when_engine_loaded(client):
+def test_health_reports_model_version_when_engine_loaded(client):
     """pr-test-analyzer指摘: ENGINE=Noneケース(503)は既にstatus_codeを検証しているが、
     loadedケース(200)側はstatus_codeを検証しておらず非対称だった。Cloud Run probeは
     HTTPステータスのみで健全性判定するため(bodyのmodelLoadedは見ない)、両方向の
     契約を回帰検知できるようにする。"""
     app_module.ENGINE = StubEngine()
-    resp = client.get("/healthz")
+    resp = client.get("/health")
     assert resp.status_code == 200
     body = resp.json()
     assert body["modelLoaded"] is True
     assert body["modelVersion"] == "stub-model-version"
     assert body["engine"] == "paddleocr"
+
+
+def test_healthz_route_no_longer_exists(client):
+    """pr-test-analyzer指摘反映: /healthzはdev実機でGoogle Frontend側に外部到達を
+    拒否され続けたため/healthへ改名した(README.md「Cloud Run liveness probeによる
+    インスタンス強制入れ替え」節参照)。将来「後方互換のため」等の理由で/healthzを
+    再度エイリアスとして追加すると、同じ実機障害を再現しうる。このテストは/healthzが
+    ルートとして存在しないことを固定し、意図しない復活を検知する。"""
+    app_module.ENGINE = StubEngine()
+    resp = client.get("/healthz")
+    assert resp.status_code == 404
 
 
 def test_ocr_rejects_unsupported_content_type(client):
@@ -212,7 +223,7 @@ def test_ocr_returns_500_when_engine_raises_unexpected_exception(client):
 
 
 def test_ocr_returns_500_when_engine_is_none(client):
-    """pr-test-analyzer指摘反映: /healthzは既にENGINE=Noneをテスト済みだが、/ocr側の
+    """pr-test-analyzer指摘反映: /healthは既にENGINE=Noneをテスト済みだが、/ocr側の
     同分岐は未テストだった。起動直後にリクエストが到達するレースを想定した防御を確認する。"""
     app_module.ENGINE = None
     pdf_bytes = _make_pdf_bytes(1)

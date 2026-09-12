@@ -367,8 +367,8 @@ jobs:
             --max-instances=3 \
             --timeout=300 \
             --cpu-boost \
-            --startup-probe="httpGet.path=/healthz,httpGet.port=8080,periodSeconds=5,timeoutSeconds=3,failureThreshold=24" \
-            --liveness-probe="httpGet.path=/healthz,httpGet.port=8080,periodSeconds=30,timeoutSeconds=5,failureThreshold=10" \
+            --startup-probe="httpGet.path=/health,httpGet.port=8080,periodSeconds=5,timeoutSeconds=3,failureThreshold=24" \
+            --liveness-probe="httpGet.path=/health,httpGet.port=8080,periodSeconds=30,timeoutSeconds=5,failureThreshold=10" \
             --update-env-vars="PADDLE_PDF_RENDER_DPI=200,MAX_PAGES=8,MAX_PIXELS=40000000,MAX_PROCESSING_SECONDS=240,IMAGE_DIGEST=${IMAGE_DIGEST}"
           SERVICE_URL=$(gcloud run services describe paddle-ocr \
             --region="$CLOUD_RUN_LOCATION" --project="$PROJECT_ID" --format='value(status.url)')
@@ -423,20 +423,24 @@ jobs:
           set -euo pipefail
           TOKEN=$(gcloud auth print-identity-token --audiences="$SERVICE_URL")
 
-          echo "=== /healthz ==="
+          echo "=== /health ==="
           # silent-failure-hunter指摘: curlは-f/--failを付けない限り、401/403/500/503等の
           # 非2xxレスポンスでも終了コード0を返す。bodyの文字列一致だけで判定すると、認証切れ・
           # run.invoker未反映・Cloud Run側の異常等のHTTPレベルの問題を「アプリのバグ」として
           # 誤診断してしまう。HTTPステータスを明示的に取得し、body判定の前にゲートする。
-          HEALTHZ_STATUS=$(curl -sS -o /tmp/healthz_body.json -w '%{http_code}' -H "Authorization: Bearer ${TOKEN}" "${SERVICE_URL}/healthz")
-          HEALTHZ_BODY=$(cat /tmp/healthz_body.json)
-          echo "$HEALTHZ_BODY"
-          if [ "$HEALTHZ_STATUS" != "200" ]; then
-            echo "ERROR: /healthz が HTTP ${HEALTHZ_STATUS} を返しました(期待値: 200): $HEALTHZ_BODY" >&2
+          # ADR-0025 PR4b実機検証で判明: パス名"/healthz"(完全一致)は、devのCloud Run実機で
+          # 外部リクエストのみGoogle Frontend側の404で弾かれ続ける現象を確認した(内部probe疎通は
+          # 正常、公式ドキュメントは外部到達可能と明記、原因不明)。回避策として"/health"に変更した
+          # (services/paddle-ocr/README.md「Cloud Run liveness probeによるインスタンス強制入れ替え」節参照)。
+          HEALTH_STATUS=$(curl -sS -o /tmp/health_body.json -w '%{http_code}' -H "Authorization: Bearer ${TOKEN}" "${SERVICE_URL}/health")
+          HEALTH_BODY=$(cat /tmp/health_body.json)
+          echo "$HEALTH_BODY"
+          if [ "$HEALTH_STATUS" != "200" ]; then
+            echo "ERROR: /health が HTTP ${HEALTH_STATUS} を返しました(期待値: 200): $HEALTH_BODY" >&2
             exit 1
           fi
-          echo "$HEALTHZ_BODY" | grep -q '"modelLoaded":true' || { echo "ERROR: modelLoaded is not true" >&2; exit 1; }
-          echo "$HEALTHZ_BODY" | grep -q "\"imageDigest\":\"${IMAGE_DIGEST}\"" || { echo "ERROR: imageDigest does not match deployed digest" >&2; exit 1; }
+          echo "$HEALTH_BODY" | grep -q '"modelLoaded":true' || { echo "ERROR: modelLoaded is not true" >&2; exit 1; }
+          echo "$HEALTH_BODY" | grep -q "\"imageDigest\":\"${IMAGE_DIGEST}\"" || { echo "ERROR: imageDigest does not match deployed digest" >&2; exit 1; }
 
           echo "=== probe設定確認 ==="
           gcloud run services describe paddle-ocr \
