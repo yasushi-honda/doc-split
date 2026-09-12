@@ -32,6 +32,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import type { PDFDocument as PDFDocumentType } from 'pdf-lib';
 import type { CustomerMaster, OfficeMaster, DocumentMaster } from '../../shared/types';
 
 const FIXTURE_DIR = path.join(__dirname, 'paddle-ocr-golden');
@@ -174,9 +175,28 @@ export function readGoldenFixturePdf(fixtureFileName: string): Buffer {
  * pdf-lib / fontkit は fixture 生成時のみ必要なため dynamic import にする
  * (scripts/fixtures/arbitrationCompareFixtures.ts と同じ設計意図)。
  */
+/** 2026-01-01T00:00:00Z を固定化(scripts/fixtures/generate-fixtures.tsと同じ決定論化パターン)。
+ * PDFDocument.create()はデフォルトで現在時刻のCreationDate/ModDate・ランダムなtrailer /IDを
+ * 埋め込むため、再生成のたびに論理内容が同一でもバイト列が変わってしまう(2026-09-12実測で
+ * 発覚: PDF再生成後にPython golden text生成をやり忘れ、コミット済みPDFとgolden textの
+ * ソースハッシュが不一致になるインシデントが発生。codex review指摘)。 */
+const FIXED_DATE = new Date(Date.UTC(2026, 0, 1, 0, 0, 0));
+const FIXED_ID_HEX = '00112233445566778899AABBCCDDEEFF';
+
 async function generateFixtures(): Promise<void> {
-  const { PDFDocument, rgb } = await import('pdf-lib');
+  const { PDFArray, PDFDocument, PDFHexString, rgb } = await import('pdf-lib');
   const fontkit = (await import('@pdf-lib/fontkit')).default;
+
+  function applyDeterminism(pdf: PDFDocumentType): void {
+    pdf.setCreationDate(FIXED_DATE);
+    pdf.setModificationDate(FIXED_DATE);
+    pdf.setProducer('docsplit-paddle-ocr-golden-fixtures');
+    pdf.setCreator('docsplit-paddle-ocr-golden-fixtures');
+    const idArray = PDFArray.withContext(pdf.context);
+    idArray.push(PDFHexString.of(FIXED_ID_HEX));
+    idArray.push(PDFHexString.of(FIXED_ID_HEX));
+    pdf.context.trailerInfo.ID = idArray;
+  }
 
   const fontPath = FONT_CANDIDATES.find((p) => fs.existsSync(p));
   if (!fontPath) {
@@ -204,6 +224,7 @@ async function generateFixtures(): Promise<void> {
       });
     }
 
+    applyDeterminism(pdf);
     const combinedBytes = await pdf.save();
 
     if (doc.pages.length === 1) {
@@ -216,6 +237,15 @@ async function generateFixtures(): Promise<void> {
       // 動的importにするのは、この関数(PDF生成時のみ実行)以外からこのファイルの
       // フィクスチャ定義をimportした際に、geminiOcrCompare.ts経由で@google/genai等の
       // 無関係な重い依存を引き込まないようにするため(functions/test/からの利用を想定)。
+      //
+      // 既知の限界: extractAllPdfPages内部は分割後の各ページを新規PDFDocument.create()で
+      // 生成し直すため(scripts/lib/geminiOcrCompare.ts:86-93)、上記のapplyDeterminism()は
+      // 分割後の単一ページPDFには及ばない(非exportのため本ファイルから制御不可)。よって
+      // golden-multipage-01の分割済みPDFは再生成のたびにバイト列が変わりうる。この対策として、
+      // functions/test/paddleOcrArbitrationRegression.test.tsがmanifest.jsonのSHA-256と
+      // 実ファイルの実ハッシュを毎回突合し、PDF再生成後にgolden text再生成を忘れた場合は
+      // テストが即座に失敗するようにしている(2026-09-12実測でこの不整合が実際に発生し、
+      // codex reviewで検出された教訓を反映)。
       const { extractAllPdfPages } = await import('../lib/geminiOcrCompare');
       const pageBuffers = await extractAllPdfPages(Buffer.from(combinedBytes));
       pageBuffers.forEach((buf, i) => {

@@ -22,6 +22,7 @@
  */
 
 import { expect } from 'chai';
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import {
@@ -99,8 +100,51 @@ interface LoadedArtifacts {
   firstPageText: string;
 }
 
+let manifestCache: Record<string, unknown> | undefined;
+function loadManifest(): Record<string, unknown> {
+  manifestCache ??= JSON.parse(fs.readFileSync(path.join(FIXTURE_DIR, 'manifest.json'), 'utf-8'));
+  return manifestCache as Record<string, unknown>;
+}
+
+function sha256File(filePath: string): string {
+  return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+}
+
+function pdfFileNamesForFixture(fixture: GoldenFixtureDoc): string[] {
+  if (fixture.pages.length === 1) return [`${fixture.fixtureBase}.pdf`];
+  return fixture.pages.map((_, i) => `${fixture.fixtureBase}-p${i + 1}.pdf`);
+}
+
+/**
+ * コミット済みPDFの実ハッシュがmanifest.jsonの記録値と一致するか検証する。
+ *
+ * 2026-09-12実測でのインシデント反映: PDF再生成(npx ts-node ... --generate-pdfs)後に
+ * golden text再生成(generate-paddle-ocr-golden-text.py)を実行し忘れ、コミット済みPDFと
+ * .expected.txt/.pages.jsonが別世代のまま混在した状態でcodex reviewに検出された。
+ * pages.json/expected.txtの内部整合性チェックだけではこの種の不整合(PDFとテキストの
+ * ソース不一致)を検知できないため、実ファイルのSHA-256をmanifest記録値と直接突合する。
+ */
+function verifyPdfProvenance(fixture: GoldenFixtureDoc): void {
+  const manifest = loadManifest() as { fixtures?: Record<string, { sourcePdfSha256?: Record<string, string> }> };
+  const recorded = manifest.fixtures?.[fixture.id]?.sourcePdfSha256;
+  if (!recorded) {
+    throw new Error(`${fixture.id}: manifest.jsonにsourcePdfSha256の記録がありません`);
+  }
+  for (const fname of pdfFileNamesForFixture(fixture)) {
+    const actualHash = sha256File(path.join(FIXTURE_DIR, fname));
+    expect(recorded[fname], `${fixture.id}: manifest.jsonに${fname}のハッシュ記録がありません`).to.exist;
+    expect(
+      actualHash,
+      `${fixture.id}: ${fname}の実ハッシュがmanifest.json記録値と不一致です。` +
+        'PDF再生成後にgolden text再生成(python3 scripts/generate-paddle-ocr-golden-text.py)を' +
+        '忘れていないか確認してください。'
+    ).to.equal(recorded[fname]);
+  }
+}
+
 /** golden text生成物(.expected.txt / .pages.json)を読み込み、内部整合性を確認する。 */
-function loadFixtureArtifacts(fixtureId: string): LoadedArtifacts {
+function loadFixtureArtifacts(fixture: GoldenFixtureDoc): LoadedArtifacts {
+  const fixtureId = fixture.id;
   const expectedPath = path.join(FIXTURE_DIR, `${fixtureId}.expected.txt`);
   const pagesPath = path.join(FIXTURE_DIR, `${fixtureId}.pages.json`);
 
@@ -111,6 +155,8 @@ function loadFixtureArtifacts(fixtureId: string): LoadedArtifacts {
         '`python3 scripts/generate-paddle-ocr-golden-text.py` を実行してコミットしてください。'
     );
   }
+
+  verifyPdfProvenance(fixture);
 
   const expectedTxt = fs.readFileSync(expectedPath, 'utf-8');
   const pages: string[] = JSON.parse(fs.readFileSync(pagesPath, 'utf-8'));
@@ -129,7 +175,7 @@ describe('PaddleOCR抽出/仲裁ロジック回帰テスト (ADR-0025 PR4前提)
   describe('Layer A: 固定済みPaddleOCR出力に対する抽出/仲裁回帰', () => {
     GOLDEN_FIXTURES.forEach((fixture: GoldenFixtureDoc) => {
       it(`${fixture.id}: 4フィールドとも期待通りに解決すること`, () => {
-        const { ocrResult, firstPageText } = loadFixtureArtifacts(fixture.id);
+        const { ocrResult, firstPageText } = loadFixtureArtifacts(fixture);
         const { documentTypeResult, customerResult, officeResult, dateResult } = runArbitrationPipeline(
           ocrResult,
           firstPageText,
