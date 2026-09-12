@@ -72,17 +72,26 @@ def client():
 
 
 def test_healthz_reports_engine_not_loaded_when_engine_is_none(client):
+    """ADR-0025 PR4b: ENGINE未初期化時は503を返す(startup/liveness probe対応)。
+    以前は200を返していたが、これはprobeの誤判定防止としては不要と判明済み
+    (lifespan startup完了までTCP接続自体がリッスンされないため)。定常状態の
+    ヘルスチェック応答をより正確にするための防御的な変更として503化した。"""
     app_module.ENGINE = None
     resp = client.get("/healthz")
-    assert resp.status_code == 200
+    assert resp.status_code == 503
     body = resp.json()
     assert body["modelLoaded"] is False
     assert body["status"] == "starting"
 
 
 def test_healthz_reports_model_version_when_engine_loaded(client):
+    """pr-test-analyzer指摘: ENGINE=Noneケース(503)は既にstatus_codeを検証しているが、
+    loadedケース(200)側はstatus_codeを検証しておらず非対称だった。Cloud Run probeは
+    HTTPステータスのみで健全性判定するため(bodyのmodelLoadedは見ない)、両方向の
+    契約を回帰検知できるようにする。"""
     app_module.ENGINE = StubEngine()
     resp = client.get("/healthz")
+    assert resp.status_code == 200
     body = resp.json()
     assert body["modelLoaded"] is True
     assert body["modelVersion"] == "stub-model-version"
