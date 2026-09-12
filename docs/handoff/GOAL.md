@@ -460,6 +460,12 @@ decision-maker承認（「正しいことを段階的かつ計画的にうっか
 
 **次の一手（次セッション再開点）**: 有効化から60時間後（目安2026-09-10 23:10 UTC以降）に`classify-drive-export-drift`をkanameoneで実行し、有効化前のベースライン（Phase 3最終確認、misplaced 42件〜49件台で推移）と比較して`misplaced`が増加していないことを確認する（計画書AC）。異常があれば`settings/features.driveFolderClaimRead: false`で即座にロールバック可能（shadowモードへ復帰、claim書き込みは継続するため既存挙動への影響はない）。
 
+**【完了・2026-09-13】AC判定: misplaced増加を確認したが、有効化との因果関係なしと判定・ロールバック見送り**: トリガー（60時間経過）から3日超過していたため`classify-drive-export-drift`をkanameone全体で実行（run [34723740796](https://github.com/yasushi-honda/doc-split/actions/runs/34723740796)）。結果`scanned=6785 healthy=6617(97.5%) misplaced=97`と、ベースライン（42〜49件）から倍増しAC単純比較では不合格。
+
+- **内訳精査（read-only、`diagnose-drive-folder-duplicate-causality`スクリプトで97件の(旧,新)フォルダペア計141IDをDrive API直接参照）**: ①真の物理フォルダ重複10件（顧客7名: 森奈穂美担当5名+赤崎早江1名+宮崎幸代1名、フォルダ作成日時は全て8/6〜8/26）②旧フォルダ完全削除+新フォルダtrashed済み4件（平出勝己担当2名、作成8/28）③カテゴリ再分類ドリフト（異名フォルダ間、無害寄り）83件（新フォルダ作成日時は8月73件+9月上旬8件）
+- **判定根拠**: `driveFolderClaimRead`有効化（目安2026-09-08、60時間判定基準2026-09-10 23:10 UTC）**より後に作成されたフォルダは97件中0件**。全ての乖離が有効化前から存在していた既存事象であり、有効化が新規の物理的フォルダ重複を誘発した証拠は見当たらない。83件のカテゴリ再分類ドリフトも2026-08-30分析（78%が無害な再分類）と同種のパターン
+- **decision-maker判断（AskUserQuestion経由）**: 因果関係なしと判定しロールバック見送り、現状維持。未修復の物理重複7顧客分（10件）は別途修復タスクとして残存（`execute-drive-export-repair`等の既存修復パスの対象、本セッションではスコープ外）
+
 **【知見・2026-09-08】cocoro Phase C待ちの間の事前点検（read-only、コード変更なし）**: kanameoneのロールアウト完了を受け、cocoro側でPhase C（クライアント側Drive OAuth接続）完了時に備えて先行点検を実施した。
 
 - コード鮮度: `functions/src/drive`配下、cocoroの最終デプロイ（2026-08-30、claimプロトコルPR-3+PR-4含む）以降に新規コミットなし。追加デプロイ不要
