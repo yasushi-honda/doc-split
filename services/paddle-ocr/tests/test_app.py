@@ -98,6 +98,17 @@ def test_health_reports_model_version_when_engine_loaded(client):
     assert body["engine"] == "paddleocr"
 
 
+def test_healthz_route_no_longer_exists(client):
+    """pr-test-analyzer指摘反映: /healthzはdev実機でGoogle Frontend側に外部到達を
+    拒否され続けたため/healthへ改名した(README.md「Cloud Run liveness probeによる
+    インスタンス強制入れ替え」節参照)。将来「後方互換のため」等の理由で/healthzを
+    再度エイリアスとして追加すると、同じ実機障害を再現しうる。このテストは/healthzが
+    ルートとして存在しないことを固定し、意図しない復活を検知する。"""
+    app_module.ENGINE = StubEngine()
+    resp = client.get("/healthz")
+    assert resp.status_code == 404
+
+
 def test_ocr_rejects_unsupported_content_type(client):
     app_module.ENGINE = StubEngine()
     resp = client.post("/ocr", content=b"not-a-real-file", headers={"content-type": "text/plain"})
