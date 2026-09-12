@@ -1,7 +1,14 @@
 """ADR-0025 PR4a: PaddleOCR Cloud Runサービス(FastAPI)。
 
 エンドポイント契約:
-- GET /healthz: エンジンの状態・モデルバージョン等を返す。OCRは実行しない(軽量)。
+- GET /health: エンジンの状態・モデルバージョン等を返す。OCRは実行しない(軽量)。
+  ADR-0025 PR4b実機検証で判明: パス名"/healthz"(完全一致)は、devのCloud Run実機で
+  外部リクエストのみGoogle Frontend側の404で弾かれ続ける現象を確認した(内部の
+  startup/liveness probeからの"/healthz"疎通は正常、"/healthz/"末尾スラッシュは
+  外部からも正常到達、新規revision作成でも再現)。公式ドキュメントは
+  「health checkエンドポイントは他の外部公開エンドポイントと同様に外部到達可能」と
+  明記しており原因不明(未文書化のGoogle側インフラ挙動の可能性)。回避策として
+  パス名を"/health"に変更した。
 - POST /ocr: 生バイナリbody(Content-Typeでpdf/jpeg/png/tiff/gifを判定)を受け取り、
   {text, pages, pageCount, engine, modelVersion, lang, renderDpi, processingMs} を返す。
 
@@ -78,7 +85,7 @@ def _error_response(status_code: int, code: str, message: str, *, limit: Optiona
     return JSONResponse(status_code=status_code, content=body)
 
 
-@app.get("/healthz")
+@app.get("/health")
 def healthz():
     # ADR-0025 PR4b: ENGINE未初期化時は503を返す(以前は常に200)。ASGI lifespanの
     # startup完了までTCP接続自体がリッスンされないため(実測確認済み)、Cloud Runの

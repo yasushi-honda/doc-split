@@ -77,7 +77,7 @@ def test_healthz_reports_engine_not_loaded_when_engine_is_none(client):
     (lifespan startup完了までTCP接続自体がリッスンされないため)。定常状態の
     ヘルスチェック応答をより正確にするための防御的な変更として503化した。"""
     app_module.ENGINE = None
-    resp = client.get("/healthz")
+    resp = client.get("/health")
     assert resp.status_code == 503
     body = resp.json()
     assert body["modelLoaded"] is False
@@ -90,7 +90,7 @@ def test_healthz_reports_model_version_when_engine_loaded(client):
     HTTPステータスのみで健全性判定するため(bodyのmodelLoadedは見ない)、両方向の
     契約を回帰検知できるようにする。"""
     app_module.ENGINE = StubEngine()
-    resp = client.get("/healthz")
+    resp = client.get("/health")
     assert resp.status_code == 200
     body = resp.json()
     assert body["modelLoaded"] is True
@@ -212,7 +212,7 @@ def test_ocr_returns_500_when_engine_raises_unexpected_exception(client):
 
 
 def test_ocr_returns_500_when_engine_is_none(client):
-    """pr-test-analyzer指摘反映: /healthzは既にENGINE=Noneをテスト済みだが、/ocr側の
+    """pr-test-analyzer指摘反映: /healthは既にENGINE=Noneをテスト済みだが、/ocr側の
     同分岐は未テストだった。起動直後にリクエストが到達するレースを想定した防御を確認する。"""
     app_module.ENGINE = None
     pdf_bytes = _make_pdf_bytes(1)
