@@ -147,8 +147,13 @@ export const GOLDEN_FIXTURES: GoldenFixtureDoc[] = [
     fixtureBase: 'golden_multipage_01',
     fileName: 'golden_multipage_01_ケアプラン.pdf',
     title: 'ケアプラン',
-    // 2ページ文書。1ページ目に正解の日付、2ページ目にdistractorの日付を配置し、
-    // extractDateEnhancedのfirstPageText優先経路(ocrProcessor.ts:434)を検証する。
+    // 2ページ文書。本番のPDF分割→OCR→ページヘッダ付き結合という構造的な経路を検証する。
+    // 注意(pr-test-analyzer指摘反映): dateMarker「作成日」が1ページ目にのみ実文書として
+    // 出現するため、この文書単体ではfirstPageText優先分岐(extractors.ts:1120-1150)の
+    // 必要性までは差別化できない(firstPageTextなしでもマーカー近傍探索で同じ正解に
+    // 到達してしまう)。firstPageText優先分岐そのものの直接検証は
+    // functions/test/paddleOcrArbitrationRegression.test.tsの
+    // 「extractDateEnhanced: firstPageText優先経路の直接検証」で別途行う。
     pages: [
       ['利用者: 山田太郎 様', '事業所: あおぞらデイサービスセンター', '作成日: 2026年8月20日'],
       ['次回見直し予定: 2026年11月20日'],

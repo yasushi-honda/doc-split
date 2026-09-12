@@ -48,10 +48,17 @@ import {
 const FIXTURE_DIR = path.join(__dirname, '..', '..', 'scripts', 'fixtures', 'paddle-ocr-golden');
 
 /** 本番functions/src/ocr/ocrProcessor.tsと同じ呼出順(:381-434)で抽出/仲裁パイプラインを実行する。
- * candidateは全てnull固定(Pass2無効時のベースライン抽出、~/.claude/plans/fuzzy-moseying-book.md v5参照)。 */
+ * candidateは全てnull固定(Pass2無効時のベースライン抽出、~/.claude/plans/fuzzy-moseying-book.md v5参照)。
+ * candidate=null時、各arbitrate*()は`isGroundedInText(null, ...)`がfalseになるためexistingを
+ * そのまま素通しするだけで、候補への昇格・exact match再照合等の分岐には到達しない
+ * (pr-test-analyzer指摘反映: 「仲裁ロジックの検証」ではなく「Pass2無効時のベースライン抽出の
+ * 安全性検証」であることをコードからも明示)。 */
 function runArbitrationPipeline(ocrResult: string, firstPageText: string, fileName: string) {
   const documentTypeBase = extractDocumentTypeEnhanced(ocrResult, GOLDEN_DOCUMENT_MASTERS);
   const documentTypeResult = arbitrateDocumentType(documentTypeBase, null, GOLDEN_DOCUMENT_MASTERS, ocrResult);
+  // documentTypeResult.documentTypeがnull(マスタ完全不一致)になるケースは全fixtureで
+  // 発生しない。fax劣化等の画像品質劣化と同様、本タスクでは意図的にスコープ外
+  // (pr-test-analyzer指摘反映)。
 
   const customerBase = extractCustomerCandidates(ocrResult, GOLDEN_CUSTOMER_MASTERS);
   const customerResult = arbitrateCustomerName(customerBase, null, GOLDEN_CUSTOMER_MASTERS, ocrResult);
@@ -267,6 +274,31 @@ describe('PaddleOCR抽出/仲裁ロジック回帰テスト (ADR-0025 PR4前提)
         assertField(dateResult.formattedDate, riskCase.date, `${riskCase.id}.date`);
         riskCase.extraAssert?.(officeResult);
       });
+    });
+  });
+
+  describe('extractDateEnhanced: firstPageText優先経路の直接検証(pr-test-analyzer指摘反映)', () => {
+    // golden-multipage-01(Layer A)は、正解日付の直近に dateMarker「作成日」が実文書として
+    // 出現するため、firstPageTextを渡さなくても本番のマーカー近傍探索(textNormalizer.ts:
+    // selectMostReasonableDate)だけで同じ正解に到達してしまい、firstPageText優先分岐
+    // (extractors.ts:1120-1150)が壊れても検知できないことが判明した(pr-test-analyzer実測)。
+    // ここでは、正解日付をdateMarkerの出現しない1ページ目に、誤った日付をdateMarkerの
+    // 出現する2ページ目に人工的に配置し、firstPageText優先分岐そのものの必要性を直接証明する。
+    const ocrResult =
+      '--- Page 1 ---\n利用者: 山田太郎 様\n事業所: あおぞらデイサービスセンター\n2026年8月20日 訪問\n\n--- Page 2 ---\n作成日: 2026年11月20日';
+    const firstPageText = '利用者: 山田太郎 様\n事業所: あおぞらデイサービスセンター\n2026年8月20日 訪問';
+
+    it('firstPageTextを渡すと1ページ目の日付(正解)が優先されること', () => {
+      const result = extractDateEnhanced(ocrResult, '作成日', firstPageText);
+      expect(result.formattedDate, 'firstPageText優先分岐が機能していません').to.equal('2026/08/20');
+    });
+
+    it('firstPageTextを渡さない場合はdateMarker近傍探索により2ページ目の日付が選ばれること(firstPageText優先分岐が必要であることの証明)', () => {
+      const result = extractDateEnhanced(ocrResult, '作成日');
+      expect(
+        result.formattedDate,
+        'この結果が2026/08/20になった場合、上のfirstPageText優先分岐は無くても同じ結果になる=直接検証になっていない'
+      ).to.equal('2026/11/20');
     });
   });
 });
