@@ -109,16 +109,17 @@ async def _read_body_with_limit(request: Request) -> bytes:
     return b"".join(chunks)
 
 
-def _log_late_page_result(future: "asyncio.Future[str]") -> None:
-    """タイムアウト応答を返した後もバックグラウンドで実行が続く推論の結果を破棄しつつ、
-    例外だけはログに残す(add_done_callbackが失敗を握り潰す=silent failureにしないため)。
+def _log_late_future_result(future: "asyncio.Future") -> None:
+    """タイムアウト応答を返した後もバックグラウンドで実行が続く処理(ラスタライズ/OCR推論)の
+    結果を破棄しつつ、例外だけはログに残す(add_done_callbackが失敗を握り潰す=silent failure
+    にしないため)。
     """
     try:
         future.result()
     except asyncio.CancelledError:
         pass
     except Exception:
-        logger.exception("OCR_ENGINE_ERROR (タイムアウト応答後に完了した推論で例外)")
+        logger.exception("タイムアウト応答後にバックグラウンドで完了した処理で例外")
 
 
 @app.post("/ocr")
@@ -166,19 +167,46 @@ async def ocr(request: Request):
         rgb_page_iter = image_to_rgb(data, limits=LIMITS)
 
     loop = asyncio.get_running_loop()
+    _RASTER_DONE = object()
+
+    def _next_raster_page():
+        try:
+            return next(rgb_page_iter)
+        except StopIteration:
+            return _RASTER_DONE
 
     try:
         pages: list[str] = []
         # raster側のgeneratorを1ページずつ消費し、OCR後は次ページの参照を保持しない
         # (codex review指摘: list()で全ページを先に確保すると、8ページ×4000万ピクセルで
         # 約960MBを同時保持しラスタライズのメモリ上限設計が無効化されるため)。
-        for rgb in rgb_page_iter:
+        while True:
             if _timed_out():
                 return _error_response(
                     504,
                     "PROCESSING_TIMEOUT",
                     f"ラスタライズ処理が制限時間を超過しました(上限: {MAX_PROCESSING_SECONDS}秒)",
                 )
+            # codex review指摘: pdfium/Pillowによるラスタライズ(next(rgb_page_iter))も
+            # 同期・CPUバウンドな呼び出しであり、そのままasync def内で呼ぶとイベントループを
+            # ブロックする(OCR推論と同一のクラスの問題)。OCR推論と同じ
+            # run_in_executor+asyncio.waitパターンで非ブロッキング化する。既知の限界も同様:
+            # GILを解放しない真のハングには無力(README.md「既知の限界」節参照)。
+            remaining = max(MAX_PROCESSING_SECONDS - (time.monotonic() - started), 0)
+            raster_future = loop.run_in_executor(None, _next_raster_page)
+            _, pending = await asyncio.wait({raster_future}, timeout=remaining)
+            if pending:
+                raster_future.add_done_callback(_log_late_future_result)
+                logger.warning("PROCESSING_TIMEOUT: ラスタライズが制限時間を超過しました")
+                return _error_response(
+                    504,
+                    "PROCESSING_TIMEOUT",
+                    f"ラスタライズ処理が制限時間を超過しました(上限: {MAX_PROCESSING_SECONDS}秒)",
+                )
+            rgb = raster_future.result()
+            if rgb is _RASTER_DONE:
+                break
+
             remaining = max(MAX_PROCESSING_SECONDS - (time.monotonic() - started), 0)
             # codex review指摘: ENGINE.page_text()は同期・CPUバウンドな呼び出しであり、
             # async def内でそのまま呼ぶとイベントループをその呼び出しが完了するまで
@@ -212,7 +240,7 @@ async def ocr(request: Request):
             page_future = loop.run_in_executor(None, ENGINE.page_text, rgb)
             _, pending = await asyncio.wait({page_future}, timeout=remaining)
             if pending:
-                page_future.add_done_callback(_log_late_page_result)
+                page_future.add_done_callback(_log_late_future_result)
                 logger.warning("PROCESSING_TIMEOUT: OCR推論が制限時間を超過しました")
                 return _error_response(
                     504,

@@ -308,14 +308,40 @@ def test_ocr_times_out_after_last_page_inference_exceeds_budget(client, monkeypa
     assert resp.json()["error"]["code"] == "PROCESSING_TIMEOUT"
 
 
-def test_ocr_timeout_does_not_wait_for_slow_inference_to_complete(monkeypatch):
-    """codex review指摘反映(2回目)の中核: MAX_PROCESSING_SECONDSを超える推論に対して、
-    レスポンスが推論の完了を待たずに返ることを、TestClientのportal破棄処理を経由しない
-    直接のコルーチン呼び出しで実測する(上記テストのコメント参照、本番のuvicorn常駐
-    イベントループに近い条件で検証するため)。"""
+async def _call_ocr_directly(pdf_bytes: bytes) -> tuple[float, object]:
+    """TestClientのportal破棄処理(with文なし利用時、リクエストごとにanyioの
+    blocking portalを生成・破棄し、その破棄処理がbackgroundで走り続けるrun_in_executorの
+    Futureの完了を待ってしまう)を経由しない、直接のコルーチン呼び出し。本番のuvicorn
+    常駐イベントループに近い条件でタイムアウトの応答時間を実測するために使う。"""
     import time as time_module
 
     from starlette.requests import Request
+
+    sent = False
+
+    async def receive():
+        nonlocal sent
+        if not sent:
+            sent = True
+            return {"type": "http.request", "body": pdf_bytes, "more_body": False}
+        return {"type": "http.disconnect"}
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/ocr",
+        "headers": [(b"content-type", b"application/pdf")],
+    }
+    request = Request(scope, receive)
+    started = time_module.monotonic()
+    result = await app_module.ocr(request)
+    return time_module.monotonic() - started, result
+
+
+def test_ocr_timeout_does_not_wait_for_slow_inference_to_complete(monkeypatch):
+    """codex review指摘反映(2回目)の中核: MAX_PROCESSING_SECONDSを超える推論に対して、
+    レスポンスが推論の完了を待たずに返ることを実測する(_call_ocr_directlyのdocstring参照)。"""
+    import time as time_module
 
     class SlowStubEngine(StubEngine):
         def page_text(self, rgb_array) -> str:
@@ -326,33 +352,36 @@ def test_ocr_timeout_does_not_wait_for_slow_inference_to_complete(monkeypatch):
     app_module.ENGINE = SlowStubEngine()
     pdf_bytes = _make_pdf_bytes(1)
 
-    async def run_once() -> tuple[float, object]:
-        sent = False
-
-        async def receive():
-            nonlocal sent
-            if not sent:
-                sent = True
-                return {"type": "http.request", "body": pdf_bytes, "more_body": False}
-            return {"type": "http.disconnect"}
-
-        scope = {
-            "type": "http",
-            "method": "POST",
-            "path": "/ocr",
-            "headers": [(b"content-type", b"application/pdf")],
-        }
-        request = Request(scope, receive)
-        started = time_module.monotonic()
-        result = await app_module.ocr(request)
-        return time_module.monotonic() - started, result
-
-    elapsed, result = asyncio.run(run_once())
+    elapsed, result = asyncio.run(_call_ocr_directly(pdf_bytes))
 
     assert result.status_code == 504
     body = json.loads(result.body)
     assert body["error"]["code"] == "PROCESSING_TIMEOUT"
     # 推論の完了(2.0秒)を待たずに、予算超過時点(0.05秒)で応答が返っていること。
+    assert elapsed < 1.0
+
+
+def test_ocr_timeout_does_not_wait_for_slow_rasterization_to_complete(monkeypatch):
+    """codex review指摘反映(3回目): ラスタライズ(next(rgb_page_iter))も同期・CPUバウンドな
+    呼び出しであり、OCR推論と同じrun_in_executor+asyncio.waitパターンで非ブロッキング化した。
+    ラスタライズ自体が予算を超過する場合も、完了を待たずに504が返ることを実測する。"""
+    import time as time_module
+
+    def slow_pdf_pages_to_rgb(data, *, dpi, limits):
+        time_module.sleep(2.0)
+        yield object()
+
+    monkeypatch.setattr(app_module, "pdf_pages_to_rgb", slow_pdf_pages_to_rgb)
+    monkeypatch.setattr(app_module, "MAX_PROCESSING_SECONDS", 0.05)
+    app_module.ENGINE = StubEngine()
+    pdf_bytes = _make_pdf_bytes(1)
+
+    elapsed, result = asyncio.run(_call_ocr_directly(pdf_bytes))
+
+    assert result.status_code == 504
+    body = json.loads(result.body)
+    assert body["error"]["code"] == "PROCESSING_TIMEOUT"
+    # ラスタライズの完了(2.0秒)を待たずに、予算超過時点(0.05秒)で応答が返っていること。
     assert elapsed < 1.0
 
 

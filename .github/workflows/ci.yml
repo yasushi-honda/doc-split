@@ -76,6 +76,22 @@ jobs:
         # 依存は上のnpm ciで解決済み、emulator不要で数秒。
         run: cd frontend && npm test
 
+      - name: Setup Python (paddle-ocr service tests)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Run paddle-ocr service tests
+        # services/paddle-ocr/tests/ (HTTP契約・入力上限・タイムアウト回帰を含む)は
+        # これまでCIで一切実行されていなかった(codex review指摘、ADR-0025 PR4a)。
+        # requirements-test.txt はpaddleocr/paddlepaddle等の重量パッケージを除いた
+        # 軽量サブセットであり、conftest.py+ENGINEスタブ化の設計によりpaddleocr自体の
+        # importは不要(数秒で完結)。
+        run: |
+          cd services/paddle-ocr
+          pip install -r requirements-test.txt
+          python3 -m pytest tests/ -v
+
       - name: Run customer identity gate integration tests (Firestore emulator)
         # functions/test/exportDocumentIntegration.test.tsの顧客未確定ゲート13ケースは
         # test/*Integration.test.tsがnpm run test:functionsの対象外(functions/package.json)
