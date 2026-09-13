@@ -23,7 +23,16 @@ Gemini(Vertex AI日本リージョン非公式動作)からの移行として、
 
 **残タスク（次セッション、詳細はplanファイル参照）**:
 - [x] D-1(liveness probe)実効性検証【完了・2026-09-13】: `app.py`にテスト専用`FORCE_HEALTH_FAIL_AFTER_SECONDS`環境変数ゲートを追加(PR #911)し、隔離revision(`--tag`、トラフィック0%)+短縮probe(15秒窓)で決定論的に`/health`を失敗させたところ、Cloud Runログで`LIVENESS HTTP probe failed 3 times consecutively ... The instance has been shut down.`を実測確認(60秒後の3回連続503→強制終了)。本番トラフィック(100%固定revision)への影響なしを確認、テストrevisionは削除済み。詳細は`services/paddle-ocr/README.md`「D-1実効性検証結果」節参照
-- [ ] PR4c: `scripts/paddle-ocr-verify.ts`による1/20/71/160ページ負荷試験・golden/png精度検証、PR6着手可否のゲート判定（`fuzzy-moseying-book.md`§4参照）
+- [x] PR4c Stage 1【完了・2026-09-13】: `scripts/paddle-ocr-verify.ts`golden一次スクリーニングハーネスをcodex review 14ラウンド+pr-review-toolkit並列レビューで収束、PR #912マージ。dev実機計測で**1ページあたり93.3秒**(承認済みゲート1p<=30秒等を4〜8倍下回る、PaddleOCR公式ベンチマーク2.05秒/画像とも約45倍乖離)という深刻な問題を発見
+- [x] PR4c Stage 2(速度改善調査)【完了・2026-09-14】: 根本原因を段階的に特定・解消した
+  - `cpu_threads`未指定によるオーバーサブスクリプション(PaddleOCRデフォルト10 vs Cloud Run `--cpu=2`)解消 → 93.3秒→71秒
+  - `execution-environment=gen2`(Cloud Run新実行環境)適用 → 71秒→41.6秒
+  - **決定的要因**: `enable_mkldnn=True`が実機で`(Unimplemented) ConvertPirAttribute2RuntimeAttribute not support`(onednn_instruction.cc)でクラッシュする不具合は、Cloud Run固有ではなく**PaddlePaddle 3.3.0系の既知アップストリームバグ**と判明(公式Issue `PaddlePaddle/Paddle#77340`、修正PR#77430はdevelopへマージ済みだがどのPyPI公開版にも未反映)。`paddlepaddle==3.2.2`への切り戻しで解消することを実機確認
+  - `paddlepaddle==3.2.2`+`enable_mkldnn=True`+`cpu_threads=4`/`--cpu=4`+`execution-environment=gen2`の組み合わせで**1ページあたりp50=6.4秒/p95=7.4秒**まで改善(元の93.3秒から約14.6倍、golden 18/18文字単位一致は維持)。承認済み3ゲート(1p<=30秒/20p<=400秒/71p<=850秒)を**全てPASS**
+  - `scripts/generate-paddle-ocr-golden-text.py`もproduction設定と同期し実際に再生成、golden text/pages.jsonが完全同一であることを確認(manifest.jsonのバージョン記録のみ変化)
+  - 一般的な技術知見(PaddlePaddleバグの詳細)は`~/.claude/memory/reference_paddlepaddle_330_mkldnn_pir_crash.md`(グローバルメモリ)に記録済み
+  - GPU化(GKE/Cloud Batch、GPUクォータ増加申請済み・審査待ち)・AWS Lambda/EC2検証は、この結果を受けて不要と判断(いずれも未着手のまま保留)
+- [ ] **次の一手**: `feature/paddle-ocr-pr4c-cpu-mkldnn-speedup`ブランチ(codex review 0件、scripts/npm test 330件パス、services/paddle-ocr pytest 45件パス)をPRとして起票・マージするかdecision-makerの最終判断待ち。マージ後の残課題: (a) Cloud Functions第2世代の540秒上限(71ページ×7.4秒=約525秒、安全マージン約15秒とまだ薄い、非同期化・ページ単位分割の要否は未検討) (b) Stage 3負荷試験(160ページ等、`fuzzy-moseying-book.md`§4参照)は未着手
 
 **現在のミッション（下記「現在のミッション」節、Google Drive連携）との関係**: 完全に独立した並行トラック。優先度判断はdecision-maker領分。
 

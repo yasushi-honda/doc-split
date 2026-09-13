@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-09-12T07:17:12.890375+00:00",
-  "generatorGitCommit": "fba3540b64565694ea58fd8895ec799338e4da9e",
+  "generatedAt": "2026-09-13T22:53:05.224455+00:00",
+  "generatorGitCommit": "b0113f19e958755aaf3982b7d92f154136cc619f",
   "renderDpi": 200,
   "engine": "paddleocr",
   "textDetectionModelName": "PP-OCRv6_medium_det",
@@ -22,7 +22,7 @@
     "inference.yml": "991b700facf5b50a7de193468207d5f4255b538dde0d312ae3b7c7a9b6873129"
   },
   "paddleocrVersion": "3.7.0",
-  "paddlepaddleVersion": "3.3.1",
+  "paddlepaddleVersion": "3.2.2",
   "pypdfium2Version": "4.30.0",
   "pythonVersion": "3.12.12 (main, Oct  9 2025, 11:07:00) [Clang 17.0.0 (clang-1700.4.4.1)]",
   "platform": "macOS-26.6.2-arm64-arm-64bit",

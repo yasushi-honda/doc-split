@@ -96,13 +96,20 @@ def build_engine(model_root: Path, expected_hashes: dict) -> PaddleOcrEngine:
     # lang指定はtext_detection_model_name/text_recognition_model_name指定時は無視される
     # (scripts/generate-paddle-ocr-golden-text.pyで実測済みの挙動)ため渡さない。
     #
-    # enable_mkldnn=False(PR4a実機検証で追加): linux/amd64コンテナ(Cloud Run想定環境)で
-    # デフォルトのmkldnn実行パスを使うと
+    # enable_mkldnn=True + paddlepaddle==3.2.2(ADR-0025 PR4c、2026-09-14 CPU速度改善):
+    # PR4a実機検証時点ではenable_mkldnn=True(paddlepaddle 3.3.1)がlinux/amd64コンテナで
     # "(Unimplemented) ConvertPirAttribute2RuntimeAttribute not support [...]"
-    # (onednn_instruction.cc)で推論が例外終了することを実機確認した。mkldnnはCPU推論の
-    # 高速化オプションであり正解性には影響しないため、無効化して安全側に倒す。
-    # 無効化後、golden fixture(golden_plain_01.pdf)でarm64生成時と文字単位で完全一致する
-    # OCR結果が得られることを確認済み。
+    # (onednn_instruction.cc)によりクラッシュしたため無効化していた。原因を追跡した結果、
+    # paddlepaddle 3.3.0で導入された新IR(PIR)とoneDNN命令変換の組み合わせバグと判明
+    # (公式Issue: PaddlePaddle/Paddle#77340。修正PR#77430はdevelopへ2026-04-16マージ済みだが
+    # 2026-09時点のどのPyPI公開版にも未反映)。paddlepaddle==3.2.2(このバグ導入前の最終安定版)
+    # へrequirements.txtを切り戻すことでenable_mkldnn=Trueが正常動作することを実機確認した。
+    #
+    # cpu_threads=4/--cpu=4(.github/workflows/deploy-paddle-ocr.yml、vCPU数に一致させ
+    # オーバーサブスクリプションを回避)・execution-environment=gen2(Cloud Run新実行環境、
+    # 公式にCPU性能向上と明記)と合わせて、1ページあたりp50=6.4秒/p95=7.4秒まで改善
+    # (旧構成93.3秒から約14.6倍)。承認済みゲート基準(1p<=30秒/20p<=400秒/71p<=850秒)を
+    # 全て満たすことを実機golden計測(18/18文字単位一致)で確認済み。
     engine = PaddleOCR(
         text_detection_model_name=DET_MODEL_NAME,
         text_detection_model_dir=str(det_dir),
@@ -111,7 +118,8 @@ def build_engine(model_root: Path, expected_hashes: dict) -> PaddleOcrEngine:
         use_doc_orientation_classify=False,
         use_doc_unwarping=False,
         use_textline_orientation=False,
-        enable_mkldnn=False,
+        enable_mkldnn=True,
+        cpu_threads=4,
     )
 
     det_hash12 = expected_hashes["textDetection"]["fileHashes"]["inference.pdiparams"][:12]
