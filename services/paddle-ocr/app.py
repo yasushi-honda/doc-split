@@ -224,6 +224,9 @@ async def ocr(request: Request):
             # run_in_executor+asyncio.waitパターンで非ブロッキング化する。既知の限界も同様:
             # GILを解放しない真のハングには無力(README.md「既知の限界」節参照)。
             remaining = max(MAX_PROCESSING_SECONDS - (time.monotonic() - started), 0)
+            # ADR-0025 PR4c Phase A(実験用、一時計測、mainへ非マージ): 93.3秒/ページの内訳を
+            # ラスタライズ/OCR推論に分解するため、区間タイミングを記録する。
+            _raster_started = time.monotonic()
             raster_future = loop.run_in_executor(None, _next_raster_page)
             _, pending = await asyncio.wait({raster_future}, timeout=remaining)
             if pending:
@@ -235,6 +238,10 @@ async def ocr(request: Request):
                     f"ラスタライズ処理が制限時間を超過しました(上限: {MAX_PROCESSING_SECONDS}秒)",
                 )
             rgb = raster_future.result()
+            logger.info(
+                "PHASE_A_TIMING raster_ms=%d",
+                int((time.monotonic() - _raster_started) * 1000),
+            )
             if rgb is _RASTER_DONE:
                 break
 
@@ -268,6 +275,8 @@ async def ocr(request: Request):
             # その待機自体もGILが取れず機能せず、中途半端に導入すると「幽霊推論が
             # 終わるまで503を連発する劣化インスタンス」を作るだけで根本解決にならない
             # ため見送った(セカンドオピニオン2件の一致した結論)。
+            # ADR-0025 PR4c Phase A(実験用、一時計測、mainへ非マージ)
+            _ocr_started = time.monotonic()
             page_future = loop.run_in_executor(None, ENGINE.page_text, rgb)
             _, pending = await asyncio.wait({page_future}, timeout=remaining)
             if pending:
@@ -278,6 +287,10 @@ async def ocr(request: Request):
                     "PROCESSING_TIMEOUT",
                     f"OCR処理が制限時間を超過しました(上限: {MAX_PROCESSING_SECONDS}秒)",
                 )
+            logger.info(
+                "PHASE_A_TIMING ocr_ms=%d",
+                int((time.monotonic() - _ocr_started) * 1000),
+            )
             pages.append(page_future.result())
     except InputRejected as e:
         logger.warning("%s: %s", e.code, e.message)
