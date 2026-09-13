@@ -22,7 +22,7 @@ Gemini(Vertex AI日本リージョン非公式動作)からの移行として、
 **サービスURL(dev)**: `https://paddle-ocr-whfgr6jwaa-an.a.run.app`（`scripts/clients/dev.env`の`PADDLE_OCR_URL`参照）
 
 **残タスク（次セッション、詳細はplanファイル参照）**:
-- [ ] D-1(liveness probe)実効性検証: テスト専用の隔離revision(`--no-traffic`)で`/health`を決定論的に失敗させ、liveness probeがインスタンスを強制入れ替えすることをCloud Runログで確認（`fuzzy-moseying-book.md`「PR4b-4. 受け入れ確認」④参照）
+- [x] D-1(liveness probe)実効性検証【完了・2026-09-13】: `app.py`にテスト専用`FORCE_HEALTH_FAIL_AFTER_SECONDS`環境変数ゲートを追加(PR #911)し、隔離revision(`--tag`、トラフィック0%)+短縮probe(15秒窓)で決定論的に`/health`を失敗させたところ、Cloud Runログで`LIVENESS HTTP probe failed 3 times consecutively ... The instance has been shut down.`を実測確認(60秒後の3回連続503→強制終了)。本番トラフィック(100%固定revision)への影響なしを確認、テストrevisionは削除済み。詳細は`services/paddle-ocr/README.md`「D-1実効性検証結果」節参照
 - [ ] PR4c: `scripts/paddle-ocr-verify.ts`による1/20/71/160ページ負荷試験・golden/png精度検証、PR6着手可否のゲート判定（`fuzzy-moseying-book.md`§4参照）
 
 **現在のミッション（下記「現在のミッション」節、Google Drive連携）との関係**: 完全に独立した並行トラック。優先度判断はdecision-maker領分。

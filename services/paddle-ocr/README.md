@@ -92,6 +92,18 @@ ADR-0025(PaddleOCR移行)のPR4: 自前ホスティングPaddleOCR(PP-OCRv6 medi
 
 liveness窓(300秒)はPR4b時点では暫定値であり、Cloud Run実機での単一ページ処理時間の実測(p95/最大値)を確認したうえで、PR4c完了後に最終値を確定する。
 
+### D-1実効性検証結果(2026-09-13、dev実機)
+
+`app.py`にテスト専用の`FORCE_HEALTH_FAIL_AFTER_SECONDS`環境変数ゲート(本番未設定=無効、起動から指定秒数経過後の`/health`を決定論的に503にする)を追加し、隔離revision(`--tag`、トラフィック0%)に短縮したprobe設定(`periodSeconds=5,timeoutSeconds=3,failureThreshold=3`=15秒窓)+`FORCE_HEALTH_FAIL_AFTER_SECONDS=60`を投入して検証した。
+
+Cloud Runログで以下を実測確認した:
+
+- `00:08:53`: STARTUP probe成功(7回目の試行)、初回LIVENESS probe成功(モデルロード完了・正常応答を実際に確認してから合格させている)
+- `00:09:28`〜`00:09:38`: 60秒経過後、`/health`が3回連続で503(`{"status":"forced-failure",...}`)を返す
+- `00:09:38`: `LIVENESS HTTP probe failed 3 times consecutively for container "paddle-ocr-1" ... The instance has been shut down.`(SIGTERM、決定論的に発火)
+
+「凍結した(疑似)インスタンスをCloud Runのliveness probeが検知し強制終了する」という設計上の防波堤が実機で機能することを確認した。検証後、テスト用revisionは削除し、本番トラフィック(100%固定revision)には影響がないことを確認済み。
+
 ## PR4c実測値(未実施)
 
 Cloud Run実機での1/20/71/160ページ負荷試験結果は、PR4c完了後にここへ追記する。
