@@ -104,13 +104,12 @@ def build_engine(model_root: Path, expected_hashes: dict) -> PaddleOcrEngine:
     # 無効化後、golden fixture(golden_plain_01.pdf)でarm64生成時と文字単位で完全一致する
     # OCR結果が得られることを確認済み。
     #
-    # cpu_threads=2(ADR-0025 PR4c Phase 1実験、実験ブランチ限定): PaddleOCRの
-    # DEFAULT_CPU_THREADS(paddleocr/_constants.py)は10だが、Cloud Runのコンテナ割当は
-    # --cpu=2(.github/workflows/deploy-paddle-ocr.yml)であり、未指定のままだと2 vCPU上で
-    # OpenBLAS/OpenMP系の数値計算スレッドが10本走る5倍のオーバーサブスクリプションが
-    # 発生していた(セカンドオピニオンでコード上の事実として指摘・検証済み)。実測93.3秒/
-    # ページがADR-0025のローカルMac実測6〜8秒/ページと乖離する一因の仮説として、
-    # vCPU数に一致させて計測する。
+    # cpu_threads=8(ADR-0025 PR4c CPUスケーリング上限実験、実験ブランチ限定):
+    # cpu_threads=2(vCPU数に一致)+execution-environment=gen2で93.3秒→平均41.6秒/ページまで
+    # 改善したことを受け、Cloud Runのハード上限である8 vCPU(.github/workflows/
+    # deploy-paddle-ocr.ymlの--cpu=8)まで引き上げた場合の頭打ち点を実測する。PP-OCRv6
+    # medium(34.5Mパラメータ)は軽量モデルであり、行列演算のスレッド並列化は4スレッド
+    # 前後で頭打ちになりやすいという仮説があるため、線形改善は保証しない前提で計測する。
     engine = PaddleOCR(
         text_detection_model_name=DET_MODEL_NAME,
         text_detection_model_dir=str(det_dir),
@@ -120,7 +119,7 @@ def build_engine(model_root: Path, expected_hashes: dict) -> PaddleOcrEngine:
         use_doc_unwarping=False,
         use_textline_orientation=False,
         enable_mkldnn=False,
-        cpu_threads=2,
+        cpu_threads=8,
     )
 
     det_hash12 = expected_hashes["textDetection"]["fileHashes"]["inference.pdiparams"][:12]
