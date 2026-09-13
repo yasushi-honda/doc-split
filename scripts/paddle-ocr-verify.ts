@@ -46,6 +46,26 @@ const REQUEST_TIMEOUT_MS = 180_000;
 const MAX_RETRIES = 3;
 const INITIAL_BACKOFF_MS = 2_000;
 const MIN_SUBSEQUENT_SAMPLES = 10;
+/**
+ * silent-failure-hunter指摘(Medium、pr-review-toolkit): `/ocr`本体は`AbortController`で
+ * 明示的に180秒の上限を設けているのに対し、同じ理由で外部プロセスに依存する`gcloud`呼び出し
+ * (トークン発行・サービススナップショット取得)には従来タイムアウトがなかった。gcloudが
+ * ネットワーク不調・認証状態異常等でハングすると、例外にすらならず無限に待ち続け、
+ * 「main()のトップレベルcatchでも必ずレポートを書き出す」という設計全体が発動する機会すら
+ * 得られないまま、GitHub Actionsのjob timeout-minutes(240分)でジョブごと強制終了される
+ * (この場合`if: always()`のartifactアップロードすら実行されない)。妥当な上限を設け、
+ * 既存のtry/catch機構に正しく捕捉させる。
+ */
+const GCLOUD_SUBPROCESS_TIMEOUT_MS = 60_000;
+/**
+ * codex review(8周目)指摘(P2): `--repeat`の上限(20)だけでは、429/5xxの再試行が繰り返し
+ * 発生するケースで `.github/workflows/paddle-ocr-verify.yml` の `timeout-minutes: 240` を
+ * 超過しうる(1ケース最悪約734秒×多数ケース)。ケース数の上限だけに頼らず、実行時間そのものを
+ * 監視し、安全マージンを残してレポート書き出しに戻れるようにする。200分(12,000,000ms)は
+ * 240分ジョブタイムアウトからsetup(checkout/auth/npm ci等)+最終スナップショット取得+
+ * レポート書き出しの時間を差し引いた安全な内側の予算。
+ */
+const RUN_BUDGET_MS = 200 * 60 * 1000;
 
 /**
  * 71ページ(必須ゲート)・20ページ・1ページの合格基準(秒)。
@@ -258,7 +278,9 @@ export class IdTokenProvider {
 }
 
 async function mintIdToken(audience: string): Promise<string> {
-  const { stdout } = await execFileAsync('gcloud', ['auth', 'print-identity-token', '--audiences', audience]);
+  const { stdout } = await execFileAsync('gcloud', ['auth', 'print-identity-token', '--audiences', audience], {
+    timeout: GCLOUD_SUBPROCESS_TIMEOUT_MS,
+  });
   return stdout.trim();
 }
 
@@ -285,13 +307,13 @@ export async function getServiceSnapshot(projectId: string, region: string): Pro
     '--project', projectId,
     '--region', region,
     '--format', 'value(status.latestReadyRevisionName)',
-  ]);
+  ], { timeout: GCLOUD_SUBPROCESS_TIMEOUT_MS });
   const { stdout: envJsonRaw } = await execFileAsync('gcloud', [
     'run', 'services', 'describe', SERVICE_NAME,
     '--project', projectId,
     '--region', region,
     '--format', 'json(spec.template.spec.containers[0].env)',
-  ]);
+  ], { timeout: GCLOUD_SUBPROCESS_TIMEOUT_MS });
   const parsed = JSON.parse(envJsonRaw) as {
     spec?: { template?: { spec?: { containers?: Array<{ env?: Array<{ name: string; value?: string }> }> } } };
   };
@@ -405,6 +427,54 @@ export function compareGoldenText(expected: string, actual: string): TextDiffRes
 }
 
 // ============================================================================
+// 契約検証(pageCount/engine/renderDpi/modelVersion、実測値を構造化して保持する)
+// ============================================================================
+
+export interface ContractCheck {
+  pageCountOk: boolean;
+  engineOk: boolean;
+  renderDpiOk: boolean;
+  modelVersionMatch: boolean;
+  /**
+   * codex review(12周目)指摘(P2): 従来`pages[0]`のみをgolden textと突合しており、
+   * レスポンスのトップレベル`text`フィールド(services/paddle-ocr/app.py:302の
+   * `"\n\n".join(pages)`、本番Functions側が実際に消費するフィールド)が欠落・古い値・
+   * `pages`と乖離した値を返しても検知できなかった。1ページ入力では`text`は`pages[0]`と
+   * 完全一致するはずであり、これを見逃すと契約回帰(response-contract regression)が
+   * 未検知のままworkflowが緑になりうる。
+   */
+  textFieldOk: boolean;
+  actualPageCount?: number;
+  actualEngine?: string;
+  actualRenderDpi?: number;
+  actualModelVersion?: string;
+  actualTextField?: string;
+}
+
+export function checkContract(
+  parsed: { pageCount?: number; engine?: string; renderDpi?: number; modelVersion?: string; text?: string },
+  expectedModelVersion: string,
+  expectedText: string
+): ContractCheck {
+  return {
+    pageCountOk: parsed.pageCount === 1,
+    engineOk: parsed.engine === 'paddleocr',
+    renderDpiOk: parsed.renderDpi === 200,
+    modelVersionMatch: parsed.modelVersion === expectedModelVersion,
+    textFieldOk: parsed.text === expectedText,
+    actualPageCount: parsed.pageCount,
+    actualEngine: parsed.engine,
+    actualRenderDpi: parsed.renderDpi,
+    actualModelVersion: parsed.modelVersion,
+    actualTextField: parsed.text,
+  };
+}
+
+export function contractOk(c: ContractCheck): boolean {
+  return c.pageCountOk && c.engineOk && c.renderDpiOk && c.modelVersionMatch && c.textFieldOk;
+}
+
+// ============================================================================
 // レポート型・Markdown生成
 // ============================================================================
 
@@ -420,10 +490,20 @@ export interface GoldenRequestRecord {
   retriedCount: number;
   authRetried: boolean;
   timedOut: boolean;
+  /**
+   * silent-failure-hunter指摘(High、pr-review-toolkit): 従来`timedOut: true`の3要因
+   * (クライアント180秒タイムアウト/サーバ504/networkError)が最終レコードで区別不能だった。
+   * JSON artifact・Step Summaryが decision-maker にとって唯一の一次情報源であるため、
+   * 再実行なしで「サーバがハングしているのか」「単なるネットワーク瞬断か」を切り分けられるよう、
+   * `timedOut: true` の場合は必ずこのフィールドを持つ。
+   */
+  failureKind?: 'clientTimeout' | 'serverTimeout504' | 'networkError';
+  /** silent-failure-hunter指摘: networkError発生時の元例外情報(err.name/err.message)を保持する */
+  errorDetail?: string;
   fatal: boolean;
   fatalReason?: string;
   textCheck?: TextDiffResult;
-  modelVersionMatch?: boolean;
+  contractCheck?: ContractCheck;
 }
 
 export interface GateReportEntry {
@@ -467,12 +547,25 @@ export function buildReport(input: {
   serviceUrl: string;
   startedAt: string;
   finishedAt: string;
-  serviceSnapshotStart: ServiceSnapshot;
-  serviceSnapshotEnd: ServiceSnapshot;
+  /**
+   * codex review指摘(P2): 終了時スナップショット取得(gcloud呼び出し)が計測完了後に
+   * 一時的に失敗した場合でも、それまでに収集した`requests`を捨てずにinconclusiveな
+   * レポートとして残せるよう、開始/終了スナップショットはnullを許容する。
+   */
+  serviceSnapshotStart: ServiceSnapshot | null;
+  serviceSnapshotEnd: ServiceSnapshot | null;
   requests: GoldenRequestRecord[];
 }): Report {
-  const inconclusiveBySnapshot = !snapshotsMatch(input.serviceSnapshotStart, input.serviceSnapshotEnd);
+  const inconclusiveBySnapshot =
+    input.serviceSnapshotStart === null ||
+    input.serviceSnapshotEnd === null ||
+    !snapshotsMatch(input.serviceSnapshotStart, input.serviceSnapshotEnd);
   const [first, ...rest] = input.requests;
+
+  // code-reviewer指摘(High): 1件目(first)がfatal/timedOutの場合、そのwallMsをそのまま
+  // p1ゲートに使うと「失敗した1件目のレイテンシがたまたま短かった」だけでPASS判定になりうる
+  // (subsequent系列で既に対策済みだったのと同種の見落とし)。firstValidを介して判定する。
+  const firstValid = first && !first.fatal && !first.timedOut ? first : null;
 
   const validSubsequent = rest.filter((r) => !r.fatal && !r.timedOut);
   const subsequentLatencies = validSubsequent.map((r) => r.wallMs);
@@ -486,12 +579,22 @@ export function buildReport(input: {
   // `subsequent !== null && ...` は false になり「標本数不足」を検知できずconclusive扱いに
   // なってしまう(全件タイムアウトでもワークフローが緑になるバグ)。null自体も不足として扱う。
   const inconclusiveBySampleSize = subsequent === null || subsequent.n < MIN_SUBSEQUENT_SAMPLES;
-  const inconclusive = inconclusiveBySnapshot || inconclusiveBySampleSize;
+  // codex review(7周目)指摘(P2): timedOut(クライアントタイムアウト・504とも)はサーバ側で
+  // OCR処理がバックグラウンド継続する設計であり、その直後に送った以降のリクエストが
+  // 同一インスタンスのロック待ちや異なるインスタンスへの回り込みで汚染されている可能性がある。
+  // 特定の1件(p1ゲート等)だけの問題ではなく、それ以降のsubsequent系列全体の逐次性が
+  // 保証できなくなるため、1件でもtimedOutがあればレポート全体をinconclusiveとする。
+  const inconclusiveByTimeout = timedOutCount > 0;
+  const inconclusive = inconclusiveBySnapshot || inconclusiveByTimeout || inconclusiveBySampleSize;
   const inconclusiveReason = inconclusiveBySnapshot
-    ? `計測開始時と終了時でサービススナップショットが一致しない(開始: ${JSON.stringify(input.serviceSnapshotStart)}, 終了: ${JSON.stringify(input.serviceSnapshotEnd)})`
-    : inconclusiveBySampleSize
-      ? `subsequentRequestsMsの標本数が不足(n=${subsequent?.n ?? 0} < ${MIN_SUBSEQUENT_SAMPLES})`
-      : null;
+    ? input.serviceSnapshotStart === null || input.serviceSnapshotEnd === null
+      ? `サービススナップショットの取得に失敗しました(開始: ${JSON.stringify(input.serviceSnapshotStart)}, 終了: ${JSON.stringify(input.serviceSnapshotEnd)})。gcloud呼び出しの一時的な失敗の可能性があるため再計測を検討してください`
+      : `計測開始時と終了時でサービススナップショットが一致しない(開始: ${JSON.stringify(input.serviceSnapshotStart)}, 終了: ${JSON.stringify(input.serviceSnapshotEnd)})`
+    : inconclusiveByTimeout
+      ? `${timedOutCount}件のリクエストがタイムアウトまたは504(サービス側で処理継続中)を検知した。以降のリクエストのインスタンス割当が汚染されている可能性があり、subsequent系列全体を信頼できない`
+      : inconclusiveBySampleSize
+        ? `subsequentRequestsMsの標本数が不足(n=${subsequent?.n ?? 0} < ${MIN_SUBSEQUENT_SAMPLES})`
+        : null;
 
   const gates: GateReportEntry[] = inconclusive
     ? []
@@ -500,9 +603,9 @@ export function buildReport(input: {
           id: 'p1',
           pages: 1,
           thresholdSeconds: GATE_THRESHOLDS_SECONDS.p1,
-          actualSeconds: first ? first.wallMs / 1000 : null,
+          actualSeconds: firstValid ? firstValid.wallMs / 1000 : null,
           basis: 'p50',
-          verdict: gateVerdict(first ? first.wallMs / 1000 : null, GATE_THRESHOLDS_SECONDS.p1),
+          verdict: gateVerdict(firstValid ? firstValid.wallMs / 1000 : null, GATE_THRESHOLDS_SECONDS.p1),
         },
         {
           id: 'p20',
@@ -546,6 +649,26 @@ export function buildReport(input: {
   };
 }
 
+/**
+ * pr-test-analyzer指摘(High、pr-review-toolkit): このスクリプトが最終的にGitHub Actionsの
+ * 赤/緑を左右する唯一の判定ロジックがmain()末尾にインライン化されており、88件のテストの
+ * どこからも到達しなかった(「全て健全→0のまま」というハッピーパスすら未検証)。純関数として
+ * 抽出し、決定ロジックを直接テスト可能にする。
+ *
+ * codex review指摘(P1、effort=high): ゲートFAILでもexitCodeが0のままだと、明確に不合格の
+ * 性能スクリーニング結果がGitHub Actions上は緑のまま終わってしまう(実装レビューで指摘され、
+ * 「PR4c自体の完了」と「CIジョブの成否シグナル」を混同していたplan段階の判断を訂正した)。
+ * さらにcodex review(3周目)指摘: timedOutは`fatal`ではなく統計から除外されるだけの扱いの
+ * ため、fatalの有無だけでは「1件目がタイムアウトしp1ゲートがNOT_EVALUATEDのまま」でも
+ * 緑になってしまう。タイムアウトの発生自体、および未評価ゲートの存在も失敗条件に含める。
+ */
+export function determineExitCode(report: Report, requests: readonly GoldenRequestRecord[]): 0 | 1 {
+  const anyFatal = requests.some((r) => r.fatal);
+  const anyTimedOut = requests.some((r) => r.timedOut);
+  const anyGateFailOrUnevaluated = report.gates.some((g) => g.verdict === 'FAIL' || g.verdict === 'NOT_EVALUATED');
+  return report.inconclusive || anyFatal || anyTimedOut || anyGateFailOrUnevaluated ? 1 : 0;
+}
+
 export function buildStepSummaryMarkdown(report: Report): string {
   const lines: string[] = [];
   lines.push('## PaddleOCR PR4c Stage 1: golden一次スクリーニング結果');
@@ -561,19 +684,25 @@ export function buildStepSummaryMarkdown(report: Report): string {
     lines.push(
       `- subsequentRequestsMs(真のwarm確証なし): p50=${report.subsequent.p50Ms}ms p95=${report.subsequent.p95Ms}ms n=${report.subsequent.n}`
     );
+  } else {
+    lines.push('- subsequentRequestsMs: 有効サンプルなし(全件fatal/timedOut)');
   }
   lines.push(`- 成功率(subsequent): ${report.successRateSubsequent !== null ? `${(report.successRateSubsequent * 100).toFixed(1)}%` : 'N/A'}`);
   lines.push(`- タイムアウト件数: ${report.timedOutCount} / 503件数: ${report.status503Count}`);
   lines.push('');
-  lines.push('| ゲート | ページ数 | 基準(秒) | 実測換算(秒) | 判定 |');
-  lines.push('|---|---|---|---|---|');
-  for (const g of report.gates) {
-    lines.push(
-      `| ${g.id} | ${g.pages} | ${g.thresholdSeconds} | ${g.actualSeconds !== null ? g.actualSeconds.toFixed(1) : 'N/A'} | projected ${g.verdict} |`
-    );
+  if (report.gates.length > 0) {
+    lines.push('| ゲート | ページ数 | 基準(秒) | 実測換算(秒) | 判定 |');
+    lines.push('|---|---|---|---|---|');
+    for (const g of report.gates) {
+      lines.push(
+        `| ${g.id} | ${g.pages} | ${g.thresholdSeconds} | ${g.actualSeconds !== null ? g.actualSeconds.toFixed(1) : 'N/A'} | projected ${g.verdict} |`
+      );
+    }
+    lines.push('');
+    lines.push('「PASS」は「Stage 3の実データ負荷試験へ進めてよい」という意味であり、PR6のGo判定そのものではない。');
+  } else {
+    lines.push('ゲート判定なし(inconclusiveのため。再計測が必要)。');
   }
-  lines.push('');
-  lines.push('「PASS」は「Stage 3の実データ負荷試験へ進めてよい」という意味であり、PR6のGo判定そのものではない。');
   lines.push('');
   lines.push('### 注記');
   for (const note of report.notes) {
@@ -599,9 +728,29 @@ export function parseArgs(argv: string[]): CliArgs {
     const m = raw.match(/^--([^=]+)=(.*)$/);
     if (m) args[m[1]] = m[2];
   }
-  const repeat = args.repeat ? Number.parseInt(args.repeat, 10) : 3;
-  if (!Number.isFinite(repeat) || repeat < 1) {
-    throw new Error(`--repeat は1以上の整数を指定してください(got: ${args.repeat})`);
+  // codex review(7周目)指摘(P2): 100(=600リクエスト)は`.github/workflows/paddle-ocr-verify.yml`の
+  // `timeout-minutes: 240`に対して非現実的に大きい。実測97秒/リクエスト前提で600件は約16時間を要し、
+  // GHAのジョブタイムアウトでスクリプト自身がレポートを書き出す前にジョブごと強制終了される
+  // (せっかくの「失敗時も必ずレポートを残す」設計が無効化される)。20周=120リクエストなら
+  // 約110秒/件換算で約3.7時間(220分)に収まり、setup(checkout/auth/npm ci等)の
+  // オーバーヘッドを差し引いても240分ジョブタイムアウト内に収まる安全な上限とする。
+  const MAX_REPEAT = 20;
+  let repeat = 3;
+  if (args.repeat !== undefined) {
+    // codex review指摘(P2): Number.parseIntは"3.5"や"3junk"のような数値プレフィックスを
+    // 無言で受理してしまう。この値は標本数(送信ページ数)を直接左右するため、厳密な整数文字列
+    // のみを許容する。
+    if (!/^\d+$/.test(args.repeat)) {
+      throw new Error(`--repeat は1以上の整数を指定してください(got: ${args.repeat})`);
+    }
+    repeat = Number.parseInt(args.repeat, 10);
+    // codex review指摘(P2、4周目): 数字のみの文字列でも桁数が多いとNumber.parseIntが
+    // Infinityへオーバーフローしうる(例: "9"を300個)。forループが`round < repeat`で
+    // 終了しなくなりGHAのtimeout-minutesまでジョブを消費してレポートも出せなくなるため、
+    // 安全な整数範囲かつ実用上の上限内であることを検証する。
+    if (!Number.isSafeInteger(repeat) || repeat < 1 || repeat > MAX_REPEAT) {
+      throw new Error(`--repeat は1以上${MAX_REPEAT}以下の整数を指定してください(got: ${args.repeat})`);
+    }
   }
   return {
     mode: args.mode ?? 'golden',
@@ -612,34 +761,60 @@ export function parseArgs(argv: string[]): CliArgs {
 }
 
 // ============================================================================
-// CLIオーケストレーション(require.main === module でのみ実行)
+// OCRリクエスト実行(注入可能、テスト時はフェイクに差し替える)
 // ============================================================================
 
-async function sendGoldenRequestOnce(
-  serviceUrl: string,
-  pdfBuffer: Buffer,
-  tokenProvider: IdTokenProvider
-): Promise<{ status: number | null; body: string | null; wallMs: number; kind: 'success' | 'timeout' | 'networkError' }> {
-  const token = await tokenProvider.getToken();
+export interface OcrAttemptResult {
+  status: number | null;
+  body: string | null;
+  wallMs: number;
+  kind: 'success' | 'timeout' | 'networkError';
+  /** silent-failure-hunter指摘: networkError時に元の例外情報を握り潰さないため保持する */
+  errorDetail?: string;
+}
+
+export type OcrRequestFn = (serviceUrl: string, pdfBuffer: Buffer, token: string) => Promise<OcrAttemptResult>;
+
+/**
+ * codex review(13周目)指摘(P2): `resolveServiceUrl`は末尾スラッシュ付きURL(`--url`や
+ * `PADDLE_OCR_URL`経由)を明示的に許容しているが、従来`${serviceUrl}/ocr`の単純な文字列連結
+ * だったため`//ocr`という不正パスになり、Cloud Run/FastAPI側では404になって全リクエストが
+ * 失敗しうる(pr912-code-reviewer指摘時は`paddle-ocr-verify.yml`が常に末尾スラッシュなしの
+ * dev.env値のみを使う経路のため実害なしと判断したが、`--url`手動指定時には実害がある)。
+ */
+export function buildOcrEndpoint(serviceUrl: string): string {
+  return `${serviceUrl.replace(/\/+$/, '')}/ocr`;
+}
+
+export async function defaultOcrRequestFn(serviceUrl: string, pdfBuffer: Buffer, token: string): Promise<OcrAttemptResult> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   const started = Date.now();
   try {
-    const res = await fetch(`${serviceUrl}/ocr`, {
+    const res = await fetch(buildOcrEndpoint(serviceUrl), {
       method: 'POST',
       headers: { 'Content-Type': 'application/pdf', Authorization: `Bearer ${token}` },
       body: pdfBuffer,
       signal: controller.signal,
     });
-    const wallMs = Date.now() - started;
+    // codex review(5周目)指摘(P2): fetch()はレスポンスヘッダ受信時点で解決するため、
+    // res.text()より前にwallMsを確定するとtime-to-first-byteしか計測できず、レスポンス
+    // ボディ転送が遅いケースで実際のレイテンシを過小評価してしまう。ボディ読了後に確定する。
     const body = await res.text();
+    const wallMs = Date.now() - started;
     return { status: res.status, body, wallMs, kind: 'success' };
   } catch (err) {
     const wallMs = Date.now() - started;
     if ((err as { name?: string }).name === 'AbortError') {
       return { status: null, body: null, wallMs, kind: 'timeout' };
     }
-    return { status: null, body: null, wallMs, kind: 'networkError' };
+    return {
+      status: null,
+      body: null,
+      wallMs,
+      kind: 'networkError',
+      errorDetail: err instanceof Error ? `${err.name}: ${err.message}` : String(err),
+    };
   } finally {
     clearTimeout(timer);
   }
@@ -649,218 +824,349 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function sendGoldenCaseWithRetries(
+// ============================================================================
+// GoldenRequestRecord ファクトリ(code-reviewer指摘: 7箇所の重複return literalを解消)
+// ============================================================================
+
+interface RecordBase {
+  manifestId: string;
+  pdfFile: string;
+  round: number;
+  order: number;
+}
+
+function baseRecord(c: GoldenCase, round: number, order: number): RecordBase {
+  return { manifestId: c.manifestId, pdfFile: c.pdfFile, round, order };
+}
+
+// code-reviewer指摘(Important、pr-review-toolkit): 位置引数(特に`number`型が複数連続する)は
+// 呼び出し側で誤発注してもTypeScriptの型検査を通過してしまう。以下3つのファクトリは
+// named fieldsのoptionsオブジェクトで受け取る。
+function makeTimedOutRecord(
+  base: RecordBase,
+  opts: {
+    wallMs: number;
+    retriedCount: number;
+    authRetried: boolean;
+    /**
+     * silent-failure-hunter指摘(High、pr-review-toolkit): クライアントタイムアウト/サーバ504/
+     * networkErrorの3要因を最終レコードで区別できるようにする。
+     */
+    failureKind: 'clientTimeout' | 'serverTimeout504' | 'networkError';
+    httpStatus?: number | null;
+    errorDetail?: string;
+  }
+): GoldenRequestRecord {
+  return {
+    ...base,
+    wallMs: opts.wallMs,
+    processingMs: null,
+    clientObservedExcessMs: null,
+    httpStatus: opts.httpStatus ?? null,
+    retriedCount: opts.retriedCount,
+    authRetried: opts.authRetried,
+    timedOut: true,
+    failureKind: opts.failureKind,
+    errorDetail: opts.errorDetail,
+    fatal: false,
+  };
+}
+
+function makeFatalRecord(
+  base: RecordBase,
+  opts: {
+    wallMs: number;
+    httpStatus: number | null;
+    retriedCount: number;
+    authRetried: boolean;
+    fatalReason: string;
+  }
+): GoldenRequestRecord {
+  return {
+    ...base,
+    wallMs: opts.wallMs,
+    processingMs: null,
+    clientObservedExcessMs: null,
+    httpStatus: opts.httpStatus,
+    retriedCount: opts.retriedCount,
+    authRetried: opts.authRetried,
+    timedOut: false,
+    fatal: true,
+    fatalReason: opts.fatalReason,
+  };
+}
+
+function makeResponseRecord(
+  base: RecordBase,
+  opts: {
+    wallMs: number;
+    httpStatus: number;
+    retriedCount: number;
+    authRetried: boolean;
+    processingMs: number | null;
+    clientObservedExcessMs: number | null;
+    textCheck: TextDiffResult;
+    contractCheck: ContractCheck;
+    fatal: boolean;
+    fatalReason?: string;
+  }
+): GoldenRequestRecord {
+  return {
+    ...base,
+    wallMs: opts.wallMs,
+    processingMs: opts.processingMs,
+    clientObservedExcessMs: opts.clientObservedExcessMs,
+    httpStatus: opts.httpStatus,
+    retriedCount: opts.retriedCount,
+    authRetried: opts.authRetried,
+    timedOut: false,
+    fatal: opts.fatal,
+    fatalReason: opts.fatalReason,
+    textCheck: opts.textCheck,
+    contractCheck: opts.contractCheck,
+  };
+}
+
+// ============================================================================
+// 1ケース分のOCR送信(リトライ・認証再試行を内包)
+// ============================================================================
+
+export async function sendGoldenCaseWithRetries(
   c: GoldenCase,
   round: number,
   order: number,
   serviceUrl: string,
   expectedModelVersion: string,
-  tokenProvider: IdTokenProvider
+  tokenProvider: IdTokenProvider,
+  requestFn: OcrRequestFn = defaultOcrRequestFn,
+  /** テスト用に注入可能(既定は本番値)。リトライ上限までの実時間待機を避けるため。 */
+  backoffMs: number = INITIAL_BACKOFF_MS,
+  /** テスト用に注入可能な時計。累積経過時間(elapsedMs)の計算を決定論的にテストするため。 */
+  nowFn: () => number = Date.now
 ): Promise<GoldenRequestRecord> {
+  const base = baseRecord(c, round, order);
   const pdfBuffer = fs.readFileSync(path.join(FIXTURE_DIR, c.pdfFile));
   const expectedPages = JSON.parse(fs.readFileSync(path.join(FIXTURE_DIR, c.pagesJsonFile), 'utf-8')) as string[];
   const expectedText = expectedPages[c.pageIndex];
 
   let retriedCount = 0;
   let authRetried = false;
+  // codex review(5周目)指摘(P1): 従来は最終試行の`attempt.wallMs`のみを記録しており、
+  // リトライ発生時の失敗試行時間・バックオフ待機時間が丸ごと消えていた(例: 504で数分待った後
+  // 高速なリトライが成功すると、実際には数分かかったケースが数百msのPASSとして記録される)。
+  // ケース開始時点からの累積経過時間を記録し、リトライ込みの実質レイテンシを反映する。
+  // codex review(9周目)指摘(P2): 計測開始点をトークン取得より前に置くと、初回発行(または
+  // 約55分ごとのキャッシュ失効後の再発行)で発生する`gcloud auth print-identity-token`
+  // サブプロセスの起動時間がレイテンシに混入し、GitHub Actions runner/IAM側の遅延を
+  // Cloud Run `/ocr`自体のレイテンシと誤認しうる(p1/p95ゲートを偽陽性でFAILさせかねない)。
+  // トークン取得(1回目、通常はキャッシュ済みで高速)が完了した直後に計測を開始することで、
+  // これを除外しつつ、リトライ・バックオフに費やした時間は従来通り累積に含める。
+  let caseStarted: number | undefined;
 
   for (;;) {
-    const attempt = await sendGoldenRequestOnce(serviceUrl, pdfBuffer, tokenProvider);
+    const token = await tokenProvider.getToken();
+    if (caseStarted === undefined) {
+      caseStarted = nowFn();
+    }
+    const attempt = await requestFn(serviceUrl, pdfBuffer, token);
+    const elapsedMs = nowFn() - caseStarted;
 
     if (attempt.kind === 'timeout') {
-      return {
-        manifestId: c.manifestId,
-        pdfFile: c.pdfFile,
-        round,
-        order,
-        wallMs: attempt.wallMs,
-        processingMs: null,
-        clientObservedExcessMs: null,
-        httpStatus: null,
+      return makeTimedOutRecord(base, {
+        wallMs: elapsedMs,
         retriedCount,
         authRetried,
-        timedOut: true,
-        fatal: false,
-      };
+        failureKind: 'clientTimeout',
+      });
     }
 
     if (attempt.kind === 'networkError') {
-      const failureClass = classifyFailure('networkError', null);
-      if (failureClass === 'retryable' && retriedCount < MAX_RETRIES) {
-        retriedCount++;
-        await sleep(INITIAL_BACKOFF_MS * 2 ** (retriedCount - 1));
-        continue;
-      }
-      return {
-        manifestId: c.manifestId,
-        pdfFile: c.pdfFile,
-        round,
-        order,
-        wallMs: attempt.wallMs,
-        processingMs: null,
-        clientObservedExcessMs: null,
-        httpStatus: null,
+      // codex review(8周目)指摘(P2): networkError(接続断)は「サーバに全く到達しなかった」
+      // (安全にリトライ可能)なのか「サーバは受理し処理を開始したが応答が届く前に接続が
+      // 切れた」(504と同じくバックグラウンド処理継続の疑いがある)のかを、fetch()の汎用的な
+      // 例外だけからは区別できない。安全側に倒し、504/クライアントタイムアウトと同様に
+      // リトライせずtimedOut扱いとする(次のケースへ進まず、レポート全体もinconclusiveにする)。
+      return makeTimedOutRecord(base, {
+        wallMs: elapsedMs,
         retriedCount,
         authRetried,
-        timedOut: false,
-        fatal: true,
-        fatalReason: 'ネットワークエラーがリトライ上限まで解消しませんでした',
-      };
+        failureKind: 'networkError',
+        // silent-failure-hunter指摘(High、pr-review-toolkit): 保持していたerrorDetailを
+        // レコードへ渡し忘れており、原因調査に必要な情報がJSON artifact/Step Summaryに
+        // 一切残らなかった。
+        errorDetail: attempt.errorDetail,
+      });
     }
 
-    // kind === 'success'
+    // kind === 'success'(HTTPレスポンスは受信できた。ステータスは200とは限らない)
     if ((attempt.status === 401 || attempt.status === 403) && !authRetried) {
       authRetried = true;
       await tokenProvider.getToken(true);
       continue;
     }
     if ((attempt.status === 401 || attempt.status === 403) && authRetried) {
-      return {
-        manifestId: c.manifestId,
-        pdfFile: c.pdfFile,
-        round,
-        order,
-        wallMs: attempt.wallMs,
-        processingMs: null,
-        clientObservedExcessMs: null,
+      return makeFatalRecord(base, {
+        wallMs: elapsedMs,
         httpStatus: attempt.status,
         retriedCount,
         authRetried,
-        timedOut: false,
-        fatal: true,
         fatalReason: `トークン再発行後も${attempt.status}が続きました(認可設定の不備の疑い)`,
-      };
+      });
     }
 
-    const failureClass = attempt.status !== null && attempt.status !== 200
-      ? classifyFailure('httpStatus', attempt.status)
-      : null;
+    // codex review(6周目)指摘(P2): PaddleOCRサービス自身が返す504(PROCESSING_TIMEOUT)は、
+    // services/paddle-ocr/README.md「既知の限界」節の通りバックグラウンドでOCR処理(と
+    // エンジンのthreading.Lock保持)がそのまま継続する設計であり、クライアントタイムアウトと
+    // 同じ理由でリトライしてはいけない(別インスタンスまたは同一インスタンスのロック待ちに
+    // 回り込み、逐次計測の前提=subsequentRequestsMs系列を汚染する)。timedOutと同様に扱う。
+    if (attempt.status === 504) {
+      return makeTimedOutRecord(base, {
+        wallMs: elapsedMs,
+        retriedCount,
+        authRetried,
+        failureKind: 'serverTimeout504',
+        // silent-failure-hunter指摘: 504もhttpStatus:nullに一律化されており、クライアント
+        // タイムアウト/networkErrorと区別がつかなかった。実際のステータスを保持する。
+        httpStatus: 504,
+        errorDetail: attempt.body?.slice(0, 500),
+      });
+    }
+
+    const failureClass = attempt.status !== null && attempt.status !== 200 ? classifyFailure('httpStatus', attempt.status) : null;
 
     if (failureClass === 'retryable' && retriedCount < MAX_RETRIES) {
       retriedCount++;
-      await sleep(INITIAL_BACKOFF_MS * 2 ** (retriedCount - 1));
+      await sleep(backoffMs * 2 ** (retriedCount - 1));
       continue;
     }
 
     if (attempt.status !== 200) {
-      return {
-        manifestId: c.manifestId,
-        pdfFile: c.pdfFile,
-        round,
-        order,
-        wallMs: attempt.wallMs,
-        processingMs: null,
-        clientObservedExcessMs: null,
+      return makeFatalRecord(base, {
+        wallMs: elapsedMs,
         httpStatus: attempt.status,
         retriedCount,
         authRetried,
-        timedOut: false,
-        fatal: true,
         fatalReason: `HTTP ${attempt.status}: ${attempt.body?.slice(0, 500) ?? ''}`,
-      };
+      });
     }
 
     // 200 OK: 契約検証
-    let parsed: { text?: string; pages?: string[]; pageCount?: number; engine?: string; renderDpi?: number; modelVersion?: string; processingMs?: number };
+    let parsed: {
+      pages?: string[];
+      text?: string;
+      pageCount?: number;
+      engine?: string;
+      renderDpi?: number;
+      modelVersion?: string;
+      processingMs?: number;
+    };
     try {
       parsed = JSON.parse(attempt.body ?? '');
     } catch {
-      return {
-        manifestId: c.manifestId,
-        pdfFile: c.pdfFile,
-        round,
-        order,
-        wallMs: attempt.wallMs,
-        processingMs: null,
-        clientObservedExcessMs: null,
+      // silent-failure-hunter指摘: 非200時はレスポンス本文を含めているのに、JSON parse失敗時は
+      // 含めていなかった非対称性を解消する(200 OKでも不正JSONが返るケースこそ原因調査が必要)。
+      return makeFatalRecord(base, {
+        wallMs: elapsedMs,
         httpStatus: attempt.status,
         retriedCount,
         authRetried,
-        timedOut: false,
-        fatal: true,
-        fatalReason: 'レスポンスがJSONとしてパースできませんでした',
-      };
+        fatalReason: `レスポンスがJSONとしてパースできませんでした: ${(attempt.body ?? '').slice(0, 500)}`,
+      });
     }
 
     const actualText = parsed.pages?.[0] ?? '';
     const textCheck = compareGoldenText(expectedText, actualText);
-    const modelVersionMatch = parsed.modelVersion === expectedModelVersion;
-    const contractOk =
-      parsed.pageCount === 1 && parsed.engine === 'paddleocr' && parsed.renderDpi === 200 && modelVersionMatch;
+    const contractCheck = checkContract(parsed, expectedModelVersion, expectedText);
 
     const processingMs = typeof parsed.processingMs === 'number' ? parsed.processingMs : null;
-    const clientObservedExcessMs = processingMs !== null ? attempt.wallMs - processingMs : null;
+    // clientObservedExcessMsもリトライ込みの累積時間基準にする(リトライがあった場合、
+    // その分の超過が正直に反映される)。
+    const clientObservedExcessMs = processingMs !== null ? elapsedMs - processingMs : null;
 
-    if (!textCheck.exactMatch || !contractOk) {
-      return {
-        manifestId: c.manifestId,
-        pdfFile: c.pdfFile,
-        round,
-        order,
-        wallMs: attempt.wallMs,
-        processingMs,
-        clientObservedExcessMs,
-        httpStatus: attempt.status,
-        retriedCount,
-        authRetried,
-        timedOut: false,
-        fatal: true,
-        fatalReason: !textCheck.exactMatch ? 'golden textと不一致' : '契約検証(pageCount/engine/renderDpi/modelVersion)に失敗',
-        textCheck,
-        modelVersionMatch,
-      };
-    }
+    const fatal = !textCheck.exactMatch || !contractOk(contractCheck);
+    const fatalReason = !textCheck.exactMatch
+      ? 'golden textと不一致'
+      : !contractOk(contractCheck)
+        ? `契約検証(pageCount/engine/renderDpi/modelVersion)に失敗: ${JSON.stringify(contractCheck)}`
+        : undefined;
 
-    return {
-      manifestId: c.manifestId,
-      pdfFile: c.pdfFile,
-      round,
-      order,
-      wallMs: attempt.wallMs,
-      processingMs,
-      clientObservedExcessMs,
+    return makeResponseRecord(base, {
+      wallMs: elapsedMs,
       httpStatus: attempt.status,
       retriedCount,
       authRetried,
-      timedOut: false,
-      fatal: false,
+      processingMs,
+      clientObservedExcessMs,
       textCheck,
-      modelVersionMatch,
-    };
+      contractCheck,
+      fatal,
+      fatalReason,
+    });
   }
 }
 
+// ============================================================================
+// CLIオーケストレーション(require.main === module でのみ実行)
+// ============================================================================
+
+function emptyReportSkeleton(startedAt: string, finishedAt: string, serviceUrl: string, fatalError: string): Report {
+  return {
+    schemaVersion: 1,
+    startedAt,
+    finishedAt,
+    serviceUrl,
+    serviceSnapshotStart: null,
+    serviceSnapshotEnd: null,
+    inconclusive: true,
+    inconclusiveReason: null,
+    requests: [],
+    firstRequestMs: null,
+    subsequent: null,
+    successRateSubsequent: null,
+    timedOutCount: 0,
+    status503Count: 0,
+    gates: [],
+    goldenMatchSummary: { total: 0, matched: 0 },
+    fatalError,
+    notes: REPORT_NOTES,
+  };
+}
+
 async function main(): Promise<void> {
-  const args = parseArgs(process.argv.slice(2));
-  if (args.mode !== 'golden') {
-    throw new Error(`--mode=${args.mode} はStage 1では未実装です(golden のみ対応。png/load/coldはStage 2/3判断待ち)`);
-  }
-
-  const devEnvContent = fs.readFileSync(DEV_ENV_PATH, 'utf-8');
-  const projectId = requireEnvField(devEnvContent, 'PROJECT_ID', DEV_ENV_PATH);
-  const region = requireEnvField(devEnvContent, 'CLOUD_RUN_LOCATION', DEV_ENV_PATH);
-  const serviceUrl = resolveServiceUrl({
-    explicitUrl: args.url,
-    envVarUrl: process.env.PADDLE_OCR_URL,
-    devEnvContent,
-    devEnvPathForError: DEV_ENV_PATH,
-  });
-
   const startedAt = new Date().toISOString();
   let exitCode = 0;
+  // code-reviewer指摘(High)・codex pass2指摘(P2): parseArgs/env読込/URL解決がtryの外にあると、
+  // これらの失敗時にレポートJSON/Step Summaryが一切生成されない(ワークフローの
+  // 「if: always()で必ず測定結果を回収する」という設計意図に反する)。全てtry内へ移す。
+  let args: CliArgs | undefined;
 
-  const writeAndExit = (report: Partial<Report> & { fatalError: string | null }) => {
-    fs.mkdirSync(path.dirname(args.out), { recursive: true });
-    fs.writeFileSync(args.out, JSON.stringify(report, null, 2));
-    console.log(`レポートを書き出しました: ${args.out}`);
+  const writeAndExit = (report: Report, outPath: string) => {
+    fs.mkdirSync(path.dirname(outPath), { recursive: true });
+    fs.writeFileSync(outPath, JSON.stringify(report, null, 2));
+    console.log(`レポートを書き出しました: ${outPath}`);
     const summaryPath = process.env.GITHUB_STEP_SUMMARY;
-    if (summaryPath && report.schemaVersion === 1) {
-      fs.appendFileSync(summaryPath, buildStepSummaryMarkdown(report as Report) + '\n');
+    if (summaryPath) {
+      fs.appendFileSync(summaryPath, buildStepSummaryMarkdown(report) + '\n');
     }
     process.exitCode = exitCode;
   };
 
   try {
+    args = parseArgs(process.argv.slice(2));
+    if (args.mode !== 'golden') {
+      throw new Error(`--mode=${args.mode} はStage 1では未実装です(golden のみ対応。png/load/coldはStage 2/3判断待ち)`);
+    }
+
+    const devEnvContent = fs.readFileSync(DEV_ENV_PATH, 'utf-8');
+    const projectId = requireEnvField(devEnvContent, 'PROJECT_ID', DEV_ENV_PATH);
+    const region = requireEnvField(devEnvContent, 'CLOUD_RUN_LOCATION', DEV_ENV_PATH);
+    const serviceUrl = resolveServiceUrl({
+      explicitUrl: args.url,
+      envVarUrl: process.env.PADDLE_OCR_URL,
+      devEnvContent,
+      devEnvPathForError: DEV_ENV_PATH,
+    });
+
     const manifest = JSON.parse(fs.readFileSync(MANIFEST_PATH, 'utf-8')) as GoldenManifest;
     const hashCheck = verifyGoldenManifestHashes(manifest, FIXTURE_DIR);
     if (!hashCheck.ok) {
@@ -875,20 +1181,70 @@ async function main(): Promise<void> {
 
     const requests: GoldenRequestRecord[] = [];
     let order = 0;
-    for (let round = 0; round < args.repeat; round++) {
+    const loopStartedAt = Date.now();
+    // codex review(7周目)指摘(P2): timedOut(クライアントタイムアウト・504)発生時に何も
+    // せず次のケースへ進むと、サーバ側で継続中のバックグラウンド処理と後続リクエストの
+    // インスタンス割当が絡み合い、以降のsubsequentRequestsMsサンプルを汚染しうる。
+    // 検知したら残りのケース送信を打ち切る(buildReport側でも1件でもtimedOutがあれば
+    // report全体をinconclusiveとする、二重の防御)。
+    requestLoop: for (let round = 0; round < args.repeat; round++) {
       for (const c of GOLDEN_CASES) {
-        const record = await sendGoldenCaseWithRetries(c, round, order, serviceUrl, expectedModelVersion, tokenProvider);
+        // codex review(8周目)指摘(P2): 429/5xxの再試行が繰り返し発生すると、`--repeat`の
+        // ケース数上限だけではジョブのtimeout-minutesを超過しうる。実行時間そのものを監視し、
+        // 予算超過ならレポートを書き出す時間を残して打ち切る。
+        if (Date.now() - loopStartedAt > RUN_BUDGET_MS) {
+          console.warn(
+            `実行時間の予算(${RUN_BUDGET_MS / 60000}分)を超過したため、残りのケース送信を打ち切ります。` +
+              `収集済み${requests.length}件のデータでレポートを生成します。`
+          );
+          break requestLoop;
+        }
+        // silent-failure-hunter指摘(High): sendGoldenCaseWithRetries内のgetToken()呼び出しや
+        // fixtureファイル読み込みが無保護のまま外側へ例外を伝播すると、1ケースの一時的な失敗
+        // (gcloud呼び出し失敗・fixtureファイル破損等)でそれまでに収集した全計測データが
+        // main()のトップレベルcatchで捨てられてしまう。ケース単位で例外境界を設け、
+        // そのケースだけをfatalレコードとして記録しループを継続する。
+        let record: GoldenRequestRecord;
+        try {
+          record = await sendGoldenCaseWithRetries(c, round, order, serviceUrl, expectedModelVersion, tokenProvider);
+        } catch (caseErr) {
+          record = makeFatalRecord(baseRecord(c, round, order), {
+            wallMs: 0,
+            httpStatus: null,
+            retriedCount: 0,
+            authRetried: false,
+            fatalReason: `ケース処理中に想定外の例外が発生しました: ${caseErr instanceof Error ? caseErr.message : String(caseErr)}`,
+          });
+        }
         requests.push(record);
         console.log(
           `[${order + 1}/${args.repeat * GOLDEN_CASES.length}] ${c.pdfFile} round=${round} wallMs=${record.wallMs} ` +
             `fatal=${record.fatal} timedOut=${record.timedOut} exactMatch=${record.textCheck?.exactMatch ?? 'N/A'}`
         );
         order++;
+        if (record.timedOut) {
+          console.warn(
+            `タイムアウト/504を検知したため、残りのケース送信を打ち切ります(サーバ側処理継続中の疑いがあり、以降のサンプルが汚染されうるため)。` +
+              `order=${record.order} pdfFile=${record.pdfFile}`
+          );
+          break requestLoop;
+        }
       }
     }
 
-    const serviceSnapshotEnd = await getServiceSnapshot(projectId, region);
-    console.log('終了時スナップショット:', serviceSnapshotEnd);
+    // codex review指摘(P2): 全リクエスト完了後にここが例外を投げると、無保護のままでは
+    // main()のトップレベルcatchに落ち、それまでに収集した`requests`が空スケルトンで
+    // 上書きされ失われる。ケース単位の防御(上記try/catch)と同じ思想で、終了時スナップ
+    // ショット取得の失敗もここで吸収し、収集済みデータを保持したままinconclusiveとして
+    // 報告する。
+    let serviceSnapshotEnd: ServiceSnapshot | null;
+    try {
+      serviceSnapshotEnd = await getServiceSnapshot(projectId, region);
+      console.log('終了時スナップショット:', serviceSnapshotEnd);
+    } catch (snapshotErr) {
+      serviceSnapshotEnd = null;
+      console.error('終了時スナップショットの取得に失敗しました:', snapshotErr);
+    }
 
     const finishedAt = new Date().toISOString();
     const report = buildReport({
@@ -900,38 +1256,22 @@ async function main(): Promise<void> {
       requests,
     });
 
-    const anyFatal = requests.some((r) => r.fatal);
-    if (report.inconclusive || anyFatal) {
-      exitCode = 1;
-    }
+    exitCode = determineExitCode(report, requests);
 
-    writeAndExit(report);
+    writeAndExit(report, args.out);
   } catch (err) {
     exitCode = 1;
-    writeAndExit({
-      schemaVersion: 1,
-      startedAt,
-      finishedAt: new Date().toISOString(),
-      serviceUrl,
-      serviceSnapshotStart: null,
-      serviceSnapshotEnd: null,
-      inconclusive: true,
-      inconclusiveReason: null,
-      requests: [],
-      firstRequestMs: null,
-      subsequent: null,
-      successRateSubsequent: null,
-      timedOutCount: 0,
-      status503Count: 0,
-      gates: [],
-      goldenMatchSummary: { total: 0, matched: 0 },
-      fatalError: err instanceof Error ? `${err.message}\n${err.stack ?? ''}` : String(err),
-      notes: REPORT_NOTES,
-    });
+    const outPath = args?.out ?? path.join(process.cwd(), 'paddle-ocr-verify-golden.json');
+    const fatalError = err instanceof Error ? `${err.message}\n${err.stack ?? ''}` : String(err);
+    writeAndExit(emptyReportSkeleton(startedAt, new Date().toISOString(), args?.url ?? 'unresolved', fatalError), outPath);
     console.error(err);
   }
 }
 
 if (require.main === module) {
-  main();
+  main().catch((err) => {
+    // 最終防波堤: writeAndExit自体が失敗した場合(ディスク書き込み失敗等)のみここに到達する。
+    console.error('main()が予期せぬ形で失敗しました(レポート書き出し自体が失敗した可能性があります):', err);
+    process.exitCode = 1;
+  });
 }
