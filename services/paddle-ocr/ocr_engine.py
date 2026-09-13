@@ -93,19 +93,24 @@ def build_engine(model_root: Path, expected_hashes: dict) -> PaddleOcrEngine:
     det_dir = model_root / DET_MODEL_NAME
     rec_dir = model_root / REC_MODEL_NAME
 
-    # enable_mkldnn=True + NEWIR_BLOCKLISTモンキーパッチ(ADR-0025 PR4c 新IR回避実験、
-    # 実験ブランチ限定): 素のenable_mkldnn=Trueは新IR(PIR)とoneDNNの組み合わせで
-    # "(Unimplemented) ConvertPirAttribute2RuntimeAttribute not support [...]"
-    # (onednn_instruction.cc)によりクラッシュすることを実機確認済み。PaddleXは
-    # 既知の問題モデルをNEWIR_BLOCKLISTに登録し新IRを無効化する仕組みを持つが、
-    # PP-OCRv6_medium_det/_recはこのリストに未登録(=既知バグとして把握されていない)。
-    # このリストは実行時に参照される可変listのため、モンキーパッチで自分たちのモデル名を
-    # 追加することで、mkldnn自体は有効のまま新IR側だけを回避できるか検証する。
-    from paddlex.inference.models.runners.paddle_static.config import blocklists
+    # enable_mkldnn=True + enable_new_ir強制無効化パッチ(ADR-0025 PR4c 新IR回避実験v2、
+    # 実験ブランチ限定): NEWIR_BLOCKLISTへのモデル名追加(v1)では同一クラッシュが再発した
+    # (モデル名照合の不一致、またはconfig事前計算タイミングの問題と推測、根本原因は未特定)。
+    # v2はモデル名照合に依存せず、PaddlePredictorOption.setdefault_by_model_name()自体を
+    # 直接パッチしてenable_new_irを常にFalseへ上書きする、より確実な経路で再検証する。
+    from paddlex.inference.models.runners.paddle_static.config.pp_option import (
+        PaddlePredictorOption,
+    )
 
-    for _model_name in (DET_MODEL_NAME, REC_MODEL_NAME):
-        if _model_name not in blocklists.NEWIR_BLOCKLIST:
-            blocklists.NEWIR_BLOCKLIST.append(_model_name)
+    if not getattr(PaddlePredictorOption, "_adr0025_newir_patched", False):
+        _original_setdefault_by_model_name = PaddlePredictorOption.setdefault_by_model_name
+
+        def _patched_setdefault_by_model_name(self, model_name):
+            _original_setdefault_by_model_name(self, model_name)
+            self._cfg["enable_new_ir"] = False
+
+        PaddlePredictorOption.setdefault_by_model_name = _patched_setdefault_by_model_name
+        PaddlePredictorOption._adr0025_newir_patched = True
 
     # cpu_threads=2(ADR-0025 PR4c Phase 1実験で確立、vCPU数=2に一致させオーバーサブ
     # スクリプションを回避)。
