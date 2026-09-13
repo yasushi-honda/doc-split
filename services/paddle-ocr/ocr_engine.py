@@ -96,13 +96,21 @@ def build_engine(model_root: Path, expected_hashes: dict) -> PaddleOcrEngine:
     # lang指定はtext_detection_model_name/text_recognition_model_name指定時は無視される
     # (scripts/generate-paddle-ocr-golden-text.pyで実測済みの挙動)ため渡さない。
     #
-    # enable_mkldnn=False(PR4a実機検証で追加): linux/amd64コンテナ(Cloud Run想定環境)で
-    # デフォルトのmkldnn実行パスを使うと
-    # "(Unimplemented) ConvertPirAttribute2RuntimeAttribute not support [...]"
-    # (onednn_instruction.cc)で推論が例外終了することを実機確認した。mkldnnはCPU推論の
-    # 高速化オプションであり正解性には影響しないため、無効化して安全側に倒す。
-    # 無効化後、golden fixture(golden_plain_01.pdf)でarm64生成時と文字単位で完全一致する
-    # OCR結果が得られることを確認済み。
+    # enable_mkldnn=True(ADR-0025 PR4c Stage 2、速度検証中): PR4a実機検証時にFalse固定と
+    # した根拠(README.md「PR4a実装時の実機検証で判明した事項」節)は、**QEMUエミュレーション
+    # 環境での観測**であり、実Cloud Run amd64実機での再現有無は当時「PR4bで要確認」のまま
+    # 未検証だった。一方、PR4c Stage 1のdev実機計測(2026-09-13)でsubsequentRequestsMs
+    # p50=93.3秒/ページと判明し、PaddleOCR公式ベンチマーク(PP-OCRv6_medium、標準Paddle
+    # Inference backend、Intel Xeon)の2.05秒/画像から約45倍乖離していることが分かった。
+    # mkldnn(oneDNN)はIntel CPU向けのCPU推論高速化ライブラリで、無効化がこの乖離の主因である
+    # 可能性が高いと判断し、実機で再検証する。**正解性には影響しないはずのオプションだが、
+    # 万一結果が変わってもgolden fixtureの完全一致検証(scripts/paddle-ocr-verify.ts
+    # --mode=golden)で即座に検知できる**ため、この検証自体は安全に実施できる。
+    #
+    # 注意: このパラメータのみ、意図的にscripts/generate-paddle-ocr-golden-text.pyの設定
+    # (enable_mkldnn=False)と一時的に不一致にしている。同スクリプトはarm64(Mac)で実行され
+    # mkldnnは元々使われないため、この不一致はgolden text(ground truth)の再現性に影響しない
+    # (同スクリプトのコメント参照)。他の全パラメータは引き続き一字一句一致を維持すること。
     engine = PaddleOCR(
         text_detection_model_name=DET_MODEL_NAME,
         text_detection_model_dir=str(det_dir),
@@ -111,7 +119,7 @@ def build_engine(model_root: Path, expected_hashes: dict) -> PaddleOcrEngine:
         use_doc_orientation_classify=False,
         use_doc_unwarping=False,
         use_textline_orientation=False,
-        enable_mkldnn=False,
+        enable_mkldnn=True,
     )
 
     det_hash12 = expected_hashes["textDetection"]["fileHashes"]["inference.pdiparams"][:12]
