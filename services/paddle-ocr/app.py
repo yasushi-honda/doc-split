@@ -40,6 +40,16 @@ from fastapi.responses import JSONResponse
 from raster import InputRejected, RasterLimits, image_to_rgb, pdf_pages_to_rgb
 
 logger = logging.getLogger("paddle-ocr")
+# ADR-0025 PR4c Phase A(実験用、一時計測、mainへ非マージ): setLevelだけでは不十分
+# (loggerにもrootにもhandlerが無い場合、logging.lastResortがWARNING未満を捨てるため
+# INFOレコードは最終的に破棄される、実機で無音のまま欠落することを確認)。
+# 明示的にStreamHandlerを付与してCloud RunのstderrキャプチャでPHASE_A_TIMING等の
+# logger.info()呼び出しを確実に出力させる。
+if not logger.handlers:
+    _handler = logging.StreamHandler()
+    _handler.setLevel(logging.INFO)
+    logger.addHandler(_handler)
+logger.setLevel(logging.INFO)
 
 MODEL_ROOT = Path(os.environ.get("PADDLE_MODEL_DIR", "/opt/paddle-ocr/models"))
 EXPECTED_HASHES_PATH = Path(os.environ.get("PADDLE_EXPECTED_HASHES", "/app/expected-model-hashes.json"))
