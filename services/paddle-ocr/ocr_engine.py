@@ -105,8 +105,10 @@ def build_engine(model_root: Path, expected_hashes: dict) -> PaddleOcrEngine:
     # 同issueで他ユーザーがpaddlepaddle==3.2.2への切り戻しで解消したことを報告しており、
     # 本実験で同様の効果を検証する(requirements.txtも3.3.1→3.2.2に変更済み)。
     #
-    # cpu_threads=2(ADR-0025 PR4c Phase 1実験で確立、vCPU数=2に一致させオーバー
-    # サブスクリプションを回避)。
+    # cpu_threads=4(ADR-0025 PR4c 71ページゲート微調整実験、実験ブランチ限定):
+    # mkldnn復活後の実測(cpu_threads=2/--cpu=2)でp50=11.26秒/p95=12.7秒まで改善し、
+    # 71ページゲート(850秒)まで残り約6%(902秒)に迫った。vCPU数=4(.github/workflows/
+    # deploy-paddle-ocr.ymlの--cpu=4)に一致させ、この差を埋められるか検証する。
     engine = PaddleOCR(
         text_detection_model_name=DET_MODEL_NAME,
         text_detection_model_dir=str(det_dir),
@@ -116,7 +118,7 @@ def build_engine(model_root: Path, expected_hashes: dict) -> PaddleOcrEngine:
         use_doc_unwarping=False,
         use_textline_orientation=False,
         enable_mkldnn=True,
-        cpu_threads=2,
+        cpu_threads=4,
     )
 
     det_hash12 = expected_hashes["textDetection"]["fileHashes"]["inference.pdiparams"][:12]
