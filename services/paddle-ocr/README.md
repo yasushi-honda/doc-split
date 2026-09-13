@@ -62,7 +62,7 @@ ADR-0025(PaddleOCR移行)のPR4: 自前ホスティングPaddleOCR(PP-OCRv6 medi
 
 ## PR4a実装時の実機検証で判明した事項
 
-- **linux/amd64でのmkldnn実行パスの不具合**: デフォルト設定(`enable_mkldnn`未指定)でamd64コンテナ上で推論を実行すると`(Unimplemented) ConvertPirAttribute2RuntimeAttribute not support [...]`(`onednn_instruction.cc`)で例外終了することを確認した(QEMUエミュレーション環境での検証、実Cloud Run実機での再現有無はPR4bで要確認)。`enable_mkldnn=False`で回避し、`ocr_engine.py`・`scripts/generate-paddle-ocr-golden-text.py`の両方に反映済み。mkldnnはCPU推論の高速化オプションであり正解性には影響しない。
+- **linux/amd64でのmkldnn実行パスの不具合**: デフォルト設定(`enable_mkldnn`未指定)でamd64コンテナ上で推論を実行すると`(Unimplemented) ConvertPirAttribute2RuntimeAttribute not support [pir::ArrayAttribute<pir::DoubleAttribute>]`(`onednn_instruction.cc`)で例外終了することを確認した(初回はQEMUエミュレーション環境での観測。**PR4c Stage 2(2026-09-13)で実Cloud Run dev環境に`enable_mkldnn=True`をデプロイし実際に再現することを確認済み**——QEMU限定の問題ではなく、このPaddlePaddleビルドの実機非対応パターンと確定した)。`enable_mkldnn=False`で回避し、`ocr_engine.py`・`scripts/generate-paddle-ocr-golden-text.py`の両方に反映済み。mkldnnはCPU推論の高速化オプションであり正解性には影響しない。速度改善レバーとしては不採用が確定したため、次点候補(`cpu_threads`明示指定・`--cpu`増量)を検討する。
 - **arm64/amd64のOCR結果一致(重要なリスク解消)**: ADR-0025 PR4計画のv2で「未検証のリスク」として明記していた「arm64(Mac)生成のgolden textとamd64(Cloud Run想定)推論結果が完全一致するか」について、ローカルDocker(linux/amd64、QEMUエミュレーション)上で5 fixture全て(6ページ)を検証し、**文字単位で完全一致**することを確認した。ただし実Cloud Run実機(エミュレーションではない実x86_64ハードウェア)での再確認はPR4bで実施する。
 - **イメージサイズ**: 725MB(単一ステージ、python:3.12-slimベース)。ADR-0025 PR4計画v1が見積もっていた「3〜4GB級」は過大な推測だったことが確定した。
 
