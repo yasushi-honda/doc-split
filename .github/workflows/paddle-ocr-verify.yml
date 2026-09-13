@@ -1,0 +1,98 @@
+name: PaddleOCR Verify Stage 1 (ADR-0025 PR4c)
+
+# Stage 1: golden一次スクリーニングのみ対応。png/load/coldはStage 2/3判断待ち
+# (~/.claude/plans/enumerated-gliding-bengio.md、plan-crossreview実施済み)。
+#
+# 設計判断:
+# - concurrency groupはdeploy-paddle-ocr.ymlと意図的に同一にする(codex pass2 High指摘反映)。
+#   GitHub Actionsのconcurrency groupはリポジトリ全体で文字列一致するため、計測中に
+#   deploy-paddle-ocr.ymlが起動されると自動的にキュー待ち/キャンセルになり、
+#   サービススナップショット比較(事後検知)より確実な排他が得られる。
+# - 全てのinputs.*/secrets.*はstep-level env:経由で変数化し、run:内で${{ }}を直接展開しない
+#   (deploy-paddle-ocr.ymlと同一のworkflow injection対策)。
+# - timeout-minutes: 240。正常時(golden 6ページ×repeat3=18リクエスト、97秒/件)は約30分だが、
+#   リトライ・バックオフが複数件重なる最悪ケースを吸収する安全マージン(GHAの6時間ハード上限内)。
+# - upload-artifact/Step Summary出力はif: always()にする(スクリプトが非ゼロ終了しても
+#   測定結果を必ず回収する、codex pass2 Medium指摘反映)。
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment(Stage 1はdevのみ対応)'
+        required: true
+        type: choice
+        options:
+          - dev
+      repeat:
+        description: 'golden 6ページを何周送信するか(既定3、2件目以降がsubsequentRequestsMs系列になる)'
+        required: false
+        default: '3'
+
+concurrency:
+  group: deploy-paddle-ocr-${{ github.event.inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate inputs
+        env:
+          ENVIRONMENT: ${{ github.event.inputs.environment }}
+        run: |
+          set -euo pipefail
+          if [ "$ENVIRONMENT" != "dev" ]; then
+            echo "ERROR: Stage 1では現時点でdevのみ対応(got: $ENVIRONMENT)" >&2
+            exit 1
+          fi
+
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY_DEV }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run paddle-ocr-verify (golden mode)
+        id: run_verify
+        env:
+          REPEAT: ${{ github.event.inputs.repeat }}
+        run: |
+          set +e
+          npx ts-node scripts/paddle-ocr-verify.ts --mode=golden --repeat="${REPEAT:-3}" --out=paddle-ocr-verify-golden.json
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Upload report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: paddle-ocr-verify-golden-report
+          path: paddle-ocr-verify-golden.json
+          if-no-files-found: warn
+
+      - name: Fail job if verify script reported non-zero exit
+        if: always()
+        env:
+          VERIFY_EXIT_CODE: ${{ steps.run_verify.outputs.exit_code }}
+        run: |
+          set -euo pipefail
+          if [ "${VERIFY_EXIT_CODE:-1}" != "0" ]; then
+            echo "ERROR: paddle-ocr-verify.ts が非ゼロ終了しました(exit_code=${VERIFY_EXIT_CODE:-unknown})。詳細はartifactのJSONレポートおよびStep Summaryを確認してください" >&2
+            exit 1
+          fi
+          echo "OK: paddle-ocr-verify.ts は正常終了しました"
