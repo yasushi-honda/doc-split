@@ -27,6 +27,10 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
+# ADR-0025 PR4c HPI実験(実験ブランチ限定): ultra-infer-python(ONNX Runtime/OpenVINO経由の
+# 高速推論プラグイン)を導入する。ocr_engine.pyのenable_hpi=Trueに対応。
+RUN paddlex --install hpi-cpu -y
+
 # モデル取得+SHA-256検証(ビルド時専用、fail-loud)。HOME=/tmp/paddle-buildでHFキャッシュを
 # 隔離し、同一RUN内で削除することで最終イメージにキャッシュが残らないようにする。
 # hashutil.pyはdownload_models.py(ビルド時)とocr_engine.py(実行時)の両方が共有する

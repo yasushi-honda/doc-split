@@ -121,6 +121,13 @@ def build_engine(model_root: Path, expected_hashes: dict) -> PaddleOcrEngine:
         use_textline_orientation=False,
         enable_mkldnn=False,
         cpu_threads=2,
+        # enable_hpi=True(ADR-0025 PR4c HPI実験、実験ブランチ限定): enable_mkldnnは
+        # PIR(new IR)との組み合わせで実機クラッシュ確認済みのため無効化したままだが、
+        # PaddleOCR公式ベンチマーク(2.05秒/画像)が使ったであろう最適化CPU推論パスを
+        # 使えていない可能性がある。enable_hpiはONNX Runtime/OpenVINO経由の別の高速化
+        # プラグイン(ultra-infer-python、Dockerfileでpaddlex --install hpi-cpuにより導入)
+        # で、mkldnnのバグを回避しつつ最適化バックエンドを使えるか検証する。
+        enable_hpi=True,
     )
 
     det_hash12 = expected_hashes["textDetection"]["fileHashes"]["inference.pdiparams"][:12]
