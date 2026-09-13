@@ -98,6 +98,39 @@ def test_health_reports_model_version_when_engine_loaded(client):
     assert body["engine"] == "paddleocr"
 
 
+def test_health_forced_failure_stays_ok_before_grace_period(client, monkeypatch):
+    """ADR-0025 PR4b D-1実効性検証用のFORCE_HEALTH_FAIL_AFTER_SECONDSフック。
+    グレース期間(閾値秒数)を経過するまでは通常のENGINE状態通りの応答を返すことを固定する
+    (startup probeが実際のモデルロード完了を待って一度パスできることを保証するため)。"""
+    app_module.ENGINE = StubEngine()
+    monkeypatch.setattr(app_module, "FORCE_HEALTH_FAIL_AFTER_SECONDS", 1000.0)
+    monkeypatch.setattr(app_module, "_PROCESS_START_MONOTONIC", app_module.time.monotonic())
+    resp = client.get("/health")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+
+
+def test_health_forced_failure_returns_503_after_grace_period(client, monkeypatch):
+    """グレース期間経過後は、ENGINEが正常ロード済みでも/healthが常に503を返すことを固定する
+    (liveness probeを決定論的に失敗させ、Cloud Runによるインスタンス強制置換を検証するため)。"""
+    app_module.ENGINE = StubEngine()
+    monkeypatch.setattr(app_module, "FORCE_HEALTH_FAIL_AFTER_SECONDS", 0.0)
+    monkeypatch.setattr(
+        app_module, "_PROCESS_START_MONOTONIC", app_module.time.monotonic() - 1.0
+    )
+    resp = client.get("/health")
+    assert resp.status_code == 503
+    body = resp.json()
+    assert body["status"] == "forced-failure"
+    assert body["modelLoaded"] is True
+
+
+def test_health_forced_failure_disabled_by_default(client):
+    """本番相当(環境変数未設定)ではFORCE_HEALTH_FAIL_AFTER_SECONDSがNoneのままであり、
+    通常のENGINE状態判定のみが働くことを固定する(既定で無効であることの回帰検知)。"""
+    assert app_module.FORCE_HEALTH_FAIL_AFTER_SECONDS is None
+
+
 def test_healthz_route_no_longer_exists(client):
     """pr-test-analyzer指摘反映: /healthzはdev実機でGoogle Frontend側に外部到達を
     拒否され続けたため/healthへ改名した(README.md「Cloud Run liveness probeによる

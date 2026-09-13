@@ -49,6 +49,18 @@ MAX_PAGES = int(os.environ.get("MAX_PAGES", "8"))
 MAX_PIXELS = int(os.environ.get("MAX_PIXELS", str(40_000_000)))
 MAX_PROCESSING_SECONDS = float(os.environ.get("MAX_PROCESSING_SECONDS", "240"))
 IMAGE_DIGEST = os.environ.get("IMAGE_DIGEST", "unknown")
+# ADR-0025 PR4b D-1実効性検証専用(本番では未設定=無効)。設定時、プロセス起動から
+# 指定秒数が経過した後の/healthを常に503にする。startup probeは実際のENGINEロード完了を
+# 待って一度パスさせ、その後にliveness probeだけを決定論的に失敗させたい(=真にハングした
+# インスタンスをCloud Runが強制置換することの検証)ため、単純な「常に503」ではなく
+# 「起動からのグレース期間後にのみ503」という時間ベースの遅延発火にしている。
+# 本番運用のCloud Runサービスにこの環境変数を設定してはならない(README.md
+# 「Cloud Run liveness probeによるインスタンス強制入れ替え」節参照)。
+_FORCE_HEALTH_FAIL_AFTER_SECONDS_RAW = os.environ.get("FORCE_HEALTH_FAIL_AFTER_SECONDS")
+FORCE_HEALTH_FAIL_AFTER_SECONDS = (
+    float(_FORCE_HEALTH_FAIL_AFTER_SECONDS_RAW) if _FORCE_HEALTH_FAIL_AFTER_SECONDS_RAW else None
+)
+_PROCESS_START_MONOTONIC = time.monotonic()
 
 ALLOWED_CONTENT_TYPES = {
     "application/pdf": "pdf",
@@ -92,14 +104,20 @@ def health():
     # startup/liveness probeがこの分岐に到達することは通常起こらない — 503化は
     # 「probeの誤判定を防ぐ」ためではなく、定常状態のヘルスチェック応答をより正確に
     # するための防御的な変更(services/paddle-ocr/README.md「既知の限界」節参照)。
+    forced_failure = (
+        FORCE_HEALTH_FAIL_AFTER_SECONDS is not None
+        and (time.monotonic() - _PROCESS_START_MONOTONIC) >= FORCE_HEALTH_FAIL_AFTER_SECONDS
+    )
     body = {
-        "status": "ok" if ENGINE is not None else "starting",
+        "status": "forced-failure" if forced_failure else ("ok" if ENGINE is not None else "starting"),
         "engine": "paddleocr",
         "modelVersion": ENGINE.model_version if ENGINE is not None else None,
         "renderDpi": RENDER_DPI,
         "imageDigest": IMAGE_DIGEST,
         "modelLoaded": ENGINE is not None,
     }
+    if forced_failure:
+        return JSONResponse(status_code=503, content=body)
     return JSONResponse(status_code=200 if ENGINE is not None else 503, content=body)
 
 
