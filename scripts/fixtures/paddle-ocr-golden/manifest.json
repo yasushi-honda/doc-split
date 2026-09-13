@@ -1,6 +1,6 @@
 {
-  "generatedAt": "2026-09-13T22:26:44.813535+00:00",
-  "generatorGitCommit": "6b1017ffa881b04a4e1e0c3c3a676ec927788581",
+  "generatedAt": "2026-09-13T22:53:05.224455+00:00",
+  "generatorGitCommit": "b0113f19e958755aaf3982b7d92f154136cc619f",
   "renderDpi": 200,
   "engine": "paddleocr",
   "textDetectionModelName": "PP-OCRv6_medium_det",
