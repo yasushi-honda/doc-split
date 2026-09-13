@@ -93,24 +93,22 @@ def build_engine(model_root: Path, expected_hashes: dict) -> PaddleOcrEngine:
     det_dir = model_root / DET_MODEL_NAME
     rec_dir = model_root / REC_MODEL_NAME
 
-    # lang指定はtext_detection_model_name/text_recognition_model_name指定時は無視される
-    # (scripts/generate-paddle-ocr-golden-text.pyで実測済みの挙動)ため渡さない。
-    #
-    # enable_mkldnn=False(PR4a実機検証で追加): linux/amd64コンテナ(Cloud Run想定環境)で
-    # デフォルトのmkldnn実行パスを使うと
+    # enable_mkldnn=True + NEWIR_BLOCKLISTモンキーパッチ(ADR-0025 PR4c 新IR回避実験、
+    # 実験ブランチ限定): 素のenable_mkldnn=Trueは新IR(PIR)とoneDNNの組み合わせで
     # "(Unimplemented) ConvertPirAttribute2RuntimeAttribute not support [...]"
-    # (onednn_instruction.cc)で推論が例外終了することを実機確認した。mkldnnはCPU推論の
-    # 高速化オプションであり正解性には影響しないため、無効化して安全側に倒す。
-    # 無効化後、golden fixture(golden_plain_01.pdf)でarm64生成時と文字単位で完全一致する
-    # OCR結果が得られることを確認済み。
-    #
-    # cpu_threads=2(ADR-0025 PR4c Phase 1実験、実験ブランチ限定): PaddleOCRの
-    # DEFAULT_CPU_THREADS(paddleocr/_constants.py)は10だが、Cloud Runのコンテナ割当は
-    # --cpu=2(.github/workflows/deploy-paddle-ocr.yml)であり、未指定のままだと2 vCPU上で
-    # OpenBLAS/OpenMP系の数値計算スレッドが10本走る5倍のオーバーサブスクリプションが
-    # 発生していた(セカンドオピニオンでコード上の事実として指摘・検証済み)。実測93.3秒/
-    # ページがADR-0025のローカルMac実測6〜8秒/ページと乖離する一因の仮説として、
-    # vCPU数に一致させて計測する。
+    # (onednn_instruction.cc)によりクラッシュすることを実機確認済み。PaddleXは
+    # 既知の問題モデルをNEWIR_BLOCKLISTに登録し新IRを無効化する仕組みを持つが、
+    # PP-OCRv6_medium_det/_recはこのリストに未登録(=既知バグとして把握されていない)。
+    # このリストは実行時に参照される可変listのため、モンキーパッチで自分たちのモデル名を
+    # 追加することで、mkldnn自体は有効のまま新IR側だけを回避できるか検証する。
+    from paddlex.inference.models.runners.paddle_static.config import blocklists
+
+    for _model_name in (DET_MODEL_NAME, REC_MODEL_NAME):
+        if _model_name not in blocklists.NEWIR_BLOCKLIST:
+            blocklists.NEWIR_BLOCKLIST.append(_model_name)
+
+    # cpu_threads=2(ADR-0025 PR4c Phase 1実験で確立、vCPU数=2に一致させオーバーサブ
+    # スクリプションを回避)。
     engine = PaddleOCR(
         text_detection_model_name=DET_MODEL_NAME,
         text_detection_model_dir=str(det_dir),
@@ -119,7 +117,7 @@ def build_engine(model_root: Path, expected_hashes: dict) -> PaddleOcrEngine:
         use_doc_orientation_classify=False,
         use_doc_unwarping=False,
         use_textline_orientation=False,
-        enable_mkldnn=False,
+        enable_mkldnn=True,
         cpu_threads=2,
     )
 
