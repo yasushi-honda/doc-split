@@ -13,7 +13,7 @@ functions/test/paddleOcrArbitrationRegression.test.ts (CI対象) はこれらの
 事前準備:
     uv venv --python 3.12 .venv-paddle
     source .venv-paddle/bin/activate
-    uv pip install paddleocr==3.7.0 paddlepaddle==3.3.1 pypdfium2==4.30.0
+    uv pip install paddleocr==3.7.0 paddlepaddle==3.2.2 pypdfium2==4.30.0
 
 実行:
     source .venv-paddle/bin/activate
@@ -106,11 +106,12 @@ def build_ocr_engine():
     # lang指定はtext_detection_model_name/text_recognition_model_name指定時は無視される
     # (実行時にUserWarningで確認済み)ため渡さない。モデルは名前+ディレクトリで完全に固定する。
     #
-    # enable_mkldnn=False(ADR-0025 PR4a実機検証で追加): linux/amd64コンテナ(Cloud Run想定
-    # 環境)でmkldnn実行パスが例外終了する不具合を確認したため無効化した(services/paddle-ocr/
-    # ocr_engine.py参照)。arm64(Mac)ではmkldnnが元々使われないため本スクリプトの出力(golden
-    # text)には影響しないが、services/paddle-ocr/ocr_engine.pyとの「一字一句一致」を保つため
-    # 本スクリプトにも反映する。
+    # enable_mkldnn=True + cpu_threads=4(ADR-0025 PR4c、2026-09-14): services/paddle-ocr/
+    # ocr_engine.pyがpaddlepaddle==3.2.2への切り戻しによりenable_mkldnn=Trueへ変更された
+    # (PaddlePaddle/Paddle#77340、3.3.0系のPIR×oneDNN組み合わせバグを回避)。arm64(Mac)では
+    # mkldnnが元々使われないため本スクリプトの出力(golden text)には影響しない見込みだが、
+    # services/paddle-ocr/ocr_engine.pyとの「一字一句一致」を保つため本スクリプトにも反映し、
+    # 実際に再生成してgolden text/manifestが変化しないことを確認済み。
     return PaddleOCR(
         text_detection_model_name=DET_MODEL_NAME,
         text_detection_model_dir=str(DET_MODEL_DIR),
@@ -119,7 +120,8 @@ def build_ocr_engine():
         use_doc_orientation_classify=False,
         use_doc_unwarping=False,
         use_textline_orientation=False,
-        enable_mkldnn=False,
+        enable_mkldnn=True,
+        cpu_threads=4,
     )
 
 
