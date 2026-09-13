@@ -9,6 +9,11 @@
 # 取得と実行時ロードを明確に分離している。詳細はocr_engine.py/download_models.pyのdocstring参照)。
 FROM python:3.12-slim
 
+# OMP_NUM_THREADS=2(pr-review-toolkit code-reviewer指摘反映、ADR-0025 PR4c):
+# --cpu=4/cpu_threads=4(ocr_engine.py参照)へ変更した後もこの値は意図的に2のまま据え置いている。
+# 実機ベンチマーク(p50=6.4秒/p95=7.4秒等)はこのDockerfile(OMP_NUM_THREADS=2)込みの構成で
+# 計測・確認済みであり、未検証のまま4に変更すると計測結果との対応が崩れるため。将来この値を
+# vCPU数に揃える場合は、cpu_threads側の変更と同様に実機golden計測での再検証が必須。
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
