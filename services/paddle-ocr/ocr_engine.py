@@ -96,21 +96,17 @@ def build_engine(model_root: Path, expected_hashes: dict) -> PaddleOcrEngine:
     # lang指定はtext_detection_model_name/text_recognition_model_name指定時は無視される
     # (scripts/generate-paddle-ocr-golden-text.pyで実測済みの挙動)ため渡さない。
     #
-    # enable_mkldnn=False(PR4a実機検証で追加): linux/amd64コンテナ(Cloud Run想定環境)で
-    # デフォルトのmkldnn実行パスを使うと
+    # enable_mkldnn=True + paddlepaddle==3.2.2ダウングレード(ADR-0025 PR4c mkldnn実験v3、
+    # 実験ブランチ限定): paddlepaddle 3.3.0で導入された新IR(PIR)とoneDNNの組み合わせに
     # "(Unimplemented) ConvertPirAttribute2RuntimeAttribute not support [...]"
-    # (onednn_instruction.cc)で推論が例外終了することを実機確認した。mkldnnはCPU推論の
-    # 高速化オプションであり正解性には影響しないため、無効化して安全側に倒す。
-    # 無効化後、golden fixture(golden_plain_01.pdf)でarm64生成時と文字単位で完全一致する
-    # OCR結果が得られることを確認済み。
+    # (onednn_instruction.cc)というクラッシュが実機確認済み。公式GitHub Issue
+    # (PaddlePaddle/Paddle#77340)で3.3.0系の既知リグレッションと確認済み: 修正PR(#77430)は
+    # developブランチへ2026-04-16マージ済みだが、3.3.1を含むどのPyPI公開版にも未反映。
+    # 同issueで他ユーザーがpaddlepaddle==3.2.2への切り戻しで解消したことを報告しており、
+    # 本実験で同様の効果を検証する(requirements.txtも3.3.1→3.2.2に変更済み)。
     #
-    # cpu_threads=2(ADR-0025 PR4c Phase 1実験、実験ブランチ限定): PaddleOCRの
-    # DEFAULT_CPU_THREADS(paddleocr/_constants.py)は10だが、Cloud Runのコンテナ割当は
-    # --cpu=2(.github/workflows/deploy-paddle-ocr.yml)であり、未指定のままだと2 vCPU上で
-    # OpenBLAS/OpenMP系の数値計算スレッドが10本走る5倍のオーバーサブスクリプションが
-    # 発生していた(セカンドオピニオンでコード上の事実として指摘・検証済み)。実測93.3秒/
-    # ページがADR-0025のローカルMac実測6〜8秒/ページと乖離する一因の仮説として、
-    # vCPU数に一致させて計測する。
+    # cpu_threads=2(ADR-0025 PR4c Phase 1実験で確立、vCPU数=2に一致させオーバー
+    # サブスクリプションを回避)。
     engine = PaddleOCR(
         text_detection_model_name=DET_MODEL_NAME,
         text_detection_model_dir=str(det_dir),
@@ -119,7 +115,7 @@ def build_engine(model_root: Path, expected_hashes: dict) -> PaddleOcrEngine:
         use_doc_orientation_classify=False,
         use_doc_unwarping=False,
         use_textline_orientation=False,
-        enable_mkldnn=False,
+        enable_mkldnn=True,
         cpu_threads=2,
     )
 
