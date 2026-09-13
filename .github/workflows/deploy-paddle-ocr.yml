@@ -367,6 +367,7 @@ jobs:
             --max-instances=3 \
             --timeout=300 \
             --cpu-boost \
+            --execution-environment=gen2 \
             --startup-probe="httpGet.path=/health,httpGet.port=8080,periodSeconds=5,timeoutSeconds=3,failureThreshold=24" \
             --liveness-probe="httpGet.path=/health,httpGet.port=8080,periodSeconds=30,timeoutSeconds=5,failureThreshold=10" \
             --update-env-vars="PADDLE_PDF_RENDER_DPI=200,MAX_PAGES=8,MAX_PIXELS=40000000,MAX_PROCESSING_SECONDS=240,IMAGE_DIGEST=${IMAGE_DIGEST}"
