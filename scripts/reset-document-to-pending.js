@@ -130,7 +130,10 @@ async function main() {
   // 存在してnull等の非配列値の場合はfail-closedで全docId拒否として扱う(不正形式が
   // 「無制限」と誤読されるとgate未整備のままGeminiへ流れてしまうため)。
   const allowlistFieldPresent = Object.prototype.hasOwnProperty.call(featuresData, 'paddleOcrAllowlist');
-  const allowlistPermits = !allowlistFieldPresent || (Array.isArray(allowlist) && allowlist.includes(docId));
+  // 全要素がstringであることも要求する(codex review strict P2指摘): getPaddleOcrGate()は
+  // 混在型配列(非string要素を含む)もfail-closedで[]扱いにするため、判定を完全一致させる。
+  const isValidAllowlist = Array.isArray(allowlist) && allowlist.every((v) => typeof v === 'string');
+  const allowlistPermits = !allowlistFieldPresent || (isValidAllowlist && allowlist.includes(docId));
   if (!paddleOcrEnabled || !allowlistPermits) {
     console.error(
       `ERROR: PaddleOCRゲートが未整備です(paddleOcr=${paddleOcrEnabled}, allowlist=${JSON.stringify(allowlist)})。` +
