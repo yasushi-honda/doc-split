@@ -76,6 +76,8 @@ on:
           - inspect-document --file-name --include-related
           - inspect-document --doc-id
           - inspect-document --doc-id --include-related
+          - reset-document-to-pending --doc-id --dry-run
+          - reset-document-to-pending --doc-id --execute
           - audit-storage-mismatch
           - audit-storage-mismatch --no-orphans
           - audit-storage-mismatch --no-collisions
@@ -1581,6 +1583,19 @@ jobs:
         with:
           name: merge-notation-duplicate-masters-backup-${{ github.event.inputs.environment }}-${{ github.run_id }}
           path: scripts/merge-notation-duplicate-masters-backup.json
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Upload reset-document-to-pending backup artifact
+        # ADR-0025 PaddleOCR canary: status=processedの実顧客文書をリセットする前のバックアップ。
+        # ランナーのワークスペースはjob終了で消えるため(codex review P1指摘)、artifact経由で
+        # 永続化する。ファイル名にdocId/タイムスタンプを含むためglobで拾う。dry-runでは
+        # ファイルが生成されないためif-no-files-found: warnで許容する。
+        if: ${{ startsWith(github.event.inputs.script, 'reset-document-to-pending') && always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: reset-document-to-pending-backup-${{ github.event.inputs.environment }}-${{ github.run_id }}
+          path: backups/reset-document-to-pending-*.json
           if-no-files-found: warn
           retention-days: 90
 
