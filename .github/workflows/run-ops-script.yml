@@ -76,6 +76,8 @@ on:
           - inspect-document --file-name --include-related
           - inspect-document --doc-id
           - inspect-document --doc-id --include-related
+          - reset-document-to-pending --doc-id --dry-run
+          - reset-document-to-pending --doc-id --execute
           - audit-storage-mismatch
           - audit-storage-mismatch --no-orphans
           - audit-storage-mismatch --no-collisions

@@ -1,0 +1,147 @@
+#!/usr/bin/env node
+/**
+ * status=processed の documents を1件だけ status=pending へリセットするスクリプト(ADR-0025)
+ *
+ * PaddleOCR canary展開(Pass1)で、既にstatus=processedの実顧客文書を対象に
+ * 「そのまま再処理させて新しいOCRプロバイダの結果を確認する」ために使う。
+ * `scripts/fix-stuck-documents.js`はerror/processing状態専用でこの用途には使えないため、
+ * 別スクリプトとして新設する。
+ *
+ * 安全策:
+ *   - status===processedの文書のみ対象(error/pending/processing等は拒否、誤用防止)
+ *   - リセット前の全フィールドをバックアップJSON保存(backups/配下)
+ *   - 既定はdry-run、--executeで実書込み
+ *   - resolveClientName()でscripts/clients/*.envと照合(誤ったプロジェクトへの実行防止)
+ *
+ * リセット内容は`scripts/reset-documents-by-office.js`と同一の最小フィールドセット
+ * (status/retryCount/lastErrorMessage/updatedAt/pass2Promotion削除)。
+ * customerId/officeId等の確定済みフィールドは一切変更しない
+ * (再処理結果で上書きされるのは`processDocument()`が書き込むフィールドのみ)。
+ *
+ * 使用方法:
+ *   FIREBASE_PROJECT_ID=docsplit-kanameone node scripts/reset-document-to-pending.js \
+ *     --doc-id <docId> --dry-run
+ *   FIREBASE_PROJECT_ID=docsplit-kanameone node scripts/reset-document-to-pending.js \
+ *     --doc-id <docId> --execute
+ */
+
+const fs = require('fs');
+const path = require('path');
+const admin = require('firebase-admin');
+
+const projectId = process.env.FIREBASE_PROJECT_ID;
+if (!projectId) {
+  console.error('FIREBASE_PROJECT_ID を設定してください');
+  process.exit(1);
+}
+
+function getArg(name) {
+  const i = process.argv.indexOf(name);
+  return i >= 0 ? process.argv[i + 1] : undefined;
+}
+
+const docId = getArg('--doc-id');
+const execute = process.argv.includes('--execute');
+
+if (!docId) {
+  console.error('--doc-id <docId> を指定してください');
+  process.exit(1);
+}
+
+/**
+ * scripts/clients/*.env の PROJECT_ID と照合し、対象がどのクライアント環境かを解決する。
+ * 一致しない場合は未登録プロジェクトへの誤操作の可能性があるため中断する。
+ * (set-feature-flag.js / set-drive-allowlist.js resolveClientName() と同一ロジック)
+ */
+function resolveClientName(targetProjectId) {
+  const clientsDir = path.join(__dirname, 'clients');
+  const envFiles = fs.readdirSync(clientsDir).filter((f) => f.endsWith('.env'));
+  for (const file of envFiles) {
+    const content = fs.readFileSync(path.join(clientsDir, file), 'utf8');
+    const m = content.match(/^PROJECT_ID=["']?([^"'\r\n]+)["']?/m);
+    if (m && m[1] === targetProjectId) {
+      return file.replace(/\.env$/, '');
+    }
+  }
+  return null;
+}
+
+const clientName = resolveClientName(projectId);
+if (!clientName) {
+  console.error(
+    `ERROR: FIREBASE_PROJECT_ID="${projectId}" は scripts/clients/*.env のどのPROJECT_IDとも一致しません。`
+  );
+  console.error('誤ったプロジェクトへの書込みを防ぐため中断します。');
+  process.exit(1);
+}
+
+admin.initializeApp({ projectId });
+const db = admin.firestore();
+
+function serializeTimestamps(obj) {
+  return JSON.parse(
+    JSON.stringify(obj, (_key, value) => {
+      if (value && typeof value === 'object' && typeof value.toDate === 'function') {
+        return value.toDate().toISOString();
+      }
+      return value;
+    })
+  );
+}
+
+async function main() {
+  console.log(`環境: ${clientName} (project: ${projectId})`);
+  console.log(`対象: documents/${docId}`);
+
+  const ref = db.doc(`documents/${docId}`);
+  const snap = await ref.get();
+  if (!snap.exists) {
+    console.error(`ERROR: documents/${docId} が見つかりません`);
+    process.exit(1);
+  }
+
+  const data = snap.data();
+  if (data.status !== 'processed') {
+    console.error(
+      `ERROR: status="${data.status}" のため対象外です(processedのみ対象、誤用防止)。` +
+        'error/processing状態のリセットは scripts/fix-stuck-documents.js を使用してください。'
+    );
+    process.exit(1);
+  }
+
+  console.log(`現在のstatus: ${data.status} / customerConfirmed: ${data.customerConfirmed} / officeConfirmed: ${data.officeConfirmed}`);
+  console.log('→ status: pending へリセットします');
+
+  if (!execute) {
+    console.log('\nDRY RUN: 書込みは実行しません。--execute で実行してください。');
+    return;
+  }
+
+  const backupDir = path.join(__dirname, '..', 'backups');
+  if (!fs.existsSync(backupDir)) {
+    fs.mkdirSync(backupDir, { recursive: true });
+  }
+  const ts = new Date().toISOString().replace(/[:.]/g, '-');
+  const backupPath = path.join(backupDir, `reset-document-to-pending-${projectId}-${docId}-${ts}.json`);
+  fs.writeFileSync(backupPath, JSON.stringify({ id: docId, data: serializeTimestamps(data) }, null, 2), 'utf8');
+  console.log(`✓ バックアップ保存: ${backupPath}`);
+
+  await ref.update({
+    status: 'pending',
+    retryCount: 0,
+    lastErrorMessage: null,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    // ADR-0025 PR2: Pass2昇格の可観測化フィールド。前回実行時の値が計測を汚染するのを
+    // 避けるため明示的にクリアする(reset-documents-by-office.jsと同一の配慮)。
+    pass2Promotion: admin.firestore.FieldValue.delete(),
+  });
+
+  console.log(`✓ documents/${docId} を status=pending にリセットしました`);
+}
+
+main()
+  .then(() => process.exit(0))
+  .catch((err) => {
+    console.error('ERROR:', err);
+    process.exit(1);
+  });
