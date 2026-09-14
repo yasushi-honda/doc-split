@@ -276,6 +276,20 @@ if [ "$FULL_DEPLOY" = true ]; then
     mv "${FUNCTIONS_ENV_FILE}.tmp" "$FUNCTIONS_ENV_FILE"
     log_success "functions/.env.${PROJECT_ID} に STORAGE_BUCKET=${STORAGE_BUCKET} を設定"
 
+    # PADDLE_OCR_URL (任意、ADR-0025): .github/workflows/deploy-functions.ymlと同じ理由。
+    # scripts/clients/<alias>.env が<TBD>のまま(PaddleOCR未デプロイ環境)の場合は書き込まない
+    # (codex review P1指摘対応: これを自動反映する経路が無いと、functions/.env.<project-id>を
+    # 手動編集しない限りOCR_PROVIDER=paddleを設定してもPaddleOCRへ到達できない)。
+    case "${PADDLE_OCR_URL:-}" in
+      ""|"<TBD>"|"TBD"|"tbd") ;;
+      *)
+        grep -v '^PADDLE_OCR_URL=' "$FUNCTIONS_ENV_FILE" > "${FUNCTIONS_ENV_FILE}.tmp" || true
+        echo "PADDLE_OCR_URL=${PADDLE_OCR_URL}" >> "${FUNCTIONS_ENV_FILE}.tmp"
+        mv "${FUNCTIONS_ENV_FILE}.tmp" "$FUNCTIONS_ENV_FILE"
+        log_success "functions/.env.${PROJECT_ID} に PADDLE_OCR_URL=${PADDLE_OCR_URL} を設定"
+        ;;
+    esac
+
     firebase deploy --only functions -P "$PROJECT_ALIAS"
     log_success "Functions デプロイ完了"
 
