@@ -16,6 +16,8 @@ import {
   isMultiCustomerDetectionEnabled,
   isDriveExportEnabled,
   getDriveExportGate,
+  getPaddleOcrGate,
+  resolveOcrProvider,
   FEATURE_FLAGS_DOC_PATH,
 } from '../src/utils/featureFlags';
 
@@ -161,5 +163,72 @@ describe('getDriveExportGate (allowlist込みgate、Phase D/E再設計 Codex Fin
   it('driveExportAllowlistフィールドが明示的にnullの場合、フィールド不在とは区別しfail-closedでallowlist:[](全拒否)を返す(codex review P1指摘対応: コンソール誤操作等でnullが書き込まれても制限なし扱いにならない)', async () => {
     await db.doc(FEATURE_FLAGS_DOC_PATH).set({ driveExport: true, driveExportAllowlist: null });
     expect(await getDriveExportGate(db)).to.deep.equal({ enabled: true, allowlist: [] });
+  });
+});
+
+describe('getPaddleOcrGate (ADR-0025 Pass1切替のL2ゲート、getDriveExportGateと同型)', () => {
+  beforeEach(async () => {
+    await cleanupCollections(db, COLLECTIONS_TO_CLEAN);
+  });
+
+  it('フラグドキュメントが存在しない場合、enabled:false・allowlist:null(制限なし)を返す', async () => {
+    expect(await getPaddleOcrGate(db)).to.deep.equal({ enabled: false, allowlist: null });
+  });
+
+  it('paddleOcrAllowlistフィールドが無い場合、allowlist:null(制限なし)を返す', async () => {
+    await db.doc(FEATURE_FLAGS_DOC_PATH).set({ paddleOcr: true });
+    expect(await getPaddleOcrGate(db)).to.deep.equal({ enabled: true, allowlist: null });
+  });
+
+  it('paddleOcrAllowlistが空配列の場合、allowlist:[](全docId拒否)を返す', async () => {
+    await db.doc(FEATURE_FLAGS_DOC_PATH).set({ paddleOcr: true, paddleOcrAllowlist: [] });
+    expect(await getPaddleOcrGate(db)).to.deep.equal({ enabled: true, allowlist: [] });
+  });
+
+  it('paddleOcrAllowlistが文字列配列の場合、そのままallowlistとして返す(canary展開想定)', async () => {
+    await db
+      .doc(FEATURE_FLAGS_DOC_PATH)
+      .set({ paddleOcr: true, paddleOcrAllowlist: ['docA', 'docB', 'docC'] });
+    expect(await getPaddleOcrGate(db)).to.deep.equal({
+      enabled: true,
+      allowlist: ['docA', 'docB', 'docC'],
+    });
+  });
+
+  it('paddleOcrAllowlistが配列でない(不正値)場合、fail-closedでallowlist:[](全拒否)を返す', async () => {
+    await db.doc(FEATURE_FLAGS_DOC_PATH).set({ paddleOcr: true, paddleOcrAllowlist: 'docA' as unknown });
+    expect(await getPaddleOcrGate(db)).to.deep.equal({ enabled: true, allowlist: [] });
+  });
+
+  it('paddleOcrAllowlistが非string混在配列の場合、fail-closedでallowlist:[](全拒否)を返す', async () => {
+    await db
+      .doc(FEATURE_FLAGS_DOC_PATH)
+      .set({ paddleOcr: true, paddleOcrAllowlist: ['docA', 123] as unknown });
+    expect(await getPaddleOcrGate(db)).to.deep.equal({ enabled: true, allowlist: [] });
+  });
+
+  it('paddleOcrAllowlistフィールドが明示的にnullの場合、フィールド不在とは区別しfail-closedでallowlist:[](全拒否)を返す', async () => {
+    await db.doc(FEATURE_FLAGS_DOC_PATH).set({ paddleOcr: true, paddleOcrAllowlist: null });
+    expect(await getPaddleOcrGate(db)).to.deep.equal({ enabled: true, allowlist: [] });
+  });
+});
+
+describe('resolveOcrProvider (ADR-0025 L1+L2統合解決)', () => {
+  beforeEach(async () => {
+    await cleanupCollections(db, COLLECTIONS_TO_CLEAN);
+  });
+
+  // このテストプロセスではOCR_PROVIDER環境変数は未設定(既定'gemini')のまま
+  // functions/src/utils/config.tsがロードされる。L1が'paddle'でない場合は
+  // L2(Firestoreフラグ)の状態に関わらず常に'gemini'を返すfail-closed設計を検証する
+  // (L1='paddle'側の分岐はparseOcrProviderの単体テスト(config.test.ts)で別途検証済み)。
+
+  it('L2フラグ未設定でもL1が既定"gemini"のため"gemini"を返す', async () => {
+    expect(await resolveOcrProvider(db, 'doc-1')).to.equal('gemini');
+  });
+
+  it('L2のpaddleOcrフラグがtrueでも、L1が"gemini"のままなら"gemini"を返す(L1が上位ゲート)', async () => {
+    await db.doc(FEATURE_FLAGS_DOC_PATH).set({ paddleOcr: true, paddleOcrAllowlist: ['doc-1'] });
+    expect(await resolveOcrProvider(db, 'doc-1')).to.equal('gemini');
   });
 });

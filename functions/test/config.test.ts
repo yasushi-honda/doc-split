@@ -12,6 +12,7 @@ import {
   parseModelId,
   isThreePointFiveModel,
   resolveGeminiPricing,
+  parseOcrProvider,
 } from '../src/utils/config';
 
 describe('config: parseOcrThinkingBudget (Issue #546)', () => {
@@ -119,5 +120,36 @@ describe('config: resolveGeminiPricing (Issue #548)', () => {
       inputPer1MTokens: 0.3,
       outputPer1MTokens: 2.5,
     });
+  });
+});
+
+describe('config: parseOcrProvider (ADR-0025)', () => {
+  it('未設定(undefined)の場合は既定値"gemini"を返す', () => {
+    expect(parseOcrProvider(undefined)).to.equal('gemini');
+  });
+
+  it('空文字列の場合は既定値"gemini"を返す', () => {
+    expect(parseOcrProvider('')).to.equal('gemini');
+  });
+
+  it('"gemini"を指定した場合は"gemini"を返す', () => {
+    expect(parseOcrProvider('gemini')).to.equal('gemini');
+  });
+
+  it('"paddle"を指定した場合は"paddle"を返す', () => {
+    expect(parseOcrProvider('paddle')).to.equal('paddle');
+  });
+
+  it('未サポート値は既定値"gemini"にフォールバックする(全OCRリクエストを巻き込む事故を防ぐ)', () => {
+    expect(parseOcrProvider('paddleocr')).to.equal('gemini');
+    expect(parseOcrProvider('PADDLE')).to.equal('gemini');
+  });
+
+  it('前後空白付き"paddle"("  paddle  ")はtrimして"paddle"として扱われる', () => {
+    expect(parseOcrProvider('  paddle  ')).to.equal('paddle');
+  });
+
+  it('末尾改行付き"paddle"("paddle\\n")はtrimして"paddle"として扱われる', () => {
+    expect(parseOcrProvider('paddle\n')).to.equal('paddle');
   });
 });

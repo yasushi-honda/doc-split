@@ -7,6 +7,7 @@
  * kanameoneのみ明示ONを想定。cocoroはOFFのまま展開)。
  */
 import * as admin from 'firebase-admin';
+import { PADDLE_OCR_CONFIG, type OcrProvider } from './config';
 
 export const FEATURE_FLAGS_DOC_PATH = 'settings/features';
 
@@ -108,4 +109,62 @@ export async function isDriveFolderClaimReadEnabled(
   const snap = await db.doc(FEATURE_FLAGS_DOC_PATH).get();
   if (!snap.exists) return false;
   return snap.data()?.driveFolderClaimRead === true;
+}
+
+export interface PaddleOcrGate {
+  enabled: boolean;
+  /**
+   * null: フィールド不在 = 制限なし(全docIdが対象、devの全展開挙動)。
+   * string[]: このdocIdのみPaddleOCRへ切替許可(空配列は「全docId拒否」の意味、canary準備用)。
+   * 不正値(非配列・非string混在)はfail-closedで空配列扱い(全docId拒否)にする。
+   */
+  allowlist: string[] | null;
+}
+
+/**
+ * ADR-0025 Pass1切替(`OCR_PROVIDER=paddle`をL1として選択した上での)L2ゲート
+ * (flag + 許可リスト)を単一snapshotで返す。`getDriveExportGate`と同型
+ * (`driveExport`→`paddleOcr`、`driveExportAllowlist`→`paddleOcrAllowlist`)。
+ *
+ * フラグドキュメントが存在しない場合、またはpaddleOcrが明示的にtrueでない場合は
+ * 「無効」を安全側デフォルトとする(fail-closed、段階導入の既定はGemini継続)。
+ */
+export async function getPaddleOcrGate(
+  db: admin.firestore.Firestore
+): Promise<PaddleOcrGate> {
+  const snap = await db.doc(FEATURE_FLAGS_DOC_PATH).get();
+  const data = snap.data();
+  const enabled = data?.paddleOcr === true;
+
+  if (!data || !('paddleOcrAllowlist' in data)) {
+    return { enabled, allowlist: null };
+  }
+  const rawAllowlist = data.paddleOcrAllowlist;
+  if (!Array.isArray(rawAllowlist) || rawAllowlist.some((v) => typeof v !== 'string')) {
+    console.error(
+      `[featureFlags] paddleOcrAllowlist が不正な形式です(配列/文字列以外): ${JSON.stringify(rawAllowlist)}。fail-closedで全docId拒否として扱います。`
+    );
+    return { enabled, allowlist: [] };
+  }
+  return { enabled, allowlist: rawAllowlist as string[] };
+}
+
+/**
+ * ドキュメント単位のOCR Pass1プロバイダを解決する(ADR-0025)。
+ *
+ * L1(環境変数`OCR_PROVIDER`)とL2(Firestoreフラグ+許可リスト)の2層構造。
+ * どちらもGemini側にfail-closed: L1が'paddle'でない場合は即座に'gemini'、
+ * L2の`paddleOcr`フラグが無効、または許可リストが存在しdocIdを含まない場合も'gemini'。
+ * 呼出元(ocrProcessor.ts)はドキュメント処理開始直後に1回だけ呼び出す。
+ */
+export async function resolveOcrProvider(
+  db: admin.firestore.Firestore,
+  docId: string
+): Promise<OcrProvider> {
+  if (PADDLE_OCR_CONFIG.provider !== 'paddle') return 'gemini';
+
+  const gate = await getPaddleOcrGate(db);
+  if (!gate.enabled) return 'gemini';
+  if (gate.allowlist !== null && !gate.allowlist.includes(docId)) return 'gemini';
+  return 'paddle';
 }
