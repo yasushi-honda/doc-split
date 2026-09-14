@@ -129,15 +129,21 @@ async function main() {
   // 揃える(codex review strict P2指摘): フィールド自体が存在しない場合のみ無制限、
   // 存在してnull等の非配列値の場合はfail-closedで全docId拒否として扱う(不正形式が
   // 「無制限」と誤読されるとgate未整備のままGeminiへ流れてしまうため)。
-  const allowlistFieldPresent = Object.prototype.hasOwnProperty.call(featuresData, 'paddleOcrAllowlist');
   // 全要素がstringであることも要求する(codex review strict P2指摘): getPaddleOcrGate()は
   // 混在型配列(非string要素を含む)もfail-closedで[]扱いにするため、判定を完全一致させる。
   const isValidAllowlist = Array.isArray(allowlist) && allowlist.every((v) => typeof v === 'string');
-  const allowlistPermits = !allowlistFieldPresent || (isValidAllowlist && allowlist.includes(docId));
+  // 注意: 本番のgetPaddleOcrGate()はallowlist未設定を「無制限」として許可するが、
+  // 本スクリプトは意図的にそれより厳しくする(codex review strict P1指摘)。単発canaryの
+  // 目的で実行したつもりが、allowlist未設定のままだと既存のpending backlog全体が
+  // PaddleOCR対象になってしまうため、本スクリプトの実行条件としては
+  // 「対象docIdを含む明示的なallowlistが存在すること」を必須とする。
+  const allowlistPermits = isValidAllowlist && allowlist.includes(docId);
   if (!paddleOcrEnabled || !allowlistPermits) {
     console.error(
       `ERROR: PaddleOCRゲートが未整備です(paddleOcr=${paddleOcrEnabled}, allowlist=${JSON.stringify(allowlist)})。` +
-        'このままリセットするとGeminiで再処理が完了し、canaryとして無意味です。' +
+        '本スクリプトは対象docIdを含む明示的なallowlistの存在を必須とします' +
+        '(allowlist未設定=無制限という本番仕様のまま実行すると、既存pending backlog全体が' +
+        'PaddleOCR対象になりうるため)。' +
         'set-feature-flag --flag paddleOcr --value true / set-paddle-ocr-allowlist --set を先に実行してください。'
     );
     process.exit(1);
@@ -186,11 +192,17 @@ async function main() {
   // 持ちうる。存在する場合、processDocument()のreuse-checkが働きOCRプロバイダ呼出自体を
   // スキップしてしまう(codex review --strict-config P2指摘)。canaryの目的は新プロバイダを
   // 実際に呼び出して検証することなので、対象がpageResultsを保持していれば必ずクリアする。
+  // `resolveDetailFields()`はdetail/main不在時、root直下のlegacy pageResultsへフォール
+  // バックする(codex review strict P1/P2指摘)ため、そちらも検出してクリア対象に含める。
   const detailRef = db.doc(`documents/${docId}/detail/main`);
   const detailSnap = await detailRef.get();
-  const hasCachedPageResults = detailSnap.exists && detailSnap.data()?.pageResults !== undefined;
-  if (hasCachedPageResults) {
+  const hasDetailPageResults = detailSnap.exists && detailSnap.data()?.pageResults !== undefined;
+  const hasLegacyRootPageResults = data.pageResults !== undefined;
+  if (hasDetailPageResults) {
     console.log('detail/main.pageResults にキャッシュ済みOCR結果を検出 → 併せてクリアします');
+  }
+  if (hasLegacyRootPageResults) {
+    console.log('documents/{id}.pageResults(legacy形式)にキャッシュ済みOCR結果を検出 → 併せてクリアします');
   }
 
   const backupDir = path.join(__dirname, '..', 'backups');
@@ -200,7 +212,7 @@ async function main() {
   const ts = new Date().toISOString().replace(/[:.]/g, '-');
   const backupPath = path.join(backupDir, `reset-document-to-pending-${projectId}-${docId}-${ts}.json`);
   const backupPayload = { id: docId, data: serializeTimestamps(data) };
-  if (hasCachedPageResults) {
+  if (hasDetailPageResults) {
     backupPayload.detailMain = serializeTimestamps(detailSnap.data());
   }
   fs.writeFileSync(backupPath, JSON.stringify(backupPayload, null, 2), 'utf8');
@@ -224,14 +236,21 @@ async function main() {
     // 「リセット成功」に見えても即時再処理されない(codex review strict P2指摘、
     // fix-stuck-documents.jsと同一の配慮)。
     retryAfter: admin.firestore.FieldValue.delete(),
+    ...(hasLegacyRootPageResults ? { pageResults: admin.firestore.FieldValue.delete() } : {}),
   });
-  if (hasCachedPageResults) {
+  if (hasDetailPageResults) {
     // 本体updateと同一batchでのdetail/main書込み(ocrProcessor.tsの既存規約と同じく原子性を保つ)。
     batch.update(detailRef, { pageResults: admin.firestore.FieldValue.delete() });
   }
   await batch.commit();
 
-  console.log(`✓ documents/${docId} を status=pending にリセットしました${hasCachedPageResults ? '(detail/main.pageResultsもクリア)' : ''}`);
+  const clearedNotes = [
+    hasDetailPageResults && 'detail/main.pageResults',
+    hasLegacyRootPageResults && 'legacy root pageResults',
+  ].filter(Boolean);
+  console.log(
+    `✓ documents/${docId} を status=pending にリセットしました${clearedNotes.length ? `(${clearedNotes.join(' / ')}もクリア)` : ''}`
+  );
 }
 
 main()
