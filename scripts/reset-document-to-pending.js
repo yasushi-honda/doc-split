@@ -120,7 +120,12 @@ async function main() {
   const featuresData = featuresSnap.data() || {};
   const paddleOcrEnabled = featuresData.paddleOcr === true;
   const allowlist = featuresData.paddleOcrAllowlist;
-  const allowlistPermits = allowlist === undefined || allowlist === null || (Array.isArray(allowlist) && allowlist.includes(docId));
+  // getPaddleOcrGate()(functions/src/utils/featureFlags.ts)と同一のnull/undefined判定に
+  // 揃える(codex review strict P2指摘): フィールド自体が存在しない場合のみ無制限、
+  // 存在してnull等の非配列値の場合はfail-closedで全docId拒否として扱う(不正形式が
+  // 「無制限」と誤読されるとgate未整備のままGeminiへ流れてしまうため)。
+  const allowlistFieldPresent = Object.prototype.hasOwnProperty.call(featuresData, 'paddleOcrAllowlist');
+  const allowlistPermits = !allowlistFieldPresent || (Array.isArray(allowlist) && allowlist.includes(docId));
   if (!paddleOcrEnabled || !allowlistPermits) {
     console.error(
       `ERROR: PaddleOCRゲートが未整備です(paddleOcr=${paddleOcrEnabled}, allowlist=${JSON.stringify(allowlist)})。` +
@@ -174,6 +179,10 @@ async function main() {
     // P2指摘、fix-stuck-documents.jsと同一の配慮)。
     errorRescueCount: admin.firestore.FieldValue.delete(),
     lastRescuedAt: admin.firestore.FieldValue.delete(),
+    // 未来時刻のretryAfterが残っているとpendingポーラーが処理をスキップし続け、
+    // 「リセット成功」に見えても即時再処理されない(codex review strict P2指摘、
+    // fix-stuck-documents.jsと同一の配慮)。
+    retryAfter: admin.firestore.FieldValue.delete(),
   });
   if (hasCachedPageResults) {
     // 本体updateと同一batchでのdetail/main書込み(ocrProcessor.tsの既存規約と同じく原子性を保つ)。
