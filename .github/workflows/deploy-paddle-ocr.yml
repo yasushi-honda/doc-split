@@ -1,6 +1,7 @@
 name: Deploy PaddleOCR Cloud Run Service (ADR-0025 PR4b)
 
-# devのみ対応。kanameone/cocoroはGitHub Environment承認設定・実値が未確定のため対象外
+# dev/kanameone対応(2026-09-14、kanameoneのPR3ブートストラップ完了に伴い追加)。
+# cocoroはGitHub Environment承認設定・実値が未確定のため引き続き対象外
 # (pr-d4-backfill.ymlと同様の環境別分岐は将来のクライアント展開PRで追加)。
 #
 # 設計判断(/plan-crossreview反映、ADR-0025 PR4b、~/.claude/plans/fuzzy-moseying-book.md参照):
@@ -25,11 +26,12 @@ on:
   workflow_dispatch:
     inputs:
       environment:
-        description: 'Target environment(現時点ではdevのみ対応)'
+        description: 'Target environment(現時点ではdev/kanameoneのみ対応)'
         required: true
         type: choice
         options:
           - dev
+          - kanameone
       first_deploy:
         description: 'true = 初回デプロイ(PADDLE_OCR_URL未設定の状態から)。false = 既存URLとの一致検証'
         required: true
@@ -57,14 +59,16 @@ jobs:
           ENVIRONMENT: ${{ github.event.inputs.environment }}
         run: |
           set -euo pipefail
-          if [ "$ENVIRONMENT" != "dev" ]; then
-            echo "ERROR: 現時点ではdevのみ対応(got: $ENVIRONMENT)。kanameone/cocoroはGitHub Environment承認設定が未確定のため対象外です" >&2
+          if [ "$ENVIRONMENT" != "dev" ] && [ "$ENVIRONMENT" != "kanameone" ]; then
+            echo "ERROR: 現時点ではdev/kanameoneのみ対応(got: $ENVIRONMENT)。cocoroはGitHub Environment承認設定が未確定のため対象外です" >&2
             exit 1
           fi
 
       - uses: google-github-actions/auth@v2
         with:
-          credentials_json: ${{ secrets.GCP_SA_KEY_DEV }}
+          credentials_json: >-
+            ${{ github.event.inputs.environment == 'kanameone' && secrets.GCP_SA_KEY_KANAMEONE ||
+                secrets.GCP_SA_KEY_DEV }}
 
       - uses: google-github-actions/setup-gcloud@v2
 
