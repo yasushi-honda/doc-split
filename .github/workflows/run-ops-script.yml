@@ -1586,6 +1586,19 @@ jobs:
           if-no-files-found: warn
           retention-days: 90
 
+      - name: Upload reset-document-to-pending backup artifact
+        # ADR-0025 PaddleOCR canary: status=processedの実顧客文書をリセットする前のバックアップ。
+        # ランナーのワークスペースはjob終了で消えるため(codex review P1指摘)、artifact経由で
+        # 永続化する。ファイル名にdocId/タイムスタンプを含むためglobで拾う。dry-runでは
+        # ファイルが生成されないためif-no-files-found: warnで許容する。
+        if: ${{ startsWith(github.event.inputs.script, 'reset-document-to-pending') && always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: reset-document-to-pending-backup-${{ github.event.inputs.environment }}-${{ github.run_id }}
+          path: backups/reset-document-to-pending-*.json
+          if-no-files-found: warn
+          retention-days: 90
+
       - name: Upload backfill-drive-export manifest artifact
         # Phase D/E再設計(breezy-tickling-sifakis.md): --rollbackの対象docId一覧として必須の
         # 復旧材料。dry-runでも出力されるため canary の事前レビュー材料としても使える。
