@@ -21,6 +21,15 @@ on:
           - code-default
           - gemini-2.5-flash
           - gemini-3.5-flash
+      ocr_provider_override:
+        description: 'OCR_PROVIDER override (ADR-0025。未指定=code-default(現在gemini)。paddleを選ぶ前に対象環境のPADDLE_OCR_URLが設定済みであること)'
+        required: true
+        default: 'code-default'
+        type: choice
+        options:
+          - code-default
+          - gemini
+          - paddle
 
 jobs:
   deploy:
@@ -101,6 +110,44 @@ jobs:
           if [ "${{ github.event.inputs.gemini_model_id_override }}" != "code-default" ]; then
             echo "GEMINI_MODEL_ID=${{ github.event.inputs.gemini_model_id_override }}" >> "functions/.env.${PROJECT_ID}"
             echo "GEMINI_MODEL_ID override 適用: ${{ github.event.inputs.gemini_model_id_override }} (functions/.env.${PROJECT_ID})"
+          fi
+
+          # PADDLE_OCR_URL (任意、ADR-0025): deploy-paddle-ocr.ymlのresolve_field_optional()と
+          # 同型。dev以外はPaddleOCR未デプロイのためscripts/clients/<alias>.envが<TBD>のままの
+          # ケースを許容し、その場合は書き込みをスキップする(codex review P1指摘対応: このURLを
+          # 書かないとOCR_PROVIDER=paddleを選んでもPaddleOCRへ到達できず、機能が永久に無効化される)。
+          resolve_field_optional() {
+            local field="$1"
+            local file="$2"
+            local val
+            val=$(grep -E "^${field}=" "$file" | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'")
+            val="${val#"${val%%[![:space:]]*}"}"
+            val="${val%"${val##*[![:space:]]}"}"
+            case "$val" in
+              ""|"<TBD>"|"TBD"|"tbd"|"<TODO>"|"TODO"|"todo"|"<FIXME>"|"FIXME"|"fixme"|"null"|"NULL"|"undefined"|"UNDEFINED"|"xxx"|"XXX"|"<PLACEHOLDER>")
+                echo ""
+                ;;
+              *)
+                echo "$val"
+                ;;
+            esac
+          }
+          PADDLE_OCR_URL=$(resolve_field_optional PADDLE_OCR_URL "$ENV_FILE")
+          if [ -n "$PADDLE_OCR_URL" ]; then
+            echo "PADDLE_OCR_URL=${PADDLE_OCR_URL}" >> "functions/.env.${PROJECT_ID}"
+            echo "PADDLE_OCR_URL 設定: ${PADDLE_OCR_URL} (functions/.env.${PROJECT_ID})"
+          fi
+
+          # OCR_PROVIDER override (任意、ADR-0025 L1ゲート): GEMINI_MODEL_ID overrideと同じ
+          # 即時ロールバック手段。paddleを選んだのに対象環境のPADDLE_OCR_URLが未設定(<TBD>)の
+          # 場合は、デプロイ後にfail-loudするpaddleOcrClient.tsの挙動を待たずここで即座に検知する。
+          if [ "${{ github.event.inputs.ocr_provider_override }}" != "code-default" ]; then
+            if [ "${{ github.event.inputs.ocr_provider_override }}" == "paddle" ] && [ -z "$PADDLE_OCR_URL" ]; then
+              echo "ERROR: ocr_provider_override=paddle が指定されましたが、$ENV_FILE のPADDLE_OCR_URLが未設定です" >&2
+              exit 1
+            fi
+            echo "OCR_PROVIDER=${{ github.event.inputs.ocr_provider_override }}" >> "functions/.env.${PROJECT_ID}"
+            echo "OCR_PROVIDER override 適用: ${{ github.event.inputs.ocr_provider_override }} (functions/.env.${PROJECT_ID})"
           fi
 
           echo "Deploying to: $PROJECT_ALIAS"

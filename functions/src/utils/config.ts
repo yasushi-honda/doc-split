@@ -69,6 +69,47 @@ export function isThreePointFiveModel(modelId: string): boolean {
   return modelId === 'gemini-3.5-flash';
 }
 
+/** OCR Pass1(画像/PDF→テキスト)のエンジン種別 (ADR-0025) */
+export type OcrProvider = 'gemini' | 'paddle';
+
+/**
+ * `OCR_PROVIDER`環境変数からPass1エンジンを解決する (ADR-0025)。
+ *
+ * 既定は'gemini'(現行挙動)。parseModelId/parseOcrThinkingBudgetと同型: ドキュメント化
+ * されていない値は全OCRリクエストを巻き込む事故を避けるため安全側の既定値へフォールバック
+ * する。GCPコンソール等からのコピペで混入する前後空白・改行はtrimしてから比較する。
+ */
+export function parseOcrProvider(envValue: string | undefined): OcrProvider {
+  const trimmed = envValue?.trim();
+  if (trimmed === 'paddle') return 'paddle';
+  if (trimmed !== undefined && trimmed !== '' && trimmed !== 'gemini') {
+    console.warn(
+      `[config] OCR_PROVIDER="${envValue}" is not a supported value (expected "gemini" or "paddle"). Falling back to gemini.`
+    );
+  }
+  return 'gemini';
+}
+
+/**
+ * PaddleOCR Cloud Runサービス(ADR-0025)の呼び出し設定。
+ *
+ * `serviceUrl`が空なのに`provider==='paddle'`が選択されている場合、paddleOcrClient.ts側で
+ * 黙ってGeminiにフォールバックせず確定的にエラーとする(サイレントフォールバックは
+ * コスト削減効果を無言で無効化するため)。
+ */
+export const PADDLE_OCR_CONFIG = {
+  provider: parseOcrProvider(process.env.OCR_PROVIDER),
+  serviceUrl: process.env.PADDLE_OCR_URL || '',
+  /**
+   * codex review P2指摘対応: PaddleOCR Cloud Runサービス側の`MAX_PROCESSING_SECONDS`は240秒
+   * (`.github/workflows/deploy-paddle-ocr.yml`の`--update-env-vars`実測値)。クライアント側の
+   * タイムアウトがこれより短いと、サービス側では正常完了しうるリクエストをクライアントが
+   * 先に中断してリトライしてしまう(無駄なリトライ+実質的な失敗確定)。サービス側上限に
+   * レスポンス転送分の余裕(10秒)を足した値にする。
+   */
+  requestTimeoutMs: 250_000,
+} as const;
+
 // Vertex AI / Gemini設定
 export const GEMINI_CONFIG = {
   /** 使用するGeminiモデルID (Issue #548: `GEMINI_MODEL_ID`で上書き可能、既定gemini-3.5-flash) */

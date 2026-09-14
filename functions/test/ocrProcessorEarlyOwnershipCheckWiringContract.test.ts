@@ -61,18 +61,19 @@ describe('ocrProcessor PDFページOCRループ早期所有権チェック配線
     checkFunctionBody = checkBody!;
   });
 
-  it('checkOcrRunStillOwned の呼出しが extractPdfPage / ocrWithGemini より前にある', () => {
+  it('checkOcrRunStillOwned の呼出しが extractPdfPage / ocrPass1 より前にある', () => {
     const checkCallIdx = pdfPageLoopBody.indexOf('await checkOcrRunStillOwned(');
     // PR3 (ADR-0023関連): extractPdfPage は毎ページ再パースを避けるため、bufferではなく
     // ループ外で事前ロード済みの pdfDoc を受け取る形に変更した (挙動不変)。
     const extractPdfPageIdx = pdfPageLoopBody.indexOf('await extractPdfPage(pdfDoc, i)');
-    const ocrWithGeminiIdx = pdfPageLoopBody.indexOf("await ocrWithGemini(pageBuffer, 'application/pdf'");
+    // ADR-0025 PR6: ocrWithGemini直呼び出しはocrPass1ディスパッチャー経由に置き換わった。
+    const ocrPass1Idx = pdfPageLoopBody.indexOf("await ocrPass1(pageBuffer, 'application/pdf'");
     expect(checkCallIdx, 'checkOcrRunStillOwned呼出しが見つからない').to.be.greaterThan(-1);
     expect(extractPdfPageIdx, 'extractPdfPage呼出しが見つからない').to.be.greaterThan(checkCallIdx);
-    expect(ocrWithGeminiIdx, 'ocrWithGemini呼出しが見つからない').to.be.greaterThan(extractPdfPageIdx);
+    expect(ocrPass1Idx, 'ocrPass1呼出しが見つからない').to.be.greaterThan(extractPdfPageIdx);
   });
 
-  it('ownership.ok が false の場合 OcrRunSupersededError を throw し、以降のGemini呼出しをスキップする', () => {
+  it('ownership.ok が false の場合 OcrRunSupersededError を throw し、以降のOCR呼出しをスキップする', () => {
     const checkCallIdx = pdfPageLoopBody.indexOf('await checkOcrRunStillOwned(');
     const throwMatch = /if\s*\(\s*!ownership\.ok\s*\)\s*\{[\s\S]{0,400}?throw new OcrRunSupersededError\(/.exec(
       pdfPageLoopBody
@@ -80,9 +81,9 @@ describe('ocrProcessor PDFページOCRループ早期所有権チェック配線
     expect(throwMatch, 'ownership.ok===false時のOcrRunSupersededError throwが見つからない').to.not.be.null;
     expect(throwMatch!.index).to.be.greaterThan(checkCallIdx);
 
-    const ocrWithGeminiIdx = pdfPageLoopBody.indexOf("await ocrWithGemini(pageBuffer, 'application/pdf'");
-    expect(throwMatch!.index, 'throwはGemini呼出しより前になければ早期中断の意味がない').to.be.lessThan(
-      ocrWithGeminiIdx
+    const ocrPass1Idx = pdfPageLoopBody.indexOf("await ocrPass1(pageBuffer, 'application/pdf'");
+    expect(throwMatch!.index, 'throwはOCR呼出しより前になければ早期中断の意味がない').to.be.lessThan(
+      ocrPass1Idx
     );
   });
 

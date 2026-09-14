@@ -28,6 +28,8 @@ export const RETRY_CONFIGS = {
   gemini: { ...DEFAULT_RETRY_CONFIG, maxRetries: 3, initialDelayMs: 5000 },
   storage: { ...DEFAULT_RETRY_CONFIG, initialDelayMs: 500 },
   firestore: { ...DEFAULT_RETRY_CONFIG, initialDelayMs: 500 },
+  /** ADR-0025: PaddleOCR Cloud Runサービス呼出し(429/5xx/timeoutのみ対象、403/400/413等は非対象)。 */
+  paddleOcr: { ...DEFAULT_RETRY_CONFIG, maxRetries: 3, initialDelayMs: 2000 },
 } as const;
 
 /** 一時的エラー（リトライ対象）のコード */

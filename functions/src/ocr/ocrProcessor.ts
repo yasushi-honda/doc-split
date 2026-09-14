@@ -22,7 +22,8 @@ import {
   type OcrRunOwnershipResult,
 } from './ocrRunGuard';
 import { getRateLimiter } from '../utils/rateLimiter';
-import { GCP_CONFIG, GEMINI_CONFIG, isThreePointFiveModel } from '../utils/config';
+import { GCP_CONFIG, GEMINI_CONFIG, isThreePointFiveModel, type OcrProvider } from '../utils/config';
+import { ocrWithPaddle } from './paddleOcrClient';
 import {
   extractDocumentTypeEnhanced,
   extractCustomerCandidates,
@@ -53,6 +54,7 @@ import { applyConfirmedFieldProtection } from './confirmedFieldMerge';
 import { buildOcrExcerpt } from './ocrExcerpt';
 import { isFaxDuplicationEnabled } from '../utils/featureFlags';
 import { isMultiCustomerDetectionEnabled } from '../utils/featureFlags';
+import { resolveOcrProvider } from '../utils/featureFlags';
 import { planFaxDuplication, buildFaxDuplicationMemberOverride } from './faxDuplication';
 import {
   buildMultiCustomerDetectionFields,
@@ -181,6 +183,17 @@ export async function processDocument(
     mimeType: docData.mimeType as string,
   };
 
+  // ADR-0025: Pass1(OCR)エンジンをドキュメント単位で1回だけ解決する。ページOCRループの
+  // 反復ごとに呼び直すとFirestore readが重複するうえ、同一文書内でプロバイダが
+  // 途中で変わりうる(=結果の一貫性が壊れる)ため、ここで確定させて使い回す。
+  const ocrProvider: OcrProvider = await resolveOcrProvider(db, docId);
+  // ocrExtraction.version相当のfirestore書込みフィールド(既定はGemini、Pass1が実際に
+  // 呼ばれた場合のみ後段で上書きする。既存pageResults再利用時はOCR自体を呼ばないため
+  // 既定値のまま=既存挙動を保持する)。PaddleOCR時はmodelVersion文字列自体が
+  // (例: "PP-OCRv6_medium/det:.../rec:...")Geminiのモデル名と書式が異なり判別可能なため、
+  // engineを別フィールドに分離せずmodelIdへそのまま転記する(プロバイダ来歴を握りつぶさない)。
+  let pass1ModelVersion = MODEL_ID;
+
   // Issue #526 D3: 分割子ドキュメント(#445で確立済みのparentDocumentIdを持つ)が
   // 親から継承した有効なpageResultsを持つ場合、ページOCRを再実行せず再利用する(コスト削減)。
   // ADR-0018 Phase D (#1): 再利用元は detail/main を優先読み(親フォールバック付き)。
@@ -213,6 +226,15 @@ export async function processDocument(
     );
     pageResults = existingPageResults;
     totalPages = existingPageResults.length;
+    // codex review P2指摘対応: このパスはocrPass1を一切呼ばないため、pass1ModelVersionを
+    // 既定値(MODEL_ID=Gemini)のまま放置すると、PaddleOCRで処理された親のpageResultsを継承した
+    // 分割子ドキュメントのocrExtraction.versionが誤ってGeminiに上書きされる(実際に生成した
+    // エンジンの来歴を握りつぶす)。継承元の既存ocrExtraction.versionがあればそれを維持する。
+    const inheritedModelVersion = (docData.ocrExtraction as { version?: unknown } | undefined)
+      ?.version;
+    if (typeof inheritedModelVersion === 'string' && inheritedModelVersion) {
+      pass1ModelVersion = inheritedModelVersion;
+    }
   } else {
     if (!reuseCheck.reusable && existingPageResults && existingPageResults.length > 0) {
       console.log(`pageResults reuse skipped for ${docId}: ${reuseCheck.reason}`);
@@ -267,7 +289,8 @@ export async function processDocument(
         console.log(`Processing page ${pageNumber}/${totalPages}`);
 
         const pageBuffer = await extractPdfPage(pdfDoc, i);
-        const result = await ocrWithGemini(pageBuffer, 'application/pdf', pageNumber);
+        const result = await ocrPass1(pageBuffer, 'application/pdf', ocrProvider, pageNumber);
+        pass1ModelVersion = result.modelVersion;
 
         pageResults.push(buildPageResult(result, pageNumber, `Page ${pageNumber}/${totalPages}`));
 
@@ -276,7 +299,8 @@ export async function processDocument(
         totalThinkingTokens += result.thinkingTokens;
       }
     } else {
-      const result = await ocrWithGemini(buffer, mimeType);
+      const result = await ocrPass1(buffer, mimeType, ocrProvider);
+      pass1ModelVersion = result.modelVersion;
       pageResults.push(buildPageResult(result, 1, 'Image'));
       totalInputTokens = result.inputTokens;
       totalOutputTokens = result.outputTokens;
@@ -460,7 +484,7 @@ export async function processDocument(
     ocrResultUrl,
     totalPages,
     suggestedNewOffice,
-    modelId: MODEL_ID,
+    modelId: pass1ModelVersion,
     extractedAt: admin.firestore.FieldValue.serverTimestamp(),
   });
 
@@ -1007,6 +1031,51 @@ async function extractPdfPage(pdfDoc: PDFDocument, pageIndex: number): Promise<B
   newPdf.addPage(copiedPage);
   const pdfBytes = await newPdf.save();
   return Buffer.from(pdfBytes);
+}
+
+/** ocrPass1の戻り値shape。インライン型にすると`Promise<{...}>`の`{`が関数本体の`{`より
+ * 先に来てしまい、grep/brace-nestingベースの契約テスト(extractBraceBlock)が関数本体の
+ * 抽出に失敗するため、名前付き型として切り出す。 */
+interface OcrPass1Result {
+  text: string;
+  inputTokens: number;
+  outputTokens: number;
+  thinkingTokens: number;
+  modelVersion: string;
+}
+
+/**
+ * Pass1(画像/PDF→テキスト)のディスパッチャー (ADR-0025)。
+ *
+ * `provider`(呼出元が`resolveOcrProvider`で文書ごとに1回だけ解決した値)に応じて
+ * Gemini/PaddleOCRのいずれかへ振り分ける。両者の戻り値shapeを統一することで、
+ * 呼出元(processDocument)はプロバイダ非依存にトークン集計・buildPageResult呼出し・
+ * provenance(modelVersion)記録を行える。`engine`は保持しない: modelVersion文字列自体が
+ * (Geminiの"gemini-3.5-flash"とPaddleの"PP-OCRv6_medium/det:.../rec:..."で書式が
+ * 全く異なり)判別可能であり、type-design-analyzerレビューで指摘の通りengineは
+ * どの呼出元からも参照されない死んだフィールドだったため削除した。
+ */
+async function ocrPass1(
+  buffer: Buffer,
+  mimeType: string,
+  provider: OcrProvider,
+  pageNumber?: number
+): Promise<OcrPass1Result> {
+  if (provider === 'paddle') {
+    const result = await ocrWithPaddle(buffer, mimeType, pageNumber);
+    return {
+      text: result.text,
+      inputTokens: result.inputTokens,
+      outputTokens: result.outputTokens,
+      thinkingTokens: result.thinkingTokens,
+      modelVersion: result.modelVersion,
+    };
+  }
+  const result = await ocrWithGemini(buffer, mimeType, pageNumber);
+  return {
+    ...result,
+    modelVersion: MODEL_ID,
+  };
 }
 
 /**
