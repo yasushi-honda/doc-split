@@ -112,6 +112,25 @@ async function main() {
   console.log(`現在のstatus: ${data.status} / customerConfirmed: ${data.customerConfirmed} / officeConfirmed: ${data.officeConfirmed}`);
   console.log('→ status: pending へリセットします');
 
+  // ADR-0025 PaddleOCR canary: このスクリプトの唯一の用途はPaddleOCR検証のため、
+  // 実際にpaddleへ回るゲート状態(L2フラグ+allowlist)でなければfail-closedする
+  // (codex review --strict-config P2指摘: ゲートOFFのままリセットするとGeminiで
+  // 静かに再処理が完了し、「canary成功」に見えて実際は新プロバイダを検証していない)。
+  const featuresSnap = await db.doc('settings/features').get();
+  const featuresData = featuresSnap.data() || {};
+  const paddleOcrEnabled = featuresData.paddleOcr === true;
+  const allowlist = featuresData.paddleOcrAllowlist;
+  const allowlistPermits = allowlist === undefined || allowlist === null || (Array.isArray(allowlist) && allowlist.includes(docId));
+  if (!paddleOcrEnabled || !allowlistPermits) {
+    console.error(
+      `ERROR: PaddleOCRゲートが未整備です(paddleOcr=${paddleOcrEnabled}, allowlist=${JSON.stringify(allowlist)})。` +
+        'このままリセットするとGeminiで再処理が完了し、canaryとして無意味です。' +
+        'set-feature-flag --flag paddleOcr --value true / set-paddle-ocr-allowlist --set を先に実行してください。'
+    );
+    process.exit(1);
+  }
+  console.log('✓ PaddleOCRゲート確認OK(paddleOcr=true、対象docIdはallowlist許可範囲内)');
+
   if (!execute) {
     console.log('\nDRY RUN: 書込みは実行しません。--execute で実行してください。');
     return;
@@ -150,6 +169,11 @@ async function main() {
     // ADR-0025 PR2: Pass2昇格の可観測化フィールド。前回実行時の値が計測を汚染するのを
     // 避けるため明示的にクリアする(reset-documents-by-office.jsと同一の配慮)。
     pass2Promotion: admin.firestore.FieldValue.delete(),
+    // 自動error-rescue機構の閾値カウンタ。残存すると今回の手動リセット後に429等で
+    // 失敗した場合、rescue上限到達済み扱いで自動復旧されなくなる(codex review strict
+    // P2指摘、fix-stuck-documents.jsと同一の配慮)。
+    errorRescueCount: admin.firestore.FieldValue.delete(),
+    lastRescuedAt: admin.firestore.FieldValue.delete(),
   });
   if (hasCachedPageResults) {
     // 本体updateと同一batchでのdetail/main書込み(ocrProcessor.tsの既存規約と同じく原子性を保つ)。
