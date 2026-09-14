@@ -33,7 +33,8 @@ Gemini(Vertex AI日本リージョン非公式動作)からの移行として、
   - 一般的な技術知見(PaddlePaddleバグの詳細)は`~/.claude/memory/reference_paddlepaddle_330_mkldnn_pir_crash.md`(グローバルメモリ)に記録済み
   - GPU化(GKE/Cloud Batch、GPUクォータ増加申請済み・審査待ち)・AWS Lambda/EC2検証は、この結果を受けて不要と判断(いずれも未着手のまま保留)
 - [x] PR #913マージ完了【2026-09-14】: codex review 3周収束(golden生成スクリプト同期漏れ→manifest来歴不正確→0件)+pr-review-toolkit:code-reviewer(Important 1件、OMP_NUM_THREADS据え置き理由未記載→コメント追記で対応)。mainへsquash mergeし実験ブランチ群(`experiment/paddle-ocr-*`、10本)は未削除のまま残存(実験履歴として保存、必要なら別途整理)
-- [ ] **次の一手**: mainの最新コミットをdevへ再デプロイし本番相当の状態と一致させる(現devは`feature/paddle-ocr-pr4c-cpu-mkldnn-speedup`由来のイメージで稼働中、内容は同一だがコミット系譜を揃える)。その後の残課題: (a) Cloud Functions第2世代の540秒上限(71ページ×7.4秒=約525秒、安全マージン約15秒とまだ薄い、非同期化・ページ単位分割の要否は未検討) (b) Stage 3負荷試験(160ページ等、`fuzzy-moseying-book.md`§4参照)は未着手
+- [x] mainの最新コミットをdevへ再デプロイし本番相当の状態と一致させる【完了・2026-09-14】: `deploy-paddle-ocr.yml`をmainブランチ(HEAD `36a612d2`)から手動dispatch実行(run [34790036864](https://github.com/yasushi-honda/doc-split/actions/runs/34790036864)、成功)。デプロイ後`gcloud run services describe`/`gcloud artifacts docker tags list`で実測確認: 新リビジョン`paddle-ocr-00021-2f8`のイメージタグが`20260913T233600Z-36a612d`となり、main HEADの短縮SHA(`36a612d`)と一致。ワークフロー内蔵の認証済みヘルスチェック(imageDigest一致検証)も成功済み
+- [ ] **次の一手**: (a) Cloud Functions第2世代の540秒上限(71ページ×7.4秒=約525秒、安全マージン約15秒とまだ薄い、非同期化・ページ単位分割の要否は未検討) (b) Stage 3負荷試験(160ページ等、`fuzzy-moseying-book.md`§4参照)は未着手
 
 **現在のミッション（下記「現在のミッション」節、Google Drive連携）との関係**: 完全に独立した並行トラック。優先度判断はdecision-maker領分。
 
