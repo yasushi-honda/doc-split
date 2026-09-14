@@ -181,6 +181,16 @@ on:
           - set-drive-allowlist --clear-empty
           - set-drive-allowlist --remove --dry-run
           - set-drive-allowlist --remove
+          - set-feature-flag --flag paddleOcr --value true --dry-run
+          - set-feature-flag --flag paddleOcr --value true
+          - set-feature-flag --flag paddleOcr --value false --dry-run
+          - set-feature-flag --flag paddleOcr --value false
+          - set-paddle-ocr-allowlist --set --dry-run
+          - set-paddle-ocr-allowlist --set
+          - set-paddle-ocr-allowlist --clear-empty --dry-run
+          - set-paddle-ocr-allowlist --clear-empty
+          - set-paddle-ocr-allowlist --remove --dry-run
+          - set-paddle-ocr-allowlist --remove
           - backfill-drive-export --dry-run --limit --expected-count
           - backfill-drive-export --limit --expected-count
           - backfill-drive-export --dry-run --expected-count
@@ -199,7 +209,7 @@ on:
         type: string
         default: ''
       doc_id:
-        description: 'Document ID (required when script contains --doc-id or set-drive-allowlist --set; ignored otherwise)'
+        description: 'Document ID (required when script contains --doc-id, set-drive-allowlist --set, or set-paddle-ocr-allowlist --set; ignored otherwise)'
         required: false
         type: string
         default: ''
@@ -376,6 +386,20 @@ jobs:
           if [ "$SCRIPT_NAME" = "set-drive-allowlist" ] && echo "$SCRIPT_ARGS" | grep -q -- '--set'; then
             if [ -z "$DOC_ID" ]; then
               echo "ERROR: doc_id input is required when script contains set-drive-allowlist --set" >&2
+              exit 1
+            fi
+            if ! echo "$DOC_ID" | grep -qE '^[A-Za-z0-9_-]+$'; then
+              echo "ERROR: doc_id must contain only alphanumeric, underscore, hyphen characters" >&2
+              exit 1
+            fi
+            SCRIPT_ARGS=$(echo "$SCRIPT_ARGS" | sed "s/--set/--set $DOC_ID/")
+          fi
+
+          # set-paddle-ocr-allowlist --set(ADR-0025 Pass1 canary展開用)は
+          # set-drive-allowlist --setと同一パターン(単一docIdをdoc_id入力から受け取る)。
+          if [ "$SCRIPT_NAME" = "set-paddle-ocr-allowlist" ] && echo "$SCRIPT_ARGS" | grep -q -- '--set'; then
+            if [ -z "$DOC_ID" ]; then
+              echo "ERROR: doc_id input is required when script contains set-paddle-ocr-allowlist --set" >&2
               exit 1
             fi
             if ! echo "$DOC_ID" | grep -qE '^[A-Za-z0-9_-]+$'; then
