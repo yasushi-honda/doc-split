@@ -36,6 +36,14 @@ Gemini(Vertex AI日本リージョン非公式動作)からの移行として、
 - [x] mainの最新コミットをdevへ再デプロイし本番相当の状態と一致させる【完了・2026-09-14】: `deploy-paddle-ocr.yml`をmainブランチ(HEAD `36a612d2`)から手動dispatch実行(run [34790036864](https://github.com/yasushi-honda/doc-split/actions/runs/34790036864)、成功)。デプロイ後`gcloud run services describe`/`gcloud artifacts docker tags list`で実測確認: 新リビジョン`paddle-ocr-00021-2f8`のイメージタグが`20260913T233600Z-36a612d`となり、main HEADの短縮SHA(`36a612d`)と一致。ワークフロー内蔵の認証済みヘルスチェック(imageDigest一致検証)も成功済み
 - [ ] **次の一手**: (a) Cloud Functions第2世代の540秒上限(71ページ×7.4秒=約525秒、安全マージン約15秒とまだ薄い、非同期化・ページ単位分割の要否は未検討) (b) Stage 3負荷試験(160ページ等、`fuzzy-moseying-book.md`§4参照)は未着手
 
+**kanameone本番canary展開・クライアント報告【完了・2026-09-14】**: 上記dev最適化と並行し、kanameone向け本番導入準備も完遂した。
+- [x] kanameoneインフラ準備: Artifact Registry・ランタイムSA・IAM ロール・Cloud Runデプロイ、allowlist設定スクリプト(PR #916)、`deploy-paddle-ocr.yml`のkanameone対応(PR #917)、`PADDLE_OCR_URL`反映(PR #918)
+- [x] kanameone Functions L1配線(`OCR_PROVIDER`環境変数)完了
+- [x] kanameone Pass2昇格率観測デプロイ完了(計測期間進行中、判断は1-2週間後)
+- [x] kanameone Pass1実文書canary検証: 本番文書3件(`BhpiCzQMP5zUmpNvuvOx`/`0Vd63asWLXDRQjMQBaWe`/`0mUx83vaJ67MxzBHf5WF`)をPaddleOCR経由で再処理、全件`ocrExtraction.version: PP-OCRv6_medium`・エラー0件・`customerConfirmed`/`officeConfirmed`とも`false`のまま(業務影響なし)を確認。本番データリセット用ops-script`scripts/reset-document-to-pending.js`を新規実装(L1/L2両ゲートチェック・キャッシュ削除・バックアップ保存、codex review 8ラウンド収束、PR #919マージ)
+- [x] クライアント向け状況報告HTML作成・送信完了(`html-brief`スキル、非エンジニア向け、Gemini 3.5 Flash東京リージョン非公式料金体系のソースリンク・現在の進捗確度・今後の見通しを記載)。生成後、コピー時に`<a href>`のURLが失われる不具合をクライアントが発見、グローバルスキル側(`~/.claude/skills/html-brief`)で根本修正(`inlineLinkHrefs()`追加、コミット`d5399a0`)
+- [ ] 残タスク: 運用コスト実測(kanameone Cloud Run実billing、1-2週間の蓄積待ち)・抽出精度の実データ統計検証(同様に1-2週間待ち)。現状のGemini実質コスト(global料金換算・トークン数仮定ベースで概算$50/月)とCloud Run想定コスト(実測レイテンシ11件サンプルから概算$4-9/月)の試算はあるが、いずれも実測ではなく参考値である旨をレポートには明記済み
+
 **現在のミッション（下記「現在のミッション」節、Google Drive連携）との関係**: 完全に独立した並行トラック。優先度判断はdecision-maker領分。
 
 ## 【完了・2026-08-29開始→2026-08-30完了】複数人記載FAX: 複製廃止→検出バッジへの置換（kanameone、Stage 0〜3完了）
