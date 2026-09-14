@@ -117,16 +117,32 @@ async function main() {
     return;
   }
 
+  // ADR-0018 Phase D: 分割子ドキュメントは`detail/main.pageResults`にキャッシュ済みOCR結果を
+  // 持ちうる。存在する場合、processDocument()のreuse-checkが働きOCRプロバイダ呼出自体を
+  // スキップしてしまう(codex review --strict-config P2指摘)。canaryの目的は新プロバイダを
+  // 実際に呼び出して検証することなので、対象がpageResultsを保持していれば必ずクリアする。
+  const detailRef = db.doc(`documents/${docId}/detail/main`);
+  const detailSnap = await detailRef.get();
+  const hasCachedPageResults = detailSnap.exists && detailSnap.data()?.pageResults !== undefined;
+  if (hasCachedPageResults) {
+    console.log('detail/main.pageResults にキャッシュ済みOCR結果を検出 → 併せてクリアします');
+  }
+
   const backupDir = path.join(__dirname, '..', 'backups');
   if (!fs.existsSync(backupDir)) {
     fs.mkdirSync(backupDir, { recursive: true });
   }
   const ts = new Date().toISOString().replace(/[:.]/g, '-');
   const backupPath = path.join(backupDir, `reset-document-to-pending-${projectId}-${docId}-${ts}.json`);
-  fs.writeFileSync(backupPath, JSON.stringify({ id: docId, data: serializeTimestamps(data) }, null, 2), 'utf8');
+  const backupPayload = { id: docId, data: serializeTimestamps(data) };
+  if (hasCachedPageResults) {
+    backupPayload.detailMain = serializeTimestamps(detailSnap.data());
+  }
+  fs.writeFileSync(backupPath, JSON.stringify(backupPayload, null, 2), 'utf8');
   console.log(`✓ バックアップ保存: ${backupPath}`);
 
-  await ref.update({
+  const batch = db.batch();
+  batch.update(ref, {
     status: 'pending',
     retryCount: 0,
     lastErrorMessage: null,
@@ -135,8 +151,13 @@ async function main() {
     // 避けるため明示的にクリアする(reset-documents-by-office.jsと同一の配慮)。
     pass2Promotion: admin.firestore.FieldValue.delete(),
   });
+  if (hasCachedPageResults) {
+    // 本体updateと同一batchでのdetail/main書込み(ocrProcessor.tsの既存規約と同じく原子性を保つ)。
+    batch.update(detailRef, { pageResults: admin.firestore.FieldValue.delete() });
+  }
+  await batch.commit();
 
-  console.log(`✓ documents/${docId} を status=pending にリセットしました`);
+  console.log(`✓ documents/${docId} を status=pending にリセットしました${hasCachedPageResults ? '(detail/main.pageResultsもクリア)' : ''}`);
 }
 
 main()
