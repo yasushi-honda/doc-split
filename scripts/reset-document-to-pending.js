@@ -12,6 +12,10 @@
  *   - リセット前の全フィールドをバックアップJSON保存(backups/配下)
  *   - 既定はdry-run、--executeで実書込み
  *   - resolveClientName()でscripts/clients/*.envと照合(誤ったプロジェクトへの実行防止)
+ *   - L2ゲート(settings/features.paddleOcr + paddleOcrAllowlist)とL1ゲート(processOCR
+ *     Functionsの環境変数OCR_PROVIDER、`gcloud functions describe`で実機確認、
+ *     roles/cloudfunctions.viewer相当の権限が必要)の両方がpaddleを指していなければ
+ *     fail-closed(片方だけOKでは無意味なcanaryになるため)
  *
  * リセット内容は`scripts/reset-documents-by-office.js`と同一の最小フィールドセット
  * (status/retryCount/lastErrorMessage/updatedAt/pass2Promotion削除)。
@@ -27,6 +31,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { execFileSync } = require('child_process');
 const admin = require('firebase-admin');
 
 const projectId = process.env.FIREBASE_PROJECT_ID;
@@ -134,7 +139,40 @@ async function main() {
     );
     process.exit(1);
   }
-  console.log('✓ PaddleOCRゲート確認OK(paddleOcr=true、対象docIdはallowlist許可範囲内)');
+  console.log('✓ L2ゲート確認OK(paddleOcr=true、対象docIdはallowlist許可範囲内)');
+
+  // L1(デプロイ済みprocessOCR Functionsの環境変数OCR_PROVIDER)も実機確認する(codex review
+  // strict P1指摘: L2がOKでもL1がgemini(デフォルト)のままなら resolveOcrProvider() は
+  // 結局geminiを返す。ここが最終防衛線でありfail-loudする(gcloud呼出自体の失敗も許容しない)。
+  let deployedProvider;
+  try {
+    deployedProvider = execFileSync(
+      'gcloud',
+      [
+        'functions',
+        'describe',
+        'processOCR',
+        '--gen2',
+        '--region=asia-northeast1',
+        `--project=${projectId}`,
+        '--format=value(serviceConfig.environmentVariables.OCR_PROVIDER)',
+      ],
+      { encoding: 'utf8' }
+    ).trim();
+  } catch (err) {
+    console.error(`ERROR: processOCR FunctionsのOCR_PROVIDER確認に失敗しました(gcloud呼出エラー): ${err.message}`);
+    console.error('gcloud CLIの認証状態、またはprocessOCR未デプロイの可能性を確認してください。');
+    process.exit(1);
+  }
+  if (deployedProvider !== 'paddle') {
+    console.error(
+      `ERROR: processOCR FunctionsのL1環境変数 OCR_PROVIDER="${deployedProvider || '(未設定=gemini)'}" です。` +
+        'L2ゲートがOKでもL1がpaddleでなければresolveOcrProvider()はgeminiを返します。' +
+        '"Deploy Cloud Functions" workflow(ocr_provider_override=paddle)を先に実行してください。'
+    );
+    process.exit(1);
+  }
+  console.log('✓ L1ゲート確認OK(processOCR FunctionsのOCR_PROVIDER=paddle)');
 
   if (!execute) {
     console.log('\nDRY RUN: 書込みは実行しません。--execute で実行してください。');
