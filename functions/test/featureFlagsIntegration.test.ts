@@ -219,9 +219,8 @@ describe('resolveOcrProvider (ADR-0025 L1+L2統合解決)', () => {
   });
 
   // このテストプロセスではOCR_PROVIDER環境変数は未設定(既定'gemini')のまま
-  // functions/src/utils/config.tsがロードされる。L1が'paddle'でない場合は
-  // L2(Firestoreフラグ)の状態に関わらず常に'gemini'を返すfail-closed設計を検証する
-  // (L1='paddle'側の分岐はparseOcrProviderの単体テスト(config.test.ts)で別途検証済み)。
+  // functions/src/utils/config.tsがロードされる。以下の2件はその実際の本番既定値
+  // (省略時のl1Provider引数)でL1が上位ゲートとして機能することを検証する。
 
   it('L2フラグ未設定でもL1が既定"gemini"のため"gemini"を返す', async () => {
     expect(await resolveOcrProvider(db, 'doc-1')).to.equal('gemini');
@@ -230,5 +229,37 @@ describe('resolveOcrProvider (ADR-0025 L1+L2統合解決)', () => {
   it('L2のpaddleOcrフラグがtrueでも、L1が"gemini"のままなら"gemini"を返す(L1が上位ゲート)', async () => {
     await db.doc(FEATURE_FLAGS_DOC_PATH).set({ paddleOcr: true, paddleOcrAllowlist: ['doc-1'] });
     expect(await resolveOcrProvider(db, 'doc-1')).to.equal('gemini');
+  });
+
+  // pr-test-analyzerセカンドオピニオン指摘(Critical): L1='paddle'を選んだ場合のL2合成ロジック
+  // (gate.enabled判定 + allowlist.includes判定)は、本番のPADDLE_OCR_CONFIG.providerに依存する
+  // 経路では一度も実行されない(このテストプロセスはOCR_PROVIDER未設定のため)。第3引数
+  // l1Providerでテスト専用に'paddle'を注入し、本番投入の実スイッチそのものである5パターンを
+  // 直接検証する。
+  describe('L1="paddle"注入時のL2合成ロジック(本番投入スイッチの5パターン)', () => {
+    it('L2.enabled=falseなら"gemini"を返す', async () => {
+      await db.doc(FEATURE_FLAGS_DOC_PATH).set({ paddleOcr: false });
+      expect(await resolveOcrProvider(db, 'doc-1', 'paddle')).to.equal('gemini');
+    });
+
+    it('L2.enabled=true・allowlist未設定(制限なし)なら"paddle"を返す(全面切替の主経路)', async () => {
+      await db.doc(FEATURE_FLAGS_DOC_PATH).set({ paddleOcr: true });
+      expect(await resolveOcrProvider(db, 'doc-1', 'paddle')).to.equal('paddle');
+    });
+
+    it('L2.enabled=true・allowlistにdocIdを含む場合は"paddle"を返す(canary)', async () => {
+      await db.doc(FEATURE_FLAGS_DOC_PATH).set({ paddleOcr: true, paddleOcrAllowlist: ['doc-1', 'doc-2'] });
+      expect(await resolveOcrProvider(db, 'doc-1', 'paddle')).to.equal('paddle');
+    });
+
+    it('L2.enabled=true・allowlistにdocIdを含まない場合は"gemini"を返す', async () => {
+      await db.doc(FEATURE_FLAGS_DOC_PATH).set({ paddleOcr: true, paddleOcrAllowlist: ['doc-2', 'doc-3'] });
+      expect(await resolveOcrProvider(db, 'doc-1', 'paddle')).to.equal('gemini');
+    });
+
+    it('L2.enabled=true・allowlist=[](全docId拒否)なら"gemini"を返す', async () => {
+      await db.doc(FEATURE_FLAGS_DOC_PATH).set({ paddleOcr: true, paddleOcrAllowlist: [] });
+      expect(await resolveOcrProvider(db, 'doc-1', 'paddle')).to.equal('gemini');
+    });
   });
 });

@@ -156,12 +156,25 @@ export async function getPaddleOcrGate(
  * どちらもGemini側にfail-closed: L1が'paddle'でない場合は即座に'gemini'、
  * L2の`paddleOcr`フラグが無効、または許可リストが存在しdocIdを含まない場合も'gemini'。
  * 呼出元(ocrProcessor.ts)はドキュメント処理開始直後に1回だけ呼び出す。
+ *
+ * silent-failure-hunterレビュー指摘: 上記「fail-closed」は判定ロジック自体の既定値の話であり、
+ * `getPaddleOcrGate`内のFirestore read自体はtry/catchしていない(既存の`isFaxDuplicationEnabled`
+ * 等の他フラグ取得関数と同じ規約)。read失敗時は例外がそのまま呼出元(processDocument)へ
+ * 伝播し、ドキュメント処理全体がerror状態になる(geminiへ静かにフォールバックするわけではない)。
+ * 「間違ったエンジンを黙って選ぶ」より「処理全体を明示的に失敗させる」方を安全側とする、
+ * このプロジェクトのsilent-failure回避方針との整合を優先した意図的な挙動。
+ *
+ * `l1Provider`はテスト専用の注入口(既定は本番同様`PADDLE_OCR_CONFIG.provider`を使う、
+ * paddleOcrClient.tsのdeps注入と同じ規約)。`PADDLE_OCR_CONFIG`はモジュール読み込み時に
+ * 一度だけ評価される定数のため、これが無いとL1='paddle'側のL2合成ロジック(このpr-test-analyzer
+ * 指摘対応)がテストスイート内で一度も実行されない。
  */
 export async function resolveOcrProvider(
   db: admin.firestore.Firestore,
-  docId: string
+  docId: string,
+  l1Provider: OcrProvider = PADDLE_OCR_CONFIG.provider
 ): Promise<OcrProvider> {
-  if (PADDLE_OCR_CONFIG.provider !== 'paddle') return 'gemini';
+  if (l1Provider !== 'paddle') return 'gemini';
 
   const gate = await getPaddleOcrGate(db);
   if (!gate.enabled) return 'gemini';

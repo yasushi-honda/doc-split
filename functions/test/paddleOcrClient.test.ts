@@ -204,4 +204,44 @@ describe('paddleOcrClient: ocrWithPaddle (ADR-0025 PR5)', () => {
     expect(result.text).to.equal('recovered');
     expect(callCount).to.equal(2);
   });
+
+  it('429のリトライが全て枯渇した場合、最終エラーのstatusを保持したままthrowする', async () => {
+    let callCount = 0;
+    const deps = withNoDelay({
+      fetchImpl: (async () => {
+        callCount++;
+        return jsonResponse(429, { error: { code: 'RESOURCE_EXHAUSTED', message: 'busy' } });
+      }) as typeof fetch,
+    });
+
+    try {
+      await ocrWithPaddle(Buffer.from('x'), 'image/png', 1, deps);
+      expect.fail('エラーがthrowされるべき');
+    } catch (err) {
+      expect((err as Error & { status?: number }).status).to.equal(429);
+    }
+    // RETRY_CONFIGS.paddleOcr: maxRetries=3 → 初回+3リトライ=計4回呼び出される
+    expect(callCount).to.equal(4);
+  });
+
+  it('非JSON(壊れた/インフラ由来)のエラーボディでもcode/messageなしに縮退してfail-loudする', async () => {
+    const deps = withNoDelay({
+      fetchImpl: (async () => {
+        return new Response('<html><body>502 Bad Gateway</body></html>', {
+          status: 502,
+          headers: { 'Content-Type': 'text/html' },
+        });
+      }) as typeof fetch,
+      retryConfig: { maxRetries: 0, initialDelayMs: 1, maxDelayMs: 1, backoffMultiplier: 1 },
+    });
+
+    try {
+      await ocrWithPaddle(Buffer.from('x'), 'image/png', 1, deps);
+      expect.fail('エラーがthrowされるべき');
+    } catch (err) {
+      const error = err as Error & { status?: number };
+      expect(error.status).to.equal(502);
+      expect(error.message).to.equal('PaddleOCR request failed: 502');
+    }
+  });
 });

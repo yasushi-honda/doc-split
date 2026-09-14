@@ -226,6 +226,15 @@ export async function processDocument(
     );
     pageResults = existingPageResults;
     totalPages = existingPageResults.length;
+    // codex review P2指摘対応: このパスはocrPass1を一切呼ばないため、pass1ModelVersionを
+    // 既定値(MODEL_ID=Gemini)のまま放置すると、PaddleOCRで処理された親のpageResultsを継承した
+    // 分割子ドキュメントのocrExtraction.versionが誤ってGeminiに上書きされる(実際に生成した
+    // エンジンの来歴を握りつぶす)。継承元の既存ocrExtraction.versionがあればそれを維持する。
+    const inheritedModelVersion = (docData.ocrExtraction as { version?: unknown } | undefined)
+      ?.version;
+    if (typeof inheritedModelVersion === 'string' && inheritedModelVersion) {
+      pass1ModelVersion = inheritedModelVersion;
+    }
   } else {
     if (!reuseCheck.reusable && existingPageResults && existingPageResults.length > 0) {
       console.log(`pageResults reuse skipped for ${docId}: ${reuseCheck.reason}`);
@@ -1032,7 +1041,6 @@ interface OcrPass1Result {
   inputTokens: number;
   outputTokens: number;
   thinkingTokens: number;
-  engine: string;
   modelVersion: string;
 }
 
@@ -1042,7 +1050,10 @@ interface OcrPass1Result {
  * `provider`(呼出元が`resolveOcrProvider`で文書ごとに1回だけ解決した値)に応じて
  * Gemini/PaddleOCRのいずれかへ振り分ける。両者の戻り値shapeを統一することで、
  * 呼出元(processDocument)はプロバイダ非依存にトークン集計・buildPageResult呼出し・
- * provenance(engine/modelVersion)記録を行える。
+ * provenance(modelVersion)記録を行える。`engine`は保持しない: modelVersion文字列自体が
+ * (Geminiの"gemini-3.5-flash"とPaddleの"PP-OCRv6_medium/det:.../rec:..."で書式が
+ * 全く異なり)判別可能であり、type-design-analyzerレビューで指摘の通りengineは
+ * どの呼出元からも参照されない死んだフィールドだったため削除した。
  */
 async function ocrPass1(
   buffer: Buffer,
@@ -1057,14 +1068,12 @@ async function ocrPass1(
       inputTokens: result.inputTokens,
       outputTokens: result.outputTokens,
       thinkingTokens: result.thinkingTokens,
-      engine: result.engine,
       modelVersion: result.modelVersion,
     };
   }
   const result = await ocrWithGemini(buffer, mimeType, pageNumber);
   return {
     ...result,
-    engine: 'gemini',
     modelVersion: MODEL_ID,
   };
 }

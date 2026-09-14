@@ -100,7 +100,14 @@ export function parseOcrProvider(envValue: string | undefined): OcrProvider {
 export const PADDLE_OCR_CONFIG = {
   provider: parseOcrProvider(process.env.OCR_PROVIDER),
   serviceUrl: process.env.PADDLE_OCR_URL || '',
-  requestTimeoutMs: 180_000,
+  /**
+   * codex review P2指摘対応: PaddleOCR Cloud Runサービス側の`MAX_PROCESSING_SECONDS`は240秒
+   * (`.github/workflows/deploy-paddle-ocr.yml`の`--update-env-vars`実測値)。クライアント側の
+   * タイムアウトがこれより短いと、サービス側では正常完了しうるリクエストをクライアントが
+   * 先に中断してリトライしてしまう(無駄なリトライ+実質的な失敗確定)。サービス側上限に
+   * レスポンス転送分の余裕(10秒)を足した値にする。
+   */
+  requestTimeoutMs: 250_000,
 } as const;
 
 // Vertex AI / Gemini設定

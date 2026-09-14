@@ -79,4 +79,47 @@ describe('ocrProcessor OCR_PROVIDER配線契約 (ADR-0025 PR6)', () => {
     expect(ocrPass1Body).to.include('await ocrWithPaddle(');
     expect(ocrPass1Body).to.include('await ocrWithGemini(');
   });
+
+  // pr-test-analyzerセカンドオピニオン指摘(Critical): ocrExtraction.version相当の監査用
+  // provenanceフィールド(pass1ModelVersion→modelId)は、この配線契約テストを含むどのテストからも
+  // 一切参照されていなかった。「modelId: pass1ModelVersion」が「modelId: MODEL_ID」へ差し戻される
+  // 回帰(コード自身のコメントが明言する「捨てるとPaddle移行後は監査上Geminiと誤記録される」)を
+  // 検知するため、ソース文字列レベルでlock-inする。
+  it('PDFループ・非PDF分岐の両方で ocrPass1 呼出し直後に pass1ModelVersion を更新している', () => {
+    const matches = processDocumentBody.match(/pass1ModelVersion\s*=\s*result\.modelVersion;/g) ?? [];
+    expect(
+      matches.length,
+      'PDFページ分岐・画像分岐の計2箇所でpass1ModelVersionを更新する想定。' +
+        '片方でも欠落するとそのプロバイダのprovenanceがMODEL_ID(Gemini)のまま' +
+        '取り残される回帰になる'
+    ).to.equal(2);
+  });
+
+  it('buildOcrExtractionUpdatePayload には modelId: pass1ModelVersion が渡り、固定のMODEL_IDは渡っていない', () => {
+    expect(
+      processDocumentBody,
+      'modelId: pass1ModelVersion であるべき箇所がmodelId: MODEL_IDへ差し戻されると、' +
+        'PaddleOCRで処理してもFirestoreには常にGeminiのmodelIdが記録される回帰になる'
+    ).to.include('modelId: pass1ModelVersion,');
+    expect(processDocumentBody).to.not.match(/modelId:\s*MODEL_ID,/);
+  });
+
+  it('pageResults再利用パス(OCR自体をスキップ)では、既存のocrExtraction.versionを継承しMODEL_IDへ上書きしない', () => {
+    // codex review P2指摘対応: PaddleOCRで処理された親のpageResultsを継承した分割子ドキュメントの
+    // provenanceが、再利用パス(ocrPass1を呼ばない)でGeminiのMODEL_IDへ誤って上書きされない
+    // ことを検証する。抽出対象は「reuseCheck.reusable && existingPageResults」ブロック本体。
+    const reuseBlock = extractBraceBlock(
+      processDocumentBody,
+      /if\s*\(\s*reuseCheck\.reusable\s*&&\s*existingPageResults\s*\)/
+    );
+    expect(reuseBlock, '再利用パスのifブロック本体の抽出に失敗した').to.not.be.null;
+    expect(
+      reuseBlock,
+      '再利用パスでdocData.ocrExtraction.versionを継承する処理が見つからない'
+    ).to.match(/docData\.ocrExtraction/);
+    expect(
+      reuseBlock,
+      '再利用パスでpass1ModelVersionにinheritedModelVersion相当の値を代入していない'
+    ).to.match(/pass1ModelVersion\s*=\s*inheritedModelVersion/);
+  });
 });
