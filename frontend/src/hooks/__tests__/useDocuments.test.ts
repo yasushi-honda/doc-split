@@ -769,7 +769,10 @@ describe('applySearchTextFilter (ADR-0018 Phase D、Issue #547: ocrResult条件�
 function withGetQueryCacheStub(invalidateQueries: ReturnType<typeof vi.fn>): QueryClient {
   return {
     invalidateQueries,
-    getQueryCache: () => ({ findAll: () => [] }),
+    // subscribe: markGroupDocumentsVariantsDirty(useDocumentGroups.ts)が内部で
+    // getQueryCache().subscribe(...)を呼ぶ(GCイベント購読、2026-09-15 Issue #891修正)
+    // ため、スタブにも用意しておく。
+    getQueryCache: () => ({ findAll: () => [], subscribe: () => () => {} }),
   } as unknown as QueryClient
 }
 
@@ -792,7 +795,7 @@ describe('invalidateDocumentAndGroupQueries (2026-08-06: useDocumentEdit/useRepr
     expect(invalidateQueries).toHaveBeenCalledTimes(5)
   })
 
-  it('documentsInfiniteのみrefetchType:noneを指定する(2026-09-08: Firestore読み取り過大バグ修正。全ページ再取得を自動発火させないため)', () => {
+  it('documentsInfiniteとgroupDocumentsはrefetchType:noneを指定し、それ以外は指定しない(2026-09-08/2026-09-15: Firestore読み取り過大バグ修正。全ページ再取得を自動発火させないため)', () => {
     const invalidateQueries = vi.fn()
     const queryClient = withGetQueryCacheStub(invalidateQueries)
 
@@ -801,14 +804,16 @@ describe('invalidateDocumentAndGroupQueries (2026-08-06: useDocumentEdit/useRepr
     const calls = invalidateQueries.mock.calls.map(
       (call) => call[0] as { queryKey: unknown[]; refetchType?: string }
     )
-    const documentsInfiniteCall = calls.find(
-      (c) => JSON.stringify(c.queryKey) === JSON.stringify(['documentsInfinite'])
-    )
-    expect(documentsInfiniteCall?.refetchType).toBe('none')
+    const findCall = (key: unknown[]) =>
+      calls.find((c) => JSON.stringify(c.queryKey) === JSON.stringify(key))
 
-    const otherCalls = calls.filter(
-      (c) => JSON.stringify(c.queryKey) !== JSON.stringify(['documentsInfinite'])
-    )
+    // 2026-09-15 Issue #891修正: groupDocumentsもuseInfiniteQueryのため
+    // documentsInfiniteと同じくrefetchType:'none'が必要(plan-crossreview対応)
+    expect(findCall(['documentsInfinite'])?.refetchType).toBe('none')
+    expect(findCall(['groupDocuments'])?.refetchType).toBe('none')
+
+    const noneKeys = [JSON.stringify(['documentsInfinite']), JSON.stringify(['groupDocuments'])]
+    const otherCalls = calls.filter((c) => !noneKeys.includes(JSON.stringify(c.queryKey)))
     otherCalls.forEach((c) => {
       expect(c.refetchType).toBeUndefined()
     })

@@ -5,7 +5,8 @@
  * 無限スクロール対応
  */
 
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { FileText, Loader2, RefreshCw, Users } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -19,13 +20,18 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { LoadMoreIndicator } from '@/components/LoadMoreIndicator';
+import { DocumentListUpdateBanner } from '@/components/DocumentListUpdateBanner';
 import { useInfiniteScroll } from '@/hooks/useInfiniteScroll';
 import { useReprocessDocument } from '@/hooks/useDocuments';
 import { useDocumentTypes, useCustomerIdentityLookup, type CustomerIdentityLookup } from '@/hooks/useMasters';
 import {
   useGroupDocuments,
+  groupDocumentsQueryKey,
+  resetGroupDocumentsToFirstPage,
+  clearGroupDocumentsVariantDirty,
   type GroupType,
 } from '@/hooks/useDocumentGroups';
+import { useGroupDocumentListRefresh } from '@/hooks/useGroupDocumentListRefresh';
 import { isCustomerConfirmed } from '@/hooks/useProcessingHistory';
 import { CustomerSubGroup } from './CustomerSubGroup';
 import { MultiCustomerBadge } from '@/components/MultiCustomerBadge';
@@ -205,6 +211,7 @@ export function GroupDocumentList({
   dateFilter,
   onDocumentSelect,
 }: GroupDocumentListProps) {
+  const PAGE_SIZE = 100;
   const {
     data,
     fetchNextPage,
@@ -212,12 +219,70 @@ export function GroupDocumentList({
     isFetchingNextPage,
     isLoading,
     isError,
+    refetch,
   } = useGroupDocuments({
     groupType,
     groupKey,
-    pageSize: 100,
+    pageSize: PAGE_SIZE,
   });
-  const { loadMoreRef } = useInfiniteScroll({ hasNextPage: !!hasNextPage, isFetchingNextPage, fetchNextPage });
+
+  const queryClient = useQueryClient();
+  const activeQueryKey = groupDocumentsQueryKey(groupType, groupKey, PAGE_SIZE);
+  const { hasUpdates, message, resetBaseline } = useGroupDocumentListRefresh({
+    groupType,
+    groupKey,
+    pageSize: PAGE_SIZE,
+  });
+  const [isRefreshingGroup, setIsRefreshingGroup] = useState(false);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+  /**
+   * 「更新があります」バナー押下時のハンドラ(2026-09-15、Issue #891修正)。
+   * `useInfiniteScroll`はスクロールコンテナ末尾のsentinelを常時監視しているため、
+   * pagesを1件に切り詰めた直後もsentinelが表示領域に残っていると`fetchNextPage`が
+   * 即座に再発火し、「1ページのみ再取得」の意図が崩れる(plan-crossreview codex
+   * pass1指摘)。`isRefreshingGroup`を`useInfiniteScroll`の`disabled`に渡してこれを防ぎ、
+   * あわせてスクロール位置を先頭へ戻す(`DocumentsPage.tsx`の`refreshDocumentList`と
+   * 同じ対策パターン)。
+   */
+  const handleRefresh = async () => {
+    setIsRefreshingGroup(true);
+    try {
+      scrollContainerRef.current?.scrollTo({ top: 0 });
+      await resetGroupDocumentsToFirstPage(queryClient, activeQueryKey);
+      // groupStatsの再取得も明示的にawaitしてからresetBaselineを呼ぶ(codex review指摘、
+      // 2026-09-15)。invalidateGroupQueries由来の`groupStats`再取得がまだ進行中の状態で
+      // resetBaselineを呼ぶと、その時点のキャッシュ(=古い値)をbaselineとして確定してしまい、
+      // 直後に進行中の再取得が新しい値で解決した瞬間、シグネチャ差分でバナーが即座に
+      // 再表示されてしまう(`DocumentsPage.tsx`の`refreshDocumentList`と同じ対策)。
+      const [result] = await Promise.all([
+        refetch(),
+        queryClient.refetchQueries({ queryKey: ['groupStats', groupType] }),
+      ]);
+      if (result.isSuccess) {
+        clearGroupDocumentsVariantDirty(activeQueryKey);
+        resetBaseline();
+      }
+    } finally {
+      setIsRefreshingGroup(false);
+    }
+  };
+
+  const { loadMoreRef } = useInfiniteScroll({
+    hasNextPage: !!hasNextPage,
+    isFetchingNextPage,
+    fetchNextPage,
+    disabled: isRefreshingGroup,
+  });
+
+  const updateBanner = (
+    <DocumentListUpdateBanner
+      hasUpdates={hasUpdates}
+      message={message}
+      isRefreshing={isRefreshingGroup}
+      onRefresh={() => void handleRefresh()}
+    />
+  );
 
   // カテゴリフォルダ表示用の書類マスター（書類種別タブと同一 queryKey でキャッシュ共有）。
   // 取得失敗時は undefined のまま渡し、CustomerSubGroup 側が書類種別表示にフォールバックする
@@ -272,11 +337,18 @@ export function GroupDocumentList({
   }
 
   // 空状態
+  // 2026-09-15 Issue #891修正: バナーは空状態の早期returnより前段(この分岐内)にも
+  // 配置する。キャッシュ上は空だったグループに書類が新規追加された場合でも、
+  // dirty化されていればバナー経由で更新できるようにするため(plan-crossreview
+  // codex pass1指摘)。
   if (allDocuments.length === 0) {
     return (
-      <div className="py-8 text-center text-sm text-gray-500">
-        このグループには書類がありません
-      </div>
+      <>
+        {updateBanner}
+        <div className="py-8 text-center text-sm text-gray-500">
+          このグループには書類がありません
+        </div>
+      </>
     );
   }
 
@@ -318,50 +390,56 @@ export function GroupDocumentList({
   // 担当CM別の場合は顧客サブグループで表示
   if (groupType === 'careManager') {
     return (
-      <div className="max-h-[500px] overflow-y-auto">
-        <CustomerSubGroup
-          documents={allDocuments}
-          furiganaMap={furiganaMap}
-          documentMasters={documentMasters}
-          onDocumentSelect={onDocumentSelect}
-          onRetry={setRetryTarget}
-          identityLookup={identityLookup}
-        />
+      <>
+        {updateBanner}
+        <div ref={scrollContainerRef} className="max-h-[500px] overflow-y-auto">
+          <CustomerSubGroup
+            documents={allDocuments}
+            furiganaMap={furiganaMap}
+            documentMasters={documentMasters}
+            onDocumentSelect={onDocumentSelect}
+            onRetry={setRetryTarget}
+            identityLookup={identityLookup}
+          />
 
-        <LoadMoreIndicator
-          ref={loadMoreRef}
-          hasNextPage={hasNextPage}
-          isFetchingNextPage={isFetchingNextPage}
-          className="border-t border-gray-100"
-        />
-        {retryDialog}
-      </div>
+          <LoadMoreIndicator
+            ref={loadMoreRef}
+            hasNextPage={hasNextPage}
+            isFetchingNextPage={isFetchingNextPage}
+            className="border-t border-gray-100"
+          />
+          {retryDialog}
+        </div>
+      </>
     );
   }
 
   // その他のグループタイプは従来のフラット表示
   return (
-    <div className="max-h-96 overflow-y-auto">
-      {/* ドキュメント一覧 */}
-      <div className="divide-y divide-gray-100">
-        {allDocuments.map((doc) => (
-          <DocumentRow
-            key={doc.id}
-            document={doc}
-            groupType={groupType}
-            onClick={() => onDocumentSelect?.(doc.id)}
-            onRetry={setRetryTarget}
-            identityLookup={identityLookup}
-          />
-        ))}
-      </div>
+    <>
+      {updateBanner}
+      <div ref={scrollContainerRef} className="max-h-96 overflow-y-auto">
+        {/* ドキュメント一覧 */}
+        <div className="divide-y divide-gray-100">
+          {allDocuments.map((doc) => (
+            <DocumentRow
+              key={doc.id}
+              document={doc}
+              groupType={groupType}
+              onClick={() => onDocumentSelect?.(doc.id)}
+              onRetry={setRetryTarget}
+              identityLookup={identityLookup}
+            />
+          ))}
+        </div>
 
-      <LoadMoreIndicator
-        ref={loadMoreRef}
-        hasNextPage={hasNextPage}
-        isFetchingNextPage={isFetchingNextPage}
-      />
-      {retryDialog}
-    </div>
+        <LoadMoreIndicator
+          ref={loadMoreRef}
+          hasNextPage={hasNextPage}
+          isFetchingNextPage={isFetchingNextPage}
+        />
+        {retryDialog}
+      </div>
+    </>
   );
 }

@@ -6,6 +6,7 @@
  */
 
 import { useQuery, useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
+import type { QueryClient, InfiniteData } from '@tanstack/react-query';
 import {
   collection,
   query,
@@ -196,7 +197,25 @@ async function fetchGroupDocuments(
 }
 
 /**
+ * `groupDocuments`のqueryKeyを組み立てる（`documentsInfiniteQueryKey`と同型）。
+ * 外部から現在表示中variantのactiveQueryKeyを正確に組み立てるために使う
+ * （dirty-tracking・reset処理の両方が必要とする）。
+ */
+export function groupDocumentsQueryKey(
+  groupType: GroupType,
+  groupKey: string,
+  pageSize: number
+) {
+  return ['groupDocuments', groupType, groupKey, pageSize] as const;
+}
+
+/**
  * グループ内ドキュメントを取得するフック（無限スクロール対応）
+ *
+ * 2026-09-15 Issue #891修正: Firestore読み取り過大バグ(`documentsInfinite`と同型)を
+ * 解消するため、自動再取得の経路を全て塞ぐ。詳細は`markGroupDocumentsStale`・
+ * `resetGroupDocumentsToFirstPage`のコメント、および`useDocuments.ts`の
+ * `useInfiniteDocuments`のコメント(同型の対策の元実装)を参照。
  */
 export function useGroupDocuments(options: UseGroupDocumentsOptions) {
   const {
@@ -207,14 +226,18 @@ export function useGroupDocuments(options: UseGroupDocumentsOptions) {
   } = options;
 
   return useInfiniteQuery({
-    queryKey: ['groupDocuments', groupType, groupKey, pageSize],
+    queryKey: groupDocumentsQueryKey(groupType, groupKey, pageSize),
     queryFn: ({ pageParam }) =>
       fetchGroupDocuments(groupType, groupKey, pageSize, pageParam),
     getNextPageParam: (lastPage) =>
       lastPage.hasMore ? lastPage.lastDoc : undefined,
     initialPageParam: undefined as DocumentSnapshot | undefined,
     enabled: enabled && !!groupKey,
-    staleTime: 30 * 1000, // 30秒間キャッシュ
+    staleTime: Infinity,
+    gcTime: 60_000,
+    refetchOnWindowFocus: false,
+    refetchOnMount: false,
+    refetchOnReconnect: false,
   });
 }
 
@@ -249,6 +272,12 @@ async function fetchGroupStats(groupType: GroupType): Promise<GroupStats> {
 
 /**
  * グループ統計を取得するフック
+ *
+ * 2026-09-15 Issue #891修正: `useGroupDocuments`の自動再取得を全廃したため、
+ * 再処理等の非同期完了(Cloud Functionsバッチ)を検知する手段が無くなった。
+ * `useDocumentStats`(`refetchInterval:30000`)と同じ役割を`groupDocuments`側でも
+ * 持たせるため、常時30秒ポーリングを追加する(`useGroupDocumentListRefresh`が
+ * このシグネチャ変化を検知シグナルとして使う)。
  */
 export function useGroupStats(groupType: GroupType, enabled = true) {
   return useQuery({
@@ -256,7 +285,155 @@ export function useGroupStats(groupType: GroupType, enabled = true) {
     queryFn: () => fetchGroupStats(groupType),
     enabled,
     staleTime: 60 * 1000,
+    refetchInterval: 30 * 1000,
   });
+}
+
+// ============================================
+// groupDocuments variant「dirty(要更新)」トラッキング
+// ============================================
+//
+// 2026-09-15 Issue #891修正: useDocuments.tsのdocumentsInfinite版dirty-trackingと
+// 同型の独立トラッキング(TanStack内部のisInvalidatedはsetQueriesData呼び出しで
+// 意図せずクリアされるため信頼できない、詳細はuseDocuments.ts参照)。
+//
+// documentsInfinite側と異なる点: groupKeyの組み合わせ数はフィルタの組み合わせ数
+// (documentsInfinite)より遥かに大きい(例: kanameone顧客別で1,400以上)。
+// documentsInfinite側が採用した「フィルタ組み合わせは有限で実害なし」という
+// pruning省略の判断はそのまま流用できないため、QueryCacheの'removed'イベントを
+// 購読しqueryがgcTimeでキャッシュから破棄されたタイミングでdirtyエントリも
+// 一緒に削除する(plan-crossreview codex pass2指摘対応)。
+
+type GroupDirtyStoreListener = () => void
+
+const dirtyGroupDocumentsVariants = new Set<string>()
+const groupDirtyStoreListeners = new Set<GroupDirtyStoreListener>()
+// QueryClientインスタンス単位で購読済みかを管理する(WeakSetで自動GC対象にする)。
+// 単純なbooleanフラグだと、複数のQueryClientインスタンスが存在する場合(テスト環境で
+// 各テストが独自のQueryClientを作る場合や、将来複数QueryClientが共存する場合)に、
+// 最初の1つだけ購読され残りが購読されないまま「購読済み」扱いになってしまう
+// (実際にテストで検出: 複数QueryClientインスタンスを跨いで発生する不具合)。
+const groupCachePruningSubscribedClients = new WeakSet<QueryClient>()
+
+function groupDirtyKeyOf(queryKey: readonly unknown[]): string {
+  return JSON.stringify(queryKey)
+}
+
+function notifyGroupDirtyStoreListeners(): void {
+  groupDirtyStoreListeners.forEach((listener) => listener())
+}
+
+/**
+ * QueryCacheの'removed'イベントを購読し、groupDocumentsのqueryがgcTime経過で
+ * キャッシュから破棄されたタイミングでdirtyエントリも削除する。QueryClient
+ * インスタンスごとに1回だけ購読する。
+ *
+ * 既知の限界(codex review指摘、2026-09-15): `dirtyGroupDocumentsVariants`自体は
+ * QueryClientをまたいだ単一のモジュール共有Setであるため、複数のQueryClient
+ * インスタンスが同一queryKeyを持つ状況(このアプリの実運用では発生しない。
+ * `QueryClientProvider`はルートで単一インスタンスを提供する設計)では、片方の
+ * clientでのremovedイベントがもう片方がまだdirtyとして必要としているエントリを
+ * 誤って削除しうる。documentsInfinite側の既存のdirty-tracking設計も同じ
+ * 「単一QueryClientインスタンス」を前提としており(useDocuments.ts参照)、本実装は
+ * その前提を踏襲する。複数QueryClient共存を正式にサポートする場合は、dirtyエントリの
+ * キーにQueryClient自体の識別子を含める設計変更が必要。
+ */
+function ensureGroupCachePruning(queryClient: QueryClient): void {
+  if (groupCachePruningSubscribedClients.has(queryClient)) return
+  groupCachePruningSubscribedClients.add(queryClient)
+  queryClient.getQueryCache().subscribe((event) => {
+    if (event.type !== 'removed') return
+    const key = event.query.queryKey
+    if (key[0] !== 'groupDocuments') return
+    if (dirtyGroupDocumentsVariants.delete(groupDirtyKeyOf(key))) {
+      notifyGroupDirtyStoreListeners()
+    }
+  })
+}
+
+/**
+ * ['groupDocuments']部分一致の全variant(画面表示中のものを含む)をdirty化する。
+ * documentsInfinite版(`markDocumentsInfiniteVariantsDirty`)と同じ理由で、
+ * グループ移動の可能性がある操作は非アクティブなvariantも含め一律dirty化する
+ * (呼び出し元は移動元・移動先のグループを特定できないため)。
+ *
+ * 例外を投げない(呼び出し元の多くはuseMutationのonSuccess内であるため、
+ * documentsInfinite版と同じ理由)。
+ */
+export function markGroupDocumentsVariantsDirty(queryClient: QueryClient): void {
+  try {
+    ensureGroupCachePruning(queryClient)
+    const queries = queryClient.getQueryCache().findAll({ queryKey: ['groupDocuments'] })
+    let changed = false
+    queries.forEach((q) => {
+      const key = groupDirtyKeyOf(q.queryKey)
+      if (!dirtyGroupDocumentsVariants.has(key)) {
+        dirtyGroupDocumentsVariants.add(key)
+        changed = true
+      }
+    })
+    if (changed) notifyGroupDirtyStoreListeners()
+  } catch (err) {
+    console.error('[markGroupDocumentsVariantsDirty] unexpected error (ignored, banner UX only):', err)
+  }
+}
+
+/**
+ * `groupDocuments`を「即時再取得しないがstale化する」ための定型2行を1箇所に
+ * まとめたヘルパー(`markDocumentsInfiniteStale`と同型)。
+ */
+export function markGroupDocumentsStale(queryClient: QueryClient): void {
+  queryClient.invalidateQueries({ queryKey: ['groupDocuments'], refetchType: 'none' })
+  markGroupDocumentsVariantsDirty(queryClient)
+}
+
+/**
+ * 指定したqueryKeyのdirtyフラグを解除する。呼び出し側は対象variantの実際の
+ * fetchが成功したことを確認してから呼ぶこと(documentsInfinite版と同じ理由:
+ * refetch失敗時にフラグだけ先に解除すると「要更新」を知らせる手段が失われる)。
+ */
+export function clearGroupDocumentsVariantDirty(queryKey: readonly unknown[]): void {
+  if (dirtyGroupDocumentsVariants.delete(groupDirtyKeyOf(queryKey))) {
+    notifyGroupDirtyStoreListeners()
+  }
+}
+
+export function isGroupDocumentsVariantDirty(queryKey: readonly unknown[]): boolean {
+  return dirtyGroupDocumentsVariants.has(groupDirtyKeyOf(queryKey))
+}
+
+/** `useSyncExternalStore`用のsubscribe関数(`useGroupDocumentListRefresh.ts`が使用) */
+export function subscribeGroupDocumentsDirtyStore(listener: GroupDirtyStoreListener): () => void {
+  groupDirtyStoreListeners.add(listener)
+  return () => {
+    groupDirtyStoreListeners.delete(listener)
+  }
+}
+
+/**
+ * groupDocumentsを1ページ目のみへリセットする(`resetDocumentsInfiniteToFirstPage`と同型)。
+ * バナー押下時の「更新があります」解消に使う: 進行中のfetchNextPageを破棄→
+ * 全variantをstale化(dirty化)→アクティブなvariantのみpages/pageParamsを
+ * 先頭1件に切り詰める。呼び出し側はこの後refetch()を実行し、成功を確認してから
+ * clearGroupDocumentsVariantDirtyを呼ぶこと。
+ */
+export async function resetGroupDocumentsToFirstPage(
+  queryClient: QueryClient,
+  activeQueryKey: readonly [string, GroupType, string, number]
+): Promise<void> {
+  await queryClient.cancelQueries({ queryKey: activeQueryKey })
+  markGroupDocumentsStale(queryClient)
+  queryClient.setQueryData(
+    activeQueryKey,
+    (old: InfiniteData<GroupDocumentsPage> | undefined) => {
+      if (!old?.pages?.length) return old
+      return {
+        ...old,
+        pages: old.pages.slice(0, 1),
+        pageParams: old.pageParams.slice(0, 1),
+      }
+    }
+  )
 }
 
 // ============================================
@@ -265,6 +442,12 @@ export function useGroupStats(groupType: GroupType, enabled = true) {
 
 /**
  * グループ関連のキャッシュを無効化
+ *
+ * 2026-09-15 Issue #891修正: `groupDocuments`は`invalidateGroupQueries`
+ * (`useDocuments.ts`)が唯一の呼び出し元という前提は誤りで、本フックも
+ * デフォルトrefetchで`groupDocuments`をinvalidateしていた(plan-crossreview
+ * codex pass2指摘)。呼び出し実績はないが公開APIである以上、同じ全ページ
+ * 再取得バグを再発させないよう`markGroupDocumentsStale`へ統一する。
  */
 export function useInvalidateGroups() {
   const queryClient = useQueryClient();
@@ -272,17 +455,19 @@ export function useInvalidateGroups() {
   return {
     invalidateAll: () => {
       queryClient.invalidateQueries({ queryKey: ['documentGroups'] });
-      queryClient.invalidateQueries({ queryKey: ['groupDocuments'] });
+      markGroupDocumentsStale(queryClient);
       queryClient.invalidateQueries({ queryKey: ['groupStats'] });
     },
     invalidateGroupType: (groupType: GroupType) => {
       queryClient.invalidateQueries({ queryKey: ['documentGroups', groupType] });
       queryClient.invalidateQueries({ queryKey: ['groupStats', groupType] });
     },
-    invalidateGroup: (groupType: GroupType, groupKey: string) => {
-      queryClient.invalidateQueries({
-        queryKey: ['groupDocuments', groupType, groupKey],
-      });
+    invalidateGroup: (_groupType: GroupType, _groupKey: string) => {
+      // 特定groupType/groupKeyへの部分invalidateではなく、全variant一律dirty化に
+      // 統一する(markGroupDocumentsVariantsDirtyと同じ理由: 呼び出し元は移動元・
+      // 移動先のグループを特定できないため)。引数は既存の呼び出し形を維持するため
+      // 残すが未使用。
+      markGroupDocumentsStale(queryClient);
     },
   };
 }

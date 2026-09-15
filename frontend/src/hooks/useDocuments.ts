@@ -27,6 +27,7 @@ import { useState } from 'react'
 import { toast } from 'sonner'
 import { db } from '@/lib/firebase'
 import type { Document, DocumentStatus, DocumentMaster, CustomerMaster, OfficeMaster, SummaryField } from '@shared/types'
+import { markGroupDocumentsStale } from './useDocumentGroups'
 
 // ============================================
 // Summary 後方互換読込 (Issue #215)
@@ -299,7 +300,12 @@ export function updateDocumentInListCache(
  */
 export function invalidateGroupQueries(queryClient: QueryClient): void {
   queryClient.invalidateQueries({ queryKey: ['documentGroups'] })
-  queryClient.invalidateQueries({ queryKey: ['groupDocuments'] })
+  // 2026-09-15 Issue #891修正: groupDocumentsはuseInfiniteQueryのため、通常の
+  // invalidateQueries(refetchType未指定=デフォルト'active')を呼ぶと、開いている
+  // グループの読み込み済み全ページが即座に再取得されるFirestore読み取り過大バグを
+  // 引き起こす(documentsInfiniteで既に修正済みの問題と同型)。refetchType:'none'
+  // + dirty化のみ行うmarkGroupDocumentsStale(useDocumentGroups.ts)を使う。
+  markGroupDocumentsStale(queryClient)
   queryClient.invalidateQueries({ queryKey: ['groupStats'] })
 }
 
@@ -308,14 +314,18 @@ export function invalidateGroupQueries(queryClient: QueryClient): void {
  * invalidateヘルパー。document本体・`invalidateGroupQueries`は引き続きここで
  * 無効化する(1件読み取りで安価、詳細モーダルに確定値を渡すため必要)。
  *
- * `documentsInfinite`のみ`refetchType:'none'`を指定する(2026-09-08、Firestore読み取り
- * 過大バグ修正、docs/handoff/GOAL.md「【要修正・2026-09-08】」参照)。理由:
- * `useInfiniteDocuments`はrefetchOnWindowFocus/refetchOnMount/refetchOnReconnectを
+ * `documentsInfinite`と`groupDocuments`(2026-09-15、Issue #891修正で追加)は
+ * `refetchType:'none'`を指定する(2026-09-08、Firestore読み取り過大バグ修正、
+ * docs/handoff/GOAL.md「【要修正・2026-09-08】」参照)。理由:
+ * どちらも`useInfiniteQuery`でrefetchOnWindowFocus/refetchOnMount/refetchOnReconnectを
  * 全て無効化しており(全ページ再取得を絶対に自動発火させないため)、通常の
  * `invalidateQueries`(refetchType未指定=デフォルト'active')を呼ぶとここが
- * その場で全ページ再取得の引き金になってしまう。ここではstaleマークのみ行い、
- * 表示更新は呼び出し元が一覧キャッシュを`updateDocumentInListCache`等で
- * 事前にパッチしておく責務を負う(このファイルの`useReprocessDocument`が実例)。
+ * その場で全ページ再取得の引き金になってしまう。`documentsInfinite`は呼び出し元が
+ * 一覧キャッシュを`updateDocumentInListCache`等で事前にパッチする(このファイルの
+ * `useReprocessDocument`が実例)のに対し、`groupDocuments`はパッチを行わず
+ * dirty化+バナー経由のユーザー起点再取得のみに委ねる(grouping keyの変更を伴う
+ * 操作が多く、値の書換えだけのパッチでは誤ったグループ残留を招くため、詳細は
+ * `useGroupDocumentListRefresh.ts`参照)。
  */
 export function invalidateDocumentAndGroupQueries(queryClient: QueryClient, documentId: string): void {
   // `invalidateQueries(refetchType:'none')`のisInvalidatedは、呼び出し元が併せて行う
