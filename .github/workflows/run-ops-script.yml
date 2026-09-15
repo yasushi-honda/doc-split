@@ -169,6 +169,9 @@ on:
           - drive-export-status-report --breakdown
           - audit-fax-duplication-inventory
           - audit-fax-duplication-inventory --full-scan
+          - audit-fax-duplication-plan-logs --hours 168
+          - audit-fax-duplication-plan-logs --hours 336
+          - audit-fax-duplication-plan-logs --hours 504
           - set-feature-flag --flag driveExport --value true --dry-run
           - set-feature-flag --flag driveExport --value true
           - set-feature-flag --flag driveExport --value false --dry-run
@@ -1453,6 +1456,29 @@ jobs:
               echo "--- $svc ---"
               gcloud logging read "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"$svc\" AND severity>=ERROR AND timestamp>=\"$SINCE\"" \
                 --project="$PROJECT_ID" --format="table(timestamp,severity,textPayload)" --limit=3
+            done
+          elif [ "$SCRIPT_NAME" = "audit-fax-duplication-plan-logs" ]; then
+            # 複数人記載FAX検出 Stage2切替判断材料(docs/adr/0024-multi-customer-detection.md)。
+            # processOCR(cronバッチ)がconsole.log(msg, obj)で出力するfaxDuplicationPlanログ
+            # (jsonPayloadではなくtextPayload化される)のreason別件数を集計し、
+            # audit-fax-duplication-inventoryの棚卸し結果(検出集合)と突合するための材料にする。
+            # check-function-error-logsと同じgcloud logging read直叩きパターン
+            # (read-only、Node/firebase-admin非依存)。
+            HOURS=$(echo "$SCRIPT_ARGS" | grep -oE '[0-9]+' | head -1)
+            if [ -z "$HOURS" ]; then
+              echo "ERROR: --hours N が必要です" >&2
+              exit 1
+            fi
+            SINCE=$(date -u -d "-${HOURS} hours" +%Y-%m-%dT%H:%M:%SZ)
+            echo "=== faxDuplicationPlanログ reason別件数(過去${HOURS}時間、project=$PROJECT_ID) ==="
+            ENTRIES=$(gcloud logging read "resource.type=\"cloud_run_revision\" AND textPayload:\"event: 'faxDuplicationPlan'\" AND timestamp>=\"$SINCE\"" \
+              --project="$PROJECT_ID" --format="value(textPayload)" --limit=50000)
+            TOTAL=$(echo "$ENTRIES" | grep -c "event: 'faxDuplicationPlan'" || true)
+            echo "総件数: ${TOTAL}"
+            # functions/src/ocr/faxDuplication.ts の FaxDuplicationPlanReason と同期を保つこと
+            for REASON in flagDisabled alreadyDistributed alreadyConfirmedOrVerified insufficientExactCandidates exactCandidatesDistributed; do
+              COUNT=$(echo "$ENTRIES" | grep -c "reason: '${REASON}'" || true)
+              echo "  ${REASON}: ${COUNT}"
             done
           elif [ "$SCRIPT_NAME" = "audit-session61-parent-provenance" ]; then
             # Issue #432 PR-C2-execution post-audit: log secret masking で `{` が
