@@ -104,9 +104,53 @@ Cloud Runログで以下を実測確認した:
 
 「凍結した(疑似)インスタンスをCloud Runのliveness probeが検知し強制終了する」という設計上の防波堤が実機で機能することを確認した。検証後、テスト用revisionは削除し、本番トラフィック(100%固定revision)には影響がないことを確認済み。
 
-## PR4c実測値(未実施)
+## PR4c実測値
 
-Cloud Run実機での1/20/71/160ページ負荷試験結果は、PR4c完了後にここへ追記する。
+Stage 1(golden screening)・Stage 2(速度改善)は完了済み(dev実機、1ページあたりp50=6.4秒/p95=7.4秒、承認済みゲート1p≤30秒/20p≤400秒/71p≤850秒を全てPASS)。ただし1/20/71/160ページを実際に流すStage 3本格負荷試験(N=20〜30回、cold/warm分離)は**未実装**(`paddle-ocr-verify.ts`は現状6ページgoldenの`--repeat`周回のみ対応、専用フィクスチャ・モードは未着手)。2026-09-15時点の代替エビデンスとして、kanameone本番Cloud Loggingの`phaseTimings`実測(実在する最大文書73ページ、Gemini処理時代のログだが非OCR部分の実測として有効)で非OCRオーバーヘッド9.9秒(設計マージン50秒の約1/5)を確認済み。詳細は`docs/handoff/GOAL.md`「ADR-0025 PaddleOCR PR4b」節参照。
+
+## 運用ランブック(PR8)
+
+### ロールアウト手順
+
+PaddleOCRへの切替はL1(環境変数)/L2(Firestoreフラグ)の2層ゲートで制御する(`functions/src/utils/featureFlags.ts`の`resolveOcrProvider`)。
+
+1. **L1: `OCR_PROVIDER=paddle`** — Cloud Functionsのデプロイ時環境変数。クライアントの`scripts/clients/<client>.env`に設定し、`deploy-paddle-ocr.yml`または通常のFunctionsデプロイで反映(**再デプロイが必要**、即時反映ではない)。L1が`paddle`でない場合、L2の値によらず常にGeminiへ(fail-closed)。
+2. **L2: Firestore `settings/features.paddleOcr`** — GitHub Actions `Run Operations Script`経由で即時切替可能(再デプロイ不要):
+   ```bash
+   gh workflow run "Run Operations Script" -f environment=<env> -f script='set-feature-flag --flag paddleOcr --value true --dry-run'  # 確認
+   gh workflow run "Run Operations Script" -f environment=<env> -f script='set-feature-flag --flag paddleOcr --value true'            # 実行
+   ```
+3. **canary許可リスト(段階導入)**: `paddleOcrAllowlist`(docId配列)で対象文書を限定できる。`set-paddle-ocr-allowlist --set`(GHA経由)で設定、未設定(フィールド不在)時は全docIdが対象になる点に注意(全面展開前は必ずallowlistを設定すること)。
+
+推奨順序: L1をdevへ反映・canary確認 → L2 allowlistで少数文書に限定してkanameone/cocoroへ展開 → 実績確認後allowlist解除で全面展開。
+
+### ロールバック手順(緊急停止)
+
+**第一選択: L2フラグの即時無効化**(再デプロイ不要、秒単位で反映):
+```bash
+gh workflow run "Run Operations Script" -f environment=<env> -f script='set-feature-flag --flag paddleOcr --value false'
+```
+これにより新規OCR処理は全てGeminiへ即座にフォールバックする。処理中(in-flight)のリクエストは完走する。
+
+**重要な注意**: Geminiへのフォールバックは**あくまで暫定策**であり、恒久的な運用方針ではない。Gemini 3.5 FlashのVertex AI日本リージョン(asia-northeast1)従量課金は公式には非サポート(ADR-0025参照、非公式動作に依存)で、いつ塞がれてもおかしくない状態がPaddleOCR移行の動機そのもの。ロールバック後は原因調査・修正を優先し、Gemini運用を前提に長期間放置しないこと。
+
+L1(`OCR_PROVIDER`環境変数)を`gemini`に戻す完全ロールバックは再デプロイを要するため、緊急停止時はまずL2で止め、根本対応後に恒久措置としてL1も戻すか判断する。
+
+### 監視方法
+
+- **Cloud Run health**: `GET /health`(`modelLoaded: true`・`imageDigest`が最新デプロイと一致することを確認)
+- **liveness probe**: 凍結インスタンスは自動検知・強制終了される(上記「Cloud Run liveness probeによるインスタンス強制入れ替え」節)。`LIVENESS HTTP probe failed`ログの頻発は異常兆候
+- **処理時間の内訳**: Cloud Logging(`resource.type="cloud_run_revision" AND resource.labels.service_name="processocr"`)で`event:"phaseTimings"`を検索すると、文書ごとの`pageLoopMs`(OCR)/`masterLoadMs`/`candidateGeminiMs`/`customerMatchMs`等の内訳が取得できる:
+  ```bash
+  gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="processocr" AND textPayload:"] phaseTimings for"' --project=<project-id> --limit=100 --freshness=7d
+  ```
+- **OCRエンジンの来歴**: `documents/{id}.ocrExtraction.version`が`PP-OCRv6_medium/...`(PaddleOCR)か`gemini-3.5-flash`(Gemini)かで実際に使われたエンジンを文書単位で確認できる
+
+### コスト監視
+
+- **現状**: 自動アラート・予算通知は**未設定**(2026-09-15時点)。GCP Console(Cloud Run > paddle-ocr サービス > 指標、または課金 > レポート)での手動確認が必要
+- kanameone canaryの運用コスト実測・精度統計検証は実施中(1-2週間の実績蓄積待ち、`docs/handoff/GOAL.md`参照)。判明した参考値: Gemini概算$50/月 vs Cloud Run想定$4-9/月(いずれも実測ではなく参考値)
+- **TODO**: Cloud Billing予算アラート(GCPコンソールまたは`gcloud billing budgets create`)の設定は未着手。運用コスト実測が出揃った後、想定レンジを大幅に超えた場合に通知される仕組みの導入を検討する
 
 ## ローカル開発
 
