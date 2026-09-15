@@ -138,6 +138,31 @@ describe('useGroupDocumentListRefresh', () => {
     expect(result.current.hasUpdates).toBe(false)
   })
 
+  it('resetBaselineはReactのレンダー状態ではなくqueryClientのキャッシュを直接読む(pr-review-toolkit:pr-test-analyzer指摘の回帰テスト、姉妹実装useDocumentListRefreshと同型)', () => {
+    mockStatsData = baseStats
+    const queryClient = new QueryClient()
+    // useGroupStats自体はモック化されておりqueryClientのキャッシュとは独立しているため、
+    // resetBaseline内部のqueryClient.getQueryData(['groupStats', groupType])は明示的に
+    // セットした値を読む。ここでは「フックのレンダー状態(mockStatsData)」と「queryClient
+    // キャッシュ」を意図的に異なる値にして、後者が使われることを確認する。
+    queryClient.setQueryData(['groupStats', GROUP_TYPE], { ...baseStats, totalDocuments: 999 })
+
+    const { result, rerender } = renderHook(
+      () => useGroupDocumentListRefresh({ groupType: GROUP_TYPE, groupKey: GROUP_KEY, pageSize: PAGE_SIZE }),
+      { wrapper: createWrapper(queryClient) }
+    )
+    rerender()
+
+    act(() => {
+      result.current.resetBaseline()
+    })
+
+    // baselineがqueryClientキャッシュ側(totalDocuments:999)で確定していれば、レンダー状態
+    // (mockStatsData.totalDocuments:42)との差分でhasUpdatesがtrueになるはず
+    rerender()
+    expect(result.current.hasUpdates).toBe(true)
+  })
+
   it('activeQueryKeyはgroupDocumentsQueryKey(groupType, groupKey, pageSize)と完全一致する', () => {
     mockStatsData = baseStats
     const queryClient = new QueryClient()

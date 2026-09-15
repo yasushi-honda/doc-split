@@ -56,7 +56,10 @@ export function useGroupDocumentListRefresh({
   pageSize,
 }: UseGroupDocumentListRefreshOptions): UseGroupDocumentListRefreshResult {
   const queryClient = useQueryClient()
-  const { data: stats } = useGroupStats(groupType)
+  // pollForUpdates:true — 非同期完了検知のための30秒ポーリングは、この一覧が実際に
+  // マウントされている(=グループが展開されている)間だけ有効化する(code-reviewer
+  // Critical指摘対応、詳細はuseDocumentGroups.tsのuseGroupStatsコメント参照)。
+  const { data: stats } = useGroupStats(groupType, true, true)
 
   const activeQueryKey = groupDocumentsQueryKey(groupType, groupKey, pageSize)
 

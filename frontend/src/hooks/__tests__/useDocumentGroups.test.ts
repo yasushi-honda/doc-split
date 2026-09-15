@@ -16,6 +16,7 @@ import { createElement, type ReactNode } from 'react';
 import {
   shouldIncludeInGroupDocuments,
   useGroupDocuments,
+  useGroupStats,
   groupDocumentsQueryKey,
   markGroupDocumentsStale,
   markGroupDocumentsVariantsDirty,
@@ -298,5 +299,101 @@ describe('useInvalidateGroups (plan-crossreview codex pass1/pass2 Medium指摘�
     expect(isGroupDocumentsVariantDirty(key)).toBe(true);
 
     queryClient.clear();
+  });
+});
+
+// pr-review-toolkit:pr-test-analyzer指摘(2026-09-15)反映: useGroupStats/GCプルーニング周りの
+// 追加カバレッジ
+
+describe('useGroupStats (非同期完了検知用ポーリング、Issue #891修正 + code-reviewer Critical指摘反映)', () => {
+  it('pollForUpdates未指定(既定false)ではrefetchIntervalが無効(false)になる(GroupList.tsxの無条件マウント経路でのポーリング過大読み取りを防ぐ)', () => {
+    const queryClient = new QueryClient();
+    renderHook(() => useGroupStats('customer', false), { wrapper: createWrapper(queryClient) });
+
+    const query = queryClient.getQueryCache().find({ queryKey: ['groupStats', 'customer'] });
+    const options = query?.options as Record<string, unknown> | undefined;
+
+    expect(options?.refetchInterval).toBe(false);
+
+    queryClient.clear();
+  });
+
+  it('pollForUpdates:trueを明示指定した場合のみrefetchInterval:30000になる(useGroupDocumentListRefresh専用経路)', () => {
+    const queryClient = new QueryClient();
+    renderHook(() => useGroupStats('office', false, true), { wrapper: createWrapper(queryClient) });
+
+    const query = queryClient.getQueryCache().find({ queryKey: ['groupStats', 'office'] });
+    const options = query?.options as Record<string, unknown> | undefined;
+
+    expect(options?.refetchInterval).toBe(30 * 1000);
+
+    queryClient.clear();
+  });
+});
+
+describe('ensureGroupCachePruning (GC連動pruningの境界条件、pr-test-analyzer指摘対応)', () => {
+  it('"removed"以外のイベント(例: データ更新によるupdatedイベント)ではdirtyエントリを削除しない', () => {
+    const queryClient = new QueryClient();
+    const key = groupDocumentsQueryKey('customer', 'gc-boundary-test-marker-a', 100);
+    queryClient.setQueryData(key, { pages: [], pageParams: [] });
+
+    // markGroupDocumentsVariantsDirty呼び出し時にGCプルーニング購読(ensureGroupCachePruning)
+    // が有効化される
+    markGroupDocumentsVariantsDirty(queryClient);
+    expect(isGroupDocumentsVariantDirty(key)).toBe(true);
+
+    // 同じqueryKeyへの再setQueryData("updated"イベント、"removed"ではない)
+    queryClient.setQueryData(key, { pages: [{ documents: [] }], pageParams: [undefined] });
+
+    expect(isGroupDocumentsVariantDirty(key)).toBe(true);
+
+    queryClient.clear();
+  });
+
+  it('groupDocuments以外のqueryKeyが破棄されても、groupDocumentsのdirtyエントリには影響しない', () => {
+    const queryClient = new QueryClient();
+    const groupKey = groupDocumentsQueryKey('customer', 'gc-boundary-test-marker-b', 100);
+    const unrelatedKey = ['documentGroups', 'customer'];
+    queryClient.setQueryData(groupKey, { pages: [], pageParams: [] });
+    queryClient.setQueryData(unrelatedKey, []);
+
+    markGroupDocumentsVariantsDirty(queryClient);
+    expect(isGroupDocumentsVariantDirty(groupKey)).toBe(true);
+
+    queryClient.removeQueries({ queryKey: unrelatedKey });
+
+    expect(isGroupDocumentsVariantDirty(groupKey)).toBe(true);
+
+    queryClient.clear();
+  });
+
+  it('複数のQueryClientインスタンスがそれぞれ独立して購読され、一方のremovedイベントがもう一方の同名キーのdirtyエントリを誤って削除しない実運用相当のケース(pr-test-analyzer Rating6指摘)', () => {
+    // 注意: dirtyGroupDocumentsVariantsはモジュールレベルで全QueryClientに共有される
+    // (アプリ実運用は単一QueryClientインスタンス前提、useDocumentGroups.tsのコメント参照)。
+    // このテストは「片方のclientでの購読処理自体が正しく機能し、明示的にremoveした
+    // queryのみが削除される」という購読機構そのものの健全性を検証する
+    // (クロスclient分離までは保証しない、既知の限界としてコード側に明記済み)。
+    const queryClientA = new QueryClient();
+    const queryClientB = new QueryClient();
+    const keyA = groupDocumentsQueryKey('customer', 'multi-client-test-marker-a', 100);
+    const keyB = groupDocumentsQueryKey('office', 'multi-client-test-marker-b', 100);
+    queryClientA.setQueryData(keyA, { pages: [], pageParams: [] });
+    queryClientB.setQueryData(keyB, { pages: [], pageParams: [] });
+
+    // 両方のclientそれぞれでensureGroupCachePruningがWeakSet経由で個別に購読される
+    // (以前の実装はbooleanフラグで2個目以降のclientが購読漏れするバグがあった)
+    markGroupDocumentsVariantsDirty(queryClientA);
+    markGroupDocumentsVariantsDirty(queryClientB);
+    expect(isGroupDocumentsVariantDirty(keyA)).toBe(true);
+    expect(isGroupDocumentsVariantDirty(keyB)).toBe(true);
+
+    // clientAのqueryのみ破棄 → keyAのdirtyエントリのみ削除される(clientBの購読が
+    // 正しく機能していれば、keyBには影響しないはず)
+    queryClientA.removeQueries({ queryKey: keyA });
+    expect(isGroupDocumentsVariantDirty(keyA)).toBe(false);
+    expect(isGroupDocumentsVariantDirty(keyB)).toBe(true);
+
+    queryClientA.clear();
+    queryClientB.clear();
   });
 });

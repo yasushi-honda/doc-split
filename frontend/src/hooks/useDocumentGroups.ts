@@ -276,16 +276,29 @@ async function fetchGroupStats(groupType: GroupType): Promise<GroupStats> {
  * 2026-09-15 Issue #891修正: `useGroupDocuments`の自動再取得を全廃したため、
  * 再処理等の非同期完了(Cloud Functionsバッチ)を検知する手段が無くなった。
  * `useDocumentStats`(`refetchInterval:30000`)と同じ役割を`groupDocuments`側でも
- * 持たせるため、常時30秒ポーリングを追加する(`useGroupDocumentListRefresh`が
- * このシグネチャ変化を検知シグナルとして使う)。
+ * 持たせるため、`useGroupDocumentListRefresh`から呼ぶ場合のみ`pollForUpdates:true`で
+ * 30秒ポーリングを有効化する(このシグネチャ変化を検知シグナルとして使う)。
+ *
+ * **`pollForUpdates`を既定でtrueにしないこと(pr-review-toolkit:code-reviewer
+ * Critical指摘、2026-09-15)**: `fetchGroupStats`は`getCountFromServer`のような
+ * aggregationクエリではなく、対象groupType配下の`documentGroups`ドキュメントを
+ * 毎回フル読み取り(`getDocs`)している。`GroupList.tsx`はグループタブそのものに
+ * 無条件で`useGroupStats(groupType)`をマウントしており、`refetchInterval`を
+ * フック本体に付与すると同じqueryKeyを共有する全呼び出し元(=タブを開いている間
+ * ずっと、個別グループを1件も展開していなくても)がポーリング対象になってしまう
+ * (kanameone顧客別グループは1,400件超、30秒ごとに継続的な大量読み取りが発生し、
+ * 本Issue #891が解消しようとしている過大読み取り問題を別経路で再発させる)。
+ * TanStack Query v5は同一queryKeyでもobserverごとに`refetchInterval`を独立して
+ * 評価するため、`useGroupDocumentListRefresh`(グループ詳細展開時のみマウント)側
+ * だけで有効化すれば、ポーリングは実際にグループが展開されている間だけに限定される。
  */
-export function useGroupStats(groupType: GroupType, enabled = true) {
+export function useGroupStats(groupType: GroupType, enabled = true, pollForUpdates = false) {
   return useQuery({
     queryKey: ['groupStats', groupType],
     queryFn: () => fetchGroupStats(groupType),
     enabled,
     staleTime: 60 * 1000,
-    refetchInterval: 30 * 1000,
+    refetchInterval: pollForUpdates ? 30 * 1000 : false,
   });
 }
 

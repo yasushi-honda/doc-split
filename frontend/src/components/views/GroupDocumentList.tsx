@@ -219,6 +219,7 @@ export function GroupDocumentList({
     isFetchingNextPage,
     isLoading,
     isError,
+    isRefetching,
     refetch,
   } = useGroupDocuments({
     groupType,
@@ -261,6 +262,18 @@ export function GroupDocumentList({
       ]);
       if (result.isSuccess) {
         clearGroupDocumentsVariantDirty(activeQueryKey);
+        // pr-review-toolkit:pr-test-analyzer指摘(2026-09-15): queryClient.refetchQueries()は
+        // 失敗してもエラーを握りつぶす(TanStack Query仕様、Promiseはresolveする)ため、
+        // 上のPromise.allが成功したように見えても実はgroupStats再取得が失敗していることがある。
+        // `DocumentsPage.tsx`の`refreshDocumentList`と同じく、失敗時は可視化だけしておく
+        // (自己修復は既存の30秒ポーリング(useGroupStatsのrefetchInterval)に委ねる)。
+        const statsState = queryClient.getQueryState(['groupStats', groupType]);
+        if (statsState?.status === 'error') {
+          console.error(
+            '[GroupDocumentList] groupStats refetch failed; baseline may use stale stats',
+            statsState.error
+          );
+        }
         resetBaseline();
       }
     } finally {
@@ -328,10 +341,29 @@ export function GroupDocumentList({
   }
 
   // エラー
+  // 2026-09-15 Issue #891修正(codex review P1指摘): useGroupDocumentsが自動再取得
+  // (refetchOnWindowFocus/refetchOnMount/refetchOnReconnect)を全て無効化したため、
+  // 従来は再フォーカス・再マウントで自然に自己修復していたエラー状態が、明示的な
+  // 再試行手段を用意しないとページリロードまで抜け出せなくなる。単純な再試行
+  // ボタンを用意する(dirtyフラグに依存するupdateBannerとは別、hasUpdatesの真偽に
+  // 関わらず常時表示する)。
   if (isError) {
     return (
-      <div className="py-8 text-center text-sm text-red-500">
-        データの読み込みに失敗しました
+      <div className="py-8 text-center text-sm text-red-500 space-y-2">
+        <p>データの読み込みに失敗しました</p>
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={isRefetching}
+          onClick={() => void refetch()}
+        >
+          {isRefetching ? (
+            <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+          ) : (
+            <RefreshCw className="mr-1 h-4 w-4" />
+          )}
+          再試行
+        </Button>
       </div>
     );
   }
