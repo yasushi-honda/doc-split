@@ -492,6 +492,8 @@ decision-maker承認（「正しいことを段階的かつ計画的にうっか
 - **判定根拠**: `driveFolderClaimRead`有効化（目安2026-09-08、60時間判定基準2026-09-10 23:10 UTC）**より後に作成されたフォルダは97件中0件**。全ての乖離が有効化前から存在していた既存事象であり、有効化が新規の物理的フォルダ重複を誘発した証拠は見当たらない。83件のカテゴリ再分類ドリフトも2026-08-30分析（78%が無害な再分類）と同種のパターン
 - **decision-maker判断（AskUserQuestion経由）**: 因果関係なしと判定しロールバック見送り、現状維持。未修復の物理重複7顧客分（10件）は別途修復タスクとして残存（`execute-drive-export-repair`等の既存修復パスの対象、本セッションではスコープ外）
 
+**【完了・2026-09-15】残存修復実行**: `classify-drive-export-drift`再実行（run [34989202350](https://github.com/yasushi-honda/doc-split/actions/runs/34989202350)）で`scanned=7079 healthy=6895(97.4%) misplaced=109 trashed=14 blocked:target-path-not-created=36`を確認（09-13時点misplaced97件から+12、新規文書流入による自然増と判断）。`execute-drive-export-repair --dry-run`で修復候補165件（misplaced109+missing-404 6+trashed14+blocked:target-path-not-created36）を確認後、decision-maker明示認可のうえ`--execute --acknowledge-restore-folders`で本実行（run [35000627013](https://github.com/yasushi-honda/doc-split/actions/runs/35000627013)）。結果: `attempted=150 repaired=147 failed=3 skippedDrift=2 skippedPossibleManualEdit=13`。**残る3件は「フォルダの記録(claim)と実体が食い違っている」としてfail-closedで意図的にブロック**（人手確認が必要、自動修復対象外）: `KtvdlXkXdMwT4tt3zbNY`（フ　藤原広子）/ `PNFkvtmQklBQ2fTsCQJI`・`ensJd0d97BPprgPfZhrn`（同一の親フォルダ"実績"、claimedFolderId: `1N8pjNQ8U2T0NYDWLxDTAJIZXu5P-XaIG`）。**次の一手**: この3件を個別に人手確認するか判断が必要（decision-maker未判断、着手不要なら本節はこれで完了扱い）。
+
 **【知見・2026-09-08】cocoro Phase C待ちの間の事前点検（read-only、コード変更なし）**: kanameoneのロールアウト完了を受け、cocoro側でPhase C（クライアント側Drive OAuth接続）完了時に備えて先行点検を実施した。
 
 - コード鮮度: `functions/src/drive`配下、cocoroの最終デプロイ（2026-08-30、claimプロトコルPR-3+PR-4含む）以降に新規コミットなし。追加デプロイ不要
