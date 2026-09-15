@@ -63,7 +63,9 @@ describe('useSplitPdf - Issue #621 already-exists/aborted時のキャッシュ�
     // 2026-08-06: 分割元書類がグループ表示に含まれていた場合の表示崩れを防ぐため、
     // グループ系キャッシュも合わせてinvalidateする(useDocumentEdit等と同型の漏れの予防)
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['documentGroups'] })
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['groupDocuments'] })
+    // 2026-09-15 Issue #891修正: groupDocumentsもdocumentsInfiniteと同じく
+    // refetchType:'none'を指定する(開いているグループの全ページ再取得を防ぐため)
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['groupDocuments'], refetchType: 'none' })
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['groupStats'] })
   })
 
@@ -81,7 +83,7 @@ describe('useSplitPdf - Issue #621 already-exists/aborted時のキャッシュ�
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['documentsInfinite'], refetchType: 'none' })
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['document'] })
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['documentGroups'] })
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['groupDocuments'] })
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['groupDocuments'], refetchType: 'none' })
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['groupStats'] })
   })
 
@@ -109,7 +111,7 @@ describe('useSplitPdf - Issue #621 already-exists/aborted時のキャッシュ�
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['documentsInfinite'], refetchType: 'none' })
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['document'] })
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['documentGroups'] })
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['groupDocuments'] })
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['groupDocuments'], refetchType: 'none' })
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['groupStats'] })
   })
 })
