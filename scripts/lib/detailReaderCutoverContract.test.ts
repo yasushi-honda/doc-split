@@ -57,6 +57,12 @@ const ALLOWLIST = new Set([
   'delete-legacy-ocr-fields.ts',
   // 上記のヘルパー(decideDeletionAction等、親の値の有無・内容比較ロジック)
   'lib/deleteLegacyOcrFieldsHelpers.ts',
+  // status=processed文書を単発でpendingへ戻すops-script(ADR-0025、PR #919)。detail/main優先+
+  // legacy root pageResultsへのフォールバックの両方を確認したうえでFieldValue.delete()する
+  // 削除実行者であり(delete-legacy-ocr-fields.tsと同じ位置づけ)、コンテンツを読み取って
+  // 業務ロジックに使う「読者」ではないため対象外。本エントリの追加漏れがPR #921のCIを
+  // ブロックしていたため2026-09-15に追記(Issue #891とは無関係の既存の見落とし)。
+  'reset-document-to-pending.js',
 ]);
 
 const EXCLUDED_DIR_NAMES = new Set(['node_modules', '.git']);
