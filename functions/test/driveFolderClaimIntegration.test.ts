@@ -33,6 +33,9 @@ import {
   recordFullScanResolution,
   invalidateResolvedClaimByFolderId,
   invalidateCreatingClaimByAttemptId,
+  verifyFolderClaim,
+  readClaim,
+  type ResolvedFolderClaim,
 } from '../src/drive/driveFolderClaim';
 import { resolveChildFolder } from '../src/drive/childFolderResolver';
 
@@ -1229,6 +1232,28 @@ describe('driveFolderClaim プロトコル(Issue #871)', () => {
       expect(data.state).to.equal('divergent');
       expect(data.resyncHistory).to.have.lengthOf(1);
       expect(data.resyncHistory[0]).to.deep.include({ mode: 'restore', actor: 'past-actor', atMs: 1000 });
+    });
+
+    it('resync直後の通常のverify成功(recordVerification、実運用で最も頻繁に通るホットパス)でもresyncHistoryが消えない(codex review 2巡目P2指摘の回帰テスト)', async () => {
+      await claimDocRef('parent-ttl3', '健全太郎').set({
+        state: 'resolved',
+        folderId: 'healthy-id',
+        attempt: null,
+        parentId: 'parent-ttl3',
+        name: '健全太郎',
+        resyncHistory: [{ mode: 'restore', actor: 'past-actor', atMs: 1000 }],
+      });
+      const { drive } = makeFakeDrive({
+        files: [{ id: 'healthy-id', name: '健全太郎', parents: ['parent-ttl3'], trashed: false }],
+      });
+      const claim = (await readClaim(db, 'parent-ttl3', '健全太郎')) as ResolvedFolderClaim;
+
+      await verifyFolderClaim(drive, db, 'parent-ttl3', '健全太郎', claim, 'run-verify1');
+
+      const after = (await claimDocRef('parent-ttl3', '健全太郎').get()).data()!;
+      expect(after.state).to.equal('resolved');
+      expect(after.resyncHistory).to.have.lengthOf(1);
+      expect(after.resyncHistory[0]).to.deep.include({ mode: 'restore', actor: 'past-actor', atMs: 1000 });
     });
   });
 

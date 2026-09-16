@@ -70,9 +70,9 @@ METRICS=(
   "ocr_aggregate_truncated|OCR aggregate pageResults truncated (#220, Issue #205)|resource.type=\"cloud_function\" AND textPayload=~\"\\\\[OCR\\\\] Aggregate pageResults truncated\""
   "summary_truncated|summary generation truncated (#220, Issue #209)|resource.type=\"cloud_function\" AND textPayload=~\"\\\\[Summary\\\\] truncated\""
   "search_index_silent_failure|removeTokensFromIndex permanent error (#220, ADR-0015)|resource.type=\"cloud_function\" AND resource.labels.function_name=\"ondocumentwritesearchindex\" AND severity=\"ERROR\" AND textPayload:\"Failed to remove tokens\""
-  "drive_folder_divergent|driveFolderClaim claim divergent detected (Issue #871 恒久対応)|resource.type=\"cloud_function\" AND textPayload:\"[driveFolderClaim] claim divergent detected\""
-  "drive_folder_divergent_record_failed|markDivergent()自体の書込み失敗、claimにもメトリクスにも残らない経路 (Issue #871 恒久対応)|resource.type=\"cloud_function\" AND textPayload:\"divergent記録に失敗しました\""
-  "claim_divergent_backlog_stale|divergent claim が3日以上未解決のまま滞留 (Issue #871 恒久対応、日次sweep)|resource.type=\"cloud_function\" AND resource.labels.function_name=\"drivefolderclaimdivergentsweep\" AND severity=\"WARNING\" AND textPayload:\"[driveFolderClaim] divergent backlog stale\""
+  "drive_folder_divergent|driveFolderClaim claim divergent detected (Issue #871 恒久対応)|resource.type=\"cloud_run_revision\" AND textPayload:\"[driveFolderClaim] claim divergent detected\""
+  "drive_folder_divergent_record_failed|markDivergent()自体の書込み失敗、claimにもメトリクスにも残らない経路 (Issue #871 恒久対応)|resource.type=\"cloud_run_revision\" AND textPayload:\"divergent記録に失敗しました\""
+  "claim_divergent_backlog_stale|divergent claim が3日以上未解決のまま滞留 (Issue #871 恒久対応、日次sweep)|resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"drivefolderclaimdivergentsweep\" AND severity=\"WARNING\" AND textPayload:\"[driveFolderClaim] divergent backlog stale\""
 )
 
 # ==================================================

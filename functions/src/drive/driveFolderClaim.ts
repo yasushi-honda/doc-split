@@ -460,6 +460,10 @@ export async function beginCreation(
       lockToken: attemptId,
       claimedAtMs: startedAtMs,
       expireAt: ttlTimestamp(),
+      // codex review 2巡目P2指摘対応: 過去にreleaseDivergentClaimで無効化されたclaimが
+      // 同一parent+nameで再作成される場合、resyncHistory(繰り返し乖離の監査証跡)を
+      // 引き継ぐ(全ての完全置換write共通の方針)。
+      resyncHistory: existing?.resyncHistory,
     });
     tx.set(ref, doc);
     return { kind: 'begun' };
@@ -525,6 +529,9 @@ export async function commitResolvedWithRetry(
             parentId,
             name,
             expireAt: ttlTimestamp(),
+            // codex review 2巡目P2指摘対応: resyncHistory(繰り返し乖離の監査証跡)を
+            // 全ての完全置換writeで引き継ぐ。
+            resyncHistory: existing?.resyncHistory,
           });
           tx.set(ref, doc);
         });
@@ -594,6 +601,9 @@ export async function recordFullScanResolution(
       parentId,
       name,
       expireAt: ttlTimestamp(),
+      // codex review 2巡目P2指摘対応: resyncHistory(繰り返し乖離の監査証跡)を
+      // 全ての完全置換writeで引き継ぐ。
+      resyncHistory: existing?.resyncHistory,
     });
     tx.set(ref, doc);
   });
@@ -729,6 +739,9 @@ export async function invalidateResolvedClaimByFolderId(
         parentId: data.parentId as string,
         name: data.name as string,
         expireAt: ttlTimestamp(),
+        // codex review 2巡目P2指摘対応: resyncHistory(繰り返し乖離の監査証跡)を
+        // 全ての完全置換writeで引き継ぐ。
+        resyncHistory: data.resyncHistory as ResyncHistoryEntry[] | undefined,
       });
       tx.set(fresh.ref, doc2);
       return true;
@@ -778,6 +791,9 @@ export async function invalidateCreatingClaimByAttemptId(
         parentId: data.parentId as string,
         name: data.name as string,
         expireAt: ttlTimestamp(),
+        // codex review 2巡目P2指摘対応: resyncHistory(繰り返し乖離の監査証跡)を
+        // 全ての完全置換writeで引き継ぐ。
+        resyncHistory: data.resyncHistory as ResyncHistoryEntry[] | undefined,
       });
       tx.set(fresh.ref, doc2);
       return true;
@@ -810,6 +826,9 @@ export async function invalidateAttempt(
       parentId,
       name,
       expireAt: ttlTimestamp(),
+      // codex review 2巡目P2指摘対応: resyncHistory(繰り返し乖離の監査証跡)を
+      // 全ての完全置換writeで引き継ぐ。
+      resyncHistory: existing.resyncHistory,
     });
     tx.set(ref, doc);
   });
@@ -865,6 +884,10 @@ async function recordVerification(
       parentId,
       name,
       expireAt: ttlTimestamp(),
+      // codex review 2巡目P2指摘対応: resyncHistoryは解決直後の通常のverify成功
+      // (このパスは実運用で最も頻繁に通るホットパス)で無条件に消えていた。
+      // 全ての完全置換writeで引き継ぐ。
+      resyncHistory: existing?.resyncHistory,
     });
     tx.set(ref, doc);
   });
@@ -1144,6 +1167,9 @@ async function recordMiss(
         parentId,
         name,
         expireAt: ttlTimestamp(),
+        // codex review 2巡目P2指摘対応: resyncHistory(繰り返し乖離の監査証跡)を
+        // 全ての完全置換writeで引き継ぐ。
+        resyncHistory: existing.resyncHistory,
       });
       tx.set(ref, doc);
       return { invalidated: true };
@@ -1162,6 +1188,7 @@ async function recordMiss(
       parentId,
       name,
       expireAt: ttlTimestamp(),
+      resyncHistory: existing.resyncHistory,
     });
     tx.set(ref, doc);
     return { invalidated: false };

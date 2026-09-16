@@ -13,7 +13,7 @@ combiner: OR
 conditions:
   - displayName: "claim_divergent_backlog_stale > 0 in 24h"
     conditionThreshold:
-      filter: 'metric.type="logging.googleapis.com/user/claim_divergent_backlog_stale" AND resource.type="cloud_function"'
+      filter: 'metric.type="logging.googleapis.com/user/claim_divergent_backlog_stale" AND resource.type="cloud_run_revision"'
       aggregations:
         - alignmentPeriod: 86400s
           perSeriesAligner: ALIGN_SUM
