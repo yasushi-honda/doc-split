@@ -496,7 +496,7 @@ decision-maker承認（「正しいことを段階的かつ計画的にうっか
 
 **【調査完了・2026-09-16】残3件のclaim/実体不一致 原因調査 + セカンドオピニオン(Fable 5.1・codex GPT)相談**: `diagnose-drive-folder-duplicate-causality`(read-only)でDrive実体を直接調査。
 
-- **ケース1(フ藤原広子、`KtvdlXkXdMwT4tt3zbNY`)**: ファイルは実際には「牧野美雪」ケアマネのフォルダ配下に作られた「フ　藤原広子」フォルダに格納。Firestoreのclaim/document.careManagerは「今井 聖治」を期待。**顧客マスター(`masters/customers/items/yjT87b670Ul2ltlZntrO`).careManagerName`も「今井 聖治」で完全一致**——「Firestoreが古い」という可能性は排除。Drive実体側の誤配置が確定
+- **ケース1(フ藤原広子、`KtvdlXkXdMwT4tt3zbNY`)**: ファイルは実際には「牧野美雪」ケアマネのフォルダ配下に作られた「フ　藤原広子」フォルダに格納。Firestoreのclaim/document.careManagerは「今井 聖治」を期待。**顧客マスター(`masters/customers/items/yjT87b670Ul2ltlZntrO`)の`careManagerName`も「今井 聖治」で完全一致**——「Firestoreが古い」という可能性は排除。Drive実体側の誤配置が確定
 - **ケース2/3(実績、`PNFkvtmQklBQ2fTsCQJI`/`ensJd0d97BPprgPfZhrn`)**: claim通り「イ　井戸利雄」配下が正しいが、実際には「イ　井戸利雄→未判定→実績」という余分な中間フォルダを挟んだ入れ子構造になっていた
 - `driveFolderLocks`で`state=='divergent'`の全件確認: **現在この2キーのみ**(他に潜在的な同種未解決案件なし、影響範囲は確定)
 - **Fable 5.1(独立コードレビュー)の指摘**: divergentの検知理由は`verifyFolderClaim()`の`parents-mismatch`(=フォルダが作成後に移動された)であり、Issue #871本来の「同名フォルダの重複作成」メカニズムとは別現象。ケース1の親フォルダ404は`drive.file`スコープ由来の見かけ上のものが最有力(子フォルダは健全)。ケース2/3の「未判定」は`documentType`未確定時にシステムが正当に生成しうる設計(ゲート未実装のギャップ、M1として別途課題化候補)
