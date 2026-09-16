@@ -208,6 +208,12 @@ on:
           - execute-drive-export-repair --execute --limit --expected-count
           - execute-drive-export-repair --execute --expected-count
           - diagnose-drive-folder-duplicate-causality
+          - backfill-drive-folder-claim-ttl
+          - backfill-drive-folder-claim-ttl --execute
+          - classify-drive-claim-divergence
+          - execute-drive-claim-resync --dry-run
+          - execute-drive-claim-resync --execute
+          - execute-drive-claim-resync --execute --requeue
       backfill_limit:
         description: 'backfill-drive-export --limit: canary実行時のマーク上限件数(数値のみ) / classify-drive-export-drift --limit: 検査対象document数の上限(数値のみ) / execute-drive-export-repair --limit: 修復対象候補数の上限(数値のみ)'
         required: false
@@ -272,7 +278,7 @@ on:
         type: string
         default: ''
       exec_args_json:
-        description: 'execute-collision-migration: JSON {"planRunId":"<classify run id>","approvedOperationIds":["op-0001",...]} / investigate-issue811-root-cause: JSON {"folderIds":[...],"docIds":[...]} / classify-drive-folder-duplicates: JSON {"canonicalFolderId":"...","duplicateFolderIds":["id1","id2"]} / execute-drive-folder-merge: JSON {"planRunId":"<classify-drive-folder-duplicates run id>","approvedOperationIds":["op-0001",...]} / rollback-drive-folder-merge: JSON {"manifestRunId":"<execute-drive-folder-merge run id>","approvedOperationIds":["op-0001",...]}(approvedOperationIds省略時はmanifest全件を対象) / execute-drive-export-repair: JSON {"planRunId":"<classify-drive-export-drift run id>","expectedTotal":488,"acknowledgeRestoreFolders":false}(planRunId必須、expectedTotal/acknowledgeRestoreFoldersは省略可) / diagnose-drive-folder-duplicate-causality: JSON {"folderIds":["id1","id2",...]}'
+        description: 'execute-collision-migration: JSON {"planRunId":"<classify run id>","approvedOperationIds":["op-0001",...]} / investigate-issue811-root-cause: JSON {"folderIds":[...],"docIds":[...]} / classify-drive-folder-duplicates: JSON {"canonicalFolderId":"...","duplicateFolderIds":["id1","id2"]} / execute-drive-folder-merge: JSON {"planRunId":"<classify-drive-folder-duplicates run id>","approvedOperationIds":["op-0001",...]} / rollback-drive-folder-merge: JSON {"manifestRunId":"<execute-drive-folder-merge run id>","approvedOperationIds":["op-0001",...]}(approvedOperationIds省略時はmanifest全件を対象) / execute-drive-export-repair: JSON {"planRunId":"<classify-drive-export-drift run id>","expectedTotal":488,"acknowledgeRestoreFolders":false}(planRunId必須、expectedTotal/acknowledgeRestoreFoldersは省略可) / diagnose-drive-folder-duplicate-causality: JSON {"folderIds":["id1","id2",...]} / execute-drive-claim-resync: JSON {"planRunId":"<classify-drive-claim-divergence run id>","approvedOperations":{"op-0001":{"mode":"restore-expected"},"op-0002":{"mode":"release-claim","acknowledgedStrandedFiles":0}}}(modeはrestore-expected/release-claim/finalize-resolvedのいずれか、release-claimでdirectChildCount>0の場合のみacknowledgedStrandedFilesが必須)'
         required: false
         type: string
         default: ''
@@ -689,6 +695,87 @@ jobs:
           run-id: ${{ steps.parse_exec_drive.outputs.plan_run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Parse execute-drive-claim-resync args
+        # Issue #871 恒久対応: exec_args_json から planRunId(classify-drive-claim-divergence
+        # run id)を抽出する。approvedOperationsのJSON本体はGITHUB_OUTPUT経由での多段
+        # エスケープを避けるため、後続stepで github.event.inputs.exec_args_json を直接
+        # 再パースする(planRunIdのみここでnumeric検証してoutputに残す)。
+        id: parse_exec_divergence
+        if: ${{ startsWith(github.event.inputs.script, 'execute-drive-claim-resync') }}
+        env:
+          EXEC_ARGS_JSON: ${{ github.event.inputs.exec_args_json }}
+        run: |
+          set -euo pipefail
+          if [ -z "$EXEC_ARGS_JSON" ]; then
+            echo "ERROR: exec_args_json is required when script is execute-drive-claim-resync" >&2
+            exit 1
+          fi
+          if ! echo "$EXEC_ARGS_JSON" | jq empty 2>/dev/null; then
+            echo "ERROR: exec_args_json is not valid JSON" >&2
+            exit 1
+          fi
+          PLAN_RUN_ID=$(echo "$EXEC_ARGS_JSON" | jq -r '.planRunId // empty')
+          if [ -z "$PLAN_RUN_ID" ]; then
+            echo "ERROR: exec_args_json must contain planRunId (string)" >&2
+            exit 1
+          fi
+          if ! echo "$PLAN_RUN_ID" | grep -qE '^[0-9]+$'; then
+            echo "ERROR: planRunId must be a numeric run id (got: $PLAN_RUN_ID)" >&2
+            exit 1
+          fi
+          HAS_VALID_APPROVED_OPS=$(echo "$EXEC_ARGS_JSON" | jq '(.approvedOperations // null) | type == "object"')
+          if [ "$HAS_VALID_APPROVED_OPS" != "true" ]; then
+            echo "ERROR: exec_args_json must contain approvedOperations (object, may be {} for a zero-approval dry-run)" >&2
+            exit 1
+          fi
+          # operationIdは^op-[0-9]+$、modeは既知の3値、acknowledgedStrandedFilesは
+          # 指定時は0以上の整数のみ許可(誤操作・インジェクション対策)。
+          INVALID_KEYS=$(echo "$EXEC_ARGS_JSON" | jq -r '.approvedOperations | keys[] | select(test("^op-[0-9]+$") | not)')
+          if [ -n "$INVALID_KEYS" ]; then
+            echo "ERROR: approvedOperations keys must each match ^op-[0-9]+$ (invalid: $INVALID_KEYS)" >&2
+            exit 1
+          fi
+          INVALID_MODES=$(echo "$EXEC_ARGS_JSON" | jq -r '.approvedOperations[] | .mode | select(. as $m | ["restore-expected","release-claim","finalize-resolved"] | index($m) | not)')
+          if [ -n "$INVALID_MODES" ]; then
+            echo "ERROR: approvedOperations[].mode must be one of restore-expected/release-claim/finalize-resolved (invalid: $INVALID_MODES)" >&2
+            exit 1
+          fi
+          INVALID_ACK=$(echo "$EXEC_ARGS_JSON" | jq -r '.approvedOperations[] | select(has("acknowledgedStrandedFiles")) | .acknowledgedStrandedFiles | select((type != "number") or (. < 0) or (floor != .))')
+          if [ -n "$INVALID_ACK" ]; then
+            echo "ERROR: approvedOperations[].acknowledgedStrandedFiles must be a non-negative integer when present" >&2
+            exit 1
+          fi
+          echo "plan_run_id=$PLAN_RUN_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Download classify-drive-claim-divergence plan artifact
+        if: ${{ startsWith(github.event.inputs.script, 'execute-drive-claim-resync') }}
+        uses: actions/download-artifact@v4
+        with:
+          name: classify-drive-claim-divergence-plan-${{ github.event.inputs.environment }}-${{ steps.parse_exec_divergence.outputs.plan_run_id }}
+          path: ${{ github.workspace }}/.divergence-plan
+          run-id: ${{ steps.parse_exec_divergence.outputs.plan_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate approval JSON from divergence plan + exec_args_json
+        # plan.planId + exec_args_json.approvedOperations を合成してapproval.jsonに書き出す。
+        # execute-drive-claim-resync.tsのschemaVersion/planId/projectId gateを満たす形式。
+        if: ${{ startsWith(github.event.inputs.script, 'execute-drive-claim-resync') }}
+        env:
+          EXEC_ARGS_JSON: ${{ github.event.inputs.exec_args_json }}
+        run: |
+          set -euo pipefail
+          PLAN_FILE="${GITHUB_WORKSPACE}/.divergence-plan/plan-output.json"
+          APPROVAL_FILE="${GITHUB_WORKSPACE}/.divergence-plan/approval.json"
+          if [ ! -f "$PLAN_FILE" ]; then
+            echo "ERROR: plan-output.json not found at $PLAN_FILE" >&2
+            exit 1
+          fi
+          PLAN_ID=$(jq -r '.planId' "$PLAN_FILE")
+          echo "$EXEC_ARGS_JSON" | jq --arg planId "$PLAN_ID" '{planId: $planId, approvedOperations: .approvedOperations}' > "$APPROVAL_FILE"
+          echo "=== Generated approval.json ==="
+          cat "$APPROVAL_FILE"
+          echo "==============================="
+
       - name: Parse execute-drive-export-repair args
         # Issue #811/#823 remediation Phase 2b: exec_args_json から
         # planRunId(classify-drive-export-drift run id、必須)・expectedTotal(任意、H5の
@@ -963,6 +1050,24 @@ jobs:
               npx ts-node diagnose-drive-folder-duplicate-causality.ts \
                 --folder-ids "$FOLDER_IDS" \
                 --out "${GITHUB_WORKSPACE}/scripts/diagnose-drive-folder-duplicate-causality-output.json"
+          elif [ "$SCRIPT_NAME" = "backfill-drive-folder-claim-ttl" ]; then
+            # Issue #871 恒久対応: 既存divergent claimのexpireAt(TTL)を除去する一回限りの移行。
+            # exec_args_json不要。SCRIPT_ARGSは "" (dry-run) または "--execute"。
+            cd scripts
+            NODE_PATH=../functions/node_modules \
+              FIREBASE_PROJECT_ID="$PROJECT_ID" \
+              npx ts-node backfill-drive-folder-claim-ttl.ts \
+                $SCRIPT_ARGS
+          elif [ "$SCRIPT_NAME" = "classify-drive-claim-divergence" ]; then
+            # Issue #871 恒久対応: divergent claimの一覧化(read-only)。exec_args_json不要
+            # (driveFolderLocksをstate=='divergent'で全走査するため対象IDの指定が不要)。
+            # ログマスキングで `{` が `***` に置換されるため、plan JSON をファイル出力 →
+            # upload-artifact で取得する経路を必須化(classify-drive-folder-duplicatesと同型)。
+            cd scripts
+            NODE_PATH=../functions/node_modules \
+              FIREBASE_PROJECT_ID="$PROJECT_ID" \
+              npx ts-node classify-drive-claim-divergence.ts \
+                --out "${GITHUB_WORKSPACE}/scripts/plan-output.json"
           elif [ "$SCRIPT_NAME" = "classify-drive-folder-duplicates" ]; then
             # Issue #811 Phase B Part A: Driveフォルダ重複統合の分類(read-only)。
             # ログマスキングで `{` が `***` に置換されるため、plan JSON をファイル出力 →
@@ -994,6 +1099,17 @@ jobs:
                 --approval "${GITHUB_WORKSPACE}/.drive-merge-plan/approval.json" \
                 --operations "$DRIVE_OPERATION_IDS_CSV" \
                 --manifest-out "${GITHUB_WORKSPACE}/scripts/manifest-output.json" \
+                $SCRIPT_ARGS
+          elif [ "$SCRIPT_NAME" = "execute-drive-claim-resync" ]; then
+            # Issue #871 恒久対応: 承認付き再同期の実行。plan + approval は前段stepで
+            # artifact取得+生成。SCRIPT_ARGSは"--dry-run"/"--execute"/"--execute --requeue"。
+            cd scripts
+            NODE_PATH=../functions/node_modules \
+              FIREBASE_PROJECT_ID="$PROJECT_ID" \
+              npx ts-node execute-drive-claim-resync.ts \
+                --plan "${GITHUB_WORKSPACE}/.divergence-plan/plan-output.json" \
+                --approval "${GITHUB_WORKSPACE}/.divergence-plan/approval.json" \
+                --manifest-out "${GITHUB_WORKSPACE}/scripts/manifest-output-divergence.json" \
                 $SCRIPT_ARGS
           elif [ "$SCRIPT_NAME" = "rollback-drive-folder-merge" ]; then
             # Issue #811 Phase B: execute-drive-folder-mergeのmanifestを巻き戻す。
@@ -1558,6 +1674,27 @@ jobs:
         with:
           name: execute-drive-folder-merge-manifest-${{ github.event.inputs.environment }}-${{ github.run_id }}
           path: scripts/manifest-output.json
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Upload classify-drive-claim-divergence plan artifact
+        # Issue #871 恒久対応: classify-drive-folder-duplicatesと同型(log secret maskingで
+        # plan JSONが欠落するためartifact経由で受け渡す)。
+        if: ${{ github.event.inputs.script == 'classify-drive-claim-divergence' && always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: classify-drive-claim-divergence-plan-${{ github.event.inputs.environment }}-${{ github.run_id }}
+          path: scripts/plan-output.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload execute-drive-claim-resync manifest artifact
+        # Issue #871 恒久対応: rollback材料のためretentionを長めに取る(execute-drive-folder-mergeと同型)。
+        if: ${{ startsWith(github.event.inputs.script, 'execute-drive-claim-resync') && always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: execute-drive-claim-resync-manifest-${{ github.event.inputs.environment }}-${{ github.run_id }}
+          path: scripts/manifest-output-divergence.json
           if-no-files-found: warn
           retention-days: 90
 
