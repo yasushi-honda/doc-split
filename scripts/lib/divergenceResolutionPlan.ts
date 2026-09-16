@@ -228,12 +228,20 @@ export interface DivergencePlanSummary {
   blocked: number;
 }
 
+/** `driveApiVersionGate.ts`の`DriveApiVersionSnapshot`と同一形状(循環import回避のため独立定義)。 */
+export interface DivergencePlanDriveApiVersion {
+  lockfileHash: string;
+  googleapisLockfileVersion: string;
+}
+
 export interface DivergencePlan {
   schemaVersion: DivergencePlanSchemaVersion;
   planId: string;
   createdAt: string;
   environment: string;
   projectId: string;
+  /** classify/execute間でgoogleapisのバージョンが変わっていないかのfail-closed照合用。 */
+  driveApiVersion: DivergencePlanDriveApiVersion;
   summary: DivergencePlanSummary;
   operations: DivergenceOperation[];
 }
