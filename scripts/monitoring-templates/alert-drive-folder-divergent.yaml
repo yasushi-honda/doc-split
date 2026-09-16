@@ -1,0 +1,27 @@
+displayName: "[__ENV__] drive_folder_divergent: claim divergent detected (24h detect, 7d persist)"
+documentation:
+  content: |
+    Drive フォルダの claim(`driveFolderLocks`)と実体が食い違う「divergent」状態が新規発生しました。
+    Issue #871 恒久対応の一環。divergent は自動修復されず、承認付き再同期
+    (`scripts/classify-drive-claim-divergence.ts` → `scripts/execute-drive-claim-resync.ts`)
+    による人手介入が必要です。24 時間窓で 1 件以上検知し、incident は 7 日間クローズせず
+    可視化します(実績: 約2.5週間で2件、発生自体が異常)。
+    運用 SOP: docs/context/monitoring-setup.md 参照。
+  mimeType: "text/markdown"
+combiner: OR
+conditions:
+  - displayName: "drive_folder_divergent > 0 in 24h"
+    conditionThreshold:
+      filter: 'metric.type="logging.googleapis.com/user/drive_folder_divergent" AND resource.type="cloud_function"'
+      aggregations:
+        - alignmentPeriod: 86400s
+          perSeriesAligner: ALIGN_SUM
+      comparison: COMPARISON_GT
+      thresholdValue: 0
+      duration: 0s
+alertStrategy:
+  autoClose: 604800s
+userLabels:
+  source: docsplit-monitoring-setup
+notificationChannels:
+  - __NOTIFICATION_CHANNEL__

@@ -4,8 +4,8 @@ Issue #220 + ADR-0015 Follow-up で構築した log-based metric + Cloud Monitor
 
 ## 構成概要
 
-- **5 種メトリクス** (log-based) を各環境で作成
-- **5 種アラートポリシー** (Cloud Monitoring) をメトリクスと対になる形で作成
+- **8 種メトリクス** (log-based) を各環境で作成
+- **8 種アラートポリシー** (Cloud Monitoring) をメトリクスと対になる形で作成
 - **通知チャネル** 1 つ (email、環境ごと) を作成し全ポリシーで共有
 
 関連コード:
@@ -23,13 +23,16 @@ Issue #220 + ADR-0015 Follow-up で構築した log-based metric + Cloud Monitor
 | `ocr_aggregate_truncated` | `[OCR] Aggregate pageResults truncated` (WARN) | 24h 以内に 1 件以上 | per-page 二段目発動は異常 |
 | `summary_truncated` | `[Summary] truncated` (WARN) | 24h 以内に 1 件以上 | Issue #209 再発指標 |
 | `search_index_silent_failure` | `Failed to remove tokens` (severity=ERROR) | 24 時間窓で 1 件以上 (incident は 7 日間可視化) | ADR-0015 再評価トリガー条件1 (`#220 metric で severity=ERROR ログが 7日間に 1件以上発生`) を反映。GCP API 制約 (alignmentPeriod 最大 25h) のため厳密な 7 日 rolling ではなく、`autoClose: 7d` で incident 可視性を 7 日担保 |
+| `drive_folder_divergent` | `[driveFolderClaim] claim divergent detected` | 24 時間窓で 1 件以上 (incident は 7 日間可視化) | Issue #871 恒久対応。claim と Drive 実体の食い違い(新規発生)を検知。実績: 約2.5週間で2件、発生自体が異常 |
+| `drive_folder_divergent_record_failed` | `divergent記録に失敗しました` | 24 時間窓で 1 件以上 (incident は 7 日間可視化) | Issue #871 恒久対応。`markDivergent()`自体のFirestore書込み失敗は claim にもメトリクスにも残らない経路があるため高優先度 |
+| `claim_divergent_backlog_stale` | `[driveFolderClaim] divergent backlog stale` (severity=WARNING、`driveFolderClaimDivergentSweep`日次関数が出力) | 24 時間窓で 1 件以上 (incident は 7 日間可視化) | Issue #871 恒久対応。「新規発生」検知だけでは既存の未解決分の**放置**を検知できないギャップを埋める。3日以上未解決の divergent が残っている場合のみ日次で1回発火 |
 
 ### アラートポリシー共通パラメータ
 
 - `duration`: 0s (閾値超過で即発火)
 - `autoClose`:
   - 標準 (`searchindex_oom` / `ocr_*_truncated` / `summary_truncated`): 86400s (24h 無発火で自動クローズ)
-  - `search_index_silent_failure` のみ: 604800s (7 日間) — ADR-0015 の 7 日間監視要件を担保
+  - `search_index_silent_failure` / `drive_folder_divergent` / `drive_folder_divergent_record_failed` / `claim_divergent_backlog_stale`: 604800s (7 日間) — 放置検知のため長めに取る
 - `notificationRateLimit`: **未設定**。Cloud Monitoring API の仕様により metric-based alert policy では指定不可（log-based policy 限定）。metric alert は incident オープン時 1 通のみ送信、`autoClose` まで再通知されないため通知暴走リスクは元々低い
 - **検出遅延**:
   - `searchindex_oom` (alignment 1h): 約 3-5 分
@@ -87,7 +90,7 @@ ADR-0015 要件「7 日間に 1 件以上」は metric alignment では厳密に
 ```bash
 # メトリクス一覧
 gcloud logging metrics list --project=<project-id> \
-  --filter='name=(searchindex_oom OR ocr_page_truncated OR ocr_aggregate_truncated OR summary_truncated OR search_index_silent_failure)'
+  --filter='name=(searchindex_oom OR ocr_page_truncated OR ocr_aggregate_truncated OR summary_truncated OR search_index_silent_failure OR drive_folder_divergent OR drive_folder_divergent_record_failed OR claim_divergent_backlog_stale)'
 
 # アラートポリシー一覧 (user_labels で本 script が作成したもののみ識別)
 gcloud alpha monitoring policies list --project=<project-id> \
@@ -168,6 +171,7 @@ rm /tmp/monitoring-sa.json
 - ✅ dev: SA + Secret + setup 完了 (2026-04-17 session6, 5 metrics + 5 alert policies + 1 channel 稼働中)
 - ✅ kanameone: SA + Secret + setup 完了 (2026-04-17 session7, Run ID `24547741800`, 5 metrics + 5 alert policies + 1 channel 稼働中、通知先 `hy.unimail.11@gmail.com`)
 - ✅ cocoro: SA + Secret + setup 完了 (2026-04-17 session7, Run ID `24548562806`, 5 metrics + 5 alert policies + 1 channel 稼働中、通知先 `hy.unimail.11@gmail.com`)
+- ⏳ Issue #871 恒久対応で追加した3種（`drive_folder_divergent`/`drive_folder_divergent_record_failed`/`claim_divergent_backlog_stale`）は**PR時点では未適用**。スクリプトは冪等なので、各環境で `setup-log-based-metrics.sh` を再実行すれば既存5種はskipされ新規3種のみ追加される（ロールアウト §1 参照）
 
 ## 通知先の調整
 

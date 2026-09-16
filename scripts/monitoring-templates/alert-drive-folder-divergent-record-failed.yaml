@@ -1,0 +1,27 @@
+displayName: "[__ENV__] drive_folder_divergent_record_failed: markDivergent write failed (24h detect, 7d persist)"
+documentation:
+  content: |
+    `markDivergent()` 自体の Firestore 書込みが失敗しました。この場合 claim ドキュメントにも
+    `drive_folder_divergent` メトリクスにも何も残らず、矛盾の発生自体が観測不能になります
+    (Issue #871 恒久対応、silent-failure-hunter レビュー対応箇所)。
+    `findOrCreateFolder.ts`/`childFolderResolver.ts` のログを確認し、対象フォルダの
+    claim/実体を手動で調査してください。24 時間窓で 1 件以上を高優先度として検知します。
+    運用 SOP: docs/context/monitoring-setup.md 参照。
+  mimeType: "text/markdown"
+combiner: OR
+conditions:
+  - displayName: "drive_folder_divergent_record_failed > 0 in 24h"
+    conditionThreshold:
+      filter: 'metric.type="logging.googleapis.com/user/drive_folder_divergent_record_failed" AND resource.type="cloud_function"'
+      aggregations:
+        - alignmentPeriod: 86400s
+          perSeriesAligner: ALIGN_SUM
+      comparison: COMPARISON_GT
+      thresholdValue: 0
+      duration: 0s
+alertStrategy:
+  autoClose: 604800s
+userLabels:
+  source: docsplit-monitoring-setup
+notificationChannels:
+  - __NOTIFICATION_CHANNEL__

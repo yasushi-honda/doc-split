@@ -1,0 +1,28 @@
+displayName: "[__ENV__] claim_divergent_backlog_stale: divergent unresolved > 3d (24h detect, 7d persist)"
+documentation:
+  content: |
+    未解決の divergent claim が 3 日以上滞留しています(`driveFolderClaimDivergentSweep`
+    日次スケジュール関数による検知、Issue #871 恒久対応)。
+    `drive_folder_divergent`(新規発生)は検知できても放置は検知できないという設計上の
+    ギャップを埋めるための指標です。「人手解決するまで必ず残す」方針の担保として、
+    このアラートが鳴っている間は対応中のタスクとして扱ってください。
+    承認付き再同期: `scripts/classify-drive-claim-divergence.ts` → `scripts/execute-drive-claim-resync.ts`。
+    運用 SOP: docs/context/monitoring-setup.md 参照。
+  mimeType: "text/markdown"
+combiner: OR
+conditions:
+  - displayName: "claim_divergent_backlog_stale > 0 in 24h"
+    conditionThreshold:
+      filter: 'metric.type="logging.googleapis.com/user/claim_divergent_backlog_stale" AND resource.type="cloud_function"'
+      aggregations:
+        - alignmentPeriod: 86400s
+          perSeriesAligner: ALIGN_SUM
+      comparison: COMPARISON_GT
+      thresholdValue: 0
+      duration: 0s
+alertStrategy:
+  autoClose: 604800s
+userLabels:
+  source: docsplit-monitoring-setup
+notificationChannels:
+  - __NOTIFICATION_CHANNEL__
