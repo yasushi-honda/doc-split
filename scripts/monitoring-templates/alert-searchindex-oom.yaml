@@ -9,7 +9,7 @@ combiner: OR
 conditions:
   - displayName: "searchindex_oom > 0 in 1h"
     conditionThreshold:
-      filter: 'metric.type="logging.googleapis.com/user/searchindex_oom" AND resource.type="cloud_function"'
+      filter: 'metric.type="logging.googleapis.com/user/searchindex_oom" AND resource.type="cloud_run_revision"'
       aggregations:
         - alignmentPeriod: 3600s
           perSeriesAligner: ALIGN_SUM
