@@ -29,6 +29,9 @@ export { retryDriveExport } from './drive/retryDriveExport';
 // Google Drive エクスポート 定期リトライ（Cloud Scheduler: 15分間隔, ADR-0022 Phase1 Task8）
 export { driveExportScheduled } from './drive/driveExportScheduled';
 
+// Google Drive フォルダclaim divergent滞留の日次観測（Cloud Scheduler: 24時間間隔, Issue #871 恒久対応）
+export { driveFolderClaimDivergentSweep } from './drive/driveFolderClaimDivergentSweep';
+
 // OCR処理（定期実行 - メイン処理パス）
 export { processOCR } from './ocr/processOCR';
 
