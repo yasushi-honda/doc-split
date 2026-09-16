@@ -27,8 +27,15 @@ import {
   FolderClaimRestoreCommitError,
   buildFolderLockId,
   commitResolvedWithRetry,
+  resolveDivergentClaim,
+  releaseDivergentClaim,
+  beginCreation,
+  recordFullScanResolution,
   invalidateResolvedClaimByFolderId,
   invalidateCreatingClaimByAttemptId,
+  verifyFolderClaim,
+  readClaim,
+  type ResolvedFolderClaim,
 } from '../src/drive/driveFolderClaim';
 import { resolveChildFolder } from '../src/drive/childFolderResolver';
 
@@ -1165,6 +1172,433 @@ describe('driveFolderClaim プロトコル(Issue #871)', () => {
       expect(updateCalls[0].requestBody).to.deep.equal({ trashed: false });
       const recovered = store.find((f) => f.id === 'trashed-recovered-id');
       expect(recovered?.trashed).to.equal(false);
+    });
+  });
+
+  describe('markDivergent: TTL対象外化 + 監査フィールド(Issue #871 恒久対応)', () => {
+    it('expireAtを書かず、divergentAtMs/divergentRunIdを書く', async () => {
+      await claimDocRef('parent-ttl1', '滞留太郎').set({
+        state: 'resolved',
+        folderId: 'existing-id',
+        attempt: null,
+        parentId: 'parent-ttl1',
+        name: '滞留太郎',
+        expireAt: admin.firestore.Timestamp.fromMillis(Date.now() + 1000),
+      });
+      const beforeMs = Date.now();
+      const { drive } = makeFakeDrive({
+        files: [{ id: 'other-id', name: '滞留太郎', parents: ['parent-ttl1'], trashed: false }],
+      });
+      await enableClaimRead();
+
+      try {
+        await findOrCreateFolder(drive, db, 'parent-ttl1', '滞留太郎');
+        expect.fail('DivergentFolderClaimErrorがthrowされるべき');
+      } catch (error) {
+        expect(error).to.be.instanceOf(DivergentFolderClaimError);
+      }
+
+      const snap = await claimDocRef('parent-ttl1', '滞留太郎').get();
+      const data = snap.data()!;
+      expect(data.state).to.equal('divergent');
+      expect(data.expireAt).to.equal(undefined);
+      expect(data.divergentAtMs).to.be.a('number').and.be.at.least(beforeMs);
+      expect(data.divergentReason).to.equal('full-scan-mismatch');
+    });
+
+    it('同一claimが再度divergent化してもresyncHistoryを引き継ぐ(codex review Low指摘の回帰テスト)', async () => {
+      await claimDocRef('parent-ttl2', '再発太郎').set({
+        state: 'resolved',
+        folderId: 'existing-id',
+        attempt: null,
+        parentId: 'parent-ttl2',
+        name: '再発太郎',
+        resyncHistory: [{ mode: 'restore-expected', actor: 'past-actor', atMs: 1000 }],
+      });
+      const { drive } = makeFakeDrive({
+        files: [{ id: 'other-id', name: '再発太郎', parents: ['parent-ttl2'], trashed: false }],
+      });
+      await enableClaimRead();
+
+      try {
+        await findOrCreateFolder(drive, db, 'parent-ttl2', '再発太郎');
+        expect.fail('DivergentFolderClaimErrorがthrowされるべき');
+      } catch (error) {
+        expect(error).to.be.instanceOf(DivergentFolderClaimError);
+      }
+
+      const snap = await claimDocRef('parent-ttl2', '再発太郎').get();
+      const data = snap.data()!;
+      expect(data.state).to.equal('divergent');
+      expect(data.resyncHistory).to.have.lengthOf(1);
+      expect(data.resyncHistory[0]).to.deep.include({ mode: 'restore-expected', actor: 'past-actor', atMs: 1000 });
+    });
+
+    it('resync直後の通常のverify成功(recordVerification、実運用で最も頻繁に通るホットパス)でもresyncHistoryが消えない(codex review 2巡目P2指摘の回帰テスト)', async () => {
+      await claimDocRef('parent-ttl3', '健全太郎').set({
+        state: 'resolved',
+        folderId: 'healthy-id',
+        attempt: null,
+        parentId: 'parent-ttl3',
+        name: '健全太郎',
+        resyncHistory: [{ mode: 'restore-expected', actor: 'past-actor', atMs: 1000 }],
+      });
+      const { drive } = makeFakeDrive({
+        files: [{ id: 'healthy-id', name: '健全太郎', parents: ['parent-ttl3'], trashed: false }],
+      });
+      const claim = (await readClaim(db, 'parent-ttl3', '健全太郎')) as ResolvedFolderClaim;
+
+      await verifyFolderClaim(drive, db, 'parent-ttl3', '健全太郎', claim, 'run-verify1');
+
+      const after = (await claimDocRef('parent-ttl3', '健全太郎').get()).data()!;
+      expect(after.state).to.equal('resolved');
+      expect(after.resyncHistory).to.have.lengthOf(1);
+      expect(after.resyncHistory[0]).to.deep.include({ mode: 'restore-expected', actor: 'past-actor', atMs: 1000 });
+    });
+  });
+
+  describe('resolveDivergentClaim/releaseDivergentClaim(Issue #871 恒久対応、承認付き再同期の唯一の出口)', () => {
+    const parentId = 'parent-resync';
+    const name = '再同期太郎';
+
+    async function seedDivergentClaim(overrides: Record<string, unknown> = {}) {
+      await claimDocRef(parentId, name).set({
+        state: 'divergent',
+        folderId: 'divergent-folder-id',
+        attempt: null,
+        divergentReason: 'parents-mismatch',
+        divergentAtMs: Date.now() - 60_000,
+        parentId,
+        name,
+        ...overrides,
+      });
+      return claimDocRef(parentId, name).get();
+    }
+
+    it('divergent → resolved: fenceが一致すれば成功し、verifiedAtMs/resolvedAtMsを未設定のままにする(次回完全再検索を強制)', async () => {
+      const snap = await seedDivergentClaim();
+      const outcome = await resolveDivergentClaim(
+        db,
+        parentId,
+        name,
+        {
+          expectedFolderId: 'divergent-folder-id',
+          expectedDivergentReason: 'parents-mismatch',
+          expectedUpdateTimeMs: snap.updateTime!.toMillis(),
+          actor: 'test-actor',
+        },
+        'restore-expected'
+      );
+
+      expect(outcome).to.deep.equal({ outcome: 'resolved' });
+      const after = (await claimDocRef(parentId, name).get()).data()!;
+      expect(after.state).to.equal('resolved');
+      expect(after.folderId).to.equal('divergent-folder-id');
+      expect(after.verifiedAtMs).to.equal(undefined);
+      expect(after.resolvedAtMs).to.equal(undefined);
+      expect(after.missCount).to.equal(0);
+      expect(after.resyncHistory).to.have.lengthOf(1);
+      expect(after.resyncHistory[0]).to.deep.include({ mode: 'restore-expected', actor: 'test-actor' });
+    });
+
+    it('finalize-resolved経由の場合、resyncHistoryにfinalize-resolvedと記録される(type-design-analyzerレビュー指摘の回帰テスト、Drive成功後Firestore失敗からの収束パスとrestore-expectedを監査上区別する)', async () => {
+      const snap = await seedDivergentClaim();
+      const outcome = await resolveDivergentClaim(
+        db,
+        parentId,
+        name,
+        {
+          expectedFolderId: 'divergent-folder-id',
+          expectedDivergentReason: 'parents-mismatch',
+          expectedUpdateTimeMs: snap.updateTime!.toMillis(),
+          actor: 'test-actor',
+        },
+        'finalize-resolved'
+      );
+
+      expect(outcome).to.deep.equal({ outcome: 'resolved' });
+      const after = (await claimDocRef(parentId, name).get()).data()!;
+      expect(after.resyncHistory).to.have.lengthOf(1);
+      expect(after.resyncHistory[0]).to.deep.include({ mode: 'finalize-resolved', actor: 'test-actor' });
+    });
+
+    it('divergent → resolved 復帰後、次回findOrCreateFolderがthrowせず実体を再確認できる(出口が機能する回帰テスト)', async () => {
+      const snap = await seedDivergentClaim();
+      await resolveDivergentClaim(
+        db,
+        parentId,
+        name,
+        {
+          expectedFolderId: 'divergent-folder-id',
+          expectedDivergentReason: 'parents-mismatch',
+          expectedUpdateTimeMs: snap.updateTime!.toMillis(),
+          actor: 'test-actor',
+        },
+        'restore-expected'
+      );
+      await enableClaimRead();
+      const { drive, listCalls } = makeFakeDrive({
+        files: [{ id: 'divergent-folder-id', name, parents: [parentId], trashed: false }],
+      });
+
+      const result = await findOrCreateFolder(drive, db, parentId, name);
+
+      expect(result).to.equal('divergent-folder-id');
+      // verifiedAtMs/resolvedAtMs未設定によりanchorMs=0となり、SOFT_TTL_MS超過と同じ
+      // 扱いで即座に完全再検索(files.list)が行われることを確認する。
+      expect(listCalls.length).to.be.greaterThan(0);
+    });
+
+    it('divergent → invalidated(release): fenceが一致すれば成功し、Driveには一切書き込まない', async () => {
+      const snap = await seedDivergentClaim();
+      const { drive, updateCalls } = makeFakeDrive({ files: [] });
+
+      const outcome = await releaseDivergentClaim(db, parentId, name, {
+        expectedFolderId: 'divergent-folder-id',
+        expectedDivergentReason: 'parents-mismatch',
+        expectedUpdateTimeMs: snap.updateTime!.toMillis(),
+        actor: 'test-actor',
+      });
+
+      expect(outcome).to.deep.equal({ outcome: 'resolved' });
+      expect(updateCalls).to.have.lengthOf(0);
+      const after = (await claimDocRef(parentId, name).get()).data()!;
+      expect(after.state).to.equal('invalidated');
+      expect(after.folderId).to.equal(undefined);
+      expect(after.resyncHistory).to.have.lengthOf(1);
+      expect(after.resyncHistory[0]).to.deep.include({ mode: 'release-claim', actor: 'test-actor' });
+      void drive;
+    });
+
+    it('release後、次回findOrCreateFolderは通常のfind-or-create経路(完全検索)に入る', async () => {
+      const snap = await seedDivergentClaim();
+      await releaseDivergentClaim(db, parentId, name, {
+        expectedFolderId: 'divergent-folder-id',
+        expectedDivergentReason: 'parents-mismatch',
+        expectedUpdateTimeMs: snap.updateTime!.toMillis(),
+        actor: 'test-actor',
+      });
+      await enableClaimRead();
+      const { drive, createCalls } = makeFakeDrive({ files: [] });
+
+      const result = await findOrCreateFolder(drive, db, parentId, name);
+
+      expect(result).to.equal('created-1');
+      expect(createCalls).to.have.lengthOf(1);
+    });
+
+    it('stateが divergent でなければ no-op(not-divergent)', async () => {
+      await claimDocRef(parentId, name).set({
+        state: 'resolved',
+        folderId: 'resolved-id',
+        attempt: null,
+        parentId,
+        name,
+      });
+      const snap = await claimDocRef(parentId, name).get();
+
+      const outcome = await resolveDivergentClaim(
+        db,
+        parentId,
+        name,
+        {
+          expectedFolderId: 'resolved-id',
+          expectedDivergentReason: 'parents-mismatch',
+          expectedUpdateTimeMs: snap.updateTime!.toMillis(),
+          actor: 'test-actor',
+        },
+        'restore-expected'
+      );
+
+      expect(outcome).to.deep.equal({ outcome: 'no-op', reason: 'not-divergent' });
+      const after = (await claimDocRef(parentId, name).get()).data()!;
+      expect(after.state).to.equal('resolved');
+    });
+
+    it('claimドキュメントが存在しなければ no-op(not-divergent)', async () => {
+      const outcome = await resolveDivergentClaim(
+        db,
+        parentId,
+        name,
+        {
+          expectedFolderId: 'x',
+          expectedDivergentReason: 'parents-mismatch',
+          expectedUpdateTimeMs: Date.now(),
+          actor: 'test-actor',
+        },
+        'restore-expected'
+      );
+      expect(outcome).to.deep.equal({ outcome: 'no-op', reason: 'not-divergent' });
+    });
+
+    it('updateTimeが不一致なら no-op(fence-mismatch、classify後にclaimが変化した場合の防御)', async () => {
+      const snap = await seedDivergentClaim();
+      const outcome = await resolveDivergentClaim(
+        db,
+        parentId,
+        name,
+        {
+          expectedFolderId: 'divergent-folder-id',
+          expectedDivergentReason: 'parents-mismatch',
+          expectedUpdateTimeMs: snap.updateTime!.toMillis() - 1,
+          actor: 'test-actor',
+        },
+        'restore-expected'
+      );
+      expect(outcome).to.deep.equal({ outcome: 'no-op', reason: 'fence-mismatch' });
+      const after = (await claimDocRef(parentId, name).get()).data()!;
+      expect(after.state).to.equal('divergent');
+    });
+
+    it('divergentReasonが不一致なら no-op(fence-mismatch)', async () => {
+      const snap = await seedDivergentClaim();
+      const outcome = await resolveDivergentClaim(
+        db,
+        parentId,
+        name,
+        {
+          expectedFolderId: 'divergent-folder-id',
+          expectedDivergentReason: 'name-mismatch',
+          expectedUpdateTimeMs: snap.updateTime!.toMillis(),
+          actor: 'test-actor',
+        },
+        'restore-expected'
+      );
+      expect(outcome).to.deep.equal({ outcome: 'no-op', reason: 'fence-mismatch' });
+    });
+
+    it('folderIdが不一致なら no-op(fence-mismatch)', async () => {
+      const snap = await seedDivergentClaim();
+      const outcome = await resolveDivergentClaim(
+        db,
+        parentId,
+        name,
+        {
+          expectedFolderId: 'different-id',
+          expectedDivergentReason: 'parents-mismatch',
+          expectedUpdateTimeMs: snap.updateTime!.toMillis(),
+          actor: 'test-actor',
+        },
+        'restore-expected'
+      );
+      expect(outcome).to.deep.equal({ outcome: 'no-op', reason: 'fence-mismatch' });
+    });
+
+    it('folderIdが無いclaim(reconcile-name-mismatch等)は resolveDivergentClaim では no-op(missing-folder-id)、releaseDivergentClaimでは扱える', async () => {
+      await claimDocRef(parentId, name).set({
+        state: 'divergent',
+        attempt: null,
+        divergentReason: 'reconcile-name-mismatch',
+        parentId,
+        name,
+      });
+      const snap = await claimDocRef(parentId, name).get();
+
+      const resolveOutcome = await resolveDivergentClaim(
+        db,
+        parentId,
+        name,
+        {
+          expectedDivergentReason: 'reconcile-name-mismatch',
+          expectedUpdateTimeMs: snap.updateTime!.toMillis(),
+          actor: 'test-actor',
+        },
+        'restore-expected'
+      );
+      expect(resolveOutcome).to.deep.equal({ outcome: 'no-op', reason: 'missing-folder-id' });
+
+      const releaseOutcome = await releaseDivergentClaim(db, parentId, name, {
+        expectedDivergentReason: 'reconcile-name-mismatch',
+        expectedUpdateTimeMs: snap.updateTime!.toMillis(),
+        actor: 'test-actor',
+      });
+      expect(releaseOutcome).to.deep.equal({ outcome: 'resolved' });
+      const after = (await claimDocRef(parentId, name).get()).data()!;
+      expect(after.state).to.equal('invalidated');
+    });
+
+    it('resyncHistoryはRESYNC_HISTORY_MAX(20件)を超えると古いものから切り捨てる', async () => {
+      const oldEntries = Array.from({ length: 20 }, (_, i) => ({
+        mode: 'restore-expected' as const,
+        actor: `actor-${i}`,
+        atMs: i,
+      }));
+      await seedDivergentClaim({ resyncHistory: oldEntries });
+      const snap = await claimDocRef(parentId, name).get();
+
+      await resolveDivergentClaim(
+        db,
+        parentId,
+        name,
+        {
+          expectedFolderId: 'divergent-folder-id',
+          expectedDivergentReason: 'parents-mismatch',
+          expectedUpdateTimeMs: snap.updateTime!.toMillis(),
+          actor: 'actor-new',
+        },
+        'restore-expected'
+      );
+
+      const after = (await claimDocRef(parentId, name).get()).data()!;
+      expect(after.resyncHistory).to.have.lengthOf(20);
+      // 最古(actor-0)が切り捨てられ、先頭はactor-1になっている
+      expect(after.resyncHistory[0].actor).to.equal('actor-1');
+      expect(after.resyncHistory[19].actor).to.equal('actor-new');
+    });
+  });
+
+  describe('契約テスト: divergent状態はresolveDivergentClaim/releaseDivergentClaim以外から変更されない(Issue #871 恒久対応)', () => {
+    it('beginCreationはdivergentを変更しない(既存ガードの再確認)', async () => {
+      await claimDocRef('parent-contract1', '契約太郎').set({
+        state: 'divergent',
+        folderId: 'divergent-id',
+        attempt: null,
+        divergentReason: 'parents-mismatch',
+        parentId: 'parent-contract1',
+        name: '契約太郎',
+      });
+      const before = (await claimDocRef('parent-contract1', '契約太郎').get()).data()!;
+
+      const result = await beginCreation(db, 'parent-contract1', '契約太郎', 'run-contract1');
+
+      expect(result.status).to.equal('divergent');
+      const after = (await claimDocRef('parent-contract1', '契約太郎').get()).data()!;
+      expect(after).to.deep.equal(before);
+    });
+
+    it('recordFullScanResolutionはdivergentを変更しない(既存ガードの再確認)', async () => {
+      await claimDocRef('parent-contract2', '契約花子').set({
+        state: 'divergent',
+        folderId: 'divergent-id',
+        attempt: null,
+        divergentReason: 'parents-mismatch',
+        parentId: 'parent-contract2',
+        name: '契約花子',
+      });
+      const before = (await claimDocRef('parent-contract2', '契約花子').get()).data()!;
+
+      await recordFullScanResolution(db, 'parent-contract2', '契約花子', 'scanned-id', 'run-contract2');
+
+      const after = (await claimDocRef('parent-contract2', '契約花子').get()).data()!;
+      expect(after).to.deep.equal(before);
+    });
+
+    it('invalidateResolvedClaimByFolderIdはdivergentを変更しない(resolved限定クエリのため、既存ガードの再確認)', async () => {
+      await claimDocRef('parent-contract3', '契約次郎').set({
+        state: 'divergent',
+        folderId: 'divergent-id',
+        attempt: null,
+        divergentReason: 'parents-mismatch',
+        parentId: 'parent-contract3',
+        name: '契約次郎',
+      });
+      const before = (await claimDocRef('parent-contract3', '契約次郎').get()).data()!;
+
+      const count = await invalidateResolvedClaimByFolderId(db, 'divergent-id');
+
+      expect(count).to.equal(0);
+      const after = (await claimDocRef('parent-contract3', '契約次郎').get()).data()!;
+      expect(after).to.deep.equal(before);
     });
   });
 });

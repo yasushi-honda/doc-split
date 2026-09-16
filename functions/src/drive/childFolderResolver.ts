@@ -315,9 +315,9 @@ export async function resolveChildFolder(
       // 唯一の「人手介入が必要」シグナル。書込み自体が失敗すると、claimドキュメントには
       // 反映されないままこの呼び出しだけ異常終了し、次回以降の呼び出しがこの矛盾を
       // 検知できなくなる。best-effort(投げない)のままだが、ログだけは必ず残す。
-      await markDivergent(firestore, parentId, name, 'ambiguous-full-scan').catch((markError) =>
+      await markDivergent(firestore, parentId, name, 'ambiguous-full-scan', runId).catch((markError) =>
         console.error(
-          `[Phase B Part A] divergent記録に失敗しました("${name}"、親フォルダ: ${parentId}）: 次回呼び出しがこの矛盾を検知できない可能性があります`,
+          `[Phase B Part A] divergent記録に失敗しました(親フォルダ: ${parentId}）: 次回呼び出しがこの矛盾を検知できない可能性があります`,
           markError
         )
       );
@@ -335,9 +335,9 @@ export async function resolveChildFolder(
     // 無関係な(たまたま同名でtrashedの)フォルダをfail-closedの判定が確定する前に
     // untrashしてしまい、判定結果に関わらずDrive側を書き換えてしまう。
     if (readEnabled && isResolvedWithFolderId(claim) && claim.folderId !== existingId) {
-      await markDivergent(firestore, parentId, name, 'full-scan-mismatch').catch((markError) =>
+      await markDivergent(firestore, parentId, name, 'full-scan-mismatch', runId).catch((markError) =>
         console.error(
-          `[Phase B Part A] divergent記録に失敗しました("${name}"、親フォルダ: ${parentId}）: 次回呼び出しがこの矛盾を検知できない可能性があります`,
+          `[Phase B Part A] divergent記録に失敗しました(親フォルダ: ${parentId}）: 次回呼び出しがこの矛盾を検知できない可能性があります`,
           markError
         )
       );

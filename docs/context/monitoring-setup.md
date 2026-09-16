@@ -4,8 +4,8 @@ Issue #220 + ADR-0015 Follow-up で構築した log-based metric + Cloud Monitor
 
 ## 構成概要
 
-- **5 種メトリクス** (log-based) を各環境で作成
-- **5 種アラートポリシー** (Cloud Monitoring) をメトリクスと対になる形で作成
+- **8 種メトリクス** (log-based) を各環境で作成
+- **8 種アラートポリシー** (Cloud Monitoring) をメトリクスと対になる形で作成
 - **通知チャネル** 1 つ (email、環境ごと) を作成し全ポリシーで共有
 
 関連コード:
@@ -23,13 +23,16 @@ Issue #220 + ADR-0015 Follow-up で構築した log-based metric + Cloud Monitor
 | `ocr_aggregate_truncated` | `[OCR] Aggregate pageResults truncated` (WARN) | 24h 以内に 1 件以上 | per-page 二段目発動は異常 |
 | `summary_truncated` | `[Summary] truncated` (WARN) | 24h 以内に 1 件以上 | Issue #209 再発指標 |
 | `search_index_silent_failure` | `Failed to remove tokens` (severity=ERROR) | 24 時間窓で 1 件以上 (incident は 7 日間可視化) | ADR-0015 再評価トリガー条件1 (`#220 metric で severity=ERROR ログが 7日間に 1件以上発生`) を反映。GCP API 制約 (alignmentPeriod 最大 25h) のため厳密な 7 日 rolling ではなく、`autoClose: 7d` で incident 可視性を 7 日担保 |
+| `drive_folder_divergent` | `[driveFolderClaim] claim divergent detected` | 24 時間窓で 1 件以上 (incident は 7 日間可視化) | Issue #871 恒久対応。claim と Drive 実体の食い違い(新規発生)を検知。実績: 約2.5週間で2件、発生自体が異常 |
+| `drive_folder_divergent_record_failed` | `divergent記録に失敗しました` | 24 時間窓で 1 件以上 (incident は 7 日間可視化) | Issue #871 恒久対応。`markDivergent()`自体のFirestore書込み失敗は claim にもメトリクスにも残らない経路があるため高優先度 |
+| `claim_divergent_backlog_stale` | `[driveFolderClaim] divergent backlog stale` (severity=WARNING、`driveFolderClaimDivergentSweep`日次関数が出力) | 24 時間窓で 1 件以上 (incident は 7 日間可視化) | Issue #871 恒久対応。「新規発生」検知だけでは既存の未解決分の**放置**を検知できないギャップを埋める。3日以上未解決の divergent が残っている場合のみ日次で1回発火 |
 
 ### アラートポリシー共通パラメータ
 
 - `duration`: 0s (閾値超過で即発火)
 - `autoClose`:
   - 標準 (`searchindex_oom` / `ocr_*_truncated` / `summary_truncated`): 86400s (24h 無発火で自動クローズ)
-  - `search_index_silent_failure` のみ: 604800s (7 日間) — ADR-0015 の 7 日間監視要件を担保
+  - `search_index_silent_failure` / `drive_folder_divergent` / `drive_folder_divergent_record_failed` / `claim_divergent_backlog_stale`: 604800s (7 日間) — 放置検知のため長めに取る
 - `notificationRateLimit`: **未設定**。Cloud Monitoring API の仕様により metric-based alert policy では指定不可（log-based policy 限定）。metric alert は incident オープン時 1 通のみ送信、`autoClose` まで再通知されないため通知暴走リスクは元々低い
 - **検出遅延**:
   - `searchindex_oom` (alignment 1h): 約 3-5 分
@@ -87,7 +90,7 @@ ADR-0015 要件「7 日間に 1 件以上」は metric alignment では厳密に
 ```bash
 # メトリクス一覧
 gcloud logging metrics list --project=<project-id> \
-  --filter='name=(searchindex_oom OR ocr_page_truncated OR ocr_aggregate_truncated OR summary_truncated OR search_index_silent_failure)'
+  --filter='name=(searchindex_oom OR ocr_page_truncated OR ocr_aggregate_truncated OR summary_truncated OR search_index_silent_failure OR drive_folder_divergent OR drive_folder_divergent_record_failed OR claim_divergent_backlog_stale)'
 
 # アラートポリシー一覧 (user_labels で本 script が作成したもののみ識別)
 gcloud alpha monitoring policies list --project=<project-id> \
@@ -168,6 +171,7 @@ rm /tmp/monitoring-sa.json
 - ✅ dev: SA + Secret + setup 完了 (2026-04-17 session6, 5 metrics + 5 alert policies + 1 channel 稼働中)
 - ✅ kanameone: SA + Secret + setup 完了 (2026-04-17 session7, Run ID `24547741800`, 5 metrics + 5 alert policies + 1 channel 稼働中、通知先 `hy.unimail.11@gmail.com`)
 - ✅ cocoro: SA + Secret + setup 完了 (2026-04-17 session7, Run ID `24548562806`, 5 metrics + 5 alert policies + 1 channel 稼働中、通知先 `hy.unimail.11@gmail.com`)
+- ⏳ Issue #871 恒久対応で追加した3種（`drive_folder_divergent`/`drive_folder_divergent_record_failed`/`claim_divergent_backlog_stale`）は**PR時点では未適用**。スクリプトは冪等なので、各環境で `setup-log-based-metrics.sh` を再実行すれば既存5種はskipされ新規3種のみ追加される（ロールアウト §1 参照）
 
 ## 通知先の調整
 
@@ -185,12 +189,45 @@ Cloud Monitoring の notification channel の email アドレスを変更する�
 - 破壊的変更があった場合は本 script を更新する
 - 代替手段として Google Cloud Monitoring API (REST / gRPC) 直接呼び出しも検討可能
 
+## Issue #871: Drive フォルダ乖離(divergent)の検知〜解決 運用 SOP
+
+`driveFolderLocks` の claim と Drive 実体が食い違う `divergent` 状態は、人手介入なしでは絶対に解消されない(TTL 対象外、§出典: ADR-0022 決定4追記)。以下の手順を形骸化させないため、承認経路・棚卸し・昇格基準を明文化する。
+
+### 検知〜解決フロー
+
+1. **新規発生の検知**: `drive_folder_divergent` アラート発火(24h窓・1件以上)。または `claim_divergent_backlog_stale` アラート(3日以上未解決の滞留)で既存分の放置に気づく
+2. **一覧化(read-only)**: GitHub Actions "Run Operations Script" → `classify-drive-claim-divergence` を実行し、Plan(推奨 resolution・プリフライト結果込み)を artifact として取得
+3. **承認**: Plan の内容(推奨 mode・claim グラフ衝突・stranded 件数)を人間が確認し、`exec_args_json` に `{planRunId, approvedOperations: {opId: {mode, acknowledgedStrandedFiles?}}}` を明示指定する
+4. **実行**: `execute-drive-claim-resync` を `--execute --requeue` 付きで実行(dry-run 先行を推奨)。Drive 先→Firestore 後の順で書き込み、rollback manifest が artifact として残る
+5. **確認**: 対象 document の `driveExportStatus` が `exported` に遷移したことを確認する
+
+### 形骸化防止条項(MUST)
+
+- **承認は必ず `classify-drive-claim-divergence` が発行した `planRunId` 経由のみ**で行う。`folderId` を直接指定する自由入力の実行経路は作らない(誤操作・スコープ外操作の防止)
+- 承認は必ず GitHub Actions 経由で行う。**Firestore コンソールでの直接編集はコードでは防止できない**ため、`driveFolderLocks` への書込み権限を持つアカウントを定期棚卸しし最小化する。緊急時にやむを得ず直接操作した場合は、事後に `resyncHistory[]` 相当の記録を手動で追記し、次回棚卸しで必ず申告する
+- 人手棚卸し時は claim ドキュメントの `resyncHistory[]`(直近20件)を確認し、**同一顧客/ケアマネで繰り返し divergent が発生していないか**を確認する。繰り返し発生は個別 resync だけでは対処しきれない業務フロー側の問題を示唆する
+- **月間発生件数が閾値(目安: 3件)を超えたら、個別 resync ではなく根本原因レビュー**(なぜ手動操作が発生しているか、業務フロー側の見直し)を起動する。`divergentReason` 別の発生件数を計測し、閾値超過の判断材料とする(「未判定フォルダの export ゲート未実装」が直接原因と断定できる根拠は現時点でないため、原因を決め打ちしない)
+- `driveFolderLocks` への書込みは `functions/src/drive/driveFolderClaim.ts` モジュール内の関数経由に限定する規約とし、新規の書込み経路を追加する PR レビュー時は `grep -rn "collection('driveFolderLocks')\|FOLDER_LOCKS_COLLECTION" functions/src` で同ファイル以外からの直接アクセスがないことを確認する
+
+### UI 化への昇格基準
+
+現状はアプリ内 UI を作らず ops-script + GitHub Actions での承認に留める。以下のいずれかを満たした場合、アプリ内 UI 化を別途計画する:
+
+- divergent の発生率が**月数件以上**で恒常化した場合
+- 承認担当者がエンジニア以外(現場担当者等)に拡大する必要が生じた場合
+
+### 既知の未実装事項
+
+- Firestore Audit Log(`protoPayload.serviceName="firestore.googleapis.com"`)による `driveFolderLocks` への直接書込み検知は、詳細な log filter 設計を含めて未実装。GHA 経由以外からの書込みを継続的に自動検知する仕組みは今後の課題とし、当面は上記「承認は必ず GitHub Actions 経由」の運用ルール(権限棚卸し + 緊急時の事後申告)で代替する
+
 ## 関連ドキュメント
 
 - [ADR-0015](../adr/0015-search-index-silent-failure-policy.md): silent failure 対処方針
+- [ADR-0022](../adr/0022-google-drive-export.md) 決定4: Drive フォルダ乖離(divergent)の恒久出口・承認付き再同期ワークフロー(Issue #871)
 - Issue #220: log-based metric + alert (本タスクの起票元)
 - Issue #229: 復旧 SOP + force reindex (ADR-0015 Follow-up)
 - Issue #217 / PR #218: OOM 応急対処 (searchindex_oom の対象)
 - Issue #205 / PR #208: OCR 切り詰め防御 (ocr_*_truncated の対象)
 - Issue #209 / PR #212: summary 切り詰め防御 (summary_truncated の対象)
 - Issue #219 / PR #222: silent failure 監視可能化 (search_index_silent_failure の対象)
+- Issue #871: Drive フォルダ乖離(divergent)の恒久対応(承認付き再同期ワークフロー)

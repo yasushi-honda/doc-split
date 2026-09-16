@@ -72,6 +72,19 @@ Accepted (2026-07-20)
 
 詳細設計は`~/.claude/plans/moonlit-jumping-alpaca.md`、実装・レビュー経緯は`docs/handoff/GOAL.md`「PR-3完了・次セッション再開点」節を参照。
 
+**`divergent`の恒久出口・承認付き再同期ワークフロー（Issue #871恒久対応、2026-09-16）**: claimプロトコル導入後もkanameoneで3件の`divergent`（claim記録とDrive実体の食い違い、Drive UI上での手動フォルダ作成・移動・改名が原因）が発生し、`divergent`には**出口となるコードパスが一切存在しない**ことが判明した（`beginCreation()`はdivergentを無条件に弾き続け、`findOrCreateFolder.ts`/`childFolderResolver.ts`は`DivergentFolderClaimError`をthrowし続ける）。あわせて`markDivergent()`が180日TTL（`expireAt`）を書いていたため、人手解決しないまま放置すると claim が無言で消滅し、システムが通常の find-or-create に戻って期待場所へ新規フォルダを作成、誤配置フォルダが中身ごと孤立する（同一論理フォルダの物理的分裂）リスクも確認された。
+
+decision-maker判断（本セッション、AskUserQuestion経由）: 業務方針は「手動フォルダ操作を原則禁止」ではなく**「承認付き再同期ワークフローとして正式サポート」**とする。
+
+- **手動操作は禁止しない**。Drive UI上での移動・改名・作成自体は妨げない。ただし検知後は承認付き再同期（ops-script + GitHub Actions実行、`scripts/classify-drive-claim-divergence.ts`→`scripts/execute-drive-claim-resync.ts`）を経て初めてFirestore側の記録（claim）へ反映される。アプリ内UIでの承認は今回作らない（発生率が月数件以上になったら別途計画する。昇格基準は`docs/context/monitoring-setup.md`運用SOPに明記）
+- **`divergent`はTTL対象外**にする（`markDivergent()`は`expireAt`を書かない）。人手解決するまで必ず残す。既存3件を含む過去分は`scripts/backfill-drive-folder-claim-ttl.ts`（一回限りの移行スクリプト）で`expireAt`を除去した
+- 承認後のフォルダ移動・改名は**スクリプトがDrive APIで自動実行してよい**。書き込み順序はDrive先→Firestore後（Firestoreを先に`resolved`にすると、並行exportがまだ物理的に移動していないフォルダへ書き込みうるため）
+- **`accept-actual`（Drive実体を正としてclaimを書き換える）は意図的に提供しない**。claimのキーは期待パス（`parentId`+`name`）から決まるため「実体を正とする」は論理的所属の定義そのものを変える操作になる。実体が正しいなら正しい直し方は**マスターデータ（担当ケアマネ等）をアプリUIで修正すること**であり、その後`release-claim`（`invalidated`化）すれば期待パスが実体に一致する。物理配置にアプリの論理的所属を追従させる経路は作らない
+- 実際の修復方法（`restore-expected`/`release-claim`/`finalize-resolved`）は`divergentReason`（トリアージ用ラベルに過ぎない）ではなく、classify時に取得したDrive実体と期待値（claimの`name`/`parentId`）の**フィールドごとの差分**から機械的に決める。同名フォルダが複数存在する場合（`ambiguous-full-scan`/`full-scan-mismatch`）と、claimに`folderId`が入らないまま divergent 化するケース（`reconcile-name-mismatch`）は、一意な直し方が無いため本ワークフローの対象外とし、手動調査に委ねる
+- fail-closedプリフライト（期待親の到達性・move/rename権限・移動先の同名重複・claimグラフ衝突・trashed・stranded件数の明示承認・claim側のCAS(`updateTime`)・**Drive実体側のTOCTOU再確認**の8項目）を、classifyのdry-run分類とexecute直前の再評価の両方で同じ純関数（`evaluatePreflight()`）に通す
+
+詳細設計・実装は`~/.claude/plans/wild-dreaming-firefly.md`（grip自白×codex 2パスクロスレビュー済み）を参照。運用SOP（承認は`planRunId`経由のみ・`resyncHistory[]`の棚卸し・月間発生件数閾値超過時の根本原因レビュー起動）は`docs/context/monitoring-setup.md`を参照。
+
 ### 5. 同期トリガーは「確認ボタン」押下（`verified` false→true）
 
 documentの`verified`フィールドがfalse→trueになる瞬間を、Cloud Functions側のFirestoreトリガー（`onDocumentWritten('documents/{docId}')`）で検知してエクスポートを開始する。OCR誤読・利用者取り違えが確定する前の情報を外部Driveへ誤って流出させるリスクを、人間のレビュー完了という明示的なゲートで防ぐ。この方式はcocoro側で承認済み。既存の確認フロー（`useDocumentVerification.ts`の`markAsVerified`、3つの呼び出し元）には一切変更を加えない。

@@ -12,6 +12,9 @@ Cloud Monitoring アラートポリシーの YAML テンプレート。
 | `alert-ocr-aggregate-truncated.yaml` | `ocr_aggregate_truncated` | 1 件 / 1日 | 過去30日実績 0 件。per-page 二段目発動は異常 |
 | `alert-summary-truncated.yaml` | `summary_truncated` | 1 件 / 1日 | Issue #209 再発指標 |
 | `alert-search-index-silent-failure.yaml` | `search_index_silent_failure` | 1 件 / 24h 窓 (incident は 7d 可視化) | ADR-0015「7日1件以上」を autoClose=7d で代替。GCP API alignmentPeriod 上限 25h のため厳密な 7d rolling ではない |
+| `alert-drive-folder-divergent.yaml` | `drive_folder_divergent` | 1 件 / 24h 窓 (incident は 7d 可視化) | Issue #871 恒久対応。実績: 約2.5週間で2件、発生自体が異常 |
+| `alert-drive-folder-divergent-record-failed.yaml` | `drive_folder_divergent_record_failed` | 1 件 / 24h 窓 (incident は 7d 可視化) | Issue #871 恒久対応。`markDivergent()`書込み失敗はclaimにもメトリクスにも残らない経路があるため高優先度 |
+| `alert-claim-divergent-backlog-stale.yaml` | `claim_divergent_backlog_stale` | 1 件 / 24h 窓 (incident は 7d 可視化) | Issue #871 恒久対応。日次sweepが3日超の未解決滞留を検知した回のみ発火(「新規発生」検知だけでは放置を検知できないギャップを埋める) |
 
 ## 共通パラメータ
 
