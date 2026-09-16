@@ -261,3 +261,31 @@ export interface DivergenceApproval {
   planId: string;
   approvedOperations: Record<string, DivergenceApprovalEntry>;
 }
+
+/**
+ * rollback manifest(`execute-drive-folder-merge.ts`の`ExecutionManifest`と同型の設計、
+ * ただしDrive操作が`files.update`単発でアトミックな点は共通のため簡素化)。
+ * `restore-expected`のみDrive側の変更を記録する(`release-claim`/`finalize-resolved`は
+ * Drive書込みが無いため rollback対象自体が存在しない)。
+ */
+export interface DivergenceResyncManifestEntry {
+  operationId: string;
+  parentId: string;
+  name: string;
+  mode: ResolutionMode;
+  claimFolderId: string | null;
+  driveChange: {
+    oldParents: string[];
+    oldName: string;
+    newParents: string[];
+    newName: string;
+  } | null;
+  requeuedDocIds: string[];
+  timestamp: string;
+}
+
+export interface DivergenceResyncManifest {
+  planId: string;
+  environment: string;
+  entries: DivergenceResyncManifestEntry[];
+}
