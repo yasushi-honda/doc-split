@@ -477,10 +477,12 @@ decision-maker承認（「正しいことを段階的かつ計画的にうっか
 **品質ゲート**: codex review 2巡（1巡目Critical1件含む複数、2巡目P1〜P2）+ `pr-review-toolkit`5エージェント（code-reviewer/silent-failure-hunter/pr-test-analyzer/comment-analyzer/type-design-analyzer）並列レビューで検出したCritical/High全件を修正済み。主な修正: ①`release-claim`が`actual===null`で常時blockedになりTTL除去の設計意図（404'd claimの解放）が到達不能だった欠陥 ②`markDivergent()`失敗ログの欠落（最ホットパスの`verifyFolderClaim()`3箇所） ③`execute-drive-claim-resync.ts`のテスト0件 ④監視メトリクス/アラートが`resource.type="cloud_function"`を指定しており実際のgen2ログ出力（`cloud_run_revision`）と不一致で機能しない欠陥（`gcloud logging read`実測で確認・修正、**同型の不一致が本リポジトリの既存5メトリクスにも及ぶ疑いを残す**、下記「条件待ち」参照） ⑤`resyncHistory`が通常のclaim書込み全12箇所で毎回消えていた欠陥。テスト最終件数: functions unit 2144件・integration 383件、scripts unit 359件・integration 79件、全PASS
 
 - [x] **段階1（全環境）完了【2026-09-16】**: 監視メトリクス+アラート3種（`drive_folder_divergent`/`drive_folder_divergent_record_failed`/`claim_divergent_backlog_stale`）を`setup-monitoring.yml`（GitHub Actions、推奨経路）経由でdev/kanameone/cocoro全環境に配備。`--dry-run`（3環境並列）で新規作成対象を事前確認後、`action=setup`で本番反映。devのみ初回実行時にGCP側メトリクス伝播遅延によるレース（`Cannot find metric(s)...could take up to 10 minutes`）でアラートポリシー作成が一部失敗したが、冪等な再実行で解消。3環境とも`gcloud logging metrics list`で独立確認済み（既存5種メトリクス・通知チャネルへの変更なし）
+- [x] **段階2〜4（kanameone）完了【2026-09-16】**: `classify-drive-claim-divergence`で残2件（op-0001「実績」フォルダ・op-0002「フ　藤原広子」フォルダ、いずれも`divergentReason: parents-mismatch`）を再確認、両件とも`recommendedMode: restore-expected`・`blockedReasons`/`claimGraphConflicts`なしと判明。dry-run（`executed=0 dry-run=2 error=0`）→番号単位の明示認可→`execute-drive-claim-resync --execute --requeue`で実行し両件とも`status=executed`。独立した再実行で`classify-drive-claim-divergence`の`totalDivergent`が2→0になったことを確認済み
+  - **副次的に発見した実バグ（Issue #931起票済み・未修正）**: `--requeue`（影響文書の即時再export試行）が対象3文書（`PNFkvtmQklBQ2fTsCQJI`/`ensJd0d97BPprgPfZhrn`/`KtvdlXkXdMwT4tt3zbNY`）全件で`Bucket name not specified or invalid`エラー。根本原因は`scripts/execute-drive-claim-resync.ts:160`の`admin.initializeApp({ projectId })`が`storageBucket`未設定（兄弟スクリプト`classify-drive-export-drift.ts`等は正しく設定）。resync本体（claim/フォルダ修復）自体には影響なし、対象文書は`driveExportStatus: 'error'`のまま本番の定期リトライスイープ（`storageBucket`設定は正しい`functions/src/index.ts`側）で自然に回収される設計のため実害は限定的
 
-**次の一手（次セッション再開点、要decision-maker判断）**: 計画のロールアウト表の段階0・段階2〜4が未着手。
+**次の一手（次セッション再開点、要decision-maker判断）**: 計画のロールアウト表の段階0のみが未着手。
 1. **段階0（dev）**: Drive UIで手動移動してdivergentを人為的に発生させ、classify→承認→execute→requeue→再export成功までを通しで実機確認（空フォルダ・非空フォルダのstrandedガード発火の両ケース）。**live Drive API資格情報を要するため本セッションでは実行不可**
-2. **段階2〜4（kanameone）**: `classify-drive-claim-divergence`で残2件を再確認→dry-run結果をdecision-makerが確認→番号単位の明示認可→`--execute`で修復→`driveExportStatus`が`exported`へ遷移することを実測確認
+2. Issue #931（`--requeue`のstorageBucket未設定バグ）の修正着手（1行修正、優先度低）
 
 ## 【要注意・2026-09-08】Gemini 3.5 Flash: asia-northeast1での従量課金は公式サポート対象外と判明（本番は継続稼働中、未解決の矛盾）
 
