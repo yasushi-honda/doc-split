@@ -387,7 +387,7 @@ cocoro/kanameから、書類（ケアプラン・医療・介護保険証等）�
 
 ## 🔄 中断点（in-flight）
 
-**なし**（2026-09-16時点）。本節は2026-08-30〜2026-09-16のIssue #871調査・実装過程の中間状態を長期間記述したまま更新されておらず、次セッションを誤誘導するリスクがあったため一括整理した。旧内容（複数人記載FAX Stage2状況・Issue #871の原因調査/claimプロトコル実装/divergent恒久対応の各段階）はいずれも完了済みで、詳細は下記の各「【完了】」節（特に「Issue #871 divergent claimの恒久対応」節）に保持済み。唯一残る未着手項目（ロールアウト段階0のdevリハーサル、live Drive資格情報が必要）は同節末尾の「次の一手」に記録済みのため、本節はこの1行のみとする。
+**なし**（2026-09-16時点）。Issue #871ロールアウト（段階1〜4・段階0devリハーサル・Issue #931修正）は全て完了済み。詳細は下記「Issue #871 divergent恒久対応」節（特に段階0の項目）参照。
 
 cocoro側Drive連携Phase C（クライアント自身のOAuth接続）は外部依存待ち（継続、変更なし、詳細は本ファイル冒頭「現在のミッション」節参照）。
 
@@ -478,11 +478,12 @@ decision-maker承認（「正しいことを段階的かつ計画的にうっか
 
 - [x] **段階1（全環境）完了【2026-09-16】**: 監視メトリクス+アラート3種（`drive_folder_divergent`/`drive_folder_divergent_record_failed`/`claim_divergent_backlog_stale`）を`setup-monitoring.yml`（GitHub Actions、推奨経路）経由でdev/kanameone/cocoro全環境に配備。`--dry-run`（3環境並列）で新規作成対象を事前確認後、`action=setup`で本番反映。devのみ初回実行時にGCP側メトリクス伝播遅延によるレース（`Cannot find metric(s)...could take up to 10 minutes`）でアラートポリシー作成が一部失敗したが、冪等な再実行で解消。3環境とも`gcloud logging metrics list`で独立確認済み（既存5種メトリクス・通知チャネルへの変更なし）
 - [x] **段階2〜4（kanameone）完了【2026-09-16】**: `classify-drive-claim-divergence`で残2件（op-0001「実績」フォルダ・op-0002「フ　藤原広子」フォルダ、いずれも`divergentReason: parents-mismatch`）を再確認、両件とも`recommendedMode: restore-expected`・`blockedReasons`/`claimGraphConflicts`なしと判明。dry-run（`executed=0 dry-run=2 error=0`）→番号単位の明示認可→`execute-drive-claim-resync --execute --requeue`で実行し両件とも`status=executed`。独立した再実行で`classify-drive-claim-divergence`の`totalDivergent`が2→0になったことを確認済み
-  - **副次的に発見した実バグ（Issue #931起票済み・未修正）**: `--requeue`（影響文書の即時再export試行）が対象3文書（`PNFkvtmQklBQ2fTsCQJI`/`ensJd0d97BPprgPfZhrn`/`KtvdlXkXdMwT4tt3zbNY`）全件で`Bucket name not specified or invalid`エラー。根本原因は`scripts/execute-drive-claim-resync.ts:160`の`admin.initializeApp({ projectId })`が`storageBucket`未設定（兄弟スクリプト`classify-drive-export-drift.ts`等は正しく設定）。resync本体（claim/フォルダ修復）自体には影響なし、対象文書は`driveExportStatus: 'error'`のまま本番の定期リトライスイープ（`storageBucket`設定は正しい`functions/src/index.ts`側）で自然に回収される設計のため実害は限定的
-
-**次の一手（次セッション再開点、要decision-maker判断）**: 計画のロールアウト表の段階0のみが未着手。
-1. **段階0（dev）**: Drive UIで手動移動してdivergentを人為的に発生させ、classify→承認→execute→requeue→再export成功までを通しで実機確認（空フォルダ・非空フォルダのstrandedガード発火の両ケース）。**live Drive API資格情報を要するため本セッションでは実行不可**
-2. Issue #931（`--requeue`のstorageBucket未設定バグ）の修正着手（1行修正、優先度低）
+  - **副次的に発見した実バグ**: `--requeue`（影響文書の即時再export試行）が対象3文書（`PNFkvtmQklBQ2fTsCQJI`/`ensJd0d97BPprgPfZhrn`/`KtvdlXkXdMwT4tt3zbNY`）全件で`Bucket name not specified or invalid`エラー。根本原因は`scripts/execute-drive-claim-resync.ts:160`の`admin.initializeApp({ projectId })`が`storageBucket`未設定（兄弟スクリプト`classify-drive-export-drift.ts`等は正しく設定）。**Issue #931として起票、1行修正（`storageBucket: process.env.STORAGE_BUCKET`追加）でPR #933にてマージ済み【2026-09-16】**。統合テスト12件PASSで確認
+- [x] **段階0（devリハーサル）完了【2026-09-16】**: 着手時、dev環境のDrive連携先`rootFolderId`が外部の実在共有ドライブ（顧客とは無関係の第三者所有）を指す設定ミスと判明。書き込みテストを中断しdecision-maker確認のうえ、①dev専用の新規共有ドライブへ`rootFolderId`をアプリ正規UI経由で切替 ②混入していた合成テストデータ（1階層、全件`scripts/seed-dev-data.ts`由来と確認済み）をゴミ箱へ移動、の2点を是正（詳細: `[[reference_dev_drive_root_folder_misconfiguration]]`）。是正後のdev専用サンドボックスで改めてリハーサル実施:
+  - Drive UI経由のフォルダ移動はContent Manager/Manager両ロールで3回とも原因不明のまま静かに失敗（Playwright操作は成功するがDrive API側は無変化）。codexセカンドオピニオンの助言により方式転換し、`files.update`（addParents/removeParents）でDrive API直接操作しdivergent状態を人為的に作成（使い捨てスクリプト、GitHub Actions run-ops-script.yml経由）
+  - **新たな発見**: `classify-drive-claim-divergence`は`driveFolderLocks.state=='divergent'`を走査するのみでDrive実体とのライブ突合はしない。state遷移はアプリの実exportホットパス（`findOrCreateFolder`→`verifyFolderClaim`、または完全再検索でのmismatch）でのみ発生する。またdriveExportTrigger.tsは`driveExportStatus`が既に設定済みのdocumentでは`verified` false→true再発火をno-op化する（`executeDriveExport`のクレームが`claimFromStatus: undefined`固定のため）ため、既export済みdocumentで再現するには`driveExportStatus`フィールド自体の削除が必要だった
+  - 上記を踏まえ実際のexportコードパス経由でclaimを`state: 'divergent'`へ遷移させたうえで、`classify-drive-claim-divergence`(`totalDivergent: 1`検知)→番号単位の明示認可→`execute-drive-claim-resync --dry-run`(`dry-run=1 error=0`)→`--execute`(`status=executed`、claim`resolved`へ復元)→再度divergent再現→`--execute --requeue`一括実行(`status=executed`・`requeue完了: 対象1件中 成功1件`、document`driveExportStatus`が`error`→`exported`へ回復)まで一気通貫で実機確認。途中、既に解決済みのplanで再実行を試みた際に`status=claim-drift`で安全に拒否されることも確認（stale plan誤承認の防止機構が正常動作）
+  - 使い捨てスクリプト・GitHub Actions一時choice（`tmp-issue871-stage0-*`）は`chore/tmp-issue871-stage0-divergent-test`ブランチのみに存在、mainへはマージしない（後日削除）
 
 ## 【要注意・2026-09-08】Gemini 3.5 Flash: asia-northeast1での従量課金は公式サポート対象外と判明（本番は継続稼働中、未解決の矛盾）
 
