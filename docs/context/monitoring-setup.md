@@ -189,12 +189,45 @@ Cloud Monitoring の notification channel の email アドレスを変更する�
 - 破壊的変更があった場合は本 script を更新する
 - 代替手段として Google Cloud Monitoring API (REST / gRPC) 直接呼び出しも検討可能
 
+## Issue #871: Drive フォルダ乖離(divergent)の検知〜解決 運用 SOP
+
+`driveFolderLocks` の claim と Drive 実体が食い違う `divergent` 状態は、人手介入なしでは絶対に解消されない(TTL 対象外、§出典: ADR-0022 決定4追記)。以下の手順を形骸化させないため、承認経路・棚卸し・昇格基準を明文化する。
+
+### 検知〜解決フロー
+
+1. **新規発生の検知**: `drive_folder_divergent` アラート発火(24h窓・1件以上)。または `claim_divergent_backlog_stale` アラート(3日以上未解決の滞留)で既存分の放置に気づく
+2. **一覧化(read-only)**: GitHub Actions "Run Operations Script" → `classify-drive-claim-divergence` を実行し、Plan(推奨 resolution・プリフライト結果込み)を artifact として取得
+3. **承認**: Plan の内容(推奨 mode・claim グラフ衝突・stranded 件数)を人間が確認し、`exec_args_json` に `{planRunId, approvedOperations: {opId: {mode, acknowledgedStrandedFiles?}}}` を明示指定する
+4. **実行**: `execute-drive-claim-resync` を `--execute --requeue` 付きで実行(dry-run 先行を推奨)。Drive 先→Firestore 後の順で書き込み、rollback manifest が artifact として残る
+5. **確認**: 対象 document の `driveExportStatus` が `exported` に遷移したことを確認する
+
+### 形骸化防止条項(MUST)
+
+- **承認は必ず `classify-drive-claim-divergence` が発行した `planRunId` 経由のみ**で行う。`folderId` を直接指定する自由入力の実行経路は作らない(誤操作・スコープ外操作の防止)
+- 承認は必ず GitHub Actions 経由で行う。**Firestore コンソールでの直接編集はコードでは防止できない**ため、`driveFolderLocks` への書込み権限を持つアカウントを定期棚卸しし最小化する。緊急時にやむを得ず直接操作した場合は、事後に `resyncHistory[]` 相当の記録を手動で追記し、次回棚卸しで必ず申告する
+- 人手棚卸し時は claim ドキュメントの `resyncHistory[]`(直近20件)を確認し、**同一顧客/ケアマネで繰り返し divergent が発生していないか**を確認する。繰り返し発生は個別 resync だけでは対処しきれない業務フロー側の問題を示唆する
+- **月間発生件数が閾値(目安: 3件)を超えたら、個別 resync ではなく根本原因レビュー**(なぜ手動操作が発生しているか、業務フロー側の見直し)を起動する。`divergentReason` 別の発生件数を計測し、閾値超過の判断材料とする(「未判定フォルダの export ゲート未実装」が直接原因と断定できる根拠は現時点でないため、原因を決め打ちしない)
+- `driveFolderLocks` への書込みは `functions/src/drive/driveFolderClaim.ts` モジュール内の関数経由に限定する規約とし、新規の書込み経路を追加する PR レビュー時は `grep -rn "collection('driveFolderLocks')\|FOLDER_LOCKS_COLLECTION" functions/src` で同ファイル以外からの直接アクセスがないことを確認する
+
+### UI 化への昇格基準
+
+現状はアプリ内 UI を作らず ops-script + GitHub Actions での承認に留める。以下のいずれかを満たした場合、アプリ内 UI 化を別途計画する:
+
+- divergent の発生率が**月数件以上**で恒常化した場合
+- 承認担当者がエンジニア以外(現場担当者等)に拡大する必要が生じた場合
+
+### 既知の未実装事項
+
+- Firestore Audit Log(`protoPayload.serviceName="firestore.googleapis.com"`)による `driveFolderLocks` への直接書込み検知は、詳細な log filter 設計を含めて未実装。GHA 経由以外からの書込みを継続的に自動検知する仕組みは今後の課題とし、当面は上記「承認は必ず GitHub Actions 経由」の運用ルール(権限棚卸し + 緊急時の事後申告)で代替する
+
 ## 関連ドキュメント
 
 - [ADR-0015](../adr/0015-search-index-silent-failure-policy.md): silent failure 対処方針
+- [ADR-0022](../adr/0022-google-drive-export.md) 決定4: Drive フォルダ乖離(divergent)の恒久出口・承認付き再同期ワークフロー(Issue #871)
 - Issue #220: log-based metric + alert (本タスクの起票元)
 - Issue #229: 復旧 SOP + force reindex (ADR-0015 Follow-up)
 - Issue #217 / PR #218: OOM 応急対処 (searchindex_oom の対象)
 - Issue #205 / PR #208: OCR 切り詰め防御 (ocr_*_truncated の対象)
 - Issue #209 / PR #212: summary 切り詰め防御 (summary_truncated の対象)
 - Issue #219 / PR #222: silent failure 監視可能化 (search_index_silent_failure の対象)
+- Issue #871: Drive フォルダ乖離(divergent)の恒久対応(承認付き再同期ワークフロー)
