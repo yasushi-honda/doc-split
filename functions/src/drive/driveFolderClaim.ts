@@ -651,7 +651,16 @@ export async function reconcileAttempt(
     // しまい、要求された名前とは異なるフォルダへ後続exportが配置され続けてしまう。
     // files.listで既に取得済みのnameフィールドと突合する(追加API呼び出し不要)。
     if (files[0].name !== undefined && files[0].name !== name) {
-      await markDivergent(firestore, parentId, name, 'reconcile-name-mismatch', runId);
+      // silent-failure-hunterレビュー指摘対応(findOrCreateFolder.ts/childFolderResolver.ts
+      // と揃える): markDivergent()自体の書込みが失敗すると、claimドキュメントにも
+      // drive_folder_divergent_record_failedメトリクスにも何も残らないまま異常終了しうる。
+      // best-effort(投げない)のままログだけは必ず残す。
+      await markDivergent(firestore, parentId, name, 'reconcile-name-mismatch', runId).catch((markError) =>
+        console.error(
+          `[driveFolderClaim] divergent記録に失敗しました("${name}"、親フォルダ: ${parentId}）: 次回呼び出しがこの矛盾を検知できない可能性があります`,
+          markError
+        )
+      );
       throw new DivergentFolderClaimError(name, parentId, undefined, id);
     }
     // codex review P2指摘対応: files.create()後・commit前に(人力操作等で)ゴミ箱へ
@@ -1221,7 +1230,15 @@ export async function verifyFolderClaim(
   // parentsのみ確認していると、リネームされた同一IDのフォルダをそのまま信用してしまい、
   // 要求された名前とは異なるフォルダへエクスポートし続けてしまう。
   if (data.name !== undefined && data.name !== name) {
-    await markDivergent(firestore, parentId, name, 'name-mismatch', runId);
+    // silent-failure-hunterレビュー指摘対応: verifyFolderClaimはresolved済みclaimの
+    // 健全性確認として毎回のexportで通るホットパス。ここでのmarkDivergent()失敗を
+    // 無防備にしておくと、実運用で最も発生しうる箇所が唯一観測不能になってしまう。
+    await markDivergent(firestore, parentId, name, 'name-mismatch', runId).catch((markError) =>
+      console.error(
+        `[driveFolderClaim] divergent記録に失敗しました("${name}"、親フォルダ: ${parentId}）: 次回呼び出しがこの矛盾を検知できない可能性があります`,
+        markError
+      )
+    );
     throw new DivergentFolderClaimError(name, parentId, claim.folderId);
   }
 
@@ -1231,7 +1248,12 @@ export async function verifyFolderClaim(
   // 誤った場所にドキュメントを配置しうる。
   const parents = data.parents ?? [];
   if (!parents.includes(parentId)) {
-    await markDivergent(firestore, parentId, name, 'parents-mismatch', runId);
+    await markDivergent(firestore, parentId, name, 'parents-mismatch', runId).catch((markError) =>
+      console.error(
+        `[driveFolderClaim] divergent記録に失敗しました("${name}"、親フォルダ: ${parentId}）: 次回呼び出しがこの矛盾を検知できない可能性があります`,
+        markError
+      )
+    );
     throw new DivergentFolderClaimError(name, parentId, claim.folderId);
   }
 

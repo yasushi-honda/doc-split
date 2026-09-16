@@ -161,7 +161,9 @@ async function main(): Promise<void> {
   const { resolveDivergentClaim, releaseDivergentClaim, buildFolderLockId } = await import(
     '../functions/src/drive/driveFolderClaim'
   );
-  const { retryDriveExportCore } = await import('../functions/src/drive/retryDriveExport');
+  const { retryDriveExportCore, DriveExportNotRetryableError } = await import(
+    '../functions/src/drive/retryDriveExport'
+  );
 
   console.log(`プロジェクト: ${projectId}`);
   console.log(`モード: ${execute ? 'EXECUTE' : 'DRY-RUN'}`);
@@ -177,7 +179,15 @@ async function main(): Promise<void> {
     { resolveDivergentClaim, releaseDivergentClaim, buildFolderLockId },
     plan,
     approval,
-    { execute, actor, log: (m) => console.log(m) }
+    {
+      execute,
+      actor,
+      log: (m) => console.log(m),
+      // pr-review-toolkit:code-reviewer Important指摘対応: ループの途中でプロセスが
+      // クラッシュ/killされた場合でも、それまでに成功したDrive移動をrollback可能な状態に
+      // する(execute-drive-folder-merge.tsと同じ理由)。
+      onProgress: (m) => fs.writeFileSync(manifestOutFile, JSON.stringify(m, null, 2)),
+    }
   );
 
   for (const o of outcomes) {
@@ -195,6 +205,7 @@ async function main(): Promise<void> {
     let requeuedSuccess = 0;
     let requeuedStillError = 0;
     let requeueSkipped = 0;
+    let requeueUnexpectedError = 0;
     for (const docId of executedDocIds) {
       try {
         const result = await retryDriveExportCore(db, docId, {});
@@ -205,13 +216,26 @@ async function main(): Promise<void> {
           console.warn(`requeue後も再度error(次回スイープで自然にリトライされます): ${docId} error="${result.error}"`);
         }
       } catch (err) {
-        requeueSkipped++;
-        console.warn(`requeue対象外(既にリトライ可能な状態でない): ${docId}`, err);
+        // silent-failure-hunterレビュー指摘対応: DriveExportNotRetryableError(対象外、
+        // 想定内)と、それ以外の予期しない例外(Firestoreトランザクション失敗・権限エラー等)
+        // を区別する。従来は全て「requeue対象外(既にリトライ可能な状態でない)」という
+        // 特定の(誤りうる)診断で一律ログしており、実際は無関係な障害が「対象外」として
+        // 誤診断され、かつexit codeにも一切反映されずrunがgreenで終わっていた。
+        if (err instanceof DriveExportNotRetryableError) {
+          requeueSkipped++;
+          console.warn(`requeue対象外(既にリトライ可能な状態でない): ${docId}`);
+        } else {
+          requeueUnexpectedError++;
+          console.error(`requeue中に予期しないエラー: ${docId}`, err);
+        }
       }
     }
     console.log(
-      `requeue完了: 対象${executedDocIds.length}件中 成功${requeuedSuccess}件・再度error${requeuedStillError}件・対象外${requeueSkipped}件`
+      `requeue完了: 対象${executedDocIds.length}件中 成功${requeuedSuccess}件・再度error${requeuedStillError}件・対象外${requeueSkipped}件・予期しないエラー${requeueUnexpectedError}件`
     );
+    if (requeueUnexpectedError > 0) {
+      process.exitCode = 1;
+    }
   }
 
   const summary = {
@@ -228,7 +252,20 @@ async function main(): Promise<void> {
     `完了: executed=${summary.executed} dry-run=${summary.dryRun} blocked=${summary.blocked} claim-drift=${summary.claimDrift} drive-drift=${summary.driveDrift} not-approved=${summary.notApproved} error=${summary.error}`
   );
 
-  if (summary.error > 0) {
+  // pr-review-toolkit:code-reviewer Important指摘対応: --execute時にblocked/claim-drift/
+  // drive-drift/errorが1件でもあればexit 1にする。従来はsummary.error>0のみを見ており、
+  // 承認済みoperationが軒並みblocked/driftで一切実行されなくてもrunがexit 0(green)で
+  // 終わり、ログを読まない限り気付けなかった(execute-drive-folder-merge.tsの既存慣習と揃える)。
+  // dry-run時はblocked/drift自体が承認前の診断結果として想定通りのため対象外。
+  if (execute) {
+    const failedCount = summary.blocked + summary.claimDrift + summary.driveDrift + summary.error;
+    if (failedCount > 0) {
+      console.error(
+        `${failedCount}件のoperationが未実行のまま終了しました(blocked=${summary.blocked} claim-drift=${summary.claimDrift} drive-drift=${summary.driveDrift} error=${summary.error})。classify-drive-claim-divergence.tsを再実行し、最新のplanRunIdで再承認してください。`
+      );
+      process.exitCode = 1;
+    }
+  } else if (summary.error > 0) {
     process.exitCode = 1;
   }
 }

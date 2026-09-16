@@ -775,6 +775,17 @@ jobs:
           echo "=== Generated approval.json ==="
           cat "$APPROVAL_FILE"
           echo "==============================="
+          # 承認されたoperationIdが実際にplanに存在するかを確認する(pr-review-toolkit:
+          # code-reviewer Important指摘対応。execute-drive-folder-merge/execute-collision-migration
+          # の同種チェックと揃える)。存在しないIDを承認してもexecute-drive-claim-resync.ts側は
+          # 単にそのoperationを黙ってスキップするだけで、承認者が意図した操作が実行されない
+          # ままrunがexit 0で終わりうる。
+          INPUT_COUNT=$(jq '.approvedOperations | keys | length' "$APPROVAL_FILE")
+          MATCHED_COUNT=$(jq --slurpfile approval "$APPROVAL_FILE" '[.operations[] | select(.operationId as $id | ($approval[0].approvedOperations | has($id)))] | length' "$PLAN_FILE")
+          if [ "$INPUT_COUNT" != "$MATCHED_COUNT" ]; then
+            echo "ERROR: $INPUT_COUNT operation ids approved but only $MATCHED_COUNT matched in plan" >&2
+            exit 1
+          fi
 
       - name: Parse execute-drive-export-repair args
         # Issue #811/#823 remediation Phase 2b: exec_args_json から

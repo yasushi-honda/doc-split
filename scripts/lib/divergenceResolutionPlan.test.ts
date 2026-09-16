@@ -140,6 +140,29 @@ test('evaluatePreflight: actualがnull(実体404)ならactual-folder-unreachable
   assert.deepEqual(result, { blocked: true, reasons: ['actual-folder-unreachable'] });
 });
 
+test('evaluatePreflight(release-claim): actualがnull(実体404、または claimFolderId自体が無い)でもblockedにならない(pr-review-toolkit:code-reviewer Critical指摘の回帰テスト)', () => {
+  const result = evaluatePreflight({
+    ...BASE_PREFLIGHT,
+    approvedMode: 'release-claim',
+    actual: null,
+    directChildCount: null,
+    acknowledgedStrandedCount: null,
+  });
+  assert.deepEqual(result, { blocked: false, reasons: [] });
+});
+
+test('evaluatePreflight(release-claim): actualがnullでもclaimGraphConflictsが有ればclaim-graph-conflictでblocked(actual===null早期returnをbypassしても他ゲートは効く)', () => {
+  const result = evaluatePreflight({
+    ...BASE_PREFLIGHT,
+    approvedMode: 'release-claim',
+    actual: null,
+    directChildCount: null,
+    acknowledgedStrandedCount: null,
+    claimGraphConflicts: [{ otherParentId: 'p2', otherName: '実績', otherState: 'resolved' }],
+  });
+  assert.deepEqual(result, { blocked: true, reasons: ['claim-graph-conflict'] });
+});
+
 test('evaluatePreflight: 全条件を満たせばblocked=false', () => {
   const result = evaluatePreflight(BASE_PREFLIGHT);
   assert.deepEqual(result, { blocked: false, reasons: [] });

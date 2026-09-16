@@ -67,6 +67,15 @@ export interface ExecuteDivergenceResyncOptions {
   execute: boolean;
   actor: string;
   log?: (message: string) => void;
+  /**
+   * 各operation処理完了直後に呼ばれる(pr-review-toolkit:code-reviewer Important指摘対応)。
+   * `execute-drive-folder-merge.ts`は書込みループの途中でmanifestを都度ディスクへ
+   * 書き出しており(「ループの途中でプロセスがクラッシュ/killされた場合でも、それまでに
+   * 成功したfile移動をrollback可能な状態にする」)、本スクリプトも同じ理由でDrive書込みを
+   * 伴う destructive operation のため同型にする。呼び出し元(CLI)がここで都度
+   * `manifest-out`ファイルへ書き出すことを想定。
+   */
+  onProgress?: (manifest: DivergenceResyncManifest) => void;
 }
 
 export type OperationExecutionStatus =
@@ -189,8 +198,6 @@ async function processOperation(
   options: ExecuteDivergenceResyncOptions
 ): Promise<{ outcome: OperationExecutionOutcome; manifestEntry: DivergenceResyncManifestEntry | null }> {
   const log = options.log ?? (() => {});
-  const noManifest = { outcome: undefined as unknown, manifestEntry: null };
-  void noManifest;
 
   const approvedEntry = approval.approvedOperations[op.operationId];
   if (!approvedEntry) {
@@ -453,19 +460,34 @@ async function processOperation(
     } catch (updateErr) {
       // タイムアウト/切断でも実際には成功している可能性がある(execute-drive-folder-merge.ts
       // と同じ理由)。再取得して既に期待通りになっていれば成功経路へ合流する。
-      const reconciled = await fetchSnapshot(deps, op.claimFolderId as string).catch(() => null);
+      // silent-failure-hunterレビュー指摘対応: この再取得(reconcile確認)自体が失敗した
+      // 場合(権限エラー・レート制限等)を「反映されていない」と静かに同一視しない。
+      // reconcile確認が本当に失敗したのか、確認できただけで反映されていなかったのかを
+      // errorMessageで区別できるようにする。
+      let reconciled: DriveEntitySnapshot | null;
+      let reconcileError: Error | null;
+      try {
+        reconciled = await fetchSnapshot(deps, op.claimFolderId as string);
+        reconcileError = null;
+      } catch (verifyErr) {
+        reconciled = null;
+        reconcileError = verifyErr as Error;
+      }
       const alreadyApplied =
         reconciled !== null &&
         reconciled.name === newName &&
         newParents.every((p) => reconciled!.parents.includes(p));
       if (!alreadyApplied) {
+        const reconcileNote = reconcileError
+          ? ` (加えて反映確認自体も失敗: ${reconcileError.message})`
+          : '';
         return {
           outcome: {
             operationId: op.operationId,
             status: 'error',
             mode: approvedMode,
             reasons: [],
-            errorMessage: `files.update failed: ${(updateErr as Error).message}`,
+            errorMessage: `files.update failed: ${(updateErr as Error).message}${reconcileNote}`,
             affectedDocIds: [],
           },
           manifestEntry: null,
@@ -539,7 +561,10 @@ export async function executeDivergenceResync(
   for (const op of plan.operations) {
     const { outcome, manifestEntry } = await processOperation(deps, firestore, claimFns, op, approval, options);
     outcomes.push(outcome);
-    if (manifestEntry) manifestEntries.push(manifestEntry);
+    if (manifestEntry) {
+      manifestEntries.push(manifestEntry);
+      options.onProgress?.({ planId: plan.planId, environment: plan.environment, entries: manifestEntries });
+    }
   }
 
   return {

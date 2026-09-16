@@ -93,7 +93,17 @@ export const driveFolderClaimDivergentSweep = onSchedule(
     maxInstances: 1,
   },
   async () => {
-    const summary = await computeDivergentBacklogSummary(db);
-    logDivergentBacklogSummary(summary);
+    try {
+      const summary = await computeDivergentBacklogSummary(db);
+      logDivergentBacklogSummary(summary);
+    } catch (error) {
+      // silent-failure-hunterレビュー指摘対応: この関数自体の存在意義は「発生ではなく
+      // 放置」を継続観測するバックストップであり、その関数のFirestoreクエリ自体が
+      // 失敗した場合(権限regression・indexドロップ・quota等)に無言で終了すると、
+      // 観測不能ギャップを埋めるはずの仕組みに新たな観測不能ギャップができてしまう。
+      // ログを残したうえで再throwし、Cloud Functions自体のエラー集計にも乗せる。
+      console.error('[driveFolderClaim] divergent backlog sweep failed', error);
+      throw error;
+    }
   }
 );

@@ -162,12 +162,18 @@ export function evaluatePreflight(input: PreflightInput): PreflightResult {
     return { blocked: true, reasons };
   }
 
-  if (input.actual === null) {
+  // release-claimはDrive実体への書込みを一切行わない(claimをinvalidatedへ落とすのみ)ため、
+  // 実体が取得不能(404、または`reconcile-name-mismatch`のようにclaimFolderId自体が無い)
+  // でも実行できるべき(pr-review-toolkit:code-reviewer Critical指摘対応)。この判定を
+  // restore-expected/finalize-resolvedと同列に無条件で行うと、`releaseDivergentClaim`側
+  // では意図的にサポートしているこの2ケース向けの出口が、このゲートで常にblockedとなり
+  // 実質デッドコードになっていた。
+  if (input.approvedMode !== 'release-claim' && input.actual === null) {
     reasons.push('actual-folder-unreachable');
     return { blocked: true, reasons };
   }
 
-  if (input.actual.trashed) {
+  if (input.actual !== null && input.actual.trashed) {
     reasons.push('trashed');
   }
 

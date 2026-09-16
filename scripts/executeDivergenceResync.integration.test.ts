@@ -41,7 +41,15 @@ interface FakeFile {
   capabilities?: { canMoveItemWithinDrive?: boolean; canRename?: boolean; canAddChildren?: boolean };
 }
 
-function makeFakeDrive(files: FakeFile[], opts: { mutateOnNthGet?: { n: number; apply: () => void } } = {}) {
+interface FakeDriveOpts {
+  mutateOnNthGet?: { n: number; apply: () => void };
+  /** files.update()自体は実際に適用するが、呼び出し元にはエラーをthrowする(タイムアウト/切断だが実際には成功、を模す)。 */
+  updateThrowsButApplies?: Error;
+  /** files.update()は正常応答を返すが実際にはfilesを書き換えない(Drive側の無言no-opを模す)。 */
+  updateNoOps?: boolean;
+}
+
+function makeFakeDrive(files: FakeFile[], opts: FakeDriveOpts = {}) {
   const updateCalls: Record<string, unknown>[] = [];
   let getCallCount = 0;
   const drive = {
@@ -90,6 +98,10 @@ function makeFakeDrive(files: FakeFile[], opts: { mutateOnNthGet?: { n: number; 
         const fileId = params.fileId as string;
         const file = files.find((f) => f.id === fileId);
         if (!file) throw new Error(`fake drive: update対象が見つかりません: ${fileId}`);
+        if (opts.updateNoOps) {
+          // Drive側が200を返したのに実際には書き換わっていない(無言no-op)を模す。
+          return { data: { id: file.id, name: file.name, parents: file.parents, trashed: file.trashed ?? false } };
+        }
         const addParents = params.addParents as string | undefined;
         const removeParents = params.removeParents as string | undefined;
         if (addParents) {
@@ -100,6 +112,10 @@ function makeFakeDrive(files: FakeFile[], opts: { mutateOnNthGet?: { n: number; 
         const requestBody = params.requestBody as { name?: string } | undefined;
         if (requestBody?.name) {
           file.name = requestBody.name;
+        }
+        if (opts.updateThrowsButApplies) {
+          // タイムアウト/切断だが実際にはDrive側で適用済み、を模す(変更は上で適用済み)。
+          throw opts.updateThrowsButApplies;
         }
         return { data: { id: file.id, name: file.name, parents: file.parents, trashed: file.trashed ?? false } };
       },
@@ -210,6 +226,136 @@ test('restore-expected(--execute): Driveを移動しclaimをresolvedへ復帰、
 
   assert.equal(manifest.entries.length, 1);
   assert.deepEqual(manifest.entries[0].driveChange!.newParents, ['expected-parent']);
+});
+
+test('restore-expected(--execute): files.update()が例外を投げても実際には適用済みなら成功経路へ合流する(pr-test-analyzer指摘の回帰テスト)', async () => {
+  const claimFns = await loadClaimFns();
+  const claimSnap = await seedDivergentClaim(claimFns);
+  const { drive, updateCalls } = makeFakeDrive(
+    [
+      { id: 'f1', name: '対象太郎', parents: ['wrong-parent'] },
+      { id: 'expected-parent', name: '期待親', parents: [] },
+    ],
+    { updateThrowsButApplies: new Error('ECONNRESET (simulated)') }
+  );
+
+  const op = buildOp({ claimUpdateTimeMs: claimSnap.updateTime!.toMillis() });
+  const plan = buildPlan([op]);
+  const approval = buildApproval(plan.planId, { 'op-0001': { mode: 'restore-expected' } });
+
+  const { outcomes, manifest } = await executeDivergenceResync(
+    { drive, supportsAllDrives: SUPPORTS_ALL_DRIVES, folderMimeType: FOLDER_MIME_TYPE, escapeQueryValue },
+    db,
+    claimFns,
+    plan,
+    approval,
+    { execute: true, actor: 'test-actor' }
+  );
+
+  assert.equal(outcomes[0].status, 'executed');
+  assert.equal(updateCalls.length, 1);
+  const after = (await claimDocRef(claimFns).get()).data()!;
+  assert.equal(after.state, 'resolved');
+  assert.equal(manifest.entries.length, 1);
+});
+
+test('restore-expected(--execute): files.update()が例外を投げ実際にも未適用ならerrorになる(pr-test-analyzer指摘の回帰テスト)', async () => {
+  const claimFns = await loadClaimFns();
+  const claimSnap = await seedDivergentClaim(claimFns);
+  const { drive } = makeFakeDrive([
+    { id: 'f1', name: '対象太郎', parents: ['wrong-parent'] },
+    { id: 'expected-parent', name: '期待親', parents: [] },
+  ]);
+  // files.update()自体を「(反映確認用のfiles.getは正常に動くまま)常に未適用のまま失敗する」
+  // 実装に差し替える。files配列は一切変更されないため、直後の再取得(reconcile確認)も
+  // 「未適用」を観測し、alreadyApplied=falseの経路に入る。
+  (drive.files as unknown as { update: (p: Record<string, unknown>) => Promise<unknown> }).update = async () => {
+    throw new Error('permission denied (simulated, not applied)');
+  };
+
+  const op = buildOp({ claimUpdateTimeMs: claimSnap.updateTime!.toMillis() });
+  const plan = buildPlan([op]);
+  const approval = buildApproval(plan.planId, { 'op-0001': { mode: 'restore-expected' } });
+
+  const { outcomes } = await executeDivergenceResync(
+    { drive, supportsAllDrives: SUPPORTS_ALL_DRIVES, folderMimeType: FOLDER_MIME_TYPE, escapeQueryValue },
+    db,
+    claimFns,
+    plan,
+    approval,
+    { execute: true, actor: 'test-actor' }
+  );
+
+  assert.equal(outcomes[0].status, 'error');
+  assert.match(outcomes[0].errorMessage ?? '', /files\.update failed/);
+  const after = (await claimDocRef(claimFns).get()).data()!;
+  assert.equal(after.state, 'divergent');
+});
+
+test('restore-expected(--execute): files.update()は成功するが実際には無言no-opの場合、書込み後の再検証で不一致を検知しerrorになる(pr-test-analyzer指摘の回帰テスト)', async () => {
+  const claimFns = await loadClaimFns();
+  const claimSnap = await seedDivergentClaim(claimFns);
+  const { drive } = makeFakeDrive(
+    [
+      { id: 'f1', name: '対象太郎', parents: ['wrong-parent'] },
+      { id: 'expected-parent', name: '期待親', parents: [] },
+    ],
+    { updateNoOps: true }
+  );
+
+  const op = buildOp({ claimUpdateTimeMs: claimSnap.updateTime!.toMillis() });
+  const plan = buildPlan([op]);
+  const approval = buildApproval(plan.planId, { 'op-0001': { mode: 'restore-expected' } });
+
+  const { outcomes } = await executeDivergenceResync(
+    { drive, supportsAllDrives: SUPPORTS_ALL_DRIVES, folderMimeType: FOLDER_MIME_TYPE, escapeQueryValue },
+    db,
+    claimFns,
+    plan,
+    approval,
+    { execute: true, actor: 'test-actor' }
+  );
+
+  assert.equal(outcomes[0].status, 'error');
+  assert.match(outcomes[0].errorMessage ?? '', /Drive書込み後の再検証に失敗しました/);
+  const after = (await claimDocRef(claimFns).get()).data()!;
+  assert.equal(after.state, 'divergent');
+});
+
+test('restore-expected(--execute): Drive書込み成功後にresolveDivergentClaimがno-opならerrorになりclaimはdivergentのまま残る(split-brain収束設計の回帰テスト、pr-test-analyzer指摘)', async () => {
+  const claimFns = await loadClaimFns();
+  const claimSnap = await seedDivergentClaim(claimFns);
+  const { drive, updateCalls } = makeFakeDrive([
+    { id: 'f1', name: '対象太郎', parents: ['wrong-parent'] },
+    { id: 'expected-parent', name: '期待親', parents: [] },
+  ]);
+  // resolveDivergentClaimだけno-opを返すスタブに差し替える(Drive書込みは実物のまま成功させ、
+  // 「Drive成功・Firestore確定no-op」というsplit-brain収束パスだけを分離して検証する)。
+  const stubbedClaimFns: ClaimFunctions = {
+    ...claimFns,
+    resolveDivergentClaim: async () => ({ outcome: 'no-op', reason: 'fence-mismatch' }),
+  };
+
+  const op = buildOp({ claimUpdateTimeMs: claimSnap.updateTime!.toMillis() });
+  const plan = buildPlan([op]);
+  const approval = buildApproval(plan.planId, { 'op-0001': { mode: 'restore-expected' } });
+
+  const { outcomes, manifest } = await executeDivergenceResync(
+    { drive, supportsAllDrives: SUPPORTS_ALL_DRIVES, folderMimeType: FOLDER_MIME_TYPE, escapeQueryValue },
+    db,
+    stubbedClaimFns,
+    plan,
+    approval,
+    { execute: true, actor: 'test-actor' }
+  );
+
+  assert.equal(outcomes[0].status, 'error');
+  assert.match(outcomes[0].errorMessage ?? '', /次回classifyでfinalize-resolvedとして再提案されます/);
+  // Drive側の書込み自体は実行されている(次回classifyがfinalize-resolvedを提案する前提)。
+  assert.equal(updateCalls.length, 1);
+  assert.equal(manifest.entries.length, 0);
+  const after = (await claimDocRef(claimFns).get()).data()!;
+  assert.equal(after.state, 'divergent');
 });
 
 test('dry-run(--executeなし): Drive書込み・Firestore書込みともに発生しない', async () => {
@@ -331,6 +477,77 @@ test('drive drift: name/parents/trashedは一致するがmodifiedTimeのみ不�
 
   assert.equal(outcomes[0].status, 'drive-drift');
   assert.equal(updateCalls.length, 0);
+});
+
+test('release-claim(--execute): claimFolderIdが無い(reconcile-name-mismatch相当)claimでも実行できる(pr-review-toolkit:code-reviewer Critical指摘の回帰テスト)', async () => {
+  const claimFns = await loadClaimFns();
+  // folderId自体をドキュメントに含めない(Firestore Admin SDKは.set()にundefined値を
+  // 直接渡すとデフォルトで例外を投げるため、キー自体を省略する)。
+  const claimRef = claimDocRef(claimFns);
+  await claimRef.set({
+    state: 'divergent',
+    attempt: null,
+    divergentReason: 'reconcile-name-mismatch',
+    divergentAtMs: 1000,
+    parentId: 'expected-parent',
+    name: '対象太郎',
+  });
+  const claimSnap = await claimRef.get();
+  const { drive, updateCalls } = makeFakeDrive([]);
+
+  const op = buildOp({
+    claimUpdateTimeMs: claimSnap.updateTime!.toMillis(),
+    claimFolderId: null,
+    divergentReason: 'reconcile-name-mismatch',
+    actual: null,
+    directChildCount: null,
+  });
+  const plan = buildPlan([op]);
+  const approval = buildApproval(plan.planId, { 'op-0001': { mode: 'release-claim' } });
+
+  const { outcomes } = await executeDivergenceResync(
+    { drive, supportsAllDrives: SUPPORTS_ALL_DRIVES, folderMimeType: FOLDER_MIME_TYPE, escapeQueryValue },
+    db,
+    claimFns,
+    plan,
+    approval,
+    { execute: true, actor: 'test-actor' }
+  );
+
+  assert.equal(outcomes[0].status, 'executed');
+  assert.equal(updateCalls.length, 0);
+  const after = (await claimDocRef(claimFns).get()).data()!;
+  assert.equal(after.state, 'invalidated');
+});
+
+test('release-claim(--execute): Drive実体が404(完全削除済み)のclaimでも実行できる(pr-review-toolkit:code-reviewer Critical指摘の回帰テスト)', async () => {
+  const claimFns = await loadClaimFns();
+  const claimSnap = await seedDivergentClaim(claimFns);
+  // f1はfake driveに一切登録しない(files.get()が404を返す想定)。classify時点でも
+  // 実体が既に消失していたケース(op.actual: null)を模す。
+  const { drive, updateCalls } = makeFakeDrive([]);
+
+  const op = buildOp({
+    claimUpdateTimeMs: claimSnap.updateTime!.toMillis(),
+    actual: null,
+    directChildCount: 0,
+  });
+  const plan = buildPlan([op]);
+  const approval = buildApproval(plan.planId, { 'op-0001': { mode: 'release-claim', acknowledgedStrandedFiles: 0 } });
+
+  const { outcomes } = await executeDivergenceResync(
+    { drive, supportsAllDrives: SUPPORTS_ALL_DRIVES, folderMimeType: FOLDER_MIME_TYPE, escapeQueryValue },
+    db,
+    claimFns,
+    plan,
+    approval,
+    { execute: true, actor: 'test-actor' }
+  );
+
+  assert.equal(outcomes[0].status, 'executed');
+  assert.equal(updateCalls.length, 0);
+  const after = (await claimDocRef(claimFns).get()).data()!;
+  assert.equal(after.state, 'invalidated');
 });
 
 test('release-claim(--execute): Driveには一切書き込まずclaimをinvalidatedへ落とす', async () => {
