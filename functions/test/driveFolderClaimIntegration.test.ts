@@ -1213,7 +1213,7 @@ describe('driveFolderClaim プロトコル(Issue #871)', () => {
         attempt: null,
         parentId: 'parent-ttl2',
         name: '再発太郎',
-        resyncHistory: [{ mode: 'restore', actor: 'past-actor', atMs: 1000 }],
+        resyncHistory: [{ mode: 'restore-expected', actor: 'past-actor', atMs: 1000 }],
       });
       const { drive } = makeFakeDrive({
         files: [{ id: 'other-id', name: '再発太郎', parents: ['parent-ttl2'], trashed: false }],
@@ -1231,7 +1231,7 @@ describe('driveFolderClaim プロトコル(Issue #871)', () => {
       const data = snap.data()!;
       expect(data.state).to.equal('divergent');
       expect(data.resyncHistory).to.have.lengthOf(1);
-      expect(data.resyncHistory[0]).to.deep.include({ mode: 'restore', actor: 'past-actor', atMs: 1000 });
+      expect(data.resyncHistory[0]).to.deep.include({ mode: 'restore-expected', actor: 'past-actor', atMs: 1000 });
     });
 
     it('resync直後の通常のverify成功(recordVerification、実運用で最も頻繁に通るホットパス)でもresyncHistoryが消えない(codex review 2巡目P2指摘の回帰テスト)', async () => {
@@ -1241,7 +1241,7 @@ describe('driveFolderClaim プロトコル(Issue #871)', () => {
         attempt: null,
         parentId: 'parent-ttl3',
         name: '健全太郎',
-        resyncHistory: [{ mode: 'restore', actor: 'past-actor', atMs: 1000 }],
+        resyncHistory: [{ mode: 'restore-expected', actor: 'past-actor', atMs: 1000 }],
       });
       const { drive } = makeFakeDrive({
         files: [{ id: 'healthy-id', name: '健全太郎', parents: ['parent-ttl3'], trashed: false }],
@@ -1253,7 +1253,7 @@ describe('driveFolderClaim プロトコル(Issue #871)', () => {
       const after = (await claimDocRef('parent-ttl3', '健全太郎').get()).data()!;
       expect(after.state).to.equal('resolved');
       expect(after.resyncHistory).to.have.lengthOf(1);
-      expect(after.resyncHistory[0]).to.deep.include({ mode: 'restore', actor: 'past-actor', atMs: 1000 });
+      expect(after.resyncHistory[0]).to.deep.include({ mode: 'restore-expected', actor: 'past-actor', atMs: 1000 });
     });
   });
 
@@ -1277,12 +1277,18 @@ describe('driveFolderClaim プロトコル(Issue #871)', () => {
 
     it('divergent → resolved: fenceが一致すれば成功し、verifiedAtMs/resolvedAtMsを未設定のままにする(次回完全再検索を強制)', async () => {
       const snap = await seedDivergentClaim();
-      const outcome = await resolveDivergentClaim(db, parentId, name, {
-        expectedFolderId: 'divergent-folder-id',
-        expectedDivergentReason: 'parents-mismatch',
-        expectedUpdateTimeMs: snap.updateTime!.toMillis(),
-        actor: 'test-actor',
-      });
+      const outcome = await resolveDivergentClaim(
+        db,
+        parentId,
+        name,
+        {
+          expectedFolderId: 'divergent-folder-id',
+          expectedDivergentReason: 'parents-mismatch',
+          expectedUpdateTimeMs: snap.updateTime!.toMillis(),
+          actor: 'test-actor',
+        },
+        'restore-expected'
+      );
 
       expect(outcome).to.deep.equal({ outcome: 'resolved' });
       const after = (await claimDocRef(parentId, name).get()).data()!;
@@ -1292,17 +1298,44 @@ describe('driveFolderClaim プロトコル(Issue #871)', () => {
       expect(after.resolvedAtMs).to.equal(undefined);
       expect(after.missCount).to.equal(0);
       expect(after.resyncHistory).to.have.lengthOf(1);
-      expect(after.resyncHistory[0]).to.deep.include({ mode: 'restore', actor: 'test-actor' });
+      expect(after.resyncHistory[0]).to.deep.include({ mode: 'restore-expected', actor: 'test-actor' });
+    });
+
+    it('finalize-resolved経由の場合、resyncHistoryにfinalize-resolvedと記録される(type-design-analyzerレビュー指摘の回帰テスト、Drive成功後Firestore失敗からの収束パスとrestore-expectedを監査上区別する)', async () => {
+      const snap = await seedDivergentClaim();
+      const outcome = await resolveDivergentClaim(
+        db,
+        parentId,
+        name,
+        {
+          expectedFolderId: 'divergent-folder-id',
+          expectedDivergentReason: 'parents-mismatch',
+          expectedUpdateTimeMs: snap.updateTime!.toMillis(),
+          actor: 'test-actor',
+        },
+        'finalize-resolved'
+      );
+
+      expect(outcome).to.deep.equal({ outcome: 'resolved' });
+      const after = (await claimDocRef(parentId, name).get()).data()!;
+      expect(after.resyncHistory).to.have.lengthOf(1);
+      expect(after.resyncHistory[0]).to.deep.include({ mode: 'finalize-resolved', actor: 'test-actor' });
     });
 
     it('divergent → resolved 復帰後、次回findOrCreateFolderがthrowせず実体を再確認できる(出口が機能する回帰テスト)', async () => {
       const snap = await seedDivergentClaim();
-      await resolveDivergentClaim(db, parentId, name, {
-        expectedFolderId: 'divergent-folder-id',
-        expectedDivergentReason: 'parents-mismatch',
-        expectedUpdateTimeMs: snap.updateTime!.toMillis(),
-        actor: 'test-actor',
-      });
+      await resolveDivergentClaim(
+        db,
+        parentId,
+        name,
+        {
+          expectedFolderId: 'divergent-folder-id',
+          expectedDivergentReason: 'parents-mismatch',
+          expectedUpdateTimeMs: snap.updateTime!.toMillis(),
+          actor: 'test-actor',
+        },
+        'restore-expected'
+      );
       await enableClaimRead();
       const { drive, listCalls } = makeFakeDrive({
         files: [{ id: 'divergent-folder-id', name, parents: [parentId], trashed: false }],
@@ -1333,7 +1366,7 @@ describe('driveFolderClaim プロトコル(Issue #871)', () => {
       expect(after.state).to.equal('invalidated');
       expect(after.folderId).to.equal(undefined);
       expect(after.resyncHistory).to.have.lengthOf(1);
-      expect(after.resyncHistory[0]).to.deep.include({ mode: 'release', actor: 'test-actor' });
+      expect(after.resyncHistory[0]).to.deep.include({ mode: 'release-claim', actor: 'test-actor' });
       void drive;
     });
 
@@ -1364,12 +1397,18 @@ describe('driveFolderClaim プロトコル(Issue #871)', () => {
       });
       const snap = await claimDocRef(parentId, name).get();
 
-      const outcome = await resolveDivergentClaim(db, parentId, name, {
-        expectedFolderId: 'resolved-id',
-        expectedDivergentReason: 'parents-mismatch',
-        expectedUpdateTimeMs: snap.updateTime!.toMillis(),
-        actor: 'test-actor',
-      });
+      const outcome = await resolveDivergentClaim(
+        db,
+        parentId,
+        name,
+        {
+          expectedFolderId: 'resolved-id',
+          expectedDivergentReason: 'parents-mismatch',
+          expectedUpdateTimeMs: snap.updateTime!.toMillis(),
+          actor: 'test-actor',
+        },
+        'restore-expected'
+      );
 
       expect(outcome).to.deep.equal({ outcome: 'no-op', reason: 'not-divergent' });
       const after = (await claimDocRef(parentId, name).get()).data()!;
@@ -1377,23 +1416,35 @@ describe('driveFolderClaim プロトコル(Issue #871)', () => {
     });
 
     it('claimドキュメントが存在しなければ no-op(not-divergent)', async () => {
-      const outcome = await resolveDivergentClaim(db, parentId, name, {
-        expectedFolderId: 'x',
-        expectedDivergentReason: 'parents-mismatch',
-        expectedUpdateTimeMs: Date.now(),
-        actor: 'test-actor',
-      });
+      const outcome = await resolveDivergentClaim(
+        db,
+        parentId,
+        name,
+        {
+          expectedFolderId: 'x',
+          expectedDivergentReason: 'parents-mismatch',
+          expectedUpdateTimeMs: Date.now(),
+          actor: 'test-actor',
+        },
+        'restore-expected'
+      );
       expect(outcome).to.deep.equal({ outcome: 'no-op', reason: 'not-divergent' });
     });
 
     it('updateTimeが不一致なら no-op(fence-mismatch、classify後にclaimが変化した場合の防御)', async () => {
       const snap = await seedDivergentClaim();
-      const outcome = await resolveDivergentClaim(db, parentId, name, {
-        expectedFolderId: 'divergent-folder-id',
-        expectedDivergentReason: 'parents-mismatch',
-        expectedUpdateTimeMs: snap.updateTime!.toMillis() - 1,
-        actor: 'test-actor',
-      });
+      const outcome = await resolveDivergentClaim(
+        db,
+        parentId,
+        name,
+        {
+          expectedFolderId: 'divergent-folder-id',
+          expectedDivergentReason: 'parents-mismatch',
+          expectedUpdateTimeMs: snap.updateTime!.toMillis() - 1,
+          actor: 'test-actor',
+        },
+        'restore-expected'
+      );
       expect(outcome).to.deep.equal({ outcome: 'no-op', reason: 'fence-mismatch' });
       const after = (await claimDocRef(parentId, name).get()).data()!;
       expect(after.state).to.equal('divergent');
@@ -1401,23 +1452,35 @@ describe('driveFolderClaim プロトコル(Issue #871)', () => {
 
     it('divergentReasonが不一致なら no-op(fence-mismatch)', async () => {
       const snap = await seedDivergentClaim();
-      const outcome = await resolveDivergentClaim(db, parentId, name, {
-        expectedFolderId: 'divergent-folder-id',
-        expectedDivergentReason: 'name-mismatch',
-        expectedUpdateTimeMs: snap.updateTime!.toMillis(),
-        actor: 'test-actor',
-      });
+      const outcome = await resolveDivergentClaim(
+        db,
+        parentId,
+        name,
+        {
+          expectedFolderId: 'divergent-folder-id',
+          expectedDivergentReason: 'name-mismatch',
+          expectedUpdateTimeMs: snap.updateTime!.toMillis(),
+          actor: 'test-actor',
+        },
+        'restore-expected'
+      );
       expect(outcome).to.deep.equal({ outcome: 'no-op', reason: 'fence-mismatch' });
     });
 
     it('folderIdが不一致なら no-op(fence-mismatch)', async () => {
       const snap = await seedDivergentClaim();
-      const outcome = await resolveDivergentClaim(db, parentId, name, {
-        expectedFolderId: 'different-id',
-        expectedDivergentReason: 'parents-mismatch',
-        expectedUpdateTimeMs: snap.updateTime!.toMillis(),
-        actor: 'test-actor',
-      });
+      const outcome = await resolveDivergentClaim(
+        db,
+        parentId,
+        name,
+        {
+          expectedFolderId: 'different-id',
+          expectedDivergentReason: 'parents-mismatch',
+          expectedUpdateTimeMs: snap.updateTime!.toMillis(),
+          actor: 'test-actor',
+        },
+        'restore-expected'
+      );
       expect(outcome).to.deep.equal({ outcome: 'no-op', reason: 'fence-mismatch' });
     });
 
@@ -1431,11 +1494,17 @@ describe('driveFolderClaim プロトコル(Issue #871)', () => {
       });
       const snap = await claimDocRef(parentId, name).get();
 
-      const resolveOutcome = await resolveDivergentClaim(db, parentId, name, {
-        expectedDivergentReason: 'reconcile-name-mismatch',
-        expectedUpdateTimeMs: snap.updateTime!.toMillis(),
-        actor: 'test-actor',
-      });
+      const resolveOutcome = await resolveDivergentClaim(
+        db,
+        parentId,
+        name,
+        {
+          expectedDivergentReason: 'reconcile-name-mismatch',
+          expectedUpdateTimeMs: snap.updateTime!.toMillis(),
+          actor: 'test-actor',
+        },
+        'restore-expected'
+      );
       expect(resolveOutcome).to.deep.equal({ outcome: 'no-op', reason: 'missing-folder-id' });
 
       const releaseOutcome = await releaseDivergentClaim(db, parentId, name, {
@@ -1450,19 +1519,25 @@ describe('driveFolderClaim プロトコル(Issue #871)', () => {
 
     it('resyncHistoryはRESYNC_HISTORY_MAX(20件)を超えると古いものから切り捨てる', async () => {
       const oldEntries = Array.from({ length: 20 }, (_, i) => ({
-        mode: 'restore' as const,
+        mode: 'restore-expected' as const,
         actor: `actor-${i}`,
         atMs: i,
       }));
       await seedDivergentClaim({ resyncHistory: oldEntries });
       const snap = await claimDocRef(parentId, name).get();
 
-      await resolveDivergentClaim(db, parentId, name, {
-        expectedFolderId: 'divergent-folder-id',
-        expectedDivergentReason: 'parents-mismatch',
-        expectedUpdateTimeMs: snap.updateTime!.toMillis(),
-        actor: 'actor-new',
-      });
+      await resolveDivergentClaim(
+        db,
+        parentId,
+        name,
+        {
+          expectedFolderId: 'divergent-folder-id',
+          expectedDivergentReason: 'parents-mismatch',
+          expectedUpdateTimeMs: snap.updateTime!.toMillis(),
+          actor: 'actor-new',
+        },
+        'restore-expected'
+      );
 
       const after = (await claimDocRef(parentId, name).get()).data()!;
       expect(after.resyncHistory).to.have.lengthOf(20);

@@ -52,7 +52,10 @@ export interface ClaimFunctions {
     firestore: admin.firestore.Firestore,
     parentId: string,
     name: string,
-    fence: ClaimFence
+    fence: ClaimFence,
+    /** type-design-analyzerレビュー指摘対応: resyncHistory[]でrestore-expected/
+     * finalize-resolvedを区別するため、実際に承認されたmodeを伝える。 */
+    mode: 'restore-expected' | 'finalize-resolved'
   ) => Promise<ClaimOutcome>;
   releaseDivergentClaim: (
     firestore: admin.firestore.Firestore,
@@ -407,7 +410,7 @@ async function processOperation(
         };
       }
     }
-    const result = await claimFns.resolveDivergentClaim(firestore, op.parentId, op.name, fence);
+    const result = await claimFns.resolveDivergentClaim(firestore, op.parentId, op.name, fence, 'finalize-resolved');
     if (result.outcome === 'no-op') {
       return {
         outcome: { operationId: op.operationId, status: 'error', mode: approvedMode, reasons: [], errorMessage: `resolveDivergentClaim no-op: ${result.reason}`, affectedDocIds: [] },
@@ -511,7 +514,7 @@ async function processOperation(
       };
     }
 
-    const result = await claimFns.resolveDivergentClaim(firestore, op.parentId, op.name, fence);
+    const result = await claimFns.resolveDivergentClaim(firestore, op.parentId, op.name, fence, 'restore-expected');
     if (result.outcome === 'no-op') {
       // Drive側は既に正しい位置に書き換わっているが、Firestore確定が失敗した。
       // ロールバックはしない(divergentのまま残す)。次回classifyがfinalize-resolvedを

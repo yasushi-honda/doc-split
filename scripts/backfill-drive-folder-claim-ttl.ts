@@ -3,7 +3,8 @@
  * Issue #871 恒久対応: 既存 divergent claim の expireAt(TTL) を除去する一回限りの移行
  *
  * `markDivergent()`は本対応(PR-B)以降`expireAt`を書かなくなったが、既にdivergent化して
- * いる既存claim(kanameoneの2件、2026-09-16確認)は`expireAt`(180日TTL)を持ったまま
+ * いる既存claim(kanameoneで2026-09-16時点で3件確認、うち2件は2026-09-01発生分)は
+ * `expireAt`(180日TTL)を持ったまま
  * Firestoreに残っている。kanameoneでは`gcloud firestore fields ttls list
  * --collection-group=driveFolderLocks`で`ttlConfig.state:ACTIVE`を実測確認済みのため、
  * 人手解決前にこのフィールドが原因で無言消滅しうる実在リスクがある。

@@ -92,7 +92,15 @@ export interface FolderClaimAttempt {
  * 上限`RESYNC_HISTORY_MAX`件で古いものから切り捨てる。
  */
 export interface ResyncHistoryEntry {
-  mode: 'restore' | 'release';
+  /**
+   * どの経路でdivergentから抜けたか。`scripts/lib/divergenceResolutionPlan.ts`の
+   * `ResolutionMode`と同じ語彙(循環import回避のためこのファイル内で独立定義、
+   * 値は構造的に一致させる)。type-design-analyzerレビュー指摘対応: 従来は
+   * `resolveDivergentClaim()`が'restore-expected'(実際にDriveを移動・改名した)と
+   * 'finalize-resolved'(Driveは既に正しくFirestore確定のみ行った)を区別できず
+   * 一律'restore'で記録していたため、監査履歴からこの2ケースを区別できなかった。
+   */
+  mode: 'restore-expected' | 'release-claim' | 'finalize-resolved';
   actor: string;
   atMs: number;
 }
@@ -186,8 +194,10 @@ export class DrivePermissionError extends Error {
  * 「フォルダの記録(claim)と実体が食い違っています(人手確認が必要)」という内部用語
  * のまま表示され、押しても絶対に成功しないリトライボタンだけが並んでいた。
  * 非エンジニアが読んで次の行動が分かる文言を先頭に置き、`name`/`parentId`/
- * folderId等の照合情報(`scripts/classify-drive-claim-divergence.ts`が
- * `driveExportError`からfolderIdを抽出するのに使う)は末尾に残す。
+ * folderId等の照合情報は末尾に残す(`scripts/lib/buildDivergencePlan.ts`が既に
+ * claimドキュメントから分かっている`folderId`をこのメッセージ全文に対する部分文字列
+ * 一致で検索し、影響書類を特定するのに使う。folderIdをメッセージから抽出している
+ * わけではない)。
  */
 export class DivergentFolderClaimError extends Error {
   constructor(name: string, parentId: string, claimedFolderId?: string, observedFolderId?: string) {
@@ -1012,7 +1022,14 @@ export async function resolveDivergentClaim(
   firestore: admin.firestore.Firestore,
   parentId: string,
   name: string,
-  fence: DivergentClaimFence
+  fence: DivergentClaimFence,
+  /**
+   * 呼び出し元が承認した実際のresolutionMode(type-design-analyzerレビュー指摘対応)。
+   * `finalize-resolved`(Driveは既に正しくFirestore確定のみ)と`restore-expected`
+   * (実際にDrive移動/改名した)を`resyncHistory[]`で区別するために必須にする
+   * (`release-claim`は`releaseDivergentClaim()`側の専用経路)。
+   */
+  mode: 'restore-expected' | 'finalize-resolved'
 ): Promise<DivergentResolutionOutcome> {
   const ref = claimRef(firestore, parentId, name);
   return firestore.runTransaction(async (tx) => {
@@ -1038,7 +1055,7 @@ export async function resolveDivergentClaim(
     }
 
     const resyncHistory = appendResyncHistory(existing.resyncHistory, {
-      mode: 'restore',
+      mode,
       actor: fence.actor,
       atMs: Date.now(),
     });
@@ -1088,7 +1105,7 @@ export async function releaseDivergentClaim(
     }
 
     const resyncHistory = appendResyncHistory(existing.resyncHistory, {
-      mode: 'release',
+      mode: 'release-claim',
       actor: fence.actor,
       atMs: Date.now(),
     });
