@@ -386,63 +386,9 @@ cocoro/kanameから、書類（ケアプラン・医療・介護保険証等）�
 
 ## 🔄 中断点（in-flight）
 
-**複数人記載FAX検出（Stage 2完了・運用中、対応不要）**: 本節は2026-08-30 13:19 UTCのStage 2切替（`faxDuplication`フラグOFF）実施前の状態を記述したまま更新されずに残っていた（実際の切替記録はADR-0024「ロールアウト実績」節・PR #882参照）。**2026-09-15にこの陳腐化に気付かないまま「まだStage 1併走中」の前提で再調査・GHA新規スクリプト追加(PR #922)まで進めてしまった**ため、その場で`set-feature-flag --flag faxDuplication --value false --dry-run`を実行し`settings/features.faxDuplication`が現在も`false`であることを実測確認して訂正した。同時点の`audit-fax-duplication-inventory`再実行では、複製されたdoc数(91件/20グループ)は8/30時点から不変（想定通り、複製OFFなので増えない）な一方、検出のみ(`detectionOnlyCount`)は0件→**424件**に増加しており、Stage 2後に到着した新規複数人記載FAXが「複製されず検出のみになる」という設計通りの挙動を示している。あわせて`faxDuplicationPlan`ログ(過去504時間)で`reason: flagDisabled`が3,669件観測され、ADR-0024の「未検証項目」（Stage2後に`reason: flagDisabled`が出ることの確認）も事実上クローズ可能な材料が揃った。**次セッションへの申し送り**: 本節はこれ以上の対応不要。ADR-0024の「未検証項目」記述を「検証済み」に更新するドキュメント修正のみ、着手する場合はdecision-maker認可を得てから行う。旧「次の一手」（Stage2着手をdecision-makerへ諮る）は完了済みのため実行しないこと。
+**なし**（2026-09-16時点）。本節は2026-08-30〜2026-09-16のIssue #871調査・実装過程の中間状態を長期間記述したまま更新されておらず、次セッションを誤誘導するリスクがあったため一括整理した。旧内容（複数人記載FAX Stage2状況・Issue #871の原因調査/claimプロトコル実装/divergent恒久対応の各段階）はいずれも完了済みで、詳細は下記の各「【完了】」節（特に「Issue #871 divergent claimの恒久対応」節）に保持済み。唯一残る未着手項目（ロールアウト段階0のdevリハーサル、live Drive資格情報が必要）は同節末尾の「次の一手」に記録済みのため、本節はこの1行のみとする。
 
-**2026-08-30追記（Stage2切替前の意思決定記録、履歴として保持）**: kanameoneから同一要望（「1つのファイルに複数名が掲載されている場合、人数分同じファイルを表示する処理の廃止」+「複数人記載ファイルの識別表示・フィルター」）を含む仕様変更依頼（チャット、4項目のうち3件目）が改めて届いた。①複数職員が同時に分割作業を行いファイル重複が発生した実害の報告 ②「分割業務専任担当者」を配置したので重複表示処理の廃止を希望、という内容で、既にStage 1として進行中の対応そのものであることを確認・回答済み。これを機に前倒しでaudit-fax-duplication-inventoryを実行（run 33283490255）: `detectionStats.totalDetectedCount: 0`（flag ON化から約1日、対象となる複数人記載FAXがまだ到達していない）。`set-feature-flag --dry-run`で`multiCustomerDetection: true`/`faxDuplication: true`の両フラグが意図通り設定されていることも実測確認済み。decision-maker判断: 当初計画通り目安2026-09-01以降まで待つ（検出漏れのまま複製OFFにすると本来分割が必要なケースを見逃すリスクがあるため）——この判断の後、同日中にStage 2切替が実施された（ADR-0024参照）。
-
-**Issue #871（新規・2026-08-30起票、P1昇格・次セッション再開点）**: kanameoneから同一チャットの4項目のうち4件目として「フォルダ自動作成の重複」不具合報告（手動でフォルダ新規作成/移動後にアプリから保存すると重複作成される、同じ操作でも発生有無が分かれる）を受けた。Issue #811（`findOrCreateFolder`のtrashed=false固定検索によるケアマネフォルダ重複、PR #840で2026-08-27修正済み）とは別要因と判断（今回はactiveフォルダとの重複でtrashed分岐は無関係、発生も修正適用後の8/29）。
-
-**decision-maker指摘（2026-08-30）を受けた重要な再評価**: 「前回セッションのAI修復作業（Phase 3）が原因ではないか」という指摘を受け時系列を照合したところ、**Phase 3自体が今回の急増の引き金である可能性が濃厚**と判明した。Phase 3の「残り全件実行」（2026-08-27〜28、run 33164719730）は本番の`executeDriveExport()`（`findOrCreateFolder`を内部で呼ぶ本番ロジックそのもの）を**1,613件のdocumentに対し連続約3時間15分**呼び出した。直後の検証classify（同8/28、run 33178487794）は`healthy=99.0% misplaced=11`と健全だったが、**その約1.5時間後には11→14に「自然増」**（既存記録「残存44件(→49件)の実態解明」節参照）、さらに**約36時間後（2026-08-30、本追記時点）にはmisplacedが14→42へ急増、うち田中幹子18件・森奈穂美9件（Phase B/Phase3で修復済みのはずが再発）・平出勝己5件・山田直子5件・那須幸子3件・田端幸子2件**という結果になった（`classify-drive-export-drift`run 33284449245）。「修復直後は健全→時間差で乖離が湧く」というパターンは、Phase 3が短時間に大量の`findOrCreateFolder`呼び出しを行ったこと自体が、Google Drive API側の検索インデックス反映遅延（新規作成直後のフォルダが`files.list`検索へ即座に反映されないことがある既知の制約）を誘発・増幅した、という仮説と規模・タイミングの両面で整合する。kaname報告④（手動操作後の重複）は氷山の一角の目視発見であり、**本質的な引き金は前回セッションの大量修復バッチだった可能性が高い**という見立てに変更。
-
-次の一手: 田中幹子のケアマネフォルダが物理的に複数存在していないか（`investigate-caremanager-folder-duplicate --name "田中 幹子"`、run 33285636973、実行中）を確認し、重複フォルダの`createdTime`がPhase 3実行window（2026-08-27 深夜〜2026-08-28、run 33164719730の実行時間帯）と一致するかで最終確認する。一致すれば、対策の焦点は「人間の手動操作対策」ではなく「`findOrCreateFolder`が高頻度・連続呼び出し下でのDrive API検索一貫性をどう担保するか」（例: 作成直前の再検索リトライ、作成後の確認的re-fetch等）に絞り込む。
-
-**2026-08-30追記（実装前ゲート実行結果・規模認識の訂正）**: 田中幹子のケアマネフォルダ調査（run 33285636973）は**重複なし**（337件全件が単一物理フォルダに収束）と判明。ケアマネ階層は健全で、重複は顧客/書類種別階層に限定されると確認。
-
-plan mode（Opus 5、grip+codex 2パスクロスレビュー）で恒久対策を`~/.claude/plans/moonlit-jumping-alpaca.md`として再設計し承認済み。PR-2（`FOLDER_LOCK_STALE_MS`120秒→10分是正、Issue #871と無関係に単独是正すべき不具合、PR #872）は実装・マージ完了。
-
-続けてPR-1（`scripts/diagnose-drive-folder-duplicate-causality.ts`、実装前ゲートの因果検証スクリプト）を実装し、kanameone実データで実行した結果、**当初の規模認識・因果仮説の両方に重大な訂正が必要**と判明:
-
-- **規模**: misplaced 42件のうちユニークな(旧,新)フォルダペア32件を精査すると、78%（25件）は名前が異なる「byte-mismatch」＝書類カテゴリの再分類ドリフト（バグではない可能性が高い）であり、**真の物理フォルダ重複は5件・森奈穂美担当のみ**（42件・6ケアマネという当初報告は過大評価だった）
-- **因果**: 真の重複5件のうち4件は、新フォルダの`createdTime`が**2026-08-21 12:53〜12:55の約2分間**に集中。Cloud Loggingで同時刻帯の`onDocumentWriteDriveExport`発火回数を確認したところ、12:00〜13:00の1時間で**1,111回**（通常は数回/時間）という明確な異常バーストを検出した。ただしこのバーストの発生源はGitHub Actions実行履歴・git commit履歴のいずれにも痕跡がなく特定できなかった。**Phase3（2026-08-27〜28）とは全く別の日付・別のイベントであり、「Phase3が原因」という当初の因果仮説はこの5件については支持されない**
-- **結論**: 「高頻度バーストがDrive API検索結果整合性を崩し重複を誘発する」という核心メカニズム自体は8/21の実バーストとの時刻一致で裏付けが強まったが、規模が当初報告より大幅に小さいため**Issue #871の優先度をP1→P2へ変更**。恒久対策（claimプロトコル、計画のPR-3）は規模を踏まえた緊急度で実装を継続する方針（decision-maker承認済み）。8/21バーストの発生源特定は費用対効果が見合わずスコープ外とした。詳細はIssue #871コメント参照。
-
-**【2026-08-30・PR-3完了・次セッション再開点】claimプロトコル本体実装がマージ完了**: 承認済み計画`~/.claude/plans/moonlit-jumping-alpaca.md`のPR-3を実装・PR #875としてマージ完了（squash、`fix/issue-871-folder-claim-protocol`ブランチは削除済み）。
-
-- 実装: `functions/src/drive/driveFolderClaim.ts`（新規、claim状態機械creating/resolved/invalidated/divergent、3段ラダーCREATE_TRUST_MS/SOFT_TTL_MS、中断復旧reconcileAttempt、fail-closedなDrive APIエラー分類）＋`findOrCreateFolder.ts`書き換え（既存検索・trashed復元ロジックは無改変で再利用）＋`driveFolderClaimRead`機能フラグ（既定shadowモード、claim書き込みのみ・既存挙動への影響ゼロ）
-- 品質ゲート: codex review 3巡実施（1巡目P1 1件・2巡目P1 1件+P2 2件、全てコード修正、TTLプロビジョニング指摘のみ運用手順としてコメント明記・3巡目で収束確認）、`pr-review-toolkit:code-reviewer`セカンドオピニオンでCritical 1件（旧`acquireFolderLock`/`releaseFolderLock`がclaimプロトコル管理下のドキュメントを誤って破壊・削除する穴）・Important 2件（divergent状態の無条件上書き、commit失敗時の振る舞い＝decision-maker判断で計画通り維持）を検出、Critical+Important 1件を修正
-- テスト: unit test 2104件・integration test 317件、全PASS
-
-**【2026-08-30・dev Stage 1完了・次セッション再開点】ロールアウトdev Stage 1（TTL+shadow deploy）完了**: 計画のロールアウト表（段階1）を実施。
-
-- Firestore TTLポリシー: `gcloud firestore fields ttls update expireAt --collection-group=driveFolderLocks --enable-ttl --project=doc-split-dev`実行、`ttlConfig.state: ACTIVE`を実測確認
-- devデプロイ: GitHub Actions「Deploy Cloud Functions」（`-f environment=dev`）経由でrun 33296927036完走（7m53s）。`gcloud functions describe onDocumentWriteDriveExport --project=doc-split-dev`のupdateTimeがデプロイ時刻と一致し反映を確認。`driveFolderClaimRead`は`settings/features`に未設定=既定OFFのまま（shadowモード）
-- 手動エクスポート検証: devのseedテストデータ（`井上春子`等、実運用データではない）で未検証doc 2件をFirestore経由で`verified:true`へ切替しexportをトリガー。2件とも`driveExportStatus:exported`で成功、`driveFolderLocks`に事業所→ケアマネ→顧客→書類種別の4階層claimが書き込まれ**全件`state:resolved`・`missCount:0`**（不一致0件）。Cloud Logging（`ondocumentwritedriveexport`）にERROR/WARNINGなし
-- 副次的発見（Issue #871スコープ外・要フォローアップ検討）: 3件目のテストdoc（`UjPO01QBlPvRaCLIrHRr`、複数人記載FAX検出用のseed fixture）は`driveExportStatus`が**フィールド不在ではなく明示的な`null`値**で保存されており、`executeDriveExport.ts:49`の`currentStatus !== claimFromStatus`（`claimFromStatus`は`undefined`）判定に一致せず、verified:true化してもクレームされず静かにno-opした。claimプロトコルとは無関係の既存挙動（PR-2/PR-3で変更していない箇所）。実運用documentでこの明示的`null`状態が発生しうるか（バグかseedデータ特有か）は未調査、次回`/checkup`または関連作業時に確認候補
-
-**【2026-08-30・dev Stage 2完了】読み経路有効化+陳腐化シナリオ手動確認、全PASS**:
-
-- `settings/features.driveFolderClaimRead: true`をdevで有効化
-- **高速パス（<CREATE_TRUST_MS 60秒）**: 同一customer+category（「計画」フォルダ、実体はケアプラン/サービス提供票が共有）へ12秒間隔で2件連続エクスポートを実行し、両方とも`exported`成功。claim重複なし（5件のまま）。Drive API実測（`files.list`で「計画」フォルダ配下を直接確認）でも**物理フォルダは1個のみ**、3ファイルが正しく格納されていることを確認（=Issue #871の再現パターンをdevで再現し、claimプロトコルが正しく1回のcreateに収束させることを実証）
-- **trash検知・復元**: 「計画」フォルダをDrive APIで手動trash後に再エクスポート→`exported`成功、claim.verifiedAtMs更新、`files.get`実測でフォルダが`trashed:false`に復元されていることを確認（§3の200・trashed=true分岐が正しく動作）
-- **divergent検知（人力移動）**: 「計画」フォルダをDrive APIで別parentへ手動移動後に再エクスポート→`driveExportStatus:error`（「フォルダの記録(claim)と実体が食い違っています」）、claim.state:`divergent`・`divergentReason:parents-mismatch`に遷移。**削除も再作成もされず**、fail-closed設計（§4）が意図通り動作
-- 後片付け: 移動したフォルダを元の親へ復元、divergent化したclaimドキュメントを削除（cold path再解決に委ねる設計のため安全）、テストで使ったdocument（`seed-doc-0026`）を`verified:false`+export関連フィールド削除で試験前状態に復元
-
-decision-maker判断（2026-08-30）: 本セッションはdev検証（Stage 1・2）完了で区切り、cocoro/kanameoneへの本番展開は次セッション以降に改めて着手判断する。
-
-次の一手（**次セッション再開点・要decision-maker判断**）: 計画のロールアウト表の残り段階。
-1. ~~cocoro→kanameoneの順で段階展開~~ → **2026-08-30訂正・着手**: cocoroはPhase C（OAuth接続）未完了でDrive連携自体が稼働していない（`settings/drive`が2026-07-23から未変更と実測再確認）ため、cocoro先行の「観察による安全確認」が機能しないと判明。decision-maker判断で**kanameoneを先行させる**方針に変更。kanameoneのshadow展開着手・進捗は下記「Issue #871 kanameone本番展開」節参照。cocoroはPhase C完了後に別途展開
-2. ~~`childFolderResolver.ts`自体のclaimプロトコル移行（PR-4、計画書§5）は本ロールアウトと独立に着手可能（未着手）~~ → **2026-08-30完了、詳細は下記「Issue #871 PR-4完了」節参照**
-3. **2026-08-30追加**: 計画書PR-5（`driveExportErrorKind`フィールド新設、transient/permanentエラー再試行閾値短縮）はPR-3/PR-4実装時にスコープアウトされ未実装のまま判明。claimプロトコル本体（重複防止）とは独立した改善項目のため、Issue #881として起票しfollow-up化（P3、緊急性なし）
-
-**Issue #811/#823 remediation（次セッション再開点）**: Phase 2b-1（PR #851実装マージ・devリハーサル）・Phase 2b-2（森奈穂美分本番実行、healthy 33.1%→98.8%）・Phase 5（ADR-0022更新PR #854マージ・Issue #811/#823クローズ）・**Phase 3（kanameone全ケアマネへ横展開、healthy 60.8%→99.0%）**・**Phase 4（cocoroはDrive未接続のため対象外と確定）**、全て完了済み（詳細は上記「Issue #811/#823 remediation Phase 3」節参照）。**kanameoneのDrive export破損document remediationはこれで実質完了**。
-
-**残り23件（trashed9+misplaced11+target-path-not-created3）の原因調査（2026-08-28実施・打ち切り）**: `skippedPossibleManualEdit`は最終的に21件（森奈穂美分8件+他ケアマネ分13件）、複数日（8/3・8/4・8/5・8/12・8/14・8/16）に分散し数秒〜数十秒の小さなクラスタを形成。複数クラスタでCloud Logging（kanameone、`gcloud logging read`）を確認したが、該当時刻にdoc-split側のCloud Function実行履歴が一切見つからなかった（`processocr`/`checkgmailattachments`の通常ポーリングのみ）。**doc-split側の処理では説明がつかない=Drive側での外部要因（人間操作かGoogle内部処理か不明）の可能性が高いという結論を複数クラスタで再現・補強**。これ以上の特定にはGoogle Workspace管理者監査ログ（Drive Activity API）へのアクセスが必要なため調査を打ち切った。他blocked21件（segment-unresolvable17/ambiguous-path3/customer-unconfirmed1）は元々execute-drive-export-repair.tsの対象外（フォルダ構造の曖昧性解消・顧客確定という別種の人間作業が必要）。**→ 2026-08-29に実体解明済み、詳細は下記「残存44件(→49件)の実態解明」節参照**。
-
-**完了記録**: kanameone backfillマーカー20件滞留の原因調査・修正は完遂した。PR #804（`sweepStuckDriveExports`のrequeuedカウンタ修正）をkanameone/cocoro両環境へデプロイ後（2026-08-06 03:10/03:21）、自然経過での解消をFirestore/Cloud Loggingで継続監視: 20件(04:22 UTC)→9件(04:32〜06:35 UTC、customer-unconfirmed/real-errorの塊をカーソルが順次走査するため一時的に足踏み)→**0件（06:37:41 UTCの`requeued=8, failed=16`実行で末尾のbackfillマーカー群を処理し完全解消、07:02 UTC時点でFirestore実測`{"customer-unconfirmed":218,"real-error":117}`とbackfillカテゴリなしを確認）**。約3.5時間で修正の効果が完全に実証された。
-
-**Issue #794（③kanameone報告PDFのType3フォント文字消失）**: 2026-08-06 PR #798マージによりクローズ済み。詳細は上記「kanameoneからの相談3件対応」節③参照。
-
-cocoro側Drive連携Phase C（クライアント自身のOAuth接続）は外部依存待ち（継続、変更なし）。
+cocoro側Drive連携Phase C（クライアント自身のOAuth接続）は外部依存待ち（継続、変更なし、詳細は本ファイル冒頭「現在のミッション」節参照）。
 
 ## 【完了・2026-08-30】Issue #871 PR-4: childFolderResolver.tsのclaimプロトコル完全移行(PR #879マージ)
 
@@ -505,7 +451,7 @@ decision-maker承認（「正しいことを段階的かつ計画的にうっか
 
 **【完了・2026-09-16】観測性強化の先行実施(PR #925)**: `markDivergent()`にCloud Loggingへの構造化ログ出力を追加(顧客名等はPII配慮で出力せず、folderId/parentId/reasonのみ)。既存のdivergent遷移が**ログに一切残らず発生に誰も気づけないサイレント設計**だったと判明(2026-09-01発生の今回2件が2週間後の手動棚卸しで初めて発覚)したため、恒久対応(業務ルール策定・claim検証モデル見直し)を正式設計するまでの間も、新規発生を検知できるようにする低リスクな先行対応。functions unit 2144件+`driveFolderClaimIntegration.test.ts`統合テスト40件全PASS確認済み。
 
-**【未着手】残3件の実修復**: Fable/codexの分析で「Drive実体を本来の場所へ戻す」のが正しい修復方向と確定したが、実際の移動(Drive API経由の自動修復 or kanameone担当者への手動修正依頼)は未着手。**次の一手**: 上記「恒久対応の設計方針」のplan mode設計と合わせて、この3件の具体的な修復方法(自動移動スクリプトを新規実装するか、クライアントへ依頼するか)を決定する。
+**【解消・2026-09-16】残2件の実修復方法**: 上記調査結果を受け、plan mode（Opus 5、grip+codex 2パスクロスレビュー）で恒久対応`~/.claude/plans/wild-dreaming-firefly.md`を設計し承認済み。「承認付き再同期ワークフロー」として実装・PR #928でマージ完了（詳細は下記「Issue #871 divergent恒久対応」節）。**残2件（kanameone）の実際の修復実行はロールアウト段階0（devリハーサル）以降が未着手のまま**、次セッションの次の一手として下記完了節末尾に記録。
 
 **【知見・2026-09-08】cocoro Phase C待ちの間の事前点検（read-only、コード変更なし）**: kanameoneのロールアウト完了を受け、cocoro側でPhase C（クライアント側Drive OAuth接続）完了時に備えて先行点検を実施した。
 
@@ -515,6 +461,24 @@ decision-maker承認（「正しいことを段階的かつ計画的にうっか
 - `check-customer-master-integrity`（read-only、Phase D=Drive export flag ON前の同姓同名衝突リスク可視化ツール）をcocoroで初実行: 顧客マスター86件、完全一致同姓同名[A]0組・表記ゆれ重複候補[B]0組（kanameoneのような衝突リスクなし）。ただしverified済み103件中**45件が顧客未確定でDrive export gateにブロックされる状態**（内訳: 顧客名未設定/sentinel値44件、customerId↔name乖離1件）。Drive連携とは無関係の既存運用バックログであり、Phase C完了後もこの45件は自動エクスポートされない(fail-visible設計通り)
 - customerId↔name乖離1件（`NeVG6FlTfuyntSl6NwUa`、customerName="冨山 マサ"）を個別調査: Firestore実測で原因判明。`customerCandidates`に同一ケアマネ(板垣亜紀子)配下の同姓別人2名(冨山瑞男`F8Utnydi44sHWbS4oaxs`/冨山マサ`NlHmL46fPTAxB3TvptoT`)が両方score100・exact matchで並び、システムは1件目customerIdを仮保持したまま`needsManualCustomerSelection:true`で人手確認待ちにしていた。`customerAmbiguityGate.ts`のgateは意図通りこれをブロック済みで、コード修正は不要と判断（decision-maker確認済み、AskUserQuestion経由）
 - **decision-maker判断**: 45件の顧客未確定バックログ解消は既存のFEレビューフロー任せとし、今回はIssue化・着手ともに見送り。Phase C完了作業の一部として着手判断する必要はない
+
+## 【完了・2026-09-16】Issue #871 divergent claimの恒久対応: 承認付き再同期ワークフロー実装完了(PR #928マージ)
+
+`divergent`状態（claim記録とDrive実体の食い違い）に唯一の出口がなく、人手解決までFirestoreの手動編集以外に復帰手段が無いという構造的欠陥（上記「残2件のclaim/実体不一致 原因調査」節参照）に対し、plan mode（Opus 5、grip+codex 2パスクロスレビュー、`~/.claude/plans/wild-dreaming-firefly.md`）で設計した恒久対応を実装・マージした（PR #928、Closes #871）。
+
+**実装概要**:
+- `functions/src/drive/driveFolderClaim.ts`: `resolveDivergentClaim()`/`releaseDivergentClaim()`を新規export（divergentから抜ける唯一の正規経路、Firestore `updateTime`によるCAS付き）。`markDivergent()`から`expireAt`（180日TTL）を除去しTTL対象外化、`divergentAtMs`/`divergentRunId`を記録。`resyncHistory[]`（監査用、最大20件）を追加
+- `scripts/classify-drive-claim-divergence.ts`（新規、read-only）+ `scripts/execute-drive-claim-resync.ts`（新規、承認付き実行）: `restore-expected`（Drive実体を期待値へ書き戻す）/`release-claim`（claim破棄、stranded件数ガード付き）/`finalize-resolved`（Drive側は既に正、Firestore確定のみ）の3モード。fail-closedプリフライト（`scripts/lib/divergenceResolutionPlan.ts`）+ Drive側TOCTOU対策（書込み直前に`files.get`で再照合）
+- `functions/src/drive/driveFolderClaimDivergentSweep.ts`（新規、日次onSchedule）: divergent滞留バックログの継続監視。監視メトリクス3種（新規発生・記録失敗・滞留バックログ）+ アラート3種を`setup-log-based-metrics.sh`/`monitoring-templates/`に配線
+- `.github/workflows/run-ops-script.yml`: 承認JSON中のoperationIdがplan由来と一致することをjqで検証するゲートを追加
+- ADR-0022 Decision 4・`docs/context/monitoring-setup.md`に業務方針（`accept-actual`を意図的に非提供、TTL対象外化、承認は`planRunId`経由限定等）を明文化
+
+**品質ゲート**: codex review 2巡（1巡目Critical1件含む複数、2巡目P1〜P2）+ `pr-review-toolkit`5エージェント（code-reviewer/silent-failure-hunter/pr-test-analyzer/comment-analyzer/type-design-analyzer）並列レビューで検出したCritical/High全件を修正済み。主な修正: ①`release-claim`が`actual===null`で常時blockedになりTTL除去の設計意図（404'd claimの解放）が到達不能だった欠陥 ②`markDivergent()`失敗ログの欠落（最ホットパスの`verifyFolderClaim()`3箇所） ③`execute-drive-claim-resync.ts`のテスト0件 ④監視メトリクス/アラートが`resource.type="cloud_function"`を指定しており実際のgen2ログ出力（`cloud_run_revision`）と不一致で機能しない欠陥（`gcloud logging read`実測で確認・修正、**同型の不一致が本リポジトリの既存5メトリクスにも及ぶ疑いを残す**、下記「条件待ち」参照） ⑤`resyncHistory`が通常のclaim書込み全12箇所で毎回消えていた欠陥。テスト最終件数: functions unit 2144件・integration 383件、scripts unit 359件・integration 79件、全PASS
+
+**次の一手（次セッション再開点、要decision-maker判断）**: 計画のロールアウト表の段階0以降が未着手。
+1. **段階0（dev）**: Drive UIで手動移動してdivergentを人為的に発生させ、classify→承認→execute→requeue→再export成功までを通しで実機確認（空フォルダ・非空フォルダのstrandedガード発火の両ケース）。**live Drive API資格情報を要するため本セッションでは実行不可**
+2. **段階1（全環境）**: 監視メトリクス+アラートを`setup-log-based-metrics.sh`経由で配備（`--dry-run`先行）
+3. **段階2〜4（kanameone）**: `classify-drive-claim-divergence`で残2件を再確認→dry-run結果をdecision-makerが確認→番号単位の明示認可→`--execute`で修復→`driveExportStatus`が`exported`へ遷移することを実測確認
 
 ## 【要注意・2026-09-08】Gemini 3.5 Flash: asia-northeast1での従量課金は公式サポート対象外と判明（本番は継続稼働中、未解決の矛盾）
 
