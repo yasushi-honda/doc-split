@@ -483,7 +483,7 @@ decision-maker承認（「正しいことを段階的かつ計画的にうっか
   - Drive UI経由のフォルダ移動はContent Manager/Manager両ロールで3回とも原因不明のまま静かに失敗（Playwright操作は成功するがDrive API側は無変化）。codexセカンドオピニオンの助言により方式転換し、`files.update`（addParents/removeParents）でDrive API直接操作しdivergent状態を人為的に作成（使い捨てスクリプト、GitHub Actions run-ops-script.yml経由）
   - **新たな発見**: `classify-drive-claim-divergence`は`driveFolderLocks.state=='divergent'`を走査するのみでDrive実体とのライブ突合はしない。state遷移はアプリの実exportホットパス（`findOrCreateFolder`→`verifyFolderClaim`、または完全再検索でのmismatch）でのみ発生する。またdriveExportTrigger.tsは`driveExportStatus`が既に設定済みのdocumentでは`verified` false→true再発火をno-op化する（`executeDriveExport`のクレームが`claimFromStatus: undefined`固定のため）ため、既export済みdocumentで再現するには`driveExportStatus`フィールド自体の削除が必要だった
   - 上記を踏まえ実際のexportコードパス経由でclaimを`state: 'divergent'`へ遷移させたうえで、`classify-drive-claim-divergence`(`totalDivergent: 1`検知)→番号単位の明示認可→`execute-drive-claim-resync --dry-run`(`dry-run=1 error=0`)→`--execute`(`status=executed`、claim`resolved`へ復元)→再度divergent再現→`--execute --requeue`一括実行(`status=executed`・`requeue完了: 対象1件中 成功1件`、document`driveExportStatus`が`error`→`exported`へ回復)まで一気通貫で実機確認。途中、既に解決済みのplanで再実行を試みた際に`status=claim-drift`で安全に拒否されることも確認（stale plan誤承認の防止機構が正常動作）
-  - 使い捨てスクリプト・GitHub Actions一時choice（`tmp-issue871-stage0-*`）は`chore/tmp-issue871-stage0-divergent-test`ブランチのみに存在、mainへはマージしない（後日削除）
+  - 使い捨てスクリプト・GitHub Actions一時choice（`tmp-issue871-stage0-*`）は`chore/tmp-issue871-stage0-divergent-test`ブランチのみに存在させ、mainへは一切マージしていない。検証完了後、同ブランチをローカル・リモートとも削除済み【2026-09-16】
 
 ## 【要注意・2026-09-08】Gemini 3.5 Flash: asia-northeast1での従量課金は公式サポート対象外と判明（本番は継続稼働中、未解決の矛盾）
 
