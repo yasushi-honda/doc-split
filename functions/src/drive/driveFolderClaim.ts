@@ -837,6 +837,8 @@ export async function markDivergent(
   reason: string
 ): Promise<void> {
   const ref = claimRef(firestore, parentId, name);
+  let transitioned = false;
+  let folderId: string | undefined;
   await firestore.runTransaction(async (tx) => {
     const snap = await tx.get(ref);
     const existing = snap.exists ? normalizeClaim(snap.data()!, parentId, name) : null;
@@ -848,6 +850,7 @@ export async function markDivergent(
       return;
     }
 
+    folderId = existing?.folderId;
     const doc = stripUndefined({
       state: 'divergent' as const,
       folderId: existing?.folderId,
@@ -858,7 +861,24 @@ export async function markDivergent(
       expireAt: ttlTimestamp(),
     });
     tx.set(ref, doc);
+    transitioned = true;
   });
+  // Issue #871関連調査(2026-09-16)で判明: divergent遷移はCloud Loggingに一切出力されず、
+  // 発生に誰も気づけずFirestoreへの書込みのみでサイレントに蓄積する設計だった
+  // (2026-09-01発生の2件が2週間後の手動棚卸しで初めて発覚)。トランザクション外で
+  // 遷移が実際に起きた場合のみ1回出力し、Firestoreトランザクションのリトライによる
+  // 重複ログを防ぐ。顧客名・ケアマネ名はnameフィールドに含まれうるためログには出さず、
+  // 照合キー(folderId/parentId)とreasonのみに留める(PII配慮、名前解決は権限を持つ者が
+  // Firestore側のclaimドキュメントを直接参照する)。
+  if (transitioned) {
+    console.log(`[driveFolderClaim] claim divergent detected: reason=${reason}`, {
+      operation: 'driveFolderClaim',
+      event: 'claimDivergent',
+      parentId,
+      folderId,
+      reason,
+    });
+  }
 }
 
 /**
