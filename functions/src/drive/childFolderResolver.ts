@@ -317,7 +317,7 @@ export async function resolveChildFolder(
       // 検知できなくなる。best-effort(投げない)のままだが、ログだけは必ず残す。
       await markDivergent(firestore, parentId, name, 'ambiguous-full-scan', runId).catch((markError) =>
         console.error(
-          `[Phase B Part A] divergent記録に失敗しました("${name}"、親フォルダ: ${parentId}）: 次回呼び出しがこの矛盾を検知できない可能性があります`,
+          `[Phase B Part A] divergent記録に失敗しました(親フォルダ: ${parentId}）: 次回呼び出しがこの矛盾を検知できない可能性があります`,
           markError
         )
       );
@@ -337,7 +337,7 @@ export async function resolveChildFolder(
     if (readEnabled && isResolvedWithFolderId(claim) && claim.folderId !== existingId) {
       await markDivergent(firestore, parentId, name, 'full-scan-mismatch', runId).catch((markError) =>
         console.error(
-          `[Phase B Part A] divergent記録に失敗しました("${name}"、親フォルダ: ${parentId}）: 次回呼び出しがこの矛盾を検知できない可能性があります`,
+          `[Phase B Part A] divergent記録に失敗しました(親フォルダ: ${parentId}）: 次回呼び出しがこの矛盾を検知できない可能性があります`,
           markError
         )
       );

@@ -41,9 +41,22 @@ import {
   DIVERGENCE_PLAN_SCHEMA_VERSION,
   type DivergenceApproval,
   type DivergencePlan,
+  type DivergenceResyncManifest,
 } from './lib/divergenceResolutionPlan';
 import { executeDivergenceResync } from './lib/executeDivergenceResync';
 import { readDriveApiVersionSnapshot, verifyDriveApiVersionMatch } from './lib/driveApiVersionGate';
+
+/**
+ * manifestを一時ファイルへ書いてからrenameする(codex review 2巡目Medium指摘対応)。
+ * `fs.writeFileSync`直接上書きは書込み途中でプロセスがkillされると、既存の(直前まで
+ * 正しかった)rollback材料ごと破損・消失しうる。同一ファイルシステム内のrenameは
+ * atomicなため、書込み完了前にkillされても元のmanifestファイルは無傷のまま残る。
+ */
+function writeManifestAtomic(outFile: string, manifest: DivergenceResyncManifest): void {
+  const tmpFile = `${outFile}.tmp-${process.pid}`;
+  fs.writeFileSync(tmpFile, JSON.stringify(manifest, null, 2));
+  fs.renameSync(tmpFile, outFile);
+}
 
 const projectId = process.env.FIREBASE_PROJECT_ID;
 if (!projectId) {
@@ -186,7 +199,7 @@ async function main(): Promise<void> {
       // pr-review-toolkit:code-reviewer Important指摘対応: ループの途中でプロセスが
       // クラッシュ/killされた場合でも、それまでに成功したDrive移動をrollback可能な状態に
       // する(execute-drive-folder-merge.tsと同じ理由)。
-      onProgress: (m) => fs.writeFileSync(manifestOutFile, JSON.stringify(m, null, 2)),
+      onProgress: (m) => writeManifestAtomic(manifestOutFile, m),
     }
   );
 
@@ -196,42 +209,52 @@ async function main(): Promise<void> {
     );
   }
 
-  fs.writeFileSync(manifestOutFile, JSON.stringify(manifest, null, 2));
+  writeManifestAtomic(manifestOutFile, manifest);
   console.log(`manifest出力: ${manifestOutFile}(${manifest.entries.length}件)`);
 
   if (execute && requeue) {
     console.log('--- --requeue: executed操作の影響書類を即時再試行(ErrorsPageのリトライボタンと同一ロジック) ---');
-    const executedDocIds = outcomes.filter((o) => o.status === 'executed').flatMap((o) => o.affectedDocIds);
     let requeuedSuccess = 0;
     let requeuedStillError = 0;
     let requeueSkipped = 0;
     let requeueUnexpectedError = 0;
-    for (const docId of executedDocIds) {
-      try {
-        const result = await retryDriveExportCore(db, docId, {});
-        if (result.success) {
-          requeuedSuccess++;
-        } else {
-          requeuedStillError++;
-          console.warn(`requeue後も再度error(次回スイープで自然にリトライされます): ${docId} error="${result.error}"`);
-        }
-      } catch (err) {
-        // silent-failure-hunterレビュー指摘対応: DriveExportNotRetryableError(対象外、
-        // 想定内)と、それ以外の予期しない例外(Firestoreトランザクション失敗・権限エラー等)
-        // を区別する。従来は全て「requeue対象外(既にリトライ可能な状態でない)」という
-        // 特定の(誤りうる)診断で一律ログしており、実際は無関係な障害が「対象外」として
-        // 誤診断され、かつexit codeにも一切反映されずrunがgreenで終わっていた。
-        if (err instanceof DriveExportNotRetryableError) {
-          requeueSkipped++;
-          console.warn(`requeue対象外(既にリトライ可能な状態でない): ${docId}`);
-        } else {
-          requeueUnexpectedError++;
-          console.error(`requeue中に予期しないエラー: ${docId}`, err);
+    let requeueAttempted = 0;
+    // codex review 2巡目Low指摘対応: manifestは--requeue実行「前」に確定していたため、
+    // 型に存在する`requeuedDocIds`が常に空のままだった。operationごとに実際に成功
+    // requeueできたdocIdを記録し、requeue完了後にmanifestを再書込みする。
+    const executedOutcomes = outcomes.filter((o) => o.status === 'executed');
+    for (const o of executedOutcomes) {
+      const entry = manifest.entries.find((e) => e.operationId === o.operationId);
+      for (const docId of o.affectedDocIds) {
+        requeueAttempted++;
+        try {
+          const result = await retryDriveExportCore(db, docId, {});
+          if (result.success) {
+            requeuedSuccess++;
+            entry?.requeuedDocIds.push(docId);
+          } else {
+            requeuedStillError++;
+            console.warn(`requeue後も再度error(次回スイープで自然にリトライされます): ${docId} error="${result.error}"`);
+          }
+        } catch (err) {
+          // silent-failure-hunterレビュー指摘対応: DriveExportNotRetryableError(対象外、
+          // 想定内)と、それ以外の予期しない例外(Firestoreトランザクション失敗・権限エラー等)
+          // を区別する。従来は全て「requeue対象外(既にリトライ可能な状態でない)」という
+          // 特定の(誤りうる)診断で一律ログしており、実際は無関係な障害が「対象外」として
+          // 誤診断され、かつexit codeにも一切反映されずrunがgreenで終わっていた。
+          if (err instanceof DriveExportNotRetryableError) {
+            requeueSkipped++;
+            console.warn(`requeue対象外(既にリトライ可能な状態でない): ${docId}`);
+          } else {
+            requeueUnexpectedError++;
+            console.error(`requeue中に予期しないエラー: ${docId}`, err);
+          }
         }
       }
     }
+    writeManifestAtomic(manifestOutFile, manifest);
     console.log(
-      `requeue完了: 対象${executedDocIds.length}件中 成功${requeuedSuccess}件・再度error${requeuedStillError}件・対象外${requeueSkipped}件・予期しないエラー${requeueUnexpectedError}件`
+      `requeue完了: 対象${requeueAttempted}件中 成功${requeuedSuccess}件・再度error${requeuedStillError}件・対象外${requeueSkipped}件・予期しないエラー${requeueUnexpectedError}件`
     );
     if (requeueUnexpectedError > 0) {
       process.exitCode = 1;

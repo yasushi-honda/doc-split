@@ -657,7 +657,7 @@ export async function reconcileAttempt(
       // best-effort(投げない)のままログだけは必ず残す。
       await markDivergent(firestore, parentId, name, 'reconcile-name-mismatch', runId).catch((markError) =>
         console.error(
-          `[driveFolderClaim] divergent記録に失敗しました("${name}"、親フォルダ: ${parentId}）: 次回呼び出しがこの矛盾を検知できない可能性があります`,
+          `[driveFolderClaim] divergent記録に失敗しました(親フォルダ: ${parentId}）: 次回呼び出しがこの矛盾を検知できない可能性があります`,
           markError
         )
       );
@@ -1235,7 +1235,7 @@ export async function verifyFolderClaim(
     // 無防備にしておくと、実運用で最も発生しうる箇所が唯一観測不能になってしまう。
     await markDivergent(firestore, parentId, name, 'name-mismatch', runId).catch((markError) =>
       console.error(
-        `[driveFolderClaim] divergent記録に失敗しました("${name}"、親フォルダ: ${parentId}）: 次回呼び出しがこの矛盾を検知できない可能性があります`,
+        `[driveFolderClaim] divergent記録に失敗しました(親フォルダ: ${parentId}）: 次回呼び出しがこの矛盾を検知できない可能性があります`,
         markError
       )
     );
@@ -1250,7 +1250,7 @@ export async function verifyFolderClaim(
   if (!parents.includes(parentId)) {
     await markDivergent(firestore, parentId, name, 'parents-mismatch', runId).catch((markError) =>
       console.error(
-        `[driveFolderClaim] divergent記録に失敗しました("${name}"、親フォルダ: ${parentId}）: 次回呼び出しがこの矛盾を検知できない可能性があります`,
+        `[driveFolderClaim] divergent記録に失敗しました(親フォルダ: ${parentId}）: 次回呼び出しがこの矛盾を検知できない可能性があります`,
         markError
       )
     );
