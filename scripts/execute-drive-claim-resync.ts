@@ -157,7 +157,8 @@ if (!driveApiVersionResult.ok) {
   process.exit(2);
 }
 
-admin.initializeApp({ projectId });
+const storageBucket = process.env.STORAGE_BUCKET;
+admin.initializeApp({ projectId, storageBucket });
 
 function resolveActor(): string {
   if (process.env.GITHUB_RUN_ID && process.env.GITHUB_SERVER_URL && process.env.GITHUB_REPOSITORY) {
