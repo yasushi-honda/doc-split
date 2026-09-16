@@ -86,6 +86,20 @@ export interface FolderClaimAttempt {
   runId: string | null;
 }
 
+/**
+ * `divergent`状態からの復帰(Issue #871 恒久対応、承認付き再同期ワークフロー)を
+ * 監査するための履歴エントリ。判定ロジックには使わない追跡用フィールド。
+ * 上限`RESYNC_HISTORY_MAX`件で古いものから切り捨てる。
+ */
+export interface ResyncHistoryEntry {
+  mode: 'restore' | 'release';
+  actor: string;
+  atMs: number;
+}
+
+/** `resyncHistory[]`の保持上限件数。 */
+export const RESYNC_HISTORY_MAX = 20;
+
 export interface FolderClaimDoc {
   state: ClaimState;
   lockToken?: string;
@@ -100,6 +114,14 @@ export interface FolderClaimDoc {
   missRunIds?: string[];
   parentId: string;
   name: string;
+  /** divergent化した理由('parents-mismatch'等)。人手介入時の調査手がかり。 */
+  divergentReason?: string;
+  /** divergent化した時刻(ms epoch)。滞留日数の算出に使う(Issue #871 恒久対応で追加)。 */
+  divergentAtMs?: number;
+  /** divergent化を検知した実行のrunId。監査用(Issue #871 恒久対応で追加)。 */
+  divergentRunId?: string;
+  /** divergentからの復帰履歴。判定ロジックには使わない(Issue #871 恒久対応で追加)。 */
+  resyncHistory?: ResyncHistoryEntry[];
 }
 
 export type ResolvedFolderClaim = FolderClaimDoc & { state: 'resolved'; folderId: string };
@@ -157,6 +179,15 @@ export class DrivePermissionError extends Error {
 /**
  * claimが指すfolderIdと実体(`files.get`のparents、または完全再検索の結果)が食い違う。
  * 人手介入待ち。削除も再作成も行わない。
+ *
+ * メッセージ全文は`driveExportError`(Admin SDK専有フィールド)に保存され、
+ * ErrorsPageの「Driveエクスポートエラー」タブでクライアント担当者に直接表示される
+ * (`frontend/src/pages/ErrorsPage.tsx`)。Issue #871 恒久対応(2026-09)以前は
+ * 「フォルダの記録(claim)と実体が食い違っています(人手確認が必要)」という内部用語
+ * のまま表示され、押しても絶対に成功しないリトライボタンだけが並んでいた。
+ * 非エンジニアが読んで次の行動が分かる文言を先頭に置き、`name`/`parentId`/
+ * folderId等の照合情報(`scripts/classify-drive-claim-divergence.ts`が
+ * `driveExportError`からfolderIdを抽出するのに使う)は末尾に残す。
  */
 export class DivergentFolderClaimError extends Error {
   constructor(name: string, parentId: string, claimedFolderId?: string, observedFolderId?: string) {
@@ -165,7 +196,8 @@ export class DivergentFolderClaimError extends Error {
         ? `claim側: ${claimedFolderId ?? '(不明)'} / 実体側: ${observedFolderId}`
         : `claimedFolderId: ${claimedFolderId ?? '(不明)'}`;
     super(
-      `フォルダの記録(claim)と実体が食い違っています(人手確認が必要): "${name}"（親フォルダ: ${parentId}、${detail}）`
+      `Drive上でこのフォルダが移動・改名された可能性があります。自動リトライでは解消しません。サポートへご連絡ください。` +
+        `(参考情報: "${name}"（親フォルダ: ${parentId}、${detail}）)`
     );
     this.name = 'DivergentFolderClaimError';
   }
@@ -619,7 +651,7 @@ export async function reconcileAttempt(
     // しまい、要求された名前とは異なるフォルダへ後続exportが配置され続けてしまう。
     // files.listで既に取得済みのnameフィールドと突合する(追加API呼び出し不要)。
     if (files[0].name !== undefined && files[0].name !== name) {
-      await markDivergent(firestore, parentId, name, 'reconcile-name-mismatch');
+      await markDivergent(firestore, parentId, name, 'reconcile-name-mismatch', runId);
       throw new DivergentFolderClaimError(name, parentId, undefined, id);
     }
     // codex review P2指摘対応: files.create()後・commit前に(人力操作等で)ゴミ箱へ
@@ -834,7 +866,8 @@ export async function markDivergent(
   firestore: admin.firestore.Firestore,
   parentId: string,
   name: string,
-  reason: string
+  reason: string,
+  runId?: string
 ): Promise<void> {
   const ref = claimRef(firestore, parentId, name);
   let transitioned = false;
@@ -851,14 +884,20 @@ export async function markDivergent(
     }
 
     folderId = existing?.folderId;
+    // Issue #871 恒久対応(承認付き再同期ワークフロー): divergentはTTL対象外にする
+    // (`expireAt`を書かない)。承認付き再同期(resolveDivergentClaim/releaseDivergentClaim)
+    // で人手解決されるまでclaimを必ず残す。従来はここで`expireAt`(180日)を書いており、
+    // 人手解決しないまま180日経つとclaimが消え、システムが無言で通常のfind-or-create経路に
+    // 戻ってしまう(kanameoneで`ttlConfig.state:ACTIVE`を実測確認済みの実在リスク)。
     const doc = stripUndefined({
       state: 'divergent' as const,
       folderId: existing?.folderId,
       attempt: null,
       divergentReason: reason,
+      divergentAtMs: Date.now(),
+      divergentRunId: runId,
       parentId,
       name,
-      expireAt: ttlTimestamp(),
     });
     tx.set(ref, doc);
     transitioned = true;
@@ -879,6 +918,154 @@ export async function markDivergent(
       reason,
     });
   }
+}
+
+/**
+ * `resolveDivergentClaim`/`releaseDivergentClaim`が要求するfence(CAS条件、Issue #871
+ * 恒久対応)。`classify-drive-claim-divergence.ts`がplan生成時に読んだclaimドキュメントの
+ * `updateTime`/`divergentReason`/`folderId`をそのまま渡し、execute実行時のトランザクション
+ * 内で再照合する。`beginCreation()`がdivergentを無条件に弾き`markDivergent()`自体も冪等
+ * (既にdivergentなら上書きしない)なため、divergent状態のclaimドキュメントは人手介入まで
+ * 不変——この不変性により、`updateTime`一致の確認だけで「読んでから書くまでの間に
+ * 別の解決者が同じclaimを処理していないか」を検出できる(新規スキーマ不要)。
+ *
+ * これはclaim側のCASに過ぎず、Drive実体側のTOCTOU(第三者による再移動)は検知できない。
+ * Drive実体側のdrift確認は呼び出し元(`execute-drive-claim-resync.ts`)が
+ * Drive書込み直前に別途`files.get`で行う責務。
+ */
+export interface DivergentClaimFence {
+  /** claimの`folderId`と一致するか(reconcile-name-mismatch等でfolderId不在の場合はundefined)。 */
+  expectedFolderId?: string;
+  expectedDivergentReason: string;
+  /** plan生成時に読んだ`DocumentSnapshot.updateTime.toMillis()`。 */
+  expectedUpdateTimeMs: number;
+  /** 監査用(GHA run URL等)。`resyncHistory[]`に記録される。 */
+  actor: string;
+}
+
+export type DivergentResolutionOutcome =
+  | { outcome: 'resolved' }
+  | { outcome: 'no-op'; reason: 'not-divergent' | 'fence-mismatch' | 'missing-folder-id' };
+
+/** `resyncHistory[]`に追記し、`RESYNC_HISTORY_MAX`件を超えたら古いものから切り捨てる。 */
+function appendResyncHistory(
+  existing: ResyncHistoryEntry[] | undefined,
+  entry: ResyncHistoryEntry
+): ResyncHistoryEntry[] {
+  const next = [...(existing ?? []), entry];
+  return next.length > RESYNC_HISTORY_MAX ? next.slice(next.length - RESYNC_HISTORY_MAX) : next;
+}
+
+function matchesFence(existing: FolderClaimDoc, updateTimeMs: number, fence: DivergentClaimFence): boolean {
+  if (updateTimeMs !== fence.expectedUpdateTimeMs) return false;
+  if (existing.divergentReason !== fence.expectedDivergentReason) return false;
+  if (fence.expectedFolderId !== undefined && existing.folderId !== fence.expectedFolderId) return false;
+  return true;
+}
+
+/**
+ * divergentから抜ける唯一の正規経路(1/2)。Drive実体を期待値へ書き戻した後に呼ぶ。
+ * `state`を'resolved'へ戻す。`verifiedAtMs`/`resolvedAtMs`は意図的に未設定のままにする
+ * (`findOrCreateFolder.ts`/`childFolderResolver.ts`の完全再検索分岐は`lastFullScanAtMs`
+ * ではなく`claim.verifiedAtMs ?? claim.resolvedAtMs`からの経過時間で決まるため、両方
+ * 未設定にすればanchorMs=0となり、次回呼び出しで即座に完全再検索(`SOFT_TTL_MS`超過と
+ * 同じ扱い)に入り、実体との一致を再度確かめさせられる)。
+ */
+export async function resolveDivergentClaim(
+  firestore: admin.firestore.Firestore,
+  parentId: string,
+  name: string,
+  fence: DivergentClaimFence
+): Promise<DivergentResolutionOutcome> {
+  const ref = claimRef(firestore, parentId, name);
+  return firestore.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists) {
+      return { outcome: 'no-op', reason: 'not-divergent' };
+    }
+    const existing = normalizeClaim(snap.data()!, parentId, name);
+    if (existing.state !== 'divergent') {
+      return { outcome: 'no-op', reason: 'not-divergent' };
+    }
+    if (existing.folderId === undefined) {
+      // reconcile-name-mismatch等、claimにfolderIdが入らないまま divergent化したケース。
+      // resolved復帰にはfolderIdが必須のため、本経路では扱えない(手動調査対象)。
+      return { outcome: 'no-op', reason: 'missing-folder-id' };
+    }
+    if (!snap.updateTime) {
+      return { outcome: 'no-op', reason: 'fence-mismatch' };
+    }
+    const updateTimeMs = snap.updateTime.toMillis();
+    if (!matchesFence(existing, updateTimeMs, fence)) {
+      return { outcome: 'no-op', reason: 'fence-mismatch' };
+    }
+
+    const resyncHistory = appendResyncHistory(existing.resyncHistory, {
+      mode: 'restore',
+      actor: fence.actor,
+      atMs: Date.now(),
+    });
+    const doc = stripUndefined({
+      state: 'resolved' as const,
+      folderId: existing.folderId,
+      attempt: null,
+      missCount: 0,
+      parentId,
+      name,
+      expireAt: ttlTimestamp(),
+      resyncHistory,
+    });
+    tx.set(ref, doc);
+    return { outcome: 'resolved' };
+  });
+}
+
+/**
+ * divergentから抜ける唯一の正規経路(2/2)。Drive側には一切書き込まず、`state`を
+ * 'invalidated'へ落とす。次回exportは通常のfind-or-create経路(完全検索)へフォール
+ * バックする。誤配置フォルダの中身は放置される(split-brainリスク、呼び出し元が
+ * stranded件数を確認済みであることが前提)。
+ */
+export async function releaseDivergentClaim(
+  firestore: admin.firestore.Firestore,
+  parentId: string,
+  name: string,
+  fence: DivergentClaimFence
+): Promise<DivergentResolutionOutcome> {
+  const ref = claimRef(firestore, parentId, name);
+  return firestore.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists) {
+      return { outcome: 'no-op', reason: 'not-divergent' };
+    }
+    const existing = normalizeClaim(snap.data()!, parentId, name);
+    if (existing.state !== 'divergent') {
+      return { outcome: 'no-op', reason: 'not-divergent' };
+    }
+    if (!snap.updateTime) {
+      return { outcome: 'no-op', reason: 'fence-mismatch' };
+    }
+    const updateTimeMs = snap.updateTime.toMillis();
+    if (!matchesFence(existing, updateTimeMs, fence)) {
+      return { outcome: 'no-op', reason: 'fence-mismatch' };
+    }
+
+    const resyncHistory = appendResyncHistory(existing.resyncHistory, {
+      mode: 'release',
+      actor: fence.actor,
+      atMs: Date.now(),
+    });
+    const doc = stripUndefined({
+      state: 'invalidated' as const,
+      attempt: null,
+      parentId,
+      name,
+      expireAt: ttlTimestamp(),
+      resyncHistory,
+    });
+    tx.set(ref, doc);
+    return { outcome: 'resolved' };
+  });
 }
 
 /**
@@ -1029,7 +1216,7 @@ export async function verifyFolderClaim(
   // parentsのみ確認していると、リネームされた同一IDのフォルダをそのまま信用してしまい、
   // 要求された名前とは異なるフォルダへエクスポートし続けてしまう。
   if (data.name !== undefined && data.name !== name) {
-    await markDivergent(firestore, parentId, name, 'name-mismatch');
+    await markDivergent(firestore, parentId, name, 'name-mismatch', runId);
     throw new DivergentFolderClaimError(name, parentId, claim.folderId);
   }
 
@@ -1039,7 +1226,7 @@ export async function verifyFolderClaim(
   // 誤った場所にドキュメントを配置しうる。
   const parents = data.parents ?? [];
   if (!parents.includes(parentId)) {
-    await markDivergent(firestore, parentId, name, 'parents-mismatch');
+    await markDivergent(firestore, parentId, name, 'parents-mismatch', runId);
     throw new DivergentFolderClaimError(name, parentId, claim.folderId);
   }
 

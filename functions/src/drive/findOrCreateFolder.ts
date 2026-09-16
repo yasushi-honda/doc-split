@@ -249,7 +249,7 @@ export async function findOrCreateFolder(
       // 唯一の「人手介入が必要」シグナル。書込み自体が失敗すると、claimドキュメントには
       // 反映されないままこの呼び出しだけ異常終了し、次回以降の呼び出しがこの矛盾を
       // 検知できなくなる。best-effort(投げない)のままだが、ログだけは必ず残す。
-      await markDivergent(firestore, parentId, name, 'ambiguous-full-scan').catch((markError) =>
+      await markDivergent(firestore, parentId, name, 'ambiguous-full-scan', runId).catch((markError) =>
         console.error(
           `[findOrCreateFolder] divergent記録に失敗しました("${name}"、親フォルダ: ${parentId}）: 次回呼び出しがこの矛盾を検知できない可能性があります`,
           markError
@@ -263,7 +263,7 @@ export async function findOrCreateFolder(
     // codex review P2指摘対応: claimとの突合(divergent判定)を、trashedからの復元
     // (materializeExistingFolder、Drive側への書込み)より先に行う。
     if (readEnabled && isResolvedWithFolderId(claim) && claim.folderId !== match.id) {
-      await markDivergent(firestore, parentId, name, 'full-scan-mismatch').catch((markError) =>
+      await markDivergent(firestore, parentId, name, 'full-scan-mismatch', runId).catch((markError) =>
         console.error(
           `[findOrCreateFolder] divergent記録に失敗しました("${name}"、親フォルダ: ${parentId}）: 次回呼び出しがこの矛盾を検知できない可能性があります`,
           markError
