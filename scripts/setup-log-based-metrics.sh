@@ -65,11 +65,11 @@ echo ""
 # ==================================================
 # 各メトリクスを "名前|説明|ログフィルタ" で定義
 METRICS=(
-  "searchindex_oom|ondocumentwritesearchindex memory limit exceeded (#220, #217/PR #218)|resource.type=\"cloud_function\" AND resource.labels.function_name=\"ondocumentwritesearchindex\" AND textPayload:\"Memory limit exceeded\""
-  "ocr_page_truncated|OCR per-page text truncated (#220, Issue #205)|resource.type=\"cloud_function\" AND textPayload=~\"\\\\[OCR\\\\].*text truncated\""
-  "ocr_aggregate_truncated|OCR aggregate pageResults truncated (#220, Issue #205)|resource.type=\"cloud_function\" AND textPayload=~\"\\\\[OCR\\\\] Aggregate pageResults truncated\""
-  "summary_truncated|summary generation truncated (#220, Issue #209)|resource.type=\"cloud_function\" AND textPayload=~\"\\\\[Summary\\\\] truncated\""
-  "search_index_silent_failure|removeTokensFromIndex permanent error (#220, ADR-0015)|resource.type=\"cloud_function\" AND resource.labels.function_name=\"ondocumentwritesearchindex\" AND severity=\"ERROR\" AND textPayload:\"Failed to remove tokens\""
+  "searchindex_oom|ondocumentwritesearchindex memory limit exceeded (#220, #217/PR #218, #936でcloud_run_revisionへ修正)|resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"ondocumentwritesearchindex\" AND textPayload:\"Memory limit exceeded\""
+  "ocr_page_truncated|OCR per-page text truncated (#220, Issue #205, #936でcloud_run_revisionへ修正)|resource.type=\"cloud_run_revision\" AND textPayload=~\"\\\\[OCR\\\\].*text truncated\""
+  "ocr_aggregate_truncated|OCR aggregate pageResults truncated (#220, Issue #205, #936でcloud_run_revisionへ修正)|resource.type=\"cloud_run_revision\" AND textPayload=~\"\\\\[OCR\\\\] Aggregate pageResults truncated\""
+  "summary_truncated|summary generation truncated (#220, Issue #209, #936でcloud_run_revisionへ修正)|resource.type=\"cloud_run_revision\" AND textPayload=~\"\\\\[Summary\\\\] truncated\""
+  "search_index_silent_failure|removeTokensFromIndex permanent error (#220, ADR-0015, #936でcloud_run_revisionへ修正)|resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"ondocumentwritesearchindex\" AND severity=\"ERROR\" AND textPayload:\"Failed to remove tokens\""
   "drive_folder_divergent|driveFolderClaim claim divergent detected (Issue #871 恒久対応)|resource.type=\"cloud_run_revision\" AND textPayload:\"[driveFolderClaim] claim divergent detected\""
   "drive_folder_divergent_record_failed|markDivergent()自体の書込み失敗、claimにもメトリクスにも残らない経路 (Issue #871 恒久対応)|resource.type=\"cloud_run_revision\" AND textPayload:\"divergent記録に失敗しました\""
   "claim_divergent_backlog_stale|divergent claim が3日以上未解決のまま滞留 (Issue #871 恒久対応、日次sweep)|resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"drivefolderclaimdivergentsweep\" AND severity=\"WARNING\" AND textPayload:\"[driveFolderClaim] divergent backlog stale\""

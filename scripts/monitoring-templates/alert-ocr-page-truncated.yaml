@@ -9,7 +9,7 @@ combiner: OR
 conditions:
   - displayName: "ocr_page_truncated > 2 in 24h"
     conditionThreshold:
-      filter: 'metric.type="logging.googleapis.com/user/ocr_page_truncated" AND resource.type="cloud_function"'
+      filter: 'metric.type="logging.googleapis.com/user/ocr_page_truncated" AND resource.type="cloud_run_revision"'
       aggregations:
         - alignmentPeriod: 86400s
           perSeriesAligner: ALIGN_SUM
