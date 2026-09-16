@@ -898,6 +898,11 @@ export async function markDivergent(
       divergentRunId: runId,
       parentId,
       name,
+      // 同一claimが再度divergent化した場合の過去のresync履歴を引き継ぐ(codex review Low
+      // 指摘対応)。tx.set()は全置換のため、明示的に引き継がないと繰り返し乖離の監査証跡
+      // (resyncHistory[])が毎回失われ、「同一claimで繰り返し発生していないか」という
+      // 運用SOPの棚卸しが機能しなくなる。
+      resyncHistory: existing?.resyncHistory,
     });
     tx.set(ref, doc);
     transitioned = true;

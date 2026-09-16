@@ -50,7 +50,8 @@ export type BlockedReason =
   | 'trashed'
   | 'stranded-unacknowledged'
   | 'claim-drift'
-  | 'drive-drift';
+  | 'drive-drift'
+  | 'finalize-resolved-mismatch';
 
 /** Drive folder/fileの健全性確認に必要な最小スナップショット。 */
 export interface DriveEntitySnapshot {
@@ -133,6 +134,14 @@ export interface PreflightInput {
   directChildCount: number | null;
   /** release-claimかつdirectChildCount>0の場合のみ意味を持つ。operatorが承認した件数。 */
   acknowledgedStrandedCount: number | null;
+  /**
+   * finalize-resolvedの場合のみ意味を持つ。実体(`actual`)が期待値(name/parentId)と
+   * 完全一致しているか(codex review High指摘対応)。`approvedMode`は推奨値
+   * (`determineResolution`の結果)ではなくoperator承認値のため、推奨がrestore-expected
+   * だったoperationにoperatorが誤ってfinalize-resolvedを承認しても、この一致確認なしでは
+   * 乖離を残したままclaimがresolvedへ戻ってしまう。他モードでは無視される。
+   */
+  actualMatchesExpected: boolean;
 }
 
 export interface PreflightResult {
@@ -190,6 +199,12 @@ export function evaluatePreflight(input: PreflightInput): PreflightResult {
       if (input.acknowledgedStrandedCount !== input.directChildCount) {
         reasons.push('stranded-unacknowledged');
       }
+    }
+  }
+
+  if (input.approvedMode === 'finalize-resolved') {
+    if (!input.actualMatchesExpected) {
+      reasons.push('finalize-resolved-mismatch');
     }
   }
 

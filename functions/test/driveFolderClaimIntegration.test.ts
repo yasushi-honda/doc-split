@@ -1202,6 +1202,34 @@ describe('driveFolderClaim プロトコル(Issue #871)', () => {
       expect(data.divergentAtMs).to.be.a('number').and.be.at.least(beforeMs);
       expect(data.divergentReason).to.equal('full-scan-mismatch');
     });
+
+    it('同一claimが再度divergent化してもresyncHistoryを引き継ぐ(codex review Low指摘の回帰テスト)', async () => {
+      await claimDocRef('parent-ttl2', '再発太郎').set({
+        state: 'resolved',
+        folderId: 'existing-id',
+        attempt: null,
+        parentId: 'parent-ttl2',
+        name: '再発太郎',
+        resyncHistory: [{ mode: 'restore', actor: 'past-actor', atMs: 1000 }],
+      });
+      const { drive } = makeFakeDrive({
+        files: [{ id: 'other-id', name: '再発太郎', parents: ['parent-ttl2'], trashed: false }],
+      });
+      await enableClaimRead();
+
+      try {
+        await findOrCreateFolder(drive, db, 'parent-ttl2', '再発太郎');
+        expect.fail('DivergentFolderClaimErrorがthrowされるべき');
+      } catch (error) {
+        expect(error).to.be.instanceOf(DivergentFolderClaimError);
+      }
+
+      const snap = await claimDocRef('parent-ttl2', '再発太郎').get();
+      const data = snap.data()!;
+      expect(data.state).to.equal('divergent');
+      expect(data.resyncHistory).to.have.lengthOf(1);
+      expect(data.resyncHistory[0]).to.deep.include({ mode: 'restore', actor: 'past-actor', atMs: 1000 });
+    });
   });
 
   describe('resolveDivergentClaim/releaseDivergentClaim(Issue #871 恒久対応、承認付き再同期の唯一の出口)', () => {

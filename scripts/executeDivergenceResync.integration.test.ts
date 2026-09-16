@@ -37,14 +37,17 @@ interface FakeFile {
   name: string;
   trashed?: boolean;
   parents: string[];
+  modifiedTime?: string;
   capabilities?: { canMoveItemWithinDrive?: boolean; canRename?: boolean; canAddChildren?: boolean };
 }
 
-function makeFakeDrive(files: FakeFile[]) {
+function makeFakeDrive(files: FakeFile[], opts: { mutateOnNthGet?: { n: number; apply: () => void } } = {}) {
   const updateCalls: Record<string, unknown>[] = [];
+  let getCallCount = 0;
   const drive = {
     files: {
       get: async (params: Record<string, unknown>) => {
+        getCallCount++;
         const fileId = params.fileId as string;
         const file = files.find((f) => f.id === fileId);
         if (!file) {
@@ -52,16 +55,23 @@ function makeFakeDrive(files: FakeFile[]) {
           err.status = 404;
           throw err;
         }
-        return {
+        const response = {
           data: {
             id: file.id,
             name: file.name,
             trashed: file.trashed ?? false,
-            parents: file.parents,
-            modifiedTime: '2026-01-01T00:00:00.000Z',
+            parents: [...file.parents],
+            modifiedTime: file.modifiedTime ?? '2026-01-01T00:00:00.000Z',
             capabilities: file.capabilities ?? { canMoveItemWithinDrive: true, canRename: true, canAddChildren: true },
           },
         };
+        // 書込み直前TOCTOU再確認のテスト用: 指定回数目のfiles.get()呼出し完了「後」に
+        // Drive側の状態を変化させ、その後続の呼出しが変化後の状態を観測するようにする
+        // (第三者が並行して移動・改名した状況を模す)。
+        if (opts.mutateOnNthGet && getCallCount === opts.mutateOnNthGet.n) {
+          opts.mutateOnNthGet.apply();
+        }
+        return response;
       },
       list: async (params: Record<string, unknown>) => {
         const q = params.q as string;
@@ -297,6 +307,32 @@ test('drive drift: classify後にDrive実体がさらに動いていたらdrive-
   assert.equal(updateCalls.length, 0);
 });
 
+test('drive drift: name/parents/trashedは一致するがmodifiedTimeのみ不一致でもdrive-driftになる(codex review Medium指摘の回帰テスト)', async () => {
+  const claimFns = await loadClaimFns();
+  const claimSnap = await seedDivergentClaim(claimFns);
+  // name/parents/trashedはplan記録時のop.actualと一致するが、modifiedTimeだけ後から変化した
+  // (例: 内容更新や移動→復帰でmodifiedTimeが進んだ)ケースを模す。
+  const { drive, updateCalls } = makeFakeDrive([
+    { id: 'f1', name: '対象太郎', parents: ['wrong-parent'], modifiedTime: '2026-02-01T00:00:00.000Z' },
+  ]);
+
+  const op = buildOp({ claimUpdateTimeMs: claimSnap.updateTime!.toMillis() }); // op.actual.modifiedTimeは既定の2026-01-01のまま
+  const plan = buildPlan([op]);
+  const approval = buildApproval(plan.planId, { 'op-0001': { mode: 'restore-expected' } });
+
+  const { outcomes } = await executeDivergenceResync(
+    { drive, supportsAllDrives: SUPPORTS_ALL_DRIVES, folderMimeType: FOLDER_MIME_TYPE, escapeQueryValue },
+    db,
+    claimFns,
+    plan,
+    approval,
+    { execute: true, actor: 'test-actor' }
+  );
+
+  assert.equal(outcomes[0].status, 'drive-drift');
+  assert.equal(updateCalls.length, 0);
+});
+
 test('release-claim(--execute): Driveには一切書き込まずclaimをinvalidatedへ落とす', async () => {
   const claimFns = await loadClaimFns();
   const claimSnap = await seedDivergentClaim(claimFns);
@@ -411,4 +447,123 @@ test('claimグラフ再確認: execute直前に新たに競合claimが作られ�
   assert.equal(outcomes[0].status, 'blocked');
   assert.deepEqual(outcomes[0].reasons, ['claim-graph-conflict']);
   assert.equal(updateCalls.length, 0);
+});
+
+test('finalize-resolved(--execute): 実体が期待値と不一致(推奨と異なるmodeを誤って承認)ならfinalize-resolved-mismatchでblockedになりresolvedにならない(codex review High指摘の回帰テスト)', async () => {
+  const claimFns = await loadClaimFns();
+  const claimSnap = await seedDivergentClaim(claimFns);
+  // 実体は依然としてwrong-parent配下(未修復)。recommendedModeはrestore-expectedのはずだが、
+  // operatorが誤ってfinalize-resolvedを承認したケースを模す。
+  const { drive, updateCalls } = makeFakeDrive([{ id: 'f1', name: '対象太郎', parents: ['wrong-parent'] }]);
+
+  const op = buildOp({ claimUpdateTimeMs: claimSnap.updateTime!.toMillis() });
+  const plan = buildPlan([op]);
+  const approval = buildApproval(plan.planId, { 'op-0001': { mode: 'finalize-resolved' } });
+
+  const { outcomes } = await executeDivergenceResync(
+    { drive, supportsAllDrives: SUPPORTS_ALL_DRIVES, folderMimeType: FOLDER_MIME_TYPE, escapeQueryValue },
+    db,
+    claimFns,
+    plan,
+    approval,
+    { execute: true, actor: 'test-actor' }
+  );
+
+  assert.equal(outcomes[0].status, 'blocked');
+  assert.deepEqual(outcomes[0].reasons, ['finalize-resolved-mismatch']);
+  assert.equal(updateCalls.length, 0);
+  const after = (await claimDocRef(claimFns).get()).data()!;
+  assert.equal(after.state, 'divergent');
+});
+
+test('restore-expected(書込み直前): capability確認等の間に第三者が動かした場合もfiles.update直前の再確認で検知しdrive-driftになる(codex review High指摘の回帰テスト)', async () => {
+  const claimFns = await loadClaimFns();
+  const claimSnap = await seedDivergentClaim(claimFns);
+  const files: FakeFile[] = [
+    { id: 'f1', name: '対象太郎', parents: ['wrong-parent'] },
+    { id: 'expected-parent', name: '期待親', parents: [] },
+  ];
+  const { drive, updateCalls } = makeFakeDrive(files, {
+    // 1回目のfiles.get()(早期driftチェック用のfreshActual取得)完了直後に、第三者が
+    // 別の場所へ動かしたことにする。以降のcapability確認等はこの変化後の状態を見る。
+    mutateOnNthGet: { n: 1, apply: () => { files[0].parents = ['yet-another-parent']; } },
+  });
+
+  const op = buildOp({ claimUpdateTimeMs: claimSnap.updateTime!.toMillis() });
+  const plan = buildPlan([op]);
+  const approval = buildApproval(plan.planId, { 'op-0001': { mode: 'restore-expected' } });
+
+  const { outcomes } = await executeDivergenceResync(
+    { drive, supportsAllDrives: SUPPORTS_ALL_DRIVES, folderMimeType: FOLDER_MIME_TYPE, escapeQueryValue },
+    db,
+    claimFns,
+    plan,
+    approval,
+    { execute: true, actor: 'test-actor' }
+  );
+
+  assert.equal(outcomes[0].status, 'drive-drift');
+  assert.equal(updateCalls.length, 0);
+  const after = (await claimDocRef(claimFns).get()).data()!;
+  assert.equal(after.state, 'divergent');
+});
+
+test('finalize-resolved(書込み直前): claimグラフ再確認等の間に第三者が動かした場合もFirestore書込み直前の再確認で検知しresolvedにしない(codex review High指摘の回帰テスト)', async () => {
+  const claimFns = await loadClaimFns();
+  const claimSnap = await seedDivergentClaim(claimFns);
+  const files: FakeFile[] = [{ id: 'f1', name: '対象太郎', parents: ['expected-parent'] }];
+  const { drive } = makeFakeDrive(files, {
+    // 早期driftチェック(freshActual取得)完了直後に第三者が動かしたことにする。
+    mutateOnNthGet: { n: 1, apply: () => { files[0].parents = ['yet-another-parent']; } },
+  });
+
+  const op = buildOp({
+    claimUpdateTimeMs: claimSnap.updateTime!.toMillis(),
+    actual: { id: 'f1', name: '対象太郎', parents: ['expected-parent'], trashed: false, modifiedTime: '2026-01-01T00:00:00.000Z' },
+    nameDiffers: false,
+    parentsDiffer: false,
+    recommendedMode: 'finalize-resolved',
+  });
+  const plan = buildPlan([op]);
+  const approval = buildApproval(plan.planId, { 'op-0001': { mode: 'finalize-resolved' } });
+
+  const { outcomes } = await executeDivergenceResync(
+    { drive, supportsAllDrives: SUPPORTS_ALL_DRIVES, folderMimeType: FOLDER_MIME_TYPE, escapeQueryValue },
+    db,
+    claimFns,
+    plan,
+    approval,
+    { execute: true, actor: 'test-actor' }
+  );
+
+  assert.equal(outcomes[0].status, 'drive-drift');
+  const after = (await claimDocRef(claimFns).get()).data()!;
+  assert.equal(after.state, 'divergent');
+});
+
+test('未知のresolutionMode文字列はrestore-expectedへfall-throughせずerrorで拒否される(codex review Medium指摘の回帰テスト)', async () => {
+  const claimFns = await loadClaimFns();
+  const claimSnap = await seedDivergentClaim(claimFns);
+  const { drive, updateCalls } = makeFakeDrive([{ id: 'f1', name: '対象太郎', parents: ['wrong-parent'] }]);
+
+  const op = buildOp({ claimUpdateTimeMs: claimSnap.updateTime!.toMillis() });
+  const plan = buildPlan([op]);
+  const approval = buildApproval(plan.planId, {
+    'op-0001': { mode: 'typo-mode' as unknown as 'restore-expected' },
+  });
+
+  const { outcomes } = await executeDivergenceResync(
+    { drive, supportsAllDrives: SUPPORTS_ALL_DRIVES, folderMimeType: FOLDER_MIME_TYPE, escapeQueryValue },
+    db,
+    claimFns,
+    plan,
+    approval,
+    { execute: true, actor: 'test-actor' }
+  );
+
+  assert.equal(outcomes[0].status, 'error');
+  // restore-expectedへfall-throughしてfiles.update()が呼ばれていないことを確認
+  assert.equal(updateCalls.length, 0);
+  const after = (await claimDocRef(claimFns).get()).data()!;
+  assert.equal(after.state, 'divergent');
 });

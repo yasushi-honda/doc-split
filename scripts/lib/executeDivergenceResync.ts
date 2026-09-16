@@ -119,10 +119,21 @@ function snapshotsMatch(a: DriveEntitySnapshot, b: DriveEntitySnapshot): boolean
     a.id === b.id &&
     a.name === b.name &&
     a.trashed === b.trashed &&
+    // modifiedTimeも比較対象に含める(codex review Medium指摘対応)。id/name/parents/trashedが
+    // 同一でも、第三者が内容更新や移動→復帰(親は結果的に同じだがmodifiedTimeは進む)を行った
+    // 場合を検知するため、設計上のスナップショット定義({id,name,parents,trashed,modifiedTime})
+    // の完全一致を保証する。
+    a.modifiedTime === b.modifiedTime &&
     a.parents.length === b.parents.length &&
     a.parents.every((p) => b.parents.includes(p))
   );
 }
+
+const KNOWN_RESOLUTION_MODES: ReadonlySet<string> = new Set<ResolutionMode>([
+  'restore-expected',
+  'release-claim',
+  'finalize-resolved',
+]);
 
 async function listAll(deps: DriveDeps, q: string): Promise<DriveFile[]> {
   const results: DriveFile[] = [];
@@ -189,6 +200,24 @@ async function processOperation(
     };
   }
   const approvedMode = approvedEntry.mode;
+
+  // 未知のmode文字列をrestore-expected扱いにfall-throughさせない(codex review Medium指摘対応)。
+  // approval JSONは外部入力であり、GHA側のjqバリデーションを経由しないローカルCLI直接実行
+  // 経路では検証されない。誤字・不正値のmodeがそのまま`else`(restore-expected)分岐へ流れ、
+  // 権限チェック等がスキップされたままDrive書込みが実行されるfail-openな穴を塞ぐ。
+  if (!KNOWN_RESOLUTION_MODES.has(approvedMode)) {
+    return {
+      outcome: {
+        operationId: op.operationId,
+        status: 'error',
+        mode: null,
+        reasons: [],
+        errorMessage: `未知のresolutionMode: ${JSON.stringify(approvedMode)}`,
+        affectedDocIds: [],
+      },
+      manifestEntry: null,
+    };
+  }
 
   if (op.claimFolderId === null && approvedMode !== 'release-claim') {
     return {
@@ -287,6 +316,17 @@ async function processOperation(
     directChildCount = children.length;
   }
 
+  // finalize-resolvedはop.recommendedModeではなくoperator承認値(approvedMode)であり、
+  // classify時点の推奨とは独立にoperatorが選べる。実体が本当に期待値と一致しているかを
+  // ここで(execute直前にfetchしたfreshActualで)フレッシュに確認する(codex review High
+  // 指摘対応: 推奨がrestore-expectedだったoperationに誤ってfinalize-resolvedを承認しても、
+  // 乖離を残したままclaimがresolvedへ戻ることを防ぐ)。
+  const actualMatchesExpected =
+    freshActual !== null &&
+    !freshActual.trashed &&
+    freshActual.name === op.expectedName &&
+    freshActual.parents.includes(op.expectedParentId);
+
   const preflight = evaluatePreflight({
     approvedMode,
     actual: freshActual,
@@ -297,6 +337,7 @@ async function processOperation(
     claimGraphConflicts,
     directChildCount,
     acknowledgedStrandedCount: approvedEntry.acknowledgedStrandedFiles ?? null,
+    actualMatchesExpected,
   });
 
   if (preflight.blocked) {
@@ -341,6 +382,24 @@ async function processOperation(
       timestamp: new Date().toISOString(),
     };
   } else if (approvedMode === 'finalize-resolved') {
+    // Firestore書込み直前の最終ドリフト確認(codex review High指摘対応: プリフライト完了後も
+    // capabilities取得等でAPI呼出しを重ねており、その間に第三者が動かした変更を見逃す
+    // 可能性があった)。claimGraphConflicts再評価からこの時点までの間にDrive側が動いていない
+    // ことを、書込み直前に取得した最新スナップショットで再確認する。
+    if (op.claimFolderId !== null) {
+      const finalActual = await fetchSnapshot(deps, op.claimFolderId);
+      const finalMatches =
+        finalActual !== null &&
+        !finalActual.trashed &&
+        finalActual.name === op.expectedName &&
+        finalActual.parents.includes(op.expectedParentId);
+      if (!finalMatches) {
+        return {
+          outcome: { operationId: op.operationId, status: 'drive-drift', mode: approvedMode, reasons: [], affectedDocIds: [] },
+          manifestEntry: null,
+        };
+      }
+    }
     const result = await claimFns.resolveDivergentClaim(firestore, op.parentId, op.name, fence);
     if (result.outcome === 'no-op') {
       return {
@@ -376,6 +435,17 @@ async function processOperation(
     }
     if (op.nameDiffers) {
       updateParams.requestBody = { name: op.expectedName };
+    }
+
+    // Drive書込み直前の最終ドリフト確認(codex review High指摘対応: 期待親取得・重複名検索・
+    // capabilities取得の3回のAPI呼出しを経てからfiles.updateへ進んでおり、この間に第三者が
+    // 再度移動・改名していないかを、書込み直前に取得した最新スナップショットで再確認する)。
+    const preWriteActual = await fetchSnapshot(deps, op.claimFolderId as string);
+    if (preWriteActual === null || !snapshotsMatch(preWriteActual, freshActual!)) {
+      return {
+        outcome: { operationId: op.operationId, status: 'drive-drift', mode: approvedMode, reasons: [], affectedDocIds: [] },
+        manifestEntry: null,
+      };
     }
 
     try {

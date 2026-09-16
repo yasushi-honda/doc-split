@@ -237,6 +237,10 @@ export async function buildDivergencePlan(
       claimGraphConflicts,
       directChildCount: null,
       acknowledgedStrandedCount: null,
+      // classify時点ではresolution.modeはdetermineResolution()の推奨値そのものであり、
+      // finalize-resolvedはnameDiffers/parentsDiffer双方falseの場合のみ推奨されるため
+      // 常にtrue(execute側は承認値で上書きされうるため別途フレッシュ確認する、実装側参照)。
+      actualMatchesExpected: !nameDiffers && !parentsDiffer,
     });
 
     operations.push({

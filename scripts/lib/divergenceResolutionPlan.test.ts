@@ -127,6 +127,7 @@ const BASE_PREFLIGHT: PreflightInput = {
   claimGraphConflicts: [],
   directChildCount: null,
   acknowledgedStrandedCount: null,
+  actualMatchesExpected: true,
 };
 
 test('evaluatePreflight: approvedModeがnullならout-of-scope-reasonでblocked', () => {
@@ -229,6 +230,24 @@ test('evaluatePreflight(release-claim): directChildCount>0で承認件数が一�
     acknowledgedStrandedCount: 3,
   });
   assert.deepEqual(result, { blocked: false, reasons: [] });
+});
+
+test('evaluatePreflight(finalize-resolved): actualMatchesExpected=trueならblocked=false', () => {
+  const result = evaluatePreflight({
+    ...BASE_PREFLIGHT,
+    approvedMode: 'finalize-resolved',
+    actualMatchesExpected: true,
+  });
+  assert.deepEqual(result, { blocked: false, reasons: [] });
+});
+
+test('evaluatePreflight(finalize-resolved): actualMatchesExpected=falseならfinalize-resolved-mismatchでblocked(codex review High指摘の回帰テスト、推奨と異なるmodeを承認した場合の防止)', () => {
+  const result = evaluatePreflight({
+    ...BASE_PREFLIGHT,
+    approvedMode: 'finalize-resolved',
+    actualMatchesExpected: false,
+  });
+  assert.deepEqual(result, { blocked: true, reasons: ['finalize-resolved-mismatch'] });
 });
 
 test('evaluatePreflight: 複数条件を満たさない場合はreasonsに全て列挙する', () => {

@@ -75,6 +75,50 @@ if (!planFile || !approvalFile) {
 const plan: DivergencePlan = JSON.parse(fs.readFileSync(planFile, 'utf8'));
 const approval: DivergenceApproval = JSON.parse(fs.readFileSync(approvalFile, 'utf8'));
 
+// === approval JSON形状の厳格バリデーション(codex review Medium指摘対応) ===
+// GHA経由の実行はrun-ops-script.yml内のjqバリデーションを通るが、ローカルCLI直接実行は
+// この型キャストのみでは何も拒否しない。未知のmode文字列を許すとexecuteDivergenceResync側の
+// 実行部が`else`(restore-expected)へfall-throughしうる設計だったため、ここでも独立に
+// 拒否する(多層防御。executeDivergenceResync.ts自体も未知mode拒否ガードを持つ)。
+const KNOWN_APPROVAL_MODES = new Set(['restore-expected', 'release-claim', 'finalize-resolved']);
+function validateApproval(value: unknown): asserts value is DivergenceApproval {
+  if (typeof value !== 'object' || value === null) {
+    throw new Error('approval JSONはオブジェクトである必要があります');
+  }
+  const v = value as Record<string, unknown>;
+  if (typeof v.planId !== 'string' || v.planId.length === 0) {
+    throw new Error('approval.planIdは非空文字列である必要があります');
+  }
+  if (typeof v.approvedOperations !== 'object' || v.approvedOperations === null || Array.isArray(v.approvedOperations)) {
+    throw new Error('approval.approvedOperationsはオブジェクトである必要があります');
+  }
+  for (const [opId, entry] of Object.entries(v.approvedOperations as Record<string, unknown>)) {
+    if (typeof entry !== 'object' || entry === null) {
+      throw new Error(`approval.approvedOperations["${opId}"]はオブジェクトである必要があります`);
+    }
+    const e = entry as Record<string, unknown>;
+    if (typeof e.mode !== 'string' || !KNOWN_APPROVAL_MODES.has(e.mode)) {
+      throw new Error(
+        `approval.approvedOperations["${opId}"].modeが不正です(値: ${JSON.stringify(e.mode)}、許容値: ${[...KNOWN_APPROVAL_MODES].join('/')})`
+      );
+    }
+    if (
+      e.acknowledgedStrandedFiles !== undefined &&
+      (typeof e.acknowledgedStrandedFiles !== 'number' ||
+        !Number.isInteger(e.acknowledgedStrandedFiles) ||
+        e.acknowledgedStrandedFiles < 0)
+    ) {
+      throw new Error(`approval.approvedOperations["${opId}"].acknowledgedStrandedFilesは0以上の整数である必要があります`);
+    }
+  }
+}
+try {
+  validateApproval(approval);
+} catch (err) {
+  console.error(`FATAL: approval JSONの検証に失敗しました: ${(err as Error).message}`);
+  process.exit(2);
+}
+
 // === schemaVersion gate ===
 if (plan.schemaVersion !== DIVERGENCE_PLAN_SCHEMA_VERSION) {
   console.error(
