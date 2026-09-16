@@ -41,7 +41,8 @@ Gemini(Vertex AI日本リージョン非公式動作)からの移行として、
   - `BATCH_SIZE=5`逐次処理の懸念についても、大型文書は`multiCustomerDetection`によるFAX分割のsource文書としてのみ発生し(実例2件とも`isSplitSource:true`)、分割子は`pageResults`再利用でOCR自体をスキップするため、同一バッチ内に大型OCR処理が複数重なる確率は極めて低いと判断
   - **結論**: タイムアウト上限引き上げ・非同期化・ページ分割は不要。900秒予算に対し実測ベースの総所要時間(OCR約525秒@71p + 非OCR約10秒)は十分な余裕(約365秒)を持つ。追加対応なしでクローズ
 - [x] **PR8運用ランブック着手【2026-09-15】**: decision-maker指示「PaddleOCR本番導入に必要な事をどんどん進めて」を受け、Stage 3負荷試験は実は`paddleOcrLoadFixtures.ts`等の新規実装(未着手・3ファイル以上)が必要と判明し、CLAUDE.md CRITICALのplan mode要件に該当すると判断(即座の実行対象から除外、decision-makerへ確認済み)。代わりに`services/paddle-ocr/README.md`へ運用ランブック節を追記: ロールアウト手順(L1環境変数/L2 Firestoreフラグ2層ゲート、allowlist段階導入)、ロールバック手順(L2 `set-feature-flag --flag paddleOcr --value false`が第一選択・秒単位反映、**Geminiフォールバックは暫定策であり恒久運用ではない旨を明記**)、監視方法(`phaseTimings`ログのgcloud loggingクエリ例)、コスト監視(自動アラート未設定であることを明記、TODO化)。コミットはまだ実施していない(作業ツリーの変更のみ)
-- [ ] **次の一手**: (a) 運用ランブックの内容をコミット・PR化 (b) Stage 3負荷試験は新機能実装として別途plan modeで計画するか、優先度を下げるかdecision-maker判断待ち(160ページ等、`fuzzy-moseying-book.md`§4参照、実行に3時間超・実コストはほぼ無料枠内)
+- [x] 運用ランブックの内容をコミット・PR化【完了・2026-09-15】: commit `8578d482` / PR #920でマージ済み（2026-09-16 catchup時にGOAL.md未更新のまま陳腐化していたと判明、本行で反映）
+- [ ] **次の一手**: Stage 3負荷試験は新機能実装として別途plan modeで計画するか、優先度を下げるかdecision-maker判断待ち(160ページ等、`fuzzy-moseying-book.md`§4参照、実行に3時間超・実コストはほぼ無料枠内)
 
 **kanameone本番canary展開・クライアント報告【完了・2026-09-14】**: 上記dev最適化と並行し、kanameone向け本番導入準備も完遂した。
 - [x] kanameoneインフラ準備: Artifact Registry・ランタイムSA・IAM ロール・Cloud Runデプロイ、allowlist設定スクリプト(PR #916)、`deploy-paddle-ocr.yml`のkanameone対応(PR #917)、`PADDLE_OCR_URL`反映(PR #918)
@@ -475,10 +476,11 @@ decision-maker承認（「正しいことを段階的かつ計画的にうっか
 
 **品質ゲート**: codex review 2巡（1巡目Critical1件含む複数、2巡目P1〜P2）+ `pr-review-toolkit`5エージェント（code-reviewer/silent-failure-hunter/pr-test-analyzer/comment-analyzer/type-design-analyzer）並列レビューで検出したCritical/High全件を修正済み。主な修正: ①`release-claim`が`actual===null`で常時blockedになりTTL除去の設計意図（404'd claimの解放）が到達不能だった欠陥 ②`markDivergent()`失敗ログの欠落（最ホットパスの`verifyFolderClaim()`3箇所） ③`execute-drive-claim-resync.ts`のテスト0件 ④監視メトリクス/アラートが`resource.type="cloud_function"`を指定しており実際のgen2ログ出力（`cloud_run_revision`）と不一致で機能しない欠陥（`gcloud logging read`実測で確認・修正、**同型の不一致が本リポジトリの既存5メトリクスにも及ぶ疑いを残す**、下記「条件待ち」参照） ⑤`resyncHistory`が通常のclaim書込み全12箇所で毎回消えていた欠陥。テスト最終件数: functions unit 2144件・integration 383件、scripts unit 359件・integration 79件、全PASS
 
-**次の一手（次セッション再開点、要decision-maker判断）**: 計画のロールアウト表の段階0以降が未着手。
+- [x] **段階1（全環境）完了【2026-09-16】**: 監視メトリクス+アラート3種（`drive_folder_divergent`/`drive_folder_divergent_record_failed`/`claim_divergent_backlog_stale`）を`setup-monitoring.yml`（GitHub Actions、推奨経路）経由でdev/kanameone/cocoro全環境に配備。`--dry-run`（3環境並列）で新規作成対象を事前確認後、`action=setup`で本番反映。devのみ初回実行時にGCP側メトリクス伝播遅延によるレース（`Cannot find metric(s)...could take up to 10 minutes`）でアラートポリシー作成が一部失敗したが、冪等な再実行で解消。3環境とも`gcloud logging metrics list`で独立確認済み（既存5種メトリクス・通知チャネルへの変更なし）
+
+**次の一手（次セッション再開点、要decision-maker判断）**: 計画のロールアウト表の段階0・段階2〜4が未着手。
 1. **段階0（dev）**: Drive UIで手動移動してdivergentを人為的に発生させ、classify→承認→execute→requeue→再export成功までを通しで実機確認（空フォルダ・非空フォルダのstrandedガード発火の両ケース）。**live Drive API資格情報を要するため本セッションでは実行不可**
-2. **段階1（全環境）**: 監視メトリクス+アラートを`setup-log-based-metrics.sh`経由で配備（`--dry-run`先行）
-3. **段階2〜4（kanameone）**: `classify-drive-claim-divergence`で残2件を再確認→dry-run結果をdecision-makerが確認→番号単位の明示認可→`--execute`で修復→`driveExportStatus`が`exported`へ遷移することを実測確認
+2. **段階2〜4（kanameone）**: `classify-drive-claim-divergence`で残2件を再確認→dry-run結果をdecision-makerが確認→番号単位の明示認可→`--execute`で修復→`driveExportStatus`が`exported`へ遷移することを実測確認
 
 ## 【要注意・2026-09-08】Gemini 3.5 Flash: asia-northeast1での従量課金は公式サポート対象外と判明（本番は継続稼働中、未解決の矛盾）
 
