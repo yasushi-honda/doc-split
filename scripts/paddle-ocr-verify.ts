@@ -1746,7 +1746,11 @@ async function runLoadModeSingleTier(opts: {
     serviceSnapshotWarmEnd,
     warmTrials,
     coldBursts,
-    expectedWarmTrials: warmTrialsExpected,
+    // warm系列を実行していない run(--series=cold単独)では、参考値のtrialCompletionRateが
+    // 「0/期待値=0%」という誤解を招く表示にならないよう0を渡す(computeTrialCompletionRate側の
+    // 早期return null経路に載せる。ゲート判定自体はkind/metricで既にcoldMax/warmP95を
+    // 正しく使い分けているため、このexpectedWarmTrialsの扱いはreference表示にのみ影響する)。
+    expectedWarmTrials: seriesExecuted.includes('warm') ? warmTrialsExpected : 0,
     expectedColdBursts: coldBurstsExpected,
     abortedReason,
   });
