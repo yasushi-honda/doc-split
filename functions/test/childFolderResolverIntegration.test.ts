@@ -36,6 +36,7 @@ import {
   FolderClaimRestoreCommitError,
   PartialChildFolderPathError,
   DivergentFolderClaimError,
+  FolderCreationInProgressError,
 } from '../src/drive/childFolderResolver';
 
 const db = admin.firestore();
@@ -696,5 +697,139 @@ describe('resolveChildFolder: claim確定書込み失敗時のfolderId伝播(cod
       expect(partialError.createdFolderIds).to.deep.equal(['created-1']);
       expect(partialError.restoredFolderIds).to.deep.equal([]);
     }
+  });
+});
+
+/**
+ * `settings/features`(driveFolderClaimReadフラグ)への`.get()`だけを失敗させるfirestoreラッパ
+ * (Issue #880 characterization test用、findOrCreateFolderIntegration.test.tsの同名ヘルパーと同型)。
+ */
+function makeFailingFeatureFlagFirestore(realDb: admin.firestore.Firestore): admin.firestore.Firestore {
+  return {
+    collection: (path: string) => realDb.collection(path),
+    doc: (path: string) => {
+      if (path === 'settings/features') {
+        return {
+          get: async () => {
+            throw new Error('simulated feature flag read failure');
+          },
+        } as unknown as admin.firestore.DocumentReference;
+      }
+      return realDb.doc(path);
+    },
+    runTransaction: (updateFn: (tx: admin.firestore.Transaction) => Promise<unknown>) => realDb.runTransaction(updateFn),
+  } as unknown as admin.firestore.Firestore;
+}
+
+describe('Issue #880: claimプロトコル未カバー分岐のcharacterization test(共通化リファクタ前に現行実装の挙動を固定する)', () => {
+  beforeEach(async () => {
+    await cleanupCollections(db, COLLECTIONS_TO_CLEAN);
+  });
+
+  it('driveFolderClaimReadフラグの読取に失敗した場合、shadowモードへfail-closedし通常のfind-or-create経路で完走する', async () => {
+    const failingDb = makeFailingFeatureFlagFirestore(db);
+    const { drive, createCalls } = makeFakeDrive({ listFiles: [] });
+
+    const result = await resolveChildFolder(drive, failingDb, 'parent-flagfail-child', 'フラグ失敗子太郎');
+
+    expect(result).to.deep.equal({ id: 'new-folder-id', restored: false, created: true });
+    expect(createCalls).to.have.lengthOf(1);
+  });
+
+  it('旧形式(state欠損、claimedAtMs/lockTokenのみ)のドキュメントが有効なリース内なら、resolveChildFolder経由でもFolderCreationInProgressError(beginCreationのblocked分岐)', async () => {
+    await db
+      .collection('driveFolderLocks')
+      .doc(Buffer.from('parent-legacy-child/旧形式子太郎').toString('base64url'))
+      .set({
+        claimedAtMs: Date.now(),
+        lockToken: 'legacy-token',
+      });
+    const { drive, createCalls } = makeFakeDrive({ listFiles: [] });
+
+    try {
+      await resolveChildFolder(drive, db, 'parent-legacy-child', '旧形式子太郎');
+      expect.fail('FolderCreationInProgressErrorがthrowされるべき');
+    } catch (error) {
+      expect(error).to.be.instanceOf(FolderCreationInProgressError);
+    }
+    expect(createCalls).to.have.lengthOf(0);
+  });
+
+  it('予約後の再検索でtrashedフォルダが見つかりuntrash自体は成功したが、直後のcommitResolvedWithRetryが失敗するとChildFolderRestoredButUncommittedErrorでfolderIdが伝播する', async () => {
+    // 呼び出し順: 1=完全検索active(0件) 2=完全検索trashed(0件) →beginCreation(予約)→
+    // 3=recheck active(0件) 4=recheck trashed(1件、別プロセスがゴミ箱へ移動していた)
+    let listCallCount = 0;
+    const updateCalls: Record<string, unknown>[] = [];
+    const createCalls: Record<string, unknown>[] = [];
+    const drive = {
+      files: {
+        list: async () => {
+          listCallCount++;
+          if (listCallCount <= 3) {
+            return { data: { files: [] } };
+          }
+          return { data: { files: [{ id: 'recheck-trashed-child-id', name: '再検索復元子太郎', trashed: true }] } };
+        },
+        create: async (params: Record<string, unknown>) => {
+          createCalls.push(params);
+          return { data: { id: 'should-not-be-used' } };
+        },
+        update: async (params: Record<string, unknown>) => {
+          updateCalls.push(params);
+          return { data: { id: params.fileId as string } };
+        },
+      },
+    } as unknown as drive_v3.Drive;
+    // beginCreation(1回目のtx)は成功させ、commitResolvedWithRetryの3回のリトライ
+    // (2〜4回目のtx)を全て失敗させる。
+    const failingDb = makeFailingCommitFirestore(db, [2, 3, 4]);
+
+    try {
+      await resolveChildFolder(drive, failingDb, 'parent-recheck-restore-fail-child', '再検索復元子太郎');
+      expect.fail('ChildFolderRestoredButUncommittedErrorがthrowされるべき');
+    } catch (error) {
+      expect(error).to.be.instanceOf(ChildFolderRestoredButUncommittedError);
+      expect((error as ChildFolderRestoredButUncommittedError).restoredFolderId).to.equal('recheck-trashed-child-id');
+    }
+    expect(updateCalls).to.have.lengthOf(1);
+    expect(updateCalls[0].requestBody).to.deep.equal({ trashed: false });
+    expect(createCalls).to.have.lengthOf(0);
+  });
+
+  it('予約後の再検索で2件以上見つかった場合もAmbiguousChildFolderErrorをthrowする', async () => {
+    // 呼び出し順: 1=完全検索active(0件) 2=完全検索trashed(0件) →beginCreation(予約)→
+    // 3=recheck active(2件、別の実行が同時に2件作成していた)
+    let listCallCount = 0;
+    const createCalls: Record<string, unknown>[] = [];
+    const drive = {
+      files: {
+        list: async () => {
+          listCallCount++;
+          if (listCallCount <= 2) {
+            return { data: { files: [] } };
+          }
+          return {
+            data: {
+              files: [
+                { id: 'dup-recheck-child-1', name: '予約後重複子太郎' },
+                { id: 'dup-recheck-child-2', name: '予約後重複子太郎' },
+              ],
+            },
+          };
+        },
+        create: async (params: Record<string, unknown>) => {
+          createCalls.push(params);
+          return { data: { id: 'should-not-be-used' } };
+        },
+      },
+    } as unknown as drive_v3.Drive;
+
+    try {
+      await resolveChildFolder(drive, db, 'parent-recheck-ambiguous-child', '予約後重複子太郎');
+      expect.fail('AmbiguousChildFolderErrorがthrowされるべき');
+    } catch (error) {
+      expect(error).to.be.instanceOf(AmbiguousChildFolderError);
+    }
+    expect(createCalls).to.have.lengthOf(0);
   });
 });

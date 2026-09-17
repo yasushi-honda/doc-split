@@ -31,6 +31,50 @@ const db = admin.firestore();
 // 本ファイルのテストは意図的にフラグ未設定=shadowモードの挙動を検証する。
 const COLLECTIONS_TO_CLEAN: readonly string[] = ['driveFolderLocks', 'settings'];
 
+/**
+ * `runTransaction`だけを差し替えたfirestoreラッパ。指定した通し番号のトランザクション
+ * 呼び出しを失敗させる(Issue #880 characterization test用、driveFolderClaimIntegration.test.ts
+ * の同名ヘルパーと同型)。
+ */
+function makeFailingCommitFirestore(
+  realDb: admin.firestore.Firestore,
+  failTxCallIndices: readonly number[]
+): admin.firestore.Firestore {
+  let txCalls = 0;
+  return {
+    collection: (path: string) => realDb.collection(path),
+    doc: (path: string) => realDb.doc(path),
+    runTransaction: async (updateFn: (tx: admin.firestore.Transaction) => Promise<unknown>) => {
+      txCalls++;
+      if (failTxCallIndices.includes(txCalls)) {
+        throw new Error(`simulated Firestore transaction failure (call #${txCalls})`);
+      }
+      return realDb.runTransaction(updateFn);
+    },
+  } as unknown as admin.firestore.Firestore;
+}
+
+/**
+ * `settings/features`(driveFolderClaimReadフラグ)への`.get()`だけを失敗させるfirestoreラッパ
+ * (Issue #880 characterization test用)。他のパスへのdoc/collection操作は実dbへ委譲する。
+ */
+function makeFailingFeatureFlagFirestore(realDb: admin.firestore.Firestore): admin.firestore.Firestore {
+  return {
+    collection: (path: string) => realDb.collection(path),
+    doc: (path: string) => {
+      if (path === 'settings/features') {
+        return {
+          get: async () => {
+            throw new Error('simulated feature flag read failure');
+          },
+        } as unknown as admin.firestore.DocumentReference;
+      }
+      return realDb.doc(path);
+    },
+    runTransaction: (updateFn: (tx: admin.firestore.Transaction) => Promise<unknown>) => realDb.runTransaction(updateFn),
+  } as unknown as admin.firestore.Firestore;
+}
+
 interface FakeFile {
   id: string;
   name: string;
@@ -498,5 +542,80 @@ describe('findOrCreateFolder (ADR-0022)', () => {
     // する挙動を確認済み)なため採用しない。ロックの契約(既に保有されている場合は
     // throwする/staleなら上書きできる/正常終了・異常終了いずれでも解放される)は上記の
     // 決定論的なテスト群で網羅しているため、フレークな再現テストに依存する必要はない。
+  });
+
+  describe('Issue #880: claimプロトコル未カバー分岐のcharacterization test(共通化リファクタ前に現行実装の挙動を固定する)', () => {
+    it('driveFolderClaimReadフラグの読取に失敗した場合、shadowモードへfail-closedし通常のfind-or-create経路で完走する', async () => {
+      const failingDb = makeFailingFeatureFlagFirestore(db);
+      const { drive, createCalls } = makeFakeDrive({ listFiles: [] });
+
+      const result = await findOrCreateFolder(drive, failingDb, 'parent-flagfail', 'フラグ失敗太郎');
+
+      expect(result).to.equal('new-folder-id');
+      expect(createCalls).to.have.lengthOf(1);
+    });
+
+    it('予約後の再検索でtrashedフォルダが見つかりuntrash自体は成功したが、直後のcommitResolvedWithRetryが失敗すると専用errorに包まず素のFolderClaimCommitErrorをそのままthrowする', async () => {
+      // 呼び出し順: 1=完全検索active(0件) 2=完全検索trashed(0件) →beginCreation(予約)→
+      // 3=recheck active(0件) 4=recheck trashed(1件、別プロセスがゴミ箱へ移動していた)
+      let listCallCount = 0;
+      const updateCalls: Record<string, unknown>[] = [];
+      const createCalls: Record<string, unknown>[] = [];
+      const drive = {
+        files: {
+          list: async () => {
+            listCallCount++;
+            if (listCallCount <= 3) {
+              return { data: { files: [] } };
+            }
+            return { data: { files: [{ id: 'recheck-trashed-id', name: '再検索復元失敗太郎', trashed: true }] } };
+          },
+          create: async (params: Record<string, unknown>) => {
+            createCalls.push(params);
+            return { data: { id: 'should-not-be-used' } };
+          },
+          update: async (params: Record<string, unknown>) => {
+            updateCalls.push(params);
+            return { data: { id: params.fileId as string } };
+          },
+        },
+      } as unknown as drive_v3.Drive;
+      // beginCreation(1回目のtx)は成功させ、commitResolvedWithRetryの3回のリトライ
+      // (2〜4回目のtx)を全て失敗させる。
+      const failingDb = makeFailingCommitFirestore(db, [2, 3, 4]);
+
+      try {
+        await findOrCreateFolder(drive, failingDb, 'parent-recheck-restore-fail', '再検索復元失敗太郎');
+        expect.fail('FolderClaimCommitErrorがthrowされるべき');
+      } catch (error) {
+        // childFolderResolver.ts側はChildFolderRestoredButUncommittedErrorで包み直すが、
+        // findOrCreateFolder.ts側はそのような包装を行わない(現行実装の非対称性)。
+        expect((error as Error).name).to.equal('FolderClaimCommitError');
+      }
+      // Drive側のuntrash自体は成功していること(claim確定書込みの失敗とは独立)
+      expect(updateCalls).to.have.lengthOf(1);
+      expect(updateCalls[0].requestBody).to.deep.equal({ trashed: false });
+      expect(createCalls).to.have.lengthOf(0);
+    });
+
+    it('shadowモード(driveFolderClaimRead未設定)でも、猶予(RECONCILE_GRACE_MS)未満の"creating"claimが存在する場合はFolderCreationInProgressErrorで待機し、新規作成しない', async () => {
+      const lockId = Buffer.from('parent-shadow-wait/待機太郎').toString('base64url');
+      await db.collection('driveFolderLocks').doc(lockId).set({
+        state: 'creating',
+        attempt: { attemptId: 'attempt-shadow-wait', startedAtMs: Date.now() - 2 * 60 * 1000, runId: 'other-run' },
+        parentId: 'parent-shadow-wait',
+        name: '待機太郎',
+      });
+      // attemptIdタグ検索も0件(=まだ作成されていない)
+      const { drive, createCalls } = makeFakeDrive({ listFiles: [] });
+
+      try {
+        await findOrCreateFolder(drive, db, 'parent-shadow-wait', '待機太郎');
+        expect.fail('FolderCreationInProgressErrorがthrowされるべき');
+      } catch (error) {
+        expect(error).to.be.instanceOf(FolderCreationInProgressError);
+      }
+      expect(createCalls).to.have.lengthOf(0);
+    });
   });
 });
