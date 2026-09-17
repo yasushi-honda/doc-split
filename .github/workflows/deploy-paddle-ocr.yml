@@ -1,8 +1,9 @@
 name: Deploy PaddleOCR Cloud Run Service (ADR-0025 PR4b)
 
 # dev/kanameone対応(2026-09-14、kanameoneのPR3ブートストラップ完了に伴い追加)。
-# cocoroはGitHub Environment承認設定・実値が未確定のため引き続き対象外
-# (pr-d4-backfill.ymlと同様の環境別分岐は将来のクライアント展開PRで追加)。
+# cocoro対応(2026-09-17、cocoroのPR3ブートストラップ(Artifact Registry repo + runtime SA)
+# 完了に伴い追加。SA認証はdeploy-functions.ymlと同型の3値分岐、secretsは既存の
+# GCP_SA_KEY(cocoro、将来GCP_SA_KEY_COCOROに移行)を再利用)。
 #
 # 設計判断(/plan-crossreview反映、ADR-0025 PR4b、~/.claude/plans/fuzzy-moseying-book.md参照):
 # - concurrency: 同一devへの手動dispatch並走を防ぐ(pr-d4-backfill.yml:62-64パターン)
@@ -26,12 +27,13 @@ on:
   workflow_dispatch:
     inputs:
       environment:
-        description: 'Target environment(現時点ではdev/kanameoneのみ対応)'
+        description: 'Target environment'
         required: true
         type: choice
         options:
           - dev
           - kanameone
+          - cocoro
       first_deploy:
         description: 'true = 初回デプロイ(PADDLE_OCR_URL未設定の状態から)。false = 既存URLとの一致検証'
         required: true
@@ -59,16 +61,18 @@ jobs:
           ENVIRONMENT: ${{ github.event.inputs.environment }}
         run: |
           set -euo pipefail
-          if [ "$ENVIRONMENT" != "dev" ] && [ "$ENVIRONMENT" != "kanameone" ]; then
-            echo "ERROR: 現時点ではdev/kanameoneのみ対応(got: $ENVIRONMENT)。cocoroはGitHub Environment承認設定が未確定のため対象外です" >&2
+          if [ "$ENVIRONMENT" != "dev" ] && [ "$ENVIRONMENT" != "kanameone" ] && [ "$ENVIRONMENT" != "cocoro" ]; then
+            echo "ERROR: 未知の環境です(got: $ENVIRONMENT)" >&2
             exit 1
           fi
 
       - uses: google-github-actions/auth@v2
         with:
+          # deploy-functions.ymlと同型の3値分岐(cocoroはGCP_SA_KEY、将来GCP_SA_KEY_COCOROに移行)
           credentials_json: >-
             ${{ github.event.inputs.environment == 'kanameone' && secrets.GCP_SA_KEY_KANAMEONE ||
-                secrets.GCP_SA_KEY_DEV }}
+                github.event.inputs.environment == 'dev' && secrets.GCP_SA_KEY_DEV ||
+                secrets.GCP_SA_KEY }}
 
       - uses: google-github-actions/setup-gcloud@v2
 
