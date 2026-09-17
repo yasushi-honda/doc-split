@@ -285,6 +285,9 @@ describe('executeDriveExport (ADR-0022 code-review CONFIRMED指摘対応: 所有
     expect(afterA.driveExportStatus).to.equal('exported'); // 'error'に巻き戻っていない
     expect(afterA.driveExportRunId).to.equal(runIdAfterB);
     expect(afterA.driveExportError).to.be.undefined;
+    // Issue #881: superseded書戻しのスキップ経路で、新フィールドだけ書き漏れる/
+    // 誤って書かれる回帰がないことを確認する。
+    expect(afterA.driveExportErrorKind).to.be.undefined;
     // Run B: claimプロトコルによりRun Aが確定済みのフォルダを再利用するため、
     // 新規フォルダ作成は発生しない。ファイルのみ新規作成。
     expect(createCallsB).to.have.lengthOf(1);
@@ -307,6 +310,38 @@ describe('executeDriveExport (ADR-0022 code-review CONFIRMED指摘対応: 所有
     expect(after.driveExportStatus).to.equal('error');
     expect(after.driveExportError).to.be.a('string');
     expect(after.driveExportError as string).to.match(/^顧客が未確定のため/);
+    // Issue #881: CustomerUnconfirmedErrorはpermanent(人間が顧客確定するまで解消しない)
+    expect(after.driveExportErrorKind).to.equal('permanent');
+  });
+
+  it('Drive APIが5xxを返した場合、driveExportErrorKindがtransientで書き戻される(Issue #881)', async () => {
+    const docId = await seedDocument({ driveExportStatus: 'error', driveExportErrorKind: 'permanent' });
+    const drive = {
+      files: {
+        list: async () => ({ data: { files: [] } }),
+        create: async () => {
+          throw { status: 503 };
+        },
+      },
+    } as unknown as drive_v3.Drive;
+
+    await executeDriveExport(db, docId, { drive, downloadFile: async () => Buffer.from('x') }, 'error');
+
+    const after = await getDoc(docId);
+    expect(after.driveExportStatus).to.equal('error');
+    // 前回値('permanent')が残らず、今回の分類結果で上書きされること
+    expect(after.driveExportErrorKind).to.equal('transient');
+  });
+
+  it('クレーム成功時に前回のdriveExportErrorKindが削除される(Issue #881)', async () => {
+    const docId = await seedDocument({ driveExportStatus: 'error', driveExportErrorKind: 'transient' });
+    const { drive } = makeFakeDrive({ createdIds: ['folder-x', 'file-x'] });
+
+    await executeDriveExport(db, docId, { drive, downloadFile: async () => Buffer.from('x') }, 'error');
+
+    const after = await getDoc(docId);
+    expect(after.driveExportStatus).to.equal('exported');
+    expect(after.driveExportErrorKind).to.be.undefined;
   });
 
   it('更新対象外フィールド(customerName/careManager/officeName等)の値が変化しない(CLAUDE.md MUST)', async () => {

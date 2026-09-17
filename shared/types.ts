@@ -19,6 +19,21 @@ export type DocumentStatus = 'pending' | 'processing' | 'processed' | 'error' | 
  */
 export type DriveExportStatus = 'exporting' | 'exported' | 'error';
 
+/**
+ * `driveExportError`(人間可読メッセージ)とは別の機械可読なエラー分類(Issue #871計画書§7・
+ * Issue #881)。'transient'(時間経過で自然に解消しうる)/'permanent'(人手介入が必要)。
+ * `functions/src/drive/executeDriveExport.ts`の`classifyDriveExportErrorKind()`が判定し、
+ * `functions/src/drive/driveExportScheduled.ts`が再試行閾値の短縮判定に使う。
+ *
+ * (type-design-analyzerレビュー指摘対応: `DriveExportStatus`と同じくfunctions側から
+ * importして再利用する。以前は`executeDriveExport.ts`側にローカル定義し値集合を
+ * ここへ文字列リテラルとして独立複製していたが、同一ファイル内で`DriveExportStatus`は
+ * 逆方向(shared→functions importして再利用)なのに本型だけ非対称な解決策になっており、
+ * 将来どちらかだけ値集合が変更された場合にコンパイラが検知できずドリフトするリスクが
+ * あったため統一した)
+ */
+export type DriveExportErrorKind = 'transient' | 'permanent';
+
 /** ドキュメントのソースタイプ */
 export type SourceType = 'gmail' | 'upload';
 
@@ -230,6 +245,11 @@ export interface Document {
   driveExportError?: string | null;  // エラー一覧UI表示用の日本語メッセージ
   /** クレーム時に発行される所有権トークン(randomUUID)。並行実行時の書戻し保護に使用。 */
   driveExportRunId?: string | null;
+  /**
+   * 未設定(本フィールド導入前に発生したエラー)は'permanent'相当として扱われる
+   * (安全側デフォルト、`driveExportScheduled.ts`参照)。型定義は`DriveExportErrorKind`参照。
+   */
+  driveExportErrorKind?: DriveExportErrorKind | null;
 }
 
 /**

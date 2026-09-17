@@ -133,6 +133,7 @@ DocSplitのデータはすべてCloud Firestoreに格納される。
 | driveExportedAt | timestamp \| null | No | エクスポート完了日時 |
 | driveExportError | string \| null | No | エラー一覧UI表示用の日本語メッセージ |
 | driveExportRunId | string \| null | No | クレーム時に発行される所有権トークン(randomUUID)。並行実行時の書戻し保護に使用 |
+| driveExportErrorKind | string \| null | No | `transient` \| `permanent`。エラーの機械可読分類（Issue #871計画書§7・Issue #881）。定期リトライの再試行閾値短縮に使用 |
 
 ### 複数人記載FAX（`settings/features` のクライアント別 feature flag で制御）
 

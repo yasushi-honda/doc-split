@@ -54,8 +54,28 @@ async function writeSweepCursor(
 /**
  * `error`滞留の再試行間隔。直後の連続リトライ(手動リトライ直後の二重実行等)を避ける。
  * (`processOCR.ts`の`ERROR_RESCUE_THRESHOLD_MS`と同型: 1時間)
+ *
+ * `driveExportErrorKind`が`'permanent'`または未設定(本フィールド導入前に発生したエラー、
+ * Issue #881)の場合にこの閾値を使う。安全側デフォルト(移行不要でバックフィル不要)。
  */
 export const DRIVE_EXPORT_ERROR_RETRY_THRESHOLD_MS = 60 * 60 * 1000;
+
+/**
+ * `driveExportErrorKind==='transient'`(時間経過で自然に解消しうるエラー、Issue #871計画書§7・
+ * Issue #881)の再試行間隔。`RECONCILE_GRACE_MS`(`driveFolderClaim.ts`、10分)・
+ * `DRIVE_EXPORT_STUCK_EXPORTING_THRESHOLD_MS`と同値にそろえ、`FolderCreationInProgressError`
+ * のreconcile猶予が明けるタイミングと自然に一致させる。
+ *
+ * **待ち時間の実際の見積り(fable-review指摘Medium-3で訂正)**: 本関数は15分間隔のcronで
+ * 実行され、`now - updatedAtMs < threshold`でスキップ判定するため、エラー発生からの実際の
+ * 待ち時間はcron tickとの位相に依存する。閾値をcron間隔未満に保っても「次の1 tick以内で
+ * 確実に再試行される」保証は無く(位相が悪いと2 tick待つケースが残る)、最悪ケースの待ち時間は
+ * おおよそ「閾値 + cron間隔」(現状10分+15分=最大約25分)になる。それでも閾値をcron間隔以上
+ * (例: 15分)にした場合の最悪ケース(約2×cron間隔=30分)よりは短くなるため、cron間隔未満に
+ * 保つこと自体には意味がある。10分という具体的な値の根拠は上記の`RECONCILE_GRACE_MS`等との
+ * 整合であり、「1 tick以内保証」ではない。
+ */
+export const DRIVE_EXPORT_TRANSIENT_ERROR_RETRY_THRESHOLD_MS = 10 * 60 * 1000;
 
 /**
  * `exporting`滞留の停止判定閾値。トリガー/リトライのtimeoutSeconds(120s)より
@@ -118,7 +138,9 @@ export async function sweepStuckDriveExports(
     const updatedAtMs = (data.updatedAt as admin.firestore.Timestamp | undefined)?.toMillis?.() ?? 0;
     const threshold =
       status === 'error'
-        ? DRIVE_EXPORT_ERROR_RETRY_THRESHOLD_MS
+        ? data.driveExportErrorKind === 'transient'
+          ? DRIVE_EXPORT_TRANSIENT_ERROR_RETRY_THRESHOLD_MS
+          : DRIVE_EXPORT_ERROR_RETRY_THRESHOLD_MS
         : DRIVE_EXPORT_STUCK_EXPORTING_THRESHOLD_MS;
 
     if (now - updatedAtMs < threshold) {

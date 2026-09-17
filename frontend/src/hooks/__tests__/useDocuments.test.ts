@@ -79,6 +79,7 @@ describe('firestoreToDocument', () => {
         driveExportedAt: Timestamp.now(),
         driveExportError: null,
         driveExportRunId: 'run-id-1',
+        driveExportErrorKind: 'transient',
       }
       const result = firestoreToDocument('doc-001', data)
       expect(result.driveExportStatus).toBe('exported')
@@ -86,6 +87,7 @@ describe('firestoreToDocument', () => {
       expect(result.driveExportedAt).toBe(data.driveExportedAt)
       expect(result.driveExportError).toBeNull()
       expect(result.driveExportRunId).toBe('run-id-1')
+      expect(result.driveExportErrorKind).toBe('transient')
     })
 
     it('Drive系フィールドが未設定の場合は undefined', () => {
@@ -95,6 +97,7 @@ describe('firestoreToDocument', () => {
       expect(result.driveExportedAt).toBeUndefined()
       expect(result.driveExportError).toBeUndefined()
       expect(result.driveExportRunId).toBeUndefined()
+      expect(result.driveExportErrorKind).toBeUndefined()
     })
   })
 
@@ -579,12 +582,13 @@ describe('getReprocessClearFields (Issue #215: 旧3キー + 新summary 全て de
   // ADR-0022 Phase1 code-review CONFIRMED指摘対応: エクスポート済み(driveExportStatus:
   // 'exported')docを再処理してもクレーム状態が残存すると、訂正後の再確認でトリガーの
   // クレームが既存ステータスを検知しスキップしてしまい、二度と再エクスポートされない
-  it('Drive エクスポートのクレーム状態4フィールドを含む (ADR-0022)', () => {
+  it('Drive エクスポートのクレーム状態5フィールドを含む (ADR-0022、Issue #881でdriveExportErrorKind追加)', () => {
     const fields = getReprocessClearFields()
     expect(fields).toHaveProperty('driveExportStatus')
     expect(fields).toHaveProperty('driveExportedAt')
     expect(fields).toHaveProperty('driveExportError')
     expect(fields).toHaveProperty('driveExportRunId')
+    expect(fields).toHaveProperty('driveExportErrorKind')
   })
 
   // ADR-0022 Phase1 code-review xhigh指摘対応(2026-07-21): driveFileId は意図的に
@@ -646,10 +650,11 @@ describe('getReprocessClearFields (Issue #215: 旧3キー + 新summary 全て de
 // ADR-0022 Phase1、code-review指摘#42対応(2026-07-22): getReprocessClearFields()と
 // useDocumentVerification.tsのmarkAsUnverifiedの両方から呼ばれる共通ヘルパー
 describe('getDriveExportClearFields (ADR-0022 code-review指摘#42対応)', () => {
-  it('Drive系4フィールド(driveExportStatus/driveExportedAt/driveExportError/driveExportRunId)のみを返す', () => {
+  it('Drive系5フィールド(driveExportStatus/driveExportedAt/driveExportError/driveExportRunId/driveExportErrorKind)のみを返す(Issue #881でdriveExportErrorKind追加)', () => {
     const fields = getDriveExportClearFields()
     expect(Object.keys(fields).sort()).toEqual([
       'driveExportError',
+      'driveExportErrorKind',
       'driveExportRunId',
       'driveExportStatus',
       'driveExportedAt',
@@ -661,12 +666,13 @@ describe('getDriveExportClearFields (ADR-0022 code-review指摘#42対応)', () =
     expect(fields).not.toHaveProperty('driveFileId')
   })
 
-  it('4フィールドとも deleteField sentinel (firestore.rulesは削除または無変更のみ許可)', () => {
+  it('5フィールドとも deleteField sentinel (firestore.rulesは削除または無変更のみ許可)', () => {
     const fields = getDriveExportClearFields()
     expect(deleteField().isEqual(fields.driveExportStatus)).toBe(true)
     expect(deleteField().isEqual(fields.driveExportedAt)).toBe(true)
     expect(deleteField().isEqual(fields.driveExportError)).toBe(true)
     expect(deleteField().isEqual(fields.driveExportRunId)).toBe(true)
+    expect(deleteField().isEqual(fields.driveExportErrorKind)).toBe(true)
   })
 })
 

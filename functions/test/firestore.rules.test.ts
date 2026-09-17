@@ -1055,6 +1055,7 @@ describe('Firestore Security Rules', () => {
           driveExportedAt: new Date(),
           driveExportError: null,
           driveExportRunId: 'run-id-abc',
+          driveExportErrorKind: 'permanent',
           // 複数人記載検出 (PR-A/PR-B、2026-08-30): getReprocessClearFields()が無条件で
           // deleteField()する対象。preserveDistributionFieldsの値によらず常にクリアされる。
           multiCustomerDetected: true,
@@ -1109,6 +1110,7 @@ describe('Firestore Security Rules', () => {
           driveExportedAt: deleteField(),
           driveExportError: deleteField(),
           driveExportRunId: deleteField(),
+          driveExportErrorKind: deleteField(),
           multiCustomerDetected: deleteField(),
           multiCustomerCount: deleteField(),
           // 値をリセット
@@ -1191,6 +1193,8 @@ describe('Firestore Security Rules', () => {
       await assertFails(updateDoc(docRef, { driveExportRunId: 'forged-run-id' }));
       await assertFails(updateDoc(docRef, { driveExportedAt: new Date() }));
       await assertFails(updateDoc(docRef, { driveExportError: 'forged error' }));
+      // Issue #881: driveExportErrorKindも同型ガードで新規値の上書きが拒否されること
+      await assertFails(updateDoc(docRef, { driveExportErrorKind: 'transient' }));
     });
 
     it('複数人記載検出フィールド(multiCustomerDetected/multiCustomerCount)への新規値の上書きは拒否され、削除(deleteField)のみ許可される(PR-A/PR-B、2026-08-30)', async () => {
@@ -1291,14 +1295,14 @@ describe('Firestore Security Rules', () => {
       expect('pass2Promotion' in (afterData ?? {})).to.equal(false);
     });
 
-    it('driveFileIdの削除(deleteField)はdriveExportStatus等の他4フィールドと異なり拒否される(様子見#47対応、2026-07-22)', async () => {
+    it('driveFileIdの削除(deleteField)はdriveExportStatus等の他フィールドと異なり拒否される(様子見#47対応、2026-07-22)', async () => {
       // getReprocessClearFields()/getDriveExportClearFields()のいずれもdriveFileIdを
       // クリア対象から意図的に除外している(exportDocument.tsのresolveDriveFile()が
       // 内容最新化・重複防止に利用するため)。クライアントSDK経由での削除を正当化する
       // 業務フローが存在しないため、ルール層でも削除自体を拒否する多層防御を検証する。
-      // driveExportStatus等の他4フィールドの削除が引き続き許可されることは、上記の
-      // 「エクスポート済みdocの再処理」テスト(driveExportStatus/driveExportedAt/
-      // driveExportError/driveExportRunIdをdeleteField()する既存assertSucceeds)で
+      // driveExportStatus等の他フィールド(driveExportedAt/driveExportError/driveExportRunId/
+      // driveExportErrorKind、Issue #881で1つ追加)の削除が引き続き許可されることは、上記の
+      // 「エクスポート済みdocの再処理」テストで
       // カバー済みのためここでは重複させない。
       const normalUser = testEnv.authenticatedContext(normalUid);
 
@@ -1367,6 +1371,9 @@ describe('Firestore Security Rules', () => {
       await assertFails(updateDoc(docRef, { retryAfter: null }));
       await assertFails(updateDoc(docRef, { errorRescueCount: null }));
       await assertFails(updateDoc(docRef, { lastRescuedAt: null }));
+      // Issue #881: driveExportErrorKindも同じ('field' in resource.data)ガードの
+      // 書き忘れを検知する専用テスト
+      await assertFails(updateDoc(docRef, { driveExportErrorKind: null }));
     });
 
     it('許可されていないフィールドの更新は禁止', async () => {

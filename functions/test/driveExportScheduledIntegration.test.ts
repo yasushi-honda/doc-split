@@ -19,8 +19,10 @@ import {
   DRIVE_EXPORT_SCHEDULED_BATCH_SIZE,
   DRIVE_EXPORT_SCHEDULED_PAGE_SIZE,
   DRIVE_EXPORT_ERROR_RETRY_THRESHOLD_MS,
+  DRIVE_EXPORT_TRANSIENT_ERROR_RETRY_THRESHOLD_MS,
   DRIVE_EXPORT_STUCK_EXPORTING_THRESHOLD_MS,
 } from '../src/drive/driveExportScheduled';
+import { RECONCILE_GRACE_MS } from '../src/drive/driveFolderClaim';
 import { MASTER_PATHS } from '../src/utils/masterPaths';
 
 const db = admin.firestore();
@@ -217,6 +219,114 @@ describe('sweepStuckDriveExports (ADR-0022 Phase 1 Task8)', () => {
     expect(createCalls).to.have.lengthOf(0);
   });
 
+  describe('driveExportErrorKind による再試行閾値分岐(Issue #871計画書§7・Issue #881)', () => {
+    it('DRIVE_EXPORT_TRANSIENT_ERROR_RETRY_THRESHOLD_MSはRECONCILE_GRACE_MS/DRIVE_EXPORT_STUCK_EXPORTING_THRESHOLD_MSと同値である(fable-review指摘Low-3、3箇所の独立リテラルのドリフト検知)', () => {
+      expect(DRIVE_EXPORT_TRANSIENT_ERROR_RETRY_THRESHOLD_MS).to.equal(RECONCILE_GRACE_MS);
+      expect(DRIVE_EXPORT_TRANSIENT_ERROR_RETRY_THRESHOLD_MS).to.equal(DRIVE_EXPORT_STUCK_EXPORTING_THRESHOLD_MS);
+    });
+
+
+    it('transientかつ短い閾値(10分)以上経過したdocは再エンキューされる', async () => {
+      const docId = await seedDocument({
+        driveExportStatus: 'error',
+        driveExportError: '一時的なエラー',
+        driveExportErrorKind: 'transient',
+        updatedAt: admin.firestore.Timestamp.fromMillis(
+          Date.now() - DRIVE_EXPORT_TRANSIENT_ERROR_RETRY_THRESHOLD_MS - BUFFER_MS
+        ),
+      });
+      const { drive, createCalls } = makeFakeDrive({ createdIds: ['folder-office', 'exported-file-id'] });
+
+      const result = await sweepStuckDriveExports(db, { drive, downloadFile: async () => Buffer.from('x') });
+
+      expect(result).to.deep.equal({ requeued: 1, failed: 0, skipped: 0 });
+      expect(createCalls).to.have.lengthOf(2);
+      expect((await getDoc(docId)).driveExportStatus).to.equal('exported');
+    });
+
+    it('transientかつ短い閾値(10分)未満のdocはスキップされる', async () => {
+      await seedDocument({
+        driveExportStatus: 'error',
+        driveExportError: '一時的なエラー',
+        driveExportErrorKind: 'transient',
+        updatedAt: admin.firestore.Timestamp.fromMillis(Date.now() - 5 * 60 * 1000), // 5分前
+      });
+      const { drive, createCalls } = makeFakeDrive();
+
+      const result = await sweepStuckDriveExports(db, { drive, downloadFile: async () => Buffer.from('x') });
+
+      expect(result).to.deep.equal({ requeued: 0, failed: 0, skipped: 1 });
+      expect(createCalls).to.have.lengthOf(0);
+    });
+
+    it('permanentは短い閾値(10分)を超えても長い閾値(1時間)未満ならスキップされる(分岐が効いていることの証明)', async () => {
+      await seedDocument({
+        driveExportStatus: 'error',
+        driveExportError: '恒久的なエラー',
+        driveExportErrorKind: 'permanent',
+        updatedAt: admin.firestore.Timestamp.fromMillis(
+          Date.now() - DRIVE_EXPORT_TRANSIENT_ERROR_RETRY_THRESHOLD_MS - BUFFER_MS
+        ),
+      });
+      const { drive, createCalls } = makeFakeDrive();
+
+      const result = await sweepStuckDriveExports(db, { drive, downloadFile: async () => Buffer.from('x') });
+
+      expect(result).to.deep.equal({ requeued: 0, failed: 0, skipped: 1 });
+      expect(createCalls).to.have.lengthOf(0);
+    });
+
+    it('permanentは長い閾値(1時間)以上経過すれば再エンキューされる', async () => {
+      const docId = await seedDocument({
+        driveExportStatus: 'error',
+        driveExportError: '恒久的なエラー',
+        driveExportErrorKind: 'permanent',
+        updatedAt: admin.firestore.Timestamp.fromMillis(
+          Date.now() - DRIVE_EXPORT_ERROR_RETRY_THRESHOLD_MS - BUFFER_MS
+        ),
+      });
+      const { drive, createCalls } = makeFakeDrive({ createdIds: ['folder-office', 'exported-file-id'] });
+
+      const result = await sweepStuckDriveExports(db, { drive, downloadFile: async () => Buffer.from('x') });
+
+      expect(result).to.deep.equal({ requeued: 1, failed: 0, skipped: 0 });
+      expect(createCalls).to.have.lengthOf(2);
+      expect((await getDoc(docId)).driveExportStatus).to.equal('exported');
+    });
+
+    it('driveExportErrorKind未設定(本フィールド導入前の既存エラーdoc)は長い閾値(1時間)にフォールバックする(バックフィル不要)', async () => {
+      await seedDocument({
+        driveExportStatus: 'error',
+        driveExportError: '導入前の古いエラー',
+        // driveExportErrorKindは意図的に未設定
+        updatedAt: admin.firestore.Timestamp.fromMillis(
+          Date.now() - DRIVE_EXPORT_TRANSIENT_ERROR_RETRY_THRESHOLD_MS - BUFFER_MS
+        ),
+      });
+      const { drive, createCalls } = makeFakeDrive();
+
+      const result = await sweepStuckDriveExports(db, { drive, downloadFile: async () => Buffer.from('x') });
+
+      // 短い閾値(10分)は超えているが、未設定は長い閾値(1時間)側に倒れるためまだskipされる
+      expect(result).to.deep.equal({ requeued: 0, failed: 0, skipped: 1 });
+      expect(createCalls).to.have.lengthOf(0);
+    });
+
+    it('exporting状態はdriveExportErrorKindの有無に関わらずSTUCK_EXPORTING_THRESHOLD_MS(10分)のまま(誤ってerror側分岐を適用しない回帰防止)', async () => {
+      await seedDocument({
+        driveExportStatus: 'exporting',
+        driveExportErrorKind: 'transient', // exportingでは無視されるべき残存値
+        updatedAt: admin.firestore.Timestamp.fromMillis(Date.now() - 30 * 1000), // 30秒前、10分未満
+      });
+      const { drive, createCalls } = makeFakeDrive();
+
+      const result = await sweepStuckDriveExports(db, { drive, downloadFile: async () => Buffer.from('x') });
+
+      expect(result).to.deep.equal({ requeued: 0, failed: 0, skipped: 1 });
+      expect(createCalls).to.have.lengthOf(0);
+    });
+  });
+
   it('exported状態のdocは対象外(クエリで除外される)', async () => {
     await seedDocument({
       driveExportStatus: 'exported',
@@ -279,6 +389,25 @@ describe('sweepStuckDriveExports (ADR-0022 Phase 1 Task8)', () => {
     expect(data.officeName).to.equal('不変事業所');
     expect(data.mimeType).to.equal('application/pdf');
     expect(data.fileId).to.equal('unchanged-file-id');
+  });
+
+  it('sweep経由での再エンキュー(requeue)自体はdriveExportErrorKindを書き換えない(sweepは読むだけで書かない、Issue #881)', async () => {
+    const docId = await seedDocument({
+      driveExportStatus: 'error',
+      driveExportErrorKind: 'permanent',
+      updatedAt: admin.firestore.Timestamp.fromMillis(
+        Date.now() - DRIVE_EXPORT_ERROR_RETRY_THRESHOLD_MS - BUFFER_MS
+      ),
+    });
+    const { drive } = makeFakeDrive({ createdIds: ['folder-office', 'exported-file-id'] });
+
+    await sweepStuckDriveExports(db, { drive, downloadFile: async () => Buffer.from('x') });
+
+    const data = await getDoc(docId);
+    expect(data.driveExportStatus).to.equal('exported');
+    // 成功時はexecuteDriveExport()のクレームtxがdriveExportErrorKindをdeleteFieldするため
+    // 消える(sweep自体が書き換えるわけではない)。
+    expect(data.driveExportErrorKind).to.be.undefined;
   });
 
   it('対象docが0件の場合は何もせずrequeued/skipped共に0を返す', async () => {
