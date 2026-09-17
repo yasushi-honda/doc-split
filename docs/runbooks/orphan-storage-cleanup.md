@@ -15,7 +15,7 @@
 PR-B 補償処理の二段失敗 (Firestore set 失敗 → Storage delete も失敗) で発生する場合:
 
 ```
-resource.type="cloud_function"
+resource.type="cloud_run_revision"
 jsonPayload.operation="splitPdf"
 jsonPayload.stage="orphanCleanup"
 jsonPayload.cleanupResult="failed"
@@ -110,7 +110,7 @@ parent (= splitPdf に渡された元 doc ID) を特定する手段:
 ```bash
 # Cloud Logging で当該 newDocId を含む splitPdf invocation を検索
 # query 例:
-#   resource.type="cloud_function"
+#   resource.type="cloud_run_revision"
 #   jsonPayload.operation="splitPdf"
 #   jsonPayload.newDocId="<orphan-path から抽出した docId>"
 # → invocation の入力 documentId が parentDocumentId
