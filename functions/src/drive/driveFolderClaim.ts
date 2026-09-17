@@ -139,7 +139,19 @@ export type ResolvedFolderClaim = FolderClaimDoc & { state: 'resolved'; folderId
  * `reconcileAttempt()`のattemptIdタグ検索でも同じ意味(claimが指すはずの作成が
  * 2件のフォルダとして観測された=矛盾)で使う。
  */
-export class AmbiguousFolderError extends Error {
+
+/**
+ * フォルダ名重複(曖昧)系エラーの共通基底クラス(Issue #880)。
+ * `findOrCreateFolder.ts`用の`AmbiguousFolderError`と`childFolderResolver.ts`用の
+ * `AmbiguousChildFolderError`が共にこれを継承する。`folderResolutionCore.ts`側は
+ * `error instanceof AmbiguousFolderErrorBase`で判定することで、「生成したエラーの
+ * クラス」と「判定するクラス」が別々のクロージャに分散し実装者の注意力だけで
+ * 対応を保つ(=対称性が崩れても型エラーにならない)というリスクを、型階層による
+ * 保証へ置き換える(type-design-analyzerレビュー指摘対応)。
+ */
+export abstract class AmbiguousFolderErrorBase extends Error {}
+
+export class AmbiguousFolderError extends AmbiguousFolderErrorBase {
   constructor(name: string, parentId: string, count: number) {
     super(
       `フォルダ名が重複しているため解決できません(${count}件): "${name}"（親フォルダ: ${parentId}）`

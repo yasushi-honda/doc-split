@@ -38,6 +38,7 @@ import { isDriveFolderClaimReadEnabled } from '../utils/featureFlags';
 import {
   FolderCreationInProgressError,
   DivergentFolderClaimError,
+  AmbiguousFolderErrorBase,
   CREATE_TRUST_MS,
   SOFT_TTL_MS,
   FolderClaimDoc,
@@ -64,10 +65,12 @@ export interface FolderResolutionOutcome {
 export interface FolderResolutionPolicy {
   /** console.error の先頭('[findOrCreateFolder]' / '[Phase B Part A]') */
   logPrefix: string;
-  /** 2件以上マッチ時のエラー。呼び出し元がinstanceofで分岐するため区別の維持が必須 */
+  /**
+   * 2件以上マッチ時のエラー。呼び出し元がinstanceofで分岐するため区別の維持が必須。
+   * 生成したエラーは必ず`AmbiguousFolderErrorBase`を継承すること(コア側はこの
+   * 基底クラスでのみ判定する。継承を怠るとdivergent記録処理が発火しなくなる)。
+   */
   makeAmbiguousError(name: string, parentId: string, count: number): Error;
-  /** `error`が`makeAmbiguousError`が生成したクラスのインスタンスかどうかの判定 */
-  isAmbiguousError(error: unknown): boolean;
   /** id欠落時のエラー。両ファイルで文言・名詞が異なるためpolicy側に持たせる */
   makeMissingIdError(name: string, context: 'existing' | 'created'): Error;
   /**
@@ -263,7 +266,7 @@ export async function resolveFolderWithClaim(
   try {
     existing = await findExistingFolderFile(drive, parentId, name, policy.makeAmbiguousError);
   } catch (error) {
-    if (readEnabled && isResolvedWithFolderId(claim) && policy.isAmbiguousError(error)) {
+    if (readEnabled && isResolvedWithFolderId(claim) && error instanceof AmbiguousFolderErrorBase) {
       // divergentマーカーの永続化はこの状態機械唯一の「人手介入が必要」シグナル。書込み
       // 自体が失敗すると、claimドキュメントには反映されないままこの呼び出しだけ異常終了し、
       // 次回以降の呼び出しがこの矛盾を検知できなくなる。best-effort(投げない)のままだが、

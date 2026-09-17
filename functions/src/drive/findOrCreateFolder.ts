@@ -73,7 +73,6 @@ export {
 const findOrCreateFolderPolicy: FolderResolutionPolicy = {
   logPrefix: '[findOrCreateFolder]',
   makeAmbiguousError: (name, parentId, count) => new AmbiguousFolderError(name, parentId, count),
-  isAmbiguousError: (error) => error instanceof AmbiguousFolderError,
   makeMissingIdError: (name, context) =>
     new Error(
       context === 'created'

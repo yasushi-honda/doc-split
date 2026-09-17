@@ -44,8 +44,9 @@ import {
   FolderCreationInProgressError,
   DivergentFolderClaimError,
   FolderClaimRestoreCommitError,
+  AmbiguousFolderErrorBase,
 } from './driveFolderClaim';
-import { findExistingFolderFile, resolveFolderWithClaim, FolderResolutionPolicy } from './folderResolutionCore';
+import { findExistingFolderFile, resolveFolderWithClaim, FolderResolutionOutcome, FolderResolutionPolicy } from './folderResolutionCore';
 
 // 状態機械由来のエラーは呼び出し元(execute-drive-folder-merge.ts等)からの既存importを
 // 壊さないよう、また`findOrCreateFolder.ts`と同じ意味を保つよう再exportする。
@@ -95,7 +96,7 @@ export class ChildFolderRestoredButUncommittedError extends Error {
   }
 }
 
-export class AmbiguousChildFolderError extends Error {
+export class AmbiguousChildFolderError extends AmbiguousFolderErrorBase {
   constructor(name: string, parentId: string, count: number) {
     super(
       `[Phase B Part A] 子フォルダ名が重複しているため解決できません(${count}件、trashed込み): "${name}"（親フォルダ: ${parentId}）。fail-closed: 作成・復元のいずれも行いません。`
@@ -107,7 +108,6 @@ export class AmbiguousChildFolderError extends Error {
 const childFolderResolutionPolicy: FolderResolutionPolicy = {
   logPrefix: '[Phase B Part A]',
   makeAmbiguousError: (name, parentId, count) => new AmbiguousChildFolderError(name, parentId, count),
-  isAmbiguousError: (error) => error instanceof AmbiguousChildFolderError,
   makeMissingIdError: (name, context) =>
     new Error(
       context === 'created'
@@ -141,14 +141,14 @@ export async function resolveExistingChildFile(
 /**
  * `parentId`直下でtrashed込みの`name`一致フォルダをfind-or-createする(Part A専用)。
  * 0件なら新規作成、1件(trashedなら復元)なら再利用、2件以上ならfail-closedでthrowする。
+ *
+ * `folderResolutionCore.ts`の`FolderResolutionOutcome`と構造的に同一(`{id, restored, created}`)
+ * だが、既存の公開契約(呼び出し元がこの名前をimportしている)を維持するため別名で
+ * 型エイリアスとして維持する(type-design-analyzerレビュー指摘対応: interfaceの
+ * 独立宣言だと`FolderResolutionOutcome`側にフィールドが追加された際に追従が
+ * 保証されないため、名目上も同一の型であることを明示する)。
  */
-export interface ResolvedChildFolder {
-  id: string;
-  /** trashedだったフォルダをこの呼び出しでuntrashしたか(rollback記録用、codex review P2指摘対応) */
-  restored: boolean;
-  /** この呼び出しで新規作成したフォルダか(rollback記録用、codex review 3巡目P2指摘対応) */
-  created: boolean;
-}
+export type ResolvedChildFolder = FolderResolutionOutcome;
 
 export async function resolveChildFolder(
   drive: drive_v3.Drive,
