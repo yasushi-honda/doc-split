@@ -30,6 +30,39 @@ import * as crypto from 'crypto';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { percentile } from './lib/confirmedReplayStats';
+import { LOAD_TIERS, loadFixturePath, type LoadTier } from './fixtures/paddleOcrLoadFixtures';
+import {
+  WARM_TRIALS_FULL,
+  COLD_BURSTS_FULL,
+  COLD_BURST_SIZE,
+  QUICK_PARAMS,
+  CIRCUIT_BREAK_THRESHOLD,
+  COOLDOWN_AFTER_FAILURE_MS,
+  LOAD_MAX_RETRIES,
+  LOAD_INITIAL_BACKOFF_MS,
+  LOAD_REQUEST_TIMEOUT_MS,
+  initialTrialState,
+  reduceTrialOutcome,
+  finalizeTrialFailedPageCount,
+  trialSucceeded,
+  initialCircuitState,
+  reduceCircuitState,
+  checkLoadContract,
+  loadContractOk,
+  EXPECTED_LOAD_FIXTURE_SHA256,
+  buildLoadReport,
+  emptyLoadReportSkeleton,
+  determineLoadExitCode,
+  buildLoadStepSummaryMarkdown,
+  type LoadSeries,
+  type LoadIntensity,
+  type LoadTrialRecord,
+  type ColdBurstRecord,
+  type LoadPageRecord,
+  type LoadReport,
+  type LoadServiceSnapshot,
+  type PageFailureKind,
+} from './lib/paddleOcrLoad';
 
 const execFileAsync = promisify(execFile);
 
@@ -66,6 +99,19 @@ const GCLOUD_SUBPROCESS_TIMEOUT_MS = 60_000;
  * レポート書き出しの時間を差し引いた安全な内側の予算。
  */
 const RUN_BUDGET_MS = 200 * 60 * 1000;
+
+/**
+ * loadモードの`--budget-minutes`既定値(tier別)。71ページwarm系列は見込み154〜175分+
+ * リトライで200分(golden既定のRUN_BUDGET_MS)を超過しうるため、tier別に出し分ける
+ * (ADR-0025 PR4c Stage3、2026-09-18 Fable 5.1レビュー指摘M4反映)。
+ */
+const LOAD_BUDGET_MINUTES_DEFAULT: Record<LoadTier | 'all', number> = {
+  1: 80,
+  20: 80,
+  71: 320,
+  160: 80,
+  all: 60,
+};
 
 /**
  * 71ページ(必須ゲート)・20ページ・1ページの合格基準(秒)。
@@ -148,7 +194,7 @@ export function resolveServiceUrl(opts: {
   if (candidateHost !== devHost) {
     throw new Error(
       `解決したサービスURL(${candidate})のホストが ${opts.devEnvPathForError} の PADDLE_OCR_URL(${devUrl})と一致しません。` +
-        'Stage 1 はdev環境専用です。誤って他環境を指定していないか確認してください。'
+        'PR4c(Stage 1/3)はdev環境専用です。誤って他環境を指定していないか確認してください。'
     );
   }
   return candidate;
@@ -715,11 +761,23 @@ export function buildStepSummaryMarkdown(report: Report): string {
 // CLI引数
 // ============================================================================
 
+const LOAD_TIER_STRINGS = ['1', '20', '71', '160', 'all'] as const;
+type LoadTierArg = LoadTier | 'all';
+
 export interface CliArgs {
   mode: string;
   url?: string;
+  /** golden専用。load時は未使用(常に3のまま残るが読まれない)。 */
   repeat: number;
   out: string;
+  /** 実行時間予算(ミリ秒)。golden既定はRUN_BUDGET_MS、load既定はtier別(LOAD_BUDGET_MINUTES_DEFAULT)。 */
+  budgetMs: number;
+  /** load専用フィールド(golden時はundefined)。 */
+  tier?: LoadTierArg;
+  series?: LoadSeries | 'both';
+  intensity?: LoadIntensity;
+  /** quick検証用のfault injection。指定したページ番号(1始まり)で強制的にhttpFatalを発生させる。 */
+  injectFailureAtPage?: number;
 }
 
 export function parseArgs(argv: string[]): CliArgs {
@@ -728,36 +786,105 @@ export function parseArgs(argv: string[]): CliArgs {
     const m = raw.match(/^--([^=]+)=(.*)$/);
     if (m) args[m[1]] = m[2];
   }
-  // codex review(7周目)指摘(P2): 100(=600リクエスト)は`.github/workflows/paddle-ocr-verify.yml`の
-  // `timeout-minutes: 240`に対して非現実的に大きい。実測97秒/リクエスト前提で600件は約16時間を要し、
-  // GHAのジョブタイムアウトでスクリプト自身がレポートを書き出す前にジョブごと強制終了される
-  // (せっかくの「失敗時も必ずレポートを残す」設計が無効化される)。20周=120リクエストなら
-  // 約110秒/件換算で約3.7時間(220分)に収まり、setup(checkout/auth/npm ci等)の
-  // オーバーヘッドを差し引いても240分ジョブタイムアウト内に収まる安全な上限とする。
-  const MAX_REPEAT = 20;
-  let repeat = 3;
-  if (args.repeat !== undefined) {
-    // codex review指摘(P2): Number.parseIntは"3.5"や"3junk"のような数値プレフィックスを
-    // 無言で受理してしまう。この値は標本数(送信ページ数)を直接左右するため、厳密な整数文字列
-    // のみを許容する。
-    if (!/^\d+$/.test(args.repeat)) {
-      throw new Error(`--repeat は1以上の整数を指定してください(got: ${args.repeat})`);
+  const mode = args.mode ?? 'golden';
+  if (mode !== 'golden' && mode !== 'load') {
+    throw new Error(`--mode=${mode} は未対応です(golden|load のみ対応。pngはStage判断待ち)`);
+  }
+
+  const out = args.out ?? path.join(process.cwd(), `paddle-ocr-verify-${mode}.json`);
+
+  if (mode === 'golden') {
+    // mode不一致のオプション併用はfail-loud(2026-09-18 Fable 5.1レビュー指摘反映: 誤設定のまま
+    // 3時間の負荷試験を回してしまう事故を防ぐ)。
+    for (const key of ['tier', 'series', 'intensity', 'inject-failure-at-page']) {
+      if (args[key] !== undefined) {
+        throw new Error(`--mode=golden では --${key} は指定できません`);
+      }
     }
-    repeat = Number.parseInt(args.repeat, 10);
-    // codex review指摘(P2、4周目): 数字のみの文字列でも桁数が多いとNumber.parseIntが
-    // Infinityへオーバーフローしうる(例: "9"を300個)。forループが`round < repeat`で
-    // 終了しなくなりGHAのtimeout-minutesまでジョブを消費してレポートも出せなくなるため、
-    // 安全な整数範囲かつ実用上の上限内であることを検証する。
-    if (!Number.isSafeInteger(repeat) || repeat < 1 || repeat > MAX_REPEAT) {
-      throw new Error(`--repeat は1以上${MAX_REPEAT}以下の整数を指定してください(got: ${args.repeat})`);
+    // codex review(7周目)指摘(P2): 100(=600リクエスト)は`.github/workflows/paddle-ocr-verify.yml`の
+    // `timeout-minutes: 240`に対して非現実的に大きい。実測97秒/リクエスト前提で600件は約16時間を要し、
+    // GHAのジョブタイムアウトでスクリプト自身がレポートを書き出す前にジョブごと強制終了される
+    // (せっかくの「失敗時も必ずレポートを残す」設計が無効化される)。20周=120リクエストなら
+    // 約110秒/件換算で約3.7時間(220分)に収まり、setup(checkout/auth/npm ci等)の
+    // オーバーヘッドを差し引いても240分ジョブタイムアウト内に収まる安全な上限とする。
+    const MAX_REPEAT = 20;
+    let repeat = 3;
+    if (args.repeat !== undefined) {
+      // codex review指摘(P2): Number.parseIntは"3.5"や"3junk"のような数値プレフィックスを
+      // 無言で受理してしまう。この値は標本数(送信ページ数)を直接左右するため、厳密な整数文字列
+      // のみを許容する。
+      if (!/^\d+$/.test(args.repeat)) {
+        throw new Error(`--repeat は1以上の整数を指定してください(got: ${args.repeat})`);
+      }
+      repeat = Number.parseInt(args.repeat, 10);
+      // codex review指摘(P2、4周目): 数字のみの文字列でも桁数が多いとNumber.parseIntが
+      // Infinityへオーバーフローしうる(例: "9"を300個)。forループが`round < repeat`で
+      // 終了しなくなりGHAのtimeout-minutesまでジョブを消費してレポートも出せなくなるため、
+      // 安全な整数範囲かつ実用上の上限内であることを検証する。
+      if (!Number.isSafeInteger(repeat) || repeat < 1 || repeat > MAX_REPEAT) {
+        throw new Error(`--repeat は1以上${MAX_REPEAT}以下の整数を指定してください(got: ${args.repeat})`);
+      }
+    }
+    let budgetMs = RUN_BUDGET_MS;
+    if (args['budget-minutes'] !== undefined) {
+      budgetMs = parsePositiveIntMinutesToMs(args['budget-minutes'], 'budget-minutes');
+    }
+    return { mode, url: args.url, repeat, out, budgetMs };
+  }
+
+  // mode === 'load'
+  if (args.repeat !== undefined) {
+    throw new Error('--mode=load では --repeat は指定できません(tier別の試行回数はWARM_TRIALS_FULLで確定済みです)');
+  }
+  if (args.tier === undefined || !(LOAD_TIER_STRINGS as readonly string[]).includes(args.tier)) {
+    throw new Error(`--mode=load では --tier=${LOAD_TIER_STRINGS.join('|')} の指定が必須です(got: ${args.tier})`);
+  }
+  const tier: LoadTierArg = args.tier === 'all' ? 'all' : (Number(args.tier) as LoadTier);
+
+  const series = (args.series ?? 'both') as LoadSeries | 'both';
+  if (series !== 'warm' && series !== 'cold' && series !== 'both') {
+    throw new Error(`--series は warm|cold|both のいずれかを指定してください(got: ${args.series})`);
+  }
+
+  const intensity = (args.intensity ?? 'full') as LoadIntensity;
+  if (intensity !== 'full' && intensity !== 'quick') {
+    throw new Error(`--intensity は full|quick のいずれかを指定してください(got: ${args.intensity})`);
+  }
+
+  if (tier === 'all' && intensity !== 'quick') {
+    throw new Error('--tier=all は --intensity=quick でのみ指定できます(全tier fullを1ジョブに詰め込む事故防止)');
+  }
+
+  let injectFailureAtPage: number | undefined;
+  if (args['inject-failure-at-page'] !== undefined) {
+    if (!/^\d+$/.test(args['inject-failure-at-page'])) {
+      throw new Error(`--inject-failure-at-page は1以上の整数を指定してください(got: ${args['inject-failure-at-page']})`);
+    }
+    injectFailureAtPage = Number.parseInt(args['inject-failure-at-page'], 10);
+    if (!Number.isSafeInteger(injectFailureAtPage) || injectFailureAtPage < 1) {
+      throw new Error(`--inject-failure-at-page は1以上の整数を指定してください(got: ${args['inject-failure-at-page']})`);
     }
   }
-  return {
-    mode: args.mode ?? 'golden',
-    url: args.url,
-    repeat,
-    out: args.out ?? path.join(process.cwd(), 'paddle-ocr-verify-golden.json'),
-  };
+
+  let budgetMs: number;
+  if (args['budget-minutes'] !== undefined) {
+    budgetMs = parsePositiveIntMinutesToMs(args['budget-minutes'], 'budget-minutes');
+  } else {
+    budgetMs = LOAD_BUDGET_MINUTES_DEFAULT[tier] * 60 * 1000;
+  }
+
+  return { mode, url: args.url, repeat: 3, out, budgetMs, tier, series, intensity, injectFailureAtPage };
+}
+
+function parsePositiveIntMinutesToMs(raw: string, flagName: string): number {
+  if (!/^\d+$/.test(raw)) {
+    throw new Error(`--${flagName} は1以上の整数(分)を指定してください(got: ${raw})`);
+  }
+  const minutes = Number.parseInt(raw, 10);
+  if (!Number.isSafeInteger(minutes) || minutes < 1) {
+    throw new Error(`--${flagName} は1以上の整数(分)を指定してください(got: ${raw})`);
+  }
+  return minutes * 60 * 1000;
 }
 
 // ============================================================================
@@ -786,42 +913,192 @@ export function buildOcrEndpoint(serviceUrl: string): string {
   return `${serviceUrl.replace(/\/+$/, '')}/ocr`;
 }
 
-export async function defaultOcrRequestFn(serviceUrl: string, pdfBuffer: Buffer, token: string): Promise<OcrAttemptResult> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-  const started = Date.now();
-  try {
-    const res = await fetch(buildOcrEndpoint(serviceUrl), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/pdf', Authorization: `Bearer ${token}` },
-      body: pdfBuffer,
-      signal: controller.signal,
-    });
-    // codex review(5周目)指摘(P2): fetch()はレスポンスヘッダ受信時点で解決するため、
-    // res.text()より前にwallMsを確定するとtime-to-first-byteしか計測できず、レスポンス
-    // ボディ転送が遅いケースで実際のレイテンシを過小評価してしまう。ボディ読了後に確定する。
-    const body = await res.text();
-    const wallMs = Date.now() - started;
-    return { status: res.status, body, wallMs, kind: 'success' };
-  } catch (err) {
-    const wallMs = Date.now() - started;
-    if ((err as { name?: string }).name === 'AbortError') {
-      return { status: null, body: null, wallMs, kind: 'timeout' };
+/**
+ * `OcrRequestFn`のファクトリ(タイムアウト値を注入可能にする)。golden(180秒)とload
+ * (250秒、本番`RETRY_CONFIGS.paddleOcr`の`requestTimeoutMs`と同値)でタイムアウトが
+ * 異なるため、2026-09-18のADR-0025 PR4c Stage3実装でファクトリ化した(挙動は不変、
+ * `defaultOcrRequestFn`は従来通り`REQUEST_TIMEOUT_MS`固定のエイリアス)。
+ */
+export function makeOcrRequestFn(timeoutMs: number): OcrRequestFn {
+  return async function ocrRequestFn(serviceUrl: string, pdfBuffer: Buffer, token: string): Promise<OcrAttemptResult> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const started = Date.now();
+    try {
+      const res = await fetch(buildOcrEndpoint(serviceUrl), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/pdf', Authorization: `Bearer ${token}` },
+        body: pdfBuffer,
+        signal: controller.signal,
+      });
+      // codex review(5周目)指摘(P2): fetch()はレスポンスヘッダ受信時点で解決するため、
+      // res.text()より前にwallMsを確定するとtime-to-first-byteしか計測できず、レスポンス
+      // ボディ転送が遅いケースで実際のレイテンシを過小評価してしまう。ボディ読了後に確定する。
+      const body = await res.text();
+      const wallMs = Date.now() - started;
+      return { status: res.status, body, wallMs, kind: 'success' };
+    } catch (err) {
+      const wallMs = Date.now() - started;
+      if ((err as { name?: string }).name === 'AbortError') {
+        return { status: null, body: null, wallMs, kind: 'timeout' };
+      }
+      return {
+        status: null,
+        body: null,
+        wallMs,
+        kind: 'networkError',
+        errorDetail: err instanceof Error ? `${err.name}: ${err.message}` : String(err),
+      };
+    } finally {
+      clearTimeout(timer);
     }
-    return {
-      status: null,
-      body: null,
-      wallMs,
-      kind: 'networkError',
-      errorDetail: err instanceof Error ? `${err.name}: ${err.message}` : String(err),
-    };
-  } finally {
-    clearTimeout(timer);
-  }
+  };
 }
+
+export const defaultOcrRequestFn: OcrRequestFn = makeOcrRequestFn(REQUEST_TIMEOUT_MS);
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// ============================================================================
+// OCR送信リトライの汎用コア(golden/load共有、2026-09-18 ADR-0025 PR4c Stage3で抽出)
+// ============================================================================
+
+export interface RetryPolicy {
+  maxRetries: number;
+  backoffMs: number;
+  /**
+   * true: 504・クライアントタイムアウト・networkErrorもリトライ対象に含める(load方針、
+   * 本番`functions/src/utils/retry.ts`の`RETRY_CONFIGS.paddleOcr`と整合させる。
+   * 完了率ゲートの目的は「本番が完走するか」であり、本番が救済するケースをハーネスが
+   * 誤って失敗カウントしないため)。
+   * false: 即座にtimedOut扱いにしリトライしない(golden方針、逐次系列
+   * `subsequentRequestsMs`の統計的純度を守るため、既存の挙動を変えない)。
+   */
+  retryOnTimeoutLike: boolean;
+}
+
+export type RawSendResult =
+  | { kind: 'timedOut'; failureKind: 'clientTimeout' | 'serverTimeout504' | 'networkError'; httpStatus: number | null; errorDetail?: string }
+  | { kind: 'fatal'; httpStatus: number | null; fatalReason: string }
+  | { kind: 'success'; httpStatus: 200; body: string };
+
+export interface RawSendOutcome {
+  elapsedMs: number;
+  retriedCount: number;
+  authRetried: boolean;
+  result: RawSendResult;
+}
+
+/**
+ * 1リクエスト分のOCR送信をリトライ込みで実行する汎用コア。fixture読込・golden text/契約
+ * 検証等の呼び出し元固有の後処理は含まない(`sendGoldenCaseWithRetries`が薄いラッパとして
+ * 呼び出す)。ロジック自体は従来の`sendGoldenCaseWithRetries`と完全に同一(golden方針=
+ * `retryOnTimeoutLike:false`で呼ぶ限り既存88テストが無改変で緑であることを確認済み)。
+ */
+export async function sendOcrWithRetries(opts: {
+  pdfBuffer: Buffer;
+  serviceUrl: string;
+  tokenProvider: IdTokenProvider;
+  policy: RetryPolicy;
+  requestFn?: OcrRequestFn;
+  nowFn?: () => number;
+}): Promise<RawSendOutcome> {
+  const requestFn = opts.requestFn ?? defaultOcrRequestFn;
+  const nowFn = opts.nowFn ?? Date.now;
+  let retriedCount = 0;
+  let authRetried = false;
+  let caseStarted: number | undefined;
+
+  for (;;) {
+    const token = await opts.tokenProvider.getToken();
+    if (caseStarted === undefined) {
+      caseStarted = nowFn();
+    }
+    const attempt = await requestFn(opts.serviceUrl, opts.pdfBuffer, token);
+    const elapsedMs = nowFn() - caseStarted;
+
+    if (attempt.kind === 'timeout') {
+      if (opts.policy.retryOnTimeoutLike && retriedCount < opts.policy.maxRetries) {
+        retriedCount++;
+        await sleep(opts.policy.backoffMs * 2 ** (retriedCount - 1));
+        continue;
+      }
+      return { elapsedMs, retriedCount, authRetried, result: { kind: 'timedOut', failureKind: 'clientTimeout', httpStatus: null } };
+    }
+
+    if (attempt.kind === 'networkError') {
+      if (opts.policy.retryOnTimeoutLike && retriedCount < opts.policy.maxRetries) {
+        retriedCount++;
+        await sleep(opts.policy.backoffMs * 2 ** (retriedCount - 1));
+        continue;
+      }
+      return {
+        elapsedMs,
+        retriedCount,
+        authRetried,
+        result: { kind: 'timedOut', failureKind: 'networkError', httpStatus: null, errorDetail: attempt.errorDetail },
+      };
+    }
+
+    // kind === 'success'(HTTPレスポンスは受信できた。ステータスは200とは限らない)
+    if ((attempt.status === 401 || attempt.status === 403) && !authRetried) {
+      authRetried = true;
+      await opts.tokenProvider.getToken(true);
+      continue;
+    }
+    if ((attempt.status === 401 || attempt.status === 403) && authRetried) {
+      return {
+        elapsedMs,
+        retriedCount,
+        authRetried,
+        result: {
+          kind: 'fatal',
+          httpStatus: attempt.status,
+          fatalReason: `トークン再発行後も${attempt.status}が続きました(認可設定の不備の疑い)`,
+        },
+      };
+    }
+
+    if (attempt.status === 504) {
+      if (opts.policy.retryOnTimeoutLike && retriedCount < opts.policy.maxRetries) {
+        retriedCount++;
+        await sleep(opts.policy.backoffMs * 2 ** (retriedCount - 1));
+        continue;
+      }
+      return {
+        elapsedMs,
+        retriedCount,
+        authRetried,
+        result: {
+          kind: 'timedOut',
+          failureKind: 'serverTimeout504',
+          httpStatus: 504,
+          errorDetail: attempt.body?.slice(0, 500),
+        },
+      };
+    }
+
+    const failureClass = attempt.status !== null && attempt.status !== 200 ? classifyFailure('httpStatus', attempt.status) : null;
+
+    if (failureClass === 'retryable' && retriedCount < opts.policy.maxRetries) {
+      retriedCount++;
+      await sleep(opts.policy.backoffMs * 2 ** (retriedCount - 1));
+      continue;
+    }
+
+    if (attempt.status !== 200) {
+      return {
+        elapsedMs,
+        retriedCount,
+        authRetried,
+        result: { kind: 'fatal', httpStatus: attempt.status, fatalReason: `HTTP ${attempt.status}: ${attempt.body?.slice(0, 500) ?? ''}` },
+      };
+    }
+
+    return { elapsedMs, retriedCount, authRetried, result: { kind: 'success', httpStatus: 200, body: attempt.body ?? '' } };
+  }
 }
 
 // ============================================================================
@@ -949,160 +1226,92 @@ export async function sendGoldenCaseWithRetries(
   const expectedPages = JSON.parse(fs.readFileSync(path.join(FIXTURE_DIR, c.pagesJsonFile), 'utf-8')) as string[];
   const expectedText = expectedPages[c.pageIndex];
 
-  let retriedCount = 0;
-  let authRetried = false;
-  // codex review(5周目)指摘(P1): 従来は最終試行の`attempt.wallMs`のみを記録しており、
-  // リトライ発生時の失敗試行時間・バックオフ待機時間が丸ごと消えていた(例: 504で数分待った後
-  // 高速なリトライが成功すると、実際には数分かかったケースが数百msのPASSとして記録される)。
-  // ケース開始時点からの累積経過時間を記録し、リトライ込みの実質レイテンシを反映する。
-  // codex review(9周目)指摘(P2): 計測開始点をトークン取得より前に置くと、初回発行(または
-  // 約55分ごとのキャッシュ失効後の再発行)で発生する`gcloud auth print-identity-token`
-  // サブプロセスの起動時間がレイテンシに混入し、GitHub Actions runner/IAM側の遅延を
-  // Cloud Run `/ocr`自体のレイテンシと誤認しうる(p1/p95ゲートを偽陽性でFAILさせかねない)。
-  // トークン取得(1回目、通常はキャッシュ済みで高速)が完了した直後に計測を開始することで、
-  // これを除外しつつ、リトライ・バックオフに費やした時間は従来通り累積に含める。
-  let caseStarted: number | undefined;
+  // 2026-09-18 ADR-0025 PR4c Stage3実装で`sendOcrWithRetries`(汎用コア)へ抽出した。
+  // golden方針(retryOnTimeoutLike:false)で呼ぶ限り、504・クライアントタイムアウト・
+  // networkErrorは即座にtimedOut扱いになり、429/5xx(504除く)はMAX_RETRIESまでリトライする
+  // という従来の挙動と完全に同一(既存88テストで確認済み)。
+  const outcome = await sendOcrWithRetries({
+    pdfBuffer,
+    serviceUrl,
+    tokenProvider,
+    policy: { maxRetries: MAX_RETRIES, backoffMs, retryOnTimeoutLike: false },
+    requestFn,
+    nowFn,
+  });
 
-  for (;;) {
-    const token = await tokenProvider.getToken();
-    if (caseStarted === undefined) {
-      caseStarted = nowFn();
-    }
-    const attempt = await requestFn(serviceUrl, pdfBuffer, token);
-    const elapsedMs = nowFn() - caseStarted;
-
-    if (attempt.kind === 'timeout') {
-      return makeTimedOutRecord(base, {
-        wallMs: elapsedMs,
-        retriedCount,
-        authRetried,
-        failureKind: 'clientTimeout',
-      });
-    }
-
-    if (attempt.kind === 'networkError') {
-      // codex review(8周目)指摘(P2): networkError(接続断)は「サーバに全く到達しなかった」
-      // (安全にリトライ可能)なのか「サーバは受理し処理を開始したが応答が届く前に接続が
-      // 切れた」(504と同じくバックグラウンド処理継続の疑いがある)のかを、fetch()の汎用的な
-      // 例外だけからは区別できない。安全側に倒し、504/クライアントタイムアウトと同様に
-      // リトライせずtimedOut扱いとする(次のケースへ進まず、レポート全体もinconclusiveにする)。
-      return makeTimedOutRecord(base, {
-        wallMs: elapsedMs,
-        retriedCount,
-        authRetried,
-        failureKind: 'networkError',
-        // silent-failure-hunter指摘(High、pr-review-toolkit): 保持していたerrorDetailを
-        // レコードへ渡し忘れており、原因調査に必要な情報がJSON artifact/Step Summaryに
-        // 一切残らなかった。
-        errorDetail: attempt.errorDetail,
-      });
-    }
-
-    // kind === 'success'(HTTPレスポンスは受信できた。ステータスは200とは限らない)
-    if ((attempt.status === 401 || attempt.status === 403) && !authRetried) {
-      authRetried = true;
-      await tokenProvider.getToken(true);
-      continue;
-    }
-    if ((attempt.status === 401 || attempt.status === 403) && authRetried) {
-      return makeFatalRecord(base, {
-        wallMs: elapsedMs,
-        httpStatus: attempt.status,
-        retriedCount,
-        authRetried,
-        fatalReason: `トークン再発行後も${attempt.status}が続きました(認可設定の不備の疑い)`,
-      });
-    }
-
-    // codex review(6周目)指摘(P2): PaddleOCRサービス自身が返す504(PROCESSING_TIMEOUT)は、
-    // services/paddle-ocr/README.md「既知の限界」節の通りバックグラウンドでOCR処理(と
-    // エンジンのthreading.Lock保持)がそのまま継続する設計であり、クライアントタイムアウトと
-    // 同じ理由でリトライしてはいけない(別インスタンスまたは同一インスタンスのロック待ちに
-    // 回り込み、逐次計測の前提=subsequentRequestsMs系列を汚染する)。timedOutと同様に扱う。
-    if (attempt.status === 504) {
-      return makeTimedOutRecord(base, {
-        wallMs: elapsedMs,
-        retriedCount,
-        authRetried,
-        failureKind: 'serverTimeout504',
-        // silent-failure-hunter指摘: 504もhttpStatus:nullに一律化されており、クライアント
-        // タイムアウト/networkErrorと区別がつかなかった。実際のステータスを保持する。
-        httpStatus: 504,
-        errorDetail: attempt.body?.slice(0, 500),
-      });
-    }
-
-    const failureClass = attempt.status !== null && attempt.status !== 200 ? classifyFailure('httpStatus', attempt.status) : null;
-
-    if (failureClass === 'retryable' && retriedCount < MAX_RETRIES) {
-      retriedCount++;
-      await sleep(backoffMs * 2 ** (retriedCount - 1));
-      continue;
-    }
-
-    if (attempt.status !== 200) {
-      return makeFatalRecord(base, {
-        wallMs: elapsedMs,
-        httpStatus: attempt.status,
-        retriedCount,
-        authRetried,
-        fatalReason: `HTTP ${attempt.status}: ${attempt.body?.slice(0, 500) ?? ''}`,
-      });
-    }
-
-    // 200 OK: 契約検証
-    let parsed: {
-      pages?: string[];
-      text?: string;
-      pageCount?: number;
-      engine?: string;
-      renderDpi?: number;
-      modelVersion?: string;
-      processingMs?: number;
-    };
-    try {
-      parsed = JSON.parse(attempt.body ?? '');
-    } catch {
-      // silent-failure-hunter指摘: 非200時はレスポンス本文を含めているのに、JSON parse失敗時は
-      // 含めていなかった非対称性を解消する(200 OKでも不正JSONが返るケースこそ原因調査が必要)。
-      return makeFatalRecord(base, {
-        wallMs: elapsedMs,
-        httpStatus: attempt.status,
-        retriedCount,
-        authRetried,
-        fatalReason: `レスポンスがJSONとしてパースできませんでした: ${(attempt.body ?? '').slice(0, 500)}`,
-      });
-    }
-
-    const actualText = parsed.pages?.[0] ?? '';
-    const textCheck = compareGoldenText(expectedText, actualText);
-    const contractCheck = checkContract(parsed, expectedModelVersion, expectedText);
-
-    const processingMs = typeof parsed.processingMs === 'number' ? parsed.processingMs : null;
-    // clientObservedExcessMsもリトライ込みの累積時間基準にする(リトライがあった場合、
-    // その分の超過が正直に反映される)。
-    const clientObservedExcessMs = processingMs !== null ? elapsedMs - processingMs : null;
-
-    const fatal = !textCheck.exactMatch || !contractOk(contractCheck);
-    const fatalReason = !textCheck.exactMatch
-      ? 'golden textと不一致'
-      : !contractOk(contractCheck)
-        ? `契約検証(pageCount/engine/renderDpi/modelVersion)に失敗: ${JSON.stringify(contractCheck)}`
-        : undefined;
-
-    return makeResponseRecord(base, {
-      wallMs: elapsedMs,
-      httpStatus: attempt.status,
-      retriedCount,
-      authRetried,
-      processingMs,
-      clientObservedExcessMs,
-      textCheck,
-      contractCheck,
-      fatal,
-      fatalReason,
+  if (outcome.result.kind === 'timedOut') {
+    return makeTimedOutRecord(base, {
+      wallMs: outcome.elapsedMs,
+      retriedCount: outcome.retriedCount,
+      authRetried: outcome.authRetried,
+      failureKind: outcome.result.failureKind,
+      httpStatus: outcome.result.httpStatus,
+      errorDetail: outcome.result.errorDetail,
     });
   }
+
+  if (outcome.result.kind === 'fatal') {
+    return makeFatalRecord(base, {
+      wallMs: outcome.elapsedMs,
+      httpStatus: outcome.result.httpStatus,
+      retriedCount: outcome.retriedCount,
+      authRetried: outcome.authRetried,
+      fatalReason: outcome.result.fatalReason,
+    });
+  }
+
+  // 200 OK: 契約検証
+  let parsed: {
+    pages?: string[];
+    text?: string;
+    pageCount?: number;
+    engine?: string;
+    renderDpi?: number;
+    modelVersion?: string;
+    processingMs?: number;
+  };
+  try {
+    parsed = JSON.parse(outcome.result.body);
+  } catch {
+    // silent-failure-hunter指摘: 非200時はレスポンス本文を含めているのに、JSON parse失敗時は
+    // 含めていなかった非対称性を解消する(200 OKでも不正JSONが返るケースこそ原因調査が必要)。
+    return makeFatalRecord(base, {
+      wallMs: outcome.elapsedMs,
+      httpStatus: 200,
+      retriedCount: outcome.retriedCount,
+      authRetried: outcome.authRetried,
+      fatalReason: `レスポンスがJSONとしてパースできませんでした: ${outcome.result.body.slice(0, 500)}`,
+    });
+  }
+
+  const actualText = parsed.pages?.[0] ?? '';
+  const textCheck = compareGoldenText(expectedText, actualText);
+  const contractCheck = checkContract(parsed, expectedModelVersion, expectedText);
+
+  const processingMs = typeof parsed.processingMs === 'number' ? parsed.processingMs : null;
+  // clientObservedExcessMsもリトライ込みの累積時間基準にする(リトライがあった場合、
+  // その分の超過が正直に反映される)。
+  const clientObservedExcessMs = processingMs !== null ? outcome.elapsedMs - processingMs : null;
+
+  const fatal = !textCheck.exactMatch || !contractOk(contractCheck);
+  const fatalReason = !textCheck.exactMatch
+    ? 'golden textと不一致'
+    : !contractOk(contractCheck)
+      ? `契約検証(pageCount/engine/renderDpi/modelVersion)に失敗: ${JSON.stringify(contractCheck)}`
+      : undefined;
+
+  return makeResponseRecord(base, {
+    wallMs: outcome.elapsedMs,
+    httpStatus: 200,
+    retriedCount: outcome.retriedCount,
+    authRetried: outcome.authRetried,
+    processingMs,
+    clientObservedExcessMs,
+    textCheck,
+    contractCheck,
+    fatal,
+    fatalReason,
+  });
 }
 
 // ============================================================================
@@ -1132,6 +1341,417 @@ function emptyReportSkeleton(startedAt: string, finishedAt: string, serviceUrl: 
   };
 }
 
+// ============================================================================
+// load モード(ADR-0025 PR4c Stage3、2026-09-18実装)のI/Oオーケストレーション。
+// 純ロジック(ゲート判定・統計・reducer)は scripts/lib/paddleOcrLoad.ts に隔離済み。
+// ============================================================================
+
+/** 前バーストの余剰インスタンス終了を待つための間隔(承認済み設計、バースト方式のcold測定)。 */
+const COLD_BURST_COOLDOWN_MS = 180_000;
+/** trial失敗後のクールダウン中、/healthのポーリング間隔・最大待機時間。 */
+const HEALTH_POLL_INTERVAL_MS = 5_000;
+const HEALTH_POLL_MAX_WAIT_MS = 600_000;
+
+async function sendLoadPage(opts: {
+  series: LoadSeries;
+  trial: number;
+  pageIndex: number;
+  pdfBuffer: Buffer;
+  serviceUrl: string;
+  tokenProvider: IdTokenProvider;
+  expectedModelVersion: string;
+  requestFn?: OcrRequestFn;
+  nowFn?: () => number;
+  /** fault injection(quick検証専用): trueならHTTP送信自体を行わず強制的にfatal扱いにする。 */
+  forceFailure?: boolean;
+}): Promise<LoadPageRecord> {
+  const baseFields = { series: opts.series, trial: opts.trial, pageIndex: opts.pageIndex };
+
+  if (opts.forceFailure) {
+    return {
+      ...baseFields,
+      wallMs: 0,
+      serviceProcessingMs: null,
+      clientObservedExcessMs: null,
+      httpStatus: null,
+      retriedCount: 0,
+      authRetried: false,
+      timedOut: false,
+      fatal: true,
+      fatalReason: 'fault injection(--inject-failure-at-page)による強制失敗(quickモードの経路検証専用)',
+    };
+  }
+
+  const outcome = await sendOcrWithRetries({
+    pdfBuffer: opts.pdfBuffer,
+    serviceUrl: opts.serviceUrl,
+    tokenProvider: opts.tokenProvider,
+    policy: { maxRetries: LOAD_MAX_RETRIES, backoffMs: LOAD_INITIAL_BACKOFF_MS, retryOnTimeoutLike: true },
+    requestFn: opts.requestFn,
+    nowFn: opts.nowFn,
+  });
+
+  const withRetryMeta = { ...baseFields, retriedCount: outcome.retriedCount, authRetried: outcome.authRetried };
+
+  if (outcome.result.kind === 'timedOut') {
+    return {
+      ...withRetryMeta,
+      wallMs: outcome.elapsedMs,
+      serviceProcessingMs: null,
+      clientObservedExcessMs: null,
+      httpStatus: outcome.result.httpStatus,
+      timedOut: true,
+      failureKind: outcome.result.failureKind,
+      errorDetail: outcome.result.errorDetail,
+      fatal: false,
+    };
+  }
+  if (outcome.result.kind === 'fatal') {
+    return {
+      ...withRetryMeta,
+      wallMs: outcome.elapsedMs,
+      serviceProcessingMs: null,
+      clientObservedExcessMs: null,
+      httpStatus: outcome.result.httpStatus,
+      timedOut: false,
+      fatal: true,
+      fatalReason: outcome.result.fatalReason,
+    };
+  }
+
+  // success: 200 OK
+  let parsed: { pages?: string[]; text?: string; pageCount?: number; engine?: string; renderDpi?: number; modelVersion?: string; processingMs?: number };
+  try {
+    parsed = JSON.parse(outcome.result.body);
+  } catch {
+    return {
+      ...withRetryMeta,
+      wallMs: outcome.elapsedMs,
+      serviceProcessingMs: null,
+      clientObservedExcessMs: null,
+      httpStatus: 200,
+      timedOut: false,
+      fatal: true,
+      fatalReason: `レスポンスがJSONとしてパースできませんでした: ${outcome.result.body.slice(0, 500)}`,
+    };
+  }
+  const contractCheck = checkLoadContract(parsed, opts.expectedModelVersion);
+  const processingMs = typeof parsed.processingMs === 'number' ? parsed.processingMs : null;
+  const clientObservedExcessMs = processingMs !== null ? outcome.elapsedMs - processingMs : null;
+  const fatal = !loadContractOk(contractCheck);
+
+  return {
+    ...withRetryMeta,
+    wallMs: outcome.elapsedMs,
+    serviceProcessingMs: processingMs,
+    clientObservedExcessMs,
+    httpStatus: 200,
+    timedOut: false,
+    contractCheck,
+    fatal,
+    fatalReason: fatal ? `契約検証(pageCount/engine/renderDpi/modelVersion/textSelfConsistent/nonEmptyText)に失敗: ${JSON.stringify(contractCheck)}` : undefined,
+  };
+}
+
+async function pollHealthUntilOk(serviceUrl: string, tokenProvider: IdTokenProvider): Promise<void> {
+  const deadline = Date.now() + HEALTH_POLL_MAX_WAIT_MS;
+  for (;;) {
+    try {
+      const token = await tokenProvider.getToken();
+      const res = await fetch(`${serviceUrl.replace(/\/+$/, '')}/health`, { headers: { Authorization: `Bearer ${token}` } });
+      if (res.ok) return;
+    } catch {
+      // 無視して再試行(ネットワーク瞬断・503等)
+    }
+    if (Date.now() > deadline) {
+      console.warn(`/healthのポーリングが${HEALTH_POLL_MAX_WAIT_MS / 60000}分でタイムアウトしました。次trialへ進みます。`);
+      return;
+    }
+    await sleep(HEALTH_POLL_INTERVAL_MS);
+  }
+}
+
+/**
+ * 承認済み仕様の緩和(golden側は「1件でも全体inconclusive」のまま無改変):
+ * page単位で失敗検知したらtrialを打ち切り、300秒+/healthポーリングでクールダウンしてから
+ * 次trialへ進む。本番と同じ「1ページずつ逐次送信」を再現する。
+ */
+async function runWarmTrial(opts: {
+  tier: LoadTier;
+  trialIndex: number;
+  pageBuffers: Buffer[];
+  serviceUrl: string;
+  tokenProvider: IdTokenProvider;
+  expectedModelVersion: string;
+  requestFn: OcrRequestFn;
+  injectFailureAtPage?: number;
+}): Promise<LoadTrialRecord> {
+  const startedAt = new Date().toISOString();
+  const trialStartMs = Date.now();
+  let state = initialTrialState(opts.tier, opts.trialIndex, opts.pageBuffers.length);
+  let totalWallMs = 0;
+  let totalServiceProcessingMs = 0;
+  let hasServiceProcessingMs = false;
+
+  for (let i = 0; i < opts.pageBuffers.length; i++) {
+    const forceFailure = opts.injectFailureAtPage !== undefined && i + 1 === opts.injectFailureAtPage;
+    const page = await sendLoadPage({
+      series: 'warm',
+      trial: opts.trialIndex,
+      pageIndex: i,
+      pdfBuffer: opts.pageBuffers[i],
+      serviceUrl: opts.serviceUrl,
+      tokenProvider: opts.tokenProvider,
+      expectedModelVersion: opts.expectedModelVersion,
+      requestFn: opts.requestFn,
+      forceFailure,
+    });
+
+    if (page.timedOut || page.fatal) {
+      const kind: PageFailureKind = page.timedOut ? (page.failureKind ?? 'networkError') : 'httpFatal';
+      state = reduceTrialOutcome(state, { type: 'pageFailure', pageIndex: i, kind, detail: page.errorDetail ?? page.fatalReason });
+      break;
+    }
+    totalWallMs += page.wallMs;
+    if (page.serviceProcessingMs !== null) {
+      totalServiceProcessingMs += page.serviceProcessingMs;
+      hasServiceProcessingMs = true;
+    }
+    state = reduceTrialOutcome(state, { type: 'pageSuccess', pageIndex: i, wallMs: page.wallMs });
+  }
+
+  const finishedAt = new Date().toISOString();
+  const completed = trialSucceeded(state);
+
+  return {
+    series: 'warm',
+    trial: opts.trialIndex,
+    pagesPlanned: opts.pageBuffers.length,
+    pagesSent: state.pagesSent,
+    totalWallMs,
+    trialWallClockMs: Date.now() - trialStartMs,
+    totalServiceProcessingMs: hasServiceProcessingMs ? totalServiceProcessingMs : null,
+    completed,
+    failedPageCount: completed ? 0 : finalizeTrialFailedPageCount(state),
+    firstFailure: state.firstFailure,
+    startedAt,
+    finishedAt,
+  };
+}
+
+async function runWarmSeries(opts: {
+  tier: LoadTier;
+  expectedWarmTrials: number;
+  pageBuffers: Buffer[];
+  serviceUrl: string;
+  tokenProvider: IdTokenProvider;
+  expectedModelVersion: string;
+  requestFn: OcrRequestFn;
+  budgetDeadlineMs: number;
+  injectFailureAtPage?: number;
+}): Promise<{ trials: LoadTrialRecord[]; abortedReason: 'budgetExceeded' | 'consecutiveTrialFailures' | null }> {
+  const trials: LoadTrialRecord[] = [];
+  let circuit = initialCircuitState();
+
+  // warm系列1trial目はmin-instances=0により実質cold startを含むため、統計から除外する
+  // 破棄用ウォームアップリクエストを1件送る(成否は問わない)。
+  await sendLoadPage({
+    series: 'warm',
+    trial: -1,
+    pageIndex: 0,
+    pdfBuffer: opts.pageBuffers[0],
+    serviceUrl: opts.serviceUrl,
+    tokenProvider: opts.tokenProvider,
+    expectedModelVersion: opts.expectedModelVersion,
+    requestFn: opts.requestFn,
+  }).catch(() => undefined);
+
+  for (let trialIndex = 0; trialIndex < opts.expectedWarmTrials; trialIndex++) {
+    if (Date.now() > opts.budgetDeadlineMs) {
+      console.warn(`実行時間の予算を超過したため、残りのtrialを打ち切ります。収集済み${trials.length}件のtrialでレポートを生成します。`);
+      return { trials, abortedReason: 'budgetExceeded' };
+    }
+    const trial = await runWarmTrial({
+      tier: opts.tier,
+      trialIndex,
+      pageBuffers: opts.pageBuffers,
+      serviceUrl: opts.serviceUrl,
+      tokenProvider: opts.tokenProvider,
+      expectedModelVersion: opts.expectedModelVersion,
+      requestFn: opts.requestFn,
+      injectFailureAtPage: trialIndex === 0 ? opts.injectFailureAtPage : undefined,
+    });
+    trials.push(trial);
+    console.log(
+      `[warm ${trialIndex + 1}/${opts.expectedWarmTrials}] tier=${opts.tier} completed=${trial.completed} ` +
+        `totalWallMs=${trial.totalWallMs} failedPageCount=${trial.failedPageCount}`
+    );
+
+    circuit = reduceCircuitState(circuit, trial.completed);
+    if (!trial.completed) {
+      console.warn(`trial失敗を検知したためクールダウンへ入ります(次trial前にサービス復旧を待つ)。`);
+      await sleep(COOLDOWN_AFTER_FAILURE_MS);
+      await pollHealthUntilOk(opts.serviceUrl, opts.tokenProvider);
+    }
+    if (circuit.broken) {
+      console.warn(`連続${CIRCUIT_BREAK_THRESHOLD}回のtrial失敗によりサーキットブレークしました。`);
+      return { trials, abortedReason: 'consecutiveTrialFailures' };
+    }
+  }
+  return { trials, abortedReason: null };
+}
+
+async function runColdBurst(opts: {
+  burstIndex: number;
+  pageBuffer: Buffer;
+  serviceUrl: string;
+  tokenProvider: IdTokenProvider;
+  expectedModelVersion: string;
+  requestFn: OcrRequestFn;
+}): Promise<ColdBurstRecord> {
+  const sendOne = (i: number) =>
+    sendLoadPage({
+      series: 'cold',
+      trial: opts.burstIndex,
+      pageIndex: i,
+      pdfBuffer: opts.pageBuffer,
+      serviceUrl: opts.serviceUrl,
+      tokenProvider: opts.tokenProvider,
+      expectedModelVersion: opts.expectedModelVersion,
+      requestFn: opts.requestFn,
+    });
+  // concurrency=1のため、既存インスタンスで捌けない分は新規起動(真のcold start)を強制する
+  // (2026-09-18再設計、詳細は計画書「cold測定の再設計」節参照)。
+  const pages = await Promise.all(Array.from({ length: COLD_BURST_SIZE }, (_, i) => sendOne(i)));
+  const coldCandidateMs = Math.max(...pages.map((p) => p.wallMs));
+  return { burstIndex: opts.burstIndex, pages, coldCandidateMs };
+}
+
+async function runColdSeries(opts: {
+  expectedColdBursts: number;
+  pageBuffer: Buffer;
+  serviceUrl: string;
+  tokenProvider: IdTokenProvider;
+  expectedModelVersion: string;
+  requestFn: OcrRequestFn;
+}): Promise<ColdBurstRecord[]> {
+  const bursts: ColdBurstRecord[] = [];
+  for (let i = 0; i < opts.expectedColdBursts; i++) {
+    if (i > 0) {
+      await sleep(COLD_BURST_COOLDOWN_MS);
+    }
+    const burst = await runColdBurst({
+      burstIndex: i,
+      pageBuffer: opts.pageBuffer,
+      serviceUrl: opts.serviceUrl,
+      tokenProvider: opts.tokenProvider,
+      expectedModelVersion: opts.expectedModelVersion,
+      requestFn: opts.requestFn,
+    });
+    bursts.push(burst);
+    console.log(`[cold burst ${i + 1}/${opts.expectedColdBursts}] coldCandidateMs=${burst.coldCandidateMs}`);
+  }
+  return bursts;
+}
+
+async function runLoadModeSingleTier(opts: {
+  tier: LoadTier;
+  seriesArg: LoadSeries | 'both';
+  intensity: LoadIntensity;
+  injectFailureAtPage: number | undefined;
+  budgetDeadlineMs: number;
+  projectId: string;
+  region: string;
+  serviceUrl: string;
+  expectedModelVersion: string;
+}): Promise<LoadReport> {
+  const startedAt = new Date().toISOString();
+  const fixturePath = loadFixturePath(opts.tier);
+  const combinedBuffer = fs.readFileSync(fixturePath);
+  const fixtureSha256 = sha256File(fixturePath);
+  const expectedSha256 = EXPECTED_LOAD_FIXTURE_SHA256[opts.tier];
+  if (fixtureSha256 !== expectedSha256) {
+    throw new Error(
+      `load fixture整合性エラー(世代混在の疑い): ${path.basename(fixturePath)} のSHA-256が期待値と不一致です` +
+        `(expected=${expectedSha256}, actual=${fixtureSha256})。fixtureを再生成した場合は` +
+        `scripts/lib/paddleOcrLoad.ts の EXPECTED_LOAD_FIXTURE_SHA256 も更新してください。`
+    );
+  }
+  const { extractAllPdfPages } = await import('./lib/geminiOcrCompare');
+  const pageBuffers = await extractAllPdfPages(combinedBuffer);
+
+  const tokenProvider = new IdTokenProvider(opts.serviceUrl);
+  const requestFn = makeOcrRequestFn(LOAD_REQUEST_TIMEOUT_MS);
+
+  const warmTrialsExpected = opts.intensity === 'quick' ? QUICK_PARAMS.warmTrials : WARM_TRIALS_FULL[opts.tier];
+  const coldBurstsExpected = opts.intensity === 'quick' ? QUICK_PARAMS.coldBursts : COLD_BURSTS_FULL;
+  const effectivePageBuffers =
+    opts.intensity === 'quick' ? pageBuffers.slice(0, Math.min(pageBuffers.length, QUICK_PARAMS.maxPagesPerTrial)) : pageBuffers;
+
+  const seriesExecuted: LoadSeries[] = [];
+  let warmTrials: LoadTrialRecord[] = [];
+  let coldBursts: ColdBurstRecord[] = [];
+  let abortedReason: 'budgetExceeded' | 'consecutiveTrialFailures' | null = null;
+  let serviceSnapshotWarmStart: LoadServiceSnapshot | null = null;
+  let serviceSnapshotWarmEnd: LoadServiceSnapshot | null = null;
+
+  if (opts.seriesArg === 'warm' || opts.seriesArg === 'both') {
+    seriesExecuted.push('warm');
+    serviceSnapshotWarmStart = await getServiceSnapshot(opts.projectId, opts.region);
+    const result = await runWarmSeries({
+      tier: opts.tier,
+      expectedWarmTrials: warmTrialsExpected,
+      pageBuffers: effectivePageBuffers,
+      serviceUrl: opts.serviceUrl,
+      tokenProvider,
+      expectedModelVersion: opts.expectedModelVersion,
+      requestFn,
+      budgetDeadlineMs: opts.budgetDeadlineMs,
+      injectFailureAtPage: opts.injectFailureAtPage,
+    });
+    warmTrials = result.trials;
+    abortedReason = result.abortedReason;
+    try {
+      serviceSnapshotWarmEnd = await getServiceSnapshot(opts.projectId, opts.region);
+    } catch (snapshotErr) {
+      console.error('終了時スナップショットの取得に失敗しました:', snapshotErr);
+    }
+  }
+
+  if ((opts.seriesArg === 'cold' || opts.seriesArg === 'both') && abortedReason === null) {
+    seriesExecuted.push('cold');
+    coldBursts = await runColdSeries({
+      expectedColdBursts: coldBurstsExpected,
+      pageBuffer: effectivePageBuffers[0],
+      serviceUrl: opts.serviceUrl,
+      tokenProvider,
+      expectedModelVersion: opts.expectedModelVersion,
+      requestFn,
+    });
+  }
+
+  const finishedAt = new Date().toISOString();
+  return buildLoadReport({
+    tier: opts.tier,
+    intensity: opts.intensity,
+    seriesExecuted,
+    startedAt,
+    finishedAt,
+    serviceUrl: opts.serviceUrl,
+    fixtureFile: path.basename(fixturePath),
+    fixtureSha256,
+    fixturePageCount: pageBuffers.length,
+    expectedModelVersion: opts.expectedModelVersion,
+    serviceSnapshotWarmStart,
+    serviceSnapshotWarmEnd,
+    warmTrials,
+    coldBursts,
+    expectedWarmTrials: warmTrialsExpected,
+    expectedColdBursts: coldBurstsExpected,
+    abortedReason,
+  });
+}
+
 async function main(): Promise<void> {
   const startedAt = new Date().toISOString();
   let exitCode = 0;
@@ -1140,23 +1760,74 @@ async function main(): Promise<void> {
   // 「if: always()で必ず測定結果を回収する」という設計意図に反する)。全てtry内へ移す。
   let args: CliArgs | undefined;
 
-  const writeAndExit = (report: Report, outPath: string) => {
+  const writeJsonAndSummary = (reportJson: unknown, summaryMarkdown: string | null, outPath: string) => {
     fs.mkdirSync(path.dirname(outPath), { recursive: true });
-    fs.writeFileSync(outPath, JSON.stringify(report, null, 2));
+    fs.writeFileSync(outPath, JSON.stringify(reportJson, null, 2));
     console.log(`レポートを書き出しました: ${outPath}`);
     const summaryPath = process.env.GITHUB_STEP_SUMMARY;
-    if (summaryPath) {
-      fs.appendFileSync(summaryPath, buildStepSummaryMarkdown(report) + '\n');
+    if (summaryPath && summaryMarkdown !== null) {
+      fs.appendFileSync(summaryPath, summaryMarkdown + '\n');
     }
     process.exitCode = exitCode;
   };
 
   try {
     args = parseArgs(process.argv.slice(2));
-    if (args.mode !== 'golden') {
-      throw new Error(`--mode=${args.mode} はStage 1では未実装です(golden のみ対応。png/load/coldはStage 2/3判断待ち)`);
+
+    if (args.mode === 'load') {
+      const devEnvContent = fs.readFileSync(DEV_ENV_PATH, 'utf-8');
+      const projectId = requireEnvField(devEnvContent, 'PROJECT_ID', DEV_ENV_PATH);
+      const region = requireEnvField(devEnvContent, 'CLOUD_RUN_LOCATION', DEV_ENV_PATH);
+      const serviceUrl = resolveServiceUrl({
+        explicitUrl: args.url,
+        envVarUrl: process.env.PADDLE_OCR_URL,
+        devEnvContent,
+        devEnvPathForError: DEV_ENV_PATH,
+      });
+      const manifest = JSON.parse(fs.readFileSync(MANIFEST_PATH, 'utf-8')) as GoldenManifest;
+      const expectedModelVersion = deriveExpectedModelVersion(manifest);
+      const budgetDeadlineMs = Date.now() + args.budgetMs;
+      const seriesArg = args.series ?? 'both';
+
+      if (args.tier === 'all') {
+        // quick専用: 4tier全てを1ジョブで疎通確認する(Phase A step4相当)。
+        const tierReports = {} as Record<LoadTier, LoadReport>;
+        for (const t of LOAD_TIERS) {
+          tierReports[t] = await runLoadModeSingleTier({
+            tier: t,
+            seriesArg,
+            intensity: 'quick',
+            injectFailureAtPage: args.injectFailureAtPage,
+            budgetDeadlineMs,
+            projectId,
+            region,
+            serviceUrl,
+            expectedModelVersion,
+          });
+        }
+        exitCode = Math.max(...LOAD_TIERS.map((t) => determineLoadExitCode(tierReports[t]))) as 0 | 1;
+        const combinedMd = LOAD_TIERS.map((t) => buildLoadStepSummaryMarkdown(tierReports[t])).join('\n\n---\n\n');
+        writeJsonAndSummary({ schemaVersion: 1, mode: 'load', intensity: 'quick', tiers: tierReports }, combinedMd, args.out);
+        return;
+      }
+
+      const report = await runLoadModeSingleTier({
+        tier: args.tier as LoadTier,
+        seriesArg,
+        intensity: args.intensity ?? 'full',
+        injectFailureAtPage: args.injectFailureAtPage,
+        budgetDeadlineMs,
+        projectId,
+        region,
+        serviceUrl,
+        expectedModelVersion,
+      });
+      exitCode = determineLoadExitCode(report);
+      writeJsonAndSummary(report, buildLoadStepSummaryMarkdown(report), args.out);
+      return;
     }
 
+    // mode === 'golden'
     const devEnvContent = fs.readFileSync(DEV_ENV_PATH, 'utf-8');
     const projectId = requireEnvField(devEnvContent, 'PROJECT_ID', DEV_ENV_PATH);
     const region = requireEnvField(devEnvContent, 'CLOUD_RUN_LOCATION', DEV_ENV_PATH);
@@ -1192,9 +1863,9 @@ async function main(): Promise<void> {
         // codex review(8周目)指摘(P2): 429/5xxの再試行が繰り返し発生すると、`--repeat`の
         // ケース数上限だけではジョブのtimeout-minutesを超過しうる。実行時間そのものを監視し、
         // 予算超過ならレポートを書き出す時間を残して打ち切る。
-        if (Date.now() - loopStartedAt > RUN_BUDGET_MS) {
+        if (Date.now() - loopStartedAt > args.budgetMs) {
           console.warn(
-            `実行時間の予算(${RUN_BUDGET_MS / 60000}分)を超過したため、残りのケース送信を打ち切ります。` +
+            `実行時間の予算(${args.budgetMs / 60000}分)を超過したため、残りのケース送信を打ち切ります。` +
               `収集済み${requests.length}件のデータでレポートを生成します。`
           );
           break requestLoop;
@@ -1258,12 +1929,29 @@ async function main(): Promise<void> {
 
     exitCode = determineExitCode(report, requests);
 
-    writeAndExit(report, args.out);
+    writeJsonAndSummary(report, buildStepSummaryMarkdown(report), args.out);
   } catch (err) {
     exitCode = 1;
-    const outPath = args?.out ?? path.join(process.cwd(), 'paddle-ocr-verify-golden.json');
     const fatalError = err instanceof Error ? `${err.message}\n${err.stack ?? ''}` : String(err);
-    writeAndExit(emptyReportSkeleton(startedAt, new Date().toISOString(), args?.url ?? 'unresolved', fatalError), outPath);
+    if (args?.mode === 'load' && args.tier !== undefined && args.tier !== 'all') {
+      const outPath = args.out;
+      const report = emptyLoadReportSkeleton({
+        tier: args.tier as LoadTier,
+        intensity: args.intensity ?? 'full',
+        startedAt,
+        finishedAt: new Date().toISOString(),
+        serviceUrl: args.url ?? 'unresolved',
+        fatalError,
+      });
+      writeJsonAndSummary(report, buildLoadStepSummaryMarkdown(report), outPath);
+    } else {
+      const outPath = args?.out ?? path.join(process.cwd(), 'paddle-ocr-verify-golden.json');
+      writeJsonAndSummary(
+        emptyReportSkeleton(startedAt, new Date().toISOString(), args?.url ?? 'unresolved', fatalError),
+        buildStepSummaryMarkdown(emptyReportSkeleton(startedAt, new Date().toISOString(), args?.url ?? 'unresolved', fatalError)),
+        outPath
+      );
+    }
     console.error(err);
   }
 }
