@@ -31,37 +31,26 @@
  * フラグを持つ)だけに縮小している。read-only関数(`resolveExistingChildFile`等、
  * `classify-drive-export-drift.ts`用)は無変更(診断のground truth性を維持するため、
  * claimコレクションに一切アクセスしない)。
+ *
+ * Issue #880恒久対策(2026-09-17): claimプロトコル状態機械の呼び出しシーケンスは
+ * `findOrCreateFolder.ts`とほぼ同一だったため重複しており、実際に2度(コミット8a89badd・
+ * PR #928)片側だけ修正して対称性が崩れる実害を起こしていた。`folderResolutionCore.ts`へ
+ * 状態機械本体を集約し、本ファイルは薄いラッパーになった。
  */
 
 import type { drive_v3 } from 'googleapis';
 import type * as admin from 'firebase-admin';
-import { randomUUID } from 'node:crypto';
-import { SUPPORTS_ALL_DRIVES, DOCSPLIT_FOLDER_CLAIM_KEY, escapeQueryValue } from './driveApiConstants';
-import { isDriveFolderClaimReadEnabled } from '../utils/featureFlags';
 import {
   FolderCreationInProgressError,
   DivergentFolderClaimError,
   FolderClaimRestoreCommitError,
-  CREATE_TRUST_MS,
-  SOFT_TTL_MS,
-  FolderClaimDoc,
-  ResolvedFolderClaim,
-  FolderClaimAttempt,
-  readClaim,
-  beginCreation,
-  commitResolvedWithRetry,
-  recordFullScanResolution,
-  reconcileAttempt,
-  invalidateAttempt,
-  markDivergent,
-  verifyFolderClaim,
+  AmbiguousFolderErrorBase,
 } from './driveFolderClaim';
+import { findExistingFolderFile, resolveFolderWithClaim, FolderResolutionOutcome, FolderResolutionPolicy } from './folderResolutionCore';
 
 // 状態機械由来のエラーは呼び出し元(execute-drive-folder-merge.ts等)からの既存importを
 // 壊さないよう、また`findOrCreateFolder.ts`と同じ意味を保つよう再exportする。
 export { FolderCreationInProgressError, DivergentFolderClaimError, FolderClaimRestoreCommitError };
-
-const FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder';
 
 /**
  * `resolveChildFolder`が`files.create()`自体は成功したがclaim確定書込み(`commitResolvedWithRetry`)
@@ -107,7 +96,7 @@ export class ChildFolderRestoredButUncommittedError extends Error {
   }
 }
 
-export class AmbiguousChildFolderError extends Error {
+export class AmbiguousChildFolderError extends AmbiguousFolderErrorBase {
   constructor(name: string, parentId: string, count: number) {
     super(
       `[Phase B Part A] 子フォルダ名が重複しているため解決できません(${count}件、trashed込み): "${name}"（親フォルダ: ${parentId}）。fail-closed: 作成・復元のいずれも行いません。`
@@ -116,33 +105,24 @@ export class AmbiguousChildFolderError extends Error {
   }
 }
 
-async function listMatchingFolders(
-  drive: drive_v3.Drive,
-  parentId: string,
-  name: string,
-  trashed: boolean
-): Promise<drive_v3.Schema$File[]> {
-  const q = `'${parentId}' in parents and name='${escapeQueryValue(name)}' and mimeType='${FOLDER_MIME_TYPE}' and trashed=${trashed}`;
-  const files: drive_v3.Schema$File[] = [];
-  let pageToken: string | undefined;
-  do {
-    const res = await drive.files.list({
-      q,
-      fields: 'nextPageToken, files(id, name, trashed)',
-      includeItemsFromAllDrives: true,
-      pageSize: 100,
-      pageToken,
-      ...SUPPORTS_ALL_DRIVES,
-    });
-    files.push(...(res.data.files ?? []));
-    pageToken = res.data.nextPageToken ?? undefined;
-  } while (pageToken);
-  return files;
-}
+const childFolderResolutionPolicy: FolderResolutionPolicy = {
+  logPrefix: '[Phase B Part A]',
+  makeAmbiguousError: (name, parentId, count) => new AmbiguousChildFolderError(name, parentId, count),
+  makeMissingIdError: (name, context) =>
+    new Error(
+      context === 'created'
+        ? `[Phase B Part A] 子フォルダの作成に失敗しました(idが返却されませんでした): "${name}"`
+        : `[Phase B Part A] 既存子フォルダのidが取得できません: "${name}"`
+    ),
+  wrapCommitFailure: (kind, name, parentId, folderId, cause) =>
+    kind === 'created'
+      ? new ChildFolderCreatedButUncommittedError(name, parentId, folderId, cause)
+      : new ChildFolderRestoredButUncommittedError(name, parentId, folderId, cause),
+};
 
 /**
- * `parentId`直下で`name`と一致する既存フォルダを2段階で解決する
- * (`findOrCreateFolder.ts`の`resolveExistingFolder`と同型)。
+ * `parentId`直下で`name`と一致する既存フォルダを2段階で解決する(`findOrCreateFolder.ts`と
+ * 共有する`findExistingFolderFile`のラッパー)。
  * 1. activeのみで検索: 1件ならそのファイルを返す(無関係なtrashedの同名フォルダは
  *    一切考慮しない)。2件以上なら`AmbiguousChildFolderError`。
  * 2. active 0件の場合のみtrashed込みで再検索: 1件ならそのファイル(trashed=true)を
@@ -155,97 +135,20 @@ export async function resolveExistingChildFile(
   parentId: string,
   name: string
 ): Promise<drive_v3.Schema$File | null> {
-  const activeFiles = await listMatchingFolders(drive, parentId, name, false);
-  if (activeFiles.length > 1) {
-    throw new AmbiguousChildFolderError(name, parentId, activeFiles.length);
-  }
-  if (activeFiles.length === 1) {
-    return activeFiles[0];
-  }
-
-  const trashedFiles = await listMatchingFolders(drive, parentId, name, true);
-  if (trashedFiles.length > 1) {
-    throw new AmbiguousChildFolderError(name, parentId, trashedFiles.length);
-  }
-  if (trashedFiles.length === 1) {
-    return trashedFiles[0];
-  }
-  return null;
+  return findExistingFolderFile(drive, parentId, name, childFolderResolutionPolicy.makeAmbiguousError);
 }
 
 /**
  * `parentId`直下でtrashed込みの`name`一致フォルダをfind-or-createする(Part A専用)。
  * 0件なら新規作成、1件(trashedなら復元)なら再利用、2件以上ならfail-closedでthrowする。
+ *
+ * `folderResolutionCore.ts`の`FolderResolutionOutcome`と構造的に同一(`{id, restored, created}`)
+ * だが、既存の公開契約(呼び出し元がこの名前をimportしている)を維持するため別名で
+ * 型エイリアスとして維持する(type-design-analyzerレビュー指摘対応: interfaceの
+ * 独立宣言だと`FolderResolutionOutcome`側にフィールドが追加された際に追従が
+ * 保証されないため、名目上も同一の型であることを明示する)。
  */
-export interface ResolvedChildFolder {
-  id: string;
-  /** trashedだったフォルダをこの呼び出しでuntrashしたか(rollback記録用、codex review P2指摘対応) */
-  restored: boolean;
-  /** この呼び出しで新規作成したフォルダか(rollback記録用、codex review 3巡目P2指摘対応) */
-  created: boolean;
-}
-
-async function toResolvedExisting(
-  drive: drive_v3.Drive,
-  existing: drive_v3.Schema$File,
-  name: string
-): Promise<ResolvedChildFolder> {
-  if (!existing.id) {
-    throw new Error(`[Phase B Part A] 既存子フォルダのidが取得できません: "${name}"`);
-  }
-  if (existing.trashed) {
-    await drive.files.update({
-      fileId: existing.id,
-      requestBody: { trashed: false },
-      fields: 'id',
-      ...SUPPORTS_ALL_DRIVES,
-    });
-    return { id: existing.id, restored: true, created: false };
-  }
-  return { id: existing.id, restored: false, created: false };
-}
-
-function isResolvedWithFolderId(claim: FolderClaimDoc | null): claim is ResolvedFolderClaim {
-  return claim?.state === 'resolved' && typeof claim.folderId === 'string';
-}
-
-/**
- * `claim`が'creating'状態(進行中のattempt)の場合に、`reconcileAttempt`で回収・確定を
- * 試みる共通ロジック(codex review P2指摘対応、3巡目)。read有効時の通常経路と、shadow時の
- * 新規作成直前防御チェックの両方から呼ばれる — 重複実装すると挙動がずれるリスクがあるため
- * 一本化した。'adopt'ならResolvedChildFolderを返し、'wait'なら
- * FolderCreationInProgressErrorをthrow、'clear'(claimがinvalidated化された)ならnullを
- * 返す(呼び出し元は以降claim無しとして後続処理へ進む)。
- */
-async function reconcileCreatingClaim(
-  drive: drive_v3.Drive,
-  firestore: admin.firestore.Firestore,
-  parentId: string,
-  name: string,
-  claim: FolderClaimDoc & { attempt: FolderClaimAttempt },
-  runId: string
-): Promise<ResolvedChildFolder | null> {
-  const outcome = await reconcileAttempt(drive, firestore, parentId, name, claim, runId);
-  if (outcome.status === 'adopt') {
-    // reconcileAttemptが内部でuntrash済み(outcome.restored===true)の場合、直後の
-    // commitResolvedWithRetryが失敗するとDrive側の復元事実がresolveChildFolderPathの
-    // restoredFolderIds(rollback manifest用)から漏れる。folderIdを運べる専用errorへ包む。
-    try {
-      await commitResolvedWithRetry(firestore, parentId, name, claim.attempt.attemptId, outcome.folderId);
-    } catch (commitError) {
-      if (outcome.restored) {
-        throw new ChildFolderRestoredButUncommittedError(name, parentId, outcome.folderId, commitError);
-      }
-      throw commitError;
-    }
-    return { id: outcome.folderId, restored: outcome.restored, created: false };
-  }
-  if (outcome.status === 'wait') {
-    throw new FolderCreationInProgressError(name, parentId);
-  }
-  // status === 'clear' → claimはinvalidated化された。呼び出し元にclaim無しとして委ねる
-  return null;
-}
+export type ResolvedChildFolder = FolderResolutionOutcome;
 
 export async function resolveChildFolder(
   drive: drive_v3.Drive,
@@ -253,220 +156,7 @@ export async function resolveChildFolder(
   parentId: string,
   name: string
 ): Promise<ResolvedChildFolder> {
-  const runId = randomUUID();
-  // silent-failure-hunterレビュー指摘対応: shadowモードへのfail-closedフォールバック自体は
-  // 妥当だが、直後にも同じfirestore引数でreadClaim等のFirestore操作が続くため、ここで
-  // 起きたエラーが一過性か、Firestoreへの接続自体が本質的に壊れているか(IAM設定ミス等)の
-  // 区別がつかない。ログを残さないと、本番運用でこの障害が「単にshadowモードのまま動いて
-  // いる」ように見えてしまい検知できない。
-  const readEnabled = await isDriveFolderClaimReadEnabled(firestore).catch((error) => {
-    console.error(
-      `[Phase B Part A] driveFolderClaimReadフラグの読取に失敗しました(shadowモードへfail-closed): "${name}"（親フォルダ: ${parentId}）`,
-      error
-    );
-    return false;
-  });
-  let claim: FolderClaimDoc | null = null;
-
-  if (readEnabled) {
-    claim = await readClaim(firestore, parentId, name);
-
-    if (claim?.state === 'divergent') {
-      throw new DivergentFolderClaimError(name, parentId, claim.folderId);
-    }
-
-    if (isResolvedWithFolderId(claim)) {
-      const anchorMs = claim.verifiedAtMs ?? claim.resolvedAtMs ?? 0;
-      const elapsedMs = Date.now() - anchorMs;
-      if (elapsedMs < CREATE_TRUST_MS) {
-        return { id: claim.folderId, restored: false, created: false };
-      }
-      if (elapsedMs < SOFT_TTL_MS) {
-        const verified = await verifyFolderClaim(drive, firestore, parentId, name, claim, runId);
-        return { id: verified.folderId, restored: verified.restored, created: false };
-      }
-      // elapsedMs >= SOFT_TTL_MS → 下の完全再検索に合流(claimとの突合はそちらで行う)
-    }
-
-    if (claim?.state === 'creating' && claim.attempt) {
-      const reconciled = await reconcileCreatingClaim(
-        drive,
-        firestore,
-        parentId,
-        name,
-        claim as FolderClaimDoc & { attempt: FolderClaimAttempt },
-        runId
-      );
-      if (reconciled) {
-        return reconciled;
-      }
-      // 'clear'(invalidated化)された。以降はclaim無しとして扱う
-      claim = null;
-    }
-  }
-
-  // --- 完全再検索(shadow時は常時ここから開始。read時はここまでfall throughした場合のみ) ---
-  let existing: drive_v3.Schema$File | null;
-  try {
-    existing = await resolveExistingChildFile(drive, parentId, name);
-  } catch (error) {
-    if (readEnabled && isResolvedWithFolderId(claim) && error instanceof AmbiguousChildFolderError) {
-      // silent-failure-hunterレビュー指摘対応: divergentマーカーの永続化はこの状態機械
-      // 唯一の「人手介入が必要」シグナル。書込み自体が失敗すると、claimドキュメントには
-      // 反映されないままこの呼び出しだけ異常終了し、次回以降の呼び出しがこの矛盾を
-      // 検知できなくなる。best-effort(投げない)のままだが、ログだけは必ず残す。
-      await markDivergent(firestore, parentId, name, 'ambiguous-full-scan', runId).catch((markError) =>
-        console.error(
-          `[Phase B Part A] divergent記録に失敗しました(親フォルダ: ${parentId}）: 次回呼び出しがこの矛盾を検知できない可能性があります`,
-          markError
-        )
-      );
-    }
-    throw error;
-  }
-
-  if (existing) {
-    const existingId = existing.id;
-    if (!existingId) {
-      throw new Error(`[Phase B Part A] 既存子フォルダのidが取得できません: "${name}"`);
-    }
-    // codex review P2指摘対応(2巡目): claimとの突合(divergent判定)を、trashedからの
-    // 復元(toResolvedExisting、Drive側への書込み)より先に行う。順序を誤ると、claimとは
-    // 無関係な(たまたま同名でtrashedの)フォルダをfail-closedの判定が確定する前に
-    // untrashしてしまい、判定結果に関わらずDrive側を書き換えてしまう。
-    if (readEnabled && isResolvedWithFolderId(claim) && claim.folderId !== existingId) {
-      await markDivergent(firestore, parentId, name, 'full-scan-mismatch', runId).catch((markError) =>
-        console.error(
-          `[Phase B Part A] divergent記録に失敗しました(親フォルダ: ${parentId}）: 次回呼び出しがこの矛盾を検知できない可能性があります`,
-          markError
-        )
-      );
-      throw new DivergentFolderClaimError(name, parentId, claim.folderId, existingId);
-    }
-    const resolved = await toResolvedExisting(drive, existing, name);
-    await recordFullScanResolution(firestore, parentId, name, resolved.id, runId).catch((error) =>
-      console.error(
-        `[Phase B Part A] claim記録に失敗しました(結果には影響しません): "${name}"（親フォルダ: ${parentId}）`,
-        error
-      )
-    );
-    return resolved;
-  }
-
-  // 0件。read時にresolved claimが存在する場合は、それを信用する(§4の要、driveFolderClaim.ts参照)
-  if (readEnabled && isResolvedWithFolderId(claim)) {
-    const verified = await verifyFolderClaim(drive, firestore, parentId, name, claim, runId);
-    return { id: verified.folderId, restored: verified.restored, created: false };
-  }
-
-  // codex review P2指摘対応(3巡目): 読み経路が無効(shadowロールアウト中、既定)でも、
-  // 直前にfindOrCreateFolder.ts(本番export)がクラッシュし'creating'状態の孤児claim
-  // (リース失効済みだがattemptIdタグ付きフォルダは未確定)を残している可能性がある。
-  // beginCreation()自身はリース失効時に無条件で上書きして新規createへ進んでしまう
-  // (driveへのタグ検索は行わない)ため、それをそのまま許すと孤児フォルダを見落として
-  // 二重作成しうる。childFolderResolver.tsは操作者が制御するPhase B移行スクリプトで
-  // あり、読み経路のロールアウト段階に関わらず既存claimを信用してよいため、ここでは
-  // 常にclaimを読み直し、'creating'状態ならread有効時と同じreconcileAttemptベースの
-  // 回収ロジックに委ねる。
-  // ('resolved'状態のclaim保護はTOCTOUなしにbeginCreation()自身のトランザクション内で
-  //  atomicに行われる — codex review P1指摘対応、4巡目 — ため、ここでは扱わない)
-  if (!readEnabled) {
-    const preCreateClaim = await readClaim(firestore, parentId, name);
-    if (preCreateClaim?.state === 'creating' && preCreateClaim.attempt) {
-      const reconciled = await reconcileCreatingClaim(
-        drive,
-        firestore,
-        parentId,
-        name,
-        preCreateClaim as FolderClaimDoc & { attempt: FolderClaimAttempt },
-        runId
-      );
-      if (reconciled) {
-        return reconciled;
-      }
-      // 'clear'(invalidated化)された → 下のbeginCreation()へ進んでよい
-    }
-    // 'creating'かつattemptが無い(旧形式残骸)場合は、下のbeginCreation()自身の
-    // staleness判定(claimedAtMs)に委ねる(read有効時の分岐と同型)。
-  }
-
-  // 0件マッチ = 新規作成が必要。異なる呼び出し間(並行稼働しうる本番export含む)の
-  // 競合を防ぐためclaimを予約する。
-  const begun = await beginCreation(firestore, parentId, name, runId);
-  if (begun.status === 'blocked') {
-    throw new FolderCreationInProgressError(name, parentId);
-  }
-  if (begun.status === 'divergent') {
-    throw new DivergentFolderClaimError(name, parentId, begun.claim.folderId);
-  }
-  if (begun.status === 'resolved') {
-    // codex review指摘対応(4巡目、P1): 直前の完全再検索〜beginCreation呼び出しの
-    // 間隙で、別の呼び出し元(findOrCreateFolder.ts等)が既にresolvedへ確定させていた。
-    // beginCreation自身のトランザクションで検知できたためTOCTOUなく採用できる。
-    const verified = await verifyFolderClaim(drive, firestore, parentId, name, begun.claim, runId);
-    return { id: verified.folderId, restored: verified.restored, created: false };
-  }
-  const { attemptId } = begun;
-  // findOrCreateFolder.tsと同じ理由(コミット失敗時にDrive側の作成事実を握り潰さない)で、
-  // このattemptで実際にfiles.create()したかどうかを追跡する。
-  let createdViaThisAttempt: string | null = null;
-  try {
-    // 予約後に再検索(直前の予約保有者が既に作成済みの可能性があるため)。
-    const recheckExisting = await resolveExistingChildFile(drive, parentId, name);
-    if (recheckExisting) {
-      const recheckResolved = await toResolvedExisting(drive, recheckExisting, name);
-      // codex review P2指摘対応(2巡目): recheckResolved.restored===trueの場合と同様、
-      // 直後のcommitResolvedWithRetryが失敗するとDrive側の復元事実が漏れる。
-      try {
-        await commitResolvedWithRetry(firestore, parentId, name, attemptId, recheckResolved.id);
-      } catch (commitError) {
-        if (recheckResolved.restored) {
-          throw new ChildFolderRestoredButUncommittedError(name, parentId, recheckResolved.id, commitError);
-        }
-        throw commitError;
-      }
-      return recheckResolved;
-    }
-
-    const createResponse = await drive.files.create({
-      requestBody: {
-        name,
-        mimeType: FOLDER_MIME_TYPE,
-        parents: [parentId],
-        appProperties: { [DOCSPLIT_FOLDER_CLAIM_KEY]: attemptId },
-      },
-      fields: 'id',
-      ...SUPPORTS_ALL_DRIVES,
-    });
-    const createdId = createResponse.data.id;
-    if (!createdId) {
-      throw new Error(`[Phase B Part A] 子フォルダの作成に失敗しました(idが返却されませんでした): "${name}"`);
-    }
-    createdViaThisAttempt = createdId;
-    await commitResolvedWithRetry(firestore, parentId, name, attemptId, createdId);
-    return { id: createdId, restored: false, created: true };
-  } catch (error) {
-    if (createdViaThisAttempt !== null) {
-      // Drive側の作成自体は成功済み。claimは'creating'のまま残し、次回呼び出しの
-      // reconcileAttempt(タグ検索)による回収に委ねる。invalidateしない。
-      // codex review P2指摘対応: この場合`resolveChildFolder`はResolvedChildFolderを
-      // 返せないため、素の`error`を再throwすると呼び出し元(`resolveChildFolderPath`)が
-      // 「このattemptで実際にfiles.create()した」事実を知る手段を失い、rollback manifest
-      // (createdFolderIds)からこの作成済みフォルダが漏れる。folderIdを運べる専用errorで包む。
-      console.error(
-        `[Phase B Part A] claim確定書込みに失敗しました(Drive側の作成は成功済み、次回呼び出しのreconcileAttemptで回収されます): "${name}"（親フォルダ: ${parentId}、folderId: ${createdViaThisAttempt}）:`,
-        error
-      );
-      throw new ChildFolderCreatedButUncommittedError(name, parentId, createdViaThisAttempt, error);
-    }
-    await invalidateAttempt(firestore, parentId, name, attemptId).catch((invalidateError) =>
-      console.error(
-        `[Phase B Part A] claim invalidateに失敗しました("${name}"、親フォルダ: ${parentId}):`,
-        invalidateError
-      )
-    );
-    throw error;
-  }
+  return resolveFolderWithClaim(drive, firestore, parentId, name, childFolderResolutionPolicy);
 }
 
 export interface ResolvedChildFolderPath {
