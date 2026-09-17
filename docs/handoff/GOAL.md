@@ -8,7 +8,7 @@ updated: 2026-09-16
 
 - [x] `docs/context/gemini-rate-limiting.md`のレート制限値をGemini 3.5 Flash運用下で再検証する（2026-08-02、PR #785マージ済み）。Playwright MCPでVertex AI公式モデルカードを実測確認し、RPM/TPMがDynamic Shared Quota化され固定値が存在しないこと・最大出力トークンがモデル上限65,536（旧記載8,192はアプリの暴走対策キャップとの混同）・PDF最大ファイルサイズがAPI経由で50MB（旧記載20MBは不一致）と判明、ドキュメントを修正
 
-## 【進行中・2026-09-12開始】ADR-0025 PaddleOCR PR4b: devデプロイ完了、残タスクはD-1検証+PR4c（現在のミッションとは別件・並行トラック）
+## 【進行中・2026-09-12開始】ADR-0025 PaddleOCR: dev/kanameone/cocoro全3環境でインフラ・L1配線・実文書canary完了、Stage3負荷試験は優先度判断待ち（現在のミッションとは別件・並行トラック）
 
 Gemini(Vertex AI日本リージョン非公式動作)からの移行として、自前ホスティングPaddleOCR(PP-OCRv6 medium)をCloud Run上でHTTPサービス化するADR-0025の一環。親計画`~/.claude/plans/shiny-knitting-flamingo.md`のPR4フェーズ（詳細設計は`~/.claude/plans/fuzzy-moseying-book.md`、`/plan-crossreview`実施済み）。PR1〜PR3・PR4a(サービス本体、PR #903)は完了済み。本セッションでPR4b(devへの初回デプロイ+デプロイワークフロー)を完遂した。
 
@@ -51,6 +51,15 @@ Gemini(Vertex AI日本リージョン非公式動作)からの移行として、
 - [x] kanameone Pass1実文書canary検証: 本番文書3件(`BhpiCzQMP5zUmpNvuvOx`/`0Vd63asWLXDRQjMQBaWe`/`0mUx83vaJ67MxzBHf5WF`)をPaddleOCR経由で再処理、全件`ocrExtraction.version: PP-OCRv6_medium`・エラー0件・`customerConfirmed`/`officeConfirmed`とも`false`のまま(業務影響なし)を確認。本番データリセット用ops-script`scripts/reset-document-to-pending.js`を新規実装(L1/L2両ゲートチェック・キャッシュ削除・バックアップ保存、codex review 8ラウンド収束、PR #919マージ)
 - [x] クライアント向け状況報告HTML作成・送信完了(`html-brief`スキル、非エンジニア向け、Gemini 3.5 Flash東京リージョン非公式料金体系のソースリンク・現在の進捗確度・今後の見通しを記載)。生成後、コピー時に`<a href>`のURLが失われる不具合をクライアントが発見、グローバルスキル側(`~/.claude/skills/html-brief`)で根本修正(`inlineLinkHrefs()`追加、コミット`d5399a0`)
 - [ ] 残タスク: 運用コスト実測(kanameone Cloud Run実billing、1-2週間の蓄積待ち)・抽出精度の実データ統計検証(同様に1-2週間待ち)。現状のGemini実質コスト(global料金換算・トークン数仮定ベースで概算$50/月)とCloud Run想定コスト(実測レイテンシ11件サンプルから概算$4-9/月)の試算はあるが、いずれも実測ではなく参考値である旨をレポートには明記済み
+
+**cocoro本番canary展開【完了・2026-09-17】**: decision-maker指示「いまできることを段階的に進めましょう」を受け、kanameoneと同一手順でcocoro展開を完遂した。
+- [x] cocoroインフラ準備: `setup-paddle-ocr-infra.sh cocoro`実行(Artifact Registry repo `paddle-ocr`+runtime SA `paddle-ocr-runtime`、無権限、いずれも新規作成)。事前に「bootstrap権限一時付与」を試みたが、cocoro deployer SA(`docsplit-deployer@docsplit-cocoro.iam.gserviceaccount.com`)は既にproject `roles/owner`を保有しており付与不要と判明(既存の「無権限前提」ドキュメントとの差分)
+- [x] `deploy-paddle-ocr.yml`のcocoro対応(PR #941、`deploy-functions.yml`と同型の3値SA分岐)・`scripts/clients/cocoro.env`の`CLOUD_RUN_LOCATION`実値化、マージ済み
+- [x] PaddleOCR Cloud Run初回デプロイ: 1回目は`docsplit-cloud-build@docsplit-cocoro`SAの権限不足(`cloudbuild.builds.editor`/`storage.admin`/`artifactregistry.reader`欠落)でPERMISSION_DENIED失敗、3ロールを恒久付与(kanameone等の既存ロール一覧との差分のみ)して再実行し成功。`/health` 200・golden fixture完全一致・実処理時間8秒を確認。`PADDLE_OCR_URL`反映(PR #942、マージ済み)
+- [x] cocoro Functions再デプロイ(main HEAD、`OCR_PROVIDER=paddle`のL1配線含む)。18日分の差分(Issue #871 Drive恒久対応3件・Issue #895修正等)も同時反映。`gcloud functions describe`で`OCR_PROVIDER=paddle`/`PADDLE_OCR_URL`反映を実測確認
+- [x] L2ゲート設定: `settings/features.paddleOcr=true`、`paddleOcrAllowlist=["neUsEvOzmqgnkazWytWr"]`(1件のみ許可、他文書は引き続きGemini)
+- [x] 実文書1件のcanary検証: `neUsEvOzmqgnkazWytWr`(1ページ、事業所確認済み・顧客は元々「不明顧客」で書換リスク最小)を`reset-document-to-pending`で再処理、`status:processed`・`ocrExtraction.version:"PP-OCRv6_medium/..."`・エラー0件・`officeConfirmed:true`(Gemini時代と同じ結果)を確認
+- [ ] **次の一手**: decision-maker判断で「ここで一区切り」(追加canaryは見送り)。kanameoneと同様、コスト・精度データの1-2週間蓄積待ちに合流。追加canary・本番切替判断は次の明示指示待ち
 
 **現在のミッション（下記「現在のミッション」節、Google Drive連携）との関係**: 完全に独立した並行トラック。優先度判断はdecision-maker領分。
 
