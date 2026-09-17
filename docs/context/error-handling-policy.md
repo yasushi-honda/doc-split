@@ -374,13 +374,13 @@ export const retryDocument = onCall(async (request) => {
 ### 7.2 ログベースメトリクス
 
 ```bash
-# Cloud Loggingフィルタ
-resource.type="cloud_function"
+# Cloud Loggingフィルタ (gen2 Cloud Functionsはcloud_run_revisionでミラーされる、Issue #936参照)
+resource.type="cloud_run_revision"
 severity>=ERROR
 
 # エラーカウントメトリクス作成
 gcloud logging metrics create error-count \
-  --filter="resource.type=cloud_function AND severity>=ERROR"
+  --filter="resource.type=cloud_run_revision AND severity>=ERROR"
 ```
 
 ## 参照
