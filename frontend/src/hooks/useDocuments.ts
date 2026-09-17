@@ -227,6 +227,7 @@ export function firestoreToDocument(id: string, data: Record<string, unknown>): 
     driveExportedAt: data.driveExportedAt as Timestamp | null | undefined,
     driveExportError: data.driveExportError as string | null | undefined,
     driveExportRunId: data.driveExportRunId as string | null | undefined,
+    driveExportErrorKind: data.driveExportErrorKind as Document['driveExportErrorKind'],
   }
 }
 
@@ -351,9 +352,14 @@ export function invalidateDocumentAndGroupQueries(queryClient: QueryClient, docu
  * 共通ロジック。deleteField()を毎回生成する理由・`driveFileId`を意図的にクリアしない
  * 理由は`getReprocessClearFields()`本体のDrive系フィールドのコメント参照。
  *
- * firestore.rules側はこの5フィールドについて削除(deleteField)または無変更のみを許可する
- * 専用ガードを持つため、値の新規設定・上書きにはならないこの関数の戻り値はそのまま
- * update()に渡せる(rules変更不要)。
+ * 戻り値の5フィールド(driveExportStatus/driveExportedAt/driveExportError/driveExportRunId/
+ * driveExportErrorKind、Issue #881でdriveExportErrorKind追加)は、firestore.rules側でそれぞれ
+ * 「削除(deleteField)または無変更のみ許可」の専用ガードを持つため、値の新規設定・上書きには
+ * ならないこの関数の戻り値はそのままupdate()に渡せる(rules変更不要)。driveFileIdは意図的に
+ * このクリア対象から除外されており(下記コメント参照)、firestore.rules側も「削除自体を禁止」
+ * という別型のガードを持つ(fable-review指摘Low-5: 旧コメントの「6フィールド」という表現は
+ * この関数が返す5キーとdriveFileIdの合計を指していたが、driveFileIdのガード種別が異なる点が
+ * 埋もれて紛らわしかったため、返す5キーとdriveFileIdを明示的に分けて記述するよう訂正)。
  */
 export function getDriveExportClearFields() {
   const df = deleteField()
@@ -362,6 +368,7 @@ export function getDriveExportClearFields() {
     driveExportedAt: df,
     driveExportError: df,
     driveExportRunId: df,
+    driveExportErrorKind: df,
   }
 }
 

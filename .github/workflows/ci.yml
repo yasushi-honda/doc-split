@@ -110,6 +110,8 @@ jobs:
         # CIのどのステップもこのスクリプト自体を呼んでいなかったため一度も実行されていなかった。
         # Drive claimプロトコルの重複解消リファクタ(Issue #880)の安全網として、
         # リファクタ着手前にCIで常時緑であることを確定させる。
+        # Issue #881(2026-09): executeDriveExport/driveExportScheduled系の統合テストも
+        # 同じ理由(test:integrationに含まれるがCI未配線)でここへ追加した。
         run: cd functions && firebase emulators:exec --only firestore 'npm run test:integration:drive'
         env:
           FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
