@@ -690,6 +690,41 @@ describe('driveFolderClaim プロトコル(Issue #871)', () => {
       const snap = await claimDocRef('parent-crash5', '要求名太郎').get();
       expect(snap.data()?.state).to.equal('divergent');
     });
+
+    it('findOrCreateFolder: reconcileAttemptがadoptを返した直後にcommitResolvedWithRetryが失敗すると、専用errorに包まず素のFolderClaimCommitErrorをそのままthrowする(Issue #880 characterization test、リファクタ前の非対称性を固定する)', async () => {
+      await enableClaimRead();
+      await claimDocRef('parent-adoptcommitfail', '回収確定失敗太郎').set({
+        state: 'creating',
+        attempt: { attemptId: 'attempt-adoptcommitfail', startedAtMs: Date.now() - 11 * 60 * 1000, runId: 'old-run' },
+        parentId: 'parent-adoptcommitfail',
+        name: '回収確定失敗太郎',
+      });
+      const { drive } = makeFakeDrive({
+        files: [
+          {
+            id: 'tagged-adoptcommitfail',
+            name: '回収確定失敗太郎',
+            parents: ['parent-adoptcommitfail'],
+            trashed: false,
+            appProperties: { docSplitFolderClaim: 'attempt-adoptcommitfail' },
+          },
+        ],
+      });
+      // readClaim/reconcileAttemptはトランザクションを使わないため、commitResolvedWithRetryの
+      // 3回のリトライ(1〜3回目のtx)を全て失敗させる。
+      const failingDb = makeFailingCommitFirestore(db, [1, 2, 3]);
+
+      try {
+        await findOrCreateFolder(drive, failingDb, 'parent-adoptcommitfail', '回収確定失敗太郎');
+        expect.fail('FolderClaimCommitErrorがthrowされるべき');
+      } catch (error) {
+        // childFolderResolver.ts側はChildFolderRestoredButUncommittedError等でfolderIdを
+        // 運ぶ専用errorへ包み直すが、findOrCreateFolder.ts側はそのような包装を行わない
+        // (現行実装の非対称性、Issue #880で共通コア化する際もこの挙動を維持する)。
+        expect((error as Error).name).to.equal('FolderClaimCommitError');
+        expect((error as { folderId?: string }).folderId).to.equal('tagged-adoptcommitfail');
+      }
+    });
   });
 
   describe('fail-closedなfiles.getエラー分類(§3)', () => {
@@ -1204,6 +1239,35 @@ describe('driveFolderClaim プロトコル(Issue #871)', () => {
       expect(data.expireAt).to.equal(undefined);
       expect(data.divergentAtMs).to.be.a('number').and.be.at.least(beforeMs);
       expect(data.divergentReason).to.equal('full-scan-mismatch');
+    });
+
+    it('完全再検索でAmbiguousFolderError(2件以上)を検知した場合もmarkDivergent(ambiguous-full-scan)を記録してからそのままthrowする(Issue #880 characterization test)', async () => {
+      await claimDocRef('parent-ambfs', '曖昧太郎').set({
+        state: 'resolved',
+        folderId: 'existing-id',
+        attempt: null,
+        parentId: 'parent-ambfs',
+        name: '曖昧太郎',
+      });
+      const { drive } = makeFakeDrive({
+        files: [
+          { id: 'dup-a', name: '曖昧太郎', parents: ['parent-ambfs'], trashed: false },
+          { id: 'dup-b', name: '曖昧太郎', parents: ['parent-ambfs'], trashed: false },
+        ],
+      });
+      await enableClaimRead();
+
+      try {
+        await findOrCreateFolder(drive, db, 'parent-ambfs', '曖昧太郎');
+        expect.fail('AmbiguousFolderErrorがthrowされるべき');
+      } catch (error) {
+        expect(error).to.be.instanceOf(AmbiguousFolderError);
+      }
+
+      const snap = await claimDocRef('parent-ambfs', '曖昧太郎').get();
+      const data = snap.data()!;
+      expect(data.state).to.equal('divergent');
+      expect(data.divergentReason).to.equal('ambiguous-full-scan');
     });
 
     it('同一claimが再度divergent化してもresyncHistoryを引き継ぐ(codex review Low指摘の回帰テスト)', async () => {
