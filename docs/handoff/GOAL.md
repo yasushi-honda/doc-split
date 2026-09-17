@@ -437,6 +437,8 @@ decision-maker承認（「正しいことを段階的かつ計画的にうっか
 
 **【完了・2026-09-08】読み経路有効化（Phase 2）**: `/catchup`でFirestore実測（kanameone`driveFolderLocks`全1,609件→`state:resolved`100%・divergent 0件・missCount異常0件、shadow観察9日経過）により、計画書AC（claim/`files.get`/`files.list`の3者一致率）の健全性条件を充足したと判定。decision-maker明示認可（AskUserQuestion経由）を得て有効化した。
 
+**【完了・2026-09-18】Issue #881（`driveExportErrorKind`新設、PR-5の未実装分）**: plan mode（計画`peaceful-strolling-squid.md`）→ Fable 5.1 3巡セカンドオピニオン → pr-review-toolkit（code-reviewer/silent-failure-hunter/type-design-analyzer）並列レビュー → quality-gate-evaluator（Evaluator分離、AC1-9全PASS・HIGH/MEDIUM指摘0件・APPROVE）を経てPR #948をsquashマージ完了（`main`へfast-forward反映済み）。codex reviewはアカウント使用上限（2026-09-20回復予定）のため今回は代替レビューで完了とした。silent-failure-hunter指摘（エラー確定トランザクション自体が失敗した場合の既存の脆弱性、本PR起因ではない既存の限界）はIssue #947としてfollow-up化済み（未対応、緊急性なし）。これでIssue #871計画書§7のPR分割表は全PR（PR-1〜PR-5相当）が実装完了。
+
 - 前提整備: `driveFolderClaimRead`が`scripts/set-feature-flag.js`のKNOWN_FLAGSと`.github/workflows/run-ops-script.yml`のscript dropdownに未登録だったため、既存の`driveExport`と同型のエントリを追加（PR #884、decision-maker明示認可のうえマージ）
 - 実行: GitHub Actions「Run Operations Script」（`environment=kanameone`）で`set-feature-flag --flag driveFolderClaimRead --value true --dry-run`（run 34168756294、現在値`undefined`を確認）→`--dry-run`なし（run 34168906202）を実行し、`settings/features.driveFolderClaimRead: true`への反映を実測確認（`docsplit-kanameone`の`settings/features`全体: `driveExport:true, multiCustomerDetection:true, faxDuplication:false, driveFolderClaimRead:true`）
 
