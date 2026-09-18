@@ -105,32 +105,59 @@ async function waitForFolderClaimResolved(parentId: string, name: string): Promi
   throw new Error(`folder claim not resolved for ${parentId}/${name} within timeout`);
 }
 
+interface FirestoreFailureOptions {
+  /** runTransaction()の何回目の呼び出しを失敗させるか(1始まり)。省略時は失敗させない。 */
+  failTransactionOnCall?: number;
+  /** trueならフォールバック経路の`docRef.update()`も失敗させる(両方の書戻しが失敗するケースの検証用) */
+  failDocUpdate?: boolean;
+}
+
 /**
- * Issue #947回帰テスト用: `firestore.runTransaction()`のN回目の呼び出しだけを
- * 合成エラーで失敗させ、それ以外は実emulatorへ委譲するラッパー。
- * `doc()`等の他メソッドは対象(target)へbindして転送するため、返されるDocumentReference
- * は実emulator上のデータを指す(フォールバック経路の`docRef.get()/update()`は素通り)。
+ * Issue #947回帰テスト用: `firestore.runTransaction()`のN回目の呼び出し・`docRef.update()`
+ * (フォールバック経路)を合成エラーで失敗させ、それ以外は実emulatorへ委譲するラッパー。
+ * `doc()`が返すDocumentReferenceも実emulator上のデータを指すため、フォールバック経路の
+ * `docRef.get()`は常に素通りする(`failDocUpdate`指定時のみ`update()`だけ差し替える)。
+ * `getTransactionCallCount()`で実際にrunTransaction()が呼ばれた回数を検証できる
+ * (exportDocument()が将来注入firestoreを使うよう変わった場合に、「2回目」の意味が
+ * claim transactionからエラー確定transactionへ暗黙にズレる回帰を検知するため)。
  */
-function wrapFirestoreFailingNthTransaction(
+function wrapFirestoreWithFailures(
   target: admin.firestore.Firestore,
-  failOnCall: number
-): admin.firestore.Firestore {
-  let callCount = 0;
-  return new Proxy(target, {
+  options: FirestoreFailureOptions
+): { firestore: admin.firestore.Firestore; getTransactionCallCount: () => number } {
+  let transactionCallCount = 0;
+  const firestore = new Proxy(target, {
     get(t, prop, receiver) {
       if (prop === 'runTransaction') {
         return async (...args: unknown[]) => {
-          callCount++;
-          if (callCount === failOnCall) {
+          transactionCallCount++;
+          if (transactionCallCount === options.failTransactionOnCall) {
             throw new Error('simulated runTransaction failure');
           }
           return (t.runTransaction as (...a: unknown[]) => unknown)(...args);
+        };
+      }
+      if (prop === 'doc' && options.failDocUpdate) {
+        return (path: string) => {
+          const realDocRef = (t.doc as (p: string) => admin.firestore.DocumentReference)(path);
+          return new Proxy(realDocRef, {
+            get(dt, dprop, dreceiver) {
+              if (dprop === 'update') {
+                return async () => {
+                  throw new Error('simulated fallback update failure');
+                };
+              }
+              const value = Reflect.get(dt, dprop, dreceiver);
+              return typeof value === 'function' ? (value as (...a: unknown[]) => unknown).bind(dt) : value;
+            },
+          });
         };
       }
       const value = Reflect.get(t, prop, receiver);
       return typeof value === 'function' ? (value as (...a: unknown[]) => unknown).bind(t) : value;
     },
   }) as admin.firestore.Firestore;
+  return { firestore, getTransactionCallCount: () => transactionCallCount };
 }
 
 async function seedDocument(overrides: Record<string, unknown> = {}): Promise<string> {
@@ -398,7 +425,7 @@ describe('executeDriveExport (ADR-0022 code-review CONFIRMED指摘対応: 所有
       const docId = await seedDocument();
       const { drive } = makeFakeDrive();
       // 1回目=claim transaction(成功させる)、2回目=エラー確定transaction(合成失敗させる)
-      const failingDb = wrapFirestoreFailingNthTransaction(db, 2);
+      const { firestore: failingDb, getTransactionCallCount } = wrapFirestoreWithFailures(db, { failTransactionOnCall: 2 });
 
       const claimed = await executeDriveExport(
         failingDb,
@@ -408,10 +435,12 @@ describe('executeDriveExport (ADR-0022 code-review CONFIRMED指摘対応: 所有
       );
 
       expect(claimed).to.be.true; // フォールバックが失敗しても呼び出し元へ例外を投げない
+      expect(getTransactionCallCount()).to.equal(2); // 失敗させたのが意図通り2回目(エラー確定transaction)だったことの確認
       const after = await getDoc(docId);
       expect(after.driveExportStatus).to.equal('error'); // 'exporting'に固着していない
       expect(after.driveExportError).to.equal('simulated export failure');
-      expect(after.driveExportErrorKind).to.be.a('string');
+      // 素のErrorはHTTPステータス/gRPCコードを持たずisTransientError()もfalseを返すためpermanent
+      expect(after.driveExportErrorKind).to.equal('permanent');
     });
 
     it('runTransaction失敗後、フォールバック直前に他の実行に引き継がれていた(runId不一致)場合はフォールバックも上書きしない', async () => {
@@ -421,7 +450,7 @@ describe('executeDriveExport (ADR-0022 code-review CONFIRMED指摘対応: 所有
       const { drive: driveA } = makeFakeDrive({ createdIds: ['folder-a'], sharedIdToParents });
       const { drive: driveB } = makeFakeDrive({ createdIds: ['file-b'], sharedIdToParents });
       // Run Aのみ: 1回目=claim(成功)、2回目=エラー確定transaction(合成失敗) → フォールバックへ
-      const failingDbA = wrapFirestoreFailingNthTransaction(db, 2);
+      const { firestore: failingDbA, getTransactionCallCount } = wrapFirestoreWithFailures(db, { failTransactionOnCall: 2 });
 
       const runAPromise = executeDriveExport(
         failingDbA,
@@ -443,10 +472,32 @@ describe('executeDriveExport (ADR-0022 code-review CONFIRMED指摘対応: 所有
       blockA.resolve();
       await runAPromise;
 
+      expect(getTransactionCallCount()).to.equal(2);
       const afterA = await getDoc(docId);
       expect(afterA.driveExportStatus).to.equal('exported'); // 'error'に巻き戻っていない
       expect(afterA.driveExportRunId).to.equal(runIdAfterB);
       expect(afterA.driveExportError).to.be.undefined;
+    });
+
+    it('runTransaction・フォールバックのdocRef.update()の両方が失敗しても例外を外へ伝播させない(バックストップはdriveExportScheduledのsweepに委ねる)', async () => {
+      const docId = await seedDocument();
+      const { drive } = makeFakeDrive();
+      const { firestore: failingDb } = wrapFirestoreWithFailures(db, {
+        failTransactionOnCall: 2,
+        failDocUpdate: true,
+      });
+
+      const claimed = await executeDriveExport(
+        failingDb,
+        docId,
+        { drive, downloadFile: async () => { throw new Error('simulated export failure'); } },
+        undefined
+      );
+
+      expect(claimed).to.be.true; // 両方の書戻しが失敗しても呼び出し元へ例外を投げない(既存設計を踏襲)
+      const after = await getDoc(docId);
+      expect(after.driveExportStatus).to.equal('exporting'); // 両方失敗した場合は固着する(sweepが最終バックストップ)
+      expect(after.driveExportError).to.be.undefined;
     });
   });
 });

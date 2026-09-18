@@ -200,25 +200,28 @@ export async function executeDriveExport(
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`Drive export failed for document ${docId}: ${message}`);
-    const errorKind = classifyDriveExportErrorKind(error);
+    const errorPatch = {
+      driveExportStatus: 'error' as const,
+      driveExportError: message,
+      driveExportErrorKind: classifyDriveExportErrorKind(error),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
     try {
       await firestore.runTransaction(async (tx) => {
         const snap = await tx.get(docRef);
         if (!snap.exists || snap.data()?.driveExportRunId !== runId) {
           return; // 他の実行に引き継がれている(superseded) → 新しい状態を上書きしない
         }
-        tx.update(docRef, {
-          driveExportStatus: 'error',
-          driveExportError: message,
-          driveExportErrorKind: errorKind,
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        });
+        tx.update(docRef, errorPatch);
       });
     } catch (writebackError) {
       // このtransaction自体(tx.get()/tx.update())が失敗すると、driveExportStatusは
       // 'exporting'のまま固着しErrorsPageのエラー一覧UIから原因を追跡できなくなる(Issue #947)。
-      // 所有権チェック(driveExportRunId一致)は失うが、best-effortの非transaction書込みへ
-      // フォールバックすることで固着だけは回避する。
+      // 所有権チェック(driveExportRunId一致)自体は維持するが、get→updateの間に他の実行が
+      // 割り込む余地(TOCTOU、runTransaction()なら内部的に防げていたもの)が生まれる。
+      // `lastUpdateTime` precondition(Issue #539/EFF-M2と同一パターン)を使い、
+      // get以降にdocが変更されていればFAILED_PRECONDITIONで書込みを拒否させることで
+      // この穴を塞ぎつつ、非transactionのbest-effort書込みへフォールバックする。
       const writebackMessage =
         writebackError instanceof Error ? writebackError.message : String(writebackError);
       console.error(
@@ -227,12 +230,7 @@ export async function executeDriveExport(
       try {
         const snap = await docRef.get();
         if (snap.exists && snap.data()?.driveExportRunId === runId) {
-          await docRef.update({
-            driveExportStatus: 'error',
-            driveExportError: message,
-            driveExportErrorKind: errorKind,
-            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-          });
+          await docRef.update(errorPatch, { lastUpdateTime: snap.updateTime! });
         } // else: 他の実行に引き継がれている(superseded) → 新しい状態を上書きしない
       } catch (fallbackError) {
         const fallbackMessage =
