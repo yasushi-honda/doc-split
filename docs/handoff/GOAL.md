@@ -8,7 +8,7 @@ updated: 2026-09-16
 
 - [x] `docs/context/gemini-rate-limiting.md`のレート制限値をGemini 3.5 Flash運用下で再検証する（2026-08-02、PR #785マージ済み）。Playwright MCPでVertex AI公式モデルカードを実測確認し、RPM/TPMがDynamic Shared Quota化され固定値が存在しないこと・最大出力トークンがモデル上限65,536（旧記載8,192はアプリの暴走対策キャップとの混同）・PDF最大ファイルサイズがAPI経由で50MB（旧記載20MBは不一致）と判明、ドキュメントを修正
 
-## 【進行中・2026-09-12開始】ADR-0025 PaddleOCR: dev/kanameone/cocoro全3環境でインフラ・L1配線・実文書canary完了、Stage3負荷試験は優先度判断待ち（現在のミッションとは別件・並行トラック）
+## 【進行中・2026-09-12開始】ADR-0025 PaddleOCR: dev/kanameone/cocoro全3環境でインフラ・L1配線・実文書canary完了、Stage3負荷試験ハーネス実装完了（PR #950マージ済み）、Phase B(実測実行)待ち（現在のミッションとは別件・並行トラック）
 
 Gemini(Vertex AI日本リージョン非公式動作)からの移行として、自前ホスティングPaddleOCR(PP-OCRv6 medium)をCloud Run上でHTTPサービス化するADR-0025の一環。親計画`~/.claude/plans/shiny-knitting-flamingo.md`のPR4フェーズ（詳細設計は`~/.claude/plans/fuzzy-moseying-book.md`、`/plan-crossreview`実施済み）。PR1〜PR3・PR4a(サービス本体、PR #903)は完了済み。本セッションでPR4b(devへの初回デプロイ+デプロイワークフロー)を完遂した。
 
@@ -42,7 +42,8 @@ Gemini(Vertex AI日本リージョン非公式動作)からの移行として、
   - **結論**: タイムアウト上限引き上げ・非同期化・ページ分割は不要。900秒予算に対し実測ベースの総所要時間(OCR約525秒@71p + 非OCR約10秒)は十分な余裕(約365秒)を持つ。追加対応なしでクローズ
 - [x] **PR8運用ランブック着手【2026-09-15】**: decision-maker指示「PaddleOCR本番導入に必要な事をどんどん進めて」を受け、Stage 3負荷試験は実は`paddleOcrLoadFixtures.ts`等の新規実装(未着手・3ファイル以上)が必要と判明し、CLAUDE.md CRITICALのplan mode要件に該当すると判断(即座の実行対象から除外、decision-makerへ確認済み)。代わりに`services/paddle-ocr/README.md`へ運用ランブック節を追記: ロールアウト手順(L1環境変数/L2 Firestoreフラグ2層ゲート、allowlist段階導入)、ロールバック手順(L2 `set-feature-flag --flag paddleOcr --value false`が第一選択・秒単位反映、**Geminiフォールバックは暫定策であり恒久運用ではない旨を明記**)、監視方法(`phaseTimings`ログのgcloud loggingクエリ例)、コスト監視(自動アラート未設定であることを明記、TODO化)。コミットはまだ実施していない(作業ツリーの変更のみ)
 - [x] 運用ランブックの内容をコミット・PR化【完了・2026-09-15】: commit `8578d482` / PR #920でマージ済み（2026-09-16 catchup時にGOAL.md未更新のまま陳腐化していたと判明、本行で反映）
-- [ ] **次の一手**: Stage 3負荷試験は新機能実装として別途plan modeで計画するか、優先度を下げるかdecision-maker判断待ち(160ページ等、`fuzzy-moseying-book.md`§4参照、実行に3時間超・実コストはほぼ無料枠内)
+- [x] **PR4c Stage 3負荷試験ハーネス実装完了・マージ済み（2026-09-18、PR #950）**: decision-maker承認によりplan mode(`~/.claude/plans/peaceful-strolling-squid.md`)着手。`/fable-review`によるFable 5.1独立レビューを経て計画承認、実装完了。承認済みcold測定手順(revision強制作成)はCloud Runのstartup probe仕様上原理的に成立しないと実コード検証で判明し、`--concurrency=1`下で3件同時発火するバースト方式へ再設計。完了率ゲート(71ページ≥95%)はpage単位で判定することをAskUserQuestion経由でdecision-maker確定。実装後、Fable 5.1+pr-review-toolkit(5エージェント)+quality-gate-evaluator(Evaluator分離プロトコル、2回実施)による多角的レビューでH1(Critical、`--series=cold`単独実行時の標本数不足チェックすり抜け)含む複数バグを検出・修正、2回目のEvaluator評価でAPPROVE。GHA実機でH1修正後の再検証も実施(run 35292728322)。coldバースト実測値の再現性課題(3回のquick試行で34.2秒→9.7秒→40.4秒とばらつき)も正直に開示しREADMEに注記。`scripts`配下テスト429件全PASS。**Phase B(`intensity=full`実測実行、5回のGHA dispatch、計約5.5時間規模)は本PRのスコープ外、次セッション以降の別タスク**
+- [ ] **次の一手**: Phase B実行(`intensity=full`、1p→71p warm→71p cold→20p→160pの順、承認済み計画`peaceful-strolling-squid.md`「Phase B」節参照)。71ページが必須ゲート(≥95%完了率・≤850秒)で基準未達の場合はPass1切替(PR6)着手をNo-Go判定。実行はdecision-maker判断待ち(優先度・タイミングとも)
 
 **kanameone本番canary展開・クライアント報告【完了・2026-09-14】**: 上記dev最適化と並行し、kanameone向け本番導入準備も完遂した。
 - [x] kanameoneインフラ準備: Artifact Registry・ランタイムSA・IAM ロール・Cloud Runデプロイ、allowlist設定スクリプト(PR #916)、`deploy-paddle-ocr.yml`のkanameone対応(PR #917)、`PADDLE_OCR_URL`反映(PR #918)
