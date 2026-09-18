@@ -11,8 +11,16 @@ documentation:
     ログが10分間(1分間隔ポーリングに対し十分なマージン)出現しない場合、
     OCR処理パイプライン全体が停止している可能性が高い。
 
+    `processocr_completed`メトリクスは、上記の正常完了ログに加えて
+    `[maintenanceGate] groupAggregation gate closed`(ADR-0019のメンテナンス
+    ゲート閉鎖によるOCR確定処理skip、実績で最大約25分・ドレイン待機20分)も
+    heartbeatとしてカウントする。ゲート閉鎖は正当な運用操作であり、これを
+    誤検知させないため。
+
     対応: Cloud Loggingでprocessocr関連のエラーログを確認し、原因を特定する。
-    Issue #966 / ADR-0023 / ADR-0025 PR6参照。
+    本アラート発火前の早期兆候として、`OCR processing (polling) completed`の
+    ログ間隔がポーリング間隔(1分)より明らかに伸びていないか(tick滞留の兆候)も
+    合わせて確認するとよい。Issue #966 / ADR-0023 / ADR-0025 PR6参照。
   mimeType: "text/markdown"
 combiner: OR
 conditions:

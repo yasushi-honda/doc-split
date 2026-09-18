@@ -137,9 +137,9 @@ Pass2用のプロンプトは「原文どおりに転記せよ、補正するな
 
 **追記(2026-09-19、PR6): コスト試算前提の変更 + `processOCR`への`concurrency:1`導入**
 
-Stage3負荷試験Phase B実測(1ページのcoldMax=33.4秒、5バースト中1回の外れ値)を受け、コスト試算の前提だった`--concurrency=1 --min-instances=0`から**`--min-instances=1`へ変更**した(PR #967、Issue #966)。孤立した単発リクエスト(現状の実トラフィックの大半)のcold startを解消する効果と引き換えに、常時1インスタンス分の課金が発生する。上記コスト試算(57-104行目)は前提が変わったため無効化されており、実測での再検証が必要(Cloud Billing反映後、別途確認)。
+Stage3負荷試験Phase B実測(1ページのcoldMax=33.4秒、5バースト中1回の外れ値)を受け、コスト試算の前提だった`--concurrency=1 --min-instances=0`から**`--min-instances=1`へ変更**した(PR #967、Issue #966)。孤立した単発リクエスト(現状の実トラフィックの大半)のcold startを解消する効果と引き換えに、常時1インスタンス分の課金が発生する。上記「### コスト試算(実データに基づく、2026-09-12実測)」節は前提が変わったため無効化されており、実測での再検証が必要(Cloud Billing反映後、別途確認)。
 
-また、Pass1切替(PR6)にあたり、本番の唯一のOCRトリガー`processOCR`(Cloud Scheduler、1分間隔)について、**`concurrency:1`を明示追加**した。実機`maxInstanceRequestConcurrency`は既定値80であり、`maxInstances:1`だけでは1サイクルの処理時間がポーリング間隔(60秒)を超えた場合に次tickが同一インスタンス内で並行実行される(「tick重複」)。この現象自体はGemini運用の現在でも起こりうる(ADR-0023が2026-08-02にkanameoneで実際に観測)が、Geminiにはcold start概念がなく実害が顕在化していなかった。PaddleOCR(`--concurrency=1`)ではtick重複時の2文書目以降が必ず新規インスタンスのcold startを踏むため、Pass1切替後に実害化する経路であり、切替前に`processOCR`側で機構的に排除した。詳細はIssue #966、承認済み計画`~/.claude/plans/eventual-dreaming-wind.md`参照。
+また、Pass1切替(PR6)にあたり、本番の唯一のOCRトリガー`processOCR`(Cloud Scheduler、1分間隔)について、**`concurrency:1`を明示追加**した。実機`maxInstanceRequestConcurrency`は既定値80であり、`maxInstances:1`だけでは1サイクルの処理時間がポーリング間隔(60秒)を超えた場合に次tickが同一インスタンス内で並行実行される(「tick重複」)。この現象自体はGemini運用の現在でも起こりうる(ADR-0023が2026-08-02にkanameoneで実際に観測)が、Geminiにはcold start概念がなく実害が顕在化していなかった。PaddleOCR(`--concurrency=1`)ではtick重複時の2文書目以降が必ず新規インスタンスのcold startを踏むため、Pass1切替後に実害化する経路であり、切替前に`processOCR`側で「同一インスタンス内で複数tickが同時実行される」ことを機構的に排除した(残存リスクとして、前tickがCloud SchedulerのattemptDeadline(実機確認: 900秒)を超えて長引いた場合のリトライ挙動による滞留があり、`functions/src/ocr/processOCR.ts`の`rescueErroredDocumentsIfDue`JSDoc・PR6のStep 0で確認事項として扱う)。詳細はIssue #966、承認済み計画`~/.claude/plans/eventual-dreaming-wind.md`参照。
 
 **スコープ外(本ADRの対象外)**:
 - 手動トリガーの`regenerateSummary`(要約再生成、低頻度)は同じくGemini依存だが自動処理パス外のため対象外、別途扱う

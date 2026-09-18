@@ -319,11 +319,20 @@ export async function rescueStuckProcessingDocs(): Promise<void> {
  * 化して並列 instance の同時 scan を防ぐこと (現状の実装では同時 scan が稀に発生しうる)。
  *
  * ADR-0025 PR6で追加した`concurrency: 1`(上記`processOCR`のoptions参照)により、
- * 同一インスタンス内でのtick重複(このファイルが元々想定していた「同時scan」の主因)は
- * 排除された。ただし以下は本ガードの対象外として残る: (1) Cloud Runの仕様上maxInstances設定
- * はスケーリングイベント時にごく短時間超過しうる、(2) デプロイ時は新旧リビジョンが
- * 短時間併走しうる。いずれも一般的なCloud Runの挙動であり本プロジェクト固有の問題ではないが、
- * 「concurrency:1で完全に排除された」と誤解しないこと。
+ * 同一インスタンス内での「同時に2つのtickが実行中になる」こと(このファイルが元々
+ * 想定していた「同時scan」の主因)は排除された。ただし以下は本ガードでも解消しない
+ * 残存リスクとして知っておくこと(「concurrency:1で完全に排除された」と誤解しないこと):
+ * (1) Cloud Runの仕様上maxInstances設定はスケーリングイベント時にごく短時間超過しうる、
+ * (2) デプロイ時は新旧リビジョンが短時間併走しうる(いずれも一般的なCloud Runの挙動)、
+ * (3) 前tickの処理がCloud SchedulerのattemptDeadline(実機確認: 900秒、関数の
+ * timeoutSecondsと同値)を超えて長引いた場合、concurrency:1でキューイング中の後続tickが
+ * Scheduler側でdeadline exceeded扱いになりリトライが発火しうる(ADR-0023が当初
+ * concurrency:1導入を「Cloud Schedulerのリトライ挙動等の副作用検証を要する」として
+ * 先送りした理由そのもの)。この場合も同時実行(tick重複)そのものは発生しない
+ * (concurrency:1でCloud Run側が直列化するため)が、キュー滞留・リトライによる
+ * pending処理の遅延は起こりうる。processocr_completedのabsenceアラート(10分)が
+ * この滞留が深刻化した場合の保険になるが、恒久対応(retryConfig明示設定等)の要否は
+ * PR6のStep 0で確認する。
  */
 export async function rescueErroredDocumentsIfDue(): Promise<void> {
   const stateRef = db.doc(RESCUE_STATE_DOC_PATH);

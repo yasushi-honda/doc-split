@@ -73,7 +73,7 @@ METRICS=(
   "drive_folder_divergent|driveFolderClaim claim divergent detected (Issue #871 恒久対応)|resource.type=\"cloud_run_revision\" AND textPayload:\"[driveFolderClaim] claim divergent detected\""
   "drive_folder_divergent_record_failed|markDivergent()自体の書込み失敗、claimにもメトリクスにも残らない経路 (Issue #871 恒久対応)|resource.type=\"cloud_run_revision\" AND textPayload:\"divergent記録に失敗しました\""
   "claim_divergent_backlog_stale|divergent claim が3日以上未解決のまま滞留 (Issue #871 恒久対応、日次sweep)|resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"drivefolderclaimdivergentsweep\" AND severity=\"WARNING\" AND textPayload:\"[driveFolderClaim] divergent backlog stale\""
-  "processocr_completed|processOCR cycle完了ログ(ADR-0025 PR6、tick重複対策concurrency:1導入後の健全性監視。absence条件で本メトリクスが一定時間出現しない=OCR処理停止を検知)|resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"processocr\" AND textPayload:\"OCR processing (polling) completed\""
+  "processocr_completed|processOCR cycle完了 or メンテナンスゲート閉鎖によるskip(ADR-0025 PR6、tick重複対策concurrency:1導入後の健全性監視。absence条件で本メトリクスが一定時間出現しない=OCR処理停止を検知。ADR-0019のgroupAggregationGate閉鎖(実績最大約25分、PR #781でドレイン待機20分に設定)は正当なOCR確定処理skipであり誤検知させないため、gate閉鎖ログもheartbeatとして本メトリクスに含める)|resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"processocr\" AND (textPayload:\"OCR processing (polling) completed\" OR textPayload:\"[maintenanceGate] groupAggregation gate closed\")"
 )
 
 # ==================================================
