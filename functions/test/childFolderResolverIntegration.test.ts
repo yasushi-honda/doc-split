@@ -38,6 +38,7 @@ import {
   DivergentFolderClaimError,
   FolderCreationInProgressError,
 } from '../src/drive/childFolderResolver';
+import { FOLDER_CLAIM_TX_RETRY_ATTEMPTS } from '../src/drive/driveFolderClaim';
 
 const db = admin.firestore();
 const COLLECTIONS_TO_CLEAN: readonly string[] = ['driveFolderLocks', 'settings'];
@@ -475,8 +476,12 @@ describe('resolveChildFolder: claimプロトコルへの参加(Issue #871 PR-4)'
         parentId: 'parent-restorecommitfail',
         name: '復元コミット失敗太郎',
       });
-    // recordVerification自体はリトライなしの単発runTransactionのため、1回目を失敗させれば十分。
-    const failingDb = makeFailingCommitFirestore(db, [1]);
+    // Issue #954: recordVerificationはwithBackoffRetry(FOLDER_CLAIM_TX_RETRY_ATTEMPTS回)で
+    // 保護されるようになったため、全attemptを失敗させて初めてFolderClaimRestoreCommitErrorになる。
+    const { firestore: failingDb } = makeFailingCommitFirestore(
+      db,
+      Array.from({ length: FOLDER_CLAIM_TX_RETRY_ATTEMPTS }, (_, i) => i + 1)
+    );
 
     try {
       await resolveChildFolder(drive, failingDb, 'parent-restorecommitfail', '復元コミット失敗太郎');
@@ -513,7 +518,11 @@ describe('resolveChildFolder: claimプロトコルへの参加(Issue #871 PR-4)'
         parentId: 'root-restorecommitfail',
         name: '復元コミット失敗二郎',
       });
-    const failingDb = makeFailingCommitFirestore(db, [1]);
+    // Issue #954: recordVerificationはwithBackoffRetryで保護されるため全attemptを失敗させる。
+    const { firestore: failingDb } = makeFailingCommitFirestore(
+      db,
+      Array.from({ length: FOLDER_CLAIM_TX_RETRY_ATTEMPTS }, (_, i) => i + 1)
+    );
 
     try {
       await resolveChildFolderPath(drive, failingDb, 'root-restorecommitfail', ['復元コミット失敗二郎']);
@@ -579,7 +588,7 @@ describe('resolveChildFolder: claimプロトコルへの参加(Issue #871 PR-4)'
         },
       ],
     });
-    const failingDb = makeFailingCommitFirestore(db, [1, 2, 3]);
+    const { firestore: failingDb } = makeFailingCommitFirestore(db, [1, 2, 3]);
 
     try {
       await resolveChildFolder(drive, failingDb, 'parent-reconcile-restore', '回収復元太郎');
@@ -644,23 +653,33 @@ describe('read-only関数はclaimコレクションに一切アクセスしな�
  * 返される参照は実dbのFirestore emulatorに対して有効。`driveFolderClaimIntegration.test.ts`の
  * 同名ヘルパーと同型(「files.create()成功後にFirestoreへの確定書込みだけが失敗する」状況を
  * 再現するため)。
+ *
+ * Issue #954で`driveFolderClaim.ts`内の10関数に追加された`withBackoffRetry`は
+ * `isRetryableFirestoreError`(gRPC transientコードのみリトライ)を`shouldRetry`として
+ * 渡すため、`errorCode`(既定14=UNAVAILABLE、transient)を持つ合成エラーを投げる。
  */
 function makeFailingCommitFirestore(
   realDb: admin.firestore.Firestore,
-  failTxCallIndices: readonly number[]
-): admin.firestore.Firestore {
+  failTxCallIndices: readonly number[],
+  errorCode = 14
+): { firestore: admin.firestore.Firestore; getTxCallCount: () => number } {
   let txCalls = 0;
-  return {
+  const firestore = {
     collection: (path: string) => realDb.collection(path),
     doc: (path: string) => realDb.doc(path),
     runTransaction: async (updateFn: (tx: admin.firestore.Transaction) => Promise<unknown>) => {
       txCalls++;
       if (failTxCallIndices.includes(txCalls)) {
-        throw new Error(`simulated Firestore transaction failure (call #${txCalls})`);
+        const err = new Error(`simulated Firestore transaction failure (call #${txCalls})`) as Error & {
+          code: number;
+        };
+        err.code = errorCode;
+        throw err;
       }
       return realDb.runTransaction(updateFn);
     },
   } as unknown as admin.firestore.Firestore;
+  return { firestore, getTxCallCount: () => txCalls };
 }
 
 describe('resolveChildFolder: claim確定書込み失敗時のfolderId伝播(codex review P2指摘対応)', () => {
@@ -672,7 +691,7 @@ describe('resolveChildFolder: claim確定書込み失敗時のfolderId伝播(cod
     const { drive, createCalls } = makeClaimAwareFakeDrive({ listReturnsEmpty: true });
     // beginCreation(1回目のtx)は成功させ、commitResolvedWithRetryの3回のリトライ
     // (2〜4回目のtx)を全て失敗させる(driveFolderClaimIntegration.test.tsと同じ配置)。
-    const failingDb = makeFailingCommitFirestore(db, [2, 3, 4]);
+    const { firestore: failingDb } = makeFailingCommitFirestore(db, [2, 3, 4]);
 
     try {
       await resolveChildFolder(drive, failingDb, 'parent-commitfail', 'コミット失敗太郎');
@@ -686,7 +705,7 @@ describe('resolveChildFolder: claim確定書込み失敗時のfolderId伝播(cod
 
   it('resolveChildFolderPath経由でも、作成済みfolderIdがPartialChildFolderPathError.createdFolderIdsに含まれる(rollback manifest漏れ防止)', async () => {
     const { drive } = makeClaimAwareFakeDrive({ listReturnsEmpty: true });
-    const failingDb = makeFailingCommitFirestore(db, [2, 3, 4]);
+    const { firestore: failingDb } = makeFailingCommitFirestore(db, [2, 3, 4]);
 
     try {
       await resolveChildFolderPath(drive, failingDb, 'root-commitfail', ['コミット失敗太郎']);
@@ -782,7 +801,7 @@ describe('Issue #880: claimプロトコル未カバー分岐のcharacterization 
     } as unknown as drive_v3.Drive;
     // beginCreation(1回目のtx)は成功させ、commitResolvedWithRetryの3回のリトライ
     // (2〜4回目のtx)を全て失敗させる。
-    const failingDb = makeFailingCommitFirestore(db, [2, 3, 4]);
+    const { firestore: failingDb } = makeFailingCommitFirestore(db, [2, 3, 4]);
 
     try {
       await resolveChildFolder(drive, failingDb, 'parent-recheck-restore-fail-child', '再検索復元子太郎');

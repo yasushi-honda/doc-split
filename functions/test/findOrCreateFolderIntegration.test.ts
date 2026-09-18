@@ -35,10 +35,17 @@ const COLLECTIONS_TO_CLEAN: readonly string[] = ['driveFolderLocks', 'settings']
  * `runTransaction`だけを差し替えたfirestoreラッパ。指定した通し番号のトランザクション
  * 呼び出しを失敗させる(Issue #880 characterization test用、driveFolderClaimIntegration.test.ts
  * の同名ヘルパーと同型)。
+ *
+ * pr955-code-reviewer指摘対応(Issue #954): `commitResolvedWithRetry`はIssue #954で
+ * `isRetryableFirestoreError`によるgRPC transientコード判定を適用するようになったため、
+ * `errorCode`省略時(コード無しの素のError)だと1回目の失敗で即座に諦めてしまい、下記
+ * 呼び出し箇所のコメントが意図する「3回のリトライを全て失敗させる」を検証できなくなって
+ * いた。既定値をgRPC transientコード(14=UNAVAILABLE)にし、意図通りリトライ全滅を再現する。
  */
 function makeFailingCommitFirestore(
   realDb: admin.firestore.Firestore,
-  failTxCallIndices: readonly number[]
+  failTxCallIndices: readonly number[],
+  errorCode = 14
 ): admin.firestore.Firestore {
   let txCalls = 0;
   return {
@@ -47,7 +54,11 @@ function makeFailingCommitFirestore(
     runTransaction: async (updateFn: (tx: admin.firestore.Transaction) => Promise<unknown>) => {
       txCalls++;
       if (failTxCallIndices.includes(txCalls)) {
-        throw new Error(`simulated Firestore transaction failure (call #${txCalls})`);
+        const err = new Error(`simulated Firestore transaction failure (call #${txCalls})`) as Error & {
+          code: number;
+        };
+        err.code = errorCode;
+        throw err;
       }
       return realDb.runTransaction(updateFn);
     },
