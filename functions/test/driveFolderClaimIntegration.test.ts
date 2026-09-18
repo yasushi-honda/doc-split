@@ -39,6 +39,7 @@ import {
   readClaim,
   FOLDER_CLAIM_TX_RETRY_ATTEMPTS,
   RECONCILE_GRACE_MS,
+  FOLDER_LOCK_STALE_MS,
   type ResolvedFolderClaim,
   type FolderClaimAttempt,
   type FolderClaimDoc,
@@ -1806,7 +1807,7 @@ describe('driveFolderClaim プロトコル(Issue #871)', () => {
         });
         const { drive } = makeFakeDrive({ files: [] }); // files.get()は404
         const claim = (await readClaim(db, 'parent-954-b1', '既存太郎')) as ResolvedFolderClaim;
-        const { firestore: failingDb } = makeFailingCommitFirestore(
+        const { firestore: failingDb, getTxCallCount } = makeFailingCommitFirestore(
           db,
           Array.from({ length: FOLDER_CLAIM_TX_RETRY_ATTEMPTS }, (_, i) => i + 1)
         );
@@ -1818,6 +1819,10 @@ describe('driveFolderClaim プロトコル(Issue #871)', () => {
           expect(error).to.be.instanceOf(FolderVerificationPendingError);
           expect(classifyDriveExportErrorKind(error)).to.equal('transient');
         }
+        // pr955-test-analyzer指摘対応: 無条件throwの背後でrecordMiss自体が実際に
+        // FOLDER_CLAIM_TX_RETRY_ATTEMPTS回リトライしたことを直接確認する(リトライ回数の
+        // 後退はこのアサーションなしでは検知できない)。
+        expect(getTxCallCount()).to.equal(FOLDER_CLAIM_TX_RETRY_ATTEMPTS);
       });
 
       it('recordVerification(非trashed経路): 全滅しても例外を投げずrestored:falseで返す(claimのverifiedAtMsは更新されない)', async () => {
@@ -1833,7 +1838,7 @@ describe('driveFolderClaim プロトコル(Issue #871)', () => {
           files: [{ id: 'b2-folder-id', name: '継続太郎', parents: ['parent-954-b2'], trashed: false }],
         });
         const claim = (await readClaim(db, 'parent-954-b2', '継続太郎')) as ResolvedFolderClaim;
-        const { firestore: failingDb } = makeFailingCommitFirestore(
+        const { firestore: failingDb, getTxCallCount } = makeFailingCommitFirestore(
           db,
           Array.from({ length: FOLDER_CLAIM_TX_RETRY_ATTEMPTS }, (_, i) => i + 1)
         );
@@ -1843,6 +1848,9 @@ describe('driveFolderClaim プロトコル(Issue #871)', () => {
         expect(result).to.deep.equal({ folderId: 'b2-folder-id', restored: false });
         const after = (await claimDocRef('parent-954-b2', '継続太郎').get()).data()!;
         expect(after.verifiedAtMs).to.equal(12345);
+        // pr955-test-analyzer指摘対応: recordVerification自体が実際にリトライ全滅した
+        // ことを直接確認する。
+        expect(getTxCallCount()).to.equal(FOLDER_CLAIM_TX_RETRY_ATTEMPTS);
       });
 
       it('reconcileAttempt: invalidateAttemptが全滅しても握り潰され、clear経路が正常に返る', async () => {
@@ -1857,7 +1865,7 @@ describe('driveFolderClaim プロトコル(Issue #871)', () => {
         };
         await claimDocRef(parentId, name).set(claim);
         const { drive } = makeFakeDrive({}); // attemptIdタグ検索は0件
-        const { firestore: failingDb } = makeFailingCommitFirestore(
+        const { firestore: failingDb, getTxCallCount } = makeFailingCommitFirestore(
           db,
           Array.from({ length: FOLDER_CLAIM_TX_RETRY_ATTEMPTS }, (_, i) => i + 1)
         );
@@ -1865,6 +1873,9 @@ describe('driveFolderClaim プロトコル(Issue #871)', () => {
         const result = await reconcileAttempt(drive, failingDb, parentId, name, claim, 'new-run');
 
         expect(result).to.deep.equal({ status: 'clear' });
+        // pr955-test-analyzer指摘対応: invalidateAttempt自体が実際にリトライ全滅した
+        // ことを直接確認する。
+        expect(getTxCallCount()).to.equal(FOLDER_CLAIM_TX_RETRY_ATTEMPTS);
       });
     });
 
@@ -1888,6 +1899,37 @@ describe('driveFolderClaim プロトコル(Issue #871)', () => {
 
         expect(result).to.deep.equal({ folderId: 'c1-folder-id', restored: false });
         expect(getTxCallCount()).to.equal(1);
+      });
+
+      it('recordVerification: RESOURCE_EXHAUSTED(code 8、SDK内部ではtransient扱いだが外側リトライ対象からは意図的に除外)も1回で諦めリトライされない(fable-reviewセカンドオピニオン指摘、Issue #954)', async () => {
+        // gRPC code 8はSDK内部で最大60秒程度までbackoffが引き上げられる特別扱いのため、
+        // 外側でさらに3回重ねるとホットパスでCloud Functions timeoutに接近するリスクが
+        // あり、意図的にFIRESTORE_TRANSIENT_GRPC_CODESから除外している。この判断が
+        // 将来「executeDriveExport.tsのGRPC_TRANSIENT_CODES(8を含む)と揃えよう」という
+        // 善意のリファクタで無言に巻き戻らないよう固定する。
+        await claimDocRef('parent-954-c2', '過負荷太郎').set({
+          state: 'resolved',
+          folderId: 'c2-folder-id',
+          attempt: null,
+          parentId: 'parent-954-c2',
+          name: '過負荷太郎',
+        });
+        const { drive } = makeFakeDrive({
+          files: [{ id: 'c2-folder-id', name: '過負荷太郎', parents: ['parent-954-c2'], trashed: false }],
+        });
+        const claim = (await readClaim(db, 'parent-954-c2', '過負荷太郎')) as ResolvedFolderClaim;
+        const { firestore: failingDb, getTxCallCount } = makeFailingCommitFirestore(db, [1], 8);
+
+        const result = await verifyFolderClaim(drive, failingDb, 'parent-954-c2', '過負荷太郎', claim, 'run-c2');
+
+        expect(result).to.deep.equal({ folderId: 'c2-folder-id', restored: false });
+        expect(getTxCallCount()).to.equal(1);
+      });
+    });
+
+    describe('E. 定数間の暗黙結合のドリフト検知(silent-failure-hunter指摘、Issue #954)', () => {
+      it('RECONCILE_GRACE_MSとFOLDER_LOCK_STALE_MSは同値でなければならない(reconcileAttemptがinvalidateAttempt失敗を「リースは既に失効済み」として握り潰す前提)', () => {
+        expect(RECONCILE_GRACE_MS).to.equal(FOLDER_LOCK_STALE_MS);
       });
     });
 

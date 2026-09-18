@@ -54,7 +54,16 @@ export const CREATE_TRUST_MS = 60 * 1000;
 /** この期間内はfiles.getのみで健全性を確認し、完全な`files.list`検索を省略する。 */
 export const SOFT_TTL_MS = 5 * 60 * 1000;
 
-/** 'creating'のリース失効後、attemptId検索で作成事実を回収するまでの猶予。 */
+/**
+ * 'creating'のリース失効後、attemptId検索で作成事実を回収するまでの猶予。
+ * `reconcileAttempt`は`claim.attempt.startedAtMs`からの経過時間をこの値と直接比較する
+ * (`hasValidInFlightCreatingLease`の`FOLDER_LOCK_STALE_MS`判定と同じ起点からの経過時間)。
+ * 現在`FOLDER_LOCK_STALE_MS`と同値(10分)のため、`reconcileAttempt`が
+ * `invalidateAttempt`を呼ぶ時点で既にリースは失効済みになる(silent-failure-hunter
+ * レビュー指摘、Issue #954: この暗黙の等値は`driveFolderClaimIntegration.test.ts`の
+ * ドリフト検知テストで固定している。値を変える場合は両方を同期し、
+ * `reconcileAttempt`内の「リースは既に失効済み」という前提コメントも見直すこと)。
+ */
 export const RECONCILE_GRACE_MS = 10 * 60 * 1000;
 
 /**
@@ -449,6 +458,27 @@ function isRetryableFirestoreError(error: unknown): boolean {
 }
 
 /**
+ * pr955-code-reviewer指摘対応(DRY): claim書込みtransactionの11呼び出し箇所全てで
+ * `withBackoffRetry(..., FOLDER_CLAIM_TX_RETRY_ATTEMPTS, FOLDER_CLAIM_TX_RETRY_BASE_DELAY_MS,
+ * isRetryableFirestoreError)`という同一の末尾3引数が重複していたのを集約する。
+ *
+ * `functions/src/utils/retry.ts`の`withRetry`/`isTransientError`とは統合しない: 同ファイルの
+ * `isTransientError`はgRPC ABORTED(10)以外の数値コード(本ファイルが対象とする1/2/4/13/14/16)を
+ * カバーしておらず、Firestore transactionのgRPC transientコード判定としてそのまま転用できない。
+ */
+function runClaimTransaction<T>(
+  firestore: admin.firestore.Firestore,
+  updateFn: (tx: admin.firestore.Transaction) => Promise<T>
+): Promise<T> {
+  return withBackoffRetry(
+    () => firestore.runTransaction(updateFn),
+    FOLDER_CLAIM_TX_RETRY_ATTEMPTS,
+    FOLDER_CLAIM_TX_RETRY_BASE_DELAY_MS,
+    isRetryableFirestoreError
+  );
+}
+
+/**
  * claimを読み取る(旧形式も正規化して返す)。ドキュメントが存在しなければnull。
  */
 export async function readClaim(
@@ -486,73 +516,70 @@ export async function beginCreation(
   const attemptId = randomUUID();
   const startedAtMs = Date.now();
 
-  const result = await withBackoffRetry(
-    () =>
-      firestore.runTransaction(async (
-        tx
-      ): Promise<
-        | { kind: 'blocked' }
-        | { kind: 'divergent'; claim: FolderClaimDoc }
-        | { kind: 'resolved'; claim: ResolvedFolderClaim }
-        | { kind: 'begun' }
-      > => {
-        const snap = await tx.get(ref);
-        const existing = snap.exists ? normalizeClaim(snap.data()!, parentId, name) : null;
+  const result = await runClaimTransaction(
+    firestore,
+    async (
+      tx
+    ): Promise<
+      | { kind: 'blocked' }
+      | { kind: 'divergent'; claim: FolderClaimDoc }
+      | { kind: 'resolved'; claim: ResolvedFolderClaim }
+      | { kind: 'begun' }
+    > => {
+      const snap = await tx.get(ref);
+      const existing = snap.exists ? normalizeClaim(snap.data()!, parentId, name) : null;
 
-        // second-opinionレビュー指摘(Important)対応: divergent(人手介入待ち)は
-        // shadowモード(呼び出し元がclaimを事前読取しない経路)や、read有効化後に
-        // shadowへ戻された場合(フラグの一時ロールバック等)でも、無条件に上書きして
-        // 新規作成attemptへ進んではならない。plan §4の「削除も再作成もしない」を
-        // このtx自体でも自己防衛する。
-        if (existing?.state === 'divergent') {
-          return { kind: 'divergent', claim: existing };
-        }
+      // second-opinionレビュー指摘(Important)対応: divergent(人手介入待ち)は
+      // shadowモード(呼び出し元がclaimを事前読取しない経路)や、read有効化後に
+      // shadowへ戻された場合(フラグの一時ロールバック等)でも、無条件に上書きして
+      // 新規作成attemptへ進んではならない。plan §4の「削除も再作成もしない」を
+      // このtx自体でも自己防衛する。
+      if (existing?.state === 'divergent') {
+        return { kind: 'divergent', claim: existing };
+      }
 
-        // codex review指摘対応(4巡目、P1): 従来はresolved claimをshadow/未読取経路で
-        // 無条件に上書きしていた(claim導入前の重複作成リスクを変えないための意図的設計
-        // だったが、findOrCreateFolder.tsとchildFolderResolver.tsが同じparent+nameを
-        // 取り合うケースでは、呼び出し元が事前にclaimを読んでからこの関数を呼ぶまでの
-        // 間隙で別解決者がresolvedへ確定させるTOCTOUを塞げなかった)。予約の可否判定と
-        // 「既にresolved済みか」の確認を同一トランザクション内でatomicに行い、resolved
-        // ならそれを採用させる(呼び出し元は`verifyFolderClaim`等で健全性確認してから
-        // 使う)よう、常にresolvedを保護する形に統一する。
-        if (existing?.state === 'resolved' && typeof existing.folderId === 'string') {
-          return { kind: 'resolved', claim: existing as ResolvedFolderClaim };
-        }
+      // codex review指摘対応(4巡目、P1): 従来はresolved claimをshadow/未読取経路で
+      // 無条件に上書きしていた(claim導入前の重複作成リスクを変えないための意図的設計
+      // だったが、findOrCreateFolder.tsとchildFolderResolver.tsが同じparent+nameを
+      // 取り合うケースでは、呼び出し元が事前にclaimを読んでからこの関数を呼ぶまでの
+      // 間隙で別解決者がresolvedへ確定させるTOCTOUを塞げなかった)。予約の可否判定と
+      // 「既にresolved済みか」の確認を同一トランザクション内でatomicに行い、resolved
+      // ならそれを採用させる(呼び出し元は`verifyFolderClaim`等で健全性確認してから
+      // 使う)よう、常にresolvedを保護する形に統一する。
+      if (existing?.state === 'resolved' && typeof existing.folderId === 'string') {
+        return { kind: 'resolved', claim: existing as ResolvedFolderClaim };
+      }
 
-        // Issue #954(withBackoffRetry導入): ambiguous commit(書込みは成功したが
-        // クライアントには失敗として返る)後の再試行で、自分自身が直前の試行で書いた
-        // creating claimを他者の進行中リースと誤認してblockedを返さないためのガード。
-        // attemptId(UUID)は本関数の呼び出し1回につき1つのみ生成される(tx外のL465)ため、
-        // 一致すれば必ず自分自身の書込みである。
-        if (existing?.state === 'creating' && existing.attempt?.attemptId === attemptId) {
-          return { kind: 'begun' };
-        }
-
-        if (hasValidInFlightCreatingLease(existing)) {
-          return { kind: 'blocked' };
-        }
-
-        const attempt: FolderClaimAttempt = { attemptId, startedAtMs, runId };
-        const doc = stripUndefined({
-          state: 'creating' as const,
-          attempt,
-          parentId,
-          name,
-          lockToken: attemptId,
-          claimedAtMs: startedAtMs,
-          expireAt: ttlTimestamp(),
-          // codex review 2巡目P2指摘対応: 過去にreleaseDivergentClaimで無効化されたclaimが
-          // 同一parent+nameで再作成される場合、resyncHistory(繰り返し乖離の監査証跡)を
-          // 引き継ぐ(全ての完全置換write共通の方針)。
-          resyncHistory: existing?.resyncHistory,
-        });
-        tx.set(ref, doc);
+      // Issue #954(withBackoffRetry導入): ambiguous commit(書込みは成功したが
+      // クライアントには失敗として返る)後の再試行で、自分自身が直前の試行で書いた
+      // creating claimを他者の進行中リースと誤認してblockedを返さないためのガード。
+      // attemptId(UUID)は本関数の呼び出し1回につき1つのみ生成される(本関数冒頭、tx外)ため、
+      // 一致すれば必ず自分自身の書込みである。
+      if (existing?.state === 'creating' && existing.attempt?.attemptId === attemptId) {
         return { kind: 'begun' };
-      }),
-    FOLDER_CLAIM_TX_RETRY_ATTEMPTS,
-    FOLDER_CLAIM_TX_RETRY_BASE_DELAY_MS,
-    isRetryableFirestoreError
+      }
+
+      if (hasValidInFlightCreatingLease(existing)) {
+        return { kind: 'blocked' };
+      }
+
+      const attempt: FolderClaimAttempt = { attemptId, startedAtMs, runId };
+      const doc = stripUndefined({
+        state: 'creating' as const,
+        attempt,
+        parentId,
+        name,
+        lockToken: attemptId,
+        claimedAtMs: startedAtMs,
+        expireAt: ttlTimestamp(),
+        // codex review 2巡目P2指摘対応: 過去にreleaseDivergentClaimで無効化されたclaimが
+        // 同一parent+nameで再作成される場合、resyncHistory(繰り返し乖離の監査証跡)を
+        // 引き継ぐ(全ての完全置換write共通の方針)。
+        resyncHistory: existing?.resyncHistory,
+      });
+      tx.set(ref, doc);
+      return { kind: 'begun' };
+    }
   );
 
   if (result.kind === 'blocked') {
@@ -569,7 +596,9 @@ export async function beginCreation(
 
 /**
  * 予約したattemptを確定させ、状態を'resolved'にする。書込み失敗はリトライ(3回・指数
- * バックオフ)後も失敗したら`FolderClaimCommitError`をthrowする(握り潰さない)。
+ * バックオフ、gRPC transientコード以外は即座に諦める。silent-failure-hunterレビュー
+ * 指摘対応、Issue #954: 従来は無差別リトライだったが、他10関数と統一した)後も
+ * 失敗したら`FolderClaimCommitError`をthrowする(握り潰さない)。
  * 既に別のattemptがこのclaimを確定/上書き済みの場合は何もしない(fencing、正常系)。
  */
 export async function commitResolvedWithRetry(
@@ -581,50 +610,44 @@ export async function commitResolvedWithRetry(
 ): Promise<void> {
   const ref = claimRef(firestore, parentId, name);
   try {
-    await withBackoffRetry(
-      async () => {
-        await firestore.runTransaction(async (tx) => {
-          const snap = await tx.get(ref);
-          const existing = snap.exists ? normalizeClaim(snap.data()!, parentId, name) : null;
-          // second-opinionレビュー指摘対応(read-only, 7巡目相当): divergent(人手介入待ち)は
-          // attemptIdの一致判定に関わらず常に保護する。既存のfencing(creating/resolvedの
-          // attemptId不一致チェック)はdivergent状態を素通りしてしまい、無条件で'resolved'
-          // 上書きするバグが残っていた。
-          if (existing?.state === 'divergent') {
-            console.warn(
-              `[driveFolderClaim] divergent状態のclaimをcommit結果で上書きしません(人手介入待ち): "${name}"（親フォルダ: ${parentId}）`
-            );
-            return;
-          }
-          if (existing?.state === 'creating' && existing.attempt?.attemptId !== attemptId) {
-            return; // 既に別のattemptに引き継がれている(fencing) → 何もしない
-          }
-          if (existing?.state === 'resolved' && existing.attempt?.attemptId !== attemptId) {
-            return; // 既に他のattemptがresolved確定済み → 上書きしない
-          }
-          const nowMs = Date.now();
-          const doc = stripUndefined({
-            state: 'resolved' as const,
-            folderId,
-            attempt: { attemptId, startedAtMs: existing?.attempt?.startedAtMs ?? nowMs, runId: existing?.attempt?.runId ?? null },
-            resolvedAtMs: nowMs,
-            verifiedAtMs: nowMs,
-            lastFullScanAtMs: nowMs,
-            missCount: 0,
-            missRunIds: [] as string[],
-            parentId,
-            name,
-            expireAt: ttlTimestamp(),
-            // codex review 2巡目P2指摘対応: resyncHistory(繰り返し乖離の監査証跡)を
-            // 全ての完全置換writeで引き継ぐ。
-            resyncHistory: existing?.resyncHistory,
-          });
-          tx.set(ref, doc);
-        });
-      },
-      FOLDER_CLAIM_TX_RETRY_ATTEMPTS,
-      FOLDER_CLAIM_TX_RETRY_BASE_DELAY_MS
-    );
+    await runClaimTransaction(firestore, async (tx) => {
+      const snap = await tx.get(ref);
+      const existing = snap.exists ? normalizeClaim(snap.data()!, parentId, name) : null;
+      // second-opinionレビュー指摘対応(read-only, 7巡目相当): divergent(人手介入待ち)は
+      // attemptIdの一致判定に関わらず常に保護する。既存のfencing(creating/resolvedの
+      // attemptId不一致チェック)はdivergent状態を素通りしてしまい、無条件で'resolved'
+      // 上書きするバグが残っていた。
+      if (existing?.state === 'divergent') {
+        console.warn(
+          `[driveFolderClaim] divergent状態のclaimをcommit結果で上書きしません(人手介入待ち): "${name}"（親フォルダ: ${parentId}）`
+        );
+        return;
+      }
+      if (existing?.state === 'creating' && existing.attempt?.attemptId !== attemptId) {
+        return; // 既に別のattemptに引き継がれている(fencing) → 何もしない
+      }
+      if (existing?.state === 'resolved' && existing.attempt?.attemptId !== attemptId) {
+        return; // 既に他のattemptがresolved確定済み → 上書きしない
+      }
+      const nowMs = Date.now();
+      const doc = stripUndefined({
+        state: 'resolved' as const,
+        folderId,
+        attempt: { attemptId, startedAtMs: existing?.attempt?.startedAtMs ?? nowMs, runId: existing?.attempt?.runId ?? null },
+        resolvedAtMs: nowMs,
+        verifiedAtMs: nowMs,
+        lastFullScanAtMs: nowMs,
+        missCount: 0,
+        missRunIds: [] as string[],
+        parentId,
+        name,
+        expireAt: ttlTimestamp(),
+        // codex review 2巡目P2指摘対応: resyncHistory(繰り返し乖離の監査証跡)を
+        // 全ての完全置換writeで引き継ぐ。
+        resyncHistory: existing?.resyncHistory,
+      });
+      tx.set(ref, doc);
+    });
   } catch (error) {
     throw new FolderClaimCommitError(name, parentId, folderId, error);
   }
@@ -645,63 +668,57 @@ export async function recordFullScanResolution(
   runId: string
 ): Promise<void> {
   const ref = claimRef(firestore, parentId, name);
-  await withBackoffRetry(
-    () =>
-      firestore.runTransaction(async (tx) => {
-        const snap = await tx.get(ref);
-        const existing = snap.exists ? normalizeClaim(snap.data()!, parentId, name) : null;
+  await runClaimTransaction(firestore, async (tx) => {
+    const snap = await tx.get(ref);
+    const existing = snap.exists ? normalizeClaim(snap.data()!, parentId, name) : null;
 
-        // second-opinionレビュー指摘(Important)対応: beginCreationと同様、shadowモードや
-        // read無効化直後の経路では呼び出し元がclaimを事前確認していないため、divergent
-        // (人手介入待ち)をこの完全再検索の記録で無条件に'resolved'へ上書きしてはならない。
-        // codex review P2指摘対応(10巡目): invalidated(rollback等による意図的な無効化)も
-        // 同様に保護しないと、rollbackの無効化が並行exportにより'resolved'へ書き戻される。
-        if (isFencedTerminalState(existing)) {
-          console.warn(
-            `[driveFolderClaim] divergent/invalidated状態のclaimを完全再検索の結果で上書きしません: "${name}"（親フォルダ: ${parentId}）`
-          );
-          return;
-        }
+    // second-opinionレビュー指摘(Important)対応: beginCreationと同様、shadowモードや
+    // read無効化直後の経路では呼び出し元がclaimを事前確認していないため、divergent
+    // (人手介入待ち)をこの完全再検索の記録で無条件に'resolved'へ上書きしてはならない。
+    // codex review P2指摘対応(10巡目): invalidated(rollback等による意図的な無効化)も
+    // 同様に保護しないと、rollbackの無効化が並行exportにより'resolved'へ書き戻される。
+    if (isFencedTerminalState(existing)) {
+      console.warn(
+        `[driveFolderClaim] divergent/invalidated状態のclaimを完全再検索の結果で上書きしません: "${name}"（親フォルダ: ${parentId}）`
+      );
+      return;
+    }
 
-        // codex review P1指摘対応(6巡目): 有効なリース内の'creating'(=別プロセスが現在
-        // 進行中とみなせるattempt)を検知した場合、そのattemptIdをこの完全再検索の結果へ
-        // そのまま引き継いで'resolved'へ書き込んではならない。引き継ぐと、後で進行中の
-        // プロセス自身がfiles.create()を完了しcommitResolvedWithRetryを呼んだ際、
-        // fencing判定(attemptId一致チェック)が「自分のattemptだ」と誤判定して上書きを
-        // 許してしまい、この完全再検索が見つけた既存フォルダとは別の新しいフォルダが
-        // 二重に確定される(呼び出し元は既にこの既存フォルダのidを返却済みのため、
-        // 整合性が崩れる)。claim記録はスキップする(呼び出し元が見つけた既存フォルダ自体の
-        // 採用は妨げない、claimの更新だけを見送る)。
-        if (hasValidInFlightCreatingLease(existing)) {
-          console.warn(
-            `[driveFolderClaim] 進行中の他attemptのclaimを完全再検索の結果で上書きしません(fencingトークン汚染防止): "${name}"（親フォルダ: ${parentId}）`
-          );
-          return;
-        }
+    // codex review P1指摘対応(6巡目): 有効なリース内の'creating'(=別プロセスが現在
+    // 進行中とみなせるattempt)を検知した場合、そのattemptIdをこの完全再検索の結果へ
+    // そのまま引き継いで'resolved'へ書き込んではならない。引き継ぐと、後で進行中の
+    // プロセス自身がfiles.create()を完了しcommitResolvedWithRetryを呼んだ際、
+    // fencing判定(attemptId一致チェック)が「自分のattemptだ」と誤判定して上書きを
+    // 許してしまい、この完全再検索が見つけた既存フォルダとは別の新しいフォルダが
+    // 二重に確定される(呼び出し元は既にこの既存フォルダのidを返却済みのため、
+    // 整合性が崩れる)。claim記録はスキップする(呼び出し元が見つけた既存フォルダ自体の
+    // 採用は妨げない、claimの更新だけを見送る)。
+    if (hasValidInFlightCreatingLease(existing)) {
+      console.warn(
+        `[driveFolderClaim] 進行中の他attemptのclaimを完全再検索の結果で上書きしません(fencingトークン汚染防止): "${name}"（親フォルダ: ${parentId}）`
+      );
+      return;
+    }
 
-        const nowMs = Date.now();
-        const doc = stripUndefined({
-          state: 'resolved' as const,
-          folderId,
-          attempt: existing?.attempt ?? { attemptId: randomUUID(), startedAtMs: nowMs, runId },
-          resolvedAtMs: existing?.resolvedAtMs ?? nowMs,
-          verifiedAtMs: nowMs,
-          lastFullScanAtMs: nowMs,
-          missCount: 0,
-          missRunIds: [] as string[],
-          parentId,
-          name,
-          expireAt: ttlTimestamp(),
-          // codex review 2巡目P2指摘対応: resyncHistory(繰り返し乖離の監査証跡)を
-          // 全ての完全置換writeで引き継ぐ。
-          resyncHistory: existing?.resyncHistory,
-        });
-        tx.set(ref, doc);
-      }),
-    FOLDER_CLAIM_TX_RETRY_ATTEMPTS,
-    FOLDER_CLAIM_TX_RETRY_BASE_DELAY_MS,
-    isRetryableFirestoreError
-  );
+    const nowMs = Date.now();
+    const doc = stripUndefined({
+      state: 'resolved' as const,
+      folderId,
+      attempt: existing?.attempt ?? { attemptId: randomUUID(), startedAtMs: nowMs, runId },
+      resolvedAtMs: existing?.resolvedAtMs ?? nowMs,
+      verifiedAtMs: nowMs,
+      lastFullScanAtMs: nowMs,
+      missCount: 0,
+      missRunIds: [] as string[],
+      parentId,
+      name,
+      expireAt: ttlTimestamp(),
+      // codex review 2巡目P2指摘対応: resyncHistory(繰り返し乖離の監査証跡)を
+      // 全ての完全置換writeで引き継ぐ。
+      resyncHistory: existing?.resyncHistory,
+    });
+    tx.set(ref, doc);
+  });
 }
 
 /**
@@ -790,12 +807,16 @@ export async function reconcileAttempt(
   }
 
   // Issue #954: invalidateAttempt自体(Firestore transaction)が失敗しても、これは
-  // 孤児claimのbest-effortクリーンアップに過ぎない(FOLDER_LOCK_STALE_MS経過で自然に
-  // リース失効し自己回復する)。もう一方の呼び出し元(folderResolutionCore.ts)と
-  // 同様に握り潰し、reconcileAttempt自体を例外化させない(非対称の解消)。
+  // 孤児claimのbest-effortクリーンアップに過ぎない。ここに到達する時点で既に
+  // elapsedMs>=RECONCILE_GRACE_MS(=FOLDER_LOCK_STALE_MSと同値、10分)が成立しており
+  // リース自体は既に失効済みのため、invalidate失敗後も次回呼び出しで
+  // beginCreationが失効済みリースを上書きして自然回復する(fable-reviewセカンド
+  // オピニオン指摘対応: 「最大10分後に失効」という誤った表現を訂正、この時点で
+  // 待機は発生しない)。もう一方の呼び出し元(folderResolutionCore.ts)と同様に
+  // 握り潰し、reconcileAttempt自体を例外化させない(非対称の解消)。
   await invalidateAttempt(firestore, parentId, name, attemptId).catch((invalidateError) =>
     console.error(
-      `[driveFolderClaim] 孤児claimのinvalidateに失敗しました(親フォルダ: ${parentId}）: 最大${Math.round(FOLDER_LOCK_STALE_MS / 60000)}分後にリース失効し自然回復します`,
+      `[driveFolderClaim] 孤児claimのinvalidateに失敗しました(親フォルダ: ${parentId}）: リースは既に失効済みのため、次回呼び出しの再reconcileで上書きされ自然回復します`,
       invalidateError
     )
   );
@@ -832,31 +853,25 @@ export async function invalidateResolvedClaimByFolderId(
     // 呼び出し元(rollback-drive-folder-merge.ts)が「invalidate成功」と誤認しうる
     // (ロールバック直後にreconcile中の別プロセスがこのclaimを'resolved'へ確定させて
     // いた場合等)。トランザクションの戻り値で実際に書き込んだかどうかを伝播する。
-    const didInvalidate = await withBackoffRetry(
-      () =>
-        firestore.runTransaction(async (tx) => {
-          const fresh = await tx.get(doc.ref);
-          const data = fresh.data();
-          if (!fresh.exists || data?.state !== 'resolved' || data?.folderId !== folderId) {
-            return false; // fencing: 別処理が既に状態を変えている
-          }
-          const doc2 = stripUndefined({
-            state: 'invalidated' as const,
-            attempt: null,
-            parentId: data.parentId as string,
-            name: data.name as string,
-            expireAt: ttlTimestamp(),
-            // codex review 2巡目P2指摘対応: resyncHistory(繰り返し乖離の監査証跡)を
-            // 全ての完全置換writeで引き継ぐ。
-            resyncHistory: data.resyncHistory as ResyncHistoryEntry[] | undefined,
-          });
-          tx.set(fresh.ref, doc2);
-          return true;
-        }),
-      FOLDER_CLAIM_TX_RETRY_ATTEMPTS,
-      FOLDER_CLAIM_TX_RETRY_BASE_DELAY_MS,
-      isRetryableFirestoreError
-    );
+    const didInvalidate = await runClaimTransaction(firestore, async (tx) => {
+      const fresh = await tx.get(doc.ref);
+      const data = fresh.data();
+      if (!fresh.exists || data?.state !== 'resolved' || data?.folderId !== folderId) {
+        return false; // fencing: 別処理が既に状態を変えている
+      }
+      const doc2 = stripUndefined({
+        state: 'invalidated' as const,
+        attempt: null,
+        parentId: data.parentId as string,
+        name: data.name as string,
+        expireAt: ttlTimestamp(),
+        // codex review 2巡目P2指摘対応: resyncHistory(繰り返し乖離の監査証跡)を
+        // 全ての完全置換writeで引き継ぐ。
+        resyncHistory: data.resyncHistory as ResyncHistoryEntry[] | undefined,
+      });
+      tx.set(fresh.ref, doc2);
+      return true;
+    });
     if (didInvalidate) {
       invalidatedCount++;
     }
@@ -891,31 +906,25 @@ export async function invalidateCreatingClaimByAttemptId(
   for (const doc of snap.docs) {
     // codex review P2指摘対応(9巡目、invalidateResolvedClaimByFolderIdと同じ理由):
     // トランザクションの戻り値で実際に書き込んだかどうかを伝播する。
-    const didInvalidate = await withBackoffRetry(
-      () =>
-        firestore.runTransaction(async (tx) => {
-          const fresh = await tx.get(doc.ref);
-          const data = fresh.data();
-          if (!fresh.exists || data?.state !== 'creating' || data?.attempt?.attemptId !== attemptId) {
-            return false; // fencing: 別処理が既に状態を変えている
-          }
-          const doc2 = stripUndefined({
-            state: 'invalidated' as const,
-            attempt: null,
-            parentId: data.parentId as string,
-            name: data.name as string,
-            expireAt: ttlTimestamp(),
-            // codex review 2巡目P2指摘対応: resyncHistory(繰り返し乖離の監査証跡)を
-            // 全ての完全置換writeで引き継ぐ。
-            resyncHistory: data.resyncHistory as ResyncHistoryEntry[] | undefined,
-          });
-          tx.set(fresh.ref, doc2);
-          return true;
-        }),
-      FOLDER_CLAIM_TX_RETRY_ATTEMPTS,
-      FOLDER_CLAIM_TX_RETRY_BASE_DELAY_MS,
-      isRetryableFirestoreError
-    );
+    const didInvalidate = await runClaimTransaction(firestore, async (tx) => {
+      const fresh = await tx.get(doc.ref);
+      const data = fresh.data();
+      if (!fresh.exists || data?.state !== 'creating' || data?.attempt?.attemptId !== attemptId) {
+        return false; // fencing: 別処理が既に状態を変えている
+      }
+      const doc2 = stripUndefined({
+        state: 'invalidated' as const,
+        attempt: null,
+        parentId: data.parentId as string,
+        name: data.name as string,
+        expireAt: ttlTimestamp(),
+        // codex review 2巡目P2指摘対応: resyncHistory(繰り返し乖離の監査証跡)を
+        // 全ての完全置換writeで引き継ぐ。
+        resyncHistory: data.resyncHistory as ResyncHistoryEntry[] | undefined,
+      });
+      tx.set(fresh.ref, doc2);
+      return true;
+    });
     if (didInvalidate) {
       invalidatedCount++;
     }
@@ -936,31 +945,25 @@ export async function invalidateAttempt(
   attemptId: string
 ): Promise<void> {
   const ref = claimRef(firestore, parentId, name);
-  await withBackoffRetry(
-    () =>
-      firestore.runTransaction(async (tx) => {
-        const snap = await tx.get(ref);
-        if (!snap.exists) return;
-        const existing = normalizeClaim(snap.data()!, parentId, name);
-        if (existing.state !== 'creating' || existing.attempt?.attemptId !== attemptId) {
-          return; // 既に別状態に遷移済み(fencing)
-        }
-        const doc = stripUndefined({
-          state: 'invalidated' as const,
-          attempt: null,
-          parentId,
-          name,
-          expireAt: ttlTimestamp(),
-          // codex review 2巡目P2指摘対応: resyncHistory(繰り返し乖離の監査証跡)を
-          // 全ての完全置換writeで引き継ぐ。
-          resyncHistory: existing.resyncHistory,
-        });
-        tx.set(ref, doc);
-      }),
-    FOLDER_CLAIM_TX_RETRY_ATTEMPTS,
-    FOLDER_CLAIM_TX_RETRY_BASE_DELAY_MS,
-    isRetryableFirestoreError
-  );
+  await runClaimTransaction(firestore, async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists) return;
+    const existing = normalizeClaim(snap.data()!, parentId, name);
+    if (existing.state !== 'creating' || existing.attempt?.attemptId !== attemptId) {
+      return; // 既に別状態に遷移済み(fencing)
+    }
+    const doc = stripUndefined({
+      state: 'invalidated' as const,
+      attempt: null,
+      parentId,
+      name,
+      expireAt: ttlTimestamp(),
+      // codex review 2巡目P2指摘対応: resyncHistory(繰り返し乖離の監査証跡)を
+      // 全ての完全置換writeで引き継ぐ。
+      resyncHistory: existing.resyncHistory,
+    });
+    tx.set(ref, doc);
+  });
 }
 
 /**
@@ -977,62 +980,56 @@ async function recordVerification(
   folderId: string
 ): Promise<void> {
   const ref = claimRef(firestore, parentId, name);
-  await withBackoffRetry(
-    () =>
-      firestore.runTransaction(async (tx) => {
-        const snap = await tx.get(ref);
-        const existing = snap.exists ? normalizeClaim(snap.data()!, parentId, name) : null;
+  await runClaimTransaction(firestore, async (tx) => {
+    const snap = await tx.get(ref);
+    const existing = snap.exists ? normalizeClaim(snap.data()!, parentId, name) : null;
 
-        // second-opinionレビュー指摘対応(read-only, 7巡目相当): 直前に'resolved'を確認して
-        // からこの書込みまでの間隙で、別プロセスがdivergentへ遷移させていた場合、その
-        // 人手介入待ちシグナルを無条件で'resolved'へ戻してはならない。files.getで確認済みの
-        // 健全性そのものは変わらないため、呼び出し元(verifyFolderClaim)はこの記録スキップに
-        // 関わらず結果を返してよい(claimのメタデータ更新だけを見送る。書込み失敗時も同様、
-        // Issue #954)。
-        // codex review P2指摘対応(10巡目): invalidated(rollback等による意図的な無効化)も
-        // 同様に保護しないと、rollbackの無効化が並行exportにより'resolved'へ書き戻される。
-        if (isFencedTerminalState(existing)) {
-          console.warn(
-            `[driveFolderClaim] divergent/invalidated状態のclaimをverify結果で上書きしません: "${name}"（親フォルダ: ${parentId}）`
-          );
-          return;
-        }
+    // second-opinionレビュー指摘対応(read-only, 7巡目相当): 直前に'resolved'を確認して
+    // からこの書込みまでの間隙で、別プロセスがdivergentへ遷移させていた場合、その
+    // 人手介入待ちシグナルを無条件で'resolved'へ戻してはならない。files.getで確認済みの
+    // 健全性そのものは変わらないため、呼び出し元(verifyFolderClaim)はこの記録スキップに
+    // 関わらず結果を返してよい(claimのメタデータ更新だけを見送る。書込み失敗時も同様、
+    // Issue #954)。
+    // codex review P2指摘対応(10巡目): invalidated(rollback等による意図的な無効化)も
+    // 同様に保護しないと、rollbackの無効化が並行exportにより'resolved'へ書き戻される。
+    if (isFencedTerminalState(existing)) {
+      console.warn(
+        `[driveFolderClaim] divergent/invalidated状態のclaimをverify結果で上書きしません: "${name}"（親フォルダ: ${parentId}）`
+      );
+      return;
+    }
 
-        // codex review P1指摘対応(6巡目、recordFullScanResolutionと同じ理由): 直前に
-        // 'resolved'を確認してからこの書込みまでの間隙で、別プロセスが有効なリース内の
-        // 'creating'attemptを開始していた場合、そのattemptIdを引き継いで上書きしてはならない
-        // (fencingトークン汚染防止)。
-        if (hasValidInFlightCreatingLease(existing)) {
-          console.warn(
-            `[driveFolderClaim] 進行中の他attemptのclaimをverify結果で上書きしません(fencingトークン汚染防止): "${name}"（親フォルダ: ${parentId}）`
-          );
-          return;
-        }
+    // codex review P1指摘対応(6巡目、recordFullScanResolutionと同じ理由): 直前に
+    // 'resolved'を確認してからこの書込みまでの間隙で、別プロセスが有効なリース内の
+    // 'creating'attemptを開始していた場合、そのattemptIdを引き継いで上書きしてはならない
+    // (fencingトークン汚染防止)。
+    if (hasValidInFlightCreatingLease(existing)) {
+      console.warn(
+        `[driveFolderClaim] 進行中の他attemptのclaimをverify結果で上書きしません(fencingトークン汚染防止): "${name}"（親フォルダ: ${parentId}）`
+      );
+      return;
+    }
 
-        const nowMs = Date.now();
-        const doc = stripUndefined({
-          state: 'resolved' as const,
-          folderId,
-          attempt: existing?.attempt ?? null,
-          resolvedAtMs: existing?.resolvedAtMs ?? nowMs,
-          verifiedAtMs: nowMs,
-          lastFullScanAtMs: existing?.lastFullScanAtMs,
-          missCount: 0,
-          missRunIds: [] as string[],
-          parentId,
-          name,
-          expireAt: ttlTimestamp(),
-          // codex review 2巡目P2指摘対応: resyncHistoryは解決直後の通常のverify成功
-          // (このパスは実運用で最も頻繁に通るホットパス)で無条件に消えていた。
-          // 全ての完全置換writeで引き継ぐ。
-          resyncHistory: existing?.resyncHistory,
-        });
-        tx.set(ref, doc);
-      }),
-    FOLDER_CLAIM_TX_RETRY_ATTEMPTS,
-    FOLDER_CLAIM_TX_RETRY_BASE_DELAY_MS,
-    isRetryableFirestoreError
-  );
+    const nowMs = Date.now();
+    const doc = stripUndefined({
+      state: 'resolved' as const,
+      folderId,
+      attempt: existing?.attempt ?? null,
+      resolvedAtMs: existing?.resolvedAtMs ?? nowMs,
+      verifiedAtMs: nowMs,
+      lastFullScanAtMs: existing?.lastFullScanAtMs,
+      missCount: 0,
+      missRunIds: [] as string[],
+      parentId,
+      name,
+      expireAt: ttlTimestamp(),
+      // codex review 2巡目P2指摘対応: resyncHistoryは解決直後の通常のverify成功
+      // (このパスは実運用で最も頻繁に通るホットパス)で無条件に消えていた。
+      // 全ての完全置換writeで引き継ぐ。
+      resyncHistory: existing?.resyncHistory,
+    });
+    tx.set(ref, doc);
+  });
 }
 
 /**
@@ -1054,47 +1051,41 @@ export async function markDivergent(
   const ref = claimRef(firestore, parentId, name);
   let transitioned = false;
   let folderId: string | undefined;
-  await withBackoffRetry(
-    () =>
-      firestore.runTransaction(async (tx) => {
-        const snap = await tx.get(ref);
-        const existing = snap.exists ? normalizeClaim(snap.data()!, parentId, name) : null;
+  await runClaimTransaction(firestore, async (tx) => {
+    const snap = await tx.get(ref);
+    const existing = snap.exists ? normalizeClaim(snap.data()!, parentId, name) : null;
 
-        // second-opinionレビュー指摘対応(read-only, 7巡目相当): 既にdivergent状態のclaimを
-        // 再書込みすると、最初に検知した`divergentReason`(人手介入時の調査手がかり)が
-        // 別の理由で上書きされ、証拠が失われてしまう。冪等に扱い、最初の検知を保持する。
-        if (existing?.state === 'divergent') {
-          return;
-        }
+    // second-opinionレビュー指摘対応(read-only, 7巡目相当): 既にdivergent状態のclaimを
+    // 再書込みすると、最初に検知した`divergentReason`(人手介入時の調査手がかり)が
+    // 別の理由で上書きされ、証拠が失われてしまう。冪等に扱い、最初の検知を保持する。
+    if (existing?.state === 'divergent') {
+      return;
+    }
 
-        folderId = existing?.folderId;
-        // Issue #871 恒久対応(承認付き再同期ワークフロー): divergentはTTL対象外にする
-        // (`expireAt`を書かない)。承認付き再同期(resolveDivergentClaim/releaseDivergentClaim)
-        // で人手解決されるまでclaimを必ず残す。従来はここで`expireAt`(180日)を書いており、
-        // 人手解決しないまま180日経つとclaimが消え、システムが無言で通常のfind-or-create経路に
-        // 戻ってしまう(kanameoneで`ttlConfig.state:ACTIVE`を実測確認済みの実在リスク)。
-        const doc = stripUndefined({
-          state: 'divergent' as const,
-          folderId: existing?.folderId,
-          attempt: null,
-          divergentReason: reason,
-          divergentAtMs: Date.now(),
-          divergentRunId: runId,
-          parentId,
-          name,
-          // 同一claimが再度divergent化した場合の過去のresync履歴を引き継ぐ(codex review Low
-          // 指摘対応)。tx.set()は全置換のため、明示的に引き継がないと繰り返し乖離の監査証跡
-          // (resyncHistory[])が毎回失われ、「同一claimで繰り返し発生していないか」という
-          // 運用SOPの棚卸しが機能しなくなる。
-          resyncHistory: existing?.resyncHistory,
-        });
-        tx.set(ref, doc);
-        transitioned = true;
-      }),
-    FOLDER_CLAIM_TX_RETRY_ATTEMPTS,
-    FOLDER_CLAIM_TX_RETRY_BASE_DELAY_MS,
-    isRetryableFirestoreError
-  );
+    folderId = existing?.folderId;
+    // Issue #871 恒久対応(承認付き再同期ワークフロー): divergentはTTL対象外にする
+    // (`expireAt`を書かない)。承認付き再同期(resolveDivergentClaim/releaseDivergentClaim)
+    // で人手解決されるまでclaimを必ず残す。従来はここで`expireAt`(180日)を書いており、
+    // 人手解決しないまま180日経つとclaimが消え、システムが無言で通常のfind-or-create経路に
+    // 戻ってしまう(kanameoneで`ttlConfig.state:ACTIVE`を実測確認済みの実在リスク)。
+    const doc = stripUndefined({
+      state: 'divergent' as const,
+      folderId: existing?.folderId,
+      attempt: null,
+      divergentReason: reason,
+      divergentAtMs: Date.now(),
+      divergentRunId: runId,
+      parentId,
+      name,
+      // 同一claimが再度divergent化した場合の過去のresync履歴を引き継ぐ(codex review Low
+      // 指摘対応)。tx.set()は全置換のため、明示的に引き継がないと繰り返し乖離の監査証跡
+      // (resyncHistory[])が毎回失われ、「同一claimで繰り返し発生していないか」という
+      // 運用SOPの棚卸しが機能しなくなる。
+      resyncHistory: existing?.resyncHistory,
+    });
+    tx.set(ref, doc);
+    transitioned = true;
+  });
   // Issue #871関連調査(2026-09-16)で判明: divergent遷移はCloud Loggingに一切出力されず、
   // 発生に誰も気づけずFirestoreへの書込みのみでサイレントに蓄積する設計だった
   // (2026-09-01発生の2件が2週間後の手動棚卸しで初めて発覚)。トランザクション外で
@@ -1191,52 +1182,46 @@ export async function resolveDivergentClaim(
   mode: 'restore-expected' | 'finalize-resolved'
 ): Promise<DivergentResolutionOutcome> {
   const ref = claimRef(firestore, parentId, name);
-  return withBackoffRetry(
-    () =>
-      firestore.runTransaction(async (tx): Promise<DivergentResolutionOutcome> => {
-        const snap = await tx.get(ref);
-        if (!snap.exists) {
-          return { outcome: 'no-op', reason: 'not-divergent' };
-        }
-        const existing = normalizeClaim(snap.data()!, parentId, name);
-        if (existing.state !== 'divergent') {
-          return { outcome: 'no-op', reason: 'not-divergent' };
-        }
-        if (existing.folderId === undefined) {
-          // reconcile-name-mismatch等、claimにfolderIdが入らないまま divergent化したケース。
-          // resolved復帰にはfolderIdが必須のため、本経路では扱えない(手動調査対象)。
-          return { outcome: 'no-op', reason: 'missing-folder-id' };
-        }
-        if (!snap.updateTime) {
-          return { outcome: 'no-op', reason: 'fence-mismatch' };
-        }
-        const updateTimeMs = snap.updateTime.toMillis();
-        if (!matchesFence(existing, updateTimeMs, fence)) {
-          return { outcome: 'no-op', reason: 'fence-mismatch' };
-        }
+  return runClaimTransaction(firestore, async (tx): Promise<DivergentResolutionOutcome> => {
+    const snap = await tx.get(ref);
+    if (!snap.exists) {
+      return { outcome: 'no-op', reason: 'not-divergent' };
+    }
+    const existing = normalizeClaim(snap.data()!, parentId, name);
+    if (existing.state !== 'divergent') {
+      return { outcome: 'no-op', reason: 'not-divergent' };
+    }
+    if (existing.folderId === undefined) {
+      // reconcile-name-mismatch等、claimにfolderIdが入らないまま divergent化したケース。
+      // resolved復帰にはfolderIdが必須のため、本経路では扱えない(手動調査対象)。
+      return { outcome: 'no-op', reason: 'missing-folder-id' };
+    }
+    if (!snap.updateTime) {
+      return { outcome: 'no-op', reason: 'fence-mismatch' };
+    }
+    const updateTimeMs = snap.updateTime.toMillis();
+    if (!matchesFence(existing, updateTimeMs, fence)) {
+      return { outcome: 'no-op', reason: 'fence-mismatch' };
+    }
 
-        const resyncHistory = appendResyncHistory(existing.resyncHistory, {
-          mode,
-          actor: fence.actor,
-          atMs: Date.now(),
-        });
-        const doc = stripUndefined({
-          state: 'resolved' as const,
-          folderId: existing.folderId,
-          attempt: null,
-          missCount: 0,
-          parentId,
-          name,
-          expireAt: ttlTimestamp(),
-          resyncHistory,
-        });
-        tx.set(ref, doc);
-        return { outcome: 'resolved' };
-      }),
-    FOLDER_CLAIM_TX_RETRY_ATTEMPTS,
-    FOLDER_CLAIM_TX_RETRY_BASE_DELAY_MS,
-    isRetryableFirestoreError
-  );
+    const resyncHistory = appendResyncHistory(existing.resyncHistory, {
+      mode,
+      actor: fence.actor,
+      atMs: Date.now(),
+    });
+    const doc = stripUndefined({
+      state: 'resolved' as const,
+      folderId: existing.folderId,
+      attempt: null,
+      missCount: 0,
+      parentId,
+      name,
+      expireAt: ttlTimestamp(),
+      resyncHistory,
+    });
+    tx.set(ref, doc);
+    return { outcome: 'resolved' };
+  });
 }
 
 /**
@@ -1254,45 +1239,39 @@ export async function releaseDivergentClaim(
   fence: DivergentClaimFence
 ): Promise<DivergentResolutionOutcome> {
   const ref = claimRef(firestore, parentId, name);
-  return withBackoffRetry(
-    () =>
-      firestore.runTransaction(async (tx): Promise<DivergentResolutionOutcome> => {
-        const snap = await tx.get(ref);
-        if (!snap.exists) {
-          return { outcome: 'no-op', reason: 'not-divergent' };
-        }
-        const existing = normalizeClaim(snap.data()!, parentId, name);
-        if (existing.state !== 'divergent') {
-          return { outcome: 'no-op', reason: 'not-divergent' };
-        }
-        if (!snap.updateTime) {
-          return { outcome: 'no-op', reason: 'fence-mismatch' };
-        }
-        const updateTimeMs = snap.updateTime.toMillis();
-        if (!matchesFence(existing, updateTimeMs, fence)) {
-          return { outcome: 'no-op', reason: 'fence-mismatch' };
-        }
+  return runClaimTransaction(firestore, async (tx): Promise<DivergentResolutionOutcome> => {
+    const snap = await tx.get(ref);
+    if (!snap.exists) {
+      return { outcome: 'no-op', reason: 'not-divergent' };
+    }
+    const existing = normalizeClaim(snap.data()!, parentId, name);
+    if (existing.state !== 'divergent') {
+      return { outcome: 'no-op', reason: 'not-divergent' };
+    }
+    if (!snap.updateTime) {
+      return { outcome: 'no-op', reason: 'fence-mismatch' };
+    }
+    const updateTimeMs = snap.updateTime.toMillis();
+    if (!matchesFence(existing, updateTimeMs, fence)) {
+      return { outcome: 'no-op', reason: 'fence-mismatch' };
+    }
 
-        const resyncHistory = appendResyncHistory(existing.resyncHistory, {
-          mode: 'release-claim',
-          actor: fence.actor,
-          atMs: Date.now(),
-        });
-        const doc = stripUndefined({
-          state: 'invalidated' as const,
-          attempt: null,
-          parentId,
-          name,
-          expireAt: ttlTimestamp(),
-          resyncHistory,
-        });
-        tx.set(ref, doc);
-        return { outcome: 'resolved' };
-      }),
-    FOLDER_CLAIM_TX_RETRY_ATTEMPTS,
-    FOLDER_CLAIM_TX_RETRY_BASE_DELAY_MS,
-    isRetryableFirestoreError
-  );
+    const resyncHistory = appendResyncHistory(existing.resyncHistory, {
+      mode: 'release-claim',
+      actor: fence.actor,
+      atMs: Date.now(),
+    });
+    const doc = stripUndefined({
+      state: 'invalidated' as const,
+      attempt: null,
+      parentId,
+      name,
+      expireAt: ttlTimestamp(),
+      resyncHistory,
+    });
+    tx.set(ref, doc);
+    return { outcome: 'resolved' };
+  });
 }
 
 /**
@@ -1310,89 +1289,83 @@ async function recordMiss(
   runId: string
 ): Promise<{ invalidated: boolean }> {
   const ref = claimRef(firestore, parentId, name);
-  return withBackoffRetry(
-    () =>
-      firestore.runTransaction(async (tx): Promise<{ invalidated: boolean }> => {
-        const snap = await tx.get(ref);
-        const existing = snap.exists ? normalizeClaim(snap.data()!, parentId, name) : null;
+  return runClaimTransaction(firestore, async (tx): Promise<{ invalidated: boolean }> => {
+    const snap = await tx.get(ref);
+    const existing = snap.exists ? normalizeClaim(snap.data()!, parentId, name) : null;
 
-        // second-opinionレビュー指摘対応(read-only, 7巡目相当): 呼び出し元(verifyFolderClaim)が
-        // resolved claimを読んでからこのmiss記録までの間隙で、別プロセスがdivergentへ遷移
-        // させていた場合、無条件で上書きしてはならない(人手介入待ちシグナルの消失防止)。
-        if (existing?.state === 'divergent') {
-          console.warn(
-            `[driveFolderClaim] divergent状態のclaimをmiss記録で上書きしません(人手介入待ち): "${name}"（親フォルダ: ${parentId}）`
-          );
-          return { invalidated: false };
-        }
-        // 同様に、有効なリース内の'creating'(別プロセスの進行中attempt)を検知した場合も
-        // 上書きしない(fencingトークン汚染防止、他の書込み関数と同じ理由)。
-        if (hasValidInFlightCreatingLease(existing)) {
-          console.warn(
-            `[driveFolderClaim] 進行中の他attemptのclaimをmiss記録で上書きしません(fencingトークン汚染防止): "${name}"（親フォルダ: ${parentId}）`
-          );
-          return { invalidated: false };
-        }
-        // `existing`が既にresolvedなfolderIdを持たない(claim消滅・未resolved・invalidated
-        // 済み等)場合、`existing?.folderId`はundefinedになる。これを`state:'resolved'`の
-        // まま書き込むと、`isResolvedWithFolderId()`が'resolved'として認識できない不正な
-        // ドキュメントが残り、`invalidateAttempt`(state==='creating'のみ対象)でも
-        // 回収できない永久に詰まったclaimになる。このケースはmiss記録自体が無意味なので
-        // スキップする。
-        if (!existing || typeof existing.folderId !== 'string') {
-          console.warn(
-            `[driveFolderClaim] resolved folderIdを持たないclaimへのmiss記録をスキップします(既に無効化/未解決): "${name}"（親フォルダ: ${parentId}）`
-          );
-          return { invalidated: false };
-        }
+    // second-opinionレビュー指摘対応(read-only, 7巡目相当): 呼び出し元(verifyFolderClaim)が
+    // resolved claimを読んでからこのmiss記録までの間隙で、別プロセスがdivergentへ遷移
+    // させていた場合、無条件で上書きしてはならない(人手介入待ちシグナルの消失防止)。
+    if (existing?.state === 'divergent') {
+      console.warn(
+        `[driveFolderClaim] divergent状態のclaimをmiss記録で上書きしません(人手介入待ち): "${name}"（親フォルダ: ${parentId}）`
+      );
+      return { invalidated: false };
+    }
+    // 同様に、有効なリース内の'creating'(別プロセスの進行中attempt)を検知した場合も
+    // 上書きしない(fencingトークン汚染防止、他の書込み関数と同じ理由)。
+    if (hasValidInFlightCreatingLease(existing)) {
+      console.warn(
+        `[driveFolderClaim] 進行中の他attemptのclaimをmiss記録で上書きしません(fencingトークン汚染防止): "${name}"（親フォルダ: ${parentId}）`
+      );
+      return { invalidated: false };
+    }
+    // `existing`が既にresolvedなfolderIdを持たない(claim消滅・未resolved・invalidated
+    // 済み等)場合、`existing?.folderId`はundefinedになる。これを`state:'resolved'`の
+    // まま書き込むと、`isResolvedWithFolderId()`が'resolved'として認識できない不正な
+    // ドキュメントが残り、`invalidateAttempt`(state==='creating'のみ対象)でも
+    // 回収できない永久に詰まったclaimになる。このケースはmiss記録自体が無意味なので
+    // スキップする。
+    if (!existing || typeof existing.folderId !== 'string') {
+      console.warn(
+        `[driveFolderClaim] resolved folderIdを持たないclaimへのmiss記録をスキップします(既に無効化/未解決): "${name}"（親フォルダ: ${parentId}）`
+      );
+      return { invalidated: false };
+    }
 
-        const nowMs = Date.now();
-        const missCount = (existing?.missCount ?? 0) + 1;
-        const firstMissAtMs = existing?.missCount ? (existing.firstMissAtMs ?? nowMs) : nowMs;
-        const missRunIds = Array.from(new Set([...(existing?.missRunIds ?? []), runId]));
+    const nowMs = Date.now();
+    const missCount = (existing?.missCount ?? 0) + 1;
+    const firstMissAtMs = existing?.missCount ? (existing.firstMissAtMs ?? nowMs) : nowMs;
+    const missRunIds = Array.from(new Set([...(existing?.missRunIds ?? []), runId]));
 
-        const shouldInvalidate =
-          missCount >= MISS_THRESHOLD &&
-          nowMs - firstMissAtMs >= MISS_WINDOW_MS &&
-          missRunIds.length >= 2;
+    const shouldInvalidate =
+      missCount >= MISS_THRESHOLD &&
+      nowMs - firstMissAtMs >= MISS_WINDOW_MS &&
+      missRunIds.length >= 2;
 
-        if (shouldInvalidate) {
-          const doc = stripUndefined({
-            state: 'invalidated' as const,
-            attempt: null,
-            parentId,
-            name,
-            expireAt: ttlTimestamp(),
-            // codex review 2巡目P2指摘対応: resyncHistory(繰り返し乖離の監査証跡)を
-            // 全ての完全置換writeで引き継ぐ。
-            resyncHistory: existing.resyncHistory,
-          });
-          tx.set(ref, doc);
-          return { invalidated: true };
-        }
+    if (shouldInvalidate) {
+      const doc = stripUndefined({
+        state: 'invalidated' as const,
+        attempt: null,
+        parentId,
+        name,
+        expireAt: ttlTimestamp(),
+        // codex review 2巡目P2指摘対応: resyncHistory(繰り返し乖離の監査証跡)を
+        // 全ての完全置換writeで引き継ぐ。
+        resyncHistory: existing.resyncHistory,
+      });
+      tx.set(ref, doc);
+      return { invalidated: true };
+    }
 
-        const doc = stripUndefined({
-          state: 'resolved' as const,
-          folderId: existing?.folderId,
-          attempt: existing?.attempt ?? null,
-          resolvedAtMs: existing?.resolvedAtMs,
-          verifiedAtMs: existing?.verifiedAtMs,
-          lastFullScanAtMs: existing?.lastFullScanAtMs,
-          missCount,
-          firstMissAtMs,
-          missRunIds,
-          parentId,
-          name,
-          expireAt: ttlTimestamp(),
-          resyncHistory: existing.resyncHistory,
-        });
-        tx.set(ref, doc);
-        return { invalidated: false };
-      }),
-    FOLDER_CLAIM_TX_RETRY_ATTEMPTS,
-    FOLDER_CLAIM_TX_RETRY_BASE_DELAY_MS,
-    isRetryableFirestoreError
-  );
+    const doc = stripUndefined({
+      state: 'resolved' as const,
+      folderId: existing?.folderId,
+      attempt: existing?.attempt ?? null,
+      resolvedAtMs: existing?.resolvedAtMs,
+      verifiedAtMs: existing?.verifiedAtMs,
+      lastFullScanAtMs: existing?.lastFullScanAtMs,
+      missCount,
+      firstMissAtMs,
+      missRunIds,
+      parentId,
+      name,
+      expireAt: ttlTimestamp(),
+      resyncHistory: existing.resyncHistory,
+    });
+    tx.set(ref, doc);
+    return { invalidated: false };
+  });
 }
 
 /** `verifyFolderClaim`の返り値。`restored`は呼び出し元(rollback manifest記録用)が
