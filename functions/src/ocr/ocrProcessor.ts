@@ -612,7 +612,11 @@ export async function processDocument(
  * と同値(Issue #871/#954で実績のある値)を踏襲する。本ファイルのCloud Functions
  * timeout(`PROCESS_OCR_TIMEOUT_SECONDS`=900秒)はdriveFolderClaim.ts側のホットパス
  * (`onDocumentWriteDriveExport`の`timeoutSeconds:120`)よりはるかに長く、外側リトライの
- * 追加遅延(最大3回・300ms基準backoffで数秒程度)がtimeoutに接近するリスクは無視できる。
+ * 追加遅延がtimeoutに接近するリスクは無視できる(fable-reviewセカンドオピニオン指摘L1:
+ * 外側sleep自体は300+600ms=900ms未満だが、外側1回ごとにFirestore SDK内部リトライ
+ * (最大5回、コードによっては`resetToMax()`で数十秒規模)も再度フルで走りうるため、
+ * 実質的な追加時間は最悪数十秒規模になりうる。それでも900秒のtimeoutに対しては
+ * 引き続き無視できるオーダー)。
  */
 export const OCR_TX_RETRY_ATTEMPTS = 3;
 export const OCR_TX_RETRY_BASE_DELAY_MS = 300;

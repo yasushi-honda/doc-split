@@ -61,13 +61,13 @@ describe('ocrProcessor detail/main dual-write contract (ADR-0018 Phase B)', () =
     const txFnBody = extractBraceBlock(source, /\}\): Promise<void> \{/);
     expect(txFnBody, 'applyOcrCompletionTransaction本体の抽出に失敗した').to.not.be.null;
 
-    const txStartIdx = txFnBody!.indexOf('db.runTransaction(async (tx) => {');
-    const detailSetIdx = txFnBody!.indexOf(
-      "tx.set(docRef.collection('detail').doc('main'),"
-    );
-    const txEndIdx = txFnBody!.indexOf('});', detailSetIdx);
-    expect(txStartIdx).to.be.greaterThan(-1);
-    expect(detailSetIdx).to.be.greaterThan(txStartIdx);
-    expect(txEndIdx).to.be.greaterThan(detailSetIdx);
+    // 2回目のfable-reviewセカンドオピニオン指摘L4: 旧実装の`indexOf('});', detailSetIdx)`は
+    // `tx.set(...)`自身の閉じ括弧にマッチしてしまうため`txEndIdx > detailSetIdx`が常に真になり、
+    // 「db.runTransactionコールバック内にある」ことの証明になっていなかった(vacuous)。
+    // db.runTransactionコールバック自体をブレース単位で切り出し、その中にdetail/main
+    // tx.setが実際に含まれることを直接確認する。
+    const txCallbackBody = extractBraceBlock(txFnBody!, /db\.runTransaction\(async \(tx\) => \{/);
+    expect(txCallbackBody, 'db.runTransactionコールバック本体の抽出に失敗した').to.not.be.null;
+    expect(txCallbackBody).to.include("tx.set(docRef.collection('detail').doc('main'),");
   });
 });

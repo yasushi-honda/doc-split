@@ -353,9 +353,15 @@ describe('handleProcessingError (Issue #957: runTransaction自体の一時的失
     expect(callCount, 'リトライにより2回呼ばれるはず').to.equal(2);
     const after = await docRef.get();
     expect(after.data()!.status).to.equal('error');
-    // リトライで失敗した回のtransaction bodyは実行されない(real dbへ委譲する前にthrow)ため、
-    // retryCountは1回分のみ加算される(二重加算されない = リトライの冪等性)。
-    expect(after.data()!.retryCount, 'リトライ中の失敗試行でretryCountが二重加算されないこと').to.equal(1);
+    // fable-reviewセカンドオピニオン指摘M3: 本テストの合成失敗(withCountingFailingRunTransaction)は
+    // 失敗させる回のtransaction body自体を一切実行せずreal dbへ委譲する前にthrowするため、
+    // 「bodyが2回実行されても結果が壊れない」という一般的な冪等性の証明にはならない(過大な主張を
+    // していた)。本テストが実際に証明しているのは「1回失敗しても最終的にretryCountは1回分しか
+    // 加算されない」という、この合成失敗パターン特有の(弱いが正確な)性質のみ。より一般的な
+    // 「commitは成功したがクライアントには失敗として返る(ambiguous commit)」ケース、すなわち
+    // bodyが実際に2回実行されるケースの冪等性検証は別途必要(driveFolderClaimIntegration.test.ts
+    // の「B. ambiguous commit」相当、未実装)。
+    expect(after.data()!.retryCount, 'リトライ中の失敗試行(body未実行)ではretryCountが加算されないこと').to.equal(1);
   });
 
   it(`全attempts(OCR_TX_RETRY_ATTEMPTS=${OCR_TX_RETRY_ATTEMPTS})失敗しても、既存fallback(非transactional docRef.update)でstatus:errorが確定する`, async () => {
@@ -376,6 +382,38 @@ describe('handleProcessingError (Issue #957: runTransaction自体の一時的失
     // 発火し、status:errorが確定する(Issue #540 H2のfallback、本変更で新設したものではない)。
     const after = await docRef.get();
     expect(after.data()!.status).to.equal('error');
+    // pr-test-analyzerセカンドオピニオン指摘: 既存fallback(docRef.update)はretryCountフィールドを
+    // 含まない(コード上明記、functions/src/ocr/ocrProcessor.ts catch(updateErr)節)。この「本経路の
+    // 成功時とは異なりretryCountを更新しない」という非自明な仕様を直接lock-inする。
+    expect(after.data()!.retryCount, 'fallback経路はretryCountを更新しない(本経路のtx成功時とは非対称)').to.be
+      .undefined;
+  });
+
+  it('transientな業務エラー(429以外、例: timeout)がFirestore層の一時的失敗と組み合わさっても、リトライ成功後は正しくstatus:pendingへ遷移する(pr-test-analyzerセカンドオピニオン指摘: transient/non-transient × outer-retryの組合せ未検証だった)', async () => {
+    const docId = 'doc-957-handle-transient-business-error-with-retry';
+    const docRef = db.collection('documents').doc(docId);
+    await docRef.set({ status: 'pending', fileUrl: 'gs://bucket/a.pdf', mimeType: 'application/pdf' });
+    const claim = await tryStartProcessing(docId);
+    const { ocrRunId } = claim!;
+
+    const { callCount } = await withCountingFailingRunTransaction([1], 14, () =>
+      handleProcessingError(
+        docId,
+        new Error('Request timeout - exception posting request to model'),
+        'test',
+        ocrRunId
+      )
+    );
+
+    expect(callCount, 'Firestore層は1回だけ失敗しリトライで2回呼ばれるはず').to.equal(2);
+    const after = await docRef.get();
+    // isTransientError(業務エラー側の分類)がtrueのため、外側リトライ成功後は
+    // 従来通りstatus:pending(自動リトライ待ち)に遷移する(status:error確定ではない)。
+    expect(after.data()!.status, 'transientな業務エラーはリトライ成功後もpendingへ遷移するはず').to.equal(
+      'pending'
+    );
+    expect(after.data()!.retryCount).to.equal(1);
+    expect(after.data()!.retryAfter, 'transient分岐ではretryAfterが設定される').to.exist;
   });
 
   it('非transientコード(例: 7=PERMISSION_DENIED)は1回で諦めリトライされない', async () => {
