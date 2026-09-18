@@ -25,6 +25,7 @@ import {
 import {
   DivergentFolderClaimError,
   FolderClaimRestoreCommitError,
+  FolderVerificationPendingError,
   buildFolderLockId,
   commitResolvedWithRetry,
   resolveDivergentClaim,
@@ -33,10 +34,16 @@ import {
   recordFullScanResolution,
   invalidateResolvedClaimByFolderId,
   invalidateCreatingClaimByAttemptId,
+  reconcileAttempt,
   verifyFolderClaim,
   readClaim,
+  FOLDER_CLAIM_TX_RETRY_ATTEMPTS,
+  RECONCILE_GRACE_MS,
   type ResolvedFolderClaim,
+  type FolderClaimAttempt,
+  type FolderClaimDoc,
 } from '../src/drive/driveFolderClaim';
+import { classifyDriveExportErrorKind } from '../src/drive/executeDriveExport';
 import { resolveChildFolder } from '../src/drive/childFolderResolver';
 
 const db = admin.firestore();
@@ -148,10 +155,52 @@ async function enableClaimRead(): Promise<void> {
  * 返される参照は実dbのFirestore emulatorに対して有効。commitResolvedWithRetryの
  * リトライ(withBackoffRetry)を意図的に失敗させ、「files.create()成功後にFirestoreへの
  * 確定書込みだけが失敗する」状況(codex review P1指摘)を再現するために使う。
+ *
+ * Issue #954で`driveFolderClaim.ts`内の10関数に追加された`withBackoffRetry`は
+ * `isRetryableFirestoreError`(gRPC transientコードのみリトライ)を`shouldRetry`として
+ * 渡すため、`errorCode`(既定14=UNAVAILABLE、transient)を持つ合成エラーを投げる。
+ * 非transientコード(例: 7=PERMISSION_DENIED)を指定すれば「リトライされない」ことの
+ * 検証に使える。`getTxCallCount()`で実際の`runTransaction`呼び出し回数を検証できる。
  */
 function makeFailingCommitFirestore(
   realDb: admin.firestore.Firestore,
-  failTxCallIndices: readonly number[]
+  failTxCallIndices: readonly number[],
+  errorCode = 14
+): { firestore: admin.firestore.Firestore; getTxCallCount: () => number } {
+  let txCalls = 0;
+  const firestore = {
+    collection: (path: string) => realDb.collection(path),
+    doc: (path: string) => realDb.doc(path),
+    runTransaction: async (updateFn: (tx: admin.firestore.Transaction) => Promise<unknown>) => {
+      txCalls++;
+      if (failTxCallIndices.includes(txCalls)) {
+        const err = new Error(`simulated Firestore transaction failure (call #${txCalls})`) as Error & {
+          code: number;
+        };
+        err.code = errorCode;
+        throw err;
+      }
+      return realDb.runTransaction(updateFn);
+    },
+  } as unknown as admin.firestore.Firestore;
+  return { firestore, getTxCallCount: () => txCalls };
+}
+
+function claimDocRef(parentId: string, name: string) {
+  return db.collection('driveFolderLocks').doc(buildFolderLockId(parentId, name));
+}
+
+/**
+ * `runTransaction`だけを差し替えたfirestoreラッパ。`failOnCallIndex`回目のtxは実dbへ
+ * 実際に委譲し(書込みは成功する)、その直後にクライアント側にのみgRPC transientコード
+ * (既定14=UNAVAILABLE)を持つ合成エラーを投げる。「サーバー側は成功したがクライアントには
+ * 失敗として返る」ambiguous commitを再現する(Issue #954、beginCreationの自己ブロック
+ * 解消の検証用)。
+ */
+function makeAmbiguousCommitFirestore(
+  realDb: admin.firestore.Firestore,
+  failOnCallIndex: number,
+  errorCode = 14
 ): admin.firestore.Firestore {
   let txCalls = 0;
   return {
@@ -159,16 +208,17 @@ function makeFailingCommitFirestore(
     doc: (path: string) => realDb.doc(path),
     runTransaction: async (updateFn: (tx: admin.firestore.Transaction) => Promise<unknown>) => {
       txCalls++;
-      if (failTxCallIndices.includes(txCalls)) {
-        throw new Error(`simulated Firestore transaction failure (call #${txCalls})`);
+      const result = await realDb.runTransaction(updateFn);
+      if (txCalls === failOnCallIndex) {
+        const err = new Error('simulated ambiguous commit (server succeeded, client sees failure)') as Error & {
+          code: number;
+        };
+        err.code = errorCode;
+        throw err;
       }
-      return realDb.runTransaction(updateFn);
+      return result;
     },
   } as unknown as admin.firestore.Firestore;
-}
-
-function claimDocRef(parentId: string, name: string) {
-  return db.collection('driveFolderLocks').doc(buildFolderLockId(parentId, name));
 }
 
 /**
@@ -310,8 +360,12 @@ describe('driveFolderClaim プロトコル(Issue #871)', () => {
           { id: 'trashed-restore-fail-id', name: '復元失敗太郎', parents: ['parent-restorecommitfail'], trashed: true },
         ],
       });
-      // recordVerification自体はリトライなしの単発runTransactionのため、1回目を失敗させれば十分。
-      const failingDb = makeFailingCommitFirestore(db, [1]);
+      // Issue #954: recordVerificationはwithBackoffRetry(FOLDER_CLAIM_TX_RETRY_ATTEMPTS回)で
+      // 保護されるようになったため、全attemptを失敗させて初めてFolderClaimRestoreCommitErrorになる。
+      const { firestore: failingDb } = makeFailingCommitFirestore(
+        db,
+        Array.from({ length: FOLDER_CLAIM_TX_RETRY_ATTEMPTS }, (_, i) => i + 1)
+      );
 
       try {
         await findOrCreateFolder(drive, failingDb, 'parent-restorecommitfail', '復元失敗太郎');
@@ -712,7 +766,7 @@ describe('driveFolderClaim プロトコル(Issue #871)', () => {
       });
       // readClaim/reconcileAttemptはトランザクションを使わないため、commitResolvedWithRetryの
       // 3回のリトライ(1〜3回目のtx)を全て失敗させる。
-      const failingDb = makeFailingCommitFirestore(db, [1, 2, 3]);
+      const { firestore: failingDb } = makeFailingCommitFirestore(db, [1, 2, 3]);
 
       try {
         await findOrCreateFolder(drive, failingDb, 'parent-adoptcommitfail', '回収確定失敗太郎');
@@ -1151,7 +1205,7 @@ describe('driveFolderClaim プロトコル(Issue #871)', () => {
 
       // beginCreation(1回目のtx)は成功させ、commitResolvedWithRetryの3回のリトライ
       // (2〜4回目のtx)を全て失敗させる。
-      const failingDb = makeFailingCommitFirestore(db, [2, 3, 4]);
+      const { firestore: failingDb } = makeFailingCommitFirestore(db, [2, 3, 4]);
 
       let firstError: unknown;
       try {
@@ -1663,6 +1717,192 @@ describe('driveFolderClaim プロトコル(Issue #871)', () => {
       expect(count).to.equal(0);
       const after = (await claimDocRef('parent-contract3', '契約次郎').get()).data()!;
       expect(after).to.deep.equal(before);
+    });
+  });
+
+  describe('Issue #954: runTransaction自体の一時的失敗をwithBackoffRetryで防御', () => {
+    describe('A. リトライで復旧する(1回だけ失敗させ2回目で成功、getTxCallCount()でリトライが実際に効いたことを確認)', () => {
+      it('recordVerification: 1回失敗しても2回目でリトライ成功しclaimが更新される', async () => {
+        await claimDocRef('parent-954-a1', 'リトライ太郎').set({
+          state: 'resolved',
+          folderId: 'a1-folder-id',
+          attempt: null,
+          parentId: 'parent-954-a1',
+          name: 'リトライ太郎',
+        });
+        const { drive } = makeFakeDrive({
+          files: [{ id: 'a1-folder-id', name: 'リトライ太郎', parents: ['parent-954-a1'], trashed: false }],
+        });
+        const claim = (await readClaim(db, 'parent-954-a1', 'リトライ太郎')) as ResolvedFolderClaim;
+        const { firestore: failingDb, getTxCallCount } = makeFailingCommitFirestore(db, [1]);
+
+        const result = await verifyFolderClaim(drive, failingDb, 'parent-954-a1', 'リトライ太郎', claim, 'run-a1');
+
+        expect(result).to.deep.equal({ folderId: 'a1-folder-id', restored: false });
+        expect(getTxCallCount()).to.equal(2);
+        const after = (await claimDocRef('parent-954-a1', 'リトライ太郎').get()).data()!;
+        expect(after.verifiedAtMs).to.be.a('number');
+      });
+
+      it('markDivergent: 1回失敗しても2回目でリトライ成功しdivergent状態が記録される(従来は1回失敗で検知が永久に失われていた)', async () => {
+        await claimDocRef('parent-954-a2', '不一致太郎').set({
+          state: 'resolved',
+          folderId: 'a2-folder-id',
+          attempt: null,
+          parentId: 'parent-954-a2',
+          name: '不一致太郎',
+        });
+        const { drive } = makeFakeDrive({
+          files: [{ id: 'a2-folder-id', name: '実際は別名', parents: ['parent-954-a2'], trashed: false }],
+        });
+        const claim = (await readClaim(db, 'parent-954-a2', '不一致太郎')) as ResolvedFolderClaim;
+        const { firestore: failingDb, getTxCallCount } = makeFailingCommitFirestore(db, [1]);
+
+        try {
+          await verifyFolderClaim(drive, failingDb, 'parent-954-a2', '不一致太郎', claim, 'run-a2');
+          expect.fail('DivergentFolderClaimErrorがthrowされるべき');
+        } catch (error) {
+          expect(error).to.be.instanceOf(DivergentFolderClaimError);
+        }
+
+        expect(getTxCallCount()).to.equal(2);
+        const after = (await claimDocRef('parent-954-a2', '不一致太郎').get()).data()!;
+        expect(after.state).to.equal('divergent');
+      });
+
+      it('invalidateResolvedClaimByFolderId: 1回失敗しても2回目でリトライ成功する', async () => {
+        await claimDocRef('parent-954-a3', '無効化太郎').set({
+          state: 'resolved',
+          folderId: 'a3-folder-id',
+          attempt: null,
+          parentId: 'parent-954-a3',
+          name: '無効化太郎',
+        });
+        const { firestore: failingDb, getTxCallCount } = makeFailingCommitFirestore(db, [1]);
+
+        const count = await invalidateResolvedClaimByFolderId(failingDb, 'a3-folder-id');
+
+        expect(count).to.equal(1);
+        expect(getTxCallCount()).to.equal(2);
+        const after = (await claimDocRef('parent-954-a3', '無効化太郎').get()).data()!;
+        expect(after.state).to.equal('invalidated');
+      });
+    });
+
+    describe('B. リトライ全滅後も呼び出し元の契約が守られる(全attempts失敗)', () => {
+      it('recordMiss: 全滅してもFolderVerificationPendingError(transient)を必ずthrowする(生のFirestoreエラーではない)', async () => {
+        await claimDocRef('parent-954-b1', '既存太郎').set({
+          state: 'resolved',
+          folderId: 'gone-id',
+          attempt: null,
+          parentId: 'parent-954-b1',
+          name: '既存太郎',
+        });
+        const { drive } = makeFakeDrive({ files: [] }); // files.get()は404
+        const claim = (await readClaim(db, 'parent-954-b1', '既存太郎')) as ResolvedFolderClaim;
+        const { firestore: failingDb } = makeFailingCommitFirestore(
+          db,
+          Array.from({ length: FOLDER_CLAIM_TX_RETRY_ATTEMPTS }, (_, i) => i + 1)
+        );
+
+        try {
+          await verifyFolderClaim(drive, failingDb, 'parent-954-b1', '既存太郎', claim, 'run-b1');
+          expect.fail('FolderVerificationPendingErrorがthrowされるべき');
+        } catch (error) {
+          expect(error).to.be.instanceOf(FolderVerificationPendingError);
+          expect(classifyDriveExportErrorKind(error)).to.equal('transient');
+        }
+      });
+
+      it('recordVerification(非trashed経路): 全滅しても例外を投げずrestored:falseで返す(claimのverifiedAtMsは更新されない)', async () => {
+        await claimDocRef('parent-954-b2', '継続太郎').set({
+          state: 'resolved',
+          folderId: 'b2-folder-id',
+          attempt: null,
+          verifiedAtMs: 12345,
+          parentId: 'parent-954-b2',
+          name: '継続太郎',
+        });
+        const { drive } = makeFakeDrive({
+          files: [{ id: 'b2-folder-id', name: '継続太郎', parents: ['parent-954-b2'], trashed: false }],
+        });
+        const claim = (await readClaim(db, 'parent-954-b2', '継続太郎')) as ResolvedFolderClaim;
+        const { firestore: failingDb } = makeFailingCommitFirestore(
+          db,
+          Array.from({ length: FOLDER_CLAIM_TX_RETRY_ATTEMPTS }, (_, i) => i + 1)
+        );
+
+        const result = await verifyFolderClaim(drive, failingDb, 'parent-954-b2', '継続太郎', claim, 'run-b2');
+
+        expect(result).to.deep.equal({ folderId: 'b2-folder-id', restored: false });
+        const after = (await claimDocRef('parent-954-b2', '継続太郎').get()).data()!;
+        expect(after.verifiedAtMs).to.equal(12345);
+      });
+
+      it('reconcileAttempt: invalidateAttemptが全滅しても握り潰され、clear経路が正常に返る', async () => {
+        const parentId = 'parent-954-b3';
+        const name = 'クリア太郎';
+        const attemptId = 'attempt-954-b3';
+        const claim: FolderClaimDoc & { attempt: FolderClaimAttempt } = {
+          state: 'creating',
+          attempt: { attemptId, startedAtMs: Date.now() - (RECONCILE_GRACE_MS + 60_000), runId: 'old-run' },
+          parentId,
+          name,
+        };
+        await claimDocRef(parentId, name).set(claim);
+        const { drive } = makeFakeDrive({}); // attemptIdタグ検索は0件
+        const { firestore: failingDb } = makeFailingCommitFirestore(
+          db,
+          Array.from({ length: FOLDER_CLAIM_TX_RETRY_ATTEMPTS }, (_, i) => i + 1)
+        );
+
+        const result = await reconcileAttempt(drive, failingDb, parentId, name, claim, 'new-run');
+
+        expect(result).to.deep.equal({ status: 'clear' });
+      });
+    });
+
+    describe('C. 非transientエラーは即座に諦める(shouldRetry述語が機能する証拠)', () => {
+      it('recordVerification: PERMISSION_DENIED(非transient)は1回で諦めリトライされない', async () => {
+        await claimDocRef('parent-954-c1', '非再試行太郎').set({
+          state: 'resolved',
+          folderId: 'c1-folder-id',
+          attempt: null,
+          parentId: 'parent-954-c1',
+          name: '非再試行太郎',
+        });
+        const { drive } = makeFakeDrive({
+          files: [{ id: 'c1-folder-id', name: '非再試行太郎', parents: ['parent-954-c1'], trashed: false }],
+        });
+        const claim = (await readClaim(db, 'parent-954-c1', '非再試行太郎')) as ResolvedFolderClaim;
+        // gRPC code 7 = PERMISSION_DENIED、FIRESTORE_TRANSIENT_GRPC_CODESに含まれない
+        const { firestore: failingDb, getTxCallCount } = makeFailingCommitFirestore(db, [1], 7);
+
+        const result = await verifyFolderClaim(drive, failingDb, 'parent-954-c1', '非再試行太郎', claim, 'run-c1');
+
+        expect(result).to.deep.equal({ folderId: 'c1-folder-id', restored: false });
+        expect(getTxCallCount()).to.equal(1);
+      });
+    });
+
+    describe('D. beginCreationの自己ブロック解消(ambiguous commit後の再試行で自分自身のcreating claimをblockedと誤認しない)', () => {
+      it('ambiguous commit(サーバー側の書込みは成功したがクライアントには失敗として返る)後の再試行で、自分自身が書いたcreating claimをblockedと誤認せずbegunを返す', async () => {
+        const parentId = 'parent-954-d1';
+        const name = '自己ブロック太郎';
+        // 1回目のtxは実dbへ実際に委譲し(書込みは成功する)、その後クライアント側にのみ
+        // 一時的失敗として返す(ambiguous commitの再現)。attemptIdはbeginCreation内で
+        // tx外(呼び出し1回につき1つ)生成されるため、2回目のtxでも同じattemptIdが使われる。
+        const ambiguousDb = makeAmbiguousCommitFirestore(db, 1);
+
+        const result = await beginCreation(ambiguousDb, parentId, name, 'run-d1');
+
+        expect(result.status).to.equal('begun');
+        const snap = await claimDocRef(parentId, name).get();
+        expect(snap.data()?.state).to.equal('creating');
+        if (result.status === 'begun') {
+          expect(snap.data()?.attempt?.attemptId).to.equal(result.attemptId);
+        }
+      });
     });
   });
 });
