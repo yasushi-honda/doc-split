@@ -362,10 +362,15 @@ jobs:
           # (services/paddle-ocr/README.md「Cloud Run liveness probe」節参照)。
           #
           # --min-instances=1の理由: 1ページのcold start変動(Issue #966)への
-          # 緩和策。常時1インスタンスを起動状態に保つことで、孤立した単発リクエスト
-          # (実運用の主要パターン)のcold start(実測最大33.4秒)を解消する。
-          # ただしGmail添付ポーリング由来のバースト到達(複数文書がほぼ同時に
-          # onCreateされるケース)では2件目以降のスケールアウト起動までは救えない
+          # 緩和策。常時1インスタンスを起動状態に保つことで、tick重複が起きていない
+          # 限り実質的にほぼ全リクエストのcold start(実測最大33.4秒)を解消する。
+          # processOCR(Cloud Scheduler)は実機maxInstanceRequestConcurrency=80のため、
+          # 1サイクルがポーリング間隔60秒を超えると次tickが並行実行され複数文書への
+          # OCRリクエストが同時in-flightになりうる(ADR-0023参照)。この現象自体は
+          # Gemini運用の現在でも起こりうるが(多ページ文書で1サイクルが60秒超過しうる)、
+          # Geminiにはcold start概念がなく実害が顕在化していない。PaddleOCR
+          # (--concurrency=1)ではtick重複時の2文書目以降が必ず新規インスタンスの
+          # cold startを踏むため、PR6(Pass1切替)後に初めて実害化する
           # (Issue #966に残課題として記録)。「0に戻せばコスト削減」という
           # 善意の後日修正を防ぐため明記する。dev/kanameone/cocoro全環境で共通適用。
           gcloud run deploy paddle-ocr \
