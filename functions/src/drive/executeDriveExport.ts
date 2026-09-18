@@ -200,18 +200,48 @@ export async function executeDriveExport(
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`Drive export failed for document ${docId}: ${message}`);
-    await firestore.runTransaction(async (tx) => {
-      const snap = await tx.get(docRef);
-      if (!snap.exists || snap.data()?.driveExportRunId !== runId) {
-        return; // 他の実行に引き継がれている(superseded) → 新しい状態を上書きしない
-      }
-      tx.update(docRef, {
-        driveExportStatus: 'error',
-        driveExportError: message,
-        driveExportErrorKind: classifyDriveExportErrorKind(error),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    const errorKind = classifyDriveExportErrorKind(error);
+    try {
+      await firestore.runTransaction(async (tx) => {
+        const snap = await tx.get(docRef);
+        if (!snap.exists || snap.data()?.driveExportRunId !== runId) {
+          return; // 他の実行に引き継がれている(superseded) → 新しい状態を上書きしない
+        }
+        tx.update(docRef, {
+          driveExportStatus: 'error',
+          driveExportError: message,
+          driveExportErrorKind: errorKind,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
       });
-    });
+    } catch (writebackError) {
+      // このtransaction自体(tx.get()/tx.update())が失敗すると、driveExportStatusは
+      // 'exporting'のまま固着しErrorsPageのエラー一覧UIから原因を追跡できなくなる(Issue #947)。
+      // 所有権チェック(driveExportRunId一致)は失うが、best-effortの非transaction書込みへ
+      // フォールバックすることで固着だけは回避する。
+      const writebackMessage =
+        writebackError instanceof Error ? writebackError.message : String(writebackError);
+      console.error(
+        `Drive export error writeback failed for document ${docId} (original error: ${message}): ${writebackMessage}`
+      );
+      try {
+        const snap = await docRef.get();
+        if (snap.exists && snap.data()?.driveExportRunId === runId) {
+          await docRef.update({
+            driveExportStatus: 'error',
+            driveExportError: message,
+            driveExportErrorKind: errorKind,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+        } // else: 他の実行に引き継がれている(superseded) → 新しい状態を上書きしない
+      } catch (fallbackError) {
+        const fallbackMessage =
+          fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+        console.error(
+          `Drive export error writeback fallback also failed for document ${docId} (original error: ${message}): ${fallbackMessage}`
+        );
+      }
+    }
   }
 
   return true;

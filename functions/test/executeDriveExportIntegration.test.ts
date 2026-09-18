@@ -105,6 +105,34 @@ async function waitForFolderClaimResolved(parentId: string, name: string): Promi
   throw new Error(`folder claim not resolved for ${parentId}/${name} within timeout`);
 }
 
+/**
+ * Issue #947回帰テスト用: `firestore.runTransaction()`のN回目の呼び出しだけを
+ * 合成エラーで失敗させ、それ以外は実emulatorへ委譲するラッパー。
+ * `doc()`等の他メソッドは対象(target)へbindして転送するため、返されるDocumentReference
+ * は実emulator上のデータを指す(フォールバック経路の`docRef.get()/update()`は素通り)。
+ */
+function wrapFirestoreFailingNthTransaction(
+  target: admin.firestore.Firestore,
+  failOnCall: number
+): admin.firestore.Firestore {
+  let callCount = 0;
+  return new Proxy(target, {
+    get(t, prop, receiver) {
+      if (prop === 'runTransaction') {
+        return async (...args: unknown[]) => {
+          callCount++;
+          if (callCount === failOnCall) {
+            throw new Error('simulated runTransaction failure');
+          }
+          return (t.runTransaction as (...a: unknown[]) => unknown)(...args);
+        };
+      }
+      const value = Reflect.get(t, prop, receiver);
+      return typeof value === 'function' ? (value as (...a: unknown[]) => unknown).bind(t) : value;
+    },
+  }) as admin.firestore.Firestore;
+}
+
 async function seedDocument(overrides: Record<string, unknown> = {}): Promise<string> {
   const docRef = db.collection('documents').doc();
   await docRef.set({
@@ -363,5 +391,62 @@ describe('executeDriveExport (ADR-0022 code-review CONFIRMED指摘対応: 所有
     expect(data.customerName).to.equal('不変花子');
     expect(data.officeName).to.equal('不変事業所');
     expect(data.careManager).to.equal('不変太郎');
+  });
+
+  describe('エラー確定用runTransactionが無保護で失敗した場合のフォールバック(Issue #947)', () => {
+    it('runTransaction自体が失敗しても例外を外へ伝播させず、非transactionのフォールバック書込みでerror状態へ遷移する', async () => {
+      const docId = await seedDocument();
+      const { drive } = makeFakeDrive();
+      // 1回目=claim transaction(成功させる)、2回目=エラー確定transaction(合成失敗させる)
+      const failingDb = wrapFirestoreFailingNthTransaction(db, 2);
+
+      const claimed = await executeDriveExport(
+        failingDb,
+        docId,
+        { drive, downloadFile: async () => { throw new Error('simulated export failure'); } },
+        undefined
+      );
+
+      expect(claimed).to.be.true; // フォールバックが失敗しても呼び出し元へ例外を投げない
+      const after = await getDoc(docId);
+      expect(after.driveExportStatus).to.equal('error'); // 'exporting'に固着していない
+      expect(after.driveExportError).to.equal('simulated export failure');
+      expect(after.driveExportErrorKind).to.be.a('string');
+    });
+
+    it('runTransaction失敗後、フォールバック直前に他の実行に引き継がれていた(runId不一致)場合はフォールバックも上書きしない', async () => {
+      const docId = await seedDocument({ driveExportStatus: 'exporting' });
+      const blockA = makeDeferred<void>();
+      const sharedIdToParents = new Map<string, string[]>();
+      const { drive: driveA } = makeFakeDrive({ createdIds: ['folder-a'], sharedIdToParents });
+      const { drive: driveB } = makeFakeDrive({ createdIds: ['file-b'], sharedIdToParents });
+      // Run Aのみ: 1回目=claim(成功)、2回目=エラー確定transaction(合成失敗) → フォールバックへ
+      const failingDbA = wrapFirestoreFailingNthTransaction(db, 2);
+
+      const runAPromise = executeDriveExport(
+        failingDbA,
+        docId,
+        { drive: driveA, downloadFile: async () => { await blockA.promise; throw new Error('simulated late failure'); } },
+        'exporting'
+      );
+      await waitForRunIdClaim(docId);
+      await waitForFolderClaimResolved('root-folder-id', '事業所A');
+
+      // Run B: 再クレームして正常完了(driveExportRunIdがBのものに変わる)
+      await executeDriveExport(db, docId, { drive: driveB, downloadFile: async () => Buffer.from('b') }, 'exporting');
+      const afterB = await getDoc(docId);
+      expect(afterB.driveExportStatus).to.equal('exported');
+      const runIdAfterB = afterB.driveExportRunId;
+
+      // Run Aを解放。エラー確定transactionが合成失敗→フォールバックを試みるが、
+      // driveExportRunIdが既にBのものになっているため上書きしないはず。
+      blockA.resolve();
+      await runAPromise;
+
+      const afterA = await getDoc(docId);
+      expect(afterA.driveExportStatus).to.equal('exported'); // 'error'に巻き戻っていない
+      expect(afterA.driveExportRunId).to.equal(runIdAfterB);
+      expect(afterA.driveExportError).to.be.undefined;
+    });
   });
 });
