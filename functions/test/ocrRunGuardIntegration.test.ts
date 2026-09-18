@@ -21,6 +21,7 @@ import {
   tryStartProcessing,
   handleProcessingError,
   checkOcrRunStillOwned,
+  OCR_TX_RETRY_ATTEMPTS,
 } from '../src/ocr/ocrProcessor';
 import { evaluateOcrRunOwnership, OcrRunSupersededError } from '../src/ocr/ocrRunGuard';
 import { cleanupCollections } from './helpers/cleanupEmulator';
@@ -294,6 +295,105 @@ describe('OCR実行所有権ガード integration (#540)', () => {
     // 削除エラー自体はsupersededと違いerrors/に記録される(観測性の回帰防止)
     const errors = await db.collection('errors').get();
     expect(errors.empty, 'ドキュメント削除エラーはerrors/に記録されるべき').to.equal(false);
+  });
+});
+
+describe('handleProcessingError (Issue #957: runTransaction自体の一時的失敗をwithBackoffRetryで防御)', () => {
+  beforeEach(async () => {
+    await cleanupCollections(db, COLLECTIONS_TO_CLEAN);
+  });
+
+  /**
+   * handleProcessingError()はdbをパラメータで受け取らずモジュール直下の`db`
+   * (`admin.firestore()`のデフォルトapp singleton)を直接使うため、
+   * applyOcrCompletionTransactionのようにfake firestoreをinjectできない。
+   * rescueStuckProcessingIntegration.test.ts #364のwithFailingRunTransactionと
+   * 同方針(sinon依存を追加しないpolyfill)で、db.runTransaction自体を一時差し替えて
+   * 呼び出し回数・失敗回数を制御する。try/finallyで原値復元を保証する。
+   */
+  async function withCountingFailingRunTransaction<T>(
+    failCallIndices: readonly number[],
+    errorCode: number,
+    fn: () => Promise<T>
+  ): Promise<{ result: T; callCount: number }> {
+    const original = db.runTransaction.bind(db);
+    let callCount = 0;
+    (db as unknown as { runTransaction: unknown }).runTransaction = async (
+      updateFn: (tx: admin.firestore.Transaction) => Promise<unknown>
+    ) => {
+      callCount++;
+      if (failCallIndices.includes(callCount)) {
+        const err = new Error(`simulated runTransaction failure (call #${callCount})`) as Error & {
+          code: number;
+        };
+        err.code = errorCode;
+        throw err;
+      }
+      return original(updateFn);
+    };
+    try {
+      const result = await fn();
+      return { result, callCount };
+    } finally {
+      (db as unknown as { runTransaction: typeof original }).runTransaction = original;
+    }
+  }
+
+  it('1回だけtransientエラー(code 14)で失敗しても2回目でリトライ成功し、retryCountが二重加算されずstatus:errorが確定する', async () => {
+    const docId = 'doc-957-handle-retry-success';
+    const docRef = db.collection('documents').doc(docId);
+    await docRef.set({ status: 'pending', fileUrl: 'gs://bucket/a.pdf', mimeType: 'application/pdf' });
+    const claim = await tryStartProcessing(docId);
+    const { ocrRunId } = claim!;
+
+    const { callCount } = await withCountingFailingRunTransaction([1], 14, () =>
+      handleProcessingError(docId, new Error('non-transient failure'), 'test', ocrRunId)
+    );
+
+    expect(callCount, 'リトライにより2回呼ばれるはず').to.equal(2);
+    const after = await docRef.get();
+    expect(after.data()!.status).to.equal('error');
+    // リトライで失敗した回のtransaction bodyは実行されない(real dbへ委譲する前にthrow)ため、
+    // retryCountは1回分のみ加算される(二重加算されない = リトライの冪等性)。
+    expect(after.data()!.retryCount, 'リトライ中の失敗試行でretryCountが二重加算されないこと').to.equal(1);
+  });
+
+  it(`全attempts(OCR_TX_RETRY_ATTEMPTS=${OCR_TX_RETRY_ATTEMPTS})失敗しても、既存fallback(非transactional docRef.update)でstatus:errorが確定する`, async () => {
+    const docId = 'doc-957-handle-retry-exhausted';
+    const docRef = db.collection('documents').doc(docId);
+    await docRef.set({ status: 'pending', fileUrl: 'gs://bucket/a.pdf', mimeType: 'application/pdf' });
+    const claim = await tryStartProcessing(docId);
+    const { ocrRunId } = claim!;
+
+    const { callCount } = await withCountingFailingRunTransaction(
+      Array.from({ length: OCR_TX_RETRY_ATTEMPTS }, (_, i) => i + 1),
+      14,
+      () => handleProcessingError(docId, new Error('non-transient failure'), 'test', ocrRunId)
+    );
+
+    expect(callCount, `${OCR_TX_RETRY_ATTEMPTS}回とも失敗するはず`).to.equal(OCR_TX_RETRY_ATTEMPTS);
+    // transaction全滅後はcatch(updateErr)内の既存fallback(非transactional docRef.update)が
+    // 発火し、status:errorが確定する(Issue #540 H2のfallback、本変更で新設したものではない)。
+    const after = await docRef.get();
+    expect(after.data()!.status).to.equal('error');
+  });
+
+  it('非transientコード(例: 7=PERMISSION_DENIED)は1回で諦めリトライされない', async () => {
+    const docId = 'doc-957-handle-non-retryable';
+    const docRef = db.collection('documents').doc(docId);
+    await docRef.set({ status: 'pending', fileUrl: 'gs://bucket/a.pdf', mimeType: 'application/pdf' });
+    const claim = await tryStartProcessing(docId);
+    const { ocrRunId } = claim!;
+
+    const { callCount } = await withCountingFailingRunTransaction([1], 7, () =>
+      handleProcessingError(docId, new Error('non-transient failure'), 'test', ocrRunId)
+    );
+
+    expect(callCount, '非transientは即座に諦めるため1回のみ').to.equal(1);
+    // フォールバックにより最終的な状態はリトライ成功時と同じ(status:error)になるが、
+    // 重要なのは無駄なリトライをしていないこと(callCount===1)。
+    const after = await docRef.get();
+    expect(after.data()!.status).to.equal('error');
   });
 });
 

@@ -54,11 +54,18 @@ describe('ocrProcessor detail/main dual-write contract (ADR-0018 Phase B)', () =
   });
 
   it('detail/main への tx.set は db.runTransaction コールバック内 (本体updateと同一transaction) にある', () => {
-    const txStartIdx = source.indexOf('await db.runTransaction(async (tx) => {');
-    const detailSetIdx = source.indexOf(
+    // Issue #957(fable-reviewセカンドオピニオン指摘L4): 素の`source.indexOf('db.runTransaction(...)')`
+    // は`handleProcessingError`側にも同一パターンが存在するため、ファイル内の出現順序に暗黙依存する
+    // 脆いanchorだった。applyOcrCompletionTransaction本体を先に切り出してからスコープ内で検索する
+    // (ocrProcessorFaxDuplicationWiringContract.test.tsのTX_FN_BODY_ANCHORと同方針)。
+    const txFnBody = extractBraceBlock(source, /\}\): Promise<void> \{/);
+    expect(txFnBody, 'applyOcrCompletionTransaction本体の抽出に失敗した').to.not.be.null;
+
+    const txStartIdx = txFnBody!.indexOf('db.runTransaction(async (tx) => {');
+    const detailSetIdx = txFnBody!.indexOf(
       "tx.set(docRef.collection('detail').doc('main'),"
     );
-    const txEndIdx = source.indexOf('});', detailSetIdx);
+    const txEndIdx = txFnBody!.indexOf('});', detailSetIdx);
     expect(txStartIdx).to.be.greaterThan(-1);
     expect(detailSetIdx).to.be.greaterThan(txStartIdx);
     expect(txEndIdx).to.be.greaterThan(detailSetIdx);
