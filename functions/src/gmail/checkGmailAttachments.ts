@@ -16,13 +16,23 @@ import * as admin from 'firebase-admin';
 import { gmail_v1 } from 'googleapis';
 import * as crypto from 'crypto';
 import { getGmailClient } from '../utils/gmailAuth';
-import { withRetry, RETRY_CONFIGS } from '../utils/retry';
+import { withRetry, RETRY_CONFIGS, withBackoffRetry } from '../utils/retry';
+import { isRetryableFirestoreError } from '../utils/firestoreErrors';
 import { logError } from '../utils/errorLogger';
 import { sanitizeFilenameForStorage } from '../utils/fileNaming';
 import { evaluateReimportDecision, resolveExistingLogData } from './reimportPolicy';
 
 const db = admin.firestore();
 const storage = admin.storage();
+
+/**
+ * gmailLogs+documents+detail/main原子的作成transaction自体の一時的失敗(gRPC transient
+ * コード)を`withBackoffRetry`で防御するための回数・基準バックオフ(Issue #958、
+ * Issue #957と同型パターン)。`onSchedule`の`timeoutSeconds:300`に対し、外側リトライの
+ * 追加遅延(最大3回・300ms基準backoff)は無視できるオーダー。
+ */
+const GMAIL_ATTACHMENT_TX_RETRY_ATTEMPTS = 3;
+const GMAIL_ATTACHMENT_TX_RETRY_BASE_DELAY_MS = 300;
 
 // 設定
 const SEARCH_MINUTES = 10; // 過去何分のメールを検索するか
@@ -356,45 +366,57 @@ async function processAttachment(
   const logRef = db.collection('gmailLogs').doc();
   const docRef = db.collection('documents').doc();
 
-  await db.runTransaction(async (transaction) => {
-    // gmailLogsに記録
-    transaction.set(logRef, {
-      messageId,
-      fileName: filename,
-      hash,
-      fileSizeKB,
-      emailSubject: subject,
-      processedAt: admin.firestore.FieldValue.serverTimestamp(),
-      fileUrl,
-      emailBody,
-    });
+  // fable-reviewセカンドオピニオン指摘M2(Issue #958): 外側withBackoffRetryの冪等性は
+  // 「logRef/docRefが事前に確定済み(トランザクション再試行毎に新規採番されない)」かつ
+  // 「transaction.set(`create`ではなく`merge`なしの上書きset)を使っている」ことに依存する。
+  // 将来ここを`transaction.create(...)`に変更すると、ambiguous commit後の再試行で
+  // 既存ドキュメントに対しALREADY_EXISTS(code 6、isRetryableFirestoreError対象外)が
+  // 即throwされ、成功していたはずのGmail取込みがerror扱いになる退行を招くため注意。
+  await withBackoffRetry(
+    () =>
+      db.runTransaction(async (transaction) => {
+        // gmailLogsに記録
+        transaction.set(logRef, {
+          messageId,
+          fileName: filename,
+          hash,
+          fileSizeKB,
+          emailSubject: subject,
+          processedAt: admin.firestore.FieldValue.serverTimestamp(),
+          fileUrl,
+          emailBody,
+        });
 
-    // documents（status: pending）を作成
-    transaction.set(docRef, {
-      id: docRef.id,
-      messageId,
-      processedAt: admin.firestore.FieldValue.serverTimestamp(),
-      fileId: logRef.id,
-      fileName: filename,
-      mimeType,
-      documentType: '',
-      customerName: '',
-      officeName: '',
-      fileUrl,
-      fileDate: null,
-      isDuplicateCustomer: false,
-      totalPages: 0,
-      targetPageNumber: 1,
-      status: 'pending',
-      sourceType: 'gmail',
-    });
+        // documents（status: pending）を作成
+        transaction.set(docRef, {
+          id: docRef.id,
+          messageId,
+          processedAt: admin.firestore.FieldValue.serverTimestamp(),
+          fileId: logRef.id,
+          fileName: filename,
+          mimeType,
+          documentType: '',
+          customerName: '',
+          officeName: '',
+          fileUrl,
+          fileDate: null,
+          isDuplicateCustomer: false,
+          totalPages: 0,
+          targetPageNumber: 1,
+          status: 'pending',
+          sourceType: 'gmail',
+        });
 
-    // ADR-0018 (Issue #547) Phase E: ocrResultはdetail/mainにのみ初期化する
-    // (本体には書かない)。同一transactionでの作成はMUST: 原子性。
-    transaction.set(docRef.collection('detail').doc('main'), {
-      ocrResult: '',
-    });
-  });
+        // ADR-0018 (Issue #547) Phase E: ocrResultはdetail/mainにのみ初期化する
+        // (本体には書かない)。同一transactionでの作成はMUST: 原子性。
+        transaction.set(docRef.collection('detail').doc('main'), {
+          ocrResult: '',
+        });
+      }),
+    GMAIL_ATTACHMENT_TX_RETRY_ATTEMPTS,
+    GMAIL_ATTACHMENT_TX_RETRY_BASE_DELAY_MS,
+    isRetryableFirestoreError
+  );
 
   console.log(`Saved attachment: ${filename} → ${docRef.id}`);
   return 'processed';

@@ -116,38 +116,58 @@ export interface OcrClaim {
 /**
  * 排他制御付きでドキュメントの処理を開始
  * 既に処理中の場合、または存在しない場合はnullを返す
+ *
+ * Issue #958: transaction自体の一時的失敗(gRPC transientコード)を`withBackoffRetry`で
+ * 防御する(Issue #957と同型パターン)。既存のcatch節はsilent-failure寄り(記録なしに
+ * nullを返す)だが、全attempts失敗時はdocumentが`pending`のまま(commit自体が本当に
+ * 失敗した場合)なので次cronで再試行され致命的固着はしないため、observability強化は
+ * Issue #958のスコープ外として本PRでは対応しない。
+ *
+ * 既知の残余ギャップ(fable-reviewセカンドオピニオン指摘、Issue #963): 上記は
+ * 「commit自体が失敗した」場合の話であり、「サーバー側はcommitに成功したがクライアントには
+ * 失敗が返るambiguous commit」の場合は当てはまらない。この場合、再試行時は
+ * `docData.status !== 'pending'`(既に'processing')によりnullを返すため、1回目で発行した
+ * `ocrRunId`を誰も使わないまま、documentが`processing`で取り残される(rescueStuckProcessingDocs
+ * が最終的に拾うまで放置)。SDK内部リトライでも従来から存在した既存の故障クラスであり
+ * 本PRの回帰ではないが、外側リトライの追加により発生窓が広がった。Issue #963で対応検討。
  */
 export async function tryStartProcessing(docId: string): Promise<OcrClaim | null> {
   const docRef = db.doc(`documents/${docId}`);
 
   try {
-    const claim = await db.runTransaction(async (transaction) => {
-      const doc = await transaction.get(docRef);
+    const claim = await withBackoffRetry(
+      () =>
+        db.runTransaction(async (transaction) => {
+          const doc = await transaction.get(docRef);
 
-      if (!doc.exists) {
-        console.log(`Document ${docId} not found`);
-        return null;
-      }
+          if (!doc.exists) {
+            console.log(`Document ${docId} not found`);
+            return null;
+          }
 
-      const docData = doc.data()!;
+          const docData = doc.data()!;
 
-      // pending以外は処理しない（既に処理中または完了）
-      if (docData.status !== 'pending') {
-        console.log(`Document ${docId} is not pending (status: ${docData.status}), skipping`);
-        return null;
-      }
+          // pending以外は処理しない（既に処理中または完了）
+          if (docData.status !== 'pending') {
+            console.log(`Document ${docId} is not pending (status: ${docData.status}), skipping`);
+            return null;
+          }
 
-      const ocrRunId = randomUUID();
+          const ocrRunId = randomUUID();
 
-      // processingに更新、ocrRunIdを所有権トークンとして発行 (Issue #540)
-      transaction.update(docRef, {
-        status: 'processing',
-        ocrRunId,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
+          // processingに更新、ocrRunIdを所有権トークンとして発行 (Issue #540)
+          transaction.update(docRef, {
+            status: 'processing',
+            ocrRunId,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
 
-      return { ocrRunId, docData };
-    });
+          return { ocrRunId, docData };
+        }),
+      OCR_TX_RETRY_ATTEMPTS,
+      OCR_TX_RETRY_BASE_DELAY_MS,
+      isRetryableFirestoreError
+    );
 
     return claim;
   } catch (error) {
