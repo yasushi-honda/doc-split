@@ -54,13 +54,20 @@ describe('ocrProcessor detail/main dual-write contract (ADR-0018 Phase B)', () =
   });
 
   it('detail/main への tx.set は db.runTransaction コールバック内 (本体updateと同一transaction) にある', () => {
-    const txStartIdx = source.indexOf('await db.runTransaction(async (tx) => {');
-    const detailSetIdx = source.indexOf(
-      "tx.set(docRef.collection('detail').doc('main'),"
-    );
-    const txEndIdx = source.indexOf('});', detailSetIdx);
-    expect(txStartIdx).to.be.greaterThan(-1);
-    expect(detailSetIdx).to.be.greaterThan(txStartIdx);
-    expect(txEndIdx).to.be.greaterThan(detailSetIdx);
+    // Issue #957(fable-reviewセカンドオピニオン指摘L4): 素の`source.indexOf('db.runTransaction(...)')`
+    // は`handleProcessingError`側にも同一パターンが存在するため、ファイル内の出現順序に暗黙依存する
+    // 脆いanchorだった。applyOcrCompletionTransaction本体を先に切り出してからスコープ内で検索する
+    // (ocrProcessorFaxDuplicationWiringContract.test.tsのTX_FN_BODY_ANCHORと同方針)。
+    const txFnBody = extractBraceBlock(source, /\}\): Promise<void> \{/);
+    expect(txFnBody, 'applyOcrCompletionTransaction本体の抽出に失敗した').to.not.be.null;
+
+    // 2回目のfable-reviewセカンドオピニオン指摘L4: 旧実装の`indexOf('});', detailSetIdx)`は
+    // `tx.set(...)`自身の閉じ括弧にマッチしてしまうため`txEndIdx > detailSetIdx`が常に真になり、
+    // 「db.runTransactionコールバック内にある」ことの証明になっていなかった(vacuous)。
+    // db.runTransactionコールバック自体をブレース単位で切り出し、その中にdetail/main
+    // tx.setが実際に含まれることを直接確認する。
+    const txCallbackBody = extractBraceBlock(txFnBody!, /db\.runTransaction\(async \(tx\) => \{/);
+    expect(txCallbackBody, 'db.runTransactionコールバック本体の抽出に失敗した').to.not.be.null;
+    expect(txCallbackBody).to.include("tx.set(docRef.collection('detail').doc('main'),");
   });
 });

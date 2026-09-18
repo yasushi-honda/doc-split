@@ -276,3 +276,51 @@ export async function withRetryResult<T>(
     };
   }
 }
+
+/**
+ * 固定回数・単純exponential backoffのリトライ(`withRetry`とは別系統、統合しない)。
+ *
+ * 元は`functions/src/drive/driveFolderClaim.ts`のclaim書込みtransaction専用private関数
+ * だったが、Issue #957で`ocrProcessor.ts`のOCR確定commit/エラーハンドリングtransaction
+ * にも同型パターンで適用するため共通化した(driveFolderClaim.tsのcommitResolvedWithRetry
+ * で実績のある実装、Issue #871/#954)。
+ *
+ * `withRetry`(`RetryConfig`ベース、`isTransientError`で汎用API呼び出し向けの多様な一時的
+ * エラーを判定)とは意図的に統合しない: 本関数は`shouldRetry`述語を呼び出し側が渡す設計
+ * で、Firestore transactionのgRPC transientコード判定(`isRetryableFirestoreError`、
+ * `../utils/firestoreErrors`)のような狭い判定基準にも使える。`shouldRetry`省略時は
+ * 従来通り理由を問わず`attempts`回リトライする。
+ *
+ * 注意: `@google-cloud/firestore`の`runTransaction()`自体が、gRPC transientコード集合に
+ * 対し既定で最大5回まで内部リトライする(`isRetryableTransactionError`)。この関数の
+ * リトライはその内部リトライが尽きた後に追加で効く外側の層であり、「1回失敗しただけ」
+ * ではなく「SDK内部リトライ(最大5回)が枯渇してもなお失敗する」場合に効く。
+ *
+ * ループ後の`throw lastError`は`attempts`が1以上の呼び出しでは到達しない
+ * (最終試行時は`i === attempts - 1`が真になりループ内でthrowされる)。
+ *
+ * 前提: `attempts >= 1`。`attempts <= 0`を渡すとループが1度も実行されず
+ * `lastError`(未初期化の`undefined`)がthrowされる(fable-reviewセカンドオピニオン
+ * 指摘L6、Issue #957でpublic util化された際に明記。現在の全呼び出し元は3固定で
+ * この経路には到達しない)。
+ */
+export async function withBackoffRetry<T>(
+  fn: () => Promise<T>,
+  attempts: number,
+  baseDelayMs: number,
+  shouldRetry: (error: unknown) => boolean = () => true
+): Promise<T> {
+  let lastError: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      if (i === attempts - 1 || !shouldRetry(error)) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, baseDelayMs * 2 ** i));
+    }
+  }
+  throw lastError;
+}

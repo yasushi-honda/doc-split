@@ -78,7 +78,7 @@ describe('processDocument() / applyOcrCompletionTransaction() faxDuplication配�
 
   it('複製判定(planFaxDuplication)はfreshData取得・存在チェックより後、confirmed保護マージ(merged)より後に呼ばれる', () => {
     const txFnBody = extractBraceBlock(source, TX_FN_BODY_ANCHOR)!;
-    const txAnchor = /await db\.runTransaction\(async \(tx\) => \{/;
+    const txAnchor = /db\.runTransaction\(async \(tx\) => \{/;
     const txBody = extractBraceBlock(txFnBody, txAnchor);
     expect(txBody, 'runTransactionハンドラ本体の抽出に失敗した').to.not.be.null;
 
@@ -108,7 +108,7 @@ describe('processDocument() / applyOcrCompletionTransaction() faxDuplication配�
     );
 
     const txFnBody = extractBraceBlock(source, TX_FN_BODY_ANCHOR)!;
-    const txAnchor = /await db\.runTransaction\(async \(tx\) => \{/;
+    const txAnchor = /db\.runTransaction\(async \(tx\) => \{/;
     const txBody = extractBraceBlock(txFnBody, txAnchor)!;
     const planCallArgs = extractBraceBlock(txBody, /const distributionPlan = planFaxDuplication\(\{/);
     expect(planCallArgs, 'planFaxDuplication呼出引数の抽出に失敗した').to.not.be.null;
@@ -117,7 +117,7 @@ describe('processDocument() / applyOcrCompletionTransaction() faxDuplication配�
 
   it('複製時はtx.update(docRef)に続けてrestAssignments分のtx.set(newDocRef)を行い、既存の単一doc更新にfallthroughしない(return文で分岐)', () => {
     const txFnBody = extractBraceBlock(source, TX_FN_BODY_ANCHOR)!;
-    const txAnchor = /await db\.runTransaction\(async \(tx\) => \{/;
+    const txAnchor = /db\.runTransaction\(async \(tx\) => \{/;
     const txBody = extractBraceBlock(txFnBody, txAnchor)!;
 
     const ifAnchor = /if \(distributionPlan\.shouldDuplicate\) \{/;
@@ -143,7 +143,7 @@ describe('processDocument() / applyOcrCompletionTransaction() faxDuplication配�
 
   it('新規コピーはStorage実体を共有する(D2): fileId/fileUrl/mimeType/fileNameをfreshDataから引き継ぐ', () => {
     const txFnBody = extractBraceBlock(source, TX_FN_BODY_ANCHOR)!;
-    const txAnchor = /await db\.runTransaction\(async \(tx\) => \{/;
+    const txAnchor = /db\.runTransaction\(async \(tx\) => \{/;
     const txBody = extractBraceBlock(txFnBody, txAnchor)!;
     const ifAnchor = /if \(distributionPlan\.shouldDuplicate\) \{/;
     const ifBlock = extractBraceBlock(txBody, ifAnchor)!;
@@ -165,7 +165,7 @@ describe('processDocument() / applyOcrCompletionTransaction() faxDuplication配�
     expect(helperBody).to.match(/ocr-results\/\$\{destinationKey\}\/\$\{ocrRunId\}\.txt/);
 
     const txFnBody = extractBraceBlock(source, TX_FN_BODY_ANCHOR)!;
-    const txAnchor = /await db\.runTransaction\(async \(tx\) => \{/;
+    const txAnchor = /db\.runTransaction\(async \(tx\) => \{/;
     const txBody = extractBraceBlock(txFnBody, txAnchor)!;
     const ifAnchor = /if \(distributionPlan\.shouldDuplicate\) \{/;
     const ifBlock = extractBraceBlock(txBody, ifAnchor)!;

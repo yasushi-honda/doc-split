@@ -17,7 +17,8 @@ import './helpers/initFirestoreEmulator';
 import { expect } from 'chai';
 import * as admin from 'firebase-admin';
 import { cleanupCollections } from './helpers/cleanupEmulator';
-import { applyOcrCompletionTransaction } from '../src/ocr/ocrProcessor';
+import { applyOcrCompletionTransaction, OCR_TX_RETRY_ATTEMPTS } from '../src/ocr/ocrProcessor';
+import { OcrRunSupersededError } from '../src/ocr/ocrRunGuard';
 import { buildOcrExtractionUpdatePayload } from '../src/ocr/ocrUpdatePayloadBuilder';
 import { buildMultiCustomerDetectionFields } from '../../shared/multiCustomerDetection';
 import type {
@@ -513,5 +514,237 @@ describe('applyOcrCompletionTransaction (複数人記載検出 PR-A、multiCusto
     const updated = (await docRef.get()).data()!;
     expect('multiCustomerDetected' in updated, 'キー自体が書き込まれないこと(cocoro/devの挙動不変)').to.equal(false);
     expect('multiCustomerCount' in updated).to.equal(false);
+  });
+});
+
+describe('applyOcrCompletionTransaction (Issue #957: runTransaction自体の一時的失敗をwithBackoffRetryで防御)', () => {
+  beforeEach(async () => {
+    await cleanupCollections(db, COLLECTIONS_TO_CLEAN);
+  });
+
+  /**
+   * runTransactionだけを差し替えたfirestoreラッパ。failTxCallIndices回目のtxは実dbへ
+   * 委譲せず合成エラーを投げる。driveFolderClaimIntegration.test.tsのmakeFailingCommitFirestore
+   * (Issue #954で確立済みのテストパターン)をOCR側にも適用する(Issue #957)。
+   */
+  function makeFailingCommitFirestore(
+    realDb: admin.firestore.Firestore,
+    failTxCallIndices: readonly number[],
+    errorCode = 14
+  ): { firestore: admin.firestore.Firestore; getTxCallCount: () => number } {
+    let txCalls = 0;
+    const firestore = {
+      collection: (path: string) => realDb.collection(path),
+      doc: (path: string) => realDb.doc(path),
+      runTransaction: async (updateFn: (tx: admin.firestore.Transaction) => Promise<unknown>) => {
+        txCalls++;
+        if (failTxCallIndices.includes(txCalls)) {
+          const err = new Error(`simulated Firestore transaction failure (call #${txCalls})`) as Error & {
+            code: number;
+          };
+          err.code = errorCode;
+          throw err;
+        }
+        return realDb.runTransaction(updateFn);
+      },
+    } as unknown as admin.firestore.Firestore;
+    return { firestore, getTxCallCount: () => txCalls };
+  }
+
+  /** 複製・複数人記載検出を伴わない最小構成の入力(単一doc更新パスのみを対象にする)。 */
+  function minimalCompletionInput(
+    targetDb: admin.firestore.Firestore,
+    docRef: FirebaseFirestore.DocumentReference,
+    docId: string
+  ) {
+    const customerResult = twoExactCandidatesResult(true); // needsManualSelection:true → 複製なし
+    return {
+      db: targetDb,
+      docRef,
+      docId,
+      ownershipExpectation: OWNERSHIP,
+      extractionFields: buildExtractionFields(customerResult),
+      customerCandidates: customerResult.candidates,
+      sameNameCollisionNames: new Set<string>(),
+      fileDateFormatted: dateResult.formattedDate ?? undefined,
+      savedOcrResult: 'raw ocr text',
+      pageResults,
+      ocrExcerpt: 'excerpt',
+      faxDuplicationEnabled: false,
+      multiCustomerDetectionEnabled: false,
+      tokenCounts: { inputTokens: 10, outputTokens: 5, thinkingTokens: 0, pagesProcessed: 1 },
+    };
+  }
+
+  it('1回だけtransientエラー(code 14)で失敗しても2回目でリトライ成功し、docが更新される', async () => {
+    const docId = 'tx-957-retry-success';
+    const docRef = await seedProcessingDoc(docId);
+    const { firestore: failingDb, getTxCallCount } = makeFailingCommitFirestore(db, [1]);
+
+    await applyOcrCompletionTransaction(minimalCompletionInput(failingDb, docRef, docId));
+
+    expect(getTxCallCount(), 'リトライにより2回呼ばれるはず').to.equal(2);
+    const updated = (await docRef.get()).data()!;
+    expect(updated.status).to.equal('processed');
+  });
+
+  it(`全attempts(OCR_TX_RETRY_ATTEMPTS=${OCR_TX_RETRY_ATTEMPTS})失敗すると、docは更新されないままエラーがthrowされる`, async () => {
+    const docId = 'tx-957-retry-exhausted';
+    const docRef = await seedProcessingDoc(docId);
+    const { firestore: failingDb, getTxCallCount } = makeFailingCommitFirestore(
+      db,
+      Array.from({ length: OCR_TX_RETRY_ATTEMPTS }, (_, i) => i + 1)
+    );
+
+    try {
+      await applyOcrCompletionTransaction(minimalCompletionInput(failingDb, docRef, docId));
+      expect.fail('全attempts失敗時はthrowされるはず');
+    } catch (error) {
+      expect((error as Error).message).to.include('simulated Firestore transaction failure');
+    }
+    expect(getTxCallCount(), `${OCR_TX_RETRY_ATTEMPTS}回とも失敗するはず`).to.equal(OCR_TX_RETRY_ATTEMPTS);
+
+    const after = (await docRef.get()).data()!;
+    expect(after.status, 'transaction全滅時はstatusが更新されないまま(processing)残る').to.equal('processing');
+  });
+
+  it('非transientコード(例: 7=PERMISSION_DENIED)は1回で諦めリトライされない', async () => {
+    const docId = 'tx-957-non-retryable';
+    const docRef = await seedProcessingDoc(docId);
+    const { firestore: failingDb, getTxCallCount } = makeFailingCommitFirestore(db, [1], 7);
+
+    try {
+      await applyOcrCompletionTransaction(minimalCompletionInput(failingDb, docRef, docId));
+      expect.fail('非transientエラーはリトライされずthrowされるはず');
+    } catch (error) {
+      expect((error as Error).message).to.include('simulated Firestore transaction failure');
+    }
+    expect(getTxCallCount(), '非transientは即座に諦めるため1回のみ').to.equal(1);
+  });
+
+  it('所有権喪失(OcrRunSupersededError)はtransaction本体からthrowされたエラーのため.codeを持たずリトライされない(fable-reviewセカンドオピニオン指摘の回帰防止)', async () => {
+    const docId = 'tx-957-superseded-no-retry';
+    // ownershipExpectation(OWNERSHIP.ocrRunId='run-1')と不一致にして所有権喪失を再現する
+    const docRef = await seedProcessingDoc(docId, { ocrRunId: 'different-run' });
+
+    let txCalls = 0;
+    const countingDb = {
+      collection: (path: string) => db.collection(path),
+      doc: (path: string) => db.doc(path),
+      runTransaction: async (updateFn: (tx: admin.firestore.Transaction) => Promise<unknown>) => {
+        txCalls++;
+        return db.runTransaction(updateFn);
+      },
+    } as unknown as admin.firestore.Firestore;
+
+    try {
+      await applyOcrCompletionTransaction(minimalCompletionInput(countingDb, docRef, docId));
+      expect.fail('所有権喪失時はOcrRunSupersededErrorがthrowされるはず');
+    } catch (error) {
+      expect(error).to.be.instanceOf(OcrRunSupersededError);
+    }
+    expect(txCalls, 'アプリケーションレベルのthrow(.codeなし)はリトライ対象外のため1回のみ実行されるはず').to.equal(1);
+  });
+
+  /**
+   * runTransactionだけを差し替えたfirestoreラッパ。failOnCallIndex回目のtxは実dbへ実際に
+   * 委譲し(書込みは成功する)、その直後にクライアント側にのみgRPC transientコード
+   * (既定14=UNAVAILABLE)を持つ合成エラーを投げる。「サーバー側は成功したがクライアントには
+   * 失敗として返る」ambiguous commitを再現する(driveFolderClaimIntegration.test.tsの
+   * makeAmbiguousCommitFirestoreと同方針)。
+   *
+   * pr-test-analyzer/Evaluator/fable-reviewの3者が独立に収束指摘: FAX複製分岐
+   * (distributionPlan.shouldDuplicate)は`db.collection('documents').doc()`で毎回新規の
+   * ランダムIDを採番するため、driveFolderClaim.tsのattemptId自己ブロックのような
+   * 冪等性ガードを持たない。ambiguous commit後の再実行時にこの分岐がどう振る舞うかを
+   * 直接検証する(下のit参照)。
+   */
+  function makeAmbiguousCommitFirestore(
+    realDb: admin.firestore.Firestore,
+    failOnCallIndex: number,
+    errorCode = 14
+  ): { firestore: admin.firestore.Firestore; getTxCallCount: () => number } {
+    let txCalls = 0;
+    const firestore = {
+      collection: (path: string) => realDb.collection(path),
+      doc: (path: string) => realDb.doc(path),
+      runTransaction: async (updateFn: (tx: admin.firestore.Transaction) => Promise<unknown>) => {
+        txCalls++;
+        const result = await realDb.runTransaction(updateFn);
+        if (txCalls === failOnCallIndex) {
+          const err = new Error('simulated ambiguous commit (server succeeded, client sees failure)') as Error & {
+            code: number;
+          };
+          err.code = errorCode;
+          throw err;
+        }
+        return result;
+      },
+    } as unknown as admin.firestore.Firestore;
+    return { firestore, getTxCallCount: () => txCalls };
+  }
+
+  it('FAX複製分岐でambiguous commit(サーバー側は成功したがクライアントには失敗が返る)後、リトライはOcrRunSupersededError(status-mismatch)で即座に諦め、かつ1回目のcommit結果(重複なし・正しいcustomerId)は破壊されない', async () => {
+    // fable-reviewセカンドオピニオン(codex代替)M2で判明した実際の挙動: 1回目のcommitで
+    // status:'processed'に書き換わるため、2回目の再実行時は`evaluateOcrRunOwnership`が
+    // `fresh.status !== 'processing'`によりstatus-mismatchと判定し、FAX複製の分岐判定
+    // (shouldDuplicate)に到達する前にOcrRunSupersededErrorをthrowする(実装時点の想定
+    // 「2回目はshouldDuplicate:falseの非複製分岐に倒れる」は誤りだった。実測により訂正)。
+    // OcrRunSupersededErrorは.codeを持たないためisRetryableFirestoreErrorがfalseを返し
+    // 即座に諦める(リトライされない)。呼出元processOCR.tsはこれを異常ではなく正常な
+    // supersedeとして扱う(compensateDeleteOnFailure/shouldSkipCompensatingDeleteが
+    // status==='processed'&&ocrRunId一致を検知し削除しない、ocrResultCleanup.ts参照)ため、
+    // 1回目の正しいcommit結果(重複なし・customerId正常)がそのまま最終状態として残る。
+    const docId = 'tx-957-fax-ambiguous-commit';
+    const docRef = await seedProcessingDoc(docId);
+    const customerResult = twoExactCandidatesResult(false);
+    const { firestore: ambiguousDb, getTxCallCount } = makeAmbiguousCommitFirestore(db, 1);
+
+    try {
+      await applyOcrCompletionTransaction({
+        db: ambiguousDb,
+        docRef,
+        docId,
+        ownershipExpectation: OWNERSHIP,
+        extractionFields: buildExtractionFields(customerResult),
+        customerCandidates: customerResult.candidates,
+        sameNameCollisionNames: new Set(),
+        fileDateFormatted: dateResult.formattedDate ?? undefined,
+        savedOcrResult: 'raw ocr text',
+        pageResults,
+        ocrExcerpt: 'excerpt',
+        faxDuplicationEnabled: true,
+        multiCustomerDetectionEnabled: false,
+        tokenCounts: { inputTokens: 10, outputTokens: 5, thinkingTokens: 0, pagesProcessed: 1 },
+      });
+      expect.fail('2回目はstatus-mismatchによりOcrRunSupersededErrorがthrowされるはず');
+    } catch (error) {
+      expect(error).to.be.instanceOf(OcrRunSupersededError);
+      expect((error as OcrRunSupersededError).reason).to.equal('status-mismatch');
+    }
+
+    expect(
+      getTxCallCount(),
+      '1回目は実際にcommitされた上でクライアントには失敗が返り、withBackoffRetryが2回目を実行するが、' +
+        'status-mismatchは.codeを持たずリトライ対象外のためここで諦めるはず'
+    ).to.equal(2);
+
+    const allDocs = await db.collection('documents').get();
+    expect(allDocs.size, '2回目はOcrRunSupersededErrorで書込み前に中断するため、重複コピーが作られないこと').to.equal(
+      2
+    );
+
+    const docs = allDocs.docs.map((d) => ({ id: d.id, data: d.data() }));
+    const original = docs.find((d) => d.id === docId)!;
+    const copy = docs.find((d) => d.id !== docId)!;
+
+    expect(original.data.distributionId, 'distributionIdは1回目のcommit結果のまま維持される').to.equal(docId);
+    expect(original.data.customerId, '1回目のcommit結果のcustomerIdが破壊されないこと').to.equal('cust-a');
+    expect(original.data.customerConfirmed).to.equal(true);
+    expect(original.data.status, '1回目のcommit結果のstatusが破壊されないこと').to.equal('processed');
+    expect(copy.data.customerId, '1回目で作成された複製コピーが破壊・重複作成されないこと').to.equal('cust-b');
+
+    const detailSnap = await db.doc(`documents/${docId}/detail/main`).get();
+    expect(detailSnap.exists, '1回目のcommit結果のdetail/mainが破壊されないこと').to.equal(true);
   });
 });

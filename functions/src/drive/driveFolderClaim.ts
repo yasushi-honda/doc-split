@@ -37,6 +37,8 @@ import {
   DOCSPLIT_FOLDER_CLAIM_KEY,
   escapeQueryValue,
 } from './driveApiConstants';
+import { withBackoffRetry } from '../utils/retry';
+import { isRetryableFirestoreError } from '../utils/firestoreErrors';
 
 /** claimドキュメントの永続化先(トップレベルコレクション、Admin SDK専有)。 */
 export const FOLDER_LOCKS_COLLECTION = 'driveFolderLocks';
@@ -399,68 +401,13 @@ function stripUndefined<T extends Record<string, unknown>>(obj: T): T {
 }
 
 /**
- * `shouldRetry`省略時は従来通り理由を問わず`attempts`回リトライする
- * (`commitResolvedWithRetry`の既存呼び出しはこの既定値のまま挙動を変えない)。
- * Issue #954でclaim書込みtransaction全般に適用する際は、gRPC transientコード
- * (`isRetryableFirestoreError`)以外を即座に諦めさせ、恒久エラーでの
- * 無駄なリトライ(ホットパスでのCloud Functions timeout接近)を避ける。
- *
- * 注意(fable-reviewセカンドオピニオン指摘): `@google-cloud/firestore`の
- * `runTransaction()`自体が、同じgRPC transientコード集合に対し既定で最大5回まで
- * 内部リトライする(`isRetryableTransactionError`)。この関数のリトライはその内部
- * リトライが尽きた後に追加で効く外側の層であり、「1回失敗しただけ」ではなく
- * 「SDK内部リトライ(最大5回)が枯渇してもなお失敗する」場合に効く。
- *
- * ループ後の`throw lastError`は`attempts`が1以上である現在の全呼び出し
- * (`FOLDER_CLAIM_TX_RETRY_ATTEMPTS`等は常に1以上)では到達しない
- * (最終試行時は`i === attempts - 1`が真になりループ内でthrowされる)。
- */
-async function withBackoffRetry<T>(
-  fn: () => Promise<T>,
-  attempts: number,
-  baseDelayMs: number,
-  shouldRetry: (error: unknown) => boolean = () => true
-): Promise<T> {
-  let lastError: unknown;
-  for (let i = 0; i < attempts; i++) {
-    try {
-      return await fn();
-    } catch (error) {
-      lastError = error;
-      if (i === attempts - 1 || !shouldRetry(error)) {
-        throw error;
-      }
-      await new Promise((resolve) => setTimeout(resolve, baseDelayMs * 2 ** i));
-    }
-  }
-  throw lastError;
-}
-
-/**
- * `@google-cloud/firestore`の`isRetryableTransactionError`が内部リトライ対象とする
- * gRPC transientコード8種のうち、**8(RESOURCE_EXHAUSTED)を除く**7種
- * (`executeDriveExport.ts`の`GRPC_TRANSIENT_CODES`は8を含む全8種、こちらは
- * 外側リトライ専用に意図的に縮小)。
- *
- * fable-reviewセカンドオピニオン指摘: code 8はSDK内部で`backoff.resetToMax()`
- * (最大60秒程度)まで引き上げられる特別扱いのため、SDK内部リトライ(最大5回)だけで
- * 既に長時間を要しうる。ここでさらに外側3回のリトライを重ねると、
- * `recordVerification`等の全export共通ホットパスでCloud Functions timeout
- * (`onDocumentWriteDriveExport`の`timeoutSeconds:120`)に接近するリスクが
- * 無視できない(SDK内部だけで60秒超、外側を重ねるとさらに悪化)。8はSDK自身が
- * 既に最大限の猶予を与えているため、外側リトライでの追加効果は薄く、
- * timeoutリスクの方が優る(decision-maker承認済み、2026-09-18)。
- */
-const FIRESTORE_TRANSIENT_GRPC_CODES = new Set([1, 2, 4, 10, 13, 14, 16]);
-function isRetryableFirestoreError(error: unknown): boolean {
-  const code = (error as { code?: number } | undefined)?.code;
-  return typeof code === 'number' && FIRESTORE_TRANSIENT_GRPC_CODES.has(code);
-}
-
-/**
  * pr955-code-reviewer指摘対応(DRY): claim書込みtransactionの11呼び出し箇所全てで
  * `withBackoffRetry(..., FOLDER_CLAIM_TX_RETRY_ATTEMPTS, FOLDER_CLAIM_TX_RETRY_BASE_DELAY_MS,
  * isRetryableFirestoreError)`という同一の末尾3引数が重複していたのを集約する。
+ *
+ * Issue #957: `withBackoffRetry`/`isRetryableFirestoreError`自体は元々本ファイルの
+ * private関数だったが、`ocrProcessor.ts`にも同型パターンで適用するため
+ * `../utils/retry`/`../utils/firestoreErrors`へ共通化した(挙動は完全に不変)。
  *
  * `functions/src/utils/retry.ts`の`withRetry`/`isTransientError`とは統合しない: 同ファイルの
  * `isTransientError`はgRPC ABORTED(10)以外の数値コード(本ファイルが対象とする1/2/4/13/14/16)を
