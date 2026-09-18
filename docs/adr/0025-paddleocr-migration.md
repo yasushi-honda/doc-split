@@ -135,6 +135,12 @@ Pass2用のプロンプトは「原文どおりに転記せよ、補正するな
 - 自前ホスティングサービス(PaddleOCR Cloud Run)の運用責任(デプロイ・監視・障害対応)がdoc-splitチームに追加される
 - Cloud Run実機でのレイテンシ・コールドスタートは未実測であり、コスト試算・ユーザー体感とも実装時の負荷試験結果次第で見直しが必要
 
+**追記(2026-09-19、PR6): コスト試算前提の変更 + `processOCR`への`concurrency:1`導入**
+
+Stage3負荷試験Phase B実測(1ページのcoldMax=33.4秒、5バースト中1回の外れ値)を受け、コスト試算の前提だった`--concurrency=1 --min-instances=0`から**`--min-instances=1`へ変更**した(PR #967、Issue #966)。孤立した単発リクエスト(現状の実トラフィックの大半)のcold startを解消する効果と引き換えに、常時1インスタンス分の課金が発生する。上記コスト試算(57-104行目)は前提が変わったため無効化されており、実測での再検証が必要(Cloud Billing反映後、別途確認)。
+
+また、Pass1切替(PR6)にあたり、本番の唯一のOCRトリガー`processOCR`(Cloud Scheduler、1分間隔)について、**`concurrency:1`を明示追加**した。実機`maxInstanceRequestConcurrency`は既定値80であり、`maxInstances:1`だけでは1サイクルの処理時間がポーリング間隔(60秒)を超えた場合に次tickが同一インスタンス内で並行実行される(「tick重複」)。この現象自体はGemini運用の現在でも起こりうる(ADR-0023が2026-08-02にkanameoneで実際に観測)が、Geminiにはcold start概念がなく実害が顕在化していなかった。PaddleOCR(`--concurrency=1`)ではtick重複時の2文書目以降が必ず新規インスタンスのcold startを踏むため、Pass1切替後に実害化する経路であり、切替前に`processOCR`側で機構的に排除した。詳細はIssue #966、承認済み計画`~/.claude/plans/eventual-dreaming-wind.md`参照。
+
 **スコープ外(本ADRの対象外)**:
 - 手動トリガーの`regenerateSummary`(要約再生成、低頻度)は同じくGemini依存だが自動処理パス外のため対象外、別途扱う
 - Issue #895の完全な修正(office側`officeAmbiguityGate.ts`新設等)は本移行と独立した別トラックとする(最小ガードのみ本計画に含める、上記Decision 3参照)

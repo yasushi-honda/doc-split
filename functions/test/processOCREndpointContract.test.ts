@@ -81,6 +81,10 @@ describe('processOCR endpoint contract (ADR-0023)', () => {
     expect(optionsBlock).to.match(/maxInstances:\s*1\b/);
   });
 
+  it('concurrency: 1 (ADR-0025 PR6、tick重複防止の前提)', () => {
+    expect(optionsBlock).to.match(/concurrency:\s*1\b/);
+  });
+
   it('timeoutSeconds は PROCESS_OCR_TIMEOUT_SECONDS 識別子参照であり、リテラルに退行していない', () => {
     expect(optionsBlock).to.match(/timeoutSeconds:\s*PROCESS_OCR_TIMEOUT_SECONDS\b/);
     // リテラルへの退行 (例: `timeoutSeconds: 540`) を明示的に弾く

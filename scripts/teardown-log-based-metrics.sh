@@ -73,6 +73,7 @@ METRIC_NAMES=(
   drive_folder_divergent
   drive_folder_divergent_record_failed
   claim_divergent_backlog_stale
+  processocr_completed
 )
 for metric in "${METRIC_NAMES[@]}"; do
   if gcloud logging metrics describe "$metric" --project="$PROJECT_ID" >/dev/null 2>&1; then

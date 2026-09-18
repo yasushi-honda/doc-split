@@ -73,6 +73,7 @@ METRICS=(
   "drive_folder_divergent|driveFolderClaim claim divergent detected (Issue #871 恒久対応)|resource.type=\"cloud_run_revision\" AND textPayload:\"[driveFolderClaim] claim divergent detected\""
   "drive_folder_divergent_record_failed|markDivergent()自体の書込み失敗、claimにもメトリクスにも残らない経路 (Issue #871 恒久対応)|resource.type=\"cloud_run_revision\" AND textPayload:\"divergent記録に失敗しました\""
   "claim_divergent_backlog_stale|divergent claim が3日以上未解決のまま滞留 (Issue #871 恒久対応、日次sweep)|resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"drivefolderclaimdivergentsweep\" AND severity=\"WARNING\" AND textPayload:\"[driveFolderClaim] divergent backlog stale\""
+  "processocr_completed|processOCR cycle完了ログ(ADR-0025 PR6、tick重複対策concurrency:1導入後の健全性監視。absence条件で本メトリクスが一定時間出現しない=OCR処理停止を検知)|resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"processocr\" AND textPayload:\"OCR processing (polling) completed\""
 )
 
 # ==================================================
@@ -174,7 +175,7 @@ if [ -z "$DRY" ]; then
   echo "メトリクス:"
   gcloud logging metrics list \
     --project="$PROJECT_ID" \
-    --filter="name=(searchindex_oom OR ocr_page_truncated OR ocr_aggregate_truncated OR summary_truncated OR search_index_silent_failure OR drive_folder_divergent OR drive_folder_divergent_record_failed OR claim_divergent_backlog_stale)" \
+    --filter="name=(searchindex_oom OR ocr_page_truncated OR ocr_aggregate_truncated OR summary_truncated OR search_index_silent_failure OR drive_folder_divergent OR drive_folder_divergent_record_failed OR claim_divergent_backlog_stale OR processocr_completed)" \
     --format="table(name,description.segment(0,60))"
   echo ""
   echo "アラートポリシー:"

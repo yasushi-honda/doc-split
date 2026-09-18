@@ -70,6 +70,11 @@ export const processOCR = onSchedule(
     timeoutSeconds: PROCESS_OCR_TIMEOUT_SECONDS,
     memory: '1GiB',
     maxInstances: 1,
+    // tick重複防止(ADR-0025 PR6、Issue #966): maxInstanceRequestConcurrencyは既定80のため、
+    // maxInstances=1だけでは同一インスタンス内で複数tickが並行実行されうる(ADR-0023
+    // 「concurrency設定の実態」節、kanameone本番で実際に観測済み)。concurrency=1により
+    // Cloud Run基盤自身のキューイングで1サイクルの完了を待ってから次tickを処理させる。
+    concurrency: 1,
   },
   async () => {
     console.log('Starting OCR processing (polling)...');
@@ -312,6 +317,13 @@ export async function rescueStuckProcessingDocs(): Promise<void> {
  * NOTE: `processOCR` の `maxInstances: 1` を前提に non-transactional な read-then-write
  * で実装している。`maxInstances` を 2+ に変更する場合は state read/write を transaction
  * 化して並列 instance の同時 scan を防ぐこと (現状の実装では同時 scan が稀に発生しうる)。
+ *
+ * ADR-0025 PR6で追加した`concurrency: 1`(上記`processOCR`のoptions参照)により、
+ * 同一インスタンス内でのtick重複(このファイルが元々想定していた「同時scan」の主因)は
+ * 排除された。ただし以下は本ガードの対象外として残る: (1) Cloud Runの仕様上maxInstances設定
+ * はスケーリングイベント時にごく短時間超過しうる、(2) デプロイ時は新旧リビジョンが
+ * 短時間併走しうる。いずれも一般的なCloud Runの挙動であり本プロジェクト固有の問題ではないが、
+ * 「concurrency:1で完全に排除された」と誤解しないこと。
  */
 export async function rescueErroredDocumentsIfDue(): Promise<void> {
   const stateRef = db.doc(RESCUE_STATE_DOC_PATH);

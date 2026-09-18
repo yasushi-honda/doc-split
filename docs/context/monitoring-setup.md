@@ -26,6 +26,7 @@ Issue #220 + ADR-0015 Follow-up で構築した log-based metric + Cloud Monitor
 | `drive_folder_divergent` | `[driveFolderClaim] claim divergent detected` | 24 時間窓で 1 件以上 (incident は 7 日間可視化) | Issue #871 恒久対応。claim と Drive 実体の食い違い(新規発生)を検知。実績: 約2.5週間で2件、発生自体が異常 |
 | `drive_folder_divergent_record_failed` | `divergent記録に失敗しました` | 24 時間窓で 1 件以上 (incident は 7 日間可視化) | Issue #871 恒久対応。`markDivergent()`自体のFirestore書込み失敗は claim にもメトリクスにも残らない経路があるため高優先度 |
 | `claim_divergent_backlog_stale` | `[driveFolderClaim] divergent backlog stale` (severity=WARNING、`driveFolderClaimDivergentSweep`日次関数が出力) | 24 時間窓で 1 件以上 (incident は 7 日間可視化) | Issue #871 恒久対応。「新規発生」検知だけでは既存の未解決分の**放置**を検知できないギャップを埋める。3日以上未解決の divergent が残っている場合のみ日次で1回発火 |
+| `processocr_completed` | `OCR processing (polling) completed`(`processOCR`、正常終了時に必ず出力) | **absence**条件: 10分間ログが出現しない | ADR-0025 PR6。`processOCR`に`concurrency:1`を導入(tick重複防止)したことに伴い、原因を問わずOCR処理パイプライン全体が停止している状態を検知する健全性監視。他メトリクスと異なり閾値超過ではなく**ログの欠落**を検知する点に注意(`conditionAbsent`、`conditionThreshold`ではない) |
 
 ### アラートポリシー共通パラメータ
 
