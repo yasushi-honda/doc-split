@@ -1,33 +1,77 @@
-name: PaddleOCR Verify Stage 1 (ADR-0025 PR4c)
+name: PaddleOCR Verify (ADR-0025 PR4c Stage 1/3)
 
-# Stage 1: golden一次スクリーニングのみ対応。png/load/coldはStage 2/3判断待ち
-# (~/.claude/plans/enumerated-gliding-bengio.md、plan-crossreview実施済み)。
+# Stage 1: golden一次スクリーニング(既存、無改変)。
+# Stage 3: load(負荷試験、2026-09-18実装)。承認済み仕様(~/.claude/plans/fuzzy-moseying-book.md
+# §4、~/.claude/plans/shiny-knitting-flamingo.md ゲート表)に基づく。coldはバースト方式へ
+# 再設計済み(revision強制作成方式はCloud Runのstartup probe仕様上原理的に成立しないと判明した
+# ため、詳細は~/.claude/plans/peaceful-strolling-squid.md「cold測定の再設計」節参照)。
+# pngモードは引き続き未実装。
 #
 # 設計判断:
 # - concurrency groupはdeploy-paddle-ocr.ymlと意図的に同一にする(codex pass2 High指摘反映)。
 #   GitHub Actionsのconcurrency groupはリポジトリ全体で文字列一致するため、計測中に
 #   deploy-paddle-ocr.ymlが起動されると自動的にキュー待ち/キャンセルになり、
-#   サービススナップショット比較(事後検知)より確実な排他が得られる。
+#   サービススナップショット比較(事後検知)より確実な排他が得られる。coldバースト測定は
+#   revisionを作らないため、この排他の必要性はgolden/warm系列ほど高くないが、既存の
+#   単一concurrency group設計を維持する(排他を弱める理由がないため)。
 # - 全てのinputs.*/secrets.*はstep-level env:経由で変数化し、run:内で${{ }}を直接展開しない
 #   (deploy-paddle-ocr.ymlと同一のworkflow injection対策)。
-# - timeout-minutes: 240。正常時(golden 6ページ×repeat3=18リクエスト、97秒/件)は約30分だが、
-#   リトライ・バックオフが複数件重なる最悪ケースを吸収する安全マージン(GHAの6時間ハード上限内)。
+# - timeout-minutesはtier別に出し分ける(2026-09-18 Fable 5.1レビュー指摘M3反映)。一律350分だと
+#   ハングした軽量tierのジョブがconcurrency group経由でdevデプロイを最長6時間ブロックするため。
+#   golden: 240分(既存・無改変)。load 71ページ: 350分(warm系列単独で約175分の見込み+リトライ
+#   マージン、GHAハード上限360分の内側)。load それ以外のtier: 90分。
 # - upload-artifact/Step Summary出力はif: always()にする(スクリプトが非ゼロ終了しても
 #   測定結果を必ず回収する、codex pass2 Medium指摘反映)。
+# - 実行分割方針: 1回のdispatch=1 tier×1 series(tier=allはintensity=quick専用の例外)。
+#   71ページ単独でもGHA6時間ハード上限に迫るため、全tier一括実行は不採用。
 
 on:
   workflow_dispatch:
     inputs:
       environment:
-        description: 'Target environment(Stage 1はdevのみ対応)'
+        description: 'Target environment(PR4c Stage 1/3はdevのみ対応)'
         required: true
         type: choice
         options:
           - dev
+      mode:
+        description: 'golden(Stage1精度スクリーニング) / load(Stage3負荷試験)'
+        required: true
+        type: choice
+        options:
+          - golden
+          - load
+        default: golden
+      tier:
+        description: 'loadモード必須(golden時は空欄のまま)。値: 1|20|71|160|all(allはintensity=quick専用、4tier一括疎通確認)'
+        required: false
+        type: string
+        default: ''
+      series:
+        description: 'loadモードのみ有効(既定both)'
+        required: false
+        type: choice
+        options:
+          - both
+          - warm
+          - cold
+        default: both
+      intensity:
+        description: 'loadモードのみ有効。quickはデバッグ用・合否ゲート判定には使わない(既定full)'
+        required: false
+        type: choice
+        options:
+          - full
+          - quick
+        default: full
       repeat:
-        description: 'golden 6ページを何周送信するか(既定3、2件目以降がsubsequentRequestsMs系列になる)'
+        description: 'goldenモードのみ有効。6ページを何周送信するか(既定3)'
         required: false
         default: '3'
+      inject_failure_at_page:
+        description: 'loadモードのfault injection検証専用。指定ページ番号(1始まり)で強制失敗させる(通常は空欄のまま)'
+        required: false
+        default: ''
 
 concurrency:
   group: deploy-paddle-ocr-${{ github.event.inputs.environment }}
@@ -36,7 +80,7 @@ concurrency:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: ${{ (github.event.inputs.mode == 'load' && github.event.inputs.tier == '71') && 350 || (github.event.inputs.mode == 'load' && 90) || 240 }}
     permissions:
       contents: read
       id-token: write
@@ -46,10 +90,25 @@ jobs:
       - name: Validate inputs
         env:
           ENVIRONMENT: ${{ github.event.inputs.environment }}
+          MODE: ${{ github.event.inputs.mode }}
+          TIER: ${{ github.event.inputs.tier }}
+          INTENSITY: ${{ github.event.inputs.intensity }}
         run: |
           set -euo pipefail
           if [ "$ENVIRONMENT" != "dev" ]; then
-            echo "ERROR: Stage 1では現時点でdevのみ対応(got: $ENVIRONMENT)" >&2
+            echo "ERROR: PR4c Stage 1/3では現時点でdevのみ対応(got: $ENVIRONMENT)" >&2
+            exit 1
+          fi
+          if [ "$MODE" = "load" ] && [ -z "$TIER" ]; then
+            echo "ERROR: mode=load では tier の指定が必須です" >&2
+            exit 1
+          fi
+          if [ "$MODE" = "golden" ] && [ -n "$TIER" ]; then
+            echo "ERROR: mode=golden では tier は指定できません(誤って--tierを設定していないか確認してください)" >&2
+            exit 1
+          fi
+          if [ "$TIER" = "all" ] && [ "$INTENSITY" != "quick" ]; then
+            echo "ERROR: tier=all は intensity=quick でのみ指定できます(全tier fullを1ジョブに詰め込む事故防止)" >&2
             exit 1
           fi
 
@@ -67,13 +126,44 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run paddle-ocr-verify (golden mode)
+      - name: Resolve run parameters
+        id: params
+        env:
+          MODE: ${{ github.event.inputs.mode }}
+          TIER: ${{ github.event.inputs.tier }}
+          SERIES: ${{ github.event.inputs.series }}
+          INTENSITY: ${{ github.event.inputs.intensity }}
+        run: |
+          set -euo pipefail
+          if [ "$MODE" = "golden" ]; then
+            echo "out=paddle-ocr-verify-golden.json" >> "$GITHUB_OUTPUT"
+            echo "artifact=paddle-ocr-verify-golden-report" >> "$GITHUB_OUTPUT"
+          else
+            echo "out=paddle-ocr-verify-load-${TIER}-${SERIES}-${INTENSITY}.json" >> "$GITHUB_OUTPUT"
+            echo "artifact=paddle-ocr-verify-load-${TIER}-${SERIES}-${INTENSITY}-report" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run paddle-ocr-verify
         id: run_verify
         env:
+          MODE: ${{ github.event.inputs.mode }}
+          TIER: ${{ github.event.inputs.tier }}
+          SERIES: ${{ github.event.inputs.series }}
+          INTENSITY: ${{ github.event.inputs.intensity }}
           REPEAT: ${{ github.event.inputs.repeat }}
+          INJECT_FAILURE_AT_PAGE: ${{ github.event.inputs.inject_failure_at_page }}
+          OUT_PATH: ${{ steps.params.outputs.out }}
         run: |
           set +e
-          npx ts-node scripts/paddle-ocr-verify.ts --mode=golden --repeat="${REPEAT:-3}" --out=paddle-ocr-verify-golden.json
+          if [ "$MODE" = "golden" ]; then
+            npx ts-node scripts/paddle-ocr-verify.ts --mode=golden --repeat="${REPEAT:-3}" --out="$OUT_PATH"
+          elif [ -n "$INJECT_FAILURE_AT_PAGE" ]; then
+            npx ts-node scripts/paddle-ocr-verify.ts --mode=load --tier="$TIER" --series="${SERIES:-both}" \
+              --intensity="${INTENSITY:-full}" --out="$OUT_PATH" --inject-failure-at-page="$INJECT_FAILURE_AT_PAGE"
+          else
+            npx ts-node scripts/paddle-ocr-verify.ts --mode=load --tier="$TIER" --series="${SERIES:-both}" \
+              --intensity="${INTENSITY:-full}" --out="$OUT_PATH"
+          fi
           echo "exit_code=$?" >> "$GITHUB_OUTPUT"
           exit 0
 
@@ -81,8 +171,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: paddle-ocr-verify-golden-report
-          path: paddle-ocr-verify-golden.json
+          name: ${{ steps.params.outputs.artifact }}
+          path: ${{ steps.params.outputs.out }}
           if-no-files-found: warn
 
       - name: Fail job if verify script reported non-zero exit

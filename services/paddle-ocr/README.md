@@ -90,7 +90,7 @@ ADR-0025(PaddleOCR移行)のPR4: 自前ホスティングPaddleOCR(PP-OCRv6 medi
 
 `startup probe`(既定`periodSeconds=5,timeoutSeconds=3,failureThreshold=24`=起動猶予120秒)は、モデルロード完了を待つための設定であり、cold start全体(コンテナpull含む)のレイテンシ計測とは別物である。cold latencyの実測はPR4cで別途行う。
 
-liveness窓(300秒)はPR4b時点では暫定値であり、Cloud Run実機での単一ページ処理時間の実測(p95/最大値)を確認したうえで、PR4c完了後に最終値を確定する。
+liveness窓(300秒)はPR4b時点では暫定値であり、Cloud Run実機での単一ページ処理時間の実測(p95/最大値)を確認したうえで、PR4c完了後に最終値を確定する。**2026-09-18時点**: Stage3負荷試験ハーネス(`--mode=load`)は実装完了したが、実測値の取得(Phase B、`intensity=full`)はマージ後の別タスクのため、この窓の最終値確定はPhase B完了後まで持ち越す。
 
 ### D-1実効性検証結果(2026-09-13、dev実機)
 
@@ -106,7 +106,18 @@ Cloud Runログで以下を実測確認した:
 
 ## PR4c実測値
 
-Stage 1(golden screening)・Stage 2(速度改善)は完了済み(dev実機、1ページあたりp50=6.4秒/p95=7.4秒、承認済みゲート1p≤30秒/20p≤400秒/71p≤850秒を全てPASS)。ただし1/20/71/160ページを実際に流すStage 3本格負荷試験(N=20〜30回、cold/warm分離)は**未実装**(`paddle-ocr-verify.ts`は現状6ページgoldenの`--repeat`周回のみ対応、専用フィクスチャ・モードは未着手)。2026-09-15時点の代替エビデンスとして、kanameone本番Cloud Loggingの`phaseTimings`実測(実在する最大文書73ページ、Gemini処理時代のログだが非OCR部分の実測として有効)で非OCRオーバーヘッド9.9秒(設計マージン50秒の約1/5)を確認済み。詳細は`docs/handoff/GOAL.md`「ADR-0025 PaddleOCR PR4b」節参照。
+Stage 1(golden screening)・Stage 2(速度改善)は完了済み(dev実機、1ページあたりp50=6.4秒/p95=7.4秒)。この数値は6ページgoldenの`--repeat`周回から算出した**1ページ実測値の線形外挿**であり、20p/71pの「PASS」表記は「Stage 3の実データ負荷試験へ進めてよいか」の一次スクリーニング結果に過ぎない(`scripts/paddle-ocr-verify.ts`の`REPORT_NOTES`参照、PR6着手のGo判定そのものではない)。2026-09-15時点の代替エビデンスとして、kanameone本番Cloud Loggingの`phaseTimings`実測(実在する最大文書73ページ、Gemini処理時代のログだが非OCR部分の実測として有効)で非OCRオーバーヘッド9.9秒(設計マージン50秒の約1/5)を確認済み。詳細は`docs/handoff/GOAL.md`「ADR-0025 PaddleOCR PR4b」節参照。
+
+**Stage 3(本格負荷試験、`--mode=load`)は実装完了(2026-09-18)。実測値の取得(Phase B、`intensity=full`、1/20/71/160ページをそれぞれN=20〜30回・cold/warm分離で計測)はこのPRのスコープ外であり、マージ後に別途5回のGHA dispatchで実施する(`docs/handoff/GOAL.md`「ADR-0025 PaddleOCR」節参照)。** 実装時点で判明している設計上の注意点:
+
+- **coldはバースト方式**(`--concurrency=1`下で3件同時発火、最大値を代理指標とする)で計測する。当初の承認済み計画(revision強制作成→Ready確認直後に送信)は、Cloud Runの`--startup-probe`(`httpGet.path=/health`)自体がモデルロード完了を待ってからrevisionをReadyにする仕様のため原理的に成立しないと実コード検証で判明し、この方式へ差し替えた。**再現性の注意**: 2026-09-17〜18のquick疎通確認(tier1)を3回dispatchした結果、`coldCandidateMs`は34209ms→9662ms→40396msと大きくばらついた(warm実測7-9秒台に対し、2回目のみほぼ同水準で「cold」を捉え損なった疑い)。直前のdispatchで起動したインスタンスが完全に終了しきる前に次のバーストを送ると、既に温まったインスタンスに割り当たる可能性を示唆している。`COLD_BURST_COOLDOWN_MS`(バースト間隔)の妥当性はPhase B(K=5バーストの実測)で要再検証。quickモードはこのばらつきを織り込み`intensity=quick`を常に`NOT_EVALUATED`扱いとしゲート合否には使わない設計としている(本節の数値も合否判定ではなく疎通・傾向確認のみを目的とする)
+- **完了率ゲートはpage単位で判定する**(2026-09-18decision-maker確定。71ページなら1,420リクエスト中の成功率≥95%。trial単位[20回中19回完走]で同じ完了率95%を要求すると、71ページ全て成功する確率として1ページあたり約99.93%の成功率が必要になり、page単位の許容不良率(5%)の約70分の1(約2桁)まで厳しくなる。健全な状態でもインフラ雑音でFAILしうるため採用しない。2026-09-18 Fable 5.1レビュー指摘により「約3桁」から訂正)
+- p95は右側打ち切り(未完走trialを+Infinity扱いで順位統計に含める)で算出する。除外方式は生存者バイアスで下方に歪むため採用しない
+- **onCreateトリガーは`timeoutSeconds=540`のハード上限**(GCP仕様、event-drivenトリガーは900秒にできない)があり、71ページ級書類は初回試行(onCreate)では完走せずscheduled経路(`processOCR`、900秒)へフォールバックする既存設計(ADR-0023、2026-08-01の実インシデントを受けた決定)である。850秒ゲートはscheduled経路を対象にしている
+- 本ハーネスは`--concurrency=1`の単一ストリーム測定であり、本番の複数文書同時処理時の輻輳(`max-instances=3`飽和・キュー待ち)は測定していない
+- `wallMs`はGHA runner(米国)↔asia-northeast1のネットワーク往復を含み、本番(同一リージョン内のCloud Functions↔Cloud Run)より系統的に大きい
+
+実行方法(1回のdispatch=1 tier×1 series。71ページwarm系列単独で約175分を要するため単独実行すること): GitHub Actions「PaddleOCR Verify (ADR-0025 PR4c Stage 1/3)」を`mode=load`・`tier`・`series`・`intensity`を指定して実行する。詳細は本ファイル「運用ランブック」節参照。71ページで基準未達の場合はPass1切替(PR6)着手をNo-Goとし、イメージ削減・min-instances見直し・並列化・基準自体の再検討のいずれかをdecision-makerに諮る(承認済み計画の失敗判定表)。
 
 ## 運用ランブック(PR8)
 
