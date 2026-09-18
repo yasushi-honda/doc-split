@@ -4,13 +4,13 @@ updated: 2026-09-18
 <!-- 前ミッション(dev/kanameone/cocoro環境監査・保守検証)は2026-07-20完遂。全文はdocs/handoff/LATEST.md参照。 -->
 <!-- Google Drive連携Phase1 (MVP)実装ミッションは2026-07-22完了(PR#700マージ)。詳細は本ファイル末尾「Google Drive連携Phase1完遂」節+docs/handoff/LATEST.md参照。 -->
 
-## 【完了・2026-09-18】低コストROI対応2件: Issue #949(cocoro Hosting反映)+ Issue #947(executeDriveExport runTransaction保護、PR #951)+ Issue #952起票
+## 【完了・2026-09-18】低コストROI対応3件: Issue #949(cocoro Hosting反映)+ Issue #947(executeDriveExport runTransaction保護、PR #951)+ Issue #952(exportDocument writeback保護、PR #953)
 
-decision-maker質問「まず低コストですぐ出来るROIが良いものは？」を受け、catchup積み残し候補（Issue #949/#947）を比較・decision-maker選択のうえ両方完了させた。現在のミッション（Drive連携Phase1展開）・ADR-0025 PaddleOCRトラックとは独立した単発対応。
+decision-maker質問「まず低コストですぐ出来るROIが良いものは？」を受け、catchup積み残し候補（Issue #949/#947）を比較・decision-maker選択のうえ完了。続けて/catchupが検出した即着手候補Issue #952（#947のfable-review時にスコープ外指摘された類似問題）もdecision-maker承認を得て同日中に完了させた。現在のミッション（Drive連携Phase1展開）・ADR-0025 PaddleOCRトラックとは独立した単発対応。
 
 - [x] **Issue #949: cocoro Hosting未反映(94.1時間遅延、閾値48時間)を解消**: `switch-client.sh cocoro && deploy-to-project.sh cocoro`で手動デプロイ。**副産物の発見**: `switch-client.sh`をサブプロセス実行すると、`.envrc`のdirenvフックが新規シェル起動のたびに`CLOUDSDK_ACTIVE_CONFIG_NAME=doc-split`へ戻してしまい環境切替が効かない（`gcloud config configurations activate`も同様に上書きされる）。回避策として`source ./scripts/switch-client.sh <env>`で切替とデプロイを同一シェル内実行。恒久対応（スクリプト側改修）は未着手のまま（次回同種操作時の参考として本記録を残す）。配信バンドルハッシュ照合で反映確認、Issueクローズ済み
 - [x] **Issue #947: `executeDriveExport()`のエラー確定用runTransaction無保護によるexporting状態固着リスクを解消（PR #951マージ済み）**: try/catchで保護し、失敗時は`lastUpdateTime` precondition付きの非transactionフォールバック書込みへ切替。codex reviewが利用上限(`You've hit your usage limit`、事前承認済みの自動fable-review切替条件`Selected model is at capacity`とは別種のためAskUserQuestionで都度承認を得て手動切替)でfable-review(Fable 5.1)を2回実施(初回diff+PR最終diff)、High 1件(lastUpdateTime precondition化)・Medium/Low計9件を反映。CI pass・fable-review mergeable判定後、decision-maker番号単位認可でsquash mergeしIssue #947クローズ
-- [x] **Issue #952起票**: fable-reviewがスコープ外で指摘した類似問題（`exportDocument.ts`の成功時writeback transactionも同様に未保護、失敗時に`driveFileId`を喪失するリスク）をP2/bugで新規issue化。未着手
+- [x] **Issue #952: `exportDocument()`の成功時writeback transaction無保護によるdriveFileId消失リスクを解消（PR #953マージ済み）**: #947と同型パターンで対応。try/catchで保護し、失敗時は`lastUpdateTime` precondition付きの非transactionフォールバックへ切替。#947との設計上の違い: フォールバックも失敗した場合、#947（呼び出し元の既存catch節内）は例外を握り潰して良かったが、#952は`exportDocument()`本体の実行中のため握り潰すと`driveExportStatus`が`'exporting'`のまま固着する。そこで元の例外を呼び出し元`executeDriveExport()`へ再throwし、PR #951で保護済みのエラー確定writebackに委ねて`'error'`へ遷移させる設計とした（driveFileIdは喪失するが状態不整合は防止、再試行は`resolveDriveFile()`のappProperties経由idempotencyに委ねる）。テスト用に`ExportDocumentDeps.firestore`を追加、回帰テスト3件追加（41件全PASS、`test:integration:drive`187件回帰なし）。codex reviewは本セッション中も利用上限が継続（復帰予定2026-09-20 1:21 AM）のため2回ともfable-review代替（High 0/Medium 4/Low 5、マージブロッカーなし）、指摘2件（テストタイトルの誤り・`firestore`注入範囲の一部不整合）を追加コミットで反映。decision-maker番号単位認可でsquash mergeしIssue #952クローズ
 
 ## 📋 空き時間バックログ（現在のミッションとは無関係、doc-audit 2026-08-01指摘）
 
