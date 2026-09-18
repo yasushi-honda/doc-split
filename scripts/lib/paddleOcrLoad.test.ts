@@ -427,10 +427,16 @@ test('evaluateLoadGate: 1ページ、coldMaxが30秒超過でFAIL', () => {
   assert.equal(gate.verdict, 'FAIL');
 });
 
-test('evaluateLoadGate: H1回帰(2026-09-18) — series=cold単独実行(warmTrials=[])でも、expectedWarmTrialsに実際の期待値を渡せばNOT_EVALUATEDになる(FAILにならない)', () => {
-  // warm系列を実行していない(--series=cold単独)ケース。expectedWarmTrialsを実測の
-  // 期待値(30)のまま渡すのが正しい実装(以前は誤って0を渡しており、
-  // hasSufficientWarmSamples = 0 >= 0 = true ですり抜けてFAILになっていた)。
+test('evaluateLoadGate: H1回帰(2026-09-18) — metric=coldMax(tier1)はwarm標本0件でも「標本数不足」判定にはならない(quality-gate-evaluator指摘反映)', () => {
+  // metric=coldMaxのゲートはcold標本の充足性のみで十分性を判定すべきで、warm標本数の
+  // 充足性(hasSufficientWarmSamples)はチェック対象外にする(以前はwarmP95/coldMaxを
+  // 問わず一律チェックしており、expectedWarmTrialsに誤って0を渡していたH1バグを
+  // 修正した際、逆に「--series=cold単独+intensity=fullが恒久的にNOT_EVALUATEDにしか
+  // ならない」別の矛盾を生んでいた)。cold標本が十分ならNOT_EVALUATEDにはならず、
+  // 実際のゲート評価まで進む(ただしpage完了率はwarm系列前提の設計のため、この
+  // 入力パターンではcompletionOkがfalseになりFAILになる。これはCLI側
+  // (parseArgs)で--series=cold単独+tier=coldMax+intensity=fullをfail-loudに拒否する
+  // ことで運用上回避する、意図した制限)。
   const cold = [makeColdBurst(9000, 0)];
   const gate = evaluateLoadGate({
     tier: 1,
@@ -439,6 +445,20 @@ test('evaluateLoadGate: H1回帰(2026-09-18) — series=cold単独実行(warmTri
     coldBursts: cold,
     expectedWarmTrials: 30,
     expectedColdBursts: 1,
+  });
+  assert.notEqual(gate.verdict, 'NOT_EVALUATED');
+  assert.equal(gate.pageCompletionRate, null);
+  assert.equal(gate.verdict, 'FAIL'); // completionOk=falseのため(page完了率が測れない)
+});
+
+test('evaluateLoadGate: H1回帰(2026-09-18) — metric=warmP95(tier71)はwarm標本不足なら正しくNOT_EVALUATEDのまま(coldMax向け緩和の影響を受けない)', () => {
+  const gate = evaluateLoadGate({
+    tier: 71,
+    intensity: 'full',
+    warmTrials: Array.from({ length: 5 }, (_, i) => makeTrial({ pagesPlanned: 71, trial: i })),
+    coldBursts: [],
+    expectedWarmTrials: 20,
+    expectedColdBursts: 0,
   });
   assert.equal(gate.verdict, 'NOT_EVALUATED');
   assert.match(gate.verdictReason, /標本数が不足/);

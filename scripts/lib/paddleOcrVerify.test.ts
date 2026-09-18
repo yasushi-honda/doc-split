@@ -1328,13 +1328,34 @@ test('parseArgs: --mode=load --tier=all は --intensity=quick 併用時のみ受
 });
 
 test('parseArgs: --mode=load --series は warm|cold|both 以外だとエラー', () => {
-  assert.throws(() => parseArgs(['--mode=load', '--tier=1', '--series=invalid']));
-  const args = parseArgs(['--mode=load', '--tier=1', '--series=cold']);
+  assert.throws(() => parseArgs(['--mode=load', '--tier=20', '--series=invalid']));
+  const args = parseArgs(['--mode=load', '--tier=20', '--series=cold']);
   assert.equal(args.series, 'cold');
 });
 
 test('parseArgs: --mode=load --intensity は full|quick 以外だとエラー', () => {
   assert.throws(() => parseArgs(['--mode=load', '--tier=1', '--intensity=invalid']));
+});
+
+test('parseArgs: metric=coldMaxのtier(1)は--intensity=full時--series=both以外だとエラー(quality-gate-evaluator指摘、2026-09-18)', () => {
+  // tier1はpage完了率をwarm系列の実行結果から算出する設計のため、--series=cold単独で
+  // intensity=fullを評価しようとすると恒久的にFAILし続ける(completionOkがpageCompletionRate
+  // =nullで常にfalseになるため)。この矛盾した組み合わせをCLI側でfail-loudに拒否する。
+  assert.throws(() => parseArgs(['--mode=load', '--tier=1', '--series=cold', '--intensity=full']));
+  assert.throws(() => parseArgs(['--mode=load', '--tier=1', '--series=warm', '--intensity=full']));
+  // series=bothなら許可
+  const both = parseArgs(['--mode=load', '--tier=1', '--series=both', '--intensity=full']);
+  assert.equal(both.series, 'both');
+  // intensity=quick(疎通確認用)なら単独seriesでも許可
+  const quick = parseArgs(['--mode=load', '--tier=1', '--series=cold', '--intensity=quick']);
+  assert.equal(quick.series, 'cold');
+});
+
+test('parseArgs: metric=warmP95のtier(20/71)はintensity=full時でも単独series実行を許可する(coldMax向け制約の対象外)', () => {
+  const tier20 = parseArgs(['--mode=load', '--tier=20', '--series=warm', '--intensity=full']);
+  assert.equal(tier20.series, 'warm');
+  const tier71 = parseArgs(['--mode=load', '--tier=71', '--series=cold', '--intensity=full']);
+  assert.equal(tier71.series, 'cold');
 });
 
 test('parseArgs: --mode=load は --repeat と併用できない(golden専用オプション)', () => {

@@ -386,7 +386,13 @@ export function evaluateLoadGate(input: {
     };
   }
 
-  const hasSufficientWarmSamples = warmTrialsForStats.length >= input.expectedWarmTrials * MIN_WARM_SAMPLE_RATIO;
+  // quality-gate-evaluator指摘(2026-09-18): metricがcoldMaxのtier(=tier1)を評価する際、
+  // warm標本の充足を無条件で要求すると、page完了率計算(completionOk)がwarmTrialsに
+  // 依存する設計と相まって「--series=cold単独+intensity=full」が原理的に恒久的に
+  // NOT_EVALUATEDにしかならない(hasSufficientColdSamplesと対称に、metric自身が
+  // 要求する系列の標本数のみを見る)。
+  const hasSufficientWarmSamples =
+    spec.metric !== 'warmP95' || warmTrialsForStats.length >= input.expectedWarmTrials * MIN_WARM_SAMPLE_RATIO;
   const hasSufficientColdSamples = spec.metric !== 'coldMax' || coldBurstsSufficient(input.coldBursts.length, input.expectedColdBursts);
 
   if (!hasSufficientWarmSamples || !hasSufficientColdSamples) {

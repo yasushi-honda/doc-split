@@ -38,6 +38,7 @@ import { loadFixturePath } from './fixtures/paddleOcrLoadFixtures';
 import {
   LOAD_TIERS,
   type LoadTier,
+  LOAD_GATES,
   WARM_TRIALS_FULL,
   COLD_BURSTS_FULL,
   COLD_BURST_SIZE,
@@ -860,6 +861,21 @@ export function parseArgs(argv: string[]): CliArgs {
 
   if (tier === 'all' && intensity !== 'quick') {
     throw new Error('--tier=all は --intensity=quick でのみ指定できます(全tier fullを1ジョブに詰め込む事故防止)');
+  }
+
+  // quality-gate-evaluator指摘(2026-09-18): metric=coldMaxのtier(現状tier1のみ)は
+  // page完了率(pageCompletionRate)をwarm trialの実行結果から算出する設計のため、
+  // --series=cold単独でintensity=fullを評価しようとすると、latencyは測れても
+  // completionOkが常にfalse(pageCompletionRate=null)になり恒久的にFAILし続ける
+  // (H1修正で標本数不足チェック自体はすり抜けるようになったが、この根本問題は残る)。
+  // 承認済み計画のゲート数値・完了率算出方式自体は変更せず、CLI側でこの矛盾した
+  // 組み合わせをfail-loudにする(Phase B計画でもtier1はseries=bothで1回のdispatchに
+  // まとめる想定であり、実害はない)。
+  if (tier !== 'all' && intensity === 'full' && series !== 'both' && LOAD_GATES[tier as LoadTier].metric === 'coldMax') {
+    throw new Error(
+      `--tier=${tier}はmetric=coldMaxのゲートのため、--intensity=fullでは--series=bothでのみ実行できます` +
+        `(page完了率の算出にwarm系列の実行結果が必要です)。個別series実行は--intensity=quickでの疎通確認にのみ使用してください(got: series=${series})`
+    );
   }
 
   let injectFailureAtPage: number | undefined;
