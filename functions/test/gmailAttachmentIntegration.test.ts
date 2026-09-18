@@ -26,6 +26,7 @@ import {
   resolveExistingLogData,
   type ReimportVerdict,
 } from '../src/gmail/reimportPolicy';
+import { createGmailAttachmentRecords } from '../src/gmail/checkGmailAttachments';
 
 const db = admin.firestore();
 const COLLECTIONS_TO_CLEAN: readonly string[] = ['gmailLogs', 'documents', 'uploadLogs'];
@@ -237,5 +238,131 @@ describe('checkGmailAttachments 統合テスト (#200)', () => {
       const verdict = await queryAndEvaluateReimport(hash);
       expect(verdict).to.equal('skip');
     });
+  });
+});
+
+describe('createGmailAttachmentRecords (Issue #958: runTransaction自体の一時的失敗をwithBackoffRetryで防御)', () => {
+  beforeEach(async () => {
+    await cleanupCollections(db, COLLECTIONS_TO_CLEAN);
+  });
+
+  /**
+   * runTransactionだけを差し替えたfirestoreラッパ。failTxCallIndices回目のtxは実dbへ
+   * 委譲せず合成エラーを投げる。driveFolderClaimIntegration.test.ts/
+   * ocrCompletionTransactionIntegration.test.tsのmakeFailingCommitFirestoreと同方針
+   * (Issue #954で確立済みのテストパターン)。code-reviewer/pr-test-analyzerセカンドオピニオン
+   * 指摘(Issue #958、PR #964): checkGmailAttachments.ts側のwithBackoffRetryにリトライ注入
+   * テストが1件もなかったため、transaction部分を`createGmailAttachmentRecords`として
+   * db注入可能な形にexportし、Gmail API/Storageのモック基盤なしでこのtransaction単体の
+   * リトライ挙動を直接検証できるようにした。
+   */
+  function makeFailingCommitFirestore(
+    realDb: admin.firestore.Firestore,
+    failTxCallIndices: readonly number[],
+    errorCode = 14
+  ): { firestore: admin.firestore.Firestore; getTxCallCount: () => number } {
+    let txCalls = 0;
+    const firestore = {
+      collection: (path: string) => realDb.collection(path),
+      doc: (path: string) => realDb.doc(path),
+      runTransaction: async (updateFn: (tx: admin.firestore.Transaction) => Promise<unknown>) => {
+        txCalls++;
+        if (failTxCallIndices.includes(txCalls)) {
+          const err = new Error(`simulated Firestore transaction failure (call #${txCalls})`) as Error & {
+            code: number;
+          };
+          err.code = errorCode;
+          throw err;
+        }
+        return realDb.runTransaction(updateFn);
+      },
+    } as unknown as admin.firestore.Firestore;
+    return { firestore, getTxCallCount: () => txCalls };
+  }
+
+  const FIELDS = {
+    messageId: 'msg-958',
+    filename: 'invoice.pdf',
+    hash: 'hash-958',
+    fileSizeKB: 123,
+    subject: 'テスト件名',
+    fileUrl: 'gs://bucket/original/1234_invoice.pdf',
+    emailBody: '本文',
+    mimeType: 'application/pdf',
+  };
+
+  it('1回だけtransientエラー(code 14)で失敗しても2回目でリトライ成功し、gmailLogs/documents/detail/mainが作成される', async () => {
+    const logRef = db.collection('gmailLogs').doc();
+    const docRef = db.collection('documents').doc();
+    const { firestore: failingDb, getTxCallCount } = makeFailingCommitFirestore(db, [1]);
+
+    await createGmailAttachmentRecords(failingDb, logRef, docRef, FIELDS);
+
+    expect(getTxCallCount(), 'リトライにより2回呼ばれるはず').to.equal(2);
+    const logSnap = await logRef.get();
+    expect(logSnap.exists, 'gmailLogsが作成されること').to.equal(true);
+    expect(logSnap.data()?.messageId).to.equal(FIELDS.messageId);
+    const docSnap = await docRef.get();
+    expect(docSnap.exists, 'documentsが作成されること').to.equal(true);
+    expect(docSnap.data()?.status).to.equal('pending');
+    const detailSnap = await docRef.collection('detail').doc('main').get();
+    expect(detailSnap.exists, 'detail/mainが作成されること').to.equal(true);
+  });
+
+  it('全attempts失敗すると、gmailLogs/documents共に作成されないままエラーがthrowされる', async () => {
+    const logRef = db.collection('gmailLogs').doc();
+    const docRef = db.collection('documents').doc();
+    const { firestore: failingDb, getTxCallCount } = makeFailingCommitFirestore(db, [1, 2, 3]);
+
+    try {
+      await createGmailAttachmentRecords(failingDb, logRef, docRef, FIELDS);
+      expect.fail('全attempts失敗時はthrowされるはず');
+    } catch (error) {
+      expect((error as Error).message).to.include('simulated Firestore transaction failure');
+    }
+    expect(getTxCallCount(), '3回とも失敗するはず').to.equal(3);
+
+    expect((await logRef.get()).exists, 'transaction全滅時はgmailLogsが作成されないこと').to.equal(false);
+    expect((await docRef.get()).exists, 'transaction全滅時はdocumentsが作成されないこと').to.equal(false);
+  });
+
+  it('非transientコード(例: 7=PERMISSION_DENIED)は1回で諦めリトライされない', async () => {
+    const logRef = db.collection('gmailLogs').doc();
+    const docRef = db.collection('documents').doc();
+    const { firestore: failingDb, getTxCallCount } = makeFailingCommitFirestore(db, [1], 7);
+
+    try {
+      await createGmailAttachmentRecords(failingDb, logRef, docRef, FIELDS);
+      expect.fail('非transientエラーはリトライされずthrowされるはず');
+    } catch (error) {
+      expect((error as Error).message).to.include('simulated Firestore transaction failure');
+    }
+    expect(getTxCallCount(), '非transientは即座に諦めるため1回のみ').to.equal(1);
+  });
+
+  it('logRefが既に存在する場合(ambiguous commit後の再試行を想定)、docRefへの書込みをスキップし他の書き手の変更を巻き戻さない(fable-reviewセカンドオピニオン指摘M1の回帰防止)', async () => {
+    const logRef = db.collection('gmailLogs').doc();
+    const docRef = db.collection('documents').doc();
+
+    // 1回目のcommitが既に成功した状態を再現(gmailLogs作成済み)。
+    await logRef.set({
+      messageId: FIELDS.messageId,
+      fileName: FIELDS.filename,
+      hash: FIELDS.hash,
+      fileSizeKB: FIELDS.fileSizeKB,
+      emailSubject: FIELDS.subject,
+      fileUrl: FIELDS.fileUrl,
+      emailBody: FIELDS.emailBody,
+    });
+    // その後processOCRのcronが先にclaimした状態を再現。
+    await docRef.set({ status: 'processing', ocrRunId: 'cron-claimed-run-id', messageId: FIELDS.messageId });
+
+    await createGmailAttachmentRecords(db, logRef, docRef, FIELDS);
+
+    const docSnap = await docRef.get();
+    expect(docSnap.data()?.status, '他の書き手(cron)によるstatus:processingを巻き戻さないこと').to.equal(
+      'processing'
+    );
+    expect(docSnap.data()?.ocrRunId, '他の書き手のocrRunIdを消さないこと').to.equal('cron-claimed-run-id');
   });
 });

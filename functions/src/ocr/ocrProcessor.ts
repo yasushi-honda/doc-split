@@ -118,18 +118,28 @@ export interface OcrClaim {
  * 既に処理中の場合、または存在しない場合はnullを返す
  *
  * Issue #958: transaction自体の一時的失敗(gRPC transientコード)を`withBackoffRetry`で
- * 防御する(Issue #957と同型パターン)。既存のcatch節はsilent-failure寄り(記録なしに
- * nullを返す)だが、全attempts失敗時はdocumentが`pending`のまま(commit自体が本当に
- * 失敗した場合)なので次cronで再試行され致命的固着はしないため、observability強化は
+ * 防御する(Issue #957と同型パターン)。既存のcatch節はsilent-failure寄り(comment-analyzer
+ * セカンドオピニオン指摘: `console.error`では記録するが`logError`等の構造化ログ・
+ * アラート連携はしない)だが、全attempts失敗時はdocumentが`pending`のまま(commit自体が
+ * 本当に失敗した場合)なので次cronで再試行され致命的固着はしないため、observability強化は
  * Issue #958のスコープ外として本PRでは対応しない。
  *
- * 既知の残余ギャップ(fable-reviewセカンドオピニオン指摘、Issue #963): 上記は
- * 「commit自体が失敗した」場合の話であり、「サーバー側はcommitに成功したがクライアントには
- * 失敗が返るambiguous commit」の場合は当てはまらない。この場合、再試行時は
+ * 既知の残余ギャップ(fable-review/silent-failure-hunterセカンドオピニオン指摘、Issue #963):
+ * 上記は「commit自体が失敗した」場合の話であり、「サーバー側はcommitに成功したがクライアント
+ * には失敗が返るambiguous commit」の場合は当てはまらない。この場合、再試行時は
  * `docData.status !== 'pending'`(既に'processing')によりnullを返すため、1回目で発行した
  * `ocrRunId`を誰も使わないまま、documentが`processing`で取り残される(rescueStuckProcessingDocs
- * が最終的に拾うまで放置)。SDK内部リトライでも従来から存在した既存の故障クラスであり
- * 本PRの回帰ではないが、外側リトライの追加により発生窓が広がった。Issue #963で対応検討。
+ * が最終的に拾うまで放置。かつこの経路には「ambiguous commitが原因」と特定できる診断シグナルが
+ * 現状存在しない)。
+ *
+ * 2巡目のfable-reviewセカンドオピニオン指摘: 「外側リトライの追加により発生窓が広がった」は
+ * 不正確だった(訂正)。ambiguous commit直後、Firestore SDK自体の内部リトライ(最大5回)が
+ * 次の内部attemptで同じupdateFnを再実行し、既に'processing'を読んでnullを正常返却する
+ * ため、この経路は**本PR以前・外側リトライ層の有無に関わらず**発生していた既存の故障クラス。
+ * 外側`withBackoffRetry`が効くのは「SDK内部5回が全滅した」場合のみで、その最後の内部試行が
+ * ambiguous成功なら従来通り(外側層は関与しない)、本当に失敗していたなら外側リトライにより
+ * 再claimが成功する可能性が上がる(改善方向)。よって外側リトライの追加はこの故障クラスを
+ * 悪化させない。Issue #963で対応検討。
  */
 export async function tryStartProcessing(docId: string): Promise<OcrClaim | null> {
   const docRef = db.doc(`documents/${docId}`);
