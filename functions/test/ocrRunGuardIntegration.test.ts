@@ -298,46 +298,47 @@ describe('OCR実行所有権ガード integration (#540)', () => {
   });
 });
 
+/**
+ * handleProcessingError()/tryStartProcessing()はdbをパラメータで受け取らずモジュール直下の
+ * `db`(`admin.firestore()`のデフォルトapp singleton)を直接使うため、
+ * applyOcrCompletionTransactionのようにfake firestoreをinjectできない。
+ * rescueStuckProcessingIntegration.test.ts #364のwithFailingRunTransactionと
+ * 同方針(sinon依存を追加しないpolyfill)で、db.runTransaction自体を一時差し替えて
+ * 呼び出し回数・失敗回数を制御する。try/finallyで原値復元を保証する。
+ * ファイルスコープに定義し、Issue #957/#958双方のdescribeブロックから共有する。
+ */
+async function withCountingFailingRunTransaction<T>(
+  failCallIndices: readonly number[],
+  errorCode: number,
+  fn: () => Promise<T>
+): Promise<{ result: T; callCount: number }> {
+  const original = db.runTransaction.bind(db);
+  let callCount = 0;
+  (db as unknown as { runTransaction: unknown }).runTransaction = async (
+    updateFn: (tx: admin.firestore.Transaction) => Promise<unknown>
+  ) => {
+    callCount++;
+    if (failCallIndices.includes(callCount)) {
+      const err = new Error(`simulated runTransaction failure (call #${callCount})`) as Error & {
+        code: number;
+      };
+      err.code = errorCode;
+      throw err;
+    }
+    return original(updateFn);
+  };
+  try {
+    const result = await fn();
+    return { result, callCount };
+  } finally {
+    (db as unknown as { runTransaction: typeof original }).runTransaction = original;
+  }
+}
+
 describe('handleProcessingError (Issue #957: runTransaction自体の一時的失敗をwithBackoffRetryで防御)', () => {
   beforeEach(async () => {
     await cleanupCollections(db, COLLECTIONS_TO_CLEAN);
   });
-
-  /**
-   * handleProcessingError()はdbをパラメータで受け取らずモジュール直下の`db`
-   * (`admin.firestore()`のデフォルトapp singleton)を直接使うため、
-   * applyOcrCompletionTransactionのようにfake firestoreをinjectできない。
-   * rescueStuckProcessingIntegration.test.ts #364のwithFailingRunTransactionと
-   * 同方針(sinon依存を追加しないpolyfill)で、db.runTransaction自体を一時差し替えて
-   * 呼び出し回数・失敗回数を制御する。try/finallyで原値復元を保証する。
-   */
-  async function withCountingFailingRunTransaction<T>(
-    failCallIndices: readonly number[],
-    errorCode: number,
-    fn: () => Promise<T>
-  ): Promise<{ result: T; callCount: number }> {
-    const original = db.runTransaction.bind(db);
-    let callCount = 0;
-    (db as unknown as { runTransaction: unknown }).runTransaction = async (
-      updateFn: (tx: admin.firestore.Transaction) => Promise<unknown>
-    ) => {
-      callCount++;
-      if (failCallIndices.includes(callCount)) {
-        const err = new Error(`simulated runTransaction failure (call #${callCount})`) as Error & {
-          code: number;
-        };
-        err.code = errorCode;
-        throw err;
-      }
-      return original(updateFn);
-    };
-    try {
-      const result = await fn();
-      return { result, callCount };
-    } finally {
-      (db as unknown as { runTransaction: typeof original }).runTransaction = original;
-    }
-  }
 
   it('1回だけtransientエラー(code 14)で失敗しても2回目でリトライ成功し、retryCountが二重加算されずstatus:errorが確定する', async () => {
     const docId = 'doc-957-handle-retry-success';
@@ -432,6 +433,59 @@ describe('handleProcessingError (Issue #957: runTransaction自体の一時的失
     // 重要なのは無駄なリトライをしていないこと(callCount===1)。
     const after = await docRef.get();
     expect(after.data()!.status).to.equal('error');
+  });
+});
+
+describe('tryStartProcessing (Issue #958: runTransaction自体の一時的失敗をwithBackoffRetryで防御)', () => {
+  beforeEach(async () => {
+    await cleanupCollections(db, COLLECTIONS_TO_CLEAN);
+  });
+
+  it('1回だけtransientエラー(code 14)で失敗しても2回目でリトライ成功し、claimが取得できる', async () => {
+    const docId = 'doc-958-claim-retry-success';
+    const docRef = db.collection('documents').doc(docId);
+    await docRef.set({ status: 'pending', fileUrl: 'gs://bucket/a.pdf', mimeType: 'application/pdf' });
+
+    const { result: claim, callCount } = await withCountingFailingRunTransaction([1], 14, () =>
+      tryStartProcessing(docId)
+    );
+
+    expect(callCount, 'リトライにより2回呼ばれるはず').to.equal(2);
+    expect(claim, 'リトライ成功によりclaimが取得できるはず').to.not.be.null;
+    const after = await docRef.get();
+    expect(after.data()!.status).to.equal('processing');
+    expect(after.data()!.ocrRunId).to.equal(claim!.ocrRunId);
+  });
+
+  it(`全attempts(OCR_TX_RETRY_ATTEMPTS=${OCR_TX_RETRY_ATTEMPTS})失敗すると、既存catch節が握り潰しnullを返す(silent-failure、Issue #958のスコープ外として現状維持)`, async () => {
+    const docId = 'doc-958-claim-retry-exhausted';
+    const docRef = db.collection('documents').doc(docId);
+    await docRef.set({ status: 'pending', fileUrl: 'gs://bucket/a.pdf', mimeType: 'application/pdf' });
+
+    const { result: claim, callCount } = await withCountingFailingRunTransaction(
+      Array.from({ length: OCR_TX_RETRY_ATTEMPTS }, (_, i) => i + 1),
+      14,
+      () => tryStartProcessing(docId)
+    );
+
+    expect(callCount, `${OCR_TX_RETRY_ATTEMPTS}回とも失敗するはず`).to.equal(OCR_TX_RETRY_ATTEMPTS);
+    expect(claim, '全attempts失敗時は既存catch節によりnullが返るはず').to.equal(null);
+    // docは書き込まれずpendingのまま残る(次cronで再試行される、致命的固着ではない)。
+    const after = await docRef.get();
+    expect(after.data()!.status).to.equal('pending');
+  });
+
+  it('非transientコード(例: 7=PERMISSION_DENIED)は1回で諦めリトライされない', async () => {
+    const docId = 'doc-958-claim-non-retryable';
+    const docRef = db.collection('documents').doc(docId);
+    await docRef.set({ status: 'pending', fileUrl: 'gs://bucket/a.pdf', mimeType: 'application/pdf' });
+
+    const { result: claim, callCount } = await withCountingFailingRunTransaction([1], 7, () =>
+      tryStartProcessing(docId)
+    );
+
+    expect(callCount, '非transientは即座に諦めるため1回のみ').to.equal(1);
+    expect(claim).to.equal(null);
   });
 });
 

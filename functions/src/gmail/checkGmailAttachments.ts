@@ -16,13 +16,29 @@ import * as admin from 'firebase-admin';
 import { gmail_v1 } from 'googleapis';
 import * as crypto from 'crypto';
 import { getGmailClient } from '../utils/gmailAuth';
-import { withRetry, RETRY_CONFIGS } from '../utils/retry';
+import { withRetry, RETRY_CONFIGS, withBackoffRetry } from '../utils/retry';
+import { isRetryableFirestoreError } from '../utils/firestoreErrors';
 import { logError } from '../utils/errorLogger';
 import { sanitizeFilenameForStorage } from '../utils/fileNaming';
 import { evaluateReimportDecision, resolveExistingLogData } from './reimportPolicy';
 
 const db = admin.firestore();
 const storage = admin.storage();
+
+/**
+ * gmailLogs+documents+detail/main原子的作成transaction自体の一時的失敗(gRPC transient
+ * コード)を`withBackoffRetry`で防御するための回数・基準バックオフ(Issue #958、
+ * Issue #957と同型パターン)。
+ *
+ * 2巡目のfable-reviewセカンドオピニオン指摘M3: 外側sleep自体は300+600ms=900ms未満だが、
+ * 外側1回ごとにFirestore SDK内部リトライ(最大5回、code 4のDEADLINE_EXCEEDED等では
+ * さらに長い)も再度フルで走りうるため、Firestore広域障害時は添付1件あたり実質数秒〜
+ * 十数秒規模になりうる(`SEARCH_MINUTES=10`のポーリング窓との兼ね合いで、`checkGmailAttachments`
+ * 全体の`onSchedule`の`timeoutSeconds:300`に対しては引き続き無視できるオーダーだが、
+ * 障害が持続すると1回のスキャンで処理しきれる添付件数は減る)。
+ */
+const GMAIL_ATTACHMENT_TX_RETRY_ATTEMPTS = 3;
+const GMAIL_ATTACHMENT_TX_RETRY_BASE_DELAY_MS = 300;
 
 // 設定
 const SEARCH_MINUTES = 10; // 過去何分のメールを検索するか
@@ -243,6 +259,100 @@ async function processMessage(
 }
 
 /**
+ * gmailLogs+documents+detail/mainを単一transactionで原子的に作成する。
+ * `db`を引数で受け取る設計(pr-test-analyzerセカンドオピニオン指摘、Issue #958対応:
+ * checkGmailAttachments.ts側のwithBackoffRetryにリトライ注入テストが1件もなかった。
+ * `applyOcrCompletionTransaction`と同じdb注入パターンに揃えることで、Gmail API/Storageの
+ * モック基盤を用意せずにtransaction単体のリトライ挙動を直接検証できるようにした)。
+ *
+ * fable-reviewセカンドオピニオン指摘(Issue #958): 外側withBackoffRetryの冪等性は
+ * 「logRef/docRefが呼び出し元で事前に確定済み(トランザクション再試行毎に新規採番されない)」
+ * かつ「transaction.set(`create`ではなく`merge`なしの上書きset)を使っている」ことに依存する。
+ * 将来ここを`transaction.create(...)`に変更すると、ambiguous commit後の再試行で
+ * 既存ドキュメントに対しALREADY_EXISTS(code 6、isRetryableFirestoreError対象外)が
+ * 即throwされ、成功していたはずのGmail取込みがerror扱いになる退行を招くため注意。
+ *
+ * 2巡目のfable-reviewセカンドオピニオン指摘M1: 上記の冪等性は「自分自身の再試行に対して」
+ * のみ成立し、「同一docへの他の書き手との競合」は別問題。ambiguous commit(1回目は実際には
+ * commit成功)発生後、外側retryのbackoff待機中(最大900ms)に`processOCR`のポーリングcronが
+ * この新規pending docを拾い`tryStartProcessing`で`status:'processing'`+`ocrRunId`を書く
+ * possibility がある。この状態で2回目のtransactionが素のblind setを実行すると、cronの
+ * claimを`status:'pending'`へ巻き戻し`ocrRunId`を消してしまう(所有権喪失、Gemini
+ * トークン浪費)。事前に`logRef`の存在を確認し、既にcommit済みなら書かずにreturnすることで
+ * 真に冪等にする(1 read追加のみ)。
+ */
+export async function createGmailAttachmentRecords(
+  targetDb: admin.firestore.Firestore,
+  logRef: FirebaseFirestore.DocumentReference,
+  docRef: FirebaseFirestore.DocumentReference,
+  fields: {
+    messageId: string;
+    filename: string;
+    hash: string;
+    fileSizeKB: number;
+    subject: string;
+    fileUrl: string;
+    emailBody: string;
+    mimeType: string;
+  }
+): Promise<void> {
+  const { messageId, filename, hash, fileSizeKB, subject, fileUrl, emailBody, mimeType } = fields;
+
+  await withBackoffRetry(
+    () =>
+      targetDb.runTransaction(async (transaction) => {
+        // ambiguous commit後の再試行で、1回目のcommitが既に成功していた場合は
+        // 何もせずreturnする(他の書き手によるdocRefへの後続変更を巻き戻さないため)。
+        const existingLog = await transaction.get(logRef);
+        if (existingLog.exists) {
+          return;
+        }
+
+        // gmailLogsに記録
+        transaction.set(logRef, {
+          messageId,
+          fileName: filename,
+          hash,
+          fileSizeKB,
+          emailSubject: subject,
+          processedAt: admin.firestore.FieldValue.serverTimestamp(),
+          fileUrl,
+          emailBody,
+        });
+
+        // documents（status: pending）を作成
+        transaction.set(docRef, {
+          id: docRef.id,
+          messageId,
+          processedAt: admin.firestore.FieldValue.serverTimestamp(),
+          fileId: logRef.id,
+          fileName: filename,
+          mimeType,
+          documentType: '',
+          customerName: '',
+          officeName: '',
+          fileUrl,
+          fileDate: null,
+          isDuplicateCustomer: false,
+          totalPages: 0,
+          targetPageNumber: 1,
+          status: 'pending',
+          sourceType: 'gmail',
+        });
+
+        // ADR-0018 (Issue #547) Phase E: ocrResultはdetail/mainにのみ初期化する
+        // (本体には書かない)。同一transactionでの作成はMUST: 原子性。
+        transaction.set(docRef.collection('detail').doc('main'), {
+          ocrResult: '',
+        });
+      }),
+    GMAIL_ATTACHMENT_TX_RETRY_ATTEMPTS,
+    GMAIL_ATTACHMENT_TX_RETRY_BASE_DELAY_MS,
+    isRetryableFirestoreError
+  );
+}
+
+/**
  * 添付ファイルを処理
  */
 async function processAttachment(
@@ -356,44 +466,15 @@ async function processAttachment(
   const logRef = db.collection('gmailLogs').doc();
   const docRef = db.collection('documents').doc();
 
-  await db.runTransaction(async (transaction) => {
-    // gmailLogsに記録
-    transaction.set(logRef, {
-      messageId,
-      fileName: filename,
-      hash,
-      fileSizeKB,
-      emailSubject: subject,
-      processedAt: admin.firestore.FieldValue.serverTimestamp(),
-      fileUrl,
-      emailBody,
-    });
-
-    // documents（status: pending）を作成
-    transaction.set(docRef, {
-      id: docRef.id,
-      messageId,
-      processedAt: admin.firestore.FieldValue.serverTimestamp(),
-      fileId: logRef.id,
-      fileName: filename,
-      mimeType,
-      documentType: '',
-      customerName: '',
-      officeName: '',
-      fileUrl,
-      fileDate: null,
-      isDuplicateCustomer: false,
-      totalPages: 0,
-      targetPageNumber: 1,
-      status: 'pending',
-      sourceType: 'gmail',
-    });
-
-    // ADR-0018 (Issue #547) Phase E: ocrResultはdetail/mainにのみ初期化する
-    // (本体には書かない)。同一transactionでの作成はMUST: 原子性。
-    transaction.set(docRef.collection('detail').doc('main'), {
-      ocrResult: '',
-    });
+  await createGmailAttachmentRecords(db, logRef, docRef, {
+    messageId,
+    filename,
+    hash,
+    fileSizeKB,
+    subject,
+    fileUrl,
+    emailBody,
+    mimeType,
   });
 
   console.log(`Saved attachment: ${filename} → ${docRef.id}`);
