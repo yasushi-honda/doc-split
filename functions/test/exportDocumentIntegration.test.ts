@@ -1061,11 +1061,11 @@ describe('exportDocument (ADR-0022 Phase 1)', () => {
       expect(data.driveExportRunId).to.equal('another-run-id');
     });
 
-    it('runTransaction・フォールバックのdocRef.update()の両方が失敗した場合、driveFileId喪失を防ぐため元の例外を呼び出し元へ再throwする', async () => {
+    it('runTransaction・フォールバックのdocRef.update()の両方が失敗した場合、driveExportStatusの\'exporting\'固着を防ぐため元の例外を呼び出し元へ再throwする(driveFileIdは喪失する)', async () => {
       const docId = await seedDocument();
       await seedCustomer();
       await seedDriveSettings();
-      const { drive } = makeFakeDrive({
+      const { drive, createCalls } = makeFakeDrive({
         createdIds: ['folder-office', 'folder-customer', 'exported-file-id'],
       });
       const failingFirestore = wrapFirestoreWithFailures(db, {
@@ -1085,8 +1085,10 @@ describe('exportDocument (ADR-0022 Phase 1)', () => {
         expect((error as Error).message).to.equal('simulated runTransaction failure');
       }
 
-      // Drive側の操作(フォルダ作成・ファイルアップロード)自体は実行済み(呼び出し元executeDriveExport()の
-      // エラー確定writebackがdriveExportStatus:'error'へ遷移させる、Firestore側はexportDocument()単体では未変化)
+      // Drive側の操作(フォルダ作成2件+ファイルアップロード1件)自体は実行済み(Issue #952の核心状態:
+      // Drive上には実体があるのにFirestore側は未反映)。呼び出し元executeDriveExport()の
+      // エラー確定writebackがdriveExportStatus:'error'へ遷移させる、Firestore側はexportDocument()単体では未変化
+      expect(createCalls).to.have.lengthOf(3);
       const data = (await db.doc(`documents/${docId}`).get()).data()!;
       expect(data.driveFileId).to.be.undefined;
       expect(data.driveExportStatus).to.equal('exporting'); // seedDocumentの初期値のまま(exportDocument()単体テストのためexecuteDriveExport()のエラー確定writebackは走らない)

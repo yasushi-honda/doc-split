@@ -57,7 +57,13 @@ const storage = admin.storage();
 export interface ExportDocumentDeps {
   drive: drive_v3.Drive;
   downloadFile: (fileUrl: string) => Promise<Buffer>;
-  /** Issue #952回帰テスト用: 成功時writeback transactionの失敗を合成するために注入する。省略時はモジュール既定の`db`を使う。 */
+  /**
+   * 主にIssue #952回帰テスト用: 成功時writeback transaction(docRef/runTransaction)と
+   * 顧客未確定ゲート・furigana取得の読み込みに使う。省略時はモジュール既定の`db`を使う。
+   * documentCategory解決(masters/documents参照)・findOrCreateFolder()へ渡すFirestore
+   * インスタンスは本フィールドの対象外で、常にモジュール既定の`db`を使う(fable-review
+   * セカンドオピニオン指摘、スコープ外拡張を避けるため今回は据え置き)。
+   */
   firestore: admin.firestore.Firestore;
 }
 
@@ -348,13 +354,13 @@ export async function exportDocument(
   let customerFurigana: string | undefined;
   let customerMasterName: string | null = null;
   if (doc.customerId) {
-    const customerSnap = await db.doc(`${MASTER_PATHS.customers}/${doc.customerId}`).get();
+    const customerSnap = await firestore.doc(`${MASTER_PATHS.customers}/${doc.customerId}`).get();
     const customerMaster = customerSnap.data() as CustomerMaster | undefined;
     customerFurigana = customerMaster?.furigana;
     customerMasterName = customerMaster?.name ?? null;
   }
 
-  if (await isCustomerUnconfirmed(doc, { firestore: db, customerMasterName })) {
+  if (await isCustomerUnconfirmed(doc, { firestore, customerMasterName })) {
     throw new CustomerUnconfirmedError(doc.customerName || '未判定');
   }
 
