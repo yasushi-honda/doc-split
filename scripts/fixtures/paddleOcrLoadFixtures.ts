@@ -31,15 +31,17 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import type { PDFDocument as PDFDocumentType } from 'pdf-lib';
+import { LOAD_TIERS, type LoadTier } from '../lib/paddleOcrLoad';
 
 const FIXTURE_DIR = path.join(__dirname, 'paddle-ocr-load');
 
 /** macOS開発機専用固定(理由は本ファイル冒頭コメント参照)。golden/seed-dev-dataと同一候補。 */
 const FONT_CANDIDATES = ['/System/Library/Fonts/Supplemental/Arial Unicode.ttf', '/Library/Fonts/Arial Unicode.ttf'];
 
-/** 承認済み仕様のページ数tier(~/.claude/plans/shiny-knitting-flamingo.md ゲート表) */
-export const LOAD_TIERS = [1, 20, 71, 160] as const;
-export type LoadTier = (typeof LOAD_TIERS)[number];
+// LOAD_TIERS/LoadTierの単一情報源は scripts/lib/paddleOcrLoad.ts
+// (code-reviewer指摘、2026-09-18: 以前は本ファイルで独立再宣言しており、将来tier表を
+// 変更した際に構造的型付けにより検知されずサイレントに乖離しうる状態だった)。
+export { LOAD_TIERS, type LoadTier };
 
 export function loadFixturePath(tier: LoadTier): string {
   return path.join(FIXTURE_DIR, `load_${tier}p.pdf`);

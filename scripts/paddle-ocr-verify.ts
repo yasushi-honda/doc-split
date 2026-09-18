@@ -1,12 +1,16 @@
 #!/usr/bin/env ts-node
 /**
- * ADR-0025 PR4c Stage 1: PaddleOCR Cloud Run実機の一次スクリーニング + golden再現性検証。
+ * ADR-0025 PR4c Stage 1/3: PaddleOCR Cloud Run実機の一次スクリーニング(golden再現性検証)+
+ * 実データ規模の負荷試験(load)。
  *
  * 背景: 承認済み計画(~/.claude/plans/fuzzy-moseying-book.md §4)は「6〜8秒/ページ」
  * (ローカルMac arm64のPoC実測)を前提にフル負荷試験を設計していたが、plan mode中の実測で
  * dev Cloud Run実機の`/ocr`実績が96.6秒/ページ(1桁の乖離)であることが判明した。本スクリプトは
  * その乖離の実力値を安価に確認するStage 1(`~/.claude/plans/enumerated-gliding-bengio.md`)の
- * 実装であり、`golden`モードのみを対象とする。png/load/coldモードは未実装(Stage 2/3判断待ち)。
+ * 実装として`golden`モードを持つ。`--mode=load`はStage 3
+ * (`~/.claude/plans/peaceful-strolling-squid.md`、2026-09-18)の実装で、1/20/71/160ページの
+ * 実データ規模でwarm/cold系列を実測しゲート判定する。pngモード・独立したcoldモード単体コマンドは
+ * 未実装のまま(loadモード内の`--series=cold`で代替)。
  *
  * 重要な限界(plan-crossreview: grip自白 + codex 2パスで検証済み、詳細は上記計画ファイル参照):
  * - Cloud Runは逐次リクエストでも同一インスタンスへのルーティングを保証しないため、
@@ -30,8 +34,10 @@ import * as crypto from 'crypto';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { percentile } from './lib/confirmedReplayStats';
-import { LOAD_TIERS, loadFixturePath, type LoadTier } from './fixtures/paddleOcrLoadFixtures';
+import { loadFixturePath } from './fixtures/paddleOcrLoadFixtures';
 import {
+  LOAD_TIERS,
+  type LoadTier,
   WARM_TRIALS_FULL,
   COLD_BURSTS_FULL,
   COLD_BURST_SIZE,
@@ -172,7 +178,8 @@ export function requireEnvField(content: string, key: string, envFilePathForErro
 /**
  * サービスURLを解決する。優先順位: --url > 環境変数 PADDLE_OCR_URL > scripts/clients/dev.env。
  * 解決したURLのホストが dev.env の値と一致しない場合は即エラーにする(将来kanameone/cocoroにも
- * PADDLE_OCR_URLが設定された後の誤爆防止。Stage 1はdev環境専用のため常にdev.envと一致するはず)。
+ * PADDLE_OCR_URLが設定された後の誤爆防止。PR4c(Stage 1/3、golden/loadいずれのモードも)は
+ * dev環境専用のため常にdev.envと一致するはず)。
  */
 export function resolveServiceUrl(opts: {
   explicitUrl?: string;
@@ -765,7 +772,7 @@ const LOAD_TIER_STRINGS = ['1', '20', '71', '160', 'all'] as const;
 type LoadTierArg = LoadTier | 'all';
 
 export interface CliArgs {
-  mode: string;
+  mode: 'golden' | 'load';
   url?: string;
   /** golden専用。load時は未使用(常に3のまま残るが読まれない)。 */
   repeat: number;
@@ -1382,75 +1389,96 @@ async function sendLoadPage(opts: {
     };
   }
 
-  const outcome = await sendOcrWithRetries({
-    pdfBuffer: opts.pdfBuffer,
-    serviceUrl: opts.serviceUrl,
-    tokenProvider: opts.tokenProvider,
-    policy: { maxRetries: LOAD_MAX_RETRIES, backoffMs: LOAD_INITIAL_BACKOFF_MS, retryOnTimeoutLike: true },
-    requestFn: opts.requestFn,
-    nowFn: opts.nowFn,
-  });
-
-  const withRetryMeta = { ...baseFields, retriedCount: outcome.retriedCount, authRetried: outcome.authRetried };
-
-  if (outcome.result.kind === 'timedOut') {
-    return {
-      ...withRetryMeta,
-      wallMs: outcome.elapsedMs,
-      serviceProcessingMs: null,
-      clientObservedExcessMs: null,
-      httpStatus: outcome.result.httpStatus,
-      timedOut: true,
-      failureKind: outcome.result.failureKind,
-      errorDetail: outcome.result.errorDetail,
-      fatal: false,
-    };
-  }
-  if (outcome.result.kind === 'fatal') {
-    return {
-      ...withRetryMeta,
-      wallMs: outcome.elapsedMs,
-      serviceProcessingMs: null,
-      clientObservedExcessMs: null,
-      httpStatus: outcome.result.httpStatus,
-      timedOut: false,
-      fatal: true,
-      fatalReason: outcome.result.fatalReason,
-    };
-  }
-
-  // success: 200 OK
-  let parsed: { pages?: string[]; text?: string; pageCount?: number; engine?: string; renderDpi?: number; modelVersion?: string; processingMs?: number };
+  // silent-failure-hunter指摘(Critical、2026-09-18): sendOcrWithRetries内部(特に
+  // tokenProvider.getToken()のgcloudサブプロセス呼び出し)が例外を投げた場合、これを
+  // 無保護のまま呼び出し元(runWarmTrial/runColdBurst)へ伝播させると、Promise.all等が
+  // 丸ごと失敗しそれまでに収集した実データが失われる。golden側の
+  // sendGoldenCaseWithRetries呼び出し箇所(main()内)と同じ「ケース単位の例外境界」を
+  // ここに設け、常にLoadPageRecordを返す(例外を投げない)関数にする。
   try {
-    parsed = JSON.parse(outcome.result.body);
-  } catch {
+    const outcome = await sendOcrWithRetries({
+      pdfBuffer: opts.pdfBuffer,
+      serviceUrl: opts.serviceUrl,
+      tokenProvider: opts.tokenProvider,
+      policy: { maxRetries: LOAD_MAX_RETRIES, backoffMs: LOAD_INITIAL_BACKOFF_MS, retryOnTimeoutLike: true },
+      requestFn: opts.requestFn,
+      nowFn: opts.nowFn,
+    });
+
+    const withRetryMeta = { ...baseFields, retriedCount: outcome.retriedCount, authRetried: outcome.authRetried };
+
+    if (outcome.result.kind === 'timedOut') {
+      return {
+        ...withRetryMeta,
+        wallMs: outcome.elapsedMs,
+        serviceProcessingMs: null,
+        clientObservedExcessMs: null,
+        httpStatus: outcome.result.httpStatus,
+        timedOut: true,
+        failureKind: outcome.result.failureKind,
+        errorDetail: outcome.result.errorDetail,
+        fatal: false,
+      };
+    }
+    if (outcome.result.kind === 'fatal') {
+      return {
+        ...withRetryMeta,
+        wallMs: outcome.elapsedMs,
+        serviceProcessingMs: null,
+        clientObservedExcessMs: null,
+        httpStatus: outcome.result.httpStatus,
+        timedOut: false,
+        fatal: true,
+        fatalReason: outcome.result.fatalReason,
+      };
+    }
+
+    // success: 200 OK
+    let parsed: { pages?: string[]; text?: string; pageCount?: number; engine?: string; renderDpi?: number; modelVersion?: string; processingMs?: number };
+    try {
+      parsed = JSON.parse(outcome.result.body);
+    } catch (parseErr) {
+      return {
+        ...withRetryMeta,
+        wallMs: outcome.elapsedMs,
+        serviceProcessingMs: null,
+        clientObservedExcessMs: null,
+        httpStatus: 200,
+        timedOut: false,
+        fatal: true,
+        fatalReason: `レスポンスがJSONとしてパースできませんでした(${parseErr instanceof Error ? parseErr.message : String(parseErr)}): ${outcome.result.body.slice(0, 500)}`,
+      };
+    }
+    const contractCheck = checkLoadContract(parsed, opts.expectedModelVersion);
+    const processingMs = typeof parsed.processingMs === 'number' ? parsed.processingMs : null;
+    const clientObservedExcessMs = processingMs !== null ? outcome.elapsedMs - processingMs : null;
+    const fatal = !loadContractOk(contractCheck);
+
     return {
       ...withRetryMeta,
       wallMs: outcome.elapsedMs,
-      serviceProcessingMs: null,
-      clientObservedExcessMs: null,
+      serviceProcessingMs: processingMs,
+      clientObservedExcessMs,
       httpStatus: 200,
       timedOut: false,
+      contractCheck,
+      fatal,
+      fatalReason: fatal ? `契約検証(pageCount/engine/renderDpi/modelVersion/textSelfConsistent/nonEmptyText)に失敗: ${JSON.stringify(contractCheck)}` : undefined,
+    };
+  } catch (err) {
+    return {
+      ...baseFields,
+      wallMs: 0,
+      serviceProcessingMs: null,
+      clientObservedExcessMs: null,
+      httpStatus: null,
+      retriedCount: 0,
+      authRetried: false,
+      timedOut: false,
       fatal: true,
-      fatalReason: `レスポンスがJSONとしてパースできませんでした: ${outcome.result.body.slice(0, 500)}`,
+      fatalReason: `ページ送信中に想定外の例外が発生しました(gcloudサブプロセス失敗等の疑い): ${err instanceof Error ? err.message : String(err)}`,
     };
   }
-  const contractCheck = checkLoadContract(parsed, opts.expectedModelVersion);
-  const processingMs = typeof parsed.processingMs === 'number' ? parsed.processingMs : null;
-  const clientObservedExcessMs = processingMs !== null ? outcome.elapsedMs - processingMs : null;
-  const fatal = !loadContractOk(contractCheck);
-
-  return {
-    ...withRetryMeta,
-    wallMs: outcome.elapsedMs,
-    serviceProcessingMs: processingMs,
-    clientObservedExcessMs,
-    httpStatus: 200,
-    timedOut: false,
-    contractCheck,
-    fatal,
-    fatalReason: fatal ? `契約検証(pageCount/engine/renderDpi/modelVersion/textSelfConsistent/nonEmptyText)に失敗: ${JSON.stringify(contractCheck)}` : undefined,
-  };
 }
 
 async function pollHealthUntilOk(serviceUrl: string, tokenProvider: IdTokenProvider): Promise<void> {
@@ -1554,8 +1582,10 @@ async function runWarmSeries(opts: {
   let circuit = initialCircuitState();
 
   // warm系列1trial目はmin-instances=0により実質cold startを含むため、統計から除外する
-  // 破棄用ウォームアップリクエストを1件送る(成否は問わない)。
-  await sendLoadPage({
+  // 破棄用ウォームアップリクエストを1件送る(成否は問わない)。sendLoadPage自体は例外を
+  // 投げない設計だが、万一の想定外例外にも備えて.catchは残しつつ、silent-failure-hunter
+  // 指摘(Medium)を踏まえログだけは残す(完全な無言破棄は早期診断シグナルを失うため)。
+  const warmupResult = await sendLoadPage({
     series: 'warm',
     trial: -1,
     pageIndex: 0,
@@ -1564,7 +1594,15 @@ async function runWarmSeries(opts: {
     tokenProvider: opts.tokenProvider,
     expectedModelVersion: opts.expectedModelVersion,
     requestFn: opts.requestFn,
-  }).catch(() => undefined);
+  }).catch((err) => {
+    console.warn('破棄用ウォームアップリクエストが想定外の例外で失敗しました(統計には影響しません):', err);
+    return undefined;
+  });
+  if (warmupResult?.fatal || warmupResult?.timedOut) {
+    console.warn(
+      `破棄用ウォームアップリクエストが失敗しました(統計には影響しません): fatal=${warmupResult.fatal} timedOut=${warmupResult.timedOut} reason=${warmupResult.fatalReason ?? warmupResult.errorDetail ?? 'unknown'}`
+    );
+  }
 
   for (let trialIndex = 0; trialIndex < opts.expectedWarmTrials; trialIndex++) {
     if (Date.now() > opts.budgetDeadlineMs) {
@@ -1621,9 +1659,34 @@ async function runColdBurst(opts: {
       requestFn: opts.requestFn,
     });
   // concurrency=1のため、既存インスタンスで捌けない分は新規起動(真のcold start)を強制する
-  // (2026-09-18再設計、詳細は計画書「cold測定の再設計」節参照)。
-  const pages = await Promise.all(Array.from({ length: COLD_BURST_SIZE }, (_, i) => sendOne(i)));
-  const coldCandidateMs = Math.max(...pages.map((p) => p.wallMs));
+  // (2026-09-18再設計、詳細は計画書「cold測定の再設計」節参照)。sendLoadPageは例外を
+  // 投げない設計だが、defense-in-depthとしてPromise.allSettledを使う(silent-failure-hunter
+  // 指摘: Promise.allだと1件の異常拒否で残り2件の実測結果が失われる)。
+  const settled = await Promise.allSettled(Array.from({ length: COLD_BURST_SIZE }, (_, i) => sendOne(i)));
+  const pages = settled.map((s, i) =>
+    s.status === 'fulfilled'
+      ? s.value
+      : ({
+          series: 'cold' as const,
+          trial: opts.burstIndex,
+          pageIndex: i,
+          wallMs: 0,
+          serviceProcessingMs: null,
+          clientObservedExcessMs: null,
+          httpStatus: null,
+          retriedCount: 0,
+          authRetried: false,
+          timedOut: false,
+          fatal: true,
+          fatalReason: `バースト内リクエストが想定外の例外で拒否されました: ${s.reason instanceof Error ? s.reason.message : String(s.reason)}`,
+        } satisfies LoadPageRecord)
+  );
+  // Fable 5.1レビュー指摘(M2、2026-09-18): バースト内に失敗ページがあるまま
+  // Math.max(wallMs)を取ると、失敗が速く返った場合にcoldCandidateMsが実態より小さく
+  // 見え、tier1ゲート(coldMax<=30秒)が誤ってPASSしうる。失敗ページが1件でもあれば
+  // +Infinityとして扱う(warm系列p95の右側打ち切りと同じ思想)。
+  const anyFailed = pages.some((p) => p.fatal || p.timedOut);
+  const coldCandidateMs = anyFailed ? Number.POSITIVE_INFINITY : Math.max(...pages.map((p) => p.wallMs));
   return { burstIndex: opts.burstIndex, pages, coldCandidateMs };
 }
 
@@ -1634,9 +1697,18 @@ async function runColdSeries(opts: {
   tokenProvider: IdTokenProvider;
   expectedModelVersion: string;
   requestFn: OcrRequestFn;
+  budgetDeadlineMs: number;
 }): Promise<ColdBurstRecord[]> {
   const bursts: ColdBurstRecord[] = [];
   for (let i = 0; i < opts.expectedColdBursts; i++) {
+    // silent-failure-hunter指摘(High、2026-09-18): warm系列がtier別budget-minutesの
+    // 大半を消費した場合、runColdSeriesに打ち切り判定が無いとGHAのtimeout-minutes自体で
+    // 強制SIGKILLされ、レポートが一切書き出されないまま終わる(runWarmSeriesには
+    // 既に同種のbudgetDeadlineMsチェックがある)。
+    if (Date.now() > opts.budgetDeadlineMs) {
+      console.warn(`実行時間の予算を超過したため、残りのcoldバーストを打ち切ります。収集済み${bursts.length}件のバーストでレポートを生成します。`);
+      return bursts;
+    }
     if (i > 0) {
       await sleep(COLD_BURST_COOLDOWN_MS);
     }
@@ -1727,6 +1799,7 @@ async function runLoadModeSingleTier(opts: {
       tokenProvider,
       expectedModelVersion: opts.expectedModelVersion,
       requestFn,
+      budgetDeadlineMs: opts.budgetDeadlineMs,
     });
   }
 
@@ -1746,11 +1819,14 @@ async function runLoadModeSingleTier(opts: {
     serviceSnapshotWarmEnd,
     warmTrials,
     coldBursts,
-    // warm系列を実行していない run(--series=cold単独)では、参考値のtrialCompletionRateが
-    // 「0/期待値=0%」という誤解を招く表示にならないよう0を渡す(computeTrialCompletionRate側の
-    // 早期return null経路に載せる。ゲート判定自体はkind/metricで既にcoldMax/warmP95を
-    // 正しく使い分けているため、このexpectedWarmTrialsの扱いはreference表示にのみ影響する)。
-    expectedWarmTrials: seriesExecuted.includes('warm') ? warmTrialsExpected : 0,
+    // Fable 5.1レビュー指摘(H1、2026-09-18): ここを0にすると evaluateLoadGate の
+    // hasSufficientWarmSamples(= warmTrialsForStats.length >= expectedWarmTrials)が
+    // 0>=0でtrueになり、「標本数不足→NOT_EVALUATED」判定を素通りしてしまう
+    // (--series=cold単独・intensity=fullでtier1のcoldMaxが基準内でも誤ってFAILになる)。
+    // 常に実測の期待値を渡す。「--series=cold単独時にtrialCompletionRateが0%と誤解を招く
+    // 表示になる」問題は computeTrialCompletionRate 側で trials.length===0 を早期return null
+    // する形で解消する(ゲート判定のsufficiency計算には影響しない)。
+    expectedWarmTrials: warmTrialsExpected,
     expectedColdBursts: coldBurstsExpected,
     abortedReason,
   });
@@ -1795,22 +1871,38 @@ async function main(): Promise<void> {
 
       if (args.tier === 'all') {
         // quick専用: 4tier全てを1ジョブで疎通確認する(Phase A step4相当)。
-        const tierReports = {} as Record<LoadTier, LoadReport>;
-        for (const t of LOAD_TIERS) {
-          tierReports[t] = await runLoadModeSingleTier({
-            tier: t,
-            seriesArg,
-            intensity: 'quick',
-            injectFailureAtPage: args.injectFailureAtPage,
-            budgetDeadlineMs,
-            projectId,
-            region,
-            serviceUrl,
-            expectedModelVersion,
-          });
+        // pr-test-analyzer指摘(2026-09-18): このループの外側で例外を投げると、main()の
+        // トップレベルcatchは`args.tier !== 'all'`をload skeletonの条件にしているため
+        // tier=allのrunはgolden用の空レポート形状で書き出されてしまう(「if: always()で
+        // 必ず測定結果を回収する」という設計意図に反する)。ループ全体を専用try/catchで囲み、
+        // 既に収集済みのtierレポートを保持したまま、正しい形状(mode:'load')で書き出す。
+        const tierReports = {} as Partial<Record<LoadTier, LoadReport>>;
+        try {
+          for (const t of LOAD_TIERS) {
+            tierReports[t] = await runLoadModeSingleTier({
+              tier: t,
+              seriesArg,
+              intensity: 'quick',
+              injectFailureAtPage: args.injectFailureAtPage,
+              budgetDeadlineMs,
+              projectId,
+              region,
+              serviceUrl,
+              expectedModelVersion,
+            });
+          }
+        } catch (tierErr) {
+          exitCode = 1;
+          const fatalError = tierErr instanceof Error ? `${tierErr.message}\n${tierErr.stack ?? ''}` : String(tierErr);
+          const completedTiers = LOAD_TIERS.filter((t) => tierReports[t] !== undefined);
+          const md =
+            `## PaddleOCR PR4c Stage 3: load tier=all(quick)が途中で失敗しました\n\n` +
+            `完了済みtier: ${completedTiers.join(', ') || 'なし'}\n\nエラー: ${fatalError}`;
+          writeJsonAndSummary({ schemaVersion: 1, mode: 'load', intensity: 'quick', tiers: tierReports, fatalError }, md, args.out);
+          return;
         }
-        exitCode = Math.max(...LOAD_TIERS.map((t) => determineLoadExitCode(tierReports[t]))) as 0 | 1;
-        const combinedMd = LOAD_TIERS.map((t) => buildLoadStepSummaryMarkdown(tierReports[t])).join('\n\n---\n\n');
+        exitCode = Math.max(...LOAD_TIERS.map((t) => determineLoadExitCode(tierReports[t] as LoadReport))) as 0 | 1;
+        const combinedMd = LOAD_TIERS.map((t) => buildLoadStepSummaryMarkdown(tierReports[t] as LoadReport)).join('\n\n---\n\n');
         writeJsonAndSummary({ schemaVersion: 1, mode: 'load', intensity: 'quick', tiers: tierReports }, combinedMd, args.out);
         return;
       }
@@ -1950,11 +2042,8 @@ async function main(): Promise<void> {
       writeJsonAndSummary(report, buildLoadStepSummaryMarkdown(report), outPath);
     } else {
       const outPath = args?.out ?? path.join(process.cwd(), 'paddle-ocr-verify-golden.json');
-      writeJsonAndSummary(
-        emptyReportSkeleton(startedAt, new Date().toISOString(), args?.url ?? 'unresolved', fatalError),
-        buildStepSummaryMarkdown(emptyReportSkeleton(startedAt, new Date().toISOString(), args?.url ?? 'unresolved', fatalError)),
-        outPath
-      );
+      const report = emptyReportSkeleton(startedAt, new Date().toISOString(), args?.url ?? 'unresolved', fatalError);
+      writeJsonAndSummary(report, buildStepSummaryMarkdown(report), outPath);
     }
     console.error(err);
   }

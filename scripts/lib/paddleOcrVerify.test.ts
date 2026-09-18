@@ -27,6 +27,7 @@ import {
   parseArgs,
   sha256File,
   sendGoldenCaseWithRetries,
+  sendOcrWithRetries,
   GATE_THRESHOLDS_SECONDS,
   type GoldenManifest,
   type GoldenRequestRecord,
@@ -621,6 +622,93 @@ test('sendGoldenCaseWithRetries: 401→トークン再発行後も403が続け�
   assert.match(record.fatalReason ?? '', /認可設定/);
 });
 
+// ---------------------------------------------------------------------------
+// sendOcrWithRetries: retryOnTimeoutLike:true(load方針)の専用パス
+// (pr-test-analyzer/Fable 5.1/code-reviewer共通指摘、2026-09-18: goldenの
+// retryOnTimeoutLike:falseパスは既存88テストで網羅済みだが、load専用の
+// retryOnTimeoutLike:trueパス(本番RETRY_CONFIGS.paddleOcrと整合させた新規ロジック)には
+// テストが一件もなかった)
+// ---------------------------------------------------------------------------
+
+test('sendOcrWithRetries: retryOnTimeoutLike=trueならclientTimeoutをリトライし、最終的に成功する', async () => {
+  const requestFn = queueRequestFn([
+    { status: null, body: null, wallMs: 250000, kind: 'timeout' },
+    { status: 200, body: successBody(), wallMs: 50, kind: 'success' },
+  ]);
+  const outcome = await sendOcrWithRetries({
+    pdfBuffer: Buffer.from('dummy'),
+    serviceUrl: 'https://x',
+    tokenProvider: fakeTokenProvider(),
+    policy: { maxRetries: 3, backoffMs: 1, retryOnTimeoutLike: true },
+    requestFn,
+  });
+  assert.equal(outcome.result.kind, 'success');
+  assert.equal(outcome.retriedCount, 1);
+});
+
+test('sendOcrWithRetries: retryOnTimeoutLike=trueでもmaxRetries超過後はtimedOutで確定する', async () => {
+  const requestFn = queueRequestFn(
+    Array.from({ length: 4 }, () => ({ status: null, body: null, wallMs: 1000, kind: 'timeout' as const }))
+  );
+  const outcome = await sendOcrWithRetries({
+    pdfBuffer: Buffer.from('dummy'),
+    serviceUrl: 'https://x',
+    tokenProvider: fakeTokenProvider(),
+    policy: { maxRetries: 3, backoffMs: 1, retryOnTimeoutLike: true },
+    requestFn,
+  });
+  assert.equal(outcome.result.kind, 'timedOut');
+  assert.equal(outcome.retriedCount, 3);
+  if (outcome.result.kind === 'timedOut') {
+    assert.equal(outcome.result.failureKind, 'clientTimeout');
+  }
+});
+
+test('sendOcrWithRetries: retryOnTimeoutLike=trueならnetworkErrorをリトライし、最終的に成功する', async () => {
+  const requestFn = queueRequestFn([
+    { status: null, body: null, wallMs: 100, kind: 'networkError', errorDetail: 'ECONNRESET' },
+    { status: 200, body: successBody(), wallMs: 50, kind: 'success' },
+  ]);
+  const outcome = await sendOcrWithRetries({
+    pdfBuffer: Buffer.from('dummy'),
+    serviceUrl: 'https://x',
+    tokenProvider: fakeTokenProvider(),
+    policy: { maxRetries: 3, backoffMs: 1, retryOnTimeoutLike: true },
+    requestFn,
+  });
+  assert.equal(outcome.result.kind, 'success');
+  assert.equal(outcome.retriedCount, 1);
+});
+
+test('sendOcrWithRetries: retryOnTimeoutLike=trueなら504をリトライし、最終的に成功する(本番RETRY_CONFIGS.paddleOcrとの整合)', async () => {
+  const requestFn = queueRequestFn([
+    { status: 504, body: '{"error":{"code":"PROCESSING_TIMEOUT"}}', wallMs: 100, kind: 'success' },
+    { status: 200, body: successBody(), wallMs: 50, kind: 'success' },
+  ]);
+  const outcome = await sendOcrWithRetries({
+    pdfBuffer: Buffer.from('dummy'),
+    serviceUrl: 'https://x',
+    tokenProvider: fakeTokenProvider(),
+    policy: { maxRetries: 3, backoffMs: 1, retryOnTimeoutLike: true },
+    requestFn,
+  });
+  assert.equal(outcome.result.kind, 'success');
+  assert.equal(outcome.retriedCount, 1);
+});
+
+test('sendOcrWithRetries: retryOnTimeoutLike=falseなら(golden方針)clientTimeoutは即timedOutでリトライしない(既存挙動の対比確認)', async () => {
+  const requestFn = queueRequestFn([{ status: null, body: null, wallMs: 250000, kind: 'timeout' }]);
+  const outcome = await sendOcrWithRetries({
+    pdfBuffer: Buffer.from('dummy'),
+    serviceUrl: 'https://x',
+    tokenProvider: fakeTokenProvider(),
+    policy: { maxRetries: 3, backoffMs: 1, retryOnTimeoutLike: false },
+    requestFn,
+  });
+  assert.equal(outcome.result.kind, 'timedOut');
+  assert.equal(outcome.retriedCount, 0);
+});
+
 test('sendGoldenCaseWithRetries: 200だがJSONパース不能な場合はレスポンス本文を含めてfatal', async () => {
   const requestFn = queueRequestFn([{ status: 200, body: '<html>Bad Gateway</html>', wallMs: 100, kind: 'success' }]);
   const record = await sendGoldenCaseWithRetries(SAMPLE_CASE, 0, 0, 'https://x', SAMPLE_MODEL_VERSION, fakeTokenProvider(), requestFn);
@@ -1208,4 +1296,72 @@ test('parseArgs: --repeatが実用上の上限(20)を超える場合はエラー
 test('parseArgs: --repeatが上限ちょうど(20)なら受理する(境界値)', () => {
   const args = parseArgs(['--repeat=20']);
   assert.equal(args.repeat, 20);
+});
+
+// ---------------------------------------------------------------------------
+// parseArgs: --mode=load(pr-test-analyzer/Fable 5.1指摘、2026-09-18: load分岐は
+// オーケストレーション層(main())からしか呼ばれずテストが一件も無かった)
+// ---------------------------------------------------------------------------
+
+test('parseArgs: --mode=load --tier=1 は既定でseries=both, intensity=fullになる', () => {
+  const args = parseArgs(['--mode=load', '--tier=1']);
+  assert.equal(args.mode, 'load');
+  assert.equal(args.tier, 1);
+  assert.equal(args.series, 'both');
+  assert.equal(args.intensity, 'full');
+});
+
+test('parseArgs: --mode=load は --tier必須(未指定はエラー)', () => {
+  assert.throws(() => parseArgs(['--mode=load']));
+});
+
+test('parseArgs: --mode=load --tier=999(未対応tier)はエラー', () => {
+  assert.throws(() => parseArgs(['--mode=load', '--tier=999']));
+});
+
+test('parseArgs: --mode=load --tier=all は --intensity=quick 併用時のみ受理する', () => {
+  const args = parseArgs(['--mode=load', '--tier=all', '--intensity=quick']);
+  assert.equal(args.tier, 'all');
+  assert.equal(args.intensity, 'quick');
+  assert.throws(() => parseArgs(['--mode=load', '--tier=all', '--intensity=full']));
+  assert.throws(() => parseArgs(['--mode=load', '--tier=all']));
+});
+
+test('parseArgs: --mode=load --series は warm|cold|both 以外だとエラー', () => {
+  assert.throws(() => parseArgs(['--mode=load', '--tier=1', '--series=invalid']));
+  const args = parseArgs(['--mode=load', '--tier=1', '--series=cold']);
+  assert.equal(args.series, 'cold');
+});
+
+test('parseArgs: --mode=load --intensity は full|quick 以外だとエラー', () => {
+  assert.throws(() => parseArgs(['--mode=load', '--tier=1', '--intensity=invalid']));
+});
+
+test('parseArgs: --mode=load は --repeat と併用できない(golden専用オプション)', () => {
+  assert.throws(() => parseArgs(['--mode=load', '--tier=1', '--repeat=3']));
+});
+
+test('parseArgs: --mode=golden は load専用オプション(tier/series/intensity/inject-failure-at-page)と併用できない', () => {
+  assert.throws(() => parseArgs(['--mode=golden', '--tier=1']));
+  assert.throws(() => parseArgs(['--mode=golden', '--series=warm']));
+  assert.throws(() => parseArgs(['--mode=golden', '--intensity=quick']));
+  assert.throws(() => parseArgs(['--mode=golden', '--inject-failure-at-page=3']));
+});
+
+test('parseArgs: --inject-failure-at-page は1以上の整数のみ受理する', () => {
+  const args = parseArgs(['--mode=load', '--tier=1', '--inject-failure-at-page=3']);
+  assert.equal(args.injectFailureAtPage, 3);
+  assert.throws(() => parseArgs(['--mode=load', '--tier=1', '--inject-failure-at-page=0']));
+  assert.throws(() => parseArgs(['--mode=load', '--tier=1', '--inject-failure-at-page=abc']));
+});
+
+test('parseArgs: --mode=load --budget-minutes未指定時はtier別既定値が使われる(71pのみ他tierより大きい)', () => {
+  const tier1 = parseArgs(['--mode=load', '--tier=1']);
+  const tier71 = parseArgs(['--mode=load', '--tier=71']);
+  assert.ok(tier71.budgetMs > tier1.budgetMs);
+});
+
+test('parseArgs: --mode=load --budget-minutesを明示指定すればtier既定値を上書きする', () => {
+  const args = parseArgs(['--mode=load', '--tier=1', '--budget-minutes=5']);
+  assert.equal(args.budgetMs, 5 * 60 * 1000);
 });

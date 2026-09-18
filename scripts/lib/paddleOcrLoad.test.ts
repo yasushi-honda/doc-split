@@ -250,12 +250,6 @@ test('summarizeWarmTrials: 未完走trialは右側打ち切り(+Infinity)とし�
   assert.equal(summary!.p95Ms, Number.POSITIVE_INFINITY);
 });
 
-test('summarizeWarmTrials: warmupDiscardedは呼び出し側でフィルタする想定(この関数自体はフィルタしない)', () => {
-  const trials = [makeTrial({ pagesPlanned: 1, totalWallMs: 9999, warmupDiscarded: true }), makeTrial({ pagesPlanned: 1, totalWallMs: 100 })];
-  const summary = summarizeWarmTrials(trials);
-  assert.equal(summary!.n, 2);
-});
-
 test('summarizeWarmTrials: 空配列はnull', () => {
   assert.equal(summarizeWarmTrials([]), null);
 });
@@ -431,6 +425,76 @@ test('evaluateLoadGate: 1ページ、coldMaxが30秒超過でFAIL', () => {
     expectedColdBursts: 5,
   });
   assert.equal(gate.verdict, 'FAIL');
+});
+
+test('evaluateLoadGate: H1回帰(2026-09-18) — series=cold単独実行(warmTrials=[])でも、expectedWarmTrialsに実際の期待値を渡せばNOT_EVALUATEDになる(FAILにならない)', () => {
+  // warm系列を実行していない(--series=cold単独)ケース。expectedWarmTrialsを実測の
+  // 期待値(30)のまま渡すのが正しい実装(以前は誤って0を渡しており、
+  // hasSufficientWarmSamples = 0 >= 0 = true ですり抜けてFAILになっていた)。
+  const cold = [makeColdBurst(9000, 0)];
+  const gate = evaluateLoadGate({
+    tier: 1,
+    intensity: 'full',
+    warmTrials: [],
+    coldBursts: cold,
+    expectedWarmTrials: 30,
+    expectedColdBursts: 1,
+  });
+  assert.equal(gate.verdict, 'NOT_EVALUATED');
+  assert.match(gate.verdictReason, /標本数が不足/);
+});
+
+test('evaluateLoadGate: H1回帰(2026-09-18) — expectedWarmTrials=0を渡すと(誤実装時)標本数不足チェックをすり抜けてFAILになることの確認(退行防止の反証テスト)', () => {
+  // このテスト自体は「誤実装ならFAILになる」ことを確認するものではなく、正しい実装
+  // (expectedWarmTrials=実測値)では発生し得ないことをコメントで明示するために残す。
+  // 実際のオーケストレーション層(runLoadModeSingleTier)側の回帰防止は上のテストで担保する。
+  const cold = [makeColdBurst(9000, 0)];
+  const gateWithZero = evaluateLoadGate({
+    tier: 1,
+    intensity: 'full',
+    warmTrials: [],
+    coldBursts: cold,
+    expectedWarmTrials: 0,
+    expectedColdBursts: 1,
+  });
+  assert.equal(gateWithZero.verdict, 'FAIL');
+});
+
+test('computeTrialCompletionRate: trials.length===0の場合、expectedWarmTrialsの値に関わらずnull(H1関連の副修正)', () => {
+  assert.equal(computeTrialCompletionRate([], 30), null);
+  assert.equal(computeTrialCompletionRate([], 0), null);
+});
+
+test('evaluateLoadGate: coldバースト内に失敗ページがあればcoldCandidateMsはInfinity扱いでFAIL(M2、2026-09-18)', () => {
+  const warm = Array.from({ length: 30 }, (_, i) => makeTrial({ pagesPlanned: 1, totalWallMs: 5000, trial: i }));
+  const failedPage: LoadPageRecord = {
+    series: 'cold',
+    trial: 0,
+    pageIndex: 1,
+    wallMs: 500,
+    serviceProcessingMs: null,
+    clientObservedExcessMs: null,
+    httpStatus: null,
+    retriedCount: 0,
+    authRetried: false,
+    timedOut: false,
+    fatal: true,
+    fatalReason: 'テスト用の強制失敗',
+  };
+  const cold: ColdBurstRecord[] = [{ burstIndex: 0, pages: [failedPage], coldCandidateMs: Number.POSITIVE_INFINITY }];
+  const gate = evaluateLoadGate({
+    tier: 1,
+    intensity: 'full',
+    warmTrials: warm,
+    coldBursts: cold,
+    expectedWarmTrials: 30,
+    expectedColdBursts: 1,
+  });
+  assert.equal(gate.actualSeconds, null);
+  assert.equal(gate.reference.coldMaxMs, null);
+  assert.deepEqual(gate.reference.coldCandidatesMs, [null]);
+  assert.equal(gate.verdict, 'FAIL');
+  assert.match(gate.verdictReason, /coldバースト内に失敗ページ/);
 });
 
 test('evaluateLoadGate: p95がInfinity(右側打ち切り)の場合、actualSecondsはnullでFAIL', () => {

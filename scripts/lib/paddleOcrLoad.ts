@@ -242,8 +242,6 @@ export interface LoadTrialRecord {
   firstFailure?: { pageIndex: number; kind: PageFailureKind; detail?: string };
   startedAt: string;
   finishedAt: string;
-  /** warm系列1trial目の破棄用ウォームアップリクエストの場合true(統計から除外)。 */
-  warmupDiscarded?: boolean;
 }
 
 export interface ColdBurstRecord {
@@ -288,7 +286,11 @@ export function computePageCompletionRate(trials: readonly LoadTrialRecord[]): n
 }
 
 export function computeTrialCompletionRate(trials: readonly LoadTrialRecord[], expectedWarmTrials: number): number | null {
-  if (expectedWarmTrials === 0) return null;
+  // trials.length===0(warm系列を実行していない、または未着手)の場合はexpectedWarmTrialsの
+  // 値に関わらずnullを返す。expectedWarmTrials自体は evaluateLoadGate の標本数不足判定
+  // (hasSufficientWarmSamples)にも使われるため、ここで0に丸めてはならない(Fable 5.1
+  // レビュー指摘H1、2026-09-18)。
+  if (trials.length === 0 || expectedWarmTrials === 0) return null;
   const completed = trials.filter((t) => t.completed).length;
   return completed / expectedWarmTrials;
 }
@@ -313,7 +315,9 @@ export interface LoadGateEntry {
     warmP50Ms: number | null;
     warmP95Ms: number | null;
     warmN: number;
-    coldCandidatesMs: number[];
+    /** バースト内失敗によりPOSITIVE_INFINITYになった要素はnullとしてJSON安全化する
+     * (JSON.stringifyはInfinityを無言でnullにするため、意図してnull化したことを明示する)。 */
+    coldCandidatesMs: (number | null)[];
     coldMaxMs: number | null;
     trialCompletionRate: number | null;
   };
@@ -330,10 +334,14 @@ export function evaluateLoadGate(input: {
   expectedColdBursts: number;
 }): LoadGateEntry {
   const spec = LOAD_GATES[input.tier];
-  const warmTrialsForStats = input.warmTrials.filter((t) => !t.warmupDiscarded);
+  // 破棄用ウォームアップリクエストはそもそもLoadTrialRecord化されない(オーケストレーション層
+  // が単発リクエストとして送信し、trial配列に含めない設計)ため、ここでのフィルタは不要。
+  const warmTrialsForStats = input.warmTrials;
   const warmSummary = summarizeWarmTrials(warmTrialsForStats);
-  const coldCandidatesMs = input.coldBursts.map((b) => b.coldCandidateMs);
-  const coldMaxMs = coldCandidatesMs.length > 0 ? Math.max(...coldCandidatesMs) : null;
+  // ゲート判定(actualMs)にはPOSITIVE_INFINITYを含む生の値を使う(バースト内失敗を
+  // レイテンシ超過と同様にFAIL側へ倒すため)。JSON出力用のreferenceだけ後段でnull化する。
+  const rawColdCandidatesMs = input.coldBursts.map((b) => b.coldCandidateMs);
+  const coldMaxMs = rawColdCandidatesMs.length > 0 ? Math.max(...rawColdCandidatesMs) : null;
   const pageCompletionRate = computePageCompletionRate(warmTrialsForStats);
   const trialCompletionRate = computeTrialCompletionRate(warmTrialsForStats, input.expectedWarmTrials);
 
@@ -341,8 +349,8 @@ export function evaluateLoadGate(input: {
     warmP50Ms: warmSummary && Number.isFinite(warmSummary.p50Ms) ? warmSummary.p50Ms : null,
     warmP95Ms: warmSummary && Number.isFinite(warmSummary.p95Ms) ? warmSummary.p95Ms : null,
     warmN: warmSummary?.n ?? 0,
-    coldCandidatesMs,
-    coldMaxMs,
+    coldCandidatesMs: rawColdCandidatesMs.map((v) => (Number.isFinite(v) ? v : null)),
+    coldMaxMs: coldMaxMs !== null && Number.isFinite(coldMaxMs) ? coldMaxMs : null,
     trialCompletionRate,
   };
 
@@ -409,7 +417,11 @@ export function evaluateLoadGate(input: {
   const verdict: LoadVerdict = latencyOk && completionOk ? 'PASS' : 'FAIL';
   const reasonParts: string[] = [];
   if (!Number.isFinite(actualMs)) {
-    reasonParts.push('warm系列のp95が右側打ち切り(未完走trialを含む)により算出不能(=無限大)でした');
+    reasonParts.push(
+      spec.metric === 'coldMax'
+        ? 'coldバースト内に失敗ページがあり、coldCandidateMsが算出不能(=無限大)でした'
+        : 'warm系列のp95が右側打ち切り(未完走trialを含む)により算出不能(=無限大)でした'
+    );
   } else if (!latencyOk) {
     reasonParts.push(`レイテンシ${(actualMs / 1000).toFixed(1)}秒が基準${spec.latencySeconds}秒を超過`);
   }
