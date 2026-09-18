@@ -357,10 +357,17 @@ jobs:
           # Functionsから到達不能になる。善意の「internalの方が安全」という
           # 後日修正を防ぐため明記する。
           #
-          # probe値(startup 120秒窓・liveness 300秒窓)はPR4b時点では暫定値。
-          # Cloud Run実機での単一ページ処理時間の実測(このワークフロー実行後、
-          # 下記Verifyステップで記録)を踏まえ、PR4c完了後に最終値を確定する
+          # probe値(startup 120秒窓・liveness 300秒窓)はPhase B実測(2026-09-18、
+          # 1ページwarm p95=9.26秒・cold最大33.4秒)を踏まえ300秒で確定済み
           # (services/paddle-ocr/README.md「Cloud Run liveness probe」節参照)。
+          #
+          # --min-instances=1の理由: 1ページのcold start変動(Issue #966)への
+          # 緩和策。常時1インスタンスを起動状態に保つことで、孤立した単発リクエスト
+          # (実運用の主要パターン)のcold start(実測最大33.4秒)を解消する。
+          # ただしGmail添付ポーリング由来のバースト到達(複数文書がほぼ同時に
+          # onCreateされるケース)では2件目以降のスケールアウト起動までは救えない
+          # (Issue #966に残課題として記録)。「0に戻せばコスト削減」という
+          # 善意の後日修正を防ぐため明記する。dev/kanameone/cocoro全環境で共通適用。
           gcloud run deploy paddle-ocr \
             --image="$IMAGE_DIGEST" \
             --region="$CLOUD_RUN_LOCATION" \
@@ -371,7 +378,7 @@ jobs:
             --cpu=4 \
             --memory=4Gi \
             --concurrency=1 \
-            --min-instances=0 \
+            --min-instances=1 \
             --max-instances=3 \
             --timeout=300 \
             --cpu-boost \
