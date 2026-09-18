@@ -371,7 +371,7 @@ jobs:
             --cpu=4 \
             --memory=4Gi \
             --concurrency=1 \
-            --min-instances=0 \
+            --min-instances=1 \
             --max-instances=3 \
             --timeout=300 \
             --cpu-boost \
