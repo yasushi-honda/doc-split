@@ -1,0 +1,44 @@
+displayName: "[__ENV__] processocr_stalled: OCR processing (polling) completed ログが20分間出現しない"
+documentation:
+  content: |
+    ADR-0025 PR6でprocessOCR(Cloud Scheduler、1分間隔)にconcurrency:1を導入し、
+    tick重複(同一インスタンス内での並行実行)を防止した。この変更により、
+    リクエストがCloud Run基盤側でキューイングされ続けるケースや、想定外の
+    例外による処理停止など、原因を問わず「OCR処理が実質止まっている」状態を
+    検知する必要がある。
+
+    `OCR processing (polling) completed`(processOCR.ts、正常終了時に必ず出力)
+    ログが20分間出現しない場合、OCR処理パイプライン全体が停止している可能性が
+    高い。閾値は「正当に処理が長引いているだけ」を誤検知しないよう、
+    PROCESS_OCR_TIMEOUT_SECONDS(900秒、ADR-0023)を基準に決めている:
+    concurrency:1下では1サイクルが最大900秒かかり得て、かつ次のtickが
+    処理されるまで最大60秒(ポーリング間隔)待つため、正常な完了ログ間隔は
+    最大960秒(16分)まで伸びうる。20分(1200秒)はこの最大960秒に十分な
+    マージンを載せた値。
+
+    `processocr_completed`メトリクスは、上記の正常完了ログに加えて
+    `[maintenanceGate] groupAggregation gate closed`(ADR-0019のメンテナンス
+    ゲート閉鎖によるOCR確定処理skip、実績で最大約25分・ドレイン待機20分)も
+    heartbeatとしてカウントする。ゲート閉鎖は正当な運用操作であり、これを
+    誤検知させないため。
+
+    対応: Cloud Loggingでprocessocr関連のエラーログを確認し、原因を特定する。
+    本アラート発火前の早期兆候として、`OCR processing (polling) completed`の
+    ログ間隔がポーリング間隔(1分)より明らかに伸びていないか(tick滞留の兆候)も
+    合わせて確認するとよい。Issue #966 / ADR-0023 / ADR-0025 PR6参照。
+  mimeType: "text/markdown"
+combiner: OR
+conditions:
+  - displayName: "processocr_completed ログ欠落 20分"
+    conditionAbsent:
+      filter: 'metric.type="logging.googleapis.com/user/processocr_completed" AND resource.type="cloud_run_revision"'
+      aggregations:
+        - alignmentPeriod: 60s
+          perSeriesAligner: ALIGN_COUNT
+      duration: 1200s
+alertStrategy:
+  autoClose: 86400s
+userLabels:
+  source: docsplit-monitoring-setup
+notificationChannels:
+  - __NOTIFICATION_CHANNEL__

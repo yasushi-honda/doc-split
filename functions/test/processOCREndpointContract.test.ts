@@ -35,10 +35,14 @@ import {
 
 const PROCESS_OCR_SOURCE_PATH = 'src/ocr/processOCR.ts';
 const MIGRATE_SCRIPT_PATH = '../../scripts/migrate-document-groups.js';
+const STALLED_ALERT_TEMPLATE_PATH =
+  '../../scripts/monitoring-templates/alert-processocr-stalled.yaml';
 const ON_SCHEDULE_ANCHOR = /export\s+const\s+processOCR\s*=\s*onSchedule\s*\(/;
+const SCHEDULE_INTERVAL_SECONDS = 60;
 
 let optionsBlock = '';
 let migrateScriptSource = '';
+let stalledAlertTemplateSource = '';
 
 describe('processOCR endpoint contract (ADR-0023)', () => {
   before(() => {
@@ -63,6 +67,12 @@ describe('processOCR endpoint contract (ADR-0023)', () => {
       throw new Error(`Source file not found: ${MIGRATE_SCRIPT_PATH}`);
     }
     migrateScriptSource = readFileSync(migratePath, 'utf-8');
+
+    const stalledAlertPath = resolve(__dirname, STALLED_ALERT_TEMPLATE_PATH);
+    if (!existsSync(stalledAlertPath)) {
+      throw new Error(`Source file not found: ${STALLED_ALERT_TEMPLATE_PATH}`);
+    }
+    stalledAlertTemplateSource = readFileSync(stalledAlertPath, 'utf-8');
   });
 
   it('schedule: "every 1 minutes"', () => {
@@ -79,6 +89,10 @@ describe('processOCR endpoint contract (ADR-0023)', () => {
 
   it('maxInstances: 1 (non-transactional read-then-write の前提)', () => {
     expect(optionsBlock).to.match(/maxInstances:\s*1\b/);
+  });
+
+  it('concurrency: 1 (ADR-0025 PR6、tick重複防止の前提)', () => {
+    expect(optionsBlock).to.match(/concurrency:\s*1\b/);
   });
 
   it('timeoutSeconds は PROCESS_OCR_TIMEOUT_SECONDS 識別子参照であり、リテラルに退行していない', () => {
@@ -109,6 +123,26 @@ describe('processOCR endpoint contract (ADR-0023)', () => {
       STUCK_PROCESSING_THRESHOLD_MS,
       'drainWaitMs が STUCK_PROCESSING_THRESHOLD_MS 未満だと、ADR-0019のドレイン待機中に' +
         'processOCR runが生存し得て集計の二重計上リスクが生じる',
+    );
+  });
+
+  it('processocr_stalled absence alertのdurationは、正当に長いOCRサイクル1回では誤発火しない (ADR-0025 PR6、Issue #966 H1)', () => {
+    // concurrency:1 下では、'completed' ログ間隔は最大で
+    // (1サイクルの所要時間 <= PROCESS_OCR_TIMEOUT_SECONDS) + (次tickまでの待ち <= SCHEDULE_INTERVAL_SECONDS)
+    // まで正当に伸びうる。alertのdurationがこれ以下だと、異常のない長時間サイクル1回で誤発火する。
+    const match = stalledAlertTemplateSource.match(/duration:\s*(\d+)s/);
+    expect(
+      match,
+      `${STALLED_ALERT_TEMPLATE_PATH} に 'duration: <N>s' 形式の値が見つからない`,
+    ).to.not.be.null;
+    const durationSeconds = Number(match![1]);
+    const maxLegitimateGapSeconds =
+      PROCESS_OCR_TIMEOUT_SECONDS + SCHEDULE_INTERVAL_SECONDS;
+    expect(durationSeconds).to.be.greaterThan(
+      maxLegitimateGapSeconds,
+      `duration(${durationSeconds}s) が PROCESS_OCR_TIMEOUT_SECONDS + SCHEDULE_INTERVAL_SECONDS` +
+        `(${maxLegitimateGapSeconds}s) 以下だと、異常のない長時間OCRサイクル1回だけで` +
+        'absenceアラートが誤発火する',
     );
   });
 });
