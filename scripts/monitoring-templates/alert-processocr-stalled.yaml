@@ -1,4 +1,4 @@
-displayName: "[__ENV__] processocr_stalled: OCR processing (polling) completed ログが10分間出現しない"
+displayName: "[__ENV__] processocr_stalled: OCR processing (polling) completed ログが20分間出現しない"
 documentation:
   content: |
     ADR-0025 PR6でprocessOCR(Cloud Scheduler、1分間隔)にconcurrency:1を導入し、
@@ -8,8 +8,13 @@ documentation:
     検知する必要がある。
 
     `OCR processing (polling) completed`(processOCR.ts、正常終了時に必ず出力)
-    ログが10分間(1分間隔ポーリングに対し十分なマージン)出現しない場合、
-    OCR処理パイプライン全体が停止している可能性が高い。
+    ログが20分間出現しない場合、OCR処理パイプライン全体が停止している可能性が
+    高い。閾値は「正当に処理が長引いているだけ」を誤検知しないよう、
+    PROCESS_OCR_TIMEOUT_SECONDS(900秒、ADR-0023)を基準に決めている:
+    concurrency:1下では1サイクルが最大900秒かかり得て、かつ次のtickが
+    処理されるまで最大60秒(ポーリング間隔)待つため、正常な完了ログ間隔は
+    最大960秒(16分)まで伸びうる。20分(1200秒)はこの最大960秒に十分な
+    マージンを載せた値。
 
     `processocr_completed`メトリクスは、上記の正常完了ログに加えて
     `[maintenanceGate] groupAggregation gate closed`(ADR-0019のメンテナンス
@@ -24,13 +29,13 @@ documentation:
   mimeType: "text/markdown"
 combiner: OR
 conditions:
-  - displayName: "processocr_completed ログ欠落 10分"
+  - displayName: "processocr_completed ログ欠落 20分"
     conditionAbsent:
       filter: 'metric.type="logging.googleapis.com/user/processocr_completed" AND resource.type="cloud_run_revision"'
       aggregations:
         - alignmentPeriod: 60s
           perSeriesAligner: ALIGN_COUNT
-      duration: 600s
+      duration: 1200s
 alertStrategy:
   autoClose: 86400s
 userLabels:

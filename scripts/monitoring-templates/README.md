@@ -15,13 +15,14 @@ Cloud Monitoring アラートポリシーの YAML テンプレート。
 | `alert-drive-folder-divergent.yaml` | `drive_folder_divergent` | 1 件 / 24h 窓 (incident は 7d 可視化) | Issue #871 恒久対応。実績: 約2.5週間で2件、発生自体が異常 |
 | `alert-drive-folder-divergent-record-failed.yaml` | `drive_folder_divergent_record_failed` | 1 件 / 24h 窓 (incident は 7d 可視化) | Issue #871 恒久対応。`markDivergent()`書込み失敗はclaimにもメトリクスにも残らない経路があるため高優先度 |
 | `alert-claim-divergent-backlog-stale.yaml` | `claim_divergent_backlog_stale` | 1 件 / 24h 窓 (incident は 7d 可視化) | Issue #871 恒久対応。日次sweepが3日超の未解決滞留を検知した回のみ発火(「新規発生」検知だけでは放置を検知できないギャップを埋める) |
+| `alert-processocr-stalled.yaml` | `processocr_completed` | **absence**条件: 20分間ログ欠落 | ADR-0025 PR6、Issue #966。`processOCR`の`concurrency:1`導入に伴う健全性監視(原因を問わずOCR処理停止を検知)。閾値超過型ではなく**ログの欠落**を検知する点が他テンプレートと異なる |
 
 ## 共通パラメータ
 
-- `duration`: `0s` (閾値超過で即発火)
+- `duration`: `0s` (閾値超過で即発火)。例外: `alert-processocr-stalled.yaml`は`conditionAbsent`(絶対条件)のため`duration: 1200s`(1サイクル最大900秒+次tick待ち最大60秒=960秒に対するマージン)
 - `autoClose`: `86400s` (24h 無発火で自動クローズ)
 - `notificationRateLimit`: **未設定**。GCP API 仕様により metric-based alert policy では指定不可（log-based policy 限定）。metric alert は incident オープン時 1 通、`autoClose` まで再通知されない
-- 検出遅延: alignment 1h 以内なら約 3-5 分 (ADR-0015 「5分以内」要件を満たす)
+- 検出遅延: alignment 1h 以内なら約 3-5 分 (ADR-0015 「5分以内」要件を満たす)。`alert-processocr-stalled.yaml`はabsence条件のため約20-21分(上表参照)
 
 ## テンプレートの変数
 

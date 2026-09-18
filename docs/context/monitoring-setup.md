@@ -26,11 +26,11 @@ Issue #220 + ADR-0015 Follow-up で構築した log-based metric + Cloud Monitor
 | `drive_folder_divergent` | `[driveFolderClaim] claim divergent detected` | 24 時間窓で 1 件以上 (incident は 7 日間可視化) | Issue #871 恒久対応。claim と Drive 実体の食い違い(新規発生)を検知。実績: 約2.5週間で2件、発生自体が異常 |
 | `drive_folder_divergent_record_failed` | `divergent記録に失敗しました` | 24 時間窓で 1 件以上 (incident は 7 日間可視化) | Issue #871 恒久対応。`markDivergent()`自体のFirestore書込み失敗は claim にもメトリクスにも残らない経路があるため高優先度 |
 | `claim_divergent_backlog_stale` | `[driveFolderClaim] divergent backlog stale` (severity=WARNING、`driveFolderClaimDivergentSweep`日次関数が出力) | 24 時間窓で 1 件以上 (incident は 7 日間可視化) | Issue #871 恒久対応。「新規発生」検知だけでは既存の未解決分の**放置**を検知できないギャップを埋める。3日以上未解決の divergent が残っている場合のみ日次で1回発火 |
-| `processocr_completed` | `OCR processing (polling) completed`(`processOCR`、正常終了時に必ず出力) | **absence**条件: 10分間ログが出現しない | ADR-0025 PR6。`processOCR`に`concurrency:1`を導入(tick重複防止)したことに伴い、原因を問わずOCR処理パイプライン全体が停止している状態を検知する健全性監視。他メトリクスと異なり閾値超過ではなく**ログの欠落**を検知する点に注意(`conditionAbsent`、`conditionThreshold`ではない) |
+| `processocr_completed` | `OCR processing (polling) completed`(`processOCR`、正常終了時に必ず出力) | **absence**条件: 20分間ログが出現しない | ADR-0025 PR6。`processOCR`に`concurrency:1`を導入(tick重複防止)したことに伴い、原因を問わずOCR処理パイプライン全体が停止している状態を検知する健全性監視。他メトリクスと異なり閾値超過ではなく**ログの欠落**を検知する点に注意(`conditionAbsent`、`conditionThreshold`ではない)。閾値20分(1200s)は「1サイクル最大900秒(`PROCESS_OCR_TIMEOUT_SECONDS`) + 次tickまでの待ち最大60秒」=最大960秒という**正当な**間隔に対して十分なマージンを取った値(Issue #966 H1、当初600sは900秒タイムアウトと矛盾し誤発火しうると判明したため修正) |
 
 ### アラートポリシー共通パラメータ
 
-- `duration`: 0s (閾値超過で即発火)
+- `duration`: 0s (閾値超過で即発火)。例外: `processocr_completed`はabsence条件のため`duration: 1200s`(上表参照)
 - `autoClose`:
   - 標準 (`searchindex_oom` / `ocr_*_truncated` / `summary_truncated` / `processocr_completed`): 86400s (24h 無発火で自動クローズ)
   - `search_index_silent_failure` / `drive_folder_divergent` / `drive_folder_divergent_record_failed` / `claim_divergent_backlog_stale`: 604800s (7 日間) — 放置検知のため長めに取る
@@ -39,7 +39,7 @@ Issue #220 + ADR-0015 Follow-up で構築した log-based metric + Cloud Monitor
   - `searchindex_oom` (alignment 1h): 約 3-5 分
   - `ocr_*_truncated` / `summary_truncated` (alignment 24h): 数分〜最大数時間 (Cloud Monitoring の rolling 評価依存)
   - `search_index_silent_failure` (alignment 24h): 同上、即時検知には向かない
-  - `processocr_completed` (**absence条件**、他8種と異なり閾値超過ではなくログの欠落を検知。`alignmentPeriod:60s`・`duration:600s`): 約10-11分。processOCRの1分間隔ポーリングに対し十分なマージンを取った設計
+  - `processocr_completed` (**absence条件**、他8種と異なり閾値超過ではなくログの欠落を検知。`alignmentPeriod:60s`・`duration:1200s`): 約20-21分。「1サイクル最大900秒+次tickまでの待ち最大60秒」という正当な最大間隔(960秒)に対して十分なマージンを取った設計
 
 ADR-0015 要件「5 分以内」は `searchindex_oom` のみ厳密に満たす。他は「日次で必ず検出」を目標とする。
 ADR-0015 要件「7 日間に 1 件以上」は metric alignment では厳密には表現できないため、`autoClose: 7d` による incident 継続可視化で実運用上の監査表現を代替する。より厳密な weekly 集計が必要な場合は scheduled query / health-report 等で別途担保する。
