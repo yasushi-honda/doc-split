@@ -31,6 +31,10 @@
  * `runId`は呼び出し元が発行した所有権トークン。成功時の最終書戻しは、書戻し直前に
  * 再読込した`driveExportRunId`が`runId`と一致する場合のみ行う(並行実行時に
  * 古い実行が新しい実行の状態を上書きしないためのガード、`executeDriveExport.ts`参照)。
+ * この成功時writeback transaction自体(Drive操作完了後のFirestore書込み)が失敗した
+ * 場合は非transactionのフォールバック書込みを試み、それも失敗した場合のみ例外を
+ * 呼び出し元へthrowする(Issue #952。driveFileIdは喪失するが、呼び出し元のエラー確定
+ * writebackにdriveExportStatus:'error'への遷移を委ね、'exporting'固着を防ぐ)。
  */
 
 import * as admin from 'firebase-admin';
@@ -49,10 +53,12 @@ import { isCustomerUnconfirmed } from './customerAmbiguityGate';
 const db = admin.firestore();
 const storage = admin.storage();
 
-/** テスト時に外部依存(Drive API / Storage)を差し替えるための注入ポイント。 */
+/** テスト時に外部依存(Drive API / Storage / Firestore)を差し替えるための注入ポイント。 */
 export interface ExportDocumentDeps {
   drive: drive_v3.Drive;
   downloadFile: (fileUrl: string) => Promise<Buffer>;
+  /** Issue #952回帰テスト用: 成功時writeback transactionの失敗を合成するために注入する。省略時はモジュール既定の`db`を使う。 */
+  firestore: admin.firestore.Firestore;
 }
 
 async function defaultDownloadFile(fileUrl: string): Promise<Buffer> {
@@ -314,7 +320,8 @@ export async function exportDocument(
   runId: string,
   deps: Partial<ExportDocumentDeps> = {}
 ): Promise<void> {
-  const docRef = db.doc(`documents/${docId}`);
+  const firestore = deps.firestore ?? db;
+  const docRef = firestore.doc(`documents/${docId}`);
   const docSnap = await docRef.get();
   if (!docSnap.exists) {
     throw new Error(`document not found: ${docId}`);
@@ -401,15 +408,49 @@ export async function exportDocument(
 
   const driveFileId = await resolveDriveFile(drive, parentId, docId, doc, deps);
 
-  await db.runTransaction(async (tx) => {
-    const snap = await tx.get(docRef);
-    if (!snap.exists || snap.data()?.driveExportRunId !== runId) {
-      return; // 他の実行に引き継がれている(superseded) → 新しい状態を上書きしない
-    }
-    tx.update(docRef, {
-      driveFileId,
-      driveExportedAt: admin.firestore.FieldValue.serverTimestamp(),
-      driveExportStatus: 'exported',
+  const successPatch = {
+    driveFileId,
+    driveExportedAt: admin.firestore.FieldValue.serverTimestamp(),
+    driveExportStatus: 'exported' as const,
+  };
+  try {
+    await firestore.runTransaction(async (tx) => {
+      const snap = await tx.get(docRef);
+      if (!snap.exists || snap.data()?.driveExportRunId !== runId) {
+        return; // 他の実行に引き継がれている(superseded) → 新しい状態を上書きしない
+      }
+      tx.update(docRef, successPatch);
     });
-  });
+  } catch (writebackError) {
+    // このtransaction自体(tx.get()/tx.update())が失敗すると、Drive上には既にファイルが
+    // 作成済み(resolveDriveFile()完了後)なのにFirestore側へdriveFileIdが反映されず、
+    // 参照が食い違ったまま呼び出し元executeDriveExport()のcatch節にも捕捉されない
+    // (Issue #952)。所有権チェック(driveExportRunId一致)を維持したまま、`lastUpdateTime`
+    // precondition(Issue #539/EFF-M2、PR #951のエラー確定writebackと同一パターン)で
+    // get→updateの間のTOCTOUを防ぎつつ非transactionのbest-effort書込みへフォールバックする。
+    const writebackMessage =
+      writebackError instanceof Error ? writebackError.message : String(writebackError);
+    console.error(
+      `Drive export success writeback failed for document ${docId}: ${writebackMessage}`
+    );
+    try {
+      const snap = await docRef.get();
+      if (snap.exists && snap.data()?.driveExportRunId === runId) {
+        await docRef.update(successPatch, { lastUpdateTime: snap.updateTime! });
+      } // else: 他の実行に引き継がれている(superseded) → 新しい状態を上書きしない
+    } catch (fallbackError) {
+      // フォールバックも失敗した場合、ここで例外を握り潰すとdriveExportStatusが
+      // 'exporting'のまま固着し(#947と同じ症状)ユーザーからは失敗にすら見えなくなる。
+      // driveFileId(Drive上の実ファイルへの参照)は喪失するが、元のwritebackErrorを
+      // 再throwして呼び出し元executeDriveExport()の(PR #951で保護済みの)エラー確定
+      // writebackへ委ね、driveExportStatus:'error'として状態不整合を解消する
+      // (再試行時はresolveDriveFile()のappProperties経由idempotencyチェックに委ねる)。
+      const fallbackMessage =
+        fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+      console.error(
+        `Drive export success writeback fallback also failed for document ${docId}: ${fallbackMessage}`
+      );
+      throw writebackError;
+    }
+  }
 }

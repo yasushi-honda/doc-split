@@ -192,6 +192,51 @@ async function seedCollidingCustomers(
   );
 }
 
+interface FirestoreFailureOptions {
+  /** runTransaction()の呼び出しを失敗させるか(exportDocument()は成功時writebackの1回のみ呼ぶ)。 */
+  failTransaction?: boolean;
+  /** trueならフォールバック経路の`docRef.update()`も失敗させる(両方の書戻しが失敗するケースの検証用) */
+  failDocUpdate?: boolean;
+}
+
+/**
+ * Issue #952回帰テスト用: `firestore.runTransaction()`・`docRef.update()`(フォールバック経路)
+ * を合成エラーで失敗させ、それ以外は実emulatorへ委譲するラッパー(executeDriveExportIntegration
+ * .test.tsの`wrapFirestoreWithFailures`と同型、Issue #947 PR #951参照)。
+ */
+function wrapFirestoreWithFailures(
+  target: admin.firestore.Firestore,
+  options: FirestoreFailureOptions
+): admin.firestore.Firestore {
+  return new Proxy(target, {
+    get(t, prop, receiver) {
+      if (prop === 'runTransaction' && options.failTransaction) {
+        return async () => {
+          throw new Error('simulated runTransaction failure');
+        };
+      }
+      if (prop === 'doc' && options.failDocUpdate) {
+        return (path: string) => {
+          const realDocRef = (t.doc as (p: string) => admin.firestore.DocumentReference)(path);
+          return new Proxy(realDocRef, {
+            get(dt, dprop, dreceiver) {
+              if (dprop === 'update') {
+                return async () => {
+                  throw new Error('simulated fallback update failure');
+                };
+              }
+              const value = Reflect.get(dt, dprop, dreceiver);
+              return typeof value === 'function' ? (value as (...a: unknown[]) => unknown).bind(dt) : value;
+            },
+          });
+        };
+      }
+      const value = Reflect.get(t, prop, receiver);
+      return typeof value === 'function' ? (value as (...a: unknown[]) => unknown).bind(t) : value;
+    },
+  }) as admin.firestore.Firestore;
+}
+
 async function seedDriveSettings(overrides: Record<string, unknown> = {}): Promise<void> {
   await db.doc('settings/drive').set({
     rootFolderId: 'root-folder-id',
@@ -968,6 +1013,83 @@ describe('exportDocument (ADR-0022 Phase 1)', () => {
       expect(createCalls.length).to.be.greaterThan(0);
       const docSnap = await db.collection('documents').doc(docId).get();
       expect(docSnap.data()!.driveExportStatus).to.equal('exported');
+    });
+  });
+
+  describe('成功時writeback transactionが無保護で失敗した場合のフォールバック(Issue #952)', () => {
+    it('runTransaction自体が失敗しても、非transactionのフォールバック書込みでexported状態へ遷移する', async () => {
+      const docId = await seedDocument();
+      await seedCustomer();
+      await seedDriveSettings();
+      const { drive } = makeFakeDrive({
+        createdIds: ['folder-office', 'folder-customer', 'exported-file-id'],
+      });
+      const failingFirestore = wrapFirestoreWithFailures(db, { failTransaction: true });
+
+      await exportDocument(docId, TEST_RUN_ID, {
+        drive,
+        downloadFile: async () => Buffer.from('fake-pdf-bytes'),
+        firestore: failingFirestore,
+      });
+
+      const data = (await db.doc(`documents/${docId}`).get()).data()!;
+      expect(data.driveFileId).to.equal('exported-file-id');
+      expect(data.driveExportStatus).to.equal('exported');
+      expect(data.driveExportedAt).to.not.be.undefined;
+    });
+
+    it('runTransaction失敗後、フォールバック直前に他の実行に引き継がれていた(runId不一致)場合はフォールバックも上書きせず例外も投げない', async () => {
+      // 別の実行(runId不一致)に既に所有権が引き継がれた状態を模す(line 493のsuperseded
+      // テストと同型の前提だが、runTransaction自体が合成失敗してフォールバック経路を通る点が異なる)
+      const docId = await seedDocument({ driveExportRunId: 'another-run-id' });
+      await seedCustomer();
+      await seedDriveSettings();
+      const { drive } = makeFakeDrive({
+        createdIds: ['folder-office', 'folder-customer', 'exported-file-id'],
+      });
+      const failingFirestore = wrapFirestoreWithFailures(db, { failTransaction: true });
+
+      await exportDocument(docId, TEST_RUN_ID, {
+        drive,
+        downloadFile: async () => Buffer.from('x'),
+        firestore: failingFirestore,
+      });
+
+      const data = (await db.doc(`documents/${docId}`).get()).data()!;
+      expect(data.driveFileId).to.be.undefined;
+      expect(data.driveExportStatus).to.equal('exporting');
+      expect(data.driveExportRunId).to.equal('another-run-id');
+    });
+
+    it('runTransaction・フォールバックのdocRef.update()の両方が失敗した場合、driveFileId喪失を防ぐため元の例外を呼び出し元へ再throwする', async () => {
+      const docId = await seedDocument();
+      await seedCustomer();
+      await seedDriveSettings();
+      const { drive } = makeFakeDrive({
+        createdIds: ['folder-office', 'folder-customer', 'exported-file-id'],
+      });
+      const failingFirestore = wrapFirestoreWithFailures(db, {
+        failTransaction: true,
+        failDocUpdate: true,
+      });
+
+      try {
+        await exportDocument(docId, TEST_RUN_ID, {
+          drive,
+          downloadFile: async () => Buffer.from('x'),
+          firestore: failingFirestore,
+        });
+        expect.fail('両方の書戻しが失敗した場合は例外がthrowされるべき');
+      } catch (error) {
+        expect(error).to.be.instanceOf(Error);
+        expect((error as Error).message).to.equal('simulated runTransaction failure');
+      }
+
+      // Drive側の操作(フォルダ作成・ファイルアップロード)自体は実行済み(呼び出し元executeDriveExport()の
+      // エラー確定writebackがdriveExportStatus:'error'へ遷移させる、Firestore側はexportDocument()単体では未変化)
+      const data = (await db.doc(`documents/${docId}`).get()).data()!;
+      expect(data.driveFileId).to.be.undefined;
+      expect(data.driveExportStatus).to.equal('exporting'); // seedDocumentの初期値のまま(exportDocument()単体テストのためexecuteDriveExport()のエラー確定writebackは走らない)
     });
   });
 });
