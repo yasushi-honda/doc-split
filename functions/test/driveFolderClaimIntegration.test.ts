@@ -1720,6 +1720,12 @@ describe('driveFolderClaim プロトコル(Issue #871)', () => {
     });
   });
 
+  // fable-reviewセカンドオピニオン指摘: 本describe配下のmakeFailingCommitFirestoreは
+  // `firestore.runTransaction`自体を差し替えるため、`@google-cloud/firestore`のSDK内部
+  // リトライ(同じgRPC transientコード集合を最大5回まで内部リトライする)を経由せず、
+  // withBackoffRetry(外側の層)のみを直接検証している。本番では「SDK内部リトライ最大5回が
+  // 枯渇してもなお失敗する」場合に初めてこの外側リトライが効く(1回のtransaction呼び出しで
+  // 即座に失敗する状況を想定したものではない)。
   describe('Issue #954: runTransaction自体の一時的失敗をwithBackoffRetryで防御', () => {
     describe('A. リトライで復旧する(1回だけ失敗させ2回目で成功、getTxCallCount()でリトライが実際に効いたことを確認)', () => {
       it('recordVerification: 1回失敗しても2回目でリトライ成功しclaimが更新される', async () => {
@@ -1892,6 +1898,10 @@ describe('driveFolderClaim プロトコル(Issue #871)', () => {
         // 1回目のtxは実dbへ実際に委譲し(書込みは成功する)、その後クライアント側にのみ
         // 一時的失敗として返す(ambiguous commitの再現)。attemptIdはbeginCreation内で
         // tx外(呼び出し1回につき1つ)生成されるため、2回目のtxでも同じattemptIdが使われる。
+        // 本テストは外側のwithBackoffRetry層でのみ再現するが、自己ブロック解消ガード
+        // (`existing.attempt?.attemptId === attemptId`)はtxコールバック内にあるため、
+        // 実運用でSDK内部リトライ(最大5回)経由でtxコールバックが再実行される場合も
+        // 同様に効く(fable-reviewセカンドオピニオン指摘)。
         const ambiguousDb = makeAmbiguousCommitFirestore(db, 1);
 
         const result = await beginCreation(ambiguousDb, parentId, name, 'run-d1');
