@@ -432,10 +432,7 @@ cocoro/kanameから、書類（ケアプラン・医療・介護保険証等）�
 
 ## 🔄 中断点（in-flight）
 
-**ADR-0025 PaddleOCR Pass1切替 Step0（前提確認）、kanameoneの一部項目が外部要因でブロック中（2026-09-19時点）**。
-- 直前の状態: 計画書`~/.claude/plans/eventual-dreaming-wind.md`のStep0のうち、①(3環境Cloud Run設定横並び)は実質完了・記録化のみ残、③(Cloud Scheduler retryConfig確認)・④(切替前ベースライン記録: status:error率/1サイクルlatency分布)はdev/cocoroで実機確認済み（下記「ADR-0025 PaddleOCR」節参照）。②(3環境L1/L2ゲート状態確認)は未着手、③④のkanameone分は`gcloud`CLI/ADCとも`systemkaname@kanameone.com`の対話認証切れ(`Reauthentication failed. cannot prompt during non-interactive execution`)でブロック。kanameoneのCloud Functions severity>=ERRORログ(代替指標、GHA `check-function-error-logs --hours 168`)のみ取得済み(processOCR関連0件)
-- 次の一手: decision-makerが`gcloud auth login --configuration=kanameone`を対話実行 → 完了後、②③④のkanameone分を実施しStep0を3環境で完了 → Pass1全面切替(`set-paddle-ocr-allowlist --remove`)の実行判断へ進む
-- 検証コマンド: `gcloud config configurations activate kanameone && gcloud scheduler jobs describe firebase-schedule-processOCR-asia-northeast1 --location=asia-northeast1`（成功すれば認証復旧確認）
+なし（2026-09-19セッションで解消: kanameoneのgcloud対話認証はdecision-makerが`gcloud auth login --configuration=kanameone`を実行し復旧済み。ADR-0025 PaddleOCR Pass1全面切替はdev/kanameone/cocoro 3環境とも完了済み、事後監視のpush型アラート強化も完了済み。詳細は本ファイル冒頭「ADR-0025 PaddleOCR」節参照）。
 
 cocoro側Drive連携Phase C（クライアント自身のOAuth接続）は外部依存待ち（継続、変更なし、詳細は本ファイル冒頭「現在のミッション」節参照）。
 
