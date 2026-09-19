@@ -1659,10 +1659,17 @@ jobs:
             # 注: 分母は「直近7日にupdatedAtが更新されたdocuments」(OCR処理件数と一致しない、編集等も含む)、
             # 分子は現時点でstatus:errorのもののスナップショット(dev/cocoroと同方式、前後比較の整合性は保たれる)。
             SINCE_ISO=$(date -u -d "-7 days" +%Y-%m-%dT%H:%M:%SZ)
+            # 注(実機検証で判明): Firestore REST runAggregationQueryのJSON→protobufトランスコーダは
+            # where句がcompositeFilter(2条件以上)の場合、"aggregations"を"structuredQuery"より後に
+            # 置くと"Unknown name \"aggregations\" at 'structured_aggregation_query.structured_query'"
+            # という誤った400エラーを返す既知の癖がある(kanameone実機でTOTAL/ERROR_QUERYとも再現、
+            # cocoroへの直接curlでも同条件で再現・キー順序の入れ替えのみで解消することを確認済み)。
+            # 単純クエリでは順序に依存しないが、以降両方とも"aggregations"を先に書く。
             TOTAL_QUERY=$(node -e '
               const since = process.argv[1];
               console.log(JSON.stringify({
                 structuredAggregationQuery: {
+                  aggregations: [{ count: {}, alias: "total" }],
                   structuredQuery: {
                     from: [{ collectionId: "documents" }],
                     where: {
@@ -1673,7 +1680,6 @@ jobs:
                       },
                     },
                   },
-                  aggregations: [{ count: {}, alias: "total" }],
                 },
               }));
             ' "$SINCE_ISO")
@@ -1681,6 +1687,7 @@ jobs:
               const since = process.argv[1];
               console.log(JSON.stringify({
                 structuredAggregationQuery: {
+                  aggregations: [{ count: {}, alias: "errorCount" }],
                   structuredQuery: {
                     from: [{ collectionId: "documents" }],
                     where: {
@@ -1704,7 +1711,6 @@ jobs:
                         ],
                       },
                     },
-                    aggregations: [{ count: {}, alias: "errorCount" }],
                   },
                 },
               }));
