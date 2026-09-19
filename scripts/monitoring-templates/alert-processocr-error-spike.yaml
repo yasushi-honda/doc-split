@@ -1,0 +1,34 @@
+displayName: "[__ENV__] processocr_error: processOCR document処理エラー発生"
+documentation:
+  content: |
+    ADR-0025 PaddleOCR Pass1全面切替(2026-09-19、dev/kanameone/cocoro 3環境)後の
+    事後監視として追加。切替前Step0④実測ベースライン(直近7日のstatus:error率)は
+    dev/kanameone/cocoroいずれも0.00%(kanameone: total=1949件・error=0件)であり、
+    実績上「発生自体が異常」と判断し閾値1件で即時発火とする。
+
+    `Error processing document`(ocrProcessor.ts、status:'error'確定パス手前の
+    console.error)ログの発生を検知する。個別ドキュメントのOCR処理失敗を
+    早期に捕捉する目的。processocr_stalled(処理停止の絶対検知)とは異なり、
+    「処理は続いているが失敗が増えている」ケースを補完する。
+
+    対応: Cloud Loggingでprocessocr関連のERRORログを確認し、対象docIdの
+    status/lastErrorMessageをFirestoreで確認する。一時的な監視強化のため、
+    PaddleOCR切替後の観察期間終了後は削除するか恒久運用に格上げするか再判断する。
+  mimeType: "text/markdown"
+combiner: OR
+conditions:
+  - displayName: "processocr_error > 0 in 1h"
+    conditionThreshold:
+      filter: 'metric.type="logging.googleapis.com/user/processocr_error" AND resource.type="cloud_run_revision"'
+      aggregations:
+        - alignmentPeriod: 3600s
+          perSeriesAligner: ALIGN_SUM
+      comparison: COMPARISON_GT
+      thresholdValue: 0
+      duration: 0s
+alertStrategy:
+  autoClose: 86400s
+userLabels:
+  source: docsplit-monitoring-setup
+notificationChannels:
+  - __NOTIFICATION_CHANNEL__

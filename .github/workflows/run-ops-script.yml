@@ -215,6 +215,8 @@ on:
           - execute-drive-claim-resync --dry-run
           - execute-drive-claim-resync --execute
           - execute-drive-claim-resync --execute --requeue
+          - setup-log-based-metrics --dry-run
+          - setup-log-based-metrics
       backfill_limit:
         description: 'backfill-drive-export --limit: canary実行時のマーク上限件数(数値のみ) / classify-drive-export-drift --limit: 検査対象document数の上限(数値のみ) / execute-drive-export-repair --limit: 修復対象候補数の上限(数値のみ)'
         required: false
@@ -1775,6 +1777,18 @@ jobs:
                   );
                 });
               '
+          elif [ "$SCRIPT_NAME" = "setup-log-based-metrics" ]; then
+            # ADR-0025 PaddleOCR Pass1全面切替(2026-09-19)後の事後監視強化。kanameoneは
+            # ローカルgcloud対話認証(systemkaname@kanameone.com)が失効しているため、
+            # check-function-error-logs/check-paddle-ocr-step0と同じ既存デプロイSA
+            # (GCP_SA_KEY_KANAMEONE)非対話認証でCloud Monitoringアラートポリシーを作成する。
+            # 通知先メールは既存チャネル(DocSplit Monitoring Alerts - <env>)がある限り
+            # 再利用され新規作成時のみ使われる(setup-log-based-metrics.sh参照)。
+            DRY_RUN_FLAG=""
+            if echo "$SCRIPT_ARGS" | grep -q -- '--dry-run'; then
+              DRY_RUN_FLAG="--dry-run"
+            fi
+            ./scripts/setup-log-based-metrics.sh "$PROJECT_ID" "hy.unimail.11@gmail.com" $DRY_RUN_FLAG
           elif [ "$SCRIPT_NAME" = "audit-fax-duplication-plan-logs" ]; then
             # 複数人記載FAX検出 Stage2切替判断材料(docs/adr/0024-multi-customer-detection.md)。
             # processOCR(cronバッチ)がconsole.log(msg, obj)で出力するfaxDuplicationPlanログ

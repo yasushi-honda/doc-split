@@ -1,0 +1,35 @@
+displayName: "[__ENV__] processocr_latency_p95: Cloud Run p95 latency悪化検知"
+documentation:
+  content: |
+    ADR-0025 PaddleOCR Pass1全面切替(2026-09-19、dev/kanameone/cocoro 3環境)後の
+    事後監視として追加。切替前Step0④実測ベースライン(直近7日、Cloud Run
+    request latency)は kanameone: p50=0.16s/p95=0.42s/max=195.76s、
+    dev: p50=0.19s/p95=0.30s/max=163.0s、cocoro: p50=0.18s/p95=0.29s/max=42.1s。
+
+    閾値2秒は実測p95(0.29〜0.42s)の約5〜7倍のマージンを取った値。単発の
+    リクエストではなく5分window内のp95(分布全体の傾向)で判定するため、
+    偶発的な単発スパイクでは発火しにくい設計。
+
+    対応: Cloud Loggingでprocessocr関連のログを確認し、PaddleOCR呼び出し側
+    (Cloud Run内製、Gemini API依存ではない)の処理時間悪化・リトライ増加の
+    兆候がないか確認する。一時的な監視強化のため、PaddleOCR切替後の観察期間
+    終了後は削除するか恒久運用に格上げするか再判断する。
+  mimeType: "text/markdown"
+combiner: OR
+conditions:
+  - displayName: "processocr request latency p95 > 2s (5分window)"
+    conditionThreshold:
+      filter: 'resource.type="cloud_run_revision" AND resource.labels.service_name="processocr" AND metric.type="run.googleapis.com/request_latencies"'
+      aggregations:
+        - alignmentPeriod: 300s
+          perSeriesAligner: ALIGN_PERCENTILE_95
+          crossSeriesReducer: REDUCE_MAX
+      comparison: COMPARISON_GT
+      thresholdValue: 2000
+      duration: 0s
+alertStrategy:
+  autoClose: 86400s
+userLabels:
+  source: docsplit-monitoring-setup
+notificationChannels:
+  - __NOTIFICATION_CHANNEL__

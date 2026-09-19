@@ -16,6 +16,8 @@ Cloud Monitoring アラートポリシーの YAML テンプレート。
 | `alert-drive-folder-divergent-record-failed.yaml` | `drive_folder_divergent_record_failed` | 1 件 / 24h 窓 (incident は 7d 可視化) | Issue #871 恒久対応。`markDivergent()`書込み失敗はclaimにもメトリクスにも残らない経路があるため高優先度 |
 | `alert-claim-divergent-backlog-stale.yaml` | `claim_divergent_backlog_stale` | 1 件 / 24h 窓 (incident は 7d 可視化) | Issue #871 恒久対応。日次sweepが3日超の未解決滞留を検知した回のみ発火(「新規発生」検知だけでは放置を検知できないギャップを埋める) |
 | `alert-processocr-stalled.yaml` | `processocr_completed` | **absence**条件: 20分間ログ欠落 | ADR-0025 PR6、Issue #966。`processOCR`の`concurrency:1`導入に伴う健全性監視(原因を問わずOCR処理停止を検知)。閾値超過型ではなく**ログの欠落**を検知する点が他テンプレートと異なる |
+| `alert-processocr-error-spike.yaml` | `processocr_error` | 1 件 / 1h | ADR-0025 PaddleOCR Pass1全面切替(2026-09-19)後の一時的事後監視。Step0④ベースライン実測でstatus:error率0%(kanameone: total=1949件)のため発生即異常。**観察期間終了後に削除 or 恒久化を再判断**すること |
+| `alert-processocr-latency-p95.yaml` | `run.googleapis.com/request_latencies`(標準メトリクス、log-based metricではない) | p95 > 2秒 / 5分window | ADR-0025 PaddleOCR Pass1全面切替後の一時的事後監視。Step0④実測p95(kanameone 0.42s / dev 0.30s / cocoro 0.29s)の約5〜7倍のマージン。**観察期間終了後に削除 or 恒久化を再判断**すること |
 
 ## 共通パラメータ
 
