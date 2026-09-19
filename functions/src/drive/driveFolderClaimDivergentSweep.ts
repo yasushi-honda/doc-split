@@ -9,8 +9,8 @@
  *
  * `driveFolderLocks` を `state=='divergent'` で日次走査し、件数・最古の滞留時間を
  * 構造化ログ `event: claimDivergentBacklog` として常に出力する。滞留が
- * `STALE_THRESHOLD_MS`(3日)を超えているものが1件でもあれば、`severity: WARNING`かつ
- * `[driveFolderClaim] divergent backlog stale`を含むログを追加出力し、
+ * `STALE_THRESHOLD_MS`(3日)を超えているものが1件でもあれば、
+ * `[driveFolderClaim] divergent backlog stale`を含むログを`console.warn`で追加出力し、
  * `claim_divergent_backlog_stale`メトリクス(`scripts/setup-log-based-metrics.sh`)が
  * これを拾ってアラートを発火させる。
  *
@@ -77,7 +77,8 @@ export function logDivergentBacklogSummary(summary: DivergentBacklogSummary): vo
     payload
   );
   if (summary.count > 0 && summary.stale) {
-    // `claim_divergent_backlog_stale`メトリクス(severity=WARNING必須)が拾う。
+    // `claim_divergent_backlog_stale`メトリクスが拾う。console.warnはCloud LoggingでDEFAULT severityのため、
+    // メトリクスはseverityでなくtextPayload(`[driveFolderClaim] divergent backlog stale`)で検知する(Issue #981)。
     console.warn(
       `[driveFolderClaim] divergent backlog stale: count=${summary.count} oldestAgeMs=${summary.oldestAgeMs ?? 'n/a'} unknownAgeCount=${summary.unknownAgeCount}`,
       payload
