@@ -3,6 +3,7 @@
 #
 # Issue #220 + ADR-0015 Follow-up の運用監視基盤を作成する。
 # 一度実行すれば自動監視が開始される。冪等 (既存があれば skip)。
+# 既存 metric の filter が定義と食い違う場合は警告する。反映は UPDATE_EXISTING_METRICS=1 を付けて再実行 (#981)。
 #
 # 使用方法:
 #   ./scripts/setup-log-based-metrics.sh <project-id> <notification-email> [--dry-run]
@@ -114,7 +115,28 @@ for metric_def in "${METRICS[@]}"; do
   IFS='|' read -r METRIC_NAME METRIC_DESC METRIC_FILTER <<< "$metric_def"
 
   if gcloud logging metrics describe "$METRIC_NAME" --project="$PROJECT_ID" >/dev/null 2>&1; then
-    echo "✓ $METRIC_NAME は既存 (skip)"
+    # 既存 metric は既定では書き換えない(冪等性維持)。ただし filter がこの定義と食い違う場合は
+    # 「スクリプトの定義だけ直っても本番は旧 filter のまま」になる(#981)ため、差分を警告する。
+    # 反映する場合は UPDATE_EXISTING_METRICS=1 を付けて再実行する(差分のある metric のみ更新)。
+    CURRENT_FILTER="$(gcloud logging metrics describe "$METRIC_NAME" --project="$PROJECT_ID" --format='value(filter)' 2>/dev/null || true)"
+    if [ "$CURRENT_FILTER" = "$METRIC_FILTER" ]; then
+      echo "✓ $METRIC_NAME は既存 (skip、filter 一致)"
+    elif [ "${UPDATE_EXISTING_METRICS:-}" = "1" ]; then
+      echo "${DRY}$METRIC_NAME は既存だが filter が定義と異なるため更新 ..."
+      echo "    現在: $CURRENT_FILTER"
+      echo "    定義: $METRIC_FILTER"
+      if [ -z "$DRY" ]; then
+        gcloud logging metrics update "$METRIC_NAME" \
+          --project="$PROJECT_ID" \
+          --description="$METRIC_DESC" \
+          --log-filter="$METRIC_FILTER" >/dev/null
+        echo "✓ 更新完了"
+      fi
+    else
+      echo "⚠ $METRIC_NAME は既存だが filter が定義と異なります (skip)。反映するには UPDATE_EXISTING_METRICS=1 を付けて再実行してください"
+      echo "    現在: $CURRENT_FILTER"
+      echo "    定義: $METRIC_FILTER"
+    fi
   else
     echo "${DRY}$METRIC_NAME を作成 ..."
     if [ -z "$DRY" ]; then
