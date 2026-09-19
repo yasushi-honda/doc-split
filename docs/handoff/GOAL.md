@@ -75,7 +75,8 @@ Gemini(Vertex AI日本リージョン非公式動作)からの移行として、
   - PR #973(`feat/paddle-ocr-step0-kanameone-gha`)はマージ待ち
 - [x] **decision-maker確定・Pass1全面切替ロールアウト開始(2026-09-19)**: 必須ゲート(71ページ負荷試験p95=600.5秒/基準850秒PASS)・精度検証(96判定中94/96正解・危険な誤確定0件、Gemini同等)・3環境canary実績(error率0%)により客観的検証完了と判断、Go決定。コスト/精度統計レポート用の「1-2週間データ蓄積待ち」(運用コスト実測・抽出精度統計検証)は別目的タスクであり切替のブロッカーではないと整理([[feedback_data_collection_window_vs_safety_gate]]、グローバルmemoryに一般化して記録)
 - [x] **dev全面切替完了(2026-09-19)**: `set-paddle-ocr-allowlist --remove`(dry-run確認後に本実行、GHA run 35423070490)。`settings/features.paddleOcrAllowlist`フィールド削除を実機確認(Firestore REST直接取得、`getPaddleOcrGate()`上は不在=制限なし=全docId対象)。`paddleOcr:true`は維持
-- [ ] **次の一手**: kanameone→cocoroの順で同様に`set-paddle-ocr-allowlist --remove`を実行する。各環境の実行前に一時停止しdecision-makerへ確認する運用で進行中(実クライアントデータが対象のため)。閾値: 処理件数が一定数集まった時点でstatus:error率・Cloud Run latency(p95/60秒超過率)がベースライン(Step0④実測値)から悪化していないことを確認してから次環境へ進む
+- [x] **kanameone全面切替完了(2026-09-19)**: dry-run(GHA run 35423329917)で対象canary docId(`BhpiCzQMP5zUmpNvuvOx`/`0Vd63asWLXDRQjMQBaWe`/`0mUx83vaJ67MxzBHf5WF`、Pass1実文書canary検証で使用した3件と一致)を確認後、本実行(GHA run 35423445041)。`settings/features.paddleOcrAllowlist`フィールド削除・`paddleOcr:true`維持をFirestore REST直接取得で実機確認
+- [ ] **次の一手**: cocoroで同様に`set-paddle-ocr-allowlist --remove`を実行する(実行前にdecision-maker確認を挟む運用)。kanameone切替後の監視: 処理件数が一定数集まった時点でstatus:error率・Cloud Run latency(p95/60秒超過率)をStep0④実測値(total=1949/7日・error率0%・p95=0.42s・60秒超過0.29%)と比較し、悪化していないか確認する
 
 **kanameone本番canary展開・クライアント報告【完了・2026-09-14】**: 上記dev最適化と並行し、kanameone向け本番導入準備も完遂した。
 - [x] kanameoneインフラ準備: Artifact Registry・ランタイムSA・IAM ロール・Cloud Runデプロイ、allowlist設定スクリプト(PR #916)、`deploy-paddle-ocr.yml`のkanameone対応(PR #917)、`PADDLE_OCR_URL`反映(PR #918)
