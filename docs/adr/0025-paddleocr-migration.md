@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted (2026-09-12)。plan-crossreview(grip判断モード可視化 + codex 2パス独立診断)を経て設計確定、decision-maker承認済み。実装(PR構成、`/Users/yyyhhh/.claude/plans/shiny-knitting-flamingo.md`参照)は未着手、本ADRが実装着手の前提条件。
+Accepted (2026-09-12) → **Implemented (2026-09-19)**。plan-crossreview(grip判断モード可視化 + codex 2パス独立診断)を経て設計確定、decision-maker承認済み。実装(PR構成、`/Users/yyyhhh/.claude/plans/shiny-knitting-flamingo.md`参照)完了後、Pass1(PaddleOCR)への全面切替(dev/kanameone/cocoro 3環境)まで完了。詳細は下記「追記(2026-09-19、Pass1全面切替完了)」節参照。
 
 ## Context
 
@@ -140,6 +140,8 @@ Pass2用のプロンプトは「原文どおりに転記せよ、補正するな
 Stage3負荷試験Phase B実測(1ページのcoldMax=33.4秒、5バースト中1回の外れ値)を受け、コスト試算の前提だった`--concurrency=1 --min-instances=0`から**`--min-instances=1`へ変更**した(PR #967、Issue #966)。孤立した単発リクエスト(現状の実トラフィックの大半)のcold startを解消する効果と引き換えに、常時1インスタンス分の課金が発生する。上記「### コスト試算(実データに基づく、2026-09-12実測)」節は前提が変わったため無効化されており、実測での再検証が必要(Cloud Billing反映後、別途確認)。
 
 また、Pass1切替(PR6)にあたり、本番の唯一のOCRトリガー`processOCR`(Cloud Scheduler、1分間隔)について、**`concurrency:1`を明示追加**した。実機`maxInstanceRequestConcurrency`は既定値80であり、`maxInstances:1`だけでは1サイクルの処理時間がポーリング間隔(60秒)を超えた場合に次tickが同一インスタンス内で並行実行される(「tick重複」)。この現象自体はGemini運用の現在でも起こりうる(ADR-0023が2026-08-02にkanameoneで実際に観測)が、Geminiにはcold start概念がなく実害が顕在化していなかった。PaddleOCR(`--concurrency=1`)ではtick重複時の2文書目以降が必ず新規インスタンスのcold startを踏むため、Pass1切替後に実害化する経路であり、切替前に`processOCR`側で「同一インスタンス内で複数tickが同時実行される」ことを機構的に排除した(残存リスクとして、前tickがCloud SchedulerのattemptDeadline(実機確認: 900秒)を超えて長引いた場合のリトライ挙動による滞留があり、`functions/src/ocr/processOCR.ts`の`rescueErroredDocumentsIfDue`JSDoc・PR6のStep 0で確認事項として扱う)。詳細はIssue #966、承認済み計画`~/.claude/plans/eventual-dreaming-wind.md`参照。
+
+**追記(2026-09-19、Pass1全面切替完了)**: 必須ゲート(71ページ負荷試験p95=600.5秒/基準850秒PASS、完了率100%)・精度検証(24文書×4フィールド=96判定、PaddleOCR 94/96正解・危険な誤確定0件、Gemini 2.5/3.5 Flashと同水準)・3環境canary運用実績(error率0%)により客観的検証完了と判断し、decision-maker承認のもと`set-paddle-ocr-allowlist --remove`(dry-run確認後に本実行、`run-ops-script.yml`経由)をdev→kanameone→cocoroの順で実行した。各環境とも実行前のcanary allowlist(dev/kanameone各3件、cocoro 1件)がFirestore `settings/features.paddleOcrAllowlist`フィールドから削除され、`getPaddleOcrGate()`上は「不在=制限なし=全docId対象」となったことをFirestore REST API直接読み取りで実機確認済み(Firestore Admin SDK経由ではなく、`gcloud auth print-access-token`で取得したアクセストークンによるREST直叩き、kanameoneのローカル対話認証失効環境でも非対話SA認証(GHA)で完結する経路として`check-paddle-ocr-step0`と同型)。運用コスト実測・抽出精度の実データ統計検証(1-2週間のデータ蓄積、クライアント報告用)は、切替可否の技術判断とは独立した別目的タスクとして並行継続中(詳細: `docs/handoff/GOAL.md`「ADR-0025 PaddleOCR」節)。切替後の事後監視(status:error率・Cloud Run latency)は各環境のStep0④実測ベースラインとの比較で行う。
 
 **スコープ外(本ADRの対象外)**:
 - 手動トリガーの`regenerateSummary`(要約再生成、低頻度)は同じくGemini依存だが自動処理パス外のため対象外、別途扱う
