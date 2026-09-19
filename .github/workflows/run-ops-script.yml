@@ -217,7 +217,6 @@ on:
           - execute-drive-claim-resync --execute --requeue
           - setup-log-based-metrics --dry-run
           - setup-log-based-metrics
-          - check-deploy-sa-iam-roles
       backfill_limit:
         description: 'backfill-drive-export --limit: canary実行時のマーク上限件数(数値のみ) / classify-drive-export-drift --limit: 検査対象document数の上限(数値のみ) / execute-drive-export-repair --limit: 修復対象候補数の上限(数値のみ)'
         required: false
@@ -1785,21 +1784,11 @@ jobs:
             # (GCP_SA_KEY_KANAMEONE)非対話認証でCloud Monitoringアラートポリシーを作成する。
             # 通知先メールは既存チャネル(DocSplit Monitoring Alerts - <env>)がある限り
             # 再利用され新規作成時のみ使われる(setup-log-based-metrics.sh参照)。
-            DRY_RUN_FLAG=""
+            ARGS=("$PROJECT_ID" "hy.unimail.11@gmail.com")
             if echo "$SCRIPT_ARGS" | grep -q -- '--dry-run'; then
-              DRY_RUN_FLAG="--dry-run"
+              ARGS+=( --dry-run )
             fi
-            ./scripts/setup-log-based-metrics.sh "$PROJECT_ID" "hy.unimail.11@gmail.com" $DRY_RUN_FLAG
-          elif [ "$SCRIPT_NAME" = "check-deploy-sa-iam-roles" ]; then
-            # setup-log-based-metrics実行時の"Permission denied"調査用、一時的read-only確認。
-            # デプロイSA自身が持つIAM roleの一覧を出す(monitoring.notificationChannelEditor等の
-            # 有無を確認し、IAM変更が必要かdecision-maker対話ログインが必要かを判断する材料にする)。
-            DEPLOY_SA="docsplit-cloud-build@${PROJECT_ID}.iam.gserviceaccount.com"
-            echo "=== $DEPLOY_SA の現在のproject-level IAM role一覧 ==="
-            gcloud projects get-iam-policy "$PROJECT_ID" \
-              --flatten="bindings[].members" \
-              --filter="bindings.members:${DEPLOY_SA}" \
-              --format="table(bindings.role)"
+            ./scripts/setup-log-based-metrics.sh "${ARGS[@]}"
           elif [ "$SCRIPT_NAME" = "audit-fax-duplication-plan-logs" ]; then
             # 複数人記載FAX検出 Stage2切替判断材料(docs/adr/0024-multi-customer-detection.md)。
             # processOCR(cronバッチ)がconsole.log(msg, obj)で出力するfaxDuplicationPlanログ

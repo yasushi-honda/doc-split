@@ -6,14 +6,18 @@ documentation:
     dev/kanameone/cocoroいずれも0.00%(kanameone: total=1949件・error=0件)であり、
     実績上「発生自体が異常」と判断し閾値1件で即時発火とする。
 
-    `Error processing document`(ocrProcessor.ts、status:'error'確定パス手前の
-    console.error)ログの発生を検知する。個別ドキュメントのOCR処理失敗を
-    早期に捕捉する目的。processocr_stalled(処理停止の絶対検知)とは異なり、
-    「処理は続いているが失敗が増えている」ケースを補完する。
+    `Error processing document`(ocrProcessor.ts handleProcessingError、
+    status確定判定より前の無条件console.error)ログの発生を検知する。
+    注意: このログはtransientエラー(429/network/timeout等、自動リトライで
+    最終的にstatus:'pending'へ戻り成功しうる一時失敗)でも出力されるため、
+    「status:error確定」そのものではない(Fable 5.1セカンドオピニオン指摘、
+    2026-09-19)。有効化前に3環境で実測した結果、直近7日の発生件数は
+    いずれも0件だったため閾値1件のまま採用したが、将来transientエラーが
+    日常的に発生するようになった場合は誤発火しうる点に留意すること。
 
     対応: Cloud Loggingでprocessocr関連のERRORログを確認し、対象docIdの
     status/lastErrorMessageをFirestoreで確認する。一時的な監視強化のため、
-    PaddleOCR切替後の観察期間終了後は削除するか恒久運用に格上げするか再判断する。
+    review_by(下記userLabels)までに削除するか恒久運用に格上げするか再判断する。
   mimeType: "text/markdown"
 combiner: OR
 conditions:
@@ -30,5 +34,7 @@ alertStrategy:
   autoClose: 86400s
 userLabels:
   source: docsplit-monitoring-setup
+  lifecycle: temporary
+  review_by: "2026-10-03"
 notificationChannels:
   - __NOTIFICATION_CHANNEL__
