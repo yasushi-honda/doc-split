@@ -1590,7 +1590,9 @@ jobs:
             # ④切替前ベースライン(status:error率/1サイクルlatency分布)をkanameoneでも取得するための
             # 代替経路。ローカルgcloud対話認証(systemkaname@kanameone.com)の失効に依存せず、
             # check-function-error-logsと同じSA(GCP_SA_KEY_KANAMEONE)非対話認証で完結させる。
-            # 参照: ~/.claude/plans/eventual-dreaming-wind.md §3、docs/handoff/GOAL.md Step0④注記
+            # 参照: docs/handoff/GOAL.md Step0④注記
+            # fable-reviewでの指摘反映: L2の「フィールド不在(制限なし)」と「空配列(全拒否)」の区別、
+            # Firestore REST呼び出し失敗時のfail-closed化(silent failure回避)。
             echo "=== ② L1ゲート状態(processOCR環境変数 OCR_PROVIDER) ==="
             gcloud functions describe processOCR --project="$PROJECT_ID" --gen2 --region=asia-northeast1 \
               --format="value(serviceConfig.environmentVariables.OCR_PROVIDER)"
@@ -1605,14 +1607,44 @@ jobs:
                 let data = "";
                 process.stdin.on("data", (c) => { data += c; });
                 process.stdin.on("end", () => {
-                  const doc = JSON.parse(data);
+                  let doc;
+                  try {
+                    doc = JSON.parse(data);
+                  } catch (e) {
+                    console.error("ERROR: settings/featuresのレスポンスがJSONとして解釈できません:", data);
+                    process.exit(1);
+                  }
+                  if (doc.error) {
+                    if (doc.error.code === 404) {
+                      console.log("settings/features: ドキュメント未作成(getPaddleOcrGate上は無効/fail-closed相当)");
+                      return;
+                    }
+                    console.error("ERROR: settings/features取得に失敗しました:", JSON.stringify(doc.error));
+                    process.exit(1);
+                  }
                   const fields = doc.fields || {};
-                  const paddleOcr = fields.paddleOcr ? fields.paddleOcr.booleanValue : null;
-                  const values = fields.paddleOcrAllowlist && fields.paddleOcrAllowlist.arrayValue
-                    ? fields.paddleOcrAllowlist.arrayValue.values || []
-                    : [];
-                  console.log("paddleOcr:", paddleOcr);
-                  console.log("paddleOcrAllowlist件数:", values.length);
+                  const paddleOcrField = fields.paddleOcr;
+                  let paddleOcrDisplay;
+                  if (!paddleOcrField) {
+                    paddleOcrDisplay = "未設定(フィールド不在、無効扱い)";
+                  } else if (typeof paddleOcrField.booleanValue === "boolean") {
+                    paddleOcrDisplay = String(paddleOcrField.booleanValue);
+                  } else {
+                    paddleOcrDisplay = `非boolean値のため無効扱い: ${JSON.stringify(paddleOcrField)}`;
+                  }
+                  console.log("paddleOcr:", paddleOcrDisplay);
+
+                  if (!("paddleOcrAllowlist" in fields)) {
+                    console.log("paddleOcrAllowlist: 不在(制限なし=allowlist null、全docId対象)");
+                  } else {
+                    const arrayValue = fields.paddleOcrAllowlist.arrayValue;
+                    const values = arrayValue && arrayValue.values ? arrayValue.values : [];
+                    if (values.length === 0) {
+                      console.log("paddleOcrAllowlist: 空配列(fail-closedで全docId拒否=実質全展開ブロック中)");
+                    } else {
+                      console.log(`paddleOcrAllowlist: ${values.length}件(該当docIdのみ対象、他は無効)`);
+                    }
+                  }
                 });
               '
 
@@ -1624,6 +1656,8 @@ jobs:
 
             echo ""
             echo "=== ④ status:error率(直近7日、updatedAt基準、documentsコレクション) ==="
+            # 注: 分母は「直近7日にupdatedAtが更新されたdocuments」(OCR処理件数と一致しない、編集等も含む)、
+            # 分子は現時点でstatus:errorのもののスナップショット(dev/cocoroと同方式、前後比較の整合性は保たれる)。
             SINCE_ISO=$(date -u -d "-7 days" +%Y-%m-%dT%H:%M:%SZ)
             TOTAL_QUERY=$(node -e '
               const since = process.argv[1];
@@ -1675,35 +1709,66 @@ jobs:
                 },
               }));
             ' "$SINCE_ISO")
-            echo "total: $(curl -sS -H "Authorization: Bearer ${ACCESS_TOKEN}" -H "Content-Type: application/json" \
+            TOTAL_RESULT=$(curl -sS -H "Authorization: Bearer ${ACCESS_TOKEN}" -H "Content-Type: application/json" \
               -d "$TOTAL_QUERY" \
-              "https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents:runAggregationQuery")"
-            echo "error: $(curl -sS -H "Authorization: Bearer ${ACCESS_TOKEN}" -H "Content-Type: application/json" \
+              "https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents:runAggregationQuery")
+            ERROR_RESULT=$(curl -sS -H "Authorization: Bearer ${ACCESS_TOKEN}" -H "Content-Type: application/json" \
               -d "$ERROR_QUERY" \
-              "https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents:runAggregationQuery")"
+              "https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents:runAggregationQuery")
+            node -e '
+              function extractCount(raw, alias) {
+                let parsed;
+                try {
+                  parsed = JSON.parse(raw);
+                } catch (e) {
+                  console.error("ERROR: runAggregationQueryのレスポンスがJSONとして解釈できません:", raw);
+                  process.exit(1);
+                }
+                const errorObj = Array.isArray(parsed) ? (parsed[0] && parsed[0].error) : parsed.error;
+                if (errorObj) {
+                  console.error("ERROR: Firestore runAggregationQueryが失敗しました:", JSON.stringify(errorObj));
+                  process.exit(1);
+                }
+                const row = Array.isArray(parsed) ? parsed[0] : parsed;
+                const value = row && row.result && row.result.aggregateFields && row.result.aggregateFields[alias]
+                  ? row.result.aggregateFields[alias].integerValue
+                  : undefined;
+                if (value === undefined) {
+                  console.error("ERROR: 集計結果を取得できません(想定外のレスポンス形状):", raw);
+                  process.exit(1);
+                }
+                return parseInt(value, 10);
+              }
+              const total = extractCount(process.argv[1], "total");
+              const errorCount = extractCount(process.argv[2], "errorCount");
+              const rate = total > 0 ? ((errorCount / total) * 100).toFixed(2) : "0.00";
+              console.log(`total=${total} error=${errorCount} rate=${rate}%`);
+            ' "$TOTAL_RESULT" "$ERROR_RESULT"
 
             echo ""
-            echo "=== ④ 1サイクル所要時間分布(processocr Cloud Run request latency、直近7日、上限10000件) ==="
-            LOG_SINCE=$(date -u -d "-7 days" +%Y-%m-%dT%H:%M:%SZ)
-            gcloud logging read "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"processocr\" AND httpRequest.latency:* AND timestamp>=\"$LOG_SINCE\"" \
-              --project="$PROJECT_ID" --format="value(httpRequest.latency)" --limit=10000 > /tmp/paddle-ocr-step0-latencies.txt
-            node -e '
-              const fs = require("fs");
-              const lines = fs.readFileSync("/tmp/paddle-ocr-step0-latencies.txt", "utf8").split("\n").filter(Boolean);
-              const nums = lines
-                .map((l) => parseFloat(l.replace(/s$/, "")))
-                .filter((n) => !Number.isNaN(n))
-                .sort((a, b) => a - b);
-              if (nums.length === 0) {
-                console.log("サンプルなし");
-                process.exit(0);
-              }
-              const pct = (p) => nums[Math.min(nums.length - 1, Math.floor(nums.length * p))];
-              const over60 = nums.filter((n) => n > 60).length;
-              console.log(
-                `件数=${nums.length} p50=${pct(0.5).toFixed(2)}s p95=${pct(0.95).toFixed(2)}s max=${nums[nums.length - 1].toFixed(2)}s 60秒超過=${over60}件(${((over60 / nums.length) * 100).toFixed(2)}%)`
-              );
-            '
+            echo "=== ④ 1サイクル所要時間分布(processocr Cloud Run request latency、直近7日、上限11000件) ==="
+            gcloud logging read "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"processocr\" AND httpRequest.latency:* AND timestamp>=\"$SINCE_ISO\"" \
+              --project="$PROJECT_ID" --format="value(httpRequest.latency)" --limit=11000 \
+              | node -e '
+                let data = "";
+                process.stdin.on("data", (c) => { data += c; });
+                process.stdin.on("end", () => {
+                  const lines = data.split("\n").filter(Boolean);
+                  const nums = lines
+                    .map((l) => parseFloat(l.replace(/s$/, "")))
+                    .filter((n) => !Number.isNaN(n))
+                    .sort((a, b) => a - b);
+                  if (nums.length === 0) {
+                    console.log("サンプルなし");
+                    return;
+                  }
+                  const pct = (p) => nums[Math.min(nums.length - 1, Math.floor(nums.length * p))];
+                  const over60 = nums.filter((n) => n > 60).length;
+                  console.log(
+                    `件数=${nums.length} p50=${pct(0.5).toFixed(2)}s p95=${pct(0.95).toFixed(2)}s max=${nums[nums.length - 1].toFixed(2)}s 60秒超過=${over60}件(${((over60 / nums.length) * 100).toFixed(2)}%)`
+                  );
+                });
+              '
           elif [ "$SCRIPT_NAME" = "audit-fax-duplication-plan-logs" ]; then
             # 複数人記載FAX検出 Stage2切替判断材料(docs/adr/0024-multi-customer-detection.md)。
             # processOCR(cronバッチ)がconsole.log(msg, obj)で出力するfaxDuplicationPlanログ
