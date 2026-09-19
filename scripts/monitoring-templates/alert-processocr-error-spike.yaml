@@ -8,12 +8,17 @@ documentation:
 
     `Error processing document`(ocrProcessor.ts handleProcessingError、
     status確定判定より前の無条件console.error)ログの発生を検知する。
+    log-based metric側のフィルタにseverity条件は付けていない
+    (firebase-functions/logger未使用のためconsole.error()はCloud Loggingで
+    自動的にERROR severityへ昇格されず、textPayloadのみのDEFAULT severityで
+    記録される実測を確認済み。Fable 5.1セカンドオピニオン指摘、2026-09-19)。
+
     注意: このログはtransientエラー(429/network/timeout等、自動リトライで
     最終的にstatus:'pending'へ戻り成功しうる一時失敗)でも出力されるため、
-    「status:error確定」そのものではない(Fable 5.1セカンドオピニオン指摘、
-    2026-09-19)。有効化前に3環境で実測した結果、直近7日の発生件数は
-    いずれも0件だったため閾値1件のまま採用したが、将来transientエラーが
-    日常的に発生するようになった場合は誤発火しうる点に留意すること。
+    「status:error確定」そのものではない。有効化前に3環境で実測した結果、
+    直近30日の発生件数はいずれも0件(陽性検証材料なし)だったため閾値1件の
+    まま採用したが、将来transientエラーが日常的に発生するようになった場合は
+    誤発火しうる点に留意すること。
 
     対応: Cloud Loggingでprocessocr関連のERRORログを確認し、対象docIdの
     status/lastErrorMessageをFirestoreで確認する。一時的な監視強化のため、
