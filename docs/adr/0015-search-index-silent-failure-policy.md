@@ -95,6 +95,7 @@ Issue #223 で方針を確定させる必要がある。
 
 - PR #222 の判断根拠が明文化され、将来の再議論コストが低減
 - #220 の log-based metric 設計と整合 (ERROR severity 前提)
+  - **2026-09-20 追記 (Issue #981)**: この「ERROR severity 前提」はgen2 (Cloud Run)では成立しない。`console.error()`はCloud Loggingで`severity=ERROR`に昇格されずDEFAULT severityで記録されるため、metricフィルタから`severity="ERROR"`条件を除去し、resource + `textPayload`で検知する形に修正した。本ADR中の「`severity=ERROR`」「ERROR severity」への言及は全て「`console.error`で出力された」の意味で読むこと(例: 「`severity=ERROR`ログが7日間に1件以上」=「`console.error`で`Failed to remove tokens`が7日間に1件以上出力された」)
 - 追加実装ゼロで本 Issue をクローズ可能
 
 ### Negative

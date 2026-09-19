@@ -249,7 +249,9 @@ async function removeTokensFromIndex(docId: string, tokens: string[]): Promise<v
       console.warn(`Search index entry not found while removing tokens for ${docId} (idempotent skip)`);
       return;
     }
-    // Firestore権限/ネットワーク/クォータ等の障害は ERROR として残し監視/アラート対象化する
+    // Firestore権限/ネットワーク/クォータ等の障害は console.error として残し監視/アラート対象化する。
+    // 注意: console.error は Cloud Logging で severity=ERROR に昇格されず DEFAULT のまま記録される(Issue #981)。
+    // `search_index_silent_failure` メトリクスは severity ではなく textPayload(`Failed to remove tokens`)で検知する。
     console.error(`Failed to remove tokens from search index for ${docId}:`, error);
   }
 }

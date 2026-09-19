@@ -9,7 +9,7 @@ Issue #220 + ADR-0015 Follow-up で構築した log-based metric + Cloud Monitor
 - **通知チャネル** 1 つ (email、環境ごと) を作成し全ポリシーで共有
 
 関連コード:
-- `scripts/setup-log-based-metrics.sh`: 作成 (冪等、`--dry-run` 対応)
+- `scripts/setup-log-based-metrics.sh`: 作成 (冪等: 既存の metric / alert policy は既定で変更しない、`--dry-run` 対応)
 - `scripts/teardown-log-based-metrics.sh`: 削除 (policies → metrics → channel の順)
 - `scripts/monitoring-templates/`: alert policy YAML テンプレート
 - `.github/workflows/setup-monitoring.yml`: workflow_dispatch 実行基盤
@@ -22,10 +22,10 @@ Issue #220 + ADR-0015 Follow-up で構築した log-based metric + Cloud Monitor
 | `ocr_page_truncated` | `[OCR] ... text truncated` (WARN) | 24h 以内に 3 件以上 | 過去30日実績 0.067件/日の約45倍 |
 | `ocr_aggregate_truncated` | `[OCR] Aggregate pageResults truncated` (WARN) | 24h 以内に 1 件以上 | per-page 二段目発動は異常 |
 | `summary_truncated` | `[Summary] truncated` (WARN) | 24h 以内に 1 件以上 | Issue #209 再発指標 |
-| `search_index_silent_failure` | `Failed to remove tokens` (severity=ERROR) | 24 時間窓で 1 件以上 (incident は 7 日間可視化) | ADR-0015 再評価トリガー条件1 (`#220 metric で severity=ERROR ログが 7日間に 1件以上発生`) を反映。GCP API 制約 (alignmentPeriod 最大 25h) のため厳密な 7 日 rolling ではなく、`autoClose: 7d` で incident 可視性を 7 日担保 |
+| `search_index_silent_failure` | `Failed to remove tokens` (`console.error`出力、severity条件なし: Cloud LoggingでDEFAULT severityのため、Issue #981) | 24 時間窓で 1 件以上 (incident は 7 日間可視化) | ADR-0015 再評価トリガー条件1 (`#220 metric で severity=ERROR ログが 7日間に 1件以上発生`) を反映。GCP API 制約 (alignmentPeriod 最大 25h) のため厳密な 7 日 rolling ではなく、`autoClose: 7d` で incident 可視性を 7 日担保 |
 | `drive_folder_divergent` | `[driveFolderClaim] claim divergent detected` | 24 時間窓で 1 件以上 (incident は 7 日間可視化) | Issue #871 恒久対応。claim と Drive 実体の食い違い(新規発生)を検知。実績: 約2.5週間で2件、発生自体が異常 |
 | `drive_folder_divergent_record_failed` | `divergent記録に失敗しました` | 24 時間窓で 1 件以上 (incident は 7 日間可視化) | Issue #871 恒久対応。`markDivergent()`自体のFirestore書込み失敗は claim にもメトリクスにも残らない経路があるため高優先度 |
-| `claim_divergent_backlog_stale` | `[driveFolderClaim] divergent backlog stale` (severity=WARNING、`driveFolderClaimDivergentSweep`日次関数が出力) | 24 時間窓で 1 件以上 (incident は 7 日間可視化) | Issue #871 恒久対応。「新規発生」検知だけでは既存の未解決分の**放置**を検知できないギャップを埋める。3日以上未解決の divergent が残っている場合のみ日次で1回発火 |
+| `claim_divergent_backlog_stale` | `[driveFolderClaim] divergent backlog stale` (`console.warn`出力、severity条件なし: Cloud LoggingでDEFAULT severityのため、Issue #981。`driveFolderClaimDivergentSweep`日次関数が出力) | 24 時間窓で 1 件以上 (incident は 7 日間可視化) | Issue #871 恒久対応。「新規発生」検知だけでは既存の未解決分の**放置**を検知できないギャップを埋める。3日以上未解決の divergent が残っている場合のみ日次で1回発火 |
 | `processocr_completed` | `OCR processing (polling) completed`(`processOCR`、正常終了時に必ず出力) | **absence**条件: 20分間ログが出現しない | ADR-0025 PR6。`processOCR`に`concurrency:1`を導入(tick重複防止)したことに伴い、原因を問わずOCR処理パイプライン全体が停止している状態を検知する健全性監視。他メトリクスと異なり閾値超過ではなく**ログの欠落**を検知する点に注意(`conditionAbsent`、`conditionThreshold`ではない)。閾値20分(1200s)は「1サイクル最大900秒(`PROCESS_OCR_TIMEOUT_SECONDS`) + 次tickまでの待ち最大60秒」=最大960秒という**正当な**間隔に対して十分なマージンを取った値(Issue #966 H1、当初600sは900秒タイムアウトと矛盾し誤発火しうると判明したため修正) |
 | `processocr_error` | `Error processing document`(`processOCR`のみ、`ocrProcessor.ts` `handleProcessingError`が無条件出力) | 1h 以内に 1 件以上 | ADR-0025 PaddleOCR Pass1全面切替(2026-09-19)後の一時的事後監視(`lifecycle: temporary`、`review_by: 2026-10-03`)。severity条件は付けない(`console.error()`はfirebase-functions/logger未使用のためCloud Loggingで自動的にERROR severityへ昇格されずDEFAULTのまま記録される実測を確認済み。当初`severity="ERROR"`を含めていたが構造的に一致しない欠陥がありPR #980で修正)。`Error processing document`はtransientエラー(自動リトライで最終的に成功する一時失敗)でも無条件出力されるため「status:error確定」そのものではない点に留意。有効化前の実データ確認(直近30日)は3環境とも該当ログ0件で陽性検証材料なし |
 
@@ -74,8 +74,11 @@ ADR-0015 要件「7 日間に 1 件以上」は metric alignment では厳密に
 
 ### 冪等性
 
-スクリプトは既存リソースがあれば skip する。再実行しても副作用なし。
-ただし**更新は自動では行われない**。既存リソースを変更する場合は先に teardown が必要。
+スクリプトは既存リソースがあれば既定では変更せず skip する。再実行しても副作用なし。
+
+- **alert policy**: 更新は自動では行われない。変更する場合は先に teardown が必要。
+- **log-based metric**: 既存 metric の filter が定義と食い違う場合は警告を出して skip する(#981)。反映するには `UPDATE_EXISTING_METRICS=1` を付けて再実行する(差分のある metric のみ `gcloud logging metrics update` で更新。`--dry-run` で事前確認できる)。alert policy は `metric.type` を参照するため、metric の filter 更新だけなら policy の変更は不要。
+- 上記の `UPDATE_EXISTING_METRICS=1` は**ローカル実行のみ**対応。GitHub Actions (`setup-monitoring.yml`) にはこの環境変数を渡す入力がない。特定 metric だけを更新する場合は `gcloud logging metrics update <name> --log-filter=...` を直接使ってもよい。
 
 ### ロールバック / 削除
 
@@ -175,6 +178,7 @@ rm /tmp/monitoring-sa.json
 - ✅ dev: SA + Secret + setup 完了 (2026-04-17 session6, 5 metrics + 5 alert policies + 1 channel 稼働中)
 - ✅ kanameone: SA + Secret + setup 完了 (2026-04-17 session7, Run ID `24547741800`, 5 metrics + 5 alert policies + 1 channel 稼働中、通知先 `hy.unimail.11@gmail.com`)
 - ✅ cocoro: SA + Secret + setup 完了 (2026-04-17 session7, Run ID `24548562806`, 5 metrics + 5 alert policies + 1 channel 稼働中、通知先 `hy.unimail.11@gmail.com`)
+- ✅ 2026-09-20 (Issue #981 / PR #985): dev / cocoro / kanameone の `search_index_silent_failure` と `claim_divergent_backlog_stale` の filter から severity 条件を除去(`gcloud logging metrics update` で in-place 反映、alert policy は無変更)。`console.error` / `console.warn` は gen2 の Cloud Logging で DEFAULT severity のため、旧 filter は一致しなかった
 - ⏳ Issue #871 恒久対応で追加した3種（`drive_folder_divergent`/`drive_folder_divergent_record_failed`/`claim_divergent_backlog_stale`）は**PR時点では未適用**。スクリプトは冪等なので、各環境で `setup-log-based-metrics.sh` を再実行すれば既存5種はskipされ新規3種のみ追加される（ロールアウト §1 参照）
 
 ## 通知先の調整
