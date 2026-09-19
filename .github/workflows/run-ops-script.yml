@@ -161,6 +161,7 @@ on:
           - check-function-error-logs --hours 24
           - check-function-error-logs --hours 72
           - check-function-error-logs --hours 168
+          - check-paddle-ocr-step0
           - audit-filename-pattern-issue686
           - backfill-drive-export --dry-run
           - backfill-drive-export
@@ -1584,6 +1585,125 @@ jobs:
               gcloud logging read "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"$svc\" AND severity>=ERROR AND timestamp>=\"$SINCE\"" \
                 --project="$PROJECT_ID" --format="table(timestamp,severity,textPayload)" --limit=3
             done
+          elif [ "$SCRIPT_NAME" = "check-paddle-ocr-step0" ]; then
+            # ADR-0025 Pass1切替 Step0(前提確認)②L1/L2ゲート状態・③Scheduler retryConfig・
+            # ④切替前ベースライン(status:error率/1サイクルlatency分布)をkanameoneでも取得するための
+            # 代替経路。ローカルgcloud対話認証(systemkaname@kanameone.com)の失効に依存せず、
+            # check-function-error-logsと同じSA(GCP_SA_KEY_KANAMEONE)非対話認証で完結させる。
+            # 参照: ~/.claude/plans/eventual-dreaming-wind.md §3、docs/handoff/GOAL.md Step0④注記
+            echo "=== ② L1ゲート状態(processOCR環境変数 OCR_PROVIDER) ==="
+            gcloud functions describe processOCR --project="$PROJECT_ID" --gen2 --region=asia-northeast1 \
+              --format="value(serviceConfig.environmentVariables.OCR_PROVIDER)"
+
+            ACCESS_TOKEN=$(gcloud auth print-access-token)
+
+            echo ""
+            echo "=== ② L2ゲート状態(settings/features: paddleOcr, paddleOcrAllowlist) ==="
+            curl -sS -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+              "https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents/settings/features" \
+              | node -e '
+                let data = "";
+                process.stdin.on("data", (c) => { data += c; });
+                process.stdin.on("end", () => {
+                  const doc = JSON.parse(data);
+                  const fields = doc.fields || {};
+                  const paddleOcr = fields.paddleOcr ? fields.paddleOcr.booleanValue : null;
+                  const values = fields.paddleOcrAllowlist && fields.paddleOcrAllowlist.arrayValue
+                    ? fields.paddleOcrAllowlist.arrayValue.values || []
+                    : [];
+                  console.log("paddleOcr:", paddleOcr);
+                  console.log("paddleOcrAllowlist件数:", values.length);
+                });
+              '
+
+            echo ""
+            echo "=== ③ Cloud Scheduler設定(attemptDeadline, retryConfig) ==="
+            gcloud scheduler jobs describe firebase-schedule-processOCR-asia-northeast1 \
+              --location=asia-northeast1 --project="$PROJECT_ID" \
+              --format="yaml(attemptDeadline,retryConfig)"
+
+            echo ""
+            echo "=== ④ status:error率(直近7日、updatedAt基準、documentsコレクション) ==="
+            SINCE_ISO=$(date -u -d "-7 days" +%Y-%m-%dT%H:%M:%SZ)
+            TOTAL_QUERY=$(node -e '
+              const since = process.argv[1];
+              console.log(JSON.stringify({
+                structuredAggregationQuery: {
+                  structuredQuery: {
+                    from: [{ collectionId: "documents" }],
+                    where: {
+                      fieldFilter: {
+                        field: { fieldPath: "updatedAt" },
+                        op: "GREATER_THAN_OR_EQUAL",
+                        value: { timestampValue: since },
+                      },
+                    },
+                  },
+                  aggregations: [{ count: {}, alias: "total" }],
+                },
+              }));
+            ' "$SINCE_ISO")
+            ERROR_QUERY=$(node -e '
+              const since = process.argv[1];
+              console.log(JSON.stringify({
+                structuredAggregationQuery: {
+                  structuredQuery: {
+                    from: [{ collectionId: "documents" }],
+                    where: {
+                      compositeFilter: {
+                        op: "AND",
+                        filters: [
+                          {
+                            fieldFilter: {
+                              field: { fieldPath: "updatedAt" },
+                              op: "GREATER_THAN_OR_EQUAL",
+                              value: { timestampValue: since },
+                            },
+                          },
+                          {
+                            fieldFilter: {
+                              field: { fieldPath: "status" },
+                              op: "EQUAL",
+                              value: { stringValue: "error" },
+                            },
+                          },
+                        ],
+                      },
+                    },
+                    aggregations: [{ count: {}, alias: "errorCount" }],
+                  },
+                },
+              }));
+            ' "$SINCE_ISO")
+            echo "total: $(curl -sS -H "Authorization: Bearer ${ACCESS_TOKEN}" -H "Content-Type: application/json" \
+              -d "$TOTAL_QUERY" \
+              "https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents:runAggregationQuery")"
+            echo "error: $(curl -sS -H "Authorization: Bearer ${ACCESS_TOKEN}" -H "Content-Type: application/json" \
+              -d "$ERROR_QUERY" \
+              "https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents:runAggregationQuery")"
+
+            echo ""
+            echo "=== ④ 1サイクル所要時間分布(processocr Cloud Run request latency、直近7日、上限10000件) ==="
+            LOG_SINCE=$(date -u -d "-7 days" +%Y-%m-%dT%H:%M:%SZ)
+            gcloud logging read "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"processocr\" AND httpRequest.latency:* AND timestamp>=\"$LOG_SINCE\"" \
+              --project="$PROJECT_ID" --format="value(httpRequest.latency)" --limit=10000 > /tmp/paddle-ocr-step0-latencies.txt
+            node -e '
+              const fs = require("fs");
+              const lines = fs.readFileSync("/tmp/paddle-ocr-step0-latencies.txt", "utf8").split("\n").filter(Boolean);
+              const nums = lines
+                .map((l) => parseFloat(l.replace(/s$/, "")))
+                .filter((n) => !Number.isNaN(n))
+                .sort((a, b) => a - b);
+              if (nums.length === 0) {
+                console.log("サンプルなし");
+                process.exit(0);
+              }
+              const pct = (p) => nums[Math.min(nums.length - 1, Math.floor(nums.length * p))];
+              const over60 = nums.filter((n) => n > 60).length;
+              console.log(
+                `件数=${nums.length} p50=${pct(0.5).toFixed(2)}s p95=${pct(0.95).toFixed(2)}s max=${nums[nums.length - 1].toFixed(2)}s 60秒超過=${over60}件(${((over60 / nums.length) * 100).toFixed(2)}%)`
+              );
+            '
           elif [ "$SCRIPT_NAME" = "audit-fax-duplication-plan-logs" ]; then
             # 複数人記載FAX検出 Stage2切替判断材料(docs/adr/0024-multi-customer-detection.md)。
             # processOCR(cronバッチ)がconsole.log(msg, obj)で出力するfaxDuplicationPlanログ
