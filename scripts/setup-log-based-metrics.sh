@@ -2,7 +2,7 @@
 # Cloud Logging log-based metric + Cloud Monitoring alert policy セットアップ
 #
 # Issue #220 + ADR-0015 Follow-up の運用監視基盤を作成する。
-# 一度実行すれば自動監視が開始される。冪等 (既存があれば skip)。
+# 一度実行すれば自動監視が開始される。冪等 (既存は既定で変更しない = skip)。
 # 既存 metric の filter が定義と食い違う場合は警告する。反映は UPDATE_EXISTING_METRICS=1 を付けて再実行 (#981)。
 #
 # 使用方法:
@@ -11,6 +11,7 @@
 # 例:
 #   ./scripts/setup-log-based-metrics.sh docsplit-kanameone alerts@example.com
 #   ./scripts/setup-log-based-metrics.sh docsplit-dev dev@example.com --dry-run
+#   UPDATE_EXISTING_METRICS=1 ./scripts/setup-log-based-metrics.sh docsplit-kanameone alerts@example.com  # 既存metricのfilter差分を更新
 #
 # 確認:
 #   gcloud logging metrics list --project=<project-id>
@@ -42,7 +43,7 @@ esac
 DRY=""
 if [ "$DRY_RUN" = "--dry-run" ]; then
   DRY="[DRY-RUN] "
-  echo "=== DRY-RUN モード: リソース作成をスキップしますが、既存確認の gcloud 呼び出しは実行されます (権限エラー時は dry-run でも失敗します) ==="
+  echo "=== DRY-RUN モード: リソース作成・更新をスキップしますが、既存確認の gcloud 呼び出しは実行されます (権限エラー時は dry-run でも失敗します) ==="
   echo ""
 fi
 
@@ -70,10 +71,12 @@ METRICS=(
   "ocr_page_truncated|OCR per-page text truncated (#220, Issue #205, #936でcloud_run_revisionへ修正)|resource.type=\"cloud_run_revision\" AND textPayload=~\"\\\\[OCR\\\\].*text truncated\""
   "ocr_aggregate_truncated|OCR aggregate pageResults truncated (#220, Issue #205, #936でcloud_run_revisionへ修正)|resource.type=\"cloud_run_revision\" AND textPayload=~\"\\\\[OCR\\\\] Aggregate pageResults truncated\""
   "summary_truncated|summary generation truncated (#220, Issue #209, #936でcloud_run_revisionへ修正)|resource.type=\"cloud_run_revision\" AND textPayload=~\"\\\\[Summary\\\\] truncated\""
-  "search_index_silent_failure|removeTokensFromIndex permanent error (#220, ADR-0015, #936でcloud_run_revisionへ修正、#981でseverity条件を除去: console.error()はCloud LoggingでDEFAULT severityのため)|resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"ondocumentwritesearchindex\" AND textPayload:\"Failed to remove tokens\""
+  # search_index_silent_failure / claim_divergent_backlog_stale は severity 条件を付けない(#981): functions/src は素の
+  # console.error/console.warn を使い、gen2 の Cloud Logging では DEFAULT severity で記録されるため textPayload で検知する。
+  "search_index_silent_failure|removeTokensFromIndex permanent error (#220, ADR-0015, #936でcloud_run_revisionへ修正)|resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"ondocumentwritesearchindex\" AND textPayload:\"Failed to remove tokens\""
   "drive_folder_divergent|driveFolderClaim claim divergent detected (Issue #871 恒久対応)|resource.type=\"cloud_run_revision\" AND textPayload:\"[driveFolderClaim] claim divergent detected\""
   "drive_folder_divergent_record_failed|markDivergent()自体の書込み失敗、claimにもメトリクスにも残らない経路 (Issue #871 恒久対応)|resource.type=\"cloud_run_revision\" AND textPayload:\"divergent記録に失敗しました\""
-  "claim_divergent_backlog_stale|divergent claim が3日以上未解決のまま滞留 (Issue #871 恒久対応、日次sweep、#981でseverity条件を除去: console.warn()はCloud LoggingでDEFAULT severityのため)|resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"drivefolderclaimdivergentsweep\" AND textPayload:\"[driveFolderClaim] divergent backlog stale\""
+  "claim_divergent_backlog_stale|divergent claim が3日以上未解決のまま滞留 (Issue #871 恒久対応、日次sweep)|resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"drivefolderclaimdivergentsweep\" AND textPayload:\"[driveFolderClaim] divergent backlog stale\""
   "processocr_completed|processOCR cycle完了 or メンテナンスゲート閉鎖によるskip(ADR-0025 PR6、tick重複対策concurrency:1導入後の健全性監視。absence条件で本メトリクスが一定時間出現しない=OCR処理停止を検知。ADR-0019のgroupAggregationGate閉鎖(実績最大約25分、PR #781でドレイン待機20分に設定)は正当なOCR確定処理skipであり誤検知させないため、gate閉鎖ログもheartbeatとして本メトリクスに含める)|resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"processocr\" AND (textPayload:\"OCR processing (polling) completed\" OR textPayload:\"[maintenanceGate] groupAggregation gate closed\")"
   "processocr_error|processOCR document処理エラー(ADR-0025 PaddleOCR Pass1全面切替後の事後監視、Step0④ベースラインerror率0%実績を踏まえ発生即異常として検知。console.error()はfirebase-functions/logger未使用のためCloud Loggingのseverityは自動付与されずDEFAULTのまま記録される実測を確認済み、severity条件は付けない)|resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"processocr\" AND textPayload:\"Error processing document\""
 )
@@ -118,7 +121,11 @@ for metric_def in "${METRICS[@]}"; do
     # 既存 metric は既定では書き換えない(冪等性維持)。ただし filter がこの定義と食い違う場合は
     # 「スクリプトの定義だけ直っても本番は旧 filter のまま」になる(#981)ため、差分を警告する。
     # 反映する場合は UPDATE_EXISTING_METRICS=1 を付けて再実行する(差分のある metric のみ更新)。
-    CURRENT_FILTER="$(gcloud logging metrics describe "$METRIC_NAME" --project="$PROJECT_ID" --format='value(filter)' 2>/dev/null || true)"
+    if ! CURRENT_FILTER="$(gcloud logging metrics describe "$METRIC_NAME" --project="$PROJECT_ID" --format='value(filter)' 2>/dev/null)" || [ -z "$CURRENT_FILTER" ]; then
+      # 権限/一時エラーを「filter 差分」と誤認して更新しないよう、取得失敗時は何もしない
+      echo "⚠ $METRIC_NAME の filter を取得できませんでした (skip)"
+      continue
+    fi
     if [ "$CURRENT_FILTER" = "$METRIC_FILTER" ]; then
       echo "✓ $METRIC_NAME は既存 (skip、filter 一致)"
     elif [ "${UPDATE_EXISTING_METRICS:-}" = "1" ]; then

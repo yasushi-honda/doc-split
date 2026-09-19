@@ -9,7 +9,7 @@ Issue #220 + ADR-0015 Follow-up で構築した log-based metric + Cloud Monitor
 - **通知チャネル** 1 つ (email、環境ごと) を作成し全ポリシーで共有
 
 関連コード:
-- `scripts/setup-log-based-metrics.sh`: 作成 (冪等、`--dry-run` 対応)
+- `scripts/setup-log-based-metrics.sh`: 作成 (冪等: 既存の metric / alert policy は既定で変更しない、`--dry-run` 対応)
 - `scripts/teardown-log-based-metrics.sh`: 削除 (policies → metrics → channel の順)
 - `scripts/monitoring-templates/`: alert policy YAML テンプレート
 - `.github/workflows/setup-monitoring.yml`: workflow_dispatch 実行基盤
@@ -74,8 +74,11 @@ ADR-0015 要件「7 日間に 1 件以上」は metric alignment では厳密に
 
 ### 冪等性
 
-スクリプトは既存リソースがあれば skip する。再実行しても副作用なし。
-ただし**更新は自動では行われない**。既存リソースを変更する場合は先に teardown が必要。
+スクリプトは既存リソースがあれば既定では変更せず skip する。再実行しても副作用なし。
+
+- **alert policy**: 更新は自動では行われない。変更する場合は先に teardown が必要。
+- **log-based metric**: 既存 metric の filter が定義と食い違う場合は警告を出して skip する(#981)。反映するには `UPDATE_EXISTING_METRICS=1` を付けて再実行する(差分のある metric のみ `gcloud logging metrics update` で更新。`--dry-run` で事前確認できる)。alert policy は `metric.type` を参照するため、metric の filter 更新だけなら policy の変更は不要。
+- 上記の `UPDATE_EXISTING_METRICS=1` は**ローカル実行のみ**対応。GitHub Actions (`setup-monitoring.yml`) にはこの環境変数を渡す入力がない。特定 metric だけを更新する場合は `gcloud logging metrics update <name> --log-filter=...` を直接使ってもよい。
 
 ### ロールバック / 削除
 
@@ -175,6 +178,7 @@ rm /tmp/monitoring-sa.json
 - ✅ dev: SA + Secret + setup 完了 (2026-04-17 session6, 5 metrics + 5 alert policies + 1 channel 稼働中)
 - ✅ kanameone: SA + Secret + setup 完了 (2026-04-17 session7, Run ID `24547741800`, 5 metrics + 5 alert policies + 1 channel 稼働中、通知先 `hy.unimail.11@gmail.com`)
 - ✅ cocoro: SA + Secret + setup 完了 (2026-04-17 session7, Run ID `24548562806`, 5 metrics + 5 alert policies + 1 channel 稼働中、通知先 `hy.unimail.11@gmail.com`)
+- ✅ 2026-09-20 (Issue #981 / PR #985): dev / cocoro / kanameone の `search_index_silent_failure` と `claim_divergent_backlog_stale` の filter から severity 条件を除去(`gcloud logging metrics update` で in-place 反映、alert policy は無変更)。`console.error` / `console.warn` は gen2 の Cloud Logging で DEFAULT severity のため、旧 filter は一致しなかった
 - ⏳ Issue #871 恒久対応で追加した3種（`drive_folder_divergent`/`drive_folder_divergent_record_failed`/`claim_divergent_backlog_stale`）は**PR時点では未適用**。スクリプトは冪等なので、各環境で `setup-log-based-metrics.sh` を再実行すれば既存5種はskipされ新規3種のみ追加される（ロールアウト §1 参照）
 
 ## 通知先の調整

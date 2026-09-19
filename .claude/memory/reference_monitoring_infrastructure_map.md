@@ -19,7 +19,7 @@ metadata:
 
 ## 既知の設計上の注意点
 
-- log-based metricのフィルタにseverity条件を含める場合、対象コードがfirebase-functions/loggerを使っているかを先に確認する。`functions/src`は素の`console.error`/`console.warn`を多用しており、これらは自動的にCloud Loggingのseverityへ昇格されずDEFAULTのまま記録される(実測確認済み)。既存メトリクス`search_index_silent_failure`(`severity="ERROR"`)・`claim_divergent_backlog_stale`(`severity="WARNING"`)にも同種の不一致がある疑いが残っている(GitHub Issue #981で検証待ち)
+- log-based metricのフィルタにseverity条件を含める場合、対象コードがfirebase-functions/loggerを使っているかを先に確認する。`functions/src`は素の`console.error`/`console.warn`を多用しており、これらは自動的にCloud Loggingのseverityへ昇格されずDEFAULTのまま記録される(実測確認済み)。既存メトリクス`search_index_silent_failure`(`severity="ERROR"`)・`claim_divergent_backlog_stale`(`severity="WARNING"`)にも同種の不一致があった(2026-09-20に実測確認、GitHub Issue #981 / PR #985でseverity条件を除去し3環境へ反映済み)
 - Cloud Run標準メトリクス(`run.googleapis.com/request_latencies`等)を使う場合、対象のCloud Functions/Cloud Runが「1回の呼び出し内で複数件を直列処理する」設計かどうかを確認する。`processOCR`は1分間隔・`concurrency:1`で1 tick内に最大5件(`BATCH_SIZE`)を直列処理するため、標準latencyメトリクスは「1 tickの所要時間」であって「1文書あたりの処理時間」ではない
 
 ## 関連

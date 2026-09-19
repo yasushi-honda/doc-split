@@ -46,9 +46,9 @@ stateDiagram-v2
 `search_index_silent_failure` metric の alert が発火すると以下のメールが届く:
 
 ```
-Subject: [ALERT] doc-split-<env>: search_index_silent_failure (severity=ERROR)
+Subject: [ALERT] doc-split-<env>: search_index_silent_failure
 ...
-Log filter: resource.labels.function_name="ondocumentwritesearchindex" severity>=ERROR
+Log filter: resource.type="cloud_run_revision" resource.labels.service_name="ondocumentwritesearchindex" textPayload:"Failed to remove tokens"
 ```
 
 #### 影響 docId の特定
@@ -57,7 +57,7 @@ Cloud Logging で以下のクエリを実行:
 
 ```bash
 gcloud logging read \
-  'resource.labels.function_name="ondocumentwritesearchindex" severity>=ERROR \
+  'resource.type="cloud_run_revision" resource.labels.service_name="ondocumentwritesearchindex" \
    textPayload:"Failed to remove tokens from search index" \
    timestamp>="YYYY-MM-DDT00:00:00Z"' \
   --project=<env-project-id> --limit=100 --format="value(timestamp,textPayload)"
@@ -189,7 +189,8 @@ FIREBASE_PROJECT_ID=<env> node scripts/force-reindex.js --all-drift --dry-run
 
 ```bash
 gcloud logging read \
-  'resource.labels.function_name="ondocumentwritesearchindex" severity>=ERROR \
+  'resource.type="cloud_run_revision" resource.labels.service_name="ondocumentwritesearchindex" \
+   textPayload:"Failed to remove tokens from search index" \
    timestamp>="(復旧完了時刻)"' \
   --project=<env-project-id> --limit=10
 ```
@@ -270,7 +271,7 @@ Escalation 先: `docs/adr/0015-search-index-silent-failure-policy.md` の再評�
 | 部分検証 (先頭 n 件のみ) | `... --all-drift --sample=<n> --execute` |
 | バッチサイズ指定 (クエリページング件数) | `... --all-drift --batch-size=<n> --execute` |
 | 並行数指定 (docId 並行処理数、デフォルト 5、Issue #687) | `... --all-drift --concurrency=<n> --execute` |
-| ERROR ログ確認 | `gcloud logging read 'resource.labels.function_name="ondocumentwritesearchindex" severity>=ERROR' --project=<env-id> --limit=50` |
+| 索引削除失敗ログ確認 | `gcloud logging read 'resource.type="cloud_run_revision" resource.labels.service_name="ondocumentwritesearchindex" textPayload:"Failed to remove tokens"' --project=<env-id> --limit=50` |
 | Firestore バックアップ確認 (復旧前) | `gcloud firestore backups list --database='(default)' --project=<env-id>` |
 
 ### 6.1 force-reindex audit log クエリ (Issue #239)
