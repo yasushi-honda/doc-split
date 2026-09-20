@@ -21,6 +21,8 @@ import {
 } from '../utils/firestoreErrors';
 import { chunkArray } from '../utils/chunkArray';
 import { invalidateSearchCache } from './searchDocuments';
+import { TOKEN_SKIPPED_LOG, INDEX_WRITE_FAILED_LOG } from './searchIndexLogMessages';
+import { partitionTokensBySkippedIds } from './skippedTokens';
 
 const db = getFirestore();
 
@@ -34,6 +36,12 @@ const db = getFirestore();
  * 観測して妥当性を再評価する(GOAL.md AC-e参照)。
  */
 const GET_ALL_CHUNK_SIZE = 10;
+
+/**
+ * サイズ超過時のフォールバックで、トークンごとの個別書込みを同時に発行する件数(Issue #984)。
+ * 60秒 timeout と部分状態の増幅を抑えるため、getAll と同じ 10 を意図的に共用する(値が独立に変わりうるので別名にしている)。
+ */
+const FALLBACK_WRITE_CONCURRENCY = GET_ALL_CHUNK_SIZE;
 
 /** フィールドからマスクへの変換 */
 const FIELD_TO_MASK: Record<TokenField, number> = {
@@ -121,12 +129,8 @@ export async function processSearchIndexTrigger(
   // 新しいトークンをインデックスに追加
   // 高頻度トークンが 1MiB 上限に達している場合は、そのトークンだけスキップして残りを登録する(Issue #984)
   const { skippedTokenIds } = await addDocumentToIndex(docId, tokens);
-  const skippedIdSet = new Set(skippedTokenIds);
-  const registeredTokens = tokens.filter(t => !skippedIdSet.has(generateTokenId(t.token)));
   // generateTokenId は 32bit ハッシュで異なる文字列が同じ ID になりうるため、ID→文字列は 1:N で逆引きする
-  const skippedTokens = [
-    ...new Set(tokens.filter(t => skippedIdSet.has(generateTokenId(t.token))).map(t => t.token)),
-  ];
+  const { registeredTokens, skippedTokens } = partitionTokensBySkippedIds(tokens, new Set(skippedTokenIds));
 
   // ドキュメントに検索メタデータを保存（idempotent用）
   // - tokens: 実際に登録できたトークンのみ(スキップ分を含めると再索引時に存在しない posting を削除して df を誤減算する)
@@ -229,17 +233,19 @@ function hasPostingFor(snapshot: FirebaseFirestore.DocumentSnapshot, docId: stri
 }
 
 /**
- * サイズ超過と判定できなかった索引書込みの失敗を、throw の前に固定文言で記録する。
- * 判定関数が SDK/バックエンドの文言変更で外れても log-based metric(search_index_write_degraded)で
- * 検知できるようにする備え。
+ * サイズ超過以外の索引書込みの失敗を、throw の前に固定文言(INDEX_WRITE_FAILED_LOG)で記録する。
+ * UNAVAILABLE / PERMISSION_DENIED 等の一時・権限障害や、サイズ超過の判定関数が SDK/バックエンドの
+ * 文言変更で外れた場合も含む。log-based metric(search_index_write_failed)で検知できるようにする備え。
  * ログは引数1個の単一文字列に固定する(第2引数を渡すとペイロード形状が変わり、textPayload 前提の
  * metric に当たらなくなる。Issue #981 と同型の失敗を避ける)。
+ *
+ * @param detail 追加の診断情報(失敗件数・tokenId 一覧など)。先頭にスペースを含めて渡す
  */
-function logIndexWriteFailed(docId: string, error: unknown): void {
+function logIndexWriteFailed(docId: string, error: unknown, detail = ''): void {
   const code = (error as { code?: unknown } | null)?.code;
   const message = error instanceof Error ? error.message : String(error);
   console.error(
-    `[searchIndexer] index write failed docId=${docId} code=${String(code)} message=${message.slice(0, 160)}`
+    `${INDEX_WRITE_FAILED_LOG} docId=${docId} code=${String(code)} message=${message.slice(0, 160)}${detail}`
   );
 }
 
@@ -350,31 +356,40 @@ export async function addDocumentToIndex(
   // 60秒 timeout と部分状態の増幅を抑えるため、chunkArray で件数を制限して並列化する。
   const startedAt = Date.now();
   const sizeFailedOps: TokenWriteOp[] = [];
-  for (const opChunk of chunkArray(ops, GET_ALL_CHUNK_SIZE)) {
+  for (const opChunk of chunkArray(ops, FALLBACK_WRITE_CONCURRENCY)) {
     const results = await Promise.allSettled(opChunk.map(op => writeOp(op)));
-    let fatal: { error: unknown } | undefined;
+    const fatalFailures: { op: TokenWriteOp; error: unknown }[] = [];
     results.forEach((result, i) => {
       if (result.status === 'fulfilled') return;
       if (isFirestoreDocumentSizeExceededError(result.reason)) {
         sizeFailedOps.push(opChunk[i]!);
-      } else if (!fatal) {
-        fatal = { error: result.reason };
+      } else {
+        fatalFailures.push({ op: opChunk[i]!, error: result.reason });
       }
     });
-    if (fatal) {
-      logIndexWriteFailed(docId, fatal.error);
-      throw fatal.error;
+    if (fatalFailures.length > 0) {
+      // 以降の chunk は試行せずに throw する(force-reindex は全件を試行してから throw する)。
+      // 部分登録の状態は documents.search が未更新(tokenHash 欠落)のため drift として検知でき、
+      // force-reindex で復旧する。複数の失敗を診断できるよう件数と tokenId 一覧を記録する。
+      logIndexWriteFailed(
+        docId,
+        fatalFailures[0]!.error,
+        ` failed=${fatalFailures.length}/${ops.length} tokenIds=${fatalFailures.map(f => f.op.tokenId).join(',')}`
+      );
+      throw fatalFailures[0]!.error;
     }
   }
 
-  // batch はサイズ超過で失敗したが、個別書込みは全て成功した場合(他の書込みと競合して容量が空いた等)は、
-  // スキップが無いので何も記録しない(skipped=0 のログで metric を誤って動かさない)
-  if (sizeFailedOps.length === 0) return { skippedTokenIds: [] };
-
   // 既に posting がある(=索引に残っている)トークンは skipped に含めない
   const skippedTokenIds = sizeFailedOps.filter(op => !op.hadPosting).map(op => op.tokenId);
+
+  // スキップが 1 件も無い場合は何も記録しない(skipped=0 のログで metric を誤って動かさない)。該当するのは、
+  // (a) batch はサイズ超過で失敗したが個別書込みは全て成功した(他の書込みと競合して容量が空いた等)、
+  // (b) サイズ超過で書けなかった書込みが全て「この書類の posting が既に存在する」トークンだった、の場合
+  if (skippedTokenIds.length === 0) return { skippedTokenIds: [] };
+
   console.error(
-    `[searchIndexer] token skipped: document size limit docId=${docId} ` +
+    `${TOKEN_SKIPPED_LOG} docId=${docId} ` +
       `skipped=${skippedTokenIds.length} keptExisting=${sizeFailedOps.length - skippedTokenIds.length} ` +
       `total=${ops.length} tokenIds=${skippedTokenIds.join(',')} elapsedMs=${Date.now() - startedAt}`
   );

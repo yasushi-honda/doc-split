@@ -1231,15 +1231,19 @@ describe('force-reindex: reindexDocument (サイズ超過 token のスキップ,
     const bulkWriter = mock.createBulkWriter();
     const doc = {
       customerName: '過去スキップ顧客', officeName: '過去スキップ事業所', fileName: 'oldskip.pdf',
-      search: { version: 1, tokens: [], tokenHash: 'stale', skippedTokens: ['old-hot-token'] },
+      // futureField: 今回の書込み対象ではない search.* 内の兄弟フィールド。dot 記法の Partial Update なら不変
+      // (search オブジェクト全体を置換する回帰が入ると消える。CLAUDE.md MUST)
+      search: { version: 1, tokens: [], tokenHash: 'stale', skippedTokens: ['old-hot-token'], futureField: 'keep-me' },
     };
     mock.seedDoc('documents', 'docOld', doc);
+    const plan = forceReindex.planReindex('docOld', doc, loadTokenizer());
 
     await forceReindex.reindexDocument(mock.db, 'docOld', doc, { execute: true, bulkWriter });
 
     const stored = mock.getStoredDoc('documents', 'docOld');
     expect(stored.search).to.not.have.property('skippedTokens');
-    expect(stored.search.tokens.length).to.be.greaterThan(0);
+    expect(stored.search.tokens, '全トークンが登録された').to.deep.equal(plan.newTokenStrings);
+    expect(stored.search.futureField, 'search.* 内の対象外フィールドは不変').to.equal('keep-me');
   });
 
   it('既に posting がある token はサイズ超過で書けなくても skipped にせず search.tokens に残す', async () => {
@@ -1256,6 +1260,97 @@ describe('force-reindex: reindexDocument (サイズ超過 token のスキップ,
     const result = await forceReindex.reindexDocument(mock.db, 'docKept', doc, { execute: true, bulkWriter });
 
     const stored = mock.getStoredDoc('documents', 'docKept');
+    expect(stored.search).to.not.have.property('skippedTokens');
+    expect(stored.search.tokens).to.deep.equal(plan.newTokenStrings);
+    expect(result.tokensSkipped).to.equal(0);
+  });
+});
+
+describe('force-reindex: reindexDocument (サイズ超過の境界・衝突・旧書式, Issue #984)', () => {
+  const sizeError = () => Object.assign(new Error('maximum entity size is 1048576 bytes'), { code: 3 });
+
+  function failSetFor(bulkWriter: any, failingIds: Set<string>) {
+    const originalSet = bulkWriter.set.bind(bulkWriter);
+    bulkWriter.set = async (ref: any, data: any, options?: any) => {
+      if (ref.collectionName === 'search_index' && failingIds.has(ref.id)) throw sizeError();
+      return originalSet(ref, data, options);
+    };
+  }
+
+  it('全トークンがサイズ超過でも resolve し、search.tokens=[] / skippedTokens=全件 / tokenHash=全ハッシュ', async () => {
+    const tokenizer = loadTokenizer();
+    const mock = createFirestoreMock();
+    const bulkWriter = mock.createBulkWriter();
+    const doc = { customerName: '全飽和顧客', officeName: '全飽和事業所', fileName: 'allhot.pdf' };
+    mock.seedDoc('documents', 'docAllHot', doc);
+    const plan = forceReindex.planReindex('docAllHot', doc, tokenizer);
+    failSetFor(bulkWriter, new Set(plan.tokenMap.keys() as Iterable<string>));
+
+    const result = await forceReindex.reindexDocument(mock.db, 'docAllHot', doc, { execute: true, bulkWriter });
+
+    const stored = mock.getStoredDoc('documents', 'docAllHot');
+    expect(stored.search.tokens).to.deep.equal([]);
+    expect([...stored.search.skippedTokens].sort()).to.deep.equal([...new Set<string>(plan.newTokenStrings)].sort());
+    expect(stored.search.tokenHash).to.equal(plan.tokenHash);
+    expect(result.tokensSkipped).to.equal(stored.search.skippedTokens.length);
+  });
+
+  it('tokenId が衝突する別文字列("Aa" と "BB")は、片方が飽和すれば両方を skippedTokens に入れ、tokens に残さない(1:N 逆引き)', async () => {
+    const real = loadTokenizer();
+    // planReindex / computeExpectedIndex は tokenizer を引数で受けるため、固定の衝突ペアを返す偽 tokenizer を注入する
+    const tokenizer = {
+      ...real,
+      generateDocumentTokens: () => [
+        { token: 'Aa', field: 'customer', weight: 10 },
+        { token: 'BB', field: 'office', weight: 8 },
+        { token: 'other', field: 'fileName', weight: 5 },
+      ],
+    };
+    const collidingId = real.generateTokenId('Aa');
+    expect(real.generateTokenId('BB'), '前提: 衝突する').to.equal(collidingId);
+    const mock = createFirestoreMock();
+    const bulkWriter = mock.createBulkWriter();
+    const doc = { customerName: 'x', fileName: 'collide.pdf' };
+    mock.seedDoc('documents', 'docCollide', doc);
+    failSetFor(bulkWriter, new Set([collidingId]));
+
+    await forceReindex.reindexDocument(mock.db, 'docCollide', doc, { execute: true, bulkWriter }, tokenizer);
+
+    const stored = mock.getStoredDoc('documents', 'docCollide');
+    expect(stored.search.skippedTokens).to.deep.equal(['Aa', 'BB']);
+    expect(stored.search.tokens).to.deep.equal(['other']);
+  });
+
+  it('旧書式(ルート直下の postings.<docId>)の既存 posting でも df を再加算しない(トリガー側 hasPostingFor と同じ判定)', async () => {
+    const tokenizer = loadTokenizer();
+    const mock = createFirestoreMock();
+    const bulkWriter = mock.createBulkWriter();
+    const doc = { customerName: '旧書式顧客', officeName: '旧書式事業所', fileName: 'legacy.pdf' };
+    mock.seedDoc('documents', 'docLegacy', doc);
+    const plan = forceReindex.planReindex('docLegacy', doc, tokenizer);
+    const legacyId = [...plan.tokenMap.keys()][0] as string;
+    // 旧 addDocumentToIndex が set({[`postings.${docId}`]: ...}, {merge:true}) で作った、文字どおりのフィールド名
+    mock.seedDoc('search_index', legacyId, { df: 1, 'postings.docLegacy': { score: 1, fieldsMask: 1 } });
+
+    await forceReindex.reindexDocument(mock.db, 'docLegacy', doc, { execute: true, bulkWriter });
+
+    expect(mock.getStoredDoc('search_index', legacyId).df, '旧書式でも既存 posting とみなし df は増えない').to.equal(1);
+  });
+
+  it('旧書式の既存 posting があるトークンは、サイズ超過で書けなくても skipped にせず search.tokens に残す', async () => {
+    const tokenizer = loadTokenizer();
+    const mock = createFirestoreMock();
+    const bulkWriter = mock.createBulkWriter();
+    const doc = { customerName: '旧書式skip顧客', officeName: '旧書式skip事業所', fileName: 'legacyskip.pdf' };
+    mock.seedDoc('documents', 'docLegacy2', doc);
+    const plan = forceReindex.planReindex('docLegacy2', doc, tokenizer);
+    const hotId = [...plan.tokenMap.keys()][0] as string;
+    mock.seedDoc('search_index', hotId, { df: 1, 'postings.docLegacy2': { score: 1, fieldsMask: 1 } });
+    failSetFor(bulkWriter, new Set([hotId]));
+
+    const result = await forceReindex.reindexDocument(mock.db, 'docLegacy2', doc, { execute: true, bulkWriter });
+
+    const stored = mock.getStoredDoc('documents', 'docLegacy2');
     expect(stored.search).to.not.have.property('skippedTokens');
     expect(stored.search.tokens).to.deep.equal(plan.newTokenStrings);
     expect(result.tokensSkipped).to.equal(0);

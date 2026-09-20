@@ -12,6 +12,12 @@ export function isFirestoreNotFoundError(error: unknown): boolean {
   return code === 5 || code === 'NOT_FOUND' || code === 'not-found';
 }
 
+/** サイズ超過と判定する既知のエラー文言(経路により異なる。詳細は isFirestoreDocumentSizeExceededError の JSDoc)。 */
+const DOCUMENT_SIZE_EXCEEDED_MESSAGE_PATTERNS = [
+  'cannot be written because its size',
+  'maximum entity size',
+] as const;
+
 /**
  * Firestoreのドキュメントサイズ超過(1MiB)エラーかを判定 (Issue #984)
  *
@@ -26,14 +32,9 @@ export function isFirestoreNotFoundError(error: unknown): boolean {
  * - 本番: `3 INVALID_ARGUMENT: Document '...' cannot be written because its size (1,048...`
  * - エミュレータ(WriteBatch): `3 INVALID_ARGUMENT: maximum entity size is 1048576 bytes`
  * - エミュレータ(BulkWriter): `maximum entity size is 1048576 bytes`(接頭辞なし)
- * SDK/バックエンド更新で文言が変わると判定が外れるため、外れた場合の備えとして
- * `searchIndexer.ts` は未分類の書込み失敗も固定ログで記録して監視する。
+ * SDK/バックエンド更新で文言が変わると判定が外れて(サイズ超過が throw 側に倒れる)、書類の全トークンが未登録になる
+ * 元の被害に戻るため、`searchIndexer.ts` はサイズ超過以外の索引書込み失敗(判定の外れを含む)を固定ログで記録して監視する。
  */
-const DOCUMENT_SIZE_EXCEEDED_MESSAGE_PATTERNS = [
-  'cannot be written because its size',
-  'maximum entity size',
-] as const;
-
 export function isFirestoreDocumentSizeExceededError(error: unknown): boolean {
   if (error === null || typeof error !== 'object') return false;
   const { code, message } = error as { code?: unknown; message?: unknown };

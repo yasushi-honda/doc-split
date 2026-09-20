@@ -1,0 +1,39 @@
+displayName: "[__ENV__] search_index_write_failed: 検索インデックス書込み失敗 (24h detect, 7d persist)"
+documentation:
+  content: |
+    検索インデックス(`search_index/{tokenId}`)の書込みが、**サイズ超過以外の理由で失敗**しました(Issue #984)。
+    `ondocumentwritesearchindex` の `[searchIndexer] index write failed` を検知します。発生 0 が正常です。
+
+    考えられる原因(ログの `code=` と `message=` を確認してください):
+    - UNAVAILABLE / DEADLINE_EXCEEDED / ABORTED などの一時障害
+    - PERMISSION_DENIED などの権限障害
+    - **サイズ超過の判定関数の外れ**: SDK/バックエンドのエラー文言が変わり、`isFirestoreDocumentSizeExceededError`
+      (`functions/src/utils/firestoreErrors.ts`)がサイズ超過を判定できなくなった可能性。この場合、高頻度トークン
+      (kanameone の `"2026"` 等)を持つ書類は、全トークンが未登録になる元の被害(#984)に戻ります。
+      `message=` に `size` / `entity` などの語が含まれていれば、まずこれを疑ってください。
+
+    失敗した書類は `documents.search.tokenHash` が付かず、`force-reindex.js --all-drift` で drift として検出できます
+    (復旧: docs/context/search-index-recovery.md)。ログの `failed=` と `tokenIds=` に、失敗した件数とトークンの ID が出ます。
+
+    なお、高頻度トークンのスキップ(`[searchIndexer] token skipped: document size limit`)は別の metric
+    `search_index_token_skipped` で観測しており、**アラートは付けていません**(kanameone では根本対応(段階2)まで
+    2026 年の新規書類のたびに発生するため、常時 open のアラートは新規の劣化を覆い隠す)。
+    運用 SOP: docs/context/monitoring-setup.md 参照。
+  mimeType: "text/markdown"
+combiner: OR
+conditions:
+  - displayName: "search_index_write_failed > 0 in 24h"
+    conditionThreshold:
+      filter: 'metric.type="logging.googleapis.com/user/search_index_write_failed" AND resource.type="cloud_run_revision"'
+      aggregations:
+        - alignmentPeriod: 86400s
+          perSeriesAligner: ALIGN_SUM
+      comparison: COMPARISON_GT
+      thresholdValue: 0
+      duration: 0s
+alertStrategy:
+  autoClose: 604800s
+userLabels:
+  source: docsplit-monitoring-setup
+notificationChannels:
+  - __NOTIFICATION_CHANNEL__

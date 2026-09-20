@@ -64,6 +64,9 @@ async function emitFailureEvent({
 // CLI 実行時のみ build を強制。test (require) 時は呼び出し側に委ねる。
 if (require.main === module) {
   ensureTokenizerBuilt();
+  // 古い functions/lib/(サイズ超過の判定関数の追加前にビルドされたもの)だと、step 1(旧 posting 削除)の後に
+  // 初めて失敗し、全書類で「削除だけ済んで posting が抜けた」状態が広がる。書込み前に失敗させる(Issue #984)。
+  loadFirestoreErrors();
 }
 
 const admin = require('firebase-admin');
@@ -300,8 +303,10 @@ async function settleTokenWrites(entries, defaultStage) {
  * 指定 docId の search_index を強制再構築する (BulkWriter 版)。
  * tokenHash 無視で以下を実行:
  *   1. 既存 posting (search.tokens が示す位置) を削除
- *   2. 新 posting を書き込み (再実行安全: 既存 posting 存在時は df 加算しない)
+ *   2. 新 posting を書き込み (再実行安全: 既存 posting 存在時は df 加算しない。ネスト形と旧書式の両方を見る)。
+ *      サイズ超過(高頻度トークンが 1MiB 上限、Issue #984)の token はスキップし、他は登録する
  *   3. documents.search を dot 記法で Partial Update
+ *      (tokens=登録できた分 / skippedTokens=スキップ分(無ければ削除) / tokenHash=期待する全トークンのハッシュ)
  *
  * BulkWriter 移行の設計 (Codex plan review 2026-07-19 反映):
  *   - 同一 DocumentReference への 2 回目以降の書き込みは、1 回目の完了を待たずに
@@ -352,6 +357,9 @@ async function reindexDocument(db, docId, docData, { execute, bulkWriter, plan }
     throw new Error('reindexDocument: execute=true には bulkWriter が必須です');
   }
 
+  // 判定関数を書込み前に検査する(古い lib のまま step 1 で旧 posting だけ削除して失敗するのを防ぐ)
+  loadFirestoreErrors();
+
   const now = admin.firestore.Timestamp.now();
 
   // 削除対象・新規書込み対象の ref を先に構築する。両者は disjoint (tokensToRemove は
@@ -395,7 +403,13 @@ async function reindexDocument(db, docId, docData, { execute, bulkWriter, plan }
     const indexRef = db.collection('search_index').doc(tokenId);
     const posting = { score: data.score, fieldsMask: data.fieldsMask, updatedAt: now };
     const existingDoc = existingById.get(tokenId);
-    const hadPosting = existingDoc?.data()?.postings?.[docId] !== undefined;
+    // ネスト形 postings[docId] と、旧 addDocumentToIndex が作ったルート直下の `postings.<docId>`
+    // (set() はドットをパスとして解釈せず文字どおりのフィールド名になる)のどちらか。
+    // トリガー側 searchIndexer.hasPostingFor と同じ判定にする(Issue #984)。
+    const existingData = existingDoc?.data();
+    const hadPosting =
+      existingData?.postings?.[docId] !== undefined ||
+      existingData?.[`postings.${docId}`] !== undefined;
 
     writeEntries.push({
       tokenId,
@@ -531,8 +545,10 @@ async function runSingleDocId(db, args, auditCtx) {
     const result = await reindexDocument(db, args.docId, data, { execute: args.execute, bulkWriter });
     console.log(
       `  [${args.execute ? 'OK' : 'DRY'}] ${result.docId}: ` +
-      `+${result.tokensToAdd} / -${result.tokensToRemove} tokens, ` +
-      `hash ${result.actualHash || '(none)'} → ${result.expectedHash}`
+      `+${result.tokensToAdd} / -${result.tokensToRemove} tokens` +
+      // サイズ超過でスキップしたトークン数(Issue #984)。0 件なら出さない。hash 一致 = 全トークン登録済み、ではない
+      (result.tokensSkipped ? ` (うち ${result.tokensSkipped} 件はサイズ超過でスキップ、search.skippedTokens に記録)` : '') +
+      `, hash ${result.actualHash || '(none)'} → ${result.expectedHash}`
     );
     await writeForceReindexAuditLog(
       {
@@ -541,7 +557,11 @@ async function runSingleDocId(db, args, auditCtx) {
         mode: 'doc-id',
         dryRun: !args.execute,
         docId: result.docId,
-        counts: { tokensAdded: result.tokensToAdd, tokensRemoved: result.tokensToRemove },
+        counts: {
+          tokensAdded: result.tokensToAdd,
+          tokensRemoved: result.tokensToRemove,
+          tokensSkipped: result.tokensSkipped ?? 0,
+        },
         hashes: { oldHash: result.actualHash || null, newHash: result.expectedHash },
       },
       auditCtx,
@@ -577,6 +597,9 @@ async function runAllDrift(db, args, auditCtx) {
   let drifted = 0;
   let reindexed = 0;
   let failed = 0;
+  // サイズ超過でトークンをスキップした書類数と合計トークン数(Issue #984。drift: 0 では見えないため別に集計する)
+  let skippedDocs = 0;
+  let skippedTokensTotal = 0;
   let lastDoc = null;
   const maxDocs = args.sample ?? Infinity;
 
@@ -634,7 +657,14 @@ async function runAllDrift(db, args, auditCtx) {
             // 同一性保証、code-review 2026-07-19 指摘)。
             const result = await reindexDocument(db, docId, data, { execute: true, bulkWriter, plan });
             reindexed++;
-            console.log(`    [OK] ${docId} 再 index 完了`);
+            if (result.tokensSkipped > 0) {
+              skippedDocs++;
+              skippedTokensTotal += result.tokensSkipped;
+            }
+            console.log(
+              `    [OK] ${docId} 再 index 完了` +
+                (result.tokensSkipped > 0 ? ` (${result.tokensSkipped} トークンはサイズ超過でスキップ)` : '')
+            );
             await writeForceReindexAuditLog(
               {
                 event: EVENTS.EXECUTED,
@@ -642,7 +672,11 @@ async function runAllDrift(db, args, auditCtx) {
                 mode: 'all-drift',
                 dryRun: false,
                 docId,
-                counts: { tokensAdded: result.tokensToAdd, tokensRemoved: result.tokensToRemove },
+                counts: {
+                  tokensAdded: result.tokensToAdd,
+                  tokensRemoved: result.tokensToRemove,
+                  tokensSkipped: result.tokensSkipped ?? 0,
+                },
                 hashes: { oldHash: result.actualHash || null, newHash: result.expectedHash },
               },
               auditCtx,
@@ -683,6 +717,13 @@ async function runAllDrift(db, args, auditCtx) {
 
   console.log('---');
   console.log(`走査: ${processed} 件 / drift: ${drifted} 件 / 再 index: ${reindexed} 件 / 失敗: ${failed} 件`);
+  if (skippedDocs > 0) {
+    // drift: 0 は「ハッシュ保存済み」であり「全トークン登録済み」ではない(Issue #984)。スキップの事実をここで必ず見せる。
+    console.log(
+      `サイズ超過でスキップあり: ${skippedDocs} 件 / 合計 ${skippedTokensTotal} トークン ` +
+        `(search.skippedTokens に記録。再 index しても drift 判定には現れない。docs/context/search-index-recovery.md §2.3)`
+    );
+  }
 
   await writeForceReindexAuditLog(
     {
@@ -690,7 +731,7 @@ async function runAllDrift(db, args, auditCtx) {
       severity: failed > 0 ? SEVERITIES.WARNING : SEVERITIES.NOTICE,
       mode: 'all-drift',
       dryRun: !args.execute,
-      counts: { processed, drifted, reindexed, failed },
+      counts: { processed, drifted, reindexed, failed, skippedDocs, skippedTokens: skippedTokensTotal },
     },
     auditCtx,
   );
