@@ -13,8 +13,11 @@ import {
   tokenizeQuery,
   generateTokenId,
   generateTokensHash,
+  isExcludedToken,
+  tokenizeQueryByWords,
   FIELD_WEIGHTS,
 } from '../src/utils/tokenizer';
+import { extractDateFilters } from '../src/search/dateQuery';
 
 describe('normalizeForSearch', () => {
   it('全角文字を半角に変換する', () => {
@@ -150,10 +153,10 @@ describe('generateDocumentTokens', () => {
     expect(tokens.some(t => t.field === 'documentType')).to.be.true;
   });
 
-  it('日付からトークンを生成する', () => {
+  it('日付トークンは索引に持たない (日付は fileDate の範囲クエリで答える。Issue #984 段階2a)', () => {
     const tokens = generateDocumentTokens({ fileDate: new Date(2024, 0, 15) });
-    expect(tokens.some(t => t.field === 'date')).to.be.true;
-    expect(tokens.some(t => t.token === '2024-01-15')).to.be.true;
+    expect(tokens.some(t => t.field === 'date')).to.be.false;
+    expect(tokens).to.deep.equal([]);
   });
 
   it('ファイル名からトークンを生成する（拡張子除去）', () => {
@@ -173,7 +176,7 @@ describe('generateDocumentTokens', () => {
     expect(tokens.filter(t => t.field === 'customer').length).to.be.greaterThan(0);
     expect(tokens.filter(t => t.field === 'office').length).to.be.greaterThan(0);
     expect(tokens.filter(t => t.field === 'documentType').length).to.be.greaterThan(0);
-    expect(tokens.filter(t => t.field === 'date').length).to.be.greaterThan(0);
+    expect(tokens.filter(t => t.field === 'date').length).to.equal(0);
     expect(tokens.filter(t => t.field === 'fileName').length).to.be.greaterThan(0);
   });
 
@@ -244,6 +247,90 @@ describe('generateDocumentTokens', () => {
       const tokens = generateDocumentTokens({ fileName: '' });
       expect(tokens.filter(t => t.field === 'fileName').length).to.equal(0);
     });
+  });
+});
+
+describe('isExcludedToken (Issue #984 段階2a)', () => {
+  it('日付形 (YYYY / YYYY-MM / YYYY-MM-DD, 2000〜2099) は除外', () => {
+    for (const t of ['2026', '2000', '2099', '2026-09', '2026-12', '2026-09-20', '2028-02-29']) {
+      expect(isExcludedToken(t), t).to.equal(true);
+    }
+  });
+
+  it('数字・_ だけの 1〜2 文字は除外', () => {
+    for (const t of ['20', '02', '26', '60', '09', '0', '9', '_2', '0_', '2_', '__']) {
+      expect(isExcludedToken(t), t).to.equal(true);
+    }
+  });
+
+  it('通常の語・3 文字以上の数字・範囲外の年・不正な月日は除外しない', () => {
+    for (const t of ['田中', '介護', '1999', '2100', '1234', '20260920', '2026年報告', '2026-13', '2026-09-32',
+      '0t', 'ab', '_顧', 'a1']) {
+      expect(isExcludedToken(t), t).to.equal(false);
+    }
+  });
+
+  it('tokenId が除外トークンと衝突する通常の語は除外しない (文字列で判定)', () => {
+    // "0t" は "26" と generateTokenId が衝突する (32bit ハッシュ)
+    expect(generateTokenId('0t')).to.equal(generateTokenId('26'));
+    expect(isExcludedToken('26')).to.equal(true);
+    expect(isExcludedToken('0t')).to.equal(false);
+  });
+
+  it('日付語として認識する範囲 (dateQuery) と一致する: 認識される年月日は除外され、認識されない語は除外されない', () => {
+    // 不一致だと、索引から除外された日付が範囲検索にも載らず 0 件になる
+    for (let y = 1990; y <= 2110; y++) {
+      const word = String(y);
+      expect(isExcludedToken(word), word).to.equal(extractDateFilters(word).dateRange !== null);
+    }
+    for (const word of ['2026-01', '2026-12', '2026-13', '2026-00', '2099-12', '2100-01', '1999-12',
+      '2026-01-31', '2028-02-29', '2026-09-00', '2026-09-32']) {
+      // 索引トークンは normalizeForSearch 後の形 (ハイフンあり) で date 形を判定する
+      expect(isExcludedToken(word), word).to.equal(extractDateFilters(word).dateRange !== null);
+    }
+  });
+});
+
+describe('generateDocumentTokens: 日付由来トークンの除外 (Issue #984 段階2a)', () => {
+  it('アプリの改名規則ファイル名の YYYYMMDD 由来の 2 桁 bigram を含まない', () => {
+    const tokens = generateDocumentTokens({
+      fileName: '訪問看護報告書_西春内科在宅クリニック_20260920_田中太郎',
+    });
+    const set = new Set(tokens.map(t => t.token));
+    for (const t of ['20', '02', '26', '60', '09', '92', '_2', '0_']) {
+      expect(set.has(t), t).to.equal(false);
+    }
+    // 通常の語は残る
+    expect(set.has('訪問')).to.equal(true);
+  });
+
+  it('顧客名・事業所名・書類種別の数字だけの語も除外する (全フィールド共通)', () => {
+    const tokens = generateDocumentTokens({ customerName: '田中 26', officeName: '2026', documentType: '第20号' });
+    const set = new Set(tokens.map(t => t.token));
+    expect(set.has('26')).to.equal(false);
+    expect(set.has('2026')).to.equal(false);
+    expect(set.has('20')).to.equal(false);
+    expect(set.has('田中')).to.equal(true);
+  });
+});
+
+describe('tokenizeQueryByWords: 除外トークンの扱い (Issue #984 段階2a)', () => {
+  it('全トークンが除外される語は AND から外れる ("田中 20" → 田中のみ)', () => {
+    const groups = tokenizeQueryByWords('田中 20');
+    expect(groups).to.have.length(1);
+    expect(groups[0]).to.include('田中');
+  });
+
+  it('除外語だけのクエリは空配列', () => {
+    expect(tokenizeQueryByWords('20')).to.deep.equal([]);
+    expect(tokenizeQueryByWords('2026')).to.deep.equal([]);
+  });
+
+  it('語の一部だけが除外される場合は残りのトークンを保持する ("田中26" → 田中26 / 田中 / 中2 / 26除外)', () => {
+    const groups = tokenizeQueryByWords('田中26');
+    expect(groups).to.have.length(1);
+    expect(groups[0]).to.not.include('26');
+    expect(groups[0]).to.include('田中26');
   });
 });
 

@@ -45,6 +45,27 @@ const MIN_TOKEN_LENGTH = 2;
 const MAX_TOKENS_PER_FIELD = 20;
 
 /**
+ * 日付形のトークン (YYYY / YYYY-MM / YYYY-MM-DD)。年は 2000〜2099 に限定する。
+ * search/dateQuery.ts が日付語として認識する範囲と必ず一致させること
+ * （不一致だと、索引から除外された日付が範囲検索にも載らず 0 件になる。tokenizer.test.ts で固定）。
+ */
+const DATE_TOKEN_RE = /^20\d{2}(-(0[1-9]|1[0-2])(-(0[1-9]|[12]\d|3[01]))?)?$/;
+
+/** 数字と `_` だけの 1〜2 文字 (`20` `02` `26` `60` `_2` `0_` 等。改名規則の YYYYMMDD 由来の bigram) */
+const SHORT_NUMERIC_TOKEN_RE = /^[0-9_]{1,2}$/;
+
+/**
+ * 検索索引に登録しない（クエリでも使わない）トークンか。
+ *
+ * 日付由来のトークンは全書類の postings を抱えて Firestore の 1MiB 上限に達する
+ * (Issue #984、ADR-0026)。日付語は documents.fileDate の範囲クエリで答える。
+ * トークン文字列で判定する（tokenId は 32bit ハッシュで衝突するため、ID では正当な語を巻き込む）。
+ */
+export function isExcludedToken(token: string): boolean {
+  return DATE_TOKEN_RE.test(token) || SHORT_NUMERIC_TOKEN_RE.test(token);
+}
+
+/**
  * テキストを検索用に正規化
  *
  * @param text 正規化対象テキスト
@@ -223,17 +244,8 @@ export function generateDocumentTokens(metadata: DocumentMetadata): TokenInfo[] 
     tokens.push(...docTypeTokens.slice(0, MAX_TOKENS_PER_FIELD));
   }
 
-  // 日付トークン
-  if (metadata.fileDate) {
-    const dateTokens = generateDateTokens(metadata.fileDate);
-    for (const token of dateTokens) {
-      tokens.push({
-        token,
-        field: 'date',
-        weight: FIELD_WEIGHTS.date,
-      });
-    }
-  }
+  // 日付トークンは索引に持たない (Issue #984 段階2a)。日付語は fileDate の範囲クエリで答える。
+  // metadata.fileDate は互換のため受け取るが、トークン生成には使わない。
 
   // ファイル名トークン（Issue #680: 生fileNameでなくextractFilenameInfo()のprefix経由。
   // fax gateway命名規則(`{prefix}-L{レーン番号}-{YYYYMMDDHHMMSS}.pdf`)の時刻断片を除去し、
@@ -272,6 +284,7 @@ function generateFieldTokens(
   // キーワードトークン
   const keywords = generateKeywords(value);
   for (const keyword of keywords) {
+    if (isExcludedToken(keyword)) continue;
     tokens.push({ token: keyword, field, weight });
   }
 
@@ -279,6 +292,7 @@ function generateFieldTokens(
   if (includeBigrams) {
     const bigrams = generateBigrams(value);
     for (const bigram of bigrams) {
+      if (isExcludedToken(bigram)) continue;
       tokens.push({ token: bigram, field, weight: weight * 0.5 });
     }
   }
@@ -344,12 +358,10 @@ export function tokenizeQueryByWords(query: string): string[][] {
     const bigrams = generateBigrams(word);
     wordTokens.push(...bigrams);
 
-    // 日付トークン（単語が日付形式の場合）
-    const dateTokens = generateDateTokensFromString(word);
-    wordTokens.push(...dateTokens);
-
+    // 日付語は search/dateQuery.ts が fileDate の範囲で処理する。索引に無い除外トークンは
+    // 引かない (全トークンが除外される語は AND から外れる)
     // 重複除去
-    const uniqueTokens = [...new Set(wordTokens)];
+    const uniqueTokens = [...new Set(wordTokens)].filter(t => !isExcludedToken(t));
     if (uniqueTokens.length > 0) {
       result.push(uniqueTokens);
     }

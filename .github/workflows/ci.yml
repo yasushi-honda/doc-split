@@ -110,10 +110,12 @@ jobs:
         # 回帰を守る。functions/package.json の test:integration に含めるだけでは CI で実行されない
         # (CI から functions の `npm run test:integration` は呼ばれず、統合テストは step ごとに列挙して
         # 実行する)ため、専用 step として追加した。
+        # Issue #984 段階2a: 日付由来トークンの除外(削除側の NOT_FOUND 巻き添え・tokenId 重複・
+        # トークン 0 件)の統合テストも本 step で実行する。
         # 既存の searchIndexer*Integration も現状 CI 未配線(本 step の対象外)。
         run: |
           cd functions && firebase emulators:exec --only firestore \
-            'npx mocha --require ts-node/register --timeout 60000 test/searchIndexerHotTokenIntegration.test.ts'
+            'npx mocha --require ts-node/register --timeout 60000 test/searchIndexerHotTokenIntegration.test.ts test/searchIndexerDateTokenExclusionIntegration.test.ts'
         env:
           FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
 
