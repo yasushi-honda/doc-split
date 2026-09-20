@@ -165,9 +165,41 @@ FIREBASE_PROJECT_ID=<env> node scripts/force-reindex.js --all-drift --execute --
 
 ---
 
+### 2.3 高頻度トークン飽和(1MiB 超過)で未索引になった書類の復旧 (Issue #984)
+
+`search_index/{tokenId}` の1トークン=1ドキュメント設計により、高頻度トークン(kanameone の `"2026"` = `00177502` 等)が
+Firestore の 1MiB 上限に達すると、その書類は全トークン未登録(`search.tokenHash` 無し)になっていた。
+修正後の `ondocumentwritesearchindex` と `force-reindex.js` は、サイズ超過のトークンだけをスキップして他を登録する。
+
+**前提(MUST)**:
+1. 修正済みの関数を対象環境へデプロイ済みであること(未デプロイだと新規書類が再び全滅する)。
+2. `cd functions && npm run build` で `functions/lib/` を再ビルドしていること(古いビルドだと `loadFirestoreErrors` が原因つきで即時停止する)。
+3. `processedAt` が欠落した書類は `--all-drift` のクエリ(`orderBy('processedAt')`)から除外される。該当があれば `--doc-id` で個別に復旧する。
+
+**手順**:
+1. `--all-drift --dry-run` で対象件数を確認する。
+2. `--all-drift --sample=N --execute` で**分割実行**する。復旧自体が高頻度トークンの余力を消費する
+   (1 書類ごとに、その書類が持つ高頻度トークンへ posting を 1 件追加する)ため、各回の後に主要トークンの
+   postings 件数を確認する(Firestore コンソールで `search_index/<tokenId>` を開くか、read-only の
+   Firestore REST(`runQuery`、`postings` の map キー数のみ集計)で確認する。書類 ID や内容は出力しない)。
+   主要トークン: `"2026"`=`00177502`、`"26"`=`00000644`、`"20"`=`0000063e`、`"02"`=`00000602`、`000006ba`
+   (実測の目安: 2026-09-20 時点で `"2026"` が 14,562 postings に達して書込みが失敗している。1 文書に入る postings は
+   概ね 1.4 万件台が上限で、書類の属性によって前後する。正本は実測の件数と、`--dry-run` の出力)。
+   別のトークンが飽和した場合はフォールバックがスキップして吸収するため、中断は必須ではない(スキップ数が増えたら中断を検討)。
+3. 再実行の `--all-drift --dry-run` が `drift: 0件` になることを確認する。
+
+**`drift: 0` の意味**: 「`search.tokenHash` が期待値と一致している」ことであり、「全トークンが登録済み」ではない。
+スキップされたトークンは `documents.search.skippedTokens` に文字列で保存される。スキップの有無・件数は
+`search.skippedTokens` を持つ書類の件数で確認する。スキップされたトークンでは検索にヒットしない
+(他のトークンでは検索可能)。恒久対応は段階2(postings のシャーディング等)。
+
 ## 3. 事後確認
 
 ### 3.1 tokenHash 再一致の確認
+
+> **注意 (Issue #984)**: `scripts/migrate-search-index.js` は本対応の対象外(書込み前の `hadPosting` 確認とサイズ超過の処理を持たず、飽和トークンで途中失敗すると部分登録が残り、再実行で成功済みトークンの `df` が二重加算される)。飽和が疑われる環境での再索引には `force-reindex.js` を使う。
+>
+> **注意 (Issue #984)**: `tokenHash` の一致は「全トークン登録済み」を意味しない。高頻度トークンのスキップ分は `search.skippedTokens` で確認する(§2.3)。
 
 ```bash
 FIREBASE_PROJECT_ID=<env> node scripts/force-reindex.js --all-drift --dry-run

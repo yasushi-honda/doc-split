@@ -4,8 +4,8 @@ Issue #220 + ADR-0015 Follow-up で構築した log-based metric + Cloud Monitor
 
 ## 構成概要
 
-- **10 種メトリクス** (log-based) を各環境で作成 (うち`processocr_error`は`lifecycle: temporary`、review_by到達後に削除/恒久化を再判断)
-- **10 種アラートポリシー** (Cloud Monitoring) をメトリクスと対になる形で作成
+- **12 種メトリクス** (log-based) を各環境で作成 (うち`processocr_error`は`lifecycle: temporary`、review_by到達後に削除/恒久化を再判断)
+- **11 種アラートポリシー** (Cloud Monitoring) を作成 (`search_index_token_skipped`はアラートなし、観測専用)
 - **通知チャネル** 1 つ (email、環境ごと) を作成し全ポリシーで共有
 
 関連コード:
@@ -27,6 +27,8 @@ Issue #220 + ADR-0015 Follow-up で構築した log-based metric + Cloud Monitor
 | `drive_folder_divergent_record_failed` | `divergent記録に失敗しました` | 24 時間窓で 1 件以上 (incident は 7 日間可視化) | Issue #871 恒久対応。`markDivergent()`自体のFirestore書込み失敗は claim にもメトリクスにも残らない経路があるため高優先度 |
 | `claim_divergent_backlog_stale` | `[driveFolderClaim] divergent backlog stale` (`console.warn`出力、severity条件なし: Cloud LoggingでDEFAULT severityのため、Issue #981。`driveFolderClaimDivergentSweep`日次関数が出力) | 24 時間窓で 1 件以上 (incident は 7 日間可視化) | Issue #871 恒久対応。「新規発生」検知だけでは既存の未解決分の**放置**を検知できないギャップを埋める。3日以上未解決の divergent が残っている場合のみ日次で1回発火 |
 | `processocr_completed` | `OCR processing (polling) completed`(`processOCR`、正常終了時に必ず出力) | **absence**条件: 20分間ログが出現しない | ADR-0025 PR6。`processOCR`に`concurrency:1`を導入(tick重複防止)したことに伴い、原因を問わずOCR処理パイプライン全体が停止している状態を検知する健全性監視。他メトリクスと異なり閾値超過ではなく**ログの欠落**を検知する点に注意(`conditionAbsent`、`conditionThreshold`ではない)。閾値20分(1200s)は「1サイクル最大900秒(`PROCESS_OCR_TIMEOUT_SECONDS`) + 次tickまでの待ち最大60秒」=最大960秒という**正当な**間隔に対して十分なマージンを取った値(Issue #966 H1、当初600sは900秒タイムアウトと矛盾し誤発火しうると判明したため修正) |
+| `search_index_token_skipped` | `[searchIndexer] token skipped: document size limit`(`ondocumentwritesearchindex`、引数1個の単一文字列の `console.error`。severity 条件なし) | **アラートなし**(観測専用) | Issue #984。高頻度トークン(`"2026"` 等)の `search_index` 文書が 1MiB 上限に達し、スキップが発生した索引処理の回数(1回の処理につき1行のログ。スキップしたトークン数ではなく、初回索引後の `search` メタ書込みによるトリガー再発火で同じ書類が2回数えられうる)。kanameone では段階2まで 2026 年の新規書類のたびに発生する(常時 open のアラートは新規の劣化を覆い隠すためアラートは付けない)。新規飽和は tokenId 別件数で読む(SOP は下記「Issue #984」節) |
+| `search_index_write_failed` | `[searchIndexer] index write failed`(`ondocumentwritesearchindex`、引数1個の単一文字列の `console.error`。severity 条件なし) | 24 時間窓で 1 件以上 (incident は 7 日間可視化) | Issue #984。サイズ超過と判定できなかった索引書込み失敗(一時障害・権限障害、および判定関数が SDK/バックエンドの文言変更で外れた場合)。0 が正常。判定が外れると高頻度トークンを持つ書類が全トークン未登録に戻るため、これを検知する。**対象は索引(`search_index`)への書込み(一括書込みとフォールバック)の失敗のみ**で、既存 posting の読取り(`getAll`)や `documents.search` メタの更新の失敗は含まない(それらは Cloud Functions の一般エラーとして記録される) |
 | `processocr_error` | `Error processing document`(`processOCR`のみ、`ocrProcessor.ts` `handleProcessingError`が無条件出力) | 1h 以内に 1 件以上 | ADR-0025 PaddleOCR Pass1全面切替(2026-09-19)後の一時的事後監視(`lifecycle: temporary`、`review_by: 2026-10-03`)。severity条件は付けない(`console.error()`はfirebase-functions/logger未使用のためCloud Loggingで自動的にERROR severityへ昇格されずDEFAULTのまま記録される実測を確認済み。当初`severity="ERROR"`を含めていたが構造的に一致しない欠陥がありPR #980で修正)。`Error processing document`はtransientエラー(自動リトライで最終的に成功する一時失敗)でも無条件出力されるため「status:error確定」そのものではない点に留意。有効化前の実データ確認(直近30日)は3環境とも該当ログ0件で陽性検証材料なし |
 
 ### アラートポリシー共通パラメータ
@@ -34,13 +36,13 @@ Issue #220 + ADR-0015 Follow-up で構築した log-based metric + Cloud Monitor
 - `duration`: 0s (閾値超過で即発火)。例外: `processocr_completed`はabsence条件のため`duration: 1200s`(上表参照)
 - `autoClose`:
   - 標準 (`searchindex_oom` / `ocr_*_truncated` / `summary_truncated` / `processocr_completed` / `processocr_error`): 86400s (24h 無発火で自動クローズ)
-  - `search_index_silent_failure` / `drive_folder_divergent` / `drive_folder_divergent_record_failed` / `claim_divergent_backlog_stale`: 604800s (7 日間) — 放置検知のため長めに取る
+  - `search_index_silent_failure` / `search_index_write_failed` / `drive_folder_divergent` / `drive_folder_divergent_record_failed` / `claim_divergent_backlog_stale`: 604800s (7 日間) — 放置検知のため長めに取る
 - `notificationRateLimit`: **未設定**。Cloud Monitoring API の仕様により metric-based alert policy では指定不可（log-based policy 限定）。metric alert は incident オープン時 1 通のみ送信、`autoClose` まで再通知されないため通知暴走リスクは元々低い
 - **検出遅延**:
   - `searchindex_oom` (alignment 1h): 約 3-5 分
   - `ocr_*_truncated` / `summary_truncated` (alignment 24h): 数分〜最大数時間 (Cloud Monitoring の rolling 評価依存)
-  - `search_index_silent_failure` (alignment 24h): 同上、即時検知には向かない
-  - `processocr_completed` (**absence条件**、他9種と異なり閾値超過ではなくログの欠落を検知。`alignmentPeriod:60s`・`duration:1200s`): 約20-21分。「1サイクル最大900秒+次tickまでの待ち最大60秒」という正当な最大間隔(960秒)に対して十分なマージンを取った設計
+  - `search_index_silent_failure` / `search_index_write_failed` (alignment 24h): 同上、即時検知には向かない
+  - `processocr_completed` (**absence条件**、他10種と異なり閾値超過ではなくログの欠落を検知。`alignmentPeriod:60s`・`duration:1200s`): 約20-21分。「1サイクル最大900秒+次tickまでの待ち最大60秒」という正当な最大間隔(960秒)に対して十分なマージンを取った設計
   - `processocr_error` (alignment 1h): 約3-5分
 
 ADR-0015 要件「5 分以内」は `searchindex_oom` のみ厳密に満たす。他は「日次で必ず検出」を目標とする。
@@ -97,7 +99,7 @@ ADR-0015 要件「7 日間に 1 件以上」は metric alignment では厳密に
 ```bash
 # メトリクス一覧
 gcloud logging metrics list --project=<project-id> \
-  --filter='name=(searchindex_oom OR ocr_page_truncated OR ocr_aggregate_truncated OR summary_truncated OR search_index_silent_failure OR drive_folder_divergent OR drive_folder_divergent_record_failed OR claim_divergent_backlog_stale OR processocr_completed OR processocr_error)'
+  --filter='name=(searchindex_oom OR ocr_page_truncated OR ocr_aggregate_truncated OR summary_truncated OR search_index_silent_failure OR drive_folder_divergent OR drive_folder_divergent_record_failed OR claim_divergent_backlog_stale OR processocr_completed OR processocr_error OR search_index_token_skipped OR search_index_write_failed)'
 
 # アラートポリシー一覧 (user_labels で本 script が作成したもののみ識別)
 gcloud alpha monitoring policies list --project=<project-id> \
@@ -227,6 +229,23 @@ Cloud Monitoring の notification channel の email アドレスを変更する�
 ### 既知の未実装事項
 
 - Firestore Audit Log(`protoPayload.serviceName="firestore.googleapis.com"`)による `driveFolderLocks` への直接書込み検知は、詳細な log filter 設計を含めて未実装。GHA 経由以外からの書込みを継続的に自動検知する仕組みは今後の課題とし、当面は上記「承認は必ず GitHub Actions 経由」の運用ルール(権限棚卸し + 緊急時の事後申告)で代替する
+
+## Issue #984: 検索インデックスの高頻度トークン飽和(`search_index_token_skipped` / `search_index_write_failed`)運用 SOP
+
+`search_index/{tokenId}` は1トークン=1ドキュメントに全書類の postings を詰める設計のため、高頻度トークンが
+Firestore の 1MiB 上限に達する。`ondocumentwritesearchindex` は、サイズ超過のトークンだけをスキップして
+他のトークンを登録する(それ以前は書類の全トークンが未登録になっていた)。
+
+- **`token skipped: document size limit` のログ**: `docId=` `skipped=` `tokenIds=` を含む1処理1行(初回索引後の `search` メタ書込みによるトリガー再発火で、新規書類1件につき最大2行出る)。`tokenIds=` が飽和したトークンの ID。
+- **kanameone の既知の飽和トークン**: `00177502`(`"2026"`)。段階2(postings のシャーディング等)が済むまで、2026 年の新規書類のたびにスキップが出る(このためスキップ側 metric にはアラートを付けていない)。
+- **新規飽和の読み方**: アラートは無いため、ログの `tokenIds=` に**これまで出ていなかった tokenId** が現れたかを見る。
+  ```bash
+  gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="ondocumentwritesearchindex" AND textPayload:"[searchIndexer] token skipped"' \
+    --project=<env-project-id> --freshness=1d --limit=200 --format='value(textPayload)' | grep -o 'tokenIds=[^ ]*' | sed 's/tokenIds=//' | tr ',' '\n' | sort | uniq -c | sort -rn
+  ```
+- **`index write failed` のアラートが鳴った場合**(`search_index_write_failed`、0 が正常): サイズ超過と判定できなかった失敗。`code=` `message=` を確認し、サイズ超過の判定関数(`functions/src/utils/firestoreErrors.ts` の `isFirestoreDocumentSizeExceededError`)の文言が SDK/バックエンドの変更で外れていないかを疑う。
+- **スキップされた書類**: そのトークンでは検索にヒットしない(他のトークンでは検索可能)。`documents.search.skippedTokens` にスキップしたトークン文字列が保存される。
+- **`search.tokenHash` の読み方が変わる**: `tokenHash` 保存済み = 全トークン登録済み、ではない。`force-reindex --all-drift` の `drift: 0` と、`scripts/backfill-detail-subcollection.ts --audit` の `tokenHash` 欠落数は「ハッシュ保存済みか」を示すのであり、スキップの有無は `search.skippedTokens` で確認する。
 
 ## 関連ドキュメント
 

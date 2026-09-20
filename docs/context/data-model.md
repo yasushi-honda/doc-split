@@ -179,8 +179,9 @@ DocSplitのデータはすべてCloud Firestoreに格納される。
 | フィールド | 型 | 必須 | 説明 |
 |-----------|-----|------|------|
 | search.version | number | No | インデックスバージョン |
-| search.tokens | string[] | No | トークンリスト |
-| search.tokenHash | string | No | トークンハッシュ（変更検知用） |
+| search.tokens | string[] | No | 実際に `search_index` へ登録できたトークン(文字列)のリスト。高頻度トークンが 1MiB 上限でスキップされた場合、そのトークンは含まない(ただし既にこの書類の posting が存在するトークンは残す) |
+| search.tokenHash | string | No | トークンハッシュ（変更検知用）。**期待する全トークン**のハッシュで、スキップしたトークンも含む。したがって「tokenHash 保存済み = 全トークン登録済み」ではない |
+| search.skippedTokens | string[] | No | 高頻度トークンの `search_index` 文書が 1MiB 上限に達して登録できなかったトークン(文字列)。無ければフィールド自体が無い。段階2(根本対応)で対象書類だけを再索引するための情報(Issue #984) |
 | search.indexedAt | timestamp | No | インデックス日時 |
 
 ### Firestoreセキュリティルール

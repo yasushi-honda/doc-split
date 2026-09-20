@@ -165,6 +165,20 @@ dead letter pattern 移行後は **原則 ERROR ログは発生しなくなる�
 
 この置換条件を明示しないと、二重検知 (ERROR ログ alert + dead letter queue alert 両方から通知) が発生する。
 
+## 2026-09-20 追記 (Issue #984): 高頻度トークン飽和のフォールバック
+
+**段階の定義**: 段階1 = 本追記のフォールバック(影響範囲の限定)・検知・復旧。段階2 = 根本対応(`postings` のシャーディング、または高頻度トークンの索引除外とクエリ側の `fileDate` 範囲代替。別途 plan mode で決める)。
+
+`search_index/{tokenId}` の1トークン=1ドキュメント設計により、高頻度トークン(kanameone の `"2026"` = `00177502`)が
+Firestore の 1MiB 上限に達し、`addDocumentToIndex` の原子的 batch が失敗して、その書類の全トークンが未登録になった。
+
+- **フォールバック**: サイズ超過(`isFirestoreDocumentSizeExceededError`)の場合だけ、トークンごとの個別書込みへ切り替え、超過したトークンだけをスキップする。通常経路は単一 batch のまま。サイズ超過以外のエラーは従来どおり throw し、throw 前に固定ログ `[searchIndexer] index write failed` を出す。
+- **`documents.search` の意味**: `tokens` = 登録できたトークンのみ / `skippedTokens` = スキップ分 / `tokenHash` = 期待する全トークンのハッシュ。**`drift: 0` は「全トークン登録済み」ではなく「ハッシュ保存済み」**。段階2では `search.skippedTokens` を持つ書類を列挙して再索引する(列挙方法は段階2の計画で確定)。
+- **`df`**: index 文書の存在ではなく `postings[docId]` の有無で増分を決める(`force-reindex.js` の `hadPosting` と同じ)。初回索引の直後に `search` メタ書込みが同じトリガーを再発火し再索引される既存挙動と、フォールバック後の再試行で `df` が二重加算されるのを防ぐ。**既存の膨張済み `df`(実件数の約3.6倍)は是正しない**。書き手は3種(トリガー、`force-reindex.js`、`migrate-search-index.js`)で意味がばらつき、削除側(`removeTokensFromIndex`)は posting の存在確認なしに `df` を減算する(非対称)。`searchDocuments.ts` は `df` の最大値を総書類数の代用にするため、既存の膨張済み `df` と混在して検索ランキングがわずかに変わりうる。
+- **旧書式**: 旧 `addDocumentToIndex` は `set(..., {[`postings.${docId}`]: ...}, {merge:true})` を使っており、ルート直下に文字どおり `postings.<docId>` というフィールドが作られた可能性がある(`searchDocuments.ts` の互換処理はこのため)。`hadPosting` の判定は、トリガー(`searchIndexer.hasPostingFor`)と `force-reindex.js` の両方で、ネスト形とルート直下の旧書式の両方を見る。掃除は段階2。
+- **既知の限界**: フォールバック中にサイズ超過以外のエラーが起きると、一部トークンだけ書込み済みの状態で throw する(`df` は再試行しても再加算されない。postings の部分登録は `force-reindex` で復旧)。
+- **検知**: log-based metric を2本に分ける。`search_index_token_skipped`(スキップ。アラートなし: kanameone では段階2まで常時発生し、常時 open のアラートは新規の劣化を覆い隠すため)と、`search_index_write_failed`(サイズ超過以外の書込み失敗。**アラートあり**、0 が正常)。
+
 ## References
 
 - Issue #223 (本 ADR)
