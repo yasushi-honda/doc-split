@@ -193,7 +193,29 @@ async function searchByDateRange(range: DateRangeMs, limit: number, offset: numb
     .where('fileDate', '>=', Timestamp.fromMillis(range.startMs))
     .where('fileDate', '<', Timestamp.fromMillis(range.endMs));
 
-  const matched = (await base.count().get()).data().count;
+  let matched: number;
+  let snapshot: FirebaseFirestore.QuerySnapshot | null = null;
+  try {
+    matched = (await base.count().get()).data().count;
+    if (matched > 0 && offset < Math.min(matched, MAX_GETALL)) {
+      snapshot = await base
+        .orderBy('fileDate', 'desc')
+        .limit(Math.min(offset + limit, MAX_GETALL))
+        .get();
+    }
+  } catch (error) {
+    // 複合インデックス (status × fileDate) が環境に未デプロイの場合は FAILED_PRECONDITION
+    // (メッセージに作成 URL を含む)。原因に辿り着けるよう範囲・offset・limit と併せて記録する
+    // (クエリ文字列は個人情報を含みうるため出力しない)。
+    console.error('[searchDocuments] date range query failed', {
+      startMs: range.startMs,
+      endMs: range.endMs,
+      offset,
+      limit,
+      error: String(error),
+    });
+    throw error;
+  }
   if (matched === 0) {
     return { documents: [], total: 0, hasMore: false };
   }
@@ -208,12 +230,7 @@ async function searchByDateRange(range: DateRangeMs, limit: number, offset: numb
     return { documents: [], total, hasMore: false, ...truncationFields };
   }
 
-  const snapshot = await base
-    .orderBy('fileDate', 'desc')
-    .limit(Math.min(offset + limit, MAX_GETALL))
-    .get();
-
-  const documents = snapshot.docs
+  const documents = (snapshot?.docs ?? [])
     .slice(offset, offset + limit)
     .map((doc) => toSearchResultDocument(doc.id, doc.data(), 0));
 
@@ -256,8 +273,14 @@ export const searchDocuments = onCall<SearchRequest>(
       throw new HttpsError('invalid-argument', '検索クエリが長すぎます（最大100文字）');
     }
 
-    if (limit < 1 || limit > 50) {
-      throw new HttpsError('invalid-argument', 'limitは1-50の範囲で指定してください');
+    if (!Number.isInteger(limit) || limit < 1 || limit > 50) {
+      throw new HttpsError('invalid-argument', 'limitは1-50の整数で指定してください');
+    }
+
+    // 日付範囲検索は Firestore の limit(offset + limit) を使うため、負値・非整数は
+    // 内部エラーになる。索引検索と共通で入力段階で弾く。
+    if (!Number.isInteger(offset) || offset < 0) {
+      throw new HttpsError('invalid-argument', 'offsetは0以上の整数で指定してください');
     }
 
     // キャッシュチェック

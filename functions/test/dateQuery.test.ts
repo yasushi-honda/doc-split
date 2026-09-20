@@ -175,4 +175,42 @@ describe('extractDateFilters (Issue #984 段階2a)', () => {
       expect(extractDateFilters('2026/04/27').dateRange).to.not.equal(null);
     });
   });
+  describe('ドット区切りの日付 (2026.09.20)', () => {
+    for (const word of ['2026.09.20', '2026.9.20', '２０２６．９．２０', '2026.09.20.']) {
+      it(`年月日 "${word}" は 1 日の範囲 (年フィルタ + 余計な語に化けない)`, () => {
+        const r = extractDateFilters(word);
+        expect(r.dateRange).to.deep.equal({ startMs: utc(2026, 9, 20), endMs: utc(2026, 9, 21) });
+        expect(r.remainingQuery).to.equal('');
+      });
+    }
+
+    it('年月 "2026.09" は当該月の範囲', () => {
+      expect(extractDateFilters('2026.09').dateRange).to.deep.equal({
+        startMs: utc(2026, 9, 1),
+        endMs: utc(2026, 10, 1),
+      });
+    });
+
+    it('日付語でない語内のドットは従来どおり区切り ("田中.太郎" → 2 語)', () => {
+      const r = extractDateFilters('田中.太郎');
+      expect(r.dateRange).to.equal(null);
+      expect(r.remainingQuery).to.equal('田中 太郎');
+    });
+
+    it('通常語の末尾ドットは除去される ("田中." → "田中")', () => {
+      expect(extractDateFilters('田中.').remainingQuery).to.equal('田中');
+    });
+  });
+  describe('年の境界 (2000〜2099 の端は日付語)', () => {
+    it('2000 と 2099 は日付語で、2099-12 の終端は 2100-01-01', () => {
+      expect(extractDateFilters('2000').dateRange).to.deep.equal({
+        startMs: utc(2000, 1, 1),
+        endMs: utc(2001, 1, 1),
+      });
+      expect(extractDateFilters('2099-12').dateRange).to.deep.equal({
+        startMs: utc(2099, 12, 1),
+        endMs: utc(2100, 1, 1),
+      });
+    });
+  });
 });

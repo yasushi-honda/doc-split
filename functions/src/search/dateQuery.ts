@@ -34,17 +34,21 @@ const YEAR = '(20\\d{2})';
 const MONTH_DAY = '(\\d{1,2})';
 
 const YEAR_RE = new RegExp(`^${YEAR}年?$`);
-const YEAR_MONTH_RE = new RegExp(`^${YEAR}(?:[-/]${MONTH_DAY}|年${MONTH_DAY}月)$`);
+const YEAR_MONTH_RE = new RegExp(`^${YEAR}(?:[-/.]${MONTH_DAY}|年${MONTH_DAY}月)$`);
 const YEAR_MONTH_DAY_RE = new RegExp(
-  `^${YEAR}(?:[-/]${MONTH_DAY}[-/]${MONTH_DAY}|年${MONTH_DAY}月${MONTH_DAY}日)$`
+  `^${YEAR}(?:[-/.]${MONTH_DAY}[-/.]${MONTH_DAY}|年${MONTH_DAY}月${MONTH_DAY}日)$`
 );
 
 /**
  * 語の区切り。tokenizer.normalizeForSearch が空白に置換する句読点・括弧と揃える
  * （`2026年4月、田中` のように区切りなしで連結した日付語も抽出するため）。
- * ハイフン・スラッシュは日付語の内部で使うため区切りにしない。
+ * ハイフン・スラッシュ・ドットは日付語の内部で使うため、ここでは区切りにしない
+ * （日付語でなかった語のドットは extractDateFilters で改めて区切る）。
  */
-const WORD_DELIMITERS = /[\s　・．.。、，,「」『』【】（）()[\]]+/;
+const WORD_DELIMITERS = /[\s\u3000・。、，,「」『』【】（）()[\]]+/;
+
+/** 日付語でなかった語の内部のドット (normalizeForSearch は . ． を空白に置換する) */
+const DOT_DELIMITERS = /[.．]+/;
 
 /** 1 語を日付範囲に変換する。日付語でない（不正な月日を含む）場合は null */
 function parseDateWord(word: string): DateRangeMs | null {
@@ -92,9 +96,10 @@ export function extractDateFilters(rawQuery: string): ExtractedDateFilters {
   let hasDateWord = false;
 
   for (const word of words) {
-    const range = parseDateWord(convertFullWidthToHalfWidth(word));
+    // 末尾のドットは文末記号として無視 ("2026.09.20." / "2026年4月.")
+    const range = parseDateWord(convertFullWidthToHalfWidth(word).replace(/\.+$/, ''));
     if (!range) {
-      remaining.push(word);
+      remaining.push(...word.split(DOT_DELIMITERS).filter((piece) => piece.length > 0));
       continue;
     }
     hasDateWord = true;
