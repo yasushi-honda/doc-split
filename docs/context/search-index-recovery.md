@@ -176,9 +176,20 @@ Firestore の 1MiB 上限に達すると、その書類は全トークン未登�
 2. `cd functions && npm run build` で `functions/lib/` を再ビルドしていること(古いビルドだと `loadFirestoreErrors` が原因つきで即時停止する)。
 3. `processedAt` が欠落した書類は `--all-drift` のクエリ(`orderBy('processedAt')`)から除外される。該当があれば `--doc-id` で個別に復旧する。
 
+**`--missing-hash-only`(推奨)**: `--all-drift` は `search.tokenHash` が未保存の書類(飽和で未索引になった書類)と、
+保存済みだが期待値と**不一致**の書類(トークン化ロジックの変更前に索引された書類など、別原因)を区別せず両方を再 index する。
+飽和の復旧だけが目的なら `--all-drift --missing-hash-only` で、`tokenHash` 未保存の書類だけを対象にする(保存済みの書類は
+値が不一致でも一切書き込まない)。kanameone の 2026-09-20 の dry-run では、drift 9,968 件の内訳が
+`tokenHash` 未保存 1,723 件(#984 の対象)と不一致 8,245 件(`search.indexedAt` が 2026-01〜07 に集中し、#684 の
+tokenizer 変更(2026-07-19)より前に索引された書類と整合する。個別の原因確認はしていない)だった。GitHub Actions
+(`Run Operations Script`)では `force-reindex --all-drift --missing-hash-only [--execute]` を選ぶ。
+`--sample=N` は drift 件数ではなく**走査する件数**(`processedAt` の新しい順)で、対象が含まれない場合がある。
+小さく試すなら `--doc-id`(dry-run の `[DRIFT]` 行に出る docId を指定)を使う。
+
 **手順**:
-1. `--all-drift --dry-run` で対象件数を確認する。
-2. `--all-drift --sample=N --execute` で**分割実行**する。復旧自体が高頻度トークンの余力を消費する
+1. `--all-drift --missing-hash-only --dry-run`(GitHub Actions では dry-run の選択肢)で対象件数を確認する。
+2. `--all-drift --missing-hash-only --sample=N --execute` で**分割実行**する(GitHub Actions では `--sample` の選択肢が
+   無いため、`--doc-id --execute` で 1 件試してから `--all-drift --missing-hash-only --execute` を実行する)。復旧自体が高頻度トークンの余力を消費する
    (1 書類ごとに、その書類が持つ高頻度トークンへ posting を 1 件追加する)ため、各回の後に主要トークンの
    postings 件数を確認する(Firestore コンソールで `search_index/<tokenId>` を開くか、read-only の
    Firestore REST(`runQuery`、`postings` の map キー数のみ集計)で確認する。書類 ID や内容は出力しない)。

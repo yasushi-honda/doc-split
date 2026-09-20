@@ -12,6 +12,7 @@
  *   FIREBASE_PROJECT_ID=<project> node scripts/force-reindex.js --doc-id <id> [--execute]
  *   FIREBASE_PROJECT_ID=<project> node scripts/force-reindex.js --all-drift [--execute]
  *   FIREBASE_PROJECT_ID=<project> node scripts/force-reindex.js --all-drift --sample=10
+ *   FIREBASE_PROJECT_ID=<project> node scripts/force-reindex.js --all-drift --missing-hash-only [--execute]
  *
  * デフォルトは dry-run (書き込みなし)。ADR-0008 データ保護方針により
  * 明示的な `--execute` フラグなしでは書き込みを行わない。
@@ -82,6 +83,7 @@ function parseArgs(argv) {
   const args = {
     docId: null,
     allDrift: false,
+    missingHashOnly: false,
     execute: false,
     sample: null,
     batchSize: 500,
@@ -98,6 +100,8 @@ function parseArgs(argv) {
       }
     } else if (arg === '--all-drift') {
       args.allDrift = true;
+    } else if (arg === '--missing-hash-only') {
+      args.missingHashOnly = true;
     } else if (arg === '--execute') {
       args.execute = true;
     } else if (arg.startsWith('--sample=')) {
@@ -131,6 +135,9 @@ function parseArgs(argv) {
     if (args.docId && args.allDrift) {
       throw new Error('--doc-id と --all-drift は同時指定できません');
     }
+    if (args.missingHashOnly && !args.allDrift) {
+      throw new Error('--missing-hash-only は --all-drift と併用してください');
+    }
   }
 
   return args;
@@ -149,7 +156,11 @@ search_index drift 復旧スクリプト (ADR-0015 / Issue #229)
 
 オプション:
   --execute             実書き込みを行う (未指定時は dry-run)
-  --sample=<n>          --all-drift 時に先頭 n 件のみ処理 (部分検証用)
+  --sample=<n>          --all-drift 時に先頭 n 件のみ処理 (部分検証用)。n は drift 件数ではなく
+                        走査する件数 (processedAt の新しい順)
+  --missing-hash-only   --all-drift 時に search.tokenHash が未保存の書類だけを対象にする
+                        (hash 保存済みで値が不一致の書類は対象外。Issue #984 の飽和で未索引に
+                        なった書類だけを復旧し、別原因の hash 不一致に触れないため)
   --batch-size=<n>      Firestore クエリのページング件数 (デフォルト 500。
                         並行処理数とは別軸、--concurrency 参照)
   --concurrency=<n>     --all-drift --execute 時の docId 並行処理数
@@ -591,6 +602,7 @@ async function runSingleDocId(db, args, auditCtx) {
 async function runAllDrift(db, args, auditCtx) {
   console.log(`[MODE] 全 drift scan (${args.execute ? '実行' : 'dry-run'})` +
     (args.sample ? `, sample=${args.sample}` : '') +
+    (args.missingHashOnly ? ', missing-hash-only' : '') +
     (args.execute ? `, concurrency=${args.concurrency}` : ''));
 
   let processed = 0;
@@ -600,6 +612,8 @@ async function runAllDrift(db, args, auditCtx) {
   // サイズ超過でトークンをスキップした書類数と合計トークン数(Issue #984。drift: 0 では見えないため別に集計する)
   let skippedDocs = 0;
   let skippedTokensTotal = 0;
+  // --missing-hash-only で、tokenHash 保存済みのため対象外にした書類数(値の一致・不一致は問わない)
+  let excludedHashPresent = 0;
   let lastDoc = null;
   const maxDocs = args.sample ?? Infinity;
 
@@ -627,6 +641,10 @@ async function runAllDrift(db, args, auditCtx) {
       for (const docSnap of snapshot.docs) {
         processed++;
         const data = docSnap.data();
+        if (args.missingHashOnly && data.search?.tokenHash) {
+          excludedHashPresent++;
+          continue;
+        }
         const drift = detectDrift(data);
         if (!drift.isDrifted) continue;
 
@@ -717,6 +735,9 @@ async function runAllDrift(db, args, auditCtx) {
 
   console.log('---');
   console.log(`走査: ${processed} 件 / drift: ${drifted} 件 / 再 index: ${reindexed} 件 / 失敗: ${failed} 件`);
+  if (args.missingHashOnly) {
+    console.log(`--missing-hash-only: tokenHash 保存済みのため対象外: ${excludedHashPresent} 件`);
+  }
   if (skippedDocs > 0) {
     // drift: 0 は「ハッシュ保存済み」であり「全トークン登録済み」ではない(Issue #984)。スキップの事実をここで必ず見せる。
     console.log(

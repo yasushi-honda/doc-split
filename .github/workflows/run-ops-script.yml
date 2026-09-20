@@ -49,6 +49,8 @@ on:
           - cleanup-duplicates --execute
           - force-reindex --all-drift
           - force-reindex --all-drift --execute
+          - force-reindex --all-drift --missing-hash-only
+          - force-reindex --all-drift --missing-hash-only --execute
           - force-reindex --doc-id
           - force-reindex --doc-id --execute
           - investigate-office-duplicate
