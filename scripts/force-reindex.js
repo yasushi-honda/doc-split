@@ -242,6 +242,23 @@ function planReindex(docId, docData, tokenizer = loadTokenizer()) {
 }
 
 /**
+ * enqueue 済みの書込みを BulkWriter に送信させ、完了まで待つ (dry-run で bulkWriter が null なら何もしない)。
+ *
+ * BulkWriter は flush()/close() が呼ばれるか、キューが 20 件に達するまで書込みを送信しない。
+ * flush せずに各書込みの Promise を待つと、20 件未満の残りが永久に完了せず、Node は
+ * タイマーが無いため、エラーも出さずに exit 0 で終了する(ワークフローは success になる)。
+ * Issue #984 の kanameone canary で実機発生: 29 トークンの書類で最初の 20 件だけが書かれ、
+ * 残りと documents.search の更新が行われないまま終了した。
+ *
+ * 呼び出し側は、flush より前に各 Promise へ処理側のハンドラを付けること
+ * (flush 中に拒否された書込みが未処理の拒否になり、プロセスが落ちるのを防ぐ)。
+ * flush() 自体は、個別の書込みの失敗では reject しない(失敗は各書込みの Promise 側で判定する)。
+ */
+async function flushBulkWriter(bulkWriter) {
+  if (bulkWriter) await bulkWriter.flush();
+}
+
+/**
  * Promise 群を allSettled で drain し、1件でも失敗があれば reindexStage を付けて throw する。
  * Promise.all だと最初の失敗で即 reject し、他の enqueue 済み write の結果を捕捉できないため
  * (BulkWriter は各 write が独立した Promise を返し、batch のような一括ロールバックがない)。
@@ -404,7 +421,14 @@ async function reindexDocument(db, docId, docData, { execute, bulkWriter, plan }
         }),
       );
     }
-    await settleOrThrow(removePromises, 'search_index_postings_remove');
+    // 先に settle を開始して各 Promise に処理側のハンドラを付けてから flush する
+    // (flush 中に拒否された書込みが未処理の拒否になり、プロセスが落ちるのを防ぐ)。
+    const removeSettled = settleOrThrow(removePromises, 'search_index_postings_remove');
+    // settle 自体の Promise にもハンドラを付ける: 共有 BulkWriter の並行実行では、自分の書込みが確定した後も
+    // flush() が他の書類の書込みを待つため、その間に拒否されると未処理の拒否になる(拒否は下の await で再 throw する)
+    removeSettled.catch(() => {});
+    await flushBulkWriter(bulkWriter);
+    await removeSettled;
   }
 
   // 2. 新 posting 書き込み (再実行安全: 既に posting が存在するなら df 加算しない)。
@@ -439,7 +463,10 @@ async function reindexDocument(db, docId, docData, { execute, bulkWriter, plan }
   // 半端状態 (postings 一部/全部新しいが tokenHash 古い) 発生時は
   // Runbook §4.5 に基づき手動クリーンアップ or 再実行する。
   // サイズ超過(高頻度トークンが 1MiB 上限、Issue #984)の token はスキップし、他は登録する。
-  const { skippedTokenIds } = await settleTokenWrites(writeEntries, 'search_index_postings_write');
+  const writeSettled = settleTokenWrites(writeEntries, 'search_index_postings_write');
+  writeSettled.catch(() => {}); // 理由は removeSettled と同じ(拒否は下の await で再 throw する)
+  await flushBulkWriter(bulkWriter);
+  const { skippedTokenIds } = await writeSettled;
   // generateTokenId は 32bit ハッシュで異なる文字列が同じ ID になりうるため、ID→文字列は 1:N で逆引きする
   const registeredTokenStrings = newTokenStrings.filter(
     t => !skippedTokenIds.has(tokenizer.generateTokenId(t)),
@@ -452,7 +479,7 @@ async function reindexDocument(db, docId, docData, { execute, bulkWriter, plan }
   //    search オブジェクト全体置換にすると将来追加フィールドが消える
   //    (CLAUDE.md MUST: Partial Update は対象外フィールド不変)。
   try {
-    await bulkWriter.update(db.collection('documents').doc(docId), {
+    const metaWrite = bulkWriter.update(db.collection('documents').doc(docId), {
       'search.version': 1,
       // 登録できたトークンのみ(スキップ分を含めると再索引時に存在しない posting を削除して df を誤減算する)
       'search.tokens': registeredTokenStrings,
@@ -464,6 +491,9 @@ async function reindexDocument(db, docId, docData, { execute, bulkWriter, plan }
         ? skippedTokenStrings
         : admin.firestore.FieldValue.delete(),
     });
+    metaWrite.catch(() => {}); // flush 中の拒否を未処理にしない(拒否は下の await で catch する)
+    await flushBulkWriter(bulkWriter);
+    await metaWrite;
   } catch (error) {
     // step 2 成功後に step 3 が失敗 → postings 新しいが tokenHash 古い半端状態
     error.reindexStage = 'documents_search_update';
