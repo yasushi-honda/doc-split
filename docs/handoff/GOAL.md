@@ -15,6 +15,7 @@ kanameoneの`search_index/{tokenId}`(1トークン=1文書に全書類のposting
 - [x] **本番事前計測(read-only)**: kanameone/cocoroとも複合インデックスstatus×fileDate READY、実行時TZなし(UTC)。fileDate: kanameone UTC0時17,390/JST0時80/なし2,638/2000〜2099外522、cocoro UTC0時1,348/なし289/外12。3環境で関数構成・runtime・インデックスは一致(事前計測時点ではcocoroのみ#986/#990/#991未反映、その後デプロイ済み)
 - [x] **kanameone Functionsデプロイ(2026-09-20 13:47Z、run 35514146302)**: `OCR_PROVIDER=paddle`維持、25関数ACTIVE
 - [x] **kanameone実データ確認(2026-09-20 14:26Z、read-only)**: デプロイ後の新規書類2件で`2026`/`26`/`20`/`02`/`60`の索引文書にpostingなし、5索引文書の最終更新はデプロイ前(不変、`2026`=14,562件)、`token skipped`/`index write failed`ログ0件、既存書類9件の再索引もエラーなし。**Issue #984クローズ**
+- [x] **dev画面確認(2026-09-21、認証済みPlaywright)**: 人工書類で`2099`→範囲内2件のみ新しい順、`2099-03-10`→1件、通常語+`2099年3月`→2件、日付なしの従来検索も正常、コンソールエラー0件。人工書類は後片付け済み(クライアント本番は画面操作せずread-only観測のみが建付け)
 - [x] **cocoroデプロイ(2026-09-20 14:52〜14:54Z、run 35517480350)**: `OCR_PROVIDER=paddle`維持、25関数ACTIVE、3環境(dev/kanameone/cocoro)で関数構成・runtime・メモリ・タイムアウト・複合インデックス36個が一致
 - [x] **ログベースメトリクス・アラートの適用(2026-09-21、Issue #981クローズ)**: Setup Monitoringワークフローで dev(ローカル実行)→kanameone(run 35533087283)→cocoro(run 35533423590)へ、`search_index_token_skipped`/`search_index_write_failed`メトリクスと`search_index_write_failed`アラートを新規作成(既存は変更なし)。devの実ログで`token skipped`フィルタが3件一致を確認
 
