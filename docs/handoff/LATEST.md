@@ -1,6 +1,21 @@
 # ハンドオフメモ
 
-**更新日**: 2026-09-18（Issue #954完了: driveFolderClaim.tsの無保護runTransaction11箇所をwithBackoffRetryで防御）
+**更新日**: 2026-09-20（Issue #984 段階1・段階2a完了、kanameone Functionsデプロイ済み・実データ確認待ち）
+
+## Issue #984 段階1・段階2a完了 + kanameoneデプロイ（2026-09-19〜20）
+
+kanameoneの`search_index`で日付由来トークン(`2026`=14,562件で飽和、`26/20/02/60`が11,400〜12,780件)が1MiB上限に達し新規書類が検索に出ない問題(Issue #984)に対応。PR #985〜#989(段階1: fail-soft・検知・復旧、未索引1,723→0)、#990(日付語をfileDateのUTC範囲クエリで検索)、#991(日付由来トークンを索引から除外、削除側の安全化)をマージし、kanameoneへFunctionsをデプロイ(2026-09-20 13:47Z、`OCR_PROVIDER=paddle`維持)。ADR-0026。
+
+**経緯と判断**: 初版プラン(全件force-reindex・GitHub Actions計測オプション・旧形式postings移行・索引掃除を含む)を`/plan-crossreview`(grip+codex 2パス)で改訂したが、実装後にdecision-makerから「利用者は複合条件で検索する、過剰対応では」との指摘を受け、codexにも規模の妥当性を独立に評価させて「最小構成」に絞った(全件再索引・`force-reindex.js`変更・掃除・`df`再計算を行わない)。実データ調査で2000年未満の`fileDate`がkanameoneに522件あると判明(年検索で当たらなくなる)、範囲は2000〜2099のまま(decision-maker判断)。
+
+**検証**: 単体2,262件・統合512件pass、`codex review`(high、PR-B 2回目とPR-A は0件)、pr-review-toolkit・Evaluatorの指摘を実運用での起こりやすさで個別評価。dev実機確認(日付トークン非登録・実Firestoreの範囲クエリ)、kanameone/cocoro事前計測(インデックスREADY・TZなし・fileDate分布)。kanameoneはデプロイ直後で新規索引0件のため実データ確認は未了。
+
+### Issue Net
+Net 0（Close 0件・起票0件）。#984はP1のバグでクローズ条件(kanameone実データ確認)が未了、#981はメトリクス適用が未了のため両方OPEN継続。新規Issueは起票していない(FEバナーのフォローアップは未起票)。
+
+### 同根再発スキャン・対症療法判定（handoff §4.6/§4.7）
+- **同根候補あり（記録）**: 本セッションの修正PR(#985/#986/#989/#991のテスト修正)のうち「ローカルのテストは通るがCIで失敗」が2回再発(#989: 型注釈`withTimeout`のTS18046、#991: `force-reindex.js`が`functions/lib`のビルド済みトークナイザーを使うのにローカルは`lib`が古いまま)。共通の根本原因はローカル検証がCIの条件(functionsをbuildしてからunit test)と異なること。対策: push前に`npm run build:functions`してから`cd functions && npm test`を実行する(memory `feedback_local_pass_not_ci_build_lib.md`に記録)
+- **対症療法判定**: 該当なし。#986/#991は飽和の原因(日付トークン)自体を索引から除外する設計で、retry/fallbackのみの対症療法ではない(段階1のfail-softは暫定策として明示し、根本対応が段階2aという二段構成)
 
 ## Issue #954完了: driveFolderClaim.tsの無保護runTransaction11箇所をwithBackoffRetryで防御（2026-09-18）
 

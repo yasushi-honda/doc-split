@@ -1,8 +1,24 @@
 ---
-updated: 2026-09-18
+updated: 2026-09-20
 ---
 <!-- 前ミッション(dev/kanameone/cocoro環境監査・保守検証)は2026-07-20完遂。全文はdocs/handoff/LATEST.md参照。 -->
 <!-- Google Drive連携Phase1 (MVP)実装ミッションは2026-07-22完了(PR#700マージ)。詳細は本ファイル末尾「Google Drive連携Phase1完遂」節+docs/handoff/LATEST.md参照。 -->
+
+## 【進行中・2026-09-19開始】Issue #984: kanameone `search_index` 1MiB飽和(日付由来トークン)対応 — 段階1・段階2a完了、kanameoneデプロイ済み、実データ確認待ち（現在のミッション・ADR-0025とは別件の並行トラック）
+
+kanameoneの`search_index/{tokenId}`(1トークン=1文書に全書類のpostingsを格納、1MiB上限≒14,500件)で、日付由来トークン(`2026`=14,562件で飽和済み、改名規則`…_YYYYMMDD_…`由来の2桁bigram `26/20/02/60`が11,400〜12,780件)が飽和し、新規書類がその語で検索に出なくなっていた。
+
+- [x] **段階1（PR #985〜#989）**: 高頻度トークンが上限に達しても書類の全トークンを未登録にしないfail-soft、検知メトリクス、`--missing-hash-only`による復旧。kanameoneで未索引1,723→0（BulkWriter flush不具合#989も修正）
+- [x] **段階2a PR-B（#990）**: 日付語(年・年月・年月日、2000〜2099)を`documents.fileDate`のUTC範囲クエリで答える(`dateQuery.ts`)。日付のみ=`status`+`fileDate`範囲+`count()`で先頭500件のみ、混在=索引AND後にfileDateで絞る（候補500超で日付一致が漏れうる既知の限界、`truncated`で通知）
+- [x] **段階2a PR-A（#991）**: `isExcludedToken`(日付形と数字/`_`のみ1〜2文字)を索引から除外。削除側のNOT_FOUND巻き添え・tokenId重複減算(`df`負値)・トークン0件書類を修正。ADR-0026
+- [x] **dev実機確認**: 人工書類で日付トークン非登録・実Firestoreの範囲クエリ+`count()`(複合インデックス)を確認、後片付け済み。callableの認証付き実呼び出しは権限(`signJwt`)の都合で未実施
+- [x] **本番事前計測(read-only)**: kanameone/cocoroとも複合インデックスstatus×fileDate READY、実行時TZなし(UTC)。fileDate: kanameone UTC0時17,390/JST0時80/なし2,638/2000〜2099外522、cocoro UTC0時1,348/なし289/外12。3環境で関数構成・runtime・インデックスは一致、cocoroのみ#986/#990/#991未反映
+- [x] **kanameone Functionsデプロイ(2026-09-20 13:47Z、run 35514146302)**: `OCR_PROVIDER=paddle`維持、25関数ACTIVE
+- [ ] **kanameone実データ確認**: 新規書類が索引された後、`search_index/00177502`(`2026`、現在14,562件)のpostingsが増えないこと・`search_index_token_skipped`の日付由来tokenIds(`00177502`等)が出ないことを確認（デプロイ直後は新規索引0件で未確認）
+- [ ] **cocoroデプロイ**(`/deploy cocoro --functions`、decision-maker実行): 索引は上限の約8%で急がない。kanameone確認後
+- [ ] ログベースメトリクス・アラートの適用(dev→kanameone、Issue #981の完了条件)。本番変更のため明示指示待ち
+
+**decision-maker判断**: 全件force-reindexはしない(新規書込みが止まれば飽和は進まず、既存書類は更新時に自動再索引)、`force-reindex.js`変更・飽和索引の掃除・`df`再計算もしない。年範囲は2000〜2099のまま(2000年未満522件は誤抽出の可能性が高く年検索で当たらなくなる)。数字部分一致縮小は許容。段階2b(シャーディング)は非日付トークンの推定posting>10,000件、または`search_index_token_skipped`に新tokenIdsが出た場合に再検討。混在検索で日付一致が候補500から漏れ0件になる場合のFEバナー警告は別PRのフォローアップ(未起票)。詳細: `docs/adr/0026-search-index-date-tokens-excluded.md` / Issue #984コメント / `docs/context/search-index-recovery.md`。
 
 ## 【完了・2026-09-18】低コストROI対応3件: Issue #949(cocoro Hosting反映)+ Issue #947(executeDriveExport runTransaction保護、PR #951)+ Issue #952(exportDocument writeback保護、PR #953)
 
@@ -435,6 +451,8 @@ cocoro/kanameから、書類（ケアプラン・医療・介護保険証等）�
 なし（2026-09-19セッションで解消: kanameoneのgcloud対話認証はdecision-makerが`gcloud auth login --configuration=kanameone`を実行し復旧済み。ADR-0025 PaddleOCR Pass1全面切替はdev/kanameone/cocoro 3環境とも完了済み、事後監視のpush型アラート強化も完了済み。詳細は本ファイル冒頭「ADR-0025 PaddleOCR」節参照）。
 
 cocoro側Drive連携Phase C（クライアント自身のOAuth接続）は外部依存待ち（継続、変更なし、詳細は本ファイル冒頭「現在のミッション」節参照）。
+
+**Issue #984（2026-09-20）**: 段階1・段階2a完了、kanameone Functionsデプロイ済み(13:47Z)。再開点は「kanameone実データ確認」(新規書類が索引されたら`search_index/00177502`のpostings件数が14,562から増えていないか、`search_index_token_skipped`ログの日付由来tokenIdsが出ていないかをread-only確認、スクリプト例は本セッションscratchpadの`kn_postings.py`相当=`CLOUDSDK_ACTIVE_CONFIG_NAME=kanameone`でFirestore REST GET)。cocoroは未デプロイ(`/deploy cocoro --functions`はdecision-maker実行)。
 
 ## 【完了・2026-08-30】Issue #871 PR-4: childFolderResolver.tsのclaimプロトコル完全移行(PR #879マージ)
 
