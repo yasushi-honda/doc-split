@@ -20,6 +20,7 @@ import {
   safeToMillis,
   type SortableSearchDoc,
 } from './sortSearchResults';
+import { extractDateFilters, type DateRangeMs } from './dateQuery';
 
 const db = getFirestore();
 
@@ -155,6 +156,75 @@ function calculateIdf(df: number, totalDocs: number): number {
   return Math.log((totalDocs + 1) / (df + 1));
 }
 
+/** 検索結果ドキュメントへの変換 (索引検索・日付範囲検索で共通) */
+function toSearchResultDocument(
+  docId: string,
+  data: FirebaseFirestore.DocumentData,
+  score: number
+): SearchResultDocument {
+  return {
+    id: docId,
+    fileName: data.fileName || '',
+    customerName: data.customerName || '',
+    officeName: data.officeName || '',
+    documentType: data.documentType || '',
+    fileDate: data.fileDate?.toDate?.()?.toISOString?.().split('T')[0] || null,
+    score: Math.round(score * 100) / 100,
+  };
+}
+
+/**
+ * 日付語のみのクエリ (Issue #984 段階2a)。search_index を使わず documents.fileDate の
+ * UTC 範囲で答える。日付トークンは索引に持たない (ADR-0026)。
+ *
+ * - 既存の複合インデックス (status × fileDate) で `where status + fileDate 範囲 + orderBy
+ *   fileDate desc` と count() を賄う。新しいインデックスは追加しない。
+ * - 索引検索と同じ OOM ガード契約に合わせ、先頭 MAX_GETALL 件のみを対象にする。
+ *   total > MAX_GETALL のとき truncated=true / actualMatchedCount=実件数、total=MAX_GETALL。
+ *   深い offset (MAX_GETALL 以降) は約束しない。
+ * - 並びは Firestore の native 順 (fileDate desc → docId desc)。limit(offset+limit) を
+ *   ページごとに変えても先頭からの接頭辞が一致するため、同日内でもページ境界で重複・欠落しない
+ *   (compareSearchResults で再ソートすると境界日の並びがページ間でずれる)。
+ */
+async function searchByDateRange(range: DateRangeMs, limit: number, offset: number): Promise<SearchResult> {
+  const base = db
+    .collection('documents')
+    .where('status', '==', 'processed')
+    .where('fileDate', '>=', Timestamp.fromMillis(range.startMs))
+    .where('fileDate', '<', Timestamp.fromMillis(range.endMs));
+
+  const matched = (await base.count().get()).data().count;
+  if (matched === 0) {
+    return { documents: [], total: 0, hasMore: false };
+  }
+
+  const total = Math.min(matched, MAX_GETALL);
+  const truncated = matched > MAX_GETALL;
+  const truncationFields = truncated
+    ? { truncated: true as const, actualMatchedCount: matched }
+    : {};
+
+  if (offset >= total) {
+    return { documents: [], total, hasMore: false, ...truncationFields };
+  }
+
+  const snapshot = await base
+    .orderBy('fileDate', 'desc')
+    .limit(Math.min(offset + limit, MAX_GETALL))
+    .get();
+
+  const documents = snapshot.docs
+    .slice(offset, offset + limit)
+    .map((doc) => toSearchResultDocument(doc.id, doc.data(), 0));
+
+  return {
+    documents,
+    total,
+    hasMore: offset + limit < total,
+    ...truncationFields,
+  };
+}
+
 /**
  * ドキュメント検索 Callable Function
  */
@@ -200,10 +270,26 @@ export const searchDocuments = onCall<SearchRequest>(
     // perf 計測開始 (cache miss 時のみ。Issue #402 段階1)
     const startMs = Date.now();
 
+    // 日付語 (年・年月・年月日) は索引ではなく fileDate の範囲で答える (Issue #984 段階2a)。
+    // 日付語を除いた残りの語だけを索引検索 (AND) に渡す。
+    const dateFilters = extractDateFilters(query);
+    if (dateFilters.isEmptyRange) {
+      const empty: SearchResult = { documents: [], total: 0, hasMore: false };
+      setCache(cacheKey, empty);
+      return empty;
+    }
+    const dateRange = dateFilters.dateRange;
+
     // クエリを単語ごとにトークン化（AND検索用）
-    const wordTokenGroups = tokenizeQueryByWords(query);
+    const wordTokenGroups = tokenizeQueryByWords(dateFilters.remainingQuery);
     if (wordTokenGroups.length === 0) {
-      return { documents: [], total: 0, hasMore: false };
+      if (!dateRange) {
+        return { documents: [], total: 0, hasMore: false };
+      }
+      // 日付語のみ: documents.fileDate の範囲クエリで答える
+      const dateOnlyResult = await searchByDateRange(dateRange, limit, offset);
+      setCache(cacheKey, dateOnlyResult);
+      return dateOnlyResult;
     }
 
     // 全トークンのIDを収集
@@ -355,21 +441,25 @@ export const searchDocuments = onCall<SearchRequest>(
       );
     }
 
+    // 日付語との混在クエリ: 候補 (MAX_GETALL 件以内) を fileDate の範囲でメモリ内フィルタ。
+    // fileDate は documents 側にしか無く、切り詰め前には絞れないため、候補から日付に合う
+    // 書類が漏れうる (truncated=true で通知。段階3 = posting に fileDate 内包は別判断)。
+    // fileDate 不明 (null) は日付指定の検索に該当しない。
+    const rangedDocs = dateRange
+      ? sortableDocs.filter(
+          (d) => d.fileDateMs !== null && d.fileDateMs >= dateRange.startMs && d.fileDateMs < dateRange.endMs
+        )
+      : sortableDocs;
+
     // 多段ソート: fileDate desc nulls last → score desc → processedAt desc → docId asc
-    sortableDocs.sort(compareSearchResults);
+    rangedDocs.sort(compareSearchResults);
 
-    const total = sortableDocs.length;
-    const paginatedDocs = sortableDocs.slice(offset, offset + limit);
+    const total = rangedDocs.length;
+    const paginatedDocs = rangedDocs.slice(offset, offset + limit);
 
-    const documents: SearchResultDocument[] = paginatedDocs.map(({ docId, score, data }) => ({
-      id: docId,
-      fileName: data.fileName || '',
-      customerName: data.customerName || '',
-      officeName: data.officeName || '',
-      documentType: data.documentType || '',
-      fileDate: data.fileDate?.toDate?.()?.toISOString?.().split('T')[0] || null,
-      score: Math.round(score * 100) / 100,
-    }));
+    const documents: SearchResultDocument[] = paginatedDocs.map(({ docId, score, data }) =>
+      toSearchResultDocument(docId, data, score)
+    );
 
     const result: SearchResult = {
       documents,

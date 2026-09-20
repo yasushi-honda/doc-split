@@ -117,6 +117,17 @@ jobs:
         env:
           FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
 
+      - name: Run searchDocuments handler integration tests (Firestore emulator)
+        # Issue #984 段階2a: 日付語(年・年月・年月日)を search_index ではなく documents.fileDate の
+        # 範囲クエリで答える経路(日付のみ/混在)と、既存の AND 検索・ソート・OOM ガード契約の
+        # 回帰を守る。functions/package.json の test:integration に含まれるが CI からは呼ばれず
+        # 未配線だったため、専用 step として追加した。
+        run: |
+          cd functions && firebase emulators:exec --only firestore \
+            'npx mocha --require ts-node/register --timeout 60000 test/searchDocumentsIntegration.test.ts'
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+
       - name: Run Drive folder claim integration tests (Firestore emulator)
         # Issue #880: findOrCreateFolder/childFolderResolver/driveFolderClaim系の統合テスト
         # (計110件)は functions/package.json の test:integration には含まれているが、

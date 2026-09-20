@@ -138,6 +138,8 @@ async function callSearch(
   }>;
   total: number;
   hasMore: boolean;
+  truncated?: boolean;
+  actualMatchedCount?: number;
 }> {
   const auth = uid === null ? undefined : { uid, token: {} as Record<string, unknown> };
   // wrap() awaits and re-throws handler errors as Promise rejections (AC6 が依存)。
@@ -972,6 +974,150 @@ describe('searchDocuments handler integration (#401a, Closes #401)', () => {
       expect(result.total).to.equal(1);
       expect(result.documents.map((d) => d.id)).to.deep.equal(['live-1']);
       expect(result.documents.map((d) => d.id)).to.not.include('split-1');
+    });
+  });
+  // ----------------------------------------
+  // AC12: 日付語の範囲検索 (Issue #984 段階2a)
+  // 日付語 (年・年月・年月日) は search_index ではなく documents.fileDate の UTC 範囲で答える。
+  // cache は query 単位のため、各 it は他テストと重ならない年を使う。
+  // ----------------------------------------
+  describe('AC12: 日付語の範囲検索 (#984 段階2a)', () => {
+    it('日付のみ (年): fileDate が範囲内の processed 書類だけが fileDate 降順で返る。search_index は使わない', async () => {
+      await seedUser();
+      await seedDocument('in-old', { fileDate: ts('2031-02-01') });
+      await seedDocument('in-new', { fileDate: ts('2031-11-30') });
+      await seedDocument('out-prev', { fileDate: ts('2030-12-31') });
+      await seedDocument('out-next', { fileDate: ts('2032-01-01') });
+      await seedDocument('no-date', { fileDate: null });
+      await seedDocument('split-in', { fileDate: ts('2031-06-01'), status: 'split' });
+      await seedDocument('pending-in', { fileDate: ts('2031-06-02'), status: 'pending' });
+      // 索引に "2031" の decoy posting があっても、範囲検索は索引を読まない
+      await seedSearchIndex('2031', { 'out-prev': { score: 9, fieldsMask: 16 } });
+
+      const result = await callSearch({ query: '2031' });
+
+      expect(result.documents.map((d) => d.id)).to.deep.equal(['in-new', 'in-old']);
+      expect(result.total).to.equal(2);
+      expect(result.hasMore).to.be.false;
+      expect(result.truncated).to.equal(undefined);
+      expect(result.documents.map((d) => d.fileDate)).to.deep.equal(['2031-11-30', '2031-02-01']);
+    });
+
+    it('年月・年月日 (ISO / 日本語表記) は該当期間だけを返す', async () => {
+      await seedUser();
+      await seedDocument('d1', { fileDate: ts('2033-09-19') });
+      await seedDocument('d2', { fileDate: ts('2033-09-20') });
+      await seedDocument('d3', { fileDate: ts('2033-09-21') });
+      await seedDocument('d4', { fileDate: ts('2033-10-01') });
+
+      const month = await callSearch({ query: '2033年9月' });
+      expect(month.documents.map((d) => d.id)).to.deep.equal(['d3', 'd2', 'd1']);
+
+      const dayIso = await callSearch({ query: '2033-09-20' });
+      expect(dayIso.documents.map((d) => d.id)).to.deep.equal(['d2']);
+
+      const daySlash = await callSearch({ query: '2033/9/20' });
+      expect(daySlash.documents.map((d) => d.id)).to.deep.equal(['d2']);
+    });
+
+    it('共通部分が空の日付語 (異なる年) は 0 件', async () => {
+      await seedUser();
+      await seedDocument('x1', { fileDate: ts('2034-03-01') });
+
+      const result = await callSearch({ query: '2034 2035' });
+
+      expect(result.total).to.equal(0);
+      expect(result.documents).to.deep.equal([]);
+      expect(result.hasMore).to.be.false;
+    });
+
+    it('ページング: limit/offset で重複・欠落なく、hasMore が切り替わる (同日内も docId 降順で安定)', async () => {
+      await seedUser();
+      // 同一 fileDate 5 件 + 別日 1 件 (計 6 件)
+      for (const id of ['p-a', 'p-b', 'p-c', 'p-d', 'p-e']) {
+        await seedDocument(id, { fileDate: ts('2036-05-10') });
+      }
+      await seedDocument('p-old', { fileDate: ts('2036-01-01') });
+
+      const full = await callSearch({ query: '2036', limit: 50 });
+      const page1 = await callSearch({ query: '2036', limit: 2, offset: 0 });
+      const page2 = await callSearch({ query: '2036', limit: 2, offset: 2 });
+      const page3 = await callSearch({ query: '2036', limit: 2, offset: 4 });
+
+      expect(full.total).to.equal(6);
+      const paged = [...page1.documents, ...page2.documents, ...page3.documents].map((d) => d.id);
+      expect(paged).to.deep.equal(full.documents.map((d) => d.id));
+      expect(new Set(paged).size).to.equal(6);
+      expect(page1.hasMore).to.be.true;
+      expect(page2.hasMore).to.be.true;
+      expect(page3.hasMore).to.be.false;
+    });
+
+    it('500 件超: 先頭 500 件のみ・truncated=true・actualMatchedCount=実件数。offset>=500 は空で hasMore=false', async () => {
+      await seedUser();
+      const TOTAL = 501;
+      for (let start = 0; start < TOTAL; start += 400) {
+        const batch = db.batch();
+        for (let i = start; i < Math.min(start + 400, TOTAL); i++) {
+          batch.set(db.doc(`documents/big-${String(i).padStart(3, '0')}`), {
+            fileName: `big-${i}.pdf`,
+            customerName: '',
+            officeName: '',
+            documentType: '',
+            fileDate: ts('2037-06-15'),
+            processedAt: admin.firestore.Timestamp.now(),
+            status: 'processed',
+          });
+        }
+        await batch.commit();
+      }
+
+      const head = await callSearch({ query: '2037', limit: 50, offset: 0 });
+      expect(head.truncated).to.equal(true);
+      expect(head.actualMatchedCount).to.equal(TOTAL);
+      expect(head.total).to.equal(500);
+      expect(head.documents).to.have.length(50);
+      expect(head.hasMore).to.be.true;
+
+      const last = await callSearch({ query: '2037', limit: 20, offset: 480 });
+      expect(last.documents).to.have.length(20);
+      expect(last.hasMore).to.be.false;
+
+      const beyond = await callSearch({ query: '2037', limit: 20, offset: 500 });
+      expect(beyond.documents).to.deep.equal([]);
+      expect(beyond.hasMore).to.be.false;
+    }).timeout(60000);
+
+    it('混在: 日付以外の語で索引検索し、fileDate で絞る (日付が合わない候補と日付なしは除外)', async () => {
+      await seedUser();
+      await seedSearchIndex('ac12mixword', {
+        'm-hit': { score: 1, fieldsMask: 8 },
+        'm-other-year': { score: 1, fieldsMask: 8 },
+        'm-nodate': { score: 1, fieldsMask: 8 },
+      });
+      await seedDocument('m-hit', { fileDate: ts('2038-05-01') });
+      await seedDocument('m-other-year', { fileDate: ts('2039-05-01') });
+      await seedDocument('m-nodate', { fileDate: null });
+
+      const year = await callSearch({ query: 'ac12mixword 2038' });
+      expect(year.documents.map((d) => d.id)).to.deep.equal(['m-hit']);
+      expect(year.total).to.equal(1);
+
+      const month = await callSearch({ query: 'ac12mixword 2038-05' });
+      expect(month.documents.map((d) => d.id)).to.deep.equal(['m-hit']);
+
+      const miss = await callSearch({ query: 'ac12mixword 2040' });
+      expect(miss.total).to.equal(0);
+    });
+
+    it('日付語を含まないクエリは従来どおり索引検索 (回帰)', async () => {
+      await seedUser();
+      await seedSimplePosting('ac12plainword', 'plain-1');
+      await seedDocument('plain-1', { fileDate: ts('2041-01-01') });
+
+      const result = await callSearch({ query: 'ac12plainword' });
+
+      expect(result.documents.map((d) => d.id)).to.deep.equal(['plain-1']);
     });
   });
 });
