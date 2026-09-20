@@ -7,7 +7,7 @@
 - [監視セットアップ](monitoring-setup.md) (log-based metric / alert policy)
 - `scripts/force-reindex.js` (復旧スクリプト)
 
-> **注意（Issue #984 段階2a / ADR-0026）**: 日付形・数字/`_` のみの 1〜2 文字トークンは索引に登録しない。`force-reindex.js` の `tokensToRemove` はこの除外を考慮していないため、除外トークンの索引文書が存在しない書類では削除側の NOT_FOUND を書類単位で失敗として扱う可能性がある。全件 `--all-drift` は日付トークンを持たない期待 hash との差で大量に検出される（tokenHash が全書類で変わるため）。復旧指標として `drift` 件数をそのまま使わないこと。
+> **注意（Issue #984 段階2a / ADR-0026）**: 日付形・数字/`_` のみの 1〜2 文字トークンは索引に登録しない。`force-reindex.js` の `tokensToRemove` はこの除外を考慮していないため、除外トークンの索引文書が存在しない書類では削除側の NOT_FOUND を書類単位で失敗として扱う可能性がある。全件 `--all-drift` は日付トークンを持たない期待 hash との差で大量に検出される（tokenHash が全書類で変わるため）。復旧指標として `drift` 件数をそのまま使わないこと。書類が更新されて再索引されると、その書類の `search.tokens` から除外トークンが消えるため、飽和した索引文書（`2026` `20` 等）に残る旧 posting は `search.tokens` からは辿れない。将来これらを掃除する場合は `search.tokens` ではなく索引文書側の `postings` マップを走査すること。また `force-reindex.js` / `migrate-search-index.js` はビルド済みの `functions/lib` を使うため、実行前に `functions` を再ビルドしないと除外前のトークナイザーで日付トークンを再登録してしまう。
 
 ---
 
