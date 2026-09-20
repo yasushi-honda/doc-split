@@ -157,21 +157,21 @@ function createFirestoreMock() {
   const db: any = { collection, getAll };
 
   /**
-   * @param options.lazy true なら実物の BulkWriter と同じく、書込みは flush()/close() が呼ばれるか、
-   *   キューが LAZY_MAX_BATCH_SIZE(20) 件に達するまで送信・完了しない。既定(false)は各書込みが
-   *   1 tick で完了する簡易モックで、flush() を呼び忘れて書込みの Promise を待ち続ける不具合(Issue #984 の
-   *   canary で実機発生)を検出できない。
+   * @param options.lazy 既定 true。実物の BulkWriter と同じく、書込みは flush()/close() が呼ばれるか、
+   *   キューが LAZY_MAX_BATCH_SIZE(20) 件に達するまで送信・完了しない。false は各書込みが 1 tick で完了する
+   *   簡易モックで、flush() を呼び忘れて書込みの Promise を待ち続ける不具合(Issue #984 の canary で実機発生)を
+   *   検出できないため、明示的に必要な場合以外は使わない。
    */
   function createBulkWriter(options: { lazy?: boolean } = {}) {
+    const lazy = options.lazy ?? true;
     const LAZY_MAX_BATCH_SIZE = 20;
     let closed = false;
     let closeCallCount = 0;
-    let flushCallCount = 0;
     const queue: Array<() => Promise<void>> = [];
 
     /** 書込みを実行する thunk を渡す。lazy でなければ即実行、lazy なら flush/満杯まで保留する。 */
     function enqueue<T>(run: () => T): Promise<T> {
-      if (!options.lazy) return (async () => { await tick(); return run(); })();
+      if (!lazy) return (async () => { await tick(); return run(); })();
       return new Promise<T>((resolve, reject) => {
         queue.push(async () => {
           await tick();
@@ -207,7 +207,6 @@ function createFirestoreMock() {
         });
       },
       async flush() {
-        flushCallCount++;
         await drain();
       },
       async close() {
@@ -217,9 +216,6 @@ function createFirestoreMock() {
       },
       get closeCallCount() {
         return closeCallCount;
-      },
-      get flushCallCount() {
-        return flushCallCount;
       },
     };
   }
@@ -574,10 +570,9 @@ describe('force-reindex: planReindex (systemic error, Issue #687)', () => {
 describe('force-reindex: reindexDocument (BulkWriter の flush, Issue #984)', () => {
   /** 待ち続ける不具合を、テスト全体のハングではなく失敗として検出する */
   function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
-    return Promise.race([
-      promise,
-      new Promise<T>((_, reject) => setTimeout(() => reject(new Error(message)), ms)),
-    ]);
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<T>((_, reject) => { timer = setTimeout(() => reject(new Error(message)), ms); });
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
   }
 
   // トークン数が 20 件(BulkWriter の自動送信の閾値)を超える書類。29 トークンの実機 canary と同型
@@ -616,17 +611,102 @@ describe('force-reindex: reindexDocument (BulkWriter の flush, Issue #984)', ()
     const tokenizer = loadTokenizer();
     const mock = createFirestoreMock();
     const bulkWriter = mock.createBulkWriter({ lazy: true });
-    const smallDoc = { customerName: 'あ', status: 'processed' };
+    const smallDoc = { customerName: 'あいう', fileName: 'x.pdf', status: 'processed' };
     mock.seedDoc('documents', 'doc-small', smallDoc);
     const plan = forceReindex.planReindex('doc-small', smallDoc, tokenizer);
-    expect(plan.tokenMap.size, '前提: 閾値(20)未満').to.be.lessThan(20);
+    expect(plan.tokenMap.size, '前提: トークンが 1 件以上あり、閾値(20)未満').to.be.within(1, 19);
 
     await withTimeout(
       forceReindex.reindexDocument(mock.db, 'doc-small', smallDoc, { execute: true, bulkWriter }),
       1500,
       'reindexDocument が完了しない(flush されない BulkWriter の書込みを待ち続けている)',
     );
+    for (const tokenId of plan.tokenMap.keys()) {
+      expect(mock.getStoredDoc('search_index', tokenId)?.postings?.['doc-small'], `tokenId=${tokenId} が未登録`).to.exist;
+    }
     expect(mock.getStoredDoc('documents', 'doc-small').search?.tokenHash).to.equal(plan.tokenHash);
+  });
+
+  it('旧トークンを持つ書類の再索引(旧 posting の削除 → 新 posting の書込み)も、flush されない BulkWriter で完了する', async () => {
+    // 旧 posting の削除(ステージ 1)は、旧トークンを持つ書類でしか通らない。新規書類の fixture では
+    // このブロックが丸ごとスキップされ、ステージ 1 の flush 欠落を検出できなかった。
+    const tokenizer = loadTokenizer();
+    const mock = createFirestoreMock();
+    const oldDoc = { customerName: '旧顧客名', fileName: 'old.pdf', status: 'processed' };
+    const newDoc = { customerName: '新顧客名', fileName: 'old.pdf', status: 'processed' };
+    const oldPlan = forceReindex.planReindex('doc-stale', oldDoc, tokenizer);
+    const newPlan = forceReindex.planReindex('doc-stale', newDoc, tokenizer);
+    const removedIds = [...oldPlan.tokenMap.keys()].filter((id: string) => !newPlan.tokenMap.has(id));
+    expect(removedIds.length, '前提: 削除対象が 1 件以上、20 件未満').to.be.within(1, 19);
+
+    // 旧トークンで索引済みの状態(search_index に posting、documents.search.tokens に旧トークン)を作る
+    for (const [tokenId] of oldPlan.tokenMap) {
+      mock.seedDoc('search_index', tokenId, { df: 1, postings: { 'doc-stale': { score: 1, fieldsMask: 1 } } });
+    }
+    mock.seedDoc('documents', 'doc-stale', {
+      ...newDoc,
+      search: { version: 1, tokens: oldPlan.newTokenStrings, tokenHash: 'stalehash' },
+    });
+    const bulkWriter = mock.createBulkWriter({ lazy: true });
+
+    await withTimeout(
+      forceReindex.reindexDocument(mock.db, 'doc-stale', { ...newDoc, search: { version: 1, tokens: oldPlan.newTokenStrings, tokenHash: 'stalehash' } }, { execute: true, bulkWriter }),
+      1500,
+      'reindexDocument が完了しない(旧 posting の削除で flush されない BulkWriter の書込みを待ち続けている)',
+    );
+
+    for (const tokenId of removedIds) {
+      const doc = mock.getStoredDoc('search_index', tokenId);
+      expect(doc.postings?.['doc-stale'], `旧トークン ${tokenId} の posting が削除されていない`).to.equal(undefined);
+      expect(doc.df, `旧トークン ${tokenId} の df が減算されていない`).to.equal(0);
+    }
+    for (const tokenId of newPlan.tokenMap.keys()) {
+      expect(mock.getStoredDoc('search_index', tokenId)?.postings?.['doc-stale'], `新トークン ${tokenId} が未登録`).to.exist;
+    }
+    expect(mock.getStoredDoc('documents', 'doc-stale').search.tokenHash).to.equal(newPlan.tokenHash);
+  });
+
+  it('サイズ超過以外のエラーで書込みが失敗し、flush() の解決が遅れても、未処理の拒否を起こさず reindexStage 付きで throw する', async () => {
+    // 並行実行(共有 BulkWriter)では、自分の書込みが全て確定した後も、flush() は他の書類の書込みを待つため
+    // 解決が遅れる。この間に settle の Promise が拒否されると、await でハンドラが付くまで未処理の拒否になる。
+    const tokenizer = loadTokenizer();
+    const mock = createFirestoreMock();
+    const bulkWriter = mock.createBulkWriter({ lazy: true });
+    mock.seedDoc('documents', 'doc-fatal', bigDoc);
+    const plan = forceReindex.planReindex('doc-fatal', bigDoc, tokenizer);
+    const [failingId] = [...plan.tokenMap.keys()];
+    const originalSet = bulkWriter.set.bind(bulkWriter);
+    bulkWriter.set = (ref: any, data: any, options?: any) =>
+      ref.collectionName === 'search_index' && ref.id === failingId
+        ? Promise.reject(Object.assign(new Error('simulated UNAVAILABLE'), { code: 14 }))
+        : originalSet(ref, data, options);
+    const originalFlush = bulkWriter.flush.bind(bulkWriter);
+    bulkWriter.flush = async () => {
+      await originalFlush();
+      await new Promise((resolve) => setTimeout(resolve, 30)); // 他の書類の書込みを待つ分の遅延を模す
+    };
+
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => { unhandled.push(reason); };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      let thrown: any;
+      try {
+        await withTimeout(
+          forceReindex.reindexDocument(mock.db, 'doc-fatal', bigDoc, { execute: true, bulkWriter }),
+          1500,
+          'reindexDocument が完了しない',
+        );
+      } catch (error) {
+        thrown = error;
+      }
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(thrown, 'サイズ超過以外の失敗は throw される').to.be.instanceOf(Error);
+      expect(thrown.reindexStage).to.equal('search_index_postings_write');
+      expect(unhandled, 'flush の解決前に拒否された settle の Promise が、未処理の拒否になっている').to.have.length(0);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
   });
 
   it('サイズ超過で拒否された書込みがあっても、未処理の拒否(unhandledRejection)を起こさず完了する', async () => {
@@ -1205,10 +1285,11 @@ describe('force-reindex: runAllDrift (Issue #687)', () => {
       getAll: mock.db.getAll,
     };
 
+    let timer: NodeJS.Timeout | undefined;
     const exitCode = await Promise.race([
       forceReindex.runAllDrift(db, { execute: true, batchSize: 500, concurrency: 2, sample: null }, { projectId: 'test', executedBy: 'tester' }),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('runAllDrift が完了しない(flush されない BulkWriter の書込みを待ち続けている)')), 3000)),
-    ]);
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('runAllDrift が完了しない(flush されない BulkWriter の書込みを待ち続けている)')), 3000); }),
+    ]).finally(() => clearTimeout(timer));
 
     expect(exitCode).to.equal(forceReindex.EXIT_OK);
     const summary = captured.find((e) => e.event === 'force_reindex_batch_summary');

@@ -424,6 +424,9 @@ async function reindexDocument(db, docId, docData, { execute, bulkWriter, plan }
     // 先に settle を開始して各 Promise に処理側のハンドラを付けてから flush する
     // (flush 中に拒否された書込みが未処理の拒否になり、プロセスが落ちるのを防ぐ)。
     const removeSettled = settleOrThrow(removePromises, 'search_index_postings_remove');
+    // settle 自体の Promise にもハンドラを付ける: 共有 BulkWriter の並行実行では、自分の書込みが確定した後も
+    // flush() が他の書類の書込みを待つため、その間に拒否されると未処理の拒否になる(拒否は下の await で再 throw する)
+    removeSettled.catch(() => {});
     await flushBulkWriter(bulkWriter);
     await removeSettled;
   }
@@ -461,6 +464,7 @@ async function reindexDocument(db, docId, docData, { execute, bulkWriter, plan }
   // Runbook §4.5 に基づき手動クリーンアップ or 再実行する。
   // サイズ超過(高頻度トークンが 1MiB 上限、Issue #984)の token はスキップし、他は登録する。
   const writeSettled = settleTokenWrites(writeEntries, 'search_index_postings_write');
+  writeSettled.catch(() => {}); // 理由は removeSettled と同じ(拒否は下の await で再 throw する)
   await flushBulkWriter(bulkWriter);
   const { skippedTokenIds } = await writeSettled;
   // generateTokenId は 32bit ハッシュで異なる文字列が同じ ID になりうるため、ID→文字列は 1:N で逆引きする
