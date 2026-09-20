@@ -181,6 +181,7 @@ rm /tmp/monitoring-sa.json
 - ✅ kanameone: SA + Secret + setup 完了 (2026-04-17 session7, Run ID `24547741800`, 5 metrics + 5 alert policies + 1 channel 稼働中、通知先 `hy.unimail.11@gmail.com`)
 - ✅ cocoro: SA + Secret + setup 完了 (2026-04-17 session7, Run ID `24548562806`, 5 metrics + 5 alert policies + 1 channel 稼働中、通知先 `hy.unimail.11@gmail.com`)
 - ✅ 2026-09-20 (Issue #981 / PR #985): dev / cocoro / kanameone の `search_index_silent_failure` と `claim_divergent_backlog_stale` の filter から severity 条件を除去(`gcloud logging metrics update` で in-place 反映、alert policy は無変更)。`console.error` / `console.warn` は gen2 の Cloud Logging で DEFAULT severity のため、旧 filter は一致しなかった
+- ✅ 2026-09-21 (Issue #984 / #981): dev / kanameone (run `35533087283`) / cocoro (run `35533423590`) に `search_index_token_skipped` / `search_index_write_failed` のメトリクスと `search_index_write_failed` のアラートを適用(Setup Monitoring ワークフロー、既存は変更なし)。dev では `processocr_error` も新規作成。`search_index_token_skipped` のメトリクス説明文「kanameone では段階 2 まで常時発生が正常」は段階 2a 完了で実態と合わなくなったため、次に `setup-log-based-metrics.sh` を触るときに更新する
 - ⏳ Issue #871 恒久対応で追加した3種（`drive_folder_divergent`/`drive_folder_divergent_record_failed`/`claim_divergent_backlog_stale`）は**PR時点では未適用**。スクリプトは冪等なので、各環境で `setup-log-based-metrics.sh` を再実行すれば既存5種はskipされ新規3種のみ追加される（ロールアウト §1 参照）
 
 ## 通知先の調整
