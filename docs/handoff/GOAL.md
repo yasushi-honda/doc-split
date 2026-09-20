@@ -4,7 +4,7 @@ updated: 2026-09-20
 <!-- 前ミッション(dev/kanameone/cocoro環境監査・保守検証)は2026-07-20完遂。全文はdocs/handoff/LATEST.md参照。 -->
 <!-- Google Drive連携Phase1 (MVP)実装ミッションは2026-07-22完了(PR#700マージ)。詳細は本ファイル末尾「Google Drive連携Phase1完遂」節+docs/handoff/LATEST.md参照。 -->
 
-## 【進行中・2026-09-19開始】Issue #984: kanameone `search_index` 1MiB飽和(日付由来トークン)対応 — 段階1・段階2a完了、kanameoneデプロイ済み、実データ確認待ち（現在のミッション・ADR-0025とは別件の並行トラック）
+## 【完了・2026-09-20】Issue #984: kanameone `search_index` 1MiB飽和(日付由来トークン)対応 — 段階1・段階2a完了、kanameone実データ確認済み・Issueクローズ（残: cocoroデプロイ・#981メトリクス適用、現在のミッション・ADR-0025とは別件の並行トラック）
 
 kanameoneの`search_index/{tokenId}`(1トークン=1文書に全書類のpostingsを格納、1MiB上限≒14,500件)で、日付由来トークン(`2026`=14,562件で飽和済み、改名規則`…_YYYYMMDD_…`由来の2桁bigram `26/20/02/60`が11,400〜12,780件)が飽和し、新規書類がその語で検索に出なくなっていた。
 
@@ -14,7 +14,7 @@ kanameoneの`search_index/{tokenId}`(1トークン=1文書に全書類のposting
 - [x] **dev実機確認**: 人工書類で日付トークン非登録・実Firestoreの範囲クエリ+`count()`(複合インデックス)を確認、後片付け済み。callableの認証付き実呼び出しは権限(`signJwt`)の都合で未実施
 - [x] **本番事前計測(read-only)**: kanameone/cocoroとも複合インデックスstatus×fileDate READY、実行時TZなし(UTC)。fileDate: kanameone UTC0時17,390/JST0時80/なし2,638/2000〜2099外522、cocoro UTC0時1,348/なし289/外12。3環境で関数構成・runtime・インデックスは一致、cocoroのみ#986/#990/#991未反映
 - [x] **kanameone Functionsデプロイ(2026-09-20 13:47Z、run 35514146302)**: `OCR_PROVIDER=paddle`維持、25関数ACTIVE
-- [ ] **kanameone実データ確認**: 新規書類が索引された後、`search_index/00177502`(`2026`、現在14,562件)のpostingsが増えないこと・`search_index_token_skipped`の日付由来tokenIds(`00177502`等)が出ないことを確認（デプロイ直後は新規索引0件で未確認）
+- [x] **kanameone実データ確認(2026-09-20 14:26Z、read-only)**: デプロイ後の新規書類2件で`2026`/`26`/`20`/`02`/`60`の索引文書にpostingなし、5索引文書の最終更新はデプロイ前(不変、`2026`=14,562件)、`token skipped`/`index write failed`ログ0件、既存書類9件の再索引もエラーなし。**Issue #984クローズ**
 - [ ] **cocoroデプロイ**(`/deploy cocoro --functions`、decision-maker実行): 索引は上限の約8%で急がない。kanameone確認後
 - [ ] ログベースメトリクス・アラートの適用(dev→kanameone、Issue #981の完了条件)。本番変更のため明示指示待ち
 
@@ -452,7 +452,7 @@ cocoro/kanameから、書類（ケアプラン・医療・介護保険証等）�
 
 cocoro側Drive連携Phase C（クライアント自身のOAuth接続）は外部依存待ち（継続、変更なし、詳細は本ファイル冒頭「現在のミッション」節参照）。
 
-**Issue #984（2026-09-20）**: 段階1・段階2a完了、kanameone Functionsデプロイ済み(13:47Z)。再開点は「kanameone実データ確認」(新規書類が索引されたら`search_index/00177502`のpostings件数が14,562から増えていないか、`search_index_token_skipped`ログの日付由来tokenIdsが出ていないかをread-only確認、スクリプト例は本セッションscratchpadの`kn_postings.py`相当=`CLOUDSDK_ACTIVE_CONFIG_NAME=kanameone`でFirestore REST GET)。cocoroは未デプロイ(`/deploy cocoro --functions`はdecision-maker実行)。
+**Issue #984（2026-09-20）**: 完了・クローズ済み(kanameone実データ確認済み、上記節参照)。残りは別トラック: cocoroは未デプロイ(`/deploy cocoro --functions`はdecision-maker実行、索引は上限の約8%で急がない)、ログベースメトリクス・アラート適用(#981の完了条件、本番変更のため明示指示待ち)。
 
 ## 【完了・2026-08-30】Issue #871 PR-4: childFolderResolver.tsのclaimプロトコル完全移行(PR #879マージ)
 

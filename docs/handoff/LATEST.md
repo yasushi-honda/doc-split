@@ -8,10 +8,10 @@ kanameoneの`search_index`で日付由来トークン(`2026`=14,562件で飽和�
 
 **経緯と判断**: 初版プラン(全件force-reindex・GitHub Actions計測オプション・旧形式postings移行・索引掃除を含む)を`/plan-crossreview`(grip+codex 2パス)で改訂したが、実装後にdecision-makerから「利用者は複合条件で検索する、過剰対応では」との指摘を受け、codexにも規模の妥当性を独立に評価させて「最小構成」に絞った(全件再索引・`force-reindex.js`変更・掃除・`df`再計算を行わない)。実データ調査で2000年未満の`fileDate`がkanameoneに522件あると判明(年検索で当たらなくなる)、範囲は2000〜2099のまま(decision-maker判断)。
 
-**検証**: 単体2,262件・統合512件pass、`codex review`(high、PR-B 2回目とPR-A は0件)、pr-review-toolkit・Evaluatorの指摘を実運用での起こりやすさで個別評価。dev実機確認(日付トークン非登録・実Firestoreの範囲クエリ)、kanameone/cocoro事前計測(インデックスREADY・TZなし・fileDate分布)。kanameoneはデプロイ直後で新規索引0件のため実データ確認は未了。
+**検証**: 単体2,262件・統合512件pass、`codex review`(high、PR-B 2回目とPR-A は0件)、pr-review-toolkit・Evaluatorの指摘を実運用での起こりやすさで個別評価。dev実機確認(日付トークン非登録・実Firestoreの範囲クエリ)、kanameone/cocoro事前計測(インデックスREADY・TZなし・fileDate分布)。kanameone実データ確認(2026-09-20 14:26Z、read-only)で、デプロイ後の新規書類に日付由来トークンのpostingがなく、飽和5索引文書は不変、`token skipped`ログ0件を確認しIssue #984をクローズ。
 
 ### Issue Net
-Net 0（Close 0件・起票0件）。#984はP1のバグでクローズ条件(kanameone実データ確認)が未了、#981はメトリクス適用が未了のため両方OPEN継続。新規Issueは起票していない(FEバナーのフォローアップは未起票)。
+Net +1（Close 1件(#984、kanameone実データ確認後にクローズ)・起票0件）。#981はメトリクス適用が未了のためOPEN継続。新規Issueは起票していない(FEバナーのフォローアップは未起票)。
 
 ### 同根再発スキャン・対症療法判定（handoff §4.6/§4.7）
 - **同根候補あり（記録）**: 本セッションの修正PR(#985/#986/#989/#991のテスト修正)のうち「ローカルのテストは通るがCIで失敗」が2回再発(#989: 型注釈`withTimeout`のTS18046、#991: `force-reindex.js`が`functions/lib`のビルド済みトークナイザーを使うのにローカルは`lib`が古いまま)。共通の根本原因はローカル検証がCIの条件(functionsをbuildしてからunit test)と異なること。対策: push前に`npm run build:functions`してから`cd functions && npm test`を実行する(memory `feedback_local_pass_not_ci_build_lib.md`に記録)
