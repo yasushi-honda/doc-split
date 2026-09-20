@@ -54,6 +54,18 @@ fi
 ENV_NAME="${PROJECT_ID#docsplit-}"
 ENV_NAME="${ENV_NAME#doc-split-}"
 
+# 既存確認の list 系 gcloud を fail-closed で実行する (#978)。
+# 権限不足・一時障害を「既存なし」と誤認すると、通知チャネル・metric・alert policy を重複作成しうる
+# (--dry-run も同経路のため「全部作成予定」と誤表示する)。失敗時は STDERR を残したまま中断する。
+list_names() {
+  local out
+  if ! out="$(gcloud "$@")"; then
+    echo "ERROR: 'gcloud $*' が失敗しました。権限不足または一時障害で既存リソースの有無を判定できないため、重複作成を避けて中断します" >&2
+    return 1
+  fi
+  printf '%s\n' "$out"
+}
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEMPLATE_DIR="$SCRIPT_DIR/monitoring-templates"
 
@@ -95,10 +107,11 @@ METRICS=(
 # ==================================================
 echo "--- Notification channel ---"
 CHANNEL_DISPLAY_NAME="DocSplit Monitoring Alerts - ${PROJECT_ID#docsplit-}"
-EXISTING_CHANNEL=$(gcloud alpha monitoring channels list \
+CHANNEL_LIST="$(list_names alpha monitoring channels list \
   --project="$PROJECT_ID" \
   --filter="displayName=\"$CHANNEL_DISPLAY_NAME\"" \
-  --format="value(name)" 2>/dev/null | head -n1 || true)
+  --format="value(name)")"
+EXISTING_CHANNEL="$(head -n1 <<< "$CHANNEL_LIST")"
 
 if [ -n "$EXISTING_CHANNEL" ]; then
   echo "✓ 既存チャネル利用: $EXISTING_CHANNEL"
@@ -123,10 +136,13 @@ echo ""
 # 3. Log-based metric 作成
 # ==================================================
 echo "--- Log-based metrics ---"
+# 存在確認は describe の成否ではなく list の結果で行う: describe は権限不足・一時障害でも失敗するため
+# 「存在しない」と区別できず、既存 metric の重複作成を試みてしまう (#978)。
+EXISTING_METRICS="$(list_names logging metrics list --project="$PROJECT_ID" --format="value(name)")"
 for metric_def in "${METRICS[@]}"; do
   IFS='|' read -r METRIC_NAME METRIC_DESC METRIC_FILTER <<< "$metric_def"
 
-  if gcloud logging metrics describe "$METRIC_NAME" --project="$PROJECT_ID" >/dev/null 2>&1; then
+  if grep -qxF "$METRIC_NAME" <<< "$EXISTING_METRICS"; then
     # 既存 metric は既定では書き換えない(冪等性維持)。ただし filter がこの定義と食い違う場合は
     # 「スクリプトの定義だけ直っても本番は旧 filter のまま」になる(#981)ため、差分を警告する。
     # 反映する場合は UPDATE_EXISTING_METRICS=1 を付けて再実行する(差分のある metric のみ更新)。
@@ -186,10 +202,11 @@ for template in "$TEMPLATE_DIR"/alert-*.yaml; do
 
   DISPLAY_NAME=$(awk -F'"' '/^displayName:/ {print $2; exit}' "$POLICY_FILE")
 
-  EXISTING_POLICY=$(gcloud alpha monitoring policies list \
+  POLICY_LIST="$(list_names alpha monitoring policies list \
     --project="$PROJECT_ID" \
     --filter="displayName=\"$DISPLAY_NAME\"" \
-    --format="value(name)" 2>/dev/null | head -n1 || true)
+    --format="value(name)")"
+  EXISTING_POLICY="$(head -n1 <<< "$POLICY_LIST")"
 
   if [ -n "$EXISTING_POLICY" ]; then
     echo "✓ $DISPLAY_NAME は既存 (skip)"
