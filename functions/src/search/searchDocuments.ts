@@ -198,8 +198,10 @@ async function searchByDateRange(range: DateRangeMs, limit: number, offset: numb
   try {
     matched = (await base.count().get()).data().count;
     if (matched > 0 && offset < Math.min(matched, MAX_GETALL)) {
+      // 結果に使う 5 フィールドだけ読む (ocrResult 等の大きいフィールドで 256MiB を圧迫しない)
       snapshot = await base
         .orderBy('fileDate', 'desc')
+        .select('fileName', 'customerName', 'officeName', 'documentType', 'fileDate')
         .limit(Math.min(offset + limit, MAX_GETALL))
         .get();
     }
