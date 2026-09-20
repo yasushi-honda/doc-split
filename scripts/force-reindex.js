@@ -26,6 +26,7 @@
 // Issue #237 で scripts/lib/loadTokenizer.js に共通化 (migrate-search-index.js と共有)。
 // BE tokenizer.ts の compiled lib/ を参照することで drift を防止する。
 const { loadTokenizer, ensureTokenizerBuilt } = require('./lib/loadTokenizer');
+const { loadFirestoreErrors } = require('./lib/loadFirestoreErrors');
 const { aggregateTokensByTokenId } = require('./lib/aggregateTokens');
 const {
   writeForceReindexAuditLog,
@@ -241,7 +242,14 @@ async function settleOrThrow(promises, defaultStage) {
   const results = await Promise.allSettled(promises);
   const failures = results.filter(r => r.status === 'rejected').map(r => r.reason);
   if (failures.length === 0) return;
+  throwFailures(failures, defaultStage);
+}
 
+/**
+ * 失敗が1件ならそのエラーに reindexStage を付けて、複数なら件数を集約したエラーにして throw する
+ * (settleOrThrow と settleTokenWrites で共有)。
+ */
+function throwFailures(failures, defaultStage) {
   if (failures.length === 1) {
     const error = failures[0];
     error.reindexStage = error.reindexStage || defaultStage;
@@ -256,6 +264,36 @@ async function settleOrThrow(promises, defaultStage) {
   aggregated.code = primary?.code;
   aggregated.cause = primary;
   throw aggregated;
+}
+
+/**
+ * トークンごとの書込み Promise を allSettled で drain し、失敗を分類する (Issue #984)。
+ *
+ * - サイズ超過(search_index/{tokenId} が 1MiB 上限、高頻度トークン): スキップ扱い。ただし既に
+ *   この書類の posting がある token(hadPosting)は索引に残っているので skipped にしない
+ * - それ以外の失敗が1件でもあれば、全書込みを試行した上で throw する(サイズ超過を skipped として
+ *   握りつぶすと、非サイズ失敗の全体像を隠してしまうため、throw する失敗にはサイズ超過を含めない)
+ *
+ * トリガー側(searchIndexer.addDocumentToIndex)と同じ判定関数(functions/src/utils/firestoreErrors.ts)を使う。
+ *
+ * @param {Array<{tokenId: string, hadPosting: boolean, promise: Promise}>} entries
+ * @returns {Promise<{skippedTokenIds: Set<string>}>} 登録できなかった tokenId (既存 posting があるものは含まない)
+ */
+async function settleTokenWrites(entries, defaultStage) {
+  const { isFirestoreDocumentSizeExceededError } = loadFirestoreErrors();
+  const results = await Promise.allSettled(entries.map(e => e.promise));
+  const skippedTokenIds = new Set();
+  const fatalFailures = [];
+  results.forEach((result, i) => {
+    if (result.status === 'fulfilled') return;
+    if (isFirestoreDocumentSizeExceededError(result.reason)) {
+      if (!entries[i].hadPosting) skippedTokenIds.add(entries[i].tokenId);
+    } else {
+      fatalFailures.push(result.reason);
+    }
+  });
+  if (fatalFailures.length > 0) throwFailures(fatalFailures, defaultStage);
+  return { skippedTokenIds };
 }
 
 /**
@@ -352,15 +390,17 @@ async function reindexDocument(db, docId, docData, { execute, bulkWriter, plan }
 
   // 2. 新 posting 書き込み (再実行安全: 既に posting が存在するなら df 加算しない)。
   //    集約ロジックは scripts/lib/aggregateTokens.js を経由 (migrate-search-index.js と共有)
-  const writePromises = [];
+  const writeEntries = [];
   for (const [tokenId, data] of tokenMap) {
     const indexRef = db.collection('search_index').doc(tokenId);
     const posting = { score: data.score, fieldsMask: data.fieldsMask, updatedAt: now };
     const existingDoc = existingById.get(tokenId);
     const hadPosting = existingDoc?.data()?.postings?.[docId] !== undefined;
 
-    writePromises.push(
-      bulkWriter.set(
+    writeEntries.push({
+      tokenId,
+      hadPosting,
+      promise: bulkWriter.set(
         indexRef,
         {
           updatedAt: now,
@@ -369,11 +409,19 @@ async function reindexDocument(db, docId, docData, { execute, bulkWriter, plan }
         },
         { merge: true },
       ),
-    );
+    });
   }
   // 半端状態 (postings 一部/全部新しいが tokenHash 古い) 発生時は
   // Runbook §4.5 に基づき手動クリーンアップ or 再実行する。
-  await settleOrThrow(writePromises, 'search_index_postings_write');
+  // サイズ超過(高頻度トークンが 1MiB 上限、Issue #984)の token はスキップし、他は登録する。
+  const { skippedTokenIds } = await settleTokenWrites(writeEntries, 'search_index_postings_write');
+  // generateTokenId は 32bit ハッシュで異なる文字列が同じ ID になりうるため、ID→文字列は 1:N で逆引きする
+  const registeredTokenStrings = newTokenStrings.filter(
+    t => !skippedTokenIds.has(tokenizer.generateTokenId(t)),
+  );
+  const skippedTokenStrings = [
+    ...new Set(newTokenStrings.filter(t => skippedTokenIds.has(tokenizer.generateTokenId(t)))),
+  ];
 
   // 3. documents.search を dot 記法で Partial Update
   //    search オブジェクト全体置換にすると将来追加フィールドが消える
@@ -381,9 +429,15 @@ async function reindexDocument(db, docId, docData, { execute, bulkWriter, plan }
   try {
     await bulkWriter.update(db.collection('documents').doc(docId), {
       'search.version': 1,
-      'search.tokens': newTokenStrings,
+      // 登録できたトークンのみ(スキップ分を含めると再索引時に存在しない posting を削除して df を誤減算する)
+      'search.tokens': registeredTokenStrings,
+      // 期待する全トークンのハッシュ (tokenHash 保存済み = 全トークン登録済み、ではない)
       'search.tokenHash': tokenHash,
       'search.indexedAt': admin.firestore.Timestamp.now(),
+      // スキップしたトークン文字列。無ければ削除する(過去のスキップが解消した場合に古い値を残さない)
+      'search.skippedTokens': skippedTokenStrings.length > 0
+        ? skippedTokenStrings
+        : admin.firestore.FieldValue.delete(),
     });
   } catch (error) {
     // step 2 成功後に step 3 が失敗 → postings 新しいが tokenHash 古い半端状態
@@ -395,6 +449,7 @@ async function reindexDocument(db, docId, docData, { execute, bulkWriter, plan }
     docId,
     tokensToAdd: tokens.length,
     tokensToRemove: tokensToRemove.length,
+    tokensSkipped: skippedTokenStrings.length,
     expectedHash: tokenHash,
     actualHash: docData.search?.tokenHash || null,
     skipped: false,

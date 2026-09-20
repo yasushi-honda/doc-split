@@ -22,6 +22,7 @@ import { createRequire } from 'module';
 const requireCjs = createRequire(`${process.cwd()}/package.json`);
 const forceReindex = requireCjs(path.resolve(process.cwd(), '../scripts/force-reindex.js'));
 const { loadTokenizer } = requireCjs(path.resolve(process.cwd(), '../scripts/lib/loadTokenizer.js'));
+const { assertFirestoreErrorsModule } = requireCjs(path.resolve(process.cwd(), '../scripts/lib/loadFirestoreErrors.js'));
 // force-reindex.js と同一の CJS require パスで admin を取得する。
 // `import * as admin from 'firebase-admin'` は ts-node の ESM 再解釈時に
 // admin.firestore が undefined になる (CJS 名前空間解決の相互運用問題) ため使わない。
@@ -1114,5 +1115,161 @@ describe('force-reindex: runAllDrift (Issue #687)', () => {
     expect(batchSummary.counts.reindexed).to.equal(1);
     // close 失敗自体も別イベントとして記録される
     expect(captured.some((e) => e.event === 'force_reindex_bulkwriter_close_failed')).to.equal(true);
+  });
+});
+
+/**
+ * サイズ超過(1MiB)トークンのスキップ (Issue #984)
+ *
+ * search_index/{tokenId} が上限に達した高頻度トークンは書けないが、その書類の他トークンは登録する。
+ * 復旧(--all-drift)が同じ失敗を繰り返さないため、トリガー(addDocumentToIndex)と同じ方針にする。
+ * - search.tokens = 登録できたトークンのみ / search.skippedTokens = スキップ分 / search.tokenHash = 全トークン
+ * - サイズ超過以外のエラーは従来どおり throw
+ * - 既に posting がある token はサイズ超過で書けなくても索引に残っているので skipped にしない
+ */
+describe('force-reindex: reindexDocument (サイズ超過 token のスキップ, Issue #984)', () => {
+  const sizeError = () => Object.assign(new Error('maximum entity size is 1048576 bytes'), { code: 3 });
+
+  function failSetFor(bulkWriter: any, failingIds: Set<string>, makeError: () => Error) {
+    const originalSet = bulkWriter.set.bind(bulkWriter);
+    bulkWriter.set = async (ref: any, data: any, options?: any) => {
+      if (ref.collectionName === 'search_index' && failingIds.has(ref.id)) throw makeError();
+      return originalSet(ref, data, options);
+    };
+  }
+
+  it('サイズ超過の token だけスキップし、他 token は登録。search メタは仕様どおりで、対象外フィールドは不変', async () => {
+    const tokenizer = loadTokenizer();
+    const mock = createFirestoreMock();
+    const bulkWriter = mock.createBulkWriter();
+    const doc = {
+      customerName: 'スキップ確認顧客', officeName: 'スキップ確認事業所', fileName: 'skip.pdf',
+      displayFileName: 'keep-me.pdf', status: 'processed',
+    };
+    mock.seedDoc('documents', 'docHot', doc);
+    const plan = forceReindex.planReindex('docHot', doc, tokenizer);
+    expect(plan.tokenMap.size).to.be.greaterThan(2);
+    const hotId = [...plan.tokenMap.keys()][0] as string;
+    failSetFor(bulkWriter, new Set([hotId]), sizeError);
+
+    const result = await forceReindex.reindexDocument(mock.db, 'docHot', doc, { execute: true, bulkWriter });
+
+    const hotStrings = [...new Set<string>(plan.newTokenStrings.filter((t: string) => tokenizer.generateTokenId(t) === hotId))];
+    const stored = mock.getStoredDoc('documents', 'docHot');
+    expect(stored.search.tokens).to.deep.equal(
+      plan.newTokenStrings.filter((t: string) => tokenizer.generateTokenId(t) !== hotId)
+    );
+    expect(stored.search.skippedTokens).to.deep.equal(hotStrings);
+    expect(stored.search.tokenHash, 'tokenHash は全トークンのハッシュ').to.equal(plan.tokenHash);
+    expect(result.tokensSkipped).to.equal(hotStrings.length);
+
+    // Partial Update: search.* 以外のフィールドは不変(CLAUDE.md MUST)
+    expect(stored.displayFileName).to.equal('keep-me.pdf');
+    expect(stored.customerName).to.equal(doc.customerName);
+    expect(stored.status).to.equal('processed');
+
+    // スキップした token の search_index は作られず、他 token は登録される
+    expect(mock.getStoredDoc('search_index', hotId)).to.equal(undefined);
+    for (const id of [...plan.tokenMap.keys()].filter((k) => k !== hotId)) {
+      const idx = mock.getStoredDoc('search_index', id);
+      expect(idx.postings.docHot).to.exist;
+      expect(idx.df).to.equal(1);
+    }
+  });
+
+  it('サイズ超過以外のエラーは従来どおり throw し、search メタは更新されない', async () => {
+    const tokenizer = loadTokenizer();
+    const mock = createFirestoreMock();
+    const bulkWriter = mock.createBulkWriter();
+    const doc = { customerName: '非サイズ失敗顧客', officeName: '非サイズ失敗事業所', fileName: 'nonsize.pdf' };
+    mock.seedDoc('documents', 'docErr', doc);
+    const plan = forceReindex.planReindex('docErr', doc, tokenizer);
+    const failingId = [...plan.tokenMap.keys()][0] as string;
+    failSetFor(bulkWriter, new Set([failingId]), () => Object.assign(new Error('permission denied'), { code: 7 }));
+
+    let caught: any = null;
+    try {
+      await forceReindex.reindexDocument(mock.db, 'docErr', doc, { execute: true, bulkWriter });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).to.exist;
+    expect(caught.reindexStage).to.equal('search_index_postings_write');
+    expect(mock.getStoredDoc('documents', 'docErr').search, 'step 3 に進まない').to.equal(undefined);
+  });
+
+  it('サイズ超過と非サイズ失敗が混在する場合は throw し(非サイズ失敗を隠さない)、サイズ超過だけを skipped 扱いにしない', async () => {
+    const tokenizer = loadTokenizer();
+    const mock = createFirestoreMock();
+    const bulkWriter = mock.createBulkWriter();
+    const doc = { customerName: '混在顧客名', officeName: '混在事業所', fileName: 'mixed.pdf' };
+    mock.seedDoc('documents', 'docMix', doc);
+    const plan = forceReindex.planReindex('docMix', doc, tokenizer);
+    const ids = [...plan.tokenMap.keys()] as string[];
+    const originalSet = bulkWriter.set.bind(bulkWriter);
+    bulkWriter.set = async (ref: any, data: any, options?: any) => {
+      if (ref.collectionName === 'search_index' && ref.id === ids[0]) throw sizeError();
+      if (ref.collectionName === 'search_index' && ref.id === ids[1]) {
+        throw Object.assign(new Error('unavailable'), { code: 14 });
+      }
+      return originalSet(ref, data, options);
+    };
+
+    let caught: any = null;
+    try {
+      await forceReindex.reindexDocument(mock.db, 'docMix', doc, { execute: true, bulkWriter });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).to.exist;
+    expect(caught.code).to.equal(14);
+    expect(mock.getStoredDoc('documents', 'docMix').search).to.equal(undefined);
+  });
+
+  it('スキップが無い場合は search.skippedTokens を付けず、既存の skippedTokens は削除される', async () => {
+    const mock = createFirestoreMock();
+    const bulkWriter = mock.createBulkWriter();
+    const doc = {
+      customerName: '過去スキップ顧客', officeName: '過去スキップ事業所', fileName: 'oldskip.pdf',
+      search: { version: 1, tokens: [], tokenHash: 'stale', skippedTokens: ['old-hot-token'] },
+    };
+    mock.seedDoc('documents', 'docOld', doc);
+
+    await forceReindex.reindexDocument(mock.db, 'docOld', doc, { execute: true, bulkWriter });
+
+    const stored = mock.getStoredDoc('documents', 'docOld');
+    expect(stored.search).to.not.have.property('skippedTokens');
+    expect(stored.search.tokens.length).to.be.greaterThan(0);
+  });
+
+  it('既に posting がある token はサイズ超過で書けなくても skipped にせず search.tokens に残す', async () => {
+    const tokenizer = loadTokenizer();
+    const mock = createFirestoreMock();
+    const bulkWriter = mock.createBulkWriter();
+    const doc = { customerName: '既存posting顧客', officeName: '既存posting事業所', fileName: 'kept.pdf' };
+    mock.seedDoc('documents', 'docKept', doc);
+    const plan = forceReindex.planReindex('docKept', doc, tokenizer);
+    const hotId = [...plan.tokenMap.keys()][0] as string;
+    mock.seedDoc('search_index', hotId, { df: 1, postings: { docKept: { score: 1, fieldsMask: 1 } } });
+    failSetFor(bulkWriter, new Set([hotId]), sizeError);
+
+    const result = await forceReindex.reindexDocument(mock.db, 'docKept', doc, { execute: true, bulkWriter });
+
+    const stored = mock.getStoredDoc('documents', 'docKept');
+    expect(stored.search).to.not.have.property('skippedTokens');
+    expect(stored.search.tokens).to.deep.equal(plan.newTokenStrings);
+    expect(result.tokensSkipped).to.equal(0);
+  });
+});
+
+describe('scripts/lib/loadFirestoreErrors: 古い functions/lib のガード (Issue #984)', () => {
+  it('判定関数が無い(古いビルドの)モジュールは、原因が分かるエラーで即時停止する', () => {
+    expect(() => assertFirestoreErrorsModule({})).to.throw(/functions.*build/);
+    expect(() => assertFirestoreErrorsModule({ isFirestoreDocumentSizeExceededError: 'not-a-function' })).to.throw(/build/);
+  });
+
+  it('判定関数があるモジュールはそのまま返す', () => {
+    const mod = { isFirestoreDocumentSizeExceededError: () => true };
+    expect(assertFirestoreErrorsModule(mod)).to.equal(mod);
   });
 });
