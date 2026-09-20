@@ -1110,6 +1110,42 @@ describe('searchDocuments handler integration (#401a, Closes #401)', () => {
       expect(miss.total).to.equal(0);
     });
 
+    it('混在 + 候補 500 超: truncated=true を維持し、actualMatchedCount は日付絞り込み後の件数と矛盾しない', async () => {
+      // 通常語の候補が 501 件 (score 上位 500 件のみ取得) で、日付に合うのは 1 件だけ。
+      // 未フィルタの候補数 (501) を actualMatchedCount にすると FE バナーが
+      // 「上位 1 件のみ表示（501 件中）」と日付一致 501 件中の 1 件のように誤読させる。
+      await seedUser();
+      const TOTAL = 501;
+      const postings: Record<string, { score: number; fieldsMask: number }> = {};
+      for (let i = 0; i < TOTAL; i++) {
+        postings[`mt-${String(i).padStart(3, '0')}`] = { score: i === 0 ? 10 : 1, fieldsMask: 8 };
+      }
+      await seedSearchIndex('ac12truncmix', postings);
+      for (let start = 0; start < TOTAL; start += 400) {
+        const batch = db.batch();
+        for (let i = start; i < Math.min(start + 400, TOTAL); i++) {
+          batch.set(db.doc(`documents/mt-${String(i).padStart(3, '0')}`), {
+            fileName: `mt-${i}.pdf`,
+            customerName: '',
+            officeName: '',
+            documentType: '',
+            // mt-000 だけ 2042 年 (score 最大なので候補 500 件に必ず入る)。他は 2043 年
+            fileDate: ts(i === 0 ? '2042-03-01' : '2043-03-01'),
+            processedAt: admin.firestore.Timestamp.now(),
+            status: 'processed',
+          });
+        }
+        await batch.commit();
+      }
+
+      const result = await callSearch({ query: 'ac12truncmix 2042' });
+
+      expect(result.documents.map((d) => d.id)).to.deep.equal(['mt-000']);
+      expect(result.total).to.equal(1);
+      expect(result.truncated).to.equal(true);
+      expect(result.actualMatchedCount).to.equal(1);
+    }).timeout(60000);
+
     it('日付語を含まないクエリは従来どおり索引検索 (回帰)', async () => {
       await seedUser();
       await seedSimplePosting('ac12plainword', 'plain-1');

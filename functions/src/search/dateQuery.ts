@@ -39,6 +39,13 @@ const YEAR_MONTH_DAY_RE = new RegExp(
   `^${YEAR}(?:[-/]${MONTH_DAY}[-/]${MONTH_DAY}|年${MONTH_DAY}月${MONTH_DAY}日)$`
 );
 
+/**
+ * 語の区切り。tokenizer.normalizeForSearch が空白に置換する句読点・括弧と揃える
+ * （`2026年4月、田中` のように区切りなしで連結した日付語も抽出するため）。
+ * ハイフン・スラッシュは日付語の内部で使うため区切りにしない。
+ */
+const WORD_DELIMITERS = /[\s　・．.。、，,「」『』【】（）()[\]]+/;
+
 /** 1 語を日付範囲に変換する。日付語でない（不正な月日を含む）場合は null */
 function parseDateWord(word: string): DateRangeMs | null {
   const ymd = YEAR_MONTH_DAY_RE.exec(word);
@@ -77,7 +84,7 @@ function parseDateWord(word: string): DateRangeMs | null {
  * 生のクエリから日付語を抽出し、fileDate の UTC 範囲と残りの語を返す。
  */
 export function extractDateFilters(rawQuery: string): ExtractedDateFilters {
-  const words = (rawQuery ?? '').split(/[\s　]+/).filter((w) => w.length > 0);
+  const words = (rawQuery ?? '').split(WORD_DELIMITERS).filter((w) => w.length > 0);
 
   const remaining: string[] = [];
   let startMs = -Infinity;

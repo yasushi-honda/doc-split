@@ -147,4 +147,32 @@ describe('extractDateFilters (Issue #984 段階2a)', () => {
       expect(extractDateFilters('').remainingQuery).to.equal('');
     });
   });
+  describe('句読点・括弧は語の区切り (normalizeForSearch と同じ扱い)', () => {
+    it('読点で日付語と通常語が連結していても日付語を抽出できる ("2026年4月、田中")', () => {
+      const r = extractDateFilters('2026年4月、田中');
+      expect(r.dateRange).to.deep.equal({ startMs: utc(2026, 4, 1), endMs: utc(2026, 5, 1) });
+      expect(r.remainingQuery).to.equal('田中');
+    });
+
+    it('日付語の後ろの読点・カンマ・中点も区切りとして扱う', () => {
+      for (const q of ['2026年4月。田中', '2026年4月,田中', '2026年4月・田中', '2026年4月，田中']) {
+        const r = extractDateFilters(q);
+        expect(r.dateRange, q).to.deep.equal({ startMs: utc(2026, 4, 1), endMs: utc(2026, 5, 1) });
+        expect(r.remainingQuery, q).to.equal('田中');
+      }
+    });
+
+    it('括弧で囲まれた日付語 ("(2026-04-27)" / "【2026/4/27】") も抽出できる', () => {
+      for (const q of ['(2026-04-27)', '【2026/4/27】', '（2026年4月27日）']) {
+        const r = extractDateFilters(q);
+        expect(r.dateRange, q).to.deep.equal({ startMs: utc(2026, 4, 27), endMs: utc(2026, 4, 28) });
+        expect(r.remainingQuery, q).to.equal('');
+      }
+    });
+
+    it('日付語内のハイフン・スラッシュは区切りにしない', () => {
+      expect(extractDateFilters('2026-04-27').dateRange).to.not.equal(null);
+      expect(extractDateFilters('2026/04/27').dateRange).to.not.equal(null);
+    });
+  });
 });

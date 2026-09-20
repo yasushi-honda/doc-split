@@ -467,9 +467,14 @@ export const searchDocuments = onCall<SearchRequest>(
       hasMore: offset + limit < total,
       // OOM ガード発動時のみ truncated / actualMatchedCount を露出 (Issue #402 段階2)。
       // silent loss 防止: FE は optional field として未読でも互換、follow-up PR でバナー表示。
+      // 日付語との混在では、切り詰め前の候補数 (truncatedBeforeCount) は日付で絞る前の数で、
+      // FE バナー「上位 {total} 件のみ表示（{actualMatchedCount} 件中）」が日付一致件数と
+      // 誤読される。日付で絞った後の件数 (=total) を返す。切り詰めにより日付に合う書類が
+      // 候補から漏れうる事実は truncated=true で維持する (件数の精緻化は段階3 = posting に
+      // fileDate 内包で別判断)。
       ...(truncated && {
         truncated: true as const,
-        actualMatchedCount: truncatedBeforeCount,
+        actualMatchedCount: dateRange ? total : truncatedBeforeCount,
       }),
     };
 
