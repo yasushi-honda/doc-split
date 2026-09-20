@@ -177,6 +177,7 @@ Firestore の 1MiB 上限に達し、`addDocumentToIndex` の原子的 batch が
 - **`df`**: index 文書の存在ではなく `postings[docId]` の有無で増分を決める(`force-reindex.js` の `hadPosting` と同じ)。初回索引の直後に `search` メタ書込みが同じトリガーを再発火し再索引される既存挙動と、フォールバック後の再試行で `df` が二重加算されるのを防ぐ。**既存の膨張済み `df`(実件数の約3.6倍)は是正しない**。書き手は3種(トリガー、`force-reindex.js`、`migrate-search-index.js`)で意味がばらつき、削除側(`removeTokensFromIndex`)は posting の存在確認なしに `df` を減算する(非対称)。`searchDocuments.ts` は `df` の最大値を総書類数の代用にするため、既存の膨張済み `df` と混在して検索ランキングがわずかに変わりうる。
 - **旧書式**: 旧 `addDocumentToIndex` は `set(..., {[`postings.${docId}`]: ...}, {merge:true})` を使っており、ルート直下に文字どおり `postings.<docId>` というフィールドが作られた可能性がある(`searchDocuments.ts` の互換処理はこのため)。`hadPosting` の判定は、トリガー(`searchIndexer.hasPostingFor`)と `force-reindex.js` の両方で、ネスト形とルート直下の旧書式の両方を見る。掃除は段階2。
 - **既知の限界**: フォールバック中にサイズ超過以外のエラーが起きると、一部トークンだけ書込み済みの状態で throw する(`df` は再試行しても再加算されない。postings の部分登録は `force-reindex` で復旧)。
+- **除去側の重複トークン**: `search.tokens` は重複を排除せず保存し(変更前から同じ)、`removeTokensFromIndex` はエントリごとに `df` を減算する。1書類が同じトークン文字列を複数のフィールドから生成する場合(例: 顧客名と事業所名がともに `zz` を含む)、`df` の加算は tokenId ごとに1回、減算はエントリ数回になり、書類の削除で `df` が負になりうる(dev 実機検証 2026-09-20 で `zz` の `df=-1` を確認)。本 PR の変更ではなく既存の非対称性。段階2の `df` 是正で扱う(除去側で tokenId を重複排除する等)。
 - **検知**: log-based metric を2本に分ける。`search_index_token_skipped`(スキップ。アラートなし: kanameone では段階2まで常時発生し、常時 open のアラートは新規の劣化を覆い隠すため)と、`search_index_write_failed`(サイズ超過以外の書込み失敗。**アラートあり**、0 が正常)。
 
 ## References
