@@ -511,6 +511,41 @@ describe('searchIndexer - 高頻度トークン飽和のフォールバック (I
       }
     });
 
+    it('AC4(a)+飽和: 高頻度トークンが飽和した新規書類が自身の search 書込みで再発火しても、df・search メタは安定する(skip ログは処理ごとに1行=2行)', async () => {
+      const docId = 'doc-chain-hot';
+      const tokens = expectedTokens();
+      const hotId = generateTokenId(tokens.find((t) => t.field === 'customer')!.token);
+      await saturateTokenDoc(hotId);
+      const hotBefore = (await db.collection('search_index').doc(hotId).get()).data();
+      await db.doc(`documents/${docId}`).set(base);
+
+      const cap = captureConsoleError();
+      let afterEvent1: FirebaseFirestore.DocumentData;
+      try {
+        // イベント1: 新規作成 / イベント2: イベント1 の search メタ書込みによる再発火(before に search が無いので再索引される)
+        await processSearchIndexTrigger(docId, undefined, base);
+        afterEvent1 = (await db.doc(`documents/${docId}`).get()).data()!;
+        await processSearchIndexTrigger(docId, base, afterEvent1);
+      } finally {
+        cap.restore();
+      }
+
+      const afterEvent2 = (await db.doc(`documents/${docId}`).get()).data()!;
+      expect(afterEvent2.search.skippedTokens, '再発火後も skippedTokens は同じ').to.deep.equal(afterEvent1.search.skippedTokens);
+      expect(afterEvent2.search.tokens, '再発火後も tokens は同じ').to.deep.equal(afterEvent1.search.tokens);
+      expect(afterEvent2.search.tokenHash).to.equal(afterEvent1.search.tokenHash);
+
+      for (const { token: t } of tokens.filter((x) => generateTokenId(x.token) !== hotId)) {
+        const data = (await getIndexDoc(t))!;
+        expect(data.df, `${t} の df は posting 実数(1)のまま`).to.equal(1);
+        expect(Object.keys(data.postings)).to.deep.equal([docId]);
+      }
+      expect((await db.collection('search_index').doc(hotId).get()).data(), '飽和した文書は不変').to.deep.equal(hotBefore);
+
+      const skipLogs = cap.calls.filter((args) => typeof args[0] === 'string' && (args[0] as string).startsWith(SKIP_LOG));
+      expect(skipLogs.length, '飽和トークンは posting が無いため、再発火でも再試行され skip ログが出る').to.equal(2);
+    });
+
     it('AC3/AC5: 高頻度トークンが飽和していても、search メタは仕様どおりで、非高頻度トークンで検索にヒットする', async () => {
       const docId = 'doc-hot-meta';
       const tokens = expectedTokens();

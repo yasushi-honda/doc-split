@@ -13,7 +13,7 @@ documentation:
       `message=` に `size` / `entity` などの語が含まれていれば、まずこれを疑ってください。
 
     失敗した書類は `documents.search.tokenHash` が付かず、`force-reindex.js --all-drift` で drift として検出できます
-    (復旧: docs/context/search-index-recovery.md)。ログの `failed=` と `tokenIds=` に、失敗した件数とトークンの ID が出ます。
+    (復旧: docs/context/search-index-recovery.md)。フォールバック中の失敗であれば、ログの `failed=` と `tokenIds=` に失敗した件数とトークンの ID が出ます(最初の一括書込みでの失敗は `docId=` `code=` `message=` のみ)。
 
     なお、高頻度トークンのスキップ(`[searchIndexer] token skipped: document size limit`)は別の metric
     `search_index_token_skipped` で観測しており、**アラートは付けていません**(kanameone では根本対応(段階2)まで

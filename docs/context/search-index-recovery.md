@@ -197,6 +197,8 @@ Firestore の 1MiB 上限に達すると、その書類は全トークン未登�
 
 ### 3.1 tokenHash 再一致の確認
 
+> **注意 (Issue #984)**: `scripts/migrate-search-index.js` は本対応の対象外(書込み前の `hadPosting` 確認とサイズ超過の処理を持たず、飽和トークンで途中失敗すると部分登録が残り、再実行で成功済みトークンの `df` が二重加算される)。飽和が疑われる環境での再索引には `force-reindex.js` を使う。
+>
 > **注意 (Issue #984)**: `tokenHash` の一致は「全トークン登録済み」を意味しない。高頻度トークンのスキップ分は `search.skippedTokens` で確認する(§2.3)。
 
 ```bash

@@ -243,7 +243,8 @@ function hasPostingFor(snapshot: FirebaseFirestore.DocumentSnapshot, docId: stri
  */
 function logIndexWriteFailed(docId: string, error: unknown, detail = ''): void {
   const code = (error as { code?: unknown } | null)?.code;
-  const message = error instanceof Error ? error.message : String(error);
+  // 改行を含むと、後続の failed= / tokenIds= が別のログエントリに分かれるため、空白を1つにまとめる
+  const message = (error instanceof Error ? error.message : String(error)).replace(/\s+/g, ' ');
   console.error(
     `${INDEX_WRITE_FAILED_LOG} docId=${docId} code=${String(code)} message=${message.slice(0, 160)}${detail}`
   );
