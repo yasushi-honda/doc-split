@@ -569,9 +569,11 @@ describe('force-reindex: planReindex (systemic error, Issue #687)', () => {
  */
 describe('force-reindex: reindexDocument (BulkWriter の flush, Issue #984)', () => {
   /** 待ち続ける不具合を、テスト全体のハングではなく失敗として検出する */
-  function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  // forceReindex は createRequire 経由の動的ロードで戻り値の型が環境により any / unknown になりうるため、
+  // 型パラメータを使わず any で受ける(周囲のテストの `const db: any` と同じ扱い)
+  function withTimeout(promise: Promise<any>, ms: number, message: string): Promise<any> {
     let timer: NodeJS.Timeout | undefined;
-    const timeout = new Promise<T>((_, reject) => { timer = setTimeout(() => reject(new Error(message)), ms); });
+    const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(message)), ms); });
     return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
   }
 
