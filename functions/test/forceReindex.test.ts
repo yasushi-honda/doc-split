@@ -213,6 +213,19 @@ describe('force-reindex: parseArgs', () => {
     expect(args.docId).to.equal(null);
   });
 
+  it('--missing-hash-only は --all-drift と併用でき、既定は false (Issue #984)', () => {
+    expect(forceReindex.parseArgs(['--all-drift']).missingHashOnly).to.equal(false);
+    const args = forceReindex.parseArgs(['--all-drift', '--missing-hash-only', '--sample=5']);
+    expect(args.missingHashOnly).to.equal(true);
+    expect(args.allDrift).to.equal(true);
+    expect(args.sample).to.equal(5);
+  });
+
+  it('--missing-hash-only は --all-drift なしでは拒否する(--doc-id との併用も同様)', () => {
+    expect(() => forceReindex.parseArgs(['--missing-hash-only'])).to.throw();
+    expect(() => forceReindex.parseArgs(['--doc-id', 'abc123', '--missing-hash-only'])).to.throw();
+  });
+
   it('--execute 未指定時は dry-run (execute=false)', () => {
     const args = forceReindex.parseArgs(['--doc-id', 'abc123']);
     expect(args.execute).to.equal(false);
@@ -1030,6 +1043,58 @@ describe('force-reindex: runAllDrift (Issue #687)', () => {
 
     expect(exitCode).to.equal(forceReindex.EXIT_OK);
     expect(bulkWriter.closeCallCount).to.equal(1);
+  });
+
+  describe('--missing-hash-only (Issue #984)', () => {
+    /** 3件: tokenHash 未保存 / tokenHash 保存済みで不一致(stale) / 同じく保存済みで不一致 */
+    async function run(missingHashOnly: boolean) {
+      const captured = stubAuditLoggingWithCapture('test');
+      const mock = createFirestoreMock();
+      const bulkWriter = mock.createBulkWriter();
+      const base = { status: 'processed', processedAt: { toDate: () => new Date() } };
+      const allDocs = [
+        { id: 'doc-nohash', data: { ...base, customerName: '未保存' } },
+        { id: 'doc-stale-1', data: { ...base, customerName: '不一致1', search: { tokens: [], tokenHash: 'deadbeef' } } },
+        { id: 'doc-stale-2', data: { ...base, customerName: '不一致2', search: { tokens: [], tokenHash: 'cafebabe' } } },
+      ];
+      allDocs.forEach((d) => mock.seedDoc('documents', d.id, d.data));
+      const db: any = {
+        collection: (name: string) => {
+          if (name === 'documents') return createDocumentsQueryableCollection(mock, allDocs);
+          return mock.db.collection(name);
+        },
+        bulkWriter: () => bulkWriter,
+        getAll: mock.db.getAll,
+      };
+      const exitCode = await forceReindex.runAllDrift(
+        db,
+        { execute: true, batchSize: 500, concurrency: 5, sample: null, missingHashOnly },
+        { projectId: 'test', executedBy: 'tester' },
+      );
+      const summary = captured.find((e) => e.event === 'force_reindex_batch_summary');
+      return { exitCode, summary, mock };
+    }
+
+    it('tokenHash が未保存の書類だけを再 index し、保存済み(値が不一致でも)の書類には一切書込まない', async () => {
+      const { exitCode, summary, mock } = await run(true);
+      expect(exitCode).to.equal(forceReindex.EXIT_OK);
+      expect(summary.counts.processed).to.equal(3);
+      expect(summary.counts.drifted, '対象は未保存の1件のみ').to.equal(1);
+      expect(summary.counts.reindexed).to.equal(1);
+
+      expect(mock.getStoredDoc('documents', 'doc-nohash').search?.tokenHash, '未保存だった書類は再 index される').to.be.a('string');
+      // Partial Update の MUST: 対象外の書類は完全に不変(tokenHash も tokens も)
+      expect(mock.getStoredDoc('documents', 'doc-stale-1').search).to.deep.equal({ tokens: [], tokenHash: 'deadbeef' });
+      expect(mock.getStoredDoc('documents', 'doc-stale-2').search).to.deep.equal({ tokens: [], tokenHash: 'cafebabe' });
+    });
+
+    it('フラグなしなら従来どおり、不一致の書類も含めて全て再 index する(既存挙動の回帰確認)', async () => {
+      const { exitCode, summary, mock } = await run(false);
+      expect(exitCode).to.equal(forceReindex.EXIT_OK);
+      expect(summary.counts.drifted).to.equal(3);
+      expect(summary.counts.reindexed).to.equal(3);
+      expect(mock.getStoredDoc('documents', 'doc-stale-1').search.tokenHash).to.not.equal('deadbeef');
+    });
   });
 
   it('複数ページに跨る複数 drift docs を pagination + runWithConcurrency 経由で漏れなく処理する (code-review 2026-07-19 指摘: PRの主目的である4389件規模スキャンの核心機構の検証)', async () => {
