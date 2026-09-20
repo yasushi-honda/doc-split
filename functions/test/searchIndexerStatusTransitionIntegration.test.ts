@@ -184,16 +184,21 @@ describe('searchIndexer.processSearchIndexTrigger - status遷移時のインデ�
       status: 'processed',
       search: { version: 1, tokens: [token], tokenHash: 'dummy-hash-stay', indexedAt: Timestamp.now() },
     };
-    // customerName等が空のため generateDocumentTokens は空配列を返し早期return する
-    // (= 新しいstatus遷移ガードは発火しない経路)。既存 posting が無傷であることを確認する。
+    // status は processed のまま (= status 遷移ガードは発火しない経路)。既存トークンを引き続き
+    // 持つ更新では既存 posting が無傷であることを確認する。
+    // (Issue #984 段階2a: トークン 0 件になる更新は旧 posting を削除する仕様に変わったため、
+    //  ここでは同じ語を顧客名に持たせてトークン 0 件の経路とは切り離している。
+    //  0 件の経路は searchIndexerDateTokenExclusionIntegration.test.ts で検証)
     const after = {
       status: 'processed',
-      customerName: '',
+      customerName: token,
       officeName: '',
       documentType: '',
       fileName: '',
       fileDate: null,
     };
+    // 本番のトリガーは実在ドキュメントの書込みで発火する (search メタを update するため実 doc が必要)
+    await db.doc(`documents/${docId}`).set({ ...after, search: before.search });
 
     await processSearchIndexTrigger(docId, before, after);
 

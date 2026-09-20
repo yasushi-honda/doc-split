@@ -14,6 +14,7 @@ import {
   generateTokensHash,
   type TokenField,
   type TokenInfo,
+  isExcludedToken,
 } from '../utils/tokenizer';
 import {
   isFirestoreNotFoundError,
@@ -104,6 +105,23 @@ export async function processSearchIndexTrigger(
   });
 
   if (tokens.length === 0) {
+    // 日付は索引しないため、日付だけが残る書類 (他のメタデータが空) はトークン 0 件になる。
+    // 旧トークンが残っていれば削除し、search メタを空にする (放置すると旧 posting が残り続ける)。
+    // 旧メタも無い (もともとトークンが無い) 書類は従来どおり何も書かない。
+    const previousTokens = before?.search?.tokens as string[] | undefined;
+    if (!previousTokens || previousTokens.length === 0) {
+      return;
+    }
+    await removeTokensFromIndex(docId, previousTokens);
+    await db.doc(`documents/${docId}`).update({
+      search: {
+        version: 1,
+        tokens: [],
+        tokenHash: generateTokensHash([]),
+        indexedAt: Timestamp.now(),
+      },
+    });
+    console.log(`Search index cleared for document (no indexable tokens): ${docId}`);
     return;
   }
 
@@ -410,13 +428,28 @@ async function removeDocumentFromIndex(docId: string, tokens: string[]): Promise
 async function removeTokensFromIndex(docId: string, tokens: string[]): Promise<void> {
   const batch = db.batch();
 
+  // 削除対象の絞り込み (Issue #984 段階2a):
+  // - 除外トークン (日付・2 桁数字) は索引に書かないので削除も試みない。旧書類の search.tokens に
+  //   残っていても、その索引文書が存在しない場合に NOT_FOUND がバッチ全体 (原子的 batch.update) を
+  //   失敗させ、同じバッチの正当なトークンの posting 削除・df 減算まで巻き添えになるのを防ぐ。
+  //   (今回導入する欠損にだけ効く。他の理由による欠損は従来どおりバッチを巻き込む)
+  // - 同一 tokenId は 1 回だけ減算する。複数フィールドで同じ語 (例: 顧客名と事業所名) だと
+  //   search.tokens に重複して入り、df を重複減算して負値になる。
+  const removedTokenIds = new Set<string>();
   for (const token of tokens) {
+    if (isExcludedToken(token)) continue;
     const tokenId = generateTokenId(token);
+    if (removedTokenIds.has(tokenId)) continue;
+    removedTokenIds.add(tokenId);
     const indexRef = db.collection('search_index').doc(tokenId);
     batch.update(indexRef, {
       [`postings.${docId}`]: FieldValue.delete(),
       df: FieldValue.increment(-1),
     });
+  }
+
+  if (removedTokenIds.size === 0) {
+    return;
   }
 
   try {

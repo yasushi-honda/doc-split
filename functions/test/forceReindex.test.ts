@@ -406,17 +406,19 @@ describe('force-reindex: computeExpectedIndex', () => {
     expect(result1.tokenHash).to.equal(result2.tokenHash);
   });
 
-  it('Firestore Timestamp 型の fileDate を Date に変換する', () => {
+  it('Firestore Timestamp 型の fileDate でも例外にならず、日付は索引トークンに影響しない (Issue #984 段階2a)', () => {
     const mockTimestamp = {
       toDate: () => new Date('2026-04-16'),
     };
-    const result = forceReindex.computeExpectedIndex({
+    const withDate = forceReindex.computeExpectedIndex({
       customerName: 'X',
       fileDate: mockTimestamp,
     });
-    // 日付トークンが含まれていること
-    const dateTokens = result.tokens.filter((t: { field: string }) => t.field === 'date');
-    expect(dateTokens.length).to.be.greaterThan(0);
+    const withoutDate = forceReindex.computeExpectedIndex({ customerName: 'X' });
+    // 日付トークンは索引に持たない (日付は fileDate の範囲クエリで答える)
+    const dateTokens = withDate.tokens.filter((t: { field: string }) => t.field === 'date');
+    expect(dateTokens).to.deep.equal([]);
+    expect(withDate.tokenHash).to.equal(withoutDate.tokenHash);
   });
 });
 
