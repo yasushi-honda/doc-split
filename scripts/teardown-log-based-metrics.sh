@@ -75,6 +75,7 @@ METRIC_NAMES=(
   claim_divergent_backlog_stale
   processocr_completed
   processocr_error
+  search_index_write_degraded
 )
 for metric in "${METRIC_NAMES[@]}"; do
   if gcloud logging metrics describe "$metric" --project="$PROJECT_ID" >/dev/null 2>&1; then
