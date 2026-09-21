@@ -77,6 +77,7 @@ METRIC_NAMES=(
   processocr_error
   search_index_token_skipped
   search_index_write_failed
+  processocr_request_timeout
 )
 for metric in "${METRIC_NAMES[@]}"; do
   if gcloud logging metrics describe "$metric" --project="$PROJECT_ID" >/dev/null 2>&1; then

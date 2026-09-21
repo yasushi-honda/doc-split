@@ -91,6 +91,11 @@ METRICS=(
   "claim_divergent_backlog_stale|divergent claim が3日以上未解決のまま滞留 (Issue #871 恒久対応、日次sweep)|resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"drivefolderclaimdivergentsweep\" AND textPayload:\"[driveFolderClaim] divergent backlog stale\""
   "processocr_completed|processOCR cycle完了 or メンテナンスゲート閉鎖によるskip(ADR-0025 PR6、tick重複対策concurrency:1導入後の健全性監視。absence条件で本メトリクスが一定時間出現しない=OCR処理停止を検知。ADR-0019のgroupAggregationGate閉鎖(実績最大約25分、PR #781でドレイン待機20分に設定)は正当なOCR確定処理skipであり誤検知させないため、gate閉鎖ログもheartbeatとして本メトリクスに含める)|resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"processocr\" AND (textPayload:\"OCR processing (polling) completed\" OR textPayload:\"[maintenanceGate] groupAggregation gate closed\")"
   "processocr_error|processOCR document処理エラー(ADR-0025 PaddleOCR Pass1全面切替後の事後監視、Step0④ベースラインerror率0%実績を踏まえ発生即異常として検知。console.error()はfirebase-functions/logger未使用のためCloud Loggingのseverityは自動付与されずDEFAULTのまま記録される実測を確認済み、severity条件は付けない)|resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"processocr\" AND textPayload:\"Error processing document\""
+  # processOCR が Cloud Run の request timeout(PROCESS_OCR_TIMEOUT_SECONDS=900s)で強制終了(HTTP 504)された。
+  # 強制終了はアプリのログを残さず processocr_error(`Error processing document`)では検知できない。ページ数の多い
+  # 文書がPaddleOCRの実測(約13〜19秒/ページ)で900秒予算を超える場合に起こりうる(2026-09-21 kanameoneで実発生)。
+  # Cloud Run のリクエストログ(httpRequest.status)で検知する。severity条件は付けない。
+  "processocr_request_timeout|processOCR が900秒のrequest timeoutで強制終了された(HTTP 504)。大型文書のPaddleOCR処理で発生しうる(2026-09-21 kanameone実発生)|resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"processocr\" AND httpRequest.status=504"
   # Issue #984: 検索インデックスの書込み劣化を、性質の異なる2本の metric に分けて検知する。
   # どちらも searchIndexer.ts が引数1個の単一文字列で出す固定文言(第2引数を渡すと textPayload に当たらなくなる)。
   # - search_index_token_skipped: 高頻度トークンが Firestore の 1MiB 上限に達してスキップされた(フォールバック)。
@@ -231,7 +236,7 @@ if [ -z "$DRY" ]; then
   echo "メトリクス:"
   gcloud logging metrics list \
     --project="$PROJECT_ID" \
-    --filter="name=(searchindex_oom OR ocr_page_truncated OR ocr_aggregate_truncated OR summary_truncated OR search_index_silent_failure OR drive_folder_divergent OR drive_folder_divergent_record_failed OR claim_divergent_backlog_stale OR processocr_completed OR processocr_error OR search_index_token_skipped OR search_index_write_failed)" \
+    --filter="name=(searchindex_oom OR ocr_page_truncated OR ocr_aggregate_truncated OR summary_truncated OR search_index_silent_failure OR drive_folder_divergent OR drive_folder_divergent_record_failed OR claim_divergent_backlog_stale OR processocr_completed OR processocr_error OR search_index_token_skipped OR search_index_write_failed OR processocr_request_timeout)" \
     --format="table(name,description.segment(0,60))"
   echo ""
   echo "アラートポリシー:"

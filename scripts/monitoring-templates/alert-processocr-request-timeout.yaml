@@ -1,0 +1,41 @@
+displayName: "[__ENV__] processocr_request_timeout: processOCR が900秒のrequest timeoutで強制終了(504)"
+documentation:
+  content: |
+    `processOCR`(Cloud Scheduler、1分間隔、concurrency:1)のリクエストが、Cloud Runの
+    request timeout(`PROCESS_OCR_TIMEOUT_SECONDS`=900秒、ADR-0023)に達して強制終了
+    (HTTP 504)されたことを検知する。
+
+    強制終了はアプリケーションのログを残さないため、`processocr_error`
+    (`Error processing document`ログ)では検知できない。PaddleOCR(ADR-0025)は実測で
+    1ページ約13〜19秒(Gemini時代は約4.5秒)のため、約46ページ以上の大型文書1件で
+    900秒予算を超えうる。実際に2026-09-21、kanameoneで45ページの文書処理中に1件発生した。
+    この事例では文書は最終的に`processed`まで自動回復した(取込から完了まで約17分)が、
+    自動回復するかは保証されない。
+
+    対応: (1) Cloud Loggingで`processocr`の直近のphaseTimingsログ(`pages`・`pageLoopMs`)から
+    対象文書(ページ数の多いもの)を特定する。(2) その文書の`status`が`processed`まで進んだか、
+    `processing`のまま固着していないかをFirestoreで確認する(固着は`rescueStuckProcessingDocs`が
+    閾値経過後に救済する)。(3) 繰り返し発生する場合は、1ページあたりの処理時間の短縮
+    (CPU増設等)や処理の分割を検討する。
+
+    log-based metricのフィルタは、Cloud Runのリクエストログの`httpRequest.status=504`で
+    判定する(severity条件は付けていない)。2026-09-21時点のkanameone直近30日で該当ログは
+    当該1件のみ、dev/cocoroは0件(フィルタの陽性検証済み)。
+  mimeType: "text/markdown"
+combiner: OR
+conditions:
+  - displayName: "processocr_request_timeout > 0 in 1h"
+    conditionThreshold:
+      filter: 'metric.type="logging.googleapis.com/user/processocr_request_timeout" AND resource.type="cloud_run_revision"'
+      aggregations:
+        - alignmentPeriod: 3600s
+          perSeriesAligner: ALIGN_SUM
+      comparison: COMPARISON_GT
+      thresholdValue: 0
+      duration: 0s
+alertStrategy:
+  autoClose: 86400s
+userLabels:
+  source: docsplit-monitoring-setup
+notificationChannels:
+  - __NOTIFICATION_CHANNEL__
