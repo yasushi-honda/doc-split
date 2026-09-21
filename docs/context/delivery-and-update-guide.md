@@ -205,6 +205,37 @@ gcloud projects add-iam-policy-binding <project-id> \
 
 `roles/run.admin`はPR3では付与しない(Cloud Runサービスのデプロイを一切行わないため不要)。PR4でCloud Runサービスを実際にデプロイする段階で、必要性・付与範囲・撤去条件を改めて設計する。
 
+#### Sarashina要約基盤準備(ADR-0027 PR1b)のbootstrap権限(一時付与、上記の最小権限6ロールには含めない)
+
+`scripts/setup-sarashina-summary-infra.sh`を各クライアントへ実行する前に、実行者アカウントへ一時的に以下2ロールを付与し、対象クライアントへの適用完了後に剥奪する。PaddleOCR(ADR-0025 PR3)と全く同じ2ロール・同じ理由(継続運用に必要な権限ではないため、上記の恒久的な最小権限6ロールには含めない)。
+
+- `roles/artifactregistry.admin`(Artifact Registry repo作成+クリーンアップポリシー設定に必要)
+- `roles/iam.serviceAccountCreator`(無権限runtime SA `sarashina-summary-runtime`の作成に必要)
+
+**注意**: `--member`のprincipal種別はクライアントごとの実行者アカウント種別に合わせること(上記PaddleOCR節と同じ注意点、dev/kanameoneは個人Googleアカウント、cocoroはサービスアカウント)。
+
+付与(dev/kanameoneの例、個人アカウント):
+```bash
+gcloud projects add-iam-policy-binding <project-id> \
+  --member="user:<account>" --role="roles/artifactregistry.admin"
+gcloud projects add-iam-policy-binding <project-id> \
+  --member="user:<account>" --role="roles/iam.serviceAccountCreator"
+```
+
+付与(cocoroの例、サービスアカウント):
+```bash
+gcloud projects add-iam-policy-binding <project-id> \
+  --member="serviceAccount:docsplit-deployer@docsplit-cocoro.iam.gserviceaccount.com" --role="roles/artifactregistry.admin"
+gcloud projects add-iam-policy-binding <project-id> \
+  --member="serviceAccount:docsplit-deployer@docsplit-cocoro.iam.gserviceaccount.com" --role="roles/iam.serviceAccountCreator"
+```
+
+対象クライアントへの適用完了後、`add-iam-policy-binding`と同じ`--member`を使い`remove-iam-policy-binding`で剥奪する。
+
+`roles/run.admin`はPR1bでは付与しない(Cloud Runサービスのデプロイを一切行わないため不要)。PR1cでCloud Runサービスを実際にデプロイする段階で、必要性・付与範囲・撤去条件を改めて設計する(下記「Sarashina要約Cloud Runデプロイ」節参照)。
+
+**dev実機確認(2026-09-22)**: devの実行者アカウント(`hy.unimail.11@gmail.com`)は既にproject-level `roles/owner`を保有しているため、上記bootstrap権限の個別付与は不要だった(`gcloud projects get-iam-policy`で確認)。`./scripts/setup-sarashina-summary-infra.sh dev`を実行し、Artifact Registry repo `sarashina-summary`(cleanup policy keep-latest-2適用済み)・無権限runtime SA `sarashina-summary-runtime@doc-split-dev.iam.gserviceaccount.com`の作成、および再実行時の冪等性(全項目skip)を確認済み。kanameone/cocoroはPaddleOCR節と同様、実行者アカウントの権限を個別に確認しbootstrap権限が必要か判断すること。
+
 #### PaddleOCR Cloud Runデプロイ(ADR-0025 PR4b)のGitHub Actions デプロイSA権限(恒久)
 
 `.github/workflows/deploy-paddle-ocr.yml`(`workflow_dispatch`、反復実行される)が使う GitHub deploy SA(`docsplit-cloud-build@{project-id}.iam.gserviceaccount.com`、`secrets.GCP_SA_KEY_DEV`のidentity)向けの権限。上記のbootstrap権限(一時付与)とは異なり、このワークフローは繰り返し実行されるため**恒久的に付与**する。
@@ -248,6 +279,25 @@ gcloud iam service-accounts add-iam-policy-binding \
 ```
 
 `cloudbuild.googleapis.com`の有効化は`deploy-paddle-ocr.yml`自身では行わない(デプロイSAへ`serviceusage.services.enable`を日常的に持たせる根拠が薄いため)。未有効な場合は、上記のPR3 bootstrap権限(一時付与)を使って`gcloud services enable cloudbuild.googleapis.com --project=<project-id>`を実行する。
+
+#### Sarashina要約Cloud Runデプロイ(ADR-0027 PR1c予定)のGitHub Actions デプロイSA権限(恒久)
+
+`.github/workflows/deploy-sarashina-summary.yml`(PR1cで新設予定)が使うGitHub deploy SAは、PaddleOCR(`.github/workflows/deploy-paddle-ocr.yml`)と**同一のSA**(`docsplit-cloud-build@{project-id}.iam.gserviceaccount.com`)を再利用する想定(サービスごとにSAを分ける設計上の必然性がないため)。したがって、上記PaddleOCR節で既に付与済みの恒久ロール(`roles/run.admin`・`roles/artifactregistry.writer`・`roles/artifactregistry.reader`・`roles/storage.admin`・`roles/cloudbuild.builds.editor`・`roles/cloudfunctions.viewer`)は環境によっては追加付与が不要な可能性が高い。PR1c実装時に必ず現在の権限を確認し、不足分のみ追加すること(確認コマンドは上記PaddleOCR節と同じ)。
+
+**Sarashina固有で新規に必要な権限は以下の1点のみ**:
+
+- `roles/iam.serviceAccountUser`(runtime SA `sarashina-summary-runtime@{project-id}.iam.gserviceaccount.com`への`actAs`用。`--service-account=X`フラグがこの権限を要求する。対象を`sarashina-summary-runtime`に限定したconditional bindingが望ましい、PaddleOCR節と同じ設計)
+
+付与(PR1c実装時、不足分のみ):
+```bash
+gcloud iam service-accounts add-iam-policy-binding \
+  sarashina-summary-runtime@<project-id>.iam.gserviceaccount.com \
+  --member="serviceAccount:docsplit-cloud-build@<project-id>.iam.gserviceaccount.com" \
+  --role="roles/iam.serviceAccountUser" \
+  --project=<project-id>
+```
+
+**注意**: 上記は設計時点(PR1b、2026-09-22)の想定であり、PR1c実装時に実際のデプロイを通して権限不足がないか実機確認すること(PaddleOCR PR4b節と同じ、事前の一律付与はしない方針)。
 
 ---
 
