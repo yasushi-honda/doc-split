@@ -7,6 +7,8 @@
 import json, subprocess, sys, time, os, urllib.request, urllib.error
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+DOCS_DIR = os.path.join(HERE, "..", "docs")  # fixture(D1〜D10, meta.json)は親のsarashina-summary-golden/docs/にある
+RESULTS_DIR = os.path.join(HERE, "results")  # 実験結果JSONの出力先
 PROJECT = os.environ.get("PR0_GCP_PROJECT", "doc-split-dev")
 REGION = os.environ.get("PR0_GCP_REGION", "asia-northeast1")
 ACCOUNT = os.environ.get("PR0_GCP_ACCOUNT")  # 実行者のgcloudアカウント。未設定ならgcloud既定アカウントを使う
@@ -128,7 +130,7 @@ def main():
     doc_ids = sys.argv[sys.argv.index("--docs") + 1].split(",") if "--docs" in sys.argv else ["D1", "D2", "D4", "D3"]
     out_suffix = sys.argv[sys.argv.index("--suffix") + 1] if "--suffix" in sys.argv else prompt_version
     builder = build_prompt_v2 if prompt_version == "v2" else build_prompt
-    meta = json.load(open(os.path.join(HERE, "docs", "meta.json")))
+    meta = json.load(open(os.path.join(DOCS_DIR, "meta.json")))
     url = service_url(svc)
     tok = token()
     out = {"service": svc, "url": url, "started": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "cold_first": None, "runs": []}
@@ -137,10 +139,10 @@ def main():
     out["ready_wait_s"] = wait_ready(url, tok)
     print(f"[{svc}] ready_wait_s={out['ready_wait_s']}", flush=True)
     if out["ready_wait_s"] is None:
-        print("   準備完了せず。中断"); json.dump(out, open(os.path.join(HERE, f"result_{svc}.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=2); return
+        print("   準備完了せず。中断"); json.dump(out, open(os.path.join(RESULTS_DIR, f"result_{svc}.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=2); return
     tok = token()
     # 準備完了直後の初回リクエスト(モデルの page-in を含む)
-    d1 = open(os.path.join(HERE, "docs", "D1.txt"), encoding="utf-8").read()
+    d1 = open(os.path.join(DOCS_DIR, "D1.txt"), encoding="utf-8").read()
     print(f"[{svc}] cold-first request (D1) ...", flush=True)
     out["cold_first"] = call(url, tok, builder(d1, meta["D1"]["title"]))
     print("   ", {k: v for k, v in out["cold_first"].items() if k != "text"}, flush=True)
@@ -149,7 +151,7 @@ def main():
     call(url, tok, builder(d1, meta["D1"]["title"]))
 
     for doc_id in doc_ids:
-        text = open(os.path.join(HERE, "docs", f"{doc_id}.txt"), encoding="utf-8").read()
+        text = open(os.path.join(DOCS_DIR, f"{doc_id}.txt"), encoding="utf-8").read()
         prompt = builder(text, meta[doc_id]["title"])
         for i in range(runs):
             tok = token()
@@ -160,7 +162,7 @@ def main():
                   f"pred_n={r.get('predicted_n')} pred_tps={r.get('predicted_tps')} err={r.get('error')}", flush=True)
 
     out_name = f"result_matrix_{svc}_{out_suffix}.json"
-    json.dump(out, open(os.path.join(HERE, out_name), "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+    json.dump(out, open(os.path.join(RESULTS_DIR, out_name), "w", encoding="utf-8"), ensure_ascii=False, indent=2)
     print("saved", out_name)
 
 

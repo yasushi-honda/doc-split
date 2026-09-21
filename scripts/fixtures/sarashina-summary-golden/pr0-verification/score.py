@@ -4,7 +4,9 @@
 import json, os, re, statistics as st, sys, glob
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-meta = json.load(open(os.path.join(HERE, "docs", "meta.json"), encoding="utf-8"))
+DOCS_DIR = os.path.join(HERE, "..", "docs")  # fixtureは親のsarashina-summary-golden/docs/にある
+RESULTS_DIR = os.path.join(HERE, "results")  # 実験結果JSONの置き場
+meta = json.load(open(os.path.join(DOCS_DIR, "meta.json"), encoding="utf-8"))
 MAX_INPUT = 8000
 
 
@@ -18,7 +20,7 @@ def norm(s):
 
 
 def source_text(doc_id):
-    t = open(os.path.join(HERE, "docs", f"{doc_id}.txt"), encoding="utf-8").read()
+    t = open(os.path.join(DOCS_DIR, f"{doc_id}.txt"), encoding="utf-8").read()
     return t[:MAX_INPUT]
 
 
@@ -42,11 +44,15 @@ def score(doc_id, text):
 
 
 def load_runs():
+    # キーはファイル名(サフィックス込み)にする。d["service"]だけをキーにすると、
+    # 同一サービスに対する複数実験(例: D1-D4用ファイルとD9/D10温度違い用ファイル)が
+    # 互いを上書きしてしまう(PR0検証で実際に発生・修正した不具合)。
     out = {}
-    for path in sorted(glob.glob(os.path.join(HERE, "result_slm-bench-*.json"))):
+    for path in sorted(glob.glob(os.path.join(RESULTS_DIR, "result_slm-bench-*.json")) + glob.glob(os.path.join(RESULTS_DIR, "result_matrix_*.json"))):
         d = json.load(open(path, encoding="utf-8"))
-        out[d["service"].replace("slm-bench-", "")] = d
-    g = os.path.join(HERE, "result_gemini.json")
+        key = os.path.basename(path).replace("result_matrix_", "").replace("result_slm-bench-", "").replace(".json", "")
+        out[key] = d
+    g = os.path.join(RESULTS_DIR, "result_gemini.json")
     if os.path.exists(g):
         gd = json.load(open(g, encoding="utf-8"))
         runs = []

@@ -3,7 +3,9 @@
 数値の捏造チェックでは見つけられない種類の捏造(D9で発見: 事業所名の完全な創作)を横断的に洗う。"""
 import json, re, glob, os
 HERE = os.path.dirname(os.path.abspath(__file__))
-meta = json.load(open(os.path.join(HERE, "docs", "meta.json"), encoding="utf-8"))
+DOCS_DIR = os.path.join(HERE, "..", "docs")  # fixtureは親のsarashina-summary-golden/docs/にある
+RESULTS_DIR = os.path.join(HERE, "results")  # 実験結果JSONの置き場
+meta = json.load(open(os.path.join(DOCS_DIR, "meta.json"), encoding="utf-8"))
 MAX_INPUT = 8000
 
 # 事業所・施設・医療機関らしき固有名詞パターン(カタカナ/漢字+末尾語)
@@ -12,11 +14,11 @@ ORG_PAT = re.compile(rf"[一-龠ぁ-んァ-ヶー・]{{2,12}}{ORG_SUFFIX}")
 
 
 def source_text(doc_id):
-    return open(os.path.join(HERE, "docs", f"{doc_id}.txt"), encoding="utf-8").read()[:MAX_INPUT]
+    return open(os.path.join(DOCS_DIR, f"{doc_id}.txt"), encoding="utf-8").read()[:MAX_INPUT]
 
 
 rows = []
-for path in sorted(glob.glob(os.path.join(HERE, "result_matrix_*.json")) + glob.glob(os.path.join(HERE, "result_slm-bench-*.json"))):
+for path in sorted(glob.glob(os.path.join(RESULTS_DIR, "result_matrix_*.json")) + glob.glob(os.path.join(RESULTS_DIR, "result_slm-bench-*.json"))):
     d = json.load(open(path, encoding="utf-8"))
     label = os.path.basename(path)
     for r in d.get("runs", []):
