@@ -236,6 +236,8 @@ gcloud projects add-iam-policy-binding <project-id> \
 
 **dev実機確認(2026-09-22)**: devの実行者アカウント(`hy.unimail.11@gmail.com`)は既にproject-level `roles/owner`を保有しているため、上記bootstrap権限の個別付与は不要だった(`gcloud projects get-iam-policy`で確認)。`./scripts/setup-sarashina-summary-infra.sh dev`を実行し、Artifact Registry repo `sarashina-summary`(cleanup policy keep-latest-2適用済み)・無権限runtime SA `sarashina-summary-runtime@doc-split-dev.iam.gserviceaccount.com`の作成、および再実行時の冪等性(全項目skip)を確認済み。kanameone/cocoroはPaddleOCR節と同様、実行者アカウントの権限を個別に確認しbootstrap権限が必要か判断すること。
 
+**`resourcemanager.projects.getIamPolicy`権限について(codex review指摘の検証、2026-09-22)**: `setup-sarashina-summary-infra.sh`のpreflight(IAM権限事前確認)は`resourcemanager.projects.getIamPolicy`を要求するが、上記の恒久的最小権限6ロール+bootstrap権限2ロールの一覧だけを見ると、どのロールがこれを含むか一見わかりにくい。実機で`gcloud iam roles describe`により全8ロールの`includedPermissions`を確認した結果、**恒久権限の`roles/firebase.admin`が`resourcemanager.projects.getIamPolicy`を含んでいる**ことを確認した(bootstrap権限2ロールには含まれない)。したがって、上記の権限構成(最小権限6ロール+bootstrap権限2ロール)で運用する実行者アカウントであれば、この権限は別途追加不要。この検証はPaddleOCR節(`setup-paddle-ocr-infra.sh`が同じ権限をpreflightで要求する)にも同様に当てはまる。
+
 #### PaddleOCR Cloud Runデプロイ(ADR-0025 PR4b)のGitHub Actions デプロイSA権限(恒久)
 
 `.github/workflows/deploy-paddle-ocr.yml`(`workflow_dispatch`、反復実行される)が使う GitHub deploy SA(`docsplit-cloud-build@{project-id}.iam.gserviceaccount.com`、`secrets.GCP_SA_KEY_DEV`のidentity)向けの権限。上記のbootstrap権限(一時付与)とは異なり、このワークフローは繰り返し実行されるため**恒久的に付与**する。
