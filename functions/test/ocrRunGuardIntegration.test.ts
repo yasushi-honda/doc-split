@@ -436,6 +436,41 @@ describe('handleProcessingError (Issue #957: runTransaction自体の一時的失
   });
 });
 
+/**
+ * ambiguous commit(サーバー側はcommit成功したがクライアントにはgRPC transientエラーとして返る)を再現する。
+ * failOnCallIndex回目のtransactionは実dbへ実際に委譲(書込みは成功)した直後にエラーをthrowする
+ * (ocrCompletionTransactionIntegration.test.tsのmakeAmbiguousCommitFirestoreと同方針、
+ * withCountingFailingRunTransactionと同じくdb.runTransactionを一時差し替えて原値復元を保証する)。
+ */
+async function withAmbiguousCommitRunTransaction<T>(
+  failOnCallIndex: number,
+  errorCode: number,
+  fn: () => Promise<T>
+): Promise<{ result: T; callCount: number }> {
+  const original = db.runTransaction.bind(db);
+  let callCount = 0;
+  (db as unknown as { runTransaction: unknown }).runTransaction = async (
+    updateFn: (tx: admin.firestore.Transaction) => Promise<unknown>
+  ) => {
+    callCount++;
+    const result = await original(updateFn);
+    if (callCount === failOnCallIndex) {
+      const err = new Error(
+        `simulated ambiguous commit (server succeeded, client sees failure, call #${callCount})`
+      ) as Error & { code: number };
+      err.code = errorCode;
+      throw err;
+    }
+    return result;
+  };
+  try {
+    const result = await fn();
+    return { result, callCount };
+  } finally {
+    (db as unknown as { runTransaction: typeof original }).runTransaction = original;
+  }
+}
+
 describe('tryStartProcessing (Issue #958: runTransaction自体の一時的失敗をwithBackoffRetryで防御)', () => {
   beforeEach(async () => {
     await cleanupCollections(db, COLLECTIONS_TO_CLEAN);
@@ -486,6 +521,56 @@ describe('tryStartProcessing (Issue #958: runTransaction自体の一時的失敗
 
     expect(callCount, '非transientは即座に諦めるため1回のみ').to.equal(1);
     expect(claim).to.equal(null);
+  });
+
+  // Issue #963: ambiguous commit後の再実行が、自分自身のclaimを「他プロセスのclaim済み」と誤認して
+  // nullを返し、発行済みocrRunIdを誰も使わないprocessing固着docを生んでいた。
+  it('ambiguous commit(1回目は実際にcommit成功だがクライアントには失敗が返る)後の再実行で、自分が発行したocrRunIdによるclaimを認識してclaimを返す (#963)', async () => {
+    const docId = 'doc-963-ambiguous-commit';
+    const docRef = db.collection('documents').doc(docId);
+    await docRef.set({ status: 'pending', fileUrl: 'gs://bucket/a.pdf', mimeType: 'application/pdf' });
+
+    const { result: claim, callCount } = await withAmbiguousCommitRunTransaction(1, 14, () =>
+      tryStartProcessing(docId)
+    );
+
+    expect(callCount, '1回目はcommit成功後に失敗が返り、リトライで2回目が実行されるはず').to.equal(2);
+    expect(claim, '自分自身のclaimは認識してnullではなくclaimを返すはず(processing固着の防止)').to.not.be.null;
+    const after = await docRef.get();
+    expect(after.data()!.status).to.equal('processing');
+    expect(claim!.ocrRunId, '返すocrRunIdは1回目のcommitで書込み済みのものと一致するはず').to.equal(
+      after.data()!.ocrRunId
+    );
+    expect(claim!.docData.fileUrl, '後続のprocessDocumentが使うdocDataが返るはず').to.equal('gs://bucket/a.pdf');
+  });
+
+  it('他プロセスが発行したocrRunIdで既にprocessingのdocは、自分のclaimとは区別してnullを返す (#963)', async () => {
+    const docId = 'doc-963-other-process-claim';
+    const docRef = db.collection('documents').doc(docId);
+    await docRef.set({
+      status: 'processing',
+      ocrRunId: 'other-process-run-id',
+      fileUrl: 'gs://bucket/a.pdf',
+      mimeType: 'application/pdf',
+    });
+
+    const claim = await tryStartProcessing(docId);
+
+    expect(claim, '他プロセスの正当なclaimは自分のclaimとして返してはならない').to.equal(null);
+    const after = await docRef.get();
+    expect(after.data()!.ocrRunId, '他プロセスのocrRunIdを上書きしないこと').to.equal('other-process-run-id');
+  });
+
+  it('ocrRunId未設定のprocessing doc(旧データ等)も自分のclaimとは扱わずnullを返す (#963)', async () => {
+    const docId = 'doc-963-processing-without-run-id';
+    await db
+      .collection('documents')
+      .doc(docId)
+      .set({ status: 'processing', fileUrl: 'gs://bucket/a.pdf', mimeType: 'application/pdf' });
+
+    const claim = await tryStartProcessing(docId);
+
+    expect(claim, 'ocrRunIdがundefinedでも一致扱いにしてはならない').to.equal(null);
   });
 });
 
