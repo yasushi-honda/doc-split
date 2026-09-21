@@ -36,7 +36,7 @@ WebSearch/WebFetchで2026-09-21時点の情報を収集し、Qwen3.5-4B/Gemma4 E
 | コールドスタート(`ready_wait_s`) | 20.5秒〜65.9秒のレンジ |
 | コンテキスト長 | `-c 16384`と指定しても`max_position_embeddings=8192`でハードクランプされる(実害はPR0時点では無し、PR1詳細設計で入力長管理の必要性を確認) |
 | 出力トークン上限 | PR0時点では「`-n`/`LLAMA_ARG_N_PREDICT`が全く機能しない」と誤認したが、PR1設計時のソースコード確認で訂正: `max_tokens`省略時のみ機能するフォールバックであり、`/props`の`n_predict:-1`は表示上の実装に起因する(詳細は実装計画「主要な設計判断」1a-5参照) |
-| Cloud Run timeout後の実挙動 | クライアントが接続を打ち切った後もサーバー側は生成を継続し、新規リクエストは約2分40秒間ブロックされた(実際の発生源はCloud Run自体、PR1設計時に訂正) |
+| クライアント切断後の実挙動 | クライアントが接続を打ち切った後もサーバー側は生成を継続し、新規リクエストは約2分40秒間ブロックされた。ブロックの機序はCloud Runの`No available container instances`(`--concurrency=1`+`--max-instances`によるキャパシティ枯渇)であり、Cloud Runの`--timeout`設定に到達したこととは別事象(PR1設計時にllama.cppのソースコードでも429を返さないことを確認し訂正、詳細はサービスREADME参照) |
 | コストレンジ | 月$106.5〜$115.4(コールドスタート20.5秒/65.9秒それぞれの前提) |
 
 検証用リソース(Cloud Runサービス・Artifact Registry repo)はPR0完了後にdevから削除済み。fixture(D1〜D10)は`scripts/fixtures/sarashina-summary-golden/`へコミット済み。
@@ -71,7 +71,20 @@ GCPプロジェクトの契約主体はクライアント自身であり、doc-s
 3. **モデルルーティングは3値(`none`/`sarashina`/`gemini`)、fail-safe先は`none`**: 既定`none`とし、デプロイしただけで全文書が無言でGemini自動要約される事故を防ぐ(詳細は実装計画「主要な設計判断」2参照)
 4. **段階的ロールアウト**: PR0(spike)→PR1(サービス基盤、a/b/c分割)→PR2(品質ゲートのCI化)→PR3(クライアント/ディスパッチャー)→PR4(バッチ処理・フロントエンド)→PR5(dev有効化)→PR6(kanameone/cocoro展開)→PR7(手動経路の非同期化、完全なGemini依存脱却に必須)。PR1以降は個別にdecision-maker再承認が必要
 
-詳細な変更内容・PR構成・検証方法は実装計画(`/Users/yyyhhh/.claude/plans/logical-baking-lighthouse.md`)を正とする。
+詳細な変更内容・PR構成・検証方法は実装計画(`/Users/yyyhhh/.claude/plans/logical-baking-lighthouse.md`、decision-maker個人のローカル環境にのみ存在しリポジトリには含まれない)を正とする。ただし、以下の「PR1a実装知見」節に、PR1a実装時にリポジトリ内のコード・ドキュメントを保守する上で必要な技術的要点を転記し、実装計画ファイルにアクセスできない環境でも本ADRとサービスREADME(`services/sarashina-summary/README.md`)だけで判断できるようにしている(pr-review-toolkit comment-analyzer指摘反映)。
+
+### PR1a実装知見(サービス基盤の技術的詳細)
+
+PaddleOCR(`services/paddle-ocr/`)を複製元として実装する過程で、llama.cppのソースコード・GHCRのイメージconfig・Hugging Face API・GCPのIAM権限を実機で裏取りし、以下の技術的要点を確定させた。詳細・検証コマンドは`services/sarashina-summary/README.md`を参照。
+
+1. **モデル取得は完全ファイル名指定(curl直接取得)**: `mmnga/sarashina2.2-3b-instruct-v0.1-gguf`は多数の量子化ファイルを含むため、PaddleOCRの`snapshot_download`+`allow_patterns`パターンを機械的に複製すると全量子化を取得してビルドが破綻する事故が起きうる。alpine+curlで完全ファイル名を直接URL指定して取得し、SHA-256をビルド時に検証する
+2. **パラメータ設定はENV(`LLAMA_ARG_*`)方式を基本とする**: llama.cppは環境変数を先に処理しCLI引数が後から上書きする実装のため、CMD方式で書いたオプションは`gcloud run deploy --update-env-vars=LLAMA_ARG_*`による再デプロイなしチューニングが無効化される。ただし`-tb`/`--threads-batch`には対応する環境変数が存在しないため、この1オプションのみCMDで明示する(個々のCLIオプションは対応する`LLAMA_ARG_*`のみを上書きするため、この部分的な混在は安全)
+3. **有効コンテキスト長は8192固定**: `LLAMA_ARG_CTX_SIZE`をいくら大きく指定しても、モデルの`max_position_embeddings=8192`でハードクランプされる。入力長の事前切り詰め・事前拒否はクライアント(PR3/PR4)の責務
+4. **出力トークン上限の正確な仕様**: クライアントが`max_tokens`を省略した場合のみ`LLAMA_ARG_N_PREDICT`がフォールバック上限として効く。明示指定時はクランプされずそのまま通るため、`LLAMA_ARG_N_PREDICT`を「効かないフラグ」として将来削除しないこと。呼び出し元は必ず`max_tokens`を明示すること
+5. **Cloud Run 429の発生源はllama.cppではなくCloud Run自体**: llama.cppが返しうるのは503のみで429は返さない。`--max-instances`は「コスト上限」であって「逐次実行の保証」ではなく、逐次実行の担保はクライアント側(`generateSummaryBatch`の逐次ループ+Firestoreのclaim/所有権トークン、PR4)の責務とする
+6. **メモリ32GiBはPR0実測条件の保存であり実需要ではない**: 実需要は約5〜6GiBと試算されるが、PR1では32GiBを据え置く(PR0実測条件の再現性を保つため)。削減はPR2以降で実peak RSSを計測してから判断する
+7. **runtime SAへの`iam.serviceAccountUser`(actAs)付与はPR1bで今すぐ行う**: PaddleOCR版が`run.invoker`をPR4へ委譲しているのとは性質が異なる(actAsは呼び出し元の存在と無関係にデプロイ実行者の権限の話であり、今すぐ付与できる)
+8. **`/health`のdigest検証はできない**: PaddleOCR版は`/health`レスポンスの`imageDigest`フィールドで検証しているが、llama.cppの`/health`は`{"status":"ok"}`のみ。代替として`/props`の`build_info`/`model_alias`と`gcloud run services describe`のimage一致を組み合わせる
 
 ## Consequences
 

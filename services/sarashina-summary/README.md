@@ -1,12 +1,12 @@
 # Sarashina要約 Cloud Runサービス
 
-ADR-0027(要約生成のGemini依存脱却)のPR1: 自前ホスティングSarashina2.2-3B-instruct-v0.1(Q8_0量子化)をCloud Run上でOpenAI互換APIとして提供する。詳細な意思決定の経緯は[`docs/adr/0027-sarashina-summary-migration.md`](../../docs/adr/0027-sarashina-summary-migration.md)、実装計画は`~/.claude/plans/logical-baking-lighthouse.md`を参照。
+ADR-0027(要約生成のGemini依存脱却)のPR1: 自前ホスティングSarashina2.2-3B-instruct-v0.1(Q8_0量子化)をCloud Run上でOpenAI互換APIとして提供する。詳細な意思決定の経緯・PR1a実装知見は[`docs/adr/0027-sarashina-summary-migration.md`](../../docs/adr/0027-sarashina-summary-migration.md)を参照(リポジトリ内で完結)。プロジェクト全体のPR構成・PR2以降の計画は`~/.claude/plans/logical-baking-lighthouse.md`(decision-makerのローカル環境にのみ存在)を参照。
 
 ## PaddleOCR(`services/paddle-ocr/`)との意図的な相違点
 
 本サービスはPaddleOCRのFastAPIラッパー方式を踏襲しない。llama.cpp server(OpenAI互換API)がHTTP契約・ヘルスチェック・並行制御をネイティブに提供するため、追加のアプリケーション層を作らず、`ghcr.io/ggml-org/llama.cpp`のdigest固定イメージへモデルを焼き込むだけの構成にしている。
 
-- **モデル取得**: Python+huggingface_hubを使わず、alpine+curlで完全ファイル名を直接URL指定して取得する。取得元(`mmnga/sarashina2.2-3b-instruct-v0.1-gguf`)は24個の量子化ファイル(合計30GB超)を含むため、PaddleOCRの`snapshot_download`+`allow_patterns`パターンを機械的に複製すると全量子化を取得してビルドが破綻する事故が起きうる(PR1設計時に発見)。curl直接取得はこの事故が構造的に起きない。
+- **モデル取得**: Python+huggingface_hubを使わず、alpine+curlで完全ファイル名を直接URL指定して取得する。取得元(`mmnga/sarashina2.2-3b-instruct-v0.1-gguf`)は24個の量子化ファイル(合計30GB超、2026-09-22確認時点。第三者リポジトリのため将来増減しうる)を含むため、PaddleOCRの`snapshot_download`+`allow_patterns`パターンを機械的に複製すると全量子化を取得してビルドが破綻する事故が起きうる(PR1設計時に発見)。curl直接取得はこの事故が構造的に起きない。
 - **実行時ハッシュ再検証はしない**: digest固定デプロイで内容は既に固定済みのため、3.4GB再ハッシュはコールドスタートの純損失になる(ビルド時の検証のみ、`Dockerfile`参照)。
 - **パラメータ設定はENV方式を基本とする**: llama.cppは環境変数を先に処理し、CLI引数が後から上書きする実装になっている。もしCMD方式(コマンドライン引数)で設定すると、`gcloud run deploy --update-env-vars=LLAMA_ARG_*`による再デプロイなしチューニングが**静かに無視される**。本サービスは対応する`LLAMA_ARG_*`が存在するパラメータは全て環境変数で設定する。ただし`-tb`/`--threads-batch`(バッチ処理スレッド数)には対応する環境変数が存在しない(`common/arg.cpp`で確認済み、`.set_env()`が付与されているのは`-t`/`--threads`のみ)ため、このオプションのみCMDで明示している(`Dockerfile`参照)。個々のCLIオプションはそれに対応する`LLAMA_ARG_*`のみを上書きするため、この部分的な混在は安全。
 
