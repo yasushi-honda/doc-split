@@ -4,7 +4,9 @@ updated: 2026-09-20
 <!-- 前ミッション(dev/kanameone/cocoro環境監査・保守検証)は2026-07-20完遂。全文はdocs/handoff/LATEST.md参照。 -->
 <!-- Google Drive連携Phase1 (MVP)実装ミッションは2026-07-22完了(PR#700マージ)。詳細は本ファイル末尾「Google Drive連携Phase1完遂」節+docs/handoff/LATEST.md参照。 -->
 
-## 【実装移行決定・plan mode着手・2026-09-21】要約生成(regenerateSummary)のGemini依存脱却: Sarashina2.2-3B(Q8_0量子化)への実装移行を正式決定、plan modeでのフル計画策定へ
+## 【PR1a完了・マージ済み(PR#1006)・2026-09-22】要約生成(regenerateSummary)のGemini依存脱却: Sarashina2.2-3B(Q8_0量子化)実装移行、PR0(spike)実測完了→ADR-0027策定→PR1a(サービス基盤)実装完了
+
+**進捗サマリ(2026-09-22)**: PR0(spike)でdev環境への独立した再ビルド・再デプロイにより品質・処理能力・コストを実測(詳細は`docs/adr/0027-sarashina-summary-migration.md`および`~/.claude/plans/logical-baking-lighthouse.md`「PR0実測結果」節)。plan-crossreview(grip+codex)とPlan agentレビューを経てPR1を1a/1b/1cへ分割し、PR1a(ADR-0027新設+`services/sarashina-summary/`サービス基盤+CI配線)を実装、codex review(2回)+pr-review-toolkit 4エージェント並列レビューで検出した指摘(High1/Medium5/Critical1/Low2)を全て修正、CI全PASSを確認しPR #1006としてsquash mergeした。次はPR1b(`scripts/setup-sarashina-summary-infra.sh`+`docs/context/delivery-and-update-guide.md`追記)に着手予定。
 
 ADR-0025はPass1(OCR)のみ対象でPass2/要約は明示的にスコープ外(手動トリガー・低頻度のため)。decision-makerの意向で「要約もいずれはPaddleOCRと同様に自前ホスティングSLM(Cloud Run、CPUのみ、asia-northeast1)へモデルルーティングしたい」という将来検討として、2026-09-21に候補調査・実機検証を実施した。当日中に品質・コスト・アーキテクチャ・コンプライアンスの検討が完了し、**decision-makerが実装移行を正式決定**(下記「次の一手」トリガー②を充足)。CLAUDE.md CRITICAL該当のためplan modeでのフル計画策定に入る。実装(summaryPromptBuilder.ts等の変更)はまだ一切行っていない(この節はplan mode着手時点の記録)。
 
