@@ -55,12 +55,12 @@ RUN useradd --create-home --uid 1001 --shell /usr/sbin/nologin appuser \
     && chmod 0444 /models/model.gguf
 USER appuser
 
-# ENV方式を採用(CMDは書かない)。理由: llama.cppは環境変数を先に処理しCLI引数が
-# 後から上書きする実装のため、CMD方式だとgcloud run deploy --update-env-vars=
+# ENV方式を基本とする(パラメータ変更を--update-env-varsで再デプロイなしに行える
+# ようにするため)。理由: llama.cppは環境変数を先に処理しCLI引数が後から上書きする
+# 実装のため、CMD方式で書いたオプションはgcloud run deploy --update-env-vars=
 # LLAMA_ARG_*が静かに無視される(PR1設計時にcommon/arg.cppのソースで確認)。
 # PaddleOCRの--update-env-varsによる再デプロイなしチューニングという運用モデルと
-# 揃えるため、全パラメータをENV経由にする。CMD引数を追加すると対応するLLAMA_ARG_*を
-# 無条件に上書きするため、混在させないこと。
+# 揃えるため、対応するLLAMA_ARG_*が存在するパラメータは全てENV経由にする。
 #
 # LLAMA_ARG_CTX_SIZE=8192: モデルのmax_position_embeddings=8192でハードクランプ
 #   されるため、それより大きい値を指定しても意味がない(PR0では16384を指定していたが
@@ -68,16 +68,27 @@ USER appuser
 # LLAMA_ARG_N_PREDICT=1024: クライアントがmax_tokensを省略した場合のみ効くフォール
 #   バック上限(クランプではない)。唯一の安全機構ではなく、呼び出し元は必ずリクエスト
 #   ごとにmax_tokensを明示すること(実装計画「主要な設計判断」1a-5参照)。
+# LLAMA_ARG_THREADS=8: PR0実測構成(-t 8)を再現し、Cloud Run 8vCPU環境での
+#   物理コア自動検出のばらつき(cgroup制限下では不安定になりうる)に依存しない
+#   ようにする(codex review指摘、Dockerfile:59-63参照)。
 # LLAMA_ARG_N_PARALLEL=1: Cloud Run --concurrency=1と対応させ8vCPU専有を維持。
 # LLAMA_ARG_TIMEOUT=600: Cloud Run --timeout=600と揃える(既定3600秒のままだと
 #   どちらが先に切るか不明瞭になるため明示する)。
 ENV LLAMA_ARG_MODEL=/models/model.gguf \
     LLAMA_ARG_CTX_SIZE=8192 \
     LLAMA_ARG_N_PREDICT=1024 \
+    LLAMA_ARG_THREADS=8 \
     LLAMA_ARG_N_PARALLEL=1 \
     LLAMA_ARG_JINJA=1 \
     LLAMA_ARG_ALIAS=sarashina2.2-3b-instruct-v0.1-Q8_0 \
     LLAMA_ARG_TIMEOUT=600 \
     LLAMA_ARG_PORT=8080
+
+# `-tb`/`--threads-batch`(バッチ処理スレッド数、PR0実測構成の`-tb 8`に対応)には
+# LLAMA_ARG_THREADS_BATCHのような環境変数が存在しない(common/arg.cppで確認済み、
+# .set_env()が付与されているのは-t/--threadsのみ)。CLI引数でしか設定できないため
+# CMDで明示する。個々のCLIオプションはそれに対応するLLAMA_ARG_*のみを上書きする
+# (他のENV設定はそのまま有効なため、上記ENV方式との混在は意図的かつ安全)。
+CMD ["-tb", "8"]
 
 EXPOSE 8080

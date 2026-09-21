@@ -8,7 +8,7 @@ ADR-0027(要約生成のGemini依存脱却)のPR1: 自前ホスティングSaras
 
 - **モデル取得**: Python+huggingface_hubを使わず、alpine+curlで完全ファイル名を直接URL指定して取得する。取得元(`mmnga/sarashina2.2-3b-instruct-v0.1-gguf`)は24個の量子化ファイル(合計30GB超)を含むため、PaddleOCRの`snapshot_download`+`allow_patterns`パターンを機械的に複製すると全量子化を取得してビルドが破綻する事故が起きうる(PR1設計時に発見)。curl直接取得はこの事故が構造的に起きない。
 - **実行時ハッシュ再検証はしない**: digest固定デプロイで内容は既に固定済みのため、3.4GB再ハッシュはコールドスタートの純損失になる(ビルド時の検証のみ、`Dockerfile`参照)。
-- **パラメータ設定はENV方式(CMDは書かない)**: llama.cppは環境変数を先に処理し、CLI引数が後から上書きする実装になっている。もしCMD方式(コマンドライン引数)を採用すると、`gcloud run deploy --update-env-vars=LLAMA_ARG_*`による再デプロイなしチューニングが**静かに無視される**。本サービスは全パラメータを`LLAMA_ARG_*`環境変数で設定し、CMDは書かない。CMD引数を追加すると対応する`LLAMA_ARG_*`を無条件に上書きするため、将来混在させないこと。
+- **パラメータ設定はENV方式を基本とする**: llama.cppは環境変数を先に処理し、CLI引数が後から上書きする実装になっている。もしCMD方式(コマンドライン引数)で設定すると、`gcloud run deploy --update-env-vars=LLAMA_ARG_*`による再デプロイなしチューニングが**静かに無視される**。本サービスは対応する`LLAMA_ARG_*`が存在するパラメータは全て環境変数で設定する。ただし`-tb`/`--threads-batch`(バッチ処理スレッド数)には対応する環境変数が存在しない(`common/arg.cpp`で確認済み、`.set_env()`が付与されているのは`-t`/`--threads`のみ)ため、このオプションのみCMDで明示している(`Dockerfile`参照)。個々のCLIオプションはそれに対応する`LLAMA_ARG_*`のみを上書きするため、この部分的な混在は安全。
 
 ## エンドポイント契約
 
