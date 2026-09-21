@@ -92,6 +92,17 @@ jobs:
           pip install -r requirements-test.txt
           python3 -m pytest tests/ -v
 
+      - name: Run sarashina-summary service tests
+        # services/sarashina-summary/tests/ (ADR-0027 PR1a、expected-model-hashes.json
+        # の形式検証+Dockerfile/README.mdとのドリフトガード)。本サービスは実行時に
+        # Pythonコードを持たない(curl+jqのみでモデル取得、Dockerfile参照)ため、
+        # このテストがビルド前に検証できる唯一のSarashina固有ロジックになる。
+        # PaddleOCR側と異なりpaddleocr/paddlepaddle相当の重量依存は無くpytestのみ。
+        run: |
+          cd services/sarashina-summary
+          pip install -r requirements-test.txt
+          python3 -m pytest tests/ -v
+
       - name: Run customer identity gate integration tests (Firestore emulator)
         # functions/test/exportDocumentIntegration.test.tsの顧客未確定ゲート13ケースは
         # test/*Integration.test.tsがnpm run test:functionsの対象外(functions/package.json)

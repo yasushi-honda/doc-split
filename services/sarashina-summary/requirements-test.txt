@@ -1,0 +1,4 @@
+# ADR-0027 PR1a: CI用の軽量テスト依存。本サービスは実行時にPythonを一切使わない
+# (curl+jqのみでモデルを取得、詳細はDockerfile参照)ため、requirements.txtは存在しない。
+# テストのみpytestに依存する。
+pytest==9.1.1
