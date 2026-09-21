@@ -1,0 +1,17 @@
+{
+  "_comment": "ADR-0027 PR1a: Sarashina2.2-3B-instruct-v0.1(Q8_0量子化)の同一性担保。hfRevisionはmmnga/sarashina2.2-3b-instruct-v0.1-ggufリポジトリのimmutable commit sha。sha256/sizeBytesはPR0実測値(2026-09-21〜22)およびHugging Face API(paths-info)の独立確認と完全一致(2026-09-22確認)。値を変更する場合はPR0相当の固有名詞捏造テスト(D9/D10相当、scripts/fixtures/sarashina-summary-golden/)を再実行して品質を再検証し、本ファイルとREADME.mdの記載値を同時更新すること。無検証での更新は禁止。",
+  "textGeneration": {
+    "hfRepoId": "mmnga/sarashina2.2-3b-instruct-v0.1-gguf",
+    "hfRevision": "31d771319b04032f33e0d9d860f3984ea4812154",
+    "fileName": "sarashina2.2-3b-instruct-v0.1-Q8_0.gguf",
+    "sizeBytes": 3568393312,
+    "sha256": "8784919a2f7bbe89594b2260d5d0a1d85eddfdb42f3735bdef892d8ca033a1dc"
+  },
+  "baseImage": {
+    "_comment": "ghcr.io/ggml-org/llama.cpp のserver-b11065タグ(OCI index、amd64/arm64/s390xマルチアーキ)。PR0検証時のbuild_info(b11065-ce8caa6e6)と一致するタグをdigest固定で使用する。",
+    "repository": "ghcr.io/ggml-org/llama.cpp",
+    "tag": "server-b11065",
+    "digest": "sha256:9dc0a0f4080b7817c9592b19c03a4f4b0be92fd701076b9da259ff941dc5bf91",
+    "buildInfo": "b11065-ce8caa6e6"
+  }
+}
