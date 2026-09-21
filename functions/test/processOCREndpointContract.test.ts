@@ -37,12 +37,17 @@ const PROCESS_OCR_SOURCE_PATH = 'src/ocr/processOCR.ts';
 const MIGRATE_SCRIPT_PATH = '../../scripts/migrate-document-groups.js';
 const STALLED_ALERT_TEMPLATE_PATH =
   '../../scripts/monitoring-templates/alert-processocr-stalled.yaml';
+const TIMEOUT_ALERT_TEMPLATE_PATH =
+  '../../scripts/monitoring-templates/alert-processocr-request-timeout.yaml';
+const SETUP_METRICS_SCRIPT_PATH = '../../scripts/setup-log-based-metrics.sh';
 const ON_SCHEDULE_ANCHOR = /export\s+const\s+processOCR\s*=\s*onSchedule\s*\(/;
 const SCHEDULE_INTERVAL_SECONDS = 60;
 
 let optionsBlock = '';
 let migrateScriptSource = '';
 let stalledAlertTemplateSource = '';
+let timeoutAlertTemplateSource = '';
+let setupMetricsScriptSource = '';
 
 describe('processOCR endpoint contract (ADR-0023)', () => {
   before(() => {
@@ -73,6 +78,14 @@ describe('processOCR endpoint contract (ADR-0023)', () => {
       throw new Error(`Source file not found: ${STALLED_ALERT_TEMPLATE_PATH}`);
     }
     stalledAlertTemplateSource = readFileSync(stalledAlertPath, 'utf-8');
+
+    for (const relPath of [TIMEOUT_ALERT_TEMPLATE_PATH, SETUP_METRICS_SCRIPT_PATH]) {
+      if (!existsSync(resolve(__dirname, relPath))) {
+        throw new Error(`Source file not found: ${relPath}`);
+      }
+    }
+    timeoutAlertTemplateSource = readFileSync(resolve(__dirname, TIMEOUT_ALERT_TEMPLATE_PATH), 'utf-8');
+    setupMetricsScriptSource = readFileSync(resolve(__dirname, SETUP_METRICS_SCRIPT_PATH), 'utf-8');
   });
 
   it('schedule: "every 1 minutes"', () => {
@@ -144,5 +157,27 @@ describe('processOCR endpoint contract (ADR-0023)', () => {
         `(${maxLegitimateGapSeconds}s) 以下だと、異常のない長時間OCRサイクル1回だけで` +
         'absenceアラートが誤発火する',
     );
+  });
+
+  it('processocr_request_timeout: log-based metric定義が processocr の HTTP 504/499 を対象にし、アラートがそのメトリクスを参照する (900秒request timeoutの強制終了検知)', () => {
+    // 強制終了(504)はアプリログを残さず processocr_error では検知できない。
+    // metric定義側のフィルタが対象サービス・status条件を失う(例: service_name の typo、
+    // status条件の欠落)と、アラートが構造的に発火しなくなるため、両者の整合を固定する。
+    const metricLine = setupMetricsScriptSource
+      .split('\n')
+      .find((line) => line.includes('"processocr_request_timeout|'));
+    expect(metricLine, `${SETUP_METRICS_SCRIPT_PATH} に processocr_request_timeout の定義が無い`).to.not.be.undefined;
+    expect(metricLine).to.include('resource.type=\\"cloud_run_revision\\"');
+    expect(metricLine).to.include('resource.labels.service_name=\\"processocr\\"');
+    // Scheduler の attemptDeadline も900秒のため、Scheduler側が先に切れると Cloud Run のログは 499 になりうる
+    expect(metricLine).to.include('httpRequest.status=(499 OR 504)');
+
+    expect(timeoutAlertTemplateSource).to.include(
+      'metric.type="logging.googleapis.com/user/processocr_request_timeout"',
+    );
+    // 1件でも発生したら即時通知する(強制終了は発生自体が異常)。durationを付けると単発504を取りこぼす。
+    expect(timeoutAlertTemplateSource).to.match(/comparison:\s*COMPARISON_GT\s*$/m);
+    expect(timeoutAlertTemplateSource).to.match(/thresholdValue:\s*0\s*$/m);
+    expect(timeoutAlertTemplateSource).to.match(/duration:\s*0s\s*$/m);
   });
 });

@@ -1,0 +1,51 @@
+displayName: "[__ENV__] processocr_request_timeout: processOCR が900秒のrequest timeoutで強制終了(504)"
+documentation:
+  content: |
+    `processOCR`(Cloud Scheduler、1分間隔、concurrency:1)のリクエストが、Cloud Runの
+    request timeout(`PROCESS_OCR_TIMEOUT_SECONDS`=900秒、ADR-0023)に達して強制終了
+    (HTTP 504)されたことを検知する。
+
+    強制終了はアプリケーションのログを残さないため、`processocr_error`
+    (`Error processing document`ログ)では検知できない。PaddleOCR(ADR-0025)は実測で
+    1ページ約13〜19秒(Gemini時代は約4.5秒)のため、約46ページ以上の大型文書1件で
+    900秒予算を超えうる。実際に2026-09-21、kanameoneで45ページの文書処理中に1件発生した。
+    この事例では文書は最終的に`processed`まで自動回復した(取込から完了まで約17分)が、
+    自動回復するかは保証されない。
+
+    対応: (1) 強制終了された文書自身は`phaseTimings`ログ(処理完了後にのみ出力)を残さない。
+    Cloud Loggingで504の時刻(アラートのincident時刻)の直前に出力された
+    `Processing document: <docId>`(文書ごとの処理開始ログ、ページループの前に出力)のうち、
+    その後に`phaseTimings for <docId>`が出ていない文書を探す。あるいはFirestoreで
+    `status:'processing'`のまま滞留している文書を探す。(2) その文書の`status`が`processed`まで
+    進んだか、`processing`のまま固着していないかをFirestoreで確認する(固着は
+    `rescueStuckProcessingDocs`が閾値経過後に救済する)。(3) 繰り返し発生する場合は、
+    1ページあたりの処理時間の短縮(CPU増設等)や処理の分割を検討する。
+
+    注意: `httpRequest.status=(499 OR 504)`はCloud Runが返す504・499全般に一致する。processOCRは
+    Cloud Schedulerが起動する内部ジョブであり、その大半は900秒のrequest timeout由来
+    (実ログのlatencyが約900秒であることで確認できる)と想定している。Cloud Schedulerの
+    attemptDeadlineも同じ900秒のため、Scheduler側が先に切れた場合はCloud Runのログが
+    504ではなく499(client closed request)になりうる。このため499も対象にしている。
+
+    log-based metricのフィルタは、Cloud Runのリクエストログの`httpRequest.status=(499 OR 504)`で
+    判定する(severity条件は付けていない)。2026-09-21時点のkanameone直近30日で、実ログ検索での
+    該当は当該1件のみ、dev/cocoroは0件(フィルタの一致は確認済み)。metricの計数とこのアラートの
+    発火までのend-to-endは、最初の発生まで検証できていない(log-based metricは作成後のログのみ計数する)。
+  mimeType: "text/markdown"
+combiner: OR
+conditions:
+  - displayName: "processocr_request_timeout > 0 in 1h"
+    conditionThreshold:
+      filter: 'metric.type="logging.googleapis.com/user/processocr_request_timeout" AND resource.type="cloud_run_revision"'
+      aggregations:
+        - alignmentPeriod: 3600s
+          perSeriesAligner: ALIGN_SUM
+      comparison: COMPARISON_GT
+      thresholdValue: 0
+      duration: 0s
+alertStrategy:
+  autoClose: 86400s
+userLabels:
+  source: docsplit-monitoring-setup
+notificationChannels:
+  - __NOTIFICATION_CHANNEL__

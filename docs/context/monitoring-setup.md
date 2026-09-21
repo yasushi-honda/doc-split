@@ -4,8 +4,8 @@ Issue #220 + ADR-0015 Follow-up で構築した log-based metric + Cloud Monitor
 
 ## 構成概要
 
-- **12 種メトリクス** (log-based) を各環境で作成 (うち`processocr_error`は`lifecycle: temporary`、review_by到達後に削除/恒久化を再判断)
-- **11 種アラートポリシー** (Cloud Monitoring) を作成 (`search_index_token_skipped`はアラートなし、観測専用)
+- **13 種メトリクス** (log-based) を各環境で作成 (うち`processocr_error`は`lifecycle: temporary`、review_by到達後に削除/恒久化を再判断)
+- **12 種アラートポリシー** (Cloud Monitoring) を作成 (`search_index_token_skipped`はアラートなし、観測専用)
 - **通知チャネル** 1 つ (email、環境ごと) を作成し全ポリシーで共有
 
 関連コード:
@@ -30,12 +30,13 @@ Issue #220 + ADR-0015 Follow-up で構築した log-based metric + Cloud Monitor
 | `search_index_token_skipped` | `[searchIndexer] token skipped: document size limit`(`ondocumentwritesearchindex`、引数1個の単一文字列の `console.error`。severity 条件なし) | **アラートなし**(観測専用) | Issue #984。高頻度トークン(`"2026"` 等)の `search_index` 文書が 1MiB 上限に達し、スキップが発生した索引処理の回数(1回の処理につき1行のログ。スキップしたトークン数ではなく、初回索引後の `search` メタ書込み等によるトリガー再発火で同じ書類が複数回数えられうる。dev 実機検証では1件で3回)。kanameone では段階2まで 2026 年の新規書類のたびに発生する(常時 open のアラートは新規の劣化を覆い隠すためアラートは付けない)。新規飽和は tokenId 別件数で読む(SOP は下記「Issue #984」節) |
 | `search_index_write_failed` | `[searchIndexer] index write failed`(`ondocumentwritesearchindex`、引数1個の単一文字列の `console.error`。severity 条件なし) | 24 時間窓で 1 件以上 (incident は 7 日間可視化) | Issue #984。サイズ超過と判定できなかった索引書込み失敗(一時障害・権限障害、および判定関数が SDK/バックエンドの文言変更で外れた場合)。0 が正常。判定が外れると高頻度トークンを持つ書類が全トークン未登録に戻るため、これを検知する。**対象は索引(`search_index`)への書込み(一括書込みとフォールバック)の失敗のみ**で、既存 posting の読取り(`getAll`)や `documents.search` メタの更新の失敗は含まない(それらは Cloud Functions の一般エラーとして記録される) |
 | `processocr_error` | `Error processing document`(`processOCR`のみ、`ocrProcessor.ts` `handleProcessingError`が無条件出力) | 1h 以内に 1 件以上 | ADR-0025 PaddleOCR Pass1全面切替(2026-09-19)後の一時的事後監視(`lifecycle: temporary`、`review_by: 2026-10-03`)。severity条件は付けない(`console.error()`はfirebase-functions/logger未使用のためCloud Loggingで自動的にERROR severityへ昇格されずDEFAULTのまま記録される実測を確認済み。当初`severity="ERROR"`を含めていたが構造的に一致しない欠陥がありPR #980で修正)。`Error processing document`はtransientエラー(自動リトライで最終的に成功する一時失敗)でも無条件出力されるため「status:error確定」そのものではない点に留意。有効化前の実データ確認(直近30日)は3環境とも該当ログ0件で陽性検証材料なし |
+| `processocr_request_timeout` | Cloud Runリクエストログ `httpRequest.status=(499 OR 504)`(`processocr`、request timeout=`PROCESS_OCR_TIMEOUT_SECONDS`=900秒での強制終了。Scheduler の attemptDeadline も900秒のため、Scheduler側が先に切れた場合は499になる) | 1h 以内に 1 件以上 | ADR-0025 PaddleOCR(1ページ約13〜19秒、Gemini時代は約4.5秒)で約46ページ以上の大型文書が900秒予算を超えうることが、2026-09-21にkanameoneで実発生(45ページ文書、最終的に自動回復、取込から完了まで約17分)して判明。強制終了はアプリログを残さず`processocr_error`(`Error processing document`)では検知できないため別metricで検知する。フィルタは実ログ検索で一致を確認済み(kanameone直近30日で該当1件のみ、dev/cocoroは0件。metricの計数とアラート発火のend-to-endは最初の発生まで未検証)。恒久運用(`lifecycle`ラベルなし) |
 
 ### アラートポリシー共通パラメータ
 
 - `duration`: 0s (閾値超過で即発火)。例外: `processocr_completed`はabsence条件のため`duration: 1200s`(上表参照)
 - `autoClose`:
-  - 標準 (`searchindex_oom` / `ocr_*_truncated` / `summary_truncated` / `processocr_completed` / `processocr_error`): 86400s (24h 無発火で自動クローズ)
+  - 標準 (`searchindex_oom` / `ocr_*_truncated` / `summary_truncated` / `processocr_completed` / `processocr_error` / `processocr_request_timeout`): 86400s (24h 無発火で自動クローズ)
   - `search_index_silent_failure` / `search_index_write_failed` / `drive_folder_divergent` / `drive_folder_divergent_record_failed` / `claim_divergent_backlog_stale`: 604800s (7 日間) — 放置検知のため長めに取る
 - `notificationRateLimit`: **未設定**。Cloud Monitoring API の仕様により metric-based alert policy では指定不可（log-based policy 限定）。metric alert は incident オープン時 1 通のみ送信、`autoClose` まで再通知されないため通知暴走リスクは元々低い
 - **検出遅延**:
@@ -44,6 +45,7 @@ Issue #220 + ADR-0015 Follow-up で構築した log-based metric + Cloud Monitor
   - `search_index_silent_failure` / `search_index_write_failed` (alignment 24h): 同上、即時検知には向かない
   - `processocr_completed` (**absence条件**、他10種と異なり閾値超過ではなくログの欠落を検知。`alignmentPeriod:60s`・`duration:1200s`): 約20-21分。「1サイクル最大900秒+次tickまでの待ち最大60秒」という正当な最大間隔(960秒)に対して十分なマージンを取った設計
   - `processocr_error` (alignment 1h): 約3-5分
+  - `processocr_request_timeout` (alignment 1h): 約3-5分
 
 ADR-0015 要件「5 分以内」は `searchindex_oom` のみ厳密に満たす。他は「日次で必ず検出」を目標とする。
 ADR-0015 要件「7 日間に 1 件以上」は metric alignment では厳密には表現できないため、`autoClose: 7d` による incident 継続可視化で実運用上の監査表現を代替する。より厳密な weekly 集計が必要な場合は scheduled query / health-report 等で別途担保する。
@@ -99,7 +101,7 @@ ADR-0015 要件「7 日間に 1 件以上」は metric alignment では厳密に
 ```bash
 # メトリクス一覧
 gcloud logging metrics list --project=<project-id> \
-  --filter='name=(searchindex_oom OR ocr_page_truncated OR ocr_aggregate_truncated OR summary_truncated OR search_index_silent_failure OR drive_folder_divergent OR drive_folder_divergent_record_failed OR claim_divergent_backlog_stale OR processocr_completed OR processocr_error OR search_index_token_skipped OR search_index_write_failed)'
+  --filter='name=(searchindex_oom OR ocr_page_truncated OR ocr_aggregate_truncated OR summary_truncated OR search_index_silent_failure OR drive_folder_divergent OR drive_folder_divergent_record_failed OR claim_divergent_backlog_stale OR processocr_completed OR processocr_error OR search_index_token_skipped OR search_index_write_failed OR processocr_request_timeout)'
 
 # アラートポリシー一覧 (user_labels で本 script が作成したもののみ識別)
 gcloud alpha monitoring policies list --project=<project-id> \
@@ -183,6 +185,7 @@ rm /tmp/monitoring-sa.json
 - ✅ 2026-09-20 (Issue #981 / PR #985): dev / cocoro / kanameone の `search_index_silent_failure` と `claim_divergent_backlog_stale` の filter から severity 条件を除去(`gcloud logging metrics update` で in-place 反映、alert policy は無変更)。`console.error` / `console.warn` は gen2 の Cloud Logging で DEFAULT severity のため、旧 filter は一致しなかった
 - ✅ 2026-09-21 (Issue #984 / #981): dev / kanameone (run `35533087283`) / cocoro (run `35533423590`) に `search_index_token_skipped` / `search_index_write_failed` のメトリクスと `search_index_write_failed` のアラートを適用(Setup Monitoring ワークフロー、既存は変更なし)。dev では `processocr_error` も新規作成。`search_index_token_skipped` のメトリクス説明文「kanameone では段階 2 まで常時発生が正常」は段階 2a 完了で実態と合わなくなったため、次に `setup-log-based-metrics.sh` を触るときに更新する
 - ⏳ Issue #871 恒久対応で追加した3種（`drive_folder_divergent`/`drive_folder_divergent_record_failed`/`claim_divergent_backlog_stale`）は**PR時点では未適用**。スクリプトは冪等なので、各環境で `setup-log-based-metrics.sh` を再実行すれば既存5種はskipされ新規3種のみ追加される（ロールアウト §1 参照）
+- ⏳ 2026-09-21: `processocr_request_timeout`(processOCRが900秒のrequest timeoutで強制終了された504の検知、PaddleOCRの大型文書で2026-09-21にkanameoneで実発生)は**PR時点では未適用**。マージ後、`setup-monitoring.yml`(冪等、既存のmetric/policyは変更しない)を dev → kanameone → cocoro の順に実行して適用し、`gcloud logging metrics describe processocr_request_timeout`と`gcloud alpha monitoring policies list`で各環境の存在を確認すること(log-based metricは作成後のログのみ計数するため、適用前に発生した504は遡及されない)。適用後、本行を✅に更新する
 
 ## 通知先の調整
 
