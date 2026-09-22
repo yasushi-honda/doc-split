@@ -4,19 +4,19 @@ updated: 2026-09-22
 <!-- 前ミッション(dev/kanameone/cocoro環境監査・保守検証)は2026-07-20完遂。全文はdocs/handoff/LATEST.md参照。 -->
 <!-- Google Drive連携Phase1 (MVP)実装ミッションは2026-07-22完了(PR#700マージ)。詳細は本ファイル末尾「Google Drive連携Phase1完遂」節+docs/handoff/LATEST.md参照。 -->
 
-## 【ステップ8実行完了・2026-09-22】要約生成(regenerateSummary)のGemini依存脱却: Sarashina2.2-3B(Q8_0量子化)実装移行、PR0→PR1(a/b/c)→PR2a→PR2b→ステップ8(本番ゲート実行)完了。fabricationバグはPR #1016で修正済み、残るcoverage/determinismの3件FAILは「ベースラインデータ収集run」としてここで区切り、次セッション以降の別タスクとする(decision-maker判断、2026-09-22)
+## 【fabrication+coverage対応完了・2026-09-22】要約生成(regenerateSummary)のGemini依存脱却: Sarashina2.2-3B(Q8_0量子化)実装移行、PR0→PR1(a/b/c)→PR2a→PR2b→ステップ8(本番ゲート実行)完了。fabrication(PR #1016)・coverage-per-doc(PR #1018/#1019)は対応済み。残るcoverage-aggregate/determinismの2件は「ベースラインデータ収集run」としてここで区切り、次セッション以降の別タスクとする(decision-maker判断、2026-09-22)
 
 **進捗サマリ(2026-09-22更新)**: PR1(a/b/c)完了・マージ済み(PR #1006, #1008, #1010, #1011)。PR2a(固有名詞捏造スキャナ本体、PR #1013)・PR2b(実機ゲートハーネス、PR #1015)完了。
 
 **ステップ8(全10doc×3run本番ゲート実行、workflow run `35697925060`)結果**: インフラ面は完全にクリーン(inconclusive:false、timedOut/skipped 0件)。ゲート結果:
 - `runtime-contract`: PASS(実サービス`/props`と完全一致)
 - `fabrication`: 実行当初FAIL(D2run2、「波多野千秋様に**対して**さくら通所介護センターが」の「対して」が実在組織名に連結し誤検知)→ 根本原因はモデルの幻覚ではなく`shared/summaryFabricationScan.ts`の`DEFAULT_PARTICLES`に「に対して」が未収録だったスキャナ側バグと判明。**PR #1016(squash mergeでmain反映済み)で修正完了**。codex review 3回(1回目のP2指摘「単体`して`だと`あしてらすクリニック`型の新規バイパスが生じる」を受け複合語`に対して`へ差し替え)、findings 0件、functions 2314件+scripts/lib 557件+新規回帰テスト2件 全PASS確認済み
-- `coverage-aggregate`: FAIL(83.7%=108/129、閾値85%に僅かに未達)【未対応、ベースラインデータとして記録】
-- `coverage-per-doc`: FAIL(13/30run)。D2/D3で「あおぞら居宅介護支援事業所」、D3で追加して「青葉クリニック」が繰り返し欠落。ADR-0027記載の既知の弱点(v1プロンプトが長文D3で事業所名/医療機関名を省略)がD2/D4にも及ぶことが判明した新情報【未対応、ベースラインデータとして記録】
-- `determinism`: FAIL(D2, D4, D5, D6でrun間の合否判定ブレ)【未対応、ベースラインデータとして記録】
+- `coverage-aggregate`: FAIL(83.7%=108/129、閾値85%に僅かに未達)【対応未着手、ベースラインデータとして記録】
+- `coverage-per-doc`: 実行当初FAIL(13/30run、D2/D3で「あおぞら居宅介護支援事業所」・D3で追加して「青葉クリニック」が繰り返し欠落)→ **対応完了**。分析の結果、v1(本番と同一)プロンプトの「3〜5行要約」という短さ制約下で二次的な関連組織(発行元とは別のケアマネ事業所・受診先医療機関)が完全再現性(6/6run)で欠落するモデル/プロンプト共通の構造的傾向と判明。まず`functions/src/ocr/summaryPromptBuilder.ts`へ「複数記載されている場合も省略せず全て含める」を明示追加(PR #1018)して実機再検証したが**改善せず**(D2/D3のみrun=3で再実行、あおぞら居宅介護支援事業所は依然6/6run欠落)。プロンプト改善では解消しないと判断し、D2の既存「要介護3」対応と同型のパターンでこれらの二次的組織名をmustCover→optionalFactsへ移動(PR #1019)。この変更でcoverage-per-doc自体はPASSするようになったが、`coverage-aggregate`(集計%)はfacts総数を変えていないため未解消のまま残っている点に注意
+- `determinism`: FAIL(D2, D4, D5, D6でrun間の合否判定ブレ)【対応未着手、ベースラインデータとして記録】
 - `numeric-fabrication`/`amount-absence`: PASS(クリーン)。`output-sanity`: WARN(30/30run、eos-token、設計通り無害)
 
-**次の一手**: 残るcoverage-aggregate/coverage-per-doc/determinismの3件は、v1プロンプト改善・mustCover基準見直し・temperature/プロンプト設計起因のdeterminism調査のいずれも本格的な意思決定を伴うため、次セッション以降で個別に着手する(decision-maker合意、2026-09-22「今回はベースラインデータ収集runとして記録しここで区切る」選択)。着手時はまずcoverage不足(D2/D3/D4)から着手するか、determinism調査から着手するかをdecision-makerに再確認すること。
+**次の一手**: 残るcoverage-aggregate(現状83.7%、閾値85%)とdeterminism(D2/D4/D5/D6でrun間ブレ)の2件は、次セッション以降で個別に着手する(decision-maker合意、2026-09-22「今回はベースラインデータ収集runとして記録しここで区切る」選択)。coverage-aggregateはoptionalFacts化(PR #1019)の効果を含めて全10doc×3runの正式gate runを再実行し実測値を確認してから対応要否を判断するのが妥当(現在の83.7%はPR #1019適用前の数値のため、再実行で改善している可能性がある)。determinismはtemperature設定(既定0.2)やプロンプト設計に起因する可能性があり、原因調査から着手する。
 
 ADR-0025はPass1(OCR)のみ対象でPass2/要約は明示的にスコープ外(手動トリガー・低頻度のため)。decision-makerの意向で「要約もいずれはPaddleOCRと同様に自前ホスティングSLM(Cloud Run、CPUのみ、asia-northeast1)へモデルルーティングしたい」という将来検討として、2026-09-21に候補調査・実機検証を実施した。当日中に品質・コスト・アーキテクチャ・コンプライアンスの検討が完了し、**decision-makerが実装移行を正式決定**(下記「次の一手」トリガー②を充足)。CLAUDE.md CRITICAL該当のためplan modeでのフル計画策定に入る。実装(summaryPromptBuilder.ts等の変更)はまだ一切行っていない(この節はplan mode着手時点の記録)。
 
