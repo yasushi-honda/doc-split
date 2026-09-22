@@ -710,6 +710,20 @@ export function checkCrossEntity(
     }
   };
 
+  // codex review指摘(P2、3回目、strict-config): 同一セグメント/節内に同一人物の複数
+  // エイリアスが両方出現する場合(例:「立花文子（文子様）は青葉クリニックを受診」)、
+  // 正規化後のalias値そのままでdedupすると「2名」と誤って数えられ、多人数セグメント
+  // 扱い(ambiguousSegments)のNOT_EVALUATEDに落ちて取り違えを検知できなくなる。
+  // origByNormで代表ラベル(factLabel)へ正規化してからdedupする。
+  const dedupePersonsByLabel = (hits: Occurrence[]): string[] => {
+    const byLabel = new Map<string, string>();
+    for (const hit of hits) {
+      const label = origByNorm.get(hit.value) ?? hit.value;
+      if (!byLabel.has(label)) byLabel.set(label, hit.value);
+    }
+    return [...byLabel.values()];
+  };
+
   // codex review指摘(P2、2回目): 改行を正規化(空白除去)より先に分割の境界として使う。
   // `normalizeForScore(summaryText)`をまるごと正規化してから`[\r\n]+`込みの正規表現で
   // split()すると、`\r`/`\n`は既に除去済みのため改行はセグメント境界として機能しない
@@ -731,7 +745,7 @@ export function checkCrossEntity(
       unattributedOrgMentions += orgHits.length;
       return;
     }
-    const distinctPersons = [...new Set(personHits.map((p) => p.value))];
+    const distinctPersons = dedupePersonsByLabel(personHits);
     if (distinctPersons.length === 1) {
       attribute(distinctPersons[0], orgHits, 'segment', i, segment);
       return;
@@ -742,7 +756,7 @@ export function checkCrossEntity(
     for (const clause of clauses) {
       const clauseOrgHits = findOccurrences(clause, orgVocab);
       if (clauseOrgHits.length === 0) continue;
-      const clausePersonHits = [...new Set(findOccurrences(clause, personVocab).map((p) => p.value))];
+      const clausePersonHits = dedupePersonsByLabel(findOccurrences(clause, personVocab));
       if (clausePersonHits.length !== 1) {
         ambiguousSegments++;
         continue;

@@ -408,6 +408,20 @@ test('checkCrossEntity: FactEntry(エイリアス配列)のperson側は名のみ
   assert.deepEqual(correct.consistentPairs, [{ person: '立花 文子/文子', org: 'さくらい整形外科' }]);
 });
 
+test('checkCrossEntity: 同一セグメント内に同一人物の複数エイリアスが両方出現しても2名と誤カウントしない(codex review指摘、3回目、strict-configの回帰テスト)', () => {
+  // 「立花文子(文子様)は青葉クリニックを受診」のように姓名形+名のみ形が同一セグメント内に
+  // 両方出現する場合、正規化後のalias値そのままでdedupすると「2名」と誤って数えられ、
+  // 多人数セグメント扱い(ambiguousSegments)のNOT_EVALUATEDに落ちて取り違えを検知できなく
+  // なるバグがあった。origByNormの代表ラベルでdedupすることで解消する。
+  const meta = loadMeta();
+  const r = checkCrossEntity('立花文子(文子様)は青葉クリニックを受診。', meta['D8']);
+  assert.equal(r.verdict, 'FAIL');
+  assert.equal(r.ambiguousSegments, 0);
+  assert.equal(r.findings.length, 1);
+  assert.equal(r.findings[0].person, '立花 文子/文子');
+  assert.equal(r.findings[0].org, '青葉クリニック');
+});
+
 test('checkCrossEntity: 改行区切り(箇条書き記号なし)の複数文でも取り違えを検出する(codex review指摘、2回目)', () => {
   // normalizeForScoreが\s+除去で\r/\nを先に消してしまうため、改行がセグメント境界として
   // 機能しないバグがあった(・/。等の記号が無い普通の改行区切り文では全文が1セグメントに
