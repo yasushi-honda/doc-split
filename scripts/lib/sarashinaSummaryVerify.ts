@@ -878,10 +878,14 @@ const FAIL_CAPABLE_GATES: ReadonlySet<SummaryGateEntry['id']> = new Set([
  * FAIL可のゲートがFAILまたはNOT_EVALUATEDならexitCode=1(`scripts/paddle-ocr-verify.ts`の
  * `determineExitCode`と同じ「未評価も失敗condition」の設計)。
  */
-export function determineExitCode(report: SummaryVerifyReport): 0 | 1 {
+export function determineExitCode(report: SummaryVerifyReport, opts?: { allowNotEvaluated?: boolean }): 0 | 1 {
   const anyFatal = report.records.some((r) => r.kind === 'fatal');
+  // codex review指摘(P2、3回目): `--smoke=true`(部分実行の疎通確認)ではNOT_EVALUATEDは
+  // データ不足であって異常ではないため、FAILのみを失敗条件にする(allowNotEvaluated)。
   const failCapableBad = report.gates.some(
-    (g) => FAIL_CAPABLE_GATES.has(g.id) && (g.verdict === 'FAIL' || g.verdict === 'NOT_EVALUATED')
+    (g) =>
+      FAIL_CAPABLE_GATES.has(g.id) &&
+      (g.verdict === 'FAIL' || (!opts?.allowNotEvaluated && g.verdict === 'NOT_EVALUATED'))
   );
   return report.inconclusive || anyFatal || failCapableBad ? 1 : 0;
 }
@@ -959,6 +963,16 @@ export interface CliArgs {
   out: string;
   budgetMs: number;
   docs: readonly string[];
+  /**
+   * codex review指摘(P2、3回目): `--docs=D9,D10 --runs=1`のような疎通確認用の部分実行は、
+   * D9/D10が両方role=fabricationのためcoverage-aggregateが、runs=1のためdeterminismが、
+   * それぞれ構造的にNOT_EVALUATEDになる(データ不足であって異常ではない)。9ゲート表の
+   * exitCode判定はNOT_EVALUATEDをFAIL相当として扱う設計(全10doc×複数runの本番実行を
+   * 前提)のため、そのままでは「サービスは正常なのに毎回job赤」になる。`--smoke=true`は
+   * NOT_EVALUATED起因の失敗のみexitCodeから除外する(FAIL/fatal/timedOut/inconclusiveは
+   * 従来通り失敗として扱う、疎通確認の目的を損なわない)。
+   */
+  smoke: boolean;
 }
 
 export function parseArgs(argv: string[]): CliArgs {
@@ -1015,8 +1029,9 @@ export function parseArgs(argv: string[]): CliArgs {
   }
 
   const out = args.out ?? path.join(process.cwd(), 'sarashina-summary-verify.json');
+  const smoke = args.smoke === 'true';
 
-  return { url: args.url, runs, temperature, maxTokens, out, budgetMs, docs };
+  return { url: args.url, runs, temperature, maxTokens, out, budgetMs, docs, smoke };
 }
 
 // ============================================================================

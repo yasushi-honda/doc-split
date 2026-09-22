@@ -9,7 +9,9 @@
  *
  * 実行例:
  *   npx ts-node scripts/sarashina-summary-verify.ts --runs=3
- *   npx ts-node scripts/sarashina-summary-verify.ts --docs=D9,D10 --runs=1 (疎通確認用)
+ *   npx ts-node scripts/sarashina-summary-verify.ts --docs=D9,D10 --runs=1 --smoke=true (疎通確認用。
+ *   `--smoke=true`が無いと、D9/D10のみ・runs=1という組み合わせはcoverage-aggregate/determinismが
+ *   構造的にNOT_EVALUATEDになり、サービスが正常でも必ずexitCode=1になる。codex review指摘)
  */
 
 import * as fs from 'fs';
@@ -18,6 +20,7 @@ import { requireEnvField, IdTokenProvider } from './lib/cloudRunVerifyCommon';
 import {
   DEV_ENV_PATH,
   MANIFEST_PATH,
+  REQUEST_TIMEOUT_MS,
   resolveServiceUrl,
   getServiceSnapshot,
   fetchProps,
@@ -90,8 +93,16 @@ async function main(): Promise<void> {
       const requestBody = buildChatRequestBody(prompt, { maxTokens: args.maxTokens, temperature: args.temperature });
 
       for (let run = 1; run <= args.runs; run++) {
-        if (Date.now() - loopStartedAt > args.budgetMs) {
-          console.warn(`実行時間の予算(${args.budgetMs / 60000}分)を超過したため、残りのdoc/run送信を打ち切ります。`);
+        // codex review指摘(P2、3回目): budget残量が0になっていなくても、1リクエストの
+        // 最悪ケース所要時間(REQUEST_TIMEOUT_MS、リトライのbackoff込みでさらに超過しうる)
+        // より残り予算が少なければ、このリクエストを開始した時点で予算超過が確定する。
+        // 開始前に打ち切ることで、`--budget-minutes=1`のような小さい予算でも
+        // 実際の超過を最小限に抑える。
+        const remainingBudgetMs = args.budgetMs - (Date.now() - loopStartedAt);
+        if (remainingBudgetMs < REQUEST_TIMEOUT_MS) {
+          console.warn(
+            `実行時間の予算(${args.budgetMs / 60000}分)の残りが1リクエストの最悪所要時間(${REQUEST_TIMEOUT_MS / 60000}分)未満のため、残りのdoc/run送信を打ち切ります。`
+          );
           break requestLoop;
         }
         let record: SummaryRunRecord;
@@ -159,7 +170,7 @@ async function main(): Promise<void> {
       expectedRunsPerDoc: args.runs,
     });
 
-    exitCode = determineExitCode(report);
+    exitCode = determineExitCode(report, { allowNotEvaluated: args.smoke });
     writeJsonAndSummary(report, buildStepSummaryMarkdown(report), args.out);
   } catch (err) {
     exitCode = 1;

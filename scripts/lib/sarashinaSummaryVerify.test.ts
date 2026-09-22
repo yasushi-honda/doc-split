@@ -705,6 +705,56 @@ test('determineExitCode: FAIL-capableゲートがFAILなら1', () => {
   assert.equal(determineExitCode({ ...withoutRuntimeContract, inconclusive: false }), 1);
 });
 
+test('determineExitCode: 文書化されたsmoke例(--docs=D9,D10 --runs=1)はsmoke=trueで初めて健全にPASSする(codex review指摘、3回目)', () => {
+  // D9/D10は両方role=fabricationのためcoverage-aggregateがNOT_EVALUATED、runs=1のため
+  // determinismもNOT_EVALUATEDになる(サービスは正常でもデータ不足で構造的にこうなる)。
+  // smoke=falseのままだとこれらもFAIL-capable扱いで必ず1になってしまう欠陥があった。
+  const records = [
+    evaluatedRecord({ docId: 'D9', run: 1, rawText: D9_MUST_COVER_TEXT }),
+    evaluatedRecord({ docId: 'D10', run: 1 }),
+  ];
+  const report = buildReport({
+    serviceUrl: 'https://x',
+    startedAt: 't0',
+    finishedAt: 't1',
+    serviceSnapshotStart: snap('rev-1', 'img-1'),
+    serviceSnapshotEnd: snap('rev-1', 'img-1'),
+    runtimeContract: null,
+    records,
+    metaByDoc,
+    expectedDocs: ['D9', 'D10'],
+    expectedRunsPerDoc: 1,
+  });
+  assert.equal(report.inconclusive, false);
+  const coveragePerDoc = report.gates.find((g) => g.id === 'coverage-per-doc');
+  assert.equal(coveragePerDoc?.verdict, 'PASS', `前提が崩れている: ${coveragePerDoc?.detail}`);
+  const withoutRuntimeContract = { ...report, gates: report.gates.filter((g) => g.id !== 'runtime-contract') };
+  const coverageAggregate = withoutRuntimeContract.gates.find((g) => g.id === 'coverage-aggregate');
+  const determinism = withoutRuntimeContract.gates.find((g) => g.id === 'determinism');
+  assert.equal(coverageAggregate?.verdict, 'NOT_EVALUATED');
+  assert.equal(determinism?.verdict, 'NOT_EVALUATED');
+  assert.equal(determineExitCode(withoutRuntimeContract), 1, 'smoke指定なしでは従来通り1のまま');
+  assert.equal(determineExitCode(withoutRuntimeContract, { allowNotEvaluated: true }), 0, 'smoke=trueならNOT_EVALUATEDのみでは1にならない');
+});
+
+test('determineExitCode: allowNotEvaluated:trueでもFAILは引き続き1にする(smokeモードが検知力を失わないことの確認)', () => {
+  const records = [evaluatedRecord({ docId: 'D9', run: 1, rawText: '介護サポート株式会社' })];
+  const report = buildReport({
+    serviceUrl: 'https://x',
+    startedAt: 't0',
+    finishedAt: 't1',
+    serviceSnapshotStart: snap('rev-1', 'img-1'),
+    serviceSnapshotEnd: snap('rev-1', 'img-1'),
+    runtimeContract: null,
+    records,
+    metaByDoc,
+    expectedDocs: ['D9'],
+    expectedRunsPerDoc: 1,
+  });
+  const withoutRuntimeContract = { ...report, gates: report.gates.filter((g) => g.id !== 'runtime-contract') };
+  assert.equal(determineExitCode({ ...withoutRuntimeContract, inconclusive: false }, { allowNotEvaluated: true }), 1);
+});
+
 test('determineExitCode: anyFatal単独でも1になる(pr-test-analyzer指摘: 他のinconclusiveトリガーと絡めずに検証)', () => {
   // D5(role=coverage)を2run成功させ全FAIL-capableゲートをPASSにしたうえで、
   // D9のrun2だけをfatalにする。D9run1は評価済みのままなのでdocsWithoutSuccessfulRunには
@@ -771,6 +821,13 @@ test('parseArgs: 既定値', () => {
   assert.equal(args.temperature, 0.2);
   assert.equal(args.maxTokens, 1024);
   assert.deepEqual([...args.docs], [...DOC_IDS]);
+  assert.equal(args.smoke, false);
+});
+
+test('parseArgs: --smoke=trueでsmokeモードが有効になる(codex review指摘、3回目)', () => {
+  assert.equal(parseArgs(['--smoke=true']).smoke, true);
+  assert.equal(parseArgs(['--smoke=false']).smoke, false);
+  assert.equal(parseArgs([]).smoke, false);
 });
 
 test('parseArgs: --runsは1〜10の整数のみ許可', () => {

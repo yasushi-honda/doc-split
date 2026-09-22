@@ -12,8 +12,11 @@ name: Sarashina Summary Verify (ADR-0027 PR2b)
 # 設計判断(PaddleOCR版からの意図的な相違点):
 # - environmentはdevのみ(PR2b実装順序ステップ8時点でdev限定、他環境展開は本ミッションの
 #   スコープ外)
-# - --docs/--temperature/--budget-minutesを任意入力にし、疎通確認(--docs=D9,D10 --runs=1)を
-#   本番ゲート実行(全10doc既定)と同じworkflowで両対応できるようにする
+# - --docs/--temperature/--budget-minutesを任意入力にし、疎通確認(--docs=D9,D10 --runs=1
+#   --smoke=true)を本番ゲート実行(全10doc既定)と同じworkflowで両対応できるようにする。
+#   `smoke`未指定(既定false)の部分実行はcoverage-aggregate/determinismがNOT_EVALUATEDになり
+#   サービスが正常でも必ずjobが赤くなる(codex review指摘、3回目)ため、`docs`を絞る場合は
+#   `smoke=true`も併せて指定すること
 # - concurrency groupはdeploy-sarashina-summary-${environment}と意図的に同一にする
 #   (deploy-paddle-ocr.yml/paddle-ocr-verify.ymlと同じ排他設計。計測中にデプロイが走ると
 #   サービススナップショット比較でinconclusiveになるため、自動的にキュー待ちさせる)
@@ -43,6 +46,11 @@ on:
         description: '実行時間予算(分)。空欄ならスクリプト既定値(60分)を使う'
         required: false
         default: ''
+      smoke:
+        description: '疎通確認モード。true にするとNOT_EVALUATED(データ不足)はjob失敗の条件にしない(FAIL/fatal/timedOut等は引き続き失敗扱い)。--docsで対象を絞る場合はtrue推奨'
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: deploy-sarashina-summary-${{ github.event.inputs.environment }}
@@ -89,6 +97,7 @@ jobs:
           DOCS: ${{ github.event.inputs.docs }}
           TEMPERATURE: ${{ github.event.inputs.temperature }}
           BUDGET_MINUTES: ${{ github.event.inputs.budget_minutes }}
+          SMOKE: ${{ github.event.inputs.smoke }}
           OUT_PATH: sarashina-summary-verify.json
         run: |
           set +e
@@ -98,6 +107,9 @@ jobs:
           fi
           if [ -n "$BUDGET_MINUTES" ]; then
             ARGS+=(--budget-minutes="$BUDGET_MINUTES")
+          fi
+          if [ "$SMOKE" = "true" ]; then
+            ARGS+=(--smoke=true)
           fi
           npx ts-node scripts/sarashina-summary-verify.ts "${ARGS[@]}"
           echo "exit_code=$?" >> "$GITHUB_OUTPUT"
