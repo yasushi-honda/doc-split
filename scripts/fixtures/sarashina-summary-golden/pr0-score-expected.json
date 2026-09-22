@@ -1,0 +1,1069 @@
+{
+  "generatedFrom": "scripts/fixtures/sarashina-summary-golden/pr0-verification/results/*.json",
+  "generatedAt": "2026-09-22",
+  "note": "ADR-0027 PR2b: scripts/lib/sarashinaSummaryScore.ts(scoreSummary)をPR0結果JSON(28run)へ実際に実行した結果そのものを期待値として固定する(PR2aの教訓: プロトタイプでの実測は設計検証であり実装の証明ではない)。D5〜D8のmustCoverは暫定値(meta.json _note参照)であり、正式gate run実行後に確定させる運用(6b節参照、baseline収集runの位置づけ)。",
+  "summaryScoreConfigVersion": "a5025e3f",
+  "runsScanned": 28,
+  "summary": {
+    "passed": 28,
+    "blocked": 0,
+    "warned": 28,
+    "blockingReasonCounts": {}
+  },
+  "runs": [
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_d1d4_pr0.json",
+      "doc": "D1",
+      "run": 1,
+      "coverage": {
+        "applicable": true,
+        "mustCoverSatisfied": true,
+        "minCoveredSatisfied": true,
+        "coveredCount": 7,
+        "totalCount": 7,
+        "missingFacts": [],
+        "missingMustCover": []
+      },
+      "numeric": {
+        "fabricatedCount": 0,
+        "findings": []
+      },
+      "amount": {
+        "applicable": false,
+        "mentions": []
+      },
+      "crossEntity": {
+        "applicable": false,
+        "verdict": "NOT_EVALUATED",
+        "findings": []
+      },
+      "output": {
+        "anomalies": [
+          "eos-token"
+        ]
+      },
+      "blocking": [],
+      "warnings": [
+        "出力形状: eos-token"
+      ],
+      "passed": true
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_d1d4_pr0.json",
+      "doc": "D1",
+      "run": 2,
+      "coverage": {
+        "applicable": true,
+        "mustCoverSatisfied": true,
+        "minCoveredSatisfied": true,
+        "coveredCount": 7,
+        "totalCount": 7,
+        "missingFacts": [],
+        "missingMustCover": []
+      },
+      "numeric": {
+        "fabricatedCount": 0,
+        "findings": []
+      },
+      "amount": {
+        "applicable": false,
+        "mentions": []
+      },
+      "crossEntity": {
+        "applicable": false,
+        "verdict": "NOT_EVALUATED",
+        "findings": []
+      },
+      "output": {
+        "anomalies": [
+          "eos-token"
+        ]
+      },
+      "blocking": [],
+      "warnings": [
+        "出力形状: eos-token"
+      ],
+      "passed": true
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_d1d4_pr0.json",
+      "doc": "D1",
+      "run": 3,
+      "coverage": {
+        "applicable": true,
+        "mustCoverSatisfied": true,
+        "minCoveredSatisfied": true,
+        "coveredCount": 7,
+        "totalCount": 7,
+        "missingFacts": [],
+        "missingMustCover": []
+      },
+      "numeric": {
+        "fabricatedCount": 0,
+        "findings": []
+      },
+      "amount": {
+        "applicable": false,
+        "mentions": []
+      },
+      "crossEntity": {
+        "applicable": false,
+        "verdict": "NOT_EVALUATED",
+        "findings": []
+      },
+      "output": {
+        "anomalies": [
+          "eos-token"
+        ]
+      },
+      "blocking": [],
+      "warnings": [
+        "出力形状: eos-token"
+      ],
+      "passed": true
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_d1d4_pr0.json",
+      "doc": "D2",
+      "run": 1,
+      "coverage": {
+        "applicable": true,
+        "mustCoverSatisfied": true,
+        "minCoveredSatisfied": true,
+        "coveredCount": 6,
+        "totalCount": 7,
+        "missingFacts": [
+          "要介護3"
+        ],
+        "missingMustCover": []
+      },
+      "numeric": {
+        "fabricatedCount": 0,
+        "findings": []
+      },
+      "amount": {
+        "applicable": false,
+        "mentions": []
+      },
+      "crossEntity": {
+        "applicable": false,
+        "verdict": "NOT_EVALUATED",
+        "findings": []
+      },
+      "output": {
+        "anomalies": [
+          "eos-token"
+        ]
+      },
+      "blocking": [],
+      "warnings": [
+        "出力形状: eos-token"
+      ],
+      "passed": true
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_d1d4_pr0.json",
+      "doc": "D2",
+      "run": 2,
+      "coverage": {
+        "applicable": true,
+        "mustCoverSatisfied": true,
+        "minCoveredSatisfied": true,
+        "coveredCount": 7,
+        "totalCount": 7,
+        "missingFacts": [],
+        "missingMustCover": []
+      },
+      "numeric": {
+        "fabricatedCount": 0,
+        "findings": []
+      },
+      "amount": {
+        "applicable": false,
+        "mentions": []
+      },
+      "crossEntity": {
+        "applicable": false,
+        "verdict": "NOT_EVALUATED",
+        "findings": []
+      },
+      "output": {
+        "anomalies": [
+          "eos-token"
+        ]
+      },
+      "blocking": [],
+      "warnings": [
+        "出力形状: eos-token"
+      ],
+      "passed": true
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_d1d4_pr0.json",
+      "doc": "D2",
+      "run": 3,
+      "coverage": {
+        "applicable": true,
+        "mustCoverSatisfied": true,
+        "minCoveredSatisfied": true,
+        "coveredCount": 7,
+        "totalCount": 7,
+        "missingFacts": [],
+        "missingMustCover": []
+      },
+      "numeric": {
+        "fabricatedCount": 0,
+        "findings": []
+      },
+      "amount": {
+        "applicable": false,
+        "mentions": []
+      },
+      "crossEntity": {
+        "applicable": false,
+        "verdict": "NOT_EVALUATED",
+        "findings": []
+      },
+      "output": {
+        "anomalies": [
+          "eos-token"
+        ]
+      },
+      "blocking": [],
+      "warnings": [
+        "出力形状: eos-token"
+      ],
+      "passed": true
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_d1d4_pr0.json",
+      "doc": "D3",
+      "run": 1,
+      "coverage": {
+        "applicable": true,
+        "mustCoverSatisfied": true,
+        "minCoveredSatisfied": true,
+        "coveredCount": 6,
+        "totalCount": 6,
+        "missingFacts": [],
+        "missingMustCover": []
+      },
+      "numeric": {
+        "fabricatedCount": 0,
+        "findings": []
+      },
+      "amount": {
+        "applicable": false,
+        "mentions": []
+      },
+      "crossEntity": {
+        "applicable": false,
+        "verdict": "NOT_EVALUATED",
+        "findings": []
+      },
+      "output": {
+        "anomalies": [
+          "eos-token"
+        ]
+      },
+      "blocking": [],
+      "warnings": [
+        "出力形状: eos-token"
+      ],
+      "passed": true
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_d1d4_pr0.json",
+      "doc": "D3",
+      "run": 2,
+      "coverage": {
+        "applicable": true,
+        "mustCoverSatisfied": true,
+        "minCoveredSatisfied": true,
+        "coveredCount": 6,
+        "totalCount": 6,
+        "missingFacts": [],
+        "missingMustCover": []
+      },
+      "numeric": {
+        "fabricatedCount": 0,
+        "findings": []
+      },
+      "amount": {
+        "applicable": false,
+        "mentions": []
+      },
+      "crossEntity": {
+        "applicable": false,
+        "verdict": "NOT_EVALUATED",
+        "findings": []
+      },
+      "output": {
+        "anomalies": [
+          "eos-token"
+        ]
+      },
+      "blocking": [],
+      "warnings": [
+        "出力形状: eos-token"
+      ],
+      "passed": true
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_d1d4_pr0.json",
+      "doc": "D3",
+      "run": 3,
+      "coverage": {
+        "applicable": true,
+        "mustCoverSatisfied": true,
+        "minCoveredSatisfied": true,
+        "coveredCount": 6,
+        "totalCount": 6,
+        "missingFacts": [],
+        "missingMustCover": []
+      },
+      "numeric": {
+        "fabricatedCount": 0,
+        "findings": []
+      },
+      "amount": {
+        "applicable": false,
+        "mentions": []
+      },
+      "crossEntity": {
+        "applicable": false,
+        "verdict": "NOT_EVALUATED",
+        "findings": []
+      },
+      "output": {
+        "anomalies": [
+          "eos-token"
+        ]
+      },
+      "blocking": [],
+      "warnings": [
+        "出力形状: eos-token"
+      ],
+      "passed": true
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_d1d4_pr0.json",
+      "doc": "D4",
+      "run": 1,
+      "coverage": {
+        "applicable": true,
+        "mustCoverSatisfied": true,
+        "minCoveredSatisfied": true,
+        "coveredCount": 7,
+        "totalCount": 7,
+        "missingFacts": [],
+        "missingMustCover": []
+      },
+      "numeric": {
+        "fabricatedCount": 0,
+        "findings": []
+      },
+      "amount": {
+        "applicable": false,
+        "mentions": []
+      },
+      "crossEntity": {
+        "applicable": false,
+        "verdict": "NOT_EVALUATED",
+        "findings": []
+      },
+      "output": {
+        "anomalies": [
+          "eos-token"
+        ]
+      },
+      "blocking": [],
+      "warnings": [
+        "出力形状: eos-token"
+      ],
+      "passed": true
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_d1d4_pr0.json",
+      "doc": "D4",
+      "run": 2,
+      "coverage": {
+        "applicable": true,
+        "mustCoverSatisfied": true,
+        "minCoveredSatisfied": true,
+        "coveredCount": 7,
+        "totalCount": 7,
+        "missingFacts": [],
+        "missingMustCover": []
+      },
+      "numeric": {
+        "fabricatedCount": 0,
+        "findings": []
+      },
+      "amount": {
+        "applicable": false,
+        "mentions": []
+      },
+      "crossEntity": {
+        "applicable": false,
+        "verdict": "NOT_EVALUATED",
+        "findings": []
+      },
+      "output": {
+        "anomalies": [
+          "eos-token"
+        ]
+      },
+      "blocking": [],
+      "warnings": [
+        "出力形状: eos-token"
+      ],
+      "passed": true
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_d1d4_pr0.json",
+      "doc": "D4",
+      "run": 3,
+      "coverage": {
+        "applicable": true,
+        "mustCoverSatisfied": true,
+        "minCoveredSatisfied": true,
+        "coveredCount": 7,
+        "totalCount": 7,
+        "missingFacts": [],
+        "missingMustCover": []
+      },
+      "numeric": {
+        "fabricatedCount": 0,
+        "findings": []
+      },
+      "amount": {
+        "applicable": false,
+        "mentions": []
+      },
+      "crossEntity": {
+        "applicable": false,
+        "verdict": "NOT_EVALUATED",
+        "findings": []
+      },
+      "output": {
+        "anomalies": [
+          "eos-token"
+        ]
+      },
+      "blocking": [],
+      "warnings": [
+        "出力形状: eos-token"
+      ],
+      "passed": true
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_t00_pr0.json",
+      "doc": "D9",
+      "run": 1,
+      "coverage": {
+        "applicable": true,
+        "mustCoverSatisfied": true,
+        "minCoveredSatisfied": true,
+        "coveredCount": 2,
+        "totalCount": 3,
+        "missingFacts": [
+          "歩行器"
+        ],
+        "missingMustCover": []
+      },
+      "numeric": {
+        "fabricatedCount": 0,
+        "findings": []
+      },
+      "amount": {
+        "applicable": false,
+        "mentions": []
+      },
+      "crossEntity": {
+        "applicable": false,
+        "verdict": "NOT_EVALUATED",
+        "findings": []
+      },
+      "output": {
+        "anomalies": [
+          "eos-token"
+        ]
+      },
+      "blocking": [],
+      "warnings": [
+        "出力形状: eos-token"
+      ],
+      "passed": true
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_t00_pr0.json",
+      "doc": "D9",
+      "run": 2,
+      "coverage": {
+        "applicable": true,
+        "mustCoverSatisfied": true,
+        "minCoveredSatisfied": true,
+        "coveredCount": 2,
+        "totalCount": 3,
+        "missingFacts": [
+          "歩行器"
+        ],
+        "missingMustCover": []
+      },
+      "numeric": {
+        "fabricatedCount": 0,
+        "findings": []
+      },
+      "amount": {
+        "applicable": false,
+        "mentions": []
+      },
+      "crossEntity": {
+        "applicable": false,
+        "verdict": "NOT_EVALUATED",
+        "findings": []
+      },
+      "output": {
+        "anomalies": [
+          "eos-token"
+        ]
+      },
+      "blocking": [],
+      "warnings": [
+        "出力形状: eos-token"
+      ],
+      "passed": true
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_t00_pr0.json",
+      "doc": "D9",
+      "run": 3,
+      "coverage": {
+        "applicable": true,
+        "mustCoverSatisfied": true,
+        "minCoveredSatisfied": true,
+        "coveredCount": 2,
+        "totalCount": 3,
+        "missingFacts": [
+          "歩行器"
+        ],
+        "missingMustCover": []
+      },
+      "numeric": {
+        "fabricatedCount": 0,
+        "findings": []
+      },
+      "amount": {
+        "applicable": false,
+        "mentions": []
+      },
+      "crossEntity": {
+        "applicable": false,
+        "verdict": "NOT_EVALUATED",
+        "findings": []
+      },
+      "output": {
+        "anomalies": [
+          "eos-token"
+        ]
+      },
+      "blocking": [],
+      "warnings": [
+        "出力形状: eos-token"
+      ],
+      "passed": true
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_t00_pr0.json",
+      "doc": "D10",
+      "run": 1,
+      "coverage": {
+        "applicable": false,
+        "mustCoverSatisfied": true,
+        "minCoveredSatisfied": true,
+        "coveredCount": 0,
+        "totalCount": 0,
+        "missingFacts": [],
+        "missingMustCover": []
+      },
+      "numeric": {
+        "fabricatedCount": 0,
+        "findings": []
+      },
+      "amount": {
+        "applicable": true,
+        "mentions": []
+      },
+      "crossEntity": {
+        "applicable": false,
+        "verdict": "NOT_EVALUATED",
+        "findings": []
+      },
+      "output": {
+        "anomalies": [
+          "eos-token"
+        ]
+      },
+      "blocking": [],
+      "warnings": [
+        "出力形状: eos-token"
+      ],
+      "passed": true
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_t00_pr0.json",
+      "doc": "D10",
+      "run": 2,
+      "coverage": {
+        "applicable": false,
+        "mustCoverSatisfied": true,
+        "minCoveredSatisfied": true,
+        "coveredCount": 0,
+        "totalCount": 0,
+        "missingFacts": [],
+        "missingMustCover": []
+      },
+      "numeric": {
+        "fabricatedCount": 0,
+        "findings": []
+      },
+      "amount": {
+        "applicable": true,
+        "mentions": []
+      },
+      "crossEntity": {
+        "applicable": false,
+        "verdict": "NOT_EVALUATED",
+        "findings": []
+      },
+      "output": {
+        "anomalies": [
+          "eos-token"
+        ]
+      },
+      "blocking": [],
+      "warnings": [
+        "出力形状: eos-token"
+      ],
+      "passed": true
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_t00_pr0.json",
+      "doc": "D10",
+      "run": 3,
+      "coverage": {
+        "applicable": false,
+        "mustCoverSatisfied": true,
+        "minCoveredSatisfied": true,
+        "coveredCount": 0,
+        "totalCount": 0,
+        "missingFacts": [],
+        "missingMustCover": []
+      },
+      "numeric": {
+        "fabricatedCount": 0,
+        "findings": []
+      },
+      "amount": {
+        "applicable": true,
+        "mentions": []
+      },
+      "crossEntity": {
+        "applicable": false,
+        "verdict": "NOT_EVALUATED",
+        "findings": []
+      },
+      "output": {
+        "anomalies": [
+          "eos-token"
+        ]
+      },
+      "blocking": [],
+      "warnings": [
+        "出力形状: eos-token"
+      ],
+      "passed": true
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_t02_pr0.json",
+      "doc": "D9",
+      "run": 1,
+      "coverage": {
+        "applicable": true,
+        "mustCoverSatisfied": true,
+        "minCoveredSatisfied": true,
+        "coveredCount": 2,
+        "totalCount": 3,
+        "missingFacts": [
+          "歩行器"
+        ],
+        "missingMustCover": []
+      },
+      "numeric": {
+        "fabricatedCount": 0,
+        "findings": []
+      },
+      "amount": {
+        "applicable": false,
+        "mentions": []
+      },
+      "crossEntity": {
+        "applicable": false,
+        "verdict": "NOT_EVALUATED",
+        "findings": []
+      },
+      "output": {
+        "anomalies": [
+          "eos-token"
+        ]
+      },
+      "blocking": [],
+      "warnings": [
+        "出力形状: eos-token"
+      ],
+      "passed": true
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_t02_pr0.json",
+      "doc": "D9",
+      "run": 2,
+      "coverage": {
+        "applicable": true,
+        "mustCoverSatisfied": true,
+        "minCoveredSatisfied": true,
+        "coveredCount": 2,
+        "totalCount": 3,
+        "missingFacts": [
+          "歩行器"
+        ],
+        "missingMustCover": []
+      },
+      "numeric": {
+        "fabricatedCount": 0,
+        "findings": []
+      },
+      "amount": {
+        "applicable": false,
+        "mentions": []
+      },
+      "crossEntity": {
+        "applicable": false,
+        "verdict": "NOT_EVALUATED",
+        "findings": []
+      },
+      "output": {
+        "anomalies": [
+          "eos-token"
+        ]
+      },
+      "blocking": [],
+      "warnings": [
+        "出力形状: eos-token"
+      ],
+      "passed": true
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_t02_pr0.json",
+      "doc": "D9",
+      "run": 3,
+      "coverage": {
+        "applicable": true,
+        "mustCoverSatisfied": true,
+        "minCoveredSatisfied": true,
+        "coveredCount": 2,
+        "totalCount": 3,
+        "missingFacts": [
+          "歩行器"
+        ],
+        "missingMustCover": []
+      },
+      "numeric": {
+        "fabricatedCount": 0,
+        "findings": []
+      },
+      "amount": {
+        "applicable": false,
+        "mentions": []
+      },
+      "crossEntity": {
+        "applicable": false,
+        "verdict": "NOT_EVALUATED",
+        "findings": []
+      },
+      "output": {
+        "anomalies": [
+          "eos-token"
+        ]
+      },
+      "blocking": [],
+      "warnings": [
+        "出力形状: eos-token"
+      ],
+      "passed": true
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_t02_pr0.json",
+      "doc": "D9",
+      "run": 4,
+      "coverage": {
+        "applicable": true,
+        "mustCoverSatisfied": true,
+        "minCoveredSatisfied": true,
+        "coveredCount": 2,
+        "totalCount": 3,
+        "missingFacts": [
+          "歩行器"
+        ],
+        "missingMustCover": []
+      },
+      "numeric": {
+        "fabricatedCount": 0,
+        "findings": []
+      },
+      "amount": {
+        "applicable": false,
+        "mentions": []
+      },
+      "crossEntity": {
+        "applicable": false,
+        "verdict": "NOT_EVALUATED",
+        "findings": []
+      },
+      "output": {
+        "anomalies": [
+          "eos-token"
+        ]
+      },
+      "blocking": [],
+      "warnings": [
+        "出力形状: eos-token"
+      ],
+      "passed": true
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_t02_pr0.json",
+      "doc": "D9",
+      "run": 5,
+      "coverage": {
+        "applicable": true,
+        "mustCoverSatisfied": true,
+        "minCoveredSatisfied": true,
+        "coveredCount": 2,
+        "totalCount": 3,
+        "missingFacts": [
+          "歩行器"
+        ],
+        "missingMustCover": []
+      },
+      "numeric": {
+        "fabricatedCount": 0,
+        "findings": []
+      },
+      "amount": {
+        "applicable": false,
+        "mentions": []
+      },
+      "crossEntity": {
+        "applicable": false,
+        "verdict": "NOT_EVALUATED",
+        "findings": []
+      },
+      "output": {
+        "anomalies": [
+          "eos-token"
+        ]
+      },
+      "blocking": [],
+      "warnings": [
+        "出力形状: eos-token"
+      ],
+      "passed": true
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_t02_pr0.json",
+      "doc": "D10",
+      "run": 1,
+      "coverage": {
+        "applicable": false,
+        "mustCoverSatisfied": true,
+        "minCoveredSatisfied": true,
+        "coveredCount": 0,
+        "totalCount": 0,
+        "missingFacts": [],
+        "missingMustCover": []
+      },
+      "numeric": {
+        "fabricatedCount": 0,
+        "findings": []
+      },
+      "amount": {
+        "applicable": true,
+        "mentions": []
+      },
+      "crossEntity": {
+        "applicable": false,
+        "verdict": "NOT_EVALUATED",
+        "findings": []
+      },
+      "output": {
+        "anomalies": [
+          "eos-token"
+        ]
+      },
+      "blocking": [],
+      "warnings": [
+        "出力形状: eos-token"
+      ],
+      "passed": true
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_t02_pr0.json",
+      "doc": "D10",
+      "run": 2,
+      "coverage": {
+        "applicable": false,
+        "mustCoverSatisfied": true,
+        "minCoveredSatisfied": true,
+        "coveredCount": 0,
+        "totalCount": 0,
+        "missingFacts": [],
+        "missingMustCover": []
+      },
+      "numeric": {
+        "fabricatedCount": 0,
+        "findings": []
+      },
+      "amount": {
+        "applicable": true,
+        "mentions": []
+      },
+      "crossEntity": {
+        "applicable": false,
+        "verdict": "NOT_EVALUATED",
+        "findings": []
+      },
+      "output": {
+        "anomalies": [
+          "eos-token"
+        ]
+      },
+      "blocking": [],
+      "warnings": [
+        "出力形状: eos-token"
+      ],
+      "passed": true
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_t02_pr0.json",
+      "doc": "D10",
+      "run": 3,
+      "coverage": {
+        "applicable": false,
+        "mustCoverSatisfied": true,
+        "minCoveredSatisfied": true,
+        "coveredCount": 0,
+        "totalCount": 0,
+        "missingFacts": [],
+        "missingMustCover": []
+      },
+      "numeric": {
+        "fabricatedCount": 0,
+        "findings": []
+      },
+      "amount": {
+        "applicable": true,
+        "mentions": []
+      },
+      "crossEntity": {
+        "applicable": false,
+        "verdict": "NOT_EVALUATED",
+        "findings": []
+      },
+      "output": {
+        "anomalies": [
+          "eos-token"
+        ]
+      },
+      "blocking": [],
+      "warnings": [
+        "出力形状: eos-token"
+      ],
+      "passed": true
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_t02_pr0.json",
+      "doc": "D10",
+      "run": 4,
+      "coverage": {
+        "applicable": false,
+        "mustCoverSatisfied": true,
+        "minCoveredSatisfied": true,
+        "coveredCount": 0,
+        "totalCount": 0,
+        "missingFacts": [],
+        "missingMustCover": []
+      },
+      "numeric": {
+        "fabricatedCount": 0,
+        "findings": []
+      },
+      "amount": {
+        "applicable": true,
+        "mentions": []
+      },
+      "crossEntity": {
+        "applicable": false,
+        "verdict": "NOT_EVALUATED",
+        "findings": []
+      },
+      "output": {
+        "anomalies": [
+          "eos-token"
+        ]
+      },
+      "blocking": [],
+      "warnings": [
+        "出力形状: eos-token"
+      ],
+      "passed": true
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_t02_pr0.json",
+      "doc": "D10",
+      "run": 5,
+      "coverage": {
+        "applicable": false,
+        "mustCoverSatisfied": true,
+        "minCoveredSatisfied": true,
+        "coveredCount": 0,
+        "totalCount": 0,
+        "missingFacts": [],
+        "missingMustCover": []
+      },
+      "numeric": {
+        "fabricatedCount": 0,
+        "findings": []
+      },
+      "amount": {
+        "applicable": true,
+        "mentions": []
+      },
+      "crossEntity": {
+        "applicable": false,
+        "verdict": "NOT_EVALUATED",
+        "findings": []
+      },
+      "output": {
+        "anomalies": [
+          "eos-token"
+        ]
+      },
+      "blocking": [],
+      "warnings": [
+        "出力形状: eos-token"
+      ],
+      "passed": true
+    }
+  ]
+}

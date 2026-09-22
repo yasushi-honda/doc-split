@@ -4,6 +4,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as crypto from 'node:crypto';
 import { FABRICATION_SCAN_CONFIG_VERSION } from '../../shared/summaryFabricationScan';
+import { SUMMARY_SCORE_CONFIG_VERSION } from './sarashinaSummaryScore';
 
 /**
  * ADR-0027 PR2a: scripts/fixtures/sarashina-summary-golden/manifest.json が以下4方向で
@@ -17,6 +18,14 @@ import { FABRICATION_SCAN_CONFIG_VERSION } from '../../shared/summaryFabrication
  * (4) manifest.maxInputChars が本番 summaryPromptBuilder.ts の MAX_SUMMARY_INPUT_LENGTH、
  *     manifest.fabricationScanConfigVersion が shared/summaryFabricationScan.ts の
  *     FABRICATION_SCAN_CONFIG_VERSION と一致
+ * (5) ADR-0027 PR2b: manifest.summaryScoreConfigVersion が scripts/lib/sarashinaSummaryScore.ts の
+ *     SUMMARY_SCORE_CONFIG_VERSION と一致
+ * (6) ADR-0027 PR2b: manifest.runtimeContract(モデル・プロンプト・fixture hashと同じ「実行前の
+ *     静的検証」層、`/plan-crossreview` codex指摘7の3層区分(a: /props実測値、b: gcloud run
+ *     services describe、c: 本ファイル)のうち(c)を担当)が services/sarashina-summary/Dockerfile の
+ *     ENV設定・expected-model-hashes.json のfileNameと一致。ランタイムでの実測(a)(b)は
+ *     scripts/lib/sarashinaSummaryVerify.ts(PR2b実装順序ステップ4)の責務であり、本テストは
+ *     「GGUF実体hashをruntimeで検証済み」ことまでは主張しない。
  */
 
 const GOLDEN_DIR = path.join(__dirname, '..', 'fixtures', 'sarashina-summary-golden');
@@ -41,6 +50,14 @@ const SUMMARY_PROMPT_BUILDER_PATH = path.join(
   'ocr',
   'summaryPromptBuilder.ts'
 );
+const SARASHINA_DOCKERFILE_PATH = path.join(
+  __dirname,
+  '..',
+  '..',
+  'services',
+  'sarashina-summary',
+  'Dockerfile'
+);
 
 function loadJson(p: string): Record<string, unknown> {
   return JSON.parse(fs.readFileSync(p, 'utf-8'));
@@ -59,6 +76,7 @@ interface Manifest {
   promptV2Sha256: string;
   maxInputChars: number;
   fabricationScanConfigVersion: string;
+  summaryScoreConfigVersion: string;
   docs: Record<string, ManifestDoc>;
   model: {
     hfRepoId: string;
@@ -67,6 +85,12 @@ interface Manifest {
     sha256: string;
     baseImageDigest: string;
     baseImageBuildInfo: string;
+  };
+  runtimeContract: {
+    modelFtype: string;
+    nCtx: number;
+    totalSlots: number;
+    modelAlias: string;
   };
 }
 
@@ -159,4 +183,49 @@ test('sarashinaSummaryGoldenDrift: manifest.maxInputCharsがbench.pyのMAX_INPUT
 test('sarashinaSummaryGoldenDrift: manifest.fabricationScanConfigVersionがshared/summaryFabricationScan.tsの現行設定と一致すること', () => {
   const manifest = loadJson(MANIFEST_PATH) as unknown as Manifest;
   assert.equal(manifest.fabricationScanConfigVersion, FABRICATION_SCAN_CONFIG_VERSION);
+});
+
+test('sarashinaSummaryGoldenDrift: manifest.summaryScoreConfigVersionがscripts/lib/sarashinaSummaryScore.tsの現行設定と一致すること(ADR-0027 PR2b)', () => {
+  const manifest = loadJson(MANIFEST_PATH) as unknown as Manifest;
+  assert.equal(
+    manifest.summaryScoreConfigVersion,
+    SUMMARY_SCORE_CONFIG_VERSION,
+    'scoreSummaryの既定設定(DEFAULT_SUMMARY_SCORE_CONFIG)が変更された可能性があります。意図した変更で' +
+      'あればpr0-score-expected.jsonを実データ再実行のうえ再生成し、本ファイルを同時更新してください' +
+      '(無検証での更新は禁止)。'
+  );
+});
+
+test('sarashinaSummaryGoldenDrift: manifest.runtimeContractがservices/sarashina-summary/Dockerfileと一致すること(ADR-0027 PR2b、静的層のみ)', () => {
+  // codex指摘7(`/plan-crossreview`)への対応: `/props`実測(a)・gcloud run services describe実測(b)
+  // ではなく、本テストが担当するのは(c)リポジトリ内の静的な設定同士の突合のみ。実行前に検知できる
+  // 範囲(Dockerfileのビルド時定数)に限定し、「runtimeで検証済み」という主張はしない。
+  const manifest = loadJson(MANIFEST_PATH) as unknown as Manifest;
+  const dockerfile = fs.readFileSync(SARASHINA_DOCKERFILE_PATH, 'utf-8');
+
+  const ctxMatch = dockerfile.match(/LLAMA_ARG_CTX_SIZE=(\d+)/);
+  assert.ok(ctxMatch, 'DockerfileからLLAMA_ARG_CTX_SIZEの値を抽出できませんでした');
+  assert.equal(manifest.runtimeContract.nCtx, Number(ctxMatch![1]));
+
+  const parallelMatch = dockerfile.match(/LLAMA_ARG_N_PARALLEL=(\d+)/);
+  assert.ok(parallelMatch, 'DockerfileからLLAMA_ARG_N_PARALLELの値を抽出できませんでした');
+  assert.equal(manifest.runtimeContract.totalSlots, Number(parallelMatch![1]));
+
+  const aliasMatch = dockerfile.match(/LLAMA_ARG_ALIAS=(\S+?)\s*\\?$/m);
+  assert.ok(aliasMatch, 'DockerfileからLLAMA_ARG_ALIASの値を抽出できませんでした');
+  assert.equal(manifest.runtimeContract.modelAlias, aliasMatch![1]);
+});
+
+test('sarashinaSummaryGoldenDrift: manifest.runtimeContract.modelFtypeがexpected-model-hashes.jsonのfileNameと一致すること(ADR-0027 PR2b)', () => {
+  const manifest = loadJson(MANIFEST_PATH) as unknown as Manifest;
+  const expected = loadJson(EXPECTED_HASHES_PATH) as {
+    textGeneration: { fileName: string };
+  };
+  const ftypeMatch = expected.textGeneration.fileName.match(/-([A-Za-z0-9_]+)\.gguf$/);
+  assert.ok(ftypeMatch, 'expected-model-hashes.jsonのfileNameから量子化タイプを抽出できませんでした');
+  assert.equal(manifest.runtimeContract.modelFtype, ftypeMatch![1]);
+  assert.ok(
+    manifest.runtimeContract.modelAlias.endsWith(manifest.runtimeContract.modelFtype),
+    'runtimeContract.modelAliasの末尾がmodelFtypeと整合していません'
+  );
 });
