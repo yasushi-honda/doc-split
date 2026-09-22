@@ -477,7 +477,13 @@ export function checkAmountProhibition(
 // ④cross-entity(対象者取り違え)判定
 // ============================================================================
 
-const SEGMENT_DELIMITER_RE = /[\r\n]+|・|。|;|；/;
+/**
+ * codex review指摘(P2、2回目): 改行はセグメント区切りとして機能しない設計ミスがあった
+ * (`normalizeForScore`が`\s+`除去で`\r`/`\n`を先に消してしまうため、`split()`時点で
+ * この正規表現の`[\r\n]+`枝は既にマッチ対象が存在しないdead codeだった)。改行分割は
+ * `checkCrossEntity`側で正規化前に行う(下記参照)ため、本正規表現からは除外する。
+ */
+const SEGMENT_DELIMITER_RE = /・|。|;|；/;
 const CLAUSE_DELIMITER_RE = /[、,，]/;
 
 export type CrossEntityVerdict = 'PASS' | 'FAIL' | 'NOT_EVALUATED';
@@ -628,8 +634,16 @@ export function checkCrossEntity(
     }
   };
 
-  const normalized = normalizeForScore(summaryText);
-  const segments = normalized.split(segmentDelimiter).filter((s) => s.length > 0);
+  // codex review指摘(P2、2回目): 改行を正規化(空白除去)より先に分割の境界として使う。
+  // `normalizeForScore(summaryText)`をまるごと正規化してから`[\r\n]+`込みの正規表現で
+  // split()すると、`\r`/`\n`は既に除去済みのため改行はセグメント境界として機能しない
+  // (通常の改行区切り箇条書き・プレーンな複数文が1セグメントに結合され、取り違えが
+  // ambiguousSegments扱いのNOT_EVALUATEDに落ちて検知漏れになっていた)。行ごとに
+  // normalizeForScoreを適用してから`segmentDelimiter`(・/。/;/；)でさらに分割する。
+  const segments = summaryText
+    .split(/\r\n|\r|\n/)
+    .flatMap((line) => normalizeForScore(line).split(segmentDelimiter))
+    .filter((s) => s.length > 0);
 
   segments.forEach((segment, i) => {
     const orgHits = findOccurrences(segment, orgVocab);

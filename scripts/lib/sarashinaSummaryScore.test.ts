@@ -346,6 +346,23 @@ test('checkCrossEntity: セグメント内で人物1名+誤った事業所はFAI
   assert.deepEqual(r.findings[0].expectedPersons, ['立花 文子']);
 });
 
+test('checkCrossEntity: 改行区切り(箇条書き記号なし)の複数文でも取り違えを検出する(codex review指摘、2回目)', () => {
+  // normalizeForScoreが\s+除去で\r/\nを先に消してしまうため、改行がセグメント境界として
+  // 機能しないバグがあった(・/。等の記号が無い普通の改行区切り文では全文が1セグメントに
+  // 結合され、取り違えがあってもambiguousSegments扱いのNOT_EVALUATEDに落ちていた)。
+  const meta = loadMeta();
+  const r = checkCrossEntity('立花 誠一様はさくらい整形外科を受診\n立花 文子様は青葉クリニックを受診', meta['D8']);
+  assert.equal(r.verdict, 'FAIL');
+  assert.equal(r.findings.length, 2);
+});
+
+test('checkCrossEntity: 改行区切りの正ペアはPASSする(改行修正の健全性確認)', () => {
+  const meta = loadMeta();
+  const r = checkCrossEntity('立花 誠一様は青葉クリニックを受診\n立花 文子様はさくらい整形外科を受診', meta['D8']);
+  assert.equal(r.verdict, 'PASS');
+  assert.equal(r.consistentPairs.length, 2);
+});
+
 test('checkCrossEntity: 括弧付き列挙の節分割でも取り違えを検出する(scope:clause)', () => {
   const meta = loadMeta();
   const r = checkCrossEntity(
