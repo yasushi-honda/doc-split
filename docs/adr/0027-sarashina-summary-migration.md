@@ -83,7 +83,7 @@ PaddleOCR(`services/paddle-ocr/`)を複製元として実装する過程で、ll
 4. **出力トークン上限の正確な仕様**: クライアントが`max_tokens`を省略した場合のみ`LLAMA_ARG_N_PREDICT`がフォールバック上限として効く。明示指定時はクランプされずそのまま通るため、`LLAMA_ARG_N_PREDICT`を「効かないフラグ」として将来削除しないこと。呼び出し元は必ず`max_tokens`を明示すること
 5. **Cloud Run 429の発生源はllama.cppではなくCloud Run自体**: llama.cppが返しうるのは503のみで429は返さない。`--max-instances`は「コスト上限」であって「逐次実行の保証」ではなく、逐次実行の担保はクライアント側(`generateSummaryBatch`の逐次ループ+Firestoreのclaim/所有権トークン、PR4)の責務とする
 6. **メモリ32GiBはPR0実測条件の保存であり実需要ではない**: 実需要は約5〜6GiBと試算されるが、PR1では32GiBを据え置く(PR0実測条件の再現性を保つため)。削減はPR2以降で実peak RSSを計測してから判断する
-7. **runtime SAへの`iam.serviceAccountUser`(actAs)付与はPR1bで今すぐ行う**: PaddleOCR版が`run.invoker`をPR4へ委譲しているのとは性質が異なる(actAsは呼び出し元の存在と無関係にデプロイ実行者の権限の話であり、今すぐ付与できる)
+7. **runtime SAへの`iam.serviceAccountUser`(actAs)付与はPR1c(デプロイワークフロー実装時)に行う**(PR1b実装時に方針修正、当初はPR1bで今すぐ行う想定だった): PaddleOCR版の実際の構造(`docs/context/delivery-and-update-guide.md`)を確認した結果、actAs付与はインフラ準備スクリプト(PaddleOCR版のPR3相当)ではなく、デプロイワークフロー(PaddleOCR版のPR4b相当)側でデプロイSAへの恒久権限として付与されていることが判明した。「runtime SAが実際に使われる段階で権限を付与する」という一貫した設計であり、Sarashina版もこの構造に合わせる。PR1bの`scripts/setup-sarashina-summary-infra.sh`とdelivery-and-update-guide.mdには、PR1c実装時に付与すべきactAsコマンドを明記済み
 8. **`/health`のdigest検証はできない**: PaddleOCR版は`/health`レスポンスの`imageDigest`フィールドで検証しているが、llama.cppの`/health`は`{"status":"ok"}`のみ。代替として`/props`の`build_info`/`model_alias`と`gcloud run services describe`のimage一致を組み合わせる
 
 ## Consequences
