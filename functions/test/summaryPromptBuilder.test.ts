@@ -88,8 +88,16 @@ describe('buildSummaryPrompt (#251 Scope 2)', () => {
       const prompt = buildSummaryPrompt('sample', '書類A');
       expect(prompt).to.include('書類の主な目的・内容');
       expect(prompt).to.include('重要な日付や金額');
-      expect(prompt).to.include('関係者（顧客名、事業所名など）');
+      expect(prompt).to.include('関係者（顧客名、事業所名、医療機関名など）');
       expect(prompt).to.include('専門用語は平易に言い換える');
+    });
+
+    it('関係者項目に複数記載時の省略禁止指示を含む(ADR-0027 PR2bステップ8実機ゲート指摘の回帰テスト)', () => {
+      // Sarashina本番ゲート実行で、二次的な関連組織(ケアマネ事業所・受診先医療機関等)が
+      // 一貫して欠落する傾向を発見(D2/D3で該当組織名が3/3run・6/6run全てで欠落)。
+      // 本プロンプトはGemini/Sarashina共通のため、明示指示の欠如が原因と推定し追加した。
+      const prompt = buildSummaryPrompt('sample', '書類A');
+      expect(prompt).to.include('複数記載されている場合も省略せず全て含める');
     });
 
     it('「3〜5行で要約してください」の指示を含む', () => {
