@@ -75,9 +75,20 @@ export type FixtureRole = 'coverage' | 'numeric' | 'cross-entity' | 'fabrication
  * `mustCover`を氏名なしの「文子」単体へ緩和する案は、`checkCrossEntity`(対象者取り違え
  * 判定)がこの文書形式では`evaluatedAttributions:0`(実質検証不能)であるため、将来
  * 「文子様が誤った受診先を受診」のような取り違えが出力されてもcoverage-per-docが
- * 素通りしてしまう安全性の後退を招くとcodex reviewで指摘された。エイリアス配列
+ * 素通りしてしまう安全性の後退を招くとcodex reviewで指摘された(1回目)。エイリアス配列
  * (`["立花 文子", "文子"]`)により、姓名の完全一致・名のみのいずれでも許容しつつ、
- * 「立花」という識別情報自体は`facts`定義に残す設計とした。
+ * 「立花」という識別情報自体は`facts`定義に残す設計とした。`checkCrossEntity`のperson側
+ * vocabもこの配列で展開し、名のみ表記でも取り違えを検知できるよう対応した(2回目)。
+ *
+ * 【既知の限界、decision-maker確認済み・2026-09-23、これ以上のスコアラー複雑化は行わない】
+ * `factHit`は文脈を問わない単純な部分一致のため、要約内に「立花文子」とは別人の同姓・
+ * 同名の人物(例:「鈴木文子」)が登場した場合、「文子」の部分文字列一致により誤ってD8の
+ * 患者と同一視され、coverage・cross-entityの双方をすり抜けうる(codex review 3回目指摘、
+ * strict-config)。回避には直前の文脈(続柄語「妻」等)を要求する、または人名を跨いだ
+ * 形態素解析が必要になり、`shared/summaryFabricationScan.ts`冒頭コメントの既知の限界群と
+ * 同種の設計限界(正規表現+部分一致という設計そのものの限界)に該当する。この3run分の
+ * テストセット(D8は源泉テキストに立花家の2名のみが登場する固定書式)では実際に発生しない
+ * 理論的な攻撃パターンであり、形態素解析非採用の既存方針を優先しこれ以上の対応はしない。
  */
 export type FactEntry = string | readonly string[];
 
