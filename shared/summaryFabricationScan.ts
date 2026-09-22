@@ -25,6 +25,11 @@
  *   ① 左文脈抽出 → ② 助詞トリム(地の文巻き込みを解消、core確定)
  *   → ③ verbatim判定(トリム後core+suffix全体の完全一致のみ見る) → ④ 再結合判定
  *      (fabricated/recombinedの分離)
+ * これは「core+suffix」(名前が先、種別語が後)の順序を前提にしている。加えて
+ * `PREFIX_CAPABLE_SUFFIXES`(「株式会社」「有限会社」)の語彙のみ、①〜③と対称的な
+ * 右方向のパス(`extractRightContext`/`trimParticlesFromPrefix`)を並行実行し、
+ * 「suffix+core」(「株式会社みずほ」のようなプレフィックス表記)の順序も検出する
+ * (codex review 4回目指摘、P2。実務ではこちらの順序の方が一般的)。
  *
  * `/plan-crossreview`(codex High指摘)で「再結合判定を原典中の前後30文字以内の近接一致で
  * 行うと、無関係な地名・人名+種別語の偶然の近接一致による真の捏造もrecombined(既定WARN)
@@ -42,15 +47,18 @@
  * `sourceText` には呼び出し側が既に切り詰め済みのテキスト(`MAX_SUMMARY_INPUT_LENGTH`
  * 適用後)を渡す契約とする。本関数は切り詰めを行わない — 原典全文を渡すと、モデルが
  * 実際には見ていない切り詰め後より後ろの語を「実在扱い」してしまい偽陰性(検出漏れ)に
- * なるため(ADR-0027「PR2a実装知見」節、D3が9,940文字 > MAX_SUMMARY_INPUT_LENGTH=8000の教訓)。
+ * なるため(`scripts/fixtures/sarashina-summary-golden/docs/meta.json`のD3
+ * `chars=9940`が`MAX_SUMMARY_INPUT_LENGTH=8000`〔`functions/src/ocr/summaryPromptBuilder.ts`〕
+ * を超える実例、comment-analyzer指摘反映: 当初ADR-0027を参照先としていたが該当記述が
+ * 存在せず、実在するfixtureデータへ差し替えた)。
  *
  * 数値捏造・金額混入・cross-entity(対象者取り違え)判定はスコープ外
  * (別モジュールが担当する想定、PR2b`scripts/lib/sarashinaSummaryScore.ts`として実装予定・
  * 本PR時点では未着手、意味論が異なるため本スキャナには混ぜない、comment-analyzer指摘反映)。
  *
- * 既知の限界(PR2a実装時、対照コーパステストおよびcodex review 2回目で発見。
- * decision-maker確認済み、2026-09-22: 実データでの発生実績なし・形態素解析不採用の
- * 判断を優先し、これ以上の精緻化は行わない):
+ * 既知の限界(1はPR2a実装時の対照コーパステストで発見、2・3はcodex review 2回目、
+ * 4は5回目で追加発見。いずれもdecision-maker確認済み、2026-09-22: 実データでの
+ * 発生実績なし・形態素解析不採用の判断を優先し、これ以上の精緻化は行わない):
  *
  * 1. ②助詞トリムは`lastIndexOf`ベースの単純な文字列一致のため、1文字助詞
  *    (「も」「が」「を」等)が固有名詞の先頭1文字と偶然一致する場合

@@ -105,6 +105,16 @@ describe('scanSummaryForFabrication: verbatim判定(③)', () => {
     expect(r.findings[0].name).to.equal('新佐々木クリニック');
   });
 
+  it('【既知の限界】固有名詞の先頭1文字が助詞と偶然一致する場合、捏造プレフィックスの検出をすり抜けることがある(PR2a実装時の対照コーパステストで発見、decision-maker確認済み・対応不要、comment-analyzer指摘: 未テストだった限界1件を追加)', () => {
+    // 「もみじ整形外科」の「も」が助詞と誤認され、trimParticlesが「みじ」までトリムして
+    // しまう。「みじ整形外科」は原典中の実在名「もみじ整形外科」の部分文字列として
+    // verbatim一致するため、捏造プレフィックス「新」付きの偽名「新もみじ整形外科」に
+    // 対してもすり抜けが発生する(ファイル冒頭コメント既知の限界1参照)。
+    const source = 'もみじ整形外科の担当医が診察。';
+    const r = scanSummaryForFabrication('新もみじ整形外科の担当医が診察。', source);
+    expect(r.fabricatedCount).to.equal(0); // 既知の限界: 本来はfabricatedであるべきだが検出できない
+  });
+
   it('【既知の限界】組織名内部に助詞と同じ文字列を含む場合、捏造プレフィックスの検出をすり抜けることがある(codex review 2回目指摘、decision-maker確認済み・対応不要)', () => {
     // 「さくらの里クリニック」の「の」が助詞と誤認され、捏造プレフィックス「新」付きの
     // 偽名「新さくらの里クリニック」に対してもトリムが誤発動し、トリム後のcore「里」が
@@ -183,6 +193,7 @@ describe('scanSummaryForFabrication: 助詞トリム(②)', () => {
     const source = '株式会社みずほ訪問看護の担当者が訪問。';
     const r = scanSummaryForFabrication('株式会社みずほの担当者が来訪。', source);
     expect(r.fabricatedCount).to.equal(0);
+    expect(r.findings).to.deep.equal([]); // pr-test-analyzer指摘: fabricatedCount単体よりkind混在の見逃しがないことまで確認する
   });
 
   it('【既知の限界】プレフィックス形で企業名の先頭が助詞と同じ文字の場合、捏造企業名の検出をすり抜けることがある(codex review 5回目指摘、decision-maker確認済み・対応不要)', () => {
@@ -196,6 +207,58 @@ describe('scanSummaryForFabrication: 助詞トリム(②)', () => {
     const source = '利用者の状況について記載。';
     const r = scanSummaryForFabrication('株式会社のぞみが担当。', source);
     expect(r.fabricatedCount).to.equal(0); // 既知の限界: 本来はfabricatedであるべきだが検出できない
+  });
+
+  it('通常方向(core-suffix)とプレフィックス方向(suffix-core)の候補が同一要約内に混在しても、それぞれ独立して検出される(pr-test-analyzer指摘の回帰テスト)', () => {
+    // pr-test-analyzer(4回目/5回目codex reviewで発見されたバグがいずれも「左方向ロジック
+    // だけを見ていたら気づけなかった」ことを踏まえ、2つの独立ループの相互作用が最も
+    // リグレッションの起きやすい箇所と指摘)。
+    const source = '利用者の状況について記載。';
+    const r = scanSummaryForFabrication(
+      '青葉クリニックの関連会社である株式会社みずほが担当。',
+      source
+    );
+    // 「株式会社」はPREFIX_CAPABLE_SUFFIXESであると同時に通常のORG_SUFFIXESでもあるため、
+    // 「である株式会社」(で→助詞トリム→core="ある")もcore-suffix方向の候補として独立に
+    // 生成される。「ある」はgenericCoresに含まれない動詞語幹の残骸であり、本来の固有名詞
+    // ではないが、正規表現+助詞境界という設計上、意味を持たない短い残骸まで拾ってしまう
+    // ことがある。これは本PR(プレフィックス方向追加)以前から存在するcore-suffix方向の
+    // 過検出(false positive、安全側)であり、混在自体が引き起こす新規のバグではないことを
+    // 確認済み(株式会社をorgSuffixesから除外した場合でも「青葉クリニック」のみ検出される
+    // ことをデバッグ時に別途確認した)。fabricationゲートは過検出(見逃しより多く検知)側に
+    // 倒すのが安全設計のため、これも許容範囲として3件を期待値とする。
+    expect(r.fabricatedCount).to.equal(3);
+    const names = r.findings.map((f) => f.name).sort();
+    expect(names).to.deep.equal(['ある株式会社', '株式会社みずほ', '青葉クリニック'].sort());
+    // 「株式会社みずほ」(プレフィックス方向)が「ある株式会社」(core-suffix方向)の座標に
+    // 誤って包含・抑制されていないことを個別に確認する(pr-test-analyzer指摘の核心)。
+    expect(r.findings.some((f) => f.name === '株式会社みずほ')).to.equal(true);
+    expect(r.findings.some((f) => f.name === '青葉クリニック')).to.equal(true);
+  });
+
+  it('プレフィックス方向(suffix-core)でもmaxLeftContext(既定16文字)を超える長い実在企業名は検出漏れうる(左方向と対称の境界値、回帰テスト)', () => {
+    // 左方向の同種境界値テスト(「maxLeftContext(既定16文字)を超える長い施設名でも
+    // verbatim判定が機能する」)と対称のケースを右方向でも固定する。17文字のcoreは
+    // maxLeftContext(16)以内に収まりverbatim一致で検出されない(左方向と同じ挙動)。
+    const longName = 'あ'.repeat(17);
+    const source = `株式会社${longName}の担当者が訪問。`;
+    const r = scanSummaryForFabrication(`株式会社${longName}の担当者が来訪。`, source);
+    expect(r.fabricatedCount).to.equal(0);
+  });
+
+  it('プレフィックス語彙(株式会社/有限会社)が同一要約内に複数出現しても、それぞれ独立して検出される(pr-test-analyzer指摘の回帰テスト)', () => {
+    const source = '利用者の状況について記載。';
+    const r = scanSummaryForFabrication('株式会社Aと有限会社Bが共同で担当。', source);
+    expect(r.fabricatedCount).to.equal(2);
+    const names = r.findings.map((f) => f.name).sort();
+    expect(names).to.deep.equal(['有限会社B', '株式会社A']);
+  });
+
+  it('プレフィックス方向で右文脈なし(suffixが文末)の場合は検出しない(左方向の「文頭で左文脈なし」と対称の境界値)', () => {
+    const source = '利用者の状況について記載。';
+    const r = scanSummaryForFabrication('担当は株式会社。', source);
+    expect(r.fabricatedCount).to.equal(0);
+    expect(r.findings).to.deep.equal([]);
   });
 
   it('リスト列挙の中黒区切りを巻き込まない(「・」は区切り文字として扱う)', () => {
