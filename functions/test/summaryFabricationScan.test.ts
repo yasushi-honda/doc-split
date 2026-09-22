@@ -285,6 +285,18 @@ describe('scanSummaryForFabrication: 助詞トリム(②)', () => {
     const r = scanSummaryForFabrication(summary, source);
     expect(r.fabricatedCount).to.equal(0);
   });
+
+  it('「〜に対して」型の地の文接続を巻き込まない(ADR-0027 PR2b実機ゲート本番run D2run2の回帰テスト)', () => {
+    // 本番Cloud Runサービスへの実機ゲート実行(2026-09-22)で実際に発生した誤検出の再現。
+    // 「様に対してさくら通所介護センターが」の「に」までしかトリムされず、残った「対して」が
+    // 実在組織名に連結した状態(「対してさくら通所介護センター」)で捏造判定されていた
+    // (ファイル冒頭コメントの既知の限界5参照)。
+    const source = '波多野千秋様にさくら通所介護センターが介護サービスを提供した。';
+    const summary = '波多野千秋様に対してさくら通所介護センターが提供した介護サービス。';
+    const r = scanSummaryForFabrication(summary, source);
+    expect(r.fabricatedCount).to.equal(0);
+    expect(r.findings).to.deep.equal([]);
+  });
 });
 
 describe('scanSummaryForFabrication: 再結合判定(④、fabricated/recombined分離)', () => {
