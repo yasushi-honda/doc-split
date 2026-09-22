@@ -318,7 +318,10 @@ function extractLeftContext(text: string, suffixStart: number, maxLeftContext: n
   let start = suffixStart;
   let count = 0;
   while (start > 0 && count < maxLeftContext) {
-    const ch = text[start - 1];
+    // frontend/tsconfig.json の noUncheckedIndexedAccess 下では text[i] が
+    // string | undefined になるため、常にstringを返すcharAt()を使う
+    // (ループ条件でstart>0を保証済みのため範囲外アクセスにはならない)。
+    const ch = text.charAt(start - 1);
     if (!NAME_CHAR.test(ch)) break;
     start--;
     count++;
@@ -366,7 +369,8 @@ function extractRightContext(text: string, suffixEnd: number, maxLength: number)
   let end = suffixEnd;
   let count = 0;
   while (end < text.length && count < maxLength) {
-    const ch = text[end];
+    // extractLeftContextと同じ理由(noUncheckedIndexedAccess対策)でcharAt()を使う。
+    const ch = text.charAt(end);
     if (!NAME_CHAR.test(ch)) break;
     end++;
     count++;
