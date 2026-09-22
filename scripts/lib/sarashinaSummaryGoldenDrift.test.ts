@@ -142,6 +142,20 @@ test('sarashinaSummaryGoldenDrift: manifest.maxInputCharsが本番summaryPromptB
   assert.equal(manifest.maxInputChars, Number(match![1]));
 });
 
+test('sarashinaSummaryGoldenDrift: manifest.maxInputCharsがbench.pyのMAX_INPUT(PR0結果生成時の切り詰め値)とも一致すること', () => {
+  // codex review 3回目指摘(P2): 本番summaryPromptBuilder.tsとの一致だけでは、
+  // bench.py自身が持つ独立したMAX_INPUT定数(PR0結果JSONを生成した際に実際に使われた
+  // 切り詰め値)が将来変更された場合を検知できない。その場合、本テストは緑のままでも
+  // functions/test/sarashinaSummaryScanCorpus.test.tsが8000文字で切り詰めて再走する
+  // sourceTextと、PR0結果生成時に実際にモデルへ送信されたsourceTextの前提がズレ、
+  // 回帰検証の前提が無自覚に崩れる。bench.py側のMAX_INPUTも直接manifestと突合する。
+  const manifest = loadJson(MANIFEST_PATH) as unknown as Manifest;
+  const benchPy = fs.readFileSync(BENCH_PY_PATH, 'utf-8');
+  const match = benchPy.match(/^MAX_INPUT\s*=\s*(\d+)/m);
+  assert.ok(match, 'bench.pyからMAX_INPUTの値を抽出できませんでした(定数名変更の可能性)');
+  assert.equal(manifest.maxInputChars, Number(match![1]));
+});
+
 test('sarashinaSummaryGoldenDrift: manifest.fabricationScanConfigVersionがshared/summaryFabricationScan.tsの現行設定と一致すること', () => {
   const manifest = loadJson(MANIFEST_PATH) as unknown as Manifest;
   assert.equal(manifest.fabricationScanConfigVersion, FABRICATION_SCAN_CONFIG_VERSION);

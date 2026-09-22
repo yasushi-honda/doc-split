@@ -41,7 +41,7 @@ describe('normalizeForFabricationScan', () => {
   });
 });
 
-describe('scanSummaryForFabrication: verbatim判定(②)', () => {
+describe('scanSummaryForFabrication: verbatim判定(③)', () => {
   it('原典にそのまま存在する組織名は検出しない', () => {
     const source = '担当はみどりヶ丘訪問看護ステーションです。';
     const summary = '訪問看護はみどりヶ丘訪問看護ステーションが担当。';
@@ -131,7 +131,7 @@ describe('scanSummaryForFabrication: verbatim判定(②)', () => {
   });
 });
 
-describe('scanSummaryForFabrication: 助詞トリム(③)', () => {
+describe('scanSummaryForFabrication: 助詞トリム(②)', () => {
   it('地の文を巻き込んだ「サービス内容は通所リハビリ」型は検出しない(genericCores)', () => {
     const source = '通所リハビリを週2回利用。';
     const summary = 'サービス内容は通所リハビリです。';
@@ -144,6 +144,17 @@ describe('scanSummaryForFabrication: 助詞トリム(③)', () => {
     const summary = '具体的な利用者名や事業所名の記載はない。';
     const r = scanSummaryForFabrication(summary, source);
     expect(r.fabricatedCount).to.equal(0);
+  });
+
+  it('coreがそれ自体ORG_SUFFIX語彙の場合(固有名詞を伴わない一般的なサービス種別連結表現)は検出しない(codex review 3回目指摘の回帰テスト)', () => {
+    // 「訪問看護ステーションが担当」(suffix=ステーション、core=訪問看護)のような、
+    // 固有名詞を伴わない一般的な表現は捏造ではなく、単に事業所名が読み取れない場合の
+    // 正当な要約表現。coreが別のORG_SUFFIX語彙自体と一致する場合はfabricated扱いにしない。
+    const source = '利用者の状況について記載。';
+    const r1 = scanSummaryForFabrication('訪問看護ステーションが担当。', source);
+    expect(r1.fabricatedCount).to.equal(0);
+    const r2 = scanSummaryForFabrication('居宅介護支援事業所へ相談。', source);
+    expect(r2.fabricatedCount).to.equal(0);
   });
 
   it('リスト列挙の中黒区切りを巻き込まない(「・」は区切り文字として扱う)', () => {

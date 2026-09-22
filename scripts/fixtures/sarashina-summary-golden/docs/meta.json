@@ -121,7 +121,7 @@
     ],
     "optionalFacts": [],
     "minCoveredFacts": 3,
-    "_note": "PR0で未実行(D5〜D8はPR2詳細設計6a節参照)。mustCoverはfactsをそのまま暫定採用、PR2b実機ゲート初回実行値で見直す。"
+    "_note": "PR0で未実行(D5〜D8は実機での固有名詞捏造検証がまだ未実施)。mustCoverはfactsをそのまま暫定採用、PR2b実機ゲート初回実行値で見直す。"
   },
   "D6": {
     "title": "介護サービス利用実績一覧",

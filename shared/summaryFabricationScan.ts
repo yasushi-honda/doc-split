@@ -42,7 +42,7 @@
  * `sourceText` には呼び出し側が既に切り詰め済みのテキスト(`MAX_SUMMARY_INPUT_LENGTH`
  * 適用後)を渡す契約とする。本関数は切り詰めを行わない — 原典全文を渡すと、モデルが
  * 実際には見ていない切り詰め後より後ろの語を「実在扱い」してしまい偽陰性(検出漏れ)に
- * なるため(PR2詳細設計「6a」節、D3が9,940文字 > MAX_SUMMARY_INPUT_LENGTH=8000の教訓)。
+ * なるため(ADR-0027「PR2a実装知見」節、D3が9,940文字 > MAX_SUMMARY_INPUT_LENGTH=8000の教訓)。
  *
  * 数値捏造・金額混入・cross-entity(対象者取り違え)判定はスコープ外
  * (別モジュールが担当する想定、PR2b`scripts/lib/sarashinaSummaryScore.ts`として実装予定・
@@ -247,7 +247,7 @@ const NAME_CHAR = /[一-龠ぁ-んァ-ヶー々a-zA-Z0-9]/;
  * 正規化: NFKC → 前後の空白除去 → 特殊トークン除去 → 改行を含む空白の除去。
  * summaryText/sourceText 両方に適用する。
  * `</s>` はllama.cppのEOSトークンがそのまま出力に混入する既知の事象への対処
- * (PR2詳細設計「6a」節参照)。exportして呼び出し側(PR4の書込前正規化)が同じ実装を使えるようにする。
+ * (ADR-0027「PR2a実装知見」節参照)。exportして呼び出し側(PR4の書込前正規化)が同じ実装を使えるようにする。
  *
  * 改行除去(codex review指摘、P2): 当初`[ \t]+`のみを対象にしており改行`\n`/`\r`を
  * 除去していなかった。PaddleOCRのレイアウト都合でページ・行境界に実在の組織名が分断される
@@ -370,6 +370,7 @@ export function scanSummaryForFabrication(
 
   const rawMatches = findOrgSuffixMatches(normalizedSummary, config.orgSuffixes);
   const genericCoreSet = new Set(config.genericCores);
+  const orgSuffixSet = new Set(config.orgSuffixes);
 
   const candidates: Candidate[] = [];
   for (const match of rawMatches) {
@@ -378,6 +379,13 @@ export function scanSummaryForFabrication(
     // ②助詞トリム: leftContextを助詞境界で切りcoreを得る。core空/汎用語なら検出しない
     const core = trimParticles(leftContext, config.particles);
     if (genericCoreSet.has(core)) continue;
+    // coreがそれ自体ORG_SUFFIX語彙と一致する場合も汎用語として検出しない(codex review
+    // 3回目指摘、P2): 「訪問看護ステーションが担当」(suffix=ステーション、core=訪問看護)
+    // のような、固有名詞を伴わない一般的なサービス種別の連結表現は捏造ではなく、単に
+    // 事業所名が読み取れない場合の正当な要約表現である。coreが別のORG_SUFFIX語彙(この
+    // 例では「訪問看護」自体がORG_SUFFIXES配列に含まれる)と一致する場合はこれに該当する
+    // とみなし、検出対象から除外する。
+    if (orgSuffixSet.has(core)) continue;
 
     // ③verbatim判定: トリム後のcore全体+suffixが原典にそのまま存在するなら検出しない
     // (codex review指摘、P2: 部分列を試す設計だと捏造プレフィックス「新青葉クリニック」の
