@@ -170,27 +170,14 @@ jobs:
             echo "ERROR: cloudbuild.googleapis.com が有効化されていません。bootstrap手順(一時権限)で有効化してください: gcloud services enable cloudbuild.googleapis.com --project=$PROJECT_ID" >&2
             exit 1
           fi
-          # actAs(roles/iam.serviceAccountUser)がデプロイ実行SA(このワークフローの認証identity)に
-          # 付与されていない場合、後続のgcloud run deploy --service-account=...が403で失敗する。
-          # ここで事前に検知し、docs/context/delivery-and-update-guide.mdの手順を案内する
-          # (PaddleOCR版には存在しないチェック。Sarashina版はactAs付与をPR1cに委譲した設計のため、
-          # 手動付与漏れの検知が特に重要)。
-          DEPLOY_SA=$(gcloud config get-value account 2>/dev/null)
-          if ! SA_POLICY_OUT=$(gcloud iam service-accounts get-iam-policy "$RUNTIME_SA" \
-              --project="$PROJECT_ID" --format=json 2>&1); then
-            echo "ERROR: runtime SA '$RUNTIME_SA' のIAMポリシー取得に失敗しました: $SA_POLICY_OUT" >&2
-            exit 1
-          fi
-          if ! echo "$SA_POLICY_OUT" | grep -q "\"serviceAccount:${DEPLOY_SA}\"" || \
-             ! echo "$SA_POLICY_OUT" | grep -q '"roles/iam.serviceAccountUser"'; then
-            echo "ERROR: デプロイ実行SA ($DEPLOY_SA) に runtime SA ($RUNTIME_SA) への" >&2
-            echo "  roles/iam.serviceAccountUser(actAs)が付与されていない可能性があります。" >&2
-            echo "  付与コマンド(docs/context/delivery-and-update-guide.mdより):" >&2
-            echo "  gcloud iam service-accounts add-iam-policy-binding $RUNTIME_SA \\" >&2
-            echo "    --member=\"serviceAccount:${DEPLOY_SA}\" --role=\"roles/iam.serviceAccountUser\" --project=$PROJECT_ID" >&2
-            exit 1
-          fi
-          echo "Preflight OK: Artifact Registry 'sarashina-summary' / runtime SA / actAs / Cloud Build API を確認しました"
+          echo "Preflight OK: Artifact Registry 'sarashina-summary' / runtime SA / Cloud Build API を確認しました"
+          # actAs(roles/iam.serviceAccountUser)の事前検証は行わない(2026-09-22、codex review
+          # 指摘P1により削除)。`gcloud iam service-accounts get-iam-policy`の実行には
+          # iam.serviceAccounts.getIamPolicy権限が必要だが、これはSarashina固有の文書化された
+          # 権限(roles/iam.serviceAccountUserのみ)には含まれない。devでは偶然project-level
+          # roles/viewerを既に保有しているため動作したが、これに依存しない設計へ変更した。
+          # actAs不足は後続の「Deploy Cloud Run service」ステップで403として顕在化し、
+          # そこでエラーメッセージに付与コマンドを案内する(下記参照)。
 
       - name: Verify SARASHINA_SUMMARY_URL matches current service URL (pre-deploy drift guard)
         # デプロイ後にURL比較すると、不一致が判明した時点で既に新リビジョンがライブになって
@@ -368,7 +355,11 @@ jobs:
           # liveness-probe: PaddleOCR版と同じ300秒窓を踏襲するが、llama.cppの/healthは
           # 生成中も200を返すため生成ハング検知の効果はほぼ無い(異常終了・プロセス
           # クラッシュの検知のみ、services/sarashina-summary/README.md参照)。
-          gcloud run deploy sarashina-summary \
+          # actAs(roles/iam.serviceAccountUser)不足時、このコマンドはIAM_PERMISSION_DENIED/403で
+          # 失敗する。事前のget-iam-policyベースの検証は追加の未文書権限を要求するため削除した
+          # (2026-09-22、codex review指摘P1)。ここでは実行結果をキャプチャし、権限不足を示す
+          # 文言が含まれる場合のみ付与コマンドを案内する(fail-loudしつつ原因特定を助ける)。
+          if ! DEPLOY_OUT=$(gcloud run deploy sarashina-summary \
             --image="$IMAGE_DIGEST" \
             --region="$CLOUD_RUN_LOCATION" \
             --project="$PROJECT_ID" \
@@ -384,7 +375,19 @@ jobs:
             --cpu-boost \
             --execution-environment=gen2 \
             --startup-probe="httpGet.path=/health,httpGet.port=8080,periodSeconds=5,timeoutSeconds=3,failureThreshold=48" \
-            --liveness-probe="httpGet.path=/health,httpGet.port=8080,periodSeconds=30,timeoutSeconds=5,failureThreshold=10"
+            --liveness-probe="httpGet.path=/health,httpGet.port=8080,periodSeconds=30,timeoutSeconds=5,failureThreshold=10" 2>&1); then
+            echo "$DEPLOY_OUT" >&2
+            if echo "$DEPLOY_OUT" | grep -qiE 'iam\.serviceaccounts\.actas|serviceAccountUser|PERMISSION_DENIED.*service.?account'; then
+              echo "" >&2
+              echo "ERROR: actAs(roles/iam.serviceAccountUser)不足の可能性があります。以下を実行してください:" >&2
+              DEPLOY_SA=$(gcloud config get-value account 2>/dev/null)
+              echo "  gcloud iam service-accounts add-iam-policy-binding $RUNTIME_SA \\" >&2
+              echo "    --member=\"serviceAccount:${DEPLOY_SA}\" --role=\"roles/iam.serviceAccountUser\" --project=$PROJECT_ID" >&2
+              echo "  詳細: docs/context/delivery-and-update-guide.md「Sarashina要約Cloud Runデプロイ」節" >&2
+            fi
+            exit 1
+          fi
+          echo "$DEPLOY_OUT"
           SERVICE_URL=$(gcloud run services describe sarashina-summary \
             --region="$CLOUD_RUN_LOCATION" --project="$PROJECT_ID" --format='value(status.url)')
           if [ -z "$SERVICE_URL" ]; then
@@ -406,8 +409,19 @@ jobs:
         run: |
           set -euo pipefail
           TOKEN=$(gcloud auth print-identity-token --audiences="$SERVICE_URL")
-          EXPECTED_BUILD_INFO=$(jq -r '.baseImage.buildInfo' services/sarashina-summary/expected-model-hashes.json)
-          EXPECTED_ALIAS=$(jq -r '.textGeneration.fileName' services/sarashina-summary/expected-model-hashes.json | sed 's/\.gguf$//')
+          # `// empty`無しだとキー欠落時にjqが文字列"null"を返しexit 0のまま後続比較に流れ、
+          # 「設定ファイルのキー欠落」が「値の不一致」という紛らわしいエラーになる
+          # (pr-review-toolkit silent-failure-hunter指摘、Medium)。空ならここでfail-loudする。
+          EXPECTED_BUILD_INFO=$(jq -r '.baseImage.buildInfo // empty' services/sarashina-summary/expected-model-hashes.json)
+          if [ -z "$EXPECTED_BUILD_INFO" ]; then
+            echo "ERROR: services/sarashina-summary/expected-model-hashes.json に baseImage.buildInfo が見つかりません" >&2
+            exit 1
+          fi
+          EXPECTED_ALIAS=$(jq -r '.textGeneration.fileName // empty' services/sarashina-summary/expected-model-hashes.json | sed 's/\.gguf$//')
+          if [ -z "$EXPECTED_ALIAS" ]; then
+            echo "ERROR: services/sarashina-summary/expected-model-hashes.json に textGeneration.fileName が見つかりません" >&2
+            exit 1
+          fi
 
           echo "=== /health ==="
           # curlは-f/--failを付けない限り401/403/500/503等の非2xxレスポンスでもexit 0を返す
@@ -478,7 +492,15 @@ jobs:
               console.error("raw body:", raw);
               process.exit(1);
             }
-            const content = data.choices?.[0]?.message?.content;
+            // 構造破壊的変更(choices不在等)と正常構造だがcontentが空、を別メッセージにする
+            // (raw bodyダンプを見ずとも真因を切り分けられるように、pr-review-toolkit
+            // silent-failure-hunter指摘反映)。
+            if (!Array.isArray(data.choices) || data.choices.length === 0) {
+              console.error("ERROR: レスポンスにchoices配列がありません(OpenAI互換APIの想定構造と異なります)");
+              console.error("raw body:", raw);
+              process.exit(1);
+            }
+            const content = data.choices[0].message?.content;
             if (!content || content.trim().length === 0) {
               console.error("ERROR: 生成contentが空です");
               console.error("raw body:", raw);
