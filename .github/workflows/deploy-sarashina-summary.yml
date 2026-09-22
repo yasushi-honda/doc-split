@@ -1,0 +1,528 @@
+name: Deploy Sarashina Summary Cloud Run Service (ADR-0027 PR1c)
+
+# dev/kanameone/cocoro対応。SA認証はdeploy-paddle-ocr.ymlと同型の3値分岐、
+# secretsも同じ(GCP_SA_KEY_DEV/GCP_SA_KEY_KANAMEONE/GCP_SA_KEY)を再利用する。
+#
+# 設計判断(PaddleOCR版(.github/workflows/deploy-paddle-ocr.yml)からの意図的な相違点、
+# 詳細: docs/adr/0027-sarashina-summary-migration.md「PR1a実装知見」節):
+# - Model hash drift guard(`cd scripts && npm test`)・setup-node・npm ciステップは
+#   入れない。Sarashina側golden manifestとの突合はPR2のスコープであり、対象が
+#   存在しない時点でCIジョブを追加すると意味のない実行になるため
+# - Cloud Buildの`--machine-type=E2_HIGHCPU_8`を明示(PaddleOCR版は無指定=e2-standard-2)。
+#   PR0のcloudbuild.yamlと揃え、3.5GBのGGUF圧縮・pushの所要時間をPR0実測と同条件にする
+# - `Grant run.invoker`ステップは入れない。呼び出し元`generateSummaryBatch`はPR4まで
+#   存在せず、付与できない(PaddleOCR版が`processOCR`のSAへ付与しているのと対照的)
+# - `Verify`ステップはllama.cppの`/health`(`{"status":"ok"}`のみ)がPaddleOCR版のような
+#   `imageDigest`フィールドを持たないため、`/props`(`build_info`/`model_alias`)+
+#   `gcloud run services describe`のimage一致による代替検証を行う
+# - `--service-account=sarashina-summary-runtime@...`が要求するactAs
+#   (`roles/iam.serviceAccountUser`)は、本ワークフロー内では付与しない
+#   (docs/context/delivery-and-update-guide.md「Sarashina要約Cloud Runデプロイ」節の
+#   手順に従い、デプロイ実行前に手動で恒久付与しておく想定。Preflightで不足を検知する)
+# - step-level env規約・concurrency・resolve_field()等の設計はPaddleOCR版を踏襲
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        type: choice
+        options:
+          - dev
+          - kanameone
+          - cocoro
+      first_deploy:
+        description: 'true = 初回デプロイ(SARASHINA_SUMMARY_URL未設定の状態から)。false = 既存URLとの一致検証'
+        required: true
+        type: choice
+        default: 'false'
+        options:
+          - 'false'
+          - 'true'
+
+concurrency:
+  group: deploy-sarashina-summary-${{ github.event.inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate inputs
+        env:
+          ENVIRONMENT: ${{ github.event.inputs.environment }}
+        run: |
+          set -euo pipefail
+          if [ "$ENVIRONMENT" != "dev" ] && [ "$ENVIRONMENT" != "kanameone" ] && [ "$ENVIRONMENT" != "cocoro" ]; then
+            echo "ERROR: 未知の環境です(got: $ENVIRONMENT)" >&2
+            exit 1
+          fi
+
+      - uses: google-github-actions/auth@v2
+        with:
+          # deploy-paddle-ocr.ymlと同型の3値分岐(cocoroはGCP_SA_KEY、将来GCP_SA_KEY_COCOROに移行)
+          credentials_json: >-
+            ${{ github.event.inputs.environment == 'kanameone' && secrets.GCP_SA_KEY_KANAMEONE ||
+                github.event.inputs.environment == 'dev' && secrets.GCP_SA_KEY_DEV ||
+                secrets.GCP_SA_KEY }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Resolve project / region / URL
+        id: resolve
+        env:
+          ENVIRONMENT: ${{ github.event.inputs.environment }}
+        run: |
+          set -euo pipefail
+          ENV_FILE="scripts/clients/${ENVIRONMENT}.env"
+          if [ ! -f "$ENV_FILE" ]; then
+            echo "ERROR: $ENV_FILE not found" >&2
+            exit 1
+          fi
+          resolve_field() {
+            local field="$1"
+            local file="$2"
+            local val
+            val=$(grep -E "^${field}=" "$file" | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'")
+            val="${val#"${val%%[![:space:]]*}"}"
+            val="${val%"${val##*[![:space:]]}"}"
+            case "$val" in
+              ""|"<TBD>"|"TBD"|"tbd"|"<TODO>"|"TODO"|"todo"|"<FIXME>"|"FIXME"|"fixme"|"null"|"NULL"|"undefined"|"UNDEFINED"|"xxx"|"XXX"|"<PLACEHOLDER>")
+                echo "ERROR: ${field} not configured for $ENVIRONMENT (value=\"$val\"); see services/sarashina-summary/README.md" >&2
+                exit 1
+                ;;
+            esac
+            echo "$val"
+          }
+          # SARASHINA_SUMMARY_URLは初回デプロイ前は<TBD>のまま許容する(resolve_fieldと違いexitしない)。
+          resolve_field_optional() {
+            local field="$1"
+            local file="$2"
+            local val
+            val=$(grep -E "^${field}=" "$file" | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'")
+            val="${val#"${val%%[![:space:]]*}"}"
+            val="${val%"${val##*[![:space:]]}"}"
+            case "$val" in
+              ""|"<TBD>"|"TBD"|"tbd"|"<TODO>"|"TODO"|"todo"|"<FIXME>"|"FIXME"|"fixme"|"null"|"NULL"|"undefined"|"UNDEFINED"|"xxx"|"XXX"|"<PLACEHOLDER>")
+                echo ""
+                ;;
+              *)
+                echo "$val"
+                ;;
+            esac
+          }
+          PROJECT_ID=$(node scripts/helpers/firebaserc-helper.js get-project "$ENVIRONMENT")
+          CLOUD_RUN_LOCATION=$(resolve_field CLOUD_RUN_LOCATION "$ENV_FILE")
+          SARASHINA_SUMMARY_URL=$(resolve_field_optional SARASHINA_SUMMARY_URL "$ENV_FILE")
+          {
+            echo "project_id=$PROJECT_ID"
+            echo "cloud_run_location=$CLOUD_RUN_LOCATION"
+            echo "sarashina_summary_url=$SARASHINA_SUMMARY_URL"
+          } >> "$GITHUB_OUTPUT"
+          echo "Resolved: project=$PROJECT_ID region=$CLOUD_RUN_LOCATION url=${SARASHINA_SUMMARY_URL:-<未設定>}"
+
+      - name: Validate first_deploy / URL consistency
+        env:
+          FIRST_DEPLOY: ${{ github.event.inputs.first_deploy }}
+          SARASHINA_SUMMARY_URL: ${{ steps.resolve.outputs.sarashina_summary_url }}
+        run: |
+          set -euo pipefail
+          if [ "$FIRST_DEPLOY" = "true" ] && [ -n "$SARASHINA_SUMMARY_URL" ]; then
+            echo "ERROR: SARASHINA_SUMMARY_URL は既に設定済みです ($SARASHINA_SUMMARY_URL) が first_deploy=true が指定されました。ドリフト検証の迂回は許可しません。first_deploy=false で実行してください" >&2
+            exit 1
+          fi
+          if [ "$FIRST_DEPLOY" = "false" ] && [ -z "$SARASHINA_SUMMARY_URL" ]; then
+            echo "ERROR: SARASHINA_SUMMARY_URL が未設定です。初回デプロイの場合は first_deploy=true を明示してください" >&2
+            exit 1
+          fi
+          echo "OK: first_deploy=$FIRST_DEPLOY, existing_url=${SARASHINA_SUMMARY_URL:-<未設定>}"
+
+      - name: Preflight (Artifact Registry / runtime SA / actAs / Cloud Build API)
+        env:
+          PROJECT_ID: ${{ steps.resolve.outputs.project_id }}
+          CLOUD_RUN_LOCATION: ${{ steps.resolve.outputs.cloud_run_location }}
+        run: |
+          set -euo pipefail
+          # stderrを破棄すると「本当に存在しない」と「権限/認証エラーでdescribeコマンド自体が
+          # 失敗した」を区別できず、誤った改善案内を出してしまう(deploy-paddle-ocr.ymlと同じ理由)。
+          if ! ARTIFACT_REGISTRY_OUT=$(gcloud artifacts repositories describe sarashina-summary \
+              --project="$PROJECT_ID" --location="$CLOUD_RUN_LOCATION" 2>&1); then
+            echo "ERROR: Artifact Registry 'sarashina-summary' の確認に失敗しました: $ARTIFACT_REGISTRY_OUT" >&2
+            echo "ERROR: 存在しない場合は scripts/setup-sarashina-summary-infra.sh dev を先に実行してください。権限/認証エラーの場合は上記メッセージを確認してください" >&2
+            exit 1
+          fi
+          RUNTIME_SA="sarashina-summary-runtime@${PROJECT_ID}.iam.gserviceaccount.com"
+          if ! RUNTIME_SA_OUT=$(gcloud iam service-accounts describe "$RUNTIME_SA" \
+              --project="$PROJECT_ID" 2>&1); then
+            echo "ERROR: runtime SA '$RUNTIME_SA' の確認に失敗しました: $RUNTIME_SA_OUT" >&2
+            echo "ERROR: 存在しない場合は scripts/setup-sarashina-summary-infra.sh dev を先に実行してください。権限/認証エラーの場合は上記メッセージを確認してください" >&2
+            exit 1
+          fi
+          CLOUDBUILD_ENABLED=$(gcloud services list --enabled --project="$PROJECT_ID" \
+              --filter='config.name:cloudbuild.googleapis.com' --format='value(config.name)')
+          if [ -z "$CLOUDBUILD_ENABLED" ]; then
+            echo "ERROR: cloudbuild.googleapis.com が有効化されていません。bootstrap手順(一時権限)で有効化してください: gcloud services enable cloudbuild.googleapis.com --project=$PROJECT_ID" >&2
+            exit 1
+          fi
+          echo "Preflight OK: Artifact Registry 'sarashina-summary' / runtime SA / Cloud Build API を確認しました"
+          # actAs(roles/iam.serviceAccountUser)の事前検証は行わない(2026-09-22、codex review
+          # 指摘P1により削除)。`gcloud iam service-accounts get-iam-policy`の実行には
+          # iam.serviceAccounts.getIamPolicy権限が必要だが、これはSarashina固有の文書化された
+          # 権限(roles/iam.serviceAccountUserのみ)には含まれない。devでは偶然project-level
+          # roles/viewerを既に保有しているため動作したが、これに依存しない設計へ変更した。
+          # actAs不足は後続の「Deploy Cloud Run service」ステップで403として顕在化し、
+          # そこでエラーメッセージに付与コマンドを案内する(下記参照)。
+
+      - name: Verify SARASHINA_SUMMARY_URL matches current service URL (pre-deploy drift guard)
+        # デプロイ後にURL比較すると、不一致が判明した時点で既に新リビジョンがライブになって
+        # しまう(deploy-paddle-ocr.ymlと同じ理由でビルド/デプロイ前に検証する)。
+        if: ${{ github.event.inputs.first_deploy == 'false' }}
+        env:
+          PROJECT_ID: ${{ steps.resolve.outputs.project_id }}
+          CLOUD_RUN_LOCATION: ${{ steps.resolve.outputs.cloud_run_location }}
+          EXPECTED_URL: ${{ steps.resolve.outputs.sarashina_summary_url }}
+        run: |
+          set -euo pipefail
+          if ! CURRENT_URL=$(gcloud run services describe sarashina-summary \
+              --region="$CLOUD_RUN_LOCATION" --project="$PROJECT_ID" \
+              --format='value(status.url)' 2>&1); then
+            echo "ERROR: 既存のsarashina-summaryサービスの取得に失敗しました: $CURRENT_URL" >&2
+            echo "ERROR: SARASHINA_SUMMARY_URLが設定済みなのにサービスが存在しない場合、設定ドリフトの可能性があります" >&2
+            exit 1
+          fi
+          if [ "$EXPECTED_URL" != "$CURRENT_URL" ]; then
+            echo "ERROR: scripts/clients/<env>.env のSARASHINA_SUMMARY_URL ($EXPECTED_URL) が現在のservice URL ($CURRENT_URL) と一致しません。ビルド/デプロイ前に停止します" >&2
+            exit 1
+          fi
+          echo "OK: SARASHINA_SUMMARY_URL matches current service URL ($CURRENT_URL)"
+
+      - name: Verify sarashina-summary service does not already exist (first_deploy guard)
+        # first_deploy=trueの場合、既存サービスの有無を確認していないと、SARASHINA_SUMMARY_URLが
+        # 誤って<TBD>のままの状態で既存サービスへそのまま新リビジョンをデプロイできてしまう
+        # (deploy-paddle-ocr.ymlと同じガード)。
+        if: ${{ github.event.inputs.first_deploy == 'true' }}
+        env:
+          PROJECT_ID: ${{ steps.resolve.outputs.project_id }}
+          CLOUD_RUN_LOCATION: ${{ steps.resolve.outputs.cloud_run_location }}
+        run: |
+          set -euo pipefail
+          if DESCRIBE_OUT=$(gcloud run services describe sarashina-summary \
+              --region="$CLOUD_RUN_LOCATION" --project="$PROJECT_ID" \
+              --format='value(status.url)' 2>&1); then
+            echo "ERROR: first_deploy=true が指定されましたが、sarashina-summary サービスは既に存在します(URL: ${DESCRIBE_OUT})。SARASHINA_SUMMARY_URLが誤って<TBD>のままになっている可能性があります。first_deploy=false で実行してください" >&2
+            exit 1
+          fi
+          if ! echo "$DESCRIBE_OUT" | grep -qiE 'NOT_FOUND|Cannot find service'; then
+            echo "ERROR: sarashina-summary サービスの存在確認に失敗しました(未存在以外のエラー): $DESCRIBE_OUT" >&2
+            exit 1
+          fi
+          echo "OK: sarashina-summary サービスは未存在です(初回デプロイとして進めます)"
+
+      - name: Compute image tag
+        id: compute
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          TS=$(date -u +%Y%m%dT%H%M%SZ)
+          SHORT_SHA="${COMMIT_SHA:0:7}"
+          IMAGE_TAG="${TS}-${SHORT_SHA}"
+          echo "image_tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+          echo "Computed image_tag=$IMAGE_TAG"
+
+      - name: Build container image (Cloud Build, async + polling) + digest pinning
+        id: build
+        env:
+          PROJECT_ID: ${{ steps.resolve.outputs.project_id }}
+          CLOUD_RUN_LOCATION: ${{ steps.resolve.outputs.cloud_run_location }}
+          IMAGE_TAG: ${{ steps.compute.outputs.image_tag }}
+        run: |
+          set -euo pipefail
+          IMAGE_URI="${CLOUD_RUN_LOCATION}-docker.pkg.dev/${PROJECT_ID}/sarashina-summary/sarashina-summary:${IMAGE_TAG}"
+          echo "Submitting Cloud Build (async): $IMAGE_URI"
+          # ビルドコンテキストはservices/sarashina-summaryを明示指定(deploy-paddle-ocr.ymlと同じ理由)。
+          # --machine-type=E2_HIGHCPU_8: PR0のcloudbuild.yamlと揃え、3.5GBのGGUF圧縮・push
+          # 所要時間をPR0実測と同条件にする(PaddleOCR版は--machine-type無指定=e2-standard-2だが、
+          # PaddleOCRのビルド対象(725MB、モデル無し)とSarashina(3.5GBモデル同梱)は
+          # ビルド負荷の桁が異なるため、意図的に明示する)。
+          BUILD_ID=$(gcloud builds submit services/sarashina-summary \
+            --tag="$IMAGE_URI" \
+            --project="$PROJECT_ID" \
+            --machine-type=E2_HIGHCPU_8 \
+            --timeout=2400s \
+            --async \
+            --format='value(id)')
+          if [ -z "$BUILD_ID" ]; then
+            echo "ERROR: failed to obtain BUILD_ID" >&2
+            exit 1
+          fi
+          echo "BUILD_ID: $BUILD_ID"
+          POLL_INTERVAL=15
+          MAX_ITERATIONS=240
+          ITERATION=0
+          DESCRIBE_FAILURES=0
+          MAX_DESCRIBE_FAILURES=5
+          while [ "$ITERATION" -lt "$MAX_ITERATIONS" ]; do
+            # describeコマンド自体の失敗(認証切れ・IAM権限剥奪・API障害等)を単に「未知の
+            # ステータス文字列」と区別せず同じリトライループへ落とすと、恒久的な失敗が
+            # 最大60分の空リトライの末に原因不明のタイムアウトとして報告される
+            # (deploy-paddle-ocr.ymlと同じ設計)。
+            if ! STATUS=$(gcloud builds describe "$BUILD_ID" --project="$PROJECT_ID" --format='value(status)' 2>/tmp/build_describe_err.log); then
+              DESCRIBE_FAILURES=$((DESCRIBE_FAILURES + 1))
+              echo "WARN: gcloud builds describe failed (${DESCRIBE_FAILURES}/${MAX_DESCRIBE_FAILURES}): $(cat /tmp/build_describe_err.log)" >&2
+              if [ "$DESCRIBE_FAILURES" -ge "$MAX_DESCRIBE_FAILURES" ]; then
+                echo "ERROR: gcloud builds describe が${MAX_DESCRIBE_FAILURES}回連続で失敗しました。認証・IAM権限・Cloud Build APIの状態を確認してください" >&2
+                exit 1
+              fi
+              sleep "$POLL_INTERVAL"
+              ITERATION=$((ITERATION + 1))
+              continue
+            fi
+            DESCRIBE_FAILURES=0
+            case "$STATUS" in
+              SUCCESS)
+                echo "Build succeeded after ${ITERATION} polls"
+                break
+                ;;
+              FAILURE|CANCELLED|TIMEOUT|EXPIRED|INTERNAL_ERROR)
+                echo "ERROR: Build failed with status: $STATUS" >&2
+                echo "Logs: https://console.cloud.google.com/cloud-build/builds/${BUILD_ID}?project=${PROJECT_ID}" >&2
+                exit 1
+                ;;
+              QUEUED|WORKING|PENDING)
+                echo "[${ITERATION}/${MAX_ITERATIONS}] Status: $STATUS, waiting ${POLL_INTERVAL}s..."
+                sleep "$POLL_INTERVAL"
+                ITERATION=$((ITERATION + 1))
+                ;;
+              *)
+                echo "WARN: Unexpected status '$STATUS', waiting ${POLL_INTERVAL}s and retrying..." >&2
+                sleep "$POLL_INTERVAL"
+                ITERATION=$((ITERATION + 1))
+                ;;
+            esac
+          done
+          if [ "$ITERATION" -ge "$MAX_ITERATIONS" ]; then
+            echo "ERROR: Build polling timed out after $((MAX_ITERATIONS * POLL_INTERVAL))s" >&2
+            exit 1
+          fi
+          # 実際のCloud Build実行SAをログに出力する(GitHub deploy SAとは別物、deploy-paddle-ocr.yml
+          # と同じ理由)。権限不足で失敗した場合は、ここに表示されるSAへ個別に対応する。
+          if ! BUILD_SA=$(gcloud builds describe "$BUILD_ID" --project="$PROJECT_ID" --format='value(serviceAccount)' 2>/tmp/build_sa_err.log); then
+            BUILD_SA="unknown ($(cat /tmp/build_sa_err.log))"
+          fi
+          echo "actual Cloud Build execution SA: $BUILD_SA"
+          IMAGE_DIGEST=$(gcloud artifacts docker images describe "$IMAGE_URI" \
+            --format='value(image_summary.fully_qualified_digest)' \
+            --project="$PROJECT_ID")
+          if [ -z "$IMAGE_DIGEST" ]; then
+            echo "ERROR: failed to resolve image digest for $IMAGE_URI" >&2
+            exit 1
+          fi
+          echo "image_digest=$IMAGE_DIGEST" >> "$GITHUB_OUTPUT"
+          echo "Built: $IMAGE_URI"
+          echo "Digest: $IMAGE_DIGEST"
+
+      - name: Deploy Cloud Run service
+        id: deploy
+        env:
+          PROJECT_ID: ${{ steps.resolve.outputs.project_id }}
+          CLOUD_RUN_LOCATION: ${{ steps.resolve.outputs.cloud_run_location }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.image_digest }}
+        run: |
+          set -euo pipefail
+          RUNTIME_SA="sarashina-summary-runtime@${PROJECT_ID}.iam.gserviceaccount.com"
+          # --ingress=allの理由: VPCコネクタが存在しないためinternalにするとFunctionsから
+          # 到達不能になる(deploy-paddle-ocr.ymlと同じ理由)。
+          #
+          # cpu=8/memory=32GiB: PR0実測条件の保存(実需要は約5〜6GiBと試算されるが、削減は
+          # PR2以降で実peak RSSを計測してから判断する、ADR-0027「PR1a実装知見」6参照)。
+          # concurrency=1: LLAMA_ARG_N_PARALLEL=1(Dockerfile)と対応させ8vCPU専有を維持。
+          # min-instances=0: 非同期処理のためコールドスタート許容(PaddleOCRのmin-instances=1
+          # とは逆。PaddleOCRがウォーム化必須なのはFunctionsの同期タイムアウト制約のためで、
+          # Sarashina要約には同じ制約がない)。
+          # max-instances=1: コスト上限として設定(逐次実行の保証ではない。逐次性の担保は
+          # クライアント側(generateSummaryBatch、PR4)の責務、ADR-0027「PR1a実装知見」5参照)。
+          # timeout=600: LLAMA_ARG_TIMEOUT=600(Dockerfile)と揃える。
+          # startup-probe failureThreshold=48(=240秒窓): Cloud Run公式制約
+          # (failureThreshold×periodSeconds は240秒が上限)いっぱいまでマージンを取る。
+          # PR0実測ready_wait最大65.9秒の約3.6倍。
+          # liveness-probe: PaddleOCR版と同じ300秒窓を踏襲するが、llama.cppの/healthは
+          # 生成中も200を返すため生成ハング検知の効果はほぼ無い(異常終了・プロセス
+          # クラッシュの検知のみ、services/sarashina-summary/README.md参照)。
+          # actAs(roles/iam.serviceAccountUser)不足時、このコマンドはIAM_PERMISSION_DENIED/403で
+          # 失敗する。事前のget-iam-policyベースの検証は追加の未文書権限を要求するため削除した
+          # (2026-09-22、codex review指摘P1)。ここでは実行結果をキャプチャし、権限不足を示す
+          # 文言が含まれる場合のみ付与コマンドを案内する(fail-loudしつつ原因特定を助ける)。
+          if ! DEPLOY_OUT=$(gcloud run deploy sarashina-summary \
+            --image="$IMAGE_DIGEST" \
+            --region="$CLOUD_RUN_LOCATION" \
+            --project="$PROJECT_ID" \
+            --no-allow-unauthenticated \
+            --ingress=all \
+            --service-account="$RUNTIME_SA" \
+            --cpu=8 \
+            --memory=32Gi \
+            --concurrency=1 \
+            --min-instances=0 \
+            --max-instances=1 \
+            --timeout=600 \
+            --cpu-boost \
+            --execution-environment=gen2 \
+            --startup-probe="httpGet.path=/health,httpGet.port=8080,periodSeconds=5,timeoutSeconds=3,failureThreshold=48" \
+            --liveness-probe="httpGet.path=/health,httpGet.port=8080,periodSeconds=30,timeoutSeconds=5,failureThreshold=10" 2>&1); then
+            echo "$DEPLOY_OUT" >&2
+            if echo "$DEPLOY_OUT" | grep -qiE 'iam\.serviceaccounts\.actas|serviceAccountUser|PERMISSION_DENIED.*service.?account'; then
+              echo "" >&2
+              echo "ERROR: actAs(roles/iam.serviceAccountUser)不足の可能性があります。以下を実行してください:" >&2
+              DEPLOY_SA=$(gcloud config get-value account 2>/dev/null)
+              echo "  gcloud iam service-accounts add-iam-policy-binding $RUNTIME_SA \\" >&2
+              echo "    --member=\"serviceAccount:${DEPLOY_SA}\" --role=\"roles/iam.serviceAccountUser\" --project=$PROJECT_ID" >&2
+              echo "  詳細: docs/context/delivery-and-update-guide.md「Sarashina要約Cloud Runデプロイ」節" >&2
+            fi
+            exit 1
+          fi
+          echo "$DEPLOY_OUT"
+          SERVICE_URL=$(gcloud run services describe sarashina-summary \
+            --region="$CLOUD_RUN_LOCATION" --project="$PROJECT_ID" --format='value(status.url)')
+          if [ -z "$SERVICE_URL" ]; then
+            echo "ERROR: failed to resolve service URL" >&2
+            exit 1
+          fi
+          echo "service_url=$SERVICE_URL" >> "$GITHUB_OUTPUT"
+          echo "Deployed: $SERVICE_URL"
+          # SARASHINA_SUMMARY_URLのドリフト検証は「Verify SARASHINA_SUMMARY_URL matches
+          # current service URL」ステップでビルド/デプロイ前に完了済み(deploy-paddle-ocr.yml
+          # と同じ理由でデプロイ後の再検証は不要)。
+
+      - name: Verify
+        env:
+          PROJECT_ID: ${{ steps.resolve.outputs.project_id }}
+          CLOUD_RUN_LOCATION: ${{ steps.resolve.outputs.cloud_run_location }}
+          SERVICE_URL: ${{ steps.deploy.outputs.service_url }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.image_digest }}
+        run: |
+          set -euo pipefail
+          TOKEN=$(gcloud auth print-identity-token --audiences="$SERVICE_URL")
+          # `// empty`無しだとキー欠落時にjqが文字列"null"を返しexit 0のまま後続比較に流れ、
+          # 「設定ファイルのキー欠落」が「値の不一致」という紛らわしいエラーになる
+          # (pr-review-toolkit silent-failure-hunter指摘、Medium)。空ならここでfail-loudする。
+          EXPECTED_BUILD_INFO=$(jq -r '.baseImage.buildInfo // empty' services/sarashina-summary/expected-model-hashes.json)
+          if [ -z "$EXPECTED_BUILD_INFO" ]; then
+            echo "ERROR: services/sarashina-summary/expected-model-hashes.json に baseImage.buildInfo が見つかりません" >&2
+            exit 1
+          fi
+          EXPECTED_ALIAS=$(jq -r '.textGeneration.fileName // empty' services/sarashina-summary/expected-model-hashes.json | sed 's/\.gguf$//')
+          if [ -z "$EXPECTED_ALIAS" ]; then
+            echo "ERROR: services/sarashina-summary/expected-model-hashes.json に textGeneration.fileName が見つかりません" >&2
+            exit 1
+          fi
+
+          echo "=== /health ==="
+          # curlは-f/--failを付けない限り401/403/500/503等の非2xxレスポンスでもexit 0を返す
+          # ため、HTTPステータスを明示的に取得しbody判定の前にゲートする(deploy-paddle-ocr.yml
+          # と同じ理由)。
+          HEALTH_STATUS=$(curl -sS -o /tmp/health_body.json -w '%{http_code}' -H "Authorization: Bearer ${TOKEN}" "${SERVICE_URL}/health")
+          HEALTH_BODY=$(cat /tmp/health_body.json)
+          echo "$HEALTH_BODY"
+          if [ "$HEALTH_STATUS" != "200" ]; then
+            echo "ERROR: /health が HTTP ${HEALTH_STATUS} を返しました(期待値: 200): $HEALTH_BODY" >&2
+            exit 1
+          fi
+
+          echo "=== /props (imageDigest検証の代替、PaddleOCR版の/healthとは異なりllama.cppの/healthは"
+          echo "    {\"status\":\"ok\"}のみでdigestを含まないため、/propsのbuild_info/model_aliasで代替する) ==="
+          PROPS_STATUS=$(curl -sS -o /tmp/props_body.json -w '%{http_code}' -H "Authorization: Bearer ${TOKEN}" "${SERVICE_URL}/props")
+          PROPS_BODY=$(cat /tmp/props_body.json)
+          if [ "$PROPS_STATUS" != "200" ]; then
+            echo "ERROR: /props が HTTP ${PROPS_STATUS} を返しました(期待値: 200): $PROPS_BODY" >&2
+            exit 1
+          fi
+          ACTUAL_BUILD_INFO=$(echo "$PROPS_BODY" | jq -r '.build_info // empty')
+          if [ "$ACTUAL_BUILD_INFO" != "$EXPECTED_BUILD_INFO" ]; then
+            echo "ERROR: /props の build_info ($ACTUAL_BUILD_INFO) が expected-model-hashes.json の baseImage.buildInfo ($EXPECTED_BUILD_INFO) と一致しません" >&2
+            exit 1
+          fi
+          ACTUAL_ALIAS=$(echo "$PROPS_BODY" | jq -r '.model_alias // empty')
+          if [ "$ACTUAL_ALIAS" != "$EXPECTED_ALIAS" ]; then
+            echo "ERROR: /props の model_alias ($ACTUAL_ALIAS) が期待値 ($EXPECTED_ALIAS) と一致しません" >&2
+            exit 1
+          fi
+          echo "OK: build_info=$ACTUAL_BUILD_INFO, model_alias=$ACTUAL_ALIAS"
+
+          echo "=== image digest検証(gcloud run services describeとビルド時digestの照合) ==="
+          DEPLOYED_IMAGE=$(gcloud run services describe sarashina-summary \
+            --region="$CLOUD_RUN_LOCATION" --project="$PROJECT_ID" \
+            --format='value(spec.template.spec.containers[0].image)')
+          if [ "$DEPLOYED_IMAGE" != "$IMAGE_DIGEST" ]; then
+            echo "ERROR: デプロイされたimage ($DEPLOYED_IMAGE) がビルド時のdigest ($IMAGE_DIGEST) と一致しません" >&2
+            exit 1
+          fi
+          echo "OK: deployed image matches build digest ($DEPLOYED_IMAGE)"
+
+          echo "=== probe設定確認 ==="
+          gcloud run services describe sarashina-summary \
+            --region="$CLOUD_RUN_LOCATION" --project="$PROJECT_ID" \
+            --format='yaml(spec.template.spec.containers[0].startupProbe,spec.template.spec.containers[0].livenessProbe)'
+
+          echo "=== 最小スモーク: 生成疎通確認(golden比較はPR2のスコープ、ここでは200+非空contentのみ確認) ==="
+          STARTED=$(date +%s)
+          CHAT_STATUS=$(curl -sS -o /tmp/chat_body.json -w '%{http_code}' -H "Authorization: Bearer ${TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d '{"messages":[{"role":"user","content":"こんにちは"}],"max_tokens":16,"cache_prompt":false}' \
+            "${SERVICE_URL}/v1/chat/completions")
+          ELAPSED=$(( $(date +%s) - STARTED ))
+          if [ "$CHAT_STATUS" != "200" ]; then
+            echo "ERROR: /v1/chat/completions が HTTP ${CHAT_STATUS} を返しました(期待値: 200): $(cat /tmp/chat_body.json)" >&2
+            exit 1
+          fi
+          node -e '
+            const fs = require("fs");
+            const raw = fs.readFileSync("/tmp/chat_body.json", "utf-8");
+            let data;
+            try {
+              data = JSON.parse(raw);
+            } catch (e) {
+              console.error("ERROR: /v1/chat/completions のレスポンスがJSONとしてパースできませんでした:", e.message);
+              console.error("raw body:", raw);
+              process.exit(1);
+            }
+            // 構造破壊的変更(choices不在等)と正常構造だがcontentが空、を別メッセージにする
+            // (raw bodyダンプを見ずとも真因を切り分けられるように、pr-review-toolkit
+            // silent-failure-hunter指摘反映)。
+            if (!Array.isArray(data.choices) || data.choices.length === 0) {
+              console.error("ERROR: レスポンスにchoices配列がありません(OpenAI互換APIの想定構造と異なります)");
+              console.error("raw body:", raw);
+              process.exit(1);
+            }
+            const content = data.choices[0].message?.content;
+            if (!content || content.trim().length === 0) {
+              console.error("ERROR: 生成contentが空です");
+              console.error("raw body:", raw);
+              process.exit(1);
+            }
+            console.log("OK: 生成疎通確認(content先頭50字):", content.slice(0, 50));
+          '
+          echo "実処理時間: ${ELAPSED}秒(コールドスタート込みのため単発値であることに留意)"
+
+      - name: Summary
+        env:
+          SERVICE_URL: ${{ steps.deploy.outputs.service_url }}
+          FIRST_DEPLOY: ${{ github.event.inputs.first_deploy }}
+          ENVIRONMENT: ${{ github.event.inputs.environment }}
+        run: |
+          {
+            echo "## Sarashina Summary Cloud Run デプロイ完了"
+            echo ""
+            echo "- environment: ${ENVIRONMENT}"
+            echo "- service URL: ${SERVICE_URL}"
+            echo ""
+            if [ "$FIRST_DEPLOY" = "true" ]; then
+              echo "**初回デプロイです。\`scripts/clients/${ENVIRONMENT}.env\` の \`SARASHINA_SUMMARY_URL\` を上記URLへ手動で更新し、別コミットでコミットしてください。**"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
