@@ -105,7 +105,7 @@ export interface SummaryScoreSpec {
   optionalFacts: readonly FactEntry[];
   minCoveredFacts: number | null;
   mustNotContainAmount?: boolean;
-  crossEntityPairs?: readonly (readonly [string, string])[];
+  crossEntityPairs?: readonly (readonly [FactEntry, string])[];
   role?: FixtureRole;
 }
 
@@ -190,7 +190,7 @@ export function parseFixtureMeta(raw: unknown): Record<string, SummaryScoreSpec>
       optionalFacts: (entry.optionalFacts as FactEntry[]) ?? [],
       minCoveredFacts: (entry.minCoveredFacts as number | null) ?? null,
       mustNotContainAmount: entry.must_not_contain_amount as boolean | undefined,
-      crossEntityPairs: entry.cross_entity_pairs as [string, string][] | undefined,
+      crossEntityPairs: entry.cross_entity_pairs as [FactEntry, string][] | undefined,
       role: entry.role as FixtureRole | undefined,
     };
   }
@@ -630,23 +630,39 @@ export function checkCrossEntity(
   // 適用してから比較する(修正前は「立花 誠一」(半角スペース入り)のまま検索しており、
   // 空白除去済みの「立花誠一様」に対して一致せず、全件unattributedになるバグがあった)。
   // 報告(findings/consistentPairs)にはdecision-maker可読性のため元表記を残す。
+  //
+  // person側は`FactEntry`(エイリアス配列)を許容する(D8「文子」対応、codex review指摘、
+  // ADR-0027 PR2bステップ8全10doc×3run正式gate run再実行、2026-09-22追加): coverage側
+  // (evaluateCoverage)だけエイリアスを認識しcross-entity側が旧来の姓名のみのままだと、
+  // 「文子様が誤った受診先を受診」のような取り違えが出力されてもperson側が一致せず
+  // unattributedOrgMentionsへ落ちてNOT_EVALUATED(警告のみ)になり、取り違えが検知されない
+  // まま`scoreSummary`全体がPASSしてしまう抜け穴が生じるため、両者を同じエイリアス集合で
+  // 一致させる。
   const normVocab = (s: string): string => normalizeForScore(s);
   const origByNorm = new Map<string, string>();
   for (const [person, org] of pairs) {
-    origByNorm.set(normVocab(person), person);
+    for (const alias of factAliases(person)) {
+      origByNorm.set(normVocab(alias), factLabel(person));
+    }
     origByNorm.set(normVocab(org), org);
   }
-  const personVocab = [...new Set(pairs.map((p) => normVocab(p[0])))];
+  const personVocab = [...new Set(pairs.flatMap((p) => factAliases(p[0]).map(normVocab)))];
   const orgVocab = [...new Set(pairs.map((p) => normVocab(p[1])))];
   const personToOrgs = new Map<string, Set<string>>();
+  // orgToPersonsは表示用(expectedPersons)のため、エイリアスの正規化キーではなく
+  // 人物の代表ラベル(factLabel)で集約する。正規化キーのまま集約すると、1人物の
+  // エイリアス数だけ重複したラベルがexpectedPersonsに並んでしまう(codex review指摘、
+  // ADR-0027 PR2bステップ8全10doc×3run正式gate run再実行、2026-09-22追加)。
   const orgToPersons = new Map<string, Set<string>>();
   for (const [personRaw, orgRaw] of pairs) {
-    const person = normVocab(personRaw);
     const org = normVocab(orgRaw);
-    if (!personToOrgs.has(person)) personToOrgs.set(person, new Set());
-    personToOrgs.get(person)!.add(org);
     if (!orgToPersons.has(org)) orgToPersons.set(org, new Set());
-    orgToPersons.get(org)!.add(person);
+    orgToPersons.get(org)!.add(factLabel(personRaw));
+    for (const alias of factAliases(personRaw)) {
+      const person = normVocab(alias);
+      if (!personToOrgs.has(person)) personToOrgs.set(person, new Set());
+      personToOrgs.get(person)!.add(org);
+    }
   }
 
   const findings: CrossEntityFinding[] = [];
@@ -674,7 +690,7 @@ export function checkCrossEntity(
         findings.push({
           person: personOrig,
           org: orgOrig,
-          expectedPersons: [...(orgToPersons.get(org) ?? [])].map((p) => origByNorm.get(p) ?? p),
+          expectedPersons: [...(orgToPersons.get(org) ?? [])],
           scope,
           segmentIndex,
           segmentText: segmentText.slice(0, 80),

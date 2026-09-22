@@ -387,7 +387,25 @@ test('checkCrossEntity: セグメント内で人物1名+誤った事業所はFAI
   assert.equal(r.findings.length, 1);
   assert.equal(r.findings[0].person, '立花 誠一');
   assert.equal(r.findings[0].org, 'さくらい整形外科');
-  assert.deepEqual(r.findings[0].expectedPersons, ['立花 文子']);
+  // D8の文子はFactEntry(エイリアス配列["立花 文子","文子"])のため表示ラベルは"立花 文子/文子"になる
+  // (codex review指摘、ADR-0027 PR2bステップ8全10doc×3run正式gate run再実行、2026-09-22追加)。
+  assert.deepEqual(r.findings[0].expectedPersons, ['立花 文子/文子']);
+});
+
+test('checkCrossEntity: FactEntry(エイリアス配列)のperson側は名のみの表記でも取り違えを検出する(D8「文子」対応、codex review指摘、2回目の回帰テスト)', () => {
+  // coverage側だけエイリアスを認識しcross-entity側が姓名のみのままだと、「文子様が誤った
+  // 受診先を受診」のような取り違えが出力されてもperson側が一致せずunattributedOrgMentions
+  // へ落ちてNOT_EVALUATED(警告のみ)になり、scoreSummary全体がPASSしてしまう抜け穴があった。
+  const meta = loadMeta();
+  const wrong = checkCrossEntity('文子様は青葉クリニックを受診', meta['D8']);
+  assert.equal(wrong.verdict, 'FAIL');
+  assert.equal(wrong.findings.length, 1);
+  assert.equal(wrong.findings[0].person, '立花 文子/文子');
+  assert.equal(wrong.findings[0].org, '青葉クリニック');
+
+  const correct = checkCrossEntity('文子様はさくらい整形外科を受診', meta['D8']);
+  assert.equal(correct.verdict, 'PASS');
+  assert.deepEqual(correct.consistentPairs, [{ person: '立花 文子/文子', org: 'さくらい整形外科' }]);
 });
 
 test('checkCrossEntity: 改行区切り(箇条書き記号なし)の複数文でも取り違えを検出する(codex review指摘、2回目)', () => {
