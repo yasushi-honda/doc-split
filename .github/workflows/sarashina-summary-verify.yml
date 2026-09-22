@@ -1,0 +1,136 @@
+name: Sarashina Summary Verify (ADR-0027 PR2b)
+
+# 実機ゲートハーネス(scripts/sarashina-summary-verify.ts、実装順序ステップ4)のCI実行。
+# PaddleOCR版(.github/workflows/paddle-ocr-verify.yml)のパターン(常にレポートを
+# artifact化・Step Summary出力・script非ゼロ終了を別ステップでジョブ失敗に変換)を踏襲する。
+#
+# `/plan-crossreview`(codex指摘1)反映: featureブランチへのpush直後は本ワークフローが
+# main未反映のためworkflow_dispatchが404になる(PR1cで既に遭遇した制約と同じ)。
+# 実行順序は「①コードPRをマージ→②main上で本workflowをworkflow_dispatch実行→③run URL・
+# 成果物を追記する小さなdocsコミットで記録」の2段階(実装順序ステップ7-8参照)。
+#
+# 設計判断(PaddleOCR版からの意図的な相違点):
+# - environmentはdevのみ(PR2b実装順序ステップ8時点でdev限定、他環境展開は本ミッションの
+#   スコープ外)
+# - --docs/--temperature/--budget-minutesを任意入力にし、疎通確認(--docs=D9,D10 --runs=1
+#   --smoke=true)を本番ゲート実行(全10doc既定)と同じworkflowで両対応できるようにする。
+#   `smoke`未指定(既定false)の部分実行はcoverage-aggregate/determinismがNOT_EVALUATEDになり
+#   サービスが正常でも必ずjobが赤くなる(codex review指摘、3回目)ため、`docs`を絞る場合は
+#   `smoke=true`も併せて指定すること
+# - concurrency groupはdeploy-sarashina-summary-${environment}と意図的に同一にする
+#   (deploy-paddle-ocr.yml/paddle-ocr-verify.ymlと同じ排他設計。計測中にデプロイが走ると
+#   サービススナップショット比較でinconclusiveになるため、自動的にキュー待ちさせる)
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment(PR2bはdevのみ対応)'
+        required: true
+        type: choice
+        options:
+          - dev
+      runs:
+        description: 'doc毎の試行回数(既定3、1〜10)'
+        required: false
+        default: '3'
+      docs:
+        description: '対象doc(カンマ区切り、例: D9,D10)。空欄なら全10doc(D1〜D10)'
+        required: false
+        default: ''
+      temperature:
+        description: '生成temperature(既定0.2、PR0検証時と同値)'
+        required: false
+        default: '0.2'
+      budget_minutes:
+        description: '実行時間予算(分)。空欄ならスクリプト既定値(60分)を使う'
+        required: false
+        default: ''
+      smoke:
+        description: '疎通確認モード。true にするとNOT_EVALUATED(データ不足)はjob失敗の条件にしない(FAIL/fatal/timedOut等は引き続き失敗扱い)。--docsで対象を絞る場合はtrue推奨'
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: deploy-sarashina-summary-${{ github.event.inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate inputs
+        env:
+          ENVIRONMENT: ${{ github.event.inputs.environment }}
+        run: |
+          set -euo pipefail
+          if [ "$ENVIRONMENT" != "dev" ]; then
+            echo "ERROR: PR2bでは現時点でdevのみ対応(got: $ENVIRONMENT)" >&2
+            exit 1
+          fi
+
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY_DEV }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run sarashina-summary-verify
+        id: run_verify
+        env:
+          RUNS: ${{ github.event.inputs.runs }}
+          DOCS: ${{ github.event.inputs.docs }}
+          TEMPERATURE: ${{ github.event.inputs.temperature }}
+          BUDGET_MINUTES: ${{ github.event.inputs.budget_minutes }}
+          SMOKE: ${{ github.event.inputs.smoke }}
+          OUT_PATH: sarashina-summary-verify.json
+        run: |
+          set +e
+          ARGS=(--runs="${RUNS:-3}" --temperature="${TEMPERATURE:-0.2}" --out="$OUT_PATH")
+          if [ -n "$DOCS" ]; then
+            ARGS+=(--docs="$DOCS")
+          fi
+          if [ -n "$BUDGET_MINUTES" ]; then
+            ARGS+=(--budget-minutes="$BUDGET_MINUTES")
+          fi
+          if [ "$SMOKE" = "true" ]; then
+            ARGS+=(--smoke=true)
+          fi
+          npx ts-node scripts/sarashina-summary-verify.ts "${ARGS[@]}"
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Upload report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sarashina-summary-verify-report
+          path: sarashina-summary-verify.json
+          if-no-files-found: warn
+
+      - name: Fail job if verify script reported non-zero exit
+        if: always()
+        env:
+          VERIFY_EXIT_CODE: ${{ steps.run_verify.outputs.exit_code }}
+        run: |
+          set -euo pipefail
+          if [ "${VERIFY_EXIT_CODE:-1}" != "0" ]; then
+            echo "ERROR: sarashina-summary-verify.ts が非ゼロ終了しました(exit_code=${VERIFY_EXIT_CODE:-unknown})。詳細はartifactのJSONレポートおよびStep Summaryを確認してください" >&2
+            exit 1
+          fi
+          echo "OK: sarashina-summary-verify.ts は正常終了しました"

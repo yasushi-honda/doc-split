@@ -30,6 +30,18 @@ ADR-0027(要約生成Gemini依存脱却、Sarashina2.2-3B移行)のPR0で実施�
 - `prompt-v2.txt`: PR0検証で使ったv2プロンプト(`bench.py`の`build_prompt_v2`と同一文面)をデータファイルとして固定。本番`functions/src/ocr/summaryPromptBuilder.ts`は無改変(PR3スコープを侵さない)。ドリフトガードが`bench.py`のリテラルと突合しクロス言語ドリフトを検知する
 - 既知の限界: 助詞トリムは`lastIndexOf`ベースの単純一致のため、1文字助詞(「も」等)が固有名詞の先頭1文字と偶然一致するケース(例:「もみじ整形外科」)では誤ってトリムしうる。PR0結果28run全件では未発生(コーパス回帰テストで確認済み)。詳細は`shared/summaryFabricationScan.ts`冒頭コメント参照
 
+## PR2bスコアラ・実機ゲートハーネス(実装済み)
+
+`scripts/lib/sarashinaSummaryScore.ts`が固有名詞捏造以外の品質判定(カバー率・数値捏造・金額混入・cross-entity対象者取り違え)を担当する。`shared/summaryFabricationScan.ts`(PR2a)とは別モジュールとして併存する(意味論・正規化ルールが異なるため混同を防ぐ)。
+
+- `normalizeForScore`は`normalizeForFabricationScan`とは別関数(NFKC必須・3桁区切りカンマのみ除去、句読点は除去しない)
+- カバー率(`evaluateCoverage`/`aggregateCoverage`)・数値捏造(`scanNumericFabrication`、`\d{2,}`方式+要介護/要支援/N割の1桁重要数値パターン)はPR0の`score.py`を移植、金額混入(`checkAmountProhibition`)・cross-entity(`checkCrossEntity`)は新規設計
+- 金額混入は「金額とは何か」の対照コーパス未整備のためモジュール自体はFAIL/WARNのポリシーを持たず、構造化結果のみを返す。cross-entityは`PASS`/`FAIL`/`NOT_EVALUATED`の3値判定(`NOT_EVALUATED`は「全ゲートPASS」の集計から除外)
+- `pr0-score-expected.json`: PR0結果JSON(28run、v1プロンプト分)へ`scoreSummary()`を実際に実行した結果を期待値として固定(PR2aの教訓「プロトタイプでの実測は設計検証であり実装の証明ではない」を踏襲)。28run全件でblocking 0件、warningsは全件`出力形状: eos-token`(生テキスト末尾の`</s>`残留を正規化前に検知する契約通り)。`scripts/lib/sarashinaSummaryScoreCorpus.test.ts`で回帰検証する
+- `manifest.json`に`summaryScoreConfigVersion`(スコアラ既定設定のハッシュ)・`runtimeContract`(`modelFtype`/`nCtx`/`totalSlots`/`modelAlias`)を追加。`sarashinaSummaryGoldenDrift.test.ts`が前者を`SUMMARY_SCORE_CONFIG_VERSION`と、後者を`services/sarashina-summary/Dockerfile`のENV設定・`expected-model-hashes.json`のfileNameと突合する(実行前の静的検証のみ。ランタイム実測は`sarashinaSummaryVerify.ts`の`runtime-contract`ゲートの責務)
+
+`scripts/lib/sarashinaSummaryVerify.ts` + `scripts/sarashina-summary-verify.ts`(CLIエントリ、`npx ts-node scripts/sarashina-summary-verify.ts --runs=3`)が実機ゲートハーネス本体。v1プロンプト(本番`summaryPromptBuilder.ts`の`buildSummaryPrompt`をそのまま呼び出す)でD1〜D10(D5〜D8はPR0未実行、本ハーネスで初めて実機実行する)へ実際にリクエストを送り、9ゲート(`runtime-contract`/`fabrication`/`recombination`(WARN)/`coverage-aggregate`/`coverage-per-doc`/`numeric-fabrication`/`amount-absence`(WARN)/`determinism`/`output-sanity`(WARN))で判定する。`.github/workflows/sarashina-summary-verify.yml`(workflow_dispatch、devのみ)から実行する。詳細な設計判断(runtime-contractの3層区分・timeout時は再送しない安全方針等)はADR-0027「PR2b実装知見」節を参照。
+
 ## PR0実測結果(2026-09-21〜22実施・完了、Pythonスクリプトによる暫定検証)
 
 `pr0-verification/`に、PR0で実際に使用したDockerfile・cloudbuild.yaml・検証スクリプト(`bench.py`/`scan_entity_fabrication.py`/`score.py`)と、実験結果(`results/`配下、モデルのpropsレスポンス含む)を保存している。

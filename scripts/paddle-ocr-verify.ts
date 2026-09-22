@@ -30,11 +30,49 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import * as crypto from 'crypto';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { percentile } from './lib/confirmedReplayStats';
 import { loadFixturePath } from './fixtures/paddleOcrLoadFixtures';
+import {
+  GCLOUD_SUBPROCESS_TIMEOUT_MS,
+  parseEnvField,
+  requireEnvField,
+  sha256File,
+  decodeJwtExpSeconds,
+  mintIdToken,
+  IdTokenProvider,
+  snapshotsMatch,
+  classifyFailure,
+  summarizeLatencies,
+  gateVerdict,
+  sleep,
+  parsePositiveIntMinutesToMs,
+  type ServiceSnapshot,
+  type RequestFailureKind,
+  type LatencySummary,
+  type GateVerdict,
+} from './lib/cloudRunVerifyCommon';
+
+// ADR-0027 PR2b(`/plan-crossreview`codex指摘): 認証・env解析・リトライ分類・統計・
+// ゲート判定のうちサービス非依存な部分は`scripts/lib/cloudRunVerifyCommon.ts`へ抽出済み
+// (ロジック変更ゼロ、移動のみ)。既存`scripts/lib/paddleOcrVerify.test.ts`は
+// `../paddle-ocr-verify`からのimportを変更しないため、以下で再export する。
+export {
+  parseEnvField,
+  requireEnvField,
+  sha256File,
+  decodeJwtExpSeconds,
+  IdTokenProvider,
+  snapshotsMatch,
+  classifyFailure,
+  summarizeLatencies,
+  gateVerdict,
+  type ServiceSnapshot,
+  type RequestFailureKind,
+  type LatencySummary,
+  type GateVerdict,
+};
 import {
   LOAD_TIERS,
   type LoadTier,
@@ -86,17 +124,7 @@ const REQUEST_TIMEOUT_MS = 180_000;
 const MAX_RETRIES = 3;
 const INITIAL_BACKOFF_MS = 2_000;
 const MIN_SUBSEQUENT_SAMPLES = 10;
-/**
- * silent-failure-hunter指摘(Medium、pr-review-toolkit): `/ocr`本体は`AbortController`で
- * 明示的に180秒の上限を設けているのに対し、同じ理由で外部プロセスに依存する`gcloud`呼び出し
- * (トークン発行・サービススナップショット取得)には従来タイムアウトがなかった。gcloudが
- * ネットワーク不調・認証状態異常等でハングすると、例外にすらならず無限に待ち続け、
- * 「main()のトップレベルcatchでも必ずレポートを書き出す」という設計全体が発動する機会すら
- * 得られないまま、GitHub Actionsのjob timeout-minutes(240分)でジョブごと強制終了される
- * (この場合`if: always()`のartifactアップロードすら実行されない)。妥当な上限を設け、
- * 既存のtry/catch機構に正しく捕捉させる。
- */
-const GCLOUD_SUBPROCESS_TIMEOUT_MS = 60_000;
+// GCLOUD_SUBPROCESS_TIMEOUT_MSは scripts/lib/cloudRunVerifyCommon.ts へ抽出済み(ADR-0027 PR2b)。
 /**
  * codex review(8周目)指摘(P2): `--repeat`の上限(20)だけでは、429/5xxの再試行が繰り返し
  * 発生するケースで `.github/workflows/paddle-ocr-verify.yml` の `timeout-minutes: 240` を
@@ -154,27 +182,8 @@ export const GOLDEN_CASES: readonly GoldenCase[] = [
 
 // ============================================================================
 // env ファイル解析(deploy-paddle-ocr.yml の resolve_field() と同じプレースホルダー判定)
+// parseEnvField/requireEnvFieldは scripts/lib/cloudRunVerifyCommon.ts へ抽出済み(ADR-0027 PR2b)。
 // ============================================================================
-
-const PLACEHOLDER_VALUES = new Set([
-  '', '<TBD>', 'TBD', 'tbd', '<TODO>', 'TODO', 'todo', '<FIXME>', 'FIXME', 'fixme',
-  'null', 'NULL', 'undefined', 'UNDEFINED', 'xxx', 'XXX', '<PLACEHOLDER>',
-]);
-
-export function parseEnvField(content: string, key: string): string | null {
-  const re = new RegExp(`^${key}=(.*)$`, 'm');
-  const match = content.match(re);
-  if (!match) return null;
-  return match[1].replace(/["']/g, '').trim();
-}
-
-export function requireEnvField(content: string, key: string, envFilePathForError: string): string {
-  const val = parseEnvField(content, key);
-  if (val === null || PLACEHOLDER_VALUES.has(val)) {
-    throw new Error(`${key} が ${envFilePathForError} に設定されていません(値: ${val === null ? '未検出' : val})`);
-  }
-  return val;
-}
 
 /**
  * サービスURLを解決する。優先順位: --url > 環境変数 PADDLE_OCR_URL > scripts/clients/dev.env。
@@ -218,10 +227,7 @@ export interface GoldenManifest {
   textRecognitionModelFileHashes: Record<string, string>;
 }
 
-export function sha256File(filePath: string): string {
-  const buf = fs.readFileSync(filePath);
-  return crypto.createHash('sha256').update(buf).digest('hex');
-}
+// sha256Fileは scripts/lib/cloudRunVerifyCommon.ts へ抽出済み(ADR-0027 PR2b)。
 
 /**
  * manifest.jsonのsourcePdfSha256と実ファイルのSHA-256を突合する。
@@ -267,85 +273,13 @@ export function deriveExpectedModelVersion(manifest: GoldenManifest): string {
   return `PP-OCRv6_medium/det:${det.slice(0, 12)}/rec:${rec.slice(0, 12)}`;
 }
 
-// ============================================================================
-// IDトークン管理(JWT expデコードによる遅延更新、pass2でエッジケース追記)
-// ============================================================================
-
-/**
- * JWTペイロード(base64url)をデコードしてexp(epoch秒)を読み取る。自己発行トークンの
- * 読み取りのみのため署名検証は行わない。デコードに失敗した場合はnullを返し、
- * 呼び出し側はキャッシュせず都度再取得する(pass2指摘、実機でのペイロード形式は未検証のため
- * 安全側に倒す)。
- */
-export function decodeJwtExpSeconds(token: string): number | null {
-  const parts = token.split('.');
-  if (parts.length < 2) return null;
-  try {
-    const base64url = parts[1].replace(/-/g, '+').replace(/_/g, '/');
-    const padded = base64url + '='.repeat((4 - (base64url.length % 4)) % 4);
-    const json = Buffer.from(padded, 'base64').toString('utf-8');
-    const payload = JSON.parse(json) as { exp?: unknown };
-    return typeof payload.exp === 'number' ? payload.exp : null;
-  } catch {
-    return null;
-  }
-}
-
-export class IdTokenProvider {
-  private cachedToken: string | null = null;
-  private cachedExpSeconds: number | null = null;
-  private inflight: Promise<string> | null = null;
-
-  constructor(
-    private readonly audience: string,
-    private readonly mintFn: (audience: string) => Promise<string> = mintIdToken
-  ) {}
-
-  /** 有効期限まで300秒を切っている、またはexpデコード不能なら再取得する。 */
-  async getToken(forceRefresh = false): Promise<string> {
-    const nowSeconds = Math.floor(Date.now() / 1000);
-    const stillValid =
-      !forceRefresh &&
-      this.cachedToken !== null &&
-      this.cachedExpSeconds !== null &&
-      nowSeconds < this.cachedExpSeconds - 300;
-    if (stillValid) {
-      return this.cachedToken as string;
-    }
-    if (this.inflight) {
-      return this.inflight;
-    }
-    this.inflight = this.mint();
-    try {
-      return await this.inflight;
-    } finally {
-      this.inflight = null;
-    }
-  }
-
-  private async mint(): Promise<string> {
-    const token = await this.mintFn(this.audience);
-    this.cachedToken = token;
-    this.cachedExpSeconds = decodeJwtExpSeconds(token);
-    return token;
-  }
-}
-
-async function mintIdToken(audience: string): Promise<string> {
-  const { stdout } = await execFileAsync('gcloud', ['auth', 'print-identity-token', '--audiences', audience], {
-    timeout: GCLOUD_SUBPROCESS_TIMEOUT_MS,
-  });
-  return stdout.trim();
-}
+// IDトークン管理(decodeJwtExpSeconds/IdTokenProvider/mintIdToken)は
+// scripts/lib/cloudRunVerifyCommon.ts へ抽出済み(ADR-0027 PR2b)。
 
 // ============================================================================
 // サービススナップショット(Cloud Run control-plane APIのみ、HTTPは叩かない)
+// ServiceSnapshot型自体は scripts/lib/cloudRunVerifyCommon.ts へ抽出済み(ADR-0027 PR2b)。
 // ============================================================================
-
-export interface ServiceSnapshot {
-  revisionName: string;
-  imageDigest: string | null;
-}
 
 /**
  * codex pass2 High指摘の反映: 当初案は`GET /health`でスナップショットを取得していたが、
@@ -379,68 +313,12 @@ export async function getServiceSnapshot(projectId: string, region: string): Pro
   };
 }
 
-export function snapshotsMatch(a: ServiceSnapshot, b: ServiceSnapshot): boolean {
-  return a.revisionName === b.revisionName && a.imageDigest === b.imageDigest;
-}
-
-// ============================================================================
-// リトライ分類(codex pass1/pass2反映)
-// ============================================================================
-
-export type RequestFailureKind = 'networkError' | 'timeout' | 'httpStatus';
-
-/**
- * リトライ対象はネットワークエラー・429・5xx系のみ。400/413/415/422等の4xxおよび
- * クライアントタイムアウト(180秒)は即fatal/timedOutとしリトライしない。
- *
- * タイムアウトをリトライしない理由(codex pass2 High指摘): アプリ内上限は240秒・Cloud Run
- * timeoutは300秒のため、クライアントが180秒で諦めて再送しても、サーバ側OCRは継続しうる。
- * maxScale=3の下で再送が別インスタンスへ回ると並行処理が発生し、subsequentRequestsMs系列の
- * 「逐次実行」という前提そのものを汚染する。
- */
-export function classifyFailure(kind: RequestFailureKind, httpStatus: number | null): 'retryable' | 'fatal' | 'timeout' {
-  if (kind === 'timeout') return 'timeout';
-  if (kind === 'networkError') return 'retryable';
-  // kind === 'httpStatus'
-  if (httpStatus === 429 || (httpStatus !== null && httpStatus >= 500 && httpStatus <= 599)) {
-    return 'retryable';
-  }
-  return 'fatal';
-}
-
-// ============================================================================
-// 統計量(既存 confirmedReplayStats.ts の percentile を再利用、nearest-rank法)
-// ============================================================================
-
-export interface LatencySummary {
-  p50Ms: number;
-  p95Ms: number;
-  minMs: number;
-  maxMs: number;
-  n: number;
-}
-
-export function summarizeLatencies(valuesMs: number[]): LatencySummary {
-  const sorted = [...valuesMs].sort((a, b) => a - b);
-  return {
-    p50Ms: percentile(sorted, 50),
-    p95Ms: percentile(sorted, 95),
-    minMs: sorted.length > 0 ? sorted[0] : 0,
-    maxMs: sorted.length > 0 ? sorted[sorted.length - 1] : 0,
-    n: sorted.length,
-  };
-}
+// snapshotsMatch/classifyFailure(RequestFailureKind)/summarizeLatencies(LatencySummary)/
+// gateVerdict(GateVerdict)は scripts/lib/cloudRunVerifyCommon.ts へ抽出済み(ADR-0027 PR2b)。
 
 /** ページ数換算(ミリ秒/ページ → 秒)。71/20/1ページゲート判定の基礎。 */
 export function projectToSeconds(perPageMs: number, pages: number): number {
   return (perPageMs * pages) / 1000;
-}
-
-export type GateVerdict = 'PASS' | 'FAIL' | 'NOT_EVALUATED';
-
-export function gateVerdict(actualSeconds: number | null, thresholdSeconds: number): GateVerdict {
-  if (actualSeconds === null) return 'NOT_EVALUATED';
-  return actualSeconds <= thresholdSeconds ? 'PASS' : 'FAIL';
 }
 
 // ============================================================================
@@ -899,16 +777,7 @@ export function parseArgs(argv: string[]): CliArgs {
   return { mode, url: args.url, repeat: 3, out, budgetMs, tier, series, intensity, injectFailureAtPage };
 }
 
-function parsePositiveIntMinutesToMs(raw: string, flagName: string): number {
-  if (!/^\d+$/.test(raw)) {
-    throw new Error(`--${flagName} は1以上の整数(分)を指定してください(got: ${raw})`);
-  }
-  const minutes = Number.parseInt(raw, 10);
-  if (!Number.isSafeInteger(minutes) || minutes < 1) {
-    throw new Error(`--${flagName} は1以上の整数(分)を指定してください(got: ${raw})`);
-  }
-  return minutes * 60 * 1000;
-}
+// parsePositiveIntMinutesToMsは scripts/lib/cloudRunVerifyCommon.ts へ抽出済み(ADR-0027 PR2b)。
 
 // ============================================================================
 // OCRリクエスト実行(注入可能、テスト時はフェイクに差し替える)
@@ -980,9 +849,7 @@ export function makeOcrRequestFn(timeoutMs: number): OcrRequestFn {
 
 export const defaultOcrRequestFn: OcrRequestFn = makeOcrRequestFn(REQUEST_TIMEOUT_MS);
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+// sleepは scripts/lib/cloudRunVerifyCommon.ts へ抽出済み(ADR-0027 PR2b)。
 
 // ============================================================================
 // OCR送信リトライの汎用コア(golden/load共有、2026-09-18 ADR-0025 PR4c Stage3で抽出)
