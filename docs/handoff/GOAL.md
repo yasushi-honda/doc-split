@@ -4,13 +4,13 @@ updated: 2026-09-22
 <!-- 前ミッション(dev/kanameone/cocoro環境監査・保守検証)は2026-07-20完遂。全文はdocs/handoff/LATEST.md参照。 -->
 <!-- Google Drive連携Phase1 (MVP)実装ミッションは2026-07-22完了(PR#700マージ)。詳細は本ファイル末尾「Google Drive連携Phase1完遂」節+docs/handoff/LATEST.md参照。 -->
 
-## 【PR1c完了・マージ済み(PR#1010, #1011)・2026-09-22】要約生成(regenerateSummary)のGemini依存脱却: Sarashina2.2-3B(Q8_0量子化)実装移行、PR0(spike)実測完了→ADR-0027策定→PR1a(サービス基盤)→PR1b(インフラ準備)→PR1c(デプロイワークフロー+dev初回デプロイ)実装完了
+## 【PR2b実装中(ステップ1-2完了・handoff)・2026-09-22】要約生成(regenerateSummary)のGemini依存脱却: Sarashina2.2-3B(Q8_0量子化)実装移行、PR0→PR1(a/b/c)→PR2a完了、PR2b実装着手
 
-**進捗サマリ(2026-09-22)**: PR0(spike)でdev環境への独立した再ビルド・再デプロイにより品質・処理能力・コストを実測(詳細は`docs/adr/0027-sarashina-summary-migration.md`および`~/.claude/plans/logical-baking-lighthouse.md`「PR0実測結果」節)。plan-crossreview(grip+codex)とPlan agentレビューを経てPR1を1a/1b/1cへ分割。PR1a(ADR-0027新設+`services/sarashina-summary/`サービス基盤+CI配線、PR #1006)・PR1b(`scripts/setup-sarashina-summary-infra.sh`+`docs/context/delivery-and-update-guide.md`追記、PR #1008)・PR1c(`.github/workflows/deploy-sarashina-summary.yml`新設、PR #1010)をそれぞれcodex review+pr-review-toolkit並列クロスレビューで検出した指摘を全て修正のうえマージ済み。PR1c実装過程で、`gcloud iam service-accounts get-iam-policy`実行自体に未文書権限(`iam.serviceAccounts.getIamPolicy`)が必要という根本問題をcodex review指摘で発見し、actAs事前チェックロジックを削除しDeploy失敗時のエラーハンドリング(403 grep案内)へ設計変更した。
+**進捗サマリ(2026-09-22更新)**: PR1(a/b/c)完了・マージ済み(PR #1006, #1008, #1010, #1011)。続けてPR2a(固有名詞捏造スキャナ本体`shared/summaryFabricationScan.ts`+CI契約テスト、PR #1013)をcodex review 5回・pr-review-toolkit 4エージェント対応のうえsquash mergeで完了。
 
-devへの初回デプロイ(GitHub Actions run 35674503504、11分10秒で成功)をVerifyステップで実機確認: `/health`200 OK、`/props`の`build_info=b11065-ce8caa6e6`・`model_alias=sarashina2.2-3b-instruct-v0.1-Q8_0`がそれぞれベースイメージ・ENV設定と一致、デプロイ済みimageがビルド時digestと一致、probe設定確認、生成疎通確認(`POST /v1/chat/completions` → 200+非空content、実処理時間2秒)。`scripts/clients/dev.env`の`SARASHINA_SUMMARY_URL`を実URL(`https://sarashina-summary-whfgr6jwaa-an.a.run.app`)へ反映(PR #1011、PaddleOCR運用#907と同じパターンで別コミット)。
+**PR2b(実機ゲートハーネス)は詳細設計+`/plan-crossreview`(grip自白+codex 2パス)完了、実装ステップ1-2完了・feature branch `feat/pr2b-sarashina-verify-harness`(origin push済み、未マージ)で作業中**: ステップ1(`scripts/lib/cloudRunVerifyCommon.ts`抽出、コミット`907c3358`)・ステップ2(`scripts/lib/sarashinaSummaryScore.ts`新規実装〔カバー率/数値捏造/金額混入/cross-entity判定〕、コミット`d9ce3bec`、実データ検証で重大バグ発見・修正済み)。残りステップ3(PR0回帰テスト固定)〜8(マージ後dev実機実行)は未着手、セッション長を理由に次セッションへhandoff。詳細・次の一手は`~/.claude/plans/logical-baking-lighthouse.md`「6b. PR2b詳細設計」節+改訂履歴2026-09-22「PR2b実装ステップ1-2完了」節を参照。
 
-**PR1(a/b/c)完了。次はPR2(固有名詞捏造ゲート一式のCI/契約テスト化)以降、`~/.claude/plans/logical-baking-lighthouse.md`実装ステップ表の通りPR0完了後の再承認が必要。decision-makerへPR1完了を報告し、PR2着手可否を確認すること。**
+**次の一手**: 新セッションで`feat/pr2b-sarashina-verify-harness`ブランチをcheckoutし、実装順序ステップ3(`scripts/fixtures/sarashina-summary-golden/pr0-score-expected.json`固定+`manifest.json`の`summaryScoreConfigVersion`追加+`sarashinaSummaryGoldenDrift.test.ts`更新)から再開する。
 
 ADR-0025はPass1(OCR)のみ対象でPass2/要約は明示的にスコープ外(手動トリガー・低頻度のため)。decision-makerの意向で「要約もいずれはPaddleOCRと同様に自前ホスティングSLM(Cloud Run、CPUのみ、asia-northeast1)へモデルルーティングしたい」という将来検討として、2026-09-21に候補調査・実機検証を実施した。当日中に品質・コスト・アーキテクチャ・コンプライアンスの検討が完了し、**decision-makerが実装移行を正式決定**(下記「次の一手」トリガー②を充足)。CLAUDE.md CRITICAL該当のためplan modeでのフル計画策定に入る。実装(summaryPromptBuilder.ts等の変更)はまだ一切行っていない(この節はplan mode着手時点の記録)。
 
