@@ -138,6 +138,18 @@ export const DEFAULT_ORG_SUFFIXES: readonly string[] = [
 ];
 
 /**
+ * `DEFAULT_ORG_SUFFIXES`のうち、名前の後ろ(suffix)だけでなく前(prefix)にも現れる語彙
+ * (codex review 4回目指摘、P2): 「株式会社」「有限会社」は実務では「株式会社みずほ」の
+ * ようにプレフィックス表記される方が一般的だが、①〜③の判定は一貫して「core+suffix」
+ * (名前が先、種別語が後)の順序のみを前提にしており、プレフィックス表記の捏造企業名が
+ * 検出をすり抜けていた(左文脈が空文字列になりgenericCore判定で候補にすら入らないため)。
+ * `scanSummaryForFabrication`はこの語彙についてのみ、右方向(`extractRightContext`)の
+ * 追加パスで「suffix+core」順の候補も生成する。他の語彙(クリニック・訪問看護等)は
+ * プレフィックスとして使われる日本語表現が存在しないため対象外。
+ */
+const PREFIX_CAPABLE_SUFFIXES: ReadonlySet<string> = new Set(['株式会社', '有限会社']);
+
+/**
  * 左文脈を切り詰める助詞・機能語(②助詞トリムで使用)。地の文の巻き込みを解消するための
  * 区切り位置候補。`trimParticles`が使用前に長さ降順へソートするため、この配列自体の
  * 記述順は任意でよい(code-reviewer/pr-test-analyzer指摘、複数経路で同時検出: 当初は
@@ -330,6 +342,51 @@ function trimParticles(leftContext: string, particles: readonly string[]): strin
 }
 
 /**
+ * 法人格プレフィックス語彙(`PREFIX_CAPABLE_SUFFIXES`)専用: 「株式会社みずほ」のように
+ * suffixが名前の前に来るパターンを検出するため、suffix終端から右へ最大maxLeftContext文字
+ * (①左文脈抽出と対称の予算)を、名前構成文字が続く限り読み進める(codex review 4回目指摘、
+ * P2: 「株式会社みずほ」「有限会社みずほ」のような、実務でより一般的なプレフィックス表記の
+ * 捏造企業名が、①〜③の左文脈ベースの判定だけでは一切検出できずすり抜けていた。suffixの
+ * 左に何もない=空文字列としてgenericCore判定され候補にすらならないため)。
+ */
+function extractRightContext(text: string, suffixEnd: number, maxLength: number): string {
+  let end = suffixEnd;
+  let count = 0;
+  while (end < text.length && count < maxLength) {
+    const ch = text[end];
+    if (!NAME_CHAR.test(ch)) break;
+    end++;
+    count++;
+  }
+  return text.slice(suffixEnd, end);
+}
+
+/**
+ * `trimParticles`(②助詞トリム)の左右対称版。プレフィックス形では助詞・機能語は名前の
+ * *後ろ*に続く(「株式会社みずほが担当」の「が」)ため、最初に出現した助詞の手前までを
+ * core候補として残す(`trimParticles`が最後の出現位置の後ろを残すのと対称)。
+ */
+function trimParticlesFromPrefix(rightContext: string, particles: readonly string[]): string {
+  const sortedParticles = [...particles].filter((p) => p.length > 0).sort((a, b) => b.length - a.length);
+  let core = rightContext;
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const particle of sortedParticles) {
+      const idx = core.indexOf(particle);
+      if (idx !== -1) {
+        const candidate = core.slice(0, idx);
+        if (candidate.length < core.length) {
+          core = candidate;
+          changed = true;
+        }
+      }
+    }
+  }
+  return core;
+}
+
+/**
  * ④再結合判定(順序上は③verbatim判定の後): 原典中に `{suffix}（{core}）` という完全一致の括弧書き略記パターンが
  * 実在するかのみを見る限定判定(codex指摘反映、近接30文字判定は不採用)。
  * `source`は呼び出し元(`scanSummaryForFabrication`)で`normalizeForFabricationScan`
@@ -347,6 +404,9 @@ interface Candidate {
   end: number;
   core: string;
   suffix: string;
+  /** 'core-suffix' = 通常の「core+suffix」順(「みずほクリニック」)。
+   *  'suffix-core' = プレフィックス語彙の「suffix+core」順(「株式会社みずほ」、PREFIX_CAPABLE_SUFFIXES参照)。 */
+  order: 'core-suffix' | 'suffix-core';
 }
 
 export function scanSummaryForFabrication(
@@ -368,9 +428,24 @@ export function scanSummaryForFabrication(
   const normalizedSummary = normalizeForFabricationScan(summaryText);
   const normalizedSource = normalizeForFabricationScan(sourceText);
 
-  const rawMatches = findOrgSuffixMatches(normalizedSummary, config.orgSuffixes);
+  const rawMatchesAll = findOrgSuffixMatches(normalizedSummary, config.orgSuffixes);
   const genericCoreSet = new Set(config.genericCores);
   const orgSuffixSet = new Set(config.orgSuffixes);
+
+  // suffix語彙同士が包含関係(「グループホーム」⊃「ホーム」)の場合、包含されるsuffixの
+  // マッチを候補生成より前に除去する(codex review 4回目指摘、P2)。当初は候補(Candidate)
+  // レベルの包含除去(下記「最長スパン優先」)しか行っておらず、外側のsuffix(グループホーム)
+  // がgenericCore判定(coreが空文字)で候補にすら入らない場合、内側のsuffix(ホーム)だけが
+  // 生き残り「グループ」を捏造coreとして誤検出していた(「利用先はグループホームです」で
+  // 実際に再現確認)。suffix自体の包含関係はconfig(語彙)の構造に起因する問題であり、
+  // 左文脈確定より前の段階で解消するのが正しい。
+  const rawMatches = rawMatchesAll.filter(
+    (m) =>
+      !rawMatchesAll.some(
+        (other) =>
+          other !== m && other.suffixStart <= m.suffixStart && m.suffixEnd <= other.suffixEnd
+      )
+  );
 
   const candidates: Candidate[] = [];
   for (const match of rawMatches) {
@@ -394,7 +469,23 @@ export function scanSummaryForFabrication(
     if (normalizedSource.includes(core + match.suffix)) continue;
 
     const start = match.suffixStart - core.length;
-    candidates.push({ start, end: match.suffixEnd, core, suffix: match.suffix });
+    candidates.push({ start, end: match.suffixEnd, core, suffix: match.suffix, order: 'core-suffix' });
+  }
+
+  // プレフィックス形(「株式会社みずほ」)の検出(codex review 4回目指摘、P2、
+  // PREFIX_CAPABLE_SUFFIXES参照)。suffix終端から右方向にcoreを探す点以外は
+  // 上記の左文脈ループと対称のロジック(②助詞トリム相当・orgSuffix自体除外・③verbatim判定)。
+  for (const match of rawMatches) {
+    if (!PREFIX_CAPABLE_SUFFIXES.has(match.suffix)) continue;
+
+    const rightContext = extractRightContext(normalizedSummary, match.suffixEnd, config.maxLeftContext);
+    const core = trimParticlesFromPrefix(rightContext, config.particles);
+    if (genericCoreSet.has(core)) continue;
+    if (orgSuffixSet.has(core)) continue;
+    if (normalizedSource.includes(match.suffix + core)) continue;
+
+    const end = match.suffixEnd + core.length;
+    candidates.push({ start: match.suffixStart, end, core, suffix: match.suffix, order: 'suffix-core' });
   }
 
   // 最長スパン優先で入れ子候補を除去(「みずほ訪問看護」⊂「みずほ訪問看護ステーション」)
@@ -411,7 +502,7 @@ export function scanSummaryForFabrication(
       : 'fabricated';
     return {
       kind,
-      name: c.core + c.suffix,
+      name: c.order === 'suffix-core' ? c.suffix + c.core : c.core + c.suffix,
       core: c.core,
       suffix: c.suffix,
       start: c.start,

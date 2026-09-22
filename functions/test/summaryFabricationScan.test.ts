@@ -157,6 +157,34 @@ describe('scanSummaryForFabrication: 助詞トリム(②)', () => {
     expect(r2.fabricatedCount).to.equal(0);
   });
 
+  it('suffix語彙同士が包含関係(「グループホーム」⊃「ホーム」)の外側がgenericCore判定で除外される場合、内側の誤検出も連鎖して除外する(codex review 4回目指摘の回帰テスト)', () => {
+    // 「利用先はグループホームです」のように事業所名を伴わない一般的な表現では、外側の
+    // 「グループホーム」はgenericCore(空文字)判定で候補から除外されるが、修正前は内側の
+    // 「ホーム」だけが生き残り「グループ」を捏造coreとして誤検出していた。
+    const source = '利用者の状況について記載。';
+    const r = scanSummaryForFabrication('利用先はグループホームです。', source);
+    expect(r.fabricatedCount).to.equal(0);
+    expect(r.findings).to.deep.equal([]);
+  });
+
+  it('プレフィックス形の法人格語彙(「株式会社」「有限会社」)による捏造企業名を検出する(codex review 4回目指摘の回帰テスト)', () => {
+    // 実務でより一般的な「株式会社みずほ」のようなプレフィックス表記は、修正前は
+    // 左文脈(suffixより前)が空文字列になりgenericCore判定で検出をすり抜けていた。
+    const source = '利用者の状況について記載。';
+    const r1 = scanSummaryForFabrication('株式会社みずほが担当。', source);
+    expect(r1.fabricatedCount).to.equal(1);
+    expect(r1.findings[0].name).to.equal('株式会社みずほ');
+    const r2 = scanSummaryForFabrication('有限会社みずほへ相談。', source);
+    expect(r2.fabricatedCount).to.equal(1);
+    expect(r2.findings[0].name).to.equal('有限会社みずほ');
+  });
+
+  it('プレフィックス形でも原典に実在する法人名はverbatim一致で検出しない(codex review 4回目指摘の回帰テスト)', () => {
+    const source = '株式会社みずほ訪問看護の担当者が訪問。';
+    const r = scanSummaryForFabrication('株式会社みずほの担当者が来訪。', source);
+    expect(r.fabricatedCount).to.equal(0);
+  });
+
   it('リスト列挙の中黒区切りを巻き込まない(「・」は区切り文字として扱う)', () => {
     const source = '訪問介護・通所介護・短期入所生活介護・訪問看護を提供。';
     const summary = '特筆事項：訪問介護・通所介護・短期入所生活介護・訪問看護の各サービス内容。';
