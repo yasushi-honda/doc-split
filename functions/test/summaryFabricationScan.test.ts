@@ -87,6 +87,48 @@ describe('scanSummaryForFabrication: verbatim判定(②)', () => {
     const r = scanSummaryForFabrication(summary, source);
     expect(r.fabricatedCount).to.equal(0);
   });
+
+  it('「々」(踊り字)を含む実在人名でも正しくverbatim一致する(codex review 2回目指摘の回帰テスト)', () => {
+    // 「々」がNAME_CHARに含まれていないと「佐々木クリニック」のような実在名で
+    // 左文脈抽出が「々」の手前で止まり誤ってfabricated扱いになっていた。
+    const source = '担当医は佐々木クリニックの佐々木医師。';
+    const summary = '担当医は佐々木クリニックです。';
+    const r = scanSummaryForFabrication(summary, source);
+    expect(r.fabricatedCount).to.equal(0);
+  });
+
+  it('「々」を含む実在人名に捏造プレフィックスを付けた場合はfabricatedとして検出する(codex review 2回目指摘の回帰テスト)', () => {
+    const source = '担当医は佐々木クリニックの佐々木医師。';
+    const summary = '担当医は新佐々木クリニックです。';
+    const r = scanSummaryForFabrication(summary, source);
+    expect(r.fabricatedCount).to.equal(1);
+    expect(r.findings[0].name).to.equal('新佐々木クリニック');
+  });
+
+  it('【既知の限界】組織名内部に助詞と同じ文字列を含む場合、捏造プレフィックスの検出をすり抜けることがある(codex review 2回目指摘、decision-maker確認済み・対応不要)', () => {
+    // 「さくらの里クリニック」の「の」が助詞と誤認され、捏造プレフィックス「新」付きの
+    // 偽名「新さくらの里クリニック」に対してもトリムが誤発動し、トリム後のcore「里」が
+    // sourceの部分文字列に一致してすり抜ける。正規表現+文脈判定の設計限界であり、
+    // PR0実データ28runでは未発生。形態素解析への置き換えなしには根本解決できないため、
+    // 2026-09-22 decision-maker確認のうえ対応不要と判断した(ファイル冒頭コメント参照)。
+    // 「現状こう振る舞う」ことをテストで固定し、将来の意図しない挙動変化を検知する。
+    const source = 'さくらの里クリニックが担当。';
+    const summary = '担当は新さくらの里クリニックです。';
+    const r = scanSummaryForFabrication(summary, source);
+    expect(r.fabricatedCount).to.equal(0); // 既知の限界: 本来はfabricatedであるべきだが検出できない
+  });
+
+  it('【既知の限界】maxLeftContextを超える長い実在組織名への捏造プレフィックスは検出できないことがある(codex review 2回目指摘、decision-maker確認済み・対応不要)', () => {
+    // 既定maxLeftContext=16文字を超えるsuffix直前の名前部分(他のORG_SUFFIX語彙を含まない
+    // 純粋な部分)に捏造プレフィックスを付けると、抽出ウィンドウの外にプレフィックスが
+    // はみ出し、ウィンドウ内のcoreがsourceの実在名の部分文字列と完全一致してしまいすり
+    // 抜ける。2026-09-22 decision-maker確認のうえ対応不要と判断。
+    const longName = 'アイウエオカキクケコサシスセソタチクリニック'; // suffix直前17文字+「クリニック」
+    const source = `${longName}が担当。`;
+    const summary = `担当は偽${longName}です。`; // 捏造プレフィックス「偽」(1文字)
+    const r = scanSummaryForFabrication(summary, source);
+    expect(r.fabricatedCount).to.equal(0); // 既知の限界: 本来はfabricatedであるべきだが検出できない
+  });
 });
 
 describe('scanSummaryForFabrication: 助詞トリム(③)', () => {
