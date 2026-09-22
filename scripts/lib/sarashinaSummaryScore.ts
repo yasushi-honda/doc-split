@@ -178,15 +178,26 @@ export function validateCoverageSpec(docId: string, spec: SummaryScoreSpec): str
   if (unionKeys.size !== factsSet.size || [...unionKeys].some((k) => !factsSet.has(k))) {
     errors.push(`${docId}: facts が mustCover∪optionalFacts と一致しません`);
   }
-  for (const f of spec.facts) {
+  // codex review指摘(P2、2026-09-23追加): 以前は`facts`のみ検証していたが、`factKey`は
+  // 文字列単体と1件のみのエイリアス配列を同一キーへ潰す(`factKey("A") === factKey(["A"])`、
+  // `join`はセパレータを1件配列には挿入しないため)ため、`mustCover`/`optionalFacts`側に
+  // 不正な1件配列(`[["A"]]`)が混入していても、`facts`側の正常な`"A"`とキーが一致して
+  // 上記のunion一致チェックを素通りしてしまい、`facts`だけの検証では検知できなかった。
+  // 3リスト全てを個別に検証する。
+  for (const f of [...spec.facts, ...spec.mustCover, ...spec.optionalFacts]) {
     errors.push(...validateFactEntry(docId, f, 'facts'));
   }
-  // codex review指摘(type-design-analyzer、2026-09-23追加): facts/mustCover/optionalFactsは
-  // FactEntry不変条件(空配列・空文字列・1件のみ配列)を検証していたが、crossEntityPairsの
-  // person側(同じFactEntry型、D8で実際に使用)は素通りしていた。同じ不変条件を適用する。
+  // type-design-analyzer指摘、2026-09-23追加: crossEntityPairsのperson側(同じFactEntry型、
+  // D8で実際に使用)がfacts系と同じ不変条件検証から漏れていたため追加。ただしcodex review
+  // 2回目指摘(P2): pairの要素数チェック(下記)より先に destructuring すると、
+  // `cross_entity_pairs: [[]]`のような不正な行(要素0個)で`person`が`undefined`になり
+  // `validateFactEntry`が例外を投げて検証全体がクラッシュする。要素数が2件のpairのみを
+  // 対象にする(不正な行は下記の別チェックで報告される)。
   if (spec.crossEntityPairs !== undefined) {
-    for (const [person] of spec.crossEntityPairs) {
-      errors.push(...validateFactEntry(docId, person, 'crossEntityPairs'));
+    for (const pair of spec.crossEntityPairs) {
+      if (pair.length === 2) {
+        errors.push(...validateFactEntry(docId, pair[0], 'crossEntityPairs'));
+      }
     }
   }
   const factsEmpty = spec.facts.length === 0;

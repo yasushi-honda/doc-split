@@ -250,6 +250,37 @@ test('validateCoverageSpec: crossEntityPairsのperson側FactEntryにも同じ不
   assert.ok(errs.some((e) => e.includes('エイリアスが1件のみ') && e.includes('crossEntityPairs')));
 });
 
+test('validateCoverageSpec: mustCover/optionalFactsの不正な1件配列は、factsと同じfactKeyに潰れてunion一致チェックを素通りしても個別に検出する(codex review指摘、PR#1021最終、P2の回帰テスト)', () => {
+  // factKey("A")とfactKey(["A"])は共に"A"になる(joinは1件配列にセパレータを挿入しない)
+  // ため、mustCoverの不正な1件配列がfactsの正常な文字列とキー上一致してしまい、
+  // 「facts が mustCover∪optionalFacts と一致しません」チェックだけでは検知できない。
+  // facts側だけでなくmustCover/optionalFacts側も個別に検証することで解消したことを固定する。
+  const spec: SummaryScoreSpec = {
+    facts: ['A'],
+    mustCover: [['A'] as unknown as FactEntry],
+    optionalFacts: [],
+    minCoveredFacts: 1,
+  };
+  const errs = validateCoverageSpec('X', spec);
+  assert.ok(errs.some((e) => e.includes('エイリアスが1件のみ')));
+});
+
+test('validateCoverageSpec: crossEntityPairsの不正な行(要素数が2でない)はvalidateFactEntryの実行前にスキップし、クラッシュせず別のエラーを報告する(codex review指摘、PR#1021最終、P2の回帰テスト)', () => {
+  // 修正前は`for (const [person] of pairs)`で先にdestructuringしていたため、
+  // `[[]]`(要素0個の行)ではpersonがundefinedになりvalidateFactEntry内の
+  // `aliases.length`参照で例外を投げ、検証関数全体がクラッシュしていた。
+  const spec: SummaryScoreSpec = {
+    facts: [],
+    mustCover: [],
+    optionalFacts: [],
+    minCoveredFacts: null,
+    crossEntityPairs: [[] as unknown as readonly [FactEntry, string]],
+  };
+  assert.doesNotThrow(() => validateCoverageSpec('X', spec));
+  const errs = validateCoverageSpec('X', spec);
+  assert.ok(errs.some((e) => e.includes('2要素タプルである必要があります')));
+});
+
 test('validateCoverageSpec: roleが不正な値なら検出する', () => {
   const spec: SummaryScoreSpec = { facts: [], mustCover: [], optionalFacts: [], minCoveredFacts: null, role: 'bogus' as FixtureRole };
   const errs = validateCoverageSpec('X', spec);
