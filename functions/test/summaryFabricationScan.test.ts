@@ -297,6 +297,19 @@ describe('scanSummaryForFabrication: 助詞トリム(②)', () => {
     expect(r.fabricatedCount).to.equal(0);
     expect(r.findings).to.deep.equal([]);
   });
+
+  it('組織名自体が「して」を含む場合の捏造プレフィックスは、単体「して」ではなく複合語「に対して」で解消したため引き続き検出できる(codex review指摘の回帰テスト)', () => {
+    // 「〜に対して」修正の初版では単体の「して」を助詞として追加していたが、それだと
+    // 「あしてらすクリニック」のように組織名自体が「して」を内部に含む場合、捏造プレフィックス
+    // (「新あしてらすクリニック」)のtrimParticlesが「して」で誤ってトリムし「らすクリニック」
+    // まで削ってしまい、これがsourceの部分文字列に一致することで検出をすり抜けてしまう
+    // (codex review指摘、既存の【既知の限界】2と同型の新規バイパス)。複合語「に対して」への
+    // 差し替えによりこのバイパスが生じないことを固定する。
+    const source = 'あしてらすクリニックが担当。';
+    const r = scanSummaryForFabrication('新あしてらすクリニックが担当。', source);
+    expect(r.fabricatedCount).to.equal(1);
+    expect(r.findings[0].name).to.equal('新あしてらすクリニック');
+  });
 });
 
 describe('scanSummaryForFabrication: 再結合判定(④、fabricated/recombined分離)', () => {
