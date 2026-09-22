@@ -4,15 +4,19 @@ updated: 2026-09-22
 <!-- 前ミッション(dev/kanameone/cocoro環境監査・保守検証)は2026-07-20完遂。全文はdocs/handoff/LATEST.md参照。 -->
 <!-- Google Drive連携Phase1 (MVP)実装ミッションは2026-07-22完了(PR#700マージ)。詳細は本ファイル末尾「Google Drive連携Phase1完遂」節+docs/handoff/LATEST.md参照。 -->
 
-## 【PR2b実装完了・マージ済み(PR#1015)・2026-09-22】要約生成(regenerateSummary)のGemini依存脱却: Sarashina2.2-3B(Q8_0量子化)実装移行、PR0→PR1(a/b/c)→PR2a→PR2b完了、残るはステップ8(dev実機実行)のみ
+## 【ステップ8実行完了・2026-09-22】要約生成(regenerateSummary)のGemini依存脱却: Sarashina2.2-3B(Q8_0量子化)実装移行、PR0→PR1(a/b/c)→PR2a→PR2b→ステップ8(本番ゲート実行)完了。fabricationバグはPR #1016で修正済み、残るcoverage/determinismの3件FAILは「ベースラインデータ収集run」としてここで区切り、次セッション以降の別タスクとする(decision-maker判断、2026-09-22)
 
-**進捗サマリ(2026-09-22更新)**: PR1(a/b/c)完了・マージ済み(PR #1006, #1008, #1010, #1011)。PR2a(固有名詞捏造スキャナ本体`shared/summaryFabricationScan.ts`+CI契約テスト、PR #1013)完了。
+**進捗サマリ(2026-09-22更新)**: PR1(a/b/c)完了・マージ済み(PR #1006, #1008, #1010, #1011)。PR2a(固有名詞捏造スキャナ本体、PR #1013)・PR2b(実機ゲートハーネス、PR #1015)完了。
 
-**PR2b(実機ゲートハーネス)完了・マージ済み(PR #1015、squash、コミット`8b14c214`)**: 実装順序ステップ1〜7が全て完了した。ステップ1(`cloudRunVerifyCommon.ts`抽出)・ステップ2(`sarashinaSummaryScore.ts`新規実装〔カバー率/数値捏造/金額混入/cross-entity判定〕)・ステップ3(PR0結果28run回帰テスト固定+manifest drift guard)・ステップ4(`sarashinaSummaryVerify.ts`+CLIエントリ、9ゲート表実装)・ステップ5(`.github/workflows/sarashina-summary-verify.yml`新設)・ステップ6(ADR/README追記)・ステップ7(PRマージ)。マージ前レビューはcodex review 3回(High×2/Critical×1含む計10件検出、cross-entity改行分割バグ・空レスポンスの全ゲート素通り・discriminated union化・smoke モード欠陥等を修正)+pr-review-toolkit 5エージェント(code-reviewer/pr-test-analyzer/silent-failure-hunter/type-design-analyzer/comment-analyzer)並列実行で実施、findings全件反映のうえマージ。`scripts/lib`最終557テストPASS。
+**ステップ8(全10doc×3run本番ゲート実行、workflow run `35697925060`)結果**: インフラ面は完全にクリーン(inconclusive:false、timedOut/skipped 0件)。ゲート結果:
+- `runtime-contract`: PASS(実サービス`/props`と完全一致)
+- `fabrication`: 実行当初FAIL(D2run2、「波多野千秋様に**対して**さくら通所介護センターが」の「対して」が実在組織名に連結し誤検知)→ 根本原因はモデルの幻覚ではなく`shared/summaryFabricationScan.ts`の`DEFAULT_PARTICLES`に「に対して」が未収録だったスキャナ側バグと判明。**PR #1016(squash mergeでmain反映済み)で修正完了**。codex review 3回(1回目のP2指摘「単体`して`だと`あしてらすクリニック`型の新規バイパスが生じる」を受け複合語`に対して`へ差し替え)、findings 0件、functions 2314件+scripts/lib 557件+新規回帰テスト2件 全PASS確認済み
+- `coverage-aggregate`: FAIL(83.7%=108/129、閾値85%に僅かに未達)【未対応、ベースラインデータとして記録】
+- `coverage-per-doc`: FAIL(13/30run)。D2/D3で「あおぞら居宅介護支援事業所」、D3で追加して「青葉クリニック」が繰り返し欠落。ADR-0027記載の既知の弱点(v1プロンプトが長文D3で事業所名/医療機関名を省略)がD2/D4にも及ぶことが判明した新情報【未対応、ベースラインデータとして記録】
+- `determinism`: FAIL(D2, D4, D5, D6でrun間の合否判定ブレ)【未対応、ベースラインデータとして記録】
+- `numeric-fabrication`/`amount-absence`: PASS(クリーン)。`output-sanity`: WARN(30/30run、eos-token、設計通り無害)
 
-**残りステップ8(実装順序の最終ステップ)**: main上で`sarashina-summary-verify.yml`をworkflow_dispatch実行し、D1〜D10(D5〜D8はPR0未実行、初めての実機実行)への実際のリクエストで9ゲートの結果を確認する。featureブランチではworkflow_dispatchがmain未反映のため404になる制約があり、マージ後の今初めて実行可能になった。D5〜D8は初回実行時点ではbaseline収集run(NOT_EVALUATED許容)として扱い、実測値をもとに`meta.json`の`mustCover`を人手で確定してから正式gate runを再実行する運用(6b節参照)。
-
-**次の一手**: `gh workflow run sarashina-summary-verify.yml -f environment=dev -f runs=3` (または疎通確認としてまず`-f docs=D9,D10 -f runs=1 -f smoke=true`)を実行し、実機ゲート結果を確認する。実際のCloud Runコスト・実行時間(推定20〜30分)が発生するため、着手前にdecision-maker確認を得ること。
+**次の一手**: 残るcoverage-aggregate/coverage-per-doc/determinismの3件は、v1プロンプト改善・mustCover基準見直し・temperature/プロンプト設計起因のdeterminism調査のいずれも本格的な意思決定を伴うため、次セッション以降で個別に着手する(decision-maker合意、2026-09-22「今回はベースラインデータ収集runとして記録しここで区切る」選択)。着手時はまずcoverage不足(D2/D3/D4)から着手するか、determinism調査から着手するかをdecision-makerに再確認すること。
 
 ADR-0025はPass1(OCR)のみ対象でPass2/要約は明示的にスコープ外(手動トリガー・低頻度のため)。decision-makerの意向で「要約もいずれはPaddleOCRと同様に自前ホスティングSLM(Cloud Run、CPUのみ、asia-northeast1)へモデルルーティングしたい」という将来検討として、2026-09-21に候補調査・実機検証を実施した。当日中に品質・コスト・アーキテクチャ・コンプライアンスの検討が完了し、**decision-makerが実装移行を正式決定**(下記「次の一手」トリガー②を充足)。CLAUDE.md CRITICAL該当のためplan modeでのフル計画策定に入る。実装(summaryPromptBuilder.ts等の変更)はまだ一切行っていない(この節はplan mode着手時点の記録)。
 
