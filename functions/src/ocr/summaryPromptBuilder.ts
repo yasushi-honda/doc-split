@@ -29,6 +29,14 @@ const DEFAULT_DOCUMENT_TYPE_LABEL = '書類';
  * - `ocrResult.length > MAX_SUMMARY_INPUT_LENGTH` の場合、先頭 MAX_SUMMARY_INPUT_LENGTH
  *   文字のみを使用し末尾に「...(以下省略)」を付ける
  * - `documentType` が空文字列なら DEFAULT_DOCUMENT_TYPE_LABEL をタイトルに差し込む
+ *
+ * 「関係者」項目の複数記載時省略禁止指示(ADR-0027 PR2bステップ8実機ゲート、2026-09-22追加):
+ * Sarashina2.2-3B本番ゲート実行(全10doc×3run)で、二次的な関連組織(ケアマネ事業所・受診先
+ * 医療機関など、主たる発行元組織とは別の組織)が一貫して要約から欠落する傾向を発見
+ * (D2/D3で該当事業所名が3/3run・6/6run全てで欠落、ランダムな脱落ではなく100%の再現性)。
+ * 本プロンプトはGeminiでも共通のため、モデル固有の弱点ではなくプロンプト側の「3〜5行」という
+ * 短さ制約と、複数組織の網羅を明示要求しない曖昧な指示文の組み合わせに起因すると推定し、
+ * 「複数記載されている場合も省略せず全て含める」を明示追加した(詳細: ADR-0027 PR2b実装知見節)。
  */
 export function buildSummaryPrompt(ocrResult: string, documentType: string): string {
   const truncatedText =
@@ -42,7 +50,7 @@ export function buildSummaryPrompt(ocrResult: string, documentType: string): str
 【要約のポイント】
 - 書類の主な目的・内容
 - 重要な日付や金額があれば含める
-- 関係者（顧客名、事業所名など）の記載があれば含める
+- 関係者（顧客名、事業所名、医療機関名など）は、複数記載されている場合も省略せず全て含める
 - 専門用語は平易に言い換える
 
 【OCR結果】
