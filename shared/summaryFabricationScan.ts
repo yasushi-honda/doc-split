@@ -22,14 +22,22 @@
  *    原典に実在するため、実在しない情報の創作(捏造)とは性質が異なる第3のカテゴリ。
  *
  * 本実装は4段階の判定で上記を解消する:
- *   ① 左文脈抽出 → ② verbatim判定(地の文巻き込みの大半を解消)
- *   → ③ 助詞トリム(残りの地の文巻き込みを解消) → ④ 再結合判定(fabricated/recombinedの分離)
+ *   ① 左文脈抽出 → ② 助詞トリム(地の文巻き込みを解消、core確定)
+ *   → ③ verbatim判定(トリム後core+suffix全体の完全一致のみ見る) → ④ 再結合判定
+ *      (fabricated/recombinedの分離)
  *
  * `/plan-crossreview`(codex High指摘)で「再結合判定を原典中の前後30文字以内の近接一致で
  * 行うと、無関係な地名・人名+種別語の偶然の近接一致による真の捏造もrecombined(既定WARN)
  * としてゲートを通してしまう」と指摘された。そのため④は「原典中に `{suffix}（{core}）`
- * (全角/半角括弧)という完全一致の括弧書き略記パターンが実在するか」という限定的な構文
- * 変換のみを許容する判定にしている。曖昧な近接一致はfabricated側に倒す。
+ * という完全一致の括弧書き略記パターンが実在するか」という限定的な構文変換のみを許容する
+ * 判定にしている。曖昧な近接一致はfabricated側に倒す。
+ *
+ * `codex review`(PR2a実装後、P2指摘)で「②③の当初の順序(verbatim判定を先に行い、左文脈の
+ * 右詰め部分列のいずれかがsourceにverbatim一致すれば検出しない、という設計)だと、実在する
+ * 組織名`青葉クリニック`の前に捏造プレフィックス`新`を付けた`新青葉クリニック`が、部分列
+ * `青葉クリニック`だけでverbatim一致してしまい検出されずバイパスされる」と指摘された。
+ * これを受け、②助詞トリムを先に行いcoreを確定させたうえで、③verbatim判定はトリム後の
+ * `core+suffix`全体の完全一致のみを見る設計に変更した(部分列を試す探索は行わない)。
  *
  * `sourceText` には呼び出し側が既に切り詰め済みのテキスト(`MAX_SUMMARY_INPUT_LENGTH`
  * 適用後)を渡す契約とする。本関数は切り詰めを行わない — 原典全文を渡すと、モデルが
@@ -37,9 +45,10 @@
  * なるため(PR2詳細設計「6a」節、D3が9,940文字 > MAX_SUMMARY_INPUT_LENGTH=8000の教訓)。
  *
  * 数値捏造・金額混入・cross-entity(対象者取り違え)判定はスコープ外
- * (`scripts/lib/sarashinaSummaryScore.ts` が担当、意味論が異なるため混ぜない)。
+ * (別モジュールが担当する想定、PR2b`scripts/lib/sarashinaSummaryScore.ts`として実装予定・
+ * 本PR時点では未着手、意味論が異なるため本スキャナには混ぜない、comment-analyzer指摘反映)。
  *
- * 既知の限界(PR2a実装時、対照コーパステストで発見): ③助詞トリムは`lastIndexOf`ベースの
+ * 既知の限界(PR2a実装時、対照コーパステストで発見): ②助詞トリムは`lastIndexOf`ベースの
  * 単純な文字列一致のため、1文字助詞(「も」「が」「を」等)が固有名詞の先頭1文字と偶然一致
  * する場合(例: 「もみじ整形外科」の「も」)、意図せず固有名詞の一部までトリムしてしまう
  * ことがある(「もみじ整形外科」→core「みじ」)。PR0結果28run全件では実際にこの衝突は
@@ -114,8 +123,13 @@ export const DEFAULT_ORG_SUFFIXES: readonly string[] = [
 ];
 
 /**
- * 左文脈を切り詰める助詞・機能語(③助詞トリムで使用)。地の文の巻き込みを解消するための
- * 区切り位置候補。長い語を先に置き、部分一致による誤トリムを避ける。
+ * 左文脈を切り詰める助詞・機能語(②助詞トリムで使用)。地の文の巻き込みを解消するための
+ * 区切り位置候補。`trimParticles`が使用前に長さ降順へソートするため、この配列自体の
+ * 記述順は任意でよい(code-reviewer/pr-test-analyzer指摘、複数経路で同時検出: 当初は
+ * 配列の記述順自体に「長い語を先に置く」不変条件を求めていたが、手動維持は破綻しやすく
+ * 実際に`した際`が`した`より後・`という点`が`という`より後にあるなど不変条件に違反した
+ * 状態でコミットされていた。ソート責務を呼び出し側からロジック側へ移し、配列の記述順に
+ * 依存しない設計へ修正した)。
  */
 export const DEFAULT_PARTICLES: readonly string[] = [
   'については',
@@ -126,9 +140,9 @@ export const DEFAULT_PARTICLES: readonly string[] = [
   'ならびに',
   'および',
   'または',
+  'という点',
   'という',
   'による',
-  'という点',
   'ため',
   'まで',
   'など',
@@ -139,12 +153,10 @@ export const DEFAULT_PARTICLES: readonly string[] = [
   'より',
   'にて',
   'にも',
-  'にて',
   'へは',
-  'にて',
+  'した際',
   'した',
   'する',
-  'した際',
   'は',
   'が',
   'を',
@@ -159,7 +171,7 @@ export const DEFAULT_PARTICLES: readonly string[] = [
 
 /**
  * トリム後coreが以下いずれかに該当する場合、それ単体では固有名詞として不十分と判定し
- * 検出しない(③助詞トリムで使用)。「サービス内容は通所リハビリ」等、種別語そのものが
+ * 検出しない(②助詞トリムで使用)。「サービス内容は通所リハビリ」等、種別語そのものが
  * suffixとして再度マッチしてしまうケースや、明らかな汎用語の巻き込みを解消する。
  */
 export const DEFAULT_GENERIC_CORES: readonly string[] = [
@@ -185,7 +197,12 @@ export const DEFAULT_FABRICATION_SCAN_CONFIG: Required<FabricationScanOptions> =
 };
 
 /** `DEFAULT_FABRICATION_SCAN_CONFIG` の正規化JSONを元にした簡易ハッシュ(FNV-1a、依存ゼロ)。
- * ドリフトガード契約テストがこの値を直接参照する。 */
+ * `scripts/lib/sarashinaSummaryGoldenDrift.test.ts`がこの値を`manifest.json`の
+ * `fabricationScanConfigVersion`と直接突合する。`DEFAULT_ORG_SUFFIXES`/`DEFAULT_PARTICLES`/
+ * `DEFAULT_GENERIC_CORES`/`DEFAULT_MAX_LEFT_CONTEXT`のいずれかを変更するとこのハッシュ値が
+ * 変わるため、`manifest.json`の`fabricationScanConfigVersion`を同時更新しないとCIが赤くなる
+ * (comment-analyzer指摘、意図的な設計: 判定基準を変更したらD9/D10相当の固有名詞捏造テストを
+ * 再実行して品質を再検証すべき、というREADME記載の運用ルールを機械的に強制する)。 */
 function fnv1aHex(input: string): string {
   let hash = 0x811c9dc5;
   for (let i = 0; i < input.length; i++) {
@@ -209,15 +226,23 @@ export const FABRICATION_SCAN_CONFIG_VERSION: string = fnv1aHex(
 const NAME_CHAR = /[一-龠ぁ-んァ-ヶーa-zA-Z0-9]/;
 
 /**
- * 正規化: NFKC → 前後の空白除去 → 特殊トークン除去。summaryText/sourceText 両方に適用する。
+ * 正規化: NFKC → 前後の空白除去 → 特殊トークン除去 → 改行を含む空白の除去。
+ * summaryText/sourceText 両方に適用する。
  * `</s>` はllama.cppのEOSトークンがそのまま出力に混入する既知の事象への対処
  * (PR2詳細設計「6a」節参照)。exportして呼び出し側(PR4の書込前正規化)が同じ実装を使えるようにする。
+ *
+ * 改行除去(codex review指摘、P2): 当初`[ \t]+`のみを対象にしており改行`\n`/`\r`を
+ * 除去していなかった。PaddleOCRのレイアウト都合でページ・行境界に実在の組織名が分断される
+ * (例: OCR結果中で「青葉\nクリニック」のように改行を挟む)ケースで、sourceText側の改行が
+ * 残ったままverbatim判定・再結合判定の文字列比較(source.includes)を行うと一致せず、
+ * 実在する組織名を誤ってfabricatedと判定する偽陽性を招く。summaryText/sourceText両方に
+ * 同じ正規化を適用するため、改行除去による一貫性の崩れは生じない。
  */
 export function normalizeForFabricationScan(text: string): string {
   return text
     .normalize('NFKC')
     .replace(/<\/s>|<s>|<think>|<\/think>/g, '')
-    .replace(/[ \t]+/g, '')
+    .replace(/[ \t\r\n]+/g, '')
     .trim();
 }
 
@@ -259,28 +284,20 @@ function extractLeftContext(text: string, suffixStart: number, maxLeftContext: n
 }
 
 /**
- * ②verbatim判定: 左文脈の右詰め部分列のいずれかがsuffixと連結してsourceにそのまま含まれるか。
- * `cut === leftContext.length`(candidateがsuffix単体になるケース)は除外する — suffix自体は
- * 常にsourceに含まれうる語彙(「訪問看護」等の一般語)であり、これを含めるとleft contextが
- * 何であってもverbatim判定が常にtrueになってしまい判定が無意味化するバグを防ぐ。
+ * ②助詞トリム: 左文脈を助詞・機能語の最後の出現位置で切り、coreを得る。
+ * `particles`は長い語から先に評価する(`した際`を`した`より先に、`という点`を`という`より
+ * 先に切らないと、短い語が先にマッチして長い語の残り(`際`/`点`)がcoreへ混入する)。
+ * この関数自身が長さ降順にソートしてから使うため、`particles`引数(`DEFAULT_PARTICLES`)の
+ * 記述順そのものには依存しない(code-reviewer/pr-test-analyzer指摘: 呼び出し側の手動ソート
+ * 維持に頼る設計は破綻しやすく、実際に不変条件違反がコミットされていた教訓を反映)。
  */
-function isVerbatimInSource(leftContext: string, suffix: string, source: string): boolean {
-  for (let cut = 0; cut < leftContext.length; cut++) {
-    const candidate = leftContext.slice(cut) + suffix;
-    if (candidate.length > 0 && source.includes(candidate)) return true;
-  }
-  return false;
-}
-
-/** ③助詞トリム: 左文脈を助詞・機能語の最後の出現位置で切り、coreを得る。 */
 function trimParticles(leftContext: string, particles: readonly string[]): string {
+  const sortedParticles = [...particles].filter((p) => p.length > 0).sort((a, b) => b.length - a.length);
   let core = leftContext;
-  // 助詞は長い語を先に評価(部分一致による誤トリム防止のため呼び出し側でソート済みの配列を使う)。
   let changed = true;
   while (changed) {
     changed = false;
-    for (const particle of particles) {
-      if (particle.length === 0) continue;
+    for (const particle of sortedParticles) {
       const idx = core.lastIndexOf(particle);
       if (idx !== -1) {
         const candidate = core.slice(idx + particle.length);
@@ -295,14 +312,16 @@ function trimParticles(leftContext: string, particles: readonly string[]): strin
 }
 
 /**
- * ④再結合判定: 原典中に `{suffix}（{core}）` または `{suffix}({core})` という完全一致の
- * 括弧書き略記パターンが実在するかのみを見る限定判定(codex指摘反映、近接30文字判定は不採用)。
+ * ④再結合判定(順序上は③verbatim判定の後): 原典中に `{suffix}（{core}）` という完全一致の括弧書き略記パターンが
+ * 実在するかのみを見る限定判定(codex指摘反映、近接30文字判定は不採用)。
+ * `source`は呼び出し元(`scanSummaryForFabrication`)で`normalizeForFabricationScan`
+ * (NFKC正規化)を通した後の値のみを受け取る契約のため、全角括弧`（）`は既に半角`()`へ
+ * 正規化済みで、半角パターンのみを見れば足りる(pr-test-analyzer指摘: 当初は全角/半角
+ * 両方のパターンを見ていたが、全角分岐は正規化後には到達不能なデッドコードだった)。
  */
 function isRecombinedFromSource(core: string, suffix: string, source: string): boolean {
   if (core.length === 0) return false;
-  const fullwidth = `${suffix}（${core}）`;
-  const halfwidth = `${suffix}(${core})`;
-  return source.includes(fullwidth) || source.includes(halfwidth);
+  return source.includes(`${suffix}(${core})`);
 }
 
 interface Candidate {
@@ -338,14 +357,15 @@ export function scanSummaryForFabrication(
   for (const match of rawMatches) {
     const leftContext = extractLeftContext(normalizedSummary, match.suffixStart, config.maxLeftContext);
 
-    // ②verbatim判定: 原典にそのまま存在するなら検出しない
-    if (isVerbatimInSource(leftContext, match.suffix, normalizedSource)) continue;
-
-    // ③助詞トリム: core空/汎用語なら検出しない
+    // ②助詞トリム: leftContextを助詞境界で切りcoreを得る。core空/汎用語なら検出しない
     const core = trimParticles(leftContext, config.particles);
     if (genericCoreSet.has(core)) continue;
-    // トリム後も原典にverbatimで存在するなら(助詞境界を跨いだverbatim一致)検出しない
-    if (isVerbatimInSource(core, match.suffix, normalizedSource)) continue;
+
+    // ③verbatim判定: トリム後のcore全体+suffixが原典にそのまま存在するなら検出しない
+    // (codex review指摘、P2: 部分列を試す設計だと捏造プレフィックス「新青葉クリニック」の
+    // 「青葉クリニック」部分だけがverbatim一致してバイパスされてしまうため、トリム済みの
+    // core全体での完全一致のみを見る。部分列探索は行わない)。
+    if (normalizedSource.includes(core + match.suffix)) continue;
 
     const start = match.suffixStart - core.length;
     candidates.push({ start, end: match.suffixEnd, core, suffix: match.suffix });

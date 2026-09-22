@@ -197,7 +197,7 @@
       "10月2日"
     ],
     "minCoveredFacts": 3,
-    "_note": "PR0で未実行。対象者取り違え判定(cross_entity_pairs)はscripts/lib/sarashinaSummaryScore.tsの責務、本ファイルのmustCoverは氏名・共通事業所のみ必須とする暫定値。"
+    "_note": "PR0で未実行。対象者取り違え判定(cross_entity_pairs)は別モジュールが担当する想定(PR2b scripts/lib/sarashinaSummaryScore.tsとして実装予定・本PR時点では未着手)、本ファイルのmustCoverは氏名・共通事業所のみ必須とする暫定値。"
   },
   "D9": {
     "title": "福祉用具貸与確認書",

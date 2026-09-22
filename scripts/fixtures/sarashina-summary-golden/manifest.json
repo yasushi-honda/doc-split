@@ -3,7 +3,7 @@
   "note": "ADR-0027 PR2a: モデルハッシュ・fixtureハッシュ・プロンプトハッシュ・捏造スキャナ設定の ドリフト検知用manifest。いずれかを変更した場合、scripts/lib/sarashinaSummaryGoldenDrift.test.ts がCIで検知する。値を変更する場合はD9/D10相当の固有名詞捏造テストを再実行して品質を 再検証したうえで、本ファイルと関連READMEを同時更新すること。無検証での更新は禁止。",
   "promptV2Sha256": "442c3dced23f15cdb88858929fe7740d73e75302234b8644d9a38a4818eee522",
   "maxInputChars": 8000,
-  "fabricationScanConfigVersion": "ccd683d2",
+  "fabricationScanConfigVersion": "6f198bc4",
   "docs": {
     "D1.txt": {
       "sha256": "1c81be7b8a32f343653518d4bfc16782b181585f4b839f89f5d3300ec09a1a5c",
@@ -46,8 +46,8 @@
       "bytes": 137
     },
     "meta.json": {
-      "sha256": "e48d7692269fb0de9a915da8c833c227cf8d30a556dcebc804d58fdf044fe880",
-      "bytes": 6514
+      "sha256": "5c407abe28266f743e6e092e42b250b495da83fcd714f2a0d0d2fe7f1e47290a",
+      "bytes": 6601
     }
   },
   "model": {

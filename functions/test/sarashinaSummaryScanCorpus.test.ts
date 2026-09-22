@@ -42,7 +42,21 @@ const EXPECTED_PATH = path.join(
   'sarashina-summary-golden',
   'pr0-fabrication-expected.json'
 );
-const MAX_INPUT_CHARS = 8000; // functions/src/ocr/summaryPromptBuilder.ts の MAX_SUMMARY_INPUT_LENGTH と同値
+const MANIFEST_PATH = path.join(
+  __dirname,
+  '..',
+  '..',
+  'scripts',
+  'fixtures',
+  'sarashina-summary-golden',
+  'manifest.json'
+);
+// ハードコードせず manifest.json から読む(silent-failure-hunter指摘: 独立した8000のハード
+// コード値だと、本番MAX_SUMMARY_INPUT_LENGTHが変更されてもこのテストだけ気づかず緑のまま
+// 残り、scripts/lib/sarashinaSummaryGoldenDrift.test.tsが検知するドリフトと単一のsource of
+// truthを共有できていなかった)。
+const MAX_INPUT_CHARS: number = (JSON.parse(fs.readFileSync(MANIFEST_PATH, 'utf-8')) as { maxInputChars: number })
+  .maxInputChars;
 
 interface ExpectedFinding {
   kind: string;
@@ -72,6 +86,10 @@ interface Pr0ResultFile {
   runs?: Pr0ResultRun[];
 }
 
+/** 本番`summaryPromptBuilder.ts`の切り詰め処理(`...(以下省略)`付与)は完全には再現しない
+ * 単純スライス。`scanSummaryForFabrication`のverbatim/再結合判定は末尾に付与される定型文
+ * `...(以下省略)`の有無に依存しないため実害はないが、バイト単位で本番と同一の入力ではない
+ * ことに留意(comment-analyzer指摘)。 */
 function sourceTextFor(docId: string): string {
   return fs.readFileSync(path.join(DOCS_DIR, `${docId}.txt`), 'utf-8').slice(0, MAX_INPUT_CHARS);
 }
@@ -95,8 +113,23 @@ describe('sarashinaSummaryScanCorpus: PR0結果28run回帰', () => {
     const mismatches: string[] = [];
 
     for (const expectedRun of expected.runs) {
+      // ファイル読込/パース/ソース読込の失敗も、run未検出と同じくmismatchesへ集約する
+      // (silent-failure-hunter指摘: 無防備なreadFileSync/JSON.parseが1件でも失敗すると
+      // 未捕捉例外でループ全体が打ち切られ、「全mismatchsを1回のpassでまとめて提示する」
+      // という本テストの設計意図が壊れていた)。
       const filePath = path.join(RESULTS_DIR, expectedRun.resultFile);
-      const data: Pr0ResultFile = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+      let data: Pr0ResultFile;
+      let src: string;
+      try {
+        data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+        src = sourceTextFor(expectedRun.doc);
+      } catch (e) {
+        mismatches.push(
+          `${expectedRun.resultFile} ${expectedRun.doc} run${expectedRun.run}: ` +
+            `ファイル読込/パースに失敗しました(${(e as Error).message})`
+        );
+        continue;
+      }
       const run = (data.runs ?? []).find(
         (r) => r.doc === expectedRun.doc && r.run === expectedRun.run
       );
@@ -107,7 +140,6 @@ describe('sarashinaSummaryScanCorpus: PR0結果28run回帰', () => {
         continue;
       }
       actualRunCount++;
-      const src = sourceTextFor(expectedRun.doc);
       const result = scanSummaryForFabrication(run.text, src);
       actualFabricated += result.fabricatedCount;
       actualRecombined += result.recombinedCount;

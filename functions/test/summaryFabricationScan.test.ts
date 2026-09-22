@@ -28,6 +28,14 @@ describe('normalizeForFabricationScan', () => {
     expect(normalizeForFabricationScan('  こんにちは\t\t')).to.equal('こんにちは');
   });
 
+  it('改行(\\n・\\r\\n)を除去する(codex review指摘の回帰テスト)', () => {
+    // PaddleOCRのレイアウト都合でページ・行境界に実在の組織名が分断されるケース
+    // (「青葉\nクリニック」等)で、正規化後も改行が残っているとverbatim判定・再結合判定の
+    // 文字列比較が一致せず、実在する組織名を誤ってfabricatedと判定する偽陽性を招いていた。
+    expect(normalizeForFabricationScan('青葉\nクリニック')).to.equal('青葉クリニック');
+    expect(normalizeForFabricationScan('青葉\r\nクリニック')).to.equal('青葉クリニック');
+  });
+
   it('空文字列は空文字列のまま', () => {
     expect(normalizeForFabricationScan('')).to.equal('');
   });
@@ -51,6 +59,30 @@ describe('scanSummaryForFabrication: verbatim判定(②)', () => {
 
   it('「主治医は青葉クリニック」型(助詞+原典実在語)は検出しない', () => {
     const source = '主治医は青葉クリニックの桜庭医師。';
+    const summary = '主治医は青葉クリニックです。';
+    const r = scanSummaryForFabrication(summary, source);
+    expect(r.fabricatedCount).to.equal(0);
+  });
+
+  it('実在組織名に捏造プレフィックスを付けた場合はfabricatedとして検出する(codex review指摘の回帰テスト)', () => {
+    // 当初のverbatim判定(左文脈の右詰め部分列のいずれかがsourceにverbatim一致すれば検出
+    // しない、という設計)だと、実在する「青葉クリニック」の前に捏造プレフィックス「新」を
+    // 付けた「新青葉クリニック」が、部分列「青葉クリニック」だけでverbatim一致してしまい
+    // バイパスされていた。助詞トリムを先に行いcore全体での完全一致のみを見る設計に修正し、
+    // 「新」(助詞ではない)がcoreに残ったまま一致しないことを確認する。
+    const source = '主治医は青葉クリニックの桜庭医師。';
+    const summary = '主治医は新青葉クリニックです。';
+    const r = scanSummaryForFabrication(summary, source);
+    expect(r.fabricatedCount).to.equal(1);
+    expect(r.findings[0].name).to.equal('新青葉クリニック');
+    expect(r.findings[0].kind).to.equal('fabricated');
+  });
+
+  it('OCR改行で分断された実在組織名でも正しくverbatim一致する(codex review指摘の回帰テスト)', () => {
+    // PaddleOCRのレイアウト都合でsourceText中に「青葉\nクリニック」のような改行を挟む
+    // 分断が発生しても、normalizeForFabricationScanが改行を除去するため、要約側が
+    // 改行なしで「青葉クリニック」と出力した場合も正しく実在扱いされ誤検出しない。
+    const source = '主治医は青葉\nクリニックの桜庭医師。';
     const summary = '主治医は青葉クリニックです。';
     const r = scanSummaryForFabrication(summary, source);
     expect(r.fabricatedCount).to.equal(0);
@@ -79,6 +111,17 @@ describe('scanSummaryForFabrication: 助詞トリム(③)', () => {
     expect(r.fabricatedCount).to.equal(0);
   });
 
+  it('複合語助詞(「した際」「という点」)は短い部分文字列(「した」「という」)より先にトリムされる(code-reviewer/pr-test-analyzer指摘の回帰テスト)', () => {
+    // DEFAULT_PARTICLESの記述順に「した際」が「した」より後・「という点」が「という」より
+    // 後にある状態でコミットされていたバグの再現テスト。trimParticlesが内部で長さ降順に
+    // ソートしてから評価するため、記述順に関わらず正しくトリムされることを固定する。
+    const source = '主治医は青葉クリニックの桜庭医師。';
+    const r1 = scanSummaryForFabrication('診察したという点で青葉クリニックを受診。', source);
+    expect(r1.fabricatedCount).to.equal(0);
+    const r2 = scanSummaryForFabrication('受診した際に青葉クリニックへ。', source);
+    expect(r2.fabricatedCount).to.equal(0);
+  });
+
   it('箇条書き記号「・」で始まる文の先頭suffixを巻き込まない', () => {
     const source = '訪問看護報告書。黒田しずか様向けにみどりヶ丘訪問看護ステーションが作成。';
     const summary = '・訪問看護報告書は利用者黒田しずか様向けにみどりヶ丘訪問看護ステーションが作成。';
@@ -100,7 +143,12 @@ describe('scanSummaryForFabrication: 再結合判定(④、fabricated/recombined
     expect(r.findings.every((f) => f.kind === 'recombined')).to.equal(true);
   });
 
-  it('全角括弧の略記パターンも検出する', () => {
+  it('原典が全角括弧の略記でも検出する(呼び出し前にNFKC正規化で半角化される)', () => {
+    // isRecombinedFromSource自体は半角括弧パターンのみを見る(NFKC正規化後のsourceを
+    // 受け取る契約のため、全角括弧が残ることはない)。この入力(全角括弧)がscanSummaryFor
+    // Fabrication経由で正しく正規化されたうえでrecombined判定されることを確認する
+    // (pr-test-analyzer指摘: 当初isRecombinedFromSource内に全角/半角2分岐を持っていたが、
+    // 全角分岐は正規化後には到達不能なデッドコードだった。分岐を削除し正規化に一本化した)。
     const source = '訪問看護（水無月）が担当。';
     const summary = '水無月訪問看護が対応。';
     const r = scanSummaryForFabrication(summary, source);
@@ -125,6 +173,19 @@ describe('scanSummaryForFabrication: 再結合判定(④、fabricated/recombined
     expect(r.findings[0].kind).to.equal('fabricated');
   });
 
+  it('fabricatedとrecombinedが同一要約内に混在してもそれぞれ正しく数え分けられる(pr-test-analyzer指摘の回帰テスト)', () => {
+    const source = '出席者：訪問看護(水無月)。福祉用具貸与確認書。利用者：三好 陽子様。';
+    const summary = '担当は水無月訪問看護とみずほ訪問看護ステーションです。';
+    const r = scanSummaryForFabrication(summary, source);
+    expect(r.fabricatedCount).to.equal(1);
+    expect(r.recombinedCount).to.equal(1);
+    expect(r.findings.length).to.equal(2);
+    const recombined = r.findings.find((f) => f.name === '水無月訪問看護');
+    const fabricated = r.findings.find((f) => f.name.includes('みずほ訪問看護ステーション'));
+    expect(recombined?.kind).to.equal('recombined');
+    expect(fabricated?.kind).to.equal('fabricated');
+  });
+
   it('coreは実在するがsuffixだけ異なる組織名はfabricated(近接判定の悪用を防ぐ)', () => {
     // 「さくら」はD2原典に実在するが「さくらデイサービス」という組織自体は実在しない
     // (実在するのは「さくら通所介護センター」)。近接30文字判定を採用していた旧設計では
@@ -147,6 +208,14 @@ describe('scanSummaryForFabrication: 包含関係の除去', () => {
     // 最長スパン優先により「みずほ訪問看護ステーション」1件のみが残る。
     expect(r.findings.length).to.equal(1);
     expect(r.findings[0].name).to.equal('みずほ訪問看護ステーション');
+  });
+
+  it('suffix語彙同士が包含関係(「グループホーム」⊃「ホーム」)の場合も最長スパンのみ残す(pr-test-analyzer指摘の回帰テスト)', () => {
+    const source = '福祉用具貸与確認書。';
+    const summary = '担当は緑風園グループホームです。';
+    const r = scanSummaryForFabrication(summary, source);
+    expect(r.findings.length).to.equal(1);
+    expect(r.findings[0].name).to.equal('緑風園グループホーム');
   });
 });
 
@@ -176,6 +245,24 @@ describe('scanSummaryForFabrication: 境界値', () => {
     const truncatedSource = fullSource.slice(0, 100); // 「みずほ訪問看護ステーション」を含まない
     const r = scanSummaryForFabrication('みずほ訪問看護ステーションが担当。', truncatedSource);
     expect(r.fabricatedCount).to.equal(1);
+  });
+
+  it('suffixが文頭(左文脈なし)の場合は検出しない(pr-test-analyzer指摘、区切り位置の境界値)', () => {
+    // extractLeftContextが空文字列を返し、genericCoreSetの''にマッチするため検出されない。
+    // 「判定する対象となる名前が存在しない」という意図的な挙動を固定する。
+    const r = scanSummaryForFabrication('クリニックにて対応しました。', '無関係な出典テキスト。');
+    expect(r.findings).to.deep.equal([]);
+  });
+
+  it('maxLeftContext(既定16文字)を超える長い施設名でもverbatim判定が機能する(pr-test-analyzer指摘、境界値)', () => {
+    // 「地域包括支援センターさくらの里南出張所」は19文字(既定maxLeftContext=16を超える)。
+    // 左文脈抽出は末尾16文字分しか遡らないが、verbatim判定は右詰め部分列の総当たりのため、
+    // 16文字分が原典にverbatimで含まれていれば検出されない。
+    const longName = '地域包括支援センターさくらの里南出張所';
+    const source = `${longName}が担当。`;
+    const summary = `担当は${longName}です。`;
+    const r = scanSummaryForFabrication(summary, source);
+    expect(r.fabricatedCount).to.equal(0);
   });
 });
 
