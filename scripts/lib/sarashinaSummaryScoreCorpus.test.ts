@@ -118,6 +118,28 @@ test('sarashinaSummaryScoreCorpus: 期待値ファイル自体がPR0結果JSON�
   assert.deepEqual(expectedFiles, resultFiles);
 });
 
+test('sarashinaSummaryScoreCorpus: 期待値ファイルの(resultFile,doc,run)キー集合が生JSON全件と完全一致する(codex review指摘: 追加/削除の検知)', () => {
+  // 前のテストはresultFile名の一覧一致とrunsScannedの数のみを見ており、既存result JSONへ
+  // run(例: D1のrun4)が追加されたり、逆にexpected.runsから1件だけ削除された場合を検知できない
+  // (次のテストはexpected.runsを起点にループするため、そこに無いキーは静かに無視される)。
+  // 生JSON側から全run(doc/run/textを持つもの)を数え上げ、双方向で一致することを直接確認する。
+  const resultFiles = fs
+    .readdirSync(RESULTS_DIR)
+    .filter((f) => f.startsWith('result_matrix_'))
+    .sort();
+  const actualKeys: string[] = [];
+  for (const resultFile of resultFiles) {
+    const data: Pr0ResultFile = JSON.parse(fs.readFileSync(path.join(RESULTS_DIR, resultFile), 'utf-8'));
+    for (const run of data.runs ?? []) {
+      if (run.doc === undefined || run.run === undefined || run.text === undefined) continue;
+      actualKeys.push(`${resultFile}::${run.doc}::${run.run}`);
+    }
+  }
+  const expected: ExpectedFile = JSON.parse(fs.readFileSync(EXPECTED_PATH, 'utf-8'));
+  const expectedKeys = expected.runs.map((r) => `${r.resultFile}::${r.doc}::${r.run}`);
+  assert.deepEqual(actualKeys.sort(), expectedKeys.sort());
+});
+
 test('sarashinaSummaryScoreCorpus: pr0-score-expected.jsonのsummaryScoreConfigVersionが現行実装と一致すること', () => {
   const expected: ExpectedFile = JSON.parse(fs.readFileSync(EXPECTED_PATH, 'utf-8'));
   assert.equal(

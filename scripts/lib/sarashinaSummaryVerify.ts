@@ -185,14 +185,35 @@ export interface PropsResponse {
   default_generation_settings?: { n_ctx?: number };
 }
 
-export async function fetchProps(serviceUrl: string, token: string): Promise<PropsResponse> {
-  const res = await fetch(`${serviceUrl.replace(/\/+$/, '')}/props`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (!res.ok) {
-    throw new Error(`/props が HTTP ${res.status} を返しました`);
+/**
+ * codex review指摘(P2): 生成リクエスト(`makeSummaryRequestFn`)・gcloud呼び出し
+ * (`GCLOUD_SUBPROCESS_TIMEOUT_MS`)はいずれもタイムアウトを持つが、本関数だけ無制限
+ * `fetch`だとサーバが接続を受けたまま応答しない場合にハーネス全体がbudgetチェックにすら
+ * 到達できず固まる。タイムアウト時は例外を投げ、呼び出し側で既存の`runtime-contract:
+ * NOT_EVALUATED`扱いへ落ちるようにする。
+ */
+export const PROPS_REQUEST_TIMEOUT_MS = 60_000;
+
+export async function fetchProps(serviceUrl: string, token: string, timeoutMs: number = PROPS_REQUEST_TIMEOUT_MS): Promise<PropsResponse> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${serviceUrl.replace(/\/+$/, '')}/props`, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      throw new Error(`/props が HTTP ${res.status} を返しました`);
+    }
+    return (await res.json()) as PropsResponse;
+  } catch (err) {
+    if ((err as { name?: string }).name === 'AbortError') {
+      throw new Error(`/props が${timeoutMs}ms以内に応答しませんでした`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
   }
-  return (await res.json()) as PropsResponse;
 }
 
 export interface RuntimeManifest {
@@ -672,6 +693,9 @@ export interface SummaryVerifyReport {
   runtimeContract: RuntimeContractCheck | null;
   records: SummaryRunRecord[];
   docsWithoutSuccessfulRun: string[];
+  timedOutCount: number;
+  /** budget超過・早期break等で1件も送信されなかった(doc,run)の一覧(`${docId}#${run}`形式)。 */
+  skippedRuns: string[];
   gates: SummaryGateEntry[];
   crossEntityByDoc: Record<string, CrossEntityResult>;
   fatalError: string | null;
@@ -694,6 +718,10 @@ export function buildReport(input: {
   runtimeContract: RuntimeContractCheck | null;
   records: SummaryRunRecord[];
   metaByDoc: Record<string, SummaryScoreSpec>;
+  /** 実行が要求されていたdoc一覧(`args.docs`)。budget超過等での早期打ち切り検知に使う。 */
+  expectedDocs: readonly string[];
+  /** doc毎に要求されていたrun数(`args.runs`)。 */
+  expectedRunsPerDoc: number;
 }): SummaryVerifyReport {
   const inconclusiveBySnapshot =
     input.serviceSnapshotStart === null ||
@@ -701,16 +729,38 @@ export function buildReport(input: {
     input.serviceSnapshotStart.revisionName !== input.serviceSnapshotEnd.revisionName ||
     input.serviceSnapshotStart.imageDigest !== input.serviceSnapshotEnd.imageDigest;
 
+  // codex review指摘(P1): timeout/504はサーバ側で処理が継続中の可能性があり、以降のサンプルが
+  // 汚染されうる(`scripts/paddle-ocr-verify.ts`の`inconclusiveByTimeout`と同じ考え方)。
+  // 1件でもtimedOutがあればレポート全体をinconclusiveとする(そのdocに他の成功runがあっても
+  // 「静かなPASS」にしない)。
+  const timedOutCount = input.records.filter((r) => r.timedOut).length;
+  const inconclusiveByTimeout = timedOutCount > 0;
+
   const docsWithoutSuccessfulRun = DOC_IDS.filter(
     (docId) => input.records.some((r) => r.docId === docId) && !input.records.some((r) => r.docId === docId && isEvaluated(r))
   );
   const inconclusiveByMissingDoc = docsWithoutSuccessfulRun.length > 0;
-  const inconclusive = inconclusiveBySnapshot || inconclusiveByMissingDoc;
+
+  // codex review指摘(P1): budget超過・例外による早期breakで要求された(doc,run)の一部が
+  // 1回も送信されないまま終わった場合、`docsWithoutSuccessfulRun`はrecordsに存在するdocしか
+  // 見ないため検知できず、「一部docだけの部分実行」がPASSしてしまう。要求された全(doc,run)の
+  // 組が実際に送信(records化)されたかを直接突き合わせる。
+  const attemptedKeys = new Set(input.records.map((r) => `${r.docId}#${r.run}`));
+  const skippedRuns = input.expectedDocs.flatMap((docId) =>
+    Array.from({ length: input.expectedRunsPerDoc }, (_, i) => `${docId}#${i + 1}`).filter((key) => !attemptedKeys.has(key))
+  );
+  const inconclusiveByBudget = skippedRuns.length > 0;
+
+  const inconclusive = inconclusiveBySnapshot || inconclusiveByTimeout || inconclusiveByMissingDoc || inconclusiveByBudget;
   const inconclusiveReason = inconclusiveBySnapshot
     ? `計測開始時と終了時でサービススナップショットが一致しません(開始: ${JSON.stringify(input.serviceSnapshotStart)}, 終了: ${JSON.stringify(input.serviceSnapshotEnd)})`
-    : inconclusiveByMissingDoc
-      ? `以下のdocで有効なrunが1件も得られませんでした: ${docsWithoutSuccessfulRun.join('、')}`
-      : null;
+    : inconclusiveByTimeout
+      ? `${timedOutCount}件のリクエストがタイムアウトまたは504(サービス側で処理継続中)を検知しました。以降のリクエストのインスタンス割当が汚染されている可能性があります`
+      : inconclusiveByMissingDoc
+        ? `以下のdocで有効なrunが1件も得られませんでした: ${docsWithoutSuccessfulRun.join('、')}`
+        : inconclusiveByBudget
+          ? `実行時間予算の超過等により以下の(doc,run)が送信されませんでした: ${skippedRuns.join('、')}`
+          : null;
 
   const runtimeContractEntry: SummaryGateEntry = input.runtimeContract
     ? {
@@ -757,6 +807,8 @@ export function buildReport(input: {
     runtimeContract: input.runtimeContract,
     records: input.records,
     docsWithoutSuccessfulRun,
+    timedOutCount,
+    skippedRuns,
     gates,
     crossEntityByDoc,
     fatalError: null,
@@ -795,6 +847,12 @@ export function buildStepSummaryMarkdown(report: SummaryVerifyReport): string {
   if (report.docsWithoutSuccessfulRun.length > 0) {
     lines.push(`- 有効runが0件だったdoc: ${report.docsWithoutSuccessfulRun.join('、')}`);
   }
+  if (report.timedOutCount > 0) {
+    lines.push(`- タイムアウト/504件数: ${report.timedOutCount}`);
+  }
+  if (report.skippedRuns.length > 0) {
+    lines.push(`- 実行時間予算超過等で送信されなかった(doc,run): ${report.skippedRuns.join('、')}`);
+  }
   lines.push('');
   lines.push('| ゲート | 判定 | 詳細 |');
   lines.push('|---|---|---|');
@@ -824,6 +882,8 @@ export function emptyReportSkeleton(startedAt: string, finishedAt: string, servi
     runtimeContract: null,
     records: [],
     docsWithoutSuccessfulRun: [...DOC_IDS],
+    timedOutCount: 0,
+    skippedRuns: [],
     gates: [],
     crossEntityByDoc: {},
     fatalError,

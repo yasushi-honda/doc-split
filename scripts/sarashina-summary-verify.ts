@@ -147,6 +147,8 @@ async function main(): Promise<void> {
       runtimeContract,
       records,
       metaByDoc,
+      expectedDocs: args.docs,
+      expectedRunsPerDoc: args.runs,
     });
 
     exitCode = determineExitCode(report);

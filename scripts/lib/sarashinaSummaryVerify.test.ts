@@ -9,6 +9,7 @@ import {
   scoreRunRecord,
   checkRuntimeContract,
   runtimeContractOk,
+  fetchProps,
   evaluateFabricationGate,
   evaluateRecombinationGate,
   evaluateCoverageAggregateGate,
@@ -282,6 +283,10 @@ test('checkRuntimeContract: build_infoが不一致ならFAIL相当', () => {
   assert.equal(check.buildInfoOk, false);
 });
 
+test('fetchProps: 到達不能なURLへは短いtimeoutMsのままハングせず失敗する(codex review指摘: 無制限fetch防止)', async () => {
+  await assert.rejects(() => fetchProps('http://127.0.0.1:1', 'fake-token', 300));
+});
+
 test('checkRuntimeContract: n_ctxが欠落(undefined)ならFAIL相当(NaN比較等でtrueにならない)', () => {
   const check = checkRuntimeContract(
     { build_info: 'b11065-ce8caa6e6', model_alias: 'sarashina2.2-3b-instruct-v0.1-Q8_0', total_slots: 1 },
@@ -425,11 +430,13 @@ test('buildReport: 開始/終了スナップショット不一致はinconclusive
     runtimeContract: null,
     records,
     metaByDoc,
+    expectedDocs: ['D9'],
+    expectedRunsPerDoc: 1,
   });
   assert.equal(report.inconclusive, true);
 });
 
-test('buildReport: 全docで有効runがあればdocsWithoutSuccessfulRunは空', () => {
+test('buildReport: 全docで有効runがあればdocsWithoutSuccessfulRunは空・skippedRunsも空', () => {
   const records = DOC_IDS.map((docId) => evaluatedRecord({ docId, run: 1 }));
   const report = buildReport({
     serviceUrl: 'https://x',
@@ -440,11 +447,14 @@ test('buildReport: 全docで有効runがあればdocsWithoutSuccessfulRunは空'
     runtimeContract: null,
     records,
     metaByDoc,
+    expectedDocs: DOC_IDS,
+    expectedRunsPerDoc: 1,
   });
   assert.deepEqual(report.docsWithoutSuccessfulRun, []);
+  assert.deepEqual(report.skippedRuns, []);
 });
 
-test('buildReport: 有効runが0件のdocがあればinconclusiveかつdocsWithoutSuccessfulRunに含まれる', () => {
+test('buildReport: 有効runが0件のdocがあればinconclusiveかつdocsWithoutSuccessfulRunに含まれる(timedOutCountも計上)', () => {
   const records: SummaryRunRecord[] = [
     { docId: 'D9', run: 1, wallMs: 1, httpStatus: null, retriedCount: 0, timedOut: true, fatal: false },
   ];
@@ -457,9 +467,55 @@ test('buildReport: 有効runが0件のdocがあればinconclusiveかつdocsWitho
     runtimeContract: null,
     records,
     metaByDoc,
+    expectedDocs: ['D9'],
+    expectedRunsPerDoc: 1,
   });
   assert.equal(report.inconclusive, true);
   assert.deepEqual(report.docsWithoutSuccessfulRun, ['D9']);
+  assert.equal(report.timedOutCount, 1);
+});
+
+test('buildReport: 同一docに成功runがあってもtimedOutが1件でもあればinconclusive(codex review指摘)', () => {
+  const records: SummaryRunRecord[] = [
+    evaluatedRecord({ docId: 'D9', run: 1 }),
+    { docId: 'D9', run: 2, wallMs: 1, httpStatus: 504, retriedCount: 0, timedOut: true, failureKind: 'serverTimeout504', fatal: false },
+  ];
+  const report = buildReport({
+    serviceUrl: 'https://x',
+    startedAt: 't0',
+    finishedAt: 't1',
+    serviceSnapshotStart: snap('rev-1', 'img-1'),
+    serviceSnapshotEnd: snap('rev-1', 'img-1'),
+    runtimeContract: null,
+    records,
+    metaByDoc,
+    expectedDocs: ['D9'],
+    expectedRunsPerDoc: 2,
+  });
+  // このdocはisEvaluated(run1)がtrueなのでdocsWithoutSuccessfulRunには入らないが、
+  // timedOutが1件存在する事実だけでinconclusiveになるべき(以降サンプル汚染の疑い)。
+  assert.deepEqual(report.docsWithoutSuccessfulRun, []);
+  assert.equal(report.timedOutCount, 1);
+  assert.equal(report.inconclusive, true);
+});
+
+test('buildReport: budget超過等で要求した(doc,run)の一部が1回も送信されなければinconclusive(codex review指摘)', () => {
+  const records = [evaluatedRecord({ docId: 'D9', run: 1 })];
+  const report = buildReport({
+    serviceUrl: 'https://x',
+    startedAt: 't0',
+    finishedAt: 't1',
+    serviceSnapshotStart: snap('rev-1', 'img-1'),
+    serviceSnapshotEnd: snap('rev-1', 'img-1'),
+    runtimeContract: null,
+    records,
+    metaByDoc,
+    expectedDocs: ['D9', 'D10'],
+    expectedRunsPerDoc: 1,
+  });
+  assert.equal(report.inconclusive, true);
+  assert.deepEqual(report.skippedRuns, ['D10#1']);
+  assert.ok(report.inconclusiveReason?.includes('D10#1'));
 });
 
 test('buildReport: gatesは9項目全て含む', () => {
@@ -473,6 +529,8 @@ test('buildReport: gatesは9項目全て含む', () => {
     runtimeContract: null,
     records,
     metaByDoc,
+    expectedDocs: ['D9'],
+    expectedRunsPerDoc: 1,
   });
   assert.deepEqual(
     report.gates.map((g) => g.id).sort(),
@@ -509,6 +567,8 @@ test('determineExitCode: WARN専用ゲートのみだと合格でもrecombinatio
     runtimeContract: null,
     records,
     metaByDoc,
+    expectedDocs: ['D5', 'D9'],
+    expectedRunsPerDoc: 2,
   });
   const outputSanity = report.gates.find((g) => g.id === 'output-sanity');
   assert.equal(outputSanity?.verdict, 'WARN');
@@ -534,6 +594,8 @@ test('determineExitCode: FAIL-capableゲートがFAILなら1', () => {
     runtimeContract: null,
     records,
     metaByDoc,
+    expectedDocs: ['D9'],
+    expectedRunsPerDoc: 1,
   });
   const withoutRuntimeContract = { ...report, gates: report.gates.filter((g) => g.id !== 'runtime-contract') };
   assert.equal(determineExitCode({ ...withoutRuntimeContract, inconclusive: false }), 1);
@@ -550,6 +612,8 @@ test('buildStepSummaryMarkdown: 9行のゲート表を含む', () => {
     runtimeContract: null,
     records,
     metaByDoc,
+    expectedDocs: ['D9'],
+    expectedRunsPerDoc: 1,
   });
   const md = buildStepSummaryMarkdown(report);
   for (const gate of report.gates) {
