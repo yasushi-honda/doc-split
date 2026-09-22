@@ -310,6 +310,19 @@ describe('scanSummaryForFabrication: 助詞トリム(②)', () => {
     expect(r.fabricatedCount).to.equal(1);
     expect(r.findings[0].name).to.equal('新あしてらすクリニック');
   });
+
+  it('指示語「当該」+suffixは事業所名不明の正直な回答であり検出しない(ADR-0027 PR2bステップ8全10doc×3run正式gate run再実行、D9run2の回帰テスト)', () => {
+    // 「関係者は三好陽子様、当該事業所、および医療機関(詳細不明)である」のような、
+    // 事業所名が分からない旨を正直に述べる健全な出力で、「当該事業所」(「当該」は
+    // 「(前述の)その」を意味する指示語であり固有名詞ではない)が誤って捏造判定されていた。
+    const source = '三好陽子様に歩行器を貸与する。';
+    const r = scanSummaryForFabrication(
+      '関係者は三好陽子様、当該事業所、および医療機関（詳細不明）である。',
+      source
+    );
+    expect(r.fabricatedCount).to.equal(0);
+    expect(r.findings).to.deep.equal([]);
+  });
 });
 
 describe('scanSummaryForFabrication: 再結合判定(④、fabricated/recombined分離)', () => {
