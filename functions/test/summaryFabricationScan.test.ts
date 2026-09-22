@@ -185,6 +185,19 @@ describe('scanSummaryForFabrication: 助詞トリム(②)', () => {
     expect(r.fabricatedCount).to.equal(0);
   });
 
+  it('【既知の限界】プレフィックス形で企業名の先頭が助詞と同じ文字の場合、捏造企業名の検出をすり抜けることがある(codex review 5回目指摘、decision-maker確認済み・対応不要)', () => {
+    // 「株式会社のぞみ」の「の」が助詞と誤認され、trimParticlesFromPrefixが空文字まで
+    // トリムしてgenericCore判定で除外してしまう。既存の【既知の限界】(組織名内部に助詞と
+    // 同じ文字列を含む場合、左方向のtrimParticlesが誤発動するケース)と構造的に同一の
+    // 正規表現+文脈判定の設計限界(境界が助詞の1文字と偶然一致するケース)が、4回目修正で
+    // 追加したプレフィックス方向(右方向)のtrimParticlesFromPrefixにも対称的に存在する。
+    // PR0実データ28runでは未発生。形態素解析への置き換えなしには根本解決できないため、
+    // 2026-09-22 decision-maker確認のうえ対応不要と判断した(ファイル冒頭コメント参照)。
+    const source = '利用者の状況について記載。';
+    const r = scanSummaryForFabrication('株式会社のぞみが担当。', source);
+    expect(r.fabricatedCount).to.equal(0); // 既知の限界: 本来はfabricatedであるべきだが検出できない
+  });
+
   it('リスト列挙の中黒区切りを巻き込まない(「・」は区切り文字として扱う)', () => {
     const source = '訪問介護・通所介護・短期入所生活介護・訪問看護を提供。';
     const summary = '特筆事項：訪問介護・通所介護・短期入所生活介護・訪問看護の各サービス内容。';
