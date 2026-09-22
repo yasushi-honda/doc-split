@@ -86,6 +86,18 @@ PaddleOCR(`services/paddle-ocr/`)を複製元として実装する過程で、ll
 7. **runtime SAへの`iam.serviceAccountUser`(actAs)付与はPR1c(デプロイワークフロー実装時)に行う**(PR1b実装時に方針修正、当初はPR1bで今すぐ行う想定だった): PaddleOCR版の実際の構造(`docs/context/delivery-and-update-guide.md`)を確認した結果、actAs付与はインフラ準備スクリプト(PaddleOCR版のPR3相当)ではなく、デプロイワークフロー(PaddleOCR版のPR4b相当)側でデプロイSAへの恒久権限として付与されていることが判明した。「runtime SAが実際に使われる段階で権限を付与する」という一貫した設計であり、Sarashina版もこの構造に合わせる。PR1bの`scripts/setup-sarashina-summary-infra.sh`とdelivery-and-update-guide.mdには、PR1c実装時に付与すべきactAsコマンドを明記済み
 8. **`/health`のdigest検証はできない**: PaddleOCR版は`/health`レスポンスの`imageDigest`フィールドで検証しているが、llama.cppの`/health`は`{"status":"ok"}`のみ。代替として`/props`の`build_info`/`model_alias`と`gcloud run services describe`のimage一致を組み合わせる
 
+### PR2a実装知見(固有名詞捏造スキャナ・ドリフトガード)
+
+`shared/summaryFabricationScan.ts`(PR4でバッチ処理から呼ばれる想定、PR2時点ではdead code)を実装する過程で、PR0検証スクリプト(`scan_entity_fabrication.py`、正規表現のみ)の精度課題と、`/plan-crossreview`(grip自白+codex 2パス)での指摘を反映した。詳細は`scripts/fixtures/sarashina-summary-golden/README.md`を参照。
+
+1. **「誤検出13→0」は実装前は未検証の設計提案だった**(`/plan-crossreview` codex High指摘): 当初のプラン記述はPlan agentの設計検証結果を「確認済み」と書いてしまっていたが、実際にコードとして実装・実行するまでは未証明だった。PR2a実装時にPR0結果JSON(28run)へ実際に実行し、`scripts/fixtures/sarashina-summary-golden/pr0-fabrication-expected.json`に期待値を固定、`functions/test/sarashinaSummaryScanCorpus.test.ts`で継続的に回帰検証する設計にした
+2. **捏造検知は4段階(左文脈抽出→verbatim判定→助詞トリム→再結合判定)**: PR0のPython版が出していた誤検出16件(地の文巻き込み)を解消しつつ、D3の3件(`水無月訪問看護`等)を「原典の括弧書き略記の言い換え」として`recombined`(捏造ではない)に分類する。実装中に「・」(中黒)を名前構成文字に含めていたためリスト列挙・箇条書き記号を巻き込む新規の誤検出を発見し、区切り文字として扱うよう修正した
+3. **再結合判定は限定的な構文変換のみを許容**(`/plan-crossreview` codex High指摘反映): 当初「原典中の前後30文字以内の近接一致」で判定する設計だったが、これは無関係な語の偶然の近接一致による真の捏造も`recombined`(既定WARN)としてゲートを通してしまう。原典中に`{suffix}（{core}）`という完全一致の括弧書き略記パターンが実在するかのみを見る判定へ厳格化した
+4. **既知の限界**: 助詞トリムは`lastIndexOf`ベースの単純一致のため、1文字助詞(「も」等)が固有名詞の先頭1文字と偶然一致するケース(「もみじ整形外科」等)では誤ってトリムしうる。PR0結果28run全件では未発生(形態素解析は依存コストの観点からPR2a時点では不採用)
+5. **カバー率は`mustCover`/`optionalFacts`に分離**(`/plan-crossreview` codex High指摘反映): 率(ヒット数÷facts数)のみで判定すると、重要事実(氏名等)の脱落が非必須事実(品目等)の充足で相殺されてしまう。`meta.json`に`mustCover`(必須、個別判定)・`optionalFacts`(任意、率算入のみ)・`minCoveredFacts`(丸め誤差を避けた整数個数)を追加した。D9(facts=`三好陽子/歩行器/9月20日`)は「歩行器」がv2プロンプトの必須5項目に品目が無いため8/8回欠落する構造的な結果であり、`mustCover=[氏名,日付]`・`minCoveredFacts=2`として85%一律ゲートの対象外にした
+6. **v2プロンプトはデータファイル化、本番`summaryPromptBuilder.ts`は無改変**: `scripts/fixtures/sarashina-summary-golden/prompt-v2.txt`に固定し、ドリフトガードが`bench.py`のリテラルとの一致(クロス言語ドリフト検知)・`manifest.json`のSHA-256一致を検証する。PR3スコープ(本番プロンプトへの実装)を先取りしない
+7. **テスト配置は`functions/test/`(mocha)と`scripts/lib/`(node:test)の2箇所**: `shared/`配下のロジックは`functions/test/customerIdentity.test.ts`の前例に倣い`functions/test/summaryFabricationScan.test.ts`・`sarashinaSummaryScanCorpus.test.ts`に、ドリフトガードは`scripts/lib/paddleOcrModelHashes.test.ts`の前例に倣い`scripts/lib/sarashinaSummaryGoldenDrift.test.ts`に配置。いずれも既存CI配線(`cd scripts && npm test`・`npm run test:functions`)で拾われるため`.github/workflows/ci.yml`の変更は不要
+
 ## Consequences
 
 **良い影響**:

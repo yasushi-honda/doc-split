@@ -1,0 +1,67 @@
+{
+  "generatedAt": "2026-09-22",
+  "note": "ADR-0027 PR2a: モデルハッシュ・fixtureハッシュ・プロンプトハッシュ・捏造スキャナ設定の ドリフト検知用manifest。いずれかを変更した場合、scripts/lib/sarashinaSummaryGoldenDrift.test.ts がCIで検知する。値を変更する場合はD9/D10相当の固有名詞捏造テストを再実行して品質を 再検証したうえで、本ファイルと関連READMEを同時更新すること。無検証での更新は禁止。",
+  "promptV2Sha256": "442c3dced23f15cdb88858929fe7740d73e75302234b8644d9a38a4818eee522",
+  "maxInputChars": 8000,
+  "fabricationScanConfigVersion": "ccd683d2",
+  "docs": {
+    "D1.txt": {
+      "sha256": "1c81be7b8a32f343653518d4bfc16782b181585f4b839f89f5d3300ec09a1a5c",
+      "bytes": 1548
+    },
+    "D10.txt": {
+      "sha256": "7c448222c6fd5ad27545e2d3120c035ccdf8a367b313c0dbb0c68890473e0a44",
+      "bytes": 102
+    },
+    "D2.txt": {
+      "sha256": "00935f4b06dc820db584b38c56a9a47c09b7cca63da8ef9d3cb267677e278bac",
+      "bytes": 4280
+    },
+    "D3.txt": {
+      "sha256": "65794f52cd72a96df970685ab15d9e7c276ec69551a359f801b76db3d81c3617",
+      "bytes": 26994
+    },
+    "D4.txt": {
+      "sha256": "7c571a6f1856d44b45bc6a5d6f968bc58d3aa582ff46a61caa630e26b50a8bbb",
+      "bytes": 5013
+    },
+    "D5.txt": {
+      "sha256": "bafa51d262b21b5d75d7b919846e74ffaed5d5ac9218fa5c6f79c3983b38eae8",
+      "bytes": 648
+    },
+    "D6.txt": {
+      "sha256": "b6d7df22743ff874bb2c92430d0fa08081f5a8428910f7c7013eadbc236fe1d5",
+      "bytes": 840
+    },
+    "D7.txt": {
+      "sha256": "72e57d2e0ea74b323c44dd91e89025edb15ff46e7a27d0184c23d03e55c08f41",
+      "bytes": 603
+    },
+    "D8.txt": {
+      "sha256": "2a9c7681c52693f46ed519ec8bf84692c5c7b4b881e7f29b4525f5c0f68e1b1c",
+      "bytes": 873
+    },
+    "D9.txt": {
+      "sha256": "cf31fdcb022075e91ac9685f53f9e6bfdcbf8ac8e357ab76a624ff825b7c5e46",
+      "bytes": 137
+    },
+    "meta.json": {
+      "sha256": "e48d7692269fb0de9a915da8c833c227cf8d30a556dcebc804d58fdf044fe880",
+      "bytes": 6514
+    }
+  },
+  "model": {
+    "hfRepoId": "mmnga/sarashina2.2-3b-instruct-v0.1-gguf",
+    "hfRevision": "31d771319b04032f33e0d9d860f3984ea4812154",
+    "fileName": "sarashina2.2-3b-instruct-v0.1-Q8_0.gguf",
+    "sha256": "8784919a2f7bbe89594b2260d5d0a1d85eddfdb42f3735bdef892d8ca033a1dc",
+    "baseImageDigest": "sha256:9dc0a0f4080b7817c9592b19c03a4f4b0be92fd701076b9da259ff941dc5bf91",
+    "baseImageBuildInfo": "b11065-ce8caa6e6"
+  },
+  "runtimeContract": {
+    "modelFtype": "Q8_0",
+    "nCtx": 8192,
+    "totalSlots": 1,
+    "modelAlias": "sarashina2.2-3b-instruct-v0.1-Q8_0"
+  }
+}
