@@ -243,7 +243,10 @@ export const DEFAULT_FABRICATION_SCAN_CONFIG: Required<FabricationScanOptions> =
  * 変わるため、`manifest.json`の`fabricationScanConfigVersion`を同時更新しないとCIが赤くなる
  * (comment-analyzer指摘、意図的な設計: 判定基準を変更したらD9/D10相当の固有名詞捏造テストを
  * 再実行して品質を再検証すべき、というREADME記載の運用ルールを機械的に強制する)。 */
-function fnv1aHex(input: string): string {
+/** ADR-0027 PR2bで`scripts/lib/sarashinaSummaryScore.ts`からも再利用するためexportする
+ * (同種のconfigVersion管理を1実装に統一し、pr-review-toolkit code-reviewer等が指摘する
+ * DRY違反を未然に防ぐ、Plan agent設計プランD-5)。 */
+export function fnv1aHex(input: string): string {
   let hash = 0x811c9dc5;
   for (let i = 0; i < input.length; i++) {
     hash ^= input.charCodeAt(i);
