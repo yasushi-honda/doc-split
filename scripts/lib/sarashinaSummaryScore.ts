@@ -65,10 +65,44 @@ export function normalizeForScore(text: string): string {
 
 export type FixtureRole = 'coverage' | 'numeric' | 'cross-entity' | 'fabrication';
 
+/**
+ * 1件のfactは単一の文字列、または「同一人物/組織を指す複数の許容表記」を表す
+ * エイリアス配列のいずれかを取る(ADR-0027 PR2bステップ8全10doc×3run正式gate run再実行、
+ * 2026-09-22追加、codex review指摘)。
+ *
+ * 導入経緯: D8(合同報告書)で「立花 文子」が実際には毎回「妻文子様」のように姓を省略した
+ * 自然な日本語で正しく言及されていたが、完全一致判定では検出できず欠落と誤判定していた。
+ * `mustCover`を氏名なしの「文子」単体へ緩和する案は、`checkCrossEntity`(対象者取り違え
+ * 判定)がこの文書形式では`evaluatedAttributions:0`(実質検証不能)であるため、将来
+ * 「文子様が誤った受診先を受診」のような取り違えが出力されてもcoverage-per-docが
+ * 素通りしてしまう安全性の後退を招くとcodex reviewで指摘された。エイリアス配列
+ * (`["立花 文子", "文子"]`)により、姓名の完全一致・名のみのいずれでも許容しつつ、
+ * 「立花」という識別情報自体は`facts`定義に残す設計とした。
+ */
+export type FactEntry = string | readonly string[];
+
+function factAliases(entry: FactEntry): readonly string[] {
+  return typeof entry === 'string' ? [entry] : entry;
+}
+
+/** レポート・エラーメッセージ表示用のラベル(エイリアスは"/"区切りで連結)。 */
+function factLabel(entry: FactEntry): string {
+  return typeof entry === 'string' ? entry : entry.join('/');
+}
+
+/** 重複検知・集合演算用の安定キー(配列はNUL区切りで連結し、文字列と衝突しない形にする)。 */
+function factKey(entry: FactEntry): string {
+  return typeof entry === 'string' ? entry : entry.join('\u0000');
+}
+
+function factHit(entry: FactEntry, normalizedSummary: string): boolean {
+  return factAliases(entry).some((alias) => normalizedSummary.includes(normalizeForScore(alias)));
+}
+
 export interface SummaryScoreSpec {
-  facts: readonly string[];
-  mustCover: readonly string[];
-  optionalFacts: readonly string[];
+  facts: readonly FactEntry[];
+  mustCover: readonly FactEntry[];
+  optionalFacts: readonly FactEntry[];
   minCoveredFacts: number | null;
   mustNotContainAmount?: boolean;
   crossEntityPairs?: readonly (readonly [string, string])[];
@@ -81,9 +115,12 @@ export interface SummaryScoreSpec {
  */
 export function validateCoverageSpec(docId: string, spec: SummaryScoreSpec): string[] {
   const errors: string[] = [];
-  const mustCoverSet = new Set(spec.mustCover);
-  const optionalSet = new Set(spec.optionalFacts);
-  const factsSet = new Set(spec.facts);
+  const mustCoverKeys = spec.mustCover.map(factKey);
+  const optionalKeys = spec.optionalFacts.map(factKey);
+  const factsKeys = spec.facts.map(factKey);
+  const mustCoverSet = new Set(mustCoverKeys);
+  const optionalSet = new Set(optionalKeys);
+  const factsSet = new Set(factsKeys);
 
   if (mustCoverSet.size !== spec.mustCover.length) {
     errors.push(`${docId}: mustCoverに重複があります`);
@@ -95,14 +132,23 @@ export function validateCoverageSpec(docId: string, spec: SummaryScoreSpec): str
     errors.push(`${docId}: factsに重複があります`);
   }
   for (const f of spec.mustCover) {
-    if (optionalSet.has(f)) errors.push(`${docId}: "${f}"がmustCoverとoptionalFactsの両方に含まれています`);
+    if (optionalSet.has(factKey(f))) {
+      errors.push(`${docId}: "${factLabel(f)}"がmustCoverとoptionalFactsの両方に含まれています`);
+    }
   }
-  const union = new Set([...spec.mustCover, ...spec.optionalFacts]);
-  if (union.size !== factsSet.size || [...union].some((f) => !factsSet.has(f))) {
+  const unionKeys = new Set([...mustCoverKeys, ...optionalKeys]);
+  if (unionKeys.size !== factsSet.size || [...unionKeys].some((k) => !factsSet.has(k))) {
     errors.push(`${docId}: facts が mustCover∪optionalFacts と一致しません`);
   }
-  if (spec.facts.some((f) => f.length === 0)) {
-    errors.push(`${docId}: factsに空文字列が含まれています`);
+  for (const f of spec.facts) {
+    const aliases = factAliases(f);
+    if (aliases.length === 0) {
+      errors.push(`${docId}: factsに空のエイリアス配列が含まれています`);
+    } else if (aliases.some((a) => a.length === 0)) {
+      errors.push(`${docId}: factsに空文字列が含まれています`);
+    } else if (typeof f !== 'string' && aliases.length === 1) {
+      errors.push(`${docId}: "${factLabel(f)}"はエイリアスが1件のみです(1件なら文字列で表現してください)`);
+    }
   }
   const factsEmpty = spec.facts.length === 0;
   if (factsEmpty && spec.minCoveredFacts !== null) {
@@ -139,9 +185,9 @@ export function parseFixtureMeta(raw: unknown): Record<string, SummaryScoreSpec>
   const result: Record<string, SummaryScoreSpec> = {};
   for (const [docId, entry] of Object.entries(obj)) {
     result[docId] = {
-      facts: (entry.facts as string[]) ?? [],
-      mustCover: (entry.mustCover as string[]) ?? [],
-      optionalFacts: (entry.optionalFacts as string[]) ?? [],
+      facts: (entry.facts as FactEntry[]) ?? [],
+      mustCover: (entry.mustCover as FactEntry[]) ?? [],
+      optionalFacts: (entry.optionalFacts as FactEntry[]) ?? [],
       minCoveredFacts: (entry.minCoveredFacts as number | null) ?? null,
       mustNotContainAmount: entry.must_not_contain_amount as boolean | undefined,
       crossEntityPairs: entry.cross_entity_pairs as [string, string][] | undefined,
@@ -161,7 +207,10 @@ export function parseFixtureMeta(raw: unknown): Record<string, SummaryScoreSpec>
  * 2. 元号除去(`令和8年`→``)により、D7の「令和8年9月」がD2の「令和8年8月」等、無関係な
  *    月と混同されうる(日付factが事実上無条件充足に近づく)。
  * 3. 短いfact(「2割」等)は他文脈での偶然一致がありうる。
- * 4. 氏名の部分表記(「誠一様」「立花様」)は非対応(完全な姓名表記のみヒット)。
+ * 4. 氏名の部分表記(「誠一様」「立花様」)は非対応(完全な姓名表記のみヒット)。個別のfactを
+ *    `FactEntry`(エイリアス配列)にすれば特定factに限り許容可能(D8「文子」参照、
+ *    ADR-0027 PR2bステップ8全10doc×3run正式gate run再実行、2026-09-22追加)だが、
+ *    全factへの汎用対応ではない(fixture編集者が個別に判断して明示的に配列化する設計)。
  * 5. 言い換えは`要介護度`→`要介護`の1件のみ対応、他の表現ゆれ(「介護度3」等)は非対応。
  * 6. D5〜D8の`mustCover`はPR0未実行のためfactsをそのまま暫定採用した値であり、PR2b初回
  *    実機実行の結果を踏まえ確定させる運用(`meta.json`の`_note`参照)。
@@ -182,11 +231,11 @@ export interface CoverageResult {
 
 export function evaluateCoverage(summaryText: string, spec: SummaryScoreSpec): CoverageResult {
   const normalizedSummary = normalizeForScore(summaryText);
-  const hit = (fact: string): boolean => normalizedSummary.includes(normalizeForScore(fact));
+  const hit = (fact: FactEntry): boolean => factHit(fact, normalizedSummary);
 
-  const coveredFacts = spec.facts.filter(hit);
-  const missingFacts = spec.facts.filter((f) => !hit(f));
-  const missingMustCover = spec.mustCover.filter((f) => !hit(f));
+  const coveredFacts = spec.facts.filter(hit).map(factLabel);
+  const missingFacts = spec.facts.filter((f) => !hit(f)).map(factLabel);
+  const missingMustCover = spec.mustCover.filter((f) => !hit(f)).map(factLabel);
   const totalCount = spec.facts.length;
   const applicable = totalCount > 0;
   const coverageRatio = applicable ? coveredFacts.length / totalCount : null;

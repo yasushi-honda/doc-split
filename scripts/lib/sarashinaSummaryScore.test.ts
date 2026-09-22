@@ -136,6 +136,27 @@ test('evaluateCoverage: minCoveredFacts=nullはvacuous true', () => {
   assert.equal(r.minCoveredSatisfied, true);
 });
 
+test('evaluateCoverage: FactEntry(エイリアス配列)は姓名・名のいずれでもヒットする(D8「文子」対応、codex review指摘の回帰テスト)', () => {
+  // 「立花 文子」修正の初版ではmustCoverを名のみ「文子」に単純に緩和したが、それだと
+  // 識別情報(姓「立花」)自体がfacts定義から失われ、将来cross-entity取り違えが発生しても
+  // coverage-per-docが素通りしてしまう(codex review指摘)。エイリアス配列により
+  // 「立花 文子」(姓名)・「文子」(名のみ、意図的な姓省略)のいずれでもヒットしつつ、
+  // 識別情報自体はfacts定義に残す。
+  const spec: SummaryScoreSpec = {
+    facts: [['立花 文子', '文子']],
+    mustCover: [['立花 文子', '文子']],
+    optionalFacts: [],
+    minCoveredFacts: 1,
+  };
+  const fullName = evaluateCoverage('要介護1の妻立花文子様が対象。', spec);
+  assert.equal(fullName.mustCoverSatisfied, true);
+  const givenNameOnly = evaluateCoverage('要介護1の妻文子様が対象。', spec);
+  assert.equal(givenNameOnly.mustCoverSatisfied, true);
+  const neither = evaluateCoverage('該当者なし。', spec);
+  assert.equal(neither.mustCoverSatisfied, false);
+  assert.deepEqual(neither.missingMustCover, ['立花 文子/文子']);
+});
+
 // ---------------------------------------------------------------------------
 // validateCoverageSpec(D1〜D10全件、および故意に壊したspec)
 // ---------------------------------------------------------------------------
@@ -171,6 +192,29 @@ test('validateCoverageSpec: minCoveredFactsがmustCover件数未満なら検出�
   const spec: SummaryScoreSpec = { facts: ['A', 'B'], mustCover: ['A', 'B'], optionalFacts: [], minCoveredFacts: 1 };
   const errs = validateCoverageSpec('X', spec);
   assert.ok(errs.some((e) => e.includes('mustCover件数')));
+});
+
+test('validateCoverageSpec: FactEntry(エイリアス配列)を含むspecも不変条件に違反しない(D8相当)', () => {
+  const spec: SummaryScoreSpec = {
+    facts: ['A', ['立花 文子', '文子']],
+    mustCover: ['A', ['立花 文子', '文子']],
+    optionalFacts: [],
+    minCoveredFacts: 2,
+  };
+  const errs = validateCoverageSpec('X', spec);
+  assert.deepEqual(errs, []);
+});
+
+test('validateCoverageSpec: エイリアス配列が1件のみなら検出する(文字列で表現すべき、codex review指摘の回帰テスト)', () => {
+  const spec: SummaryScoreSpec = { facts: [['A']], mustCover: [['A']], optionalFacts: [], minCoveredFacts: 1 };
+  const errs = validateCoverageSpec('X', spec);
+  assert.ok(errs.some((e) => e.includes('エイリアスが1件のみ')));
+});
+
+test('validateCoverageSpec: エイリアス配列内に空文字列があれば検出する', () => {
+  const spec: SummaryScoreSpec = { facts: [['A', '']], mustCover: [['A', '']], optionalFacts: [], minCoveredFacts: 1 };
+  const errs = validateCoverageSpec('X', spec);
+  assert.ok(errs.some((e) => e.includes('factsに空文字列が含まれています')));
 });
 
 test('validateCoverageSpec: roleが不正な値なら検出する', () => {
