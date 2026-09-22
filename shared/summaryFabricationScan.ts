@@ -90,9 +90,15 @@
  * a. ADR-0027 PR2b実機ゲート本番run(2026-09-22)で、助詞リストに「に対して」が未収録
  *    だったため実在組織名に「対して」が連結した状態で捏造判定されていた(D2run2)。
  *    「に関して」「によれば」等と同じ設計方針で複合語として追加し解消。
- * b. ADR-0027 PR2bステップ8全10doc×3run正式gate run再実行(2026-09-22)で、助詞リストに
- *    指示語「当該」が未収録だったため、事業所名不明と正直に回答する健全な出力
- *    (「当該事業所」)が捏造判定されていた(D9run2)。単体助詞として追加し解消。
+ * b. ADR-0027 PR2bステップ8全10doc×3run正式gate run再実行(2026-09-22)で、事業所名不明と
+ *    正直に回答する健全な出力(「当該事業所」)が捏造判定されていた(D9run2)。当初「当該」を
+ *    `DEFAULT_PARTICLES`(助詞トリム境界)へ追加したが、codex review指摘(P2、strict-config
+ *    high): `trimParticles`はcandidate core内のどこにでも出現する助詞を境界として使うため、
+ *    「新当該クリニック」「新当該事業所」のような捏造名でも「当該」の位置でトリムされ
+ *    core が空になり、genericCore判定で捏造検出そのものをすり抜けてしまう新規バイパスを
+ *    生んでいた(上記2・上記5「して」と同型の問題)。「当該事業所」の健全なケースはcore
+ *    (「当該」)が完全一致すれば十分なため、`DEFAULT_PARTICLES`ではなく`DEFAULT_GENERIC_CORES`
+ *    (完全一致のみ判定、部分一致では発動しない)へ追加し解消。
  */
 
 /** 捏造疑いの固有名詞の分類。`fabricated` のみが「呼び出し側がブロックすべき」対象。
@@ -181,7 +187,6 @@ const PREFIX_CAPABLE_SUFFIXES: ReadonlySet<string> = new Set(['株式会社', '�
  * 依存しない設計へ修正した)。
  */
 export const DEFAULT_PARTICLES: readonly string[] = [
-  '当該',
   'については',
   'に対して',
   'に関して',
@@ -227,6 +232,7 @@ export const DEFAULT_PARTICLES: readonly string[] = [
  */
 export const DEFAULT_GENERIC_CORES: readonly string[] = [
   '',
+  '当該',
   '内容',
   'サービス内容',
   '利用者名',

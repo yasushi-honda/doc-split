@@ -323,6 +323,22 @@ describe('scanSummaryForFabrication: 助詞トリム(②)', () => {
     expect(r.fabricatedCount).to.equal(0);
     expect(r.findings).to.deep.equal([]);
   });
+
+  it('「当該」を含む捏造プレフィックスは引き続き検出する(codex review指摘、PR#1021最終、P2の回帰テスト)', () => {
+    // 「当該」を助詞リスト(DEFAULT_PARTICLES)へ追加する初版では、trimParticlesがcandidate
+    // core内のどこにでも出現する助詞を境界として使うため、「新当該クリニック」のような
+    // 捏造名でも「当該」の位置でトリムされcoreが空になり、genericCore判定で捏造検出
+    // そのものをすり抜けてしまう新規バイパスが生じていた(codex review指摘)。「当該事業所」
+    // の健全なケースはcoreの完全一致で十分なため、DEFAULT_GENERIC_CORESへ差し替えて解消。
+    const source = '青葉クリニックが担当。';
+    const r1 = scanSummaryForFabrication('新当該クリニックが担当。', source);
+    expect(r1.fabricatedCount).to.equal(1);
+    expect(r1.findings[0].name).to.equal('新当該クリニック');
+
+    const r2 = scanSummaryForFabrication('新当該事業所が担当。', '利用者の状況について記載。');
+    expect(r2.fabricatedCount).to.equal(1);
+    expect(r2.findings[0].name).to.equal('新当該事業所');
+  });
 });
 
 describe('scanSummaryForFabrication: 再結合判定(④、fabricated/recombined分離)', () => {
