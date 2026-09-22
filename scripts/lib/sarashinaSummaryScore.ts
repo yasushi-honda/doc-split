@@ -90,7 +90,15 @@ export type FixtureRole = 'coverage' | 'numeric' | 'cross-entity' | 'fabrication
  * テストセット(D8は源泉テキストに立花家の2名のみが登場する固定書式)では実際に発生しない
  * 理論的な攻撃パターンであり、形態素解析非採用の既存方針を優先しこれ以上の対応はしない。
  */
-export type FactEntry = string | readonly string[];
+/**
+ * 配列側は2件以上のrest-tupleとして型で強制する(type-design-analyzer指摘、2026-09-23
+ * 追加: `readonly string[]`のままだと0件・1件の配列も型上は許容されてしまい、
+ * 「1件なら文字列で表現すべき」という不変条件が実行時検証(`validateFactEntry`)頼みに
+ * なっていた)。ただしmeta.json(JSON)由来のspecは`parseFixtureMeta`の型アサーションで
+ * 生成されるため、この型強制はTypeScriptで直接specリテラルを書くテストコードのみに効く。
+ * JSON側の不正な形(空配列等)は引き続き`validateFactEntry`の実行時検証が唯一の防波堤。
+ */
+export type FactEntry = string | readonly [string, string, ...string[]];
 
 function factAliases(entry: FactEntry): readonly string[] {
   return typeof entry === 'string' ? [entry] : entry;
@@ -118,6 +126,25 @@ export interface SummaryScoreSpec {
   mustNotContainAmount?: boolean;
   crossEntityPairs?: readonly (readonly [FactEntry, string])[];
   role?: FixtureRole;
+}
+
+/**
+ * 単一の`FactEntry`が満たすべき不変条件(空のエイリアス配列・空文字列・1件のみの配列は
+ * 不正)を検証する。`facts`/`mustCover`/`optionalFacts`と`crossEntityPairs`のperson側の
+ * 両方から共有される(type-design-analyzer指摘、2026-09-23追加: 以前はcrossEntityPairs側が
+ * 未検証だった)。
+ */
+function validateFactEntry(docId: string, entry: FactEntry, fieldLabel: string): string[] {
+  const errors: string[] = [];
+  const aliases = factAliases(entry);
+  if (aliases.length === 0) {
+    errors.push(`${docId}: ${fieldLabel}に空のエイリアス配列が含まれています`);
+  } else if (aliases.some((a) => a.length === 0)) {
+    errors.push(`${docId}: ${fieldLabel}に空文字列が含まれています`);
+  } else if (typeof entry !== 'string' && aliases.length === 1) {
+    errors.push(`${docId}: "${factLabel(entry)}"(${fieldLabel})はエイリアスが1件のみです(1件なら文字列で表現してください)`);
+  }
+  return errors;
 }
 
 /**
@@ -152,13 +179,14 @@ export function validateCoverageSpec(docId: string, spec: SummaryScoreSpec): str
     errors.push(`${docId}: facts が mustCover∪optionalFacts と一致しません`);
   }
   for (const f of spec.facts) {
-    const aliases = factAliases(f);
-    if (aliases.length === 0) {
-      errors.push(`${docId}: factsに空のエイリアス配列が含まれています`);
-    } else if (aliases.some((a) => a.length === 0)) {
-      errors.push(`${docId}: factsに空文字列が含まれています`);
-    } else if (typeof f !== 'string' && aliases.length === 1) {
-      errors.push(`${docId}: "${factLabel(f)}"はエイリアスが1件のみです(1件なら文字列で表現してください)`);
+    errors.push(...validateFactEntry(docId, f, 'facts'));
+  }
+  // codex review指摘(type-design-analyzer、2026-09-23追加): facts/mustCover/optionalFactsは
+  // FactEntry不変条件(空配列・空文字列・1件のみ配列)を検証していたが、crossEntityPairsの
+  // person側(同じFactEntry型、D8で実際に使用)は素通りしていた。同じ不変条件を適用する。
+  if (spec.crossEntityPairs !== undefined) {
+    for (const [person] of spec.crossEntityPairs) {
+      errors.push(...validateFactEntry(docId, person, 'crossEntityPairs'));
     }
   }
   const factsEmpty = spec.facts.length === 0;
@@ -609,7 +637,9 @@ function findOccurrences(text: string, vocab: readonly string[]): Occurrence[] {
  *    構造的に緑判定しうるため、3値判定へ変更した)。
  * 3. 多人数セグメント内で、読点が人物と事業所を実際には分断していないケース(「立花誠一様は、
  *    さくらい整形外科を受診」)は、読点で節分割した結果その節に人物がいなくなり検知漏れうる。
- * 4. 氏名の部分表記(「誠一様」)・同姓(「立花」のみ)への対応はできない。
+ * 4. 氏名の部分表記(「誠一様」)は、`crossEntityPairs`のperson側を`FactEntry`(エイリアス
+ *    配列)にすれば特定ペアに限り許容可能(D8「文子」参照、2026-09-23対応)。同姓のみ
+ *    (「立花」のみ)への対応はできない。
  * 5. 語彙は`cross_entity_pairs`で明示された組み合わせに限定される。共通事業所名との
  *    誤結合は対象外(`shared/summaryFabricationScan.ts`の捏造検知の領分)。
  * 6. 否定・比較文脈(「Aではなく B」)は考慮しない。
@@ -714,7 +744,11 @@ export function checkCrossEntity(
   // エイリアスが両方出現する場合(例:「立花文子（文子様）は青葉クリニックを受診」)、
   // 正規化後のalias値そのままでdedupすると「2名」と誤って数えられ、多人数セグメント
   // 扱い(ambiguousSegments)のNOT_EVALUATEDに落ちて取り違えを検知できなくなる。
-  // origByNormで代表ラベル(factLabel)へ正規化してからdedupする。
+  // origByNormで得た代表ラベル(factLabel)を重複排除の判定キーとして使い、ラベルごとに
+  // 最初に出現した正規化済みalias値を1件だけ返す(返り値自体はラベルではなくalias値。
+  // `attribute()`が`personToOrgs`を引くために正規化済みalias値を必要とするため。
+  // comment-analyzer指摘、2026-09-23: 旧コメントは「ラベルへ正規化して返す」と読めたが
+  // 実際の返り値はalias値であり誤解を招くため文言を修正)。
   const dedupePersonsByLabel = (hits: Occurrence[]): string[] => {
     const byLabel = new Map<string, string>();
     for (const hit of hits) {

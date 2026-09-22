@@ -17,6 +17,7 @@ import {
   SUMMARY_SCORE_CONFIG_VERSION,
   type SummaryScoreSpec,
   type FixtureRole,
+  type FactEntry,
 } from './sarashinaSummaryScore';
 
 const META_PATH = path.join(__dirname, '..', 'fixtures', 'sarashina-summary-golden', 'docs', 'meta.json');
@@ -206,15 +207,47 @@ test('validateCoverageSpec: FactEntry(エイリアス配列)を含むspecも不�
 });
 
 test('validateCoverageSpec: エイリアス配列が1件のみなら検出する(文字列で表現すべき、codex review指摘の回帰テスト)', () => {
-  const spec: SummaryScoreSpec = { facts: [['A']], mustCover: [['A']], optionalFacts: [], minCoveredFacts: 1 };
+  // `FactEntry`の配列側は型レベルで2件以上を強制する(type-design-analyzer指摘)ため、
+  // TypeScriptで直接この不正な形を書くとコンパイルエラーになる。meta.json(JSON)側は
+  // 型チェックの対象外(`parseFixtureMeta`の型アサーション経由)のため、実行時検証
+  // (`validateFactEntry`)が唯一の防波堤であることを示すため、あえて型を迂回して構築する。
+  const spec: SummaryScoreSpec = {
+    facts: [['A'] as unknown as FactEntry],
+    mustCover: [['A'] as unknown as FactEntry],
+    optionalFacts: [],
+    minCoveredFacts: 1,
+  };
   const errs = validateCoverageSpec('X', spec);
   assert.ok(errs.some((e) => e.includes('エイリアスが1件のみ')));
+});
+
+test('validateCoverageSpec: エイリアス配列が完全に空なら検出する(pr-test-analyzer指摘: 未テストだった分岐)', () => {
+  const spec: SummaryScoreSpec = {
+    facts: [[] as unknown as FactEntry],
+    mustCover: [[] as unknown as FactEntry],
+    optionalFacts: [],
+    minCoveredFacts: 1,
+  };
+  const errs = validateCoverageSpec('X', spec);
+  assert.ok(errs.some((e) => e.includes('空のエイリアス配列')));
 });
 
 test('validateCoverageSpec: エイリアス配列内に空文字列があれば検出する', () => {
   const spec: SummaryScoreSpec = { facts: [['A', '']], mustCover: [['A', '']], optionalFacts: [], minCoveredFacts: 1 };
   const errs = validateCoverageSpec('X', spec);
   assert.ok(errs.some((e) => e.includes('factsに空文字列が含まれています')));
+});
+
+test('validateCoverageSpec: crossEntityPairsのperson側FactEntryにも同じ不変条件を適用する(type-design-analyzer指摘: 以前はcrossEntityPairs側が未検証だった)', () => {
+  const spec: SummaryScoreSpec = {
+    facts: [],
+    mustCover: [],
+    optionalFacts: [],
+    minCoveredFacts: null,
+    crossEntityPairs: [[['A'] as unknown as FactEntry, 'org']],
+  };
+  const errs = validateCoverageSpec('X', spec);
+  assert.ok(errs.some((e) => e.includes('エイリアスが1件のみ') && e.includes('crossEntityPairs')));
 });
 
 test('validateCoverageSpec: roleが不正な値なら検出する', () => {
