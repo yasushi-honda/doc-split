@@ -1,0 +1,193 @@
+{
+  "generatedFrom": "scripts/fixtures/sarashina-summary-golden/pr0-verification/results/*.json",
+  "generatedAt": "2026-09-22",
+  "note": "shared/summaryFabricationScan.ts(4段階アルゴリズム)をPR0結果JSON(28run)へ実際に実行した 結果そのものを期待値として固定する。codex review 2回目(P2×3件、うち々対応のみ反映・残り2件は既知の限界としてdecision-maker確認のうえ受容)後の再生成版。",
+  "runsScanned": 28,
+  "summary": {
+    "fabricated": 0,
+    "recombined": 3
+  },
+  "runs": [
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_d1d4_pr0.json",
+      "doc": "D1",
+      "run": 1,
+      "findings": []
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_d1d4_pr0.json",
+      "doc": "D1",
+      "run": 2,
+      "findings": []
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_d1d4_pr0.json",
+      "doc": "D1",
+      "run": 3,
+      "findings": []
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_d1d4_pr0.json",
+      "doc": "D2",
+      "run": 1,
+      "findings": []
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_d1d4_pr0.json",
+      "doc": "D2",
+      "run": 2,
+      "findings": []
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_d1d4_pr0.json",
+      "doc": "D2",
+      "run": 3,
+      "findings": []
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_d1d4_pr0.json",
+      "doc": "D3",
+      "run": 1,
+      "findings": []
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_d1d4_pr0.json",
+      "doc": "D3",
+      "run": 2,
+      "findings": []
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_d1d4_pr0.json",
+      "doc": "D3",
+      "run": 3,
+      "findings": [
+        {
+          "kind": "recombined",
+          "name": "水無月訪問看護"
+        },
+        {
+          "kind": "recombined",
+          "name": "若草訪問介護"
+        },
+        {
+          "kind": "recombined",
+          "name": "日向通所リハビリ"
+        }
+      ]
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_d1d4_pr0.json",
+      "doc": "D4",
+      "run": 1,
+      "findings": []
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_d1d4_pr0.json",
+      "doc": "D4",
+      "run": 2,
+      "findings": []
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_d1d4_pr0.json",
+      "doc": "D4",
+      "run": 3,
+      "findings": []
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_t00_pr0.json",
+      "doc": "D9",
+      "run": 1,
+      "findings": []
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_t00_pr0.json",
+      "doc": "D9",
+      "run": 2,
+      "findings": []
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_t00_pr0.json",
+      "doc": "D9",
+      "run": 3,
+      "findings": []
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_t00_pr0.json",
+      "doc": "D10",
+      "run": 1,
+      "findings": []
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_t00_pr0.json",
+      "doc": "D10",
+      "run": 2,
+      "findings": []
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_t00_pr0.json",
+      "doc": "D10",
+      "run": 3,
+      "findings": []
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_t02_pr0.json",
+      "doc": "D9",
+      "run": 1,
+      "findings": []
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_t02_pr0.json",
+      "doc": "D9",
+      "run": 2,
+      "findings": []
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_t02_pr0.json",
+      "doc": "D9",
+      "run": 3,
+      "findings": []
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_t02_pr0.json",
+      "doc": "D9",
+      "run": 4,
+      "findings": []
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_t02_pr0.json",
+      "doc": "D9",
+      "run": 5,
+      "findings": []
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_t02_pr0.json",
+      "doc": "D10",
+      "run": 1,
+      "findings": []
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_t02_pr0.json",
+      "doc": "D10",
+      "run": 2,
+      "findings": []
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_t02_pr0.json",
+      "doc": "D10",
+      "run": 3,
+      "findings": []
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_t02_pr0.json",
+      "doc": "D10",
+      "run": 4,
+      "findings": []
+    },
+    {
+      "resultFile": "result_matrix_sarashina-pr0_q8_t02_pr0.json",
+      "doc": "D10",
+      "run": 5,
+      "findings": []
+    }
+  ]
+}

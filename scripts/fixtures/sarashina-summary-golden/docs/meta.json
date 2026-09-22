@@ -11,7 +11,19 @@
       "9月18日",
       "週3回",
       "12,480"
-    ]
+    ],
+    "role": "coverage",
+    "mustCover": [
+      "星野 みなと",
+      "みどりヶ丘訪問看護ステーション",
+      "あおぞら居宅介護支援事業所",
+      "訪問看護指示書",
+      "9月18日",
+      "週3回",
+      "12,480"
+    ],
+    "optionalFacts": [],
+    "minCoveredFacts": 7
   },
   "D2": {
     "title": "介護サービス利用料明細書兼請求書",
@@ -25,7 +37,21 @@
       "36,366",
       "9月30日",
       "あおぞら居宅介護支援事業所"
-    ]
+    ],
+    "role": "coverage",
+    "mustCover": [
+      "波多野 千秋",
+      "さくら通所介護センター",
+      "令和8年8月",
+      "36,366",
+      "9月30日",
+      "あおぞら居宅介護支援事業所"
+    ],
+    "optionalFacts": [
+      "要介護3"
+    ],
+    "minCoveredFacts": 6,
+    "_note": "PR0実測(2026-09-21〜22)でカバー率95%(min86%)、未充足factは常に「要介護3」だった。属性情報であり要約の核心(関係者・金額・日付)ではないためoptionalFactsへ分離(mustCover=6件は3回実測とも全て充足)。"
   },
   "D3": {
     "title": "居宅サービス計画書",
@@ -38,7 +64,18 @@
       "転倒",
       "令和8年9月1日",
       "青葉クリニック"
-    ]
+    ],
+    "role": "coverage",
+    "mustCover": [
+      "柊 あおい",
+      "あおぞら居宅介護支援事業所",
+      "要介護2",
+      "転倒",
+      "令和8年9月1日",
+      "青葉クリニック"
+    ],
+    "optionalFacts": [],
+    "minCoveredFacts": 6
   },
   "D4": {
     "title": "訪問看護報告書",
@@ -52,7 +89,19 @@
       "9月16日",
       "10月7日",
       "利尿薬"
-    ]
+    ],
+    "role": "coverage",
+    "mustCover": [
+      "黒田 しずか",
+      "みどりヶ丘訪問看護ステーション",
+      "慢性心不全",
+      "要介護4",
+      "9月16日",
+      "10月7日",
+      "利尿薬"
+    ],
+    "optionalFacts": [],
+    "minCoveredFacts": 7
   },
   "D5": {
     "title": "訪問介護サービス実施記録",
@@ -63,7 +112,16 @@
       "ひまわり訪問介護",
       "9月22日"
     ],
-    "must_not_contain_amount": true
+    "must_not_contain_amount": true,
+    "role": "numeric",
+    "mustCover": [
+      "宮下 譲",
+      "ひまわり訪問介護",
+      "9月22日"
+    ],
+    "optionalFacts": [],
+    "minCoveredFacts": 3,
+    "_note": "PR0で未実行(D5〜D8は実機での固有名詞捏造検証がまだ未実施)。mustCoverはfactsをそのまま暫定採用、PR2b実機ゲート初回実行値で見直す。"
   },
   "D6": {
     "title": "介護サービス利用実績一覧",
@@ -74,7 +132,17 @@
       "あさひ訪問介護ステーション",
       "16,051",
       "9月30日"
-    ]
+    ],
+    "role": "coverage",
+    "mustCover": [
+      "東雲 直人",
+      "あさひ訪問介護ステーション",
+      "16,051",
+      "9月30日"
+    ],
+    "optionalFacts": [],
+    "minCoveredFacts": 4,
+    "_note": "PR0で未実行。mustCoverはfactsをそのまま暫定採用、PR2b実機ゲート初回実行値で見直す。"
   },
   "D7": {
     "title": "介護保険負担割合証(OCR劣化あり)",
@@ -85,7 +153,17 @@
       "けやき居宅介護支援事業所",
       "2割",
       "令和8年9月"
-    ]
+    ],
+    "role": "coverage",
+    "mustCover": [
+      "桧山 加代",
+      "けやき居宅介護支援事業所",
+      "2割",
+      "令和8年9月"
+    ],
+    "optionalFacts": [],
+    "minCoveredFacts": 4,
+    "_note": "PR0で未実行。mustCoverはfactsをそのまま暫定採用、PR2b実機ゲート初回実行値で見直す。"
   },
   "D8": {
     "title": "訪問看護複数名合同報告書",
@@ -107,7 +185,19 @@
         "立花 文子",
         "さくらい整形外科"
       ]
-    ]
+    ],
+    "role": "cross-entity",
+    "mustCover": [
+      "立花 誠一",
+      "立花 文子",
+      "みどりヶ丘訪問看護ステーション"
+    ],
+    "optionalFacts": [
+      "9月26日",
+      "10月2日"
+    ],
+    "minCoveredFacts": 3,
+    "_note": "PR0で未実行。対象者取り違え判定(cross_entity_pairs)は別モジュールが担当する想定(PR2b scripts/lib/sarashinaSummaryScore.tsとして実装予定・本PR時点では未着手)、本ファイルのmustCoverは氏名・共通事業所のみ必須とする暫定値。"
   },
   "D9": {
     "title": "福祉用具貸与確認書",
@@ -117,13 +207,28 @@
       "三好 陽子",
       "歩行器",
       "9月20日"
-    ]
+    ],
+    "role": "fabrication",
+    "mustCover": [
+      "三好 陽子",
+      "9月20日"
+    ],
+    "optionalFacts": [
+      "歩行器"
+    ],
+    "minCoveredFacts": 2,
+    "_note": "PR0実測(2026-09-21〜22)で「歩行器」がv2プロンプトの必須5項目(種類/関係者/日付/金額/状態変化)に品目が無いため8/8回欠落。捏造検知(fabrication)テストの対象であり、カバー率85%ゲート(coverage-aggregate)の対象外。minCoveredFactsは整数個数で持つ(2/3=0.666...と0.67の生値比較による丸め誤差を避ける、/plan-crossreview codex Medium指摘反映)。"
   },
   "D10": {
     "title": "業務メモ",
     "chars": 44,
     "chars_used": 44,
     "facts": [],
-    "must_not_contain_amount": true
+    "must_not_contain_amount": true,
+    "role": "fabrication",
+    "mustCover": [],
+    "optionalFacts": [],
+    "minCoveredFacts": null,
+    "_note": "factsが空のためカバー率計算の対象外(0除算回避)。捏造検知(fabrication)テストの対象。"
   }
 }
