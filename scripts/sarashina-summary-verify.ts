@@ -80,6 +80,7 @@ async function main(): Promise<void> {
     const tokenProvider = new IdTokenProvider(serviceUrl);
     const records: SummaryRunRecord[] = [];
     let runtimeContract: RuntimeContractCheck | null = null;
+    let runtimeContractError: string | null = null;
     const loopStartedAt = Date.now();
 
     requestLoop: for (const docId of args.docs) {
@@ -104,24 +105,27 @@ async function main(): Promise<void> {
             wallMs: 0,
             httpStatus: null,
             retriedCount: 0,
-            timedOut: false,
-            fatal: true,
+            kind: 'fatal',
             fatalReason: `doc/run処理中に想定外の例外が発生しました: ${caseErr instanceof Error ? caseErr.message : String(caseErr)}`,
           };
         }
         records.push(record);
         console.log(
-          `[${docId}#${record.run}] wallMs=${record.wallMs} fatal=${record.fatal} timedOut=${record.timedOut} ` +
-            `mustCoverOk=${record.coverage?.mustCoverSatisfied ?? 'N/A'}`
+          `[${docId}#${record.run}] wallMs=${record.wallMs} kind=${record.kind} ` +
+            `mustCoverOk=${record.kind === 'evaluated' ? record.coverage.mustCoverSatisfied : 'N/A'}`
         );
 
         // runtime-contractは最初に得られた成功レスポンスの直後(既にwarm化済み)にのみ取得する。
-        if (runtimeContract === null && !record.fatal && !record.timedOut) {
+        if (runtimeContract === null && record.kind === 'evaluated') {
           try {
             const token = await tokenProvider.getToken();
             const props = await fetchProps(serviceUrl, token);
             runtimeContract = checkRuntimeContract(props, manifest);
           } catch (propsErr) {
+            // silent-failure-hunter指摘(High): console.errorのみだとJSONレポート(artifact)に
+            // 理由が残らずpost-mortem時にjobログを漁る必要があった。実際のエラー内容を
+            // レポート(runtime-contractゲートのdetail)へ持ち越す。
+            runtimeContractError = propsErr instanceof Error ? propsErr.message : String(propsErr);
             console.error('/propsの取得に失敗しました:', propsErr);
           }
         }
@@ -129,11 +133,13 @@ async function main(): Promise<void> {
     }
 
     let serviceSnapshotEnd;
+    let serviceSnapshotEndError: string | null = null;
     try {
       serviceSnapshotEnd = await getServiceSnapshot(projectId, region);
       console.log('終了時スナップショット:', serviceSnapshotEnd);
     } catch (snapshotErr) {
       serviceSnapshotEnd = null;
+      serviceSnapshotEndError = snapshotErr instanceof Error ? snapshotErr.message : String(snapshotErr);
       console.error('終了時スナップショットの取得に失敗しました:', snapshotErr);
     }
 
@@ -144,7 +150,9 @@ async function main(): Promise<void> {
       finishedAt,
       serviceSnapshotStart,
       serviceSnapshotEnd,
+      serviceSnapshotEndError,
       runtimeContract,
+      runtimeContractError,
       records,
       metaByDoc,
       expectedDocs: args.docs,

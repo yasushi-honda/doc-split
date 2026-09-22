@@ -425,26 +425,46 @@ export function extractContent(rawBody: string): string {
 // 1リクエスト分の記録・採点
 // ============================================================================
 
-export interface SummaryRunRecord {
+interface SummaryRunRecordBase {
   docId: string;
   run: number;
   wallMs: number;
   httpStatus: number | null;
   retriedCount: number;
-  timedOut: boolean;
-  failureKind?: 'clientTimeout' | 'serverTimeout504' | 'networkError';
-  fatal: boolean;
-  fatalReason?: string;
-  rawText?: string;
-  fabrication?: FabricationScanResult;
-  coverage?: CoverageResult;
-  numeric?: NumericFabricationResult;
-  amount?: AmountProhibitionResult;
-  crossEntity?: CrossEntityResult;
-  output?: OutputShapeResult;
 }
 
-/** 成否に関わらず1件のレコードを作る。評価対象(rawText以降)は成功時のみ埋まる。 */
+/**
+ * type-design-analyzer指摘(High、`codex review`と独立したセカンドオピニオン): 当初timedOut/
+ * fatal/success(evaluated)の3つの相互排他状態を独立boolean+全フィールドoptionalで表現して
+ * いたが、これはillegal state(例: `fatal:true`かつ`coverage`等が populated)を型上許容し、
+ * `evaluateCoverageAggregateGate`で`r.coverage as CoverageResult`という型安全性を破棄する
+ * キャストが必要になっていた。同じ3状態を正しく判別可能unionで表現している
+ * `RawSummarySendResult`と設計を揃え、判別可能unionへ変更した(`kind`で判別)。
+ */
+export interface TimedOutSummaryRunRecord extends SummaryRunRecordBase {
+  kind: 'timedOut';
+  failureKind: 'clientTimeout' | 'serverTimeout504' | 'networkError';
+}
+
+export interface FatalSummaryRunRecord extends SummaryRunRecordBase {
+  kind: 'fatal';
+  fatalReason: string;
+}
+
+export interface EvaluatedSummaryRunRecord extends SummaryRunRecordBase {
+  kind: 'evaluated';
+  rawText: string;
+  fabrication: FabricationScanResult;
+  coverage: CoverageResult;
+  numeric: NumericFabricationResult;
+  amount: AmountProhibitionResult;
+  crossEntity: CrossEntityResult;
+  output: OutputShapeResult;
+}
+
+export type SummaryRunRecord = TimedOutSummaryRunRecord | FatalSummaryRunRecord | EvaluatedSummaryRunRecord;
+
+/** 成否に関わらず1件のレコードを作る。評価対象フィールドは`kind:'evaluated'`のみ持つ。 */
 export function scoreRunRecord(
   docId: string,
   run: number,
@@ -457,26 +477,39 @@ export function scoreRunRecord(
     return {
       ...base,
       httpStatus: outcome.result.httpStatus,
-      timedOut: true,
+      kind: 'timedOut',
       failureKind: outcome.result.failureKind,
-      fatal: false,
     };
   }
   if (outcome.result.kind === 'fatal') {
     return {
       ...base,
       httpStatus: outcome.result.httpStatus,
-      timedOut: false,
-      fatal: true,
+      kind: 'fatal',
       fatalReason: outcome.result.fatalReason,
     };
   }
   const rawText = extractContent(outcome.result.body);
+  // silent-failure-hunter指摘(Critical): 200 OK+スキーマ的に有効なJSONだが
+  // `choices[0].message.content`が空/欠落の場合、`extractContent`は`?? ''`で空文字に
+  // フォールバックする(JSON.parse自体の失敗とは意図的に区別している)。facts=[]のdoc
+  // (D10)はカバー率判定が恒真的にtrueになるため、この空文字がそのまま9ゲート中FAIL可能な
+  // 6ゲート全てを素通りしうる(fabrication/numeric-fabricationも空文字からは検知不能、
+  // determinismも毎回同じ空文字なら「一致」扱い)。output-sanityの`too-short`はWARN専用の
+  // ためexitCodeに影響しない。空/実質空のレスポンスはfacts数に関わらずスキーマ不一致・
+  // 生成失敗の疑いが強いため、評価対象(evaluated)にはせずfatalとして扱う。
+  if (rawText.trim().length === 0) {
+    return {
+      ...base,
+      httpStatus: 200,
+      kind: 'fatal',
+      fatalReason: 'レスポンスのcontentが空でした(choices[0].message.content欠落、またはモデルが空文字を生成)',
+    };
+  }
   return {
     ...base,
     httpStatus: 200,
-    timedOut: false,
-    fatal: false,
+    kind: 'evaluated',
     rawText,
     fabrication: scanSummaryForFabrication(rawText, sourceTextForScoring),
     coverage: evaluateCoverage(rawText, spec),
@@ -487,8 +520,8 @@ export function scoreRunRecord(
   };
 }
 
-function isEvaluated(r: SummaryRunRecord): r is SummaryRunRecord & { rawText: string } {
-  return !r.fatal && !r.timedOut && r.rawText !== undefined;
+function isEvaluated(r: SummaryRunRecord): r is EvaluatedSummaryRunRecord {
+  return r.kind === 'evaluated';
 }
 
 // ============================================================================
@@ -517,7 +550,7 @@ export function evaluateFabricationGate(records: readonly SummaryRunRecord[]): S
   if (evaluated.length === 0) {
     return { id: 'fabrication', verdict: 'NOT_EVALUATED', detail: '評価対象のrunがありません(全件fatal/timedOut)' };
   }
-  const fabricated = evaluated.filter((r) => (r.fabrication?.fabricatedCount ?? 0) > 0);
+  const fabricated = evaluated.filter((r) => r.fabrication.fabricatedCount > 0);
   if (fabricated.length > 0) {
     return {
       id: 'fabrication',
@@ -535,7 +568,7 @@ export function evaluateRecombinationGate(records: readonly SummaryRunRecord[]):
   if (evaluated.length === 0) {
     return { id: 'recombination', verdict: 'NOT_EVALUATED', detail: '評価対象のrunがありません' };
   }
-  const recombined = evaluated.filter((r) => (r.fabrication?.recombinedCount ?? 0) > 0);
+  const recombined = evaluated.filter((r) => r.fabrication.recombinedCount > 0);
   if (recombined.length > 0) {
     return {
       id: 'recombination',
@@ -560,7 +593,7 @@ export function evaluateCoverageAggregateGate(
   const inputs = evaluated.map((r) => ({
     docId: `${r.docId}#${r.run}`,
     role: metaByDoc[r.docId].role ?? 'coverage',
-    coverage: r.coverage as CoverageResult,
+    coverage: r.coverage,
   }));
   const aggregate = aggregateCoverage(inputs, { excludeRoles: META_ROLE_EXCLUDE_FROM_AGGREGATE });
   const verdict: SummaryGateVerdict = aggregate.factsTotal === 0 ? 'NOT_EVALUATED' : aggregate.passed ? 'PASS' : 'FAIL';
@@ -580,13 +613,13 @@ export function evaluateCoveragePerDocGate(records: readonly SummaryRunRecord[])
   if (evaluated.length === 0) {
     return { id: 'coverage-per-doc', verdict: 'NOT_EVALUATED', detail: '評価対象のrunがありません' };
   }
-  const failing = evaluated.filter((r) => r.coverage && !r.coverage.passed);
+  const failing = evaluated.filter((r) => !r.coverage.passed);
   if (failing.length > 0) {
     return {
       id: 'coverage-per-doc',
       verdict: 'FAIL',
       detail: `mustCover/minCoveredFacts未充足(${failing.length}/${evaluated.length}run): ${failing
-        .map((r) => `${r.docId}#${r.run}(欠落: ${r.coverage!.missingMustCover.join('、') || r.coverage!.missingFacts.join('、')})`)
+        .map((r) => `${r.docId}#${r.run}(欠落: ${r.coverage.missingMustCover.join('、') || r.coverage.missingFacts.join('、')})`)
         .join('、')}`,
     };
   }
@@ -598,7 +631,7 @@ export function evaluateNumericFabricationGate(records: readonly SummaryRunRecor
   if (evaluated.length === 0) {
     return { id: 'numeric-fabrication', verdict: 'NOT_EVALUATED', detail: '評価対象のrunがありません' };
   }
-  const failing = evaluated.filter((r) => r.numeric && !r.numeric.passed);
+  const failing = evaluated.filter((r) => !r.numeric.passed);
   if (failing.length > 0) {
     return {
       id: 'numeric-fabrication',
@@ -610,11 +643,11 @@ export function evaluateNumericFabricationGate(records: readonly SummaryRunRecor
 }
 
 export function evaluateAmountAbsenceGate(records: readonly SummaryRunRecord[]): SummaryGateEntry {
-  const evaluated = records.filter(isEvaluated).filter((r) => r.amount?.applicable);
+  const evaluated = records.filter(isEvaluated).filter((r) => r.amount.applicable);
   if (evaluated.length === 0) {
     return { id: 'amount-absence', verdict: 'NOT_EVALUATED', detail: 'must_not_contain_amount対象のdocに評価済みrunがありません' };
   }
-  const violating = evaluated.filter((r) => r.amount && !r.amount.passed);
+  const violating = evaluated.filter((r) => !r.amount.passed);
   if (violating.length > 0) {
     return {
       id: 'amount-absence',
@@ -632,9 +665,9 @@ export function evaluateOutputSanityGate(records: readonly SummaryRunRecord[]): 
   if (evaluated.length === 0) {
     return { id: 'output-sanity', verdict: 'NOT_EVALUATED', detail: '評価対象のrunがありません' };
   }
-  const withAnomaly = evaluated.filter((r) => (r.output?.anomalies.length ?? 0) > 0);
+  const withAnomaly = evaluated.filter((r) => r.output.anomalies.length > 0);
   if (withAnomaly.length > 0) {
-    const kinds = [...new Set(withAnomaly.flatMap((r) => r.output!.anomalies))].sort();
+    const kinds = [...new Set(withAnomaly.flatMap((r) => r.output.anomalies))].sort();
     return {
       id: 'output-sanity',
       verdict: 'WARN',
@@ -663,7 +696,7 @@ export function evaluateDeterminismGate(records: readonly SummaryRunRecord[]): S
   const inconsistentDocs: string[] = [];
   for (const [docId, rs] of evaluableDocs) {
     const signatures = new Set(
-      rs.map((r) => JSON.stringify([r.coverage?.passed, r.numeric?.passed, (r.fabrication?.fabricatedCount ?? 0) > 0]))
+      rs.map((r) => JSON.stringify([r.coverage.passed, r.numeric.passed, r.fabrication.fabricatedCount > 0]))
     );
     if (signatures.size > 1) inconsistentDocs.push(docId);
   }
@@ -691,6 +724,9 @@ export interface SummaryVerifyReport {
   inconclusive: boolean;
   inconclusiveReason: string | null;
   runtimeContract: RuntimeContractCheck | null;
+  /** silent-failure-hunter指摘(High): /props取得失敗の実際のエラー内容を証跡として残す
+   * (以前はconsole.errorのみでJSONレポートには固定文言しか残らなかった)。 */
+  runtimeContractError: string | null;
   records: SummaryRunRecord[];
   docsWithoutSuccessfulRun: string[];
   timedOutCount: number;
@@ -715,7 +751,12 @@ export function buildReport(input: {
   finishedAt: string;
   serviceSnapshotStart: ServiceSnapshot | null;
   serviceSnapshotEnd: ServiceSnapshot | null;
+  /** silent-failure-hunter指摘(High): 終了時スナップショット取得が失敗した場合の実際の
+   * エラー内容(gcloud呼び出し失敗の理由等)。JSONレポートへ証跡として残すために使う。 */
+  serviceSnapshotEndError?: string | null;
   runtimeContract: RuntimeContractCheck | null;
+  /** /props取得が失敗した場合の実際のエラー内容(silent-failure-hunter指摘、High参照)。 */
+  runtimeContractError?: string | null;
   records: SummaryRunRecord[];
   metaByDoc: Record<string, SummaryScoreSpec>;
   /** 実行が要求されていたdoc一覧(`args.docs`)。budget超過等での早期打ち切り検知に使う。 */
@@ -733,7 +774,7 @@ export function buildReport(input: {
   // 汚染されうる(`scripts/paddle-ocr-verify.ts`の`inconclusiveByTimeout`と同じ考え方)。
   // 1件でもtimedOutがあればレポート全体をinconclusiveとする(そのdocに他の成功runがあっても
   // 「静かなPASS」にしない)。
-  const timedOutCount = input.records.filter((r) => r.timedOut).length;
+  const timedOutCount = input.records.filter((r) => r.kind === 'timedOut').length;
   const inconclusiveByTimeout = timedOutCount > 0;
 
   const docsWithoutSuccessfulRun = DOC_IDS.filter(
@@ -753,7 +794,9 @@ export function buildReport(input: {
 
   const inconclusive = inconclusiveBySnapshot || inconclusiveByTimeout || inconclusiveByMissingDoc || inconclusiveByBudget;
   const inconclusiveReason = inconclusiveBySnapshot
-    ? `計測開始時と終了時でサービススナップショットが一致しません(開始: ${JSON.stringify(input.serviceSnapshotStart)}, 終了: ${JSON.stringify(input.serviceSnapshotEnd)})`
+    ? `計測開始時と終了時でサービススナップショットが一致しません(開始: ${JSON.stringify(input.serviceSnapshotStart)}, 終了: ${JSON.stringify(input.serviceSnapshotEnd)}${
+        input.serviceSnapshotEndError ? `、終了時取得エラー: ${input.serviceSnapshotEndError}` : ''
+      })`
     : inconclusiveByTimeout
       ? `${timedOutCount}件のリクエストがタイムアウトまたは504(サービス側で処理継続中)を検知しました。以降のリクエストのインスタンス割当が汚染されている可能性があります`
       : inconclusiveByMissingDoc
@@ -772,7 +815,11 @@ export function buildReport(input: {
           input.runtimeContract.actual.total_slots ?? 'N/A'
         }`,
       }
-    : { id: 'runtime-contract', verdict: 'NOT_EVALUATED', detail: '/propsの取得に失敗しました' };
+    : {
+        id: 'runtime-contract',
+        verdict: 'NOT_EVALUATED',
+        detail: input.runtimeContractError ? `/propsの取得に失敗しました: ${input.runtimeContractError}` : '/propsの取得に失敗しました',
+      };
 
   const { entry: coverageAggregateEntry } = evaluateCoverageAggregateGate(input.records, input.metaByDoc);
 
@@ -790,7 +837,7 @@ export function buildReport(input: {
 
   const crossEntityByDoc: Record<string, CrossEntityResult> = {};
   for (const r of input.records) {
-    if (isEvaluated(r) && r.crossEntity && !crossEntityByDoc[r.docId]) {
+    if (isEvaluated(r) && !crossEntityByDoc[r.docId]) {
       crossEntityByDoc[r.docId] = r.crossEntity;
     }
   }
@@ -805,6 +852,7 @@ export function buildReport(input: {
     inconclusive,
     inconclusiveReason,
     runtimeContract: input.runtimeContract,
+    runtimeContractError: input.runtimeContractError ?? null,
     records: input.records,
     docsWithoutSuccessfulRun,
     timedOutCount,
@@ -831,7 +879,7 @@ const FAIL_CAPABLE_GATES: ReadonlySet<SummaryGateEntry['id']> = new Set([
  * `determineExitCode`と同じ「未評価も失敗condition」の設計)。
  */
 export function determineExitCode(report: SummaryVerifyReport): 0 | 1 {
-  const anyFatal = report.records.some((r) => r.fatal);
+  const anyFatal = report.records.some((r) => r.kind === 'fatal');
   const failCapableBad = report.gates.some(
     (g) => FAIL_CAPABLE_GATES.has(g.id) && (g.verdict === 'FAIL' || g.verdict === 'NOT_EVALUATED')
   );
@@ -844,6 +892,13 @@ export function buildStepSummaryMarkdown(report: SummaryVerifyReport): string {
   lines.push('');
   lines.push(`- inconclusive: ${report.inconclusive}${report.inconclusiveReason ? ` (${report.inconclusiveReason})` : ''}`);
   lines.push(`- 評価対象run: ${report.records.filter(isEvaluated).length} / ${report.records.length}`);
+  const fatalCount = report.records.filter((r) => r.kind === 'fatal').length;
+  if (fatalCount > 0) {
+    // code-reviewer指摘(参考、confidence~60): HTTPエラー等でリトライ尽きたfatal件数は
+    // JSONレポートのrecords[].kindから追えるが、Step Summaryだけ見た人には一目で
+    // 分からなかった。exitCode=1の理由をStep Summary単体で追えるよう明示する。
+    lines.push(`- fatal件数(HTTPエラー・スキーマ不一致・想定外の例外等): ${fatalCount}`);
+  }
   if (report.docsWithoutSuccessfulRun.length > 0) {
     lines.push(`- 有効runが0件だったdoc: ${report.docsWithoutSuccessfulRun.join('、')}`);
   }
@@ -880,6 +935,7 @@ export function emptyReportSkeleton(startedAt: string, finishedAt: string, servi
     inconclusive: true,
     inconclusiveReason: 'fatalErrorにより計測を完了できませんでした',
     runtimeContract: null,
+    runtimeContractError: null,
     records: [],
     docsWithoutSuccessfulRun: [...DOC_IDS],
     timedOutCount: 0,

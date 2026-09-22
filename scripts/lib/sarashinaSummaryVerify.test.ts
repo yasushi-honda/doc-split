@@ -32,6 +32,7 @@ import {
   DOC_IDS,
   MAX_RETRIES,
   type SummaryRunRecord,
+  type EvaluatedSummaryRunRecord,
   type SummarySendOutcome,
   type SummaryRequestFn,
   type SummaryAttemptResult,
@@ -201,6 +202,43 @@ test('sendSummaryWithRetries: 401は1回だけトークン再発行して再試�
   assert.equal(outcome.authRetried, true);
 });
 
+test('sendSummaryWithRetries: networkErrorはmaxRetriesまでリトライしてから成功できる(pr-test-analyzer指摘: 未テストだった経路)', async () => {
+  const requestFn = makeFakeRequestFn([
+    { status: null, body: null, wallMs: 1, kind: 'networkError', errorDetail: 'FetchError: ECONNRESET' },
+    { status: 200, body: '{"choices":[]}', wallMs: 1, kind: 'success' },
+  ]);
+  const outcome = await sendSummaryWithRetries({
+    requestBody: buildChatRequestBody('x'),
+    serviceUrl: 'https://x',
+    tokenProvider: fakeTokenProvider(),
+    requestFn,
+    backoffMs: 1,
+    maxRetries: MAX_RETRIES,
+  });
+  assert.equal(outcome.result.kind, 'success');
+  assert.equal(outcome.retriedCount, 1);
+});
+
+test('sendSummaryWithRetries: networkErrorがmaxRetriesを超えるとtimedOut扱いになる(二重推論防止と同じ着地点)', async () => {
+  const requestFn = makeFakeRequestFn([
+    { status: null, body: null, wallMs: 1, kind: 'networkError', errorDetail: 'FetchError: ECONNRESET' },
+  ]);
+  const outcome = await sendSummaryWithRetries({
+    requestBody: buildChatRequestBody('x'),
+    serviceUrl: 'https://x',
+    tokenProvider: fakeTokenProvider(),
+    requestFn,
+    backoffMs: 1,
+    maxRetries: 1,
+  });
+  assert.equal(outcome.result.kind, 'timedOut');
+  if (outcome.result.kind === 'timedOut') {
+    assert.equal(outcome.result.failureKind, 'networkError');
+    assert.equal(outcome.result.errorDetail, 'FetchError: ECONNRESET');
+  }
+  assert.equal(outcome.retriedCount, 1);
+});
+
 // ---------------------------------------------------------------------------
 // scoreRunRecord (実fixtureで採点)
 // ---------------------------------------------------------------------------
@@ -220,10 +258,11 @@ test('scoreRunRecord: D9(正直に「記載なし」と回答)はmustCover充足
   const src = sourceTextForScoring(fullText);
   const text = '・書類の種類: 福祉用具貸与確認書\n・関係者: 利用者 三好 陽子様、事業所名（省略）\n・重要な日付: 貸与開始日 令和8年9月20日\n・金額: （省略）\n・特筆すべき状態・変化: なし</s>';
   const record = scoreRunRecord('D9', 1, src, metaByDoc.D9, successOutcome(chatBody(text)));
-  assert.equal(record.fatal, false);
-  assert.equal(record.coverage?.mustCoverSatisfied, true);
-  assert.equal(record.fabrication?.fabricatedCount, 0);
-  assert.equal(record.numeric?.passed, true);
+  assert.equal(record.kind, 'evaluated');
+  if (record.kind !== 'evaluated') throw new Error('unreachable');
+  assert.equal(record.coverage.mustCoverSatisfied, true);
+  assert.equal(record.fabrication.fabricatedCount, 0);
+  assert.equal(record.numeric.passed, true);
 });
 
 test('scoreRunRecord: 原典に無い組織名を出力すると固有名詞捏造としてfabricatedCount>0になる', () => {
@@ -231,10 +270,12 @@ test('scoreRunRecord: 原典に無い組織名を出力すると固有名詞捏�
   const src = sourceTextForScoring(fullText);
   const text = '・関係者: 利用者 三好 陽子様、介護サポート株式会社</s>';
   const record = scoreRunRecord('D9', 1, src, metaByDoc.D9, successOutcome(chatBody(text)));
-  assert.ok((record.fabrication?.fabricatedCount ?? 0) > 0);
+  assert.equal(record.kind, 'evaluated');
+  if (record.kind !== 'evaluated') throw new Error('unreachable');
+  assert.ok(record.fabrication.fabricatedCount > 0);
 });
 
-test('scoreRunRecord: timedOutの場合はrawText等が未設定のまま記録される', () => {
+test('scoreRunRecord: timedOutの場合はkind:timedOutのみで記録される(評価フィールドを持たない)', () => {
   const outcome: SummarySendOutcome = {
     elapsedMs: 620000,
     retriedCount: 0,
@@ -242,9 +283,25 @@ test('scoreRunRecord: timedOutの場合はrawText等が未設定のまま記録�
     result: { kind: 'timedOut', failureKind: 'clientTimeout', httpStatus: null },
   };
   const record = scoreRunRecord('D9', 1, 'src', metaByDoc.D9, outcome);
-  assert.equal(record.timedOut, true);
-  assert.equal(record.rawText, undefined);
-  assert.equal(record.coverage, undefined);
+  assert.equal(record.kind, 'timedOut');
+  assert.ok(!('rawText' in record));
+  assert.ok(!('coverage' in record));
+});
+
+test('scoreRunRecord: content空文字(スキーマ不一致・生成失敗)はfatal扱いになる(silent-failure-hunter指摘、Critical)', () => {
+  const fullText = loadFullSourceText('D10');
+  const src = sourceTextForScoring(fullText);
+  const record = scoreRunRecord('D10', 1, src, metaByDoc.D10, successOutcome(chatBody('')));
+  assert.equal(record.kind, 'fatal');
+  if (record.kind !== 'fatal') throw new Error('unreachable');
+  assert.match(record.fatalReason, /空/);
+});
+
+test('scoreRunRecord: choices[0].message.content欠落(schemaミスマッチ)もfatal扱いになる', () => {
+  const fullText = loadFullSourceText('D10');
+  const src = sourceTextForScoring(fullText);
+  const record = scoreRunRecord('D10', 1, src, metaByDoc.D10, successOutcome(JSON.stringify({ choices: [{ message: {} }] })));
+  assert.equal(record.kind, 'fatal');
 });
 
 // ---------------------------------------------------------------------------
@@ -300,12 +357,13 @@ test('checkRuntimeContract: n_ctxが欠落(undefined)ならFAIL相当(NaN比較�
 // ゲート判定
 // ---------------------------------------------------------------------------
 
-function evaluatedRecord(overrides: Partial<SummaryRunRecord> & { docId: string; run: number }): SummaryRunRecord {
+function evaluatedRecord(overrides: Partial<EvaluatedSummaryRunRecord> & { docId: string; run: number }): EvaluatedSummaryRunRecord {
   const fullText = loadFullSourceText(overrides.docId);
   const src = sourceTextForScoring(fullText);
   const text = overrides.rawText ?? 'ダミー要約';
   const outcome = successOutcome(chatBody(text));
   const base = scoreRunRecord(overrides.docId, overrides.run, src, metaByDoc[overrides.docId], outcome);
+  if (base.kind !== 'evaluated') throw new Error('evaluatedRecord: scoreRunRecordがevaluatedを返しませんでした');
   return { ...base, ...overrides };
 }
 
@@ -323,19 +381,25 @@ test('evaluateFabricationGate: 1件でも捏造があればFAIL', () => {
 
 test('evaluateFabricationGate: 評価対象0件はNOT_EVALUATED', () => {
   const records: SummaryRunRecord[] = [
-    { docId: 'D9', run: 1, wallMs: 1, httpStatus: null, retriedCount: 0, timedOut: true, fatal: false },
+    { docId: 'D9', run: 1, wallMs: 1, httpStatus: null, retriedCount: 0, kind: 'timedOut', failureKind: 'clientTimeout' },
   ];
   assert.equal(evaluateFabricationGate(records).verdict, 'NOT_EVALUATED');
 });
 
 test('evaluateRecombinationGate: 再結合検知はWARN(FAILにしない)', () => {
-  // D3の「水無月訪問看護」は既知の再結合パターン(PR2a pr0-fabrication-expected.json参照)。
+  // D3の「水無月訪問看護」は既知の再結合パターン(PR2a pr0-fabrication-expected.json参照、
+  // 原典の括弧書き略記「訪問看護（水無月）」の言い換えであり捏造ではない)。
+  // pr-test-analyzer指摘: 期待値を実行結果から動的算出するとトートロジーになり退行を
+  // 検知できないため、固定値'WARN'で比較する。
   const fullText = loadFullSourceText('D3');
   const src = sourceTextForScoring(fullText);
   const text = '水無月訪問看護が対応しました。';
   const record = scoreRunRecord('D3', 1, src, metaByDoc.D3, successOutcome(chatBody(text)));
+  assert.equal(record.kind, 'evaluated');
+  if (record.kind !== 'evaluated') throw new Error('unreachable');
+  assert.ok(record.fabrication.recombinedCount > 0, '前提: このテキストは再結合パターンとして検知されるはず');
   const entry = evaluateRecombinationGate([record]);
-  assert.equal(entry.verdict, record.fabrication!.recombinedCount > 0 ? 'WARN' : 'PASS');
+  assert.equal(entry.verdict, 'WARN');
 });
 
 test('evaluateCoveragePerDocGate: mustCover欠落があればFAIL', () => {
@@ -436,6 +500,46 @@ test('buildReport: 開始/終了スナップショット不一致はinconclusive
   assert.equal(report.inconclusive, true);
 });
 
+test('buildReport: 終了時スナップショット取得失敗のエラー内容がinconclusiveReasonに残る(silent-failure-hunter指摘、High)', () => {
+  const records = [evaluatedRecord({ docId: 'D9', run: 1 })];
+  const report = buildReport({
+    serviceUrl: 'https://x',
+    startedAt: 't0',
+    finishedAt: 't1',
+    serviceSnapshotStart: snap('rev-1', 'img-1'),
+    serviceSnapshotEnd: null,
+    serviceSnapshotEndError: 'gcloud呼び出し失敗: PERMISSION_DENIED',
+    runtimeContract: null,
+    records,
+    metaByDoc,
+    expectedDocs: ['D9'],
+    expectedRunsPerDoc: 1,
+  });
+  assert.equal(report.inconclusive, true);
+  assert.ok(report.inconclusiveReason?.includes('PERMISSION_DENIED'));
+});
+
+test('buildReport: /props取得失敗のエラー内容がruntime-contractゲートのdetailに残る(silent-failure-hunter指摘、High)', () => {
+  const records = [evaluatedRecord({ docId: 'D9', run: 1 })];
+  const report = buildReport({
+    serviceUrl: 'https://x',
+    startedAt: 't0',
+    finishedAt: 't1',
+    serviceSnapshotStart: snap('rev-1', 'img-1'),
+    serviceSnapshotEnd: snap('rev-1', 'img-1'),
+    runtimeContract: null,
+    runtimeContractError: 'FetchError: request to https://x/props timed out',
+    records,
+    metaByDoc,
+    expectedDocs: ['D9'],
+    expectedRunsPerDoc: 1,
+  });
+  const runtimeContractGate = report.gates.find((g) => g.id === 'runtime-contract');
+  assert.equal(runtimeContractGate?.verdict, 'NOT_EVALUATED');
+  assert.ok(runtimeContractGate?.detail.includes('timed out'));
+  assert.equal(report.runtimeContractError, 'FetchError: request to https://x/props timed out');
+});
+
 test('buildReport: 全docで有効runがあればdocsWithoutSuccessfulRunは空・skippedRunsも空', () => {
   const records = DOC_IDS.map((docId) => evaluatedRecord({ docId, run: 1 }));
   const report = buildReport({
@@ -456,7 +560,7 @@ test('buildReport: 全docで有効runがあればdocsWithoutSuccessfulRunは空�
 
 test('buildReport: 有効runが0件のdocがあればinconclusiveかつdocsWithoutSuccessfulRunに含まれる(timedOutCountも計上)', () => {
   const records: SummaryRunRecord[] = [
-    { docId: 'D9', run: 1, wallMs: 1, httpStatus: null, retriedCount: 0, timedOut: true, fatal: false },
+    { docId: 'D9', run: 1, wallMs: 1, httpStatus: null, retriedCount: 0, kind: 'timedOut', failureKind: 'clientTimeout' },
   ];
   const report = buildReport({
     serviceUrl: 'https://x',
@@ -478,7 +582,7 @@ test('buildReport: 有効runが0件のdocがあればinconclusiveかつdocsWitho
 test('buildReport: 同一docに成功runがあってもtimedOutが1件でもあればinconclusive(codex review指摘)', () => {
   const records: SummaryRunRecord[] = [
     evaluatedRecord({ docId: 'D9', run: 1 }),
-    { docId: 'D9', run: 2, wallMs: 1, httpStatus: 504, retriedCount: 0, timedOut: true, failureKind: 'serverTimeout504', fatal: false },
+    { docId: 'D9', run: 2, wallMs: 1, httpStatus: 504, retriedCount: 0, kind: 'timedOut', failureKind: 'serverTimeout504' },
   ];
   const report = buildReport({
     serviceUrl: 'https://x',
@@ -599,6 +703,42 @@ test('determineExitCode: FAIL-capableゲートがFAILなら1', () => {
   });
   const withoutRuntimeContract = { ...report, gates: report.gates.filter((g) => g.id !== 'runtime-contract') };
   assert.equal(determineExitCode({ ...withoutRuntimeContract, inconclusive: false }), 1);
+});
+
+test('determineExitCode: anyFatal単独でも1になる(pr-test-analyzer指摘: 他のinconclusiveトリガーと絡めずに検証)', () => {
+  // D5(role=coverage)を2run成功させ全FAIL-capableゲートをPASSにしたうえで、
+  // D9のrun2だけをfatalにする。D9run1は評価済みのままなのでdocsWithoutSuccessfulRunには
+  // 載らず、fatalなrunもattemptedKeysには含まれるのでskippedRunsも空、timedOutでもない。
+  // つまりinconclusiveの他3トリガー(snapshot/timeout/budget-skip)は全てfalseのまま、
+  // anyFatalだけが有効な状態を作り、determineExitCodeがこれを正しく1にすることを確認する。
+  const D5_MUST_COVER_TEXT = '宮下 譲様、ひまわり訪問介護、9月22日に訪問しました。';
+  const records: SummaryRunRecord[] = [
+    evaluatedRecord({ docId: 'D5', run: 1, rawText: D5_MUST_COVER_TEXT }),
+    evaluatedRecord({ docId: 'D5', run: 2, rawText: D5_MUST_COVER_TEXT }),
+    evaluatedRecord({ docId: 'D9', run: 1, rawText: `${D9_MUST_COVER_TEXT}</s>` }),
+    { docId: 'D9', run: 2, wallMs: 1, httpStatus: 400, retriedCount: 0, kind: 'fatal', fatalReason: 'HTTP 400: bad request' },
+  ];
+  const report = buildReport({
+    serviceUrl: 'https://x',
+    startedAt: 't0',
+    finishedAt: 't1',
+    serviceSnapshotStart: snap('rev-1', 'img-1'),
+    serviceSnapshotEnd: snap('rev-1', 'img-1'),
+    runtimeContract: null,
+    records,
+    metaByDoc,
+    expectedDocs: ['D5', 'D9'],
+    expectedRunsPerDoc: 2,
+  });
+  assert.equal(report.inconclusive, false);
+  assert.deepEqual(report.docsWithoutSuccessfulRun, []);
+  assert.deepEqual(report.skippedRuns, []);
+  const withoutRuntimeContract = { ...report, gates: report.gates.filter((g) => g.id !== 'runtime-contract') };
+  for (const g of withoutRuntimeContract.gates) {
+    if (g.id === 'recombination' || g.id === 'amount-absence' || g.id === 'output-sanity') continue;
+    assert.equal(g.verdict, 'PASS', `前提が崩れている: ${g.id}=${g.verdict} (${g.detail})`);
+  }
+  assert.equal(determineExitCode(withoutRuntimeContract), 1);
 });
 
 test('buildStepSummaryMarkdown: 9行のゲート表を含む', () => {
