@@ -667,7 +667,16 @@ export function DocumentsPage() {
       // 一括取得〜各文書のトランザクション完了までの数秒程度)であり、同一名の顧客が
       // まさにこの数秒の間に追加・改名され、かつそれが今回確定対象の文書と一致するという
       // 低頻度の偶発事象が前提となる。
-      const freshIdentityLookup = await fetchFreshCustomerIdentityLookup()
+      //
+      // codexレビュー指摘(P1、7回目): fetchFreshCustomerIdentityLookup()自体がサーバー
+      // 到達不能で失敗しうる(fail-closed設計、useMasters.ts参照)。単体トグルと同じく
+      // 失敗時は確定判定を一律スキップし、verifiedのみ更新する(オフライン等でも
+      // 「確認済みにする」操作自体は引き続き行えるようにする。誤った確定を書き込むより
+      // 安全側に倒す)。
+      const freshIdentityLookup = await fetchFreshCustomerIdentityLookup().catch((fetchErr) => {
+        console.error('Failed to fetch fresh customer identity lookup, skipping confirm-on-verify:', fetchErr)
+        return null
+      })
 
       const outcomes = await runWithConcurrency(ids, 20, async (docId) => {
         const docRef = doc(db, 'documents', docId)
@@ -679,16 +688,17 @@ export function DocumentsPage() {
             }
             const freshDoc = freshSnap.data() as Document
 
-            const txDecisions = planConfirmOnVerify(freshDoc, {
-              customerMasterName: freshDoc.customerId
-                ? (freshIdentityLookup.customerMasterNameById.get(freshDoc.customerId) ?? null)
-                : null,
-              sameNameCollisionNames: freshIdentityLookup.sameNameCollisionNames,
-            })
-            const { update: confirmFields, logs } = buildConfirmOnVerifyUpdate(txDecisions, freshDoc, {
-              uid,
-              now: serverTimestamp(),
-            })
+            const txDecisions = freshIdentityLookup
+              ? planConfirmOnVerify(freshDoc, {
+                  customerMasterName: freshDoc.customerId
+                    ? (freshIdentityLookup.customerMasterNameById.get(freshDoc.customerId) ?? null)
+                    : null,
+                  sameNameCollisionNames: freshIdentityLookup.sameNameCollisionNames,
+                })
+              : null
+            const { update: confirmFields, logs } = txDecisions
+              ? buildConfirmOnVerifyUpdate(txDecisions, freshDoc, { uid, now: serverTimestamp() })
+              : { update: {}, logs: [] }
 
             // 既存のuseDocumentEdit.ts(L396)と同じ規約: 動的に組み立てたRecord<string, unknown>を
             // Firestoreの厳密なUpdateData型へ渡すためのキャスト。

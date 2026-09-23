@@ -9,11 +9,14 @@ import {
   collection,
   doc,
   getDocs,
+  getDocsFromServer,
   getDoc,
   setDoc,
   deleteDoc,
   updateDoc,
   serverTimestamp,
+  type QuerySnapshot,
+  type DocumentData,
 } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import { normalizeName } from '@/lib/textNormalizer'
@@ -60,8 +63,7 @@ const COLLECTION_PATHS = {
 // 顧客マスター
 // ============================================
 
-async function fetchCustomers(): Promise<CustomerMaster[]> {
-  const snapshot = await getDocs(collection(db, COLLECTION_PATHS.customers))
+function mapCustomerMastersSnapshot(snapshot: QuerySnapshot<DocumentData>): CustomerMaster[] {
   return snapshot.docs.map((doc) => ({
     id: doc.id,
     name: doc.data().name as string,
@@ -74,6 +76,11 @@ async function fetchCustomers(): Promise<CustomerMaster[]> {
     notes: doc.data().notes as string | undefined,
     aliases: doc.data().aliases as string[] | undefined,
   }))
+}
+
+async function fetchCustomers(): Promise<CustomerMaster[]> {
+  const snapshot = await getDocs(collection(db, COLLECTION_PATHS.customers))
+  return mapCustomerMastersSnapshot(snapshot)
 }
 
 export function useCustomers() {
@@ -138,9 +145,16 @@ export function useCustomerIdentityLookup(): CustomerIdentityLookup {
  * (`scripts/backfill-confirm-on-verify.ts`が実行開始時にマスターを都度フェッチするのと
  * 同じ理由。ただしこちらは確定操作のたびに呼ぶため、backfillの「実行中の一度きり
  * スナップショット」よりさらに鮮度が高い)。
+ *
+ * codexレビュー指摘(P1、7回目): `getDocs()`(既定)はSDKのローカルキャッシュ(IndexedDB
+ * 永続化が有効な場合、オフライン時等)から解決されうるため、「新規取得」の意図に反して
+ * 古いマスター一覧を返す恐れがあった。`getDocsFromServer()`でサーバーへの到達を強制し、
+ * 到達できない場合は例外をそのまま呼出元へ伝播させる(fail-closed。呼出元は失敗時、
+ * 確定判定をスキップしてverifiedのみ更新する、または一括操作全体を中断する設計)。
  */
 export async function fetchFreshCustomerIdentityLookup(): Promise<Omit<CustomerIdentityLookup, 'isReady'>> {
-  const customers = await fetchCustomers()
+  const snapshot = await getDocsFromServer(collection(db, COLLECTION_PATHS.customers))
+  const customers = mapCustomerMastersSnapshot(snapshot)
   return {
     sameNameCollisionNames: findSameNameCollisionNames(customers),
     customerMasterNameById: new Map(customers.map((c) => [c.id, typeof c.name === 'string' ? c.name : null])),
