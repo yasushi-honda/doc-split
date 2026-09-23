@@ -427,7 +427,13 @@ export function GroupDocumentList({
   // 配置する。キャッシュ上は空だったグループに書類が新規追加された場合でも、
   // dirty化されていればバナー経由で更新できるようにするため(plan-crossreview
   // codex pass1指摘)。
-  if (allDocuments.length === 0) {
+  //
+  // 担当CM別(#1032、codex review P2指摘、2026-09-24): 日付フィルターが読み込み済みの
+  // 最初の数ページを全て除外すると、後続ページ(自動読み込み中、hasNextPage:true)に
+  // 該当書類が残っていても、ここで「このグループには書類がありません」と早期確定表示
+  // されてしまう。CM別は全ページ読み込み完了(hasNextPage===false)まではこの空状態判定を
+  // 保留し、下部のcareManager分岐のローディング表示に委ねる。
+  if (allDocuments.length === 0 && (groupType !== 'careManager' || !hasNextPage)) {
     return (
       <>
         {updateBanner}

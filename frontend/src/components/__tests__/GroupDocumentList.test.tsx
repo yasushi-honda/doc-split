@@ -202,4 +202,28 @@ describe('GroupDocumentList - 担当CM別の件数表示(Issue #1032)', () => {
 
     expect(fetchNextPage).not.toHaveBeenCalled()
   })
+
+  it('未読込ページが残る間、読み込み済みページが0件でも空状態を確定表示せずローディングに留める(codex review P2回帰テスト、日付フィルターで先行ページが全滅するケース)', () => {
+    const fetchNextPage = vi.fn()
+    mockUseGroupDocuments.mockReturnValue({
+      // 例: 日付フィルターが読み込み済みの1ページ目を全件除外(後続ページに該当あり)
+      data: { pages: [{ documents: [], lastDoc: null, hasMore: true }] },
+      fetchNextPage,
+      hasNextPage: true,
+      isFetchingNextPage: false,
+      isFetchNextPageError: false,
+      isLoading: false,
+      isError: false,
+      isRefetching: false,
+      refetch: vi.fn(),
+    })
+
+    renderWithClient(
+      <GroupDocumentList groupType="careManager" groupKey="cm-1" />
+    )
+
+    expect(fetchNextPage).toHaveBeenCalled()
+    expect(screen.getByText(/件数を集計中/)).toBeDefined()
+    expect(screen.queryByText('このグループには書類がありません')).toBeNull()
+  })
 })
