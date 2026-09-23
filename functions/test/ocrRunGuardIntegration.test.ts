@@ -434,6 +434,50 @@ describe('handleProcessingError (Issue #957: runTransaction自体の一時的失
     const after = await docRef.get();
     expect(after.data()!.status).to.equal('error');
   });
+
+  it('業務エラー自体がFirestore transient gRPCコード(例: code 14)を持つ場合、isTransientErrorが拾えなくてもstatus:pendingへ遷移する(Issue #960)', async () => {
+    // applyOcrCompletionTransactionの外側リトライ(withBackoffRetry)が尽きた場合、
+    // ここで渡すerrorはFirestoreのgRPC transientコード(数値.code)を持つ。isTransientError単独は
+    // 数値コードのうちgRPC ABORTED(10)しか認識しないため、修正前はこのケースでstatus:'error'に
+    // 誤確定していた。
+    const docId = 'doc-960-firestore-transient-code-on-business-error';
+    const docRef = db.collection('documents').doc(docId);
+    await docRef.set({ status: 'pending', fileUrl: 'gs://bucket/a.pdf', mimeType: 'application/pdf' });
+    const claim = await tryStartProcessing(docId);
+    const { ocrRunId } = claim!;
+
+    const firestoreTransientError = Object.assign(
+      new Error('14 UNAVAILABLE: The service is currently unavailable.'),
+      { code: 14 }
+    );
+
+    await handleProcessingError(docId, firestoreTransientError, 'test', ocrRunId);
+
+    const after = await docRef.get();
+    expect(
+      after.data()!.status,
+      'code=14はisRetryableFirestoreErrorでtransient判定されstatus:pendingに遷移するはず'
+    ).to.equal('pending');
+    expect(after.data()!.retryCount).to.equal(1);
+    expect(after.data()!.retryAfter, 'transient分岐ではretryAfterが設定される').to.exist;
+  });
+
+  it('業務エラーがFirestoreの非transient gRPCコード(例: code 3=INVALID_ARGUMENT)を持つ場合はstatus:errorのまま確定する(回帰防止)', async () => {
+    const docId = 'doc-960-firestore-non-transient-code-on-business-error';
+    const docRef = db.collection('documents').doc(docId);
+    await docRef.set({ status: 'pending', fileUrl: 'gs://bucket/a.pdf', mimeType: 'application/pdf' });
+    const claim = await tryStartProcessing(docId);
+    const { ocrRunId } = claim!;
+
+    const nonTransientError = Object.assign(new Error('3 INVALID_ARGUMENT: bad request'), {
+      code: 3,
+    });
+
+    await handleProcessingError(docId, nonTransientError, 'test', ocrRunId);
+
+    const after = await docRef.get();
+    expect(after.data()!.status).to.equal('error');
+  });
 });
 
 /**
