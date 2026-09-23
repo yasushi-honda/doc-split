@@ -573,7 +573,20 @@ cocoro側Drive連携Phase C（クライアント自身のOAuth接続）は外部
 
 **Issue #1028本体のバグ再現→非再発確認(AC4相当)も完了**: decision-maker指示によりPlaywright MCP(既存の認証済みGoogleセッション、hy.unimail.11@gmail.com)経由でDrive UI上の「き　木村千代」フォルダ配下に新規未タグフォルダ「テスト再現1028」を作成(appは一切未関与)。`investigate-drive-folder-duplicate-by-name --name-contains "テスト再現1028"`(GHA run 35846393874)で`該当フォルダ: 1件、claimProperty=false`を確認——フルスコープ`drive`接続後は、appが一度も触れていない人作成フォルダを正しく検出できることを実機証拠として確定。旧`drive.file`スコープでは構造的に不可視だった対象が可視化されたことの直接確認(coreのバグ修正が実際に機能している証拠)。
 
-**残るのはfixtureベース統合テスト(Issue #1039、P1、実装時期未定)のみ**。dev実機検証(再連携・既存重複統合リハーサル・新規フォルダ検出確認・GHAワークフロー起動テスト計5回)は全て完了。kanameone/cocoro本番展開に進む準備が整った(decision-maker判断待ち、展開手順はADR-0028参照)。
+**残るのはfixtureベース統合テスト(Issue #1039、P1、実装時期未定)のみ**。dev実機検証(再連携・既存重複統合リハーサル・新規フォルダ検出確認・GHAワークフロー起動テスト計5回)は全て完了。
+
+**kanameone/cocoro本番展開(2026-09-23、着手)**:
+- [x] **コードデプロイ完了**: `gh workflow run deploy-functions.yml`(kanameone/cocoro)+`deploy-hosting.yml`(kanameone/cocoro)の計4件、全て成功確認済み(GHAログで`exchangeDriveAuthCode`含む全関数の`Successful update operation`を確認)
+- [x] **cocoro側はこれで展開完了**: Drive未接続(Phase C未着手)のため、コードデプロイのみで完結。次回クライアントが接続する際は最初からフルスコープ`drive`で同意フローが走る
+- [ ] **kanameone側は残作業あり**: コードは反映済みだが、実際のOAuth再連携はkanameone管理者(systemkaname@kanameone.com)自身が行う必要があり(executor代行不可)、以下が未着手:
+  1. kanameone管理者との再連携タイミング調整(統合作業中は対象ツリーの手動変更を控えてもらう)
+  2. `driveExport` flag OFF → drain確認(exporting件数が0になるまで待機)
+  3. kanameone管理者による実際のOAuth再連携(設定画面で「再連携する」)
+  4. `audit-drive-sibling-duplicates`(kanameone、read-only)実行 → 重複グループを decision-maker/クライアントへ提示 → 承認
+  5. `execute-drive-sibling-merge`実行(承認済みgroupのみ)
+  6. `driveExport` flag ON → backfill-drive-export(停止中の確認済みdoc)
+  - 本番のdestructive操作(統合実行・flag切替)は全て番号単位の明示認可のもとで行う(既存ルール)
+  - Go条件(専用アカウント運用・共有範囲限定等)の最終確認もこのタイミングで実施
 
 ## 【完了・2026-08-30】Issue #871 PR-4: childFolderResolver.tsのclaimプロトコル完全移行(PR #879マージ)
 
