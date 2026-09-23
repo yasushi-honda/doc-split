@@ -34,6 +34,7 @@ const makeDocument = (overrides: Partial<Document> = {}): Document => ({
 })
 
 const makeLookup = (sameNameCollisionNames: string[]): CustomerIdentityLookup => ({
+  isReady: true,
   sameNameCollisionNames: new Set(sameNameCollisionNames),
   customerMasterNameById: new Map(),
 })

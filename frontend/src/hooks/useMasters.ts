@@ -9,11 +9,14 @@ import {
   collection,
   doc,
   getDocs,
+  getDocsFromServer,
   getDoc,
   setDoc,
   deleteDoc,
   updateDoc,
   serverTimestamp,
+  type QuerySnapshot,
+  type DocumentData,
 } from 'firebase/firestore'
 import { db } from '@/lib/firebase'
 import { normalizeName } from '@/lib/textNormalizer'
@@ -60,8 +63,7 @@ const COLLECTION_PATHS = {
 // 顧客マスター
 // ============================================
 
-async function fetchCustomers(): Promise<CustomerMaster[]> {
-  const snapshot = await getDocs(collection(db, COLLECTION_PATHS.customers))
+function mapCustomerMastersSnapshot(snapshot: QuerySnapshot<DocumentData>): CustomerMaster[] {
   return snapshot.docs.map((doc) => ({
     id: doc.id,
     name: doc.data().name as string,
@@ -74,6 +76,11 @@ async function fetchCustomers(): Promise<CustomerMaster[]> {
     notes: doc.data().notes as string | undefined,
     aliases: doc.data().aliases as string[] | undefined,
   }))
+}
+
+async function fetchCustomers(): Promise<CustomerMaster[]> {
+  const snapshot = await getDocs(collection(db, COLLECTION_PATHS.customers))
+  return mapCustomerMastersSnapshot(snapshot)
 }
 
 export function useCustomers() {
@@ -93,6 +100,13 @@ export function useCustomers() {
  * コンテナ層のみで呼び出し、行コンポーネントへはpropで結果を渡すこと(単体テスト容易性のため)。
  */
 export interface CustomerIdentityLookup {
+  /**
+   * 顧客マスターの読み込みが完了しているか(`useCustomers()`のクエリが解決済みか)。
+   * falseの間は`sameNameCollisionNames`/`customerMasterNameById`が空集合になり、
+   * 「同姓同名なし」と「まだ読み込んでいない」を区別できない。書き込みを伴う判定
+   * (confirmOnVerify等)はisReady:trueになるまで評価を見送ること(Issue #1034)。
+   */
+  isReady: boolean
   /** 完全一致で2件以上あるマスター名の集合(shared/customerIdentity.tsのfindSameNameCollisionNames)。 */
   sameNameCollisionNames: ReadonlySet<string>
   /**
@@ -107,11 +121,44 @@ export interface CustomerIdentityLookup {
 export function useCustomerIdentityLookup(): CustomerIdentityLookup {
   const { data: customers } = useCustomers()
   return useMemo(() => ({
+    // customers === undefined はクエリ未解決(読み込み中)を表す。読み込み中は
+    // sameNameCollisionNames/customerMasterNameByIdが空集合になり「同姓同名なし」と
+    // 区別がつかないため、isReadyで呼出元(confirmOnVerify等、書き込みを伴う判定)に
+    // 明示的に伝える(Issue #1034、codexレビュー指摘: 読込中の誤判定防止)。
+    isReady: customers !== undefined,
     sameNameCollisionNames: findSameNameCollisionNames(customers ?? []),
     customerMasterNameById: new Map(
       (customers ?? []).map((c) => [c.id, typeof c.name === 'string' ? c.name : null])
     ),
   }), [customers])
+}
+
+/**
+ * `useCustomers()`のReact Queryキャッシュ(staleTime 5分)を経由せず、Firestoreから
+ * 直接最新の顧客マスター一覧を取得してCustomerIdentityLookup相当を組み立てる。
+ *
+ * Issue #1034 + codexレビュー指摘(P1、2回目): 確認済み操作の確定判定は
+ * `useDocumentVerification`/`handleBulkVerify`内のFirestoreトランザクションで
+ * 文書そのものは直前に再読込するようにしたが、同姓同名判定に使う顧客マスター側は
+ * キャッシュ経由のままだった。確定操作の直前にこの関数で新規取得したマスター一覧を
+ * 使うことで、直近に追加・改名された同姓同名マスターも判定に反映される
+ * (`scripts/backfill-confirm-on-verify.ts`が実行開始時にマスターを都度フェッチするのと
+ * 同じ理由。ただしこちらは確定操作のたびに呼ぶため、backfillの「実行中の一度きり
+ * スナップショット」よりさらに鮮度が高い)。
+ *
+ * codexレビュー指摘(P1、7回目): `getDocs()`(既定)はSDKのローカルキャッシュ(IndexedDB
+ * 永続化が有効な場合、オフライン時等)から解決されうるため、「新規取得」の意図に反して
+ * 古いマスター一覧を返す恐れがあった。`getDocsFromServer()`でサーバーへの到達を強制し、
+ * 到達できない場合は例外をそのまま呼出元へ伝播させる(fail-closed。呼出元は失敗時、
+ * 確定判定をスキップしてverifiedのみ更新する、または一括操作全体を中断する設計)。
+ */
+export async function fetchFreshCustomerIdentityLookup(): Promise<Omit<CustomerIdentityLookup, 'isReady'>> {
+  const snapshot = await getDocsFromServer(collection(db, COLLECTION_PATHS.customers))
+  const customers = mapCustomerMastersSnapshot(snapshot)
+  return {
+    sameNameCollisionNames: findSameNameCollisionNames(customers),
+    customerMasterNameById: new Map(customers.map((c) => [c.id, typeof c.name === 'string' ? c.name : null])),
+  }
 }
 
 interface AddCustomerParams {

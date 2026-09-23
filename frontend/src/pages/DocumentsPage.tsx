@@ -1,7 +1,7 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
-import { doc, writeBatch, serverTimestamp } from 'firebase/firestore'
+import { doc, writeBatch, serverTimestamp, collection, runTransaction } from 'firebase/firestore'
 import {
   Filter,
   FileText,
@@ -69,10 +69,11 @@ import {
 } from '@/hooks/useDocuments'
 import { useDocumentListRefresh } from '@/hooks/useDocumentListRefresh'
 import { DocumentListUpdateBanner } from '@/components/DocumentListUpdateBanner'
-import { useCareManagers, useCustomerIdentityLookup, type CustomerIdentityLookup } from '@/hooks/useMasters'
+import { useCareManagers, useCustomerIdentityLookup, fetchFreshCustomerIdentityLookup, type CustomerIdentityLookup } from '@/hooks/useMasters'
 import { DateRangeFilter, type DateRange } from '@/components/DateRangeFilter'
 import { isCustomerConfirmed } from '@/hooks/useProcessingHistory'
 import { resolveCustomerUnconfirmedReason } from '@shared/customerIdentity'
+import { planConfirmOnVerify, buildConfirmOnVerifyUpdate } from '@shared/confirmOnVerify'
 import { DocumentDetailModal } from '@/components/DocumentDetailModal'
 import { MultiCustomerBadge } from '@/components/MultiCustomerBadge'
 import { AliasLearningHistoryModal } from '@/components/AliasLearningHistoryModal'
@@ -124,20 +125,48 @@ function SortableHeader({
   )
 }
 
+/**
+ * 並行数を制限しつつ配列の各要素を非同期処理する(Issue #1034 一括確認済み用)。
+ * `items.length`件のFirestoreトランザクションを無制限に同時発行しないための簡易プール。
+ */
+async function runWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length)
+  let nextIndex = 0
+  async function worker() {
+    while (nextIndex < items.length) {
+      const current = nextIndex++
+      results[current] = await fn(items[current] as T)
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
+  return results
+}
+
 // 一括操作モードの型
 type BulkActionMode = 'delete' | 'verify' | 'reprocess'
 
 // 一括操作ボタンの色スキーム
+// ホバー時の文字の読みにくさ(kaname報告、Issue #1034)への対応:
+// 1. 全状態でホバー時の背景色・文字色を明示指定する(Button基底の`outline`variantが持つ
+//    `hover:bg-accent hover:text-accent-foreground`は、`cn()`(twMerge)がclassName側の
+//    hover:クラスを優先して打ち消すため、明示すれば確実に上書きできる)
+// 2. 非アクティブ状態(inactive、他ボタン選択中)は、手動`opacity-40`と基底の
+//    `disabled:opacity-50`(components/ui/button.tsx)が重ねて掛かり実効不透明度が
+//    大幅に下がって文字が読めなくなっていた。opacity指定をやめ、明示的な薄いグレー
+//    配色に変更し、`disabled:opacity-100`で基底のdisabled:opacity-50を打ち消す。
 const BULK_COLORS = {
   blue: {
-    solid: 'bg-blue-600 border-blue-600 text-white shadow-md hover:bg-blue-700',
-    light: 'bg-blue-100 border-blue-400 text-blue-700 ring-1 ring-blue-400',
+    solid: 'bg-blue-600 border-blue-600 text-white shadow-md hover:bg-blue-700 hover:text-white',
+    light: 'bg-blue-100 border-blue-400 text-blue-700 ring-1 ring-blue-400 hover:bg-blue-200 hover:text-blue-800',
+    inactive: 'bg-gray-50 border-gray-200 text-gray-400 disabled:opacity-100',
+    defaultStyle: 'text-gray-700 hover:bg-blue-50 hover:text-blue-700 border-gray-200',
     badgeText: 'text-blue-700',
     badgeBorder: 'border-blue-300',
   },
   red: {
-    solid: 'bg-red-600 border-red-600 text-white shadow-md hover:bg-red-700',
-    light: 'bg-red-100 border-red-400 text-red-700 ring-1 ring-red-400',
+    solid: 'bg-red-600 border-red-600 text-white shadow-md hover:bg-red-700 hover:text-white',
+    light: 'bg-red-100 border-red-400 text-red-700 ring-1 ring-red-400 hover:bg-red-200 hover:text-red-800',
+    inactive: 'bg-gray-50 border-gray-200 text-gray-400 disabled:opacity-100',
     badgeText: 'text-red-700',
     badgeBorder: 'border-red-300',
     defaultStyle: 'text-red-600 hover:text-red-700 hover:bg-red-50 border-red-200',
@@ -149,7 +178,7 @@ type BulkColorScheme = typeof BULK_COLORS[keyof typeof BULK_COLORS]
 // 一括操作ボタン共通コンポーネント
 function BulkActionButton({
   mode, icon: Icon, label, colors, selectionMode, selectedCount,
-  isBulkOperating, isSpinning, onToggle, onExecute,
+  isBulkOperating, isSpinning, onToggle, onExecute, disabledReason,
 }: {
   mode: BulkActionMode
   icon: React.ComponentType<{ className?: string }>
@@ -161,6 +190,8 @@ function BulkActionButton({
   isSpinning: boolean
   onToggle: () => void
   onExecute: () => void
+  /** 指定時はボタンをdisabledにし、理由をtitle属性で表示する(例: 顧客マスター読み込み中)。 */
+  disabledReason?: string
 }) {
   const isActive = selectionMode === mode
   const hasSelection = selectedCount > 0
@@ -171,13 +202,14 @@ function BulkActionButton({
         variant="outline"
         size="sm"
         onClick={isActive && hasSelection ? onExecute : onToggle}
-        disabled={isBulkOperating || (!!selectionMode && !isActive && hasSelection)}
+        disabled={isBulkOperating || !!disabledReason || (!!selectionMode && !isActive && hasSelection)}
+        title={disabledReason}
         className={`flex items-center gap-1 h-7 text-xs transition-all duration-200 ${
           isActive && hasSelection
             ? colors.solid
             : isActive
               ? colors.light
-              : selectionMode ? 'opacity-40' : ('defaultStyle' in colors ? colors.defaultStyle : '')
+              : selectionMode ? colors.inactive : ('defaultStyle' in colors ? colors.defaultStyle : '')
         }`}
       >
         <Icon className={`h-3.5 w-3.5 ${isSpinning ? 'animate-spin' : ''}`} />
@@ -255,6 +287,18 @@ function DocumentRow({
   const reviewReasons: string[] = []
   if (isSameNameCollision) {
     reviewReasons.push('同姓同名の顧客マスターが複数あります。書類詳細で正しい顧客を選び直してください')
+  } else if (needsCustomerConfirmation) {
+    // codexレビュー(second opinion、comment-analyzer)指摘: 従来のコメントは同姓同名
+    // ケース特有の説明をこのelse-if分岐(既にisSameNameCollisionを除外済み)に誤って
+    // 当てはめていた。この分岐に入るのは「未確認かつ同姓同名ではない」ケース全般で、
+    // shared/confirmOnVerify.tsのdecideCustomerConfirmが実際に評価する内訳は:
+    // - 有効な単一候補で未確認なだけ → 「確認済み」操作でcustomerConfirmed:trueとなり
+    //   このバッジは消える(直後のUI文言通り)
+    // - invalid-name/name-id-mismatch/customer-master-missing(候補自体が無効/マスター
+    //   不整合) → 「確認済み」操作でもdecideCustomerConfirmがskipを返すため解消せず、
+    //   書類詳細で候補を選び直す必要がある
+    // UI文言はこの2ケースを区別せず一括して案内している(過不足があれば別途改善)。
+    reviewReasons.push('顧客が未確定です。書類詳細で候補を選択するか、確認済みにすると表示中の候補で確定します')
   }
   if (needsOfficeConfirmation) {
     reviewReasons.push('事業所が未選択です')
@@ -592,43 +636,164 @@ export function DocumentsPage() {
   }, [])
 
   // 一括確認済み
-  // 2026-09-08 crossreview反映: writeBatchは単一batchのため部分失敗はしない
-  // (batch.commit()は全体成功/全体失敗のいずれか)。invalidateQueriesによる全ページ
-  // 再取得はやめ、commit成功後に対象全idへ直接キャッシュパッチする。verifiedAtの
-  // クライアント近似(Timestamp.now())は単体確認の既存楽観更新(useDocumentVerification.ts)
-  // と同じパターンを踏襲する(一覧表示はverifiedのみ参照しverifiedAtは表示に使わない)。
+  // Issue #1034: 「確認済み」にする操作は、同姓同名等の危険なケースを除きcustomerConfirmed/
+  // officeConfirmedも同時に確定する(shared/confirmOnVerify.ts、単体トグルと同一ロジック)。
+  //
+  // codexレビュー指摘(P1、2026-09-23): 当初案は`documentsData`(Reactクエリキャッシュ、
+  // 最大5分古い)から取得した文書データで確定可否を判定し、`writeBatch`でチャンクごとに
+  // まとめて書き込んでいた。選択してから実行するまでの間に他者が顧客/事業所を変更していた
+  // 場合、古いデータのまま誤って確定してしまう恐れがあった(単体トグルと同じ問題)。
+  // 文書ごとに`runTransaction`でFirestoreから直前に再読込した最新データに対して判定・
+  // 書込みを行う方式に変更し、この競合を防ぐ。writeBatchのチャンク化(500オペレーション
+  // 上限対策)も、文書単位の独立したトランザクションに置き換わったことで不要になった
+  // (1件の衝突/失敗が他の文書を巻き込まない点は、scripts/backfill-confirm-on-verify.ts
+  // が個別update()+precondition方式を採る理由と同じ)。
   const handleBulkVerify = useCallback(async () => {
+    // codexレビュー(second opinion、strict-config)指摘: identityLookup.isReady
+    // (useCustomers()キャッシュの初回ロード完了)は、確定判定の実際の権威である
+    // fetchFreshCustomerIdentityLookup()(キャッシュを経由しない独立取得)とは無関係。
+    // 初回のuseCustomers()が一度でもエラーになるとisReadyはfalseのまま固着し、直接
+    // サーバー読み取りなら成功するはずの状況でも一括確認済みが永久に使えなくなって
+    // いた。ここではゲートせず、fetchFreshCustomerIdentityLookup()自体の成否
+    // (失敗時はcatchでnullフォールバック、verifiedのみ更新)に判断を委ねる。
     if (selectedIds.size === 0 || !user) return
 
     setIsBulkOperating(true)
     try {
-      const batch = writeBatch(db)
-      for (const docId of selectedIds) {
-        const docRef = doc(db, 'documents', docId)
-        batch.update(docRef, {
-          verified: true,
-          verifiedBy: user.uid,
-          verifiedAt: serverTimestamp(),
-        })
-      }
-      const count = selectedIds.size
-      const targetIds = Array.from(selectedIds)
-      await batch.commit()
+      const ids = Array.from(selectedIds)
+      const uid = user.uid
+      const email = user.email || ''
 
-      const verifiedAtApprox = Timestamp.now()
-      targetIds.forEach((docId) => {
-        updateDocumentInListCache(queryClient, docId, {
-          verified: true,
-          verifiedBy: user.uid,
-          verifiedAt: verifiedAtApprox,
-        })
+      // codexレビュー指摘(P1・2回目): 同姓同名判定に使う顧客マスターを`identityLookup`
+      // (useCustomers()キャッシュ、最大5分古い)からではなく、この一括確認済み実行の
+      // 直前に新規取得したものから読む(このバッチ内の全文書で1回だけ取得・共有する。
+      // 文書自体の鮮度は各文書のトランザクション内でtx.get()により個別に保証する)。
+      //
+      // codexレビュー指摘(P1、6回目): この取得(1回)からループ内の各`runTransaction`完了
+      // までの間に、他者が顧客マスターを追加・改名して新たな同姓同名衝突が発生する可能性は
+      // 残る(TOCTOU)。文書側とは異なりFirestore(client SDK)のトランザクションは任意の
+      // クエリを内包できない(`tx.get()`は特定docRefのみ)ため、「同姓同名が新たに発生して
+      // いないか」を該当トランザクション内で検証することはできず、完全に閉じるには顧客
+      // マスター側へ衝突有無を非正規化して都度1文書読み取りで検証できるようにする設計変更が
+      // 必要(本Issueのスコープ外)。この残存窓は、既存の単体編集保存フロー
+      // (useDocumentEdit.ts)が元々受け入れていた同種のトレードオフ(marker: ADR-0022)の
+      // 延長として意図的に許容する。5分キャッシュだった従来より窓は大幅に縮小済み(この
+      // 一括取得〜各文書のトランザクション完了までの数秒程度)であり、同一名の顧客が
+      // まさにこの数秒の間に追加・改名され、かつそれが今回確定対象の文書と一致するという
+      // 低頻度の偶発事象が前提となる。
+      //
+      // codexレビュー指摘(P1、7回目): fetchFreshCustomerIdentityLookup()自体がサーバー
+      // 到達不能で失敗しうる(fail-closed設計、useMasters.ts参照)。単体トグルと同じく
+      // 失敗時は確定判定を一律スキップし、verifiedのみ更新する(オフライン等でも
+      // 「確認済みにする」操作自体は引き続き行えるようにする。誤った確定を書き込むより
+      // 安全側に倒す)。
+      const freshIdentityLookup = await fetchFreshCustomerIdentityLookup().catch((fetchErr) => {
+        console.error('Failed to fetch fresh customer identity lookup, skipping confirm-on-verify:', fetchErr)
+        return null
       })
+
+      const outcomes = await runWithConcurrency(ids, 20, async (docId) => {
+        const docRef = doc(db, 'documents', docId)
+        try {
+          const decisions = await runTransaction(db, async (tx) => {
+            const freshSnap = await tx.get(docRef)
+            if (!freshSnap.exists()) {
+              throw new Error(`Document not found: ${docId}`)
+            }
+            const freshDoc = freshSnap.data() as Document
+
+            const txDecisions = freshIdentityLookup
+              ? planConfirmOnVerify(freshDoc, {
+                  customerMasterName: freshDoc.customerId
+                    ? (freshIdentityLookup.customerMasterNameById.get(freshDoc.customerId) ?? null)
+                    : null,
+                  sameNameCollisionNames: freshIdentityLookup.sameNameCollisionNames,
+                })
+              : null
+            const { update: confirmFields, logs } = txDecisions
+              ? buildConfirmOnVerifyUpdate(txDecisions, freshDoc, { uid, now: serverTimestamp() })
+              : { update: {}, logs: [] }
+
+            // 既存のuseDocumentEdit.ts(L396)と同じ規約: 動的に組み立てたRecord<string, unknown>を
+            // Firestoreの厳密なUpdateData型へ渡すためのキャスト。
+            tx.update(docRef, {
+              verified: true,
+              verifiedBy: uid,
+              verifiedAt: serverTimestamp(),
+              ...confirmFields,
+            } as any)
+
+            const editLogsRef = collection(db, 'editLogs')
+            for (const change of logs) {
+              tx.set(doc(editLogsRef), {
+                documentId: docId,
+                fieldName: change.field,
+                oldValue: change.oldValue,
+                newValue: change.newValue,
+                editedBy: uid,
+                editedByEmail: email,
+                editedAt: serverTimestamp(),
+              })
+            }
+
+            return txDecisions
+          })
+          return { docId, status: 'ok' as const, decisions }
+        } catch (err) {
+          console.error(`Bulk verify failed for document ${docId}:`, err)
+          return { docId, status: 'error' as const, decisions: null }
+        }
+      })
+
+      const succeeded = outcomes.filter((o) => o.status === 'ok')
+      const failed = outcomes.filter((o) => o.status === 'error')
+
+      const confirmedAtApprox = Timestamp.now()
+      for (const o of succeeded) {
+        const cachePatch: Record<string, unknown> = {
+          verified: true,
+          verifiedBy: uid,
+          verifiedAt: confirmedAtApprox,
+        }
+        if (o.decisions?.customer.action === 'confirm') {
+          cachePatch.customerConfirmed = true
+          cachePatch.confirmedBy = uid
+          cachePatch.confirmedAt = confirmedAtApprox
+        }
+        if (o.decisions?.office.action === 'confirm') {
+          cachePatch.officeConfirmed = true
+          cachePatch.officeConfirmedBy = uid
+          cachePatch.officeConfirmedAt = confirmedAtApprox
+        }
+        updateDocumentInListCache(queryClient, o.docId, cachePatch)
+      }
+
       // 安全網: staleマークのみ(refetchType:'none')。表示更新は上記パッチが担う
       markDocumentsInfiniteStale(queryClient)
       queryClient.invalidateQueries({ queryKey: ['documentStats'] })
-      clearSelection()
-      setBulkOperation(null)
-      toast.success(`${count}件を確認済みにしました`)
+      // codexレビュー指摘(P2・5回目): 一括確認済みもcustomerConfirmed/officeConfirmedを
+      // 変更するが、上記パッチはdocumentsInfiniteのみが対象。グループ表示(担当CM別・
+      // 利用者別)を開いている場合、staleTime:Infiniteのgroup系キャッシュが古いバッジを
+      // 保持し続ける。他の一括操作(一括再処理・一括削除)と同じくinvalidateGroupQueriesを呼ぶ。
+      invalidateGroupQueries(queryClient)
+
+      const confirmedCount = succeeded.filter(
+        (o) => o.decisions?.customer.action === 'confirm' || o.decisions?.office.action === 'confirm'
+      ).length
+
+      if (failed.length > 0) {
+        const failedIds = new Set(failed.map((o) => o.docId))
+        setSelectedIds(prev => new Set([...prev].filter(id => failedIds.has(id))))
+        toast.error(`一括確認が一部失敗しました（${succeeded.length}/${ids.length}件完了）`)
+      } else {
+        clearSelection()
+        setBulkOperation(null)
+        toast.success(
+          confirmedCount > 0
+            ? `${succeeded.length}件を確認済みにしました（うち${confirmedCount}件は顧客/事業所も確定しました）`
+            : `${succeeded.length}件を確認済みにしました`
+        )
+      }
     } catch (error) {
       console.error('Bulk verify error:', error)
       toast.error('一括確認に失敗しました')
@@ -1275,6 +1440,8 @@ export function DocumentsPage() {
                   {bulkOperation === 'verify' && (
                     <>
                       選択した{selectedIds.size}件の書類を確認済みにします。
+                      <br />
+                      同姓同名等の対象を除き、表示中の顧客・事業所も同時に確定します(確定後も書類詳細から変更できます)。
                     </>
                   )}
                   {bulkOperation === 'reprocess' && (

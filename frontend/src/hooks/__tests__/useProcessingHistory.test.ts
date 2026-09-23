@@ -174,6 +174,7 @@ describe('applyConfirmedFilter (#273)', () => {
 describe('applyConfirmedFilter with identityLookup (2026-07-26追加)', () => {
   function makeLookup(sameNameCollisionNames: string[]): CustomerIdentityLookup {
     return {
+      isReady: true,
       sameNameCollisionNames: new Set(sameNameCollisionNames),
       customerMasterNameById: new Map(),
     };

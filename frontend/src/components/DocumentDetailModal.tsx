@@ -419,6 +419,12 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
     prevStatusRef.current = currentStatus
   }, [document?.status, documentId, queryClient])
 
+  // 同姓同名判定(2026-07-26追加)。useCustomers()のキャッシュ共有により追加フェッチなし。
+  // 同姓同名バッジ表示に使う(useDocumentVerificationの確定判定は、キャッシュ鮮度の
+  // 問題を避けるためfetchFreshCustomerIdentityLookup()で別途取得する、codexレビュー
+  // 指摘P2・5回目参照)。
+  const identityLookup = useCustomerIdentityLookup()
+
   // 確認ステータス管理（楽観的更新で即時反映）
   const {
     isUpdating: isVerifying,
@@ -593,8 +599,6 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
     ? document.officeConfirmed === false && document.officeCandidates && document.officeCandidates.length > 0
     : false
 
-  // 同姓同名判定(2026-07-26追加)。useCustomers()のキャッシュ共有により追加フェッチなし
-  const identityLookup = useCustomerIdentityLookup()
   const unconfirmedReason = document
     ? resolveCustomerUnconfirmedReason(document, {
         customerMasterName: document.customerId
