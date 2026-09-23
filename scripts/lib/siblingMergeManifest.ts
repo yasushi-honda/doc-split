@@ -1,12 +1,17 @@
 /**
  * Issue #1028(ADR-0028): execute-drive-sibling-merge.tsが書き込むmanifest型定義。
  *
- * 実行順序はcodex High#5指摘対応で「Drive移動完了確認→claim無効化の成功件数照合→
- * その後にapp側の空フォルダをtrash」に固定しているため、`duplicateTrashedAt`が
- * nullのentryは「ファイル移動・claim無効化までは完了しているがtrashは未実行」の
- * 部分成功状態を表す。再実行時はduplicate folderがまだ存在し空であることを再確認し、
- * trashのみを完了させる(#811のrollback-drive-folder-merge.tsのような別スクリプトは
- * 設けず、同一スクリプトの再実行で完結させる設計)。
+ * 実行順序は「Drive移動完了確認→trash直前の再列挙(0件確認)→claim状態確認→claim
+ * 無効化の成功件数照合→その後にapp側の空フォルダをtrash」に固定している。
+ * `duplicateTrashedAt`がnullのentryは、以下いずれかの理由でtrashが未実行の状態を表す
+ * (`SiblingDuplicateManifest.skipped`に理由が記録される):
+ * - ファイル移動の一部が失敗した(次回再実行で再試行対象)
+ * - trash直前の再列挙でduplicateフォルダが空でなかった(並行export競合の疑い)
+ * - claimが'resolved'以外(divergent/creating等)のため、claim無効化を経ずには
+ *   trashできない(先にexecute-drive-claim-resyncでの解消が必要)
+ * いずれのケースも、既に移動済みのファイル(`movedFileIds`)はそのまま維持され、
+ * duplicateフォルダ自体は現存する。再実行時は同一スクリプトが上記チェックを
+ * やり直すため、専用のrollbackスクリプトは設けていない。
  */
 
 export interface SiblingMergeManifestEntry {

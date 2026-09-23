@@ -81,11 +81,18 @@ OAuth同意画面のユーザータイプを「内部」へ切り替える(審�
 - refresh tokenが連携アカウントのアクセス可能なDrive範囲(Shared Drive含みうる)への
   読み書き権限を持つ。Go条件(専用アカウント・共有範囲限定・IAM最小化)で緩和するが、
   ADR-0022時点の「app作成分のみ」という説明責任の軽さは失われる。
-- **既存app管理フォルダとの新規衝突は引き続き手動対応**: `resolved` claimは最長5分間
+- **既存app管理フォルダとの新規衝突は、今後も繰り返し発生する運用コストとして受容する**
+  (decision-maker確認済み、2026-09-23クロスレビュー後の再確認)。`resolved` claimは最長5分間
   `files.get`のみで信頼される(3段ラダー、`driveFolderClaim.ts`)。「既にapp側フォルダが
   ある場所へ人が同名フォルダを移動する」通常操作は、この5分の窓の間は検出されず、5分経過後の
-  完全検索で2件を検出して`divergent`化する(自動統合はされない)。今回解消するのは
-  「appがまだclaimを持っていない場所に人がフォルダを置く」ケース(Issue #1028本体)のみである。
+  完全検索で2件を検出して`divergent`化する(自動統合はされない。kanameoneは
+  `driveFolderClaimRead`が既に有効なため、この経路は本番で常時稼働している)。`divergent`は
+  人手解除するまで対象customer/category配下のexportが停止し続ける。今回のスコープ拡張が
+  解消するのは「appがまだclaimを持っていない場所に人がフォルダを置く」ケース(Issue #1028
+  本体)のみであり、「既存app管理フォルダと衝突する形で新たに同名フォルダを作る」ケースは、
+  クライアントが手動フォルダ操作を続ける限り今後も定期的に発生しうる。解消手順は
+  `docs/context/monitoring-setup.md`のIssue #871 SOP(`classify-drive-claim-divergence`→
+  `execute-drive-claim-resync`のrelease-claim)をそのまま使う。
 - 表記ゆれ(全角/半角スペース違いのフォルダ名)は完全一致検索では同一とみなされない(既存課題、
   対象外)。
 

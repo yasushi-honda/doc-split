@@ -161,11 +161,27 @@ async function main(): Promise<void> {
   console.log(`モード: ${shouldExecute ? '実行(--execute)' : 'dry-run(プレビューのみ)'}`);
   console.log('---');
 
-  const { getDriveClient } = await import('../functions/src/utils/driveAuth');
-  const { invalidateResolvedClaimByFolderId } = await import('../functions/src/drive/driveFolderClaim');
+  const { getDriveSettings, getDriveClient } = await import('../functions/src/utils/driveAuth');
+  const { invalidateResolvedClaimByFolderId, readClaim } = await import(
+    '../functions/src/drive/driveFolderClaim'
+  );
   const { FOLDER_MIME_TYPE, DOCSPLIT_FOLDER_CLAIM_KEY } = await import(
     '../functions/src/drive/driveApiConstants'
   );
+  const { REQUIRED_DRIVE_SCOPE } = await import('../functions/src/drive/exchangeDriveAuthCode');
+
+  // fable-reviewセカンドオピニオン指摘(High#3): 旧drive.fileスコープのままだと
+  // 人作成フォルダが不可視のまま「重複0件」と誤って完走してしまう。再連携未実施の
+  // まま誤って実行するのをfail-closedで防ぐ。
+  const driveSettings = await getDriveSettings();
+  const grantedScopes = driveSettings.grantedScopes ?? [];
+  if (!grantedScopes.includes(REQUIRED_DRIVE_SCOPE)) {
+    console.error(
+      `FATAL: settings/drive.grantedScopesに${REQUIRED_DRIVE_SCOPE}が含まれていません。` +
+        '再連携(Drive設定画面で「再連携する」)が完了してから実行してください。'
+    );
+    process.exit(2);
+  }
 
   const drive = await getDriveClient();
   const firestore = admin.firestore();
@@ -279,13 +295,76 @@ async function main(): Promise<void> {
       continue;
     }
 
+    // fable-reviewセカンドオピニオン指摘(High#1、2パス目): kanameoneは
+    // driveFolderClaimReadが既に有効なため、対象claimが既にdivergent化している
+    // 場合がありうる。invalidateResolvedClaimByFolderId()はstate=='resolved'のみを
+    // 対象とするため、divergent/creating状態のまま無条件にtrashすると、trashed
+    // フォルダを指す解消不能なclaimが残ってしまう(次回exportが永久に停止する)。
+    // trash前に現在のclaim状態を確認し、'resolved'かつfolderIdがduplicate自身を
+    // 指す場合のみ無効化→trashへ進む。それ以外(divergent/creating/不整合)は
+    // trashをskipし、先にexecute-drive-claim-resync(release-claim)での解消を促す
+    // (SOP側にこの手順を正式化する、decision-maker承認済み)。
+    const existingClaim = await readClaim(firestore, group.parentId, group.name);
+    if (existingClaim && !(existingClaim.state === 'resolved' && existingClaim.folderId === group.duplicateFolderId)) {
+      console.error(
+        `  ⚠️  claim状態が'${existingClaim.state}'のためtrashをskipします(ファイル移動は完了済み)。` +
+          `先に classify-drive-claim-divergence → execute-drive-claim-resync(release-claim) で解消してから再実行してください`
+      );
+      manifest.skipped.push({
+        groupId: group.groupId,
+        reason: `claim状態が'${existingClaim.state}'のため未解消(release-claim後に再実行が必要)`,
+      });
+      manifest.entries.push(entry);
+      continue;
+    }
+
+    // fable-reviewセカンドオピニオン指摘(High#2、1パス目): ファイル列挙〜trashの間に
+    // 並行exportがduplicateフォルダへ新規ファイルを作成する競合窓がある(resolved claimは
+    // 5分間files.getのみで信頼されるため、並行exportがfiles.list照合無しでduplicateへ
+    // 書き込みうる)。trash直前に再列挙し、0件でなければtrashせずskipする(新規ファイルの
+    // サイレントなゴミ箱行きを防ぐ)。
+    const remainingFiles: string[] = [];
+    let recheckPageToken: string | undefined;
+    do {
+      const recheckRes = await drive.files.list({
+        q: `'${group.duplicateFolderId}' in parents and trashed=false and mimeType!='${FOLDER_MIME_TYPE}'`,
+        fields: 'nextPageToken, files(id)',
+        pageSize: 100,
+        pageToken: recheckPageToken,
+        supportsAllDrives: true,
+        includeItemsFromAllDrives: true,
+      });
+      for (const f of recheckRes.data.files ?? []) {
+        if (f.id) remainingFiles.push(f.id);
+      }
+      recheckPageToken = recheckRes.data.nextPageToken ?? undefined;
+    } while (recheckPageToken);
+    if (remainingFiles.length > 0) {
+      console.error(
+        `  ⚠️  trash直前の再確認でduplicateフォルダに${remainingFiles.length}件の新規ファイルを検出したためtrashをskipします(並行exportとの競合の可能性、次回再実行で再試行可能)`
+      );
+      manifest.skipped.push({
+        groupId: group.groupId,
+        reason: `trash直前の再確認でduplicateフォルダが空でなかった(${remainingFiles.length}件、並行export競合の疑い)`,
+      });
+      manifest.entries.push(entry);
+      continue;
+    }
+
     // claim無効化(件数照合)→ trashの順序を厳守する(codex High#5対応)
     const claimInvalidatedCount = await invalidateResolvedClaimByFolderId(firestore, group.duplicateFolderId);
     entry.claimInvalidatedCount = claimInvalidatedCount;
 
+    // fable-reviewセカンドオピニオン指摘(High#4): drive.file→driveフルスコープ化に伴い、
+    // 既存の`materializeExistingFolderFile()`(2段階検索のtrashed fallback)は、タグの
+    // 有無を問わず同名trashedフォルダを復元するようになった(旧スコープでは人が捨てた
+    // フォルダは不可視だったため実害が無かった)。統合済みduplicateを元の名前のまま
+    // trashすると、将来同じ名前で0件マッチが起きた際に誤って復元されうる。改名してから
+    // trashすることで、名前一致検索の対象から外す。
+    const trashedSuffix = `【統合済み_${new Date().toISOString().slice(0, 10)}】`;
     await drive.files.update({
       fileId: group.duplicateFolderId,
-      requestBody: { trashed: true },
+      requestBody: { name: `${group.name}${trashedSuffix}`, trashed: true },
       supportsAllDrives: true,
       fields: 'id',
     });

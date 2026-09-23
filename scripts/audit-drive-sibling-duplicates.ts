@@ -93,6 +93,7 @@ async function main(): Promise<void> {
   const { FOLDER_MIME_TYPE, DOCSPLIT_FOLDER_CLAIM_KEY } = await import(
     '../functions/src/drive/driveApiConstants'
   );
+  const { REQUIRED_DRIVE_SCOPE } = await import('../functions/src/drive/exchangeDriveAuthCode');
 
   console.log(`プロジェクト: ${projectId}`);
 
@@ -101,6 +102,19 @@ async function main(): Promise<void> {
   if (!rootFolderId) {
     console.error('❌ settings/drive.rootFolderId が未設定です。');
     process.exit(1);
+  }
+
+  // fable-reviewセカンドオピニオン指摘(High#3): 旧drive.fileスコープのままだと
+  // 人作成フォルダが不可視のため「重複0件」と誤って完走してしまう(本Issueの原因を
+  // 監査ツール自身が再演する)。再連携未実施のまま誤って実行するのをfail-closedで防ぐ。
+  const grantedScopes = settings.grantedScopes ?? [];
+  if (!grantedScopes.includes(REQUIRED_DRIVE_SCOPE)) {
+    console.error(
+      `❌ settings/drive.grantedScopesに${REQUIRED_DRIVE_SCOPE}が含まれていません。` +
+        '再連携(Drive設定画面で「再連携する」)が完了してから実行してください。' +
+        '未連携のまま実行すると、人作成フォルダが不可視のため「重複0件」という誤った結果になります。'
+    );
+    process.exit(2);
   }
 
   const drive = await getDriveClient();
