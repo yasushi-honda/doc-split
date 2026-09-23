@@ -855,9 +855,13 @@ function GoogleDriveConnect() {
         <Button
           onClick={handleConnect}
           disabled={connecting || !gisLoaded}
-          variant="ghost"
+          variant={needsScopeReconnect ? 'outline' : 'ghost'}
           size="sm"
-          className="text-gray-500"
+          className={
+            needsScopeReconnect
+              ? 'border-amber-300 text-amber-800 hover:bg-amber-100'
+              : 'text-gray-500'
+          }
         >
           {connecting ? (
             <>
