@@ -2016,5 +2016,54 @@ describe('Firestore Security Rules', () => {
       // 既存と同値での書込みは「無変更」扱いのため許可
       await assertSucceeds(updateDoc(docRef, { authMode: 'oauth', connectedEmail: 'real@example.com' }));
     });
+
+    // ADR-0028(Issue #1028対応、2026-09-23追加): grantedScopesもauthMode/connectedEmailと
+    // 同型のガード対象。exchangeDriveAuthCodeCore(スコープ検証済み)を経由しない直接偽装を防ぐ。
+    it('管理者でもsettings/drive.grantedScopesへの新規値の上書きは拒否される', async () => {
+      const adminUser = testEnv.authenticatedContext(adminUid);
+
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'settings', 'drive'), {
+          rootFolderId: 'folder-abc',
+          grantedScopes: ['https://www.googleapis.com/auth/drive'],
+        });
+      });
+
+      const docRef = doc(adminUser.firestore(), 'settings', 'drive');
+      await assertFails(
+        updateDoc(docRef, { grantedScopes: ['https://www.googleapis.com/auth/drive.file'] })
+      );
+    });
+
+    it('管理者でもsettings/drive.grantedScopesが未設定のdocへ新規設定するのは拒否される', async () => {
+      const adminUser = testEnv.authenticatedContext(adminUid);
+
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'settings', 'drive'), {
+          rootFolderId: 'folder-abc',
+        });
+      });
+
+      const docRef = doc(adminUser.firestore(), 'settings', 'drive');
+      await assertFails(
+        updateDoc(docRef, { grantedScopes: ['https://www.googleapis.com/auth/drive'] })
+      );
+    });
+
+    it('settings/drive.grantedScopesと同値での書込みは引き続き許可される', async () => {
+      const adminUser = testEnv.authenticatedContext(adminUid);
+
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'settings', 'drive'), {
+          rootFolderId: 'folder-abc',
+          grantedScopes: ['https://www.googleapis.com/auth/drive'],
+        });
+      });
+
+      const docRef = doc(adminUser.firestore(), 'settings', 'drive');
+      await assertSucceeds(
+        updateDoc(docRef, { grantedScopes: ['https://www.googleapis.com/auth/drive'] })
+      );
+    });
   });
 });

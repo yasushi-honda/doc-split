@@ -425,9 +425,10 @@ Google Drive連携設定（ADR-0022、Phase 1）。Gmail連携（`settings/gmail
 | rootFolderName | string | No | 同上フォルダ名（UI表示用） |
 | template | DriveFolderTemplate | No | フォルダ階層のセグメント定義（テナントごとに可変、`shared/types.ts` 参照） |
 | furiganaFallback | string | No | `stop`（デフォルト、フリガナ欠損時はエクスポート停止） \| `useNameInitial`（氏名頭文字で代替、opt-in） |
+| grantedScopes | string[] | No | バックエンド永続token(code flow)交換時に実際に付与されたOAuthスコープ一覧。`exchangeDriveAuthCode.ts`(Admin SDK専有)のみが書き込む（ADR-0028、Issue #1028対応） |
 
 > OAuth認証情報（clientId, clientSecret, refreshToken）はSecret Manager (`drive-oauth-client-id`/`-secret`/`-refresh-token`) に保存。Firestoreには格納しない。
-> スコープは `drive.file` で確定（実機検証済み、Picker経由で選択したフォルダへのShared Drive内フォルダ作成が成功することを確認）。フル `drive` スコープは不要。
+> スコープはバックエンド永続token(code flow)のみフルスコープ `drive` に拡張済み（[ADR-0028](../adr/0028-drive-full-scope.md)、Issue #1028対応）。Picker用token(`initTokenClient`)は引き続き `drive.file` のまま（ADR-0022 Decision 2、Google推奨のPicker併用スコープ、最小権限のため変更していない）。
 
 ### /settings/features
 

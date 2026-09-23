@@ -722,6 +722,11 @@ function GoogleDriveConnect() {
 
   const isConnected = drive?.authMode === 'oauth'
   const clientId = drive?.oauthClientId
+  // ADR-0028(Issue #1028): drive.fileスコープ時代に連携した既存アカウントは
+  // grantedScopesが未記録(旧フィールド)か、driveフルスコープを含まないまま。
+  // その場合は再連携するまで手動作成フォルダの検出・統合機能が有効にならない。
+  const needsScopeReconnect =
+    isConnected && !(drive?.grantedScopes ?? []).includes('https://www.googleapis.com/auth/drive')
 
   const handleConnect = useCallback(() => {
     if (!gisLoaded || !clientId) return
@@ -738,7 +743,10 @@ function GoogleDriveConnect() {
 
     const client = google.accounts.oauth2.initCodeClient({
       client_id: clientId,
-      scope: 'https://www.googleapis.com/auth/drive.file',
+      // ADR-0028(Issue #1028): バックエンド永続token(code flow)のみdriveフルスコープ。
+      // Picker用token(下のDriveFolderPicker、initTokenClient)はdrive.fileのまま
+      // (Google推奨のPicker併用スコープであり、変更する必要が無い)。
+      scope: 'https://www.googleapis.com/auth/drive',
       ux_mode: 'popup',
       callback: async (response: { code?: string; error?: string }) => {
         if (response.error || !response.code) {
@@ -835,6 +843,14 @@ function GoogleDriveConnect() {
         </div>
       )}
 
+      {needsScopeReconnect && (
+        <div className="flex items-center gap-2 text-sm text-amber-700 bg-amber-50 rounded p-2">
+          <AlertCircle className="h-4 w-4 flex-shrink-0" />
+          権限の更新が必要です。手動で作成されたフォルダの検出・統合を有効にするには、
+          「再連携する」を押してください。
+        </div>
+      )}
+
       {isConnected && (
         <Button
           onClick={handleConnect}
@@ -875,6 +891,9 @@ function GoogleDriveConnect() {
  * エクスポート先ルートフォルダのGoogle Picker選択。
  * Drive接続(code flow)とは別に、Picker表示用の短命access_tokenをtoken flowで取得する
  * (initTokenClient、ADR-0022 Decision 2で実機検証済みのdrive.fileスコープ)。
+ * ADR-0028(Issue #1028)でバックエンド永続token(code flow)はdriveフルスコープへ拡張したが、
+ * この短命Picker tokenは意図的にdrive.fileのまま変更しない(Google公式がPickerとの
+ * 併用を推奨するスコープであり、フォルダ選択という用途に対して不要な権限拡大を避ける)。
  */
 function DriveFolderPicker() {
   const gisLoaded = useGisScript()

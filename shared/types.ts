@@ -807,6 +807,14 @@ export interface DriveSettings {
    * 'useNameInitial' は明示的にopt-inした場合のみ、氏名の先頭文字で代替する。
    */
   furiganaFallback?: 'stop' | 'useNameInitial';
+  /**
+   * バックエンド永続token(code flow)のOAuth交換時にGoogleが実際に付与したスコープ一覧。
+   * `exchangeDriveAuthCode`のみが書き込む(BE専有、firestore.rulesでadmin書込みを禁止)。
+   * Issue #1028対応(ADR-0028)で`drive`フルスコープへ拡張した際、実際に付与されたか
+   * どうかを検証するために追加。Picker用token(`initTokenClient`)は`drive.file`のまま
+   * のため、Picker側の付与スコープはここに含めない。
+   */
+  grantedScopes?: string[];
 }
 
 // ============================================
