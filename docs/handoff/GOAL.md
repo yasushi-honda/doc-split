@@ -4,6 +4,21 @@ updated: 2026-09-23
 <!-- 前ミッション(dev/kanameone/cocoro環境監査・保守検証)は2026-07-20完遂。全文はdocs/handoff/LATEST.md参照。 -->
 <!-- Google Drive連携Phase1 (MVP)実装ミッションは2026-07-22完了(PR#700マージ)。詳細は本ファイル末尾「Google Drive連携Phase1完遂」節+docs/handoff/LATEST.md参照。 -->
 
+## 【完了・2026-09-23】Issue #1028: Drive OAuthスコープをdrive.file→driveフルスコープへ拡張し、兄弟重複統合スクリプトを新設（PR #1038マージ）
+
+下記「kanameoneクライアントフィードバック10件対応」①（医療フォルダ重複）で判明した`drive.file`スコープの構造的盲点（appが一度も触れていない人作成フォルダを`files.list`で検出不能）への対応。decision-maker判断「クライアントが手動でフォルダ操作したいという業務要件があるため、運用ルールでの回避ではなく技術対応が必要」を受け着手。
+
+**プロセス**: plan mode（Opus）で計画策定 → `/plan-crossreview`（grip自白×codex独立診断2巡、High8/Medium7/Low1件を反映し計画を書き直し）→ 実装 → `codex review`がusage limit到達のため事前承認済み手順でFable 5.1へ2回セカンドオピニオン依頼（実コード直接検証込み、両パス合わせてHigh4件を反映）→ PR作成 → `post-pr-review.sh`hook強制のPRレビューゲート（`codex review`P1×2/P2×1 + `pr-review-toolkit`5エージェント[code-reviewer/pr-test-analyzer/silent-failure-hunter/type-design-analyzer/comment-analyzer] + `quality-gate-evaluator`のAC忠実性チェック込み評価、Critical1件・3経路収束High1件を含め全件コード修正）→ `.tsx`変更（SettingsPage/HelpPage）をPlaywright MCP+ローカルemulatorで実機確認し`ui-verified`付与 → decision-maker明示認可を得てsquashマージ。
+
+**決定事項（AskUserQuestionで確定）**:
+1. バックエンド永続token（code flow）のみ`drive`フルスコープへ拡張。Picker用token（`initTokenClient`）は`drive.file`のまま維持（最小権限、Google推奨のPicker併用パターン）。`drive.metadata.readonly`は要件（フォルダ作成・移動・PDF書込み）を構造的に満たせないため確定却下（ADR-0028）
+2. 既存の同名重複は「人が作った側」を残し、app作成側の中身を移動してから統合する新設スクリプト2本（`scripts/audit-drive-sibling-duplicates.ts`[read-only棚卸し]・`scripts/execute-drive-sibling-merge.ts`[承認制実行]）で対応。GitHub Actions `run-ops-script.yml`へ組み込み済み
+3. kanameoneは既に`driveFolderClaimRead:true`が本番有効なため、既存app管理フォルダとの新規衝突による`divergent`化は今後も繰り返し発生する運用コストとして受容し、人手解除ステップ（`execute-drive-claim-resync --mode release-claim`→再実行）をSOPとして正式化（`docs/context/monitoring-setup.md`、ADR-0028 Cons節）。一時「解消不能なclaimが残る恒久バグではないか」と誤認しかけたが、実装・SOP双方を突き合わせて「release-claim後の再実行で解消する」設計に修正済み
+
+**follow-up（未着手、次アクション候補）**:
+- Issue #1039（P1）: 新設2スクリプト本体のfixtureベース統合テストが不在（evaluator/pr-test-analyzer指摘、`scripts/execute-drive-claim-resync.integration.test.ts`と同型のfake Drive client注入パターンで追加予定）
+- **kanameone/cocoro本番展開前の必須ゲート（decision-maker承認済み、未実施）**: ①dev環境での実機再連携（`https://www.googleapis.com/auth/drive`スコープでの再同意）・Issue #1028再現解消確認・既存重複統合リハーサル ②GitHub Actionsワークフロー（`audit-drive-sibling-duplicates`/`execute-drive-sibling-merge`）の実機起動テスト。両方を実施してからkanameone/cocoroへ「Drive再連携」を案内すること
+
 ## 【進行中・2026-09-23】kanameoneクライアントフィードバック10件対応（Issue化9/9完了+既存Issue #960修正1件マージ済み、現在のミッションとは別件・並行トラック）
 
 kanameoneから10件のフィードバックが届き、①は不具合報告・②〜⑩は機能要望。着手順はdecision-makerに一任されたため、①はrules/workflow.md「バグ報告は報告者へ即座に聞き返す前に自分の手段を使い切る」原則([[feedback_reproduce_before_asking_reporter]]としてグローバルharnessにも新規反映)に従い、まずdev環境での実機再現を優先した。
@@ -24,7 +39,7 @@ kanameoneから10件のフィードバックが届き、①は不具合報告・
 
 **既存Issue #960(別件、同セッション内で先行対応)**: `handleProcessingError`のFirestore transient gRPCコード判定漏れをPR #1026で修正・マージ済み(codex review findings 0件、CI全PASS)。
 
-**次の一手**: decision-makerがIssue #1028(①の対応方針3候補のどれを採るか)とIssue #1029〜#1037(着手順・優先度)を判断してから、次セッションで着手する。AI側からの提案・着手は行わない(起点アイデアはdecision-maker領分)。
+**次の一手**: Issue #1028は本セッションで対応方針確定→実装→PR #1038マージまで完了（詳細は上記新規エントリ「Issue #1028: Drive OAuthスコープ拡張」参照）。残るIssue #1029〜#1037(着手順・優先度)の判断のみが未決。AI側からの提案・着手は行わない(起点アイデアはdecision-maker領分)。
 
 ## 【ADR-0027 PR2bハーネス収束完了・2026-09-23】要約生成(regenerateSummary)のGemini依存脱却: Sarashina2.2-3B(Q8_0量子化)実装移行、PR0→PR1(a/b/c)→PR2a→PR2b→ステップ8(本番ゲート実行、計4回の全10doc×3run実機run)、完了。累計16件の実機問題を発見・修正しdeterminismを含む全FAILゲートが収束(decision-maker判断でここで区切り)
 
@@ -550,6 +565,8 @@ cocoro/kanameから、書類（ケアプラン・医療・介護保険証等）�
 cocoro側Drive連携Phase C（クライアント自身のOAuth接続）は外部依存待ち（継続、変更なし、詳細は本ファイル冒頭「現在のミッション」節参照）。
 
 **Issue #984（2026-09-20）**: 完了・クローズ済み(kanameone実データ確認済み、上記節参照)。cocoroも2026-09-20にデプロイ済み(3環境同一コード)。ログベースメトリクス・アラートも2026-09-21に3環境へ適用済み(#981クローズ)。#984に関する残りタスクはなし。
+
+**Issue #1028（2026-09-23、PR #1038マージ）**: コード実装・レビューゲート対応は完了(詳細は本ファイル冒頭の新規エントリ参照)。**ただしkanameone/cocoro本番展開には未実施のゲートが残る**: ①dev環境での実機再連携・Issue #1028再現解消確認・既存重複統合リハーサル ②GitHub Actionsワークフロー(`audit-drive-sibling-duplicates`/`execute-drive-sibling-merge`)の実機起動テスト。次セッションでこの2点を実施してから、kanameone/cocoroへの「Drive再連携」案内に進むこと。fixtureベース統合テスト不在はIssue #1039(P1)へ切り出し済み、実装時期は未定。
 
 ## 【完了・2026-08-30】Issue #871 PR-4: childFolderResolver.tsのclaimプロトコル完全移行(PR #879マージ)
 
