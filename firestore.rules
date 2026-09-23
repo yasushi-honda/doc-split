@@ -351,11 +351,16 @@ service cloud.firestore {
       // 同型のガードで、クライアントからの新規設定・上書きを禁止する(削除または無変更のみ許可)。
       // これが無いと、FEのバグや誤操作で実際のOAuthハンドシェイクを経由せず
       // 「連携済み」状態を直接偽装できてしまう。
+      // grantedScopes(ADR-0028、Issue #1028対応、2026-09-23追加)も同型。クライアントが
+      // 直接この値を書き換えてスコープ検証(exchangeDriveAuthCodeCore)を経由せず
+      // 「必要なスコープが付与済み」と偽装できてしまうのを防ぐ。
       allow write: if isAdmin()
         && (!('authMode' in request.resource.data)
             || (('authMode' in resource.data) && request.resource.data.authMode == resource.data.authMode))
         && (!('connectedEmail' in request.resource.data)
-            || (('connectedEmail' in resource.data) && request.resource.data.connectedEmail == resource.data.connectedEmail));
+            || (('connectedEmail' in resource.data) && request.resource.data.connectedEmail == resource.data.connectedEmail))
+        && (!('grantedScopes' in request.resource.data)
+            || (('grantedScopes' in resource.data) && request.resource.data.grantedScopes == resource.data.grantedScopes));
     }
 
     // Phase 8: ドキュメントグループ（サマリー集計）

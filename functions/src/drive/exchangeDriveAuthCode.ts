@@ -45,6 +45,25 @@ export class DriveRefreshTokenMissingError extends Error {
   }
 }
 
+/**
+ * ADR-0028(Issue #1028): バックエンド永続token(code flow)には`drive`フルスコープが
+ * 必須。GISのgranular consentによりユーザーが同意画面でスコープのチェックを外した場合、
+ * `tokens.scope`に`drive`が含まれないままrefresh_tokenだけが発行されうる。この場合は
+ * Secret Manager・Firestoreのいずれにも書き込まず拒否する(旧値は不変のまま維持)。
+ */
+export class DriveScopeNotGrantedError extends Error {
+  constructor() {
+    super(
+      'Google Driveへの必要な権限が付与されませんでした。同意画面で全ての権限にチェックが' +
+        '入っていることを確認し、もう一度「Google Drive連携」ボタンを押してください。'
+    );
+    this.name = 'DriveScopeNotGrantedError';
+  }
+}
+
+/** バックエンド永続token(code flow)に必須のスコープ(ADR-0028、Picker用tokenは対象外)。 */
+export const REQUIRED_DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive';
+
 export interface ExchangeDriveAuthCodeDeps {
   /** Secret Managerから値を取得。テストでは固定値を返すfakeに差し替える。 */
   getSecret: (name: string) => Promise<string>;
@@ -55,7 +74,7 @@ export interface ExchangeDriveAuthCodeDeps {
     clientId: string;
     clientSecret: string;
     code: string;
-  }) => Promise<{ refreshToken: string | null }>;
+  }) => Promise<{ refreshToken: string | null; scope: string | null }>;
   /** refresh_tokenでDrive APIの疎通確認(about.get)を行い、接続先メールアドレスを返す。 */
   fetchConnectedEmail: (params: {
     clientId: string;
@@ -89,9 +108,16 @@ export async function exchangeDriveAuthCodeCore(
     deps.getSecret('drive-oauth-client-secret'),
   ]);
 
-  const { refreshToken } = await deps.exchangeCode({ clientId, clientSecret, code });
+  const { refreshToken, scope } = await deps.exchangeCode({ clientId, clientSecret, code });
   if (!refreshToken) {
     throw new DriveRefreshTokenMissingError();
+  }
+
+  // スコープ検証(ADR-0028): fetchConnectedEmail/setSecretより先に行う。ここで拒否すれば
+  // Secret Manager・Firestoreのいずれも一切変更されず、旧値がそのまま維持される。
+  const grantedScopes = (scope ?? '').split(' ').filter(Boolean);
+  if (!grantedScopes.includes(REQUIRED_DRIVE_SCOPE)) {
+    throw new DriveScopeNotGrantedError();
   }
 
   // 疎通確認(fetchConnectedEmail)を、Secret Managerへの保存より先に行う(codex review
@@ -121,7 +147,9 @@ export async function exchangeDriveAuthCodeCore(
   // コミット済みで残り、FEの接続判定(authMode==='oauth')が「連携済み」と誤表示していた。
   // 単一ドキュメントへのsetは元々アトミックなため、成功確定後にまとめて書くことで
   // 部分書込みの不整合状態が構造的に発生しなくなる(ロールバック処理は不要)。
-  await firestore.doc(DRIVE_SETTINGS_DOC_PATH).set({ authMode: 'oauth', connectedEmail: email }, { merge: true });
+  await firestore
+    .doc(DRIVE_SETTINGS_DOC_PATH)
+    .set({ authMode: 'oauth', connectedEmail: email, grantedScopes }, { merge: true });
 
   return { success: true, email };
 }
@@ -136,7 +164,7 @@ const productionDeps: ExchangeDriveAuthCodeDeps = {
       'postmessage' // GIS popup flow uses 'postmessage' as redirect_uri
     );
     const { tokens } = await oauth2Client.getToken(code);
-    return { refreshToken: tokens.refresh_token ?? null };
+    return { refreshToken: tokens.refresh_token ?? null, scope: tokens.scope ?? null };
   },
   fetchConnectedEmail: async ({ clientId, clientSecret, refreshToken }) => {
     const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, 'postmessage');
@@ -185,7 +213,7 @@ export const exchangeDriveAuthCode = onCall(
         throw error;
       }
 
-      if (error instanceof DriveRefreshTokenMissingError) {
+      if (error instanceof DriveRefreshTokenMissingError || error instanceof DriveScopeNotGrantedError) {
         throw new HttpsError('failed-precondition', error.message);
       }
 

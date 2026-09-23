@@ -2,7 +2,11 @@
  * Google Drive認証ユーティリティ(ADR-0022)
  *
  * Gmail連携(`gmailAuth.ts`)とは完全に独立したOAuth 2.0接続。
- * スコープは `drive.file` に確定(実機検証済み、ADR-0022 Decision 2)。
+ * スコープは `drive` フルスコープ(ADR-0028、Issue #1028対応でADR-0022 Decision 2から変更)。
+ * `drive.file`では人がDrive UIで作成したフォルダが`files.list`で一切見えず、手動フォルダ
+ * 操作と衝突して重複フォルダを作り続ける問題があったため、バックエンド永続token(code flow)
+ * のみフルスコープへ拡張した。Picker用token(`initTokenClient`、フロントエンド)は
+ * `drive.file`のまま(Google公式がPickerとの併用を推奨するスコープのため変更していない)。
  * 認証情報は Secret Manager に保存(`drive-oauth-client-id` / `-secret` / `-refresh-token`)。
  */
 

@@ -23,6 +23,8 @@ import { cleanupCollections } from './helpers/cleanupEmulator';
 import {
   exchangeDriveAuthCodeCore,
   DriveRefreshTokenMissingError,
+  DriveScopeNotGrantedError,
+  REQUIRED_DRIVE_SCOPE,
   ExchangeDriveAuthCodeDeps,
 } from '../src/drive/exchangeDriveAuthCode';
 import { DRIVE_SETTINGS_DOC_PATH } from '../src/utils/driveAuth';
@@ -33,6 +35,7 @@ const COLLECTIONS_TO_CLEAN: readonly string[] = ['settings'];
 function makeFakeDeps(opts: {
   refreshToken?: string | null;
   connectedEmail?: string;
+  scope?: string | null;
 } = {}): ExchangeDriveAuthCodeDeps & {
   setSecretCalls: Array<{ name: string; value: string }>;
   exchangeCodeCalls: Array<{ clientId: string; clientSecret: string; code: string }>;
@@ -47,7 +50,10 @@ function makeFakeDeps(opts: {
     },
     exchangeCode: async (params) => {
       exchangeCodeCalls.push(params);
-      return { refreshToken: opts.refreshToken === undefined ? 'fake-refresh-token' : opts.refreshToken };
+      return {
+        refreshToken: opts.refreshToken === undefined ? 'fake-refresh-token' : opts.refreshToken,
+        scope: opts.scope === undefined ? REQUIRED_DRIVE_SCOPE : opts.scope,
+      };
     },
     fetchConnectedEmail: async () => opts.connectedEmail ?? 'connected@example.com',
     setSecretCalls,
@@ -80,9 +86,41 @@ describe('exchangeDriveAuthCodeCore (ADR-0022)', () => {
     const settings = (await db.doc(DRIVE_SETTINGS_DOC_PATH).get()).data();
     expect(settings?.authMode).to.equal('oauth');
     expect(settings?.connectedEmail).to.equal('hy.unimail.11@example.com');
+    expect(settings?.grantedScopes).to.deep.equal([REQUIRED_DRIVE_SCOPE]);
     expect(deps.setSecretCalls).to.deep.equal([
       { name: 'drive-oauth-refresh-token', value: 'fake-refresh-token' },
     ]);
+  });
+
+  it('必須スコープ(drive)が付与されなかった場合はDriveScopeNotGrantedErrorをthrowし、Secret/settingsのいずれも一切書き込まれない(ADR-0028)', async () => {
+    await seedDriveSettings();
+    const deps = makeFakeDeps({ scope: 'https://www.googleapis.com/auth/drive.file' });
+
+    try {
+      await exchangeDriveAuthCodeCore(db, 'auth-code-1', deps);
+      expect.fail('DriveScopeNotGrantedErrorがthrowされるべき');
+    } catch (error) {
+      expect(error).to.be.instanceOf(DriveScopeNotGrantedError);
+    }
+
+    const settings = (await db.doc(DRIVE_SETTINGS_DOC_PATH).get()).data();
+    expect(settings?.authMode).to.be.undefined;
+    expect(settings?.grantedScopes).to.be.undefined;
+    expect(deps.setSecretCalls).to.deep.equal([]);
+  });
+
+  it('scopeが空文字/nullの場合もDriveScopeNotGrantedErrorをthrowする(ADR-0028)', async () => {
+    await seedDriveSettings();
+    const deps = makeFakeDeps({ scope: null });
+
+    try {
+      await exchangeDriveAuthCodeCore(db, 'auth-code-1', deps);
+      expect.fail('DriveScopeNotGrantedErrorがthrowされるべき');
+    } catch (error) {
+      expect(error).to.be.instanceOf(DriveScopeNotGrantedError);
+    }
+
+    expect(deps.setSecretCalls).to.deep.equal([]);
   });
 
   it('更新対象外フィールド(rootFolderId/rootFolderName/template/furiganaFallback)の値が変化しない(CLAUDE.md MUST)', async () => {
