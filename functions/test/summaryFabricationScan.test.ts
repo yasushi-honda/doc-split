@@ -358,6 +358,20 @@ describe('scanSummaryForFabrication: 助詞トリム(②)', () => {
     expect(r2.fabricatedCount).to.equal(1);
     expect(r2.findings[0].name).to.equal('新関わるクリニック');
   });
+
+  it('プレフィックス形(「株式会社」等)で捏造企業名のcoreがgenericCores語彙と偶然一致しても検出する(codex review指摘、genericCoreとprefixGenericCoreの分離の回帰テスト)', () => {
+    // 「株式会社関わるが担当」のような、suffix直後のcoreがたまたまDEFAULT_GENERIC_CORES
+    // (「関わる」等、地の文への巻き込みを想定したcore→suffix方向専用の語彙)と一致する場合、
+    // genericCoreSetをprefix方向にも共用していると実在しない企業名でも検出をすり抜けて
+    // しまっていた(この抜け穴は「当該」追加時から潜在していたが、より具体的な再現例
+    // 「株式会社関わる」で発見された)。prefixGenericCores(既定は空文字列のみ)を新設し
+    // プレフィックス形専用に分離することで、core→suffix方向の健全なケースの誤検知抑止を
+    // 保ったままprefix方向の検出力を回復した。
+    const source = '利用者の状況について記載。';
+    const r = scanSummaryForFabrication('株式会社関わるが担当。', source);
+    expect(r.fabricatedCount).to.equal(1);
+    expect(r.findings[0].name).to.equal('株式会社関わる');
+  });
 });
 
 describe('scanSummaryForFabrication: 再結合判定(④、fabricated/recombined分離)', () => {
