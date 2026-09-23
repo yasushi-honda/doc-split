@@ -15,6 +15,15 @@
  *
  * 汎用ツールとして書いており、名前パターンを変えれば今後の同種の重複報告調査にも再利用できる。
  *
+ * **重要な制約(codex review P1指摘)**: `getDriveClient()`(`functions/src/utils/driveAuth.ts`)は
+ * `drive.file`スコープのOAuthクライアントで、appが作成/開いたことのないファイルは`files.list`で
+ * 一切見えない。したがって「医療」フォルダが元々app未関与の場所にあり人間が初めて移動してきた
+ * ものだった場合、本スクリプトは(そして本番の`findOrCreateFolder`自身も同じ`drive.file`スコープで
+ * 動いているため)そのフォルダを検出できない可能性がある。0件/部分的な結果は「重複が存在しない
+ * 証拠」ではなく「appのスコープ外にあり見えていないだけ」の可能性を必ず疑うこと。逆に言えば、
+ * もし本スクリプトが実際に重複を検出できた場合、そのフォルダは(少なくとも一方は)appが
+ * `files.create`で作成したもの、というappスコープ内での確実な事実ではある。
+ *
  * 使用方法:
  *   FIREBASE_PROJECT_ID=docsplit-kanameone npx ts-node scripts/investigate-drive-folder-duplicate-by-name.ts \
  *     --name-contains "医療"
@@ -62,6 +71,10 @@ async function main(): Promise<void> {
   console.log(`プロジェクト: ${projectId}`);
   console.log(`検索語: name contains "${NAME_CONTAINS}"`);
   console.log(`trashed含む: ${includeTrashed}`);
+  console.log(
+    '⚠️  注意: drive.fileスコープのため、appが一度も作成/参照していないフォルダは見えない。' +
+      '0件/想定より少ない件数は「重複なし」の証拠ではない(詳細はファイル冒頭のdocstring参照)。'
+  );
   console.log('---');
 
   const trashedClause = includeTrashed ? '' : ' and trashed=false';
