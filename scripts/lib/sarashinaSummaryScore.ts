@@ -65,14 +65,86 @@ export function normalizeForScore(text: string): string {
 
 export type FixtureRole = 'coverage' | 'numeric' | 'cross-entity' | 'fabrication';
 
+/**
+ * 1件のfactは単一の文字列、または「同一人物/組織を指す複数の許容表記」を表す
+ * エイリアス配列のいずれかを取る(ADR-0027 PR2bステップ8全10doc×3run正式gate run再実行、
+ * 2026-09-22追加、codex review指摘)。
+ *
+ * 導入経緯: D8(合同報告書)で「立花 文子」が実際には毎回「妻文子様」のように姓を省略した
+ * 自然な日本語で正しく言及されていたが、完全一致判定では検出できず欠落と誤判定していた。
+ * `mustCover`を氏名なしの「文子」単体へ緩和する案は、`checkCrossEntity`(対象者取り違え
+ * 判定)がこの文書形式では`evaluatedAttributions:0`(実質検証不能)であるため、将来
+ * 「文子様が誤った受診先を受診」のような取り違えが出力されてもcoverage-per-docが
+ * 素通りしてしまう安全性の後退を招くとcodex reviewで指摘された(1回目)。エイリアス配列
+ * (`["立花 文子", "文子"]`)により、姓名の完全一致・名のみのいずれでも許容しつつ、
+ * 「立花」という識別情報自体は`facts`定義に残す設計とした。`checkCrossEntity`のperson側
+ * vocabもこの配列で展開し、名のみ表記でも取り違えを検知できるよう対応した(2回目)。
+ *
+ * 【既知の限界、decision-maker確認済み・2026-09-23、これ以上のスコアラー複雑化は行わない】
+ * `factHit`は文脈を問わない単純な部分一致のため、要約内に「立花文子」とは別人の同姓・
+ * 同名の人物(例:「鈴木文子」)が登場した場合、「文子」の部分文字列一致により誤ってD8の
+ * 患者と同一視され、coverage・cross-entityの双方をすり抜けうる(codex review 3回目指摘、
+ * strict-config)。回避には直前の文脈(続柄語「妻」等)を要求する、または人名を跨いだ
+ * 形態素解析が必要になり、`shared/summaryFabricationScan.ts`冒頭コメントの既知の限界群と
+ * 同種の設計限界(正規表現+部分一致という設計そのものの限界)に該当する。この3run分の
+ * テストセット(D8は源泉テキストに立花家の2名のみが登場する固定書式)では実際に発生しない
+ * 理論的な攻撃パターンであり、形態素解析非採用の既存方針を優先しこれ以上の対応はしない。
+ */
+/**
+ * 配列側は2件以上のrest-tupleとして型で強制する(type-design-analyzer指摘、2026-09-23
+ * 追加: `readonly string[]`のままだと0件・1件の配列も型上は許容されてしまい、
+ * 「1件なら文字列で表現すべき」という不変条件が実行時検証(`validateFactEntry`)頼みに
+ * なっていた)。ただしmeta.json(JSON)由来のspecは`parseFixtureMeta`の型アサーションで
+ * 生成されるため、この型強制はTypeScriptで直接specリテラルを書くテストコードのみに効く。
+ * JSON側の不正な形(空配列等)は引き続き`validateFactEntry`の実行時検証が唯一の防波堤。
+ */
+export type FactEntry = string | readonly [string, string, ...string[]];
+
+function factAliases(entry: FactEntry): readonly string[] {
+  return typeof entry === 'string' ? [entry] : entry;
+}
+
+/** レポート・エラーメッセージ表示用のラベル(エイリアスは"/"区切りで連結)。 */
+function factLabel(entry: FactEntry): string {
+  return typeof entry === 'string' ? entry : entry.join('/');
+}
+
+/** 重複検知・集合演算用の安定キー(配列はNUL区切りで連結し、文字列と衝突しない形にする)。 */
+function factKey(entry: FactEntry): string {
+  return typeof entry === 'string' ? entry : entry.join('\u0000');
+}
+
+function factHit(entry: FactEntry, normalizedSummary: string): boolean {
+  return factAliases(entry).some((alias) => normalizedSummary.includes(normalizeForScore(alias)));
+}
+
 export interface SummaryScoreSpec {
-  facts: readonly string[];
-  mustCover: readonly string[];
-  optionalFacts: readonly string[];
+  facts: readonly FactEntry[];
+  mustCover: readonly FactEntry[];
+  optionalFacts: readonly FactEntry[];
   minCoveredFacts: number | null;
   mustNotContainAmount?: boolean;
-  crossEntityPairs?: readonly (readonly [string, string])[];
+  crossEntityPairs?: readonly (readonly [FactEntry, string])[];
   role?: FixtureRole;
+}
+
+/**
+ * 単一の`FactEntry`が満たすべき不変条件(空のエイリアス配列・空文字列・1件のみの配列は
+ * 不正)を検証する。`facts`/`mustCover`/`optionalFacts`と`crossEntityPairs`のperson側の
+ * 両方から共有される(type-design-analyzer指摘、2026-09-23追加: 以前はcrossEntityPairs側が
+ * 未検証だった)。
+ */
+function validateFactEntry(docId: string, entry: FactEntry, fieldLabel: string): string[] {
+  const errors: string[] = [];
+  const aliases = factAliases(entry);
+  if (aliases.length === 0) {
+    errors.push(`${docId}: ${fieldLabel}に空のエイリアス配列が含まれています`);
+  } else if (aliases.some((a) => a.length === 0)) {
+    errors.push(`${docId}: ${fieldLabel}に空文字列が含まれています`);
+  } else if (typeof entry !== 'string' && aliases.length === 1) {
+    errors.push(`${docId}: "${factLabel(entry)}"(${fieldLabel})はエイリアスが1件のみです(1件なら文字列で表現してください)`);
+  }
+  return errors;
 }
 
 /**
@@ -81,9 +153,12 @@ export interface SummaryScoreSpec {
  */
 export function validateCoverageSpec(docId: string, spec: SummaryScoreSpec): string[] {
   const errors: string[] = [];
-  const mustCoverSet = new Set(spec.mustCover);
-  const optionalSet = new Set(spec.optionalFacts);
-  const factsSet = new Set(spec.facts);
+  const mustCoverKeys = spec.mustCover.map(factKey);
+  const optionalKeys = spec.optionalFacts.map(factKey);
+  const factsKeys = spec.facts.map(factKey);
+  const mustCoverSet = new Set(mustCoverKeys);
+  const optionalSet = new Set(optionalKeys);
+  const factsSet = new Set(factsKeys);
 
   if (mustCoverSet.size !== spec.mustCover.length) {
     errors.push(`${docId}: mustCoverに重複があります`);
@@ -95,14 +170,35 @@ export function validateCoverageSpec(docId: string, spec: SummaryScoreSpec): str
     errors.push(`${docId}: factsに重複があります`);
   }
   for (const f of spec.mustCover) {
-    if (optionalSet.has(f)) errors.push(`${docId}: "${f}"がmustCoverとoptionalFactsの両方に含まれています`);
+    if (optionalSet.has(factKey(f))) {
+      errors.push(`${docId}: "${factLabel(f)}"がmustCoverとoptionalFactsの両方に含まれています`);
+    }
   }
-  const union = new Set([...spec.mustCover, ...spec.optionalFacts]);
-  if (union.size !== factsSet.size || [...union].some((f) => !factsSet.has(f))) {
+  const unionKeys = new Set([...mustCoverKeys, ...optionalKeys]);
+  if (unionKeys.size !== factsSet.size || [...unionKeys].some((k) => !factsSet.has(k))) {
     errors.push(`${docId}: facts が mustCover∪optionalFacts と一致しません`);
   }
-  if (spec.facts.some((f) => f.length === 0)) {
-    errors.push(`${docId}: factsに空文字列が含まれています`);
+  // codex review指摘(P2、2026-09-23追加): 以前は`facts`のみ検証していたが、`factKey`は
+  // 文字列単体と1件のみのエイリアス配列を同一キーへ潰す(`factKey("A") === factKey(["A"])`、
+  // `join`はセパレータを1件配列には挿入しないため)ため、`mustCover`/`optionalFacts`側に
+  // 不正な1件配列(`[["A"]]`)が混入していても、`facts`側の正常な`"A"`とキーが一致して
+  // 上記のunion一致チェックを素通りしてしまい、`facts`だけの検証では検知できなかった。
+  // 3リスト全てを個別に検証する。
+  for (const f of [...spec.facts, ...spec.mustCover, ...spec.optionalFacts]) {
+    errors.push(...validateFactEntry(docId, f, 'facts'));
+  }
+  // type-design-analyzer指摘、2026-09-23追加: crossEntityPairsのperson側(同じFactEntry型、
+  // D8で実際に使用)がfacts系と同じ不変条件検証から漏れていたため追加。ただしcodex review
+  // 2回目指摘(P2): pairの要素数チェック(下記)より先に destructuring すると、
+  // `cross_entity_pairs: [[]]`のような不正な行(要素0個)で`person`が`undefined`になり
+  // `validateFactEntry`が例外を投げて検証全体がクラッシュする。要素数が2件のpairのみを
+  // 対象にする(不正な行は下記の別チェックで報告される)。
+  if (spec.crossEntityPairs !== undefined) {
+    for (const pair of spec.crossEntityPairs) {
+      if (pair.length === 2) {
+        errors.push(...validateFactEntry(docId, pair[0], 'crossEntityPairs'));
+      }
+    }
   }
   const factsEmpty = spec.facts.length === 0;
   if (factsEmpty && spec.minCoveredFacts !== null) {
@@ -139,12 +235,12 @@ export function parseFixtureMeta(raw: unknown): Record<string, SummaryScoreSpec>
   const result: Record<string, SummaryScoreSpec> = {};
   for (const [docId, entry] of Object.entries(obj)) {
     result[docId] = {
-      facts: (entry.facts as string[]) ?? [],
-      mustCover: (entry.mustCover as string[]) ?? [],
-      optionalFacts: (entry.optionalFacts as string[]) ?? [],
+      facts: (entry.facts as FactEntry[]) ?? [],
+      mustCover: (entry.mustCover as FactEntry[]) ?? [],
+      optionalFacts: (entry.optionalFacts as FactEntry[]) ?? [],
       minCoveredFacts: (entry.minCoveredFacts as number | null) ?? null,
       mustNotContainAmount: entry.must_not_contain_amount as boolean | undefined,
-      crossEntityPairs: entry.cross_entity_pairs as [string, string][] | undefined,
+      crossEntityPairs: entry.cross_entity_pairs as [FactEntry, string][] | undefined,
       role: entry.role as FixtureRole | undefined,
     };
   }
@@ -161,7 +257,10 @@ export function parseFixtureMeta(raw: unknown): Record<string, SummaryScoreSpec>
  * 2. 元号除去(`令和8年`→``)により、D7の「令和8年9月」がD2の「令和8年8月」等、無関係な
  *    月と混同されうる(日付factが事実上無条件充足に近づく)。
  * 3. 短いfact(「2割」等)は他文脈での偶然一致がありうる。
- * 4. 氏名の部分表記(「誠一様」「立花様」)は非対応(完全な姓名表記のみヒット)。
+ * 4. 氏名の部分表記(「誠一様」「立花様」)は非対応(完全な姓名表記のみヒット)。個別のfactを
+ *    `FactEntry`(エイリアス配列)にすれば特定factに限り許容可能(D8「文子」参照、
+ *    ADR-0027 PR2bステップ8全10doc×3run正式gate run再実行、2026-09-22追加)だが、
+ *    全factへの汎用対応ではない(fixture編集者が個別に判断して明示的に配列化する設計)。
  * 5. 言い換えは`要介護度`→`要介護`の1件のみ対応、他の表現ゆれ(「介護度3」等)は非対応。
  * 6. D5〜D8の`mustCover`はPR0未実行のためfactsをそのまま暫定採用した値であり、PR2b初回
  *    実機実行の結果を踏まえ確定させる運用(`meta.json`の`_note`参照)。
@@ -182,11 +281,11 @@ export interface CoverageResult {
 
 export function evaluateCoverage(summaryText: string, spec: SummaryScoreSpec): CoverageResult {
   const normalizedSummary = normalizeForScore(summaryText);
-  const hit = (fact: string): boolean => normalizedSummary.includes(normalizeForScore(fact));
+  const hit = (fact: FactEntry): boolean => factHit(fact, normalizedSummary);
 
-  const coveredFacts = spec.facts.filter(hit);
-  const missingFacts = spec.facts.filter((f) => !hit(f));
-  const missingMustCover = spec.mustCover.filter((f) => !hit(f));
+  const coveredFacts = spec.facts.filter(hit).map(factLabel);
+  const missingFacts = spec.facts.filter((f) => !hit(f)).map(factLabel);
+  const missingMustCover = spec.mustCover.filter((f) => !hit(f)).map(factLabel);
   const totalCount = spec.facts.length;
   const applicable = totalCount > 0;
   const coverageRatio = applicable ? coveredFacts.length / totalCount : null;
@@ -549,7 +648,9 @@ function findOccurrences(text: string, vocab: readonly string[]): Occurrence[] {
  *    構造的に緑判定しうるため、3値判定へ変更した)。
  * 3. 多人数セグメント内で、読点が人物と事業所を実際には分断していないケース(「立花誠一様は、
  *    さくらい整形外科を受診」)は、読点で節分割した結果その節に人物がいなくなり検知漏れうる。
- * 4. 氏名の部分表記(「誠一様」)・同姓(「立花」のみ)への対応はできない。
+ * 4. 氏名の部分表記(「誠一様」)は、`crossEntityPairs`のperson側を`FactEntry`(エイリアス
+ *    配列)にすれば特定ペアに限り許容可能(D8「文子」参照、2026-09-23対応)。同姓のみ
+ *    (「立花」のみ)への対応はできない。
  * 5. 語彙は`cross_entity_pairs`で明示された組み合わせに限定される。共通事業所名との
  *    誤結合は対象外(`shared/summaryFabricationScan.ts`の捏造検知の領分)。
  * 6. 否定・比較文脈(「Aではなく B」)は考慮しない。
@@ -581,23 +682,39 @@ export function checkCrossEntity(
   // 適用してから比較する(修正前は「立花 誠一」(半角スペース入り)のまま検索しており、
   // 空白除去済みの「立花誠一様」に対して一致せず、全件unattributedになるバグがあった)。
   // 報告(findings/consistentPairs)にはdecision-maker可読性のため元表記を残す。
+  //
+  // person側は`FactEntry`(エイリアス配列)を許容する(D8「文子」対応、codex review指摘、
+  // ADR-0027 PR2bステップ8全10doc×3run正式gate run再実行、2026-09-22追加): coverage側
+  // (evaluateCoverage)だけエイリアスを認識しcross-entity側が旧来の姓名のみのままだと、
+  // 「文子様が誤った受診先を受診」のような取り違えが出力されてもperson側が一致せず
+  // unattributedOrgMentionsへ落ちてNOT_EVALUATED(警告のみ)になり、取り違えが検知されない
+  // まま`scoreSummary`全体がPASSしてしまう抜け穴が生じるため、両者を同じエイリアス集合で
+  // 一致させる。
   const normVocab = (s: string): string => normalizeForScore(s);
   const origByNorm = new Map<string, string>();
   for (const [person, org] of pairs) {
-    origByNorm.set(normVocab(person), person);
+    for (const alias of factAliases(person)) {
+      origByNorm.set(normVocab(alias), factLabel(person));
+    }
     origByNorm.set(normVocab(org), org);
   }
-  const personVocab = [...new Set(pairs.map((p) => normVocab(p[0])))];
+  const personVocab = [...new Set(pairs.flatMap((p) => factAliases(p[0]).map(normVocab)))];
   const orgVocab = [...new Set(pairs.map((p) => normVocab(p[1])))];
   const personToOrgs = new Map<string, Set<string>>();
+  // orgToPersonsは表示用(expectedPersons)のため、エイリアスの正規化キーではなく
+  // 人物の代表ラベル(factLabel)で集約する。正規化キーのまま集約すると、1人物の
+  // エイリアス数だけ重複したラベルがexpectedPersonsに並んでしまう(codex review指摘、
+  // ADR-0027 PR2bステップ8全10doc×3run正式gate run再実行、2026-09-22追加)。
   const orgToPersons = new Map<string, Set<string>>();
   for (const [personRaw, orgRaw] of pairs) {
-    const person = normVocab(personRaw);
     const org = normVocab(orgRaw);
-    if (!personToOrgs.has(person)) personToOrgs.set(person, new Set());
-    personToOrgs.get(person)!.add(org);
     if (!orgToPersons.has(org)) orgToPersons.set(org, new Set());
-    orgToPersons.get(org)!.add(person);
+    orgToPersons.get(org)!.add(factLabel(personRaw));
+    for (const alias of factAliases(personRaw)) {
+      const person = normVocab(alias);
+      if (!personToOrgs.has(person)) personToOrgs.set(person, new Set());
+      personToOrgs.get(person)!.add(org);
+    }
   }
 
   const findings: CrossEntityFinding[] = [];
@@ -625,13 +742,31 @@ export function checkCrossEntity(
         findings.push({
           person: personOrig,
           org: orgOrig,
-          expectedPersons: [...(orgToPersons.get(org) ?? [])].map((p) => origByNorm.get(p) ?? p),
+          expectedPersons: [...(orgToPersons.get(org) ?? [])],
           scope,
           segmentIndex,
           segmentText: segmentText.slice(0, 80),
         });
       }
     }
+  };
+
+  // codex review指摘(P2、3回目、strict-config): 同一セグメント/節内に同一人物の複数
+  // エイリアスが両方出現する場合(例:「立花文子（文子様）は青葉クリニックを受診」)、
+  // 正規化後のalias値そのままでdedupすると「2名」と誤って数えられ、多人数セグメント
+  // 扱い(ambiguousSegments)のNOT_EVALUATEDに落ちて取り違えを検知できなくなる。
+  // origByNormで得た代表ラベル(factLabel)を重複排除の判定キーとして使い、ラベルごとに
+  // 最初に出現した正規化済みalias値を1件だけ返す(返り値自体はラベルではなくalias値。
+  // `attribute()`が`personToOrgs`を引くために正規化済みalias値を必要とするため。
+  // comment-analyzer指摘、2026-09-23: 旧コメントは「ラベルへ正規化して返す」と読めたが
+  // 実際の返り値はalias値であり誤解を招くため文言を修正)。
+  const dedupePersonsByLabel = (hits: Occurrence[]): string[] => {
+    const byLabel = new Map<string, string>();
+    for (const hit of hits) {
+      const label = origByNorm.get(hit.value) ?? hit.value;
+      if (!byLabel.has(label)) byLabel.set(label, hit.value);
+    }
+    return [...byLabel.values()];
   };
 
   // codex review指摘(P2、2回目): 改行を正規化(空白除去)より先に分割の境界として使う。
@@ -655,7 +790,7 @@ export function checkCrossEntity(
       unattributedOrgMentions += orgHits.length;
       return;
     }
-    const distinctPersons = [...new Set(personHits.map((p) => p.value))];
+    const distinctPersons = dedupePersonsByLabel(personHits);
     if (distinctPersons.length === 1) {
       attribute(distinctPersons[0], orgHits, 'segment', i, segment);
       return;
@@ -666,7 +801,7 @@ export function checkCrossEntity(
     for (const clause of clauses) {
       const clauseOrgHits = findOccurrences(clause, orgVocab);
       if (clauseOrgHits.length === 0) continue;
-      const clausePersonHits = [...new Set(findOccurrences(clause, personVocab).map((p) => p.value))];
+      const clausePersonHits = dedupePersonsByLabel(findOccurrences(clause, personVocab));
       if (clausePersonHits.length !== 1) {
         ambiguousSegments++;
         continue;

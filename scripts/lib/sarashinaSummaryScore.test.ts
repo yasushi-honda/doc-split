@@ -17,6 +17,7 @@ import {
   SUMMARY_SCORE_CONFIG_VERSION,
   type SummaryScoreSpec,
   type FixtureRole,
+  type FactEntry,
 } from './sarashinaSummaryScore';
 
 const META_PATH = path.join(__dirname, '..', 'fixtures', 'sarashina-summary-golden', 'docs', 'meta.json');
@@ -136,6 +137,27 @@ test('evaluateCoverage: minCoveredFacts=nullはvacuous true', () => {
   assert.equal(r.minCoveredSatisfied, true);
 });
 
+test('evaluateCoverage: FactEntry(エイリアス配列)は姓名・名のいずれでもヒットする(D8「文子」対応、codex review指摘の回帰テスト)', () => {
+  // 「立花 文子」修正の初版ではmustCoverを名のみ「文子」に単純に緩和したが、それだと
+  // 識別情報(姓「立花」)自体がfacts定義から失われ、将来cross-entity取り違えが発生しても
+  // coverage-per-docが素通りしてしまう(codex review指摘)。エイリアス配列により
+  // 「立花 文子」(姓名)・「文子」(名のみ、意図的な姓省略)のいずれでもヒットしつつ、
+  // 識別情報自体はfacts定義に残す。
+  const spec: SummaryScoreSpec = {
+    facts: [['立花 文子', '文子']],
+    mustCover: [['立花 文子', '文子']],
+    optionalFacts: [],
+    minCoveredFacts: 1,
+  };
+  const fullName = evaluateCoverage('要介護1の妻立花文子様が対象。', spec);
+  assert.equal(fullName.mustCoverSatisfied, true);
+  const givenNameOnly = evaluateCoverage('要介護1の妻文子様が対象。', spec);
+  assert.equal(givenNameOnly.mustCoverSatisfied, true);
+  const neither = evaluateCoverage('該当者なし。', spec);
+  assert.equal(neither.mustCoverSatisfied, false);
+  assert.deepEqual(neither.missingMustCover, ['立花 文子/文子']);
+});
+
 // ---------------------------------------------------------------------------
 // validateCoverageSpec(D1〜D10全件、および故意に壊したspec)
 // ---------------------------------------------------------------------------
@@ -171,6 +193,92 @@ test('validateCoverageSpec: minCoveredFactsがmustCover件数未満なら検出�
   const spec: SummaryScoreSpec = { facts: ['A', 'B'], mustCover: ['A', 'B'], optionalFacts: [], minCoveredFacts: 1 };
   const errs = validateCoverageSpec('X', spec);
   assert.ok(errs.some((e) => e.includes('mustCover件数')));
+});
+
+test('validateCoverageSpec: FactEntry(エイリアス配列)を含むspecも不変条件に違反しない(D8相当)', () => {
+  const spec: SummaryScoreSpec = {
+    facts: ['A', ['立花 文子', '文子']],
+    mustCover: ['A', ['立花 文子', '文子']],
+    optionalFacts: [],
+    minCoveredFacts: 2,
+  };
+  const errs = validateCoverageSpec('X', spec);
+  assert.deepEqual(errs, []);
+});
+
+test('validateCoverageSpec: エイリアス配列が1件のみなら検出する(文字列で表現すべき、codex review指摘の回帰テスト)', () => {
+  // `FactEntry`の配列側は型レベルで2件以上を強制する(type-design-analyzer指摘)ため、
+  // TypeScriptで直接この不正な形を書くとコンパイルエラーになる。meta.json(JSON)側は
+  // 型チェックの対象外(`parseFixtureMeta`の型アサーション経由)のため、実行時検証
+  // (`validateFactEntry`)が唯一の防波堤であることを示すため、あえて型を迂回して構築する。
+  const spec: SummaryScoreSpec = {
+    facts: [['A'] as unknown as FactEntry],
+    mustCover: [['A'] as unknown as FactEntry],
+    optionalFacts: [],
+    minCoveredFacts: 1,
+  };
+  const errs = validateCoverageSpec('X', spec);
+  assert.ok(errs.some((e) => e.includes('エイリアスが1件のみ')));
+});
+
+test('validateCoverageSpec: エイリアス配列が完全に空なら検出する(pr-test-analyzer指摘: 未テストだった分岐)', () => {
+  const spec: SummaryScoreSpec = {
+    facts: [[] as unknown as FactEntry],
+    mustCover: [[] as unknown as FactEntry],
+    optionalFacts: [],
+    minCoveredFacts: 1,
+  };
+  const errs = validateCoverageSpec('X', spec);
+  assert.ok(errs.some((e) => e.includes('空のエイリアス配列')));
+});
+
+test('validateCoverageSpec: エイリアス配列内に空文字列があれば検出する', () => {
+  const spec: SummaryScoreSpec = { facts: [['A', '']], mustCover: [['A', '']], optionalFacts: [], minCoveredFacts: 1 };
+  const errs = validateCoverageSpec('X', spec);
+  assert.ok(errs.some((e) => e.includes('factsに空文字列が含まれています')));
+});
+
+test('validateCoverageSpec: crossEntityPairsのperson側FactEntryにも同じ不変条件を適用する(type-design-analyzer指摘: 以前はcrossEntityPairs側が未検証だった)', () => {
+  const spec: SummaryScoreSpec = {
+    facts: [],
+    mustCover: [],
+    optionalFacts: [],
+    minCoveredFacts: null,
+    crossEntityPairs: [[['A'] as unknown as FactEntry, 'org']],
+  };
+  const errs = validateCoverageSpec('X', spec);
+  assert.ok(errs.some((e) => e.includes('エイリアスが1件のみ') && e.includes('crossEntityPairs')));
+});
+
+test('validateCoverageSpec: mustCover/optionalFactsの不正な1件配列は、factsと同じfactKeyに潰れてunion一致チェックを素通りしても個別に検出する(codex review指摘、PR#1021最終、P2の回帰テスト)', () => {
+  // factKey("A")とfactKey(["A"])は共に"A"になる(joinは1件配列にセパレータを挿入しない)
+  // ため、mustCoverの不正な1件配列がfactsの正常な文字列とキー上一致してしまい、
+  // 「facts が mustCover∪optionalFacts と一致しません」チェックだけでは検知できない。
+  // facts側だけでなくmustCover/optionalFacts側も個別に検証することで解消したことを固定する。
+  const spec: SummaryScoreSpec = {
+    facts: ['A'],
+    mustCover: [['A'] as unknown as FactEntry],
+    optionalFacts: [],
+    minCoveredFacts: 1,
+  };
+  const errs = validateCoverageSpec('X', spec);
+  assert.ok(errs.some((e) => e.includes('エイリアスが1件のみ')));
+});
+
+test('validateCoverageSpec: crossEntityPairsの不正な行(要素数が2でない)はvalidateFactEntryの実行前にスキップし、クラッシュせず別のエラーを報告する(codex review指摘、PR#1021最終、P2の回帰テスト)', () => {
+  // 修正前は`for (const [person] of pairs)`で先にdestructuringしていたため、
+  // `[[]]`(要素0個の行)ではpersonがundefinedになりvalidateFactEntry内の
+  // `aliases.length`参照で例外を投げ、検証関数全体がクラッシュしていた。
+  const spec: SummaryScoreSpec = {
+    facts: [],
+    mustCover: [],
+    optionalFacts: [],
+    minCoveredFacts: null,
+    crossEntityPairs: [[] as unknown as readonly [FactEntry, string]],
+  };
+  assert.doesNotThrow(() => validateCoverageSpec('X', spec));
+  const errs = validateCoverageSpec('X', spec);
+  assert.ok(errs.some((e) => e.includes('2要素タプルである必要があります')));
 });
 
 test('validateCoverageSpec: roleが不正な値なら検出する', () => {
@@ -343,7 +451,39 @@ test('checkCrossEntity: セグメント内で人物1名+誤った事業所はFAI
   assert.equal(r.findings.length, 1);
   assert.equal(r.findings[0].person, '立花 誠一');
   assert.equal(r.findings[0].org, 'さくらい整形外科');
-  assert.deepEqual(r.findings[0].expectedPersons, ['立花 文子']);
+  // D8の文子はFactEntry(エイリアス配列["立花 文子","文子"])のため表示ラベルは"立花 文子/文子"になる
+  // (codex review指摘、ADR-0027 PR2bステップ8全10doc×3run正式gate run再実行、2026-09-22追加)。
+  assert.deepEqual(r.findings[0].expectedPersons, ['立花 文子/文子']);
+});
+
+test('checkCrossEntity: FactEntry(エイリアス配列)のperson側は名のみの表記でも取り違えを検出する(D8「文子」対応、codex review指摘、2回目の回帰テスト)', () => {
+  // coverage側だけエイリアスを認識しcross-entity側が姓名のみのままだと、「文子様が誤った
+  // 受診先を受診」のような取り違えが出力されてもperson側が一致せずunattributedOrgMentions
+  // へ落ちてNOT_EVALUATED(警告のみ)になり、scoreSummary全体がPASSしてしまう抜け穴があった。
+  const meta = loadMeta();
+  const wrong = checkCrossEntity('文子様は青葉クリニックを受診', meta['D8']);
+  assert.equal(wrong.verdict, 'FAIL');
+  assert.equal(wrong.findings.length, 1);
+  assert.equal(wrong.findings[0].person, '立花 文子/文子');
+  assert.equal(wrong.findings[0].org, '青葉クリニック');
+
+  const correct = checkCrossEntity('文子様はさくらい整形外科を受診', meta['D8']);
+  assert.equal(correct.verdict, 'PASS');
+  assert.deepEqual(correct.consistentPairs, [{ person: '立花 文子/文子', org: 'さくらい整形外科' }]);
+});
+
+test('checkCrossEntity: 同一セグメント内に同一人物の複数エイリアスが両方出現しても2名と誤カウントしない(codex review指摘、3回目、strict-configの回帰テスト)', () => {
+  // 「立花文子(文子様)は青葉クリニックを受診」のように姓名形+名のみ形が同一セグメント内に
+  // 両方出現する場合、正規化後のalias値そのままでdedupすると「2名」と誤って数えられ、
+  // 多人数セグメント扱い(ambiguousSegments)のNOT_EVALUATEDに落ちて取り違えを検知できなく
+  // なるバグがあった。origByNormの代表ラベルでdedupすることで解消する。
+  const meta = loadMeta();
+  const r = checkCrossEntity('立花文子(文子様)は青葉クリニックを受診。', meta['D8']);
+  assert.equal(r.verdict, 'FAIL');
+  assert.equal(r.ambiguousSegments, 0);
+  assert.equal(r.findings.length, 1);
+  assert.equal(r.findings[0].person, '立花 文子/文子');
+  assert.equal(r.findings[0].org, '青葉クリニック');
 });
 
 test('checkCrossEntity: 改行区切り(箇条書き記号なし)の複数文でも取り違えを検出する(codex review指摘、2回目)', () => {

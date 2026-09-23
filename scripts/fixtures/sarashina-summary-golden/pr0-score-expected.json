@@ -1,7 +1,7 @@
 {
   "generatedFrom": "scripts/fixtures/sarashina-summary-golden/pr0-verification/results/*.json",
-  "generatedAt": "2026-09-22",
-  "note": "ADR-0027 PR2b: scripts/lib/sarashinaSummaryScore.ts(scoreSummary)をPR0結果JSON(28run)へ実際に実行した結果そのものを期待値として固定する(PR2aの教訓: プロトタイプでの実測は設計検証であり実装の証明ではない)。D5〜D8のmustCoverは暫定値(meta.json _note参照)であり、正式gate run実行後に確定させる運用(6b節参照、baseline収集runの位置づけ)。D2/D3のmustCoverはADR-0027 PR2bステップ8本番ゲート実機run(2026-09-22)の実測を受けて改訂済み(meta.json _note参照、二次的組織名をoptionalFactsへ分離)。",
+  "generatedAt": "2026-09-23",
+  "note": "ADR-0027 PR2b: scripts/lib/sarashinaSummaryScore.ts(scoreSummary)をPR0結果JSON(28run)へ実際に実行した結果そのものを期待値として固定する(PR2aの教訓: プロトタイプでの実測は設計検証であり実装の証明ではない)。D5〜D8のmustCoverは暫定値(meta.json _note参照)であり、正式gate run実行後に確定させる運用(6b節参照、baseline収集runの位置づけ)。D2/D3/D8のmustCoverはADR-0027 PR2bステップ8本番ゲート実機run(2026-09-22)の実測を受けて改訂済み(meta.json _note参照)。D8は`FactEntry`エイリアス配列(scoreSummary.ts参照)をfacts/mustCover/cross_entity_pairsのperson側に導入し、missingFacts/missingMustCoverの表示ラベルが該当factで\"立花 文子/文子\"形式になる。",
   "summaryScoreConfigVersion": "a5025e3f",
   "runsScanned": 28,
   "summary": {
