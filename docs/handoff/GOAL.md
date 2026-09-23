@@ -32,14 +32,16 @@ kanameoneから10件のフィードバックが届き、①は不具合報告・
 - #1031 PDFアップロードのバックグラウンド化
 - #1032 担当CM別画面の件数不正確(全件読込前、bugラベル)
 - #1033 契約終了利用者の非表示設定
-- #1034 確認後も「選択待ち」バッジが残る(bugラベル、`customerConfirmed`/`officeConfirmed`と「確認済み」トグルの不整合を仮説として記載)
-- #1035 利用者フォルダ内の日付表記・ソート順(#1034と同型バグ含む)
+- ~~#1034 確認後も「選択待ち」バッジが残る~~ **【完了・2026-09-24、PR #1041マージ】** 「確認済み」操作が`customerConfirmed`/`officeConfirmed`も同時確定するよう統合。同姓同名等の危険ケースは既存の安全装置(ADR-0022)で引き続き除外。既存本番データへのbackfillスクリプト(`scripts/backfill-confirm-on-verify.ts`)を新規作成したが**本番実行は別途番号単位の明示認可待ち**(dev `--dry-run`→kanameone/cocoro canary→全量、docs/handoff/GOAL.md本節末尾「次の一手」参照)。codex review 9回(通常8回+マージ前strict-config)+`pr-review-toolkit`5エージェント並列セカンドオピニオンで検出した指摘のうち重要4件は本PRで反映、残り3件はフォローアップIssue化(#1042/#1043/#1044、詳細はPR #1041のコメント参照)
+- ~~#1035 利用者フォルダ内の日付表記・ソート順~~ **【完了・2026-09-24、PR #1041に同梱】** 担当CM別グループ表示の日付を書類日付→登録日(`processedAt`)に変更
 - #1036 マスターCSV一括編集機能
 - #1037 PDF削除権限の一般ユーザー開放(**権限変更のため実装前にdecision-maker確認必須**と明記、Firestoreルール・フロントエンド両方の変更が必要)
 
 **既存Issue #960(別件、同セッション内で先行対応)**: `handleProcessingError`のFirestore transient gRPCコード判定漏れをPR #1026で修正・マージ済み(codex review findings 0件、CI全PASS)。
 
-**次の一手**: Issue #1028は本セッションで対応方針確定→実装→PR #1038マージまで完了（詳細は上記新規エントリ「Issue #1028: Drive OAuthスコープ拡張」参照）。残るIssue #1029〜#1037(着手順・優先度)の判断のみが未決。AI側からの提案・着手は行わない(起点アイデアはdecision-maker領分)。
+**次の一手**: Issue #1028は本セッションで対応方針確定→実装→PR #1038マージまで完了（詳細は上記新規エントリ「Issue #1028: Drive OAuthスコープ拡張」参照）。Issue #1034/#1035はPR #1041で完了(2026-09-24)。残るIssue #1029〜#1033/#1036/#1037(着手順・優先度)の判断のみが未決。AI側からの提案・着手は行わない(起点アイデアはdecision-maker領分)。
+
+**Issue #1034/#1035のbackfillスクリプト本番実行(条件待ち、trigger=decision-makerの番号単位の明示認可)**: `scripts/backfill-confirm-on-verify.ts`は実装・テスト・codexレビュー済みだが未実行。実行前に#1043(ManifestEntry型強化+rollback読込のランタイム検証)の解消を推奨(rollback経路の安全性に直結するため)。実行手順: dev環境`--dry-run`→対象件数・理由別内訳確認→`--limit`少数canary→`--rollback --dry-run`でロールバック動作確認→kanameone/cocoroそれぞれ同じ段階を番号単位の明示認可のもとで実施。kanameoneはGOAL.md「Google Drive連携Phase1」の本番展開時期と調整が必要(既にverified:trueの書類にcustomerConfirmedが付くことで、driveExportStatus:'error'で止まっていた書類が定期リトライで拾われる可能性があるため)。
 
 ## 【ADR-0027 PR2bハーネス収束完了・2026-09-23】要約生成(regenerateSummary)のGemini依存脱却: Sarashina2.2-3B(Q8_0量子化)実装移行、PR0→PR1(a/b/c)→PR2a→PR2b→ステップ8(本番ゲート実行、計4回の全10doc×3run実機run)、完了。累計16件の実機問題を発見・修正しdeterminismを含む全FAILゲートが収束(decision-maker判断でここで区切り)
 
