@@ -311,6 +311,13 @@ export function GroupDocumentList({
    * 失敗するたびに即座にfetchNextPageを呼び直す無限リトライループになる(Firestore読み取りが
    * 際限なく発生し、Issue #891で塞いだはずの過大読み取りを再発させる)。失敗後の再試行は
    * 下部のエラー表示からユーザーの明示操作に委ねる。
+   *
+   * isError/isRefetchingでも停止する(codex review P2指摘、2026-09-24): 失敗後にユーザーが
+   * 既存の汎用再試行ボタン(refetch())を押すと、refetchが forward-fetch のメタ情報を
+   * クリアするため一瞬 isFetchNextPageError:false・isRefetching:true という状態を経由する。
+   * この窓でこのeffectがfetchNextPage()を呼ぶと、TanStack Queryの既定動作(cancelRefetch)で
+   * ユーザーが起動したrefetchそのものがキャンセルされてしまう。isError/isRefetchingの間は
+   * 自動読み込みを完全に止め、手動再試行が完了してから(=isError解消後)再開する。
    */
   useEffect(() => {
     if (
@@ -318,6 +325,8 @@ export function GroupDocumentList({
       hasNextPage &&
       !isFetchingNextPage &&
       !isFetchNextPageError &&
+      !isError &&
+      !isRefetching &&
       !isRefreshingGroup
     ) {
       fetchNextPage();
@@ -327,6 +336,8 @@ export function GroupDocumentList({
     hasNextPage,
     isFetchingNextPage,
     isFetchNextPageError,
+    isError,
+    isRefetching,
     isRefreshingGroup,
     fetchNextPage,
   ]);

@@ -177,4 +177,29 @@ describe('GroupDocumentList - 担当CM別の件数表示(Issue #1032)', () => {
     fireEvent.click(screen.getByRole('button', { name: /再試行/ }))
     expect(refetch).toHaveBeenCalledTimes(1)
   })
+
+  it('手動再試行(refetch)の実行中(isRefetching:true)はfetchNextPageを呼ばない(codex review P2回帰テスト、手動再試行キャンセル防止)', () => {
+    // refetch()はforward-fetchのメタ情報をクリアするため、失敗直後の再試行操作は
+    // isFetchNextPageError:false・isRefetching:trueという状態を一瞬経由しうる。ここで
+    // effectがfetchNextPageを呼ぶと、TanStack Queryの既定動作(cancelRefetch)でユーザーが
+    // 起動したrefetchそのものがキャンセルされてしまう。
+    const fetchNextPage = vi.fn()
+    mockUseGroupDocuments.mockReturnValue({
+      data: { pages: [{ documents: [makeDocument()], lastDoc: null, hasMore: true }] },
+      fetchNextPage,
+      hasNextPage: true,
+      isFetchingNextPage: false,
+      isFetchNextPageError: false,
+      isLoading: false,
+      isError: true,
+      isRefetching: true,
+      refetch: vi.fn(),
+    })
+
+    renderWithClient(
+      <GroupDocumentList groupType="careManager" groupKey="cm-1" />
+    )
+
+    expect(fetchNextPage).not.toHaveBeenCalled()
+  })
 })
