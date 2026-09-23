@@ -246,7 +246,7 @@ ADR-0028(drive.file→driveフルスコープ拡張)の再連携後、appが新�
 2. **承認**: Plan JSON内の`groups[]`を確認し、`action: "merge"`のgroupのうち統合してよいものの`groupId`を控える。`action: "manual-review"`のgroupは自動処理対象外(`reason`に理由が記載される)なので、統合したい場合は個別に手動対応する
 3. **統合実行(dry-run)**: `execute-drive-sibling-merge --dry-run`を、`exec_args_json`に`{"planRunId":"<手順1のrun id>","approvedGroupIds":["<groupId>",...]}`を指定して実行する。移動予定のファイル件数がログに出るので確認する
 4. **統合実行(本番)**: 問題なければ`execute-drive-sibling-merge --execute`を同じexec_args_jsonで実行する。**番号単位の明示認可**(CLAUDE.md destructive操作)のもとで行う
-5. **確認**: 統合後、`investigate-drive-folder-duplicate-by-name --name-contains <名前>`で対象フォルダが1件のみになったことを確認する。manifestの`skipped`にclaim状態起因のskipが記録されている場合は、下記「claimが既にdivergent化している場合の人手解除」の手順に従う(`drive_folder_divergent`アラートはこの場合、想定通り発火する)
+5. **確認**: 統合後、`investigate-drive-folder-duplicate-by-name --name-contains <名前>`で対象フォルダが1件のみになったことを確認する。manifestの`skipped`にclaim状態起因のskipが記録されている場合は、下記「claimが既にdivergent化している場合の人手解除」の手順に従う。**注意**: `drive_folder_divergent`アラートは本統合実行の結果として新たに発火するものではなく、対象claimが統合実行より前の通常export処理で既にdivergent化した時点で発火済みのはずである(未発火であれば別途調査すること)
 
 ### 冪等性・再実行
 

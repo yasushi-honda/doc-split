@@ -146,6 +146,13 @@ async function main(): Promise<void> {
     process.exit(2);
   }
 
+  // codex review指摘対応(PR#1038): execute-drive-folder-merge.tsと同型のprojectIdゲート。
+  // 別環境向けのPlanを誤ったFIREBASE_PROJECT_IDで実行してしまう事故を防ぐ。
+  if (plan.projectId !== projectId) {
+    console.error(`FATAL: plan.projectId(${plan.projectId}) !== runtime FIREBASE_PROJECT_ID(${projectId})`);
+    process.exit(2);
+  }
+
   const runtimeVersion = readDriveApiVersionSnapshot();
   const versionCheck = verifyDriveApiVersionMatch(
     { lockfileHash: plan.lockfileHash, googleapisLockfileVersion: plan.googleapisLockfileVersion },
@@ -195,10 +202,20 @@ async function main(): Promise<void> {
     skipped: [],
   };
 
+  // silent-failure-hunter/code-reviewer指摘対応(PR#1038、execute-drive-folder-merge.tsと
+  // 同型): 従来はループ全体の完走後に1回だけmanifestを書き出しており、途中でプロセスが
+  // 落ちると(SIGKILL等)、それまでに完了したファイル移動・trashの記録が失われうる。
+  // group単位の処理完了ごとに都度永続化する。
+  function persistManifest(): void {
+    if (!shouldExecute) return;
+    fs.writeFileSync(manifestOutFile, JSON.stringify(manifest, null, 2));
+  }
+
   for (const group of approvedGroups) {
     if (group.action !== 'merge' || !group.canonicalFolderId || !group.duplicateFolderId) {
       console.log(`[skip] ${group.groupId}: action='${group.action}'のgroupは承認されていても実行しない`);
       manifest.skipped.push({ groupId: group.groupId, reason: `action='${group.action}'は実行対象外` });
+      persistManifest();
       continue;
     }
 
@@ -206,6 +223,7 @@ async function main(): Promise<void> {
     const planDuplicate = group.folders.find((f) => f.id === group.duplicateFolderId);
     if (!planCanonical || !planDuplicate) {
       manifest.skipped.push({ groupId: group.groupId, reason: 'plan内にcanonical/duplicateのsnapshotが見つからない' });
+      persistManifest();
       continue;
     }
 
@@ -213,12 +231,14 @@ async function main(): Promise<void> {
     if (isGroupAlreadyMerged(liveDuplicate)) {
       console.log(`[skip] ${group.groupId}: 既に統合済み(duplicateフォルダが404またはtrashed)`);
       manifest.skipped.push({ groupId: group.groupId, reason: '既に統合済み' });
+      persistManifest();
       continue;
     }
 
     const liveCanonical = await fetchLiveSnapshot(drive, group.canonicalFolderId, FOLDER_MIME_TYPE, DOCSPLIT_FOLDER_CLAIM_KEY);
     if (!liveCanonical) {
       manifest.skipped.push({ groupId: group.groupId, reason: 'canonicalフォルダが404(手動削除された可能性)' });
+      persistManifest();
       continue;
     }
 
@@ -229,6 +249,7 @@ async function main(): Promise<void> {
     if (!fingerprintCheck.ok) {
       console.log(`[skip] ${group.groupId}: ${fingerprintCheck.reason}`);
       manifest.skipped.push({ groupId: group.groupId, reason: fingerprintCheck.reason });
+      persistManifest();
       continue;
     }
 
@@ -292,42 +313,55 @@ async function main(): Promise<void> {
         `  ⚠️  ${failedFileMoves.length}件のファイル移動が失敗したため、claim無効化・trashは実行しません(次回再実行で再試行可能)`
       );
       manifest.entries.push(entry);
+      persistManifest();
       continue;
     }
 
-    // fable-reviewセカンドオピニオン指摘(High#1、2パス目): kanameoneは
-    // driveFolderClaimReadが既に有効なため、対象claimが既にdivergent化している
-    // 場合がありうる。invalidateResolvedClaimByFolderId()はstate=='resolved'のみを
-    // 対象とするため、divergent/creating状態のまま無条件にtrashすると、trashed
-    // フォルダを指す解消不能なclaimが残ってしまう(次回exportが永久に停止する)。
-    // trash前に現在のclaim状態を確認し、'resolved'かつfolderIdがduplicate自身を
-    // 指す場合のみ無効化→trashへ進む。それ以外(divergent/creating/不整合)は
-    // trashをskipし、先にexecute-drive-claim-resync(release-claim)での解消を促す
-    // (SOP側にこの手順を正式化する、decision-maker承認済み)。
+    // fable-reviewセカンドオピニオン指摘(High#1、2パス目) + comment-analyzer/codex review
+    // 指摘対応(PR#1038): kanameoneはdriveFolderClaimReadが既に有効なため、対象claimが
+    // 既にdivergent化している場合がありうる。安全にtrashへ進めてよいのは次のいずれか:
+    //   (a) claimが存在しない
+    //   (b) state==='resolved' かつ folderIdがduplicate自身を指す(この後で無効化してtrash)
+    //   (c) state==='invalidated'(execute-drive-claim-resync --mode release-claim等で
+    //       既に無効化済み。この場所を指す生きたclaimはもう無いためtrash可能。旧実装は
+    //       'resolved'以外を一律skipしていたため、release-claim直後の再実行でも
+    //       無限にtrashできない不具合があった=SOP記載の「再実行すればtrashまで完了する」
+    //       という前提と実装が食い違っていた、comment-analyzer指摘で発覚)
+    // divergent/creatingはtrashをskipし、先にexecute-drive-claim-resync(release-claim)での
+    // 解消を促す。
     const existingClaim = await readClaim(firestore, group.parentId, group.name);
-    if (existingClaim && !(existingClaim.state === 'resolved' && existingClaim.folderId === group.duplicateFolderId)) {
+    const claimWasResolvedForDuplicate =
+      !!existingClaim && existingClaim.state === 'resolved' && existingClaim.folderId === group.duplicateFolderId;
+    const claimBlocksTrash =
+      !!existingClaim && existingClaim.state !== 'invalidated' && !claimWasResolvedForDuplicate;
+    if (claimBlocksTrash) {
       console.error(
-        `  ⚠️  claim状態が'${existingClaim.state}'のためtrashをskipします(ファイル移動は完了済み)。` +
+        `  ⚠️  claim状態が'${existingClaim!.state}'のためtrashをskipします(ファイル移動は完了済み)。` +
           `先に classify-drive-claim-divergence → execute-drive-claim-resync(release-claim) で解消してから再実行してください`
       );
       manifest.skipped.push({
         groupId: group.groupId,
-        reason: `claim状態が'${existingClaim.state}'のため未解消(release-claim後に再実行が必要)`,
+        reason: `claim状態が'${existingClaim!.state}'のため未解消(release-claim後に再実行が必要)`,
       });
       manifest.entries.push(entry);
+      persistManifest();
       continue;
     }
 
-    // fable-reviewセカンドオピニオン指摘(High#2、1パス目): ファイル列挙〜trashの間に
-    // 並行exportがduplicateフォルダへ新規ファイルを作成する競合窓がある(resolved claimは
-    // 5分間files.getのみで信頼されるため、並行exportがfiles.list照合無しでduplicateへ
-    // 書き込みうる)。trash直前に再列挙し、0件でなければtrashせずskipする(新規ファイルの
-    // サイレントなゴミ箱行きを防ぐ)。
-    const remainingFiles: string[] = [];
+    // fable-reviewセカンドオピニオン指摘(High#2、1パス目) + codex review指摘対応
+    // (PR#1038、P1): ファイル列挙〜trashの間に並行exportがduplicateフォルダへ新規の
+    // ファイル/フォルダを作成する競合窓がある(resolved claimは5分間files.getのみで
+    // 信頼されるため、並行exportがfiles.list照合無しでduplicateへ書き込みうる)。
+    // trash直前に再列挙し、1件でも残っていればtrashせずskipする。旧実装はmimeTypeで
+    // 非フォルダのみを再確認していたため、並行exportが作成した「サブフォルダ」を
+    // 見逃し、そのままduplicateごとtrashしてしまう欠陥があった(codex指摘、classifier側の
+    // 前提「duplicate.childFolderCount===0」を維持するにはフォルダも含めて0件を要求する
+    // 必要がある)。
+    const remainingChildren: string[] = [];
     let recheckPageToken: string | undefined;
     do {
       const recheckRes = await drive.files.list({
-        q: `'${group.duplicateFolderId}' in parents and trashed=false and mimeType!='${FOLDER_MIME_TYPE}'`,
+        q: `'${group.duplicateFolderId}' in parents and trashed=false`,
         fields: 'nextPageToken, files(id)',
         pageSize: 100,
         pageToken: recheckPageToken,
@@ -335,25 +369,45 @@ async function main(): Promise<void> {
         includeItemsFromAllDrives: true,
       });
       for (const f of recheckRes.data.files ?? []) {
-        if (f.id) remainingFiles.push(f.id);
+        if (f.id) remainingChildren.push(f.id);
       }
       recheckPageToken = recheckRes.data.nextPageToken ?? undefined;
     } while (recheckPageToken);
-    if (remainingFiles.length > 0) {
+    if (remainingChildren.length > 0) {
       console.error(
-        `  ⚠️  trash直前の再確認でduplicateフォルダに${remainingFiles.length}件の新規ファイルを検出したためtrashをskipします(並行exportとの競合の可能性、次回再実行で再試行可能)`
+        `  ⚠️  trash直前の再確認でduplicateフォルダに${remainingChildren.length}件の新規ファイル/フォルダを検出したためtrashをskipします(並行exportとの競合の可能性、次回再実行で再試行可能)`
       );
       manifest.skipped.push({
         groupId: group.groupId,
-        reason: `trash直前の再確認でduplicateフォルダが空でなかった(${remainingFiles.length}件、並行export競合の疑い)`,
+        reason: `trash直前の再確認でduplicateフォルダが空でなかった(${remainingChildren.length}件、並行export競合の疑い)`,
       });
       manifest.entries.push(entry);
+      persistManifest();
       continue;
     }
 
     // claim無効化(件数照合)→ trashの順序を厳守する(codex High#5対応)
     const claimInvalidatedCount = await invalidateResolvedClaimByFolderId(firestore, group.duplicateFolderId);
     entry.claimInvalidatedCount = claimInvalidatedCount;
+
+    // codex review指摘対応(PR#1038、P1): 上のreadClaim確認からここまでの間に並行export
+    // がclaimを'resolved'から別状態へ遷移させていた場合(TOCTOU)、
+    // invalidateResolvedClaimByFolderId内部のトランザクションは状態不一致でwriteをスキップし
+    // invalidatedCount=0を返す。claimWasResolvedForDuplicate(=1件無効化されるはずだった)なのに
+    // 実際の無効化件数が0件なら、対象claimがまだduplicateを指す形で生きている可能性が
+    // あるためtrashを進めてはならない。
+    if (claimWasResolvedForDuplicate && claimInvalidatedCount === 0) {
+      console.error(
+        `  ⚠️  claim無効化件数が0件(並行してclaim状態が変化した疑い)のためtrashをskipします(次回再実行で再試行可能)`
+      );
+      manifest.skipped.push({
+        groupId: group.groupId,
+        reason: 'claim無効化直前の再照合で不一致(並行更新の疑い)',
+      });
+      manifest.entries.push(entry);
+      persistManifest();
+      continue;
+    }
 
     // fable-reviewセカンドオピニオン指摘(High#4): drive.file→driveフルスコープ化に伴い、
     // 既存の`materializeExistingFolderFile()`(2段階検索のtrashed fallback)は、タグの
@@ -374,10 +428,11 @@ async function main(): Promise<void> {
       `  ✅ 完了: ${movedFileIds.length}件移動、claim ${claimInvalidatedCount}件無効化、duplicateをtrash`
     );
     manifest.entries.push(entry);
+    persistManifest();
   }
 
   if (shouldExecute) {
-    fs.writeFileSync(manifestOutFile, JSON.stringify(manifest, null, 2));
+    persistManifest();
     console.log('---');
     console.log(`Manifestを書き出しました: ${manifestOutFile}`);
   }
