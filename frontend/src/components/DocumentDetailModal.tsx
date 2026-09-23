@@ -419,13 +419,18 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
     prevStatusRef.current = currentStatus
   }, [document?.status, documentId, queryClient])
 
+  // 同姓同名判定(2026-07-26追加)。useCustomers()のキャッシュ共有により追加フェッチなし。
+  // useDocumentVerificationより前に呼ぶ: Issue #1034で「確認済み」操作がcustomerConfirmed/
+  // officeConfirmedも同時に確定するようになったため、同じ判定結果を共有する。
+  const identityLookup = useCustomerIdentityLookup()
+
   // 確認ステータス管理（楽観的更新で即時反映）
   const {
     isUpdating: isVerifying,
     error: verifyError,
     markAsVerified,
     markAsUnverified,
-  } = useDocumentVerification(document)
+  } = useDocumentVerification(document, identityLookup)
 
   // マスターデータ取得（編集時のドロップダウン用）
   // useDocumentEditより前に呼ぶ: customersを渡して同姓同名の曖昧性判定に使う(ADR-0022
@@ -593,8 +598,6 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
     ? document.officeConfirmed === false && document.officeCandidates && document.officeCandidates.length > 0
     : false
 
-  // 同姓同名判定(2026-07-26追加)。useCustomers()のキャッシュ共有により追加フェッチなし
-  const identityLookup = useCustomerIdentityLookup()
   const unconfirmedReason = document
     ? resolveCustomerUnconfirmedReason(document, {
         customerMasterName: document.customerId

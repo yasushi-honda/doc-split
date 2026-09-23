@@ -93,6 +93,13 @@ export function useCustomers() {
  * コンテナ層のみで呼び出し、行コンポーネントへはpropで結果を渡すこと(単体テスト容易性のため)。
  */
 export interface CustomerIdentityLookup {
+  /**
+   * 顧客マスターの読み込みが完了しているか(`useCustomers()`のクエリが解決済みか)。
+   * falseの間は`sameNameCollisionNames`/`customerMasterNameById`が空集合になり、
+   * 「同姓同名なし」と「まだ読み込んでいない」を区別できない。書き込みを伴う判定
+   * (confirmOnVerify等)はisReady:trueになるまで評価を見送ること(Issue #1034)。
+   */
+  isReady: boolean
   /** 完全一致で2件以上あるマスター名の集合(shared/customerIdentity.tsのfindSameNameCollisionNames)。 */
   sameNameCollisionNames: ReadonlySet<string>
   /**
@@ -107,6 +114,11 @@ export interface CustomerIdentityLookup {
 export function useCustomerIdentityLookup(): CustomerIdentityLookup {
   const { data: customers } = useCustomers()
   return useMemo(() => ({
+    // customers === undefined はクエリ未解決(読み込み中)を表す。読み込み中は
+    // sameNameCollisionNames/customerMasterNameByIdが空集合になり「同姓同名なし」と
+    // 区別がつかないため、isReadyで呼出元(confirmOnVerify等、書き込みを伴う判定)に
+    // 明示的に伝える(Issue #1034、codexレビュー指摘: 読込中の誤判定防止)。
+    isReady: customers !== undefined,
     sameNameCollisionNames: findSameNameCollisionNames(customers ?? []),
     customerMasterNameById: new Map(
       (customers ?? []).map((c) => [c.id, typeof c.name === 'string' ? c.name : null])

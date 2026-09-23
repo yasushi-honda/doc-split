@@ -15,6 +15,8 @@ import type { Document } from '../../../../shared/types'
 
 const mockUpdateDoc = vi.fn().mockResolvedValue(undefined)
 const mockDoc = vi.fn().mockReturnValue({ id: 'doc-ref' })
+const mockAddDoc = vi.fn().mockResolvedValue(undefined)
+const mockCollection = vi.fn().mockReturnValue({ id: 'editLogs-ref' })
 
 vi.mock('firebase/firestore', async () => {
   const actual = await vi.importActual('firebase/firestore')
@@ -22,6 +24,8 @@ vi.mock('firebase/firestore', async () => {
     ...actual,
     doc: (...args: unknown[]) => mockDoc(...args),
     updateDoc: (...args: unknown[]) => mockUpdateDoc(...args),
+    addDoc: (...args: unknown[]) => mockAddDoc(...args),
+    collection: (...args: unknown[]) => mockCollection(...args),
     serverTimestamp: () => 'SERVER_TIMESTAMP',
   }
 })
@@ -59,6 +63,16 @@ vi.mock('../useDocuments', () => ({
 }))
 
 import { useDocumentVerification } from '../useDocumentVerification'
+import type { CustomerIdentityLookup } from '../useMasters'
+
+// Issue #1034以前の挙動(customerConfirmed/officeConfirmedへ一切触れない)を検証する
+// 既存テストは、意図的に isReady:false のlookupを渡して確定ロジックを発火させない。
+// 確定ロジック自体のテストは本ファイル末尾の専用describeで行う。
+const notReadyLookup: CustomerIdentityLookup = {
+  isReady: false,
+  sameNameCollisionNames: new Set(),
+  customerMasterNameById: new Map(),
+}
 
 const makeDocument = (overrides: Partial<Document> = {}): Document => ({
   id: 'doc-001',
@@ -88,7 +102,7 @@ describe('useDocumentVerification', () => {
   describe('markAsUnverified (#42: Drive状態クリア)', () => {
     it('updateDocにDrive系4フィールド(deleteField sentinel)が含まれる', async () => {
       const doc = makeDocument({ verified: true })
-      const { result } = renderHook(() => useDocumentVerification(doc))
+      const { result } = renderHook(() => useDocumentVerification(doc, notReadyLookup))
 
       await act(async () => {
         await result.current.markAsUnverified()
@@ -104,7 +118,7 @@ describe('useDocumentVerification', () => {
 
     it('driveFileId は含まない(旧Driveファイルへの参照を保持する必要があるため)', async () => {
       const doc = makeDocument({ verified: true })
-      const { result } = renderHook(() => useDocumentVerification(doc))
+      const { result } = renderHook(() => useDocumentVerification(doc, notReadyLookup))
 
       await act(async () => {
         await result.current.markAsUnverified()
@@ -116,7 +130,7 @@ describe('useDocumentVerification', () => {
 
     it('verified/verifiedBy/verifiedAt/updatedAtの既存フィールドも引き続き更新される(回帰防止)', async () => {
       const doc = makeDocument({ verified: true })
-      const { result } = renderHook(() => useDocumentVerification(doc))
+      const { result } = renderHook(() => useDocumentVerification(doc, notReadyLookup))
 
       await act(async () => {
         await result.current.markAsUnverified()
@@ -133,7 +147,7 @@ describe('useDocumentVerification', () => {
   describe('markAsVerified (Drive状態は触らない、変更不要範囲の確認)', () => {
     it('updateDocにDrive系フィールドを含めない(未確認→確認済みではDrive状態は既にクリア済みの前提)', async () => {
       const doc = makeDocument({ verified: false })
-      const { result } = renderHook(() => useDocumentVerification(doc))
+      const { result } = renderHook(() => useDocumentVerification(doc, notReadyLookup))
 
       await act(async () => {
         await result.current.markAsVerified()
@@ -157,7 +171,7 @@ describe('useDocumentVerification', () => {
   describe('markDocumentsInfiniteVariantsDirtyの呼び出し(更新バナー検知シグナル)', () => {
     it('markAsVerified成功時、確認・ロールバックいずれの経路でもdirty化する', async () => {
       const doc = makeDocument({ verified: false })
-      const { result } = renderHook(() => useDocumentVerification(doc))
+      const { result } = renderHook(() => useDocumentVerification(doc, notReadyLookup))
 
       await act(async () => {
         await result.current.markAsVerified()
@@ -168,7 +182,7 @@ describe('useDocumentVerification', () => {
 
     it('markAsUnverified成功時もdirty化する', async () => {
       const doc = makeDocument({ verified: true })
-      const { result } = renderHook(() => useDocumentVerification(doc))
+      const { result } = renderHook(() => useDocumentVerification(doc, notReadyLookup))
 
       await act(async () => {
         await result.current.markAsUnverified()
@@ -188,7 +202,7 @@ describe('useDocumentVerification', () => {
         throw new Error('unexpected cache error')
       })
       const doc = makeDocument({ verified: false })
-      const { result } = renderHook(() => useDocumentVerification(doc))
+      const { result } = renderHook(() => useDocumentVerification(doc, notReadyLookup))
 
       let returned: boolean | undefined
       await act(async () => {
@@ -209,7 +223,7 @@ describe('useDocumentVerification', () => {
         throw new Error('unexpected cache error')
       })
       const doc = makeDocument({ verified: true })
-      const { result } = renderHook(() => useDocumentVerification(doc))
+      const { result } = renderHook(() => useDocumentVerification(doc, notReadyLookup))
 
       let returned: boolean | undefined
       await act(async () => {
@@ -219,6 +233,98 @@ describe('useDocumentVerification', () => {
       expect(returned).toBe(false)
       expect(result.current.isUpdating).toBe(false)
       expect(mockUpdateDoc).not.toHaveBeenCalled()
+    })
+  })
+
+  // Issue #1034: 「確認済み」にする操作がcustomerConfirmed/officeConfirmedも
+  // 同時に確定するようになった(shared/confirmOnVerify.ts経由)。
+  describe('markAsVerified (#1034: 確定フラグの統合)', () => {
+    const readyLookup: CustomerIdentityLookup = {
+      isReady: true,
+      sameNameCollisionNames: new Set(),
+      customerMasterNameById: new Map([['customer-1', '田村 勝義']]),
+    }
+
+    it('identityLookup.isReady:falseのときはcustomerConfirmed/officeConfirmedを更新しない(既存動作維持)', async () => {
+      const doc = makeDocument({ verified: false, customerId: 'customer-1' })
+      const { result } = renderHook(() => useDocumentVerification(doc, notReadyLookup))
+
+      await act(async () => {
+        await result.current.markAsVerified()
+      })
+
+      const updateData = mockUpdateDoc.mock.calls[0]?.[1] as Record<string, unknown>
+      expect('customerConfirmed' in updateData).toBe(false)
+      expect('officeConfirmed' in updateData).toBe(false)
+      expect(mockAddDoc).not.toHaveBeenCalled()
+    })
+
+    it('同姓同名でない有効な顧客・事業所名ならcustomerConfirmed/officeConfirmedもtrueにする', async () => {
+      const doc = makeDocument({ verified: false, customerId: 'customer-1' })
+      const { result } = renderHook(() => useDocumentVerification(doc, readyLookup))
+
+      await act(async () => {
+        await result.current.markAsVerified()
+      })
+
+      const updateData = mockUpdateDoc.mock.calls[0]?.[1] as Record<string, unknown>
+      expect(updateData.customerConfirmed).toBe(true)
+      expect(updateData.confirmedBy).toBe('user-001')
+      expect(updateData.officeConfirmed).toBe(true)
+      expect(updateData.officeConfirmedBy).toBe('user-001')
+      // 監査ログ(editLogs)も書かれる(Issue #398と同じ規約)
+      expect(mockAddDoc).toHaveBeenCalledTimes(2)
+    })
+
+    it('同姓同名の顧客は確定しない(ADR-0022の安全装置を維持)', async () => {
+      const collisionLookup: CustomerIdentityLookup = {
+        isReady: true,
+        sameNameCollisionNames: new Set(['田村 勝義']),
+        customerMasterNameById: new Map([['customer-1', '田村 勝義']]),
+      }
+      const doc = makeDocument({ verified: false, customerId: 'customer-1' })
+      const { result } = renderHook(() => useDocumentVerification(doc, collisionLookup))
+
+      await act(async () => {
+        await result.current.markAsVerified()
+      })
+
+      const updateData = mockUpdateDoc.mock.calls[0]?.[1] as Record<string, unknown>
+      expect('customerConfirmed' in updateData).toBe(false)
+      // 事業所側は顧客の同姓同名と無関係に確定される
+      expect(updateData.officeConfirmed).toBe(true)
+    })
+
+    it('customerId・customerName・officeId・officeNameは更新データに含まれない', async () => {
+      const doc = makeDocument({ verified: false, customerId: 'customer-1' })
+      const { result } = renderHook(() => useDocumentVerification(doc, readyLookup))
+
+      await act(async () => {
+        await result.current.markAsVerified()
+      })
+
+      const updateData = mockUpdateDoc.mock.calls[0]?.[1] as Record<string, unknown>
+      for (const key of ['customerId', 'customerName', 'officeId', 'officeName']) {
+        expect(key in updateData).toBe(false)
+      }
+    })
+
+    it('既にcustomerConfirmed:trueの書類は再確定しない(already-confirmedでskip)', async () => {
+      const doc = makeDocument({
+        verified: false,
+        customerId: 'customer-1',
+        customerConfirmed: true,
+        officeConfirmed: false,
+      })
+      const { result } = renderHook(() => useDocumentVerification(doc, readyLookup))
+
+      await act(async () => {
+        await result.current.markAsVerified()
+      })
+
+      const updateData = mockUpdateDoc.mock.calls[0]?.[1] as Record<string, unknown>
+      expect('customerConfirmed' in updateData).toBe(false)
+      expect(updateData.officeConfirmed).toBe(true)
     })
   })
 })

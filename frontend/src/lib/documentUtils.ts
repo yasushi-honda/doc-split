@@ -13,8 +13,9 @@ import type { DocumentStatus, SplitSegment } from '@shared/types';
 // shared/customerIdentity.ts へ移設した。ここでは同一ファイル内(buildSegmentConfirmedFlags等)
 // からも使うためimportし、既存importerが無修正で動くようre-exportも兼ねる。
 import { isValidCustomerSelection } from '@shared/customerIdentity';
+import { isValidOfficeSelection } from '@shared/officeIdentity';
 
-export { isValidCustomerSelection };
+export { isValidCustomerSelection, isValidOfficeSelection };
 
 // ============================================
 // ステータス表示設定
@@ -78,19 +79,7 @@ export function formatTimestamp(
 // 選択として無効扱いにする。CUSTOMER_INVALID_SENTINELS/isValidCustomerSelection は
 // shared/customerIdentity.ts へ移設済み(上記re-export参照)。
 
-const OFFICE_INVALID_SENTINELS: ReadonlySet<string> = new Set(['未判定', '不明事業所']);
 const DOCUMENT_TYPE_INVALID_SENTINELS: ReadonlySet<string> = new Set(['未判定', '不明文書']);
-
-/**
- * 事業所名が「確定可能な有効値」かを判定する。
- * 空文字・null・undefined・空白のみ・sentinel 値（'未判定'/'不明事業所'）は false を返す。
- */
-export function isValidOfficeSelection(name: string | null | undefined): boolean {
-  if (name == null) return false;
-  const trimmed = name.trim();
-  if (trimmed === '') return false;
-  return !OFFICE_INVALID_SENTINELS.has(trimmed);
-}
 
 /**
  * 書類種別が「確定可能な有効値」かを判定する。

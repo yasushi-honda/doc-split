@@ -5,11 +5,13 @@
  */
 
 import { useState, useCallback } from 'react'
-import { doc, updateDoc, serverTimestamp, Timestamp } from 'firebase/firestore'
+import { doc, updateDoc, serverTimestamp, Timestamp, addDoc, collection } from 'firebase/firestore'
 import { useQueryClient } from '@tanstack/react-query'
 import { db, auth } from '../lib/firebase'
 import { updateDocumentInListCache, getDriveExportClearFields, markDocumentsInfiniteVariantsDirty } from './useDocuments'
 import type { Document } from '../../../shared/types'
+import { planConfirmOnVerify, buildConfirmOnVerifyUpdate } from '../../../shared/confirmOnVerify'
+import type { CustomerIdentityLookup } from './useMasters'
 
 interface UseDocumentVerificationResult {
   isUpdating: boolean
@@ -19,20 +21,22 @@ interface UseDocumentVerificationResult {
 }
 
 export function useDocumentVerification(
-  document: Document | null | undefined
+  document: Document | null | undefined,
+  identityLookup: CustomerIdentityLookup
 ): UseDocumentVerificationResult {
   const [isUpdating, setIsUpdating] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const queryClient = useQueryClient()
 
   // 楽観的更新: キャッシュを即座に更新
-  const optimisticUpdate = useCallback((verified: boolean) => {
+  const optimisticUpdate = useCallback((verified: boolean, extra?: Partial<Document>) => {
     if (!document) return
 
     updateDocumentInListCache(queryClient, document.id, {
       verified,
       verifiedBy: verified ? auth.currentUser?.uid : null,
       verifiedAt: verified ? Timestamp.now() : null,
+      ...extra,
     })
     // 2026-09-08追記(codex review 5周目 P2指摘): この書類が現在`documentsInfinite`の
     // どのvariantにもキャッシュされていない場合(グループ表示やdeep linkから開いた場合等)、
@@ -56,13 +60,41 @@ export function useDocumentVerification(
     // オブジェクトのため、try内外どちらで読んでも同じ値になる)
     const previousVerified = document.verified
 
+    // Issue #1034: 「確認済み」にする操作は、同姓同名等の危険なケースを除き
+    // customerConfirmed/officeConfirmedも同時に確定する(既存の保存フロー
+    // useDocumentEdit.tsのshouldSetCustomerConfirmed/shouldSetOfficeConfirmedと同一ルール)。
+    // identityLookup.isReady が false(顧客マスター読み込み中)の間はサイレントに確定させず、
+    // verifiedのみ更新する既存動作のままにする。
+    const decisions = identityLookup.isReady
+      ? planConfirmOnVerify(document, {
+          customerMasterName: document.customerId
+            ? (identityLookup.customerMasterNameById.get(document.customerId) ?? null)
+            : null,
+          sameNameCollisionNames: identityLookup.sameNameCollisionNames,
+        })
+      : null
+    const confirmUpdate = decisions
+      ? buildConfirmOnVerifyUpdate(decisions, document, { uid: auth.currentUser.uid, now: serverTimestamp() })
+      : null
+
     try {
       // 楽観的更新（即座にUIに反映）
       // 2026-09-08追記(second-opinionレビュー指摘): この呼び出しをtryブロックの外に
       // 置くと、内部のmarkDocumentsInfiniteVariantsDirty等が万一例外を投げた場合に
       // finally(isUpdatingのリセット)が実行されず、確認トグルが永久disabledになる
       // 恐れがあった。tryブロック内へ移動して対称性を確保する。
-      optimisticUpdate(true)
+      const optimisticConfirm: Partial<Document> = {}
+      if (decisions?.customer.action === 'confirm') {
+        optimisticConfirm.customerConfirmed = true
+        optimisticConfirm.confirmedBy = auth.currentUser.uid
+        optimisticConfirm.confirmedAt = Timestamp.now()
+      }
+      if (decisions?.office.action === 'confirm') {
+        optimisticConfirm.officeConfirmed = true
+        optimisticConfirm.officeConfirmedBy = auth.currentUser.uid
+        optimisticConfirm.officeConfirmedAt = Timestamp.now()
+      }
+      optimisticUpdate(true, optimisticConfirm)
 
       const docRef = doc(db, 'documents', document.id)
       await updateDoc(docRef, {
@@ -70,18 +102,46 @@ export function useDocumentVerification(
         verifiedBy: auth.currentUser.uid,
         verifiedAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
+        ...confirmUpdate?.update,
       })
+
+      // #398と同じ規約の監査ログ(確定フラグ変更のsilent failure検知用)。
+      if (confirmUpdate && confirmUpdate.logs.length > 0) {
+        const editLogsRef = collection(db, 'editLogs')
+        for (const change of confirmUpdate.logs) {
+          await addDoc(editLogsRef, {
+            documentId: document.id,
+            fieldName: change.field,
+            oldValue: change.oldValue,
+            newValue: change.newValue,
+            editedBy: auth.currentUser.uid,
+            editedByEmail: auth.currentUser.email || '',
+            editedAt: serverTimestamp(),
+          })
+        }
+      }
       return true
     } catch (err) {
       console.error('Failed to mark as verified:', err)
       setError(err instanceof Error ? err.message : '確認済みにできませんでした')
-      // エラー時はロールバック
-      optimisticUpdate(previousVerified || false)
+      // エラー時はロールバック(確定フラグの楽観的更新も含めて元に戻す)
+      const rollbackConfirm: Partial<Document> = {}
+      if (decisions?.customer.action === 'confirm') {
+        rollbackConfirm.customerConfirmed = document.customerConfirmed
+        rollbackConfirm.confirmedBy = document.confirmedBy ?? null
+        rollbackConfirm.confirmedAt = document.confirmedAt ?? null
+      }
+      if (decisions?.office.action === 'confirm') {
+        rollbackConfirm.officeConfirmed = document.officeConfirmed
+        rollbackConfirm.officeConfirmedBy = document.officeConfirmedBy ?? null
+        rollbackConfirm.officeConfirmedAt = document.officeConfirmedAt ?? null
+      }
+      optimisticUpdate(previousVerified || false, rollbackConfirm)
       return false
     } finally {
       setIsUpdating(false)
     }
-  }, [document, optimisticUpdate])
+  }, [document, optimisticUpdate, identityLookup])
 
   const markAsUnverified = useCallback(async (): Promise<boolean> => {
     if (!document || !auth.currentUser) {

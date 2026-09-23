@@ -1,7 +1,7 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
-import { doc, writeBatch, serverTimestamp } from 'firebase/firestore'
+import { doc, writeBatch, serverTimestamp, collection } from 'firebase/firestore'
 import {
   Filter,
   FileText,
@@ -73,6 +73,7 @@ import { useCareManagers, useCustomerIdentityLookup, type CustomerIdentityLookup
 import { DateRangeFilter, type DateRange } from '@/components/DateRangeFilter'
 import { isCustomerConfirmed } from '@/hooks/useProcessingHistory'
 import { resolveCustomerUnconfirmedReason } from '@shared/customerIdentity'
+import { planConfirmOnVerify, buildConfirmOnVerifyUpdate } from '@shared/confirmOnVerify'
 import { DocumentDetailModal } from '@/components/DocumentDetailModal'
 import { MultiCustomerBadge } from '@/components/MultiCustomerBadge'
 import { AliasLearningHistoryModal } from '@/components/AliasLearningHistoryModal'
@@ -128,16 +129,27 @@ function SortableHeader({
 type BulkActionMode = 'delete' | 'verify' | 'reprocess'
 
 // 一括操作ボタンの色スキーム
+// ホバー時の文字の読みにくさ(kaname報告、Issue #1034)への対応:
+// 1. 全状態でホバー時の背景色・文字色を明示指定する(Button基底の`outline`variantが持つ
+//    `hover:bg-accent hover:text-accent-foreground`は、`cn()`(twMerge)がclassName側の
+//    hover:クラスを優先して打ち消すため、明示すれば確実に上書きできる)
+// 2. 非アクティブ状態(inactive、他ボタン選択中)は、手動`opacity-40`と基底の
+//    `disabled:opacity-50`(components/ui/button.tsx)が重ねて掛かり実効不透明度が
+//    大幅に下がって文字が読めなくなっていた。opacity指定をやめ、明示的な薄いグレー
+//    配色に変更し、`disabled:opacity-100`で基底のdisabled:opacity-50を打ち消す。
 const BULK_COLORS = {
   blue: {
-    solid: 'bg-blue-600 border-blue-600 text-white shadow-md hover:bg-blue-700',
-    light: 'bg-blue-100 border-blue-400 text-blue-700 ring-1 ring-blue-400',
+    solid: 'bg-blue-600 border-blue-600 text-white shadow-md hover:bg-blue-700 hover:text-white',
+    light: 'bg-blue-100 border-blue-400 text-blue-700 ring-1 ring-blue-400 hover:bg-blue-200 hover:text-blue-800',
+    inactive: 'bg-gray-50 border-gray-200 text-gray-400 disabled:opacity-100',
+    defaultStyle: 'text-gray-700 hover:bg-blue-50 hover:text-blue-700 border-gray-200',
     badgeText: 'text-blue-700',
     badgeBorder: 'border-blue-300',
   },
   red: {
-    solid: 'bg-red-600 border-red-600 text-white shadow-md hover:bg-red-700',
-    light: 'bg-red-100 border-red-400 text-red-700 ring-1 ring-red-400',
+    solid: 'bg-red-600 border-red-600 text-white shadow-md hover:bg-red-700 hover:text-white',
+    light: 'bg-red-100 border-red-400 text-red-700 ring-1 ring-red-400 hover:bg-red-200 hover:text-red-800',
+    inactive: 'bg-gray-50 border-gray-200 text-gray-400 disabled:opacity-100',
     badgeText: 'text-red-700',
     badgeBorder: 'border-red-300',
     defaultStyle: 'text-red-600 hover:text-red-700 hover:bg-red-50 border-red-200',
@@ -149,7 +161,7 @@ type BulkColorScheme = typeof BULK_COLORS[keyof typeof BULK_COLORS]
 // 一括操作ボタン共通コンポーネント
 function BulkActionButton({
   mode, icon: Icon, label, colors, selectionMode, selectedCount,
-  isBulkOperating, isSpinning, onToggle, onExecute,
+  isBulkOperating, isSpinning, onToggle, onExecute, disabledReason,
 }: {
   mode: BulkActionMode
   icon: React.ComponentType<{ className?: string }>
@@ -161,6 +173,8 @@ function BulkActionButton({
   isSpinning: boolean
   onToggle: () => void
   onExecute: () => void
+  /** 指定時はボタンをdisabledにし、理由をtitle属性で表示する(例: 顧客マスター読み込み中)。 */
+  disabledReason?: string
 }) {
   const isActive = selectionMode === mode
   const hasSelection = selectedCount > 0
@@ -171,13 +185,14 @@ function BulkActionButton({
         variant="outline"
         size="sm"
         onClick={isActive && hasSelection ? onExecute : onToggle}
-        disabled={isBulkOperating || (!!selectionMode && !isActive && hasSelection)}
+        disabled={isBulkOperating || !!disabledReason || (!!selectionMode && !isActive && hasSelection)}
+        title={disabledReason}
         className={`flex items-center gap-1 h-7 text-xs transition-all duration-200 ${
           isActive && hasSelection
             ? colors.solid
             : isActive
               ? colors.light
-              : selectionMode ? 'opacity-40' : ('defaultStyle' in colors ? colors.defaultStyle : '')
+              : selectionMode ? colors.inactive : ('defaultStyle' in colors ? colors.defaultStyle : '')
         }`}
       >
         <Icon className={`h-3.5 w-3.5 ${isSpinning ? 'animate-spin' : ''}`} />
@@ -255,6 +270,11 @@ function DocumentRow({
   const reviewReasons: string[] = []
   if (isSameNameCollision) {
     reviewReasons.push('同姓同名の顧客マスターが複数あります。書類詳細で正しい顧客を選び直してください')
+  } else if (needsCustomerConfirmation) {
+    // Issue #1034: 顧客だけが未確定(同姓同名以外の理由)の場合、以前は理由が一切表示されず
+    // 「なぜ選択待ちが消えないか」が伝わらなかった。「確認済み」にしても、顧客候補が
+    // 複数あるうちのどれが正しいか確定していない限りこのバッジは残る(意図した挙動)。
+    reviewReasons.push('顧客が未確定です。書類詳細で候補を選択するか、確認済みにすると表示中の候補で確定します')
   }
   if (needsOfficeConfirmation) {
     reviewReasons.push('事業所が未選択です')
@@ -592,50 +612,132 @@ export function DocumentsPage() {
   }, [])
 
   // 一括確認済み
-  // 2026-09-08 crossreview反映: writeBatchは単一batchのため部分失敗はしない
-  // (batch.commit()は全体成功/全体失敗のいずれか)。invalidateQueriesによる全ページ
-  // 再取得はやめ、commit成功後に対象全idへ直接キャッシュパッチする。verifiedAtの
-  // クライアント近似(Timestamp.now())は単体確認の既存楽観更新(useDocumentVerification.ts)
-  // と同じパターンを踏襲する(一覧表示はverifiedのみ参照しverifiedAtは表示に使わない)。
+  // Issue #1034: 「確認済み」にする操作は、同姓同名等の危険なケースを除きcustomerConfirmed/
+  // officeConfirmedも同時に確定する(shared/confirmOnVerify.ts、単体トグルと同一ロジック)。
+  // 1文書あたり最大4オペレーション(doc更新1 + customerConfirmedログ1 +
+  // needsManualCustomerSelectionログ1 + officeConfirmedログ1)になったため、500オペレーション/
+  // バッチ上限を踏まえてCHUNK_SIZE=100でチャンク化する(以前は無チャンクの単一batchだった。
+  // codexレビュー指摘: 150では最大600操作になり上限超過)。チャンク処理は
+  // handleBulkReprocess(下記)と同じパターンを踏襲する。
   const handleBulkVerify = useCallback(async () => {
-    if (selectedIds.size === 0 || !user) return
+    if (selectedIds.size === 0 || !user || !identityLookup.isReady) return
 
     setIsBulkOperating(true)
     try {
-      const batch = writeBatch(db)
-      for (const docId of selectedIds) {
-        const docRef = doc(db, 'documents', docId)
-        batch.update(docRef, {
-          verified: true,
-          verifiedBy: user.uid,
-          verifiedAt: serverTimestamp(),
-        })
-      }
-      const count = selectedIds.size
-      const targetIds = Array.from(selectedIds)
-      await batch.commit()
+      const allDocsForLookup = documentsData?.pages.flatMap(page => page.documents) ?? []
+      const docsById = new Map(allDocsForLookup.map((d) => [d.id, d]))
+      const ids = Array.from(selectedIds)
+      const CHUNK_SIZE = 100
+      let succeededCount = 0
+      let confirmedCount = 0
+      let chunkFailed = false
 
-      const verifiedAtApprox = Timestamp.now()
-      targetIds.forEach((docId) => {
-        updateDocumentInListCache(queryClient, docId, {
-          verified: true,
-          verifiedBy: user.uid,
-          verifiedAt: verifiedAtApprox,
-        })
-      })
+      for (let i = 0; i < ids.length; i += CHUNK_SIZE) {
+        const chunk = ids.slice(i, i + CHUNK_SIZE)
+        try {
+          const batch = writeBatch(db)
+          const editLogsRef = collection(db, 'editLogs')
+          // decisionsは書込み用(serverTimestamp)とキャッシュパッチ用(Timestamp.now())で
+          // actorのnowだけ異なるため、confirm有無の判定(action==='confirm'か)だけ先に
+          // 一度計算して使い回す(2箇所で同じplanConfirmOnVerifyを重複計算しない)。
+          const chunkPlans = chunk.map((docId) => {
+            const targetDoc = docsById.get(docId)
+            if (!targetDoc) return { docId, targetDoc: null, decisions: null }
+            const decisions = planConfirmOnVerify(targetDoc, {
+              customerMasterName: targetDoc.customerId
+                ? (identityLookup.customerMasterNameById.get(targetDoc.customerId) ?? null)
+                : null,
+              sameNameCollisionNames: identityLookup.sameNameCollisionNames,
+            })
+            return { docId, targetDoc, decisions }
+          })
+
+          for (const { docId, targetDoc, decisions } of chunkPlans) {
+            const docRef = doc(db, 'documents', docId)
+            const update: Record<string, unknown> = {
+              verified: true,
+              verifiedBy: user.uid,
+              verifiedAt: serverTimestamp(),
+            }
+            if (targetDoc && decisions) {
+              const { update: confirmUpdate, logs } = buildConfirmOnVerifyUpdate(decisions, targetDoc, {
+                uid: user.uid,
+                now: serverTimestamp(),
+              })
+              Object.assign(update, confirmUpdate)
+              for (const change of logs) {
+                batch.set(doc(editLogsRef), {
+                  documentId: docId,
+                  fieldName: change.field,
+                  oldValue: change.oldValue,
+                  newValue: change.newValue,
+                  editedBy: user.uid,
+                  editedByEmail: user.email || '',
+                  editedAt: serverTimestamp(),
+                })
+              }
+            }
+            // 既存のuseDocumentEdit.ts(L396)と同じ規約: 動的に組み立てたRecord<string, unknown>を
+            // Firestoreの厳密なUpdateData型へ渡すためのキャスト。
+            batch.update(docRef, update as any)
+          }
+
+          await batch.commit()
+          succeededCount += chunk.length
+          confirmedCount += chunkPlans.filter(
+            ({ decisions }) => decisions?.customer.action === 'confirm' || decisions?.office.action === 'confirm'
+          ).length
+
+          const verifiedAtApprox = Timestamp.now()
+          chunkPlans.forEach(({ docId, decisions }) => {
+            const cachePatch: Record<string, unknown> = {
+              verified: true,
+              verifiedBy: user.uid,
+              verifiedAt: verifiedAtApprox,
+            }
+            if (decisions?.customer.action === 'confirm') {
+              cachePatch.customerConfirmed = true
+              cachePatch.confirmedBy = user.uid
+              cachePatch.confirmedAt = verifiedAtApprox
+            }
+            if (decisions?.office.action === 'confirm') {
+              cachePatch.officeConfirmed = true
+              cachePatch.officeConfirmedBy = user.uid
+              cachePatch.officeConfirmedAt = verifiedAtApprox
+            }
+            updateDocumentInListCache(queryClient, docId, cachePatch)
+          })
+        } catch (chunkError) {
+          console.error('Bulk verify chunk error:', chunkError)
+          chunkFailed = true
+          break
+        }
+      }
+
       // 安全網: staleマークのみ(refetchType:'none')。表示更新は上記パッチが担う
       markDocumentsInfiniteStale(queryClient)
       queryClient.invalidateQueries({ queryKey: ['documentStats'] })
-      clearSelection()
-      setBulkOperation(null)
-      toast.success(`${count}件を確認済みにしました`)
+
+      if (chunkFailed) {
+        const succeededIds = new Set(ids.slice(0, succeededCount))
+        setSelectedIds(prev => new Set([...prev].filter(id => !succeededIds.has(id))))
+        toast.error(`一括確認が途中で失敗しました（${succeededCount}/${ids.length}件完了）`)
+      } else {
+        clearSelection()
+        setBulkOperation(null)
+        toast.success(
+          confirmedCount > 0
+            ? `${succeededCount}件を確認済みにしました（うち${confirmedCount}件は顧客/事業所も確定しました）`
+            : `${succeededCount}件を確認済みにしました`
+        )
+      }
     } catch (error) {
       console.error('Bulk verify error:', error)
       toast.error('一括確認に失敗しました')
     } finally {
       setIsBulkOperating(false)
     }
-  }, [selectedIds, user, queryClient, clearSelection])
+  }, [selectedIds, user, queryClient, clearSelection, documentsData, identityLookup])
 
   // 一括再処理
   // ADR-0018 Phase D PR4b (Issue #547): 親doc + detail/main を同一batchでクリア。
@@ -977,6 +1079,7 @@ export function DocumentsPage() {
                 isSpinning={false}
                 onToggle={() => handleModeToggle('verify')}
                 onExecute={() => setBulkOperation('verify')}
+                disabledReason={identityLookup.isReady ? undefined : '顧客マスター読み込み中です'}
               />
               <BulkActionButton
                 mode="delete"
@@ -1275,6 +1378,8 @@ export function DocumentsPage() {
                   {bulkOperation === 'verify' && (
                     <>
                       選択した{selectedIds.size}件の書類を確認済みにします。
+                      <br />
+                      同姓同名等の対象を除き、表示中の顧客・事業所も同時に確定します(確定後も書類詳細から変更できます)。
                     </>
                   )}
                   {bulkOperation === 'reprocess' && (
