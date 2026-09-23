@@ -234,6 +234,37 @@ Cloud Monitoring の notification channel の email アドレスを変更する�
 
 - Firestore Audit Log(`protoPayload.serviceName="firestore.googleapis.com"`)による `driveFolderLocks` への直接書込み検知は、詳細な log filter 設計を含めて未実装。GHA 経由以外からの書込みを継続的に自動検知する仕組みは今後の課題とし、当面は上記「承認は必ず GitHub Actions 経由」の運用ルール(権限棚卸し + 緊急時の事後申告)で代替する
 
+## Issue #1028: 兄弟重複(人作成 vs app作成フォルダ)の棚卸し・統合 運用 SOP
+
+ADR-0028(drive.file→driveフルスコープ拡張)の再連携後、appが新たに人作成フォルダを検出
+できるようになったことで、既存の同名重複(人が手動作成したフォルダとappが作成したフォルダが
+同一parent+nameで並存する状態)が可視化される。これを安全に統合するための運用手順。
+
+### 実行手順
+
+1. **棚卸し(read-only)**: GitHub Actions「Run Operations Script」→ `audit-drive-sibling-duplicates` を実行する。exec_args_json不要。結果はartifact(`audit-drive-sibling-duplicates-plan-<environment>-<run-id>`)としてPlan JSONが保存される
+2. **承認**: Plan JSON内の`groups[]`を確認し、`action: "merge"`のgroupのうち統合してよいものの`groupId`を控える。`action: "manual-review"`のgroupは自動処理対象外(`reason`に理由が記載される)なので、統合したい場合は個別に手動対応する
+3. **統合実行(dry-run)**: `execute-drive-sibling-merge --dry-run`を、`exec_args_json`に`{"planRunId":"<手順1のrun id>","approvedGroupIds":["<groupId>",...]}`を指定して実行する。移動予定のファイル件数がログに出るので確認する
+4. **統合実行(本番)**: 問題なければ`execute-drive-sibling-merge --execute`を同じexec_args_jsonで実行する。**番号単位の明示認可**(CLAUDE.md destructive操作)のもとで行う
+5. **確認**: 統合後、`investigate-drive-folder-duplicate-by-name --name-contains <名前>`で対象フォルダが1件のみになったこと、既存の`drive_folder_divergent`アラートが誤発火していないことを確認する
+
+### 冪等性・再実行
+
+`execute-drive-sibling-merge`は、あるgroupで一部ファイルの移動に失敗した場合、そのgroupの
+claim無効化・trashを実行せず次のgroupへ進む(部分成功の記録はmanifest artifactに残る)。
+同じ`--plan`/`--approval`で再実行すると、既に完全に統合済み(duplicateフォルダが404または
+trashed済み)のgroupは自動的にskipされるため、専用のrollbackスクリプトを設けずに再実行で
+安全に再開できる。
+
+### audit〜execute間の運用上の注意
+
+`audit-drive-sibling-duplicates`実行後、`execute-drive-sibling-merge`実行までの間にクライアント
+が対象フォルダをさらに手動変更すると、実行直前の再照合(fencing)でそのgroupがskipされる
+(安全側)。棚卸しから統合実行までは同日中に完結させ、対象ツリーの手動変更を一時的に控えて
+もらうようクライアントへ依頼することを推奨する。
+
+詳細設計は[ADR-0028](../adr/0028-drive-full-scope.md)を参照。
+
 ## Issue #984: 検索インデックスの高頻度トークン飽和(`search_index_token_skipped` / `search_index_write_failed`)運用 SOP
 
 `search_index/{tokenId}` は1トークン=1ドキュメントに全書類の postings を詰める設計のため、高頻度トークンが

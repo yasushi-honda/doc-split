@@ -22,6 +22,12 @@ Accepted (2026-07-20)
 
 ### 2. スコープは `drive.file` に確定
 
+> **2026-09-23追記**: 本Decision 2は[ADR-0028](0028-drive-full-scope.md)により置換された。
+> Issue #1028(人が手動作成したフォルダがdrive.fileスコープの構造上恒久的に不可視になる
+> 問題)への対応として、バックエンド永続token(code flow)のスコープを`drive`フルスコープへ
+> 拡張した。Picker用tokenは本Decision通り`drive.file`のまま維持している。以下は歴史的経緯
+> として残す。
+
 `doc-split-dev`環境で実機検証を行い、以下を確認した：
 - **`drive.file`スコープ + Google Picker（`setEnableDrives(true)`） + `supportsAllDrives=true`** の組み合わせで、Shared Drive内へのフォルダ作成が成功する。フルスコープ`drive`は不要。
 - Shared Driveのルート自体はPickerで選択できず、1階層以上のサブフォルダを選ぶ必要がある（UI上に明示する制約）。
@@ -192,7 +198,7 @@ Phase 2（担当替え追従の自動フォルダ移動、Shared Drive/Service A
 - **フロントエンドから直接Drive系フィールドを書き込む案**: 却下。`firestore.rules`のdocuments update許可リストを汚染し、改ざん可能面が広がるため、Admin SDK専有・Callable Function経由に統一した。
 - **`onDocumentUpdated`トリガーの採用**: 却下。このプロジェクトのCloud Functionsは全てのFirestoreトリガーを`onDocumentWritten`で統一しており（前例なし）、既存パターンとの一貫性を優先した。
 - **フォルダ名重複時の自動選択（先頭を採用する等）**: 却下。誤った利用者フォルダへの配置リスクが「エクスポートされない」リスクより重いと判断し、常に停止を優先した。
-- **フルスコープ`drive`の採用**: 却下。実機検証で`drive.file`+`supportsAllDrives=true`の組み合わせで要件を満たせることを確認できたため、より狭いスコープを採用した。
+- **フルスコープ`drive`の採用**: 当初却下。実機検証で`drive.file`+`supportsAllDrives=true`の組み合わせで要件を満たせることを確認できたため、より狭いスコープを採用した。**2026-09-23追記**: Issue #1028により、この判断はバックエンド永続tokenに限り[ADR-0028](0028-drive-full-scope.md)で覆された(Picker用tokenは本判断通り`drive.file`のまま)。
 
 ## References
 - 関連ドキュメント: `docs/context/data-model.md`（`/settings/drive`、Drive Export状態セクション）
