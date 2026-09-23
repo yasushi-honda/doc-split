@@ -339,6 +339,39 @@ describe('scanSummaryForFabrication: 助詞トリム(②)', () => {
     expect(r2.fabricatedCount).to.equal(1);
     expect(r2.findings[0].name).to.equal('新当該事業所');
   });
+
+  it('動詞「関わる」+suffixは事業所名不明の正直な回答であり検出しない(ADR-0027 PR2bステップ8全10doc×3run最終確認run、D9run1の回帰テスト)', () => {
+    // 「本書類には貸与に関わる事業所名や医療機関名は記載されていません」のような、事業所名が
+    // 分からない旨を正直に述べる健全な出力で、「関わる事業所」(「関わる」は「関連する」を
+    // 意味する動詞であり固有名詞ではない)が誤って捏造判定されていた。「対して」「当該」に
+    // 続く3件目の同型パターンで、bと同じ理由で最初からDEFAULT_GENERIC_CORESへ追加した。
+    const source = '三好陽子様に歩行器を貸与する。';
+    const r1 = scanSummaryForFabrication(
+      '本書類には貸与に関わる事業所名や医療機関名は記載されていませんが、それらの関係者が適切に連携して三好様のサポートを行うことが想定されています。',
+      source
+    );
+    expect(r1.fabricatedCount).to.equal(0);
+    expect(r1.findings).to.deep.equal([]);
+
+    // バイパス確認: 「関わる」を含む捏造プレフィックスは引き続き検出できる
+    const r2 = scanSummaryForFabrication('新関わるクリニックが担当。', '青葉クリニックが担当。');
+    expect(r2.fabricatedCount).to.equal(1);
+    expect(r2.findings[0].name).to.equal('新関わるクリニック');
+  });
+
+  it('プレフィックス形(「株式会社」等)で捏造企業名のcoreがgenericCores語彙と偶然一致しても検出する(codex review指摘、genericCoreとprefixGenericCoreの分離の回帰テスト)', () => {
+    // 「株式会社関わるが担当」のような、suffix直後のcoreがたまたまDEFAULT_GENERIC_CORES
+    // (「関わる」等、地の文への巻き込みを想定したcore→suffix方向専用の語彙)と一致する場合、
+    // genericCoreSetをprefix方向にも共用していると実在しない企業名でも検出をすり抜けて
+    // しまっていた(この抜け穴は「当該」追加時から潜在していたが、より具体的な再現例
+    // 「株式会社関わる」で発見された)。prefixGenericCores(既定は空文字列のみ)を新設し
+    // プレフィックス形専用に分離することで、core→suffix方向の健全なケースの誤検知抑止を
+    // 保ったままprefix方向の検出力を回復した。
+    const source = '利用者の状況について記載。';
+    const r = scanSummaryForFabrication('株式会社関わるが担当。', source);
+    expect(r.fabricatedCount).to.equal(1);
+    expect(r.findings[0].name).to.equal('株式会社関わる');
+  });
 });
 
 describe('scanSummaryForFabrication: 再結合判定(④、fabricated/recombined分離)', () => {

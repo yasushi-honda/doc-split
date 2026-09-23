@@ -99,6 +99,19 @@
  *    生んでいた(上記2・上記5「して」と同型の問題)。「当該事業所」の健全なケースはcore
  *    (「当該」)が完全一致すれば十分なため、`DEFAULT_PARTICLES`ではなく`DEFAULT_GENERIC_CORES`
  *    (完全一致のみ判定、部分一致では発動しない)へ追加し解消。
+ * c. ADR-0027 PR2bステップ8全10doc×3run最終確認run(2026-09-23)で、事業所名不明と正直に
+ *    回答する健全な出力(「(貸与に)関わる事業所」、D9run1)が捏造判定されていた。「関わる」
+ *    は動詞(連体形)であり固有名詞ではない。「対して」「当該」に続く3件目の同型パターン
+ *    (動詞・修飾語+suffixが助詞トリムをすり抜けるケース)であり、bと同じ理由で最初から
+ *    `DEFAULT_PARTICLES`ではなく`DEFAULT_GENERIC_CORES`へ追加した。同型のパターンが3回
+ *    発生しているため、今後また新たな修飾語(動詞・指示語等)で再発しうる点に留意
+ *    (decision-maker確認済み、2026-09-23: 個別対応を優先し形態素解析への置き換えは
+ *    見送り。4件目以降が発生した場合は設計見直しを再検討すること)。追加でcodex review
+ *    指摘(P2): `genericCoreSet`をプレフィックス形(「株式会社」等、suffix→core方向)の
+ *    判定にも共用していたため、「株式会社関わる」のような実在しない企業名でもcoreが
+ *    「関わる」と一致し誤って検出をすり抜けてしまう新規バイパスを生んでいた(この抜け穴は
+ *    「当該」追加時から潜在していたが、より具体的な再現例で今回発見された)。
+ *    `prefixGenericCores`(既定は空文字列のみ)を新設しプレフィックス形専用に分離して解消。
  */
 
 /** 捏造疑いの固有名詞の分類。`fabricated` のみが「呼び出し側がブロックすべき」対象。
@@ -133,6 +146,17 @@ export interface FabricationScanOptions {
   orgSuffixes?: readonly string[];
   particles?: readonly string[];
   genericCores?: readonly string[];
+  /**
+   * プレフィックス形(「株式会社みずほ」、suffix→core方向)専用の汎用コア判定リスト。
+   * 既定は空文字列のみ(codex review指摘、2026-09-23追加、P2): `genericCores`は
+   * core→suffix方向(「(地の文)+事業所」型)の助詞トリム後に残る動詞・指示語等の
+   * フィラー(「当該」「関わる」等)を想定した語彙だが、`genericCoreSet`をprefix方向にも
+   * 共用すると、「株式会社関わる」のようなsuffix直後のcoreが偶然`genericCores`の語彙と
+   * 一致した場合、実在しない企業名でも誤って検出をすり抜けてしまう(prefix方向では
+   * suffix直後のcoreはそのまま企業名候補であり、「地の文への巻き込み」という
+   * `genericCores`本来の想定ケースが構造的に発生しないため、フィラー語彙を共用すべきでない)。
+   */
+  prefixGenericCores?: readonly string[];
   /** ①左文脈抽出で遡る最大文字数。既定16 */
   maxLeftContext?: number;
 }
@@ -233,6 +257,7 @@ export const DEFAULT_PARTICLES: readonly string[] = [
 export const DEFAULT_GENERIC_CORES: readonly string[] = [
   '',
   '当該',
+  '関わる',
   '内容',
   'サービス内容',
   '利用者名',
@@ -244,19 +269,23 @@ export const DEFAULT_GENERIC_CORES: readonly string[] = [
   '訪問介護・',
 ];
 
+/** プレフィックス形(suffix→core方向)専用。空文字列(coreなし)のみを許容する。 */
+export const DEFAULT_PREFIX_GENERIC_CORES: readonly string[] = [''];
+
 const DEFAULT_MAX_LEFT_CONTEXT = 16;
 
 export const DEFAULT_FABRICATION_SCAN_CONFIG: Required<FabricationScanOptions> = {
   orgSuffixes: DEFAULT_ORG_SUFFIXES,
   particles: DEFAULT_PARTICLES,
   genericCores: DEFAULT_GENERIC_CORES,
+  prefixGenericCores: DEFAULT_PREFIX_GENERIC_CORES,
   maxLeftContext: DEFAULT_MAX_LEFT_CONTEXT,
 };
 
 /** `DEFAULT_FABRICATION_SCAN_CONFIG` の正規化JSONを元にした簡易ハッシュ(FNV-1a、依存ゼロ)。
  * `scripts/lib/sarashinaSummaryGoldenDrift.test.ts`がこの値を`manifest.json`の
  * `fabricationScanConfigVersion`と直接突合する。`DEFAULT_ORG_SUFFIXES`/`DEFAULT_PARTICLES`/
- * `DEFAULT_GENERIC_CORES`/`DEFAULT_MAX_LEFT_CONTEXT`のいずれかを変更するとこのハッシュ値が
+ * `DEFAULT_GENERIC_CORES`/`DEFAULT_PREFIX_GENERIC_CORES`/`DEFAULT_MAX_LEFT_CONTEXT`のいずれかを変更するとこのハッシュ値が
  * 変わるため、`manifest.json`の`fabricationScanConfigVersion`を同時更新しないとCIが赤くなる
  * (comment-analyzer指摘、意図的な設計: 判定基準を変更したらD9/D10相当の固有名詞捏造テストを
  * 再実行して品質を再検証すべき、というREADME記載の運用ルールを機械的に強制する)。 */
@@ -455,6 +484,7 @@ export function scanSummaryForFabrication(
     orgSuffixes: options?.orgSuffixes ?? DEFAULT_FABRICATION_SCAN_CONFIG.orgSuffixes,
     particles: options?.particles ?? DEFAULT_FABRICATION_SCAN_CONFIG.particles,
     genericCores: options?.genericCores ?? DEFAULT_FABRICATION_SCAN_CONFIG.genericCores,
+    prefixGenericCores: options?.prefixGenericCores ?? DEFAULT_FABRICATION_SCAN_CONFIG.prefixGenericCores,
     maxLeftContext: options?.maxLeftContext ?? DEFAULT_FABRICATION_SCAN_CONFIG.maxLeftContext,
   };
   const configVersion =
@@ -467,6 +497,7 @@ export function scanSummaryForFabrication(
 
   const rawMatchesAll = findOrgSuffixMatches(normalizedSummary, config.orgSuffixes);
   const genericCoreSet = new Set(config.genericCores);
+  const prefixGenericCoreSet = new Set(config.prefixGenericCores);
   const orgSuffixSet = new Set(config.orgSuffixes);
 
   // suffix語彙同士が包含関係(「グループホーム」⊃「ホーム」)の場合、包含されるsuffixの
@@ -517,7 +548,7 @@ export function scanSummaryForFabrication(
 
     const rightContext = extractRightContext(normalizedSummary, match.suffixEnd, config.maxLeftContext);
     const core = trimParticlesFromPrefix(rightContext, config.particles);
-    if (genericCoreSet.has(core)) continue;
+    if (prefixGenericCoreSet.has(core)) continue;
     if (orgSuffixSet.has(core)) continue;
     if (normalizedSource.includes(match.suffix + core)) continue;
 
