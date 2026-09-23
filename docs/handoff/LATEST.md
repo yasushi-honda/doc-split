@@ -1,6 +1,14 @@
 # ハンドオフメモ
 
-**更新日**: 2026-09-20（Issue #984 段階1・段階2a完了、kanameone Functionsデプロイ済み・実データ確認待ち）
+**更新日**: 2026-09-23（Issue #1028実装・レビューゲート・dev実機検証・kanameone/cocoroコードデプロイ完了、kanameone実連携は外部調整待ち）
+
+## Issue #1028: Drive OAuthスコープ拡張〜kanameone/cocoro展開着手（2026-09-23）
+
+Drive OAuthスコープを`drive.file`→`drive`フルスコープへ拡張し、兄弟重複統合スクリプトを新設(PR #1038)。plan mode→plan-crossreview(grip×codex)→実装→Fable 5.1セカンドオピニオン(codex usage limit時の代替手順)→`post-pr-review.sh`hook強制のPRレビューゲート(codex review P1×2/P2×1、pr-review-toolkit 5エージェント、quality-gate-evaluator)を経てマージ。レビューゲートで発見されたCritical1件(SOP記述と実装の不一致、`release-claim`後の再実行でtrashが完了しない欠陥)・3経路収束High1件(manifest未チェックポイント)を含む全指摘を修正。fixtureベース統合テスト不在はIssue #1039へ切り出し(P1、実装時期未定)。
+
+**dev実機検証(decision-maker実施分含む)**: OAuth再連携実施→`grantedScopes`にフルスコープ反映確認。この過程で「再連携する」ボタンの視認性バグをdecision-makerが発見、即修正・別PR #1040でマージ。既存重複統合リハーサル(audit→dry-run→execute→再audit)で重複解消・今回修正コードパス(claim状態ガード・TOCTOU検知・trash直前再確認・manifestチェックポイント)を実地検証。Playwright MCP(認証済みセッション)経由でDrive UI上に新規未タグフォルダを作成し、フルスコープでの検出(`claimProperty=false`)を確認、Issue #1028本体の再現→非再発確認が完了。検証用フォルダは削除済み。
+
+**kanameone/cocoro本番展開**: Functions/Hostingとも計4件デプロイ成功。cocoroはDrive未接続(Phase C未着手)のためこれで展開完了。**kanameoneは実際のOAuth再連携以降(flag OFF→drain確認→クライアント自身の再連携→audit→承認→execute→flag ON→backfill)がクライアント側調整待ちで未着手**。decision-maker判断によりここでセッション区切り。詳細はGOAL.md参照。
 
 ## Issue #984 段階1・段階2a完了 + kanameoneデプロイ（2026-09-19〜20）
 
