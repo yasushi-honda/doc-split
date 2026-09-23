@@ -290,7 +290,12 @@ export function GroupDocumentList({
     hasNextPage: !!hasNextPage,
     isFetchingNextPage,
     fetchNextPage,
-    disabled: isRefreshingGroup,
+    // 担当CM別(#1032)は下記useEffectが全ページ取得を自前で駆動するため、sentinel経由の
+    // fetchNextPageは無効化する(codex review P1指摘、2026-09-24): 有効なままだと
+    // ローディング表示中もsentinelが画面内に残り、同一render(isFetchingNextPage:false)の
+    // 間にuseEffectとIntersectionObserverの双方からfetchNextPageが呼ばれ、Firestoreへの
+    // 余分な読み取りが発生しうる。
+    disabled: isRefreshingGroup || groupType === 'careManager',
   });
 
   /**
