@@ -221,6 +221,7 @@ export function GroupDocumentList({
     fetchNextPage,
     hasNextPage,
     isFetchingNextPage,
+    isFetchNextPageError,
     isLoading,
     isError,
     isRefetching,
@@ -299,12 +300,31 @@ export function GroupDocumentList({
    * 読み込み切り、完了する(hasNextPage===false)までは下部のcareManager分岐で件数を出さず
    * ローディング表示に留める。他のgroupTypeは従来通りスクロール駆動のまま(Firestore読み取り
    * 抑制、Issue #891)。
+   *
+   * isFetchNextPageErrorで停止する(codex review P1指摘、2026-09-24): ページ取得が失敗すると
+   * hasNextPageはtrueのまま・isFetchingNextPageはfalseに戻るため、このガードがないと
+   * 失敗するたびに即座にfetchNextPageを呼び直す無限リトライループになる(Firestore読み取りが
+   * 際限なく発生し、Issue #891で塞いだはずの過大読み取りを再発させる)。失敗後の再試行は
+   * 下部のエラー表示からユーザーの明示操作に委ねる。
    */
   useEffect(() => {
-    if (groupType === 'careManager' && hasNextPage && !isFetchingNextPage && !isRefreshingGroup) {
+    if (
+      groupType === 'careManager' &&
+      hasNextPage &&
+      !isFetchingNextPage &&
+      !isFetchNextPageError &&
+      !isRefreshingGroup
+    ) {
       fetchNextPage();
     }
-  }, [groupType, hasNextPage, isFetchingNextPage, isRefreshingGroup, fetchNextPage]);
+  }, [
+    groupType,
+    hasNextPage,
+    isFetchingNextPage,
+    isFetchNextPageError,
+    isRefreshingGroup,
+    fetchNextPage,
+  ]);
 
   const updateBanner = (
     <DocumentListUpdateBanner
@@ -456,6 +476,10 @@ export function GroupDocumentList({
               identityLookup={identityLookup}
             />
           ) : (
+            // isFetchNextPageError:true(追加ページ取得失敗)の場合、react-queryの型上
+            // isErrorも同時にtrueになり本コンポーネント冒頭の isError 早期return(汎用エラー
+            // 画面+再試行ボタン、他groupTypeと共通)が先に発火するため、ここに到達するのは
+            // 正常に読み込み中の場合のみ
             <div className="flex flex-col items-center justify-center gap-2 py-8 text-sm text-gray-500">
               <Loader2 className="h-5 w-5 animate-spin text-gray-400" />
               <span>件数を集計中...({allDocuments.length}件読み込み済み)</span>

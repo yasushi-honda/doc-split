@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, fireEvent } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { Timestamp } from 'firebase/firestore'
 import type { Document } from '@shared/types'
@@ -98,6 +98,7 @@ describe('GroupDocumentList - 担当CM別の件数表示(Issue #1032)', () => {
       fetchNextPage,
       hasNextPage: true,
       isFetchingNextPage: false,
+      isFetchNextPageError: false,
       isLoading: false,
       isError: false,
       isRefetching: false,
@@ -126,6 +127,7 @@ describe('GroupDocumentList - 担当CM別の件数表示(Issue #1032)', () => {
       fetchNextPage,
       hasNextPage: false,
       isFetchingNextPage: false,
+      isFetchNextPageError: false,
       isLoading: false,
       isError: false,
       isRefetching: false,
@@ -140,5 +142,39 @@ describe('GroupDocumentList - 担当CM別の件数表示(Issue #1032)', () => {
     expect(screen.queryByText(/件数を集計中/)).toBeNull()
     expect(screen.getByText('松本 実')).toBeDefined()
     expect(screen.getByText('3件')).toBeDefined()
+  })
+
+  it('追加ページ取得が失敗(isFetchNextPageError:true、react-query仕様上isErrorも同時にtrue)した場合、useEffectはfetchNextPageを自動再呼び出ししない(codex review P1回帰テスト、無限リトライループ防止)', () => {
+    // react-queryの型上、isFetchNextPageError:trueはisError:trueと同時に成立する
+    // (InfiniteQueryObserverRefetchErrorResult)。このときコンポーネント冒頭の
+    // isError早期returnが先に発火し、汎用エラー画面(他groupTypeと共通、refetch呼び出しの
+    // 再試行ボタン)が表示される。ここで検証したい本質は「effectが無限にfetchNextPageを
+    // 呼び直さないこと」。
+    const fetchNextPage = vi.fn()
+    const refetch = vi.fn()
+    mockUseGroupDocuments.mockReturnValue({
+      data: { pages: [{ documents: [makeDocument()], lastDoc: null, hasMore: true }] },
+      fetchNextPage,
+      hasNextPage: true,
+      isFetchingNextPage: false,
+      isFetchNextPageError: true,
+      isLoading: false,
+      isError: true,
+      isRefetching: false,
+      refetch,
+    })
+
+    renderWithClient(
+      <GroupDocumentList groupType="careManager" groupKey="cm-1" />
+    )
+
+    // isFetchNextPageError:true の間、useEffectはfetchNextPageを呼ばない(無限リトライループ防止)
+    expect(fetchNextPage).not.toHaveBeenCalled()
+    expect(screen.getByText('データの読み込みに失敗しました')).toBeDefined()
+    expect(screen.queryByText(/件数を集計中/)).toBeNull()
+
+    // 既存の汎用再試行ボタンはrefetch(1ページ目からの再取得)を呼ぶ
+    fireEvent.click(screen.getByRole('button', { name: /再試行/ }))
+    expect(refetch).toHaveBeenCalledTimes(1)
   })
 })
