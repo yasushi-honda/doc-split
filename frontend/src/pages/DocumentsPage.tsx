@@ -288,9 +288,16 @@ function DocumentRow({
   if (isSameNameCollision) {
     reviewReasons.push('同姓同名の顧客マスターが複数あります。書類詳細で正しい顧客を選び直してください')
   } else if (needsCustomerConfirmation) {
-    // Issue #1034: 顧客だけが未確定(同姓同名以外の理由)の場合、以前は理由が一切表示されず
-    // 「なぜ選択待ちが消えないか」が伝わらなかった。「確認済み」にしても、顧客候補が
-    // 複数あるうちのどれが正しいか確定していない限りこのバッジは残る(意図した挙動)。
+    // codexレビュー(second opinion、comment-analyzer)指摘: 従来のコメントは同姓同名
+    // ケース特有の説明をこのelse-if分岐(既にisSameNameCollisionを除外済み)に誤って
+    // 当てはめていた。この分岐に入るのは「未確認かつ同姓同名ではない」ケース全般で、
+    // shared/confirmOnVerify.tsのdecideCustomerConfirmが実際に評価する内訳は:
+    // - 有効な単一候補で未確認なだけ → 「確認済み」操作でcustomerConfirmed:trueとなり
+    //   このバッジは消える(直後のUI文言通り)
+    // - invalid-name/name-id-mismatch/customer-master-missing(候補自体が無効/マスター
+    //   不整合) → 「確認済み」操作でもdecideCustomerConfirmがskipを返すため解消せず、
+    //   書類詳細で候補を選び直す必要がある
+    // UI文言はこの2ケースを区別せず一括して案内している(過不足があれば別途改善)。
     reviewReasons.push('顧客が未確定です。書類詳細で候補を選択するか、確認済みにすると表示中の候補で確定します')
   }
   if (needsOfficeConfirmation) {
@@ -642,7 +649,14 @@ export function DocumentsPage() {
   // (1件の衝突/失敗が他の文書を巻き込まない点は、scripts/backfill-confirm-on-verify.ts
   // が個別update()+precondition方式を採る理由と同じ)。
   const handleBulkVerify = useCallback(async () => {
-    if (selectedIds.size === 0 || !user || !identityLookup.isReady) return
+    // codexレビュー(second opinion、strict-config)指摘: identityLookup.isReady
+    // (useCustomers()キャッシュの初回ロード完了)は、確定判定の実際の権威である
+    // fetchFreshCustomerIdentityLookup()(キャッシュを経由しない独立取得)とは無関係。
+    // 初回のuseCustomers()が一度でもエラーになるとisReadyはfalseのまま固着し、直接
+    // サーバー読み取りなら成功するはずの状況でも一括確認済みが永久に使えなくなって
+    // いた。ここではゲートせず、fetchFreshCustomerIdentityLookup()自体の成否
+    // (失敗時はcatchでnullフォールバック、verifiedのみ更新)に判断を委ねる。
+    if (selectedIds.size === 0 || !user) return
 
     setIsBulkOperating(true)
     try {
@@ -786,7 +800,7 @@ export function DocumentsPage() {
     } finally {
       setIsBulkOperating(false)
     }
-  }, [selectedIds, user, queryClient, clearSelection, identityLookup])
+  }, [selectedIds, user, queryClient, clearSelection])
 
   // 一括再処理
   // ADR-0018 Phase D PR4b (Issue #547): 親doc + detail/main を同一batchでクリア。
@@ -1128,7 +1142,6 @@ export function DocumentsPage() {
                 isSpinning={false}
                 onToggle={() => handleModeToggle('verify')}
                 onExecute={() => setBulkOperation('verify')}
-                disabledReason={identityLookup.isReady ? undefined : '顧客マスター読み込み中です'}
               />
               <BulkActionButton
                 mode="delete"

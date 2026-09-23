@@ -275,13 +275,32 @@ async function runBackfill(): Promise<void> {
   const runId = randomUUID();
   const entries: ConfirmOnVerifyManifestEntry[] = [];
   let preconditionFailedCount = 0;
-  for (const candidate of targets) {
-    // eslint-disable-next-line no-await-in-loop
-    const result = await applyConfirmOnVerify(candidate);
-    if (result.status === 'ok') {
-      entries.push(result.entry);
-    } else {
-      preconditionFailedCount++;
+  // codexレビュー(second opinion、silent-failure-hunter)指摘: precondition不一致以外の
+  // 予期しない例外(ネットワーク断・権限エラー等)がループ途中で発生すると、それまでに
+  // 実際にFirestoreへ書込み済みの分がmanifestに一切残らず、rollbackの一次情報を失って
+  // しまう(このスクリプトの設計そのものが「manifestがrollbackの一次情報」を前提にして
+  // いるにもかかわらず)。try/finallyで、ループが例外で中断してもその時点までのentriesを
+  // 必ずmanifestへ書き出す。
+  try {
+    for (const candidate of targets) {
+      // eslint-disable-next-line no-await-in-loop
+      const result = await applyConfirmOnVerify(candidate);
+      if (result.status === 'ok') {
+        entries.push(result.entry);
+      } else {
+        preconditionFailedCount++;
+      }
+    }
+  } finally {
+    if (manifestOutPath && entries.length > 0) {
+      const manifest: ConfirmOnVerifyBackfillManifest = buildConfirmOnVerifyManifest({
+        runId,
+        projectId: projectId as string,
+        timestampIso: new Date().toISOString(),
+        entries,
+      });
+      writeFileSync(manifestOutPath, JSON.stringify(manifest, null, 2));
+      console.log(`manifest出力: ${manifestOutPath} (runId=${runId}, ${entries.length}件)`);
     }
   }
 
@@ -289,17 +308,6 @@ async function runBackfill(): Promise<void> {
   console.log(`確定成功: ${entries.length}件`);
   if (preconditionFailedCount > 0) {
     console.log(`並行書込みによりスキップ: ${preconditionFailedCount}件`);
-  }
-
-  if (manifestOutPath) {
-    const manifest: ConfirmOnVerifyBackfillManifest = buildConfirmOnVerifyManifest({
-      runId,
-      projectId: projectId as string,
-      timestampIso: new Date().toISOString(),
-      entries,
-    });
-    writeFileSync(manifestOutPath, JSON.stringify(manifest, null, 2));
-    console.log(`manifest出力: ${manifestOutPath} (runId=${runId})`);
   }
 }
 

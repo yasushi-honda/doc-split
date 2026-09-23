@@ -151,37 +151,48 @@ export function useDocumentVerification(document: Document | null | undefined): 
         return txDecisions
       })
 
-      // トランザクション確定後、実際に判定された確定フラグでキャッシュを補正する
-      // (最新データに基づく結果のため、モーダルを開いた時点のdocumentとは食い違いうる)。
-      if (decisions) {
-        const confirmedAtApprox = Timestamp.now()
-        const patch: Partial<Document> = {}
-        if (decisions.customer.action === 'confirm') {
-          patch.customerConfirmed = true
-          patch.confirmedBy = uid
-          patch.confirmedAt = confirmedAtApprox
+      // codexレビュー(second opinion、comment-analyzer)指摘: トランザクションは既に成功して
+      // おり、Firestoreには`verified`/確定フラグが書き込まれ済みのため、以降のキャッシュ
+      // 補正(optimisticUpdate/invalidateGroupQueries)は表示上の後始末に過ぎない。ここで
+      // 例外が起きても外側のcatch(下記)のロールバック処理を発火させてはならない
+      // (発火させると、Firestoreには確定済みなのにUIキャッシュだけ未確認へ戻り、
+      // 表示とデータが食い違う)。そのため別のtry/catchで隔離し、失敗してもログのみ残す。
+      try {
+        // トランザクション確定後、実際に判定された確定フラグでキャッシュを補正する
+        // (最新データに基づく結果のため、モーダルを開いた時点のdocumentとは食い違いうる)。
+        if (decisions) {
+          const confirmedAtApprox = Timestamp.now()
+          const patch: Partial<Document> = {}
+          if (decisions.customer.action === 'confirm') {
+            patch.customerConfirmed = true
+            patch.confirmedBy = uid
+            patch.confirmedAt = confirmedAtApprox
+          }
+          if (decisions.office.action === 'confirm') {
+            patch.officeConfirmed = true
+            patch.officeConfirmedBy = uid
+            patch.officeConfirmedAt = confirmedAtApprox
+          }
+          if (Object.keys(patch).length > 0) {
+            optimisticUpdate(true, patch)
+          }
         }
-        if (decisions.office.action === 'confirm') {
-          patch.officeConfirmed = true
-          patch.officeConfirmedBy = uid
-          patch.officeConfirmedAt = confirmedAtApprox
-        }
-        if (Object.keys(patch).length > 0) {
-          optimisticUpdate(true, patch)
-        }
+        // グループ表示(担当CM別・利用者別)を開いたまま詳細モーダルで確認済みにすると、
+        // groupDocumentsクエリ(staleTime:Infinity、自動再取得なし)が古いcustomerConfirmed/
+        // officeConfirmedバッジを保持し続ける。他の単体書類更新(useDocumentEdit.ts等)と
+        // 同じくinvalidateGroupQueriesでdirty化し、バナー経由で気付けるようにする。
+        invalidateGroupQueries(queryClient)
+      } catch (postCommitErr) {
+        console.error('Failed to sync cache after markAsVerified transaction succeeded:', postCommitErr)
       }
-      // codexレビュー指摘(P2・5回目): グループ表示(担当CM別・利用者別)を開いたまま
-      // 詳細モーダルで確認済みにすると、groupDocumentsクエリ(staleTime:Infinity、
-      // 自動再取得なし)が古いcustomerConfirmed/officeConfirmedバッジを保持し続ける。
-      // 他の単体書類更新(useDocumentEdit.ts等)と同じくinvalidateGroupQueriesで
-      // dirty化し、バナー経由で気付けるようにする。
-      invalidateGroupQueries(queryClient)
       return true
     } catch (err) {
       console.error('Failed to mark as verified:', err)
       setError(err instanceof Error ? err.message : '確認済みにできませんでした')
-      // エラー時はロールバック(トランザクション全体が失敗しているため、確定フラグは
-      // 一切書き込まれていない。verifiedの楽観的更新のみ元に戻せばよい)。
+      // エラー時はロールバック(runTransaction自体が失敗した場合のみここに到達し、確定
+      // フラグは一切書き込まれていない前提。トランザクション成功後の後始末は上の内側
+      // try/catchで隔離済みのため、ここに来た時点でFirestoreへの書込みは行われていない)。
+      // verifiedの楽観的更新のみ元に戻せばよい。
       optimisticUpdate(previousVerified || false)
       return false
     } finally {
