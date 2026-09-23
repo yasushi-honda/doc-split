@@ -71,9 +71,11 @@ vi.mock('@tanstack/react-query', () => ({
 
 const mockUpdateDocumentInListCache = vi.fn()
 const mockMarkDocumentsInfiniteVariantsDirty = vi.fn()
+const mockInvalidateGroupQueries = vi.fn()
 vi.mock('../useDocuments', () => ({
   updateDocumentInListCache: (...args: unknown[]) => mockUpdateDocumentInListCache(...args),
   markDocumentsInfiniteVariantsDirty: (...args: unknown[]) => mockMarkDocumentsInfiniteVariantsDirty(...args),
+  invalidateGroupQueries: (...args: unknown[]) => mockInvalidateGroupQueries(...args),
   getDriveExportClearFields: vi.fn(() => {
     const df = deleteField()
     return {
@@ -100,15 +102,6 @@ vi.mock('../useMasters', () => ({
 
 import { useDocumentVerification } from '../useDocumentVerification'
 import type { CustomerIdentityLookup } from '../useMasters'
-
-// Issue #1034以前の挙動(customerConfirmed/officeConfirmedへ一切触れない)を検証する
-// 既存テストは、意図的に isReady:false のlookupを渡して確定ロジックを発火させない。
-// 確定ロジック自体のテストは本ファイル末尾の専用describeで行う。
-const notReadyLookup: CustomerIdentityLookup = {
-  isReady: false,
-  sameNameCollisionNames: new Set(),
-  customerMasterNameById: new Map(),
-}
 
 const makeDocument = (overrides: Partial<Document> = {}): Document => ({
   id: 'doc-001',
@@ -147,7 +140,7 @@ describe('useDocumentVerification', () => {
     it('updateDocにDrive系4フィールド(deleteField sentinel)が含まれる', async () => {
       const doc = makeDocument({ verified: true })
       txGetOverride = doc
-      const { result } = renderHook(() => useDocumentVerification(doc, notReadyLookup))
+      const { result } = renderHook(() => useDocumentVerification(doc))
 
       await act(async () => {
         await result.current.markAsUnverified()
@@ -164,7 +157,7 @@ describe('useDocumentVerification', () => {
     it('driveFileId は含まない(旧Driveファイルへの参照を保持する必要があるため)', async () => {
       const doc = makeDocument({ verified: true })
       txGetOverride = doc
-      const { result } = renderHook(() => useDocumentVerification(doc, notReadyLookup))
+      const { result } = renderHook(() => useDocumentVerification(doc))
 
       await act(async () => {
         await result.current.markAsUnverified()
@@ -177,7 +170,7 @@ describe('useDocumentVerification', () => {
     it('verified/verifiedBy/verifiedAt/updatedAtの既存フィールドも引き続き更新される(回帰防止)', async () => {
       const doc = makeDocument({ verified: true })
       txGetOverride = doc
-      const { result } = renderHook(() => useDocumentVerification(doc, notReadyLookup))
+      const { result } = renderHook(() => useDocumentVerification(doc))
 
       await act(async () => {
         await result.current.markAsUnverified()
@@ -195,7 +188,7 @@ describe('useDocumentVerification', () => {
     it('tx.updateにDrive系フィールドを含めない(未確認→確認済みではDrive状態は既にクリア済みの前提)', async () => {
       const doc = makeDocument({ verified: false })
       txGetOverride = doc
-      const { result } = renderHook(() => useDocumentVerification(doc, notReadyLookup))
+      const { result } = renderHook(() => useDocumentVerification(doc))
 
       await act(async () => {
         await result.current.markAsVerified()
@@ -221,7 +214,7 @@ describe('useDocumentVerification', () => {
     it('markAsVerified成功時、確認・ロールバックいずれの経路でもdirty化する', async () => {
       const doc = makeDocument({ verified: false })
       txGetOverride = doc
-      const { result } = renderHook(() => useDocumentVerification(doc, notReadyLookup))
+      const { result } = renderHook(() => useDocumentVerification(doc))
 
       await act(async () => {
         await result.current.markAsVerified()
@@ -233,7 +226,7 @@ describe('useDocumentVerification', () => {
     it('markAsUnverified成功時もdirty化する', async () => {
       const doc = makeDocument({ verified: true })
       txGetOverride = doc
-      const { result } = renderHook(() => useDocumentVerification(doc, notReadyLookup))
+      const { result } = renderHook(() => useDocumentVerification(doc))
 
       await act(async () => {
         await result.current.markAsUnverified()
@@ -254,7 +247,7 @@ describe('useDocumentVerification', () => {
       })
       const doc = makeDocument({ verified: false })
       txGetOverride = doc
-      const { result } = renderHook(() => useDocumentVerification(doc, notReadyLookup))
+      const { result } = renderHook(() => useDocumentVerification(doc))
 
       let returned: boolean | undefined
       await act(async () => {
@@ -276,7 +269,7 @@ describe('useDocumentVerification', () => {
       })
       const doc = makeDocument({ verified: true })
       txGetOverride = doc
-      const { result } = renderHook(() => useDocumentVerification(doc, notReadyLookup))
+      const { result } = renderHook(() => useDocumentVerification(doc))
 
       let returned: boolean | undefined
       await act(async () => {
@@ -298,16 +291,28 @@ describe('useDocumentVerification', () => {
       customerMasterNameById: new Map([['customer-1', '田村 勝義']]),
     }
 
-    it('identityLookup.isReady:falseのときはcustomerConfirmed/officeConfirmedを更新しない(既存動作維持)', async () => {
+    // codexレビュー指摘(P2、5回目、2026-09-23): 以前はidentityLookup.isReady(useCustomers()
+    // キャッシュの初回ロード完了)がfalseの間、確定判定を丸ごとスキップしていた。しかし
+    // 単体トグルは一括確認済みと違いこの間disabledにならず、ユーザーが気付かないまま
+    // verifiedのみ更新されてしまう恐れがあった。fetchFreshCustomerIdentityLookup()は
+    // キャッシュを経由しない独立取得のため、isReadyの状態に関わらず常に呼び出す設計に
+    // 変更した(そのため本フックはidentityLookupを引数に取らなくなった)。ここでは
+    // フレッシュ取得自体が失敗した場合のフォールバック(verifiedのみ更新、クラッシュしない)
+    // を検証する。
+    it('fetchFreshCustomerIdentityLookupが失敗した場合はverifiedのみ更新し、確定フラグは書き込まない(失敗をもみ消さない)', async () => {
+      mockFetchFreshCustomerIdentityLookup.mockRejectedValueOnce(new Error('network error'))
       const doc = makeDocument({ verified: false, customerId: 'customer-1' })
       txGetOverride = doc
-      const { result } = renderHook(() => useDocumentVerification(doc, notReadyLookup))
+      const { result } = renderHook(() => useDocumentVerification(doc))
 
+      let returned: boolean | undefined
       await act(async () => {
-        await result.current.markAsVerified()
+        returned = await result.current.markAsVerified()
       })
 
+      expect(returned).toBe(true)
       const updateData = getTxUpdateData()
+      expect(updateData.verified).toBe(true)
       expect('customerConfirmed' in updateData).toBe(false)
       expect('officeConfirmed' in updateData).toBe(false)
       expect(mockTxSet).not.toHaveBeenCalled()
@@ -317,7 +322,7 @@ describe('useDocumentVerification', () => {
       const doc = makeDocument({ verified: false, customerId: 'customer-1' })
       txGetOverride = doc
       freshLookupOverride = readyLookup
-      const { result } = renderHook(() => useDocumentVerification(doc, readyLookup))
+      const { result } = renderHook(() => useDocumentVerification(doc))
 
       await act(async () => {
         await result.current.markAsVerified()
@@ -341,7 +346,7 @@ describe('useDocumentVerification', () => {
       const doc = makeDocument({ verified: false, customerId: 'customer-1' })
       txGetOverride = doc
       freshLookupOverride = collisionLookup
-      const { result } = renderHook(() => useDocumentVerification(doc, collisionLookup))
+      const { result } = renderHook(() => useDocumentVerification(doc))
 
       await act(async () => {
         await result.current.markAsVerified()
@@ -357,7 +362,7 @@ describe('useDocumentVerification', () => {
       const doc = makeDocument({ verified: false, customerId: 'customer-1' })
       txGetOverride = doc
       freshLookupOverride = readyLookup
-      const { result } = renderHook(() => useDocumentVerification(doc, readyLookup))
+      const { result } = renderHook(() => useDocumentVerification(doc))
 
       await act(async () => {
         await result.current.markAsVerified()
@@ -378,7 +383,7 @@ describe('useDocumentVerification', () => {
       })
       txGetOverride = doc
       freshLookupOverride = readyLookup
-      const { result } = renderHook(() => useDocumentVerification(doc, readyLookup))
+      const { result } = renderHook(() => useDocumentVerification(doc))
 
       await act(async () => {
         await result.current.markAsVerified()
@@ -397,7 +402,7 @@ describe('useDocumentVerification', () => {
       mockRunTransaction.mockRejectedValueOnce(new Error('transaction failed'))
       const doc = makeDocument({ verified: false, customerId: 'customer-1' })
       txGetOverride = doc
-      const { result } = renderHook(() => useDocumentVerification(doc, readyLookup))
+      const { result } = renderHook(() => useDocumentVerification(doc))
 
       let returned: boolean | undefined
       await act(async () => {
@@ -430,7 +435,7 @@ describe('useDocumentVerification', () => {
         customerMasterNameById: new Map([['customer-1', '鈴木花子']]),
       }
       freshLookupOverride = collisionOnFreshRead
-      const { result } = renderHook(() => useDocumentVerification(staleDoc, collisionOnFreshRead))
+      const { result } = renderHook(() => useDocumentVerification(staleDoc))
 
       await act(async () => {
         await result.current.markAsVerified()
@@ -448,22 +453,15 @@ describe('useDocumentVerification', () => {
     // 同姓同名判定に使う顧客マスター側がuseCustomers()のキャッシュ(最大5分古い)のままだと、
     // 直近に追加された同姓同名マスターを見逃して誤確定してしまう。fetchFreshCustomerIdentityLookup()
     // (キャッシュを経由しない新規取得)の結果を使っていることを検証する。
-    it('identityLookup prop(キャッシュ)が同姓同名なしでも、fetchFreshCustomerIdentityLookupが同姓同名ありを返せば確定しない(マスター鮮度のP1回帰テスト)', async () => {
+    it('fetchFreshCustomerIdentityLookupが返す同姓同名情報が確定判定にそのまま使われる(マスター鮮度のP1回帰テスト)', async () => {
       const doc = makeDocument({ verified: false, customerId: 'customer-1', customerName: '田村 勝義' })
-      txGetOverride = doc // 文書自体は最新(propと同じ)
-      // フックへ渡すidentityLookup prop(キャッシュ由来)は同姓同名なしと認識している。
-      const staleCachedLookup: CustomerIdentityLookup = {
-        isReady: true,
-        sameNameCollisionNames: new Set(),
-        customerMasterNameById: new Map([['customer-1', '田村 勝義']]),
-      }
-      // しかし直前に新規取得したマスター一覧(フレッシュ取得)では、同姓同名マスターが
-      // 直近追加されたことが判明している。
+      txGetOverride = doc // 文書自体は最新
+      // 直前に新規取得したマスター一覧(フレッシュ取得)で、同姓同名マスターが判明している。
       freshLookupOverride = {
         sameNameCollisionNames: new Set(['田村 勝義']),
         customerMasterNameById: new Map([['customer-1', '田村 勝義']]),
       }
-      const { result } = renderHook(() => useDocumentVerification(doc, staleCachedLookup))
+      const { result } = renderHook(() => useDocumentVerification(doc))
 
       await act(async () => {
         await result.current.markAsVerified()
@@ -471,9 +469,25 @@ describe('useDocumentVerification', () => {
 
       expect(mockFetchFreshCustomerIdentityLookup).toHaveBeenCalled()
       const updateData = getTxUpdateData()
-      // フレッシュ取得の同姓同名情報が使われていれば確定しない。propのキャッシュ
-      // (同姓同名なし)のまま判定していれば誤って確定していたはず。
+      // フレッシュ取得の同姓同名情報が使われていれば確定しない。
       expect('customerConfirmed' in updateData).toBe(false)
+    })
+
+    // codexレビュー指摘(P2、5回目、2026-09-23): グループ表示(担当CM別・利用者別)を
+    // 開いたまま詳細モーダルで確認済みにすると、customerConfirmed/officeConfirmedの
+    // 変更がgroupDocuments系キャッシュ(staleTime:Infinity)に反映されず古いバッジが
+    // 残り続けていた。他の単体書類更新と同じくinvalidateGroupQueriesを呼ぶことを検証する。
+    it('成功時にinvalidateGroupQueriesを呼び、グループ表示キャッシュをdirty化する', async () => {
+      const doc = makeDocument({ verified: false, customerId: 'customer-1' })
+      txGetOverride = doc
+      freshLookupOverride = readyLookup
+      const { result } = renderHook(() => useDocumentVerification(doc))
+
+      await act(async () => {
+        await result.current.markAsVerified()
+      })
+
+      expect(mockInvalidateGroupQueries).toHaveBeenCalledTimes(1)
     })
   })
 })

@@ -734,6 +734,11 @@ export function DocumentsPage() {
       // 安全網: staleマークのみ(refetchType:'none')。表示更新は上記パッチが担う
       markDocumentsInfiniteStale(queryClient)
       queryClient.invalidateQueries({ queryKey: ['documentStats'] })
+      // codexレビュー指摘(P2・5回目): 一括確認済みもcustomerConfirmed/officeConfirmedを
+      // 変更するが、上記パッチはdocumentsInfiniteのみが対象。グループ表示(担当CM別・
+      // 利用者別)を開いている場合、staleTime:Infiniteのgroup系キャッシュが古いバッジを
+      // 保持し続ける。他の一括操作(一括再処理・一括削除)と同じくinvalidateGroupQueriesを呼ぶ。
+      invalidateGroupQueries(queryClient)
 
       const confirmedCount = succeeded.filter(
         (o) => o.decisions?.customer.action === 'confirm' || o.decisions?.office.action === 'confirm'

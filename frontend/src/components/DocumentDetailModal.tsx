@@ -420,8 +420,9 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
   }, [document?.status, documentId, queryClient])
 
   // 同姓同名判定(2026-07-26追加)。useCustomers()のキャッシュ共有により追加フェッチなし。
-  // useDocumentVerificationより前に呼ぶ: Issue #1034で「確認済み」操作がcustomerConfirmed/
-  // officeConfirmedも同時に確定するようになったため、同じ判定結果を共有する。
+  // 同姓同名バッジ表示に使う(useDocumentVerificationの確定判定は、キャッシュ鮮度の
+  // 問題を避けるためfetchFreshCustomerIdentityLookup()で別途取得する、codexレビュー
+  // 指摘P2・5回目参照)。
   const identityLookup = useCustomerIdentityLookup()
 
   // 確認ステータス管理（楽観的更新で即時反映）
@@ -430,7 +431,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
     error: verifyError,
     markAsVerified,
     markAsUnverified,
-  } = useDocumentVerification(document, identityLookup)
+  } = useDocumentVerification(document)
 
   // マスターデータ取得（編集時のドロップダウン用）
   // useDocumentEditより前に呼ぶ: customersを渡して同姓同名の曖昧性判定に使う(ADR-0022

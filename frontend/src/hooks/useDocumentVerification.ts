@@ -8,10 +8,15 @@ import { useState, useCallback } from 'react'
 import { doc, updateDoc, serverTimestamp, Timestamp, collection, runTransaction } from 'firebase/firestore'
 import { useQueryClient } from '@tanstack/react-query'
 import { db, auth } from '../lib/firebase'
-import { updateDocumentInListCache, getDriveExportClearFields, markDocumentsInfiniteVariantsDirty } from './useDocuments'
+import {
+  updateDocumentInListCache,
+  getDriveExportClearFields,
+  markDocumentsInfiniteVariantsDirty,
+  invalidateGroupQueries,
+} from './useDocuments'
 import type { Document } from '../../../shared/types'
 import { planConfirmOnVerify, buildConfirmOnVerifyUpdate } from '../../../shared/confirmOnVerify'
-import { fetchFreshCustomerIdentityLookup, type CustomerIdentityLookup } from './useMasters'
+import { fetchFreshCustomerIdentityLookup } from './useMasters'
 
 interface UseDocumentVerificationResult {
   isUpdating: boolean
@@ -20,10 +25,7 @@ interface UseDocumentVerificationResult {
   markAsUnverified: () => Promise<boolean>
 }
 
-export function useDocumentVerification(
-  document: Document | null | undefined,
-  identityLookup: CustomerIdentityLookup
-): UseDocumentVerificationResult {
+export function useDocumentVerification(document: Document | null | undefined): UseDocumentVerificationResult {
   const [isUpdating, setIsUpdating] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const queryClient = useQueryClient()
@@ -81,17 +83,19 @@ export function useDocumentVerification(
       // 依然`useCustomers()`のキャッシュ(最大5分古い)のままだった。直近に追加・改名された
       // 同姓同名マスターがキャッシュに反映されていないと、実際には曖昧な顧客を誤って
       // 確定してしまう。確定操作の直前に`fetchFreshCustomerIdentityLookup()`でキャッシュを
-      // 経由しない最新のマスター一覧を取得し、判定に使う(`identityLookup`propはisReadyの
-      // 事前チェックのみに用い、実際の判定内容には使わない)。
-      // identityLookup.isReadyがfalse(マスターを一度も読み込めていない)場合は、
-      // フレッシュ取得を試みても状況が変わらない可能性が高いため確定をスキップし、
-      // verifiedのみ更新する(既存動作を維持、サイレントに確定させない)。
-      const freshIdentityLookup = identityLookup.isReady
-        ? await fetchFreshCustomerIdentityLookup().catch((fetchErr) => {
-            console.error('Failed to fetch fresh customer identity lookup, skipping confirm-on-verify:', fetchErr)
-            return null
-          })
-        : null
+      // 経由しない最新のマスター一覧を取得し、判定に使う。
+      //
+      // codexレビュー指摘(P2・5回目): この取得を`identityLookup.isReady`(=`useCustomers()`
+      // キャッシュの初回ロード完了)条件で分岐すると、ページ初回表示直後にキャッシュが
+      // まだ無い間はfalseになり、確定操作が`verified`のみ更新してサイレントに確定を
+      // 恒久的にスキップしてしまう(単体トグルは一括確認済みと違いこの間disabledにならない
+      // ため、ユーザーが気付かず後から手戻りが必要になる)。`fetchFreshCustomerIdentityLookup()`
+      // はキャッシュを経由しない独立したFirestore取得のため、`identityLookup.isReady`の
+      // 状態に関わらず常に呼び出せる。
+      const freshIdentityLookup = await fetchFreshCustomerIdentityLookup().catch((fetchErr) => {
+        console.error('Failed to fetch fresh customer identity lookup, skipping confirm-on-verify:', fetchErr)
+        return null
+      })
 
       const decisions = await runTransaction(db, async (tx) => {
         const freshSnap = await tx.get(docRef)
@@ -161,6 +165,12 @@ export function useDocumentVerification(
           optimisticUpdate(true, patch)
         }
       }
+      // codexレビュー指摘(P2・5回目): グループ表示(担当CM別・利用者別)を開いたまま
+      // 詳細モーダルで確認済みにすると、groupDocumentsクエリ(staleTime:Infinity、
+      // 自動再取得なし)が古いcustomerConfirmed/officeConfirmedバッジを保持し続ける。
+      // 他の単体書類更新(useDocumentEdit.ts等)と同じくinvalidateGroupQueriesで
+      // dirty化し、バナー経由で気付けるようにする。
+      invalidateGroupQueries(queryClient)
       return true
     } catch (err) {
       console.error('Failed to mark as verified:', err)
@@ -172,7 +182,7 @@ export function useDocumentVerification(
     } finally {
       setIsUpdating(false)
     }
-  }, [document, optimisticUpdate, identityLookup])
+  }, [document, optimisticUpdate, queryClient])
 
   const markAsUnverified = useCallback(async (): Promise<boolean> => {
     if (!document || !auth.currentUser) {
