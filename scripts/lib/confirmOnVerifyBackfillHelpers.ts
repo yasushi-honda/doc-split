@@ -95,15 +95,22 @@ export interface ConfirmOnVerifyManifestEntry {
   /** confirmedOffice:trueの場合のみ有効。backfill実行前のofficeConfirmedの値。 */
   officeConfirmedBefore?: boolean;
   /**
-   * backfillがこの文書へ書込んだ直後の`updateTime`(ミリ秒、`WriteResult.writeTime.toMillis()`)。
-   * rollback時、ライブの`updateTime`とこの値が一致する場合のみ「backfill以降、誰にも
-   * (再処理を含め)一切触れられていない」と判定できる(codexレビュー指摘: `confirmedBy`が
-   * nullのままの再確認だけでなく、OCR再処理による自動確定もconfirmedByをnullのまま
-   * customerConfirmed等を新しい値で書き換えうるため、actorベースの判定だけでは
-   * 「backfillが書いた値のまま」なのか「その後さらに別の値で上書きされた」のかを
-   * 区別できなかった。updateTime完全一致チェックはどちらの経路の上書きも等しく検知する)。
+   * backfillがこの文書へ書込んだ直後の`updateTime`(`WriteResult.writeTime`のseconds/nanoseconds、
+   * `Timestamp.toMillis()`ではなくフル精度で保持する)。rollback時、ライブの`updateTime`と
+   * この値が一致する場合のみ「backfill以降、誰にも(再処理を含め)一切触れられていない」と
+   * 判定できる(codexレビュー指摘: `confirmedBy`がnullのままの再確認だけでなく、OCR再処理に
+   * よる自動確定もconfirmedByをnullのままcustomerConfirmed等を新しい値で書き換えうるため、
+   * actorベースの判定だけでは「backfillが書いた値のまま」なのか「その後さらに別の値で
+   * 上書きされた」のかを区別できなかった。updateTime完全一致チェックはどちらの経路の
+   * 上書きも等しく検知する)。
+   *
+   * codexレビュー指摘(5回目、P2): `toMillis()`(ミリ秒精度)だと、backfill書込み直後の
+   * 同一ミリ秒内に別の書込みが発生した場合に両者のミリ秒値が一致してしまい、rollbackが
+   * その新しい書込みを誤って「backfillのまま」と判定し上書きしてしまう恐れがあった。
+   * Firestoreの`Timestamp`はナノ秒精度を持つため、seconds/nanosecondsをそのまま保持して
+   * 完全一致比較することで、この衝突リスクを排除する。
    */
-  backfillUpdateTimeMs: number;
+  backfillUpdateTime: { seconds: number; nanoseconds: number };
 }
 
 export interface ConfirmOnVerifyBackfillManifest {
@@ -135,9 +142,19 @@ export function buildConfirmOnVerifyManifest(params: {
  * 人間の確定操作によるものかOCR再処理の自動確定によるものかを問わず、backfillが記録した
  * 「実行前の値」は既に古くなっている可能性があるためrollback対象外とする
  * (backfill-drive-export.tsの「進行済みはskip」と同じ設計思想をより厳密にしたもの)。
+ *
+ * codexレビュー指摘(5回目、P2): ミリ秒精度(`toMillis()`)の比較だと、同一ミリ秒内に
+ * 発生した別の書込みを誤って「backfillのまま」と判定しうる。seconds/nanosecondsの
+ * 両方が完全一致する場合のみeligibleとする(Firestoreのナノ秒精度を活かす)。
  */
-export function isRollbackEligibleByUpdateTime(entry: ConfirmOnVerifyManifestEntry, liveUpdateTimeMs: number): boolean {
-  return liveUpdateTimeMs === entry.backfillUpdateTimeMs;
+export function isRollbackEligibleByUpdateTime(
+  entry: ConfirmOnVerifyManifestEntry,
+  liveUpdateTime: { seconds: number; nanoseconds: number }
+): boolean {
+  return (
+    liveUpdateTime.seconds === entry.backfillUpdateTime.seconds &&
+    liveUpdateTime.nanoseconds === entry.backfillUpdateTime.nanoseconds
+  );
 }
 
 /**

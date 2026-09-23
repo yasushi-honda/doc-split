@@ -50,7 +50,7 @@ test('buildConfirmOnVerifyManifest: 渡したentriesをそのまま保持する'
         confirmedCustomer: true,
         resetNeedsManualCustomerSelection: false,
         confirmedOffice: false,
-        backfillUpdateTimeMs: 1000,
+        backfillUpdateTime: { seconds: 1, nanoseconds: 0 },
       },
     ],
   });
@@ -65,13 +65,18 @@ test('isRollbackEligibleByUpdateTime: backfill書込み直後のupdateTimeとラ
     confirmedCustomer: true,
     resetNeedsManualCustomerSelection: false,
     confirmedOffice: true,
-    backfillUpdateTimeMs: 1_700_000_000_000,
+    backfillUpdateTime: { seconds: 1_700_000_000, nanoseconds: 123_000_000 },
   };
-  assert.equal(isRollbackEligibleByUpdateTime(entry, 1_700_000_000_000), true);
+  assert.equal(isRollbackEligibleByUpdateTime(entry, { seconds: 1_700_000_000, nanoseconds: 123_000_000 }), true);
   assert.equal(
-    isRollbackEligibleByUpdateTime(entry, 1_700_000_000_001),
+    isRollbackEligibleByUpdateTime(entry, { seconds: 1_700_000_001, nanoseconds: 123_000_000 }),
     false,
-    '1msでも異なれば(人間の再確定/OCR再処理の自動確定いずれによる上書きでも)対象外'
+    'secondsが異なれば(人間の再確定/OCR再処理の自動確定いずれによる上書きでも)対象外'
+  );
+  assert.equal(
+    isRollbackEligibleByUpdateTime(entry, { seconds: 1_700_000_000, nanoseconds: 123_000_001 }),
+    false,
+    'nanosecondsが1でも異なれば対象外(同一ミリ秒内の別書込みをtoMillis()丸めで見逃さないための精度、codexレビュー指摘5回目)'
   );
 });
 
@@ -81,7 +86,7 @@ test('computeRollbackInstructions: 実行前がフィールド不在ならdelete
     confirmedCustomer: true,
     resetNeedsManualCustomerSelection: false,
     confirmedOffice: true,
-    backfillUpdateTimeMs: 1000,
+    backfillUpdateTime: { seconds: 1000, nanoseconds: 0 },
   });
   assert.deepEqual(deleteBoth.customer, { action: 'delete' });
   assert.deepEqual(deleteBoth.office, { action: 'delete' });
@@ -93,7 +98,7 @@ test('computeRollbackInstructions: 実行前がフィールド不在ならdelete
     customerConfirmedBefore: false,
     resetNeedsManualCustomerSelection: false,
     confirmedOffice: false,
-    backfillUpdateTimeMs: 1000,
+    backfillUpdateTime: { seconds: 1000, nanoseconds: 0 },
   });
   assert.deepEqual(setFalse.customer, { action: 'set', value: false });
   assert.equal(setFalse.office, undefined, 'confirmedOffice:falseのentryはoffice側の指示を返さない');
@@ -105,7 +110,7 @@ test('computeRollbackInstructions: resetNeedsManualCustomerSelection:trueなら�
     confirmedCustomer: true,
     resetNeedsManualCustomerSelection: true,
     confirmedOffice: false,
-    backfillUpdateTimeMs: 1000,
+    backfillUpdateTime: { seconds: 1000, nanoseconds: 0 },
   });
   assert.deepEqual(result.needsManualCustomerSelection, { action: 'set', value: true });
 });
@@ -117,7 +122,7 @@ test('computeRollbackInstructions: 顧客側が対象外(confirmedCustomer:false
     resetNeedsManualCustomerSelection: true,
     confirmedOffice: true,
     officeConfirmedBefore: false,
-    backfillUpdateTimeMs: 1000,
+    backfillUpdateTime: { seconds: 1000, nanoseconds: 0 },
   });
   assert.equal(result.customer, undefined);
   assert.equal(result.needsManualCustomerSelection, undefined);

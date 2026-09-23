@@ -92,6 +92,11 @@ export function useDocumentVerification(document: Document | null | undefined): 
       // ため、ユーザーが気付かず後から手戻りが必要になる)。`fetchFreshCustomerIdentityLookup()`
       // はキャッシュを経由しない独立したFirestore取得のため、`identityLookup.isReady`の
       // 状態に関わらず常に呼び出せる。
+      //
+      // codexレビュー指摘(P1、6回目、DocumentsPage.tsxの一括確認済みで指摘・本フックにも
+      // 同型で存在): この取得からトランザクション完了までの間の同姓同名TOCTOUは意図的に
+      // 許容する残存リスク(詳細・理由はDocumentsPage.tsxのhandleBulkVerify内の同種コメント
+      // 参照)。
       const freshIdentityLookup = await fetchFreshCustomerIdentityLookup().catch((fetchErr) => {
         console.error('Failed to fetch fresh customer identity lookup, skipping confirm-on-verify:', fetchErr)
         return null

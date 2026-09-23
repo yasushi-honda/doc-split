@@ -194,7 +194,7 @@ async function applyConfirmOnVerify(
         // OCR再処理による自動確定(confirmedByはnullのまま新しい値で上書き)を検知できない。
         // backfillが実際に書き込んだ直後のupdateTimeを記録し、rollback時にライブの
         // updateTimeと完全一致するかで「backfill以降一切触れられていないか」を判定する。
-        backfillUpdateTimeMs: writeResult.writeTime.toMillis(),
+        backfillUpdateTime: { seconds: writeResult.writeTime.seconds, nanoseconds: writeResult.writeTime.nanoseconds },
       },
     };
   } catch (err) {
@@ -344,7 +344,7 @@ async function runRollback(manifestPath: string): Promise<void> {
     // 自動確定(confirmedByはnullのまま新しい値で上書き)を「backfillのまま」と誤検知しうる。
     // backfill書込み直後のupdateTimeとライブのupdateTimeが完全一致する場合のみ、entry全体
     // (顧客・事業所とも)をrollback対象とする(1文字でも異なれば何らかの書込みが発生している)。
-    if (!isRollbackEligibleByUpdateTime(entry, snap.updateTime!.toMillis())) {
+    if (!isRollbackEligibleByUpdateTime(entry, { seconds: snap.updateTime!.seconds, nanoseconds: snap.updateTime!.nanoseconds })) {
       console.log(`  スキップ(backfill以降に別の書込みが発生済み): ${entry.docId}`);
       skippedProgressed++;
       continue;
