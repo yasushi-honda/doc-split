@@ -339,6 +339,25 @@ describe('scanSummaryForFabrication: 助詞トリム(②)', () => {
     expect(r2.fabricatedCount).to.equal(1);
     expect(r2.findings[0].name).to.equal('新当該事業所');
   });
+
+  it('動詞「関わる」+suffixは事業所名不明の正直な回答であり検出しない(ADR-0027 PR2bステップ8全10doc×3run最終確認run、D9run1の回帰テスト)', () => {
+    // 「本書類には貸与に関わる事業所名や医療機関名は記載されていません」のような、事業所名が
+    // 分からない旨を正直に述べる健全な出力で、「関わる事業所」(「関わる」は「関連する」を
+    // 意味する動詞であり固有名詞ではない)が誤って捏造判定されていた。「対して」「当該」に
+    // 続く3件目の同型パターンで、bと同じ理由で最初からDEFAULT_GENERIC_CORESへ追加した。
+    const source = '三好陽子様に歩行器を貸与する。';
+    const r1 = scanSummaryForFabrication(
+      '本書類には貸与に関わる事業所名や医療機関名は記載されていませんが、それらの関係者が適切に連携して三好様のサポートを行うことが想定されています。',
+      source
+    );
+    expect(r1.fabricatedCount).to.equal(0);
+    expect(r1.findings).to.deep.equal([]);
+
+    // バイパス確認: 「関わる」を含む捏造プレフィックスは引き続き検出できる
+    const r2 = scanSummaryForFabrication('新関わるクリニックが担当。', '青葉クリニックが担当。');
+    expect(r2.fabricatedCount).to.equal(1);
+    expect(r2.findings[0].name).to.equal('新関わるクリニック');
+  });
 });
 
 describe('scanSummaryForFabrication: 再結合判定(④、fabricated/recombined分離)', () => {
