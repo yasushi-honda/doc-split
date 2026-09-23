@@ -571,7 +571,9 @@ cocoro側Drive連携Phase C（クライアント自身のOAuth接続）は外部
 - **既存重複統合リハーサル完了**: 前回の再現テストで残置されていた「医療」フォルダ重複(木村千代配下)を対象に、GitHub Actions経由で`audit-drive-sibling-duplicates`(dry-run結果通り1件検出)→`execute-drive-sibling-merge --dry-run`(1件移動予定と確認)→`--execute`(1件移動・claim1件無効化・duplicateをtrash、成功)→再auditで`groupCount:0`(重複完全解消)を確認。本セッションでコード修正した claim状態ガード(`invalidated`許容)・TOCTOU検知・trash直前の全種別再確認・manifestチェックポイントの各パスを実地で通過
 - **GitHub Actionsワークフロー起動テスト完了**: `audit-drive-sibling-duplicates`(2回)・`execute-drive-sibling-merge --dry-run`・`--execute`の計4回、実際にGHA経由で正常完走を確認(run 35844692547/35844983583/35845455722/35845744740)
 
-**残る検証（次アクション候補）**: 「appがまだ認識していない場所に人がフォルダを置く」新規ケース(Issue #1028本体のバグ再現→非再発確認、AC4相当)は未実施。Drive UI上で新規の未タグフォルダを人が手動作成する必要があり、①decision-maker自身がDrive UIで操作する ②API経由で模擬作成する、いずれかの手段が必要（次セッションでdecision-maker判断）。fixtureベース統合テスト不在はIssue #1039(P1)へ切り出し済み、実装時期は未定。kanameone/cocoro本番展開はこれらの検証完了後に着手すること。
+**Issue #1028本体のバグ再現→非再発確認(AC4相当)も完了**: decision-maker指示によりPlaywright MCP(既存の認証済みGoogleセッション、hy.unimail.11@gmail.com)経由でDrive UI上の「き　木村千代」フォルダ配下に新規未タグフォルダ「テスト再現1028」を作成(appは一切未関与)。`investigate-drive-folder-duplicate-by-name --name-contains "テスト再現1028"`(GHA run 35846393874)で`該当フォルダ: 1件、claimProperty=false`を確認——フルスコープ`drive`接続後は、appが一度も触れていない人作成フォルダを正しく検出できることを実機証拠として確定。旧`drive.file`スコープでは構造的に不可視だった対象が可視化されたことの直接確認(coreのバグ修正が実際に機能している証拠)。
+
+**残るのはfixtureベース統合テスト(Issue #1039、P1、実装時期未定)のみ**。dev実機検証(再連携・既存重複統合リハーサル・新規フォルダ検出確認・GHAワークフロー起動テスト計5回)は全て完了。kanameone/cocoro本番展開に進む準備が整った(decision-maker判断待ち、展開手順はADR-0028参照)。
 
 ## 【完了・2026-08-30】Issue #871 PR-4: childFolderResolver.tsのclaimプロトコル完全移行(PR #879マージ)
 
