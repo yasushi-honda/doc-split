@@ -21,6 +21,7 @@ export function normalizeDriveSettings(data: Record<string, unknown> | undefined
     rootFolderName: data.rootFolderName as string | undefined,
     template: data.template as DriveSettings['template'],
     furiganaFallback: data.furiganaFallback as DriveSettings['furiganaFallback'],
+    grantedScopes: data.grantedScopes as DriveSettings['grantedScopes'],
   }
 }
 

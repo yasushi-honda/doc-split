@@ -28,6 +28,7 @@ describe('normalizeDriveSettings', () => {
       rootFolderName: 'エクスポート先',
       template,
       furiganaFallback: 'useNameInitial',
+      grantedScopes: ['https://www.googleapis.com/auth/drive'],
     })
 
     expect(result).toEqual({
@@ -38,6 +39,7 @@ describe('normalizeDriveSettings', () => {
       rootFolderName: 'エクスポート先',
       template,
       furiganaFallback: 'useNameInitial',
+      grantedScopes: ['https://www.googleapis.com/auth/drive'],
     })
   })
 
