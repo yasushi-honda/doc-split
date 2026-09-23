@@ -94,6 +94,9 @@ on:
           - execute-drive-folder-merge --execute
           - rollback-drive-folder-merge --dry-run
           - rollback-drive-folder-merge --execute
+          - audit-drive-sibling-duplicates
+          - execute-drive-sibling-merge --dry-run
+          - execute-drive-sibling-merge --execute
           - classify-collision-docs
           - setup-collision-fixture --dev
           - setup-collision-fixture --dev --cleanup
@@ -283,7 +286,7 @@ on:
         type: string
         default: ''
       exec_args_json:
-        description: 'execute-collision-migration: JSON {"planRunId":"<classify run id>","approvedOperationIds":["op-0001",...]} / investigate-issue811-root-cause: JSON {"folderIds":[...],"docIds":[...]} / classify-drive-folder-duplicates: JSON {"canonicalFolderId":"...","duplicateFolderIds":["id1","id2"]} / execute-drive-folder-merge: JSON {"planRunId":"<classify-drive-folder-duplicates run id>","approvedOperationIds":["op-0001",...]} / rollback-drive-folder-merge: JSON {"manifestRunId":"<execute-drive-folder-merge run id>","approvedOperationIds":["op-0001",...]}(approvedOperationIds省略時はmanifest全件を対象) / execute-drive-export-repair: JSON {"planRunId":"<classify-drive-export-drift run id>","expectedTotal":488,"acknowledgeRestoreFolders":false}(planRunId必須、expectedTotal/acknowledgeRestoreFoldersは省略可) / diagnose-drive-folder-duplicate-causality: JSON {"folderIds":["id1","id2",...]} / execute-drive-claim-resync: JSON {"planRunId":"<classify-drive-claim-divergence run id>","approvedOperations":{"op-0001":{"mode":"restore-expected"},"op-0002":{"mode":"release-claim","acknowledgedStrandedFiles":0}}}(modeはrestore-expected/release-claim/finalize-resolvedのいずれか、release-claimでdirectChildCount>0の場合のみacknowledgedStrandedFilesが必須)'
+        description: 'execute-collision-migration: JSON {"planRunId":"<classify run id>","approvedOperationIds":["op-0001",...]} / investigate-issue811-root-cause: JSON {"folderIds":[...],"docIds":[...]} / classify-drive-folder-duplicates: JSON {"canonicalFolderId":"...","duplicateFolderIds":["id1","id2"]} / execute-drive-folder-merge: JSON {"planRunId":"<classify-drive-folder-duplicates run id>","approvedOperationIds":["op-0001",...]} / rollback-drive-folder-merge: JSON {"manifestRunId":"<execute-drive-folder-merge run id>","approvedOperationIds":["op-0001",...]}(approvedOperationIds省略時はmanifest全件を対象) / execute-drive-export-repair: JSON {"planRunId":"<classify-drive-export-drift run id>","expectedTotal":488,"acknowledgeRestoreFolders":false}(planRunId必須、expectedTotal/acknowledgeRestoreFoldersは省略可) / diagnose-drive-folder-duplicate-causality: JSON {"folderIds":["id1","id2",...]} / execute-drive-claim-resync: JSON {"planRunId":"<classify-drive-claim-divergence run id>","approvedOperations":{"op-0001":{"mode":"restore-expected"},"op-0002":{"mode":"release-claim","acknowledgedStrandedFiles":0}}}(modeはrestore-expected/release-claim/finalize-resolvedのいずれか、release-claimでdirectChildCount>0の場合のみacknowledgedStrandedFilesが必須) / execute-drive-sibling-merge: JSON {"planRunId":"<audit-drive-sibling-duplicates run id>","approvedGroupIds":["parentId:name",...]}(groupIdはaudit-drive-sibling-duplicatesが出力するplan-output.jsonのgroups[].groupIdをそのまま指定)'
         required: false
         type: string
         default: ''
@@ -792,6 +795,78 @@ jobs:
             exit 1
           fi
 
+      - name: Parse execute-drive-sibling-merge args
+        # Issue #1028(ADR-0028): exec_args_json から planRunId(audit-drive-sibling-duplicates
+        # run id)を抽出する。approvedGroupIdsはgroupId(parentId:name形式、日本語フォルダ名を
+        # 含みうる)のJSON配列のため、CSV化はせず後続stepでexec_args_jsonを直接再パースする
+        # (execute-drive-claim-resyncのapprovedOperationsと同型の方針)。
+        id: parse_exec_sibling
+        if: ${{ startsWith(github.event.inputs.script, 'execute-drive-sibling-merge') }}
+        env:
+          EXEC_ARGS_JSON: ${{ github.event.inputs.exec_args_json }}
+        run: |
+          set -euo pipefail
+          if [ -z "$EXEC_ARGS_JSON" ]; then
+            echo "ERROR: exec_args_json is required when script is execute-drive-sibling-merge" >&2
+            exit 1
+          fi
+          if ! echo "$EXEC_ARGS_JSON" | jq empty 2>/dev/null; then
+            echo "ERROR: exec_args_json is not valid JSON" >&2
+            exit 1
+          fi
+          PLAN_RUN_ID=$(echo "$EXEC_ARGS_JSON" | jq -r '.planRunId // empty')
+          if [ -z "$PLAN_RUN_ID" ]; then
+            echo "ERROR: exec_args_json must contain planRunId (string)" >&2
+            exit 1
+          fi
+          if ! echo "$PLAN_RUN_ID" | grep -qE '^[0-9]+$'; then
+            echo "ERROR: planRunId must be a numeric run id (got: $PLAN_RUN_ID)" >&2
+            exit 1
+          fi
+          HAS_VALID_GROUP_IDS=$(echo "$EXEC_ARGS_JSON" | jq '(.approvedGroupIds // null) | type == "array"')
+          if [ "$HAS_VALID_GROUP_IDS" != "true" ]; then
+            echo "ERROR: exec_args_json must contain approvedGroupIds (array, may be empty for a zero-approval dry-run)" >&2
+            exit 1
+          fi
+          echo "plan_run_id=$PLAN_RUN_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Download audit-drive-sibling-duplicates plan artifact
+        if: ${{ startsWith(github.event.inputs.script, 'execute-drive-sibling-merge') }}
+        uses: actions/download-artifact@v4
+        with:
+          name: audit-drive-sibling-duplicates-plan-${{ github.event.inputs.environment }}-${{ steps.parse_exec_sibling.outputs.plan_run_id }}
+          path: ${{ github.workspace }}/.sibling-merge-plan
+          run-id: ${{ steps.parse_exec_sibling.outputs.plan_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate approval JSON from sibling duplicate plan + exec_args_json
+        # plan.planId + exec_args_json.approvedGroupIdsを合成してapproval.jsonに書き出す。
+        # execute-drive-sibling-merge.tsのschemaVersion/planId gateを満たす形式。
+        if: ${{ startsWith(github.event.inputs.script, 'execute-drive-sibling-merge') }}
+        env:
+          EXEC_ARGS_JSON: ${{ github.event.inputs.exec_args_json }}
+        run: |
+          set -euo pipefail
+          PLAN_FILE="${GITHUB_WORKSPACE}/.sibling-merge-plan/plan-output.json"
+          APPROVAL_FILE="${GITHUB_WORKSPACE}/.sibling-merge-plan/approval.json"
+          if [ ! -f "$PLAN_FILE" ]; then
+            echo "ERROR: plan-output.json not found at $PLAN_FILE" >&2
+            exit 1
+          fi
+          PLAN_ID=$(jq -r '.planId' "$PLAN_FILE")
+          echo "$EXEC_ARGS_JSON" | jq --arg planId "$PLAN_ID" '{planId: $planId, approvedGroupIds: .approvedGroupIds}' > "$APPROVAL_FILE"
+          echo "=== Generated approval.json ==="
+          cat "$APPROVAL_FILE"
+          echo "==============================="
+          # 承認されたgroupIdが実際にplanのmerge対象groupに存在するかを確認する
+          # (execute-drive-folder-merge/execute-drive-claim-resyncの同種チェックと揃える)。
+          INPUT_COUNT=$(jq '.approvedGroupIds | length' "$APPROVAL_FILE")
+          MATCHED_COUNT=$(jq --slurpfile approval "$APPROVAL_FILE" '[.groups[] | select(.action == "merge") | select(.groupId as $id | ($approval[0].approvedGroupIds | index($id)))] | length' "$PLAN_FILE")
+          if [ "$INPUT_COUNT" != "$MATCHED_COUNT" ]; then
+            echo "ERROR: $INPUT_COUNT group ids approved but only $MATCHED_COUNT matched merge-eligible groups in plan" >&2
+            exit 1
+          fi
+
       - name: Parse execute-drive-export-repair args
         # Issue #811/#823 remediation Phase 2b: exec_args_json から
         # planRunId(classify-drive-export-drift run id、必須)・expectedTotal(任意、H5の
@@ -1154,6 +1229,27 @@ jobs:
             NODE_PATH=../functions/node_modules \
               FIREBASE_PROJECT_ID="$PROJECT_ID" \
               npx ts-node rollback-drive-folder-merge.ts "${ARGS[@]}" $SCRIPT_ARGS
+          elif [ "$SCRIPT_NAME" = "audit-drive-sibling-duplicates" ]; then
+            # Issue #1028(ADR-0028): 兄弟重複(人作成 vs app作成フォルダ)の棚卸し(read-only)。
+            # exec_args_json不要(settings/drive.rootFolderId配下を全走査するため)。
+            # ログマスキングで `{` が `***` に置換されるため、plan JSON をファイル出力 →
+            # upload-artifact で取得する経路を必須化(classify-drive-claim-divergenceと同型)。
+            cd scripts
+            NODE_PATH=../functions/node_modules \
+              FIREBASE_PROJECT_ID="$PROJECT_ID" \
+              npx ts-node audit-drive-sibling-duplicates.ts \
+                --out "${GITHUB_WORKSPACE}/scripts/plan-output.json"
+          elif [ "$SCRIPT_NAME" = "execute-drive-sibling-merge" ]; then
+            # Issue #1028(ADR-0028): 承認制の統合実行。plan + approval は前段stepで
+            # artifact取得+生成。SCRIPT_ARGSは"--dry-run"相当(未指定)または"--execute"。
+            cd scripts
+            NODE_PATH=../functions/node_modules \
+              FIREBASE_PROJECT_ID="$PROJECT_ID" \
+              npx ts-node execute-drive-sibling-merge.ts \
+                --plan "${GITHUB_WORKSPACE}/.sibling-merge-plan/plan-output.json" \
+                --approval "${GITHUB_WORKSPACE}/.sibling-merge-plan/approval.json" \
+                --manifest-out "${GITHUB_WORKSPACE}/scripts/manifest-output-sibling.json" \
+                $SCRIPT_ARGS
           elif [ "$SCRIPT_NAME" = "setup-drive-folder-fixture" ]; then
             # Issue #811 Phase B: devリハーサル用fixture投入(ADR-0016 devリハーサル規律を踏襲)。
             cd scripts
@@ -1913,6 +2009,28 @@ jobs:
         with:
           name: execute-drive-claim-resync-manifest-${{ github.event.inputs.environment }}-${{ github.run_id }}
           path: scripts/manifest-output-divergence.json
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Upload audit-drive-sibling-duplicates plan artifact
+        # Issue #1028(ADR-0028): classify-drive-claim-divergenceと同型(log secret maskingで
+        # plan JSONが欠落するためartifact経由で受け渡す)。
+        if: ${{ github.event.inputs.script == 'audit-drive-sibling-duplicates' && always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-drive-sibling-duplicates-plan-${{ github.event.inputs.environment }}-${{ github.run_id }}
+          path: scripts/plan-output.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload execute-drive-sibling-merge manifest artifact
+        # Issue #1028(ADR-0028): 部分成功からの再実行判断材料のためretentionを長めに取る
+        # (execute-drive-folder-mergeと同型)。
+        if: ${{ startsWith(github.event.inputs.script, 'execute-drive-sibling-merge') && always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: execute-drive-sibling-merge-manifest-${{ github.event.inputs.environment }}-${{ github.run_id }}
+          path: scripts/manifest-output-sibling.json
           if-no-files-found: warn
           retention-days: 90
 
