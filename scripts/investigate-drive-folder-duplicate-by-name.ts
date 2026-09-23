@@ -20,9 +20,14 @@
  * 一切見えない。したがって「医療」フォルダが元々app未関与の場所にあり人間が初めて移動してきた
  * ものだった場合、本スクリプトは(そして本番の`findOrCreateFolder`自身も同じ`drive.file`スコープで
  * 動いているため)そのフォルダを検出できない可能性がある。0件/部分的な結果は「重複が存在しない
- * 証拠」ではなく「appのスコープ外にあり見えていないだけ」の可能性を必ず疑うこと。逆に言えば、
- * もし本スクリプトが実際に重複を検出できた場合、そのフォルダは(少なくとも一方は)appが
- * `files.create`で作成したもの、というappスコープ内での確実な事実ではある。
+ * 証拠」ではなく「appのスコープ外にあり見えていないだけ」の可能性を必ず疑うこと。
+ *
+ * **もう一つの誤読注意(codex review --strict-config P2指摘)**: `drive.file`スコープは
+ * `files.create`で作成したファイルだけでなく、ユーザーがファイル選択UI等でappに明示的に
+ * 開かせたファイルにも付与されうる。したがって本スクリプトの`files.list`に出てきたという
+ * 事実だけでは「appが作成した」とは断定できない。作成経路の判定には必ず出力末尾の
+ * `appProperties.docSplitFolderClaim`(claimプロトコル経由の`files.create`時にのみ
+ * 刻まれる)を根拠にすること。
  *
  * 使用方法:
  *   FIREBASE_PROJECT_ID=docsplit-kanameone npx ts-node scripts/investigate-drive-folder-duplicate-by-name.ts \
