@@ -977,7 +977,12 @@ export async function handleProcessingError(
   console.error(`Error processing document ${docId}:`, error.message);
 
   const docRef = db.doc(`documents/${docId}`);
-  const transient = isTransientError(error);
+  // Issue #960: applyOcrCompletionTransactionの外側リトライ(withBackoffRetry)が尽きた場合、
+  // ここに渡ってくるerrorはFirestoreのgRPC transientコード(1/2/4/13/14/16)を持ちうるが、
+  // isTransientErrorはgRPC ABORTED(10)以外の数値コードを認識しない。isRetryableFirestoreErrorを
+  // OR条件で加え、OCR抽出結果が既に計算済みなのにstatus:'error'へ誤確定するのを防ぐ
+  // (両関数の統合はしない、driveFolderClaim.ts由来の既存方針を維持)。
+  const transient = isTransientError(error) || isRetryableFirestoreError(error);
   const isQuotaError = is429Error(error);
   const maxRetries = isQuotaError ? MAX_RETRY_COUNT_429 : MAX_RETRY_COUNT;
 
