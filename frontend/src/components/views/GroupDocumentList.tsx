@@ -5,7 +5,7 @@
  * 無限スクロール対応
  */
 
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { FileText, Loader2, RefreshCw, Users } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
@@ -292,6 +292,20 @@ export function GroupDocumentList({
     disabled: isRefreshingGroup,
   });
 
+  /**
+   * 担当CM別(#1032): 利用者別・フォルダ別の件数はページ読み込み済み分のクライアント集計
+   * (下記 allDocuments)のため、スクロール末尾のsentinel到達を待つ従来の無限スクロールでは
+   * 全件読み込み完了まで件数が不正確なまま表示されてしまう。CM展開時は自動で残り全ページを
+   * 読み込み切り、完了する(hasNextPage===false)までは下部のcareManager分岐で件数を出さず
+   * ローディング表示に留める。他のgroupTypeは従来通りスクロール駆動のまま(Firestore読み取り
+   * 抑制、Issue #891)。
+   */
+  useEffect(() => {
+    if (groupType === 'careManager' && hasNextPage && !isFetchingNextPage && !isRefreshingGroup) {
+      fetchNextPage();
+    }
+  }, [groupType, hasNextPage, isFetchingNextPage, isRefreshingGroup, fetchNextPage]);
+
   const updateBanner = (
     <DocumentListUpdateBanner
       hasUpdates={hasUpdates}
@@ -425,18 +439,28 @@ export function GroupDocumentList({
 
   // 担当CM別の場合は顧客サブグループで表示
   if (groupType === 'careManager') {
+    // 全ページ読み込み完了(hasNextPage===false)まで、利用者別・フォルダ別の件数は
+    // 不正確になりうるため表示せずローディングに留める(Issue #1032)
+    const isFullyLoaded = !hasNextPage;
     return (
       <>
         {updateBanner}
         <div ref={scrollContainerRef} className="max-h-[500px] overflow-y-auto">
-          <CustomerSubGroup
-            documents={allDocuments}
-            furiganaMap={furiganaMap}
-            documentMasters={documentMasters}
-            onDocumentSelect={onDocumentSelect}
-            onRetry={setRetryTarget}
-            identityLookup={identityLookup}
-          />
+          {isFullyLoaded ? (
+            <CustomerSubGroup
+              documents={allDocuments}
+              furiganaMap={furiganaMap}
+              documentMasters={documentMasters}
+              onDocumentSelect={onDocumentSelect}
+              onRetry={setRetryTarget}
+              identityLookup={identityLookup}
+            />
+          ) : (
+            <div className="flex flex-col items-center justify-center gap-2 py-8 text-sm text-gray-500">
+              <Loader2 className="h-5 w-5 animate-spin text-gray-400" />
+              <span>件数を集計中...({allDocuments.length}件読み込み済み)</span>
+            </div>
+          )}
 
           <LoadMoreIndicator
             ref={loadMoreRef}
