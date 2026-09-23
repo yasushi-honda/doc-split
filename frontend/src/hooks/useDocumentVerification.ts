@@ -5,7 +5,7 @@
  */
 
 import { useState, useCallback } from 'react'
-import { doc, updateDoc, serverTimestamp, Timestamp, addDoc, collection } from 'firebase/firestore'
+import { doc, updateDoc, serverTimestamp, Timestamp, collection, runTransaction } from 'firebase/firestore'
 import { useQueryClient } from '@tanstack/react-query'
 import { db, auth } from '../lib/firebase'
 import { updateDocumentInListCache, getDriveExportClearFields, markDocumentsInfiniteVariantsDirty } from './useDocuments'
@@ -59,92 +59,100 @@ export function useDocumentVerification(
     // ロールバック用に変更前の値を保持(documentは以降optimisticUpdateで変異しない
     // オブジェクトのため、try内外どちらで読んでも同じ値になる)
     const previousVerified = document.verified
-
-    // Issue #1034: 「確認済み」にする操作は、同姓同名等の危険なケースを除き
-    // customerConfirmed/officeConfirmedも同時に確定する(既存の保存フロー
-    // useDocumentEdit.tsのshouldSetCustomerConfirmed/shouldSetOfficeConfirmedと同一ルール)。
-    // identityLookup.isReady が false(顧客マスター読み込み中)の間はサイレントに確定させず、
-    // verifiedのみ更新する既存動作のままにする。
-    const decisions = identityLookup.isReady
-      ? planConfirmOnVerify(document, {
-          customerMasterName: document.customerId
-            ? (identityLookup.customerMasterNameById.get(document.customerId) ?? null)
-            : null,
-          sameNameCollisionNames: identityLookup.sameNameCollisionNames,
-        })
-      : null
-    const confirmUpdate = decisions
-      ? buildConfirmOnVerifyUpdate(decisions, document, { uid: auth.currentUser.uid, now: serverTimestamp() })
-      : null
+    const uid = auth.currentUser.uid
+    const email = auth.currentUser.email || ''
 
     try {
-      // 楽観的更新（即座にUIに反映）
+      // 楽観的更新（即座にUIに反映）。verifiedのみ即時反映し、確定フラグ(customerConfirmed等)は
+      // トランザクション確定後の実際の判定結果で反映する(下記)。
       // 2026-09-08追記(second-opinionレビュー指摘): この呼び出しをtryブロックの外に
       // 置くと、内部のmarkDocumentsInfiniteVariantsDirty等が万一例外を投げた場合に
       // finally(isUpdatingのリセット)が実行されず、確認トグルが永久disabledになる
       // 恐れがあった。tryブロック内へ移動して対称性を確保する。
-      const optimisticConfirm: Partial<Document> = {}
-      if (decisions?.customer.action === 'confirm') {
-        optimisticConfirm.customerConfirmed = true
-        optimisticConfirm.confirmedBy = auth.currentUser.uid
-        optimisticConfirm.confirmedAt = Timestamp.now()
-      }
-      if (decisions?.office.action === 'confirm') {
-        optimisticConfirm.officeConfirmed = true
-        optimisticConfirm.officeConfirmedBy = auth.currentUser.uid
-        optimisticConfirm.officeConfirmedAt = Timestamp.now()
-      }
-      optimisticUpdate(true, optimisticConfirm)
+      optimisticUpdate(true)
 
       const docRef = doc(db, 'documents', document.id)
-      await updateDoc(docRef, {
-        verified: true,
-        verifiedBy: auth.currentUser.uid,
-        verifiedAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-        ...confirmUpdate?.update,
-      })
+      // Issue #1034 + codexレビュー指摘(P1): propの`document`はモーダルを開いた時点の
+      // スナップショットで、確定操作を押すまでの間に他者が顧客/事業所を変更している
+      // 可能性がある。その場合、古いスナップショットで「確定可能」と判定した内容を
+      // 書き込むと、実際には変更後の(未検証の)顧客/事業所を人間確定扱いにしてしまい、
+      // 同姓同名ゲートを素通りしうる。トランザクション内でFirestoreから直前に再読込した
+      // 最新データに対して判定・書込みを行うことで、この競合を防ぐ。
+      const decisions = await runTransaction(db, async (tx) => {
+        const freshSnap = await tx.get(docRef)
+        if (!freshSnap.exists()) {
+          throw new Error('Document not found')
+        }
+        const freshDoc = freshSnap.data() as Document
 
-      // #398と同じ規約の監査ログ(確定フラグ変更のsilent failure検知用)。
-      // codexレビュー指摘: updateDoc成功後にここが失敗すると、Firestoreには確定済みの
-      // 内容が既に保存されているにもかかわらず、外側catchのロールバックでUIだけ未確認に
-      // 戻ってしまい表示とFirestoreの状態が食い違う。監査ログはベストエフォートとして
-      // 独立したtry/catchにし、失敗してもドキュメント本体の更新成功を優先する。
-      if (confirmUpdate && confirmUpdate.logs.length > 0) {
-        try {
+        const txDecisions = identityLookup.isReady
+          ? planConfirmOnVerify(freshDoc, {
+              customerMasterName: freshDoc.customerId
+                ? (identityLookup.customerMasterNameById.get(freshDoc.customerId) ?? null)
+                : null,
+              sameNameCollisionNames: identityLookup.sameNameCollisionNames,
+            })
+          : null
+        const confirmUpdate = txDecisions
+          ? buildConfirmOnVerifyUpdate(txDecisions, freshDoc, { uid, now: serverTimestamp() })
+          : null
+
+        tx.update(docRef, {
+          verified: true,
+          verifiedBy: uid,
+          verifiedAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+          ...confirmUpdate?.update,
+        })
+
+        // #398と同じ規約の監査ログ(確定フラグ変更のsilent failure検知用)。ドキュメント本体の
+        // 更新と同一トランザクションに含めることで、ログ書込みが失敗した場合は本体更新も
+        // 含めて全体がロールバックされ、Firestoreの状態とUIが食い違うことがなくなる
+        // (codexレビュー指摘: 従来はupdateDoc成功後にaddDocが独立して失敗しうる構造だった)。
+        if (confirmUpdate) {
           const editLogsRef = collection(db, 'editLogs')
           for (const change of confirmUpdate.logs) {
-            await addDoc(editLogsRef, {
+            tx.set(doc(editLogsRef), {
               documentId: document.id,
               fieldName: change.field,
               oldValue: change.oldValue,
               newValue: change.newValue,
-              editedBy: auth.currentUser.uid,
-              editedByEmail: auth.currentUser.email || '',
+              editedBy: uid,
+              editedByEmail: email,
               editedAt: serverTimestamp(),
             })
           }
-        } catch (logErr) {
-          console.error('Failed to write editLogs for confirm-on-verify (document update already succeeded):', logErr)
+        }
+
+        return txDecisions
+      })
+
+      // トランザクション確定後、実際に判定された確定フラグでキャッシュを補正する
+      // (最新データに基づく結果のため、モーダルを開いた時点のdocumentとは食い違いうる)。
+      if (decisions) {
+        const confirmedAtApprox = Timestamp.now()
+        const patch: Partial<Document> = {}
+        if (decisions.customer.action === 'confirm') {
+          patch.customerConfirmed = true
+          patch.confirmedBy = uid
+          patch.confirmedAt = confirmedAtApprox
+        }
+        if (decisions.office.action === 'confirm') {
+          patch.officeConfirmed = true
+          patch.officeConfirmedBy = uid
+          patch.officeConfirmedAt = confirmedAtApprox
+        }
+        if (Object.keys(patch).length > 0) {
+          optimisticUpdate(true, patch)
         }
       }
       return true
     } catch (err) {
       console.error('Failed to mark as verified:', err)
       setError(err instanceof Error ? err.message : '確認済みにできませんでした')
-      // エラー時はロールバック(確定フラグの楽観的更新も含めて元に戻す)
-      const rollbackConfirm: Partial<Document> = {}
-      if (decisions?.customer.action === 'confirm') {
-        rollbackConfirm.customerConfirmed = document.customerConfirmed
-        rollbackConfirm.confirmedBy = document.confirmedBy ?? null
-        rollbackConfirm.confirmedAt = document.confirmedAt ?? null
-      }
-      if (decisions?.office.action === 'confirm') {
-        rollbackConfirm.officeConfirmed = document.officeConfirmed
-        rollbackConfirm.officeConfirmedBy = document.officeConfirmedBy ?? null
-        rollbackConfirm.officeConfirmedAt = document.officeConfirmedAt ?? null
-      }
-      optimisticUpdate(previousVerified || false, rollbackConfirm)
+      // エラー時はロールバック(トランザクション全体が失敗しているため、確定フラグは
+      // 一切書き込まれていない。verifiedの楽観的更新のみ元に戻せばよい)。
+      optimisticUpdate(previousVerified || false)
       return false
     } finally {
       setIsUpdating(false)

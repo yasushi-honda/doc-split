@@ -1,7 +1,7 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
-import { doc, writeBatch, serverTimestamp, collection } from 'firebase/firestore'
+import { doc, writeBatch, serverTimestamp, collection, runTransaction } from 'firebase/firestore'
 import {
   Filter,
   FileText,
@@ -123,6 +123,23 @@ function SortableHeader({
       </div>
     </th>
   )
+}
+
+/**
+ * 並行数を制限しつつ配列の各要素を非同期処理する(Issue #1034 一括確認済み用)。
+ * `items.length`件のFirestoreトランザクションを無制限に同時発行しないための簡易プール。
+ */
+async function runWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length)
+  let nextIndex = 0
+  async function worker() {
+    while (nextIndex < items.length) {
+      const current = nextIndex++
+      results[current] = await fn(items[current] as T)
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
+  return results
 }
 
 // 一括操作モードの型
@@ -614,121 +631,119 @@ export function DocumentsPage() {
   // 一括確認済み
   // Issue #1034: 「確認済み」にする操作は、同姓同名等の危険なケースを除きcustomerConfirmed/
   // officeConfirmedも同時に確定する(shared/confirmOnVerify.ts、単体トグルと同一ロジック)。
-  // 1文書あたり最大4オペレーション(doc更新1 + customerConfirmedログ1 +
-  // needsManualCustomerSelectionログ1 + officeConfirmedログ1)になったため、500オペレーション/
-  // バッチ上限を踏まえてCHUNK_SIZE=100でチャンク化する(以前は無チャンクの単一batchだった。
-  // codexレビュー指摘: 150では最大600操作になり上限超過)。チャンク処理は
-  // handleBulkReprocess(下記)と同じパターンを踏襲する。
+  //
+  // codexレビュー指摘(P1、2026-09-23): 当初案は`documentsData`(Reactクエリキャッシュ、
+  // 最大5分古い)から取得した文書データで確定可否を判定し、`writeBatch`でチャンクごとに
+  // まとめて書き込んでいた。選択してから実行するまでの間に他者が顧客/事業所を変更していた
+  // 場合、古いデータのまま誤って確定してしまう恐れがあった(単体トグルと同じ問題)。
+  // 文書ごとに`runTransaction`でFirestoreから直前に再読込した最新データに対して判定・
+  // 書込みを行う方式に変更し、この競合を防ぐ。writeBatchのチャンク化(500オペレーション
+  // 上限対策)も、文書単位の独立したトランザクションに置き換わったことで不要になった
+  // (1件の衝突/失敗が他の文書を巻き込まない点は、scripts/backfill-confirm-on-verify.ts
+  // が個別update()+precondition方式を採る理由と同じ)。
   const handleBulkVerify = useCallback(async () => {
     if (selectedIds.size === 0 || !user || !identityLookup.isReady) return
 
     setIsBulkOperating(true)
     try {
-      const allDocsForLookup = documentsData?.pages.flatMap(page => page.documents) ?? []
-      const docsById = new Map(allDocsForLookup.map((d) => [d.id, d]))
       const ids = Array.from(selectedIds)
-      const CHUNK_SIZE = 100
-      let succeededCount = 0
-      let confirmedCount = 0
-      let chunkFailed = false
+      const uid = user.uid
+      const email = user.email || ''
 
-      for (let i = 0; i < ids.length; i += CHUNK_SIZE) {
-        const chunk = ids.slice(i, i + CHUNK_SIZE)
+      const outcomes = await runWithConcurrency(ids, 20, async (docId) => {
+        const docRef = doc(db, 'documents', docId)
         try {
-          const batch = writeBatch(db)
-          const editLogsRef = collection(db, 'editLogs')
-          // decisionsは書込み用(serverTimestamp)とキャッシュパッチ用(Timestamp.now())で
-          // actorのnowだけ異なるため、confirm有無の判定(action==='confirm'か)だけ先に
-          // 一度計算して使い回す(2箇所で同じplanConfirmOnVerifyを重複計算しない)。
-          const chunkPlans = chunk.map((docId) => {
-            const targetDoc = docsById.get(docId)
-            if (!targetDoc) return { docId, targetDoc: null, decisions: null }
-            const decisions = planConfirmOnVerify(targetDoc, {
-              customerMasterName: targetDoc.customerId
-                ? (identityLookup.customerMasterNameById.get(targetDoc.customerId) ?? null)
+          const decisions = await runTransaction(db, async (tx) => {
+            const freshSnap = await tx.get(docRef)
+            if (!freshSnap.exists()) {
+              throw new Error(`Document not found: ${docId}`)
+            }
+            const freshDoc = freshSnap.data() as Document
+
+            const txDecisions = planConfirmOnVerify(freshDoc, {
+              customerMasterName: freshDoc.customerId
+                ? (identityLookup.customerMasterNameById.get(freshDoc.customerId) ?? null)
                 : null,
               sameNameCollisionNames: identityLookup.sameNameCollisionNames,
             })
-            return { docId, targetDoc, decisions }
-          })
+            const { update: confirmFields, logs } = buildConfirmOnVerifyUpdate(txDecisions, freshDoc, {
+              uid,
+              now: serverTimestamp(),
+            })
 
-          for (const { docId, targetDoc, decisions } of chunkPlans) {
-            const docRef = doc(db, 'documents', docId)
-            const update: Record<string, unknown> = {
-              verified: true,
-              verifiedBy: user.uid,
-              verifiedAt: serverTimestamp(),
-            }
-            if (targetDoc && decisions) {
-              const { update: confirmUpdate, logs } = buildConfirmOnVerifyUpdate(decisions, targetDoc, {
-                uid: user.uid,
-                now: serverTimestamp(),
-              })
-              Object.assign(update, confirmUpdate)
-              for (const change of logs) {
-                batch.set(doc(editLogsRef), {
-                  documentId: docId,
-                  fieldName: change.field,
-                  oldValue: change.oldValue,
-                  newValue: change.newValue,
-                  editedBy: user.uid,
-                  editedByEmail: user.email || '',
-                  editedAt: serverTimestamp(),
-                })
-              }
-            }
             // 既存のuseDocumentEdit.ts(L396)と同じ規約: 動的に組み立てたRecord<string, unknown>を
             // Firestoreの厳密なUpdateData型へ渡すためのキャスト。
-            batch.update(docRef, update as any)
-          }
-
-          await batch.commit()
-          succeededCount += chunk.length
-          confirmedCount += chunkPlans.filter(
-            ({ decisions }) => decisions?.customer.action === 'confirm' || decisions?.office.action === 'confirm'
-          ).length
-
-          const verifiedAtApprox = Timestamp.now()
-          chunkPlans.forEach(({ docId, decisions }) => {
-            const cachePatch: Record<string, unknown> = {
+            tx.update(docRef, {
               verified: true,
-              verifiedBy: user.uid,
-              verifiedAt: verifiedAtApprox,
+              verifiedBy: uid,
+              verifiedAt: serverTimestamp(),
+              ...confirmFields,
+            } as any)
+
+            const editLogsRef = collection(db, 'editLogs')
+            for (const change of logs) {
+              tx.set(doc(editLogsRef), {
+                documentId: docId,
+                fieldName: change.field,
+                oldValue: change.oldValue,
+                newValue: change.newValue,
+                editedBy: uid,
+                editedByEmail: email,
+                editedAt: serverTimestamp(),
+              })
             }
-            if (decisions?.customer.action === 'confirm') {
-              cachePatch.customerConfirmed = true
-              cachePatch.confirmedBy = user.uid
-              cachePatch.confirmedAt = verifiedAtApprox
-            }
-            if (decisions?.office.action === 'confirm') {
-              cachePatch.officeConfirmed = true
-              cachePatch.officeConfirmedBy = user.uid
-              cachePatch.officeConfirmedAt = verifiedAtApprox
-            }
-            updateDocumentInListCache(queryClient, docId, cachePatch)
+
+            return txDecisions
           })
-        } catch (chunkError) {
-          console.error('Bulk verify chunk error:', chunkError)
-          chunkFailed = true
-          break
+          return { docId, status: 'ok' as const, decisions }
+        } catch (err) {
+          console.error(`Bulk verify failed for document ${docId}:`, err)
+          return { docId, status: 'error' as const, decisions: null }
         }
+      })
+
+      const succeeded = outcomes.filter((o) => o.status === 'ok')
+      const failed = outcomes.filter((o) => o.status === 'error')
+
+      const confirmedAtApprox = Timestamp.now()
+      for (const o of succeeded) {
+        const cachePatch: Record<string, unknown> = {
+          verified: true,
+          verifiedBy: uid,
+          verifiedAt: confirmedAtApprox,
+        }
+        if (o.decisions?.customer.action === 'confirm') {
+          cachePatch.customerConfirmed = true
+          cachePatch.confirmedBy = uid
+          cachePatch.confirmedAt = confirmedAtApprox
+        }
+        if (o.decisions?.office.action === 'confirm') {
+          cachePatch.officeConfirmed = true
+          cachePatch.officeConfirmedBy = uid
+          cachePatch.officeConfirmedAt = confirmedAtApprox
+        }
+        updateDocumentInListCache(queryClient, o.docId, cachePatch)
       }
 
       // 安全網: staleマークのみ(refetchType:'none')。表示更新は上記パッチが担う
       markDocumentsInfiniteStale(queryClient)
       queryClient.invalidateQueries({ queryKey: ['documentStats'] })
 
-      if (chunkFailed) {
-        const succeededIds = new Set(ids.slice(0, succeededCount))
-        setSelectedIds(prev => new Set([...prev].filter(id => !succeededIds.has(id))))
-        toast.error(`一括確認が途中で失敗しました（${succeededCount}/${ids.length}件完了）`)
+      const confirmedCount = succeeded.filter(
+        (o) => o.decisions?.customer.action === 'confirm' || o.decisions?.office.action === 'confirm'
+      ).length
+
+      if (failed.length > 0) {
+        const failedIds = new Set(failed.map((o) => o.docId))
+        setSelectedIds(prev => new Set([...prev].filter(id => failedIds.has(id))))
+        toast.error(`一括確認が一部失敗しました（${succeeded.length}/${ids.length}件完了）`)
       } else {
         clearSelection()
         setBulkOperation(null)
         toast.success(
           confirmedCount > 0
-            ? `${succeededCount}件を確認済みにしました（うち${confirmedCount}件は顧客/事業所も確定しました）`
-            : `${succeededCount}件を確認済みにしました`
+            ? `${succeeded.length}件を確認済みにしました（うち${confirmedCount}件は顧客/事業所も確定しました）`
+            : `${succeeded.length}件を確認済みにしました`
         )
       }
     } catch (error) {
@@ -737,7 +752,7 @@ export function DocumentsPage() {
     } finally {
       setIsBulkOperating(false)
     }
-  }, [selectedIds, user, queryClient, clearSelection, documentsData, identityLookup])
+  }, [selectedIds, user, queryClient, clearSelection, identityLookup])
 
   // 一括再処理
   // ADR-0018 Phase D PR4b (Issue #547): 親doc + detail/main を同一batchでクリア。
