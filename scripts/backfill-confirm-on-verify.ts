@@ -47,8 +47,7 @@ import {
   tallyConfirmOnVerifyDecisions,
   tallyDriveExportStatus,
   buildConfirmOnVerifyManifest,
-  isCustomerFieldRollbackEligible,
-  isOfficeFieldRollbackEligible,
+  isRollbackEligibleByUpdateTime,
   computeRollbackInstructions,
   type ConfirmOnVerifyManifestEntry,
   type ConfirmOnVerifyBackfillManifest,
@@ -176,7 +175,7 @@ async function applyConfirmOnVerify(
 ): Promise<{ status: 'ok'; entry: ConfirmOnVerifyManifestEntry } | { status: 'precondition-failed' }> {
   const { update } = buildConfirmOnVerifyUpdate(candidate.decisions, candidate.data, { uid: null });
   try {
-    await candidate.ref.update(update, { lastUpdateTime: candidate.updateTime });
+    const writeResult = await candidate.ref.update(update, { lastUpdateTime: candidate.updateTime });
     return {
       status: 'ok',
       entry: {
@@ -191,6 +190,11 @@ async function applyConfirmOnVerify(
         confirmedOffice: candidate.decisions.office.action === 'confirm',
         officeConfirmedBefore:
           candidate.decisions.office.action === 'confirm' ? (candidate.data.officeConfirmed as boolean | undefined) : undefined,
+        // codexレビュー指摘(4回目・P2): rollback可否をconfirmedBy等のactorベースで判定すると、
+        // OCR再処理による自動確定(confirmedByはnullのまま新しい値で上書き)を検知できない。
+        // backfillが実際に書き込んだ直後のupdateTimeを記録し、rollback時にライブの
+        // updateTimeと完全一致するかで「backfill以降一切触れられていないか」を判定する。
+        backfillUpdateTimeMs: writeResult.writeTime.toMillis(),
       },
     };
   } catch (err) {
@@ -336,16 +340,19 @@ async function runRollback(manifestPath: string): Promise<void> {
       skippedNotFound++;
       continue;
     }
-    const data = snap.data()!;
+    // codexレビュー指摘(4回目・P2): confirmedBy等のactorベースの判定では、OCR再処理による
+    // 自動確定(confirmedByはnullのまま新しい値で上書き)を「backfillのまま」と誤検知しうる。
+    // backfill書込み直後のupdateTimeとライブのupdateTimeが完全一致する場合のみ、entry全体
+    // (顧客・事業所とも)をrollback対象とする(1文字でも異なれば何らかの書込みが発生している)。
+    if (!isRollbackEligibleByUpdateTime(entry, snap.updateTime!.toMillis())) {
+      console.log(`  スキップ(backfill以降に別の書込みが発生済み): ${entry.docId}`);
+      skippedProgressed++;
+      continue;
+    }
     const instructions = computeRollbackInstructions(entry);
     const update: Record<string, unknown> = {};
 
     if (instructions.customer) {
-      if (!isCustomerFieldRollbackEligible(data)) {
-        console.log(`  スキップ(顧客側は人間が後から確定済み): ${entry.docId}`);
-        skippedProgressed++;
-        continue;
-      }
       update.customerConfirmed =
         instructions.customer.action === 'delete' ? admin.firestore.FieldValue.delete() : instructions.customer.value;
       // codexレビュー指摘: backfillが顧客確定と同時にneedsManualCustomerSelectionも
@@ -356,11 +363,6 @@ async function runRollback(manifestPath: string): Promise<void> {
       }
     }
     if (instructions.office) {
-      if (!isOfficeFieldRollbackEligible(data)) {
-        console.log(`  スキップ(事業所側は人間が後から確定済み): ${entry.docId}`);
-        skippedProgressed++;
-        continue;
-      }
       update.officeConfirmed =
         instructions.office.action === 'delete' ? admin.firestore.FieldValue.delete() : instructions.office.value;
     }

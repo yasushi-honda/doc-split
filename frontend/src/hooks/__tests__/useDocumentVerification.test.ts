@@ -85,6 +85,19 @@ vi.mock('../useDocuments', () => ({
   }),
 }))
 
+// fetchFreshCustomerIdentityLookup()のモック。codexレビュー指摘(P1・2回目)対応で
+// markAsVerifiedが確定判定の直前にこれを呼ぶようになったため、テストごとに
+// `freshLookupOverride`を設定してマスター内容を差し替える(既定はマスター0件)。
+let freshLookupOverride: { sameNameCollisionNames: ReadonlySet<string>; customerMasterNameById: ReadonlyMap<string, string | null> } = {
+  sameNameCollisionNames: new Set(),
+  customerMasterNameById: new Map(),
+}
+const mockFetchFreshCustomerIdentityLookup = vi.fn(async () => freshLookupOverride)
+
+vi.mock('../useMasters', () => ({
+  fetchFreshCustomerIdentityLookup: () => mockFetchFreshCustomerIdentityLookup(),
+}))
+
 import { useDocumentVerification } from '../useDocumentVerification'
 import type { CustomerIdentityLookup } from '../useMasters'
 
@@ -127,6 +140,7 @@ describe('useDocumentVerification', () => {
     vi.clearAllMocks()
     txGetOverride = null
     txGetExists = true
+    freshLookupOverride = { sameNameCollisionNames: new Set(), customerMasterNameById: new Map() }
   })
 
   describe('markAsUnverified (#42: Drive状態クリア)', () => {
@@ -302,6 +316,7 @@ describe('useDocumentVerification', () => {
     it('同姓同名でない有効な顧客・事業所名ならcustomerConfirmed/officeConfirmedもtrueにする', async () => {
       const doc = makeDocument({ verified: false, customerId: 'customer-1' })
       txGetOverride = doc
+      freshLookupOverride = readyLookup
       const { result } = renderHook(() => useDocumentVerification(doc, readyLookup))
 
       await act(async () => {
@@ -325,6 +340,7 @@ describe('useDocumentVerification', () => {
       }
       const doc = makeDocument({ verified: false, customerId: 'customer-1' })
       txGetOverride = doc
+      freshLookupOverride = collisionLookup
       const { result } = renderHook(() => useDocumentVerification(doc, collisionLookup))
 
       await act(async () => {
@@ -340,6 +356,7 @@ describe('useDocumentVerification', () => {
     it('customerId・customerName・officeId・officeNameは更新データに含まれない', async () => {
       const doc = makeDocument({ verified: false, customerId: 'customer-1' })
       txGetOverride = doc
+      freshLookupOverride = readyLookup
       const { result } = renderHook(() => useDocumentVerification(doc, readyLookup))
 
       await act(async () => {
@@ -360,6 +377,7 @@ describe('useDocumentVerification', () => {
         officeConfirmed: false,
       })
       txGetOverride = doc
+      freshLookupOverride = readyLookup
       const { result } = renderHook(() => useDocumentVerification(doc, readyLookup))
 
       await act(async () => {
@@ -411,6 +429,7 @@ describe('useDocumentVerification', () => {
         sameNameCollisionNames: new Set(['鈴木花子']),
         customerMasterNameById: new Map([['customer-1', '鈴木花子']]),
       }
+      freshLookupOverride = collisionOnFreshRead
       const { result } = renderHook(() => useDocumentVerification(staleDoc, collisionOnFreshRead))
 
       await act(async () => {
@@ -423,6 +442,38 @@ describe('useDocumentVerification', () => {
       expect('customerConfirmed' in updateData).toBe(false)
       // 事業所側も最新データ(未判定=invalid-name)で判定されるため確定されない。
       expect('officeConfirmed' in updateData).toBe(false)
+    })
+
+    // codexレビュー指摘(P1、2回目、2026-09-23): 文書自体はtx.get()で再読込していても、
+    // 同姓同名判定に使う顧客マスター側がuseCustomers()のキャッシュ(最大5分古い)のままだと、
+    // 直近に追加された同姓同名マスターを見逃して誤確定してしまう。fetchFreshCustomerIdentityLookup()
+    // (キャッシュを経由しない新規取得)の結果を使っていることを検証する。
+    it('identityLookup prop(キャッシュ)が同姓同名なしでも、fetchFreshCustomerIdentityLookupが同姓同名ありを返せば確定しない(マスター鮮度のP1回帰テスト)', async () => {
+      const doc = makeDocument({ verified: false, customerId: 'customer-1', customerName: '田村 勝義' })
+      txGetOverride = doc // 文書自体は最新(propと同じ)
+      // フックへ渡すidentityLookup prop(キャッシュ由来)は同姓同名なしと認識している。
+      const staleCachedLookup: CustomerIdentityLookup = {
+        isReady: true,
+        sameNameCollisionNames: new Set(),
+        customerMasterNameById: new Map([['customer-1', '田村 勝義']]),
+      }
+      // しかし直前に新規取得したマスター一覧(フレッシュ取得)では、同姓同名マスターが
+      // 直近追加されたことが判明している。
+      freshLookupOverride = {
+        sameNameCollisionNames: new Set(['田村 勝義']),
+        customerMasterNameById: new Map([['customer-1', '田村 勝義']]),
+      }
+      const { result } = renderHook(() => useDocumentVerification(doc, staleCachedLookup))
+
+      await act(async () => {
+        await result.current.markAsVerified()
+      })
+
+      expect(mockFetchFreshCustomerIdentityLookup).toHaveBeenCalled()
+      const updateData = getTxUpdateData()
+      // フレッシュ取得の同姓同名情報が使われていれば確定しない。propのキャッシュ
+      // (同姓同名なし)のまま判定していれば誤って確定していたはず。
+      expect('customerConfirmed' in updateData).toBe(false)
     })
   })
 })

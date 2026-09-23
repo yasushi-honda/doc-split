@@ -94,6 +94,16 @@ export interface ConfirmOnVerifyManifestEntry {
   confirmedOffice: boolean;
   /** confirmedOffice:trueの場合のみ有効。backfill実行前のofficeConfirmedの値。 */
   officeConfirmedBefore?: boolean;
+  /**
+   * backfillがこの文書へ書込んだ直後の`updateTime`(ミリ秒、`WriteResult.writeTime.toMillis()`)。
+   * rollback時、ライブの`updateTime`とこの値が一致する場合のみ「backfill以降、誰にも
+   * (再処理を含め)一切触れられていない」と判定できる(codexレビュー指摘: `confirmedBy`が
+   * nullのままの再確認だけでなく、OCR再処理による自動確定もconfirmedByをnullのまま
+   * customerConfirmed等を新しい値で書き換えうるため、actorベースの判定だけでは
+   * 「backfillが書いた値のまま」なのか「その後さらに別の値で上書きされた」のかを
+   * 区別できなかった。updateTime完全一致チェックはどちらの経路の上書きも等しく検知する)。
+   */
+  backfillUpdateTimeMs: number;
 }
 
 export interface ConfirmOnVerifyBackfillManifest {
@@ -118,18 +128,16 @@ export function buildConfirmOnVerifyManifest(params: {
 }
 
 /**
- * ロールバック可否判定。backfillは`confirmedBy`/`officeConfirmedBy`を書かない
- * (shared/confirmOnVerify.tsの設計方針)ため、ライブの値がまだ空であれば「backfill後に
- * 人間の確定操作(単体トグル・一括確認済み・候補選び直し)が入っていない」と判定できる。
- * 既に値が入っている場合は、それを上書きすると人間の確定を破壊してしまうためskipする
- * (backfill-drive-export.tsの「進行済みはskip」と同じ設計思想)。
+ * ロールバック可否判定(codexレビュー指摘、2回目: actorベース(confirmedBy等)の判定を
+ * updateTime完全一致ベースに置き換え)。backfillが書込んだ直後の`updateTime`と、
+ * ライブの`updateTime`が完全一致する場合のみ「backfill以降、この文書には一切(再処理・
+ * 他の確定操作を含め)書込みが発生していない」と判定できる。1文字でも異なれば、それが
+ * 人間の確定操作によるものかOCR再処理の自動確定によるものかを問わず、backfillが記録した
+ * 「実行前の値」は既に古くなっている可能性があるためrollback対象外とする
+ * (backfill-drive-export.tsの「進行済みはskip」と同じ設計思想をより厳密にしたもの)。
  */
-export function isCustomerFieldRollbackEligible(liveData: Record<string, unknown>): boolean {
-  return liveData.confirmedBy == null;
-}
-
-export function isOfficeFieldRollbackEligible(liveData: Record<string, unknown>): boolean {
-  return liveData.officeConfirmedBy == null;
+export function isRollbackEligibleByUpdateTime(entry: ConfirmOnVerifyManifestEntry, liveUpdateTimeMs: number): boolean {
+  return liveUpdateTimeMs === entry.backfillUpdateTimeMs;
 }
 
 /**

@@ -5,8 +5,7 @@ import {
   tallyConfirmOnVerifyDecisions,
   tallyDriveExportStatus,
   buildConfirmOnVerifyManifest,
-  isCustomerFieldRollbackEligible,
-  isOfficeFieldRollbackEligible,
+  isRollbackEligibleByUpdateTime,
   computeRollbackInstructions,
 } from './confirmOnVerifyBackfillHelpers';
 
@@ -46,7 +45,13 @@ test('buildConfirmOnVerifyManifest: 渡したentriesをそのまま保持する'
     projectId: 'proj-1',
     timestampIso: '2026-09-23T00:00:00.000Z',
     entries: [
-      { docId: 'doc-1', confirmedCustomer: true, resetNeedsManualCustomerSelection: false, confirmedOffice: false },
+      {
+        docId: 'doc-1',
+        confirmedCustomer: true,
+        resetNeedsManualCustomerSelection: false,
+        confirmedOffice: false,
+        backfillUpdateTimeMs: 1000,
+      },
     ],
   });
   assert.equal(manifest.runId, 'run-1');
@@ -54,15 +59,20 @@ test('buildConfirmOnVerifyManifest: 渡したentriesをそのまま保持する'
   assert.equal(manifest.entries[0].docId, 'doc-1');
 });
 
-test('isCustomerFieldRollbackEligible: confirmedByが未設定(null/undefined)のときのみtrue', () => {
-  assert.equal(isCustomerFieldRollbackEligible({}), true);
-  assert.equal(isCustomerFieldRollbackEligible({ confirmedBy: null }), true);
-  assert.equal(isCustomerFieldRollbackEligible({ confirmedBy: 'user-1' }), false, '人間が後から確定した場合はロールバック対象外');
-});
-
-test('isOfficeFieldRollbackEligible: officeConfirmedByが未設定のときのみtrue', () => {
-  assert.equal(isOfficeFieldRollbackEligible({}), true);
-  assert.equal(isOfficeFieldRollbackEligible({ officeConfirmedBy: 'user-1' }), false);
+test('isRollbackEligibleByUpdateTime: backfill書込み直後のupdateTimeとライブのupdateTimeが完全一致する場合のみtrue', () => {
+  const entry = {
+    docId: 'doc-1',
+    confirmedCustomer: true,
+    resetNeedsManualCustomerSelection: false,
+    confirmedOffice: true,
+    backfillUpdateTimeMs: 1_700_000_000_000,
+  };
+  assert.equal(isRollbackEligibleByUpdateTime(entry, 1_700_000_000_000), true);
+  assert.equal(
+    isRollbackEligibleByUpdateTime(entry, 1_700_000_000_001),
+    false,
+    '1msでも異なれば(人間の再確定/OCR再処理の自動確定いずれによる上書きでも)対象外'
+  );
 });
 
 test('computeRollbackInstructions: 実行前がフィールド不在ならdelete、falseならその値へset', () => {
@@ -71,6 +81,7 @@ test('computeRollbackInstructions: 実行前がフィールド不在ならdelete
     confirmedCustomer: true,
     resetNeedsManualCustomerSelection: false,
     confirmedOffice: true,
+    backfillUpdateTimeMs: 1000,
   });
   assert.deepEqual(deleteBoth.customer, { action: 'delete' });
   assert.deepEqual(deleteBoth.office, { action: 'delete' });
@@ -82,6 +93,7 @@ test('computeRollbackInstructions: 実行前がフィールド不在ならdelete
     customerConfirmedBefore: false,
     resetNeedsManualCustomerSelection: false,
     confirmedOffice: false,
+    backfillUpdateTimeMs: 1000,
   });
   assert.deepEqual(setFalse.customer, { action: 'set', value: false });
   assert.equal(setFalse.office, undefined, 'confirmedOffice:falseのentryはoffice側の指示を返さない');
@@ -93,6 +105,7 @@ test('computeRollbackInstructions: resetNeedsManualCustomerSelection:trueなら�
     confirmedCustomer: true,
     resetNeedsManualCustomerSelection: true,
     confirmedOffice: false,
+    backfillUpdateTimeMs: 1000,
   });
   assert.deepEqual(result.needsManualCustomerSelection, { action: 'set', value: true });
 });
@@ -104,6 +117,7 @@ test('computeRollbackInstructions: 顧客側が対象外(confirmedCustomer:false
     resetNeedsManualCustomerSelection: true,
     confirmedOffice: true,
     officeConfirmedBefore: false,
+    backfillUpdateTimeMs: 1000,
   });
   assert.equal(result.customer, undefined);
   assert.equal(result.needsManualCustomerSelection, undefined);

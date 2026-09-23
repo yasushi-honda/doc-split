@@ -11,7 +11,7 @@ import { db, auth } from '../lib/firebase'
 import { updateDocumentInListCache, getDriveExportClearFields, markDocumentsInfiniteVariantsDirty } from './useDocuments'
 import type { Document } from '../../../shared/types'
 import { planConfirmOnVerify, buildConfirmOnVerifyUpdate } from '../../../shared/confirmOnVerify'
-import type { CustomerIdentityLookup } from './useMasters'
+import { fetchFreshCustomerIdentityLookup, type CustomerIdentityLookup } from './useMasters'
 
 interface UseDocumentVerificationResult {
   isUpdating: boolean
@@ -72,12 +72,27 @@ export function useDocumentVerification(
       optimisticUpdate(true)
 
       const docRef = doc(db, 'documents', document.id)
-      // Issue #1034 + codexレビュー指摘(P1): propの`document`はモーダルを開いた時点の
+      // Issue #1034 + codexレビュー指摘(P1・1回目): propの`document`はモーダルを開いた時点の
       // スナップショットで、確定操作を押すまでの間に他者が顧客/事業所を変更している
-      // 可能性がある。その場合、古いスナップショットで「確定可能」と判定した内容を
-      // 書き込むと、実際には変更後の(未検証の)顧客/事業所を人間確定扱いにしてしまい、
-      // 同姓同名ゲートを素通りしうる。トランザクション内でFirestoreから直前に再読込した
-      // 最新データに対して判定・書込みを行うことで、この競合を防ぐ。
+      // 可能性がある。トランザクション内でFirestoreから直前に再読込した最新データに
+      // 対して判定・書込みを行うことで、この競合を防ぐ。
+      //
+      // codexレビュー指摘(P1・2回目): 上記だけでは、同姓同名判定に使う顧客マスター側が
+      // 依然`useCustomers()`のキャッシュ(最大5分古い)のままだった。直近に追加・改名された
+      // 同姓同名マスターがキャッシュに反映されていないと、実際には曖昧な顧客を誤って
+      // 確定してしまう。確定操作の直前に`fetchFreshCustomerIdentityLookup()`でキャッシュを
+      // 経由しない最新のマスター一覧を取得し、判定に使う(`identityLookup`propはisReadyの
+      // 事前チェックのみに用い、実際の判定内容には使わない)。
+      // identityLookup.isReadyがfalse(マスターを一度も読み込めていない)場合は、
+      // フレッシュ取得を試みても状況が変わらない可能性が高いため確定をスキップし、
+      // verifiedのみ更新する(既存動作を維持、サイレントに確定させない)。
+      const freshIdentityLookup = identityLookup.isReady
+        ? await fetchFreshCustomerIdentityLookup().catch((fetchErr) => {
+            console.error('Failed to fetch fresh customer identity lookup, skipping confirm-on-verify:', fetchErr)
+            return null
+          })
+        : null
+
       const decisions = await runTransaction(db, async (tx) => {
         const freshSnap = await tx.get(docRef)
         if (!freshSnap.exists()) {
@@ -85,12 +100,12 @@ export function useDocumentVerification(
         }
         const freshDoc = freshSnap.data() as Document
 
-        const txDecisions = identityLookup.isReady
+        const txDecisions = freshIdentityLookup
           ? planConfirmOnVerify(freshDoc, {
               customerMasterName: freshDoc.customerId
-                ? (identityLookup.customerMasterNameById.get(freshDoc.customerId) ?? null)
+                ? (freshIdentityLookup.customerMasterNameById.get(freshDoc.customerId) ?? null)
                 : null,
-              sameNameCollisionNames: identityLookup.sameNameCollisionNames,
+              sameNameCollisionNames: freshIdentityLookup.sameNameCollisionNames,
             })
           : null
         const confirmUpdate = txDecisions

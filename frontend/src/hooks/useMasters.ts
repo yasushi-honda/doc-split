@@ -126,6 +126,27 @@ export function useCustomerIdentityLookup(): CustomerIdentityLookup {
   }), [customers])
 }
 
+/**
+ * `useCustomers()`のReact Queryキャッシュ(staleTime 5分)を経由せず、Firestoreから
+ * 直接最新の顧客マスター一覧を取得してCustomerIdentityLookup相当を組み立てる。
+ *
+ * Issue #1034 + codexレビュー指摘(P1、2回目): 確認済み操作の確定判定は
+ * `useDocumentVerification`/`handleBulkVerify`内のFirestoreトランザクションで
+ * 文書そのものは直前に再読込するようにしたが、同姓同名判定に使う顧客マスター側は
+ * キャッシュ経由のままだった。確定操作の直前にこの関数で新規取得したマスター一覧を
+ * 使うことで、直近に追加・改名された同姓同名マスターも判定に反映される
+ * (`scripts/backfill-confirm-on-verify.ts`が実行開始時にマスターを都度フェッチするのと
+ * 同じ理由。ただしこちらは確定操作のたびに呼ぶため、backfillの「実行中の一度きり
+ * スナップショット」よりさらに鮮度が高い)。
+ */
+export async function fetchFreshCustomerIdentityLookup(): Promise<Omit<CustomerIdentityLookup, 'isReady'>> {
+  const customers = await fetchCustomers()
+  return {
+    sameNameCollisionNames: findSameNameCollisionNames(customers),
+    customerMasterNameById: new Map(customers.map((c) => [c.id, typeof c.name === 'string' ? c.name : null])),
+  }
+}
+
 interface AddCustomerParams {
   name: string
   furigana: string

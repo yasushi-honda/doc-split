@@ -69,7 +69,7 @@ import {
 } from '@/hooks/useDocuments'
 import { useDocumentListRefresh } from '@/hooks/useDocumentListRefresh'
 import { DocumentListUpdateBanner } from '@/components/DocumentListUpdateBanner'
-import { useCareManagers, useCustomerIdentityLookup, type CustomerIdentityLookup } from '@/hooks/useMasters'
+import { useCareManagers, useCustomerIdentityLookup, fetchFreshCustomerIdentityLookup, type CustomerIdentityLookup } from '@/hooks/useMasters'
 import { DateRangeFilter, type DateRange } from '@/components/DateRangeFilter'
 import { isCustomerConfirmed } from '@/hooks/useProcessingHistory'
 import { resolveCustomerUnconfirmedReason } from '@shared/customerIdentity'
@@ -650,6 +650,12 @@ export function DocumentsPage() {
       const uid = user.uid
       const email = user.email || ''
 
+      // codexレビュー指摘(P1・2回目): 同姓同名判定に使う顧客マスターを`identityLookup`
+      // (useCustomers()キャッシュ、最大5分古い)からではなく、この一括確認済み実行の
+      // 直前に新規取得したものから読む(このバッチ内の全文書で1回だけ取得・共有する。
+      // 文書自体の鮮度は各文書のトランザクション内でtx.get()により個別に保証する)。
+      const freshIdentityLookup = await fetchFreshCustomerIdentityLookup()
+
       const outcomes = await runWithConcurrency(ids, 20, async (docId) => {
         const docRef = doc(db, 'documents', docId)
         try {
@@ -662,9 +668,9 @@ export function DocumentsPage() {
 
             const txDecisions = planConfirmOnVerify(freshDoc, {
               customerMasterName: freshDoc.customerId
-                ? (identityLookup.customerMasterNameById.get(freshDoc.customerId) ?? null)
+                ? (freshIdentityLookup.customerMasterNameById.get(freshDoc.customerId) ?? null)
                 : null,
-              sameNameCollisionNames: identityLookup.sameNameCollisionNames,
+              sameNameCollisionNames: freshIdentityLookup.sameNameCollisionNames,
             })
             const { update: confirmFields, logs } = buildConfirmOnVerifyUpdate(txDecisions, freshDoc, {
               uid,
