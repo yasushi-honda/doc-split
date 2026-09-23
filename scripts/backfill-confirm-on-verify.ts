@@ -184,6 +184,10 @@ async function applyConfirmOnVerify(
         confirmedCustomer: candidate.decisions.customer.action === 'confirm',
         customerConfirmedBefore:
           candidate.decisions.customer.action === 'confirm' ? (candidate.data.customerConfirmed as boolean | undefined) : undefined,
+        // codexレビュー指摘: buildConfirmOnVerifyUpdate()は顧客確定と同時にneedsManualCustomerSelection
+        // (true→false)も書き戻すことがある。updateに実際に含まれているかで判定する(実行前は
+        // 常にtrueだった場合のみ含まれるため、rollback時はtrueへ戻せば足りる)。
+        resetNeedsManualCustomerSelection: 'needsManualCustomerSelection' in update,
         confirmedOffice: candidate.decisions.office.action === 'confirm',
         officeConfirmedBefore:
           candidate.decisions.office.action === 'confirm' ? (candidate.data.officeConfirmed as boolean | undefined) : undefined,
@@ -307,6 +311,17 @@ async function runRollback(manifestPath: string): Promise<void> {
   console.log(`rollback対象manifest: ${manifestPath} (runId=${manifest.runId}, entries=${manifest.entries.length}件)`);
   console.log('---');
 
+  // codexレビュー指摘: manifestは`projectId`を持つが、実行対象(FIREBASE_PROJECT_ID)と
+  // 一致するかを確認していなかった。別テナント/環境向けのmanifestをdocId衝突のまま
+  // 誤って実行すると、意図しないプロジェクトの文書を書き換えてしまう。
+  if (manifest.projectId !== projectId) {
+    console.error(
+      `ERROR: manifestのprojectId(${manifest.projectId})と実行対象(${projectId})が一致しません。` +
+        '誤操作防止のため中断します。正しいFIREBASE_PROJECT_IDで実行するか、manifestを確認してください。'
+    );
+    process.exit(1);
+  }
+
   let reverted = 0;
   let skippedNotFound = 0;
   let skippedProgressed = 0;
@@ -333,6 +348,12 @@ async function runRollback(manifestPath: string): Promise<void> {
       }
       update.customerConfirmed =
         instructions.customer.action === 'delete' ? admin.firestore.FieldValue.delete() : instructions.customer.value;
+      // codexレビュー指摘: backfillが顧客確定と同時にneedsManualCustomerSelectionも
+      // 書き戻していた場合、customerConfirmedと同じ原子性(同一update呼び出し)で
+      // 一緒に元へ戻す(customerConfirmedだけ戻すとレガシーフラグが不整合になる)。
+      if (instructions.needsManualCustomerSelection?.action === 'set') {
+        update.needsManualCustomerSelection = instructions.needsManualCustomerSelection.value;
+      }
     }
     if (instructions.office) {
       if (!isOfficeFieldRollbackEligible(data)) {

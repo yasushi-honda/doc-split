@@ -326,5 +326,26 @@ describe('useDocumentVerification', () => {
       expect('customerConfirmed' in updateData).toBe(false)
       expect(updateData.officeConfirmed).toBe(true)
     })
+
+    // codexレビュー指摘(2026-09-23): updateDoc成功後にeditLogsのaddDocが失敗すると、
+    // 従来は外側catchでUIが未確認へロールバックされ、Firestoreには既に確定済み内容が
+    // 保存されているのにUIと状態が食い違っていた。監査ログの失敗は本体の成功を妨げない。
+    it('updateDoc成功後にeditLogs書込み(addDoc)が失敗しても、trueを返しロールバックしない', async () => {
+      mockAddDoc.mockRejectedValueOnce(new Error('editLogs write failed'))
+      const doc = makeDocument({ verified: false, customerId: 'customer-1' })
+      const { result } = renderHook(() => useDocumentVerification(doc, readyLookup))
+
+      let returned: boolean | undefined
+      await act(async () => {
+        returned = await result.current.markAsVerified()
+      })
+
+      expect(returned).toBe(true)
+      // updateDocumentInListCacheの2回目呼び出し(ロールバック用)が発生していないこと
+      expect(mockUpdateDocumentInListCache).toHaveBeenCalledTimes(1)
+      const cachePatch = mockUpdateDocumentInListCache.mock.calls[0]?.[2] as Record<string, unknown>
+      expect(cachePatch.verified).toBe(true)
+      expect(cachePatch.customerConfirmed).toBe(true)
+    })
   })
 })

@@ -83,6 +83,14 @@ export interface ConfirmOnVerifyManifestEntry {
   confirmedCustomer: boolean;
   /** confirmedCustomer:trueの場合のみ有効。backfill実行前のcustomerConfirmedの値。 */
   customerConfirmedBefore?: boolean;
+  /**
+   * 顧客確定と同時に`needsManualCustomerSelection:true`→`false`のレガシーフラグ書き戻しが
+   * 発生したか(shared/confirmOnVerify.tsのbuildConfirmOnVerifyUpdate参照、実行前は常にtrue
+   * だった場合のみ発生するため、trueを記録すれば「実行前の値はtrueだった」ことも自明)。
+   * これを記録しないと、rollbackでcustomerConfirmedだけ戻してもneedsManualCustomerSelection:false
+   * が残存し、レガシー文書が「確定済み」のまま復元されてしまう(codexレビュー指摘)。
+   */
+  resetNeedsManualCustomerSelection: boolean;
   confirmedOffice: boolean;
   /** confirmedOffice:trueの場合のみ有効。backfill実行前のofficeConfirmedの値。 */
   officeConfirmedBefore?: boolean;
@@ -135,12 +143,21 @@ export type RollbackFieldInstruction = { action: 'set'; value: boolean } | { act
 
 export function computeRollbackInstructions(entry: ConfirmOnVerifyManifestEntry): {
   customer?: RollbackFieldInstruction;
+  /** resetNeedsManualCustomerSelection:trueの場合のみ返す。実行前は常にtrueだった値へ戻す。 */
+  needsManualCustomerSelection?: RollbackFieldInstruction;
   office?: RollbackFieldInstruction;
 } {
-  const result: { customer?: RollbackFieldInstruction; office?: RollbackFieldInstruction } = {};
+  const result: {
+    customer?: RollbackFieldInstruction;
+    needsManualCustomerSelection?: RollbackFieldInstruction;
+    office?: RollbackFieldInstruction;
+  } = {};
   if (entry.confirmedCustomer) {
     result.customer =
       entry.customerConfirmedBefore === undefined ? { action: 'delete' } : { action: 'set', value: entry.customerConfirmedBefore };
+    if (entry.resetNeedsManualCustomerSelection) {
+      result.needsManualCustomerSelection = { action: 'set', value: true };
+    }
   }
   if (entry.confirmedOffice) {
     result.office =

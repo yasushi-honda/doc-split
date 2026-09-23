@@ -45,7 +45,9 @@ test('buildConfirmOnVerifyManifest: 渡したentriesをそのまま保持する'
     runId: 'run-1',
     projectId: 'proj-1',
     timestampIso: '2026-09-23T00:00:00.000Z',
-    entries: [{ docId: 'doc-1', confirmedCustomer: true, confirmedOffice: false }],
+    entries: [
+      { docId: 'doc-1', confirmedCustomer: true, resetNeedsManualCustomerSelection: false, confirmedOffice: false },
+    ],
   });
   assert.equal(manifest.runId, 'run-1');
   assert.equal(manifest.entries.length, 1);
@@ -67,17 +69,42 @@ test('computeRollbackInstructions: 実行前がフィールド不在ならdelete
   const deleteBoth = computeRollbackInstructions({
     docId: 'doc-1',
     confirmedCustomer: true,
+    resetNeedsManualCustomerSelection: false,
     confirmedOffice: true,
   });
   assert.deepEqual(deleteBoth.customer, { action: 'delete' });
   assert.deepEqual(deleteBoth.office, { action: 'delete' });
+  assert.equal(deleteBoth.needsManualCustomerSelection, undefined);
 
   const setFalse = computeRollbackInstructions({
     docId: 'doc-2',
     confirmedCustomer: true,
     customerConfirmedBefore: false,
+    resetNeedsManualCustomerSelection: false,
     confirmedOffice: false,
   });
   assert.deepEqual(setFalse.customer, { action: 'set', value: false });
   assert.equal(setFalse.office, undefined, 'confirmedOffice:falseのentryはoffice側の指示を返さない');
+});
+
+test('computeRollbackInstructions: resetNeedsManualCustomerSelection:trueなら、顧客確定と一緒にneedsManualCustomerSelection:trueへ戻す指示を返す(codexレビュー指摘)', () => {
+  const result = computeRollbackInstructions({
+    docId: 'doc-3',
+    confirmedCustomer: true,
+    resetNeedsManualCustomerSelection: true,
+    confirmedOffice: false,
+  });
+  assert.deepEqual(result.needsManualCustomerSelection, { action: 'set', value: true });
+});
+
+test('computeRollbackInstructions: 顧客側が対象外(confirmedCustomer:false)ならneedsManualCustomerSelectionの指示も返さない', () => {
+  const result = computeRollbackInstructions({
+    docId: 'doc-4',
+    confirmedCustomer: false,
+    resetNeedsManualCustomerSelection: true,
+    confirmedOffice: true,
+    officeConfirmedBefore: false,
+  });
+  assert.equal(result.customer, undefined);
+  assert.equal(result.needsManualCustomerSelection, undefined);
 });

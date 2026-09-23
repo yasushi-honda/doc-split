@@ -106,18 +106,26 @@ export function useDocumentVerification(
       })
 
       // #398と同じ規約の監査ログ(確定フラグ変更のsilent failure検知用)。
+      // codexレビュー指摘: updateDoc成功後にここが失敗すると、Firestoreには確定済みの
+      // 内容が既に保存されているにもかかわらず、外側catchのロールバックでUIだけ未確認に
+      // 戻ってしまい表示とFirestoreの状態が食い違う。監査ログはベストエフォートとして
+      // 独立したtry/catchにし、失敗してもドキュメント本体の更新成功を優先する。
       if (confirmUpdate && confirmUpdate.logs.length > 0) {
-        const editLogsRef = collection(db, 'editLogs')
-        for (const change of confirmUpdate.logs) {
-          await addDoc(editLogsRef, {
-            documentId: document.id,
-            fieldName: change.field,
-            oldValue: change.oldValue,
-            newValue: change.newValue,
-            editedBy: auth.currentUser.uid,
-            editedByEmail: auth.currentUser.email || '',
-            editedAt: serverTimestamp(),
-          })
+        try {
+          const editLogsRef = collection(db, 'editLogs')
+          for (const change of confirmUpdate.logs) {
+            await addDoc(editLogsRef, {
+              documentId: document.id,
+              fieldName: change.field,
+              oldValue: change.oldValue,
+              newValue: change.newValue,
+              editedBy: auth.currentUser.uid,
+              editedByEmail: auth.currentUser.email || '',
+              editedAt: serverTimestamp(),
+            })
+          }
+        } catch (logErr) {
+          console.error('Failed to write editLogs for confirm-on-verify (document update already succeeded):', logErr)
         }
       }
       return true
