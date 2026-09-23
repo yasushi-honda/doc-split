@@ -41,6 +41,10 @@ if (!nameContains) {
   console.error('--name-contains <文字列> を指定してください(例: --name-contains "医療")');
   process.exit(1);
 }
+// TypeScriptはモジュールスコープの`if (!nameContains) exit`によるnarrowingを、
+// 別関数(main)内で外側変数をクロージャ参照する箇所までは伝播しない(TS2345)ため、
+// 検証済みの値を明示的にstring型の定数へ束縛し直す(codex review P1指摘)。
+const NAME_CONTAINS: string = nameContains;
 
 admin.initializeApp({ projectId });
 
@@ -56,13 +60,13 @@ async function main(): Promise<void> {
   const drive = await getDriveClient();
 
   console.log(`プロジェクト: ${projectId}`);
-  console.log(`検索語: name contains "${nameContains}"`);
+  console.log(`検索語: name contains "${NAME_CONTAINS}"`);
   console.log(`trashed含む: ${includeTrashed}`);
   console.log('---');
 
   const trashedClause = includeTrashed ? '' : ' and trashed=false';
   const q =
-    `name contains '${escapeQueryValue(nameContains)}' and mimeType='${FOLDER_MIME_TYPE}'` +
+    `name contains '${escapeQueryValue(NAME_CONTAINS)}' and mimeType='${FOLDER_MIME_TYPE}'` +
     trashedClause;
 
   const files: Array<{

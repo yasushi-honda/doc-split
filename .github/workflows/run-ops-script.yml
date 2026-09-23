@@ -57,6 +57,7 @@ on:
           - investigate-caremanager-duplicate
           - investigate-caremanager-folder-duplicate
           - investigate-drive-folder-duplicate-by-name
+          - investigate-drive-folder-duplicate-by-name --include-trashed
           - investigate-issue811-root-cause
           - investigate-issue811-root-cause --scan-root-duplicates
           - investigate-issue811-root-cause --list-children
@@ -1004,7 +1005,7 @@ jobs:
             cd scripts
             NODE_PATH=../functions/node_modules \
               FIREBASE_PROJECT_ID="$PROJECT_ID" \
-              npx ts-node investigate-drive-folder-duplicate-by-name.ts --name-contains "$NAME1"
+              npx ts-node investigate-drive-folder-duplicate-by-name.ts --name-contains "$NAME1" $SCRIPT_ARGS
           elif [ "$SCRIPT_NAME" = "classify-drive-export-drift" ]; then
             # Issue #811/#823 remediation: exported documentの物理状態検査(read-only)。
             # ログマスキングで `{` が `***` に置換されるため、plan JSON をファイル出力 →
