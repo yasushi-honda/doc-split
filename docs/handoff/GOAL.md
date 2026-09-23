@@ -566,7 +566,12 @@ cocoro側Drive連携Phase C（クライアント自身のOAuth接続）は外部
 
 **Issue #984（2026-09-20）**: 完了・クローズ済み(kanameone実データ確認済み、上記節参照)。cocoroも2026-09-20にデプロイ済み(3環境同一コード)。ログベースメトリクス・アラートも2026-09-21に3環境へ適用済み(#981クローズ)。#984に関する残りタスクはなし。
 
-**Issue #1028（2026-09-23、PR #1038マージ）**: コード実装・レビューゲート対応は完了(詳細は本ファイル冒頭の新規エントリ参照)。**ただしkanameone/cocoro本番展開には未実施のゲートが残る**: ①dev環境での実機再連携・Issue #1028再現解消確認・既存重複統合リハーサル ②GitHub Actionsワークフロー(`audit-drive-sibling-duplicates`/`execute-drive-sibling-merge`)の実機起動テスト。次セッションでこの2点を実施してから、kanameone/cocoroへの「Drive再連携」案内に進むこと。fixtureベース統合テスト不在はIssue #1039(P1)へ切り出し済み、実装時期は未定。
+**Issue #1028（2026-09-23、PR #1038マージ）**: コード実装・レビューゲート対応は完了(詳細は本ファイル冒頭の新規エントリ参照)。dev実機検証セッションで以下まで完了:
+- **dev実機再連携完了**: decision-maker(hy.unimail.11@gmail.com)が実際にOAuth再同意を実施、`settings/drive.grantedScopes`に`https://www.googleapis.com/auth/drive`が反映されたことを確認済み。この過程で「再連携する」ボタンがghost+グレー文字で視認しづらいUXバグをdecision-makerのスクリーンショット報告で発見・修正(PR #1040、`ui-verified`確認済みでマージ済み)
+- **既存重複統合リハーサル完了**: 前回の再現テストで残置されていた「医療」フォルダ重複(木村千代配下)を対象に、GitHub Actions経由で`audit-drive-sibling-duplicates`(dry-run結果通り1件検出)→`execute-drive-sibling-merge --dry-run`(1件移動予定と確認)→`--execute`(1件移動・claim1件無効化・duplicateをtrash、成功)→再auditで`groupCount:0`(重複完全解消)を確認。本セッションでコード修正した claim状態ガード(`invalidated`許容)・TOCTOU検知・trash直前の全種別再確認・manifestチェックポイントの各パスを実地で通過
+- **GitHub Actionsワークフロー起動テスト完了**: `audit-drive-sibling-duplicates`(2回)・`execute-drive-sibling-merge --dry-run`・`--execute`の計4回、実際にGHA経由で正常完走を確認(run 35844692547/35844983583/35845455722/35845744740)
+
+**残る検証（次アクション候補）**: 「appがまだ認識していない場所に人がフォルダを置く」新規ケース(Issue #1028本体のバグ再現→非再発確認、AC4相当)は未実施。Drive UI上で新規の未タグフォルダを人が手動作成する必要があり、①decision-maker自身がDrive UIで操作する ②API経由で模擬作成する、いずれかの手段が必要（次セッションでdecision-maker判断）。fixtureベース統合テスト不在はIssue #1039(P1)へ切り出し済み、実装時期は未定。kanameone/cocoro本番展開はこれらの検証完了後に着手すること。
 
 ## 【完了・2026-08-30】Issue #871 PR-4: childFolderResolver.tsのclaimプロトコル完全移行(PR #879マージ)
 
