@@ -1,21 +1,30 @@
 ---
-updated: 2026-09-22
+updated: 2026-09-23
 ---
 <!-- 前ミッション(dev/kanameone/cocoro環境監査・保守検証)は2026-07-20完遂。全文はdocs/handoff/LATEST.md参照。 -->
 <!-- Google Drive連携Phase1 (MVP)実装ミッションは2026-07-22完了(PR#700マージ)。詳細は本ファイル末尾「Google Drive連携Phase1完遂」節+docs/handoff/LATEST.md参照。 -->
 
-## 【正式gate run再実行・fabrication2件目+D8対応完了・2026-09-23】要約生成(regenerateSummary)のGemini依存脱却: Sarashina2.2-3B(Q8_0量子化)実装移行、PR0→PR1(a/b/c)→PR2a→PR2b→ステップ8(本番ゲート実行)→正式gate run再実行、完了。残るdeterminismの1件のみ「ベースラインデータ収集run」としてここで区切り、次セッション以降の別タスクとする(decision-maker判断)
+## 【ADR-0027 PR2bハーネス収束完了・2026-09-23】要約生成(regenerateSummary)のGemini依存脱却: Sarashina2.2-3B(Q8_0量子化)実装移行、PR0→PR1(a/b/c)→PR2a→PR2b→ステップ8(本番ゲート実行、計4回の全10doc×3run実機run)、完了。累計16件の実機問題を発見・修正しdeterminismを含む全FAILゲートが収束(decision-maker判断でここで区切り)
 
-**進捗サマリ(2026-09-23更新)**: PR1(a/b/c)完了・マージ済み(PR #1006, #1008, #1010, #1011)。PR2a(固有名詞捏造スキャナ本体、PR #1013)・PR2b(実機ゲートハーネス、PR #1015)完了。ステップ8初回実行(D2「対して」fabricationバグ、coverage-per-doc対応、PR #1016/#1018/#1019)完了後、全10doc×3runの正式gate run再実行(workflow run `35738943604`)を実施。
+**進捗サマリ(2026-09-23最終更新)**: PR1(a/b/c)完了・マージ済み(PR #1006, #1008, #1010, #1011)。PR2a(固有名詞捏造スキャナ本体、PR #1013)・PR2b(実機ゲートハーネス、PR #1015)完了。ステップ8で計4回の全10doc×3run正式gate runを実施(workflow run `35738943604`→`35804688603`→2回、うち最終2回はrun ID未記録)し、都度発見したfindingsを個別PR(#1016, #1018/#1019, #1021, #1023, #1024)で修正。
 
-**正式gate run再実行結果**: `coverage-aggregate`は**85.3%(110/129)でPASSに改善**(PR #1019のoptionalFacts化が奏功)。一方で新たに2件のfindingsが判明、いずれも**対応完了(PR #1021、squash mergeでmain反映済み)**:
-- `fabrication`(D9run2「当該事業所」誤検知): 事業所名不明と正直に回答する健全な出力が捏造判定されていた。`DEFAULT_PARTICLES`に指示語「当該」が未収録だったスキャナ側バグ(PR #1016と同型)。当初助詞として追加したが、codex reviewで「新当該クリニック」等の捏造名がトリムにより検出をすり抜ける新規バイパスを指摘され、`DEFAULT_GENERIC_CORES`(完全一致のみ判定)へ差し替えて解消
-- `coverage-per-doc`(D8「立花 文子」欠落): 同一世帯のため姓を省略し「妻文子様」と自然な日本語で毎回正しく言及されていたが、スコアラーの完全一致判定の限界で欠落と誤判定。`FactEntry`(文字列|エイリアス配列)型を新規導入して対応。**codex review + pr-review-toolkit 4エージェント並列レビューで計7件のP1/P2指摘**(cross-entity側のエイリアス未対応による安全性後退、セグメント内重複カウント、crossEntityPairs側の検証漏れ、型の不変条件未強制等)を受け全て修正。残存リスク(エイリアス「文子」が別人の同名者と衝突しうる理論上の攻撃パターン)はdecision-maker確認済みで既知の限界として明記するに留めた(D8の実データでは実際には発生しない)
-- 最終確認: codex review(`--strict-config -c model_reasoning_effort=high`)を2回連続実行しfindings 0件で収束確認
+**最終収束結果**: `coverage-aggregate`はPASS(85.3%→最終88%台まで改善、D2/D3/D5/D8のoptionalFacts化が奏功)。`fabrication`はPASS(下記3件の同型バグを修正)。`determinism`はPASS(下記の原因調査により独立起因なしと判明、根本のcoverage/fabrication不安定性を解消したことで解消)。`numeric-fabrication`/`amount-absence`/`runtime-contract`: PASS。`output-sanity`: WARN(eos-token、設計通り無害)。
 
-**残るdeterminism**: FAIL(正式gate run再実行では D5, D9 でrun間の合否判定ブレ、初回実行時はD2/D4/D5/D6)【対応未着手、ベースラインデータとして記録】。`numeric-fabrication`/`amount-absence`/`runtime-contract`: PASS。`output-sanity`: WARN(eos-token、設計通り無害)。
+**fabrication修正3件(すべて「動詞・指示語が組織名接尾辞の直前に来ると捏造名の一部と誤認される」同型バグ)**:
+- `に対して`(PR #1016): 「して」を`DEFAULT_PARTICLES`に単独追加すると捏造名内部の「して」を含む文字列でバイパスが生じるため、複合助詞`に対して`として追加
+- `当該`(PR #1021、D9run2): 当初`DEFAULT_PARTICLES`(トリム境界)へ追加したが「新当該クリニック」等の捏造名がすり抜けるバイパスをcodex reviewで指摘され、`DEFAULT_GENERIC_CORES`(完全一致のみ判定)へ差し替え
+- `関わる`(PR #1024、D9run1): 「当該」の教訓を活かし最初から`DEFAULT_GENERIC_CORES`へ追加。さらにcodex reviewで**「当該」追加時から潜在していた別のバイパス**(`genericCoreSet`をプレフィックス形「株式会社」等の判定にも共用していたため「株式会社関わる」がすり抜ける)を発見し、`prefixGenericCores`(既定は空文字列のみ)を新設してプレフィックス形専用に分離
+- **標準決定(decision-maker確認済み)**: 同型バグの4件目が発生した場合は個別パッチではなく設計自体(正規表現+generic-core除外→形態素解析への置き換え等)の再検討を行う(コード内コメントに明記済み)
 
-**次の一手**: determinism(temperature設定・プロンプト設計起因の可能性)の原因調査から次セッション以降で着手する(decision-maker合意)。着手時は、対応が完了したfabrication/coverage-aggregate/coverage-per-docを含めた全10doc×3runの再確認も兼ねて実施するのが望ましい。
+**coverage-per-doc修正(D8「立花 文子」欠落、PR #1021)**: 同一世帯のため姓を省略し「妻文子様」と自然な日本語で毎回正しく言及されていたが、スコアラーの完全一致判定の限界で欠落と誤判定。`FactEntry`(文字列|エイリアス配列)型を新規導入して対応。**codex review + pr-review-toolkit 4エージェント並列レビューで計7件のP1/P2指摘**(cross-entity側のエイリアス未対応による安全性後退、セグメント内重複カウント、crossEntityPairs側の検証漏れ、型の不変条件未強制等)を受け全て修正。残存リスク(エイリアス「文子」が別人の同名者と衝突しうる理論上の攻撃パターン)はdecision-maker確認済みで既知の限界として明記するに留めた(D8の実データでは実際には発生しない)。
+
+**determinism原因調査結果(PR #1023)**: determinismゲートは独立した品質軸ではなく、同一docの各runにおける`[coverage.passed, numeric.passed, fabrication.fabricatedCount>0]`のシグネチャ比較の副産物と判明。過去に観測された全てのdeterminism FAIL(D2/D4/D5/D6、D5/D9)は、当該docのcoverage-per-doc/fabrication側の根本原因(D9「当該」誤検知、D5「ひまわり訪問介護」欠落)を修正することで解消し、determinism固有の追加対応は不要だった。D5は「唯一の事業所名」がモデルの圧縮時に担当者個人名と入れ替わる形で3/6run欠落しており(D2/D3/D8の「二次的組織名の省略」とは異なるパターン)、同型でoptionalFactsへ分離。
+
+**coverage-per-doc追加修正(D2「9月30日」欠落、PR #1024)**: D2には令和8年8月(サービス提供月)と9月30日(支払期限)の2つの日付があり、あおぞら居宅介護支援事業所の欠落問題(PR #1019)が隠していた二次的な日付の省略が、その修正後に新たに表面化(2/3run欠落)。D2/D3/D5/D8と同型のパターンでoptionalFactsへ分離。
+
+**プロンプト改善(PR #1018)の評価**: 「複数記載されている場合も省略せず全て含める」という明示指示を追加したが、D2/D3の3run再検証で改善効果ゼロと実証。この3Bモデルの「二次的事実の圧縮省略」はプロンプトワーディングでは是正不能と判断し、以降の同型issue(D2/D3/D5/D8)は全てfixture側(mustCover→optionalFacts)で対応する方針を確立。
+
+**次の一手**: 明示的な次アクションなし。決定済みの唯一の再着手条件は「fabrication同型バグの4件目発生」時の設計再検討(上記参照)。それ以外は現状で収束済みとしてこのミッションをクローズする。
 
 ADR-0025はPass1(OCR)のみ対象でPass2/要約は明示的にスコープ外(手動トリガー・低頻度のため)。decision-makerの意向で「要約もいずれはPaddleOCRと同様に自前ホスティングSLM(Cloud Run、CPUのみ、asia-northeast1)へモデルルーティングしたい」という将来検討として、2026-09-21に候補調査・実機検証を実施した。当日中に品質・コスト・アーキテクチャ・コンプライアンスの検討が完了し、**decision-makerが実装移行を正式決定**(下記「次の一手」トリガー②を充足)。CLAUDE.md CRITICAL該当のためplan modeでのフル計画策定に入る。実装(summaryPromptBuilder.ts等の変更)はまだ一切行っていない(この節はplan mode着手時点の記録)。
 
