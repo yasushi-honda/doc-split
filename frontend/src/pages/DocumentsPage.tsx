@@ -77,7 +77,7 @@ import { planConfirmOnVerify, buildConfirmOnVerifyUpdate } from '@shared/confirm
 import { DocumentDetailModal } from '@/components/DocumentDetailModal'
 import { MultiCustomerBadge } from '@/components/MultiCustomerBadge'
 import { AliasLearningHistoryModal } from '@/components/AliasLearningHistoryModal'
-import { PdfUploadModal } from '@/components/PdfUploadModal'
+import { usePdfUploadStore } from '@/stores/pdfUploadStore'
 import { GroupList } from '@/components/views'
 import { SearchBar } from '@/components/SearchBar'
 import { LoadMoreIndicator } from '@/components/LoadMoreIndicator'
@@ -445,9 +445,6 @@ export function DocumentsPage() {
   // 履歴モーダル
   const [showHistoryModal, setShowHistoryModal] = useState(false)
 
-  // アップロードモーダル
-  const [showUploadModal, setShowUploadModal] = useState(false)
-
   // 一括選択
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [isBulkOperating, setIsBulkOperating] = useState(false)
@@ -580,11 +577,10 @@ export function DocumentsPage() {
   }, [sortField])
 
   // アップロード成功時のハンドラ
-  // 2026-09-08 crossreview反映: `PdfUploadModal`の`onSuccess`はアップロードAPI成功時
-  // ではなく、ファイルごとのOCR完了時に個別発火する(PdfUploadModal.tsx
-  // handleRowStatusUpdate、step==='processed')。複数ファイル同時アップロードだと
-  // 短時間に複数回呼ばれるため、300ms trailingデバウンスでまとめて1回だけ
-  // refreshDocumentList()を呼ぶ(lodash未導入のため自前実装)。
+  // 2026-09-08 crossreview反映: pdfUploadStoreのcompletionCounterはファイルごとの
+  // OCR完了時に個別加算される(pdfUploadStore.ts subscribeRow、step==='processed')。
+  // 複数ファイル同時アップロードだと短時間に複数回変化するため、300ms trailing
+  // デバウンスでまとめて1回だけrefreshDocumentList()を呼ぶ(lodash未導入のため自前実装)。
   const uploadSuccessDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const handleUploadSuccess = useCallback(() => {
     // documentStatsの再取得はrefreshDocumentList内でawait付きで行う(codex review P2指摘、
@@ -609,6 +605,19 @@ export function DocumentsPage() {
       }
     }
   }, [])
+
+  // Issue #1031: PdfUploadModalがLayout共通マウントへ移設され、アップロード状態は
+  // pdfUploadStoreのモジュールシングルトンへ引き上げられたため、completionCounterの
+  // 変化を購読してhandleUploadSuccessを呼ぶ形に差し替える。依存配列にcompletionCounter
+  // を直接入れる方式は、他画面から戻った際の再マウントで不要なrefreshDocumentList()を
+  // 誘発するため不採用(subscribeで「変化」のみを検知する)。
+  useEffect(() => {
+    return usePdfUploadStore.subscribe((state, prevState) => {
+      if (state.completionCounter !== prevState.completionCounter) {
+        handleUploadSuccess()
+      }
+    })
+  }, [handleUploadSuccess])
 
   // 一括選択のトグル
   const handleSelectToggle = useCallback((docId: string, checked: boolean) => {
@@ -1046,7 +1055,7 @@ export function DocumentsPage() {
           <Button
             variant="default"
             size="sm"
-            onClick={() => setShowUploadModal(true)}
+            onClick={() => usePdfUploadStore.getState().openModal()}
             className="flex items-center gap-2"
           >
             <Upload className="h-4 w-4" />
@@ -1404,13 +1413,6 @@ export function DocumentsPage() {
       <AliasLearningHistoryModal
         open={showHistoryModal}
         onOpenChange={setShowHistoryModal}
-      />
-
-      {/* PDFアップロードモーダル */}
-      <PdfUploadModal
-        open={showUploadModal}
-        onOpenChange={setShowUploadModal}
-        onSuccess={handleUploadSuccess}
       />
 
       {/* 一括操作確認ダイアログ */}

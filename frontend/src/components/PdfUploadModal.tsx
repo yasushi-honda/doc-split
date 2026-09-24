@@ -1,13 +1,14 @@
 /**
- * PDFアップロードモーダル
+ * PDFアップロードモーダル(表示専用、Issue #1031)
  *
  * ローカルファイルからPDF/画像を複数まとめて選択し、逐次アップロードしてOCR処理キューに追加
- * 行ごとに独立してOCR処理の進捗を監視し、全件完了後に自動クローズ
+ * アップロード状態・ロジック・Firestore onSnapshot購読はpdfUploadStore.tsへ引き上げ済みで、
+ * このコンポーネントはストアのセレクタで状態を読み、モーダルの開閉から独立してバックグラウンドで
+ * 処理が継続できるようにする(閉じてもストアの処理・購読は止まらない)。
  */
 
-import { useState, useRef, useCallback, useEffect } from 'react'
+import { useRef, useState, useCallback } from 'react'
 import { Upload, FileText, AlertCircle, CheckCircle2, Loader2, Clock, Sparkles, X, RefreshCw } from 'lucide-react'
-import { doc, onSnapshot } from 'firebase/firestore'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -18,28 +19,16 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import { db } from '@/lib/firebase'
-import { callFunction, getCallableErrorMessage } from '@/lib/callFunction'
-import type { DocumentStatus } from '@shared/types'
-
-// 設定
-const MAX_FILE_SIZE_MB = 10
-const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
-const AUTO_CLOSE_DELAY_MS = 2000 // 完了後2秒で自動クローズ
-
-// 対象MIMEタイプ
-const ALLOWED_MIME_TYPES = [
-  'application/pdf',
-  'image/jpeg',
-  'image/png',
-  'image/tiff',
-  'image/gif',
-]
-
-const ALLOWED_EXTENSIONS = '.pdf,.jpg,.jpeg,.png,.tiff,.tif,.gif'
-
-// 処理ステップ定義
-type ProcessingStep = 'idle' | 'uploading' | 'pending' | 'processing' | 'processed' | 'error' | 'duplicate'
+import { usePdfUploadStore } from '@/stores/pdfUploadStore'
+import {
+  isNameClaimedByOther,
+  isActiveStep,
+  formatFileSize,
+  MAX_FILE_SIZE_MB,
+  ALLOWED_EXTENSIONS,
+  type ProcessingStep,
+  type FileUploadItem,
+} from '@/lib/pdfUpload'
 
 const STEP_CONFIG: Record<ProcessingStep, {
   label: string
@@ -56,318 +45,39 @@ const STEP_CONFIG: Record<ProcessingStep, {
   duplicate: { label: '重複あり', icon: AlertCircle, progress: 0, color: 'text-yellow-500' },
 }
 
-interface PdfUploadModalProps {
-  open: boolean
-  onOpenChange: (open: boolean) => void
-  onSuccess?: (documentId: string) => void
-}
-
-interface UploadResult {
-  success: boolean
-  documentId?: string
-  duplicate?: boolean
-  existingFileName?: string
-  suggestedFileName?: string
-  existingDocumentId?: string
-}
-
-interface FileUploadItem {
-  id: string
-  file: File
-  step: ProcessingStep
-  documentId?: string
-  error?: string
-  duplicateInfo?: { existingFileName: string; suggestedFileName: string }
-}
-
-// ============================================
-// claimedFileNames 予約ロジック(純粋関数、UIイベントから分離して単体テスト可能にする)
-//
-// 候補ファイル名(通常アップロードの元ファイル名 or 重複解決時の代替名)を
-// 「候補名 → 予約している行ID」のMapで管理する。同一バッチ内で複数の行が
-// 同じ最終ファイル名を狙って衝突するのを防ぐためのクライアントローカルな排他制御。
-// BE(uploadPdf.ts)側の重複検査は変更しない前提のため、別タブ・別ユーザー間の
-// 衝突までは防げない(既知の残存リスク、Issue #815スコープ外)。
-// ============================================
-
-export type ClaimedFileNames = Map<string, string>
-
-export function claimFileName(
-  claimed: ClaimedFileNames,
-  fileName: string,
-  rowId: string
-): ClaimedFileNames | null {
-  const owner = claimed.get(fileName)
-  if (owner && owner !== rowId) {
-    return null // 他の行が既に予約済み
-  }
-  const next = new Map(claimed)
-  next.set(fileName, rowId)
-  return next
-}
-
-export function releaseRowClaims(claimed: ClaimedFileNames, rowId: string): ClaimedFileNames {
-  const next = new Map(claimed)
-  for (const [name, owner] of next) {
-    if (owner === rowId) {
-      next.delete(name)
-    }
-  }
-  return next
-}
-
-export function isNameClaimedByOther(claimed: ClaimedFileNames, fileName: string, rowId: string): boolean {
-  const owner = claimed.get(fileName)
-  return !!owner && owner !== rowId
-}
-
-function validateFile(file: File): string | null {
-  if (!ALLOWED_MIME_TYPES.includes(file.type)) {
-    return `対応していないファイル形式です: ${file.type || '不明'}。PDF/JPEG/PNG/TIFF/GIF形式のファイルを選択してください。`
-  }
-  if (file.size > MAX_FILE_SIZE_BYTES) {
-    return `ファイルサイズが大きすぎます: ${Math.round(file.size / 1024 / 1024)}MB。最大${MAX_FILE_SIZE_MB}MBまでです。`
-  }
-  return null
-}
-
-function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
-}
-
-function readFileAsBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => {
-      const result = reader.result as string
-      resolve(result.split(',')[1] ?? '')
-    }
-    reader.onerror = () => reject(new Error('ファイルの読み込みに失敗しました'))
-    reader.readAsDataURL(file)
-  })
-}
-
-function resolveUploadErrorMessage(err: unknown): string {
-  if (err instanceof Error) {
-    const message = err.message
-    if (message.includes('already-exists') || message.includes('already been uploaded')) {
-      return 'このファイルは既にアップロードされています'
-    }
-    if (message.includes('invalid-argument')) {
-      const match = message.match(/: (.+)$/)
-      return match ? match[1] ?? message : message
-    }
-    return getCallableErrorMessage(err, 'アップロードに失敗しました')
-  }
-  return 'アップロードに失敗しました'
-}
-
-export function PdfUploadModal({ open, onOpenChange, onSuccess }: PdfUploadModalProps) {
+export function PdfUploadModal() {
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const [files, setFiles] = useState<FileUploadItem[]>([])
-  const [selectError, setSelectError] = useState<string | null>(null)
   const [dragActive, setDragActive] = useState(false)
-  const [isAnyUploadInFlight, setIsAnyUploadInFlight] = useState(false)
-  const [claimedFileNames, setClaimedFileNames] = useState<ClaimedFileNames>(new Map())
 
-  // handleRowStatusUpdate を documentId 変更以外で再生成させないための最新files参照
-  const filesRef = useRef<FileUploadItem[]>(files)
-  useEffect(() => {
-    filesRef.current = files
-  }, [files])
-
-  const handleFilesSelect = useCallback((fileList: FileList | File[]) => {
-    const incoming = Array.from(fileList)
-    if (incoming.length === 0) return
-
-    const validationErrors: string[] = []
-    const newItems: FileUploadItem[] = []
-    let nextClaimed = claimedFileNames
-
-    for (const file of incoming) {
-      const validationError = validateFile(file)
-      if (validationError) {
-        validationErrors.push(`${file.name}: ${validationError}`)
-        continue
-      }
-      const id = crypto.randomUUID()
-      const claimed = claimFileName(nextClaimed, file.name, id)
-      if (claimed) {
-        nextClaimed = claimed
-      }
-      newItems.push({ id, file, step: 'idle' })
-    }
-
-    if (newItems.length > 0) {
-      setFiles((prev) => [...prev, ...newItems])
-      setClaimedFileNames(nextClaimed)
-    }
-    setSelectError(validationErrors.length > 0 ? validationErrors.join('\n') : null)
-  }, [claimedFileNames])
-
-  const performUpload = useCallback(async (
-    id: string,
-    file: File,
-    options?: { confirmDuplicate?: boolean; alternativeFileName?: string }
-  ) => {
-    setFiles((prev) => prev.map((f) => (f.id === id ? { ...f, step: 'uploading', error: undefined } : f)))
-
-    try {
-      const base64Data = await readFileAsBase64(file)
-
-      const response = await callFunction<
-        { fileName: string; mimeType: string; data: string; confirmDuplicate?: boolean; alternativeFileName?: string },
-        UploadResult
-      >('uploadPdf', {
-        fileName: file.name,
-        mimeType: file.type,
-        data: base64Data,
-        confirmDuplicate: options?.confirmDuplicate,
-        alternativeFileName: options?.alternativeFileName,
-      }, { timeout: 120_000 })
-
-      if (response.duplicate && response.suggestedFileName) {
-        setFiles((prev) => prev.map((f) => (f.id === id ? {
-          ...f,
-          step: 'duplicate',
-          duplicateInfo: {
-            existingFileName: response.existingFileName || file.name,
-            suggestedFileName: response.suggestedFileName as string,
-          },
-        } : f)))
-        return
-      }
-
-      if (response.success && response.documentId) {
-        setFiles((prev) => prev.map((f) => (f.id === id ? {
-          ...f,
-          step: 'pending',
-          documentId: response.documentId,
-          duplicateInfo: undefined,
-        } : f)))
-        return
-      }
-
-      // 想定外レスポンス(duplicateでもdocumentIdでもない成功応答): fail-visibleにerrorへ倒す
-      setFiles((prev) => prev.map((f) => (f.id === id ? {
-        ...f,
-        step: 'error',
-        error: '予期しない応答が返されました。再試行してください。',
-      } : f)))
-      // documentIdが発行されず終端したため、onSnapshot経由の解放が発生しない。ここで明示的に解放する
-      setClaimedFileNames((prev) => releaseRowClaims(prev, id))
-    } catch (err) {
-      console.error('Upload error:', err)
-      setFiles((prev) => prev.map((f) => (f.id === id ? { ...f, step: 'error', error: resolveUploadErrorMessage(err) } : f)))
-      // callFunction自体が失敗した場合も同様にdocumentIdが発行されないため、ここで明示的に解放する
-      // (codex review指摘: 別名で保存の確定リクエストがネットワークエラー等で失敗すると、
-      //  claimedFileNamesの予約がリークし、他の重複行が永久に「他のファイルの処理完了後に再試行」に
-      //  ブロックされ続けていた)
-      setClaimedFileNames((prev) => releaseRowClaims(prev, id))
-    }
-  }, [])
-
-  // バッチ全体の逐次アップロード
-  const handleUploadAll = useCallback(async () => {
-    if (isAnyUploadInFlight) return
-    const targets = files.filter((f) => f.step === 'idle').map((f) => ({ id: f.id, file: f.file }))
-    if (targets.length === 0) return
-
-    setIsAnyUploadInFlight(true)
-    try {
-      for (const target of targets) {
-        await performUpload(target.id, target.file)
-      }
-    } finally {
-      setIsAnyUploadInFlight(false)
-    }
-  }, [files, isAnyUploadInFlight, performUpload])
-
-  // 行単位の単独アップロード(再試行・別名で保存)。バッチループの外から呼ぶ想定
-  const uploadOneFile = useCallback(async (
-    id: string,
-    options?: { confirmDuplicate?: boolean; alternativeFileName?: string }
-  ) => {
-    if (isAnyUploadInFlight) return
-    const item = files.find((f) => f.id === id)
-    if (!item) return
-
-    setIsAnyUploadInFlight(true)
-    try {
-      await performUpload(id, item.file, options)
-    } finally {
-      setIsAnyUploadInFlight(false)
-    }
-  }, [files, isAnyUploadInFlight, performUpload])
-
-  const handleRetry = useCallback((id: string) => {
-    uploadOneFile(id)
-  }, [uploadOneFile])
-
-  const handleResolveDuplicate = useCallback((id: string) => {
-    const item = files.find((f) => f.id === id)
-    if (!item?.duplicateInfo) return
-    const suggested = item.duplicateInfo.suggestedFileName
-
-    setClaimedFileNames((prev) => claimFileName(prev, suggested, id) ?? prev)
-    uploadOneFile(id, { confirmDuplicate: true, alternativeFileName: suggested })
-  }, [files, uploadOneFile])
-
-  const handleRemoveFile = useCallback((id: string) => {
-    setFiles((prev) => prev.filter((f) => f.id !== id))
-    setClaimedFileNames((prev) => releaseRowClaims(prev, id))
-  }, [])
-
-  // FileUploadRow の onSnapshot からの状態更新。documentId以外で再生成されないよう
-  // files の参照は filesRef 経由で読み、依存配列を onSuccess のみに保つ
-  const handleRowStatusUpdate = useCallback((
-    id: string,
-    step: 'pending' | 'processing' | 'processed' | 'error',
-    errorMessage?: string
-  ) => {
-    setFiles((prev) => prev.map((f) => (f.id === id ? { ...f, step, error: errorMessage } : f)))
-
-    if (step === 'processed' || step === 'error') {
-      setClaimedFileNames((prev) => releaseRowClaims(prev, id))
-    }
-    if (step === 'processed') {
-      const item = filesRef.current.find((f) => f.id === id)
-      if (item?.documentId) {
-        onSuccess?.(item.documentId)
-      }
-    }
-  }, [onSuccess])
-
-  const handleClose = useCallback(() => {
-    if (files.some((f) => f.step === 'uploading')) return
-    setFiles([])
-    setClaimedFileNames(new Map())
-    setSelectError(null)
-    if (fileInputRef.current) {
-      fileInputRef.current.value = ''
-    }
-    onOpenChange(false)
-  }, [files, onOpenChange])
-
-  // 全件完了後の自動クローズ
-  useEffect(() => {
-    if (files.length > 0 && files.every((f) => f.step === 'processed')) {
-      const timer = setTimeout(() => {
-        handleClose()
-      }, AUTO_CLOSE_DELAY_MS)
-      return () => clearTimeout(timer)
-    }
-  }, [files, handleClose])
+  const isModalOpen = usePdfUploadStore((s) => s.isModalOpen)
+  const files = usePdfUploadStore((s) => s.files)
+  const selectError = usePdfUploadStore((s) => s.selectError)
+  const isAnyUploadInFlight = usePdfUploadStore((s) => s.isAnyUploadInFlight)
+  const claimedFileNames = usePdfUploadStore((s) => s.claimedFileNames)
+  const openModal = usePdfUploadStore((s) => s.openModal)
+  const closeModal = usePdfUploadStore((s) => s.closeModal)
+  const addFiles = usePdfUploadStore((s) => s.addFiles)
+  const uploadAll = usePdfUploadStore((s) => s.uploadAll)
+  const retry = usePdfUploadStore((s) => s.retry)
+  const resolveDuplicate = usePdfUploadStore((s) => s.resolveDuplicate)
+  const removeFile = usePdfUploadStore((s) => s.removeFile)
 
   const handleInputChange = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     if (event.target.files && event.target.files.length > 0) {
-      handleFilesSelect(event.target.files)
+      addFiles(event.target.files)
     }
     // ブラウザは同一valueでのchange再発火をしないため、同名ファイルの選び直しに対応するためリセットする
     event.target.value = ''
-  }, [handleFilesSelect])
+  }, [addFiles])
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setDragActive(false)
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      addFiles(e.dataTransfer.files)
+    }
+  }, [addFiles])
 
   const handleDrag = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -379,24 +89,27 @@ export function PdfUploadModal({ open, onOpenChange, onSuccess }: PdfUploadModal
     }
   }, [])
 
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-    setDragActive(false)
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      handleFilesSelect(e.dataTransfer.files)
-    }
-  }, [handleFilesSelect])
-
   const hasIdleFiles = files.some((f) => f.step === 'idle')
+  const hasActiveRow = files.some((f) => isActiveStep(f.step)) || isAnyUploadInFlight
+  const allProcessed = files.length > 0 && files.every((f) => f.step === 'processed')
+  const hasAttentionRow = files.some((f) => f.step === 'error' || f.step === 'duplicate')
+
+  // ボタン文言: 進行中の行、またはerror/duplicate行(NeedsAttention)が残っていれば
+  // 「閉じる(バックグラウンドで継続)」、全件processedなら「閉じる」、それ以外は「キャンセル」
+  const closeButtonLabel = allProcessed
+    ? '閉じる'
+    : hasActiveRow || hasAttentionRow
+      ? '閉じる(バックグラウンドで継続)'
+      : 'キャンセル'
 
   return (
-    <Dialog open={open} onOpenChange={handleClose}>
+    <Dialog open={isModalOpen} onOpenChange={(open) => (open ? openModal() : closeModal())}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>PDFアップロード</DialogTitle>
           <DialogDescription>
             PDF/画像ファイルをアップロードしてOCR処理を行います(複数選択可)
+            {(hasActiveRow || hasAttentionRow) && !allProcessed && '。閉じても処理は継続されます'}
           </DialogDescription>
         </DialogHeader>
 
@@ -456,10 +169,9 @@ export function PdfUploadModal({ open, onOpenChange, onSuccess }: PdfUploadModal
                       ? isNameClaimedByOther(claimedFileNames, item.duplicateInfo.suggestedFileName, item.id)
                       : false
                   }
-                  onRemove={handleRemoveFile}
-                  onRetry={handleRetry}
-                  onResolveDuplicate={handleResolveDuplicate}
-                  onStatusUpdate={handleRowStatusUpdate}
+                  onRemove={removeFile}
+                  onRetry={retry}
+                  onResolveDuplicate={resolveDuplicate}
                 />
               ))}
             </div>
@@ -469,13 +181,12 @@ export function PdfUploadModal({ open, onOpenChange, onSuccess }: PdfUploadModal
         <DialogFooter className="gap-2 sm:gap-0">
           <Button
             variant="outline"
-            onClick={handleClose}
-            disabled={files.some((f) => f.step === 'uploading')}
+            onClick={closeModal}
           >
-            {files.length > 0 && files.every((f) => f.step === 'processed') ? '閉じる' : 'キャンセル'}
+            {closeButtonLabel}
           </Button>
           <Button
-            onClick={handleUploadAll}
+            onClick={uploadAll}
             disabled={!hasIdleFiles || isAnyUploadInFlight}
           >
             {isAnyUploadInFlight ? (
@@ -503,7 +214,6 @@ interface FileUploadRowProps {
   onRemove: (id: string) => void
   onRetry: (id: string) => void
   onResolveDuplicate: (id: string) => void
-  onStatusUpdate: (id: string, step: 'pending' | 'processing' | 'processed' | 'error', errorMessage?: string) => void
 }
 
 function FileUploadRow({
@@ -513,41 +223,7 @@ function FileUploadRow({
   onRemove,
   onRetry,
   onResolveDuplicate,
-  onStatusUpdate,
 }: FileUploadRowProps) {
-  // documentId確定時にのみ購読を張る。stepの変化では再購読しない(依存配列はdocumentIdのみ)
-  useEffect(() => {
-    if (!item.documentId) return
-
-    const unsubscribe = onSnapshot(
-      doc(db, 'documents', item.documentId),
-      (snapshot) => {
-        const data = snapshot.data()
-        if (!data) return
-
-        const status = data.status as DocumentStatus
-
-        if (status === 'pending') {
-          onStatusUpdate(item.id, 'pending')
-        } else if (status === 'processing') {
-          onStatusUpdate(item.id, 'processing')
-        } else if (status === 'processed') {
-          onStatusUpdate(item.id, 'processed')
-          unsubscribe()
-        } else if (status === 'error') {
-          onStatusUpdate(item.id, 'error', data.lastErrorMessage || 'OCR処理に失敗しました')
-          unsubscribe()
-        }
-      },
-      (err) => {
-        console.error('Snapshot error:', err)
-      }
-    )
-
-    return () => unsubscribe()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [item.documentId])
-
   const stepConfig = STEP_CONFIG[item.step]
   const StepIcon = stepConfig.icon
   const isProcessing = ['uploading', 'pending', 'processing'].includes(item.step)
