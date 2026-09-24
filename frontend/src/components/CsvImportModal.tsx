@@ -529,6 +529,22 @@ export function CsvImportModal({ type, isOpen, onClose, onImport, existingRecord
             </Alert>
           )}
 
+          {/* 書込み失敗の警告(成功アラートとは別に必ず表示し、見逃しを防ぐ) */}
+          {result && result.failedNames.length > 0 && (
+            <Alert variant="destructive">
+              <AlertCircle className="h-4 w-4" />
+              <AlertTitle>{result.failedNames.length}件の書込みに失敗しました</AlertTitle>
+              <AlertDescription>
+                以下の項目はデータベースへの反映に失敗しました。内容を確認し、再度インポートし直してください。
+                <ul className="mt-1 text-xs list-disc list-inside">
+                  {result.failedNames.map((name, i) => (
+                    <li key={i}>{name}</li>
+                  ))}
+                </ul>
+              </AlertDescription>
+            </Alert>
+          )}
+
           {/* プレビュー（結果表示後は非表示） */}
           {previewData.length > 0 && !result && !checkingDuplicates && (
             <>

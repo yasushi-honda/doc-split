@@ -1329,10 +1329,12 @@ async function bulkImportCustomersWithActions(
     }
 
     try {
-      // 共通のデータオブジェクトを作成(notes・aliasesはCSVに値がある場合のみ含める。空欄=変更しない)
+      // 共通のデータオブジェクトを作成(furigana・notes・aliasesはCSVに値がある場合のみ含める。空欄=変更しない)
       const baseData: Record<string, unknown> = {
         name: normalizedName,
-        furigana: normalizeName(item.data.furigana),
+      }
+      if (item.data.furigana) {
+        baseData.furigana = normalizeName(item.data.furigana)
       }
       if (item.data.careManagerName) {
         baseData.careManagerName = item.data.careManagerName

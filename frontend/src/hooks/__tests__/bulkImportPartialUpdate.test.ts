@@ -97,6 +97,27 @@ describe('一括インポート(上書き)の部分更新', () => {
       expect('aliases' in data).toBe(false)
     })
 
+    it('空欄のfuriganaは送信データにキー自体が含まれない(既存値を消さない、codex review指摘の回帰)', async () => {
+      const { useBulkImportCustomersWithActions } = await import('../useMasters')
+      const { renderHook, act } = await import('@testing-library/react')
+      const { QueryClient, QueryClientProvider } = await import('@tanstack/react-query')
+      const React = await import('react')
+      const queryClient = new QueryClient()
+      const wrapper = ({ children }: { children: React.ReactNode }) =>
+        React.createElement(QueryClientProvider, { client: queryClient }, children)
+
+      const { result } = renderHook(() => useBulkImportCustomersWithActions(), { wrapper })
+      await act(async () => {
+        await result.current.mutateAsync([
+          { data: { name: '田中太郎', furigana: '', notes: '北区在住' }, existingId: 'cust-1', action: 'overwrite' },
+        ])
+      })
+
+      const [, data] = mockUpdateDoc.mock.calls[0] as [unknown, Record<string, unknown>]
+      expect('furigana' in data).toBe(false)
+      expect(data.notes).toBe('北区在住')
+    })
+
     it('addは従来通りsetDocであること', async () => {
       const { useBulkImportCustomersWithActions } = await import('../useMasters')
       const { renderHook, act } = await import('@testing-library/react')

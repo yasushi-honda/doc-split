@@ -323,7 +323,12 @@ function CustomersMaster() {
             <Download className="h-4 w-4 mr-1" />
             エクスポート
           </Button>
-          <Button variant="outline" onClick={() => setIsCsvImportOpen(true)}>
+          <Button
+            variant="outline"
+            onClick={() => setIsCsvImportOpen(true)}
+            disabled={isLoading}
+            title={isLoading ? '顧客データの読み込み中はID照合が正しく行えないため、読み込み完了までお待ちください' : undefined}
+          >
             <Upload className="h-4 w-4 mr-2" />
             CSVインポート
           </Button>
@@ -1204,7 +1209,12 @@ function OfficesMaster() {
             <Download className="h-4 w-4 mr-1" />
             エクスポート
           </Button>
-          <Button variant="outline" onClick={() => setIsCsvImportOpen(true)}>
+          <Button
+            variant="outline"
+            onClick={() => setIsCsvImportOpen(true)}
+            disabled={isLoading}
+            title={isLoading ? '事業所データの読み込み中はID照合が正しく行えないため、読み込み完了までお待ちください' : undefined}
+          >
             <Upload className="h-4 w-4 mr-2" />
             CSVインポート
           </Button>
