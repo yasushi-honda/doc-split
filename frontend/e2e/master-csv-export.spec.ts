@@ -28,7 +28,7 @@ test.describe('マスター一括修正用のCSVダウンロード/編集機能 
     const download = await downloadPromise;
     const downloadPath = await download.path();
     if (!downloadPath) throw new Error('download path is null');
-    const exportedContent = fs.readFileSync(downloadPath, 'utf-8').replace(/^﻿/, '');
+    const exportedContent = fs.readFileSync(downloadPath, 'utf-8').replace(/^\uFEFF/, '');
 
     expect(exportedContent.split('\n')[0]).toBe('id,name,furigana,careManagerName,notes,aliases');
     expect(exportedContent).toContain(CUSTOMER_ID);
@@ -74,7 +74,7 @@ test.describe('マスター一括修正用のCSVダウンロード/編集機能 
     const download2 = await downloadPromise2;
     const downloadPath2 = await download2.path();
     if (!downloadPath2) throw new Error('download path is null');
-    const reExportedContent = fs.readFileSync(downloadPath2, 'utf-8').replace(/^﻿/, '');
+    const reExportedContent = fs.readFileSync(downloadPath2, 'utf-8').replace(/^\uFEFF/, '');
 
     expect(reExportedContent).toContain(CUSTOMER_NAME); // 名前は変わっていない
     expect(reExportedContent).not.toContain('検証太郎(改名試行)');
