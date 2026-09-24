@@ -222,6 +222,7 @@ DocSplitのデータはすべてCloud Firestoreに格納される。
 | furigana | string | Yes | ふりがな（照合用） |
 | careManagerName | string | No | 担当ケアマネジャー名 |
 | notes | string | No | 区別用補足情報（例: "北名古屋在住"） |
+| isContractEnded | boolean | No | 契約終了フラグ。未設定は契約中扱い。trueの場合、書類画面では既定で確認済み書類が非表示になる（Issue #1033、`/settings/app`のshowContractEndedCustomersで既定値を切替可能） |
 
 ### offices（事業所）
 
@@ -394,6 +395,7 @@ Gmail添付ファイル取得ログ。重複検知用のMD5ハッシュを含む
 | errorNotificationEmails | string[] | Yes | エラー通知先メールアドレス |
 | gmailAccount | string | No | 監視対象Gmailアカウント |
 | delegatedUserEmail | string | No | Gmail委任対象メールアドレス |
+| showContractEndedCustomers | boolean | No | 契約終了した利用者を書類画面で表示するか。未設定は`false`（非表示）扱い（Issue #1033） |
 
 ### /settings/auth
 

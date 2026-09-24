@@ -67,6 +67,7 @@ import {
   type ImportAction,
   type BulkImportResultDetailed,
 } from '@/hooks/useMasters'
+import { useSettings, useUpdateSettings } from '@/hooks/useSettings'
 import { CsvImportModal } from '@/components/CsvImportModal'
 import type { CustomerCSVRow, OfficeCSVRow, CareManagerCSVRow, DocumentTypeCSVRow } from '@/lib/csvParser'
 
@@ -134,6 +135,8 @@ function CustomersMaster() {
   const deleteCustomer = useDeleteCustomer()
   const bulkImport = useBulkImportCustomersWithActions()
   const { syncAliases, isProcessing: isAliasSyncing } = useMasterAlias()
+  const { data: settings } = useSettings()
+  const updateSettings = useUpdateSettings()
 
   const [searchText, setSearchText] = useState('')
   const [isAddOpen, setIsAddOpen] = useState(false)
@@ -148,9 +151,22 @@ function CustomersMaster() {
   const [formFurigana, setFormFurigana] = useState('')
   const [formCareManagerName, setFormCareManagerName] = useState('')
   const [formIsDuplicate, setFormIsDuplicate] = useState(false)
+  const [formIsContractEnded, setFormIsContractEnded] = useState(false)
   const [formNotes, setFormNotes] = useState('')
   const [formAliases, setFormAliases] = useState('')
   const [formError, setFormError] = useState<string | null>(null)
+  const [settingsError, setSettingsError] = useState<string | null>(null)
+
+  const handleToggleShowContractEnded = async (checked: boolean) => {
+    setSettingsError(null)
+    try {
+      await updateSettings.mutateAsync({ showContractEndedCustomers: checked })
+    } catch (err) {
+      // pr-review-toolkit(silent-failure-hunter)指摘: エラー内容を捨てずconsoleへ残す
+      console.error('[MastersPage] showContractEndedCustomers更新失敗', err)
+      setSettingsError('設定の保存に失敗しました')
+    }
+  }
 
   const handleCsvImport = async (
     items: { data: AnyCSVData; existingId?: string; action: ImportAction }[]
@@ -234,6 +250,7 @@ function CustomersMaster() {
       careManagerName: formCareManagerName,
       isDuplicate: formIsDuplicate,
       notes: formNotes || undefined,
+      isContractEnded: formIsContractEnded,
     })
     // エイリアス差分をAPI経由で同期
     const newAliases = formAliases.trim()
@@ -255,6 +272,7 @@ function CustomersMaster() {
     setFormFurigana(customer.furigana ?? '')
     setFormCareManagerName(customer.careManagerName || '')
     setFormIsDuplicate(customer.isDuplicate ?? false)
+    setFormIsContractEnded(customer.isContractEnded ?? false)
     setFormNotes(customer.notes || '')
     setFormAliases(customer.aliases?.join(', ') || '')
     setEditingCustomer(customer)
@@ -265,6 +283,7 @@ function CustomersMaster() {
     setFormFurigana('')
     setFormCareManagerName('')
     setFormIsDuplicate(false)
+    setFormIsContractEnded(false)
     setFormNotes('')
     setFormAliases('')
     setFormError(null)
@@ -275,7 +294,12 @@ function CustomersMaster() {
       <CardHeader className="flex flex-row items-center justify-between">
         <div>
           <CardTitle>顧客マスター</CardTitle>
-          <CardDescription>{customers?.length ?? 0}件の顧客</CardDescription>
+          <CardDescription>
+            {customers?.length ?? 0}件の顧客
+            {customers && customers.some((c) => c.isContractEnded) && (
+              <>(うち契約終了 {customers.filter((c) => c.isContractEnded).length}件)</>
+            )}
+          </CardDescription>
         </div>
         <div className="flex gap-2">
           <Button variant="ghost" size="sm" onClick={() => downloadCsvTemplate('customers')}>
@@ -293,6 +317,18 @@ function CustomersMaster() {
         </div>
       </CardHeader>
       <CardContent>
+        <div className="mb-4 flex items-center justify-between rounded-md border border-gray-200 p-3">
+          <div>
+            <Label>書類画面で契約終了の利用者を表示する</Label>
+            <p className="text-xs text-gray-500">全ユーザー共通の既定値です。個々のユーザーは書類画面側で一時的に切り替えられます</p>
+            {settingsError && <p className="text-xs text-red-600">{settingsError}</p>}
+          </div>
+          <Switch
+            checked={settings?.showContractEndedCustomers ?? false}
+            onCheckedChange={handleToggleShowContractEnded}
+            disabled={updateSettings.isPending}
+          />
+        </div>
         <div className="mb-4">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
@@ -329,7 +365,14 @@ function CustomersMaster() {
               ) : (
                 filteredCustomers?.map((customer) => (
                   <TableRow key={customer.id}>
-                    <TableCell className="font-medium">{customer.name}</TableCell>
+                    <TableCell className="font-medium">
+                      <div className="flex items-center gap-2">
+                        {customer.name}
+                        {customer.isContractEnded && (
+                          <Badge variant="outline" className="text-gray-500">契約終了</Badge>
+                        )}
+                      </div>
+                    </TableCell>
                     <TableCell>{customer.furigana ?? '-'}</TableCell>
                     <TableCell>{customer.careManagerName || '-'}</TableCell>
                     <TableCell className="max-w-[200px]">
@@ -497,6 +540,18 @@ function CustomersMaster() {
                   onCheckedChange={setFormIsDuplicate}
                 />
               </div>
+              <div className="flex items-center justify-between">
+                <Label>契約終了</Label>
+                <Switch
+                  checked={formIsContractEnded}
+                  onCheckedChange={setFormIsContractEnded}
+                />
+              </div>
+              {formIsContractEnded && (
+                <p className="text-xs text-gray-500">
+                  この利用者の確認済み書類は、書類画面で既定では表示されなくなります
+                </p>
+              )}
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setEditingCustomer(null)}>

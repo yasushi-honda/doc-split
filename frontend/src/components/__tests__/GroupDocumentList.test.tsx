@@ -43,6 +43,18 @@ vi.mock('@/hooks/useMasters', async (importOriginal) => {
       sameNameCollisionNames: new Set<string>(),
       customerMasterNameById: new Map<string, string | null>(),
     }),
+    // Issue #1033: useContractEndedLookupは同一モジュール内でuseCustomers()を直接呼ぶ
+    // (self-reference)ため、useCustomersだけをモックしても`actual`経由の呼び出しには
+    // 反映されない(モジュールモックは他モジュールからのimportにのみ作用する)。
+    // useContractEndedLookup自体を直接モックする
+    useContractEndedLookup: () => ({
+      isReady: true,
+      endedById: new Map<string, boolean>([
+        ['customer-ended', true],
+        ['customer-active', false],
+      ]),
+      fullyEndedNameKeys: new Set<string>(['契約終了花子']),
+    }),
   }
 })
 
@@ -225,5 +237,82 @@ describe('GroupDocumentList - 担当CM別の件数表示(Issue #1032)', () => {
     expect(fetchNextPage).toHaveBeenCalled()
     expect(screen.getByText(/件数を集計中/)).toBeDefined()
     expect(screen.queryByText('このグループには書類がありません')).toBeNull()
+  })
+})
+
+describe('GroupDocumentList - 契約終了した利用者の非表示(Issue #1033)', () => {
+  beforeEach(() => {
+    mockUseGroupDocuments.mockReset()
+  })
+
+  it('担当CM別: 契約終了利用者の確認済み書類はCustomerSubGroupに渡らず、非表示件数メッセージが出る', () => {
+    const docs = [
+      makeDocument({ id: 'doc-ended', customerId: 'customer-ended', customerName: '契約終了花子', verified: true }),
+      makeDocument({ id: 'doc-active', customerId: 'customer-active', customerName: '契約中次郎', verified: true }),
+    ]
+    mockUseGroupDocuments.mockReturnValue({
+      data: { pages: [{ documents: docs, lastDoc: null, hasMore: false }] },
+      fetchNextPage: vi.fn(),
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      isFetchNextPageError: false,
+      isLoading: false,
+      isError: false,
+      isRefetching: false,
+      refetch: vi.fn(),
+    })
+
+    renderWithClient(<GroupDocumentList groupType="careManager" groupKey="cm-1" />)
+
+    expect(screen.getByText('契約中次郎')).toBeDefined()
+    expect(screen.queryByText('契約終了花子')).toBeNull()
+    expect(screen.getByText(/契約終了の利用者の書類 1件を非表示中/)).toBeDefined()
+  })
+
+  it('担当CM別: showContractEnded=trueなら契約終了利用者も表示される', () => {
+    const docs = [
+      makeDocument({ id: 'doc-ended', customerId: 'customer-ended', customerName: '契約終了花子', verified: true }),
+    ]
+    mockUseGroupDocuments.mockReturnValue({
+      data: { pages: [{ documents: docs, lastDoc: null, hasMore: false }] },
+      fetchNextPage: vi.fn(),
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      isFetchNextPageError: false,
+      isLoading: false,
+      isError: false,
+      isRefetching: false,
+      refetch: vi.fn(),
+    })
+
+    renderWithClient(<GroupDocumentList groupType="careManager" groupKey="cm-1" showContractEnded />)
+
+    expect(screen.getByText('契約終了花子')).toBeDefined()
+    expect(screen.queryByText(/非表示中/)).toBeNull()
+  })
+
+  it('その他のグループタイプ(フラット表示): 契約終了利用者の確認済み書類が一覧から消え、未確認書類は残る', () => {
+    const docs = [
+      makeDocument({ id: 'doc-ended-verified', customerId: 'customer-ended', customerName: '契約終了花子', verified: true, fileName: 'ended-verified.pdf' }),
+      makeDocument({ id: 'doc-ended-unverified', customerId: 'customer-ended', customerName: '契約終了花子', verified: false, fileName: 'ended-unverified.pdf' }),
+      makeDocument({ id: 'doc-active', customerId: 'customer-active', customerName: '契約中次郎', verified: true, fileName: 'active.pdf' }),
+    ]
+    mockUseGroupDocuments.mockReturnValue({
+      data: { pages: [{ documents: docs, lastDoc: null, hasMore: false }] },
+      fetchNextPage: vi.fn(),
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      isFetchNextPageError: false,
+      isLoading: false,
+      isError: false,
+      isRefetching: false,
+      refetch: vi.fn(),
+    })
+
+    renderWithClient(<GroupDocumentList groupType="customer" groupKey="customer-ended" />)
+
+    expect(screen.queryByText('ended-verified.pdf')).toBeNull()
+    expect(screen.getByText('ended-unverified.pdf')).toBeDefined()
+    expect(screen.getByText(/契約終了の利用者の書類 1件を非表示中/)).toBeDefined()
   })
 })
