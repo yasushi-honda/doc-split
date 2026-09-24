@@ -135,7 +135,7 @@ export function MastersPage() {
 // ============================================
 
 function CustomersMaster() {
-  const { data: customers, isLoading } = useCustomers()
+  const { data: customers, isLoading, isError } = useCustomers()
   const addCustomer = useAddCustomer()
   const updateCustomer = useUpdateCustomer()
   const deleteCustomer = useDeleteCustomer()
@@ -326,8 +326,14 @@ function CustomersMaster() {
           <Button
             variant="outline"
             onClick={() => setIsCsvImportOpen(true)}
-            disabled={isLoading}
-            title={isLoading ? '顧客データの読み込み中はID照合が正しく行えないため、読み込み完了までお待ちください' : undefined}
+            disabled={isLoading || isError}
+            title={
+              isLoading
+                ? '顧客データの読み込み中はID照合が正しく行えないため、読み込み完了までお待ちください'
+                : isError
+                  ? '顧客データの読み込みに失敗したためID照合が行えません。画面を再読み込みしてください'
+                  : undefined
+            }
           >
             <Upload className="h-4 w-4 mr-2" />
             CSVインポート
@@ -1048,7 +1054,7 @@ function DocumentTypesMaster() {
 // ============================================
 
 function OfficesMaster() {
-  const { data: offices, isLoading } = useOffices()
+  const { data: offices, isLoading, isError } = useOffices()
   const addOffice = useAddOffice()
   const updateOffice = useUpdateOffice()
   const deleteOffice = useDeleteOffice()
@@ -1212,8 +1218,14 @@ function OfficesMaster() {
           <Button
             variant="outline"
             onClick={() => setIsCsvImportOpen(true)}
-            disabled={isLoading}
-            title={isLoading ? '事業所データの読み込み中はID照合が正しく行えないため、読み込み完了までお待ちください' : undefined}
+            disabled={isLoading || isError}
+            title={
+              isLoading
+                ? '事業所データの読み込み中はID照合が正しく行えないため、読み込み完了までお待ちください'
+                : isError
+                  ? '事業所データの読み込みに失敗したためID照合が行えません。画面を再読み込みしてください'
+                  : undefined
+            }
           >
             <Upload className="h-4 w-4 mr-2" />
             CSVインポート

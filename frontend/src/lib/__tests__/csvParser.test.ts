@@ -68,6 +68,11 @@ describe('parseCSV', () => {
     const content = 'name,notes\n'
     expect(parseCSV(content)).toEqual([])
   })
+
+  it('ダブルクォートが閉じられないまま終端に達した場合はエラーを投げる（silent-failure-hunter指摘の回帰、レコードのサイレント消失防止）', () => {
+    const content = 'name,notes\n山田太郎,"閉じていない\n田中花子,備考B\n'
+    expect(() => parseCSV(content)).toThrow('ダブルクォートが閉じられていません')
+  })
 })
 
 describe('mapCustomerCSV / mapOfficeCSV のid列対応', () => {

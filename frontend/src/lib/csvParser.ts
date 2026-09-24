@@ -88,6 +88,12 @@ function parseCSVRecords(content: string): string[][] {
     }
   }
 
+  // ダブルクォートが閉じられないまま終端に達した場合、以降の内容が全て1フィールドに
+  // 吸収されレコードがサイレントに消失する(silent-failure-hunter指摘)。検知してエラーにする
+  if (inQuotes) {
+    throw new Error('CSVの形式が不正です(ダブルクォートが閉じられていません)')
+  }
+
   // 末尾に改行が無いまま終わった最後のフィールド/レコードを確定する
   if (current !== '' || currentRecord.length > 0) {
     currentRecord.push(current)

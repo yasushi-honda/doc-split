@@ -357,11 +357,16 @@ export function CsvImportModal({ type, isOpen, onClose, onImport, existingRecord
         })
 
         setPreviewData([...idMatchedRows, ...nameMatchedRows])
+      } catch (err) {
+        console.error('[CsvImportModal] 重複チェック(Firestore通信)に失敗しました', err)
+        setError('既存データとの照合に失敗しました。通信状況を確認し、再度お試しください')
+        setPreviewData([])
       } finally {
         setCheckingDuplicates(false)
       }
-    } catch {
-      setError('ファイルの読み込みに失敗しました')
+    } catch (err) {
+      console.error('[CsvImportModal] CSVファイルの読み込み/解析に失敗しました', err)
+      setError('ファイルの読み込みに失敗しました。CSVの形式を確認してください')
       setPreviewData([])
     }
   }
@@ -386,8 +391,9 @@ export function CsvImportModal({ type, isOpen, onClose, onImport, existingRecord
       })
       const result = await onImport(items)
       setResult(result)
-    } catch {
-      setError('インポートに失敗しました')
+    } catch (err) {
+      console.error('[CsvImportModal] インポート処理に失敗しました', err)
+      setError('インポートに失敗しました。通信状況を確認し、再度お試しください')
     } finally {
       setImporting(false)
     }
@@ -504,12 +510,14 @@ export function CsvImportModal({ type, isOpen, onClose, onImport, existingRecord
             </Alert>
           )}
 
-          {/* 成功メッセージ */}
+          {/* 成功メッセージ(一部失敗時はタイトル・色をアラート調に変え、成功と誤解されないようにする) */}
           {result && (
-            <Alert className="border-green-200 bg-green-50">
-              <CheckCircle2 className="h-4 w-4 text-green-600" />
-              <AlertTitle className="text-green-800">インポート完了</AlertTitle>
-              <AlertDescription className="text-green-700">
+            <Alert className={result.failedNames.length > 0 ? 'border-amber-200 bg-amber-50' : 'border-green-200 bg-green-50'}>
+              <CheckCircle2 className={`h-4 w-4 ${result.failedNames.length > 0 ? 'text-amber-600' : 'text-green-600'}`} />
+              <AlertTitle className={result.failedNames.length > 0 ? 'text-amber-800' : 'text-green-800'}>
+                {result.failedNames.length > 0 ? '一部失敗してインポートしました' : 'インポート完了'}
+              </AlertTitle>
+              <AlertDescription className={result.failedNames.length > 0 ? 'text-amber-700' : 'text-green-700'}>
                 {result.added}件追加
                 {result.overwritten > 0 && `、${result.overwritten}件上書き`}
                 {result.skipped > 0 && `、${result.skipped}件スキップ`}

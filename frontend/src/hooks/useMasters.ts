@@ -1347,6 +1347,14 @@ async function bulkImportCustomersWithActions(
         baseData.aliases = aliases
       }
 
+      if (item.action === 'overwrite' && !item.existingId) {
+        // overwrite指定だがexistingIdが無い異常系。addへ無警告フォールバックすると
+        // 別レコードとして重複作成されてしまうため、明示的に失敗扱いにする
+        console.error(`[bulkImportCustomersWithActions] "${normalizedName}" はoverwrite指定ですがexistingIdがありません`)
+        failedNames.push(normalizedName)
+        continue
+      }
+
       if (item.action === 'overwrite' && item.existingId) {
         // 上書き: 既存ドキュメントを更新
         const docRef = doc(db, COLLECTION_PATHS.customers, item.existingId)
@@ -1450,6 +1458,14 @@ async function bulkImportOfficesWithActions(
     try {
       const normalizedShortName = item.data.shortName ? normalizeName(item.data.shortName) : ''
       const aliases = parseSeparatedListForImport(item.data.aliases, '|')
+
+      if (item.action === 'overwrite' && !item.existingId) {
+        // overwrite指定だがexistingIdが無い異常系。addへ無警告フォールバックすると
+        // 別レコードとして重複作成されてしまうため、明示的に失敗扱いにする
+        console.error(`[bulkImportOfficesWithActions] "${normalizedName}" はoverwrite指定ですがexistingIdがありません`)
+        failedNames.push(normalizedName)
+        continue
+      }
 
       if (item.action === 'overwrite' && item.existingId) {
         // 上書き: setDoc(非merge)だとCSV列に無いフィールド(shortName・備考・別表記等)が

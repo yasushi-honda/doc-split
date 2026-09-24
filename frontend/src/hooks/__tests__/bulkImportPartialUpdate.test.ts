@@ -162,6 +162,30 @@ describe('一括インポート(上書き)の部分更新', () => {
       expect(importResult?.failedNames).toEqual(['失敗太郎'])
       expect(importResult?.overwritten).toBe(1)
     })
+
+    it('overwrite指定だがexistingIdが無い場合、addへ無警告フォールバックせずfailedNamesに記録される(silent-failure-hunter指摘の回帰)', async () => {
+      const { useBulkImportCustomersWithActions } = await import('../useMasters')
+      const { renderHook, act } = await import('@testing-library/react')
+      const { QueryClient, QueryClientProvider } = await import('@tanstack/react-query')
+      const React = await import('react')
+      const queryClient = new QueryClient()
+      const wrapper = ({ children }: { children: React.ReactNode }) =>
+        React.createElement(QueryClientProvider, { client: queryClient }, children)
+
+      const { result } = renderHook(() => useBulkImportCustomersWithActions(), { wrapper })
+      let importResult: Awaited<ReturnType<typeof result.current.mutateAsync>> | undefined
+      await act(async () => {
+        importResult = await result.current.mutateAsync([
+          { data: { name: '異常太郎', furigana: '' }, action: 'overwrite' }, // existingIdなし
+        ])
+      })
+
+      expect(mockUpdateDoc).not.toHaveBeenCalled()
+      expect(mockSetDoc).not.toHaveBeenCalled()
+      expect(importResult?.failedNames).toEqual(['異常太郎'])
+      expect(importResult?.added).toBe(0)
+      expect(importResult?.overwritten).toBe(0)
+    })
   })
 
   describe('事業所(bulkImportOfficesWithActions)', () => {
@@ -192,6 +216,73 @@ describe('一括インポート(上書き)の部分更新', () => {
       expect('shortName' in data).toBe(false)
       expect('notes' in data).toBe(false)
     })
+
+    it('addは従来通りsetDocであること', async () => {
+      const { useBulkImportOfficesWithActions } = await import('../useMasters')
+      const { renderHook, act } = await import('@testing-library/react')
+      const { QueryClient, QueryClientProvider } = await import('@tanstack/react-query')
+      const React = await import('react')
+      const queryClient = new QueryClient()
+      const wrapper = ({ children }: { children: React.ReactNode }) =>
+        React.createElement(QueryClientProvider, { client: queryClient }, children)
+
+      const { result } = renderHook(() => useBulkImportOfficesWithActions(), { wrapper })
+      await act(async () => {
+        await result.current.mutateAsync([
+          { data: { name: '新規事業所', shortName: '' }, action: 'add' },
+        ])
+      })
+
+      expect(mockSetDoc).toHaveBeenCalledTimes(1)
+      expect(mockUpdateDoc).not.toHaveBeenCalled()
+    })
+
+    it('途中の1件が失敗しても後続行は処理され、失敗行はfailedNamesに記録される', async () => {
+      mockUpdateDoc.mockRejectedValueOnce(new Error('permission denied')).mockResolvedValueOnce(undefined)
+
+      const { useBulkImportOfficesWithActions } = await import('../useMasters')
+      const { renderHook, act } = await import('@testing-library/react')
+      const { QueryClient, QueryClientProvider } = await import('@tanstack/react-query')
+      const React = await import('react')
+      const queryClient = new QueryClient()
+      const wrapper = ({ children }: { children: React.ReactNode }) =>
+        React.createElement(QueryClientProvider, { client: queryClient }, children)
+
+      const { result } = renderHook(() => useBulkImportOfficesWithActions(), { wrapper })
+      let importResult: Awaited<ReturnType<typeof result.current.mutateAsync>> | undefined
+      await act(async () => {
+        importResult = await result.current.mutateAsync([
+          { data: { name: '失敗事業所', shortName: '' }, existingId: 'office-fail', action: 'overwrite' },
+          { data: { name: '成功事業所', shortName: '' }, existingId: 'office-ok', action: 'overwrite' },
+        ])
+      })
+
+      expect(mockUpdateDoc).toHaveBeenCalledTimes(2)
+      expect(importResult?.failedNames).toEqual(['失敗事業所'])
+      expect(importResult?.overwritten).toBe(1)
+    })
+
+    it('overwrite指定だがexistingIdが無い場合、addへ無警告フォールバックせずfailedNamesに記録される(silent-failure-hunter指摘の回帰)', async () => {
+      const { useBulkImportOfficesWithActions } = await import('../useMasters')
+      const { renderHook, act } = await import('@testing-library/react')
+      const { QueryClient, QueryClientProvider } = await import('@tanstack/react-query')
+      const React = await import('react')
+      const queryClient = new QueryClient()
+      const wrapper = ({ children }: { children: React.ReactNode }) =>
+        React.createElement(QueryClientProvider, { client: queryClient }, children)
+
+      const { result } = renderHook(() => useBulkImportOfficesWithActions(), { wrapper })
+      let importResult: Awaited<ReturnType<typeof result.current.mutateAsync>> | undefined
+      await act(async () => {
+        importResult = await result.current.mutateAsync([
+          { data: { name: '異常事業所', shortName: '' }, action: 'overwrite' }, // existingIdなし
+        ])
+      })
+
+      expect(mockUpdateDoc).not.toHaveBeenCalled()
+      expect(mockSetDoc).not.toHaveBeenCalled()
+      expect(importResult?.failedNames).toEqual(['異常事業所'])
+    })
   })
 
   describe('書類種別(bulkImportDocumentTypesWithActions)', () => {
@@ -221,6 +312,51 @@ describe('一括インポート(上書き)の部分更新', () => {
       expect('dateMarker' in data).toBe(false)
       expect('category' in data).toBe(false)
       expect('keywords' in data).toBe(false)
+    })
+
+    it('addは従来通りsetDocであること', async () => {
+      const { useBulkImportDocumentTypesWithActions } = await import('../useMasters')
+      const { renderHook, act } = await import('@testing-library/react')
+      const { QueryClient, QueryClientProvider } = await import('@tanstack/react-query')
+      const React = await import('react')
+      const queryClient = new QueryClient()
+      const wrapper = ({ children }: { children: React.ReactNode }) =>
+        React.createElement(QueryClientProvider, { client: queryClient }, children)
+
+      const { result } = renderHook(() => useBulkImportDocumentTypesWithActions(), { wrapper })
+      await act(async () => {
+        await result.current.mutateAsync([
+          { data: { name: '新規書類種別', dateMarker: '', category: '', keywords: '' }, action: 'add' },
+        ])
+      })
+
+      expect(mockSetDoc).toHaveBeenCalledTimes(1)
+      expect(mockUpdateDoc).not.toHaveBeenCalled()
+    })
+
+    it('途中の1件が失敗しても後続行は処理され、失敗行はfailedNamesに記録される', async () => {
+      mockUpdateDoc.mockRejectedValueOnce(new Error('permission denied')).mockResolvedValueOnce(undefined)
+
+      const { useBulkImportDocumentTypesWithActions } = await import('../useMasters')
+      const { renderHook, act } = await import('@testing-library/react')
+      const { QueryClient, QueryClientProvider } = await import('@tanstack/react-query')
+      const React = await import('react')
+      const queryClient = new QueryClient()
+      const wrapper = ({ children }: { children: React.ReactNode }) =>
+        React.createElement(QueryClientProvider, { client: queryClient }, children)
+
+      const { result } = renderHook(() => useBulkImportDocumentTypesWithActions(), { wrapper })
+      let importResult: Awaited<ReturnType<typeof result.current.mutateAsync>> | undefined
+      await act(async () => {
+        importResult = await result.current.mutateAsync([
+          { data: { name: '失敗書類種別', dateMarker: '', category: '', keywords: '' }, action: 'overwrite' },
+          { data: { name: '成功書類種別', dateMarker: '', category: '', keywords: '' }, action: 'overwrite' },
+        ])
+      })
+
+      expect(mockUpdateDoc).toHaveBeenCalledTimes(2)
+      expect(importResult?.failedNames).toEqual(['失敗書類種別'])
+      expect(importResult?.overwritten).toBe(1)
     })
   })
 
