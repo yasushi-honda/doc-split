@@ -438,8 +438,12 @@ export function DocumentsPage() {
   // その場合はアプリ全体共有設定(settings.showContractEndedCustomers)に従う。
   // ページ再読み込みでこの一時切替は消え、共有既定値に戻る(保存しない)
   const [contractEndedOverride, setContractEndedOverride] = useState<boolean | null>(null)
-  const { data: settings } = useSettings()
-  const showContractEnded = contractEndedOverride ?? settings?.showContractEndedCustomers ?? false
+  const { data: settings, isError: isSettingsError } = useSettings()
+  // pr-review-toolkit(silent-failure-hunter)指摘: 設定取得(useSettings)が失敗した場合、
+  // settingsがundefinedのまま`?? false`にフォールバックすると、共有既定値が実際にはtrue
+  // だったとしても書類がサイレントに非表示になる。本機能の設計方針(迷ったら表示=fail-open)
+  // と矛盾するため、設定取得失敗時は明示的に表示側へ倒す
+  const showContractEnded = contractEndedOverride ?? (isSettingsError ? true : settings?.showContractEndedCustomers ?? false)
   const contractEndedLookup = useContractEndedLookup()
   const [dateRange, setDateRange] = useState<DateRange>({
     dateFrom: undefined,

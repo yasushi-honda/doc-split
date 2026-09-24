@@ -39,6 +39,17 @@ describe('buildContractEndedLookup', () => {
     ]);
     expect(lookup.fullyEndedNameKeys.has('田中太郎')).toBe(false);
   });
+
+  it('isContractEndedフィールド自体が存在しない既存マスターは契約中扱い(pr-review-toolkit指摘、Issue #445/PR-D3と同型の既存データ互換性確認)', () => {
+    // Partial<CustomerMaster>からisContractEndedキー自体を省略する(false明示とは区別する)
+    const legacyCustomer: CustomerMaster = { id: 'legacy', name: '既存太郎' };
+    const lookup = buildContractEndedLookup([legacyCustomer]);
+    expect(lookup.endedById.get('legacy')).toBe(false);
+    expect(lookup.fullyEndedNameKeys.has('既存太郎')).toBe(false);
+    expect(
+      isDocumentHiddenByContractEnd({ customerId: 'legacy', verified: true }, lookup, false),
+    ).toBe(false);
+  });
 });
 
 describe('isDocumentHiddenByContractEnd', () => {

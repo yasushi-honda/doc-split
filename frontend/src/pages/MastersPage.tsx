@@ -161,7 +161,9 @@ function CustomersMaster() {
     setSettingsError(null)
     try {
       await updateSettings.mutateAsync({ showContractEndedCustomers: checked })
-    } catch {
+    } catch (err) {
+      // pr-review-toolkit(silent-failure-hunter)指摘: エラー内容を捨てずconsoleへ残す
+      console.error('[MastersPage] showContractEndedCustomers更新失敗', err)
       setSettingsError('設定の保存に失敗しました')
     }
   }

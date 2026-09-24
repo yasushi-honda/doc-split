@@ -107,7 +107,7 @@ interface GroupItemProps {
   onDocumentSelect?: (documentId: string) => void;
 }
 
-function GroupItem({ group, isExpanded, furiganaMap, dateFilter, showContractEnded, onToggle, onDocumentSelect }: GroupItemProps) {
+function GroupItem({ group, isExpanded, furiganaMap, dateFilter, showContractEnded = false, onToggle, onDocumentSelect }: GroupItemProps) {
   const config = GROUP_TYPE_CONFIG[group.groupType];
   const Icon = config.icon;
 
