@@ -49,6 +49,26 @@ export function generateCsvTemplate(type: TemplateType, includeExample = true): 
 }
 
 /**
+ * CSV文字列をBOM付きUTF-8でダウンロードする（Excel対応）
+ *
+ * テンプレートダウンロード・CSVエクスポート（csvExport.ts、Issue #1036）の
+ * 両方から使う共通処理。見た目・挙動は従来のdownloadCsvTemplateと同じ。
+ */
+export function downloadCsvContent(content: string, filename: string): void {
+  const bom = new Uint8Array([0xef, 0xbb, 0xbf])
+  const blob = new Blob([bom, content], { type: 'text/csv;charset=utf-8' })
+
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  URL.revokeObjectURL(url)
+}
+
+/**
  * CSVテンプレートをダウンロード
  * @param type テンプレート種別
  * @param includeExample サンプル行を含めるか
@@ -56,17 +76,5 @@ export function generateCsvTemplate(type: TemplateType, includeExample = true): 
 export function downloadCsvTemplate(type: TemplateType, includeExample = true): void {
   const template = CSV_TEMPLATES[type]
   const content = generateCsvTemplate(type, includeExample)
-
-  // BOM付きUTF-8でダウンロード（Excel対応）
-  const bom = new Uint8Array([0xef, 0xbb, 0xbf])
-  const blob = new Blob([bom, content], { type: 'text/csv;charset=utf-8' })
-
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = template.filename
-  document.body.appendChild(link)
-  link.click()
-  document.body.removeChild(link)
-  URL.revokeObjectURL(url)
+  downloadCsvContent(content, template.filename)
 }
