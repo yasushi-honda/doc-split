@@ -24,6 +24,7 @@ import {
 } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
 import { getDisplayName } from '@/utils/displayName';
+import { masterCandidateFilter } from '@/lib/masterCandidateFilter';
 import { RegisterNewMasterModal, type MasterType, type RegisteredMasterInfo } from './RegisterNewMasterModal';
 
 // ============================================
@@ -150,7 +151,7 @@ export function MasterSelectField({
           </Button>
         </PopoverTrigger>
         <PopoverContent className="w-[300px] p-0" align="start">
-          <Command>
+          <Command filter={masterCandidateFilter}>
             <CommandInput placeholder={`${config.label}を検索...`} />
             <CommandList className="max-h-[250px] overflow-y-auto">
               <CommandEmpty>該当なし</CommandEmpty>
