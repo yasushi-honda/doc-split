@@ -23,7 +23,8 @@ import { LoadMoreIndicator } from '@/components/LoadMoreIndicator';
 import { DocumentListUpdateBanner } from '@/components/DocumentListUpdateBanner';
 import { useInfiniteScroll } from '@/hooks/useInfiniteScroll';
 import { useReprocessDocument } from '@/hooks/useDocuments';
-import { useDocumentTypes, useCustomerIdentityLookup, type CustomerIdentityLookup } from '@/hooks/useMasters';
+import { useDocumentTypes, useCustomerIdentityLookup, useContractEndedLookup, type CustomerIdentityLookup } from '@/hooks/useMasters';
+import { isDocumentHiddenByContractEnd } from '@/lib/contractEnded';
 import {
   useGroupDocuments,
   groupDocumentsQueryKey,
@@ -50,6 +51,7 @@ interface GroupDocumentListProps {
   groupKey: string;
   furiganaMap?: Map<string, string>;
   dateFilter?: DateRange;
+  showContractEnded?: boolean;
   onDocumentSelect?: (documentId: string) => void;
 }
 
@@ -213,6 +215,7 @@ export function GroupDocumentList({
   groupKey,
   furiganaMap,
   dateFilter,
+  showContractEnded = false,
   onDocumentSelect,
 }: GroupDocumentListProps) {
   const PAGE_SIZE = 100;
@@ -384,6 +387,14 @@ export function GroupDocumentList({
     [data?.pages, dateFilter]
   );
 
+  // 契約終了した利用者の確認済み書類を非表示(Issue #1033)。useCustomers()のキャッシュ共有により追加フェッチなし
+  const contractEndedLookup = useContractEndedLookup();
+  const visibleDocuments = useMemo(
+    () => allDocuments.filter((doc) => !isDocumentHiddenByContractEnd(doc, contractEndedLookup, showContractEnded)),
+    [allDocuments, contractEndedLookup, showContractEnded]
+  );
+  const hiddenByContractEndedCount = allDocuments.length - visibleDocuments.length;
+
   // ローディング（初回）
   if (isLoading) {
     return (
@@ -433,7 +444,16 @@ export function GroupDocumentList({
   // 該当書類が残っていても、ここで「このグループには書類がありません」と早期確定表示
   // されてしまう。CM別は全ページ読み込み完了(hasNextPage===false)まではこの空状態判定を
   // 保留し、下部のcareManager分岐のローディング表示に委ねる。
-  if (allDocuments.length === 0 && (groupType !== 'careManager' || !hasNextPage)) {
+  //
+  // 契約終了フィルタ(Issue #1033)も日付フィルタと同型のクライアント側フィルタのため、
+  // 読み込み済みの現在のページが全滅していても後続ページに該当があり得る。groupType問わず
+  // hasNextPageがtrueの間は空状態判定を保留しLoadMoreIndicatorを出し続ける。
+  const mightHaveMoreAfterContractFilter = hiddenByContractEndedCount > 0 && hasNextPage;
+  if (
+    visibleDocuments.length === 0 &&
+    (groupType !== 'careManager' || !hasNextPage) &&
+    !mightHaveMoreAfterContractFilter
+  ) {
     return (
       <>
         {updateBanner}
@@ -489,14 +509,21 @@ export function GroupDocumentList({
         {updateBanner}
         <div ref={scrollContainerRef} className="max-h-[500px] overflow-y-auto">
           {isFullyLoaded ? (
-            <CustomerSubGroup
-              documents={allDocuments}
-              furiganaMap={furiganaMap}
-              documentMasters={documentMasters}
-              onDocumentSelect={onDocumentSelect}
-              onRetry={setRetryTarget}
-              identityLookup={identityLookup}
-            />
+            <>
+              {hiddenByContractEndedCount > 0 && (
+                <p className="px-4 pt-2 text-xs text-gray-500">
+                  契約終了の利用者の書類 {hiddenByContractEndedCount}件を非表示中
+                </p>
+              )}
+              <CustomerSubGroup
+                documents={visibleDocuments}
+                furiganaMap={furiganaMap}
+                documentMasters={documentMasters}
+                onDocumentSelect={onDocumentSelect}
+                onRetry={setRetryTarget}
+                identityLookup={identityLookup}
+              />
+            </>
           ) : (
             // isFetchNextPageError:true(追加ページ取得失敗)の場合、react-queryの型上
             // isErrorも同時にtrueになり本コンポーネント冒頭の isError 早期return(汎用エラー
@@ -525,9 +552,14 @@ export function GroupDocumentList({
     <>
       {updateBanner}
       <div ref={scrollContainerRef} className="max-h-96 overflow-y-auto">
+        {hiddenByContractEndedCount > 0 && (
+          <p className="px-4 pt-2 text-xs text-gray-500">
+            契約終了の利用者の書類 {hiddenByContractEndedCount}件を非表示中
+          </p>
+        )}
         {/* ドキュメント一覧 */}
         <div className="divide-y divide-gray-100">
-          {allDocuments.map((doc) => (
+          {visibleDocuments.map((doc) => (
             <DocumentRow
               key={doc.id}
               document={doc}

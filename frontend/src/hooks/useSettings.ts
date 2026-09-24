@@ -25,6 +25,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   labelSearchOperator: 'OR',
   errorNotificationEmails: [],
   gmailAccount: '',
+  showContractEndedCustomers: false,
 }
 
 async function fetchSettings(): Promise<AppSettings> {
@@ -42,6 +43,8 @@ async function fetchSettings(): Promise<AppSettings> {
     labelSearchOperator: data.labelSearchOperator || 'OR',
     errorNotificationEmails: data.errorNotificationEmails || [],
     gmailAccount: data.gmailAccount || '',
+    // Issue #1033: `||`ではなく厳密な真偽判定にする(`||`だと`false`と未設定を区別できない)
+    showContractEndedCustomers: data.showContractEndedCustomers === true,
   }
 }
 

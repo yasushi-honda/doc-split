@@ -26,8 +26,9 @@ import {
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { db } from '@/lib/firebase'
-import type { Document, DocumentStatus, DocumentMaster, CustomerMaster, OfficeMaster, SummaryField } from '@shared/types'
+import type { Document, DocumentStatus, DocumentMaster, OfficeMaster, SummaryField } from '@shared/types'
 import { markGroupDocumentsStale } from './useDocumentGroups'
+import { fetchCustomers } from './useMasters'
 
 // ============================================
 // Summary 後方互換読込 (Issue #215)
@@ -1079,22 +1080,14 @@ export function useDocumentMasters() {
   })
 }
 
-async function fetchCustomerMasters(): Promise<CustomerMaster[]> {
-  const snapshot = await getDocs(collection(db, 'masters/customers/items'))
-  return snapshot.docs.map((doc) => ({
-    id: doc.id,
-    name: doc.data().name as string,
-    // #338: shared 側 optional と整合させる honesty cast。fetchCustomers (useMasters.ts) と同パターンに統一。
-    isDuplicate: doc.data().isDuplicate as boolean | undefined,
-    furigana: doc.data().furigana as string | undefined,
-    careManagerName: doc.data().careManagerName as string | undefined,
-  }))
-}
-
 export function useCustomerMasters() {
+  // Issue #1033: 以前はここに別の取得関数(フィールド構成が異なる簡易マッピング)を
+  // 持っていたが、useMasters.tsのuseCustomers()と同じqueryKey ['masters','customers']を
+  // 共有しているため、fetchCustomers(useMasters.ts)に一本化した。どちらが先にキャッシュを
+  // 埋めてもisContractEnded等のフィールドが欠落しないようにするため。
   return useQuery({
     queryKey: ['masters', 'customers'],
-    queryFn: fetchCustomerMasters,
+    queryFn: fetchCustomers,
     staleTime: 5 * 60 * 1000,
   })
 }

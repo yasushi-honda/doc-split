@@ -32,7 +32,8 @@ import {
   type GroupType,
   type DocumentGroup,
 } from '@/hooks/useDocumentGroups';
-import { useCustomers, useDocumentTypes } from '@/hooks/useMasters';
+import { useCustomers, useDocumentTypes, useContractEndedLookup } from '@/hooks/useMasters';
+import { isCustomerGroupHiddenByContractEnd } from '@/lib/contractEnded';
 import { KanaFilterBar } from '@/components/KanaFilterBar';
 import {
   buildFuriganaMap,
@@ -58,6 +59,7 @@ import type { DateRange } from '@/components/DateRangeFilter';
 interface GroupListProps {
   groupType: GroupType;
   dateFilter?: DateRange;
+  showContractEnded?: boolean;
   onDocumentSelect?: (documentId: string) => void;
 }
 
@@ -100,11 +102,12 @@ interface GroupItemProps {
   isExpanded: boolean;
   furiganaMap?: Map<string, string>;
   dateFilter?: DateRange;
+  showContractEnded?: boolean;
   onToggle: () => void;
   onDocumentSelect?: (documentId: string) => void;
 }
 
-function GroupItem({ group, isExpanded, furiganaMap, dateFilter, onToggle, onDocumentSelect }: GroupItemProps) {
+function GroupItem({ group, isExpanded, furiganaMap, dateFilter, showContractEnded, onToggle, onDocumentSelect }: GroupItemProps) {
   const config = GROUP_TYPE_CONFIG[group.groupType];
   const Icon = config.icon;
 
@@ -144,6 +147,7 @@ function GroupItem({ group, isExpanded, furiganaMap, dateFilter, onToggle, onDoc
             groupKey={group.groupKey}
             furiganaMap={furiganaMap}
             dateFilter={dateFilter}
+            showContractEnded={showContractEnded}
             onDocumentSelect={onDocumentSelect}
           />
         </div>
@@ -206,7 +210,7 @@ function CategoryItem({
 // メインコンポーネント
 // ============================================
 
-export function GroupList({ groupType, dateFilter, onDocumentSelect }: GroupListProps) {
+export function GroupList({ groupType, dateFilter, showContractEnded = false, onDocumentSelect }: GroupListProps) {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set());
   const [selectedKanaRow, setSelectedKanaRow] = useState<KanaRow | null>(null);
@@ -235,6 +239,8 @@ export function GroupList({ groupType, dateFilter, onDocumentSelect }: GroupList
   // 顧客マスター（顧客別・担当CM別のみ取得）
   const { data: customers } = useCustomers();
   const isFuriganaReady = needsFurigana ? !!customers : true;
+  // 契約終了した利用者の非表示判定(Issue #1033、顧客別タブのみグループ単位で除外)
+  const contractEndedLookup = useContractEndedLookup();
   const furiganaMap = useMemo(
     () => (needsFurigana && customers ? buildFuriganaMap(customers) : new Map<string, string>()),
     [needsFurigana, customers]
@@ -284,8 +290,13 @@ export function GroupList({ groupType, dateFilter, onDocumentSelect }: GroupList
     const nameFiltered = filterGroupsByName(groups, nameFilter);
 
     if (isCustomerView) {
-      if (!isFuriganaReady) return nameFiltered;
-      const sorted = sortGroupsByFurigana(nameFiltered, furiganaMap);
+      // 契約終了した利用者のグループを除外(Issue #1033)。事業所別・書類種別は複数顧客に
+      // またがりうるためグループ単位の除外は行わない(顧客別のみ、/plan-crossreview codex確認済み)
+      const notContractEnded = nameFiltered.filter(
+        (g) => !isCustomerGroupHiddenByContractEnd(g.groupKey, contractEndedLookup, showContractEnded)
+      );
+      if (!isFuriganaReady) return notContractEnded;
+      const sorted = sortGroupsByFurigana(notContractEnded, furiganaMap);
       return filterGroupsByKanaRow(sorted, selectedKanaRow, furiganaMap);
     }
     if (isDocumentTypeView) {
@@ -295,7 +306,13 @@ export function GroupList({ groupType, dateFilter, onDocumentSelect }: GroupList
     // 事業所別・担当CM別: サーバー側の上位100件キャップを廃止したため、
     // 従来の表示順（件数降順）をクライアント側で維持する（全件表示、上限なし）
     return [...nameFiltered].sort((a, b) => b.count - a.count);
-  }, [groups, isCustomerView, isDocumentTypeView, useCategoryHierarchy, isFuriganaReady, furiganaMap, selectedKanaRow, nameFilter]);
+  }, [groups, isCustomerView, isDocumentTypeView, useCategoryHierarchy, isFuriganaReady, furiganaMap, selectedKanaRow, nameFilter, contractEndedLookup, showContractEnded]);
+
+  // 統計行に「契約終了 N名を非表示中」を出すための件数(顧客別タブのみ)
+  const hiddenCustomerGroupCount = useMemo(() => {
+    if (!isCustomerView || !groups) return 0;
+    return groups.filter((g) => isCustomerGroupHiddenByContractEnd(g.groupKey, contractEndedLookup, showContractEnded)).length;
+  }, [groups, isCustomerView, contractEndedLookup, showContractEnded]);
 
   const config = GROUP_TYPE_CONFIG[groupType];
 
@@ -384,6 +401,11 @@ export function GroupList({ groupType, dateFilter, onDocumentSelect }: GroupList
             <span className="font-medium text-gray-900">{stats.totalDocuments}</span>
             &nbsp;件
           </span>
+          {hiddenCustomerGroupCount > 0 && (
+            <span className="text-gray-400">
+              (契約終了 {hiddenCustomerGroupCount}名を非表示中)
+            </span>
+          )}
         </div>
       )}
 
@@ -454,6 +476,7 @@ export function GroupList({ groupType, dateFilter, onDocumentSelect }: GroupList
                       group={group}
                       isExpanded={expandedGroups.has(group.id)}
                       dateFilter={dateFilter}
+                      showContractEnded={showContractEnded}
                       onToggle={() => toggleGroup(group.id)}
                       onDocumentSelect={onDocumentSelect}
                     />
@@ -467,6 +490,7 @@ export function GroupList({ groupType, dateFilter, onDocumentSelect }: GroupList
                   isExpanded={expandedGroups.has(group.id)}
                   furiganaMap={needsFurigana ? furiganaMap : undefined}
                   dateFilter={dateFilter}
+                  showContractEnded={showContractEnded}
                   onToggle={() => toggleGroup(group.id)}
                   onDocumentSelect={onDocumentSelect}
                 />

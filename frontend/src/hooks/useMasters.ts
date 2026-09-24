@@ -28,6 +28,7 @@ import type {
 } from '@shared/types'
 import { validateOfficeMasterImport } from '@shared/officeMasterValidation'
 import { findSameNameCollisionNames } from '@shared/customerIdentity'
+import { buildContractEndedLookup, type ContractEndedLookup } from '@/lib/contractEnded'
 
 // 重複エラークラス
 export class DuplicateError extends Error {
@@ -75,10 +76,14 @@ function mapCustomerMastersSnapshot(snapshot: QuerySnapshot<DocumentData>): Cust
     careManagerName: doc.data().careManagerName as string | undefined,
     notes: doc.data().notes as string | undefined,
     aliases: doc.data().aliases as string[] | undefined,
+    isContractEnded: doc.data().isContractEnded as boolean | undefined,
   }))
 }
 
-async function fetchCustomers(): Promise<CustomerMaster[]> {
+// Issue #1033: frontend/src/hooks/useDocuments.ts の useCustomerMasters もこの関数を使う
+// (queryKey ['masters','customers'] を共有しているため、フィールド構成が異なる別の取得関数を
+// 使うとどちらが先にキャッシュを埋めるかでフィールドが欠落する。/plan-crossreview codex指摘)
+export async function fetchCustomers(): Promise<CustomerMaster[]> {
   const snapshot = await getDocs(collection(db, COLLECTION_PATHS.customers))
   return mapCustomerMastersSnapshot(snapshot)
 }
@@ -131,6 +136,15 @@ export function useCustomerIdentityLookup(): CustomerIdentityLookup {
       (customers ?? []).map((c) => [c.id, typeof c.name === 'string' ? c.name : null])
     ),
   }), [customers])
+}
+
+/**
+ * 契約終了した利用者の書類を非表示にする判定用lookup(Issue #1033)。
+ * useCustomers()のキャッシュをそのまま使うため追加フェッチは発生しない。
+ */
+export function useContractEndedLookup(): ContractEndedLookup {
+  const { data: customers } = useCustomers()
+  return useMemo(() => buildContractEndedLookup(customers), [customers])
 }
 
 /**
@@ -223,6 +237,7 @@ interface UpdateCustomerParams {
   isDuplicate: boolean
   careManagerName?: string
   notes?: string
+  isContractEnded?: boolean
 }
 
 async function updateCustomer(params: UpdateCustomerParams): Promise<void> {
@@ -239,6 +254,10 @@ async function updateCustomer(params: UpdateCustomerParams): Promise<void> {
   // notes は空文字の場合も保存（削除のため）
   if (params.notes !== undefined) {
     data.notes = params.notes || null
+  }
+  // isContractEnded は undefined の場合は送信しない（部分更新の対象外フィールドを変更しない、Issue #1033）
+  if (params.isContractEnded !== undefined) {
+    data.isContractEnded = params.isContractEnded
   }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await updateDoc(docRef, data as any)

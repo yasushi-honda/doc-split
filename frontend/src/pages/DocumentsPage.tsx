@@ -69,7 +69,9 @@ import {
 } from '@/hooks/useDocuments'
 import { useDocumentListRefresh } from '@/hooks/useDocumentListRefresh'
 import { DocumentListUpdateBanner } from '@/components/DocumentListUpdateBanner'
-import { useCareManagers, useCustomerIdentityLookup, fetchFreshCustomerIdentityLookup, type CustomerIdentityLookup } from '@/hooks/useMasters'
+import { useCareManagers, useCustomerIdentityLookup, fetchFreshCustomerIdentityLookup, useContractEndedLookup, type CustomerIdentityLookup } from '@/hooks/useMasters'
+import { useSettings } from '@/hooks/useSettings'
+import { isDocumentHiddenByContractEnd } from '@/lib/contractEnded'
 import { DateRangeFilter, type DateRange } from '@/components/DateRangeFilter'
 import { isCustomerConfirmed } from '@/hooks/useProcessingHistory'
 import { resolveCustomerUnconfirmedReason } from '@shared/customerIdentity'
@@ -432,6 +434,13 @@ export function DocumentsPage() {
   // フィールド自体が存在せず常にfalse相当になるため、チェックしても該当0件になるだけで
   // 無害(Firestore whereを使わない理由は同ファイルのdocumentsフィルタ処理コメント参照)。
   const [showMultiCustomerOnly, setShowMultiCustomerOnly] = useState(false)
+  // 契約終了した利用者の書類を表示するか(Issue #1033)。nullは「一時切替未操作」を表し、
+  // その場合はアプリ全体共有設定(settings.showContractEndedCustomers)に従う。
+  // ページ再読み込みでこの一時切替は消え、共有既定値に戻る(保存しない)
+  const [contractEndedOverride, setContractEndedOverride] = useState<boolean | null>(null)
+  const { data: settings } = useSettings()
+  const showContractEnded = contractEndedOverride ?? settings?.showContractEndedCustomers ?? false
+  const contractEndedLookup = useContractEndedLookup()
   const [dateRange, setDateRange] = useState<DateRange>({
     dateFrom: undefined,
     dateTo: undefined,
@@ -1013,7 +1022,7 @@ export function DocumentsPage() {
   }, [documentsData?.pages])
 
   // ドキュメントリスト（フィルターのみ、ソートはFirestoreで実行済み）
-  const documents = useMemo(() => {
+  const { documents, hiddenByContractEndedCount } = useMemo(() => {
     let docs = allDocuments
 
     // showSplitがfalseの場合は常にsplitを除外
@@ -1034,8 +1043,13 @@ export function DocumentsPage() {
       docs = docs.filter(doc => doc.multiCustomerDetected === true)
     }
 
-    return docs
-  }, [allDocuments, showSplit, showUnverifiedOnly, showMultiCustomerOnly])
+    // 契約終了した利用者の確認済み書類を非表示(Issue #1033)。未確認書類は隠さない
+    // (isDocumentHiddenByContractEnd内でverified!==trueは表示側に倒す)
+    const beforeContractFilterCount = docs.length
+    docs = docs.filter(doc => !isDocumentHiddenByContractEnd(doc, contractEndedLookup, showContractEnded))
+
+    return { documents: docs, hiddenByContractEndedCount: beforeContractFilterCount - docs.length }
+  }, [allDocuments, showSplit, showUnverifiedOnly, showMultiCustomerOnly, contractEndedLookup, showContractEnded])
 
   // 全選択/全解除（documentsの後に定義する必要あり）
   const handleSelectAll = useCallback((checked: boolean) => {
@@ -1280,6 +1294,18 @@ export function DocumentsPage() {
                 </div>
               )}
 
+              {/* 契約終了利用者の表示切替（全タブ共通、Issue #1033）。保存しない一時切替で、
+                  未操作(null)の間はアプリ全体共有設定(settings.showContractEndedCustomers)に従う */}
+              <label className="flex cursor-pointer items-center gap-2 text-xs text-gray-500">
+                <input
+                  type="checkbox"
+                  checked={showContractEnded}
+                  onChange={(e) => setContractEndedOverride(e.target.checked)}
+                  className="h-3.5 w-3.5 rounded border-gray-300 text-gray-600 focus:ring-gray-500"
+                />
+                契約終了の利用者も表示
+              </label>
+
               {/* 期間指定フィルター（全タブ共通） */}
               <DateRangeFilter value={dateRange} onChange={setDateRange} />
             </CardContent>
@@ -1315,18 +1341,19 @@ export function DocumentsPage() {
                 <FileText className="mb-4 h-12 w-12 text-gray-300" />
                 <p className="text-lg font-medium">書類がありません</p>
                 <p className="mt-1 text-sm">
-                  {showMultiCustomerOnly && hasNextPage
+                  {(showMultiCustomerOnly || hiddenByContractEndedCount > 0) && hasNextPage
                     ? '表示中のページに該当する書類はありません。さらに読み込むと見つかる可能性があります'
                     : statusFilter !== 'all' || documentTypeFilter !== 'all' || careManagerFilter !== 'all'
                     ? '条件に一致する書類がありません'
                     : 'Gmailから添付ファイルが取得されると、ここに表示されます'}
                 </p>
-                {/* 複数名の可能性フィルタ(PR-B)はクライアント側フィルタのため、現在のページに
-                    該当0件でも後続ページに該当があり得る。documents.length===0でも
-                    LoadMoreIndicatorを出し続けてfetchNextPageが呼ばれ続けるようにする
-                    (codex review P1指摘対応: 未対応だとこの分岐でLoadMoreIndicatorがunmount
-                    されscrollトリガーが失われ、実質ページネーションが停止してしまう) */}
-                {showMultiCustomerOnly && hasNextPage && (
+                {/* 複数名の可能性フィルタ(PR-B)・契約終了フィルタ(Issue #1033)はクライアント側
+                    フィルタのため、現在のページに該当0件でも後続ページに該当があり得る。
+                    documents.length===0でもLoadMoreIndicatorを出し続けてfetchNextPageが
+                    呼ばれ続けるようにする(codex review P1指摘対応: 未対応だとこの分岐で
+                    LoadMoreIndicatorがunmountされscrollトリガーが失われ、実質ページネーションが
+                    停止してしまう) */}
+                {(showMultiCustomerOnly || hiddenByContractEndedCount > 0) && hasNextPage && (
                   <LoadMoreIndicator
                     ref={loadMoreRef}
                     hasNextPage={hasNextPage}
@@ -1337,6 +1364,11 @@ export function DocumentsPage() {
               </div>
             ) : (
               <>
+              {hiddenByContractEndedCount > 0 && (
+                <p className="px-4 pt-3 text-xs text-gray-500">
+                  契約終了の利用者の書類 {hiddenByContractEndedCount}件を非表示中(読み込み済みの範囲)
+                </p>
+              )}
               <div className="overflow-x-auto">
                 <table className="w-full">
                   <thead className="border-b border-gray-200 bg-gray-50">
@@ -1396,6 +1428,7 @@ export function DocumentsPage() {
             <GroupList
               groupType={groupType}
               dateFilter={dateRange}
+              showContractEnded={showContractEnded}
               onDocumentSelect={(docId) => setSelectedDocumentId(docId)}
             />
           </TabsContent>

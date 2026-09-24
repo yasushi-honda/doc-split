@@ -575,6 +575,7 @@ export interface CustomerMaster {
   careManagerName?: string; // 担当ケアマネジャー名
   aliases?: string[];  // 許容される別表記（例: ["田中　太郎", "たなか太郎"]）
   notes?: string;      // 区別用補足情報（例: "北名古屋在住"）
+  isContractEnded?: boolean; // 契約終了フラグ。未設定は契約中扱い（Issue #1033）
 }
 
 export interface OfficeMaster {
@@ -754,6 +755,7 @@ export interface AppSettings {
   labelSearchOperator: LabelSearchOperator;
   errorNotificationEmails: string[];
   gmailAccount?: string; // 監視対象Gmailアカウント
+  showContractEndedCustomers?: boolean; // 契約終了利用者を書類画面で表示するか（既定: 非表示、Issue #1033）
 }
 
 // ============================================

@@ -79,6 +79,7 @@ const COLLECTIONS = {
     notes: 'string',
     isDuplicate: 'boolean',
     aliases: 'string[]',
+    isContractEnded: 'boolean',
   },
   'masters/offices/items': {
     name: 'string',
