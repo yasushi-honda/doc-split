@@ -1251,6 +1251,16 @@ async function bulkImportCareManagersWithActions(
     }
 
     try {
+      if (item.action === 'overwrite' && !item.existingId) {
+        // overwrite指定だがexistingIdが無い異常系。ケアマネのdoc IDはUI作成分(正規化名)と
+        // CLI作成分(自動採番)が混在するため、無警告で名前ベースの新規docへフォールバック
+        // すると、CLI由来レコードとは別の名前ベース文書が重複作成されうる。顧客・事業所と
+        // 同様に明示的に失敗扱いにする(pr-review-toolkit指摘の回帰)
+        console.error(`[bulkImportCareManagersWithActions] "${item.data.name}" はoverwrite指定ですがexistingIdがありません`)
+        failedNames.push(item.data.name)
+        continue
+      }
+
       if (item.action === 'overwrite' && item.existingId) {
         // 上書きは実doc ID(existingId)で更新する。UI経由の新規作成はdoc ID=正規化した
         // 名前だが、CLI(scripts/import-masters.js)経由のケアマネはdoc()自動採番のため、

@@ -389,7 +389,7 @@ describe('一括インポート(上書き)の部分更新', () => {
       expect(data.email).toBe('sato@example.com')
     })
 
-    it('existingIdが無いoverwriteは新規追加(setDoc)にフォールバックする', async () => {
+    it('addは従来通り名前ベースのdocへsetDocすること', async () => {
       const { useBulkImportCareManagersWithActions } = await import('../useMasters')
       const { renderHook, act } = await import('@testing-library/react')
       const { QueryClient, QueryClientProvider } = await import('@tanstack/react-query')
@@ -401,12 +401,34 @@ describe('一括インポート(上書き)の部分更新', () => {
       const { result } = renderHook(() => useBulkImportCareManagersWithActions(), { wrapper })
       await act(async () => {
         await result.current.mutateAsync([
-          { data: { name: '新規花子' }, action: 'overwrite' },
+          { data: { name: '新規花子' }, action: 'add' },
         ])
       })
 
       expect(mockSetDoc).toHaveBeenCalledTimes(1)
       expect(mockUpdateDoc).not.toHaveBeenCalled()
+    })
+
+    it('overwrite指定だがexistingIdが無い場合、addへ無警告フォールバックせずfailedNamesに記録される(ケアマネはdoc IDがUI作成分/CLI作成分で混在するため、顧客・事業所と同様の防御が必要。pr-review-toolkit指摘の回帰)', async () => {
+      const { useBulkImportCareManagersWithActions } = await import('../useMasters')
+      const { renderHook, act } = await import('@testing-library/react')
+      const { QueryClient, QueryClientProvider } = await import('@tanstack/react-query')
+      const React = await import('react')
+      const queryClient = new QueryClient()
+      const wrapper = ({ children }: { children: React.ReactNode }) =>
+        React.createElement(QueryClientProvider, { client: queryClient }, children)
+
+      const { result } = renderHook(() => useBulkImportCareManagersWithActions(), { wrapper })
+      let importResult: Awaited<ReturnType<typeof result.current.mutateAsync>> | undefined
+      await act(async () => {
+        importResult = await result.current.mutateAsync([
+          { data: { name: '異常花子' }, action: 'overwrite' }, // existingIdなし
+        ])
+      })
+
+      expect(mockUpdateDoc).not.toHaveBeenCalled()
+      expect(mockSetDoc).not.toHaveBeenCalled()
+      expect(importResult?.failedNames).toEqual(['異常花子'])
     })
   })
 })
