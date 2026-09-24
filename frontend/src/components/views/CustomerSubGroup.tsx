@@ -220,8 +220,9 @@ function DocumentRow({ document, onClick, onRetry, identityLookup }: DocumentRow
 // フォルダの単位はカテゴリ（master.category、kaname要望 2026-07-16）。
 // カテゴリ解決できない書類は種別名フォルダのまま残る。
 // 集約ロジック本体は lib/buildCustomerFolderGroups.ts（純粋関数・テスト済み）。
-// 件数は読み込み済みページ分のクライアント集約
-// (既存の顧客サブグループと同一方式。未読分は LoadMoreIndicator で可視)。
+// 件数は渡された documents 配列のクライアント集約(既存の顧客サブグループと同一方式)。
+// 呼び出し元(GroupDocumentList)が担当CM別表示では全ページ読み込み完了後にのみ本コンポーネントを
+// マウントするため(Issue #1032)、ここでの documents は常に全件が揃っている前提でよい。
 // ============================================
 
 interface FolderGroupItemProps {

@@ -5,7 +5,7 @@
  * 無限スクロール対応
  */
 
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { FileText, Loader2, RefreshCw, Users } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
@@ -221,6 +221,7 @@ export function GroupDocumentList({
     fetchNextPage,
     hasNextPage,
     isFetchingNextPage,
+    isFetchNextPageError,
     isLoading,
     isError,
     isRefetching,
@@ -289,8 +290,57 @@ export function GroupDocumentList({
     hasNextPage: !!hasNextPage,
     isFetchingNextPage,
     fetchNextPage,
-    disabled: isRefreshingGroup,
+    // 担当CM別(#1032)は下記useEffectが全ページ取得を自前で駆動するため、sentinel経由の
+    // fetchNextPageは無効化する(codex review P1指摘、2026-09-24): 有効なままだと
+    // ローディング表示中もsentinelが画面内に残り、同一render(isFetchingNextPage:false)の
+    // 間にuseEffectとIntersectionObserverの双方からfetchNextPageが呼ばれ、Firestoreへの
+    // 余分な読み取りが発生しうる。
+    disabled: isRefreshingGroup || groupType === 'careManager',
   });
+
+  /**
+   * 担当CM別(#1032): 利用者別・フォルダ別の件数はページ読み込み済み分のクライアント集計
+   * (下記 allDocuments)のため、スクロール末尾のsentinel到達を待つ従来の無限スクロールでは
+   * 全件読み込み完了まで件数が不正確なまま表示されてしまう。CM展開時は自動で残り全ページを
+   * 読み込み切り、完了する(hasNextPage===false)までは下部のcareManager分岐で件数を出さず
+   * ローディング表示に留める。他のgroupTypeは従来通りスクロール駆動のまま(Firestore読み取り
+   * 抑制、Issue #891)。
+   *
+   * isFetchNextPageErrorで停止する(codex review P1指摘、2026-09-24): ページ取得が失敗すると
+   * hasNextPageはtrueのまま・isFetchingNextPageはfalseに戻るため、このガードがないと
+   * 失敗するたびに即座にfetchNextPageを呼び直す無限リトライループになる(Firestore読み取りが
+   * 際限なく発生し、Issue #891で塞いだはずの過大読み取りを再発させる)。失敗後の再試行は
+   * 下部のエラー表示からユーザーの明示操作に委ねる。
+   *
+   * isError/isRefetchingでも停止する(codex review P2指摘、2026-09-24): 失敗後にユーザーが
+   * 既存の汎用再試行ボタン(refetch())を押すと、refetchが forward-fetch のメタ情報を
+   * クリアするため一瞬 isFetchNextPageError:false・isRefetching:true という状態を経由する。
+   * この窓でこのeffectがfetchNextPage()を呼ぶと、TanStack Queryの既定動作(cancelRefetch)で
+   * ユーザーが起動したrefetchそのものがキャンセルされてしまう。isError/isRefetchingの間は
+   * 自動読み込みを完全に止め、手動再試行が完了してから(=isError解消後)再開する。
+   */
+  useEffect(() => {
+    if (
+      groupType === 'careManager' &&
+      hasNextPage &&
+      !isFetchingNextPage &&
+      !isFetchNextPageError &&
+      !isError &&
+      !isRefetching &&
+      !isRefreshingGroup
+    ) {
+      fetchNextPage();
+    }
+  }, [
+    groupType,
+    hasNextPage,
+    isFetchingNextPage,
+    isFetchNextPageError,
+    isError,
+    isRefetching,
+    isRefreshingGroup,
+    fetchNextPage,
+  ]);
 
   const updateBanner = (
     <DocumentListUpdateBanner
@@ -377,7 +427,13 @@ export function GroupDocumentList({
   // 配置する。キャッシュ上は空だったグループに書類が新規追加された場合でも、
   // dirty化されていればバナー経由で更新できるようにするため(plan-crossreview
   // codex pass1指摘)。
-  if (allDocuments.length === 0) {
+  //
+  // 担当CM別(#1032、codex review P2指摘、2026-09-24): 日付フィルターが読み込み済みの
+  // 最初の数ページを全て除外すると、後続ページ(自動読み込み中、hasNextPage:true)に
+  // 該当書類が残っていても、ここで「このグループには書類がありません」と早期確定表示
+  // されてしまう。CM別は全ページ読み込み完了(hasNextPage===false)まではこの空状態判定を
+  // 保留し、下部のcareManager分岐のローディング表示に委ねる。
+  if (allDocuments.length === 0 && (groupType !== 'careManager' || !hasNextPage)) {
     return (
       <>
         {updateBanner}
@@ -425,18 +481,32 @@ export function GroupDocumentList({
 
   // 担当CM別の場合は顧客サブグループで表示
   if (groupType === 'careManager') {
+    // 全ページ読み込み完了(hasNextPage===false)まで、利用者別・フォルダ別の件数は
+    // 不正確になりうるため表示せずローディングに留める(Issue #1032)
+    const isFullyLoaded = !hasNextPage;
     return (
       <>
         {updateBanner}
         <div ref={scrollContainerRef} className="max-h-[500px] overflow-y-auto">
-          <CustomerSubGroup
-            documents={allDocuments}
-            furiganaMap={furiganaMap}
-            documentMasters={documentMasters}
-            onDocumentSelect={onDocumentSelect}
-            onRetry={setRetryTarget}
-            identityLookup={identityLookup}
-          />
+          {isFullyLoaded ? (
+            <CustomerSubGroup
+              documents={allDocuments}
+              furiganaMap={furiganaMap}
+              documentMasters={documentMasters}
+              onDocumentSelect={onDocumentSelect}
+              onRetry={setRetryTarget}
+              identityLookup={identityLookup}
+            />
+          ) : (
+            // isFetchNextPageError:true(追加ページ取得失敗)の場合、react-queryの型上
+            // isErrorも同時にtrueになり本コンポーネント冒頭の isError 早期return(汎用エラー
+            // 画面+再試行ボタン、他groupTypeと共通)が先に発火するため、ここに到達するのは
+            // 正常に読み込み中の場合のみ
+            <div className="flex flex-col items-center justify-center gap-2 py-8 text-sm text-gray-500">
+              <Loader2 className="h-5 w-5 animate-spin text-gray-400" />
+              <span>件数を集計中...({allDocuments.length}件読み込み済み)</span>
+            </div>
+          )}
 
           <LoadMoreIndicator
             ref={loadMoreRef}
