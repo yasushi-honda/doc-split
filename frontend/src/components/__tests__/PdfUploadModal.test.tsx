@@ -1,13 +1,11 @@
 /**
- * PdfUploadModal 単体テスト (Issue #815)
+ * PdfUploadModal 単体テスト (Issue #1031)
  *
- * 単一ファイル前提だった状態モデルを配列化(複数ファイル同時アップロード対応)したための
- * 新規テストスイート。plan-crossreview(grip + codex 2巡)で洗い出された以下の設計要件を
- * 回帰テストとして固定する:
- * - アップロードは逐次実行され、1件目の重複/エラーが2件目をブロックしない
- * - isAnyUploadInFlight による排他制御(バッチループ・行単位の別名で保存/再試行を横断)
- * - claimedFileNames(候補名→行ID予約)による同一バッチ内の同名衝突防止
- * - 行ごとのonSnapshot購読が他行に影響せず、終端状態で解除される
+ * ストア(usePdfUploadStore)経由の表示専用コンポーネントとしての回帰テスト。
+ * アップロードロジック・逐次実行・claimedFileNames等の詳細な回帰テストは
+ * frontend/src/stores/__tests__/pdfUploadStore.test.tsへ移設済み。
+ * ここではストアの状態がUIへ正しく反映されること、UI操作がストアのアクションを
+ * 正しく呼び出すことのみを検証する。
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -25,21 +23,22 @@ vi.mock('@/lib/callFunction', () => ({
   getCallableErrorMessage: (_err: unknown, fallback: string) => fallback,
 }))
 
+vi.mock('sonner', () => ({
+  toast: { dismiss: vi.fn(), loading: vi.fn(), success: vi.fn(), error: vi.fn() },
+}))
+
 // onSnapshot は行ごとに独立したコールバックを保持するレジストリ形式でモックする
 type SnapshotData = Record<string, unknown>
 type SnapshotCallback = (snapshot: { data: () => SnapshotData | undefined }) => void
 const snapshotCallbacks = new Map<string, SnapshotCallback>()
-const unsubscribeSpies = new Map<string, ReturnType<typeof vi.fn>>()
 
 vi.mock('firebase/firestore', () => ({
   doc: (_db: unknown, _collection: string, id: string) => ({ id }),
   onSnapshot: (ref: { id: string }, onNext: SnapshotCallback) => {
     snapshotCallbacks.set(ref.id, onNext)
-    const unsubscribe = vi.fn(() => {
+    return vi.fn(() => {
       snapshotCallbacks.delete(ref.id)
     })
-    unsubscribeSpies.set(ref.id, unsubscribe)
-    return unsubscribe
   },
 }))
 
@@ -51,11 +50,11 @@ function emitSnapshot(documentId: string, data: SnapshotData) {
   })
 }
 
-import { PdfUploadModal, claimFileName, releaseRowClaims, isNameClaimedByOther } from '../PdfUploadModal'
+import { PdfUploadModal } from '../PdfUploadModal'
+import { usePdfUploadStore } from '@/stores/pdfUploadStore'
 
 function makeFile(name: string, type = 'application/pdf', size = 1024): File {
-  const file = new File(['x'.repeat(size)], name, { type })
-  return file
+  return new File(['x'.repeat(size)], name, { type })
 }
 
 function selectFiles(input: HTMLInputElement, files: File[]) {
@@ -67,19 +66,30 @@ function getFileInput(): HTMLInputElement {
   return document.querySelector('input[type="file"]') as HTMLInputElement
 }
 
+function resetStore() {
+  usePdfUploadStore.setState({
+    files: [],
+    claimedFileNames: new Map(),
+    isAnyUploadInFlight: false,
+    isModalOpen: true,
+    completionCounter: 0,
+    selectError: null,
+  })
+}
+
 beforeEach(() => {
   mockCallFunction.mockReset()
   snapshotCallbacks.clear()
-  unsubscribeSpies.clear()
+  resetStore()
 })
 
 afterEach(() => {
   vi.useRealTimers()
 })
 
-describe('PdfUploadModal — ファイル選択(Issue #815)', () => {
+describe('PdfUploadModal — ファイル選択', () => {
   it('複数ファイル選択で有効なファイルのみ行として追加され、無効なファイルはエラー表示される', () => {
-    render(<PdfUploadModal open onOpenChange={vi.fn()} />)
+    render(<PdfUploadModal />)
     const validFile = makeFile('a.pdf')
     const invalidFile = makeFile('b.txt', 'text/plain')
 
@@ -91,7 +101,7 @@ describe('PdfUploadModal — ファイル選択(Issue #815)', () => {
   })
 
   it('idle行のみ削除ボタンが機能する', () => {
-    render(<PdfUploadModal open onOpenChange={vi.fn()} />)
+    render(<PdfUploadModal />)
     selectFiles(getFileInput(), [makeFile('a.pdf'), makeFile('b.pdf')])
 
     expect(screen.getByText('a.pdf')).toBeDefined()
@@ -105,7 +115,7 @@ describe('PdfUploadModal — ファイル選択(Issue #815)', () => {
   })
 })
 
-describe('PdfUploadModal — 逐次アップロード(Issue #815)', () => {
+describe('PdfUploadModal — 逐次アップロード', () => {
   it('アップロードは逐次実行され、1件目が重複検出されても2件目が自動的に進む', async () => {
     let resolveFirst!: (v: unknown) => void
     const firstCallPromise = new Promise((resolve) => {
@@ -117,20 +127,12 @@ describe('PdfUploadModal — 逐次アップロード(Issue #815)', () => {
       return Promise.resolve({ success: true, documentId: 'doc-ok' })
     })
 
-    render(<PdfUploadModal open onOpenChange={vi.fn()} />)
+    render(<PdfUploadModal />)
     selectFiles(getFileInput(), [makeFile('dup.pdf'), makeFile('ok.pdf')])
 
     fireEvent.click(screen.getByRole('button', { name: /アップロード/ }))
 
     await waitFor(() => expect(mockCallFunction).toHaveBeenCalledTimes(1))
-    expect(mockCallFunction).toHaveBeenNthCalledWith(
-      1,
-      'uploadPdf',
-      expect.objectContaining({ fileName: 'dup.pdf' }),
-      expect.anything()
-    )
-
-    // 1件目が未解決の間は2件目は呼ばれない(逐次実行であることの確認)
     expect(mockCallFunction).toHaveBeenCalledTimes(1)
 
     resolveFirst({
@@ -141,20 +143,13 @@ describe('PdfUploadModal — 逐次アップロード(Issue #815)', () => {
     })
 
     await waitFor(() => expect(mockCallFunction).toHaveBeenCalledTimes(2))
-    expect(mockCallFunction).toHaveBeenNthCalledWith(
-      2,
-      'uploadPdf',
-      expect.objectContaining({ fileName: 'ok.pdf' }),
-      expect.anything()
-    )
-
     await waitFor(() => expect(screen.getByText(/同名ファイルが存在します/)).toBeDefined())
   })
 
   it('想定外レスポンス(duplicateでもdocumentIdでもない)はerrorへフォールバックする', async () => {
     mockCallFunction.mockResolvedValue({ success: true })
 
-    render(<PdfUploadModal open onOpenChange={vi.fn()} />)
+    render(<PdfUploadModal />)
     selectFiles(getFileInput(), [makeFile('weird.pdf')])
     fireEvent.click(screen.getByRole('button', { name: /アップロード/ }))
 
@@ -162,14 +157,14 @@ describe('PdfUploadModal — 逐次アップロード(Issue #815)', () => {
   })
 })
 
-describe('PdfUploadModal — 排他制御(isAnyUploadInFlight, Issue #815)', () => {
+describe('PdfUploadModal — 排他制御(isAnyUploadInFlight)', () => {
   it('アップロード中はアップロードボタン・削除ボタンが無効化され、二重起動しない', async () => {
     let resolveUpload!: (v: unknown) => void
     mockCallFunction.mockImplementation(
       () => new Promise((resolve) => { resolveUpload = resolve })
     )
 
-    render(<PdfUploadModal open onOpenChange={vi.fn()} />)
+    render(<PdfUploadModal />)
     selectFiles(getFileInput(), [makeFile('a.pdf'), makeFile('b.pdf')])
 
     const uploadButton = screen.getByRole('button', { name: /アップロード/ })
@@ -177,14 +172,11 @@ describe('PdfUploadModal — 排他制御(isAnyUploadInFlight, Issue #815)', () 
 
     await waitFor(() => expect(mockCallFunction).toHaveBeenCalledTimes(1))
 
-    // 実行中はアップロードボタンが無効化される
     expect(isDisabled(uploadButton)).toBe(true)
-    // b.pdfはまだidleだが、削除ボタンは無効化される
     const removeButtons = screen.getAllByLabelText('削除')
     expect(removeButtons.length).toBeGreaterThan(0)
     removeButtons.forEach((btn) => expect(isDisabled(btn)).toBe(true))
 
-    // 実行中に再度クリックしても呼び出し回数は増えない(二重起動防止)
     fireEvent.click(uploadButton)
     expect(mockCallFunction).toHaveBeenCalledTimes(1)
 
@@ -208,7 +200,7 @@ describe('PdfUploadModal — 排他制御(isAnyUploadInFlight, Issue #815)', () 
       return Promise.resolve({ success: true, documentId: 'doc-resolved' })
     })
 
-    render(<PdfUploadModal open onOpenChange={vi.fn()} />)
+    render(<PdfUploadModal />)
     selectFiles(getFileInput(), [makeFile('dup.pdf'), makeFile('bad.pdf')])
     fireEvent.click(screen.getByRole('button', { name: /アップロード/ }))
 
@@ -216,7 +208,6 @@ describe('PdfUploadModal — 排他制御(isAnyUploadInFlight, Issue #815)', () 
     await waitFor(() => expect(screen.getByText('壊れたファイル')).toBeDefined())
     expect(mockCallFunction).toHaveBeenCalledTimes(2)
 
-    // 重複行のみ「別名で保存」を実行
     fireEvent.click(screen.getByRole('button', { name: /別名で保存/ }))
     await waitFor(() => expect(mockCallFunction).toHaveBeenCalledTimes(3))
     expect(mockCallFunction).toHaveBeenNthCalledWith(
@@ -226,7 +217,6 @@ describe('PdfUploadModal — 排他制御(isAnyUploadInFlight, Issue #815)', () 
       expect.anything()
     )
 
-    // エラー行の「再試行」はエラー行のみ再実行(dup.pdf側は再度呼ばれない)
     await waitFor(() => expect(isDisabled(screen.getByRole('button', { name: /再試行/ }))).toBe(false))
     fireEvent.click(screen.getByRole('button', { name: /再試行/ }))
     await waitFor(() => expect(mockCallFunction).toHaveBeenCalledTimes(4))
@@ -239,7 +229,7 @@ describe('PdfUploadModal — 排他制御(isAnyUploadInFlight, Issue #815)', () 
   })
 })
 
-describe('PdfUploadModal — claimedFileNames同名衝突防止(Issue #815)', () => {
+describe('PdfUploadModal — claimedFileNames同名衝突防止', () => {
   it('同一バッチ内の同名ファイル2件が同じ代替名を提案された場合、2件目の別名で保存は無効化され、1件目解決後に再試行できる', async () => {
     let callCount = 0
     mockCallFunction.mockImplementation((_name: string, data: { fileName: string; confirmDuplicate?: boolean }) => {
@@ -255,8 +245,7 @@ describe('PdfUploadModal — claimedFileNames同名衝突防止(Issue #815)', ()
       return Promise.resolve({ success: true, documentId: `doc-${callCount}` })
     })
 
-    render(<PdfUploadModal open onOpenChange={vi.fn()} />)
-    // 同名の異なる2ファイル(同じdup.pdfという名前で内容だけ変える)
+    render(<PdfUploadModal />)
     const fileA = new File(['aaaa'], 'dup.pdf', { type: 'application/pdf' })
     const fileB = new File(['bbbb'], 'dup.pdf', { type: 'application/pdf' })
     selectFiles(getFileInput(), [fileA, fileB])
@@ -266,19 +255,13 @@ describe('PdfUploadModal — claimedFileNames同名衝突防止(Issue #815)', ()
     await waitFor(() => expect(mockCallFunction).toHaveBeenCalledTimes(2))
     await waitFor(() => expect(screen.getAllByText(/同名ファイルが存在します/).length).toBe(2))
 
-    // 2行とも同じ代替名(dup_2.pdf)を提案されている段階では、両方とも「別名で保存」を表示
     expect(screen.getAllByRole('button', { name: /^別名で保存$/ }).length).toBe(2)
 
-    // 1件目を「別名で保存」で確定
     fireEvent.click(screen.getAllByRole('button', { name: /^別名で保存$/ })[0]!)
 
-    // 2件目は自動的に「別名で保存」が無効化され、「他のファイルの処理完了後に再試行」に切り替わる
     await waitFor(() => expect(screen.getByRole('button', { name: /他のファイルの処理完了後に再試行/ })).toBeDefined())
     expect(screen.queryByRole('button', { name: /^別名で保存$/ })).toBeNull()
 
-    // 1件目の「別名で保存」確定リクエストが完全に完了するまで待ってからテストを終える
-    // (未解決のまま終えるとFileReaderの非同期完了が次のテストへ漏れ込み、mockCallFunctionの
-    //  呼び出し回数を汚染する)
     await waitFor(() => expect(mockCallFunction).toHaveBeenCalledTimes(3))
   })
 
@@ -295,13 +278,12 @@ describe('PdfUploadModal — claimedFileNames同名衝突防止(Issue #815)', ()
         })
       }
       if (data.confirmDuplicate) {
-        // 別名で保存の確定リクエスト自体が失敗するケース(ネットワークエラー等)
         return Promise.reject(new Error('network error'))
       }
       return Promise.resolve({ success: true, documentId: `doc-${callCount}` })
     })
 
-    render(<PdfUploadModal open onOpenChange={vi.fn()} />)
+    render(<PdfUploadModal />)
     const fileA = new File(['aaaa'], 'dup.pdf', { type: 'application/pdf' })
     const fileB = new File(['bbbb'], 'dup.pdf', { type: 'application/pdf' })
     selectFiles(getFileInput(), [fileA, fileB])
@@ -309,101 +291,70 @@ describe('PdfUploadModal — claimedFileNames同名衝突防止(Issue #815)', ()
     fireEvent.click(screen.getByRole('button', { name: /アップロード/ }))
     await waitFor(() => expect(screen.getAllByText(/同名ファイルが存在します/).length).toBe(2))
 
-    // 1件目の「別名で保存」を確定 → APIが失敗してerror行になる
     fireEvent.click(screen.getAllByRole('button', { name: /^別名で保存$/ })[0]!)
     await waitFor(() => expect(screen.getByText('アップロードに失敗しました')).toBeDefined())
 
-    // 失敗した1件目が保持していた予約(dup_2.pdf)は解放され、2件目は
-    // 「他のファイルの処理完了後に再試行」に固定されたままにならず、再び「別名で保存」を選べる
     await waitFor(() => expect(screen.getByRole('button', { name: /^別名で保存$/ })).toBeDefined())
     expect(screen.queryByRole('button', { name: /他のファイルの処理完了後に再試行/ })).toBeNull()
   })
 })
 
-describe('PdfUploadModal — claimedFileNames 予約ロジック(純粋関数、Issue #815)', () => {
-  it('claimFileNameは未予約の名前を予約できる', () => {
-    const claimed = claimFileName(new Map(), 'a.pdf', 'row-1')
-    expect(claimed?.get('a.pdf')).toBe('row-1')
-  })
-
-  it('claimFileNameは他の行が予約済みの名前を奪えない', () => {
-    const claimed = claimFileName(new Map([['a.pdf', 'row-1']]), 'a.pdf', 'row-2')
-    expect(claimed).toBeNull()
-  })
-
-  it('claimFileNameは自分自身の既存予約は上書きできる', () => {
-    const claimed = claimFileName(new Map([['a.pdf', 'row-1']]), 'a.pdf', 'row-1')
-    expect(claimed?.get('a.pdf')).toBe('row-1')
-  })
-
-  it('releaseRowClaimsは指定行が予約した名前のみ解放する', () => {
-    const map = new Map([['a.pdf', 'row-1'], ['b.pdf', 'row-2']])
-    const released = releaseRowClaims(map, 'row-1')
-    expect(released.has('a.pdf')).toBe(false)
-    expect(released.get('b.pdf')).toBe('row-2')
-  })
-
-  it('isNameClaimedByOtherは他行の予約のみtrueを返す', () => {
-    const map = new Map([['a.pdf', 'row-1']])
-    expect(isNameClaimedByOther(map, 'a.pdf', 'row-2')).toBe(true)
-    expect(isNameClaimedByOther(map, 'a.pdf', 'row-1')).toBe(false)
-    expect(isNameClaimedByOther(map, 'unknown.pdf', 'row-2')).toBe(false)
-  })
-})
-
-describe('PdfUploadModal — モーダルクローズ制御(Issue #815)', () => {
-  it('閉じるボタンはuploading中の行がある間のみ無効化される', async () => {
+describe('PdfUploadModal — モーダルクローズ制御(Issue #1031: 常に閉じられる+データ温存)', () => {
+  it('uploading中でも閉じるボタンは有効で、閉じても購読・アップロードは継続する', async () => {
     let resolveUpload!: (v: unknown) => void
     mockCallFunction.mockImplementation(() => new Promise((resolve) => { resolveUpload = resolve }))
 
-    const onOpenChange = vi.fn()
-    render(<PdfUploadModal open onOpenChange={onOpenChange} />)
+    render(<PdfUploadModal />)
     selectFiles(getFileInput(), [makeFile('a.pdf')])
     fireEvent.click(screen.getByRole('button', { name: /アップロード/ }))
 
     await waitFor(() => expect(mockCallFunction).toHaveBeenCalledTimes(1))
-    const closeButton = screen.getByRole('button', { name: /キャンセル|閉じる/ })
-    expect(isDisabled(closeButton)).toBe(true)
+    const closeButton = screen.getByRole('button', { name: /閉じる\(バックグラウンドで継続\)/ })
+    expect(isDisabled(closeButton)).toBe(false)
+
+    fireEvent.click(closeButton)
+    expect(usePdfUploadStore.getState().isModalOpen).toBe(false)
+    expect(usePdfUploadStore.getState().files.length).toBe(1)
 
     resolveUpload({ success: true, documentId: 'doc-a' })
-    await waitFor(() => expect(isDisabled(screen.getByRole('button', { name: /キャンセル|閉じる/ }))).toBe(false))
+    await waitFor(() => expect(usePdfUploadStore.getState().files[0]?.step).toBe('pending'))
   })
 
-  it('全件processedのときのみ自動クローズし、1件でもerror/duplicateが残れば発火しない', async () => {
-    vi.useFakeTimers()
-    mockCallFunction.mockImplementation((_name: string, data: { fileName: string }) => {
-      if (data.fileName === 'ok.pdf') return Promise.resolve({ success: true, documentId: 'doc-ok' })
-      return Promise.reject(new Error('failure'))
-    })
+  it('進行中・要対応のいずれもない(idleのみ)場合のボタン文言は「キャンセル」', () => {
+    render(<PdfUploadModal />)
+    selectFiles(getFileInput(), [makeFile('a.pdf')])
+    expect(screen.getByRole('button', { name: 'キャンセル' })).toBeDefined()
+  })
 
-    const onOpenChange = vi.fn()
-    render(<PdfUploadModal open onOpenChange={onOpenChange} />)
-    selectFiles(getFileInput(), [makeFile('ok.pdf'), makeFile('ng.pdf')])
+  it('全件processedのときのボタン文言は「閉じる」', async () => {
+    mockCallFunction.mockResolvedValue({ success: true, documentId: 'doc-ok' })
+    render(<PdfUploadModal />)
+    selectFiles(getFileInput(), [makeFile('ok.pdf')])
+    fireEvent.click(screen.getByRole('button', { name: /アップロード/ }))
+    await waitFor(() => expect(mockCallFunction).toHaveBeenCalledTimes(1))
+
+    emitSnapshot('doc-ok', { status: 'processed' })
+    await waitFor(() => expect(screen.getByRole('button', { name: '閉じる' })).toBeDefined())
+  })
+
+  it('error/duplicate行が残っている場合のボタン文言は「閉じる(バックグラウンドで継続)」', async () => {
+    mockCallFunction.mockResolvedValue({ success: true, duplicate: true, existingFileName: 'dup.pdf', suggestedFileName: 'dup_2.pdf' })
+    render(<PdfUploadModal />)
+    selectFiles(getFileInput(), [makeFile('dup.pdf')])
     fireEvent.click(screen.getByRole('button', { name: /アップロード/ }))
 
-    await vi.waitFor(() => expect(mockCallFunction).toHaveBeenCalledTimes(2))
-    // ng.pdfのエラー処理(catch内のsetFiles)が完全に反映されるまで待ってから次に進む
-    // (未解決のまま進めると次のテストへ漏れ込み、mockCallFunctionの呼び出し回数を汚染する)
-    await vi.waitFor(() => expect(screen.getByText('アップロードに失敗しました')).toBeDefined())
-
-    // ok.pdf行をprocessedへ遷移させる(ng.pdfはerrorのまま残る)
-    emitSnapshot('doc-ok', { status: 'processed' })
-
-    await vi.advanceTimersByTimeAsync(3000)
-    // 1件(ng.pdf)がerrorのまま残っているため自動クローズしない
-    expect(onOpenChange).not.toHaveBeenCalled()
+    await waitFor(() => expect(screen.getByRole('button', { name: /閉じる\(バックグラウンドで継続\)/ })).toBeDefined())
   })
 })
 
-describe('PdfUploadModal — 行ごとのonSnapshot購読(Issue #815)', () => {
-  it('行ごとの購読は他の行に影響せず、processed到達時に購読が解除される', async () => {
+describe('PdfUploadModal — 行ごとのonSnapshot購読(ストア経由)', () => {
+  it('行ごとの購読は他の行に影響せず、processed到達時にcompletionCounterが加算される', async () => {
     mockCallFunction.mockImplementation((_name: string, data: { fileName: string }) => {
       const id = data.fileName === 'a.pdf' ? 'doc-a' : 'doc-b'
       return Promise.resolve({ success: true, documentId: id })
     })
 
-    const onSuccess = vi.fn()
-    render(<PdfUploadModal open onOpenChange={vi.fn()} onSuccess={onSuccess} />)
+    render(<PdfUploadModal />)
     selectFiles(getFileInput(), [makeFile('a.pdf'), makeFile('b.pdf')])
     fireEvent.click(screen.getByRole('button', { name: /アップロード/ }))
 
@@ -412,20 +363,17 @@ describe('PdfUploadModal — 行ごとのonSnapshot購読(Issue #815)', () => {
     await waitFor(() => expect(snapshotCallbacks.has('doc-b')).toBe(true))
 
     emitSnapshot('doc-a', { status: 'processing' })
-    // b側は無関係な状態のまま(a側の更新の影響を受けない)
     await waitFor(() => expect(screen.queryAllByText('OCR処理中...').length).toBe(1))
 
     emitSnapshot('doc-a', { status: 'processed' })
-    await waitFor(() => expect(onSuccess).toHaveBeenCalledWith('doc-a'))
-    expect(unsubscribeSpies.get('doc-a')).toHaveBeenCalled()
-    // b側の購読は解除されていない
+    await waitFor(() => expect(usePdfUploadStore.getState().completionCounter).toBe(1))
     expect(snapshotCallbacks.has('doc-b')).toBe(true)
   })
 
-  it('OCRエラー到達時にも購読が解除される', async () => {
+  it('OCRエラー到達時にもエラー表示される', async () => {
     mockCallFunction.mockResolvedValue({ success: true, documentId: 'doc-x' })
 
-    render(<PdfUploadModal open onOpenChange={vi.fn()} />)
+    render(<PdfUploadModal />)
     selectFiles(getFileInput(), [makeFile('x.pdf')])
     fireEvent.click(screen.getByRole('button', { name: /アップロード/ }))
 
@@ -433,6 +381,5 @@ describe('PdfUploadModal — 行ごとのonSnapshot購読(Issue #815)', () => {
     emitSnapshot('doc-x', { status: 'error', lastErrorMessage: 'OCR失敗' })
 
     await waitFor(() => expect(screen.getByText('OCR失敗')).toBeDefined())
-    expect(unsubscribeSpies.get('doc-x')).toHaveBeenCalled()
   })
 })

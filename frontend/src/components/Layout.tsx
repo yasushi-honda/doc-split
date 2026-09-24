@@ -3,6 +3,8 @@ import { FileText, Settings, LogOut, AlertCircle, Database, History, HelpCircle 
 import { useAuthStore } from '@/stores/authStore'
 import { NetworkStatusBar } from '@/components/NetworkStatusBar'
 import { PullToRefresh } from '@/components/PullToRefresh'
+import { PdfUploadModal } from '@/components/PdfUploadModal'
+import { PdfUploadBackgroundHost } from '@/components/PdfUploadBackgroundHost'
 import { useTokenRefresh } from '@/hooks/useTokenRefresh'
 
 export function Layout() {
@@ -80,6 +82,9 @@ export function Layout() {
           <Outlet />
         </main>
       </div>
+
+      <PdfUploadModal />
+      <PdfUploadBackgroundHost />
     </PullToRefresh>
   )
 }

@@ -1,5 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { RefreshCw } from 'lucide-react'
+import { usePdfUploadStore } from '@/stores/pdfUploadStore'
+import { isActiveStep } from '@/lib/pdfUpload'
 
 const THRESHOLD = 80
 
@@ -38,6 +40,18 @@ export function PullToRefresh({ children }: { children: React.ReactNode }) {
 
   const handleTouchEnd = useCallback(() => {
     if (isPulling && pullDistance >= THRESHOLD) {
+      // PDFアップロード中(初回リクエスト中のisAnyUploadInFlightだけでなく、その後の
+      // OCR処理中=pending/processingも含む)はフルリロードで進捗・購読が失われるため
+      // 抑止する(codex review指摘: isAnyUploadInFlightのみだとOCR処理中の window
+      // ではガードされず、最も長く続く区間でリロードを防げていなかった。Issue #1031)
+      const uploadState = usePdfUploadStore.getState()
+      const hasActiveUpload = uploadState.isAnyUploadInFlight || uploadState.files.some((f) => isActiveStep(f.step))
+      if (hasActiveUpload) {
+        setPullDistance(0)
+        setIsPulling(false)
+        pulling.current = false
+        return
+      }
       window.location.reload()
       return
     }
