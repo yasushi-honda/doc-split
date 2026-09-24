@@ -114,7 +114,15 @@ export const usePdfUploadStore = create<PdfUploadState>((set, get) => {
       doc(db, 'documents', documentId),
       (snapshot) => {
         if (myEpoch !== epoch) return
-        applyTerminalOrProgress(id, mapDocumentStatusToStep(snapshot.data()))
+        const data = snapshot.data()
+        const result = mapDocumentStatusToStep(data)
+        // dataがundefined(文書消失)、またはstatusが既知の値のいずれでもない場合は、
+        // Firestore側の想定外の状態(スキーマドリフト等)であり診断に残す
+        // (data?.status === 'error'はアプリの正常な終端状態のためログ対象外)
+        if (result.step === 'error' && data?.status !== 'error') {
+          console.error('Unexpected document snapshot state:', { documentId, status: data?.status })
+        }
+        applyTerminalOrProgress(id, result)
       },
       (err) => {
         console.error('Snapshot error:', err)
@@ -132,7 +140,11 @@ export const usePdfUploadStore = create<PdfUploadState>((set, get) => {
   ) {
     const myEpoch = epoch
     set((state) => ({
-      files: state.files.map((f) => (f.id === id ? { ...f, step: 'uploading', error: undefined } : f)),
+      // duplicateInfoも明示的にクリアする(type-design-analyzer指摘): 重複解決の再試行を
+      // 経由すると、クリアしないままstep=processedまで進んでもduplicateInfoが陳腐化した
+      // まま残り続ける。表示側は`step==='duplicate'`とAND条件で参照しているため現状は
+      // 実害が隠れているだけで、型・実データいずれも不変条件を保証していなかった
+      files: state.files.map((f) => (f.id === id ? { ...f, step: 'uploading', error: undefined, duplicateInfo: undefined } : f)),
     }))
 
     try {
@@ -180,6 +192,7 @@ export const usePdfUploadStore = create<PdfUploadState>((set, get) => {
 
       // 想定外レスポンス(duplicateでもdocumentIdでもない成功応答): fail-visibleにerrorへ倒す
       // documentIdが発行されず終端したため、onSnapshot経由の解放が発生しない。ここで明示的に解放する
+      console.error('Unexpected uploadPdf response:', response)
       set((state) => ({
         files: state.files.map((f) => (f.id === id ? {
           ...f,
@@ -305,6 +318,10 @@ export const usePdfUploadStore = create<PdfUploadState>((set, get) => {
     },
 
     removeFile: (id) => {
+      // 現在UIから呼べるのはidle行のみ(未購読)だが、removeFileはストアの公開アクションで
+      // あり将来別の呼び出し元がactive行に対して呼ぶ可能性を排除できないため、
+      // 呼び出し元のUIガードに依存せずストア自身で購読解除を保証する(type-design-analyzer指摘)
+      unsubscribeRow(id)
       set((state) => ({
         files: state.files.filter((f) => f.id !== id),
         claimedFileNames: releaseRowClaims(state.claimedFileNames, id),

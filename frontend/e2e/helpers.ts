@@ -37,8 +37,20 @@ export async function clickTab(page: Page, tabName: string) {
  * Firestore Emulatorへ直接接続するfirebase-admin Firestoreインスタンス(E2E専用)。
  * `firebase emulators:exec`が`FIRESTORE_EMULATOR_HOST`/`GCLOUD_PROJECT`を注入した
  * プロセス内で呼び出すこと(scripts/seed-*.jsと同じ接続方式)。
+ *
+ * fail-closed(codex review指摘): `FIRESTORE_EMULATOR_HOST`未設定のまま呼び出すと、
+ * Admin SDKは実際のdev projectのFirestoreへ接続してしまい、このヘルパーがfakeな
+ * documentを作成・上書きする危険がある。誤った実行環境(emulator未起動)を早期に
+ * 検知してエラーにする。
  */
 function getAdminFirestore() {
+  if (!process.env.FIRESTORE_EMULATOR_HOST) {
+    throw new Error(
+      'FIRESTORE_EMULATOR_HOST is not set. This helper must run inside `firebase emulators:exec` ' +
+      '(or with FIRESTORE_EMULATOR_HOST=localhost:8085 set manually) to avoid writing fake documents ' +
+      'to a real Firestore project.'
+    );
+  }
   const projectId = process.env.GCLOUD_PROJECT || 'doc-split-dev';
   if (getApps().length === 0) {
     initializeApp({ projectId });

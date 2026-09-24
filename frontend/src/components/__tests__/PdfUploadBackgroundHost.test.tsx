@@ -59,14 +59,17 @@ describe('PdfUploadBackgroundHost', () => {
     expect(toastLoading).toHaveBeenCalledWith(expect.any(String), { id: PDF_UPLOAD_TOAST_ID })
   })
 
-  it('非表示+needsAttentionでtoast.errorをアクションボタン付きで呼ぶ', () => {
+  it('非表示+needsAttentionでtoast.errorをアクションボタン付き・duration:Infinityで呼ぶ', () => {
     render(<PdfUploadBackgroundHost />)
     setState({ files: [makeItem('error')], isModalOpen: false })
 
     expect(toastError).toHaveBeenCalledTimes(1)
-    const [, options] = toastError.mock.calls[0] as [string, { id: string; action: { label: string; onClick: () => void } }]
+    const [, options] = toastError.mock.calls[0] as [string, { id: string; duration: number; action: { label: string; onClick: () => void } }]
     expect(options.id).toBe(PDF_UPLOAD_TOAST_ID)
     expect(options.action.label).toBeTruthy()
+    // silent-failure-hunter指摘: sonner既定duration(約4秒)で自動消滅すると、裏側で
+    // 恒久的に残るerror行に対する唯一の通知手段が失われるため、明示的にInfinityにする
+    expect(options.duration).toBe(Infinity)
 
     act(() => options.action.onClick())
     expect(usePdfUploadStore.getState().isModalOpen).toBe(true)

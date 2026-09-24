@@ -177,7 +177,8 @@ describe('uploadAll — 逐次実行・排他制御', () => {
     await uploadPromise
   })
 
-  it('想定外レスポンス(duplicateでもdocumentIdでもない)はerrorへフォールバックし予約が解放される', async () => {
+  it('想定外レスポンス(duplicateでもdocumentIdでもない)はerrorへフォールバックし予約が解放され、診断ログが残る(silent-failure-hunter指摘)', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
     mockCallFunction.mockResolvedValue({ success: true })
     usePdfUploadStore.getState().addFiles([makeFile('weird.pdf')])
     await act(() => usePdfUploadStore.getState().uploadAll())
@@ -186,6 +187,28 @@ describe('uploadAll — 逐次実行・排他制御', () => {
     expect(state.files[0]?.step).toBe('error')
     expect(state.files[0]?.error).toMatch(/予期しない応答/)
     expect(state.claimedFileNames.has('weird.pdf')).toBe(false)
+    expect(consoleError).toHaveBeenCalledWith('Unexpected uploadPdf response:', expect.objectContaining({ success: true }))
+    consoleError.mockRestore()
+  })
+
+  it('addFiles()は保留中の自動クリアタイマーをキャンセルする(バッチ1完了直後2秒以内にバッチ2を追加しても消えない)', async () => {
+    mockCallFunction.mockResolvedValue({ success: true, documentId: 'doc-batch1' })
+    usePdfUploadStore.getState().addFiles([makeFile('batch1.pdf')])
+    await act(() => usePdfUploadStore.getState().uploadAll())
+
+    vi.useFakeTimers()
+    act(() => emitSnapshot('doc-batch1', { status: 'processed' }))
+    // この時点でautoClearTimerがスケジュールされている(2秒後に発火予定)
+
+    // 2秒経過する前に新しいバッチを追加する
+    await act(() => vi.advanceTimersByTimeAsync(500))
+    usePdfUploadStore.getState().addFiles([makeFile('batch2.pdf')])
+
+    await act(() => vi.advanceTimersByTimeAsync(2000))
+    // 旧タイマーがaddFiles()でキャンセルされているため、全件processedではなくなった
+    // (batch1=processed, batch2=idleの混在)状態のまま両方とも残っていること
+    // (新タイマーは全件processedでない限り再スケジュールされない)
+    expect(usePdfUploadStore.getState().files.map((f) => f.file.name).sort()).toEqual(['batch1.pdf', 'batch2.pdf'])
   })
 })
 
@@ -275,6 +298,28 @@ describe('retry / resolveDuplicate', () => {
     await waitFor(() => expect(usePdfUploadStore.getState().files[0]?.step).toBe('error'))
     expect(usePdfUploadStore.getState().claimedFileNames.has('dup_2.pdf')).toBe(false)
   })
+
+  it('uploadAll進行中に別行のretry/resolveDuplicateを呼んでも無視される(isAnyUploadInFlightの排他ガード)', async () => {
+    let resolveFirst!: (v: unknown) => void
+    mockCallFunction.mockImplementation((_name: string, data: { fileName: string }) => {
+      if (data.fileName === 'a.pdf') return new Promise((resolve) => { resolveFirst = resolve })
+      return Promise.resolve({ success: true, documentId: 'doc-b' })
+    })
+
+    usePdfUploadStore.getState().addFiles([makeFile('a.pdf'), makeFile('b.pdf')])
+    const uploadPromise = act(() => usePdfUploadStore.getState().uploadAll())
+    await waitFor(() => expect(mockCallFunction).toHaveBeenCalledTimes(1))
+    expect(usePdfUploadStore.getState().isAnyUploadInFlight).toBe(true)
+
+    // b.pdfはまだidleのまま(uploadAllのループがa.pdfで止まっている)。ここでretry/resolveDuplicateを
+    // 呼んでも、uploadOneFile内のisAnyUploadInFlightガードにより無視されるべき
+    const bId = usePdfUploadStore.getState().files.find((f) => f.file.name === 'b.pdf')!.id
+    act(() => usePdfUploadStore.getState().retry(bId))
+    expect(mockCallFunction).toHaveBeenCalledTimes(1)
+
+    resolveFirst({ success: true, documentId: 'doc-a' })
+    await uploadPromise
+  })
 })
 
 describe('行ごとのonSnapshot購読', () => {
@@ -330,6 +375,33 @@ describe('行ごとのonSnapshot購読', () => {
     expect(usePdfUploadStore.getState().completionCounter).toBe(1)
   })
 
+  it('未知のstatus値はerror終端になり、診断ログが残る(silent-failure-hunter指摘)', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    mockCallFunction.mockResolvedValue({ success: true, documentId: 'doc-unknown-status' })
+    usePdfUploadStore.getState().addFiles([makeFile('unknown.pdf')])
+    await act(() => usePdfUploadStore.getState().uploadAll())
+
+    emitSnapshot('doc-unknown-status', { status: 'some-future-status' })
+    expect(usePdfUploadStore.getState().files[0]?.step).toBe('error')
+    expect(consoleError).toHaveBeenCalledWith(
+      'Unexpected document snapshot state:',
+      expect.objectContaining({ documentId: 'doc-unknown-status', status: 'some-future-status' })
+    )
+    consoleError.mockRestore()
+  })
+
+  it('アプリの正常なerror終端(status===error)では想定外状態の診断ログを出さない', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    mockCallFunction.mockResolvedValue({ success: true, documentId: 'doc-normal-error' })
+    usePdfUploadStore.getState().addFiles([makeFile('normalerror.pdf')])
+    await act(() => usePdfUploadStore.getState().uploadAll())
+
+    emitSnapshot('doc-normal-error', { status: 'error', lastErrorMessage: 'OCR失敗' })
+    expect(usePdfUploadStore.getState().files[0]?.step).toBe('error')
+    expect(consoleError).not.toHaveBeenCalledWith('Unexpected document snapshot state:', expect.anything())
+    consoleError.mockRestore()
+  })
+
   it('onSnapshotのerrorコールバックでもerror終端+購読解除+予約解放される(plan-crossreview Medium#3)', async () => {
     mockCallFunction.mockResolvedValue({ success: true, documentId: 'doc-snap-err' })
     usePdfUploadStore.getState().addFiles([makeFile('snaperr.pdf')])
@@ -359,6 +431,20 @@ describe('行ごとのonSnapshot購読', () => {
     act(() => usePdfUploadStore.getState().retry(rowId))
     await waitFor(() => expect(nextCallbacks.has('doc-retry-2')).toBe(true))
     expect(nextCallbacks.has('doc-retry-1')).toBe(false)
+  })
+
+  it('active行(購読中)をremoveFileで削除すると購読も解除される(PR review指摘: 購読リーク防止)', async () => {
+    mockCallFunction.mockResolvedValue({ success: true, documentId: 'doc-remove' })
+    usePdfUploadStore.getState().addFiles([makeFile('remove.pdf')])
+    await act(() => usePdfUploadStore.getState().uploadAll())
+    expect(nextCallbacks.has('doc-remove')).toBe(true)
+
+    const rowId = usePdfUploadStore.getState().files[0]!.id
+    act(() => usePdfUploadStore.getState().removeFile(rowId))
+
+    expect(usePdfUploadStore.getState().files.length).toBe(0)
+    expect(unsubscribeSpies.get('doc-remove')).toHaveBeenCalled()
+    expect(nextCallbacks.has('doc-remove')).toBe(false)
   })
 })
 

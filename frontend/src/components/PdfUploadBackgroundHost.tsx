@@ -48,8 +48,13 @@ export function PdfUploadBackgroundHost() {
       toast.success(spec.message, { id: PDF_UPLOAD_TOAST_ID })
       return
     }
+    // durationはInfinity固定(silent-failure-hunter指摘): sonnerのerror既定duration(約4秒)
+    // だと、裏側のerror/duplicate行はユーザーが操作するまで恒久的に残るにも関わらず、
+    // 唯一の通知手段であるこのトーストだけが数秒で消え、再通知の手段が無いまま
+    // ユーザーが気づけなくなる。ユーザーが「確認」を押すかトーストを自分で閉じるまで残す
     toast.error(spec.message, {
       id: PDF_UPLOAD_TOAST_ID,
+      duration: Infinity,
       action: { label: spec.actionLabel, onClick: openModal },
     })
   }, [files, isAnyUploadInFlight, isModalOpen, openModal])
