@@ -51,6 +51,7 @@ import {
   type DuplicateCheckResultWithDetails,
   type BulkImportResultDetailed,
 } from '@/hooks/useMasters'
+import { matchRowsById, type CsvRowWithId, type ExistingRecordWithId } from '@/lib/csvImportMatching'
 
 type ImportType = 'customer' | 'office' | 'caremanager' | 'documenttype'
 
@@ -65,6 +66,8 @@ interface PreviewRow {
   isExactMatch: boolean  // 完全一致かどうか
   action: ImportAction
   existingId?: string
+  /** 'id'の場合、ID列による一致行(顧客・事業所のみ。Issue #1036) */
+  matchedBy?: 'id'
 }
 
 interface CsvImportModalProps {
@@ -72,9 +75,17 @@ interface CsvImportModalProps {
   isOpen: boolean
   onClose: () => void
   onImport: (items: { data: AnyCSVData; existingId?: string; action: ImportAction }[]) => Promise<BulkImportResultDetailed>
+  /**
+   * ID列による厳密突合の対象となる既存レコード一覧(顧客・事業所のみ渡す、Issue #1036)。
+   * CustomerMaster[]/OfficeMaster[]等、id・name以外に備考・別表記等のフィールドを
+   * 持つ配列をそのまま渡してよい(ID一致行の差分プレビューに使う。取得はgetCellValueで
+   * Record<string, unknown>へキャストして行う)。
+   */
+  existingRecords?: ExistingRecordWithId[]
 }
 
 // 完全一致判定（全カラムが同じかどうか）
+// CSVが空欄のセルは比較対象から除外する(空欄=変更しない、のため差分として扱わない。Issue #1036)
 function isExactMatchData(
   type: ImportType,
   csvData: AnyCSVData,
@@ -85,8 +96,10 @@ function isExactMatchData(
   const config = TYPE_CONFIG[type]
   return config.columns.every(col => {
     const csvValue = (csvData as unknown as Record<string, unknown>)[col.key] ?? ''
+    const csvValueStr = String(csvValue).trim()
+    if (csvValueStr === '') return true
     const existingValue = (existingData as unknown as Record<string, unknown>)[col.key] ?? ''
-    return String(csvValue).trim() === String(existingValue).trim()
+    return csvValueStr === String(existingValue).trim()
   })
 }
 
@@ -98,26 +111,31 @@ const TYPE_CONFIG = {
       { key: 'name', label: '顧客名' },
       { key: 'furigana', label: 'フリガナ' },
       { key: 'careManagerName', label: '担当ケアマネ' },
+      { key: 'notes', label: '備考' },
+      { key: 'aliases', label: '別表記' },
     ],
     defaultAction: 'add' as ImportAction,
-    description: '同名は別人として追加されます。上書きを選択すると既存データを更新します。',
+    description: '同名は別人として追加されます。上書きを選択すると既存データを更新します。空欄のセルは既存の値を変更しません(値を削除したい場合は編集ダイアログを使ってください)。別表記は書類のOCR自動振り分けに使われるため、変更内容をよく確認してください。',
   },
   office: {
     name: '事業所',
     columns: [
       { key: 'name', label: '事業所名' },
       { key: 'shortName', label: '略称' },
+      { key: 'notes', label: '備考' },
+      { key: 'aliases', label: '別表記' },
     ],
     defaultAction: 'add' as ImportAction,
-    description: '同名は別事業所として追加されます。上書きを選択すると既存データを更新します。',
+    description: '同名は別事業所として追加されます。上書きを選択すると既存データを更新します。空欄のセルは既存の値を変更しません(値を削除したい場合は編集ダイアログを使ってください)。別表記は書類のOCR自動振り分けに使われるため、変更内容をよく確認してください。',
   },
   caremanager: {
     name: 'ケアマネ',
     columns: [
       { key: 'name', label: 'ケアマネ名' },
+      { key: 'email', label: 'メールアドレス' },
     ],
     defaultAction: 'skip' as ImportAction,
-    description: '同名はスキップされます。上書きを選択すると既存データを更新します。',
+    description: '同名はスキップされます。上書きを選択すると既存データを更新します。空欄のセルは既存の値を変更しません。',
   },
   documenttype: {
     name: '書類種別',
@@ -126,13 +144,14 @@ const TYPE_CONFIG = {
       { key: 'dateMarker', label: '日付マーカー' },
       { key: 'category', label: 'カテゴリ' },
       { key: 'keywords', label: 'キーワード' },
+      { key: 'aliases', label: '別表記' },
     ],
     defaultAction: 'skip' as ImportAction,
-    description: '同名はスキップされます。上書きを選択すると既存データを更新します。',
+    description: '同名はスキップされます。上書きを選択すると既存データを更新します。空欄のセルは既存の値を変更しません。別表記は書類のOCR自動振り分けに使われるため、変更内容をよく確認してください。',
   },
 }
 
-export function CsvImportModal({ type, isOpen, onClose, onImport }: CsvImportModalProps) {
+export function CsvImportModal({ type, isOpen, onClose, onImport, existingRecords }: CsvImportModalProps) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [fileName, setFileName] = useState<string | null>(null)
   const [previewData, setPreviewData] = useState<PreviewRow[]>([])
@@ -143,20 +162,26 @@ export function CsvImportModal({ type, isOpen, onClose, onImport }: CsvImportMod
 
   const config = TYPE_CONFIG[type]
 
-  // 重複データを部分一致と完全一致に分類
+  // ID一致行(顧客・事業所のみ。既存の3分類からは除外する)
+  const idMatchRows = useMemo(() =>
+    previewData.filter(row => row.matchedBy === 'id'),
+    [previewData]
+  )
+
+  // 重複データを部分一致と完全一致に分類(ID一致行は含めない)
   const partialMatchRows = useMemo(() =>
-    previewData.filter(row => row.isDuplicate && !row.isExactMatch),
+    previewData.filter(row => row.matchedBy !== 'id' && row.isDuplicate && !row.isExactMatch),
     [previewData]
   )
 
   const exactMatchRows = useMemo(() =>
-    previewData.filter(row => row.isDuplicate && row.isExactMatch),
+    previewData.filter(row => row.matchedBy !== 'id' && row.isDuplicate && row.isExactMatch),
     [previewData]
   )
 
-  // 新規データのみ抽出
+  // 新規データのみ抽出(ID一致行は含めない)
   const newRows = useMemo(() =>
-    previewData.filter(row => !row.isDuplicate),
+    previewData.filter(row => row.matchedBy !== 'id' && !row.isDuplicate),
     [previewData]
   )
 
@@ -164,6 +189,12 @@ export function CsvImportModal({ type, isOpen, onClose, onImport }: CsvImportMod
   const overwriteCount = useMemo(() =>
     partialMatchRows.filter(row => row.action === 'overwrite').length,
     [partialMatchRows]
+  )
+
+  // ID一致行の上書き選択数(既定でON)
+  const idMatchOverwriteCount = useMemo(() =>
+    idMatchRows.filter(row => row.action === 'overwrite').length,
+    [idMatchRows]
   )
 
   // 完全一致から追加選択数（顧客・事業所のみ）
@@ -179,20 +210,33 @@ export function CsvImportModal({ type, isOpen, onClose, onImport }: CsvImportMod
   const handleSelectAll = (checked: boolean) => {
     setPreviewData(prev => prev.map(row => ({
       ...row,
-      // 部分一致のみ変更、完全一致はスキップのまま
-      action: (row.isDuplicate && !row.isExactMatch)
+      // 部分一致のみ変更、完全一致・ID一致はそのまま
+      action: (row.matchedBy !== 'id' && row.isDuplicate && !row.isExactMatch)
         ? (checked ? 'overwrite' : config.defaultAction)
         : row.action,
     })))
   }
 
-  // 個別選択
+  // 個別選択(部分一致・完全一致行用)
   const handleSelectRow = (index: number, checked: boolean) => {
     setPreviewData(prev => prev.map((row, i) => {
       if (i !== index) return row
       return {
         ...row,
         action: checked ? 'overwrite' : config.defaultAction,
+      }
+    }))
+  }
+
+  // ID一致行の個別選択。チェックを外した場合は既存レコードの更新自体を行わない
+  // 'skip'にする('add'にすると同一レコードが新規追加されてしまうため、
+  // config.defaultActionにフォールバックするhandleSelectRowとは分けている)
+  const handleSelectIdMatchRow = (index: number, checked: boolean) => {
+    setPreviewData(prev => prev.map((row, i) => {
+      if (i !== index) return row
+      return {
+        ...row,
+        action: checked ? 'overwrite' : 'skip',
       }
     }))
   }
@@ -233,43 +277,73 @@ export function CsvImportModal({ type, isOpen, onClose, onImport }: CsvImportMod
         return
       }
 
-      // 重複チェック（詳細付き）
+      // ID照合(顧客・事業所のみexistingRecordsが渡される)。名前ベース照合より前段で行う。
+      // 優先順位が逆だと、名前を書き換えた行が名前照合で「新規」判定され重複追加されるため
+      const idMatch = matchRowsById(mapped as unknown as CsvRowWithId[], existingRecords)
+
+      if (idMatch.duplicateIds.length > 0) {
+        setError(`CSV内でID列が重複しています(該当ID: ${idMatch.duplicateIds.join(', ')})。IDを修正してから再度お試しください`)
+        setPreviewData([])
+        return
+      }
+
+      const idMatchedRows: PreviewRow[] = idMatch.idMatchRows.map(m => ({
+        csvData: m.resolvedData as unknown as AnyCSVData,
+        existingData: m.existing as unknown as AnyCSVData,
+        isDuplicate: true,
+        isExactMatch: false,
+        action: 'overwrite', // ID一致は既定で上書きON
+        existingId: m.existing.id,
+        matchedBy: 'id',
+      }))
+
+      const remaining = idMatch.remainingRows as AnyCSVData[]
+
+      // 重複チェック（詳細付き）。ID一致しなかった残りの行のみ対象
       setCheckingDuplicates(true)
       try {
         let checked: DuplicateCheckResultWithDetails<AnyCSVData>[]
 
         if (type === 'customer') {
           const result = await checkCustomerDuplicatesWithDetails(
-            mapped.map(m => ({
+            remaining.map(m => ({
               name: (m as CustomerCSVRow).name,
               furigana: (m as CustomerCSVRow).furigana,
               careManagerName: (m as CustomerCSVRow).careManagerName,
+              notes: (m as CustomerCSVRow).notes,
+              aliases: (m as CustomerCSVRow).aliases,
             }))
           )
           checked = result as DuplicateCheckResultWithDetails<AnyCSVData>[]
         } else if (type === 'office') {
           const result = await checkOfficeDuplicatesWithDetails(
-            mapped.map(m => ({ name: (m as OfficeCSVRow).name, shortName: (m as OfficeCSVRow).shortName ?? '' }))
+            remaining.map(m => ({
+              name: (m as OfficeCSVRow).name,
+              shortName: (m as OfficeCSVRow).shortName ?? '',
+              notes: (m as OfficeCSVRow).notes,
+              aliases: (m as OfficeCSVRow).aliases,
+            }))
           )
           checked = result as DuplicateCheckResultWithDetails<AnyCSVData>[]
         } else if (type === 'caremanager') {
           const result = await checkCareManagerDuplicatesWithDetails(
-            mapped.map(m => ({ name: (m as CareManagerCSVRow).name }))
+            remaining.map(m => ({ name: (m as CareManagerCSVRow).name, email: (m as CareManagerCSVRow).email }))
           )
           checked = result as DuplicateCheckResultWithDetails<AnyCSVData>[]
         } else {
           const result = await checkDocumentTypeDuplicatesWithDetails(
-            mapped.map(m => ({
+            remaining.map(m => ({
               name: (m as DocumentTypeCSVRow).name,
               dateMarker: (m as DocumentTypeCSVRow).dateMarker,
               category: (m as DocumentTypeCSVRow).category,
               keywords: (m as DocumentTypeCSVRow).keywords,
+              aliases: (m as DocumentTypeCSVRow).aliases,
             }))
           )
           checked = result as DuplicateCheckResultWithDetails<AnyCSVData>[]
         }
 
-        setPreviewData(checked.map(item => {
+        const nameMatchedRows: PreviewRow[] = checked.map(item => {
           const exactMatch = item.isDuplicate && isExactMatchData(type, item.csvData, item.existingData)
           return {
             csvData: item.csvData,
@@ -280,7 +354,9 @@ export function CsvImportModal({ type, isOpen, onClose, onImport }: CsvImportMod
             action: exactMatch ? 'skip' : (item.isDuplicate ? config.defaultAction : 'add'),
             existingId: (item.existingData as { id?: string } | null)?.id,
           }
-        }))
+        })
+
+        setPreviewData([...idMatchedRows, ...nameMatchedRows])
       } finally {
         setCheckingDuplicates(false)
       }
@@ -297,11 +373,17 @@ export function CsvImportModal({ type, isOpen, onClose, onImport }: CsvImportMod
     setError(null)
 
     try {
-      const items = previewData.map(row => ({
-        data: row.csvData,
-        existingId: row.existingId,
-        action: row.action,
-      }))
+      const items = previewData.map(row => {
+        // csvDataにid列が含まれる場合(顧客・事業所のCSVにID列がある場合)、
+        // Firestoreの書込みデータに混入しないよう除く
+        const dataWithoutId = { ...row.csvData } as AnyCSVData & { id?: string }
+        delete dataWithoutId.id
+        return {
+          data: dataWithoutId as AnyCSVData,
+          existingId: row.existingId,
+          action: row.action,
+        }
+      })
       const result = await onImport(items)
       setResult(result)
     } catch {
@@ -352,11 +434,13 @@ export function CsvImportModal({ type, isOpen, onClose, onImport }: CsvImportMod
     }
   }, [isOpen])
 
-  // セル値を取得するヘルパー
-  const getCellValue = (data: AnyCSVData | null, key: string): string => {
+  // セル値を取得するヘルパー(既存データ側は配列(aliases等)で保持されている場合があるため、
+  // 表示時にCSVと同じ区切り文字(|)で連結する。Issue #1036)
+  const getCellValue = (data: AnyCSVData | Record<string, unknown> | null, key: string): string => {
     if (!data) return '-'
     const value = (data as unknown as Record<string, unknown>)[key]
     if (value === undefined || value === null || value === '') return '-'
+    if (Array.isArray(value)) return value.length > 0 ? value.join('|') : '-'
     return String(value)
   }
 
@@ -453,6 +537,14 @@ export function CsvImportModal({ type, isOpen, onClose, onImport }: CsvImportMod
                 <span className="text-gray-700">
                   新規追加: <strong>{newRows.length}件</strong>
                 </span>
+                {idMatchRows.length > 0 && (
+                  <span className="text-blue-700 flex items-center gap-1">
+                    ID一致: <strong>{idMatchRows.length}件</strong>
+                    {idMatchOverwriteCount > 0 && (
+                      <span className="text-blue-600">（{idMatchOverwriteCount}件上書き選択）</span>
+                    )}
+                  </span>
+                )}
                 {partialMatchRows.length > 0 && (
                   <span className="text-yellow-700 flex items-center gap-1">
                     <AlertTriangle className="h-4 w-4" />
@@ -475,6 +567,66 @@ export function CsvImportModal({ type, isOpen, onClose, onImport }: CsvImportMod
                   </span>
                 )}
               </div>
+
+              {/* ID一致データ(顧客・事業所のみ。既定で上書きON) */}
+              {idMatchRows.length > 0 && (
+                <div className="border rounded-md p-3 bg-blue-50">
+                  <div className="flex items-center justify-between mb-2">
+                    <h4 className="text-sm font-medium text-blue-800">
+                      IDが一致（既存データを更新）
+                    </h4>
+                    <span className="text-xs text-gray-600">
+                      名前は変更されません（CSVで書き換えても既存の名前のまま更新されます）
+                    </span>
+                  </div>
+                  <div className="max-h-60 overflow-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="w-12">上書き</TableHead>
+                          <TableHead className="w-16">状態</TableHead>
+                          {config.columns.map(col => (
+                            <TableHead key={col.key}>{col.label}</TableHead>
+                          ))}
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {idMatchRows.map((row, idx) => {
+                          const originalIndex = previewData.findIndex(r => r === row)
+                          return (
+                            <Fragment key={idx}>
+                              {/* CSVデータ行(名前列のみ既存値を表示し、CSVでの改名は反映されないことを示す) */}
+                              <TableRow className="bg-blue-50">
+                                <TableCell rowSpan={2} className="align-middle">
+                                  <Checkbox
+                                    checked={row.action === 'overwrite'}
+                                    onCheckedChange={(checked) => handleSelectIdMatchRow(originalIndex, !!checked)}
+                                  />
+                                </TableCell>
+                                <TableCell className="text-xs text-blue-600 font-medium">CSV</TableCell>
+                                {config.columns.map(col => (
+                                  <TableCell key={col.key} className="text-sm">
+                                    {col.key === 'name' ? getCellValue(row.existingData, 'name') : getCellValue(row.csvData, col.key)}
+                                  </TableCell>
+                                ))}
+                              </TableRow>
+                              {/* 既存データ行 */}
+                              <TableRow className="bg-gray-50 border-b-2">
+                                <TableCell className="text-xs text-gray-500">既存</TableCell>
+                                {config.columns.map(col => (
+                                  <TableCell key={col.key} className="text-sm text-gray-500">
+                                    {getCellValue(row.existingData, col.key)}
+                                  </TableCell>
+                                ))}
+                              </TableRow>
+                            </Fragment>
+                          )
+                        })}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </div>
+              )}
 
               {/* 部分一致データ（上書き選択UI） */}
               {partialMatchRows.length > 0 && (
@@ -667,11 +819,13 @@ export function CsvImportModal({ type, isOpen, onClose, onImport }: CsvImportMod
                 <ul className="list-disc list-inside text-xs space-y-1">
                   <li>顧客名: <code>name</code>, <code>顧客名</code>, <code>氏名</code>, <code>利用者名</code></li>
                   <li>フリガナ: <code>furigana</code>, <code>フリガナ</code>, <code>ふりがな</code></li>
+                  <li>ID: <code>id</code>, <code>ID</code>（エクスポートしたCSVのみ。この列の値がある行は名前を変更しても同じ人として更新されます。他の行にコピーしないでください）</li>
                 </ul>
               ) : type === 'office' ? (
                 <ul className="list-disc list-inside text-xs space-y-1">
                   <li>事業所名: <code>name</code>, <code>事業所名</code>, <code>名称</code></li>
                   <li>略称: <code>shortName</code>, <code>略称</code>, <code>短縮名</code></li>
+                  <li>ID: <code>id</code>, <code>ID</code>（エクスポートしたCSVのみ。この列の値がある行は名前を変更しても同じ事業所として更新されます。他の行にコピーしないでください）</li>
                 </ul>
               ) : type === 'caremanager' ? (
                 <ul className="list-disc list-inside text-xs space-y-1">
@@ -701,7 +855,7 @@ export function CsvImportModal({ type, isOpen, onClose, onImport }: CsvImportMod
               {importing ? 'インポート中...' : (
                 <>
                   {newRows.length + exactMatchAddCount}件追加
-                  {overwriteCount > 0 && ` + ${overwriteCount}件上書き`}
+                  {(overwriteCount + idMatchOverwriteCount) > 0 && ` + ${overwriteCount + idMatchOverwriteCount}件上書き`}
                 </>
               )}
             </Button>
