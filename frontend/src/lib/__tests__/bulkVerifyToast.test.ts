@@ -119,11 +119,12 @@ describe('decideBulkVerifyToast', () => {
 // Phase-B(キャッシュ補正・トースト表示)自体が例外を投げた場合、以前は固定の「更新しました」
 // 文言のみを返し、Phase-Aで既に判明している一部書込み失敗の情報を握り潰していた。
 describe('decidePostWriteSyncFailureToast', () => {
-  it('Phase-Aで書込み失敗がなければ、表示更新失敗のみを伝えるwarningを返す', () => {
+  it('Phase-Aで書込み失敗もidentityLookup失敗もなければ、表示更新失敗のみを伝えるwarningを返す', () => {
     const outcome = decidePostWriteSyncFailureToast({
       totalCount: 5,
       succeededCount: 5,
       failedCount: 0,
+      identityLookupFailed: false,
     })
 
     expect(outcome).toEqual({
@@ -137,9 +138,39 @@ describe('decidePostWriteSyncFailureToast', () => {
       totalCount: 10,
       succeededCount: 7,
       failedCount: 3,
+      identityLookupFailed: false,
     })
 
     expect(outcome.type).toBe('error')
     expect(outcome.message).toContain('一括確認が一部失敗しました（7/10件完了）')
+  })
+
+  // codex review 2巡目指摘(P2): 表示更新失敗のフォールバックがidentityLookupFailedを
+  // 無視すると、再読み込みしても確定処理は再実行されないのに、ユーザーは「画面表示の
+  // 更新に失敗しました」だけを見て確定処理スキップの事実に気付けない。
+  it('書込みは全件成功したがidentityLookup取得は失敗していた場合、確定スキップの警告も含める(codex review 2巡目指摘)', () => {
+    const outcome = decidePostWriteSyncFailureToast({
+      totalCount: 5,
+      succeededCount: 5,
+      failedCount: 0,
+      identityLookupFailed: true,
+    })
+
+    expect(outcome.type).toBe('warning')
+    expect(outcome.message).toContain('画面表示の更新に失敗しました')
+    expect(outcome.message).toContain('確定処理はスキップされました')
+  })
+
+  it('一部書込み失敗かつidentityLookup取得も失敗していた場合、両方の情報を含むerrorを返す', () => {
+    const outcome = decidePostWriteSyncFailureToast({
+      totalCount: 10,
+      succeededCount: 7,
+      failedCount: 3,
+      identityLookupFailed: true,
+    })
+
+    expect(outcome.type).toBe('error')
+    expect(outcome.message).toContain('一括確認が一部失敗しました（7/10件完了）')
+    expect(outcome.message).toContain('確定処理はスキップされました')
   })
 })

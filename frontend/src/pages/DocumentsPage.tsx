@@ -871,6 +871,7 @@ export function DocumentsPage() {
         totalCount: ids.length,
         succeededCount: succeeded.length,
         failedCount: failed.length,
+        identityLookupFailed,
       })
       toast[toastOutcome.type](toastOutcome.message)
     } finally {

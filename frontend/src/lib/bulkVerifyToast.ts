@@ -63,27 +63,41 @@ export interface DecidePostWriteSyncFailureToastParams {
   totalCount: number
   succeededCount: number
   failedCount: number
+  /** fetchFreshCustomerIdentityLookup()自体が失敗し、バッチ全体で確定判定をスキップした場合true */
+  identityLookupFailed: boolean
 }
 
 /**
  * handleBulkVerifyのPhase-B(Firestore書込み後のキャッシュ補正・トースト表示)自体が
  * 例外を投げた場合のフォールバックトーストを決定する純粋関数(Issue #1042、
- * pr-review-toolkit:silent-failure-hunter指摘CRITICAL-2対応)。
+ * pr-review-toolkit:silent-failure-hunter指摘CRITICAL-2 + codex review 2巡目指摘対応)。
  *
  * Phase-A(Firestore書込み)は既に完了しているため「一括確認に失敗しました」は誤りだが、
- * Phase-Aの時点で一部書類の書込み自体が失敗していた場合(failedCount>0)は、その事実を
- * 「画面表示の更新に失敗しました」という後始末失敗のメッセージだけに埋もれさせず、
- * 実際に書込みが失敗した件数も明示する(失敗情報を握り潰さない)。
+ * このフォールバックは失敗情報を2種類握り潰しうる: (1) Phase-Aの時点で一部書類の書込み
+ * 自体が失敗していた場合(failedCount>0)の失敗件数、(2) identityLookupFailedによる確定処理
+ * スキップの事実。再読み込みしても確定処理は再実行されないため、後者を省略すると
+ * 「画面表示の更新に失敗しました」のメッセージだけを見たユーザーが、実際には顧客/事業所
+ * 未確定のまま放置されていることに気付けない(codex review 2巡目 P2指摘)。
  */
 export function decidePostWriteSyncFailureToast(
   params: DecidePostWriteSyncFailureToastParams
 ): BulkVerifyToastOutcome {
-  const { totalCount, succeededCount, failedCount } = params
+  const { totalCount, succeededCount, failedCount, identityLookupFailed } = params
 
   if (failedCount > 0) {
+    const base = `一括確認が一部失敗しました（${succeededCount}/${totalCount}件完了）。画面表示の更新にも失敗したため、最新の状態を確認してください`
     return {
       type: 'error',
-      message: `一括確認が一部失敗しました（${succeededCount}/${totalCount}件完了）。画面表示の更新にも失敗したため、最新の状態を確認してください`,
+      message: identityLookupFailed
+        ? `${base}。成功した${succeededCount}件も、${CONFIRM_ON_VERIFY_SKIPPED_REASON_MESSAGE}`
+        : base,
+    }
+  }
+
+  if (identityLookupFailed) {
+    return {
+      type: 'warning',
+      message: `確認済みに更新しましたが、画面表示の更新に失敗しました。再読み込みしてください。また、${CONFIRM_ON_VERIFY_SKIPPED_REASON_MESSAGE}`,
     }
   }
 
