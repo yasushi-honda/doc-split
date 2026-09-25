@@ -869,17 +869,18 @@ export function DocumentsPage() {
         identityLookupFailed: identityLookupWarningNeeded,
       })
 
-      if (failed.length > 0) {
+      if (identityLookupWarningNeeded) {
+        // codex review 4巡目・5巡目指摘の統合対応: 確定処理がidentityLookup取得失敗で
+        // スキップされ、警告が「再実行してください」と促す。書込みの成否(failed.length)に
+        // 関わらず、元の選択を丸ごと維持する。部分失敗時に成功した書類だけ選択解除すると、
+        // それらも確認済みになり「未確認のみ表示」フィルタで一覧から消えるため、再実行の
+        // ための再選択ができなくなる(failed.length>0のケースをfailedIdsのみへ絞る旧分岐と
+        // 統合し、identityLookupWarningNeededを常に優先する)。選択(selectionMode含む)は
+        // 維持し、確認ダイアログのみ閉じる。
+        setBulkOperation(null)
+      } else if (failed.length > 0) {
         const failedIds = new Set(failed.map((o) => o.docId))
         setSelectedIds(prev => new Set([...prev].filter(id => failedIds.has(id))))
-      } else if (identityLookupWarningNeeded) {
-        // codex review 4巡目指摘: 全件書込みは成功したが確定処理はスキップされ、警告が
-        // 「再実行してください」と促す。ここでselectedIdsを空にすると、確認済み書類が
-        // 「未確認のみ表示」フィルタで一覧から即座に消えるケースが多く、ユーザーは
-        // フィルタを変更して該当書類を探し再選択しない限り再実行できなくなる。
-        // 選択(selectionMode含む)を維持し、確認ダイアログのみ閉じて再度「確認済みにする」を
-        // 押すだけで再実行できるようにする。
-        setBulkOperation(null)
       } else {
         clearSelection()
         setBulkOperation(null)
@@ -889,9 +890,11 @@ export function DocumentsPage() {
       // Firestoreへの書込みは既に成功しているため、ここでの失敗は表示更新の後始末の
       // 失敗に過ぎない。「一括確認に失敗しました」は誤りなので出さない。ただしPhase-Aで
       // 一部書類の書込み自体が失敗していた場合(failed.length>0)は、その情報を握り潰さず
-      // 失敗した書類を選択に残す(再実行できるようにする)。
+      // 失敗した書類を選択に残す(再実行できるようにする)。ただしidentityLookupWarningNeeded
+      // の場合は成功した書類も再実行対象のため、failedIdsだけに絞らず選択を丸ごと維持する
+      // (上の成功パスと同じ判断、codex review 4巡目・5巡目指摘)。
       console.error('Bulk verify: post-write cache sync failed (writes already succeeded):', postWriteErr)
-      if (failed.length > 0) {
+      if (failed.length > 0 && !identityLookupWarningNeeded) {
         const failedIds = new Set(failed.map((o) => o.docId))
         setSelectedIds(prev => new Set([...prev].filter(id => failedIds.has(id))))
       }
