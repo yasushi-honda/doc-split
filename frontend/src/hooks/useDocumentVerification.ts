@@ -15,7 +15,11 @@ import {
   invalidateGroupQueries,
 } from './useDocuments'
 import type { Document } from '../../../shared/types'
-import { planConfirmOnVerify, buildConfirmOnVerifyUpdate } from '../../../shared/confirmOnVerify'
+import {
+  planConfirmOnVerify,
+  buildConfirmOnVerifyUpdate,
+  CONFIRM_ON_VERIFY_SKIPPED_WARNING_MESSAGE,
+} from '../../../shared/confirmOnVerify'
 import { fetchFreshCustomerIdentityLookup } from './useMasters'
 
 interface UseDocumentVerificationResult {
@@ -184,6 +188,19 @@ export function useDocumentVerification(document: Document | null | undefined): 
         invalidateGroupQueries(queryClient)
       } catch (postCommitErr) {
         console.error('Failed to sync cache after markAsVerified transaction succeeded:', postCommitErr)
+      }
+      // Issue #1042: freshIdentityLookup取得失敗により確定判定(customerConfirmed/
+      // officeConfirmed)が丸ごとスキップされた場合、verifiedはtrueで書き込まれ成功したように
+      // 見えるが確定フラグは書き込まれていない。console.errorのみではユーザーが気付けず、
+      // 手戻りが必要になるまで放置されるため、非ブロッキングの警告を表示する。
+      // 元々どちらも確定済み(何も変わらないはずだった)の書類では、確定判定をスキップしても
+      // 実害がないため警告を出さない(モーダルを開いた時点のdocument propによる簡易判定、
+      // トランザクション内で再読込した最新状態との食い違いは許容する)。
+      if (
+        freshIdentityLookup === null &&
+        !(document.customerConfirmed === true && document.officeConfirmed === true)
+      ) {
+        setError(CONFIRM_ON_VERIFY_SKIPPED_WARNING_MESSAGE)
       }
       return true
     } catch (err) {

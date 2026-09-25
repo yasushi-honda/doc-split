@@ -187,3 +187,12 @@ export function buildConfirmOnVerifyUpdate(
 
   return { update, logs };
 }
+
+/**
+ * 確定判定用の顧客マスター一覧取得(`fetchFreshCustomerIdentityLookup()`)が失敗し、
+ * customerConfirmed/officeConfirmedの確定処理を丸ごとスキップした場合にユーザーへ
+ * 提示する警告文言(Issue #1042)。単体トグル(useDocumentVerification.ts)・一括確認済み
+ * (DocumentsPage.tsxのhandleBulkVerify)の両方から参照する共通文言。
+ */
+export const CONFIRM_ON_VERIFY_SKIPPED_WARNING_MESSAGE =
+  '確認済みにしましたが、顧客/事業所マスターの取得に失敗したため確定処理はスキップされました。再実行してください';

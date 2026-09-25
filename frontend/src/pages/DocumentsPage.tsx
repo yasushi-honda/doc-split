@@ -76,6 +76,7 @@ import { DateRangeFilter, type DateRange } from '@/components/DateRangeFilter'
 import { isCustomerConfirmed } from '@/hooks/useProcessingHistory'
 import { resolveCustomerUnconfirmedReason } from '@shared/customerIdentity'
 import { planConfirmOnVerify, buildConfirmOnVerifyUpdate } from '@shared/confirmOnVerify'
+import { decideBulkVerifyToast } from '@/lib/bulkVerifyToast'
 import { DocumentDetailModal } from '@/components/DocumentDetailModal'
 import { MultiCustomerBadge } from '@/components/MultiCustomerBadge'
 import { AliasLearningHistoryModal } from '@/components/AliasLearningHistoryModal'
@@ -687,9 +688,19 @@ export function DocumentsPage() {
     if (selectedIds.size === 0 || !user) return
 
     setIsBulkOperating(true)
+
+    // Issue #1042: Firestore書込みフェーズ(このtry)と、後続のキャッシュ補正フェーズ(下記の
+    // 別try)を分離する。以前は一つのtryで両方を包んでおり、runWithConcurrency自体は成功して
+    // Firestoreへの書込みが完了済みなのに、後続のキャッシュ処理(updateDocumentInListCache
+    // ループ・invalidateGroupQueries等)側で例外が起きると「一括確認に失敗しました」という
+    // 誤った全体失敗トーストが出ていた(書込みは成功しているため実際には失敗していない)。
+    let ids: string[]
+    let uid: string
+    let outcomes: Array<{ docId: string; status: 'ok' | 'error'; decisions: ReturnType<typeof planConfirmOnVerify> | null }>
+    let identityLookupFailed = false
     try {
-      const ids = Array.from(selectedIds)
-      const uid = user.uid
+      ids = Array.from(selectedIds)
+      uid = user.uid
       const email = user.email || ''
 
       // codexレビュー指摘(P1・2回目): 同姓同名判定に使う顧客マスターを`identityLookup`
@@ -717,10 +728,11 @@ export function DocumentsPage() {
       // 安全側に倒す)。
       const freshIdentityLookup = await fetchFreshCustomerIdentityLookup().catch((fetchErr) => {
         console.error('Failed to fetch fresh customer identity lookup, skipping confirm-on-verify:', fetchErr)
+        identityLookupFailed = true
         return null
       })
 
-      const outcomes = await runWithConcurrency(ids, 20, async (docId) => {
+      outcomes = await runWithConcurrency(ids, 20, async (docId) => {
         const docRef = doc(db, 'documents', docId)
         try {
           const decisions = await runTransaction(db, async (tx) => {
@@ -772,7 +784,20 @@ export function DocumentsPage() {
           return { docId, status: 'error' as const, decisions: null }
         }
       })
+    } catch (error) {
+      // このcatchに到達するのはrunWithConcurrency自体(個別docの失敗は上のper-doc
+      // try/catchで既にstatus:'error'として吸収済み)が例外を投げた場合のみで、
+      // 実質的にバッチ全体で書込みが行われていない状態。「一括確認に失敗しました」で正しい。
+      console.error('Bulk verify error (write phase):', error)
+      toast.error('一括確認に失敗しました')
+      setIsBulkOperating(false)
+      return
+    }
 
+    // Issue #1042: ここに到達した時点でFirestoreへの書込み(verified/確定フラグ)は
+    // 既に完了している。以降はキャッシュ補正・トースト表示という表示上の後始末のため、
+    // 失敗しても「一括確認に失敗しました」という誤った全体失敗にしない(書込み自体は成功済み)。
+    try {
       const succeeded = outcomes.filter((o) => o.status === 'ok')
       const failed = outcomes.filter((o) => o.status === 'error')
 
@@ -809,22 +834,28 @@ export function DocumentsPage() {
         (o) => o.decisions?.customer.action === 'confirm' || o.decisions?.office.action === 'confirm'
       ).length
 
+      const toastOutcome = decideBulkVerifyToast({
+        totalCount: ids.length,
+        succeededCount: succeeded.length,
+        failedCount: failed.length,
+        confirmedCount,
+        identityLookupFailed,
+      })
+
       if (failed.length > 0) {
         const failedIds = new Set(failed.map((o) => o.docId))
         setSelectedIds(prev => new Set([...prev].filter(id => failedIds.has(id))))
-        toast.error(`一括確認が一部失敗しました（${succeeded.length}/${ids.length}件完了）`)
       } else {
         clearSelection()
         setBulkOperation(null)
-        toast.success(
-          confirmedCount > 0
-            ? `${succeeded.length}件を確認済みにしました（うち${confirmedCount}件は顧客/事業所も確定しました）`
-            : `${succeeded.length}件を確認済みにしました`
-        )
       }
-    } catch (error) {
-      console.error('Bulk verify error:', error)
-      toast.error('一括確認に失敗しました')
+      toast[toastOutcome.type](toastOutcome.message)
+    } catch (postWriteErr) {
+      // Firestoreへの書込みは既に成功しているため、ここでの失敗は表示更新の後始末の
+      // 失敗に過ぎない。「一括確認に失敗しました」は誤りなので出さず、書込み成功を
+      // 前提にした別メッセージで再読み込みを促す。
+      console.error('Bulk verify: post-write cache sync failed (writes already succeeded):', postWriteErr)
+      toast.warning('確認済みに更新しましたが、画面表示の更新に失敗しました。再読み込みしてください')
     } finally {
       setIsBulkOperating(false)
     }

@@ -318,6 +318,73 @@ describe('useDocumentVerification', () => {
       expect(mockTxSet).not.toHaveBeenCalled()
     })
 
+    // Issue #1042: 上記の「確定フラグがサイレントにスキップされる」問題自体はそのまま
+    // (fail-closed設計のため意図的)だが、console.errorのみでユーザーに一切通知されない点が
+    // バグだった。markAsVerifiedはtrue(成功)を返しつつ、非ブロッキングの警告をerror状態に
+    // 出すことで、モーダルの既存バナー表示経路(DocumentDetailModal.tsxのverifyError)経由で
+    // ユーザーが気付けるようにする。
+    describe('確定判定スキップ時のユーザー通知(Issue #1042)', () => {
+      it('fetchFreshCustomerIdentityLookupが失敗し、確定していないフィールドがある場合は警告を出す(成功はtrueのまま)', async () => {
+        mockFetchFreshCustomerIdentityLookup.mockRejectedValueOnce(new Error('network error'))
+        const doc = makeDocument({
+          verified: false,
+          customerId: 'customer-1',
+          customerConfirmed: false,
+          officeConfirmed: false,
+        })
+        txGetOverride = doc
+        const { result } = renderHook(() => useDocumentVerification(doc))
+
+        let returned: boolean | undefined
+        await act(async () => {
+          returned = await result.current.markAsVerified()
+        })
+
+        expect(returned).toBe(true)
+        expect(result.current.error).toBe(
+          '確認済みにしましたが、顧客/事業所マスターの取得に失敗したため確定処理はスキップされました。再実行してください'
+        )
+      })
+
+      it('取得成功時は警告を出さない(errorはnullのまま)', async () => {
+        const doc = makeDocument({
+          verified: false,
+          customerId: 'customer-1',
+          customerConfirmed: false,
+          officeConfirmed: false,
+        })
+        txGetOverride = doc
+        freshLookupOverride = readyLookup
+        const { result } = renderHook(() => useDocumentVerification(doc))
+
+        await act(async () => {
+          await result.current.markAsVerified()
+        })
+
+        expect(result.current.error).toBeNull()
+      })
+
+      it('取得失敗でも、顧客/事業所とも既に確定済みの書類では警告を出さない(何も変わらないため実害なし)', async () => {
+        mockFetchFreshCustomerIdentityLookup.mockRejectedValueOnce(new Error('network error'))
+        const doc = makeDocument({
+          verified: false,
+          customerId: 'customer-1',
+          customerConfirmed: true,
+          officeConfirmed: true,
+        })
+        txGetOverride = doc
+        const { result } = renderHook(() => useDocumentVerification(doc))
+
+        let returned: boolean | undefined
+        await act(async () => {
+          returned = await result.current.markAsVerified()
+        })
+
+        expect(returned).toBe(true)
+        expect(result.current.error).toBeNull()
+      })
+    })
+
     it('同姓同名でない有効な顧客・事業所名ならcustomerConfirmed/officeConfirmedもtrueにする', async () => {
       const doc = makeDocument({ verified: false, customerId: 'customer-1' })
       txGetOverride = doc
