@@ -696,7 +696,15 @@ export function DocumentsPage() {
     // 誤った全体失敗トーストが出ていた(書込みは成功しているため実際には失敗していない)。
     let ids: string[]
     let uid: string
-    let outcomes: Array<{ docId: string; status: 'ok' | 'error'; decisions: ReturnType<typeof planConfirmOnVerify> | null }>
+    let outcomes: Array<{
+      docId: string
+      status: 'ok' | 'error'
+      decisions: ReturnType<typeof planConfirmOnVerify> | null
+      // codex review 3巡目指摘: 成功した書類がトランザクション内で読み込んだ最新状態の
+      // 時点で既に両方確定済みだったか。identityLookupFailed時の警告要否判定に使う
+      // (成功でも実際には確定処理が発生しなかったerrorステータス扱いの書類はfalse=無視)。
+      alreadyFullyConfirmed: boolean
+    }>
     let identityLookupFailed = false
     try {
       ids = Array.from(selectedIds)
@@ -735,7 +743,7 @@ export function DocumentsPage() {
       outcomes = await runWithConcurrency(ids, 20, async (docId) => {
         const docRef = doc(db, 'documents', docId)
         try {
-          const decisions = await runTransaction(db, async (tx) => {
+          const { decisions, alreadyFullyConfirmed } = await runTransaction(db, async (tx) => {
             const freshSnap = await tx.get(docRef)
             if (!freshSnap.exists()) {
               throw new Error(`Document not found: ${docId}`)
@@ -776,12 +784,19 @@ export function DocumentsPage() {
               })
             }
 
-            return txDecisions
+            return {
+              decisions: txDecisions,
+              // codex review 3巡目指摘: identityLookupFailedによる警告は、成功した書類の
+              // うち少なくとも1件が実際に確定できたはず(=両方確定済みではなかった)場合のみ
+              // 出す。単体トグルの「既に両方確定済みなら警告不要」と同じ判定を、このtx内で
+              // 再読込した最新状態(freshDoc)を基準に行う。
+              alreadyFullyConfirmed: freshDoc.customerConfirmed === true && freshDoc.officeConfirmed === true,
+            }
           })
-          return { docId, status: 'ok' as const, decisions }
+          return { docId, status: 'ok' as const, decisions, alreadyFullyConfirmed }
         } catch (err) {
           console.error(`Bulk verify failed for document ${docId}:`, err)
-          return { docId, status: 'error' as const, decisions: null }
+          return { docId, status: 'error' as const, decisions: null, alreadyFullyConfirmed: false }
         }
       })
     } catch (error) {
@@ -806,6 +821,11 @@ export function DocumentsPage() {
     // 一部書込み失敗があった場合でも全体成功したかのように見えていた)。
     const succeeded = outcomes.filter((o) => o.status === 'ok')
     const failed = outcomes.filter((o) => o.status === 'error')
+    // codex review 3巡目指摘: identityLookupFailedが真でも、成功した書類が全て既に
+    // 両方確定済み(alreadyFullyConfirmed)なら実際には確定できたはずのものは何もなく、
+    // 警告は不要(単体トグルの「既に両方確定済みなら警告不要」と同じ判定に揃える)。
+    const identityLookupWarningNeeded =
+      identityLookupFailed && succeeded.some((o) => !o.alreadyFullyConfirmed)
 
     try {
       const confirmedAtApprox = Timestamp.now()
@@ -846,7 +866,7 @@ export function DocumentsPage() {
         succeededCount: succeeded.length,
         failedCount: failed.length,
         confirmedCount,
-        identityLookupFailed,
+        identityLookupFailed: identityLookupWarningNeeded,
       })
 
       if (failed.length > 0) {
@@ -871,7 +891,7 @@ export function DocumentsPage() {
         totalCount: ids.length,
         succeededCount: succeeded.length,
         failedCount: failed.length,
-        identityLookupFailed,
+        identityLookupFailed: identityLookupWarningNeeded,
       })
       toast[toastOutcome.type](toastOutcome.message)
     } finally {
