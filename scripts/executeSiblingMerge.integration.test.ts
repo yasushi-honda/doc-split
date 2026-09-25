@@ -311,11 +311,12 @@ test('ケース5: dry-run → Drive書込みゼロ・claim不変・onProgress未
   assert.equal(onProgressCalls, 0);
 });
 
-test('ケース6: 権限エラー(1ファイルのupdateが非適用エラー) → failedFileMoves記録、partial-file-move-failure', async () => {
+test('ケース6: 権限エラー(2ファイル中1件のupdateが非適用エラー) → 成功/失敗が正しく振り分けられ、partial-file-move-failure', async () => {
   const claimFns = await loadClaimFns();
   const file1 = { id: 'file-1', name: 'a.pdf', mimeType: 'application/pdf', parents: [DUPLICATE_ID] };
-  const { drive } = makeFakeSiblingDrive([canonicalFile(), duplicateFile(), file1], {
-    updateFailures: new Map([['file-1', { mode: 'not-applied-error', message: 'permission denied' }]]),
+  const file2 = { id: 'file-2', name: 'b.pdf', mimeType: 'application/pdf', parents: [DUPLICATE_ID] };
+  const { drive } = makeFakeSiblingDrive([canonicalFile(), duplicateFile(), file1, file2], {
+    updateFailures: new Map([['file-2', { mode: 'not-applied-error', message: 'permission denied' }]]),
   });
   const plan = buildPlan([buildGroup()]);
   const approval = buildApproval(plan.planId, [buildGroup().groupId]);
@@ -329,9 +330,12 @@ test('ケース6: 権限エラー(1ファイルのupdateが非適用エラー) �
     { execute: true }
   );
 
+  // pr-test-analyzer指摘対応: 1件のみだと「失敗idだけ記録」と「何も記録されない」を
+  // 区別できないため、成功1件+失敗1件で正しく振り分けられることを確認する。
   assert.equal(outcomes[0].status, 'partial-file-move-failure');
+  assert.deepEqual(manifest.entries[0].movedFileIds, ['file-1']);
   assert.equal(manifest.entries[0].failedFileMoves.length, 1);
-  assert.equal(manifest.entries[0].movedFileIds.length, 0);
+  assert.equal(manifest.entries[0].failedFileMoves[0].fileId, 'file-2');
   assert.equal(manifest.entries[0].duplicateTrashedAt, null);
 });
 
@@ -703,4 +707,98 @@ test('ケース17: 成功系でのcallLog順序確認(移動→claim状態チェ
   assert.ok(readClaimIdx < lastListIdx, 'claim状態チェックはtrash直前再列挙より前');
   assert.ok(lastListIdx < invalidateIdx, 'trash直前再列挙はclaim無効化より前');
   assert.ok(invalidateIdx < lastUpdateIdx, 'claim無効化はtrash(最後のupdate)より前');
+});
+
+// pr-review-toolkit:pr-test-analyzer指摘対応(Important、rating6): fakeSiblingDrive.tsに
+// plan-crossreview High#2対応として実装した'applied-success-but-noop'が、どのテストからも
+// 一度も注入されていなかった。trashステップ(最後のfiles.update)でこのモードを注入し、
+// 現状の挙動(既知の限界)を明示的にテストで固定する。
+test('ケース18: trashステップでのno-op(200成功だが無反映) → manifestはduplicateTrashedAtを立てるが実際はtrashedのまま変化しない(既知の限界、次回再実行で自己修復)', async () => {
+  const claimFns = await loadClaimFns();
+  const dup = duplicateFile();
+  const { drive } = makeFakeSiblingDrive([canonicalFile(), dup], {
+    updateFailures: new Map([[DUPLICATE_ID, { mode: 'applied-success-but-noop' }]]),
+  });
+  const plan = buildPlan([buildGroup()]);
+  const approval = buildApproval(plan.planId, [buildGroup().groupId]);
+
+  const { manifest, outcomes } = await executeSiblingMerge(
+    { drive, folderMimeType: FOLDER_MIME_TYPE, claimKey: CLAIM_KEY },
+    db,
+    claimFns,
+    plan,
+    approval,
+    { execute: true }
+  );
+
+  // 現状の実装(抽出元main()から不変)はtrash updateの応答内容を再検証しないため、
+  // Drive側が無言no-opでも例外を投げなければ成功扱いになる。dupは実際にはtrashed
+  // されないため、次回同一planを再実行すればfetchLiveSnapshotがtrashed=falseを
+  // 観測し再度処理対象になる(=データ破壊ではなく、1回分のmanifestが実態と
+  // 食い違うだけ、との評価)。この挙動を変更することは本Issueのスコープ外
+  // (挙動不変の原則)。
+  assert.equal(outcomes[0].status, 'merged');
+  assert.ok(manifest.entries[0].duplicateTrashedAt);
+  assert.equal(dup.trashed ?? false, false);
+});
+
+// pr-review-toolkit:pr-test-analyzer指摘対応(Important、rating6): ケース7a/7bはファイル
+// 移動ステップでのapplied-errorのみ検証しており、trashステップ(最後のfiles.update)での
+// applied-error(実際には適用されるが例外を投げる)は未検証だった。
+test('ケース19: trashステップでapplied-error(実際はtrashedへ変化するが例外) → 例外が伝播しそのgroupは当該manifestに未記録、再実行はskipped-already-merged', async () => {
+  const claimFns = await loadClaimFns();
+  const dup = duplicateFile();
+  const { drive } = makeFakeSiblingDrive([canonicalFile(), dup], {
+    updateFailures: new Map([[DUPLICATE_ID, { mode: 'applied-error', message: 'ETIMEDOUT (simulated, trash step)' }]]),
+  });
+  const plan = buildPlan([buildGroup()]);
+  const approval = buildApproval(plan.planId, [buildGroup().groupId]);
+
+  // 抽出元main()と同様、trashのfiles.update()にtry/catchが無いため例外はそのまま伝播する
+  // (この挙動は意図的: 途中で処理を止めることを意味し、本PRで変更していない)。
+  await assert.rejects(
+    executeSiblingMerge(
+      { drive, folderMimeType: FOLDER_MIME_TYPE, claimKey: CLAIM_KEY },
+      db,
+      claimFns,
+      plan,
+      approval,
+      { execute: true }
+    )
+  );
+  // 実際にはDrive側は既にtrashed=trueへ変化している(applied-error)。
+  assert.equal(dup.trashed, true);
+
+  // 同一planを再実行すると、duplicateは既にtrashed済みのため冪等性判定でskipされる。
+  const second = await executeSiblingMerge(
+    { drive, folderMimeType: FOLDER_MIME_TYPE, claimKey: CLAIM_KEY },
+    db,
+    claimFns,
+    plan,
+    approval,
+    { execute: true }
+  );
+  assert.equal(second.outcomes[0].status, 'skipped-already-merged');
+});
+
+// pr-review-toolkit:pr-test-analyzer指摘対応(Minor、rating5): SiblingGroupStatusのうち
+// 'skipped-missing-snapshot'だけがどのテストからも一度もヒットしていなかった。
+test('ケース20: plan内にcanonical/duplicateのsnapshotが見つからない(改ざん/不整合なplan) → skipped-missing-snapshot', async () => {
+  const claimFns = await loadClaimFns();
+  const { drive } = makeFakeSiblingDrive([canonicalFile(), duplicateFile()]);
+  // canonicalSnapshotを欠落させた不整合group(canonicalFolderIdが指すsnapshotがfoldersに無い)。
+  const brokenGroup = buildGroup({ folders: [duplicateSnapshot()] });
+  const plan = buildPlan([brokenGroup]);
+  const approval = buildApproval(plan.planId, [brokenGroup.groupId]);
+
+  const { outcomes } = await executeSiblingMerge(
+    { drive, folderMimeType: FOLDER_MIME_TYPE, claimKey: CLAIM_KEY },
+    db,
+    claimFns,
+    plan,
+    approval,
+    { execute: true }
+  );
+
+  assert.equal(outcomes[0].status, 'skipped-missing-snapshot');
 });
