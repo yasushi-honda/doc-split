@@ -73,27 +73,40 @@ export function tallyDriveExportStatus(statuses: readonly (string | undefined)[]
 }
 
 /**
+ * 顧客側の確定結果(判別可能ユニオン、Issue #1043)。`confirmedCustomer:false`かつ
+ * `customerConfirmedBefore`に値がある、といった不正な組み合わせを型として表現不能にする
+ * (旧フラット構造では規約でしか守れず、コンパイラの保証がなかった、codex `type-design-analyzer`指摘)。
+ */
+export type ManifestCustomerOutcome =
+  | { confirmedCustomer: false }
+  | {
+      confirmedCustomer: true;
+      /** backfill実行前のcustomerConfirmedの値(field不在ならundefined)。 */
+      customerConfirmedBefore: boolean | undefined;
+      /**
+       * 顧客確定と同時に`needsManualCustomerSelection:true`→`false`のレガシーフラグ書き戻しが
+       * 発生したか(shared/confirmOnVerify.tsのbuildConfirmOnVerifyUpdate参照、実行前は常にtrue
+       * だった場合のみ発生するため、trueを記録すれば「実行前の値はtrueだった」ことも自明)。
+       * これを記録しないと、rollbackでcustomerConfirmedだけ戻してもneedsManualCustomerSelection:false
+       * が残存し、レガシー文書が「確定済み」のまま復元されてしまう(codexレビュー指摘)。
+       */
+      resetNeedsManualCustomerSelection: boolean;
+    };
+
+/** 事業所側の確定結果(判別可能ユニオン、Issue #1043)。設計意図はManifestCustomerOutcomeと同じ。 */
+export type ManifestOfficeOutcome =
+  | { confirmedOffice: false }
+  | { confirmedOffice: true; officeConfirmedBefore: boolean | undefined };
+
+/**
  * backfillが実際に確定した1文書分のmanifestエントリ。ロールバック時に「backfill実行前の
  * 値」へ正確に戻すため、書込み前の値(field不在ならundefined)を保持する
  * (codexレビュー指摘: 部分失敗・再実行・ロールバック手段が未定義だった対応)。
  */
 export interface ConfirmOnVerifyManifestEntry {
   docId: string;
-  /** このentryが顧客側を確定させたか。falseなら顧客側は対象外(元々touchしていない)。 */
-  confirmedCustomer: boolean;
-  /** confirmedCustomer:trueの場合のみ有効。backfill実行前のcustomerConfirmedの値。 */
-  customerConfirmedBefore?: boolean;
-  /**
-   * 顧客確定と同時に`needsManualCustomerSelection:true`→`false`のレガシーフラグ書き戻しが
-   * 発生したか(shared/confirmOnVerify.tsのbuildConfirmOnVerifyUpdate参照、実行前は常にtrue
-   * だった場合のみ発生するため、trueを記録すれば「実行前の値はtrueだった」ことも自明)。
-   * これを記録しないと、rollbackでcustomerConfirmedだけ戻してもneedsManualCustomerSelection:false
-   * が残存し、レガシー文書が「確定済み」のまま復元されてしまう(codexレビュー指摘)。
-   */
-  resetNeedsManualCustomerSelection: boolean;
-  confirmedOffice: boolean;
-  /** confirmedOffice:trueの場合のみ有効。backfill実行前のofficeConfirmedの値。 */
-  officeConfirmedBefore?: boolean;
+  customer: ManifestCustomerOutcome;
+  office: ManifestOfficeOutcome;
   /**
    * backfillがこの文書へ書込んだ直後の`updateTime`(`WriteResult.writeTime`のseconds/nanoseconds、
    * `Timestamp.toMillis()`ではなくフル精度で保持する)。rollback時、ライブの`updateTime`と
@@ -177,16 +190,74 @@ export function computeRollbackInstructions(entry: ConfirmOnVerifyManifestEntry)
     needsManualCustomerSelection?: RollbackFieldInstruction;
     office?: RollbackFieldInstruction;
   } = {};
-  if (entry.confirmedCustomer) {
+  if (entry.customer.confirmedCustomer) {
     result.customer =
-      entry.customerConfirmedBefore === undefined ? { action: 'delete' } : { action: 'set', value: entry.customerConfirmedBefore };
-    if (entry.resetNeedsManualCustomerSelection) {
+      entry.customer.customerConfirmedBefore === undefined
+        ? { action: 'delete' }
+        : { action: 'set', value: entry.customer.customerConfirmedBefore };
+    if (entry.customer.resetNeedsManualCustomerSelection) {
       result.needsManualCustomerSelection = { action: 'set', value: true };
     }
   }
-  if (entry.confirmedOffice) {
+  if (entry.office.confirmedOffice) {
     result.office =
-      entry.officeConfirmedBefore === undefined ? { action: 'delete' } : { action: 'set', value: entry.officeConfirmedBefore };
+      entry.office.officeConfirmedBefore === undefined
+        ? { action: 'delete' }
+        : { action: 'set', value: entry.office.officeConfirmedBefore };
   }
   return result;
+}
+
+function isPlainObject(x: unknown): x is Record<string, unknown> {
+  return typeof x === 'object' && x !== null && !Array.isArray(x);
+}
+
+/** `ManifestCustomerOutcome`のランタイム検証(Issue #1043、`--rollback`読込み時の型ガード)。 */
+export function isValidManifestCustomerOutcome(x: unknown): x is ManifestCustomerOutcome {
+  if (!isPlainObject(x)) return false;
+  if (x.confirmedCustomer === false) return true;
+  if (x.confirmedCustomer === true) {
+    return (
+      (x.customerConfirmedBefore === undefined || typeof x.customerConfirmedBefore === 'boolean') &&
+      typeof x.resetNeedsManualCustomerSelection === 'boolean'
+    );
+  }
+  return false;
+}
+
+/** `ManifestOfficeOutcome`のランタイム検証(Issue #1043、`--rollback`読込み時の型ガード)。 */
+export function isValidManifestOfficeOutcome(x: unknown): x is ManifestOfficeOutcome {
+  if (!isPlainObject(x)) return false;
+  if (x.confirmedOffice === false) return true;
+  if (x.confirmedOffice === true) {
+    return x.officeConfirmedBefore === undefined || typeof x.officeConfirmedBefore === 'boolean';
+  }
+  return false;
+}
+
+/**
+ * manifest 1件分のランタイム検証(Issue #1043)。`--rollback`実行時、`JSON.parse`+型アサーション
+ * のみで信頼していた読込み経路(手編集・別バージョン・部分破損JSONを構文エラーなくすり抜けさせて
+ * いた、codex `type-design-analyzer`指摘)に、生成側と同じ構造的整合性チェックを課す。
+ */
+export function isValidManifestEntry(x: unknown): x is ConfirmOnVerifyManifestEntry {
+  if (!isPlainObject(x)) return false;
+  if (typeof x.docId !== 'string' || x.docId.length === 0) return false;
+  if (!isValidManifestCustomerOutcome(x.customer)) return false;
+  if (!isValidManifestOfficeOutcome(x.office)) return false;
+  const t = x.backfillUpdateTime;
+  if (!isPlainObject(t) || typeof t.seconds !== 'number' || typeof t.nanoseconds !== 'number') return false;
+  return true;
+}
+
+/**
+ * manifest全体のランタイム検証(Issue #1043)。1件でも不正なentryがあれば全体をfalseとし、
+ * `--rollback`側はFirestoreへ一切書込まずexit(1)する(fail-closed、部分的に壊れたJSONを
+ * 「壊れていない部分だけ実行」して誤ったロールバックが混入する事故を防ぐ)。
+ */
+export function isValidManifest(x: unknown): x is ConfirmOnVerifyBackfillManifest {
+  if (!isPlainObject(x)) return false;
+  if (typeof x.runId !== 'string' || typeof x.projectId !== 'string' || typeof x.timestamp !== 'string') return false;
+  if (!Array.isArray(x.entries)) return false;
+  return x.entries.every(isValidManifestEntry);
 }

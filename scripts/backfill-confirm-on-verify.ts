@@ -49,6 +49,7 @@ import {
   buildConfirmOnVerifyManifest,
   isRollbackEligibleByUpdateTime,
   computeRollbackInstructions,
+  isValidManifest,
   type ConfirmOnVerifyManifestEntry,
   type ConfirmOnVerifyBackfillManifest,
 } from './lib/confirmOnVerifyBackfillHelpers';
@@ -180,16 +181,22 @@ async function applyConfirmOnVerify(
       status: 'ok',
       entry: {
         docId: candidate.id,
-        confirmedCustomer: candidate.decisions.customer.action === 'confirm',
-        customerConfirmedBefore:
-          candidate.decisions.customer.action === 'confirm' ? (candidate.data.customerConfirmed as boolean | undefined) : undefined,
-        // codexレビュー指摘: buildConfirmOnVerifyUpdate()は顧客確定と同時にneedsManualCustomerSelection
-        // (true→false)も書き戻すことがある。updateに実際に含まれているかで判定する(実行前は
-        // 常にtrueだった場合のみ含まれるため、rollback時はtrueへ戻せば足りる)。
-        resetNeedsManualCustomerSelection: 'needsManualCustomerSelection' in update,
-        confirmedOffice: candidate.decisions.office.action === 'confirm',
-        officeConfirmedBefore:
-          candidate.decisions.office.action === 'confirm' ? (candidate.data.officeConfirmed as boolean | undefined) : undefined,
+        customer:
+          candidate.decisions.customer.action === 'confirm'
+            ? {
+                confirmedCustomer: true,
+                customerConfirmedBefore: candidate.data.customerConfirmed as boolean | undefined,
+                // codexレビュー指摘: buildConfirmOnVerifyUpdate()は顧客確定と同時に
+                // needsManualCustomerSelection(true→false)も書き戻すことがある。updateに
+                // 実際に含まれているかで判定する(実行前は常にtrueだった場合のみ含まれるため、
+                // rollback時はtrueへ戻せば足りる)。
+                resetNeedsManualCustomerSelection: 'needsManualCustomerSelection' in update,
+              }
+            : { confirmedCustomer: false },
+        office:
+          candidate.decisions.office.action === 'confirm'
+            ? { confirmedOffice: true, officeConfirmedBefore: candidate.data.officeConfirmed as boolean | undefined }
+            : { confirmedOffice: false },
         // codexレビュー指摘(4回目・P2): rollback可否をconfirmedBy等のactorベースで判定すると、
         // OCR再処理による自動確定(confirmedByはnullのまま新しい値で上書き)を検知できない。
         // backfillが実際に書き込んだ直後のupdateTimeを記録し、rollback時にライブの
@@ -317,7 +324,19 @@ async function runBackfill(): Promise<void> {
  * 値(フィールド不在ならdelete、falseならfalseへset)へ戻す。
  */
 async function runRollback(manifestPath: string): Promise<void> {
-  const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8')) as ConfirmOnVerifyBackfillManifest;
+  const parsed: unknown = JSON.parse(readFileSync(manifestPath, 'utf-8'));
+  // codexレビュー指摘(type-design-analyzer、Issue #1043): 従来はJSON.parse()の戻り値を
+  // 型アサーションのみで信頼しており、手編集・別バージョン・部分破損したmanifestが構文
+  // エラーなくすり抜け、computeRollbackInstructions()が誤ったロールバックを実行しうる
+  // 状態だった。生成側と同じ構造的整合性チェックをランタイムで課し、1件でも不正なentryが
+  // あれば書込みを一切行わずここで中断する(fail-closed)。
+  if (!isValidManifest(parsed)) {
+    console.error(
+      `ERROR: manifestの構造が不正です(${manifestPath})。手編集・別バージョン・部分破損したJSONではないか確認してください。`
+    );
+    process.exit(1);
+  }
+  const manifest: ConfirmOnVerifyBackfillManifest = parsed;
   console.log(`プロジェクト: ${projectId}`);
   console.log(`モード: ${dryRun ? 'DRY RUN(変更なし)' : '実行'}`);
   console.log(`rollback対象manifest: ${manifestPath} (runId=${manifest.runId}, entries=${manifest.entries.length}件)`);
