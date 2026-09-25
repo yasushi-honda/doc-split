@@ -208,6 +208,12 @@ on:
           - backfill-drive-export --limit --expected-count
           - backfill-drive-export --dry-run --expected-count
           - backfill-drive-export --expected-count
+          - backfill-confirm-on-verify --dry-run
+          - backfill-confirm-on-verify
+          - backfill-confirm-on-verify --dry-run --limit --expected-count
+          - backfill-confirm-on-verify --limit --expected-count
+          - backfill-confirm-on-verify --dry-run --expected-count
+          - backfill-confirm-on-verify --expected-count
           - classify-drive-export-drift
           - classify-drive-export-drift --care-manager
           - classify-drive-export-drift --care-manager --limit
@@ -432,6 +438,26 @@ jobs:
           # (breezy-tickling-sifakis.md runbook)。値省略は誤操作(無制限全件処理)に
           # つながるため、既存の--doc-id置換と同一パターンでinputからの明示値を必須化する。
           if [ "$SCRIPT_NAME" = "backfill-drive-export" ]; then
+            if echo "$SCRIPT_ARGS" | grep -q -- '--limit'; then
+              if [ -z "$BACKFILL_LIMIT" ] || ! echo "$BACKFILL_LIMIT" | grep -qE '^[0-9]+$'; then
+                echo "ERROR: backfill_limit must be a non-negative integer when script contains --limit" >&2
+                exit 1
+              fi
+              SCRIPT_ARGS=$(echo "$SCRIPT_ARGS" | sed "s/--limit/--limit $BACKFILL_LIMIT/")
+            fi
+            if echo "$SCRIPT_ARGS" | grep -q -- '--expected-count'; then
+              if [ -z "$EXPECTED_COUNT" ] || ! echo "$EXPECTED_COUNT" | grep -qE '^[0-9]+$'; then
+                echo "ERROR: expected_count must be a non-negative integer when script contains --expected-count" >&2
+                exit 1
+              fi
+              SCRIPT_ARGS=$(echo "$SCRIPT_ARGS" | sed "s/--expected-count/--expected-count $EXPECTED_COUNT/")
+            fi
+          fi
+
+          # backfill-confirm-on-verify --limit/--expected-count(Issue #1034/#1043、
+          # backfill-drive-exportと同一のcanary安全策)。値省略は誤操作(無制限全件処理)に
+          # つながるため、backfill-drive-exportと同一パターンで明示値を必須化する。
+          if [ "$SCRIPT_NAME" = "backfill-confirm-on-verify" ]; then
             if echo "$SCRIPT_ARGS" | grep -q -- '--limit'; then
               if [ -z "$BACKFILL_LIMIT" ] || ! echo "$BACKFILL_LIMIT" | grep -qE '^[0-9]+$'; then
                 echo "ERROR: backfill_limit must be a non-negative integer when script contains --limit" >&2
@@ -1549,6 +1575,7 @@ jobs:
                [ "$SCRIPT_NAME" = "measure-summary-cost" ] || \
                [ "$SCRIPT_NAME" = "create-pending-doc" ] || \
                [ "$SCRIPT_NAME" = "backfill-drive-export" ] || \
+               [ "$SCRIPT_NAME" = "backfill-confirm-on-verify" ] || \
                [ "$SCRIPT_NAME" = "drive-export-status-report" ] || \
                [ "$SCRIPT_NAME" = "audit-fax-duplication-inventory" ] || \
                [ "$SCRIPT_NAME" = "merge-notation-duplicate-masters" ] || \
@@ -1596,6 +1623,11 @@ jobs:
             # audit-fax-duplication-inventory (PR-D、docs/adr/0024-multi-customer-detection.md
             # Stage3) は read-only。scripts/lib/faxDuplicationInventory.tsに依存するためts-node
             # 経由。--full-scanはSCRIPT_ARGS経由でそのまま渡る。STORAGE_BUCKET不使用。
+            # backfill-confirm-on-verify (Issue #1034/#1043) は firebase-adminのみ依存
+            # (functions/src非依存、STORAGE_BUCKET不使用)。安全設計・EXTRA_ARGSの
+            # --manifest-out常時付与方針ともbackfill-drive-exportを完全踏襲する。
+            # --rollbackはbackfill-drive-export同様このワークフローには未配線(前例踏襲、
+            # 必要時はartifactのmanifestをローカルで扱う想定)。
             EXTRA_ARGS=""
             if [ "$SCRIPT_NAME" = "classify-collision-docs" ]; then
               # ログマスキングで `{` が `***` に置換されるため、plan JSON を
@@ -1619,6 +1651,9 @@ jobs:
             elif [ "$SCRIPT_NAME" = "backfill-drive-export" ]; then
               # rollback時の対象docId一覧(--rollback <manifest>)として必須のため常時出力。
               EXTRA_ARGS="--manifest-out ${GITHUB_WORKSPACE}/scripts/backfill-drive-export-manifest.json"
+            elif [ "$SCRIPT_NAME" = "backfill-confirm-on-verify" ]; then
+              # rollback時の対象docId一覧(--rollback <manifest>)として必須のため常時出力。
+              EXTRA_ARGS="--manifest-out ${GITHUB_WORKSPACE}/scripts/backfill-confirm-on-verify-manifest.json"
             elif [ "$SCRIPT_NAME" = "audit-fax-duplication-inventory" ]; then
               # 棚卸し結果(グループ一覧込み)をartifact経由で取得(log secret maskingで`{`が
               # 伏字になる既知問題の回避、drive-export-status-reportと同種の対策)。常時出力。
@@ -2106,6 +2141,17 @@ jobs:
         with:
           name: backfill-drive-export-manifest-${{ github.event.inputs.environment }}-${{ github.run_id }}
           path: scripts/backfill-drive-export-manifest.json
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Upload backfill-confirm-on-verify manifest artifact
+        # Issue #1034/#1043: --rollbackの対象docId一覧として必須の復旧材料。dry-runでは
+        # manifestが出力されないため if-no-files-found: warn(backfill-drive-exportと同型)。
+        if: ${{ startsWith(github.event.inputs.script, 'backfill-confirm-on-verify') && always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: backfill-confirm-on-verify-manifest-${{ github.event.inputs.environment }}-${{ github.run_id }}
+          path: scripts/backfill-confirm-on-verify-manifest.json
           if-no-files-found: warn
           retention-days: 90
 
