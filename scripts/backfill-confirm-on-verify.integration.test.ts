@@ -14,7 +14,7 @@
 import assert from 'node:assert/strict';
 import { test, before, after, beforeEach } from 'node:test';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import * as admin from 'firebase-admin';
@@ -72,24 +72,31 @@ function unrelatedFields<T extends Record<string, unknown> = Record<string, neve
 
 interface RunResult {
   stdout: string;
+  stderr: string;
   status: number;
 }
 
+/**
+ * fable-review指摘: stderrを捨てていると、非ゼロ終了が「意図したエラーメッセージによる
+ * 中断」なのか「無関係なクラッシュ」なのかをテストが区別できない。stderrも保持し、
+ * 呼び出し側でエラーメッセージの内容を assert できるようにする。
+ */
 function runScript(args: string[], opts: { expectNonZeroExit?: boolean } = {}): RunResult {
   try {
     const stdout = execFileSync('npx', ['ts-node', SCRIPT_PATH, ...args], {
       cwd: __dirname,
       env: { ...process.env, FIREBASE_PROJECT_ID: PROJECT_ID },
       encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
     if (opts.expectNonZeroExit) {
       throw new Error(`終了コード0(成功)だったが非ゼロを期待していた。stdout:\n${stdout}`);
     }
-    return { stdout, status: 0 };
+    return { stdout, stderr: '', status: 0 };
   } catch (err) {
     if (opts.expectNonZeroExit) {
-      const e = err as { status?: number; stdout?: Buffer | string };
-      return { stdout: e.stdout?.toString() ?? '', status: e.status ?? 1 };
+      const e = err as { status?: number; stdout?: Buffer | string; stderr?: Buffer | string };
+      return { stdout: e.stdout?.toString() ?? '', stderr: e.stderr?.toString() ?? '', status: e.status ?? 1 };
     }
     throw err;
   }
@@ -110,6 +117,11 @@ test('backfill本実行: customerConfirmed/officeConfirmedのみ変化し、他�
   const after = await getDoc('doc-partial-update-check');
   assert.equal(after.customerConfirmed, true);
   assert.equal(after.officeConfirmed, true);
+  // fable-review指摘: 元ドキュメントにneedsManualCustomerSelectionが無いケースでは
+  // destructureで除外するだけだと「誤って書き込まれていないこと」を検出できない。
+  // このケースでは書き込まれないのが正しい契約(shared/confirmOnVerify.tsのbuildConfirmOnVerifyUpdate
+  // 参照、元がtrueの場合のみ書き戻す)ため、明示的にundefinedのままであることを確認する。
+  assert.equal(after.needsManualCustomerSelection, undefined, '元々フィールド不在の場合は書き込まれないこと');
 
   const { customerConfirmed, officeConfirmed, needsManualCustomerSelection, ...unrelatedAfter } = after;
   const unrelatedBefore = { ...original };
@@ -118,6 +130,25 @@ test('backfill本実行: customerConfirmed/officeConfirmedのみ変化し、他�
     unrelatedBefore,
     'customerConfirmed/officeConfirmed/needsManualCustomerSelection以外のフィールドは元の値のまま変化しないこと'
   );
+});
+
+test('backfill→rollback往復: needsManualCustomerSelection:trueの文書はbackfillでfalseへ書き戻され、rollbackで正しくtrueへ復元される(resetNeedsManualCustomerSelection経路、fable-review指摘)', async () => {
+  const original = unrelatedFields({ needsManualCustomerSelection: true });
+  await db.doc('documents/doc-needs-manual-selection-roundtrip').set(original);
+
+  const manifestPath = path.join(tmpDir, 'needs-manual-selection-manifest.json');
+  runScript(['--expected-count', '1', '--manifest-out', manifestPath]);
+
+  const afterBackfill = await getDoc('doc-needs-manual-selection-roundtrip');
+  assert.equal(afterBackfill.customerConfirmed, true);
+  assert.equal(afterBackfill.needsManualCustomerSelection, false, 'backfillが顧客確定と同時にfalseへ書き戻すこと');
+
+  runScript(['--rollback', manifestPath]);
+
+  const afterRollback = await getDoc('doc-needs-manual-selection-roundtrip');
+  assert.equal(afterRollback.customerConfirmed, undefined);
+  assert.equal(afterRollback.needsManualCustomerSelection, true, 'rollbackでneedsManualCustomerSelectionが元のtrueへ復元されること');
+  assert.deepEqual(afterRollback, original, 'rollback後は完全に元のドキュメントへ戻ること');
 });
 
 test('rollback本実行: backfillで確定した値が元(フィールド不在)へ正しく戻り、他フィールドは一切変化しない', async () => {
@@ -139,35 +170,38 @@ test('rollback本実行: backfillで確定した値が元(フィールド不在)
   assert.deepEqual(afterRollback, original, 'rollback後は完全に元のドキュメントへ戻ること');
 });
 
-test('--rollback: 構造不正なmanifestは書込みを一切行わずexit(1)する(fail-closed、pr-test-analyzer指摘の最重要ギャップ)', async () => {
+test('--rollback: 構造不正なmanifestは書込みを一切行わずexit(1)する(fail-closed、pr-test-analyzer/fable-review指摘の最重要ギャップ)', async () => {
+  // fable-review指摘: backfillUpdateTimeを適当な固定値にすると、isValidManifestゲートが
+  // 無くてもisRollbackEligibleByUpdateTime側のupdateTime不一致だけでスキップされてしまい、
+  // 「ゲート自体が効いていること」を証明できない(別の安全機構と紛れる)。ゲートの効果を
+  // 正しく単離するため、実際にbackfillを実行して本物のupdateTime一致manifestを取得し、
+  // その`customer.confirmedCustomer`だけを型契約違反の値へ手編集する
+  // (updateTimeは一致=isRollbackEligibleByUpdateTimeはtrueを返す状況で、なお書込みが
+  // 発生しないことを示す)。
   const original = unrelatedFields();
   await db.doc('documents/doc-fail-closed-check').set(original);
 
-  const manifestPath = path.join(tmpDir, 'corrupted-manifest.json');
-  // 手編集を模した構造不正: customer.confirmedCustomerがbooleanでない(判別子として無効)。
-  writeFileSync(
-    manifestPath,
-    JSON.stringify({
-      runId: 'corrupted-run',
-      projectId: PROJECT_ID,
-      timestamp: new Date().toISOString(),
-      entries: [
-        {
-          docId: 'doc-fail-closed-check',
-          customer: { confirmedCustomer: 'yes' },
-          office: { confirmedOffice: false },
-          backfillUpdateTime: { seconds: 1, nanoseconds: 0 },
-        },
-      ],
-      fieldTypeAnomalies: [],
-    })
-  );
+  const validManifestPath = path.join(tmpDir, 'valid-manifest-for-corruption.json');
+  runScript(['--expected-count', '1', '--manifest-out', validManifestPath]);
 
-  const result = runScript(['--rollback', manifestPath], { expectNonZeroExit: true });
+  const afterBackfill = await getDoc('doc-fail-closed-check');
+  assert.equal(afterBackfill.customerConfirmed, true, '前提: backfillが実際に確定させていること');
+
+  const validManifest = JSON.parse(readFileSync(validManifestPath, 'utf-8'));
+  validManifest.entries[0].customer = { confirmedCustomer: 'yes' }; // 判別子として無効な型混入
+  const corruptedManifestPath = path.join(tmpDir, 'corrupted-manifest.json');
+  writeFileSync(corruptedManifestPath, JSON.stringify(validManifest));
+
+  const result = runScript(['--rollback', corruptedManifestPath], { expectNonZeroExit: true });
   assert.notEqual(result.status, 0, '構造不正なmanifestはexit(1)すること');
+  assert.match(result.stderr, /manifestの構造が不正/, 'エラーメッセージが期待通りであること(無関係なクラッシュでないことの確認)');
 
   const after = await getDoc('doc-fail-closed-check');
-  assert.deepEqual(after, original, '構造不正なmanifestを渡した場合、対象ドキュメントは一切変化しないこと(ゼロ書込みの実証)');
+  assert.deepEqual(
+    after,
+    afterBackfill,
+    'updateTimeが一致し本来ならrollback対象になりうる状況でも、構造不正なmanifestでは一切書込みが発生しないこと(ゲート自体の効果を単離した実証)'
+  );
 });
 
 test('想定外の型(customerConfirmedがboolean以外)を持つ文書はbackfill対象から除外され、一切書込まれない', async () => {
