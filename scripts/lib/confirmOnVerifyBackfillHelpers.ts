@@ -138,11 +138,24 @@ export interface ConfirmOnVerifyManifestEntry {
   backfillUpdateTime: { seconds: number; nanoseconds: number };
 }
 
+/**
+ * backfill対象から除外した「confirmed系フィールドの型契約違反」文書(pr-review-toolkit
+ * silent-failure-hunter指摘)。console出力のみだと、manifestを一次情報として後から監査する
+ * 際にこの除外が一切見えなくなるため、manifestにも残す。
+ */
+export interface ConfirmOnVerifyFieldTypeAnomaly {
+  docId: string;
+  fileName: string;
+  /** 契約違反だったフィールド。同一文書でcustomer/office両方が違反していれば両方を記録する。 */
+  fields: readonly ('customerConfirmed' | 'officeConfirmed')[];
+}
+
 export interface ConfirmOnVerifyBackfillManifest {
   runId: string;
   projectId: string;
   timestamp: string;
   entries: ConfirmOnVerifyManifestEntry[];
+  fieldTypeAnomalies: ConfirmOnVerifyFieldTypeAnomaly[];
 }
 
 export function buildConfirmOnVerifyManifest(params: {
@@ -150,12 +163,14 @@ export function buildConfirmOnVerifyManifest(params: {
   projectId: string;
   timestampIso: string;
   entries: readonly ConfirmOnVerifyManifestEntry[];
+  fieldTypeAnomalies?: readonly ConfirmOnVerifyFieldTypeAnomaly[];
 }): ConfirmOnVerifyBackfillManifest {
   return {
     runId: params.runId,
     projectId: params.projectId,
     timestamp: params.timestampIso,
     entries: [...params.entries],
+    fieldTypeAnomalies: params.fieldTypeAnomalies ? [...params.fieldTypeAnomalies] : [],
   };
 }
 
@@ -264,6 +279,15 @@ export function isValidManifestEntry(x: unknown): x is ConfirmOnVerifyManifestEn
   return true;
 }
 
+/** `ConfirmOnVerifyFieldTypeAnomaly`のランタイム検証(Issue #1043関連、silent-failure-hunter指摘)。 */
+export function isValidFieldTypeAnomaly(x: unknown): x is ConfirmOnVerifyFieldTypeAnomaly {
+  if (!isPlainObject(x)) return false;
+  if (typeof x.docId !== 'string' || x.docId.length === 0 || x.docId.includes('/')) return false;
+  if (typeof x.fileName !== 'string') return false;
+  if (!Array.isArray(x.fields) || x.fields.length === 0) return false;
+  return x.fields.every((f) => f === 'customerConfirmed' || f === 'officeConfirmed');
+}
+
 /**
  * manifest全体のランタイム検証(Issue #1043)。1件でも不正なentryがあれば全体をfalseとし、
  * `--rollback`側はFirestoreへ一切書込まずexit(1)する(fail-closed、部分的に壊れたJSONを
@@ -272,6 +296,7 @@ export function isValidManifestEntry(x: unknown): x is ConfirmOnVerifyManifestEn
 export function isValidManifest(x: unknown): x is ConfirmOnVerifyBackfillManifest {
   if (!isPlainObject(x)) return false;
   if (typeof x.runId !== 'string' || typeof x.projectId !== 'string' || typeof x.timestamp !== 'string') return false;
-  if (!Array.isArray(x.entries)) return false;
-  return x.entries.every(isValidManifestEntry);
+  if (!Array.isArray(x.entries) || !x.entries.every(isValidManifestEntry)) return false;
+  if (!Array.isArray(x.fieldTypeAnomalies) || !x.fieldTypeAnomalies.every(isValidFieldTypeAnomaly)) return false;
+  return true;
 }

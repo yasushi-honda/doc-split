@@ -10,6 +10,7 @@ import {
   computeRollbackInstructions,
   isValidManifestEntry,
   isValidManifest,
+  isValidFieldTypeAnomaly,
 } from './confirmOnVerifyBackfillHelpers';
 
 test('isConfirmOnVerifyCandidate: customerConfirmed/officeConfirmedのどちらかがtrueでなければ対象', () => {
@@ -207,6 +208,17 @@ test('isValidManifestEntry: 必須フィールド欠如・型不一致・不正�
   );
 });
 
+test('isValidFieldTypeAnomaly: docId・fileName・fields(1件以上、既知の判別子のみ)を要求する', () => {
+  assert.equal(isValidFieldTypeAnomaly({ docId: 'doc-1', fileName: 'a.pdf', fields: ['customerConfirmed'] }), true);
+  assert.equal(isValidFieldTypeAnomaly({ docId: 'doc-1', fileName: 'a.pdf', fields: [] }), false, 'fields空配列は不正');
+  assert.equal(
+    isValidFieldTypeAnomaly({ docId: 'doc-1', fileName: 'a.pdf', fields: ['unknownField'] }),
+    false,
+    '未知の判別子は不正'
+  );
+  assert.equal(isValidFieldTypeAnomaly({ docId: 'doc-1/x', fileName: 'a.pdf', fields: ['officeConfirmed'] }), false, 'docIdの"/"混入');
+});
+
 test('isValidManifest: buildConfirmOnVerifyManifestで生成した正常なmanifestはJSON往復後もtrueになる(生成側/検証側のずれを検知する回帰テスト、pr-review-toolkit指摘)', () => {
   const manifest = buildConfirmOnVerifyManifest({
     runId: 'run-1',
@@ -233,13 +245,50 @@ test('isValidManifest: entries中に1件でも不正なものがあればfalse(�
     backfillUpdateTime: { seconds: 1, nanoseconds: 0 },
   };
   assert.equal(
-    isValidManifest({ runId: 'r1', projectId: 'p1', timestamp: '2026-09-25T00:00:00.000Z', entries: [validEntry] }),
+    isValidManifest({ runId: 'r1', projectId: 'p1', timestamp: '2026-09-25T00:00:00.000Z', entries: [validEntry], fieldTypeAnomalies: [] }),
     true
   );
   assert.equal(
-    isValidManifest({ runId: 'r1', projectId: 'p1', timestamp: '2026-09-25T00:00:00.000Z', entries: [validEntry, { docId: 'doc-2' }] }),
+    isValidManifest({
+      runId: 'r1',
+      projectId: 'p1',
+      timestamp: '2026-09-25T00:00:00.000Z',
+      entries: [validEntry, { docId: 'doc-2' }],
+      fieldTypeAnomalies: [],
+    }),
     false,
     '2件目が不正entryなら全体をfalseにする(手編集・部分破損JSONの検知)'
+  );
+  assert.equal(
+    isValidManifest({ runId: 'r1', projectId: 'p1', timestamp: '2026-09-25T00:00:00.000Z', entries: [], fieldTypeAnomalies: [] }),
+    true
+  );
+  assert.equal(
+    isValidManifest({ runId: 'r1', projectId: 'p1', timestamp: '2026-09-25T00:00:00.000Z', entries: [] }),
+    false,
+    'fieldTypeAnomaliesが配列でない(欠如)'
+  );
+  assert.equal(
+    isValidManifest({
+      runId: 'r1',
+      projectId: 'p1',
+      timestamp: '2026-09-25T00:00:00.000Z',
+      entries: [],
+      fieldTypeAnomalies: [{ docId: 'doc-3', fileName: 'a.pdf', fields: ['customerConfirmed', 'officeConfirmed'] }],
+    }),
+    true,
+    '正常なfieldTypeAnomaliesはtrue'
+  );
+  assert.equal(
+    isValidManifest({
+      runId: 'r1',
+      projectId: 'p1',
+      timestamp: '2026-09-25T00:00:00.000Z',
+      entries: [],
+      fieldTypeAnomalies: [{ docId: 'doc-4', fileName: 'a.pdf', fields: [] }],
+    }),
+    false,
+    'fieldsが空配列は不正(判別子として意味を成さない)'
   );
   assert.equal(isValidManifest({ runId: 'r1', projectId: 'p1', timestamp: '2026-09-25T00:00:00.000Z' }), false, 'entriesが配列でない');
 });

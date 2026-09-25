@@ -53,6 +53,7 @@ import {
   isValidManifest,
   type ConfirmOnVerifyManifestEntry,
   type ConfirmOnVerifyBackfillManifest,
+  type ConfirmOnVerifyFieldTypeAnomaly,
 } from './lib/confirmOnVerifyBackfillHelpers';
 
 const projectId = process.env.FIREBASE_PROJECT_ID;
@@ -105,13 +106,6 @@ interface Candidate {
   decisions: ConfirmOnVerifyDecisions;
 }
 
-/** collectCandidates()が除外した「型契約違反」文書(pr-review-toolkit指摘、書込み前に弾く)。 */
-interface FieldTypeAnomaly {
-  id: string;
-  fileName: string;
-  field: 'customerConfirmed' | 'officeConfirmed';
-}
-
 /**
  * `verified==true`をページングし、`planConfirmOnVerify`で実際にconfirm対象になるdocだけを
  * 候補として集める。`--limit`指定時は候補がその件数に達した時点でページングを打ち切る
@@ -125,11 +119,11 @@ async function collectCandidates(
   totalScanned: number;
   candidates: Candidate[];
   scanIncomplete: boolean;
-  fieldTypeAnomalies: FieldTypeAnomaly[];
+  fieldTypeAnomalies: ConfirmOnVerifyFieldTypeAnomaly[];
 }> {
   let totalScanned = 0;
   const candidates: Candidate[] = [];
-  const fieldTypeAnomalies: FieldTypeAnomaly[] = [];
+  const fieldTypeAnomalies: ConfirmOnVerifyFieldTypeAnomaly[] = [];
   let lastDoc: FirebaseFirestore.QueryDocumentSnapshot | null = null;
   let hasMore = true;
 
@@ -165,13 +159,19 @@ async function collectCandidates(
       // だが、実データの充足率は未確認。契約違反(null・文字列等)のままmanifestへ書き込むと、
       // --rollback実行時にisValidManifestEntryがその1件を理由にmanifest全体を無効判定し、
       // 正常な残り全件のロールバックまで巻き込む。書込み前(ここ)で弾き、対象外として集計する。
+      // silent-failure-hunter指摘: 顧客/事業所の両方が契約違反の場合に片方だけ記録して
+      // continueすると、もう一方の異常が集計から漏れる(要調査時の件数を過小報告する)ため、
+      // 両方を独立に判定してから1件のentryへまとめて記録する。
       const fileName = (data.fileName as string) || '(no name)';
+      const anomalousFields: ('customerConfirmed' | 'officeConfirmed')[] = [];
       if (decisions.customer.action === 'confirm' && !isValidConfirmedFieldValue(data.customerConfirmed)) {
-        fieldTypeAnomalies.push({ id: docSnap.id, fileName, field: 'customerConfirmed' });
-        continue;
+        anomalousFields.push('customerConfirmed');
       }
       if (decisions.office.action === 'confirm' && !isValidConfirmedFieldValue(data.officeConfirmed)) {
-        fieldTypeAnomalies.push({ id: docSnap.id, fileName, field: 'officeConfirmed' });
+        anomalousFields.push('officeConfirmed');
+      }
+      if (anomalousFields.length > 0) {
+        fieldTypeAnomalies.push({ docId: docSnap.id, fileName, fields: anomalousFields });
         continue;
       }
 
@@ -282,7 +282,7 @@ async function runBackfill(): Promise<void> {
         '(customerConfirmed/officeConfirmedがboolean・フィールド不在以外の値。backfill対象から除外・要調査)'
     );
     for (const a of fieldTypeAnomalies.slice(0, 20)) {
-      console.log(`  ${a.id} [${a.fileName}] field=${a.field}`);
+      console.log(`  ${a.docId} [${a.fileName}] fields=${a.fields.join('+')}`);
     }
     if (fieldTypeAnomalies.length > 20) {
       console.log(`  ...他${fieldTypeAnomalies.length - 20}件`);
@@ -340,11 +340,14 @@ async function runBackfill(): Promise<void> {
     }
   } finally {
     if (manifestOutPath && entries.length > 0) {
+      // silent-failure-hunter指摘: fieldTypeAnomaliesはconsole出力のみだと、manifestを
+      // 一次情報として後から監査する際にこの除外が一切見えなくなるため、manifestにも残す。
       const manifest: ConfirmOnVerifyBackfillManifest = buildConfirmOnVerifyManifest({
         runId,
         projectId: projectId as string,
         timestampIso: new Date().toISOString(),
         entries,
+        fieldTypeAnomalies,
       });
       writeFileSync(manifestOutPath, JSON.stringify(manifest, null, 2));
       console.log(`manifest出力: ${manifestOutPath} (runId=${runId}, ${entries.length}件)`);
@@ -355,6 +358,10 @@ async function runBackfill(): Promise<void> {
   console.log(`確定成功: ${entries.length}件`);
   if (preconditionFailedCount > 0) {
     console.log(`並行書込みによりスキップ: ${preconditionFailedCount}件`);
+  }
+  if (fieldTypeAnomalies.length > 0) {
+    // silent-failure-hunter指摘: 冒頭でしか表示していないと、結果を確認する際に見落とされやすい。
+    console.log(`想定外の型により対象外: ${fieldTypeAnomalies.length}件(詳細は上記参照、要調査)`);
   }
 }
 
