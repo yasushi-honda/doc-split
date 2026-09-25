@@ -4,6 +4,16 @@ updated: 2026-09-25
 <!-- 前ミッション(dev/kanameone/cocoro環境監査・保守検証)は2026-07-20完遂。全文はdocs/handoff/LATEST.md参照。 -->
 <!-- Google Drive連携Phase1 (MVP)実装ミッションは2026-07-22完了(PR#700マージ)。詳細は本ファイル末尾「Google Drive連携Phase1完遂」節+docs/handoff/LATEST.md参照。 -->
 
+## 【完了・2026-09-25】/catchup発の積み残しIssue対応3件（現在のミッションとは別件・並行トラック）
+
+/catchupが提示した着手候補のうち、decision-maker承認を得た3件に順次対応。いずれも現在のミッション(Google Drive連携Phase1本番展開)とは独立。
+
+- ~~**Issue #959**: 無保護`db.runTransaction()`7箇所の棚卸し調査~~ **【完了・記録のみでクローズ】** 全7箇所の保護状況(`withBackoffRetry`適用可否)を実コードで確認しIssue #959へコメント記録。適用推奨2箇所(`processOCR.ts`の`rescueStuckProcessingDocs`・`documentDetail.ts`の`readDocWithDetail`)は将来該当ファイルを触る用事に合わせて対応する方針、コード変更なし
+- ~~**Issue #1046**: `fetchGroupDocuments`の`hasMore`算出がフィルタ後件数のみで判定され早期打ち切りしうるbug~~ **【完了・PR #1055マージ】** 生バッチ(`limit(pageSize*2)`)がsplit等で全滅した場合もhasMoreを正しくtrueにする修正+カーソルの無限ループ回避。修正過程でcodex review P1指摘(`GroupDocumentList.tsx`の空状態判定がcareManager限定でしかhasNextPageを見ておらず他groupTypeで後続ページ未到達)も検出・同PRで修正。Playwright MCPでdev実機確認(customer/careManager両groupType)、`ui-verified`付与済み
+- ~~**Issue #1042**: 確認済み操作で顧客マスター取得失敗時に確定処理がサイレントスキップされユーザーに通知されないbug~~ **【完了・PR #1056マージ】** 単体トグル(`useDocumentVerification.ts`)・一括確認済み(`DocumentsPage.tsx`)とも、`fetchFreshCustomerIdentityLookup()`失敗時に確定処理(customerConfirmed/officeConfirmed)がスキップされたことをtoast/バナーで明示するよう修正。fail-closed設計(誤った確定を書き込まない)自体は維持。**codex review(high effort)を6巡実施**(P2指摘6件、いずれも実指摘: メッセージ重複/stale prop依存/失敗情報の握り潰し×2/選択維持漏れ×2、全て修正・テスト追加)し7巡目でfindings 0件に収束。pr-review-toolkit 3エージェント(code-reviewer/silent-failure-hunter/pr-test-analyzer)並列レビューも実施(指摘は主にcodexと重複、追加で境界値テスト漏れを反映)。純粋関数抽出(`decideBulkVerifyToast`/`decidePostWriteSyncFailureToast`、`frontend/src/lib/bulkVerifyToast.ts`新設)によりDocumentsPage.tsx全体をマウントせず単体テスト可能にした(Issue #1044のDocumentsPageテスト基盤不在とは別に、判定ロジックのみ先行してテスト網羅)。Playwright MCPでdev実機確認(一括確認・単体トグル双方の正常系)、`ui-verified`付与済み
+
+**Issue Net変化**: Close 3件(#959, #1046, #1042)、起票 0件、Net +3。
+
 ## 【完了・2026-09-23】Issue #1028: Drive OAuthスコープをdrive.file→driveフルスコープへ拡張し、兄弟重複統合スクリプトを新設（PR #1038マージ）
 
 下記「kanameoneクライアントフィードバック10件対応」①（医療フォルダ重複）で判明した`drive.file`スコープの構造的盲点（appが一度も触れていない人作成フォルダを`files.list`で検出不能）への対応。decision-maker判断「クライアントが手動でフォルダ操作したいという業務要件があるため、運用ルールでの回避ではなく技術対応が必要」を受け着手。
