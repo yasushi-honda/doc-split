@@ -240,6 +240,54 @@ describe('GroupDocumentList - 担当CM別の件数表示(Issue #1032)', () => {
   })
 })
 
+describe('GroupDocumentList - fetchGroupDocuments hasMore修正の空状態判定(Issue #1046)', () => {
+  beforeEach(() => {
+    mockUseGroupDocuments.mockReset()
+  })
+
+  it('その他のグループタイプ(customer/office/documentType)でも、未読込ページが残る間(hasNextPage:true)は読み込み済みページが0件でも空状態を確定表示しない(codex review P1回帰テスト)', () => {
+    // Issue #1046修正: 生バッチが全てsplit等で除外されると、fetchGroupDocumentsは
+    // documents:[]のままhasMore(hasNextPage):trueを返すようになった。この早期return判定が
+    // careManager限定でしかhasNextPageを見ていなかった旧実装では、ここでも「このグループには
+    // 書類がありません」と誤確定表示してしまい、下部のLoadMoreIndicator(sentinel)に
+    // 到達せず後続ページが取得されなかった。
+    const fetchNextPage = vi.fn()
+    mockUseGroupDocuments.mockReturnValue({
+      data: { pages: [{ documents: [], lastDoc: null, hasMore: true }] },
+      fetchNextPage,
+      hasNextPage: true,
+      isFetchingNextPage: false,
+      isFetchNextPageError: false,
+      isLoading: false,
+      isError: false,
+      isRefetching: false,
+      refetch: vi.fn(),
+    })
+
+    renderWithClient(<GroupDocumentList groupType="customer" groupKey="customer-1" />)
+
+    expect(screen.queryByText('このグループには書類がありません')).toBeNull()
+  })
+
+  it('その他のグループタイプ: 全ページ読み込み完了(hasNextPage:false)かつ0件なら空状態を表示する(既存挙動の非破壊確認)', () => {
+    mockUseGroupDocuments.mockReturnValue({
+      data: { pages: [{ documents: [], lastDoc: null, hasMore: false }] },
+      fetchNextPage: vi.fn(),
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      isFetchNextPageError: false,
+      isLoading: false,
+      isError: false,
+      isRefetching: false,
+      refetch: vi.fn(),
+    })
+
+    renderWithClient(<GroupDocumentList groupType="customer" groupKey="customer-1" />)
+
+    expect(screen.getByText('このグループには書類がありません')).toBeDefined()
+  })
+})
+
 describe('GroupDocumentList - 契約終了した利用者の非表示(Issue #1033)', () => {
   beforeEach(() => {
     mockUseGroupDocuments.mockReset()
