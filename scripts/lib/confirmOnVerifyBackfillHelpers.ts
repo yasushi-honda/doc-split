@@ -20,6 +20,18 @@ export function isConfirmOnVerifyCandidate(data: Record<string, unknown>): boole
   return data.customerConfirmed !== true || data.officeConfirmed !== true;
 }
 
+/**
+ * `customerConfirmed`/`officeConfirmed`は本来boolean|フィールド不在の契約だが、実データの
+ * 充足率は未確認(CLAUDE.md「既存データへの新規ゲート追加時の注意」)。この契約を破る値
+ * (null・文字列等)がbackfill実行時にそのままmanifestへ書き込まれると、`--rollback`実行時に
+ * `isValidManifestEntry`がその1件を理由にmanifest全体を無効判定し、正常な残り全件のロール
+ * バックまで巻き込んでしまう(pr-review-toolkit指摘、書込み側/読込み側の非対称バグ)。
+ * 書込み前(候補収集時点)でこの契約を検査し、満たさない文書はbackfill対象から除外する。
+ */
+export function isValidConfirmedFieldValue(x: unknown): x is boolean | undefined {
+  return x === undefined || typeof x === 'boolean';
+}
+
 /** dry-runの理由別内訳集計(codexレビュー指摘: 戻り値の真偽値だけでは内訳が出せない対応)。 */
 export interface ConfirmOnVerifyTally {
   confirmBoth: number;
@@ -242,7 +254,9 @@ export function isValidManifestOfficeOutcome(x: unknown): x is ManifestOfficeOut
  */
 export function isValidManifestEntry(x: unknown): x is ConfirmOnVerifyManifestEntry {
   if (!isPlainObject(x)) return false;
-  if (typeof x.docId !== 'string' || x.docId.length === 0) return false;
+  // "/"混入は`db.doc(`documents/${docId}`)`(呼出元)が別コレクション配下の無関係なドキュメント
+  // を指す経路を開くため、手編集されたmanifestに対する追加の防御として拒否する(pr-review-toolkit指摘)。
+  if (typeof x.docId !== 'string' || x.docId.length === 0 || x.docId.includes('/')) return false;
   if (!isValidManifestCustomerOutcome(x.customer)) return false;
   if (!isValidManifestOfficeOutcome(x.office)) return false;
   const t = x.backfillUpdateTime;

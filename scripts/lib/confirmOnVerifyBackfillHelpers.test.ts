@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   isConfirmOnVerifyCandidate,
+  isValidConfirmedFieldValue,
   tallyConfirmOnVerifyDecisions,
   tallyDriveExportStatus,
   buildConfirmOnVerifyManifest,
@@ -16,6 +17,15 @@ test('isConfirmOnVerifyCandidate: customerConfirmed/officeConfirmedのどちら�
   assert.equal(isConfirmOnVerifyCandidate({ customerConfirmed: false, officeConfirmed: false }), true);
   assert.equal(isConfirmOnVerifyCandidate({ customerConfirmed: true, officeConfirmed: false }), true);
   assert.equal(isConfirmOnVerifyCandidate({ customerConfirmed: true, officeConfirmed: true }), false);
+});
+
+test('isValidConfirmedFieldValue: フィールド不在(undefined)またはboolean以外はfalse(pr-review-toolkit指摘: nullや文字列等の型異常データがmanifestへ無検証で書き込まれ、rollback全体を巻き込むfalse negativeを防ぐ)', () => {
+  assert.equal(isValidConfirmedFieldValue(undefined), true);
+  assert.equal(isValidConfirmedFieldValue(true), true);
+  assert.equal(isValidConfirmedFieldValue(false), true);
+  assert.equal(isValidConfirmedFieldValue(null), false);
+  assert.equal(isValidConfirmedFieldValue('true'), false);
+  assert.equal(isValidConfirmedFieldValue(1), false);
 });
 
 test('tallyConfirmOnVerifyDecisions: 確定パターン別・skip理由別に集計する', () => {
@@ -185,6 +195,34 @@ test('isValidManifestEntry: 必須フィールド欠如・型不一致・不正�
     false,
     'backfillUpdateTime.secondsの型不一致'
   );
+  assert.equal(
+    isValidManifestEntry({
+      docId: 'doc-6/../other-collection/doc-7',
+      customer: { confirmedCustomer: false },
+      office: { confirmedOffice: false },
+      backfillUpdateTime: { seconds: 1, nanoseconds: 0 },
+    }),
+    false,
+    'docIdに"/"を含む場合(手編集による別パス誤参照防止、pr-review-toolkit指摘)'
+  );
+});
+
+test('isValidManifest: buildConfirmOnVerifyManifestで生成した正常なmanifestはJSON往復後もtrueになる(生成側/検証側のずれを検知する回帰テスト、pr-review-toolkit指摘)', () => {
+  const manifest = buildConfirmOnVerifyManifest({
+    runId: 'run-1',
+    projectId: 'proj-1',
+    timestampIso: '2026-09-25T00:00:00.000Z',
+    entries: [
+      {
+        docId: 'doc-1',
+        customer: { confirmedCustomer: true, customerConfirmedBefore: undefined, resetNeedsManualCustomerSelection: true },
+        office: { confirmedOffice: true, officeConfirmedBefore: false },
+        backfillUpdateTime: { seconds: 1_700_000_000, nanoseconds: 123 },
+      },
+    ],
+  });
+  const roundTripped: unknown = JSON.parse(JSON.stringify(manifest));
+  assert.equal(isValidManifest(roundTripped), true);
 });
 
 test('isValidManifest: entries中に1件でも不正なものがあればfalse(部分的に壊れたJSONの検知)', () => {

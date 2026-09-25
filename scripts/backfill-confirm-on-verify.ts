@@ -44,6 +44,7 @@ import { planConfirmOnVerify, buildConfirmOnVerifyUpdate, type ConfirmOnVerifyDe
 import { applyLimit, assertExpectedCount, ExpectedCountMismatchError } from './lib/driveExportBackfillHelpers';
 import {
   isConfirmOnVerifyCandidate,
+  isValidConfirmedFieldValue,
   tallyConfirmOnVerifyDecisions,
   tallyDriveExportStatus,
   buildConfirmOnVerifyManifest,
@@ -104,6 +105,13 @@ interface Candidate {
   decisions: ConfirmOnVerifyDecisions;
 }
 
+/** collectCandidates()が除外した「型契約違反」文書(pr-review-toolkit指摘、書込み前に弾く)。 */
+interface FieldTypeAnomaly {
+  id: string;
+  fileName: string;
+  field: 'customerConfirmed' | 'officeConfirmed';
+}
+
 /**
  * `verified==true`をページングし、`planConfirmOnVerify`で実際にconfirm対象になるdocだけを
  * 候補として集める。`--limit`指定時は候補がその件数に達した時点でページングを打ち切る
@@ -113,9 +121,15 @@ async function collectCandidates(
   customerMasterNameById: ReadonlyMap<string, string | null>,
   sameNameCollisionNames: ReadonlySet<string>,
   stopAt: number | undefined
-): Promise<{ totalScanned: number; candidates: Candidate[]; scanIncomplete: boolean }> {
+): Promise<{
+  totalScanned: number;
+  candidates: Candidate[];
+  scanIncomplete: boolean;
+  fieldTypeAnomalies: FieldTypeAnomaly[];
+}> {
   let totalScanned = 0;
   const candidates: Candidate[] = [];
+  const fieldTypeAnomalies: FieldTypeAnomaly[] = [];
   let lastDoc: FirebaseFirestore.QueryDocumentSnapshot | null = null;
   let hasMore = true;
 
@@ -147,16 +161,30 @@ async function collectCandidates(
       });
       if (decisions.customer.action !== 'confirm' && decisions.office.action !== 'confirm') continue;
 
+      // pr-review-toolkit指摘: customerConfirmed/officeConfirmedは契約上boolean|フィールド不在
+      // だが、実データの充足率は未確認。契約違反(null・文字列等)のままmanifestへ書き込むと、
+      // --rollback実行時にisValidManifestEntryがその1件を理由にmanifest全体を無効判定し、
+      // 正常な残り全件のロールバックまで巻き込む。書込み前(ここ)で弾き、対象外として集計する。
+      const fileName = (data.fileName as string) || '(no name)';
+      if (decisions.customer.action === 'confirm' && !isValidConfirmedFieldValue(data.customerConfirmed)) {
+        fieldTypeAnomalies.push({ id: docSnap.id, fileName, field: 'customerConfirmed' });
+        continue;
+      }
+      if (decisions.office.action === 'confirm' && !isValidConfirmedFieldValue(data.officeConfirmed)) {
+        fieldTypeAnomalies.push({ id: docSnap.id, fileName, field: 'officeConfirmed' });
+        continue;
+      }
+
       candidates.push({
         ref: docSnap.ref,
         id: docSnap.id,
-        fileName: (data.fileName as string) || '(no name)',
+        fileName,
         updateTime: docSnap.updateTime,
         data,
         decisions,
       });
       if (stopAt !== undefined && candidates.length >= stopAt) {
-        return { totalScanned, candidates, scanIncomplete: true };
+        return { totalScanned, candidates, scanIncomplete: true, fieldTypeAnomalies };
       }
     }
 
@@ -164,7 +192,7 @@ async function collectCandidates(
     hasMore = snapshot.docs.length === PAGE_SIZE;
   }
 
-  return { totalScanned, candidates, scanIncomplete: false };
+  return { totalScanned, candidates, scanIncomplete: false, fieldTypeAnomalies };
 }
 
 /**
@@ -233,7 +261,7 @@ async function runBackfill(): Promise<void> {
   );
   console.log(`顧客マスター: ${customersSnapshot.size}件読込(同姓同名: ${sameNameCollisionNames.size}組)`);
 
-  const { totalScanned, candidates, scanIncomplete } = await collectCandidates(
+  const { totalScanned, candidates, scanIncomplete, fieldTypeAnomalies } = await collectCandidates(
     customerMasterNameById,
     sameNameCollisionNames,
     limit
@@ -247,6 +275,18 @@ async function runBackfill(): Promise<void> {
     console.log(`検査: ${totalScanned}件走査時点で--limit(${limit})件に到達したためスキャンを打ち切り`);
   } else {
     console.log(`検査: ${totalScanned}件 (verified=true)`);
+  }
+  if (fieldTypeAnomalies.length > 0) {
+    console.log(
+      `\n⚠ 想定外の型: ${fieldTypeAnomalies.length}件` +
+        '(customerConfirmed/officeConfirmedがboolean・フィールド不在以外の値。backfill対象から除外・要調査)'
+    );
+    for (const a of fieldTypeAnomalies.slice(0, 20)) {
+      console.log(`  ${a.id} [${a.fileName}] field=${a.field}`);
+    }
+    if (fieldTypeAnomalies.length > 20) {
+      console.log(`  ...他${fieldTypeAnomalies.length - 20}件`);
+    }
   }
   console.log(`対象: ${targets.length}件`);
   console.log(`  両方確定: ${tally.confirmBoth}件 / 顧客のみ: ${tally.confirmCustomerOnly}件 / 事業所のみ: ${tally.confirmOfficeOnly}件`);
