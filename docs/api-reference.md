@@ -72,7 +72,7 @@ flowchart TD
 | searchDocuments | ✅ | ✅ | - |
 | addMasterAlias | ✅ | ✅ | ✅ |
 | removeMasterAlias | ✅ | ✅ | ✅ |
-| deleteDocument | ✅ | ✅ | ✅ |
+| deleteDocument | ✅ | ✅ | - |
 
 - **認証**: Firebase Authentication（`request.auth`チェック）
 - **ホワイトリスト**: `users/{uid}`ドキュメント存在確認
@@ -186,7 +186,7 @@ PDFページを回転する。
 
 #### deleteDocument
 
-ドキュメントを削除する（管理者のみ）。
+ドキュメントを削除する（ホワイトリスト登録済みユーザーが実行可能、Issue #1037）。
 
 **リクエスト:**
 ```typescript
@@ -202,7 +202,7 @@ PDFページを回転する。
 }
 ```
 
-**権限:** `admin` ロールのユーザーのみ実行可能
+**権限:** ホワイトリスト登録済み（`users/{uid}` が存在する）ユーザーのみ実行可能
 
 ### Firestore Trigger Functions
 

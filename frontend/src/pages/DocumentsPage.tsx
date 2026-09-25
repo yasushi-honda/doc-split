@@ -1118,73 +1118,75 @@ export function DocumentsPage() {
             ))}
           </TabsList>
 
-          {/* 一括操作ボタン（管理者のみ） */}
-          {isAdmin && (
-            <div className="flex items-center gap-1.5 ml-auto">
-              {/* デスクトップ: 件数テキスト＋×ボタン（操作ボタンの左側に配置） */}
-              {selectionMode && (
-                <>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={clearSelection}
-                    disabled={isBulkOperating}
-                    className="hidden sm:flex h-7 w-7 p-0"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </Button>
-                  <span className={`hidden sm:inline text-sm font-medium whitespace-nowrap ${
-                    selectedIds.size > 0 ? 'text-blue-800' : 'text-gray-500'
-                  }`}>
-                    {selectedIds.size}件選択中
-                  </span>
-                </>
-              )}
+          {/* 一括操作ボタン(削除は全ユーザー、再処理・確認済みは管理者のみ。Issue #1037) */}
+          <div className="flex items-center gap-1.5 ml-auto">
+            {/* デスクトップ: 件数テキスト＋×ボタン（操作ボタンの左側に配置） */}
+            {selectionMode && (
+              <>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={clearSelection}
+                  disabled={isBulkOperating}
+                  className="hidden sm:flex h-7 w-7 p-0"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </Button>
+                <span className={`hidden sm:inline text-sm font-medium whitespace-nowrap ${
+                  selectedIds.size > 0 ? 'text-blue-800' : 'text-gray-500'
+                }`}>
+                  {selectedIds.size}件選択中
+                </span>
+              </>
+            )}
 
-              {/* 処理中スピナー */}
-              {selectionMode && isBulkOperating && (
-                <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
-              )}
+            {/* 処理中スピナー */}
+            {selectionMode && isBulkOperating && (
+              <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
+            )}
 
-              <BulkActionButton
-                mode="reprocess"
-                icon={RotateCcw}
-                label="再処理"
-                colors={BULK_COLORS.blue}
-                selectionMode={selectionMode}
-                selectedCount={selectedIds.size}
-                isBulkOperating={isBulkOperating}
-                isSpinning={isBulkOperating && bulkOperation === 'reprocess'}
-                onToggle={() => handleModeToggle('reprocess')}
-                onExecute={() => setBulkOperation('reprocess')}
-              />
-              <BulkActionButton
-                mode="verify"
-                icon={CheckCircle2}
-                label="確認済み"
-                colors={BULK_COLORS.blue}
-                selectionMode={selectionMode}
-                selectedCount={selectedIds.size}
-                isBulkOperating={isBulkOperating}
-                isSpinning={false}
-                onToggle={() => handleModeToggle('verify')}
-                onExecute={() => setBulkOperation('verify')}
-              />
-              <BulkActionButton
-                mode="delete"
-                icon={Trash2}
-                label="削除"
-                colors={BULK_COLORS.red}
-                selectionMode={selectionMode}
-                selectedCount={selectedIds.size}
-                isBulkOperating={isBulkOperating}
-                isSpinning={false}
-                onToggle={() => handleModeToggle('delete')}
-                onExecute={() => setBulkOperation('delete')}
-              />
+            {isAdmin && (
+              <>
+                <BulkActionButton
+                  mode="reprocess"
+                  icon={RotateCcw}
+                  label="再処理"
+                  colors={BULK_COLORS.blue}
+                  selectionMode={selectionMode}
+                  selectedCount={selectedIds.size}
+                  isBulkOperating={isBulkOperating}
+                  isSpinning={isBulkOperating && bulkOperation === 'reprocess'}
+                  onToggle={() => handleModeToggle('reprocess')}
+                  onExecute={() => setBulkOperation('reprocess')}
+                />
+                <BulkActionButton
+                  mode="verify"
+                  icon={CheckCircle2}
+                  label="確認済み"
+                  colors={BULK_COLORS.blue}
+                  selectionMode={selectionMode}
+                  selectedCount={selectedIds.size}
+                  isBulkOperating={isBulkOperating}
+                  isSpinning={false}
+                  onToggle={() => handleModeToggle('verify')}
+                  onExecute={() => setBulkOperation('verify')}
+                />
+              </>
+            )}
+            <BulkActionButton
+              mode="delete"
+              icon={Trash2}
+              label="削除"
+              colors={BULK_COLORS.red}
+              selectionMode={selectionMode}
+              selectedCount={selectedIds.size}
+              isBulkOperating={isBulkOperating}
+              isSpinning={false}
+              onToggle={() => handleModeToggle('delete')}
+              onExecute={() => setBulkOperation('delete')}
+            />
 
-            </div>
-          )}
+          </div>
         </div>
 
         {/* 検索バー＆フィルター（同一行） */}
