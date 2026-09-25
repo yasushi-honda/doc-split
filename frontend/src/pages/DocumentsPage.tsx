@@ -872,6 +872,14 @@ export function DocumentsPage() {
       if (failed.length > 0) {
         const failedIds = new Set(failed.map((o) => o.docId))
         setSelectedIds(prev => new Set([...prev].filter(id => failedIds.has(id))))
+      } else if (identityLookupWarningNeeded) {
+        // codex review 4巡目指摘: 全件書込みは成功したが確定処理はスキップされ、警告が
+        // 「再実行してください」と促す。ここでselectedIdsを空にすると、確認済み書類が
+        // 「未確認のみ表示」フィルタで一覧から即座に消えるケースが多く、ユーザーは
+        // フィルタを変更して該当書類を探し再選択しない限り再実行できなくなる。
+        // 選択(selectionMode含む)を維持し、確認ダイアログのみ閉じて再度「確認済みにする」を
+        // 押すだけで再実行できるようにする。
+        setBulkOperation(null)
       } else {
         clearSelection()
         setBulkOperation(null)
