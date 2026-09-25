@@ -191,8 +191,12 @@ export function buildConfirmOnVerifyUpdate(
 /**
  * 確定判定用の顧客マスター一覧取得(`fetchFreshCustomerIdentityLookup()`)が失敗し、
  * customerConfirmed/officeConfirmedの確定処理を丸ごとスキップした場合にユーザーへ
- * 提示する警告文言(Issue #1042)。単体トグル(useDocumentVerification.ts)・一括確認済み
- * (DocumentsPage.tsxのhandleBulkVerify)の両方から参照する共通文言。
+ * 提示する警告文言の共通部分(Issue #1042)。単体トグル(useDocumentVerification.ts)・
+ * 一括確認済み(DocumentsPage.tsxのhandleBulkVerify)の両方から参照する。
+ *
+ * 「確認済みにしました」等の前置き(件数の有無で文言が変わる)は各呼び出し元が組み立てる。
+ * ここに前置きを含めてしまうと、呼び出し元側で独自に前置きを付ける際に「確認済みに
+ * しました」が二重に出る(codex review / pr-review-toolkit:code-reviewer 指摘、2026-09-25)。
  */
-export const CONFIRM_ON_VERIFY_SKIPPED_WARNING_MESSAGE =
-  '確認済みにしましたが、顧客/事業所マスターの取得に失敗したため確定処理はスキップされました。再実行してください';
+export const CONFIRM_ON_VERIFY_SKIPPED_REASON_MESSAGE =
+  '顧客/事業所マスターの取得に失敗したため確定処理はスキップされました。再実行してください';

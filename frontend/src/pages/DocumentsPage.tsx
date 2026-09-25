@@ -76,7 +76,7 @@ import { DateRangeFilter, type DateRange } from '@/components/DateRangeFilter'
 import { isCustomerConfirmed } from '@/hooks/useProcessingHistory'
 import { resolveCustomerUnconfirmedReason } from '@shared/customerIdentity'
 import { planConfirmOnVerify, buildConfirmOnVerifyUpdate } from '@shared/confirmOnVerify'
-import { decideBulkVerifyToast } from '@/lib/bulkVerifyToast'
+import { decideBulkVerifyToast, decidePostWriteSyncFailureToast } from '@/lib/bulkVerifyToast'
 import { DocumentDetailModal } from '@/components/DocumentDetailModal'
 import { MultiCustomerBadge } from '@/components/MultiCustomerBadge'
 import { AliasLearningHistoryModal } from '@/components/AliasLearningHistoryModal'
@@ -797,10 +797,17 @@ export function DocumentsPage() {
     // Issue #1042: ここに到達した時点でFirestoreへの書込み(verified/確定フラグ)は
     // 既に完了している。以降はキャッシュ補正・トースト表示という表示上の後始末のため、
     // 失敗しても「一括確認に失敗しました」という誤った全体失敗にしない(書込み自体は成功済み)。
-    try {
-      const succeeded = outcomes.filter((o) => o.status === 'ok')
-      const failed = outcomes.filter((o) => o.status === 'error')
+    //
+    // succeeded/failedはoutcomes(Phase-Aで既に確定済みの配列)へのpureなfilter()のため
+    // 例外を投げない。tryの外(catchからも参照可能な位置)で計算しておくことで、この直後の
+    // キャッシュ補正処理自体が例外を投げても、catch側でPhase-Aの実際の成否(一部書込み失敗が
+    // あったか)を踏まえたメッセージを出せるようにする(pr-review-toolkit:silent-failure-hunter
+    // レビュー指摘CRITICAL-2: 以前はcatchが固定の「更新しました」文言のみを返し、実際には
+    // 一部書込み失敗があった場合でも全体成功したかのように見えていた)。
+    const succeeded = outcomes.filter((o) => o.status === 'ok')
+    const failed = outcomes.filter((o) => o.status === 'error')
 
+    try {
       const confirmedAtApprox = Timestamp.now()
       for (const o of succeeded) {
         const cachePatch: Record<string, unknown> = {
@@ -852,10 +859,20 @@ export function DocumentsPage() {
       toast[toastOutcome.type](toastOutcome.message)
     } catch (postWriteErr) {
       // Firestoreへの書込みは既に成功しているため、ここでの失敗は表示更新の後始末の
-      // 失敗に過ぎない。「一括確認に失敗しました」は誤りなので出さず、書込み成功を
-      // 前提にした別メッセージで再読み込みを促す。
+      // 失敗に過ぎない。「一括確認に失敗しました」は誤りなので出さない。ただしPhase-Aで
+      // 一部書類の書込み自体が失敗していた場合(failed.length>0)は、その情報を握り潰さず
+      // 失敗した書類を選択に残す(再実行できるようにする)。
       console.error('Bulk verify: post-write cache sync failed (writes already succeeded):', postWriteErr)
-      toast.warning('確認済みに更新しましたが、画面表示の更新に失敗しました。再読み込みしてください')
+      if (failed.length > 0) {
+        const failedIds = new Set(failed.map((o) => o.docId))
+        setSelectedIds(prev => new Set([...prev].filter(id => failedIds.has(id))))
+      }
+      const toastOutcome = decidePostWriteSyncFailureToast({
+        totalCount: ids.length,
+        succeededCount: succeeded.length,
+        failedCount: failed.length,
+      })
+      toast[toastOutcome.type](toastOutcome.message)
     } finally {
       setIsBulkOperating(false)
     }

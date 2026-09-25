@@ -63,6 +63,11 @@ vi.mock('../../lib/firebase', () => ({
   },
 }))
 
+const mockToastWarning = vi.fn()
+vi.mock('sonner', () => ({
+  toast: { warning: (...args: unknown[]) => mockToastWarning(...args) },
+}))
+
 vi.mock('@tanstack/react-query', () => ({
   useQueryClient: () => ({
     invalidateQueries: vi.fn(),
@@ -344,9 +349,15 @@ describe('useDocumentVerification', () => {
         expect(result.current.error).toBe(
           '確認済みにしましたが、顧客/事業所マスターの取得に失敗したため確定処理はスキップされました。再実行してください'
         )
+        // codex review指摘(P2): 「確認済みにして閉じる/ダウンロード」フローはmarkAsVerified()
+        // 直後にモーダルを閉じるため、error状態のインラインバナー(モーダル内)だけでは
+        // ユーザーが見る前に消えてしまう。モーダルの開閉に関わらず気付けるtoastも出す。
+        expect(mockToastWarning).toHaveBeenCalledWith(
+          '確認済みにしましたが、顧客/事業所マスターの取得に失敗したため確定処理はスキップされました。再実行してください'
+        )
       })
 
-      it('取得成功時は警告を出さない(errorはnullのまま)', async () => {
+      it('取得成功時は警告を出さない(errorはnullのまま、toastも呼ばない)', async () => {
         const doc = makeDocument({
           verified: false,
           customerId: 'customer-1',
@@ -362,6 +373,7 @@ describe('useDocumentVerification', () => {
         })
 
         expect(result.current.error).toBeNull()
+        expect(mockToastWarning).not.toHaveBeenCalled()
       })
 
       it('取得失敗でも、顧客/事業所とも既に確定済みの書類では警告を出さない(何も変わらないため実害なし)', async () => {
@@ -382,6 +394,64 @@ describe('useDocumentVerification', () => {
 
         expect(returned).toBe(true)
         expect(result.current.error).toBeNull()
+        expect(mockToastWarning).not.toHaveBeenCalled()
+      })
+
+      // pr-test-analyzerレビュー指摘: customerConfirmed/officeConfirmedの境界値
+      // (「片方だけtrue」)が未テストだった(CLAUDE.md「境界値を必ず含める」MUST)。
+      it('取得失敗時、顧客/事業所の片方のみ確定済みでも警告を出す(境界値: 両方trueでなければ警告)', async () => {
+        mockFetchFreshCustomerIdentityLookup.mockRejectedValueOnce(new Error('network error'))
+        const doc = makeDocument({
+          verified: false,
+          customerId: 'customer-1',
+          customerConfirmed: true,
+          officeConfirmed: false,
+        })
+        txGetOverride = doc
+        const { result } = renderHook(() => useDocumentVerification(doc))
+
+        let returned: boolean | undefined
+        await act(async () => {
+          returned = await result.current.markAsVerified()
+        })
+
+        expect(returned).toBe(true)
+        expect(result.current.error).not.toBeNull()
+        expect(mockToastWarning).toHaveBeenCalledTimes(1)
+      })
+
+      // silent-failure-hunterレビュー指摘(MEDIUM)の修正確認: 「既に両方確定済みか」の判定は
+      // モーダルを開いた時点のstale propではなく、トランザクション内で再読込した最新状態
+      // (freshDoc)を基準にする。再処理操作はcustomerConfirmed/officeConfirmedをfalseへ
+      // 戻す既存パスがあるため、propとFirestore側の最新状態が食い違いうる。
+      it('propは両方確定済みでも、トランザクション内で読み込んだ最新状態が未確定なら警告を出す(stale prop対応、MEDIUM修正の回帰テスト)', async () => {
+        mockFetchFreshCustomerIdentityLookup.mockRejectedValueOnce(new Error('network error'))
+        // フックへ渡すdocument(モーダルを開いた時点のprop)は両方確定済みに見える。
+        const staleDoc = makeDocument({
+          verified: false,
+          customerId: 'customer-1',
+          customerConfirmed: true,
+          officeConfirmed: true,
+        })
+        // しかしFirestore側は、他者の再処理操作等で既にofficeConfirmedがfalseへ
+        // リセットされている(propとは食い違う)。
+        txGetOverride = makeDocument({
+          verified: false,
+          customerId: 'customer-1',
+          customerConfirmed: true,
+          officeConfirmed: false,
+        })
+        const { result } = renderHook(() => useDocumentVerification(staleDoc))
+
+        let returned: boolean | undefined
+        await act(async () => {
+          returned = await result.current.markAsVerified()
+        })
+
+        expect(returned).toBe(true)
+        // staleなdocument propの値(両方true)だけで判定していれば警告は出ないはずだった。
+        expect(result.current.error).not.toBeNull()
+        expect(mockToastWarning).toHaveBeenCalledTimes(1)
       })
     })
 
