@@ -434,6 +434,12 @@ export function DocumentsPage() {
   // フィールド自体が存在せず常にfalse相当になるため、チェックしても該当0件になるだけで
   // 無害(Firestore whereを使わない理由は同ファイルのdocumentsフィルタ処理コメント参照)。
   const [showMultiCustomerOnly, setShowMultiCustomerOnly] = useState(false)
+  // 担当ケアマネ不明のみ表示(Issue #1029)。document.careManagerは処理時に顧客マスターの
+  // careManagerNameから自動設定される(functions/src/ocr/ocrUpdatePayloadBuilder.ts)ため、
+  // 未設定(null/空)は「顧客マスター側で担当ケアマネが未確定」と同義。showMultiCustomerOnly等と
+  // 同型のクライアント側フィルタ(Firestore whereにしない理由も同じ: 既存docへの遡及的絞り込みで
+  // 母集団をサイレント除外しないため)
+  const [showCareManagerUnassignedOnly, setShowCareManagerUnassignedOnly] = useState(false)
   // 契約終了した利用者の書類を表示するか(Issue #1033)。nullは「一時切替未操作」を表し、
   // その場合はアプリ全体共有設定(settings.showContractEndedCustomers)に従う。
   // ページ再読み込みでこの一時切替は消え、共有既定値に戻る(保存しない)
@@ -1047,13 +1053,18 @@ export function DocumentsPage() {
       docs = docs.filter(doc => doc.multiCustomerDetected === true)
     }
 
+    // 担当ケアマネ不明のみ表示(Issue #1029)
+    if (showCareManagerUnassignedOnly) {
+      docs = docs.filter(doc => !doc.careManager)
+    }
+
     // 契約終了した利用者の確認済み書類を非表示(Issue #1033)。未確認書類は隠さない
     // (isDocumentHiddenByContractEnd内でverified!==trueは表示側に倒す)
     const beforeContractFilterCount = docs.length
     docs = docs.filter(doc => !isDocumentHiddenByContractEnd(doc, contractEndedLookup, showContractEnded))
 
     return { documents: docs, hiddenByContractEndedCount: beforeContractFilterCount - docs.length }
-  }, [allDocuments, showSplit, showUnverifiedOnly, showMultiCustomerOnly, contractEndedLookup, showContractEnded])
+  }, [allDocuments, showSplit, showUnverifiedOnly, showMultiCustomerOnly, showCareManagerUnassignedOnly, contractEndedLookup, showContractEnded])
 
   // 全選択/全解除（documentsの後に定義する必要あり）
   const handleSelectAll = useCallback((checked: boolean) => {
@@ -1295,6 +1306,15 @@ export function DocumentsPage() {
                         className="h-3.5 w-3.5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
                       />
                       複数名の可能性のみ
+                    </label>
+                    <label className="flex cursor-pointer items-center gap-2 text-xs text-gray-500">
+                      <input
+                        type="checkbox"
+                        checked={showCareManagerUnassignedOnly}
+                        onChange={(e) => setShowCareManagerUnassignedOnly(e.target.checked)}
+                        className="h-3.5 w-3.5 rounded border-gray-300 text-rose-600 focus:ring-rose-500"
+                      />
+                      担当ケアマネ不明のみ表示
                     </label>
                   </div>
                 </div>
