@@ -236,6 +236,10 @@ service cloud.firestore {
         // ため、この制約はFE経由の書込みにのみ効く(Cloud Functions側は
         // functions/src/utils/maintenanceGate.ts でコードレベルにゲート済み)。
         && (!affectsGroupAggregationFields() || groupAggregationGateOpen());
+      // Issue #1037: Cloud Function(deleteDocument.ts)経由の削除はホワイトリスト全ユーザーに
+      // 許可したが、これはAdmin SDK経由でルール適用外のため本ルールとは独立した経路。
+      // Client SDKからの直接deleteは多層防御として引き続きadmin限定のまま維持する
+      // (直接deleteはStorage/ログ削除・detail/main同時削除・確認ダイアログを全て迂回するため)。
       allow delete: if isAdmin();
     }
 
@@ -258,6 +262,7 @@ service cloud.firestore {
             || (('ocrResult' in resource.data) && request.resource.data.ocrResult == resource.data.ocrResult))
         && (!('pageResults' in request.resource.data)
             || (('pageResults' in resource.data) && request.resource.data.pageResults == resource.data.pageResults));
+      // Issue #1037: 親docと同様、Client SDKからの直接deleteは多層防御としてadmin限定のまま
       allow delete: if isAdmin();
     }
 
