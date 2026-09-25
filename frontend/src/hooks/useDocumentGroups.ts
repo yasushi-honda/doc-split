@@ -148,7 +148,7 @@ export function shouldIncludeInGroupDocuments(
   return true;
 }
 
-async function fetchGroupDocuments(
+export async function fetchGroupDocuments(
   groupType: GroupType,
   groupKey: string,
   pageSize: number,
@@ -176,12 +176,18 @@ async function fetchGroupDocuments(
   }
 
   const snapshot = await getDocs(q);
+  const rawDocs = snapshot.docs;
 
-  const allDocs = snapshot.docs.filter((docSnap) =>
+  const allDocs = rawDocs.filter((docSnap) =>
     shouldIncludeInGroupDocuments(docSnap.data(), isUnassignedCareManagerGroup)
   );
 
-  const hasMore = allDocs.length > pageSize;
+  // Issue #1046: 生バッチがlimit(pageSize*2)ちょうど埋まった場合、除外対象が
+  // 生バッチの過半数を占めるケースでは除外後件数(allDocs.length)がpageSize以下でも
+  // Firestore側にまだ後続docが残っている可能性がある。除外後件数だけの判定だと
+  // 早期打ち切りになるため、生バッチの消化状況も合わせて見る。
+  const rawBatchFilled = rawDocs.length === pageSize * 2;
+  const hasMore = allDocs.length > pageSize || rawBatchFilled;
   const docs = allDocs.slice(0, pageSize);
 
   const documents: Document[] = docs.map((docSnap) => ({
@@ -189,9 +195,18 @@ async function fetchGroupDocuments(
     ...docSnap.data(),
   } as Document));
 
+  // カーソルは通常、除外後リスト(docs)の末尾を使う(pageSizeを超えたexcess分は
+  // 次ページで生バッチごと再スキャンし、除外判定も再適用するため)。
+  // ただしdocsが0件(このページの生バッチが全て除外対象)の場合に除外後リスト基準の
+  // nullを使うと、hasMore=trueなのにstartAfterが適用されず同じ生バッチを無限に
+  // 再取得するループに陥る(Issue #1046)。その場合は生バッチ自体の末尾docに
+  // フォールバックしてカーソルを前進させる。
+  const rawLastDoc = rawDocs.length > 0 ? rawDocs[rawDocs.length - 1] ?? null : null;
+  const lastDoc = docs.length > 0 ? docs[docs.length - 1] ?? null : rawLastDoc;
+
   return {
     documents,
-    lastDoc: docs.length > 0 ? docs[docs.length - 1] ?? null : null,
+    lastDoc,
     hasMore,
   };
 }

@@ -448,12 +448,16 @@ export function GroupDocumentList({
   // 契約終了フィルタ(Issue #1033)も日付フィルタと同型のクライアント側フィルタのため、
   // 読み込み済みの現在のページが全滅していても後続ページに該当があり得る。groupType問わず
   // hasNextPageがtrueの間は空状態判定を保留しLoadMoreIndicatorを出し続ける。
-  const mightHaveMoreAfterContractFilter = hiddenByContractEndedCount > 0 && hasNextPage;
-  if (
-    visibleDocuments.length === 0 &&
-    (groupType !== 'careManager' || !hasNextPage) &&
-    !mightHaveMoreAfterContractFilter
-  ) {
+  //
+  // Issue #1046修正(codex review P1指摘、2026-09-25): fetchGroupDocuments側のhasMore算出を
+  // 「生バッチ(limit(pageSize*2))がsplit等で全滅した場合もhasMore:trueを返す」よう修正した
+  // ことで、documents.length===0のページでもhasNextPage:trueになりうるケースが増えた。
+  // この早期return判定が旧来careManager限定でしかhasNextPageを見ていなかったため、他
+  // groupType(customer/office/documentType)ではhasNextPage:trueでも空状態確定表示してしまい、
+  // 下部のLoadMoreIndicator(sentinel)に到達せず後続ページが取得されないバグがあった。
+  // groupType問わずhasNextPageのみで判定を統一する(契約終了フィルタ専用の
+  // mightHaveMoreAfterContractFilterはこれに包含されるため不要)。
+  if (visibleDocuments.length === 0 && !hasNextPage) {
     return (
       <>
         {updateBanner}
