@@ -1,5 +1,5 @@
 ---
-updated: 2026-09-23
+updated: 2026-09-25
 ---
 <!-- 前ミッション(dev/kanameone/cocoro環境監査・保守検証)は2026-07-20完遂。全文はdocs/handoff/LATEST.md参照。 -->
 <!-- Google Drive連携Phase1 (MVP)実装ミッションは2026-07-22完了(PR#700マージ)。詳細は本ファイル末尾「Google Drive連携Phase1完遂」節+docs/handoff/LATEST.md参照。 -->
@@ -15,31 +15,32 @@ updated: 2026-09-23
 2. 既存の同名重複は「人が作った側」を残し、app作成側の中身を移動してから統合する新設スクリプト2本（`scripts/audit-drive-sibling-duplicates.ts`[read-only棚卸し]・`scripts/execute-drive-sibling-merge.ts`[承認制実行]）で対応。GitHub Actions `run-ops-script.yml`へ組み込み済み
 3. kanameoneは既に`driveFolderClaimRead:true`が本番有効なため、既存app管理フォルダとの新規衝突による`divergent`化は今後も繰り返し発生する運用コストとして受容し、人手解除ステップ（`execute-drive-claim-resync --mode release-claim`→再実行）をSOPとして正式化（`docs/context/monitoring-setup.md`、ADR-0028 Cons節）。一時「解消不能なclaimが残る恒久バグではないか」と誤認しかけたが、実装・SOP双方を突き合わせて「release-claim後の再実行で解消する」設計に修正済み
 
-**follow-up（未着手、次アクション候補）**:
-- Issue #1039（P1）: 新設2スクリプト本体のfixtureベース統合テストが不在（evaluator/pr-test-analyzer指摘、`scripts/execute-drive-claim-resync.integration.test.ts`と同型のfake Drive client注入パターンで追加予定）
-- **kanameone/cocoro本番展開前の必須ゲート（decision-maker承認済み、未実施）**: ①dev環境での実機再連携（`https://www.googleapis.com/auth/drive`スコープでの再同意）・Issue #1028再現解消確認・既存重複統合リハーサル ②GitHub Actionsワークフロー（`audit-drive-sibling-duplicates`/`execute-drive-sibling-merge`）の実機起動テスト。両方を実施してからkanameone/cocoroへ「Drive再連携」を案内すること
+**follow-up**:
+- ~~Issue #1039（P1）: 新設2スクリプト本体のfixtureベース統合テストが不在~~ **【完了・2026-09-25、PR #1052マージ・クローズ済み】** `scripts/lib/executeSiblingMerge.ts`/`scripts/lib/auditSiblingDuplicates.ts`へmain()の7つの安全分岐を抽出し、fake Drive(新規`scripts/lib/testing/fakeSiblingDrive.ts`)+実Firestore emulatorで24+8+5ケースの統合テストを追加。`/plan-crossreview`(codex 2パス)でIssue本文が例示した「API timeout後の状態照合」ロジックが既存実装に無いことが発覚し、decision-maker判断で新規実装せずスコープ縮小。codex review×2(findings 0件)+pr-review-toolkit×2(findings 0件、pr-test-analyzer指摘4件は追加テストで反映)+quality-gate-evaluator(APPROVE)+dev実機確認(audit→execute dry-run、書込みゼロ)を経てマージ
+- ~~**kanameone/cocoro本番展開前の必須ゲート**: ①dev環境での実機再連携・Issue #1028再現解消確認・既存重複統合リハーサル ②GitHub Actionsワークフローの実機起動テスト~~ **【完了・2026-09-24以前】** dev実機再連携(`https://www.googleapis.com/auth/drive`スコープ再同意)・既存重複統合リハーサル(audit→execute --dry-run→--execute→再audit`groupCount:0`確認)・GHAワークフロー起動テスト(計4回)いずれも完了済み(詳細は本ファイル冒頭セクション参照)
+- **残タスク（条件待ち、trigger=decision-maker判断）**: 上記2ゲートが揃ったため、technicalには「kanameone/cocoroへDrive再連携を案内する」段階に到達している。ただしこれはクライアントへの外部コミュニケーションでありexecutorが起点を持てない（4原則§1）。decision-makerが案内タイミングを判断する
 
-## 【進行中・2026-09-23】kanameoneクライアントフィードバック10件対応（Issue化9/9完了+既存Issue #960修正1件マージ済み、現在のミッションとは別件・並行トラック）
+## 【完了・2026-09-25】kanameoneクライアントフィードバック10件対応（①〜⑩全件対応完了+既存Issue #960修正1件マージ済み、現在のミッションとは別件・並行トラック）
 
 kanameoneから10件のフィードバックが届き、①は不具合報告・②〜⑩は機能要望。着手順はdecision-makerに一任されたため、①はrules/workflow.md「バグ報告は報告者へ即座に聞き返す前に自分の手段を使い切る」原則([[feedback_reproduce_before_asking_reporter]]としてグローバルharnessにも新規反映)に従い、まずdev環境での実機再現を優先した。
 
 **①(医療フォルダ重複、Issue #1028起票)**: kaname報告は「「医療」フォルダを別の場所から保存先ドライブフォルダに移動したところ重複ができた」というもの。Issue #871(claimプロトコル、2026-09-16 kanameoneロールアウト完了)と類似だが別原因の可能性を疑い、まずkanameone実データをread-only調査(`scripts/investigate-drive-folder-duplicate-by-name.ts`新規実装、PR #1027マージ・codex review 3回で指摘3件解消)。テナント全体で重複は検出できなかった(`drive.file`スコープの限界で「appが一度も触れていないフォルダ」は検出不能という制約を発見)ため、dev環境で実機再現を実施: Drive UI上でapp未関与の「医療」フォルダを手動作成→顧客フォルダへ移動→doc-split dev環境で保存操作(書類種別変更→確認済み化)を実行したところ、**Drive UI上に「医療」フォルダが2つ生成される重複を100%再現**。同時に、app視点(`files.list`)ではこの新規作成分1件しか見えず(手動配置分は不可視)、根本原因が`drive.file`スコープの恒久的な盲点(タイミング非依存、Issue #871のclaimプロトコルの対象外)であることを実機で確定。Issue #1028に再現手順・根拠・対応方針候補(スコープ拡張/運用ルール化/検出ツール運用)を記録、decision-maker判断待ち。dev環境で変更したテストデータ(`seed-doc-0125`)は元の状態(書類種別:ケアプラン、未確認)に復元済み。重複した「医療」フォルダ2件は証跡としてdev環境にそのまま残置(GHA run `35823293047`のログと合わせて参照可能)。
 
-**②〜⑩(機能要望9件)**: 全件Issue化(Issue #1029〜#1037)。P2(通常優先度)。実装は未着手、着手順・優先度はdecision-maker判断待ち。
+**②〜⑩(機能要望9件、Issue #1029〜#1037)**: 全件完了。
 
-- #1029 担当ケアマネ不明の絞り込み表示
-- #1030 書類種別サジェストの並び順改善
-- #1031 PDFアップロードのバックグラウンド化
-- #1032 担当CM別画面の件数不正確(全件読込前、bugラベル)
-- #1033 契約終了利用者の非表示設定
+- ~~#1029 担当ケアマネ不明の絞り込み表示~~ **【完了・2026-09-25、PR #1053マージ】** `document.careManager`未設定の書類を絞り込むチェックボックスを書類一覧タブに追加。既存の`showMultiCustomerOnly`等と同型のクライアント側フィルタ。1ファイル・22行の小規模PR、Playwright MCP実機確認済み
+- ~~#1030 書類種別サジェストの並び順改善~~ **【完了、PR #1047】**
+- ~~#1031 PDFアップロードのバックグラウンド化~~ **【完了、PR #1048】**
+- ~~#1032 担当CM別画面の件数不正確(全件読込前、bugラベル)~~ **【完了、PR #1045】**
+- ~~#1033 契約終了利用者の非表示設定~~ **【完了、PR #1049】**
 - ~~#1034 確認後も「選択待ち」バッジが残る~~ **【完了・2026-09-24、PR #1041マージ】** 「確認済み」操作が`customerConfirmed`/`officeConfirmed`も同時確定するよう統合。同姓同名等の危険ケースは既存の安全装置(ADR-0022)で引き続き除外。既存本番データへのbackfillスクリプト(`scripts/backfill-confirm-on-verify.ts`)を新規作成したが**本番実行は別途番号単位の明示認可待ち**(dev `--dry-run`→kanameone/cocoro canary→全量、docs/handoff/GOAL.md本節末尾「次の一手」参照)。codex review 9回(通常8回+マージ前strict-config)+`pr-review-toolkit`5エージェント並列セカンドオピニオンで検出した指摘のうち重要4件は本PRで反映、残り3件はフォローアップIssue化(#1042/#1043/#1044、詳細はPR #1041のコメント参照)
 - ~~#1035 利用者フォルダ内の日付表記・ソート順~~ **【完了・2026-09-24、PR #1041に同梱】** 担当CM別グループ表示の日付を書類日付→登録日(`processedAt`)に変更
-- #1036 マスターCSV一括編集機能
-- #1037 PDF削除権限の一般ユーザー開放(**権限変更のため実装前にdecision-maker確認必須**と明記、Firestoreルール・フロントエンド両方の変更が必要)
+- ~~#1036 マスターCSV一括編集機能~~ **【完了、PR #1050】**
+- ~~#1037 PDF削除権限の一般ユーザー開放~~ **【完了・2026-09-25、PR #1051マージ】** `/plan-crossreview`で当初案(firestore.rules緩和)がCloud Function経由の安全な削除処理を迂回する新経路を開く設計ミスと判明、`deleteDocument.ts`本体+フロントエンド2層のみでの権限緩和に全面改訂
 
 **既存Issue #960(別件、同セッション内で先行対応)**: `handleProcessingError`のFirestore transient gRPCコード判定漏れをPR #1026で修正・マージ済み(codex review findings 0件、CI全PASS)。
 
-**次の一手**: Issue #1028は本セッションで対応方針確定→実装→PR #1038マージまで完了（詳細は上記新規エントリ「Issue #1028: Drive OAuthスコープ拡張」参照）。Issue #1034/#1035はPR #1041で完了(2026-09-24)。残るIssue #1029〜#1033/#1036/#1037(着手順・優先度)の判断のみが未決。AI側からの提案・着手は行わない(起点アイデアはdecision-maker領分)。
+**🎯 kanameoneフィードバック10件対応ミッション達成**: ①(Issue #1028、Drive OAuthスコープ拡張)〜⑩(Issue #1037)全件完了。次のゴールへの更新は不要（並行トラックのため本セクションはこのまま完了記録として残す）。
 
 **Issue #1034/#1035のbackfillスクリプト本番実行(条件待ち、trigger=decision-makerの番号単位の明示認可)**: `scripts/backfill-confirm-on-verify.ts`は実装・テスト・codexレビュー済みだが未実行。実行前に#1043(ManifestEntry型強化+rollback読込のランタイム検証)の解消を推奨(rollback経路の安全性に直結するため)。実行手順: dev環境`--dry-run`→対象件数・理由別内訳確認→`--limit`少数canary→`--rollback --dry-run`でロールバック動作確認→kanameone/cocoroそれぞれ同じ段階を番号単位の明示認可のもとで実施。kanameoneはGOAL.md「Google Drive連携Phase1」の本番展開時期と調整が必要(既にverified:trueの書類にcustomerConfirmedが付くことで、driveExportStatus:'error'で止まっていた書類が定期リトライで拾われる可能性があるため)。
 
@@ -575,7 +576,7 @@ cocoro側Drive連携Phase C（クライアント自身のOAuth接続）は外部
 
 **Issue #1028本体のバグ再現→非再発確認(AC4相当)も完了**: decision-maker指示によりPlaywright MCP(既存の認証済みGoogleセッション、hy.unimail.11@gmail.com)経由でDrive UI上の「き　木村千代」フォルダ配下に新規未タグフォルダ「テスト再現1028」を作成(appは一切未関与)。`investigate-drive-folder-duplicate-by-name --name-contains "テスト再現1028"`(GHA run 35846393874)で`該当フォルダ: 1件、claimProperty=false`を確認——フルスコープ`drive`接続後は、appが一度も触れていない人作成フォルダを正しく検出できることを実機証拠として確定。旧`drive.file`スコープでは構造的に不可視だった対象が可視化されたことの直接確認(coreのバグ修正が実際に機能している証拠)。
 
-**残るのはfixtureベース統合テスト(Issue #1039、P1、実装時期未定)のみ**。dev実機検証(再連携・既存重複統合リハーサル・新規フォルダ検出確認・GHAワークフロー起動テスト計5回)は全て完了。
+~~**残るのはfixtureベース統合テスト(Issue #1039、P1、実装時期未定)のみ**~~ **【完了・2026-09-25、PR #1052マージ】**。dev実機検証(再連携・既存重複統合リハーサル・新規フォルダ検出確認・GHAワークフロー起動テスト計5回)・fixtureテスト追加とも全て完了。技術的な事前準備は完了しており、残るのは下記kanameone本番展開の外部依存ステップ(クライアント再連携調整・破壊的操作の明示認可)のみ。
 
 **kanameone/cocoro本番展開(2026-09-23、着手)**:
 - [x] **コードデプロイ完了**: `gh workflow run deploy-functions.yml`(kanameone/cocoro)+`deploy-hosting.yml`(kanameone/cocoro)の計4件、全て成功確認済み(GHAログで`exchangeDriveAuthCode`含む全関数の`Successful update operation`を確認)
