@@ -239,10 +239,25 @@ function isPlainObject(x: unknown): x is Record<string, unknown> {
   return typeof x === 'object' && x !== null && !Array.isArray(x);
 }
 
-/** `ManifestCustomerOutcome`のランタイム検証(Issue #1043、`--rollback`読込み時の型ガード)。 */
+/**
+ * manifestのdocId(呼出元は`db.doc(`documents/${docId}`)`に渡す)のランタイム検証。空文字・
+ * "/"混入(別コレクション配下の無関係なドキュメントを指す経路を開く)を拒否する
+ * (pr-review-toolkit指摘。`isValidManifestEntry`/`isValidFieldTypeAnomaly`で共用しDRY化、
+ * type-design-analyzer指摘: 重複実装だと片方だけ変更されて乖離するリスクがあった)。
+ */
+function isValidDocId(x: unknown): x is string {
+  return typeof x === 'string' && x.length > 0 && !x.includes('/');
+}
+
+/**
+ * `ManifestCustomerOutcome`のランタイム検証(Issue #1043、`--rollback`読込み時の型ガード)。
+ * `confirmedCustomer:false`の分岐は、discriminated unionが型として禁止しているはずの余分な
+ * プロパティ(`customerConfirmedBefore`等)混入を`Object.keys`件数チェックで拒否する
+ * (type-design-analyzer指摘: 型の不変条件とランタイム強制に不一致があった)。
+ */
 export function isValidManifestCustomerOutcome(x: unknown): x is ManifestCustomerOutcome {
   if (!isPlainObject(x)) return false;
-  if (x.confirmedCustomer === false) return true;
+  if (x.confirmedCustomer === false) return Object.keys(x).length === 1;
   if (x.confirmedCustomer === true) {
     return (
       (x.customerConfirmedBefore === undefined || typeof x.customerConfirmedBefore === 'boolean') &&
@@ -252,10 +267,10 @@ export function isValidManifestCustomerOutcome(x: unknown): x is ManifestCustome
   return false;
 }
 
-/** `ManifestOfficeOutcome`のランタイム検証(Issue #1043、`--rollback`読込み時の型ガード)。 */
+/** `ManifestOfficeOutcome`のランタイム検証(Issue #1043、`--rollback`読込み時の型ガード)。設計意図はcustomer版と同じ。 */
 export function isValidManifestOfficeOutcome(x: unknown): x is ManifestOfficeOutcome {
   if (!isPlainObject(x)) return false;
-  if (x.confirmedOffice === false) return true;
+  if (x.confirmedOffice === false) return Object.keys(x).length === 1;
   if (x.confirmedOffice === true) {
     return x.officeConfirmedBefore === undefined || typeof x.officeConfirmedBefore === 'boolean';
   }
@@ -269,9 +284,7 @@ export function isValidManifestOfficeOutcome(x: unknown): x is ManifestOfficeOut
  */
 export function isValidManifestEntry(x: unknown): x is ConfirmOnVerifyManifestEntry {
   if (!isPlainObject(x)) return false;
-  // "/"混入は`db.doc(`documents/${docId}`)`(呼出元)が別コレクション配下の無関係なドキュメント
-  // を指す経路を開くため、手編集されたmanifestに対する追加の防御として拒否する(pr-review-toolkit指摘)。
-  if (typeof x.docId !== 'string' || x.docId.length === 0 || x.docId.includes('/')) return false;
+  if (!isValidDocId(x.docId)) return false;
   if (!isValidManifestCustomerOutcome(x.customer)) return false;
   if (!isValidManifestOfficeOutcome(x.office)) return false;
   const t = x.backfillUpdateTime;
@@ -282,7 +295,7 @@ export function isValidManifestEntry(x: unknown): x is ConfirmOnVerifyManifestEn
 /** `ConfirmOnVerifyFieldTypeAnomaly`のランタイム検証(Issue #1043関連、silent-failure-hunter指摘)。 */
 export function isValidFieldTypeAnomaly(x: unknown): x is ConfirmOnVerifyFieldTypeAnomaly {
   if (!isPlainObject(x)) return false;
-  if (typeof x.docId !== 'string' || x.docId.length === 0 || x.docId.includes('/')) return false;
+  if (!isValidDocId(x.docId)) return false;
   if (typeof x.fileName !== 'string') return false;
   if (!Array.isArray(x.fields) || x.fields.length === 0) return false;
   return x.fields.every((f) => f === 'customerConfirmed' || f === 'officeConfirmed');

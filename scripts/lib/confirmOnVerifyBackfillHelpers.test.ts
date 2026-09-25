@@ -206,6 +206,26 @@ test('isValidManifestEntry: 必須フィールド欠如・型不一致・不正�
     false,
     'docIdに"/"を含む場合(手編集による別パス誤参照防止、pr-review-toolkit指摘)'
   );
+  assert.equal(
+    isValidManifestEntry({
+      docId: 'doc-7',
+      customer: { confirmedCustomer: false, customerConfirmedBefore: true }, // falseなのに余分なプロパティ混入
+      office: { confirmedOffice: false },
+      backfillUpdateTime: { seconds: 1, nanoseconds: 0 },
+    }),
+    false,
+    'confirmedCustomer:falseなのに余分なプロパティが混入(discriminated unionが禁止する状態、type-design-analyzer指摘)'
+  );
+  assert.equal(
+    isValidManifestEntry({
+      docId: 'doc-8',
+      customer: { confirmedCustomer: false },
+      office: { confirmedOffice: false, officeConfirmedBefore: true }, // falseなのに余分なプロパティ混入
+      backfillUpdateTime: { seconds: 1, nanoseconds: 0 },
+    }),
+    false,
+    'confirmedOffice:falseなのに余分なプロパティが混入(type-design-analyzer指摘)'
+  );
 });
 
 test('isValidFieldTypeAnomaly: docId・fileName・fields(1件以上、既知の判別子のみ)を要求する', () => {
