@@ -990,59 +990,97 @@ export type ImportAction = 'add' | 'overwrite' | 'skip'
 
 /**
  * インポート結果（詳細版）
+ *
+ * failedNames: 書込みに失敗した行(Issue #1036の/plan-crossreview反映#5)。
+ * 一括インポートは1件ずつawaitするため、途中の1件が失敗しても以前の行は
+ * コミット済みになる。失敗した行をスキップして後続を続行し、結果に含める。
  */
 export interface BulkImportResultDetailed {
   added: number
   overwritten: number
   skipped: number
   skippedNames: string[]
+  failedNames: string[]
+}
+
+/**
+ * CSV文字列(区切り文字区切り)をFirestore用のstring[]に変換する。
+ * 空文字列・空欄はundefinedを返し、「空欄=変更しない」(値がある列のみ送信する)
+ * ルールに対応する(Issue #1036)。
+ */
+function parseSeparatedListForImport(value: string | undefined, separator: string): string[] | undefined {
+  if (!value) return undefined
+  const arr = value.split(separator).map(s => s.trim()).filter(s => s.length > 0)
+  return arr.length > 0 ? arr : undefined
 }
 
 // --- 書類種別の重複チェック（詳細付き） ---
+// Issue #1036: aliases列を追加（/plan-crossreview反映#3。チェック関数のinput/output
+// 双方を完全なCSV行に拡張しないと、既存データ側にフィールドを足すだけではCSVの
+// 備考・別表記・メールがプレビュー〜書込みまで届かない）
 export async function checkDocumentTypeDuplicatesWithDetails(
-  items: { name: string; dateMarker: string; category: string; keywords: string }[]
-): Promise<DuplicateCheckResultWithDetails<{ name: string; dateMarker: string; category: string; keywords: string }>[]> {
+  items: { name: string; dateMarker: string; category: string; keywords: string; aliases?: string }[]
+): Promise<DuplicateCheckResultWithDetails<{ name: string; dateMarker: string; category: string; keywords: string; aliases?: string }>[]> {
   const snapshot = await getDocs(collection(db, COLLECTION_PATHS.documents))
-  const existingMap = new Map<string, { name: string; dateMarker: string; category: string; keywords: string }>()
+  const existingMap = new Map<string, { name: string; dateMarker: string; category: string; keywords: string; aliases?: string }>()
 
   snapshot.docs.forEach(d => {
     const data = d.data()
     const keywords = Array.isArray(data.keywords) ? data.keywords.join(';') : ''
+    const aliases = Array.isArray(data.aliases) ? data.aliases.join('|') : ''
     existingMap.set(data.name, {
       name: data.name,
       dateMarker: data.dateMarker || '',
       category: data.category || '',
       keywords,
+      aliases,
     })
   })
 
   return items.map(item => ({
-    csvData: item,
+    csvData: { ...item, aliases: item.aliases || '' },
     existingData: existingMap.get(item.name) || null,
     isDuplicate: existingMap.has(item.name),
   }))
 }
 
 // --- ケアマネの重複チェック（詳細付き） ---
+// Issue #1036: email列を追加。existingDataに実doc ID(id)を含める（/plan-crossreview反映#4。
+// UIからの新規作成はdoc ID=正規化した名前だが、CLI(scripts/import-masters.js)経由の
+// ケアマネはdoc()自動採番のため、名前ベースのdoc()で上書きすると対象不存在になりうる。
+// 実doc IDを重複チェック結果に持たせ、上書きはそのIDで行う）
 export async function checkCareManagerDuplicatesWithDetails(
-  items: { name: string }[]
-): Promise<DuplicateCheckResultWithDetails<{ name: string }>[]> {
+  items: { name: string; email?: string }[]
+): Promise<DuplicateCheckResultWithDetails<{ name: string; email?: string; id?: string }>[]> {
   const snapshot = await getDocs(collection(db, COLLECTION_PATHS.caremanagers))
-  const existingNames = new Set(snapshot.docs.map(d => d.data().name))
+  const existingMap = new Map<string, { name: string; email?: string; id: string }>()
 
-  return items.map(item => ({
-    csvData: item,
-    existingData: existingNames.has(item.name) ? { name: item.name } : null,
-    isDuplicate: existingNames.has(item.name),
-  }))
+  snapshot.docs.forEach(d => {
+    const data = d.data()
+    existingMap.set(data.name, {
+      name: data.name,
+      email: data.email || '',
+      id: d.id,
+    })
+  })
+
+  return items.map(item => {
+    const existing = existingMap.get(item.name)
+    return {
+      csvData: { name: item.name, email: item.email || '' },
+      existingData: existing || null,
+      isDuplicate: !!existing,
+    }
+  })
 }
 
 // --- 顧客の重複チェック（詳細付き） ---
+// Issue #1036: notes・aliases列を追加
 export async function checkCustomerDuplicatesWithDetails(
-  items: { name: string; furigana: string; careManagerName?: string }[]
-): Promise<DuplicateCheckResultWithDetails<{ name: string; furigana: string; careManagerName?: string; id?: string }>[]> {
+  items: { name: string; furigana: string; careManagerName?: string; notes?: string; aliases?: string }[]
+): Promise<DuplicateCheckResultWithDetails<{ name: string; furigana: string; careManagerName?: string; notes?: string; aliases?: string; id?: string }>[]> {
   const snapshot = await getDocs(collection(db, COLLECTION_PATHS.customers))
-  const existingMap = new Map<string, { name: string; furigana: string; careManagerName?: string; id: string }>()
+  const existingMap = new Map<string, { name: string; furigana: string; careManagerName?: string; notes?: string; aliases?: string; id: string }>()
 
   snapshot.docs.forEach(d => {
     const data = d.data()
@@ -1050,6 +1088,8 @@ export async function checkCustomerDuplicatesWithDetails(
       name: data.name,
       furigana: data.furigana || '',
       careManagerName: data.careManagerName || '',
+      notes: data.notes || '',
+      aliases: Array.isArray(data.aliases) ? data.aliases.join('|') : '',
       id: d.id,
     })
   })
@@ -1058,7 +1098,13 @@ export async function checkCustomerDuplicatesWithDetails(
     const normalizedName = normalizeName(item.name)
     const existing = existingMap.get(normalizedName)
     return {
-      csvData: { name: normalizedName, furigana: item.furigana, careManagerName: item.careManagerName || '' },
+      csvData: {
+        name: normalizedName,
+        furigana: item.furigana,
+        careManagerName: item.careManagerName || '',
+        notes: item.notes || '',
+        aliases: item.aliases || '',
+      },
       existingData: existing || null,
       isDuplicate: !!existing,
     }
@@ -1066,17 +1112,20 @@ export async function checkCustomerDuplicatesWithDetails(
 }
 
 // --- 事業所の重複チェック（詳細付き） ---
+// Issue #1036: notes・aliases列を追加
 export async function checkOfficeDuplicatesWithDetails(
-  items: { name: string; shortName: string }[]
-): Promise<DuplicateCheckResultWithDetails<{ name: string; shortName: string; id?: string }>[]> {
+  items: { name: string; shortName: string; notes?: string; aliases?: string }[]
+): Promise<DuplicateCheckResultWithDetails<{ name: string; shortName: string; notes?: string; aliases?: string; id?: string }>[]> {
   const snapshot = await getDocs(collection(db, COLLECTION_PATHS.offices))
-  const existingMap = new Map<string, { name: string; shortName: string; id: string }>()
+  const existingMap = new Map<string, { name: string; shortName: string; notes?: string; aliases?: string; id: string }>()
 
   snapshot.docs.forEach(d => {
     const data = d.data()
     existingMap.set(data.name, {
       name: data.name,
       shortName: data.shortName || '',
+      notes: data.notes || '',
+      aliases: Array.isArray(data.aliases) ? data.aliases.join('|') : '',
       id: d.id,
     })
   })
@@ -1085,7 +1134,12 @@ export async function checkOfficeDuplicatesWithDetails(
     const normalizedName = normalizeName(item.name)
     const existing = existingMap.get(normalizedName)
     return {
-      csvData: { name: normalizedName, shortName: item.shortName || '' },
+      csvData: {
+        name: normalizedName,
+        shortName: item.shortName || '',
+        notes: item.notes || '',
+        aliases: item.aliases || '',
+      },
       existingData: existing || null,
       isDuplicate: !!existing,
     }
@@ -1094,7 +1148,7 @@ export async function checkOfficeDuplicatesWithDetails(
 
 // --- 書類種別の上書き対応インポート ---
 interface DocumentTypeImportItem {
-  data: { name: string; dateMarker: string; category: string; keywords: string }
+  data: { name: string; dateMarker: string; category: string; keywords: string; aliases?: string }
   action: ImportAction
 }
 
@@ -1105,6 +1159,7 @@ async function bulkImportDocumentTypesWithActions(
   let overwritten = 0
   let skipped = 0
   const skippedNames: string[] = []
+  const failedNames: string[] = []
 
   for (const item of items) {
     if (!item.data.name) {
@@ -1119,24 +1174,41 @@ async function bulkImportDocumentTypesWithActions(
       continue
     }
 
-    const docRef = doc(db, COLLECTION_PATHS.documents, item.data.name)
-    await setDoc(docRef, {
-      name: item.data.name,
-      dateMarker: item.data.dateMarker || '',
-      category: item.data.category || '',
-      keywords: item.data.keywords
+    try {
+      const docRef = doc(db, COLLECTION_PATHS.documents, item.data.name)
+      const keywords = item.data.keywords
         ? item.data.keywords.split(';').map(k => k.trim()).filter(k => k.length >= 2)
-        : [],
-    })
+        : []
+      const aliases = parseSeparatedListForImport(item.data.aliases, '|')
 
-    if (item.action === 'overwrite') {
-      overwritten++
-    } else {
-      added++
+      if (item.action === 'overwrite') {
+        // 上書き: setDoc(非merge)だとCSV列に無いフィールドが消えるため、
+        // updateDocでCSVに値がある列のみ送信する(空欄=変更しない。Issue #1036既存バグ修正)
+        const updateData: Record<string, unknown> = {}
+        if (item.data.dateMarker) updateData.dateMarker = item.data.dateMarker
+        if (item.data.category) updateData.category = item.data.category
+        if (keywords.length > 0) updateData.keywords = keywords
+        if (aliases) updateData.aliases = aliases
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await updateDoc(docRef, updateData as any)
+        overwritten++
+      } else {
+        await setDoc(docRef, {
+          name: item.data.name,
+          dateMarker: item.data.dateMarker || '',
+          category: item.data.category || '',
+          keywords,
+          ...(aliases ? { aliases } : {}),
+        })
+        added++
+      }
+    } catch (err) {
+      console.error(`[bulkImportDocumentTypesWithActions] "${item.data.name}" の書込みに失敗しました`, err)
+      failedNames.push(item.data.name)
     }
   }
 
-  return { added, overwritten, skipped, skippedNames }
+  return { added, overwritten, skipped, skippedNames, failedNames }
 }
 
 export function useBulkImportDocumentTypesWithActions() {
@@ -1151,7 +1223,8 @@ export function useBulkImportDocumentTypesWithActions() {
 
 // --- ケアマネの上書き対応インポート ---
 interface CareManagerImportItem {
-  data: { name: string }
+  data: { name: string; email?: string }
+  existingId?: string
   action: ImportAction
 }
 
@@ -1162,6 +1235,7 @@ async function bulkImportCareManagersWithActions(
   let overwritten = 0
   let skipped = 0
   const skippedNames: string[] = []
+  const failedNames: string[] = []
 
   for (const item of items) {
     if (!item.data.name) {
@@ -1176,21 +1250,45 @@ async function bulkImportCareManagersWithActions(
       continue
     }
 
-    const docRef = doc(db, COLLECTION_PATHS.caremanagers, item.data.name)
-    await setDoc(docRef, {
-      name: item.data.name,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    })
+    try {
+      if (item.action === 'overwrite' && !item.existingId) {
+        // overwrite指定だがexistingIdが無い異常系。ケアマネのdoc IDはUI作成分(正規化名)と
+        // CLI作成分(自動採番)が混在するため、無警告で名前ベースの新規docへフォールバック
+        // すると、CLI由来レコードとは別の名前ベース文書が重複作成されうる。顧客・事業所と
+        // 同様に明示的に失敗扱いにする(pr-review-toolkit指摘の回帰)
+        console.error(`[bulkImportCareManagersWithActions] "${item.data.name}" はoverwrite指定ですがexistingIdがありません`)
+        failedNames.push(item.data.name)
+        continue
+      }
 
-    if (item.action === 'overwrite') {
-      overwritten++
-    } else {
-      added++
+      if (item.action === 'overwrite' && item.existingId) {
+        // 上書きは実doc ID(existingId)で更新する。UI経由の新規作成はdoc ID=正規化した
+        // 名前だが、CLI(scripts/import-masters.js)経由のケアマネはdoc()自動採番のため、
+        // 名前ベースのdocを組み立てるとCLI由来レコードの上書きが対象不存在で失敗する
+        // (Issue #1036 /plan-crossreview反映#4)。updateDocでCSVに値がある列のみ送信する
+        const docRef = doc(db, COLLECTION_PATHS.caremanagers, item.existingId)
+        const updateData: Record<string, unknown> = { updatedAt: serverTimestamp() }
+        if (item.data.email) updateData.email = item.data.email
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await updateDoc(docRef, updateData as any)
+        overwritten++
+      } else {
+        const docRef = doc(db, COLLECTION_PATHS.caremanagers, item.data.name)
+        await setDoc(docRef, {
+          name: item.data.name,
+          ...(item.data.email ? { email: item.data.email } : {}),
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        })
+        added++
+      }
+    } catch (err) {
+      console.error(`[bulkImportCareManagersWithActions] "${item.data.name}" の書込みに失敗しました`, err)
+      failedNames.push(item.data.name)
     }
   }
 
-  return { added, overwritten, skipped, skippedNames }
+  return { added, overwritten, skipped, skippedNames, failedNames }
 }
 
 export function useBulkImportCareManagersWithActions() {
@@ -1205,7 +1303,7 @@ export function useBulkImportCareManagersWithActions() {
 
 // --- 顧客の上書き対応インポート ---
 interface CustomerImportItem {
-  data: { name: string; furigana: string; careManagerName?: string }
+  data: { name: string; furigana: string; careManagerName?: string; notes?: string; aliases?: string }
   existingId?: string
   action: ImportAction
 }
@@ -1224,6 +1322,7 @@ async function bulkImportCustomersWithActions(
   let overwritten = 0
   let skipped = 0
   const skippedNames: string[] = []
+  const failedNames: string[] = []
 
   for (const item of items) {
     const normalizedName = normalizeName(item.data.name)
@@ -1239,34 +1338,56 @@ async function bulkImportCustomersWithActions(
       continue
     }
 
-    // 共通のデータオブジェクトを作成
-    const baseData: Record<string, unknown> = {
-      name: normalizedName,
-      furigana: normalizeName(item.data.furigana),
-    }
-    if (item.data.careManagerName) {
-      baseData.careManagerName = item.data.careManagerName
-    }
+    try {
+      // 共通のデータオブジェクトを作成(furigana・notes・aliasesはCSVに値がある場合のみ含める。空欄=変更しない)
+      const baseData: Record<string, unknown> = {
+        name: normalizedName,
+      }
+      if (item.data.furigana) {
+        baseData.furigana = normalizeName(item.data.furigana)
+      }
+      if (item.data.careManagerName) {
+        baseData.careManagerName = item.data.careManagerName
+      }
+      if (item.data.notes) {
+        baseData.notes = item.data.notes
+      }
+      const aliases = parseSeparatedListForImport(item.data.aliases, '|')
+      if (aliases) {
+        baseData.aliases = aliases
+      }
 
-    if (item.action === 'overwrite' && item.existingId) {
-      // 上書き: 既存ドキュメントを更新
-      const docRef = doc(db, COLLECTION_PATHS.customers, item.existingId)
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await updateDoc(docRef, baseData as any)
-      overwritten++
-    } else {
-      // 新規追加
-      const docRef = doc(collection(db, COLLECTION_PATHS.customers))
-      await setDoc(docRef, {
-        ...baseData,
-        isDuplicate: existingByName.has(normalizedName),
-      })
-      added++
-      existingByName.set(normalizedName, docRef.id)
+      if (item.action === 'overwrite' && !item.existingId) {
+        // overwrite指定だがexistingIdが無い異常系。addへ無警告フォールバックすると
+        // 別レコードとして重複作成されてしまうため、明示的に失敗扱いにする
+        console.error(`[bulkImportCustomersWithActions] "${normalizedName}" はoverwrite指定ですがexistingIdがありません`)
+        failedNames.push(normalizedName)
+        continue
+      }
+
+      if (item.action === 'overwrite' && item.existingId) {
+        // 上書き: 既存ドキュメントを更新
+        const docRef = doc(db, COLLECTION_PATHS.customers, item.existingId)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await updateDoc(docRef, baseData as any)
+        overwritten++
+      } else {
+        // 新規追加
+        const docRef = doc(collection(db, COLLECTION_PATHS.customers))
+        await setDoc(docRef, {
+          ...baseData,
+          isDuplicate: existingByName.has(normalizedName),
+        })
+        added++
+        existingByName.set(normalizedName, docRef.id)
+      }
+    } catch (err) {
+      console.error(`[bulkImportCustomersWithActions] "${normalizedName}" の書込みに失敗しました`, err)
+      failedNames.push(normalizedName)
     }
   }
 
-  return { added, overwritten, skipped, skippedNames }
+  return { added, overwritten, skipped, skippedNames, failedNames }
 }
 
 export function useBulkImportCustomersWithActions() {
@@ -1281,7 +1402,7 @@ export function useBulkImportCustomersWithActions() {
 
 // --- 事業所の上書き対応インポート ---
 interface OfficeImportItem {
-  data: { name: string; shortName: string }
+  data: { name: string; shortName: string; notes?: string; aliases?: string }
   existingId?: string
   action: ImportAction
 }
@@ -1320,6 +1441,7 @@ async function bulkImportOfficesWithActions(
   let overwritten = 0
   let skipped = 0
   const skippedNames: string[] = []
+  const failedNames: string[] = []
 
   for (let i = 0; i < items.length; i++) {
     const item = items[i]!
@@ -1343,27 +1465,48 @@ async function bulkImportOfficesWithActions(
       continue
     }
 
-    if (item.action === 'overwrite' && item.existingId) {
-      // 上書き: 既存ドキュメントを更新
-      const docRef = doc(db, COLLECTION_PATHS.offices, item.existingId)
-      await setDoc(docRef, {
-        name: normalizedName,
-        shortName: item.data.shortName ? normalizeName(item.data.shortName) : '',
-      })
-      overwritten++
-    } else {
-      // 新規追加
-      const docRef = doc(collection(db, COLLECTION_PATHS.offices))
-      await setDoc(docRef, {
-        name: normalizedName,
-        shortName: item.data.shortName ? normalizeName(item.data.shortName) : '',
-      })
-      added++
-      existingByName.set(normalizedName, docRef.id)
+    try {
+      const normalizedShortName = item.data.shortName ? normalizeName(item.data.shortName) : ''
+      const aliases = parseSeparatedListForImport(item.data.aliases, '|')
+
+      if (item.action === 'overwrite' && !item.existingId) {
+        // overwrite指定だがexistingIdが無い異常系。addへ無警告フォールバックすると
+        // 別レコードとして重複作成されてしまうため、明示的に失敗扱いにする
+        console.error(`[bulkImportOfficesWithActions] "${normalizedName}" はoverwrite指定ですがexistingIdがありません`)
+        failedNames.push(normalizedName)
+        continue
+      }
+
+      if (item.action === 'overwrite' && item.existingId) {
+        // 上書き: setDoc(非merge)だとCSV列に無いフィールド(shortName・備考・別表記等)が
+        // 消えるため、updateDocでCSVに値がある列のみ送信する(空欄=変更しない。Issue #1036既存バグ修正)
+        const docRef = doc(db, COLLECTION_PATHS.offices, item.existingId)
+        const updateData: Record<string, unknown> = { name: normalizedName }
+        if (normalizedShortName) updateData.shortName = normalizedShortName
+        if (item.data.notes) updateData.notes = item.data.notes
+        if (aliases) updateData.aliases = aliases
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await updateDoc(docRef, updateData as any)
+        overwritten++
+      } else {
+        // 新規追加
+        const docRef = doc(collection(db, COLLECTION_PATHS.offices))
+        await setDoc(docRef, {
+          name: normalizedName,
+          shortName: normalizedShortName,
+          ...(item.data.notes ? { notes: item.data.notes } : {}),
+          ...(aliases ? { aliases } : {}),
+        })
+        added++
+        existingByName.set(normalizedName, docRef.id)
+      }
+    } catch (err) {
+      console.error(`[bulkImportOfficesWithActions] "${normalizedName}" の書込みに失敗しました`, err)
+      failedNames.push(normalizedName)
     }
   }
 
-  return { added, overwritten, skipped, skippedNames }
+  return { added, overwritten, skipped, skippedNames, failedNames }
 }
 
 export function useBulkImportOfficesWithActions() {

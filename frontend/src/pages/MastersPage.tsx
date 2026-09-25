@@ -74,6 +74,12 @@ import type { CustomerCSVRow, OfficeCSVRow, CareManagerCSVRow, DocumentTypeCSVRo
 // 汎用データ型
 type AnyCSVData = CustomerCSVRow | OfficeCSVRow | CareManagerCSVRow | DocumentTypeCSVRow
 import { downloadCsvTemplate } from '@/lib/csvTemplates'
+import {
+  downloadCustomersCsv,
+  downloadOfficesCsv,
+  downloadDocumentTypesCsv,
+  downloadCareManagersCsv,
+} from '@/lib/csvExport'
 import type { CustomerMaster, DocumentMaster, OfficeMaster, CareManagerMaster } from '@shared/types'
 import { useMasterAlias } from '@/hooks/useMasterAlias'
 
@@ -129,7 +135,7 @@ export function MastersPage() {
 // ============================================
 
 function CustomersMaster() {
-  const { data: customers, isLoading } = useCustomers()
+  const { data: customers, isLoading, isError } = useCustomers()
   const addCustomer = useAddCustomer()
   const updateCustomer = useUpdateCustomer()
   const deleteCustomer = useDeleteCustomer()
@@ -179,6 +185,8 @@ function CustomersMaster() {
             name: csvRow.name,
             furigana: csvRow.furigana,
             careManagerName: csvRow.careManagerName,
+            notes: csvRow.notes,
+            aliases: csvRow.aliases,
           },
           existingId: item.existingId,
           action: item.action,
@@ -306,7 +314,27 @@ function CustomersMaster() {
             <Download className="h-4 w-4 mr-1" />
             テンプレート
           </Button>
-          <Button variant="outline" onClick={() => setIsCsvImportOpen(true)}>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => downloadCustomersCsv(customers ?? [])}
+            disabled={!customers || customers.length === 0}
+          >
+            <Download className="h-4 w-4 mr-1" />
+            エクスポート
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => setIsCsvImportOpen(true)}
+            disabled={isLoading || isError}
+            title={
+              isLoading
+                ? '顧客データの読み込み中はID照合が正しく行えないため、読み込み完了までお待ちください'
+                : isError
+                  ? '顧客データの読み込みに失敗したためID照合が行えません。画面を再読み込みしてください'
+                  : undefined
+            }
+          >
             <Upload className="h-4 w-4 mr-2" />
             CSVインポート
           </Button>
@@ -616,6 +644,7 @@ function CustomersMaster() {
           isOpen={isCsvImportOpen}
           onClose={() => setIsCsvImportOpen(false)}
           onImport={handleCsvImport}
+          existingRecords={customers}
         />
       </CardContent>
     </Card>
@@ -657,6 +686,7 @@ function DocumentTypesMaster() {
           dateMarker: (item.data as DocumentTypeCSVRow).dateMarker,
           category: (item.data as DocumentTypeCSVRow).category,
           keywords: (item.data as DocumentTypeCSVRow).keywords,
+          aliases: (item.data as DocumentTypeCSVRow).aliases,
         },
         action: item.action,
       }))
@@ -744,6 +774,15 @@ function DocumentTypesMaster() {
           <Button variant="ghost" size="sm" onClick={() => downloadCsvTemplate('documents')}>
             <Download className="h-4 w-4 mr-1" />
             テンプレート
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => downloadDocumentTypesCsv(documentTypes ?? [])}
+            disabled={!documentTypes || documentTypes.length === 0}
+          >
+            <Download className="h-4 w-4 mr-1" />
+            エクスポート
           </Button>
           <Button variant="outline" onClick={() => setIsCsvImportOpen(true)}>
             <Upload className="h-4 w-4 mr-2" />
@@ -1015,7 +1054,7 @@ function DocumentTypesMaster() {
 // ============================================
 
 function OfficesMaster() {
-  const { data: offices, isLoading } = useOffices()
+  const { data: offices, isLoading, isError } = useOffices()
   const addOffice = useAddOffice()
   const updateOffice = useUpdateOffice()
   const deleteOffice = useDeleteOffice()
@@ -1143,7 +1182,12 @@ function OfficesMaster() {
   ): Promise<BulkImportResultDetailed> => {
     return await bulkImport.mutateAsync(
       items.map(item => ({
-        data: { name: (item.data as OfficeCSVRow).name, shortName: (item.data as OfficeCSVRow).shortName ?? '' },
+        data: {
+          name: (item.data as OfficeCSVRow).name,
+          shortName: (item.data as OfficeCSVRow).shortName ?? '',
+          notes: (item.data as OfficeCSVRow).notes,
+          aliases: (item.data as OfficeCSVRow).aliases,
+        },
         existingId: item.existingId,
         action: item.action,
       }))
@@ -1162,7 +1206,27 @@ function OfficesMaster() {
             <Download className="h-4 w-4 mr-1" />
             テンプレート
           </Button>
-          <Button variant="outline" onClick={() => setIsCsvImportOpen(true)}>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => downloadOfficesCsv(offices ?? [])}
+            disabled={!offices || offices.length === 0}
+          >
+            <Download className="h-4 w-4 mr-1" />
+            エクスポート
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => setIsCsvImportOpen(true)}
+            disabled={isLoading || isError}
+            title={
+              isLoading
+                ? '事業所データの読み込み中はID照合が正しく行えないため、読み込み完了までお待ちください'
+                : isError
+                  ? '事業所データの読み込みに失敗したためID照合が行えません。画面を再読み込みしてください'
+                  : undefined
+            }
+          >
             <Upload className="h-4 w-4 mr-2" />
             CSVインポート
           </Button>
@@ -1414,6 +1478,7 @@ function OfficesMaster() {
           isOpen={isCsvImportOpen}
           onClose={() => setIsCsvImportOpen(false)}
           onImport={handleCsvImport}
+          existingRecords={offices}
         />
       </CardContent>
     </Card>
@@ -1499,7 +1564,11 @@ function CareManagersMaster() {
   ): Promise<BulkImportResultDetailed> => {
     return await bulkImport.mutateAsync(
       items.map(item => ({
-        data: { name: (item.data as CareManagerCSVRow).name },
+        data: { name: (item.data as CareManagerCSVRow).name, email: (item.data as CareManagerCSVRow).email },
+        // 実doc ID(existingId)で上書きする(Issue #1036/plan-crossreview反映#4)。
+        // UI経由の新規作成はdoc ID=正規化した名前だが、CLI(scripts/import-masters.js)
+        // 経由のケアマネはdoc()自動採番のため、名前ベースのdocでは対象不存在になりうる
+        existingId: item.existingId,
         action: item.action,
       }))
     )
@@ -1516,6 +1585,15 @@ function CareManagersMaster() {
           <Button variant="ghost" size="sm" onClick={() => downloadCsvTemplate('caremanagers')}>
             <Download className="h-4 w-4 mr-1" />
             テンプレート
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => downloadCareManagersCsv(careManagers ?? [])}
+            disabled={!careManagers || careManagers.length === 0}
+          >
+            <Download className="h-4 w-4 mr-1" />
+            エクスポート
           </Button>
           <Button variant="outline" onClick={() => setIsCsvImportOpen(true)}>
             <Upload className="h-4 w-4 mr-2" />
