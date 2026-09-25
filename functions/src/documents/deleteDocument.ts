@@ -1,10 +1,10 @@
 /**
  * ドキュメント削除 Cloud Function
  *
- * 管理者のみがドキュメントを完全削除可能
+ * ホワイトリスト登録済みユーザーがドキュメントを完全削除可能(Issue #1037)
  *
  * 処理フロー:
- * 1. 認証チェック（管理者のみ）
+ * 1. 認証・ホワイトリストチェック
  * 2. documentId検証
  * 3. Cloud Storage ファイル削除
  * 4. gmailLogs または uploadLogs 削除（sourceType判定）
@@ -44,15 +44,10 @@ export const deleteDocument = onCall(
 
     const uid = request.auth.uid;
 
-    // 管理者チェック
+    // ホワイトリストチェック(Issue #1037: 一般ユーザーにも削除を許可)
     const userDoc = await db.doc(`users/${uid}`).get();
     if (!userDoc.exists) {
       throw new HttpsError('permission-denied', 'User not in whitelist');
-    }
-
-    const userData = userDoc.data();
-    if (userData?.role !== 'admin') {
-      throw new HttpsError('permission-denied', 'Admin permission required');
     }
 
     // 2. リクエストバリデーション

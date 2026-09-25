@@ -158,7 +158,10 @@ describe('Firestore Security Rules', () => {
       );
     });
 
-    it('一般ユーザーは削除不可', async () => {
+    // Issue #1037: Cloud Function(deleteDocument.ts)経由の削除は一般ユーザーにも許可したが、
+    // これはAdmin SDK経由でルール適用外の別経路。ここで検証しているのはClient SDKからの
+    // 直接delete(deleteDoc()の直叩き)で、多層防御として引き続きadmin限定のまま。
+    it('一般ユーザーは削除不可(Client SDK直接deleteのみ。Cloud Function経由は別経路で許可済み)', async () => {
       const normalUser = testEnv.authenticatedContext(normalUid);
 
       // テストデータを作成
@@ -1616,7 +1619,8 @@ describe('Firestore Security Rules', () => {
       await assertSucceeds(deleteDoc(detailRef));
     });
 
-    it('一般ユーザーはdetail/mainを削除できない', async () => {
+    // Issue #1037: 親docのテストと同様、これはClient SDK直接deleteの検証(多層防御でadmin限定のまま)
+    it('一般ユーザーはdetail/mainを削除できない(Client SDK直接deleteのみ)', async () => {
       const normalUser = testEnv.authenticatedContext(normalUid);
 
       await testEnv.withSecurityRulesDisabled(async (context) => {

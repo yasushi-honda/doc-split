@@ -1,8 +1,8 @@
 /**
  * ドキュメント削除機能のテスト
  *
- * deleteDocument Cloud Functionのロジックテスト
- * 注: 実際のFirebase呼び出しはエミュレータで統合テストを行う
+ * deleteDocument Cloud Functionのロジックテスト(純粋関数の複製ロジック・バリデーション条件式)
+ * 注: 認可(ホワイトリスト判定)を含む実際のFirebase呼び出しはdeleteDocumentIntegration.test.tsで検証する
  */
 
 import { expect } from 'chai';
@@ -106,28 +106,6 @@ describe('deleteDocument バリデーション', () => {
     it('有効なdocumentId', () => {
       const documentId = 'abc123xyz';
       expect(!documentId || typeof documentId !== 'string').to.be.false;
-    });
-  });
-
-  describe('管理者権限検証', () => {
-    it('adminロールは管理者', () => {
-      const userData = { role: 'admin' };
-      expect(userData?.role === 'admin').to.be.true;
-    });
-
-    it('userロールは管理者ではない', () => {
-      const userData = { role: 'user' };
-      expect(userData?.role === 'admin').to.be.false;
-    });
-
-    it('ロール未設定は管理者ではない', () => {
-      const userData = {};
-      expect((userData as { role?: string })?.role === 'admin').to.be.false;
-    });
-
-    it('undefinedは管理者ではない', () => {
-      const userData = undefined as { role?: string } | undefined;
-      expect(userData?.role === 'admin').to.be.false;
     });
   });
 });

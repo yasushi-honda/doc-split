@@ -139,7 +139,7 @@ sequenceDiagram
 | `splitPdf` | Callable | PDF分割実行 |
 | `rotatePdfPages` | Callable | PDFページ回転（永続保存） |
 | `uploadPdf` | Callable | ローカルPDFアップロード |
-| `deleteDocument` | Callable | ドキュメント削除（管理者のみ） |
+| `deleteDocument` | Callable | ドキュメント削除（ホワイトリスト登録済みユーザー） |
 | `getOcrText` | Callable | OCR全文取得 |
 | `regenerateSummary` | Callable | AI要約再生成 |
 | `searchDocuments` | Callable | 全文検索（日付パース対応） |

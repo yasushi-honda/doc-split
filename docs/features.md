@@ -154,7 +154,7 @@
 | `regenerateSummary` | AI要約再生成 |
 | `searchDocuments` | 全文検索（日付パース対応） |
 | `uploadPdf` | ローカルPDFアップロード |
-| `deleteDocument` | ドキュメント削除（管理者のみ） |
+| `deleteDocument` | ドキュメント削除（ホワイトリスト登録済みユーザー） |
 
 ## ユーザーロール
 
