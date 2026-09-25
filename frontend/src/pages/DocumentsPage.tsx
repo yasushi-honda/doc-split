@@ -76,6 +76,7 @@ import { DateRangeFilter, type DateRange } from '@/components/DateRangeFilter'
 import { isCustomerConfirmed } from '@/hooks/useProcessingHistory'
 import { resolveCustomerUnconfirmedReason } from '@shared/customerIdentity'
 import { planConfirmOnVerify, buildConfirmOnVerifyUpdate } from '@shared/confirmOnVerify'
+import { decideBulkVerifyToast, decidePostWriteSyncFailureToast } from '@/lib/bulkVerifyToast'
 import { DocumentDetailModal } from '@/components/DocumentDetailModal'
 import { MultiCustomerBadge } from '@/components/MultiCustomerBadge'
 import { AliasLearningHistoryModal } from '@/components/AliasLearningHistoryModal'
@@ -687,9 +688,27 @@ export function DocumentsPage() {
     if (selectedIds.size === 0 || !user) return
 
     setIsBulkOperating(true)
+
+    // Issue #1042: Firestore書込みフェーズ(このtry)と、後続のキャッシュ補正フェーズ(下記の
+    // 別try)を分離する。以前は一つのtryで両方を包んでおり、runWithConcurrency自体は成功して
+    // Firestoreへの書込みが完了済みなのに、後続のキャッシュ処理(updateDocumentInListCache
+    // ループ・invalidateGroupQueries等)側で例外が起きると「一括確認に失敗しました」という
+    // 誤った全体失敗トーストが出ていた(書込みは成功しているため実際には失敗していない)。
+    let ids: string[]
+    let uid: string
+    let outcomes: Array<{
+      docId: string
+      status: 'ok' | 'error'
+      decisions: ReturnType<typeof planConfirmOnVerify> | null
+      // codex review 3巡目指摘: 成功した書類がトランザクション内で読み込んだ最新状態の
+      // 時点で既に両方確定済みだったか。identityLookupFailed時の警告要否判定に使う
+      // (成功でも実際には確定処理が発生しなかったerrorステータス扱いの書類はfalse=無視)。
+      alreadyFullyConfirmed: boolean
+    }>
+    let identityLookupFailed = false
     try {
-      const ids = Array.from(selectedIds)
-      const uid = user.uid
+      ids = Array.from(selectedIds)
+      uid = user.uid
       const email = user.email || ''
 
       // codexレビュー指摘(P1・2回目): 同姓同名判定に使う顧客マスターを`identityLookup`
@@ -717,13 +736,14 @@ export function DocumentsPage() {
       // 安全側に倒す)。
       const freshIdentityLookup = await fetchFreshCustomerIdentityLookup().catch((fetchErr) => {
         console.error('Failed to fetch fresh customer identity lookup, skipping confirm-on-verify:', fetchErr)
+        identityLookupFailed = true
         return null
       })
 
-      const outcomes = await runWithConcurrency(ids, 20, async (docId) => {
+      outcomes = await runWithConcurrency(ids, 20, async (docId) => {
         const docRef = doc(db, 'documents', docId)
         try {
-          const decisions = await runTransaction(db, async (tx) => {
+          const { decisions, alreadyFullyConfirmed } = await runTransaction(db, async (tx) => {
             const freshSnap = await tx.get(docRef)
             if (!freshSnap.exists()) {
               throw new Error(`Document not found: ${docId}`)
@@ -764,18 +784,50 @@ export function DocumentsPage() {
               })
             }
 
-            return txDecisions
+            return {
+              decisions: txDecisions,
+              // codex review 3巡目指摘: identityLookupFailedによる警告は、成功した書類の
+              // うち少なくとも1件が実際に確定できたはず(=両方確定済みではなかった)場合のみ
+              // 出す。単体トグルの「既に両方確定済みなら警告不要」と同じ判定を、このtx内で
+              // 再読込した最新状態(freshDoc)を基準に行う。
+              alreadyFullyConfirmed: freshDoc.customerConfirmed === true && freshDoc.officeConfirmed === true,
+            }
           })
-          return { docId, status: 'ok' as const, decisions }
+          return { docId, status: 'ok' as const, decisions, alreadyFullyConfirmed }
         } catch (err) {
           console.error(`Bulk verify failed for document ${docId}:`, err)
-          return { docId, status: 'error' as const, decisions: null }
+          return { docId, status: 'error' as const, decisions: null, alreadyFullyConfirmed: false }
         }
       })
+    } catch (error) {
+      // このcatchに到達するのはrunWithConcurrency自体(個別docの失敗は上のper-doc
+      // try/catchで既にstatus:'error'として吸収済み)が例外を投げた場合のみで、
+      // 実質的にバッチ全体で書込みが行われていない状態。「一括確認に失敗しました」で正しい。
+      console.error('Bulk verify error (write phase):', error)
+      toast.error('一括確認に失敗しました')
+      setIsBulkOperating(false)
+      return
+    }
 
-      const succeeded = outcomes.filter((o) => o.status === 'ok')
-      const failed = outcomes.filter((o) => o.status === 'error')
+    // Issue #1042: ここに到達した時点でFirestoreへの書込み(verified/確定フラグ)は
+    // 既に完了している。以降はキャッシュ補正・トースト表示という表示上の後始末のため、
+    // 失敗しても「一括確認に失敗しました」という誤った全体失敗にしない(書込み自体は成功済み)。
+    //
+    // succeeded/failedはoutcomes(Phase-Aで既に確定済みの配列)へのpureなfilter()のため
+    // 例外を投げない。tryの外(catchからも参照可能な位置)で計算しておくことで、この直後の
+    // キャッシュ補正処理自体が例外を投げても、catch側でPhase-Aの実際の成否(一部書込み失敗が
+    // あったか)を踏まえたメッセージを出せるようにする(pr-review-toolkit:silent-failure-hunter
+    // レビュー指摘CRITICAL-2: 以前はcatchが固定の「更新しました」文言のみを返し、実際には
+    // 一部書込み失敗があった場合でも全体成功したかのように見えていた)。
+    const succeeded = outcomes.filter((o) => o.status === 'ok')
+    const failed = outcomes.filter((o) => o.status === 'error')
+    // codex review 3巡目指摘: identityLookupFailedが真でも、成功した書類が全て既に
+    // 両方確定済み(alreadyFullyConfirmed)なら実際には確定できたはずのものは何もなく、
+    // 警告は不要(単体トグルの「既に両方確定済みなら警告不要」と同じ判定に揃える)。
+    const identityLookupWarningNeeded =
+      identityLookupFailed && succeeded.some((o) => !o.alreadyFullyConfirmed)
 
+    try {
       const confirmedAtApprox = Timestamp.now()
       for (const o of succeeded) {
         const cachePatch: Record<string, unknown> = {
@@ -809,22 +861,50 @@ export function DocumentsPage() {
         (o) => o.decisions?.customer.action === 'confirm' || o.decisions?.office.action === 'confirm'
       ).length
 
-      if (failed.length > 0) {
+      const toastOutcome = decideBulkVerifyToast({
+        totalCount: ids.length,
+        succeededCount: succeeded.length,
+        failedCount: failed.length,
+        confirmedCount,
+        identityLookupFailed: identityLookupWarningNeeded,
+      })
+
+      if (identityLookupWarningNeeded) {
+        // codex review 4巡目・5巡目指摘の統合対応: 確定処理がidentityLookup取得失敗で
+        // スキップされ、警告が「再実行してください」と促す。書込みの成否(failed.length)に
+        // 関わらず、元の選択を丸ごと維持する。部分失敗時に成功した書類だけ選択解除すると、
+        // それらも確認済みになり「未確認のみ表示」フィルタで一覧から消えるため、再実行の
+        // ための再選択ができなくなる(failed.length>0のケースをfailedIdsのみへ絞る旧分岐と
+        // 統合し、identityLookupWarningNeededを常に優先する)。選択(selectionMode含む)は
+        // 維持し、確認ダイアログのみ閉じる。
+        setBulkOperation(null)
+      } else if (failed.length > 0) {
         const failedIds = new Set(failed.map((o) => o.docId))
         setSelectedIds(prev => new Set([...prev].filter(id => failedIds.has(id))))
-        toast.error(`一括確認が一部失敗しました（${succeeded.length}/${ids.length}件完了）`)
       } else {
         clearSelection()
         setBulkOperation(null)
-        toast.success(
-          confirmedCount > 0
-            ? `${succeeded.length}件を確認済みにしました（うち${confirmedCount}件は顧客/事業所も確定しました）`
-            : `${succeeded.length}件を確認済みにしました`
-        )
       }
-    } catch (error) {
-      console.error('Bulk verify error:', error)
-      toast.error('一括確認に失敗しました')
+      toast[toastOutcome.type](toastOutcome.message)
+    } catch (postWriteErr) {
+      // Firestoreへの書込みは既に成功しているため、ここでの失敗は表示更新の後始末の
+      // 失敗に過ぎない。「一括確認に失敗しました」は誤りなので出さない。ただしPhase-Aで
+      // 一部書類の書込み自体が失敗していた場合(failed.length>0)は、その情報を握り潰さず
+      // 失敗した書類を選択に残す(再実行できるようにする)。ただしidentityLookupWarningNeeded
+      // の場合は成功した書類も再実行対象のため、failedIdsだけに絞らず選択を丸ごと維持する
+      // (上の成功パスと同じ判断、codex review 4巡目・5巡目指摘)。
+      console.error('Bulk verify: post-write cache sync failed (writes already succeeded):', postWriteErr)
+      if (failed.length > 0 && !identityLookupWarningNeeded) {
+        const failedIds = new Set(failed.map((o) => o.docId))
+        setSelectedIds(prev => new Set([...prev].filter(id => failedIds.has(id))))
+      }
+      const toastOutcome = decidePostWriteSyncFailureToast({
+        totalCount: ids.length,
+        succeededCount: succeeded.length,
+        failedCount: failed.length,
+        identityLookupFailed: identityLookupWarningNeeded,
+      })
+      toast[toastOutcome.type](toastOutcome.message)
     } finally {
       setIsBulkOperating(false)
     }

@@ -7,6 +7,7 @@
 import { useState, useCallback } from 'react'
 import { doc, updateDoc, serverTimestamp, Timestamp, collection, runTransaction } from 'firebase/firestore'
 import { useQueryClient } from '@tanstack/react-query'
+import { toast } from 'sonner'
 import { db, auth } from '../lib/firebase'
 import {
   updateDocumentInListCache,
@@ -15,7 +16,11 @@ import {
   invalidateGroupQueries,
 } from './useDocuments'
 import type { Document } from '../../../shared/types'
-import { planConfirmOnVerify, buildConfirmOnVerifyUpdate } from '../../../shared/confirmOnVerify'
+import {
+  planConfirmOnVerify,
+  buildConfirmOnVerifyUpdate,
+  CONFIRM_ON_VERIFY_SKIPPED_REASON_MESSAGE,
+} from '../../../shared/confirmOnVerify'
 import { fetchFreshCustomerIdentityLookup } from './useMasters'
 
 interface UseDocumentVerificationResult {
@@ -102,7 +107,7 @@ export function useDocumentVerification(document: Document | null | undefined): 
         return null
       })
 
-      const decisions = await runTransaction(db, async (tx) => {
+      const { decisions, freshCustomerConfirmed, freshOfficeConfirmed } = await runTransaction(db, async (tx) => {
         const freshSnap = await tx.get(docRef)
         if (!freshSnap.exists()) {
           throw new Error('Document not found')
@@ -148,7 +153,16 @@ export function useDocumentVerification(document: Document | null | undefined): 
           }
         }
 
-        return txDecisions
+        return {
+          decisions: txDecisions,
+          // silent-failure-hunterレビュー指摘(MEDIUM): 「既に両方確定済みなら警告不要」の
+          // 判定は、モーダルを開いた時点のstale propではなく、このトランザクション内で
+          // 再読込した最新状態(freshDoc)を基準にする。再処理操作はcustomerConfirmed/
+          // officeConfirmedをfalseへリセットする既存パスがあり(useDocuments.ts/useErrors.ts等)、
+          // 「一度trueになったら二度とfalseに戻らない」前提は成立しないため。
+          freshCustomerConfirmed: freshDoc.customerConfirmed === true,
+          freshOfficeConfirmed: freshDoc.officeConfirmed === true,
+        }
       })
 
       // codexレビュー(second opinion、comment-analyzer)指摘: トランザクションは既に成功して
@@ -184,6 +198,23 @@ export function useDocumentVerification(document: Document | null | undefined): 
         invalidateGroupQueries(queryClient)
       } catch (postCommitErr) {
         console.error('Failed to sync cache after markAsVerified transaction succeeded:', postCommitErr)
+      }
+      // Issue #1042: freshIdentityLookup取得失敗により確定判定(customerConfirmed/
+      // officeConfirmed)が丸ごとスキップされた場合、verifiedはtrueで書き込まれ成功したように
+      // 見えるが確定フラグは書き込まれていない。console.errorのみではユーザーが気付けず、
+      // 手戻りが必要になるまで放置されるため、非ブロッキングの警告を表示する。
+      // 元々どちらも確定済み(何も変わらないはずだった)の書類では、確定判定をスキップしても
+      // 実害がないため警告を出さない(トランザクション内で再読込した最新状態(freshCustomer/
+      // OfficeConfirmed)を基準に判定する、silent-failure-hunterレビュー指摘のstale prop対応)。
+      if (freshIdentityLookup === null && !(freshCustomerConfirmed && freshOfficeConfirmed)) {
+        const message = `確認済みにしましたが、${CONFIRM_ON_VERIFY_SKIPPED_REASON_MESSAGE}`
+        setError(message)
+        // codex review指摘(P2): 「確認済みにして閉じる/ダウンロード」フロー
+        // (DocumentDetailModal.tsxのhandleVerifyAndClose/handleVerifyAndDownload)は
+        // markAsVerified()の直後にモーダルを閉じるため、error状態を表示するインライン
+        // バナー(モーダル内)はユーザーが見る前に消えてしまう。モーダルの開閉に関わらず
+        // 確実に気付けるよう、モーダル外に描画されるtoastでも同じ警告を出す。
+        toast.warning(message)
       }
       return true
     } catch (err) {
