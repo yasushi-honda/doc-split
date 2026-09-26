@@ -13,6 +13,8 @@ import {
   isThreePointFiveModel,
   resolveGeminiPricing,
   parseOcrProvider,
+  parseSummaryProvider,
+  SARASHINA_SUMMARY_CONFIG,
 } from '../src/utils/config';
 
 describe('config: parseOcrThinkingBudget (Issue #546)', () => {
@@ -151,5 +153,48 @@ describe('config: parseOcrProvider (ADR-0025)', () => {
 
   it('末尾改行付き"paddle"("paddle\\n")はtrimして"paddle"として扱われる', () => {
     expect(parseOcrProvider('paddle\n')).to.equal('paddle');
+  });
+});
+
+describe('config: parseSummaryProvider (ADR-0027 PR3)', () => {
+  it('未設定(undefined)の場合は既定値"none"を返す(警告なし)', () => {
+    expect(parseSummaryProvider(undefined)).to.equal('none');
+  });
+
+  it('空文字列の場合は既定値"none"を返す(警告なし)', () => {
+    expect(parseSummaryProvider('')).to.equal('none');
+  });
+
+  it('空白のみの場合は既定値"none"を返す(警告なし)', () => {
+    expect(parseSummaryProvider('   ')).to.equal('none');
+  });
+
+  it('"none"を明示指定した場合は警告なしで"none"を返す', () => {
+    expect(parseSummaryProvider('none')).to.equal('none');
+  });
+
+  it('"sarashina"を指定した場合は"sarashina"を返す', () => {
+    expect(parseSummaryProvider('sarashina')).to.equal('sarashina');
+  });
+
+  it('"gemini"を指定した場合は"gemini"を返す', () => {
+    expect(parseSummaryProvider('gemini')).to.equal('gemini');
+  });
+
+  it('未サポート値は既定値"none"にフォールバックする(新規課金を無言で発生させない)', () => {
+    expect(parseSummaryProvider('paddle')).to.equal('none');
+    expect(parseSummaryProvider('SARASHINA')).to.equal('none');
+  });
+
+  it('前後空白・末尾改行はtrimして扱われる', () => {
+    expect(parseSummaryProvider('  sarashina  ')).to.equal('sarashina');
+    expect(parseSummaryProvider('gemini\n')).to.equal('gemini');
+  });
+});
+
+describe('config: SARASHINA_SUMMARY_CONFIG (ADR-0027 PR3)', () => {
+  it('provider/serviceUrl/requestTimeoutMsを持つ(温度・max_tokens等のリクエストパラメータは含まない、ドリフト防止のためsarashinaSummaryRequest.tsが単一の情報源)', () => {
+    expect(SARASHINA_SUMMARY_CONFIG).to.have.keys(['provider', 'serviceUrl', 'requestTimeoutMs']);
+    expect(SARASHINA_SUMMARY_CONFIG.requestTimeoutMs).to.equal(620_000);
   });
 });
