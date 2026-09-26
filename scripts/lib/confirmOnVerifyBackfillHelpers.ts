@@ -85,6 +85,18 @@ export function tallyDriveExportStatus(statuses: readonly (string | undefined)[]
 }
 
 /**
+ * `Record<string, number>`をkey=value形式の1行文字列に整形する(Issue #1059 M3)。GitHub Actions
+ * のログsecret maskingは`{`を`***`に置換するため、`console.log('...', record)`のようにオブジェクト
+ * を生のまま渡すと内訳が実行ログ上で一切読めなくなる(classify-collision-docs等、既存の
+ * `--out`/`--json-out`ファイル出力パターンとは別に、この関数はコンソール表示側の対策)。
+ */
+export function formatCountRecord(record: Record<string, number>): string {
+  const entries = Object.entries(record);
+  if (entries.length === 0) return '(なし)';
+  return entries.map(([key, count]) => `${key}=${count}`).join(', ');
+}
+
+/**
  * 顧客側の確定結果(判別可能ユニオン、Issue #1043)。`confirmedCustomer:false`かつ
  * `customerConfirmedBefore`に値がある、といった不正な組み合わせを型として表現不能にする
  * (旧フラット構造では規約でしか守れず、コンパイラの保証がなかった、codex `type-design-analyzer`指摘)。
@@ -138,6 +150,9 @@ export interface ConfirmOnVerifyManifestEntry {
   backfillUpdateTime: { seconds: number; nanoseconds: number };
 }
 
+/** 型契約違反として検出しうるフィールド名(L5、Issue #1059)。 */
+export type ConfirmOnVerifyFieldName = 'customerConfirmed' | 'officeConfirmed';
+
 /**
  * backfill対象から除外した「confirmed系フィールドの型契約違反」文書(pr-review-toolkit
  * silent-failure-hunter指摘)。console出力のみだと、manifestを一次情報として後から監査する
@@ -146,16 +161,39 @@ export interface ConfirmOnVerifyManifestEntry {
 export interface ConfirmOnVerifyFieldTypeAnomaly {
   docId: string;
   fileName: string;
-  /** 契約違反だったフィールド。同一文書でcustomer/office両方が違反していれば両方を記録する。 */
-  fields: readonly ('customerConfirmed' | 'officeConfirmed')[];
+  /**
+   * 契約違反だったフィールド。同一文書でcustomer/office両方が違反していれば両方を記録する。
+   * 空配列は判別子として意味を成さない(L5、Issue #1059: 型レベルでも1件以上を要求し、
+   * ランタイム検証`isValidFieldTypeAnomaly`の空配列拒否と整合させる)。
+   */
+  fields: readonly [ConfirmOnVerifyFieldName, ...ConfirmOnVerifyFieldName[]];
 }
 
+/** manifestのスキーマバージョン(L4、Issue #1059)。Issue #1059時点で生成するmanifestから付与する。 */
+export const CONFIRM_ON_VERIFY_MANIFEST_SCHEMA_VERSION = 1;
+
 export interface ConfirmOnVerifyBackfillManifest {
+  /**
+   * 欠如はIssue #1059以前に生成されたmanifest(legacy、schemaVersion概念導入前)を意味する
+   * (codexレビュー指摘、P1: cocoro本番backfill実行済みのmanifestが既に存在し、これを必須化
+   * すると当該manifestの`--rollback`が不可能になり、rollbackという安全機構自体を壊してしまう。
+   * `isValidManifest`は欠如を許容し、値がある場合のみバージョン一致を検証する)。
+   */
+  schemaVersion?: typeof CONFIRM_ON_VERIFY_MANIFEST_SCHEMA_VERSION;
   runId: string;
   projectId: string;
   timestamp: string;
   entries: ConfirmOnVerifyManifestEntry[];
   fieldTypeAnomalies: ConfirmOnVerifyFieldTypeAnomaly[];
+  /**
+   * 走査したdocument総数(L1、Issue #1059)。`--limit`到達で打切りが発生した場合、
+   * fieldTypeAnomalies/entriesは母集団の一部のみを反映した部分集計になるため、
+   * scanIncompleteとあわせて監査時に「どこまで見たか」を残す。schemaVersion同様、
+   * 欠如はlegacy manifestとして許容する。
+   */
+  totalScanned?: number;
+  /** `--limit`到達により走査を打ち切ったか(L1、Issue #1059)。欠如の扱いはtotalScannedと同じ。 */
+  scanIncomplete?: boolean;
 }
 
 export function buildConfirmOnVerifyManifest(params: {
@@ -164,13 +202,18 @@ export function buildConfirmOnVerifyManifest(params: {
   timestampIso: string;
   entries: readonly ConfirmOnVerifyManifestEntry[];
   fieldTypeAnomalies?: readonly ConfirmOnVerifyFieldTypeAnomaly[];
+  totalScanned: number;
+  scanIncomplete: boolean;
 }): ConfirmOnVerifyBackfillManifest {
   return {
+    schemaVersion: CONFIRM_ON_VERIFY_MANIFEST_SCHEMA_VERSION,
     runId: params.runId,
     projectId: params.projectId,
     timestamp: params.timestampIso,
     entries: [...params.entries],
     fieldTypeAnomalies: params.fieldTypeAnomalies ? [...params.fieldTypeAnomalies] : [],
+    totalScanned: params.totalScanned,
+    scanIncomplete: params.scanIncomplete,
   };
 }
 
@@ -259,6 +302,13 @@ export function isValidManifestCustomerOutcome(x: unknown): x is ManifestCustome
   if (!isPlainObject(x)) return false;
   if (x.confirmedCustomer === false) return Object.keys(x).length === 1;
   if (x.confirmedCustomer === true) {
+    // L3(Issue #1059): false分岐はObject.keys件数で余分なプロパティ混入を拒否するが、
+    // true分岐は値の型だけを見ており余分なキー混入を素通りさせていた(非対称、
+    // type-design-analyzer指摘の再発)。既知キーのみの許可リストで両分岐を対称にする。
+    // customerConfirmedBeforeはJSON.stringifyでundefined値が削除されるため、round-trip後は
+    // キー自体が不在になりうる点に注意(欠如ではなく型不一致でのみfalseにする)。
+    const allowedKeys = new Set(['confirmedCustomer', 'customerConfirmedBefore', 'resetNeedsManualCustomerSelection']);
+    if (!Object.keys(x).every((k) => allowedKeys.has(k))) return false;
     return (
       (x.customerConfirmedBefore === undefined || typeof x.customerConfirmedBefore === 'boolean') &&
       typeof x.resetNeedsManualCustomerSelection === 'boolean'
@@ -272,6 +322,9 @@ export function isValidManifestOfficeOutcome(x: unknown): x is ManifestOfficeOut
   if (!isPlainObject(x)) return false;
   if (x.confirmedOffice === false) return Object.keys(x).length === 1;
   if (x.confirmedOffice === true) {
+    // L3(Issue #1059): customer版と同じ非対称の解消。
+    const allowedKeys = new Set(['confirmedOffice', 'officeConfirmedBefore']);
+    if (!Object.keys(x).every((k) => allowedKeys.has(k))) return false;
     return x.officeConfirmedBefore === undefined || typeof x.officeConfirmedBefore === 'boolean';
   }
   return false;
@@ -298,6 +351,8 @@ export function isValidFieldTypeAnomaly(x: unknown): x is ConfirmOnVerifyFieldTy
   if (!isValidDocId(x.docId)) return false;
   if (typeof x.fileName !== 'string') return false;
   if (!Array.isArray(x.fields) || x.fields.length === 0) return false;
+  // L3(Issue #1059): 重複("customerConfirmed"を2回等)は判別子として無意味な冗長データのため拒否する。
+  if (new Set(x.fields).size !== x.fields.length) return false;
   return x.fields.every((f) => f === 'customerConfirmed' || f === 'officeConfirmed');
 }
 
@@ -308,7 +363,15 @@ export function isValidFieldTypeAnomaly(x: unknown): x is ConfirmOnVerifyFieldTy
  */
 export function isValidManifest(x: unknown): x is ConfirmOnVerifyBackfillManifest {
   if (!isPlainObject(x)) return false;
+  // L4(Issue #1059): schemaVersionは値がある場合のみバージョン一致を要求する。欠如は
+  // Issue #1059以前に生成された既存の本番rollback manifest(cocoro backfill実行分等)との
+  // 後方互換性のため許容する(codexレビュー指摘、P1: 必須化するとrollbackという安全機構
+  // 自体を壊してしまう)。
+  if (x.schemaVersion !== undefined && x.schemaVersion !== CONFIRM_ON_VERIFY_MANIFEST_SCHEMA_VERSION) return false;
   if (typeof x.runId !== 'string' || typeof x.projectId !== 'string' || typeof x.timestamp !== 'string') return false;
+  // L1(Issue #1059): totalScanned/scanIncompleteも同じ理由で欠如を許容し、型不一致のみ拒否する。
+  if (x.totalScanned !== undefined && typeof x.totalScanned !== 'number') return false;
+  if (x.scanIncomplete !== undefined && typeof x.scanIncomplete !== 'boolean') return false;
   if (!Array.isArray(x.entries) || !x.entries.every(isValidManifestEntry)) return false;
   if (!Array.isArray(x.fieldTypeAnomalies) || !x.fieldTypeAnomalies.every(isValidFieldTypeAnomaly)) return false;
   return true;

@@ -216,6 +216,39 @@ test('想定外の型(customerConfirmedがboolean以外)を持つ文書はbackfi
   assert.deepEqual(after, original, '型契約違反の文書は対象から除外され、一切書込まれないこと');
 });
 
+test('--dry-run --manifest-out: 全候補が型異常でtargetsが0件でも、fieldTypeAnomaliesのみのmanifestが出力される(M2、Issue #1059、pr-test-analyzer指摘: Issue #1059自体の再発防止経路が自動テストされていなかったギャップ)', async () => {
+  const original = unrelatedFields({ customerConfirmed: null, officeConfirmed: null });
+  await db.doc('documents/doc-dry-run-anomaly-only').set(original);
+
+  const manifestPath = path.join(tmpDir, 'dry-run-anomaly-only-manifest.json');
+  runScript(['--dry-run', '--manifest-out', manifestPath]);
+
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
+  assert.deepEqual(manifest.entries, [], 'targetsが0件のためentriesは空');
+  assert.equal(manifest.fieldTypeAnomalies.length, 1);
+  assert.equal(manifest.fieldTypeAnomalies[0].docId, 'doc-dry-run-anomaly-only');
+  assert.deepEqual(manifest.fieldTypeAnomalies[0].fields.slice().sort(), ['customerConfirmed', 'officeConfirmed']);
+
+  const after = await getDoc('doc-dry-run-anomaly-only');
+  assert.deepEqual(after, original, 'dry-runのためFirestoreへの書込みは一切発生しないこと');
+});
+
+test('本実行 --manifest-out: 全候補が型異常でentries=0でも、fieldTypeAnomaliesのみのmanifestが出力される(M2、Issue #1059)', async () => {
+  const original = unrelatedFields({ customerConfirmed: null, officeConfirmed: null });
+  await db.doc('documents/doc-real-run-anomaly-only').set(original);
+
+  const manifestPath = path.join(tmpDir, 'real-run-anomaly-only-manifest.json');
+  runScript(['--expected-count', '0', '--manifest-out', manifestPath]);
+
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
+  assert.deepEqual(manifest.entries, [], '確定対象が0件のためentriesは空');
+  assert.equal(manifest.fieldTypeAnomalies.length, 1);
+  assert.equal(manifest.fieldTypeAnomalies[0].docId, 'doc-real-run-anomaly-only');
+
+  const after = await getDoc('doc-real-run-anomaly-only');
+  assert.deepEqual(after, original, '型契約違反の文書は対象から除外され、一切書込まれないこと');
+});
+
 test('--expected-count不一致時は書込みが一切発生しない(誤操作防止、ゼロ書込みの実証)', async () => {
   await db.doc('documents/doc-a').set(unrelatedFields());
   await db.doc('documents/doc-b').set(unrelatedFields());

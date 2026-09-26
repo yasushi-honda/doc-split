@@ -47,6 +47,7 @@ import {
   isValidConfirmedFieldValue,
   tallyConfirmOnVerifyDecisions,
   tallyDriveExportStatus,
+  formatCountRecord,
   buildConfirmOnVerifyManifest,
   isRollbackEligibleByUpdateTime,
   computeRollbackInstructions,
@@ -54,6 +55,7 @@ import {
   type ConfirmOnVerifyManifestEntry,
   type ConfirmOnVerifyBackfillManifest,
   type ConfirmOnVerifyFieldTypeAnomaly,
+  type ConfirmOnVerifyFieldName,
 } from './lib/confirmOnVerifyBackfillHelpers';
 
 const projectId = process.env.FIREBASE_PROJECT_ID;
@@ -163,7 +165,7 @@ async function collectCandidates(
       // continueすると、もう一方の異常が集計から漏れる(要調査時の件数を過小報告する)ため、
       // 両方を独立に判定してから1件のentryへまとめて記録する。
       const fileName = (data.fileName as string) || '(no name)';
-      const anomalousFields: ('customerConfirmed' | 'officeConfirmed')[] = [];
+      const anomalousFields: ConfirmOnVerifyFieldName[] = [];
       if (decisions.customer.action === 'confirm' && !isValidConfirmedFieldValue(data.customerConfirmed)) {
         anomalousFields.push('customerConfirmed');
       }
@@ -171,7 +173,15 @@ async function collectCandidates(
         anomalousFields.push('officeConfirmed');
       }
       if (anomalousFields.length > 0) {
-        fieldTypeAnomalies.push({ docId: docSnap.id, fileName, fields: anomalousFields });
+        // L2(Issue #1059): 顧客/事業所どちらか片側だけの型異常でも文書全体をbackfill対象から
+        // 除外する設計(fail-safeとして妥当)。運用手順: 上記ログ(または--manifest-out先の
+        // fieldTypeAnomalies)のdocIdをFirestoreで直接調査→該当フィールドを正しい型(boolean)へ
+        // 修正→本スクリプトを再実行、の順で解消する。
+        fieldTypeAnomalies.push({
+          docId: docSnap.id,
+          fileName,
+          fields: anomalousFields as [ConfirmOnVerifyFieldName, ...ConfirmOnVerifyFieldName[]],
+        });
         continue;
       }
 
@@ -290,9 +300,12 @@ async function runBackfill(): Promise<void> {
   }
   console.log(`対象: ${targets.length}件`);
   console.log(`  両方確定: ${tally.confirmBoth}件 / 顧客のみ: ${tally.confirmCustomerOnly}件 / 事業所のみ: ${tally.confirmOfficeOnly}件`);
-  console.log('対象外の理由別内訳(顧客):', tally.customerSkipReasons);
-  console.log('対象外の理由別内訳(事業所):', tally.officeSkipReasons);
-  console.log('対象のDriveエクスポート状態別内訳:', driveStatusTally);
+  // M3(Issue #1059): GitHub Actions実行時、console.logへオブジェクトを直接渡すとログsecret
+  // maskingで`{`が`***`に置換され内訳が読めなくなる(本PRで初めてGHA配線したため顕在化)。
+  // key=value形式の文字列に整形してからログ出力する。
+  console.log(`対象外の理由別内訳(顧客): ${formatCountRecord(tally.customerSkipReasons)}`);
+  console.log(`対象外の理由別内訳(事業所): ${formatCountRecord(tally.officeSkipReasons)}`);
+  console.log(`対象のDriveエクスポート状態別内訳: ${formatCountRecord(driveStatusTally)}`);
   console.log(
     '  ※ driveExportStatus:error/フィールド不在の書類は、confirm実行後に定期リトライ(driveExportScheduled.ts、' +
       '15分毎・1回最大10件)でDriveへ書き出される可能性があります。'
@@ -316,6 +329,22 @@ async function runBackfill(): Promise<void> {
 
   if (dryRun) {
     console.log('\n--dry-run モードのため変更なし。実行するには --dry-run を外してください。');
+    // M2(Issue #1059): 全候補が型異常でtargetsが0件の場合、fieldTypeAnomaliesはconsole出力の
+    // 先頭20件にしか残らずGitHub Actionsのログsecret maskingとも重なって監査しづらい。
+    // --manifest-out指定時はdry-runでもentries空・fieldTypeAnomaliesのみのmanifestを出力する。
+    if (manifestOutPath && fieldTypeAnomalies.length > 0) {
+      const manifest = buildConfirmOnVerifyManifest({
+        runId: randomUUID(),
+        projectId: projectId as string,
+        timestampIso: new Date().toISOString(),
+        entries: [],
+        fieldTypeAnomalies,
+        totalScanned,
+        scanIncomplete,
+      });
+      writeFileSync(manifestOutPath, JSON.stringify(manifest, null, 2));
+      console.log(`manifest出力(dry-run、entries空・fieldTypeAnomaliesのみ): ${manifestOutPath} (${fieldTypeAnomalies.length}件)`);
+    }
     return;
   }
 
@@ -339,7 +368,10 @@ async function runBackfill(): Promise<void> {
       }
     }
   } finally {
-    if (manifestOutPath && entries.length > 0) {
+    // M2(Issue #1059): 従来はentries.length>0の場合のみmanifestを書き出しており、全候補が
+    // 型異常でentries=0だった場合にfieldTypeAnomaliesが一切manifestへ残らなかった。
+    // どちらか一方でも中身があれば書き出す。
+    if (manifestOutPath && (entries.length > 0 || fieldTypeAnomalies.length > 0)) {
       // silent-failure-hunter指摘: fieldTypeAnomaliesはconsole出力のみだと、manifestを
       // 一次情報として後から監査する際にこの除外が一切見えなくなるため、manifestにも残す。
       const manifest: ConfirmOnVerifyBackfillManifest = buildConfirmOnVerifyManifest({
@@ -348,6 +380,8 @@ async function runBackfill(): Promise<void> {
         timestampIso: new Date().toISOString(),
         entries,
         fieldTypeAnomalies,
+        totalScanned,
+        scanIncomplete,
       });
       writeFileSync(manifestOutPath, JSON.stringify(manifest, null, 2));
       console.log(`manifest出力: ${manifestOutPath} (runId=${runId}, ${entries.length}件)`);
