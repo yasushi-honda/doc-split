@@ -13,6 +13,7 @@ import { expect } from 'chai';
 import {
   buildSummaryPrompt,
   MAX_SUMMARY_INPUT_LENGTH,
+  MIN_OCR_LENGTH_FOR_SUMMARY,
 } from '../src/ocr/summaryPromptBuilder';
 
 const TRUNCATION_SUFFIX = '...(以下省略)';
@@ -114,6 +115,10 @@ describe('buildSummaryPrompt (#251 Scope 2)', () => {
       // summaryPromptBuilderIsolationContract.test.ts で別途 lock-in する。
       expect(typeof buildSummaryPrompt).to.equal('function');
       expect(MAX_SUMMARY_INPUT_LENGTH).to.equal(8000);
+    });
+
+    it('MIN_OCR_LENGTH_FOR_SUMMARY もここから読める (ADR-0027 PR3、summaryGenerator.ts の admin依存を経由せず読める場所へ移設)', () => {
+      expect(MIN_OCR_LENGTH_FOR_SUMMARY).to.equal(100);
     });
   });
 });
