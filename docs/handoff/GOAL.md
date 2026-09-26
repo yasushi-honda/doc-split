@@ -22,6 +22,14 @@ Firestore emulator統合テスト7件(fail-closedゲート実効性・Partial Up
 
 **kanameone実行判断の経緯(decision-maker確認済み)**: 当初はGoogle Drive連携Phase1本番展開(Track C)とのタイミング調整を理由に保留していたが、①`functions/src/drive/exportDocument.ts`の`isCustomerUnconfirmed`ゲートにより、backfillでcustomerConfirmed:trueになった書類はDriveエクスポートリトライ(`driveExportScheduled.ts`、15分毎・最大10件)の対象になりうると判明(kanameone実データで対象2,695件中240件がdriveExportStatus:'error'で該当) ②この挙動はbackfill固有ではなく、担当者がUIの「一括確認済み」(`DocumentsPage.tsx`の`handleBulkVerify`)を使った場合も全く同じ結果になる既存の正規仕様と確認 ③ただし「一括確認済み」は`useInfiniteDocuments`(1ページ100件)でその時点までにクライアント側へ読み込み済みの書類にしか作用せず、専用の絞り込みフィルタも存在しないため、担当者の通常操作でこの240件相当に自然に到達する可能性は実質的に低いと判断。「システム開発側で今まとめて解消する」方が現実的との結論に至り、Drive再連携ロールアウトの完了を待たずに実行することで決定・実施した。
 
+**【追記・2026-09-26セッション】Issue #1043クローズ+Issue #1059完了(PR #1060マージ)**: `/catchup`で「GOAL.mdは#1043『完了』と記載しているがGitHub上はOPENのまま」という矛盾を検出。PR #1058が対応案2点(discriminated union化・rollback読込時のランタイム検証)を実際に実装済みと確認のうえ#1043をクローズ。続けてIssue #1059(fable-review残課題M2/M3/L1/L3/L4/L5/L6)にPR #1060で対応:
+- M2(型異常のみでentries=0の場合manifestが空になる)/M3(GHAログsecret maskingでコンソール内訳が読めない)/L1(totalScanned/scanIncomplete記録)/L3(バリデータ非対称)/L4(schemaVersion追加)/L5(fields非空タプル型)/L6(ops-script入力欄の説明不足)を修正
+- **codex review 1回目でP1指摘**: schemaVersion/totalScanned/scanIncompleteを必須化すると、cocoro本番backfill(2026-09-25実行済み、19件確定成功)で生成済みの旧形式manifestの`--rollback`が不可能になる(rollbackはその書込みの唯一の安全装置)。3フィールドをoptional化し「欠如は許容、値がある場合のみ検証」の後方互換ロジックに修正、2回目のcodex reviewで指摘0件を確認
+- pr-review-toolkitセカンドオピニオン(code-reviewer高信頼度指摘0件、pr-test-analyzerがM2の統合テスト欠如[Critical Gap]を指摘)→統合テスト2件追加(dry-run/本実行それぞれで型異常のみのmanifest出力を検証)、Firestore emulatorで全9件PASS
+- CI(lint-build-test、E2E含む)15分でPASS、squash mergeで#1059は自動クローズ
+
+Issue Net変化: Close 2件(#1043, #1059)、起票 0件、Net +2。
+
 ## 【完了・2026-09-25】/catchup発の積み残しIssue対応3件（現在のミッションとは別件・並行トラック）
 
 /catchupが提示した着手候補のうち、decision-maker承認を得た3件に順次対応。いずれも現在のミッション(Google Drive連携Phase1本番展開)とは独立。
