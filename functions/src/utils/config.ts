@@ -110,6 +110,50 @@ export const PADDLE_OCR_CONFIG = {
   requestTimeoutMs: 250_000,
 } as const;
 
+/** 要約生成(regenerateSummary/summaryPass)のプロバイダ設定 (ADR-0027) */
+export type SummaryProviderSetting = 'none' | 'sarashina' | 'gemini';
+
+/**
+ * `SUMMARY_PROVIDER`環境変数から要約生成プロバイダを解決する (ADR-0027 PR3)。
+ *
+ * 既定は'none'(現行挙動: 自動要約生成なし、Issue #548-B1)。parseOcrProviderとは異なり
+ * 既定値を'gemini'にすると、デプロイしただけで全文書が無言でGemini自動要約されてしまう
+ * (ADR-0027 主要な設計判断2)。そのため未知値・空値はいずれも'none'にフォールバックする。
+ * 空値(未設定/空文字/空白のみ)はdead code状態のPR3では日常的に発生するため警告を出さず、
+ * 非空の未知値のみ警告する(GCPコンソール等からのコピペ誤りを検知するため)。
+ */
+export function parseSummaryProvider(envValue: string | undefined): SummaryProviderSetting {
+  const trimmed = envValue?.trim();
+  if (trimmed === 'sarashina') return 'sarashina';
+  if (trimmed === 'gemini') return 'gemini';
+  if (trimmed !== undefined && trimmed !== '' && trimmed !== 'none') {
+    console.warn(
+      `[config] SUMMARY_PROVIDER="${envValue}" is not a supported value (expected "none", "sarashina" or "gemini"). Falling back to none.`
+    );
+  }
+  return 'none';
+}
+
+/**
+ * Sarashina要約Cloud Runサービス(ADR-0027)の呼び出し設定。
+ *
+ * リクエストパラメータ(temperature/max_tokens等)はここに含めない。PR2b実機ゲートで
+ * 検証済みの値は `sarashinaSummaryRequest.ts` を単一の情報源とし、ドリフトを防ぐ
+ * (ハーネス`scripts/lib/sarashinaSummaryVerify.ts`も同モジュールへ委譲する)。
+ */
+export const SARASHINA_SUMMARY_CONFIG = {
+  provider: parseSummaryProvider(process.env.SUMMARY_PROVIDER),
+  // GCPコンソール等からのコピペで混入する前後空白をtrimする(他のparseX関数と同じ理由、
+  // codex review指摘: 未trimのままだとsarashinaSummaryClient.tsのバリデーションと実使用URLが
+  // 不一致になりうる。クライアント側でも再度trimして二重に守る)。
+  serviceUrl: (process.env.SARASHINA_SUMMARY_URL ?? '').trim(),
+  /**
+   * Cloud Run `--timeout=600`より長く設定し、クライアントより先にサーバー側の504を
+   * 受け取れるようにする(ADR-0027、PR2bハーネスの`REQUEST_TIMEOUT_MS`と同値)。
+   */
+  requestTimeoutMs: 620_000,
+} as const;
+
 // Vertex AI / Gemini設定
 export const GEMINI_CONFIG = {
   /** 使用するGeminiモデルID (Issue #548: `GEMINI_MODEL_ID`で上書き可能、既定gemini-3.5-flash) */
