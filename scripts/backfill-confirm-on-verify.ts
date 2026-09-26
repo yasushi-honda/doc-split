@@ -44,13 +44,16 @@ import { planConfirmOnVerify, buildConfirmOnVerifyUpdate, type ConfirmOnVerifyDe
 import { applyLimit, assertExpectedCount, ExpectedCountMismatchError } from './lib/driveExportBackfillHelpers';
 import {
   isConfirmOnVerifyCandidate,
+  isValidConfirmedFieldValue,
   tallyConfirmOnVerifyDecisions,
   tallyDriveExportStatus,
   buildConfirmOnVerifyManifest,
   isRollbackEligibleByUpdateTime,
   computeRollbackInstructions,
+  isValidManifest,
   type ConfirmOnVerifyManifestEntry,
   type ConfirmOnVerifyBackfillManifest,
+  type ConfirmOnVerifyFieldTypeAnomaly,
 } from './lib/confirmOnVerifyBackfillHelpers';
 
 const projectId = process.env.FIREBASE_PROJECT_ID;
@@ -112,9 +115,15 @@ async function collectCandidates(
   customerMasterNameById: ReadonlyMap<string, string | null>,
   sameNameCollisionNames: ReadonlySet<string>,
   stopAt: number | undefined
-): Promise<{ totalScanned: number; candidates: Candidate[]; scanIncomplete: boolean }> {
+): Promise<{
+  totalScanned: number;
+  candidates: Candidate[];
+  scanIncomplete: boolean;
+  fieldTypeAnomalies: ConfirmOnVerifyFieldTypeAnomaly[];
+}> {
   let totalScanned = 0;
   const candidates: Candidate[] = [];
+  const fieldTypeAnomalies: ConfirmOnVerifyFieldTypeAnomaly[] = [];
   let lastDoc: FirebaseFirestore.QueryDocumentSnapshot | null = null;
   let hasMore = true;
 
@@ -146,16 +155,36 @@ async function collectCandidates(
       });
       if (decisions.customer.action !== 'confirm' && decisions.office.action !== 'confirm') continue;
 
+      // pr-review-toolkit指摘: customerConfirmed/officeConfirmedは契約上boolean|フィールド不在
+      // だが、実データの充足率は未確認。契約違反(null・文字列等)のままmanifestへ書き込むと、
+      // --rollback実行時にisValidManifestEntryがその1件を理由にmanifest全体を無効判定し、
+      // 正常な残り全件のロールバックまで巻き込む。書込み前(ここ)で弾き、対象外として集計する。
+      // silent-failure-hunter指摘: 顧客/事業所の両方が契約違反の場合に片方だけ記録して
+      // continueすると、もう一方の異常が集計から漏れる(要調査時の件数を過小報告する)ため、
+      // 両方を独立に判定してから1件のentryへまとめて記録する。
+      const fileName = (data.fileName as string) || '(no name)';
+      const anomalousFields: ('customerConfirmed' | 'officeConfirmed')[] = [];
+      if (decisions.customer.action === 'confirm' && !isValidConfirmedFieldValue(data.customerConfirmed)) {
+        anomalousFields.push('customerConfirmed');
+      }
+      if (decisions.office.action === 'confirm' && !isValidConfirmedFieldValue(data.officeConfirmed)) {
+        anomalousFields.push('officeConfirmed');
+      }
+      if (anomalousFields.length > 0) {
+        fieldTypeAnomalies.push({ docId: docSnap.id, fileName, fields: anomalousFields });
+        continue;
+      }
+
       candidates.push({
         ref: docSnap.ref,
         id: docSnap.id,
-        fileName: (data.fileName as string) || '(no name)',
+        fileName,
         updateTime: docSnap.updateTime,
         data,
         decisions,
       });
       if (stopAt !== undefined && candidates.length >= stopAt) {
-        return { totalScanned, candidates, scanIncomplete: true };
+        return { totalScanned, candidates, scanIncomplete: true, fieldTypeAnomalies };
       }
     }
 
@@ -163,7 +192,7 @@ async function collectCandidates(
     hasMore = snapshot.docs.length === PAGE_SIZE;
   }
 
-  return { totalScanned, candidates, scanIncomplete: false };
+  return { totalScanned, candidates, scanIncomplete: false, fieldTypeAnomalies };
 }
 
 /**
@@ -180,16 +209,22 @@ async function applyConfirmOnVerify(
       status: 'ok',
       entry: {
         docId: candidate.id,
-        confirmedCustomer: candidate.decisions.customer.action === 'confirm',
-        customerConfirmedBefore:
-          candidate.decisions.customer.action === 'confirm' ? (candidate.data.customerConfirmed as boolean | undefined) : undefined,
-        // codexレビュー指摘: buildConfirmOnVerifyUpdate()は顧客確定と同時にneedsManualCustomerSelection
-        // (true→false)も書き戻すことがある。updateに実際に含まれているかで判定する(実行前は
-        // 常にtrueだった場合のみ含まれるため、rollback時はtrueへ戻せば足りる)。
-        resetNeedsManualCustomerSelection: 'needsManualCustomerSelection' in update,
-        confirmedOffice: candidate.decisions.office.action === 'confirm',
-        officeConfirmedBefore:
-          candidate.decisions.office.action === 'confirm' ? (candidate.data.officeConfirmed as boolean | undefined) : undefined,
+        customer:
+          candidate.decisions.customer.action === 'confirm'
+            ? {
+                confirmedCustomer: true,
+                customerConfirmedBefore: candidate.data.customerConfirmed as boolean | undefined,
+                // codexレビュー指摘: buildConfirmOnVerifyUpdate()は顧客確定と同時に
+                // needsManualCustomerSelection(true→false)も書き戻すことがある。updateに
+                // 実際に含まれているかで判定する(実行前は常にtrueだった場合のみ含まれるため、
+                // rollback時はtrueへ戻せば足りる)。
+                resetNeedsManualCustomerSelection: 'needsManualCustomerSelection' in update,
+              }
+            : { confirmedCustomer: false },
+        office:
+          candidate.decisions.office.action === 'confirm'
+            ? { confirmedOffice: true, officeConfirmedBefore: candidate.data.officeConfirmed as boolean | undefined }
+            : { confirmedOffice: false },
         // codexレビュー指摘(4回目・P2): rollback可否をconfirmedBy等のactorベースで判定すると、
         // OCR再処理による自動確定(confirmedByはnullのまま新しい値で上書き)を検知できない。
         // backfillが実際に書き込んだ直後のupdateTimeを記録し、rollback時にライブの
@@ -226,7 +261,7 @@ async function runBackfill(): Promise<void> {
   );
   console.log(`顧客マスター: ${customersSnapshot.size}件読込(同姓同名: ${sameNameCollisionNames.size}組)`);
 
-  const { totalScanned, candidates, scanIncomplete } = await collectCandidates(
+  const { totalScanned, candidates, scanIncomplete, fieldTypeAnomalies } = await collectCandidates(
     customerMasterNameById,
     sameNameCollisionNames,
     limit
@@ -240,6 +275,18 @@ async function runBackfill(): Promise<void> {
     console.log(`検査: ${totalScanned}件走査時点で--limit(${limit})件に到達したためスキャンを打ち切り`);
   } else {
     console.log(`検査: ${totalScanned}件 (verified=true)`);
+  }
+  if (fieldTypeAnomalies.length > 0) {
+    console.log(
+      `\n⚠ 想定外の型: ${fieldTypeAnomalies.length}件` +
+        '(customerConfirmed/officeConfirmedがboolean・フィールド不在以外の値。backfill対象から除外・要調査)'
+    );
+    for (const a of fieldTypeAnomalies.slice(0, 20)) {
+      console.log(`  ${a.docId} [${a.fileName}] fields=${a.fields.join('+')}`);
+    }
+    if (fieldTypeAnomalies.length > 20) {
+      console.log(`  ...他${fieldTypeAnomalies.length - 20}件`);
+    }
   }
   console.log(`対象: ${targets.length}件`);
   console.log(`  両方確定: ${tally.confirmBoth}件 / 顧客のみ: ${tally.confirmCustomerOnly}件 / 事業所のみ: ${tally.confirmOfficeOnly}件`);
@@ -293,11 +340,14 @@ async function runBackfill(): Promise<void> {
     }
   } finally {
     if (manifestOutPath && entries.length > 0) {
+      // silent-failure-hunter指摘: fieldTypeAnomaliesはconsole出力のみだと、manifestを
+      // 一次情報として後から監査する際にこの除外が一切見えなくなるため、manifestにも残す。
       const manifest: ConfirmOnVerifyBackfillManifest = buildConfirmOnVerifyManifest({
         runId,
         projectId: projectId as string,
         timestampIso: new Date().toISOString(),
         entries,
+        fieldTypeAnomalies,
       });
       writeFileSync(manifestOutPath, JSON.stringify(manifest, null, 2));
       console.log(`manifest出力: ${manifestOutPath} (runId=${runId}, ${entries.length}件)`);
@@ -309,6 +359,10 @@ async function runBackfill(): Promise<void> {
   if (preconditionFailedCount > 0) {
     console.log(`並行書込みによりスキップ: ${preconditionFailedCount}件`);
   }
+  if (fieldTypeAnomalies.length > 0) {
+    // silent-failure-hunter指摘: 冒頭でしか表示していないと、結果を確認する際に見落とされやすい。
+    console.log(`想定外の型により対象外: ${fieldTypeAnomalies.length}件(詳細は上記参照、要調査)`);
+  }
 }
 
 /**
@@ -317,7 +371,19 @@ async function runBackfill(): Promise<void> {
  * 値(フィールド不在ならdelete、falseならfalseへset)へ戻す。
  */
 async function runRollback(manifestPath: string): Promise<void> {
-  const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8')) as ConfirmOnVerifyBackfillManifest;
+  const parsed: unknown = JSON.parse(readFileSync(manifestPath, 'utf-8'));
+  // codexレビュー指摘(type-design-analyzer、Issue #1043): 従来はJSON.parse()の戻り値を
+  // 型アサーションのみで信頼しており、手編集・別バージョン・部分破損したmanifestが構文
+  // エラーなくすり抜け、computeRollbackInstructions()が誤ったロールバックを実行しうる
+  // 状態だった。生成側と同じ構造的整合性チェックをランタイムで課し、1件でも不正なentryが
+  // あれば書込みを一切行わずここで中断する(fail-closed)。
+  if (!isValidManifest(parsed)) {
+    console.error(
+      `ERROR: manifestの構造が不正です(${manifestPath})。手編集・別バージョン・部分破損したJSONではないか確認してください。`
+    );
+    process.exit(1);
+  }
+  const manifest: ConfirmOnVerifyBackfillManifest = parsed;
   console.log(`プロジェクト: ${projectId}`);
   console.log(`モード: ${dryRun ? 'DRY RUN(変更なし)' : '実行'}`);
   console.log(`rollback対象manifest: ${manifestPath} (runId=${manifest.runId}, entries=${manifest.entries.length}件)`);
