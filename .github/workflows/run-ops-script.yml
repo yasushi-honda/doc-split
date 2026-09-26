@@ -229,7 +229,7 @@ on:
           - execute-drive-claim-resync --execute
           - execute-drive-claim-resync --execute --requeue
       backfill_limit:
-        description: 'backfill-drive-export --limit: canary実行時のマーク上限件数(数値のみ) / classify-drive-export-drift --limit: 検査対象document数の上限(数値のみ) / execute-drive-export-repair --limit: 修復対象候補数の上限(数値のみ)'
+        description: 'backfill-drive-export --limit: canary実行時のマーク上限件数(数値のみ) / classify-drive-export-drift --limit: 検査対象document数の上限(数値のみ) / execute-drive-export-repair --limit: 修復対象候補数の上限(数値のみ) / backfill-confirm-on-verify --limit: canary実行時の確定対象上限件数(数値のみ)'
         required: false
         type: string
         default: ''
@@ -272,7 +272,7 @@ on:
           - 'false'
           - 'true'
       expected_count:
-        description: 'cleanup-office-name / delete-office-master / reset-documents-by-office: 影響件数の事前確認（数値；省略時はチェック無効、指定時は不一致で中断）/ execute-drive-export-repair --expected-count: --limit適用後の修復対象件数の事前確認(数値)'
+        description: 'cleanup-office-name / delete-office-master / reset-documents-by-office: 影響件数の事前確認（数値；省略時はチェック無効、指定時は不一致で中断）/ execute-drive-export-repair --expected-count: --limit適用後の修復対象件数の事前確認(数値) / backfill-confirm-on-verify --expected-count: 対象件数の事前確認(数値、誤操作防止)'
         required: false
         type: string
         default: ''

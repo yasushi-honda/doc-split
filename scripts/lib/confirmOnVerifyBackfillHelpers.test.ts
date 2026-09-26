@@ -5,12 +5,16 @@ import {
   isValidConfirmedFieldValue,
   tallyConfirmOnVerifyDecisions,
   tallyDriveExportStatus,
+  formatCountRecord,
   buildConfirmOnVerifyManifest,
   isRollbackEligibleByUpdateTime,
   computeRollbackInstructions,
   isValidManifestEntry,
   isValidManifest,
+  isValidManifestCustomerOutcome,
+  isValidManifestOfficeOutcome,
   isValidFieldTypeAnomaly,
+  CONFIRM_ON_VERIFY_MANIFEST_SCHEMA_VERSION,
 } from './confirmOnVerifyBackfillHelpers';
 
 test('isConfirmOnVerifyCandidate: customerConfirmed/officeConfirmedのどちらかがtrueでなければ対象', () => {
@@ -52,7 +56,12 @@ test('tallyDriveExportStatus: フィールド不在は"(フィールド不在)"�
   assert.deepEqual(tally, { error: 2, exported: 1, '(フィールド不在)': 1 });
 });
 
-test('buildConfirmOnVerifyManifest: 渡したentriesをそのまま保持する', () => {
+test('formatCountRecord: key=value形式に整形する(Issue #1059 M3、GitHub Actionsログsecret maskingで`{`が読めなくなる対策)', () => {
+  assert.equal(formatCountRecord({}), '(なし)');
+  assert.equal(formatCountRecord({ 'same-name-collision': 2, 'already-confirmed': 1 }), 'same-name-collision=2, already-confirmed=1');
+});
+
+test('buildConfirmOnVerifyManifest: 渡したentries・totalScanned・scanIncompleteをそのまま保持し、schemaVersionを付与する(Issue #1059 L1/L4)', () => {
   const manifest = buildConfirmOnVerifyManifest({
     runId: 'run-1',
     projectId: 'proj-1',
@@ -65,10 +74,15 @@ test('buildConfirmOnVerifyManifest: 渡したentriesをそのまま保持する'
         backfillUpdateTime: { seconds: 1, nanoseconds: 0 },
       },
     ],
+    totalScanned: 42,
+    scanIncomplete: true,
   });
   assert.equal(manifest.runId, 'run-1');
   assert.equal(manifest.entries.length, 1);
   assert.equal(manifest.entries[0].docId, 'doc-1');
+  assert.equal(manifest.schemaVersion, CONFIRM_ON_VERIFY_MANIFEST_SCHEMA_VERSION);
+  assert.equal(manifest.totalScanned, 42);
+  assert.equal(manifest.scanIncomplete, true);
 });
 
 test('isRollbackEligibleByUpdateTime: backfill書込み直後のupdateTimeとライブのupdateTimeが完全一致する場合のみtrue', () => {
@@ -239,6 +253,35 @@ test('isValidFieldTypeAnomaly: docId・fileName・fields(1件以上、既知の�
   assert.equal(isValidFieldTypeAnomaly({ docId: 'doc-1/x', fileName: 'a.pdf', fields: ['officeConfirmed'] }), false, 'docIdの"/"混入');
 });
 
+test('isValidFieldTypeAnomaly: fieldsに重複があればfalse(L3、Issue #1059: 判別子として意味を成さない冗長データ)', () => {
+  assert.equal(
+    isValidFieldTypeAnomaly({ docId: 'doc-1', fileName: 'a.pdf', fields: ['customerConfirmed', 'customerConfirmed'] }),
+    false
+  );
+});
+
+test('isValidManifestCustomerOutcome/isValidManifestOfficeOutcome: confirmed:trueでも未知の余分なキーがあればfalse(L3、Issue #1059: false分岐との非対称解消)', () => {
+  assert.equal(
+    isValidManifestCustomerOutcome({
+      confirmedCustomer: true,
+      customerConfirmedBefore: false,
+      resetNeedsManualCustomerSelection: false,
+      unknownExtraKey: 'x',
+    }),
+    false
+  );
+  assert.equal(
+    isValidManifestCustomerOutcome({ confirmedCustomer: true, resetNeedsManualCustomerSelection: false }),
+    true,
+    'customerConfirmedBeforeはJSON round-trip後にキー自体が消えうるため欠如は許容する'
+  );
+  assert.equal(
+    isValidManifestOfficeOutcome({ confirmedOffice: true, officeConfirmedBefore: false, unknownExtraKey: 'x' }),
+    false
+  );
+  assert.equal(isValidManifestOfficeOutcome({ confirmedOffice: true }), true, 'officeConfirmedBefore欠如は許容する');
+});
+
 test('isValidManifest: buildConfirmOnVerifyManifestで生成した正常なmanifestはJSON往復後もtrueになる(生成側/検証側のずれを検知する回帰テスト、pr-review-toolkit指摘)', () => {
   const manifest = buildConfirmOnVerifyManifest({
     runId: 'run-1',
@@ -252,6 +295,8 @@ test('isValidManifest: buildConfirmOnVerifyManifestで生成した正常なmanif
         backfillUpdateTime: { seconds: 1_700_000_000, nanoseconds: 123 },
       },
     ],
+    totalScanned: 10,
+    scanIncomplete: false,
   });
   const roundTripped: unknown = JSON.parse(JSON.stringify(manifest));
   assert.equal(isValidManifest(roundTripped), true);
@@ -264,35 +309,25 @@ test('isValidManifest: entries中に1件でも不正なものがあればfalse(�
     office: { confirmedOffice: false },
     backfillUpdateTime: { seconds: 1, nanoseconds: 0 },
   };
+  const base = {
+    schemaVersion: CONFIRM_ON_VERIFY_MANIFEST_SCHEMA_VERSION,
+    runId: 'r1',
+    projectId: 'p1',
+    timestamp: '2026-09-25T00:00:00.000Z',
+    totalScanned: 5,
+    scanIncomplete: false,
+  };
+  assert.equal(isValidManifest({ ...base, entries: [validEntry], fieldTypeAnomalies: [] }), true);
   assert.equal(
-    isValidManifest({ runId: 'r1', projectId: 'p1', timestamp: '2026-09-25T00:00:00.000Z', entries: [validEntry], fieldTypeAnomalies: [] }),
-    true
-  );
-  assert.equal(
-    isValidManifest({
-      runId: 'r1',
-      projectId: 'p1',
-      timestamp: '2026-09-25T00:00:00.000Z',
-      entries: [validEntry, { docId: 'doc-2' }],
-      fieldTypeAnomalies: [],
-    }),
+    isValidManifest({ ...base, entries: [validEntry, { docId: 'doc-2' }], fieldTypeAnomalies: [] }),
     false,
     '2件目が不正entryなら全体をfalseにする(手編集・部分破損JSONの検知)'
   );
-  assert.equal(
-    isValidManifest({ runId: 'r1', projectId: 'p1', timestamp: '2026-09-25T00:00:00.000Z', entries: [], fieldTypeAnomalies: [] }),
-    true
-  );
-  assert.equal(
-    isValidManifest({ runId: 'r1', projectId: 'p1', timestamp: '2026-09-25T00:00:00.000Z', entries: [] }),
-    false,
-    'fieldTypeAnomaliesが配列でない(欠如)'
-  );
+  assert.equal(isValidManifest({ ...base, entries: [], fieldTypeAnomalies: [] }), true);
+  assert.equal(isValidManifest({ ...base, entries: [] }), false, 'fieldTypeAnomaliesが配列でない(欠如)');
   assert.equal(
     isValidManifest({
-      runId: 'r1',
-      projectId: 'p1',
-      timestamp: '2026-09-25T00:00:00.000Z',
+      ...base,
       entries: [],
       fieldTypeAnomalies: [{ docId: 'doc-3', fileName: 'a.pdf', fields: ['customerConfirmed', 'officeConfirmed'] }],
     }),
@@ -300,15 +335,24 @@ test('isValidManifest: entries中に1件でも不正なものがあればfalse(�
     '正常なfieldTypeAnomaliesはtrue'
   );
   assert.equal(
-    isValidManifest({
-      runId: 'r1',
-      projectId: 'p1',
-      timestamp: '2026-09-25T00:00:00.000Z',
-      entries: [],
-      fieldTypeAnomalies: [{ docId: 'doc-4', fileName: 'a.pdf', fields: [] }],
-    }),
+    isValidManifest({ ...base, entries: [], fieldTypeAnomalies: [{ docId: 'doc-4', fileName: 'a.pdf', fields: [] }] }),
     false,
     'fieldsが空配列は不正(判別子として意味を成さない)'
   );
-  assert.equal(isValidManifest({ runId: 'r1', projectId: 'p1', timestamp: '2026-09-25T00:00:00.000Z' }), false, 'entriesが配列でない');
+  assert.equal(isValidManifest({ ...base, entries: undefined }), false, 'entriesが配列でない');
+  assert.equal(
+    isValidManifest({ ...base, schemaVersion: 999, entries: [], fieldTypeAnomalies: [] }),
+    false,
+    'schemaVersion不一致は不正(L4、Issue #1059)'
+  );
+  assert.equal(
+    isValidManifest({ ...base, totalScanned: '5', entries: [], fieldTypeAnomalies: [] }),
+    false,
+    'totalScannedの型不一致は不正(L1、Issue #1059)'
+  );
+  assert.equal(
+    isValidManifest({ ...base, scanIncomplete: 'false', entries: [], fieldTypeAnomalies: [] }),
+    false,
+    'scanIncompleteの型不一致は不正(L1、Issue #1059)'
+  );
 });
