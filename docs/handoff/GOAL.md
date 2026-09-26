@@ -112,7 +112,9 @@ CLAUDE.md CRITICALによりplan mode(Opus 5.5)でPR3詳細設計→`/plan-crossr
 
 **検証**: functions全テスト2408件+統合539件(Firestore emulator)+PR3新規65件、frontend型チェック、scripts全テスト609件(ハーネス委譲後も無改変で全PASS)、いずれも0 failing。lint 0 errors(新規ファイルの警告も解消済み)。`grep`で本番実行経路への配線ゼロを確認。
 
-**次の一手**: featureブランチ`feat/adr0027-pr3-summary-routing`は未マージ。codex review(実コード3ファイル以上のためCLAUDE.md CRITICAL該当)→PRレビュー→decision-maker承認のうえマージが次アクション。マージ後はPR4(状態フィールド・バッチ処理・所有権ガード・フロントエンド配線)着手可否をdecision-makerへ確認する。
+~~**次の一手**: featureブランチ`feat/adr0027-pr3-summary-routing`は未マージ。~~ **【マージ完了・2026-09-27、PR #1062】** codex review(P2、URL前後空白バリデーション不一致、修正済み)+pr-review-toolkit 4エージェント並列レビュー(H1: 短縮再送が8000文字超の文書で完全に無効化されていた実バグ、修正済み。M1: 契約テストのコメント文字列一致による抜け道、修正済み。診断情報欠落: `cause.code`が捨てられていた、修正済み)を経てsquash mergeし、main反映済み。残存指摘(ログ未整備・テストギャップ8件)はPR4申し送りとしてADR-0027に記録(decision-maker確認済み)。
+
+**次の一手**: PR4(状態フィールド`summaryState`・バッチ処理`generateSummaryBatch`・所有権ガード・フロントエンド配線)着手可否をdecision-makerへ確認する。着手時はADR-0027「PR3実装知見」節11(d)(e)(f)の申し送り事項を先に読むこと。
 
 ADR-0025はPass1(OCR)のみ対象でPass2/要約は明示的にスコープ外(手動トリガー・低頻度のため)。decision-makerの意向で「要約もいずれはPaddleOCRと同様に自前ホスティングSLM(Cloud Run、CPUのみ、asia-northeast1)へモデルルーティングしたい」という将来検討として、2026-09-21に候補調査・実機検証を実施した。当日中に品質・コスト・アーキテクチャ・コンプライアンスの検討が完了し、**decision-makerが実装移行を正式決定**(下記「次の一手」トリガー②を充足)。CLAUDE.md CRITICAL該当のためplan modeでのフル計画策定に入る。実装(summaryPromptBuilder.ts等の変更)はまだ一切行っていない(この節はplan mode着手時点の記録)。
 
