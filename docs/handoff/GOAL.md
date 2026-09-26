@@ -18,7 +18,7 @@ Firestore emulator統合テスト7件(fail-closedゲート実効性・Partial Up
 
 **GitHub Actions配線追加**: `run-ops-script.yml`に`backfill-confirm-on-verify`の実行サポートを新規追加(既存`backfill-drive-export`と同一パターン、`--rollback`は前例踏襲で対象外)。
 
-~~**本番実行(dev→kanameone/cocoro実データ`--dry-run`→canary→全件)**~~ **【kanameone/cocoro両方完了・2026-09-26】** dev/kanameone/cocoro実データとも型異常0件を確認(CLAUDE.md「既存データへの新規ゲート追加時の注意」充足)。**cocoro(19件)はcanary3件→残16件で完了(確定成功19件・エラー0件)**。**kanameoneはcanary10件→残2,685件で完了(確定成功2,694件・並行書込み検出スキップ1件、後日再実行で自然に拾われる想定・緊急性なし)**。
+~~**本番実行(dev→kanameone/cocoro実データ`--dry-run`→canary→全件)**~~ **【kanameone/cocoro両方完了・2026-09-26】** dev/kanameone/cocoro実データとも型異常0件を確認(CLAUDE.md「既存データへの新規ゲート追加時の注意」充足)。**cocoro(19件)はcanary3件→残16件で完了(確定成功19件・エラー0件)**。**kanameoneはcanary10件→残2,685件で完了(確定成功2,694件・並行書込み検出スキップ1件)**。**フォローアップ確認・2026-09-26**: 同日中に`--dry-run`を再実行したところ対象0件(想定通り自然解消済み)、追加のbackfill実行は不要と確認。
 
 **kanameone実行判断の経緯(decision-maker確認済み)**: 当初はGoogle Drive連携Phase1本番展開(Track C)とのタイミング調整を理由に保留していたが、①`functions/src/drive/exportDocument.ts`の`isCustomerUnconfirmed`ゲートにより、backfillでcustomerConfirmed:trueになった書類はDriveエクスポートリトライ(`driveExportScheduled.ts`、15分毎・最大10件)の対象になりうると判明(kanameone実データで対象2,695件中240件がdriveExportStatus:'error'で該当) ②この挙動はbackfill固有ではなく、担当者がUIの「一括確認済み」(`DocumentsPage.tsx`の`handleBulkVerify`)を使った場合も全く同じ結果になる既存の正規仕様と確認 ③ただし「一括確認済み」は`useInfiniteDocuments`(1ページ100件)でその時点までにクライアント側へ読み込み済みの書類にしか作用せず、専用の絞り込みフィルタも存在しないため、担当者の通常操作でこの240件相当に自然に到達する可能性は実質的に低いと判断。「システム開発側で今まとめて解消する」方が現実的との結論に至り、Drive再連携ロールアウトの完了を待たずに実行することで決定・実施した。
 
@@ -609,13 +609,15 @@ cocoro側Drive連携Phase C（クライアント自身のOAuth接続）は外部
 **kanameone/cocoro本番展開(2026-09-23、着手)**:
 - [x] **コードデプロイ完了**: `gh workflow run deploy-functions.yml`(kanameone/cocoro)+`deploy-hosting.yml`(kanameone/cocoro)の計4件、全て成功確認済み(GHAログで`exchangeDriveAuthCode`含む全関数の`Successful update operation`を確認)
 - [x] **cocoro側はこれで展開完了**: Drive未接続(Phase C未着手)のため、コードデプロイのみで完結。次回クライアントが接続する際は最初からフルスコープ`drive`で同意フローが走る
-- [ ] **kanameone側は残作業あり**: コードは反映済みだが、実際のOAuth再連携はkanameone管理者(systemkaname@kanameone.com)自身が行う必要があり(executor代行不可)、以下が未着手:
-  1. kanameone管理者との再連携タイミング調整(統合作業中は対象ツリーの手動変更を控えてもらう)
-  2. `driveExport` flag OFF → drain確認(exporting件数が0になるまで待機)
-  3. kanameone管理者による実際のOAuth再連携(設定画面で「再連携する」)
+- [ ] **kanameone側は残作業あり**: コードは反映済みだが、実際のOAuth再連携はkanameone管理者(systemkaname@kanameone.com)自身が行う必要があり(executor代行不可)。当初6ステップ計画のうち1・2はdecision-maker判断により「クライアントの負担最小化」方針へ変更・前倒し実施済み、残りは以下の状態:
+  1. ~~kanameone管理者との再連携タイミング調整~~ **【方針変更・2026-09-26】**: 日程調整を依頼せず、事前準備をベンダー側で先に完了させたうえで「ご都合の良いときにボタンを押すだけ」の案内に変更(html-brief、下記参照)
+  2. ~~`driveExport` flag OFF → drain確認~~ **【完了・2026-09-26】**: GHA `run-ops-script.yml`経由で`set-feature-flag --flag driveExport --value false`実行、直後に`drive-export-status-report --breakdown`で`exporting(処理中): 0件`を確認(既存の`error`715件はフリガナ未設定等の名前解決失敗によるもので本件と無関係、無処理のまま残置)
+  - **追加対応・2026-09-26**: Google OAuth同意画面の「未確認のアプリ」警告(外部・制限付きスコープ未検証のため発生)を、原因除去で解消——kanameoneのOAuth同意画面のユーザーの種類を「外部」→「内部」へ切替(Google Cloud Console、Playwright MCP実機操作)。既存のDrive接続アカウント`systemkaname@kanameone.com`がkanameone.com Workspaceアカウントであるため影響なし。cocoroは元から「内部」設定済みで対応不要と確認
+  - **クライアント案内送付完了・2026-09-26**: 対応完了報告(9件)+「医療」フォルダ重複の原因説明+再連携のお願い(操作場所の具体的な手順付き)をhtml-brief経由で作成しdecision-makerが送付済み
+  3. kanameone管理者による実際のOAuth再連携(設定画面「Google Drive」タブ→「再連携する」) ← **現在ここで待機中(外部依存、次アクションなし)**
   4. `audit-drive-sibling-duplicates`(kanameone、read-only)実行 → 重複グループを decision-maker/クライアントへ提示 → 承認
   5. `execute-drive-sibling-merge`実行(承認済みgroupのみ)
-  6. `driveExport` flag ON → backfill-drive-export(停止中の確認済みdoc)
+  6. `driveExport` flag ON → backfill-drive-export(待機中に溜まった未エクスポートdocのバックフィルを含む)
   - 本番のdestructive操作(統合実行・flag切替)は全て番号単位の明示認可のもとで行う(既存ルール)
   - Go条件(専用アカウント運用・共有範囲限定等)の最終確認もこのタイミングで実施
 

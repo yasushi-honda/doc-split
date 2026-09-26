@@ -1,6 +1,29 @@
 # ハンドオフメモ
 
-**更新日**: 2026-09-23（Issue #1028実装・レビューゲート・dev実機検証・kanameone/cocoroコードデプロイ完了、kanameone実連携は外部調整待ち）
+**更新日**: 2026-09-26（Issue #1043対応完了・confirm-on-verify backfill本番実行完了・kanameone向けクライアント案内送付完了、kanameone実連携は外部依存で待機中）
+
+## Issue #1043対応・confirm-on-verify backfill本番実行・kanameone向けフィードバック完了報告送付（2026-09-26）
+
+### 経緯
+前回セッションの`/catchup`で「backfillスクリプト本番実行前にIssue #1043（`ConfirmOnVerifyManifestEntry`の型安全化）解消を推奨」と記録されていた件に着手し、kanameoneから受領していた10件のフィードバックのうち9件の本番反映状況を確認・完了させ、残る1件（「医療」フォルダ重複）の解消に向けたクライアント案内までを完了させた。
+
+### 実行サマリ
+- **Issue #1043対応（PR #1058マージ）**: `ConfirmOnVerifyManifestEntry`をdiscriminated union化し不正な状態を型として表現不能にした。`--rollback`のmanifest読込みにランタイム検証(`isValidManifest`)を追加(fail-closed)。`codex review`がサーバー側401エラーで5回連続失敗したため、pr-review-toolkit 4エージェント+fable-reviewで代替レビューし、型契約違反データによる書込み側/読込み側の非対称バグ等を追加検出・修正。Firestore emulator統合テスト7件を新規追加、全PASS。
+- **confirm-on-verify backfill本番実行**: dev/kanameone/cocoro実データとも型異常0件を確認したうえで、cocoro(19件、canary3→残16で完了、エラー0件)・kanameone(2,695件、canary10→残2,685で完了、確定成功2,694件・並行書込み検出スキップ1件)の順に本番実行。スキップした1件は当日中の`--dry-run`再実行で対象0件を確認し、自然解消済みと確定。
+- **Drive export相互作用の判断**: kanameoneのbackfillにより、過去に`customerConfirmed`未確定でDriveエクスポートが`error`状態のまま止まっていた240件が、次回の定期リトライスイープで再度エクスポート対象になることが判明。実コード(`isCustomerUnconfirmed`ゲート→`CustomerUnconfirmedError`→スイープ再対象化)を追跡し、同等の効果がクライアント自身の既存UI機能(`handleBulkVerify`)でも本来起こり得ることを確認したうえで、decision-maker判断により実行継続。
+- **kanameone向けクライアント案内**: 10件のフィードバックのうち9件(②〜⑩)の対応完了報告と、残る1件(「医療」フォルダ重複)の原因説明・解消に向けた再連携依頼を、`html-brief`スキルで図解入りHTML文書として作成しdecision-makerが送付済み。当初案にあった「作業日程の相談」は、decision-maker指摘により撤廃し「ご都合の良いときにボタンを押すだけ」に簡素化。操作手順(設定画面→Google Driveタブ→再連携する)も実機(dev環境Playwright確認)・ソース両方で確認のうえ明記した。
+- **送付前の本番側事前準備**: クライアントの負担を最小化するため、日程調整を待たずにベンダー側で以下を先行実施した。
+  - `driveExport` feature flagをOFFにし、`exporting`件数0件のdrainを確認(GHA `run-ops-script.yml`経由)
+  - Google Cloud ConsoleでkanameoneのOAuth同意画面のユーザーの種類を「外部」→「内部」へ切替(Playwright MCP実機操作で確認・実行)。`drive`フルスコープが未検証のため発生する見込みだったGoogleの「未確認のアプリ」警告画面を、原因除去により解消。既存のDrive接続アカウント`systemkaname@kanameone.com`がkanameone.com Workspaceアカウントであるため影響なし。cocoroは元から「内部」設定済みで対応不要と確認
+
+### 現在の状態
+9件は全て本番反映済み(kanameone/cocoro)。残る1件は、kanameone管理者による実際のOAuth再連携(外部依存)を待機中。再連携完了後の残作業(重複監査→decision-maker承認→統合実行→flag ON→backfill)はGOAL.md「kanameone/cocoro本番展開」節に3分割済み。詳細はGOAL.md参照。
+
+### Issue Net
+Net 0（本セッションでのIssue起票・close操作なし。Issue #1059はPR #1058の軽微なフォローアップ指摘の記録用で、triage基準未達のためP2 backlogのまま）。
+
+### 同根再発スキャン・対症療法判定（handoff §4.6/§4.7）
+本セッションは修正PR 1件(#1058)のみで、症状の異なる複数PRの並走はなし。§4.7の判定基準（retry/timeout延長等のみの対症療法）にも該当しない(型を discriminated union 化し不正状態を構造的に表現不能にする根本対応)。同根再発候補なし。
 
 ## Issue #1028: Drive OAuthスコープ拡張〜kanameone/cocoro展開着手（2026-09-23）
 
