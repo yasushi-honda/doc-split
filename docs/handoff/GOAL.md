@@ -18,7 +18,9 @@ Firestore emulator統合テスト7件(fail-closedゲート実効性・Partial Up
 
 **GitHub Actions配線追加**: `run-ops-script.yml`に`backfill-confirm-on-verify`の実行サポートを新規追加(既存`backfill-drive-export`と同一パターン、`--rollback`は前例踏襲で対象外)。
 
-**本番実行(dev→kanameone/cocoro実データ`--dry-run`→cocoro canary→cocoro全件)**: dev/kanameone/cocoro実データとも型異常0件を確認(CLAUDE.md「既存データへの新規ゲート追加時の注意」充足)。**cocoro(19件)は canary3件→残16件の順で本実行完了、確定成功19件・エラー0件**。kanameone(2,695件、型異常0件確認済み)はGoogle Drive連携Phase1本番展開(Track C、下記)とのタイミング調整のため実行保留。
+~~**本番実行(dev→kanameone/cocoro実データ`--dry-run`→canary→全件)**~~ **【kanameone/cocoro両方完了・2026-09-26】** dev/kanameone/cocoro実データとも型異常0件を確認(CLAUDE.md「既存データへの新規ゲート追加時の注意」充足)。**cocoro(19件)はcanary3件→残16件で完了(確定成功19件・エラー0件)**。**kanameoneはcanary10件→残2,685件で完了(確定成功2,694件・並行書込み検出スキップ1件、後日再実行で自然に拾われる想定・緊急性なし)**。
+
+**kanameone実行判断の経緯(decision-maker確認済み)**: 当初はGoogle Drive連携Phase1本番展開(Track C)とのタイミング調整を理由に保留していたが、①`functions/src/drive/exportDocument.ts`の`isCustomerUnconfirmed`ゲートにより、backfillでcustomerConfirmed:trueになった書類はDriveエクスポートリトライ(`driveExportScheduled.ts`、15分毎・最大10件)の対象になりうると判明(kanameone実データで対象2,695件中240件がdriveExportStatus:'error'で該当) ②この挙動はbackfill固有ではなく、担当者がUIの「一括確認済み」(`DocumentsPage.tsx`の`handleBulkVerify`)を使った場合も全く同じ結果になる既存の正規仕様と確認 ③ただし「一括確認済み」は`useInfiniteDocuments`(1ページ100件)でその時点までにクライアント側へ読み込み済みの書類にしか作用せず、専用の絞り込みフィルタも存在しないため、担当者の通常操作でこの240件相当に自然に到達する可能性は実質的に低いと判断。「システム開発側で今まとめて解消する」方が現実的との結論に至り、Drive再連携ロールアウトの完了を待たずに実行することで決定・実施した。
 
 ## 【完了・2026-09-25】/catchup発の積み残しIssue対応3件（現在のミッションとは別件・並行トラック）
 
