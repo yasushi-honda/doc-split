@@ -1,6 +1,27 @@
 # ハンドオフメモ
 
-**更新日**: 2026-09-26（Issue #1043対応完了・confirm-on-verify backfill本番実行完了・kanameone向けクライアント案内送付完了、kanameone実連携は外部依存で待機中）
+**更新日**: 2026-09-27（ADR-0027 PR3実装・マージ完了。kanameone Drive Phase1最終ステップ・ADR-0027 PR4はいずれも外部依存/decision-maker判断待ちで待機中）
+
+## ADR-0027 PR3: Sarashina要約のモデルルーティング・クライアント・ディスパッチャー実装（2026-09-27）
+
+### 経緯
+2026-09-23に区切っていたADR-0027（要約生成のGemini依存脱却、Sarashina2.2-3B自前ホスティング）を再開。マスタープラン`~/.claude/plans/logical-baking-lighthouse.md`の次段階PR3（L1/L2ゲート・HTTPクライアント・provider別ディスパッチャーを**呼び出し元なしのdead code**として追加、本番挙動は不変）に着手した。
+
+### 実行サマリ
+- **品質ゲート一式**: plan mode（Opus）→`/plan-crossreview`（grip自白可視化+codex 2パス）→TDD実装→`codex review --base main`（P2指摘1件: URL前後空白のバリデーション/構築不一致を検出・修正）→`pr-review-toolkit`4エージェント並列レビュー（H1: context超過時の短縮再送が全ocrResult基準で計算され実際の送信テキスト（8000字切り詰め後）と不整合という実バグを検出・修正、M1: 契約テストのコメント誤マッチ、silent-failure-hunter指摘: ネットワークエラー分類でcause.codeの診断情報が握り潰される、をいずれもTDDで修正）
+- **設計上の意図的差分**: L2ゲート無効時は`resolveOcrProvider`（Paddle）と異なり`gemini`ではなく`none`へフォールバック（新規課金を発生させない）。`utils/retry.ts`の`withRetry`は使わず`withBackoffRetry`+独自分類（504/timeoutは二重推論リスクのため再送しない設計）
+- **IAM制約によるスコープ調整**: dev Sarashina Cloud Runへの実機疎通確認は、`hy.unimail.11@gmail.com`の`iam.serviceAccountTokenCreator`権限不足によりブロック。IAM変更は不実施、decision-maker判断でPR4/PR5へ延期。代わりに`gh api`でllama.cpp公式ソース（`ggml-org/llama.cpp`）を直接確認しcontext超過エラーの実JSON形状を裏取り
+- **検証**: `cd functions && npm run build && npm test` 2414 passing/0 failing、frontend型チェックPASS、新規3ファイル（`sarashinaSummaryClient.ts`/`summaryPass.ts`/`sarashinaSummaryRequest.ts`）の呼び出し元ゼロを`grep`で確認
+- PR #1062（実装本体）・PR #1063（GOAL.md記録更新）とも番号単位の明示認可でマージ済み
+
+### 現在の状態
+PR3は完了・マージ済み（本番挙動不変、dead code）。ADR-0027に「PR3実装知見」節（設計差分・PR4への申し送り事項）を記録済み。**PR4（Functions実配線・`deploy-functions.yml`へのURL/フラグ注入・IAM run.invoker付与）は新機能のため新規plan modeが必要、decision-makerの着手指示待ち**。
+
+### Issue Net
+Net 0（本セッションでのIssue起票・close操作なし）。
+
+### 同根再発スキャン・対症療法判定（handoff §4.6/§4.7）
+本セッションの修正は`codex review`のURL空白バグ・`pr-review-toolkit`のH1（短縮再送の基準不整合）・M1（契約テスト誤マッチ）・診断情報欠落の4件。いずれも構造的な根本対応（値のtrim統一・短縮計算基準の修正・コメント文言変更・診断フィールド追加）であり、retry/fallbackのみの対症療法には該当しない。過去7日のhandoff archiveに同キーワード（Sarashina/summaryPass/contextExceeded）のヒットなし、同根候補0件。
 
 ## Issue #1043対応・confirm-on-verify backfill本番実行・kanameone向けフィードバック完了報告送付（2026-09-26）
 
@@ -27,296 +48,63 @@ Net 0（本セッションでのIssue起票・close操作なし。Issue #1059は
 
 ## Issue #1028: Drive OAuthスコープ拡張〜kanameone/cocoro展開着手（2026-09-23）
 
-Drive OAuthスコープを`drive.file`→`drive`フルスコープへ拡張し、兄弟重複統合スクリプトを新設(PR #1038)。plan mode→plan-crossreview(grip×codex)→実装→Fable 5.1セカンドオピニオン(codex usage limit時の代替手順)→`post-pr-review.sh`hook強制のPRレビューゲート(codex review P1×2/P2×1、pr-review-toolkit 5エージェント、quality-gate-evaluator)を経てマージ。レビューゲートで発見されたCritical1件(SOP記述と実装の不一致、`release-claim`後の再実行でtrashが完了しない欠陥)・3経路収束High1件(manifest未チェックポイント)を含む全指摘を修正。fixtureベース統合テスト不在はIssue #1039へ切り出し(P1、実装時期未定)。
+Drive OAuthスコープを`drive.file`→`drive`フルスコープへ拡張し、兄弟重複統合スクリプトを新設(PR #1038)。plan mode→plan-crossreview(grip×codex)→実装→Fable 5.1セカンドオピニオン(codex usage limit時の代替手順)→`post-pr-review.sh`hook強制のPRレビューゲート(codex review P1×2/P2×1、pr-review-toolkit 5エージェント、quality-gate-evaluator)を経てマージ。レビューゲートで発見されたCritical1件(SOP記述と実装の不一致、`release-claim`後の再実行でtrashが完了しない欠陥)・3経路収束High1件(manifest未チェックポイント)を含む全指摘を修正。fixtureベース統合テスト不在はIssue #1039へ切り出し(P1、実装時期未定、**完了・2026-09-25 PR #1052マージ済み**)。
 
 **dev実機検証(decision-maker実施分含む)**: OAuth再連携実施→`grantedScopes`にフルスコープ反映確認。この過程で「再連携する」ボタンの視認性バグをdecision-makerが発見、即修正・別PR #1040でマージ。既存重複統合リハーサル(audit→dry-run→execute→再audit)で重複解消・今回修正コードパス(claim状態ガード・TOCTOU検知・trash直前再確認・manifestチェックポイント)を実地検証。Playwright MCP(認証済みセッション)経由でDrive UI上に新規未タグフォルダを作成し、フルスコープでの検出(`claimProperty=false`)を確認、Issue #1028本体の再現→非再発確認が完了。検証用フォルダは削除済み。
 
 **kanameone/cocoro本番展開**: Functions/Hostingとも計4件デプロイ成功。cocoroはDrive未接続(Phase C未着手)のためこれで展開完了。**kanameoneは実際のOAuth再連携以降(flag OFF→drain確認→クライアント自身の再連携→audit→承認→execute→flag ON→backfill)がクライアント側調整待ちで未着手**。decision-maker判断によりここでセッション区切り。詳細はGOAL.md参照。
 
-## Issue #984 段階1・段階2a完了 + kanameoneデプロイ（2026-09-19〜20）
 
-kanameoneの`search_index`で日付由来トークン(`2026`=14,562件で飽和、`26/20/02/60`が11,400〜12,780件)が1MiB上限に達し新規書類が検索に出ない問題(Issue #984)に対応。PR #985〜#989(段階1: fail-soft・検知・復旧、未索引1,723→0)、#990(日付語をfileDateのUTC範囲クエリで検索)、#991(日付由来トークンを索引から除外、削除側の安全化)をマージし、kanameoneへFunctionsをデプロイ(2026-09-20 13:47Z、`OCR_PROVIDER=paddle`維持)。ADR-0026。
+---
 
-**経緯と判断**: 初版プラン(全件force-reindex・GitHub Actions計測オプション・旧形式postings移行・索引掃除を含む)を`/plan-crossreview`(grip+codex 2パス)で改訂したが、実装後にdecision-makerから「利用者は複合条件で検索する、過剰対応では」との指摘を受け、codexにも規模の妥当性を独立に評価させて「最小構成」に絞った(全件再索引・`force-reindex.js`変更・掃除・`df`再計算を行わない)。実データ調査で2000年未満の`fileDate`がkanameoneに522件あると判明(年検索で当たらなくなる)、範囲は2000〜2099のまま(decision-maker判断)。
-
-**検証**: 単体2,262件・統合512件pass、`codex review`(high、PR-B 2回目とPR-A は0件)、pr-review-toolkit・Evaluatorの指摘を実運用での起こりやすさで個別評価。dev実機確認(日付トークン非登録・実Firestoreの範囲クエリ)、kanameone/cocoro事前計測(インデックスREADY・TZなし・fileDate分布)。kanameone実データ確認(2026-09-20 14:26Z、read-only)で、デプロイ後の新規書類に日付由来トークンのpostingがなく、飽和5索引文書は不変、`token skipped`ログ0件を確認しIssue #984をクローズ。その後cocoroへFunctionsをデプロイ(14:52Z、3環境同一コード)、ログベースメトリクス・アラート(`search_index_token_skipped`/`search_index_write_failed`)を3環境へ適用(#981クローズ)、devの画面(認証済み)で日付検索を確認(`2099`→範囲内2件のみ新しい順、`2099-03-10`→1件、通常語+`2099年3月`→2件、日付なしの従来検索も正常、コンソールエラー0件)。クライアント本番は画面操作せずread-only観測のみ。
-
-### Issue Net
-Net +2（Close 2件(#984=kanameone実データ確認後、#981=dev/kanameone/cocoroへのメトリクス適用後)・起票0件）。新規Issueは起票していない(FEバナーのフォローアップは未起票)。
-
-### 同根再発スキャン・対症療法判定（handoff §4.6/§4.7）
-- **同根候補あり（記録）**: 本セッションの修正PR(#985/#986/#989/#991のテスト修正)のうち「ローカルのテストは通るがCIで失敗」が2回再発(#989: 型注釈`withTimeout`のTS18046、#991: `force-reindex.js`が`functions/lib`のビルド済みトークナイザーを使うのにローカルは`lib`が古いまま)。共通の根本原因はローカル検証がCIの条件(functionsをbuildしてからunit test)と異なること。対策: push前に`npm run build:functions`してから`cd functions && npm test`を実行する(memory `feedback_local_pass_not_ci_build_lib.md`に記録)
-- **対症療法判定**: 該当なし。#986/#991は飽和の原因(日付トークン)自体を索引から除外する設計で、retry/fallbackのみの対症療法ではない(段階1のfail-softは暫定策として明示し、根本対応が段階2aという二段構成)
-
-## Issue #954完了: driveFolderClaim.tsの無保護runTransaction11箇所をwithBackoffRetryで防御（2026-09-18）
-
-Issue #947(PR #951)・Issue #952(PR #953)と同型の「`db.runTransaction()`自体の失敗が無保護で例外が無条件伝播する」バグが、`functions/src/drive/driveFolderClaim.ts`(Issue #871フォルダclaimプロトコル)内に11箇所残っていた件（#952完了直後のhandoff同根再発スキャンで発見、Issue #954として起票）に対応した。全11箇所が`tx.set()`(全フィールド置換)のため#947/#952と同一の`update()+precondition`フォールバックは適用できず、plan mode+fable-reviewで設計を再検討し、「`withBackoffRetry`+gRPC transientコード限定`shouldRetry`述語」方式に確定。RESOURCE_EXHAUSTED(gRPC code 8)はCloud Functions timeout接近リスクを理由にdecision-maker承認のうえ外側リトライ対象から意図的に除外した。呼び出し元3箇所(bare awaitで呼び出し元の契約を壊していた箇所)も修正。
-
-**品質保証**: `codex review`が「usage limit」エラーで2回連続失敗(容量超過とは別エラー文言だが、セッション途中でdecision-makerから「事前承認済みの自動fallback対象として扱うべき」と指摘を受け、以後は都度確認なしでfable-review自動切替。memory`reference_codex_capacity_error_recovery.md`の適用範囲をusage limitにも拡張済み)したため、fable-review(設計・実装2回)+`pr-review-toolkit`3エージェント(silent-failure-hunter/pr-test-analyzer/code-reviewer、code-reviewerはECONNRESETで1回失敗し再実行)の計4エージェント並列レビューで代替。CRITICAL 1件(`commitResolvedWithRetry`のリトライ条件統一漏れ)・Medium数件・DRY指摘(claim書込みtransaction11箇所の重複を`runClaimTransaction`ヘルパーへ集約)を反映。tsc/eslint/`test:integration:drive`(197件)/`npm test`(2144件)全PASS確認後、decision-maker番号単位認可でPR #955をsquash merge。
-
-silent-failure-hunterのHIGH指摘(新規3箇所の`.catch()`にログベースメトリクス/アラート基盤が無い、既存`drive_folder_divergent_record_failed`と同型のものが必要)は本PRのスコープ外(transaction保護とは別の運用監視領域)とdecision-maker判断のうえIssue #956へ切り出した。
-
-### Issue Net
-Net 0（Close 1件(#954、PR #955の`Closes #954`で自動クローズ)・起票1件(#956)）。#956はrating判定によるレビュー指摘の機械的Issue化ではなく、実在するアラート欠落（silent-failure-hunter HIGH指摘、既存パターンとの一貫性欠如）をdecision-maker承認のうえ切り出したfollow-up。
-
-### 同根再発スキャン・対症療法判定（handoff §4.6/§4.7）
-- **同根候補あり（未解消のまま次回持ち越し）**: 本ハンドオフ実施時のスキャンで、`driveFolderClaim.ts`以外にも`db.runTransaction()`使用箇所が8ファイル・11箇所存在すると判明（`triggers/updateDocumentGroups.ts`, `ocr/processOCR.ts`(2箇所), `ocr/documentDetail.ts`, `ocr/ocrProcessor.ts`(3箇所), `utils/groupAggregation.ts`(2箇所), `gmail/checkGmailAttachments.ts`, `upload/uploadPdf.ts`）。簡易grep(直前6行以内の`try {`有無)では保護状況が判定不能なものが複数あり、Issue #954と同水準の個別関数レベル調査(Explore agent+設計判断)が必要。仮説: ①これらは元々別チーム/別時期に書かれたコードで#947/#952/#954と同じ設計原則が及んでいない②OCR系(`processOCR.ts`/`ocrProcessor.ts`)は独自のリトライ機構(`withRetry`/`utils/retry.ts`)を別途持っており実際には保護済みの可能性もある③`groupAggregation.ts`はバッチ集計処理でtransaction失敗時の実害度合いがexport系とは異なる可能性がある。もう1件同根が出るとしたら、`utils/retry.ts`の`isTransientError`がgRPC数値コードの大半(1/2/4/13/14/16)をカバーしていない（ABORTED=10のみ対応、pr955-code-reviewer指摘で判明）ため、これらの経路が`isTransientError`を使って「保護済みのつもり」でも実質無防備な経路として発現しうる
-- **対症療法判定**: 基準3(過去30日以内に同症状PRが複数、#951/#953/#955の3件)に該当。ただしWebSearch実施(`@google-cloud/firestore runTransaction unprotected failure regression 2026`)で外部要因(SDK側リグレッション等)は確認されず、内部設計監査による能動的発見であることを確認。修正内容自体も単純なretry追加ではなく、呼び出し元3箇所の契約違反修正・DRY化・decision-maker承認済みのtimeoutリスク判断を伴う構造的対応であり、外部要因対症療法には該当しない
-
-## Issue #871恒久対策のkanameone/cocoro展開 + 複数人記載FAX Stage1-3完了 + kanameone向け報告書送信（2026-08-30）
-
-decision-maker指示「正しいことを段階的かつ計画的にうっかり取りこぼしなく」を受け、承認済み計画2件（`moonlit-jumping-alpaca.md`＝Issue #871、`merry-drifting-seal.md`＝複数人記載FAX）の残工程を同日中に完遂した。
-
-**Issue #871（フォルダ重複作成の恒久対策）**: PR-4（`childFolderResolver.ts`のclaimプロトコル完全移行、PR #879）を完了し、`findOrCreateFolder.ts`との対称性を確保。kanameone・cocoro両環境へclaimプロトコル一式（TTLポリシー+Functions）をshadowモード（`driveFolderClaimRead`未設定=既存挙動へ影響ゼロ）でデプロイ。当初計画の「cocoro先行」はcocoroのPhase C（OAuth接続）未完了により観察が機能しないと判明し、decision-maker確認のうえ**kanameone先行**に訂正。元Issue #871はクローズ、恒久対策の効果測定（shadow観察→読み経路有効化）は次回セッション以降。副次的に発見した課題2件をfollow-up Issue化: #880（`findOrCreateFolder.ts`/`childFolderResolver.ts`の状態機械ロジック重複、codex review指摘）、#881（PR-5 `driveExportErrorKind`が計画記載のまま未実装だった、P3・見送り判断済み）。
-
-**複数人記載FAX（ADR-0024）**: Stage1（`multiCustomerDetection`フラグをkanameoneでON、`faxDuplication`と併走）の検出サンプルがCloud Loggingとの突合で「検出集合==複製発火集合」を実証（AC-9充足）したのを受け、同日中にStage2（メンテナンスゲートで`processOCR`を一時停止しドレイン→`faxDuplication`フラグOFF、ゲート閉鎖時間約25分）→Stage3（棚卸し、スキャン対象3,203件・複製グループ1,016・Drive出力済みメンバーを含むグループ747）まで完遂。ADR-0024に実績を記録。未検証項目（複製OFF後の新規複数人記載FAX到着時の最終挙動）は次回到着時に確認。
-
-**kanameone担当者への報告**: 上記2件を含む仕様変更依頼チャットへの中間報告として、`html-brief`スキルで非エンジニア向け統合HTML（複数種類のFAX処理=対応完了、フォルダ重複作成=中間報告）を作成、Playwright MCPで実機検証（id重複ゼロ、コピーボタン8個全て正常動作）のうえdecision-makerへ送信完了。
-
-### Issue Net
-Net -1（Close 1件(#871)・起票2件(#880, #881)）。#871クローズは恒久対策実装完了によるもの（効果測定は継続監視へ移行、恒久対策自体の実装は完了）。#880/#881はいずれもPRレビュー・計画照合過程で発見した実在課題のfollow-up化（triage基準の実バグ実例・計画記載との乖離を満たす）であり、rating 5-6の任意改善の機械的Issue化ではない。
-
-### 同根再発スキャン・対症療法判定（handoff §4.6/§4.7）
-- 過去7日のhandoffアーカイブに`findOrCreateFolder`/フォルダ重複/`driveFolderLock`キーワードのヒットなし（同根候補0件）。ただしセッション内でIssue #811（`findOrCreateFolder`のtrashed=false固定検索、PR #840で8/27修正）との関連を検討し、「今回はactiveフォルダとの重複でtrashed分岐は無関係、発生も#840適用後の8/29」と別要因判定済み（GOAL.md記録済み）。同一ファイルを触る修正が短期間に連続した点はIssue #880（状態機械ロジック重複解消）として構造的に記録し、次回同種修正での対称性見落としリスクに備えた
-- 対症療法判定: 4基準（retry/fallback限定修正・外部要因調査欠如・過去30日同症状PR限定・smoke限定検証）いずれにも該当せず。修正はDrive API検索結果反映遅延という根本原因に対する状態機械（claimプロトコル）での構造的対応であり、検証もStage1本番併走の実データ突合・Stage2本番切替実施・Stage3棚卸し（3,203件スキャン）とsmokeを超える水準
-
-## kanameone書類回転ブロッカー解消: genesis provenance実装（2026-07-31）
-
-kanameone担当者から2件の問い合わせを受けた: ①Drive連携テンプレート登録後も確認済みにしてもファイルが作成されない ②一部書類の回転操作で`Document is missing provenance fields; backfill required (Issue #445 PR-D4) before rotation`エラーが出る。
-
-**①はバグではない**: `settings/features.driveExport`が未設定（Phase D本番展開が未実施）であり、フラグOFF時の設計通りの完全no-op挙動と実測確認。
-
-**②は深刻な実害**: kanameone全11,108書類中`provenance`保有はわずか1.9%。原因はGmail添付取込のみで完結した書類（全体95.5%、`fileUrl`が`original/`直下）にはそもそも`provenance`を書く経路が存在しないため。本日新規取込分25件も全件該当し、レガシー限定ではなく現在進行形の問題と判明。
-
-当初「PR-D4 backfill（Issue #445）の本番実行」を検討したが、調査の結果①救済できるのは分割由来書類のみ（全体4%）②kanameone向けGCPインフラ（Artifact Registry/bucket/SA/IAM/GitHub Environment承認ゲート）が全て未整備・本番実行実績ゼロ③残り96%（分割を経ていない書類）は構造的に永久救済不可、と判明し方針転換。
-
-**方針転換の根拠**: 回転処理の書込先は既に`processed/{documentId}/rotations/{uuid}.pdf`という文書ID単位の名前空間に分離済み（PR-D3）であり、Issue #432（複数書類が同一Storageパスを共有し片方の回転がもう片方を破壊するP0バグ）の被害対象になり得ない`original/`直下の書類には、provenance要求が過剰防御だった。plan mode承認済み計画に基づき、回転時にその場で起点provenanceを実測合成する**genesis provenance**機構（ADR-0016 MUST 8）を実装。
-
-**実装**: `functions/src/pdf/genesisEligibility.ts`（新規、適格判定純粋関数）、`createGenesisProvenance()`（`provenance.ts`）、`provenanceOrigin`フィールド追加（`shared/types.ts`、`provenanceBackfill`とは意味論が正反対のため別フィールド）、`rotatePdfPages`にgenesis分岐実装、frontend/firestore.rules/ADR-0016も同期更新。
-
-**品質保証**: `/code-review medium`を3回実施（1回は一時的API障害ECONNRESETで再実行）。1回目で「分割元doc(`isSplitSource`)の除外漏れ」（splitPdfが親docに書く`status:'split'`はfileUrl/provenance/parentDocumentIdを変更しないため既存3条件で検出不能だった）と「PdfSplitModalの回転エラー未処理reject」の2件を検出・修正。2回目で「ADR記述と実装の条件数不一致（3つ→4つ）」を検出・修正。3回目で指摘0件を確認。functions unit1996件/integration254件/rules92件/frontend513件全PASS、Playwright MCP実機確認（dev環境、Firebase emulator + E2Eシードデータ）でPdfSplitModalの回転ボタン・エラーtoast表示の動作を確認済み（DOM内容を直接dump、「回転エラー: 通信エラーが発生しました。」を確認）。
-
-**セッション振り返り（decision-maker指摘への対応）**: `/code-review`が検出した2件（isSplitSource除外漏れ・未処理reject）はいずれも実装時に自分で気づけたはずと指摘を受け、根本原因（「小さい変更」という主観判断で対向確認/impact-analysis相当のMUSTチェックを省略していた）を分析し、グローバルmemory`feedback_task_size_bias_skips_must_checks.md`に記録。今後は新規gating predicate追加時の全書込経路grep・関数契約変更時の全呼び出し元grepを完了宣言前の固定手順とする。
-
-PR #759（18 files, +862/-52）をmainへsquash merge。GOAL.md記録更新はPR #760。
-
-### Issue Net
-Net 0（Close 0件・起票0件。PR完結、Issue化該当なし）
-
-### 同根再発スキャン・対症療法判定（handoff §4.6/§4.7）
-- 過去30日の`functions/src/pdf/`変更履歴を確認したところ、rotatePdfPages関連の直近修正はPR #620（NOT_FOUND時のメッセージ分離、二重split誤診断防止）のみで、症状（並行書込み時の原因誤診断）が今回（provenance絶対不足による永久reject）と異なるサブシステム・異なる原因クラスと判断（同根ではない）
-- 対症療法判定: 4基準（retry/fallback限定修正・外部要因調査欠如・過去30日同症状PR・smoke限定検証）いずれにも該当せず。修正は根本原因（provenanceを書く経路自体の不在）を直接是正する構造的対応であり、検証も実データ分析+全テストスイート+Playwright実機確認と smoke を超える水準
-
-## kanameone Drive連携OAuth不具合対応・Phase B完了条件の教訓反映（2026-07-29）
-
-kanameone担当者(katsumihiraide@kanameone.com)から「Google Driveと連携する」ボタン押下後「認証コードが無効または期限切れです」と表示され連携できない旨の実機スクリーンショット付き報告を受け調査した。
-
-**真因**: `drive.googleapis.com`（Google Drive API本体）がkanameone/cocoro/dev全3環境で未有効化だった。Phase Bで有効化していたのは`picker.googleapis.com`（フォルダ選択UI用）のみで、実データ操作用の本体APIが完了条件チェックリスト自体に含まれていなかった。
-
-**失敗メカニズム**（Cloud Loggingの実測ログで確認）: OAuth認可コード交換自体は成功するが、後続のDrive API疎通確認(`fetchConnectedEmail`)で`Google Drive API has not been used...or it is disabled`エラー発生→汎用`internal`エラーとしてFEに返る→`frontend/src/lib/callFunction.ts`の自動リトライが**使用済み認可コードで再送**→2回目は`invalid_grant`（非リトライ対象の`failed-precondition`）となりこれが最終的にユーザー画面へ表示、という2段階のエラー連鎖だった。
-
-**対処**: kanameone/cocoro/dev全3環境で`gcloud services enable drive.googleapis.com`を実行し解消（非破壊的操作）。dev環境では実際にFirestoreの`seed-doc-0002`を`verified:true`に更新してDriveエクスポートを実トリガーし、`driveExportStatus:'exported'`・`driveFileId`付与を確認、根本原因の解消をend-to-endで実証した。kanameone本番は担当者への再検証依頼文書（コピーボタン付きHTML、ローカル生成）を送付済み、実際の再試行結果は次回確認。
-
-**再発防止**: `scripts/setup-tenant.sh`のAPI有効化リストに`drive.googleapis.com`/`picker.googleapis.com`を追加（PR #756マージ済み）。GOAL.mdに教訓化したPhase B完了条件チェックリスト修正版を追記（PR #757マージ済み）。副次的に発見したリトライ設計課題（後続処理失敗時に使用済みOAuth codeで再送してしまう構造）はIssue #755として起票（P2、緊急性なし）。
-
-### Issue Net
-Net -1（Close 0件・起票1件(#755)）。#755は今回発見した副次的なリトライ設計課題の記録目的の起票で、triage基準（実バグ・再現条件明確）を満たす。本流の不具合対応自体は3環境のAPI有効化+dev環境でのend-to-end実証により完全に解決済みで、Net -1は品質改善の記録であり後退ではない。
-
-### 同根再発スキャン・対症療法判定（handoff §4.6/§4.7）
-- **同根候補を検出（STOP該当）**: 過去7日のアーカイブ(`docs/handoff/archive/2026-07-history.md:113`)に、2026-07-20のスパイクテスト時「GCP Console上でOAuth ClientへのlocalhostOrigin追加、**Drive API/Picker API有効化**、API Key制限へのAPI追加を実施」という記述がある。しかし今回の調査でdev環境は2026-07-29時点で`drive.googleapis.com`が未有効化だったと実測確認済みであり、この記述と矛盾する。
-- **真のroot causeの仮説（3つ以上）**: ①最も可能性が高い仮説: session137の「Drive API/Picker API有効化」という記述は実際には`picker.googleapis.com`のみを指す省略表現で、Drive API本体は最初から有効化されていなかった（＝今回発見した「2つのAPIの名前的混同」という認知パターンが、記録レベルで2026-07-20の時点から既に存在していた） ②2026-07-20のスパイクテスト後の後片付け（テストフォルダのゴミ箱移動等）の過程で誤ってAPI自体も無効化された ③プロジェクト請求先アカウント変更等でAPIが自動的にリセットされた（可能性は低い）
-- **もう1件同根が出るとしたらどの経路か**: 今回のPR #756でsetup-tenant.shに両API追加、PR #757でGOAL.mdにチェックリスト化したことで機械的な抜けは防止したが、手動のGCP Console操作（新規クライアントのPhase B相当作業やスパイク検証）に頼る限り、担当者が「Drive関連のAPI」を一括りに捉えて実際にはPicker APIしか有効化しない、という同じ認知パターンが再発しうる。GCP Console上でAPI名が似ているため、有効化直後の一覧確認（`gcloud services list --enabled | grep drive`）を都度実施する運用が必要
-- **対症療法判定**: 4基準（retry/fallback限定修正・外部要因調査欠如・過去30日同症状PR・smoke限定検証）いずれにも該当せず。修正は根本原因（プロジェクト単位のAPI有効化状態）を直接是正しており、検証もdev環境での実際のDrive書き込みend-to-end実証（smokeを超える水準）。「なぜ今起きたか」も、Phase C（kanameone担当者による実接続）が2026-07-29に初めて実施されたタイミングで初めてこのコードパスが本番相当条件で実行されたためと明確に説明できる
-- **結論**: 同根候補は「過去の記録の不正確さ」に起因するものであり、今回の対処（API有効化+チェックリスト化+スクリプト修正）で機械的な再発は防止済み。ただし手動オペレーション時の認知的混同リスクは完全には消えないため、次回同様のインフラ準備作業では`gcloud services list --enabled`での機械的突合を都度実施することを推奨する
-
-## kanameone UXフィードバック①〜⑤対応 + セカンドオピニオン修正 + ヘルプページ精度是正（2026-07-24、Drive Phase1ミッションとは無関係の独立セッション）
-
-kanameoneの実担当者から届いた6件のUXフィードバック（担当CM別ファイル名表示・事業所別欠落・テーブル列幅・五十音順要望・キーワード検索・Drive保存タイミング）に対応した。decision-maker指定の優先順位（①②③最優先→⑤→⑥はDrive連携本番稼働後）に沿って実施。
-
-**① 担当CM別ファイル名表示バグ**: `CustomerSubGroup.tsx`のDocumentRowが`getDisplayFileName()`を呼ばず生の`fileName`（内部ID風文字列）を表示していた欠陥を修正。
-
-**② 事業所別・担当CM別ビューの100件キャップ**: `GroupList.tsx`が`sortBy:'count', limitCount:100`のサーバークエリを使っており、書類数の少ない事業所（実例:「ヘルパーステーションダチョウ」）が恒久的に非表示になっていた。顧客別・書類種別と同様の全件取得+クライアントソートに統一。
-
-**③ テーブル列幅・ステータス列見切れ**: `DocumentsPage.tsx`の書類一覧テーブルがファイル名列に幅制約を持たず`table-layout:auto`で長いファイル名（区切り文字なしのID風文字列）が列を肥大化させステータス列を画面外に押し出していた。`max-width`+`break-words`で折り返し表示に変更。
-
-**④→⑤ 五十音順要望はキーワード検索で代替**: クライアント自身が「⑤があれば④は不要」と結論。⑤として事業所別・書類種別・担当CM別・顧客別ビューにグループ名フリーテキスト検索を新規実装（`frontend/src/lib/filterGroupsByName.ts`、全角/半角・大小文字・旧字体を吸収する`normalizeName`ベースの正規化）。
-
-以上をPR #717（5 files, +170/-17）としてマージ。`/code-review`で3件（書類種別フラット表示の100件キャップが名前フィルターより先に適用され101件目以降が検索できないバグ・displayNameがundefinedの場合のクラッシュ・NFKC正規化の重複実装）を検出・同PRで修正済み。
-
-**セカンドオピニオン（`/codex review-diff`）→ PR #718**: マージ後の追加チェックで、書類種別のカテゴリ階層表示時（`useCategoryHierarchy=true`）は⑤の検索欄自体が非表示になる設計漏れをP2指摘。「カテゴリ階層表示は通常の設定済みケース」というCodexの主張を鵜呑みにせず、kanameone/cocoro本番の`masters/documents/items`を実測したところ**両クライアントとも100%（kanameone 126/126件、cocoro 27/27件）でcategory運用済み**と判明し、指摘が正確な事実だったことを確認。`filterCategoryHierarchyByName()`を追加してカテゴリ内グループも検索対象に拡張（PR #718、`/code-review`指摘0件）。
-
-**ヘルプページ精度是正（PR #719）**: 別件（cocoroのGoogleドライブ接続案内通知文の作成）に先立ち、`/help`管理者ガイドのGoogle Drive連携セクションが実装と一致しているか実機（Playwright MCP）で確認したところ、2件の乖離を発見・修正: (1) 「設定画面の『Google Drive連携』カードから」という記載が、実際は上部タブから「Google Drive」を選ぶ操作（デフォルトタブは「Gmail設定」）が必要な点に触れていなかった (2) フォルダ階層テンプレートの保存ボタンの実ラベルは「設定を保存」だが「保存」と誤記載していた。
-
-**cocoroのfaxDuplication機能ON化**: 設定差分調査で`settings/features.faxDuplication`がkanameone=true・cocoro=未設定（コード上「kanameone専用機能」と明記）という差異を発見・報告したところ、decision-makerから「cocoroも同機能を使いたい」との明示指示を受け、`scripts/set-feature-flag.js`をGitHub Actions「Run Operations Script」経由（dry-run確認後に本実行）でcocoroに適用。Firestore直接読み取りで反映確認済み。
-
-**デプロイ**: PR #717・#718・#719（計3件）をdev（CI自動）+ kanameone・cocoro（`Deploy Cloud Functions`/`Deploy Firebase Hosting`のGitHub Actions、cocoro Hostingのみ`/deploy`スキルのローカル手順）へ展開。全デプロイについて配信バンドルへの`curl`直接アクセスで新機能の文字列・修正後の文言が実際に含まれることを検証済み（Functions側はバックエンド変更なしのため全て"Skipped (No changes detected)"で正常）。
-
-UI変更を含む3PRとも`ui-verified`ラベル付与前にPlaywright MCPでの実機確認証跡をPRコメントに記録（viewport・確認手順・確認結果を明記）。
-
-decision-maker向けに社内進捗ダッシュボードHTML、非エンジニアクライアント向け進捗レポートHTML、Googleドライブ接続依頼の通知文（コピーボタン付きHTML）の3点をローカル生成（スクラッチパス、リポジトリ非管理）で提供。
-
-### Issue Net
-Net +0（Close 0件・起票0件。GitHub Issue化は行わず、PR完結）
-
-### 同根再発スキャン・対症療法判定（handoff §4.6/§4.7）
-- 過去7日のhandoffアーカイブで「担当CM別」「GroupList」キーワードが1件ヒット（session128〜132「担当CM別集計バグ修正」、2026-07-14〜15）したが、内容を確認した結果、対象は**バックエンド集計トリガーのcount不整合**（`canFallbackToUnassigned`条件漏れ）であり、今回のフロントエンド表示・クエリキャップ・レイアウトバグとは異なるサブシステム・異なる原因クラスと判断（同根ではない）
-- PR #717→#718は同一ファイル（GroupList.tsx/filterGroupsByName.ts）を連続して触れているが、これは`/codex review-diff`指摘を受けた同日内の意図的な機能完成（scope拡張）であり、独立した修正試行の繰り返し（同根再発）には該当しない
-- 対症療法判定: 4基準（retry/fallback限定修正・外部要因調査欠如・過去30日同症状PR・smoke限定検証）いずれにも該当せず。全修正は根本原因を特定した上での実装、検証もFirestore実データ+Playwright実機確認+本番配信バンドルの直接照合と、smoke testを超える水準
-
-## Geminiモデル運用調査・thinkingLevel最適化・doc-audit対応（2026-07-24、Drive Phase1ミッションとは無関係の独立セッション）
-
-decision-makerからkanameoneのGemini 3.5移行状況を問われた際、ローカルの`functions/.env.docsplit-kanameone`(gitignore対象、GHAデプロイ時に動的生成される無関係な値)だけを見て「未移行」と誤報告する失敗があった。`gcloud functions describe`で3環境(dev/kanameone/cocoro)の実際の環境変数を直接確認し、全環境が実際は`gemini-3.5-flash`で正常稼働していることを実証・訂正(教訓は`~/.claude/memory/feedback_verify_fact_before_declaring.md`11回目・`CLAUDE.md`「Cloud Functions環境変数の実態確認」に記録)。
-
-**Gemini 3.6 Flash移行検証(Issue #714)**: コード変更自体は容易(config.ts 3箇所)と確認したが、実機REST検証で**`gemini-3.6-flash`が`asia-northeast1`リージョナルエンドポイントで404、`global`エンドポイントのみ200**という重大な発見があった(2026-07-22時点のmemory記録「asia-northeast1で200確認済み」と矛盾、原因未特定)。日本データレジデンシー要件のため現状は移行見送り、Issue #714は`postponed`ラベルで保留(`~/.claude/memory/reference_vertex_ai_to_gemini_enterprise_2026.md`に詳細記録)。
-
-**thinkingLevel LOW→MINIMAL最適化(PR #715、マージ済み)**: 2.5-flash時代の`thinkingBudget=0`という運用方針との一貫性を根拠に、3.5-flashのthinkingLevelをMINIMALへ変更。devフィクスチャ(14件)+kanameone/cocoro本番confirmed実データ(計18件)の**計32件で精度検証、全件でLOWと完全一致(劣化ゼロ)**、thinkingトークンは全件0でコスト16〜32%削減を実データで確認。kanameone/cocoro双方へGitHub Actions経由でデプロイ済み、エラー0件・kanameoneは実トラフィックで`thinking:0`を確認済み(cocoroは次の実文書処理待ち)。検証中にkanameone confirmed-replayスクリプトの顧客マスターページネーションバグ(Firestore REST APIが`pageSize=1000`指定でも300件で打ち切る挙動)を発見・修正。
-
-**PR #715の`Closes #714`誤記載**: MINIMAL最適化は本来Issue #714(3.6移行検討)とは別件だったが、PRマージ時に誤って自動クローズされた。再open + `postponed`ラベル付与で是正済み。
-
-**doc-audit follow-up(PR #716)**: Geminiモデル表記陳腐化(10ファイル、「2.5 Flash」表記が3.5移行完了後2週間超放置)を3.5へ一括更新、`gemini-rate-limiting.md`の価格表を実単価で再計算。`docs/architecture.md`のCloud Functions表にDrive連携4関数を反映(20→24関数)。`CLAUDE.md`から詳細ルール2件を`.claude/rules/`へ切り出し(219行→181行、doc-audit 2サイクル連続指摘の構造課題を解消)。
-
-### Issue Net
-Net +0（Close 0件・起票1件(#714、後日再open)。実質的なNet変化なし）
-
-<!-- session138〜(PR#700マージ・follow-up triage群)はLATEST.md詳細サマリ未追記、GOAL.mdのみ更新（commit dc1b0f4〜d0b5786で追跡可能）。詳細は下記「Google Drive連携Phase1 完遂 + follow-upサマリ」セクション参照。 -->
-
-## kanameone・cocoroへのGoogle Drive連携Phase1本番展開: Phase B（インフラ準備）完了（2026-07-23）
-
-前セクション「kanameone office マスター contamination cleanup」完遂後、decision-makerの「次ミッションを選定」承認を受け、GOAL.md記載の次ミッション候補3件のうち「kanameone・cocoroへのPhase1展開検討」に着手。plan mode（Explore→Plan agent→本セッションでのgcloud実地検証を経て設計を精緻化）で計画承認、`/Users/yyyhhh/.claude/plans/witty-drifting-hoare.md`に記録。
-
-### Phase A: Codexセカンドオピニオン（MCP、effort=high）
-計画に対し4観点でレビュー依頼。結論「Phase Bは条件付き実行可能、Phase D/Eは現計画のままではGO不可」。High指摘5件: ①flag ON直後は他ユーザーの通常確認操作も全てDrive書込みトリガー対象になり「1件だけのコントロールテスト」が成立しない ②実デプロイ後の各Function実行SAを別途確認すべき（get-iam-policyは意図の確認に過ぎない） ③`backfill-drive-export.ts`に`--limit`/`--expected-count`/manifest/選択的rollbackが無い ④「flag OFF」はロールバックではない（スケジューラのflagチェックは実行開始時のみ、既に起動済みのexportは完走する） ⑤通常確認操作とbackfillが競合しうる。decision-maker判断で「Phase Bのみ今日実行、Phase D/Eは設計やり直し」と結論。
-
-### Phase B: インフラ準備（kanameone・cocoro両環境、flag OFFのまま実施）
-GCP実地検証で判明した事実: kanameone project number `254284448890`・cocoro `271145290122`（計画時点の想定と一致）。**`hy.unimail.11@gmail.com`はkanameoneに`editor`+`secretmanager.admin`+`firebase.admin`+`cloudfunctions.admin`を保持しており、`systemkaname@kanameone.com`のgcloud CLIセッション期限切れ（非対話的リフレッシュ不可）を回避してPhase B全手順を実行できると判明**（decision-maker指示「ルール通りGHAで対応」を受け、Functions/Hosting/Firestore rules,indexesデプロイはGHA経由・SA鍵認証、それ以外のGCPインフラ操作は有効なhy.unimail.11セッションで実施という役割分担に整理）。
-
-両環境で実行・検証: `./scripts/deploy-to-project.sh` 相当（GHA `Deploy Cloud Functions` workflow + `firebase deploy --only firestore:rules,indexes` ローカル）→ Picker API有効化 → OAuth Webクライアント「DocSplit Drive」作成（Playwright MCPでGCPコンソール操作） → Secret Manager 3件（`drive-oauth-client-id`/`-secret`は実値投入、`-refresh-token`は空コンテナ） → compute SA（`{project-number}-compute@developer.gserviceaccount.com`）へのIAMバインド4件 → 実行SA一致確認（4関数×2環境=8関数全てcompute SAと一致） → STORAGE_BUCKET反映確認 → `settings/drive.oauthClientId`をFirebase Console UIから投入（1フィールドのみの書込みのため、`ops-script-redirect.sh`hookの意図（ADR依存の運用スクリプトのローカル実行回避）を汲みコンソールUI経由を選択、hookのパターンマッチ回避を目的とした一時スクリプト作成はしない判断） → flag OFF確認。
-
-cocoro固有の差分: `docs/clients/cocoro.md`記載のGoogle Workspace組織制約（cocoro-mgnt.com配下、SAはコンソール操作不可）どおり、OAuth Client作成は`hy.unimail.11@gmail.com`（editor）が担当、Secret作成・IAMバインドはSA`docsplit-deployer@docsplit-cocoro.iam.gserviceaccount.com`（owner、ローカル認証済み・有効）が担当。OAuth Client作成完了時に「OAuth同意画面が公開・確認されるまでアクセスは組織内ユーザーに制限される」という表示を確認し、cocoro.md記載のorgInternalOnly制約と一致することを実証。
-
-**実行中に発見・対応した問題（Codex未指摘）**: 両環境ともFirebase自動生成のBrowser API Keyの制限リストに`picker.googleapis.com`が含まれておらず、Picker起動時に失敗する状態だった。既存の許可API（kanameone26件・cocoro27件）を維持したまま追加修正。
-
-### 現在の状態・次のステップ
-両環境とも「クライアントが設定画面でGoogle Drive連携ボタンを押せる状態」に到達、flag OFFは維持のため無害。Phase C（クライアント自身によるOAuth接続、代行不可）は外部依存として待ち。Phase D/E（flag ON・backfill本実行）はCodex指摘を踏まえ次回セッションでplan modeにより再設計してから着手する方針。GOAL.md「現在のミッション」として記録済み（中断点セクションも更新済み）。
-
-### Issue Net
-Issue起票/close操作なし（インフラ運用作業のみ）。
-
-## kanameone office マスター contamination cleanup + Issue #707起票セッション（2026-07-23）
-
-`/catchup`が提示した積み残しIssue（#704/#699/#698、scheduled-audit「短officeマスター検出」が3日連続で同一検出のまま滞留）の調査を起点に、kanameone本番環境の実データ汚染を特定・cleanupした。Drive連携Phase1ミッションとは無関係の独立した保守タスク。
-
-### 診断
-`investigate-office-duplicate.js`（GHA `Run Operations Script`経由）で調査。「かいと」(id=`かいと`)・「福の里」(id=`福の里`)は、Firestore doc IDが名前文字列そのもの（通常の auto-ID とは異なる異常パターン）というCSV import由来のcontamination signatureと確定。3日間とも全く同一の検出内容で、legitimateな新規追加ではなく固定の未解消汚染と確認。
-
-### cleanup実行（`reset-documents-by-office` → `delete-office-master`の確立済みplaybook、各回バックアップJSON自動保存・削除後検証込み）
-- 「かいと」「福の里」: 影響書類7件をpending化→マスター2件削除（GHA run 29965415377 / 29965542893）
-- 追加調査で発覚した同型汚染「訪問介護かいと」(id=`訪問介護かいと`、4文字以上のため既存auditの`--max-length 3`網に非該当): ファイル名先頭FAX番号(`0582167913`)が「かいと」7件・正規マスター「訪問介護事業所かいと」(id=`mWZ7SRv7qCohTQImOwI0`)1件と完全一致し、**同一実在事業所のデータが3マスターに分散**していたと判明。影響書類1件をpending化→マスター削除（GHA run 29966386223 / 29966517630）
-- **実害の実例確認**: 「かいと」cleanupでresetした書類の1件が、既存Phase1 collisionバリデーション（`COMMON_SHORT_LENGTH_THRESHOLD=4`、4文字未満のみ対象）をすり抜け、再OCR分類で正規マスターではなく「訪問介護かいと」（別の汚染マスター）に再割当されていたことを確認。audit網の穴が理論上の懸念ではなく実害を招くことの裏付けとなった
-
-### Issue対応
-#704/#699/#698に根拠・実行ログをコメントしclose。新規Issue #707（`doc.id===name`判定を長さ非依存でaudit scriptに追加する改善案）を起票。
-
-### Issue Net
-Net +2（Close 3件: #704, #699, #698 / 起票 1件: #707）
-
-## Google Drive連携Phase1 完遂 + follow-upサマリ（2026-07-21〜23、GOAL.mdに詳細記録）
-
-session138相当（Task2-13実装、Cloud Functions+Frontend全実装）以降の詳細はLATEST.mdへの追記を省略しGOAL.mdのみで管理された（本ファイルの容量管理のため。詳細は`docs/handoff/GOAL.md`参照、commit dc1b0f4〜d0b5786で追跡可能）。
-
-- **PR #700マージ（2026-07-22、マージコミット`aa2d827`）**: 56ファイル・+7458/-168・45コミット。ADR-0022 Phase1全体。マージ前に`/code-review`（medium/bare xhigh/high×2回）+`/review-pr`（5エージェント）+`codex review`を多段実施し、計30件超のCONFIRMED指摘のうち影響度上位を都度修正
-- **E2E疎通確認（2026-07-22、dev環境、decision-maker立会い）**: 完了の定義4項目のうち3項目を実機確認、1項目は既存テストカバレッジで代替。着手直後に`STORAGE_BUCKET`環境変数未設定という新規バグを発見・緊急パッチ後、恒久対応（`scripts/deploy-to-project.sh`修正+`functions/.env.*`新設）まで完遂
-- **follow-up triage（2026-07-22〜23）**: マージ後に残っていた【様子見】6件+PLAUSIBLE 1件のうち5件をTDDで修正、PLAUSIBLE 1件はADR-0022に既知の制約として明記。残り1件（exchangeDriveAuthCodeCore Firestore書込み失敗時のsplit-brain再発）はdecision-maker選択で次ミッションへ据え置き
-- **backfill-drive-export.ts dev本実行（2026-07-23）**: feature flag OFF→ON時の既存verified document回収不能バグの恒久対応スクリプトをdev環境で本実行（51件マーク）。kanameone/cocoroはDrive関連Functions未デプロイのため据え置き、Phase1展開時に改めて実施予定
-
-**完了状態**: GOAL.mdの「現在のミッション」は【完了・2026-07-22】。次ミッション候補（exchangeDriveAuthCodeCore split-brain対応判断／backfill-drive-exportのkanameone・cocoro本実行／両環境へのPhase1展開検討）はGOAL.md末尾に記録、起点未確定のため次回セッションでdecision-maker判断待ち。
-
-## Google Drive連携Phase1: FE実装 + Firestoreルールテスト + `/code-review high`修正セッション（2026-07-21）
-
-`/catchup`が提示したGOAL.md由来の未完了タスク先頭項目から、decision-makerがAskUserQuestionで都度選択する形で以下を順次実装した。
-
-### Firestoreルールテスト追加（commit 2cbe21c）
-`settings/drive`のadmin専用write権限テスト4件を追加（読取: ホワイトリスト登録ユーザー可/未登録ユーザー不可、書込: 一般ユーザー不可/管理者可）。エミュレータで88件全PASS確認。
-
-### FE設定フック実装（commit 54a78a5）
-`frontend/src/hooks/useDriveSettings.ts`。既存`useSettings.ts`のTanStack Queryパターンを踏襲し`useDriveSettings()`/`useUpdateDriveSettings()`+正規化関数`normalizeDriveSettings()`を実装。単体テスト5件追加。
-
-### FE Drive接続 + Picker UI実装（commit d3bbf1b, 5b0f64a）
-実コード5ファイル+新機能+アーキテクチャ判断（Google Picker API新規統合）に該当したためplan mode経由で実装。設計時に2つの重大なギャップを発見・解決:
-- session137のスパイクで作成した`spike-test.html`（Picker実機検証の唯一の参照実装）はgit未コミットで復元不可能と判明。Google公式Picker/GIS仕様（context7+WebFetch）から再構築した
-- Drive接続のFE `client_id`供給元をGmail用と共用する案は、`exchangeDriveAuthCode`がSecret Manager `drive-oauth-client-id`でcode交換する制約上`invalid_grant`になり技術的に不成立と判明。`DriveSettings.oauthClientId`をFirestore新設フィールドとして解決（`shared/types.ts`、Gmail同型パターン）
-
-実装: `GoogleDriveConnect`(code flow接続)/`DriveFolderPicker`(token flow+Picker)。`frontend/src/lib/googlePicker.ts`の純粋関数`pickerResponseToRootFolder`で`window.google`依存部を分離しテスト可能にした。単体テスト9件追加、tsc/lint/frontend全378件PASS・build成功。
-
-evaluatorエージェントによるAC検証でHIGH指摘1件（Picker側キャンセル時に`onPicked`のみが`picking`状態を解除しておりUIが操作不能に固着）+MEDIUM指摘1件（GIS `error_callback`未設定でポップアップブロック時に同種の固着）を検出。自分で実装を直接確認したうえで修正: `openFolderPicker`に`onCancel`コールバックを追加し、`isPickerCancelled`純粋関数でPicker表示完了の中間イベント(`loaded`)とキャンセル確定(`cancel`)を区別。単体テスト5件追加(計14件)。
-
-### `/code-review high`実行 + resolveDriveFile()修正（commit f78304c）
-decision-maker実行の`/code-review high`（feature/drive-export-phase1ブランチ全体34ファイル・約3744行）で8角度finder並列実行→18件のユニーク候補を1票制verifyでCONFIRMED 13件/PLAUSIBLE 1件/REFUTED 2件に判定。decision-maker選択で`resolveDriveFile()`（`functions/src/drive/exportDocument.ts`、前セッションのd715e26で新規導入）に集中する最重要3件のみ修正:
-
-1. **trashed未チェック**: `files.get()`成功時にゴミ箱移動(`trashed`)を一切確認しておらず、`drive.file`スコープでは完全削除不可でゴミ箱移動のみ許可という制約下で、ゴミ箱内ファイルへ不可視のまま上書きし続けるsilent failureになっていた
-2. **404判定の型不整合**: `error.code===404`のみに依存していたが、`node_modules/gaxios`の実装を直接確認した結果、実際のGaxiosErrorはHTTPステータスを`error.status`に設定し`error.code`はnetwork層エラー専用と判明。本番で常にfalseとなり404フォールバックが死んだコードパスだった
-3. **重複検知の恒久バイパス**: driveFileId確定後は`findOrUploadFile()`のappProperties重複検知(`AmbiguousFileError`)を永久に経由しなくなっており、ADR本文の「以後AmbiguousFileErrorで恒久停止」という記述と矛盾していた
-
-`isDriveFileNotFoundError()`(status/code両対応、`is429Error`/retry.tsと同型)と`assertNoDuplicateFile()`(driveFileId優先パスでも毎回重複再確認)を追加。回帰テスト3件追加。exportDocument統合テスト18件・Drive関連統合テスト計45件・functions unit1903件・rules88件・tsc/lint全PASS確認済み。
-
-**同根再発の観察**: `resolveDriveFile()`は前セッション(d715e26)で「reprocess時の孤児ファイル問題」の緊急修正として導入されたばかりで、今回わずか1日でさらに3件のバグが見つかった。新しい状態解決パス(driveFileId優先)を追加した際に、既存の`findOrUploadFile()`が持っていた安全装置(trashedフィルタ・重複検知)を機械的に移植し忘れるという同型パターンが2回連続した形。次に同じパターンが出るとすれば、残っているCONFIRMED指摘（feature flag OFF時の永久回収不能・sweep 40件上限飽和）も「新しい状態遷移経路を追加する際に既存の安全装置(sweep/retry/エラー可視化)を横展開し忘れる」という同型の構造的リスクを持つため、着手時は注意。gaxios error-shapeの調査はWebSearchでも裏付け確認済み（AIP-193標準に基づく`status`/`code`の意味の違いは既知の安定した仕様で、外部要因の急な変化ではなく実装時の見落としと判断）。
-
-残りCONFIRMED 7件+PLAUSIBLE 1件は、Drive Phase1が未マージのため（GitHub Issue化ではなく）GOAL.mdの「進行中のtasks」に追記しtriage済み（commit 1d8a551）。
+**アーカイブ**: 過去セッション詳細は `docs/handoff/archive/` 参照(2026-09-27時点: 2026-07/08/09月分をアーカイブ済み)。
 
 ## 現在のフェーズ
 
-**進行中のミッション**: kanameone・cocoroへのGoogle Drive連携Phase1本番展開（GOAL.md準拠、2026-07-23開始）。承認済み計画: `/Users/yyyhhh/.claude/plans/witty-drifting-hoare.md`。Phase A（Codexセカンドオピニオン）・Phase B（両環境インフラ準備）完了・検証済み。Phase C（クライアント自身のOAuth接続、代行不可）は外部依存で着手待ち、Phase D/E（flag ON・backfill本実行）はCodex指摘（Highのみ5件）を踏まえ次回セッションでの再設計待ち（詳細は上記セッションサマリ参照）。
+**ミッション1: kanameone・cocoroへのGoogle Drive連携Phase1本番展開**（GOAL.md準拠、2026-07-23開始）。承認済み計画: `/Users/yyyhhh/.claude/plans/witty-drifting-hoare.md`。cocoroはFunctions/Hostingデプロイ完了、Drive未接続(Phase C=クライアント自身のOAuth接続、代行不可)で外部依存待ち。kanameoneはOAuth再連携依頼を2026-09-26に送付済み、クライアントの実際の再連携(外部依存)を待機中。再連携完了後の残作業(重複監査→承認→統合実行→flag ON→backfill)はGOAL.md「kanameone/cocoro本番展開」節に3分割済み。
 
-「Google Drive連携機能 Phase 1 (MVP)」実装自体は2026-07-22にPR #700マージで完了済み（follow-up triageも2026-07-23までに完遂、詳細は上記「Google Drive連携Phase1 完遂 + follow-upサマリ」参照）。今回のkanameone・cocoro展開は、その本番ロールアウトフェーズにあたる。
+**ミッション2: ADR-0027 Sarashina要約モデル移行**（Gemini依存脱却、Sarashina2.2-3B自前ホスティング）。PR0〜PR3完了(2026-09-27、上記セッションサマリ参照)。現状は**全経路dead code、本番挙動不変**。PR4（Functions実配線）以降は新機能のため新規plan modeが必要、decision-makerの着手指示待ち。
 
-2026-07-23の別セッションで、Drive連携と無関係の独立保守タスクとして`/catchup`が提示した積み残しIssue（#704/#699/#698）を調査しkanameone本番のofficeマスターcontaminationをcleanup済み（上記セッションサマリ参照、Issue Net +2）。
+両ミッションとも「Google Drive連携機能 Phase 1 (MVP)」実装自体（2026-07-22 PR #700マージ）とADR-0027 PR0-2（2026-09-23まで）は完了済み。今回はそれぞれの本番ロールアウト/実配線フェーズにあたる。
 
-未着手の次ミッション候補（起点未確定、decision-maker判断待ち）: GOAL.md末尾「exchangeDriveAuthCodeCore split-brain対応判断」。GitHub Issue backlog（#707/#693/#503/#251/#238、いずれもP2 enhancement・trigger未成立）も次ミッション選定時の候補。
+未着手の次ミッション候補（起点未確定、decision-maker判断待ち）: GOAL.md末尾「exchangeDriveAuthCodeCore split-brain対応判断」。GitHub Issue backlog（#956/#962/#251/#238、いずれもP2 enhancement・trigger未成立）も次ミッション選定時の候補。
 
-過去のミッションは全てクローズ済み: 「担当CM別集計バグ修正」+派生ミッション「Issue #660修正」は2026-07-15 session132で完全達成（全18項目`[x]`）。「OCR突合精度向上」は2026-07-14 session124で撤退基準適用によりクローズ（実装は保持、本番展開は見送り）。「#547/#548コスト圧縮」は2026-07-10 session113で技術的完遂・session117で本番是正完了。詳細はarchive参照。
+## 直近の変更（最近5件、新しい順）
 
-## 直近の変更（session119〜、簡潔に）
+- **2026-09-27（ADR-0027 PR3実装・マージ）**: 上記セッションサマリ参照。**Net 0**。PR #1062/#1063マージ、Sarashina要約のモデルルーティング・クライアント・ディスパッチャーをdead codeとして追加。
+- **2026-09-26（Issue #1043対応 + confirm-on-verify backfill本番実行）**: 上記セッションサマリ参照。**Net 0**。PR #1058マージ、kanameone/cocoroへbackfill本番実行、kanameone向け完了報告送付。
+- **2026-09-25（Issue #1039完了）**: PR #1052マージ。fixtureベース統合テスト追加（詳細はGOAL.md参照）。
+- **2026-09-23（Issue #1028: Drive OAuthスコープ拡張）**: 上記セッションサマリ参照。PR #1038/#1040マージ、kanameone/cocoroへDrive Phase1インフラ展開。
+- **2026-09-18〜21（Issue #984/#954/#981）**: `docs/handoff/archive/2026-09-history.md`参照。kanameone検索インデックス飽和対応、`driveFolderClaim.ts`のtransaction保護強化。
 
-- **2026-07-31（kanameone書類回転ブロッカー解消: genesis provenance）**: 上記セッションサマリ参照。**Net 0**。PR #759マージ、ADR-0016 MUST 8追加、`/code-review medium`3回で2件検出・修正。
-- **2026-07-23（kanameone・cocoro Drive Phase1展開 Phase B完了）**: 上記セッションサマリ参照。Issue操作なし。plan mode計画承認→Codexセカンドオピニオン→両環境インフラ準備完了・検証済み。Phase C以降は外部依存/再設計待ち。
-- **2026-07-23（kanameone contamination cleanup）**: 上記セッションサマリ参照。**Net +2**（Close 3件: #704,#699,#698 / 起票1件: #707）。scheduled-audit積み残し3件を調査、officeマスター汚染3件をcleanup。
-- **2026-07-21〜23（Drive Phase1完遂+follow-up）**: 上記サマリ参照。Issue起票/close操作なし（GOAL.mdチェックリスト駆動のtriageのみ、Net計測は本セッションでは未実施）。PR #700マージ・E2E疎通確認・follow-up triage完遂。
-- **session137 (2026-07-20)**: `docs/handoff/archive/2026-07-history.md`参照。**Net 0**。Google Drive連携機能の新規相談→実機技術検証→plan mode計画確定→Task1（型定義・data-model・ADR-0022）実装完了。
-- **session136 (2026-07-19)**: `docs/handoff/archive/2026-07-history.md`参照。**Net +1**（Close 1件: #686）。Issue #686(非fax由来ファイル名の`-L\d+-`偶然一致による検索インデックス脱落バグ)をTDDで修正、PR #689マージ・クローズ。
-- **session135 (2026-07-16〜17)**: `docs/handoff/archive/2026-07-history.md`参照。**Net 0**。複数顧客FAX複製機能PR-B(BE本体)完遂、PR #675マージ。4段レビュー(code-review high→Evaluator→codex review→CodeRabbit)で計8件の欠陥検出・修正。
-- **session133〜134 (2026-07-15〜16)**: LATEST.md詳細サマリ未追記(GOAL.mdのみ更新、上記コメント参照)。**Net 0**。Issue #664恒久修正(ADR-0021)完遂、複数顧客FAX複製機能の設計確定(`/impl-plan`+Codex+Fable5)、PR-A(searchIndexer chunk化、PR#673)+カテゴリ表記化(PR#672)完遂。
-- **session132 (2026-07-15)**: 上記session132サマリ参照。**Net 0**。GOAL.md「担当CM別集計バグ修正」+Issue #660ミッション完全達成。
-- **session128〜130 (2026-07-14)**: 上記各サマリ参照。**Net 0**。GOAL.mdタスクA/B/C/F実装(PR#656)、kanameoneコスト調査(トリガーストーム特定、PR#651/#652)。
-- **session119〜127**: `docs/handoff/archive/2026-07-history.md`参照（session135で60KB超過によりアーカイブ移動）。
+2026-08月・2026-07月以前の詳細は `docs/handoff/archive/2026-0{7,8}-history.md` 参照。
 
-session29〜118の詳細は `docs/handoff/archive/2026-0{4,5,6,7}-history.md` 参照。
+## 次のアクション（3 分割・SKILL.md §2.5 参照、2026-09-27時点）
 
-## 次のアクション（3 分割・SKILL.md §2.5 参照、2026-07-31時点）
-
-**即着手タスクなし（外部依存/decision-maker判断待ちのみ）。条件待ち3件。却下候補あり。**
+**即着手タスクなし（外部依存/decision-maker判断待ちのみ）。条件待ち4件。却下候補あり。**
 
 ### 即着手タスク
 
-なし。genesis provenance実装（PR #759）は完了・マージ済みだが、続く本番デプロイ・実書類確認・Drive Phase D着手・PR-D4 Phase A実施は、いずれも番号単位の明示認可（decision-maker判断）を要するため「条件待ち」に分類。
+なし。ADR-0027 PR3は完了・マージ済みだが、続くPR4着手・kanameone Drive Phase1最終ステップは、いずれも外部依存またはdecision-maker判断（新規plan mode要）を要するため「条件待ち」に分類。
 
 ### 条件待ち（明示 trigger 付き）
 
 | # | 項目 | trigger（充足条件） | 充足時のタスク | 充足確認方法 |
 |---|------|------------------|--------------|------------|
-| 1 | kanameone Functions本番デプロイ + 実書類確認 | decision-makerの番号単位の明示認可 | `gh workflow run "Deploy Cloud Functions"`（kanameone）実行→`PRI96X82bU9fybK9NRL4`等の実書類で回転操作を試し`provenance`/`provenanceOrigin`書込を確認 | `gcloud functions describe rotatePdfPages --project=docsplit-kanameone`のupdateTimeで反映確認 |
-| 2 | Drive連携Phase D（flag ON・backfill本実行）着手可否 | decision-makerの判断（kanameone単独先行 or cocoro Phase C完了待ち） | `breezy-tickling-sifakis.md`のrunbookに従いStage D→E1→E2を段階実行 | `settings/features.driveExport`・`driveExportStatus`分布を`scripts/drive-export-status-report.ts`で確認 |
-| 3 | PR-D4 Phase A（read-only監査）実施可否 | decision-makerの判断（優先度は下がったが`processed/`配下495件の残課題把握に価値残存） | `gh workflow run "PR-D4 Backfill (Issue #445)"` environment=kanameone phase=A | Phase A artifactの5分類集計結果を確認 |
+| 1 | kanameone Drive Phase1本番展開の最終ステップ | クライアント(kanameone管理者)による実際のOAuth再連携完了 | 「医療」フォルダ重複監査→decision-maker承認→統合実行→flag ON→backfill(GOAL.md記載の3分割手順) | `settings/drive.grantedScopes`にフルスコープが反映されているか確認 |
+| 2 | cocoro Drive連携Phase C以降 | クライアント側のOAuth接続実施 | Phase C確認後、Phase D(flag ON・backfill)着手可否をdecision-makerが判断 | cocoroの`settings/drive`ドキュメントで接続状態を確認 |
+| 3 | ADR-0027 PR4着手（Functions実配線・IAM run.invoker付与・`deploy-functions.yml`改修） | decision-makerのPR4着手指示（新機能のため新規plan mode必要） | `~/.claude/plans/logical-baking-lighthouse.md`のPR4計画に従い着手 | ADR-0027「PR3実装知見」節のPR4申し送り事項を確認 |
+| 4 | GitHub Issue backlog: #956(アラート欠落follow-up)/#962/#251/#238 | decision-makerの優先度判断（いずれもP2 enhancement、trigger未成立） | 個別Issue内容に従う | `gh issue view <番号>` |
 
 ### 却下候補（記録のみ）
 
 | # | 項目 | 分類 | 着手しない理由 |
 |---|------|------|--------------|
 | 1 | 次ミッション候補（GOAL.md末尾）: exchangeDriveAuthCodeCore split-brain対応判断 | 新規価値創出（起点未確定） | decision-makerによる着手選定が未実施 |
-| 2 | GitHub Issue backlog: #755（OAuth自動リトライ）/ #753（姓名スペース表記ゆれ）/ #503（sanitize drop reason）/ #251（summaryGenerator test）/ #238（force-reindex孤児posting） | 新規価値創出（trigger未成立） | いずれもP2 enhancement、triage基準（実害/CI破壊等）未該当の任意改善。着手優先順位はdecision-maker判断待ち |
-| 3 | GOAL.md「参考: 前ミッション期のfollow-up候補」6件 | 新規価値創出（triage未実施） | 次ミッション起点の選定はdecision-maker領分 |
+| 2 | GOAL.md「参考: 前ミッション期のfollow-up候補」 | 新規価値創出（triage未実施） | 次ミッション起点の選定はdecision-maker領分 |
 
-過去ミッション由来の継続保留事項（PR#474 close / `.artifacts/`扱い / frontend/.envフォールバック恒久対策 等）はarchive参照。
+過去ミッション由来の継続保留事項は`docs/handoff/archive/`参照。
 
 ### 残留プロセス（マシン全体スコープ、現在のプロジェクトに限らない）
 
-なし（本セッション終了時点で検出なし。セッション中に起動したFirebase emulator/vite dev serverはUI確認後に停止・クリーンアップ済み）。
+なし（本セッション終了時点で検出なし、事前取得データ参照）。
