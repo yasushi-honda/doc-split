@@ -169,11 +169,17 @@ export interface ConfirmOnVerifyFieldTypeAnomaly {
   fields: readonly [ConfirmOnVerifyFieldName, ...ConfirmOnVerifyFieldName[]];
 }
 
-/** manifestのスキーマバージョン(L4、Issue #1059)。本番backfill未実行(manifestゼロ件)の今が追加の最も安いタイミング。 */
+/** manifestのスキーマバージョン(L4、Issue #1059)。Issue #1059時点で生成するmanifestから付与する。 */
 export const CONFIRM_ON_VERIFY_MANIFEST_SCHEMA_VERSION = 1;
 
 export interface ConfirmOnVerifyBackfillManifest {
-  schemaVersion: typeof CONFIRM_ON_VERIFY_MANIFEST_SCHEMA_VERSION;
+  /**
+   * 欠如はIssue #1059以前に生成されたmanifest(legacy、schemaVersion概念導入前)を意味する
+   * (codexレビュー指摘、P1: cocoro本番backfill実行済みのmanifestが既に存在し、これを必須化
+   * すると当該manifestの`--rollback`が不可能になり、rollbackという安全機構自体を壊してしまう。
+   * `isValidManifest`は欠如を許容し、値がある場合のみバージョン一致を検証する)。
+   */
+  schemaVersion?: typeof CONFIRM_ON_VERIFY_MANIFEST_SCHEMA_VERSION;
   runId: string;
   projectId: string;
   timestamp: string;
@@ -182,11 +188,12 @@ export interface ConfirmOnVerifyBackfillManifest {
   /**
    * 走査したdocument総数(L1、Issue #1059)。`--limit`到達で打切りが発生した場合、
    * fieldTypeAnomalies/entriesは母集団の一部のみを反映した部分集計になるため、
-   * scanIncompleteとあわせて監査時に「どこまで見たか」を残す。
+   * scanIncompleteとあわせて監査時に「どこまで見たか」を残す。schemaVersion同様、
+   * 欠如はlegacy manifestとして許容する。
    */
-  totalScanned: number;
-  /** `--limit`到達により走査を打ち切ったか(L1、Issue #1059)。 */
-  scanIncomplete: boolean;
+  totalScanned?: number;
+  /** `--limit`到達により走査を打ち切ったか(L1、Issue #1059)。欠如の扱いはtotalScannedと同じ。 */
+  scanIncomplete?: boolean;
 }
 
 export function buildConfirmOnVerifyManifest(params: {
@@ -356,11 +363,15 @@ export function isValidFieldTypeAnomaly(x: unknown): x is ConfirmOnVerifyFieldTy
  */
 export function isValidManifest(x: unknown): x is ConfirmOnVerifyBackfillManifest {
   if (!isPlainObject(x)) return false;
-  // L4(Issue #1059): schemaVersion不一致(将来の構造変更・手編集による誤バージョン混入)を拒否する。
-  if (x.schemaVersion !== CONFIRM_ON_VERIFY_MANIFEST_SCHEMA_VERSION) return false;
+  // L4(Issue #1059): schemaVersionは値がある場合のみバージョン一致を要求する。欠如は
+  // Issue #1059以前に生成された既存の本番rollback manifest(cocoro backfill実行分等)との
+  // 後方互換性のため許容する(codexレビュー指摘、P1: 必須化するとrollbackという安全機構
+  // 自体を壊してしまう)。
+  if (x.schemaVersion !== undefined && x.schemaVersion !== CONFIRM_ON_VERIFY_MANIFEST_SCHEMA_VERSION) return false;
   if (typeof x.runId !== 'string' || typeof x.projectId !== 'string' || typeof x.timestamp !== 'string') return false;
-  // L1(Issue #1059): totalScanned/scanIncompleteも生成側と同じ構造的整合性チェックの対象にする。
-  if (typeof x.totalScanned !== 'number' || typeof x.scanIncomplete !== 'boolean') return false;
+  // L1(Issue #1059): totalScanned/scanIncompleteも同じ理由で欠如を許容し、型不一致のみ拒否する。
+  if (x.totalScanned !== undefined && typeof x.totalScanned !== 'number') return false;
+  if (x.scanIncomplete !== undefined && typeof x.scanIncomplete !== 'boolean') return false;
   if (!Array.isArray(x.entries) || !x.entries.every(isValidManifestEntry)) return false;
   if (!Array.isArray(x.fieldTypeAnomalies) || !x.fieldTypeAnomalies.every(isValidFieldTypeAnomaly)) return false;
   return true;

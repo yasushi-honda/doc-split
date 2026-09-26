@@ -356,3 +356,23 @@ test('isValidManifest: entries中に1件でも不正なものがあればfalse(�
     'scanIncompleteの型不一致は不正(L1、Issue #1059)'
   );
 });
+
+test('isValidManifest: schemaVersion/totalScanned/scanIncompleteが欠如したlegacy manifest(Issue #1059以前・PR #1058時点の形式)もtrueになる(codexレビュー指摘、P1: 既存の本番rollback manifestとの後方互換性)', () => {
+  assert.equal(
+    isValidManifest({
+      runId: 'r1',
+      projectId: 'p1',
+      timestamp: '2026-09-25T00:00:00.000Z',
+      entries: [
+        {
+          docId: 'doc-1',
+          customer: { confirmedCustomer: false },
+          office: { confirmedOffice: false },
+          backfillUpdateTime: { seconds: 1, nanoseconds: 0 },
+        },
+      ],
+      fieldTypeAnomalies: [],
+    }),
+    true
+  );
+});
