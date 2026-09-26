@@ -37,7 +37,10 @@ const CALLER_FILES = ['src/ocr/summaryGenerator.ts'];
 // Issue #214: 要約生成は generateSummaryCore に委譲される caller 群
 // Issue #548-B1: ocrProcessor.ts の自動要約生成は削除。要約生成は regenerateSummary
 // (手動トリガー) のみに集約された。
-const CORE_CALLERS = ['src/ocr/regenerateSummary.ts'];
+// ADR-0027 PR3: summaryPass.ts(dead code、呼び出し元なし)を追加。gemini経路は
+// lazy require経由でgenerateSummaryCore(をリテラル呼び出しする(DI関数参照のみでは
+// 本契約のgrepが検知できないため)。
+const CORE_CALLERS = ['src/ocr/regenerateSummary.ts', 'src/ocr/summaryPass.ts'];
 
 // Issue #548-B1: ocrProcessor.ts が要約生成に一切関与しない (bypass 復活防止) ことを
 // 別途 lock-in する caller 群。
