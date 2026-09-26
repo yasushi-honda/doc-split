@@ -117,12 +117,21 @@ function classifyNetworkError(err: unknown): SarashinaSummaryError {
   }
   const code = extractCauseCode(err);
   if (code !== undefined && PRE_CONNECTION_ERROR_CODES.has(code)) {
-    return new SarashinaSummaryError(`Sarashina network error before connection established: ${code}`, 'transient');
+    return new SarashinaSummaryError(`Sarashina network error before connection established: ${code}`, 'transient', {
+      errorType: code,
+    });
   }
   // 接続後の失敗(ECONNRESET等)・cause不在・未知のコードは、サーバーが生成を継続している
-  // 可能性を否定できないため安全側でtimeout扱いにする(再送しない)。
+  // 可能性を否定できないため安全側でtimeout扱いにする(再送しない)。分類(リトライしない)は
+  // 変えないが、抽出できたcodeはerrorType/messageへ残す(pr-review-toolkit silent-failure-hunter
+  // 指摘: 抽出したcodeを捨てるとECONNRESET/EPIPE等が全て"fetch failed"の一文に潰れ、
+  // 本番でSentry等に載せた際の切り分けができなくなる)。
   const detail = err instanceof Error ? err.message : String(err);
-  return new SarashinaSummaryError(`Sarashina network error (treated as timeout, retry unsafe): ${detail}`, 'timeout');
+  return new SarashinaSummaryError(
+    `Sarashina network error (treated as timeout, retry unsafe): code=${code ?? 'unknown'} ${detail}`,
+    'timeout',
+    { errorType: code }
+  );
 }
 
 interface SarashinaErrorPayload {

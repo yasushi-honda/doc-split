@@ -4,9 +4,12 @@
  * PR3時点ではdead code(呼び出し元なし、L1既定`none`)。PR4で`generateSummaryBatch`・
  * `regenerateSummary.ts`の呼び出し元が配線される。
  *
- * gemini経路は既定でlazy require経由で`generateSummaryCore(`をリテラル呼び出しする
- * (`summaryBuilderCallerContract.test.ts`のCORE_DELEGATE_PATTERNがgrepでこの呼び出しを
- * 検出するため、DI関数参照のみでは検知されない)。`summaryGenerator.ts`はimport経路で
+ * gemini経路は既定でlazy require経由でGemini要約コア関数をリテラル呼び出しする
+ * (`summaryBuilderCallerContract.test.ts`のCORE_DELEGATE_PATTERNがソース文字列をgrepで
+ * 検出するため、DI関数参照のみでは検知されない。pr-review-toolkit code-reviewer指摘:
+ * このJSDoc自体に対象関数名をリテラルで書くと、実呼び出しが消えてもコメントの文字列一致
+ * だけでこの契約テストが緑のまま通ってしまうため、本文中では意図的に関数名を書かない)。
+ * `summaryGenerator.ts`はimport経路で
  * `admin.firestore()`を呼ぶrateLimiterに依存するため、静的importせずrequireで遅延読込し、
  * gemini経路を使わないテスト(sarashina経路のみ実行するテスト)がadmin初期化なしで動くよう
  * にする(`utils/textCap.ts`/`utils/loadMasterData.ts`と同じlazy requireパターン)。
@@ -14,7 +17,7 @@
 
 import { capPageText, MAX_SUMMARY_LENGTH } from '../utils/textCap';
 import type { SummaryField } from '../../../shared/types';
-import { buildSummaryPrompt, MIN_OCR_LENGTH_FOR_SUMMARY } from './summaryPromptBuilder';
+import { buildSummaryPrompt, MIN_OCR_LENGTH_FOR_SUMMARY, MAX_SUMMARY_INPUT_LENGTH } from './summaryPromptBuilder';
 import {
   summarizeWithSarashina,
   SarashinaSummaryError,
@@ -82,6 +85,13 @@ async function callGemini(
  * (二重推論にならない)であることを利用して、エラーメッセージのトークン数から入力を
  * 縮小し**1回だけ**再送する(decision-maker決定、2026-09-26)。2回目も超過した場合、
  * またはメッセージからトークン数を抽出できない場合はそのままthrowする。
+ *
+ * **縮小は「実際に送信したテキスト」基準で計算する**(pr-review-toolkit code-reviewer
+ * H1指摘、実バグとして修正): `buildSummaryPrompt`は`ocrResult`を`MAX_SUMMARY_INPUT_LENGTH`
+ * (8000文字)へ切り詰めてから送るため、エラーが報告するトークン数もこの切り詰め後テキスト
+ * のもの。縮小比を`ocrResult`全体の長さに適用すると、8000文字を大きく超える文書では
+ * 縮小後も依然8000文字を超えたままとなり、`buildSummaryPrompt`が再度同じ先頭8000文字へ
+ * 切り詰めるため2回目が1回目と完全に同一内容になり、再送が無意味になる(再現確認済み)。
  */
 async function callSarashinaWithContextRetry(
   ocrResult: string,
@@ -98,8 +108,10 @@ async function callSarashinaWithContextRetry(
     const tokens = parseContextExceededTokens(err.message);
     if (!tokens) throw err;
 
-    const shrunkOcrResult = shrinkOcrResultForRetry(ocrResult, tokens.promptTokens, tokens.ctxSize);
-    if (shrunkOcrResult.length === 0 || shrunkOcrResult.length >= ocrResult.length) throw err;
+    const sentText =
+      ocrResult.length > MAX_SUMMARY_INPUT_LENGTH ? ocrResult.slice(0, MAX_SUMMARY_INPUT_LENGTH) : ocrResult;
+    const shrunkOcrResult = shrinkOcrResultForRetry(sentText, tokens.promptTokens, tokens.ctxSize);
+    if (shrunkOcrResult.length === 0 || shrunkOcrResult.length >= sentText.length) throw err;
 
     const retryPrompt = buildSummaryPrompt(shrunkOcrResult, documentType);
     const retryResult = await summarizeWithSarashina(retryPrompt, deps);

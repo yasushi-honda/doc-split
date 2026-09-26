@@ -231,6 +231,24 @@ describe('summarizeWithSarashina (ADR-0027 PR3)', () => {
       expect(calls).to.equal(1);
     });
 
+    it('接続後の失敗でも抽出できた`cause.code`(ECONNRESET)をmessageから読み取れる(pr-review-toolkit silent-failure-hunter指摘: 抽出したcodeを捨てず診断情報として残す)', async () => {
+      const deps = withNoDelay({
+        fetchImpl: (async () => {
+          const err = new TypeError('fetch failed');
+          (err as unknown as { cause: unknown }).cause = Object.assign(new Error('socket hang up'), {
+            code: 'ECONNRESET',
+          });
+          throw err;
+        }) as typeof fetch,
+      });
+      try {
+        await summarizeWithSarashina('p', deps);
+        expect.fail('エラーがthrowされるべき');
+      } catch (err) {
+        expect((err as Error).message).to.include('ECONNRESET');
+      }
+    });
+
     it('cause情報が全く無い未知のネットワーク失敗も安全側でkind:timeout扱いになる(未知のエラーコードをtransientへ広げない)', async () => {
       let calls = 0;
       const deps = withNoDelay({
