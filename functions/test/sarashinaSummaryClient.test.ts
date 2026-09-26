@@ -94,6 +94,36 @@ describe('summarizeWithSarashina (ADR-0027 PR3)', () => {
     });
   });
 
+  describe('URLの前後空白(codex review指摘: バリデーションと実使用URLの不一致防止)', () => {
+    it('末尾に空白を含むURL("https://...run.app ")はtrimされて正常にリクエストされる(バリデーション通過後に未trim生値を使うと不正エンドポイントになる回帰の防止)', async () => {
+      const deps = withNoDelay({
+        config: { serviceUrl: 'https://sarashina-summary.example.run.app ', requestTimeoutMs: 1000 },
+        getAuthHeaders: async (audience) => {
+          expect(audience).to.equal('https://sarashina-summary.example.run.app');
+          return { Authorization: 'Bearer test-id-token' };
+        },
+        fetchImpl: (async (input) => {
+          expect(String(input)).to.equal(ENDPOINT);
+          return jsonResponse(200, successBody('ok'));
+        }) as typeof fetch,
+      });
+      const result = await summarizeWithSarashina('p', deps);
+      expect(result.text).to.equal('ok');
+    });
+
+    it('先頭に空白を含むURL(" https://...run.app")もtrimされて正常にリクエストされる', async () => {
+      const deps = withNoDelay({
+        config: { serviceUrl: ' https://sarashina-summary.example.run.app', requestTimeoutMs: 1000 },
+        fetchImpl: (async (input) => {
+          expect(String(input)).to.equal(ENDPOINT);
+          return jsonResponse(200, successBody('ok'));
+        }) as typeof fetch,
+      });
+      const result = await summarizeWithSarashina('p', deps);
+      expect(result.text).to.equal('ok');
+    });
+  });
+
   describe('リクエスト形状', () => {
     it('エンドポイント・認証ヘッダー・bodyがPR2b検証済み形状と一致する(末尾スラッシュ除去含む)', async () => {
       const deps = withNoDelay({

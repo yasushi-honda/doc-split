@@ -143,7 +143,10 @@ export function parseSummaryProvider(envValue: string | undefined): SummaryProvi
  */
 export const SARASHINA_SUMMARY_CONFIG = {
   provider: parseSummaryProvider(process.env.SUMMARY_PROVIDER),
-  serviceUrl: process.env.SARASHINA_SUMMARY_URL || '',
+  // GCPコンソール等からのコピペで混入する前後空白をtrimする(他のparseX関数と同じ理由、
+  // codex review指摘: 未trimのままだとsarashinaSummaryClient.tsのバリデーションと実使用URLが
+  // 不一致になりうる。クライアント側でも再度trimして二重に守る)。
+  serviceUrl: (process.env.SARASHINA_SUMMARY_URL ?? '').trim(),
   /**
    * Cloud Run `--timeout=600`より長く設定し、クライアントより先にサーバー側の504を
    * 受け取れるようにする(ADR-0027、PR2bハーネスの`REQUEST_TIMEOUT_MS`と同値)。

@@ -144,10 +144,14 @@ export async function summarizeWithSarashina(
   prompt: string,
   deps: SarashinaSummaryDeps = {}
 ): Promise<SarashinaSummaryResult> {
-  const { serviceUrl, requestTimeoutMs } = deps.config ?? SARASHINA_SUMMARY_CONFIG;
+  const { serviceUrl: rawServiceUrl, requestTimeoutMs } = deps.config ?? SARASHINA_SUMMARY_CONFIG;
+  // codex review指摘: `new URL()`は前後空白を許容してパースに成功するため、バリデーションを
+  // 未trimの生値で行いendpoint構築だけtrimすると、逆に「バリデーションのみ通過し実使用は
+  // 壊れる」不整合が起きる。validate/useとも同じtrim済み文字列を使う。
+  const serviceUrl = rawServiceUrl.trim();
   if (!isHttpsAbsoluteUrl(serviceUrl)) {
     throw new SarashinaSummaryError(
-      `SUMMARY_PROVIDER=sarashina ですが SARASHINA_SUMMARY_URL が未設定またはhttps絶対URLではありません(値: ${JSON.stringify(serviceUrl)})。Geminiへの暗黙のフォールバックはしません。`,
+      `SUMMARY_PROVIDER=sarashina ですが SARASHINA_SUMMARY_URL が未設定またはhttps絶対URLではありません(値: ${JSON.stringify(rawServiceUrl)})。Geminiへの暗黙のフォールバックはしません。`,
       'config'
     );
   }
