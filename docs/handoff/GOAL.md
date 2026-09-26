@@ -1,8 +1,24 @@
 ---
-updated: 2026-09-25
+updated: 2026-09-26
 ---
 <!-- 前ミッション(dev/kanameone/cocoro環境監査・保守検証)は2026-07-20完遂。全文はdocs/handoff/LATEST.md参照。 -->
 <!-- Google Drive連携Phase1 (MVP)実装ミッションは2026-07-22完了(PR#700マージ)。詳細は本ファイル末尾「Google Drive連携Phase1完遂」節+docs/handoff/LATEST.md参照。 -->
+
+## 【完了・2026-09-26】Issue #1043対応(PR #1058)+cocoro「確認済み」backfill本実行完了（現在のミッションとは別件・並行トラック）
+
+前セッションの`/catchup`で「backfillスクリプト本番実行前に#1043解消を推奨」と記録されていた件に着手。
+
+**Issue #1043対応(PR #1058マージ)**: `ConfirmOnVerifyManifestEntry`をdiscriminated union化し、`confirmedCustomer:false`かつ`customerConfirmedBefore`に値がある等の不正な状態を型として表現不能にした。`--rollback`実行時のmanifest JSON読込みに`isValidManifest`によるランタイム検証を追加(fail-closed)。品質ゲートは`codex review`がサーバー側401エラーで5回試行全て失敗(フィードバック提出済み、CLI再ログインでも解消せず)したため、代替としてpr-review-toolkit 4エージェント(code-reviewer/silent-failure-hunter/type-design-analyzer/pr-test-analyzer)+fable-review(Fable 5.1、独自に605件のテストを再実行して検証)による多角的レビューを実施。指摘反映の過程で以下を追加発見・修正:
+- 型契約違反データ(customerConfirmed/officeConfirmedがboolean以外)がmanifest全体のrollbackを巻き込む書込み側/読込み側の非対称バグ
+- 顧客/事業所の両方が型異常の場合に片方だけ記録される取りこぼし
+- fail-closedゲートの実効性を証明できていなかった統合テスト設計(fable-review指摘、ゲートを一時的に無効化してテストが正しく失敗することまで検証)
+- discriminated unionの偽分岐が余分なプロパティ混入を検出していなかった問題
+
+Firestore emulator統合テスト7件(fail-closedゲート実効性・Partial Update不変性・rollback往復含む)新規追加、全PASS。残る軽微な指摘8件はIssue #1059へフォローアップ。
+
+**GitHub Actions配線追加**: `run-ops-script.yml`に`backfill-confirm-on-verify`の実行サポートを新規追加(既存`backfill-drive-export`と同一パターン、`--rollback`は前例踏襲で対象外)。
+
+**本番実行(dev→kanameone/cocoro実データ`--dry-run`→cocoro canary→cocoro全件)**: dev/kanameone/cocoro実データとも型異常0件を確認(CLAUDE.md「既存データへの新規ゲート追加時の注意」充足)。**cocoro(19件)は canary3件→残16件の順で本実行完了、確定成功19件・エラー0件**。kanameone(2,695件、型異常0件確認済み)はGoogle Drive連携Phase1本番展開(Track C、下記)とのタイミング調整のため実行保留。
 
 ## 【完了・2026-09-25】/catchup発の積み残しIssue対応3件（現在のミッションとは別件・並行トラック）
 
@@ -52,7 +68,7 @@ kanameoneから10件のフィードバックが届き、①は不具合報告・
 
 **🎯 kanameoneフィードバック10件対応ミッション達成**: ①(Issue #1028、Drive OAuthスコープ拡張)〜⑩(Issue #1037)全件完了。次のゴールへの更新は不要（並行トラックのため本セクションはこのまま完了記録として残す）。
 
-**Issue #1034/#1035のbackfillスクリプト本番実行(条件待ち、trigger=decision-makerの番号単位の明示認可)**: `scripts/backfill-confirm-on-verify.ts`は実装・テスト・codexレビュー済みだが未実行。実行前に#1043(ManifestEntry型強化+rollback読込のランタイム検証)の解消を推奨(rollback経路の安全性に直結するため)。実行手順: dev環境`--dry-run`→対象件数・理由別内訳確認→`--limit`少数canary→`--rollback --dry-run`でロールバック動作確認→kanameone/cocoroそれぞれ同じ段階を番号単位の明示認可のもとで実施。kanameoneはGOAL.md「Google Drive連携Phase1」の本番展開時期と調整が必要(既にverified:trueの書類にcustomerConfirmedが付くことで、driveExportStatus:'error'で止まっていた書類が定期リトライで拾われる可能性があるため)。
+~~**Issue #1034/#1035のbackfillスクリプト本番実行**~~ **【cocoro完了・2026-09-25、kanameoneは条件待ち】** Issue #1043(ManifestEntry型のdiscriminated union化+rollback読込みのランタイム検証、PR #1058マージ)対応完了後、dev`--dry-run`→kanameone/cocoro実データ`--dry-run`(型異常0件確認、CLAUDE.md「既存データへの新規ゲート追加時の注意」充足)→**cocoro canary3件→残16件本実行、計19件確定成功・エラー0件で完了**。kanameone(2,695件対象、型異常0件確認済み)は**Google Drive連携Phase1本番展開(下記Track C)とのタイミング調整のため実行を保留**(driveExportStatus:'error'書類が定期リトライで拾われる相互作用のため)。本番rollback dry-runはPR #1058のFirestore emulator統合テスト7件(fail-closedゲートを意図的に無効化して実効性まで検証済み)で代替、decision-maker承認済み。残る軽微な指摘(監査証跡の永続化条件・GHAログマスキング等)はIssue #1059へフォローアップ。
 
 ## 【ADR-0027 PR2bハーネス収束完了・2026-09-23】要約生成(regenerateSummary)のGemini依存脱却: Sarashina2.2-3B(Q8_0量子化)実装移行、PR0→PR1(a/b/c)→PR2a→PR2b→ステップ8(本番ゲート実行、計4回の全10doc×3run実機run)、完了。累計16件の実機問題を発見・修正しdeterminismを含む全FAILゲートが収束(decision-maker判断でここで区切り)
 
