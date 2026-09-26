@@ -100,7 +100,19 @@ kanameoneから10件のフィードバックが届き、①は不具合報告・
 
 **プロンプト改善(PR #1018)の評価**: 「複数記載されている場合も省略せず全て含める」という明示指示を追加したが、D2/D3の3run再検証で改善効果ゼロと実証。この3Bモデルの「二次的事実の圧縮省略」はプロンプトワーディングでは是正不能と判断し、以降の同型issue(D2/D3/D5/D8)は全てfixture側(mustCover→optionalFacts)で対応する方針を確立。
 
-**次の一手**: 明示的な次アクションなし。決定済みの唯一の再着手条件は「fabrication同型バグの4件目発生」時の設計再検討(上記参照)。それ以外は現状で収束済みとしてこのミッションをクローズする。
+~~**次の一手**: 明示的な次アクションなし。~~ **【再開・2026-09-26】** decision-maker「Sarashinaを再開してください」の指示によりPR3(モデルルーティング・クライアント・ディスパッチャー、dead code)に着手・完了。
+
+## 【ADR-0027 PR3完了・2026-09-26】モデルルーティング・クライアント・ディスパッチャー(dead code、呼び出し元なし)
+
+CLAUDE.md CRITICALによりplan mode(Opus 5.5)でPR3詳細設計→`/plan-crossreview`(grip自白+codex 2パス)→TDD実装。L1(`SUMMARY_PROVIDER`環境変数)/L2(`settings/features.sarashinaSummary`+allowlist)ゲート・Sarashina HTTPクライアント(`functions/src/ocr/sarashinaSummaryClient.ts`)・リクエストbody共有モジュール(`sarashinaSummaryRequest.ts`、PR2bハーネスも委譲化しドリフトを構造的に排除)・provider別ディスパッチャー(`summaryPass.ts`)を実装。呼び出し元は一切追加していない(PR4のスコープ)。詳細はADR-0027「PR3実装知見」節(10項目)・実装計画`~/.claude/plans/logical-baking-lighthouse.md`参照。
+
+**crossreview反映(High 2件)**: ①context超過(8192トークン)時に1回だけ入力を短縮して再送する設計を追加(decision-maker決定)。dev実機での実エラー形状採取はIAM権限不足(`hy.unimail.11@gmail.com`に`iam.serviceAccountTokenCreator`未付与、project-level `roles/owner`はリソースレベルimpersonationを含まないと判明)により見送り、llama.cppソースコード(`gh api`で`ggml-org/llama.cpp`から直接取得・確認)で裏取りして実装。実機確認はPR4b(run.invoker付与)へ申し送り。②`finish_reason:'length'`(出力上限で途中切れ)は成功として保存させない専用エラー種別(`kind:'incomplete'`)を新設。
+
+**マスタープランからの意図的な差分(4点、ADR記載)**: `retry.ts`は無変更/プロンプトはv1のまま定数移設のみ/デプロイworkflow環境変数注入はPR4bへ延期/ネットワークエラー再送範囲をハーネスより保守的に(接続確立前失敗のみ1回再送)。
+
+**検証**: functions全テスト2408件+統合539件(Firestore emulator)+PR3新規65件、frontend型チェック、scripts全テスト609件(ハーネス委譲後も無改変で全PASS)、いずれも0 failing。lint 0 errors(新規ファイルの警告も解消済み)。`grep`で本番実行経路への配線ゼロを確認。
+
+**次の一手**: featureブランチ`feat/adr0027-pr3-summary-routing`は未マージ。codex review(実コード3ファイル以上のためCLAUDE.md CRITICAL該当)→PRレビュー→decision-maker承認のうえマージが次アクション。マージ後はPR4(状態フィールド・バッチ処理・所有権ガード・フロントエンド配線)着手可否をdecision-makerへ確認する。
 
 ADR-0025はPass1(OCR)のみ対象でPass2/要約は明示的にスコープ外(手動トリガー・低頻度のため)。decision-makerの意向で「要約もいずれはPaddleOCRと同様に自前ホスティングSLM(Cloud Run、CPUのみ、asia-northeast1)へモデルルーティングしたい」という将来検討として、2026-09-21に候補調査・実機検証を実施した。当日中に品質・コスト・アーキテクチャ・コンプライアンスの検討が完了し、**decision-makerが実装移行を正式決定**(下記「次の一手」トリガー②を充足)。CLAUDE.md CRITICAL該当のためplan modeでのフル計画策定に入る。実装(summaryPromptBuilder.ts等の変更)はまだ一切行っていない(この節はplan mode着手時点の記録)。
 

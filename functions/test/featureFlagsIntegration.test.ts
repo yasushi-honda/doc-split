@@ -18,6 +18,8 @@ import {
   getDriveExportGate,
   getPaddleOcrGate,
   resolveOcrProvider,
+  getSarashinaSummaryGate,
+  resolveSummaryProvider,
   FEATURE_FLAGS_DOC_PATH,
 } from '../src/utils/featureFlags';
 
@@ -260,6 +262,124 @@ describe('resolveOcrProvider (ADR-0025 L1+L2統合解決)', () => {
     it('L2.enabled=true・allowlist=[](全docId拒否)なら"gemini"を返す', async () => {
       await db.doc(FEATURE_FLAGS_DOC_PATH).set({ paddleOcr: true, paddleOcrAllowlist: [] });
       expect(await resolveOcrProvider(db, 'doc-1', 'paddle')).to.equal('gemini');
+    });
+  });
+});
+
+describe('getSarashinaSummaryGate (ADR-0027 PR3、getPaddleOcrGateと同型)', () => {
+  beforeEach(async () => {
+    await cleanupCollections(db, COLLECTIONS_TO_CLEAN);
+  });
+
+  it('フラグドキュメントが存在しない場合、enabled:false・allowlist:null(制限なし)を返す', async () => {
+    expect(await getSarashinaSummaryGate(db)).to.deep.equal({ enabled: false, allowlist: null });
+  });
+
+  it('sarashinaSummaryAllowlistフィールドが無い場合、allowlist:null(制限なし)を返す', async () => {
+    await db.doc(FEATURE_FLAGS_DOC_PATH).set({ sarashinaSummary: true });
+    expect(await getSarashinaSummaryGate(db)).to.deep.equal({ enabled: true, allowlist: null });
+  });
+
+  it('sarashinaSummaryAllowlistが空配列の場合、allowlist:[](全docId拒否)を返す', async () => {
+    await db.doc(FEATURE_FLAGS_DOC_PATH).set({ sarashinaSummary: true, sarashinaSummaryAllowlist: [] });
+    expect(await getSarashinaSummaryGate(db)).to.deep.equal({ enabled: true, allowlist: [] });
+  });
+
+  it('sarashinaSummaryAllowlistが文字列配列の場合、そのままallowlistとして返す(canary展開想定)', async () => {
+    await db
+      .doc(FEATURE_FLAGS_DOC_PATH)
+      .set({ sarashinaSummary: true, sarashinaSummaryAllowlist: ['docA', 'docB'] });
+    expect(await getSarashinaSummaryGate(db)).to.deep.equal({
+      enabled: true,
+      allowlist: ['docA', 'docB'],
+    });
+  });
+
+  it('sarashinaSummaryAllowlistが配列でない(不正値)場合、fail-closedでallowlist:[](全拒否)を返す', async () => {
+    await db
+      .doc(FEATURE_FLAGS_DOC_PATH)
+      .set({ sarashinaSummary: true, sarashinaSummaryAllowlist: 'docA' as unknown });
+    expect(await getSarashinaSummaryGate(db)).to.deep.equal({ enabled: true, allowlist: [] });
+  });
+
+  it('sarashinaSummaryAllowlistが非string混在配列の場合、fail-closedでallowlist:[](全拒否)を返す', async () => {
+    await db
+      .doc(FEATURE_FLAGS_DOC_PATH)
+      .set({ sarashinaSummary: true, sarashinaSummaryAllowlist: ['docA', 123] as unknown });
+    expect(await getSarashinaSummaryGate(db)).to.deep.equal({ enabled: true, allowlist: [] });
+  });
+
+  it('sarashinaSummaryAllowlistフィールドが明示的にnullの場合、フィールド不在とは区別しfail-closedでallowlist:[](全拒否)を返す', async () => {
+    await db.doc(FEATURE_FLAGS_DOC_PATH).set({ sarashinaSummary: true, sarashinaSummaryAllowlist: null });
+    expect(await getSarashinaSummaryGate(db)).to.deep.equal({ enabled: true, allowlist: [] });
+  });
+});
+
+describe('resolveSummaryProvider (ADR-0027 PR3 L1+L2統合解決)', () => {
+  beforeEach(async () => {
+    await cleanupCollections(db, COLLECTIONS_TO_CLEAN);
+  });
+
+  // resolveOcrProviderとの設計上の違い: L1='sarashina'がL2で不許可の場合は
+  // 'gemini'ではなく'none'にfail-safeする(ADR-0027 主要な設計判断2、
+  // 新規課金を無言で発生させないため)。
+
+  it('L1="none"の場合、L2ドキュメントが存在しなくても(読取なしで)"none"を返す', async () => {
+    // Firestore読取が発生したら例外を投げるスタブで「L1=none/geminiはL2を読まない」設計を検証する
+    const noReadDb = {
+      doc: () => {
+        throw new Error('L1=noneではFirestore読取が発生してはならない');
+      },
+    } as unknown as admin.firestore.Firestore;
+    expect(await resolveSummaryProvider(noReadDb, 'doc-1', 'none')).to.equal('none');
+  });
+
+  it('L1="gemini"の場合、L2ドキュメントが存在しなくても(読取なしで)"gemini"を返す', async () => {
+    const noReadDb = {
+      doc: () => {
+        throw new Error('L1=geminiではFirestore読取が発生してはならない');
+      },
+    } as unknown as admin.firestore.Firestore;
+    expect(await resolveSummaryProvider(noReadDb, 'doc-1', 'gemini')).to.equal('gemini');
+  });
+
+  it('本番既定(SUMMARY_PROVIDER未設定 = "none")でもL2フラグを読まず"none"を返す', async () => {
+    await db.doc(FEATURE_FLAGS_DOC_PATH).set({ sarashinaSummary: true });
+    expect(await resolveSummaryProvider(db, 'doc-1')).to.equal('none');
+  });
+
+  describe('L1="sarashina"注入時のL2合成ロジック', () => {
+    it('L2.enabled=falseなら"none"を返す(geminiへは倒さない)', async () => {
+      await db.doc(FEATURE_FLAGS_DOC_PATH).set({ sarashinaSummary: false });
+      expect(await resolveSummaryProvider(db, 'doc-1', 'sarashina')).to.equal('none');
+    });
+
+    it('L2ドキュメントが存在しない場合も"none"を返す', async () => {
+      expect(await resolveSummaryProvider(db, 'doc-1', 'sarashina')).to.equal('none');
+    });
+
+    it('L2.enabled=true・allowlist未設定(制限なし)なら"sarashina"を返す(全面切替の主経路)', async () => {
+      await db.doc(FEATURE_FLAGS_DOC_PATH).set({ sarashinaSummary: true });
+      expect(await resolveSummaryProvider(db, 'doc-1', 'sarashina')).to.equal('sarashina');
+    });
+
+    it('L2.enabled=true・allowlistにdocIdを含む場合は"sarashina"を返す(canary)', async () => {
+      await db
+        .doc(FEATURE_FLAGS_DOC_PATH)
+        .set({ sarashinaSummary: true, sarashinaSummaryAllowlist: ['doc-1', 'doc-2'] });
+      expect(await resolveSummaryProvider(db, 'doc-1', 'sarashina')).to.equal('sarashina');
+    });
+
+    it('L2.enabled=true・allowlistにdocIdを含まない場合は"none"を返す(geminiへは倒さない)', async () => {
+      await db
+        .doc(FEATURE_FLAGS_DOC_PATH)
+        .set({ sarashinaSummary: true, sarashinaSummaryAllowlist: ['doc-2', 'doc-3'] });
+      expect(await resolveSummaryProvider(db, 'doc-1', 'sarashina')).to.equal('none');
+    });
+
+    it('L2.enabled=true・allowlist=[](全docId拒否)なら"none"を返す', async () => {
+      await db.doc(FEATURE_FLAGS_DOC_PATH).set({ sarashinaSummary: true, sarashinaSummaryAllowlist: [] });
+      expect(await resolveSummaryProvider(db, 'doc-1', 'sarashina')).to.equal('none');
     });
   });
 });

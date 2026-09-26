@@ -44,6 +44,12 @@ import * as path from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { buildSummaryPrompt, MAX_SUMMARY_INPUT_LENGTH } from '../../functions/src/ocr/summaryPromptBuilder';
+import {
+  buildSarashinaChatRequestBody,
+  SARASHINA_SUMMARY_MAX_TOKENS,
+  SARASHINA_SUMMARY_TEMPERATURE,
+  type SarashinaChatRequestBody,
+} from '../../functions/src/ocr/sarashinaSummaryRequest';
 import { scanSummaryForFabrication, type FabricationScanResult } from '../../shared/summaryFabricationScan';
 import {
   parseFixtureMeta,
@@ -95,10 +101,14 @@ export const EXPECTED_HASHES_PATH = path.join(
 export const DOC_IDS: readonly string[] = ['D1', 'D2', 'D3', 'D4', 'D5', 'D6', 'D7', 'D8', 'D9', 'D10'];
 
 export const DEFAULT_RUNS_PER_DOC = 3;
-export const DEFAULT_TEMPERATURE = 0.2;
-/** Dockerfileの`LLAMA_ARG_N_PREDICT=1024`(max_tokens省略時のフォールバック)と同値。呼び出し元は
- * 必ずmax_tokensを明示すること、というサービスREADMEの契約を守るため明示的に指定する。 */
-export const DEFAULT_MAX_TOKENS = 1024;
+/**
+ * ADR-0027 PR3: 本番client(`sarashinaSummaryClient.ts`)とのドリフトを防ぐため、
+ * `functions/src/ocr/sarashinaSummaryRequest.ts`を単一の情報源としてre-exportする
+ * (plan-crossreview #10反映)。値・名前ともに変更なし(DEFAULT_TEMPERATURE=0.2、
+ * DEFAULT_MAX_TOKENS=1024)。
+ */
+export const DEFAULT_TEMPERATURE = SARASHINA_SUMMARY_TEMPERATURE;
+export const DEFAULT_MAX_TOKENS = SARASHINA_SUMMARY_MAX_TOKENS;
 /** Cloud Run --timeout=600・LLAMA_ARG_TIMEOUT=600と揃え、サーバ側の504を先に観測できるよう
  * 余裕を持たせる(golden方式と同じ考え方、`scripts/paddle-ocr-verify.ts`のREQUEST_TIMEOUT_MS参照)。 */
 export const REQUEST_TIMEOUT_MS = 620_000;
@@ -249,24 +259,15 @@ export function runtimeContractOk(c: RuntimeContractCheck): boolean {
 // リクエスト送信(OpenAI Chat Completions互換、独自実装)
 // ============================================================================
 
-export interface ChatRequestBody {
-  messages: { role: 'user'; content: string }[];
-  max_tokens: number;
-  temperature: number;
-  cache_prompt: false;
-  /** PR0(`bench.py`)と同一のリクエスト形状にするための互換フィールド。Sarashinaでは無視される
-   * (Qwen系のthinking出力を抑制する目的でPR0が全モデル共通で送っていたもの)。 */
-  chat_template_kwargs: { enable_thinking: false };
-}
+/** @deprecated ADR-0027 PR3: `SarashinaChatRequestBody`(`functions/src/ocr/sarashinaSummaryRequest.ts`)のre-export。型名はCLI・既存テストの互換のため維持する。 */
+export type ChatRequestBody = SarashinaChatRequestBody;
 
-export function buildChatRequestBody(prompt: string, opts?: { maxTokens?: number; temperature?: number }): ChatRequestBody {
-  return {
-    messages: [{ role: 'user', content: prompt }],
-    max_tokens: opts?.maxTokens ?? DEFAULT_MAX_TOKENS,
-    temperature: opts?.temperature ?? DEFAULT_TEMPERATURE,
-    cache_prompt: false,
-    chat_template_kwargs: { enable_thinking: false },
-  };
+/** ADR-0027 PR3: `buildSarashinaChatRequestBody`への委譲。body形状は完全同一(PR2b実機ゲートの検証結果を継承)。 */
+export function buildChatRequestBody(
+  prompt: string,
+  opts?: { maxTokens?: number; temperature?: number }
+): ChatRequestBody {
+  return buildSarashinaChatRequestBody(prompt, opts);
 }
 
 export interface ChatCompletionResponse {

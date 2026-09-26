@@ -17,6 +17,17 @@
 export const MAX_SUMMARY_INPUT_LENGTH = 8000;
 
 /**
+ * 要約生成を行う最小 OCR 文字数 (元は summaryGenerator.ts、ADR-0027 PR3 で移設)。
+ *
+ * summaryGenerator.ts は import 経路で admin.firestore() を呼ぶ rateLimiter に
+ * 依存するため、admin 初期化なしの unit test からこの定数だけを読めない問題があった。
+ * summaryPass.ts (PR3, dead code) が admin 非依存のまま短文ガードを行うために
+ * 本モジュールへ移設し、summaryGenerator.ts からは re-export する
+ * (regenerateSummary.ts の既存 import 元は変更しない)。
+ */
+export const MIN_OCR_LENGTH_FOR_SUMMARY = 100;
+
+/**
  * documentType が空文字列のときに prompt 文言に差し込む fallback ラベル。
  * caller 側で同じ fallback を二重に書くことを構造的に防止するため、
  * 本モジュール内に single source of truth として閉じ込める (export しない)。

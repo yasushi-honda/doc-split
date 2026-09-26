@@ -20,7 +20,7 @@ import { withRetry, RETRY_CONFIGS } from '../utils/retry';
 import { capPageText, MAX_SUMMARY_LENGTH } from '../utils/textCap';
 import type { SummaryField } from '../../../shared/types';
 import { buildSummaryGenerationRequest } from './summaryRequestBuilder';
-import { buildSummaryPrompt } from './summaryPromptBuilder';
+import { buildSummaryPrompt, MIN_OCR_LENGTH_FOR_SUMMARY } from './summaryPromptBuilder';
 import { extractBlockedSummaryDetails, SummaryBlockedError } from './summaryErrorClassification';
 
 const PROJECT_ID = GCP_CONFIG.projectId;
@@ -28,7 +28,9 @@ const LOCATION = GCP_CONFIG.location;
 
 // 要約生成を行う最小 OCR 文字数。caller 側 (regenerateSummary.ts) で
 // 閾値同期漏れが起きないよう単一定数化。
-export const MIN_OCR_LENGTH_FOR_SUMMARY = 100;
+// ADR-0027 PR3 で summaryPromptBuilder.ts (admin 非依存) へ実体を移設し、ここでは
+// re-export のみ行う。regenerateSummary.ts の import 元 ('./summaryGenerator') は変更しない。
+export { MIN_OCR_LENGTH_FOR_SUMMARY };
 
 /**
  * OCR結果から AI 要約を生成する共通コア関数。
