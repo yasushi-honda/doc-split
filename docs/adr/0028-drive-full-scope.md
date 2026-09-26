@@ -62,6 +62,8 @@ OAuth同意画面のユーザータイプを「内部」へ切り替える(審�
 または内部化できない場合は、Gmail連携(`gmail.readonly`)と同じ状態(外部・未審査)の
 まま進める。
 
+**実施記録(2026-09-26)**: kanameoneのGCPプロジェクト(`docsplit-kanameone`)を対象に、Google Cloud Console(Google Auth Platform「対象」ページ)でユーザーの種類を「外部」→「内部」へ切替済み(実機操作・確認はPlaywright MCP経由)。既存のDrive接続アカウント`systemkaname@kanameone.com`がkanameone.com Workspaceアカウントであるため、既存連携への影響なし。この切替により、`drive`フルスコープが未検証スコープであることに起因するGoogleの「未確認のアプリ」警告画面が発生しなくなった。cocoro(`docsplit-cocoro`)は同ページ確認の結果、元から「内部」設定済みであり対応不要だった。
+
 **kanameone本番展開のGo条件**(内部化できない場合を含め、必ず満たすこと):
 - Drive連携は専用のGoogleアカウントで行う(クライアントの個人アカウントと分離)
 - 連携アカウントが日常的にアクセスする共有範囲を、業務データ(rootFolderId配下)のみに
