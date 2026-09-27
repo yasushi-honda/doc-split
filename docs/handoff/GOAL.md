@@ -4,6 +4,18 @@ updated: 2026-09-27
 <!-- 前ミッション(dev/kanameone/cocoro環境監査・保守検証)は2026-07-20完遂。全文はdocs/handoff/LATEST.md参照。 -->
 <!-- Google Drive連携Phase1 (MVP)実装ミッションは2026-07-22完了(PR#700マージ)。詳細は本ファイル末尾「Google Drive連携Phase1完遂」節+docs/handoff/LATEST.md参照。 -->
 
+## 【完了・2026-09-27】Issue #962対応: withBackoffRetryのリトライ観測性改善+updateErrのSentry送信(PR #1067マージ、現在のミッションとは別件・並行トラック)
+
+`/catchup`提示のIssue backlog(#979/#962/#956/#901/#251/#238)からdecision-maker選択(#962)により着手。他候補は設計不備で撤回済み(#979)・待機条件未充足(#251/#238)・緊急性なし明記(#901)・#956は#979と設計方針重複の可能性ありでいずれも保留。
+
+**実装**: ①`functions/src/utils/retry.ts`の`withBackoffRetry`のcatch節が完全に無言でリトライしており、gRPC transientエラー(ABORTED/UNAVAILABLE等)がリトライで復旧した場合ログに一切痕跡が残らなかった問題に対し、attempt番号+元エラーメッセージ付きの`console.log`を追加。②`functions/src/ocr/ocrProcessor.ts`の`handleProcessingError`の`catch(updateErr)`(状態更新自体のリトライ枯渇、元のerrorより深刻な事象)が`console.error`のみでSentry等のアラート経路(`safeLogError`)に乗っていなかった問題に対し、`functionName`に`.handleProcessingError.updateErr`タグを付与した専用`safeLogError`呼出を追加(末尾の元error用呼出と区別可能)。
+
+**テスト(TDD Red→Green)**: `backoffRetry.test.ts`にログ出力検証2件追加。`handleProcessingErrorContract.test.ts`の既存静的契約テストは非globalな正規表現の最初のmatchが新設callにずれる問題があったため、`catch(updateErr)`ブロックをbrace-nestingで先に切り出しその後方から元の末尾呼出を抽出する方式に修正し、updateErr専用の契約テスト7件を追加。
+
+**品質ゲート**: 変更規模(実コード2ファイル・23行)はCLAUDE.mdのcodex reviewゲート閾値(3ファイル以上/100行以上)未満だが、`post-pr-review.sh`hookがmedium tier PRとして明示指示したため`codex review --base main -c model_reasoning_effort=medium`を実行、findings 0件。型チェック・lint(変更ファイルwarning/error 0件)・ユニットテスト2424件・Firestoreエミュレータ経由の関連統合テスト89件(`ocrRetryIntegration`/`ocrRunGuardIntegration`(Issue #957系handleProcessingErrorリトライシナリオ含む)/`ocrCompletionTransactionIntegration`/`rescueErroredIntegration`)全PASS。実行ログで新規ログ`[withBackoffRetry] attempt N/M failed, retrying...`の出力を実機確認済み。
+
+CI(lint-build-test)完了後にsquashマージ、Issue #962は自動クローズ。Issue Net変化: Close 1件(#962)、起票 0件、Net +1。
+
 ## 【完了・2026-09-27】Issue #1044対応: handleBulkVerifyテストカバレッジ追加(PR #1065マージ、現在のミッションとは別件・並行トラック)
 
 `/catchup`提示の積み残しIssueからdecision-maker選択(#1044、handleBulkVerifyテストカバレッジ追加)により着手。
