@@ -10,8 +10,9 @@ name: Deploy Sarashina Summary Cloud Run Service (ADR-0027 PR1c)
 #   存在しない時点でCIジョブを追加すると意味のない実行になるため
 # - Cloud Buildの`--machine-type=E2_HIGHCPU_8`を明示(PaddleOCR版は無指定=e2-standard-2)。
 #   PR0のcloudbuild.yamlと揃え、3.5GBのGGUF圧縮・pushの所要時間をPR0実測と同条件にする
-# - `Grant run.invoker`ステップは入れない。呼び出し元`generateSummaryBatch`はPR4まで
-#   存在せず、付与できない(PaddleOCR版が`processOCR`のSAへ付与しているのと対照的)
+# - `Grant run.invoker`ステップ(ADR-0027 PR4b追加): 呼び出し元`generateSummaryBatch`は
+#   PR4aでfunctions/src/index.tsからexport済みのため、PaddleOCR版の`processOCR`と同型で
+#   付与する。regenerateSummaryはPR6までSarashinaを呼ばないため対象外(ADR本文Decision 2)。
 # - `Verify`ステップはllama.cppの`/health`(`{"status":"ok"}`のみ)がPaddleOCR版のような
 #   `imageDigest`フィールドを持たないため、`/props`(`build_info`/`model_alias`)+
 #   `gcloud run services describe`のimage一致による代替検証を行う
@@ -399,6 +400,40 @@ jobs:
           # SARASHINA_SUMMARY_URLのドリフト検証は「Verify SARASHINA_SUMMARY_URL matches
           # current service URL」ステップでビルド/デプロイ前に完了済み(deploy-paddle-ocr.yml
           # と同じ理由でデプロイ後の再検証は不要)。
+
+      - name: Grant run.invoker to generateSummaryBatch's execution SA
+        env:
+          PROJECT_ID: ${{ steps.resolve.outputs.project_id }}
+          CLOUD_RUN_LOCATION: ${{ steps.resolve.outputs.cloud_run_location }}
+        run: |
+          set -euo pipefail
+          # --gen2必須(deploy-paddle-ocr.ymlと同型)。呼び出し元generateSummaryBatchは
+          # ADR-0027 PR4aでfunctions/src/index.tsから export済み(SUMMARY_PROVIDER既定'none'
+          # のためdead code相当だがexport自体は存在する)。functions配下は単一の実行SA
+          # (デフォルトcompute SA)を共有するため、regenerateSummary分の追加付与は不要
+          # (regenerateSummaryはPR6までSarashinaを呼ばない、ADR本文Decision 2参照)。
+          # silent-failure-hunter指摘: stderrを破棄して空文字にフォールバックすると、
+          # 「generateSummaryBatchが本当に未デプロイ」と「IAM権限不足/API無効化/認証切れで
+          # describe自体が失敗した」を区別できず、後者の場合でも常に「先にFunctionsを
+          # デプロイしてください」という誤った改善案内を出してしまう。stderrを捕捉し、
+          # 実際の失敗理由を表示する。
+          if ! FUNCTIONS_SA=$(gcloud functions describe generateSummaryBatch --gen2 \
+              --region="$CLOUD_RUN_LOCATION" --project="$PROJECT_ID" \
+              --format='value(serviceConfig.serviceAccountEmail)' 2>/tmp/functions_describe_err.log); then
+            echo "ERROR: generateSummaryBatch functionの確認に失敗しました: $(cat /tmp/functions_describe_err.log)" >&2
+            echo "ERROR: 未デプロイの場合は先にFunctionsをデプロイしてください。権限/認証エラーの場合は上記メッセージを確認してください" >&2
+            exit 1
+          fi
+          if [ -z "$FUNCTIONS_SA" ]; then
+            echo "ERROR: generateSummaryBatch functionは見つかりましたが、serviceAccountEmailが空でした(想定外)" >&2
+            exit 1
+          fi
+          echo "generateSummaryBatch execution SA: $FUNCTIONS_SA"
+          gcloud run services add-iam-policy-binding sarashina-summary \
+            --region="$CLOUD_RUN_LOCATION" --project="$PROJECT_ID" \
+            --member="serviceAccount:${FUNCTIONS_SA}" \
+            --role="roles/run.invoker"
+          echo "Granted roles/run.invoker to $FUNCTIONS_SA"
 
       - name: Verify
         env:
