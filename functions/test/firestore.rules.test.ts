@@ -1063,6 +1063,14 @@ describe('Firestore Security Rules', () => {
           // deleteField()する対象。preserveDistributionFieldsの値によらず常にクリアされる。
           multiCustomerDetected: true,
           multiCustomerCount: 2,
+          // ADR-0027 PR4 (AI要約の非同期生成): getReprocessClearFields()が無条件でdeleteField()する対象。
+          summaryState: 'processing',
+          summaryRunId: 'summary-run-id-abc',
+          summaryStateUpdatedAt: new Date(),
+          summaryError: 'some error',
+          summaryErrorKind: 'transient',
+          summaryProvider: 'sarashina',
+          summaryAttemptCount: 2,
         });
       });
 
@@ -1116,6 +1124,13 @@ describe('Firestore Security Rules', () => {
           driveExportErrorKind: deleteField(),
           multiCustomerDetected: deleteField(),
           multiCustomerCount: deleteField(),
+          summaryState: deleteField(),
+          summaryRunId: deleteField(),
+          summaryStateUpdatedAt: deleteField(),
+          summaryError: deleteField(),
+          summaryErrorKind: deleteField(),
+          summaryProvider: deleteField(),
+          summaryAttemptCount: deleteField(),
           // 値をリセット
           customerConfirmed: false,
           confirmedBy: null,
@@ -1198,6 +1213,65 @@ describe('Firestore Security Rules', () => {
       await assertFails(updateDoc(docRef, { driveExportError: 'forged error' }));
       // Issue #881: driveExportErrorKindも同型ガードで新規値の上書きが拒否されること
       await assertFails(updateDoc(docRef, { driveExportErrorKind: 'transient' }));
+    });
+
+    it('AI要約状態フィールド(summaryState等)への新規値の上書きは拒否され、削除(deleteField)のみ許可される(ADR-0027 PR4)', async () => {
+      // getReprocessClearFields()はこれらをdeleteField()する用途のみで、値を新規設定・
+      // 上書きする経路はFEに存在しない。ホワイトリスト登録ユーザーがsummaryState:'done'を
+      // 偽装できると、実際には生成されていない要約を完了扱いにしたり、summaryRunIdを
+      // 書き換えてバッチ処理・手動再生成の所有権検証(evaluateSummaryRunOwnership)を
+      // 迂回できてしまう。
+      const normalUser = testEnv.authenticatedContext(normalUid);
+
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'documents', 'doc-summary-state-fields'), {
+          fileName: 'test.pdf',
+          status: 'processed',
+          verified: true,
+        });
+      });
+
+      const docRef = doc(normalUser.firestore(), 'documents', 'doc-summary-state-fields');
+      // フィールド不在のdocへの新規注入(偽装)は拒否される
+      await assertFails(updateDoc(docRef, { summaryState: 'done' }));
+      await assertFails(updateDoc(docRef, { summaryRunId: 'forged-run-id' }));
+      await assertFails(updateDoc(docRef, { summaryStateUpdatedAt: new Date() }));
+      await assertFails(updateDoc(docRef, { summaryError: 'forged error' }));
+      await assertFails(updateDoc(docRef, { summaryErrorKind: 'transient' }));
+      await assertFails(updateDoc(docRef, { summaryProvider: 'sarashina' }));
+      await assertFails(updateDoc(docRef, { summaryAttemptCount: 1 }));
+
+      // 既存値を持つdocへの上書きも拒否され、削除(deleteField)と無変更のみ許可される
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(
+          doc(context.firestore(), 'documents', 'doc-summary-state-fields'),
+          {
+            summaryState: 'processing',
+            summaryRunId: 'run-id-abc',
+            summaryStateUpdatedAt: new Date(),
+            summaryError: null,
+            summaryErrorKind: null,
+            summaryProvider: 'sarashina',
+            summaryAttemptCount: 1,
+          },
+          { merge: true }
+        );
+      });
+      await assertFails(updateDoc(docRef, { summaryState: 'done' }));
+      await assertFails(updateDoc(docRef, { summaryRunId: 'another-run-id' }));
+      await assertFails(updateDoc(docRef, { summaryAttemptCount: 99 }));
+      await assertSucceeds(updateDoc(docRef, { verified: false }));
+      await assertSucceeds(
+        updateDoc(docRef, {
+          summaryState: deleteField(),
+          summaryRunId: deleteField(),
+          summaryStateUpdatedAt: deleteField(),
+          summaryError: deleteField(),
+          summaryErrorKind: deleteField(),
+          summaryProvider: deleteField(),
+          summaryAttemptCount: deleteField(),
+        })
+      );
     });
 
     it('複数人記載検出フィールド(multiCustomerDetected/multiCustomerCount)への新規値の上書きは拒否され、削除(deleteField)のみ許可される(PR-A/PR-B、2026-08-30)', async () => {

@@ -591,6 +591,21 @@ describe('getReprocessClearFields (Issue #215: 旧3キー + 新summary 全て de
     expect(fields).toHaveProperty('driveExportErrorKind')
   })
 
+  // ADR-0027 PR4 (AI要約の非同期生成、codex review P1指摘対応): summaryRunId等の
+  // claim状態を残したままreprocessすると、新OCR完了までの間ocrRunIdが未更新のため
+  // 古いバッチ/手動claimの所有権チェックを通過してしまい、reprocessの意図と無関係な
+  // 古いsummary結果が書き込まれうる。他の派生フィールドと同様に無条件でクリアする。
+  it('AI要約の状態フィールド7件を含む (ADR-0027 PR4)', () => {
+    const fields = getReprocessClearFields()
+    expect(fields).toHaveProperty('summaryState')
+    expect(fields).toHaveProperty('summaryRunId')
+    expect(fields).toHaveProperty('summaryStateUpdatedAt')
+    expect(fields).toHaveProperty('summaryError')
+    expect(fields).toHaveProperty('summaryErrorKind')
+    expect(fields).toHaveProperty('summaryProvider')
+    expect(fields).toHaveProperty('summaryAttemptCount')
+  })
+
   // ADR-0022 Phase1 code-review xhigh指摘対応(2026-07-21): driveFileId は意図的に
   // クリア対象から除外する。削除すると再エクスポート時に旧Driveファイルへの参照が
   // 失われ、フォルダパスが変わる訂正で旧フォルダに孤児ファイルが残置される(誤配置)。

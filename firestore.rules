@@ -138,7 +138,18 @@ service cloud.firestore {
           // getReprocessClearFields()のdeleteField()でのみ操作する想定(#9参照)のため、
           // 値の新規設定・上書きは下記ガードで禁止する。
           'multiCustomerDetected',
-          'multiCustomerCount'
+          'multiCustomerCount',
+          // ADR-0027 PR4 (AI要約の非同期生成): Cloud Functions
+          // (ocrProcessor.ts/generateSummaryBatch.ts/regenerateSummary.ts)専有の派生フィールド。
+          // FEはgetReprocessClearFields()のdeleteField()でのみ操作する想定(#9参照)のため、
+          // 値の新規設定・上書きは下記ガードで禁止する。
+          'summaryState',
+          'summaryRunId',
+          'summaryStateUpdatedAt',
+          'summaryError',
+          'summaryErrorKind',
+          'summaryProvider',
+          'summaryAttemptCount'
         ])
         // confirmedBy は自分のUIDのみ設定可能（事業所解決時は含まれない場合あり）
         && (request.resource.data.confirmedBy == request.auth.uid
@@ -230,6 +241,24 @@ service cloud.firestore {
             || (('multiCustomerDetected' in resource.data) && request.resource.data.multiCustomerDetected == resource.data.multiCustomerDetected))
         && (!('multiCustomerCount' in request.resource.data)
             || (('multiCustomerCount' in resource.data) && request.resource.data.multiCustomerCount == resource.data.multiCustomerCount))
+        // ADR-0027 PR4 (AI要約の非同期生成): driveExportStatus等と同型のサーバー専有派生
+        // フィールド。FEはgetReprocessClearFields()のdeleteField()でのみ操作する想定
+        // (#9参照)。値の新規設定・上書きを許可すると、クライアントが任意のsummaryStateを
+        // 偽装してバッチ処理のclaim判定・所有権検証(summaryRunId)を混乱させうる。
+        && (!('summaryState' in request.resource.data)
+            || (('summaryState' in resource.data) && request.resource.data.summaryState == resource.data.summaryState))
+        && (!('summaryRunId' in request.resource.data)
+            || (('summaryRunId' in resource.data) && request.resource.data.summaryRunId == resource.data.summaryRunId))
+        && (!('summaryStateUpdatedAt' in request.resource.data)
+            || (('summaryStateUpdatedAt' in resource.data) && request.resource.data.summaryStateUpdatedAt == resource.data.summaryStateUpdatedAt))
+        && (!('summaryError' in request.resource.data)
+            || (('summaryError' in resource.data) && request.resource.data.summaryError == resource.data.summaryError))
+        && (!('summaryErrorKind' in request.resource.data)
+            || (('summaryErrorKind' in resource.data) && request.resource.data.summaryErrorKind == resource.data.summaryErrorKind))
+        && (!('summaryProvider' in request.resource.data)
+            || (('summaryProvider' in resource.data) && request.resource.data.summaryProvider == resource.data.summaryProvider))
+        && (!('summaryAttemptCount' in request.resource.data)
+            || (('summaryAttemptCount' in resource.data) && request.resource.data.summaryAttemptCount == resource.data.summaryAttemptCount))
         // ADR-0019 (GOAL.md タスクG): 集計所属変更メンテナンスゲートが閉じている間は、
         // customer/office/documentType/careManagerを変更するクライアント直接書込み
         // (useDocumentEdit.ts等)を拒否する。Cloud Functions(Admin SDK経由)はルール適用外の

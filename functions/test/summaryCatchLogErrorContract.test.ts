@@ -37,6 +37,11 @@ const SUMMARY_CATCH_ANCHORS = [
     anchor: 'generateSummaryCore(',
     context: 'regenerateSummary rethrow-preceding catch',
   },
+  {
+    file: 'src/ocr/regenerateSummary.ts',
+    anchor: 'commitSummaryResult(',
+    context: 'regenerateSummary commit-failure catch (ADR-0027 PR4、silent-failure-hunter/code-reviewer指摘反映)',
+  },
 ] as const;
 
 // catch 句のスコープとして許容する近接ウィンドウ。catch ブロックは通常 3-5 行だが、
