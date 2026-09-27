@@ -26,13 +26,26 @@ export const SUMMARY_BATCH_TIMEOUT_SECONDS = 1800;
 export const SUMMARY_BATCH_LIMIT = 20;
 
 /**
- * バッチのソフトデッドライン(ms): 関数タイムアウトから、Sarashinaの最大リクエスト時間
- * (`SARASHINA_SUMMARY_CONFIG.requestTimeoutMs`、1リクエストが最悪これだけかかりうる)と、
+ * 1文書のclaimが最悪どれだけ時間を消費しうるかの見積り(ms、codex review P1指摘反映)。
+ *
+ * `generateSummaryForProvider`(`summaryPass.ts`の`callSarashinaWithContextRetry`)は
+ * `contextExceeded`(400)を受けた場合、入力を縮小して**もう1回**Sarashinaへリクエストする
+ * (ADR-0027 PR3知見7)。したがって1件のclaimは最悪`requestTimeoutMs`(620秒)の
+ * リクエストを**2回**実行しうる。1回分だけを見積もると、ソフトデッドライン直前で
+ * claimした文書がこの2回目のリクエストの途中で関数タイムアウト(1800秒)を超えて
+ * ハードキルされうる(修正前の実際のバグ、当初は1回分のみで計算していた)。
+ */
+const SUMMARY_WORST_CASE_CLAIM_DURATION_MS = SARASHINA_SUMMARY_CONFIG.requestTimeoutMs * 2;
+
+/**
+ * バッチのソフトデッドライン(ms): 関数タイムアウトから、1件のclaimの最悪所要時間
+ * (`SUMMARY_WORST_CASE_CLAIM_DURATION_MS`、context-exceeded再送を含む2リクエスト分)と、
  * 最終文書の後処理・ログ出力用のマージン(3分)を差し引いた値。この時刻を過ぎたら
- * 新規のclaimを開始せず、残りは次tickへ委ねる(1800s+620s>1800sになる自己矛盾を避ける)。
+ * 新規のclaimを開始せず、残りは次tickへ委ねる(関数タイムアウトを超えてハードキルされる
+ * 自己矛盾を避ける)。
  */
 export const SUMMARY_BATCH_SOFT_DEADLINE_MS =
-  SUMMARY_BATCH_TIMEOUT_SECONDS * 1000 - SARASHINA_SUMMARY_CONFIG.requestTimeoutMs - 180_000;
+  SUMMARY_BATCH_TIMEOUT_SECONDS * 1000 - SUMMARY_WORST_CASE_CLAIM_DURATION_MS - 180_000;
 
 /**
  * stuck rescueの閾値(ms): 関数タイムアウト(1800s)+5分マージン(`processOCR.ts`の

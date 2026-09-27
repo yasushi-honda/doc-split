@@ -404,6 +404,19 @@ export function getReprocessClearFields(preserveDistributionFields: boolean = fa
     summary: df,
     summaryTruncated: df,
     summaryOriginalLength: df,
+    // ADR-0027 PR4 (AI要約の非同期生成): claimの所有権トークン(summaryRunId)を
+    // クリアしないと、reprocess中に古いバッチ/手動claimがまだ生きていた場合、
+    // ocrRunIdが未更新の間(新OCR実行がstatus:'processingへ遷移するまで)は
+    // 所有権チェック(evaluateSummaryRunOwnership)を通過してしまい、reprocess後の
+    // 意図と無関係な古いsummary結果が書き込まれうる(codex review P1指摘)。
+    // 新OCR完了時にocrProcessor.ts側で改めて確定される値のため、無条件クリアしてよい。
+    summaryState: df,
+    summaryRunId: df,
+    summaryStateUpdatedAt: df,
+    summaryError: df,
+    summaryErrorKind: df,
+    summaryProvider: df,
+    summaryAttemptCount: df,
     ocrExtraction: df,
     pageResults: df,
     // 表示用ファイル名（#178 displayFileName自動生成）

@@ -167,6 +167,15 @@ describe('summaryRunGuard', () => {
       );
     });
 
+    it('SUMMARY_BATCH_SOFT_DEADLINE_MSはcontext-exceeded再送(最大2リクエスト分)を含めても関数タイムアウトを超えない(codex review P1指摘の回帰防止)', () => {
+      // callSarashinaWithContextRetry(summaryPass.ts)はcontextExceeded時に1回だけ
+      // 追加リクエストする。ソフトデッドライン直前にclaimした文書がこの2回目のリクエストの
+      // 途中で関数タイムアウト(1800s)を超えてハードキルされないことを保証する。
+      expect(
+        SUMMARY_BATCH_SOFT_DEADLINE_MS + SARASHINA_SUMMARY_CONFIG.requestTimeoutMs * 2
+      ).to.be.lessThan(SUMMARY_BATCH_TIMEOUT_SECONDS * 1000);
+    });
+
     it('MANUAL_SUMMARY_SOFT_TIMEOUT_MSはonCallのハードタイムアウト(60秒)未満', () => {
       expect(MANUAL_SUMMARY_SOFT_TIMEOUT_MS).to.be.lessThan(60_000);
     });
