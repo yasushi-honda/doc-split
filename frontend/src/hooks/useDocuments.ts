@@ -229,6 +229,15 @@ export function firestoreToDocument(id: string, data: Record<string, unknown>): 
     driveExportError: data.driveExportError as string | null | undefined,
     driveExportRunId: data.driveExportRunId as string | null | undefined,
     driveExportErrorKind: data.driveExportErrorKind as Document['driveExportErrorKind'],
+    // AI要約の非同期生成状態 (ADR-0027 PR4)。FEからは書き込まない(admin SDK専有)ため
+    // 素朴なキャストで十分(Drive系フィールドと同型)。
+    summaryState: data.summaryState as Document['summaryState'],
+    summaryRunId: data.summaryRunId as string | null | undefined,
+    summaryStateUpdatedAt: data.summaryStateUpdatedAt as Timestamp | null | undefined,
+    summaryError: data.summaryError as string | null | undefined,
+    summaryErrorKind: data.summaryErrorKind as Document['summaryErrorKind'],
+    summaryProvider: data.summaryProvider as Document['summaryProvider'],
+    summaryAttemptCount: data.summaryAttemptCount as number | undefined,
   }
 }
 
@@ -962,18 +971,32 @@ async function fetchDocument(documentId: string): Promise<Document | null> {
   return firestoreToDocument(docSnap.id, docSnap.data())
 }
 
+/**
+ * useDocument()のポーリング間隔決定(ADR-0027 PR4c)。OCR側の`status`(pending/processing)
+ * を最優先する防御的規則(通常到達しないが、同時成立時にOCR完了直後の再取得を遅らせないため)。
+ * OCR完了と同一トランザクションで`summaryState`が確定するため、`status`がpending/processing
+ * のまま`summaryState`だけpending/processingという状態は通常フローでは到達しない。
+ */
+export function computeDocumentRefetchInterval(doc: Document | null): number | false {
+  if (!doc) return false
+  if (doc.status === 'pending' || doc.status === 'processing') {
+    return 3000 // 3秒ごとにポーリング（処理中のみ、現状維持）
+  }
+  if (doc.summaryState === 'processing') {
+    return 5000 // バッチclaim/手動生成中(ADR-0027 PR4c)
+  }
+  if (doc.summaryState === 'pending') {
+    return 60000 // 自動生成待ち。バッチは60分間隔のため頻繁なポーリングは不要(ADR-0027 PR4c)
+  }
+  return false
+}
+
 export function useDocument(documentId: string | null) {
   return useQuery({
     queryKey: ['document', documentId],
     queryFn: () => (documentId ? fetchDocument(documentId) : null),
     enabled: !!documentId,
-    refetchInterval: (query) => {
-      const doc = query.state.data as Document | null
-      if (doc && (doc.status === 'pending' || doc.status === 'processing')) {
-        return 3000 // 3秒ごとにポーリング（処理中のみ）
-      }
-      return false
-    },
+    refetchInterval: (query) => computeDocumentRefetchInterval(query.state.data as Document | null),
   })
 }
 

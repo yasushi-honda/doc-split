@@ -15,6 +15,7 @@ import {
   getReprocessDetailClearFields,
   getDriveExportClearFields,
   resolveDetailFields,
+  computeDocumentRefetchInterval,
   applySearchTextFilter,
   invalidateDocumentAndGroupQueries,
   resetDocumentsInfiniteToFirstPage,
@@ -98,6 +99,40 @@ describe('firestoreToDocument', () => {
       expect(result.driveExportError).toBeUndefined()
       expect(result.driveExportRunId).toBeUndefined()
       expect(result.driveExportErrorKind).toBeUndefined()
+    })
+
+    // ADR-0027 PR4c: 要約7フィールドがfirestoreToDocument()でマッピングされないと、
+    // generateSummaryBatch/regenerateSummaryが書込んでもFEで永久に読めなくなる(#178教訓)
+    it('AI要約の状態フィールド7件を正しく変換する (ADR-0027 PR4c)', () => {
+      const data = {
+        ...baseFirestoreData,
+        summaryState: 'pending',
+        summaryRunId: 'run-id-1',
+        summaryStateUpdatedAt: Timestamp.now(),
+        summaryError: 'エラーメッセージ',
+        summaryErrorKind: 'quota',
+        summaryProvider: 'sarashina',
+        summaryAttemptCount: 2,
+      }
+      const result = firestoreToDocument('doc-001', data)
+      expect(result.summaryState).toBe('pending')
+      expect(result.summaryRunId).toBe('run-id-1')
+      expect(result.summaryStateUpdatedAt).toBe(data.summaryStateUpdatedAt)
+      expect(result.summaryError).toBe('エラーメッセージ')
+      expect(result.summaryErrorKind).toBe('quota')
+      expect(result.summaryProvider).toBe('sarashina')
+      expect(result.summaryAttemptCount).toBe(2)
+    })
+
+    it('AI要約の状態フィールド7件が未設定の場合は undefined (ADR-0027 PR4c)', () => {
+      const result = firestoreToDocument('doc-001', baseFirestoreData)
+      expect(result.summaryState).toBeUndefined()
+      expect(result.summaryRunId).toBeUndefined()
+      expect(result.summaryStateUpdatedAt).toBeUndefined()
+      expect(result.summaryError).toBeUndefined()
+      expect(result.summaryErrorKind).toBeUndefined()
+      expect(result.summaryProvider).toBeUndefined()
+      expect(result.summaryAttemptCount).toBeUndefined()
     })
   })
 
@@ -755,6 +790,41 @@ describe('resolveDetailFields (ADR-0018 Phase D PR-D3, Issue #547 — FE版、BE
       { ocrResult: 'parent-text', pageResults: [{ pageNumber: 1 }] as Document['pageResults'] }
     )
     expect(r.pageResults).toEqual([])
+  })
+})
+
+describe('computeDocumentRefetchInterval (ADR-0027 PR4c: OCR + AI要約状態の統合ポーリング間隔)', () => {
+  const baseDoc = { status: 'processed' } as Document
+
+  it('docがnullの場合はfalse(ポーリングしない)', () => {
+    expect(computeDocumentRefetchInterval(null)).toBe(false)
+  })
+
+  it('status===pendingの場合は3000ms(現状維持)', () => {
+    expect(computeDocumentRefetchInterval({ ...baseDoc, status: 'pending' })).toBe(3000)
+  })
+
+  it('status===processingの場合は3000ms(現状維持)', () => {
+    expect(computeDocumentRefetchInterval({ ...baseDoc, status: 'processing' })).toBe(3000)
+  })
+
+  it('summaryState===processingの場合は5000ms', () => {
+    expect(computeDocumentRefetchInterval({ ...baseDoc, summaryState: 'processing' })).toBe(5000)
+  })
+
+  it('summaryState===pendingの場合は60000ms', () => {
+    expect(computeDocumentRefetchInterval({ ...baseDoc, summaryState: 'pending' })).toBe(60000)
+  })
+
+  it('OCR完了かつsummaryStateがdone/error/skipped/未設定の場合はfalse', () => {
+    expect(computeDocumentRefetchInterval({ ...baseDoc, summaryState: 'done' })).toBe(false)
+    expect(computeDocumentRefetchInterval({ ...baseDoc, summaryState: 'error' })).toBe(false)
+    expect(computeDocumentRefetchInterval({ ...baseDoc, summaryState: 'skipped' })).toBe(false)
+    expect(computeDocumentRefetchInterval(baseDoc)).toBe(false)
+  })
+
+  it('status===processingとsummaryState===pendingが同時に成立する場合、OCR側の3000msを優先する(防御的規則、通常到達しない)', () => {
+    expect(computeDocumentRefetchInterval({ ...baseDoc, status: 'processing', summaryState: 'pending' })).toBe(3000)
   })
 })
 

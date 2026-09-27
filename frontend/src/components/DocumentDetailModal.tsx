@@ -46,7 +46,8 @@ import { isCustomerConfirmed } from '@/hooks/useProcessingHistory'
 import { useDocumentVerification } from '@/hooks/useDocumentVerification'
 import { resolveCareManager } from '@/utils/resolveCareManager'
 import { getDisplayFileName } from '@/utils/getDisplayFileName'
-import type { DocumentStatus, SummaryField } from '@shared/types'
+import type { DocumentStatus } from '@shared/types'
+import { deriveSummaryDisplayState, type SummaryDisplayState } from '@/lib/summaryDisplayState'
 
 // 閉じる確認ダイアログ用のAlertDialog
 import {
@@ -69,18 +70,18 @@ interface DocumentDetailModalProps {
 // モバイル用ポップアップコンポーネント（Vanilla JS DOM操作でRadix UIを完全にバイパス）
 function MobileContentPopup({
   type,
-  document: doc,
+  ocrResult,
   isDetailError,
+  summaryDisplay,
   onClose,
   onGenerateSummary,
-  isGeneratingSummary,
 }: {
   type: 'summary' | 'ocr'
-  document: { summary?: SummaryField; ocrResult?: string }
+  ocrResult?: string
   isDetailError: boolean
+  summaryDisplay: SummaryDisplayState
   onClose: () => void
   onGenerateSummary: () => void
-  isGeneratingSummary: boolean
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null)
 
@@ -133,8 +134,8 @@ function MobileContentPopup({
     const title = globalThis.document.createElement('span')
     title.style.cssText = 'font-weight: 500; color: #111827;'
     title.textContent = type === 'summary' ? '✨ AI要約' : '📄 OCR結果'
-    if (type === 'ocr' && doc.ocrResult) {
-      title.textContent += ` (${doc.ocrResult.length.toLocaleString()}文字)`
+    if (type === 'ocr' && ocrResult) {
+      title.textContent += ` (${ocrResult.length.toLocaleString()}文字)`
     }
 
     const closeBtn = globalThis.document.createElement('button')
@@ -192,25 +193,64 @@ function MobileContentPopup({
     scrollContainer.appendChild(contentArea)
 
     if (type === 'summary') {
-      if (doc.summary?.text) {
-        // #215: summary が discriminated union 化されたため .text プロパティ参照に変更。
-        // 併せて innerHTML → createElement + textContent で XSS 経路を排除。
+      // ADR-0027 PR4c: 6状態(+detail-error)をkindベースで描画する。summaryDisplayは
+      // isDetailError/summaryState/summary.text/OCR結果長を1箇所(deriveSummaryDisplayState)で
+      // 判定済みのため、ここでは分岐条件を再実装しない(#193型の食い違い防止)。
+      if (summaryDisplay.kind === 'generating') {
+        // #215: XSS 経路排除のため innerHTML → createElement + textContent。
+        const wrap = globalThis.document.createElement('div')
+        wrap.style.cssText = 'text-align: center; padding: 16px;'
+        const spinnerText = globalThis.document.createElement('p')
+        spinnerText.style.cssText = 'font-size: 14px; color: #7c3aed; margin: 0;'
+        spinnerText.textContent = '⏳ 生成中...'
+        wrap.appendChild(spinnerText)
+        if (summaryDisplay.summaryText) {
+          const dim = globalThis.document.createElement('div')
+          dim.style.cssText = 'font-size: 14px; color: #9ca3af; line-height: 1.6; margin-top: 12px; text-align: left;'
+          dim.textContent = summaryDisplay.summaryText
+          wrap.appendChild(dim)
+        }
+        contentArea.replaceChildren(wrap)
+      } else if (summaryDisplay.kind === 'generated') {
         const summaryDiv = globalThis.document.createElement('div')
-        summaryDiv.style.fontSize = '14px'
-        summaryDiv.style.color = '#374151'
-        summaryDiv.style.lineHeight = '1.6'
-        summaryDiv.textContent = doc.summary.text
-        contentArea.replaceChildren(summaryDiv)
-      } else if (isDetailError) {
-        contentArea.innerHTML = `<p style="font-size: 14px; color: #ef4444; text-align: center; padding: 16px;">OCR結果の取得に失敗したため要約を生成できません</p>`
-      } else if (doc.ocrResult && doc.ocrResult.length >= 100) {
-        contentArea.innerHTML = `<div style="text-align: center; padding: 16px;">
-          <button id="generate-summary-btn" style="padding: 8px 16px; background: #f3e8ff; color: #7c3aed; border: 1px solid #c4b5fd; border-radius: 6px; cursor: pointer;">
-            🔄 AI要約を生成
-          </button>
-        </div>`
-      } else {
+        summaryDiv.style.cssText = 'font-size: 14px; color: #374151; line-height: 1.6;'
+        summaryDiv.textContent = summaryDisplay.summaryText ?? ''
+        const btnWrap = globalThis.document.createElement('div')
+        btnWrap.style.cssText = 'text-align: center; margin-top: 12px;'
+        const btn = globalThis.document.createElement('button')
+        btn.id = 'generate-summary-btn'
+        btn.style.cssText = 'padding: 6px 12px; background: #f3e8ff; color: #7c3aed; border: 1px solid #c4b5fd; border-radius: 6px; cursor: pointer; font-size: 12px;'
+        btn.textContent = '🔄 再生成'
+        btnWrap.appendChild(btn)
+        contentArea.replaceChildren(summaryDiv, btnWrap)
+      } else if (summaryDisplay.kind === 'unavailable') {
         contentArea.innerHTML = `<p style="font-size: 14px; color: #9ca3af; text-align: center; padding: 16px;">OCR結果が短いため要約を生成できません</p>`
+      } else if (summaryDisplay.kind === 'detail-error') {
+        contentArea.innerHTML = `<p style="font-size: 14px; color: #ef4444; text-align: center; padding: 16px;">OCR結果の取得に失敗したため要約を生成できません</p>`
+      } else {
+        // queued / failed / absent: メッセージ(あれば) + ボタン(全て同じonGenerateSummaryを呼ぶ)
+        const message =
+          summaryDisplay.kind === 'queued'
+            ? '自動生成待ちです'
+            : summaryDisplay.kind === 'failed'
+              ? (summaryDisplay.errorMessage ?? '要約の生成に失敗しました')
+              : ''
+        const label =
+          summaryDisplay.kind === 'queued' ? '🔄 今すぐ生成' : summaryDisplay.kind === 'failed' ? '🔄 再試行' : '🔄 AI要約を生成'
+        const wrap = globalThis.document.createElement('div')
+        wrap.style.cssText = 'text-align: center; padding: 16px;'
+        if (message) {
+          const msgEl = globalThis.document.createElement('p')
+          msgEl.style.cssText = `font-size: 14px; color: ${summaryDisplay.kind === 'failed' ? '#ef4444' : '#6b7280'}; margin-bottom: 12px;`
+          msgEl.textContent = message
+          wrap.appendChild(msgEl)
+        }
+        const btn = globalThis.document.createElement('button')
+        btn.id = 'generate-summary-btn'
+        btn.style.cssText = 'padding: 8px 16px; background: #f3e8ff; color: #7c3aed; border: 1px solid #c4b5fd; border-radius: 6px; cursor: pointer;'
+        btn.textContent = label
+        wrap.appendChild(btn)
+        contentArea.replaceChildren(wrap)
       }
     } else {
       // #215: XSS 経路排除のため innerHTML → createElement + textContent (summary 修正と整合)。
@@ -226,7 +266,7 @@ function MobileContentPopup({
         ocrPre.textContent = 'OCR結果の取得に失敗しました'
       } else {
         ocrPre.style.color = '#4b5563'
-        ocrPre.textContent = doc.ocrResult || 'OCR結果なし'
+        ocrPre.textContent = ocrResult || 'OCR結果なし'
       }
       contentArea.replaceChildren(ocrPre)
     }
@@ -277,16 +317,14 @@ function MobileContentPopup({
         container.parentNode.removeChild(container)
       }
     }
-  }, [type, doc.summary?.text, doc.ocrResult, isDetailError, onClose, onGenerateSummary])
-
-  // isGeneratingSummary の変更を反映
-  useEffect(() => {
-    const btn = globalThis.document.querySelector('#generate-summary-btn') as HTMLButtonElement
-    if (btn) {
-      btn.disabled = isGeneratingSummary
-      btn.textContent = isGeneratingSummary ? '⏳ 生成中...' : '🔄 AI要約を生成'
-    }
-  }, [isGeneratingSummary])
+    // ADR-0027 PR4c(crossreview反映): 依存配列をsummaryDisplay.kind/summaryText/errorMessageに
+    // 変更し、生成中表示もkind==='generating'の分岐で描画することで、旧来「isGeneratingSummary
+    // 専用の別effect」を廃止した。旧実装ではhandleGenerateSummaryがuseCallback化されておらず
+    // 親レンダーのたびに新しい関数参照になるため、主effect(依存配列にonGenerateSummaryを含む)が
+    // 再実行されてDOMを再構築する一方、専用effect(isGeneratingSummaryの値が不変なら再実行され
+    // ない)がボタン文言を追従できず、生成中でも「生成中」表示が消えうる構造的バグがあった
+    // (codex crossreviewで実装確認済み)。kindを主effectの依存に含めることで一本化する。
+  }, [type, ocrResult, isDetailError, summaryDisplay.kind, summaryDisplay.summaryText, summaryDisplay.errorMessage, onClose, onGenerateSummary])
 
   return null // DOMはuseEffectで直接操作
 }
@@ -375,6 +413,16 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
   const [urlRefreshKey, setUrlRefreshKey] = useState(0) // URL強制リフレッシュ用
   const [isMetadataCollapsed, setIsMetadataCollapsed] = useState(true) // モバイルでメタ情報を折りたたみ（初期は折りたたみ）
   const [isGeneratingSummary, setIsGeneratingSummary] = useState(false) // AI要約生成中
+  // ADR-0027 PR4c: 7 kindの判定を1箇所で計算し、デスクトップ・モバイル双方へ渡す
+  // (#193型の食い違い防止)。
+  const summaryDisplay = deriveSummaryDisplayState({
+    summary: document?.summary,
+    summaryState: document?.summaryState,
+    summaryErrorKind: document?.summaryErrorKind,
+    ocrResult: resolved.ocrResult,
+    isDetailError,
+    isGeneratingSummary,
+  })
   // デスクトップ用: 排他的アコーディオン
   const [expandedSection, setExpandedSection] = useState<'summary' | 'ocr' | null>('summary')
   // モバイル用: ポップアップ表示
@@ -1521,7 +1569,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                       <span className="flex items-center gap-2 text-xs font-medium text-gray-700">
                         <Sparkles className="h-3.5 w-3.5 text-purple-500" />
                         AI要約
-                        {document.summary?.text && (
+                        {summaryDisplay.kind === 'generated' && (
                           <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-purple-500 text-white text-[10px]">✓</span>
                         )}
                       </span>
@@ -1529,34 +1577,53 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                     </button>
                     {expandedSection === 'summary' && (
                       <div className="p-3 overflow-y-auto max-h-[180px] bg-white border-t border-purple-100">
-                        {document.summary?.text ? (
-                          <div className="text-sm text-gray-700 leading-relaxed">
-                            {document.summary.text}
-                          </div>
-                        ) : isDetailError ? (
-                          <p className="text-xs text-red-500">OCR結果の取得に失敗したため要約を生成できません</p>
-                        ) : resolved.ocrResult && resolved.ocrResult.length >= 100 ? (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={handleGenerateSummary}
-                            disabled={isGeneratingSummary}
-                            className="text-purple-600 border-purple-200 hover:bg-purple-50"
-                          >
-                            {isGeneratingSummary ? (
-                              <>
-                                <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-                                生成中...
-                              </>
-                            ) : (
-                              <>
-                                <RefreshCw className="mr-1 h-3 w-3" />
-                                AI要約を生成
-                              </>
+                        {/* ADR-0027 PR4c: kindベースの分岐(deriveSummaryDisplayState)。
+                            #193型の食い違い防止のためモバイル(MobileContentPopup)と同じ関数を参照する */}
+                        {summaryDisplay.kind === 'generating' ? (
+                          <div className="flex flex-col gap-2">
+                            <div className="flex items-center gap-1.5 text-xs text-purple-600">
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                              生成中...
+                            </div>
+                            {summaryDisplay.summaryText && (
+                              <div className="text-sm text-gray-400 leading-relaxed">{summaryDisplay.summaryText}</div>
                             )}
-                          </Button>
-                        ) : (
+                          </div>
+                        ) : summaryDisplay.kind === 'generated' ? (
+                          <div className="flex flex-col gap-2">
+                            <div className="text-sm text-gray-700 leading-relaxed">{summaryDisplay.summaryText}</div>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={handleGenerateSummary}
+                              className="self-start h-6 px-2 text-xs text-purple-600 border-purple-200 hover:bg-purple-50"
+                            >
+                              <RefreshCw className="mr-1 h-3 w-3" />
+                              再生成
+                            </Button>
+                          </div>
+                        ) : summaryDisplay.kind === 'detail-error' ? (
+                          <p className="text-xs text-red-500">OCR結果の取得に失敗したため要約を生成できません</p>
+                        ) : summaryDisplay.kind === 'unavailable' ? (
                           <p className="text-xs text-gray-400">OCR結果が短いため要約を生成できません</p>
+                        ) : (
+                          <div className="flex flex-col gap-2">
+                            {summaryDisplay.kind === 'queued' && (
+                              <p className="text-xs text-gray-500">自動生成待ちです</p>
+                            )}
+                            {summaryDisplay.kind === 'failed' && (
+                              <p className="text-xs text-red-500">{summaryDisplay.errorMessage}</p>
+                            )}
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={handleGenerateSummary}
+                              className="self-start text-purple-600 border-purple-200 hover:bg-purple-50"
+                            >
+                              <RefreshCw className="mr-1 h-3 w-3" />
+                              {summaryDisplay.kind === 'queued' ? '今すぐ生成' : summaryDisplay.kind === 'failed' ? '再試行' : 'AI要約を生成'}
+                            </Button>
+                          </div>
                         )}
                       </div>
                     )}
@@ -1660,11 +1727,11 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
     {mobilePopup && document && (
       <MobileContentPopup
         type={mobilePopup}
-        document={{ summary: document.summary, ocrResult: resolved.ocrResult }}
+        ocrResult={resolved.ocrResult}
         isDetailError={isDetailError}
+        summaryDisplay={summaryDisplay}
         onClose={() => setMobilePopup(null)}
         onGenerateSummary={handleGenerateSummary}
-        isGeneratingSummary={isGeneratingSummary}
       />
     )}
 

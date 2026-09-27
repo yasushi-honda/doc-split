@@ -1,0 +1,131 @@
+/**
+ * AI要約 6状態UI E2Eテスト (ADR-0027 PR4c)
+ *
+ * crossreview指摘反映: 既存 mobile-popup.spec.ts はdev本番URL直書き・`@emulator`タグなしのため
+ * 回帰保証にならない。本specは`@emulator`タグ + `loginWithTestUser`ヘルパーを使い、
+ * document-detail.spec.ts / mobile-pdf-view.spec.ts と同じ構成で書く。
+ *
+ * 実行方法:
+ *   1. Firebase Emulator起動: firebase emulators:start --only auth,firestore,functions,storage
+ *   2. テストユーザー作成: FIRESTORE_EMULATOR_HOST=localhost:8085 node scripts/setup-e2e-user.js
+ *   3. シードデータ投入: FIRESTORE_EMULATOR_HOST=localhost:8085 node scripts/seed-adr0027-pr4c-summary-states.js
+ *   4. テスト実行: cd frontend && npx playwright test e2e/summary-display-state.spec.ts
+ */
+
+import { test, expect, Page, Locator } from '@playwright/test';
+import { loginWithTestUser as _loginWithTestUser } from './helpers';
+
+async function openDocByFileName(page: Page, fileNameSubstring: string) {
+  const row = page.locator(`tbody tr:has-text("${fileNameSubstring}")`).first();
+  await expect(row).toBeVisible({ timeout: 10000 });
+  await row.click();
+  const modal = page.locator('[role="dialog"]');
+  await expect(modal).toBeVisible({ timeout: 5000 });
+  return modal;
+}
+
+/**
+ * デスクトップのAI要約アコーディオン見出しボタン。モバイル用トリガーボタン(`md:hidden`)も
+ * 同じ文言「AI要約」を含みDOM順で先に現れるため、`.first()`では誤ってそちらを掴む。
+ * デスクトップ表示(chromiumプロジェクト、md以上のviewport)では実際に可視な方を選ぶ。
+ */
+function summaryAccordionHeader(modal: Locator) {
+  return modal.locator('button:has-text("AI要約"):visible').first();
+}
+
+/**
+ * AI要約アコーディオンが開いた状態を保証する。expandedSectionの初期値は'summary'
+ * (デフォルト展開)だが、ヘッダーをクリックするとトグルで閉じてしまうため、既に開いている
+ * 場合は何もしない。
+ */
+async function ensureSummaryAccordionExpanded(modal: Locator) {
+  const header = summaryAccordionHeader(modal);
+  // ヘッダーの直後の兄弟divが展開時のコンテンツ領域(JSX上、expandedSection==='summary'の
+  // 条件付きレンダリングでheaderのすぐ後ろに挿入される)。aria-expanded等の属性は
+  // このボタンに付与されていないため、DOM構造から展開状態を判定する。
+  const content = header.locator('xpath=following-sibling::div[1]');
+  const isExpanded = await content.isVisible().catch(() => false);
+  if (!isExpanded) {
+    await header.click();
+  }
+}
+
+test.describe('AI要約 6状態UI (デスクトップ) @emulator', () => {
+  test.beforeEach(async ({ page }) => {
+    await _loginWithTestUser(page);
+  });
+
+  test('generated: 要約本文 + 「再生成」ボタンが表示される', async ({ page }) => {
+    const modal = await openDocByFileName(page, 'E2E_PR4c_generated');
+    await ensureSummaryAccordionExpanded(modal);
+    await expect(modal.locator('text=PR4c検証用の生成済み要約テキストです。')).toBeVisible();
+    await expect(modal.locator('button:has-text("再生成")')).toBeVisible();
+  });
+
+  test('queued: 「自動生成待ち」文言 + 「今すぐ生成」ボタンが表示される', async ({ page }) => {
+    const modal = await openDocByFileName(page, 'E2E_PR4c_queued');
+    await ensureSummaryAccordionExpanded(modal);
+    await expect(modal.locator('text=自動生成待ちです')).toBeVisible();
+    await expect(modal.locator('button:has-text("今すぐ生成")')).toBeVisible();
+  });
+
+  test('failed(fabrication_suspected): 専用エラーメッセージ + 「再試行」ボタンが表示される', async ({ page }) => {
+    const modal = await openDocByFileName(page, 'E2E_PR4c_failed_fabrication');
+    await ensureSummaryAccordionExpanded(modal);
+    await expect(modal.locator('text=固有名詞')).toBeVisible();
+    await expect(modal.locator('button:has-text("再試行")')).toBeVisible();
+  });
+
+  test('absent(detail/mainオフロード): OCR本文がdetail/main経由でも「AI要約を生成」ボタンが表示される', async ({ page }) => {
+    // codex pass1指摘反映の非回帰確認: 親document.ocrResultが空でも、resolveDetailFields()経由の
+    // 100字以上判定でabsent(kind=6)になり、skipped扱いにならないことを確認する
+    const modal = await openDocByFileName(page, 'E2E_PR4c_absent_detail-offload');
+    await ensureSummaryAccordionExpanded(modal);
+    await expect(modal.locator('button:has-text("AI要約を生成")')).toBeVisible();
+  });
+});
+
+test.describe('AI要約 6状態UI (モバイル) @emulator', () => {
+  test.use({
+    viewport: { width: 390, height: 844 },
+    userAgent:
+      'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1',
+    isMobile: true,
+    hasTouch: true,
+  });
+
+  test.beforeEach(async ({ page }) => {
+    await _loginWithTestUser(page, 'h1:has-text("書類管理")');
+  });
+
+  test('generating: ポーリングによる親の再レンダリング後も「生成中」表示が消えない (crossreview指摘の回帰テスト)', async ({
+    page,
+  }) => {
+    // モバイルのMobileContentPopupは、handleGenerateSummaryがuseCallback化されておらず
+    // 親レンダーのたびに新しい関数参照になるため、主effectが再実行されDOMを再構築する。
+    // 修正前はisGeneratingSummary専用の別effectが値不変で再実行されず、ボタン文言が
+    // 生成中から通常表示に戻ってしまう構造的バグがあった(codex crossreviewで実装確認済み)。
+    // ポップアップは position:fixed; inset:0 の全画面バックドロップで背後の要素へのクリックを
+    // 一切受け付けないため(実際のモーダル挙動として正しい)、手動クリックで親の再レンダリングを
+    // 誘発することはできない。代わりに、この状態(summaryState==='processing')でuseDocument()が
+    // 実際に使う5秒間隔のポーリング(computeDocumentRefetchInterval)を待ち、react-queryの
+    // refetchが返す新しいデータ参照による自然な親再レンダリングを再現する。
+    const row = page.locator('tbody tr:has-text("E2E_PR4c_generating")').first();
+    await expect(row).toBeVisible({ timeout: 10000 });
+    await row.click();
+    const modal = page.locator('[role="dialog"]');
+    await expect(modal).toBeVisible({ timeout: 5000 });
+
+    // モバイル用「AI要約」ボタンでポップアップを開く
+    await page.locator('button:has-text("要約")').first().click();
+    const popup = page.locator('#mobile-popup-container');
+    await expect(popup).toBeVisible({ timeout: 5000 });
+    await expect(popup.locator('text=生成中')).toBeVisible();
+
+    // 5秒間隔ポーリングが最低1回発火するのを待つ(回帰テスト本体)
+    await page.waitForTimeout(6500);
+
+    // 再レンダリング後も「生成中」表示が消えていないことを確認
+    await expect(popup.locator('text=生成中')).toBeVisible();
+  });
+});
