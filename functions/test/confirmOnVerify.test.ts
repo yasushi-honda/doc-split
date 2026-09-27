@@ -89,6 +89,18 @@ describe('decideCustomerConfirm', () => {
     expect(result).to.deep.equal({ action: 'confirm' });
   });
 
+  // Issue #1044(PR #1041のpr-test-analyzer指摘): customerIdなし×同姓同名衝突の組み合わせが
+  // テスト行列に欠けていた。resolveCustomerUnconfirmedReason(shared/customerIdentity.ts)の
+  // 同姓同名判定はcustomerNameのみで行われ、customerIdの有無に依存しないため、
+  // customerIdが無くても衝突集合に一致すればskipされる想定(将来の変更で壊れても検知できるように)。
+  it('customerIdが無くても、同姓同名マスターが存在する場合は same-name-collision でskip', () => {
+    const result = decideCustomerConfirm(
+      { customerName: '田中太郎', customerId: null },
+      { customerMasterName: null, sameNameCollisionNames: new Set(['田中太郎']) }
+    );
+    expect(result).to.deep.equal({ action: 'skip', reason: 'same-name-collision' });
+  });
+
   it('前後空白付きの顧客名もtrim後に有効値として確定できる', () => {
     const result = decideCustomerConfirm(
       { customerName: ' 田中太郎 ', customerId: 'c1' },

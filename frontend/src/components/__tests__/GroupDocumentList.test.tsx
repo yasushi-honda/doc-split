@@ -288,6 +288,35 @@ describe('GroupDocumentList - fetchGroupDocuments hasMore修正の空状態判�
   })
 })
 
+describe('GroupDocumentList - 選択待ちバッジの理由メッセージ(Issue #1044)', () => {
+  beforeEach(() => {
+    mockUseGroupDocuments.mockReset()
+  })
+
+  // Issue #1044(PR #1041のpr-test-analyzer指摘): Issue #1034で追加された理由メッセージが
+  // 未テストだった。「選択待ち」バッジのtitle属性(ホバー時の理由表示)に含まれることを検証する。
+  it('customerConfirmed:false + 同名衝突なしは「選択待ち」バッジのtitleに顧客未確定の理由メッセージを含む', () => {
+    const doc = makeDocument({ customerConfirmed: false })
+    mockUseGroupDocuments.mockReturnValue({
+      data: { pages: [{ documents: [doc], lastDoc: null, hasMore: false }] },
+      fetchNextPage: vi.fn(),
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      isFetchNextPageError: false,
+      isLoading: false,
+      isError: false,
+      isRefetching: false,
+      refetch: vi.fn(),
+    })
+
+    renderWithClient(<GroupDocumentList groupType="customer" groupKey="customer-1" />)
+
+    expect(screen.getByText('選択待ち').getAttribute('title')).toBe(
+      '顧客が未確定です。書類詳細で候補を選択するか、確認済みにすると表示中の候補で確定します'
+    )
+  })
+})
+
 describe('GroupDocumentList - 契約終了した利用者の非表示(Issue #1033)', () => {
   beforeEach(() => {
     mockUseGroupDocuments.mockReset()
