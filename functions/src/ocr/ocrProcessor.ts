@@ -24,8 +24,17 @@ import {
   type OcrRunOwnershipResult,
 } from './ocrRunGuard';
 import { getRateLimiter } from '../utils/rateLimiter';
-import { GCP_CONFIG, GEMINI_CONFIG, isThreePointFiveModel, type OcrProvider } from '../utils/config';
+import {
+  GCP_CONFIG,
+  GEMINI_CONFIG,
+  isThreePointFiveModel,
+  SARASHINA_SUMMARY_CONFIG,
+  type OcrProvider,
+  type SummaryProviderSetting,
+} from '../utils/config';
 import { ocrWithPaddle } from './paddleOcrClient';
+import { decideOcrCompletionSummaryState } from './summaryRunGuard';
+import { buildOcrCompletionSummaryStateFields, buildOcrCompletionSummaryStateFieldsForNewDoc } from './summaryRunStore';
 import {
   extractDocumentTypeEnhanced,
   extractCustomerCandidates,
@@ -591,6 +600,11 @@ export async function processDocument(
         thinkingTokens: totalThinkingTokens,
         pagesProcessed: totalPages,
       },
+      // ADR-0027 PR4: L1のみ渡す(L2はここでは意図的に読まない、summaryRunGuard.tsの
+      // decideOcrCompletionSummaryStateのdocコメント参照)。ocrResultLengthは
+      // savedOcrResult(オフロード時は'')ではなく元のocrResult.lengthを渡す。
+      summaryProviderL1: SARASHINA_SUMMARY_CONFIG.provider,
+      ocrResultLength: ocrResult.length,
     });
   } catch (err) {
     // Issue #625: 最終transaction失敗時(supersede/ドキュメント削除/その他エラー)、
@@ -692,6 +706,17 @@ export async function applyOcrCompletionTransaction(input: {
     thinkingTokens: number;
     pagesProcessed: number;
   };
+  /**
+   * OCR完了時点のL1(`SUMMARY_PROVIDER`環境変数)値(ADR-0027 PR4)。'none'の間は
+   * `summaryState`フィールド自体を書かない(バックフィル防止、主要な設計判断4)。
+   * L2(Firestoreフラグ)はここでは意図的に読まない(呼出元processOCR.tsを参照)。
+   */
+  summaryProviderL1: SummaryProviderSetting;
+  /**
+   * 要約生成対象になるかどうかの判定に使うOCR結果の文字数。`savedOcrResult`
+   * (Storageオフロード時は`''`)ではなく、常に元の`ocrResult.length`を渡すこと。
+   */
+  ocrResultLength: number;
 }): Promise<void> {
   const {
     db,
@@ -708,7 +733,12 @@ export async function applyOcrCompletionTransaction(input: {
     faxDuplicationEnabled,
     multiCustomerDetectionEnabled,
     tokenCounts,
+    summaryProviderL1,
+    ocrResultLength,
   } = input;
+
+  // L1+文字数のみに依存する純粋な判定のため、transaction再試行をまたいで1回だけ計算すればよい。
+  const summaryStateDecision = decideOcrCompletionSummaryState(summaryProviderL1, ocrResultLength);
 
   await withBackoffRetry(
     () =>
@@ -839,6 +869,7 @@ export async function applyOcrCompletionTransaction(input: {
               summary: admin.firestore.FieldValue.delete(),
               summaryTruncated: admin.firestore.FieldValue.delete(),
               summaryOriginalLength: admin.firestore.FieldValue.delete(),
+              ...buildOcrCompletionSummaryStateFields(summaryStateDecision, freshData),
               ocrExcerpt,
               status: 'processed',
               updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -894,6 +925,7 @@ export async function applyOcrCompletionTransaction(input: {
                 targetPageNumber: freshData.targetPageNumber,
                 ...(freshData.sourceType !== undefined ? { sourceType: freshData.sourceType } : {}),
                 ...(freshData.messageId !== undefined ? { messageId: freshData.messageId } : {}),
+                ...buildOcrCompletionSummaryStateFieldsForNewDoc(summaryStateDecision),
                 ocrExcerpt,
                 status: 'processed',
                 processedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -930,6 +962,7 @@ export async function applyOcrCompletionTransaction(input: {
             summary: admin.firestore.FieldValue.delete(),
             summaryTruncated: admin.firestore.FieldValue.delete(),
             summaryOriginalLength: admin.firestore.FieldValue.delete(),
+            ...buildOcrCompletionSummaryStateFields(summaryStateDecision, freshData),
             ocrExcerpt,
             status: 'processed',
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),

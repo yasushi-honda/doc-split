@@ -43,6 +43,8 @@ export { getOcrText } from './ocr/getOcrText';
 
 // AI要約再生成（Callable Function）
 export { regenerateSummary } from './ocr/regenerateSummary';
+// AI要約バッチ処理（定期実行、ADR-0027 PR4。SUMMARY_PROVIDER既定'none'のためdead code相当）
+export { generateSummaryBatch } from './ocr/generateSummaryBatch';
 
 // PDF編集操作（Callable Functions）
 export {

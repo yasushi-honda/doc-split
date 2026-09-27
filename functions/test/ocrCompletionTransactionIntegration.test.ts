@@ -184,6 +184,9 @@ describe('applyOcrCompletionTransaction (複数顧客FAX複製機能 AC-b/AC-c)'
       faxDuplicationEnabled: true,
       multiCustomerDetectionEnabled: false,
       tokenCounts: { inputTokens: 10, outputTokens: 5, thinkingTokens: 0, pagesProcessed: 1 },
+      // ADR-0027 PR4: 本ファイルの検証対象(FAX複製・所有権保護)には無関係のためnone/固定長で固定
+      summaryProviderL1: 'none' as const,
+      ocrResultLength: 'raw ocr text'.length,
     });
 
     const allDocs = await db.collection('documents').get();
@@ -251,6 +254,9 @@ describe('applyOcrCompletionTransaction (複数顧客FAX複製機能 AC-b/AC-c)'
       faxDuplicationEnabled: true,
       multiCustomerDetectionEnabled: false,
       tokenCounts: { inputTokens: 10, outputTokens: 5, thinkingTokens: 0, pagesProcessed: 1 },
+      // ADR-0027 PR4: 本ファイルの検証対象(FAX複製・所有権保護)には無関係のためnone/固定長で固定
+      summaryProviderL1: 'none' as const,
+      ocrResultLength: 'raw ocr text'.length,
     });
 
     const allDocs = await db.collection('documents').get();
@@ -295,6 +301,9 @@ describe('applyOcrCompletionTransaction (複数顧客FAX複製機能 AC-b/AC-c)'
       faxDuplicationEnabled: false,
       multiCustomerDetectionEnabled: false,
       tokenCounts: { inputTokens: 10, outputTokens: 5, thinkingTokens: 0, pagesProcessed: 1 },
+      // ADR-0027 PR4: 本ファイルの検証対象(FAX複製・所有権保護)には無関係のためnone/固定長で固定
+      summaryProviderL1: 'none' as const,
+      ocrResultLength: 'raw ocr text'.length,
     });
 
     const allDocs = await db.collection('documents').get();
@@ -339,6 +348,9 @@ describe('applyOcrCompletionTransaction (複数顧客FAX複製機能 AC-b/AC-c)'
       faxDuplicationEnabled: true,
       multiCustomerDetectionEnabled: false,
       tokenCounts: { inputTokens: 10, outputTokens: 5, thinkingTokens: 0, pagesProcessed: 1 },
+      // ADR-0027 PR4: 本ファイルの検証対象(FAX複製・所有権保護)には無関係のためnone/固定長で固定
+      summaryProviderL1: 'none' as const,
+      ocrResultLength: 'raw ocr text'.length,
     });
 
     const allDocs = await db.collection('documents').get();
@@ -381,6 +393,9 @@ describe('applyOcrCompletionTransaction (複数顧客FAX複製機能 AC-b/AC-c)'
       faxDuplicationEnabled: true,
       multiCustomerDetectionEnabled: false,
       tokenCounts: { inputTokens: 10, outputTokens: 5, thinkingTokens: 0, pagesProcessed: 1 },
+      // ADR-0027 PR4: 本ファイルの検証対象(FAX複製・所有権保護)には無関係のためnone/固定長で固定
+      summaryProviderL1: 'none' as const,
+      ocrResultLength: 'raw ocr text'.length,
     });
 
     const allDocs = await db.collection('documents').get();
@@ -423,6 +438,9 @@ describe('applyOcrCompletionTransaction (複数人記載検出 PR-A、multiCusto
       faxDuplicationEnabled: false,
       multiCustomerDetectionEnabled: false,
       tokenCounts: { inputTokens: 10, outputTokens: 5, thinkingTokens: 0, pagesProcessed: 1 },
+      // ADR-0027 PR4: 本ファイルの検証対象(FAX複製・所有権保護)には無関係のためnone/固定長で固定
+      summaryProviderL1: 'none' as const,
+      ocrResultLength: 'raw ocr text'.length,
     });
 
     const updated = (await docRef.get()).data()!;
@@ -475,6 +493,9 @@ describe('applyOcrCompletionTransaction (複数人記載検出 PR-A、multiCusto
       faxDuplicationEnabled: false,
       multiCustomerDetectionEnabled: true,
       tokenCounts: { inputTokens: 10, outputTokens: 5, thinkingTokens: 0, pagesProcessed: 1 },
+      // ADR-0027 PR4: 本ファイルの検証対象(FAX複製・所有権保護)には無関係のためnone/固定長で固定
+      summaryProviderL1: 'none' as const,
+      ocrResultLength: 'raw ocr text'.length,
     });
 
     const updated = (await docRef.get()).data()!;
@@ -509,6 +530,9 @@ describe('applyOcrCompletionTransaction (複数人記載検出 PR-A、multiCusto
       faxDuplicationEnabled: false,
       multiCustomerDetectionEnabled: false,
       tokenCounts: { inputTokens: 10, outputTokens: 5, thinkingTokens: 0, pagesProcessed: 1 },
+      // ADR-0027 PR4: 本ファイルの検証対象(FAX複製・所有権保護)には無関係のためnone/固定長で固定
+      summaryProviderL1: 'none' as const,
+      ocrResultLength: 'raw ocr text'.length,
     });
 
     const updated = (await docRef.get()).data()!;
@@ -573,6 +597,9 @@ describe('applyOcrCompletionTransaction (Issue #957: runTransaction自体の一�
       faxDuplicationEnabled: false,
       multiCustomerDetectionEnabled: false,
       tokenCounts: { inputTokens: 10, outputTokens: 5, thinkingTokens: 0, pagesProcessed: 1 },
+      // ADR-0027 PR4: 本ファイルの検証対象(FAX複製・所有権保護)には無関係のためnone/固定長で固定
+      summaryProviderL1: 'none' as const,
+      ocrResultLength: 'raw ocr text'.length,
     };
   }
 
@@ -716,6 +743,9 @@ describe('applyOcrCompletionTransaction (Issue #957: runTransaction自体の一�
         faxDuplicationEnabled: true,
         multiCustomerDetectionEnabled: false,
         tokenCounts: { inputTokens: 10, outputTokens: 5, thinkingTokens: 0, pagesProcessed: 1 },
+        // ADR-0027 PR4: 本ファイルの検証対象(FAX複製・所有権保護)には無関係のためnone/固定長で固定
+        summaryProviderL1: 'none' as const,
+        ocrResultLength: 'raw ocr text'.length,
       });
       expect.fail('2回目はstatus-mismatchによりOcrRunSupersededErrorがthrowされるはず');
     } catch (error) {
@@ -746,5 +776,159 @@ describe('applyOcrCompletionTransaction (Issue #957: runTransaction自体の一�
 
     const detailSnap = await db.doc(`documents/${docId}/detail/main`).get();
     expect(detailSnap.exists, '1回目のcommit結果のdetail/mainが破壊されないこと').to.equal(true);
+  });
+});
+
+describe('applyOcrCompletionTransaction: summaryStateバックフィル防止 (ADR-0027 PR4)', () => {
+  beforeEach(async () => {
+    await cleanupCollections(db, COLLECTIONS_TO_CLEAN);
+  });
+
+  async function runSingleMemberCompletion(
+    docId: string,
+    opts: { summaryProviderL1: 'none' | 'sarashina' | 'gemini'; ocrResultLength: number; seedOverrides?: Record<string, unknown> }
+  ): Promise<void> {
+    const docRef = await seedProcessingDoc(docId, opts.seedOverrides);
+    const customerResult = twoExactCandidatesResult(true); // needsManualSelection:true → 複製なし(単一文書での検証に限定するため)
+    await applyOcrCompletionTransaction({
+      db,
+      docRef,
+      docId,
+      ownershipExpectation: OWNERSHIP,
+      extractionFields: buildExtractionFields(customerResult),
+      customerCandidates: customerResult.candidates,
+      sameNameCollisionNames: new Set(),
+      fileDateFormatted: dateResult.formattedDate ?? undefined,
+      savedOcrResult: 'raw ocr text',
+      pageResults,
+      ocrExcerpt: 'excerpt',
+      faxDuplicationEnabled: true,
+      multiCustomerDetectionEnabled: false,
+      tokenCounts: { inputTokens: 10, outputTokens: 5, thinkingTokens: 0, pagesProcessed: 1 },
+      summaryProviderL1: opts.summaryProviderL1,
+      ocrResultLength: opts.ocrResultLength,
+    });
+  }
+
+  it('L1=none かつ 過去にsummaryState系フィールドを持たないdoc → summaryStateフィールド自体を書かない', async () => {
+    const docId = 'summary-backfill-none-fresh';
+    await runSingleMemberCompletion(docId, { summaryProviderL1: 'none', ocrResultLength: 5000 });
+
+    const data = (await db.doc(`documents/${docId}`).get()).data()!;
+    expect(data).to.not.have.property('summaryState');
+    expect(data).to.not.have.property('summaryRunId');
+    expect(data).to.not.have.property('summaryStateUpdatedAt');
+    expect(data).to.not.have.property('summaryError');
+    expect(data).to.not.have.property('summaryErrorKind');
+    expect(data).to.not.have.property('summaryProvider');
+    expect(data).to.not.have.property('summaryAttemptCount');
+  });
+
+  it('L1=none かつ 過去にL1が有効だった時期のsummaryState系フィールドが残存するdoc → 全て削除される(古いL1設定下の状態が残存し続けることを防ぐ)', async () => {
+    const docId = 'summary-backfill-none-stale-cleanup';
+    await runSingleMemberCompletion(docId, {
+      summaryProviderL1: 'none',
+      ocrResultLength: 5000,
+      seedOverrides: {
+        summaryState: 'error',
+        summaryRunId: 'stale-run-id',
+        summaryStateUpdatedAt: admin.firestore.Timestamp.now(),
+        summaryError: 'old error',
+        summaryErrorKind: 'unknown',
+        summaryProvider: 'sarashina',
+        summaryAttemptCount: 3,
+      },
+    });
+
+    const data = (await db.doc(`documents/${docId}`).get()).data()!;
+    expect(data).to.not.have.property('summaryState');
+    expect(data).to.not.have.property('summaryRunId');
+    expect(data).to.not.have.property('summaryStateUpdatedAt');
+    expect(data).to.not.have.property('summaryError');
+    expect(data).to.not.have.property('summaryErrorKind');
+    expect(data).to.not.have.property('summaryProvider');
+    expect(data).to.not.have.property('summaryAttemptCount');
+  });
+
+  it('L1=sarashina かつ OCR結果が十分長い → summaryState:pendingを書く', async () => {
+    const docId = 'summary-backfill-sarashina-pending';
+    await runSingleMemberCompletion(docId, { summaryProviderL1: 'sarashina', ocrResultLength: 5000 });
+
+    const data = (await db.doc(`documents/${docId}`).get()).data()!;
+    expect(data.summaryState).to.equal('pending');
+    expect(data.summaryRunId).to.equal(null);
+    expect(data.summaryAttemptCount).to.equal(0);
+    expect(data.summaryStateUpdatedAt).to.not.equal(undefined);
+  });
+
+  it('L1=gemini かつ OCR結果が短い(MIN_OCR_LENGTH_FOR_SUMMARY未満) → summaryState:skippedを書く', async () => {
+    const docId = 'summary-backfill-gemini-skipped';
+    await runSingleMemberCompletion(docId, { summaryProviderL1: 'gemini', ocrResultLength: 50 });
+
+    const data = (await db.doc(`documents/${docId}`).get()).data()!;
+    expect(data.summaryState).to.equal('skipped');
+  });
+
+  it('L1=sarashina かつ FAX複製が発火する場合 → 元docと複製コピーの両方にsummaryState:pendingが書かれる(コピーはtx.setのためFieldValue.deleteを使わない別経路を通る)', async () => {
+    const docId = 'summary-backfill-fax-duplication';
+    const docRef = await seedProcessingDoc(docId);
+    const customerResult = twoExactCandidatesResult(false); // needsManualSelection:false → 複製発火
+
+    await applyOcrCompletionTransaction({
+      db,
+      docRef,
+      docId,
+      ownershipExpectation: OWNERSHIP,
+      extractionFields: buildExtractionFields(customerResult),
+      customerCandidates: customerResult.candidates,
+      sameNameCollisionNames: new Set(),
+      fileDateFormatted: dateResult.formattedDate ?? undefined,
+      savedOcrResult: 'raw ocr text',
+      pageResults,
+      ocrExcerpt: 'excerpt',
+      faxDuplicationEnabled: true,
+      multiCustomerDetectionEnabled: false,
+      tokenCounts: { inputTokens: 10, outputTokens: 5, thinkingTokens: 0, pagesProcessed: 1 },
+      summaryProviderL1: 'sarashina',
+      ocrResultLength: 5000,
+    });
+
+    const allDocs = await db.collection('documents').get();
+    expect(allDocs.size).to.equal(2);
+    for (const d of allDocs.docs) {
+      expect(d.data().summaryState, `${d.id}のsummaryStateがpendingであること`).to.equal('pending');
+      expect(d.data().summaryAttemptCount, `${d.id}のsummaryAttemptCountが0であること`).to.equal(0);
+    }
+  });
+
+  it('L1=none かつ FAX複製が発火する場合 → 元docと複製コピーの両方でsummaryStateフィールド自体を書かない', async () => {
+    const docId = 'summary-backfill-fax-duplication-none';
+    const docRef = await seedProcessingDoc(docId);
+    const customerResult = twoExactCandidatesResult(false); // needsManualSelection:false → 複製発火
+
+    await applyOcrCompletionTransaction({
+      db,
+      docRef,
+      docId,
+      ownershipExpectation: OWNERSHIP,
+      extractionFields: buildExtractionFields(customerResult),
+      customerCandidates: customerResult.candidates,
+      sameNameCollisionNames: new Set(),
+      fileDateFormatted: dateResult.formattedDate ?? undefined,
+      savedOcrResult: 'raw ocr text',
+      pageResults,
+      ocrExcerpt: 'excerpt',
+      faxDuplicationEnabled: true,
+      multiCustomerDetectionEnabled: false,
+      tokenCounts: { inputTokens: 10, outputTokens: 5, thinkingTokens: 0, pagesProcessed: 1 },
+      summaryProviderL1: 'none',
+      ocrResultLength: 5000,
+    });
+
+    const allDocs = await db.collection('documents').get();
+    expect(allDocs.size).to.equal(2);
+    for (const d of allDocs.docs) {
+      expect(d.data()).to.not.have.property('summaryState');
+    }
   });
 });

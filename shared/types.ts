@@ -54,6 +54,24 @@ export type SummaryField =
   | { text: string; truncated: false }
   | { text: string; truncated: true; originalLength: number };
 
+/**
+ * `summaryState`の値集合 (ADR-0027 PR4)。`pending`=自動生成待ち(キュー投入済み)、
+ * `processing`=claim済み(バッチまたは手動実行が処理中)、`done`=生成成功、
+ * `error`=生成失敗(手動での再試行を促す)、`skipped`=OCR結果が短すぎる等の理由で
+ * 自動生成の対象外(フィールド不在との違いは「一度評価してskippedと判定した」こと)。
+ */
+export type SummaryState = 'pending' | 'processing' | 'done' | 'error' | 'skipped';
+
+/**
+ * `summaryError`の機械可読な分類。UIの表示メッセージはこの値から選ぶ(`summaryError`
+ * 本文はログ・診断用でPIIを含めない)。`fabrication_suspected`は固有名詞捏造スキャナ
+ * (`shared/summaryFabricationScan.ts`)が検出した場合の専用値で、要約は保存しない。
+ */
+export type SummaryErrorKind = 'quota' | 'transient' | 'blocked' | 'unknown' | 'fabrication_suspected';
+
+/** 要約を実際に生成したプロバイダ(ADR-0027)。`summaryProvider`フィールドの値集合。 */
+export type SummaryProvider = 'sarashina' | 'gemini';
+
 export interface Document {
   id: string;
   processedAt: Timestamp;
@@ -250,6 +268,27 @@ export interface Document {
    * (安全側デフォルト、`driveExportScheduled.ts`参照)。型定義は`DriveExportErrorKind`参照。
    */
   driveExportErrorKind?: DriveExportErrorKind | null;
+
+  /**
+   * AI要約の非同期生成状態 (ADR-0027 PR4)。
+   * outboxパターン: (フィールド不在) → pending → processing → done/error/skipped。
+   * フィールド不在は「この文書に対して自動要約を試みたことがない」ことを意味し、
+   * `SUMMARY_PROVIDER=none`環境ではOCR完了時にこのフィールド自体を書かない
+   * (バックフィル防止、ADR-0027「主要な設計判断4」参照)。
+   * FE から直接書き込まない（Admin SDK専有。firestore.rules の documents update
+   * 許可リストを汚染しない設計。生成トリガーは既存の Callable `regenerateSummary`)。
+   */
+  summaryState?: SummaryState;
+  /** クレーム時に発行される所有権トークン(randomUUID)。並行実行(バッチ/手動)時の書戻し保護に使用。 */
+  summaryRunId?: string | null;
+  summaryStateUpdatedAt?: Timestamp | null;
+  /** エラー一覧表示用の短い診断文字列。PIIは含めない(`summaryErrorKind`で分類し、UIメッセージはkind側から選ぶ)。 */
+  summaryError?: string | null;
+  summaryErrorKind?: SummaryErrorKind | null;
+  /** 直近の要約生成に使用したプロバイダ。`done`時のみ有効値を持つ。 */
+  summaryProvider?: SummaryProvider;
+  /** 生成試行回数。stuck rescueの上限判定に使用。 */
+  summaryAttemptCount?: number;
 }
 
 /**

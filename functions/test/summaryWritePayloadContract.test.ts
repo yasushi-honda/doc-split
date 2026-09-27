@@ -1,7 +1,7 @@
 /**
  * summary 書込経路 caller-side 契約テスト (Issue #255 + #259)
  *
- * 目的: regenerateSummary の Firestore 書込呼出で 3 要素を同時保持することを
+ * 目的: 要約の Firestore 書込呼出で 3 要素を同時保持することを
  * lock-in する: (1) `summary: buildSummaryFields(...)` (新 discriminated union, #215),
  * (2) `summaryTruncated: FieldValue.delete()` (旧フラット削除), (3) `summaryOriginalLength:
  * FieldValue.delete()`。#259: builder bypass (object literal 直書込) / .set() / .create() /
@@ -9,6 +9,10 @@
  * Issue #548-B1: ocrProcessor.ts は自動要約生成を行わないため対象外 (OCR完了のたびに
  * summary/summaryTruncated/summaryOriginalLength を FieldValue.delete() で無効化するのみで、
  * buildSummaryFields(...) は呼ばない。この無効化自体は本契約の検知パターンにマッチしない)。
+ * ADR-0027 PR4: 書込みサイトを `regenerateSummary.ts` から `summaryRunStore.ts`
+ * (`commitSummaryResult`、claim/所有権保護付き)へ一元化した。手動再生成
+ * (`regenerateSummary.ts`)とバッチ処理(`generateSummaryBatch.ts`)の両方がこの1関数を
+ * 経由するため、書込みサイトが1箇所のままdouble-write経路の増殖を防ぐ(#178教訓の直接適用)。
  *
  * 背景 (#178 教訓): 派生フィールドの一括書込が壊れると FE 表示が崩れる。旧フィールド delete
  * 忘れで Firestore に残留し後方互換読込に無限依存するリスクを防ぐ。
@@ -55,9 +59,9 @@ const FIRESTORE_WRITE_CALL = /\.(?:update|set|create)\s*\(/;
 
 // #178 教訓: 派生フィールド 3 要素は同一 update() ブロック内で書き込む必要がある。
 // 本契約に含める caller ファイル。新規 caller 追加時は手動追記すること。
-// Issue #548-B1: ocrProcessor.ts の自動要約生成は削除され、summary 書込は
-// regenerateSummary (手動トリガー) のみに一本化された。
-const WRITE_PAYLOAD_CALLERS = ['src/ocr/regenerateSummary.ts'] as const;
+// ADR-0027 PR4: 書込み実体を summaryRunStore.ts の commitSummaryResult() へ一元化した
+// (regenerateSummary.ts/generateSummaryBatch.ts はいずれもこの関数経由でのみ書き込む)。
+const WRITE_PAYLOAD_CALLERS = ['src/ocr/summaryRunStore.ts'] as const;
 
 // review-pr 指摘対応 (pr-test-analyzer Critical + code-reviewer Suggestion, 収斂): ocrProcessor.ts は
 // buildSummaryFields(...) を呼ばないため WRITE_PAYLOAD_CALLERS 対象外だが、OCR完了のたびに
@@ -69,8 +73,8 @@ const SUMMARY_INVALIDATE_CALLERS = ['src/ocr/ocrProcessor.ts'] as const;
 const SUMMARY_INVALIDATE_DELETE =
   /summary:\s*(?:admin\.firestore\.)?FieldValue\.delete\s*\(\s*\)/;
 
-// 同一 update() ブロック近接性の検証ウィンドウ。regenerateSummary の update は ~4 行と
-// 短いが、将来 caller が増えた場合の余裕を持たせ 30 行のまま維持する。
+// 同一 update() ブロック近接性の検証ウィンドウ。commitSummaryResult() 内の update は
+// ~10 行程度と短いが、将来 caller が増えた場合の余裕を持たせ 30 行のまま維持する。
 const ADJACENCY_WINDOW_LINES = 30;
 
 /**
