@@ -17,7 +17,14 @@ import { generateSummaryForProvider, type SummaryPassProvider } from './summaryP
 import { loadOcrTextForSummary } from './summaryOcrTextLoader';
 import { MIN_OCR_LENGTH_FOR_SUMMARY, MAX_SUMMARY_INPUT_LENGTH } from './summaryPromptBuilder';
 import { scanSummaryForFabrication } from '../../../shared/summaryFabricationScan';
-import { claimSummaryRun, commitSummaryResult, recordSummaryFailure, rescueStuckSummaryDocs } from './summaryRunStore';
+import {
+  claimSummaryRun,
+  commitSummaryResult,
+  recordSummaryFailure,
+  rescueStuckSummaryDocs,
+  type SummaryRunClaim,
+} from './summaryRunStore';
+import type { SummaryErrorKind, SummaryState } from '../../../shared/types';
 import {
   classifySummaryFailure,
   SummarySupersededError,
@@ -46,6 +53,33 @@ function emptyStats(): SummaryBatchStats {
 
 function incrementErrorKind(stats: SummaryBatchStats, kind: string): void {
   stats.errorByKind[kind] = (stats.errorByKind[kind] ?? 0) + 1;
+}
+
+/**
+ * `recordSummaryFailure`をsupersede-safeに呼ぶ(codex review P2指摘反映)。
+ *
+ * このヘルパーはエラーハンドラ(catchブロック)内から呼ばれる。手動再生成が
+ * 「providerが失敗した後・recordSummaryFailure実行前」の間隙でこのclaimをpreemptすると、
+ * `recordSummaryFailure`自身が`SummarySupersededError`をthrowしうる。これを素通りさせると
+ * バッチ全体(runSummaryBatch呼出元)が例外で落ち、残りのキュー済み文書がこのtickで
+ * 一切処理されなくなる。正常系(`commitSummaryResult`)と同じくsupersedeを吸収する。
+ */
+async function recordFailureOrCountSuperseded(
+  firestore: admin.firestore.Firestore,
+  docRef: FirebaseFirestore.DocumentReference,
+  claim: SummaryRunClaim,
+  failure: { state: Extract<SummaryState, 'pending' | 'error' | 'skipped'>; kind: SummaryErrorKind | null; message: string },
+  stats: SummaryBatchStats
+): Promise<void> {
+  try {
+    await recordSummaryFailure(firestore, docRef, claim, failure);
+  } catch (err) {
+    if (err instanceof SummarySupersededError) {
+      stats.superseded++;
+      return;
+    }
+    throw err;
+  }
 }
 
 export interface RunSummaryBatchDeps {
@@ -126,11 +160,20 @@ export async function runSummaryBatch(deps: RunSummaryBatchDeps): Promise<Summar
     const docRef = firestore.doc(`documents/${docId}`);
 
     if (allowlist !== null && !allowlist.includes(docId)) {
-      await docRef.update({
-        summaryState: 'skipped',
-        summaryStateUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      // codex review P2指摘反映: 参照のみ取得したスナップショットは既に古い可能性がある。
+      // 無条件updateだと、この間に手動再生成がclaimした文書(summaryState:'processing')を
+      // 'skipped'へ上書きしてしまい、手動側のcommit時の所有権チェック(state-mismatch)で
+      // 正当な結果が破棄される。トランザクション内で'pending'のままであることを再確認する。
+      const stillPending = await firestore.runTransaction(async (tx) => {
+        const fresh = await tx.get(docRef);
+        if (!fresh.exists || fresh.data()?.summaryState !== 'pending') return false;
+        tx.update(docRef, {
+          summaryState: 'skipped',
+          summaryStateUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        return true;
       });
-      stats.skipped++;
+      if (stillPending) stats.skipped++;
       continue;
     }
 
@@ -202,12 +245,18 @@ export async function runSummaryBatch(deps: RunSummaryBatchDeps): Promise<Summar
           stats.deferred = docs.length - i - 1;
           return stats;
         case 'abort-batch-config':
-          await recordSummaryFailure(firestore, docRef, claim, { state: 'pending', kind: null, message });
+          await recordFailureOrCountSuperseded(firestore, docRef, claim, { state: 'pending', kind: null, message }, stats);
           stats.deferred = docs.length - i - 1;
           return stats;
         case 'retry-or-error': {
           const nextState = claim.attemptCount >= MAX_SUMMARY_ATTEMPTS ? 'error' : 'pending';
-          await recordSummaryFailure(firestore, docRef, claim, { state: nextState, kind: outcome.kind, message });
+          await recordFailureOrCountSuperseded(
+            firestore,
+            docRef,
+            claim,
+            { state: nextState, kind: outcome.kind, message },
+            stats
+          );
           incrementErrorKind(stats, outcome.kind);
           if (outcome.stopBatch) {
             stats.deferred = docs.length - i - 1;
@@ -216,7 +265,7 @@ export async function runSummaryBatch(deps: RunSummaryBatchDeps): Promise<Summar
           break;
         }
         case 'error':
-          await recordSummaryFailure(firestore, docRef, claim, { state: 'error', kind: outcome.kind, message });
+          await recordFailureOrCountSuperseded(firestore, docRef, claim, { state: 'error', kind: outcome.kind, message }, stats);
           incrementErrorKind(stats, outcome.kind);
           break;
       }

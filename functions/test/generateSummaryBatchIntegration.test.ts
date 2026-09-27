@@ -243,6 +243,64 @@ describe('runSummaryBatch (ADR-0027 PR4)', () => {
     expect((await getDoc('doc-quota-exhausted')).summaryState).to.equal('error');
   });
 
+  it('allowlist対象外のskip書込みはトランザクション化されており、処理中に手動claimされた文書を上書きしない(codex review P2指摘の回帰防止)', async () => {
+    await seedDocument('doc-race-allowed', { updatedAt: admin.firestore.Timestamp.fromMillis(1000) });
+    await seedDocument('doc-race-not-allowed', { updatedAt: admin.firestore.Timestamp.fromMillis(2000) });
+    const raceDocRef = db.doc('documents/doc-race-not-allowed');
+
+    const stats = await runSummaryBatch({
+      firestore: db,
+      bucket: FAKE_BUCKET,
+      l1Provider: 'sarashina',
+      getGate: async () => ({ enabled: true, allowlist: ['doc-race-allowed'] }),
+      summarize: async () => {
+        // 1件目(doc-race-allowed)の生成中に、doc-race-not-allowedへの手動再生成が割り込み、
+        // 既にprocessingへ遷移したことを模す(allowlist対象外なのでバッチ自身は生成を試みない)。
+        await claimSummaryRun(db, raceDocRef, 'manual');
+        return fakeSummarize()();
+      },
+    });
+
+    expect(stats.done).to.equal(1);
+    expect(stats.skipped, 'doc-race-not-allowedは既にprocessingのためskip書込みは適用されないはず').to.equal(0);
+    const raceDocData = await getDoc('doc-race-not-allowed');
+    expect(
+      raceDocData.summaryState,
+      '手動claimの結果(processing)が保持されること(誤ってskippedへ上書きされない)'
+    ).to.equal('processing');
+  });
+
+  it('recordSummaryFailureの所有権喪失(手動claimによるpreempt)を吸収し、バッチ全体を止めずに残りの文書を処理する(codex review P2指摘の回帰防止)', async () => {
+    await seedDocument('doc-preempt-during-failure', { updatedAt: admin.firestore.Timestamp.fromMillis(1000) });
+    await seedDocument('doc-after-preempted', { updatedAt: admin.firestore.Timestamp.fromMillis(2000) });
+    const preemptedDocRef = db.doc('documents/doc-preempt-during-failure');
+    let callCount = 0;
+
+    const stats = await runSummaryBatch({
+      firestore: db,
+      bucket: FAKE_BUCKET,
+      l1Provider: 'sarashina',
+      getGate: ENABLED_GATE,
+      summarize: async () => {
+        callCount++;
+        if (callCount === 1) {
+          // providerがtransient失敗する直前に、手動再生成がこのclaimをpreemptしたことを模す。
+          // recordSummaryFailure自身がSummarySupersededErrorをthrowするケースを再現する。
+          await claimSummaryRun(db, preemptedDocRef, 'manual');
+          throw Object.assign(new Error('429'), { code: 429 });
+        }
+        return fakeSummarize()();
+      },
+    });
+
+    expect(stats.superseded, '1件目はpreemptによりsupersededとして計上されること').to.equal(1);
+    expect(stats.done, '2件目は通常通り処理され、バッチ全体が例外で止まらないこと').to.equal(1);
+    const preemptedData = await getDoc('doc-preempt-during-failure');
+    // 手動claimの結果(processing)が保持されること。バッチ側の失敗記録で上書きされない。
+    expect(preemptedData.summaryState).to.equal('processing');
+    expect((await getDoc('doc-after-preempted')).summaryState).to.equal('done');
+  });
+
   describe('claim/所有権保護', () => {
     it('claim冪等性: 同一runIdでの再claimは同じ試行として扱われる(ambiguous commit回復)', async () => {
       await seedDocument('doc-idempotent');
