@@ -51,7 +51,17 @@ describe('handleProcessingError safeLogError contract (#276)', () => {
     source,
     'export async function handleProcessingError('
   );
-  const safeLogErrorArgs = extractParenBlock(functionBody, SAFE_LOG_ERROR_CALL);
+  // Issue #962: catch(updateErr)ブロック内に専用のsafeLogError呼出を追加したため、
+  // SAFE_LOG_ERROR_CALL(非global正規表現)の素朴な最初のmatchはupdateErr側を拾ってしまう。
+  // updateErrブロックをbrace-nestingで先に切り出し、その「後ろ」の残りソースから
+  // 末尾(元のerror用)のsafeLogError呼出を抽出することで、両呼出を別々に検証する。
+  const updateErrBlock = extractBraceBlock(functionBody, /catch\s*\(updateErr\)/);
+  const updateErrSafeLogErrorArgs = extractParenBlock(updateErrBlock, SAFE_LOG_ERROR_CALL);
+  const afterUpdateErrBlock =
+    functionBody !== null && updateErrBlock !== null
+      ? functionBody.slice(functionBody.indexOf(updateErrBlock) + updateErrBlock.length)
+      : null;
+  const safeLogErrorArgs = extractParenBlock(afterUpdateErrBlock, SAFE_LOG_ERROR_CALL);
 
   it('handleProcessingError 関数本体が抽出できる', () => {
     expect(
@@ -120,6 +130,67 @@ describe('handleProcessingError safeLogError contract (#276)', () => {
       'safeLogError 引数に functionName が見つからない。' +
         'どの呼出元で発生したエラーか特定できなくなる。'
     );
+  });
+
+  // Issue #962: catch(updateErr)のfallback節(状態更新自体のリトライ枯渇)はconsole.errorのみで
+  // Sentry等のアラート経路(safeLogError)に乗っていなかった。専用のsafeLogError呼出を要求する。
+  describe('catch(updateErr) 内の safeLogError 呼出 (Issue #962)', () => {
+    it('catch(updateErr) ブロックが抽出できる', () => {
+      expect(
+        updateErrBlock,
+        '`catch (updateErr)` ブロックが見つからない。' +
+          '状態更新リトライのfallback構造が変更された場合は本契約の見直しが必要。'
+      ).to.not.be.null;
+    });
+
+    it('catch(updateErr) 内に safeLogError 呼出がある', () => {
+      expect(updateErrBlock, 'updateErrBlock 抽出失敗 (上位 it を確認)').to.not.be.null;
+      expect(SAFE_LOG_ERROR_CALL.test(updateErrBlock!)).to.equal(
+        true,
+        'catch(updateErr) 内で safeLogError 呼出が見つからない。' +
+          '状態更新自体のリトライ枯渇(元のerrorより深刻な事象)がSentyへ届かなくなる (Issue #962)。'
+      );
+    });
+
+    it('updateErr用 safeLogError 引数ブロックが抽出できる', () => {
+      expect(
+        updateErrSafeLogErrorArgs,
+        'catch(updateErr) 内の safeLogError(...) 引数ブロックが抽出できない。'
+      ).to.not.be.null;
+    });
+
+    it('updateErr用 safeLogError 引数に updateErr (error) が渡されている', () => {
+      const UPDATE_ERR_PARAM = /\bupdateErr\b/;
+      expect(updateErrSafeLogErrorArgs, '抽出失敗 (上位 it を確認)').to.not.be.null;
+      expect(UPDATE_ERR_PARAM.test(updateErrSafeLogErrorArgs!)).to.equal(
+        true,
+        'safeLogError 引数に updateErr が渡されていない。stack trace が失われる。'
+      );
+    });
+
+    it('updateErr用 safeLogError 引数に source: \'ocr\' が含まれる', () => {
+      const SOURCE_OCR = /source:\s*['"]ocr['"]/;
+      expect(updateErrSafeLogErrorArgs, '抽出失敗').to.not.be.null;
+      expect(SOURCE_OCR.test(updateErrSafeLogErrorArgs!)).to.equal(true);
+    });
+
+    it('updateErr用 safeLogError 引数に documentId が渡されている', () => {
+      const DOCUMENT_ID_PARAM = /\bdocumentId\s*[,:}]/;
+      expect(updateErrSafeLogErrorArgs, '抽出失敗').to.not.be.null;
+      expect(DOCUMENT_ID_PARAM.test(updateErrSafeLogErrorArgs!)).to.equal(true);
+    });
+
+    it('updateErr用 safeLogError 引数の functionName が、元のerror用呼出と区別できるタグを持つ', () => {
+      // 同一functionNameだとSentry/errors collection上で「状態更新自体の失敗」と
+      // 「元のOCR処理エラー」が区別できなくなる (Issue #962 の課題2そのもの)。
+      const FUNCTION_NAME_PARAM = /\bfunctionName\s*[,:}]/;
+      expect(updateErrSafeLogErrorArgs, '抽出失敗').to.not.be.null;
+      expect(FUNCTION_NAME_PARAM.test(updateErrSafeLogErrorArgs!)).to.equal(true);
+      expect(updateErrSafeLogErrorArgs!).to.match(
+        /functionName:\s*`?\$\{functionName\}[^,}]*updateErr/i,
+        'functionName が元の呼出元名をそのまま流用しており、updateErr発生を示すタグが付与されていない。'
+      );
+    });
   });
 
   // #312 PR-2 B2 方針 (pr-test-analyzer S1): signature prefix anchor の挙動を lock-in する目的で

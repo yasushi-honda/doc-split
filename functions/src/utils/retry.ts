@@ -319,7 +319,16 @@ export async function withBackoffRetry<T>(
       if (i === attempts - 1 || !shouldRetry(error)) {
         throw error;
       }
-      await new Promise((resolve) => setTimeout(resolve, baseDelayMs * 2 ** i));
+      const delayMs = baseDelayMs * 2 ** i;
+      // Issue #962: 以前はcatch節が完全に無言でリトライしており、gRPC transientエラー
+      // (ABORTED/UNAVAILABLE等)がリトライで復旧した場合にログへ一切痕跡が残らなかった。
+      // 全attempts枯渇後のcaller側console.error/safeLogErrorに到達するまで本番での
+      // 頻発が観測できなかったため、最低限の attempt番号+元エラーメッセージを出力する。
+      const message = error instanceof Error ? error.message : String(error);
+      console.log(
+        `[withBackoffRetry] attempt ${i + 1}/${attempts} failed, retrying in ${delayMs}ms: ${message}`
+      );
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
   }
   throw lastError;
