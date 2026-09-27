@@ -95,6 +95,22 @@ describe('CustomerSubGroup - 同姓同名バッジ', () => {
     expect(screen.queryByText('同姓同名')).toBeNull()
   })
 
+  // Issue #1044(PR #1041のpr-test-analyzer指摘): Issue #1034で追加された理由メッセージが
+  // 未テストだった。「選択待ち」バッジのtitle属性(ホバー時の理由表示)に含まれることを検証する。
+  it('customerConfirmed:false + 同名衝突なしは「選択待ち」バッジのtitleに顧客未確定の理由メッセージを含む', () => {
+    const doc = makeDocument({ customerConfirmed: false })
+    render(
+      <CustomerSubGroup
+        documents={[doc]}
+        identityLookup={makeLookup([])}
+      />
+    )
+    expandToDocumentRow('松本 実', 'ケアプラン')
+    expect(screen.getByText('選択待ち').getAttribute('title')).toBe(
+      '顧客が未確定です。書類詳細で候補を選択するか、確認済みにすると表示中の候補で確定します'
+    )
+  })
+
   it('前後空白付きcustomerNameでもtrim後に衝突集合と一致すれば「同姓同名」バッジを表示する(trim整合)', () => {
     const doc = makeDocument({ customerName: ' 松本 実 ' })
     render(

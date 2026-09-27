@@ -1,7 +1,7 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
-import { doc, writeBatch, serverTimestamp, collection, runTransaction } from 'firebase/firestore'
+import { writeBatch } from 'firebase/firestore'
 import {
   Filter,
   FileText,
@@ -75,8 +75,9 @@ import { isDocumentHiddenByContractEnd } from '@/lib/contractEnded'
 import { DateRangeFilter, type DateRange } from '@/components/DateRangeFilter'
 import { isCustomerConfirmed } from '@/hooks/useProcessingHistory'
 import { resolveCustomerUnconfirmedReason } from '@shared/customerIdentity'
-import { planConfirmOnVerify, buildConfirmOnVerifyUpdate } from '@shared/confirmOnVerify'
 import { decideBulkVerifyToast, decidePostWriteSyncFailureToast } from '@/lib/bulkVerifyToast'
+import { summarizeBulkVerifyOutcomes, runWithConcurrency, type BulkVerifyDocOutcome } from '@/lib/bulkVerifyOutcome'
+import { executeBulkVerifyDocumentTransaction } from '@/lib/bulkVerifyTransaction'
 import { DocumentDetailModal } from '@/components/DocumentDetailModal'
 import { MultiCustomerBadge } from '@/components/MultiCustomerBadge'
 import { AliasLearningHistoryModal } from '@/components/AliasLearningHistoryModal'
@@ -126,23 +127,6 @@ function SortableHeader({
       </div>
     </th>
   )
-}
-
-/**
- * 並行数を制限しつつ配列の各要素を非同期処理する(Issue #1034 一括確認済み用)。
- * `items.length`件のFirestoreトランザクションを無制限に同時発行しないための簡易プール。
- */
-async function runWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
-  const results: R[] = new Array(items.length)
-  let nextIndex = 0
-  async function worker() {
-    while (nextIndex < items.length) {
-      const current = nextIndex++
-      results[current] = await fn(items[current] as T)
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
-  return results
 }
 
 // 一括操作モードの型
@@ -696,15 +680,7 @@ export function DocumentsPage() {
     // 誤った全体失敗トーストが出ていた(書込みは成功しているため実際には失敗していない)。
     let ids: string[]
     let uid: string
-    let outcomes: Array<{
-      docId: string
-      status: 'ok' | 'error'
-      decisions: ReturnType<typeof planConfirmOnVerify> | null
-      // codex review 3巡目指摘: 成功した書類がトランザクション内で読み込んだ最新状態の
-      // 時点で既に両方確定済みだったか。identityLookupFailed時の警告要否判定に使う
-      // (成功でも実際には確定処理が発生しなかったerrorステータス扱いの書類はfalse=無視)。
-      alreadyFullyConfirmed: boolean
-    }>
+    let outcomes: BulkVerifyDocOutcome[]
     let identityLookupFailed = false
     try {
       ids = Array.from(selectedIds)
@@ -740,65 +716,15 @@ export function DocumentsPage() {
         return null
       })
 
-      outcomes = await runWithConcurrency(ids, 20, async (docId) => {
-        const docRef = doc(db, 'documents', docId)
-        try {
-          const { decisions, alreadyFullyConfirmed } = await runTransaction(db, async (tx) => {
-            const freshSnap = await tx.get(docRef)
-            if (!freshSnap.exists()) {
-              throw new Error(`Document not found: ${docId}`)
-            }
-            const freshDoc = freshSnap.data() as Document
-
-            const txDecisions = freshIdentityLookup
-              ? planConfirmOnVerify(freshDoc, {
-                  customerMasterName: freshDoc.customerId
-                    ? (freshIdentityLookup.customerMasterNameById.get(freshDoc.customerId) ?? null)
-                    : null,
-                  sameNameCollisionNames: freshIdentityLookup.sameNameCollisionNames,
-                })
-              : null
-            const { update: confirmFields, logs } = txDecisions
-              ? buildConfirmOnVerifyUpdate(txDecisions, freshDoc, { uid, now: serverTimestamp() })
-              : { update: {}, logs: [] }
-
-            // 既存のuseDocumentEdit.ts(L396)と同じ規約: 動的に組み立てたRecord<string, unknown>を
-            // Firestoreの厳密なUpdateData型へ渡すためのキャスト。
-            tx.update(docRef, {
-              verified: true,
-              verifiedBy: uid,
-              verifiedAt: serverTimestamp(),
-              ...confirmFields,
-            } as any)
-
-            const editLogsRef = collection(db, 'editLogs')
-            for (const change of logs) {
-              tx.set(doc(editLogsRef), {
-                documentId: docId,
-                fieldName: change.field,
-                oldValue: change.oldValue,
-                newValue: change.newValue,
-                editedBy: uid,
-                editedByEmail: email,
-                editedAt: serverTimestamp(),
-              })
-            }
-
-            return {
-              decisions: txDecisions,
-              // codex review 3巡目指摘: identityLookupFailedによる警告は、成功した書類の
-              // うち少なくとも1件が実際に確定できたはず(=両方確定済みではなかった)場合のみ
-              // 出す。単体トグルの「既に両方確定済みなら警告不要」と同じ判定を、このtx内で
-              // 再読込した最新状態(freshDoc)を基準に行う。
-              alreadyFullyConfirmed: freshDoc.customerConfirmed === true && freshDoc.officeConfirmed === true,
-            }
-          })
-          return { docId, status: 'ok' as const, decisions, alreadyFullyConfirmed }
-        } catch (err) {
-          console.error(`Bulk verify failed for document ${docId}:`, err)
-          return { docId, status: 'error' as const, decisions: null, alreadyFullyConfirmed: false }
-        }
-      })
+      // 一括確認済みには2つのMUST(#178教訓):
+      // - 派生フィールド追加時は書き込みパスとFEマッピングの両方
+      // - 戻り値の型/構造を変更したら全呼び出し元の整合性を確認
+      // ここでは1文書分のFirestoreトランザクション実行をbulkVerifyTransaction.tsへ抽出済み
+      // (Issue #1044、evaluator/pr-test-analyzer指摘対応: fail-closedの発生源そのものを
+      // Firestoreモックで単体テストできるようにするため)。
+      outcomes = await runWithConcurrency(ids, 20, (docId) =>
+        executeBulkVerifyDocumentTransaction(db, docId, { freshIdentityLookup, uid, email })
+      )
     } catch (error) {
       // このcatchに到達するのはrunWithConcurrency自体(個別docの失敗は上のper-doc
       // try/catchで既にstatus:'error'として吸収済み)が例外を投げた場合のみで、
@@ -813,19 +739,21 @@ export function DocumentsPage() {
     // 既に完了している。以降はキャッシュ補正・トースト表示という表示上の後始末のため、
     // 失敗しても「一括確認に失敗しました」という誤った全体失敗にしない(書込み自体は成功済み)。
     //
-    // succeeded/failedはoutcomes(Phase-Aで既に確定済みの配列)へのpureなfilter()のため
-    // 例外を投げない。tryの外(catchからも参照可能な位置)で計算しておくことで、この直後の
+    // summarizeBulkVerifyOutcomes(Issue #1044でbulkVerifyOutcome.tsへ抽出)は
+    // outcomes(Phase-Aで既に確定済みの配列)へのpureな集計のため例外を投げない。
+    // tryの外(catchからも参照可能な位置)で計算しておくことで、この直後の
     // キャッシュ補正処理自体が例外を投げても、catch側でPhase-Aの実際の成否(一部書込み失敗が
     // あったか)を踏まえたメッセージを出せるようにする(pr-review-toolkit:silent-failure-hunter
     // レビュー指摘CRITICAL-2: 以前はcatchが固定の「更新しました」文言のみを返し、実際には
     // 一部書込み失敗があった場合でも全体成功したかのように見えていた)。
-    const succeeded = outcomes.filter((o) => o.status === 'ok')
-    const failed = outcomes.filter((o) => o.status === 'error')
-    // codex review 3巡目指摘: identityLookupFailedが真でも、成功した書類が全て既に
-    // 両方確定済み(alreadyFullyConfirmed)なら実際には確定できたはずのものは何もなく、
-    // 警告は不要(単体トグルの「既に両方確定済みなら警告不要」と同じ判定に揃える)。
-    const identityLookupWarningNeeded =
-      identityLookupFailed && succeeded.some((o) => !o.alreadyFullyConfirmed)
+    const {
+      succeeded,
+      failed,
+      confirmedCount,
+      identityLookupWarningNeeded,
+      selectionAfterSuccess,
+      selectionAfterPostWriteFailure,
+    } = summarizeBulkVerifyOutcomes(outcomes, identityLookupFailed)
 
     try {
       const confirmedAtApprox = Timestamp.now()
@@ -857,10 +785,6 @@ export function DocumentsPage() {
       // 保持し続ける。他の一括操作(一括再処理・一括削除)と同じくinvalidateGroupQueriesを呼ぶ。
       invalidateGroupQueries(queryClient)
 
-      const confirmedCount = succeeded.filter(
-        (o) => o.decisions?.customer.action === 'confirm' || o.decisions?.office.action === 'confirm'
-      ).length
-
       const toastOutcome = decideBulkVerifyToast({
         totalCount: ids.length,
         succeededCount: succeeded.length,
@@ -869,16 +793,11 @@ export function DocumentsPage() {
         identityLookupFailed: identityLookupWarningNeeded,
       })
 
-      if (identityLookupWarningNeeded) {
-        // codex review 4巡目・5巡目指摘の統合対応: 確定処理がidentityLookup取得失敗で
-        // スキップされ、警告が「再実行してください」と促す。書込みの成否(failed.length)に
-        // 関わらず、元の選択を丸ごと維持する。部分失敗時に成功した書類だけ選択解除すると、
-        // それらも確認済みになり「未確認のみ表示」フィルタで一覧から消えるため、再実行の
-        // ための再選択ができなくなる(failed.length>0のケースをfailedIdsのみへ絞る旧分岐と
-        // 統合し、identityLookupWarningNeededを常に優先する)。選択(selectionMode含む)は
-        // 維持し、確認ダイアログのみ閉じる。
+      // selectionAfterSuccessの各方針の理由はsummarizeBulkVerifyOutcomes(bulkVerifyOutcome.ts)
+      // のコメント参照。'keep-all'は確認ダイアログのみ閉じ、選択(selectionMode含む)は維持する。
+      if (selectionAfterSuccess === 'keep-all') {
         setBulkOperation(null)
-      } else if (failed.length > 0) {
+      } else if (selectionAfterSuccess === 'keep-failed-only') {
         const failedIds = new Set(failed.map((o) => o.docId))
         setSelectedIds(prev => new Set([...prev].filter(id => failedIds.has(id))))
       } else {
@@ -890,11 +809,10 @@ export function DocumentsPage() {
       // Firestoreへの書込みは既に成功しているため、ここでの失敗は表示更新の後始末の
       // 失敗に過ぎない。「一括確認に失敗しました」は誤りなので出さない。ただしPhase-Aで
       // 一部書類の書込み自体が失敗していた場合(failed.length>0)は、その情報を握り潰さず
-      // 失敗した書類を選択に残す(再実行できるようにする)。ただしidentityLookupWarningNeeded
-      // の場合は成功した書類も再実行対象のため、failedIdsだけに絞らず選択を丸ごと維持する
-      // (上の成功パスと同じ判断、codex review 4巡目・5巡目指摘)。
+      // 失敗した書類を選択に残す(再実行できるようにする)。selectionAfterPostWriteFailureの
+      // 理由はsummarizeBulkVerifyOutcomes(bulkVerifyOutcome.ts)のコメント参照。
       console.error('Bulk verify: post-write cache sync failed (writes already succeeded):', postWriteErr)
-      if (failed.length > 0 && !identityLookupWarningNeeded) {
+      if (selectionAfterPostWriteFailure === 'keep-failed-only') {
         const failedIds = new Set(failed.map((o) => o.docId))
         setSelectedIds(prev => new Set([...prev].filter(id => failedIds.has(id))))
       }
