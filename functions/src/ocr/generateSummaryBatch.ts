@@ -99,6 +99,22 @@ export interface RunSummaryBatchDeps {
  * 同型パターン、直接テストする)。
  */
 export async function runSummaryBatch(deps: RunSummaryBatchDeps): Promise<SummaryBatchStats> {
+  try {
+    return await runSummaryBatchInner(deps);
+  } catch (error) {
+    // silent-failure-hunter指摘反映: `processOCR.ts`と同じ外側の安全網。rescue・pending
+    // 一覧取得・L2ゲート読取・claim呼出自体(=個々の文書のtry/catchより前)で例外が出ると、
+    // ここまでは一切ログを残さず関数全体が例外で落ちていた(このtickの残り文書は
+    // 次tickで再選択されるため自己修復はするが、`errors`コレクションに記録が残らず
+    // 監視から不可視だった)。
+    const err = error instanceof Error ? error : new Error(String(error));
+    console.error(`[${FUNCTION_NAME}] Fatal error:`, err.message);
+    await safeLogError({ error: err, source: 'ocr', functionName: FUNCTION_NAME });
+    throw error;
+  }
+}
+
+async function runSummaryBatchInner(deps: RunSummaryBatchDeps): Promise<SummaryBatchStats> {
   const {
     firestore,
     bucket,
@@ -244,10 +260,24 @@ export async function runSummaryBatch(deps: RunSummaryBatchDeps): Promise<Summar
           // いる可能性が高いため、このtickでの新規claimは打ち切る。
           stats.deferred = docs.length - i - 1;
           return stats;
-        case 'abort-batch-config':
-          await recordFailureOrCountSuperseded(firestore, docRef, claim, { state: 'pending', kind: null, message }, stats);
+        case 'abort-batch-config': {
+          // pr-test-analyzer指摘反映(実バグ): retry-or-errorと同じattemptCount上限判定を
+          // 適用しないと、SARASHINA_SUMMARY_URL誤設定等の恒久的な設定不備の間、文書が
+          // 'pending'のままsummaryAttemptCountだけがtickごとに際限なく増え続け、
+          // 誰も気づかないまま無限リトライし続けてしまう(errorへ確定させて可視化する機会が
+          // 永久に来ない)。
+          const configNextState = claim.attemptCount >= MAX_SUMMARY_ATTEMPTS ? 'error' : 'pending';
+          await recordFailureOrCountSuperseded(
+            firestore,
+            docRef,
+            claim,
+            { state: configNextState, kind: 'unknown', message },
+            stats
+          );
+          incrementErrorKind(stats, 'config');
           stats.deferred = docs.length - i - 1;
           return stats;
+        }
         case 'retry-or-error': {
           const nextState = claim.attemptCount >= MAX_SUMMARY_ATTEMPTS ? 'error' : 'pending';
           await recordFailureOrCountSuperseded(

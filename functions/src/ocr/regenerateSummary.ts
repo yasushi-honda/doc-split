@@ -169,15 +169,18 @@ export const regenerateSummary = functions.https.onCall(
 
     // commit(ADR-0027 PR4): 所有権を再検証してから書き込む。claim後に別の実行に
     // preemptされていた場合はSummarySupersededErrorとしてabortされ、書込みは行わない。
+    // silent-failure-hunter/code-reviewer指摘反映: commit失敗(supersede以外)もIssue #266と
+    // 同じくsafeLogErrorで記録する(releaseManualSummaryRunはあえて呼ばない。生成済みの
+    // 要約を破棄することになり、claimは'processing'のまま残るがrescueが後で回収する)。
     try {
       await commitSummaryResult(db, docRef, claim, { summary, provider: 'gemini' });
     } catch (commitErr) {
       if (commitErr instanceof SummarySupersededError) {
-        throw new functions.https.HttpsError(
-          'aborted',
-          '別の要約生成処理が先に完了したため、この結果は破棄されました'
-        );
+        throw new functions.https.HttpsError('aborted', '別の要約生成処理が先に完了したため、この結果は破棄されました');
       }
+      const err = commitErr instanceof Error ? commitErr : new Error(String(commitErr));
+      console.error('Failed to commit summary:', err);
+      await safeLogError({ error: err, source: 'ocr', functionName: 'regenerateSummary', documentId: docId });
       throw commitErr;
     }
 

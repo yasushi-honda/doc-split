@@ -20,6 +20,7 @@ import {
   claimSummaryRun,
   commitSummaryResult,
   recordSummaryFailure,
+  releaseManualSummaryRun,
   rescueStuckSummaryDocs,
 } from '../src/ocr/summaryRunStore';
 import { SummarySupersededError, MAX_SUMMARY_ATTEMPTS, SUMMARY_STUCK_THRESHOLD_MS } from '../src/ocr/summaryRunGuard';
@@ -207,6 +208,46 @@ describe('runSummaryBatch (ADR-0027 PR4)', () => {
     const data = await getDoc('doc-timeout-1');
     expect(data.summaryState).to.equal('processing');
     expect((await getDoc('doc-timeout-2')).summaryState).to.equal('pending');
+  });
+
+  it('Sarashina config失敗(サービスURL不正等): attemptCount未達ならpendingへ戻し、以降のclaimを打ち切る', async () => {
+    await seedDocument('doc-config-error-1', { updatedAt: admin.firestore.Timestamp.fromMillis(1000) });
+    await seedDocument('doc-config-error-2', { updatedAt: admin.firestore.Timestamp.fromMillis(2000) });
+    const stats = await runSummaryBatch({
+      firestore: db,
+      bucket: FAKE_BUCKET,
+      l1Provider: 'sarashina',
+      getGate: ENABLED_GATE,
+      summarize: async () => {
+        throw new SarashinaSummaryError('bad url', 'config');
+      },
+    });
+
+    expect(stats.claimed).to.equal(1);
+    expect(stats.errorByKind.config).to.equal(1);
+    expect(stats.deferred).to.equal(1);
+    const data = await getDoc('doc-config-error-1');
+    expect(data.summaryState).to.equal('pending');
+    expect((await getDoc('doc-config-error-2')).summaryState).to.equal('pending');
+  });
+
+  it('pr-test-analyzer指摘反映(実バグ): Sarashina config失敗がattemptCountの上限に達しても放置せず、errorへ確定させ無限リトライを止める', async () => {
+    await seedDocument('doc-config-error-exhausted', { summaryAttemptCount: MAX_SUMMARY_ATTEMPTS - 1 });
+    const stats = await runSummaryBatch({
+      firestore: db,
+      bucket: FAKE_BUCKET,
+      l1Provider: 'sarashina',
+      getGate: ENABLED_GATE,
+      summarize: async () => {
+        throw new SarashinaSummaryError('bad url', 'config');
+      },
+    });
+
+    expect(stats.errorByKind.config).to.equal(1);
+    const data = await getDoc('doc-config-error-exhausted');
+    expect(data.summaryState, 'attemptCount上限到達時はpendingで無限リトライさせずerrorへ確定する').to.equal(
+      'error'
+    );
   });
 
   it('quota/transient失敗: attemptCountがMAX_SUMMARY_ATTEMPTS未満ならpendingへ戻す', async () => {
@@ -406,6 +447,111 @@ describe('runSummaryBatch (ADR-0027 PR4)', () => {
     });
   });
 
+  describe('releaseManualSummaryRun (pr-test-analyzer指摘反映: 直接のテストが0件だったため追加)', () => {
+    it('claim前にsummaryState系フィールドが一切存在しなかった場合、7フィールド全て削除される', async () => {
+      const docId = 'doc-release-prior-absent';
+      await db.collection('documents').doc(docId).set({
+        fileName: 'test.pdf',
+        status: 'processed',
+        updatedAt: admin.firestore.Timestamp.now(),
+      });
+      const docRef = db.doc(`documents/${docId}`);
+      const claimResult = await claimSummaryRun(db, docRef, 'manual');
+      if (!claimResult.claimed) throw new Error('unreachable');
+      expect(claimResult.claim.priorState, 'claim前はフィールド不在だったのでpriorStateはnull').to.equal(null);
+
+      await releaseManualSummaryRun(db, docRef, claimResult.claim, 'unknown');
+
+      const data = await getDoc(docId);
+      expect(data).to.not.have.property('summaryState');
+      expect(data).to.not.have.property('summaryRunId');
+      expect(data).to.not.have.property('summaryStateUpdatedAt');
+      expect(data).to.not.have.property('summaryError');
+      expect(data).to.not.have.property('summaryErrorKind');
+      expect(data).to.not.have.property('summaryProvider');
+      expect(data).to.not.have.property('summaryAttemptCount');
+    });
+
+    it("claim前がpendingだった場合、pendingへ復元される(summaryRunIdはnullへ)", async () => {
+      await seedDocument('doc-release-prior-pending');
+      const docRef = db.doc('documents/doc-release-prior-pending');
+      const claimResult = await claimSummaryRun(db, docRef, 'manual');
+      if (!claimResult.claimed) throw new Error('unreachable');
+      expect(claimResult.claim.priorState).to.equal('pending');
+
+      await releaseManualSummaryRun(db, docRef, claimResult.claim, 'transient');
+
+      const data = await getDoc('doc-release-prior-pending');
+      expect(data.summaryState).to.equal('pending');
+      expect(data.summaryRunId).to.equal(null);
+    });
+
+    it("claim前がprocessing(実行中の別claimをpreemptした)だった場合、pendingへは戻さずerrorへ倒す(所有者不在のclaimを復活させない)", async () => {
+      await seedDocument('doc-release-prior-processing', {
+        summaryState: 'processing',
+        summaryRunId: 'orphaned-batch-run-id',
+        summaryAttemptCount: 1,
+      });
+      const docRef = db.doc('documents/doc-release-prior-processing');
+      const claimResult = await claimSummaryRun(db, docRef, 'manual');
+      if (!claimResult.claimed) throw new Error('unreachable');
+      expect(claimResult.claim.priorState, 'preempt前はprocessingだった').to.equal('processing');
+
+      await releaseManualSummaryRun(db, docRef, claimResult.claim, 'quota');
+
+      const data = await getDoc('doc-release-prior-processing');
+      expect(data.summaryState, 'processingへは戻さずerrorへ倒す(所有者不在のclaimを復活させない)').to.equal(
+        'error'
+      );
+      expect(data.summaryRunId).to.equal(null);
+      expect(data.summaryErrorKind).to.equal('quota');
+    });
+
+    it('release前に別の実行(さらに新しいclaim)へ所有権が移っていた場合、SummarySupersededErrorをthrowし書込みしない', async () => {
+      await seedDocument('doc-release-superseded');
+      const docRef = db.doc('documents/doc-release-superseded');
+      const claimResult = await claimSummaryRun(db, docRef, 'manual');
+      if (!claimResult.claimed) throw new Error('unreachable');
+
+      // release前に、さらに新しい実行がこのclaimをpreemptしたことを模す。
+      await claimSummaryRun(db, docRef, 'manual');
+
+      let caught: unknown;
+      try {
+        await releaseManualSummaryRun(db, docRef, claimResult.claim, 'unknown');
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).to.be.instanceOf(SummarySupersededError);
+    });
+  });
+
+  describe('ocr-generation-drift (reprocess中の要約commitを実Firestoreパスで検証)', () => {
+    it('claim後にreprocess等でocrRunIdが変わると、summaryRunIdは一致していてもcommitはocr-generation-driftでsupersededになる', async () => {
+      await seedDocument('doc-ocr-drift', { ocrRunId: 'ocr-run-a' });
+      const docRef = db.doc('documents/doc-ocr-drift');
+      const claimResult = await claimSummaryRun(db, docRef, 'batch');
+      if (!claimResult.claimed) throw new Error('unreachable');
+      expect(claimResult.claim.ocrRunId, 'claim時点のocrRunIdを記憶していること').to.equal('ocr-run-a');
+
+      // reprocess完了(新しいOCR実行)により、summaryRunIdはそのままocrRunIdだけが変わったことを模す。
+      await docRef.update({ ocrRunId: 'ocr-run-b' });
+
+      let caught: unknown;
+      try {
+        await commitSummaryResult(db, docRef, claimResult.claim, {
+          summary: { text: '古いOCR結果に基づく要約(破棄されるはず)', truncated: false },
+          provider: 'sarashina',
+        });
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).to.be.instanceOf(SummarySupersededError);
+      expect((caught as InstanceType<typeof SummarySupersededError>).reason).to.equal('ocr-generation-drift');
+      expect((await getDoc('doc-ocr-drift')).summary).to.equal(undefined);
+    });
+  });
+
   describe('rescueStuckSummaryDocs', () => {
     it('閾値超過したprocessing文書をpendingへ戻す(attemptCount未達)', async () => {
       await seedDocument('doc-stuck-rescuable', {
@@ -475,6 +621,79 @@ describe('runSummaryBatch (ADR-0027 PR4)', () => {
       expect(stats.rescued).to.equal(0);
       expect(stats.rescueErrored).to.equal(1);
       expect((await getDoc('doc-rescued-via-batch')).summaryState).to.equal('error');
+    });
+  });
+
+  describe('loadOcrTextForSummary: Storageオフロード分岐 (pr-test-analyzer指摘反映: 唯一の存在意義である分岐が未テストだったため追加)', () => {
+    function makeFakeBucketWithFile(opts: { exists: boolean; content?: string }): Bucket {
+      const file = {
+        exists: async () => [opts.exists],
+        download: async () => [Buffer.from(opts.content ?? '', 'utf-8')],
+      };
+      return {
+        name: 'test-bucket',
+        file: () => file,
+      } as unknown as Bucket;
+    }
+
+    it('ocrResultUrlが設定されている場合、detail/mainのocrResult(空文字)ではなくStorageからダウンロードした内容を使う', async () => {
+      const docId = 'doc-offloaded-ocr-text';
+      const offloadedText = 'x'.repeat(150_000);
+      const docRef = db.collection('documents').doc(docId);
+      await docRef.set({
+        fileName: 'test.pdf',
+        status: 'processed',
+        summaryState: 'pending',
+        summaryAttemptCount: 0,
+        updatedAt: admin.firestore.Timestamp.now(),
+        documentType: '福祉用具貸与確認書',
+        ocrResultUrl: 'gs://test-bucket/ocr-results/doc-offloaded-ocr-text/run-1.txt',
+      });
+      // 10万字超でオフロードされた文書はdetail/main.ocrResultが空文字列のまま(ADR-0018)。
+      await docRef.collection('detail').doc('main').set({ ocrResult: '' });
+
+      const bucket = makeFakeBucketWithFile({ exists: true, content: offloadedText });
+      const stats = await runSummaryBatch({
+        firestore: db,
+        bucket,
+        l1Provider: 'sarashina',
+        getGate: ENABLED_GATE,
+        summarize: async (ocrResult) => {
+          // detail/mainの空文字ではなく、Storageからダウンロードした実文字数が渡ること。
+          expect(ocrResult.length).to.equal(offloadedText.length);
+          return fakeSummarize()();
+        },
+      });
+
+      expect(stats.done).to.equal(1);
+    });
+
+    it('ocrResultUrlはあるがStorageに実体が存在しない場合、空文字列にフォールバックしskippedとして記録する(安全網)', async () => {
+      const docId = 'doc-offloaded-missing-file';
+      const docRef = db.collection('documents').doc(docId);
+      await docRef.set({
+        fileName: 'test.pdf',
+        status: 'processed',
+        summaryState: 'pending',
+        summaryAttemptCount: 0,
+        updatedAt: admin.firestore.Timestamp.now(),
+        documentType: '福祉用具貸与確認書',
+        ocrResultUrl: 'gs://test-bucket/ocr-results/doc-offloaded-missing-file/run-1.txt',
+      });
+      await docRef.collection('detail').doc('main').set({ ocrResult: '' });
+
+      const bucket = makeFakeBucketWithFile({ exists: false });
+      const stats = await runSummaryBatch({
+        firestore: db,
+        bucket,
+        l1Provider: 'sarashina',
+        getGate: ENABLED_GATE,
+        summarize: fakeSummarize(),
+      });
+
+      expect(stats.skipped, 'Storageから読めなかった安全網(loadOcrTextForSummaryがOCR結果を返せない)').to.equal(1);
+      const data = await getDoc(docId);
+      expect(data.summaryState).to.equal('skipped');
     });
   });
 });
