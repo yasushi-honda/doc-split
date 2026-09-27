@@ -1,7 +1,7 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
-import { doc, writeBatch, serverTimestamp, collection, runTransaction } from 'firebase/firestore'
+import { writeBatch } from 'firebase/firestore'
 import {
   Filter,
   FileText,
@@ -75,9 +75,9 @@ import { isDocumentHiddenByContractEnd } from '@/lib/contractEnded'
 import { DateRangeFilter, type DateRange } from '@/components/DateRangeFilter'
 import { isCustomerConfirmed } from '@/hooks/useProcessingHistory'
 import { resolveCustomerUnconfirmedReason } from '@shared/customerIdentity'
-import { planConfirmOnVerify, buildConfirmOnVerifyUpdate } from '@shared/confirmOnVerify'
 import { decideBulkVerifyToast, decidePostWriteSyncFailureToast } from '@/lib/bulkVerifyToast'
 import { summarizeBulkVerifyOutcomes, runWithConcurrency, type BulkVerifyDocOutcome } from '@/lib/bulkVerifyOutcome'
+import { executeBulkVerifyDocumentTransaction } from '@/lib/bulkVerifyTransaction'
 import { DocumentDetailModal } from '@/components/DocumentDetailModal'
 import { MultiCustomerBadge } from '@/components/MultiCustomerBadge'
 import { AliasLearningHistoryModal } from '@/components/AliasLearningHistoryModal'
@@ -716,65 +716,15 @@ export function DocumentsPage() {
         return null
       })
 
-      outcomes = await runWithConcurrency(ids, 20, async (docId) => {
-        const docRef = doc(db, 'documents', docId)
-        try {
-          const { decisions, alreadyFullyConfirmed } = await runTransaction(db, async (tx) => {
-            const freshSnap = await tx.get(docRef)
-            if (!freshSnap.exists()) {
-              throw new Error(`Document not found: ${docId}`)
-            }
-            const freshDoc = freshSnap.data() as Document
-
-            const txDecisions = freshIdentityLookup
-              ? planConfirmOnVerify(freshDoc, {
-                  customerMasterName: freshDoc.customerId
-                    ? (freshIdentityLookup.customerMasterNameById.get(freshDoc.customerId) ?? null)
-                    : null,
-                  sameNameCollisionNames: freshIdentityLookup.sameNameCollisionNames,
-                })
-              : null
-            const { update: confirmFields, logs } = txDecisions
-              ? buildConfirmOnVerifyUpdate(txDecisions, freshDoc, { uid, now: serverTimestamp() })
-              : { update: {}, logs: [] }
-
-            // 既存のuseDocumentEdit.ts(L396)と同じ規約: 動的に組み立てたRecord<string, unknown>を
-            // Firestoreの厳密なUpdateData型へ渡すためのキャスト。
-            tx.update(docRef, {
-              verified: true,
-              verifiedBy: uid,
-              verifiedAt: serverTimestamp(),
-              ...confirmFields,
-            } as any)
-
-            const editLogsRef = collection(db, 'editLogs')
-            for (const change of logs) {
-              tx.set(doc(editLogsRef), {
-                documentId: docId,
-                fieldName: change.field,
-                oldValue: change.oldValue,
-                newValue: change.newValue,
-                editedBy: uid,
-                editedByEmail: email,
-                editedAt: serverTimestamp(),
-              })
-            }
-
-            return {
-              decisions: txDecisions,
-              // codex review 3巡目指摘: identityLookupFailedによる警告は、成功した書類の
-              // うち少なくとも1件が実際に確定できたはず(=両方確定済みではなかった)場合のみ
-              // 出す。単体トグルの「既に両方確定済みなら警告不要」と同じ判定を、このtx内で
-              // 再読込した最新状態(freshDoc)を基準に行う。
-              alreadyFullyConfirmed: freshDoc.customerConfirmed === true && freshDoc.officeConfirmed === true,
-            }
-          })
-          return { docId, status: 'ok' as const, decisions, alreadyFullyConfirmed }
-        } catch (err) {
-          console.error(`Bulk verify failed for document ${docId}:`, err)
-          return { docId, status: 'error' as const, decisions: null, alreadyFullyConfirmed: false }
-        }
-      })
+      // 一括確認済みには2つのMUST(#178教訓):
+      // - 派生フィールド追加時は書き込みパスとFEマッピングの両方
+      // - 戻り値の型/構造を変更したら全呼び出し元の整合性を確認
+      // ここでは1文書分のFirestoreトランザクション実行をbulkVerifyTransaction.tsへ抽出済み
+      // (Issue #1044、evaluator/pr-test-analyzer指摘対応: fail-closedの発生源そのものを
+      // Firestoreモックで単体テストできるようにするため)。
+      outcomes = await runWithConcurrency(ids, 20, (docId) =>
+        executeBulkVerifyDocumentTransaction(db, docId, { freshIdentityLookup, uid, email })
+      )
     } catch (error) {
       // このcatchに到達するのはrunWithConcurrency自体(個別docの失敗は上のper-doc
       // try/catchで既にstatus:'error'として吸収済み)が例外を投げた場合のみで、
