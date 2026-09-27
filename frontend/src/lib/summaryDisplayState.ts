@@ -60,21 +60,30 @@ export function summaryErrorMessage(kind: SummaryErrorKind | null | undefined): 
 
 /**
  * 7 kindを上から最初に一致したもので判定する。判定順序:
- * 0. isDetailErrorかつ要約なし → detail-error
- * 1. isGeneratingSummary(ローカル状態)またはsummaryState==='processing' → generating
- *    (OCR側status(pending/processing)との同時成立は、OCR完了と同一トランザクションで
- *    summaryStateが確定するため通常到達しない防御的分岐。ポーリング間隔の優先順位は
- *    computeDocumentRefetchInterval側で扱う)
- * 2. summary.textあり → generated(要約本文が最優先。processing/error/detail-errorより先)
+ * 0. isGeneratingSummary(ローカル状態)、またはsummaryState==='processing'かつisDetailErrorで
+ *    ない場合 → generating(要約本文があれば下に薄く表示するため保持する)
+ * 1. summary.textあり → generated(要約本文が優先。error/detail-errorより先)
+ * 2. isDetailErrorかつ要約なし → detail-error
+ *    (codex review P2指摘反映: 以前の実装ではsummaryState==='processing'の判定が
+ *    isDetailErrorより無条件に先に評価されており、detail/mainの読込失敗中にバックエンドが
+ *    processing/pending/error/skippedのいずれであってもdetail-errorが隠れ、本来ブロック
+ *    すべき生成操作(queued/generating/failedのボタン)を提示してしまっていた。要約テキストが
+ *    既にある場合(手順1で処理済み)や、ローカルでの能動的な生成中(手順0)は従来通り
+ *    detail-errorより優先するが、要約なし+バックエンド側processingでもない場合は
+ *    isDetailErrorをpending/error/skippedより先に評価する)
  * 3. summaryState==='pending' → queued
  * 4. summaryState==='error' → failed
  * 5. summaryState==='skipped' またはOCR結果 < SUMMARY_MIN_OCR_LENGTH字 → unavailable
  * 6. 上記以外(OCR ≥ SUMMARY_MIN_OCR_LENGTH字) → absent
+ *
+ * OCR側status(pending/processing)とsummaryState===processingの同時成立は、OCR完了と
+ * 同一トランザクションでsummaryStateが確定するため通常到達しない防御的分岐。ポーリング
+ * 間隔の優先順位はcomputeDocumentRefetchInterval側で扱う。
  */
 export function deriveSummaryDisplayState(input: DeriveSummaryDisplayStateInput): SummaryDisplayState {
   const { summary, summaryState, summaryErrorKind, ocrResult, isDetailError, isGeneratingSummary } = input
 
-  if (isGeneratingSummary || summaryState === 'processing') {
+  if (isGeneratingSummary || (summaryState === 'processing' && !isDetailError)) {
     return { kind: 'generating', summaryText: summary?.text }
   }
 

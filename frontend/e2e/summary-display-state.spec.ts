@@ -98,6 +98,48 @@ test.describe('AI要約 6状態UI (モバイル) @emulator', () => {
     await _loginWithTestUser(page, 'h1:has-text("書類管理")');
   });
 
+  /** 書類行を開き、モバイル用「AI要約」ボタンでポップアップを表示する */
+  async function openMobileSummaryPopup(page: Page, fileNameSubstring: string) {
+    const row = page.locator(`tbody tr:has-text("${fileNameSubstring}")`).first();
+    await expect(row).toBeVisible({ timeout: 10000 });
+    await row.click();
+    const modal = page.locator('[role="dialog"]');
+    await expect(modal).toBeVisible({ timeout: 5000 });
+
+    await page.locator('button:has-text("要約")').first().click();
+    const popup = page.locator('#mobile-popup-container');
+    await expect(popup).toBeVisible({ timeout: 5000 });
+    return popup;
+  }
+
+  // pr-test-analyzer指摘反映: モバイルのMobileContentPopupはデスクトップJSXとは別に文言・
+  // 分岐を手組みDOMで実装しており(#193型の重複リスク)、generating以外のkindがモバイル側で
+  // 一度も検証されていなかった。デスクトップと同じ代表状態をモバイル側でも検証する。
+  test('generated: 要約本文 + 「再生成」ボタンが表示される', async ({ page }) => {
+    const popup = await openMobileSummaryPopup(page, 'E2E_PR4c_generated');
+    await expect(popup.locator('text=PR4c検証用の生成済み要約テキストです。')).toBeVisible();
+    await expect(popup.locator('button:has-text("再生成")')).toBeVisible();
+  });
+
+  test('queued: 「自動生成待ち」文言 + 「今すぐ生成」ボタンが表示される', async ({ page }) => {
+    const popup = await openMobileSummaryPopup(page, 'E2E_PR4c_queued');
+    await expect(popup.locator('text=自動生成待ちです')).toBeVisible();
+    await expect(popup.locator('button:has-text("今すぐ生成")')).toBeVisible();
+  });
+
+  test('failed(fabrication_suspected): 専用エラーメッセージ + 「再試行」ボタンが表示される', async ({ page }) => {
+    const popup = await openMobileSummaryPopup(page, 'E2E_PR4c_failed_fabrication');
+    await expect(popup.locator('text=固有名詞')).toBeVisible();
+    await expect(popup.locator('button:has-text("再試行")')).toBeVisible();
+  });
+
+  // pr-test-analyzer指摘反映: unavailable kind(seed-adr0027-pr4c-summary-states.jsの
+  // pr4c-skippedフィクスチャ)がE2Eで一度も参照されていなかった
+  test('unavailable(skipped): 「OCR結果が短いため要約を生成できません」が表示される', async ({ page }) => {
+    const popup = await openMobileSummaryPopup(page, 'E2E_PR4c_skipped');
+    await expect(popup.locator('text=OCR結果が短いため要約を生成できません')).toBeVisible();
+  });
+
   test('generating: ポーリングによる親の再レンダリング後も「生成中」表示が消えない (crossreview指摘の回帰テスト)', async ({
     page,
   }) => {
@@ -110,21 +152,24 @@ test.describe('AI要約 6状態UI (モバイル) @emulator', () => {
     // 誘発することはできない。代わりに、この状態(summaryState==='processing')でuseDocument()が
     // 実際に使う5秒間隔のポーリング(computeDocumentRefetchInterval)を待ち、react-queryの
     // refetchが返す新しいデータ参照による自然な親再レンダリングを再現する。
-    const row = page.locator('tbody tr:has-text("E2E_PR4c_generating")').first();
-    await expect(row).toBeVisible({ timeout: 10000 });
-    await row.click();
-    const modal = page.locator('[role="dialog"]');
-    await expect(modal).toBeVisible({ timeout: 5000 });
-
-    // モバイル用「AI要約」ボタンでポップアップを開く
-    await page.locator('button:has-text("要約")').first().click();
-    const popup = page.locator('#mobile-popup-container');
-    await expect(popup).toBeVisible({ timeout: 5000 });
+    const popup = await openMobileSummaryPopup(page, 'E2E_PR4c_generating');
     await expect(popup.locator('text=生成中')).toBeVisible();
+
+    // pr-test-analyzer指摘反映: 「消えていない」という消極的アサーションだけでは、
+    // ポーリング自体が発火しなくなった場合でも(何も起きないため)偶然passしうる。
+    // 待機ウィンドウ中に実際にFirestore emulatorへの往復が発生したこと(=ポーリングが
+    // 本当に発火したこと)を独立して確認し、テストの診断力を補強する。
+    let firestoreRequestSeenDuringWait = false;
+    const onRequest = (req: { url(): string }) => {
+      if (req.url().includes(':8085')) firestoreRequestSeenDuringWait = true;
+    };
+    page.on('request', onRequest);
 
     // 5秒間隔ポーリングが最低1回発火するのを待つ(回帰テスト本体)
     await page.waitForTimeout(6500);
+    page.off('request', onRequest);
 
+    expect(firestoreRequestSeenDuringWait).toBe(true);
     // 再レンダリング後も「生成中」表示が消えていないことを確認
     await expect(popup.locator('text=生成中')).toBeVisible();
   });

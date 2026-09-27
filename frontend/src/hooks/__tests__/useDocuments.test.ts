@@ -124,6 +124,11 @@ describe('firestoreToDocument', () => {
       expect(result.summaryAttemptCount).toBe(2)
     })
 
+    it('summaryAttemptCount: 0 (falsy値)を正しく変換する (ADR-0027 PR4c、pr-test-analyzer指摘)', () => {
+      const result = firestoreToDocument('doc-001', { ...baseFirestoreData, summaryAttemptCount: 0 })
+      expect(result.summaryAttemptCount).toBe(0)
+    })
+
     it('AI要約の状態フィールド7件が未設定の場合は undefined (ADR-0027 PR4c)', () => {
       const result = firestoreToDocument('doc-001', baseFirestoreData)
       expect(result.summaryState).toBeUndefined()

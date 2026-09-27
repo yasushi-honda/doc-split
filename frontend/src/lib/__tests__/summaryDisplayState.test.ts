@@ -119,6 +119,41 @@ describe('deriveSummaryDisplayState', () => {
       })
       expect(result.kind).toBe('generated')
     })
+
+    // codex review P2指摘反映: isDetailError(FE側のdetail取得失敗)とバックエンド側の
+    // summaryStateは独立した条件であり同時成立しうる。修正前はsummaryState==='processing'の
+    // 判定がisDetailErrorより先に評価され、detail-errorが隠れてqueued/generating/failedを
+    // 誤って提示していた(本来ブロックすべき生成操作を提示してしまう)。この交差を固定する。
+    it('isDetailErrorはsummaryState===processingより優先する(要約なし)', () => {
+      const result = deriveSummaryDisplayState({ ...base, isDetailError: true, summaryState: 'processing' })
+      expect(result.kind).toBe('detail-error')
+    })
+
+    it('isDetailErrorはsummaryState===pendingより優先する(要約なし)', () => {
+      const result = deriveSummaryDisplayState({ ...base, isDetailError: true, summaryState: 'pending' })
+      expect(result.kind).toBe('detail-error')
+    })
+
+    it('isDetailErrorはsummaryState===errorより優先する(要約なし)', () => {
+      const result = deriveSummaryDisplayState({
+        ...base,
+        isDetailError: true,
+        summaryState: 'error',
+        summaryErrorKind: 'unknown',
+      })
+      expect(result.kind).toBe('detail-error')
+    })
+
+    it('isDetailErrorはsummaryState===skippedより優先する(要約なし)', () => {
+      const result = deriveSummaryDisplayState({ ...base, isDetailError: true, summaryState: 'skipped' })
+      expect(result.kind).toBe('detail-error')
+    })
+
+    it('isGeneratingSummary(ローカル操作)はisDetailErrorより優先する', () => {
+      // ユーザーが今回のクリックで能動的に開始した操作のため、isDetailErrorより優先する
+      const result = deriveSummaryDisplayState({ ...base, isDetailError: true, isGeneratingSummary: true })
+      expect(result.kind).toBe('generating')
+    })
   })
 
   describe('後方互換(非回帰): summaryStateフィールドが存在しない旧文書', () => {
