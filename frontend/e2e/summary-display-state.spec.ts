@@ -43,8 +43,14 @@ async function ensureSummaryAccordionExpanded(modal: Locator) {
   // ヘッダーの直後の兄弟divが展開時のコンテンツ領域(JSX上、expandedSection==='summary'の
   // 条件付きレンダリングでheaderのすぐ後ろに挿入される)。aria-expanded等の属性は
   // このボタンに付与されていないため、DOM構造から展開状態を判定する。
+  // Radixダイアログのマウント直後はfade-in/zoom-inアニメーション中で、実際には展開済みでも
+  // 一瞬isVisible()がfalseを返しうる(実機で観測)。waitForで短時間リトライしてから
+  // 「本当に閉じている」と判定する。
   const content = header.locator('xpath=following-sibling::div[1]');
-  const isExpanded = await content.isVisible().catch(() => false);
+  const isExpanded = await content
+    .waitFor({ state: 'visible', timeout: 2000 })
+    .then(() => true)
+    .catch(() => false);
   if (!isExpanded) {
     await header.click();
   }
@@ -80,6 +86,16 @@ test.describe('AI要約 6状態UI (デスクトップ) @emulator', () => {
     // codex pass1指摘反映の非回帰確認: 親document.ocrResultが空でも、resolveDetailFields()経由の
     // 100字以上判定でabsent(kind=6)になり、skipped扱いにならないことを確認する
     const modal = await openDocByFileName(page, 'E2E_PR4c_absent_detail-offload');
+    await ensureSummaryAccordionExpanded(modal);
+    await expect(modal.locator('button:has-text("AI要約を生成")')).toBeVisible();
+  });
+
+  test('absent(skipped+OCR十分): Sarashina L2ゲートのallowlist除外でも手動生成ボタンが維持される', async ({ page }) => {
+    // codex review P2指摘反映: summaryState==='skipped'を無条件でunavailableに倒すと、
+    // allowlist除外(OCR長とは無関係)された長文文書でも既存のregenerateSummary手動生成経路
+    // (Sarashina L2ゲートとは独立、Geminiを呼ぶ)を失ってしまっていた。OCR結果が十分な場合は
+    // summaryState==='skipped'でもabsentとして生成ボタンを提示することを確認する
+    const modal = await openDocByFileName(page, 'E2E_PR4c_skipped_allowlist_long_ocr');
     await ensureSummaryAccordionExpanded(modal);
     await expect(modal.locator('button:has-text("AI要約を生成")')).toBeVisible();
   });
@@ -136,7 +152,9 @@ test.describe('AI要約 6状態UI (モバイル) @emulator', () => {
   // pr-test-analyzer指摘反映: unavailable kind(seed-adr0027-pr4c-summary-states.jsの
   // pr4c-skippedフィクスチャ)がE2Eで一度も参照されていなかった
   test('unavailable(skipped): 「OCR結果が短いため要約を生成できません」が表示される', async ({ page }) => {
-    const popup = await openMobileSummaryPopup(page, 'E2E_PR4c_skipped');
+    // ".pdf"まで含めて一致させる(substringマッチのため"E2E_PR4c_skipped_allowlist_long_ocr.pdf"
+    // と衝突しないようにする)
+    const popup = await openMobileSummaryPopup(page, 'E2E_PR4c_skipped.pdf');
     await expect(popup.locator('text=OCR結果が短いため要約を生成できません')).toBeVisible();
   });
 

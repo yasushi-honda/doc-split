@@ -64,8 +64,20 @@ describe('deriveSummaryDisplayState', () => {
     expect(result.errorMessage).toBe(summaryErrorMessage('quota'))
   })
 
-  it('kind=5 unavailable: summaryState===skippedの場合', () => {
+  // codex review P2指摘反映: Sarashina L2ゲートのallowlist除外時、バックエンドはOCR長に
+  // 関係なくsummaryState:'skipped'にする。OCR長が十分な場合はabsent(既存のregenerateSummary
+  // 手動生成経路、Sarashina L2ゲートとは独立)を維持し、実際に短い場合のみunavailableにする。
+  it('kind=6 absent: summaryState===skippedでもOCR結果が十分(100字以上)なら手動生成を許可する', () => {
     const result = deriveSummaryDisplayState({ ...base, summaryState: 'skipped' })
+    expect(result.kind).toBe('absent')
+  })
+
+  it('kind=5 unavailable: summaryState===skippedかつOCR結果が実際に短い場合', () => {
+    const result = deriveSummaryDisplayState({
+      ...base,
+      summaryState: 'skipped',
+      ocrResult: 'あ'.repeat(SUMMARY_MIN_OCR_LENGTH - 1),
+    })
     expect(result.kind).toBe('unavailable')
   })
 

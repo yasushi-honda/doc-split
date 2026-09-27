@@ -152,6 +152,18 @@ async function main() {
         ocrResult: SHORT_OCR_TEXT,
       }),
     },
+    // kind=6 absent(codex review P2指摘反映): Sarashina L2ゲートのallowlist除外でも
+    // OCR結果が十分(100字以上)ならsummaryState==='skipped'であってもunavailableにせず、
+    // 既存のregenerateSummary手動生成経路(Sarashina L2ゲートとは独立)を維持することを確認する
+    {
+      id: 'pr4c-skipped-allowlist-long-ocr',
+      data: baseDocData({
+        id: 'pr4c-skipped-allowlist-long-ocr',
+        fileName: 'E2E_PR4c_skipped_allowlist_long_ocr.pdf',
+        ocrResult: LONG_OCR_TEXT,
+        summaryState: 'skipped',
+      }),
+    },
   ];
 
   for (const { id, data, detail } of docs) {
@@ -161,7 +173,7 @@ async function main() {
       await docRef.collection('detail').doc('main').set(detail);
     }
   }
-  console.log(`✅ 書類${docs.length}件作成(absent/queued/generating/generated/failed/skipped/short)`);
+  console.log(`✅ 書類${docs.length}件作成(absent/queued/generating/generated/failed/skipped/short/skipped-allowlist-long-ocr)`);
 
   console.log('\n✅ ADR-0027 PR4c検証用シードデータ作成完了');
 }

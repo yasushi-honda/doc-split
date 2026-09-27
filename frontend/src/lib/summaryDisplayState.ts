@@ -73,8 +73,14 @@ export function summaryErrorMessage(kind: SummaryErrorKind | null | undefined): 
  *    isDetailErrorをpending/error/skippedより先に評価する)
  * 3. summaryState==='pending' → queued
  * 4. summaryState==='error' → failed
- * 5. summaryState==='skipped' またはOCR結果 < SUMMARY_MIN_OCR_LENGTH字 → unavailable
- * 6. 上記以外(OCR ≥ SUMMARY_MIN_OCR_LENGTH字) → absent
+ * 5. OCR結果 < SUMMARY_MIN_OCR_LENGTH字 → unavailable(summaryStateの値に関わらず)
+ * 6. 上記以外(OCR ≥ SUMMARY_MIN_OCR_LENGTH字。summaryState==='skipped'を含む) → absent
+ *    (codex review P2指摘反映: Sarashina L2ゲートのallowlist除外時、バックエンドは
+ *    OCR長に関係なくsummaryState:'skipped'にする(shared/types.tsのJSDoc「OCR結果が
+ *    短すぎる等の理由で」の「等」に該当)。summaryState==='skipped'を無条件でunavailableに
+ *    倒すと、OCR長が十分な文書でも既存のregenerateSummary手動生成経路(Sarashina L2ゲートとは
+ *    独立、Geminiを呼ぶ)を失ってしまう。OCR長を先に判定し、十分ならabsentとして手動生成
+ *    ボタンを残す)
  *
  * OCR側status(pending/processing)とsummaryState===processingの同時成立は、OCR完了と
  * 同一トランザクションでsummaryStateが確定するため通常到達しない防御的分岐。ポーリング
@@ -104,7 +110,7 @@ export function deriveSummaryDisplayState(input: DeriveSummaryDisplayStateInput)
   }
 
   const hasEnoughOcrResult = !!ocrResult && ocrResult.length >= SUMMARY_MIN_OCR_LENGTH
-  if (summaryState === 'skipped' || !hasEnoughOcrResult) {
+  if (!hasEnoughOcrResult) {
     return { kind: 'unavailable' }
   }
 
