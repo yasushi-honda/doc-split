@@ -1071,6 +1071,18 @@ export async function handleProcessingError(
     } catch (fallbackErr) {
       console.error(`Fallback update also failed for ${docId}:`, fallbackErr);
     }
+
+    // Issue #962: 状態更新自体のリトライ(OCR_TX_RETRY_ATTEMPTS回)が尽きたケースは、
+    // PR #961でouter 3 x inner 5 = 最大15回まで閾値が上がった分、以前より発生頻度は下がるが
+    // 発生時はより深刻(持続的なFirestore不安定)。console.errorのみでは末尾のsafeLogError
+    // (元のerror用、functionNameは呼出元のまま)と区別できずSentyへ届かないため、
+    // updateErr発生を示す専用タグ付きで別途送信する。
+    await safeLogError({
+      error: updateErr instanceof Error ? updateErr : new Error(String(updateErr)),
+      source: 'ocr',
+      functionName: `${functionName}.handleProcessingError.updateErr`,
+      documentId: docId,
+    });
   }
 
   // 状態更新の成否・所有権の有無に関わらず、エラー自体は必ずerrors/へ記録する

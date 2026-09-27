@@ -21,6 +21,16 @@ function makeErrorWithCode(code: unknown): Error {
   return err;
 }
 
+/** console.log の呼び出しを引数配列ごと記録する */
+function captureConsoleLog(): { calls: unknown[][]; restore: () => void } {
+  const original = console.log;
+  const calls: unknown[][] = [];
+  console.log = (...args: unknown[]) => {
+    calls.push(args);
+  };
+  return { calls, restore: () => { console.log = original; } };
+}
+
 describe('withBackoffRetry', () => {
   it('1回目で成功する場合はリトライせず、1回だけ呼ばれる', async () => {
     let calls = 0;
@@ -105,6 +115,44 @@ describe('withBackoffRetry', () => {
       expect((error as Error).message).to.equal('single attempt failure');
     }
     expect(calls).to.equal(1);
+  });
+
+  it('Issue #962: リトライ発生時にattempt番号とエラーメッセージ付きログを出力する', async () => {
+    const cap = captureConsoleLog();
+    let calls = 0;
+    try {
+      await withBackoffRetry(
+        async () => {
+          calls++;
+          if (calls < 2) throw new Error('transient boom');
+          return 'ok';
+        },
+        3,
+        1
+      );
+    } finally {
+      cap.restore();
+    }
+    expect(cap.calls, 'リトライ1回発生時にログが1件残るはず').to.have.lengthOf(1);
+    const logged = String(cap.calls[0][0]);
+    expect(logged, 'attempt番号(1/3)を含むはず').to.include('1/3');
+    expect(logged, '元のエラーメッセージを含むはず').to.include('transient boom');
+  });
+
+  it('Issue #962: 最終試行の失敗時はリトライしないためログを出力しない', async () => {
+    const cap = captureConsoleLog();
+    try {
+      await withBackoffRetry(
+        async () => {
+          throw new Error('final failure');
+        },
+        1,
+        1
+      ).catch(() => undefined);
+    } finally {
+      cap.restore();
+    }
+    expect(cap.calls, '最終試行はリトライしないためログは出ないはず').to.have.lengthOf(0);
   });
 
   it('途中の失敗でshouldRetryに実際のエラーオブジェクトが渡される', async () => {
