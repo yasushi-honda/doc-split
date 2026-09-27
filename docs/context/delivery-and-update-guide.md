@@ -301,6 +301,16 @@ gcloud iam service-accounts add-iam-policy-binding \
 
 **注意**: 上記は設計時点(PR1b、2026-09-22)の想定であり、PR1c実装時に実際のデプロイを通して権限不足がないか実機確認すること(PaddleOCR PR4b節と同じ、事前の一律付与はしない方針)。
 
+#### Sarashina要約の有効化手順(ADR-0027 PR4b)
+
+`SUMMARY_PROVIDER`をL1で`sarashina`に切り替える際は、以下の順序を守ること(順序を誤ると`generateSummaryBatch`がSarashinaサービスへ401/403で到達できない状態のままデプロイされる):
+
+1. PR4a(要約状態フィールド・claim/所有権ガード・バッチ処理基盤)をデプロイする。この時点では`SUMMARY_PROVIDER`は既定`none`のまま(実害なし)。
+2. `deploy-sarashina-summary`ワークフローを再実行し、「Grant run.invoker to generateSummaryBatch's execution SA」ステップでrun.invokerを反映する(PR4a未デプロイの環境では`generateSummaryBatch`関数自体が存在せず、このステップが失敗する)。
+3. `deploy-functions`ワークフローを`summary_provider_override=sarashina`で実行し、L1をSarashinaへ切り替える(対象環境の`scripts/clients/<client>.env`の`SARASHINA_SUMMARY_URL`が`<TBD>`のままだとfail-fastする)。
+
+**既知の落とし穴**(`OCR_PROVIDER`と同じ、`functions/.env.<project>`はデプロイの都度再生成される一時ファイル): `code-default`を指定した後続デプロイは、明示的に`summary_provider_override`を指定し直さない限りL1を暗黙に`none`へ戻す。既存のL1設定を維持したまま別の変更(モデルID変更等)だけをデプロイしたい場合は、必ず現在の値を`summary_provider_override`に明示指定すること(`OCR_PROVIDER=paddle`維持運用時と同じ手順、上記GOAL.md実績を参照)。
+
 ---
 
 ### Gmail連携方式の選択ガイド

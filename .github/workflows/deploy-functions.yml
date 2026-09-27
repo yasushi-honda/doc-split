@@ -30,6 +30,16 @@ on:
           - code-default
           - gemini
           - paddle
+      summary_provider_override:
+        description: 'SUMMARY_PROVIDER override (ADR-0027。未指定=code-default(現在none)。sarashinaを選ぶ前に対象環境のSARASHINA_SUMMARY_URLが設定済み、かつdeploy-sarashina-summary.ymlのrun.invoker付与が反映済みであること)'
+        required: true
+        default: 'code-default'
+        type: choice
+        options:
+          - code-default
+          - none
+          - gemini
+          - sarashina
 
 jobs:
   deploy:
@@ -148,6 +158,28 @@ jobs:
             fi
             echo "OCR_PROVIDER=${{ github.event.inputs.ocr_provider_override }}" >> "functions/.env.${PROJECT_ID}"
             echo "OCR_PROVIDER override 適用: ${{ github.event.inputs.ocr_provider_override }} (functions/.env.${PROJECT_ID})"
+          fi
+
+          # SARASHINA_SUMMARY_URL (任意、ADR-0027): PADDLE_OCR_URLと同型。dev以外はまだ
+          # デプロイ済みでないケースを許容し、その場合は書き込みをスキップする(このURLを
+          # 書かないとSUMMARY_PROVIDER=sarashinaを選んでもSarashinaへ到達できず機能が
+          # 永久に無効化される)。
+          SARASHINA_SUMMARY_URL=$(resolve_field_optional SARASHINA_SUMMARY_URL "$ENV_FILE")
+          if [ -n "$SARASHINA_SUMMARY_URL" ]; then
+            echo "SARASHINA_SUMMARY_URL=${SARASHINA_SUMMARY_URL}" >> "functions/.env.${PROJECT_ID}"
+            echo "SARASHINA_SUMMARY_URL 設定: ${SARASHINA_SUMMARY_URL} (functions/.env.${PROJECT_ID})"
+          fi
+
+          # SUMMARY_PROVIDER override (任意、ADR-0027 L1ゲート): OCR_PROVIDER overrideと同じ
+          # 即時ロールバック手段。sarashinaを選んだのに対象環境のSARASHINA_SUMMARY_URLが
+          # 未設定(<TBD>)の場合は、デプロイ後にfail-loudする挙動を待たずここで即座に検知する。
+          if [ "${{ github.event.inputs.summary_provider_override }}" != "code-default" ]; then
+            if [ "${{ github.event.inputs.summary_provider_override }}" == "sarashina" ] && [ -z "$SARASHINA_SUMMARY_URL" ]; then
+              echo "ERROR: summary_provider_override=sarashina が指定されましたが、$ENV_FILE のSARASHINA_SUMMARY_URLが未設定です" >&2
+              exit 1
+            fi
+            echo "SUMMARY_PROVIDER=${{ github.event.inputs.summary_provider_override }}" >> "functions/.env.${PROJECT_ID}"
+            echo "SUMMARY_PROVIDER override 適用: ${{ github.event.inputs.summary_provider_override }} (functions/.env.${PROJECT_ID})"
           fi
 
           echo "Deploying to: $PROJECT_ALIAS"
