@@ -38,6 +38,9 @@ const measureSummaryCostSrc = readFileSync(resolve(scriptsDir, 'measure-summary-
 const ALLOWLIST = new Set([
   // dual-write fixture投入 (既存Firestore状態からの解決ではなく、投入するfixtureデータそのもの)
   'seed-dev-data.ts',
+  // ADR-0027 PR4c: AI要約6状態UI検証用のemulator専用fixture投入(seed-dev-data.tsと同じ
+  // 位置づけ、投入するfixtureデータそのものであり既存Firestore状態からの解決ではない)
+  'seed-adr0027-pr4c-summary-states.js',
   // Phase C backfill本体: 親の既存ocrResult/pageResultsがdetail/mainへの移行元データ
   'backfill-detail-subcollection.ts',
   // 上記のヘルパー

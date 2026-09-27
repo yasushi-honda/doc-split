@@ -187,6 +187,7 @@ jobs:
              FIRESTORE_EMULATOR_HOST=localhost:8085 node scripts/seed-issue-1032-caremanager.js && \
              FIRESTORE_EMULATOR_HOST=localhost:8085 node scripts/seed-issue-1033-contract-ended.js && \
              FIRESTORE_EMULATOR_HOST=localhost:8085 node scripts/seed-issue-1036-csv-export.js && \
+             FIRESTORE_EMULATOR_HOST=localhost:8085 node scripts/seed-adr0027-pr4c-summary-states.js && \
              sleep 5 && \
              cd frontend && \
              npx vite --port 5173 & sleep 5 && \
