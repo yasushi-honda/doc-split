@@ -69,7 +69,7 @@ GCPプロジェクトの契約主体はクライアント自身であり、doc-s
 1. **Sarashina2.2-3B-instruct-v0.1(Q8_0量子化)を自前ホスティング**: `mmnga/sarashina2.2-3b-instruct-v0.1-gguf`(コミュニティ配布GGUF、MITライセンス継承)を`services/sarashina-summary/`のCloud Runサービスとしてデプロイする。PaddleOCRとは異なりFastAPIラッパーを作らず、llama.cpp server(OpenAI互換API)を直接使う(理由・詳細差分は実装計画「主要な設計判断」1・1a参照)
 2. **要約生成をOCR完了イベント駆動の非同期処理へ転換**: `documents/{docId}`に新フィールド`summaryState`を追加し、Cloud Scheduler定期ポーリング+`generateSummaryBatch`(逐次処理)で処理する。既存の手動再生成(`regenerateSummary`)はGemini呼び出しのまま第一弾(PR1〜PR6)では残す
 3. **モデルルーティングは3値(`none`/`sarashina`/`gemini`)、fail-safe先は`none`**: 既定`none`とし、デプロイしただけで全文書が無言でGemini自動要約される事故を防ぐ(詳細は実装計画「主要な設計判断」2参照)
-4. **段階的ロールアウト**: PR0(spike、完了)→PR1(サービス基盤、a/b/c分割、完了)→PR2(品質ゲートのCI化、a/b分割、完了)→PR3(クライアント/ディスパッチャー、dead code、完了・2026-09-26)→PR4(バッチ処理・フロントエンド)→PR5(dev有効化)→PR6(kanameone/cocoro展開)→PR7(手動経路の非同期化、完全なGemini依存脱却に必須)。PR4以降は個別にdecision-maker再承認が必要
+4. **段階的ロールアウト**: PR0(spike、完了)→PR1(サービス基盤、a/b/c分割、完了)→PR2(品質ゲートのCI化、a/b分割、完了)→PR3(クライアント/ディスパッチャー、dead code、完了・2026-09-26)→PR4(バッチ処理・フロントエンド、a/b/c分割、完了・2026-09-28。#1069/#1070/#1071)→PR5(dev有効化)→PR6(kanameone/cocoro展開)→PR7(手動経路の非同期化、完全なGemini依存脱却に必須)。PR5以降は個別にdecision-maker再承認が必要
 
 詳細な変更内容・PR構成・検証方法は実装計画(`/Users/yyyhhh/.claude/plans/logical-baking-lighthouse.md`、decision-maker個人のローカル環境にのみ存在しリポジトリには含まれない)を正とする。ただし、以下の「PR1a実装知見」節に、PR1a実装時にリポジトリ内のコード・ドキュメントを保守する上で必要な技術的要点を転記し、実装計画ファイルにアクセスできない環境でも本ADRとサービスREADME(`services/sarashina-summary/README.md`)だけで判断できるようにしている(pr-review-toolkit comment-analyzer指摘反映)。
 
