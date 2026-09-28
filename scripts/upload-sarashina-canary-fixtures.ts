@@ -97,6 +97,13 @@ const FONT_CANDIDATES = [
  * 実測幅に対し安全側、seed-dev-data.tsのbuildPdf()と同じ簡易折返し方針)。
  * pdf-lib/fontkitは生成時のみ必要なためdynamic importにする(投入経路をPDF生成依存の
  * 解決可否から切り離す、seed-dev-data.tsと同じ設計意図)。
+ *
+ * 1 fixtureページ = 1 PDFページを厳守する(codex review最終確認、P2指摘反映): 当初案は
+ * 1ページあたり最大36行を超えると自動で追加PDFページへ分割しており、D3(21ページ→22)・
+ * D4(2ページ→3)でfixtureの`--- Page N ---`構造とPDFページ数が不一致になっていた。
+ * 本番のOCR/Sarashina要約パスは`--- Page N ---`区切りのテキストを直接扱うため、この
+ * ズレはS0で検証済みのgolden corpusとcanaryの対応関係を崩す。D4の最大57行(折返し後)が
+ * A4 1ページに収まるよう、行高12pt・フォントサイズ9ptに縮小して常に1ページへ収める。
  */
 async function buildPdfFromText(pages: string[]): Promise<Uint8Array> {
   const { PDFDocument, rgb } = await import('pdf-lib');
@@ -116,8 +123,10 @@ async function buildPdfFromText(pages: string[]): Promise<Uint8Array> {
   const font = await doc.embedFont(fontBytes, { subset: true });
 
   const MAX_CHARS_PER_LINE = 40;
-  const LINE_HEIGHT = 20;
-  const MAX_LINES_PER_PAGE = 36;
+  const LINE_HEIGHT = 12;
+  const FONT_SIZE = 9;
+  const TOP_MARGIN = 50;
+  const PAGE_HEIGHT = 841.89; // A4
 
   function wrapLine(line: string): string[] {
     if (line.length === 0) return [''];
@@ -131,20 +140,24 @@ async function buildPdfFromText(pages: string[]): Promise<Uint8Array> {
   for (const pageText of pages) {
     const rawLines = pageText.split('\n');
     const wrapped = rawLines.flatMap(wrapLine);
-    for (let i = 0; i < wrapped.length; i += MAX_LINES_PER_PAGE) {
-      const chunk = wrapped.slice(i, i + MAX_LINES_PER_PAGE);
-      const page = doc.addPage([595.28, 841.89]); // A4
-      const { height } = page.getSize();
-      chunk.forEach((line, li) => {
-        page.drawText(line, {
-          x: 50,
-          y: height - 60 - li * LINE_HEIGHT,
-          size: 11,
-          font,
-          color: rgb(0.1, 0.1, 0.1),
-        });
-      });
+    const maxLinesFittingPage = Math.floor((PAGE_HEIGHT - TOP_MARGIN - 20) / LINE_HEIGHT);
+    if (wrapped.length > maxLinesFittingPage) {
+      throw new Error(
+        `1 fixtureページに${wrapped.length}行(折返し後)は収まりません(上限${maxLinesFittingPage}行、` +
+          `LINE_HEIGHT=${LINE_HEIGHT}pt)。行高またはフォントサイズを見直してください。`
+      );
     }
+    const page = doc.addPage([595.28, PAGE_HEIGHT]);
+    const { height } = page.getSize();
+    wrapped.forEach((line, li) => {
+      page.drawText(line, {
+        x: 50,
+        y: height - TOP_MARGIN - li * LINE_HEIGHT,
+        size: FONT_SIZE,
+        font,
+        color: rgb(0.1, 0.1, 0.1),
+      });
+    });
   }
 
   return doc.save();
