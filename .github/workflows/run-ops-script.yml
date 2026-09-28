@@ -2086,14 +2086,33 @@ jobs:
               process.stdin.on("end", () => {
                 const doc = JSON.parse(data);
                 const fields = (doc && doc.fields) || {};
-                const arrayValue = fields.sarashinaSummaryAllowlist && fields.sarashinaSummaryAllowlist.arrayValue;
+                if (!("sarashinaSummaryAllowlist" in fields)) {
+                  console.log("UNRESTRICTED");
+                  return;
+                }
+                const arrayValue = fields.sarashinaSummaryAllowlist.arrayValue;
                 const ids = ((arrayValue && arrayValue.values) || []).map((v) => v.stringValue);
-                console.log(ids.join(" "));
+                console.log(ids.length === 0 ? "EMPTY" : ids.join(" "));
               });
             ' > /tmp/sarashina-allowlist-ids.txt
-            ALLOWLIST_IDS=$(cat /tmp/sarashina-allowlist-ids.txt)
-            if [ -z "$ALLOWLIST_IDS" ]; then
-              echo "(allowlist空、対象文書なし)"
+            ALLOWLIST_RAW=$(cat /tmp/sarashina-allowlist-ids.txt)
+            # codex review P2指摘反映: フィールド不在(無制限)と空配列(全拒否)を区別する。
+            # 両者ともALLOWLIST_IDSは空文字列にし、以降の⑥は「無制限なら対象外文書なし」
+            # 「空配列なら全pendingが対象外」という正しい判定に分岐させる。
+            if [ "$ALLOWLIST_RAW" = "UNRESTRICTED" ]; then
+              ALLOWLIST_MODE="unrestricted"
+              ALLOWLIST_IDS=""
+            elif [ "$ALLOWLIST_RAW" = "EMPTY" ]; then
+              ALLOWLIST_MODE="empty"
+              ALLOWLIST_IDS=""
+            else
+              ALLOWLIST_MODE="list"
+              ALLOWLIST_IDS="$ALLOWLIST_RAW"
+            fi
+            if [ "$ALLOWLIST_MODE" = "unrestricted" ]; then
+              echo "(allowlist不在=無制限、個別詳細表示は対象なし。全pending文書がSarashina推論対象)"
+            elif [ "$ALLOWLIST_MODE" = "empty" ]; then
+              echo "(allowlist空配列=全拒否、対象文書なし)"
             else
               for ID in $ALLOWLIST_IDS; do
                 DOC_JSON=$(curl -sS -H "Authorization: Bearer ${ACCESS_TOKEN}" \
@@ -2133,23 +2152,27 @@ jobs:
                 },
               }));
             ' "$SINCE_1H")
-            PENDING_RESULT=$(curl -sS -H "Authorization: Bearer ${ACCESS_TOKEN}" -H "Content-Type: application/json" \
-              -d "$PENDING_QUERY" \
-              "https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents:runQuery")
-            echo "$PENDING_RESULT" | node -e '
-              let data = "";
-              process.stdin.on("data", (c) => { data += c; });
-              process.stdin.on("end", () => {
-                let rows;
-                try { rows = JSON.parse(data); } catch (e) { console.error("ERROR:", data); process.exit(1); }
-                const allowlist = new Set((process.argv[1] || "").split(" ").filter(Boolean));
-                const ids = (Array.isArray(rows) ? rows : [])
-                  .filter((r) => r.document)
-                  .map((r) => r.document.name.split("/").pop())
-                  .filter((id) => !allowlist.has(id));
-                console.log(ids.length === 0 ? "(該当なし)" : `${ids.length}件(最大50件中): ${ids.join(", ")}`);
-              });
-            ' "$ALLOWLIST_IDS"
+            if [ "$ALLOWLIST_MODE" = "unrestricted" ]; then
+              echo "(allowlist不在=無制限のため、対象外扱いになるpending文書は存在しない)"
+            else
+              PENDING_RESULT=$(curl -sS -H "Authorization: Bearer ${ACCESS_TOKEN}" -H "Content-Type: application/json" \
+                -d "$PENDING_QUERY" \
+                "https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents:runQuery")
+              echo "$PENDING_RESULT" | node -e '
+                let data = "";
+                process.stdin.on("data", (c) => { data += c; });
+                process.stdin.on("end", () => {
+                  let rows;
+                  try { rows = JSON.parse(data); } catch (e) { console.error("ERROR:", data); process.exit(1); }
+                  const allowlist = new Set((process.argv[1] || "").split(" ").filter(Boolean));
+                  const ids = (Array.isArray(rows) ? rows : [])
+                    .filter((r) => r.document)
+                    .map((r) => r.document.name.split("/").pop())
+                    .filter((id) => !allowlist.has(id));
+                  console.log(ids.length === 0 ? "(該当なし)" : `${ids.length}件(最大50件中): ${ids.join(", ")}`);
+                });
+              ' "$ALLOWLIST_IDS"
+            fi
 
             echo ""
             echo "=== ⑦ generateSummaryBatchのstatsログ・Sarashina Cloud Runのlatency(観測セッション開始からの累積) ==="
