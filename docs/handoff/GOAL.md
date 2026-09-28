@@ -138,7 +138,19 @@ CLAUDE.md CRITICALによりplan mode(Opus 5.5)でPR3詳細設計→`/plan-crossr
 
 ~~**次の一手**: featureブランチ`feat/adr0027-pr3-summary-routing`は未マージ。~~ **【マージ完了・2026-09-27、PR #1062】** codex review(P2、URL前後空白バリデーション不一致、修正済み)+pr-review-toolkit 4エージェント並列レビュー(H1: 短縮再送が8000文字超の文書で完全に無効化されていた実バグ、修正済み。M1: 契約テストのコメント文字列一致による抜け道、修正済み。診断情報欠落: `cause.code`が捨てられていた、修正済み)を経てsquash mergeし、main反映済み。残存指摘(ログ未整備・テストギャップ8件)はPR4申し送りとしてADR-0027に記録(decision-maker確認済み)。
 
-**次の一手**: PR4(状態フィールド`summaryState`・バッチ処理`generateSummaryBatch`・所有権ガード・フロントエンド配線)着手可否をdecision-makerへ確認する。着手時はADR-0027「PR3実装知見」節11(d)(e)(f)の申し送り事項を先に読むこと。
+~~**次の一手**: PR4(状態フィールド`summaryState`・バッチ処理`generateSummaryBatch`・所有権ガード・フロントエンド配線)着手可否をdecision-makerへ確認する。着手時はADR-0027「PR3実装知見」節11(d)(e)(f)の申し送り事項を先に読むこと。~~
+
+## 【ADR-0027 PR4完了・2026-09-28】バッチ処理基盤・デプロイ配線・フロントエンドUI(a/b/c分割)
+
+PR3申し送り事項(11(d)(e)(f))を起点に、PR4a(バックエンド)→PR4b(デプロイ配線)→PR4c(フロントエンド)の順で実装・マージ完了。
+
+- **PR4a(PR #1069)**: `shared/types.ts`に`summaryState`/`summaryRunId`等7フィールド追加。`summaryRunGuard.ts`(所有権判定・失敗分類・バックフィル防止)・`summaryRunStore.ts`(claim/commit/recordFailure/release/rescueの唯一の書込みサイト、#178教訓反映)・`generateSummaryBatch.ts`(OCR完了イベント駆動、`onSchedule`60分間隔)を新設。`regenerateSummary.ts`にclaim/所有権保護を追加(バッチとの競合は`SummarySupersededError`で検出)。`ocrProcessor.ts`にL1='none'時のバックフィル防止配線。codex review 2回(1ブランチ上限、P2×3→2件修正・1件はPR4cへ計画済み委譲、P1×2最終確認で追加修正)+pr-review-toolkit並列レビュー(実バグ2件・テストギャップ5件)を反映
+- **PR4b(PR #1070)**: `deploy-functions.yml`に`summary_provider_override`入力追加(`SARASHINA_SUMMARY_URL`をclient envから解決・sarashina選択時URL未設定ならfail-fast)。`deploy-sarashina-summary.yml`に`generateSummaryBatch`実行SAへの`run.invoker`付与ステップを追加。`docs/context/delivery-and-update-guide.md`にSarashina有効化手順を追記
+- **PR4c(PR #1071)**: `frontend/src/lib/summaryDisplayState.ts`(新規、7 kindを1箇所で判定する純関数)・`useDocuments.ts`(要約7フィールドのfirestoreToDocument()追加、#178教訓。summaryState別ポーリング間隔追加)・`DocumentDetailModal.tsx`(デスクトップ/モバイル双方をkindベース分岐へ置換)。crossreview(grip+codex 2パス)で発見したモバイルeffect構造的バグ(`handleGenerateSummary`未`useCallback`化により「生成中」表示が親再レンダリングで消えうる)を修正。codex review 3回(P2×2)+pr-review-toolkit(実バグ・テストギャップ計9件)を反映。emulator実機でPlaywright MCPにより6状態全てを目視確認済み
+
+**検証**: functions単体テスト864件+E2E(emulator実機)9件、全PASS。actionlintでワークフロー構文検証0 findings。本番挙動は不変(`SUMMARY_PROVIDER`既定`none`のまま、フラグ有効化はPR5のスコープ)。
+
+**次の一手**: PR5(dev環境でのL1有効化)着手可否をdecision-makerへ確認する。着手時は新規plan mode必須(CLAUDE.md CRITICAL、新機能のロールアウトのため)。
 
 ADR-0025はPass1(OCR)のみ対象でPass2/要約は明示的にスコープ外(手動トリガー・低頻度のため)。decision-makerの意向で「要約もいずれはPaddleOCRと同様に自前ホスティングSLM(Cloud Run、CPUのみ、asia-northeast1)へモデルルーティングしたい」という将来検討として、2026-09-21に候補調査・実機検証を実施した。当日中に品質・コスト・アーキテクチャ・コンプライアンスの検討が完了し、**decision-makerが実装移行を正式決定**(下記「次の一手」トリガー②を充足)。CLAUDE.md CRITICAL該当のためplan modeでのフル計画策定に入る。実装(summaryPromptBuilder.ts等の変更)はまだ一切行っていない(この節はplan mode着手時点の記録)。
 

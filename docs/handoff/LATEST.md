@@ -1,6 +1,6 @@
 # ハンドオフメモ
 
-**更新日**: 2026-09-28（ADR-0025 Pass1切替後の事後監視・第1回手動比較完了。kanameone Drive Phase1最終ステップ・ADR-0027 PR4はいずれも外部依存/decision-maker判断待ちで待機中）
+**更新日**: 2026-09-28（ADR-0027 PR4(a/b/c)完了・マージ済み。ADR-0025 Pass1切替後の事後監視・第1回手動比較も完了。kanameone Drive Phase1最終ステップ・ADR-0027 PR5着手はいずれも外部依存/decision-maker判断待ちで待機中）
 
 ## ADR-0025 Pass1切替後の事後監視・第1回手動ワンショット比較（2026-09-28）
 
@@ -24,6 +24,26 @@ Net 0（本セッションでのIssue起票・close操作なし）。
 
 ### 同根再発スキャン・対症療法判定（handoff §4.6/§4.7）
 本セッションは修正PRなし（read-only監視+GOAL.md記録更新のみ）のため対象外。
+
+## ADR-0027 PR4完了: バッチ処理基盤・デプロイ配線・フロントエンドUI（2026-09-27夜〜09-28朝）
+
+### 経緯
+PR3(2026-09-27マージ)の申し送り事項を起点に、PR4a(バックエンド)→PR4b(デプロイ配線)→PR4c(フロントエンド)の順で実装。
+
+### 実行サマリ
+- **PR4a(PR #1069)**: `summaryState`等7フィールド追加、claim/所有権ガード(`summaryRunGuard.ts`/`summaryRunStore.ts`)、OCR完了イベント駆動バッチ`generateSummaryBatch.ts`(60分間隔)を新設。`regenerateSummary.ts`にclaim保護、`ocrProcessor.ts`にL1='none'時のバックフィル防止配線。codex review 2回(1ブランチ上限)+pr-review-toolkit並列レビューで実バグ2件・テストギャップ5件を検出・修正(ソフトデッドラインがcontext超過時の2回目リクエストを未考慮だった問題等)
+- **PR4b(PR #1070)**: `deploy-functions.yml`/`deploy-sarashina-summary.yml`にデプロイ配線・`run.invoker`付与ステップを追加。actionlint構文検証0 findings
+- **PR4c(PR #1071)**: `summaryDisplayState.ts`(7 kind判定の純関数)・`useDocuments.ts`(#178教訓のfirestoreToDocument()配線)・`DocumentDetailModal.tsx`(kindベース分岐)を実装。crossreviewで発見したモバイルeffect構造的バグ(「生成中」表示が親再レンダリングで消えうる)を修正。codex review 3回+pr-review-toolkitで計9件反映、emulator実機でPlaywright MCPにより6状態を目視確認
+- **検証**: functions単体テスト864件+E2E(emulator実機)9件、全PASS。本番挙動は不変(`SUMMARY_PROVIDER`既定`none`のまま)
+
+### 現在の状態
+PR4(a/b/c)は完了・マージ済み。ADR-0027に本節の詳細を反映済み(2026-09-28)。**PR5(dev環境でのL1有効化)は新機能のロールアウトのため新規plan modeが必要、decision-makerの着手指示待ち**。
+
+### Issue Net
+Net 0（本セッションでのIssue起票・close操作なし）。
+
+### 同根再発スキャン・対症療法判定（handoff §4.6/§4.7）
+PR4a/b/cで修正した実バグ(ソフトデッドライン計算・reprocess時のフィールドクリア漏れ・外側try/catch欠如・モバイルeffect構造バグ等)はいずれも構造的な根本対応であり、retry/fallbackのみの対症療法には該当しない。
 
 ## ADR-0027 PR3: Sarashina要約のモデルルーティング・クライアント・ディスパッチャー実装（2026-09-27）
 
