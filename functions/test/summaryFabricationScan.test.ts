@@ -448,6 +448,25 @@ describe('scanSummaryForFabrication: 助詞トリム(②)', () => {
     expect(r2.findings[0].name).to.equal('新緑訪問看護ステーション');
   });
 
+  it('受動・進行形「予定されている」を挟んだ実在組織名を検出しない(ADR-0027 PR5 S0実機ゲート再検証run、e.修正時に対応漏れしていたD8run1/run2の回帰テスト)', () => {
+    // 「9月26日の受診が予定されている青葉クリニック」のような健全な出力で、直後に助詞を挟まず
+    // 実在組織名へ直接連結する動詞句「予定されている」がトリムされず、実在組織名に連結した状態
+    // (「予定されている青葉クリニック」)で捏造判定されていた。直後に助詞を挟まないため
+    // DEFAULT_GENERIC_CORES(完全一致のみ)では対応できず、aの「に対して」・eの「である」
+    // 「として」と同じ複合語トリムの仕組みでDEFAULT_PARTICLESへ「されている」を追加して解消した。
+    const source = '青葉クリニックを受診する。9月26日の受診予定。';
+    const r1 = scanSummaryForFabrication(
+      '両名は同一世帯で、9月26日の受診が予定されている青葉クリニックを受診する。',
+      source
+    );
+    expect(r1.fabricatedCount).to.equal(0);
+
+    // 「予定されている」で接続された箇所でも、実在しない組織名は引き続き捏造として検出できる
+    const r2 = scanSummaryForFabrication('受診が予定されている新葉クリニックが担当。', source);
+    expect(r2.fabricatedCount).to.equal(1);
+    expect(r2.findings[0].name).to.equal('新葉クリニック');
+  });
+
   it('プレフィックス形(「株式会社」等)で捏造企業名のcoreがgenericCores語彙と偶然一致しても検出する(codex review指摘、genericCoreとprefixGenericCoreの分離の回帰テスト)', () => {
     // 「株式会社関わるが担当」のような、suffix直後のcoreがたまたまDEFAULT_GENERIC_CORES
     // (「関わる」等、地の文への巻き込みを想定したcore→suffix方向専用の語彙)と一致する場合、
