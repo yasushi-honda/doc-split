@@ -1,6 +1,29 @@
 # ハンドオフメモ
 
-**更新日**: 2026-09-27（ADR-0027 PR3実装・マージ完了。kanameone Drive Phase1最終ステップ・ADR-0027 PR4はいずれも外部依存/decision-maker判断待ちで待機中）
+**更新日**: 2026-09-28（ADR-0025 Pass1切替後の事後監視・第1回手動比較完了。kanameone Drive Phase1最終ステップ・ADR-0027 PR4はいずれも外部依存/decision-maker判断待ちで待機中）
+
+## ADR-0025 Pass1切替後の事後監視・第1回手動ワンショット比較（2026-09-28）
+
+### 経緯
+`/catchup`で提示された即着手候補（ADR-0025 Pass1全面切替後、9日経過時点での事後監視。2026-09-19記録のStep0④ベースラインとの比較）にdecision-maker承認を得て着手。
+
+### 実行サマリ
+- 前回のベースライン測定方法（`.github/workflows/run-ops-script.yml`の`check-paddle-ocr-step0`ジョブ、Firestore REST `runAggregationQuery`によるstatus:error率集計+`gcloud logging read`によるCloud Run request latency分布算出）をExploreで再確認
+- 同ジョブをdev/kanameone/cocoro全3環境でGHA実行（run 36356478251/36356480290/36356482389、全`success`）し、ログから実測値を取得
+- **比較結果（3環境ともerror率0%を維持、p95 latency・60秒超過率とも悪化なし、いずれも同水準または改善）**:
+  - dev: total=3/7日・error0% → p95=0.29s（baseline 0.30s）・60秒超過0件/10080件（baseline 0.03%）
+  - kanameone: total=1347/7日・error0% → p95=0.32s（baseline 0.42s、改善）・60秒超過21件/10038件0.21%（baseline 0.29%、改善）
+  - cocoro: total=31/7日・error0% → p95=0.28s（baseline 0.29s）・60秒超過0件/10084件（baseline 0件）
+- GOAL.mdの該当節（Step0④ベースライン記載の直後）に結果を記録済み
+
+### 現在の状態
+事後監視・第1回は完了。継続監視は次回以降も同ジョブで実施可能。processocr_errorアラート（`lifecycle:temporary`、review_by 2026-10-03）の削除/恒久化再判断は未到来のため保留のまま。Issue #979（GOAL.mdの「撤回済み」記載とIssue OPEN状態の矛盾）はdecision-maker判断待ちで様子見。
+
+### Issue Net
+Net 0（本セッションでのIssue起票・close操作なし）。
+
+### 同根再発スキャン・対症療法判定（handoff §4.6/§4.7）
+本セッションは修正PRなし（read-only監視+GOAL.md記録更新のみ）のため対象外。
 
 ## ADR-0027 PR3: Sarashina要約のモデルルーティング・クライアント・ディスパッチャー実装（2026-09-27）
 
