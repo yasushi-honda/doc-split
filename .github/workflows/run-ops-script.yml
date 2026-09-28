@@ -228,13 +228,24 @@ on:
           - execute-drive-claim-resync --dry-run
           - execute-drive-claim-resync --execute
           - execute-drive-claim-resync --execute --requeue
+          - set-feature-flag --flag sarashinaSummary --value true --dry-run
+          - set-feature-flag --flag sarashinaSummary --value true
+          - set-feature-flag --flag sarashinaSummary --value false --dry-run
+          - set-feature-flag --flag sarashinaSummary --value false
+          - set-sarashina-summary-allowlist --set --dry-run
+          - set-sarashina-summary-allowlist --set
+          - set-sarashina-summary-allowlist --clear-empty --dry-run
+          - set-sarashina-summary-allowlist --clear-empty
+          - set-sarashina-summary-allowlist --remove --dry-run
+          - set-sarashina-summary-allowlist --remove
+          - check-sarashina-summary-status
       backfill_limit:
         description: 'backfill-drive-export --limit: canary実行時のマーク上限件数(数値のみ) / classify-drive-export-drift --limit: 検査対象document数の上限(数値のみ) / execute-drive-export-repair --limit: 修復対象候補数の上限(数値のみ) / backfill-confirm-on-verify --limit: canary実行時の確定対象上限件数(数値のみ)'
         required: false
         type: string
         default: ''
       doc_id:
-        description: 'Document ID (required when script contains --doc-id, set-drive-allowlist --set, or set-paddle-ocr-allowlist --set; ignored otherwise)'
+        description: 'Document ID (required when script contains --doc-id, set-drive-allowlist --set, or set-paddle-ocr-allowlist --set; for set-sarashina-summary-allowlist --set, comma-separated IDs allowed (max 10); ignored otherwise)'
         required: false
         type: string
         default: ''
@@ -429,6 +440,21 @@ jobs:
             fi
             if ! echo "$DOC_ID" | grep -qE '^[A-Za-z0-9_-]+$'; then
               echo "ERROR: doc_id must contain only alphanumeric, underscore, hyphen characters" >&2
+              exit 1
+            fi
+            SCRIPT_ARGS=$(echo "$SCRIPT_ARGS" | sed "s/--set/--set $DOC_ID/")
+          fi
+
+          # set-sarashina-summary-allowlist --set(ADR-0027 PR5 canary展開用)は、
+          # set-paddle-ocr-allowlist --setと異なりcanary複数件を一度に指定できるよう
+          # カンマ区切り最大10件を許可する(新規分岐、既存の単一ID運用には影響しない)。
+          if [ "$SCRIPT_NAME" = "set-sarashina-summary-allowlist" ] && echo "$SCRIPT_ARGS" | grep -q -- '--set'; then
+            if [ -z "$DOC_ID" ]; then
+              echo "ERROR: doc_id input is required when script contains set-sarashina-summary-allowlist --set" >&2
+              exit 1
+            fi
+            if ! echo "$DOC_ID" | grep -qE '^[A-Za-z0-9_-]+(,[A-Za-z0-9_-]+){0,9}$'; then
+              echo "ERROR: doc_id must be 1-10 comma-separated alphanumeric/underscore/hyphen IDs" >&2
               exit 1
             fi
             SCRIPT_ARGS=$(echo "$SCRIPT_ARGS" | sed "s/--set/--set $DOC_ID/")
@@ -1922,6 +1948,259 @@ jobs:
                   );
                 });
               '
+          elif [ "$SCRIPT_NAME" = "check-sarashina-summary-status" ]; then
+            # ADR-0027 PR5(Sarashina要約dev有効化・実機観測)の観測ジョブ。read-only。
+            # check-paddle-ocr-step0と同じFirestore REST直叩き+gcloud describe/loggingパターン
+            # (ローカルgcloud対話認証に依存せず、このworkflowのSA非対話認証で完結させる)。
+            echo "=== ① L1ゲート状態(processOCR/generateSummaryBatch の SUMMARY_PROVIDER・OCR_PROVIDER) ==="
+            echo "processOCR:"
+            gcloud functions describe processOCR --project="$PROJECT_ID" --gen2 --region=asia-northeast1 \
+              --format="value(serviceConfig.environmentVariables.OCR_PROVIDER,serviceConfig.environmentVariables.SUMMARY_PROVIDER)"
+            echo "generateSummaryBatch:"
+            gcloud functions describe generateSummaryBatch --project="$PROJECT_ID" --gen2 --region=asia-northeast1 \
+              --format="value(serviceConfig.environmentVariables.OCR_PROVIDER,serviceConfig.environmentVariables.SUMMARY_PROVIDER)"
+
+            ACCESS_TOKEN=$(gcloud auth print-access-token)
+
+            echo ""
+            echo "=== ② L2ゲート状態(settings/features: sarashinaSummary, sarashinaSummaryAllowlist) ==="
+            FEATURES_JSON=$(curl -sS -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+              "https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents/settings/features")
+            echo "$FEATURES_JSON" | node -e '
+              let data = "";
+              process.stdin.on("data", (c) => { data += c; });
+              process.stdin.on("end", () => {
+                let doc;
+                try { doc = JSON.parse(data); } catch (e) {
+                  console.error("ERROR: settings/featuresのレスポンスがJSONとして解釈できません:", data);
+                  process.exit(1);
+                }
+                if (doc.error) {
+                  if (doc.error.code === 404) {
+                    console.log("settings/features: ドキュメント未作成(sarashinaSummary上は無効/fail-closed相当)");
+                    return;
+                  }
+                  console.error("ERROR: settings/features取得に失敗しました:", JSON.stringify(doc.error));
+                  process.exit(1);
+                }
+                const fields = doc.fields || {};
+                const flagField = fields.sarashinaSummary;
+                let flagDisplay;
+                if (!flagField) {
+                  flagDisplay = "未設定(フィールド不在、無効扱い)";
+                } else if (typeof flagField.booleanValue === "boolean") {
+                  flagDisplay = String(flagField.booleanValue);
+                } else {
+                  flagDisplay = `非boolean値のため無効扱い: ${JSON.stringify(flagField)}`;
+                }
+                console.log("sarashinaSummary:", flagDisplay);
+
+                if (!("sarashinaSummaryAllowlist" in fields)) {
+                  console.log("sarashinaSummaryAllowlist: 不在(制限なし=allowlist null、全docId対象)");
+                } else {
+                  const arrayValue = fields.sarashinaSummaryAllowlist.arrayValue;
+                  const values = (arrayValue && arrayValue.values) || [];
+                  if (values.length === 0) {
+                    console.log("sarashinaSummaryAllowlist: 空配列(fail-closedで全docId拒否)");
+                  } else {
+                    const ids = values.map((v) => v.stringValue);
+                    console.log(`sarashinaSummaryAllowlist: ${ids.length}件: ${ids.join(", ")}`);
+                  }
+                }
+              })
+            '
+
+            echo ""
+            echo "=== ③ summaryState別件数(pending/processing/done/error/skipped) ==="
+            for STATE in pending processing "done" error skipped; do
+              STATE_QUERY=$(node -e '
+                console.log(JSON.stringify({
+                  structuredAggregationQuery: {
+                    aggregations: [{ count: {}, alias: "n" }],
+                    structuredQuery: {
+                      from: [{ collectionId: "documents" }],
+                      where: { fieldFilter: { field: { fieldPath: "summaryState" }, op: "EQUAL", value: { stringValue: process.argv[1] } } },
+                    },
+                  },
+                }));
+              ' "$STATE")
+              STATE_RESULT=$(curl -sS -H "Authorization: Bearer ${ACCESS_TOKEN}" -H "Content-Type: application/json" \
+                -d "$STATE_QUERY" \
+                "https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents:runAggregationQuery")
+              echo -n "${STATE}: "
+              echo "$STATE_RESULT" | node -e '
+                let data = "";
+                process.stdin.on("data", (c) => { data += c; });
+                process.stdin.on("end", () => {
+                  let parsed;
+                  try { parsed = JSON.parse(data); } catch (e) {
+                    console.error("ERROR: JSON解釈失敗:", data); process.exit(1);
+                  }
+                  const row = Array.isArray(parsed) ? parsed[0] : parsed;
+                  if (row && row.error) { console.error("ERROR:", JSON.stringify(row.error)); process.exit(1); }
+                  const value = row && row.result && row.result.aggregateFields && row.result.aggregateFields.n
+                    ? row.result.aggregateFields.n.integerValue : "0";
+                  console.log(value);
+                });
+              '
+            done
+
+            echo ""
+            echo "=== ④ summaryErrorKind別件数(fabrication_suspected含む) ==="
+            for KIND in fabrication_suspected quota transient blocked unknown; do
+              KIND_QUERY=$(node -e '
+                console.log(JSON.stringify({
+                  structuredAggregationQuery: {
+                    aggregations: [{ count: {}, alias: "n" }],
+                    structuredQuery: {
+                      from: [{ collectionId: "documents" }],
+                      where: { fieldFilter: { field: { fieldPath: "summaryErrorKind" }, op: "EQUAL", value: { stringValue: process.argv[1] } } },
+                    },
+                  },
+                }));
+              ' "$KIND")
+              KIND_RESULT=$(curl -sS -H "Authorization: Bearer ${ACCESS_TOKEN}" -H "Content-Type: application/json" \
+                -d "$KIND_QUERY" \
+                "https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents:runAggregationQuery")
+              echo -n "${KIND}: "
+              echo "$KIND_RESULT" | node -e '
+                let data = "";
+                process.stdin.on("data", (c) => { data += c; });
+                process.stdin.on("end", () => {
+                  let parsed;
+                  try { parsed = JSON.parse(data); } catch (e) { console.error("ERROR:", data); process.exit(1); }
+                  const row = Array.isArray(parsed) ? parsed[0] : parsed;
+                  if (row && row.error) { console.error("ERROR:", JSON.stringify(row.error)); process.exit(1); }
+                  const value = row && row.result && row.result.aggregateFields && row.result.aggregateFields.n
+                    ? row.result.aggregateFields.n.integerValue : "0";
+                  console.log(value);
+                });
+              '
+            done
+
+            echo ""
+            echo "=== ⑤ allowlist対象文書の詳細(summaryState/summaryProvider/summaryAttemptCount/summaryStateUpdatedAt) ==="
+            echo "$FEATURES_JSON" | node -e '
+              let data = "";
+              process.stdin.on("data", (c) => { data += c; });
+              process.stdin.on("end", () => {
+                const doc = JSON.parse(data);
+                const fields = (doc && doc.fields) || {};
+                const arrayValue = fields.sarashinaSummaryAllowlist && fields.sarashinaSummaryAllowlist.arrayValue;
+                const ids = ((arrayValue && arrayValue.values) || []).map((v) => v.stringValue);
+                console.log(ids.join(" "));
+              });
+            ' > /tmp/sarashina-allowlist-ids.txt
+            ALLOWLIST_IDS=$(cat /tmp/sarashina-allowlist-ids.txt)
+            if [ -z "$ALLOWLIST_IDS" ]; then
+              echo "(allowlist空、対象文書なし)"
+            else
+              for ID in $ALLOWLIST_IDS; do
+                DOC_JSON=$(curl -sS -H "Authorization: Bearer ${ACCESS_TOKEN}" \
+                  "https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents/documents/${ID}")
+                echo "$DOC_JSON" | node -e '
+                  let data = "";
+                  process.stdin.on("data", (c) => { data += c; });
+                  process.stdin.on("end", () => {
+                    let doc;
+                    try { doc = JSON.parse(data); } catch (e) { console.log(process.argv[1] + ": JSON解釈失敗"); return; }
+                    if (doc.error) { console.log(process.argv[1] + ": 取得失敗 " + JSON.stringify(doc.error)); return; }
+                    const f = doc.fields || {};
+                    const get = (k) => f[k] ? (f[k].stringValue ?? f[k].integerValue ?? f[k].timestampValue ?? JSON.stringify(f[k])) : "(未設定)";
+                    console.log(`${process.argv[1]}: summaryState=${get("summaryState")} summaryProvider=${get("summaryProvider")} summaryAttemptCount=${get("summaryAttemptCount")} summaryStateUpdatedAt=${get("summaryStateUpdatedAt")}`);
+                  });
+                ' "$ID"
+              done
+            fi
+
+            echo ""
+            echo "=== ⑥ pending中でallowlist外の文書ID(直近1時間・最大50件、次tickでskipped化予定) ==="
+            SINCE_1H=$(date -u -d "-1 hours" +%Y-%m-%dT%H:%M:%SZ)
+            PENDING_QUERY=$(node -e '
+              console.log(JSON.stringify({
+                structuredQuery: {
+                  from: [{ collectionId: "documents" }],
+                  where: {
+                    compositeFilter: {
+                      op: "AND",
+                      filters: [
+                        { fieldFilter: { field: { fieldPath: "summaryState" }, op: "EQUAL", value: { stringValue: "pending" } } },
+                        { fieldFilter: { field: { fieldPath: "summaryStateUpdatedAt" }, op: "GREATER_THAN_OR_EQUAL", value: { timestampValue: process.argv[1] } } },
+                      ],
+                    },
+                  },
+                  limit: 50,
+                },
+              }));
+            ' "$SINCE_1H")
+            PENDING_RESULT=$(curl -sS -H "Authorization: Bearer ${ACCESS_TOKEN}" -H "Content-Type: application/json" \
+              -d "$PENDING_QUERY" \
+              "https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents:runQuery")
+            echo "$PENDING_RESULT" | node -e '
+              let data = "";
+              process.stdin.on("data", (c) => { data += c; });
+              process.stdin.on("end", () => {
+                let rows;
+                try { rows = JSON.parse(data); } catch (e) { console.error("ERROR:", data); process.exit(1); }
+                const allowlist = new Set((process.argv[1] || "").split(" ").filter(Boolean));
+                const ids = (Array.isArray(rows) ? rows : [])
+                  .filter((r) => r.document)
+                  .map((r) => r.document.name.split("/").pop())
+                  .filter((id) => !allowlist.has(id));
+                console.log(ids.length === 0 ? "(該当なし)" : `${ids.length}件(最大50件中): ${ids.join(", ")}`);
+              });
+            ' "$ALLOWLIST_IDS"
+
+            echo ""
+            echo "=== ⑦ generateSummaryBatchのstatsログ・Sarashina Cloud Runのlatency(観測セッション開始からの累積) ==="
+            gcloud logging read "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"generatesummarybatch\" AND timestamp>=\"$SINCE_1H\"" \
+              --project="$PROJECT_ID" --format="value(textPayload)" --limit=200 || true
+            echo "--- Sarashina Cloud Run latency ---"
+            gcloud logging read "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"sarashina-summary\" AND httpRequest.latency:* AND timestamp>=\"$SINCE_1H\"" \
+              --project="$PROJECT_ID" --format="value(httpRequest.latency)" --limit=200 || true
+
+            echo ""
+            echo "=== ⑧ errorsコレクション直近24時間分のerrorMessageからcode抽出(createdAt降順、最大200件、超過時は打ち切り) ==="
+            SINCE_24H=$(date -u -d "-24 hours" +%Y-%m-%dT%H:%M:%SZ)
+            ERRORS_QUERY=$(node -e '
+              console.log(JSON.stringify({
+                structuredQuery: {
+                  from: [{ collectionId: "errors" }],
+                  where: { fieldFilter: { field: { fieldPath: "createdAt" }, op: "GREATER_THAN_OR_EQUAL", value: { timestampValue: process.argv[1] } } },
+                  orderBy: [{ field: { fieldPath: "createdAt" }, direction: "DESCENDING" }],
+                  limit: 201,
+                },
+              }));
+            ' "$SINCE_24H")
+            ERRORS_RESULT=$(curl -sS -H "Authorization: Bearer ${ACCESS_TOKEN}" -H "Content-Type: application/json" \
+              -d "$ERRORS_QUERY" \
+              "https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents:runQuery")
+            echo "$ERRORS_RESULT" | node -e '
+              let data = "";
+              process.stdin.on("data", (c) => { data += c; });
+              process.stdin.on("end", () => {
+                let rows;
+                try { rows = JSON.parse(data); } catch (e) { console.error("ERROR:", data); process.exit(1); }
+                const docs = (Array.isArray(rows) ? rows : []).filter((r) => r.document);
+                if (docs.length > 200) console.log("警告: 200件を超えるエントリが存在(200件で打ち切り、全件ではない)");
+                const codes = {};
+                for (const r of docs.slice(0, 200)) {
+                  const msg = r.document.fields && r.document.fields.errorMessage && r.document.fields.errorMessage.stringValue;
+                  if (!msg) continue;
+                  const m = msg.match(/(?:code=|before connection established: )(\w+)/);
+                  const code = m ? m[1] : "(パターン不一致)";
+                  codes[code] = (codes[code] || 0) + 1;
+                }
+                console.log(`集計対象: ${docs.length}件(直近24時間)`);
+                for (const [code, n] of Object.entries(codes)) console.log(`  ${code}: ${n}件`);
+              });
+            '
+
+            echo ""
+            echo "=== ⑨ sarashina-summaryサービスのrun.invoker付与状況・現行revision/image digest ==="
+            gcloud run services get-iam-policy sarashina-summary --project="$PROJECT_ID" --region=asia-northeast1 --format=json
+            gcloud run services describe sarashina-summary --project="$PROJECT_ID" --region=asia-northeast1 \
+              --format="value(status.latestReadyRevisionName,spec.template.spec.containers[0].image)"
           elif [ "$SCRIPT_NAME" = "audit-fax-duplication-plan-logs" ]; then
             # 複数人記載FAX検出 Stage2切替判断材料(docs/adr/0024-multi-customer-detection.md)。
             # processOCR(cronバッチ)がconsole.log(msg, obj)で出力するfaxDuplicationPlanログ
