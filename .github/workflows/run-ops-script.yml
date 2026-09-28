@@ -2171,7 +2171,7 @@ jobs:
               ALLOWLIST_IDS="$ALLOWLIST_RAW"
             fi
             if [ "$ALLOWLIST_MODE" = "gate_disabled" ]; then
-              echo "(settings/features未作成=L2ゲート全体が無効。sarashinaSummary=false相当、全文書がSarashina対象外)"
+              echo "(L2ゲート全体が無効(settings/features未作成、またはsarashinaSummaryが未有効化)。全文書がSarashina対象外。詳細は②の出力を参照)"
             elif [ "$ALLOWLIST_MODE" = "unrestricted" ]; then
               echo "(allowlist不在=無制限、個別詳細表示は対象なし。全pending文書がSarashina推論対象)"
             elif [ "$ALLOWLIST_MODE" = "empty" ]; then
