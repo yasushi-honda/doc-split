@@ -2085,7 +2085,15 @@ jobs:
               process.stdin.on("data", (c) => { data += c; });
               process.stdin.on("end", () => {
                 const doc = JSON.parse(data);
-                const fields = (doc && doc.fields) || {};
+                if (doc.error) {
+                  // codex review P2指摘反映: settings/features自体が404(未作成)の場合、
+                  // ②と同じくfail-closed(sarashinaSummary無効)として扱う。UNRESTRICTEDと
+                  // 混同すると、ゲート全体が無効なのに「全pendingがSarashina対象」という
+                  // 矛盾した誤表示になる。
+                  console.log("GATE_DISABLED");
+                  return;
+                }
+                const fields = doc.fields || {};
                 if (!("sarashinaSummaryAllowlist" in fields)) {
                   console.log("UNRESTRICTED");
                   return;
@@ -2096,10 +2104,13 @@ jobs:
               });
             ' > /tmp/sarashina-allowlist-ids.txt
             ALLOWLIST_RAW=$(cat /tmp/sarashina-allowlist-ids.txt)
-            # codex review P2指摘反映: フィールド不在(無制限)と空配列(全拒否)を区別する。
-            # 両者ともALLOWLIST_IDSは空文字列にし、以降の⑥は「無制限なら対象外文書なし」
-            # 「空配列なら全pendingが対象外」という正しい判定に分岐させる。
-            if [ "$ALLOWLIST_RAW" = "UNRESTRICTED" ]; then
+            # codex review P2指摘反映(2件): (a)フィールド不在(無制限)と空配列(全拒否)を区別する。
+            # (b)settings/features自体が404の場合はゲート全体が無効(GATE_DISABLED)であり、
+            # UNRESTRICTEDと混同しない(②のfail-closed判定と整合させる)。
+            if [ "$ALLOWLIST_RAW" = "GATE_DISABLED" ]; then
+              ALLOWLIST_MODE="gate_disabled"
+              ALLOWLIST_IDS=""
+            elif [ "$ALLOWLIST_RAW" = "UNRESTRICTED" ]; then
               ALLOWLIST_MODE="unrestricted"
               ALLOWLIST_IDS=""
             elif [ "$ALLOWLIST_RAW" = "EMPTY" ]; then
@@ -2109,7 +2120,9 @@ jobs:
               ALLOWLIST_MODE="list"
               ALLOWLIST_IDS="$ALLOWLIST_RAW"
             fi
-            if [ "$ALLOWLIST_MODE" = "unrestricted" ]; then
+            if [ "$ALLOWLIST_MODE" = "gate_disabled" ]; then
+              echo "(settings/features未作成=L2ゲート全体が無効。sarashinaSummary=false相当、全文書がSarashina対象外)"
+            elif [ "$ALLOWLIST_MODE" = "unrestricted" ]; then
               echo "(allowlist不在=無制限、個別詳細表示は対象なし。全pending文書がSarashina推論対象)"
             elif [ "$ALLOWLIST_MODE" = "empty" ]; then
               echo "(allowlist空配列=全拒否、対象文書なし)"
