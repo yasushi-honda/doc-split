@@ -359,6 +359,25 @@ describe('scanSummaryForFabrication: 助詞トリム(②)', () => {
     expect(r2.findings[0].name).to.equal('新関わるクリニック');
   });
 
+  it('動詞「行う」+suffixは事業所名不明の正直な回答であり検出しない(ADR-0027 PR5 S0実機ゲート再検証run、D9run1の回帰テスト)', () => {
+    // 「歩行器貸与を行う事業所」のような、事業所名が分からない旨を正直に述べる健全な出力で、
+    // 「行う事業所」(「行う」は「実施する」を意味する動詞であり固有名詞ではない)が誤って
+    // 捏造判定されていた。「対して」「当該」「関わる」に続く4件目の同型パターンで、
+    // 同じ理由でDEFAULT_GENERIC_CORESへ追加した。
+    const source = '三好陽子様に歩行器を貸与する。';
+    const r1 = scanSummaryForFabrication(
+      'この貸与は、三好様の日常生活の自立を支援する目的で実施され、事業所と医療機関が連携してサポートを行います。本書類には重要な日付として貸与開始日が明記されており、関係者としては三好様、貸与を行う事業所、および医療機関が含まれています。',
+      source
+    );
+    expect(r1.fabricatedCount).to.equal(0);
+    expect(r1.findings).to.deep.equal([]);
+
+    // バイパス確認: 「行う」を含む捏造プレフィックスは引き続き検出できる
+    const r2 = scanSummaryForFabrication('新行うクリニックが担当。', '青葉クリニックが担当。');
+    expect(r2.fabricatedCount).to.equal(1);
+    expect(r2.findings[0].name).to.equal('新行うクリニック');
+  });
+
   it('プレフィックス形(「株式会社」等)で捏造企業名のcoreがgenericCores語彙と偶然一致しても検出する(codex review指摘、genericCoreとprefixGenericCoreの分離の回帰テスト)', () => {
     // 「株式会社関わるが担当」のような、suffix直後のcoreがたまたまDEFAULT_GENERIC_CORES
     // (「関わる」等、地の文への巻き込みを想定したcore→suffix方向専用の語彙)と一致する場合、
