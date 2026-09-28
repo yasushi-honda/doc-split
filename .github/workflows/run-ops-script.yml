@@ -117,6 +117,9 @@ on:
           - seed-dev-data --dry-run
           - seed-dev-data
           - seed-dev-data --force-pending
+          - upload-sarashina-canary-fixtures --dry-run
+          - upload-sarashina-canary-fixtures --execute
+          - upload-sarashina-canary-fixtures --execute --force
           - set-feature-flag --flag faxDuplication --value true --dry-run
           - set-feature-flag --flag faxDuplication --value true
           - set-feature-flag --flag faxDuplication --value false --dry-run
@@ -1605,6 +1608,7 @@ jobs:
                [ "$SCRIPT_NAME" = "pdf-feature-survey" ] || \
                [ "$SCRIPT_NAME" = "verify-pdf-determinism" ] || \
                [ "$SCRIPT_NAME" = "seed-dev-data" ] || \
+               [ "$SCRIPT_NAME" = "upload-sarashina-canary-fixtures" ] || \
                [ "$SCRIPT_NAME" = "compare-gemini-ocr-models" ] || \
                [ "$SCRIPT_NAME" = "spike-candidate-extraction" ] || \
                [ "$SCRIPT_NAME" = "verify-candidate-extraction-document-level" ] || \
@@ -1622,7 +1626,11 @@ jobs:
                [ "$SCRIPT_NAME" = "merge-notation-duplicate-masters" ] || \
                [ "$SCRIPT_NAME" = "verify-type3-ocr" ]; then
             # Issue #432 PR-C 系 script は scripts/lib/* (TypeScript)、seed-dev-data (#528) は
-            # shared/*.ts に依存するため ts-node 経由で実行。compare-gemini-ocr-models (#548) は
+            # shared/*.ts に依存するため ts-node 経由で実行。
+            # upload-sarashina-canary-fixtures (ADR-0027 PR5 S4) は seed-dev-data と同型
+            # (pdf-lib/@pdf-lib/fontkitでPDF生成 + Storage実アップロード + status:'pending'投入、
+            # STORAGE_BUCKET使用)。ALLOWED_PROJECT_ID='doc-split-dev'固定ガードあり。
+            # compare-gemini-ocr-models (#548) は
             # functions/src/utils/* (extractors.ts/retry.ts) に依存するため同様に ts-node 経由。
             # compare-gemini-ocr-models-confirmed (#548 confirmed replay方式) も同様の依存関係。
             # spike-candidate-extraction (OCR突合精度向上ミッション タスクA) も同様に
