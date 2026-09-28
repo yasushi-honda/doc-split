@@ -2167,6 +2167,12 @@ jobs:
             ' "$SINCE_1H")
             if [ "$ALLOWLIST_MODE" = "unrestricted" ]; then
               echo "(allowlist不在=無制限のため、対象外扱いになるpending文書は存在しない)"
+            elif [ "$ALLOWLIST_MODE" = "gate_disabled" ]; then
+              # 2回目codex review最終確認(3回目実行)P2指摘反映: L2ゲート無効時は
+              # generateSummaryBatchがallowlist判定に到達する前にreturnするため、pending文書は
+              # 「次tickでskippedになる」のではなく「無効な間ずっとpendingのまま滞留する」。
+              echo "(L2ゲート無効(GATE_DISABLED)のためバッチのallowlist判定自体に到達しない。" \
+                   "pending文書はskippedにはならずキュー一時停止のまま滞留する)"
             else
               PENDING_RESULT=$(curl -sS -H "Authorization: Bearer ${ACCESS_TOKEN}" -H "Content-Type: application/json" \
                 -d "$PENDING_QUERY" \
@@ -2176,9 +2182,16 @@ jobs:
                 process.stdin.on("data", (c) => { data += c; });
                 process.stdin.on("end", () => {
                   let rows;
-                  try { rows = JSON.parse(data); } catch (e) { console.error("ERROR:", data); process.exit(1); }
+                  try { rows = JSON.parse(data); } catch (e) { console.error("ERROR: JSON解釈失敗:", data); process.exit(1); }
+                  // codex review最終確認(3回目実行)P2指摘反映: Firestoreエラー応答は妥当なJSONの
+                  // オブジェクト(配列ではない)として返るため、非配列を無条件で空扱いすると
+                  // クエリ失敗(権限不足・複合インデックス未整備等)を「該当なし」と誤報告する。
+                  if (!Array.isArray(rows)) {
+                    console.error("ERROR: Firestore runQueryが失敗しました:", JSON.stringify(rows));
+                    process.exit(1);
+                  }
                   const allowlist = new Set((process.argv[1] || "").split(" ").filter(Boolean));
-                  const ids = (Array.isArray(rows) ? rows : [])
+                  const ids = rows
                     .filter((r) => r.document)
                     .map((r) => r.document.name.split("/").pop())
                     .filter((id) => !allowlist.has(id));
@@ -2216,8 +2229,14 @@ jobs:
               process.stdin.on("data", (c) => { data += c; });
               process.stdin.on("end", () => {
                 let rows;
-                try { rows = JSON.parse(data); } catch (e) { console.error("ERROR:", data); process.exit(1); }
-                const docs = (Array.isArray(rows) ? rows : []).filter((r) => r.document);
+                try { rows = JSON.parse(data); } catch (e) { console.error("ERROR: JSON解釈失敗:", data); process.exit(1); }
+                // codex review最終確認(3回目実行)P2指摘反映: Firestoreエラー応答を非配列として
+                // 無条件で空扱いすると、クエリ失敗を「直近24時間エラー0件」の健全な結果と誤報告する。
+                if (!Array.isArray(rows)) {
+                  console.error("ERROR: Firestore runQueryが失敗しました:", JSON.stringify(rows));
+                  process.exit(1);
+                }
+                const docs = rows.filter((r) => r.document);
                 if (docs.length > 200) console.log("警告: 200件を超えるエントリが存在(200件で打ち切り、全件ではない)");
                 const codes = {};
                 for (const r of docs.slice(0, 200)) {
