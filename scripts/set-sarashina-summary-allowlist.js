@@ -52,13 +52,20 @@ if (modeCount !== 1) {
 
 let allowlist = null; // --remove時は使わない
 if (setRaw !== undefined) {
-  allowlist = setRaw
+  const rawIds = setRaw
     .split(',')
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
+  // pr-review-toolkit silent-failure-hunter指摘反映: 重複docId(コピペミス等)を許すと、
+  // 差分表示(describeDiff)の追加/削除件数と配列長が食い違って見え誤解を招くため、
+  // 入力段階で重複を除去し、除去があったことを明示する。
+  allowlist = [...new Set(rawIds)];
   if (allowlist.length === 0) {
     console.error('ERROR: --set には少なくとも1件のdocIdをカンマ区切りで指定してください(空にする場合は --clear-empty を使用)');
     process.exit(1);
+  }
+  if (allowlist.length !== rawIds.length) {
+    console.log(`注意: 重複docIdを${rawIds.length - allowlist.length}件除去しました(指定${rawIds.length}件→重複除去後${allowlist.length}件)`);
   }
 } else if (clearEmpty) {
   allowlist = [];
@@ -112,10 +119,14 @@ async function main() {
 
   console.log(`環境: ${clientName} (project: ${projectId})`);
   if (remove) {
+    const beforeCount = Array.isArray(currentValue) ? currentValue.length : 0;
     console.log(
       `対象: settings/features.sarashinaSummaryAllowlist  現在値: ${JSON.stringify(currentValue)} → フィールド削除(制限なし=全展開)`
     );
-    console.log(describeDiff(currentValue, []));
+    // pr-review-toolkit silent-failure-hunter指摘反映: describeDiff(current, [])を使うと
+    // 「空配列(全拒否)」と同じ表示("変更前N件→変更後0件")になり、実際の結果(制限なし=
+    // 全展開、正反対の状態)と矛盾する。--removeは専用の文言で表示する。
+    console.log(`差分: 制限対象${beforeCount}件を解除(フィールド自体を削除、空配列ではない)`);
   } else {
     console.log(
       `対象: settings/features.sarashinaSummaryAllowlist  現在値: ${JSON.stringify(currentValue)} → 新値: ${JSON.stringify(allowlist)}` +

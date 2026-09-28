@@ -2038,8 +2038,16 @@ jobs:
                   }
                   const row = Array.isArray(parsed) ? parsed[0] : parsed;
                   if (row && row.error) { console.error("ERROR:", JSON.stringify(row.error)); process.exit(1); }
+                  // pr-review-toolkit silent-failure-hunter指摘反映(check-paddle-ocr-step0の
+                  // extractCount()と同じ厳密さに揃える): 成功時の形状(aggregateFields.n)が
+                  // 無い場合はerrorフィールド不在でも想定外のレスポンスとしてfail-loudにする
+                  // (無条件に"0"へフォールバックすると、クエリ失敗を正常な0件と誤認しうる)。
                   const value = row && row.result && row.result.aggregateFields && row.result.aggregateFields.n
-                    ? row.result.aggregateFields.n.integerValue : "0";
+                    ? row.result.aggregateFields.n.integerValue : undefined;
+                  if (value === undefined) {
+                    console.error("ERROR: 集計結果を取得できません(想定外のレスポンス形状):", data);
+                    process.exit(1);
+                  }
                   console.log(value);
                 });
               '
@@ -2072,7 +2080,11 @@ jobs:
                   const row = Array.isArray(parsed) ? parsed[0] : parsed;
                   if (row && row.error) { console.error("ERROR:", JSON.stringify(row.error)); process.exit(1); }
                   const value = row && row.result && row.result.aggregateFields && row.result.aggregateFields.n
-                    ? row.result.aggregateFields.n.integerValue : "0";
+                    ? row.result.aggregateFields.n.integerValue : undefined;
+                  if (value === undefined) {
+                    console.error("ERROR: 集計結果を取得できません(想定外のレスポンス形状):", data);
+                    process.exit(1);
+                  }
                   console.log(value);
                 });
               '
@@ -2084,7 +2096,11 @@ jobs:
               let data = "";
               process.stdin.on("data", (c) => { data += c; });
               process.stdin.on("end", () => {
-                const doc = JSON.parse(data);
+                let doc;
+                try { doc = JSON.parse(data); } catch (e) {
+                  console.error("ERROR: settings/featuresのレスポンスがJSONとして解釈できません:", data);
+                  process.exit(1);
+                }
                 if (doc.error) {
                   // codex review P2指摘反映: settings/features自体が404(未作成)の場合、
                   // ②と同じくfail-closed(sarashinaSummary無効)として扱う。UNRESTRICTEDと
@@ -2094,6 +2110,14 @@ jobs:
                   return;
                 }
                 const fields = doc.fields || {};
+                // pr-review-toolkit code-reviewer指摘反映(重要): ドキュメントは存在していても
+                // sarashinaSummaryがtrueでなければgetSarashinaSummaryGate()はenabled=falseに
+                // なる(generateSummaryBatch.tsはこの時点でキューを一時停止しreturnする)。
+                // 404の場合と同じGATE_DISABLED扱いにする(allowlistの状態に関わらず無効)。
+                if (fields.sarashinaSummary?.booleanValue !== true) {
+                  console.log("GATE_DISABLED");
+                  return;
+                }
                 if (!("sarashinaSummaryAllowlist" in fields)) {
                   console.log("UNRESTRICTED");
                   return;
@@ -2135,8 +2159,21 @@ jobs:
                   process.stdin.on("data", (c) => { data += c; });
                   process.stdin.on("end", () => {
                     let doc;
-                    try { doc = JSON.parse(data); } catch (e) { console.log(process.argv[1] + ": JSON解釈失敗"); return; }
-                    if (doc.error) { console.log(process.argv[1] + ": 取得失敗 " + JSON.stringify(doc.error)); return; }
+                    // pr-review-toolkit silent-failure-hunter指摘反映: 404(文書が既に削除されている等、
+                    // 単発なら許容できる)と、それ以外(権限不足等、allowlist内の全IDで再現しうる
+                    // 系統的な障害)を区別する。系統的障害を「該当docの取得失敗」として握り潰し
+                    // job全体をexit 0にすると、観測ジョブ自体が壊れていることを見逃す。
+                    try { doc = JSON.parse(data); } catch (e) {
+                      console.error(process.argv[1] + ": JSON解釈失敗:", data); process.exit(1);
+                    }
+                    if (doc.error) {
+                      if (doc.error.code === 404) {
+                        console.log(process.argv[1] + ": 取得失敗(404、文書が存在しない可能性)");
+                        return;
+                      }
+                      console.error(process.argv[1] + ": 取得失敗(系統的障害の可能性) " + JSON.stringify(doc.error));
+                      process.exit(1);
+                    }
                     const f = doc.fields || {};
                     const get = (k) => f[k] ? (f[k].stringValue ?? f[k].integerValue ?? f[k].timestampValue ?? JSON.stringify(f[k])) : "(未設定)";
                     console.log(`${process.argv[1]}: summaryState=${get("summaryState")} summaryProvider=${get("summaryProvider")} summaryAttemptCount=${get("summaryAttemptCount")} summaryStateUpdatedAt=${get("summaryStateUpdatedAt")}`);
@@ -2201,12 +2238,15 @@ jobs:
             fi
 
             echo ""
-            echo "=== ⑦ generateSummaryBatchのstatsログ・Sarashina Cloud Runのlatency(観測セッション開始からの累積) ==="
+            echo "=== ⑦ generateSummaryBatchのstatsログ・Sarashina Cloud Runのlatency(直近1時間) ==="
+            # pr-review-toolkit silent-failure-hunter指摘反映: check-paddle-ocr-step0の同型クエリ
+            # (L1929)は`|| true`を付けていない。付けるとgcloudの権限エラー・API未有効化等の失敗が
+            # 「ログ0件(健全)」と区別つかなくなる(このジョブが検知すべき失敗を隠す)ため揃えて外す。
             gcloud logging read "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"generatesummarybatch\" AND timestamp>=\"$SINCE_1H\"" \
-              --project="$PROJECT_ID" --format="value(textPayload)" --limit=200 || true
+              --project="$PROJECT_ID" --format="value(textPayload)" --limit=200
             echo "--- Sarashina Cloud Run latency ---"
             gcloud logging read "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"sarashina-summary\" AND httpRequest.latency:* AND timestamp>=\"$SINCE_1H\"" \
-              --project="$PROJECT_ID" --format="value(httpRequest.latency)" --limit=200 || true
+              --project="$PROJECT_ID" --format="value(httpRequest.latency)" --limit=200
 
             echo ""
             echo "=== ⑧ errorsコレクション直近24時間分のerrorMessageからcode抽出(createdAt降順、最大200件、超過時は打ち切り) ==="
