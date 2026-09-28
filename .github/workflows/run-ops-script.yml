@@ -2127,6 +2127,11 @@ jobs:
                   // ②と同じくfail-closed(sarashinaSummary無効)として扱う。UNRESTRICTEDと
                   // 混同すると、ゲート全体が無効なのに「全pendingがSarashina対象」という
                   // 矛盾した誤表示になる。
+                  // 注意(pr-review-toolkit code-reviewer最終確認指摘): ここは404以外のエラー
+                  // (権限不足等)も一律GATE_DISABLED扱いにしているが、実際にfail-loudするのは
+                  // 同じ$FEATURES_JSONを先に解析する②(404以外はprocess.exit(1))であり、
+                  // pipefail下でstep全体が②の時点で止まるためここには到達しない。②のエラー
+                  // ハンドリングを変更・削除する際はこの暗黙の前提が崩れる点に注意。
                   console.log("GATE_DISABLED");
                   return;
                 }
