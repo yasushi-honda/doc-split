@@ -219,18 +219,18 @@ describe('scanSummaryForFabrication: 助詞トリム(②)', () => {
       source
     );
     // 「株式会社」はPREFIX_CAPABLE_SUFFIXESであると同時に通常のORG_SUFFIXESでもあるため、
-    // 「である株式会社」(で→助詞トリム→core="ある")もcore-suffix方向の候補として独立に
-    // 生成される。「ある」はgenericCoresに含まれない動詞語幹の残骸であり、本来の固有名詞
-    // ではないが、正規表現+助詞境界という設計上、意味を持たない短い残骸まで拾ってしまう
-    // ことがある。これは本PR(プレフィックス方向追加)以前から存在するcore-suffix方向の
-    // 過検出(false positive、安全側)であり、混在自体が引き起こす新規のバグではないことを
-    // 確認済み(株式会社をorgSuffixesから除外した場合でも「青葉クリニック」のみ検出される
-    // ことをデバッグ時に別途確認した)。fabricationゲートは過検出(見逃しより多く検知)側に
-    // 倒すのが安全設計のため、これも許容範囲として3件を期待値とする。
-    expect(r.fabricatedCount).to.equal(3);
+    // 「である株式会社」もcore-suffix方向の候補として独立に生成されうる。当初(複合語
+    // 「である」追加前)は単独の助詞「で」までしかトリムされず、残った「ある」が意味を
+    // 持たない短い残骸のまま候補化される既知の過検出(false positive、安全側)だったが、
+    // ADR-0027 PR5 S0実機ゲート再検証run(2026-09-28、d.修正)で複合語「である」を
+    // DEFAULT_PARTICLESへ追加した結果、「である」全体がトリムされ空文字列になりgenericCore
+    // 判定で候補にすら入らなくなった(この過検出そのものが解消された)。混在検証の主眼である
+    // 「株式会社みずほ」(プレフィックス方向)と「青葉クリニック」(core-suffix方向)の
+    // 2件が正しく独立して検出されることを確認する。
+    expect(r.fabricatedCount).to.equal(2);
     const names = r.findings.map((f) => f.name).sort();
-    expect(names).to.deep.equal(['ある株式会社', '株式会社みずほ', '青葉クリニック'].sort());
-    // 「株式会社みずほ」(プレフィックス方向)が「ある株式会社」(core-suffix方向)の座標に
+    expect(names).to.deep.equal(['株式会社みずほ', '青葉クリニック'].sort());
+    // 「株式会社みずほ」(プレフィックス方向)が「青葉クリニック」(core-suffix方向)の座標に
     // 誤って包含・抑制されていないことを個別に確認する(pr-test-analyzer指摘の核心)。
     expect(r.findings.some((f) => f.name === '株式会社みずほ')).to.equal(true);
     expect(r.findings.some((f) => f.name === '青葉クリニック')).to.equal(true);
@@ -376,6 +376,76 @@ describe('scanSummaryForFabrication: 助詞トリム(②)', () => {
     const r2 = scanSummaryForFabrication('新行うクリニックが担当。', '青葉クリニックが担当。');
     expect(r2.fabricatedCount).to.equal(1);
     expect(r2.findings[0].name).to.equal('新行うクリニック');
+  });
+
+  it('修飾語「各」+suffixは複数事業所の総称であり検出しない(ADR-0027 PR5 S0実機ゲート再検証run、d.修正直後の再検証、D3run1の回帰テスト)', () => {
+    // 「訪問介護・通所リハビリ・訪問看護の各事業所」のような、複数の事業所種別を総称する
+    // 健全な出力で、「各事業所」(「各」は「それぞれの」を意味する連体詞であり固有名詞ではない)
+    // が誤って捏造判定されていた。b〜dと同型のパターンでDEFAULT_GENERIC_CORESへ追加した。
+    const source = '柊あおい様には訪問介護・通所リハビリ・訪問看護を提供する。';
+    const r1 = scanSummaryForFabrication(
+      '関係者には、柊あおい様、訪問介護・通所リハビリ・訪問看護の各事業所が含まれる。',
+      source
+    );
+    expect(r1.fabricatedCount).to.equal(0);
+
+    // バイパス確認: 「各」を含む捏造プレフィックスは引き続き検出できる
+    const r2 = scanSummaryForFabrication('新各クリニックが担当。', '青葉クリニックが担当。');
+    expect(r2.fabricatedCount).to.equal(1);
+    expect(r2.findings[0].name).to.equal('新各クリニック');
+  });
+
+  it('名詞「貸与」+suffixはサービス種別の総称であり検出しない(ADR-0027 PR5 S0実機ゲート再検証run、d.修正直後の再検証、D9run2の回帰テスト)', () => {
+    // 「利用者と貸与事業所間の合意」のような、事業所名不明のまま貸与というサービス種別のみを
+    // 述べる健全な出力で、「貸与事業所」(「貸与」はサービス種別を示す名詞であり固有名詞ではない)
+    // が誤って捏造判定されていた。b〜dと同型のパターンでDEFAULT_GENERIC_CORESへ追加した。
+    const source = '三好陽子様に歩行器を貸与する。';
+    const r1 = scanSummaryForFabrication(
+      'この書類は、福祉用具の貸与に関する契約詳細を記しており、利用者と貸与事業所間の合意を証明する重要な文書です。',
+      source
+    );
+    expect(r1.fabricatedCount).to.equal(0);
+
+    // バイパス確認: 「貸与」を含む捏造プレフィックスは引き続き検出できる
+    const r2 = scanSummaryForFabrication('新貸与クリニックが担当。', '青葉クリニックが担当。');
+    expect(r2.fabricatedCount).to.equal(1);
+    expect(r2.findings[0].name).to.equal('新貸与クリニック');
+  });
+
+  it('コピュラ「である」を挟んだ実在組織名を検出しない(ADR-0027 PR5 S0実機ゲート再検証run、d.修正直後の再検証、D1run1の回帰テスト)', () => {
+    // 「主治医である青葉クリニックの桜庭研医師」のような健全な出力で、単独の助詞「で」までしか
+    // トリムされず、残った「ある」が実在組織名に連結した状態(「ある青葉クリニック」)で
+    // 捏造判定されていた(aの「に対して」と同型、異なる接続表現)。複合語「である」を
+    // DEFAULT_PARTICLESへ追加して解消した。
+    const source = '青葉クリニックの桜庭研医師による意見書。';
+    const r1 = scanSummaryForFabrication(
+      '指示書には、主治医である青葉クリニックの桜庭研医師による意見書の写しも含まれている。',
+      source
+    );
+    expect(r1.fabricatedCount).to.equal(0);
+
+    // 「である」で接続された箇所でも、実在しない組織名は引き続き捏造として検出できる
+    const r2 = scanSummaryForFabrication('主治医である新葉クリニックが担当。', source);
+    expect(r2.fabricatedCount).to.equal(1);
+    expect(r2.findings[0].name).to.equal('新葉クリニック');
+  });
+
+  it('接続助詞「として」を挟んだ実在組織名を検出しない(ADR-0027 PR5 S0実機ゲート再検証run、d.修正直後の再検証、D4run1の回帰テスト)', () => {
+    // 「関係者としてみどりヶ丘訪問看護ステーションと青葉クリニックが記載」のような健全な出力で、
+    // 単独の助詞「と」までしかトリムされず、残った「して」が実在組織名に連結した状態
+    // (「してみどりヶ丘訪問看護ステーション」)で捏造判定されていた(aの「に対して」と同型、
+    // 異なる接続表現)。複合語「として」をDEFAULT_PARTICLESへ追加して解消した。
+    const source = 'みどりヶ丘訪問看護ステーションと青葉クリニックが記載されている。';
+    const r1 = scanSummaryForFabrication(
+      '日付や金額は報告書に明記されていないが、関係者としてみどりヶ丘訪問看護ステーションと青葉クリニックが記載されている。',
+      source
+    );
+    expect(r1.fabricatedCount).to.equal(0);
+
+    // 「として」で接続された箇所でも、実在しない組織名は引き続き捏造として検出できる
+    const r2 = scanSummaryForFabrication('関係者として新緑訪問看護ステーションが記載。', source);
+    expect(r2.fabricatedCount).to.equal(1);
+    expect(r2.findings[0].name).to.equal('新緑訪問看護ステーション');
   });
 
   it('プレフィックス形(「株式会社」等)で捏造企業名のcoreがgenericCores語彙と偶然一致しても検出する(codex review指摘、genericCoreとprefixGenericCoreの分離の回帰テスト)', () => {
