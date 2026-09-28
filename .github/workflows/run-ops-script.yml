@@ -248,7 +248,7 @@ on:
         type: string
         default: ''
       doc_id:
-        description: 'Document ID (required when script contains --doc-id, set-drive-allowlist --set, or set-paddle-ocr-allowlist --set; for set-sarashina-summary-allowlist --set, comma-separated IDs allowed (max 10); ignored otherwise)'
+        description: 'Document ID (required when script contains --doc-id, set-drive-allowlist --set, or set-paddle-ocr-allowlist --set; for set-paddle-ocr-allowlist --set or set-sarashina-summary-allowlist --set, comma-separated IDs allowed (max 10); ignored otherwise)'
         required: false
         type: string
         default: ''
@@ -450,14 +450,19 @@ jobs:
           fi
 
           # set-paddle-ocr-allowlist --set(ADR-0025 Pass1 canary展開用)は
-          # set-drive-allowlist --setと同一パターン(単一docIdをdoc_id入力から受け取る)。
+          # set-drive-allowlist --setと同一パターン(単一docIdをdoc_id入力から受け取る)想定
+          # だったが、set-paddle-ocr-allowlist.js自体はscripts/set-sarashina-summary-allowlist.js
+          # と同じ`.split(',')`実装でカンマ区切り複数IDに元々対応している。ADR-0027 PR5 S7a
+          # (canary複数件を一度にPaddle allowlistへ設定する必要があるケース)で発覚したため、
+          # set-sarashina-summary-allowlistと同じカンマ区切り最大10件許可へ緩和する
+          # (既存の単一ID運用は`^id$`が`^id(,id){0,9}$`の部分集合のため無影響)。
           if [ "$SCRIPT_NAME" = "set-paddle-ocr-allowlist" ] && echo "$SCRIPT_ARGS" | grep -q -- '--set'; then
             if [ -z "$DOC_ID" ]; then
               echo "ERROR: doc_id input is required when script contains set-paddle-ocr-allowlist --set" >&2
               exit 1
             fi
-            if ! echo "$DOC_ID" | grep -qE '^[A-Za-z0-9_-]+$'; then
-              echo "ERROR: doc_id must contain only alphanumeric, underscore, hyphen characters" >&2
+            if ! echo "$DOC_ID" | grep -qE '^[A-Za-z0-9_-]+(,[A-Za-z0-9_-]+){0,9}$'; then
+              echo "ERROR: doc_id must be 1-10 comma-separated alphanumeric/underscore/hyphen IDs" >&2
               exit 1
             fi
             SCRIPT_ARGS=$(echo "$SCRIPT_ARGS" | sed "s/--set/--set $DOC_ID/")
