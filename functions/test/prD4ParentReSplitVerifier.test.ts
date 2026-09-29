@@ -60,6 +60,34 @@ async function makePdfBuffer(pageCount: number): Promise<Buffer> {
   return Buffer.from(bytes);
 }
 
+/**
+ * pdf-lib は save 時に CreationDate/ModDate へ new Date() (秒精度) を埋め込むため、
+ * 期待値生成と再 split の間に秒境界をまたぐと bytes が不一致になり flaky となる。
+ * 引数なしの new Date() / Date.now() を固定値にして決定的にする (sinon 非依存)。
+ */
+async function withFixedNow<T>(fn: () => Promise<T>): Promise<T> {
+  const RealDate = Date;
+  const fixed = new RealDate('2026-01-01T00:00:00.000Z').getTime();
+  class FixedDate extends RealDate {
+    constructor(...args: unknown[]) {
+      if (args.length === 0) {
+        super(fixed);
+      } else {
+        super(...(args as [number]));
+      }
+    }
+    static now(): number {
+      return fixed;
+    }
+  }
+  (globalThis as { Date: DateConstructor }).Date = FixedDate as unknown as DateConstructor;
+  try {
+    return await fn();
+  } finally {
+    (globalThis as { Date: DateConstructor }).Date = RealDate;
+  }
+}
+
 describe('verifyParentReSplit (PR-D4 S1-3 parent 再 split 検証)', () => {
   it('parent 不在 → exists=false (download 呼ばない)', async () => {
     const downloader = new FakeParentDownloader({});
@@ -84,7 +112,7 @@ describe('verifyParentReSplit (PR-D4 S1-3 parent 再 split 検証)', () => {
     expect(result.parentExists).to.equal(false);
   });
 
-  it('parent download 成功 + 再 split で child sha256 一致 → parentSha256MatchedAtBackfill=true', async () => {
+  it('parent download 成功 + 再 split で child sha256 一致 → parentSha256MatchedAtBackfill=true', () => withFixedNow(async () => {
     const parentBytes = await makePdfBuffer(3);
     // 期待 child = parent から page 2 のみ抽出して再 split したもの
     const parentPdf = await PDFDocument.load(parentBytes);
@@ -109,7 +137,7 @@ describe('verifyParentReSplit (PR-D4 S1-3 parent 再 split 検証)', () => {
       expect(result.sourceGeneration).to.equal('pgen');
       expect(result.sourceMetageneration).to.equal('pmgen');
     }
-  });
+  }));
 
   it('parent download 成功だが child bytes が再 split と不一致 → parentSha256MatchedAtBackfill=false', async () => {
     const parentBytes = await makePdfBuffer(3);
