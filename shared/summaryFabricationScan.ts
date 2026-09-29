@@ -366,12 +366,19 @@ const NAME_CHAR = /[一-龠ぁ-んァ-ヶー々a-zA-Z0-9]/;
  * 残ったままverbatim判定・再結合判定の文字列比較(source.includes)を行うと一致せず、
  * 実在する組織名を誤ってfabricatedと判定する偽陽性を招く。summaryText/sourceText両方に
  * 同じ正規化を適用するため、改行除去による一貫性の崩れは生じない。
+ *
+ * 長音記号補正(ADR-0027 PR5 D2): 実OCRが長音記号「ー」を漢数字「一」と誤認識した原典
+ * (例: 「センタ一」)を、SarashinaがOCR誤字と判断して正しい「センター」へ補正すると、
+ * verbatim完全一致判定が1文字差で不一致となり捏造と誤検知していた。カタカナ(長音記号含む)直後の
+ * 「一」のみを「ー」へ寄せる(「一般」「第一回」等、カタカナに隣接しない「一」は変換しない)。
+ * 両側に同じ正規化を適用するため、比較の一貫性は保たれる。
  */
 export function normalizeForFabricationScan(text: string): string {
   return text
     .normalize('NFKC')
     .replace(/<\/s>|<s>|<think>|<\/think>/g, '')
     .replace(/[ \t\r\n]+/g, '')
+    .replace(/(?<=[ァ-ヶー])一/g, 'ー')
     .trim();
 }
 
