@@ -39,6 +39,26 @@ describe('normalizeForFabricationScan', () => {
   it('空文字列は空文字列のまま', () => {
     expect(normalizeForFabricationScan('')).to.equal('');
   });
+
+  it('カタカナ直後の漢数字「一」はOCR誤認識の長音記号として「ー」へ正規化する', () => {
+    expect(normalizeForFabricationScan('センタ一')).to.equal('センター');
+    expect(normalizeForFabricationScan('ケアプラン一')).to.equal('ケアプランー');
+  });
+
+  it('カタカナに隣接しない漢数字「一」は変換しない(境界: 先頭・漢字/ひらがな直後)', () => {
+    expect(normalizeForFabricationScan('一般')).to.equal('一般');
+    expect(normalizeForFabricationScan('第一回')).to.equal('第一回');
+    expect(normalizeForFabricationScan('ひとつ一')).to.equal('ひとつ一');
+  });
+});
+
+describe('scanSummaryForFabrication: 長音記号OCR誤認識の補正(D2)', () => {
+  it('原典が「センタ一」誤字で要約が正しい「センター」でも、組織名は捏造扱いしない', () => {
+    const source = '担当は大阪介護センタ一です。';
+    const summary = '担当は大阪介護センターです。';
+    const r = scanSummaryForFabrication(summary, source);
+    expect(r.fabricatedCount).to.equal(0);
+  });
 });
 
 describe('scanSummaryForFabrication: verbatim判定(③)', () => {
