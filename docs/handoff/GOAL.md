@@ -168,7 +168,7 @@ plan mode(`~/.claude/plans/serialized-brewing-swing.md`、`/plan-crossreview`3�
 
 **D2恒久対応(2026-09-29、decision-maker方針A選択)**: `normalizeForFabricationScan`にカタカナ直後の「一」→「ー」正規化を追加(PR #1083マージ済み、テストRed→Green、functions全2457件PASS)。dev実機検証: D2を`reset-document-to-pending`で再処理(Paddle allowlistをD2のみに一時設定→再処理→`--remove`で復元、`check-paddle-ocr-step0`で「allowlist不在」を独立確認)し、`summaryState=done`/`summaryProvider=sarashina`/`fabrication_suspected 0件`を確認。**AC4(全canary done)達成(D2/D3/D8=3/3件)**。教訓: `set-paddle-ocr-allowlist --clear-empty`は「全拒否(`[]`)」で元の「未設定(制限なし)」には戻らない、復元は`--remove`。`generateSummaryBatch`は60分間隔のため再処理結果の観測には最大約1時間かかる。
 
-**現在の状態**: D2の恒久対応は完了。S9(Wave拡張)・S10(ロールバック)・S11(結果記録)は未着手でdecision-maker判断待ち(dev以外への展開はPR6で別途承認が必要)。
+**現在の状態**: D2の恒久対応は完了、S11(ADR-0027への結果記録)も完了。S9(Wave拡張)・S10(ロールバック)は未着手でdecision-maker判断待ち(dev以外への展開はPR6で別途承認が必要)。
 
 - [x] S1(実装・PR作成・マージ)
 - [x] S0(実機ゲート再検証、6ゲート全PASS)
@@ -179,7 +179,7 @@ plan mode(`~/.claude/plans/serialized-brewing-swing.md`、`/plan-crossreview`3�
 - [x] S8観測(D2/D3/D8=3/3件done、fabrication_suspected 0件、2026-09-29)
 - [ ] S9(Wave拡張、AC4は達成済み。着手はdecision-maker判断待ち)
 - [ ] S10(ロールバック、canary全件が終端状態になったため実施可否をdecision-makerが判断)
-- [ ] S11(結果記録、ADR-0027「PR5実機観測」節・本節の最終更新)
+- [x] S11(結果記録、ADR-0027「PR5実機観測」節追記済み・2026-09-29。S9/S10の結果は判断後に追記)
 
 **次の一手(トリガー付き)**: decision-makerがS9(Wave拡張)またはS10(ロールバック)の着手を指示した時点で着手。指示なしにAIからWave拡張・ロールバックを開始しない(4原則§1、起点は decision-maker)。
 
