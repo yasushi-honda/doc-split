@@ -1,6 +1,6 @@
 # ハンドオフメモ
 
-**更新日**: 2026-09-29（ADR-0027 PR5: dev環境でのSarashina要約実機観測を実施。D3・D8はSarashina要約完走、D2は`fabrication_suspected`でerror終端・根本原因特定済みだが恒久対応方針は未決定でここで区切り。kanameone Drive Phase1最終ステップは引き続き外部依存待ち）
+**更新日**: 2026-09-29（ADR-0027 PR5: dev環境でのSarashina要約実機観測を実施。D3・D8はSarashina要約完走、D2は`fabrication_suspected`誤検知をdecision-maker方針Aで恒久対応(PR #1083、スキャナ正規化)、dev実機でD2=`done`確認・AC4(canary 3/3件done)達成。kanameone Drive Phase1最終ステップは引き続き外部依存待ち）
 
 ## ADR-0027 PR5: dev環境でのSarashina要約有効化・実機観測（2026-09-29）
 
@@ -15,7 +15,7 @@ PR4完了(2026-09-28)を受け、decision-maker承認によりPR5(dev環境で�
 - **S8(観測)**: D3・D8は`summaryState=done`かつ`summaryProvider=sarashina`で実運用パイプライン初のSarashina要約完走を達成。**D2は`fabrication_suspected`でerror終端**。decision-maker承認を得て、Sarashina Cloud Runへの一時的IAM権限付与(read-only調査用、調査後即時取消)による手動根本原因調査を実施し特定: 実OCR結果中の「さくら通所介護センタ**一**」(長音記号「ー」の漢数字「一」誤認識)に対し、Sarashinaが正しく「センタ**ー**」と補正出力したが、fabricationスキャナのverbatim完全一致判定が1文字差により実在組織名を捏造と誤判定。**S0のfixtureテストでは検知不可能だった新しいバグクラス**(実OCR誤字とSarashinaの自動補正の組み合わせによる誤検知)であることを確立。
 
 ### 現在の状態
-decision-maker判断「D2は今回はerrorのまま受け入れ、ここで区切る」によりセッション終了。恒久対応方針(A:fabricationスキャナへの正規化実装/B:他canary確認/C:OCR側対応/D:現状受入)は**未決定**。AC4(全canary done)は2/3件で未達のためS9(Wave拡張)は見送り。S10(ロールバック)はcanary全件が終端状態になった場合のみ実施予定。詳細はGOAL.md「ADR-0027 PR5実機観測」節参照。
+D2の恒久対応(方針A: fabricationスキャナへの長音記号正規化、PR #1083)を完了し、dev実機でD2=`summaryState=done`/`summaryProvider=sarashina`を確認、AC4(全canary done、3/3件)達成。Paddle allowlistは`--remove`で復元済み(`check-paddle-ocr-step0`で独立確認)。S9(Wave拡張)・S10(ロールバック)・S11(結果記録)は未着手で、着手はdecision-maker判断待ち(dev以外はPR6で別途承認)。詳細はGOAL.md「ADR-0027 PR5実機観測」節参照。
 
 ### Issue Net
 Net 0（本セッションでのIssue起票・close操作なし）。

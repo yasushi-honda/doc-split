@@ -166,20 +166,22 @@ plan mode(`~/.claude/plans/serialized-brewing-swing.md`、`/plan-crossreview`3�
 
 **S8(観測)**: D3・D8は`summaryState=done`かつ`summaryProvider=sarashina`で実運用パイプライン初のSarashina要約完走を達成。**D2は`fabrication_suspected`でerror終端**。decision-maker承認を得てSarashina Cloud Runへの一時的IAM権限付与(read-only調査、即時取消済み)による手動根本原因調査を実施し特定: 実OCR結果中の「さくら通所介護センタ**一**」(長音記号「ー」の漢数字「一」誤認識)に対し、Sarashinaが正しく「センタ**ー**」と補正出力したが、fabricationスキャナのverbatim完全一致判定が1文字差により実在組織名を捏造と誤判定。**S0のfixtureテストでは検知不可能だった新しいバグクラス(実OCR誤字とSarashinaの自動補正の組み合わせ)**。
 
-**現在の状態**: decision-maker判断により「D2はerrorのまま受け入れ、ここで区切る」で本セッションを終了。恒久対応方針(正規化実装/他canary確認/OCR側対応/現状受入)は**未決定**、AC4(全canary done)は2/3件で未達のためS9(Wave拡張)は見送り。S10(ロールバック)はcanary全件が終端状態になった場合のみ実施予定。
+**D2恒久対応(2026-09-29、decision-maker方針A選択)**: `normalizeForFabricationScan`にカタカナ直後の「一」→「ー」正規化を追加(PR #1083マージ済み、テストRed→Green、functions全2457件PASS)。dev実機検証: D2を`reset-document-to-pending`で再処理(Paddle allowlistをD2のみに一時設定→再処理→`--remove`で復元、`check-paddle-ocr-step0`で「allowlist不在」を独立確認)し、`summaryState=done`/`summaryProvider=sarashina`/`fabrication_suspected 0件`を確認。**AC4(全canary done)達成(D2/D3/D8=3/3件)**。教訓: `set-paddle-ocr-allowlist --clear-empty`は「全拒否(`[]`)」で元の「未設定(制限なし)」には戻らない、復元は`--remove`。`generateSummaryBatch`は60分間隔のため再処理結果の観測には最大約1時間かかる。
+
+**現在の状態**: D2の恒久対応は完了。S9(Wave拡張)・S10(ロールバック)・S11(結果記録)は未着手でdecision-maker判断待ち(dev以外への展開はPR6で別途承認が必要)。
 
 - [x] S1(実装・PR作成・マージ)
 - [x] S0(実機ゲート再検証、6ゲート全PASS)
 - [x] S4前提崩壊対応(fixtureのdevアップロードスクリプト実装・実行)
 - [x] S5・S6(L2/L1有効化)
 - [x] S7a〜S7c(Paddle allowlist一時制限・canary再処理・復元確認)
-- [ ] D2根本原因への恒久対応方針決定(decision-maker判断待ち)
-- [ ] S8観測継続(D3/D8のfabrication_suspected 0件を維持できているかの経過観察)
-- [ ] S9(Wave拡張、AC4未達のため現時点見送り)
-- [ ] S10(ロールバック、canary全件終端状態になってから)
+- [x] D2根本原因への恒久対応(方針A、PR #1083、dev実機でD2=done確認、2026-09-29)
+- [x] S8観測(D2/D3/D8=3/3件done、fabrication_suspected 0件、2026-09-29)
+- [ ] S9(Wave拡張、AC4は達成済み。着手はdecision-maker判断待ち)
+- [ ] S10(ロールバック、canary全件が終端状態になったため実施可否をdecision-makerが判断)
 - [ ] S11(結果記録、ADR-0027「PR5実機観測」節・本節の最終更新)
 
-**次の一手(トリガー付き)**: decision-makerがD2根本原因対応の方針(A:fabricationスキャナに長音記号等の正規化を実装/B:他canary文書で同型の誤字が起きていないか確認/C:OCR側の長音記号誤認識自体を改善/D:現状のまま受入を継続)を示した時点で着手。方針決定なしにAIから恒久対応を提案・実装しない(4原則§1、起点は decision-maker)。
+**次の一手(トリガー付き)**: decision-makerがS9(Wave拡張)またはS10(ロールバック)の着手を指示した時点で着手。指示なしにAIからWave拡張・ロールバックを開始しない(4原則§1、起点は decision-maker)。
 
 ADR-0025はPass1(OCR)のみ対象でPass2/要約は明示的にスコープ外(手動トリガー・低頻度のため)。decision-makerの意向で「要約もいずれはPaddleOCRと同様に自前ホスティングSLM(Cloud Run、CPUのみ、asia-northeast1)へモデルルーティングしたい」という将来検討として、2026-09-21に候補調査・実機検証を実施した。当日中に品質・コスト・アーキテクチャ・コンプライアンスの検討が完了し、**decision-makerが実装移行を正式決定**(下記「次の一手」トリガー②を充足)。CLAUDE.md CRITICAL該当のためplan modeでのフル計画策定に入る。実装(summaryPromptBuilder.ts等の変更)はまだ一切行っていない(この節はplan mode着手時点の記録)。
 
@@ -686,7 +688,7 @@ cocoro/kanameから、書類（ケアプラン・医療・介護保険証等）�
 
 cocoro側Drive連携Phase C（クライアント自身のOAuth接続）は外部依存待ち（継続、変更なし、詳細は本ファイル冒頭「現在のミッション」節参照）。
 
-**ADR-0027 PR5実機観測（2026-09-29、別件・並行トラック、詳細は本ファイル上部「PR5実機観測」節参照）**: S0〜S8まで実施しD3・D8はSarashina要約完走(`done`)、D2は`fabrication_suspected`でerror終端。根本原因（実OCR「センタ一」の誤字をSarashinaが「センター」へ正しく補正した結果、fabricationスキャナのverbatim完全一致判定が1文字差で誤検知）は手動調査で特定済み・**恒久対応方針は未決定**。次の一手: decision-makerが対応方針(A:スキャナに長音記号等の正規化実装/B:他canary文書の同型誤字確認/C:OCR側の長音記号誤認識改善/D:現状受入を継続)を示すまで待機。S8観測（D3/D8のfabrication_suspected 0件維持）も継続中。AC4未達(2/3件done)のためS9(Wave拡張)は見送り、S10(ロールバック)はcanary全件終端状態になってから。
+**ADR-0027 PR5実機観測（2026-09-29、別件・並行トラック、詳細は本ファイル上部「PR5実機観測」節参照）**: S0〜S8まで実施。D2の`fabrication_suspected`誤検知(実OCR「センタ一」をSarashinaが「センター」へ補正)はdecision-maker方針Aによりスキャナ正規化で恒久対応済み(PR #1083)、dev実機でD2=`done`を確認しAC4(canary 3/3件done)達成。次の一手: S9(Wave拡張)/S10(ロールバック)の着手判断をdecision-makerが示すまで待機。
 
 **Issue #984（2026-09-20）**: 完了・クローズ済み(kanameone実データ確認済み、上記節参照)。cocoroも2026-09-20にデプロイ済み(3環境同一コード)。ログベースメトリクス・アラートも2026-09-21に3環境へ適用済み(#981クローズ)。#984に関する残りタスクはなし。
 
