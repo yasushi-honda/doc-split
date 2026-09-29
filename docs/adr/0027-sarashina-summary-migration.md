@@ -148,6 +148,19 @@ L1(`SUMMARY_PROVIDER`環境変数)/L2(`settings/features.sarashinaSummary`+`sara
    - **(e) 【PR4申し送り・Low】** IDトークン取得失敗を一律`kind:'transient'`にしており、恒久的なIAM誤設定(例: `run.invoker`未付与)と一時的な認証サーバの不調を区別できない(silent-failure-hunter指摘)。PR4でSentry等のアラート重要度設計を行う際に、同一エラーが複数回連続する場合は恒久障害とみなす等の区別を検討すること。
    - **(f) 【残存テストギャップ、pr-test-analyzer指摘、対応見送り】** 認証失敗の再試行枯渇未検証/`permanent`系ケースの呼び出し回数アサーション欠如/`kind:'incomplete'`の再送なし性質未検証/`DEFAULT_RETRY_ATTEMPTS`等の既定値未検証/`config.ts`の`SARASHINA_SUMMARY_URL.trim()`単体未検証(client側の再trimでのみ間接的に守られている)/`MIN_OCR_LENGTH_FOR_SUMMARY`の境界値(99 vs 100)未検証/`extractCauseCode`の5階層上限の境界未検証。decision-maker確認のうえ、PR3では追加対応せず現状のカバレッジで進める判断(2026-09-27)。将来同種の不具合が疑われた際にこの一覧から着手する。
 
+### PR5実機観測(dev環境でのSarashina要約有効化、2026-09-29)
+
+devでL2(`settings/features.sarashinaSummary`+allowlist)→L1(`SUMMARY_PROVIDER=sarashina`)を有効化し、canary 3件(D2/D3/D8)で実運用パイプラインの実機観測を行った。plan(`/plan-crossreview`3回収束)はdecision-maker承認済み。詳細な経緯は`docs/handoff/GOAL.md`「PR5実機観測」節を正とする。
+
+1. **S0(実機ゲート再検証)**: PR2bハーネスのfixture(D1〜D10)をdevで再実行し、fabrication誤検知を個別パッチ(`shared/summaryFabricationScan.ts`の`DEFAULT_GENERIC_CORES`/`DEFAULT_PARTICLES`拡充、計9パターン、PR #1077〜#1080)で解消して6ゲート(runtime-contract/fabrication/coverage-aggregate/coverage-per-doc/numeric-fabrication/determinism)全PASSを達成した。
+2. **fixture実データ化(PR #1081)**: dev実データはADR-0018 Phase Eの`detail/main`サブコレクション参照が必要で、かつ全195件がプレースホルダーのみだった。decision-maker承認のうえ、D1〜D10を実文書としてdevへ投入する`scripts/upload-sarashina-canary-fixtures.ts`を新設した。
+3. **canary結果**: D3・D8は`summaryState=done`/`summaryProvider=sarashina`で完走。D2は`fabrication_suspected`でerror終端した。
+4. **D2の根本原因(新しいバグクラス)**: 実OCRが長音記号「ー」を漢数字「一」と誤認識(「センタ**一**」)し、Sarashinaが正しく「センタ**ー**」へ補正して出力したところ、fabricationスキャナのverbatim完全一致判定が1文字差を実在組織名の捏造と誤判定した。**S0のfixtureテスト(OCR誤字を含まない)では原理的に検知できない**、実OCR誤字とモデルの自動補正の組み合わせである。
+5. **恒久対応(PR #1083、decision-maker方針A)**: `normalizeForFabricationScan`にカタカナ直後の「一」→「ー」正規化を追加(テストRed→Green、functions全2457件PASS)。dev実機でD2を再処理し`summaryState=done`/`fabrication_suspected 0件`を確認、**canary 3/3件done**となった。
+6. **運用上の教訓**: (a) `set-paddle-ocr-allowlist --clear-empty`は「全拒否(`[]`)」であり元の「未設定(制限なし)」には戻らない。復元は`--remove`で行い、`check-paddle-ocr-step0`で独立確認する。(b) `set-paddle-ocr-allowlist --set`はカンマ区切り複数IDを許可していなかった(PR #1082で修正)。(c) `generateSummaryBatch`は60分間隔のため、再処理結果の観測には最大約1時間かかる。
+7. **PR3申し送りの実機確認状況**: canaryの観測記録には、`cause.code`の実測値(上記PR3実装知見5)およびcontext超過400エラー形状の実機一致(同7)の記録がない。**未確認のまま**であり、Wave拡張(S9)以降で実測記録すること。
+8. **未実施(decision-maker判断待ち)**: S9(Wave拡張)・S10(ロールバック手順の実機確認)は未着手。dev以外(kanameone/cocoro)への展開はPR6として別途承認が必要。
+
 ## Consequences
 
 **良い影響**:
