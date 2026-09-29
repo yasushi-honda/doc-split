@@ -165,6 +165,18 @@ jobs:
         env:
           FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
 
+      - name: Run generateSummaryBatch integration tests (Firestore emulator)
+        # ADR-0027 PR5 D1対応: fabrication_suspectedを総試行上限内でpendingへ戻して再試行する
+        # 挙動(検知→pending→…→error終端、エラー文へPIIを含めない)を実Firestoreで守る。
+        # functions/package.json の test:integration に含まれていても CI からは呼ばれず、
+        # これまで generateSummaryBatchIntegration は CI 未実行だった(既存の他Integration testと
+        # 同じ理由)ため、専用 step として追加した。
+        run: |
+          cd functions && firebase emulators:exec --only firestore \
+            'npx mocha --require ts-node/register --timeout 15000 test/generateSummaryBatchIntegration.test.ts'
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+
       - name: Run scripts integration tests (Firestore emulator)
         # scripts配下のPartial Updateスクリプト(backfill-drive-export.ts・
         # merge-notation-duplicate-masters.ts等)向け統合テスト(CLAUDE.md MUST: 更新対象外

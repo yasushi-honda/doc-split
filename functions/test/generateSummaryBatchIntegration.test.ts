@@ -144,23 +144,101 @@ describe('runSummaryBatch (ADR-0027 PR4)', () => {
     expect((await getDoc('doc-gemini')).summaryProvider).to.equal('gemini');
   });
 
-  it('固有名詞捏造検知: fabricatedCount>0なら要約を保存せずerror/fabrication_suspectedになる', async () => {
-    await seedDocument('doc-fabricated');
-    const stats = await runSummaryBatch({
-      firestore: db,
-      bucket: FAKE_BUCKET,
-      l1Provider: 'sarashina',
-      getGate: ENABLED_GATE,
-      // D9実データで実証済みの捏造パターン(ADR-0027 PR0/PR2a): 事業所名の記載が
-      // 一切ない書類に対し、実在しない「みずほ訪問看護ステーション」を捏造する。
-      summarize: fakeSummarize({ summary: { text: '貸与事業所はみずほ訪問看護ステーションです。', truncated: false } }),
+  describe('固有名詞捏造検知(fabrication_suspected): 総試行上限内で再試行し、上限到達でerror', () => {
+    // D9実データで実証済みの捏造パターン(ADR-0027 PR0/PR2a): 事業所名の記載が
+    // 一切ない書類に対し、実在しない「みずほ訪問看護ステーション」を捏造する。
+    const fabricatedSummarize = fakeSummarize({
+      summary: { text: '貸与事業所はみずほ訪問看護ステーションです。', truncated: false },
     });
 
-    expect(stats.errorByKind.fabrication_suspected).to.equal(1);
-    const data = await getDoc('doc-fabricated');
-    expect(data.summaryState).to.equal('error');
-    expect(data.summaryErrorKind).to.equal('fabrication_suspected');
-    expect(data.summary).to.equal(undefined);
+    async function runFabricatedTick(): Promise<Awaited<ReturnType<typeof runSummaryBatch>>> {
+      return runSummaryBatch({
+        firestore: db,
+        bucket: FAKE_BUCKET,
+        l1Provider: 'sarashina',
+        getGate: ENABLED_GATE,
+        summarize: fabricatedSummarize,
+      });
+    }
+
+    it('attempt未達: 要約を保存せずpendingへ戻し、fabricationRetriedへ加算する(終端errorとして数えない)', async () => {
+      await seedDocument('doc-fabricated-retry', { summaryAttemptCount: 0 });
+      const stats = await runFabricatedTick();
+
+      expect(stats.fabricationRetried).to.equal(1);
+      expect(stats.errorByKind.fabrication_suspected).to.equal(undefined);
+      const data = await getDoc('doc-fabricated-retry');
+      expect(data.summaryState).to.equal('pending');
+      expect(data.summaryErrorKind).to.equal('fabrication_suspected');
+      expect(data.summary).to.equal(undefined);
+    });
+
+    it('attemptがMAX_SUMMARY_ATTEMPTSに達したらerror終端(要約は保存されず、終端errorとして数える)', async () => {
+      await seedDocument('doc-fabricated-exhausted', { summaryAttemptCount: MAX_SUMMARY_ATTEMPTS - 1 });
+      const stats = await runFabricatedTick();
+
+      expect(stats.errorByKind.fabrication_suspected).to.equal(1);
+      expect(stats.fabricationRetried).to.equal(0);
+      const data = await getDoc('doc-fabricated-exhausted');
+      expect(data.summaryState).to.equal('error');
+      expect(data.summaryErrorKind).to.equal('fabrication_suspected');
+      expect(data.summary).to.equal(undefined);
+    });
+
+    it('総試行上限の共有(仕様): quota等で試行を先に消費済みの文書は、初回の検知で即errorになる', async () => {
+      // summaryAttemptCountはquota/transient/手動再生成と共有の総claim回数のため、
+      // 「fabricationが3回連続で初めてerror」にはならない(この仕様をプランで明示的に受容した)。
+      await seedDocument('doc-fabricated-shared-budget', { summaryAttemptCount: 2, summaryErrorKind: 'quota' });
+      await runFabricatedTick();
+
+      expect((await getDoc('doc-fabricated-shared-budget')).summaryState).to.equal('error');
+    });
+
+    it('連続tick: 検知→pending→検知→pending→検知→error(3回目で終端)', async () => {
+      await seedDocument('doc-fabricated-sequence');
+      const states: string[] = [];
+      for (let tick = 0; tick < MAX_SUMMARY_ATTEMPTS; tick++) {
+        await runFabricatedTick();
+        states.push((await getDoc('doc-fabricated-sequence')).summaryState);
+      }
+
+      expect(states).to.deep.equal(['pending', 'pending', 'error']);
+      expect((await getDoc('doc-fabricated-sequence')).summaryAttemptCount).to.equal(MAX_SUMMARY_ATTEMPTS);
+    });
+
+    it('エラー文はPII契約(summaryErrorにPIIを含めない)を守り、疑い名を含まず語彙由来のsuffixとcore文字数のみを含む', async () => {
+      await seedDocument('doc-fabricated-message');
+      await runFabricatedTick();
+
+      const message: string = (await getDoc('doc-fabricated-message')).summaryError;
+      expect(message).to.contain('Fabrication scanner detected 1 suspect name(s)');
+      // 「みずほ訪問看護ステーション」は最長スパン優先でsuffix=ステーション、core=「みずほ訪問看護」(7文字)。
+      expect(message).to.contain('suffix=ステーション/coreLen=7');
+      expect(message).to.match(/configVersion=[0-9a-f]{8}/);
+      // モデル出力の疑い名(実在しない事業所名)は保存しない。
+      expect(message).to.not.contain('みずほ');
+    });
+
+    it('recombinedのみ(原典の括弧書き略記の語順入替)は捏造扱いせず、要約を保存する(再試行の対象外)', async () => {
+      await seedDocument('doc-recombined');
+      await db
+        .collection('documents')
+        .doc('doc-recombined')
+        .collection('detail')
+        .doc('main')
+        .set({ ocrResult: '訪問看護（水無月）を週2回利用している。利用者は歩行器を使用している。'.repeat(4) });
+      const stats = await runSummaryBatch({
+        firestore: db,
+        bucket: FAKE_BUCKET,
+        l1Provider: 'sarashina',
+        getGate: ENABLED_GATE,
+        summarize: fakeSummarize({ summary: { text: '水無月訪問看護を週2回利用している。', truncated: false } }),
+      });
+
+      expect(stats.done).to.equal(1);
+      expect(stats.fabricationRetried).to.equal(0);
+      expect((await getDoc('doc-recombined')).summaryState).to.equal('done');
+    });
   });
 
   it('ソフトデッドライン超過: 残りの文書はclaimせず次tickへ委ねる(deferred)', async () => {
