@@ -656,39 +656,58 @@ describe('scanSummaryForFabrication: configVersion', () => {
     });
     expect(r.configVersion).to.not.equal(FABRICATION_SCAN_CONFIG_VERSION);
   });
-  describe('【既知の誤検知】動詞連体形+suffixを組織名と誤判定する(ADR-0027 PR5 D1、decision-maker確認済み)', () => {
-    // dev実機のD1(合成FAX送付状)で、要約中の自然な文「指示期間を持つ訪問看護指示書」の動詞「持つ」を
-    // coreとして拾い、組織名「持つ訪問看護」が原典に無いとfabricated判定した(Sarashina実出力10回中2回)。
-    // 動詞・形容詞の連体形+suffixは語彙リスト(DEFAULT_GENERIC_CORES)では閉じられない開放集合で、
-    // スキャナ本体の再設計まで対応しないと決めたため、現状の挙動を固定する。運用上の緩和は
-    // generateSummaryBatchの再試行化(総試行上限内でpendingへ戻す)で行う。将来スキャナを再設計して
-    // この誤検知が解消したら、このテストが変化を知らせる(expectをfabricatedCount 0へ更新すること)。
-    const source = [
-      'FAX送付状 送信先：あおぞら居宅介護支援事業所ご担当御中',
-      '送信元：みどりヶ丘訪問看護ステーション 担当：架橋ひかり',
-      '件名：利用者 星野 みなと 様 訪問看護指示書の写し送付のご連絡',
-      '2. 主治医意見書の写し（青葉クリニック 医師：桜庭研）',
-    ].join('\n');
+});
 
-    it('実出力1: 「指示期間を持つ訪問看護指示書と、主治医である青葉クリニックの…」', () => {
-      const summary =
-        'この書類は、みどりヶ丘訪問看護ステーションがあおぞら居宅介護支援事業所に送付した訪問看護指示書の写しに関するものである。' +
-        '利用者星野みなと氏に対して、令和8年9月1日から11月30日までの指示期間を持つ訪問看護指示書と、' +
-        '主治医である青葉クリニックの桜庭研医師による意見書の写しが送付されている。';
-      const r = scanSummaryForFabrication(summary, source);
-      expect(r.fabricatedCount).to.equal(1); // 既知の誤検知: 本来は0であるべき
-      expect(r.findings[0]?.name).to.equal('持つ訪問看護');
-      expect(r.findings[0]?.core).to.equal('持つ');
-    });
+describe('【既知の誤検知】動詞連体形+suffixを組織名と誤判定する(ADR-0027 PR5 D1、decision-maker確認済み)', () => {
+  // dev実機のD1(合成FAX送付状)で、要約中の自然な文「指示期間を持つ訪問看護指示書」の動詞「持つ」を
+  // coreとして拾い、組織名「持つ訪問看護」が原典に無いとfabricated判定した(Sarashina実出力10回中2回)。
+  // 動詞・形容詞の連体形+suffixは語彙リスト(DEFAULT_GENERIC_CORES)では閉じられない開放集合で、
+  // スキャナ本体の再設計まで対応しないと決めたため、現状の挙動を固定する。運用上の緩和は
+  // generateSummaryBatchの再試行化(総試行上限内でpendingへ戻す)で行う。将来スキャナを再設計して
+  // この誤検知が解消したら、このテストが変化を知らせる(expectをfabricatedCount 0へ更新すること)。
+  const source = [
+    'FAX送付状 送信先：あおぞら居宅介護支援事業所ご担当御中',
+    '送信元：みどりヶ丘訪問看護ステーション 担当：架橋ひかり',
+    '件名：利用者 星野 みなと 様 訪問看護指示書の写し送付のご連絡',
+    '2. 主治医意見書の写し（青葉クリニック 医師：桜庭研）',
+  ].join('\n');
 
-    it('実出力2: 「…指示期間を持つ訪問看護指示書と、主治医である青葉クリニックの…、および服薬管理表」', () => {
-      const summary =
-        'この書類は、みどりヶ丘訪問看護ステーションがあおぞら居宅介護支援事業所に送付した訪問看護指示書の写しに関するものである。' +
-        '令和8年9月1日から11月30日までの指示期間を持つ訪問看護指示書と、主治医である青葉クリニックの桜庭研医師による意見書、' +
-        'および服薬管理表が含まれている。';
-      const r = scanSummaryForFabrication(summary, source);
-      expect(r.fabricatedCount).to.equal(1); // 既知の誤検知: 本来は0であるべき
-      expect(r.findings[0]?.name).to.equal('持つ訪問看護');
-    });
+  it('実出力1: 「指示期間を持つ訪問看護指示書と、主治医である青葉クリニックの…」', () => {
+    const summary =
+      'この書類は、みどりヶ丘訪問看護ステーションがあおぞら居宅介護支援事業所に送付した訪問看護指示書の写しに関するものである。' +
+      '利用者星野みなと氏に対して、令和8年9月1日から11月30日までの指示期間を持つ訪問看護指示書と、' +
+      '主治医である青葉クリニックの桜庭研医師による意見書の写しが送付されている。';
+    const r = scanSummaryForFabrication(summary, source);
+    expect(r.fabricatedCount).to.equal(1); // 既知の誤検知: 本来は0であるべき
+    expect(r.findings[0]?.name).to.equal('持つ訪問看護');
+    expect(r.findings[0]?.core).to.equal('持つ');
+  });
+
+  it('実出力2: 「…指示期間を持つ訪問看護指示書と、主治医である青葉クリニックの…、および服薬管理表」', () => {
+    const summary =
+      'この書類は、みどりヶ丘訪問看護ステーションがあおぞら居宅介護支援事業所に送付した訪問看護指示書の写しに関するものである。' +
+      '令和8年9月1日から11月30日までの指示期間を持つ訪問看護指示書と、主治医である青葉クリニックの桜庭研医師による意見書、' +
+      'および服薬管理表が含まれている。';
+    const r = scanSummaryForFabrication(summary, source);
+    expect(r.fabricatedCount).to.equal(1); // 既知の誤検知: 本来は0であるべき
+    expect(r.findings[0]?.name).to.equal('持つ訪問看護');
+  });
+});
+
+describe('scanSummaryForFabrication: 誤検知を緩和しても捏造の検出バイパスを作らない(ADR-0027 PR5 D1、クロスレビュー指摘)', () => {
+  // 「1漢字+活用語尾のcoreを一律除外する」案は、以下のような原典に無い捏造を無条件に通す
+  // 検出バイパスになるため不採用とした(codex指摘)。現状これらが検出され続けることを固定し、
+  // 将来の誤検知緩和が意図せず捏造の見逃しを生む回帰を防ぐ。
+  const source = '別の書類の内容です。担当事業所の記載はありません。';
+
+  it('「守る訪問看護」(動詞連体形に見える1漢字+語尾+suffix)が原典に無ければ検出される', () => {
+    const r = scanSummaryForFabrication('利用者を守る訪問看護が担当している。', source);
+    expect(r.fabricatedCount).to.equal(1);
+    expect(r.findings[0]?.name).to.equal('守る訪問看護');
+  });
+
+  it('「見守る訪問看護」(2漢字+語尾+suffix)も検出される', () => {
+    const r = scanSummaryForFabrication('日々見守る訪問看護が担当している。', source);
+    expect(r.fabricatedCount).to.equal(1);
   });
 });

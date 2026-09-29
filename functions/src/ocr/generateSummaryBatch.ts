@@ -79,13 +79,16 @@ const FABRICATION_MESSAGE_MAX_FINDINGS = 3;
  * 付き、実機再現(一時IAM付与)なしに次の誤検知パターンを切り分けられる。
  * `recombined`(原典の語順入替)はブロック対象外のため含めない。
  */
-function buildFabricationErrorMessage(scan: FabricationScanResult): string {
+function buildFabricationErrorMessage(scan: FabricationScanResult, attemptCount: number): string {
   const detail = scan.findings
     .filter((f) => f.kind === 'fabricated')
     .slice(0, FABRICATION_MESSAGE_MAX_FINDINGS)
     .map((f) => `suffix=${f.suffix}/coreLen=${f.core.length}`)
     .join(', ');
-  return `Fabrication scanner detected ${scan.fabricatedCount} suspect name(s): ${detail} (configVersion=${scan.configVersion})`;
+  return (
+    `Fabrication scanner detected ${scan.fabricatedCount} suspect name(s): ${detail} ` +
+    `(configVersion=${scan.configVersion}, attempt=${attemptCount}/${MAX_SUMMARY_ATTEMPTS})`
+  );
 }
 
 function incrementErrorKind(stats: SummaryBatchStats, kind: string): void {
@@ -268,11 +271,18 @@ async function runSummaryBatchInner(deps: RunSummaryBatchDeps): Promise<SummaryB
         // 総claim回数のため、先に試行を消費済みの文書は初回の検知で即errorになりうる(仕様)。
         // 要約は保存しない(検知した出力は一度も書き込まれない)。
         const nextState = claim.attemptCount >= MAX_SUMMARY_ATTEMPTS ? 'error' : 'pending';
+        const fabricationMessage = buildFabricationErrorMessage(scan, claim.attemptCount);
         await recordSummaryFailure(firestore, docRef, claim, {
           state: nextState,
           kind: 'fabrication_suspected',
-          message: buildFabricationErrorMessage(scan),
+          message: fabricationMessage,
         });
+        // 再試行(pending)した検知は`errors`コレクションに載せない(誤検知の再試行が運用者向けの
+        // エラー一覧に並ぶのを避ける)。代わりにCloud Loggingへ検知ごとの1行ログを残し、
+        // 検知率・再試行結果を後から集計できるようにする(message自体はPIIを含まない)。
+        console.warn(
+          `[${FUNCTION_NAME}] fabrication_suspected documentId=${docId} outcome=${nextState === 'error' ? 'error' : 'retry'} ${fabricationMessage}`
+        );
         if (nextState === 'error') {
           incrementErrorKind(stats, 'fabrication_suspected');
         } else {
