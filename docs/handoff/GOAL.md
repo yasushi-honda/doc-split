@@ -177,11 +177,12 @@ plan mode(`~/.claude/plans/serialized-brewing-swing.md`、`/plan-crossreview`3�
 - [x] S7a〜S7c(Paddle allowlist一時制限・canary再処理・復元確認)
 - [x] D2根本原因への恒久対応(方針A、PR #1083、dev実機でD2=done確認、2026-09-29)
 - [x] S8観測(D2/D3/D8=3/3件done、fabrication_suspected 0件、2026-09-29)
-- [ ] S9(Wave拡張、AC4は達成済み。着手はdecision-maker判断待ち)
+- [x] S9(Wave2拡張、2026-09-30。D4/D5/D6/D7=done・D9/D10=skipped・D1=fabrication_suspected誤検知〔「持つ訪問看護」、動詞を核と誤判定〕。ADR-0027「PR5実機観測」節8・9参照)
+- [ ] スキャナ構造対応(D1誤検知の恒久対応、逐次パッチは行わず新規plan modeで設計。PR6前の必須項目、decision-maker合意済み)
 - [ ] S10(ロールバック、canary全件が終端状態になったため実施可否をdecision-makerが判断)
 - [x] S11(結果記録、ADR-0027「PR5実機観測」節追記済み・2026-09-29。S9/S10の結果は判断後に追記)
 
-**次の一手(トリガー付き)**: decision-makerがS9(Wave拡張)またはS10(ロールバック)の着手を指示した時点で着手。指示なしにAIからWave拡張・ロールバックを開始しない(4原則§1、起点は decision-maker)。
+**次の一手(トリガー付き)**: ①`shared/summaryFabricationScan.ts`の構造対応(核が動詞・形容詞で終わる場合の扱い、一般サービス種別語尾の見直し等)を新規plan modeで設計する(decision-maker合意済み)。②S10(ロールバック)・PR6(dev以外展開)は decision-maker の指示があるまで開始しない(4原則§1)。
 
 ADR-0025はPass1(OCR)のみ対象でPass2/要約は明示的にスコープ外(手動トリガー・低頻度のため)。decision-makerの意向で「要約もいずれはPaddleOCRと同様に自前ホスティングSLM(Cloud Run、CPUのみ、asia-northeast1)へモデルルーティングしたい」という将来検討として、2026-09-21に候補調査・実機検証を実施した。当日中に品質・コスト・アーキテクチャ・コンプライアンスの検討が完了し、**decision-makerが実装移行を正式決定**(下記「次の一手」トリガー②を充足)。CLAUDE.md CRITICAL該当のためplan modeでのフル計画策定に入る。実装(summaryPromptBuilder.ts等の変更)はまだ一切行っていない(この節はplan mode着手時点の記録)。
 

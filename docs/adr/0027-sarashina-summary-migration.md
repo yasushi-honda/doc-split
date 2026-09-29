@@ -158,8 +158,10 @@ devでL2(`settings/features.sarashinaSummary`+allowlist)→L1(`SUMMARY_PROVIDER=
 4. **D2の根本原因(新しいバグクラス)**: 実OCRが長音記号「ー」を漢数字「一」と誤認識(「センタ**一**」)し、Sarashinaが正しく「センタ**ー**」へ補正して出力したところ、fabricationスキャナのverbatim完全一致判定が1文字差を実在組織名の捏造と誤判定した。**S0のfixtureテスト(OCR誤字を含まない)では原理的に検知できない**、実OCR誤字とモデルの自動補正の組み合わせである。
 5. **恒久対応(PR #1083、decision-maker方針A)**: `normalizeForFabricationScan`にカタカナ直後の「一」→「ー」正規化を追加(テストRed→Green、functions全2457件PASS)。dev実機でD2を再処理し`summaryState=done`/`fabrication_suspected 0件`を確認、**canary 3/3件done**となった。
 6. **運用上の教訓**: (a) `set-paddle-ocr-allowlist --clear-empty`は「全拒否(`[]`)」であり元の「未設定(制限なし)」には戻らない。復元は`--remove`で行い、`check-paddle-ocr-step0`で独立確認する。(b) `set-paddle-ocr-allowlist --set`はカンマ区切り複数IDを許可していなかった(PR #1082で修正)。(c) `generateSummaryBatch`は60分間隔のため、再処理結果の観測には最大約1時間かかる。
-7. **PR3申し送りの実機確認状況**: canaryの観測記録には、`cause.code`の実測値(上記PR3実装知見5)およびcontext超過400エラー形状の実機一致(同7)の記録がない。**未確認のまま**であり、Wave拡張(S9)以降で実測記録すること。
-8. **未実施(decision-maker判断待ち)**: S9(Wave拡張)・S10(ロールバック手順の実機確認)は未着手。dev以外(kanameone/cocoro)への展開はPR6として別途承認が必要。
+7. **PR3申し送りの実機確認状況**: Wave2(下記8)終了時点で、①`cause.code`はネットワーク失敗が一度も発生せず`errors`コレクション直近24時間0件のため**実測値なし(未発生)**、②context超過400は、2026-09-28以降のSarashina Cloud Run `/v1/chat/completions`リクエスト175件(ハーネス実行・手動調査含む)が**全てstatus=200で400は0件**のため**実機形状は未観測**(短縮再送が成功した場合はアプリ側に記録が残らないが、Cloud Run側のリクエストログに400として残る設計であり、その400も0件)。8000文字超のD3も含め通常運用でcontext超過は発生していない。
+8. **S9(Wave2拡張、2026-09-29〜30、decision-maker指示)**: L2 allowlistをD1〜D10の10件へ拡張し、Paddle allowlistを対象7件(D1/D4/D5/D6/D7/D9/D10)へ一時制限してreset-document-to-pending→OCR完了後に`--remove`で復元(`check-paddle-ocr-step0`で不在・`paddleOcr:true`を独立確認)した。結果: D4/D5/D6/D7=`done`(`summaryProvider=sarashina`、attempt 1)、D9(59字)/D10(44字)=`skipped`(`MIN_OCR_LENGTH_FOR_SUMMARY`未満、想定通り)、**D1=`error`(`fabrication_suspected`)**。Sarashina Cloud Run latencyは5件で16〜65秒(timeout・retryなし)。
+9. **D1の根本原因(D2に続く2件目のスキャナ誤検知)**: エラー文は「suspect name 1件」のみで疑い名が残らないため、decision-maker承認のうえ一時IAM付与(`roles/run.invoker`、調査後に取消し、IAM policyが調査前と一致することを確認)でD1の実OCRをSarashinaへ10回送信し再現した(2/10回)。要約中の「指示期間**を持つ訪問看護**指示書」の動詞「持つ」を核、「訪問看護」を語尾と解釈し、組織名「持つ訪問看護」が原典に無いと判定していた(実際は自然な文で捏造ではない)。S0が3回実行では検知できなかった確率的な言い回しの差。**S0の個別パッチ9パターン・D2の正規化に続く同型の誤検知で、語彙追加型の対処(逐次パッチ)は今後も別の動詞・言い回しで再発する構造**のため、decision-maker判断により個別パッチは行わず、スキャナの構造対応を新規plan modeで検討する。
+10. **未実施(decision-maker判断待ち)**: S10(ロールバック手順の実機確認)は未着手。dev以外(kanameone/cocoro)への展開(PR6)は、上記9のスキャナ構造対応の後に別途承認が必要。
 
 ## Consequences
 

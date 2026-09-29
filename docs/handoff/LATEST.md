@@ -14,8 +14,10 @@ PR4完了(2026-09-28)を受け、decision-maker承認によりPR5(dev環境で�
 - **S5〜S7(L2/L1有効化・canary処理)**: L2 allowlist設定(D2/D3/D8を承認)→L1(`SUMMARY_PROVIDER=sarashina`)有効化→S7a(`set-paddle-ocr-allowlist`にcanary一時制限)実行時に複数ID非対応バグを発見・修正(PR #1082、workflow側のdoc_id検証正規表現が単一ID専用のままだった)→S7b(canary再処理)→S7c(Paddle allowlist復元確認)を完遂。
 - **S8(観測)**: D3・D8は`summaryState=done`かつ`summaryProvider=sarashina`で実運用パイプライン初のSarashina要約完走を達成。**D2は`fabrication_suspected`でerror終端**。decision-maker承認を得て、Sarashina Cloud Runへの一時的IAM権限付与(read-only調査用、調査後即時取消)による手動根本原因調査を実施し特定: 実OCR結果中の「さくら通所介護センタ**一**」(長音記号「ー」の漢数字「一」誤認識)に対し、Sarashinaが正しく「センタ**ー**」と補正出力したが、fabricationスキャナのverbatim完全一致判定が1文字差により実在組織名を捏造と誤判定。**S0のfixtureテストでは検知不可能だった新しいバグクラス**(実OCR誤字とSarashinaの自動補正の組み合わせによる誤検知)であることを確立。
 
+- **S9(Wave2、2026-09-30)**: D1〜D10へL2拡張、Paddle allowlistを7件へ一時制限→reset→復元(独立確認済み)。D4/D5/D6/D7=done、D9/D10=skipped(100字未満)、**D1=`fabrication_suspected`**。一時IAM付与でSarashinaへ10回送信し再現(2/10): 要約中の「指示期間を持つ訪問看護指示書」を「持つ訪問看護」という組織名と誤判定するスキャナ誤検知(D2に続く2件目、同型)。IAMは調査後に取消・調査前と一致確認済み。逐次パッチは行わずスキャナ構造対応を新規plan modeで検討する方針(decision-maker合意)。詳細はADR-0027「PR5実機観測」節8・9。
+
 ### 現在の状態
-D2の恒久対応(方針A: fabricationスキャナへの長音記号正規化、PR #1083)を完了し、dev実機でD2=`summaryState=done`/`summaryProvider=sarashina`を確認、AC4(全canary done、3/3件)達成。Paddle allowlistは`--remove`で復元済み(`check-paddle-ocr-step0`で独立確認)。S9(Wave拡張)・S10(ロールバック)・S11(結果記録)は未着手で、着手はdecision-maker判断待ち(dev以外はPR6で別途承認)。詳細はGOAL.md「ADR-0027 PR5実機観測」節参照。
+D2の恒久対応(方針A: fabricationスキャナへの長音記号正規化、PR #1083)を完了し、dev実機でD2=`summaryState=done`/`summaryProvider=sarashina`を確認、AC4(全canary done、3/3件)達成。Paddle allowlistは`--remove`で復元済み(`check-paddle-ocr-step0`で独立確認)。S9(Wave2拡張)は2026-09-30に完了(D1はスキャナ誤検知、上記S9参照)。次の一手はスキャナの構造対応(新規plan mode)で、S10(ロールバック)・PR6(dev以外展開)はdecision-maker指示待ち。詳細はGOAL.md「ADR-0027 PR5実機観測」節参照。
 
 ### Issue Net
 Net 0（本セッションでのIssue起票・close操作なし）。
