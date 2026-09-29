@@ -1,5 +1,5 @@
 ---
-updated: 2026-09-27
+updated: 2026-09-29
 ---
 <!-- 前ミッション(dev/kanameone/cocoro環境監査・保守検証)は2026-07-20完遂。全文はdocs/handoff/LATEST.md参照。 -->
 <!-- Google Drive連携Phase1 (MVP)実装ミッションは2026-07-22完了(PR#700マージ)。詳細は本ファイル末尾「Google Drive連携Phase1完遂」節+docs/handoff/LATEST.md参照。 -->
@@ -150,7 +150,36 @@ PR3申し送り事項(11(d)(e)(f))を起点に、PR4a(バックエンド)→PR4b
 
 **検証**: functions単体テスト864件+E2E(emulator実機)9件、全PASS。actionlintでワークフロー構文検証0 findings。本番挙動は不変(`SUMMARY_PROVIDER`既定`none`のまま、フラグ有効化はPR5のスコープ)。
 
-**次の一手**: PR5(dev環境でのL1有効化)着手可否をdecision-makerへ確認する。着手時は新規plan mode必須(CLAUDE.md CRITICAL、新機能のロールアウトのため)。
+~~**次の一手**: PR5(dev環境でのL1有効化)着手可否をdecision-makerへ確認する。着手時は新規plan mode必須(CLAUDE.md CRITICAL、新機能のロールアウトのため)。~~ **【着手・2026-09-29、下記「PR5実機観測」節参照】**
+
+## 【ADR-0027 PR5実機観測・進行中・2026-09-29】dev環境でのSarashina要約有効化・実機観測
+
+plan mode(`~/.claude/plans/serialized-brewing-swing.md`、`/plan-crossreview`3回収束済み)承認によりS1〜S8を順次実施。
+
+**S1(実装、PR #1074?〜)**: `set-feature-flag.js`へ`sarashinaSummary`追加、`set-sarashina-summary-allowlist.js`新規、`run-ops-script.yml`に10種選択肢・観測ジョブ追加。
+
+**S0(実機ゲート再検証)**: `sarashina-summary-verify.ts`のfixture(D1〜D10)ハーネスをdevで実行、fabrication誤検知の連鎖的発見・個別パッチ対応(PR #1077〜#1080、`shared/summaryFabricationScan.ts`の`DEFAULT_GENERIC_CORES`/`DEFAULT_PARTICLES`拡充、計9パターン)を経て6ゲート(runtime-contract/fabrication/coverage-aggregate/coverage-per-doc/numeric-fabrication/determinism)全PASS達成。
+
+**S4前提崩壊(2段階)→新規スクリプト実装(PR #1081)**: canary選定でdev実データを調査した結果、①`documents`本体ではなくADR-0018 Phase Eの`detail/main`サブコレクション参照が必要と判明、②`detail/main`確認後も全195件がプレースホルダーテキストのみと判明。decision-maker承認によりS0のfixture(D1〜D10)をdevへ実文書としてアップロードする`scripts/upload-sarashina-canary-fixtures.ts`を新規実装(codex review 3回、pdf-lib/fontkitでのPDF生成・ADR-0018 dual-write契約遵守)、D1〜D10を実データとして投入完了。
+
+**S5〜S7(L2/L1有効化・canary処理)**: L2 allowlist設定→L1(`SUMMARY_PROVIDER=sarashina`)有効化→S7a(`set-paddle-ocr-allowlist`にcanary3件一時制限、複数ID非対応バグ発見・PR #1082で修正)→S7b(canary再処理)→S7c(Paddle allowlist復元確認)を完遂。
+
+**S8(観測)**: D3・D8は`summaryState=done`かつ`summaryProvider=sarashina`で実運用パイプライン初のSarashina要約完走を達成。**D2は`fabrication_suspected`でerror終端**。decision-maker承認を得てSarashina Cloud Runへの一時的IAM権限付与(read-only調査、即時取消済み)による手動根本原因調査を実施し特定: 実OCR結果中の「さくら通所介護センタ**一**」(長音記号「ー」の漢数字「一」誤認識)に対し、Sarashinaが正しく「センタ**ー**」と補正出力したが、fabricationスキャナのverbatim完全一致判定が1文字差により実在組織名を捏造と誤判定。**S0のfixtureテストでは検知不可能だった新しいバグクラス(実OCR誤字とSarashinaの自動補正の組み合わせ)**。
+
+**現在の状態**: decision-maker判断により「D2はerrorのまま受け入れ、ここで区切る」で本セッションを終了。恒久対応方針(正規化実装/他canary確認/OCR側対応/現状受入)は**未決定**、AC4(全canary done)は2/3件で未達のためS9(Wave拡張)は見送り。S10(ロールバック)はcanary全件が終端状態になった場合のみ実施予定。
+
+- [x] S1(実装・PR作成・マージ)
+- [x] S0(実機ゲート再検証、6ゲート全PASS)
+- [x] S4前提崩壊対応(fixtureのdevアップロードスクリプト実装・実行)
+- [x] S5・S6(L2/L1有効化)
+- [x] S7a〜S7c(Paddle allowlist一時制限・canary再処理・復元確認)
+- [ ] D2根本原因への恒久対応方針決定(decision-maker判断待ち)
+- [ ] S8観測継続(D3/D8のfabrication_suspected 0件を維持できているかの経過観察)
+- [ ] S9(Wave拡張、AC4未達のため現時点見送り)
+- [ ] S10(ロールバック、canary全件終端状態になってから)
+- [ ] S11(結果記録、ADR-0027「PR5実機観測」節・本節の最終更新)
+
+**次の一手(トリガー付き)**: decision-makerがD2根本原因対応の方針(A:fabricationスキャナに長音記号等の正規化を実装/B:他canary文書で同型の誤字が起きていないか確認/C:OCR側の長音記号誤認識自体を改善/D:現状のまま受入を継続)を示した時点で着手。方針決定なしにAIから恒久対応を提案・実装しない(4原則§1、起点は decision-maker)。
 
 ADR-0025はPass1(OCR)のみ対象でPass2/要約は明示的にスコープ外(手動トリガー・低頻度のため)。decision-makerの意向で「要約もいずれはPaddleOCRと同様に自前ホスティングSLM(Cloud Run、CPUのみ、asia-northeast1)へモデルルーティングしたい」という将来検討として、2026-09-21に候補調査・実機検証を実施した。当日中に品質・コスト・アーキテクチャ・コンプライアンスの検討が完了し、**decision-makerが実装移行を正式決定**(下記「次の一手」トリガー②を充足)。CLAUDE.md CRITICAL該当のためplan modeでのフル計画策定に入る。実装(summaryPromptBuilder.ts等の変更)はまだ一切行っていない(この節はplan mode着手時点の記録)。
 
@@ -656,6 +685,8 @@ cocoro/kanameから、書類（ケアプラン・医療・介護保険証等）�
 なし（2026-09-19セッションで解消: kanameoneのgcloud対話認証はdecision-makerが`gcloud auth login --configuration=kanameone`を実行し復旧済み。ADR-0025 PaddleOCR Pass1全面切替はdev/kanameone/cocoro 3環境とも完了済み、事後監視のpush型アラート強化も完了済み。詳細は本ファイル冒頭「ADR-0025 PaddleOCR」節参照）。
 
 cocoro側Drive連携Phase C（クライアント自身のOAuth接続）は外部依存待ち（継続、変更なし、詳細は本ファイル冒頭「現在のミッション」節参照）。
+
+**ADR-0027 PR5実機観測（2026-09-29、別件・並行トラック、詳細は本ファイル上部「PR5実機観測」節参照）**: S0〜S8まで実施しD3・D8はSarashina要約完走(`done`)、D2は`fabrication_suspected`でerror終端。根本原因（実OCR「センタ一」の誤字をSarashinaが「センター」へ正しく補正した結果、fabricationスキャナのverbatim完全一致判定が1文字差で誤検知）は手動調査で特定済み・**恒久対応方針は未決定**。次の一手: decision-makerが対応方針(A:スキャナに長音記号等の正規化実装/B:他canary文書の同型誤字確認/C:OCR側の長音記号誤認識改善/D:現状受入を継続)を示すまで待機。S8観測（D3/D8のfabrication_suspected 0件維持）も継続中。AC4未達(2/3件done)のためS9(Wave拡張)は見送り、S10(ロールバック)はcanary全件終端状態になってから。
 
 **Issue #984（2026-09-20）**: 完了・クローズ済み(kanameone実データ確認済み、上記節参照)。cocoroも2026-09-20にデプロイ済み(3環境同一コード)。ログベースメトリクス・アラートも2026-09-21に3環境へ適用済み(#981クローズ)。#984に関する残りタスクはなし。
 

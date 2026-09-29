@@ -1,6 +1,27 @@
 # ハンドオフメモ
 
-**更新日**: 2026-09-28（ADR-0027 PR4(a/b/c)完了・マージ済み。ADR-0025 Pass1切替後の事後監視・第1回手動比較も完了。kanameone Drive Phase1最終ステップ・ADR-0027 PR5着手はいずれも外部依存/decision-maker判断待ちで待機中）
+**更新日**: 2026-09-29（ADR-0027 PR5: dev環境でのSarashina要約実機観測を実施。D3・D8はSarashina要約完走、D2は`fabrication_suspected`でerror終端・根本原因特定済みだが恒久対応方針は未決定でここで区切り。kanameone Drive Phase1最終ステップは引き続き外部依存待ち）
+
+## ADR-0027 PR5: dev環境でのSarashina要約有効化・実機観測（2026-09-29）
+
+### 経緯
+PR4完了(2026-09-28)を受け、decision-maker承認によりPR5(dev環境でのL1有効化・実機観測)に着手。plan mode(Opus)で計画策定後、`/plan-crossreview`(grip自白+codex 2パス)を3回実施し収束(`~/.claude/plans/serialized-brewing-swing.md`)。
+
+### 実行サマリ
+- **S1(実装)**: `set-feature-flag.js`へ`sarashinaSummary`追加、`set-sarashina-summary-allowlist.js`新規作成、`run-ops-script.yml`に選択肢・観測ジョブ追加。
+- **S0(実機ゲート再検証)**: devで`sarashina-summary-verify.ts`のfixture(D1〜D10)ハーネスを実行。fabrication誤検知が「行う」「各」「貸与」「である」「として」「されている」等、計9パターン連鎖的に発覚し、都度decision-maker承認を得て`shared/summaryFabricationScan.ts`(`DEFAULT_GENERIC_CORES`/`DEFAULT_PARTICLES`)へ個別パッチ対応(PR #1077〜#1080)。D8「予定されている」の対応漏れ(自分のミス)を次サイクルで発見・訂正(PR #1080)。6つのFAIL可能ゲート(runtime-contract/fabrication/coverage-aggregate/coverage-per-doc/numeric-fabrication/determinism)全PASS達成。
+- **S4前提崩壊→新規スクリプト実装**: canary文書選定のためdev実データを調査したところ、①本体`documents`ではなくADR-0018 Phase Eの`detail/main`サブコレクションが実データ保持先であることが判明(自分の調査ミス、訂正)、②`detail/main`確認後も全195件のOCRテキストが意味のないプレースホルダーと判明。decision-maker承認を得て、S0のfixture(D1〜D10)をdevへ実文書としてアップロードする`scripts/upload-sarashina-canary-fixtures.ts`を新規実装(PR #1081)。codex review 3回(P1: GHA実行環境にmacOS専用フォントパスがなく`--execute`が確実に失敗する問題をseed-dev-data.ts方式の踏襲で解消。pr-reviewer: 親docへの直接書込みがADR-0018 dual-write契約違反、修正。P2: fixtureページ数とPDF生成後ページ数の不一致、フォントサイズ縮小で解消)を経てマージ、D1〜D10を実データとして投入完了。
+- **S5〜S7(L2/L1有効化・canary処理)**: L2 allowlist設定(D2/D3/D8を承認)→L1(`SUMMARY_PROVIDER=sarashina`)有効化→S7a(`set-paddle-ocr-allowlist`にcanary一時制限)実行時に複数ID非対応バグを発見・修正(PR #1082、workflow側のdoc_id検証正規表現が単一ID専用のままだった)→S7b(canary再処理)→S7c(Paddle allowlist復元確認)を完遂。
+- **S8(観測)**: D3・D8は`summaryState=done`かつ`summaryProvider=sarashina`で実運用パイプライン初のSarashina要約完走を達成。**D2は`fabrication_suspected`でerror終端**。decision-maker承認を得て、Sarashina Cloud Runへの一時的IAM権限付与(read-only調査用、調査後即時取消)による手動根本原因調査を実施し特定: 実OCR結果中の「さくら通所介護センタ**一**」(長音記号「ー」の漢数字「一」誤認識)に対し、Sarashinaが正しく「センタ**ー**」と補正出力したが、fabricationスキャナのverbatim完全一致判定が1文字差により実在組織名を捏造と誤判定。**S0のfixtureテストでは検知不可能だった新しいバグクラス**(実OCR誤字とSarashinaの自動補正の組み合わせによる誤検知)であることを確立。
+
+### 現在の状態
+decision-maker判断「D2は今回はerrorのまま受け入れ、ここで区切る」によりセッション終了。恒久対応方針(A:fabricationスキャナへの正規化実装/B:他canary確認/C:OCR側対応/D:現状受入)は**未決定**。AC4(全canary done)は2/3件で未達のためS9(Wave拡張)は見送り。S10(ロールバック)はcanary全件が終端状態になった場合のみ実施予定。詳細はGOAL.md「ADR-0027 PR5実機観測」節参照。
+
+### Issue Net
+Net 0（本セッションでのIssue起票・close操作なし）。
+
+### 同根再発スキャン・対症療法判定（handoff §4.6/§4.7）
+本セッションのfix系PR(#1077〜#1080、#1082)はいずれも`shared/summaryFabricationScan.ts`(fabrication誤検知)と`run-ops-script.yml`(doc_id検証)という同一ファイル・同一設計領域への連鎖的パッチだが、各修正は「新しい実在パターンの追加」または「既存の単一ID専用正規表現の見落とし」であり、retry/fallbackのみの対症療法ではなく構造的な根本対応(許可リストへの語彙追加・正規表現の拡張)。ただし`summaryFabricationScan.ts`への9回連続の個別パッチという事象自体は、verbatim完全一致方式の設計限界(D2のセンター誤字ケースも同型)を示唆しており、次回同種の誤検知が発生した場合は個別パッチの継続ではなく設計見直し(形態素解析等)を検討する必要がある旨をdecision-makerと共有済み(前回セッションでのAskUserQuestion「形態素解析への設計変更は見送り」判断を維持)。
 
 ## ADR-0025 Pass1切替後の事後監視・第1回手動ワンショット比較（2026-09-28）
 
