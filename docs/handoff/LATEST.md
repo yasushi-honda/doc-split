@@ -17,7 +17,7 @@ PR4完了(2026-09-28)を受け、decision-maker承認によりPR5(dev環境で�
 - **S9(Wave2、2026-09-30)**: D1〜D10へL2拡張、Paddle allowlistを7件へ一時制限→reset→復元(独立確認済み)。D4/D5/D6/D7=done、D9/D10=skipped(100字未満)、**D1=`fabrication_suspected`**。一時IAM付与でSarashinaへ10回送信し再現(2/10): 要約中の「指示期間を持つ訪問看護指示書」を「持つ訪問看護」という組織名と誤判定するスキャナ誤検知(D2に続く2件目、同型)。IAMは調査後に取消・調査前と一致確認済み。逐次パッチは行わずスキャナ構造対応を新規plan modeで検討する方針(decision-maker合意)。詳細はADR-0027「PR5実機観測」節8・9。
 
 ### 現在の状態
-D2の恒久対応(方針A: fabricationスキャナへの長音記号正規化、PR #1083)を完了し、dev実機でD2=`summaryState=done`/`summaryProvider=sarashina`を確認、AC4(全canary done、3/3件)達成。Paddle allowlistは`--remove`で復元済み(`check-paddle-ocr-step0`で独立確認)。S9(Wave拡張)・S10(ロールバック)・S11(結果記録)は未着手で、着手はdecision-maker判断待ち(dev以外はPR6で別途承認)。詳細はGOAL.md「ADR-0027 PR5実機観測」節参照。
+D2の恒久対応(方針A: fabricationスキャナへの長音記号正規化、PR #1083)を完了し、dev実機でD2=`summaryState=done`/`summaryProvider=sarashina`を確認、AC4(全canary done、3/3件)達成。Paddle allowlistは`--remove`で復元済み(`check-paddle-ocr-step0`で独立確認)。S9(Wave2拡張)は2026-09-30に完了(D1はスキャナ誤検知、上記S9参照)。次の一手はスキャナの構造対応(新規plan mode)で、S10(ロールバック)・PR6(dev以外展開)はdecision-maker指示待ち。詳細はGOAL.md「ADR-0027 PR5実機観測」節参照。
 
 ### Issue Net
 Net 0（本セッションでのIssue起票・close操作なし）。
