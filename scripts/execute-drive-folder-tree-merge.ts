@@ -21,10 +21,10 @@
 import * as admin from 'firebase-admin';
 import * as fs from 'fs';
 import {
-  FOLDER_TREE_MERGE_PLAN_SCHEMA_VERSION,
-  type FolderTreeMergeApproval,
+  FOLDER_TREE_MERGE_EXIT_CODE,
+  parseFolderTreeMergeApproval,
+  parseFolderTreeMergePlan,
   type FolderTreeMergeManifest,
-  type FolderTreeMergePlan,
 } from './lib/folderTreeMergePlanTypes';
 import { executeFolderTreeMerge, TreeMergeValidationError } from './lib/folderTreeMerge';
 import { buildFirestoreClaimStore } from './lib/firestoreTreeClaimStore';
@@ -58,12 +58,16 @@ const approvalPath: string = approvalPathArg;
 admin.initializeApp({ projectId });
 
 async function main(): Promise<number> {
-  const plan = JSON.parse(fs.readFileSync(planPath, 'utf8')) as FolderTreeMergePlan;
-  if (plan.schemaVersion !== FOLDER_TREE_MERGE_PLAN_SCHEMA_VERSION) {
-    console.error(`FATAL: schemaVersion不一致(plan=${plan.schemaVersion}, expected=${FOLDER_TREE_MERGE_PLAN_SCHEMA_VERSION})`);
+  // 手編集・破損したplan/承認は、形の検証で拒否する(schemaVersion不一致もここで弾かれる)
+  let plan: ReturnType<typeof parseFolderTreeMergePlan>;
+  let approval: ReturnType<typeof parseFolderTreeMergeApproval>;
+  try {
+    plan = parseFolderTreeMergePlan(JSON.parse(fs.readFileSync(planPath, 'utf8')));
+    approval = parseFolderTreeMergeApproval(JSON.parse(fs.readFileSync(approvalPath, 'utf8')));
+  } catch (err) {
+    console.error(`FATAL: ${(err as Error).message}`);
     return 2;
   }
-  const approval = JSON.parse(fs.readFileSync(approvalPath, 'utf8')) as FolderTreeMergeApproval;
   if (approval.planId !== plan.planId) {
     console.error(`FATAL: approval.planId(${approval.planId})がplan.planId(${plan.planId})と一致しません`);
     return 2;
@@ -133,7 +137,7 @@ async function main(): Promise<number> {
   console.log('---');
   console.log(`結果: status=${status} / 未適用op=${pendingOps} / 適用済みop=${appliedOps} / finalize=${manifest.finalize.outcome}`);
 
-  return status === 'completed' || status === 'already-completed' || status === 'dry-run' ? 0 : 3;
+  return FOLDER_TREE_MERGE_EXIT_CODE[status];
 }
 
 main()

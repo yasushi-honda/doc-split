@@ -10,9 +10,16 @@ import {
   executeFolderTreeMerge,
   planFolderTreeMerge,
   TreeMergeValidationError,
+  type RootClaimSnapshot,
   type TreeMergeDeps,
 } from './folderTreeMerge';
-import type { FolderTreeMergeApproval, FolderTreeMergePlan } from './folderTreeMergePlanTypes';
+import {
+  FOLDER_TREE_MERGE_EXIT_CODE,
+  parseFolderTreeMergeApproval,
+  parseFolderTreeMergePlan,
+  type FolderTreeMergeApproval,
+  type FolderTreeMergePlan,
+} from './folderTreeMergePlanTypes';
 import {
   makeFakeClaimStore,
   makeFakeTreeDrive,
@@ -163,12 +170,13 @@ test('plan検証: 統合元のrename/move権限、統合先のaddChildren権限�
 });
 
 test('plan検証: ルートclaimがdivergent/ambiguous-full-scan/folderId=Dでなければ拒否', async () => {
-  for (const root of [
+  const roots: (RootClaimSnapshot | null)[] = [
     null,
     { state: 'resolved', folderId: 'D', divergentReason: 'ambiguous-full-scan', updateTimeMs: 1 },
     { state: 'divergent', folderId: 'D', divergentReason: 'full-scan-mismatch', updateTimeMs: 1 },
     { state: 'divergent', folderId: 'S', divergentReason: 'ambiguous-full-scan', updateTimeMs: 1 },
-  ]) {
+  ];
+  for (const root of roots) {
     await assertValidation(setup(baseFiles(), { ...baseClaim(), root }).deps, 'root-claim-mismatch');
   }
 });
@@ -442,7 +450,7 @@ test('execute: finalizeが例外を投げても未完了(finalize-failed)とし�
   const { plan, approval } = await planAndApproval(throwing);
   const r = await executeFolderTreeMerge(throwing, plan, approval, { execute: true });
   assert.equal(r.status, 'finalize-failed');
-  assert.match(r.manifest.finalize.reason ?? '', /^error:/);
+  assert.ok(r.manifest.finalize.outcome === 'no-op' && /^error:/.test(r.manifest.finalize.reason));
 });
 
 test('execute: claimがresolvedでもSが生きていれば完了扱いにしない', async () => {
@@ -721,4 +729,48 @@ test('execute: op実行の途中でルートclaimが書き換えられたら、�
   const r = await executeFolderTreeMerge(deps, plan, approval, { execute: true });
   assert.equal(r.status, 'aborted-root-claim-changed');
   assert.equal(fake.updateCalls.length, 1);
+});
+
+// ---------------------------------------------------------------- plan/承認JSONの入口検証(型設計レビュー指摘)
+
+test('parseFolderTreeMergePlan: 実際に生成したplanはJSON往復しても受理される', async () => {
+  const plan = await planOf(setup().deps);
+  const roundTripped = JSON.parse(JSON.stringify(plan)); // undefinedのフィールドはJSONで落ちる
+  assert.deepEqual(parseFolderTreeMergePlan(roundTripped), roundTripped);
+});
+
+test('parseFolderTreeMergePlan: 手編集・破損したplanは拒否する(内容をエラー文言に含めない)', async () => {
+  const good = JSON.parse(JSON.stringify(await planOf(setup().deps)));
+  const mutations: Record<string, (p: Record<string, any>) => void> = {
+    schemaVersion: (p) => (p.schemaVersion = 'other'),
+    planId: (p) => delete p.planId,
+    rootFolderId: (p) => (p.rootFolderId = ''),
+    rootClaim: (p) => (p.rootClaim = { folderId: 'D' }),
+    blockers: (p) => delete p.blockers,
+    summary: (p) => (p.summary.fileMoves = -1),
+    ops: (p) => (p.ops = 'x'),
+    'op.kind': (p) => (p.ops[0].kind = 'delete-folder'),
+    'move-file': (p) => delete p.ops.find((o: any) => o.kind === 'move-file').toParentId,
+    'trash-folder': (p) => delete p.ops.find((o: any) => o.kind === 'trash-folder').parentId,
+    'summary-ops-mismatch': (p) => (p.summary.fileMoves += 1),
+  };
+  for (const [name, mutate] of Object.entries(mutations)) {
+    const p = JSON.parse(JSON.stringify(good));
+    mutate(p);
+    assert.throws(() => parseFolderTreeMergePlan(p), /invalid folder-tree-merge plan/, name);
+  }
+  assert.throws(() => parseFolderTreeMergePlan(null), /invalid folder-tree-merge plan/);
+});
+
+test('parseFolderTreeMergeApproval: 欠落・負数・非整数は拒否する', () => {
+  const ok = { planId: 'p', expectedFileMoves: 1, expectedFolderMoves: 0, expectedFolderTrashes: 2 };
+  assert.deepEqual(parseFolderTreeMergeApproval(ok), ok);
+  for (const bad of [null, { ...ok, planId: '' }, { ...ok, expectedFileMoves: -1 }, { ...ok, expectedFolderMoves: 1.5 }, { ...ok, expectedFolderTrashes: '2' }]) {
+    assert.throws(() => parseFolderTreeMergeApproval(bad), /invalid folder-tree-merge approval/);
+  }
+});
+
+test('終了コード: completed/already-completed/dry-runだけが0で、それ以外は3', () => {
+  const zero = Object.entries(FOLDER_TREE_MERGE_EXIT_CODE).filter(([, c]) => c === 0).map(([s]) => s).sort();
+  assert.deepEqual(zero, ['already-completed', 'completed', 'dry-run']);
 });

@@ -10,6 +10,7 @@
 
 import type * as admin from 'firebase-admin';
 import type { TreeMergeClaimStore } from './folderTreeMerge';
+import type { RootClaimState } from './folderTreeMergePlanTypes';
 
 export interface ClaimFunctions {
   FOLDER_LOCKS_COLLECTION: string;
@@ -57,8 +58,9 @@ export function buildFirestoreClaimStore(
       const snap = await col.doc(fns.buildFolderLockId(parentId, name)).get();
       if (!snap.exists || !snap.updateTime) return null;
       const data = snap.data() as { state?: string; folderId?: string; divergentReason?: string };
+      const known: readonly RootClaimState[] = ['creating', 'resolved', 'invalidated', 'divergent'];
       return {
-        state: data.state ?? 'unknown',
+        state: known.find((k) => k === data.state) ?? 'unknown',
         folderId: data.folderId,
         divergentReason: data.divergentReason,
         updateTimeMs: snap.updateTime.toMillis(),

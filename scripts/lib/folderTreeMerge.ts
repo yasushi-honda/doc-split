@@ -28,13 +28,14 @@ import {
   type RootClaimFence,
   type TreeMergeBlocker,
   type TreeMergeManifestEntry,
+  type RootClaimState,
   type TreeMergeOpStatus,
   type TreeMergeOp,
 } from './folderTreeMergePlanTypes';
 import { describeErrorSafely } from './confirmedReplayStats';
 
 export interface RootClaimSnapshot {
-  state: string;
+  state: RootClaimState;
   folderId?: string;
   divergentReason?: string;
   updateTimeMs: number;
