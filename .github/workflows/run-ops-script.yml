@@ -225,6 +225,7 @@ on:
           - execute-drive-export-repair --execute --limit --expected-count
           - execute-drive-export-repair --execute --expected-count
           - diagnose-drive-folder-duplicate-causality
+          - compare-drive-folder-pairs
           - backfill-drive-folder-claim-ttl
           - backfill-drive-folder-claim-ttl --execute
           - classify-drive-claim-divergence
@@ -306,7 +307,7 @@ on:
         type: string
         default: ''
       exec_args_json:
-        description: 'execute-collision-migration: JSON {"planRunId":"<classify run id>","approvedOperationIds":["op-0001",...]} / investigate-issue811-root-cause: JSON {"folderIds":[...],"docIds":[...]} / classify-drive-folder-duplicates: JSON {"canonicalFolderId":"...","duplicateFolderIds":["id1","id2"]} / execute-drive-folder-merge: JSON {"planRunId":"<classify-drive-folder-duplicates run id>","approvedOperationIds":["op-0001",...]} / rollback-drive-folder-merge: JSON {"manifestRunId":"<execute-drive-folder-merge run id>","approvedOperationIds":["op-0001",...]}(approvedOperationIds省略時はmanifest全件を対象) / execute-drive-export-repair: JSON {"planRunId":"<classify-drive-export-drift run id>","expectedTotal":488,"acknowledgeRestoreFolders":false}(planRunId必須、expectedTotal/acknowledgeRestoreFoldersは省略可) / diagnose-drive-folder-duplicate-causality: JSON {"folderIds":["id1","id2",...]} / execute-drive-claim-resync: JSON {"planRunId":"<classify-drive-claim-divergence run id>","approvedOperations":{"op-0001":{"mode":"restore-expected"},"op-0002":{"mode":"release-claim","acknowledgedStrandedFiles":0}}}(modeはrestore-expected/release-claim/finalize-resolvedのいずれか、release-claimでdirectChildCount>0の場合のみacknowledgedStrandedFilesが必須) / execute-drive-sibling-merge: JSON {"planRunId":"<audit-drive-sibling-duplicates run id>","approvedGroupIds":["parentId:name",...]}(groupIdはaudit-drive-sibling-duplicatesが出力するplan-output.jsonのgroups[].groupIdをそのまま指定)'
+        description: 'execute-collision-migration: JSON {"planRunId":"<classify run id>","approvedOperationIds":["op-0001",...]} / investigate-issue811-root-cause: JSON {"folderIds":[...],"docIds":[...]} / classify-drive-folder-duplicates: JSON {"canonicalFolderId":"...","duplicateFolderIds":["id1","id2"]} / execute-drive-folder-merge: JSON {"planRunId":"<classify-drive-folder-duplicates run id>","approvedOperationIds":["op-0001",...]} / rollback-drive-folder-merge: JSON {"manifestRunId":"<execute-drive-folder-merge run id>","approvedOperationIds":["op-0001",...]}(approvedOperationIds省略時はmanifest全件を対象) / execute-drive-export-repair: JSON {"planRunId":"<classify-drive-export-drift run id>","expectedTotal":488,"acknowledgeRestoreFolders":false}(planRunId必須、expectedTotal/acknowledgeRestoreFoldersは省略可) / diagnose-drive-folder-duplicate-causality: JSON {"folderIds":["id1","id2",...]} / compare-drive-folder-pairs: JSON {"pairs":[["idA","idB"],...]}(A=app作成側/B=人作成側、フォルダIDのみ。read-only、出力は件数のみでファイル名は含まない) / execute-drive-claim-resync: JSON {"planRunId":"<classify-drive-claim-divergence run id>","approvedOperations":{"op-0001":{"mode":"restore-expected"},"op-0002":{"mode":"release-claim","acknowledgedStrandedFiles":0}}}(modeはrestore-expected/release-claim/finalize-resolvedのいずれか、release-claimでdirectChildCount>0の場合のみacknowledgedStrandedFilesが必須) / execute-drive-sibling-merge: JSON {"planRunId":"<audit-drive-sibling-duplicates run id>","approvedGroupIds":["parentId:name",...]}(groupIdはaudit-drive-sibling-duplicatesが出力するplan-output.jsonのgroups[].groupIdをそのまま指定)'
         required: false
         type: string
         default: ''
@@ -1228,6 +1229,37 @@ jobs:
               npx ts-node diagnose-drive-folder-duplicate-causality.ts \
                 --folder-ids "$FOLDER_IDS" \
                 --out "${GITHUB_WORKSPACE}/scripts/diagnose-drive-folder-duplicate-causality-output.json"
+          elif [ "$SCRIPT_NAME" = "compare-drive-folder-pairs" ]; then
+            # audit-drive-sibling-duplicatesのmanual-review組の直下ファイル照合(read-only)。
+            # exec_args_jsonで{"pairs":[["idA","idB"],...]}を渡す。出力は件数のみ(PII対策)。
+            if [ -z "$EXEC_ARGS_JSON" ]; then
+              echo "ERROR: exec_args_json is required for compare-drive-folder-pairs" >&2
+              exit 1
+            fi
+            if ! echo "$EXEC_ARGS_JSON" | jq empty 2>/dev/null; then
+              echo "ERROR: exec_args_json is not valid JSON" >&2
+              exit 1
+            fi
+            PAIRS=$(echo "$EXEC_ARGS_JSON" | jq -r '.pairs // empty | map(select(length == 2) | join(":")) | join(",")')
+            PAIRS_COUNT=$(echo "$EXEC_ARGS_JSON" | jq -r '.pairs // [] | length')
+            if [ -z "$PAIRS" ]; then
+              echo "ERROR: exec_args_json must contain non-empty pairs array of [idA,idB]" >&2
+              exit 1
+            fi
+            if [ "$(echo "$PAIRS" | tr ',' '\n' | wc -l | tr -d ' ')" != "$PAIRS_COUNT" ]; then
+              echo "ERROR: every element of pairs must be a 2-element array [idA,idB]" >&2
+              exit 1
+            fi
+            if ! echo "$PAIRS" | grep -qE '^[A-Za-z0-9_-]+:[A-Za-z0-9_-]+(,[A-Za-z0-9_-]+:[A-Za-z0-9_-]+)*$'; then
+              echo "ERROR: each pair must match idA:idB with ^[A-Za-z0-9_-]+$ (got: $PAIRS)" >&2
+              exit 1
+            fi
+            cd scripts
+            NODE_PATH=../functions/node_modules \
+              FIREBASE_PROJECT_ID="$PROJECT_ID" \
+              npx ts-node compare-drive-folder-pairs.ts \
+                --pairs "$PAIRS" \
+                --out "${GITHUB_WORKSPACE}/scripts/compare-drive-folder-pairs-output.json"
           elif [ "$SCRIPT_NAME" = "backfill-drive-folder-claim-ttl" ]; then
             # Issue #871 恒久対応: 既存divergent claimのexpireAt(TTL)を除去する一回限りの移行。
             # exec_args_json不要。SCRIPT_ARGSは "" (dry-run) または "--execute"。
@@ -2432,6 +2464,16 @@ jobs:
         with:
           name: diagnose-drive-folder-duplicate-causality-${{ github.event.inputs.environment }}-${{ github.run_id }}
           path: scripts/diagnose-drive-folder-duplicate-causality-output.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload compare-drive-folder-pairs report artifact
+        # manual-review組の直下ファイル照合結果(read-only、件数のみ・ファイル名なし)。
+        if: ${{ startsWith(github.event.inputs.script, 'compare-drive-folder-pairs') && always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: compare-drive-folder-pairs-${{ github.event.inputs.environment }}-${{ github.run_id }}
+          path: scripts/compare-drive-folder-pairs-output.json
           if-no-files-found: warn
           retention-days: 30
 

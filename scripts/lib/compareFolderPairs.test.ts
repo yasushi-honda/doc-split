@@ -1,0 +1,105 @@
+/**
+ * `scripts/lib/compareFolderPairs.ts` の単体テスト
+ *
+ * Drive APIにもfirebase-adminにも依存しない純関数のため、emulator不要。
+ *
+ * 実行: cd scripts && npm test (node --test lib/*.test.ts)
+ */
+
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { compareFolderChildren, type FolderChild } from './compareFolderPairs';
+
+const FOLDER_MIME = 'application/vnd.google-apps.folder';
+const PDF_MIME = 'application/pdf';
+const DOC_MIME = 'application/vnd.google-apps.document';
+
+function file(name: string, md5: string | null, mimeType = PDF_MIME): FolderChild {
+  return { name, mimeType, md5Checksum: md5 };
+}
+
+test('両方空フォルダは全件0', () => {
+  const r = compareFolderChildren([], []);
+  assert.deepEqual(r, {
+    aFileCount: 0,
+    bFileCount: 0,
+    aChildFolderCount: 0,
+    bChildFolderCount: 0,
+    both: 0,
+    onlyA: 0,
+    onlyB: 0,
+    matchedByMd5: 0,
+    matchedByNameAndMime: 0,
+  });
+});
+
+test('片方だけ空: 空でない側の全件がonlyになる', () => {
+  const r = compareFolderChildren([file('a.pdf', 'm1'), file('b.pdf', 'm2')], []);
+  assert.equal(r.onlyA, 2);
+  assert.equal(r.onlyB, 0);
+  assert.equal(r.both, 0);
+});
+
+test('md5が同じなら名前が違っても同一ファイルとして扱う', () => {
+  const r = compareFolderChildren([file('新しい名前.pdf', 'same')], [file('古い名前.pdf', 'same')]);
+  assert.equal(r.both, 1);
+  assert.equal(r.onlyA, 0);
+  assert.equal(r.onlyB, 0);
+  assert.equal(r.matchedByMd5, 1);
+  assert.equal(r.matchedByNameAndMime, 0);
+});
+
+test('md5が違えば名前が同じでも別ファイル(内容が異なる)', () => {
+  const r = compareFolderChildren([file('a.pdf', 'm1')], [file('a.pdf', 'm2')]);
+  assert.equal(r.both, 0);
+  assert.equal(r.onlyA, 1);
+  assert.equal(r.onlyB, 1);
+});
+
+test('md5が無いファイル(Googleドキュメント等)は名前+mimeTypeで照合する', () => {
+  const r = compareFolderChildren([file('議事録', null, DOC_MIME)], [file('議事録', null, DOC_MIME)]);
+  assert.equal(r.both, 1);
+  assert.equal(r.matchedByNameAndMime, 1);
+  assert.equal(r.matchedByMd5, 0);
+});
+
+test('md5が無く名前は同じでもmimeTypeが違えば別ファイル', () => {
+  const r = compareFolderChildren([file('x', null, DOC_MIME)], [file('x', null, 'application/vnd.google-apps.spreadsheet')]);
+  assert.equal(r.both, 0);
+  assert.equal(r.onlyA, 1);
+  assert.equal(r.onlyB, 1);
+});
+
+test('同一md5が複数ある場合は多重度で照合する(A側2件・B側1件 → 1件一致・A側のみ1件)', () => {
+  const r = compareFolderChildren([file('a1.pdf', 'dup'), file('a2.pdf', 'dup')], [file('b.pdf', 'dup')]);
+  assert.equal(r.both, 1);
+  assert.equal(r.onlyA, 1);
+  assert.equal(r.onlyB, 0);
+});
+
+test('md5の有無が混在しても互いに混線しない', () => {
+  const r = compareFolderChildren(
+    [file('a.pdf', 'm1'), file('議事録', null, DOC_MIME)],
+    [file('a-renamed.pdf', 'm1'), file('議事録', null, DOC_MIME), file('only-b.pdf', 'm9')],
+  );
+  assert.equal(r.both, 2);
+  assert.equal(r.onlyA, 0);
+  assert.equal(r.onlyB, 1);
+  assert.equal(r.matchedByMd5, 1);
+  assert.equal(r.matchedByNameAndMime, 1);
+});
+
+test('子フォルダは照合対象外で件数だけ数える(ファイル件数に含めない)', () => {
+  const sub: FolderChild = { name: 'sub', mimeType: FOLDER_MIME, md5Checksum: null };
+  const r = compareFolderChildren([file('a.pdf', 'm1'), sub], [sub, sub]);
+  assert.equal(r.aFileCount, 1);
+  assert.equal(r.bFileCount, 0);
+  assert.equal(r.aChildFolderCount, 1);
+  assert.equal(r.bChildFolderCount, 2);
+  assert.equal(r.onlyA, 1);
+});
+
+test('結果にファイル名が含まれない(PII対策)', () => {
+  const r = compareFolderChildren([file('山田太郎_ケアプラン.pdf', 'm1')], [file('山田太郎_ケアプラン.pdf', 'm2')]);
+  assert.equal(JSON.stringify(r).includes('山田太郎'), false);
+});
