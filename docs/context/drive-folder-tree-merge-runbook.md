@@ -23,6 +23,7 @@
 - 統合先の同名子フォルダ・docSplitDocId重複はplan時のみ確認する。planは実行の直前(24時間以内、超過すると書込みを伴う実行は拒否)に取り直す
 
 ## 中断・失敗時
+- 部分統合の間はルートclaimがdivergentのままで、対象ツリーのDrive保存(通常export)は止まり続ける。長期間放置せず、原因を除いて早めに再実行する
 - 途中失敗(`aborted-op-failure`等): ルートclaimはdivergentのまま(通常exportの停止を維持)。原因を除いて**同一planで再実行**すれば、適用済みopをスキップして続きから完走する(ドリフト時は書込み前に停止するので再planする)
 - `aborted-root-claim-changed`: plan後にルートclaimが変化した。再planする
 - `finalize-failed`: Drive側の統合は完了しているがclaimが未確定。ルートclaimの状態を確認して再実行

@@ -703,3 +703,22 @@ test('execute: plan後に再帰統合対象の子フォルダが別の場所へ�
   assert.equal(r.status, 'aborted-drift');
   assert.equal(fake.updateCalls.length, 0);
 });
+
+test('execute: op実行の途中でclaim読取フラグがOFFになったら、次のop前に停止する(以降の書込みなし)', async () => {
+  const claim = baseClaim();
+  const { deps, fake } = setup(baseFiles(), claim, { afterNthUpdate: { n: 2, apply: () => (claim.claimReadEnabled = false) } });
+  const { plan, approval } = await planAndApproval(deps);
+  const r = await executeFolderTreeMerge(deps, plan, approval, { execute: true });
+  assert.equal(r.status, 'aborted-root-claim-changed');
+  assert.equal(fake.updateCalls.length, 2);
+  assert.equal(fake.callLog.some((c) => c.startsWith('claim.finalize')), false);
+});
+
+test('execute: op実行の途中でルートclaimが書き換えられたら、次のop前に停止する', async () => {
+  const claim = baseClaim();
+  const { deps, fake } = setup(baseFiles(), claim, { afterNthUpdate: { n: 1, apply: () => ((claim.root as { updateTimeMs: number }).updateTimeMs = 7777) } });
+  const { plan, approval } = await planAndApproval(deps);
+  const r = await executeFolderTreeMerge(deps, plan, approval, { execute: true });
+  assert.equal(r.status, 'aborted-root-claim-changed');
+  assert.equal(fake.updateCalls.length, 1);
+});

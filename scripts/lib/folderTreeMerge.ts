@@ -455,6 +455,11 @@ export async function executeFolderTreeMerge(
       record({ opId: op.opId, kind: op.kind, status: 'skipped-already-applied' });
       continue;
     }
+    // 実行中にflagがOFFにされる・ルートclaimが書き換わると通常exportが再開しうるため、書込みop毎に再確認する
+    if (!(await deps.claimStore.isClaimReadEnabled()) || !claimUnchanged(await deps.claimStore.readRootClaim(plan.rootFolderId, target.name))) {
+      options.logError?.(`root-claim-or-flag-changed-during-execute: before ${op.opId}`);
+      return finish('aborted-root-claim-changed', pendingOps, appliedOps);
+    }
     let status: TreeMergeOpStatus = 'applied';
     try {
       if (op.kind === 'trash-folder') {
