@@ -685,3 +685,21 @@ test('plan阻害: Sのみの子フォルダ配下のショートカット・複�
   assert.ok(codes.includes('shortcut'));
   assert.ok(codes.includes('multi-parent'));
 });
+
+// ---------------------------------------------------------------- codex review(2回目)指摘対応
+
+test('plan阻害: 再帰統合で一致した子フォルダ(統合元・統合先とも)が複数親ならmulti-parent', async () => {
+  const srcMulti = baseFiles().map((f) => (f.id === 'S-A' ? { ...f, parents: ['S', 'OTHER'] } : f));
+  assert.ok((await blockerCodes(srcMulti)).includes('multi-parent'));
+  const tgtMulti = baseFiles().map((f) => (f.id === 'D-A' ? { ...f, parents: ['D', 'OTHER'] } : f));
+  assert.ok((await blockerCodes(tgtMulti)).includes('multi-parent'));
+});
+
+test('execute: plan後に再帰統合対象の子フォルダが別の場所へ移されていたら、書込み前にドリフトで停止', async () => {
+  const { deps, fake } = setup();
+  const { plan, approval } = await planAndApproval(deps);
+  (fake.files.find((f) => f.id === 'S-A') as FakeTreeFile).parents = ['ELSEWHERE'];
+  const r = await executeFolderTreeMerge(deps, plan, approval, { execute: true });
+  assert.equal(r.status, 'aborted-drift');
+  assert.equal(fake.updateCalls.length, 0);
+});

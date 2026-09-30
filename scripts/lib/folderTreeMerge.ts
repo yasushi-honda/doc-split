@@ -255,6 +255,9 @@ export async function planFolderTreeMerge(deps: TreeMergeDeps, params: PlanParam
       if (matches.length >= 2) {
         blockers.push({ code: 'target-same-name-multiple', id: x.id });
       } else if (matches.length === 1) {
+        // 複数親のフォルダは、空にしてtrashすると他の親配下からも消える(統合先側は共有ブランチへ書き込むことになる)
+        if (x.parents.length !== 1) blockers.push({ code: 'multi-parent', id: x.id });
+        if (matches[0].parents.length !== 1) blockers.push({ code: 'multi-parent', id: matches[0].id });
         // 再帰統合した子フォルダは後で改名+trashされる。実行途中で失敗して部分統合になるのを避けるため、権限を事前に確認する
         if (!(x.canRename && x.canTrash)) blockers.push({ code: 'cannot-trash', id: x.id });
         mergedSourceIds.push(x.id);
@@ -358,7 +361,9 @@ async function liveOpState(deps: TreeMergeDeps, op: TreeMergeOp): Promise<LiveOp
   if (op.kind === 'trash-folder') {
     // 404は適用済みと見なさない(権限喪失でも404になる)。trashedを実観測した場合のみapplied
     if (!item) return 'drift';
-    return item.trashed ? 'applied' : 'pending';
+    if (item.trashed) return 'applied';
+    // plan後に別の場所へ移されたフォルダを空にしてtrashしないよう、計画上の親配下にある場合だけpendingとする
+    return item.parents.length === 1 && item.parents[0] === op.parentId ? 'pending' : 'drift';
   }
   if (!item || item.trashed) return 'drift';
   const hasTo = item.parents.includes(op.toParentId);
