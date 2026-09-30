@@ -41,6 +41,16 @@
  *     - repair-404: driveFileIdがDrive上に存在しない(missing-404判定。#823調査で判明した
  *       「404以外の例外も混ざりうる」懸念(R1)を、実際のDrive APIレスポンスで確定させる
  *       のがこのfixtureの主目的)
+ *
+ * --tree-merge-scenario: 同名の兄弟フォルダ2つの再帰統合(`plan-drive-folder-tree-merge.ts` /
+ *   `execute-drive-folder-tree-merge.ts`)のdevリハーサル用fixtureを投入する(他のfixtureとは独立、
+ *   `--cleanup`・`--repair-scenario`とは併用不可)。rootFolderId直下に同名フォルダ2つ(統合元S・
+ *   統合先D)を作り、以下を再現する:
+ *     - 両方に存在する子フォルダ(再帰統合)+それぞれの配下にファイル
+ *     - Sのみに存在する子フォルダ(再親付け)+配下のファイル
+ *     - S直下のファイル
+ *   さらにルートclaim(`(rootFolderId, name)`)をdivergent/ambiguous-full-scan/folderId=Dで投入する。
+ *   前提: dev`settings/features.driveFolderClaimRead`がtrue(falseだとplanが拒否するため警告のみ表示)。
  */
 
 import * as admin from 'firebase-admin';
@@ -58,6 +68,11 @@ if (!projectId.includes('dev')) {
 
 const cleanup = process.argv.includes('--cleanup');
 const repairScenario = process.argv.includes('--repair-scenario');
+const treeMergeScenario = process.argv.includes('--tree-merge-scenario');
+if (treeMergeScenario && (cleanup || repairScenario)) {
+  console.error('❌ --tree-merge-scenario は --cleanup / --repair-scenario と併用できません。');
+  process.exit(1);
+}
 if (repairScenario && cleanup) {
   console.error('❌ --repair-scenario と --cleanup は併用できません(cleanupは常に両fixture種別を対象に実施されるため、--repair-scenario単体では不要です)。');
   process.exit(1);
@@ -92,6 +107,8 @@ const REPAIR_FIXTURE_DOC_404 = `${FIXTURE_PREFIX}-doc-repair-404`;
 const REPAIR_FIXTURE_FAKE_404_FILE_ID = '1FIXTURE404-does-not-exist-0000000000000';
 // cleanup時の広域sweep用(実行毎のランダムsuffixに関わらず、過去runの残骸を全て対象にする)
 const FIXTURE_NAME_SWEEP_TOKEN = 'フィクスチャ';
+// --tree-merge-scenarioのS/Dフォルダ名(rootFolderId直下)。cleanup時にこのtokenで広域sweepする。
+const TREE_MERGE_NAME_TOKEN = 'フィクスチャ木統合';
 
 const FOLDER_MIME_TYPE = 'application/vnd.google-apps.folder';
 
@@ -216,6 +233,106 @@ async function main(): Promise<void> {
         .catch(() => undefined);
     }
     console.log(`cleanup完了: Drive fixtureフォルダ${toDelete.length}件をtrashed化、Firestore fixture doc 2件削除`);
+    await cleanupTreeMergeScenario();
+  }
+
+  // --tree-merge-scenarioの残骸(rootFolderId直下のS/Dフォルダ+ルートclaim)を片付ける
+  async function cleanupTreeMergeScenario(): Promise<void> {
+    let pageToken: string | undefined;
+    const folderIds: string[] = [];
+    do {
+      const res = await drive.files.list({
+        q: `'${rootFolderId}' in parents and name contains '${escapeQueryValue(TREE_MERGE_NAME_TOKEN)}' and mimeType='${FOLDER_MIME_TYPE}'`,
+        fields: 'nextPageToken, files(id)',
+        includeItemsFromAllDrives: true,
+        pageSize: 100,
+        pageToken,
+        ...SUPPORTS_ALL_DRIVES,
+      });
+      for (const f of res.data.files ?? []) if (f.id) folderIds.push(f.id);
+      pageToken = res.data.nextPageToken ?? undefined;
+    } while (pageToken);
+    for (const id of folderIds) {
+      await drive.files
+        .update({ fileId: id, requestBody: { trashed: true }, fields: 'id', ...SUPPORTS_ALL_DRIVES })
+        .catch(() => undefined);
+    }
+    const locks = await db.collection('driveFolderLocks').where('parentId', '==', rootFolderId).get();
+    const stale = locks.docs.filter((d) => String(d.data().name ?? '').includes(TREE_MERGE_NAME_TOKEN));
+    await Promise.all(stale.map((d) => d.ref.delete()));
+    console.log(`cleanup(tree-merge): rootFolderId直下のフォルダ${folderIds.length}件をtrashed化、ルートclaim${stale.length}件削除`);
+  }
+
+  // ─── --tree-merge-scenario: 再帰統合ツールのdevリハーサル用fixture投入 ──────────
+  async function setupTreeMergeScenario(): Promise<void> {
+    const { buildFolderLockId, FOLDER_LOCKS_COLLECTION } = await import('../functions/src/drive/driveFolderClaim');
+    const { isDriveFolderClaimReadEnabled } = await import('../functions/src/utils/featureFlags');
+
+    const runSuffix = crypto.randomBytes(3).toString('hex');
+    const rootName = `${TREE_MERGE_NAME_TOKEN}${runSuffix}`;
+
+    async function makeFolder(name: string, parentId: string): Promise<string> {
+      const res = await drive.files.create({
+        requestBody: { name, mimeType: FOLDER_MIME_TYPE, parents: [parentId] },
+        fields: 'id',
+        ...SUPPORTS_ALL_DRIVES,
+      });
+      if (!res.data.id) throw new Error(`fixtureフォルダ作成に失敗: ${name}`);
+      return res.data.id;
+    }
+    async function makeFile(name: string, parentId: string, docSplitDocId: string): Promise<string> {
+      const res = await drive.files.create({
+        requestBody: { name, parents: [parentId], appProperties: { docSplitDocId } },
+        media: { mimeType: 'text/plain', body: 'tree-merge fixture file' },
+        fields: 'id',
+        ...SUPPORTS_ALL_DRIVES,
+      });
+      if (!res.data.id) throw new Error(`fixtureファイル作成に失敗: ${name}`);
+      return res.data.id;
+    }
+
+    // 統合元S(先に作る=「人が作った側」を想定)・統合先D。どちらもrootFolderId直下の同名フォルダ。
+    const sourceId = await makeFolder(rootName, rootFolderId!);
+    const targetId = await makeFolder(rootName, rootFolderId!);
+
+    // 両方に存在する子フォルダ(再帰統合)。docSplitDocIdはS/Dで重複させない(阻害要因回避)。
+    const sourceShared = await makeFolder('フィクスチャ共通子', sourceId);
+    const targetShared = await makeFolder('フィクスチャ共通子', targetId);
+    await makeFile('tm-source-shared.txt', sourceShared, `${FIXTURE_PREFIX}-tm-${runSuffix}-s1`);
+    await makeFile('tm-target-shared.txt', targetShared, `${FIXTURE_PREFIX}-tm-${runSuffix}-t1`);
+    // Sのみの子フォルダ(再親付け)
+    const sourceOnly = await makeFolder('フィクスチャSのみ子', sourceId);
+    await makeFile('tm-source-only.txt', sourceOnly, `${FIXTURE_PREFIX}-tm-${runSuffix}-s2`);
+    // Dのみの子フォルダ(そのまま残る)
+    await makeFolder('フィクスチャDのみ子', targetId);
+    // S直下のファイル
+    await makeFile('tm-source-top.txt', sourceId, `${FIXTURE_PREFIX}-tm-${runSuffix}-s3`);
+
+    // ルートclaim: divergent / ambiguous-full-scan / folderId=D(kanameoneの実状態の再現)
+    await db
+      .collection(FOLDER_LOCKS_COLLECTION)
+      .doc(buildFolderLockId(rootFolderId!, rootName))
+      .set({
+        state: 'divergent',
+        folderId: targetId,
+        divergentReason: 'ambiguous-full-scan',
+        divergentAtMs: Date.now(),
+        parentId: rootFolderId,
+        name: rootName,
+        attempt: null,
+        missCount: 0,
+      });
+
+    console.log('\ntree-merge-scenario投入完了:');
+    console.log(`  sourceFolderId(統合元): ${sourceId}`);
+    console.log(`  targetFolderId(統合先): ${targetId}`);
+    console.log('  期待: ファイル移動=2(共通子内1+S直下1。Sのみ子内のファイルはフォルダごと移るため対象外)、フォルダ再親付け=1、trash=2(共通子+S本体)');
+    if (!(await isDriveFolderClaimReadEnabled(db))) {
+      console.warn('⚠️ dev の settings/features.driveFolderClaimRead が true ではありません。planはclaim-read-disabledで拒否されます(手動でtrueにしてから実行してください)。');
+    }
+    console.log(
+      `\n次: plan-drive-folder-tree-merge を {"sourceFolderId":"${sourceId}","targetFolderId":"${targetId}"} で実行してください。`
+    );
   }
 
   // ─── --repair-scenario: Issue #811/#823 remediation用fixture投入 ──────────
@@ -310,6 +427,12 @@ async function main(): Promise<void> {
 
   await doCleanup();
   if (cleanup) {
+    await admin.app().delete();
+    return;
+  }
+
+  if (treeMergeScenario) {
+    await setupTreeMergeScenario();
     await admin.app().delete();
     return;
   }
