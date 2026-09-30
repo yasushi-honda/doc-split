@@ -168,7 +168,7 @@ plan mode(`~/.claude/plans/serialized-brewing-swing.md`、`/plan-crossreview`3�
 
 **D2恒久対応(2026-09-29、decision-maker方針A選択)**: `normalizeForFabricationScan`にカタカナ直後の「一」→「ー」正規化を追加(PR #1083マージ済み、テストRed→Green、functions全2457件PASS)。dev実機検証: D2を`reset-document-to-pending`で再処理(Paddle allowlistをD2のみに一時設定→再処理→`--remove`で復元、`check-paddle-ocr-step0`で「allowlist不在」を独立確認)し、`summaryState=done`/`summaryProvider=sarashina`/`fabrication_suspected 0件`を確認。**AC4(全canary done)達成(D2/D3/D8=3/3件)**。教訓: `set-paddle-ocr-allowlist --clear-empty`は「全拒否(`[]`)」で元の「未設定(制限なし)」には戻らない、復元は`--remove`。`generateSummaryBatch`は60分間隔のため再処理結果の観測には最大約1時間かかる。
 
-**現在の状態**: D2の恒久対応は完了、S11(ADR-0027への結果記録)も完了。S9(Wave拡張)・S10(ロールバック)は未着手でdecision-maker判断待ち(dev以外への展開はPR6で別途承認が必要)。
+**現在の状態**: D2の恒久対応は完了、S11(ADR-0027への結果記録)も完了。S9(Wave2拡張)も2026-09-30に完了し、D1の誤検知には運用側の対応(fabrication_suspectedの総試行上限内再試行・診断情報・観測分離、PR #1088)を実装済み(ADR-0027「PR5実機観測」節8〜13)。S10(ロールバック)は未着手でdecision-maker判断待ち(dev以外への展開はPR6で別途承認が必要)。
 
 - [x] S1(実装・PR作成・マージ)
 - [x] S0(実機ゲート再検証、6ゲート全PASS)
@@ -691,7 +691,7 @@ cocoro/kanameから、書類（ケアプラン・医療・介護保険証等）�
 
 cocoro側Drive連携Phase C（クライアント自身のOAuth接続）は外部依存待ち（継続、変更なし、詳細は本ファイル冒頭「現在のミッション」節参照）。
 
-**ADR-0027 PR5実機観測（2026-09-29、別件・並行トラック、詳細は本ファイル上部「PR5実機観測」節参照）**: S0〜S8まで実施。D2の`fabrication_suspected`誤検知(実OCR「センタ一」をSarashinaが「センター」へ補正)はdecision-maker方針Aによりスキャナ正規化で恒久対応済み(PR #1083)、dev実機でD2=`done`を確認しAC4(canary 3/3件done)達成。次の一手: S9(Wave拡張)/S10(ロールバック)の着手判断をdecision-makerが示すまで待機。
+**ADR-0027 PR5実機観測（2026-09-29、別件・並行トラック、詳細は本ファイル上部「PR5実機観測」節参照）**: S0〜S8まで実施。D2の`fabrication_suspected`誤検知(実OCR「センタ一」をSarashinaが「センター」へ補正)はdecision-maker方針Aによりスキャナ正規化で恒久対応済み(PR #1083)、dev実機でD2=`done`を確認しAC4(canary 3/3件done)達成。**S9(Wave2)は2026-09-30に完了**(D4〜D7=done、D9/D10=skipped、D1の誤検知は運用側の対応で緩和、smoke観測でD1は1回目でdone・再試行の実機発火は未観測)。次の一手: 実運用で誤検知が発生した際に`fabricationRetried`・構造化ログ・`summaryError`(suffix/coreLen)を見てスキャナ本体の再設計要否を判断。S10(ロールバック)・PR6はdecision-makerの指示があるまで待機。
 
 **Issue #984（2026-09-20）**: 完了・クローズ済み(kanameone実データ確認済み、上記節参照)。cocoroも2026-09-20にデプロイ済み(3環境同一コード)。ログベースメトリクス・アラートも2026-09-21に3環境へ適用済み(#981クローズ)。#984に関する残りタスクはなし。
 
