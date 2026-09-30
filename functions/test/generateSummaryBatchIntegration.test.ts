@@ -144,23 +144,240 @@ describe('runSummaryBatch (ADR-0027 PR4)', () => {
     expect((await getDoc('doc-gemini')).summaryProvider).to.equal('gemini');
   });
 
-  it('固有名詞捏造検知: fabricatedCount>0なら要約を保存せずerror/fabrication_suspectedになる', async () => {
-    await seedDocument('doc-fabricated');
-    const stats = await runSummaryBatch({
-      firestore: db,
-      bucket: FAKE_BUCKET,
-      l1Provider: 'sarashina',
-      getGate: ENABLED_GATE,
-      // D9実データで実証済みの捏造パターン(ADR-0027 PR0/PR2a): 事業所名の記載が
-      // 一切ない書類に対し、実在しない「みずほ訪問看護ステーション」を捏造する。
-      summarize: fakeSummarize({ summary: { text: '貸与事業所はみずほ訪問看護ステーションです。', truncated: false } }),
+  describe('固有名詞捏造検知(fabrication_suspected): 総試行上限内で再試行し、上限到達でerror', () => {
+    // D9実データで実証済みの捏造パターン(ADR-0027 PR0/PR2a): 事業所名の記載が
+    // 一切ない書類に対し、実在しない「みずほ訪問看護ステーション」を捏造する。
+    const fabricatedSummarize = fakeSummarize({
+      summary: { text: '貸与事業所はみずほ訪問看護ステーションです。', truncated: false },
     });
 
-    expect(stats.errorByKind.fabrication_suspected).to.equal(1);
-    const data = await getDoc('doc-fabricated');
-    expect(data.summaryState).to.equal('error');
-    expect(data.summaryErrorKind).to.equal('fabrication_suspected');
-    expect(data.summary).to.equal(undefined);
+    async function runFabricatedTick(): Promise<Awaited<ReturnType<typeof runSummaryBatch>>> {
+      return runSummaryBatch({
+        firestore: db,
+        bucket: FAKE_BUCKET,
+        l1Provider: 'sarashina',
+        getGate: ENABLED_GATE,
+        summarize: fabricatedSummarize,
+      });
+    }
+
+    it('attempt未達: 要約を保存せずpendingへ戻し、fabricationRetriedへ加算する(終端errorとして数えない)', async () => {
+      await seedDocument('doc-fabricated-retry', { summaryAttemptCount: 0 });
+      const stats = await runFabricatedTick();
+
+      expect(stats.fabricationRetried).to.equal(1);
+      expect(stats.errorByKind.fabrication_suspected).to.equal(undefined);
+      const data = await getDoc('doc-fabricated-retry');
+      expect(data.summaryState).to.equal('pending');
+      expect(data.summaryErrorKind).to.equal('fabrication_suspected');
+      expect(data.summary).to.equal(undefined);
+    });
+
+    it('attemptがMAX_SUMMARY_ATTEMPTSに達したらerror終端(要約は保存されず、終端errorとして数える)', async () => {
+      await seedDocument('doc-fabricated-exhausted', { summaryAttemptCount: MAX_SUMMARY_ATTEMPTS - 1 });
+      const stats = await runFabricatedTick();
+
+      expect(stats.errorByKind.fabrication_suspected).to.equal(1);
+      expect(stats.fabricationRetried).to.equal(0);
+      const data = await getDoc('doc-fabricated-exhausted');
+      expect(data.summaryState).to.equal('error');
+      expect(data.summaryErrorKind).to.equal('fabrication_suspected');
+      expect(data.summary).to.equal(undefined);
+    });
+
+    it('総試行上限の共有(仕様): quota等で試行を先に消費済みの文書は、初回の検知で即errorになる', async () => {
+      // summaryAttemptCountはquota/transient/手動再生成と共有の総claim回数のため、
+      // 「fabricationが3回連続で初めてerror」にはならない(この仕様をプランで明示的に受容した)。
+      await seedDocument('doc-fabricated-shared-budget', { summaryAttemptCount: 2, summaryErrorKind: 'quota' });
+      const stats = await runFabricatedTick();
+
+      expect(stats.errorByKind.fabrication_suspected).to.equal(1);
+      expect(stats.fabricationRetried).to.equal(0);
+      const data = await getDoc('doc-fabricated-shared-budget');
+      expect(data.summaryState).to.equal('error');
+      // 先行するquotaのkindが残らず、fabrication_suspectedで上書きされる
+      expect(data.summaryErrorKind).to.equal('fabrication_suspected');
+    });
+
+    it('連続tick: 検知→pending→検知→pending→検知→error(3回目で終端)', async () => {
+      await seedDocument('doc-fabricated-sequence');
+      const states: string[] = [];
+      for (let tick = 0; tick < MAX_SUMMARY_ATTEMPTS; tick++) {
+        await runFabricatedTick();
+        states.push((await getDoc('doc-fabricated-sequence')).summaryState);
+      }
+
+      expect(states).to.deep.equal(['pending', 'pending', 'error']);
+      expect((await getDoc('doc-fabricated-sequence')).summaryAttemptCount).to.equal(MAX_SUMMARY_ATTEMPTS);
+    });
+
+    it('エラー文はPII契約(summaryErrorにPIIを含めない)を守り、疑い名を含まず語彙由来のsuffixとcore文字数・試行番号のみを含む', async () => {
+      await seedDocument('doc-fabricated-message', { customerName: '三好 陽子' });
+      await runFabricatedTick();
+
+      const message: string = (await getDoc('doc-fabricated-message')).summaryError;
+      // 「みずほ訪問看護ステーション」は最長スパン優先でsuffix=ステーション、core=「みずほ訪問看護」(7文字)。
+      // 文字列全体を固定し、想定外の情報(疑い名・core・利用者名・ファイル名)が混入しないことを保証する。
+      expect(message).to.match(
+        /^Fabrication scanner detected 1 suspect name\(s\): suffix=ステーション\/coreLen=7 \(configVersion=[0-9a-f]{8}, attempt=1\/3\)$/
+      );
+      for (const leaked of ['みずほ', 'みずほ訪問看護', 'みずほ訪問看護ステーション', '三好', 'test.pdf']) {
+        expect(message, `エラー文に「${leaked}」が含まれていないこと`).to.not.contain(leaked);
+      }
+    });
+
+    it('検知が4件以上でも、エラー文の詳細は先頭3件までに切り詰める(件数はfabricatedCountの全数)', async () => {
+      await seedDocument('doc-fabricated-many');
+      await runSummaryBatch({
+        firestore: db,
+        bucket: FAKE_BUCKET,
+        l1Provider: 'sarashina',
+        getGate: ENABLED_GATE,
+        summarize: fakeSummarize({
+          summary: { text: 'さくらクリニック、青空薬局、緑病院、赤井診療所が関与している。', truncated: false },
+        }),
+      });
+
+      const message: string = (await getDoc('doc-fabricated-many')).summaryError;
+      expect(message).to.contain('detected 4 suspect name(s)');
+      expect(message.match(/suffix=/g)?.length, '詳細は先頭3件のみ').to.equal(3);
+      for (const leaked of ['さくら', '青空', '緑', '赤井']) {
+        expect(message).to.not.contain(leaked);
+      }
+    });
+
+    it('更新対象外フィールドが不変: 再pending時に変わるのは要約状態系のみで、既存のsummary/summaryProviderは温存される(手動生成済み文書の再pending)', async () => {
+      await seedDocument('doc-fabricated-invariant', {
+        customerName: '三好 陽子',
+        officeName: 'テスト事業所',
+        summary: { text: '手動生成済みの既存要約です。', truncated: false },
+        summaryProvider: 'gemini',
+        summaryAttemptCount: 0,
+      });
+      const before = await getDoc('doc-fabricated-invariant');
+      const detailBefore = (await db.doc('documents/doc-fabricated-invariant/detail/main').get()).data();
+
+      await runFabricatedTick();
+
+      const after = await getDoc('doc-fabricated-invariant');
+      expect(after.summaryState).to.equal('pending');
+      expect(after.summaryRunId, 'claimは解放される').to.equal(null);
+      expect(after.summaryAttemptCount, 'claimで+1されるのみ').to.equal(1);
+      // 既存の手動生成要約は検知した出力で上書きされず温存される
+      expect(after.summary).to.deep.equal(before.summary);
+      expect(after.summaryProvider).to.equal('gemini');
+      const changed = new Set([
+        'summaryState',
+        'summaryRunId',
+        'summaryStateUpdatedAt',
+        'summaryAttemptCount',
+        'summaryError',
+        'summaryErrorKind',
+      ]);
+      const pick = (d: FirebaseFirestore.DocumentData) =>
+        Object.fromEntries(Object.entries(d).filter(([k]) => !changed.has(k)));
+      expect(pick(after), '要約状態系以外のフィールドは一切変わらない').to.deep.equal(pick(before));
+      const detailAfter = (await db.doc('documents/doc-fabricated-invariant/detail/main').get()).data();
+      expect(detailAfter).to.deep.equal(detailBefore);
+    });
+
+    it('混在バッチ: 正常・再試行・終端errorが1tickに混在しても、各文書が独立に処理されstatsが独立に加算される', async () => {
+      await seedDocument('doc-mixed-1-ok', { updatedAt: admin.firestore.Timestamp.fromMillis(1000) });
+      await seedDocument('doc-mixed-2-retry', { updatedAt: admin.firestore.Timestamp.fromMillis(2000), summaryAttemptCount: 0 });
+      await seedDocument('doc-mixed-3-terminal', {
+        updatedAt: admin.firestore.Timestamp.fromMillis(3000),
+        summaryAttemptCount: MAX_SUMMARY_ATTEMPTS - 1,
+      });
+      let call = 0;
+      const stats = await runSummaryBatch({
+        firestore: db,
+        bucket: FAKE_BUCKET,
+        l1Provider: 'sarashina',
+        getGate: ENABLED_GATE,
+        // updatedAt昇順で1件目=正常、2件目・3件目=捏造
+        summarize: async () => {
+          call++;
+          return call === 1
+            ? fakeSummarize()()
+            : fakeSummarize({ summary: { text: '貸与事業所はみずほ訪問看護ステーションです。', truncated: false } })();
+        },
+      });
+
+      expect(stats.claimed).to.equal(3);
+      expect(stats.done).to.equal(1);
+      expect(stats.fabricationRetried).to.equal(1);
+      expect(stats.errorByKind).to.deep.equal({ fabrication_suspected: 1 });
+      expect((await getDoc('doc-mixed-1-ok')).summaryState).to.equal('done');
+      expect((await getDoc('doc-mixed-2-retry')).summaryState).to.equal('pending');
+      expect((await getDoc('doc-mixed-3-terminal')).summaryState).to.equal('error');
+    });
+
+    it('回復: 検知→pending→次tickで正常な要約が返ると、doneになりsummaryError/summaryErrorKindがクリアされる', async () => {
+      await seedDocument('doc-fabricated-recovery');
+      await runFabricatedTick();
+      expect((await getDoc('doc-fabricated-recovery')).summaryState).to.equal('pending');
+
+      const stats = await runSummaryBatch({
+        firestore: db,
+        bucket: FAKE_BUCKET,
+        l1Provider: 'sarashina',
+        getGate: ENABLED_GATE,
+        summarize: fakeSummarize(),
+      });
+
+      expect(stats.done).to.equal(1);
+      const data = await getDoc('doc-fabricated-recovery');
+      expect(data.summaryState).to.equal('done');
+      expect(data.summaryError ?? null, '成功後に古いエラー文が残らない').to.equal(null);
+      expect(data.summaryErrorKind ?? null).to.equal(null);
+    });
+
+    it('supersede: 検知結果の記録前に手動claimがpreemptした場合は、二重計上せずsupersededのみ計上し文書はprocessingのまま', async () => {
+      await seedDocument('doc-fabricated-preempted');
+      const docRef = db.doc('documents/doc-fabricated-preempted');
+      const stats = await runSummaryBatch({
+        firestore: db,
+        bucket: FAKE_BUCKET,
+        l1Provider: 'sarashina',
+        getGate: ENABLED_GATE,
+        summarize: async () => {
+          // 生成した捏造要約をスキャナが検知した直後・記録前に、手動再生成がこのclaimをpreemptしたことを模す
+          await claimSummaryRun(db, docRef, 'manual');
+          return fakeSummarize({
+            summary: { text: '貸与事業所はみずほ訪問看護ステーションです。', truncated: false },
+          })();
+        },
+      });
+
+      expect(stats.superseded).to.equal(1);
+      expect(stats.fabricationRetried, 'supersede時は再試行として数えない').to.equal(0);
+      expect(stats.errorByKind.fabrication_suspected, 'supersede時は終端errorとして数えない').to.equal(undefined);
+      const data = await getDoc('doc-fabricated-preempted');
+      // 手動claimの結果が保持され、バッチ側の失敗記録で上書きされない
+      expect(data.summaryState).to.equal('processing');
+      expect(data.summaryError).to.equal(undefined);
+    });
+
+    it('recombinedのみ(原典の括弧書き略記の語順入替)は捏造扱いせず、要約を保存する(再試行の対象外)', async () => {
+      await seedDocument('doc-recombined');
+      await db
+        .collection('documents')
+        .doc('doc-recombined')
+        .collection('detail')
+        .doc('main')
+        .set({ ocrResult: '訪問看護（水無月）を週2回利用している。利用者は歩行器を使用している。'.repeat(4) });
+      const stats = await runSummaryBatch({
+        firestore: db,
+        bucket: FAKE_BUCKET,
+        l1Provider: 'sarashina',
+        getGate: ENABLED_GATE,
+        summarize: fakeSummarize({ summary: { text: '水無月訪問看護を週2回利用している。', truncated: false } }),
+      });
+
+      expect(stats.done).to.equal(1);
+      expect(stats.fabricationRetried).to.equal(0);
+      expect((await getDoc('doc-recombined')).summaryState).to.equal('done');
+    });
   });
 
   it('ソフトデッドライン超過: 残りの文書はclaimせず次tickへ委ねる(deferred)', async () => {

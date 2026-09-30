@@ -2089,22 +2089,32 @@ jobs:
 
             echo ""
             echo "=== ④ summaryErrorKind別件数(fabrication_suspected含む) ==="
-            for KIND in fabrication_suspected quota transient blocked unknown; do
+            # summaryStateを問わない件数のため、fabrication_suspectedは総試行上限内で再試行中の
+            # pending文書(次tickで再生成)を含む(ADR-0027 PR5 D1対応)。終端errorのみの件数は
+            # 「fabrication_suspected:error」行(summaryState==error で絞込み)で確認する。
+            for ENTRY in fabrication_suspected fabrication_suspected:error quota transient blocked unknown; do
+              KIND="${ENTRY%%:*}"
+              STATE_FILTER=""
+              if [ "$ENTRY" != "$KIND" ]; then STATE_FILTER="${ENTRY#*:}"; fi
               KIND_QUERY=$(node -e '
+                const kindFilter = { fieldFilter: { field: { fieldPath: "summaryErrorKind" }, op: "EQUAL", value: { stringValue: process.argv[1] } } };
+                const stateFilter = process.argv[2]
+                  ? { fieldFilter: { field: { fieldPath: "summaryState" }, op: "EQUAL", value: { stringValue: process.argv[2] } } }
+                  : null;
                 console.log(JSON.stringify({
                   structuredAggregationQuery: {
                     aggregations: [{ count: {}, alias: "n" }],
                     structuredQuery: {
                       from: [{ collectionId: "documents" }],
-                      where: { fieldFilter: { field: { fieldPath: "summaryErrorKind" }, op: "EQUAL", value: { stringValue: process.argv[1] } } },
+                      where: stateFilter ? { compositeFilter: { op: "AND", filters: [kindFilter, stateFilter] } } : kindFilter,
                     },
                   },
                 }));
-              ' "$KIND")
+              ' "$KIND" "$STATE_FILTER")
               KIND_RESULT=$(curl -sS -H "Authorization: Bearer ${ACCESS_TOKEN}" -H "Content-Type: application/json" \
                 -d "$KIND_QUERY" \
                 "https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents:runAggregationQuery")
-              echo -n "${KIND}: "
+              echo -n "${ENTRY}: "
               echo "$KIND_RESULT" | node -e '
                 let data = "";
                 process.stdin.on("data", (c) => { data += c; });

@@ -16,7 +16,7 @@ import { getSarashinaSummaryGate } from '../utils/featureFlags';
 import { generateSummaryForProvider, type SummaryPassProvider } from './summaryPass';
 import { loadOcrTextForSummary } from './summaryOcrTextLoader';
 import { MIN_OCR_LENGTH_FOR_SUMMARY, MAX_SUMMARY_INPUT_LENGTH } from './summaryPromptBuilder';
-import { scanSummaryForFabrication } from '../../../shared/summaryFabricationScan';
+import { scanSummaryForFabrication, type FabricationScanResult } from '../../../shared/summaryFabricationScan';
 import {
   claimSummaryRun,
   commitSummaryResult,
@@ -45,10 +45,50 @@ export interface SummaryBatchStats {
   deferred: number;
   rescued: number;
   rescueErrored: number;
+  /**
+   * fabricationスキャナが検知したが、総試行上限に達していないため`pending`へ戻した件数。
+   * 終端`error`(`errorByKind.fabrication_suspected`)とは別に数える(検知件数と終端error件数を
+   * 区別して観測できるようにするため、ADR-0027 PR5 D1対応)。
+   */
+  fabricationRetried: number;
 }
 
 function emptyStats(): SummaryBatchStats {
-  return { claimed: 0, done: 0, errorByKind: {}, superseded: 0, skipped: 0, deferred: 0, rescued: 0, rescueErrored: 0 };
+  return {
+    claimed: 0,
+    done: 0,
+    errorByKind: {},
+    superseded: 0,
+    skipped: 0,
+    deferred: 0,
+    rescued: 0,
+    rescueErrored: 0,
+    fabricationRetried: 0,
+  };
+}
+
+/** エラー文に載せる検知詳細の最大件数。 */
+const FABRICATION_MESSAGE_MAX_FINDINGS = 3;
+
+/**
+ * `summaryError`用の診断文字列を組み立てる。
+ *
+ * `summaryError`は「PIIを含めない」契約(`shared/types.ts`)で、`documents`は全ホワイトリスト
+ * 利用者が読める。疑い名(モデル出力=任意文字列)そのものは保存せず、語彙由来のsuffixと
+ * core文字数だけを残す(例: 「持つ訪問看護」→ `suffix=訪問看護/coreLen=2`)。これで原因の見当が
+ * 付き、実機再現(一時IAM付与)なしに次の誤検知パターンを切り分けられる。
+ * `recombined`(原典の語順入替)はブロック対象外のため含めない。
+ */
+function buildFabricationErrorMessage(scan: FabricationScanResult, attemptCount: number): string {
+  const detail = scan.findings
+    .filter((f) => f.kind === 'fabricated')
+    .slice(0, FABRICATION_MESSAGE_MAX_FINDINGS)
+    .map((f) => `suffix=${f.suffix}/coreLen=${f.core.length}`)
+    .join(', ');
+  return (
+    `Fabrication scanner detected ${scan.fabricatedCount} suspect name(s): ${detail} ` +
+    `(configVersion=${scan.configVersion}, attempt=${attemptCount}/${MAX_SUMMARY_ATTEMPTS})`
+  );
 }
 
 function incrementErrorKind(stats: SummaryBatchStats, kind: string): void {
@@ -224,12 +264,30 @@ async function runSummaryBatchInner(deps: RunSummaryBatchDeps): Promise<SummaryB
 
       const scan = scanSummaryForFabrication(passResult.summary.text, sentText);
       if (scan.fabricatedCount > 0) {
+        // 要約は確率的生成でスキャナも語彙ベースのため、自然な文の誤検知(ADR-0027 PR5 D1:
+        // 「指示期間を持つ訪問看護指示書」→「持つ訪問看護」)が起こりうる。1回の検知で終端
+        // errorにせず、他のretry経路と同じ総試行上限(MAX_SUMMARY_ATTEMPTS)の範囲で
+        // pendingへ戻して再生成する。summaryAttemptCountはquota/transient/手動再生成と共有の
+        // 総claim回数のため、先に試行を消費済みの文書は初回の検知で即errorになりうる(仕様)。
+        // 要約は保存しない(検知した出力は一度も書き込まれない)。
+        const nextState = claim.attemptCount >= MAX_SUMMARY_ATTEMPTS ? 'error' : 'pending';
+        const fabricationMessage = buildFabricationErrorMessage(scan, claim.attemptCount);
         await recordSummaryFailure(firestore, docRef, claim, {
-          state: 'error',
+          state: nextState,
           kind: 'fabrication_suspected',
-          message: `Fabrication scanner detected ${scan.fabricatedCount} suspect name(s) (configVersion=${scan.configVersion})`,
+          message: fabricationMessage,
         });
-        incrementErrorKind(stats, 'fabrication_suspected');
+        // 再試行(pending)した検知は`errors`コレクションに載せない(誤検知の再試行が運用者向けの
+        // エラー一覧に並ぶのを避ける)。代わりにCloud Loggingへ検知ごとの1行ログを残し、
+        // 検知率・再試行結果を後から集計できるようにする(message自体はPIIを含まない)。
+        console.warn(
+          `[${FUNCTION_NAME}] fabrication_suspected documentId=${docId} outcome=${nextState === 'error' ? 'error' : 'retry'} ${fabricationMessage}`
+        );
+        if (nextState === 'error') {
+          incrementErrorKind(stats, 'fabrication_suspected');
+        } else {
+          stats.fabricationRetried++;
+        }
         continue;
       }
 
