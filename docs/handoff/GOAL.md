@@ -712,9 +712,9 @@ cocoro側Drive連携Phase C（クライアント自身のOAuth接続）は外部
   2. ~~`driveExport` flag OFF → drain確認~~ **【完了・2026-09-26】**: GHA `run-ops-script.yml`経由で`set-feature-flag --flag driveExport --value false`実行、直後に`drive-export-status-report --breakdown`で`exporting(処理中): 0件`を確認(既存の`error`715件はフリガナ未設定等の名前解決失敗によるもので本件と無関係、無処理のまま残置)
   - **追加対応・2026-09-26**: Google OAuth同意画面の「未確認のアプリ」警告(外部・制限付きスコープ未検証のため発生)を、原因除去で解消——kanameoneのOAuth同意画面のユーザーの種類を「外部」→「内部」へ切替(Google Cloud Console、Playwright MCP実機操作)。既存のDrive接続アカウント`systemkaname@kanameone.com`がkanameone.com Workspaceアカウントであるため影響なし。cocoroは元から「内部」設定済みで対応不要と確認
   - **クライアント案内送付完了・2026-09-26**: 対応完了報告(9件)+「医療」フォルダ重複の原因説明+再連携のお願い(操作場所の具体的な手順付き)をhtml-brief経由で作成しdecision-makerが送付済み
-  3. kanameone管理者による実際のOAuth再連携(設定画面「Google Drive」タブ→「再連携する」) ← **現在ここで待機中(外部依存、次アクションなし)**
-  4. `audit-drive-sibling-duplicates`(kanameone、read-only)実行 → 重複グループを decision-maker/クライアントへ提示 → 承認
-  5. `execute-drive-sibling-merge`実行(承認済みgroupのみ)
+  3. ~~kanameone管理者による実際のOAuth再連携~~ **【完了・2026-09-28】**: `settings/drive.grantedScopes`にフルスコープ`https://www.googleapis.com/auth/drive`が反映(updateTime 2026-09-28T14:33Z、2026-09-30にFirestore直接読取で確認)。`connectedEmail`は`katsumihiraide@kanameone.com`(旧記録は`systemkaname@`、担当者が別アカウントで再連携したと推定)
+  4. ~~`audit-drive-sibling-duplicates`(kanameone、read-only)~~ **【完了・2026-09-30、run 36662493615】**: 走査7,024フォルダ、兄弟重複22グループ(merge候補14 / manual-review 8)。大半は平出勝己配下の利用者フォルダ
+  5. ~~`execute-drive-sibling-merge`~~ **【merge候補14グループ完了・2026-09-30】**: decision-maker承認(AskUserQuestion、14グループ限定)のうえdry-run(run 36664836487、22ファイル移動予定)→execute(run 36666461733、完了14/部分失敗0/skip0、22ファイル移動・claim14件無効化・統合元14件trash、manifest=`manifest-output-sibling.json`)。独立再audit(run 36666748853)で重複8件(merge候補0 / manual-review 8)・走査7,010フォルダ(-14=trash分)を確認。**残: manual-review 8件は未処理**(`(root)/森奈穂美`[子フォルダ63件/50件のタグ無し2件]、平出勝己配下7件[認定調査1・ケアプラン6]。いずれもタグ無し2件で自動判定不可、統合可否はdecision-maker判断)
   6. `driveExport` flag ON → backfill-drive-export(待機中に溜まった未エクスポートdocのバックフィルを含む)
   - 本番のdestructive操作(統合実行・flag切替)は全て番号単位の明示認可のもとで行う(既存ルール)
   - Go条件(専用アカウント運用・共有範囲限定等)の最終確認もこのタイミングで実施

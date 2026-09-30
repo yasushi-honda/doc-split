@@ -1,6 +1,6 @@
 # ハンドオフメモ
 
-**更新日**: 2026-09-29（ADR-0027 PR5: dev環境でのSarashina要約実機観測を実施。D3・D8はSarashina要約完走、D2は`fabrication_suspected`誤検知をdecision-maker方針Aで恒久対応(PR #1083、スキャナ正規化)、dev実機でD2=`done`確認・AC4(canary 3/3件done)達成。kanameone Drive Phase1最終ステップは引き続き外部依存待ち）
+**更新日**: 2026-09-29（ADR-0027 PR5: dev環境でのSarashina要約実機観測を実施。D3・D8はSarashina要約完走、D2は`fabrication_suspected`誤検知をdecision-maker方針Aで恒久対応(PR #1083、スキャナ正規化)、dev実機でD2=`done`確認・AC4(canary 3/3件done)達成。kanameone Drive Phase1: OAuth再連携完了(2026-09-28)を確認し、2026-09-30に重複audit→merge候補14グループ統合実行→再audit完了。残はmanual-review 8件の判断とflag ON・backfill）
 
 ## ADR-0027 PR5: dev環境でのSarashina要約有効化・実機観測（2026-09-29）
 
@@ -105,7 +105,7 @@ Net 0（本セッションでのIssue起票・close操作なし）。
   - Google Cloud ConsoleでkanameoneのOAuth同意画面のユーザーの種類を「外部」→「内部」へ切替(Playwright MCP実機操作で確認・実行)。`drive`フルスコープが未検証のため発生する見込みだったGoogleの「未確認のアプリ」警告画面を、原因除去により解消。既存のDrive接続アカウント`systemkaname@kanameone.com`がkanameone.com Workspaceアカウントであるため影響なし。cocoroは元から「内部」設定済みで対応不要と確認
 
 ### 現在の状態
-9件は全て本番反映済み(kanameone/cocoro)。残る1件は、kanameone管理者による実際のOAuth再連携(外部依存)を待機中。再連携完了後の残作業(重複監査→decision-maker承認→統合実行→flag ON→backfill)はGOAL.md「kanameone/cocoro本番展開」節に3分割済み。詳細はGOAL.md参照。
+9件は全て本番反映済み(kanameone/cocoro)。残る1件のOAuth再連携はkanameone側で完了済み(2026-09-28)。2026-09-30に重複audit(22グループ)→merge候補14グループの統合実行(承認済み)→再audit(残8件=manual-review)まで完了。残りはmanual-review 8件の判断、flag ON、backfill(GOAL.md「kanameone/cocoro本番展開」節参照)。
 
 ### Issue Net
 Net 0（本セッションでのIssue起票・close操作なし。Issue #1059はPR #1058の軽微なフォローアップ指摘の記録用で、triage基準未達のためP2 backlogのまま）。
@@ -128,7 +128,7 @@ Drive OAuthスコープを`drive.file`→`drive`フルスコープへ拡張し�
 
 ## 現在のフェーズ
 
-**ミッション1: kanameone・cocoroへのGoogle Drive連携Phase1本番展開**（GOAL.md準拠、2026-07-23開始）。承認済み計画: `/Users/yyyhhh/.claude/plans/witty-drifting-hoare.md`。cocoroはFunctions/Hostingデプロイ完了、Drive未接続(Phase C=クライアント自身のOAuth接続、代行不可)で外部依存待ち。kanameoneはOAuth再連携依頼を2026-09-26に送付済み、クライアントの実際の再連携(外部依存)を待機中。再連携完了後の残作業(重複監査→承認→統合実行→flag ON→backfill)はGOAL.md「kanameone/cocoro本番展開」節に3分割済み。
+**ミッション1: kanameone・cocoroへのGoogle Drive連携Phase1本番展開**（GOAL.md準拠、2026-07-23開始）。承認済み計画: `/Users/yyyhhh/.claude/plans/witty-drifting-hoare.md`。cocoroはFunctions/Hostingデプロイ完了、Drive未接続(Phase C=クライアント自身のOAuth接続、代行不可)で外部依存待ち。kanameoneはOAuth再連携完了(2026-09-28)、重複audit・merge候補14グループ統合・再auditまで完了(2026-09-30)。残りはmanual-review 8件の判断、`driveExport` flag ON、backfill(番号単位の明示認可が必要)。
 
 **ミッション2: ADR-0027 Sarashina要約モデル移行**（Gemini依存脱却、Sarashina2.2-3B自前ホスティング）。PR0〜PR3完了(2026-09-27、上記セッションサマリ参照)。現状は**全経路dead code、本番挙動不変**。PR4（Functions実配線）以降は新機能のため新規plan modeが必要、decision-makerの着手指示待ち。
 
@@ -158,7 +158,7 @@ Drive OAuthスコープを`drive.file`→`drive`フルスコープへ拡張し�
 
 | # | 項目 | trigger（充足条件） | 充足時のタスク | 充足確認方法 |
 |---|------|------------------|--------------|------------|
-| 1 | kanameone Drive Phase1本番展開の最終ステップ | クライアント(kanameone管理者)による実際のOAuth再連携完了 | 「医療」フォルダ重複監査→decision-maker承認→統合実行→flag ON→backfill(GOAL.md記載の3分割手順) | `settings/drive.grantedScopes`にフルスコープが反映されているか確認 |
+| 1 | kanameone Drive Phase1本番展開の最終ステップ(再連携・audit・merge14件は完了) | decision-maker判断: manual-review 8件の扱い、flag ON・backfillの明示認可 | manual-review 8件の中身調査(read-only)→統合可否判断→`driveExport` flag ON→backfill-drive-export(876件) | `settings/drive`のflag状態と再audit結果(重複8件=manual-reviewのみ)を確認 |
 | 2 | cocoro Drive連携Phase C以降 | クライアント側のOAuth接続実施 | Phase C確認後、Phase D(flag ON・backfill)着手可否をdecision-makerが判断 | cocoroの`settings/drive`ドキュメントで接続状態を確認 |
 | 3 | ADR-0027 PR4着手（Functions実配線・IAM run.invoker付与・`deploy-functions.yml`改修） | decision-makerのPR4着手指示（新機能のため新規plan mode必要） | `~/.claude/plans/logical-baking-lighthouse.md`のPR4計画に従い着手 | ADR-0027「PR3実装知見」節のPR4申し送り事項を確認 |
 | 4 | GitHub Issue backlog: #956(アラート欠落follow-up)/#962/#251/#238 | decision-makerの優先度判断（いずれもP2 enhancement、trigger未成立） | 個別Issue内容に従う | `gh issue view <番号>` |
