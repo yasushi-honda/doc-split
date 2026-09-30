@@ -19,6 +19,7 @@
 import type { drive_v3 } from 'googleapis';
 import {
   FOLDER_TREE_MERGE_PLAN_SCHEMA_VERSION,
+  PLAN_MAX_AGE_MS,
   approvalMatchesPlan,
   type FolderTreeMergeApproval,
   type FolderTreeMergeManifest,
@@ -27,8 +28,10 @@ import {
   type RootClaimFence,
   type TreeMergeBlocker,
   type TreeMergeManifestEntry,
+  type TreeMergeOpStatus,
   type TreeMergeOp,
 } from './folderTreeMergePlanTypes';
+import { describeErrorSafely } from './confirmedReplayStats';
 
 export interface RootClaimSnapshot {
   state: string;
@@ -95,11 +98,12 @@ interface DriveItem {
   appProperties: Record<string, string>;
   canMove: boolean;
   canRename: boolean;
+  canTrash: boolean;
   canAddChildren: boolean;
 }
 
 const ITEM_FIELDS =
-  'id,name,mimeType,parents,trashed,appProperties,capabilities(canMoveItemWithinDrive,canRename,canAddChildren)';
+  'id,name,mimeType,parents,trashed,appProperties,capabilities(canMoveItemWithinDrive,canRename,canTrash,canAddChildren)';
 
 function toItem(f: drive_v3.Schema$File): DriveItem {
   return {
@@ -111,6 +115,7 @@ function toItem(f: drive_v3.Schema$File): DriveItem {
     appProperties: (f.appProperties as Record<string, string> | undefined) ?? {},
     canMove: f.capabilities?.canMoveItemWithinDrive !== false,
     canRename: f.capabilities?.canRename !== false,
+    canTrash: f.capabilities?.canTrash !== false,
     canAddChildren: f.capabilities?.canAddChildren !== false,
   };
 }
@@ -155,15 +160,13 @@ async function validateRoots(
   sourceId: string,
   targetId: string,
   opts: { allowSourceTrashed?: boolean } = {}
-): Promise<{ source: DriveItem | null; target: DriveItem }> {
+): Promise<{ source: DriveItem; target: DriveItem }> {
   if (sourceId === targetId) throw new TreeMergeValidationError('same-folder');
   const source = await getItem(deps.drive, sourceId);
   const target = await getItem(deps.drive, targetId);
   if (!target) throw new TreeMergeValidationError('folder-not-found', 'target');
-  if (!source) {
-    if (opts.allowSourceTrashed) return { source: null, target };
-    throw new TreeMergeValidationError('folder-not-found', 'source');
-  }
+  // 404は「trash済み」ではない(権限喪失・共有解除でも404になる)ため、実行側でも許容せずfail-closedにする
+  if (!source) throw new TreeMergeValidationError('folder-not-found', 'source');
   const sourceIsGone = source.trashed && !!opts.allowSourceTrashed;
   for (const [label, f] of [['source', source], ['target', target]] as const) {
     if (f.mimeType !== deps.folderMimeType) throw new TreeMergeValidationError('not-a-folder', label);
@@ -172,7 +175,7 @@ async function validateRoots(
   }
   // trash済みのSは「【統合済み_…】」に改名されているため名前照合の対象外
   if (!sourceIsGone && source.name !== target.name) throw new TreeMergeValidationError('name-mismatch');
-  if (!sourceIsGone && !(source.canRename && source.canMove)) {
+  if (!sourceIsGone && !(source.canRename && source.canMove && source.canTrash)) {
     throw new TreeMergeValidationError('insufficient-capabilities', 'source');
   }
   if (!target.canAddChildren) throw new TreeMergeValidationError('insufficient-capabilities', 'target');
@@ -201,7 +204,7 @@ export async function planFolderTreeMerge(deps: TreeMergeDeps, params: PlanParam
   const now = deps.now ?? (() => new Date());
 
   const validated = await validateRoots(deps, params.rootFolderId, params.sourceFolderId, params.targetFolderId);
-  const source = validated.source as DriveItem; // allowSourceTrashed未指定のためnullにならない
+  const source = validated.source;
   const target = validated.target;
   if (!(await deps.claimStore.isClaimReadEnabled())) throw new TreeMergeValidationError('claim-read-disabled');
   const claim = assertRootClaimIsDivergentOnTarget(await deps.claimStore.readRootClaim(params.rootFolderId, target.name), target.id);
@@ -219,6 +222,18 @@ export async function planFolderTreeMerge(deps: TreeMergeDeps, params: PlanParam
   const nextId = (): string => `op-${String(++seq).padStart(4, '0')}`;
   let sameNameFileCount = 0;
   let visited = 1;
+
+  /** 再親付けするサブツリーの全子孫を走査する(claim参照検査の対象ID収集と、ショートカット・複数親の検知)。 */
+  async function inventoryMovedSubtree(folderId: string): Promise<void> {
+    for (const c of await listChildren(deps.drive, folderId)) {
+      if (c.mimeType === shortcutMime) blockers.push({ code: 'shortcut', id: c.id });
+      else if (c.parents.length !== 1) blockers.push({ code: 'multi-parent', id: c.id });
+      if (c.mimeType === deps.folderMimeType) {
+        movedFolderIds.push(c.id);
+        await inventoryMovedSubtree(c.id);
+      }
+    }
+  }
 
   async function mergePair(s: DriveItem, sParentId: string, d: DriveItem): Promise<void> {
     const [sChildren, dChildren] = await Promise.all([listChildren(deps.drive, s.id), listChildren(deps.drive, d.id)]);
@@ -240,6 +255,8 @@ export async function planFolderTreeMerge(deps: TreeMergeDeps, params: PlanParam
       if (matches.length >= 2) {
         blockers.push({ code: 'target-same-name-multiple', id: x.id });
       } else if (matches.length === 1) {
+        // 再帰統合した子フォルダは後で改名+trashされる。実行途中で失敗して部分統合になるのを避けるため、権限を事前に確認する
+        if (!(x.canRename && x.canTrash)) blockers.push({ code: 'cannot-trash', id: x.id });
         mergedSourceIds.push(x.id);
         visited += 1;
         await mergePair(x, s.id, matches[0]);
@@ -248,6 +265,7 @@ export async function planFolderTreeMerge(deps: TreeMergeDeps, params: PlanParam
         if (x.parents.length !== 1) blockers.push({ code: 'multi-parent', id: x.id });
         else if (!x.canMove) blockers.push({ code: 'cannot-move', id: x.id });
         movedFolderIds.push(x.id);
+        await inventoryMovedSubtree(x.id);
         ops.push({ opId: nextId(), kind: 'move-folder', folderId: x.id, fromParentId: s.id, toParentId: d.id });
       }
     }
@@ -338,8 +356,9 @@ async function liveOpState(deps: TreeMergeDeps, op: TreeMergeOp): Promise<LiveOp
   const targetId = op.kind === 'move-file' ? op.fileId : op.folderId;
   const item = await getItem(deps.drive, targetId);
   if (op.kind === 'trash-folder') {
-    if (!item || item.trashed) return 'applied';
-    return 'pending';
+    // 404は適用済みと見なさない(権限喪失でも404になる)。trashedを実観測した場合のみapplied
+    if (!item) return 'drift';
+    return item.trashed ? 'applied' : 'pending';
   }
   if (!item || item.trashed) return 'drift';
   const hasTo = item.parents.includes(op.toParentId);
@@ -385,7 +404,7 @@ export async function executeFolderTreeMerge(
   const rootClaimNow = await deps.claimStore.readRootClaim(plan.rootFolderId, target.name);
   if (rootClaimNow?.state === 'resolved' && rootClaimNow.folderId === plan.targetFolderId) {
     const src = await getItem(deps.drive, plan.sourceFolderId);
-    if (!src || src.trashed) return finish('already-completed');
+    if (src?.trashed) return finish('already-completed');
   }
 
   const claimUnchanged = (c: RootClaimSnapshot | null): boolean =>
@@ -399,12 +418,25 @@ export async function executeFolderTreeMerge(
     return finish('aborted-root-claim-changed');
   }
 
+  // plan後に統合元ツリーを参照するclaimが新規作成されていないか再確認(書込み前)
+  const treeIds = plan.ops.flatMap((o) => (o.kind === 'move-file' ? [] : [o.folderId]));
+  const refsNow = await deps.claimStore.countClaimsReferencing(treeIds);
+  if (refsNow.byParentId + refsNow.byFolderId > 0) {
+    options.logError?.(`claims-reference-source-tree-at-execute: count=${refsNow.byParentId + refsNow.byFolderId}`);
+    return finish('aborted-drift');
+  }
+
   // 事前照合(書込み0件): 各opは初期状態(pending)か期待終状態(applied)のみ許容
   const states: LiveOpState[] = [];
   for (const op of plan.ops) states.push(await liveOpState(deps, op));
   if (states.includes('drift')) return finish('aborted-drift');
   const pendingOps = states.filter((s) => s === 'pending').length;
   const appliedOps = states.length - pendingOps;
+  // 期限切れのplanでDriveへ書込むのは拒否する。ただし全opが適用済みでfinalizeだけが残る再開(書込みなし)は許容する
+  const planAgeMs = now().getTime() - new Date(plan.createdAt).getTime();
+  if (pendingOps > 0 && (!Number.isFinite(planAgeMs) || planAgeMs > PLAN_MAX_AGE_MS)) {
+    return finish('refused-plan-expired', pendingOps, appliedOps);
+  }
   if (!options.execute) return finish('dry-run', pendingOps, appliedOps);
 
   const record = (entry: Omit<TreeMergeManifestEntry, 'timestamp'>): void => {
@@ -418,6 +450,7 @@ export async function executeFolderTreeMerge(
       record({ opId: op.opId, kind: op.kind, status: 'skipped-already-applied' });
       continue;
     }
+    let status: TreeMergeOpStatus = 'applied';
     try {
       if (op.kind === 'trash-folder') {
         const remaining = await listChildren(deps.drive, op.folderId);
@@ -427,9 +460,10 @@ export async function executeFolderTreeMerge(
           return finish('aborted-not-empty', pendingOps, appliedOps);
         }
         const live = await getItem(deps.drive, op.folderId);
+        if (!live) throw new Error('folder-not-found-before-trash');
         await deps.drive.files.update({
           fileId: op.folderId,
-          requestBody: { name: `${live?.name ?? ''}【統合済み_${dateStamp(now())}】`, trashed: true },
+          requestBody: { name: `${live.name}【統合済み_${dateStamp(now())}】`, trashed: true },
           supportsAllDrives: true,
           fields: 'id',
         });
@@ -442,7 +476,6 @@ export async function executeFolderTreeMerge(
           fields: 'id',
         });
       }
-      record({ opId: op.opId, kind: op.kind, status: 'applied' });
     } catch (err) {
       // タイムアウト等で応答が失われても適用済みの場合があるため、実状態を再取得して判定する
       let recovered = false;
@@ -451,32 +484,41 @@ export async function executeFolderTreeMerge(
       } catch {
         recovered = false;
       }
-      if (recovered) {
-        record({ opId: op.opId, kind: op.kind, status: 'applied-after-error' });
-        continue;
+      if (!recovered) {
+        // Driveのエラー文言はリソース名(利用者名)を含みうるため、無害化した種別のみ記録する
+        const safe = describeErrorSafely(err);
+        options.logError?.(`op-failed: ${op.opId} ${op.kind} ${safe}`);
+        record({ opId: op.opId, kind: op.kind, status: 'failed', error: safe });
+        return finish('aborted-op-failure', pendingOps, appliedOps);
       }
-      options.logError?.(`op-failed: ${op.opId} ${op.kind}`);
-      record({ opId: op.opId, kind: op.kind, status: 'failed', error: (err as Error).message });
-      return finish('aborted-op-failure', pendingOps, appliedOps);
+      status = 'applied-after-error';
     }
+    // 進捗の永続化失敗はop失敗と混同しないよう、try/catchの外で記録する
+    record({ opId: op.opId, kind: op.kind, status });
   }
 
   // S本体がtrashされたこと、ルートclaim・flagが実行前から変わっていないことを確認してからfinalizeする
   const sourceAfter = await getItem(deps.drive, plan.sourceFolderId);
-  if (sourceAfter && !sourceAfter.trashed) return finish('aborted-source-not-trashed', pendingOps, appliedOps);
+  if (!sourceAfter || !sourceAfter.trashed) return finish('aborted-source-not-trashed', pendingOps, appliedOps);
   if (!(await deps.claimStore.isClaimReadEnabled()) || !claimUnchanged(await deps.claimStore.readRootClaim(plan.rootFolderId, target.name))) {
     return finish('aborted-root-claim-changed', pendingOps, appliedOps);
   }
 
-  const outcome = await deps.claimStore.finalizeResolved(plan.rootFolderId, target.name, {
-    expectedFolderId: plan.rootClaim.folderId,
-    expectedDivergentReason: plan.rootClaim.divergentReason,
-    expectedUpdateTimeMs: plan.rootClaim.updateTimeMs,
-    actor,
-  });
+  let outcome: Awaited<ReturnType<TreeMergeClaimStore['finalizeResolved']>>;
+  try {
+    outcome = await deps.claimStore.finalizeResolved(plan.rootFolderId, target.name, {
+      expectedFolderId: plan.rootClaim.folderId,
+      expectedDivergentReason: plan.rootClaim.divergentReason,
+      expectedUpdateTimeMs: plan.rootClaim.updateTimeMs,
+      actor,
+    });
+  } catch (err) {
+    // Drive側は完了済み・claim未確定。同一planの再実行(already-completed/finalize再試行)で救済する
+    outcome = { outcome: 'no-op', reason: `error:${describeErrorSafely(err)}` };
+  }
   if (outcome.outcome !== 'resolved') {
     manifest.finalize = { outcome: 'no-op', reason: outcome.reason };
-    options.logError?.(`finalize-failed: ${outcome.reason}`);
+    options.logError?.(`finalize-failed: ${outcome.reason} (Drive側の統合は完了済み。ルートclaimの状態を確認し、同一planで再実行してください)`);
     return finish('finalize-failed', pendingOps, appliedOps);
   }
   manifest.finalize = { outcome: 'resolved' };

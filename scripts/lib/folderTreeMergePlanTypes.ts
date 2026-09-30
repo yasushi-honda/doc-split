@@ -13,6 +13,9 @@
 
 export const FOLDER_TREE_MERGE_PLAN_SCHEMA_VERSION = 'folder-tree-merge-plan-v1';
 
+/** planの有効期間。fence(claimのupdateTime)や対象の状態は時間とともに古くなるため、実行直前に取り直す運用にする。 */
+export const PLAN_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
 /** ルートclaim(`(rootFolderId, name)`スロット)のplan生成時の状態。finalizeのfenceに使う。 */
 export interface RootClaimFence {
   folderId: string;
@@ -33,6 +36,7 @@ export type TreeMergeBlockerCode =
   | 'multi-parent'
   | 'cannot-move'
   | 'cannot-add-children'
+  | 'cannot-trash'
   | 'target-same-name-multiple'
   | 'source-same-name-multiple'
   | 'docid-duplicate'
@@ -97,6 +101,7 @@ export type FolderTreeMergeStatus =
   | 'already-completed'
   | 'refused-blockers'
   | 'refused-approval-mismatch'
+  | 'refused-plan-expired'
   | 'aborted-root-claim-changed'
   | 'aborted-drift'
   | 'aborted-op-failure'

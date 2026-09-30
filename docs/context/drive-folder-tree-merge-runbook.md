@@ -18,6 +18,10 @@
 5. `execute-drive-folder-tree-merge --execute`(同じexec_args_json)
 6. 完了確認: `status=completed`・`finalize=resolved`・`audit-drive-sibling-duplicates`で対象の行が消える・ルートclaimがresolved(D)
 
+## 残余リスク(設計上の限界)
+- 空確認からtrashまでは原子的でない。直前に人が統合元へファイルを置くと、フォルダごとtrashされうる(trash後の再列挙では、trash済みフォルダの子が見えず検知できない)。運用フリーズ(手順1)で緩和し、事後は30日以内にゴミ箱から復元できる
+- 統合先の同名子フォルダ・docSplitDocId重複はplan時のみ確認する。planは実行の直前(24時間以内、超過すると書込みを伴う実行は拒否)に取り直す
+
 ## 中断・失敗時
 - 途中失敗(`aborted-op-failure`等): ルートclaimはdivergentのまま(通常exportの停止を維持)。原因を除いて**同一planで再実行**すれば、適用済みopをスキップして続きから完走する(ドリフト時は書込み前に停止するので再planする)
 - `aborted-root-claim-changed`: plan後にルートclaimが変化した。再planする

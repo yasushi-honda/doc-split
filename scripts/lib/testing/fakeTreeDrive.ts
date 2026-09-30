@@ -14,6 +14,7 @@ import type { TreeMergeClaimStore, RootClaimSnapshot } from '../folderTreeMerge'
 export interface FakeTreeCapabilities {
   canMoveItemWithinDrive?: boolean;
   canRename?: boolean;
+  canTrash?: boolean;
   canAddChildren?: boolean;
 }
 
@@ -58,6 +59,7 @@ export function makeFakeTreeDrive(
     capabilities: {
       canMoveItemWithinDrive: f.capabilities?.canMoveItemWithinDrive ?? true,
       canRename: f.capabilities?.canRename ?? true,
+      canTrash: f.capabilities?.canTrash ?? true,
       canAddChildren: f.capabilities?.canAddChildren ?? true,
     },
   });

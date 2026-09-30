@@ -90,6 +90,7 @@ on:
           - classify-drive-folder-duplicates
           - setup-drive-folder-fixture --dev
           - setup-drive-folder-fixture --dev --cleanup
+          - setup-drive-folder-fixture --dev --tree-merge-scenario
           - execute-drive-folder-merge --dry-run
           - execute-drive-folder-merge --execute
           - rollback-drive-folder-merge --dry-run

@@ -377,3 +377,311 @@ test('execute: onProgressで操作ごとにmanifestが保存される', async ()
   assert.ok(sizes.length >= plan.ops.length);
   assert.ok(sizes.includes(plan.ops.length));
 });
+
+// ---------------------------------------------------------------- レビュー指摘対応の追加テスト
+
+const NAMES = ['森奈穂美', '山田太郎', '佐藤花子', '鈴木一郎', 'a.pdf', 'x.pdf', 'b.pdf'];
+
+async function planAndApproval(deps: TreeMergeDeps): Promise<{ plan: FolderTreeMergePlan; approval: FolderTreeMergeApproval }> {
+  const plan = await planOf(deps);
+  return { plan, approval: approvalFor(plan) };
+}
+
+test('execute: 最後のupdate後にルートclaimが変化したらfinalizeせず停止する', async () => {
+  const claim = baseClaim();
+  const { deps, fake } = setup(baseFiles(), claim, { afterNthUpdate: { n: 5, apply: () => ((claim.root as { updateTimeMs: number }).updateTimeMs = 9999) } });
+  const { plan, approval } = await planAndApproval(deps);
+  const r = await executeFolderTreeMerge(deps, plan, approval, { execute: true });
+  assert.equal(r.status, 'aborted-root-claim-changed');
+  assert.equal(fake.callLog.some((c) => c.startsWith('claim.finalize')), false);
+});
+
+test('execute: 最後のupdate後にclaim読取フラグがOFFになったらfinalizeせず停止する', async () => {
+  const claim = baseClaim();
+  const { deps, fake } = setup(baseFiles(), claim, { afterNthUpdate: { n: 5, apply: () => (claim.claimReadEnabled = false) } });
+  const { plan, approval } = await planAndApproval(deps);
+  const r = await executeFolderTreeMerge(deps, plan, approval, { execute: true });
+  assert.equal(r.status, 'aborted-root-claim-changed');
+  assert.equal(fake.callLog.some((c) => c.startsWith('claim.finalize')), false);
+});
+
+test('execute: S本体のtrashが反映されていなければfinalizeせず停止する(aborted-source-not-trashed)', async () => {
+  let untrash = (): void => {};
+  const { deps, fake } = setup(baseFiles(), baseClaim(), { afterNthUpdate: { n: 5, apply: () => untrash() } });
+  untrash = () => {
+    (fake.files.find((f) => f.id === 'S') as FakeTreeFile).trashed = false;
+  };
+  const { plan, approval } = await planAndApproval(deps);
+  const r = await executeFolderTreeMerge(deps, plan, approval, { execute: true });
+  assert.equal(r.status, 'aborted-source-not-trashed');
+  assert.equal(fake.callLog.some((c) => c.startsWith('claim.finalize')), false);
+});
+
+test('execute: Sはtrash済みでfinalizeだけ失敗した後、同一planの再実行でcompletedになる', async () => {
+  const claim = baseClaim();
+  const { deps, fake } = setup(baseFiles(), claim);
+  const { plan, approval } = await planAndApproval(deps);
+  claim.finalizeOverride = { outcome: 'no-op', reason: 'fence-mismatch' };
+  const first = await executeFolderTreeMerge(deps, plan, approval, { execute: true });
+  assert.equal(first.status, 'finalize-failed');
+  claim.finalizeOverride = undefined;
+  const updates = fake.updateCalls.length;
+  const second = await executeFolderTreeMerge(deps, plan, approval, { execute: true });
+  assert.equal(second.status, 'completed');
+  assert.equal(fake.updateCalls.length, updates, '再開時はDriveへ書込まない');
+  assert.equal(second.manifest.entries.every((e) => e.status === 'skipped-already-applied'), true);
+  assert.equal(claim.root?.state, 'resolved');
+});
+
+test('execute: finalizeが例外を投げても未完了(finalize-failed)として扱い、reasonにerrorを残す', async () => {
+  const { deps } = setup();
+  const throwing: TreeMergeDeps = {
+    ...deps,
+    claimStore: { ...deps.claimStore, finalizeResolved: async () => { throw new Error('firestore unavailable'); } },
+  };
+  const { plan, approval } = await planAndApproval(throwing);
+  const r = await executeFolderTreeMerge(throwing, plan, approval, { execute: true });
+  assert.equal(r.status, 'finalize-failed');
+  assert.match(r.manifest.finalize.reason ?? '', /^error:/);
+});
+
+test('execute: claimがresolvedでもSが生きていれば完了扱いにしない', async () => {
+  const claim = baseClaim();
+  const { deps, fake } = setup(baseFiles(), claim);
+  const { plan, approval } = await planAndApproval(deps);
+  claim.root = { state: 'resolved', folderId: 'D', updateTimeMs: 2000 };
+  const r = await executeFolderTreeMerge(deps, plan, approval, { execute: true });
+  assert.equal(r.status, 'aborted-root-claim-changed');
+  assert.equal(fake.updateCalls.length, 0);
+});
+
+test('execute: 実行時点で統合先が改名されていたら書込み前に前提条件不一致で拒否', async () => {
+  const { deps, fake } = setup();
+  const { plan, approval } = await planAndApproval(deps);
+  (fake.files.find((f) => f.id === 'D') as FakeTreeFile).name = '別名';
+  await assert.rejects(
+    () => executeFolderTreeMerge(deps, plan, approval, { execute: true }),
+    (e: unknown) => e instanceof TreeMergeValidationError && e.code === 'name-mismatch'
+  );
+  assert.equal(fake.updateCalls.length, 0);
+});
+
+test('execute: 統合元Sが404(権限喪失等)なら「trash済み」扱いにせず拒否する', async () => {
+  const { deps, fake } = setup();
+  const { plan, approval } = await planAndApproval(deps);
+  fake.files.splice(fake.files.findIndex((f) => f.id === 'S'), 1);
+  await assert.rejects(
+    () => executeFolderTreeMerge(deps, plan, approval, { execute: true }),
+    (e: unknown) => e instanceof TreeMergeValidationError && e.code === 'folder-not-found'
+  );
+  assert.equal(fake.callLog.some((c) => c.startsWith('claim.finalize')), false);
+});
+
+test('execute: 子フォルダ(trash対象)が404ならapplied扱いにせずドリフトで停止する', async () => {
+  const { deps, fake } = setup();
+  const { plan, approval } = await planAndApproval(deps);
+  fake.files.splice(fake.files.findIndex((f) => f.id === 'S-A'), 1);
+  const r = await executeFolderTreeMerge(deps, plan, approval, { execute: true });
+  assert.equal(r.status, 'aborted-drift');
+  assert.equal(fake.updateCalls.length, 0);
+});
+
+test('execute: ドリフト - 対象ファイルがゴミ箱に入っていたら書込み前に停止', async () => {
+  const { deps, fake } = setup();
+  const { plan, approval } = await planAndApproval(deps);
+  (fake.files.find((f) => f.id === 'S-f0') as FakeTreeFile).trashed = true;
+  const r = await executeFolderTreeMerge(deps, plan, approval, { execute: true });
+  assert.equal(r.status, 'aborted-drift');
+  assert.equal(fake.updateCalls.length, 0);
+});
+
+test('execute: ドリフト - 未適用のファイルが複数親になっていたら書込み前に停止', async () => {
+  const { deps, fake } = setup();
+  const { plan, approval } = await planAndApproval(deps);
+  (fake.files.find((f) => f.id === 'S-f0') as FakeTreeFile).parents = ['S', 'OTHER'];
+  const r = await executeFolderTreeMerge(deps, plan, approval, { execute: true });
+  assert.equal(r.status, 'aborted-drift');
+  assert.equal(fake.updateCalls.length, 0);
+});
+
+test('execute: ドリフト - 適用済みopと後続のドリフトが混在しても書込み0件で停止', async () => {
+  const { deps, fake } = setup();
+  const { plan, approval } = await planAndApproval(deps);
+  // 先頭opは適用済み(S-A-f1がD-Aへ移動済み)、後続のS-B(move-folder)は別の場所へ移されている
+  (fake.files.find((f) => f.id === 'S-A-f1') as FakeTreeFile).parents = ['D-A'];
+  (fake.files.find((f) => f.id === 'S-B') as FakeTreeFile).parents = ['ELSEWHERE'];
+  const r = await executeFolderTreeMerge(deps, plan, approval, { execute: true });
+  assert.equal(r.status, 'aborted-drift');
+  assert.equal(fake.updateCalls.length, 0);
+});
+
+test('execute: plan後に統合元ツリーを参照するclaimが作られていたら書込み前に停止', async () => {
+  const { deps, fake, claim } = setup();
+  const { plan, approval } = await planAndApproval(deps);
+  claim.referencedIds.add('S-A');
+  const r = await executeFolderTreeMerge(deps, plan, approval, { execute: true });
+  assert.equal(r.status, 'aborted-drift');
+  assert.equal(fake.updateCalls.length, 0);
+});
+
+test('execute: 有効期間(24h)を超えたplanは拒否(書込み0件)', async () => {
+  const { deps, fake } = setup();
+  const { plan, approval } = await planAndApproval(deps);
+  const later: TreeMergeDeps = { ...deps, now: () => new Date(FIXED_NOW.getTime() + 25 * 60 * 60 * 1000) };
+  const r = await executeFolderTreeMerge(later, plan, approval, { execute: true });
+  assert.equal(r.status, 'refused-plan-expired');
+  assert.equal(fake.updateCalls.length, 0);
+});
+
+test('execute: 承認JSONは4項目のどれか1つでも違えば拒否(planId/各件数)', async () => {
+  const { deps, fake } = setup();
+  const { plan, approval } = await planAndApproval(deps);
+  const variants: FolderTreeMergeApproval[] = [
+    { ...approval, planId: 'other-plan' },
+    { ...approval, expectedFileMoves: approval.expectedFileMoves + 1 },
+    { ...approval, expectedFolderMoves: approval.expectedFolderMoves + 1 },
+    { ...approval, expectedFolderTrashes: approval.expectedFolderTrashes + 1 },
+  ];
+  for (const v of variants) {
+    const r = await executeFolderTreeMerge(deps, plan, v, { execute: true });
+    assert.equal(r.status, 'refused-approval-mismatch');
+  }
+  assert.equal(fake.updateCalls.length, 0);
+});
+
+test('execute: 阻害要因があれば承認が完全一致でもrefused-blockers(blockersが先に判定される)', async () => {
+  const { deps, fake } = setup([...baseFiles(), folder('D-A2', '山田太郎', ['D'])]);
+  const { plan, approval } = await planAndApproval(deps);
+  const r = await executeFolderTreeMerge(deps, plan, approval, { execute: true });
+  assert.equal(r.status, 'refused-blockers');
+  assert.equal(fake.updateCalls.length, 0);
+});
+
+test('execute: S本体のtrashが未適用で失敗したらfinalizeせずaborted-op-failure', async () => {
+  const updateFailures = new Map([['S', { mode: 'not-applied-error' as const }]]);
+  const { deps, fake, claim } = setup(baseFiles(), baseClaim(), { updateFailures });
+  const { plan, approval } = await planAndApproval(deps);
+  const r = await executeFolderTreeMerge(deps, plan, approval, { execute: true });
+  assert.equal(r.status, 'aborted-op-failure');
+  assert.equal(claim.root?.state, 'divergent');
+  assert.equal(fake.callLog.some((c) => c.startsWith('claim.finalize')), false);
+  assert.equal(r.manifest.entries.at(-1)?.status, 'failed');
+});
+
+test('execute: S本体のtrashが応答喪失だが適用済みならcompletedになる(applied-error)', async () => {
+  const updateFailures = new Map([['S', { mode: 'applied-error' as const }]]);
+  const { deps } = setup(baseFiles(), baseClaim(), { updateFailures });
+  const { plan, approval } = await planAndApproval(deps);
+  const r = await executeFolderTreeMerge(deps, plan, approval, { execute: true });
+  assert.equal(r.status, 'completed');
+  assert.ok(r.manifest.entries.some((e) => e.kind === 'trash-folder' && e.status === 'applied-after-error'));
+});
+
+test('execute: 失敗時のログ・manifestに生のエラー文言やフォルダ名・ファイル名を含めない(PII対策)', async () => {
+  const logs: string[] = [];
+  const updateFailures = new Map([['S-B', { mode: 'not-applied-error' as const }]]);
+  const { deps } = setup(baseFiles(), baseClaim(), { updateFailures });
+  const logging: TreeMergeDeps = { ...deps, log: (m) => logs.push(m) };
+  const { plan, approval } = await planAndApproval(logging);
+  const r = await executeFolderTreeMerge(logging, plan, approval, { execute: true, log: (m) => logs.push(m), logError: (m) => logs.push(m) });
+  assert.equal(r.status, 'aborted-op-failure');
+  const all = logs.join('\n') + JSON.stringify(r.manifest);
+  for (const name of NAMES) assert.equal(all.includes(name), false, `${name}が含まれている`);
+  assert.equal(all.includes('fakeTreeDrive'), false, '生のエラー文言がmanifest/ログに出ている');
+});
+
+test('execute: trash直前の空確認で失敗した場合のログにも名前を含めない', async () => {
+  let addNew = (): void => {};
+  const logs: string[] = [];
+  const { deps, fake } = setup(baseFiles(), baseClaim(), { afterNthUpdate: { n: 1, apply: () => addNew() } });
+  addNew = () => fake.files.push(file('S-A-new', 'new.pdf', ['S-A']));
+  const { plan, approval } = await planAndApproval(deps);
+  await executeFolderTreeMerge(deps, plan, approval, { execute: true, logError: (m) => logs.push(m) });
+  const all = logs.join('\n');
+  for (const name of [...NAMES, 'new.pdf']) assert.equal(all.includes(name), false);
+});
+
+// ---------------------------------------------------------------- 深い再帰・claim照会対象
+
+function deepFiles(): FakeTreeFile[] {
+  return [
+    ...baseFiles(),
+    folder('S-A-1', '孫', ['S-A']),
+    file('S-A-1-f', 'deep.pdf', ['S-A-1']),
+    folder('D-A-1', '孫', ['D-A']),
+  ];
+}
+
+test('plan: 深さ3の再帰統合でもtrashは深い順(孫→子→S)で並ぶ', async () => {
+  const plan = await planOf(setup(deepFiles()).deps);
+  const trashOrder = plan.ops.filter((o) => o.kind === 'trash-folder').map((o) => (o as { folderId: string }).folderId);
+  assert.deepEqual(trashOrder, ['S-A-1', 'S-A', 'S']);
+  assert.ok(plan.ops.some((o) => o.kind === 'move-file' && o.fileId === 'S-A-1-f' && o.toParentId === 'D-A-1'));
+  assert.equal(plan.summary.visitedSourceFolderCount, 3);
+});
+
+test('plan阻害: S自身を親とするclaim(S直下フォルダのclaim)も検知する', async () => {
+  const claim = { ...baseClaim(), referencedIds: new Set(['S']) };
+  assert.ok((await blockerCodes(baseFiles(), claim)).includes('claims-reference-source-tree'));
+});
+
+test('plan阻害: 深さ2の統合元フォルダを参照するclaimも検知する', async () => {
+  const claim = { ...baseClaim(), referencedIds: new Set(['S-A-1']) };
+  assert.ok((await blockerCodes(deepFiles(), claim)).includes('claims-reference-source-tree'));
+});
+
+test('plan阻害: 統合元内で同じdocSplitDocIdが2件あればdocid-duplicate', async () => {
+  const files = [
+    ...baseFiles(),
+    file('S-dup1', 'p.pdf', ['S'], { appProperties: { docSplitDocId: 'same' } }),
+    file('S-dup2', 'q.pdf', ['S'], { appProperties: { docSplitDocId: 'same' } }),
+  ];
+  assert.ok((await blockerCodes(files)).includes('docid-duplicate'));
+});
+
+// ---------------------------------------------------------------- codex review(1回目)指摘対応
+
+test('execute: finalizeだけ失敗した状態は、planの有効期間を過ぎても再実行で完了できる(書込みなしの再開)', async () => {
+  const claim = baseClaim();
+  const { deps, fake } = setup(baseFiles(), claim);
+  const { plan, approval } = await planAndApproval(deps);
+  claim.finalizeOverride = { outcome: 'no-op', reason: 'fence-mismatch' };
+  assert.equal((await executeFolderTreeMerge(deps, plan, approval, { execute: true })).status, 'finalize-failed');
+  claim.finalizeOverride = undefined;
+  const later: TreeMergeDeps = { ...deps, now: () => new Date(FIXED_NOW.getTime() + 48 * 60 * 60 * 1000) };
+  const updates = fake.updateCalls.length;
+  const r = await executeFolderTreeMerge(later, plan, approval, { execute: true });
+  assert.equal(r.status, 'completed');
+  assert.equal(fake.updateCalls.length, updates);
+});
+
+test('plan阻害: 再帰統合する子フォルダのrename/trash権限が無ければcannot-trash(部分統合を避ける)', async () => {
+  for (const capabilities of [{ canRename: false }, { canTrash: false }]) {
+    const files = baseFiles().map((f) => (f.id === 'S-A' ? { ...f, capabilities } : f));
+    assert.ok((await blockerCodes(files)).includes('cannot-trash'));
+  }
+});
+
+test('plan検証: 統合元Sのtrash権限が無ければ拒否', async () => {
+  const files = baseFiles().map((f) => (f.id === 'S' ? { ...f, capabilities: { canTrash: false } } : f));
+  await assertValidation(setup(files).deps, 'insufficient-capabilities');
+});
+
+test('plan阻害: Sのみの子フォルダの孫を参照するclaimも検知する(サブツリー全体を走査)', async () => {
+  const files = [...baseFiles(), folder('S-B-1', '孫', ['S-B']), folder('S-B-2', 'ひ孫', ['S-B-1'])];
+  for (const id of ['S-B-1', 'S-B-2']) {
+    const claim = { ...baseClaim(), referencedIds: new Set([id]) };
+    assert.ok((await blockerCodes(files, claim)).includes('claims-reference-source-tree'), id);
+  }
+});
+
+test('plan阻害: Sのみの子フォルダ配下のショートカット・複数親も検知する', async () => {
+  const files = [
+    ...baseFiles(),
+    file('S-B-sc', 'sc', ['S-B'], { mimeType: SHORTCUT }),
+    file('S-B-mp', 'mp', ['S-B', 'OTHER']),
+  ];
+  const codes = await blockerCodes(files);
+  assert.ok(codes.includes('shortcut'));
+  assert.ok(codes.includes('multi-parent'));
+});

@@ -96,7 +96,7 @@ async function main(): Promise<void> {
     console.log(`  [blocker] ${b.code}${b.id ? ` id=${b.id}` : ''}${b.count !== undefined ? ` count=${b.count}` : ''}`);
   }
   if (plan.blockers.length > 0) {
-    console.log('⚠️ 阻害要因があるためexecuteは拒否されます。解消してから再planしてください。');
+    console.log('::warning::folder-tree-merge planに阻害要因があります。executeは拒否されます。解消してから再planしてください。');
   }
 }
 
