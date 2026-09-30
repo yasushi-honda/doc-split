@@ -40,6 +40,8 @@ export interface FakeTreeDriveOptions {
 }
 
 const QUERY_PATTERN = /^'([^']+)' in parents and trashed=false$/;
+/** findOrCreateFolder(functions側)が発行する名前検索。finalize後の回帰テスト(untrashされないこと)用。 */
+const NAME_QUERY_PATTERN = /^'([^']+)' in parents and name='((?:[^'\\]|\\.)*)' and mimeType='([^']+)' and trashed=(true|false)$/;
 
 export function makeFakeTreeDrive(
   files: FakeTreeFile[],
@@ -78,11 +80,21 @@ export function makeFakeTreeDrive(
         return { data: view(f) };
       },
       list: async (params: Record<string, unknown>) => {
-        const m = (params.q as string).match(QUERY_PATTERN);
-        if (!m) throw new Error(`fakeTreeDrive: 未知のqueryパターンです: ${params.q}`);
-        const parentId = m[1];
+        const q = params.q as string;
+        const nm = q.match(NAME_QUERY_PATTERN);
+        const m = nm ? null : q.match(QUERY_PATTERN);
+        if (!nm && !m) throw new Error(`fakeTreeDrive: 未知のqueryパターンです: ${q}`);
+        const parentId = (nm ?? m)![1];
         callLog.push(`files.list(parent=${parentId})`);
-        const matched = files.filter((f) => f.parents.includes(parentId) && !(f.trashed ?? false));
+        const matched = nm
+          ? files.filter(
+              (f) =>
+                f.parents.includes(parentId) &&
+                f.name === nm[2].replace(/\\(.)/g, '$1') &&
+                f.mimeType === nm[3] &&
+                (f.trashed ?? false) === (nm[4] === 'true')
+            )
+          : files.filter((f) => f.parents.includes(parentId) && !(f.trashed ?? false));
         const requested = (params.pageSize as number | undefined) ?? 100;
         const size = Math.min(requested, opts.listPageSize ?? Number.POSITIVE_INFINITY);
         const start = params.pageToken ? Number(params.pageToken) : 0;
@@ -94,6 +106,10 @@ export function makeFakeTreeDrive(
             nextPageToken: next < matched.length ? String(next) : undefined,
           },
         };
+      },
+      create: async () => {
+        callLog.push('files.create');
+        throw new Error('fakeTreeDrive: 想定外のfiles.create(統合後に新しいフォルダが作られた)');
       },
       update: async (params: Record<string, unknown>) => {
         updateCalls.push(params);

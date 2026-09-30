@@ -223,3 +223,24 @@ test('実claim: 途中失敗ではルートclaimはdivergentのまま、同一pl
   assert.equal(second.status, 'completed');
   assert.equal((await rootClaimData())?.state, 'resolved');
 });
+
+// 注: 統合元の改名(接尾辞)自体は単体テスト(正常系)が検証する。ここでは「finalize後の通常経路が統合先だけを採用し、
+// 統合元のuntrash・新規フォルダ作成を起こさない」ことを、実際のfindOrCreateFolderで確認する。
+test('回帰: finalize後の通常export(findOrCreateFolder)は統合先だけを採用し、trash済みの統合元をuntrashせず新規作成もしない', async () => {
+  await setupDivergentRoot();
+  const { fake, deps } = await makeDeps(baseFiles());
+  const plan = await planFolderTreeMerge(deps, PLAN_PARAMS);
+  const r = await executeFolderTreeMerge(deps, plan, approvalFor(plan), { execute: true });
+  assert.equal(r.status, 'completed');
+
+  const { findOrCreateFolder } = await import('../functions/src/drive/findOrCreateFolder');
+  // (a) claimが効いている通常経路
+  assert.equal(await findOrCreateFolder(fake.drive, db, ROOT, NAME), 'D');
+  // (b) claim読取が効かず完全検索へフォールバックしても、trash済みの統合元は候補に戻らない
+  await setClaimReadFlag(false);
+  assert.equal(await findOrCreateFolder(fake.drive, db, ROOT, NAME), 'D');
+
+  const source = fake.files.find((f) => f.id === 'S');
+  assert.equal(source?.trashed, true, '統合元はtrashのまま(untrashされていない)');
+  assert.equal(fake.callLog.includes('files.create'), false, '新規フォルダは作られていない');
+});
