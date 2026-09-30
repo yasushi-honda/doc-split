@@ -128,7 +128,7 @@ Drive OAuthスコープを`drive.file`→`drive`フルスコープへ拡張し�
 
 ## 現在のフェーズ
 
-**ミッション1: kanameone・cocoroへのGoogle Drive連携Phase1本番展開**（GOAL.md準拠、2026-07-23開始）。承認済み計画: `/Users/yyyhhh/.claude/plans/witty-drifting-hoare.md`。cocoroはFunctions/Hostingデプロイ完了、Drive未接続(Phase C=クライアント自身のOAuth接続、代行不可)で外部依存待ち。kanameoneはOAuth再連携完了(2026-09-28)、重複audit・merge候補14グループ統合・再auditまで完了(2026-09-30)。残りはmanual-review 8件の判断、`driveExport` flag ON、backfill(番号単位の明示認可が必要)。
+**ミッション1: kanameone・cocoroへのGoogle Drive連携Phase1本番展開**（GOAL.md準拠、2026-07-23開始）。承認済み計画: `/Users/yyyhhh/.claude/plans/witty-drifting-hoare.md`。cocoroはFunctions/Hostingデプロイ完了、Drive未接続(Phase C=クライアント自身のOAuth接続、代行不可)で外部依存待ち。kanameoneはOAuth再連携完了(2026-09-28)、重複audit・merge候補14グループ統合・再auditまで完了(2026-09-30)。残りはmanual-review 8件の判断(平出配下7組は照合済み: app側とは別物でA→B統合ならデータ保全、子フォルダ3組は中身未照合。`(root)/森奈穂美`は未調査。照合スクリプトはPR #1092でマージ済み)、`driveExport` flag ON、backfill(番号単位の明示認可が必要)。
 
 **ミッション2: ADR-0027 Sarashina要約モデル移行**（Gemini依存脱却、Sarashina2.2-3B自前ホスティング）。PR0〜PR3完了(2026-09-27、上記セッションサマリ参照)。現状は**全経路dead code、本番挙動不変**。PR4（Functions実配線）以降は新機能のため新規plan modeが必要、decision-makerの着手指示待ち。
 
