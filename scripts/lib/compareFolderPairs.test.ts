@@ -30,6 +30,7 @@ test('両方空フォルダは全件0', () => {
     onlyB: 0,
     matchedByMd5: 0,
     matchedByNameAndMime: 0,
+    childFolderNames: { both: 0, onlyA: 0, onlyB: 0, bothIgnoringSpaces: 0 },
   });
 });
 
@@ -142,4 +143,49 @@ test('deriveCaveats: 両方あれば両方付き、何も無ければ空配列',
   assert.deepEqual(deriveCaveats(both), ['weak-match', 'has-child-folders']);
   assert.deepEqual(deriveCaveats(compareFolderChildren([file('a.pdf', 'm1')], [file('b.pdf', 'm1')])), []);
   assert.deepEqual(deriveCaveats(compareFolderChildren([], [])), []);
+});
+
+function folder(name: string): FolderChild {
+  return { name, mimeType: FOLDER_MIME, md5Checksum: null };
+}
+
+test('子フォルダ名の照合: 完全一致・A側のみ・B側のみを件数で返す', () => {
+  const r = compareFolderChildren([folder('s1'), folder('s2')], [folder('s1'), folder('s3')]);
+  assert.deepEqual(r.childFolderNames, { both: 1, onlyA: 1, onlyB: 1, bothIgnoringSpaces: 1 });
+});
+
+test('子フォルダ名の照合: 全角/半角スペースの差は完全一致では別扱い、空白無視では一致', () => {
+  const r = compareFolderChildren([folder('ア　新井')], [folder('ア 新井')]);
+  assert.equal(r.childFolderNames.both, 0);
+  assert.equal(r.childFolderNames.onlyA, 1);
+  assert.equal(r.childFolderNames.onlyB, 1);
+  assert.equal(r.childFolderNames.bothIgnoringSpaces, 1);
+});
+
+test('子フォルダ名の照合: 同名が複数ある場合は多重度で対応付ける(A側2件・B側1件 → 1件一致・A側のみ1件)', () => {
+  const r = compareFolderChildren([folder('dup'), folder('dup')], [folder('dup')]);
+  assert.deepEqual(r.childFolderNames, { both: 1, onlyA: 1, onlyB: 0, bothIgnoringSpaces: 1 });
+});
+
+test('子フォルダ名の照合: 子フォルダが無ければ全て0', () => {
+  const r = compareFolderChildren([file('a.pdf', 'm1')], [file('b.pdf', 'm2')]);
+  assert.deepEqual(r.childFolderNames, { both: 0, onlyA: 0, onlyB: 0, bothIgnoringSpaces: 0 });
+});
+
+test('子フォルダ名の照合: ファイルと同名でも子フォルダ照合に混ざらない', () => {
+  const r = compareFolderChildren([file('x', 'm1'), folder('y')], [folder('x'), file('y', 'm2')]);
+  assert.deepEqual(r.childFolderNames, { both: 0, onlyA: 1, onlyB: 1, bothIgnoringSpaces: 0 });
+});
+
+test('子フォルダ名の照合: 結果にフォルダ名が含まれない(PII対策)', () => {
+  const r = compareFolderChildren([folder('山田太郎')], [folder('山田太郎')]);
+  assert.equal(JSON.stringify(r).includes('山田太郎'), false);
+});
+
+test('子フォルダ名の照合: 半角カナと全角カナ・全角英数と半角英数はNFKC正規化で一致(完全一致では別扱い)', () => {
+  const r = compareFolderChildren([folder('ｱｲｳ'), folder('Ａ１')], [folder('アイウ'), folder('A1')]);
+  assert.equal(r.childFolderNames.both, 0);
+  assert.equal(r.childFolderNames.onlyA, 2);
+  assert.equal(r.childFolderNames.onlyB, 2);
+  assert.equal(r.childFolderNames.bothIgnoringSpaces, 2);
 });

@@ -30,6 +30,17 @@ export interface FolderCompareResult {
   onlyB: number;
   matchedByMd5: number;
   matchedByNameAndMime: number;
+  /** 子フォルダ名の照合(件数のみ。中身は照合しない)。 */
+  childFolderNames: ChildFolderNameCompare;
+}
+
+export interface ChildFolderNameCompare {
+  /** 名前が完全一致した子フォルダ数(多重度考慮) */
+  both: number;
+  onlyA: number;
+  onlyB: number;
+  /** NFKC正規化+空白除去後に一致した数(全角/半角スペース差などの表記ゆれ検出用。bothを含む) */
+  bothIgnoringSpaces: number;
 }
 
 type KeyKind = 'md5' | 'name';
@@ -49,6 +60,37 @@ function countByKey(files: FolderChild[]): Map<string, { count: number; kind: Ke
     else m.set(key, { count: 1, kind });
   }
   return m;
+}
+
+function normalizeFolderName(name: string): string {
+  return name.normalize('NFKC').replace(/\s+/g, '');
+}
+
+/** 2つの名前リストを多重度考慮で照合し、対応付けできた件数を返す。 */
+function countMultisetMatches(a: string[], b: string[]): number {
+  const remaining = new Map<string, number>();
+  for (const x of a) remaining.set(x, (remaining.get(x) ?? 0) + 1);
+  let matched = 0;
+  for (const y of b) {
+    const left = remaining.get(y) ?? 0;
+    if (left > 0) {
+      matched += 1;
+      remaining.set(y, left - 1);
+    }
+  }
+  return matched;
+}
+
+function compareChildFolderNames(a: FolderChild[], b: FolderChild[]): ChildFolderNameCompare {
+  const aNames = a.filter((c) => c.mimeType === FOLDER_MIME_TYPE).map((c) => c.name);
+  const bNames = b.filter((c) => c.mimeType === FOLDER_MIME_TYPE).map((c) => c.name);
+  const both = countMultisetMatches(aNames, bNames);
+  return {
+    both,
+    onlyA: aNames.length - both,
+    onlyB: bNames.length - both,
+    bothIgnoringSpaces: countMultisetMatches(aNames.map(normalizeFolderName), bNames.map(normalizeFolderName)),
+  };
 }
 
 export function compareFolderChildren(a: FolderChild[], b: FolderChild[]): FolderCompareResult {
@@ -79,6 +121,7 @@ export function compareFolderChildren(a: FolderChild[], b: FolderChild[]): Folde
     onlyB: bFiles.length - both,
     matchedByMd5,
     matchedByNameAndMime,
+    childFolderNames: compareChildFolderNames(a, b),
   };
 }
 
