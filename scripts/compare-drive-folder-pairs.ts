@@ -9,7 +9,12 @@
  * 書き込みAPI(files.update/create/delete等)は一切呼ばない。
  *
  * PII対策: 出力(ログ・JSON)にファイル名・フォルダ名は含めない(利用者名を含みうるため)。
- * 組はフォルダIDのみで識別する。
+ * 組はフォルダIDのみで識別する。Drive APIのエラーメッセージ(リソース名を含みうる)も出力せず、
+ * 無害化した種別(describeErrorSafely)と固定の理由コードだけを残す。
+ *
+ * fail-closed: settings/drive.grantedScopesにフルスコープ`drive`が無い場合(旧drive.file)は、
+ * 人作成のフォルダ/ファイルが不可視のまま「0件・片側のみ」と誤った結果を返すため実行を拒否する
+ * (audit-drive-sibling-duplicates.tsと同型)。各IDは有効(未ゴミ箱)なフォルダであることを確認する。
  *
  * 使用方法:
  *   FIREBASE_PROJECT_ID=docsplit-kanameone npx ts-node scripts/compare-drive-folder-pairs.ts \
@@ -25,6 +30,7 @@ import * as admin from 'firebase-admin';
 import * as fs from 'fs';
 import type { drive_v3 } from 'googleapis';
 import { compareFolderChildren, type FolderChild, type FolderCompareResult } from './lib/compareFolderPairs';
+import { describeErrorSafely } from './lib/confirmedReplayStats';
 
 const projectId = process.env.FIREBASE_PROJECT_ID;
 if (!projectId) {
@@ -102,20 +108,61 @@ async function listChildren(drive: drive_v3.Drive, parentId: string): Promise<Fo
   return out;
 }
 
+/** 指定IDが有効(未ゴミ箱)なフォルダなら null、そうでなければ固定の理由コードを返す(名前は含めない)。 */
+async function folderProblem(
+  drive: drive_v3.Drive,
+  folderId: string,
+  folderMimeType: string
+): Promise<string | null> {
+  try {
+    const res = await drive.files.get({
+      fileId: folderId,
+      fields: 'mimeType,trashed',
+      supportsAllDrives: true,
+    });
+    if (res.data.trashed) return 'trashed';
+    if (res.data.mimeType !== folderMimeType) return 'not-a-folder';
+    return null;
+  } catch (err) {
+    return `unavailable:${describeErrorSafely(err)}`;
+  }
+}
+
 async function main(): Promise<void> {
   // functions/src/utils/driveAuth.ts はモジュールトップレベルで admin.firestore() を評価するため、
   // admin.initializeApp() より前に静的importするとFirebaseAppError(no-app)になる
   // (diagnose-drive-folder-duplicate-causality.ts等と同型の対策)。
-  const { getDriveClient } = await import('../functions/src/utils/driveAuth');
+  const { getDriveSettings, getDriveClient } = await import('../functions/src/utils/driveAuth');
+  const { FOLDER_MIME_TYPE } = await import('../functions/src/drive/driveApiConstants');
+  const { REQUIRED_DRIVE_SCOPE } = await import('../functions/src/drive/exchangeDriveAuthCode');
 
   console.log(`プロジェクト: ${projectId}`);
   console.log(`比較対象: ${pairs.length}組`);
   console.log('---');
 
+  const settings = await getDriveSettings();
+  const grantedScopes = settings.grantedScopes ?? [];
+  if (!grantedScopes.includes(REQUIRED_DRIVE_SCOPE)) {
+    console.error(
+      `❌ settings/drive.grantedScopesに${REQUIRED_DRIVE_SCOPE}が含まれていません。` +
+        '再連携が完了してから実行してください。未連携のまま実行すると、人作成のフォルダ/ファイルが' +
+        '不可視のため「0件・片側のみ」という誤った結果になります。'
+    );
+    process.exit(2);
+  }
+
   const drive: drive_v3.Drive = await getDriveClient();
   const reports: PairReport[] = [];
 
   for (const [i, pair] of pairs.entries()) {
+    const problemA = await folderProblem(drive, pair.a, FOLDER_MIME_TYPE);
+    const problemB = await folderProblem(drive, pair.b, FOLDER_MIME_TYPE);
+    if (problemA || problemB) {
+      const error = [problemA && `A:${problemA}`, problemB && `B:${problemB}`].filter(Boolean).join(' ');
+      reports.push({ folderIdA: pair.a, folderIdB: pair.b, found: false, error });
+      console.log(`⚠️  組${i + 1}: フォルダ確認に失敗 (${error})`);
+      continue;
+    }
     try {
       const [childrenA, childrenB] = await Promise.all([
         listChildren(drive, pair.a),
@@ -129,7 +176,7 @@ async function main(): Promise<void> {
           `共通${result.both} Aのみ${result.onlyA} Bのみ${result.onlyB}`
       );
     } catch (err) {
-      const message = (err as Error).message;
+      const message = describeErrorSafely(err);
       reports.push({ folderIdA: pair.a, folderIdB: pair.b, found: false, error: message });
       console.log(`⚠️  組${i + 1}: 取得失敗 (${message})`);
     }
@@ -149,6 +196,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  console.error('照合スクリプトが失敗しました:', err);
+  console.error('照合スクリプトが失敗しました:', describeErrorSafely(err));
   process.exit(1);
 });
