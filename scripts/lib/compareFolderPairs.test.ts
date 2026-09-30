@@ -181,3 +181,11 @@ test('子フォルダ名の照合: 結果にフォルダ名が含まれない(PI
   const r = compareFolderChildren([folder('山田太郎')], [folder('山田太郎')]);
   assert.equal(JSON.stringify(r).includes('山田太郎'), false);
 });
+
+test('子フォルダ名の照合: 半角カナと全角カナ・全角英数と半角英数はNFKC正規化で一致(完全一致では別扱い)', () => {
+  const r = compareFolderChildren([folder('ｱｲｳ'), folder('Ａ１')], [folder('アイウ'), folder('A1')]);
+  assert.equal(r.childFolderNames.both, 0);
+  assert.equal(r.childFolderNames.onlyA, 2);
+  assert.equal(r.childFolderNames.onlyB, 2);
+  assert.equal(r.childFolderNames.bothIgnoringSpaces, 2);
+});
