@@ -16,6 +16,9 @@
  * 人作成のフォルダ/ファイルが不可視のまま「0件・片側のみ」と誤った結果を返すため実行を拒否する
  * (audit-drive-sibling-duplicates.tsと同型)。各IDは有効(未ゴミ箱)なフォルダであることを確認する。
  *
+ * 子フォルダ名の照合: 子フォルダの「名前」の重なりを件数のみで返す(完全一致/空白差を無視した一致/A・Bの片側のみ)。
+ * 子フォルダの中身(孫以下)は照合しない。フォルダ統合の規模見積もり(同名の子フォルダが多いほど統合が大きくなる)に使う。
+ *
  * 結果の読み方(統合可否の判断前に必ず確認):
  * - 照合対象はOAuth主体から「見える」直下ファイルのみ。共有されていない子は検知できない。
  * - caveats: 'weak-match'(md5無しを名前+mimeTypeだけで一致扱い、内容未検証) /
@@ -204,7 +207,8 @@ async function main(): Promise<void> {
       console.log(
         `✅ 組${i + 1}: A(ファイル${result.aFileCount}/子フォルダ${result.aChildFolderCount}) ` +
           `B(ファイル${result.bFileCount}/子フォルダ${result.bChildFolderCount}) ` +
-          `共通${result.both} Aのみ${result.onlyA} Bのみ${result.onlyB}` +
+          `共通${result.both} Aのみ${result.onlyA} Bのみ${result.onlyB} ` +
+          `子フォルダ名(共通${result.childFolderNames.both}/空白無視${result.childFolderNames.bothIgnoringSpaces} Aのみ${result.childFolderNames.onlyA} Bのみ${result.childFolderNames.onlyB})` +
           (caveats.length > 0 ? ` ⚠️要確認:${caveats.join(',')}` : '')
       );
     } catch (err) {
