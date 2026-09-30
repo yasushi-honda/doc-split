@@ -1,6 +1,16 @@
 # ハンドオフメモ
 
-**更新日**: 2026-09-29（ADR-0027 PR5: dev環境でのSarashina要約実機観測を実施。D3・D8はSarashina要約完走、D2は`fabrication_suspected`誤検知をdecision-maker方針Aで恒久対応(PR #1083、スキャナ正規化)、dev実機でD2=`done`確認・AC4(canary 3/3件done)達成。kanameone Drive Phase1: OAuth再連携完了(2026-09-28)を確認し、2026-09-30に重複audit→merge候補14グループ統合実行→再audit完了。残はmanual-review 8件の判断とflag ON・backfill）
+**更新日**: 2026-10-01（kanameone `(root)/森奈穂美`の再帰統合ツールを実装・本番適用、停止書類が回復中。前回: 2026-09-29 ADR-0027 PR5: dev環境でのSarashina要約実機観測を実施。D3・D8はSarashina要約完走、D2は`fabrication_suspected`誤検知をdecision-maker方針Aで恒久対応(PR #1083、スキャナ正規化)、dev実機でD2=`done`確認・AC4(canary 3/3件done)達成。kanameone Drive Phase1: OAuth再連携完了(2026-09-28)を確認し、2026-09-30に重複audit→merge候補14グループ統合実行→再audit完了。残はmanual-review 8件の判断とflag ON・backfill）
+
+## kanameone `(root)/森奈穂美`の再帰統合ツール開発・本番適用（2026-09-30）
+
+### 結果
+同名の兄弟Driveフォルダ2つを再帰統合する承認制ツール(`plan-drive-folder-tree-merge`/`execute-drive-folder-tree-merge`、PR #1100)を実装し、devリハーサル後にkanameoneへ適用した。ショートカット規則の絞り込みと実体調査スクリプト`inspect-drive-items`はPR #1101。kanameone: ファイル移動38/フォルダ再親付け179/trash160(manifest377件全適用・失敗0)、ルートclaimは`resolved`、重複audit 8→7件、停止していた書類は63→14件へ回復中(統合後約1.5時間時点)。詳細・教訓は`GOAL.md`「再帰統合の実施結果」、手順と手動復旧は`docs/context/drive-folder-tree-merge-runbook.md`。
+
+### 次のアクション
+- **即着手**: なし(回復確認はclaim復帰から6時間後=2026-10-01 03時UTC以降の`drive-export-status-report --breakdown`、decision-maker指示があれば実施)。
+- **条件待ち**: 停止が残る場合の原因調査(trigger=6時間後の再確認で0件にならない) / クライアントへの完了連絡ドラフト(trigger=decision-maker指示) / 平出配下7組の扱い(trigger=decision-maker判断)。
+- **却下候補**: 統合対象外のショートカットによるリンク切れ検知(Drive APIで参照先逆引き不可、runbookに限界として明記)。
 
 ## ADR-0027 PR5: dev環境でのSarashina要約有効化・実機観測（2026-09-29）
 
