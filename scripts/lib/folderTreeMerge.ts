@@ -101,10 +101,12 @@ interface DriveItem {
   canRename: boolean;
   canTrash: boolean;
   canAddChildren: boolean;
+  /** ショートカットの参照先ID(ショートカット以外・不明ならundefined)。 */
+  shortcutTargetId?: string;
 }
 
 const ITEM_FIELDS =
-  'id,name,mimeType,parents,trashed,appProperties,capabilities(canMoveItemWithinDrive,canRename,canTrash,canAddChildren)';
+  'id,name,mimeType,parents,trashed,appProperties,capabilities(canMoveItemWithinDrive,canRename,canTrash,canAddChildren),shortcutDetails(targetId)';
 
 function toItem(f: drive_v3.Schema$File): DriveItem {
   return {
@@ -118,6 +120,7 @@ function toItem(f: drive_v3.Schema$File): DriveItem {
     canRename: f.capabilities?.canRename !== false,
     canTrash: f.capabilities?.canTrash !== false,
     canAddChildren: f.capabilities?.canAddChildren !== false,
+    shortcutTargetId: f.shortcutDetails?.targetId ?? undefined,
   };
 }
 
@@ -223,12 +226,14 @@ export async function planFolderTreeMerge(deps: TreeMergeDeps, params: PlanParam
   const nextId = (): string => `op-${String(++seq).padStart(4, '0')}`;
   let sameNameFileCount = 0;
   let visited = 1;
+  /** 走査中に見つけたショートカット。参照先がtrashされるフォルダかどうかは、全ペアの走査が終わってから判定する。 */
+  const shortcuts: { id: string; targetId?: string }[] = [];
 
   /** 再親付けするサブツリーの全子孫を走査する(claim参照検査の対象ID収集と、ショートカット・複数親の検知)。 */
   async function inventoryMovedSubtree(folderId: string): Promise<void> {
     for (const c of await listChildren(deps.drive, folderId)) {
-      if (c.mimeType === shortcutMime) blockers.push({ code: 'shortcut', id: c.id });
-      else if (c.parents.length !== 1) blockers.push({ code: 'multi-parent', id: c.id });
+      if (c.mimeType === shortcutMime) shortcuts.push({ id: c.id, targetId: c.shortcutTargetId });
+      if (c.parents.length !== 1) blockers.push({ code: 'multi-parent', id: c.id });
       if (c.mimeType === deps.folderMimeType) {
         movedFolderIds.push(c.id);
         await inventoryMovedSubtree(c.id);
@@ -239,6 +244,7 @@ export async function planFolderTreeMerge(deps: TreeMergeDeps, params: PlanParam
   async function mergePair(s: DriveItem, sParentId: string, d: DriveItem): Promise<void> {
     const [sChildren, dChildren] = await Promise.all([listChildren(deps.drive, s.id), listChildren(deps.drive, d.id)]);
     if (!d.canAddChildren) blockers.push({ code: 'cannot-add-children', id: d.id });
+    for (const c of dChildren) if (c.mimeType === shortcutMime) shortcuts.push({ id: c.id, targetId: c.shortcutTargetId });
 
     const sFolders = sChildren.filter((c) => c.mimeType === deps.folderMimeType);
     const sFiles = sChildren.filter((c) => c.mimeType !== deps.folderMimeType);
@@ -282,10 +288,8 @@ export async function planFolderTreeMerge(deps: TreeMergeDeps, params: PlanParam
     const dFileNames = new Set(dFiles.map((f) => f.name));
     const movedDocIds = new Set<string>();
     for (const f of sFiles) {
-      if (f.mimeType === shortcutMime) {
-        blockers.push({ code: 'shortcut', id: f.id });
-        continue;
-      }
+      // ショートカットは(参照先を変えずに)通常のファイルと同様に移動できる。リンク切れになる場合だけ後で阻害要因にする
+      if (f.mimeType === shortcutMime) shortcuts.push({ id: f.id, targetId: f.shortcutTargetId });
       if (f.parents.length !== 1) {
         blockers.push({ code: 'multi-parent', id: f.id });
         continue;
@@ -307,6 +311,13 @@ export async function planFolderTreeMerge(deps: TreeMergeDeps, params: PlanParam
   }
 
   await mergePair(source, params.rootFolderId, target);
+
+  // ショートカットが「空にしてtrashされる統合元フォルダ」を指すと、統合後にリンク切れになる。参照先が不明な場合も安全側で拒否する
+  const trashedFolderIds = new Set(mergedSourceIds);
+  for (const sc of shortcuts) {
+    if (!sc.targetId) blockers.push({ code: 'shortcut', id: sc.id });
+    else if (trashedFolderIds.has(sc.targetId)) blockers.push({ code: 'shortcut-to-trashed-folder', id: sc.id });
+  }
 
   const claimCheckFolderIds = [...mergedSourceIds, ...movedFolderIds];
   const refs = await deps.claimStore.countClaimsReferencing(claimCheckFolderIds);
