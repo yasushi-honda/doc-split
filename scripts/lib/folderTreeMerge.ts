@@ -241,6 +241,14 @@ export async function planFolderTreeMerge(deps: TreeMergeDeps, params: PlanParam
     }
   }
 
+  /** 統合先側でSに対応する子が無いサブツリーの全子孫を走査し、ショートカットだけを収集する(リンク切れ判定用)。 */
+  async function collectTargetOnlyShortcuts(folderId: string): Promise<void> {
+    for (const c of await listChildren(deps.drive, folderId)) {
+      if (c.mimeType === shortcutMime) shortcuts.push({ id: c.id, targetId: c.shortcutTargetId });
+      if (c.mimeType === deps.folderMimeType) await collectTargetOnlyShortcuts(c.id);
+    }
+  }
+
   async function mergePair(s: DriveItem, sParentId: string, d: DriveItem): Promise<void> {
     const [sChildren, dChildren] = await Promise.all([listChildren(deps.drive, s.id), listChildren(deps.drive, d.id)]);
     if (!d.canAddChildren) blockers.push({ code: 'cannot-add-children', id: d.id });
@@ -255,6 +263,11 @@ export async function planFolderTreeMerge(deps: TreeMergeDeps, params: PlanParam
     for (const x of sFolders) sNameCount.set(x.name, (sNameCount.get(x.name) ?? 0) + 1);
     for (const x of sFolders) {
       if ((sNameCount.get(x.name) ?? 0) > 1) blockers.push({ code: 'source-same-name-multiple', id: x.id });
+    }
+
+    // Sに同名の子が無い統合先の子フォルダはmergePairで再帰されないため、配下のショートカットをここで収集する
+    for (const y of dFolders) {
+      if (!sFolders.some((x) => x.name === y.name)) await collectTargetOnlyShortcuts(y.id);
     }
 
     for (const x of sFolders) {

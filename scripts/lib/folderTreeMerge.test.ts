@@ -851,3 +851,13 @@ test('plan阻害: 複数親のショートカットはmulti-parent(参照先が�
   const codes = await blockerCodes([...baseFiles(), shortcut('S-sc', ['S', 'OTHER'], 'S-B')]);
   assert.ok(codes.includes('multi-parent'));
 });
+
+test('plan阻害: 統合先のみのサブツリー(深い階層)にあるショートカットがtrashされる統合元フォルダを指す場合も検知する', async () => {
+  const files = [...baseFiles(), folder('D-C-1', '孫', ['D-C']), shortcut('D-C-1-sc', ['D-C-1'], 'S-A')];
+  assert.ok((await blockerCodes(files)).includes('shortcut-to-trashed-folder'));
+});
+
+test('plan: 統合先のみのサブツリー内のショートカットが影響を受けないフォルダを指すなら阻害要因にならない', async () => {
+  const files = [...baseFiles(), folder('D-C-1', '孫', ['D-C']), shortcut('D-C-1-sc', ['D-C-1'], 'D-C')];
+  assert.deepEqual((await planOf(setup(files).deps)).blockers, []);
+});
