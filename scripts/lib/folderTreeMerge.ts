@@ -308,7 +308,8 @@ export async function planFolderTreeMerge(deps: TreeMergeDeps, params: PlanParam
 
   await mergePair(source, params.rootFolderId, target);
 
-  const refs = await deps.claimStore.countClaimsReferencing([...mergedSourceIds, ...movedFolderIds]);
+  const claimCheckFolderIds = [...mergedSourceIds, ...movedFolderIds];
+  const refs = await deps.claimStore.countClaimsReferencing(claimCheckFolderIds);
   const refCount = refs.byParentId + refs.byFolderId;
   if (refCount > 0) blockers.push({ code: 'claims-reference-source-tree', count: refCount });
 
@@ -330,6 +331,7 @@ export async function planFolderTreeMerge(deps: TreeMergeDeps, params: PlanParam
     targetFolderId: target.id,
     rootClaim,
     ops,
+    claimCheckFolderIds,
     blockers,
     summary: { fileMoves, folderMoves, folderTrashes, sameNameFileCount, visitedSourceFolderCount: visited },
     googleapisLockfileVersion: params.lockfile?.version,
@@ -396,7 +398,8 @@ export async function executeFolderTreeMerge(
   };
   const finish = (status: FolderTreeMergeStatus, pendingOps = 0, appliedOps = 0): ExecuteResult => {
     manifest.status = status;
-    if (options.execute) options.onProgress?.(manifest);
+    // 書込みopを1件も記録していない終了(拒否・ドリフト停止等)では、空のmanifestで既存の記録を上書きさせない
+    if (options.execute && manifest.entries.length > 0) options.onProgress?.(manifest);
     return { status, manifest, pendingOps, appliedOps };
   };
 
@@ -425,8 +428,7 @@ export async function executeFolderTreeMerge(
   }
 
   // plan後に統合元ツリーを参照するclaimが新規作成されていないか再確認(書込み前)
-  const treeIds = plan.ops.flatMap((o) => (o.kind === 'move-file' ? [] : [o.folderId]));
-  const refsNow = await deps.claimStore.countClaimsReferencing(treeIds);
+  const refsNow = await deps.claimStore.countClaimsReferencing(plan.claimCheckFolderIds);
   if (refsNow.byParentId + refsNow.byFolderId > 0) {
     options.logError?.(`claims-reference-source-tree-at-execute: count=${refsNow.byParentId + refsNow.byFolderId}`);
     return finish('aborted-drift');

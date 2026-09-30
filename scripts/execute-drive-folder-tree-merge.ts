@@ -108,6 +108,13 @@ async function main(): Promise<number> {
     return 2;
   }
 
+  // 既存のmanifestは(再実行・拒否で上書きされないよう)退避してから書き出す。手動復旧の入力になる
+  if (shouldExecute && fs.existsSync(manifestOutFile)) {
+    const backup = `${manifestOutFile}.prev-${Date.now()}`;
+    fs.renameSync(manifestOutFile, backup);
+    console.log(`既存のmanifestを退避しました: ${backup}`);
+  }
+
   const drive = await getDriveClient();
   const claimStore = buildFirestoreClaimStore(admin.firestore(), {
     FOLDER_LOCKS_COLLECTION: claimFns.FOLDER_LOCKS_COLLECTION,
@@ -130,7 +137,7 @@ async function main(): Promise<number> {
     }
   );
 
-  if (shouldExecute) {
+  if (shouldExecute && manifest.entries.length > 0) {
     fs.writeFileSync(manifestOutFile, JSON.stringify(manifest, null, 2));
     console.log(`Manifestを書き出しました: ${manifestOutFile}`);
   }

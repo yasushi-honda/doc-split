@@ -747,6 +747,7 @@ test('parseFolderTreeMergePlan: 手編集・破損したplanは拒否する(内�
     rootFolderId: (p) => (p.rootFolderId = ''),
     rootClaim: (p) => (p.rootClaim = { folderId: 'D' }),
     blockers: (p) => delete p.blockers,
+    claimCheckFolderIds: (p) => delete p.claimCheckFolderIds,
     summary: (p) => (p.summary.fileMoves = -1),
     ops: (p) => (p.ops = 'x'),
     'op.kind': (p) => (p.ops[0].kind = 'delete-folder'),
@@ -773,4 +774,30 @@ test('parseFolderTreeMergeApproval: 欠落・負数・非整数は拒否する',
 test('終了コード: completed/already-completed/dry-runだけが0で、それ以外は3', () => {
   const zero = Object.entries(FOLDER_TREE_MERGE_EXIT_CODE).filter(([, c]) => c === 0).map(([s]) => s).sort();
   assert.deepEqual(zero, ['already-completed', 'completed', 'dry-run']);
+});
+
+test('plan: claimCheckFolderIdsに統合元ツリーの全フォルダ(Sのみサブツリーの子孫を含む)が入る', async () => {
+  const files = [...baseFiles(), folder('S-B-1', '孫', ['S-B']), folder('S-B-2', 'ひ孫', ['S-B-1'])];
+  const plan = await planOf(setup(files).deps);
+  assert.deepEqual([...plan.claimCheckFolderIds].sort(), ['S', 'S-A', 'S-B', 'S-B-1', 'S-B-2']);
+});
+
+test('execute: plan後にSのみサブツリーの孫を参照するclaimが作られていても、書込み前に停止する', async () => {
+  const files = [...baseFiles(), folder('S-B-1', '孫', ['S-B'])];
+  const { deps, fake, claim } = setup(files);
+  const { plan, approval } = await planAndApproval(deps);
+  claim.referencedIds.add('S-B-1');
+  const r = await executeFolderTreeMerge(deps, plan, approval, { execute: true });
+  assert.equal(r.status, 'aborted-drift');
+  assert.equal(fake.updateCalls.length, 0);
+});
+
+test('execute: 書込みopを1件も記録していない拒否・停止では、manifestを保存しない(既存の記録を上書きしない)', async () => {
+  const { deps, fake } = setup();
+  const { plan, approval } = await planAndApproval(deps);
+  (fake.files.find((f) => f.id === 'S-f0') as FakeTreeFile).parents = ['ELSEWHERE'];
+  let saved = 0;
+  const r = await executeFolderTreeMerge(deps, plan, approval, { execute: true, onProgress: () => (saved += 1) });
+  assert.equal(r.status, 'aborted-drift');
+  assert.equal(saved, 0);
 });

@@ -72,6 +72,8 @@ export interface FolderTreeMergePlan {
   targetFolderId: string;
   rootClaim: RootClaimFence;
   ops: TreeMergeOp[];
+  /** planで「参照するclaimが無い」ことを確認した統合元ツリーのフォルダID(再親付けサブツリーの子孫を含む)。executeが同じ集合で再検査する。 */
+  claimCheckFolderIds: string[];
   blockers: TreeMergeBlocker[];
   summary: FolderTreeMergeSummary;
   googleapisLockfileVersion?: string;
@@ -162,6 +164,7 @@ export function parseFolderTreeMergePlan(raw: unknown): FolderTreeMergePlan {
   }
   const rc = raw.rootClaim;
   if (!isObj(rc) || !isStr(rc.folderId) || !isStr(rc.divergentReason) || typeof rc.updateTimeMs !== 'number') bad('rootClaim');
+  if (!Array.isArray(raw.claimCheckFolderIds) || !raw.claimCheckFolderIds.every(isStr)) bad('claimCheckFolderIds');
   if (!Array.isArray(raw.blockers) || !raw.blockers.every((b) => isObj(b) && isStr(b.code))) bad('blockers');
   const sm = raw.summary;
   if (!isObj(sm) || !['fileMoves', 'folderMoves', 'folderTrashes', 'sameNameFileCount', 'visitedSourceFolderCount'].every((k) => isCount(sm[k]))) {
