@@ -97,6 +97,9 @@ on:
           - audit-drive-sibling-duplicates
           - execute-drive-sibling-merge --dry-run
           - execute-drive-sibling-merge --execute
+          - plan-drive-folder-tree-merge
+          - execute-drive-folder-tree-merge --dry-run
+          - execute-drive-folder-tree-merge --execute
           - classify-collision-docs
           - setup-collision-fixture --dev
           - setup-collision-fixture --dev --cleanup
@@ -307,7 +310,7 @@ on:
         type: string
         default: ''
       exec_args_json:
-        description: 'execute-collision-migration: JSON {"planRunId":"<classify run id>","approvedOperationIds":["op-0001",...]} / investigate-issue811-root-cause: JSON {"folderIds":[...],"docIds":[...]} / classify-drive-folder-duplicates: JSON {"canonicalFolderId":"...","duplicateFolderIds":["id1","id2"]} / execute-drive-folder-merge: JSON {"planRunId":"<classify-drive-folder-duplicates run id>","approvedOperationIds":["op-0001",...]} / rollback-drive-folder-merge: JSON {"manifestRunId":"<execute-drive-folder-merge run id>","approvedOperationIds":["op-0001",...]}(approvedOperationIds省略時はmanifest全件を対象) / execute-drive-export-repair: JSON {"planRunId":"<classify-drive-export-drift run id>","expectedTotal":488,"acknowledgeRestoreFolders":false}(planRunId必須、expectedTotal/acknowledgeRestoreFoldersは省略可) / diagnose-drive-folder-duplicate-causality: JSON {"folderIds":["id1","id2",...]} / compare-drive-folder-pairs: JSON {"pairs":[["idA","idB"],...]}(A=app作成側/B=人作成側、フォルダIDのみ。read-only、出力は件数のみでファイル名は含まない) / execute-drive-claim-resync: JSON {"planRunId":"<classify-drive-claim-divergence run id>","approvedOperations":{"op-0001":{"mode":"restore-expected"},"op-0002":{"mode":"release-claim","acknowledgedStrandedFiles":0}}}(modeはrestore-expected/release-claim/finalize-resolvedのいずれか、release-claimでdirectChildCount>0の場合のみacknowledgedStrandedFilesが必須) / execute-drive-sibling-merge: JSON {"planRunId":"<audit-drive-sibling-duplicates run id>","approvedGroupIds":["parentId:name",...]}(groupIdはaudit-drive-sibling-duplicatesが出力するplan-output.jsonのgroups[].groupIdをそのまま指定)'
+        description: 'execute-collision-migration: JSON {"planRunId":"<classify run id>","approvedOperationIds":["op-0001",...]} / investigate-issue811-root-cause: JSON {"folderIds":[...],"docIds":[...]} / classify-drive-folder-duplicates: JSON {"canonicalFolderId":"...","duplicateFolderIds":["id1","id2"]} / execute-drive-folder-merge: JSON {"planRunId":"<classify-drive-folder-duplicates run id>","approvedOperationIds":["op-0001",...]} / rollback-drive-folder-merge: JSON {"manifestRunId":"<execute-drive-folder-merge run id>","approvedOperationIds":["op-0001",...]}(approvedOperationIds省略時はmanifest全件を対象) / execute-drive-export-repair: JSON {"planRunId":"<classify-drive-export-drift run id>","expectedTotal":488,"acknowledgeRestoreFolders":false}(planRunId必須、expectedTotal/acknowledgeRestoreFoldersは省略可) / diagnose-drive-folder-duplicate-causality: JSON {"folderIds":["id1","id2",...]} / compare-drive-folder-pairs: JSON {"pairs":[["idA","idB"],...]}(A=app作成側/B=人作成側、フォルダIDのみ。read-only、出力は件数のみでファイル名は含まない) / execute-drive-claim-resync: JSON {"planRunId":"<classify-drive-claim-divergence run id>","approvedOperations":{"op-0001":{"mode":"restore-expected"},"op-0002":{"mode":"release-claim","acknowledgedStrandedFiles":0}}}(modeはrestore-expected/release-claim/finalize-resolvedのいずれか、release-claimでdirectChildCount>0の場合のみacknowledgedStrandedFilesが必須) / plan-drive-folder-tree-merge: JSON {"sourceFolderId":"<統合元(消える側)>","targetFolderId":"<統合先(残す側)>"}(read-only、出力は件数とIDのみ) / execute-drive-folder-tree-merge: JSON {"planRunId":"<plan-drive-folder-tree-merge run id>","expectedFileMoves":N,"expectedFolderMoves":N,"expectedFolderTrashes":N}(件数はplan出力と一致必須) / execute-drive-sibling-merge: JSON {"planRunId":"<audit-drive-sibling-duplicates run id>","approvedGroupIds":["parentId:name",...]}(groupIdはaudit-drive-sibling-duplicatesが出力するplan-output.jsonのgroups[].groupIdをそのまま指定)'
         required: false
         type: string
         default: ''
@@ -943,6 +946,69 @@ jobs:
             exit 1
           fi
 
+      - name: Parse execute-drive-folder-tree-merge args
+        # 再帰統合(同名の兄弟フォルダ2つ)。exec_args_jsonからplanRunId(plan-drive-folder-tree-merge
+        # run id)と承認件数(plan出力と一致必須)を抽出する。件数はplan artifactと突合してから承認JSONにする。
+        id: parse_exec_tree
+        if: ${{ startsWith(github.event.inputs.script, 'execute-drive-folder-tree-merge') }}
+        env:
+          EXEC_ARGS_JSON: ${{ github.event.inputs.exec_args_json }}
+        run: |
+          set -euo pipefail
+          if [ -z "$EXEC_ARGS_JSON" ]; then
+            echo "ERROR: exec_args_json is required when script is execute-drive-folder-tree-merge" >&2
+            exit 1
+          fi
+          if ! echo "$EXEC_ARGS_JSON" | jq empty 2>/dev/null; then
+            echo "ERROR: exec_args_json is not valid JSON" >&2
+            exit 1
+          fi
+          PLAN_RUN_ID=$(echo "$EXEC_ARGS_JSON" | jq -r '.planRunId // empty')
+          if ! echo "$PLAN_RUN_ID" | grep -qE '^[0-9]+$'; then
+            echo "ERROR: planRunId must be a numeric run id (got: $PLAN_RUN_ID)" >&2
+            exit 1
+          fi
+          for KEY in expectedFileMoves expectedFolderMoves expectedFolderTrashes; do
+            if [ "$(echo "$EXEC_ARGS_JSON" | jq -r --arg k "$KEY" '(.[$k] // null) | type == "number" and . >= 0 and . == floor')" != "true" ]; then
+              echo "ERROR: exec_args_json must contain $KEY (non-negative integer)" >&2
+              exit 1
+            fi
+          done
+          echo "plan_run_id=$PLAN_RUN_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Download plan-drive-folder-tree-merge plan artifact
+        if: ${{ startsWith(github.event.inputs.script, 'execute-drive-folder-tree-merge') }}
+        uses: actions/download-artifact@v4
+        with:
+          name: plan-drive-folder-tree-merge-plan-${{ github.event.inputs.environment }}-${{ steps.parse_exec_tree.outputs.plan_run_id }}
+          path: ${{ github.workspace }}/.tree-merge-plan
+          run-id: ${{ steps.parse_exec_tree.outputs.plan_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate approval JSON from folder tree merge plan + exec_args_json
+        if: ${{ startsWith(github.event.inputs.script, 'execute-drive-folder-tree-merge') }}
+        env:
+          EXEC_ARGS_JSON: ${{ github.event.inputs.exec_args_json }}
+        run: |
+          set -euo pipefail
+          PLAN_FILE="${GITHUB_WORKSPACE}/.tree-merge-plan/plan-output.json"
+          APPROVAL_FILE="${GITHUB_WORKSPACE}/.tree-merge-plan/approval.json"
+          if [ ! -f "$PLAN_FILE" ]; then
+            echo "ERROR: plan-output.json not found at $PLAN_FILE" >&2
+            exit 1
+          fi
+          PLAN_ID=$(jq -r '.planId' "$PLAN_FILE")
+          echo "$EXEC_ARGS_JSON" | jq --arg planId "$PLAN_ID" '{planId: $planId, expectedFileMoves: .expectedFileMoves, expectedFolderMoves: .expectedFolderMoves, expectedFolderTrashes: .expectedFolderTrashes}' > "$APPROVAL_FILE"
+          echo "=== Generated approval.json ==="
+          cat "$APPROVAL_FILE"
+          echo "==============================="
+          # 承認件数がplanと一致しなければ実行前に停止(件数を読まずに承認する事故の防止)
+          MISMATCH=$(jq --slurpfile a "$APPROVAL_FILE" '(.summary.fileMoves != $a[0].expectedFileMoves) or (.summary.folderMoves != $a[0].expectedFolderMoves) or (.summary.folderTrashes != $a[0].expectedFolderTrashes)' "$PLAN_FILE")
+          if [ "$MISMATCH" != "false" ]; then
+            echo "ERROR: approved counts do not match plan summary" >&2
+            exit 1
+          fi
+
       - name: Parse execute-drive-export-repair args
         # Issue #811/#823 remediation Phase 2b: exec_args_json から
         # planRunId(classify-drive-export-drift run id、必須)・expectedTotal(任意、H5の
@@ -1360,6 +1426,36 @@ jobs:
                 --plan "${GITHUB_WORKSPACE}/.sibling-merge-plan/plan-output.json" \
                 --approval "${GITHUB_WORKSPACE}/.sibling-merge-plan/approval.json" \
                 --manifest-out "${GITHUB_WORKSPACE}/scripts/manifest-output-sibling.json" \
+                $SCRIPT_ARGS
+          elif [ "$SCRIPT_NAME" = "plan-drive-folder-tree-merge" ]; then
+            # 同名の兄弟フォルダ2つの再帰統合Plan生成(read-only)。出力は件数とIDのみ(PII対策)。
+            if [ -z "$EXEC_ARGS_JSON" ] || ! echo "$EXEC_ARGS_JSON" | jq empty 2>/dev/null; then
+              echo "ERROR: exec_args_json (valid JSON) is required for plan-drive-folder-tree-merge" >&2
+              exit 1
+            fi
+            SRC_ID=$(echo "$EXEC_ARGS_JSON" | jq -r '.sourceFolderId // empty')
+            TGT_ID=$(echo "$EXEC_ARGS_JSON" | jq -r '.targetFolderId // empty')
+            if ! echo "$SRC_ID" | grep -qE '^[A-Za-z0-9_-]+$' || ! echo "$TGT_ID" | grep -qE '^[A-Za-z0-9_-]+$'; then
+              echo "ERROR: sourceFolderId and targetFolderId must match ^[A-Za-z0-9_-]+$" >&2
+              exit 1
+            fi
+            cd scripts
+            NODE_PATH=../functions/node_modules \
+              FIREBASE_PROJECT_ID="$PROJECT_ID" \
+              npx ts-node plan-drive-folder-tree-merge.ts \
+                --source-id "$SRC_ID" --target-id "$TGT_ID" \
+                --out "${GITHUB_WORKSPACE}/scripts/plan-output.json"
+          elif [ "$SCRIPT_NAME" = "execute-drive-folder-tree-merge" ]; then
+            # 承認制の再帰統合実行。plan + approvalは前段stepでartifact取得+生成。
+            # SCRIPT_ARGSは未指定(dry-run)または"--execute"。
+            cd scripts
+            NODE_PATH=../functions/node_modules \
+              FIREBASE_PROJECT_ID="$PROJECT_ID" \
+              npx ts-node execute-drive-folder-tree-merge.ts \
+                --plan "${GITHUB_WORKSPACE}/.tree-merge-plan/plan-output.json" \
+                --approval "${GITHUB_WORKSPACE}/.tree-merge-plan/approval.json" \
+                --manifest-out "${GITHUB_WORKSPACE}/scripts/manifest-output-tree-merge.json" \
+                --actor "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
                 $SCRIPT_ARGS
           elif [ "$SCRIPT_NAME" = "setup-drive-folder-fixture" ]; then
             # Issue #811 Phase B: devリハーサル用fixture投入(ADR-0016 devリハーサル規律を踏襲)。
@@ -2543,6 +2639,26 @@ jobs:
         with:
           name: execute-drive-sibling-merge-manifest-${{ github.event.inputs.environment }}-${{ github.run_id }}
           path: scripts/manifest-output-sibling.json
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Upload plan-drive-folder-tree-merge plan artifact
+        # ログマスキングでplan JSONが欠落するためartifact経由で受け渡す(audit-drive-sibling-duplicatesと同型)。
+        if: ${{ github.event.inputs.script == 'plan-drive-folder-tree-merge' && always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: plan-drive-folder-tree-merge-plan-${{ github.event.inputs.environment }}-${{ github.run_id }}
+          path: scripts/plan-output.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload execute-drive-folder-tree-merge manifest artifact
+        # 部分成功からの再実行・手動復旧(rollback runbook)の入力になるためretentionを長めに取る。
+        if: ${{ startsWith(github.event.inputs.script, 'execute-drive-folder-tree-merge') && always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: execute-drive-folder-tree-merge-manifest-${{ github.event.inputs.environment }}-${{ github.run_id }}
+          path: scripts/manifest-output-tree-merge.json
           if-no-files-found: warn
           retention-days: 90
 

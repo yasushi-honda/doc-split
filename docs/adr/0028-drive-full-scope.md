@@ -55,6 +55,22 @@ decision-maker判断: 同一parent+nameの重複が既に存在する場合、ap
 自動処理しない。実装は`scripts/audit-drive-sibling-duplicates.ts`(read-only棚卸し)・
 `scripts/execute-drive-sibling-merge.ts`(承認制の統合実行)を参照。
 
+#### 例外(2026-09-30、decision-maker承認): 子フォルダを持つ同名2件は、claimの集中している側を残す
+
+manual-review扱いとしていた「両方が子フォルダを多数持つ同名2件」(kanameoneの`(root)/<担当ケアマネ名>`。
+人作成側が子フォルダ50件・claim 0件、app作成側が子フォルダ63件・配下のclaim 51件)には、
+上記の「人が作った側を残す」原則を適用しない。**claimが集中している側(app作成側)を残し、
+人作成側の中身を移す**。理由: 残す側に配下のclaimが集中していれば、書き換えるclaimは
+ルートの1件(divergent→resolved)だけで済む。逆向きにすると、app側配下の全階層のclaimを
+一括で無効化する新たな危険操作が必要になる。中身(ファイル・子フォルダ)は失われず、
+統合元のフォルダは改名+trashで30日間復元可能。
+
+この統合は再帰統合ツール(`scripts/plan-drive-folder-tree-merge.ts`(read-only)・
+`scripts/execute-drive-folder-tree-merge.ts`(承認制))で行う。plan時に、統合元ツリーを
+参照するclaimが1件でもある場合・同名の子が複数ある場合・ショートカット/複数親/権限不足・
+`docSplitDocId`重複などは阻害要因として実行を拒否する。手順・手動復旧は
+`docs/context/drive-folder-tree-merge-runbook.md`を参照。
+
 ### 3. kanameoneの同意画面(外部・本番公開)は、内部化を優先する
 
 decision-maker判断: プロジェクトがkanameone.com組織配下であることを確認できれば、
@@ -117,4 +133,5 @@ OAuth同意画面のユーザータイプを「内部」へ切り替える(審�
   Decision 2を置換する)
 - `docs/context/monitoring-setup.md`(棚卸し・統合の運用SOP)
 - 関連コード: `functions/src/utils/driveAuth.ts` / `functions/src/drive/exchangeDriveAuthCode.ts` /
-  `scripts/audit-drive-sibling-duplicates.ts` / `scripts/execute-drive-sibling-merge.ts`
+  `scripts/audit-drive-sibling-duplicates.ts` / `scripts/execute-drive-sibling-merge.ts` /
+  `scripts/plan-drive-folder-tree-merge.ts` / `scripts/execute-drive-folder-tree-merge.ts`(Decision 2の例外)
