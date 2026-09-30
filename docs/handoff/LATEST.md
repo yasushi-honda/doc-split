@@ -128,7 +128,7 @@ Drive OAuthスコープを`drive.file`→`drive`フルスコープへ拡張し�
 
 ## 現在のフェーズ
 
-**ミッション1: kanameone・cocoroへのGoogle Drive連携Phase1本番展開**（GOAL.md準拠、2026-07-23開始）。承認済み計画: `/Users/yyyhhh/.claude/plans/witty-drifting-hoare.md`。cocoroはFunctions/Hostingデプロイ完了、Drive未接続(Phase C=クライアント自身のOAuth接続、代行不可)で外部依存待ち。kanameoneはOAuth再連携完了(2026-09-28)、重複audit・merge候補14グループ統合・再auditまで完了(2026-09-30)。**`driveExport` flag は9/26にOFFにして以降、約4日間確定書類がDrive未保存だった(9/30にクライアント指摘で発覚)。9/30に flag ON・backfill(404件)で復旧済み、スイープで約10.3時間で解消見込み(完了確認は次セッション、GOAL.md手順6参照)**。残りはmanual-review 8件の判断(**`(root)/森奈穂美`は既存ツールで統合不可(classifyはゴミ箱済み重複が前提)、書類11件が止まる見込み(上限)、選択肢Cを採用=backfill完了後に実停止件数を見て判断、詳細はGOAL.md手順5配下**。平出配下7組は照合済み: app側とは別物でA→B統合ならデータ保全、子フォルダ3組は中身未照合。`(root)/森奈穂美`は未調査。照合スクリプトはPR #1092でマージ済み)。
+**ミッション1: kanameone・cocoroへのGoogle Drive連携Phase1本番展開**（GOAL.md準拠、2026-07-23開始）。承認済み計画: `/Users/yyyhhh/.claude/plans/witty-drifting-hoare.md`。cocoroはFunctions/Hostingデプロイ完了、Drive未接続(Phase C=クライアント自身のOAuth接続、代行不可)で外部依存待ち。kanameoneはOAuth再連携完了(2026-09-28)、重複audit・merge候補14グループ統合・再auditまで完了(2026-09-30)。**`driveExport` flag は9/26にOFFにして以降、約4日間確定書類がDrive未保存だった(9/30にクライアント指摘で発覚)。9/30に flag ON・backfill(404件)で復旧済み、スイープで約10.3時間で解消見込み(完了確認は次セッション、GOAL.md手順6参照)**。残りはmanual-review 8件の判断(**`(root)/森奈穂美`は既存ツールで統合不可(classifyはゴミ箱済み重複が前提)、書類11件が止まる見込み(上限)、選択肢Cを採用=backfill完了後に実停止件数を見て判断、詳細はGOAL.md手順5配下**。平出配下7組は照合済み: app側とは別物でA→B統合ならデータ保全、子フォルダ3組は中身未照合。照合スクリプトはPR #1092でマージ済み)。
 
 **ミッション2: ADR-0027 Sarashina要約モデル移行**（Gemini依存脱却、Sarashina2.2-3B自前ホスティング）。PR0〜PR3完了(2026-09-27、上記セッションサマリ参照)。現状は**全経路dead code、本番挙動不変**。PR4（Functions実配線）以降は新機能のため新規plan modeが必要、decision-makerの着手指示待ち。
 
