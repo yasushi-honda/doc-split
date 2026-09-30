@@ -1435,11 +1435,11 @@ jobs:
               echo "ERROR: exec_args_json (valid JSON) is required for inspect-drive-items" >&2
               exit 1
             fi
-            IDS=$(echo "$EXEC_ARGS_JSON" | jq -r '.ids // [] | join(",")')
-            if ! echo "$IDS" | grep -qE '^[A-Za-z0-9_-]+(,[A-Za-z0-9_-]+)*$'; then
-              echo "ERROR: exec_args_json must contain non-empty ids array matching ^[A-Za-z0-9_-]+$" >&2
+            if ! echo "$EXEC_ARGS_JSON" | jq -e '(.ids | type == "array") and (.ids | length >= 1 and length <= 20) and (.ids | all(type == "string" and test("^[A-Za-z0-9_-]+$")))' >/dev/null 2>&1; then
+              echo "ERROR: exec_args_json must contain ids: array of 1-20 strings matching ^[A-Za-z0-9_-]+$" >&2
               exit 1
             fi
+            IDS=$(echo "$EXEC_ARGS_JSON" | jq -r '.ids | join(",")')
             cd scripts
             NODE_PATH=../functions/node_modules \
               FIREBASE_PROJECT_ID="$PROJECT_ID" \

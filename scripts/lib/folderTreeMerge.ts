@@ -328,7 +328,7 @@ export async function planFolderTreeMerge(deps: TreeMergeDeps, params: PlanParam
   // ショートカットが「空にしてtrashされる統合元フォルダ」を指すと、統合後にリンク切れになる。参照先が不明な場合も安全側で拒否する
   const trashedFolderIds = new Set(mergedSourceIds);
   for (const sc of shortcuts) {
-    if (!sc.targetId) blockers.push({ code: 'shortcut', id: sc.id });
+    if (!sc.targetId) blockers.push({ code: 'shortcut-target-unknown', id: sc.id });
     else if (trashedFolderIds.has(sc.targetId)) blockers.push({ code: 'shortcut-to-trashed-folder', id: sc.id });
   }
 

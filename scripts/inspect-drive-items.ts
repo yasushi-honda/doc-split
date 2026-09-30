@@ -35,23 +35,34 @@ admin.initializeApp({ projectId });
 
 const FIELDS = 'id,mimeType,trashed,parents,shortcutDetails(targetId,targetMimeType)';
 
-async function meta(drive: drive_v3.Drive, id: string): Promise<drive_v3.Schema$File | null> {
+type MetaResult = { ok: true; file: drive_v3.Schema$File } | { ok: false; reason: string };
+
+/** 404と一時エラー(429/5xx等)を区別する。リンク切れの判定に使うため、失敗理由をコード付きで返す。 */
+async function meta(drive: drive_v3.Drive, id: string): Promise<MetaResult> {
   try {
-    return (await drive.files.get({ fileId: id, fields: FIELDS, supportsAllDrives: true })).data;
-  } catch {
-    return null;
+    return { ok: true, file: (await drive.files.get({ fileId: id, fields: FIELDS, supportsAllDrives: true })).data };
+  } catch (err) {
+    return { ok: false, reason: describeErrorSafely(err) };
   }
 }
 
 /** 親をたどったID連鎖(自分を除く)。複数親は最初の親を辿り、複数親であること自体は別途表示する。 */
-async function ancestry(drive: drive_v3.Drive, first: drive_v3.Schema$File): Promise<string[]> {
+async function ancestry(drive: drive_v3.Drive, first: drive_v3.Schema$File): Promise<string> {
   const chain: string[] = [];
   let cur: drive_v3.Schema$File | null = first;
   for (let i = 0; i < MAX_DEPTH && cur?.parents?.[0]; i++) {
     chain.push(cur.parents[0]);
-    cur = await meta(drive, cur.parents[0]);
+    const r: MetaResult = await meta(drive, cur.parents[0]);
+    if (!r.ok) return `${chain.join(' > ')} > (途中で取得失敗: ${r.reason})`;
+    cur = r.file;
   }
-  return chain;
+  return cur?.parents?.[0] ? `${chain.join(' > ')} > (${MAX_DEPTH}段で打ち切り)` : chain.join(' > ');
+}
+
+/** 複数親の項目は、最初の親以外も含めて全ての親IDを示す(統合対象の枝を見落とさないため)。 */
+function parentsOf(f: drive_v3.Schema$File): string {
+  const p = f.parents ?? [];
+  return p.length > 1 ? `parents=${p.length}件(${p.join(',')})` : `parents=${p.length}件`;
 }
 
 function kind(mime?: string | null): string {
@@ -64,24 +75,24 @@ async function main(): Promise<void> {
   const { getDriveClient } = await import('../functions/src/utils/driveAuth');
   const drive = await getDriveClient();
   for (const id of ids) {
-    const m = await meta(drive, id);
-    if (!m) {
-      console.log(`${id}: 取得不可(404または権限なし)`);
+    const r = await meta(drive, id);
+    if (!r.ok) {
+      console.log(`${id}: 取得不可(${r.reason})`);
       continue;
     }
-    console.log(
-      `${id}: ${kind(m.mimeType)} trashed=${!!m.trashed} parents=${(m.parents ?? []).length}件 ` +
-        `親の連鎖=[${(await ancestry(drive, m)).join(' > ')}]`
-    );
+    const m = r.file;
+    console.log(`${id}: ${kind(m.mimeType)} trashed=${!!m.trashed} ${parentsOf(m)} 親の連鎖=[${await ancestry(drive, m)}]`);
     const t = m.shortcutDetails;
     if (t?.targetId) {
-      const tm = await meta(drive, t.targetId);
+      const tr = await meta(drive, t.targetId);
       console.log(
         `  → 参照先 ${t.targetId}: ${kind(t.targetMimeType)} ` +
-          (tm
-            ? `trashed=${!!tm.trashed} parents=${(tm.parents ?? []).length}件 親の連鎖=[${(await ancestry(drive, tm)).join(' > ')}]`
-            : '取得不可(404または権限なし)')
+          (tr.ok
+            ? `trashed=${!!tr.file.trashed} ${parentsOf(tr.file)} 親の連鎖=[${await ancestry(drive, tr.file)}]`
+            : `取得不可(${tr.reason})`)
       );
+    } else if (m.mimeType === 'application/vnd.google-apps.shortcut') {
+      console.log('  → 参照先の情報が取得できませんでした(shortcutDetails無し)');
     }
   }
 }

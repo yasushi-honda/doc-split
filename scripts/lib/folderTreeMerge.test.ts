@@ -225,7 +225,7 @@ test('plan阻害: 参照先不明のショートカット・複数親・移動�
     file('S-nm', 'nm', ['S'], { capabilities: { canMoveItemWithinDrive: false } }),
   ];
   const codes = await blockerCodes(files);
-  assert.ok(codes.includes('shortcut'));
+  assert.ok(codes.includes('shortcut-target-unknown'));
   assert.ok(codes.includes('multi-parent'));
   assert.ok(codes.includes('cannot-move'));
 });
@@ -690,7 +690,7 @@ test('plan阻害: Sのみの子フォルダ配下の参照先不明ショート�
     file('S-B-mp', 'mp', ['S-B', 'OTHER']),
   ];
   const codes = await blockerCodes(files);
-  assert.ok(codes.includes('shortcut'));
+  assert.ok(codes.includes('shortcut-target-unknown'));
   assert.ok(codes.includes('multi-parent'));
 });
 
