@@ -8,7 +8,7 @@
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { compareFolderChildren, type FolderChild } from './compareFolderPairs';
+import { compareFolderChildren, deriveCaveats, type FolderChild } from './compareFolderPairs';
 
 const FOLDER_MIME = 'application/vnd.google-apps.folder';
 const PDF_MIME = 'application/pdf';
@@ -102,4 +102,44 @@ test('子フォルダは照合対象外で件数だけ数える(ファイル件�
 test('結果にファイル名が含まれない(PII対策)', () => {
   const r = compareFolderChildren([file('山田太郎_ケアプラン.pdf', 'm1')], [file('山田太郎_ケアプラン.pdf', 'm2')]);
   assert.equal(JSON.stringify(r).includes('山田太郎'), false);
+});
+
+test('md5が空文字・undefinedでもmd5無しとして名前+mimeTypeで照合する', () => {
+  const emptyMd5: FolderChild = { name: 'x', mimeType: PDF_MIME, md5Checksum: '' };
+  const noMd5Prop: FolderChild = { name: 'x', mimeType: PDF_MIME };
+  const r = compareFolderChildren([emptyMd5], [noMd5Prop]);
+  assert.equal(r.both, 1);
+  assert.equal(r.matchedByNameAndMime, 1);
+  assert.equal(r.matchedByMd5, 0);
+});
+
+test('同名でも片方md5あり・片方md5無しは別ファイル扱い(内容確認不能なので保守的に片側のみ)', () => {
+  const r = compareFolderChildren([file('x', 'm1')], [file('x', null)]);
+  assert.equal(r.both, 0);
+  assert.equal(r.onlyA, 1);
+  assert.equal(r.onlyB, 1);
+});
+
+test('deriveCaveats: 名前+mimeType一致があればweak-match(内容未検証)を付ける', () => {
+  const r = compareFolderChildren([file('議事録', null, DOC_MIME)], [file('議事録', null, DOC_MIME)]);
+  assert.deepEqual(deriveCaveats(r), ['weak-match']);
+});
+
+test('deriveCaveats: 子フォルダがあればhas-child-folders(中身は未照合)を付ける', () => {
+  const sub: FolderChild = { name: 'sub', mimeType: FOLDER_MIME, md5Checksum: null };
+  assert.deepEqual(deriveCaveats(compareFolderChildren([file('a.pdf', 'm1'), sub], [file('a.pdf', 'm1')])), [
+    'has-child-folders',
+  ]);
+  // B側にだけ子フォルダがある場合も付く
+  assert.deepEqual(deriveCaveats(compareFolderChildren([file('a.pdf', 'm1')], [file('a.pdf', 'm1'), sub])), [
+    'has-child-folders',
+  ]);
+});
+
+test('deriveCaveats: 両方あれば両方付き、何も無ければ空配列', () => {
+  const sub: FolderChild = { name: 'sub', mimeType: FOLDER_MIME, md5Checksum: null };
+  const both = compareFolderChildren([file('d', null, DOC_MIME), sub], [file('d', null, DOC_MIME)]);
+  assert.deepEqual(deriveCaveats(both), ['weak-match', 'has-child-folders']);
+  assert.deepEqual(deriveCaveats(compareFolderChildren([file('a.pdf', 'm1')], [file('b.pdf', 'm1')])), []);
+  assert.deepEqual(deriveCaveats(compareFolderChildren([], [])), []);
 });

@@ -1254,6 +1254,10 @@ jobs:
               echo "ERROR: each pair must match idA:idB with ^[A-Za-z0-9_-]+$ (got: $PAIRS)" >&2
               exit 1
             fi
+            if [ "$(echo "$EXEC_ARGS_JSON" | jq -r '[.pairs[] | select(.[0] == .[1])] | length')" != "0" ]; then
+              echo "ERROR: a pair must not have identical idA and idB (self-comparison always matches)" >&2
+              exit 1
+            fi
             cd scripts
             NODE_PATH=../functions/node_modules \
               FIREBASE_PROJECT_ID="$PROJECT_ID" \

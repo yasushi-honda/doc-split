@@ -16,6 +16,13 @@
  * 人作成のフォルダ/ファイルが不可視のまま「0件・片側のみ」と誤った結果を返すため実行を拒否する
  * (audit-drive-sibling-duplicates.tsと同型)。各IDは有効(未ゴミ箱)なフォルダであることを確認する。
  *
+ * 結果の読み方(統合可否の判断前に必ず確認):
+ * - 照合対象はOAuth主体から「見える」直下ファイルのみ。共有されていない子は検知できない。
+ * - caveats: 'weak-match'(md5無しを名前+mimeTypeだけで一致扱い、内容未検証) /
+ *   'has-child-folders'(子フォルダの中身は未照合)。空でない組は「onlyB=0」を安全と読まないこと。
+ * - 終了コード: 失敗した組(フォルダ確認失敗・API失敗・name/mimeType欠落要素)が1組でもあれば3、
+ *   全組成功で0。JSON出力は失敗時も先に書き出す。
+ *
  * 使用方法:
  *   FIREBASE_PROJECT_ID=docsplit-kanameone npx ts-node scripts/compare-drive-folder-pairs.ts \
  *     --pairs <idA:idB,idA2:idB2,...> --out /tmp/report.json
@@ -29,7 +36,13 @@
 import * as admin from 'firebase-admin';
 import * as fs from 'fs';
 import type { drive_v3 } from 'googleapis';
-import { compareFolderChildren, type FolderChild, type FolderCompareResult } from './lib/compareFolderPairs';
+import {
+  compareFolderChildren,
+  deriveCaveats,
+  type CompareCaveat,
+  type FolderChild,
+  type FolderCompareResult,
+} from './lib/compareFolderPairs';
 import { describeErrorSafely } from './lib/confirmedReplayStats';
 
 const projectId = process.env.FIREBASE_PROJECT_ID;
@@ -70,6 +83,10 @@ const pairs: Array<{ a: string; b: string }> = pairsRaw
       console.error(`--pairs の要素は "idA:idB"(英数字・_-のみ)で指定してください: ${s}`);
       process.exit(1);
     }
+    if (parts[0] === parts[1]) {
+      console.error(`--pairs の A と B に同一IDは指定できません(自己比較は常に一致になる): ${s}`);
+      process.exit(1);
+    }
     return { a: parts[0], b: parts[1] };
   });
 if (pairs.length === 0) {
@@ -84,11 +101,16 @@ interface PairReport {
   folderIdB: string;
   found: boolean;
   result?: FolderCompareResult;
+  caveats?: CompareCaveat[];
   error?: string;
 }
 
-async function listChildren(drive: drive_v3.Drive, parentId: string): Promise<FolderChild[]> {
+async function listChildren(
+  drive: drive_v3.Drive,
+  parentId: string
+): Promise<{ children: FolderChild[]; malformedCount: number }> {
   const out: FolderChild[] = [];
+  let malformedCount = 0;
   let pageToken: string | undefined;
   do {
     const res = await drive.files.list({
@@ -100,12 +122,15 @@ async function listChildren(drive: drive_v3.Drive, parentId: string): Promise<Fo
       includeItemsFromAllDrives: true,
     });
     for (const f of res.data.files ?? []) {
-      if (!f.name || !f.mimeType) continue;
+      if (!f.name || !f.mimeType) {
+        malformedCount += 1;
+        continue;
+      }
       out.push({ name: f.name, mimeType: f.mimeType, md5Checksum: f.md5Checksum ?? null });
     }
     pageToken = res.data.nextPageToken ?? undefined;
   } while (pageToken);
-  return out;
+  return { children: out, malformedCount };
 }
 
 /** 指定IDが有効(未ゴミ箱)なフォルダなら null、そうでなければ固定の理由コードを返す(名前は含めない)。 */
@@ -164,16 +189,23 @@ async function main(): Promise<void> {
       continue;
     }
     try {
-      const [childrenA, childrenB] = await Promise.all([
-        listChildren(drive, pair.a),
-        listChildren(drive, pair.b),
-      ]);
-      const result = compareFolderChildren(childrenA, childrenB);
-      reports.push({ folderIdA: pair.a, folderIdB: pair.b, found: true, result });
+      const [listA, listB] = await Promise.all([listChildren(drive, pair.a), listChildren(drive, pair.b)]);
+      const malformed = listA.malformedCount + listB.malformedCount;
+      if (malformed > 0) {
+        // name/mimeType欠落の要素は件数に反映できず過小評価になるため、成功扱いにしない
+        const error = `malformed-entries:${malformed}`;
+        reports.push({ folderIdA: pair.a, folderIdB: pair.b, found: false, error });
+        console.log(`⚠️  組${i + 1}: 取得失敗 (${error})`);
+        continue;
+      }
+      const result = compareFolderChildren(listA.children, listB.children);
+      const caveats = deriveCaveats(result);
+      reports.push({ folderIdA: pair.a, folderIdB: pair.b, found: true, result, caveats });
       console.log(
         `✅ 組${i + 1}: A(ファイル${result.aFileCount}/子フォルダ${result.aChildFolderCount}) ` +
           `B(ファイル${result.bFileCount}/子フォルダ${result.bChildFolderCount}) ` +
-          `共通${result.both} Aのみ${result.onlyA} Bのみ${result.onlyB}`
+          `共通${result.both} Aのみ${result.onlyA} Bのみ${result.onlyB}` +
+          (caveats.length > 0 ? ` ⚠️要確認:${caveats.join(',')}` : '')
       );
     } catch (err) {
       const message = describeErrorSafely(err);
@@ -193,6 +225,10 @@ async function main(): Promise<void> {
   fs.writeFileSync(outPath as string, JSON.stringify(output, null, 2));
   console.log('---');
   console.log(`完了: ${output.successCount}/${output.requestedCount}組成功。結果を書き込みました: ${outPath}`);
+  if (output.failedCount > 0) {
+    console.error(`❌ ${output.failedCount}組が未確認です。成功組の結果だけで判断せず、原因を解消して再実行してください。`);
+    process.exit(3);
+  }
 }
 
 main().catch((err) => {

@@ -81,3 +81,19 @@ export function compareFolderChildren(a: FolderChild[], b: FolderChild[]): Folde
     matchedByNameAndMime,
   };
 }
+
+export type CompareCaveat = 'weak-match' | 'has-child-folders';
+
+/**
+ * 「onlyB=0 でも B に固有データが無いとは言い切れない」理由を示す警告コードを返す。
+ * - weak-match: md5を持たないファイル(Googleドキュメント等)を名前+mimeTypeだけで一致扱いにしており、
+ *   内容が同一かは未検証
+ * - has-child-folders: 子フォルダの中身は照合していない(件数のみ)
+ * 警告が空でない組は、統合可否の判断前に人が中身を確認すること。
+ */
+export function deriveCaveats(r: FolderCompareResult): CompareCaveat[] {
+  const caveats: CompareCaveat[] = [];
+  if (r.matchedByNameAndMime > 0) caveats.push('weak-match');
+  if (r.aChildFolderCount + r.bChildFolderCount > 0) caveats.push('has-child-folders');
+  return caveats;
+}
