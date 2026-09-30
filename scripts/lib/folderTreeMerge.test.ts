@@ -217,15 +217,15 @@ test('plan阻害: 再親付け先に同名スロットのclaimが既にある', 
   assert.ok((await blockerCodes(baseFiles(), claim)).includes('claim-exists-at-target-slot'));
 });
 
-test('plan阻害: ショートカット・複数親・移動権限なし', async () => {
+test('plan阻害: 参照先不明のショートカット・複数親・移動権限なし', async () => {
   const files = [
     ...baseFiles(),
-    file('S-sc', 'sc', ['S'], { mimeType: SHORTCUT }),
+    file('S-sc', 'sc', ['S'], { mimeType: SHORTCUT }), // 参照先(shortcutDetails)が取れない
     file('S-mp', 'mp', ['S', 'OTHER']),
     file('S-nm', 'nm', ['S'], { capabilities: { canMoveItemWithinDrive: false } }),
   ];
   const codes = await blockerCodes(files);
-  assert.ok(codes.includes('shortcut'));
+  assert.ok(codes.includes('shortcut-target-unknown'));
   assert.ok(codes.includes('multi-parent'));
   assert.ok(codes.includes('cannot-move'));
 });
@@ -683,14 +683,14 @@ test('plan阻害: Sのみの子フォルダの孫を参照するclaimも検知�
   }
 });
 
-test('plan阻害: Sのみの子フォルダ配下のショートカット・複数親も検知する', async () => {
+test('plan阻害: Sのみの子フォルダ配下の参照先不明ショートカット・複数親も検知する', async () => {
   const files = [
     ...baseFiles(),
     file('S-B-sc', 'sc', ['S-B'], { mimeType: SHORTCUT }),
     file('S-B-mp', 'mp', ['S-B', 'OTHER']),
   ];
   const codes = await blockerCodes(files);
-  assert.ok(codes.includes('shortcut'));
+  assert.ok(codes.includes('shortcut-target-unknown'));
   assert.ok(codes.includes('multi-parent'));
 });
 
@@ -800,4 +800,64 @@ test('execute: 書込みopを1件も記録していない拒否・停止では�
   const r = await executeFolderTreeMerge(deps, plan, approval, { execute: true, onProgress: () => (saved += 1) });
   assert.equal(r.status, 'aborted-drift');
   assert.equal(saved, 0);
+});
+
+// ---------------------------------------------------------------- ショートカットの扱い(参照先がtrashされるかで判定)
+
+function shortcut(id: string, parents: string[], targetId?: string): FakeTreeFile {
+  return file(id, 'sc', parents, { mimeType: SHORTCUT, shortcutTargetId: targetId });
+}
+
+test('plan: 移動されるフォルダを指すショートカットは阻害要因にならず、通常のファイルとして移動される', async () => {
+  const plan = await planOf(setup([...baseFiles(), shortcut('S-sc', ['S'], 'S-B')]).deps);
+  assert.deepEqual(plan.blockers, []);
+  assert.ok(plan.ops.some((o) => o.kind === 'move-file' && o.fileId === 'S-sc' && o.toParentId === 'D'));
+});
+
+test('plan: 統合の影響を受けないフォルダ(範囲外)を指すショートカットも阻害要因にならない', async () => {
+  const plan = await planOf(setup([...baseFiles(), shortcut('S-sc', ['S'], 'OUTSIDE')]).deps);
+  assert.deepEqual(plan.blockers, []);
+});
+
+test('plan: Sのみサブツリー内で、同じサブツリー内のフォルダ(祖先を含む)を指すショートカットは阻害要因にならない(実データの形)', async () => {
+  const files = [
+    ...baseFiles(),
+    folder('S-B-1', '孫', ['S-B']),
+    shortcut('S-B-1-sc', ['S-B-1'], 'S-B'), // 自分を含む祖先を指す自己参照
+  ];
+  const plan = await planOf(setup(files).deps);
+  assert.deepEqual(plan.blockers, []);
+  assert.ok(plan.ops.some((o) => o.kind === 'move-folder' && o.folderId === 'S-B'));
+});
+
+test('plan阻害: 空にしてtrashされる統合元フォルダを指すショートカットはリンク切れになるためshortcut-to-trashed-folder', async () => {
+  for (const target of ['S-A', 'S']) {
+    const codes = await blockerCodes([...baseFiles(), shortcut('S-sc', ['S'], target)]);
+    assert.ok(codes.includes('shortcut-to-trashed-folder'), target);
+  }
+});
+
+test('plan阻害: Sのみサブツリー内のショートカットがtrashされるフォルダを指す場合も検知する', async () => {
+  const files = [...baseFiles(), folder('S-B-1', '孫', ['S-B']), shortcut('S-B-1-sc', ['S-B-1'], 'S-A')];
+  assert.ok((await blockerCodes(files)).includes('shortcut-to-trashed-folder'));
+});
+
+test('plan阻害: 統合先側にあるショートカットがtrashされる統合元フォルダを指す場合も検知する', async () => {
+  const files = [...baseFiles(), shortcut('D-sc', ['D'], 'S-A')];
+  assert.ok((await blockerCodes(files)).includes('shortcut-to-trashed-folder'));
+});
+
+test('plan阻害: 複数親のショートカットはmulti-parent(参照先が安全でも移動しない)', async () => {
+  const codes = await blockerCodes([...baseFiles(), shortcut('S-sc', ['S', 'OTHER'], 'S-B')]);
+  assert.ok(codes.includes('multi-parent'));
+});
+
+test('plan阻害: 統合先のみのサブツリー(深い階層)にあるショートカットがtrashされる統合元フォルダを指す場合も検知する', async () => {
+  const files = [...baseFiles(), folder('D-C-1', '孫', ['D-C']), shortcut('D-C-1-sc', ['D-C-1'], 'S-A')];
+  assert.ok((await blockerCodes(files)).includes('shortcut-to-trashed-folder'));
+});
+
+test('plan: 統合先のみのサブツリー内のショートカットが影響を受けないフォルダを指すなら阻害要因にならない', async () => {
+  const files = [...baseFiles(), folder('D-C-1', '孫', ['D-C']), shortcut('D-C-1-sc', ['D-C-1'], 'D-C')];
+  assert.deepEqual((await planOf(setup(files).deps)).blockers, []);
 });

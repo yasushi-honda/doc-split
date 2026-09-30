@@ -26,6 +26,8 @@ export interface FakeTreeFile {
   trashed?: boolean;
   appProperties?: Record<string, string>;
   capabilities?: FakeTreeCapabilities;
+  /** ショートカットの参照先ID。 */
+  shortcutTargetId?: string;
 }
 
 export type FakeTreeInjectionMode = 'not-applied-error' | 'applied-error';
@@ -58,6 +60,7 @@ export function makeFakeTreeDrive(
     parents: [...f.parents],
     trashed: f.trashed ?? false,
     appProperties: f.appProperties ? { ...f.appProperties } : undefined,
+    shortcutDetails: f.shortcutTargetId ? { targetId: f.shortcutTargetId } : undefined,
     capabilities: {
       canMoveItemWithinDrive: f.capabilities?.canMoveItemWithinDrive ?? true,
       canRename: f.capabilities?.canRename ?? true,

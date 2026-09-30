@@ -32,7 +32,8 @@ export type TreeMergeOp =
 
 /** execute全体を拒否する阻害要因(名前は含めずID・件数のみ)。 */
 export type TreeMergeBlockerCode =
-  | 'shortcut'
+  | 'shortcut-target-unknown'
+  | 'shortcut-to-trashed-folder'
   | 'multi-parent'
   | 'cannot-move'
   | 'cannot-add-children'

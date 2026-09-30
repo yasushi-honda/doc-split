@@ -230,6 +230,7 @@ on:
           - execute-drive-export-repair --execute --expected-count
           - diagnose-drive-folder-duplicate-causality
           - compare-drive-folder-pairs
+          - inspect-drive-items
           - backfill-drive-folder-claim-ttl
           - backfill-drive-folder-claim-ttl --execute
           - classify-drive-claim-divergence
@@ -311,7 +312,7 @@ on:
         type: string
         default: ''
       exec_args_json:
-        description: 'execute-collision-migration: JSON {"planRunId":"<classify run id>","approvedOperationIds":["op-0001",...]} / investigate-issue811-root-cause: JSON {"folderIds":[...],"docIds":[...]} / classify-drive-folder-duplicates: JSON {"canonicalFolderId":"...","duplicateFolderIds":["id1","id2"]} / execute-drive-folder-merge: JSON {"planRunId":"<classify-drive-folder-duplicates run id>","approvedOperationIds":["op-0001",...]} / rollback-drive-folder-merge: JSON {"manifestRunId":"<execute-drive-folder-merge run id>","approvedOperationIds":["op-0001",...]}(approvedOperationIds省略時はmanifest全件を対象) / execute-drive-export-repair: JSON {"planRunId":"<classify-drive-export-drift run id>","expectedTotal":488,"acknowledgeRestoreFolders":false}(planRunId必須、expectedTotal/acknowledgeRestoreFoldersは省略可) / diagnose-drive-folder-duplicate-causality: JSON {"folderIds":["id1","id2",...]} / compare-drive-folder-pairs: JSON {"pairs":[["idA","idB"],...]}(A=app作成側/B=人作成側、フォルダIDのみ。read-only、出力は件数のみでファイル名は含まない) / execute-drive-claim-resync: JSON {"planRunId":"<classify-drive-claim-divergence run id>","approvedOperations":{"op-0001":{"mode":"restore-expected"},"op-0002":{"mode":"release-claim","acknowledgedStrandedFiles":0}}}(modeはrestore-expected/release-claim/finalize-resolvedのいずれか、release-claimでdirectChildCount>0の場合のみacknowledgedStrandedFilesが必須) / plan-drive-folder-tree-merge: JSON {"sourceFolderId":"<統合元(消える側)>","targetFolderId":"<統合先(残す側)>"}(read-only、出力は件数とIDのみ) / execute-drive-folder-tree-merge: JSON {"planRunId":"<plan-drive-folder-tree-merge run id>","expectedFileMoves":N,"expectedFolderMoves":N,"expectedFolderTrashes":N}(件数はplan出力と一致必須) / execute-drive-sibling-merge: JSON {"planRunId":"<audit-drive-sibling-duplicates run id>","approvedGroupIds":["parentId:name",...]}(groupIdはaudit-drive-sibling-duplicatesが出力するplan-output.jsonのgroups[].groupIdをそのまま指定)'
+        description: 'execute-collision-migration: JSON {"planRunId":"<classify run id>","approvedOperationIds":["op-0001",...]} / investigate-issue811-root-cause: JSON {"folderIds":[...],"docIds":[...]} / classify-drive-folder-duplicates: JSON {"canonicalFolderId":"...","duplicateFolderIds":["id1","id2"]} / execute-drive-folder-merge: JSON {"planRunId":"<classify-drive-folder-duplicates run id>","approvedOperationIds":["op-0001",...]} / rollback-drive-folder-merge: JSON {"manifestRunId":"<execute-drive-folder-merge run id>","approvedOperationIds":["op-0001",...]}(approvedOperationIds省略時はmanifest全件を対象) / execute-drive-export-repair: JSON {"planRunId":"<classify-drive-export-drift run id>","expectedTotal":488,"acknowledgeRestoreFolders":false}(planRunId必須、expectedTotal/acknowledgeRestoreFoldersは省略可) / diagnose-drive-folder-duplicate-causality: JSON {"folderIds":["id1","id2",...]} / inspect-drive-items: JSON {"ids":["<Drive項目ID>",...]}(read-only、種別・親の連鎖・ショートカット参照先をIDのみで出力) / compare-drive-folder-pairs: JSON {"pairs":[["idA","idB"],...]}(A=app作成側/B=人作成側、フォルダIDのみ。read-only、出力は件数のみでファイル名は含まない) / execute-drive-claim-resync: JSON {"planRunId":"<classify-drive-claim-divergence run id>","approvedOperations":{"op-0001":{"mode":"restore-expected"},"op-0002":{"mode":"release-claim","acknowledgedStrandedFiles":0}}}(modeはrestore-expected/release-claim/finalize-resolvedのいずれか、release-claimでdirectChildCount>0の場合のみacknowledgedStrandedFilesが必須) / plan-drive-folder-tree-merge: JSON {"sourceFolderId":"<統合元(消える側)>","targetFolderId":"<統合先(残す側)>"}(read-only、出力は件数とIDのみ) / execute-drive-folder-tree-merge: JSON {"planRunId":"<plan-drive-folder-tree-merge run id>","expectedFileMoves":N,"expectedFolderMoves":N,"expectedFolderTrashes":N}(件数はplan出力と一致必須) / execute-drive-sibling-merge: JSON {"planRunId":"<audit-drive-sibling-duplicates run id>","approvedGroupIds":["parentId:name",...]}(groupIdはaudit-drive-sibling-duplicatesが出力するplan-output.jsonのgroups[].groupIdをそのまま指定)'
         required: false
         type: string
         default: ''
@@ -1428,6 +1429,21 @@ jobs:
                 --approval "${GITHUB_WORKSPACE}/.sibling-merge-plan/approval.json" \
                 --manifest-out "${GITHUB_WORKSPACE}/scripts/manifest-output-sibling.json" \
                 $SCRIPT_ARGS
+          elif [ "$SCRIPT_NAME" = "inspect-drive-items" ]; then
+            # Driveの項目(ショートカット・複数親など)の実体調査(read-only)。出力はIDと種別のみ(PII対策)。
+            if [ -z "$EXEC_ARGS_JSON" ] || ! echo "$EXEC_ARGS_JSON" | jq empty 2>/dev/null; then
+              echo "ERROR: exec_args_json (valid JSON) is required for inspect-drive-items" >&2
+              exit 1
+            fi
+            if ! echo "$EXEC_ARGS_JSON" | jq -e '(.ids | type == "array") and (.ids | length >= 1 and length <= 20) and (.ids | all(type == "string" and test("^[A-Za-z0-9_-]+$")))' >/dev/null 2>&1; then
+              echo "ERROR: exec_args_json must contain ids: array of 1-20 strings matching ^[A-Za-z0-9_-]+$" >&2
+              exit 1
+            fi
+            IDS=$(echo "$EXEC_ARGS_JSON" | jq -r '.ids | join(",")')
+            cd scripts
+            NODE_PATH=../functions/node_modules \
+              FIREBASE_PROJECT_ID="$PROJECT_ID" \
+              npx ts-node inspect-drive-items.ts --ids "$IDS"
           elif [ "$SCRIPT_NAME" = "plan-drive-folder-tree-merge" ]; then
             # 同名の兄弟フォルダ2つの再帰統合Plan生成(read-only)。出力は件数とIDのみ(PII対策)。
             if [ -z "$EXEC_ARGS_JSON" ] || ! echo "$EXEC_ARGS_JSON" | jq empty 2>/dev/null; then

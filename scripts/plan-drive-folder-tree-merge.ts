@@ -95,6 +95,7 @@ async function main(): Promise<void> {
   for (const b of plan.blockers) {
     console.log(`  [blocker] ${b.code}${b.id ? ` id=${b.id}` : ''}${b.count !== undefined ? ` count=${b.count}` : ''}`);
   }
+  console.log('注意: 統合対象(統合元・統合先のツリー)の外にあるショートカットが統合元フォルダを指していても検知できません。統合後にリンク切れになりえます。');
   if (plan.blockers.length > 0) {
     console.log('::warning::folder-tree-merge planに阻害要因があります。executeは拒否されます。解消してから再planしてください。');
   }
