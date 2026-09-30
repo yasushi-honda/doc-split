@@ -691,7 +691,7 @@ cocoro/kanameから、書類（ケアプラン・医療・介護保険証等）�
 
 cocoro側Drive連携Phase C（クライアント自身のOAuth接続）は外部依存待ち（継続、変更なし、詳細は本ファイル冒頭「現在のミッション」節参照）。
 
-**kanameone Drive Phase1本番展開(2026-09-30時点、部分着手ではなくdecision-maker判断待ち)**: OAuth再連携完了(2026-09-28)・重複audit・merge候補14グループ統合・独立再auditまで完了済み。**flag ON・backfillは2026-09-30に復旧済み(下記手順6参照、完了確認は次セッション)**。**次の一手(decision-maker判断が起点、AI単独では着手しない)**: ①manual-review 8件の扱い(平出配下7組は`compare-drive-folder-pairs`(PR #1092)で照合済み・A→B統合ならデータ保全の見込み、子フォルダ3組は中身未照合、`(root)/森奈穂美`は未調査) ②(完了)flag ON・backfillは9/30に復旧済み。残る確認: `drive-export-status-report`でexported増加と実エラー比率を確認。検証コマンド: `settings/features.driveExport`(kanameone)がtrueであること、`audit-drive-sibling-duplicates`(read-only)で重複8件=manual-reviewのみを再確認。
+**kanameone Drive Phase1本番展開(2026-09-30時点、部分着手ではなくdecision-maker判断待ち)**: OAuth再連携完了(2026-09-28)・重複audit・merge候補14グループ統合・独立再auditまで完了済み。**flag ON・backfillは2026-09-30に復旧済み(下記手順6参照、完了確認は次セッション)**。**次の一手(decision-maker判断が起点、AI単独では着手しない)**: ①manual-review 8件の扱い(平出配下7組は`compare-drive-folder-pairs`(PR #1092)で照合済み・A→B統合ならデータ保全の見込み、子フォルダ3組は中身未照合、`(root)/森奈穂美`は既存ツールで統合不可・選択肢C採用=手順5配下の調査結果参照) ②(完了)flag ON・backfillは9/30に復旧済み。残る確認: `drive-export-status-report`でexported増加と実エラー比率を確認。検証コマンド: `settings/features.driveExport`(kanameone)がtrueであること、`audit-drive-sibling-duplicates`(read-only)で重複8件=manual-reviewのみを再確認。
 
 **ADR-0027 PR5実機観測（2026-09-29、別件・並行トラック、詳細は本ファイル上部「PR5実機観測」節参照）**: S0〜S8まで実施。D2の`fabrication_suspected`誤検知(実OCR「センタ一」をSarashinaが「センター」へ補正)はdecision-maker方針Aによりスキャナ正規化で恒久対応済み(PR #1083)、dev実機でD2=`done`を確認しAC4(canary 3/3件done)達成。**S9(Wave2)は2026-09-30に完了**(D4〜D7=done、D9/D10=skipped、D1の誤検知は運用側の対応で緩和、smoke観測でD1は1回目でdone・再試行の実機発火は未観測)。次の一手: 実運用で誤検知が発生した際に`fabricationRetried`・構造化ログ・`summaryError`(suffix/coreLen)を見てスキャナ本体の再設計要否を判断。S10(ロールバック)・PR6はdecision-makerの指示があるまで待機。
 
