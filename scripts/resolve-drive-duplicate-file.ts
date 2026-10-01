@@ -56,18 +56,23 @@ async function listDuplicates(drive: drive_v3.Drive): Promise<DuplicateFileInfo[
   const q =
     `'${parentId}' in parents and appProperties has ` +
     `{ key='docSplitDocId' and value='${escapeQueryValue(docId as string)}' } and trashed=false`;
-  const res = await drive.files.list({
-    q,
-    fields: 'files(id, createdTime, size, md5Checksum)',
-    includeItemsFromAllDrives: true,
-    supportsAllDrives: true,
-  });
-  return (res.data.files ?? []).map((x) => ({
-    id: x.id ?? '',
-    createdTime: x.createdTime,
-    size: x.size,
-    md5Checksum: x.md5Checksum,
-  }));
+  // 部分ページが返っても取りこぼさないよう、nextPageTokenを最後まで辿る(ゴミ箱へ移す判定の根拠になるため)
+  const out: DuplicateFileInfo[] = [];
+  let pageToken: string | undefined;
+  do {
+    const res: { data: drive_v3.Schema$FileList } = await drive.files.list({
+      q,
+      fields: 'nextPageToken, files(id, createdTime, size, md5Checksum)',
+      includeItemsFromAllDrives: true,
+      supportsAllDrives: true,
+      pageToken,
+    });
+    for (const x of res.data.files ?? []) {
+      out.push({ id: x.id ?? '', createdTime: x.createdTime, size: x.size, md5Checksum: x.md5Checksum });
+    }
+    pageToken = res.data.nextPageToken ?? undefined;
+  } while (pageToken);
+  return out;
 }
 
 async function main(): Promise<void> {
