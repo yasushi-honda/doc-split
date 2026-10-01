@@ -19,6 +19,12 @@
  *   FIREBASE_PROJECT_ID=... npx ts-node scripts/backfill-customer-id-link.ts --rollback <manifest> [--dry-run]
  *
  * - `--dry-run`: 書込みなし(対象件数と理由別内訳、manifestのみ)
+ * - `--whitespace-variants`: 書類の顧客名とマスター名が「内部空白の有無だけ」で違い、候補マスターがちょうど1件の書類も対象にする
+ *   (第2段)。この場合は`customerId`に加えて`customerName`もマスターの表記(生のname)へ揃える。顧客名がマスター名と
+ *   食い違うと、エクスポートの顧客確認が「顧客未確定」に落とすため。`customerKey`は書かない(書類更新トリガーが
+ *   正規化キーへ補正し、空白違いは同じキー)。Driveのフォルダ名は内部空白を除いて作られるため変わらない。
+ *   フラグなしは第1段と同じ挙動(完全一致のみ)。manifestには顧客名を入れないため、`--rollback`は`customerId`のみ戻し、
+ *   顧客名はマスター表記のまま残る(違いは空白の有無だけで、フォルダ名・グループ・同一人物の判定に影響しない)
  * - `--limit N`: 対象を先頭(documentId順)からN件に絞る(canary)
  * - `--expected-count N`: `--limit`適用後の実対象件数と一致しなければ、書込み前に中断(誤操作防止)
  * - `--rollback`: manifestのdocIdを再取得し、`updateTime`が書込み直後と一致する書類だけを元に戻す
@@ -45,6 +51,7 @@ import {
   type CustomerIdBefore,
   type CustomerIdLinkManifestEntry,
   type LinkCandidateDoc,
+  type LinkKind,
   type SkipReason,
 } from './lib/customerIdLinkBackfillHelpers';
 
@@ -55,6 +62,7 @@ if (!projectId) {
 }
 
 const dryRun = process.argv.includes('--dry-run');
+const whitespaceVariants = process.argv.includes('--whitespace-variants');
 
 /** backfill-confirm-on-verify.tsと同じ規約: 値省略/別フラグとの衝突を誤操作として弾く。 */
 function getArg(name: string): string | undefined {
@@ -94,6 +102,9 @@ interface LinkTarget {
   id: string;
   updateTime: FirebaseFirestore.Timestamp;
   masterId: string;
+  kind: LinkKind;
+  /** `link-rename`のときに書く顧客名(マスターの生のname)。manifestには入れない。 */
+  newCustomerName?: string;
   before: CustomerIdBefore;
   /** 分類に使った読取時点のフィールド(書込み直前のマスター再検証で再分類する)。 */
   data: LinkCandidateDoc;
@@ -140,9 +151,18 @@ async function scan(stopAtTargets: number | undefined): Promise<{
     if (snap.empty) break;
     for (const d of snap.docs) {
       totalScanned++;
-      const r = classifyCustomerIdLink(d.data(), index);
-      if (r.kind === 'link') {
-        targets.push({ ref: d.ref, id: d.id, updateTime: d.updateTime, masterId: r.masterId, before: r.before, data: d.data() });
+      const r = classifyCustomerIdLink(d.data(), index, { allowWhitespaceVariant: whitespaceVariants });
+      if (r.kind === 'link' || r.kind === 'link-rename') {
+        targets.push({
+          ref: d.ref,
+          id: d.id,
+          updateTime: d.updateTime,
+          masterId: r.masterId,
+          kind: r.kind,
+          newCustomerName: r.kind === 'link-rename' ? r.newCustomerName : undefined,
+          before: r.before,
+          data: d.data(),
+        });
         // --limit(canary)指定時は、対象がその件数に達した時点で打ち切る(全件走査の読取コストを避ける)
         if (stopAtTargets !== undefined && targets.length >= stopAtTargets) {
           scanIncomplete = true;
@@ -169,6 +189,7 @@ function writeManifest(path: string | undefined, manifest: object): void {
 async function runBackfill(): Promise<void> {
   console.log(`プロジェクト: ${projectId}`);
   console.log(`モード: ${dryRun ? 'DRY RUN(書込みなし)' : '実行'}`);
+  if (whitespaceVariants) console.log('--whitespace-variants: 空白違いだけの書類も対象(customerIdと顧客名をマスター表記へ揃える)');
   if (limit !== undefined) console.log(`--limit: ${limit}`);
   if (expectedCount !== undefined) console.log(`--expected-count: ${expectedCount}`);
   console.log('---');
@@ -182,6 +203,7 @@ async function runBackfill(): Promise<void> {
   console.log(`走査: verified書類${totalScanned}件${scanIncomplete ? '(--limitの対象数に達したため途中で打ち切り。対象外の内訳は走査範囲のみ)' : ''}`);
   console.log(`紐づけ対象: ${allTargets.length}件${limit !== undefined ? `(--limit適用後 ${targets.length}件)` : ''}`);
   console.log(`紐づけ前の状態: ${formatCountRecord(countBy(targets.map((t) => t.before.state)))}`);
+  console.log(`内訳: 完全一致(customerIdのみ)${targets.filter((t) => t.kind === 'link').length}件 / 空白違い(customerIdと顧客名を揃える)${targets.filter((t) => t.kind === 'link-rename').length}件`);
   console.log(`対象外(理由別): ${formatCountRecord(skippedCounts)}`);
 
   // 紐づけてもエクスポートが通らない可能性のある対象を事前に数える(承認の判断材料。書込みの可否は変えない)。
@@ -207,7 +229,7 @@ async function runBackfill(): Promise<void> {
   const entries: CustomerIdLinkManifestEntry[] = [];
   // 完走するまでは`aborted:true`で書き出す(途中で強制終了しても、最後に書かれたmanifestが「中断した実行」と分かる)
   let aborted = !dryRun;
-  const planned = targets.map((t) => ({ docId: t.id, masterId: t.masterId, customerIdBefore: t.before }));
+  const planned = targets.map((t) => ({ docId: t.id, kind: t.kind, masterId: t.masterId, customerIdBefore: t.before }));
   const buildManifest = () =>
     buildCustomerIdLinkManifest({
       runId,
@@ -232,7 +254,7 @@ async function runBackfill(): Promise<void> {
   // 走査〜書込みの間にマスターが削除・改名・追加されると、存在しないIDや曖昧な同名への紐づけを書きうるため、
   // 変わっていれば何も書かずに中断する(書類側のprecondition(updateTime)ではマスターの変化は検知できない)
   const freshIndex = await loadMasterIndex();
-  const drifted = findDriftedTargets(targets, freshIndex);
+  const drifted = findDriftedTargets(targets, freshIndex, { allowWhitespaceVariant: whitespaceVariants });
   if (drifted.length > 0) {
     console.error(`ERROR: 走査後に顧客マスターが変化し、${drifted.length}件の判定が変わりました。書込みを一切行わず中断します。再度dry-runから実行してください。`);
     process.exit(1);
@@ -249,7 +271,10 @@ async function runBackfill(): Promise<void> {
       async (t) => {
         // 読んだ時点から書込みまでの間に別の更新があれば、precondition不一致(code 9)でスキップされる
         const target = targetById.get(t.id)!;
-        const result = await target.ref.update({ customerId: t.masterId }, { lastUpdateTime: target.updateTime });
+        // link-renameのときだけ顧客名もマスター表記へ揃える(customerKey・updatedAtは書かない)
+        const fields: Record<string, string> = { customerId: t.masterId };
+        if (target.kind === 'link-rename' && target.newCustomerName !== undefined) fields.customerName = target.newCustomerName;
+        const result = await target.ref.update(fields, { lastUpdateTime: target.updateTime });
         return { seconds: result.writeTime.seconds, nanoseconds: result.writeTime.nanoseconds };
       },
       entries,
@@ -295,6 +320,10 @@ async function runRollback(manifestPath: string): Promise<void> {
   console.log(`プロジェクト: ${projectId}`);
   console.log(`モード: ${dryRun ? 'DRY RUN(変更なし)' : '実行'}`);
   console.log(`rollback対象: runId=${manifest.runId}, entries=${manifest.entries.length}件`);
+  const renamed = manifest.entries.filter((e) => e.kind === 'link-rename').length;
+  if (renamed > 0) {
+    console.log(`注意: 空白違いの紐づけ(link-rename)${renamed}件は、customerIdのみ戻します。顧客名はマスター表記のまま残ります(manifestに顧客名を残さない設計。違いは空白の有無だけです)`);
+  }
   if (manifest.projectId !== projectId) {
     console.error(`ERROR: manifestのprojectId(${manifest.projectId})と実行対象(${projectId})が一致しません。誤操作防止のため中断します。`);
     process.exit(1);

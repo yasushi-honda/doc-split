@@ -225,6 +225,10 @@ on:
           - backfill-customer-id-link --dry-run --limit --expected-count
           - backfill-customer-id-link --limit --expected-count
           - backfill-customer-id-link --expected-count
+          - backfill-customer-id-link --whitespace-variants --dry-run
+          - backfill-customer-id-link --whitespace-variants --dry-run --limit --expected-count
+          - backfill-customer-id-link --whitespace-variants --limit --expected-count
+          - backfill-customer-id-link --whitespace-variants --expected-count
           - classify-drive-export-drift
           - classify-drive-export-drift --care-manager
           - classify-drive-export-drift --care-manager --limit

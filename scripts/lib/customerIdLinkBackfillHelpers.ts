@@ -30,10 +30,22 @@ export const SKIP_REASONS: readonly SkipReason[] = [
 /** 紐づけ前の`customerId`の状態(rollbackで元に戻すために記録する)。 */
 export type CustomerIdBefore = { state: 'absent' } | { state: 'null' } | { state: 'empty' } | { state: 'dangling'; id: string };
 
+/** 紐づけの種類。`link`はcustomerIdのみ、`link-rename`(空白違いのみ)はcustomerIdとcustomerName(マスター表記)を書く。 */
+export type LinkKind = 'link' | 'link-rename';
+
 export type LinkClassification =
   | { kind: 'link'; masterId: string; before: CustomerIdBefore }
+  | { kind: 'link-rename'; masterId: string; before: CustomerIdBefore; newCustomerName: string }
   | { kind: 'skip'; reason: SkipReason }
   | { kind: 'not-applicable' };
+
+export interface ClassifyOptions {
+  /**
+   * 空白の違いだけ(内部空白の有無)で一致するマスターがちょうど1件の書類も、`link-rename`として対象にする。
+   * フラグなしは第1段と同じ挙動(完全一致のみ)。
+   */
+  allowWhitespaceVariant?: boolean;
+}
 
 export interface LinkCandidateDoc {
   customerId?: unknown;
@@ -45,6 +57,8 @@ export interface LinkCandidateDoc {
 export interface MasterIndex {
   /** マスターの生の`name`(trimしない)→ ID一覧。エクスポートの乖離チェック(書類名trim済み vs マスター名の生)と揃える。 */
   idsByExactName: Map<string, string[]>;
+  /** マスターの`name`をtrim+内部空白除去したキー → ID一覧(空白違いだけの書類の照合用)。 */
+  idsByStrippedName: Map<string, string[]>;
   ids: Set<string>;
   /** 同名衝突(trim+内部空白除去、またはNFKC正規化後に2件以上)の生のtrim済み名の集合。 */
   collisionNames: Set<string>;
@@ -56,6 +70,7 @@ export interface MasterIndex {
 
 export function buildMasterIndex(masters: Array<{ id: string; name: unknown; furigana?: unknown }>): MasterIndex {
   const idsByExactName = new Map<string, string[]>();
+  const idsByStrippedName = new Map<string, string[]>();
   const ids = new Set<string>();
   const named: Array<{ name: string }> = [];
   let nonStringNameCount = 0;
@@ -71,6 +86,8 @@ export function buildMasterIndex(masters: Array<{ id: string; name: unknown; fur
     const list = idsByExactName.get(m.name) ?? [];
     list.push(m.id);
     idsByExactName.set(m.name, list);
+    const strippedKey = stripInternalSpaces(m.name.trim());
+    idsByStrippedName.set(strippedKey, [...(idsByStrippedName.get(strippedKey) ?? []), m.id]);
   }
   // 既存の同名衝突判定(trim+内部空白除去)に加え、NFKC正規化(濁点の分解・半角カナ・互換文字)で同一になる別表記も
   // 衝突とみなす。書類名が片方に完全一致しても、同一人物の別表記マスターが並存する場合は自動で紐づけない
@@ -84,7 +101,7 @@ export function buildMasterIndex(masters: Array<{ id: string; name: unknown; fur
   for (const group of rawByNfkcKey.values()) {
     if (group.length > 1) for (const raw of group) collisionNames.add(raw);
   }
-  return { idsByExactName, ids, collisionNames, idsWithoutFurigana, nonStringNameCount };
+  return { idsByExactName, idsByStrippedName, ids, collisionNames, idsWithoutFurigana, nonStringNameCount };
 }
 
 /**
@@ -92,7 +109,7 @@ export function buildMasterIndex(masters: Array<{ id: string; name: unknown; fur
  * `not-applicable`(既に有効に紐づいている)。不備があっても、確認済みでない・顧客名が無効・
  * 同名が曖昧/不在の場合は`skip`(理由付き)。
  */
-export function classifyCustomerIdLink(doc: LinkCandidateDoc, index: MasterIndex): LinkClassification {
+export function classifyCustomerIdLink(doc: LinkCandidateDoc, index: MasterIndex, opts: ClassifyOptions = {}): LinkClassification {
   const id = doc.customerId;
   let before: CustomerIdBefore;
   if (id === undefined) {
@@ -121,14 +138,29 @@ export function classifyCustomerIdLink(doc: LinkCandidateDoc, index: MasterIndex
   if (index.collisionNames.has(name)) return { kind: 'skip', reason: 'ambiguous-same-name' };
   const matches = index.idsByExactName.get(name) ?? [];
   if (matches.length >= 2) return { kind: 'skip', reason: 'ambiguous-same-name' };
-  if (matches.length === 0) return { kind: 'skip', reason: 'no-master' };
-  return { kind: 'link', masterId: matches[0], before };
+  if (matches.length === 1) return { kind: 'link', masterId: matches[0], before };
+
+  // 完全一致が無い。フラグ指定時のみ、空白の違いだけで一致するマスターがちょうど1件の書類を、顧客名もマスター表記へ揃えて紐づける
+  // (顧客名がマスター名と食い違うと、エクスポートの顧客確認が「顧客未確定」に落とすため、名前も揃える必要がある)
+  if (opts.allowWhitespaceVariant) {
+    const stripped = index.idsByStrippedName.get(stripInternalSpaces(name)) ?? [];
+    if (stripped.length >= 2) return { kind: 'skip', reason: 'ambiguous-same-name' };
+    if (stripped.length === 1) {
+      const masterName = [...index.idsByExactName.entries()].find(([, ids]) => ids.includes(stripped[0]))?.[0];
+      // 候補マスターがNFKC表記違いの同姓同名と衝突している場合は、自動では紐づけない
+      if (masterName === undefined || index.collisionNames.has(masterName.trim())) return { kind: 'skip', reason: 'ambiguous-same-name' };
+      return { kind: 'link-rename', masterId: stripped[0], before, newCustomerName: masterName };
+    }
+  }
+  return { kind: 'skip', reason: 'no-master' };
 }
 
 // ---------------------------------------------------------------- manifest
 
 export interface CustomerIdLinkManifestEntry {
   docId: string;
+  /** 紐づけの種類(第1段の旧manifestには無い)。名前は含めない。 */
+  kind?: LinkKind;
   customerIdBefore: CustomerIdBefore;
   customerIdAfter: string;
   /** 書込み結果の`writeTime`(rollbackで「backfill後に誰も書いていない」ことを確認する)。 */
@@ -137,6 +169,7 @@ export interface CustomerIdLinkManifestEntry {
 
 export interface CustomerIdLinkPlannedEntry {
   docId: string;
+  kind?: LinkKind;
   masterId: string;
   customerIdBefore: CustomerIdBefore;
 }
@@ -177,9 +210,10 @@ function isValidBefore(v: unknown): v is CustomerIdBefore {
 }
 
 function isValidEntry(v: unknown): v is CustomerIdLinkManifestEntry {
-  if (!isObj(v) || !hasOnlyKeys(v, ['docId', 'customerIdBefore', 'customerIdAfter', 'backfillUpdateTime'])) return false;
+  if (!isObj(v) || !hasOnlyKeys(v, ['docId', 'kind', 'customerIdBefore', 'customerIdAfter', 'backfillUpdateTime'])) return false;
   const t = v.backfillUpdateTime;
   return (
+    isValidKind(v.kind) &&
     isValidDocId(v.docId) &&
     isValidBefore(v.customerIdBefore) &&
     isNonEmptyStr(v.customerIdAfter) &&
@@ -190,10 +224,13 @@ function isValidEntry(v: unknown): v is CustomerIdLinkManifestEntry {
   );
 }
 
+const isValidKind = (v: unknown): boolean => v === undefined || v === 'link' || v === 'link-rename';
+
 function isValidPlanned(v: unknown): v is CustomerIdLinkPlannedEntry {
   return (
     isObj(v) &&
-    hasOnlyKeys(v, ['docId', 'masterId', 'customerIdBefore']) &&
+    hasOnlyKeys(v, ['docId', 'kind', 'masterId', 'customerIdBefore']) &&
+    isValidKind(v.kind) &&
     isValidDocId(v.docId) &&
     isNonEmptyStr(v.masterId) &&
     isValidBefore(v.customerIdBefore)
@@ -220,10 +257,16 @@ export function isValidCustomerIdLinkManifest(v: unknown): v is CustomerIdLinkMa
  * 「同じマスターへ紐づける」判定でなくなったもの(マスターの削除・改名・同名追加など)を返す。
  * 1件でもあれば、呼び出し側は書込みを一切行わず中断する。
  */
-export function findDriftedTargets<T extends { masterId: string; data: LinkCandidateDoc }>(targets: readonly T[], freshIndex: MasterIndex): T[] {
+export function findDriftedTargets<T extends { masterId: string; kind?: LinkKind; newCustomerName?: string; data: LinkCandidateDoc }>(
+  targets: readonly T[],
+  freshIndex: MasterIndex,
+  opts: ClassifyOptions = {}
+): T[] {
   return targets.filter((t) => {
-    const r = classifyCustomerIdLink(t.data, freshIndex);
-    return !(r.kind === 'link' && r.masterId === t.masterId);
+    const r = classifyCustomerIdLink(t.data, freshIndex, opts);
+    if (r.kind !== 'link' && r.kind !== 'link-rename') return true;
+    // 分類の種類・マスターID・揃える名前のすべてが、走査時と同じであること
+    return !(r.kind === (t.kind ?? 'link') && r.masterId === t.masterId && (r.kind === 'link' || r.newCustomerName === t.newCustomerName));
   });
 }
 
@@ -231,8 +274,11 @@ export function findDriftedTargets<T extends { masterId: string; data: LinkCandi
 
 export interface LinkWriteTarget {
   id: string;
+  kind?: LinkKind;
   masterId: string;
   before: CustomerIdBefore;
+  /** `link-rename`のときに書く顧客名(マスターの生のname)。manifestには入れない。 */
+  newCustomerName?: string;
 }
 
 export interface ExecuteLinksResult {
@@ -268,7 +314,7 @@ export async function executeLinks(
     try {
       // eslint-disable-next-line no-await-in-loop
       const writeTime = await write(t);
-      const entry = { docId: t.id, customerIdBefore: t.before, customerIdAfter: t.masterId, backfillUpdateTime: writeTime };
+      const entry: CustomerIdLinkManifestEntry = { docId: t.id, kind: t.kind ?? 'link', customerIdBefore: t.before, customerIdAfter: t.masterId, backfillUpdateTime: writeTime };
       entries.push(entry);
       written++;
       hooks.onEntry?.(entry);
