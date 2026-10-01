@@ -162,7 +162,7 @@ test('dry-run: 書込みゼロ(manifestのみ出力)', async () => {
   assert.equal(manifest.dryRun, true);
   assert.equal(manifest.entries.length, 0);
   // 紐づけ予定の一覧(承認者が「どの書類をどのマスターへ」を事前に確認できる)。名前は含まない
-  assert.deepEqual(manifest.planned, [{ docId: 'd-dry', masterId: 'm-yamada', customerIdBefore: { state: 'absent' } }]);
+  assert.deepEqual(manifest.planned, [{ docId: 'd-dry', kind: 'link', masterId: 'm-yamada', customerIdBefore: { state: 'absent' } }]);
 });
 
 test('--expected-count不一致: 書込みゼロで非ゼロ終了', async () => {
@@ -395,4 +395,105 @@ test('rollback: 元が明示的なnullの書類は、フィールド削除では
   const after = await getDoc('r-null');
   assert.equal('customerId' in after, true, 'フィールドは残る');
   assert.deepEqual(after, original, 'null込みで元のドキュメントと完全一致');
+});
+
+// ---------------------------------------------------------------- 第2段: --whitespace-variants
+
+test('フラグなしでは、空白違いの書類は書き換えない(第1段と同じ挙動)', async () => {
+  await db.doc('documents/ws-1').set(baseDoc({ customerName: '山田 太郎' }));
+  runScript(['--expected-count', '0']);
+  const d = await getDoc('ws-1');
+  assert.equal(d.customerId, undefined);
+  assert.equal(d.customerName, '山田 太郎');
+});
+
+test('--whitespace-variants: customerIdと顧客名(マスター表記)だけが変わり、customerKey・updatedAtを含む他のフィールドは不変', async () => {
+  const original = baseDoc({ customerName: '山田 太郎', customerKey: '山田太郎' });
+  await db.doc('documents/ws-2').set(original);
+  runScript(['--whitespace-variants', '--expected-count', '1']);
+  const after = await getDoc('ws-2');
+  assert.equal(after.customerId, 'm-yamada');
+  assert.equal(after.customerName, '山田太郎', '顧客名はマスターの表記へ揃う');
+  const { customerId, customerName, ...rest } = after;
+  const { customerName: _o, ...originalRest } = original;
+  assert.deepEqual(rest, originalRest, 'customerKey・updatedAt・確定フラグ・careManager等は不変');
+});
+
+test('--whitespace-variants: 紐づけ後の書類は、エクスポートの顧客確認(名前の完全一致)でconfirmedになる', async () => {
+  await db.doc('documents/ws-3').set(baseDoc({ customerName: '山田　太郎' }));
+  runScript(['--whitespace-variants', '--expected-count', '1']);
+  const d = await getDoc('ws-3');
+  const master = (await db.doc(`${MASTER_PATHS.customers}/${d.customerId as string}`).get()).data()!;
+  assert.equal(precheckCustomerIdentity({ customerName: d.customerName as string, customerConfirmed: true }, { customerMasterName: master.name }).outcome, 'confirmed');
+});
+
+test('--whitespace-variants: 完全一致の書類(customerIdのみ)と空白違いの書類(顧客名も)が混在しても、それぞれ正しく書かれ、内訳が表示される', async () => {
+  await db.doc('documents/ws-exact').set(baseDoc());
+  await db.doc('documents/ws-space').set(baseDoc({ customerName: '山田 太郎' }));
+  const r = runScript(['--whitespace-variants', '--dry-run', '--expected-count', '2']);
+  assert.match(r.stdout, /内訳: 完全一致\(customerIdのみ\)1件 \/ 空白違い\(customerIdと顧客名を揃える\)1件/);
+  runScript(['--whitespace-variants', '--expected-count', '2']);
+  assert.equal((await getDoc('ws-exact')).customerName, '山田太郎');
+  assert.equal((await getDoc('ws-space')).customerName, '山田太郎');
+  assert.equal((await getDoc('ws-space')).customerId, 'm-yamada');
+});
+
+test('--whitespace-variants: かな表記違い・候補が複数・類似なしは対象外のまま書き換えない', async () => {
+  await db.doc(`${MASTER_PATHS.customers}/m-mochi`).set({ name: '持永トシエ', furigana: 'モチナガトシエ' });
+  await db.doc(`${MASTER_PATHS.customers}/m-suzuki-1`).set({ name: '鈴木 一郎', furigana: 'スズキイチロウ' });
+  await db.doc(`${MASTER_PATHS.customers}/m-suzuki-2`).set({ name: '鈴木一郎', furigana: 'スズキイチロウ' });
+  await db.doc('documents/ws-kana').set(baseDoc({ customerName: '持永トシヱ' }));
+  await db.doc('documents/ws-multi').set(baseDoc({ customerName: '鈴木  一郎' }));
+  await db.doc('documents/ws-none').set(baseDoc({ customerName: '存在しない人' }));
+  runScript(['--whitespace-variants', '--expected-count', '0']);
+  for (const id of ['ws-kana', 'ws-multi', 'ws-none']) assert.equal((await getDoc(id)).customerId, undefined, `${id}は書き換わらない`);
+});
+
+test('--whitespace-variants: rollbackはcustomerIdのみ戻し、顧客名はマスター表記のまま残る(manifestに顧客名を残さない設計)', async () => {
+  await db.doc('documents/ws-rb').set(baseDoc({ customerName: '山田 太郎' }));
+  const out = manifestPath();
+  runScript(['--whitespace-variants', '--expected-count', '1', '--manifest-out', out]);
+  const text = readFileSync(out, 'utf-8');
+  for (const word of ['山田', '太郎']) assert.equal(text.includes(word), false, `manifestに${word}が含まれている`);
+  assert.equal(JSON.parse(text).entries[0].kind, 'link-rename');
+
+  const r = runScript(['--rollback', out]);
+  assert.match(r.stdout, /customerIdのみ戻します/);
+  const after = await getDoc('ws-rb');
+  assert.equal('customerId' in after, false, 'customerIdは元(フィールドなし)へ戻る');
+  assert.equal(after.customerName, '山田太郎', '顧客名はマスター表記のまま');
+});
+
+test('--whitespace-variants: 2回目の実行は対象0件(冪等)', async () => {
+  await db.doc('documents/ws-idem').set(baseDoc({ customerName: '山田 太郎' }));
+  runScript(['--whitespace-variants', '--expected-count', '1']);
+  const r = runScript(['--whitespace-variants', '--expected-count', '0']);
+  assert.match(r.stdout, /紐づけ対象: 0件/);
+});
+
+test('--whitespace-variants: マスター名に内部空白がある場合、書類の顧客名はマスターの生の表記(空白あり)へ揃い、顧客確認でconfirmedになる', async () => {
+  await db.doc(`${MASTER_PATHS.customers}/m-suzuki-only`).set({ name: '鈴木 一郎', furigana: 'スズキイチロウ' });
+  await db.doc('documents/ws-inner').set(baseDoc({ customerName: '鈴木一郎' }));
+  runScript(['--whitespace-variants', '--expected-count', '1']);
+  const d = await getDoc('ws-inner');
+  assert.equal(d.customerId, 'm-suzuki-only');
+  assert.equal(d.customerName, '鈴木 一郎', 'マスターの生の表記へ揃う(空白除去キーではない)');
+  assert.equal(precheckCustomerIdentity({ customerName: d.customerName as string, customerConfirmed: true }, { customerMasterName: '鈴木 一郎' }).outcome, 'confirmed');
+});
+
+test('--whitespace-variants: 完全一致の書類は、前後空白付きの顧客名のままcustomerIdだけが書かれ、顧客名は元の値のまま', async () => {
+  await db.doc('documents/ws-trim').set(baseDoc({ customerName: ' 山田太郎 ' }));
+  runScript(['--whitespace-variants', '--expected-count', '1']);
+  const d = await getDoc('ws-trim');
+  assert.equal(d.customerId, 'm-yamada');
+  assert.equal(d.customerName, ' 山田太郎 ', 'linkはcustomerIdのみ。顧客名は書き換えない');
+});
+
+test('--whitespace-variants: 既に有効なマスターへ紐づいている書類・マスター名の前後に空白がある書類は書き換えない', async () => {
+  await db.doc(`${MASTER_PATHS.customers}/m-trail`).set({ name: '渡辺三郎 ', furigana: 'ワタナベサブロウ' });
+  await db.doc('documents/ws-valid').set(baseDoc({ customerName: '山田 太郎', customerId: 'm-yamada' }));
+  await db.doc('documents/ws-trail').set(baseDoc({ customerName: '渡辺 三郎' }));
+  runScript(['--whitespace-variants', '--expected-count', '0']);
+  assert.equal((await getDoc('ws-valid')).customerName, '山田 太郎', '有効な紐づけ済みの書類は触らない');
+  assert.equal((await getDoc('ws-trail')).customerId, undefined);
 });

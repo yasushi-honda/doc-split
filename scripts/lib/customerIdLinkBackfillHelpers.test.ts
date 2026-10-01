@@ -344,3 +344,124 @@ test('buildMasterIndex: furiganaが無い/空/空白のみのマスターIDを�
   ]);
   assert.deepEqual([...idx.idsWithoutFurigana].sort(), ['b', 'c', 'd', 'e']);
 });
+
+// ---------------------------------------------------------------- 第2段: 空白違いだけの書類(--whitespace-variants)
+
+import { stripInternalSpaces } from '../../shared/customerIdentity';
+
+const WS = { allowWhitespaceVariant: true } as const;
+
+test('フラグなしでは、空白違いは従来どおりno-master(後方互換)', () => {
+  assert.deepEqual(classifyCustomerIdLink(doc({ customerName: '山田 太郎' }), index()), { kind: 'skip', reason: 'no-master' });
+});
+
+test('フラグありで、空白違い・候補マスター1件はlink-rename(揃える名前はマスターの生のname)', () => {
+  assert.deepEqual(classifyCustomerIdLink(doc({ customerName: '山田 太郎' }), index(), WS), {
+    kind: 'link-rename',
+    masterId: 'm-yamada',
+    before: { state: 'absent' },
+    newCustomerName: '山田太郎',
+  });
+  assert.deepEqual(classifyCustomerIdLink(doc({ customerName: '田中　次郎', customerId: 'm-deleted' }), index(), WS), {
+    kind: 'link-rename',
+    masterId: 'm-tanaka',
+    before: { state: 'dangling', id: 'm-deleted' },
+    newCustomerName: '田中次郎',
+  });
+});
+
+test('フラグありでも、完全一致1件は従来どおりlink(名前は書かない)', () => {
+  assert.deepEqual(classifyCustomerIdLink(doc(), index(), WS), { kind: 'link', masterId: 'm-yamada', before: { state: 'absent' } });
+});
+
+test('フラグありでも、空白違いの候補マスターが2件以上ならambiguous-same-name', () => {
+  // 「鈴木 一郎」「鈴木一郎」のマスター2件に対し、書類は「鈴木  一郎」(空白2つ、どちらとも完全一致しない)
+  assert.deepEqual(classifyCustomerIdLink(doc({ customerName: '鈴木  一郎' }), index(), WS), { kind: 'skip', reason: 'ambiguous-same-name' });
+});
+
+test('フラグありでも、候補マスターがNFKC表記違いの同姓同名と衝突していればambiguous-same-name', () => {
+  const idx = buildMasterIndex([
+    { id: 'k1', name: 'ｶﾄｳ花子' },
+    { id: 'k2', name: 'カトウ花子' },
+  ]);
+  assert.deepEqual(classifyCustomerIdLink(doc({ customerName: 'カトウ 花子' }), idx, WS), { kind: 'skip', reason: 'ambiguous-same-name' });
+});
+
+test('フラグありでも、かな表記違い(ヱ/エ)・全く別の名前はno-masterのまま', () => {
+  const idx = buildMasterIndex([{ id: 'e', name: '持永トシエ' }]);
+  assert.deepEqual(classifyCustomerIdLink(doc({ customerName: '持永トシヱ' }), idx, WS), { kind: 'skip', reason: 'no-master' });
+  assert.deepEqual(classifyCustomerIdLink(doc({ customerName: '存在しない人' }), index(), WS), { kind: 'skip', reason: 'no-master' });
+});
+
+test('揃えた後の書類は顧客確認でconfirmedになり、フォルダ名(空白除去)は書換え前後で同一', () => {
+  const d = doc({ customerName: ' 山田 太郎 ' });
+  const r = classifyCustomerIdLink(d, index(), WS);
+  assert.equal(r.kind, 'link-rename');
+  const renamed = (r as { newCustomerName: string }).newCustomerName;
+  assert.equal(precheckCustomerIdentity({ ...d, customerName: renamed }, { customerMasterName: '山田太郎' }).outcome, 'confirmed');
+  assert.equal(stripInternalSpaces(renamed.trim()), stripInternalSpaces((d.customerName as string).trim()));
+});
+
+test('findDriftedTargets: 揃える名前・分類の種類が変わった場合も検出する(マスター改名・完全一致マスターの追加)', () => {
+  const t = { masterId: 'm-yamada', kind: 'link-rename' as const, newCustomerName: '山田太郎', data: doc({ customerName: '山田 太郎' }) };
+  assert.deepEqual(findDriftedTargets([t], index(), WS), []);
+  const renamedMaster = buildMasterIndex(masters.map((m) => (m.id === 'm-yamada' ? { ...m, name: '山田太郎 ' } : m)));
+  assert.equal(findDriftedTargets([t], renamedMaster, WS).length, 1, 'マスター改名で揃える名前が変わった');
+  const exactAdded = buildMasterIndex([...masters, { id: 'm-yamada-sp', name: '山田 太郎' }]);
+  assert.equal(findDriftedTargets([t], exactAdded, WS).length, 1, '完全一致の別マスターが追加された');
+});
+
+test('manifest: entries/plannedのkind(link/link-rename)を受理し、未知のkindは拒否する。kind無し(第1段の旧manifest)も受理する', () => {
+  const good = JSON.parse(JSON.stringify(manifest([entry({ kind: 'link-rename' })])));
+  good.planned[0].kind = 'link-rename';
+  assert.equal(isValidCustomerIdLinkManifest(good), true);
+  const legacy = JSON.parse(JSON.stringify(manifest()));
+  assert.equal(isValidCustomerIdLinkManifest(legacy), true, '第1段の旧manifest(kind無し)');
+  const bad = JSON.parse(JSON.stringify(good));
+  bad.entries[0].kind = 'rename-only';
+  assert.equal(isValidCustomerIdLinkManifest(bad), false);
+  assert.equal(JSON.stringify(good).includes('山田'), false, 'manifestに顧客名を含めない');
+});
+
+test('rollback指示: link-renameもcustomerIdだけを戻す(顧客名は戻さない設計)', () => {
+  assert.deepEqual(computeCustomerIdRollbackInstruction(entry({ kind: 'link-rename' })), { action: 'delete' });
+});
+
+// ---------------------------------------------------------------- 第2段: レビュー指摘(pr-test-analyzer)対応
+
+test('link-renameの揃える名前は、マスターの「生のname」(内部空白を保持)。空白除去キーや書類側の名前ではない', () => {
+  const idx = buildMasterIndex([{ id: 'm-suzuki-only', name: '鈴木 一郎' }]);
+  for (const name of ['鈴木一郎', '鈴木  一郎', '鈴木　一郎', ' 鈴木一郎 ']) {
+    const r = classifyCustomerIdLink(doc({ customerName: name }), idx, WS);
+    assert.deepEqual(r, { kind: 'link-rename', masterId: 'm-suzuki-only', before: { state: 'absent' }, newCustomerName: '鈴木 一郎' }, JSON.stringify(name));
+  }
+  // 揃えた名前は、エクスポートの顧客確認(書類名trim vs マスター名の生)でconfirmedになる
+  assert.equal(precheckCustomerIdentity(doc({ customerName: '鈴木 一郎' }), { customerMasterName: '鈴木 一郎' }).outcome, 'confirmed');
+});
+
+test('マスター名の前後に空白がある場合は、どう揃えても顧客確認(trim済みの書類名 vs 生のマスター名)で一致しないため、対象外にする', () => {
+  const idx = buildMasterIndex([{ id: 'm-trailing', name: '山田太郎 ' }]);
+  assert.deepEqual(classifyCustomerIdLink(doc({ customerName: '山田 太郎' }), idx, WS), { kind: 'skip', reason: 'no-master' });
+  const lead = buildMasterIndex([{ id: 'm-leading', name: ' 山田太郎' }]);
+  assert.deepEqual(classifyCustomerIdLink(doc({ customerName: '山田 太郎' }), lead, WS), { kind: 'skip', reason: 'no-master' });
+});
+
+test('findDriftedTargets: 同じマスターIDのまま、マスター名が書類名と完全一致する表記へ改名された場合(link-rename→link)も検出する', () => {
+  const t = { masterId: 'm-yamada', kind: 'link-rename' as const, newCustomerName: '山田太郎', data: doc({ customerName: '山田 太郎' }) };
+  const renamedToDocSpelling = buildMasterIndex(masters.map((m) => (m.id === 'm-yamada' ? { ...m, name: '山田 太郎' } : m)));
+  assert.equal(findDriftedTargets([t], renamedToDocSpelling, WS).length, 1);
+});
+
+test('NFKC衝突の判定は、前後空白付きのマスター名でも効く(trimした名前で衝突集合と照合する)', () => {
+  const idx = buildMasterIndex([
+    { id: 'k1', name: 'ｶﾄｳ 花子' },
+    { id: 'k2', name: 'カトウ 花子' },
+  ]);
+  assert.deepEqual(classifyCustomerIdLink(doc({ customerName: 'カトウ花子' }), idx, WS), { kind: 'skip', reason: 'ambiguous-same-name' });
+});
+
+test('フラグありでも、既に有効なマスターへ紐づいている書類・確認済みでない書類は変更しない(not-applicable / not-confirmed)', () => {
+  assert.deepEqual(classifyCustomerIdLink(doc({ customerName: '山田 太郎', customerId: 'm-tanaka' }), index(), WS), { kind: 'not-applicable' });
+  assert.deepEqual(classifyCustomerIdLink(doc({ customerName: '山田 太郎', customerConfirmed: false }), index(), WS), { kind: 'skip', reason: 'not-confirmed' });
+  assert.deepEqual(classifyCustomerIdLink(doc({ customerName: '山田 太郎', verified: false }), index(), WS), { kind: 'skip', reason: 'not-confirmed' });
+});
