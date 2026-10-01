@@ -6,7 +6,7 @@ updated: 2026-10-02
 
 ## 【完了・2026-09-27】Issue #962対応: withBackoffRetryのリトライ観測性改善+updateErrのSentry送信(PR #1067マージ、現在のミッションとは別件・並行トラック)
 
-`/catchup`提示のIssue backlog(#979/#962/#956/#901/#251/#238)からdecision-maker選択(#962)により着手。他候補は設計不備で撤回済み(#979、2026-10-02にnot plannedでクローズ: 提案2は`processocr_request_timeout`で充足・提案1は実害なしで見送り)・待機条件未充足(#251/#238)・緊急性なし明記(#901)・#956は#979と設計方針重複の可能性ありでいずれも保留。
+`/catchup`提示のIssue backlog(#979/#962/#956/#901/#251/#238)からdecision-maker選択(#962)により着手。他候補は設計不備で撤回済み(#979、2026-10-02にnot plannedでクローズ: 提案2は`processocr_request_timeout`で充足・提案1は実害なしで見送り)・待機条件未充足(#251/#238)・緊急性なし明記(#901)・#956は保留(当時「#979と設計方針重複の可能性」と記載したが不正確: #979=processOCR latency検知、#956=`driveFolderClaim.ts`のcatch3箇所の記録失敗監視で対象が別。2026-10-02実測で3箇所のログは直近30日kanameone/cocoroとも0件・実害なし、着手はdecision-maker指示待ち)。
 
 **実装**: ①`functions/src/utils/retry.ts`の`withBackoffRetry`のcatch節が完全に無言でリトライしており、gRPC transientエラー(ABORTED/UNAVAILABLE等)がリトライで復旧した場合ログに一切痕跡が残らなかった問題に対し、attempt番号+元エラーメッセージ付きの`console.log`を追加。②`functions/src/ocr/ocrProcessor.ts`の`handleProcessingError`の`catch(updateErr)`(状態更新自体のリトライ枯渇、元のerrorより深刻な事象)が`console.error`のみでSentry等のアラート経路(`safeLogError`)に乗っていなかった問題に対し、`functionName`に`.handleProcessingError.updateErr`タグを付与した専用`safeLogError`呼出を追加(末尾の元error用呼出と区別可能)。
 
