@@ -209,6 +209,7 @@ async function runBackfill(): Promise<void> {
     // 承認者・実行者が見落とさないよう、dry-runと本実行の両方で明示する
     console.log(
       `::warning::空白違い${renameCount}件は顧客名(customerName)をマスター表記へ書き換えます。rollbackでは顧客名は戻りません(manifestに顧客名を残さない設計)。` +
+        '顧客名の変更で検索インデックスが再生成され更新時刻が進むため、rollback自体が「書込み後に変更あり」でスキップされることもあります。本実行は--limit 1で先に1件流して確認してください。' +
         'displayFileName(Driveのファイル名)など、保存済みの派生値は旧表記のまま残ります(見た目のみ。必要ならbackfill-display-filenameで再生成)'
     );
   }
