@@ -239,6 +239,8 @@ on:
           - diagnose-drive-folder-duplicate-causality
           - compare-drive-folder-pairs
           - inspect-drive-items
+          - resolve-drive-duplicate-file
+          - resolve-drive-duplicate-file --execute
           - backfill-drive-folder-claim-ttl
           - backfill-drive-folder-claim-ttl --execute
           - classify-drive-claim-divergence
@@ -1452,6 +1454,37 @@ jobs:
             NODE_PATH=../functions/node_modules \
               FIREBASE_PROJECT_ID="$PROJECT_ID" \
               npx ts-node inspect-drive-items.ts --ids "$IDS"
+          elif [ "$SCRIPT_NAME" = "resolve-drive-duplicate-file" ]; then
+            # 同一docIdのファイルが親フォルダに2件ある状態(AmbiguousFileError)の調査(既定read-only)と、
+            # --execute時のみ指定した1件のゴミ箱への移動。ファイル名は出力しない(PII対策)。
+            if [ -z "$EXEC_ARGS_JSON" ] || ! echo "$EXEC_ARGS_JSON" | jq empty 2>/dev/null; then
+              echo "ERROR: exec_args_json (valid JSON) is required for resolve-drive-duplicate-file" >&2
+              exit 1
+            fi
+            RDF_DOC_ID=$(echo "$EXEC_ARGS_JSON" | jq -r '.docId // empty')
+            RDF_PARENT_ID=$(echo "$EXEC_ARGS_JSON" | jq -r '.parentId // empty')
+            RDF_KEEP_ID=$(echo "$EXEC_ARGS_JSON" | jq -r '.keepFileId // empty')
+            RDF_TRASH_ID=$(echo "$EXEC_ARGS_JSON" | jq -r '.trashFileId // empty')
+            for V in "$RDF_DOC_ID" "$RDF_PARENT_ID"; do
+              if ! echo "$V" | grep -Eq '^[A-Za-z0-9_-]+$'; then
+                echo "ERROR: docId / parentId must match ^[A-Za-z0-9_-]+$" >&2
+                exit 1
+              fi
+            done
+            RDF_EXEC_ARGS=""
+            if echo "$SCRIPT_ARGS" | grep -q -- '--execute'; then
+              for V in "$RDF_KEEP_ID" "$RDF_TRASH_ID"; do
+                if ! echo "$V" | grep -Eq '^[A-Za-z0-9_-]+$'; then
+                  echo "ERROR: --execute requires keepFileId and trashFileId matching ^[A-Za-z0-9_-]+$" >&2
+                  exit 1
+                fi
+              done
+              RDF_EXEC_ARGS="--execute --keep-file-id $RDF_KEEP_ID --trash-file-id $RDF_TRASH_ID"
+            fi
+            cd scripts
+            NODE_PATH=../functions/node_modules \
+              FIREBASE_PROJECT_ID="$PROJECT_ID" \
+              npx ts-node resolve-drive-duplicate-file.ts --doc-id "$RDF_DOC_ID" --parent-id "$RDF_PARENT_ID" $RDF_EXEC_ARGS
           elif [ "$SCRIPT_NAME" = "plan-drive-folder-tree-merge" ]; then
             # 同名の兄弟フォルダ2つの再帰統合Plan生成(read-only)。出力は件数とIDのみ(PII対策)。
             if [ -z "$EXEC_ARGS_JSON" ] || ! echo "$EXEC_ARGS_JSON" | jq empty 2>/dev/null; then
