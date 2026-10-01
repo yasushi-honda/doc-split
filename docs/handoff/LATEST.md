@@ -11,7 +11,7 @@
 
 ### 教訓
 - 「既存ツールを流用できる」という見立ては、ツールの前提条件(対象フォルダの親がrootFolderIdのみ)を読む前に断定してはいけない(今回、確認後に訂正)。
-- `CLAUDE_ENV_FILE`ではなく環境変数`CLOUDSDK_ACTIVE_CONFIG_NAME`が固定されていると`switch-client.sh dev`が効かない(スクリプトはサブプロセスのため環境変数を変えられない)。dev復帰は`export CLOUDSDK_ACTIVE_CONFIG_NAME=doc-split`で行う。
+- 環境変数`CLOUDSDK_ACTIVE_CONFIG_NAME`が固定されていると`switch-client.sh dev`が効かない(スクリプトはサブプロセスのため環境変数を変えられない)。dev復帰は`export CLOUDSDK_ACTIVE_CONFIG_NAME=doc-split`で行う。
 - zshではforループの`set -- $pair`が単語分割されない(今回、引数が連結されて失敗、本番変更なし)。
 
 ### 次のアクション
