@@ -21,8 +21,8 @@ documentation:
     誤発火しうる点に留意すること。
 
     対応: Cloud Loggingでprocessocr関連のERRORログを確認し、対象docIdの
-    status/lastErrorMessageをFirestoreで確認する。一時的な監視強化のため、
-    review_by(下記userLabels)までに削除するか恒久運用に格上げするか再判断する。
+    status/lastErrorMessageをFirestoreで確認する。
+    2026-10-02に恒久運用へ格上げ(切替後2週間、3環境とも該当ログ0件・誤発火なし)。
   mimeType: "text/markdown"
 combiner: OR
 conditions:
@@ -39,7 +39,5 @@ alertStrategy:
   autoClose: 86400s
 userLabels:
   source: docsplit-monitoring-setup
-  lifecycle: temporary
-  review_by: "2026-10-03"
 notificationChannels:
   - __NOTIFICATION_CHANNEL__
