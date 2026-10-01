@@ -203,7 +203,15 @@ async function runBackfill(): Promise<void> {
   console.log(`走査: verified書類${totalScanned}件${scanIncomplete ? '(--limitの対象数に達したため途中で打ち切り。対象外の内訳は走査範囲のみ)' : ''}`);
   console.log(`紐づけ対象: ${allTargets.length}件${limit !== undefined ? `(--limit適用後 ${targets.length}件)` : ''}`);
   console.log(`紐づけ前の状態: ${formatCountRecord(countBy(targets.map((t) => t.before.state)))}`);
-  console.log(`内訳: 完全一致(customerIdのみ)${targets.filter((t) => t.kind === 'link').length}件 / 空白違い(customerIdと顧客名を揃える)${targets.filter((t) => t.kind === 'link-rename').length}件`);
+  const renameCount = targets.filter((t) => t.kind === 'link-rename').length;
+  console.log(`内訳: 完全一致(customerIdのみ)${targets.length - renameCount}件 / 空白違い(customerIdと顧客名を揃える)${renameCount}件`);
+  if (renameCount > 0) {
+    // 承認者・実行者が見落とさないよう、dry-runと本実行の両方で明示する
+    console.log(
+      `::warning::空白違い${renameCount}件は顧客名(customerName)をマスター表記へ書き換えます。rollbackでは顧客名は戻りません(manifestに顧客名を残さない設計)。` +
+        'displayFileName(Driveのファイル名)など、保存済みの派生値は旧表記のまま残ります(見た目のみ。必要ならbackfill-display-filenameで再生成)'
+    );
+  }
   console.log(`対象外(理由別): ${formatCountRecord(skippedCounts)}`);
 
   // 紐づけてもエクスポートが通らない可能性のある対象を事前に数える(承認の判断材料。書込みの可否は変えない)。
@@ -322,7 +330,8 @@ async function runRollback(manifestPath: string): Promise<void> {
   console.log(`rollback対象: runId=${manifest.runId}, entries=${manifest.entries.length}件`);
   const renamed = manifest.entries.filter((e) => e.kind === 'link-rename').length;
   if (renamed > 0) {
-    console.log(`注意: 空白違いの紐づけ(link-rename)${renamed}件は、customerIdのみ戻します。顧客名はマスター表記のまま残ります(manifestに顧客名を残さない設計。違いは空白の有無だけです)`);
+    console.log(`注意: 空白違いの紐づけ(link-rename)${renamed}件は、customerIdのみ戻します。顧客名はマスター表記のまま残ります(manifestに顧客名を残さない設計。違いは空白の有無だけです)
+    console.log('注意: 顧客名の変更で検索インデックス(search)が再生成され書類の更新時刻が進むため、link-renameの書類はrollbackで「書込み後に変更あり」としてスキップされることがあります(安全側の挙動。スキップ件数は結果に表示されます)');
   }
   if (manifest.projectId !== projectId) {
     console.error(`ERROR: manifestのprojectId(${manifest.projectId})と実行対象(${projectId})が一致しません。誤操作防止のため中断します。`);
@@ -377,6 +386,9 @@ async function runRollback(manifestPath: string): Promise<void> {
   }
 }
 
+if (rollbackManifestPath && whitespaceVariants) {
+  console.log('::warning::--rollbackでは--whitespace-variantsは使われません(manifestのkindに従い、customerIdのみ戻します)');
+}
 (rollbackManifestPath ? runRollback(rollbackManifestPath) : runBackfill())
   .then(() => process.exit(0))
   .catch((err) => {

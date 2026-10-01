@@ -470,3 +470,30 @@ test('--whitespace-variants: 2回目の実行は対象0件(冪等)', async () =>
   const r = runScript(['--whitespace-variants', '--expected-count', '0']);
   assert.match(r.stdout, /紐づけ対象: 0件/);
 });
+
+test('--whitespace-variants: マスター名に内部空白がある場合、書類の顧客名はマスターの生の表記(空白あり)へ揃い、顧客確認でconfirmedになる', async () => {
+  await db.doc(`${MASTER_PATHS.customers}/m-suzuki-only`).set({ name: '鈴木 一郎', furigana: 'スズキイチロウ' });
+  await db.doc('documents/ws-inner').set(baseDoc({ customerName: '鈴木一郎' }));
+  runScript(['--whitespace-variants', '--expected-count', '1']);
+  const d = await getDoc('ws-inner');
+  assert.equal(d.customerId, 'm-suzuki-only');
+  assert.equal(d.customerName, '鈴木 一郎', 'マスターの生の表記へ揃う(空白除去キーではない)');
+  assert.equal(precheckCustomerIdentity({ customerName: d.customerName as string, customerConfirmed: true }, { customerMasterName: '鈴木 一郎' }).outcome, 'confirmed');
+});
+
+test('--whitespace-variants: 完全一致の書類は、前後空白付きの顧客名のままcustomerIdだけが書かれ、顧客名は元の値のまま', async () => {
+  await db.doc('documents/ws-trim').set(baseDoc({ customerName: ' 山田太郎 ' }));
+  runScript(['--whitespace-variants', '--expected-count', '1']);
+  const d = await getDoc('ws-trim');
+  assert.equal(d.customerId, 'm-yamada');
+  assert.equal(d.customerName, ' 山田太郎 ', 'linkはcustomerIdのみ。顧客名は書き換えない');
+});
+
+test('--whitespace-variants: 既に有効なマスターへ紐づいている書類・マスター名の前後に空白がある書類は書き換えない', async () => {
+  await db.doc(`${MASTER_PATHS.customers}/m-trail`).set({ name: '渡辺三郎 ', furigana: 'ワタナベサブロウ' });
+  await db.doc('documents/ws-valid').set(baseDoc({ customerName: '山田 太郎', customerId: 'm-yamada' }));
+  await db.doc('documents/ws-trail').set(baseDoc({ customerName: '渡辺 三郎' }));
+  runScript(['--whitespace-variants', '--expected-count', '0']);
+  assert.equal((await getDoc('ws-valid')).customerName, '山田 太郎', '有効な紐づけ済みの書類は触らない');
+  assert.equal((await getDoc('ws-trail')).customerId, undefined);
+});

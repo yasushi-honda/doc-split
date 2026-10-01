@@ -57,6 +57,8 @@ export interface LinkCandidateDoc {
 export interface MasterIndex {
   /** マスターの生の`name`(trimしない)→ ID一覧。エクスポートの乖離チェック(書類名trim済み vs マスター名の生)と揃える。 */
   idsByExactName: Map<string, string[]>;
+  /** マスターID → 生の`name`(`link-rename`で揃える名前の取得用。書類ごとの全走査を避ける)。 */
+  nameById: Map<string, string>;
   /** マスターの`name`をtrim+内部空白除去したキー → ID一覧(空白違いだけの書類の照合用)。 */
   idsByStrippedName: Map<string, string[]>;
   ids: Set<string>;
@@ -71,6 +73,7 @@ export interface MasterIndex {
 export function buildMasterIndex(masters: Array<{ id: string; name: unknown; furigana?: unknown }>): MasterIndex {
   const idsByExactName = new Map<string, string[]>();
   const idsByStrippedName = new Map<string, string[]>();
+  const nameById = new Map<string, string>();
   const ids = new Set<string>();
   const named: Array<{ name: string }> = [];
   let nonStringNameCount = 0;
@@ -86,6 +89,7 @@ export function buildMasterIndex(masters: Array<{ id: string; name: unknown; fur
     const list = idsByExactName.get(m.name) ?? [];
     list.push(m.id);
     idsByExactName.set(m.name, list);
+    nameById.set(m.id, m.name);
     const strippedKey = stripInternalSpaces(m.name.trim());
     idsByStrippedName.set(strippedKey, [...(idsByStrippedName.get(strippedKey) ?? []), m.id]);
   }
@@ -101,7 +105,7 @@ export function buildMasterIndex(masters: Array<{ id: string; name: unknown; fur
   for (const group of rawByNfkcKey.values()) {
     if (group.length > 1) for (const raw of group) collisionNames.add(raw);
   }
-  return { idsByExactName, idsByStrippedName, ids, collisionNames, idsWithoutFurigana, nonStringNameCount };
+  return { idsByExactName, idsByStrippedName, nameById, ids, collisionNames, idsWithoutFurigana, nonStringNameCount };
 }
 
 /**
@@ -146,9 +150,13 @@ export function classifyCustomerIdLink(doc: LinkCandidateDoc, index: MasterIndex
     const stripped = index.idsByStrippedName.get(stripInternalSpaces(name)) ?? [];
     if (stripped.length >= 2) return { kind: 'skip', reason: 'ambiguous-same-name' };
     if (stripped.length === 1) {
-      const masterName = [...index.idsByExactName.entries()].find(([, ids]) => ids.includes(stripped[0]))?.[0];
+      const masterName = index.nameById.get(stripped[0]);
       // 候補マスターがNFKC表記違いの同姓同名と衝突している場合は、自動では紐づけない
-      if (masterName === undefined || index.collisionNames.has(masterName.trim())) return { kind: 'skip', reason: 'ambiguous-same-name' };
+      if (masterName === undefined) return { kind: 'skip', reason: 'no-master' };
+      // マスター名の前後に空白がある場合、エクスポートの顧客確認(trim済みの書類名 vs 生のマスター名)はどう揃えても一致しない。
+      // 揃えても「顧客未確定」に落ちるだけなので、対象外にする(マスター側の名前の整理が先)
+      if (masterName !== masterName.trim()) return { kind: 'skip', reason: 'no-master' };
+      if (index.collisionNames.has(masterName.trim())) return { kind: 'skip', reason: 'ambiguous-same-name' };
       return { kind: 'link-rename', masterId: stripped[0], before, newCustomerName: masterName };
     }
   }
