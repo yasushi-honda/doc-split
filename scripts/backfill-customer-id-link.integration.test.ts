@@ -335,3 +335,64 @@ test('--limitが対象数に達しない場合は全件走査し、scanIncomplet
   runScript(['--limit', '5', '--expected-count', '1', '--manifest-out', out]);
   assert.equal(JSON.parse(readFileSync(out, 'utf-8')).scanIncomplete, false);
 });
+
+test('Firestore: lastUpdateTime付きupdateは、読取後に別の書込みがあるとcode 9で失敗し、何も書かない(executeLinksがスキップ扱いにする前提の実挙動)', async () => {
+  const { executeLinks } = await import('./lib/customerIdLinkBackfillHelpers');
+  await db.doc('documents/pre-1').set(baseDoc());
+  const ref = db.doc('documents/pre-1');
+  const staleUpdateTime = (await ref.get()).updateTime!;
+  await ref.update({ officeName: '別の書込み' }); // 読取後の別更新
+
+  const entries: Parameters<typeof executeLinks>[2] = [];
+  const skipped: string[] = [];
+  const r = await executeLinks(
+    [{ id: 'pre-1', masterId: 'm-yamada', before: { state: 'absent' } }],
+    async (t) => {
+      const res = await ref.update({ customerId: t.masterId }, { lastUpdateTime: staleUpdateTime });
+      return { seconds: res.writeTime.seconds, nanoseconds: res.writeTime.nanoseconds };
+    },
+    entries,
+    { onSkip: (id) => skipped.push(id) }
+  );
+  assert.deepEqual(r, { written: 0, skippedPrecondition: 1, skippedNotFound: 0 });
+  assert.deepEqual(skipped, ['pre-1']);
+  assert.equal((await getDoc('pre-1')).customerId, undefined, '競合時は書かれない');
+});
+
+test('Firestore: 書込み時点で書類が削除済みなら、lastUpdateTime付きupdateは失敗し(emulatorではcode 9、NOT_FOUND(code 5)の環境もありうる)、executeLinksがどちらでも全体を止めずスキップする', async () => {
+  const { executeLinks } = await import('./lib/customerIdLinkBackfillHelpers');
+  await db.doc('documents/pre-2').set(baseDoc());
+  const ref = db.doc('documents/pre-2');
+  const ut = (await ref.get()).updateTime!;
+  await ref.delete();
+  const r = await executeLinks(
+    [{ id: 'pre-2', masterId: 'm-yamada', before: { state: 'absent' } }],
+    async (t) => {
+      const res = await ref.update({ customerId: t.masterId }, { lastUpdateTime: ut });
+      return { seconds: res.writeTime.seconds, nanoseconds: res.writeTime.nanoseconds };
+    },
+    []
+  );
+  assert.equal(r.written, 0);
+  assert.equal(r.skippedPrecondition + r.skippedNotFound, 1, '削除済みの書類は(code 9または5で)スキップされ、例外にならない');
+});
+
+test('dry-runのログに、紐づけ後もエクスポートが通らない可能性(担当ケアマネ名が空・マスターのフリガナが空)の件数を出す', async () => {
+  await db.doc(`${MASTER_PATHS.customers}/m-nofuri`).set({ name: '渡辺三郎' });
+  await db.doc('documents/w-1').set(baseDoc({ customerName: '渡辺三郎', careManager: '' }));
+  await db.doc('documents/w-2').set(baseDoc());
+  const r = runScript(['--dry-run']);
+  assert.match(r.stdout, /担当ケアマネ名が空1件 \/ 紐づけ先マスターのフリガナが空1件/);
+});
+
+test('rollback: 元が明示的なnullの書類は、フィールド削除ではなくnullへ戻る', async () => {
+  const original = baseDoc({ customerId: null });
+  await db.doc('documents/r-null').set(original);
+  const out = manifestPath();
+  runScript(['--expected-count', '1', '--manifest-out', out]);
+  assert.equal((await getDoc('r-null')).customerId, 'm-yamada');
+  runScript(['--rollback', out]);
+  const after = await getDoc('r-null');
+  assert.equal('customerId' in after, true, 'フィールドは残る');
+  assert.deepEqual(after, original, 'null込みで元のドキュメントと完全一致');
+});

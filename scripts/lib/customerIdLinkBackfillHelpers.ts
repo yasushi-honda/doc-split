@@ -28,7 +28,7 @@ export const SKIP_REASONS: readonly SkipReason[] = [
 ];
 
 /** 紐づけ前の`customerId`の状態(rollbackで元に戻すために記録する)。 */
-export type CustomerIdBefore = { state: 'absent' } | { state: 'empty' } | { state: 'dangling'; id: string };
+export type CustomerIdBefore = { state: 'absent' } | { state: 'null' } | { state: 'empty' } | { state: 'dangling'; id: string };
 
 export type LinkClassification =
   | { kind: 'link'; masterId: string; before: CustomerIdBefore }
@@ -48,17 +48,21 @@ export interface MasterIndex {
   ids: Set<string>;
   /** 同名衝突(trim+内部空白除去、またはNFKC正規化後に2件以上)の生のtrim済み名の集合。 */
   collisionNames: Set<string>;
+  /** `furigana`が無い/空のマスターID(紐づけてもフォルダ名のフリガナが取れないため、dry-runで警告する)。 */
+  idsWithoutFurigana: Set<string>;
   /** `name`が文字列でないマスターの件数(データ破損の検知用。名前索引から外れ、該当書類はno-masterになる)。 */
   nonStringNameCount: number;
 }
 
-export function buildMasterIndex(masters: Array<{ id: string; name: unknown }>): MasterIndex {
+export function buildMasterIndex(masters: Array<{ id: string; name: unknown; furigana?: unknown }>): MasterIndex {
   const idsByExactName = new Map<string, string[]>();
   const ids = new Set<string>();
   const named: Array<{ name: string }> = [];
   let nonStringNameCount = 0;
+  const idsWithoutFurigana = new Set<string>();
   for (const m of masters) {
     ids.add(m.id);
+    if (typeof m.furigana !== 'string' || m.furigana.trim() === '') idsWithoutFurigana.add(m.id);
     if (typeof m.name !== 'string') {
       nonStringNameCount++;
       continue;
@@ -80,7 +84,7 @@ export function buildMasterIndex(masters: Array<{ id: string; name: unknown }>):
   for (const group of rawByNfkcKey.values()) {
     if (group.length > 1) for (const raw of group) collisionNames.add(raw);
   }
-  return { idsByExactName, ids, collisionNames, nonStringNameCount };
+  return { idsByExactName, ids, collisionNames, idsWithoutFurigana, nonStringNameCount };
 }
 
 /**
@@ -91,8 +95,10 @@ export function buildMasterIndex(masters: Array<{ id: string; name: unknown }>):
 export function classifyCustomerIdLink(doc: LinkCandidateDoc, index: MasterIndex): LinkClassification {
   const id = doc.customerId;
   let before: CustomerIdBefore;
-  if (id === undefined || id === null) {
+  if (id === undefined) {
     before = { state: 'absent' };
+  } else if (id === null) {
+    before = { state: 'null' }; // 明示的なnull。rollbackで元のnullへ戻す(フィールド削除と区別する)
   } else if (typeof id !== 'string') {
     return { kind: 'skip', reason: 'invalid-field-type' };
   } else if (id === '') {
@@ -165,7 +171,7 @@ const isValidDocId = (v: unknown): v is string => isNonEmptyStr(v) && !v.include
 
 function isValidBefore(v: unknown): v is CustomerIdBefore {
   if (!isObj(v)) return false;
-  if (v.state === 'absent' || v.state === 'empty') return hasOnlyKeys(v, ['state']);
+  if (v.state === 'absent' || v.state === 'null' || v.state === 'empty') return hasOnlyKeys(v, ['state']);
   if (v.state === 'dangling') return hasOnlyKeys(v, ['state', 'id']) && isNonEmptyStr(v.id);
   return false;
 }
@@ -207,6 +213,18 @@ export function isValidCustomerIdLinkManifest(v: unknown): v is CustomerIdLinkMa
   const s = v.skipped;
   if (!isObj(s) || !hasOnlyKeys(s, SKIP_REASONS)) return false;
   return SKIP_REASONS.every((r) => Array.isArray(s[r]) && (s[r] as unknown[]).every(isValidDocId));
+}
+
+/**
+ * 走査後にマスターが変化していないか確認する。再読込したマスター索引で各対象を分類し直し、
+ * 「同じマスターへ紐づける」判定でなくなったもの(マスターの削除・改名・同名追加など)を返す。
+ * 1件でもあれば、呼び出し側は書込みを一切行わず中断する。
+ */
+export function findDriftedTargets<T extends { masterId: string; data: LinkCandidateDoc }>(targets: readonly T[], freshIndex: MasterIndex): T[] {
+  return targets.filter((t) => {
+    const r = classifyCustomerIdLink(t.data, freshIndex);
+    return !(r.kind === 'link' && r.masterId === t.masterId);
+  });
 }
 
 // ---------------------------------------------------------------- 書込み(I/Oは呼び出し側が注入)
@@ -281,12 +299,14 @@ export function isRollbackEligibleByUpdateTime(
   return liveUpdateTime.seconds === entry.backfillUpdateTime.seconds && liveUpdateTime.nanoseconds === entry.backfillUpdateTime.nanoseconds;
 }
 
-export type RollbackInstruction = { action: 'delete' } | { action: 'set'; value: string };
+export type RollbackInstruction = { action: 'delete' } | { action: 'set'; value: string | null };
 
 export function computeCustomerIdRollbackInstruction(entry: CustomerIdLinkManifestEntry): RollbackInstruction {
   switch (entry.customerIdBefore.state) {
     case 'absent':
       return { action: 'delete' };
+    case 'null':
+      return { action: 'set', value: null };
     case 'empty':
       return { action: 'set', value: '' };
     case 'dangling':

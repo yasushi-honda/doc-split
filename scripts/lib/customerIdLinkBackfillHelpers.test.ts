@@ -51,7 +51,7 @@ test('customerIdが無い・空文字・存在しないマスターを指す、�
   assert.deepEqual(classifyCustomerIdLink(doc({ customerId: null }), index()), {
     kind: 'link',
     masterId: 'm-yamada',
-    before: { state: 'absent' },
+    before: { state: 'null' },
   });
   assert.deepEqual(classifyCustomerIdLink(doc({ customerId: 'm-deleted' }), index()), {
     kind: 'link',
@@ -176,6 +176,7 @@ test('manifestの検証: 欠落・型不一致・想定外キー・重複docId�
     mutate((m) => (m.entries[0].customerIdAfter = '')),
     mutate((m) => (m.entries[0].customerIdBefore = { state: 'other' })),
     mutate((m) => (m.entries[0].customerIdBefore = { state: 'dangling' })),
+    mutate((m) => (m.entries[0].customerIdBefore = { state: 'null', id: 'x' })),
     mutate((m) => (m.entries[0].customerIdBefore = { state: 'absent', id: 'x' })),
     mutate((m) => (m.entries[0].backfillUpdateTime = { seconds: 1 })),
     mutate((m) => m.entries.push(JSON.parse(JSON.stringify(m.entries[0])))),
@@ -192,6 +193,7 @@ test('manifestの検証: 欠落・型不一致・想定外キー・重複docId�
 
 test('rollback指示: absentはdelete、空文字は空文字へ、danglingは元のIDへ戻す', () => {
   assert.deepEqual(computeCustomerIdRollbackInstruction(entry()), { action: 'delete' });
+  assert.deepEqual(computeCustomerIdRollbackInstruction(entry({ customerIdBefore: { state: 'null' } })), { action: 'set', value: null });
   assert.deepEqual(computeCustomerIdRollbackInstruction(entry({ customerIdBefore: { state: 'empty' } })), { action: 'set', value: '' });
   assert.deepEqual(computeCustomerIdRollbackInstruction(entry({ customerIdBefore: { state: 'dangling', id: 'm-old' } })), {
     action: 'set',
@@ -307,4 +309,38 @@ test('NFKC正規化で同一になる別表記のマスター(半角カナ・濁
 
 test('buildMasterIndex: nameが文字列でないマスターの件数を数える', () => {
   assert.equal(buildMasterIndex([{ id: 'a', name: undefined }, { id: 'b', name: 5 }, { id: 'c', name: '山田太郎' }]).nonStringNameCount, 2);
+});
+
+// ---------------------------------------------------------------- マスター再検証(findDriftedTargets)・フリガナ確認
+
+import { findDriftedTargets } from './customerIdLinkBackfillHelpers';
+
+test('findDriftedTargets: マスターが変化していなければ空', () => {
+  const targets = [{ masterId: 'm-yamada', data: doc() }];
+  assert.deepEqual(findDriftedTargets(targets, index()), []);
+});
+
+test('findDriftedTargets: 紐づけ先マスターが削除された/改名された/同名が追加された対象を検出する(書込み前に中断する根拠)', () => {
+  const t = { masterId: 'm-yamada', data: doc() };
+  assert.equal(findDriftedTargets([t], buildMasterIndex(masters.filter((m) => m.id !== 'm-yamada'))).length, 1, '削除');
+  assert.equal(findDriftedTargets([t], buildMasterIndex(masters.map((m) => (m.id === 'm-yamada' ? { ...m, name: '山田 太郎' } : m)))).length, 1, '改名');
+  assert.equal(findDriftedTargets([t], buildMasterIndex([...masters, { id: 'm-yamada-2', name: '山田太郎' }])).length, 1, '同名追加');
+  assert.equal(findDriftedTargets([t], buildMasterIndex([...masters, { id: 'm-yamada-3', name: '山田 太郎' }])).length, 1, '空白違いの同名追加');
+});
+
+test('findDriftedTargets: 別のマスターに付け替わる場合(旧マスター削除+同名の別マスターのみ残る)も検出する', () => {
+  const t = { masterId: 'm-yamada', data: doc() };
+  const fresh = buildMasterIndex([{ id: 'm-new', name: '山田太郎' }]);
+  assert.equal(findDriftedTargets([t], fresh).length, 1);
+});
+
+test('buildMasterIndex: furiganaが無い/空/空白のみのマスターIDを数える', () => {
+  const idx = buildMasterIndex([
+    { id: 'a', name: 'A', furigana: 'エー' },
+    { id: 'b', name: 'B' },
+    { id: 'c', name: 'C', furigana: '' },
+    { id: 'd', name: 'D', furigana: '  ' },
+    { id: 'e', name: 'E', furigana: 5 },
+  ]);
+  assert.deepEqual([...idx.idsWithoutFurigana].sort(), ['b', 'c', 'd', 'e']);
 });

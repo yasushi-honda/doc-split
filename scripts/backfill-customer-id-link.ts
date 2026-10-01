@@ -37,6 +37,7 @@ import {
   buildCustomerIdLinkManifest,
   buildMasterIndex,
   executeLinks,
+  findDriftedTargets,
   classifyCustomerIdLink,
   computeCustomerIdRollbackInstruction,
   isRollbackEligibleByUpdateTime,
@@ -104,11 +105,12 @@ function emptySkipped(): Record<SkipReason, string[]> {
 
 async function loadMasterIndex() {
   const snap = await db.collection(MASTER_PATHS.customers).get();
-  return buildMasterIndex(snap.docs.map((d) => ({ id: d.id, name: d.data().name })));
+  return buildMasterIndex(snap.docs.map((d) => ({ id: d.id, name: d.data().name, furigana: d.data().furigana })));
 }
 
 /** `verified==true`をdocumentId順にページングして分類する(必要な4フィールドだけ読む)。 */
 async function scan(stopAtTargets: number | undefined): Promise<{
+  index: ReturnType<typeof buildMasterIndex>;
   totalScanned: number;
   targets: LinkTarget[];
   skipped: Record<SkipReason, string[]>;
@@ -130,7 +132,7 @@ async function scan(stopAtTargets: number | undefined): Promise<{
       .collection('documents')
       .where('verified', '==', true)
       .orderBy(admin.firestore.FieldPath.documentId())
-      .select('customerId', 'customerName', 'customerConfirmed', 'verified')
+      .select('customerId', 'customerName', 'customerConfirmed', 'verified', 'careManager')
       .limit(PAGE_SIZE);
     if (lastDoc) query = query.startAfter(lastDoc);
     // eslint-disable-next-line no-await-in-loop
@@ -153,7 +155,7 @@ async function scan(stopAtTargets: number | undefined): Promise<{
     lastDoc = snap.docs[snap.docs.length - 1];
     if (snap.size < PAGE_SIZE) break;
   }
-  return { totalScanned, targets, skipped, scanIncomplete };
+  return { index, totalScanned, targets, skipped, scanIncomplete };
 }
 
 /** 一時ファイルへ書いてからrenameする(途中で強制終了しても、壊れたmanifestが残らない)。 */
@@ -171,7 +173,7 @@ async function runBackfill(): Promise<void> {
   if (expectedCount !== undefined) console.log(`--expected-count: ${expectedCount}`);
   console.log('---');
 
-  const { totalScanned, targets: allTargets, skipped, scanIncomplete } = await scan(limit);
+  const { index, totalScanned, targets: allTargets, skipped, scanIncomplete } = await scan(limit);
   const targets = applyLimit(allTargets, limit);
   const runId = randomUUID();
   const timestamp = new Date().toISOString();
@@ -181,6 +183,15 @@ async function runBackfill(): Promise<void> {
   console.log(`紐づけ対象: ${allTargets.length}件${limit !== undefined ? `(--limit適用後 ${targets.length}件)` : ''}`);
   console.log(`紐づけ前の状態: ${formatCountRecord(countBy(targets.map((t) => t.before.state)))}`);
   console.log(`対象外(理由別): ${formatCountRecord(skippedCounts)}`);
+
+  // 紐づけてもエクスポートが通らない可能性のある対象を事前に数える(承認の判断材料。書込みの可否は変えない)。
+  // フォルダ名は「担当ケアマネ名」と「利用者のフリガナ」の両方が必要(フリガナは紐づけ先マスターから、ケアマネ名は書類側から取る)
+  const noCareManager = targets.filter((t) => typeof (t.data as { careManager?: unknown }).careManager !== 'string' || ((t.data as { careManager: string }).careManager).trim() === '');
+  const noFurigana = targets.filter((t) => index.idsWithoutFurigana.has(t.masterId));
+  console.log(`紐づけ後もエクスポートが通らない可能性: 担当ケアマネ名が空${noCareManager.length}件 / 紐づけ先マスターのフリガナが空${noFurigana.length}件`);
+  if (noCareManager.length + noFurigana.length > 0) {
+    console.log('::warning::紐づけ対象のうち、担当ケアマネ名またはマスターのフリガナが空の書類があります。紐づけてもエクスポートエラーの理由が変わるだけの可能性があります');
+  }
 
   // 書込み前に件数を照合する(dry-runでも実施。不一致なら書込みなしで中断)
   try {
@@ -221,10 +232,7 @@ async function runBackfill(): Promise<void> {
   // 走査〜書込みの間にマスターが削除・改名・追加されると、存在しないIDや曖昧な同名への紐づけを書きうるため、
   // 変わっていれば何も書かずに中断する(書類側のprecondition(updateTime)ではマスターの変化は検知できない)
   const freshIndex = await loadMasterIndex();
-  const drifted = targets.filter((t) => {
-    const r = classifyCustomerIdLink(t.data, freshIndex);
-    return !(r.kind === 'link' && r.masterId === t.masterId);
-  });
+  const drifted = findDriftedTargets(targets, freshIndex);
   if (drifted.length > 0) {
     console.error(`ERROR: 走査後に顧客マスターが変化し、${drifted.length}件の判定が変わりました。書込みを一切行わず中断します。再度dry-runから実行してください。`);
     process.exit(1);
