@@ -330,7 +330,7 @@ async function runRollback(manifestPath: string): Promise<void> {
   console.log(`rollback対象: runId=${manifest.runId}, entries=${manifest.entries.length}件`);
   const renamed = manifest.entries.filter((e) => e.kind === 'link-rename').length;
   if (renamed > 0) {
-    console.log(`注意: 空白違いの紐づけ(link-rename)${renamed}件は、customerIdのみ戻します。顧客名はマスター表記のまま残ります(manifestに顧客名を残さない設計。違いは空白の有無だけです)
+    console.log(`注意: 空白違いの紐づけ(link-rename)${renamed}件は、customerIdのみ戻します。顧客名はマスター表記のまま残ります(manifestに顧客名を残さない設計。違いは空白の有無だけです)`);
     console.log('注意: 顧客名の変更で検索インデックス(search)が再生成され書類の更新時刻が進むため、link-renameの書類はrollbackで「書込み後に変更あり」としてスキップされることがあります(安全側の挙動。スキップ件数は結果に表示されます)');
   }
   if (manifest.projectId !== projectId) {
