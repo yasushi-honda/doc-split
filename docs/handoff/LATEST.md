@@ -2,6 +2,23 @@
 
 **更新日**: 2026-10-02（kanameone Drive保存の範囲内作業が完了しクライアントへ送付済み: 補完99件・停止期間中の取り込み・フォルダ統合・claim解除1件・重複ファイル整理1件、すべて保存済みを確認。前回: kanameoneの顧客ID紐づけ補完を第1段56件・第2段(空白違い)43件で本番適用。前回: kanameone `(root)/森奈穂美`の再帰統合ツールを実装・本番適用、停止書類が回復中。前回: 2026-09-29 ADR-0027 PR5: dev環境でのSarashina要約実機観測を実施。D3・D8はSarashina要約完走、D2は`fabrication_suspected`誤検知をdecision-maker方針Aで恒久対応(PR #1083、スキャナ正規化)、dev実機でD2=`done`確認・AC4(canary 3/3件done)達成。kanameone Drive Phase1: OAuth再連携完了(2026-09-28)を確認し、2026-09-30に重複audit→merge候補14グループ統合実行→再audit完了。残はmanual-review 8件の判断とflag ON・backfill）
 
+## 平出配下7組の実測・processocr_errorアラート恒久化・Issue #979クローズ（2026-10-02）
+
+### 結果
+- **平出配下manual-review 7組**: kanameoneの`drive-export-status-report --breakdown`(run 36938045779)で、実エラー61件はフリガナ/ケアマネ/カテゴリ未設定のみ、`AmbiguousFolderError`由来0件と実測し実害なしと確認。既存の再帰統合ツール(`plan-drive-folder-tree-merge`)は`rootFolderId`直下の同名2フォルダ専用で利用者フォルダ配下の7組には使えないため、統合ツール新設は見送り(PR #1109)。
+- **`processocr_error`アラートを恒久化**(PR #1110): 切替後2週間(2026-09-19〜10-02)の`Error processing document`ログは3環境とも0件(対照クエリで通常ログ取得は確認済み、空振りではない)。テンプレート/docsから`lifecycle: temporary`と`review_by`を除去。`setup-log-based-metrics.sh`は既存ポリシーをskipするため、kanameone/cocoroの稼働中ポリシーは`gcloud alpha monitoring policies update --remove-user-labels=lifecycle,review_by`で個別更新し、再取得でラベル除去と有効状態を確認。
+- **Issue #979をnot plannedでクローズ**(PR #1111でGOAL.mdの旧記述へ反映): 提案2は恒久運用の`processocr_request_timeout`で充足、提案1(文書単位の処理時間metric)は実害なしのため見送り。実害が出たら再起票。
+
+### 教訓
+- 「既存ツールを流用できる」という見立ては、ツールの前提条件(対象フォルダの親がrootFolderIdのみ)を読む前に断定してはいけない(今回、確認後に訂正)。
+- 環境変数`CLOUDSDK_ACTIVE_CONFIG_NAME`が固定されていると`switch-client.sh dev`が効かない(スクリプトはサブプロセスのため環境変数を変えられない)。dev復帰は`export CLOUDSDK_ACTIVE_CONFIG_NAME=doc-split`で行う。
+- zshではforループの`set -- $pair`が単語分割されない(今回、引数が連結されて失敗、本番変更なし)。
+
+### 次のアクション
+- **即着手**: なし。
+- **条件待ち**: クライアントの返信・入力の進捗確認(trigger=返信、`drive-export-status-report --breakdown`の件数のみ) / 平出配下7組(trigger=`AmbiguousFolderError`の実発生) / #956(`driveFolderClaim.ts`のcatchメトリクス無し)の扱い見直し(GOAL.md「#979と設計方針重複の可能性」注記は#979クローズで前提が変わった。trigger=decision-maker指示、確認はIssue本文を読むだけ) / cocoro Phase C(クライアント自身のOAuth接続) / ADR-0027 S10・PR6(decision-maker指示)。
+- **却下候補**: 平出配下7組の統合ツール新設(実害なし・コストに見合わない)。
+
 ## kanameone 顧客ID紐づけ補完(フリガナ未設定エラーの根本対応)（2026-10-01）
 
 ### 結果
