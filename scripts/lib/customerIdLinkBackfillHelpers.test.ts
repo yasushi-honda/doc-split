@@ -1,0 +1,201 @@
+/**
+ * `scripts/lib/customerIdLinkBackfillHelpers.ts` の単体テスト(node:test、emulator不要)
+ *
+ * 実行: cd scripts && npm test
+ */
+
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import {
+  buildCustomerIdLinkManifest,
+  buildMasterIndex,
+  classifyCustomerIdLink,
+  computeCustomerIdRollbackInstruction,
+  isRollbackEligibleByUpdateTime,
+  isValidCustomerIdLinkManifest,
+  type CustomerIdLinkManifestEntry,
+  type MasterIndex,
+} from './customerIdLinkBackfillHelpers';
+import { precheckCustomerIdentity } from '../../shared/customerIdentity';
+
+const masters = [
+  { id: 'm-yamada', name: '山田太郎' },
+  { id: 'm-sato-1', name: '佐藤花子' },
+  { id: 'm-sato-2', name: '佐藤花子' }, // 完全一致の同名
+  { id: 'm-suzuki-a', name: '鈴木 一郎' }, // 空白違いの同姓同名
+  { id: 'm-suzuki-b', name: '鈴木一郎' },
+  { id: 'm-tanaka', name: '田中次郎' },
+];
+
+function index(): MasterIndex {
+  return buildMasterIndex(masters);
+}
+
+function doc(overrides: Record<string, unknown> = {}) {
+  return { verified: true, customerConfirmed: true, customerName: '山田太郎', ...overrides };
+}
+
+// ---------------------------------------------------------------- 紐づけ対象(link)
+
+test('customerIdが無い・空文字・存在しないマスターを指す、確認済み書類は、同名1件のマスターへ紐づける', () => {
+  assert.deepEqual(classifyCustomerIdLink(doc(), index()), {
+    kind: 'link',
+    masterId: 'm-yamada',
+    before: { state: 'absent' },
+  });
+  assert.deepEqual(classifyCustomerIdLink(doc({ customerId: '' }), index()), {
+    kind: 'link',
+    masterId: 'm-yamada',
+    before: { state: 'empty' },
+  });
+  assert.deepEqual(classifyCustomerIdLink(doc({ customerId: null }), index()), {
+    kind: 'link',
+    masterId: 'm-yamada',
+    before: { state: 'absent' },
+  });
+  assert.deepEqual(classifyCustomerIdLink(doc({ customerId: 'm-deleted' }), index()), {
+    kind: 'link',
+    masterId: 'm-yamada',
+    before: { state: 'dangling', id: 'm-deleted' },
+  });
+});
+
+test('顧客名の前後空白はtrimして照合する(エクスポートの乖離チェックと同じ)', () => {
+  const r = classifyCustomerIdLink(doc({ customerName: '  山田太郎 ' }), index());
+  assert.equal(r.kind, 'link');
+});
+
+// ---------------------------------------------------------------- 対象外
+
+test('既に有効なマスターを指している書類は対象外(not-applicable)', () => {
+  assert.deepEqual(classifyCustomerIdLink(doc({ customerId: 'm-tanaka' }), index()), { kind: 'not-applicable' });
+});
+
+test('確認済みでない書類は紐づけない(not-confirmed)', () => {
+  for (const o of [{ verified: false }, { verified: undefined }, { customerConfirmed: false }, { customerConfirmed: undefined }]) {
+    assert.deepEqual(classifyCustomerIdLink(doc(o), index()), { kind: 'skip', reason: 'not-confirmed' }, JSON.stringify(o));
+  }
+});
+
+test('顧客名が無効(空・空白のみ・sentinel・非文字列)は紐づけない(invalid-name)', () => {
+  for (const name of ['', '   ', '未判定', '不明顧客', undefined, null, 123]) {
+    assert.deepEqual(classifyCustomerIdLink(doc({ customerName: name }), index()), { kind: 'skip', reason: 'invalid-name' }, String(name));
+  }
+});
+
+test('同名マスターが2件以上(完全一致の同姓同名)は自動で紐づけない(ambiguous-same-name)', () => {
+  assert.deepEqual(classifyCustomerIdLink(doc({ customerName: '佐藤花子' }), index()), {
+    kind: 'skip',
+    reason: 'ambiguous-same-name',
+  });
+});
+
+test('空白違いの同姓同名も、完全一致が1件でも自動で紐づけない(ambiguous-same-name)', () => {
+  for (const name of ['鈴木 一郎', '鈴木一郎']) {
+    assert.deepEqual(classifyCustomerIdLink(doc({ customerName: name }), index()), { kind: 'skip', reason: 'ambiguous-same-name' }, name);
+  }
+});
+
+test('同名マスターが無い場合は紐づけない(no-master)。全半角・空白違い・別表記は一致扱いにしない', () => {
+  for (const name of ['存在しない人', '山田 太郎', '山田太郎さん']) {
+    assert.deepEqual(classifyCustomerIdLink(doc({ customerName: name }), index()), { kind: 'skip', reason: 'no-master' }, name);
+  }
+});
+
+test('customerIdが文字列以外(数値など)の書類は型異常として対象外(invalid-field-type)', () => {
+  assert.deepEqual(classifyCustomerIdLink(doc({ customerId: 123 }), index()), { kind: 'skip', reason: 'invalid-field-type' });
+  assert.deepEqual(classifyCustomerIdLink(doc({ customerId: { a: 1 } }), index()), { kind: 'skip', reason: 'invalid-field-type' });
+});
+
+test('マスターのnameが文字列でない/前後空白付きの場合も例外にならない', () => {
+  const idx = buildMasterIndex([
+    { id: 'a', name: undefined },
+    { id: 'b', name: ' 山田太郎 ' }, // 前後空白付き: 生の完全一致では一致しない
+  ]);
+  assert.deepEqual(classifyCustomerIdLink(doc(), idx), { kind: 'skip', reason: 'no-master' });
+});
+
+// ---------------------------------------------------------------- 紐づけ後にエクスポートが顧客未確定へ落ちない
+
+test('紐づけ後の書類は、エクスポート側の確認(precheckCustomerIdentity)でconfirmedになる', () => {
+  const d = doc({ customerName: '  山田太郎 ' });
+  const r = classifyCustomerIdLink(d, index());
+  assert.equal(r.kind, 'link');
+  const masterName = masters.find((m) => m.id === (r as { masterId: string }).masterId)!.name;
+  // エクスポートは紐づけ先マスターのnameを取得して渡す(書類のcustomerNameはtrimのみ、マスター名は生で比較)
+  const pre = precheckCustomerIdentity(d, { customerMasterName: masterName });
+  assert.equal(pre.outcome, 'confirmed');
+});
+
+// ---------------------------------------------------------------- manifest / rollback
+
+const entry = (over: Partial<CustomerIdLinkManifestEntry> = {}): CustomerIdLinkManifestEntry => ({
+  docId: 'doc-1',
+  customerIdBefore: { state: 'absent' },
+  customerIdAfter: 'm-yamada',
+  backfillUpdateTime: { seconds: 100, nanoseconds: 5 },
+  ...over,
+});
+
+function manifest(entries = [entry()]) {
+  return buildCustomerIdLinkManifest({
+    runId: 'run-1',
+    projectId: 'proj',
+    timestamp: '2026-10-01T00:00:00.000Z',
+    entries,
+    skipped: { 'not-confirmed': [], 'invalid-name': ['d2'], 'ambiguous-same-name': ['d3'], 'no-master': ['d4'], 'invalid-field-type': [] },
+    totalScanned: 10,
+    scanIncomplete: false,
+    dryRun: false,
+  });
+}
+
+test('manifestはJSON往復後も有効', () => {
+  assert.equal(isValidCustomerIdLinkManifest(JSON.parse(JSON.stringify(manifest()))), true);
+});
+
+test('manifestの検証: 欠落・型不一致・想定外キー・重複docId・不正なbefore/docIdを拒否する', () => {
+  const good = JSON.parse(JSON.stringify(manifest()));
+  const mutate = (fn: (m: any) => void) => {
+    const m = JSON.parse(JSON.stringify(good));
+    fn(m);
+    return m;
+  };
+  const bads = [
+    null,
+    'x',
+    mutate((m) => (m.schemaVersion = 2)),
+    mutate((m) => delete m.runId),
+    mutate((m) => (m.entries = 'x')),
+    mutate((m) => (m.extra = 1)),
+    mutate((m) => (m.entries[0].extra = 1)),
+    mutate((m) => (m.entries[0].docId = '')),
+    mutate((m) => (m.entries[0].docId = 'a/b')),
+    mutate((m) => (m.entries[0].customerIdAfter = '')),
+    mutate((m) => (m.entries[0].customerIdBefore = { state: 'other' })),
+    mutate((m) => (m.entries[0].customerIdBefore = { state: 'dangling' })),
+    mutate((m) => (m.entries[0].customerIdBefore = { state: 'absent', id: 'x' })),
+    mutate((m) => (m.entries[0].backfillUpdateTime = { seconds: 1 })),
+    mutate((m) => m.entries.push(JSON.parse(JSON.stringify(m.entries[0])))),
+    mutate((m) => (m.skipped['no-master'] = 'x')),
+    mutate((m) => (m.skipped.unknown = [])),
+    mutate((m) => (m.totalScanned = -1)),
+  ];
+  for (const [i, b] of bads.entries()) assert.equal(isValidCustomerIdLinkManifest(b), false, `bad#${i}`);
+});
+
+test('rollback指示: absentはdelete、空文字は空文字へ、danglingは元のIDへ戻す', () => {
+  assert.deepEqual(computeCustomerIdRollbackInstruction(entry()), { action: 'delete' });
+  assert.deepEqual(computeCustomerIdRollbackInstruction(entry({ customerIdBefore: { state: 'empty' } })), { action: 'set', value: '' });
+  assert.deepEqual(computeCustomerIdRollbackInstruction(entry({ customerIdBefore: { state: 'dangling', id: 'm-old' } })), {
+    action: 'set',
+    value: 'm-old',
+  });
+});
+
+test('rollback対象はupdateTimeが秒・ナノ秒とも完全一致する書類だけ', () => {
+  const e = entry();
+  assert.equal(isRollbackEligibleByUpdateTime(e, { seconds: 100, nanoseconds: 5 }), true);
+  assert.equal(isRollbackEligibleByUpdateTime(e, { seconds: 100, nanoseconds: 6 }), false);
+  assert.equal(isRollbackEligibleByUpdateTime(e, { seconds: 101, nanoseconds: 5 }), false);
+});

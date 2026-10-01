@@ -221,6 +221,10 @@ on:
           - backfill-confirm-on-verify --limit --expected-count
           - backfill-confirm-on-verify --dry-run --expected-count
           - backfill-confirm-on-verify --expected-count
+          - backfill-customer-id-link --dry-run
+          - backfill-customer-id-link --dry-run --limit --expected-count
+          - backfill-customer-id-link --limit --expected-count
+          - backfill-customer-id-link --expected-count
           - classify-drive-export-drift
           - classify-drive-export-drift --care-manager
           - classify-drive-export-drift --care-manager --limit
@@ -249,7 +253,7 @@ on:
           - set-sarashina-summary-allowlist --remove
           - check-sarashina-summary-status
       backfill_limit:
-        description: 'backfill-drive-export --limit: canary実行時のマーク上限件数(数値のみ) / classify-drive-export-drift --limit: 検査対象document数の上限(数値のみ) / execute-drive-export-repair --limit: 修復対象候補数の上限(数値のみ) / backfill-confirm-on-verify --limit: canary実行時の確定対象上限件数(数値のみ)'
+        description: 'backfill-drive-export --limit: canary実行時のマーク上限件数(数値のみ) / classify-drive-export-drift --limit: 検査対象document数の上限(数値のみ) / execute-drive-export-repair --limit: 修復対象候補数の上限(数値のみ) / backfill-confirm-on-verify --limit: canary実行時の確定対象上限件数(数値のみ) / backfill-customer-id-link --limit: canary実行時の紐づけ対象上限件数(数値のみ)'
         required: false
         type: string
         default: ''
@@ -292,7 +296,7 @@ on:
           - 'false'
           - 'true'
       expected_count:
-        description: 'cleanup-office-name / delete-office-master / reset-documents-by-office: 影響件数の事前確認（数値；省略時はチェック無効、指定時は不一致で中断）/ execute-drive-export-repair --expected-count: --limit適用後の修復対象件数の事前確認(数値) / backfill-confirm-on-verify --expected-count: 対象件数の事前確認(数値、誤操作防止)'
+        description: 'cleanup-office-name / delete-office-master / reset-documents-by-office: 影響件数の事前確認（数値；省略時はチェック無効、指定時は不一致で中断）/ execute-drive-export-repair --expected-count: --limit適用後の修復対象件数の事前確認(数値) / backfill-confirm-on-verify --expected-count: 対象件数の事前確認(数値、誤操作防止) / backfill-customer-id-link --expected-count: 紐づけ対象件数の事前確認(数値、dry-runの件数と一致必須)'
         required: false
         type: string
         default: ''
@@ -512,7 +516,7 @@ jobs:
           # backfill-confirm-on-verify --limit/--expected-count(Issue #1034/#1043、
           # backfill-drive-exportと同一のcanary安全策)。値省略は誤操作(無制限全件処理)に
           # つながるため、backfill-drive-exportと同一パターンで明示値を必須化する。
-          if [ "$SCRIPT_NAME" = "backfill-confirm-on-verify" ]; then
+          if [ "$SCRIPT_NAME" = "backfill-confirm-on-verify" ] || [ "$SCRIPT_NAME" = "backfill-customer-id-link" ]; then
             if echo "$SCRIPT_ARGS" | grep -q -- '--limit'; then
               if [ -z "$BACKFILL_LIMIT" ] || ! echo "$BACKFILL_LIMIT" | grep -qE '^[0-9]+$'; then
                 echo "ERROR: backfill_limit must be a non-negative integer when script contains --limit" >&2
@@ -1775,6 +1779,7 @@ jobs:
                [ "$SCRIPT_NAME" = "create-pending-doc" ] || \
                [ "$SCRIPT_NAME" = "backfill-drive-export" ] || \
                [ "$SCRIPT_NAME" = "backfill-confirm-on-verify" ] || \
+               [ "$SCRIPT_NAME" = "backfill-customer-id-link" ] || \
                [ "$SCRIPT_NAME" = "drive-export-status-report" ] || \
                [ "$SCRIPT_NAME" = "audit-fax-duplication-inventory" ] || \
                [ "$SCRIPT_NAME" = "merge-notation-duplicate-masters" ] || \
@@ -1857,6 +1862,11 @@ jobs:
             elif [ "$SCRIPT_NAME" = "backfill-confirm-on-verify" ]; then
               # rollback時の対象docId一覧(--rollback <manifest>)として必須のため常時出力。
               EXTRA_ARGS="--manifest-out ${GITHUB_WORKSPACE}/scripts/backfill-confirm-on-verify-manifest.json"
+            elif [ "$SCRIPT_NAME" = "backfill-customer-id-link" ]; then
+              # 確認済み書類の顧客ID紐づけ補完。manifest(紐づけ内容・対象外の理由別docId)は
+              # dry-runでも出力する(現場判断用のレビュー材料、rollbackの入力)。firebase-adminのみ依存。
+              # --rollbackはbackfill-confirm-on-verify同様このワークフローには未配線(manifestをローカルで扱う)。
+              EXTRA_ARGS="--manifest-out ${GITHUB_WORKSPACE}/scripts/backfill-customer-id-link-manifest.json"
             elif [ "$SCRIPT_NAME" = "audit-fax-duplication-inventory" ]; then
               # 棚卸し結果(グループ一覧込み)をartifact経由で取得(log secret maskingで`{`が
               # 伏字になる既知問題の回避、drive-export-status-reportと同種の対策)。常時出力。
@@ -2762,6 +2772,17 @@ jobs:
         with:
           name: backfill-confirm-on-verify-manifest-${{ github.event.inputs.environment }}-${{ github.run_id }}
           path: scripts/backfill-confirm-on-verify-manifest.json
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Upload backfill-customer-id-link manifest artifact
+        # 紐づけ内容(docId・マスターID・紐づけ前の状態)と対象外の理由別docIdの記録。--rollbackの入力、
+        # および同姓同名・同名なしの現場判断用リスト。dry-runでも出力される。
+        if: ${{ startsWith(github.event.inputs.script, 'backfill-customer-id-link') && always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: backfill-customer-id-link-manifest-${{ github.event.inputs.environment }}-${{ github.run_id }}
+          path: scripts/backfill-customer-id-link-manifest.json
           if-no-files-found: warn
           retention-days: 90
 
