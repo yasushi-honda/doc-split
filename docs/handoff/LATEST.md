@@ -1,6 +1,21 @@
 # ハンドオフメモ
 
-**更新日**: 2026-10-01（kanameone `(root)/森奈穂美`の再帰統合ツールを実装・本番適用、停止書類が回復中。前回: 2026-09-29 ADR-0027 PR5: dev環境でのSarashina要約実機観測を実施。D3・D8はSarashina要約完走、D2は`fabrication_suspected`誤検知をdecision-maker方針Aで恒久対応(PR #1083、スキャナ正規化)、dev実機でD2=`done`確認・AC4(canary 3/3件done)達成。kanameone Drive Phase1: OAuth再連携完了(2026-09-28)を確認し、2026-09-30に重複audit→merge候補14グループ統合実行→再audit完了。残はmanual-review 8件の判断とflag ON・backfill）
+**更新日**: 2026-10-01（kanameoneの顧客ID紐づけ補完を第1段56件・第2段(空白違い)43件で本番適用。前回: kanameone `(root)/森奈穂美`の再帰統合ツールを実装・本番適用、停止書類が回復中。前回: 2026-09-29 ADR-0027 PR5: dev環境でのSarashina要約実機観測を実施。D3・D8はSarashina要約完走、D2は`fabrication_suspected`誤検知をdecision-maker方針Aで恒久対応(PR #1083、スキャナ正規化)、dev実機でD2=`done`確認・AC4(canary 3/3件done)達成。kanameone Drive Phase1: OAuth再連携完了(2026-09-28)を確認し、2026-09-30に重複audit→merge候補14グループ統合実行→再audit完了。残はmanual-review 8件の判断とflag ON・backfill）
+
+## kanameone 顧客ID紐づけ補完(フリガナ未設定エラーの根本対応)（2026-10-01）
+
+### 結果
+かなめ様の「マスターにフリガナは入力済み」という指摘の原因は、書類とマスターの紐づけ不備(書類の`customerId`が空/存在しないマスターを指す)だった。`backfill-customer-id-link`(PR #1103: 同名マスター1件のみ、PR #1104: `--whitespace-variants`で空白違いは顧客名もマスター表記へ揃える)を実装し、kanameoneへ適用した。第1段=56件、第2段=43件(canary1件→残り42件、いずれも番号単位認可)。Firestoreで全件を独立確認(customerName/customerIdがマスターと一致、確認済み・verified・customerKey不変、manifestに顧客名なし)。2026-10-01時点: 保存済み8,344→8,417件、実エラー151→143件(フリガナ108/ケアマネ32/その他3)。
+
+### 限界・注意
+- 空白違い補完は顧客名を書き換えるため、検索インデックス再生成で更新時刻が進み、**rollbackは43件すべてでスキップ見込み**(実測。manifestは顧客名を持たない設計のため顧客名も戻せない)。戻す場合は個別対応。
+- displayFileName(Drive上のファイル名)は旧表記のまま(見た目のみ、必要なら`backfill-display-filename`)。
+- 空白違い補完の28件→43件の差は、計画時の集計が「エラー書類のみ」だったため(スクリプトは確認済み全体を走査)。
+
+### 次のアクション
+- **即着手**: 空白違い43件の回復確認(2026-10-01 07時UTC以降に`drive-export-status-report --breakdown`、43件中error 28件が減るか)。
+- **条件待ち**: 残り2件(移動・改名の疑い1/既存ファイル重複1)の個別確認、残るフリガナ未設定の切り分け(trigger=回復確認後) / クライアント宛の完了連絡・残り20件(かな表記違い4・候補複数1・類似なし15)の確認依頼(trigger=decision-maker指示、一覧は氏名を含むためアプリのエラー履歴画面で案内) / 顧客未確定673件(クライアント側作業)。
+- **却下候補**: 残り20件の自動補完(かな違い等は同一人物と断定できずクライアント確認が必要)。
 
 ## kanameone `(root)/森奈穂美`の再帰統合ツール開発・本番適用（2026-09-30）
 
