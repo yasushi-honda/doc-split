@@ -147,6 +147,8 @@ function manifest(entries = [entry()]) {
     totalScanned: 10,
     scanIncomplete: false,
     dryRun: false,
+    aborted: false,
+    planned: entries.map((e) => ({ docId: e.docId, masterId: e.customerIdAfter, customerIdBefore: e.customerIdBefore })),
   });
 }
 
@@ -180,6 +182,10 @@ test('manifestの検証: 欠落・型不一致・想定外キー・重複docId�
     mutate((m) => (m.skipped['no-master'] = 'x')),
     mutate((m) => (m.skipped.unknown = [])),
     mutate((m) => (m.totalScanned = -1)),
+    mutate((m) => delete m.aborted),
+    mutate((m) => (m.planned = 'x')),
+    mutate((m) => (m.planned[0].extra = 1)),
+    mutate((m) => (m.planned[0].masterId = '')),
   ];
   for (const [i, b] of bads.entries()) assert.equal(isValidCustomerIdLinkManifest(b), false, `bad#${i}`);
 });
@@ -198,4 +204,107 @@ test('rollback対象はupdateTimeが秒・ナノ秒とも完全一致する書�
   assert.equal(isRollbackEligibleByUpdateTime(e, { seconds: 100, nanoseconds: 5 }), true);
   assert.equal(isRollbackEligibleByUpdateTime(e, { seconds: 100, nanoseconds: 6 }), false);
   assert.equal(isRollbackEligibleByUpdateTime(e, { seconds: 101, nanoseconds: 5 }), false);
+});
+
+// ---------------------------------------------------------------- executeLinks(書込みの安全分岐)
+
+import { executeLinks, type LinkWriteTarget } from './customerIdLinkBackfillHelpers';
+
+const target = (id: string, masterId = 'm-1'): LinkWriteTarget => ({ id, masterId, before: { state: 'absent' } });
+const wt = { seconds: 10, nanoseconds: 1 };
+const code9 = () => Object.assign(new Error('FAILED_PRECONDITION'), { code: 9 });
+
+test('executeLinks: 全件成功すると、書込み順にentriesへ記録する', async () => {
+  const entries: CustomerIdLinkManifestEntry[] = [];
+  const r = await executeLinks([target('a'), target('b', 'm-2')], async () => wt, entries);
+  assert.deepEqual(r, { written: 2, skippedPrecondition: 0, skippedNotFound: 0 });
+  assert.deepEqual(entries.map((e) => [e.docId, e.customerIdAfter]), [['a', 'm-1'], ['b', 'm-2']]);
+});
+
+test('executeLinks: precondition不一致(code 9)はその書類だけスキップして続行し、entriesに記録しない', async () => {
+  const entries: CustomerIdLinkManifestEntry[] = [];
+  const skipped: string[] = [];
+  const r = await executeLinks(
+    [target('a'), target('b'), target('c')],
+    async (t) => {
+      if (t.id === 'b') throw code9();
+      return wt;
+    },
+    entries,
+    { onSkip: (id, reason) => skipped.push(`${id}:${reason}`) }
+  );
+  assert.deepEqual(r, { written: 2, skippedPrecondition: 1, skippedNotFound: 0 });
+  assert.deepEqual(entries.map((e) => e.docId), ['a', 'c']);
+  assert.deepEqual(skipped, ['b:precondition']);
+});
+
+test('executeLinks: code 9以外のエラーは再throwし、それまでの書込み記録はentriesに残る(途中停止でもrollbackの入力が失われない)', async () => {
+  const entries: CustomerIdLinkManifestEntry[] = [];
+  await assert.rejects(
+    () =>
+      executeLinks(
+        [target('a'), target('b'), target('c')],
+        async (t) => {
+          if (t.id === 'b') throw Object.assign(new Error('UNAVAILABLE'), { code: 14 });
+          return wt;
+        },
+        entries
+      ),
+    /UNAVAILABLE/
+  );
+  assert.deepEqual(entries.map((e) => e.docId), ['a'], '失敗の前に書いた1件は記録され、以降は書かれない');
+});
+
+test('executeLinks: codeを持たないエラーも握りつぶさず再throwする', async () => {
+  await assert.rejects(() => executeLinks([target('a')], async () => { throw new Error('boom'); }, []), /boom/);
+});
+
+test('executeLinks: 書込み時点で書類が削除済み(code 5)でも全体を止めず、その書類だけスキップして続行する', async () => {
+  const entries: CustomerIdLinkManifestEntry[] = [];
+  const skipped: string[] = [];
+  const r = await executeLinks(
+    [target('a'), target('b'), target('c')],
+    async (t) => {
+      if (t.id === 'b') throw Object.assign(new Error('NOT_FOUND'), { code: 5 });
+      return wt;
+    },
+    entries,
+    { onSkip: (id, reason) => skipped.push(`${id}:${reason}`) }
+  );
+  assert.deepEqual(r, { written: 2, skippedPrecondition: 0, skippedNotFound: 1 });
+  assert.deepEqual(skipped, ['b:not-found']);
+  assert.deepEqual(entries.map((e) => e.docId), ['a', 'c']);
+});
+
+test('executeLinks: 書込み1件ごとにonEntryが呼ばれる(manifestの逐次保存)。途中で例外停止しても、呼ばれた分は保存済み', async () => {
+  const saved: string[] = [];
+  await assert.rejects(() =>
+    executeLinks(
+      [target('a'), target('b'), target('c')],
+      async (t) => {
+        if (t.id === 'c') throw new Error('boom');
+        return wt;
+      },
+      [],
+      { onEntry: (e) => saved.push(e.docId) }
+    )
+  );
+  assert.deepEqual(saved, ['a', 'b']);
+});
+
+test('NFKC正規化で同一になる別表記のマスター(半角カナ・濁点分解)が並存する場合も、自動では紐づけない(ambiguous-same-name)', () => {
+  const idx = buildMasterIndex([
+    { id: 'm1', name: 'ｶﾄｳ花子' }, // 半角カナ
+    { id: 'm2', name: 'カトウ花子' },
+  ]);
+  assert.deepEqual(classifyCustomerIdLink(doc({ customerName: 'カトウ花子' }), idx), { kind: 'skip', reason: 'ambiguous-same-name' });
+  const nfd = buildMasterIndex([
+    { id: 'm1', name: 'ガ田花子'.normalize('NFD') },
+    { id: 'm2', name: 'ガ田花子'.normalize('NFC') },
+  ]);
+  assert.deepEqual(classifyCustomerIdLink(doc({ customerName: 'ガ田花子'.normalize('NFC') }), nfd), { kind: 'skip', reason: 'ambiguous-same-name' });
+});
+
+test('buildMasterIndex: nameが文字列でないマスターの件数を数える', () => {
+  assert.equal(buildMasterIndex([{ id: 'a', name: undefined }, { id: 'b', name: 5 }, { id: 'c', name: '山田太郎' }]).nonStringNameCount, 2);
 });

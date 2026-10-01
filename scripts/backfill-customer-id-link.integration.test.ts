@@ -161,6 +161,8 @@ test('dry-run: 書込みゼロ(manifestのみ出力)', async () => {
   const manifest = JSON.parse(readFileSync(out, 'utf-8'));
   assert.equal(manifest.dryRun, true);
   assert.equal(manifest.entries.length, 0);
+  // 紐づけ予定の一覧(承認者が「どの書類をどのマスターへ」を事前に確認できる)。名前は含まない
+  assert.deepEqual(manifest.planned, [{ docId: 'd-dry', masterId: 'm-yamada', customerIdBefore: { state: 'absent' } }]);
 });
 
 test('--expected-count不一致: 書込みゼロで非ゼロ終了', async () => {
@@ -242,4 +244,94 @@ test('rollback: 不正なmanifest・別プロジェクトのmanifestは書込み
   const r2 = runScript(['--rollback', other], { expectNonZeroExit: true });
   assert.match(r2.stderr, /projectId.*一致しません/);
   assert.equal((await getDoc('r-bad')).customerId, 'm-yamada', '別プロジェクトのmanifestでは戻されない');
+});
+
+// ---------------------------------------------------------------- 安全分岐の追加テスト(pr-test-analyzer指摘)
+
+test('rollback --dry-run: 書込みゼロ(戻し対象件数だけ表示)', async () => {
+  await db.doc('documents/r-dry').set(baseDoc());
+  const out = manifestPath();
+  runScript(['--expected-count', '1', '--manifest-out', out]);
+  const r = runScript(['--rollback', out, '--dry-run']);
+  assert.match(r.stdout, /DRY RUN: 戻し対象1件/);
+  assert.equal((await getDoc('r-dry')).customerId, 'm-yamada', 'dry-runでは戻らない');
+});
+
+test('rollback: manifest記載の書類が削除済みでも、他の書類は戻り、不在の書類はスキップして完走する', async () => {
+  await db.doc('documents/r-gone').set(baseDoc());
+  await db.doc('documents/r-kept').set(baseDoc());
+  const out = manifestPath();
+  runScript(['--expected-count', '2', '--manifest-out', out]);
+  await db.doc('documents/r-gone').delete();
+  const r = runScript(['--rollback', out]);
+  assert.match(r.stdout, /doc不在1件/);
+  assert.equal('customerId' in (await getDoc('r-kept')), false);
+});
+
+test('ページング: 200件を超える書類(複数ページ)も取りこぼさず全件紐づける', async () => {
+  const total = 205;
+  for (let start = 0; start < total; start += 100) {
+    const batch = db.batch();
+    for (let i = start; i < Math.min(start + 100, total); i++) {
+      batch.set(db.doc(`documents/p-${String(i).padStart(4, '0')}`), baseDoc());
+    }
+    await batch.commit();
+  }
+  runScript(['--expected-count', String(total)]);
+  const snap = await db.collection('documents').get();
+  assert.equal(snap.docs.filter((d) => d.data().customerId === 'm-yamada').length, total);
+});
+
+test('--expected-count 0: 対象が1件以上あれば書込みゼロで中断する(truthy判定に退行しない)', async () => {
+  await db.doc('documents/z-1').set(baseDoc());
+  const r = runScript(['--expected-count', '0'], { expectNonZeroExit: true });
+  assert.match(r.stderr, /expected-count 不一致/);
+  assert.equal((await getDoc('z-1')).customerId, undefined);
+});
+
+test('--limit 0: 0件だけ紐づける(何も書かない)', async () => {
+  await db.doc('documents/z-2').set(baseDoc());
+  runScript(['--limit', '0', '--expected-count', '0']);
+  assert.equal((await getDoc('z-2')).customerId, undefined);
+});
+
+test('--dry-runでも--expected-countの不一致は書込みゼロで非ゼロ終了(照合は書込み前)', async () => {
+  await db.doc('documents/z-3').set(baseDoc());
+  const r = runScript(['--dry-run', '--expected-count', '5'], { expectNonZeroExit: true });
+  assert.match(r.stderr, /expected-count 不一致/);
+});
+
+test('customerIdが文字列以外(数値)の書類は型異常として触らず、manifestのinvalid-field-typeに記録する', async () => {
+  await db.doc('documents/t-num').set(baseDoc({ customerId: 123 }));
+  const out = manifestPath();
+  runScript(['--manifest-out', out, '--expected-count', '0']);
+  assert.equal((await getDoc('t-num')).customerId, 123);
+  assert.deepEqual(JSON.parse(readFileSync(out, 'utf-8')).skipped['invalid-field-type'], ['t-num']);
+});
+
+test('manifest: 完走した本実行は aborted:false、planned と entries が一致する', async () => {
+  await db.doc('documents/m-1').set(baseDoc());
+  await db.doc('documents/m-2').set(baseDoc({ customerId: '' }));
+  const out = manifestPath();
+  runScript(['--expected-count', '2', '--manifest-out', out]);
+  const m = JSON.parse(readFileSync(out, 'utf-8'));
+  assert.equal(m.aborted, false);
+  assert.equal(m.dryRun, false);
+  assert.deepEqual(m.planned.map((p: { docId: string }) => p.docId), m.entries.map((e: { docId: string }) => e.docId));
+});
+
+test('--limit: 対象がN件に達した時点で走査を打ち切り、manifestにscanIncomplete:trueを記録する', async () => {
+  for (const id of ['l-1', 'l-2', 'l-3']) await db.doc(`documents/${id}`).set(baseDoc());
+  const out = manifestPath();
+  runScript(['--limit', '1', '--expected-count', '1', '--manifest-out', out]);
+  const m = JSON.parse(readFileSync(out, 'utf-8'));
+  assert.equal(m.scanIncomplete, true);
+  assert.equal(m.totalScanned, 1, '1件目で対象数に達したため、残りは読まない');
+});
+
+test('--limitが対象数に達しない場合は全件走査し、scanIncomplete:falseのまま', async () => {
+  await db.doc('documents/l-only').set(baseDoc());
+  const out = manifestPath();
+  runScript(['--limit', '5', '--expected-count', '1', '--manifest-out', out]);
+  assert.equal(JSON.parse(readFileSync(out, 'utf-8')).scanIncomplete, false);
 });

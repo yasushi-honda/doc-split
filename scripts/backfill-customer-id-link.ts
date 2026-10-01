@@ -28,7 +28,7 @@
 
 import * as admin from 'firebase-admin';
 import { randomUUID } from 'node:crypto';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { MASTER_PATHS } from '../functions/src/utils/masterPaths';
 import { applyLimit, assertExpectedCount, ExpectedCountMismatchError } from './lib/driveExportBackfillHelpers';
 import { formatCountRecord } from './lib/confirmOnVerifyBackfillHelpers';
@@ -36,12 +36,14 @@ import {
   SKIP_REASONS,
   buildCustomerIdLinkManifest,
   buildMasterIndex,
+  executeLinks,
   classifyCustomerIdLink,
   computeCustomerIdRollbackInstruction,
   isRollbackEligibleByUpdateTime,
   isValidCustomerIdLinkManifest,
   type CustomerIdBefore,
   type CustomerIdLinkManifestEntry,
+  type LinkCandidateDoc,
   type SkipReason,
 } from './lib/customerIdLinkBackfillHelpers';
 
@@ -92,6 +94,8 @@ interface LinkTarget {
   updateTime: FirebaseFirestore.Timestamp;
   masterId: string;
   before: CustomerIdBefore;
+  /** 分類に使った読取時点のフィールド(書込み直前のマスター再検証で再分類する)。 */
+  data: LinkCandidateDoc;
 }
 
 function emptySkipped(): Record<SkipReason, string[]> {
@@ -104,19 +108,24 @@ async function loadMasterIndex() {
 }
 
 /** `verified==true`をdocumentId順にページングして分類する(必要な4フィールドだけ読む)。 */
-async function scan(): Promise<{
+async function scan(stopAtTargets: number | undefined): Promise<{
   totalScanned: number;
   targets: LinkTarget[];
   skipped: Record<SkipReason, string[]>;
+  scanIncomplete: boolean;
 }> {
   const index = await loadMasterIndex();
   console.log(`顧客マスター: ${index.ids.size}件読込`);
+  if (index.nonStringNameCount > 0) {
+    console.log(`::warning::nameが文字列でない顧客マスターが${index.nonStringNameCount}件あります(該当書類はno-master扱い。データ破損の可能性)`);
+  }
 
   const targets: LinkTarget[] = [];
   const skipped = emptySkipped();
   let totalScanned = 0;
+  let scanIncomplete = false;
   let lastDoc: FirebaseFirestore.QueryDocumentSnapshot | null = null;
-  for (;;) {
+  scanLoop: for (;;) {
     let query = db
       .collection('documents')
       .where('verified', '==', true)
@@ -131,7 +140,12 @@ async function scan(): Promise<{
       totalScanned++;
       const r = classifyCustomerIdLink(d.data(), index);
       if (r.kind === 'link') {
-        targets.push({ ref: d.ref, id: d.id, updateTime: d.updateTime, masterId: r.masterId, before: r.before });
+        targets.push({ ref: d.ref, id: d.id, updateTime: d.updateTime, masterId: r.masterId, before: r.before, data: d.data() });
+        // --limit(canary)指定時は、対象がその件数に達した時点で打ち切る(全件走査の読取コストを避ける)
+        if (stopAtTargets !== undefined && targets.length >= stopAtTargets) {
+          scanIncomplete = true;
+          break scanLoop;
+        }
       } else if (r.kind === 'skip') {
         skipped[r.reason].push(d.id);
       }
@@ -139,11 +153,15 @@ async function scan(): Promise<{
     lastDoc = snap.docs[snap.docs.length - 1];
     if (snap.size < PAGE_SIZE) break;
   }
-  return { totalScanned, targets, skipped };
+  return { totalScanned, targets, skipped, scanIncomplete };
 }
 
+/** 一時ファイルへ書いてからrenameする(途中で強制終了しても、壊れたmanifestが残らない)。 */
 function writeManifest(path: string | undefined, manifest: object): void {
-  if (path) writeFileSync(path, JSON.stringify(manifest, null, 2));
+  if (!path) return;
+  const tmp = `${path}.tmp`;
+  writeFileSync(tmp, JSON.stringify(manifest, null, 2));
+  renameSync(tmp, path);
 }
 
 async function runBackfill(): Promise<void> {
@@ -153,13 +171,13 @@ async function runBackfill(): Promise<void> {
   if (expectedCount !== undefined) console.log(`--expected-count: ${expectedCount}`);
   console.log('---');
 
-  const { totalScanned, targets: allTargets, skipped } = await scan();
+  const { totalScanned, targets: allTargets, skipped, scanIncomplete } = await scan(limit);
   const targets = applyLimit(allTargets, limit);
   const runId = randomUUID();
   const timestamp = new Date().toISOString();
   const skippedCounts = Object.fromEntries(SKIP_REASONS.map((r) => [r, skipped[r].length]));
 
-  console.log(`走査: verified書類${totalScanned}件`);
+  console.log(`走査: verified書類${totalScanned}件${scanIncomplete ? '(--limitの対象数に達したため途中で打ち切り。対象外の内訳は走査範囲のみ)' : ''}`);
   console.log(`紐づけ対象: ${allTargets.length}件${limit !== undefined ? `(--limit適用後 ${targets.length}件)` : ''}`);
   console.log(`紐づけ前の状態: ${formatCountRecord(countBy(targets.map((t) => t.before.state)))}`);
   console.log(`対象外(理由別): ${formatCountRecord(skippedCounts)}`);
@@ -176,8 +194,22 @@ async function runBackfill(): Promise<void> {
   }
 
   const entries: CustomerIdLinkManifestEntry[] = [];
+  // 完走するまでは`aborted:true`で書き出す(途中で強制終了しても、最後に書かれたmanifestが「中断した実行」と分かる)
+  let aborted = !dryRun;
+  const planned = targets.map((t) => ({ docId: t.id, masterId: t.masterId, customerIdBefore: t.before }));
   const buildManifest = () =>
-    buildCustomerIdLinkManifest({ runId, projectId: projectId as string, timestamp, dryRun, entries, skipped, totalScanned, scanIncomplete: false });
+    buildCustomerIdLinkManifest({
+      runId,
+      projectId: projectId as string,
+      timestamp,
+      dryRun,
+      aborted,
+      planned,
+      entries,
+      skipped,
+      totalScanned,
+      scanIncomplete,
+    });
 
   if (dryRun) {
     writeManifest(manifestOutPath, buildManifest());
@@ -185,36 +217,56 @@ async function runBackfill(): Promise<void> {
     return;
   }
 
+  // 書込み直前に顧客マスターを再読込し、各対象の判定(同名がちょうど1件・同じマスター)が変わっていないことを確認する。
+  // 走査〜書込みの間にマスターが削除・改名・追加されると、存在しないIDや曖昧な同名への紐づけを書きうるため、
+  // 変わっていれば何も書かずに中断する(書類側のprecondition(updateTime)ではマスターの変化は検知できない)
+  const freshIndex = await loadMasterIndex();
+  const drifted = targets.filter((t) => {
+    const r = classifyCustomerIdLink(t.data, freshIndex);
+    return !(r.kind === 'link' && r.masterId === t.masterId);
+  });
+  if (drifted.length > 0) {
+    console.error(`ERROR: 走査後に顧客マスターが変化し、${drifted.length}件の判定が変わりました。書込みを一切行わず中断します。再度dry-runから実行してください。`);
+    process.exit(1);
+  }
+  writeManifest(manifestOutPath, buildManifest());
+
+  const targetById = new Map(targets.map((t) => [t.id, t]));
   let written = 0;
   let skippedPrecondition = 0;
+  let skippedNotFound = 0;
   try {
-    for (const t of targets) {
-      try {
-        // 読んだ時点から書込みまでの間に別の更新があれば、precondition不一致(code 9)でスキップする
-        // eslint-disable-next-line no-await-in-loop
-        const result = await t.ref.update({ customerId: t.masterId }, { lastUpdateTime: t.updateTime });
-        entries.push({
-          docId: t.id,
-          customerIdBefore: t.before,
-          customerIdAfter: t.masterId,
-          backfillUpdateTime: { seconds: result.writeTime.seconds, nanoseconds: result.writeTime.nanoseconds },
-        });
-        written++;
-      } catch (err) {
-        if ((err as { code?: number }).code === 9) {
-          skippedPrecondition++;
-          console.log(`  スキップ(読取後に別の書込みが発生): ${t.id}`);
-          continue;
-        }
-        throw err;
+    ({ written, skippedPrecondition, skippedNotFound } = await executeLinks(
+      targets,
+      async (t) => {
+        // 読んだ時点から書込みまでの間に別の更新があれば、precondition不一致(code 9)でスキップされる
+        const target = targetById.get(t.id)!;
+        const result = await target.ref.update({ customerId: t.masterId }, { lastUpdateTime: target.updateTime });
+        return { seconds: result.writeTime.seconds, nanoseconds: result.writeTime.nanoseconds };
+      },
+      entries,
+      {
+        // 書込み1件ごとにmanifestを保存する(強制終了・タイムアウトでも、書込み済み分の記録=rollbackの入力が残る)
+        onEntry: () => writeManifest(manifestOutPath, buildManifest()),
+        onSkip: (docId, reason) =>
+          console.log(`  スキップ(${reason === 'precondition' ? '読取後に別の書込みが発生' : '書込み時点で書類が削除済み'}): ${docId}`),
       }
-    }
+    ));
+    aborted = false;
   } finally {
-    // 途中で例外停止しても、それまでの書込み記録(rollbackの入力)を必ず出力する
-    writeManifest(manifestOutPath, buildManifest());
+    // 例外停止でも、それまでの書込み記録を必ず出力する。出力自体が失敗したら、docIdだけをstderrへ退避する
+    try {
+      writeManifest(manifestOutPath, buildManifest());
+    } catch (writeErr) {
+      console.error(`ERROR: manifestの書出しに失敗しました(${(writeErr as Error).message})。書込み済みdocIdを退避出力します:`);
+      console.error(JSON.stringify(entries.map((e) => e.docId)));
+    }
   }
   console.log('---');
-  console.log(`完了: 紐づけ${written}件 / 読取後に変更ありスキップ${skippedPrecondition}件`);
+  console.log(`完了: 紐づけ${written}件 / 読取後に変更ありスキップ${skippedPrecondition}件 / 書込み時点で削除済み${skippedNotFound}件`);
+  if (skippedPrecondition + skippedNotFound > 0) {
+    console.log(`::warning::${skippedPrecondition + skippedNotFound}件が未処理です(実行中に変更・削除された書類)。再度dry-runから確認してください`);
+  }
   if (manifestOutPath) console.log(`manifest: ${manifestOutPath}`);
 }
 
@@ -283,6 +335,9 @@ async function runRollback(manifestPath: string): Promise<void> {
   console.log(
     `${dryRun ? 'DRY RUN: 戻し対象' : '完了: 戻した'}${reverted}件 / doc不在${skippedNotFound}件 / 以降に変更あり${skippedProgressed}件 / 競合${skippedPrecondition}件`
   );
+  if (skippedNotFound + skippedProgressed + skippedPrecondition > 0) {
+    console.log(`::warning::${skippedNotFound + skippedProgressed + skippedPrecondition}件は戻していません(上記の理由別件数を確認してください)`);
+  }
 }
 
 (rollbackManifestPath ? runRollback(rollbackManifestPath) : runBackfill())
