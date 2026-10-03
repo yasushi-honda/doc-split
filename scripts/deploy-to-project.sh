@@ -294,38 +294,59 @@ if [ "$FULL_DEPLOY" = true ]; then
     # code-default時と同じく、scripts/clients/<alias>.env の宣言値を反映する(宣言があるときのみ
     # 上書き。宣言なしは既存のfunctions/.env.<project-id>の値を保持)。反映しないと、本スクリプト経由の
     # デプロイだけ宣言と異なるプロバイダで動き、OCRが無言でGeminiへ戻りうる。
-    # 不正値、およびpaddle/sarashina宣言なのに対応URLが未設定(<TBD>)の場合はデプロイ前に止める。
-    is_unset_url() { case "$1" in ""|"<TBD>"|"TBD"|"tbd") return 0 ;; *) return 1 ;; esac; }
+    # 宣言値は呼び出し元の環境変数ではなく$CLIENT_ENVのファイル内容から直接読む(workflowと同じ
+    # 読み方。direnv等のexportや.envrc.clientの上書きを拾わない、重複キーは先頭行を採用)。
+    # 不正値(TODO/<TBD>等の仮置き含む)、およびpaddle/sarashina宣言なのに対応URLが未設定の場合は
+    # デプロイ前に止める。
+    read_declared_raw() {
+        local val
+        val=$(grep -E "^${1}=" "$2" | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'")
+        val="${val#"${val%%[![:space:]]*}"}"
+        val="${val%"${val##*[![:space:]]}"}"
+        echo "$val"
+    }
+    # URL用: workflowのresolve_field_optionalと同じplaceholder語を未設定扱いにする
+    read_declared_url() {
+        local val
+        val=$(read_declared_raw "$1" "$2")
+        case "$val" in
+          ""|"<TBD>"|"TBD"|"tbd"|"<TODO>"|"TODO"|"todo"|"<FIXME>"|"FIXME"|"fixme"|"null"|"NULL"|"undefined"|"UNDEFINED"|"xxx"|"XXX"|"<PLACEHOLDER>") echo "" ;;
+          *) echo "$val" ;;
+        esac
+    }
     upsert_functions_env() {
         grep -v "^$1=" "$FUNCTIONS_ENV_FILE" > "${FUNCTIONS_ENV_FILE}.tmp" || true
         echo "$1=$2" >> "${FUNCTIONS_ENV_FILE}.tmp"
         mv "${FUNCTIONS_ENV_FILE}.tmp" "$FUNCTIONS_ENV_FILE"
         log_success "functions/.env.${PROJECT_ID} に $1=$2 を設定"
     }
-    if [ -n "${OCR_PROVIDER:-}" ]; then
-        case "$OCR_PROVIDER" in
+    DECLARED_OCR_PROVIDER=$(read_declared_raw OCR_PROVIDER "$CLIENT_ENV")
+    DECLARED_SUMMARY_PROVIDER=$(read_declared_raw SUMMARY_PROVIDER "$CLIENT_ENV")
+    if [ -n "$DECLARED_OCR_PROVIDER" ]; then
+        case "$DECLARED_OCR_PROVIDER" in
           gemini|paddle) ;;
-          *) log_error "OCR_PROVIDER=$OCR_PROVIDER は不正です(gemini|paddleのみ。$CLIENT_ENV を確認してください)"; exit 1 ;;
+          *) log_error "OCR_PROVIDER=$DECLARED_OCR_PROVIDER は不正です(gemini|paddleのみ。$CLIENT_ENV を確認してください)"; exit 1 ;;
         esac
-        if [ "$OCR_PROVIDER" = "paddle" ] && is_unset_url "${PADDLE_OCR_URL:-}"; then
+        if [ "$DECLARED_OCR_PROVIDER" = "paddle" ] && [ -z "$(read_declared_url PADDLE_OCR_URL "$CLIENT_ENV")" ]; then
             log_error "OCR_PROVIDER=paddle ですが $CLIENT_ENV の PADDLE_OCR_URL が未設定です"
             exit 1
         fi
-        upsert_functions_env OCR_PROVIDER "$OCR_PROVIDER"
+        upsert_functions_env OCR_PROVIDER "$DECLARED_OCR_PROVIDER"
     fi
-    if [ -n "${SUMMARY_PROVIDER:-}" ]; then
-        case "$SUMMARY_PROVIDER" in
+    if [ -n "$DECLARED_SUMMARY_PROVIDER" ]; then
+        case "$DECLARED_SUMMARY_PROVIDER" in
           none|gemini|sarashina) ;;
-          *) log_error "SUMMARY_PROVIDER=$SUMMARY_PROVIDER は不正です(none|gemini|sarashinaのみ。$CLIENT_ENV を確認してください)"; exit 1 ;;
+          *) log_error "SUMMARY_PROVIDER=$DECLARED_SUMMARY_PROVIDER は不正です(none|gemini|sarashinaのみ。$CLIENT_ENV を確認してください)"; exit 1 ;;
         esac
-        if [ "$SUMMARY_PROVIDER" = "sarashina" ]; then
-            if is_unset_url "${SARASHINA_SUMMARY_URL:-}"; then
+        if [ "$DECLARED_SUMMARY_PROVIDER" = "sarashina" ]; then
+            DECLARED_SARASHINA_URL=$(read_declared_url SARASHINA_SUMMARY_URL "$CLIENT_ENV")
+            if [ -z "$DECLARED_SARASHINA_URL" ]; then
                 log_error "SUMMARY_PROVIDER=sarashina ですが $CLIENT_ENV の SARASHINA_SUMMARY_URL が未設定です"
                 exit 1
             fi
-            upsert_functions_env SARASHINA_SUMMARY_URL "$SARASHINA_SUMMARY_URL"
+            upsert_functions_env SARASHINA_SUMMARY_URL "$DECLARED_SARASHINA_URL"
         fi
-        upsert_functions_env SUMMARY_PROVIDER "$SUMMARY_PROVIDER"
+        upsert_functions_env SUMMARY_PROVIDER "$DECLARED_SUMMARY_PROVIDER"
     fi
 
     firebase deploy --only functions -P "$PROJECT_ALIAS"

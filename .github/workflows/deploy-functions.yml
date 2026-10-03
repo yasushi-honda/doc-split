@@ -142,6 +142,16 @@ jobs:
                 ;;
             esac
           }
+          # L1ゲート(OCR_PROVIDER/SUMMARY_PROVIDER)の宣言用: URLと違いplaceholder語(TODO/<TBD>/null等)を
+          # 空扱いにしない。宣言値が仮置きのまま残った場合に無言でコード既定へ戻らず、不正値として
+          # fail-fastさせるため(codex review指摘)。重複キーは先頭行を採用する。
+          read_declared_raw() {
+            local val
+            val=$(grep -E "^${1}=" "$2" | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'")
+            val="${val#"${val%%[![:space:]]*}"}"
+            val="${val%"${val##*[![:space:]]}"}"
+            echo "$val"
+          }
           PADDLE_OCR_URL=$(resolve_field_optional PADDLE_OCR_URL "$ENV_FILE")
           if [ -n "$PADDLE_OCR_URL" ]; then
             echo "PADDLE_OCR_URL=${PADDLE_OCR_URL}" >> "functions/.env.${PROJECT_ID}"
@@ -157,7 +167,7 @@ jobs:
           # fail-loudするpaddleOcrClient.tsの挙動を待たずここで即座に検知する。
           OCR_PROVIDER_EFFECTIVE="${{ github.event.inputs.ocr_provider_override }}"
           if [ "$OCR_PROVIDER_EFFECTIVE" == "code-default" ]; then
-            OCR_PROVIDER_EFFECTIVE=$(resolve_field_optional OCR_PROVIDER "$ENV_FILE")
+            OCR_PROVIDER_EFFECTIVE=$(read_declared_raw OCR_PROVIDER "$ENV_FILE")
           fi
           if [ -n "$OCR_PROVIDER_EFFECTIVE" ]; then
             case "$OCR_PROVIDER_EFFECTIVE" in
@@ -173,8 +183,10 @@ jobs:
             fi
             echo "OCR_PROVIDER=${OCR_PROVIDER_EFFECTIVE}" >> "functions/.env.${PROJECT_ID}"
             echo "OCR_PROVIDER 適用: ${OCR_PROVIDER_EFFECTIVE} (override=${{ github.event.inputs.ocr_provider_override }}, functions/.env.${PROJECT_ID})"
+            echo "- ${PROJECT_ALIAS}: OCR_PROVIDER=${OCR_PROVIDER_EFFECTIVE}" >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "OCR_PROVIDER 未設定: コード既定(gemini)で動作します(override=code-default、$ENV_FILE に宣言なし)"
+            echo "::warning::OCR_PROVIDER 未設定: コード既定(gemini)で動作します(override=code-default、$ENV_FILE に宣言なし)"
+            echo "- ⚠️ ${PROJECT_ALIAS}: OCR_PROVIDER 未設定(コード既定gemini)" >> "$GITHUB_STEP_SUMMARY"
           fi
 
           # SARASHINA_SUMMARY_URL (任意、ADR-0027): PADDLE_OCR_URLと同型。dev以外はまだ
@@ -188,12 +200,12 @@ jobs:
           fi
 
           # SUMMARY_PROVIDER (ADR-0027 L1ゲート): OCR_PROVIDERと同じ解決順
-          # (明示override > <alias>.envの宣言値 > コード既定none)と同じ再発防止。
+          # (明示override > <alias>.envの宣言値 > コード既定none)で、OCR_PROVIDERと同じ再発防止。
           # sarashinaが有効なのに対象環境のSARASHINA_SUMMARY_URLが未設定(<TBD>)の場合は、
           # デプロイ後にfail-loudする挙動を待たずここで即座に検知する。
           SUMMARY_PROVIDER_EFFECTIVE="${{ github.event.inputs.summary_provider_override }}"
           if [ "$SUMMARY_PROVIDER_EFFECTIVE" == "code-default" ]; then
-            SUMMARY_PROVIDER_EFFECTIVE=$(resolve_field_optional SUMMARY_PROVIDER "$ENV_FILE")
+            SUMMARY_PROVIDER_EFFECTIVE=$(read_declared_raw SUMMARY_PROVIDER "$ENV_FILE")
           fi
           if [ -n "$SUMMARY_PROVIDER_EFFECTIVE" ]; then
             case "$SUMMARY_PROVIDER_EFFECTIVE" in
