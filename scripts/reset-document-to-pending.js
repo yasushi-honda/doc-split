@@ -13,10 +13,9 @@
  *   - 既定はdry-run、--executeで実書込み
  *   - resolveClientName()でscripts/clients/*.envと照合(誤ったプロジェクトへの実行防止)
  *   - デプロイ済みprocessOCR Functionsの環境変数OCR_PROVIDER(`gcloud functions describe`で
- *     実機確認、roles/cloudfunctions.viewer相当の権限が必要)がgemini(緊急手段)を指していたら
+ *     実機確認、roles/cloudfunctions.viewer相当の権限が必要)が明示的にpaddleでなければ
  *     fail-closed(再処理がGeminiで静かに完了し、PaddleOCRを検証したように見える事故を防ぐ)。
- *     未設定・paddleはPaddleOCR(OCRの判定はL1のOCR_PROVIDERのみ、既定・倒れ先はpaddle)。
- *     L2(settings/features.paddleOcr + allowlist)はOCRの判定から外れたため確認しない
+ *     未設定は、旧リビジョンが残る環境ではGeminiに倒れうるため、移行期は許可しない
  *
  * リセット内容は`scripts/reset-documents-by-office.js`と同一の最小フィールドセット
  * (status/retryCount/lastErrorMessage/updatedAt/pass2Promotion削除)。
@@ -119,10 +118,11 @@ async function main() {
   console.log('→ status: pending へリセットします');
 
   // ADR-0025 PaddleOCR検証: このスクリプトの唯一の用途はPaddleOCRでの再処理検証のため、
-  // デプロイ済みprocessOCR FunctionsのL1(OCR_PROVIDER)がgemini(緊急手段)でないことを実機確認する。
-  // OCRの判定はL1のみ(未設定・空・paddleはPaddleOCR、geminiを明示したときだけGemini)。
-  // L2(Firestoreのpaddleocrフラグ+allowlist)はOCRの判定から外れたため、確認も対象docIdの
-  // 分離(allowlist)もしない。ここがfail-loudの最終防衛線(gcloud呼出自体の失敗も許容しない)。
+  // デプロイ済みprocessOCR Functionsの環境変数OCR_PROVIDERが明示的にpaddleであることを実機確認する。
+  // 新しい解決ロジック(PR-B、OCRの判定はOCR_PROVIDERのみ・倒れ先paddle)では未設定でもpaddleだが、
+  // 旧リビジョンがデプロイされたままの環境では未設定=Gemini(かつpaddleでもFirestoreのL2フラグ+
+  // allowlistの除外でGemini)に倒れうるため、移行期が終わるまで「明示paddle」だけを通す
+  // (codex review指摘)。ここがfail-loudの最終防衛線(gcloud呼出自体の失敗も許容しない)。
 
   let deployedProvider;
   try {
@@ -144,16 +144,17 @@ async function main() {
     console.error('gcloud CLIの認証状態、またはprocessOCR未デプロイの可能性を確認してください。');
     process.exit(1);
   }
-  if (deployedProvider === 'gemini') {
+  if (deployedProvider !== 'paddle') {
     console.error(
-      'ERROR: processOCR FunctionsのL1環境変数 OCR_PROVIDER="gemini"(緊急手段)です。' +
-        'このまま再処理するとGemini(Vertex AI)へ顧客データが送られ、PaddleOCRの検証になりません。' +
-        '"Deploy Cloud Functions" workflow(ocr_provider_override=code-default、または=paddle)で' +
-        'PaddleOCRへ戻してから実行してください。'
+      `ERROR: processOCR Functionsの環境変数 OCR_PROVIDER="${deployedProvider || '(未設定)'}" です(明示的なpaddleが必要)。` +
+        'geminiのまま再処理するとGemini(Vertex AI)へ顧客データが送られ、PaddleOCRの検証になりません。' +
+        '未設定は、旧リビジョンが残っている環境ではGeminiに倒れるため、移行期は許可しません。' +
+        '"Deploy Cloud Functions" workflow(ocr_provider_override=paddle、または<環境>.envにOCR_PROVIDER=paddleを宣言した' +
+        'code-default)で、PaddleOCRを明示してから実行してください。'
     );
     process.exit(1);
   }
-  console.log(`✓ L1確認OK(processOCR FunctionsのOCR_PROVIDER=${deployedProvider || '(未設定=paddle)'}、geminiではない)`);
+  console.log('✓ OCR_PROVIDER確認OK(processOCR Functionsで明示的にpaddle)');
 
   if (!execute) {
     console.log('\nDRY RUN: 書込みは実行しません。--execute で実行してください。');

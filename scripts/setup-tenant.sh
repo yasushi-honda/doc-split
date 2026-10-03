@@ -881,6 +881,11 @@ else
         log_warn "（組織ポリシーでCloud Buildの権限エラーが出る場合は、組織管理者に確認）"
     else
         # 個人アカウントモード または SA + GOOGLE_APPLICATION_CREDENTIALS設定済み
+        # 注意(PR-B、2026-10-03): OCRのコード既定・倒れ先はpaddle(自前Cloud Run)。本スクリプトは
+        # PaddleOCR基盤を作らないため、PADDLE_OCR_URLが無い新規テナントでは、デプロイ後に処理される
+        # 全文書がエラーになる(Geminiへは黙って倒れない)。deploy-functions.yml/deploy-to-project.shと
+        # 違い、この経路には事前検査が無いため、ここで警告する(新規テナントの予定が出たら手順へ組込む)。
+        log_warn "OCRはPaddleOCR(自前Cloud Run)が既定です。PaddleOCR基盤(scripts/setup-paddle-ocr-infra.sh、deploy-paddle-ocr.yml)と<環境>.envのPADDLE_OCR_URL宣言が無い新規環境では、OCRが全件エラーになります"
         firebase deploy --only functions --project "$PROJECT_ID" 2>&1 | \
             grep -E "(✔|Error|Warning|functions\[)" || true
         log_success "Cloud Functions デプロイ完了"

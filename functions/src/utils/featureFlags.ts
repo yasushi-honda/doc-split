@@ -128,6 +128,10 @@ export interface PaddleOcrGate {
  *
  * フラグドキュメントが存在しない場合、またはpaddleOcrが明示的にtrueでない場合は
  * 「無効」を安全側デフォルトとする(fail-closed、段階導入の既定はGemini継続)。
+ *
+ * 【PR-B(2026-10-03)以降】OCRの判定(`resolveOcrProvider`)には使われない。全面切替済みで、
+ * OCRの倒れ先をpaddleへ反転し、`OCR_PROVIDER`(L1)だけで決まるようにしたため。運用スクリプト
+ * (set-paddle-ocr-allowlist等)が参照しているため残置しており、PR-Eで整理する。
  */
 export async function getPaddleOcrGate(
   db: admin.firestore.Firestore

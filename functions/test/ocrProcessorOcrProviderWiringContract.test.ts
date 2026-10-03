@@ -140,4 +140,12 @@ describe('ocrProcessor OCR_PROVIDER配線契約 (ADR-0025 PR6)', () => {
       'OCR呼出し前に緊急利用ログを出す旧実装に戻っている(再利用経路・OCR前失敗を過大に数える)'
     );
   });
+
+  it('OCRの判定はL1のみ: resolveOcrProvider()は引数なしで呼ばれ、ocrProcessor.tsはgetPaddleOcrGate(L2のFirestoreゲート)を使わない', () => {
+    const source = readFileSync(resolve(process.cwd(), OCR_PROCESSOR_PATH), 'utf-8');
+    expect(processDocumentBody).to.match(/resolveOcrProvider\(\)/, 'resolveOcrProviderは引数なし(L1のみ)で呼ぶ');
+    expect(source, 'L2(Firestoreのpaddleocrフラグ+allowlist)をOCRの判定に再び使うと、設定欠落で無言でGeminiへ倒れる設計に戻る').to.not.match(
+      /getPaddleOcrGate/
+    );
+  });
 });

@@ -11,6 +11,7 @@
 
 import { expect } from 'chai';
 import { resolveOcrProvider } from '../src/utils/featureFlags';
+import { PADDLE_OCR_CONFIG, parseOcrProvider } from '../src/utils/config';
 
 describe('resolveOcrProvider (ADR-0025、倒れ先paddle)', () => {
   it('L1が"gemini"(明示指定)のときだけ"gemini"を返す', () => {
@@ -21,12 +22,16 @@ describe('resolveOcrProvider (ADR-0025、倒れ先paddle)', () => {
     expect(resolveOcrProvider('paddle')).to.equal('paddle');
   });
 
-  it('引数省略時は本番のL1既定値を使う(このテストプロセスはOCR_PROVIDER未設定のため"paddle")', () => {
-    expect(process.env.OCR_PROVIDER, 'このテストはOCR_PROVIDER未設定を前提とする').to.equal(undefined);
-    expect(resolveOcrProvider()).to.equal('paddle');
+  it('引数省略時は本番のL1(PADDLE_OCR_CONFIG.provider)をそのまま使う', () => {
+    // 環境変数の有無(開発者のシェルのexport等)に依存せず、モジュール読込時に確定した本番値と一致することだけを検証する
+    expect(resolveOcrProvider()).to.equal(PADDLE_OCR_CONFIG.provider === 'gemini' ? 'gemini' : 'paddle');
   });
 
-  it('Firestoreを読まない(引数はL1のみ)', () => {
-    expect(resolveOcrProvider.length, 'L2(Firestore db/docId)を引数に取らない').to.be.lessThan(2);
+  it('L1未設定・空・未知値はpaddleに解決される(parseOcrProvider→resolveOcrProviderの結合、Geminiに倒れない)', () => {
+    for (const envValue of [undefined, '', '   ', 'code-default', 'GEMINI', 'gemini-3.5-flash', 'paddleocr']) {
+      expect(resolveOcrProvider(parseOcrProvider(envValue)), `OCR_PROVIDER=${JSON.stringify(envValue)}`).to.equal('paddle');
+    }
+    expect(resolveOcrProvider(parseOcrProvider('gemini'))).to.equal('gemini');
+    expect(resolveOcrProvider(parseOcrProvider('  gemini\n'))).to.equal('gemini');
   });
 });
