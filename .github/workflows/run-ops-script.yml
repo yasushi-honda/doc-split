@@ -250,13 +250,15 @@ on:
           - check-sarashina-summary-canary --canary-ids
           - check-sarashina-summary-canary --hours 24
           - check-sarashina-summary-canary --hours 168
+          - requeue-summary-to-pending --requeue-ids
+          - requeue-summary-to-pending --requeue-ids --execute
       backfill_limit:
         description: 'backfill-drive-export --limit: canary実行時のマーク上限件数(数値のみ) / classify-drive-export-drift --limit: 検査対象document数の上限(数値のみ) / execute-drive-export-repair --limit: 修復対象候補数の上限(数値のみ) / backfill-confirm-on-verify --limit: canary実行時の確定対象上限件数(数値のみ) / backfill-customer-id-link --limit: canary実行時の紐づけ対象上限件数(数値のみ)'
         required: false
         type: string
         default: ''
       doc_id:
-        description: 'Document ID (required when script contains --doc-id, set-drive-allowlist --set, or set-paddle-ocr-allowlist --set; for set-paddle-ocr-allowlist --set or set-sarashina-summary-allowlist --set, comma-separated IDs allowed (max 10); required for check-sarashina-summary-canary --canary-ids (1-10 comma-separated IDs); ignored otherwise)'
+        description: 'Document ID (required when script contains --doc-id, set-drive-allowlist --set, or set-paddle-ocr-allowlist --set; for set-paddle-ocr-allowlist --set or set-sarashina-summary-allowlist --set, comma-separated IDs allowed (max 10); required for check-sarashina-summary-canary --canary-ids and requeue-summary-to-pending --requeue-ids (1-10 comma-separated IDs); ignored otherwise)'
         required: false
         type: string
         default: ''
@@ -421,10 +423,14 @@ jobs:
           # --flag sarashinaSummaryとset-sarashina-summary-allowlistの書込み系操作を
           # dev以外の環境で誤実行すると、PR6の承認を経ずに本番でL2フラグが有効化されうる。
           # observation job(check-sarashina-summary-status、read-only)は対象外。
+          # PR-D(通常経路のGemini停止計画、PR6)でdecision-makerがkanameoneのcanaryを承認したため、
+          # dev+kanameoneまで許可する。cocoroはkanameoneのcanary合格後に別途承認(このガードで引き続き拒否)。
+          # requeue-summary-to-pending(要約をpendingへ戻す書込み系)も同じ対象に含める。
           if { [ "$SCRIPT_NAME" = "set-feature-flag" ] && echo "$SCRIPT_ARGS" | grep -q -- '--flag sarashinaSummary'; } || \
-             [ "$SCRIPT_NAME" = "set-sarashina-summary-allowlist" ]; then
-            if [ "$ENVIRONMENT" != "dev" ]; then
-              echo "ERROR: sarashinaSummaryのflag/allowlist操作はADR-0027 PR5によりdev限定です(kanameone/cocoroはPR6で別途承認)。environment=dev を指定してください(現在: $ENVIRONMENT)" >&2
+             [ "$SCRIPT_NAME" = "set-sarashina-summary-allowlist" ] || \
+             [ "$SCRIPT_NAME" = "requeue-summary-to-pending" ]; then
+            if [ "$ENVIRONMENT" != "dev" ] && [ "$ENVIRONMENT" != "kanameone" ]; then
+              echo "ERROR: sarashinaSummaryのflag/allowlist/requeue操作はdev・kanameone限定です(cocoroはkanameoneのcanary合格後に別途承認)。environment=dev または kanameone を指定してください(現在: $ENVIRONMENT)" >&2
               exit 1
             fi
           fi
@@ -504,6 +510,21 @@ jobs:
               exit 1
             fi
             SCRIPT_ARGS=$(echo "$SCRIPT_ARGS" | sed "s/--canary-ids/--canary-ids $DOC_ID/")
+          fi
+
+          # requeue-summary-to-pending --requeue-ids (PR-D canary再投入、書込み系)も同型。
+          # 既定はdry-run、--executeを含む選択肢のときだけ実書込みする。
+          if [ "$SCRIPT_NAME" = "requeue-summary-to-pending" ] && echo "$SCRIPT_ARGS" | grep -q -- '--requeue-ids'; then
+            if [ -z "$DOC_ID" ]; then
+              echo "ERROR: doc_id input is required when script contains requeue-summary-to-pending --requeue-ids" >&2
+              exit 1
+            fi
+            # 先頭は英数字(--execute等のオプションがIDとして通るのを防ぐ。scripts/lib/summaryRequeue.tsと同一規則)
+            if ! echo "$DOC_ID" | grep -qE '^[A-Za-z0-9][A-Za-z0-9_-]*(,[A-Za-z0-9][A-Za-z0-9_-]*){0,9}$'; then
+              echo "ERROR: doc_id must be 1-10 comma-separated IDs (start with alphanumeric; alphanumeric/underscore/hyphen only)" >&2
+              exit 1
+            fi
+            SCRIPT_ARGS=$(echo "$SCRIPT_ARGS" | sed "s/--requeue-ids/--requeue-ids $DOC_ID/")
           fi
 
           # backfill-drive-export --limit/--expected-count はStage E1 canary安全策
@@ -1813,6 +1834,7 @@ jobs:
                [ "$SCRIPT_NAME" = "upload-sarashina-canary-fixtures" ] || \
                [ "$SCRIPT_NAME" = "diagnose-confirmed-replay-sampling" ] || \
                [ "$SCRIPT_NAME" = "check-sarashina-summary-canary" ] || \
+               [ "$SCRIPT_NAME" = "requeue-summary-to-pending" ] || \
                [ "$SCRIPT_NAME" = "backfill-detail-subcollection" ] || \
                [ "$SCRIPT_NAME" = "create-pending-doc" ] || \
                [ "$SCRIPT_NAME" = "backfill-drive-export" ] || \
