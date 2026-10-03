@@ -11,6 +11,9 @@
  * 処理時間は文書に保存されないため、ゲート(3)はSarashinaサービスのCloud Runリクエストログの
  * リクエスト単位latency(コールドスタート込み)で測る。詳細は scripts/lib/sarashinaCanaryStats.ts。
  * ゲート(4)(5)(decision-makerの原文照合とrun.invoker確認)は本スクリプトの対象外。
+ *
+ * 終了コード: ゲート(1)〜(3)の総合がFAILなら1(ログ取得失敗・打切りによる不完全な測定を含む)、PASSなら0。
+ * 取得するのはsummaryState/summaryErrorKind/summaryProviderのみ。doneはsummaryProvider=sarashinaのみ数える。
  */
 import { execFileSync } from 'child_process';
 import * as admin from 'firebase-admin';
@@ -88,12 +91,13 @@ function toSnapshot(data: FirebaseFirestore.DocumentData | undefined): CanaryDoc
   return {
     state: typeof data?.summaryState === 'string' ? data.summaryState : null,
     errorKind: typeof data?.summaryErrorKind === 'string' ? data.summaryErrorKind : null,
+    provider: typeof data?.summaryProvider === 'string' ? data.summaryProvider : null,
   };
 }
 
 async function loadByIds(ids: string[]): Promise<{ docs: CanaryDocSnapshot[]; missing: number; rows: string[] }> {
   const refs = ids.map((id) => db.collection('documents').doc(id));
-  const snaps = await db.getAll(...refs, { fieldMask: ['summaryState', 'summaryErrorKind'] });
+  const snaps = await db.getAll(...refs, { fieldMask: ['summaryState', 'summaryErrorKind', 'summaryProvider'] });
   const docs: CanaryDocSnapshot[] = [];
   const rows: string[] = [];
   let missing = 0;
@@ -105,7 +109,9 @@ async function loadByIds(ids: string[]): Promise<{ docs: CanaryDocSnapshot[]; mi
     }
     const snap = toSnapshot(s.data());
     docs.push(snap);
-    rows.push(`  ${s.id}  state=${snap.state ?? '(なし)'}  errorKind=${snap.errorKind ?? '-'}`);
+    rows.push(
+      `  ${s.id}  state=${snap.state ?? '(なし)'}  provider=${snap.provider ?? '-'}  errorKind=${snap.errorKind ?? '-'}`
+    );
   }
   return { docs, missing, rows };
 }
@@ -115,7 +121,7 @@ async function loadByPeriod(periodHours: number): Promise<{ docs: CanaryDocSnaps
   const snap = await db
     .collection('documents')
     .where('summaryStateUpdatedAt', '>=', since)
-    .select('summaryState', 'summaryErrorKind')
+    .select('summaryState', 'summaryErrorKind', 'summaryProvider')
     .limit(MAX_PERIOD_DOCS + 1)
     .get();
   const truncated = snap.size > MAX_PERIOD_DOCS;
@@ -168,6 +174,7 @@ async function main(): Promise<void> {
   console.log('');
   console.log(`=== ① summaryState別(分母 ${summary.denominator}件、うち文書なし ${summary.missing}件) ===`);
   for (const [k, v] of Object.entries(summary.byState)) console.log(`${k}: ${v}`);
+  console.log(`done(Sarashina以外で生成されたものは別掲): Sarashina ${summary.byState.done}件 / 他プロバイダ ${summary.doneByOtherProvider}件`);
   console.log(`fabrication_suspectedの最終error(state=error): ${summary.fabricationFinalErrors}件`);
   if (docsTruncated) {
     console.log(`⚠ 文書が${MAX_PERIOD_DOCS}件を超えたため打切り。この集計は不完全(ゲート判定はFAIL扱い)`);
@@ -198,6 +205,7 @@ async function main(): Promise<void> {
     done: summary.byState.done,
     fabricationFinalErrors: summary.fabricationFinalErrors,
     p95Seconds: latency.p95,
+    latencyIncomplete: logsTruncated,
   });
   const incomplete = docsTruncated;
   console.log('');
@@ -205,8 +213,10 @@ async function main(): Promise<void> {
   console.log(`(1) ${gate.doneRate.pass ? 'PASS' : 'FAIL'}: ${gate.doneRate.detail}`);
   console.log(`(2) ${gate.fabrication.pass ? 'PASS' : 'FAIL'}: ${gate.fabrication.detail}`);
   console.log(`(3) ${gate.latency.pass ? 'PASS' : 'FAIL'}: ${gate.latency.detail}`);
-  console.log(`総合((1)〜(3)): ${gate.allPass && !incomplete ? 'PASS' : 'FAIL'}`);
+  const overallPass = gate.allPass && !incomplete;
+  console.log(`総合((1)〜(3)): ${overallPass ? 'PASS' : 'FAIL'}`);
   console.log('※ ゲート(4)原文照合・(5)run.invokerの確認は別途(本スクリプトの対象外)');
+  if (!overallPass) process.exitCode = 1;
 }
 
 main().catch((e) => {

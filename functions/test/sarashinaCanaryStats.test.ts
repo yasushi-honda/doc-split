@@ -9,8 +9,9 @@ import {
 
 const doc = (
   state: CanaryDocSnapshot['state'],
-  errorKind: CanaryDocSnapshot['errorKind'] = null
-): CanaryDocSnapshot => ({ state, errorKind });
+  errorKind: CanaryDocSnapshot['errorKind'] = null,
+  provider: CanaryDocSnapshot['provider'] = state === 'done' ? 'sarashina' : null
+): CanaryDocSnapshot => ({ state, errorKind, provider });
 
 describe('summarizeCanaryDocs', () => {
   it('summaryState別に集計し、分母は取得できた文書数+不在文書数にする', () => {
@@ -18,6 +19,14 @@ describe('summarizeCanaryDocs', () => {
     expect(r.denominator).to.equal(5);
     expect(r.missing).to.equal(1);
     expect(r.byState).to.deep.equal({ pending: 1, processing: 0, done: 2, error: 1, skipped: 0, none: 0 });
+    expect(r.doneByOtherProvider).to.equal(0);
+  });
+
+  it('Sarashina以外(gemini等)でdoneになった文書はdoneに数えず、doneByOtherProviderへ分ける', () => {
+    const r = summarizeCanaryDocs([doc('done', null, 'sarashina'), doc('done', null, 'gemini'), doc('done', null, null)], 0);
+    expect(r.byState.done).to.equal(1);
+    expect(r.doneByOtherProvider).to.equal(2);
+    expect(r.denominator).to.equal(3);
   });
 
   it('summaryStateが無い文書はnoneに数える(doneにしない)', () => {
@@ -136,5 +145,16 @@ describe('evaluateCanaryGate', () => {
     const g = evaluateCanaryGate({ ...base, p95Seconds: null });
     expect(g.latency.pass).to.equal(false);
     expect(g.allPass).to.equal(false);
+  });
+
+  it('(3) ログが上限に達して不完全な場合は、p95が小さくてもFAIL(欠けた分に遅い要求がありうる)', () => {
+    const g = evaluateCanaryGate({ ...base, p95Seconds: 10, latencyIncomplete: true });
+    expect(g.latency.pass).to.equal(false);
+    expect(g.latency.detail).to.include('不完全');
+    expect(g.allPass).to.equal(false);
+  });
+
+  it('(3) latencyIncompleteがfalse/未指定なら従来どおり判定する', () => {
+    expect(evaluateCanaryGate({ ...base, latencyIncomplete: false }).latency.pass).to.equal(true);
   });
 });

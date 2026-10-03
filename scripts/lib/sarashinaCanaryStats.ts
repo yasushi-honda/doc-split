@@ -14,12 +14,17 @@ import { percentile } from './confirmedReplayStats';
 export interface CanaryDocSnapshot {
   state: string | null;
   errorKind: string | null;
+  /** 要約を実際に生成したプロバイダ(summaryProvider)。フィールド不在はnull。 */
+  provider: string | null;
 }
 
 export interface CanaryDocSummary {
   denominator: number;
   missing: number;
+  /** doneはSarashinaで生成された文書のみ。他プロバイダ(geminiへのロールバック時等)のdoneは含めない。 */
   byState: { pending: number; processing: number; done: number; error: number; skipped: number; none: number };
+  /** state=doneだがsummaryProviderがsarashinaではない文書数(canaryの成功に数えない)。 */
+  doneByOtherProvider: number;
   fabricationFinalErrors: number;
 }
 
@@ -29,16 +34,23 @@ const KNOWN_STATES = ['pending', 'processing', 'done', 'error', 'skipped'] as co
  * 取得できた文書のsummaryState別件数と、捏造疑いの最終error件数を数える。
  * `missing`は指定されたが存在しなかった文書数で、分母に含める(取りこぼしを成功扱いにしない)。
  * 捏造疑いの再試行中(state=pending)は最終errorではないため数えない。
+ * Sarashina以外で生成されたdone(L1がgeminiへロールバックされた期間等)は、Sarashinaのcanary成功に
+ * 数えない(done率ゲートがSarashina以外の実績で満たされるのを防ぐ)。
  */
 export function summarizeCanaryDocs(docs: CanaryDocSnapshot[], missing: number): CanaryDocSummary {
   const byState = { pending: 0, processing: 0, done: 0, error: 0, skipped: 0, none: 0 };
   let fabricationFinalErrors = 0;
+  let doneByOtherProvider = 0;
   for (const d of docs) {
+    if (d.state === 'done' && d.provider !== 'sarashina') {
+      doneByOtherProvider += 1;
+      continue;
+    }
     const known = (KNOWN_STATES as readonly string[]).includes(d.state ?? '');
     byState[known ? (d.state as (typeof KNOWN_STATES)[number]) : 'none'] += 1;
     if (d.state === 'error' && d.errorKind === 'fabrication_suspected') fabricationFinalErrors += 1;
   }
-  return { denominator: docs.length + missing, missing, byState, fabricationFinalErrors };
+  return { denominator: docs.length + missing, missing, byState, doneByOtherProvider, fabricationFinalErrors };
 }
 
 /** Cloud Runの`httpRequest.latency`("23.35s"形式)を秒に変換する。不正はnull。 */
@@ -114,8 +126,10 @@ export function evaluateCanaryGate(input: {
   done: number;
   fabricationFinalErrors: number;
   p95Seconds: number | null;
+  /** リクエストログが取得上限に達し、古い要求が欠けている可能性がある(不完全な測定はFAIL)。 */
+  latencyIncomplete?: boolean;
 }): CanaryGate {
-  const { denominator, done, fabricationFinalErrors, p95Seconds } = input;
+  const { denominator, done, fabricationFinalErrors, p95Seconds, latencyIncomplete } = input;
   const doneRate: GateResult =
     denominator < CANARY_MIN_DENOMINATOR
       ? { pass: false, detail: `分母${denominator}件(${CANARY_MIN_DENOMINATOR}件以上が必要)` }
@@ -127,8 +141,9 @@ export function evaluateCanaryGate(input: {
     pass: fabricationFinalErrors === 0,
     detail: `捏造疑いの最終error ${fabricationFinalErrors}件(基準: 0件)`,
   };
-  const latency: GateResult =
-    p95Seconds === null
+  const latency: GateResult = latencyIncomplete
+    ? { pass: false, detail: 'リクエストログが取得上限に達し測定が不完全(欠けた分に遅い要求がありうる)。FAIL扱い' }
+    : p95Seconds === null
       ? { pass: false, detail: 'p95を測れない(200応答のログなし)。不明はFAIL扱い' }
       : {
           pass: p95Seconds <= CANARY_P95_LIMIT_SECONDS,
