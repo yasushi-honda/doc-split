@@ -125,33 +125,36 @@ describe('config: resolveGeminiPricing (Issue #548)', () => {
   });
 });
 
-describe('config: parseOcrProvider (ADR-0025)', () => {
-  it('未設定(undefined)の場合は既定値"gemini"を返す', () => {
-    expect(parseOcrProvider(undefined)).to.equal('gemini');
+describe('config: parseOcrProvider (ADR-0025、倒れ先はpaddle。Geminiは明示指定時のみ)', () => {
+  // 顧客データを外部AI(Gemini)へ送らない方針のため、設定欠落・不正値は全てpaddleへ倒す。
+  // Geminiは緊急手段として、OCR_PROVIDER=geminiを明示したときだけ有効になる。
+  it('未設定(undefined)の場合は既定値"paddle"を返す', () => {
+    expect(parseOcrProvider(undefined)).to.equal('paddle');
   });
 
-  it('空文字列の場合は既定値"gemini"を返す', () => {
-    expect(parseOcrProvider('')).to.equal('gemini');
-  });
-
-  it('"gemini"を指定した場合は"gemini"を返す', () => {
-    expect(parseOcrProvider('gemini')).to.equal('gemini');
+  it('空文字列・空白のみの場合は既定値"paddle"を返す', () => {
+    expect(parseOcrProvider('')).to.equal('paddle');
+    expect(parseOcrProvider('   ')).to.equal('paddle');
   });
 
   it('"paddle"を指定した場合は"paddle"を返す', () => {
     expect(parseOcrProvider('paddle')).to.equal('paddle');
   });
 
-  it('未サポート値は既定値"gemini"にフォールバックする(全OCRリクエストを巻き込む事故を防ぐ)', () => {
-    expect(parseOcrProvider('paddleocr')).to.equal('gemini');
-    expect(parseOcrProvider('PADDLE')).to.equal('gemini');
+  it('"gemini"を明示した場合だけ"gemini"を返す(緊急手段)', () => {
+    expect(parseOcrProvider('gemini')).to.equal('gemini');
   });
 
-  it('前後空白付き"paddle"("  paddle  ")はtrimして"paddle"として扱われる', () => {
-    expect(parseOcrProvider('  paddle  ')).to.equal('paddle');
+  it('未サポート値(綴り違い・大文字)はGeminiに倒れず"paddle"へフォールバックする', () => {
+    expect(parseOcrProvider('paddleocr')).to.equal('paddle');
+    expect(parseOcrProvider('PADDLE')).to.equal('paddle');
+    expect(parseOcrProvider('GEMINI')).to.equal('paddle');
+    expect(parseOcrProvider('gemini-3.5-flash')).to.equal('paddle');
+    expect(parseOcrProvider('code-default')).to.equal('paddle');
   });
 
-  it('末尾改行付き"paddle"("paddle\\n")はtrimして"paddle"として扱われる', () => {
+  it('前後空白・末尾改行付きの値はtrimして解釈する("  gemini  "→gemini、"paddle\\n"→paddle)', () => {
+    expect(parseOcrProvider('  gemini  ')).to.equal('gemini');
     expect(parseOcrProvider('paddle\n')).to.equal('paddle');
   });
 });

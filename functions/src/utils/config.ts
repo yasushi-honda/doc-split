@@ -75,19 +75,23 @@ export type OcrProvider = 'gemini' | 'paddle';
 /**
  * `OCR_PROVIDER`環境変数からPass1エンジンを解決する (ADR-0025)。
  *
- * 既定は'gemini'(現行挙動)。parseModelId/parseOcrThinkingBudgetと同型: ドキュメント化
- * されていない値は全OCRリクエストを巻き込む事故を避けるため安全側の既定値へフォールバック
- * する。GCPコンソール等からのコピペで混入する前後空白・改行はtrimしてから比較する。
+ * 既定は'paddle'(自前ホスティングのCloud Run、顧客データを外部AIへ送らない)。Gemini
+ * (Vertex AI)は緊急手段として、`OCR_PROVIDER=gemini`を**明示した場合だけ**有効になる。
+ * 未設定・空・未知値は全てpaddleへ倒す(2026-09-23/25にデプロイ時の設定欠落で無言のうちに
+ * Geminiへ回帰した事故の再発防止。倒れ先を反転し、顧客データを意図せず外部AIへ送らない)。
+ * paddleなのに`PADDLE_OCR_URL`が未設定の場合は、paddleOcrClient.tsが確定的にエラーにする
+ * (Geminiへの暗黙のフォールバックはしない)。GCPコンソール等からのコピペで混入する
+ * 前後空白・改行はtrimしてから比較する。
  */
 export function parseOcrProvider(envValue: string | undefined): OcrProvider {
   const trimmed = envValue?.trim();
-  if (trimmed === 'paddle') return 'paddle';
-  if (trimmed !== undefined && trimmed !== '' && trimmed !== 'gemini') {
+  if (trimmed === 'gemini') return 'gemini';
+  if (trimmed !== undefined && trimmed !== '' && trimmed !== 'paddle') {
     console.warn(
-      `[config] OCR_PROVIDER="${envValue}" is not a supported value (expected "gemini" or "paddle"). Falling back to gemini.`
+      `[config] OCR_PROVIDER="${envValue}" is not a supported value (expected "paddle" or "gemini"). Falling back to paddle.`
     );
   }
-  return 'gemini';
+  return 'paddle';
 }
 
 /**

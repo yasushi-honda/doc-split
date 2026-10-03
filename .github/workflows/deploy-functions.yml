@@ -22,7 +22,7 @@ on:
           - gemini-2.5-flash
           - gemini-3.5-flash
       ocr_provider_override:
-        description: 'OCR_PROVIDER override (ADR-0025。未指定=code-default=scripts/clients/<環境>.envのOCR_PROVIDER宣言値を維持、宣言なしならコード既定gemini。paddleを選ぶ前に対象環境のPADDLE_OCR_URLが設定済みであること)'
+        description: 'OCR_PROVIDER override (ADR-0025。未指定=code-default=scripts/clients/<環境>.envのOCR_PROVIDER宣言値を維持、宣言なしならコード既定paddle。geminiは緊急手段(顧客データがGemini/Vertex AIへ送られる)で、明示したデプロイだけ有効。paddleはPADDLE_OCR_URLが対象環境で設定済みであること)'
         required: true
         default: 'code-default'
         type: choice
@@ -159,12 +159,13 @@ jobs:
           fi
 
           # OCR_PROVIDER (ADR-0025 L1ゲート)。解決順: 明示override > scripts/clients/<alias>.env
-          # の宣言値 > コード既定。code-default選択時にfunctions/.env.<project>が毎回再生成されて
+          # の宣言値 > コード既定(paddle)。code-default選択時にfunctions/.env.<project>が毎回再生成されて
           # 既存のL1設定が無言で外れる事故(2026-09-23/25にkanameone・cocoroでpaddle→gemini回帰)の
-          # 再発防止として、code-defaultは「宣言値を維持」の意味にしている。一時的なロールバックは
-          # 明示override(gemini)、恒久的な変更は<alias>.envの宣言を書き換える。
-          # paddleが有効なのに対象環境のPADDLE_OCR_URLが未設定(<TBD>)の場合は、デプロイ後に
-          # fail-loudするpaddleOcrClient.tsの挙動を待たずここで即座に検知する。
+          # 再発防止として、code-defaultは「宣言値を維持」の意味にしている。コード既定・倒れ先は
+          # paddleで、Gemini(顧客データを外部AIへ送る)は明示override(gemini)または宣言の緊急手段のみ。
+          # 恒久的な変更は<alias>.envの宣言を書き換える。paddleで動く(宣言なしを含む)のに対象環境の
+          # PADDLE_OCR_URLが未設定(<TBD>)の場合は、デプロイ後にfail-loudするpaddleOcrClient.tsの
+          # 挙動を待たずここで即座に検知する(新規テナント納品前にPaddleOCR基盤が要る点の検知も兼ねる)。
           OCR_PROVIDER_EFFECTIVE="${{ github.event.inputs.ocr_provider_override }}"
           if [ "$OCR_PROVIDER_EFFECTIVE" == "code-default" ]; then
             OCR_PROVIDER_EFFECTIVE=$(read_declared_raw OCR_PROVIDER "$ENV_FILE")
@@ -177,16 +178,18 @@ jobs:
                 exit 1
                 ;;
             esac
-            if [ "$OCR_PROVIDER_EFFECTIVE" == "paddle" ] && [ -z "$PADDLE_OCR_URL" ]; then
-              echo "ERROR: OCR_PROVIDER=paddle ですが、$ENV_FILE のPADDLE_OCR_URLが未設定です" >&2
-              exit 1
-            fi
             echo "OCR_PROVIDER=${OCR_PROVIDER_EFFECTIVE}" >> "functions/.env.${PROJECT_ID}"
             echo "OCR_PROVIDER 適用: ${OCR_PROVIDER_EFFECTIVE} (override=${{ github.event.inputs.ocr_provider_override }}, functions/.env.${PROJECT_ID})"
             echo "- ${PROJECT_ALIAS}: OCR_PROVIDER=${OCR_PROVIDER_EFFECTIVE}" >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "::warning::OCR_PROVIDER 未設定: コード既定(gemini)で動作します(override=code-default、$ENV_FILE に宣言なし)"
-            echo "- ⚠️ ${PROJECT_ALIAS}: OCR_PROVIDER 未設定(コード既定gemini)" >> "$GITHUB_STEP_SUMMARY"
+            echo "OCR_PROVIDER 未設定: コード既定(paddle)で動作します(override=code-default、$ENV_FILE に宣言なし)"
+          fi
+          if [ "$OCR_PROVIDER_EFFECTIVE" == "gemini" ]; then
+            echo "::warning::OCR_PROVIDER=gemini(緊急手段): この環境の顧客データ(書類の画像・PDF)がGemini(Vertex AI)へ送られます"
+            echo "- ⚠️ ${PROJECT_ALIAS}: OCR_PROVIDER=gemini(緊急手段、顧客データがGeminiへ送られる)" >> "$GITHUB_STEP_SUMMARY"
+          elif [ -z "$PADDLE_OCR_URL" ]; then
+            echo "ERROR: OCR_PROVIDER=${OCR_PROVIDER_EFFECTIVE:-(未設定=paddle)} ですが、$ENV_FILE のPADDLE_OCR_URLが未設定です。PaddleOCR基盤(setup-paddle-ocr-infra.sh、deploy-paddle-ocr.yml)を先に用意するか、緊急時のみ ocr_provider_override=gemini を明示してください" >&2
+            exit 1
           fi
 
           # SARASHINA_SUMMARY_URL (任意、ADR-0027): PADDLE_OCR_URLと同型。dev以外はまだ

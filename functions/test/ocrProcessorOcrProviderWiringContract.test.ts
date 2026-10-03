@@ -4,12 +4,14 @@
  * processDocument自体はStorage/Gemini/PaddleOCR副作用が大きく直接呼び出せないため
  * (ocrProcessorEarlyOwnershipCheckWiringContract.test.tsと同方針)、配線自体を
  * ソース文字列レベルでlock-inする。判定ロジック(resolveOcrProvider自体の動作)は
- * featureFlagsIntegration.test.ts(emulator)で検証する。
+ * resolveOcrProvider.test.ts(純粋関数、倒れ先paddle)で検証する。
  *
  * 検証する契約:
  * 1. resolveOcrProviderの呼出しがprocessDocument内で1回だけ
  * 2. processDocument本体にocrWithGemini(の直接呼出しが残っていない
  *    (ocrPass1ディスパッチャー経由に一本化されていること)
+ * 3. Geminiが緊急手段として使われた文書は構造化ログ(gemini_ocr_emergency_used)に記録される
+ *    (緊急利用の有無を事後に数えられるようにするため。PR-B)
  */
 
 import { expect } from 'chai';
@@ -53,8 +55,8 @@ describe('ocrProcessor OCR_PROVIDER配線契約 (ADR-0025 PR6)', () => {
     const matches = processDocumentBody.match(/resolveOcrProvider\(/g) ?? [];
     expect(
       matches.length,
-      'resolveOcrProviderはFirestore readを伴うため、ページOCRループ内で毎回呼ぶとreadが重複し、' +
-        '同一文書内でプロバイダが途中変化する不整合も起こりうる'
+      'resolveOcrProviderはページOCRループ内で毎回呼ばず、文書ごとに1回だけ解決する' +
+        '(同一文書内でプロバイダが途中変化する不整合を防ぐ)'
     ).to.equal(1);
   });
 
@@ -121,5 +123,12 @@ describe('ocrProcessor OCR_PROVIDER配線契約 (ADR-0025 PR6)', () => {
       reuseBlock,
       '再利用パスでpass1ModelVersionにinheritedModelVersion相当の値を代入していない'
     ).to.match(/pass1ModelVersion\s*=\s*inheritedModelVersion/);
+  });
+
+  it('Geminiが使われた文書は構造化ログ(gemini_ocr_emergency_used)に記録される', () => {
+    expect(processDocumentBody).to.match(
+      /ocrProvider === 'gemini'[\s\S]{0,400}gemini_ocr_emergency_used/,
+      'ocrProvider===geminiのとき緊急利用を記録するログが見つからない(事後に緊急利用を数えられなくなる)'
+    );
   });
 });

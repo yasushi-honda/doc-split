@@ -223,10 +223,15 @@ export async function processDocument(
     mimeType: docData.mimeType as string,
   };
 
-  // ADR-0025: Pass1(OCR)エンジンをドキュメント単位で1回だけ解決する。ページOCRループの
-  // 反復ごとに呼び直すとFirestore readが重複するうえ、同一文書内でプロバイダが
-  // 途中で変わりうる(=結果の一貫性が壊れる)ため、ここで確定させて使い回す。
-  const ocrProvider: OcrProvider = await resolveOcrProvider(db, docId);
+  // ADR-0025: Pass1(OCR)エンジンをドキュメント単位で1回だけ解決する(L1のOCR_PROVIDERのみで
+  // 決まり、既定・倒れ先はpaddle)。ページOCRループの反復ごとに呼び直すと、同一文書内で
+  // プロバイダが途中で変わりうる(=結果の一貫性が壊れる)ため、ここで確定させて使い回す。
+  const ocrProvider: OcrProvider = resolveOcrProvider();
+  if (ocrProvider === 'gemini') {
+    // 緊急手段としてGemini(Vertex AI)を使う文書の記録(顧客データが外部AIへ送られる)。
+    // 通常運用(paddle)では出ない。事後に緊急利用の有無を数えられるよう、docIdだけを出す(PIIなし)。
+    console.warn(`[gemini_ocr_emergency_used] docId=${docId} (OCR_PROVIDER=geminiが明示されている)`);
+  }
   // ocrExtraction.version相当のfirestore書込みフィールド(既定はGemini、Pass1が実際に
   // 呼ばれた場合のみ後段で上書きする。既存pageResults再利用時はOCR自体を呼ばないため
   // 既定値のまま=既存挙動を保持する)。PaddleOCR時はmodelVersion文字列自体が
