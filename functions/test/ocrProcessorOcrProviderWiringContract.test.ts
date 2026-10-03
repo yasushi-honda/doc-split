@@ -125,10 +125,19 @@ describe('ocrProcessor OCR_PROVIDER配線契約 (ADR-0025 PR6)', () => {
     ).to.match(/pass1ModelVersion\s*=\s*inheritedModelVersion/);
   });
 
-  it('Geminiが使われた文書は構造化ログ(gemini_ocr_emergency_used)に記録される', () => {
+  it('Geminiが実際に使われる文書だけが構造化ログ(gemini_ocr_emergency_used)に記録される(Pass1呼出しの直前、1文書1回)', () => {
+    // 記録関数は ocrProvider==='gemini' のときだけ、かつ1回だけ出す
     expect(processDocumentBody).to.match(
-      /ocrProvider === 'gemini'[\s\S]{0,400}gemini_ocr_emergency_used/,
-      'ocrProvider===geminiのとき緊急利用を記録するログが見つからない(事後に緊急利用を数えられなくなる)'
+      /const logGeminiEmergencyOnce = \(\): void => \{\s*if \(ocrProvider !== 'gemini' \|\| geminiEmergencyLogged\) return;[\s\S]{0,200}gemini_ocr_emergency_used/,
+      '緊急利用ログの条件(gemini明示かつ未記録)が見つからない'
+    );
+    // 実際のPass1呼出し(ページ単位・単一画像)の直前で呼ぶ。pageResults再利用経路では呼ばれない
+    const calls = processDocumentBody.match(/logGeminiEmergencyOnce\(\);\s*\n\s*const result = await ocrPass1\(/g) ?? [];
+    expect(calls.length, 'ocrPass1呼出し(PDFページ・画像)の直前に緊急利用ログが置かれていない').to.equal(2);
+    // 解決直後(OCR前)に無条件で出す旧実装に戻っていない
+    expect(processDocumentBody).to.not.match(
+      /resolveOcrProvider\(\);\s*\n\s*if \(ocrProvider === 'gemini'\) \{\s*\n\s*\/\/[^\n]*\n[\s\S]{0,300}console\.warn\(`\[gemini_ocr_emergency_used\]/,
+      'OCR呼出し前に緊急利用ログを出す旧実装に戻っている(再利用経路・OCR前失敗を過大に数える)'
     );
   });
 });

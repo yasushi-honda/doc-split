@@ -332,10 +332,13 @@ if [ "$FULL_DEPLOY" = true ]; then
     # コード既定・倒れ先はpaddle(宣言なしを含む)。paddleで動くのにPADDLE_OCR_URLが未設定なら
     # デプロイ前に止める。geminiは緊急手段(顧客データがGemini/Vertex AIへ送られる)として
     # 宣言した場合だけ有効なので、警告を出す。
-    if [ "$DECLARED_OCR_PROVIDER" = "gemini" ]; then
+    # 判定は宣言値ではなく、実際にデプロイされる functions/.env.<project-id> の実効値で行う
+    # (宣言なしの環境では、ローカルに残った既存値が維持されるため。codex review指摘)。
+    EFFECTIVE_OCR_PROVIDER=$(read_declared_raw OCR_PROVIDER "$FUNCTIONS_ENV_FILE")
+    if [ "$EFFECTIVE_OCR_PROVIDER" = "gemini" ]; then
         log_warn "OCR_PROVIDER=gemini(緊急手段): この環境の顧客データがGemini(Vertex AI)へ送られます"
     elif [ -z "$(read_declared_url PADDLE_OCR_URL "$CLIENT_ENV")" ]; then
-        log_error "OCR_PROVIDER=${DECLARED_OCR_PROVIDER:-(未設定=paddle)} ですが $CLIENT_ENV の PADDLE_OCR_URL が未設定です。PaddleOCR基盤を先に用意してください"
+        log_error "OCR_PROVIDER=${EFFECTIVE_OCR_PROVIDER:-(未設定=paddle)} ですが $CLIENT_ENV の PADDLE_OCR_URL が未設定です。PaddleOCR基盤を先に用意してください"
         exit 1
     fi
     if [ -n "$DECLARED_SUMMARY_PROVIDER" ]; then

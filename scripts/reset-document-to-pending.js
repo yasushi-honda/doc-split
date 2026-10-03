@@ -12,10 +12,11 @@
  *   - リセット前の全フィールドをバックアップJSON保存(backups/配下)
  *   - 既定はdry-run、--executeで実書込み
  *   - resolveClientName()でscripts/clients/*.envと照合(誤ったプロジェクトへの実行防止)
- *   - L2ゲート(settings/features.paddleOcr + paddleOcrAllowlist)とL1ゲート(processOCR
- *     Functionsの環境変数OCR_PROVIDER、`gcloud functions describe`で実機確認、
- *     roles/cloudfunctions.viewer相当の権限が必要)の両方がpaddleを指していなければ
- *     fail-closed(片方だけOKでは無意味なcanaryになるため)
+ *   - デプロイ済みprocessOCR Functionsの環境変数OCR_PROVIDER(`gcloud functions describe`で
+ *     実機確認、roles/cloudfunctions.viewer相当の権限が必要)がgemini(緊急手段)を指していたら
+ *     fail-closed(再処理がGeminiで静かに完了し、PaddleOCRを検証したように見える事故を防ぐ)。
+ *     未設定・paddleはPaddleOCR(OCRの判定はL1のOCR_PROVIDERのみ、既定・倒れ先はpaddle)。
+ *     L2(settings/features.paddleOcr + allowlist)はOCRの判定から外れたため確認しない
  *
  * リセット内容は`scripts/reset-documents-by-office.js`と同一の最小フィールドセット
  * (status/retryCount/lastErrorMessage/updatedAt/pass2Promotion削除)。
@@ -117,42 +118,12 @@ async function main() {
   console.log(`現在のstatus: ${data.status} / customerConfirmed: ${data.customerConfirmed} / officeConfirmed: ${data.officeConfirmed}`);
   console.log('→ status: pending へリセットします');
 
-  // ADR-0025 PaddleOCR canary: このスクリプトの唯一の用途はPaddleOCR検証のため、
-  // 実際にpaddleへ回るゲート状態(L2フラグ+allowlist)でなければfail-closedする
-  // (codex review --strict-config P2指摘: ゲートOFFのままリセットするとGeminiで
-  // 静かに再処理が完了し、「canary成功」に見えて実際は新プロバイダを検証していない)。
-  const featuresSnap = await db.doc('settings/features').get();
-  const featuresData = featuresSnap.data() || {};
-  const paddleOcrEnabled = featuresData.paddleOcr === true;
-  const allowlist = featuresData.paddleOcrAllowlist;
-  // getPaddleOcrGate()(functions/src/utils/featureFlags.ts)と同一のnull/undefined判定に
-  // 揃える(codex review strict P2指摘): フィールド自体が存在しない場合のみ無制限、
-  // 存在してnull等の非配列値の場合はfail-closedで全docId拒否として扱う(不正形式が
-  // 「無制限」と誤読されるとgate未整備のままGeminiへ流れてしまうため)。
-  // 全要素がstringであることも要求する(codex review strict P2指摘): getPaddleOcrGate()は
-  // 混在型配列(非string要素を含む)もfail-closedで[]扱いにするため、判定を完全一致させる。
-  const isValidAllowlist = Array.isArray(allowlist) && allowlist.every((v) => typeof v === 'string');
-  // 注意: 本番のgetPaddleOcrGate()はallowlist未設定を「無制限」として許可するが、
-  // 本スクリプトは意図的にそれより厳しくする(codex review strict P1指摘)。単発canaryの
-  // 目的で実行したつもりが、allowlist未設定のままだと既存のpending backlog全体が
-  // PaddleOCR対象になってしまうため、本スクリプトの実行条件としては
-  // 「対象docIdを含む明示的なallowlistが存在すること」を必須とする。
-  const allowlistPermits = isValidAllowlist && allowlist.includes(docId);
-  if (!paddleOcrEnabled || !allowlistPermits) {
-    console.error(
-      `ERROR: PaddleOCRゲートが未整備です(paddleOcr=${paddleOcrEnabled}, allowlist=${JSON.stringify(allowlist)})。` +
-        '本スクリプトは対象docIdを含む明示的なallowlistの存在を必須とします' +
-        '(allowlist未設定=無制限という本番仕様のまま実行すると、既存pending backlog全体が' +
-        'PaddleOCR対象になりうるため)。' +
-        'set-feature-flag --flag paddleOcr --value true / set-paddle-ocr-allowlist --set を先に実行してください。'
-    );
-    process.exit(1);
-  }
-  console.log('✓ L2ゲート確認OK(paddleOcr=true、対象docIdはallowlist許可範囲内)');
+  // ADR-0025 PaddleOCR検証: このスクリプトの唯一の用途はPaddleOCRでの再処理検証のため、
+  // デプロイ済みprocessOCR FunctionsのL1(OCR_PROVIDER)がgemini(緊急手段)でないことを実機確認する。
+  // OCRの判定はL1のみ(未設定・空・paddleはPaddleOCR、geminiを明示したときだけGemini)。
+  // L2(Firestoreのpaddleocrフラグ+allowlist)はOCRの判定から外れたため、確認も対象docIdの
+  // 分離(allowlist)もしない。ここがfail-loudの最終防衛線(gcloud呼出自体の失敗も許容しない)。
 
-  // L1(デプロイ済みprocessOCR Functionsの環境変数OCR_PROVIDER)も実機確認する(codex review
-  // strict P1指摘: L2がOKでもL1がgemini(デフォルト)のままなら resolveOcrProvider() は
-  // 結局geminiを返す。ここが最終防衛線でありfail-loudする(gcloud呼出自体の失敗も許容しない)。
   let deployedProvider;
   try {
     deployedProvider = execFileSync(
@@ -173,15 +144,16 @@ async function main() {
     console.error('gcloud CLIの認証状態、またはprocessOCR未デプロイの可能性を確認してください。');
     process.exit(1);
   }
-  if (deployedProvider !== 'paddle') {
+  if (deployedProvider === 'gemini') {
     console.error(
-      `ERROR: processOCR FunctionsのL1環境変数 OCR_PROVIDER="${deployedProvider || '(未設定=gemini)'}" です。` +
-        'L2ゲートがOKでもL1がpaddleでなければresolveOcrProvider()はgeminiを返します。' +
-        '"Deploy Cloud Functions" workflow(ocr_provider_override=paddle)を先に実行してください。'
+      'ERROR: processOCR FunctionsのL1環境変数 OCR_PROVIDER="gemini"(緊急手段)です。' +
+        'このまま再処理するとGemini(Vertex AI)へ顧客データが送られ、PaddleOCRの検証になりません。' +
+        '"Deploy Cloud Functions" workflow(ocr_provider_override=code-default、または=paddle)で' +
+        'PaddleOCRへ戻してから実行してください。'
     );
     process.exit(1);
   }
-  console.log('✓ L1ゲート確認OK(processOCR FunctionsのOCR_PROVIDER=paddle)');
+  console.log(`✓ L1確認OK(processOCR FunctionsのOCR_PROVIDER=${deployedProvider || '(未設定=paddle)'}、geminiではない)`);
 
   if (!execute) {
     console.log('\nDRY RUN: 書込みは実行しません。--execute で実行してください。');
