@@ -309,7 +309,7 @@ gcloud iam service-accounts add-iam-policy-binding \
 2. `deploy-sarashina-summary`ワークフローを再実行し、「Grant run.invoker to generateSummaryBatch's execution SA」ステップでrun.invokerを反映する(PR4a未デプロイの環境では`generateSummaryBatch`関数自体が存在せず、このステップが失敗する)。
 3. `deploy-functions`ワークフローを`summary_provider_override=sarashina`で実行し、L1をSarashinaへ切り替える(対象環境の`scripts/clients/<client>.env`の`SARASHINA_SUMMARY_URL`が`<TBD>`のままだとfail-fastする)。
 
-**既知の落とし穴**(`OCR_PROVIDER`と同じ、`functions/.env.<project>`はデプロイの都度再生成される一時ファイル): `code-default`を指定した後続デプロイは、明示的に`summary_provider_override`を指定し直さない限りL1を暗黙に`none`へ戻す。既存のL1設定を維持したまま別の変更(モデルID変更等)だけをデプロイしたい場合は、必ず現在の値を`summary_provider_override`に明示指定すること(`OCR_PROVIDER=paddle`維持運用時と同じ手順、上記GOAL.md実績を参照)。
+**L1ゲート(`OCR_PROVIDER`/`SUMMARY_PROVIDER`)の維持方式**: `functions/.env.<project>`はデプロイの都度再生成される一時ファイルのため、以前は`code-default`を指定した後続デプロイがL1を暗黙にコード既定へ戻していた(2026-09-23/25にkanameone・cocoroの`OCR_PROVIDER`が`paddle`から`gemini`へ無言で回帰した実害あり)。現在は、`deploy-functions.yml`が次の順で値を解決する: ①明示override(`gemini`/`paddle`等) → ②`scripts/clients/<環境>.env`の`OCR_PROVIDER`/`SUMMARY_PROVIDER`宣言値 → ③コード既定(`gemini`/`none`)。つまり`code-default`は「宣言値を維持」の意味になり、モデルID変更等の別目的のデプロイでL1が外れない。**L1を恒久的に変えるときは、workflow入力ではなく`<環境>.env`の宣言を別コミット+PRで書き換える**(workflow入力のoverrideはそのデプロイ限りの一時的な上書き)。宣言値が不正(`gemini|paddle`/`none|gemini|sarashina`以外)、またはpaddle/sarashina宣言なのに対応するURLが`<TBD>`の場合はデプロイ前にfail-fastする。デプロイ後は`gcloud functions describe`で`OCR_PROVIDER`等の実値を確認すること。
 
 ---
 

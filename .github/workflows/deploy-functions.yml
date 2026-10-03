@@ -22,7 +22,7 @@ on:
           - gemini-2.5-flash
           - gemini-3.5-flash
       ocr_provider_override:
-        description: 'OCR_PROVIDER override (ADR-0025。未指定=code-default(現在gemini)。paddleを選ぶ前に対象環境のPADDLE_OCR_URLが設定済みであること)'
+        description: 'OCR_PROVIDER override (ADR-0025。未指定=code-default=scripts/clients/<環境>.envのOCR_PROVIDER宣言値を維持、宣言なしならコード既定gemini。paddleを選ぶ前に対象環境のPADDLE_OCR_URLが設定済みであること)'
         required: true
         default: 'code-default'
         type: choice
@@ -31,7 +31,7 @@ on:
           - gemini
           - paddle
       summary_provider_override:
-        description: 'SUMMARY_PROVIDER override (ADR-0027。未指定=code-default(現在none)。sarashinaを選ぶ前に対象環境のSARASHINA_SUMMARY_URLが設定済み、かつdeploy-sarashina-summary.ymlのrun.invoker付与が反映済みであること)'
+        description: 'SUMMARY_PROVIDER override (ADR-0027。未指定=code-default=scripts/clients/<環境>.envのSUMMARY_PROVIDER宣言値を維持、宣言なしならコード既定none。sarashinaを選ぶ前に対象環境のSARASHINA_SUMMARY_URLが設定済み、かつdeploy-sarashina-summary.ymlのrun.invoker付与が反映済みであること)'
         required: true
         default: 'code-default'
         type: choice
@@ -148,16 +148,33 @@ jobs:
             echo "PADDLE_OCR_URL 設定: ${PADDLE_OCR_URL} (functions/.env.${PROJECT_ID})"
           fi
 
-          # OCR_PROVIDER override (任意、ADR-0025 L1ゲート): GEMINI_MODEL_ID overrideと同じ
-          # 即時ロールバック手段。paddleを選んだのに対象環境のPADDLE_OCR_URLが未設定(<TBD>)の
-          # 場合は、デプロイ後にfail-loudするpaddleOcrClient.tsの挙動を待たずここで即座に検知する。
-          if [ "${{ github.event.inputs.ocr_provider_override }}" != "code-default" ]; then
-            if [ "${{ github.event.inputs.ocr_provider_override }}" == "paddle" ] && [ -z "$PADDLE_OCR_URL" ]; then
-              echo "ERROR: ocr_provider_override=paddle が指定されましたが、$ENV_FILE のPADDLE_OCR_URLが未設定です" >&2
+          # OCR_PROVIDER (ADR-0025 L1ゲート)。解決順: 明示override > scripts/clients/<alias>.env
+          # の宣言値 > コード既定。code-default選択時にfunctions/.env.<project>が毎回再生成されて
+          # 既存のL1設定が無言で外れる事故(2026-09-23/25にkanameone・cocoroでpaddle→gemini回帰)の
+          # 再発防止として、code-defaultは「宣言値を維持」の意味にしている。一時的なロールバックは
+          # 明示override(gemini)、恒久的な変更は<alias>.envの宣言を書き換える。
+          # paddleが有効なのに対象環境のPADDLE_OCR_URLが未設定(<TBD>)の場合は、デプロイ後に
+          # fail-loudするpaddleOcrClient.tsの挙動を待たずここで即座に検知する。
+          OCR_PROVIDER_EFFECTIVE="${{ github.event.inputs.ocr_provider_override }}"
+          if [ "$OCR_PROVIDER_EFFECTIVE" == "code-default" ]; then
+            OCR_PROVIDER_EFFECTIVE=$(resolve_field_optional OCR_PROVIDER "$ENV_FILE")
+          fi
+          if [ -n "$OCR_PROVIDER_EFFECTIVE" ]; then
+            case "$OCR_PROVIDER_EFFECTIVE" in
+              gemini|paddle) ;;
+              *)
+                echo "ERROR: OCR_PROVIDER=$OCR_PROVIDER_EFFECTIVE は不正です(gemini|paddleのみ。$ENV_FILE の宣言を確認してください)" >&2
+                exit 1
+                ;;
+            esac
+            if [ "$OCR_PROVIDER_EFFECTIVE" == "paddle" ] && [ -z "$PADDLE_OCR_URL" ]; then
+              echo "ERROR: OCR_PROVIDER=paddle ですが、$ENV_FILE のPADDLE_OCR_URLが未設定です" >&2
               exit 1
             fi
-            echo "OCR_PROVIDER=${{ github.event.inputs.ocr_provider_override }}" >> "functions/.env.${PROJECT_ID}"
-            echo "OCR_PROVIDER override 適用: ${{ github.event.inputs.ocr_provider_override }} (functions/.env.${PROJECT_ID})"
+            echo "OCR_PROVIDER=${OCR_PROVIDER_EFFECTIVE}" >> "functions/.env.${PROJECT_ID}"
+            echo "OCR_PROVIDER 適用: ${OCR_PROVIDER_EFFECTIVE} (override=${{ github.event.inputs.ocr_provider_override }}, functions/.env.${PROJECT_ID})"
+          else
+            echo "OCR_PROVIDER 未設定: コード既定(gemini)で動作します(override=code-default、$ENV_FILE に宣言なし)"
           fi
 
           # SARASHINA_SUMMARY_URL (任意、ADR-0027): PADDLE_OCR_URLと同型。dev以外はまだ
@@ -170,16 +187,30 @@ jobs:
             echo "SARASHINA_SUMMARY_URL 設定: ${SARASHINA_SUMMARY_URL} (functions/.env.${PROJECT_ID})"
           fi
 
-          # SUMMARY_PROVIDER override (任意、ADR-0027 L1ゲート): OCR_PROVIDER overrideと同じ
-          # 即時ロールバック手段。sarashinaを選んだのに対象環境のSARASHINA_SUMMARY_URLが
-          # 未設定(<TBD>)の場合は、デプロイ後にfail-loudする挙動を待たずここで即座に検知する。
-          if [ "${{ github.event.inputs.summary_provider_override }}" != "code-default" ]; then
-            if [ "${{ github.event.inputs.summary_provider_override }}" == "sarashina" ] && [ -z "$SARASHINA_SUMMARY_URL" ]; then
-              echo "ERROR: summary_provider_override=sarashina が指定されましたが、$ENV_FILE のSARASHINA_SUMMARY_URLが未設定です" >&2
+          # SUMMARY_PROVIDER (ADR-0027 L1ゲート): OCR_PROVIDERと同じ解決順
+          # (明示override > <alias>.envの宣言値 > コード既定none)と同じ再発防止。
+          # sarashinaが有効なのに対象環境のSARASHINA_SUMMARY_URLが未設定(<TBD>)の場合は、
+          # デプロイ後にfail-loudする挙動を待たずここで即座に検知する。
+          SUMMARY_PROVIDER_EFFECTIVE="${{ github.event.inputs.summary_provider_override }}"
+          if [ "$SUMMARY_PROVIDER_EFFECTIVE" == "code-default" ]; then
+            SUMMARY_PROVIDER_EFFECTIVE=$(resolve_field_optional SUMMARY_PROVIDER "$ENV_FILE")
+          fi
+          if [ -n "$SUMMARY_PROVIDER_EFFECTIVE" ]; then
+            case "$SUMMARY_PROVIDER_EFFECTIVE" in
+              none|gemini|sarashina) ;;
+              *)
+                echo "ERROR: SUMMARY_PROVIDER=$SUMMARY_PROVIDER_EFFECTIVE は不正です(none|gemini|sarashinaのみ。$ENV_FILE の宣言を確認してください)" >&2
+                exit 1
+                ;;
+            esac
+            if [ "$SUMMARY_PROVIDER_EFFECTIVE" == "sarashina" ] && [ -z "$SARASHINA_SUMMARY_URL" ]; then
+              echo "ERROR: SUMMARY_PROVIDER=sarashina ですが、$ENV_FILE のSARASHINA_SUMMARY_URLが未設定です" >&2
               exit 1
             fi
-            echo "SUMMARY_PROVIDER=${{ github.event.inputs.summary_provider_override }}" >> "functions/.env.${PROJECT_ID}"
-            echo "SUMMARY_PROVIDER override 適用: ${{ github.event.inputs.summary_provider_override }} (functions/.env.${PROJECT_ID})"
+            echo "SUMMARY_PROVIDER=${SUMMARY_PROVIDER_EFFECTIVE}" >> "functions/.env.${PROJECT_ID}"
+            echo "SUMMARY_PROVIDER 適用: ${SUMMARY_PROVIDER_EFFECTIVE} (override=${{ github.event.inputs.summary_provider_override }}, functions/.env.${PROJECT_ID})"
+          else
+            echo "SUMMARY_PROVIDER 未設定: コード既定(none)で動作します(override=code-default、$ENV_FILE に宣言なし)"
           fi
 
           echo "Deploying to: $PROJECT_ALIAS"
