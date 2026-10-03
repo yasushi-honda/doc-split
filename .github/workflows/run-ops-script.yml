@@ -247,13 +247,16 @@ on:
           - set-sarashina-summary-allowlist --remove --dry-run
           - set-sarashina-summary-allowlist --remove
           - check-sarashina-summary-status
+          - check-sarashina-summary-canary --canary-ids
+          - check-sarashina-summary-canary --hours 24
+          - check-sarashina-summary-canary --hours 168
       backfill_limit:
         description: 'backfill-drive-export --limit: canary実行時のマーク上限件数(数値のみ) / classify-drive-export-drift --limit: 検査対象document数の上限(数値のみ) / execute-drive-export-repair --limit: 修復対象候補数の上限(数値のみ) / backfill-confirm-on-verify --limit: canary実行時の確定対象上限件数(数値のみ) / backfill-customer-id-link --limit: canary実行時の紐づけ対象上限件数(数値のみ)'
         required: false
         type: string
         default: ''
       doc_id:
-        description: 'Document ID (required when script contains --doc-id, set-drive-allowlist --set, or set-paddle-ocr-allowlist --set; for set-paddle-ocr-allowlist --set or set-sarashina-summary-allowlist --set, comma-separated IDs allowed (max 10); ignored otherwise)'
+        description: 'Document ID (required when script contains --doc-id, set-drive-allowlist --set, or set-paddle-ocr-allowlist --set; for set-paddle-ocr-allowlist --set or set-sarashina-summary-allowlist --set, comma-separated IDs allowed (max 10); required for check-sarashina-summary-canary --canary-ids (1-10 comma-separated IDs); ignored otherwise)'
         required: false
         type: string
         default: ''
@@ -486,6 +489,21 @@ jobs:
               exit 1
             fi
             SCRIPT_ARGS=$(echo "$SCRIPT_ARGS" | sed "s/--set/--set $DOC_ID/")
+          fi
+
+          # check-sarashina-summary-canary --canary-ids (ADR-0027 PR6 canary測定、read-only)は
+          # canary文書をカンマ区切り最大10件でdoc_id入力から受け取る。引数名を--doc-idにしないのは、
+          # 上の汎用--doc-id分岐(単一ID専用の正規表現)に部分一致して誤動作するのを避けるため。
+          if [ "$SCRIPT_NAME" = "check-sarashina-summary-canary" ] && echo "$SCRIPT_ARGS" | grep -q -- '--canary-ids'; then
+            if [ -z "$DOC_ID" ]; then
+              echo "ERROR: doc_id input is required when script contains check-sarashina-summary-canary --canary-ids" >&2
+              exit 1
+            fi
+            if ! echo "$DOC_ID" | grep -qE '^[A-Za-z0-9_-]+(,[A-Za-z0-9_-]+){0,9}$'; then
+              echo "ERROR: doc_id must be 1-10 comma-separated alphanumeric/underscore/hyphen IDs" >&2
+              exit 1
+            fi
+            SCRIPT_ARGS=$(echo "$SCRIPT_ARGS" | sed "s/--canary-ids/--canary-ids $DOC_ID/")
           fi
 
           # backfill-drive-export --limit/--expected-count はStage E1 canary安全策
@@ -1794,6 +1812,7 @@ jobs:
                [ "$SCRIPT_NAME" = "seed-dev-data" ] || \
                [ "$SCRIPT_NAME" = "upload-sarashina-canary-fixtures" ] || \
                [ "$SCRIPT_NAME" = "diagnose-confirmed-replay-sampling" ] || \
+               [ "$SCRIPT_NAME" = "check-sarashina-summary-canary" ] || \
                [ "$SCRIPT_NAME" = "backfill-detail-subcollection" ] || \
                [ "$SCRIPT_NAME" = "create-pending-doc" ] || \
                [ "$SCRIPT_NAME" = "backfill-drive-export" ] || \
