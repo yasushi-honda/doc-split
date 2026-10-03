@@ -7,19 +7,21 @@
  *   --hours N                       分母=直近N時間にsummaryStateUpdatedAtが更新された文書(全体展開後の期間集計、1〜168)
  *   --canary-ids 指定時の--hoursは省略可(リクエストログの集計窓、既定24)
  *
- * 取得するのはsummaryState/summaryErrorKindのみ(fieldMask/select)。PIIフィールドは読まない。
+ * 取得するのはsummaryState/summaryErrorKind/summaryProviderのみ(fieldMask/select)。PIIフィールドは読まない。
+ * doneはsummaryProvider=sarashinaのみ数える。
  * 処理時間は文書に保存されないため、ゲート(3)はSarashinaサービスのCloud Runリクエストログの
  * リクエスト単位latency(コールドスタート込み)で測る。詳細は scripts/lib/sarashinaCanaryStats.ts。
  * ゲート(4)(5)(decision-makerの原文照合とrun.invoker確認)は本スクリプトの対象外。
  *
  * 終了コード: ゲート(1)〜(3)の総合がFAILなら1(ログ取得失敗・打切りによる不完全な測定を含む)、PASSなら0。
- * 取得するのはsummaryState/summaryErrorKind/summaryProviderのみ。doneはsummaryProvider=sarashinaのみ数える。
+ *
+ * 限界: ゲート(3)のリクエストログはcanary文書とは紐付かない(サービス全体の/v1/chat/completionsへのPOSTを時間窓で集計)。
+ * 期間モードの分母はsummaryStateUpdatedAtが窓内の文書のみで、窓より前に固着したpending/processingは含まない。
  */
 import { execFileSync } from 'child_process';
 import * as admin from 'firebase-admin';
 import {
-  evaluateCanaryGate,
-  isLatencyIncomplete,
+  evaluateCanaryRun,
   summarizeCanaryDocs,
   summarizeRequestLatencies,
   type CanaryDocSnapshot,
@@ -28,6 +30,7 @@ import {
 
 const ALLOWED_PROJECT_IDS = ['doc-split-dev', 'docsplit-kanameone', 'docsplit-cocoro'];
 const SARASHINA_SERVICE = 'sarashina-summary';
+const SARASHINA_REQUEST_PATH = '/v1/chat/completions';
 const MAX_CANARY_IDS = 10;
 const MAX_PERIOD_DOCS = 5000;
 const LOG_LIMIT = 1000;
@@ -130,21 +133,33 @@ async function loadByPeriod(periodHours: number): Promise<{ docs: CanaryDocSnaps
   return { docs, truncated };
 }
 
-function readRequestLogs(windowHours: number): { entries: RequestLogEntry[]; truncated: boolean } {
+function readRequestLogs(windowHours: number): { entries: RequestLogEntry[]; truncated: boolean; dropped: number } {
   const since = new Date(Date.now() - windowHours * 3600 * 1000).toISOString();
   const filter =
     `resource.type="cloud_run_revision" AND resource.labels.service_name="${SARASHINA_SERVICE}" ` +
-    `AND httpRequest.requestMethod="POST" AND timestamp>="${since}"`;
+    `AND httpRequest.requestMethod="POST" AND httpRequest.requestUrl:"${SARASHINA_REQUEST_PATH}" ` +
+    `AND timestamp>="${since}"`;
   const out = execFileSync(
     'gcloud',
-    ['logging', 'read', filter, `--project=${PROJECT_ID}`, `--limit=${LOG_LIMIT}`, '--format=json'],
+    [
+      'logging',
+      'read',
+      filter,
+      `--project=${PROJECT_ID}`,
+      `--limit=${LOG_LIMIT}`,
+      '--format=json(httpRequest.status,httpRequest.latency)',
+    ],
     { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }
   );
   const rows = JSON.parse(out) as Array<{ httpRequest?: { status?: number; latency?: string } }>;
-  const entries: RequestLogEntry[] = rows
-    .filter((r) => typeof r.httpRequest?.status === 'number')
-    .map((r) => ({ status: r.httpRequest!.status as number, latency: r.httpRequest?.latency }));
-  return { entries, truncated: rows.length >= LOG_LIMIT };
+  const entries: RequestLogEntry[] = [];
+  let dropped = 0;
+  for (const r of rows) {
+    const status = r.httpRequest?.status;
+    if (typeof status === 'number') entries.push({ status, latency: r.httpRequest?.latency });
+    else dropped += 1; // statusを読めない行は黙って捨てず、不完全な測定として数える
+  }
+  return { entries, truncated: rows.length >= LOG_LIMIT, dropped };
 }
 
 async function main(): Promise<void> {
@@ -185,39 +200,45 @@ async function main(): Promise<void> {
   console.log(`=== ② Sarashinaリクエストログ(直近${logWindowHours}時間、service=${SARASHINA_SERVICE}) ===`);
   let latency = summarizeRequestLatencies([]);
   let logsTruncated = false;
+  let logFetchFailed = false;
+  let droppedLogRows = 0;
   try {
     const logs = readRequestLogs(logWindowHours);
     logsTruncated = logs.truncated;
+    droppedLogRows = logs.dropped;
     latency = summarizeRequestLatencies(logs.entries);
   } catch (e) {
+    logFetchFailed = true;
     console.log(`ログ取得に失敗: ${(e as Error).message.split('\n')[0]}`);
     console.log('(このためp95は測れず、ゲート(3)はFAIL扱い)');
   }
   const f = (n: number | null): string => (n === null ? '測定不能' : `${n.toFixed(1)}秒`);
   console.log(
-    `200応答 ${latency.okCount}件 / 429拒否 ${latency.rejected429}件 / その他失敗 ${latency.otherFailures}件 / latency不明 ${latency.unparsable}件`
+    `200応答 ${latency.okCount}件 / 429拒否 ${latency.rejected429}件 / その他失敗 ${latency.otherFailures}件(うち300秒以上 ${latency.slowFailures}件) / latency不明 ${latency.unparsable}件 / status不明の行 ${droppedLogRows}件`
   );
   console.log(`p50=${f(latency.p50)} p95=${f(latency.p95)} max=${f(latency.max)}`);
   if (logsTruncated) console.log(`⚠ ログが${LOG_LIMIT}件に達した。古い分が欠けている可能性がある`);
-  console.log('注意: 文書単位ではなくリクエスト単位(コールドスタート込み、再試行は複数件)。429は同時実行上限での拒否。');
+  console.log('注意: canary文書とは紐付かないサービス全体の値で、リクエスト単位(コールドスタート込み、再試行は複数件)。429は同時実行上限での拒否。');
+  if (canaryIdsRaw === undefined) {
+    console.log('注意: 期間モードの分母は窓内に更新された文書のみ。窓より前に固着したpending/processingは含まれない。');
+  }
 
-  const gate = evaluateCanaryGate({
-    denominator: summary.denominator,
-    done: summary.byState.done,
-    fabricationFinalErrors: summary.fabricationFinalErrors,
-    p95Seconds: latency.p95,
-    latencyIncomplete: isLatencyIncomplete(latency, logsTruncated),
+  const gate = evaluateCanaryRun({
+    summary,
+    latency,
+    logsTruncated,
+    logFetchFailed,
+    droppedLogRows,
+    docsTruncated,
   });
-  const incomplete = docsTruncated;
   console.log('');
   console.log('=== ③ 客観ゲート判定(1)〜(3) ===');
   console.log(`(1) ${gate.doneRate.pass ? 'PASS' : 'FAIL'}: ${gate.doneRate.detail}`);
   console.log(`(2) ${gate.fabrication.pass ? 'PASS' : 'FAIL'}: ${gate.fabrication.detail}`);
   console.log(`(3) ${gate.latency.pass ? 'PASS' : 'FAIL'}: ${gate.latency.detail}`);
-  const overallPass = gate.allPass && !incomplete;
-  console.log(`総合((1)〜(3)): ${overallPass ? 'PASS' : 'FAIL'}`);
+  console.log(`総合((1)〜(3)): ${gate.allPass ? 'PASS' : 'FAIL'}`);
   console.log('※ ゲート(4)原文照合・(5)run.invokerの確認は別途(本スクリプトの対象外)');
-  if (!overallPass) process.exitCode = 1;
+  if (!gate.allPass) process.exitCode = 1;
 }
 
 main().catch((e) => {
