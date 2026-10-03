@@ -122,7 +122,10 @@ async function main() {
   // 新しい解決ロジック(PR-B、OCRの判定はOCR_PROVIDERのみ・倒れ先paddle)では未設定でもpaddleだが、
   // 旧リビジョンがデプロイされたままの環境では未設定=Gemini(かつpaddleでもFirestoreのL2フラグ+
   // allowlistの除外でGemini)に倒れうるため、移行期が終わるまで「明示paddle」だけを通す
-  // (codex review指摘)。ここがfail-loudの最終防衛線(gcloud呼出自体の失敗も許容しない)。
+  // (codex review指摘)。限界: 旧リビジョンのままL1=paddleでL2(paddleOcrフラグ+allowlist)が
+  // 閉じている環境は、このチェックでは検出できない(L2は旧リビジョンでのみ効く)。ADR-0025追記の
+  // とおり3環境ともL2はpaddleOcr=true・allowlist解除済みで、実害の確率は低い。gcloud呼出自体の
+  // 失敗も許容しない(fail-loud)。
 
   let deployedProvider;
   try {

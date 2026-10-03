@@ -1950,7 +1950,7 @@ jobs:
             # 参照: docs/handoff/GOAL.md Step0④注記
             # fable-reviewでの指摘反映: L2の「フィールド不在(制限なし)」と「空配列(全拒否)」の区別、
             # Firestore REST呼び出し失敗時のfail-closed化(silent failure回避)。
-            echo "=== ② L1ゲート状態(processOCR環境変数 OCR_PROVIDER) ==="
+            echo "=== ② L1ゲート状態(processOCR環境変数 OCR_PROVIDER。空行=未設定=コード既定のpaddle(旧リビジョンではgemini)) ==="
             gcloud functions describe processOCR --project="$PROJECT_ID" --gen2 --region=asia-northeast1 \
               --format="value(serviceConfig.environmentVariables.OCR_PROVIDER)"
 
