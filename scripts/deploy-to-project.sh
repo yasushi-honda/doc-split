@@ -290,6 +290,44 @@ if [ "$FULL_DEPLOY" = true ]; then
         ;;
     esac
 
+    # OCR_PROVIDER / SUMMARY_PROVIDER (L1ゲート宣言): .github/workflows/deploy-functions.yml の
+    # code-default時と同じく、scripts/clients/<alias>.env の宣言値を反映する(宣言があるときのみ
+    # 上書き。宣言なしは既存のfunctions/.env.<project-id>の値を保持)。反映しないと、本スクリプト経由の
+    # デプロイだけ宣言と異なるプロバイダで動き、OCRが無言でGeminiへ戻りうる。
+    # 不正値、およびpaddle/sarashina宣言なのに対応URLが未設定(<TBD>)の場合はデプロイ前に止める。
+    is_unset_url() { case "$1" in ""|"<TBD>"|"TBD"|"tbd") return 0 ;; *) return 1 ;; esac; }
+    upsert_functions_env() {
+        grep -v "^$1=" "$FUNCTIONS_ENV_FILE" > "${FUNCTIONS_ENV_FILE}.tmp" || true
+        echo "$1=$2" >> "${FUNCTIONS_ENV_FILE}.tmp"
+        mv "${FUNCTIONS_ENV_FILE}.tmp" "$FUNCTIONS_ENV_FILE"
+        log_success "functions/.env.${PROJECT_ID} に $1=$2 を設定"
+    }
+    if [ -n "${OCR_PROVIDER:-}" ]; then
+        case "$OCR_PROVIDER" in
+          gemini|paddle) ;;
+          *) log_error "OCR_PROVIDER=$OCR_PROVIDER は不正です(gemini|paddleのみ。$CLIENT_ENV を確認してください)"; exit 1 ;;
+        esac
+        if [ "$OCR_PROVIDER" = "paddle" ] && is_unset_url "${PADDLE_OCR_URL:-}"; then
+            log_error "OCR_PROVIDER=paddle ですが $CLIENT_ENV の PADDLE_OCR_URL が未設定です"
+            exit 1
+        fi
+        upsert_functions_env OCR_PROVIDER "$OCR_PROVIDER"
+    fi
+    if [ -n "${SUMMARY_PROVIDER:-}" ]; then
+        case "$SUMMARY_PROVIDER" in
+          none|gemini|sarashina) ;;
+          *) log_error "SUMMARY_PROVIDER=$SUMMARY_PROVIDER は不正です(none|gemini|sarashinaのみ。$CLIENT_ENV を確認してください)"; exit 1 ;;
+        esac
+        if [ "$SUMMARY_PROVIDER" = "sarashina" ]; then
+            if is_unset_url "${SARASHINA_SUMMARY_URL:-}"; then
+                log_error "SUMMARY_PROVIDER=sarashina ですが $CLIENT_ENV の SARASHINA_SUMMARY_URL が未設定です"
+                exit 1
+            fi
+            upsert_functions_env SARASHINA_SUMMARY_URL "$SARASHINA_SUMMARY_URL"
+        fi
+        upsert_functions_env SUMMARY_PROVIDER "$SUMMARY_PROVIDER"
+    fi
+
     firebase deploy --only functions -P "$PROJECT_ALIAS"
     log_success "Functions デプロイ完了"
 
