@@ -7,6 +7,8 @@ import {
   buildRequeuePlan,
   buildStateBackup,
   evaluateRequeueGate,
+  resolveAllowlist,
+  formatStateBackupLine,
 } from './summaryRequeue';
 
 test('parseRequeueDocIds: 1〜10件のカンマ区切りを受け付け、前後空白を除去する', () => {
@@ -134,4 +136,50 @@ test('evaluateRequeueGate: L1が違う/L2フラグがtrueでない/許可リス�
   if (!outside.ok) assert.match(outside.reason, /z/);
   // 空配列の許可リストは全拒否(未設定nullとは別物)
   assert.equal(evaluateRequeueGate({ l1Provider: 'sarashina', flag: true, allowlist: [] }, ['a']).ok, false);
+});
+
+test('resolveAllowlist: フィールド不在(または文書なし)は未設定=null(全許可)', () => {
+  assert.equal(resolveAllowlist(undefined), null);
+  assert.equal(resolveAllowlist({}), null);
+  assert.equal(resolveAllowlist({ sarashinaSummary: true }), null);
+});
+
+test('resolveAllowlist: 正常な文字列配列はそのまま返す(空配列は全拒否として保持)', () => {
+  assert.deepEqual(resolveAllowlist({ sarashinaSummaryAllowlist: ['a', 'b'] }), ['a', 'b']);
+  assert.deepEqual(resolveAllowlist({ sarashinaSummaryAllowlist: [] }), []);
+});
+
+test('resolveAllowlist: 配列以外・非文字列要素を含む不正値は全拒否[]に倒す(本番のgetSarashinaSummaryGateと同じfail-closed)', () => {
+  for (const bad of ['a,b', 'a', 1, true, null, { 0: 'a' }, ['a', 1], ['a', null], [['a']]]) {
+    assert.deepEqual(resolveAllowlist({ sarashinaSummaryAllowlist: bad }), [], `不正値: ${JSON.stringify(bad)}`);
+  }
+});
+
+test('formatStateBackupLine: ログのマスキング対象の波括弧を含まず、値を復元できる', () => {
+  const backup = buildStateBackup('doc1', {
+    summaryState: 'error',
+    summaryAttemptCount: 3,
+    summaryProvider: 'sarashina',
+    summaryError: 'timeout {code: 504} after 600s',
+    summaryErrorKind: 'timeout',
+    summaryRunId: 'run-1',
+  });
+  const line = formatStateBackupLine(backup);
+  assert.equal(/[{}]/.test(line), false);
+  assert.equal(line.includes('\n'), false);
+  const parsed = Object.fromEntries(
+    line.split(' ').map((kv: string) => {
+      const i = kv.indexOf('=');
+      return [kv.slice(0, i), decodeURIComponent(kv.slice(i + 1))];
+    })
+  );
+  assert.equal(parsed.docId, 'doc1');
+  assert.equal(parsed.summaryError, 'timeout {code: 504} after 600s');
+  assert.equal(parsed.summaryAttemptCount, '3');
+});
+
+test('formatStateBackupLine: 未設定(null)は空値で出力する(旧形式文書)', () => {
+  const line = formatStateBackupLine(buildStateBackup('doc2', { status: 'processed' }));
+  assert.match(line, /summaryState= /);
+  assert.match(line, /summaryRunId=$/);
 });

@@ -123,3 +123,24 @@ export function evaluateRequeueGate(input: RequeueGateInput, docIds: readonly st
   }
   return { ok: true };
 }
+
+/**
+ * settings/featuresからallowlistを解釈する。本番の`getSarashinaSummaryGate()`と同じ規則にする:
+ * フィールド不在=null(未設定=全許可)、存在するが配列でない/非文字列要素を含む=[](全拒否)。
+ * 不正値を「未設定」と読むと、再投入した文書をバッチが`skipped`へ倒してしまう。
+ */
+export function resolveAllowlist(settings: Record<string, unknown> | undefined): string[] | null {
+  if (!settings || !('sarashinaSummaryAllowlist' in settings)) return null;
+  const raw = settings.sarashinaSummaryAllowlist;
+  if (!Array.isArray(raw) || raw.some((v) => typeof v !== 'string')) return [];
+  return raw as string[];
+}
+
+/**
+ * 再投入前の状態を1行のkey=value(値はURIエンコード)で表す。GitHub Actionsのログは波括弧を
+ * マスキングで潰すため、JSONではロールバック記録として使えない。未設定(null)は空値で出す。
+ */
+export function formatStateBackupLine(backup: StateBackup): string {
+  const cell = (v: unknown): string => (v === null || v === undefined ? '' : encodeURIComponent(String(v)));
+  return [`docId=${cell(backup.docId)}`, ...BACKUP_FIELDS.map((f) => `${f}=${cell(backup.state[f])}`)].join(' ');
+}

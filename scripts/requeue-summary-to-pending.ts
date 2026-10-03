@@ -24,7 +24,9 @@ import {
   buildStateBackup,
   evaluateRequeueEligibility,
   evaluateRequeueGate,
+  formatStateBackupLine,
   parseRequeueDocIds,
+  resolveAllowlist,
 } from './lib/summaryRequeue';
 
 const ALLOWED_PROJECT_IDS = ['doc-split-dev', 'docsplit-kanameone'];
@@ -73,10 +75,8 @@ function readDeployedSummaryProvider(): string | undefined {
 
 async function readGate(): Promise<{ flag: unknown; allowlist: string[] | null }> {
   const snap = await db.doc('settings/features').get();
-  const data = snap.data() ?? {};
-  const raw = data.sarashinaSummaryAllowlist;
-  const allowlist = Array.isArray(raw) ? raw.filter((v): v is string => typeof v === 'string') : null;
-  return { flag: data.sarashinaSummary, allowlist };
+  const data = snap.data();
+  return { flag: data?.sarashinaSummary, allowlist: resolveAllowlist(data) };
 }
 
 async function main(): Promise<void> {
@@ -108,8 +108,9 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // Actionsのログは波括弧をマスキングするためJSONにしない(値はURIエンコード、未設定は空値)
   console.log('--- 再投入前の状態(ロールバック用、PIIなし) ---');
-  for (const b of backups) console.log(JSON.stringify(b));
+  for (const b of backups) console.log(formatStateBackupLine(b));
 
   if (!execute) {
     console.log('dry-runのため書き込みません。--execute で実行します。');
@@ -121,21 +122,24 @@ async function main(): Promise<void> {
   for (const f of plan.serverTimestamps) update[f] = admin.firestore.FieldValue.serverTimestamp();
   for (const f of plan.deleteFields) update[f] = admin.firestore.FieldValue.delete();
 
-  let written = 0;
-  for (let i = 0; i < refs.length; i++) {
-    // 書込み直前に最新値で再判定する(dry-run後に要約がclaimされた文書を壊さない)
-    const result = await db.runTransaction(async (tx) => {
-      const fresh = await tx.get(refs[i]);
-      const verdict = evaluateRequeueEligibility(fresh.data());
-      if (!verdict.eligible) return `skip:${verdict.reason}`;
-      tx.update(refs[i], update);
-      return 'written';
+  // 全件を1トランザクションで再判定してから書く(全か無か)。dry-run後に要約がclaimされた文書が
+  // あれば、1件も書かずに終了する。
+  const outcome = await db.runTransaction(async (tx) => {
+    const fresh = await tx.getAll(...refs, { fieldMask: STATE_FIELDS });
+    const blocked: string[] = [];
+    fresh.forEach((snap, i) => {
+      const verdict = evaluateRequeueEligibility(snap.exists ? (snap.data() as Record<string, unknown>) : undefined);
+      if (!verdict.eligible) blocked.push(`${ids[i]}: ${verdict.reason}`);
     });
-    if (result === 'written') written += 1;
-    console.log(`  ${ids[i]}: ${result}`);
+    if (blocked.length > 0) return { written: 0, blocked };
+    for (const ref of refs) tx.update(ref, update);
+    return { written: refs.length, blocked };
+  });
+  if (outcome.blocked.length > 0) {
+    console.error(`❌ 書込み直前の再判定で対象外になったため1件も書き込みません: ${outcome.blocked.join(' / ')}`);
+    process.exit(1);
   }
-  console.log(`完了: ${written}/${refs.length}件を pending へ再投入しました`);
-  if (written !== refs.length) process.exit(1);
+  console.log(`完了: ${outcome.written}/${refs.length}件を pending へ再投入しました`);
 }
 
 main().catch((err) => {
