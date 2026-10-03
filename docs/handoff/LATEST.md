@@ -1,6 +1,28 @@
 # ハンドオフメモ
 
-**更新日**: 2026-10-02（kanameone Drive保存の範囲内作業が完了しクライアントへ送付済み: 補完99件・停止期間中の取り込み・フォルダ統合・claim解除1件・重複ファイル整理1件、すべて保存済みを確認。前回: kanameoneの顧客ID紐づけ補完を第1段56件・第2段(空白違い)43件で本番適用。前回: kanameone `(root)/森奈穂美`の再帰統合ツールを実装・本番適用、停止書類が回復中。前回: 2026-09-29 ADR-0027 PR5: dev環境でのSarashina要約実機観測を実施。D3・D8はSarashina要約完走、D2は`fabrication_suspected`誤検知をdecision-maker方針Aで恒久対応(PR #1083、スキャナ正規化)、dev実機でD2=`done`確認・AC4(canary 3/3件done)達成。kanameone Drive Phase1: OAuth再連携完了(2026-09-28)を確認し、2026-09-30に重複audit→merge候補14グループ統合実行→再audit完了。残はmanual-review 8件の判断とflag ON・backfill）
+**更新日**: 2026-10-03（通常経路のGemini停止: Pass2廃止(PR #1116)・OCRの倒れ先をpaddleへ反転(PR #1117)・Sarashina canary測定スクリプト(PR #1118)をマージし3環境へデプロイ。過去セッションの内容は以下の各節を参照）
+
+## 通常経路のGemini停止: PR-A/PR-B/PR-D0完了（2026-10-03）
+
+### 結果
+- **発端**: 契約書第7条の整理で顧客データの送信経路を洗い出したところ、kanameone/cocoroのOCRが2026-09-23〜25にGeminiへ黙って戻っていた(`deploy-functions.yml`が`ocr_provider_override=code-default`のたびに`functions/.env.<project>`を再生成し、`OCR_PROVIDER`宣言が落ちていた)。PR #1114で再発防止し再デプロイ済み。
+- **PR-A(#1116)**: 候補抽出(Pass2)を廃止(実データで採用0件、ADR-0025決定事項2の廃止目安を満たす)。Geminiを呼ぶ運用スクリプトの実行経路を閉じた。kanameoneはデプロイ後リビジョンのログで`candidateGeminiMs`なしを確認。**cocoroは新リビジョン`processocr-00058`の処理文書がまだ無く未確認**。
+- **PR-B(#1117)**: OCRの倒れ先をpaddleへ反転(未設定・未知値はpaddle、`gemini`は明示指定時のみ)、緊急利用ログ`gemini_ocr_emergency_used`、reset系スクリプトのpreflight、納品ガイドに緊急手順と新規テナント前提を追記。3環境へデプロイし`OCR_PROVIDER=paddle`を`gcloud functions describe`で確認、緊急ログは24時間で0件。
+- **PR-D0(#1118)**: `check-sarashina-summary-canary`(読み取り専用)。ゲート(1)Sarashina生成のdoneが90%以上(分母10件以上)/(2)捏造疑いの最終error 0件/(3)リクエストp95が300秒以下(200応答10件以上、遅い失敗要求なし、測定が完全であること)。FAILなら終了コード1。devで`--hours 168`と`--canary-ids`の2モードを実機確認。
+
+### 教訓
+- 計画時に「文書単位の処理時間p95」を前提にしたが、処理時間は文書にもログにも保存されていなかった(実装時に初めて判明)。**測定計画は、測る値が実際に記録されているかを先に実データで確認する**。結果として、ゲート(3)はCloud Runのリクエスト単位latency(サービス全体、canary文書と非紐付け)に変更した。
+- 判定スクリプトは「不明をPASSにしない」を契約テストで固定する。レビュー(codex 2回+3エージェント)で、タイムアウトした失敗要求・サンプル不足・status不明の行・ログ取得失敗の経路がPASSに漏れる穴が連続して見つかった。最終判定の合成はI/O側に残さずlibへ出してテストする。
+- `run-ops-script.yml`の汎用`--doc-id`分岐は`--doc-ids`にも部分一致する。複数IDを取る引数は別名(`--canary-ids`)にする。
+- ローカルのADCではdevのFirestoreに到達できない(PERMISSION_DENIED)。実データでの確認はGitHub Actions経由で行う。
+
+### 次のアクション
+- **即着手**: PR-D(Sarashina要約の本番展開)の着手。ROI: kanameone/cocoroの手動要約ボタンのGemini送信を止める最短ルート。工数: インフラ構築〜canary合格まで数営業日(canaryは1営業日)。完了条件: kanameone canaryが客観ゲート(1)〜(5)を満たす。関連: 計画`/Users/yyyhhh/.claude/plans/jiggly-giggling-pond.md`のPR-D節、`scripts/setup-sarashina-summary-infra.sh`、`deploy-sarashina-summary.yml`。**本番作業のため、番号単位の承認を都度取る**(月約$103の試算、kanameone)。
+- **条件待ち**: ①cocoroのPR-A確認(trigger=新リビジョン`processocr-00058`が文書を処理、確認=`gcloud logging read`で`candidateGeminiMs`が出ないこと) ②3環境のPR-B確認(trigger=デプロイ後の新規処理文書、確認=`ocrExtraction.version`が`PP-OCRv6_medium`、読み取り専用runQuery) ③PR-C 手動要約の待ち行列化(trigger=kanameoneのPR-D canary合格) ④PR-E 掃除・契約テスト(trigger=PR-C/PR-D完了)。
+- **却下候補**: 開発用の合成データ向けスクリプト2本をメニューに戻す(codex review P2。PR-Eで退役予定のため見送り、decision-makerの指示があれば復活可) / 新規テナント向けのPaddleOCR基盤の納品手順への組込み(新規テナントの予定なし、契約書はkaname向け) / 文書単位の処理時間をFirestoreに保存する本体変更(ゲート(3)はリクエスト単位latencyで足りる、実害が出たら再検討)。
+
+### 最終結論
+✅ **セッション終了可** — 本セッションのPR(#1116/#1117/#1118)はマージ・デプロイ済み。残りは文書の処理待ち(cocoro/3環境の確認)とPR-D(本番作業・承認待ち)で、いずれも次セッション。
 
 ## 平出配下7組の実測・processocr_errorアラート恒久化・Issue #979クローズ（2026-10-02）
 
