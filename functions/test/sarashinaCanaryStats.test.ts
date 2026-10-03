@@ -1,6 +1,7 @@
 import { expect } from 'chai';
 import {
   evaluateCanaryGate,
+  isLatencyIncomplete,
   parseLatencySeconds,
   summarizeCanaryDocs,
   summarizeRequestLatencies,
@@ -156,5 +157,27 @@ describe('evaluateCanaryGate', () => {
 
   it('(3) latencyIncompleteがfalse/未指定なら従来どおり判定する', () => {
     expect(evaluateCanaryGate({ ...base, latencyIncomplete: false }).latency.pass).to.equal(true);
+  });
+});
+
+describe('isLatencyIncomplete', () => {
+  const ok = { okCount: 5, rejected429: 0, otherFailures: 0, unparsable: 0, p50: 1, p95: 2, max: 3 };
+
+  it('ログ打切りもlatency不明の200応答も無ければ完全', () => {
+    expect(isLatencyIncomplete(ok, false)).to.equal(false);
+  });
+
+  it('ログが取得上限に達していれば不完全', () => {
+    expect(isLatencyIncomplete(ok, true)).to.equal(true);
+  });
+
+  it('status 200なのにlatencyを読めない要求が1件でもあれば不完全(遅い要求が欠けうる)', () => {
+    expect(isLatencyIncomplete({ ...ok, unparsable: 1 }, false)).to.equal(true);
+  });
+
+  it('不完全判定がゲートのFAILにつながる(p95が小さくても)', () => {
+    const incomplete = isLatencyIncomplete({ ...ok, unparsable: 1 }, false);
+    const g = evaluateCanaryGate({ denominator: 10, done: 10, fabricationFinalErrors: 0, p95Seconds: 5, latencyIncomplete: incomplete });
+    expect(g.latency.pass).to.equal(false);
   });
 });

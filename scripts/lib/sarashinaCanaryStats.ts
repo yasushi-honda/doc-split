@@ -104,6 +104,14 @@ export function summarizeRequestLatencies(entries: RequestLogEntry[]): LatencySu
   };
 }
 
+/**
+ * latency測定が不完全か。ログが取得上限に達した場合、またはstatus 200なのにlatencyを読めない要求が
+ * 1件でもある場合は、遅い要求が欠けている可能性があるためp95ゲートをFAILにする(不明をPASSにしない)。
+ */
+export function isLatencyIncomplete(latency: LatencySummary, logsTruncated: boolean): boolean {
+  return logsTruncated || latency.unparsable > 0;
+}
+
 export const CANARY_MIN_DENOMINATOR = 10;
 export const CANARY_DONE_RATE_NUMERATOR = 9; // 10件中9件(90%)以上
 export const CANARY_P95_LIMIT_SECONDS = 300;

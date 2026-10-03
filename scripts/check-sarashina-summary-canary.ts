@@ -19,6 +19,7 @@ import { execFileSync } from 'child_process';
 import * as admin from 'firebase-admin';
 import {
   evaluateCanaryGate,
+  isLatencyIncomplete,
   summarizeCanaryDocs,
   summarizeRequestLatencies,
   type CanaryDocSnapshot,
@@ -205,7 +206,7 @@ async function main(): Promise<void> {
     done: summary.byState.done,
     fabricationFinalErrors: summary.fabricationFinalErrors,
     p95Seconds: latency.p95,
-    latencyIncomplete: logsTruncated,
+    latencyIncomplete: isLatencyIncomplete(latency, logsTruncated),
   });
   const incomplete = docsTruncated;
   console.log('');
