@@ -138,24 +138,13 @@ on:
           - measure-field-byte-sizes
           - measure-field-byte-sizes --limit 300
           - measure-split-into-length
-          - compare-gemini-ocr-models
-          - spike-candidate-extraction
-          - verify-candidate-extraction-document-level
-          - compare-ocr-arbitration-logic
-          - compare-ocr-arbitration-logic-confirmed --limit 30
-          - compare-ocr-arbitration-logic-confirmed --limit 300
-          - compare-gemini-ocr-models-confirmed --limit 30
-          - compare-gemini-ocr-models-confirmed --limit 300
-          - compare-gemini-ocr-models-confirmed --limit 5000
           - diagnose-confirmed-replay-sampling
           - diagnose-confirmed-replay-sampling --doc-id
-          - verify-type3-ocr
           - backfill-detail-subcollection --audit
           - backfill-detail-subcollection --dry-run
           - backfill-detail-subcollection --execute --limit 10
           - backfill-detail-subcollection --execute
           - backfill-detail-subcollection --verify
-          - measure-summary-cost --doc-id
           - create-pending-doc --doc-id --storage-path original/seed_generic_12p.pdf
           - delete-legacy-ocr-fields --mark-preflight
           - delete-legacy-ocr-fields --dry-run
@@ -1804,48 +1793,22 @@ jobs:
                [ "$SCRIPT_NAME" = "verify-pdf-determinism" ] || \
                [ "$SCRIPT_NAME" = "seed-dev-data" ] || \
                [ "$SCRIPT_NAME" = "upload-sarashina-canary-fixtures" ] || \
-               [ "$SCRIPT_NAME" = "compare-gemini-ocr-models" ] || \
-               [ "$SCRIPT_NAME" = "spike-candidate-extraction" ] || \
-               [ "$SCRIPT_NAME" = "verify-candidate-extraction-document-level" ] || \
-               [ "$SCRIPT_NAME" = "compare-ocr-arbitration-logic" ] || \
-               [ "$SCRIPT_NAME" = "compare-ocr-arbitration-logic-confirmed" ] || \
-               [ "$SCRIPT_NAME" = "compare-gemini-ocr-models-confirmed" ] || \
                [ "$SCRIPT_NAME" = "diagnose-confirmed-replay-sampling" ] || \
                [ "$SCRIPT_NAME" = "backfill-detail-subcollection" ] || \
-               [ "$SCRIPT_NAME" = "measure-summary-cost" ] || \
                [ "$SCRIPT_NAME" = "create-pending-doc" ] || \
                [ "$SCRIPT_NAME" = "backfill-drive-export" ] || \
                [ "$SCRIPT_NAME" = "backfill-confirm-on-verify" ] || \
                [ "$SCRIPT_NAME" = "backfill-customer-id-link" ] || \
                [ "$SCRIPT_NAME" = "drive-export-status-report" ] || \
                [ "$SCRIPT_NAME" = "audit-fax-duplication-inventory" ] || \
-               [ "$SCRIPT_NAME" = "merge-notation-duplicate-masters" ] || \
-               [ "$SCRIPT_NAME" = "verify-type3-ocr" ]; then
+               [ "$SCRIPT_NAME" = "merge-notation-duplicate-masters" ]; then
             # Issue #432 PR-C 系 script は scripts/lib/* (TypeScript)、seed-dev-data (#528) は
             # shared/*.ts に依存するため ts-node 経由で実行。
             # upload-sarashina-canary-fixtures (ADR-0027 PR5 S4) は seed-dev-data と同型
             # (pdf-lib/@pdf-lib/fontkitでPDF生成 + Storage実アップロード + status:'pending'投入、
             # STORAGE_BUCKET使用)。ALLOWED_PROJECT_ID='doc-split-dev'固定ガードあり。
-            # compare-gemini-ocr-models (#548) は
-            # functions/src/utils/* (extractors.ts/retry.ts) に依存するため同様に ts-node 経由。
-            # compare-gemini-ocr-models-confirmed (#548 confirmed replay方式) も同様の依存関係。
-            # spike-candidate-extraction (OCR突合精度向上ミッション タスクA) も同様に
-            # functions/src/utils/* + scripts/lib/geminiOcrCompare.ts に依存する。
-            # verify-candidate-extraction-document-level (同ミッション タスクB) も同様に加え
-            # functions/src/ocr/ocrProcessor.ts の extractOcrCandidates() に依存する
-            # (admin.initializeApp()後の動的importで解決、measure-summary-costと同パターン)。
-            # compare-ocr-arbitration-logic (同ミッション タスクF) も同様の依存関係に加え
-            # scripts/fixtures/arbitrationCompareFixtures.ts / scripts/lib/ocrLogicCompareStats.ts
-            # に依存する。STORAGE_BUCKET は未使用(ローカルfixture読込のみ、Storageアクセスなし)だが
-            # 本分岐の他スクリプトと統一的に環境変数を渡す。
-            # compare-ocr-arbitration-logic-confirmed (同ミッション タスクH) は
-            # compare-ocr-arbitration-logic のロジックA/B比較軸と compare-gemini-ocr-models-confirmed
-            # のconfirmed replayサンプリング/read-only/個人情報保護パターンを組み合わせたもの。
-            # kanameone/cocoro環境専用(customerConfirmed/officeConfirmedを持つ本番データが必要)。
-            # scripts/lib/confirmedArbitrationStats.ts に依存する。STORAGE_BUCKETを使用する。
             # diagnose-confirmed-replay-sampling (#548 pilot実行0件原因調査用) は firebase-admin
             # のみ依存(functions/src非依存、STORAGE_BUCKET不使用)だが統一的にts-node経由で実行。
-            # measure-summary-cost (#562) は functions/src/ocr/summaryGenerator.ts に依存するため同様。
             # backfill-detail-subcollection (#547 ADR-0018 Phase C) は
             # functions/src/ocr/ocrExcerpt.ts + scripts/lib/* に依存するため同様。
             # create-pending-doc (#562) はfirebase-adminのみ依存(functions/src非依存)だが、
@@ -1862,9 +1825,6 @@ jobs:
             # merge-notation-duplicate-masters (2026-07-27、表記ゆれ重複マスター統合)は
             # scripts/lib/notationDuplicateMerge.ts(純粋関数)に依存、STORAGE_BUCKET不使用。
             # 既定はdry-run、--executeフラグ時のみ書込みを行う。
-            # verify-type3-ocr (Issue #794 Phase 0-3) は functions/src/utils/{config,retry}.ts に
-            # 依存するためts-node経由。合成フィクスチャ(scripts/fixtures/with-type3-font*)のみを
-            # 扱いFirestore/Storage書込は行わない。ALLOWED_PROJECT_ID='doc-split-dev'固定ガードあり。
             # audit-fax-duplication-inventory (PR-D、docs/adr/0024-multi-customer-detection.md
             # Stage3) は read-only。scripts/lib/faxDuplicationInventory.tsに依存するためts-node
             # 経由。--full-scanはSCRIPT_ARGS経由でそのまま渡る。STORAGE_BUCKET不使用。

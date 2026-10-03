@@ -153,3 +153,5 @@ Stage3負荷試験Phase B実測(1ページのcoldMax=33.4秒、5バースト中1
 - [ADR-0024](0024-multi-customer-detection.md) — FAX複製機能(faxDuplication)、コスト試算のボリューム統計で多重計上排除のため参照
 - Issue #895(空確定バグ、本ADR承認と同時期に起票)
 - グローバルメモリ: `reference_japanese_ocr_model_accuracy_2026.md`(AWS Bedrock/PaddleOCRの日本語OCR精度比較)、`reference_aws_bedrock_ismap_and_pricing_2026.md`(AWS Bedrock ISMAP適合性・料金)
+
+**追記(2026-10-03、Pass2廃止の実施)**: 決定事項2の廃止判断に必要な実データ(`pass2Promotion`、distributionIdで重複除去、採用有無のブール値のみ)を集計した。kanameone 3,550件(2026-09-14〜10-03)・cocoro 140件(09-17〜10-02)・dev 13件(09-14〜09-30)の実行で、4項目(documentType/customerName/officeName/date)とも昇格0件で、廃止目安(1%未満)を大きく下回る(0/3,550の場合、統計的に言えるのは約0.08%以下)。観測期間にはGemini処理の期間も含まれ、OCRエンジンに依存せず0件だった。あわせて、顧客データ(OCR全文)を外部AI(Gemini)へ毎回送る経路を減らす方針(契約書の第三者提供の整理に伴う)から、`extractOcrCandidates`とそのプロンプト・スキーマを削除し、`processDocument`は常に全てnullの候補を`arbitrateXxx`へ渡す(既存の全文ベース結果がそのまま返る。`paddleOcrArbitrationRegression.test.ts`が候補null時の安全性を検証済み)。`pass2Promotion`は当面全てfalseで記録され続ける(整理はPR-Eで行う)。観測期間が約3週間で、月次・年次書類や日付の書式差(空白入りの「令和 7 年 1 月」など、全文照合が見落とし候補が書式を正規化して救済しうる稀な経路)は拾えていない点が限界で、救済価値が実運用で再び示された場合は再導入を検討する。

@@ -7,9 +7,9 @@
  * `ocrProcessorConfirmedFieldWiringContract.test.ts`と同じgrep-based契約パターン
  * (docs/context/test-strategy.md §2.1)で以下を lock-in する:
  *
- * 1. extractOcrCandidates()がocrResult確定後に呼ばれ、戻り値のトークン数がtotal*に
- *    加算される(trackGeminiUsageによる実コスト計測、タスクGのA/Bハーネスとは別に
- *    本番コスト可視化のため必須)
+ * 1. Pass2(LLM候補抽出、OCR全文を毎回Geminiへ送る第2呼出し)は廃止済み(ADR-0025
+ *    決定事項2、2026-10-03に実データで採用0件を確認)。extractOcrCandidatesの関数・呼出しが
+ *    再導入されていないこと、候補は常に空の結果(EMPTY_CANDIDATE_RESULTのコピー)であること
  * 2. documentType/customerName/officeName/dateの4項目それぞれがarbitrate*を経由する
  *    (既存の全文ベース結果への直接代入に回帰していないこと)
  * 3. dateMarker解決(matchedDoc)がarbitration後のdocumentTypeResultを参照する
@@ -23,28 +23,27 @@ import { resolve } from 'path';
 describe('ocrProcessor candidate extraction + arbitration wiring contract (GOAL.md タスクD)', () => {
   const source = readFileSync(resolve(process.cwd(), 'src/ocr/ocrProcessor.ts'), 'utf-8');
 
-  it('extractOcrCandidates呼出は1箇所のみ(candidates変数へ代入)', () => {
+  it('Pass2(extractOcrCandidates)の関数・呼出しが存在しない(再導入防止)', () => {
     const callCount = (source.match(/extractOcrCandidates\s*\(/g) ?? []).length;
-    // 定義箇所(export async function extractOcrCandidates)1 + 呼出箇所1 = 2
-    expect(callCount, 'processDocument内からの呼出が想定外の数(定義+呼出=2以外)').to.equal(2);
+    expect(callCount, 'Pass2(OCR全文をGeminiへ送る第2呼出し)が再導入されている').to.equal(0);
+    expect(source).to.not.match(/buildCandidateExtractionPrompt/, 'Pass2のプロンプトが残っている');
+  });
+
+  it('Geminiへのgenerate呼出しはPass1の緊急用経路(ocrWithGemini)の1箇所だけ', () => {
+    const generateCount = (source.match(/\.generateContent\s*\(/g) ?? []).length;
+    expect(
+      generateCount,
+      'ocrProcessor.ts内のgenerateContent呼出しがPass1緊急用(ocrWithGemini)以外にも存在する(顧客データの外部AI送信経路が増えている)'
+    ).to.equal(1);
+  });
+
+  it('candidatesは常に空の結果(EMPTY_CANDIDATE_RESULTのコピー)で、トークン加算は行わない', () => {
     expect(source).to.match(
-      /const candidates = await extractOcrCandidates\(ocrResult, docId\)/,
-      'extractOcrCandidates(ocrResult, docId)呼出でcandidatesへ代入する形が見つからない'
+      /const candidates: OcrCandidateExtractionResult = \{ \.\.\.EMPTY_CANDIDATE_RESULT \}/,
+      'candidatesが空の結果の固定になっていない'
     );
-  });
-
-  it('candidatesのトークン数がtotalInputTokens/totalOutputTokens/totalThinkingTokensへ加算される', () => {
-    expect(source).to.match(/totalInputTokens \+= candidates\.inputTokens/);
-    expect(source).to.match(/totalOutputTokens \+= candidates\.outputTokens/);
-    expect(source).to.match(/totalThinkingTokens \+= candidates\.thinkingTokens/);
-  });
-
-  it('extractOcrCandidates呼出はloadMasterData呼出より後(masterDataは候補抽出に不要な独立処理)', () => {
-    const loadMasterDataIndex = source.indexOf('await loadMasterData(');
-    const extractCandidatesIndex = source.indexOf('await extractOcrCandidates(');
-    expect(loadMasterDataIndex).to.be.greaterThan(-1);
-    expect(extractCandidatesIndex).to.be.greaterThan(-1);
-    expect(extractCandidatesIndex).to.be.greaterThan(loadMasterDataIndex);
+    expect(source).to.not.match(/totalInputTokens \+= candidates\./);
+    expect(source).to.not.match(/candidateGeminiMs/);
   });
 
   it('documentTypeResultはarbitrateDocumentType(documentTypeBase, candidates.documentTypeCandidate, documents, ocrResult)の戻り値', () => {
