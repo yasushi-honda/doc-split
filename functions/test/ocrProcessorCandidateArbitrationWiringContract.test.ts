@@ -20,7 +20,7 @@ import { expect } from 'chai';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
 
-describe('ocrProcessor candidate extraction + arbitration wiring contract (GOAL.md タスクD)', () => {
+describe('ocrProcessor Pass2廃止後の候補(常に空)+ arbitration配線契約 (GOAL.md タスクD、ADR-0025)', () => {
   const source = readFileSync(resolve(process.cwd(), 'src/ocr/ocrProcessor.ts'), 'utf-8');
 
   it('Pass2(extractOcrCandidates)の関数・呼出しが存在しない(再導入防止)', () => {
@@ -35,6 +35,12 @@ describe('ocrProcessor candidate extraction + arbitration wiring contract (GOAL.
       generateCount,
       'ocrProcessor.ts内のgenerateContent呼出しがPass1緊急用(ocrWithGemini)以外にも存在する(顧客データの外部AI送信経路が増えている)'
     ).to.equal(1);
+  });
+
+  it('Geminiクライアントの生成・ストリーム呼出しも増えていない(generateContentの別名・別経路での回避を検知)', () => {
+    const clientCount = (source.match(/new GoogleGenAI\(/g) ?? []).length;
+    expect(clientCount, 'new GoogleGenAI(はPass1緊急用(ocrWithGemini)の1箇所だけのはず').to.equal(1);
+    expect(source).to.not.match(/generateContentStream/, 'ストリーム経由のGemini呼出しが追加されている');
   });
 
   it('candidatesは常に空の結果(EMPTY_CANDIDATE_RESULTのコピー)で、トークン加算は行わない', () => {

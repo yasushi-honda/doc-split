@@ -183,7 +183,7 @@ L1(`OCR_PROVIDER`環境変数)を`gemini`に戻す完全ロールバックは再
 
 - **Cloud Run health**: `GET /health`(`modelLoaded: true`・`imageDigest`が最新デプロイと一致することを確認)
 - **liveness probe**: 凍結インスタンスは自動検知・強制終了される(上記「Cloud Run liveness probeによるインスタンス強制入れ替え」節)。`LIVENESS HTTP probe failed`ログの頻発は異常兆候
-- **処理時間の内訳**: Cloud Logging(`resource.type="cloud_run_revision" AND resource.labels.service_name="processocr"`)で`event:"phaseTimings"`を検索すると、文書ごとの`pageLoopMs`(OCR)/`masterLoadMs`/`candidateGeminiMs`/`customerMatchMs`等の内訳が取得できる:
+- **処理時間の内訳**: Cloud Logging(`resource.type="cloud_run_revision" AND resource.labels.service_name="processocr"`)で`event:"phaseTimings"`を検索すると、文書ごとの`pageLoopMs`(OCR)/`masterLoadMs`/`customerMatchMs`等の内訳が取得できる(`candidateGeminiMs`は候補抽出(Pass2)の廃止、2026-10-03に伴い出力されない):
   ```bash
   gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="processocr" AND textPayload:"] phaseTimings for"' --project=<project-id> --limit=100 --freshness=7d
   ```
