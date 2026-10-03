@@ -10,7 +10,8 @@
 
 export const MAX_REQUEUE_IDS = 10;
 
-const DOC_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
+/** 先頭は英数字(`--execute`等のオプションがIDとして通るのを防ぐ) */
+const DOC_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 
 /** カンマ区切りのdoc_idを検証して返す。1〜10件、重複・不正文字・空要素は例外。 */
 export function parseRequeueDocIds(csv: string | undefined): string[] {
@@ -23,7 +24,7 @@ export function parseRequeueDocIds(csv: string | undefined): string[] {
   }
   for (const id of ids) {
     if (!DOC_ID_PATTERN.test(id)) {
-      throw new Error('doc_idは英数字・アンダースコア・ハイフンのみ、空要素は不可です');
+      throw new Error('doc_idは先頭が英数字で、英数字・アンダースコア・ハイフンのみ使えます(空要素は不可)');
     }
   }
   if (new Set(ids).size !== ids.length) {
@@ -67,6 +68,23 @@ export function buildRequeuePlan(): RequeuePlan {
   };
 }
 
+export interface RequeueSentinels<T> {
+  serverTimestamp: T;
+  deleteField: T;
+}
+
+/**
+ * `buildRequeuePlan()`をFirestoreへ渡す更新オブジェクトに組み立てる。Admin SDKの
+ * `FieldValue.serverTimestamp()`/`delete()`は番兵として注入する(テストでは別の値を渡して、
+ * 書込みキーが宣言どおりの集合であることを固定する)。
+ */
+export function buildRequeueUpdate<T>(plan: RequeuePlan, sentinels: RequeueSentinels<T>): Record<string, unknown> {
+  const update: Record<string, unknown> = { ...plan.set };
+  for (const f of plan.serverTimestamps) update[f] = sentinels.serverTimestamp;
+  for (const f of plan.deleteFields) update[f] = sentinels.deleteField;
+  return update;
+}
+
 const BACKUP_FIELDS = [
   'summaryState',
   'summaryAttemptCount',
@@ -98,7 +116,7 @@ export interface RequeueGateInput {
   l1Provider: string | undefined;
   /** settings/features.sarashinaSummary */
   flag: unknown;
-  /** settings/features.sarashinaSummaryAllowlist(未設定=null=全許可、[]=全拒否) */
+  /** settings/features.sarashinaSummaryAllowlist(未設定=null=全文書対象、[]=全拒否)。再投入の前提として未設定は拒否する */
   allowlist: string[] | null;
 }
 
@@ -107,6 +125,7 @@ export type RequeueGateResult = { ok: true } | { ok: false; reason: string };
 /**
  * 再投入しても実際にSarashinaで処理されるかをfail-closedで確認する。
  * L1/L2が揃っていない状態で`pending`へ戻すと、文書が`skipped`へ倒れる/処理されない。
+ * allowlist未設定(全文書対象)も拒否する(canaryを再投入した文書だけに限定するため)。
  */
 export function evaluateRequeueGate(input: RequeueGateInput, docIds: readonly string[]): RequeueGateResult {
   if (input.l1Provider !== 'sarashina') {
@@ -115,11 +134,17 @@ export function evaluateRequeueGate(input: RequeueGateInput, docIds: readonly st
   if (input.flag !== true) {
     return { ok: false, reason: 'settings/features.sarashinaSummaryが明示的にtrueではありません' };
   }
-  if (input.allowlist !== null) {
-    const outside = docIds.filter((id) => !input.allowlist!.includes(id));
-    if (outside.length > 0) {
-      return { ok: false, reason: `許可リスト外のdoc_idがあります: ${outside.join(',')}` };
-    }
+  if (input.allowlist === null) {
+    // canaryを「指定した文書だけ」に限定する機械的な担保。未設定は全文書対象なので、
+    // 再投入していない既存のpending文書もバッチが処理してしまう。
+    return {
+      ok: false,
+      reason: 'sarashinaSummaryAllowlistが未設定(=全文書対象)です。先にset-sarashina-summary-allowlist --setで対象IDに絞ってください',
+    };
+  }
+  const outside = docIds.filter((id) => !input.allowlist!.includes(id));
+  if (outside.length > 0) {
+    return { ok: false, reason: `許可リスト外のdoc_idがあります: ${outside.join(',')}` };
   }
   return { ok: true };
 }
@@ -140,8 +165,12 @@ export function resolveAllowlist(settings: Record<string, unknown> | undefined):
  * 再投入前の状態を1行のkey=value(値はURIエンコード)で表す。GitHub Actionsのログは波括弧を
  * マスキングで潰すため、JSONではロールバック記録として使えない。未設定(null)は空値で出す。
  */
+/** ログ1行の各値の最大文字数(エンコード前)。長大な値でログが肥大するのを防ぐ。 */
+const MAX_LOG_VALUE_LENGTH = 200;
+
 export function formatStateBackupLine(backup: StateBackup): string {
-  const cell = (v: unknown): string => (v === null || v === undefined ? '' : encodeURIComponent(String(v)));
+  const cell = (v: unknown): string =>
+    v === null || v === undefined ? '' : encodeURIComponent(String(v).slice(0, MAX_LOG_VALUE_LENGTH));
   return [`docId=${cell(backup.docId)}`, ...BACKUP_FIELDS.map((f) => `${f}=${cell(backup.state[f])}`)].join(' ');
 }
 
@@ -152,4 +181,29 @@ export function formatStateBackupLine(backup: StateBackup): string {
  */
 export function isSameStateSnapshot(a: StateBackup, b: StateBackup): boolean {
   return a.docId === b.docId && BACKUP_FIELDS.every((f) => a.state[f] === b.state[f]);
+}
+
+/**
+ * 書込み可否を、全件分まとめて判定する(全か無かの判定。1件でも`blocked`なら呼び出し側は1件も書かない)。
+ * 適格性(存在・status・要約処理中)を先に見て、適格な文書だけ`expected`(プレビュー時の状態)との一致を見る。
+ * `expected`を省略するとプレビュー段階の判定(適格性のみ)になる。
+ */
+export function planRequeueWrite(
+  ids: readonly string[],
+  fresh: ReadonlyArray<Record<string, unknown> | undefined>,
+  expected?: readonly StateBackup[]
+): { blocked: string[] } {
+  if (fresh.length !== ids.length || (expected !== undefined && expected.length !== ids.length)) {
+    throw new Error('ids・読み取り結果・プレビュー状態の件数が一致しません');
+  }
+  const blocked: string[] = [];
+  ids.forEach((id, i) => {
+    const verdict = evaluateRequeueEligibility(fresh[i]);
+    if (!verdict.eligible) {
+      blocked.push(`${id}: ${verdict.reason}`);
+    } else if (expected !== undefined && !isSameStateSnapshot(expected[i], buildStateBackup(id, fresh[i] ?? {}))) {
+      blocked.push(`${id}: state-changed-since-preview`);
+    }
+  });
+  return { blocked };
 }

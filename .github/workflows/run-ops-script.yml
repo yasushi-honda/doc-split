@@ -519,8 +519,9 @@ jobs:
               echo "ERROR: doc_id input is required when script contains requeue-summary-to-pending --requeue-ids" >&2
               exit 1
             fi
-            if ! echo "$DOC_ID" | grep -qE '^[A-Za-z0-9_-]+(,[A-Za-z0-9_-]+){0,9}$'; then
-              echo "ERROR: doc_id must be 1-10 comma-separated alphanumeric/underscore/hyphen IDs" >&2
+            # 先頭は英数字(--execute等のオプションがIDとして通るのを防ぐ。scripts/lib/summaryRequeue.tsと同一規則)
+            if ! echo "$DOC_ID" | grep -qE '^[A-Za-z0-9][A-Za-z0-9_-]*(,[A-Za-z0-9][A-Za-z0-9_-]*){0,9}$'; then
+              echo "ERROR: doc_id must be 1-10 comma-separated IDs (start with alphanumeric; alphanumeric/underscore/hyphen only)" >&2
               exit 1
             fi
             SCRIPT_ARGS=$(echo "$SCRIPT_ARGS" | sed "s/--requeue-ids/--requeue-ids $DOC_ID/")
