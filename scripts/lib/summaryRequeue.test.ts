@@ -9,6 +9,7 @@ import {
   evaluateRequeueGate,
   resolveAllowlist,
   formatStateBackupLine,
+  isSameStateSnapshot,
 } from './summaryRequeue';
 
 test('parseRequeueDocIds: 1〜10件のカンマ区切りを受け付け、前後空白を除去する', () => {
@@ -182,4 +183,26 @@ test('formatStateBackupLine: 未設定(null)は空値で出力する(旧形式�
   const line = formatStateBackupLine(buildStateBackup('doc2', { status: 'processed' }));
   assert.match(line, /summaryState= /);
   assert.match(line, /summaryRunId=$/);
+});
+
+test('isSameStateSnapshot: 状態フィールドが全て同じなら一致(要約本文など対象外フィールドの差は無視する)', () => {
+  const a = buildStateBackup('d', { summaryState: 'done', summaryAttemptCount: 1, summaryProvider: 'gemini', summary: { text: 'A' } });
+  const b = buildStateBackup('d', { summaryState: 'done', summaryAttemptCount: 1, summaryProvider: 'gemini', summary: { text: 'B' } });
+  assert.equal(isSameStateSnapshot(a, b), true);
+});
+
+test('isSameStateSnapshot: 手動再生成などで状態が変わっていれば不一致(巻き戻し記録とのずれを検知する)', () => {
+  const before = buildStateBackup('d', { summaryState: 'error', summaryAttemptCount: 3, summaryError: 'x' });
+  for (const changed of [
+    { summaryState: 'done', summaryAttemptCount: 3, summaryError: 'x' },
+    { summaryState: 'error', summaryAttemptCount: 4, summaryError: 'x' },
+    { summaryState: 'error', summaryAttemptCount: 3 },
+    { summaryState: 'error', summaryAttemptCount: 3, summaryError: 'x', summaryRunId: 'r2' },
+  ]) {
+    assert.equal(isSameStateSnapshot(before, buildStateBackup('d', changed)), false, JSON.stringify(changed));
+  }
+});
+
+test('isSameStateSnapshot: docIdが違えば不一致', () => {
+  assert.equal(isSameStateSnapshot(buildStateBackup('a', {}), buildStateBackup('b', {})), false);
 });

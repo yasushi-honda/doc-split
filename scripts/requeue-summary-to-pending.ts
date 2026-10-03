@@ -16,6 +16,10 @@
  *   - 全文書がstatus=processedで、要約が処理中(summaryState=processing)ではない
  * 取得するのはstatus/summary*の状態フィールドのみ(fieldMask)。要約本文・OCR本文は読まない。
  * 再投入前の状態はログに出す(PIIなし)。
+ *
+ * 限界: OCR本文の長さは確認しない(実PIIの本文を読まない設計)。OCRが`MIN_OCR_LENGTH_FOR_SUMMARY`
+ * 未満の文書を再投入しても、`generateSummaryBatch`が再度`skipped`へ倒す(Sarashinaは呼ばれない)。
+ * 結果は`check-sarashina-summary-canary --canary-ids`で`skipped`として数えられる。
  */
 import { execFileSync } from 'child_process';
 import * as admin from 'firebase-admin';
@@ -25,6 +29,7 @@ import {
   evaluateRequeueEligibility,
   evaluateRequeueGate,
   formatStateBackupLine,
+  isSameStateSnapshot,
   parseRequeueDocIds,
   resolveAllowlist,
 } from './lib/summaryRequeue';
@@ -89,6 +94,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
   console.log('✓ L1(SUMMARY_PROVIDER=sarashina) / L2(フラグtrue・allowlist内) を確認');
+  console.log('⚠ OCR本文の長さは確認しません。短文(100字未満)の文書は再投入後もskippedになります。');
 
   const refs = ids.map((id) => db.doc(`documents/${id}`));
   const snaps = await db.getAll(...refs, { fieldMask: STATE_FIELDS });
@@ -128,15 +134,21 @@ async function main(): Promise<void> {
     const fresh = await tx.getAll(...refs, { fieldMask: STATE_FIELDS });
     const blocked: string[] = [];
     fresh.forEach((snap, i) => {
-      const verdict = evaluateRequeueEligibility(snap.exists ? (snap.data() as Record<string, unknown>) : undefined);
-      if (!verdict.eligible) blocked.push(`${ids[i]}: ${verdict.reason}`);
+      const data = snap.exists ? (snap.data() as Record<string, unknown>) : undefined;
+      const verdict = evaluateRequeueEligibility(data);
+      if (!verdict.eligible) {
+        blocked.push(`${ids[i]}: ${verdict.reason}`);
+      } else if (!isSameStateSnapshot(backups[i], buildStateBackup(ids[i], data ?? {}))) {
+        // プレビュー後に状態が動いた(手動再生成など)。記録した巻き戻し状態と実際の上書き対象がずれる
+        blocked.push(`${ids[i]}: state-changed-since-preview`);
+      }
     });
     if (blocked.length > 0) return { written: 0, blocked };
     for (const ref of refs) tx.update(ref, update);
     return { written: refs.length, blocked };
   });
   if (outcome.blocked.length > 0) {
-    console.error(`❌ 書込み直前の再判定で対象外になったため1件も書き込みません: ${outcome.blocked.join(' / ')}`);
+    console.error(`❌ 書込み直前の再判定で対象外/状態変化があったため1件も書き込みません(dry-runからやり直してください): ${outcome.blocked.join(' / ')}`);
     process.exit(1);
   }
   console.log(`完了: ${outcome.written}/${refs.length}件を pending へ再投入しました`);

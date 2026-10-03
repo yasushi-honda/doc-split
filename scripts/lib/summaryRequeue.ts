@@ -144,3 +144,12 @@ export function formatStateBackupLine(backup: StateBackup): string {
   const cell = (v: unknown): string => (v === null || v === undefined ? '' : encodeURIComponent(String(v)));
   return [`docId=${cell(backup.docId)}`, ...BACKUP_FIELDS.map((f) => `${f}=${cell(backup.state[f])}`)].join(' ');
 }
+
+/**
+ * 再投入前に控えた状態(プレビュー)と、書込みトランザクション内で読み直した状態が同じか。
+ * 違えば(プレビュー後に手動再生成などで状態が動いた)、ロールバック記録が実際に上書きした
+ * 状態と食い違うため、呼び出し側は1件も書かずに止める。
+ */
+export function isSameStateSnapshot(a: StateBackup, b: StateBackup): boolean {
+  return a.docId === b.docId && BACKUP_FIELDS.every((f) => a.state[f] === b.state[f]);
+}
