@@ -1280,9 +1280,11 @@ export function extractAllInformation(
 /**
  * OCR突合arbitration（GOAL.md タスクC）
  *
- * 既存の全文ベース突合結果（本ファイル既存関数の出力）と、独立したGemini呼出し
- * （functions/src/ocr/ocrProcessor.ts の extractOcrCandidates()、タスクB実装済み）
- * が返す候補文字列を統合する。不変条件（GOAL.md）: 突合の精度劣化は一切禁止。
+ * 既存の全文ベース突合結果（本ファイル既存関数の出力）と、候補文字列を統合する。
+ * 【2026-10-03】候補を生成していた独立したGemini呼出し(ADR-0025のPass2、候補抽出関数)は
+ * 廃止済みで、現在processDocument()は常に全てnullの候補を渡す(この場合、既存の
+ * 全文ベース結果がそのまま返る)。本ファイルのarbitrateXxxは、候補が実際に渡される
+ * 将来の再導入に備えた入力境界として残している。不変条件（GOAL.md）: 突合の精度劣化は一切禁止。
  *
  * 設計はCodexセカンドオピニオン（plan mode、session121）の指摘を反映した保守的な
  * ものになっている:

@@ -1436,3 +1436,156 @@ describe('arbitrateDate', () => {
     expect(result.provenance.source).to.equal('candidate');
   });
 });
+
+// ============================================
+// Pass2廃止後の本番経路(ADR-0025 決定事項2、2026-10-03)
+// processDocument()は常に全てnullの候補をarbitrateXxxへ渡す。この呼び方で、
+// 4項目それぞれについて既存の全文ベース結果がそのまま返る(provenance.source==='existing')
+// ことを直接検証する(plan-crossreview/レビュー指摘: 本番で実際に通る経路の単体テスト)
+// ============================================
+describe('Pass2廃止後: 候補が全てnullのとき既存の全文ベース結果がそのまま返る', () => {
+  describe('documentType', () => {
+    const matched: DocumentExtractionResult = {
+      documentType: '介護保険被保険者証',
+      category: '保険証',
+      score: 100,
+      matchType: 'exact',
+      keywords: [],
+    };
+    const none: DocumentExtractionResult = {
+      documentType: null,
+      category: null,
+      score: 0,
+      matchType: 'none',
+      keywords: [],
+    };
+
+    it('既存マッチ済み+候補null: 結果が変わらずsourceはexisting', () => {
+      const result = arbitrateDocumentType(matched, null, documentMasters, '介護保険被保険者証の写し');
+      expect(result.documentType).to.equal(matched.documentType);
+      expect(result.category).to.equal(matched.category);
+      expect(result.score).to.equal(matched.score);
+      expect(result.matchType).to.equal(matched.matchType);
+      expect(result.provenance.source).to.equal('existing');
+    });
+
+    it('既存none+候補null/空文字: noneのまま(誤昇格しない)', () => {
+      for (const candidate of [null, '']) {
+        const result = arbitrateDocumentType(none, candidate, documentMasters, '請求書を送付します');
+        expect(result.documentType, `candidate=${JSON.stringify(candidate)}`).to.be.null;
+        expect(result.matchType).to.equal('none');
+        expect(result.provenance.source).to.equal('existing');
+      }
+    });
+  });
+
+  describe('customerName', () => {
+    const empty: CustomerExtractionResult = {
+      bestMatch: null,
+      candidates: [],
+      hasMultipleCandidates: false,
+      needsManualSelection: false,
+    };
+    const matched: CustomerExtractionResult = {
+      bestMatch: {
+        id: 'cust1',
+        name: '山田太郎',
+        furigana: 'やまだたろう',
+        score: 100,
+        matchType: 'exact',
+        isDuplicate: false,
+      },
+      candidates: [
+        {
+          id: 'cust1',
+          name: '山田太郎',
+          furigana: 'やまだたろう',
+          score: 100,
+          matchType: 'exact',
+          isDuplicate: false,
+        },
+      ],
+      hasMultipleCandidates: false,
+      needsManualSelection: false,
+    };
+
+    it('既存マッチ済み+候補null: bestMatch・candidatesが変わらずsourceはexisting', () => {
+      const result = arbitrateCustomerName(matched, null, customerMasters, '利用者: 山田太郎');
+      expect(result.bestMatch).to.deep.equal(matched.bestMatch);
+      expect(result.candidates).to.deep.equal(matched.candidates);
+      expect(result.provenance.source).to.equal('existing');
+    });
+
+    it('既存bestMatchなし+候補null/空文字: bestMatchはnullのまま(誤確定しない、顧客名は誤確定リスクが最も高い項目)', () => {
+      for (const candidate of [null, '']) {
+        const result = arbitrateCustomerName(empty, candidate, customerMasters, '利用者様: 鈴木一郎様の記録です。');
+        expect(result.bestMatch, `candidate=${JSON.stringify(candidate)}`).to.be.null;
+        expect(result.provenance.source).to.equal('existing');
+      }
+    });
+  });
+
+  describe('officeName', () => {
+    const empty: OfficeExtractionResultWithCandidates = {
+      bestMatch: null,
+      candidates: [],
+      hasMultipleCandidates: false,
+      needsManualSelection: false,
+    };
+    const matched: OfficeExtractionResultWithCandidates = {
+      bestMatch: { id: 'off3', name: 'デイサービスさくら', score: 100, matchType: 'exact', isDuplicate: false },
+      candidates: [{ id: 'off3', name: 'デイサービスさくら', score: 100, matchType: 'exact', isDuplicate: false }],
+      hasMultipleCandidates: false,
+      needsManualSelection: false,
+    };
+
+    it('既存マッチ済み+候補null: bestMatch・candidatesが変わらずsourceはexisting', () => {
+      const result = arbitrateOfficeName(matched, null, officeMasters, 'デイサービスさくらのご利用者様へ');
+      expect(result.bestMatch).to.deep.equal(matched.bestMatch);
+      expect(result.candidates).to.deep.equal(matched.candidates);
+      expect(result.provenance.source).to.equal('existing');
+    });
+
+    it('既存bestMatchなし+候補null/空文字: bestMatchはnullのまま', () => {
+      for (const candidate of [null, '']) {
+        const result = arbitrateOfficeName(empty, candidate, officeMasters, '発行元: 株式会社テストケア');
+        expect(result.bestMatch, `candidate=${JSON.stringify(candidate)}`).to.be.null;
+        expect(result.provenance.source).to.equal('existing');
+      }
+    });
+  });
+
+  describe('date', () => {
+    const none: DateExtractionResult = {
+      date: null,
+      formattedDate: null,
+      source: null,
+      pattern: null,
+      confidence: 0,
+      allCandidates: [],
+    };
+    const matched: DateExtractionResult = {
+      date: new Date(2025, 0, 1),
+      formattedDate: '2025/01/01',
+      source: '2025/01/01',
+      pattern: 'iso',
+      confidence: 80,
+      allCandidates: [],
+    };
+
+    it('既存に日付あり+候補null: date・formattedDateが変わらずsourceはexisting', () => {
+      const result = arbitrateDate(matched, null, '発行日: 2025/01/01');
+      expect(result.date?.getTime()).to.equal(matched.date?.getTime());
+      expect(result.formattedDate).to.equal(matched.formattedDate);
+      expect(result.provenance.source).to.equal('existing');
+    });
+
+    it('既存null+候補null/空文字: dateはnullのまま', () => {
+      for (const candidate of [null, '']) {
+        const result = arbitrateDate(none, candidate, '発行日: 令和7年1月18日');
+        expect(result.date, `candidate=${JSON.stringify(candidate)}`).to.be.null;
+        expect(result.provenance.source).to.equal('existing');
+      }
+    });
+  });
+});
