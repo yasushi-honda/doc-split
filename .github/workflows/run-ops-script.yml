@@ -1950,14 +1950,14 @@ jobs:
             # 参照: docs/handoff/GOAL.md Step0④注記
             # fable-reviewでの指摘反映: L2の「フィールド不在(制限なし)」と「空配列(全拒否)」の区別、
             # Firestore REST呼び出し失敗時のfail-closed化(silent failure回避)。
-            echo "=== ② L1ゲート状態(processOCR環境変数 OCR_PROVIDER) ==="
+            echo "=== ② L1ゲート状態(processOCR環境変数 OCR_PROVIDER。空行=未設定=コード既定のpaddle(旧リビジョンではgemini)) ==="
             gcloud functions describe processOCR --project="$PROJECT_ID" --gen2 --region=asia-northeast1 \
               --format="value(serviceConfig.environmentVariables.OCR_PROVIDER)"
 
             ACCESS_TOKEN=$(gcloud auth print-access-token)
 
             echo ""
-            echo "=== ② L2ゲート状態(settings/features: paddleOcr, paddleOcrAllowlist) ==="
+            echo "=== ② L2ゲート状態(settings/features: paddleOcr, paddleOcrAllowlist)。PR-B以降はOCRの判定には使われない(参考表示) ==="
             curl -sS -H "Authorization: Bearer ${ACCESS_TOKEN}" \
               "https://firestore.googleapis.com/v1/projects/${PROJECT_ID}/databases/(default)/documents/settings/features" \
               | node -e '
@@ -1973,7 +1973,7 @@ jobs:
                   }
                   if (doc.error) {
                     if (doc.error.code === 404) {
-                      console.log("settings/features: ドキュメント未作成(getPaddleOcrGate上は無効/fail-closed相当)");
+                      console.log("settings/features: ドキュメント未作成(参考: getPaddleOcrGate上は無効。PR-B以降OCRの判定には未使用)");
                       return;
                     }
                     console.error("ERROR: settings/features取得に失敗しました:", JSON.stringify(doc.error));
@@ -1997,7 +1997,7 @@ jobs:
                     const arrayValue = fields.paddleOcrAllowlist.arrayValue;
                     const values = arrayValue && arrayValue.values ? arrayValue.values : [];
                     if (values.length === 0) {
-                      console.log("paddleOcrAllowlist: 空配列(fail-closedで全docId拒否=実質全展開ブロック中)");
+                      console.log("paddleOcrAllowlist: 空配列(参考: getPaddleOcrGate上は全docId拒否。PR-B以降OCRの判定には未使用)");
                     } else {
                       console.log(`paddleOcrAllowlist: ${values.length}件(該当docIdのみ対象、他は無効)`);
                     }

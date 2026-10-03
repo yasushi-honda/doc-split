@@ -2,6 +2,11 @@
 /**
  * settings/features.paddleOcrAllowlist 設定スクリプト(ADR-0025 PR6、Pass1 canary展開用)
  *
+ * 【注意(PR-B、2026-10-03以降)】現行コードでは、この設定も settings/features.paddleOcr も
+ * OCRの判定には使われない(OCRはOCR_PROVIDER環境変数だけで決まり、既定・倒れ先はpaddle)。
+ * 本スクリプトで展開を絞ったり止めたりはできない。旧リビジョンがデプロイされたままの環境でのみ
+ * 効く(PR-Eで整理する)。
+ *
  * `functions/src/utils/featureFlags.ts`の`getPaddleOcrGate()`が読む
  * `settings/features.paddleOcrAllowlist`にmerge書込みする。`settings/features.paddleOcr`
  * (L2フラグ本体)をONにしたうえで、対象docIdだけをPaddleOCRへ切替えるcanary展開に使う。

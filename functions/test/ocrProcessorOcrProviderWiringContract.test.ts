@@ -4,12 +4,14 @@
  * processDocument自体はStorage/Gemini/PaddleOCR副作用が大きく直接呼び出せないため
  * (ocrProcessorEarlyOwnershipCheckWiringContract.test.tsと同方針)、配線自体を
  * ソース文字列レベルでlock-inする。判定ロジック(resolveOcrProvider自体の動作)は
- * featureFlagsIntegration.test.ts(emulator)で検証する。
+ * resolveOcrProvider.test.ts(純粋関数、倒れ先paddle)で検証する。
  *
  * 検証する契約:
  * 1. resolveOcrProviderの呼出しがprocessDocument内で1回だけ
  * 2. processDocument本体にocrWithGemini(の直接呼出しが残っていない
  *    (ocrPass1ディスパッチャー経由に一本化されていること)
+ * 3. Geminiが緊急手段として使われた文書は構造化ログ(gemini_ocr_emergency_used)に記録される
+ *    (緊急利用の有無を事後に数えられるようにするため。PR-B)
  */
 
 import { expect } from 'chai';
@@ -53,8 +55,8 @@ describe('ocrProcessor OCR_PROVIDER配線契約 (ADR-0025 PR6)', () => {
     const matches = processDocumentBody.match(/resolveOcrProvider\(/g) ?? [];
     expect(
       matches.length,
-      'resolveOcrProviderはFirestore readを伴うため、ページOCRループ内で毎回呼ぶとreadが重複し、' +
-        '同一文書内でプロバイダが途中変化する不整合も起こりうる'
+      'resolveOcrProviderはページOCRループ内で毎回呼ばず、文書ごとに1回だけ解決する' +
+        '(同一文書内でプロバイダが途中変化する不整合を防ぐ)'
     ).to.equal(1);
   });
 
@@ -121,5 +123,29 @@ describe('ocrProcessor OCR_PROVIDER配線契約 (ADR-0025 PR6)', () => {
       reuseBlock,
       '再利用パスでpass1ModelVersionにinheritedModelVersion相当の値を代入していない'
     ).to.match(/pass1ModelVersion\s*=\s*inheritedModelVersion/);
+  });
+
+  it('Geminiが実際に使われる文書だけが構造化ログ(gemini_ocr_emergency_used)に記録される(Pass1呼出しの直前、1文書1回)', () => {
+    // 記録関数は ocrProvider==='gemini' のときだけ、かつ1回だけ出す
+    expect(processDocumentBody).to.match(
+      /const logGeminiEmergencyOnce = \(\): void => \{\s*if \(ocrProvider !== 'gemini' \|\| geminiEmergencyLogged\) return;[\s\S]{0,200}gemini_ocr_emergency_used/,
+      '緊急利用ログの条件(gemini明示かつ未記録)が見つからない'
+    );
+    // 実際のPass1呼出し(ページ単位・単一画像)の直前で呼ぶ。pageResults再利用経路では呼ばれない
+    const calls = processDocumentBody.match(/logGeminiEmergencyOnce\(\);\s*\n\s*const result = await ocrPass1\(/g) ?? [];
+    expect(calls.length, 'ocrPass1呼出し(PDFページ・画像)の直前に緊急利用ログが置かれていない').to.equal(2);
+    // 解決直後(OCR前)に無条件で出す旧実装に戻っていない
+    expect(processDocumentBody).to.not.match(
+      /resolveOcrProvider\(\);\s*\n\s*if \(ocrProvider === 'gemini'\) \{\s*\n\s*\/\/[^\n]*\n[\s\S]{0,300}console\.warn\(`\[gemini_ocr_emergency_used\]/,
+      'OCR呼出し前に緊急利用ログを出す旧実装に戻っている(再利用経路・OCR前失敗を過大に数える)'
+    );
+  });
+
+  it('OCRの判定はL1のみ: resolveOcrProvider()は引数なしで呼ばれ、ocrProcessor.tsはgetPaddleOcrGate(L2のFirestoreゲート)を使わない', () => {
+    const source = readFileSync(resolve(process.cwd(), OCR_PROCESSOR_PATH), 'utf-8');
+    expect(processDocumentBody).to.match(/resolveOcrProvider\(\)/, 'resolveOcrProviderは引数なし(L1のみ)で呼ぶ');
+    expect(source, 'L2(Firestoreのpaddleocrフラグ+allowlist)をOCRの判定に再び使うと、設定欠落で無言でGeminiへ倒れる設計に戻る').to.not.match(
+      /getPaddleOcrGate/
+    );
   });
 });

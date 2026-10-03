@@ -23,6 +23,8 @@ const path = require('path');
 const admin = require('firebase-admin');
 
 /** functions/src/utils/featureFlags.ts が読むフラグ名と同期させること */
+// 注意: 'paddleOcr' は、PR-B(2026-10-03)以降のコードではOCRの判定に使われない(OCRはOCR_PROVIDER環境変数のみ、
+// 既定・倒れ先はpaddle)。旧リビジョンが残る環境でのみ効く(PR-Eで整理する)。
 const KNOWN_FLAGS = ['faxDuplication', 'multiCustomerDetection', 'driveExport', 'driveFolderClaimRead', 'paddleOcr', 'sarashinaSummary'];
 
 const projectId = process.env.FIREBASE_PROJECT_ID;

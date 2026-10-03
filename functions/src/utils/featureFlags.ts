@@ -128,6 +128,10 @@ export interface PaddleOcrGate {
  *
  * フラグドキュメントが存在しない場合、またはpaddleOcrが明示的にtrueでない場合は
  * 「無効」を安全側デフォルトとする(fail-closed、段階導入の既定はGemini継続)。
+ *
+ * 【PR-B(2026-10-03)以降】OCRの判定(`resolveOcrProvider`)には使われない。全面切替済みで、
+ * OCRの倒れ先をpaddleへ反転し、`OCR_PROVIDER`(L1)だけで決まるようにしたため。運用スクリプト
+ * (set-paddle-ocr-allowlist等)が参照しているため残置しており、PR-Eで整理する。
  */
 export async function getPaddleOcrGate(
   db: admin.firestore.Firestore
@@ -150,36 +154,23 @@ export async function getPaddleOcrGate(
 }
 
 /**
- * ドキュメント単位のOCR Pass1プロバイダを解決する(ADR-0025)。
+ * OCR Pass1プロバイダを解決する(ADR-0025)。
  *
- * L1(環境変数`OCR_PROVIDER`)とL2(Firestoreフラグ+許可リスト)の2層構造。
- * どちらもGemini側にfail-closed: L1が'paddle'でない場合は即座に'gemini'、
- * L2の`paddleOcr`フラグが無効、または許可リストが存在しdocIdを含まない場合も'gemini'。
- * 呼出元(ocrProcessor.ts)はドキュメント処理開始直後に1回だけ呼び出す。
+ * L1(環境変数`OCR_PROVIDER`)だけで決まる。`gemini`を明示したときだけ'gemini'(緊急手段)、
+ * それ以外(未設定・空・未知値・`paddle`)は'paddle'。以前はL2(Firestoreの`paddleOcr`フラグと
+ * allowlist)も合成し、どちらかが欠けると無言でGeminiへ倒れる設計だったが、全面切替済みで
+ * L2に残る意味は「倒れ先をGeminiにする危険」だけになったため、OCRの判定からは外した
+ * (2026-09-23/25に実際に回帰した。顧客データを意図せず外部AIへ送らない方針)。
+ * Firestoreを読まない純粋関数なので、呼出元(ocrProcessor.ts)は文書処理開始直後に1回だけ
+ * 呼び出し、同一文書内でプロバイダが途中で変わる不整合を防ぐ。
  *
- * silent-failure-hunterレビュー指摘: 上記「fail-closed」は判定ロジック自体の既定値の話であり、
- * `getPaddleOcrGate`内のFirestore read自体はtry/catchしていない(既存の`isFaxDuplicationEnabled`
- * 等の他フラグ取得関数と同じ規約)。read失敗時は例外がそのまま呼出元(processDocument)へ
- * 伝播し、ドキュメント処理全体がerror状態になる(geminiへ静かにフォールバックするわけではない)。
- * 「間違ったエンジンを黙って選ぶ」より「処理全体を明示的に失敗させる」方を安全側とする、
- * このプロジェクトのsilent-failure回避方針との整合を優先した意図的な挙動。
+ * `getPaddleOcrGate`と`paddleOcr`フラグは、運用スクリプト(set-paddle-ocr-allowlist等)が
+ * 参照しているため残しているが、OCRの判定には使われない(PR-Eで整理する)。
  *
- * `l1Provider`はテスト専用の注入口(既定は本番同様`PADDLE_OCR_CONFIG.provider`を使う、
- * paddleOcrClient.tsのdeps注入と同じ規約)。`PADDLE_OCR_CONFIG`はモジュール読み込み時に
- * 一度だけ評価される定数のため、これが無いとL1='paddle'側のL2合成ロジック(このpr-test-analyzer
- * 指摘対応)がテストスイート内で一度も実行されない。
+ * `l1Provider`はテスト専用の注入口(既定は本番同様`PADDLE_OCR_CONFIG.provider`を使う)。
  */
-export async function resolveOcrProvider(
-  db: admin.firestore.Firestore,
-  docId: string,
-  l1Provider: OcrProvider = PADDLE_OCR_CONFIG.provider
-): Promise<OcrProvider> {
-  if (l1Provider !== 'paddle') return 'gemini';
-
-  const gate = await getPaddleOcrGate(db);
-  if (!gate.enabled) return 'gemini';
-  if (gate.allowlist !== null && !gate.allowlist.includes(docId)) return 'gemini';
-  return 'paddle';
+export function resolveOcrProvider(l1Provider: OcrProvider = PADDLE_OCR_CONFIG.provider): OcrProvider {
+  return l1Provider === 'gemini' ? 'gemini' : 'paddle';
 }
 
 export interface SarashinaSummaryGate {
