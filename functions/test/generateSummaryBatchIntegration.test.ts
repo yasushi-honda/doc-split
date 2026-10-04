@@ -869,6 +869,10 @@ describe('runSummaryBatch (ADR-0027 PR4)', () => {
       const line = logs.find((l) => l.includes('language_mix_suspected'));
       expect(line).to.contain('documentId=doc-mix');
       expect(line).to.contain('count=3');
+      // PII対策: 語そのもの(音訳された氏名等になりうる)はログに出さず、文字数だけを出す
+      expect(line).to.not.contain('folgerende');
+      expect(line).to.not.contain('medical');
+      expect(line).to.contain('wordLengths=10,7,12');
     });
 
     it('英字混入: 原文(実際の送信テキスト)に存在する英単語は検知しない', async () => {

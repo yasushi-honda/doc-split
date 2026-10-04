@@ -380,13 +380,14 @@ async function runSummaryBatchInner(deps: RunSummaryBatchDeps): Promise<SummaryB
 
       // 英字混入(原文にない4文字以上の英単語): 第1段階はログのみで、要約は保存する。誤検知率を
       // 実運用で測ってから、再生成・error化(ブロック)するかを判断する(PR-C)。
-      // 語は原文に存在しない=原文由来のPIIではなくモデルが生成した語のため、ログへ出してよい。
+      // 語そのものはログへ出さない(件数と文字数のみ): 原文に無い語でも、モデルが氏名等を
+      // ローマ字へ音訳した語がPIIになりうるため。誤検知の分析は文字数分布と件数で行う。
       const languageMix = scanSummaryForForeignWords(passResult.summary.text, scanSource);
       if (languageMix.count > 0) {
         stats.languageMixDetected++;
         console.warn(
           `[${FUNCTION_NAME}] language_mix_suspected documentId=${docId} count=${languageMix.count} ` +
-            `words=${languageMix.words.slice(0, 5).join(',')}`
+            `wordLengths=${languageMix.words.slice(0, 5).map((w) => w.length).join(',')}`
         );
       }
 
