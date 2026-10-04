@@ -839,6 +839,40 @@ describe('runSummaryBatch (ADR-0027 PR4)', () => {
       expect(lines[0]).to.contain('outcome=error');
     });
 
+    it('rescue: 自動生成が無効の間、印のない(自動由来の)processingがstuckしたら、pendingではなく要約なしへ戻す(取り残し防止)', async () => {
+      const stuckAt = admin.firestore.Timestamp.fromMillis(Date.now() - SUMMARY_STUCK_THRESHOLD_MS - 60_000);
+      await seedDocument('doc-stuck-unmarked', {
+        summaryState: 'processing',
+        summaryRunId: 'dead-run',
+        summaryStateUpdatedAt: stuckAt,
+        summaryAttemptCount: 1,
+        summaryManualRequestedAt: null,
+        summary: { text: '旧要約', truncated: false },
+        summaryProvider: 'sarashina',
+      });
+      await rescueStuckSummaryDocs(db, { now: () => Date.now(), l1: 'sarashina', autoEnabled: false });
+      const data = await getDoc('doc-stuck-unmarked');
+      expect(data.summaryState).to.equal(undefined);
+      expect(data.summaryAttemptCount).to.equal(undefined);
+      expect(data.summaryRunId).to.equal(undefined);
+      // 更新対象外フィールドは不変: 既存の要約本文と生成元は残る
+      expect(data.summary.text).to.equal('旧要約');
+      expect(data.summaryProvider).to.equal('sarashina');
+    });
+
+    it('rescue: 自動生成が有効なら、印のないprocessingもpendingへ戻す(自動キューで再処理される)', async () => {
+      const stuckAt = admin.firestore.Timestamp.fromMillis(Date.now() - SUMMARY_STUCK_THRESHOLD_MS - 60_000);
+      await seedDocument('doc-stuck-unmarked-auto', {
+        summaryState: 'processing',
+        summaryRunId: 'dead-run',
+        summaryStateUpdatedAt: stuckAt,
+        summaryAttemptCount: 1,
+        summaryManualRequestedAt: null,
+      });
+      await rescueStuckSummaryDocs(db, { now: () => Date.now(), l1: 'sarashina', autoEnabled: true });
+      expect((await getDoc('doc-stuck-unmarked-auto')).summaryState).to.equal('pending');
+    });
+
     it('rescue: pendingへ戻す(再試行)場合は印を保つ', async () => {
       const stuckAt = admin.firestore.Timestamp.fromMillis(Date.now() - SUMMARY_STUCK_THRESHOLD_MS - 60_000);
       await seedDocument('doc-stuck-retry', {

@@ -187,13 +187,18 @@ async function runSummaryBatchInner(deps: RunSummaryBatchDeps): Promise<SummaryB
 
   const stats = emptyStats();
 
-  // rescueはL1に関わらず毎tick実行する(手動claim(regenerateSummary)がプロセスごと
-  // 落ちて放置されたケースの回収は、自動生成が無効な環境でも必要なため)。
-  const rescueResult = await rescueStuckSummaryDocs(firestore, { now, l1: l1Provider });
+  // L2ゲート+自動生成フラグは1tickにつき1回、rescueの前に読む(rescueが「自動生成が無効の間は
+  // 印のないpendingを要約なしへ戻す」判定にautoEnabledを使うため)。L1='none'ではFirestoreを読まない。
+  const gate = l1Provider === 'none' ? null : await getGate(firestore);
+  const autoEnabled = gate?.autoOnOcr === true;
+
+  // rescueはL1に関わらず毎tick実行する(処理中のまま放置されたclaimの回収は、自動生成が
+  // 無効な環境でも必要なため)。
+  const rescueResult = await rescueStuckSummaryDocs(firestore, { now, l1: l1Provider, autoEnabled });
   stats.rescued = rescueResult.rescued;
   stats.rescueErrored = rescueResult.errored;
 
-  if (l1Provider === 'none') {
+  if (l1Provider === 'none' || gate === null) {
     console.log(`[${FUNCTION_NAME}] SUMMARY_PROVIDER=none, skipping batch (rescue only)`);
     return stats;
   }
@@ -203,9 +208,6 @@ async function runSummaryBatchInner(deps: RunSummaryBatchDeps): Promise<SummaryB
   // L2のenabled/allowlistを経由させない)。自動生成フラグ(autoSummaryOnOcr)だけは、どちらの
   // L1でも同じsnapshotから読む。
   let allowlist: string[] | null = null;
-  let autoEnabled = false;
-  const gate = await getGate(firestore);
-  autoEnabled = gate.autoOnOcr === true;
   if (l1Provider === 'sarashina') {
     if (!gate.enabled) {
       console.log(`[${FUNCTION_NAME}] sarashinaSummary gate disabled, pausing queue for this tick`);

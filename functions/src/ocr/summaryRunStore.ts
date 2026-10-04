@@ -314,7 +314,16 @@ export interface RescueStuckSummaryDocsResult {
  */
 export async function rescueStuckSummaryDocs(
   firestore: admin.firestore.Firestore,
-  opts: { now: () => number; l1: SummaryProviderSetting }
+  opts: {
+    now: () => number;
+    l1: SummaryProviderSetting;
+    /**
+     * 自動生成(`settings/features.autoSummaryOnOcr`)が有効か。偽(既定)のとき、手動依頼の印のない
+     * 文書は`pending`へ戻しても誰も処理しない(バッチは印のあるpendingだけを取得する)ため、
+     * 「要約なし」へ戻す(PR-C、切替時に自動生成の処理中だった文書の取り残し防止)。
+     */
+    autoEnabled?: boolean;
+  }
 ): Promise<RescueStuckSummaryDocsResult> {
   const threshold = admin.firestore.Timestamp.fromMillis(opts.now() - SUMMARY_STUCK_THRESHOLD_MS);
 
@@ -360,6 +369,19 @@ export async function rescueStuckSummaryDocs(
             summaryErrorKind: 'unknown' satisfies SummaryErrorKind,
           });
           return true;
+        }
+        if (!opts.autoEnabled && readManualRequestedAtMs(data) === null) {
+          // 印のないpending(自動由来)は、自動生成が無効の間は実行されず画面に「作成待ち」だけが残る。
+          // 要約本文(summary)・生成元(summaryProvider)は残し、状態系フィールドだけを消す。
+          tx.update(docRef, {
+            summaryState: admin.firestore.FieldValue.delete(),
+            summaryRunId: admin.firestore.FieldValue.delete(),
+            summaryStateUpdatedAt: admin.firestore.FieldValue.delete(),
+            summaryError: admin.firestore.FieldValue.delete(),
+            summaryErrorKind: admin.firestore.FieldValue.delete(),
+            summaryAttemptCount: admin.firestore.FieldValue.delete(),
+          });
+          return false;
         }
         tx.update(docRef, {
           summaryState: 'pending' satisfies SummaryState,
