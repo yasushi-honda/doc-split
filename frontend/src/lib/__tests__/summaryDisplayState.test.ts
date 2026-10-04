@@ -18,6 +18,7 @@ import {
   SUMMARY_MAX_INPUT_LENGTH,
   SUMMARY_QUEUED_MESSAGE,
   SUMMARY_PREVIOUS_FAILED_MESSAGE,
+  SUMMARY_SKIPPED_MESSAGE,
   shouldShowSummaryTruncationNotice,
   type DeriveSummaryDisplayStateInput,
 } from '../summaryDisplayState'
@@ -176,8 +177,22 @@ describe('deriveSummaryDisplayState', () => {
       expect(result.summaryText).toBe('旧要約')
     })
 
-    it('summaryState===done/skipped/未設定かつ要約ありはgenerated(summaryText保持、errorMessageなし)', () => {
-      for (const summaryState of ['done', 'skipped', undefined] as const) {
+    it('summaryState===skippedかつ要約ありはgenerated-with-failure(再生成がskippedになっても旧要約を「生成済み」に見せず失敗を伝える)', () => {
+      // 再生成の依頼後、原文を読み込めない・allowlistから外れた等でバッチがskippedにした場合、
+      // 旧要約は温存されるが、今回の依頼は成功していない(codex review P2指摘)。
+      const result = deriveSummaryDisplayState({
+        ...base,
+        summaryState: 'skipped',
+        summaryErrorKind: null,
+        summary: { text: '旧要約', truncated: false },
+      })
+      expect(result.kind).toBe('generated-with-failure')
+      expect(result.summaryText).toBe('旧要約')
+      expect(result.errorMessage).toBe(SUMMARY_SKIPPED_MESSAGE)
+    })
+
+    it('summaryState===done/未設定かつ要約ありはgenerated(summaryText保持、errorMessageなし)', () => {
+      for (const summaryState of ['done', undefined] as const) {
         const result = deriveSummaryDisplayState({ ...base, summaryState, summary: { text: '要約', truncated: false } })
         expect(result.kind).toBe('generated')
         expect(result.errorMessage).toBeUndefined()
@@ -358,7 +373,7 @@ describe('判定順の全組み合わせ(要約あり/なし × summaryState × 
             ? 'generating'
             : summaryState === 'pending'
               ? 'queued'
-              : summaryState === 'error'
+              : summaryState === 'error' || summaryState === 'skipped'
                 ? 'generated-with-failure'
                 : 'generated'
         expect(kind).toBe(expected)

@@ -122,6 +122,18 @@ async function main() {
         summaryAttemptCount: 3,
       }),
     },
+    // kind=2b' generated-with-failure(skipped): 再生成がskippedになった(原文の読込失敗・allowlist外等)。
+    // 旧要約は温存されるが「生成済み」には見せず、固定の理由文を併記する(codex review P2指摘)
+    {
+      id: 'pr4c-generated-skipped-rerun',
+      data: baseDocData({
+        id: 'pr4c-generated-skipped-rerun',
+        fileName: 'E2E_PR4c_generated_skipped_rerun.pdf',
+        ocrResult: LONG_OCR_TEXT,
+        summary: { text: 'PR4c検証用の旧要約テキストです。', truncated: false },
+        summaryState: 'skipped',
+      }),
+    },
     // kind=6 absent(ocrResultUrlオフロード): detail側ocrResult='' + 親ocrResultUrl(ADR-0018、10万字超)
     {
       id: 'pr4c-absent-ocr-url-offload',

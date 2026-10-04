@@ -97,6 +97,14 @@ test.describe('AI要約 8状態UI (デスクトップ) @emulator', () => {
     await expect(modal.locator('button:has-text("再試行")')).toBeVisible();
   });
 
+  test('generated-with-failure(skipped): 再生成がskippedでも旧要約を「生成済み」に見せず失敗理由を併記する', async ({ page }) => {
+    const modal = await openDocByFileName(page, 'E2E_PR4c_generated_skipped_rerun');
+    await ensureSummaryAccordionExpanded(modal);
+    await expect(modal.locator('text=PR4c検証用の旧要約テキストです。')).toBeVisible();
+    await expect(modal.locator('text=前回の要約です。今回の再作成は失敗しました')).toBeVisible();
+    await expect(modal.locator('text=要約の対象外、または原文を読み込めなかったため、再作成できませんでした')).toBeVisible();
+  });
+
   test('absent(ocrResultUrlオフロード): detail側ocrResultが空でも「AI要約を生成」が出る(要約済みなら先頭8,000字の注記)', async ({ page }) => {
     const modal = await openDocByFileName(page, 'E2E_PR4c_absent_ocr-url-offload');
     await ensureSummaryAccordionExpanded(modal);

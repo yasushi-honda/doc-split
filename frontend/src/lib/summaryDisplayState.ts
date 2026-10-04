@@ -24,6 +24,12 @@ export const SUMMARY_QUEUED_MESSAGE =
 /** 旧要約を残したまま再作成が失敗した場合の見出し(個別の失敗理由は`summaryErrorMessage`を併記する)。 */
 export const SUMMARY_PREVIOUS_FAILED_MESSAGE = '前回の要約です。今回の再作成は失敗しました'
 
+/**
+ * 旧要約を残したまま再作成が`skipped`になった場合の理由(原文を読み込めなかった、または要約機能の
+ * 対象から外れた等)。`summaryErrorKind`を持たないため固定文にする。
+ */
+export const SUMMARY_SKIPPED_MESSAGE = '要約の対象外、または原文を読み込めなかったため、再作成できませんでした'
+
 /** 生成済み要約に付ける注意ラベル。 */
 export const SUMMARY_AI_REVIEW_LABEL = 'AI生成・要確認'
 
@@ -105,7 +111,8 @@ export function summaryErrorMessage(kind: SummaryErrorKind | null | undefined): 
  * 1. summary.textあり(以降、本文は常に保持する。要約本文はdetail-errorより優先):
  *    a. summaryState==='pending' → queued(再生成依頼中。旧要約を見せ続ける)
  *    b. summaryState==='error'   → generated-with-failure(旧要約+「今回の再作成は失敗」+理由)
- *    c. 上記以外 → generated
+ *    c. summaryState==='skipped' → generated-with-failure(原文の読込失敗・対象外。固定の理由文)
+ *    d. 上記以外 → generated
  * 2. isDetailErrorかつ要約なし → detail-error
  *    (codex review P2指摘反映: summaryStateの値に関わらず要約なしのdetail取得失敗は
  *    生成操作を提示せずブロックする。ローカルの能動的な生成中(手順0)のみ優先する)
@@ -139,6 +146,15 @@ export function deriveSummaryDisplayState(input: DeriveSummaryDisplayStateInput)
         kind: 'generated-with-failure',
         summaryText: summary.text,
         errorMessage: summaryErrorMessage(summaryErrorKind),
+      }
+    }
+    if (summaryState === 'skipped') {
+      // 再生成の依頼後にバッチがskippedにした(原文の読込失敗・allowlist外等)。旧要約は温存されるが、
+      // 今回の依頼は成功していないため「生成済み」には見せない(codex review P2指摘)。
+      return {
+        kind: 'generated-with-failure',
+        summaryText: summary.text,
+        errorMessage: SUMMARY_SKIPPED_MESSAGE,
       }
     }
     return { kind: 'generated', summaryText: summary.text }
