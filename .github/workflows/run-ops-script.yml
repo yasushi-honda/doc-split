@@ -252,6 +252,8 @@ on:
           - check-sarashina-summary-canary --hours 168
           - requeue-summary-to-pending --requeue-ids
           - requeue-summary-to-pending --requeue-ids --execute
+          - clear-unmarked-pending-summary
+          - clear-unmarked-pending-summary --execute
       backfill_limit:
         description: 'backfill-drive-export --limit: canary実行時のマーク上限件数(数値のみ) / classify-drive-export-drift --limit: 検査対象document数の上限(数値のみ) / execute-drive-export-repair --limit: 修復対象候補数の上限(数値のみ) / backfill-confirm-on-verify --limit: canary実行時の確定対象上限件数(数値のみ) / backfill-customer-id-link --limit: canary実行時の紐づけ対象上限件数(数値のみ)'
         required: false
@@ -1835,6 +1837,7 @@ jobs:
                [ "$SCRIPT_NAME" = "diagnose-confirmed-replay-sampling" ] || \
                [ "$SCRIPT_NAME" = "check-sarashina-summary-canary" ] || \
                [ "$SCRIPT_NAME" = "requeue-summary-to-pending" ] || \
+               [ "$SCRIPT_NAME" = "clear-unmarked-pending-summary" ] || \
                [ "$SCRIPT_NAME" = "backfill-detail-subcollection" ] || \
                [ "$SCRIPT_NAME" = "create-pending-doc" ] || \
                [ "$SCRIPT_NAME" = "backfill-drive-export" ] || \

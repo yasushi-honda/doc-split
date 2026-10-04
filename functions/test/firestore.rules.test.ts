@@ -1071,6 +1071,7 @@ describe('Firestore Security Rules', () => {
           summaryErrorKind: 'transient',
           summaryProvider: 'sarashina',
           summaryAttemptCount: 2,
+          summaryManualRequestedAt: new Date(),
         });
       });
 
@@ -1131,6 +1132,7 @@ describe('Firestore Security Rules', () => {
           summaryErrorKind: deleteField(),
           summaryProvider: deleteField(),
           summaryAttemptCount: deleteField(),
+          summaryManualRequestedAt: deleteField(),
           // 値をリセット
           customerConfirmed: false,
           confirmedBy: null,
@@ -1240,6 +1242,8 @@ describe('Firestore Security Rules', () => {
       await assertFails(updateDoc(docRef, { summaryErrorKind: 'transient' }));
       await assertFails(updateDoc(docRef, { summaryProvider: 'sarashina' }));
       await assertFails(updateDoc(docRef, { summaryAttemptCount: 1 }));
+      // PR-C: 手動依頼の印もサーバー専有(FEが偽装すると手動優先キューへ割り込める)
+      await assertFails(updateDoc(docRef, { summaryManualRequestedAt: new Date() }));
 
       // 既存値を持つdocへの上書きも拒否され、削除(deleteField)と無変更のみ許可される
       await testEnv.withSecurityRulesDisabled(async (context) => {
@@ -1253,10 +1257,12 @@ describe('Firestore Security Rules', () => {
             summaryErrorKind: null,
             summaryProvider: 'sarashina',
             summaryAttemptCount: 1,
+            summaryManualRequestedAt: new Date(),
           },
           { merge: true }
         );
       });
+      await assertFails(updateDoc(docRef, { summaryManualRequestedAt: new Date() }));
       await assertFails(updateDoc(docRef, { summaryState: 'done' }));
       await assertFails(updateDoc(docRef, { summaryRunId: 'another-run-id' }));
       await assertFails(updateDoc(docRef, { summaryAttemptCount: 99 }));
@@ -1270,6 +1276,7 @@ describe('Firestore Security Rules', () => {
           summaryErrorKind: deleteField(),
           summaryProvider: deleteField(),
           summaryAttemptCount: deleteField(),
+          summaryManualRequestedAt: deleteField(),
         })
       );
     });

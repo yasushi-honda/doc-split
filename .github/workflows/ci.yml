@@ -165,7 +165,8 @@ jobs:
         env:
           FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
 
-      - name: Run generateSummaryBatch integration tests (Firestore emulator)
+      - name: Run generateSummaryBatch / manual summary request integration tests (Firestore emulator)
+        # PR-C: 手動依頼の登録(summaryManualRequest)も同じstepで守る(登録・冪等・L1/L2拒否)。
         # ADR-0027 PR5 D1対応: fabrication_suspectedを総試行上限内でpendingへ戻して再試行する
         # 挙動(検知→pending→…→error終端、エラー文へPIIを含めない)を実Firestoreで守る。
         # functions/package.json の test:integration に含まれていても CI からは呼ばれず、
@@ -173,7 +174,7 @@ jobs:
         # 同じ理由)ため、専用 step として追加した。
         run: |
           cd functions && firebase emulators:exec --only firestore \
-            'npx mocha --require ts-node/register --timeout 15000 test/generateSummaryBatchIntegration.test.ts'
+            'npx mocha --require ts-node/register --timeout 15000 test/generateSummaryBatchIntegration.test.ts test/summaryManualRequestIntegration.test.ts'
         env:
           FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
 

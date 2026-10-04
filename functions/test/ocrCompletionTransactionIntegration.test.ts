@@ -186,6 +186,7 @@ describe('applyOcrCompletionTransaction (複数顧客FAX複製機能 AC-b/AC-c)'
       tokenCounts: { inputTokens: 10, outputTokens: 5, thinkingTokens: 0, pagesProcessed: 1 },
       // ADR-0027 PR4: 本ファイルの検証対象(FAX複製・所有権保護)には無関係のためnone/固定長で固定
       summaryProviderL1: 'none' as const,
+      summaryAutoEnabled: false,
       ocrResultLength: 'raw ocr text'.length,
     });
 
@@ -256,6 +257,7 @@ describe('applyOcrCompletionTransaction (複数顧客FAX複製機能 AC-b/AC-c)'
       tokenCounts: { inputTokens: 10, outputTokens: 5, thinkingTokens: 0, pagesProcessed: 1 },
       // ADR-0027 PR4: 本ファイルの検証対象(FAX複製・所有権保護)には無関係のためnone/固定長で固定
       summaryProviderL1: 'none' as const,
+      summaryAutoEnabled: false,
       ocrResultLength: 'raw ocr text'.length,
     });
 
@@ -303,6 +305,7 @@ describe('applyOcrCompletionTransaction (複数顧客FAX複製機能 AC-b/AC-c)'
       tokenCounts: { inputTokens: 10, outputTokens: 5, thinkingTokens: 0, pagesProcessed: 1 },
       // ADR-0027 PR4: 本ファイルの検証対象(FAX複製・所有権保護)には無関係のためnone/固定長で固定
       summaryProviderL1: 'none' as const,
+      summaryAutoEnabled: false,
       ocrResultLength: 'raw ocr text'.length,
     });
 
@@ -350,6 +353,7 @@ describe('applyOcrCompletionTransaction (複数顧客FAX複製機能 AC-b/AC-c)'
       tokenCounts: { inputTokens: 10, outputTokens: 5, thinkingTokens: 0, pagesProcessed: 1 },
       // ADR-0027 PR4: 本ファイルの検証対象(FAX複製・所有権保護)には無関係のためnone/固定長で固定
       summaryProviderL1: 'none' as const,
+      summaryAutoEnabled: false,
       ocrResultLength: 'raw ocr text'.length,
     });
 
@@ -395,6 +399,7 @@ describe('applyOcrCompletionTransaction (複数顧客FAX複製機能 AC-b/AC-c)'
       tokenCounts: { inputTokens: 10, outputTokens: 5, thinkingTokens: 0, pagesProcessed: 1 },
       // ADR-0027 PR4: 本ファイルの検証対象(FAX複製・所有権保護)には無関係のためnone/固定長で固定
       summaryProviderL1: 'none' as const,
+      summaryAutoEnabled: false,
       ocrResultLength: 'raw ocr text'.length,
     });
 
@@ -440,6 +445,7 @@ describe('applyOcrCompletionTransaction (複数人記載検出 PR-A、multiCusto
       tokenCounts: { inputTokens: 10, outputTokens: 5, thinkingTokens: 0, pagesProcessed: 1 },
       // ADR-0027 PR4: 本ファイルの検証対象(FAX複製・所有権保護)には無関係のためnone/固定長で固定
       summaryProviderL1: 'none' as const,
+      summaryAutoEnabled: false,
       ocrResultLength: 'raw ocr text'.length,
     });
 
@@ -495,6 +501,7 @@ describe('applyOcrCompletionTransaction (複数人記載検出 PR-A、multiCusto
       tokenCounts: { inputTokens: 10, outputTokens: 5, thinkingTokens: 0, pagesProcessed: 1 },
       // ADR-0027 PR4: 本ファイルの検証対象(FAX複製・所有権保護)には無関係のためnone/固定長で固定
       summaryProviderL1: 'none' as const,
+      summaryAutoEnabled: false,
       ocrResultLength: 'raw ocr text'.length,
     });
 
@@ -532,6 +539,7 @@ describe('applyOcrCompletionTransaction (複数人記載検出 PR-A、multiCusto
       tokenCounts: { inputTokens: 10, outputTokens: 5, thinkingTokens: 0, pagesProcessed: 1 },
       // ADR-0027 PR4: 本ファイルの検証対象(FAX複製・所有権保護)には無関係のためnone/固定長で固定
       summaryProviderL1: 'none' as const,
+      summaryAutoEnabled: false,
       ocrResultLength: 'raw ocr text'.length,
     });
 
@@ -599,6 +607,7 @@ describe('applyOcrCompletionTransaction (Issue #957: runTransaction自体の一�
       tokenCounts: { inputTokens: 10, outputTokens: 5, thinkingTokens: 0, pagesProcessed: 1 },
       // ADR-0027 PR4: 本ファイルの検証対象(FAX複製・所有権保護)には無関係のためnone/固定長で固定
       summaryProviderL1: 'none' as const,
+      summaryAutoEnabled: false,
       ocrResultLength: 'raw ocr text'.length,
     };
   }
@@ -745,6 +754,7 @@ describe('applyOcrCompletionTransaction (Issue #957: runTransaction自体の一�
         tokenCounts: { inputTokens: 10, outputTokens: 5, thinkingTokens: 0, pagesProcessed: 1 },
         // ADR-0027 PR4: 本ファイルの検証対象(FAX複製・所有権保護)には無関係のためnone/固定長で固定
         summaryProviderL1: 'none' as const,
+      summaryAutoEnabled: false,
         ocrResultLength: 'raw ocr text'.length,
       });
       expect.fail('2回目はstatus-mismatchによりOcrRunSupersededErrorがthrowされるはず');
@@ -786,7 +796,13 @@ describe('applyOcrCompletionTransaction: summaryStateバックフィル防止 (A
 
   async function runSingleMemberCompletion(
     docId: string,
-    opts: { summaryProviderL1: 'none' | 'sarashina' | 'gemini'; ocrResultLength: number; seedOverrides?: Record<string, unknown> }
+    opts: {
+      summaryProviderL1: 'none' | 'sarashina' | 'gemini';
+      ocrResultLength: number;
+      /** 既定false(手動のみ、PR-C)。自動生成を再開した環境の挙動を検証する時だけtrue。 */
+      summaryAutoEnabled?: boolean;
+      seedOverrides?: Record<string, unknown>;
+    }
   ): Promise<void> {
     const docRef = await seedProcessingDoc(docId, opts.seedOverrides);
     const customerResult = twoExactCandidatesResult(true); // needsManualSelection:true → 複製なし(単一文書での検証に限定するため)
@@ -806,6 +822,7 @@ describe('applyOcrCompletionTransaction: summaryStateバックフィル防止 (A
       multiCustomerDetectionEnabled: false,
       tokenCounts: { inputTokens: 10, outputTokens: 5, thinkingTokens: 0, pagesProcessed: 1 },
       summaryProviderL1: opts.summaryProviderL1,
+      summaryAutoEnabled: opts.summaryAutoEnabled ?? false,
       ocrResultLength: opts.ocrResultLength,
     });
   }
@@ -828,6 +845,7 @@ describe('applyOcrCompletionTransaction: summaryStateバックフィル防止 (A
     const docId = 'summary-backfill-none-stale-cleanup';
     await runSingleMemberCompletion(docId, {
       summaryProviderL1: 'none',
+      summaryAutoEnabled: false,
       ocrResultLength: 5000,
       seedOverrides: {
         summaryState: 'error',
@@ -850,9 +868,9 @@ describe('applyOcrCompletionTransaction: summaryStateバックフィル防止 (A
     expect(data).to.not.have.property('summaryAttemptCount');
   });
 
-  it('L1=sarashina かつ OCR結果が十分長い → summaryState:pendingを書く', async () => {
+  it('L1=sarashina かつ autoSummaryOnOcr有効 かつ OCR結果が十分長い → summaryState:pendingを書く', async () => {
     const docId = 'summary-backfill-sarashina-pending';
-    await runSingleMemberCompletion(docId, { summaryProviderL1: 'sarashina', ocrResultLength: 5000 });
+    await runSingleMemberCompletion(docId, { summaryProviderL1: 'sarashina', summaryAutoEnabled: true, ocrResultLength: 5000 });
 
     const data = (await db.doc(`documents/${docId}`).get()).data()!;
     expect(data.summaryState).to.equal('pending');
@@ -861,12 +879,54 @@ describe('applyOcrCompletionTransaction: summaryStateバックフィル防止 (A
     expect(data.summaryStateUpdatedAt).to.not.equal(undefined);
   });
 
-  it('L1=gemini かつ OCR結果が短い(MIN_OCR_LENGTH_FOR_SUMMARY未満) → summaryState:skippedを書く', async () => {
+  it('L1=gemini かつ autoSummaryOnOcr有効 かつ OCR結果が短い(MIN_OCR_LENGTH_FOR_SUMMARY未満) → summaryState:skippedを書く', async () => {
     const docId = 'summary-backfill-gemini-skipped';
-    await runSingleMemberCompletion(docId, { summaryProviderL1: 'gemini', ocrResultLength: 50 });
+    await runSingleMemberCompletion(docId, { summaryProviderL1: 'gemini', summaryAutoEnabled: true, ocrResultLength: 50 });
 
     const data = (await db.doc(`documents/${docId}`).get()).data()!;
     expect(data.summaryState).to.equal('skipped');
+  });
+
+  it('L1=sarashina でも autoSummaryOnOcr が無効(既定、手動のみ) → summaryStateフィールド自体を書かない(PR-C: OCR完了時の自動pendingを廃止)', async () => {
+    const docId = 'summary-auto-off-sarashina';
+    await runSingleMemberCompletion(docId, { summaryProviderL1: 'sarashina', ocrResultLength: 5000 });
+
+    const data = (await db.collection('documents').doc(docId).get()).data()!;
+    expect(data).to.not.have.property('summaryState');
+    expect(data).to.not.have.property('summaryAttemptCount');
+    expect(data).to.not.have.property('summaryManualRequestedAt');
+  });
+
+  it('autoSummaryOnOcr が無効で、再OCRの対象docに過去の要約状態・手動依頼の印が残存 → 状態系フィールドと印は全て削除される', async () => {
+    const docId = 'summary-auto-off-reprocess';
+    await runSingleMemberCompletion(docId, {
+      summaryProviderL1: 'sarashina',
+      ocrResultLength: 5000,
+      seedOverrides: {
+        summaryState: 'pending',
+        summaryAttemptCount: 1,
+        summaryManualRequestedAt: admin.firestore.Timestamp.now(),
+      },
+    });
+
+    const data = (await db.collection('documents').doc(docId).get()).data()!;
+    expect(data).to.not.have.property('summaryState');
+    expect(data).to.not.have.property('summaryAttemptCount');
+    expect(data).to.not.have.property('summaryManualRequestedAt');
+  });
+
+  it('autoSummaryOnOcr が有効で新たにpendingを書く場合、残存していた手動依頼の印は削除される(自動由来を手動優先キューに載せない)', async () => {
+    const docId = 'summary-auto-on-clears-marker';
+    await runSingleMemberCompletion(docId, {
+      summaryProviderL1: 'sarashina',
+      summaryAutoEnabled: true,
+      ocrResultLength: 5000,
+      seedOverrides: { summaryManualRequestedAt: admin.firestore.Timestamp.now() },
+    });
+
+    const data = (await db.collection('documents').doc(docId).get()).data()!;
+    expect(data.summaryState).to.equal('pending');
+    expect(data).to.not.have.property('summaryManualRequestedAt');
   });
 
   it('L1=sarashina かつ FAX複製が発火する場合 → 元docと複製コピーの両方にsummaryState:pendingが書かれる(コピーはtx.setのためFieldValue.deleteを使わない別経路を通る)', async () => {
@@ -890,6 +950,7 @@ describe('applyOcrCompletionTransaction: summaryStateバックフィル防止 (A
       multiCustomerDetectionEnabled: false,
       tokenCounts: { inputTokens: 10, outputTokens: 5, thinkingTokens: 0, pagesProcessed: 1 },
       summaryProviderL1: 'sarashina',
+      summaryAutoEnabled: true,
       ocrResultLength: 5000,
     });
 
@@ -922,6 +983,7 @@ describe('applyOcrCompletionTransaction: summaryStateバックフィル防止 (A
       multiCustomerDetectionEnabled: false,
       tokenCounts: { inputTokens: 10, outputTokens: 5, thinkingTokens: 0, pagesProcessed: 1 },
       summaryProviderL1: 'none',
+      summaryAutoEnabled: false,
       ocrResultLength: 5000,
     });
 

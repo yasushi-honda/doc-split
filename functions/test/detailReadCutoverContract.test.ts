@@ -46,11 +46,9 @@ describe('detail/main 読者切替 配線契約 (ADR-0018 Phase D PR-D2)', () =>
     expect(getOcrTextSrc).to.match(/resolveDetailFields\(detailSnap\.data\(\), data\)/);
   });
 
-  it('regenerateSummary: readDocWithDetail + fieldMask + resolveDetailFields (ADR #6)', () => {
-    expect(regenerateSummarySrc).to.match(
-      /readDocWithDetail\(db, docRef, \[\s*'ocrResult',\s*'documentType',\s*\]\)/
-    );
-    expect(regenerateSummarySrc).to.match(/resolveDetailFields\(detailSnap\.data\(\), docData\)/);
+  it('regenerateSummary: OCR本文を読まない(PR-C: キューへの登録のみ。本文はバッチ側のloadOcrTextForSummaryがdetail/Storageから読む)', () => {
+    expect(regenerateSummarySrc).to.not.match(/readDocWithDetail\(/);
+    expect(regenerateSummarySrc).to.not.match(/ocrResult/);
   });
 
   it('ocrProcessor: detail read は parentDocumentId ゲート付き + fieldMask + detail優先解決 (ADR #1)', () => {

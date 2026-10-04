@@ -272,11 +272,13 @@ export interface Document {
   /**
    * AI要約の非同期生成状態 (ADR-0027 PR4)。
    * outboxパターン: (フィールド不在) → pending → processing → done/error/skipped。
-   * フィールド不在は「この文書に対して自動要約を試みたことがない」ことを意味し、
-   * `SUMMARY_PROVIDER=none`環境ではOCR完了時にこのフィールド自体を書かない
-   * (バックフィル防止、ADR-0027「主要な設計判断4」参照)。
+   * フィールド不在は「この文書に対して要約を依頼・試行したことがない」ことを意味する。
+   * 要約は「手動を基本」(PR-C、2026-10-04)で、OCR完了時には`summaryState`を書かない
+   * (`settings/features.autoSummaryOnOcr`が有効な環境のみ例外。バックフィル防止、
+   * ADR-0027「主要な設計判断4」参照)。
    * FE から直接書き込まない（Admin SDK専有。firestore.rules の documents update
-   * 許可リストを汚染しない設計。生成トリガーは既存の Callable `regenerateSummary`)。
+   * 許可リストを汚染しない設計。依頼は Callable `regenerateSummary` が`pending`と
+   * `summaryManualRequestedAt`を書いて受け付け、生成は`generateSummaryBatch`が直列に実行する)。
    */
   summaryState?: SummaryState;
   /** クレーム時に発行される所有権トークン(randomUUID)。並行実行(バッチ/手動)時の書戻し保護に使用。 */
@@ -289,6 +291,12 @@ export interface Document {
   summaryProvider?: SummaryProvider;
   /** 生成試行回数。stuck rescueの上限判定に使用。 */
   summaryAttemptCount?: number;
+  /**
+   * 手動依頼の受付時刻(PR-C)。手動依頼由来のキュー(`pending`〜生成中)の間だけ存在し、
+   * 終端(done/error/skipped)で削除される。バッチはこの印のある文書を優先して処理し、
+   * 計測ログ(`summary_manual_result`)の経過時間の起点にする。FEは読み取り専用。
+   */
+  summaryManualRequestedAt?: Timestamp | null;
 }
 
 /**

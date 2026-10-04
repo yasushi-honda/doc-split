@@ -35,17 +35,21 @@ export const SUMMARY_BATCH_LIMIT = 20;
  * claimした文書がこの2回目のリクエストの途中で関数タイムアウト(1800秒)を超えて
  * ハードキルされうる(修正前の実際のバグ、当初は1回分のみで計算していた)。
  */
-const SUMMARY_WORST_CASE_CLAIM_DURATION_MS = SARASHINA_SUMMARY_CONFIG.requestTimeoutMs * 2;
+export const SUMMARY_WORST_CASE_CLAIM_DURATION_MS = SARASHINA_SUMMARY_CONFIG.requestTimeoutMs * 2;
 
 /**
- * バッチのソフトデッドライン(ms): 関数タイムアウトから、1件のclaimの最悪所要時間
- * (`SUMMARY_WORST_CASE_CLAIM_DURATION_MS`、context-exceeded再送を含む2リクエスト分)と、
- * 最終文書の後処理・ログ出力用のマージン(3分)を差し引いた値。この時刻を過ぎたら
- * 新規のclaimを開始せず、残りは次tickへ委ねる(関数タイムアウトを超えてハードキルされる
- * 自己矛盾を避ける)。
+ * バッチのソフトデッドライン(ms): この時刻を過ぎたら新規のclaimを開始せず、残りは次tickへ
+ * 委ねる。
+ *
+ * PR-C(手動・非同期化)で、関数タイムアウトから逆算した約380秒から**120秒**へ短縮した。
+ * 手動依頼は「実行中のtickの終了」を待つため(実行中の定期起動はSchedulerがスキップする)、
+ * tickが長いほど依頼から処理開始までの待ち時間が伸びる。120秒なら、tickは最長でも
+ * 「120秒 + 最後に始めた1件分(p95 約241秒、最悪は`SUMMARY_WORST_CASE_CLAIM_DURATION_MS`)」で
+ * 終わる。1件が最悪ケース(context-exceeded再送を含む2リクエスト)に達しても関数タイムアウト
+ * (1800秒)を超えないこと(旧設計の不変条件)は、より厳しい値になったことで満たされ続ける
+ * (`summaryRunGuard.test.ts`で固定)。
  */
-export const SUMMARY_BATCH_SOFT_DEADLINE_MS =
-  SUMMARY_BATCH_TIMEOUT_SECONDS * 1000 - SUMMARY_WORST_CASE_CLAIM_DURATION_MS - 180_000;
+export const SUMMARY_BATCH_SOFT_DEADLINE_MS = 120_000;
 
 /**
  * stuck rescueの閾値(ms): 関数タイムアウト(1800s)+5分マージン(`processOCR.ts`の
@@ -57,13 +61,6 @@ export const SUMMARY_BATCH_SOFT_DEADLINE_MS =
  * 時間(=関数の最大生存時間)」を基準にする。
  */
 export const SUMMARY_STUCK_THRESHOLD_MS = SUMMARY_BATCH_TIMEOUT_SECONDS * 1000 + 5 * 60 * 1000;
-
-/**
- * 手動再生成(`regenerateSummary`、60秒onCall)がclaimを自発的に解放するまでの猶予(ms)。
- * onCallのハードタイムアウトより短く設定し、ハードキルされる前に`releaseManualSummaryRun`を
- * 実行できるようにする。
- */
-export const MANUAL_SUMMARY_SOFT_TIMEOUT_MS = 45_000;
 
 /** Firestoreから読み直した最新ドキュメントの関連フィールド(型は未検証のunknownで受ける) */
 export interface SummaryRunFreshState {
@@ -173,16 +170,20 @@ export type OcrCompletionSummaryDecision = { kind: 'absent' } | { kind: 'set'; s
  * OCR完了時に`summaryState`をどう扱うかを決定する(バックフィル防止の中核、
  * ADR-0027「主要な設計判断4」)。
  *
- * L1(`SUMMARY_PROVIDER`)が'none'の間は`summaryState`フィールド自体を書かない
- * (`kind:'absent'`)。これにより、後日L1を'sarashina'/'gemini'へ切り替えても、
- * 切替前に完了していた文書がまとめて「バックフィル」されることはない
- * (新規OCR完了分だけが対象になる)。
+ * 要約は「手動を基本、自動は見送り」(PR-C、2026-10-04決定)のため、既定では
+ * `summaryState`フィールド自体を書かない(`kind:'absent'`)。次のいずれかで'absent'になる:
+ * - L1(`SUMMARY_PROVIDER`)が'none'
+ * - `autoEnabled`(`settings/features.autoSummaryOnOcr === true`)が偽
+ *
+ * これにより、後日L1を'sarashina'/'gemini'へ切り替えても、切替前に完了していた文書が
+ * まとめて「バックフィル」されることはなく、自動生成を再開するかどうかは設定で選べる。
  */
 export function decideOcrCompletionSummaryState(
   l1: SummaryProviderSetting,
-  ocrLength: number
+  ocrLength: number,
+  autoEnabled: boolean
 ): OcrCompletionSummaryDecision {
-  if (l1 === 'none') {
+  if (l1 === 'none' || !autoEnabled) {
     return { kind: 'absent' };
   }
   return { kind: 'set', state: ocrLength >= MIN_OCR_LENGTH_FOR_SUMMARY ? 'pending' : 'skipped' };

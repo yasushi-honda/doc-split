@@ -15,6 +15,7 @@ import { withBackoffRetry } from '../utils/retry';
 import { isRetryableFirestoreError } from '../utils/firestoreErrors';
 import { safeLogError } from '../utils/errorLogger';
 import { buildSummaryFields } from './summaryRequestBuilder';
+import { logManualSummaryResult } from './summaryManualMetrics';
 import {
   evaluateSummaryRunOwnership,
   SummarySupersededError,
@@ -44,29 +45,39 @@ export interface SummaryRunClaim {
    * で行うため、この値をtransaction内で読んだ最新値として持ち回る必要がある。
    */
   attemptCount: number;
+  /**
+   * claim時点の`summaryManualRequestedAt`(epoch ms)。手動依頼由来の文書だけが持つ印で、
+   * 終端(done/error/skipped)でcommit/recordSummaryFailureが削除する際の計測ログ
+   * (`summary_manual_result`)の起点になる。自動由来(印なし)はnull。
+   */
+  manualRequestedAtMs: number | null;
 }
 
 export type ClaimSummaryRunResult =
   | { claimed: true; claim: SummaryRunClaim }
-  | { claimed: false; reason: 'not-found' | 'not-pending' | 'not-processed' };
+  | { claimed: false; reason: 'not-found' | 'not-pending' }
+  | { claimed: false; reason: 'not-processed'; manualRequestedAtMs: number | null };
+
+/** `summaryManualRequestedAt`(Timestamp)をepoch msへ。不在・型不一致はnull。 */
+function readManualRequestedAtMs(data: FirebaseFirestore.DocumentData): number | null {
+  const value = data.summaryManualRequestedAt as FirebaseFirestore.Timestamp | undefined;
+  return value && typeof value.toMillis === 'function' ? value.toMillis() : null;
+}
 
 /**
- * 要約生成のclaimを試みる。
+ * 要約生成のclaimを試みる(バッチ専用)。`summaryState==='pending'`の文書のみclaimする。
  *
- * `mode:'batch'`: `summaryState==='pending'`の文書のみclaimする。`status!=='processed'`
- * (split/error等、再OCR中を含む)なら`summaryState:'skipped'`を書いてスキップする
- * (先頭固定によるキュー閉塞を防ぐ。OCR再完了時は`decideOcrCompletionSummaryState`が
- * 改めて`pending`を書くため、恒久的に取りこぼされることはない)。
+ * PR-C(手動・非同期化)で、手動依頼もバッチのキューを通る(`regenerateSummary`は
+ * `summaryState:'pending'`と`summaryManualRequestedAt`を書くだけ)ため、旧「手動claimが既存の
+ * 所有者を無条件でpreemptする」モードは廃止した。Sarashinaは同時実行1(並行リクエストは429)で、
+ * 生成の入口はバッチ1本に絞る必要があるため。
  *
- * `mode:'manual'`: 現在の所有者(バッチ実行中・過去の手動実行)を無条件でpreemptする
- * (ユーザーの明示操作を優先。preemptされた側は`commitSummaryResult`/
- * `recordSummaryFailure`実行時に`SummarySupersededError`として検出され、
- * 実害は1回分の無駄な推論のみ)。
+ * `status!=='processed'`(split/error等、再OCR中を含む)なら`summaryState:'skipped'`を書いて
+ * スキップする(先頭固定によるキュー閉塞を防ぐ。手動依頼の印もこの終端で削除する)。
  */
 export async function claimSummaryRun(
   firestore: admin.firestore.Firestore,
   docRef: FirebaseFirestore.DocumentReference,
-  mode: 'batch' | 'manual',
   /** テスト注入用(ambiguous commit後の再実行が同一トークンを使うことを検証する目的)。本番は省略しrandomUUID()を使う。 */
   testRunId?: string
 ): Promise<ClaimSummaryRunResult> {
@@ -85,40 +96,34 @@ export async function claimSummaryRun(
         const currentState = (data.summaryState as SummaryState | undefined) ?? null;
         const currentOcrRunId = (data.ocrRunId as string | undefined) ?? null;
         const priorAttemptCount = (data.summaryAttemptCount as number) || 0;
+        const manualRequestedAtMs = readManualRequestedAtMs(data);
 
-        if (mode === 'batch') {
-          // ambiguous commit後の再実行: 自分自身のclaimが既にcommit済み(冪等復帰)。
-          // このパスではsummaryAttemptCountは既に前回の呼出しでincrement済みのため、
-          // 再度incrementせず現在値をそのまま返す。
-          if (currentState === 'processing' && data.summaryRunId === runId) {
-            return {
-              claimed: true,
-              claim: { runId, ocrRunId: currentOcrRunId, priorState: currentState, attemptCount: priorAttemptCount },
-            };
-          }
-          if (currentState !== 'pending') {
-            return { claimed: false, reason: 'not-pending' };
-          }
-          if (data.status !== 'processed') {
-            tx.update(docRef, {
-              summaryState: 'skipped' satisfies SummaryState,
-              summaryStateUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
-            });
-            return { claimed: false, reason: 'not-processed' };
-          }
-          tx.update(docRef, {
-            summaryState: 'processing' satisfies SummaryState,
-            summaryRunId: runId,
-            summaryStateUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
-            summaryAttemptCount: admin.firestore.FieldValue.increment(1),
-          });
+        // ambiguous commit後の再実行: 自分自身のclaimが既にcommit済み(冪等復帰)。
+        // このパスではsummaryAttemptCountは既に前回の呼出しでincrement済みのため、
+        // 再度incrementせず現在値をそのまま返す。
+        if (currentState === 'processing' && data.summaryRunId === runId) {
           return {
             claimed: true,
-            claim: { runId, ocrRunId: currentOcrRunId, priorState: currentState, attemptCount: priorAttemptCount + 1 },
+            claim: {
+              runId,
+              ocrRunId: currentOcrRunId,
+              priorState: currentState,
+              attemptCount: priorAttemptCount,
+              manualRequestedAtMs,
+            },
           };
         }
-
-        // mode === 'manual': 無条件preempt
+        if (currentState !== 'pending') {
+          return { claimed: false, reason: 'not-pending' };
+        }
+        if (data.status !== 'processed') {
+          tx.update(docRef, {
+            summaryState: 'skipped' satisfies SummaryState,
+            summaryStateUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            summaryManualRequestedAt: admin.firestore.FieldValue.delete(),
+          });
+          return { claimed: false, reason: 'not-processed', manualRequestedAtMs };
+        }
         tx.update(docRef, {
           summaryState: 'processing' satisfies SummaryState,
           summaryRunId: runId,
@@ -127,7 +132,13 @@ export async function claimSummaryRun(
         });
         return {
           claimed: true,
-          claim: { runId, ocrRunId: currentOcrRunId, priorState: currentState, attemptCount: priorAttemptCount + 1 },
+          claim: {
+            runId,
+            ocrRunId: currentOcrRunId,
+            priorState: currentState,
+            attemptCount: priorAttemptCount + 1,
+            manualRequestedAtMs,
+          },
         };
       }),
     SUMMARY_TX_RETRY_ATTEMPTS,
@@ -189,6 +200,9 @@ export async function commitSummaryResult(
     summaryStateUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
     summaryError: null,
     summaryErrorKind: null,
+    // 手動依頼の印は終端で削除する(寿命の定義、PR-C)。後日のOCR再処理で古い印が残ると、
+    // 手動優先キューへ誤って載り、計測も歪むため。
+    summaryManualRequestedAt: admin.firestore.FieldValue.delete(),
   }));
 }
 
@@ -210,52 +224,12 @@ export async function recordSummaryFailure(
     summaryStateUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
     summaryError: failure.message,
     summaryErrorKind: failure.kind,
+    // 'pending'(再試行)の間は手動依頼の印を保つ(優先キューに残す)。終端(error/skipped)で削除する。
+    ...(failure.state === 'pending' ? {} : { summaryManualRequestedAt: admin.firestore.FieldValue.delete() }),
   }));
 }
 
-/**
- * 手動claim(`regenerateSummary`)が失敗した際、preempt前の状態へ復元する。
- * 復元自体の失敗はcaller側でログのみに留めること(元のエラーの伝播を妨げないため)。
- */
-export async function releaseManualSummaryRun(
-  firestore: admin.firestore.Firestore,
-  docRef: FirebaseFirestore.DocumentReference,
-  claim: SummaryRunClaim,
-  kind: SummaryErrorKind
-): Promise<void> {
-  const expectation = toExpectation(docRef.id, claim);
-  await withOwnershipCheckedTransaction(firestore, docRef, expectation, () => {
-    if (claim.priorState === null) {
-      return {
-        summaryState: admin.firestore.FieldValue.delete(),
-        summaryRunId: admin.firestore.FieldValue.delete(),
-        summaryStateUpdatedAt: admin.firestore.FieldValue.delete(),
-        summaryError: admin.firestore.FieldValue.delete(),
-        summaryErrorKind: admin.firestore.FieldValue.delete(),
-        summaryProvider: admin.firestore.FieldValue.delete(),
-        summaryAttemptCount: admin.firestore.FieldValue.delete(),
-      };
-    }
-    if (claim.priorState === 'processing') {
-      // preempt前にバッチ実行中だった: そのバッチ実行はもはや所有権を持たないため、
-      // 通常のcommit/recordSummaryFailureでは検出されない。ここで明示的にerror化する。
-      return {
-        summaryState: 'error' satisfies SummaryState,
-        summaryRunId: null,
-        summaryStateUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        summaryError: 'Preempted by a manual regeneration request while a batch run was in progress',
-        summaryErrorKind: kind,
-      };
-    }
-    return {
-      summaryState: claim.priorState satisfies SummaryState,
-      summaryRunId: null,
-      summaryStateUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    };
-  });
-}
-
-/** `summaryState`関連7フィールドの名前(バックフィル防止判定・後方互換クリーンアップで使う)。 */
+/** `summaryState`関連8フィールドの名前(バックフィル防止判定・後方互換クリーンアップで使う)。 */
 const SUMMARY_STATE_FIELD_NAMES = [
   'summaryState',
   'summaryRunId',
@@ -264,6 +238,7 @@ const SUMMARY_STATE_FIELD_NAMES = [
   'summaryErrorKind',
   'summaryProvider',
   'summaryAttemptCount',
+  'summaryManualRequestedAt',
 ] as const;
 
 /**
@@ -291,6 +266,7 @@ export function buildOcrCompletionSummaryStateFields(
       summaryErrorKind: admin.firestore.FieldValue.delete(),
       summaryProvider: admin.firestore.FieldValue.delete(),
       summaryAttemptCount: admin.firestore.FieldValue.delete(),
+      summaryManualRequestedAt: admin.firestore.FieldValue.delete(),
     };
   }
   return {
@@ -301,6 +277,8 @@ export function buildOcrCompletionSummaryStateFields(
     summaryError: admin.firestore.FieldValue.delete(),
     summaryErrorKind: admin.firestore.FieldValue.delete(),
     summaryProvider: admin.firestore.FieldValue.delete(),
+    // 自動生成(OCR完了時のpending)は手動依頼ではない。古い印が残っていれば消す。
+    summaryManualRequestedAt: admin.firestore.FieldValue.delete(),
   };
 }
 
@@ -354,7 +332,10 @@ export async function rescueStuckSummaryDocs(
     const docId = docSnapshot.id;
     const docRef = firestore.doc(`documents/${docId}`);
     try {
+      // transactionが再試行されても最後の実行の値が残るよう、transaction外で宣言して都度上書きする。
+      let manualRequestedAtMs: number | null = null;
       const fatal = await firestore.runTransaction(async (tx) => {
+        manualRequestedAtMs = null;
         const fresh = await tx.get(docRef);
         if (!fresh.exists) return null;
         const data = fresh.data()!;
@@ -366,7 +347,9 @@ export async function rescueStuckSummaryDocs(
         const attemptCount = (data.summaryAttemptCount as number) || 0;
         const fatalReached = attemptCount >= MAX_SUMMARY_ATTEMPTS || opts.l1 === 'none';
         if (fatalReached) {
+          manualRequestedAtMs = readManualRequestedAtMs(data);
           tx.update(docRef, {
+            summaryManualRequestedAt: admin.firestore.FieldValue.delete(),
             summaryState: 'error' satisfies SummaryState,
             summaryRunId: null,
             summaryStateUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -386,8 +369,19 @@ export async function rescueStuckSummaryDocs(
         return false;
       });
 
-      if (fatal === true) result.errored++;
-      else if (fatal === false) result.rescued++;
+      if (fatal === true) {
+        result.errored++;
+        // 手動依頼が終端errorで確定した場合も、1依頼につき1行の計測ログを残す(通常ループ外の経路)。
+        logManualSummaryResult({
+          functionName: 'rescueStuckSummaryDocs',
+          documentId: docId,
+          outcome: 'error',
+          kind: 'unknown',
+          provider: null,
+          requestedAtMs: manualRequestedAtMs,
+          nowMs: opts.now(),
+        });
+      } else if (fatal === false) result.rescued++;
     } catch (err) {
       console.error(`Failed to rescue stuck summary document ${docId}:`, err);
       await safeLogError({

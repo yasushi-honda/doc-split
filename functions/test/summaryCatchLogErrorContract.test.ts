@@ -33,14 +33,11 @@ import { SAFE_LOG_ERROR_CALL } from './helpers/patterns';
  */
 const SUMMARY_CATCH_ANCHORS = [
   {
+    // PR-C: regenerateSummaryは登録のみ(要約を生成しない)。登録(Firestore transaction)の想定外失敗が
+    // 握りつぶされず、errors collection + 通知に残ることを固定する。
     file: 'src/ocr/regenerateSummary.ts',
-    anchor: 'generateSummaryCore(',
-    context: 'regenerateSummary rethrow-preceding catch',
-  },
-  {
-    file: 'src/ocr/regenerateSummary.ts',
-    anchor: 'commitSummaryResult(',
-    context: 'regenerateSummary commit-failure catch (ADR-0027 PR4、silent-failure-hunter/code-reviewer指摘反映)',
+    anchor: 'enqueueManualSummary(',
+    context: 'regenerateSummary enqueue catch (PR-C)',
   },
 ] as const;
 

@@ -129,6 +129,16 @@ describe('firestoreToDocument', () => {
       expect(result.summaryAttemptCount).toBe(0)
     })
 
+    // 手動依頼の印(summaryManualRequestedAt)。マッピング漏れだとポーリング短縮の判定が常に偽になる(#178教訓)
+    it('summaryManualRequestedAt(Timestamp)を変換し、未設定ならundefined、nullはnullのまま保持する', () => {
+      const ts = Timestamp.now()
+      expect(firestoreToDocument('doc-001', { ...baseFirestoreData, summaryManualRequestedAt: ts }).summaryManualRequestedAt).toBe(ts)
+      expect(firestoreToDocument('doc-001', baseFirestoreData).summaryManualRequestedAt).toBeUndefined()
+      expect(
+        firestoreToDocument('doc-001', { ...baseFirestoreData, summaryManualRequestedAt: null }).summaryManualRequestedAt
+      ).toBeNull()
+    })
+
     it('AI要約の状態フィールド7件が未設定の場合は undefined (ADR-0027 PR4c)', () => {
       const result = firestoreToDocument('doc-001', baseFirestoreData)
       expect(result.summaryState).toBeUndefined()
@@ -646,6 +656,13 @@ describe('getReprocessClearFields (Issue #215: 旧3キー + 新summary 全て de
     expect(fields).toHaveProperty('summaryAttemptCount')
   })
 
+  // 手動要約依頼の印は再処理(OCRやり直し)で残すと、古い依頼が新OCR結果に対する依頼として
+  // 残りポーリング間隔・表示に影響するため他のsummary状態と同様にクリアする
+  it('summaryManualRequestedAtをクリア対象に含む(deleteField)', () => {
+    const fields = getReprocessClearFields()
+    expect(fields).toHaveProperty('summaryManualRequestedAt')
+  })
+
   // ADR-0022 Phase1 code-review xhigh指摘対応(2026-07-21): driveFileId は意図的に
   // クリア対象から除外する。削除すると再エクスポート時に旧Driveファイルへの参照が
   // 失われ、フォルダパスが変わる訂正で旧フォルダに孤児ファイルが残置される(誤配置)。
@@ -817,8 +834,21 @@ describe('computeDocumentRefetchInterval (ADR-0027 PR4c: OCR + AI要約状態の
     expect(computeDocumentRefetchInterval({ ...baseDoc, summaryState: 'processing' })).toBe(5000)
   })
 
-  it('summaryState===pendingの場合は60000ms', () => {
+  it('summaryState===pendingかつ手動依頼の印なし(自動由来)の場合は従来どおり60000ms', () => {
     expect(computeDocumentRefetchInterval({ ...baseDoc, summaryState: 'pending' })).toBe(60000)
+    expect(computeDocumentRefetchInterval({ ...baseDoc, summaryState: 'pending', summaryManualRequestedAt: null })).toBe(60000)
+  })
+
+  it('summaryState===pendingかつsummaryManualRequestedAtあり(手動依頼中)の場合は10000ms', () => {
+    expect(
+      computeDocumentRefetchInterval({ ...baseDoc, summaryState: 'pending', summaryManualRequestedAt: Timestamp.now() })
+    ).toBe(10000)
+  })
+
+  it('手動依頼の印があってもsummaryState===processingなら5000ms、終端(done)なら印が残っていてもfalse', () => {
+    const ts = Timestamp.now()
+    expect(computeDocumentRefetchInterval({ ...baseDoc, summaryState: 'processing', summaryManualRequestedAt: ts })).toBe(5000)
+    expect(computeDocumentRefetchInterval({ ...baseDoc, summaryState: 'done', summaryManualRequestedAt: ts })).toBe(false)
   })
 
   it('OCR完了かつsummaryStateがdone/error/skipped/未設定の場合はfalse', () => {

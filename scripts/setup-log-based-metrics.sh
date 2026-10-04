@@ -107,6 +107,15 @@ METRICS=(
   #   サイズ超過の判定関数が SDK/バックエンドの文言変更で外れた場合)。発生 0 が正常なので通常のアラートを付ける。
   "search_index_token_skipped|高頻度トークンが1MiB上限に達してスキップされた(Issue #984。kanameoneでは段階2まで常時発生が正常、アラートなし)|resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"ondocumentwritesearchindex\" AND textPayload:\"[searchIndexer] token skipped: document size limit\""
   "search_index_write_failed|サイズ超過以外の検索インデックス書込み失敗(Issue #984。発生0が正常)|resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"ondocumentwritesearchindex\" AND textPayload:\"[searchIndexer] index write failed\""
+  # PR-C(要約を手動・非同期へ): 手動依頼の件数・終端結果・英字混入・バッチ失敗を数える。固定接頭辞のログ(引数1個の
+  # 単一文字列の console.log/warn/error)を textPayload で検知する(severity条件は付けない、上記と同じ理由)。
+  # アラートを付けるのは summary_batch_fatal のみ(バッチが例外で落ちた=インデックス欠落・設定不備などの構造的失敗)。
+  # 残りは利用実態の観測用(アラートなし)。latencyは summary_manual_result のログ行の latencyMs= を
+  # `gcloud logging read` で集計する(分布メトリクスは作らない)。
+  "summary_manual_requested|要約の手動依頼の受付(PR-C。利用実態の観測用、アラートなし)|resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"regeneratesummary\" AND textPayload:\"summary_manual_requested\""
+  "summary_manual_result|要約の手動依頼が終端(done/error/skipped)に達した(PR-C。outcome=・kind=・latencyMs= を含む。アラートなし)|resource.type=\"cloud_run_revision\" AND textPayload:\"summary_manual_result\""
+  "summary_language_mix|要約への英単語混入の検知(PR-C第1段階、ログのみ。誤検知率を測ってブロック化を判断する。アラートなし)|resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"generatesummarybatch\" AND textPayload:\"language_mix_suspected\""
+  "summary_batch_fatal|generateSummaryBatchが例外で落ちた(PR-C。Firestoreインデックス欠落・設定不備など。1分ごとに起動するため発生すると継続する)|resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"generatesummarybatch\" AND textPayload:\"[generateSummaryBatch] Fatal error\""
 )
 
 # ==================================================
@@ -238,7 +247,7 @@ if [ -z "$DRY" ]; then
   echo "メトリクス:"
   gcloud logging metrics list \
     --project="$PROJECT_ID" \
-    --filter="name=(searchindex_oom OR ocr_page_truncated OR ocr_aggregate_truncated OR summary_truncated OR search_index_silent_failure OR drive_folder_divergent OR drive_folder_divergent_record_failed OR claim_divergent_backlog_stale OR processocr_completed OR processocr_error OR search_index_token_skipped OR search_index_write_failed OR processocr_request_timeout)" \
+    --filter="name=(searchindex_oom OR ocr_page_truncated OR ocr_aggregate_truncated OR summary_truncated OR search_index_silent_failure OR drive_folder_divergent OR drive_folder_divergent_record_failed OR claim_divergent_backlog_stale OR processocr_completed OR processocr_error OR search_index_token_skipped OR search_index_write_failed OR processocr_request_timeout OR summary_manual_requested OR summary_manual_result OR summary_language_mix OR summary_batch_fatal)" \
     --format="table(name,description.segment(0,60))"
   echo ""
   echo "アラートポリシー:"

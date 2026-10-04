@@ -238,6 +238,7 @@ export function firestoreToDocument(id: string, data: Record<string, unknown>): 
     summaryErrorKind: data.summaryErrorKind as Document['summaryErrorKind'],
     summaryProvider: data.summaryProvider as Document['summaryProvider'],
     summaryAttemptCount: data.summaryAttemptCount as number | undefined,
+    summaryManualRequestedAt: data.summaryManualRequestedAt as Timestamp | null | undefined,
   }
 }
 
@@ -426,6 +427,9 @@ export function getReprocessClearFields(preserveDistributionFields: boolean = fa
     summaryErrorKind: df,
     summaryProvider: df,
     summaryAttemptCount: df,
+    // 手動要約依頼の印。再処理で残すと古い依頼がポーリング間隔・表示に影響するため消す
+    // (firestore.rulesはdeleteFieldのみ許可、値の書込みは不可)
+    summaryManualRequestedAt: df,
     ocrExtraction: df,
     pageResults: df,
     // 表示用ファイル名（#178 displayFileName自動生成）
@@ -986,7 +990,9 @@ export function computeDocumentRefetchInterval(doc: Document | null): number | f
     return 5000 // バッチclaim/手動生成中(ADR-0027 PR4c)
   }
   if (doc.summaryState === 'pending') {
-    return 60000 // 自動生成待ち。バッチは60分間隔のため頻繁なポーリングは不要(ADR-0027 PR4c)
+    // 手動依頼中(summaryManualRequestedAtあり)はバッチ(1分ごと、直列)が拾うまで数分〜10分で
+    // 完了するため10秒間隔で追従する。印のない自動由来のpendingは従来どおり60秒(頻繁なポーリング不要)。
+    return doc.summaryManualRequestedAt ? 10000 : 60000
   }
   return false
 }

@@ -1,8 +1,10 @@
 /**
- * AI要約のOCR完了イベント駆動バッチ処理 (ADR-0027 PR4)
+ * AI要約の非同期バッチ処理 (ADR-0027 PR4、PR-Cで手動依頼中心に再設計)
  *
- * Cloud Scheduler定期ポーリング → `summaryState=='pending'`の文書を逐次claim・生成・
- * commitする。`processOCR.ts`(ポーリング+claim+逐次処理)と同じ設計思想だが、
+ * Cloud Scheduler定期ポーリング(1分ごと) → `summaryState=='pending'`の文書を逐次claim・生成・
+ * commitする。要約は「手動を基本」(PR-C)のため、実行対象は`summaryManualRequestedAt`の印を持つ
+ * 手動依頼が中心で、`settings/features.autoSummaryOnOcr`が有効な間だけ印のないpending(自動由来)も
+ * 残りの枠で処理する。`processOCR.ts`(ポーリング+claim+逐次処理)と同じ設計思想だが、
  * 1文書の生成が最大`SARASHINA_SUMMARY_CONFIG.requestTimeoutMs`(620秒)かかりうるため、
  * ソフトデッドライン(`SUMMARY_BATCH_SOFT_DEADLINE_MS`)で早期打ち切りする点が異なる。
  */
@@ -15,8 +17,10 @@ import { SARASHINA_SUMMARY_CONFIG, type SummaryProviderSetting } from '../utils/
 import { getSarashinaSummaryGate } from '../utils/featureFlags';
 import { generateSummaryForProvider, type SummaryPassProvider } from './summaryPass';
 import { loadOcrTextForSummary } from './summaryOcrTextLoader';
-import { MIN_OCR_LENGTH_FOR_SUMMARY, MAX_SUMMARY_INPUT_LENGTH } from './summaryPromptBuilder';
+import { MIN_OCR_LENGTH_FOR_SUMMARY } from './summaryPromptBuilder';
 import { scanSummaryForFabrication, type FabricationScanResult } from '../../../shared/summaryFabricationScan';
+import { scanSummaryForForeignWords } from '../../../shared/summaryLanguageMixScan';
+import { logManualSummaryResult } from './summaryManualMetrics';
 import {
   claimSummaryRun,
   commitSummaryResult,
@@ -51,6 +55,8 @@ export interface SummaryBatchStats {
    * 区別して観測できるようにするため、ADR-0027 PR5 D1対応)。
    */
   fabricationRetried: number;
+  /** 英字混入スキャナ(第1段階はログのみ、要約は保存する)が検知した件数。 */
+  languageMixDetected: number;
 }
 
 function emptyStats(): SummaryBatchStats {
@@ -64,6 +70,7 @@ function emptyStats(): SummaryBatchStats {
     rescued: 0,
     rescueErrored: 0,
     fabricationRetried: 0,
+    languageMixDetected: 0,
   };
 }
 
@@ -113,6 +120,18 @@ async function recordFailureOrCountSuperseded(
 ): Promise<void> {
   try {
     await recordSummaryFailure(firestore, docRef, claim, failure);
+    if (failure.state !== 'pending') {
+      // 終端(error/skipped)。印はrecordSummaryFailureが削除済みで、1依頼につき1行だけ計測ログを出す。
+      logManualSummaryResult({
+        functionName: FUNCTION_NAME,
+        documentId: docRef.id,
+        outcome: failure.state,
+        kind: failure.kind,
+        provider: null,
+        requestedAtMs: claim.manualRequestedAtMs,
+        nowMs: Date.now(),
+      });
+    }
   } catch (err) {
     if (err instanceof SummarySupersededError) {
       stats.superseded++;
@@ -181,10 +200,13 @@ async function runSummaryBatchInner(deps: RunSummaryBatchDeps): Promise<SummaryB
 
   // L2ゲート(Firestoreフラグ+許可リスト)はL1='sarashina'の場合のみ適用する
   // (resolveSummaryProviderと同じ設計。L1='gemini'は明示的なロールバック運用のため
-  // L2を経由させない)。
+  // L2のenabled/allowlistを経由させない)。自動生成フラグ(autoSummaryOnOcr)だけは、どちらの
+  // L1でも同じsnapshotから読む。
   let allowlist: string[] | null = null;
+  let autoEnabled = false;
+  const gate = await getGate(firestore);
+  autoEnabled = gate.autoOnOcr === true;
   if (l1Provider === 'sarashina') {
-    const gate = await getGate(firestore);
     if (!gate.enabled) {
       console.log(`[${FUNCTION_NAME}] sarashinaSummary gate disabled, pausing queue for this tick`);
       return stats;
@@ -193,17 +215,38 @@ async function runSummaryBatchInner(deps: RunSummaryBatchDeps): Promise<SummaryB
   }
 
   const startedAt = now();
-  const pendingSnap = await firestore
+  // 実行対象(PR-C): 手動依頼の印(summaryManualRequestedAt)を持つpendingを依頼順に取得する
+  // (印のない文書はorderByの対象外になる=過去の自動・canary由来のpendingは実行されない)。
+  const manualSnap = await firestore
     .collection('documents')
     .where('summaryState', '==', 'pending')
-    .orderBy('updatedAt', 'asc')
+    .orderBy('summaryManualRequestedAt', 'asc')
     .limit(limit)
     // 参照のみ取得(egress削減、ADR-0018方針)。claim transaction内で改めて最新値を読む。
     .select()
     .get();
+  const docs = [...manualSnap.docs];
+
+  if (autoEnabled && docs.length < limit) {
+    // 自動生成が有効な間だけ、残りの枠を従来のupdatedAt順で埋める。手動依頼の文書が先頭に
+    // 含まれうるため、重複を除いた結果がlimit件に満たないことがないよう多めに取得する。
+    const autoSnap = await firestore
+      .collection('documents')
+      .where('summaryState', '==', 'pending')
+      .orderBy('updatedAt', 'asc')
+      .limit(limit + docs.length)
+      .select()
+      .get();
+    const seen = new Set(docs.map((d) => d.id));
+    for (const candidate of autoSnap.docs) {
+      if (docs.length >= limit) break;
+      if (seen.has(candidate.id)) continue;
+      seen.add(candidate.id);
+      docs.push(candidate);
+    }
+  }
 
   const provider: SummaryPassProvider = l1Provider === 'gemini' ? 'gemini' : 'sarashina';
-  const docs = pendingSnap.docs;
 
   for (let i = 0; i < docs.length; i++) {
     if (now() - startedAt >= softDeadlineMs) {
@@ -220,22 +263,50 @@ async function runSummaryBatchInner(deps: RunSummaryBatchDeps): Promise<SummaryB
       // 無条件updateだと、この間に手動再生成がclaimした文書(summaryState:'processing')を
       // 'skipped'へ上書きしてしまい、手動側のcommit時の所有権チェック(state-mismatch)で
       // 正当な結果が破棄される。トランザクション内で'pending'のままであることを再確認する。
+      let skippedRequestedAtMs: number | null = null;
       const stillPending = await firestore.runTransaction(async (tx) => {
+        skippedRequestedAtMs = null;
         const fresh = await tx.get(docRef);
         if (!fresh.exists || fresh.data()?.summaryState !== 'pending') return false;
+        const requestedAt = fresh.data()?.summaryManualRequestedAt as FirebaseFirestore.Timestamp | undefined;
+        skippedRequestedAtMs = requestedAt && typeof requestedAt.toMillis === 'function' ? requestedAt.toMillis() : null;
         tx.update(docRef, {
           summaryState: 'skipped',
           summaryStateUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          // 手動依頼の印は終端で削除する(skippedも終端)。
+          summaryManualRequestedAt: admin.firestore.FieldValue.delete(),
         });
         return true;
       });
-      if (stillPending) stats.skipped++;
+      if (stillPending) {
+        stats.skipped++;
+        logManualSummaryResult({
+          functionName: FUNCTION_NAME,
+          documentId: docId,
+          outcome: 'skipped',
+          kind: null,
+          provider: null,
+          requestedAtMs: skippedRequestedAtMs,
+          nowMs: Date.now(),
+        });
+      }
       continue;
     }
 
-    const claimResult = await claimSummaryRun(firestore, docRef, 'batch');
+    const claimResult = await claimSummaryRun(firestore, docRef);
     if (!claimResult.claimed) {
-      if (claimResult.reason === 'not-processed') stats.skipped++;
+      if (claimResult.reason === 'not-processed') {
+        stats.skipped++;
+        logManualSummaryResult({
+          functionName: FUNCTION_NAME,
+          documentId: docId,
+          outcome: 'skipped',
+          kind: null,
+          provider: null,
+          requestedAtMs: claimResult.manualRequestedAtMs,
+          nowMs: Date.now(),
+        });
+      }
       continue;
     }
     stats.claimed++;
@@ -252,17 +323,24 @@ async function runSummaryBatchInner(deps: RunSummaryBatchDeps): Promise<SummaryB
           message: 'OCR結果を読み込めなかったため要約を生成できません',
         });
         stats.skipped++;
+        logManualSummaryResult({
+          functionName: FUNCTION_NAME,
+          documentId: docId,
+          outcome: 'skipped',
+          kind: null,
+          provider: null,
+          requestedAtMs: claim.manualRequestedAtMs,
+          nowMs: Date.now(),
+        });
         continue;
       }
 
-      const sentText =
-        loaded.ocrResult.length > MAX_SUMMARY_INPUT_LENGTH
-          ? loaded.ocrResult.slice(0, MAX_SUMMARY_INPUT_LENGTH)
-          : loaded.ocrResult;
-
       const passResult = await summarize(loaded.ocrResult, loaded.documentType, provider);
 
-      const scan = scanSummaryForFabrication(passResult.summary.text, sentText);
+      // 比較対象は実際に送信した原文(context超過時の再短縮を反映済み)。元のOCR全文(の先頭8,000字)と
+      // 比べると、再短縮で送らなかった部分の語を許してしまう。
+      const scanSource = passResult.sentText;
+      const scan = scanSummaryForFabrication(passResult.summary.text, scanSource);
       if (scan.fabricatedCount > 0) {
         // 要約は確率的生成でスキャナも語彙ベースのため、自然な文の誤検知(ADR-0027 PR5 D1:
         // 「指示期間を持つ訪問看護指示書」→「持つ訪問看護」)が起こりうる。1回の検知で終端
@@ -285,10 +363,31 @@ async function runSummaryBatchInner(deps: RunSummaryBatchDeps): Promise<SummaryB
         );
         if (nextState === 'error') {
           incrementErrorKind(stats, 'fabrication_suspected');
+          logManualSummaryResult({
+            functionName: FUNCTION_NAME,
+            documentId: docId,
+            outcome: 'error',
+            kind: 'fabrication_suspected',
+            provider: null,
+            requestedAtMs: claim.manualRequestedAtMs,
+            nowMs: Date.now(),
+          });
         } else {
           stats.fabricationRetried++;
         }
         continue;
+      }
+
+      // 英字混入(原文にない4文字以上の英単語): 第1段階はログのみで、要約は保存する。誤検知率を
+      // 実運用で測ってから、再生成・error化(ブロック)するかを判断する(PR-C)。
+      // 語は原文に存在しない=原文由来のPIIではなくモデルが生成した語のため、ログへ出してよい。
+      const languageMix = scanSummaryForForeignWords(passResult.summary.text, scanSource);
+      if (languageMix.count > 0) {
+        stats.languageMixDetected++;
+        console.warn(
+          `[${FUNCTION_NAME}] language_mix_suspected documentId=${docId} count=${languageMix.count} ` +
+            `words=${languageMix.words.slice(0, 5).join(',')}`
+        );
       }
 
       await commitSummaryResult(firestore, docRef, claim, {
@@ -296,6 +395,15 @@ async function runSummaryBatchInner(deps: RunSummaryBatchDeps): Promise<SummaryB
         provider: passResult.provider,
       });
       stats.done++;
+      logManualSummaryResult({
+        functionName: FUNCTION_NAME,
+        documentId: docId,
+        outcome: 'done',
+        kind: null,
+        provider: passResult.provider,
+        requestedAtMs: claim.manualRequestedAtMs,
+        nowMs: Date.now(),
+      });
     } catch (err) {
       if (err instanceof SummarySupersededError) {
         stats.superseded++;
@@ -366,7 +474,9 @@ async function runSummaryBatchInner(deps: RunSummaryBatchDeps): Promise<SummaryB
 
 export const generateSummaryBatch = onSchedule(
   {
-    schedule: 'every 60 minutes',
+    // 1分ごと(PR-C): 手動依頼は次の実行を待つため、短い間隔にする。maxInstances:1とconcurrency:1で
+    // 同時に走るのは1本だけ(実行中の予定回はスキップされる)。tickの長さはSUMMARY_BATCH_SOFT_DEADLINE_MSで抑える。
+    schedule: 'every 1 minutes',
     region: 'asia-northeast1',
     timeoutSeconds: SUMMARY_BATCH_TIMEOUT_SECONDS,
     memory: '512MiB',
