@@ -292,6 +292,11 @@ function MobileContentPopup({
               summaryDisplay.errorMessage ?? '要約の生成に失敗しました'
             )
           )
+        } else if (summaryDisplay.errorMessage) {
+          // absent(要約なしで依頼がskippedになった): 理由を伝えてボタンを残す
+          wrap.appendChild(
+            makeText('p', 'font-size: 13px; color: #6b7280; margin-bottom: 12px;', summaryDisplay.errorMessage)
+          )
         }
         wrap.appendChild(
           makeGenerateButton(
@@ -682,15 +687,24 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
         'regenerateSummary', { docId: documentId }, { timeout: 30_000 }
       )
       toast.success(SUMMARY_QUEUED_MESSAGE)
-      // キャッシュを無効化して再取得(登録時にsummaryState:'pending'が書かれている)
-      await queryClient.invalidateQueries({ queryKey: ['document', documentId] })
-      await refetch()
     } catch (err) {
       console.error('Failed to request summary:', err)
       // failed-precondition(準備中・対象外・OCR未完了)/not-found等はBE(regenerateSummary.ts)が
       // 具体的な日本語メッセージをHttpsErrorのmessageに詰めて投げる運用のため、
       // getCallableErrorMessage側でそのまま返す(他の呼び出し元と同じ単一の判定ロジックを共有する)。
       toast.error(getCallableErrorMessage(err, '要約の作成依頼に失敗しました'))
+      setIsGeneratingSummary(false)
+      return
+    }
+
+    // 登録は成功済み。以降の再取得の失敗を「依頼に失敗」と誤って伝えない(登録とは別の失敗)。
+    // キャッシュを無効化して再取得(登録時にsummaryState:'pending'が書かれている)
+    try {
+      await queryClient.invalidateQueries({ queryKey: ['document', documentId] })
+      await refetch()
+    } catch (err) {
+      console.error('Failed to refresh document after summary request:', err)
+      toast.error('依頼は受け付けましたが、画面の更新に失敗しました。しばらくしてから開き直してください')
     } finally {
       setIsGeneratingSummary(false)
     }
@@ -1686,6 +1700,9 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                           <div className="flex flex-col gap-2">
                             {summaryDisplay.kind === 'failed' && (
                               <p className="text-xs text-red-500">{summaryDisplay.errorMessage}</p>
+                            )}
+                            {summaryDisplay.kind === 'absent' && summaryDisplay.errorMessage && (
+                              <p className="text-xs text-gray-500">{summaryDisplay.errorMessage}</p>
                             )}
                             <Button
                               variant="outline"

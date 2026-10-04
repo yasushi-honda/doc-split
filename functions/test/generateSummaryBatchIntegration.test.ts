@@ -873,6 +873,127 @@ describe('runSummaryBatch (ADR-0027 PR4)', () => {
       expect((await getDoc('doc-stuck-unmarked-auto')).summaryState).to.equal('pending');
     });
 
+    it('更新対象外フィールドの不変: skipped/done/terminal errorの後も、要約状態系以外のフィールド(verified/customerName/fileName/status)は変わらない', async () => {
+      const unrelated = { verified: true, customerName: '山田 太郎', fileName: 'keep.pdf' };
+      // 依頼順(印の昇順)で skipped → done → terminal error の順に処理される(errorは最後: quotaでバッチが止まるため)
+      await seedDocument('doc-keep-skipped', { ...unrelated, status: 'pending', summaryManualRequestedAt: admin.firestore.Timestamp.fromMillis(1000) });
+      await seedDocument('doc-keep-done', { ...unrelated, summaryManualRequestedAt: admin.firestore.Timestamp.fromMillis(2000) });
+      await seedDocument('doc-keep-error', {
+        ...unrelated,
+        summaryAttemptCount: MAX_SUMMARY_ATTEMPTS - 1,
+        summaryManualRequestedAt: admin.firestore.Timestamp.fromMillis(3000),
+      });
+      let calls = 0;
+      await run({
+        summarize: async () => {
+          calls++;
+          if (calls === 1) return fakeSummarize()();
+          throw Object.assign(new Error('429'), { code: 429 });
+        },
+      });
+      expect((await getDoc('doc-keep-skipped')).summaryState).to.equal('skipped');
+      expect((await getDoc('doc-keep-done')).summaryState).to.equal('done');
+      expect((await getDoc('doc-keep-error')).summaryState).to.equal('error');
+      for (const id of ['doc-keep-skipped', 'doc-keep-done', 'doc-keep-error']) {
+        const data = await getDoc(id);
+        expect(data.verified, id).to.equal(true);
+        expect(data.customerName, id).to.equal('山田 太郎');
+        expect(data.fileName, id).to.equal('keep.pdf');
+      }
+      expect((await getDoc('doc-keep-skipped')).status, 'status!==processedの文書はstatusを書き換えない').to.equal('pending');
+    });
+
+    it('limit境界: 手動依頼がlimit件以上ある場合、自動生成が有効でも印なしpendingは処理しない(自動クエリを発行しない)', async () => {
+      await seedDocument('doc-m1', { summaryManualRequestedAt: admin.firestore.Timestamp.fromMillis(1000) });
+      await seedDocument('doc-m2', { summaryManualRequestedAt: admin.firestore.Timestamp.fromMillis(2000) });
+      await seedDocument('doc-a1', { summaryManualRequestedAt: null });
+      const stats = await run({ limit: 2, getGate: async () => ({ enabled: true, allowlist: null, autoOnOcr: true }) });
+      expect(stats.done).to.equal(2);
+      expect((await getDoc('doc-a1')).summaryState).to.equal('pending');
+    });
+
+    it('limit境界: 手動がlimit-1件のとき、残り1枠だけ自動生成(有効時)の印なしpendingで埋める', async () => {
+      await seedDocument('doc-m1', { summaryManualRequestedAt: admin.firestore.Timestamp.fromMillis(1000) });
+      await seedDocument('doc-a1', { summaryManualRequestedAt: null, updatedAt: admin.firestore.Timestamp.fromMillis(1) });
+      await seedDocument('doc-a2', { summaryManualRequestedAt: null, updatedAt: admin.firestore.Timestamp.fromMillis(2) });
+      const stats = await run({ limit: 2, getGate: async () => ({ enabled: true, allowlist: null, autoOnOcr: true }) });
+      expect(stats.done).to.equal(2);
+      expect((await getDoc('doc-a1')).summaryState).to.equal('done');
+      expect((await getDoc('doc-a2')).summaryState).to.equal('pending');
+    });
+
+    it('OCR読込失敗(Storage上の実体なし)のskippedでも、印が削除され、summary_manual_resultが1行出る', async () => {
+      const docRef = db.collection('documents').doc('doc-load-fail');
+      await docRef.set({
+        fileName: 'test.pdf',
+        status: 'processed',
+        summaryState: 'pending',
+        summaryAttemptCount: 0,
+        summaryManualRequestedAt: admin.firestore.Timestamp.now(),
+        updatedAt: admin.firestore.Timestamp.now(),
+        documentType: '福祉用具貸与確認書',
+        ocrResultUrl: 'gs://test-bucket/ocr-results/doc-load-fail/run-1.txt',
+      });
+      await docRef.collection('detail').doc('main').set({ ocrResult: '' });
+      const missing = {
+        file: () => ({ exists: async () => [false], download: async () => [Buffer.from('')] }),
+      } as unknown as Bucket;
+      const { logs } = await captureLogs(() => run({ bucket: missing }));
+      const data = await getDoc('doc-load-fail');
+      expect(data.summaryState).to.equal('skipped');
+      expect(data.summaryManualRequestedAt).to.equal(undefined);
+      expect(manualResultLogs(logs)).to.have.length(1);
+      expect(manualResultLogs(logs)[0]).to.contain('outcome=skipped');
+    });
+
+    it('rescue: L1=noneかつ印付きのstuck processingは、errorに確定し、印を削除して1行ログを出す', async () => {
+      const stuckAt = admin.firestore.Timestamp.fromMillis(Date.now() - SUMMARY_STUCK_THRESHOLD_MS - 60_000);
+      await seedDocument('doc-stuck-none', {
+        summaryState: 'processing',
+        summaryRunId: 'dead-run',
+        summaryStateUpdatedAt: stuckAt,
+        summaryAttemptCount: 1,
+        summaryManualRequestedAt: admin.firestore.Timestamp.fromMillis(Date.now() - 10_000),
+      });
+      const { logs } = await captureLogs(() => rescueStuckSummaryDocs(db, { now: () => Date.now(), l1: 'none' }));
+      const data = await getDoc('doc-stuck-none');
+      expect(data.summaryState).to.equal('error');
+      expect(data.summaryManualRequestedAt).to.equal(undefined);
+      expect(manualResultLogs(logs)).to.have.length(1);
+    });
+
+    it('rescue: 印なしでも試行回数が上限に達していれば、状態消去ではなくerror確定が優先される(順序の固定)', async () => {
+      const stuckAt = admin.firestore.Timestamp.fromMillis(Date.now() - SUMMARY_STUCK_THRESHOLD_MS - 60_000);
+      await seedDocument('doc-stuck-max', {
+        summaryState: 'processing',
+        summaryRunId: 'dead-run',
+        summaryStateUpdatedAt: stuckAt,
+        summaryAttemptCount: MAX_SUMMARY_ATTEMPTS,
+        summaryManualRequestedAt: null,
+      });
+      const { logs } = await captureLogs(() => rescueStuckSummaryDocs(db, { now: () => Date.now(), l1: 'sarashina', autoEnabled: false }));
+      expect((await getDoc('doc-stuck-max')).summaryState).to.equal('error');
+      expect(manualResultLogs(logs), '印なしは手動依頼ではないため計測ログは出ない').to.have.length(0);
+    });
+
+    it('印の型不正(Timestamp以外)は「印なし」として一貫して扱う: claimのmanualRequestedAtMsはnull、rescueは状態消去', async () => {
+      await seedDocument('doc-garbage-claim', { summaryManualRequestedAt: 'garbage' });
+      const claimResult = await claimSummaryRun(db, db.doc('documents/doc-garbage-claim'));
+      if (!claimResult.claimed) throw new Error('unreachable');
+      expect(claimResult.claim.manualRequestedAtMs).to.equal(null);
+
+      const stuckAt = admin.firestore.Timestamp.fromMillis(Date.now() - SUMMARY_STUCK_THRESHOLD_MS - 60_000);
+      await seedDocument('doc-garbage-rescue', {
+        summaryState: 'processing',
+        summaryRunId: 'dead-run',
+        summaryStateUpdatedAt: stuckAt,
+        summaryAttemptCount: 1,
+        summaryManualRequestedAt: 123,
+      });
+      await rescueStuckSummaryDocs(db, { now: () => Date.now(), l1: 'sarashina', autoEnabled: false });
+      expect((await getDoc('doc-garbage-rescue')).summaryState).to.equal(undefined);
+    });
+
     it('rescue: pendingへ戻す(再試行)場合は印を保つ', async () => {
       const stuckAt = admin.firestore.Timestamp.fromMillis(Date.now() - SUMMARY_STUCK_THRESHOLD_MS - 60_000);
       await seedDocument('doc-stuck-retry', {

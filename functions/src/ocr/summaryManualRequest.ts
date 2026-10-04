@@ -13,6 +13,7 @@ import * as admin from 'firebase-admin';
 import { SARASHINA_SUMMARY_CONFIG, type SummaryProviderSetting } from '../utils/config';
 import { getSarashinaSummaryGate } from '../utils/featureFlags';
 import { logManualSummaryRequested } from './summaryManualMetrics';
+import { readManualRequestedAtMs } from './summaryRunStore';
 import type { SummaryState } from '../../../shared/types';
 
 export type ManualSummaryRejectReason = 'disabled' | 'not-allowed' | 'not-found' | 'not-processed';
@@ -73,7 +74,7 @@ export async function enqueueManualSummary(deps: EnqueueManualSummaryDeps): Prom
     const state = (data.summaryState as SummaryState | undefined) ?? null;
     if (state === 'processing') return true;
     if (state === 'pending') {
-      if (data.summaryManualRequestedAt) return true;
+      if (readManualRequestedAtMs(data) !== null) return true;
       // 印のない既存pending(過去の自動・canary由来)は、手動依頼として実行対象にするため印を付ける。
       // 過去の試行回数(summaryAttemptCount)は引き継がず、手動依頼としての再試行枠(MAX_SUMMARY_ATTEMPTS)を
       // 確保する(古い試行が残っていると、依頼直後の1回の失敗でerrorに確定してしまう)。

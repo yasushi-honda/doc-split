@@ -58,8 +58,12 @@ export type ClaimSummaryRunResult =
   | { claimed: false; reason: 'not-found' | 'not-pending' }
   | { claimed: false; reason: 'not-processed'; manualRequestedAtMs: number | null };
 
-/** `summaryManualRequestedAt`(Timestamp)をepoch msへ。不在・型不一致はnull。 */
-function readManualRequestedAtMs(data: FirebaseFirestore.DocumentData): number | null {
+/**
+ * `summaryManualRequestedAt`(Timestamp)をepoch msへ。不在・型不一致はnull。
+ * 「手動依頼の印があるか」の判定はこの関数に統一する(claim/rescue/enqueueで基準が食い違うと、
+ * 型不正の値で状態ごとに扱いが分かれる)。
+ */
+export function readManualRequestedAtMs(data: FirebaseFirestore.DocumentData): number | null {
   const value = data.summaryManualRequestedAt as FirebaseFirestore.Timestamp | undefined;
   return value && typeof value.toMillis === 'function' ? value.toMillis() : null;
 }
@@ -343,8 +347,10 @@ export async function rescueStuckSummaryDocs(
     try {
       // transactionが再試行されても最後の実行の値が残るよう、transaction外で宣言して都度上書きする。
       let manualRequestedAtMs: number | null = null;
+      let clearedUnmarked = false;
       const fatal = await firestore.runTransaction(async (tx) => {
         manualRequestedAtMs = null;
+        clearedUnmarked = false;
         const fresh = await tx.get(docRef);
         if (!fresh.exists) return null;
         const data = fresh.data()!;
@@ -373,6 +379,7 @@ export async function rescueStuckSummaryDocs(
         if (!opts.autoEnabled && readManualRequestedAtMs(data) === null) {
           // 印のないpending(自動由来)は、自動生成が無効の間は実行されず画面に「作成待ち」だけが残る。
           // 要約本文(summary)・生成元(summaryProvider)は残し、状態系フィールドだけを消す。
+          clearedUnmarked = true;
           tx.update(docRef, {
             summaryState: admin.firestore.FieldValue.delete(),
             summaryRunId: admin.firestore.FieldValue.delete(),
@@ -403,7 +410,13 @@ export async function rescueStuckSummaryDocs(
           requestedAtMs: manualRequestedAtMs,
           nowMs: opts.now(),
         });
-      } else if (fatal === false) result.rescued++;
+      } else if (fatal === false) {
+        result.rescued++;
+        if (clearedUnmarked) {
+          // 自動由来(印なし)の取り残しを要約なしへ戻した記録(件数は`rescued`に含まれるため、文書IDで区別できるようにする)。
+          console.log(`[rescueStuckSummaryDocs] cleared_unmarked_stuck documentId=${docId}`);
+        }
+      }
     } catch (err) {
       console.error(`Failed to rescue stuck summary document ${docId}:`, err);
       await safeLogError({

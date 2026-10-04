@@ -384,13 +384,18 @@ async function runSummaryBatchInner(deps: RunSummaryBatchDeps): Promise<SummaryB
       // 実運用で測ってから、再生成・error化(ブロック)するかを判断する(PR-C)。
       // 語そのものはログへ出さない(件数と文字数のみ): 原文に無い語でも、モデルが氏名等を
       // ローマ字へ音訳した語がPIIになりうるため。誤検知の分析は文字数分布と件数で行う。
-      const languageMix = scanSummaryForForeignWords(passResult.summary.text, scanSource);
-      if (languageMix.count > 0) {
-        stats.languageMixDetected++;
-        console.warn(
-          `[${FUNCTION_NAME}] language_mix_suspected documentId=${docId} count=${languageMix.count} ` +
-            `wordLengths=${languageMix.words.slice(0, 5).map((w) => w.length).join(',')}`
-        );
+      // 診断専用のスキャンが想定外に例外を出しても、有効な要約を失わない(警告ログだけ残して保存を続ける)。
+      try {
+        const languageMix = scanSummaryForForeignWords(passResult.summary.text, scanSource);
+        if (languageMix.count > 0) {
+          stats.languageMixDetected++;
+          console.warn(
+            `[${FUNCTION_NAME}] language_mix_suspected documentId=${docId} count=${languageMix.count} ` +
+              `wordLengths=${languageMix.words.slice(0, 5).map((w) => w.length).join(',')}`
+          );
+        }
+      } catch (scanErr) {
+        console.warn(`[${FUNCTION_NAME}] language_mix_scan_failed documentId=${docId}: ${scanErr instanceof Error ? scanErr.message : String(scanErr)}`);
       }
 
       await commitSummaryResult(firestore, docRef, claim, {

@@ -65,7 +65,7 @@ export interface SummaryDisplayState {
    * 再生成依頼中も旧要約を見せ続けるために保持する(薄く表示する用途)
    */
   summaryText?: string
-  /** kind==='failed'|'generated-with-failure'の場合のユーザー向けメッセージ(失敗理由) */
+  /** kind==='failed'|'generated-with-failure'、および依頼がskippedになった'absent'の場合のユーザー向けメッセージ(理由) */
   errorMessage?: string
 }
 
@@ -175,6 +175,11 @@ export function deriveSummaryDisplayState(input: DeriveSummaryDisplayStateInput)
   const hasEnoughOcrResult = !!ocrResultUrl || (!!ocrResult && ocrResult.length >= SUMMARY_MIN_OCR_LENGTH)
   if (!hasEnoughOcrResult) {
     return { kind: 'unavailable' }
+  }
+
+  if (summaryState === 'skipped') {
+    // 要約なしで依頼が実行されなかった(allowlist外・原文の読込失敗・OCR未完了)。理由を伝え、ボタンは残す。
+    return { kind: 'absent', errorMessage: SUMMARY_SKIPPED_MESSAGE }
   }
 
   return { kind: 'absent' }

@@ -134,6 +134,17 @@ async function main() {
         summaryState: 'skipped',
       }),
     },
+    // kind=6 absent(skipped・理由つき): 要約なしで依頼がskippedになった(allowlist外・読込失敗・OCR未完了)。
+    // 理由を伝えつつ「AI要約を生成」ボタンを残す(silent-failure-hunter H1指摘)
+    {
+      id: 'pr4c-absent-skipped-request',
+      data: baseDocData({
+        id: 'pr4c-absent-skipped-request',
+        fileName: 'E2E_PR4c_absent_skipped_request.pdf',
+        ocrResult: LONG_OCR_TEXT,
+        summaryState: 'skipped',
+      }),
+    },
     // kind=6 absent(ocrResultUrlオフロード): detail側ocrResult='' + 親ocrResultUrl(ADR-0018、10万字超)
     {
       id: 'pr4c-absent-ocr-url-offload',

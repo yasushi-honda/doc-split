@@ -79,6 +79,13 @@ describe('enqueueManualSummary (PR-C)', () => {
     expect(data.status).to.equal('processed');
   });
 
+  it('印の型不正(Timestamp以外)の既存pendingは「印なし」として扱い、正しいTimestampの印へ書き直す(判定をclaim/rescueと一致させる)', async () => {
+    await seed('doc-garbage-marker', { summaryState: 'pending', summaryManualRequestedAt: 'garbage' });
+    const result = await enqueue('doc-garbage-marker');
+    expect(result).to.deep.equal({ alreadyQueued: false });
+    expect((await get('doc-garbage-marker')).summaryManualRequestedAt).to.be.instanceOf(admin.firestore.Timestamp);
+  });
+
   it('再生成: 既存の要約本文は消さず、エラー系フィールドだけを消す(完了時に上書きされるまで旧要約を残す)', async () => {
     await seed('doc-regen', {
       summary: { text: '旧要約', truncated: false },
@@ -99,6 +106,11 @@ describe('enqueueManualSummary (PR-C)', () => {
     expect(data.summaryError).to.equal(undefined);
     expect(data.summaryErrorKind).to.equal(undefined);
     expect(data.summaryRunId).to.equal(undefined);
+    // 更新対象外フィールドの不変
+    expect(data.verified).to.equal(true);
+    expect(data.customerName).to.equal('山田 太郎');
+    expect(data.fileName).to.equal('test.pdf');
+    expect(data.status).to.equal('processed');
   });
 
   it('冪等: processing中の依頼は何も書かずalreadyQueued=trueで返る(二重実行・二重課金を防ぐ)', async () => {
@@ -177,6 +189,34 @@ describe('enqueueManualSummary (PR-C)', () => {
         throw new Error('L1=geminiではL2を読まないはず');
       });
       expect((await get('doc-gemini')).summaryState).to.equal('pending');
+    });
+
+    it('L1=sarashina かつ allowlist=null(制限なし)の場合は、明示的に受け付ける', async () => {
+      await seed('doc-allow-null');
+      const result = await enqueue('doc-allow-null', 'sarashina', async () => ({ enabled: true, allowlist: null, autoOnOcr: false }));
+      expect(result).to.deep.equal({ alreadyQueued: false });
+    });
+
+    it('ゲート取得(getGate)が失敗した場合は例外を伝播し、何も書かない(fail-closed)', async () => {
+      await seed('doc-gate-fail');
+      let caught: unknown;
+      try {
+        await enqueue('doc-gate-fail', 'sarashina', async () => {
+          throw new Error('firestore unavailable');
+        });
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).to.be.instanceOf(Error);
+      expect(caught).to.not.be.instanceOf(ManualSummaryRejectedError);
+      expect((await get('doc-gate-fail')).summaryState).to.equal(undefined);
+    });
+
+    it('オフロード文書(ocrResultUrlあり・detailのocrResultは空)でも受け付ける(登録はOCR本文を読まない)', async () => {
+      await seed('doc-offloaded', { ocrResultUrl: 'gs://bucket/ocr-results/doc-offloaded/run-1.txt' });
+      const result = await enqueue('doc-offloaded');
+      expect(result).to.deep.equal({ alreadyQueued: false });
+      expect((await get('doc-offloaded')).summaryState).to.equal('pending');
     });
 
     it('存在しない書類: not-found', async () => {

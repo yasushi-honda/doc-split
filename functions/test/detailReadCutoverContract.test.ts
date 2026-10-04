@@ -19,6 +19,7 @@ const read = (rel: string) => readFileSync(resolve(process.cwd(), rel), 'utf-8')
 const documentDetailSrc = read('src/ocr/documentDetail.ts');
 const getOcrTextSrc = read('src/ocr/getOcrText.ts');
 const regenerateSummarySrc = read('src/ocr/regenerateSummary.ts');
+const summaryOcrTextLoaderSrc = read('src/ocr/summaryOcrTextLoader.ts');
 const ocrProcessorSrc = read('src/ocr/ocrProcessor.ts');
 const pdfOperationsSrc = read('src/pdf/pdfOperations.ts');
 
@@ -44,6 +45,14 @@ describe('detail/main 読者切替 配線契約 (ADR-0018 Phase D PR-D2)', () =>
       /readDocWithDetail\(db, docRef, \[\s*'ocrResult',\s*'ocrResultUrl',\s*\]\)/
     );
     expect(getOcrTextSrc).to.match(/resolveDetailFields\(detailSnap\.data\(\), data\)/);
+  });
+
+  it('summaryOcrTextLoader: 要約バッチのOCR本文読込は readDocWithDetail + resolveDetailFields 経由(PR-C: regenerateSummaryから移った読者の切替を固定)', () => {
+    // 手動依頼が登録のみになり、要約のOCR本文を読む唯一の読者はバッチ側のloaderになった。
+    // ここが親ocrResultの直読みに退行すると、Phase E後に要約が空本文で生成される。
+    expect(summaryOcrTextLoaderSrc).to.match(/readDocWithDetail\(/);
+    expect(summaryOcrTextLoaderSrc).to.match(/resolveDetailFields\(detailSnap\.data\(\), docData\)/);
+    expect(summaryOcrTextLoaderSrc).to.not.match(/docData\.ocrResult as string/);
   });
 
   it('regenerateSummary: OCR本文を読まない(PR-C: キューへの登録のみ。本文はバッチ側のloadOcrTextForSummaryがdetail/Storageから読む)', () => {

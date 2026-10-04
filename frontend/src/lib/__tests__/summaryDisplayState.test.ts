@@ -81,6 +81,18 @@ describe('deriveSummaryDisplayState', () => {
     expect(result.kind).toBe('absent')
   })
 
+  it('kind=6 absent: 要約なしでsummaryState===skipped(依頼が実行できなかった)なら、理由(errorMessage)を伴ってボタンを残す', () => {
+    // 手動依頼がallowlist外・原文の読込失敗・OCR未完了でskippedになった場合、何も説明せずに元のボタンへ
+    // 戻ると「受付済みのはずが無反応」に見える(silent-failure-hunter H1指摘)。
+    const result = deriveSummaryDisplayState({ ...base, summaryState: 'skipped' })
+    expect(result.kind).toBe('absent')
+    expect(result.errorMessage).toBe(SUMMARY_SKIPPED_MESSAGE)
+  })
+
+  it('kind=6 absent: summaryStateが未設定・doneなら理由は付かない(通常の初期状態)', () => {
+    expect(deriveSummaryDisplayState({ ...base, summaryState: undefined }).errorMessage).toBeUndefined()
+  })
+
   it('kind=5 unavailable: summaryState===skippedかつOCR結果が実際に短い場合', () => {
     const result = deriveSummaryDisplayState({
       ...base,

@@ -105,6 +105,13 @@ test.describe('AI要約 8状態UI (デスクトップ) @emulator', () => {
     await expect(modal.locator('text=要約の対象外、または原文を読み込めなかったため、再作成できませんでした')).toBeVisible();
   });
 
+  test('absent(skipped): 要約なしで依頼が実行されなかった場合は理由を表示し、ボタンも残す', async ({ page }) => {
+    const modal = await openDocByFileName(page, 'E2E_PR4c_absent_skipped_request');
+    await ensureSummaryAccordionExpanded(modal);
+    await expect(modal.locator('text=要約の対象外、または原文を読み込めなかったため、再作成できませんでした')).toBeVisible();
+    await expect(modal.locator('button:has-text("AI要約を生成")')).toBeVisible();
+  });
+
   test('absent(ocrResultUrlオフロード): detail側ocrResultが空でも「AI要約を生成」が出る(要約済みなら先頭8,000字の注記)', async ({ page }) => {
     const modal = await openDocByFileName(page, 'E2E_PR4c_absent_ocr-url-offload');
     await ensureSummaryAccordionExpanded(modal);
