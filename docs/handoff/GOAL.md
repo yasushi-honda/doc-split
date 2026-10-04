@@ -21,13 +21,23 @@ updated: 2026-10-03
 - [x] PR-D0 canary測定スクリプト`check-sarashina-summary-canary`(PR #1118マージ、`run-ops-script.yml`に`--canary-ids`(doc_id入力に最大10件)/`--hours 24`/`--hours 168`を登録。devで2モードとも実機確認済み)
 - [ ] PR-A確認(cocoro): 新リビジョン`processocr-00058`が処理した文書で`candidateGeminiMs`が出ないこと(kanameoneは確認済み。cocoroは切替直後のログが旧リビジョン`00057`のものだけで、新リビジョンの処理文書がまだ無い)
 - [ ] PR-B確認(3環境): デプロイ後の新規処理文書(Pass1を実際に呼んだもの、`pageResults`再利用は除く)の`ocrExtraction.version`が`PP-OCRv6_medium`であること(読み取り専用のrunQuery、識別子と時刻のみ)
-- [ ] PR-D Sarashina要約の本番展開(ADR-0027 PR6): kanameone canary(10件)→全体→cocoro。手順・客観ゲート(1)〜(5)は計画のPR-D節
+- [ ] PR-D Sarashina要約の本番展開(ADR-0027 PR6): **kanameone canary(10件)は完了し、客観ゲート(1)〜(5)を通過**(decision-maker判断。下記「kanameone canary結果」)。**残り: 全体展開(許可リスト解除)→1週間監視→cocoro**。全体展開の前に、処理能力の設計判断(下記)と、canary期間中に`skipped`になった文書の`pending`再投入が必要
 - [ ] PR-C 手動要約の待ち行列化(ADR-0027 PR7、Gemini呼び出しの除去): kanameoneのPR-D canary合格後に本番化
 - [ ] PR-E 掃除・文書・再発防止の契約テスト(`@google/genai`のimportを緊急用経路に限定)
 
-**次の一手**: PR-Dの着手(kanameoneにSarashinaインフラ構築: `scripts/setup-sarashina-summary-infra.sh kanameone`をGHA経由→`deploy-sarashina-summary.yml`初回デプロイ→`kanameone.env`の`SARASHINA_SUMMARY_URL`と`SUMMARY_PROVIDER="sarashina"`宣言→`deploy-functions`)。本番作業のため、番号単位の承認を都度取る。月約$103(kanameone、試算)。
+**次の一手**: decision-makerの判断待ち。①全体展開の進め方(全文書を自動要約するか、手動ボタンのみ・書類種別で絞るか。費用と処理能力に直結、下記)、②処理能力の設計案(A〜D)、③cocoroへ同じ手順を適用する時期。判断が出るまで、kanameoneは`sarashinaSummary=true`・許可リスト10件のまま(新規文書は要約`skipped`、Sarashinaは呼ばれず費用なし)。本番作業は番号単位の承認を都度取る。
 
 **注意(PR-D・PR-Cの設計入力)**: devの実測で、Sarashinaサービス(同時実行1)は429(同時実行上限での拒否)を観測済み、リクエストp95は約138秒(最大約189秒)。canary期間中は許可リスト外の新規文書が`skipped`になり、許可リストを外しても拾われない(`ocrProcessor.ts:603`、`generateSummaryBatch.ts:218`)ため、canaryは短期(1営業日)にし、全体展開の直前に`skipped`文書を`pending`へ戻す再投入が必要。
+
+**kanameone canary結果(2026-10-03 17:01Z〜17:25Z、実文書10件)**:
+- **構築**(PR #1120・#1121): Sarashina Cloud Run(kanameone、8vCPU/32GiB、min-instances=0、max-instances=1、`run.invoker`は`generateSummaryBatch`の実行SAのみ)、`kanameone.env`の宣言、再投入スクリプト`requeue-summary-to-pending`(要約だけを`pending`へ戻す。OCR・確定項目・既存要約本文は更新しない。許可リスト未設定は拒否、L1/L2・適格性・状態一致をトランザクション内でも確認、全か無か)。`run-ops-script.yml`のsarashinaSummary操作ガードをdev限定からdev+kanameoneへ緩和(cocoroは引き続き拒否)。
+- **発見した展開漏れ(修正済み)**: `firestore.indexes.json`の`summaryState`複合インデックス2本が**kanameone・cocoroに無く**(devのみ作成済み)、`generateSummaryBatch`が`FAILED_PRECONDITION`で毎時失敗していた(ログで確認できた最古は2026-10-03 07:01Z)。`deploy-firestore-indexes.yml`で両環境へ展開(追加2本・削除0本を事前に確認、38本/38本READY)。教訓: dev実機で通っていてもindexの本番展開は別途確認が要る。
+- **客観ゲート**(`check-sarashina-summary-canary --canary-ids`、GHA run 37140479052): (1) done 10/10 (2) 捏造疑いの最終error 0件(報告書1件は検知後に再試行し2回目で成功) (3) リクエストp95 241.4秒(p50 92.2秒、200応答12件、429なし) (5) `run.invoker`は実行SAのみで10件の実呼び出しが成功。
+- **ゲート(4) 原文照合**: decision-makerが照合表で目視(実文書はClaude・Codex・pii-geminiには渡していない。介護記録=要配慮個人情報で`pii-gemini`の範囲外)。必須5項目のカバー率100%(○30/×0/除外20)。捏造欄は1件(居宅療養管理指導9ページ: 要約に原文・OCRに無い外国語句「folgerende medical instructions」が混入。固有名詞・金額・日付ではなく文脈上は正しい表現とdecision-makerが判断)。サービス提供票11ページは入力上限で要約が部分的(許容)。**decision-maker判断で「十分な結果」としてゲート(4)通過**。
+- **残るリスク(判断の上で承知済み・記録のみ)**: ①金額・状態変化の項目は10件とも該当なしで**未検証**(誤った金額は試せていない) ②言語混入の検知は未実装(本番の捏造スキャナは固有名詞が対象で今回は検知されなかった)。10件では発生率を推定できない ③長文は入力上限で途中までの要約になる(UIで示す仕組みは未実装) ④「AI生成・要確認」の表示は未実装。
+- **処理能力の制約(全体展開前に要判断)**: `generateSummaryBatch`は1回約3件で打ち切られる(ソフトデッドライン約380秒=1800秒−620秒×2−180秒)。60分間隔だと1日約72件で、流入約157件/日(kanameone、直近30日4,701件)に不足し、待ちが毎日約85件ずつ増える。案: A=スケジュール間隔を10分に(約430件/日、費用不変、設定のみ) / B=最悪値の見込みを現実に合わせる(間隔60分で約170件/日) / C=自動要約をやめ手動ボタンのみ(PR-C、ほぼ無料枠内) / D=書類種別で自動要約の対象を絞る。
+- **費用の見直し**(実測p50 92秒・p95 241秒、平均約120秒と仮定、Cloud Run Tier 1公式単価): kanameoneのSarashinaは月$110〜190、PaddleOCR(4vCPU/4GiB、min-instances=1)は約$57(待機分だけで環境ごとに約$52)、合計約$170〜250(約2.5〜3.7万円)。cocoroはPaddleOCR待機費用が大半。Gemini正規移行先(プロビジョンドスループット、最低月$2,200〜3,000、個別契約・キャンセル不可)の1/10以下。非公式のVertex従量(kanameone 2026年8月実績¥19,236)は、塞がれるリスクがあり比較の対象外。ただし自動要約の運用規模は月数万円の上限に近いため、C・Dも費用面で有効。
+- **全体展開前の必須作業**: 許可リスト解除の直前に、canary期間中に`skipped`になった文書(OCR長が十分なもの)を`pending`へ戻す再投入(`skipped`文書は許可リストを外しても拾われない、`generateSummaryBatch.ts:218`)。バッチの処理能力の手当て(上記)。cocoroはインデックス展開済み(2026-10-03)だが、canary自体は未実施。
 
 ## 【完了・2026-09-27】Issue #962対応: withBackoffRetryのリトライ観測性改善+updateErrのSentry送信(PR #1067マージ、現在のミッションとは別件・並行トラック)
 
