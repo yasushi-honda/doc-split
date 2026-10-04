@@ -85,11 +85,13 @@ test('evaluateRequeueEligibility: 存在しない/未処理/要約処理中は�
 test('buildRequeuePlan: 更新内容は要約キュー用の値・時刻・削除の3区分で固定', () => {
   const plan = buildRequeuePlan();
   assert.deepEqual(plan.set, { summaryState: 'pending', summaryAttemptCount: 0 });
-  assert.deepEqual([...plan.serverTimestamps].sort(), ['summaryStateUpdatedAt', 'updatedAt']);
+  // PR-C: 手動依頼の印(summaryManualRequestedAt)も付ける。印がないpendingは、自動生成が無効の間は
+  // バッチが実行せず「作成待ち」のまま残るため。
+  assert.deepEqual([...plan.serverTimestamps].sort(), ['summaryManualRequestedAt', 'summaryStateUpdatedAt', 'updatedAt']);
   assert.deepEqual([...plan.deleteFields].sort(), ['summaryError', 'summaryErrorKind', 'summaryRunId']);
 });
 
-test('buildRequeueUpdate: 書込みキーは宣言した7つだけで、サーバー時刻と削除は番兵に置換される(対象外フィールド不変の担保)', () => {
+test('buildRequeueUpdate: 書込みキーは宣言した8つだけで、サーバー時刻と削除は番兵に置換される(対象外フィールド不変の担保)', () => {
   const TS = Symbol('serverTimestamp');
   const DEL = Symbol('delete');
   const update = buildRequeueUpdate(buildRequeuePlan(), { serverTimestamp: TS, deleteField: DEL });
@@ -97,6 +99,7 @@ test('buildRequeueUpdate: 書込みキーは宣言した7つだけで、サー�
     'summaryAttemptCount',
     'summaryError',
     'summaryErrorKind',
+    'summaryManualRequestedAt',
     'summaryRunId',
     'summaryState',
     'summaryStateUpdatedAt',
@@ -106,6 +109,7 @@ test('buildRequeueUpdate: 書込みキーは宣言した7つだけで、サー�
   assert.equal(update.summaryAttemptCount, 0);
   assert.equal(update.updatedAt, TS);
   assert.equal(update.summaryStateUpdatedAt, TS);
+  assert.equal(update.summaryManualRequestedAt, TS);
   for (const f of ['summaryError', 'summaryErrorKind', 'summaryRunId']) assert.equal(update[f], DEL);
 });
 

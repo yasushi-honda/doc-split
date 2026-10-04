@@ -123,14 +123,14 @@ describe('enqueueManualSummary (PR-C)', () => {
     expect((await get('doc-pending-manual')).summaryManualRequestedAt.toMillis()).to.equal(5000);
   });
 
-  it('印のない既存 pending(過去の自動・canary由来)への依頼は、印だけを付けて実行対象にする(状態・試行回数は変えない)', async () => {
+  it('印のない既存 pending(過去の自動・canary由来)への依頼は、印を付けて実行対象にし、試行回数は0へ戻す(手動依頼の再試行枠を確保する)', async () => {
     await seed('doc-pending-legacy', { summaryState: 'pending', summaryAttemptCount: 1 });
     const result = await enqueue('doc-pending-legacy');
 
     expect(result).to.deep.equal({ alreadyQueued: false });
     const data = await get('doc-pending-legacy');
     expect(data.summaryState).to.equal('pending');
-    expect(data.summaryAttemptCount).to.equal(1);
+    expect(data.summaryAttemptCount).to.equal(0);
     expect(data.summaryManualRequestedAt).to.be.instanceOf(admin.firestore.Timestamp);
   });
 

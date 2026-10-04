@@ -63,7 +63,9 @@ export interface RequeuePlan {
 export function buildRequeuePlan(): RequeuePlan {
   return {
     set: { summaryState: 'pending', summaryAttemptCount: 0 },
-    serverTimestamps: ['summaryStateUpdatedAt', 'updatedAt'],
+    // summaryManualRequestedAt(PR-C): 手動依頼の印。印のないpendingは、自動生成(autoSummaryOnOcr)が
+    // 無効の間はバッチが実行しない(要約キューの実行対象は印のあるpendingだけ)ため、再投入にも付ける。
+    serverTimestamps: ['summaryStateUpdatedAt', 'updatedAt', 'summaryManualRequestedAt'],
     deleteFields: ['summaryError', 'summaryErrorKind', 'summaryRunId'],
   };
 }

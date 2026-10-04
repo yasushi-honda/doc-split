@@ -74,8 +74,13 @@ export async function enqueueManualSummary(deps: EnqueueManualSummaryDeps): Prom
     if (state === 'processing') return true;
     if (state === 'pending') {
       if (data.summaryManualRequestedAt) return true;
-      // 印のない既存pending(過去の自動・canary由来)は、手動依頼として実行対象にするため印だけを付ける。
-      tx.update(docRef, { summaryManualRequestedAt: admin.firestore.FieldValue.serverTimestamp() });
+      // 印のない既存pending(過去の自動・canary由来)は、手動依頼として実行対象にするため印を付ける。
+      // 過去の試行回数(summaryAttemptCount)は引き継がず、手動依頼としての再試行枠(MAX_SUMMARY_ATTEMPTS)を
+      // 確保する(古い試行が残っていると、依頼直後の1回の失敗でerrorに確定してしまう)。
+      tx.update(docRef, {
+        summaryManualRequestedAt: admin.firestore.FieldValue.serverTimestamp(),
+        summaryAttemptCount: 0,
+      });
       return false;
     }
 
