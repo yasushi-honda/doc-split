@@ -1,5 +1,5 @@
 /**
- * AI要約 6状態UI E2Eテスト (ADR-0027 PR4c)
+ * AI要約 8状態UI E2Eテスト (ADR-0027 PR4c)
  *
  * crossreview指摘反映: 既存 mobile-popup.spec.ts はdev本番URL直書き・`@emulator`タグなしのため
  * 回帰保証にならない。本specは`@emulator`タグ + `loginWithTestUser`ヘルパーを使い、
@@ -14,6 +14,10 @@
 
 import { test, expect, Page, Locator } from '@playwright/test';
 import { loginWithTestUser as _loginWithTestUser } from './helpers';
+
+/** summaryDisplayState.tsのSUMMARY_QUEUED_MESSAGEと同文(文言変更時はここも更新する) */
+const QUEUED_MESSAGE =
+  '要約の作成を受け付けました。バックグラウンドで作成するので、他の操作を続けられます(目安: 数分〜10分)。完了すると自動で表示されます';
 
 async function openDocByFileName(page: Page, fileNameSubstring: string) {
   const row = page.locator(`tbody tr:has-text("${fileNameSubstring}")`).first();
@@ -56,23 +60,68 @@ async function ensureSummaryAccordionExpanded(modal: Locator) {
   }
 }
 
-test.describe('AI要約 6状態UI (デスクトップ) @emulator', () => {
+test.describe('AI要約 8状態UI (デスクトップ) @emulator', () => {
   test.beforeEach(async ({ page }) => {
     await _loginWithTestUser(page);
   });
 
   test('generated: 要約本文 + 「再生成」ボタンが表示される', async ({ page }) => {
-    const modal = await openDocByFileName(page, 'E2E_PR4c_generated');
+    const modal = await openDocByFileName(page, 'E2E_PR4c_generated.pdf');
     await ensureSummaryAccordionExpanded(modal);
     await expect(modal.locator('text=PR4c検証用の生成済み要約テキストです。')).toBeVisible();
+    await expect(modal.locator('text=AI生成・要確認')).toBeVisible();
     await expect(modal.locator('button:has-text("再生成")')).toBeVisible();
   });
 
-  test('queued: 「自動生成待ち」文言 + 「今すぐ生成」ボタンが表示される', async ({ page }) => {
+  test('queued: 手動依頼の案内文言が表示され、生成ボタンは出ない(受付済み)', async ({ page }) => {
     const modal = await openDocByFileName(page, 'E2E_PR4c_queued');
     await ensureSummaryAccordionExpanded(modal);
-    await expect(modal.locator('text=自動生成待ちです')).toBeVisible();
-    await expect(modal.locator('button:has-text("今すぐ生成")')).toBeVisible();
+    await expect(modal.locator(`text=${QUEUED_MESSAGE}`)).toBeVisible();
+    await expect(modal.locator('button:has-text("今すぐ生成")')).toHaveCount(0);
+    await expect(modal.locator('button:has-text("AI要約を生成")')).toHaveCount(0);
+  });
+
+  test('queued(再生成依頼中): 案内文言 + 旧要約が薄く保持される', async ({ page }) => {
+    const modal = await openDocByFileName(page, 'E2E_PR4c_regenerate_queued');
+    await ensureSummaryAccordionExpanded(modal);
+    await expect(modal.locator(`text=${QUEUED_MESSAGE}`)).toBeVisible();
+    await expect(modal.locator('text=PR4c検証用の旧要約テキストです。')).toBeVisible();
+  });
+
+  test('generated-with-failure: 旧要約 + 「前回の要約です。今回の再作成は失敗しました」 + 理由 + 「再試行」', async ({ page }) => {
+    const modal = await openDocByFileName(page, 'E2E_PR4c_generated_with_failure');
+    await ensureSummaryAccordionExpanded(modal);
+    await expect(modal.locator('text=PR4c検証用の旧要約テキストです。')).toBeVisible();
+    await expect(modal.locator('text=前回の要約です。今回の再作成は失敗しました')).toBeVisible();
+    await expect(modal.locator('text=固有名詞')).toBeVisible();
+    await expect(modal.locator('button:has-text("再試行")')).toBeVisible();
+  });
+
+  test('generated-with-failure(skipped): 再生成がskippedでも旧要約を「生成済み」に見せず失敗理由を併記する', async ({ page }) => {
+    const modal = await openDocByFileName(page, 'E2E_PR4c_generated_skipped_rerun');
+    await ensureSummaryAccordionExpanded(modal);
+    await expect(modal.locator('text=PR4c検証用の旧要約テキストです。')).toBeVisible();
+    await expect(modal.locator('text=前回の要約です。今回の再作成は失敗しました')).toBeVisible();
+    await expect(modal.locator('text=要約の対象外、または原文を読み込めなかったため、再作成できませんでした')).toBeVisible();
+  });
+
+  test('absent(skipped): 要約なしで依頼が実行されなかった場合は理由を表示し、ボタンも残す', async ({ page }) => {
+    const modal = await openDocByFileName(page, 'E2E_PR4c_absent_skipped_request');
+    await ensureSummaryAccordionExpanded(modal);
+    await expect(modal.locator('text=要約の対象外、または原文を読み込めなかったため、再作成できませんでした')).toBeVisible();
+    await expect(modal.locator('button:has-text("AI要約を生成")')).toBeVisible();
+  });
+
+  test('absent(ocrResultUrlオフロード): detail側ocrResultが空でも「AI要約を生成」が出る(要約済みなら先頭8,000字の注記)', async ({ page }) => {
+    const modal = await openDocByFileName(page, 'E2E_PR4c_absent_ocr-url-offload');
+    await ensureSummaryAccordionExpanded(modal);
+    await expect(modal.locator('button:has-text("AI要約を生成")')).toBeVisible();
+  });
+
+  test('generated(オフロード): 「長い書類のため、先頭約8,000字を要約しています」の注記が出る', async ({ page }) => {
+    const modal = await openDocByFileName(page, 'E2E_PR4c_generated_offload');
+    await ensureSummaryAccordionExpanded(modal);
+    await expect(modal.locator('text=長い書類のため、先頭約8,000字を要約しています')).toBeVisible();
   });
 
   test('failed(fabrication_suspected): 専用エラーメッセージ + 「再試行」ボタンが表示される', async ({ page }) => {
@@ -101,7 +150,7 @@ test.describe('AI要約 6状態UI (デスクトップ) @emulator', () => {
   });
 });
 
-test.describe('AI要約 6状態UI (モバイル) @emulator', () => {
+test.describe('AI要約 8状態UI (モバイル) @emulator', () => {
   test.use({
     viewport: { width: 390, height: 844 },
     userAgent:
@@ -132,15 +181,28 @@ test.describe('AI要約 6状態UI (モバイル) @emulator', () => {
   // 分岐を手組みDOMで実装しており(#193型の重複リスク)、generating以外のkindがモバイル側で
   // 一度も検証されていなかった。デスクトップと同じ代表状態をモバイル側でも検証する。
   test('generated: 要約本文 + 「再生成」ボタンが表示される', async ({ page }) => {
-    const popup = await openMobileSummaryPopup(page, 'E2E_PR4c_generated');
+    const popup = await openMobileSummaryPopup(page, 'E2E_PR4c_generated.pdf');
     await expect(popup.locator('text=PR4c検証用の生成済み要約テキストです。')).toBeVisible();
+    await expect(popup.locator('text=AI生成・要確認')).toBeVisible();
     await expect(popup.locator('button:has-text("再生成")')).toBeVisible();
   });
 
-  test('queued: 「自動生成待ち」文言 + 「今すぐ生成」ボタンが表示される', async ({ page }) => {
+  test('queued: 手動依頼の案内文言が表示され、生成ボタンは出ない', async ({ page }) => {
     const popup = await openMobileSummaryPopup(page, 'E2E_PR4c_queued');
-    await expect(popup.locator('text=自動生成待ちです')).toBeVisible();
-    await expect(popup.locator('button:has-text("今すぐ生成")')).toBeVisible();
+    await expect(popup.locator(`text=${QUEUED_MESSAGE}`)).toBeVisible();
+    await expect(popup.locator('#generate-summary-btn')).toHaveCount(0);
+  });
+
+  test('generated-with-failure: 旧要約 + 失敗併記 + 「再試行」ボタン', async ({ page }) => {
+    const popup = await openMobileSummaryPopup(page, 'E2E_PR4c_generated_with_failure');
+    await expect(popup.locator('text=PR4c検証用の旧要約テキストです。')).toBeVisible();
+    await expect(popup.locator('text=前回の要約です。今回の再作成は失敗しました')).toBeVisible();
+    await expect(popup.locator('button:has-text("再試行")')).toBeVisible();
+  });
+
+  test('generated(オフロード): 先頭約8,000字の注記が出る', async ({ page }) => {
+    const popup = await openMobileSummaryPopup(page, 'E2E_PR4c_generated_offload');
+    await expect(popup.locator('text=長い書類のため、先頭約8,000字を要約しています')).toBeVisible();
   });
 
   test('failed(fabrication_suspected): 専用エラーメッセージ + 「再試行」ボタンが表示される', async ({ page }) => {

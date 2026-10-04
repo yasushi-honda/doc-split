@@ -69,7 +69,12 @@ describe('generateSummaryForProvider (ADR-0027 PR3)', () => {
         },
       });
       expect(calledWith).to.deep.equal([LONG_ENOUGH_OCR, '請求書']);
-      expect(result).to.deep.equal({ provider: 'gemini', summary: injected, finishReason: null });
+      expect(result).to.deep.equal({
+        provider: 'gemini',
+        summary: injected,
+        finishReason: null,
+        sentText: LONG_ENOUGH_OCR.slice(0, 8000),
+      });
     });
   });
 

@@ -170,6 +170,23 @@ devでL2(`settings/features.sarashinaSummary`+allowlist)→L1(`SUMMARY_PROVIDER=
 12. **修正デプロイ後のdev実機smoke観測(2026-09-30、受入証明ではなく観察記録)**: PR #1088のマージ後、dev自動デプロイの反映を`gcloud functions describe generateSummaryBatch`の`updateTime`(デプロイ実行時間帯内、リビジョン`00009`)で確認した。D1のみをPaddle allowlistへ一時登録→`reset-document-to-pending`→OCR完了後に`--remove`で復元(Firestoreを直接読み、`paddleOcrAllowlist`不在・`paddleOcr:true`を独立確認)し、次tickの結果を観測した。結果: D1は**1回目の試行(attempt 1)で`done`**(`summaryProvider=sarashina`、`summaryError`はクリア)、誤検知は**再現せず**(元々約80%の確率で誤検知しないため想定の範囲内)。したがって**再試行(pending化)の実機発火は今回観測できていない**(再試行の挙動はemulatorのintegrationテストで検証済み)。実機で確認できた事実: バッチ統計に新フィールド`fabricationRetried`が出力される(修正版の稼働)、`check-sarashina-summary-status`④に追加した`fabrication_suspected:error`行(`summaryState==error`で絞込み)が動作する。決定論的な誤検知が起きた場合の再試行コスト(最大3回の推論消費)は、実運用で誤検知が発生した際に`fabricationRetried`・構造化ログ(`documentId`・outcome・エラー文)で観測する。
 13. **未実施(decision-maker判断待ち)**: S10(ロールバック手順の実機確認)。dev以外(kanameone/cocoro)への展開(PR6)は別途承認が必要。スキャナ本体(候補抽出・原典照合)の再設計要否は、再試行化後に集まる誤検知データ(`fabricationRetried`・エラー文のsuffix/coreLen)を見て判断する。
 
+### 方針の再転換(非同期自動生成→手動を基本・非同期実行、2026-10-04、PR-C)
+
+上記「非同期自動生成」への転換の後、実利用の計測で前提が変わった。**要約は手動(ボタン)を基本とし、自動生成は見送る**。依頼はキューへの登録だけで即受け付け、生成は非同期に実行する。
+
+**根拠(実測)**: 手動ボタン(`regenerateSummary`)の呼び出しは、kanameone・cocoroのログ保持期間(約95日)で0件(対照の検索関数は300件超)。自動生成が実際に動いていたのは2026-04-15〜07-08(Gemini)のみで、`843d6b67`(Issue #548-B1)でコスト理由により手動のみにされていた。Sarashinaで全件を自動生成すると月約1.2万円(1件約5円、p50 92秒)かかり、利用実績のない機能に固定費を払うことになる。
+
+**確定した設計**:
+- `regenerateSummary`は**登録のみ**(`summaryState:'pending'`+`summaryManualRequestedAt`)。L1/L2ゲート(`none`/無効/allowlist外は準備中・対象外として拒否、Geminiは呼ばない)・冪等(待機中・生成中は何も書かない)・OCR未完了は拒否。同期生成・手動claimのpreemptは廃止。
+- 生成の入口は`generateSummaryBatch`1本。**1分ごと**に起動し、`maxInstances:1`/`concurrency:1`で直列(Sarashinaは同時実行1で、並行は429)。実行対象は**手動依頼の印を持つpending**(依頼順)。`settings/features.autoSummaryOnOcr`が有効な間だけ、残りの枠で印のないpendingも処理する。ソフトデッドラインを380秒→**120秒**に短縮(手動依頼は進行中のtickの終了を待つため)。
+- OCR完了時に`summaryState`を書かない(`autoSummaryOnOcr`が有効な環境を除く)。過去の自動由来で残った印のないpendingは`scripts/clear-unmarked-pending-summary.ts`で消去してから展開する。
+- 手動依頼の印は**終端(done/error/skipped)で削除**する(寿命の定義。再試行でpendingへ戻る間は保つ)。
+- 品質: 捏造・英字混入スキャンの比較対象を**実際に送信したテキスト**にした(context超過時の再短縮を反映)。英字混入(原文にない4文字以上の英単語、canary #7)は**第1段階はログのみ**(`language_mix_suspected`)で、誤検知率を測ってからブロック化を判断する。画面は「AI生成・要確認」ラベルと、8,000字を超える書類の切り詰め注記を表示する。
+- 待ち時間: 依頼から完了まで、p50約3分・p95約8分。画面は「バックグラウンドで作成中・他の操作を続けられる・目安数分〜10分」と案内し、完了はFirestoreの更新で自動表示する(**「即処理開始」ではなく「即受付」**)。
+- 計測: `summary_manual_requested`/`summary_manual_result`(outcome・kind・provider・latencyMs)/`summary_language_mix`/`summary_batch_fatal`(アラートあり)。
+
+**前提の訂正**: 上記「アーキテクチャ方針の転換」の「お客様目線で数分待たされる体験はあり得ない」は、需要を測らずに下した判断だった。自動生成を再開するかは、手動の利用実績(`summary_manual_requested`)を見て判断する(書類種別での絞り込みは、再開時に追加する)。
+
 ## Consequences
 
 **良い影響**:

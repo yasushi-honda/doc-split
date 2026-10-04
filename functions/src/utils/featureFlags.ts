@@ -181,6 +181,11 @@ export interface SarashinaSummaryGate {
    * 不正値(非配列・非string混在)はfail-closedで空配列扱い(全docId拒否)にする。
    */
   allowlist: string[] | null;
+  /**
+   * OCR完了時に自動で要約を生成する(`summaryState:'pending'`を書く)か(`settings/features.autoSummaryOnOcr`、
+   * PR-C)。既定(不在・true以外)は偽=手動のみ。自動を再開する時だけtrueにする。
+   */
+  autoOnOcr: boolean;
 }
 
 /**
@@ -197,18 +202,19 @@ export async function getSarashinaSummaryGate(
   const snap = await db.doc(FEATURE_FLAGS_DOC_PATH).get();
   const data = snap.data();
   const enabled = data?.sarashinaSummary === true;
+  const autoOnOcr = data?.autoSummaryOnOcr === true;
 
   if (!data || !('sarashinaSummaryAllowlist' in data)) {
-    return { enabled, allowlist: null };
+    return { enabled, allowlist: null, autoOnOcr };
   }
   const rawAllowlist = data.sarashinaSummaryAllowlist;
   if (!Array.isArray(rawAllowlist) || rawAllowlist.some((v) => typeof v !== 'string')) {
     console.error(
       `[featureFlags] sarashinaSummaryAllowlist が不正な形式です(配列/文字列以外): ${JSON.stringify(rawAllowlist)}。fail-closedで全docId拒否として扱います。`
     );
-    return { enabled, allowlist: [] };
+    return { enabled, allowlist: [], autoOnOcr };
   }
-  return { enabled, allowlist: rawAllowlist as string[] };
+  return { enabled, allowlist: rawAllowlist as string[], autoOnOcr };
 }
 
 /**

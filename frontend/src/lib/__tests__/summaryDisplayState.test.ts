@@ -8,10 +8,18 @@
  */
 
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname, resolve } from 'node:path'
 import {
   deriveSummaryDisplayState,
   summaryErrorMessage,
   SUMMARY_MIN_OCR_LENGTH,
+  SUMMARY_MAX_INPUT_LENGTH,
+  SUMMARY_QUEUED_MESSAGE,
+  SUMMARY_PREVIOUS_FAILED_MESSAGE,
+  SUMMARY_SKIPPED_MESSAGE,
+  shouldShowSummaryTruncationNotice,
   type DeriveSummaryDisplayStateInput,
 } from '../summaryDisplayState'
 
@@ -52,6 +60,7 @@ describe('deriveSummaryDisplayState', () => {
   it('kind=3 queued: summaryState===pendingの場合', () => {
     const result = deriveSummaryDisplayState({ ...base, summaryState: 'pending' })
     expect(result.kind).toBe('queued')
+    expect(result.summaryText).toBeUndefined()
   })
 
   it('kind=4 failed: summaryState===errorの場合', () => {
@@ -70,6 +79,18 @@ describe('deriveSummaryDisplayState', () => {
   it('kind=6 absent: summaryState===skippedでもOCR結果が十分(100字以上)なら手動生成を許可する', () => {
     const result = deriveSummaryDisplayState({ ...base, summaryState: 'skipped' })
     expect(result.kind).toBe('absent')
+  })
+
+  it('kind=6 absent: 要約なしでsummaryState===skipped(依頼が実行できなかった)なら、理由(errorMessage)を伴ってボタンを残す', () => {
+    // 手動依頼がallowlist外・原文の読込失敗・OCR未完了でskippedになった場合、何も説明せずに元のボタンへ
+    // 戻ると「受付済みのはずが無反応」に見える(silent-failure-hunter H1指摘)。
+    const result = deriveSummaryDisplayState({ ...base, summaryState: 'skipped' })
+    expect(result.kind).toBe('absent')
+    expect(result.errorMessage).toBe(SUMMARY_SKIPPED_MESSAGE)
+  })
+
+  it('kind=6 absent: summaryStateが未設定・doneなら理由は付かない(通常の初期状態)', () => {
+    expect(deriveSummaryDisplayState({ ...base, summaryState: undefined }).errorMessage).toBeUndefined()
   })
 
   it('kind=5 unavailable: summaryState===skippedかつOCR結果が実際に短い場合', () => {
@@ -113,14 +134,81 @@ describe('deriveSummaryDisplayState', () => {
       expect(result.summaryText).toBe('旧要約')
     })
 
-    it('summaryState===errorでも要約ありならgeneratedを優先する(要約本文が最優先)', () => {
+    it('summaryState===errorかつ要約あり → 旧要約を残したままgenerated-with-failure(失敗を隠さない)', () => {
       const result = deriveSummaryDisplayState({
         ...base,
         summaryState: 'error',
         summaryErrorKind: 'blocked',
         summary: { text: '過去に成功した要約', truncated: false },
       })
-      expect(result.kind).toBe('generated')
+      expect(result.kind).toBe('generated-with-failure')
+      expect(result.summaryText).toBe('過去に成功した要約')
+      expect(result.errorMessage).toBe(summaryErrorMessage('blocked'))
+    })
+
+    it('generated-with-failure: summaryErrorKindがnull/undefinedなら汎用の失敗文言', () => {
+      const result = deriveSummaryDisplayState({
+        ...base,
+        summaryState: 'error',
+        summaryErrorKind: null,
+        summary: { text: '旧要約', truncated: false },
+      })
+      expect(result.kind).toBe('generated-with-failure')
+      expect(result.errorMessage).toBe(summaryErrorMessage('unknown'))
+    })
+
+    it('再生成依頼中(pending)かつ要約あり → queuedを優先しつつ旧要約を保持する', () => {
+      const result = deriveSummaryDisplayState({
+        ...base,
+        summaryState: 'pending',
+        summary: { text: '旧要約', truncated: false },
+      })
+      expect(result.kind).toBe('queued')
+      expect(result.summaryText).toBe('旧要約')
+    })
+
+    it('再生成依頼中(pending)かつ要約あり: isDetailErrorでも旧要約を見せ続ける(queued)', () => {
+      const result = deriveSummaryDisplayState({
+        ...base,
+        isDetailError: true,
+        summaryState: 'pending',
+        summary: { text: '旧要約', truncated: false },
+      })
+      expect(result.kind).toBe('queued')
+      expect(result.summaryText).toBe('旧要約')
+    })
+
+    it('ローカル依頼中(isGeneratingSummary)かつ要約あり → generating + 旧要約保持', () => {
+      const result = deriveSummaryDisplayState({
+        ...base,
+        isGeneratingSummary: true,
+        summaryState: 'done',
+        summary: { text: '旧要約', truncated: false },
+      })
+      expect(result.kind).toBe('generating')
+      expect(result.summaryText).toBe('旧要約')
+    })
+
+    it('summaryState===skippedかつ要約ありはgenerated-with-failure(再生成がskippedになっても旧要約を「生成済み」に見せず失敗を伝える)', () => {
+      // 再生成の依頼後、原文を読み込めない・allowlistから外れた等でバッチがskippedにした場合、
+      // 旧要約は温存されるが、今回の依頼は成功していない(codex review P2指摘)。
+      const result = deriveSummaryDisplayState({
+        ...base,
+        summaryState: 'skipped',
+        summaryErrorKind: null,
+        summary: { text: '旧要約', truncated: false },
+      })
+      expect(result.kind).toBe('generated-with-failure')
+      expect(result.summaryText).toBe('旧要約')
+      expect(result.errorMessage).toBe(SUMMARY_SKIPPED_MESSAGE)
+    })
+
+    it('summaryState===done/未設定かつ要約ありはgenerated(summaryText保持、errorMessageなし)', () => {
+      for (const summaryState of ['done', undefined] as const) {
+        const result = deriveSummaryDisplayState({ ...base, summaryState, summary: { text: '要約', truncated: false } })
+        expect(result.kind).toBe('generated')
+        expect(result.errorMessage).toBeUndefined()
+      }
     })
 
     it('isDetailErrorでも要約ありならgeneratedを優先する', () => {
@@ -217,5 +305,133 @@ describe('summaryErrorMessage', () => {
 
   it('undefined: unknownと同じ汎用の失敗文言にフォールバックする(Firestore上の未設定値)', () => {
     expect(summaryErrorMessage(undefined)).toBe(summaryErrorMessage('unknown'))
+  })
+})
+
+describe('オフロード文書(ocrResultUrlあり、detail側ocrResult=\'\')の判定 (ADR-0018 / ADR-0027)', () => {
+  it('ocrResultが空でもocrResultUrlがあればabsent(ボタン表示)', () => {
+    const result = deriveSummaryDisplayState({ ...base, ocrResult: '', ocrResultUrl: 'gs://bucket/ocr/doc.txt' })
+    expect(result.kind).toBe('absent')
+  })
+
+  it('ocrResultがundefinedでもocrResultUrlがあればabsent', () => {
+    const result = deriveSummaryDisplayState({ ...base, ocrResult: undefined, ocrResultUrl: 'gs://bucket/ocr/doc.txt' })
+    expect(result.kind).toBe('absent')
+  })
+
+  it('ocrResultUrlが空文字・null・undefinedなら従来どおりunavailable(OCR空)', () => {
+    for (const ocrResultUrl of ['', null, undefined]) {
+      const result = deriveSummaryDisplayState({ ...base, ocrResult: '', ocrResultUrl })
+      expect(result.kind).toBe('unavailable')
+    }
+  })
+
+  it('ocrResultUrlがあってもisDetailError(detail取得失敗)はdetail-errorのまま(要約なし)', () => {
+    const result = deriveSummaryDisplayState({ ...base, ocrResult: undefined, ocrResultUrl: 'gs://b/o', isDetailError: true })
+    expect(result.kind).toBe('detail-error')
+  })
+
+  it('ocrResultUrlありでも summaryState===error ならfailed、pendingならqueued(状態が優先)', () => {
+    expect(
+      deriveSummaryDisplayState({ ...base, ocrResult: '', ocrResultUrl: 'gs://b/o', summaryState: 'error' }).kind
+    ).toBe('failed')
+    expect(
+      deriveSummaryDisplayState({ ...base, ocrResult: '', ocrResultUrl: 'gs://b/o', summaryState: 'pending' }).kind
+    ).toBe('queued')
+  })
+})
+
+describe('判定順の全組み合わせ(要約あり/なし × summaryState × OCR長 × ocrResultUrl)', () => {
+  const states = [undefined, 'pending', 'processing', 'done', 'error', 'skipped'] as const
+  const ocrCases = [
+    { name: 'OCR99字', ocrResult: 'あ'.repeat(SUMMARY_MIN_OCR_LENGTH - 1), ocrResultUrl: undefined, enough: false },
+    { name: 'OCR100字', ocrResult: 'あ'.repeat(SUMMARY_MIN_OCR_LENGTH), ocrResultUrl: undefined, enough: true },
+    { name: '空+URLなし', ocrResult: '', ocrResultUrl: undefined, enough: false },
+    { name: '空+URLあり', ocrResult: '', ocrResultUrl: 'gs://b/o', enough: true },
+  ]
+
+  for (const summaryState of states) {
+    for (const oc of ocrCases) {
+      it(`要約なし/${String(summaryState)}/${oc.name}`, () => {
+        const { kind } = deriveSummaryDisplayState({
+          ...base,
+          summaryState,
+          ocrResult: oc.ocrResult,
+          ocrResultUrl: oc.ocrResultUrl,
+        })
+        const expected =
+          summaryState === 'processing'
+            ? 'generating'
+            : summaryState === 'pending'
+              ? 'queued'
+              : summaryState === 'error'
+                ? 'failed'
+                : oc.enough
+                  ? 'absent'
+                  : 'unavailable'
+        expect(kind).toBe(expected)
+      })
+
+      it(`要約あり/${String(summaryState)}/${oc.name}(OCR長は無関係)`, () => {
+        const { kind, summaryText } = deriveSummaryDisplayState({
+          ...base,
+          summary: { text: '旧要約', truncated: false },
+          summaryState,
+          ocrResult: oc.ocrResult,
+          ocrResultUrl: oc.ocrResultUrl,
+        })
+        const expected =
+          summaryState === 'processing'
+            ? 'generating'
+            : summaryState === 'pending'
+              ? 'queued'
+              : summaryState === 'error' || summaryState === 'skipped'
+                ? 'generated-with-failure'
+                : 'generated'
+        expect(kind).toBe(expected)
+        expect(summaryText).toBe('旧要約')
+      })
+    }
+  }
+})
+
+describe('案内文言の定数', () => {
+  it('queued案内は受付・バックグラウンド・目安・自動表示を含む', () => {
+    expect(SUMMARY_QUEUED_MESSAGE).toContain('受け付けました')
+    expect(SUMMARY_QUEUED_MESSAGE).toContain('バックグラウンド')
+    expect(SUMMARY_QUEUED_MESSAGE).toContain('数分〜10分')
+    expect(SUMMARY_QUEUED_MESSAGE).toContain('自動で表示')
+  })
+
+  it('旧要約+再生成失敗の文言', () => {
+    expect(SUMMARY_PREVIOUS_FAILED_MESSAGE).toBe('前回の要約です。今回の再作成は失敗しました')
+  })
+
+  it('SUMMARY_MAX_INPUT_LENGTHはbackendのMAX_SUMMARY_INPUT_LENGTHと一致する(契約)', () => {
+    const src = readFileSync(
+      resolve(dirname(fileURLToPath(import.meta.url)), '../../../../functions/src/ocr/summaryPromptBuilder.ts'),
+      'utf8'
+    )
+    const m = src.match(/export const MAX_SUMMARY_INPUT_LENGTH\s*=\s*(\d+)/)
+    expect(m).not.toBeNull()
+    expect(SUMMARY_MAX_INPUT_LENGTH).toBe(Number(m![1]))
+  })
+})
+
+describe('shouldShowSummaryTruncationNotice(先頭約8,000字の注記)', () => {
+  it('8000字ちょうどは注記なし、8001字は注記あり(境界)', () => {
+    expect(shouldShowSummaryTruncationNotice('あ'.repeat(SUMMARY_MAX_INPUT_LENGTH), undefined)).toBe(false)
+    expect(shouldShowSummaryTruncationNotice('あ'.repeat(SUMMARY_MAX_INPUT_LENGTH + 1), undefined)).toBe(true)
+  })
+
+  it('オフロード文書(ocrResultUrlあり)はOCR全文が手元になくても常に注記あり', () => {
+    expect(shouldShowSummaryTruncationNotice('', 'gs://b/o')).toBe(true)
+    expect(shouldShowSummaryTruncationNotice(undefined, 'gs://b/o')).toBe(true)
+  })
+
+  it('OCR未取得・空・URLなしは注記なし', () => {
+    expect(shouldShowSummaryTruncationNotice(undefined, undefined)).toBe(false)
+    expect(shouldShowSummaryTruncationNotice('', null)).toBe(false)
+    expect(shouldShowSummaryTruncationNotice('', '')).toBe(false)
   })
 })

@@ -40,11 +40,15 @@ const CALLER_FILES = ['src/ocr/summaryGenerator.ts'];
 // ADR-0027 PR3: summaryPass.ts(dead code、呼び出し元なし)を追加。gemini経路は
 // lazy require経由でgenerateSummaryCore(をリテラル呼び出しする(DI関数参照のみでは
 // 本契約のgrepが検知できないため)。
-const CORE_CALLERS = ['src/ocr/regenerateSummary.ts', 'src/ocr/summaryPass.ts'];
+// PR-C: regenerateSummary.ts は「キューへの登録のみ」になり要約を生成しないため対象外
+// (下記SUMMARY_FREE_CALLERSで、生成経路の復活=Sarashinaのゲートを迂回するGemini直呼びを禁止する)。
+const CORE_CALLERS = ['src/ocr/summaryPass.ts'];
 
 // Issue #548-B1: ocrProcessor.ts が要約生成に一切関与しない (bypass 復活防止) ことを
 // 別途 lock-in する caller 群。
-const SUMMARY_FREE_CALLERS = ['src/ocr/ocrProcessor.ts'];
+// PR-C: regenerateSummary.ts も追加(手動依頼は登録のみ。生成はgenerateSummaryBatch→summaryPass経由に
+// 一本化され、L1/L2ゲートと直列実行(Sarashinaの同時実行1)を迂回する直接生成を許さない)。
+const SUMMARY_FREE_CALLERS = ['src/ocr/ocrProcessor.ts', 'src/ocr/regenerateSummary.ts'];
 
 /**
  * 行頭 `//` コメント行を除去。コメントアウトされた呼び出しを「存在する」と
@@ -114,7 +118,8 @@ describe('generateSummary 不在契約 (Issue #548-B1)', () => {
       expect(count).to.equal(
         0,
         `${relPath} で generateSummaryCore 呼び出しを検出。` +
-          'Issue #548-B1 で自動要約生成は削除された (要約は regenerateSummary 経由の手動生成のみ)。'
+          '要約の生成は generateSummaryBatch(summaryPass 経由)に一本化されている。' +
+          'ocrProcessor は自動生成(Issue #548-B1で削除)、regenerateSummary は登録のみ(PR-C)。'
       );
     });
 

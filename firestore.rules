@@ -149,7 +149,10 @@ service cloud.firestore {
           'summaryError',
           'summaryErrorKind',
           'summaryProvider',
-          'summaryAttemptCount'
+          'summaryAttemptCount',
+          // PR-C: 手動依頼の受付時刻。regenerateSummary(Admin SDK)が書き、終端で削除される。
+          // FEはgetReprocessClearFields()のdeleteField()でのみ操作する想定(上記と同じ)。
+          'summaryManualRequestedAt'
         ])
         // confirmedBy は自分のUIDのみ設定可能（事業所解決時は含まれない場合あり）
         && (request.resource.data.confirmedBy == request.auth.uid
@@ -259,6 +262,8 @@ service cloud.firestore {
             || (('summaryProvider' in resource.data) && request.resource.data.summaryProvider == resource.data.summaryProvider))
         && (!('summaryAttemptCount' in request.resource.data)
             || (('summaryAttemptCount' in resource.data) && request.resource.data.summaryAttemptCount == resource.data.summaryAttemptCount))
+        && (!('summaryManualRequestedAt' in request.resource.data)
+            || (('summaryManualRequestedAt' in resource.data) && request.resource.data.summaryManualRequestedAt == resource.data.summaryManualRequestedAt))
         // ADR-0019 (GOAL.md タスクG): 集計所属変更メンテナンスゲートが閉じている間は、
         // customer/office/documentType/careManagerを変更するクライアント直接書込み
         // (useDocumentEdit.ts等)を拒否する。Cloud Functions(Admin SDK経由)はルール適用外の

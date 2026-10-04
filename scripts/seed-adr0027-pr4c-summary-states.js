@@ -2,8 +2,8 @@
  * ADR-0027 PR4c (AI要約6状態UI) 実機検証用シードスクリプト
  *
  * scripts/seed-issue-1033-contract-ended.js と同様、emulator専用。
- * 全環境がSUMMARY_PROVIDER=noneのため実データが存在しない7 kind
- * (absent/queued/generating/generated/failed/unavailable×2)を、Firestoreへ直接
+ * 全環境がSUMMARY_PROVIDER=noneのため実データが存在しない8 kind
+ * (absent/queued/generating/generated/generated-with-failure/failed/unavailable×2)を、Firestoreへ直接
  * summaryState等のフィールドを書き込んで再現する。generateSummaryBatchのclaim処理や
  * regenerateSummaryのonCallパスは通過しない(表示ロジックの検証専用、crossreview指摘反映)。
  *
@@ -92,7 +92,80 @@ async function main() {
         ocrResult: LONG_OCR_TEXT,
         summaryState: 'pending',
         summaryAttemptCount: 0,
+        // 手動依頼の印(summaryManualRequestedAt): 受付案内の表示とポーリング10秒の対象
+        summaryManualRequestedAt: Timestamp.now(),
       }),
+    },
+    // kind=3 queued(再生成依頼中): 要約ありでpending。旧要約を薄く保持して見せ続ける
+    {
+      id: 'pr4c-regenerate-queued',
+      data: baseDocData({
+        id: 'pr4c-regenerate-queued',
+        fileName: 'E2E_PR4c_regenerate_queued.pdf',
+        ocrResult: LONG_OCR_TEXT,
+        summary: { text: 'PR4c検証用の旧要約テキストです。', truncated: false },
+        summaryState: 'pending',
+        summaryManualRequestedAt: Timestamp.now(),
+      }),
+    },
+    // kind=2b generated-with-failure: 要約ありで再作成が失敗(error)。旧要約+失敗併記
+    {
+      id: 'pr4c-generated-with-failure',
+      data: baseDocData({
+        id: 'pr4c-generated-with-failure',
+        fileName: 'E2E_PR4c_generated_with_failure.pdf',
+        ocrResult: LONG_OCR_TEXT,
+        summary: { text: 'PR4c検証用の旧要約テキストです。', truncated: false },
+        summaryState: 'error',
+        summaryErrorKind: 'fabrication_suspected',
+        summaryError: 'Fabrication scanner detected 1 suspect name(s)',
+        summaryAttemptCount: 3,
+      }),
+    },
+    // kind=2b' generated-with-failure(skipped): 再生成がskippedになった(原文の読込失敗・allowlist外等)。
+    // 旧要約は温存されるが「生成済み」には見せず、固定の理由文を併記する(codex review P2指摘)
+    {
+      id: 'pr4c-generated-skipped-rerun',
+      data: baseDocData({
+        id: 'pr4c-generated-skipped-rerun',
+        fileName: 'E2E_PR4c_generated_skipped_rerun.pdf',
+        ocrResult: LONG_OCR_TEXT,
+        summary: { text: 'PR4c検証用の旧要約テキストです。', truncated: false },
+        summaryState: 'skipped',
+      }),
+    },
+    // kind=6 absent(skipped・理由つき): 要約なしで依頼がskippedになった(allowlist外・読込失敗・OCR未完了)。
+    // 理由を伝えつつ「AI要約を生成」ボタンを残す(silent-failure-hunter H1指摘)
+    {
+      id: 'pr4c-absent-skipped-request',
+      data: baseDocData({
+        id: 'pr4c-absent-skipped-request',
+        fileName: 'E2E_PR4c_absent_skipped_request.pdf',
+        ocrResult: LONG_OCR_TEXT,
+        summaryState: 'skipped',
+      }),
+    },
+    // kind=6 absent(ocrResultUrlオフロード): detail側ocrResult='' + 親ocrResultUrl(ADR-0018、10万字超)
+    {
+      id: 'pr4c-absent-ocr-url-offload',
+      data: baseDocData({
+        id: 'pr4c-absent-ocr-url-offload',
+        fileName: 'E2E_PR4c_absent_ocr-url-offload.pdf',
+        ocrResultUrl: 'gs://doc-split-dev-documents/ocr/pr4c-absent-ocr-url-offload.txt',
+      }),
+      detail: { ocrResult: '' },
+    },
+    // kind=2 generated(オフロード): 要約あり。OCR全文が手元にないため8,000字注記が常に出る
+    {
+      id: 'pr4c-generated-offload',
+      data: baseDocData({
+        id: 'pr4c-generated-offload',
+        fileName: 'E2E_PR4c_generated_offload.pdf',
+        ocrResultUrl: 'gs://doc-split-dev-documents/ocr/pr4c-generated-offload.txt',
+        summary: { text: 'PR4c検証用のオフロード文書の要約テキストです。', truncated: false },
+        summaryState: 'done',
+      }),
+      detail: { ocrResult: '' },
     },
     // kind=1 generating: summaryState==='processing'(バッチclaim中を模擬)
     {
@@ -173,7 +246,7 @@ async function main() {
       await docRef.collection('detail').doc('main').set(detail);
     }
   }
-  console.log(`✅ 書類${docs.length}件作成(absent/queued/generating/generated/failed/skipped/short/skipped-allowlist-long-ocr)`);
+  console.log(`✅ 書類${docs.length}件作成(absent/queued/regenerate-queued/generating/generated/generated-with-failure/offload×2/failed/skipped/short/skipped-allowlist-long-ocr)`);
 
   console.log('\n✅ ADR-0027 PR4c検証用シードデータ作成完了');
 }

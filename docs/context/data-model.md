@@ -61,6 +61,8 @@ DocSplitのデータはすべてCloud Firestoreに格納される。
 | ocrResult | string | Yes | OCR全文テキスト（短い場合） |
 | ocrResultUrl | string | No | Cloud Storage参照URL（長い場合） |
 | summary | string | No | AI生成の要約 |
+| summaryState | string | No | 要約の状態(`pending`/`processing`/`done`/`error`/`skipped`)。不在=要約を依頼・試行したことがない。OCR完了時には書かない(手動を基本、PR-C。`settings/features.autoSummaryOnOcr`が有効な環境のみ例外)。FEは書けない(Admin SDK専有) |
+| summaryManualRequestedAt | timestamp | No | 手動依頼の受付時刻(PR-C)。手動依頼のキュー(`pending`〜生成中)の間だけ存在し、終端(`done`/`error`/`skipped`)で削除される。バッチはこの印のある文書を依頼順に優先して処理する。FEは読み取り専用(reprocessのdeleteFieldのみ可) |
 | ocrExtraction | OcrExtraction | No | OCRフィールド抽出スナップショット（正解フィードバック用） |
 | pageResults | PageOcrResult[] | No | ページ単位OCR結果（PDF分割用） |
 

@@ -47,7 +47,15 @@ import { useDocumentVerification } from '@/hooks/useDocumentVerification'
 import { resolveCareManager } from '@/utils/resolveCareManager'
 import { getDisplayFileName } from '@/utils/getDisplayFileName'
 import type { DocumentStatus } from '@shared/types'
-import { deriveSummaryDisplayState, type SummaryDisplayState } from '@/lib/summaryDisplayState'
+import {
+  deriveSummaryDisplayState,
+  shouldShowSummaryTruncationNotice,
+  SUMMARY_AI_REVIEW_LABEL,
+  SUMMARY_PREVIOUS_FAILED_MESSAGE,
+  SUMMARY_QUEUED_MESSAGE,
+  SUMMARY_TRUNCATION_NOTICE,
+  type SummaryDisplayState,
+} from '@/lib/summaryDisplayState'
 
 // 閉じる確認ダイアログ用のAlertDialog
 import {
@@ -73,6 +81,7 @@ function MobileContentPopup({
   ocrResult,
   isDetailError,
   summaryDisplay,
+  showSummaryTruncationNotice,
   onClose,
   onGenerateSummary,
 }: {
@@ -80,6 +89,8 @@ function MobileContentPopup({
   ocrResult?: string
   isDetailError: boolean
   summaryDisplay: SummaryDisplayState
+  /** OCR全文が8,000字超(またはオフロード文書)の場合の「先頭約8,000字を要約」注記表示 */
+  showSummaryTruncationNotice: boolean
   onClose: () => void
   onGenerateSummary: () => void
 }) {
@@ -193,63 +204,106 @@ function MobileContentPopup({
     scrollContainer.appendChild(contentArea)
 
     if (type === 'summary') {
-      // ADR-0027 PR4c: 6状態(+detail-error)をkindベースで描画する。summaryDisplayは
+      // ADR-0027 PR4c: 8状態(+detail-error)をkindベースで描画する。summaryDisplayは
       // isDetailError/summaryState/summary.text/OCR結果長を1箇所(deriveSummaryDisplayState)で
       // 判定済みのため、ここでは分岐条件を再実装しない(#193型の食い違い防止)。
-      if (summaryDisplay.kind === 'generating') {
-        // #215: XSS 経路排除のため innerHTML → createElement + textContent。
-        const wrap = globalThis.document.createElement('div')
+      // 文言はsummaryDisplayState.tsの定数を使いデスクトップと共通化する。
+      // #215: XSS 経路排除のため innerHTML ではなく createElement + textContent を使う。
+      const doc = globalThis.document
+      const makeText = (tag: 'p' | 'div' | 'span', css: string, text: string) => {
+        const el = doc.createElement(tag)
+        el.style.cssText = css
+        el.textContent = text
+        return el
+      }
+      const makeGenerateButton = (label: string, css: string) => {
+        const btn = doc.createElement('button')
+        btn.id = 'generate-summary-btn'
+        btn.style.cssText = css
+        btn.textContent = label
+        return btn
+      }
+      if (summaryDisplay.kind === 'generating' || summaryDisplay.kind === 'queued') {
+        // generating: 生成中表示 / queued: 受付案内。いずれも再生成依頼中は旧要約を薄く見せ続ける
+        const wrap = doc.createElement('div')
         wrap.style.cssText = 'text-align: center; padding: 16px;'
-        const spinnerText = globalThis.document.createElement('p')
-        spinnerText.style.cssText = 'font-size: 14px; color: #7c3aed; margin: 0;'
-        spinnerText.textContent = '⏳ 生成中...'
-        wrap.appendChild(spinnerText)
+        wrap.appendChild(
+          summaryDisplay.kind === 'generating'
+            ? makeText('p', 'font-size: 14px; color: #7c3aed; margin: 0;', '⏳ 生成中...')
+            : makeText('p', 'font-size: 14px; color: #6b7280; margin: 0; line-height: 1.6;', SUMMARY_QUEUED_MESSAGE)
+        )
         if (summaryDisplay.summaryText) {
-          const dim = globalThis.document.createElement('div')
-          dim.style.cssText = 'font-size: 14px; color: #9ca3af; line-height: 1.6; margin-top: 12px; text-align: left;'
-          dim.textContent = summaryDisplay.summaryText
-          wrap.appendChild(dim)
+          wrap.appendChild(
+            makeText(
+              'div',
+              'font-size: 14px; color: #9ca3af; line-height: 1.6; margin-top: 12px; text-align: left;',
+              summaryDisplay.summaryText
+            )
+          )
         }
         contentArea.replaceChildren(wrap)
-      } else if (summaryDisplay.kind === 'generated') {
-        const summaryDiv = globalThis.document.createElement('div')
-        summaryDiv.style.cssText = 'font-size: 14px; color: #374151; line-height: 1.6;'
-        summaryDiv.textContent = summaryDisplay.summaryText ?? ''
-        const btnWrap = globalThis.document.createElement('div')
-        btnWrap.style.cssText = 'text-align: center; margin-top: 12px;'
-        const btn = globalThis.document.createElement('button')
-        btn.id = 'generate-summary-btn'
-        btn.style.cssText = 'padding: 6px 12px; background: #f3e8ff; color: #7c3aed; border: 1px solid #c4b5fd; border-radius: 6px; cursor: pointer; font-size: 12px;'
-        btn.textContent = '🔄 再生成'
-        btnWrap.appendChild(btn)
-        contentArea.replaceChildren(summaryDiv, btnWrap)
-      } else if (summaryDisplay.kind === 'unavailable') {
-        contentArea.innerHTML = `<p style="font-size: 14px; color: #9ca3af; text-align: center; padding: 16px;">OCR結果が短いため要約を生成できません</p>`
-      } else if (summaryDisplay.kind === 'detail-error') {
-        contentArea.innerHTML = `<p style="font-size: 14px; color: #ef4444; text-align: center; padding: 16px;">OCR結果の取得に失敗したため要約を生成できません</p>`
-      } else {
-        // queued / failed / absent: メッセージ(あれば) + ボタン(全て同じonGenerateSummaryを呼ぶ)
-        const message =
-          summaryDisplay.kind === 'queued'
-            ? '自動生成待ちです'
-            : summaryDisplay.kind === 'failed'
-              ? (summaryDisplay.errorMessage ?? '要約の生成に失敗しました')
-              : ''
-        const label =
-          summaryDisplay.kind === 'queued' ? '🔄 今すぐ生成' : summaryDisplay.kind === 'failed' ? '🔄 再試行' : '🔄 AI要約を生成'
-        const wrap = globalThis.document.createElement('div')
-        wrap.style.cssText = 'text-align: center; padding: 16px;'
-        if (message) {
-          const msgEl = globalThis.document.createElement('p')
-          msgEl.style.cssText = `font-size: 14px; color: ${summaryDisplay.kind === 'failed' ? '#ef4444' : '#6b7280'}; margin-bottom: 12px;`
-          msgEl.textContent = message
-          wrap.appendChild(msgEl)
+      } else if (summaryDisplay.kind === 'generated' || summaryDisplay.kind === 'generated-with-failure') {
+        const nodes: HTMLElement[] = []
+        if (summaryDisplay.kind === 'generated-with-failure') {
+          const failure = doc.createElement('div')
+          failure.style.cssText = 'font-size: 12px; color: #ef4444; margin-bottom: 8px; line-height: 1.5;'
+          failure.appendChild(makeText('p', 'margin: 0; font-weight: 500;', SUMMARY_PREVIOUS_FAILED_MESSAGE))
+          failure.appendChild(makeText('p', 'margin: 0;', summaryDisplay.errorMessage ?? ''))
+          nodes.push(failure)
         }
-        const btn = globalThis.document.createElement('button')
-        btn.id = 'generate-summary-btn'
-        btn.style.cssText = 'padding: 8px 16px; background: #f3e8ff; color: #7c3aed; border: 1px solid #c4b5fd; border-radius: 6px; cursor: pointer;'
-        btn.textContent = label
-        wrap.appendChild(btn)
+        nodes.push(
+          makeText(
+            'span',
+            'display: inline-block; font-size: 11px; color: #7c3aed; background: #f3e8ff; border-radius: 4px; padding: 2px 6px; margin-bottom: 8px;',
+            SUMMARY_AI_REVIEW_LABEL
+          )
+        )
+        nodes.push(makeText('div', 'font-size: 14px; color: #374151; line-height: 1.6;', summaryDisplay.summaryText ?? ''))
+        if (showSummaryTruncationNotice) {
+          nodes.push(makeText('p', 'font-size: 12px; color: #6b7280; margin: 8px 0 0;', SUMMARY_TRUNCATION_NOTICE))
+        }
+        const btnWrap = doc.createElement('div')
+        btnWrap.style.cssText = 'text-align: center; margin-top: 12px;'
+        btnWrap.appendChild(
+          makeGenerateButton(
+            summaryDisplay.kind === 'generated-with-failure' ? '🔄 再試行' : '🔄 再生成',
+            'padding: 6px 12px; background: #f3e8ff; color: #7c3aed; border: 1px solid #c4b5fd; border-radius: 6px; cursor: pointer; font-size: 12px;'
+          )
+        )
+        nodes.push(btnWrap)
+        contentArea.replaceChildren(...nodes)
+      } else if (summaryDisplay.kind === 'unavailable') {
+        contentArea.replaceChildren(
+          makeText('p', 'font-size: 14px; color: #9ca3af; text-align: center; padding: 16px;', 'OCR結果が短いため要約を生成できません')
+        )
+      } else if (summaryDisplay.kind === 'detail-error') {
+        contentArea.replaceChildren(
+          makeText('p', 'font-size: 14px; color: #ef4444; text-align: center; padding: 16px;', 'OCR結果の取得に失敗したため要約を生成できません')
+        )
+      } else {
+        // failed / absent: メッセージ(あれば) + ボタン(同じonGenerateSummaryを呼ぶ)
+        const wrap = doc.createElement('div')
+        wrap.style.cssText = 'text-align: center; padding: 16px;'
+        if (summaryDisplay.kind === 'failed') {
+          wrap.appendChild(
+            makeText(
+              'p',
+              'font-size: 14px; color: #ef4444; margin-bottom: 12px;',
+              summaryDisplay.errorMessage ?? '要約の生成に失敗しました'
+            )
+          )
+        } else if (summaryDisplay.errorMessage) {
+          // absent(要約なしで依頼がskippedになった): 理由を伝えてボタンを残す
+          wrap.appendChild(
+            makeText('p', 'font-size: 13px; color: #6b7280; margin-bottom: 12px;', summaryDisplay.errorMessage)
+          )
+        }
+        wrap.appendChild(
+          makeGenerateButton(
+            summaryDisplay.kind === 'failed' ? '🔄 再試行' : '🔄 AI要約を生成',
+            'padding: 8px 16px; background: #f3e8ff; color: #7c3aed; border: 1px solid #c4b5fd; border-radius: 6px; cursor: pointer;'
+          )
+        )
         contentArea.replaceChildren(wrap)
       }
     } else {
@@ -324,7 +378,9 @@ function MobileContentPopup({
     // 再実行されてDOMを再構築する一方、専用effect(isGeneratingSummaryの値が不変なら再実行され
     // ない)がボタン文言を追従できず、生成中でも「生成中」表示が消えうる構造的バグがあった
     // (codex crossreviewで実装確認済み)。kindを主effectの依存に含めることで一本化する。
-  }, [type, ocrResult, isDetailError, summaryDisplay.kind, summaryDisplay.summaryText, summaryDisplay.errorMessage, onClose, onGenerateSummary])
+    // 新規に描画へ使う値(showSummaryTruncationNotice)も依存配列へ含めないと、OCR全文の遅延取得後に
+    // 注記が反映されない(effect内で参照する外部値は全て依存配列に入れる)。
+  }, [type, ocrResult, isDetailError, summaryDisplay.kind, summaryDisplay.summaryText, summaryDisplay.errorMessage, showSummaryTruncationNotice, onClose, onGenerateSummary])
 
   return null // DOMはuseEffectで直接操作
 }
@@ -420,9 +476,12 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
     summaryState: document?.summaryState,
     summaryErrorKind: document?.summaryErrorKind,
     ocrResult: resolved.ocrResult,
+    ocrResultUrl: document?.ocrResultUrl,
     isDetailError,
     isGeneratingSummary,
   })
+  // OCR全文が8,000字超(オフロード文書は常に)の場合の「先頭約8,000字を要約」注記(backendは先頭のみ送る)
+  const showSummaryTruncationNotice = shouldShowSummaryTruncationNotice(resolved.ocrResult, document?.ocrResultUrl)
   // デスクトップ用: 排他的アコーディオン
   const [expandedSection, setExpandedSection] = useState<'summary' | 'ocr' | null>('summary')
   // モバイル用: ポップアップ表示
@@ -613,25 +672,39 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
     }
   }
 
-  // AI要約を生成
+  // AI要約を依頼(登録のみ)。生成そのものはbackendのバッチが非同期に実行し、Firestoreの
+  // summaryStateがpending→processing→done/errorと変わるのをuseDocumentのポーリングで追従する。
+  // isGeneratingSummaryは「登録API呼び出し〜登録後の再取得完了」までの短い間だけ立て、
+  // finallyで必ず下ろす(登録成功後に残して「永久に作成中」にしない)。依頼済みの状態は
+  // refetch後のsummaryState(pending/processing)=queued/generatingが引き継ぐ。
   const handleGenerateSummary = async () => {
     if (!documentId || isGeneratingSummary) return
 
     setIsGeneratingSummary(true)
     try {
-      await callFunction<{ docId: string }, { success: boolean; summary: string }>(
-        'regenerateSummary', { docId: documentId }, { timeout: 60_000 }
+      // 応答は{success, queued, alreadyQueued}。alreadyQueued:trueでも同じ案内を出す(冪等)
+      await callFunction<{ docId: string }, { success: boolean; queued: boolean; alreadyQueued: boolean }>(
+        'regenerateSummary', { docId: documentId }, { timeout: 30_000 }
       )
-      // キャッシュを無効化して再取得
+      toast.success(SUMMARY_QUEUED_MESSAGE)
+    } catch (err) {
+      console.error('Failed to request summary:', err)
+      // failed-precondition(準備中・対象外・OCR未完了)/not-found等はBE(regenerateSummary.ts)が
+      // 具体的な日本語メッセージをHttpsErrorのmessageに詰めて投げる運用のため、
+      // getCallableErrorMessage側でそのまま返す(他の呼び出し元と同じ単一の判定ロジックを共有する)。
+      toast.error(getCallableErrorMessage(err, '要約の作成依頼に失敗しました'))
+      setIsGeneratingSummary(false)
+      return
+    }
+
+    // 登録は成功済み。以降の再取得の失敗を「依頼に失敗」と誤って伝えない(登録とは別の失敗)。
+    // キャッシュを無効化して再取得(登録時にsummaryState:'pending'が書かれている)
+    try {
       await queryClient.invalidateQueries({ queryKey: ['document', documentId] })
       await refetch()
     } catch (err) {
-      console.error('Failed to generate summary:', err)
-      // Issue #251 Scope3: BE(regenerateSummary.ts)がquota/transient/blockedをHttpsErrorの
-      // resource-exhausted/unavailable/failed-preconditionへ細分化し、状況別の具体的な日本語
-      // メッセージをmessageに詰めて投げる運用のため、getCallableErrorMessage側でそのまま返す
-      // (SettingsPage.tsx等、他の呼び出し元と同じ単一の判定ロジックを共有する)。
-      toast.error(getCallableErrorMessage(err, '要約の生成に失敗しました'))
+      console.error('Failed to refresh document after summary request:', err)
+      toast.error('依頼は受け付けましたが、画面の更新に失敗しました。しばらくしてから開き直してください')
     } finally {
       setIsGeneratingSummary(false)
     }
@@ -1579,19 +1652,36 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                       <div className="p-3 overflow-y-auto max-h-[180px] bg-white border-t border-purple-100">
                         {/* ADR-0027 PR4c: kindベースの分岐(deriveSummaryDisplayState)。
                             #193型の食い違い防止のためモバイル(MobileContentPopup)と同じ関数を参照する */}
-                        {summaryDisplay.kind === 'generating' ? (
+                        {summaryDisplay.kind === 'generating' || summaryDisplay.kind === 'queued' ? (
                           <div className="flex flex-col gap-2">
-                            <div className="flex items-center gap-1.5 text-xs text-purple-600">
-                              <Loader2 className="h-3 w-3 animate-spin" />
-                              生成中...
-                            </div>
+                            {summaryDisplay.kind === 'generating' ? (
+                              <div className="flex items-center gap-1.5 text-xs text-purple-600">
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                                生成中...
+                              </div>
+                            ) : (
+                              <p className="text-xs text-gray-500">{SUMMARY_QUEUED_MESSAGE}</p>
+                            )}
+                            {/* 再生成依頼中も旧要約を薄く見せ続ける */}
                             {summaryDisplay.summaryText && (
                               <div className="text-sm text-gray-400 leading-relaxed">{summaryDisplay.summaryText}</div>
                             )}
                           </div>
-                        ) : summaryDisplay.kind === 'generated' ? (
+                        ) : summaryDisplay.kind === 'generated' || summaryDisplay.kind === 'generated-with-failure' ? (
                           <div className="flex flex-col gap-2">
+                            {summaryDisplay.kind === 'generated-with-failure' && (
+                              <div className="text-xs text-red-500">
+                                <p className="font-medium">{SUMMARY_PREVIOUS_FAILED_MESSAGE}</p>
+                                <p>{summaryDisplay.errorMessage}</p>
+                              </div>
+                            )}
+                            <span className="self-start rounded bg-purple-50 px-1.5 py-0.5 text-[11px] text-purple-600">
+                              {SUMMARY_AI_REVIEW_LABEL}
+                            </span>
                             <div className="text-sm text-gray-700 leading-relaxed">{summaryDisplay.summaryText}</div>
+                            {showSummaryTruncationNotice && (
+                              <p className="text-xs text-gray-500">{SUMMARY_TRUNCATION_NOTICE}</p>
+                            )}
                             <Button
                               variant="outline"
                               size="sm"
@@ -1599,7 +1689,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                               className="self-start h-6 px-2 text-xs text-purple-600 border-purple-200 hover:bg-purple-50"
                             >
                               <RefreshCw className="mr-1 h-3 w-3" />
-                              再生成
+                              {summaryDisplay.kind === 'generated-with-failure' ? '再試行' : '再生成'}
                             </Button>
                           </div>
                         ) : summaryDisplay.kind === 'detail-error' ? (
@@ -1608,11 +1698,11 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                           <p className="text-xs text-gray-400">OCR結果が短いため要約を生成できません</p>
                         ) : (
                           <div className="flex flex-col gap-2">
-                            {summaryDisplay.kind === 'queued' && (
-                              <p className="text-xs text-gray-500">自動生成待ちです</p>
-                            )}
                             {summaryDisplay.kind === 'failed' && (
                               <p className="text-xs text-red-500">{summaryDisplay.errorMessage}</p>
+                            )}
+                            {summaryDisplay.kind === 'absent' && summaryDisplay.errorMessage && (
+                              <p className="text-xs text-gray-500">{summaryDisplay.errorMessage}</p>
                             )}
                             <Button
                               variant="outline"
@@ -1621,7 +1711,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                               className="self-start text-purple-600 border-purple-200 hover:bg-purple-50"
                             >
                               <RefreshCw className="mr-1 h-3 w-3" />
-                              {summaryDisplay.kind === 'queued' ? '今すぐ生成' : summaryDisplay.kind === 'failed' ? '再試行' : 'AI要約を生成'}
+                              {summaryDisplay.kind === 'failed' ? '再試行' : 'AI要約を生成'}
                             </Button>
                           </div>
                         )}
@@ -1730,6 +1820,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
         ocrResult={resolved.ocrResult}
         isDetailError={isDetailError}
         summaryDisplay={summaryDisplay}
+        showSummaryTruncationNotice={showSummaryTruncationNotice}
         onClose={() => setMobilePopup(null)}
         onGenerateSummary={handleGenerateSummary}
       />

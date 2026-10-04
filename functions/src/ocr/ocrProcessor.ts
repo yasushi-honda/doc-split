@@ -65,7 +65,7 @@ import { applyConfirmedFieldProtection } from './confirmedFieldMerge';
 import { buildOcrExcerpt } from './ocrExcerpt';
 import { isFaxDuplicationEnabled } from '../utils/featureFlags';
 import { isMultiCustomerDetectionEnabled } from '../utils/featureFlags';
-import { resolveOcrProvider } from '../utils/featureFlags';
+import { resolveOcrProvider, getSarashinaSummaryGate } from '../utils/featureFlags';
 import { planFaxDuplication, buildFaxDuplicationMemberOverride } from './faxDuplication';
 import {
   buildMultiCustomerDetectionFields,
@@ -574,6 +574,8 @@ export async function processDocument(
     // multiCustomerFieldsが空オブジェクトになりキー自体を書き込まないため、無効テナント
     // (cocoro/dev)の書込みペイロードは従来と完全に同一のまま。
     const multiCustomerDetectionEnabled = await isMultiCustomerDetectionEnabled(db);
+    // 要約の自動生成(PR-C): 既定は手動のみ。tx再試行のたびに読み直さないようtx開始前に1回読む。
+    const summaryAutoEnabled = await resolveSummaryAutoEnabled(db, docId);
     // ADR-0022顧客未確定ゲート再設計(2026-07-25、Plan agent検証で発覚した致命的な穴への
     // 対応): マスターの`isDuplicate`フラグは事後の追加・改名で更新されないため信用せず、
     // 既にロード済みの`customers`(:346)からライブに同名衝突を数え直す(追加読み込みなし)。
@@ -613,6 +615,7 @@ export async function processDocument(
       // decideOcrCompletionSummaryStateのdocコメント参照)。ocrResultLengthは
       // savedOcrResult(オフロード時は'')ではなく元のocrResult.lengthを渡す。
       summaryProviderL1: SARASHINA_SUMMARY_CONFIG.provider,
+      summaryAutoEnabled,
       ocrResultLength: ocrResult.length,
     });
   } catch (err) {
@@ -721,6 +724,8 @@ export async function applyOcrCompletionTransaction(input: {
    * L2(Firestoreフラグ)はここでは意図的に読まない(呼出元processOCR.tsを参照)。
    */
   summaryProviderL1: SummaryProviderSetting;
+  /** `settings/features.autoSummaryOnOcr === true`か(PR-C、既定は偽=手動のみ)。 */
+  summaryAutoEnabled: boolean;
   /**
    * 要約生成対象になるかどうかの判定に使うOCR結果の文字数。`savedOcrResult`
    * (Storageオフロード時は`''`)ではなく、常に元の`ocrResult.length`を渡すこと。
@@ -743,11 +748,12 @@ export async function applyOcrCompletionTransaction(input: {
     multiCustomerDetectionEnabled,
     tokenCounts,
     summaryProviderL1,
+    summaryAutoEnabled,
     ocrResultLength,
   } = input;
 
-  // L1+文字数のみに依存する純粋な判定のため、transaction再試行をまたいで1回だけ計算すればよい。
-  const summaryStateDecision = decideOcrCompletionSummaryState(summaryProviderL1, ocrResultLength);
+  // L1+文字数+自動生成フラグのみに依存する純粋な判定のため、transaction再試行をまたいで1回だけ計算すればよい。
+  const summaryStateDecision = decideOcrCompletionSummaryState(summaryProviderL1, ocrResultLength, summaryAutoEnabled);
 
   await withBackoffRetry(
     () =>
@@ -1370,6 +1376,29 @@ async function copyOcrResultForDistributionMember(
  * オブジェクトリテラル等)が現れないことをソース文字列レベルで検証しているため、
  * 呼出側は`.map(toMultiCustomerCandidateLike)`という中括弧を含まない1行で完結させる必要がある。
  */
+/**
+ * OCR完了時の要約自動生成が有効か(`settings/features.autoSummaryOnOcr === true`、PR-C)。
+ * L1が'none'のときはFirestoreを読まない。読取失敗は安全側(手動のみ=偽)に倒し、OCR処理自体は
+ * 止めない(要約は派生データで、手動依頼でいつでも作れるため)。
+ */
+async function resolveSummaryAutoEnabled(db: admin.firestore.Firestore, docId: string): Promise<boolean> {
+  if (SARASHINA_SUMMARY_CONFIG.provider === 'none') return false;
+  try {
+    return (await getSarashinaSummaryGate(db)).autoOnOcr;
+  } catch (err) {
+    console.error('[ocrProcessor] autoSummaryOnOcrの読取に失敗したため、要約の自動生成は無効として扱います:', err);
+    // 自動生成が有効な環境では、この文書は要約キューに載らないまま確定する(手動依頼でいつでも作れる)。
+    // 一過性の読取失敗に気づけるよう、errorsコレクション+通知にも残す。
+    await safeLogError({
+      error: err instanceof Error ? err : new Error(String(err)),
+      source: 'ocr',
+      functionName: 'resolveSummaryAutoEnabled',
+      documentId: docId,
+    });
+    return false;
+  }
+}
+
 function toMultiCustomerCandidateLike(c: CustomerCandidate): MultiCustomerCandidateLike {
   return {
     customerId: c.id,

@@ -31,6 +31,12 @@ export interface SummaryPassResult {
   summary: SummaryField;
   /** sarashina経路は常に'stop'(finish_reasonが'stop'以外ならクライアント層でthrow済み)。gemini経路は未計測のためnull。 */
   finishReason: 'stop' | null;
+  /**
+   * 実際にモデルへ送信した原文(8,000文字への切詰め、context超過時の再短縮を反映した後の値)。
+   * 捏造スキャン・英字混入スキャンの「原文に存在するか」の比較対象は、元のOCR全文ではなく
+   * この値でなければならない(再短縮後に送っていない部分の語を許してしまうため、PR-C)。
+   */
+  sentText: string;
 }
 
 export interface SummaryPassDeps {
@@ -66,6 +72,11 @@ function shrinkOcrResultForRetry(ocrResult: string, promptTokens: number, ctxSiz
   return ocrResult.slice(0, targetLength);
 }
 
+/** プロンプトへ実際に入る原文(`buildSummaryPrompt`と同じ`MAX_SUMMARY_INPUT_LENGTH`での切詰め)。 */
+function truncateForSummaryInput(ocrResult: string): string {
+  return ocrResult.length > MAX_SUMMARY_INPUT_LENGTH ? ocrResult.slice(0, MAX_SUMMARY_INPUT_LENGTH) : ocrResult;
+}
+
 function requireSummaryGenerator(): typeof import('./summaryGenerator') {
   return require('./summaryGenerator') as typeof import('./summaryGenerator');
 }
@@ -97,25 +108,24 @@ async function callSarashinaWithContextRetry(
   ocrResult: string,
   documentType: string,
   deps?: SarashinaSummaryDeps
-): Promise<string> {
+): Promise<{ text: string; sentText: string }> {
   try {
     const prompt = buildSummaryPrompt(ocrResult, documentType);
     const result = await summarizeWithSarashina(prompt, deps);
-    return result.text;
+    return { text: result.text, sentText: truncateForSummaryInput(ocrResult) };
   } catch (err) {
     if (!(err instanceof SarashinaSummaryError) || err.kind !== 'contextExceeded') throw err;
 
     const tokens = parseContextExceededTokens(err.message);
     if (!tokens) throw err;
 
-    const sentText =
-      ocrResult.length > MAX_SUMMARY_INPUT_LENGTH ? ocrResult.slice(0, MAX_SUMMARY_INPUT_LENGTH) : ocrResult;
+    const sentText = truncateForSummaryInput(ocrResult);
     const shrunkOcrResult = shrinkOcrResultForRetry(sentText, tokens.promptTokens, tokens.ctxSize);
     if (shrunkOcrResult.length === 0 || shrunkOcrResult.length >= sentText.length) throw err;
 
     const retryPrompt = buildSummaryPrompt(shrunkOcrResult, documentType);
     const retryResult = await summarizeWithSarashina(retryPrompt, deps);
-    return retryResult.text;
+    return { text: retryResult.text, sentText: truncateForSummaryInput(shrunkOcrResult) };
   }
 }
 
@@ -139,10 +149,10 @@ export async function generateSummaryForProvider(
 
   if (provider === 'gemini') {
     const summary = await callGemini(ocrResult, documentType, deps);
-    return { provider, summary, finishReason: null };
+    return { provider, summary, finishReason: null, sentText: truncateForSummaryInput(ocrResult) };
   }
 
-  const text = await callSarashinaWithContextRetry(ocrResult, documentType, deps?.sarashina);
+  const { text, sentText } = await callSarashinaWithContextRetry(ocrResult, documentType, deps?.sarashina);
   const summary = capPageText(text, MAX_SUMMARY_LENGTH);
-  return { provider, summary, finishReason: 'stop' };
+  return { provider, summary, finishReason: 'stop', sentText };
 }

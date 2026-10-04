@@ -16,7 +16,6 @@ import {
   SUMMARY_BATCH_TIMEOUT_SECONDS,
   SUMMARY_BATCH_SOFT_DEADLINE_MS,
   SUMMARY_STUCK_THRESHOLD_MS,
-  MANUAL_SUMMARY_SOFT_TIMEOUT_MS,
   type SummaryRunExpectation,
 } from '../src/ocr/summaryRunGuard';
 import { SarashinaSummaryError } from '../src/ocr/sarashinaSummaryClient';
@@ -123,31 +122,38 @@ describe('summaryRunGuard', () => {
   });
 
   describe('decideOcrCompletionSummaryState', () => {
-    it('L1=noneはフィールド不在(absent)を返す(バックフィル防止の中核)', () => {
-      expect(decideOcrCompletionSummaryState('none', 5000)).to.deep.equal({ kind: 'absent' });
+    it('L1=noneはフィールド不在(absent)を返す(バックフィル防止の中核、autoEnabledに関わらない)', () => {
+      expect(decideOcrCompletionSummaryState('none', 5000, true)).to.deep.equal({ kind: 'absent' });
+      expect(decideOcrCompletionSummaryState('none', 5000, false)).to.deep.equal({ kind: 'absent' });
     });
 
-    it('L1=sarashinaかつOCR結果が十分長ければpendingを返す', () => {
-      expect(decideOcrCompletionSummaryState('sarashina', 5000)).to.deep.equal({
+    it('autoEnabled=false(既定、手動のみ運用)は、L1が有効でもフィールド不在(absent)を返し、pendingを書かない(PR-C)', () => {
+      expect(decideOcrCompletionSummaryState('sarashina', 5000, false)).to.deep.equal({ kind: 'absent' });
+      expect(decideOcrCompletionSummaryState('gemini', 5000, false)).to.deep.equal({ kind: 'absent' });
+      expect(decideOcrCompletionSummaryState('sarashina', 50, false)).to.deep.equal({ kind: 'absent' });
+    });
+
+    it('autoEnabled=trueかつL1=sarashinaかつOCR結果が十分長ければpendingを返す', () => {
+      expect(decideOcrCompletionSummaryState('sarashina', 5000, true)).to.deep.equal({
         kind: 'set',
         state: 'pending',
       });
     });
 
-    it('L1=geminiかつOCR結果が短ければskippedを返す', () => {
-      expect(decideOcrCompletionSummaryState('gemini', 50)).to.deep.equal({
+    it('autoEnabled=trueかつL1=geminiかつOCR結果が短ければskippedを返す', () => {
+      expect(decideOcrCompletionSummaryState('gemini', 50, true)).to.deep.equal({
         kind: 'set',
         state: 'skipped',
       });
     });
 
-    it('境界値: MIN_OCR_LENGTH_FOR_SUMMARY-1文字はskipped、ちょうどはpending', () => {
+    it('境界値: MIN_OCR_LENGTH_FOR_SUMMARY-1文字はskipped、ちょうどはpending(autoEnabled=true)', () => {
       // MIN_OCR_LENGTH_FOR_SUMMARY = 100 (summaryPromptBuilder.ts)
-      expect(decideOcrCompletionSummaryState('sarashina', 99)).to.deep.equal({
+      expect(decideOcrCompletionSummaryState('sarashina', 99, true)).to.deep.equal({
         kind: 'set',
         state: 'skipped',
       });
-      expect(decideOcrCompletionSummaryState('sarashina', 100)).to.deep.equal({
+      expect(decideOcrCompletionSummaryState('sarashina', 100, true)).to.deep.equal({
         kind: 'set',
         state: 'pending',
       });
@@ -176,8 +182,9 @@ describe('summaryRunGuard', () => {
       ).to.be.lessThan(SUMMARY_BATCH_TIMEOUT_SECONDS * 1000);
     });
 
-    it('MANUAL_SUMMARY_SOFT_TIMEOUT_MSはonCallのハードタイムアウト(60秒)未満', () => {
-      expect(MANUAL_SUMMARY_SOFT_TIMEOUT_MS).to.be.lessThan(60_000);
+    it('SUMMARY_BATCH_SOFT_DEADLINE_MSは手動依頼の待ち時間を抑えるため短い(120秒、PR-C)', () => {
+      // 手動依頼は実行中のtickの終了を待つ。tickの長さの上限は「この値 + 1件分」になる。
+      expect(SUMMARY_BATCH_SOFT_DEADLINE_MS).to.be.at.most(180_000);
     });
 
     it('MAX_SUMMARY_ATTEMPTSは1以上の整数', () => {

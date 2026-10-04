@@ -11,10 +11,48 @@ import type { SummaryErrorKind, SummaryField, SummaryState } from '../../../shar
 /** OCR結果の最小長。`functions/src/ocr/summaryPromptBuilder.ts`のMIN_OCR_LENGTH_FOR_SUMMARYと同値。 */
 export const SUMMARY_MIN_OCR_LENGTH = 100
 
+/**
+ * backendが要約へ渡すOCR先頭文字数の上限。`functions/src/ocr/summaryPromptBuilder.ts`の
+ * MAX_SUMMARY_INPUT_LENGTHと同値(契約テスト`summaryDisplayState.test`で一致を固定)。
+ */
+export const SUMMARY_MAX_INPUT_LENGTH = 8000
+
+/** 手動依頼を受け付けた(pending)間の案内。デスクトップ/モバイル/トーストで共通利用する(1か所に集約)。 */
+export const SUMMARY_QUEUED_MESSAGE =
+  '要約の作成を受け付けました。バックグラウンドで作成するので、他の操作を続けられます(目安: 数分〜10分)。完了すると自動で表示されます'
+
+/** 旧要約を残したまま再作成が失敗した場合の見出し(個別の失敗理由は`summaryErrorMessage`を併記する)。 */
+export const SUMMARY_PREVIOUS_FAILED_MESSAGE = '前回の要約です。今回の再作成は失敗しました'
+
+/**
+ * 旧要約を残したまま再作成が`skipped`になった場合の理由(原文を読み込めなかった、または要約機能の
+ * 対象から外れた等)。`summaryErrorKind`を持たないため固定文にする。
+ */
+export const SUMMARY_SKIPPED_MESSAGE = '要約の対象外、または原文を読み込めなかったため、再作成できませんでした'
+
+/** 生成済み要約に付ける注意ラベル。 */
+export const SUMMARY_AI_REVIEW_LABEL = 'AI生成・要確認'
+
+/** OCR全文が上限を超える(またはオフロードで全文が手元にない)場合の注記。 */
+export const SUMMARY_TRUNCATION_NOTICE = '長い書類のため、先頭約8,000字を要約しています'
+
+/**
+ * 先頭約8,000字の注記を出すか。OCR全文が上限超、またはオフロード文書(`ocrResultUrl`あり、
+ * 全文が手元になく長さ不明だが10万字超でオフロードされているため必ず上限超)は常に出す。
+ */
+export function shouldShowSummaryTruncationNotice(
+  ocrResult: string | undefined,
+  ocrResultUrl: string | null | undefined
+): boolean {
+  if (ocrResultUrl) return true
+  return !!ocrResult && ocrResult.length > SUMMARY_MAX_INPUT_LENGTH
+}
+
 export type SummaryDisplayKind =
   | 'detail-error'
   | 'generating'
   | 'generated'
+  | 'generated-with-failure'
   | 'queued'
   | 'failed'
   | 'unavailable'
@@ -22,9 +60,12 @@ export type SummaryDisplayKind =
 
 export interface SummaryDisplayState {
   kind: SummaryDisplayKind
-  /** kind==='generating'|'generated'の場合、既存の要約テキスト(generatingでは薄く表示する用途) */
+  /**
+   * 既存の要約テキスト。generated/generated-with-failureでは本文、generating/queuedでは
+   * 再生成依頼中も旧要約を見せ続けるために保持する(薄く表示する用途)
+   */
   summaryText?: string
-  /** kind==='failed'の場合のユーザー向けメッセージ */
+  /** kind==='failed'|'generated-with-failure'、および依頼がskippedになった'absent'の場合のユーザー向けメッセージ(理由) */
   errorMessage?: string
 }
 
@@ -33,6 +74,11 @@ export interface DeriveSummaryDisplayStateInput {
   summaryState: SummaryState | undefined
   summaryErrorKind: SummaryErrorKind | null | undefined
   ocrResult: string | undefined
+  /**
+   * 親documentの`ocrResultUrl`。10万字超でStorageへオフロードされた文書(ADR-0018)は
+   * detail側`ocrResult=''`となるため、これがあればOCR十分長とみなす。
+   */
+  ocrResultUrl?: string | null
   isDetailError: boolean
   isGeneratingSummary: boolean
 }
@@ -59,41 +105,58 @@ export function summaryErrorMessage(kind: SummaryErrorKind | null | undefined): 
 }
 
 /**
- * 7 kindを上から最初に一致したもので判定する。判定順序:
+ * 8 kindを上から最初に一致したもので判定する。判定順序(最終形):
  * 0. isGeneratingSummary(ローカル状態)、またはsummaryState==='processing'かつisDetailErrorで
- *    ない場合 → generating(要約本文があれば下に薄く表示するため保持する)
- * 1. summary.textあり → generated(要約本文が優先。error/detail-errorより先)
+ *    ない場合 → generating(旧要約があれば薄く表示するため summaryText を保持)
+ * 1. summary.textあり(以降、本文は常に保持する。要約本文はdetail-errorより優先):
+ *    a. summaryState==='pending' → queued(再生成依頼中。旧要約を見せ続ける)
+ *    b. summaryState==='error'   → generated-with-failure(旧要約+「今回の再作成は失敗」+理由)
+ *    c. summaryState==='skipped' → generated-with-failure(原文の読込失敗・対象外。固定の理由文)
+ *    d. 上記以外 → generated
  * 2. isDetailErrorかつ要約なし → detail-error
- *    (codex review P2指摘反映: 以前の実装ではsummaryState==='processing'の判定が
- *    isDetailErrorより無条件に先に評価されており、detail/mainの読込失敗中にバックエンドが
- *    processing/pending/error/skippedのいずれであってもdetail-errorが隠れ、本来ブロック
- *    すべき生成操作(queued/generating/failedのボタン)を提示してしまっていた。要約テキストが
- *    既にある場合(手順1で処理済み)や、ローカルでの能動的な生成中(手順0)は従来通り
- *    detail-errorより優先するが、要約なし+バックエンド側processingでもない場合は
- *    isDetailErrorをpending/error/skippedより先に評価する)
+ *    (codex review P2指摘反映: summaryStateの値に関わらず要約なしのdetail取得失敗は
+ *    生成操作を提示せずブロックする。ローカルの能動的な生成中(手順0)のみ優先する)
  * 3. summaryState==='pending' → queued
  * 4. summaryState==='error' → failed
- * 5. OCR結果 < SUMMARY_MIN_OCR_LENGTH字 → unavailable(summaryStateの値に関わらず)
- * 6. 上記以外(OCR ≥ SUMMARY_MIN_OCR_LENGTH字。summaryState==='skipped'を含む) → absent
- *    (codex review P2指摘反映: Sarashina L2ゲートのallowlist除外時、バックエンドは
- *    OCR長に関係なくsummaryState:'skipped'にする(shared/types.tsのJSDoc「OCR結果が
- *    短すぎる等の理由で」の「等」に該当)。summaryState==='skipped'を無条件でunavailableに
- *    倒すと、OCR長が十分な文書でも既存のregenerateSummary手動生成経路(Sarashina L2ゲートとは
- *    独立、Geminiを呼ぶ)を失ってしまう。OCR長を先に判定し、十分ならabsentとして手動生成
- *    ボタンを残す)
+ * 5. OCR結果 < SUMMARY_MIN_OCR_LENGTH字、かつocrResultUrlなし → unavailable
+ *    (summaryStateの値に関わらず。ocrResultUrlあり=オフロード文書は10万字超のため十分長いとみなす)
+ * 6. 上記以外(OCR ≥ SUMMARY_MIN_OCR_LENGTH字、またはocrResultUrlあり。
+ *    summaryState==='skipped'を含む) → absent
+ *    (codex review P2指摘反映: Sarashina L2ゲートのallowlist除外時、バックエンドはOCR長に
+ *    関係なくsummaryState:'skipped'にする。skippedを無条件でunavailableにすると十分長い
+ *    文書で手動生成経路を失うため、OCR長を先に判定し十分ならabsentとして依頼ボタンを残す)
  *
  * OCR側status(pending/processing)とsummaryState===processingの同時成立は、OCR完了と
  * 同一トランザクションでsummaryStateが確定するため通常到達しない防御的分岐。ポーリング
  * 間隔の優先順位はcomputeDocumentRefetchInterval側で扱う。
  */
 export function deriveSummaryDisplayState(input: DeriveSummaryDisplayStateInput): SummaryDisplayState {
-  const { summary, summaryState, summaryErrorKind, ocrResult, isDetailError, isGeneratingSummary } = input
+  const { summary, summaryState, summaryErrorKind, ocrResult, ocrResultUrl, isDetailError, isGeneratingSummary } = input
 
   if (isGeneratingSummary || (summaryState === 'processing' && !isDetailError)) {
     return { kind: 'generating', summaryText: summary?.text }
   }
 
   if (summary?.text) {
+    if (summaryState === 'pending') {
+      return { kind: 'queued', summaryText: summary.text }
+    }
+    if (summaryState === 'error') {
+      return {
+        kind: 'generated-with-failure',
+        summaryText: summary.text,
+        errorMessage: summaryErrorMessage(summaryErrorKind),
+      }
+    }
+    if (summaryState === 'skipped') {
+      // 再生成の依頼後にバッチがskippedにした(原文の読込失敗・allowlist外等)。旧要約は温存されるが、
+      // 今回の依頼は成功していないため「生成済み」には見せない(codex review P2指摘)。
+      return {
+        kind: 'generated-with-failure',
+        summaryText: summary.text,
+        errorMessage: SUMMARY_SKIPPED_MESSAGE,
+      }
+    }
     return { kind: 'generated', summaryText: summary.text }
   }
 
@@ -109,9 +172,14 @@ export function deriveSummaryDisplayState(input: DeriveSummaryDisplayStateInput)
     return { kind: 'failed', errorMessage: summaryErrorMessage(summaryErrorKind) }
   }
 
-  const hasEnoughOcrResult = !!ocrResult && ocrResult.length >= SUMMARY_MIN_OCR_LENGTH
+  const hasEnoughOcrResult = !!ocrResultUrl || (!!ocrResult && ocrResult.length >= SUMMARY_MIN_OCR_LENGTH)
   if (!hasEnoughOcrResult) {
     return { kind: 'unavailable' }
+  }
+
+  if (summaryState === 'skipped') {
+    // 要約なしで依頼が実行されなかった(allowlist外・原文の読込失敗・OCR未完了)。理由を伝え、ボタンは残す。
+    return { kind: 'absent', errorMessage: SUMMARY_SKIPPED_MESSAGE }
   }
 
   return { kind: 'absent' }

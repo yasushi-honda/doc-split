@@ -1,0 +1,35 @@
+displayName: "[__ENV__] summary_batch_fatal: 要約バッチが例外で停止 (1h detect, 7d persist)"
+documentation:
+  content: |
+    要約バッチ(`generateSummaryBatch`、1分ごとに起動)が例外で落ちました(PR-C)。
+    `[generateSummaryBatch] Fatal error` を検知します。発生 0 が正常です。
+
+    手動の要約依頼(`regenerateSummary`)は登録だけを行い、生成はこのバッチが実行します。
+    バッチが落ち続けると、依頼は `pending` のまま処理されず、画面は「作成中」のままになります。
+
+    まず確認すること(ログの `Fatal error:` に続くメッセージ):
+    - `FAILED_PRECONDITION: The query requires an index`: Firestoreの複合インデックスが未作成です。
+      `firestore.indexes.json` に `summaryState+summaryManualRequestedAt` / `summaryState+updatedAt` /
+      `summaryState+summaryStateUpdatedAt` があること、`deploy-firestore-indexes.yml` で当該環境へ
+      反映済みで READY であることを確認します(環境間のずれは過去に実際に発生: 2026-10-04)。
+    - 権限・設定の不備(`SARASHINA_SUMMARY_URL` の誤り等は文書単位の `config` エラーとして処理されるため、
+      ここには出ません)。
+    - L1が `none` でもstuck回収(rescue)のクエリは毎分実行されるため、`none` の環境でも検知されます。
+  mimeType: "text/markdown"
+combiner: OR
+conditions:
+  - displayName: "summary_batch_fatal > 0 in 1h"
+    conditionThreshold:
+      filter: 'metric.type="logging.googleapis.com/user/summary_batch_fatal" AND resource.type="cloud_run_revision"'
+      aggregations:
+        - alignmentPeriod: 3600s
+          perSeriesAligner: ALIGN_SUM
+      comparison: COMPARISON_GT
+      thresholdValue: 0
+      duration: 0s
+alertStrategy:
+  autoClose: 604800s
+userLabels:
+  source: docsplit-monitoring-setup
+notificationChannels:
+  - __NOTIFICATION_CHANNEL__
