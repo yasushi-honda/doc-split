@@ -103,7 +103,7 @@ export interface OcrRunSupersededStats {
  *
  * retryCountは消費せずsupersededカウンタのみ増やす。既に消費済みのGemini使用量
  * (error.tokenUsage、superseded runでも実際にAPIコストは発生している)は、
- * trackGeminiUsageでのコスト計上から漏れないようstatsへ加算する。
+ * superseded判定時のトークン集計(PaddleOCRでは常に0)に反映する。
  *
  * processOCR.tsのonSchedule handler内に閉じたロジックだと直接テストできない
  * (admin.firestore()がモジュールtop-levelで評価されるため単体テストからimportできない)。

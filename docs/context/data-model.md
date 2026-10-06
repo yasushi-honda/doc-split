@@ -29,7 +29,7 @@ DocSplitのデータはすべてCloud Firestoreに格納される。
 | `officeResolutionLogs` | 事業所解決監査ログ | フロントエンド |
 | `editLogs` | ドキュメント編集監査ログ | フロントエンド |
 | `aliasLearningLogs` | エイリアス学習履歴 | Cloud Functions |
-| `stats/gemini/daily/{YYYY-MM-DD}` | Gemini API使用量追跡 | Cloud Functions |
+| `stats/gemini/daily/{YYYY-MM-DD}` | Gemini API使用量追跡（廃止済み・履歴データのみ、ADR-0029） | （書き込み元なし） |
 | `_migrations` | マイグレーション状態 | Cloud Functions / 管理スクリプト |
 
 ---
@@ -576,7 +576,9 @@ Google Drive連携設定（ADR-0022、Phase 1）。Gmail連携（`settings/gmail
 
 ## /stats/gemini/daily/{YYYY-MM-DD}
 
-Gemini API使用量の日次追跡。`rateLimiter.ts` の `trackGeminiUsage` で更新（`set` with `merge: true`）。
+**廃止済み（ADR-0029、2026-10-06）**: Geminiの廃止に伴い書き込み元（`rateLimiter.ts`の`trackGeminiUsage`）を削除したため、新しいデータは書かれない。既存の日次ドキュメントは過去の使用量の履歴として残す（読み取り専用）。以下は過去データのスキーマ。
+
+Gemini API使用量の日次追跡（過去データ）。
 
 | フィールド | 型 | 必須 | 説明 |
 |-----------|-----|------|------|
@@ -599,7 +601,7 @@ Gemini API使用量の日次追跡。`rateLimiter.ts` の `trackGeminiUsage` で
 | requestCount | number | Yes | 当該source分のリクエスト回数（累積） |
 | estimatedCostUsd | number | Yes | 当該source分の推定コスト（USD、累積） |
 
-本PR以前（Issue #546適用前）に書き込まれた日次ドキュメントには `thinkingTokens`/`bySource` が存在しない。読み取り側（`getMonthlyUsage`）はoptional chainingで後方互換対応済み。
+Issue #546適用前に書き込まれた日次ドキュメントには `thinkingTokens`/`bySource` が存在しない。
 
 ---
 
@@ -630,7 +632,7 @@ OCRフィールド抽出スナップショット。正解フィードバック�
 
 ```typescript
 interface OcrExtraction {
-  version: string;             // OCRモデルバージョン (例: "gemini-3.5-flash")
+  version: string;             // OCRモデルバージョン (例: "PP-OCRv6_medium/det:.../rec:...")。過去の文書には "gemini-*" が残る。OCRを実行せず継承元の版も欠ける再利用経路は "unknown"
   extractedAt: Timestamp;      // 抽出日時
   customer?: OcrFieldExtraction;
   office?: OcrFieldExtraction;
@@ -809,7 +811,7 @@ PR-D2（`splitPdf` 改修、Issue #445）以降、provenance の書込は以下�
 - 型定義: `shared/types.ts`
 - セキュリティルール: `firestore.rules`
 - エラーハンドリング: `docs/context/error-handling-policy.md`
-- Geminiレート制限: `docs/context/gemini-rate-limiting.md`
+- Geminiレート制限（廃止済み、履歴）: `docs/context/gemini-rate-limiting.md`
 
 ---
 

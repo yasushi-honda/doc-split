@@ -23,13 +23,8 @@ import {
   type OcrRunExpectation,
   type OcrRunOwnershipResult,
 } from './ocrRunGuard';
-import { getRateLimiter } from '../utils/rateLimiter';
 import {
-  GCP_CONFIG,
-  GEMINI_CONFIG,
-  isThreePointFiveModel,
   SARASHINA_SUMMARY_CONFIG,
-  type OcrProvider,
   type SummaryProviderSetting,
 } from '../utils/config';
 import { ocrWithPaddle } from './paddleOcrClient';
@@ -65,7 +60,7 @@ import { applyConfirmedFieldProtection } from './confirmedFieldMerge';
 import { buildOcrExcerpt } from './ocrExcerpt';
 import { isFaxDuplicationEnabled } from '../utils/featureFlags';
 import { isMultiCustomerDetectionEnabled } from '../utils/featureFlags';
-import { resolveOcrProvider, getSarashinaSummaryGate } from '../utils/featureFlags';
+import { getSarashinaSummaryGate } from '../utils/featureFlags';
 import { planFaxDuplication, buildFaxDuplicationMemberOverride } from './faxDuplication';
 import {
   buildMultiCustomerDetectionFields,
@@ -88,18 +83,8 @@ export { buildPageResult, type RawPageOcrResult };
 const db = admin.firestore();
 const storage = admin.storage();
 
-// Vertex AI設定
-const PROJECT_ID = GCP_CONFIG.projectId;
-const LOCATION = GCP_CONFIG.location;
-const MODEL_ID = GEMINI_CONFIG.modelId;
-// Issue #548: gemini-3.5-flashはthinkingBudget非対応でthinkingLevel方式のみサポートのため、
-// generateContent呼び出し時のthinkingConfig形式をモデル別に分岐する。
-const IS_35_MODEL = isThreePointFiveModel(MODEL_ID);
-
 // 定数
 const OCR_RESULT_MAX_LENGTH = 100000;
-// Vertex AI暴走時の出力トークン上限（Issue #205）。8192tokens ≈ 25K chars Japanese、通常OCRには十分
-const GEMINI_MAX_OUTPUT_TOKENS = GEMINI_CONFIG.maxOutputTokens;
 
 /** OCR処理結果 */
 export interface OcrProcessingResult {
@@ -223,26 +208,12 @@ export async function processDocument(
     mimeType: docData.mimeType as string,
   };
 
-  // ADR-0025: Pass1(OCR)エンジンをドキュメント単位で1回だけ解決する(L1のOCR_PROVIDERのみで
-  // 決まり、既定・倒れ先はpaddle)。ページOCRループの反復ごとに呼び直すと、同一文書内で
-  // プロバイダが途中で変わりうる(=結果の一貫性が壊れる)ため、ここで確定させて使い回す。
-  const ocrProvider: OcrProvider = resolveOcrProvider();
-  // 緊急手段としてGemini(Vertex AI)へ顧客データを実際に送る文書の記録。通常運用(paddle)では
-  // 出ない。Pass1(OCR)を実際に呼ぶ直前にだけ、1文書につき1回出す(既存pageResultsを再利用して
-  // OCRを呼ばない分割子文書や、OCR前の失敗では出さない=事後に緊急利用の文書数を過大に数えない)。
-  // 事後に数えられるようdocIdだけを出す(PIIなし)。
-  let geminiEmergencyLogged = false;
-  const logGeminiEmergencyOnce = (): void => {
-    if (ocrProvider !== 'gemini' || geminiEmergencyLogged) return;
-    geminiEmergencyLogged = true;
-    console.warn(`[gemini_ocr_emergency_used] docId=${docId} (OCR_PROVIDER=geminiが明示されている)`);
-  };
-  // ocrExtraction.version相当のfirestore書込みフィールド(既定はGemini、Pass1が実際に
-  // 呼ばれた場合のみ後段で上書きする。既存pageResults再利用時はOCR自体を呼ばないため
-  // 既定値のまま=既存挙動を保持する)。PaddleOCR時はmodelVersion文字列自体が
-  // (例: "PP-OCRv6_medium/det:.../rec:...")Geminiのモデル名と書式が異なり判別可能なため、
-  // engineを別フィールドに分離せずmodelIdへそのまま転記する(プロバイダ来歴を握りつぶさない)。
-  let pass1ModelVersion = MODEL_ID;
+  // ocrExtraction.version相当のfirestore書込みフィールド。Pass1が実際に呼ばれた場合のみ後段で
+  // PaddleOCRの modelVersion 文字列(例: "PP-OCRv6_medium/det:.../rec:...")へ上書きする。
+  // 既存pageResults再利用時はOCR自体を呼ばないため、継承元の版があればそれを維持し、
+  // 継承元にも版が無い場合は'unknown'のまま(=「OCRを実行しておらず、継承元の版も欠ける」を
+  // 表す。実行していないエンジンの名前を偽って書かない。ADR-0029)。
+  let pass1ModelVersion = 'unknown';
 
   // Issue #526 D3: 分割子ドキュメント(#445で確立済みのparentDocumentIdを持つ)が
   // 親から継承した有効なpageResultsを持つ場合、ページOCRを再実行せず再利用する(コスト削減)。
@@ -276,10 +247,10 @@ export async function processDocument(
     );
     pageResults = existingPageResults;
     totalPages = existingPageResults.length;
-    // codex review P2指摘対応: このパスはocrPass1を一切呼ばないため、pass1ModelVersionを
-    // 既定値(MODEL_ID=Gemini)のまま放置すると、PaddleOCRで処理された親のpageResultsを継承した
-    // 分割子ドキュメントのocrExtraction.versionが誤ってGeminiに上書きされる(実際に生成した
-    // エンジンの来歴を握りつぶす)。継承元の既存ocrExtraction.versionがあればそれを維持する。
+    // このパスはocrPass1を一切呼ばないため、pass1ModelVersionを既定値('unknown')のまま放置すると、
+    // PaddleOCRで処理された親のpageResultsを継承した分割子ドキュメントのocrExtraction.versionが
+    // 'unknown'で上書きされる(実際に生成したエンジンの来歴を握りつぶす)。
+    // 継承元の既存ocrExtraction.versionがあればそれを維持する。
     const inheritedModelVersion = (docData.ocrExtraction as { version?: unknown } | undefined)
       ?.version;
     if (typeof inheritedModelVersion === 'string' && inheritedModelVersion) {
@@ -339,8 +310,7 @@ export async function processDocument(
         console.log(`Processing page ${pageNumber}/${totalPages}`);
 
         const pageBuffer = await extractPdfPage(pdfDoc, i);
-        logGeminiEmergencyOnce();
-        const result = await ocrPass1(pageBuffer, 'application/pdf', ocrProvider, pageNumber);
+        const result = await ocrPass1(pageBuffer, 'application/pdf', pageNumber);
         pass1ModelVersion = result.modelVersion;
 
         pageResults.push(buildPageResult(result, pageNumber, `Page ${pageNumber}/${totalPages}`));
@@ -350,8 +320,7 @@ export async function processDocument(
         totalThinkingTokens += result.thinkingTokens;
       }
     } else {
-      logGeminiEmergencyOnce();
-      const result = await ocrPass1(buffer, mimeType, ocrProvider);
+      const result = await ocrPass1(buffer, mimeType);
       pass1ModelVersion = result.modelVersion;
       pageResults.push(buildPageResult(result, 1, 'Image'));
       totalInputTokens = result.inputTokens;
@@ -1171,122 +1140,24 @@ interface OcrPass1Result {
 }
 
 /**
- * Pass1(画像/PDF→テキスト)のディスパッチャー (ADR-0025)。
- *
- * `provider`(呼出元が`resolveOcrProvider`で文書ごとに1回だけ解決した値)に応じて
- * Gemini/PaddleOCRのいずれかへ振り分ける。両者の戻り値shapeを統一することで、
- * 呼出元(processDocument)はプロバイダ非依存にトークン集計・buildPageResult呼出し・
- * provenance(modelVersion)記録を行える。`engine`は保持しない: modelVersion文字列自体が
- * (Geminiの"gemini-3.5-flash"とPaddleの"PP-OCRv6_medium/det:.../rec:..."で書式が
- * 全く異なり)判別可能であり、type-design-analyzerレビューで指摘の通りengineは
- * どの呼出元からも参照されない死んだフィールドだったため削除した。
+ * Pass1(画像/PDF→テキスト)。PaddleOCR(自前のCloud Run、ADR-0025)のみを呼ぶ。
+ * Geminiは緊急用経路も含めて廃止した(ADR-0029)。戻り値のトークン数はPaddleでは常に0だが、
+ * 永続化されるpageResultsの形(PersistedPageOcrResult)を変えないため項目を残している。
+ * `engine`は保持しない: modelVersion文字列("PP-OCRv6_medium/det:.../rec:...")自体が判別可能。
  */
 async function ocrPass1(
   buffer: Buffer,
   mimeType: string,
-  provider: OcrProvider,
   pageNumber?: number
 ): Promise<OcrPass1Result> {
-  if (provider === 'paddle') {
-    const result = await ocrWithPaddle(buffer, mimeType, pageNumber);
-    return {
-      text: result.text,
-      inputTokens: result.inputTokens,
-      outputTokens: result.outputTokens,
-      thinkingTokens: result.thinkingTokens,
-      modelVersion: result.modelVersion,
-    };
-  }
-  const result = await ocrWithGemini(buffer, mimeType, pageNumber);
+  const result = await ocrWithPaddle(buffer, mimeType, pageNumber);
   return {
-    ...result,
-    modelVersion: MODEL_ID,
+    text: result.text,
+    inputTokens: result.inputTokens,
+    outputTokens: result.outputTokens,
+    thinkingTokens: result.thinkingTokens,
+    modelVersion: result.modelVersion,
   };
-}
-
-/**
- * Gemini 2.5 FlashでOCR処理
- */
-async function ocrWithGemini(
-  buffer: Buffer,
-  mimeType: string,
-  pageNumber?: number
-): Promise<{ text: string; inputTokens: number; outputTokens: number; thinkingTokens: number }> {
-  const rateLimiter = getRateLimiter();
-  await rateLimiter.acquire();
-
-  // @google/genai はESM専用パッケージのため、CJSビルドのこのファイルからは
-  // 静的importでなく動的importで読み込む(TS1479回避)。
-  const { GoogleGenAI, ThinkingLevel } = await import('@google/genai');
-  const ai = new GoogleGenAI({ vertexai: true, project: PROJECT_ID, location: LOCATION });
-
-  const base64Data = buffer.toString('base64');
-
-  const prompt = `
-この画像/PDFの内容をOCRしてください。
-
-【指示】
-- テキストをそのまま正確に抽出してください
-- 表がある場合は、構造を保ってテキスト化してください
-- 手書き文字も可能な限り読み取ってください
-- 読み取れない部分は[判読不能]と記載してください
-- 余計な説明は不要です。抽出したテキストのみを出力してください
-${pageNumber ? `\nこれは${pageNumber}ページ目です。` : ''}
-`;
-
-  const response = await withRetry(
-    async () => {
-      return await ai.models.generateContent({
-        model: MODEL_ID,
-        contents: [
-          {
-            role: 'user',
-            parts: [
-              {
-                inlineData: {
-                  mimeType,
-                  data: base64Data,
-                },
-              },
-              { text: prompt },
-            ],
-          },
-        ],
-        config: {
-          // Issue #205: ハルシネーション/暴走による1.1M chars応答を防止する根本対策
-          maxOutputTokens: GEMINI_MAX_OUTPUT_TOKENS,
-          // Issue #546: OCR転記はテキストの正確な書き起こしのみで推論を要さないため、
-          // thinkingを最小化しコストを削減する。gemini-2.5-flashはthinkingBudget方式
-          // (既定0、GEMINI_OCR_THINKING_BUDGET環境変数でfeature flag化、GEMINI_CONFIG参照)。
-          // Issue #548: gemini-3.5-flashはthinkingBudget非対応でthinkingLevel方式のみサポートのため、
-          // thinkingLevel.MINIMALを使用する(2026-07-24、LOWから変更)。2.5-flash時代の
-          // thinkingBudget=0という運用方針との一貫性を優先し、devフィクスチャ(14件)+
-          // kanameone/cocoro本番confirmed実データ(計18件)の計32件で精度検証(全件LOWと
-          // 完全一致、劣化ゼロ)、thinkingトークンは全件0でコスト16〜32%減を確認済み。
-          // 詳細はIssue #714コメント参照。
-          // ロールバックは`GEMINI_MODEL_ID=gemini-2.5-flash`設定+functions再deployのみ(コード変更不要)。
-          thinkingConfig: IS_35_MODEL
-            ? { thinkingLevel: ThinkingLevel.MINIMAL }
-            : { thinkingBudget: GEMINI_CONFIG.ocrThinkingBudget },
-        },
-      });
-    },
-    RETRY_CONFIGS.gemini
-  );
-
-  const text = response.text || '';
-
-  const usageMetadata = response.usageMetadata;
-  const inputTokens = usageMetadata?.promptTokenCount || 0;
-  const outputTokens = usageMetadata?.candidatesTokenCount || 0;
-  // Issue #546: thinkingはデフォルト有効(dynamic)でoutput単価課金だが従来未計測だった。
-  const thinkingTokens = usageMetadata?.thoughtsTokenCount || 0;
-
-  console.log(
-    `OCR completed: ${text.length} chars, tokens: ${inputTokens}/${outputTokens} (thinking: ${thinkingTokens})`
-  );
-
-  return { text, inputTokens, outputTokens, thinkingTokens };
 }
 
 /** OCR突合エンティティ候補(documentType/customerName/officeName/dateの4候補)。Pass2廃止後は常に全てnull(arbitrateXxxの入力型として残す) */

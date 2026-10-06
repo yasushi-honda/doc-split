@@ -40,7 +40,7 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
 
 ### 環境別 gcloud 操作・本番状態確認（YOU MUST、詳細: [.claude/rules/gcloud-multi-client-ops.md](.claude/rules/gcloud-multi-client-ops.md)）
 
-環境別gcloud操作は`switch-client.sh`で named config 切替→確認→操作完了後はdev復帰の順で実施。`gcloud auth list`1件だけで「権限不足」と即断しない。本番の実際の設定（`GEMINI_MODEL_ID`等の環境変数含む）はローカルenv fileの中身だけで断定せず、`gcloud functions describe`で直接確認すること（GitHub Actionsがデプロイ都度動的生成するため、ローカルの中身は実態と乖離しうる）。
+環境別gcloud操作は`switch-client.sh`で named config 切替→確認→操作完了後はdev復帰の順で実施。`gcloud auth list`1件だけで「権限不足」と即断しない。本番の実際の設定（`OCR_PROVIDER`/`SUMMARY_PROVIDER`等の環境変数含む）はローカルenv fileの中身だけで断定せず、`gcloud functions describe`で直接確認すること（GitHub Actionsがデプロイ都度動的生成するため、ローカルの中身は実態と乖離しうる）。
 
 ### ビルド・テスト
 ```bash

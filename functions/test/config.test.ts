@@ -1,162 +1,67 @@
 /**
- * config.ts: parseOcrThinkingBudget / parseModelId / isThreePointFiveModel /
- * resolveGeminiPricing テスト (Issue #546, #548)
+ * config.ts: parseOcrProvider / parseSummaryProvider / SARASHINA_SUMMARY_CONFIG テスト
  *
- * GEMINI_CONFIG.* はモジュール読み込み時に一度だけ評価されるため、
- * 環境変数の組み合わせを直接テストするには純粋関数として切り出した各関数を検証する。
+ * Geminiは緊急用OCR経路も含めて廃止した(ADR-0029)ため、Gemini用の設定
+ * (parseOcrThinkingBudget / parseModelId / isThreePointFiveModel / resolveGeminiPricing /
+ * GEMINI_CONFIG)のテストは削除した。Geminiが復活しないことは
+ * geminiSdkImportAllowlistContract.test.ts が守る。
  */
 
 import { expect } from 'chai';
 import {
-  GEMINI_CONFIG,
-  parseOcrThinkingBudget,
-  parseModelId,
-  isThreePointFiveModel,
-  resolveGeminiPricing,
   parseOcrProvider,
   parseSummaryProvider,
   SARASHINA_SUMMARY_CONFIG,
 } from '../src/utils/config';
 
-describe('config: parseOcrThinkingBudget (Issue #546)', () => {
-  it('未設定(undefined)の場合は既定値0を返す', () => {
-    expect(parseOcrThinkingBudget(undefined)).to.equal(0);
+describe('config: parseOcrProvider (ADR-0025、ADR-0029: paddleのみ。geminiは廃止)', () => {
+  // Geminiは緊急用経路も含めて廃止した(ADR-0029)。設定欠落・不正値・旧緊急経路の値('gemini')は
+  // 全て警告のうえpaddleへ倒す(実行時に古い環境変数が残っていても顧客データを外部AIへ送らない)。
+  function captureWarn(fn: () => void): string[] {
+    const original = console.warn;
+    const messages: string[] = [];
+    console.warn = (...args: unknown[]) => { messages.push(args.map(String).join(' ')); };
+    try { fn(); } finally { console.warn = original; }
+    return messages;
+  }
+
+  it('未設定(undefined)の場合は"paddle"を返し、警告は出さない', () => {
+    const warns = captureWarn(() => { expect(parseOcrProvider(undefined)).to.equal('paddle'); });
+    expect(warns).to.deep.equal([]);
   });
 
-  it('空文字列の場合は既定値0を返す', () => {
-    expect(parseOcrThinkingBudget('')).to.equal(0);
-  });
-
-  it('"0"を指定した場合は0を返す(明示的なthinking無効化)', () => {
-    expect(parseOcrThinkingBudget('0')).to.equal(0);
-  });
-
-  it('"-1"を指定した場合は-1を返す(dynamic thinkingへのロールバック)', () => {
-    expect(parseOcrThinkingBudget('-1')).to.equal(-1);
-  });
-
-  // Codexレビュー指摘: サポート対象外の値をそのままGeminiに渡すと全OCRリクエストが
-  // バリデーションエラーになるため、ドキュメント化された0/-1以外は既定値0にフォールバックする。
-  it('小数(1.5)は未サポート値として既定値0にフォールバックする', () => {
-    expect(parseOcrThinkingBudget('1.5')).to.equal(0);
-  });
-
-  it('-1以外の負数(-2)は未サポート値として既定値0にフォールバックする', () => {
-    expect(parseOcrThinkingBudget('-2')).to.equal(0);
-  });
-
-  it('範囲外の正の整数(1024)は未サポート値として既定値0にフォールバックする', () => {
-    expect(parseOcrThinkingBudget('1024')).to.equal(0);
-  });
-
-  it('数値として解釈できない文字列の場合は既定値0にフォールバックする(誤設定時の安全側動作)', () => {
-    expect(parseOcrThinkingBudget('not-a-number')).to.equal(0);
-  });
-
-  // PR#550レビュー指摘: GCPコンソール等からのコピペで混入する前後空白・改行はtrimして扱う。
-  it('前後空白付き"-1"("  -1  ")はtrimして-1として扱われる', () => {
-    expect(parseOcrThinkingBudget('  -1  ')).to.equal(-1);
-  });
-
-  it('末尾改行付き"-1"("-1\\n")はtrimして-1として扱われる', () => {
-    expect(parseOcrThinkingBudget('-1\n')).to.equal(-1);
-  });
-
-  it('前後空白付き"0"("  0  ")はtrimして0として扱われる', () => {
-    expect(parseOcrThinkingBudget('  0  ')).to.equal(0);
-  });
-});
-
-describe('config: parseModelId (Issue #548)', () => {
-  it('未設定(undefined)の場合は既定値gemini-3.5-flashを返す(移行後の既定モデル)', () => {
-    expect(parseModelId(undefined)).to.equal('gemini-3.5-flash');
-  });
-
-  it('空文字列の場合は既定値gemini-3.5-flashを返す', () => {
-    expect(parseModelId('')).to.equal('gemini-3.5-flash');
-  });
-
-  it('"gemini-3.5-flash"を指定した場合はそのまま返す', () => {
-    expect(parseModelId('gemini-3.5-flash')).to.equal('gemini-3.5-flash');
-  });
-
-  it('"gemini-2.5-flash"を指定した場合はそのまま返す(ロールバック用途)', () => {
-    expect(parseModelId('gemini-2.5-flash')).to.equal('gemini-2.5-flash');
-  });
-
-  it('未サポートの値は既定値gemini-3.5-flashにフォールバックする(誤設定時の安全側動作)', () => {
-    expect(parseModelId('gemini-1.5-flash')).to.equal('gemini-3.5-flash');
-  });
-
-  it('前後空白付き"gemini-2.5-flash"はtrimしてそのまま扱われる', () => {
-    expect(parseModelId('  gemini-2.5-flash  ')).to.equal('gemini-2.5-flash');
-  });
-});
-
-describe('config: isThreePointFiveModel (Issue #548)', () => {
-  it('"gemini-3.5-flash"はtrueを返す', () => {
-    expect(isThreePointFiveModel('gemini-3.5-flash')).to.equal(true);
-  });
-
-  it('"gemini-2.5-flash"はfalseを返す', () => {
-    expect(isThreePointFiveModel('gemini-2.5-flash')).to.equal(false);
-  });
-});
-
-describe('config: resolveGeminiPricing (Issue #548)', () => {
-  it('"gemini-3.5-flash"は実単価(入力$1.50/出力$9.00)を返す', () => {
-    expect(resolveGeminiPricing('gemini-3.5-flash')).to.deep.equal({
-      inputPer1MTokens: 1.5,
-      outputPer1MTokens: 9.0,
+  it('空文字列・空白のみの場合は"paddle"を返し、警告は出さない', () => {
+    const warns = captureWarn(() => {
+      expect(parseOcrProvider('')).to.equal('paddle');
+      expect(parseOcrProvider('   ')).to.equal('paddle');
     });
+    expect(warns).to.deep.equal([]);
   });
 
-  it('"gemini-2.5-flash"は実単価(入力$0.30/出力$2.50)を返す', () => {
-    expect(resolveGeminiPricing('gemini-2.5-flash')).to.deep.equal({
-      inputPer1MTokens: 0.3,
-      outputPer1MTokens: 2.5,
+  it('"paddle"を指定した場合は"paddle"を返し、警告は出さない(前後空白・末尾改行はtrim)', () => {
+    const warns = captureWarn(() => {
+      expect(parseOcrProvider('paddle')).to.equal('paddle');
+      expect(parseOcrProvider('  paddle\n')).to.equal('paddle');
     });
+    expect(warns).to.deep.equal([]);
   });
 
-  it('未知のmodelIdはgemini-2.5-flash単価にフォールバックする(安全側動作)', () => {
-    expect(resolveGeminiPricing('gemini-1.5-flash')).to.deep.equal({
-      inputPer1MTokens: 0.3,
-      outputPer1MTokens: 2.5,
+  it('"gemini"(旧緊急経路の値)を与えても"paddle"を返し、警告を出す(Geminiへ倒れない)', () => {
+    const warns = captureWarn(() => {
+      expect(parseOcrProvider('gemini')).to.equal('paddle');
+      expect(parseOcrProvider('  gemini\n')).to.equal('paddle');
     });
-  });
-});
-
-describe('config: parseOcrProvider (ADR-0025、倒れ先はpaddle。Geminiは明示指定時のみ)', () => {
-  // 顧客データを外部AI(Gemini)へ送らない方針のため、設定欠落・不正値は全てpaddleへ倒す。
-  // Geminiは緊急手段として、OCR_PROVIDER=geminiを明示したときだけ有効になる。
-  it('未設定(undefined)の場合は既定値"paddle"を返す', () => {
-    expect(parseOcrProvider(undefined)).to.equal('paddle');
+    expect(warns).to.have.length(2);
+    expect(warns[0]).to.include('OCR_PROVIDER');
+    expect(warns[0]).to.include('ADR-0029');
   });
 
-  it('空文字列・空白のみの場合は既定値"paddle"を返す', () => {
-    expect(parseOcrProvider('')).to.equal('paddle');
-    expect(parseOcrProvider('   ')).to.equal('paddle');
-  });
-
-  it('"paddle"を指定した場合は"paddle"を返す', () => {
-    expect(parseOcrProvider('paddle')).to.equal('paddle');
-  });
-
-  it('"gemini"を明示した場合だけ"gemini"を返す(緊急手段)', () => {
-    expect(parseOcrProvider('gemini')).to.equal('gemini');
-  });
-
-  it('未サポート値(綴り違い・大文字)はGeminiに倒れず"paddle"へフォールバックする', () => {
-    expect(parseOcrProvider('paddleocr')).to.equal('paddle');
-    expect(parseOcrProvider('PADDLE')).to.equal('paddle');
-    expect(parseOcrProvider('GEMINI')).to.equal('paddle');
-    expect(parseOcrProvider('gemini-3.5-flash')).to.equal('paddle');
-    expect(parseOcrProvider('code-default')).to.equal('paddle');
-  });
-
-  it('前後空白・末尾改行付きの値はtrimして解釈する("  gemini  "→gemini、"paddle\\n"→paddle)', () => {
-    expect(parseOcrProvider('  gemini  ')).to.equal('gemini');
-    expect(parseOcrProvider('paddle\n')).to.equal('paddle');
+  it('未サポート値(綴り違い・大文字・モデルID)は"paddle"へフォールバックし、警告を出す', () => {
+    const values = ['paddleocr', 'PADDLE', 'GEMINI', 'gemini-3.5-flash', 'code-default'];
+    const warns = captureWarn(() => {
+      for (const v of values) expect(parseOcrProvider(v), `OCR_PROVIDER=${v}`).to.equal('paddle');
+    });
+    expect(warns).to.have.length(values.length);
   });
 });
 
@@ -210,13 +115,5 @@ describe('config: SARASHINA_SUMMARY_CONFIG (ADR-0027 PR3)', () => {
   it('provider/serviceUrl/requestTimeoutMsを持つ(温度・max_tokens等のリクエストパラメータは含まない、ドリフト防止のためsarashinaSummaryRequest.tsが単一の情報源)', () => {
     expect(SARASHINA_SUMMARY_CONFIG).to.have.keys(['provider', 'serviceUrl', 'requestTimeoutMs']);
     expect(SARASHINA_SUMMARY_CONFIG.requestTimeoutMs).to.equal(620_000);
-  });
-});
-
-describe('GEMINI_CONFIG: maxOutputTokens 不変条件 (canary、OCR緊急用経路)', () => {
-  // Issue #205で導入。要約のGemini経路は撤去済みだが、OCR緊急用経路(OCR_PROVIDER=gemini)が
-  // 使うため固定する。値変更時は #205 の暴走対策の目的を再評価し、本テストも明示的に更新すること。
-  it('GEMINI_CONFIG.maxOutputTokens は 8192 で固定', () => {
-    expect(GEMINI_CONFIG.maxOutputTokens).to.equal(8192);
   });
 });

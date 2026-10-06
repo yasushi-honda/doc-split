@@ -52,7 +52,7 @@ export interface OcrUpdatePayloadInputs {
   ocrResultUrl: string | null;
   totalPages: number;
   suggestedNewOffice: string | null;
-  /** ocrExtraction.version に書き込むモデルID (呼出元のGEMINI_CONFIG.modelId) */
+  /** ocrExtraction.version に書き込むモデルID (呼出元のpass1ModelVersion。PaddleOCRのmodelVersion、または再利用経路の継承値/'unknown') */
   modelId: string;
   /** ocrExtraction.extractedAt にそのまま書き込む値 (呼出元のFieldValue.serverTimestamp()) */
   extractedAt: FirebaseFirestore.FieldValue;

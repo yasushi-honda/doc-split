@@ -1,17 +1,22 @@
 /**
- * ocrProcessor.ts の OCR_PROVIDER配線契約テスト (ADR-0025 PR6)
+ * ocrProcessor.ts の Pass1(OCR)配線契約テスト (ADR-0025 PR6、ADR-0029でGemini経路を廃止)
  *
- * processDocument自体はStorage/Gemini/PaddleOCR副作用が大きく直接呼び出せないため
+ * processDocument自体はStorage/PaddleOCR副作用が大きく直接呼び出せないため
  * (ocrProcessorEarlyOwnershipCheckWiringContract.test.tsと同方針)、配線自体を
- * ソース文字列レベルでlock-inする。判定ロジック(resolveOcrProvider自体の動作)は
- * resolveOcrProvider.test.ts(純粋関数、倒れ先paddle)で検証する。
+ * ソース文字列レベルでlock-inする。
  *
- * 検証する契約:
- * 1. resolveOcrProviderの呼出しがprocessDocument内で1回だけ
- * 2. processDocument本体にocrWithGemini(の直接呼出しが残っていない
- *    (ocrPass1ディスパッチャー経由に一本化されていること)
- * 3. Geminiが緊急手段として使われた文書は構造化ログ(gemini_ocr_emergency_used)に記録される
- *    (緊急利用の有無を事後に数えられるようにするため。PR-B)
+ * 検証する契約(plan-crossreview 指摘: 旧アサーションを削るだけにせず、削除後も意味のある
+ * 不変条件を明示する):
+ * 1. PDF・画像の両経路が ocrPass1 を呼び、ocrPass1 は PaddleOCR(ocrWithPaddle)だけを呼ぶ
+ * 2. 返されたモデル版(modelVersion)が pass1ModelVersion へ保存され、Firestoreの
+ *    ocrExtraction.version(modelId)として書かれる
+ * 3. Geminiの経路(provider解決・緊急ログ・ocrWithGemini・GoogleGenAI)がソースに存在しない
+ *    (OCR_PROVIDER=gemini を与えてもGemini呼び出しが起きない=そもそも呼び出し口が無い)
+ * 4. 既存pageResultsの再利用パス(OCRを呼ばない)で、継承元のocrExtraction.versionを維持し、
+ *    継承元にも版が無い場合は 'unknown'(OCRを実行しておらず継承元の版も欠ける)になる
+ *
+ * 'gemini' が宣言されても警告のうえpaddleに倒れる実行時の挙動は config.test.ts
+ * (parseOcrProvider)で検証する。
  */
 
 import { expect } from 'chai';
@@ -28,13 +33,14 @@ function expectSingleDefinition(source: string, pattern: RegExp, label: string):
   expect(count, `${label} の定義が複数存在する場合は anchor の narrow が必要`).to.equal(1);
 }
 
-describe('ocrProcessor OCR_PROVIDER配線契約 (ADR-0025 PR6)', () => {
+describe('ocrProcessor Pass1(OCR)配線契約 (ADR-0025 PR6、ADR-0029)', () => {
+  let source = '';
   let processDocumentBody = '';
   let ocrPass1Body = '';
 
   before(() => {
     const absPath = resolve(process.cwd(), OCR_PROCESSOR_PATH);
-    const source = readFileSync(absPath, 'utf-8');
+    source = readFileSync(absPath, 'utf-8');
 
     expectSingleDefinition(
       source,
@@ -51,65 +57,60 @@ describe('ocrProcessor OCR_PROVIDER配線契約 (ADR-0025 PR6)', () => {
     ocrPass1Body = pass1Body!;
   });
 
-  it('resolveOcrProvider の呼出しが processDocument 内で文書ごとに1回だけ行われる', () => {
-    const matches = processDocumentBody.match(/resolveOcrProvider\(/g) ?? [];
-    expect(
-      matches.length,
-      'resolveOcrProviderはページOCRループ内で毎回呼ばず、文書ごとに1回だけ解決する' +
-        '(同一文書内でプロバイダが途中変化する不整合を防ぐ)'
-    ).to.equal(1);
-  });
-
-  it('processDocument 本体に ocrWithGemini( の直接呼出しが残っていない(ocrPass1経由に一本化)', () => {
-    // 'ocrWithGemini(' 単体だと、ocrWithGeminiを説明する日本語コメント(例: 384行目付近の
-    // 「既存ocrWithGemini()とは独立した」)に偽陽性でマッチするため、実際の呼出しパターン
-    // ('await ocrWithGemini(')でのみ判定する。
-    expect(
-      processDocumentBody,
-      'processDocument内でocrWithGeminiを直接呼ぶと、ocrProvider解決結果(PaddleOCR切替)が' +
-        '無視される回帰になる'
-    ).to.not.include('await ocrWithGemini(');
-  });
-
-  it('processDocument 本体で PDFループ・非PDF分岐の両方が ocrPass1( を呼んでいる', () => {
+  // 契約1: PDF・画像の両経路が PaddleOCR を呼ぶ
+  it('processDocument 本体で PDFループ・非PDF分岐の両方が ocrPass1( を呼んでいる(provider引数なし)', () => {
     const matches = processDocumentBody.match(/await ocrPass1\(/g) ?? [];
     expect(matches.length, 'PDFページ分岐・画像分岐の計2箇所でocrPass1を呼ぶ想定').to.equal(2);
+    expect(processDocumentBody, 'PDFページ分岐の呼出しシグネチャが変わっている').to.match(
+      /await ocrPass1\(pageBuffer,\s*'application\/pdf',\s*pageNumber\)/
+    );
+    expect(processDocumentBody, '画像分岐の呼出しシグネチャが変わっている').to.match(
+      /await ocrPass1\(buffer,\s*mimeType\)/
+    );
   });
 
-  it('ocrPass1 は provider==="paddle" で ocrWithPaddle、それ以外で ocrWithGemini を呼ぶ', () => {
-    expect(ocrPass1Body).to.match(/provider\s*===\s*'paddle'/);
+  it('ocrPass1 は PaddleOCR(ocrWithPaddle)だけを呼び、provider分岐・Gemini呼出しを持たない', () => {
     expect(ocrPass1Body).to.include('await ocrWithPaddle(');
-    expect(ocrPass1Body).to.include('await ocrWithGemini(');
+    expect(ocrPass1Body, 'ocrPass1にprovider分岐が残っている(Gemini廃止、ADR-0029)').to.not.match(/provider/);
+    expect(ocrPass1Body).to.not.match(/ocrWithGemini|GoogleGenAI|generateContent/);
   });
 
-  // pr-test-analyzerセカンドオピニオン指摘(Critical): ocrExtraction.version相当の監査用
-  // provenanceフィールド(pass1ModelVersion→modelId)は、この配線契約テストを含むどのテストからも
-  // 一切参照されていなかった。「modelId: pass1ModelVersion」が「modelId: MODEL_ID」へ差し戻される
-  // 回帰(コード自身のコメントが明言する「捨てるとPaddle移行後は監査上Geminiと誤記録される」)を
-  // 検知するため、ソース文字列レベルでlock-inする。
+  // 契約2: 返されたモデル版が保存される
   it('PDFループ・非PDF分岐の両方で ocrPass1 呼出し直後に pass1ModelVersion を更新している', () => {
     const matches = processDocumentBody.match(/pass1ModelVersion\s*=\s*result\.modelVersion;/g) ?? [];
     expect(
       matches.length,
       'PDFページ分岐・画像分岐の計2箇所でpass1ModelVersionを更新する想定。' +
-        '片方でも欠落するとそのプロバイダのprovenanceがMODEL_ID(Gemini)のまま' +
-        '取り残される回帰になる'
+        '片方でも欠落するとその経路のprovenance(ocrExtraction.version)が既定値のまま取り残される'
     ).to.equal(2);
   });
 
-  it('buildOcrExtractionUpdatePayload には modelId: pass1ModelVersion が渡り、固定のMODEL_IDは渡っていない', () => {
+  it('buildOcrExtractionUpdatePayload には modelId: pass1ModelVersion が渡る', () => {
     expect(
       processDocumentBody,
-      'modelId: pass1ModelVersion であるべき箇所がmodelId: MODEL_IDへ差し戻されると、' +
-        'PaddleOCRで処理してもFirestoreには常にGeminiのmodelIdが記録される回帰になる'
+      'modelId: pass1ModelVersion が渡らないと、PaddleOCRで処理しても返されたモデル版がFirestoreに保存されない'
     ).to.include('modelId: pass1ModelVersion,');
-    expect(processDocumentBody).to.not.match(/modelId:\s*MODEL_ID,/);
   });
 
-  it('pageResults再利用パス(OCR自体をスキップ)では、既存のocrExtraction.versionを継承しMODEL_IDへ上書きしない', () => {
-    // codex review P2指摘対応: PaddleOCRで処理された親のpageResultsを継承した分割子ドキュメントの
-    // provenanceが、再利用パス(ocrPass1を呼ばない)でGeminiのMODEL_IDへ誤って上書きされない
-    // ことを検証する。抽出対象は「reuseCheck.reusable && existingPageResults」ブロック本体。
+  // 契約3: Geminiの経路がソースに存在しない
+  it('ocrProcessor.ts にGeminiの経路(provider解決・緊急ログ・ocrWithGemini・SDK・固定モデルID)が存在しない', () => {
+    expect(source).to.not.match(/resolveOcrProvider|logGeminiEmergencyOnce|gemini_ocr_emergency_used/);
+    expect(source).to.not.match(/ocrWithGemini|GoogleGenAI|@google\/genai|GEMINI_CONFIG/);
+    expect(source, '固定のMODEL_ID(Geminiのモデル名)が復活している').to.not.match(/\bMODEL_ID\b/);
+    expect(processDocumentBody, 'processDocument内にgemini provider分岐が残っている').to.not.match(
+      /ocrProvider\s*[!=]==\s*'gemini'/
+    );
+  });
+
+  // 契約4: 再利用パスの来歴
+  it("pass1ModelVersion の既定値は 'unknown'(実行していないエンジン名を偽って書かない)", () => {
+    expect(processDocumentBody).to.match(/let pass1ModelVersion\s*=\s*'unknown';/);
+  });
+
+  it('pageResults再利用パス(OCR自体をスキップ)では、既存のocrExtraction.versionを継承する', () => {
+    // PaddleOCRで処理された親のpageResultsを継承した分割子ドキュメントのprovenanceが、
+    // 再利用パス(ocrPass1を呼ばない)で既定値('unknown')へ誤って上書きされないことを検証する。
+    // 抽出対象は「reuseCheck.reusable && existingPageResults」ブロック本体。
     const reuseBlock = extractBraceBlock(
       processDocumentBody,
       /if\s*\(\s*reuseCheck\.reusable\s*&&\s*existingPageResults\s*\)/
@@ -123,29 +124,10 @@ describe('ocrProcessor OCR_PROVIDER配線契約 (ADR-0025 PR6)', () => {
       reuseBlock,
       '再利用パスでpass1ModelVersionにinheritedModelVersion相当の値を代入していない'
     ).to.match(/pass1ModelVersion\s*=\s*inheritedModelVersion/);
+    expect(reuseBlock, '再利用パスでocrPass1を呼んでいる(OCRをスキップする契約に反する)').to.not.match(/ocrPass1\(/);
   });
 
-  it('Geminiが実際に使われる文書だけが構造化ログ(gemini_ocr_emergency_used)に記録される(Pass1呼出しの直前、1文書1回)', () => {
-    // 記録関数は ocrProvider==='gemini' のときだけ、かつ1回だけ出す
-    expect(processDocumentBody).to.match(
-      /const logGeminiEmergencyOnce = \(\): void => \{\s*if \(ocrProvider !== 'gemini' \|\| geminiEmergencyLogged\) return;[\s\S]{0,200}gemini_ocr_emergency_used/,
-      '緊急利用ログの条件(gemini明示かつ未記録)が見つからない'
-    );
-    // 実際のPass1呼出し(ページ単位・単一画像)の直前で呼ぶ。pageResults再利用経路では呼ばれない
-    const calls = processDocumentBody.match(/logGeminiEmergencyOnce\(\);\s*\n\s*const result = await ocrPass1\(/g) ?? [];
-    expect(calls.length, 'ocrPass1呼出し(PDFページ・画像)の直前に緊急利用ログが置かれていない').to.equal(2);
-    // 解決直後(OCR前)に無条件で出す旧実装に戻っていない
-    expect(processDocumentBody).to.not.match(
-      /resolveOcrProvider\(\);\s*\n\s*if \(ocrProvider === 'gemini'\) \{\s*\n\s*\/\/[^\n]*\n[\s\S]{0,300}console\.warn\(`\[gemini_ocr_emergency_used\]/,
-      'OCR呼出し前に緊急利用ログを出す旧実装に戻っている(再利用経路・OCR前失敗を過大に数える)'
-    );
-  });
-
-  it('OCRの判定はL1のみ: resolveOcrProvider()は引数なしで呼ばれ、ocrProcessor.tsはgetPaddleOcrGate(L2のFirestoreゲート)を使わない', () => {
-    const source = readFileSync(resolve(process.cwd(), OCR_PROCESSOR_PATH), 'utf-8');
-    expect(processDocumentBody).to.match(/resolveOcrProvider\(\)/, 'resolveOcrProviderは引数なし(L1のみ)で呼ぶ');
-    expect(source, 'L2(Firestoreのpaddleocrフラグ+allowlist)をOCRの判定に再び使うと、設定欠落で無言でGeminiへ倒れる設計に戻る').to.not.match(
-      /getPaddleOcrGate/
-    );
+  it('OCRの判定にL2(Firestoreのpaddleocrフラグ)を使わない: ocrProcessor.tsはgetPaddleOcrGateを参照しない', () => {
+    expect(source, 'L2をOCRの判定に再び使うと、設定欠落でOCRが止まる設計に戻る').to.not.match(/getPaddleOcrGate/);
   });
 });

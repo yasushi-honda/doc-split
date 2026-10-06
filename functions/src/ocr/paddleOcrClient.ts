@@ -14,7 +14,7 @@ import { GoogleAuth } from 'google-auth-library';
 import { withRetry, RETRY_CONFIGS, type RetryConfig } from '../utils/retry';
 import { PADDLE_OCR_CONFIG } from '../utils/config';
 
-/** ocrWithGeminiと同一shape(inputTokens/outputTokens/thinkingTokens)を維持しつつ、
+/** 旧Gemini経路と同一shape(inputTokens/outputTokens/thinkingTokens、永続化されるpageResultsの形)を維持しつつ、
  * プロバイダ来歴(engine/modelVersion)と処理時間(processingMs)を追加で保持する。
  * これを捨てるとPaddle移行後は監査上Geminiと誤記録され、実コストも不可視になるため
  * 呼出元(ocrProcessor.ts)がocrExtraction.version相当のフィールドへ転記する。

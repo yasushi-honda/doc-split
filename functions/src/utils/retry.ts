@@ -25,7 +25,6 @@ export const DEFAULT_RETRY_CONFIG: RetryConfig = {
 /** 処理別のリトライ設定 */
 export const RETRY_CONFIGS = {
   gmail: { ...DEFAULT_RETRY_CONFIG, initialDelayMs: 1000 },
-  gemini: { ...DEFAULT_RETRY_CONFIG, maxRetries: 3, initialDelayMs: 5000 },
   storage: { ...DEFAULT_RETRY_CONFIG, initialDelayMs: 500 },
   firestore: { ...DEFAULT_RETRY_CONFIG, initialDelayMs: 500 },
   /** ADR-0025: PaddleOCR Cloud Runサービス呼出し(429/5xx/timeoutのみ対象、403/400/413等は非対象)。 */
