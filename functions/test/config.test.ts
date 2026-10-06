@@ -8,6 +8,7 @@
 
 import { expect } from 'chai';
 import {
+  GEMINI_CONFIG,
   parseOcrThinkingBudget,
   parseModelId,
   isThreePointFiveModel,
@@ -180,8 +181,19 @@ describe('config: parseSummaryProvider (ADR-0027 PR3)', () => {
     expect(parseSummaryProvider('sarashina')).to.equal('sarashina');
   });
 
-  it('"gemini"を指定した場合は"gemini"を返す', () => {
-    expect(parseSummaryProvider('gemini')).to.equal('gemini');
+  it('"gemini"(旧ロールバック値、PR-Eで撤去)は警告つきで"none"に倒れ、Geminiを呼ばない', () => {
+    const warnings: string[] = [];
+    const original = console.warn;
+    console.warn = (msg?: unknown) => {
+      warnings.push(String(msg));
+    };
+    try {
+      expect(parseSummaryProvider('gemini')).to.equal('none');
+    } finally {
+      console.warn = original;
+    }
+    expect(warnings).to.have.length(1);
+    expect(warnings[0]).to.include('SUMMARY_PROVIDER');
   });
 
   it('未サポート値は既定値"none"にフォールバックする(新規課金を無言で発生させない)', () => {
@@ -191,7 +203,6 @@ describe('config: parseSummaryProvider (ADR-0027 PR3)', () => {
 
   it('前後空白・末尾改行はtrimして扱われる', () => {
     expect(parseSummaryProvider('  sarashina  ')).to.equal('sarashina');
-    expect(parseSummaryProvider('gemini\n')).to.equal('gemini');
   });
 });
 
@@ -199,5 +210,13 @@ describe('config: SARASHINA_SUMMARY_CONFIG (ADR-0027 PR3)', () => {
   it('provider/serviceUrl/requestTimeoutMsを持つ(温度・max_tokens等のリクエストパラメータは含まない、ドリフト防止のためsarashinaSummaryRequest.tsが単一の情報源)', () => {
     expect(SARASHINA_SUMMARY_CONFIG).to.have.keys(['provider', 'serviceUrl', 'requestTimeoutMs']);
     expect(SARASHINA_SUMMARY_CONFIG.requestTimeoutMs).to.equal(620_000);
+  });
+});
+
+describe('GEMINI_CONFIG: maxOutputTokens 不変条件 (canary、OCR緊急用経路)', () => {
+  // Issue #205で導入。要約のGemini経路は撤去済みだが、OCR緊急用経路(OCR_PROVIDER=gemini)が
+  // 使うため固定する。値変更時は #205 の暴走対策の目的を再評価し、本テストも明示的に更新すること。
+  it('GEMINI_CONFIG.maxOutputTokens は 8192 で固定', () => {
+    expect(GEMINI_CONFIG.maxOutputTokens).to.equal(8192);
   });
 });

@@ -183,14 +183,6 @@ describe('enqueueManualSummary (PR-C)', () => {
       expect((await get('doc-allowed')).summaryState).to.equal('pending');
     });
 
-    it('L1=gemini(ロールバック運用): L2を読まずに受け付ける', async () => {
-      await seed('doc-gemini');
-      await enqueue('doc-gemini', 'gemini', async () => {
-        throw new Error('L1=geminiではL2を読まないはず');
-      });
-      expect((await get('doc-gemini')).summaryState).to.equal('pending');
-    });
-
     it('L1=sarashina かつ allowlist=null(制限なし)の場合は、明示的に受け付ける', async () => {
       await seed('doc-allow-null');
       const result = await enqueue('doc-allow-null', 'sarashina', async () => ({ enabled: true, allowlist: null, autoOnOcr: false }));

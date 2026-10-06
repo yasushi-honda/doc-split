@@ -1,14 +1,11 @@
 /**
  * 要約生成用プロンプト構築 (Issue #251 Scope 2)
  *
- * summaryGenerator.ts から `buildSummaryPrompt` と関連定数を分離した pure module。
- * Vertex AI / firebase-admin / rateLimiter への依存を持たず、unit test が admin 初期化
- * なしで実行可能。
+ * `buildSummaryPrompt` と関連定数の pure module。firebase-admin / rateLimiter への依存を
+ * 持たず、unit test が admin 初期化なしで実行可能。
+ * (ADR-0027 PR-E: 旧 summaryGenerator.ts(要約のGemini経路)は撤去済み。Sarashina経路の
+ * summaryPass.ts がこのモジュールを使う。)
  *
- * 分離の理由 (PR #250 review 指摘):
- * - summaryGenerator.ts が import する utils/rateLimiter.ts が module load 時に
- *   `admin.firestore()` を呼ぶため、本モジュールを import するだけで
- *   `app/no-app` エラー (default app 未初期化) で test が失敗する
  * - prompt 文言は退行リスクが高い箇所 (truncation 閾値、fallback 文言、セクション配置)
  *   のため、境界値 test を本モジュールに併置して lock-in する
  */
@@ -17,13 +14,8 @@
 export const MAX_SUMMARY_INPUT_LENGTH = 8000;
 
 /**
- * 要約生成を行う最小 OCR 文字数 (元は summaryGenerator.ts、ADR-0027 PR3 で移設)。
- *
- * summaryGenerator.ts は import 経路で admin.firestore() を呼ぶ rateLimiter に
- * 依存するため、admin 初期化なしの unit test からこの定数だけを読めない問題があった。
- * summaryPass.ts (PR3, dead code) が admin 非依存のまま短文ガードを行うために
- * 本モジュールへ移設し、summaryGenerator.ts からは re-export する
- * (regenerateSummary.ts の既存 import 元は変更しない)。
+ * 要約生成を行う最小 OCR 文字数 (ADR-0027 PR3 で summaryGenerator.ts から移設)。
+ * summaryPass.ts が admin 非依存のまま短文ガードを行う。
  */
 export const MIN_OCR_LENGTH_FOR_SUMMARY = 100;
 

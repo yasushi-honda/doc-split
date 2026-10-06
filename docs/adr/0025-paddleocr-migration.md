@@ -144,7 +144,7 @@ Stage3負荷試験Phase B実測(1ページのcoldMax=33.4秒、5バースト中1
 **追記(2026-09-19、Pass1全面切替完了)**: 必須ゲート(71ページ負荷試験p95=600.5秒/基準850秒PASS、完了率100%)・精度検証(24文書×4フィールド=96判定、PaddleOCR 94/96正解・危険な誤確定0件、Gemini 2.5/3.5 Flashと同水準)・3環境canary運用実績(error率0%)により客観的検証完了と判断し、decision-maker承認のもと`set-paddle-ocr-allowlist --remove`(dry-run確認後に本実行、`run-ops-script.yml`経由)をdev→kanameone→cocoroの順で実行した。各環境とも実行前のcanary allowlist(dev/kanameone各3件、cocoro 1件)がFirestore `settings/features.paddleOcrAllowlist`フィールドから削除され、`getPaddleOcrGate()`上は「不在=制限なし=全docId対象」となったことをFirestore REST API直接読み取りで実機確認済み(Firestore Admin SDK経由ではなく、`gcloud auth print-access-token`で取得したアクセストークンによるREST直叩き、kanameoneのローカル対話認証失効環境でも非対話SA認証(GHA)で完結する経路として`check-paddle-ocr-step0`と同型)。運用コスト実測・抽出精度の実データ統計検証(1-2週間のデータ蓄積、クライアント報告用)は、切替可否の技術判断とは独立した別目的タスクとして並行継続中(詳細: `docs/handoff/GOAL.md`「ADR-0025 PaddleOCR」節)。切替後の事後監視(status:error率・Cloud Run latency)は各環境のStep0④実測ベースラインとの比較で行う。
 
 **スコープ外(本ADRの対象外)**:
-- 手動トリガーの`regenerateSummary`(要約再生成、低頻度)は同じくGemini依存だが自動処理パス外のため対象外、別途扱う
+- 手動トリガーの`regenerateSummary`(要約再生成、低頻度)は同じくGemini依存だが自動処理パス外のため対象外、別途扱う(その後の対応: 要約はSarashinaの手動・非同期に一本化され、要約のGemini経路はADR-0027 PR-Eで撤去済み)
 - Issue #895の完全な修正(office側`officeAmbiguityGate.ts`新設等)は本移行と独立した別トラックとする(最小ガードのみ本計画に含める、上記Decision 3参照)
 
 ## 関連

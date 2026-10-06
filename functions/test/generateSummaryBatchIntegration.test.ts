@@ -153,19 +153,6 @@ describe('runSummaryBatch (ADR-0027 PR4)', () => {
     expect(data.summaryOriginalLength).to.equal(undefined);
   });
 
-  it('L1=gemini: L2ゲートを経由せずGemini経路で生成する', async () => {
-    await seedDocument('doc-gemini');
-    const stats = await runSummaryBatch({
-      firestore: db,
-      bucket: FAKE_BUCKET,
-      l1Provider: 'gemini',
-      summarize: fakeSummarize({ provider: 'gemini', finishReason: null }),
-    });
-
-    expect(stats.done).to.equal(1);
-    expect((await getDoc('doc-gemini')).summaryProvider).to.equal('gemini');
-  });
-
   describe('固有名詞捏造検知(fabrication_suspected): 総試行上限内で再試行し、上限到達でerror', () => {
     // D9実データで実証済みの捏造パターン(ADR-0027 PR0/PR2a): 事業所名の記載が
     // 一切ない書類に対し、実在しない「みずほ訪問看護ステーション」を捏造する。

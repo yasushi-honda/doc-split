@@ -24,9 +24,9 @@
  *
  * 複数ページのfixture(golden-multipage-01)は、本番のPDF分割経路
  * (functions/src/ocr/ocrProcessor.ts の非exportな extractPdfPage と同ロジック、
- * scripts/lib/geminiOcrCompare.ts の extractAllPdfPages を再利用)で1ページずつの
+ * scripts/lib/pdfPages.ts の extractAllPdfPages を再利用)で1ページずつの
  * 独立したPDFへ分割してから保存する。本番実装との重複は既知の限界として受け入れる
- * (geminiOcrCompare.ts冒頭コメント参照。本タスクでは本番コードの共有モジュール化は
+ * (pdfPages.ts冒頭コメント参照。本タスクでは本番コードの共有モジュール化は
  * スコープ外、~/.claude/plans/fuzzy-moseying-book.md v5参照)。
  */
 
@@ -226,21 +226,21 @@ async function generateFixtures(): Promise<void> {
       fs.writeFileSync(path.join(FIXTURE_DIR, fname), combinedBytes);
       console.log(`  ✅ ${fname} (1p, ${(combinedBytes.length / 1024).toFixed(0)}KB)`);
     } else {
-      // 本番と同じ1ページ分割ロジック(scripts/lib/geminiOcrCompare.tsのextractAllPdfPages、
+      // 本番と同じ1ページ分割ロジック(scripts/lib/pdfPages.tsのextractAllPdfPages、
       // functions/src/ocr/ocrProcessor.tsのextractPdfPageと同ロジック)で分割してから保存する。
       // 動的importにするのは、この関数(PDF生成時のみ実行)以外からこのファイルの
-      // フィクスチャ定義をimportした際に、geminiOcrCompare.ts経由で@google/genai等の
-      // 無関係な重い依存を引き込まないようにするため(functions/test/からの利用を想定)。
+      // フィクスチャ定義をimportした際に、pdf-lib等の無関係な重い依存を
+      // 引き込まないようにするため(functions/test/からの利用を想定)。
       //
       // 既知の限界: extractAllPdfPages内部は分割後の各ページを新規PDFDocument.create()で
-      // 生成し直すため(scripts/lib/geminiOcrCompare.ts:86-93)、上記のapplyDeterminism()は
+      // 生成し直すため(scripts/lib/pdfPages.ts)、上記のapplyDeterminism()は
       // 分割後の単一ページPDFには及ばない(非exportのため本ファイルから制御不可)。よって
       // golden-multipage-01の分割済みPDFは再生成のたびにバイト列が変わりうる。この対策として、
       // functions/test/paddleOcrArbitrationRegression.test.tsがmanifest.jsonのSHA-256と
       // 実ファイルの実ハッシュを毎回突合し、PDF再生成後にgolden text再生成を忘れた場合は
       // テストが即座に失敗するようにしている(2026-09-12実測でこの不整合が実際に発生し、
       // codex reviewで検出された教訓を反映)。
-      const { extractAllPdfPages } = await import('../lib/geminiOcrCompare');
+      const { extractAllPdfPages } = await import('../lib/pdfPages');
       const pageBuffers = await extractAllPdfPages(Buffer.from(combinedBytes));
       pageBuffers.forEach((buf, i) => {
         const fname = `${doc.fixtureBase}-p${i + 1}.pdf`;

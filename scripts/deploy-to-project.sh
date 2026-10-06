@@ -343,8 +343,8 @@ if [ "$FULL_DEPLOY" = true ]; then
     fi
     if [ -n "$DECLARED_SUMMARY_PROVIDER" ]; then
         case "$DECLARED_SUMMARY_PROVIDER" in
-          none|gemini|sarashina) ;;
-          *) log_error "SUMMARY_PROVIDER=$DECLARED_SUMMARY_PROVIDER は不正です(none|gemini|sarashinaのみ。$CLIENT_ENV を確認してください)"; exit 1 ;;
+          none|sarashina) ;;
+          *) log_error "SUMMARY_PROVIDER=$DECLARED_SUMMARY_PROVIDER は不正です(none|sarashinaのみ。要約のGemini経路はADR-0027 PR-Eで撤去済み。$CLIENT_ENV を確認してください)"; exit 1 ;;
         esac
         if [ "$DECLARED_SUMMARY_PROVIDER" = "sarashina" ]; then
             DECLARED_SARASHINA_URL=$(read_declared_url SARASHINA_SUMMARY_URL "$CLIENT_ENV")

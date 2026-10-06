@@ -19,7 +19,6 @@ import {
   type SummaryRunExpectation,
 } from '../src/ocr/summaryRunGuard';
 import { SarashinaSummaryError } from '../src/ocr/sarashinaSummaryClient';
-import { SummaryBlockedError } from '../src/ocr/summaryErrorClassification';
 import { SARASHINA_SUMMARY_CONFIG } from '../src/utils/config';
 
 describe('summaryRunGuard', () => {
@@ -108,11 +107,6 @@ describe('summaryRunGuard', () => {
       });
     });
 
-    it('SummaryBlockedErrorはerror/blocked', () => {
-      const err = new SummaryBlockedError({});
-      expect(classifySummaryFailure(err)).to.deep.equal({ action: 'error', kind: 'blocked' });
-    });
-
     it('未知のエラーはerror/unknown', () => {
       expect(classifySummaryFailure(new Error('mystery'))).to.deep.equal({
         action: 'error',
@@ -129,7 +123,6 @@ describe('summaryRunGuard', () => {
 
     it('autoEnabled=false(既定、手動のみ運用)は、L1が有効でもフィールド不在(absent)を返し、pendingを書かない(PR-C)', () => {
       expect(decideOcrCompletionSummaryState('sarashina', 5000, false)).to.deep.equal({ kind: 'absent' });
-      expect(decideOcrCompletionSummaryState('gemini', 5000, false)).to.deep.equal({ kind: 'absent' });
       expect(decideOcrCompletionSummaryState('sarashina', 50, false)).to.deep.equal({ kind: 'absent' });
     });
 
@@ -140,8 +133,8 @@ describe('summaryRunGuard', () => {
       });
     });
 
-    it('autoEnabled=trueかつL1=geminiかつOCR結果が短ければskippedを返す', () => {
-      expect(decideOcrCompletionSummaryState('gemini', 50, true)).to.deep.equal({
+    it('autoEnabled=trueかつL1=sarashinaかつOCR結果が短ければskippedを返す', () => {
+      expect(decideOcrCompletionSummaryState('sarashina', 50, true)).to.deep.equal({
         kind: 'set',
         state: 'skipped',
       });

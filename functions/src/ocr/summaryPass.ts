@@ -1,18 +1,8 @@
 /**
- * 要約生成のprovider別ディスパッチャー(ADR-0027)。
+ * 要約生成のディスパッチャー(ADR-0027)。生成はSarashina(自前ホスト)のみ。
  *
- * PR3時点ではdead code(呼び出し元なし、L1既定`none`)。PR4で`generateSummaryBatch`・
- * `regenerateSummary.ts`の呼び出し元が配線される。
- *
- * gemini経路は既定でlazy require経由でGemini要約コア関数をリテラル呼び出しする
- * (`summaryBuilderCallerContract.test.ts`のCORE_DELEGATE_PATTERNがソース文字列をgrepで
- * 検出するため、DI関数参照のみでは検知されない。pr-review-toolkit code-reviewer指摘:
- * このJSDoc自体に対象関数名をリテラルで書くと、実呼び出しが消えてもコメントの文字列一致
- * だけでこの契約テストが緑のまま通ってしまうため、本文中では意図的に関数名を書かない)。
- * `summaryGenerator.ts`はimport経路で
- * `admin.firestore()`を呼ぶrateLimiterに依存するため、静的importせずrequireで遅延読込し、
- * gemini経路を使わないテスト(sarashina経路のみ実行するテスト)がadmin初期化なしで動くよう
- * にする(`utils/textCap.ts`/`utils/loadMasterData.ts`と同じlazy requireパターン)。
+ * PR-E: 要約のGemini経路(旧`SUMMARY_PROVIDER=gemini`ロールバック運用)を撤去した。
+ * 要約からGeminiへ到達できないことは`geminiSdkImportAllowlistContract.test.ts`が固定する。
  */
 
 import { capPageText, MAX_SUMMARY_LENGTH } from '../utils/textCap';
@@ -24,13 +14,13 @@ import {
   type SarashinaSummaryDeps,
 } from './sarashinaSummaryClient';
 
-export type SummaryPassProvider = 'sarashina' | 'gemini';
+export type SummaryPassProvider = 'sarashina';
 
 export interface SummaryPassResult {
   provider: SummaryPassProvider;
   summary: SummaryField;
-  /** sarashina経路は常に'stop'(finish_reasonが'stop'以外ならクライアント層でthrow済み)。gemini経路は未計測のためnull。 */
-  finishReason: 'stop' | null;
+  /** 常に'stop'(finish_reasonが'stop'以外ならクライアント層でthrow済み)。 */
+  finishReason: 'stop';
   /**
    * 実際にモデルへ送信した原文(8,000文字への切詰め、context超過時の再短縮を反映した後の値)。
    * 捏造スキャン・英字混入スキャンの「原文に存在するか」の比較対象は、元のOCR全文ではなく
@@ -41,8 +31,6 @@ export interface SummaryPassResult {
 
 export interface SummaryPassDeps {
   sarashina?: SarashinaSummaryDeps;
-  /** テスト時にGemini経路を差し替える注入口。既定は`generateSummaryCore`への委譲(lazy require)。 */
-  geminiSummarize?: (ocrResult: string, documentType: string) => Promise<SummaryField>;
 }
 
 /**
@@ -75,20 +63,6 @@ function shrinkOcrResultForRetry(ocrResult: string, promptTokens: number, ctxSiz
 /** プロンプトへ実際に入る原文(`buildSummaryPrompt`と同じ`MAX_SUMMARY_INPUT_LENGTH`での切詰め)。 */
 function truncateForSummaryInput(ocrResult: string): string {
   return ocrResult.length > MAX_SUMMARY_INPUT_LENGTH ? ocrResult.slice(0, MAX_SUMMARY_INPUT_LENGTH) : ocrResult;
-}
-
-function requireSummaryGenerator(): typeof import('./summaryGenerator') {
-  return require('./summaryGenerator') as typeof import('./summaryGenerator');
-}
-
-async function callGemini(
-  ocrResult: string,
-  documentType: string,
-  deps?: SummaryPassDeps
-): Promise<SummaryField> {
-  if (deps?.geminiSummarize) return deps.geminiSummarize(ocrResult, documentType);
-  const { generateSummaryCore } = requireSummaryGenerator();
-  return generateSummaryCore(ocrResult, documentType);
 }
 
 /**
@@ -130,10 +104,10 @@ async function callSarashinaWithContextRetry(
 }
 
 /**
- * OCR結果から指定providerで要約を生成する。
+ * OCR結果からSarashinaで要約を生成する。
  *
- * 短文ガード(`ocrResult.length < MIN_OCR_LENGTH_FOR_SUMMARY`)は`generateSummaryCore`と
- * 同じ閾値・同じ安全網として両providerに共通適用する(`none`の扱いは呼び出し元の責務)。
+ * 短文ガード(`ocrResult.length < MIN_OCR_LENGTH_FOR_SUMMARY`)を安全網として適用する
+ * (`none`の扱いは呼び出し元の責務)。
  */
 export async function generateSummaryForProvider(
   ocrResult: string,
@@ -145,11 +119,6 @@ export async function generateSummaryForProvider(
     throw new Error(
       `generateSummaryForProvider: ocrResult must be at least ${MIN_OCR_LENGTH_FOR_SUMMARY} chars (actual=${ocrResult.length})`
     );
-  }
-
-  if (provider === 'gemini') {
-    const summary = await callGemini(ocrResult, documentType, deps);
-    return { provider, summary, finishReason: null, sentText: truncateForSummaryInput(ocrResult) };
   }
 
   const { text, sentText } = await callSarashinaWithContextRetry(ocrResult, documentType, deps?.sarashina);

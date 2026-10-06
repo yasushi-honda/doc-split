@@ -1,54 +1,45 @@
 /**
- * generateSummary caller-side 契約テスト (Issue #225, #214)
+ * generateSummary caller-side 不在契約テスト (Issue #225, #214, #548-B1, ADR-0027 PR-E)
  *
- * 目的: caller 側で builder を bypass (Vertex AI 直呼) する回帰を検知する (Issue #209 型の
- * summary 暴走再発防止)。builder 側 canary だけでは caller bypass を見逃すため、caller
- * 呼出パターンを静的に lock-in する。
+ * 目的: 要約生成コア(旧 `generateSummaryCore` / `buildSummaryGenerationRequest`)の復活と、
+ * 要約生成を行わないはずの caller からの直接生成(bypass)を検知する。
  *
- * 背景 (#214 リファクタ): summaryGenerator.ts が唯一の Vertex AI caller、regenerateSummary は
- * generateSummaryCore() 経由に統一。Issue #548-B1: ocrProcessor.ts の自動要約生成は削除され、
- * 要約生成は regenerateSummary (手動トリガー) のみに一本化された。
+ * 経緯: Issue #214 で要約生成は summaryGenerator.ts の generateSummaryCore に集約され、
+ * Issue #548-B1 で ocrProcessor.ts の自動要約生成が削除された。ADR-0027 PR-C で
+ * regenerateSummary.ts は「キューへの登録のみ」になり、生成は generateSummaryBatch→summaryPass
+ * (Sarashina)に一本化された。ADR-0027 PR-E で要約のGemini経路(summaryGenerator.ts、
+ * buildSummaryGenerationRequest)自体を撤去したため、以下を固定する:
+ *   - 要約生成コアの呼び出し(`generateSummaryCore(`)が、どの要約関連ファイルにも存在しない。
+ *   - ocrProcessor.ts / regenerateSummary.ts は要約を生成しない。
+ *
+ * `@google/genai` を参照してよいファイルの限定と、要約経路からGeminiへ到達しないことは
+ * `geminiSdkImportAllowlistContract.test.ts` が構文解析(AST)で別途固定する。
  *
  * 方式: grep-based (docs/context/test-strategy.md §2.1 参照)。
- * 既知の limitation: 型 alias 経由 (const gen = xxx.generateContent; gen(...)) や分割代入は
- * 未検出。caller 追加時は CALLER_FILES / CORE_CALLERS / SUMMARY_FREE_CALLERS への手動追記が
- * 必要 (grep 動的検出は未導入)。
- * 昇格条件: false negative が 1 件でも実発生した時点で sinon spy (案A) へ切替。
- *
- * 将来委譲: false negative 実発生時に sinon spy 契約テスト (案A) へ切替予定。
- *          それまでは恒久 contract として保持 (caller bypass 検知は source 構造保護が本質)。
- *
- * Issue #546 (SDK移行 @google-cloud/vertexai → @google/genai) で呼び出し形状が
- * `model.generateContent(...)` から `ai.models.generateContent(...)` に変化したため、
- * パターンは receiver 名を問わず `.generateContent(buildSummaryGenerationRequest(` の
- * 部分文字列のみを見る (SDK 変更に対して頑健にする)。
+ * 既知の limitation: 型 alias 経由 (const gen = xxx.generateContent; gen(...)) や分割代入は未検出。
+ * 将来委譲: false negative 実発生時は構文解析の契約へ寄せる(上記テストが既に到達性を見ている)。
  */
 
 import { expect } from 'chai';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
 
-const BUILDER_CALL_PATTERN = /\.generateContent\s*\(\s*buildSummaryGenerationRequest\s*\(/g;
 const CORE_DELEGATE_PATTERN = /generateSummaryCore\s*\(/g;
+const REQUEST_BUILDER_PATTERN = /buildSummaryGenerationRequest\s*\(/g;
 
-// Issue #214: builder 経由の Vertex AI 呼び出しを集約する唯一のファイル
-const CALLER_FILES = ['src/ocr/summaryGenerator.ts'];
-
-// Issue #214: 要約生成は generateSummaryCore に委譲される caller 群
-// Issue #548-B1: ocrProcessor.ts の自動要約生成は削除。要約生成は regenerateSummary
-// (手動トリガー) のみに集約された。
-// ADR-0027 PR3: summaryPass.ts(dead code、呼び出し元なし)を追加。gemini経路は
-// lazy require経由でgenerateSummaryCore(をリテラル呼び出しする(DI関数参照のみでは
-// 本契約のgrepが検知できないため)。
-// PR-C: regenerateSummary.ts は「キューへの登録のみ」になり要約を生成しないため対象外
-// (下記SUMMARY_FREE_CALLERSで、生成経路の復活=Sarashinaのゲートを迂回するGemini直呼びを禁止する)。
-const CORE_CALLERS = ['src/ocr/summaryPass.ts'];
-
-// Issue #548-B1: ocrProcessor.ts が要約生成に一切関与しない (bypass 復活防止) ことを
-// 別途 lock-in する caller 群。
-// PR-C: regenerateSummary.ts も追加(手動依頼は登録のみ。生成はgenerateSummaryBatch→summaryPass経由に
-// 一本化され、L1/L2ゲートと直列実行(Sarashinaの同時実行1)を迂回する直接生成を許さない)。
-const SUMMARY_FREE_CALLERS = ['src/ocr/ocrProcessor.ts', 'src/ocr/regenerateSummary.ts'];
+// 要約生成コア(旧 generateSummaryCore)を呼ばない caller 群。
+// Issue #548-B1: ocrProcessor.ts は要約生成に一切関与しない。
+// PR-C: regenerateSummary.ts は登録のみ(L1/L2ゲートと直列実行を迂回する直接生成を許さない)。
+// PR-E: 生成を担う summaryPass.ts / generateSummaryBatch.ts / summaryManualRequest.ts も、
+// 旧コアへの委譲(Gemini経路)を持たない。
+const SUMMARY_CORE_FREE_FILES = [
+  'src/ocr/ocrProcessor.ts',
+  'src/ocr/regenerateSummary.ts',
+  'src/ocr/summaryPass.ts',
+  'src/ocr/generateSummaryBatch.ts',
+  'src/ocr/summaryManualRequest.ts',
+  'src/ocr/summaryRunStore.ts',
+];
 
 /**
  * 行頭 `//` コメント行を除去。コメントアウトされた呼び出しを「存在する」と
@@ -62,112 +53,21 @@ function countMatches(source: string, pattern: RegExp): number {
   return source.match(pattern)?.length ?? 0;
 }
 
-describe('generateSummary caller contract', () => {
-  for (const relPath of CALLER_FILES) {
-    it(`${relPath} は buildSummaryGenerationRequest 経由で model.generateContent を呼ぶ`, () => {
+describe('generateSummary 不在契約 (Issue #548-B1 / ADR-0027 PR-E)', () => {
+  for (const relPath of SUMMARY_CORE_FREE_FILES) {
+    it(`${relPath} は generateSummaryCore / buildSummaryGenerationRequest を呼ばない (Gemini要約経路の復活防止)`, () => {
       const absPath = resolve(process.cwd(), relPath);
       const source = stripLineComments(readFileSync(absPath, 'utf-8'));
-      const count = countMatches(source, BUILDER_CALL_PATTERN);
-      expect(count).to.be.at.least(
-        1,
-        `${relPath} で builder bypass を検出。` +
-          `パターン ${BUILDER_CALL_PATTERN.source} が消滅している。` +
-          'Issue #209 再発防止のため、summaryRequestBuilder 経由で呼び出してください。'
-      );
-    });
-  }
-});
-
-describe('generateSummary delegation contract (Issue #214)', () => {
-  for (const relPath of CORE_CALLERS) {
-    it(`${relPath} は generateSummaryCore 経由で要約を生成する`, () => {
-      const absPath = resolve(process.cwd(), relPath);
-      const source = stripLineComments(readFileSync(absPath, 'utf-8'));
-      const count = countMatches(source, CORE_DELEGATE_PATTERN);
-      expect(count).to.be.at.least(
-        1,
-        `${relPath} で generateSummaryCore 呼び出しが見つかりません。` +
-          'Issue #214 のリファクタ後、要約生成は summaryGenerator.generateSummaryCore に集約されているため、' +
-          'caller は直接 Vertex AI を呼ばず generateSummaryCore を経由してください。'
-      );
-    });
-  }
-
-  for (const relPath of CORE_CALLERS) {
-    it(`${relPath} は model.generateContent を直接呼ばない (bypass 防止)`, () => {
-      const absPath = resolve(process.cwd(), relPath);
-      const source = stripLineComments(readFileSync(absPath, 'utf-8'));
-      const summaryCallCount = countMatches(source, BUILDER_CALL_PATTERN);
-      expect(summaryCallCount).to.equal(
+      expect(countMatches(source, CORE_DELEGATE_PATTERN)).to.equal(
         0,
-        `${relPath} で model.generateContent(buildSummaryGenerationRequest(...)) の直接呼び出しを検出。` +
-          'Issue #214 のリファクタ後、summary 生成は summaryGenerator.ts に集約されているため、' +
-          'caller からの直接呼び出しは bypass と見なします。'
+        `${relPath} で generateSummaryCore 呼び出しを検出。要約の生成は generateSummaryBatch(summaryPass 経由、Sarashina)に一本化されている。`
+      );
+      expect(countMatches(source, REQUEST_BUILDER_PATTERN)).to.equal(
+        0,
+        `${relPath} で buildSummaryGenerationRequest 呼び出しを検出。要約のGemini経路は撤去済み(ADR-0027 PR-E)。`
       );
     });
   }
-});
-
-describe('generateSummary 不在契約 (Issue #548-B1)', () => {
-  // ocrProcessor.ts の自動要約生成 (summaryPromise) は削除済み。復活 (再bypass) を検知する。
-  for (const relPath of SUMMARY_FREE_CALLERS) {
-    it(`${relPath} は generateSummaryCore を呼ばない (自動要約生成の復活防止)`, () => {
-      const absPath = resolve(process.cwd(), relPath);
-      const source = stripLineComments(readFileSync(absPath, 'utf-8'));
-      const count = countMatches(source, CORE_DELEGATE_PATTERN);
-      expect(count).to.equal(
-        0,
-        `${relPath} で generateSummaryCore 呼び出しを検出。` +
-          '要約の生成は generateSummaryBatch(summaryPass 経由)に一本化されている。' +
-          'ocrProcessor は自動生成(Issue #548-B1で削除)、regenerateSummary は登録のみ(PR-C)。'
-      );
-    });
-
-    it(`${relPath} は buildSummaryGenerationRequest 経由で model.generateContent を呼ばない`, () => {
-      const absPath = resolve(process.cwd(), relPath);
-      const source = stripLineComments(readFileSync(absPath, 'utf-8'));
-      const count = countMatches(source, BUILDER_CALL_PATTERN);
-      expect(count).to.equal(
-        0,
-        `${relPath} で summary 用の model.generateContent 呼び出しを検出。Issue #548-B1 違反。`
-      );
-    });
-  }
-});
-
-describe('BUILDER_CALL_PATTERN sanity (regex が bypass を正しく検出するか)', () => {
-  it('正例: buildSummaryGenerationRequest 経由の呼び出しはマッチする (旧SDK: model.generateContent)', () => {
-    const src = 'return await model.generateContent(buildSummaryGenerationRequest(prompt));';
-    expect(countMatches(src, BUILDER_CALL_PATTERN)).to.equal(1);
-  });
-
-  it('正例: buildSummaryGenerationRequest 経由の呼び出しはマッチする (Issue #546 新SDK: ai.models.generateContent)', () => {
-    const src = 'async () => ai.models.generateContent(buildSummaryGenerationRequest(prompt)),';
-    expect(countMatches(src, BUILDER_CALL_PATTERN)).to.equal(1);
-  });
-
-  it('負例: インライン展開 ({ contents: [...] }) はマッチしない', () => {
-    const src = 'return await model.generateContent({ contents: [{ role: "user", parts: [{ text: prompt }] }] });';
-    expect(countMatches(src, BUILDER_CALL_PATTERN)).to.equal(0);
-  });
-
-  it('負例: 事前組み立て req オブジェクトもマッチしない', () => {
-    const src = 'const req = { contents, generationConfig }; await model.generateContent(req);';
-    expect(countMatches(src, BUILDER_CALL_PATTERN)).to.equal(0);
-  });
-
-  it('負例: 行頭コメントアウトされた呼び出しは stripLineComments で除外される', () => {
-    const src = '  // return await model.generateContent(buildSummaryGenerationRequest(prompt));';
-    expect(countMatches(stripLineComments(src), BUILDER_CALL_PATTERN)).to.equal(0);
-  });
-
-  it('複数回呼び出しも正しくカウント', () => {
-    const src = [
-      'await model.generateContent(buildSummaryGenerationRequest(p1));',
-      'await model.generateContent(buildSummaryGenerationRequest(p2));',
-    ].join('\n');
-    expect(countMatches(src, BUILDER_CALL_PATTERN)).to.equal(2);
-  });
 });
 
 describe('CORE_DELEGATE_PATTERN sanity (generateSummaryCore 呼び出しの検出)', () => {
@@ -186,11 +86,13 @@ describe('CORE_DELEGATE_PATTERN sanity (generateSummaryCore 呼び出しの検�
     expect(countMatches(stripLineComments(src), CORE_DELEGATE_PATTERN)).to.equal(0);
   });
 
-  it('複数回呼び出しも正しくカウント (BUILDER sanity と対称)', () => {
-    const src = [
-      'await generateSummaryCore(ocr1, type1);',
-      'await generateSummaryCore(ocr2, type2);',
-    ].join('\n');
+  it('複数回呼び出しも正しくカウント', () => {
+    const src = ['await generateSummaryCore(ocr1, type1);', 'await generateSummaryCore(ocr2, type2);'].join('\n');
     expect(countMatches(src, CORE_DELEGATE_PATTERN)).to.equal(2);
+  });
+
+  it('REQUEST_BUILDER_PATTERN は buildSummaryGenerationRequest の呼び出しにマッチし、import 識別子にはマッチしない', () => {
+    expect(countMatches('ai.models.generateContent(buildSummaryGenerationRequest(prompt))', REQUEST_BUILDER_PATTERN)).to.equal(1);
+    expect(countMatches("import { buildSummaryGenerationRequest } from './x';", REQUEST_BUILDER_PATTERN)).to.equal(0);
   });
 });
