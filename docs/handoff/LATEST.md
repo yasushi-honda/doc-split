@@ -18,7 +18,7 @@
 ### 次のアクション
 **即着手(2026-10-08の夕方以降)**: ①3環境の`processocr`で展開後24時間のERRORログを読み取りで確認(証明: `gcloud logging read 'resource.labels.service_name="processocr" AND severity>=ERROR' --project=<各project> --freshness=24h --limit=1`が出力なし)。展開時刻はkanameone 2026-10-06 16:43 UTC、cocoro 同16:52 UTC。工数は小。
 **条件待ち**: ②Vertex AI API無効化と`roles/aiplatform.user`剥奪(trigger=①が問題なし+環境ごとの番号単位の承認)。③kanameone・cocoroで新規書類の`ocrExtraction.version`がPaddle系であることを確認(trigger=書類の流入)。④`docs/client/client-setup.md`の文言の最終確認(trigger=decision-maker)。
-**却下候補**: Issue #714(Gemini 3.6 Flashへの移行検討)は前提が消えたためclose候補(decision-makerの判断待ち)。トークン数項目・`SummaryProvider`の`'gemini'`値の整理はADR-0029でスコープ外。
+**却下候補**: トークン数項目・`SummaryProvider`の`'gemini'`値の整理はADR-0029でスコープ外。
 
 ### 注意(再発防止)
 - 公式資料の読み(データ所在地の表と課金形態)を取り違えた。個別の公式ページで確認してから断定する。
@@ -26,7 +26,7 @@
 - 本番の画面は開かず、配信バンドルのcurl確認で反映を確認した(Playwrightには本番ログインが残りうる)。
 
 ## Issue Net変化(2026-10-07)
-- Close 0件、起票 0件、Net 0。
+- Close 1件(#714: Geminiの完全廃止で前提が消えたためclose)、起票 0件、Net +1(open Issueは4件→3件)。
 
 ## 通常経路のGemini停止: PR-C(要約の手動・非同期化)とPR-E(要約のGemini経路の撤去)完了（2026-10-06）
 
