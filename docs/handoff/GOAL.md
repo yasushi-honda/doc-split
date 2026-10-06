@@ -16,9 +16,9 @@ updated: 2026-10-03
   - 2026-10-06再実測(`gcloud functions describe processOCR`): dev・kanameone・cocoroとも`paddle`(updateTime: dev 10/4 17:46Z、kanameone 10/6 00:53Z、cocoro 10/6 01:51Z)。**ミッション完了時(PR-E後)に最終確認を再実行する**。
 - [x] 通常経路のGemini呼び出しが0件で、緊急利用の記録も0件(証明: `gcloud logging read 'textPayload:"gemini_ocr_emergency_used"' --project=<各project> --freshness=24h --limit=1 --format="value(timestamp)"` → 出力なし。2026-10-03時点は3環境とも0件)
   - **最終実測(2026-10-06 PR-E反映後、48時間)**: 3環境とも`gemini_ocr_emergency_used`が0件(要約のGemini経路はPR-Eでコードごと撤去済み)。
-  - 2026-10-06再実測(48時間): 3環境とも`gemini_ocr_emergency_used`が0件、Pass2の`candidateGeminiMs`も0件。手動要約はGemini経路を撤去済み(PR-C)で、kanameoneはSarashina、cocoroは要約無効。ただし**要約のGemini経路のコード(`summaryGenerator.ts`等)はロールバック用に残っている**ため、「通常経路0件」の恒久的な担保はPR-E(契約テスト)で行う。
+  - 2026-10-06再実測(48時間): 3環境とも`gemini_ocr_emergency_used`が0件、Pass2の`candidateGeminiMs`も0件。手動要約はGemini経路を撤去済み(PR-C)で、kanameoneはSarashina、cocoroは要約無効。要約のGemini経路のコードはPR-Eで撤去し、「通常経路0件」の恒久的な担保は契約テストで行う。
 - [x] 本番コードのGemini利用が緊急用経路のみ(証明: 契約テスト`cd functions && npx mocha --require ts-node/register test/geminiSdkImportAllowlistContract.test.ts`と`cd scripts && npm test`がPASS=構文解析で`@google/genai`を参照するのは`functions/src/ocr/ocrProcessor.ts`だけ。単純なgrepはコメントや過去の説明文にも当たるため、証明は構文解析の契約テストに置き換えた。PR-Eで達成)
-  - 2026-10-06時点の`grep -rl "@google/genai" functions/src scripts`: `functions/src/ocr/ocrProcessor.ts`(OCR緊急用、意図して残す)に加え、**`summaryGenerator.ts`・`summaryRequestBuilder.ts`・`utils/retry.ts`(要約のGemini経路、PR-Eで撤去/限定)**と、比較用スクリプト(`scripts/compare-gemini-ocr-models*.ts`・`verify-type3-ocr.ts`・`scripts/lib/geminiOcrCompare.ts`・`scripts/fixtures/paddleOcrGoldenFixtures.ts`、本番コードではないが方針としてPR-Eで扱いを決める)が残る。
+  - 最終確認(2026-10-06、PR #1130マージ後): 構文解析の契約テストがPASS(functions 50件・scripts 3件)。`@google/genai`をimport/requireするのは`functions/src/ocr/ocrProcessor.ts`だけ(`git grep`には`utils/retry.ts`のコメント内の言及と契約テスト自身の文字列も当たるが、構文解析の対象外)。要約のGemini経路(`summaryGenerator.ts`等)と評価用の比較スクリプトは削除済み。
 
 **進行中のtasks**:
 - [x] PR-A 候補抽出(Pass2)の廃止+運用スクリプトのGemini送信経路を閉じる(PR #1116マージ、3環境デプロイ済み)。実データでPass2候補の採用は全項目0件(kanameone 3,550・cocoro 140・dev 13の実行)
@@ -28,7 +28,7 @@ updated: 2026-10-03
 - [ ] PR-B確認(3環境): デプロイ後の新規処理文書(Pass1を実際に呼んだもの、`pageResults`再利用は除く)の`ocrExtraction.version`が`PP-OCRv6_medium`であること(読み取り専用のrunQuery、識別子と時刻のみ)
 - [ ] PR-D Sarashina要約の本番展開(ADR-0027 PR6): **kanameone canary(10件)は完了し、客観ゲート(1)〜(5)を通過**(decision-maker判断。下記「kanameone canary結果」)。**2026-10-04に方針を変更: 自動要約の全体展開は見送り、「手動を基本」とする**(下記「要約の利用実態と方針決定」)。cocoroのcanaryは、PR-C後に手動経路の確認として改めて判断する
 - [x] PR-C 手動要約の待ち行列化(ADR-0027 PR7、Gemini呼び出しの除去): **完了(2026-10-06、PR #1124/#1126/#1127、3環境へ展開済み。詳細は下の「PR-C 展開完了」)**。手動要約のGemini経路(`regenerateSummary`のGemini固定)は撤去済み。
-- [x] PR-E 要約のGemini経路の撤去・再発防止の契約テスト(`@google/genai`のimportを緊急用経路に限定): **完了(2026-10-06、PR #1130、dev検証済み・kanameone/cocoro再デプロイ済み)**。dev: 手動要約1件が`outcome=done`(61秒)、paddle-ocr-verify(load、tier1、quick)が`failedPageCount=0`で成功(PDF分割の移設確認)。本番2環境は再デプロイ後も環境変数が不変で、バッチに警告以上のログなし。契約テスト(functions 50件・scripts 3件)がPASS。計画はクロスレビュー(grip+codex)済み。完了(`[x]`)にするのは、3環境への反映と、デプロイ前後の`GEMINI_MODEL_ID`実値の確認(再デプロイは既存値を引き継がずコード既定の3.5 Flashで再生成するため。2.5 Flashの退役は2026-10-16)が終わってから。本番での生成成功の確認操作は行わない(devで検証、本番は環境変数とバッチのログまで)
+- [x] PR-E 要約のGemini経路の撤去・再発防止の契約テスト(`@google/genai`のimportを緊急用経路に限定): **完了(2026-10-06、PR #1130、dev検証済み・kanameone/cocoro再デプロイ済み)**。dev: 手動要約1件が`outcome=done`(61秒)、paddle-ocr-verify(load、tier1、quick)が`failedPageCount=0`で成功(PDF分割の移設確認)。本番2環境は再デプロイ後も環境変数が不変で、バッチに警告以上のログなし。契約テスト(functions 50件・scripts 3件)がPASS。計画はクロスレビュー(grip+codex)済み。再デプロイ前の`GEMINI_MODEL_ID`実値は、kanameone・cocoroとも**未設定**(コード既定の3.5 Flash)で、再デプロイ後も不変(再デプロイは既存値を引き継がずコード既定で再生成するため、事前確認を展開の条件にした。ローカルの`functions/.env.docsplit-kanameone`の`gemini-2.5-flash`は古い値で、本番の実態ではなかった)。2.5 Flashの退役は2026-10-16。本番での生成成功の確認操作は行っていない(devで検証、本番は環境変数とバッチのログまで)
 
 **次の一手**: ①`kanameone.env`の`SUMMARY_PROVIDER`を`none`に明示してデプロイ(新規OCR文書が自動で`pending`にならず、画面の「自動生成待ちです」が出ない安全な状態にする。canaryの10件の要約は残る) → ②PR-Cのplan mode計画と実装 → ③cocoroの扱いはPR-C後に判断。本番作業は番号単位の承認を都度取る。**注意**: L1が`sarashina`のままL2フラグだけ`false`に戻すと、新規文書が`pending`のまま溜まり「自動生成待ちです」が出続ける。きれいな巻き戻しはL1(`SUMMARY_PROVIDER`)を外すこと。
 
