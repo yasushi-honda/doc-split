@@ -1,6 +1,32 @@
 # ハンドオフメモ
 
-**更新日**: 2026-10-06（通常経路のGemini停止のPR-C・PR-Eを完了、本番2環境へ反映。以前: 2026-10-03 通常経路のGemini停止: Pass2廃止(PR #1116)・OCRの倒れ先をpaddleへ反転(PR #1117)・Sarashina canary測定スクリプト(PR #1118)をマージし3環境へデプロイ。過去セッションの内容は以下の各節を参照）
+**更新日**: 2026-10-07（Gemini完全廃止(ADR-0029)を実装・3環境へ展開。以前: 2026-10-06（通常経路のGemini停止のPR-C・PR-Eを完了、本番2環境へ反映。以前: 2026-10-03 通常経路のGemini停止: Pass2廃止(PR #1116)・OCRの倒れ先をpaddleへ反転(PR #1117)・Sarashina canary測定スクリプト(PR #1118)をマージし3環境へデプロイ。過去セッションの内容は以下の各節を参照））
+
+## Gemini(Vertex AI)の完全廃止: 緊急用OCR経路も含めて撤去し、3環境へ展開（2026-10-07、ADR-0029）
+
+### 結果
+- **決定(2026-10-06)**: 安全上の理由で、緊急時も含めてGeminiを使わない。根拠は、東京の従量課金が公式サポート外であること(公式モデルページ2026-10-05)、要配慮個人情報を扱う方針、緊急利用の実績が3環境とも0件であること。
+- **PR #1137**(コード・CI・テスト・UI・重要文書): `ocrWithGemini`・料金表・`rateLimiter.ts`・`processOCROnCreate.ts`・`@google/genai`依存を削除。`parseOcrProvider`は不明値を警告のうえ`paddle`へ。`deploy-functions.yml`・`deploy-to-project.sh`は宣言値`gemini`をoverrideより前に拒否(exit 1)。契約テスト(許可リスト空)と、デプロイ拒否順序の契約テストを追加。レビューは`codex review`2回(最終は指摘0件)・独立evaluator・`pr-review-toolkit`2本。
+- **PR #1138**(残りの文書、docs-only)、**#1139**(ADRに本番リビジョン確認結果)、**#1140**(GOAL.mdの再開点)。
+- **展開(番号単位の承認)**: dev=mainの自動デプロイ、kanameone・cocoro=`deploy-functions.yml`(全入力`code-default`)。Hosting(HelpPageの文言)はkanameone・cocoroをGHAで反映、3環境の配信バンドルで旧文言なし・新文言ありをcurlで確認。
+
+### 検証(実測)
+- 3環境とも`OCR_PROVIDER=paddle`・`SUMMARY_PROVIDER=sarashina`・`GEMINI_MODEL_ID`なし(`gcloud functions describe`)。展開直後1時間のERRORログは本番2環境で0件。
+- dev: 12ページのダミー書類が`processed`、`ocrExtraction.version`=`PP-OCRv6_medium/…`。Cloud Runの`paddle-ocr`を00022→00021→`--to-latest`で戻し、100%復帰を確認。本番2環境は戻し先(直前リビジョン)がReadyであることまで確認(動作は未確認)。
+- テスト(Node 20): functions 2547件・scripts 814件PASS。
+
+### 次のアクション
+**即着手(2026-10-08の夕方以降)**: ①3環境の`processocr`で展開後24時間のERRORログを読み取りで確認(証明: `gcloud logging read 'resource.labels.service_name="processocr" AND severity>=ERROR' --project=<各project> --freshness=24h --limit=1`が出力なし)。展開時刻はkanameone 2026-10-06 16:43 UTC、cocoro 同16:52 UTC。工数は小。
+**条件待ち**: ②Vertex AI API無効化と`roles/aiplatform.user`剥奪(trigger=①が問題なし+環境ごとの番号単位の承認)。③kanameone・cocoroで新規書類の`ocrExtraction.version`がPaddle系であることを確認(trigger=書類の流入)。④`docs/client/client-setup.md`の文言の最終確認(trigger=decision-maker)。
+**却下候補**: Issue #714(Gemini 3.6 Flashへの移行検討)は前提が消えたためclose候補(decision-makerの判断待ち)。トークン数項目・`SummaryProvider`の`'gemini'`値の整理はADR-0029でスコープ外。
+
+### 注意(再発防止)
+- 公式資料の読み(データ所在地の表と課金形態)を取り違えた。個別の公式ページで確認してから断定する。
+- 状態確認のポーリングでJSON解析が失敗していたのに、20回空振りしていた。取得結果が空ならまず取得・解析を疑う。OCR全文を含むJSONは`strict=False`とフィールド指定(`mask`)で取得する。
+- 本番の画面は開かず、配信バンドルのcurl確認で反映を確認した(Playwrightには本番ログインが残りうる)。
+
+## Issue Net変化(2026-10-07)
+- Close 0件、起票 0件、Net 0。
 
 ## 通常経路のGemini停止: PR-C(要約の手動・非同期化)とPR-E(要約のGemini経路の撤去)完了（2026-10-06）
 
