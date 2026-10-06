@@ -62,7 +62,7 @@ Accepted (2026-10-06)。ADR-0025・ADR-0027が「明示指定時だけ使う緊�
 ## 展開の記録(2026-10-07)
 - PR #1137をマージ。devはmainへのpushの自動デプロイ、kanameone・cocoroは`deploy-functions.yml`(全入力`code-default`)で展開した。3環境とも`gcloud functions describe`で`OCR_PROVIDER=paddle`・`SUMMARY_PROVIDER=sarashina`・`GEMINI_MODEL_ID`なしを確認した。
 - dev実動確認: 12ページのダミー書類が`processed`になり、`ocrExtraction.version`は`PP-OCRv6_medium/det:…/rec:…`だった。
-- dev切替の実演: `paddle-ocr`を`00022`(最新、100%)→`00021`(直前、100%)→`--to-latest`で`00022`(100%)へ戻し、各段階のトラフィック配分を確認した。kanameone・cocoroのリビジョン履歴(戻し先の健全性)は未確認で、実際の障害時に確認する。
+- dev切替の実演: `paddle-ocr`を`00022`(最新、100%)→`00021`(直前、100%)→`--to-latest`で`00022`(100%)へ戻し、各段階のトラフィック配分を確認した。本番2環境のリビジョン履歴は読み取りで確認した(kanameone: 現在`00002-7lw`・直前`00001-dbr`、cocoro: 現在`00002-2sc`・直前`00001-xgj`、いずれもReady)。戻し先は存在してReadyだが、本番では切替を試せないため、直前のリビジョンがOCRとして正しく動くか(モデル・設定が現行と同じか)は未確認で、実際の障害時にその場で確認する。
 - HelpPageの文言は3環境のHostingの配信バンドルで確認した(旧文言なし、新文言あり)。
 - GCP側の設定(Vertex AI API無効化、`roles/aiplatform.user`剥奪)は、展開後24時間のERRORログ確認の後に、環境ごとの番号単位の承認で行う。
 
