@@ -187,6 +187,16 @@ devでL2(`settings/features.sarashinaSummary`+allowlist)→L1(`SUMMARY_PROVIDER=
 
 **前提の訂正**: 上記「アーキテクチャ方針の転換」の「お客様目線で数分待たされる体験はあり得ない」は、需要を測らずに下した判断だった。自動生成を再開するかは、手動の利用実績(`summary_manual_requested`)を見て判断する(書類種別での絞り込みは、再開時に追加する)。
 
+### 要約のGemini経路の撤去(PR-E、2026-10-06)
+
+通常経路のGemini停止(GOAL.md)の最後の掃除として、要約を生成するGemini経路(旧`SUMMARY_PROVIDER=gemini`のロールバック運用)を撤去した。上記の旧記述(Decisionの3値ルーティング、PR3実装知見8の`generateSummaryCore(`リテラル契約など)は、この節で置き換わる。
+
+- **撤去したもの**: `summaryGenerator.ts`(`generateSummaryCore`)、`buildSummaryGenerationRequest`、`SummaryPassProvider`の`'gemini'`と`geminiSummarize`注入口、`SummaryBlockedError`/`extractBlockedSummaryDetails`/`mapSummaryErrorToHttpsError`、`resolveSummaryProvider`(呼び出し元なし)、評価用の比較スクリプト群(`compare-gemini-ocr-models*.ts`、`verify-type3-ocr.ts`、`measure-summary-cost.ts`、`lib/geminiOcrCompare.ts`)。PDF分割関数は`scripts/lib/pdfPages.ts`へ切り出した(現役のpaddle-ocr-verifyが使う)。
+- **残したもの**: OCR緊急用経路(`OCR_PROVIDER=gemini`、`functions/src/ocr/ocrProcessor.ts`)と、それが使う`GEMINI_CONFIG`/`rateLimiter`/`RETRY_CONFIGS.gemini`。`buildSummaryFields`(要約の唯一の書込み通過点)と`classifySummaryError`(Sarashina以外の例外の受け皿)。過去データを読むための型(`SummaryProvider`の`'gemini'`、`SummaryErrorKind`の`'blocked'`/`'quota'`、`GeminiUsageSource`の`'summary'`)とFEの`blocked`表示。
+- **`SUMMARY_PROVIDER=gemini`**: 受け付けない値になり、警告を出して`none`に倒れる(安全側)。`deploy-functions.yml`・`deploy-to-project.sh`も`none|sarashina`のみ受け付ける。L1が`none`以外なら、手動依頼・バッチともに必ずL2(Firestoreフラグ+許可リスト)を通る。
+- **ロールバックの扱い(旧「L1=geminiへ戻す」は無効)**: 要約を止める手段は2つあり、**挙動は同等ではない**。①L1=`none`(`SUMMARY_PROVIDER`を外して再デプロイ): 依頼の登録は「準備中」で拒否され、バッチはstuck救済だけを行う。取り残された`processing`は救済時に`error`になる。②L2=OFF(`settings/features.sarashinaSummary`を無効化): 依頼の登録は拒否され、バッチはキューを進めない。救済の後も、すでに登録済みの手動依頼の`pending`は滞留しうる(L2を戻すと処理が再開する)。停止時は、停止前に`pending`/`processing`の件数を確認し、取り扱いを決めてから操作すること。
+- **再発防止(契約テスト)**: `functions/test/geminiSdkImportAllowlistContract.test.ts`が、`@google/genai`を参照してよいファイルを`ocrProcessor.ts`だけに限定し(構文解析で静的import・型import・動的import・require等を検出)、要約経路からocrProcessor.tsや`@google/genai`に到達しないことを固定する。`scripts/lib/geminiSdkImportAllowlistContract.test.ts`はscripts・frontend・sharedに参照が0件であることを固定する。旧Vertex SDKやREST直叩きでの復活は対象外(`summaryPromptBuilderIsolationContract.test.ts`が旧SDKを守る)。
+
 ## Consequences
 
 **良い影響**:
@@ -196,7 +206,7 @@ devでL2(`settings/features.sarashinaSummary`+allowlist)→L1(`SUMMARY_PROVIDER=
 
 **悪い影響・リスク**:
 - 自前ホスティングサービス(Sarashina Cloud Run)の運用責任(デプロイ・監視・障害対応)がdoc-splitチームに追加される
-- 第一弾(PR1〜PR6)完了時点では「Gemini依存脱却」は未完了(手動経路`regenerateSummary`はGeminiに残る)。完全な脱却にはPR7(任意ではなく必須フォローアップ)が必要
+- 第一弾(PR1〜PR6)完了時点では「Gemini依存脱却」は未完了(手動経路`regenerateSummary`はGeminiに残る)。完全な脱却にはPR7(任意ではなく必須フォローアップ)が必要(その後、PR-C(手動・非同期化)とPR-E(Gemini経路の撤去)で解消した)
 - Cloud Run timeoutを跨いだ場合、コンテナ側の生成処理が継続し新規リクエストを一時的にブロックする既知の挙動があり、クライアント側でリトライ・所有権保護の設計が必要(実装計画「主要な設計判断」3・8参照)
 - 有効コンテキスト長が8192トークンに固定され、`-c`指定を大きくしても伸びない。長文OCR結果は入力長管理が必要(実装計画「主要な設計判断」1a-4参照)
 

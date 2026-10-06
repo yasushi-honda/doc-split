@@ -1,58 +1,15 @@
 /**
- * generateSummary regression テスト (Issue #213)
+ * summaryRequestBuilder regression テスト (Issue #213)
  *
  * 目的:
- * - Gemini generateContent 呼び出しに maxOutputTokens=8192 が付与され続けることを保証 (Issue #209 再発防止)
  * - Firestore の summary フィールド書き込みに truncated/originalLength が同梱され続けることを保証 (#178 教訓)
+ * - ADR-0027 PR-E: 旧 buildSummaryGenerationRequest(要約のGeminiリクエスト)は撤去した。
+ *   GEMINI_CONFIG.maxOutputTokens の canary は OCR緊急用経路でも使うため config.test.ts へ移した。
  */
 
 import { expect } from 'chai';
-import {
-  buildSummaryGenerationRequest,
-  buildSummaryFields,
-} from '../src/ocr/summaryRequestBuilder';
-import { GEMINI_CONFIG } from '../src/utils/config';
+import { buildSummaryFields } from '../src/ocr/summaryRequestBuilder';
 import type { SummaryField } from '../../shared/types';
-
-describe('summaryRequestBuilder: buildSummaryGenerationRequest', () => {
-  it('config.maxOutputTokens に GEMINI_CONFIG.maxOutputTokens を必ず設定する', () => {
-    const req = buildSummaryGenerationRequest('test prompt');
-    expect(req.config.maxOutputTokens).to.equal(GEMINI_CONFIG.maxOutputTokens);
-  });
-
-  it('model に GEMINI_CONFIG.modelId を設定する (Issue #546 SDK移行: @google/genai は model を呼び出し引数に統合)', () => {
-    const req = buildSummaryGenerationRequest('test prompt');
-    expect(req.model).to.equal(GEMINI_CONFIG.modelId);
-  });
-
-  // canary: GEMINI_CONFIG.maxOutputTokens を意図せず緩和した場合の安全網。
-  // 値変更が必要なら #205/#209 の防御目的を再評価し、本テストも明示的に更新すること。
-  it('canary: maxOutputTokens は 8192 で固定 (#205で導入、#209でsummary適用)', () => {
-    const req = buildSummaryGenerationRequest('test prompt');
-    expect(req.config.maxOutputTokens).to.equal(8192);
-  });
-
-  it('contents[0].parts[0].text に prompt 全文を含む', () => {
-    const prompt = '【要約】以下のOCR結果を要約してください\n本文サンプル';
-    const req = buildSummaryGenerationRequest(prompt);
-    expect(req.contents).to.have.lengthOf(1);
-    expect(req.contents[0].role).to.equal('user');
-    expect(req.contents[0].parts).to.have.lengthOf(1);
-    expect(req.contents[0].parts[0].text).to.equal(prompt);
-  });
-
-  it('空 prompt でも config は維持される (防御の不変条件)', () => {
-    const req = buildSummaryGenerationRequest('');
-    expect(req.config).to.deep.equal({ maxOutputTokens: 8192 });
-  });
-
-  it('長大 prompt (50K chars) でも config は維持される', () => {
-    const longPrompt = 'a'.repeat(50_000);
-    const req = buildSummaryGenerationRequest(longPrompt);
-    expect(req.config.maxOutputTokens).to.equal(8192);
-    expect(req.contents[0].parts[0].text.length).to.equal(50_000);
-  });
-});
 
 describe('summaryRequestBuilder: buildSummaryFields (Issue #215 discriminated union)', () => {
   it('truncated=false で { text, truncated:false } のみ返す (originalLength は型レベルで不在)', () => {
@@ -103,13 +60,5 @@ describe('summaryRequestBuilder: buildSummaryFields (Issue #215 discriminated un
     if (fields.truncated) {
       expect(fields.originalLength).to.equal(50_000);
     }
-  });
-});
-
-describe('GEMINI_CONFIG: maxOutputTokens 不変条件 (canary)', () => {
-  // builder 側 canary と二重で固定。値変更時は #205 (定数導入) と #209 (summary適用) の
-  // 防御目的を再評価し、両テストを明示的に更新すること。
-  it('GEMINI_CONFIG.maxOutputTokens は 8192 で固定', () => {
-    expect(GEMINI_CONFIG.maxOutputTokens).to.equal(8192);
   });
 });

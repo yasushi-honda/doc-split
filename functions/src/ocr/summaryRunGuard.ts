@@ -125,11 +125,11 @@ export type SummaryFailureOutcome =
   // Sarashinaのconfig(サービスURL不正等): 実行環境の設定不備のためattemptを消費せず中断する。
   | { action: 'abort-batch-config' }
   | { action: 'retry-or-error'; kind: 'quota' | 'transient'; stopBatch: boolean }
-  | { action: 'error'; kind: 'blocked' | 'unknown' };
+  | { action: 'error'; kind: 'unknown' };
 
 /**
  * 要約生成失敗を分類する。`SarashinaSummaryError`を先に判定してから既存の
- * `classifySummaryError`(Gemini向け)へフォールバックする(ADR-0027 PR3知見10(b)の
+ * `classifySummaryError`(Sarashina以外の例外の受け皿)へフォールバックする(ADR-0027 PR3知見10(b)の
  * 申し送り通り: `classifySummaryError`は`SarashinaSummaryError`の`httpStatus`フィールドを
  * 認識せず、誤って`unknown`に落ちてしまうため、instanceof判定を先に行う必要がある)。
  */
@@ -157,8 +157,6 @@ export function classifySummaryFailure(err: unknown): SummaryFailureOutcome {
       return { action: 'retry-or-error', kind: 'quota', stopBatch: false };
     case 'transient':
       return { action: 'retry-or-error', kind: 'transient', stopBatch: false };
-    case 'blocked':
-      return { action: 'error', kind: 'blocked' };
     default:
       return { action: 'error', kind: 'unknown' };
   }
@@ -175,7 +173,7 @@ export type OcrCompletionSummaryDecision = { kind: 'absent' } | { kind: 'set'; s
  * - L1(`SUMMARY_PROVIDER`)が'none'
  * - `autoEnabled`(`settings/features.autoSummaryOnOcr === true`)が偽
  *
- * これにより、後日L1を'sarashina'/'gemini'へ切り替えても、切替前に完了していた文書が
+ * これにより、後日L1を'sarashina'へ切り替えても、切替前に完了していた文書が
  * まとめて「バックフィル」されることはなく、自動生成を再開するかどうかは設定で選べる。
  */
 export function decideOcrCompletionSummaryState(

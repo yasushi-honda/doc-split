@@ -47,7 +47,7 @@ export function parseOcrThinkingBudget(envValue: string | undefined): number {
  * 環境変数 `GEMINI_MODEL_ID` に`gemini-2.5-flash`を設定してfunctionsを再deployするだけで
  * コード変更・PRなしに即時ロールバックできる(GEMINI_OCR_THINKING_BUDGETと同じパターン)。
  *
- * ドキュメント化された2値(gemini-3.5-flash/gemini-2.5-flash)以外は、全OCR/summaryリクエストが
+ * ドキュメント化された2値(gemini-3.5-flash/gemini-2.5-flash)以外は、OCR緊急用経路の全リクエストが
  * 存在しないモデルIDでエラーになることを避けるため、安全側の既定値(移行後の3.5-flash)にフォールバックする。
  */
 export function parseModelId(envValue: string | undefined): string {
@@ -115,24 +115,23 @@ export const PADDLE_OCR_CONFIG = {
 } as const;
 
 /** 要約生成(regenerateSummary/summaryPass)のプロバイダ設定 (ADR-0027) */
-export type SummaryProviderSetting = 'none' | 'sarashina' | 'gemini';
+export type SummaryProviderSetting = 'none' | 'sarashina';
 
 /**
  * `SUMMARY_PROVIDER`環境変数から要約生成プロバイダを解決する (ADR-0027 PR3)。
  *
- * 既定は'none'(現行挙動: 自動要約生成なし、Issue #548-B1)。parseOcrProviderとは異なり
- * 既定値を'gemini'にすると、デプロイしただけで全文書が無言でGemini自動要約されてしまう
- * (ADR-0027 主要な設計判断2)。そのため未知値・空値はいずれも'none'にフォールバックする。
- * 空値(未設定/空文字/空白のみ)はdead code状態のPR3では日常的に発生するため警告を出さず、
+ * 既定は'none'(要約機能なし)。未知値・空値はいずれも'none'にフォールバックする
+ * (ADR-0027 主要な設計判断2: デプロイしただけで無言で課金・外部送信が始まらないようにする)。
+ * ADR-0027 PR-E: 旧ロールバック値'gemini'は撤去した。残っていても警告つきで'none'に倒れる
+ * (安全側)。空値(未設定/空文字/空白のみ)は日常的に発生するため警告せず、
  * 非空の未知値のみ警告する(GCPコンソール等からのコピペ誤りを検知するため)。
  */
 export function parseSummaryProvider(envValue: string | undefined): SummaryProviderSetting {
   const trimmed = envValue?.trim();
   if (trimmed === 'sarashina') return 'sarashina';
-  if (trimmed === 'gemini') return 'gemini';
   if (trimmed !== undefined && trimmed !== '' && trimmed !== 'none') {
     console.warn(
-      `[config] SUMMARY_PROVIDER="${envValue}" is not a supported value (expected "none", "sarashina" or "gemini"). Falling back to none.`
+      `[config] SUMMARY_PROVIDER="${envValue}" is not a supported value (expected "none" or "sarashina"). Falling back to none.`
     );
   }
   return 'none';

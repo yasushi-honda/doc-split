@@ -12,7 +12,7 @@
  * デバッグで原因不明となる silent failure を構造的に防ぐ。
  *
  * 方式: grep-based (docs/context/test-strategy.md §2.1 参照)。危険な外部呼出
- * (`generateSummaryCore(`) を anchor に、近傍 (±ANCHOR_WINDOW_LINES 行) の logError 呼出を
+ * (`enqueueManualSummary(`、PR-Cで旧 `generateSummaryCore(` から付け替え) を anchor に、近傍 (±ANCHOR_WINDOW_LINES 行) の logError 呼出を
  * 検知する。Issue #251 Scope3 で anchor を console.error メッセージから呼出自体に付け替えた
  * (catch 句内の console.error メッセージ文言変更でテストが空振りしないよう、より安定した
  * 呼出自体を anchor にする設計。console.error 自体は stack trace 可視性のため引き続き残置)。

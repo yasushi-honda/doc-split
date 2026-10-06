@@ -203,18 +203,12 @@ async function runSummaryBatchInner(deps: RunSummaryBatchDeps): Promise<SummaryB
     return stats;
   }
 
-  // L2ゲート(Firestoreフラグ+許可リスト)はL1='sarashina'の場合のみ適用する
-  // (resolveSummaryProviderと同じ設計。L1='gemini'は明示的なロールバック運用のため
-  // L2のenabled/allowlistを経由させない)。自動生成フラグ(autoSummaryOnOcr)だけは、どちらの
-  // L1でも同じsnapshotから読む。
-  let allowlist: string[] | null = null;
-  if (l1Provider === 'sarashina') {
-    if (!gate.enabled) {
-      console.log(`[${FUNCTION_NAME}] sarashinaSummary gate disabled, pausing queue for this tick`);
-      return stats;
-    }
-    allowlist = gate.allowlist;
+  // L2ゲート(Firestoreフラグ+許可リスト)。L1が'none'以外なら必ずL2を通す(PR-E)。
+  if (!gate.enabled) {
+    console.log(`[${FUNCTION_NAME}] sarashinaSummary gate disabled, pausing queue for this tick`);
+    return stats;
   }
+  const allowlist: string[] | null = gate.allowlist;
 
   const startedAt = now();
   // 実行対象(PR-C): 手動依頼の印(summaryManualRequestedAt)を持つpendingを依頼順に取得する
@@ -248,7 +242,7 @@ async function runSummaryBatchInner(deps: RunSummaryBatchDeps): Promise<SummaryB
     }
   }
 
-  const provider: SummaryPassProvider = l1Provider === 'gemini' ? 'gemini' : 'sarashina';
+  const provider: SummaryPassProvider = 'sarashina';
 
   for (let i = 0; i < docs.length; i++) {
     if (now() - startedAt >= softDeadlineMs) {

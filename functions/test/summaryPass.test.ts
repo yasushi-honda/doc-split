@@ -1,15 +1,14 @@
 /**
  * summaryPass.ts: generateSummaryForProvider テスト (ADR-0027 PR3)
  *
- * gemini経路はDI(geminiSummarize)で差し替え、admin初期化なしでテストできることを
- * 確認する。sarashina経路はsummarizeWithSarashinaのDI(fetchImpl)を通して検証する。
+ * summarizeWithSarashinaのDI(fetchImpl)を通して検証する(admin初期化不要)。
+ * ADR-0027 PR-E: Gemini経路は撤去した。
  */
 
 import { expect } from 'chai';
 import { generateSummaryForProvider } from '../src/ocr/summaryPass';
 import type { SarashinaSummaryDeps } from '../src/ocr/sarashinaSummaryClient';
 import { buildSummaryPrompt, MIN_OCR_LENGTH_FOR_SUMMARY, MAX_SUMMARY_INPUT_LENGTH } from '../src/ocr/summaryPromptBuilder';
-import type { SummaryField } from '../../shared/types';
 
 const CONFIG = { serviceUrl: 'https://sarashina-summary.example.run.app', requestTimeoutMs: 1000 };
 const LONG_ENOUGH_OCR = 'あ'.repeat(MIN_OCR_LENGTH_FOR_SUMMARY);
@@ -32,50 +31,22 @@ function withNoDelay(deps: Partial<SarashinaSummaryDeps>): SarashinaSummaryDeps 
 }
 
 describe('generateSummaryForProvider (ADR-0027 PR3)', () => {
-  it('ocrResultがMIN_OCR_LENGTH_FOR_SUMMARY未満なら通信前にthrowする(gemini/sarashinaどちらも共通)', async () => {
+  it('ocrResultがMIN_OCR_LENGTH_FOR_SUMMARY未満なら通信前にthrowする', async () => {
     let called = false;
-    await Promise.all(
-      (['gemini', 'sarashina'] as const).map(async (provider) => {
-        try {
-          await generateSummaryForProvider('短い', '書類', provider, {
-            geminiSummarize: async () => {
-              called = true;
-              return { text: 'x', truncated: false };
-            },
-            sarashina: withNoDelay({
-              fetchImpl: (async () => {
-                called = true;
-                throw new Error('should not be called');
-              }) as typeof fetch,
-            }),
-          });
-          expect.fail('エラーがthrowされるべき');
-        } catch (err) {
-          expect((err as Error).message).to.include(String(MIN_OCR_LENGTH_FOR_SUMMARY));
-        }
-      })
-    );
+    try {
+      await generateSummaryForProvider('短い', '書類', 'sarashina', {
+        sarashina: withNoDelay({
+          fetchImpl: (async () => {
+            called = true;
+            throw new Error('should not be called');
+          }) as typeof fetch,
+        }),
+      });
+      expect.fail('エラーがthrowされるべき');
+    } catch (err) {
+      expect((err as Error).message).to.include(String(MIN_OCR_LENGTH_FOR_SUMMARY));
+    }
     expect(called, '短文ガードで弾かれるため呼び出し関数に到達してはならない').to.equal(false);
-  });
-
-  describe('gemini経路', () => {
-    it('geminiSummarize(DI)へ委譲し、finishReasonはnull・summaryはそのまま返す(admin初期化不要)', async () => {
-      let calledWith: [string, string] | null = null;
-      const injected: SummaryField = { text: '生成された要約', truncated: false };
-      const result = await generateSummaryForProvider(LONG_ENOUGH_OCR, '請求書', 'gemini', {
-        geminiSummarize: async (ocrResult, documentType) => {
-          calledWith = [ocrResult, documentType];
-          return injected;
-        },
-      });
-      expect(calledWith).to.deep.equal([LONG_ENOUGH_OCR, '請求書']);
-      expect(result).to.deep.equal({
-        provider: 'gemini',
-        summary: injected,
-        finishReason: null,
-        sentText: LONG_ENOUGH_OCR.slice(0, 8000),
-      });
-    });
   });
 
   describe('sarashina経路', () => {

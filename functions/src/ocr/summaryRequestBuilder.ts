@@ -1,40 +1,14 @@
 /**
- * Vertex AI 要約生成リクエスト/Firestore 書き込みペイロードのビルダー
+ * 要約の Firestore 書き込みペイロードのビルダー
  *
- * リファクタや typo で `maxOutputTokens` 防御や 3点セット書き込みが
- * 失われる回帰を pure function テストで検出可能にする。
+ * リファクタや typo で 3点セット書き込みが失われる回帰を pure function テストで検出可能にする。
  *
  * 関連経緯:
- * - Issue #205: GEMINI_CONFIG.maxOutputTokens=8192 を導入 (OCR経路の暴走対策)
- * - Issue #209: summary 経路にも適用 + capPageText で二段防御
  * - #178 教訓: 派生フィールド (truncated/originalLength) を一括で書き込まないとFE側マッピングが破壊される
+ * - ADR-0027 PR-E: 要約のGemini経路を撤去し、旧Gemini用のリクエストビルダーを削除した
  */
 
-// @google/genai はESM専用パッケージのため、CJSビルドのこのファイルで型のみ
-// importする際は resolution-mode 属性で明示的に import 条件を指定する(TS1479回避)。
-import type { GenerateContentParameters } from '@google/genai' with { 'resolution-mode': 'import' };
-import { GEMINI_CONFIG } from '../utils/config';
 import type { SummaryField } from '../../../shared/types';
-
-export interface SummaryGenerationRequest {
-  model: string;
-  contents: Array<{ role: 'user'; parts: Array<{ text: string }> }>;
-  config: { maxOutputTokens: number };
-}
-
-/**
- * Gemini に渡す GenerateContentParameters を構築。
- * `config.maxOutputTokens` の付与漏れを呼び出し元から構造的に排除する。
- * `satisfies GenerateContentParameters` で SDK 型変更時にコンパイルエラーで検知。
- */
-export function buildSummaryGenerationRequest(prompt: string): SummaryGenerationRequest {
-  const request = {
-    model: GEMINI_CONFIG.modelId,
-    contents: [{ role: 'user' as const, parts: [{ text: prompt }] }],
-    config: { maxOutputTokens: GEMINI_CONFIG.maxOutputTokens },
-  } satisfies GenerateContentParameters;
-  return request;
-}
 
 /**
  * Firestore documents/{docId}.summary に書き込む discriminated union ペイロード。

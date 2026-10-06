@@ -45,19 +45,16 @@ export interface EnqueueManualSummaryResult {
 export async function enqueueManualSummary(deps: EnqueueManualSummaryDeps): Promise<EnqueueManualSummaryResult> {
   const { firestore, docId, l1Provider = SARASHINA_SUMMARY_CONFIG.provider, getGate = getSarashinaSummaryGate } = deps;
 
-  // L1/L2ゲート(resolveSummaryProviderと同じ設計。L1='gemini'は明示的なロールバック運用のため
-  // L2を経由しない)。拒否は書込み前に行い、無効な環境ではGeminiも呼ばない。
+  // L1/L2ゲート(PR-E: L1が'none'以外なら必ずL2を通す)。拒否は書込み前に行う。
   if (l1Provider === 'none') {
     throw new ManualSummaryRejectedError('disabled', 'この環境では要約機能は準備中です');
   }
-  if (l1Provider === 'sarashina') {
-    const gate = await getGate(firestore);
-    if (!gate.enabled) {
-      throw new ManualSummaryRejectedError('disabled', 'この環境では要約機能は準備中です');
-    }
-    if (gate.allowlist !== null && !gate.allowlist.includes(docId)) {
-      throw new ManualSummaryRejectedError('not-allowed', 'この書類は要約機能の対象外です');
-    }
+  const gate = await getGate(firestore);
+  if (!gate.enabled) {
+    throw new ManualSummaryRejectedError('disabled', 'この環境では要約機能は準備中です');
+  }
+  if (gate.allowlist !== null && !gate.allowlist.includes(docId)) {
+    throw new ManualSummaryRejectedError('not-allowed', 'この書類は要約機能の対象外です');
   }
 
   const docRef = firestore.doc(`documents/${docId}`);

@@ -13,7 +13,7 @@ on:
           - kanameone
           - cocoro
       gemini_model_id_override:
-        description: 'GEMINI_MODEL_ID override (未指定=code-default(現在gemini-3.5-flash)。Issue #548の3.5移行検証が完了するまでkanameone等はgemini-2.5-flash固定を推奨)'
+        description: 'GEMINI_MODEL_ID override (OCR緊急用経路(OCR_PROVIDER=gemini)のモデル。未指定=code-default=コード既定のgemini-3.5-flash。既存の環境値は引き継がれず再生成されるため、gemini-2.5-flash固定が必要なら明示すること。gemini-2.5-flashは2026-10-16廃止予定)'
         required: true
         default: 'code-default'
         type: choice
@@ -38,7 +38,6 @@ on:
         options:
           - code-default
           - none
-          - gemini
           - sarashina
 
 jobs:
@@ -212,9 +211,9 @@ jobs:
           fi
           if [ -n "$SUMMARY_PROVIDER_EFFECTIVE" ]; then
             case "$SUMMARY_PROVIDER_EFFECTIVE" in
-              none|gemini|sarashina) ;;
+              none|sarashina) ;;
               *)
-                echo "ERROR: SUMMARY_PROVIDER=$SUMMARY_PROVIDER_EFFECTIVE は不正です(none|gemini|sarashinaのみ。$ENV_FILE の宣言を確認してください)" >&2
+                echo "ERROR: SUMMARY_PROVIDER=$SUMMARY_PROVIDER_EFFECTIVE は不正です(none|sarashinaのみ。要約のGemini経路はADR-0027 PR-Eで撤去済み。$ENV_FILE の宣言を確認してください)" >&2
                 exit 1
                 ;;
             esac

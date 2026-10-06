@@ -2189,7 +2189,7 @@ jobs:
               --format="value(serviceConfig.environmentVariables.OCR_PROVIDER,serviceConfig.environmentVariables.SUMMARY_PROVIDER)"
             # codex review(strict-config+high effort)P2指摘反映: ⑥の「次tickでskipped化予定」
             # 予測はSUMMARY_PROVIDER=sarashinaの時のみ成立する(noneはpendingクエリ自体に到達せず
-            # return、geminiはSarashinaゲートをバイパスしてGemini側で処理されるため)。⑥で分岐
+            # return)。⑥で分岐
             # 判定に使うため、ここで実際のL1値を変数に控える。
             L1_SUMMARY_PROVIDER=$(gcloud functions describe generateSummaryBatch --project="$PROJECT_ID" --gen2 --region=asia-northeast1 \
               --format="value(serviceConfig.environmentVariables.SUMMARY_PROVIDER)")
@@ -2452,13 +2452,12 @@ jobs:
               }));
             ' "$SINCE_1H")
             if [ "$L1_SUMMARY_PROVIDER" != "sarashina" ]; then
-              # codex review(strict-config+high effort)P2指摘反映: L1がnone/geminiの場合、
-              # 「次tickでskippedになる」という予測自体が成立しない。noneはpendingクエリに
-              # 到達せずreturn(キュー一時停止)、geminiはSarashinaゲートをバイパスしGemini経由で
-              # 処理される(=doneになりskippedにはならない)。L2(ALLOWLIST_MODE)の判定より
-              # L1を優先してチェックする。
+              # codex review(strict-config+high effort)P2指摘反映: L1がnoneの場合、
+              # 「次tickでskippedになる」という予測自体が成立しない(pendingクエリに到達せず
+              # return=キュー一時停止)。L2(ALLOWLIST_MODE)の判定よりL1を優先してチェックする。
+              # (要約のGemini経路はADR-0027 PR-Eで撤去済み。L1は none|sarashina のみ)
               echo "(L1(SUMMARY_PROVIDER)=${L1_SUMMARY_PROVIDER:-未設定} のためSarashinaのallowlist判定自体が適用されない。" \
-                   "'none'ならpending文書はキュー一時停止のまま滞留、'gemini'ならGemini経由で処理されskippedにはならない)"
+                   "'none'ならpending文書はキュー一時停止のまま滞留する)"
             elif [ "$ALLOWLIST_MODE" = "unrestricted" ]; then
               echo "(allowlist不在=無制限のため、対象外扱いになるpending文書は存在しない)"
             elif [ "$ALLOWLIST_MODE" = "gate_disabled" ]; then

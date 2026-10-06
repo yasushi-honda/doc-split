@@ -797,7 +797,7 @@ describe('applyOcrCompletionTransaction: summaryStateバックフィル防止 (A
   async function runSingleMemberCompletion(
     docId: string,
     opts: {
-      summaryProviderL1: 'none' | 'sarashina' | 'gemini';
+      summaryProviderL1: 'none' | 'sarashina';
       ocrResultLength: number;
       /** 既定false(手動のみ、PR-C)。自動生成を再開した環境の挙動を検証する時だけtrue。 */
       summaryAutoEnabled?: boolean;
@@ -879,9 +879,9 @@ describe('applyOcrCompletionTransaction: summaryStateバックフィル防止 (A
     expect(data.summaryStateUpdatedAt).to.not.equal(undefined);
   });
 
-  it('L1=gemini かつ autoSummaryOnOcr有効 かつ OCR結果が短い(MIN_OCR_LENGTH_FOR_SUMMARY未満) → summaryState:skippedを書く', async () => {
-    const docId = 'summary-backfill-gemini-skipped';
-    await runSingleMemberCompletion(docId, { summaryProviderL1: 'gemini', summaryAutoEnabled: true, ocrResultLength: 50 });
+  it('L1=sarashina かつ autoSummaryOnOcr有効 かつ OCR結果が短い(MIN_OCR_LENGTH_FOR_SUMMARY未満) → summaryState:skippedを書く', async () => {
+    const docId = 'summary-backfill-sarashina-skipped';
+    await runSingleMemberCompletion(docId, { summaryProviderL1: 'sarashina', summaryAutoEnabled: true, ocrResultLength: 50 });
 
     const data = (await db.doc(`documents/${docId}`).get()).data()!;
     expect(data.summaryState).to.equal('skipped');

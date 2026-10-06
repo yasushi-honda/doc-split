@@ -161,6 +161,16 @@ describe('enqueueManualSummary (PR-C)', () => {
       expect((await get('doc-l1-none')).summaryState).to.equal(undefined);
     });
 
+    it('L1=none: L2(Firestoreフラグ)を一切読まずに拒否する(読取コストと設定依存を持ち込まない)', async () => {
+      await seed('doc-l1-none-no-gate-read');
+      const err = await rejection(
+        enqueue('doc-l1-none-no-gate-read', 'none', async () => {
+          throw new Error('L1=noneではL2を読んではならない');
+        })
+      );
+      expect(err.reason).to.equal('disabled');
+    });
+
     it('L1=sarashina かつ L2フラグ無効: 準備中として拒否する', async () => {
       await seed('doc-l2-off');
       const err = await rejection(enqueue('doc-l2-off', 'sarashina', async () => ({ enabled: false, allowlist: null, autoOnOcr: false })));
@@ -181,14 +191,6 @@ describe('enqueueManualSummary (PR-C)', () => {
       await seed('doc-allowed');
       await enqueue('doc-allowed', 'sarashina', async () => ({ enabled: true, allowlist: ['doc-allowed'], autoOnOcr: false }));
       expect((await get('doc-allowed')).summaryState).to.equal('pending');
-    });
-
-    it('L1=gemini(ロールバック運用): L2を読まずに受け付ける', async () => {
-      await seed('doc-gemini');
-      await enqueue('doc-gemini', 'gemini', async () => {
-        throw new Error('L1=geminiではL2を読まないはず');
-      });
-      expect((await get('doc-gemini')).summaryState).to.equal('pending');
     });
 
     it('L1=sarashina かつ allowlist=null(制限なし)の場合は、明示的に受け付ける', async () => {

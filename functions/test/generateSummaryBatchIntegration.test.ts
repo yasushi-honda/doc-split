@@ -91,6 +91,19 @@ describe('runSummaryBatch (ADR-0027 PR4)', () => {
     await cleanupCollections(db, COLLECTIONS_TO_CLEAN);
   });
 
+  it('L1=none: L2(Firestoreフラグ)を読まずに終了する(getGateが呼ばれたらthrowするスタブで検証)', async () => {
+    await seedDocument('doc-l1-none-no-gate');
+    const stats = await runSummaryBatch({
+      firestore: db,
+      bucket: FAKE_BUCKET,
+      l1Provider: 'none',
+      getGate: async () => {
+        throw new Error('L1=noneではL2を読んではならない');
+      },
+    });
+    expect(stats.claimed).to.equal(0);
+  });
+
   it('L1=none: 新規claimは行わずrescueのみ実行する(バックフィル防止)', async () => {
     await seedDocument('doc-l1-none');
     const stats = await runSummaryBatch({ firestore: db, bucket: FAKE_BUCKET, l1Provider: 'none' });
@@ -151,19 +164,6 @@ describe('runSummaryBatch (ADR-0027 PR4)', () => {
     expect(data.summary.text).to.equal('この書類は福祉用具貸与確認書です。利用者は歩行器を利用しています。');
     expect(data.summaryTruncated).to.equal(undefined);
     expect(data.summaryOriginalLength).to.equal(undefined);
-  });
-
-  it('L1=gemini: L2ゲートを経由せずGemini経路で生成する', async () => {
-    await seedDocument('doc-gemini');
-    const stats = await runSummaryBatch({
-      firestore: db,
-      bucket: FAKE_BUCKET,
-      l1Provider: 'gemini',
-      summarize: fakeSummarize({ provider: 'gemini', finishReason: null }),
-    });
-
-    expect(stats.done).to.equal(1);
-    expect((await getDoc('doc-gemini')).summaryProvider).to.equal('gemini');
   });
 
   describe('固有名詞捏造検知(fabrication_suspected): 総試行上限内で再試行し、上限到達でerror', () => {

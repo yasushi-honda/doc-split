@@ -1632,7 +1632,7 @@ async function runLoadModeSingleTier(opts: {
         `scripts/lib/paddleOcrLoad.ts の EXPECTED_LOAD_FIXTURE_SHA256 も更新してください。`
     );
   }
-  const { extractAllPdfPages } = await import('./lib/geminiOcrCompare');
+  const { extractAllPdfPages } = await import('./lib/pdfPages');
   const pageBuffers = await extractAllPdfPages(combinedBuffer);
 
   const tokenProvider = new IdTokenProvider(opts.serviceUrl);

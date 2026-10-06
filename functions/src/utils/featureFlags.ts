@@ -7,7 +7,7 @@
  * kanameoneのみ明示ONを想定。cocoroはOFFのまま展開)。
  */
 import * as admin from 'firebase-admin';
-import { PADDLE_OCR_CONFIG, type OcrProvider, SARASHINA_SUMMARY_CONFIG, type SummaryProviderSetting } from './config';
+import { PADDLE_OCR_CONFIG, type OcrProvider } from './config';
 
 export const FEATURE_FLAGS_DOC_PATH = 'settings/features';
 
@@ -215,26 +215,4 @@ export async function getSarashinaSummaryGate(
     return { enabled, allowlist: [], autoOnOcr };
   }
   return { enabled, allowlist: rawAllowlist as string[], autoOnOcr };
-}
-
-/**
- * ドキュメント単位の要約生成プロバイダを解決する(ADR-0027)。
- *
- * L1(環境変数`SUMMARY_PROVIDER`)とL2(Firestoreフラグ+許可リスト)の2層構造。
- * `resolveOcrProvider`と異なり、L1='sarashina'がL2で不許可の場合は**'gemini'ではなく
- * 'none'にfail-safe**する(ADR-0027 主要な設計判断2: 新規課金を無言で発生させないため)。
- * L1が'none'/'gemini'の場合はFirestore読取自体を行わない(意図的な最適化、テストで
- * 読取なしを検証する)。
- */
-export async function resolveSummaryProvider(
-  db: admin.firestore.Firestore,
-  docId: string,
-  l1Provider: SummaryProviderSetting = SARASHINA_SUMMARY_CONFIG.provider
-): Promise<SummaryProviderSetting> {
-  if (l1Provider === 'none' || l1Provider === 'gemini') return l1Provider;
-
-  const gate = await getSarashinaSummaryGate(db);
-  if (!gate.enabled) return 'none';
-  if (gate.allowlist !== null && !gate.allowlist.includes(docId)) return 'none';
-  return 'sarashina';
 }

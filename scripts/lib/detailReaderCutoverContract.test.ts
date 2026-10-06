@@ -2,8 +2,8 @@
  * scripts/ 読者の detail/main 切替 配線契約テスト (ADR-0018 Phase D PR-D4, Issue #547)
  *
  * functions/test/detailReadCutoverContract.test.ts (PR-D2) と同じ grep-based 契約パターン。
- * 「reprocess-master-matching.js / measure-summary-cost.ts が detail優先+親フォールバックで
- * ocrResult/pageResults を読む」配線をソース文字列レベルで lock-in する。
+ * 「reprocess-master-matching.js が detail優先+親フォールバックで
+ * ocrResult/pageResults を読む」配線(measure-summary-cost.ts は ADR-0027 PR-E で削除)をソース文字列レベルで lock-in する。
  *
  * AC9 (Phase E 前提ゲート): 本テストがPASSする = scripts/ 配下に、既知の許可リスト
  * (backfill移行元データ/診断比較/計測/fixture投入の4カテゴリ)以外で親 ocrResult/pageResults を
@@ -28,7 +28,6 @@ const reprocessMasterMatchingSrc = readFileSync(
   resolve(scriptsDir, 'reprocess-master-matching.js'),
   'utf-8'
 );
-const measureSummaryCostSrc = readFileSync(resolve(scriptsDir, 'measure-summary-cost.ts'), 'utf-8');
 
 /**
  * 許可リスト: 親 ocrResult/pageResults への直接参照が意図的に必要なファイル
@@ -53,7 +52,6 @@ const ALLOWLIST = new Set([
   'measure-field-byte-sizes.js',
   // PR-D4で detail優先+親フォールバックに切替済み(下記テストで個別に配線確認する対象そのもの)
   'reprocess-master-matching.js',
-  'measure-summary-cost.ts',
   // Phase E 削除実行本体: 親の既存ocrResult/pageResultsをFieldValue.delete()するのが
   // 目的そのもの(削除前提条件の判定・canonicalHash比較にも親の値を直接参照する)。
   // 「読者」ではなく削除実行者のため、detail優先化の対象外。
@@ -99,14 +97,6 @@ test('reprocess-master-matching.js: detail優先 + 親フォールバックでoc
   );
   // 旧経路 (detail解決なしの直接ocrResult参照によるスキップ判定) が残っていないこと
   assert.doesNotMatch(reprocessMasterMatchingSrc, /if \(!doc\.ocrResult\) \{/);
-});
-
-test('measure-summary-cost.ts: detail優先 + 親フォールバックでocrResultを解決する (ADR-0018 Phase D PR-D4)', () => {
-  assert.match(measureSummaryCostSrc, /db\.doc\(`documents\/\$\{docId\}\/detail\/main`\)\.get\(\)/);
-  assert.match(
-    measureSummaryCostSrc,
-    /typeof detailData\?\.ocrResult === 'string'\s*\n\s*\? detailData\.ocrResult\s*\n\s*: \(typeof data\.ocrResult === 'string' \? data\.ocrResult : ''\)/
-  );
 });
 
 test('AC9 (Phase E前提ゲート): scripts/ 配下に許可リスト外で親ocrResult/pageResultsを直接参照するファイルが存在しない', () => {
