@@ -18,6 +18,8 @@ import {
   SUMMARY_MAX_INPUT_LENGTH,
   SUMMARY_QUEUED_MESSAGE,
   SUMMARY_PREVIOUS_FAILED_MESSAGE,
+  SUMMARY_SAFETY_NOTICE,
+  SUMMARY_QUEUED_TITLE,
   SUMMARY_SKIPPED_MESSAGE,
   shouldShowSummaryTruncationNotice,
   type DeriveSummaryDisplayStateInput,
@@ -393,6 +395,29 @@ describe('判定順の全組み合わせ(要約あり/なし × summaryState × 
       })
     }
   }
+})
+
+describe('処理が遅い理由の案内(SUMMARY_SAFETY_NOTICE)', () => {
+  it('時間がかかる理由として、要配慮個人情報を安全に取り扱うため管理された環境で慎重に処理していることを伝える', () => {
+    // 利用者が納得して待てるよう、遅さの理由を明示する(decision-maker指摘、2026-10-06)
+    expect(SUMMARY_SAFETY_NOTICE).toContain('時間がかかる')
+    expect(SUMMARY_SAFETY_NOTICE).toContain('要配慮個人情報')
+    expect(SUMMARY_SAFETY_NOTICE).toContain('安全')
+  })
+
+  it('生成元(SUMMARY_PROVIDER)に依らず事実であること: 「外部のAIサービスへ送らない」等の送信先を断定する表現を含まない', () => {
+    // ロールバック運用(SUMMARY_PROVIDER=gemini)では書類の内容がVertex AI Geminiへ送られる。画面はプロバイダを
+    // 知らないため、どちらの構成でも正しい文言にする(codex review P1指摘)。
+    expect(SUMMARY_SAFETY_NOTICE).not.toMatch(/外部|送らず|送信しない|国内|専用/)
+  })
+
+  it('受付ダイアログの見出しは「受け付けました」を含む', () => {
+    expect(SUMMARY_QUEUED_TITLE).toContain('受け付けました')
+  })
+
+  it('外部送信していないという表現は「送らず」で、送信先を断定する誤解を招く語(完全・絶対等)を使わない', () => {
+    expect(SUMMARY_SAFETY_NOTICE).not.toMatch(/完全|絶対|100%|一切/)
+  })
 })
 
 describe('案内文言の定数', () => {

@@ -54,6 +54,9 @@ import {
   SUMMARY_PREVIOUS_FAILED_MESSAGE,
   SUMMARY_QUEUED_MESSAGE,
   SUMMARY_TRUNCATION_NOTICE,
+  SUMMARY_SAFETY_NOTICE,
+  SUMMARY_QUEUED_TITLE,
+  SUMMARY_QUEUED_DETAIL,
   type SummaryDisplayState,
 } from '@/lib/summaryDisplayState'
 
@@ -232,6 +235,12 @@ function MobileContentPopup({
             ? makeText('p', 'font-size: 14px; color: #7c3aed; margin: 0;', '⏳ 生成中...')
             : makeText('p', 'font-size: 14px; color: #6b7280; margin: 0; line-height: 1.6;', SUMMARY_QUEUED_MESSAGE)
         )
+        if (summaryDisplay.kind === 'queued') {
+          // 処理が遅い理由(要配慮個人情報を安全に守るため)を併記して、納得して待てるようにする
+          wrap.appendChild(
+            makeText('p', 'font-size: 12px; color: #6b7280; margin: 8px 0 0; line-height: 1.6;', SUMMARY_SAFETY_NOTICE)
+          )
+        }
         if (summaryDisplay.summaryText) {
           wrap.appendChild(
             makeText(
@@ -469,6 +478,16 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
   const [urlRefreshKey, setUrlRefreshKey] = useState(0) // URL強制リフレッシュ用
   const [isMetadataCollapsed, setIsMetadataCollapsed] = useState(true) // モバイルでメタ情報を折りたたみ（初期は折りたたみ）
   const [isGeneratingSummary, setIsGeneratingSummary] = useState(false) // AI要約生成中
+  // 要約の依頼を受け付けた案内ダイアログ(トーストはすぐ消えて読めないため、OKで閉じるダイアログにする)
+  const [showSummaryQueuedDialog, setShowSummaryQueuedDialog] = useState(false)
+  // 現在開いている書類のID(閉じている間はnull)。要約の依頼は非同期のため、応答が返る頃には書類が閉じられている/
+  // 別の書類に切り替わっていることがある。その場合に受付ダイアログを別の画面へ出さないために使う。
+  const openDocumentIdRef = useRef<string | null>(null)
+  useEffect(() => {
+    openDocumentIdRef.current = open ? documentId : null
+    // 閉じた・別の書類に切り替わった場合は、前の書類の受付ダイアログを残さない
+    setShowSummaryQueuedDialog(false)
+  }, [open, documentId])
   // ADR-0027 PR4c: 7 kindの判定を1箇所で計算し、デスクトップ・モバイル双方へ渡す
   // (#193型の食い違い防止)。
   const summaryDisplay = deriveSummaryDisplayState({
@@ -680,13 +699,18 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
   const handleGenerateSummary = async () => {
     if (!documentId || isGeneratingSummary) return
 
+    const requestedDocumentId = documentId
     setIsGeneratingSummary(true)
     try {
       // 応答は{success, queued, alreadyQueued}。alreadyQueued:trueでも同じ案内を出す(冪等)
       await callFunction<{ docId: string }, { success: boolean; queued: boolean; alreadyQueued: boolean }>(
         'regenerateSummary', { docId: documentId }, { timeout: 30_000 }
       )
-      toast.success(SUMMARY_QUEUED_MESSAGE)
+      // トーストではなく、OKボタンで閉じるダイアログで案内する(すぐ消えて読めないため)
+      // 応答を待つ間に書類が閉じられた/切り替わった場合は出さない(別の画面に出てしまうため)
+      if (openDocumentIdRef.current === requestedDocumentId) {
+        setShowSummaryQueuedDialog(true)
+      }
     } catch (err) {
       console.error('Failed to request summary:', err)
       // failed-precondition(準備中・対象外・OCR未完了)/not-found等はBE(regenerateSummary.ts)が
@@ -1660,7 +1684,10 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
                                 生成中...
                               </div>
                             ) : (
-                              <p className="text-xs text-gray-500">{SUMMARY_QUEUED_MESSAGE}</p>
+                              <div className="flex flex-col gap-1.5">
+                                <p className="text-xs text-gray-500">{SUMMARY_QUEUED_MESSAGE}</p>
+                                <p className="text-xs text-gray-500">{SUMMARY_SAFETY_NOTICE}</p>
+                              </div>
                             )}
                             {/* 再生成依頼中も旧要約を薄く見せ続ける */}
                             {summaryDisplay.summaryText && (
@@ -1825,6 +1852,22 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
         onGenerateSummary={handleGenerateSummary}
       />
     )}
+
+    {/* 要約の依頼受付ダイアログ(OKで閉じる)。モバイルのポップアップ(z-index 99999)より前面に出す */}
+    <AlertDialog open={showSummaryQueuedDialog} onOpenChange={setShowSummaryQueuedDialog}>
+      <AlertDialogContent className="z-[100001]" overlayClassName="z-[100000]">
+        <AlertDialogHeader>
+          <AlertDialogTitle>{SUMMARY_QUEUED_TITLE}</AlertDialogTitle>
+          <AlertDialogDescription className="space-y-2 text-left">
+            <span className="block">{SUMMARY_QUEUED_DETAIL}</span>
+            <span className="block">{SUMMARY_SAFETY_NOTICE}</span>
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogAction>OK</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
 
     {/* 閉じる確認ダイアログ（未確認時のみ） */}
     <AlertDialog open={showCloseDialog} onOpenChange={setShowCloseDialog}>

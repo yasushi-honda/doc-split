@@ -18,8 +18,22 @@ export const SUMMARY_MIN_OCR_LENGTH = 100
 export const SUMMARY_MAX_INPUT_LENGTH = 8000
 
 /** 手動依頼を受け付けた(pending)間の案内。デスクトップ/モバイル/トーストで共通利用する(1か所に集約)。 */
-export const SUMMARY_QUEUED_MESSAGE =
-  '要約の作成を受け付けました。バックグラウンドで作成するので、他の操作を続けられます(目安: 数分〜10分)。完了すると自動で表示されます'
+export const SUMMARY_QUEUED_DETAIL =
+  'バックグラウンドで作成するので、他の操作を続けられます(目安: 数分〜10分)。完了すると自動で表示されます'
+
+export const SUMMARY_QUEUED_MESSAGE = `要約の作成を受け付けました。${SUMMARY_QUEUED_DETAIL}`
+
+/** 受付ダイアログの見出し(OKボタンで閉じる。トーストはすぐ消えて読めないため、decision-maker指摘で変更)。 */
+export const SUMMARY_QUEUED_TITLE = '要約の作成を受け付けました'
+
+/**
+ * 要約の作成に時間がかかる理由。利用者が納得して待てるよう、受付ダイアログと「受付中」の案内に併記する。
+ * 生成元(SUMMARY_PROVIDER)によらず事実である文言にする: 画面はプロバイダを知らず、ロールバック運用
+ * (gemini)では書類の内容がVertex AI Geminiへ送られるため、「外部へ送らない」「専用環境」等は書かない
+ * (codex review P1指摘)。断定的な誇張(完全・絶対等)も避ける。
+ */
+export const SUMMARY_SAFETY_NOTICE =
+  '時間がかかるのは、書類の内容(要配慮個人情報を含む場合があります)を安全に取り扱うため、管理された環境で慎重に処理しているためです。'
 
 /** 旧要約を残したまま再作成が失敗した場合の見出し(個別の失敗理由は`summaryErrorMessage`を併記する)。 */
 export const SUMMARY_PREVIOUS_FAILED_MESSAGE = '前回の要約です。今回の再作成は失敗しました'
