@@ -1,11 +1,13 @@
 ---
 title: "Gemini APIレート制限設計"
 description: "Vertex AI Gemini 3.5 Flashのレート制限対策とコスト管理"
-status: completed
-updated: "2026-08-02"
+status: obsolete
+updated: "2026-10-07"
 ---
 
 # Gemini APIレート制限設計
+
+> **廃止済み（ADR-0029、2026-10-06）**: Gemini（Vertex AI）は緊急用経路も含めて本番から廃止しました。本書の制限値・設計は、使用していた当時の履歴としてのみ残しています。現在のOCRはPaddleOCR（自前のCloud Run）です。
 
 ## 1. Gemini 3.5 Flash レート制限
 

@@ -19,7 +19,7 @@ flowchart TD
     A["エラー検知"] --> B{"エラー種別"}
     B -->|OCRエラー| C["書類を再処理"]
     B -->|Gmail認証エラー| D["OAuth再設定"]
-    B -->|Gemini制限| E["しばらく待って再処理"]
+    B -->|OCR処理サービスの混雑・停止| E["しばらく待って再処理"]
     B -->|その他| F["ログ確認・調査"]
 
     C --> G["エラー解消確認"]
@@ -168,9 +168,9 @@ gcloud scheduler jobs create http firestore-backup \
 | Cloud Functions | 〜500円 |
 | Firestore | 〜500円 |
 | Cloud Storage | 〜500円 |
-| Vertex AI (Gemini) | 〜1,000円 |
+| Cloud Run（PaddleOCR・Sarashina） | 請求画面で実績を確認 |
 | Secret Manager | 〜100円 |
-| **合計** | **〜2,600円** |
+| **合計** | **〜1,600円＋Cloud Run分** |
 
 ### コスト削減Tips
 
@@ -181,8 +181,8 @@ gcloud scheduler jobs create http firestore-backup \
    - 古いエラーログの削除
    - 処理済み書類の定期アーカイブ
 
-3. **Gemini API使用量**
-   - 大量処理時はレート制限を意識
+3. **Cloud Runの使用量**
+   - 大量処理時はPaddleOCRのインスタンス数・処理時間を意識
 
 ### 予算アラート設定
 
@@ -265,7 +265,7 @@ DocSplitはPWA対応のため、スマートフォンやPCのホーム画面に�
 |------|------|------|
 | ログインできない | ホワイトリスト未登録 | ユーザー追加 |
 | 書類が取得されない | Gmail認証切れ | OAuth再設定 |
-| OCRが失敗する | Gemini API制限 | 時間を置いて再処理 |
+| OCRが失敗する | OCR処理サービスの混雑・停止 | 時間を置いて再処理（長引く場合は障害時の運用を参照） |
 | 顧客名が不明 | マスター未登録 | 顧客マスター追加 |
 | 書類種別が不明 | キーワード不足 | 書類種別マスター更新 |
 

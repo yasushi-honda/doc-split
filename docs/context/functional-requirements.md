@@ -27,7 +27,7 @@ Gmailの添付ファイルを自動取得し、AI OCRでメタ情報を抽出、
 | F01 | Gmail添付取得 | 対象ラベルのメールから添付ファイルを自動取得 | Cloud Functions |
 | F02 | ラベル設定 | 監視対象のGmailラベルを設定画面から指定 | UI + Firestore |
 | F03 | Cloud Storage保存 | 取得ファイルをCloud Storageに保存 | Cloud Functions |
-| F04 | AI OCR処理 | Geminiで書類内容を解析 | Cloud Functions + Vertex AI |
+| F04 | AI OCR処理 | PaddleOCRで書類内容を読み取り | Cloud Functions + PaddleOCR（Cloud Run） |
 | F05 | 自動リネーム | OCR結果に基づきファイル名を自動設定 | Cloud Functions |
 | F06 | メタ情報抽出 | 書類種別、日付、顧客名等を自動抽出 | Cloud Functions |
 | F07 | 書類一覧表示 | 登録済み書類の一覧表示 | UI |
@@ -144,8 +144,8 @@ flowchart TD
 
     subgraph OCR["2. OCR処理"]
         GCS1 -->|トリガー| CF2[Cloud Functions<br/>OCR処理]
-        CF2 -->|API呼出| Gemini[Vertex AI<br/>Gemini 3.5 Flash]
-        Gemini -->|解析結果| CF2
+        CF2 -->|API呼出| OCR[PaddleOCR<br/>Cloud Run]
+        OCR -->|OCR全文| CF2
         CF2 -->|リネーム| GCS2[Cloud Storage<br/>整理済み]
         CF2 -->|メタ情報| FS[Firestore<br/>書類データ]
     end
@@ -168,10 +168,10 @@ flowchart TD
 
 | 項目 | 説明 | 抽出方法 |
 |------|------|----------|
-| 書類種別 | 請求書、領収書、契約書等 | Gemini分類 |
-| 書類日付 | 書類に記載の日付 | Gemini抽出 |
-| 顧客名 | 関連する顧客・取引先 | Gemini抽出 + マスタ照合 |
-| 金額 | 請求額等（該当する場合） | Gemini抽出 |
+| 書類種別 | 請求書、領収書、契約書等 | ルールベース分類 |
+| 書類日付 | 書類に記載の日付 | ルールベース抽出 |
+| 顧客名 | 関連する顧客・取引先 | ルールベース抽出 + マスタ照合 |
+| 金額 | 請求額等（該当する場合） | ルールベース抽出 |
 | ファイル名 | 自動生成されたファイル名 | ルールベース |
 | 取得日時 | メール受信/処理日時 | システム自動 |
 | 元メール | 取得元メールの情報 | Gmail API |
@@ -230,9 +230,9 @@ flowchart TD
 | Firestore | 1GB保存、5万読取/日 | 〜500MB | 低 |
 | Cloud Functions | 200万回/月 | < 1万回 | 低 |
 | Cloud Storage | 5GB | 〜2GB | 低 |
-| Vertex AI Gemini | 無料枠あり | 要監視 | **中** |
+| Cloud Run（PaddleOCR・Sarashina） | 従量課金 | 請求画面で監視 | **中** |
 
-**注意**: Gemini APIの使用量がコスト超過の主要リスク
+**注意**: Cloud Runの使用量（OCR・要約の処理時間）がコストの主要因（Geminiは廃止、ADR-0029）
 
 ## 制約事項
 
@@ -240,7 +240,7 @@ flowchart TD
   - 開発環境: 個人Gmail（`@gmail.com`）でOAuth 2.0認証
   - 本番環境: Google Workspace（`@company.com`）でService Account推奨
 - 対応ファイル形式: PDF（将来的に画像対応検討）
-- 1ファイル最大サイズ: 10MB（Gemini API制限考慮）
+- 1ファイル最大サイズ: 10MB（OCR処理時間を考慮）
 - **納品形態**: GCPプロジェクト移譲（シングルテナント）
 
 ## 参照

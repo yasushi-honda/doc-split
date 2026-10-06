@@ -92,7 +92,7 @@ async function withRetry<T>(
 | 処理 | 最大リトライ | 初期遅延 | 備考 |
 |------|------------|---------|------|
 | Gmail API | 3 | 1秒 | Rate Limit考慮 |
-| Gemini OCR | 2 | 2秒 | コスト考慮で控えめ |
+| PaddleOCR | 一時エラーは4回再試行（1分間隔） | 1分 | 5回目の失敗でerror確定。詳細はADR-0029 |
 | Storage操作 | 3 | 500ms | 高速リトライ |
 | Firestore書込 | 3 | 500ms | 高速リトライ |
 

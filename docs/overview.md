@@ -54,8 +54,8 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    PDF["PDF"] --> Gemini["Gemini 3.5 Flash"]
-    Gemini --> Extract["情報抽出"]
+    PDF["PDF"] --> OCR["PaddleOCR"]
+    OCR --> Extract["情報抽出"]
     Extract --> Customer["顧客名"]
     Extract --> DocType["書類種別"]
     Extract --> Date["日付"]
@@ -117,7 +117,7 @@ flowchart LR
 
 - 1ファイルあたりの最大サイズ: 50MB
 - 対応形式: PDF
-- 同時処理数: Gemini APIレート制限に依存
+- 同時処理数: PaddleOCRの処理能力に依存（processOCRは1分ごと・1件ずつ処理）
 
 ## プロジェクト構成
 

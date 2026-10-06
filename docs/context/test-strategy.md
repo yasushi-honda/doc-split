@@ -8,7 +8,7 @@
 
 `functions/` の OCR / 書類処理パスは以下の要因で unit test のみでは contract を保護できない:
 
-- `admin.firestore()` / `storage.bucket()` / Vertex AI など **top-level で admin 初期化**する副作用を持つモジュールが多く、単体から runtime 呼出が難しい
+- `admin.firestore()` / `storage.bucket()` / 外部サービスのクライアントなど **top-level で admin 初期化**する副作用を持つモジュールが多く、単体から runtime 呼出が難しい
 - Firestore 旧データ (型変更前の document) 由来の discriminated union 違反が **silent に prod 分岐を通過**し Cloud Logging alert にも拾われない silent failure 経路が過去発生 ([Issue #209 / #288 item 6])
 - PR merge 後の **code レベル回帰** (例: `void safeLogError(...)` 直叩き回帰 / try/catch 剥離 / anchor rename) を CI で検知する必要がある
 
