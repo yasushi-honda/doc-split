@@ -12,8 +12,11 @@ updated: 2026-10-03
 
 **完了の定義**:
 - [ ] 3環境の`OCR_PROVIDER`がpaddle(証明: `gcloud functions describe processOCR --project=<各project> --account=hy.unimail.11@gmail.com --gen2 --region=asia-northeast1 --format="value(serviceConfig.environmentVariables.OCR_PROVIDER)"` → `paddle`。2026-10-03に3環境とも実測済みだが、最終確認はミッション完了時に再実行)
+  - 2026-10-06再実測(`gcloud functions describe processOCR`): dev・kanameone・cocoroとも`paddle`(updateTime: dev 10/4 17:46Z、kanameone 10/6 00:53Z、cocoro 10/6 01:51Z)。**ミッション完了時(PR-E後)に最終確認を再実行する**。
 - [ ] 通常経路のGemini呼び出しが0件で、緊急利用の記録も0件(証明: `gcloud logging read 'textPayload:"gemini_ocr_emergency_used"' --project=<各project> --freshness=24h --limit=1 --format="value(timestamp)"` → 出力なし。2026-10-03時点は3環境とも0件)
+  - 2026-10-06再実測(48時間): 3環境とも`gemini_ocr_emergency_used`が0件、Pass2の`candidateGeminiMs`も0件。手動要約はGemini経路を撤去済み(PR-C)で、kanameoneはSarashina、cocoroは要約無効。ただし**要約のGemini経路のコード(`summaryGenerator.ts`等)はロールバック用に残っている**ため、「通常経路0件」の恒久的な担保はPR-E(契約テスト)で行う。
 - [ ] 本番コードのGemini利用が緊急用経路のみ(証明: `grep -rln "@google/genai" functions/src scripts` → `functions/src/ocr/ocrProcessor.ts`のみ。PR-Eで達成)
+  - 2026-10-06時点の`grep -rl "@google/genai" functions/src scripts`: `functions/src/ocr/ocrProcessor.ts`(OCR緊急用、意図して残す)に加え、**`summaryGenerator.ts`・`summaryRequestBuilder.ts`・`utils/retry.ts`(要約のGemini経路、PR-Eで撤去/限定)**と、比較用スクリプト(`scripts/compare-gemini-ocr-models*.ts`・`verify-type3-ocr.ts`・`scripts/lib/geminiOcrCompare.ts`・`scripts/fixtures/paddleOcrGoldenFixtures.ts`、本番コードではないが方針としてPR-Eで扱いを決める)が残る。
 
 **進行中のtasks**:
 - [x] PR-A 候補抽出(Pass2)の廃止+運用スクリプトのGemini送信経路を閉じる(PR #1116マージ、3環境デプロイ済み)。実データでPass2候補の採用は全項目0件(kanameone 3,550・cocoro 140・dev 13の実行)
@@ -22,7 +25,7 @@ updated: 2026-10-03
 - [ ] PR-A確認(cocoro): 新リビジョン`processocr-00058`が処理した文書で`candidateGeminiMs`が出ないこと(kanameoneは確認済み。cocoroは切替直後のログが旧リビジョン`00057`のものだけで、新リビジョンの処理文書がまだ無い)
 - [ ] PR-B確認(3環境): デプロイ後の新規処理文書(Pass1を実際に呼んだもの、`pageResults`再利用は除く)の`ocrExtraction.version`が`PP-OCRv6_medium`であること(読み取り専用のrunQuery、識別子と時刻のみ)
 - [ ] PR-D Sarashina要約の本番展開(ADR-0027 PR6): **kanameone canary(10件)は完了し、客観ゲート(1)〜(5)を通過**(decision-maker判断。下記「kanameone canary結果」)。**2026-10-04に方針を変更: 自動要約の全体展開は見送り、「手動を基本」とする**(下記「要約の利用実態と方針決定」)。cocoroのcanaryは、PR-C後に手動経路の確認として改めて判断する
-- [ ] PR-C 手動要約の待ち行列化(ADR-0027 PR7、Gemini呼び出しの除去): **次の着手対象**。範囲: ①手動要求を押した瞬間にSarashinaの処理を起動(巡回待ちをなくす。5分間隔の巡回はフォールバック) ②「バックグラウンドで実行中・他の操作が可能・目安2〜5分」の説明表示と完了時の画面更新 ③OCR完了時の自動`pending`を廃止(自動要約は設定で後から有効化できる設計にし、将来は書類種別で絞る) ④品質の安全策(言語混入の検知と再試行、「AI生成・要確認」の表示、長文は先頭8,000字までの注記) ⑤手動要求の件数・待ち時間・エラー種別の計測(1〜2か月後に自動要否を再判断)。5ファイル以上のためplan modeでフル計画
+- [x] PR-C 手動要約の待ち行列化(ADR-0027 PR7、Gemini呼び出しの除去): **完了(2026-10-06、PR #1124/#1126/#1127、3環境へ展開済み。詳細は下の「PR-C 展開完了」)**。手動要約のGemini経路(`regenerateSummary`のGemini固定)は撤去済み。
 - [ ] PR-E 掃除・文書・再発防止の契約テスト(`@google/genai`のimportを緊急用経路に限定)
 
 **次の一手**: ①`kanameone.env`の`SUMMARY_PROVIDER`を`none`に明示してデプロイ(新規OCR文書が自動で`pending`にならず、画面の「自動生成待ちです」が出ない安全な状態にする。canaryの10件の要約は残る) → ②PR-Cのplan mode計画と実装 → ③cocoroの扱いはPR-C後に判断。本番作業は番号単位の承認を都度取る。**注意**: L1が`sarashina`のままL2フラグだけ`false`に戻すと、新規文書が`pending`のまま溜まり「自動生成待ちです」が出続ける。きれいな巻き戻しはL1(`SUMMARY_PROVIDER`)を外すこと。
