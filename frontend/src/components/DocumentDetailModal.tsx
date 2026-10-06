@@ -480,6 +480,14 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
   const [isGeneratingSummary, setIsGeneratingSummary] = useState(false) // AI要約生成中
   // 要約の依頼を受け付けた案内ダイアログ(トーストはすぐ消えて読めないため、OKで閉じるダイアログにする)
   const [showSummaryQueuedDialog, setShowSummaryQueuedDialog] = useState(false)
+  // 現在開いている書類のID(閉じている間はnull)。要約の依頼は非同期のため、応答が返る頃には書類が閉じられている/
+  // 別の書類に切り替わっていることがある。その場合に受付ダイアログを別の画面へ出さないために使う。
+  const openDocumentIdRef = useRef<string | null>(null)
+  useEffect(() => {
+    openDocumentIdRef.current = open ? documentId : null
+    // 閉じた・別の書類に切り替わった場合は、前の書類の受付ダイアログを残さない
+    setShowSummaryQueuedDialog(false)
+  }, [open, documentId])
   // ADR-0027 PR4c: 7 kindの判定を1箇所で計算し、デスクトップ・モバイル双方へ渡す
   // (#193型の食い違い防止)。
   const summaryDisplay = deriveSummaryDisplayState({
@@ -691,6 +699,7 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
   const handleGenerateSummary = async () => {
     if (!documentId || isGeneratingSummary) return
 
+    const requestedDocumentId = documentId
     setIsGeneratingSummary(true)
     try {
       // 応答は{success, queued, alreadyQueued}。alreadyQueued:trueでも同じ案内を出す(冪等)
@@ -698,7 +707,10 @@ export function DocumentDetailModal({ documentId, open, onOpenChange }: Document
         'regenerateSummary', { docId: documentId }, { timeout: 30_000 }
       )
       // トーストではなく、OKボタンで閉じるダイアログで案内する(すぐ消えて読めないため)
-      setShowSummaryQueuedDialog(true)
+      // 応答を待つ間に書類が閉じられた/切り替わった場合は出さない(別の画面に出てしまうため)
+      if (openDocumentIdRef.current === requestedDocumentId) {
+        setShowSummaryQueuedDialog(true)
+      }
     } catch (err) {
       console.error('Failed to request summary:', err)
       // failed-precondition(準備中・対象外・OCR未完了)/not-found等はBE(regenerateSummary.ts)が

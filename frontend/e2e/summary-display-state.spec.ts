@@ -129,12 +129,34 @@ test.describe('AI要約 8状態UI (デスクトップ) @emulator', () => {
     await expect(dialog).toBeVisible();
     await expect(dialog.locator('text=要約の作成を受け付けました').first()).toBeVisible();
     await expect(dialog.locator('text=要配慮個人情報')).toBeVisible();
-    await expect(dialog.locator('text=外部のAIサービスへ送らず')).toBeVisible();
+    await expect(dialog.locator('text=安全に取り扱う')).toBeVisible();
     // トーストと違って自動では消えない(利用者がOKを押すまで読める)
     await page.waitForTimeout(6000);
     await expect(dialog).toBeVisible();
     await dialog.locator('button:has-text("OK")').click();
     await expect(dialog).toBeHidden();
+  });
+
+  test('受付ダイアログ: 応答を待つ間に書類を閉じたら、閉じた後にダイアログを出さない(別の画面に出るのを防ぐ)', async ({ page }) => {
+    // 受付応答を遅らせ、その間にモーダルを閉じる(codex review P2指摘)
+    await page.route('**/regenerateSummary', async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ result: { success: true, queued: true, alreadyQueued: false } }),
+      });
+    });
+    const modal = await openDocByFileName(page, 'E2E_PR4c_absent_skipped_request');
+    await ensureSummaryAccordionExpanded(modal);
+    await modal.locator('button:has-text("AI要約を生成")').click();
+    await page.keyboard.press('Escape');
+    // 未確認の書類を閉じる際の確認ダイアログ(別のダイアログ)で「未確認のまま閉じる」を選ぶ
+    await page.locator('[role="alertdialog"] button:has-text("未確認のまま閉じる")').click();
+    await expect(page.locator('[role="dialog"]')).toBeHidden();
+    // 応答(2秒遅延)が返った後も、受付ダイアログは出ない
+    await page.waitForTimeout(3500);
+    await expect(page.locator('[role="alertdialog"]:has-text("要約の作成を受け付けました")')).toHaveCount(0);
   });
 
   test('absent(ocrResultUrlオフロード): detail側ocrResultが空でも「AI要約を生成」が出る(要約済みなら先頭8,000字の注記)', async ({ page }) => {
