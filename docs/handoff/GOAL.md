@@ -1,5 +1,5 @@
 ---
-updated: 2026-10-03
+updated: 2026-10-06
 ---
 <!-- 前ミッション(dev/kanameone/cocoro環境監査・保守検証)は2026-07-20完遂。全文はdocs/handoff/LATEST.md参照。 -->
 <!-- Google Drive連携Phase1 (MVP)実装ミッションは2026-07-22完了(PR#700マージ)。詳細は本ファイル末尾「Google Drive連携Phase1完遂」節+docs/handoff/LATEST.md参照。 -->
@@ -30,7 +30,7 @@ updated: 2026-10-03
 - [x] PR-C 手動要約の待ち行列化(ADR-0027 PR7、Gemini呼び出しの除去): **完了(2026-10-06、PR #1124/#1126/#1127、3環境へ展開済み。詳細は下の「PR-C 展開完了」)**。手動要約のGemini経路(`regenerateSummary`のGemini固定)は撤去済み。
 - [x] PR-E 要約のGemini経路の撤去・再発防止の契約テスト(`@google/genai`のimportを緊急用経路に限定): **完了(2026-10-06、PR #1130、dev検証済み・kanameone/cocoro再デプロイ済み)**。dev: 手動要約1件が`outcome=done`(61秒)、paddle-ocr-verify(load、tier1、quick)が`failedPageCount=0`で成功(PDF分割の移設確認)。本番2環境は再デプロイ後も環境変数が不変で、バッチに警告以上のログなし。契約テスト(functions 50件・scripts 3件)がPASS。計画はクロスレビュー(grip+codex)済み。再デプロイ前の`GEMINI_MODEL_ID`実値は、kanameone・cocoroとも**未設定**(コード既定の3.5 Flash)で、再デプロイ後も不変(再デプロイは既存値を引き継がずコード既定で再生成するため、事前確認を展開の条件にした。ローカルの`functions/.env.docsplit-kanameone`の`gemini-2.5-flash`は古い値で、本番の実態ではなかった)。2.5 Flashの退役は2026-10-16。本番での生成成功の確認操作は行っていない(devで検証、本番は環境変数とバッチのログまで)
 
-**次の一手**: ①`kanameone.env`の`SUMMARY_PROVIDER`を`none`に明示してデプロイ(新規OCR文書が自動で`pending`にならず、画面の「自動生成待ちです」が出ない安全な状態にする。canaryの10件の要約は残る) → ②PR-Cのplan mode計画と実装 → ③cocoroの扱いはPR-C後に判断。本番作業は番号単位の承認を都度取る。**注意**: L1が`sarashina`のままL2フラグだけ`false`に戻すと、新規文書が`pending`のまま溜まり「自動生成待ちです」が出続ける。きれいな巻き戻しはL1(`SUMMARY_PROVIDER`)を外すこと。
+**次の一手(2026-10-06更新)**: 通常経路のGemini停止の本体(PR-A/B/C/E)は完了。残りは確認作業と判断のみで、締め切りはない: ①PR-A確認(cocoro、`candidateGeminiMs`が出ないこと) ②PR-B確認(3環境、新規処理文書の`ocrExtraction.version`、読み取りスクリプトをGitHub Actions経由で用意する必要あり) ③PR-D(cocoroにSarashina基盤を作るかの判断、利用実績は95日間で0件)。本番作業は番号単位の承認を都度取る。**注意**: L1が`sarashina`のままL2フラグだけ`false`に戻すと、手動依頼の`pending`が滞留しうる。L1を外す(`none`)と取り残された`processing`は救済時に`error`になる。両者の挙動の違いはADR-0027「要約のGemini経路の撤去(PR-E)」参照。
 
 **注意(PR-D・PR-Cの設計入力)**: devの実測で、Sarashinaサービス(同時実行1)は429(同時実行上限での拒否)を観測済み、リクエストp95は約138秒(最大約189秒)。canary期間中は許可リスト外の新規文書が`skipped`になり、許可リストを外しても拾われない(`ocrProcessor.ts:603`、`generateSummaryBatch.ts:218`)ため、canaryは短期(1営業日)にし、全体展開の直前に`skipped`文書を`pending`へ戻す再投入が必要。
 
@@ -740,7 +740,7 @@ cocoro/kanameから、書類（ケアプラン・医療・介護保険証等）�
 
 ## 🔄 中断点（in-flight）
 
-**Geminiの通常経路停止(2026-10-03、本ファイル上部「通常経路のGemini停止」節)**: 部分着手のまま残るタスクはなし(PR-A/B/D0はマージ・デプロイ済み)。次の一手はPR-D着手(kanameoneのSarashinaインフラ構築、本番作業のため番号単位の承認を取る)。再開時の状態確認: `gh pr list --state open`(0件のはず) / `gcloud functions describe processOCR`の`OCR_PROVIDER`(3環境とも`paddle`) / `check-sarashina-summary-canary --hours 168`(dev、読み取り専用)。
+**Geminiの通常経路停止(2026-10-03、本ファイル上部「通常経路のGemini停止」節)**: 部分着手のまま残るタスクはなし(PR-A/B/C/D0/Eはマージ・デプロイ済み、2026-10-06に完了の定義3項目を`[x]`)。残りは確認作業(PR-A cocoro・PR-B)と判断(PR-D cocoro)のみ。再開時の状態確認: `gh pr list --state open`(0件のはず) / `gcloud functions describe processOCR`の`OCR_PROVIDER`(3環境とも`paddle`) / 契約テスト`cd functions && npx mocha --require ts-node/register test/geminiSdkImportAllowlistContract.test.ts`(Node 20で実行。手元のHomebrew Nodeが26だとmochaが動かないため`PATH=/opt/homebrew/opt/node@20/bin:$PATH`)。
 
 （以下は旧記述）なし（2026-09-19セッションで解消: kanameoneのgcloud対話認証はdecision-makerが`gcloud auth login --configuration=kanameone`を実行し復旧済み。ADR-0025 PaddleOCR Pass1全面切替はdev/kanameone/cocoro 3環境とも完了済み、事後監視のpush型アラート強化も完了済み。詳細は本ファイル冒頭「ADR-0025 PaddleOCR」節参照）。
 
