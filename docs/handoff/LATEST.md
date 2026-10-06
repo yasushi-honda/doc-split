@@ -1,6 +1,28 @@
 # ハンドオフメモ
 
-**更新日**: 2026-10-03（通常経路のGemini停止: Pass2廃止(PR #1116)・OCRの倒れ先をpaddleへ反転(PR #1117)・Sarashina canary測定スクリプト(PR #1118)をマージし3環境へデプロイ。過去セッションの内容は以下の各節を参照）
+**更新日**: 2026-10-06（通常経路のGemini停止のPR-C・PR-Eを完了、本番2環境へ反映。以前: 2026-10-03 通常経路のGemini停止: Pass2廃止(PR #1116)・OCRの倒れ先をpaddleへ反転(PR #1117)・Sarashina canary測定スクリプト(PR #1118)をマージし3環境へデプロイ。過去セッションの内容は以下の各節を参照）
+
+## 通常経路のGemini停止: PR-C(要約の手動・非同期化)とPR-E(要約のGemini経路の撤去)完了（2026-10-06）
+
+### 結果
+- **PR-C(#1124/#1126/#1127、本セッション前半)**: 要約を手動・非同期に一本化。依頼はキュー登録のみ(onCall)、生成は1分ごとのバッチが直列実行。OCR完了時の自動生成は廃止。受付はOKボタンのダイアログで、時間がかかる理由(要配慮個人情報を安全に扱うため)を併記。kanameone・cocoro(要約は準備中)へ展開済み。
+- **PR-E(#1130)**: 要約のGemini経路(`summaryGenerator.ts`、旧`SUMMARY_PROVIDER=gemini`)と評価用の比較スクリプト群を撤去。`@google/genai`を参照できるのは`ocrProcessor.ts`(OCR緊急用)だけで、構文解析の契約テスト(functions 50件・scripts 3件)がCIで固定。PDF分割関数は`scripts/lib/pdfPages.ts`へ切り出し。`SUMMARY_PROVIDER=gemini`は警告つきでnoneに倒れる。
+- **検証**: dev(手動要約が`outcome=done`、61秒 / paddle-ocr-verify load tier1 quickが`failedPageCount=0`)。本番2環境を再デプロイし、環境変数は不変(`GEMINI_MODEL_ID`は両環境とも未設定=コード既定3.5 Flash)、バッチに警告以上のログなし。3環境とも`gemini_ocr_emergency_used`は48時間0件。GOAL.mdの完了の定義3項目を`[x]`。
+- **レビュー**: 計画はgrip+codexのクロスレビュー、実装はcodex review(指摘0件)・Evaluator(APPROVE)・pr-review-toolkit 3本。
+
+### 教訓
+- ローカルの`functions/.env.<project>`の値(`GEMINI_MODEL_ID=gemini-2.5-flash`)は本番の実態ではなかった。展開前に`gcloud functions describe`で実値を確認したため、「再デプロイでモデルが変わる」懸念は杞憂と確定できた(プロジェクトCLAUDE.mdの既存ルールの再確認)。
+- 契約テストの対象を「SDKのimport」だけにせず、「要約経路から到達できない」「REST直叩きの文字列がない」まで広げ、検出の穴(動的import・コメント内の誤検知)は構文解析で塞いだ。未解決の相対importは黙ってスキップせず失敗にする。
+- 手元のHomebrew Nodeがセッション中にv26へ上がり、mochaがESMエラーで動かなくなった。CIはNode 20なので、手元ではnode@20をPATHに入れて確認する。
+- CIは約20分かかる。マージ承認を取る前に完了を待つ運用にした。
+
+### 次のアクション
+- **即着手**: なし(executor領分の作業ゼロ)。
+- **条件待ち**: ①PR-A確認(cocoro)(trigger=cocoroで新リビジョンが文書を処理。確認=`gcloud logging read`で`candidateGeminiMs`が出ないこと) ②PR-B確認(3環境)(trigger=デプロイ後の新規処理文書。確認=`ocrExtraction.version`が`PP-OCRv6_medium`。ローカルADCはFirestoreに届かないため、読み取り専用スクリプトをGitHub Actions経由で用意する必要あり。用意自体はdecision-makerの指示を待つ) ③PR-D(cocoro)(trigger=decision-makerがcocoroでSarashinaを使うと決めたとき。利用実績は95日間で0件、基盤構築の費用との見合いを判断)。
+- **却下候補**: language-mix検知のブロック化(誤検知の実測データが無く、ログのみで運用中。実測してから別途判断) / 要約の自動生成の再開(手動基本の方針、decision-makerの指示があれば`autoSummaryOnOcr`で再開可能) / 削除済みスクリプト名が残るコメントの一括整理(実害なし) / `SUMMARY_PROVIDER`不正値の警告の昇格(デプロイ前検査で入口が塞がれており、実害なし)。
+
+### 最終結論
+✅ **セッション終了可** — OPEN PRゼロ(本ハンドオフPRを除く)、Git clean、即着手なし、条件待ち3件(いずれもdecision-makerの指示または新規処理待ち)。
 
 ## 通常経路のGemini停止: PR-A/PR-B/PR-D0完了（2026-10-03）
 
