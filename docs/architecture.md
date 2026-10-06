@@ -30,7 +30,11 @@ flowchart TB
 
     subgraph External["外部サービス"]
         Gmail["Gmail API"]
-        Gemini["Gemini 3.5 Flash<br/>(Vertex AI)"]
+    end
+
+    subgraph SelfHosted["自前ホスティング(Cloud Run CPU、asia-northeast1、顧客のGCPプロジェクト内)"]
+        PaddleOCR["PaddleOCR<br/>(OCR)"]
+        Sarashina["Sarashina<br/>(要約、手動依頼のみ)"]
     end
 
     Browser --> Hosting
@@ -43,11 +47,10 @@ flowchart TB
     CheckGmail --> Firestore
 
     ProcessOCR --> Storage
-    ProcessOCR --> Gemini
+    ProcessOCR --> PaddleOCR
     ProcessOCR --> Firestore
 
     DetectSplit --> Storage
-    DetectSplit --> Gemini
     SplitPdf --> Storage
 
     Functions --> SecretManager
@@ -85,7 +88,7 @@ sequenceDiagram
     participant Scheduler as Cloud Scheduler
     participant ProcessOCR as processOCR
     participant Storage as Cloud Storage
-    participant Gemini as Gemini 3.5 Flash
+    participant PaddleOCR as PaddleOCR (Cloud Run)
     participant Firestore as Firestore
 
     Note over Scheduler,ProcessOCR: 1分間隔ポーリング（ADR-0010: processOCROnCreate廃止）
@@ -94,8 +97,8 @@ sequenceDiagram
 
     loop 各書類
         ProcessOCR->>Storage: PDF取得
-        ProcessOCR->>Gemini: OCR実行
-        Gemini-->>ProcessOCR: 抽出結果(顧客名,日付,書類種別,要約)
+        ProcessOCR->>PaddleOCR: OCR実行
+        PaddleOCR-->>ProcessOCR: OCR全文
         ProcessOCR->>Firestore: マスターデータ照合
         ProcessOCR->>Firestore: 書類更新(status: processed)
     end
@@ -141,7 +144,7 @@ sequenceDiagram
 | `uploadPdf` | Callable | ローカルPDFアップロード |
 | `deleteDocument` | Callable | ドキュメント削除（ホワイトリスト登録済みユーザー） |
 | `getOcrText` | Callable | OCR全文取得 |
-| `regenerateSummary` | Callable | AI要約再生成 |
+| `regenerateSummary` | Callable | AI要約の手動依頼(受付のみ。生成は`generateSummaryBatch`(1分間隔)がSarashinaで非同期に実行) |
 | `searchDocuments` | Callable | 全文検索（日付パース対応） |
 | `onDocumentWriteSearchIndex` | Firestore Trigger | 検索インデックス自動更新 |
 | `onDocumentWrite` | Firestore Trigger | ドキュメントグループ更新 |

@@ -12,7 +12,7 @@ updated: 2026-10-07
 
 **障害時の運用(決裁者決定)**: 検知=`processocr_error`アラートを起点にAIが件数を読み取って確認・提案。再投入(`fix-stuck-documents --include-errors`のdry-run→本実行、`run-ops-script.yml`経由)は番号単位の承認後にAIが実行。許容する停止は「復旧後にerror書類を再投入するまでの遅延」。
 
-**plan-crossreview(2026-10-06、grip+codex2パス)の主な反映**: ①障害時に書類は`pending`のまま残らず、再試行の上限を超えると`error`に確定する(コード確認済み) ②devの自動デプロイ(`deploy.yml`)は環境変数を生成しないため、devも`deploy-functions.yml`で展開して`describe`で実値確認 ③展開前にCloud Runリビジョン履歴を確認しdevで切替・復帰を実演 ④`README.md`・`docs/architecture.md`はPR-1に含める。
+**plan-crossreview(2026-10-06、grip+codex2パス)の主な反映**: ①障害時に書類は`pending`のまま残らず、再試行を使い切ると`error`に確定する(一時エラーは5回目の失敗=再試行4回、429は8回目の失敗=再試行7回、非一時エラーは即確定。コード確認済み) ②devの自動デプロイ(`deploy.yml`)は環境変数を生成しないため、devも`deploy-functions.yml`で展開して`describe`で実値確認 ③展開前にCloud Runリビジョン履歴を確認しdevで切替・復帰を実演 ④`README.md`・`docs/architecture.md`はPR-1に含める。
 
 **完了の定義**:
 - [ ] コードからGeminiが消えている(証明: `cd functions && PATH=/opt/homebrew/opt/node@20/bin:$PATH npx mocha --require ts-node/register test/geminiSdkImportAllowlistContract.test.ts` → PASS、`cd scripts && npm test` → PASS、`grep -c '"@google/genai"' functions/package.json` → `0`)
@@ -21,7 +21,7 @@ updated: 2026-10-07
 - [ ] 展開後24時間、3環境の`processocr`にERROR以上のログがない(証明: `gcloud logging read 'resource.labels.service_name="processocr" AND severity>=ERROR' --project=<各project> --freshness=24h --limit=1` → 出力なし)。運用監視であり、OCR成功の証明ではない
 - [ ] 代替OCRの実動確認(dev): 新規アップロードしたダミー書類が`done`になり`ocrExtraction.version`が`PP-OCRv6_medium`系(kanameone・cocoroは新規書類の流入後に同じ確認)
 - [ ] 3環境で`status:'error'`・`pending`の滞留が増えていない(証明: 展開前後の`fix-stuck-documents --dry-run`の対象件数を比較、`run-ops-script.yml`経由)
-- [ ] PR-2(残りのdocs)がマージ済み(証明: `grep -rln 'Gemini' README.md docs/architecture.md docs/overview.md docs/features.md`の残存が履歴・ADR・廃止の記述のみ)
+- [ ] PR-2(残りのdocs)がマージ済み(証明: `grep -rln 'Gemini' docs/overview.md docs/features.md docs/README.md docs/api-reference.md docs/operation-guide.md docs/health-report.md docs/context/functional-requirements.md docs/context/project-background.md docs/context/gcp-migration-scope.md`の残存が履歴・ADR・廃止の記述のみ)。README.md・docs/architecture.md・docs/context/business-logic.md・docs/security.md・セットアップ/デプロイ手順書はPR-1に含めた
 
 **進行状況(2026-10-06)**:
 - [x] 計画・plan-crossreview・承認

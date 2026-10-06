@@ -165,8 +165,8 @@ OCRのエンジンは**PaddleOCRのみ**で、Gemini(Vertex AI)は緊急用経�
 **外部AI(Gemini等)へは逃がさない。** 顧客データ(要配慮個人情報を含みうる)を、公式がサポートしない経路へ送らないためである。
 
 1. **検知**: `processocr_error`アラート(push型)。AIがアラートを起点に、`gcloud logging read`で原因(接続エラー・タイムアウト・5xx)と、`status:'error'`に確定した書類の件数を読み取って確認し、決裁者へ報告・提案する
-2. **短時間の障害**: 一時エラーは自動で再試行される(一時エラー5回・1分間隔、429は8回まで)。上限内に復旧すれば書類は自動で処理される
-3. **長引いた場合**: 再試行の上限を超えた書類は`status:'error'`に確定する。**書類のデータは失われないが、自動では再処理されない**(自動救済`rescueErroredDocuments`は429系のerrorのみ・最大3回)。復旧後に次の手順で`pending`へ戻して再処理する。本実行は**番号単位の承認後**にAIが実行する:
+2. **短時間の障害**: 一時エラーは自動で再試行される(5回目の失敗で確定=再試行4回・1分間隔、429は8回目の失敗で確定=再試行7回)。その範囲内に復旧すれば書類は自動で処理される。非一時エラー(403/400等)は即`error`に確定し、復旧操作だけでは直らない(原因の調査が要る)
+3. **長引いた場合**: 再試行を使い切った書類は`status:'error'`に確定する。**書類のデータは失われないが、自動では再処理されない**(自動救済`rescueErroredDocuments`は429系のerrorのみ・最大3回)。復旧後に次の手順で`pending`へ戻して再処理する。本実行は**番号単位の承認後**にAIが実行する:
    ```bash
    gh workflow run "Run Operations Script" -f environment=<env> -f script='fix-stuck-documents --include-errors --dry-run'  # 対象件数の確認
    gh workflow run "Run Operations Script" -f environment=<env> -f script='fix-stuck-documents --include-errors'            # 本実行(承認後)

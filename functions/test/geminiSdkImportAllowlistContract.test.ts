@@ -26,6 +26,8 @@ import { dirname, join, relative, resolve } from 'path';
 import * as ts from 'typescript';
 
 const GENAI_SPECIFIER = '@google/genai';
+// 旧Vertex SDK(Gemini呼び出し用)。これも使わない(ADR-0029)。
+const LEGACY_VERTEX_SPECIFIER = '@google-cloud/vertexai';
 
 // `@google/genai` を参照してよいファイル(functions/ からの相対パス)。ADR-0029で緊急用経路も
 // 廃止したため空。許可を足す変更は、ADR-0029を覆す決裁者判断が先に要る。
@@ -156,11 +158,24 @@ describe('Gemini 不使用の契約 (ADR-0029)', () => {
       );
     });
 
-    it('functions/package.json に @google/genai の依存が無い(依存の復活を検知)', () => {
+    it('functions/package.json に @google/genai・@google-cloud/vertexai の依存が無い(依存の復活を検知)', () => {
       const pkg = JSON.parse(readWithContext(resolve(ROOT, 'package.json'), 'package-json')) as Record<string, Record<string, string> | undefined>;
       for (const field of ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies']) {
-        expect(Object.keys(pkg[field] ?? {}), `functions/package.json の ${field} に ${GENAI_SPECIFIER} がある(ADR-0029で廃止)`).to.not.include(GENAI_SPECIFIER);
+        for (const forbidden of [GENAI_SPECIFIER, LEGACY_VERTEX_SPECIFIER]) {
+          expect(Object.keys(pkg[field] ?? {}), `functions/package.json の ${field} に ${forbidden} がある(ADR-0029で廃止)`).to.not.include(forbidden);
+        }
       }
+    });
+
+    it('src 配下で旧Vertex SDK(@google-cloud/vertexai)を参照するファイルは無い', () => {
+      const detected = walkTs(resolve(ROOT, 'src'))
+        .filter((f) =>
+          collectModuleSpecifiers(readWithContext(f, 'legacy-sdk-scan')).some(
+            (s) => s === LEGACY_VERTEX_SPECIFIER || s.startsWith(`${LEGACY_VERTEX_SPECIFIER}/`)
+          )
+        )
+        .map(rel);
+      expect(detected, `旧Vertex SDK(Gemini呼び出し用)の参照は禁止(ADR-0029): ${detected.join(', ')}`).to.deep.equal([]);
     });
 
     it('GoogleGenAI / generateContent の呼び出しは src のどこにも現れない', () => {

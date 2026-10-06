@@ -9,8 +9,8 @@ AppSheetで構築された書類管理アプリをGCP/Firebaseでリプレイス
 ### 主な機能
 
 - **Gmail添付ファイル自動取得**: 指定ラベルのメールから添付ファイルを自動収集
-- **AI OCR処理**: Vertex AI Gemini 3.5 Flashによる高精度なOCR
-- **AI要約**: OCR結果から書類内容を自動要約
+- **AI OCR処理**: 自前ホスティングのPaddleOCR(Cloud Run、東京リージョン)によるOCR。書類の内容を外部の生成AIサービスへは送信しない
+- **AI要約**: OCR結果から書類内容を要約(手動依頼のみ、自前ホスティングのSarashina(Cloud Run)で非同期に生成)
 - **書類情報自動抽出**: 書類名・顧客名・事業所名・日付を自動判定
 - **書類検索・閲覧**: フィルタリング、グルーピング、PDFビューアー
 - **PDF分割機能**: 複数書類が含まれるPDFを自動検出・分割
@@ -26,7 +26,8 @@ AppSheetで構築された書類管理アプリをGCP/Firebaseでリプレイス
 | データベース | Firestore |
 | ストレージ | Cloud Storage |
 | 認証 | Firebase Authentication (Google Login) |
-| OCR | Vertex AI Gemini 3.5 Flash |
+| OCR | PaddleOCR(自前ホスティング、Cloud Run asia-northeast1) |
+| 要約 | Sarashina(自前ホスティング、Cloud Run asia-northeast1、手動依頼) |
 | ホスティング | Firebase Hosting |
 
 ## プロジェクト構成

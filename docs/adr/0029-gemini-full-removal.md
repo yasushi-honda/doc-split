@@ -33,7 +33,7 @@ Accepted (2026-10-06)。ADR-0025・ADR-0027が「明示指定時だけ使う緊�
 
 ### 障害時の運用(PaddleOCRが止まったとき)
 - **外部AIへは逃がさない。**
-- OCRの再試行は、一時エラー5回(1分間隔)・429は8回までで、上限を超えた書類は`status:'error'`に確定する。**書類のデータは失われないが、自動では再処理されない**(自動救済`rescueErroredDocuments`は429系のerrorのみ、最大3回)。
+- OCRの再試行は、一時エラーは5回目の失敗で`status:'error'`に確定(再試行は4回、1分間隔)、429は8回目の失敗で確定(再試行は7回、指数バックオフ)する。非一時エラー(403/400等)は再試行せず即確定する(その場合は復旧操作だけでは直らず、原因の調査が要る)。**書類のデータは失われないが、自動では再処理されない**(自動救済`rescueErroredDocuments`は429系のerrorのみ、最大3回)。
 - 許容する停止は「復旧後にerror書類を再投入するまでの遅延」。
 - 検知: `processocr_error`アラートを起点に、AIが件数を読み取って確認・提案する。再投入(`fix-stuck-documents --include-errors`のdry-run→本実行、`run-ops-script.yml`経由)は、**番号単位の承認後にAIが実行する**(decision-maker決定)。
 - 不良リビジョンが原因の場合に限り、直前の健全なリビジョンへ`gcloud run services update-traffic`で戻す。Cloud Runや依存先の長期障害には効かない。手順は`services/paddle-ocr/README.md`の「PaddleOCR障害時の運用」を参照。

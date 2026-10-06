@@ -155,11 +155,10 @@ AppSheetからGoogle Apps Script (GAS) を呼び出して処理：
 | AppSheet自動化 | Cloud Functions + Cloud Scheduler |
 | GAS連携 | Cloud Functions (Node.js/Python) |
 | Gmail監視 | Gmail API + Pub/Sub |
-| OCR処理 | **Vertex AI Gemini 3.5 Flash** (asia-northeast1) |
+| OCR処理 | **PaddleOCR**(自前ホスティング、Cloud Run asia-northeast1。ADR-0025) |
 | ファイル操作 | Cloud Storage |
 
-> **Note**: OCRはCloud Vision APIではなくGemini 3.5 Flashを採用（2026-07-09にGemini 2.5 Flashから移行済み、Issue #548）。
-> AI OCRとして高精度、書類分類も同時に可能。詳細は `adr/0001-tech-stack-selection.md` 参照。
+> **Note**: OCRはPaddleOCR(自前ホスティング)を採用。Gemini(Vertex AI)は2026-10-06に緊急用経路も含めて廃止した(ADR-0029。経緯: ADR-0001でGemini採用→ADR-0025でPaddleOCRへ移行)。書類分類・顧客名等の抽出はOCR全文に対するルールベースの照合で行う。
 
 ## 参照
 - 詳細アクション定義: `reference/sections/03_behavior.md`

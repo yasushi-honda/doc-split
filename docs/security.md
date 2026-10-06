@@ -198,7 +198,7 @@ flowchart LR
 | ブラウザ ↔ Firestore | HTTPS | TLS 1.3 |
 | ブラウザ ↔ Storage | HTTPS | TLS 1.3 |
 | Functions ↔ Gmail API | HTTPS | TLS 1.3 |
-| Functions ↔ Vertex AI | HTTPS | TLS 1.3 |
+| Functions ↔ PaddleOCR / Sarashina (Cloud Run) | HTTPS(IDトークン認証) | TLS 1.3 |
 
 ## データ保護
 

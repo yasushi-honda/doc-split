@@ -86,7 +86,6 @@ gcloud services enable \
   firestore.googleapis.com \
   storage.googleapis.com \
   pubsub.googleapis.com \
-  aiplatform.googleapis.com \
   secretmanager.googleapis.com \
   gmail.googleapis.com \
   cloudscheduler.googleapis.com \

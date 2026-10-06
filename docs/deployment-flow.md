@@ -338,7 +338,7 @@ Claude Code / CI用（非対話モード）:
     <strong>Step 1:</strong> GCP API有効化（10個のAPI）
   </div>
   <div class="timeline-item">
-    <strong>Step 1.5:</strong> Vertex AI権限設定
+    <strong>Step 1.5:</strong> Cloud Functions SA権限設定(Vertex AIは廃止、ADR-0029)
   </div>
   <div class="timeline-item">
     <strong>Step 2:</strong> Firebase設定 + エイリアス追加
@@ -439,7 +439,7 @@ flowchart LR
 
     subgraph Process["⚙️ 自動処理"]
         B["添付ファイル取得<br/>(5分間隔)"]
-        C["AI OCR処理<br/>(Gemini 2.5)"]
+        C["AI OCR処理<br/>(PaddleOCR)"]
         D["メタ情報抽出<br/>(顧客・書類種別)"]
     end
 
@@ -606,7 +606,7 @@ flowchart TD
 |------|------|------|
 | ログインできない | ホワイトリスト未登録 | users コレクションに追加 |
 | Gmail取得されない | OAuth認証エラー | setup-gmail-auth.sh 再実行 |
-| OCRエラー | Gemini API制限 | しばらく待って再実行 |
+| OCRエラー | OCR処理サービス(PaddleOCR)の一時的な混雑・停止 | しばらく待って再実行(長引く場合はerror書類を復旧後に再投入、`services/paddle-ocr/README.md`) |
 | デプロイ失敗 | 権限不足 | IAMロール確認 |
 | auth/unauthorized-domain | Authorized Domains未設定 | setup-tenant.shで自動設定済み（手動の場合はFirebase Console） |
 | デプロイ時「gcloud構成が不一致」 | 別クライアントのgcloud構成が有効 | `./scripts/switch-client.sh <alias>` で切替 |
