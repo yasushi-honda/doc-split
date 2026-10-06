@@ -47,7 +47,7 @@ export function parseOcrThinkingBudget(envValue: string | undefined): number {
  * 環境変数 `GEMINI_MODEL_ID` に`gemini-2.5-flash`を設定してfunctionsを再deployするだけで
  * コード変更・PRなしに即時ロールバックできる(GEMINI_OCR_THINKING_BUDGETと同じパターン)。
  *
- * ドキュメント化された2値(gemini-3.5-flash/gemini-2.5-flash)以外は、全OCR/summaryリクエストが
+ * ドキュメント化された2値(gemini-3.5-flash/gemini-2.5-flash)以外は、OCR緊急用経路の全リクエストが
  * 存在しないモデルIDでエラーになることを避けるため、安全側の既定値(移行後の3.5-flash)にフォールバックする。
  */
 export function parseModelId(envValue: string | undefined): string {

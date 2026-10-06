@@ -405,9 +405,9 @@ describe('処理が遅い理由の案内(SUMMARY_SAFETY_NOTICE)', () => {
     expect(SUMMARY_SAFETY_NOTICE).toContain('安全')
   })
 
-  it('生成元(SUMMARY_PROVIDER)に依らず事実であること: 「外部のAIサービスへ送らない」等の送信先を断定する表現を含まない', () => {
-    // ロールバック運用(SUMMARY_PROVIDER=gemini)では書類の内容がVertex AI Geminiへ送られる。画面はプロバイダを
-    // 知らないため、どちらの構成でも正しい文言にする(codex review P1指摘)。
+  it('事実だけを書くこと: 「外部のAIサービスへ送らない」等の送信先を断定する表現を含まない', () => {
+    // 画面は処理基盤の詳細を知らないため、送信先を断定する文言は書かない(codex review P1指摘)。
+    // (要約のGemini経路はADR-0027 PR-Eで撤去済み。)
     expect(SUMMARY_SAFETY_NOTICE).not.toMatch(/外部|送らず|送信しない|国内|専用/)
   })
 
