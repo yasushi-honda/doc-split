@@ -59,6 +59,13 @@ Accepted (2026-10-06)。ADR-0025・ADR-0027が「明示指定時だけ使う緊�
 - `getPaddleOcrGate`とL2フラグ(`settings/features.paddleOcr*`)。本番のOCR判定では未使用の、別の整理対象。
 - 開発側のPII処理ツール(`/pii-gemini`、専用GCPプロジェクト)。本番とは別系統。
 
+## 展開の記録(2026-10-07)
+- PR #1137をマージ。devはmainへのpushの自動デプロイ、kanameone・cocoroは`deploy-functions.yml`(全入力`code-default`)で展開した。3環境とも`gcloud functions describe`で`OCR_PROVIDER=paddle`・`SUMMARY_PROVIDER=sarashina`・`GEMINI_MODEL_ID`なしを確認した。
+- dev実動確認: 12ページのダミー書類が`processed`になり、`ocrExtraction.version`は`PP-OCRv6_medium/det:…/rec:…`だった。
+- dev切替の実演: `paddle-ocr`を`00022`(最新、100%)→`00021`(直前、100%)→`--to-latest`で`00022`(100%)へ戻し、各段階のトラフィック配分を確認した。kanameone・cocoroのリビジョン履歴(戻し先の健全性)は未確認で、実際の障害時に確認する。
+- HelpPageの文言は3環境のHostingの配信バンドルで確認した(旧文言なし、新文言あり)。
+- GCP側の設定(Vertex AI API無効化、`roles/aiplatform.user`剥奪)は、展開後24時間のERRORログ確認の後に、環境ごとの番号単位の承認で行う。
+
 ## Alternatives Considered
 
 - **緊急用経路を残す(現状維持)**: 公式非サポートで継続保証がなく、処理場所を説明できない。要配慮個人情報を扱う方針と整合しない。緊急利用の実績は0件。

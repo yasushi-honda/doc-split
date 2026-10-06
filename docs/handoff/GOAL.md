@@ -15,19 +15,19 @@ updated: 2026-10-07
 **plan-crossreview(2026-10-06、grip+codex2パス)の主な反映**: ①障害時に書類は`pending`のまま残らず、再試行を使い切ると`error`に確定する(一時エラーは5回目の失敗=再試行4回、429は8回目の失敗=再試行7回、非一時エラーは即確定。コード確認済み) ②devの自動デプロイ(`deploy.yml`)は環境変数を生成しないため、devも`deploy-functions.yml`で展開して`describe`で実値確認 ③展開前にCloud Runリビジョン履歴を確認しdevで切替・復帰を実演 ④`README.md`・`docs/architecture.md`はPR-1に含める。
 
 **完了の定義**:
-- [ ] コードからGeminiが消えている(証明: `cd functions && PATH=/opt/homebrew/opt/node@20/bin:$PATH npx mocha --require ts-node/register test/geminiSdkImportAllowlistContract.test.ts` → PASS、`cd scripts && npm test` → PASS、`grep -c '"@google/genai"' functions/package.json` → `0`)
-- [ ] 3環境の`processOCR`に`GEMINI_MODEL_ID`がなく`OCR_PROVIDER=paddle`(証明: `gcloud functions describe processOCR --project=<各project> --account=hy.unimail.11@gmail.com --gen2 --region=asia-northeast1 --format="value(serviceConfig.environmentVariables)"` → `GEMINI_MODEL_ID`を含まず`OCR_PROVIDER`は`paddle`)
+- [x] コードからGeminiが消えている(証明: `cd functions && PATH=/opt/homebrew/opt/node@20/bin:$PATH npx mocha --require ts-node/register test/geminiSdkImportAllowlistContract.test.ts` → PASS、`cd scripts && npm test` → PASS、`grep -c '"@google/genai"' functions/package.json` → `0`) (2026-10-07: PR #1137マージ、CI全PASS。functions 2547件・scripts 814件PASS)
+- [x] 3環境の`processOCR`に`GEMINI_MODEL_ID`がなく`OCR_PROVIDER=paddle`(証明: `gcloud functions describe processOCR --project=<各project> --account=hy.unimail.11@gmail.com --gen2 --region=asia-northeast1 --format="value(serviceConfig.environmentVariables)"` → `GEMINI_MODEL_ID`を含まず`OCR_PROVIDER`は`paddle`) (2026-10-07実測: dev・kanameone・cocoroとも`OCR_PROVIDER=paddle`・`SUMMARY_PROVIDER=sarashina`・`GEMINI_MODEL_ID`なし)
 - [ ] 3環境でVertex AI APIが無効(証明: `gcloud services list --enabled --project=<各project> --filter="config.name:aiplatform.googleapis.com" --format="value(config.name)"` → 出力なし)。実施は展開と検証の後、環境ごとに番号単位の承認
-- [ ] 展開後24時間、3環境の`processocr`にERROR以上のログがない(証明: `gcloud logging read 'resource.labels.service_name="processocr" AND severity>=ERROR' --project=<各project> --freshness=24h --limit=1` → 出力なし)。運用監視であり、OCR成功の証明ではない
-- [ ] 代替OCRの実動確認(dev): 新規アップロードしたダミー書類が`done`になり`ocrExtraction.version`が`PP-OCRv6_medium`系(kanameone・cocoroは新規書類の流入後に同じ確認)
+- [ ] 展開後24時間、3環境の`processocr`にERROR以上のログがない(証明: `gcloud logging read 'resource.labels.service_name="processocr" AND severity>=ERROR' --project=<各project> --freshness=24h --limit=1` → 出力なし)。運用監視であり、OCR成功の証明ではない 【展開: kanameone 2026-10-06 16:43 UTC、cocoro 同16:52 UTC。展開直後の1時間はERRORログ0件。24時間後(2026-10-08夕方以降)に再確認】
+- [ ] 代替OCRの実動確認(dev): 新規アップロードしたダミー書類が`done`になり`ocrExtraction.version`が`PP-OCRv6_medium`系(kanameone・cocoroは新規書類の流入後に同じ確認) 【2026-10-07 dev完了: 12ページのダミー書類が`processed`、`ocrExtraction.version`=`PP-OCRv6_medium/…`。kanameone・cocoroは新規書類の流入待ち】
 - [ ] 3環境で`status:'error'`・`pending`の滞留が増えていない(証明: 展開前後の`fix-stuck-documents --dry-run`の対象件数を比較、`run-ops-script.yml`経由)
 - [ ] PR-2(残りのdocs)がマージ済み(証明: `grep -rln 'Gemini' docs/overview.md docs/features.md docs/README.md docs/api-reference.md docs/operation-guide.md docs/health-report.md docs/context/functional-requirements.md docs/context/project-background.md docs/context/gcp-migration-scope.md`の残存が履歴・ADR・廃止の記述のみ)。README.md・docs/architecture.md・docs/context/business-logic.md・docs/security.md・セットアップ/デプロイ手順書はPR-1に含めた
 
 **進行状況(2026-10-06)**:
 - [x] 計画・plan-crossreview・承認
-- [ ] PR-1(コード・テスト・CI・スクリプト・UI・重要文書、ADR-0029): ローカル実装・検証済み(functions単体2546件・統合187件、scripts 810件、frontend 940件PASS)。codex review・quality-gate-evaluator・HelpPage表示確認・PR作成・マージ・展開が残り
+- [x] PR-1(コード・テスト・CI・スクリプト・UI・重要文書、ADR-0029): ローカル実装・検証済み(functions単体2546件・統合187件、scripts 810件、frontend 940件PASS)。codex review・quality-gate-evaluator・HelpPage表示確認・PR作成・マージ・展開が残り → PR #1137で2026-10-07にマージ(codex review 2回・evaluator・pr-review-toolkit反映済み)
 - [ ] PR-2(残りのdocs、docs-only)
-- [ ] 展開(dev→kanameone→cocoro、番号単位の承認)
+- [x] 展開(dev→kanameone→cocoro、番号単位の承認) → 2026-10-07完了。Functions(3環境)・Hosting(kanameone・cocoro、devは自動)。devでPaddleOCRのCloud Runリビジョン切替(00022→00021→`--to-latest`)を実演し、100%復帰を確認
 - [ ] GCP設定(`roles/aiplatform.user`剥奪・Vertex AI API無効化、環境別に番号単位の承認)
 
 ## 【完了(上のミッションで置換)・2026-10-03開始】通常経路のGemini停止(緊急用のOCR経路だけ残す)。承認済み計画: `/Users/yyyhhh/.claude/plans/jiggly-giggling-pond.md`

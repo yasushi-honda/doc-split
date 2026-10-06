@@ -57,7 +57,7 @@ Cloud Storageの合計使用容量を表示します。
 |---------------|---------------|------|
 | Functions が N/N 未満 | 関数デプロイ失敗・クラッシュ | Firebase Consoleでログ確認、再デプロイ |
 | Scheduler が PAUSED | 手動で一時停止された | `gcloud scheduler jobs resume` で再開 |
-| 待機中が増加 | processOCRが停止 or Gemini制限 | Functions ログ確認、時間をおいて確認 |
+| 待機中が増加 | processOCRが停止 or PaddleOCRの混雑・停止 | Functions ログ確認、時間をおいて確認 |
 | エラーが増加 | OCR処理失敗 | エラー内容を確認し、再処理 or マスターデータ更新 |
 | ストレージが急増 | 大量の書類アップロード | 不要ファイルの整理を検討 |
 

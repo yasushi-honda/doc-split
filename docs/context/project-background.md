@@ -45,7 +45,7 @@ created_at: "2026-01-17"
 - **バックエンド**: Cloud Functions (2nd gen) + Firestore + Cloud Storage
 - **フロントエンド**: Firebase Hosting + React + Vite + TypeScript
 - **認証**: Firebase Authentication (Googleログイン + ホワイトリスト)
-- **OCR**: Vertex AI Gemini 3.5 Flash
+- **OCR**: PaddleOCR（自前のCloud Run）。当初はVertex AI Geminiを採用し、ADR-0025でPaddleOCRへ移行、ADR-0029でGeminiを廃止
 
 ### 納品形態
 - GCPプロジェクト移譲（シングルテナント）

@@ -47,7 +47,7 @@ flowchart TD
     A["トリガー"] --> B["pending書類取得"]
     B --> C["ステータス更新(processing)"]
     C --> D["PDF読み込み"]
-    D --> E["Gemini OCR実行"]
+    D --> E["PaddleOCR実行"]
     E --> F["情報抽出"]
     F --> G["マスター照合"]
     G --> H["ステータス更新(completed)"]
@@ -55,7 +55,7 @@ flowchart TD
 
 **レート制限:**
 - トークンバケット方式
-- 60 RPM (Gemini API制限)
+- OCR処理は1分ごとのスケジュール実行（processOCR、同時1件）
 
 ### Callable Functions
 
@@ -370,7 +370,7 @@ detectSplitCandidates(
 | コード | 説明 | 対処 |
 |--------|------|------|
 | `AUTH_ERROR` | Gmail認証エラー | OAuth再設定 |
-| `RATE_LIMIT` | Gemini API制限 | 時間を置いて再試行 |
+| `RATE_LIMIT` | OCR処理サービスの一時的な混雑 | 時間を置いて再試行 |
 | `OCR_FAILED` | OCR処理失敗 | 手動でメタ情報入力 |
 | `PDF_CORRUPT` | PDF破損 | 元ファイル確認 |
 | `STORAGE_ERROR` | Storage操作失敗 | 権限確認 |

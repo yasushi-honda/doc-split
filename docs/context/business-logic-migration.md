@@ -24,7 +24,7 @@ Phase 6で移行完了済み。
 | `getOAuth2Service_()` | OAuth2認証 | Service Accountのみで十分 |
 | `getIdTokenForCloudFunction_()` | CF呼び出し用トークン | 直接呼び出し可能 |
 | `checkSystemReady()` | GAS初期化チェック | Cloud Functionsで不要 |
-| `CLOUD_FUNCTION_INVOCATION_URL` 経由処理 | GAS→Gemini制約回避 | Vertex AI直接呼び出し |
+| `CLOUD_FUNCTION_INVOCATION_URL` 経由処理 | GAS→Gemini制約回避 | Vertex AI直接呼び出し（当時。現在はPaddleOCR、ADR-0025/0029） |
 
 ### ✅ 移植済み（基本実装）
 

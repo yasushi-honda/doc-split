@@ -15,7 +15,7 @@
 | 特徴 | 説明 |
 |------|------|
 | **Gmail自動連携** | 指定したGmailアカウントから添付ファイルを自動取得 |
-| **AI OCR** | Gemini 3.5 Flashでメタ情報（顧客名、日付、書類種別）を自動抽出 |
+| **AI OCR** | PaddleOCR（自前のCloud Run、東京リージョン）で文字を読み取り、顧客名・日付・書類種別をルールベースで抽出 |
 | **PDF分割** | 複数書類が結合されたPDFを自動検出・分割 |
 | **検索・フィルター** | 顧客名、書類種別、日付などで柔軟に検索 |
 | **ホワイトリスト認証** | 登録済みユーザーのみアクセス可能 |
@@ -45,7 +45,7 @@ graph LR
     end
 
     subgraph AI/External
-        G[Gemini 3.5 Flash]
+        G[PaddleOCR<br/>Cloud Run]
         H[Gmail API]
     end
 
