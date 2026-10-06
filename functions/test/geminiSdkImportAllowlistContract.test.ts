@@ -82,6 +82,22 @@ export function hasStringLiteral(source: string, value: string): boolean {
   return found;
 }
 
+/** ソース中の文字列リテラル(コメントは含まない)に、指定の部分文字列を含むものがあるか。 */
+export function hasStringLiteralContaining(source: string, needle: string): boolean {
+  const sf = ts.createSourceFile('x.ts', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  let found = false;
+  const visit = (node: ts.Node): void => {
+    if (ts.isStringLiteralLike(node) && node.text.includes(needle)) found = true;
+    else if (ts.isTemplateExpression(node) && [node.head, ...node.templateSpans.map((sp) => sp.literal)].some((t) => t.text.includes(needle))) found = true;
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return found;
+}
+
+// GeminiのREST直叩きの兆候(SDKを使わずfetchで呼ぶ復活経路の検知)
+const GEMINI_REST_HOSTS = ['aiplatform.googleapis.com', 'generativelanguage.googleapis.com'];
+
 function walkTs(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     const full = join(dir, entry.name);
@@ -99,7 +115,11 @@ function readWithContext(abs: string, purpose: string): string {
   }
 }
 
-const ROOT = process.cwd();
+// functions/ ディレクトリ。テストはESMとして読み込まれ__dirnameが使えないため、cwdから解決する
+// (functions/ で実行してもリポジトリルートで実行しても動く)。
+const ROOT = existsSync(resolve(process.cwd(), 'src/ocr/ocrProcessor.ts'))
+  ? process.cwd()
+  : resolve(process.cwd(), 'functions');
 const rel = (abs: string): string => relative(ROOT, abs);
 
 /** 相対指定子を src 配下の実ファイルへ解決する(解決できなければ null)。 */
@@ -179,6 +199,15 @@ describe('Gemini SDK 利用範囲の契約 (ADR-0027 PR-E)', () => {
       });
     }
 
+    for (const entry of SUMMARY_ENTRIES) {
+      it(`${entry} から到達するファイルにGemini REST直叩きの兆候(エンドポイント文字列)が無い`, () => {
+        const offenders = [...reachable(entry)]
+          .map(rel)
+          .filter((f) => GEMINI_REST_HOSTS.some((h) => hasStringLiteralContaining(readWithContext(resolve(ROOT, f), 'rest-scan'), h)));
+        expect(offenders).to.deep.equal([]);
+      });
+    }
+
     it('要約生成コア(summaryGenerator.ts)が存在しない', () => {
       expect(existsSync(resolve(ROOT, 'src/ocr/summaryGenerator.ts'))).to.equal(false);
     });
@@ -210,6 +239,12 @@ describe('Gemini SDK 利用範囲の契約 (ADR-0027 PR-E)', () => {
     it('文字列内に // を含んでいても、後続の本物の import を取りこぼさない', () => {
       const src = `const u = 'http://x'; import('@google/genai');`;
       expect(collectModuleSpecifiers(src)).to.deep.equal(['@google/genai']);
+    });
+
+    it('hasStringLiteralContaining はテンプレート文字列を含む実リテラルだけを検知し、コメントは無視する', () => {
+      expect(hasStringLiteralContaining("const u = 'https://aiplatform.googleapis.com/v1/x';", 'aiplatform.googleapis.com')).to.equal(true);
+      expect(hasStringLiteralContaining('const u = `https://${r}-aiplatform.googleapis.com/v1`;', 'aiplatform.googleapis.com')).to.equal(true);
+      expect(hasStringLiteralContaining('// aiplatform.googleapis.com\nconst a = 1;', 'aiplatform.googleapis.com')).to.equal(false);
     });
 
     it('hasStringLiteral はコメント内の文字列を無視し、実リテラルは検知する', () => {
