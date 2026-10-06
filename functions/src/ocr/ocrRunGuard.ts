@@ -63,7 +63,7 @@ export function evaluateOcrRunOwnership(
   return { ok: true };
 }
 
-/** supersededされた実行が完了時点までに実際に消費していたGemini使用量(コスト可視性維持のため) */
+/** supersededされた実行が完了時点までに実際に消費していたOCR使用量(トークン数。Paddleでは常に0、可視性維持のため) */
 export interface OcrRunTokenUsage {
   inputTokens: number;
   outputTokens: number;
@@ -101,7 +101,7 @@ export interface OcrRunSupersededStats {
 /**
  * OcrRunSupersededError捕捉時のstats反映(Issue #540)。
  *
- * retryCountは消費せずsupersededカウンタのみ増やす。既に消費済みのGemini使用量
+ * retryCountは消費せずsupersededカウンタのみ増やす。既に消費済みのOCR使用量
  * (error.tokenUsage、superseded runでも実際にAPIコストは発生している)は、
  * superseded判定時のトークン集計(PaddleOCRでは常に0)に反映する。
  *
