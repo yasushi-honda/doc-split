@@ -148,9 +148,17 @@ jobs:
           # 恒久的な変更は<alias>.envの宣言を書き換える。paddleで動く(宣言なしを含む)のに対象環境の
           # PADDLE_OCR_URLが未設定(<TBD>)の場合は、デプロイ後にfail-loudするpaddleOcrClient.tsの
           # 挙動を待たずここで即座に検知する(新規テナント納品前にPaddleOCR基盤が要る点の検知も兼ねる)。
+          # 宣言値(<alias>.envの生の値)は、overrideとは別に先に検査する。overrideで上書きされる前に
+          # 'gemini'の宣言を拒否しないと、ocr_provider_override=paddleを選んだデプロイが、禁止された宣言を
+          # 残したまま成功し、次のcode-defaultデプロイで予期せず失敗する(codex review指摘)。
+          DECLARED_OCR_PROVIDER=$(read_declared_raw OCR_PROVIDER "$ENV_FILE")
+          if [ "$DECLARED_OCR_PROVIDER" == "gemini" ]; then
+            echo "ERROR: $ENV_FILE の OCR_PROVIDER=gemini は廃止しました(ADR-0029: Geminiは緊急用経路も含めて使いません)。宣言を paddle に直してください(overrideの選択に関わらずデプロイを止めます)。PaddleOCR障害時の手順は docs/context/delivery-and-update-guide.md を参照" >&2
+            exit 1
+          fi
           OCR_PROVIDER_EFFECTIVE="${{ github.event.inputs.ocr_provider_override }}"
           if [ "$OCR_PROVIDER_EFFECTIVE" == "code-default" ]; then
-            OCR_PROVIDER_EFFECTIVE=$(read_declared_raw OCR_PROVIDER "$ENV_FILE")
+            OCR_PROVIDER_EFFECTIVE="$DECLARED_OCR_PROVIDER"
           fi
           if [ -n "$OCR_PROVIDER_EFFECTIVE" ]; then
             case "$OCR_PROVIDER_EFFECTIVE" in
