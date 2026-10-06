@@ -112,6 +112,31 @@ test.describe('AI要約 8状態UI (デスクトップ) @emulator', () => {
     await expect(modal.locator('button:has-text("AI要約を生成")')).toBeVisible();
   });
 
+  test('受付ダイアログ: 「AI要約を生成」を押すとOKボタンで閉じるダイアログが出て、遅い理由(要配慮個人情報を外部AIへ送らない)が読める', async ({ page }) => {
+    // regenerateSummary(callable)の受付応答をモックする(emulatorのL1設定に依存しないため)。
+    await page.route('**/regenerateSummary', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ result: { success: true, queued: true, alreadyQueued: false } }),
+      });
+    });
+    const modal = await openDocByFileName(page, 'E2E_PR4c_absent_skipped_request');
+    await ensureSummaryAccordionExpanded(modal);
+    await modal.locator('button:has-text("AI要約を生成")').click();
+
+    const dialog = page.locator('[role="alertdialog"]');
+    await expect(dialog).toBeVisible();
+    await expect(dialog.locator('text=要約の作成を受け付けました').first()).toBeVisible();
+    await expect(dialog.locator('text=要配慮個人情報')).toBeVisible();
+    await expect(dialog.locator('text=外部のAIサービスへ送らず')).toBeVisible();
+    // トーストと違って自動では消えない(利用者がOKを押すまで読める)
+    await page.waitForTimeout(6000);
+    await expect(dialog).toBeVisible();
+    await dialog.locator('button:has-text("OK")').click();
+    await expect(dialog).toBeHidden();
+  });
+
   test('absent(ocrResultUrlオフロード): detail側ocrResultが空でも「AI要約を生成」が出る(要約済みなら先頭8,000字の注記)', async ({ page }) => {
     const modal = await openDocByFileName(page, 'E2E_PR4c_absent_ocr-url-offload');
     await ensureSummaryAccordionExpanded(modal);
@@ -198,6 +223,25 @@ test.describe('AI要約 8状態UI (モバイル) @emulator', () => {
     await expect(popup.locator('text=PR4c検証用の旧要約テキストです。')).toBeVisible();
     await expect(popup.locator('text=前回の要約です。今回の再作成は失敗しました')).toBeVisible();
     await expect(popup.locator('button:has-text("再試行")')).toBeVisible();
+  });
+
+  test('受付ダイアログ(モバイル): ポップアップより前面に出て、OKで閉じられる', async ({ page }) => {
+    await page.route('**/regenerateSummary', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ result: { success: true, queued: true, alreadyQueued: false } }),
+      });
+    });
+    const popup = await openMobileSummaryPopup(page, 'E2E_PR4c_absent_skipped_request');
+    await popup.locator('button:has-text("AI要約を生成")').click();
+
+    const dialog = page.locator('[role="alertdialog"]');
+    await expect(dialog).toBeVisible();
+    await expect(dialog.locator('text=要配慮個人情報')).toBeVisible();
+    // ポップアップ(z-index 99999)の背後に隠れず、クリックできる
+    await dialog.locator('button:has-text("OK")').click();
+    await expect(dialog).toBeHidden();
   });
 
   test('generated(オフロード): 先頭約8,000字の注記が出る', async ({ page }) => {
