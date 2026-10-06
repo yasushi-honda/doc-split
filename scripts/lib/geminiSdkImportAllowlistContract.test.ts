@@ -1,7 +1,7 @@
 /**
- * Gemini SDK 利用範囲の契約 — scripts / frontend / shared 側 (ADR-0027 PR-E)
+ * Gemini 不使用の契約 — scripts / frontend / shared 側 (ADR-0029、旧: ADR-0027 PR-E)
  *
- * 目的: `@google/genai` を参照してよいのは functions/src/ocr/ocrProcessor.ts(OCR緊急用経路)だけ。
+ * 目的: `@google/genai` を参照するファイルが、リポジトリのどこにも無いことを固定する(Geminiは廃止、ADR-0029)。
  * scripts・frontend・shared には1件も無いことを固定する(評価用の比較スクリプト等を再び
  * 生やしても、顧客データをGeminiへ送る経路が本番外に増えないようにする)。functions 側は
  * functions/test/geminiSdkImportAllowlistContract.test.ts が守る。
@@ -12,7 +12,7 @@
  * 対象拡張子: .ts .tsx .js .mjs .cjs。
  *
  * 将来委譲: 新たな評価用スクリプトでGeminiを使う必要が出た場合は、ALLOWLIST に理由つきで追加する
- * (ADR-0027 の「Gemini SDKはOCR緊急用経路のみ」の方針変更として扱い、decision-makerの承認を得ること)。
+ * (ADR-0029 の「Geminiは完全廃止」の方針変更として扱い、decision-makerの承認を得ること)。
  */
 
 import assert from 'node:assert/strict';
@@ -77,7 +77,7 @@ test('scripts / frontend/src / shared に @google/genai を参照するファイ
       if (specs.some((s) => s === GENAI || s.startsWith(`${GENAI}/`))) violations.push(rel);
     }
   }
-  assert.deepEqual(violations, [], `@google/genai の参照は OCR緊急用経路(functions/src/ocr/ocrProcessor.ts)だけに限る。違反: ${violations.join(', ')}`);
+  assert.deepEqual(violations, [], `@google/genai の参照は禁止(Geminiは廃止、ADR-0029)。違反: ${violations.join(', ')}`);
 });
 
 test('scripts/package.json の dependencies に @google/genai が無い(使わない依存を残さない)', () => {

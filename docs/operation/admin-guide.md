@@ -124,7 +124,7 @@ Cloud Functionsによる自動処理のスケジュール：
 | 発生源 | 説明 | 主な原因 |
 |--------|------|---------|
 | gmail | Gmail取得処理 | OAuth認証エラー、API制限 |
-| ocr | OCR処理 | Gemini APIエラー、レート制限 |
+| ocr | OCR処理 | OCR処理サービス（PaddleOCR）のエラー・タイムアウト、画像品質、PDF破損 |
 | pdf | PDF操作 | ファイル破損、分割/回転失敗 |
 | storage | ファイル保存 | 権限エラー、容量超過 |
 | auth | 認証処理 | 権限不足、トークン期限切れ |
@@ -183,7 +183,7 @@ error_type: ocr_failed
 ```
 
 **原因:**
-- Gemini API のレート制限
+- OCR処理サービスの一時的な混雑・停止
 - 画像品質の問題
 - PDFの破損
 
@@ -251,27 +251,11 @@ error_type: matching_failed
 - **薄い背景色**: 選択モード中（書類を選んでください）
 - **塗りつぶし**: 1件以上選択済み（クリックで実行）
 
-### Gemini API コスト監視
+### Gemini API コスト監視（廃止）
 
-日次のAPI使用量は Firestore の `/stats/gemini/daily` に記録されます。
+Geminiは緊急用の経路も含めて廃止したため（ADR-0029）、新しい使用量は記録されません。過去の日次使用量は Firestore の `/stats/gemini/daily/{YYYY-MM-DD}` に履歴として残っています（読み取り専用の履歴で、削除・更新は不要）。フィールド定義は [データモデル](../context/data-model.md#statsgeminidailyyyyy-mm-dd) を参照。
 
-確認方法:
-```javascript
-// Firestore Console から確認
-/stats/gemini/daily/{YYYY-MM-DD}
-{
-  inputTokens: number,       // 入力トークン数（累積、全用途合計）
-  outputTokens: number,      // 出力トークン数（累積、全用途合計）
-  thinkingTokens: number,    // thinkingトークン数（累積、全用途合計）
-  requestCount: number,      // リクエスト回数（累積、全用途合計）
-  estimatedCostUsd: number,  // 推定コスト USD（累積、全用途合計）
-  bySource: {                // 用途別内訳（ocr: OCR転記 / summary: 要約生成）
-    ocr: { inputTokens, outputTokens, thinkingTokens, requestCount, estimatedCostUsd },
-    summary: { inputTokens, outputTokens, thinkingTokens, requestCount, estimatedCostUsd }
-  }
-}
-```
-詳細なフィールド定義は [データモデル](../context/data-model.md#statsgeminidailyyyyy-mm-dd) を参照。
+OCRの費用はCloud Run（PaddleOCR）、要約の費用はCloud Run（Sarashina）の利用料として、GCP Consoleの課金レポートで確認します。
 
 ### 定期メンテナンス
 
@@ -281,7 +265,7 @@ error_type: matching_failed
 - 随時: ユーザーの追加・削除
 
 **システム管理者向け（開発者が実施）:**
-- 月次: Gemini API コストの確認（GCP Console）
+- 月次: Cloud Run（PaddleOCR・Sarashina）の利用料の確認（GCP Console）
 - 月次: Storage 使用量の確認（Firebase Console）
 
 ## 緊急時対応

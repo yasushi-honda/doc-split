@@ -18,7 +18,7 @@ dev / kanameone / cocoro のマルチクライアント環境でgcloud操作・�
 
 ## 2. Cloud Functions環境変数の実態確認（YOU MUST NOT ローカルenv fileだけで断定）
 
-`functions/.env.<project-id>`（`.env.docsplit-kanameone`等、gitignore対象）は **GitHub Actions (`deploy-functions.yml`) がデプロイの都度runner上で新規生成・上書きする一時ファイル**であり、ローカルリポジトリにある中身は本番の実態を表さない。特に`GEMINI_MODEL_ID`は`gemini_model_id_override`ワークフロー入力（既定値`code-default`）が優先され、ローカルファイルの値は無関係。
+`functions/.env.<project-id>`（`.env.docsplit-kanameone`等、gitignore対象）は **GitHub Actions (`deploy-functions.yml`) がデプロイの都度runner上で新規生成・上書きする一時ファイル**であり、ローカルリポジトリにある中身は本番の実態を表さない。特に`OCR_PROVIDER`/`SUMMARY_PROVIDER`は、`code-default`のとき`scripts/clients/<環境>.env`の宣言値が反映される設計で、ローカルファイルの値は無関係（Geminiは廃止済みで`GEMINI_MODEL_ID`はもう使わない、ADR-0029）。
 
 本番の実際の環境変数を確認する場合は必ず以下で直接確認する（ローカルenv fileのgrepだけで済ませない）:
 ```bash

@@ -153,31 +153,33 @@ trial単位の完了率もいずれのtierも100%(1p:30/30、71p:20/20、20p:20/
 
 ## 運用ランブック(PR8)
 
-### ロールアウト手順
+### OCRエンジンの切替(ADR-0029で整理)
 
-PaddleOCRへの切替はL1(環境変数)/L2(Firestoreフラグ)の2層ゲートで制御する(`functions/src/utils/featureFlags.ts`の`resolveOcrProvider`)。
+OCRのエンジンは**PaddleOCRのみ**で、Gemini(Vertex AI)は緊急用経路も含めて廃止した(ADR-0029)。以前の「L1(環境変数`OCR_PROVIDER`)/L2(Firestore`settings/features.paddleOcr`)の2層ゲート」によるロールアウトは完了しており、2026-10-03(PR-B)以降、OCRの判定にL2は使われない(`getPaddleOcrGate`と`paddleOcr`フラグは運用スクリプトが参照するだけの残骸)。
 
-1. **L1: `OCR_PROVIDER=paddle`** — Cloud Functionsのデプロイ時環境変数。クライアントの`scripts/clients/<client>.env`に設定し、`deploy-paddle-ocr.yml`または通常のFunctionsデプロイで反映(**再デプロイが必要**、即時反映ではない)。L1が`paddle`でない場合、L2の値によらず常にGeminiへ(fail-closed)。
-2. **L2: Firestore `settings/features.paddleOcr`** — GitHub Actions `Run Operations Script`経由で即時切替可能(再デプロイ不要):
+- `OCR_PROVIDER`は`scripts/clients/<client>.env`に`paddle`を宣言する(`deploy-functions.yml`・`deploy-to-project.sh`が宣言値を維持して反映する)。`gemini`の宣言はデプロイ時にエラーで止まる。実行時に`gemini`が残っていても警告のうえpaddleに倒れる
+- 新規クライアントでは、先に`setup-paddle-ocr-infra.sh`と`deploy-paddle-ocr.yml`でPaddleOCR基盤を用意し、`PADDLE_OCR_URL`を宣言する
+
+### PaddleOCR障害時の運用(ADR-0029、旧「ロールバック手順」の置換)
+
+**外部AI(Gemini等)へは逃がさない。** 顧客データ(要配慮個人情報を含みうる)を、公式がサポートしない経路へ送らないためである。
+
+1. **検知**: `processocr_error`アラート(push型)。AIがアラートを起点に、`gcloud logging read`で原因(接続エラー・タイムアウト・5xx)と、`status:'error'`に確定した書類の件数を読み取って確認し、決裁者へ報告・提案する
+2. **短時間の障害**: 一時エラーは自動で再試行される(5回目の失敗で確定=再試行4回・1分間隔、429は8回目の失敗で確定=再試行7回)。その範囲内に復旧すれば書類は自動で処理される。非一時エラー(403/400等)は即`error`に確定し、復旧操作だけでは直らない(原因の調査が要る)
+3. **長引いた場合**: 再試行を使い切った書類は`status:'error'`に確定する。**書類のデータは失われないが、自動では再処理されない**(自動救済`rescueErroredDocuments`は429系のerrorのみ・最大3回)。復旧後に次の手順で`pending`へ戻して再処理する。本実行は**番号単位の承認後**にAIが実行する:
    ```bash
-   gh workflow run "Run Operations Script" -f environment=<env> -f script='set-feature-flag --flag paddleOcr --value true --dry-run'  # 確認
-   gh workflow run "Run Operations Script" -f environment=<env> -f script='set-feature-flag --flag paddleOcr --value true'            # 実行
+   gh workflow run "Run Operations Script" -f environment=<env> -f script='fix-stuck-documents --include-errors --dry-run'  # 対象件数の確認
+   gh workflow run "Run Operations Script" -f environment=<env> -f script='fix-stuck-documents --include-errors'            # 本実行(承認後)
    ```
-3. **canary許可リスト(段階導入)**: `paddleOcrAllowlist`(docId配列)で対象文書を限定できる。`set-paddle-ocr-allowlist --set`(GHA経由)で設定、未設定(フィールド不在)時は全docIdが対象になる点に注意(全面展開前は必ずallowlistを設定すること)。
-
-推奨順序: L1をdevへ反映・canary確認 → L2 allowlistで少数文書に限定してkanameone/cocoroへ展開 → 実績確認後allowlist解除で全面展開。
-
-### ロールバック手順(緊急停止)
-
-**第一選択: L2フラグの即時無効化**(再デプロイ不要、秒単位で反映):
-```bash
-gh workflow run "Run Operations Script" -f environment=<env> -f script='set-feature-flag --flag paddleOcr --value false'
-```
-これにより新規OCR処理は全てGeminiへ即座にフォールバックする。処理中(in-flight)のリクエストは完走する。
-
-**重要な注意**: Geminiへのフォールバックは**あくまで暫定策**であり、恒久的な運用方針ではない。Gemini 3.5 FlashのVertex AI日本リージョン(asia-northeast1)従量課金は公式には非サポート(ADR-0025参照、非公式動作に依存)で、いつ塞がれてもおかしくない状態がPaddleOCR移行の動機そのもの。ロールバック後は原因調査・修正を優先し、Gemini運用を前提に長期間放置しないこと。
-
-L1(`OCR_PROVIDER`環境変数)を`gemini`に戻す完全ロールバックは再デプロイを要するため、緊急停止時はまずL2で止め、根本対応後に恒久措置としてL1も戻すか判断する。
+4. **不良リビジョンが原因の場合に限り**、直前の健全なリビジョンへ戻す(Cloud Runや依存先の長期障害には効かない):
+   ```bash
+   gcloud run revisions list --service=paddle-ocr --region=asia-northeast1 --project=<project-id>   # 戻し先の確認
+   gcloud run services update-traffic paddle-ocr --to-revisions=<健全なリビジョン名>=100 --region=asia-northeast1 --project=<project-id>
+   # 復旧後は最新へ戻す(後続のデプロイにも旧リビジョンへの割当ては引き継がれるため、必ず戻して100%を確認する)
+   gcloud run services update-traffic paddle-ocr --to-latest --region=asia-northeast1 --project=<project-id>
+   gcloud run services describe paddle-ocr --region=asia-northeast1 --project=<project-id> --format="value(status.traffic)"
+   ```
+5. **許容する停止**: 「復旧後にerror書類を再投入するまでの遅延」。OCRは非同期(1分ごと)で、利用者は完了を待っていない。長期の障害でも書類は失われず、復旧後に再処理される
 
 ### 監視方法
 
@@ -187,7 +189,7 @@ L1(`OCR_PROVIDER`環境変数)を`gemini`に戻す完全ロールバックは再
   ```bash
   gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="processocr" AND textPayload:"] phaseTimings for"' --project=<project-id> --limit=100 --freshness=7d
   ```
-- **OCRエンジンの来歴**: `documents/{id}.ocrExtraction.version`が`PP-OCRv6_medium/...`(PaddleOCR)か`gemini-3.5-flash`(Gemini)かで実際に使われたエンジンを文書単位で確認できる
+- **OCRエンジンの来歴**: `documents/{id}.ocrExtraction.version`が`PP-OCRv6_medium/...`(PaddleOCR)であることを文書単位で確認できる(過去の文書には`gemini-*`が残る。OCRを実行せず継承元の版も欠ける再利用経路は`unknown`)
 
 ### コスト監視
 

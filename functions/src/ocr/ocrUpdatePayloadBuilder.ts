@@ -2,7 +2,7 @@
  * OCR抽出結果からFirestoreドキュメント更新payloadを組み立てる純粋関数。(Issue #526 D1)
  *
  * processDocument()の後段処理（抽出結果の集約→Firestore update payload生成）を
- * Firestore/Storage/VertexAIの副作用から切り離すことで、直接ユニットテスト可能にする。
+ * Firestore/Storage/OCRエンジンの副作用から切り離すことで、直接ユニットテスト可能にする。
  * splitDocumentBuilder.ts と同じ規約: serverTimestamp()/delete() 等のFieldValueは
  * 自前で呼び出さない。ただし `extractedAt` は呼出元が生成したFieldValueをそのまま
  * 受け取り `ocrExtraction` に一体化して返す(後述のレビュー教訓)。
@@ -52,7 +52,7 @@ export interface OcrUpdatePayloadInputs {
   ocrResultUrl: string | null;
   totalPages: number;
   suggestedNewOffice: string | null;
-  /** ocrExtraction.version に書き込むモデルID (呼出元のGEMINI_CONFIG.modelId) */
+  /** ocrExtraction.version に書き込むモデルID (呼出元のpass1ModelVersion。PaddleOCRのmodelVersion、または再利用経路の継承値/'unknown') */
   modelId: string;
   /** ocrExtraction.extractedAt にそのまま書き込む値 (呼出元のFieldValue.serverTimestamp()) */
   extractedAt: FirebaseFirestore.FieldValue;

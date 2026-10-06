@@ -12,23 +12,13 @@ on:
           - dev
           - kanameone
           - cocoro
-      gemini_model_id_override:
-        description: 'GEMINI_MODEL_ID override (OCR緊急用経路(OCR_PROVIDER=gemini)のモデル。未指定=code-default=コード既定のgemini-3.5-flash。既存の環境値は引き継がれず再生成されるため、gemini-2.5-flash固定が必要なら明示すること。gemini-2.5-flashは2026-10-16廃止予定)'
-        required: true
-        default: 'code-default'
-        type: choice
-        options:
-          - code-default
-          - gemini-2.5-flash
-          - gemini-3.5-flash
       ocr_provider_override:
-        description: 'OCR_PROVIDER override (ADR-0025。未指定=code-default=scripts/clients/<環境>.envのOCR_PROVIDER宣言値を維持、宣言なしならコード既定paddle。geminiは緊急手段(顧客データがGemini/Vertex AIへ送られる)で、明示したデプロイだけ有効。paddleはPADDLE_OCR_URLが対象環境で設定済みであること)'
+        description: 'OCR_PROVIDER override (ADR-0025、ADR-0029。未指定=code-default=scripts/clients/<環境>.envのOCR_PROVIDER宣言値を維持、宣言なしならコード既定paddle。Geminiは廃止したため選択肢にない。paddleはPADDLE_OCR_URLが対象環境で設定済みであること)'
         required: true
         default: 'code-default'
         type: choice
         options:
           - code-default
-          - gemini
           - paddle
       summary_provider_override:
         description: 'SUMMARY_PROVIDER override (ADR-0027。未指定=code-default=scripts/clients/<環境>.envのSUMMARY_PROVIDER宣言値を維持、宣言なしならコード既定none。sarashinaを選ぶ前に対象環境のSARASHINA_SUMMARY_URLが設定済み、かつdeploy-sarashina-summary.ymlのrun.invoker付与が反映済みであること)'
@@ -113,14 +103,6 @@ jobs:
           echo "STORAGE_BUCKET=${STORAGE_BUCKET}" > "functions/.env.${PROJECT_ID}"
           echo "STORAGE_BUCKET 設定: ${STORAGE_BUCKET} (functions/.env.${PROJECT_ID})"
 
-          # GEMINI_MODEL_ID override (任意): Firebase Functions v2は環境変数を
-          # functions/.env.<project-id> ファイルから読む(シェル環境変数は伝播しない)。
-          # 未指定(code-default)ならfunctions/src/utils/config.tsのコード既定値を使用。
-          if [ "${{ github.event.inputs.gemini_model_id_override }}" != "code-default" ]; then
-            echo "GEMINI_MODEL_ID=${{ github.event.inputs.gemini_model_id_override }}" >> "functions/.env.${PROJECT_ID}"
-            echo "GEMINI_MODEL_ID override 適用: ${{ github.event.inputs.gemini_model_id_override }} (functions/.env.${PROJECT_ID})"
-          fi
-
           # PADDLE_OCR_URL (任意、ADR-0025): deploy-paddle-ocr.ymlのresolve_field_optional()と
           # 同型。dev以外はPaddleOCR未デプロイのためscripts/clients/<alias>.envが<TBD>のままの
           # ケースを許容し、その場合は書き込みをスキップする(codex review P1指摘対応: このURLを
@@ -161,19 +143,32 @@ jobs:
           # の宣言値 > コード既定(paddle)。code-default選択時にfunctions/.env.<project>が毎回再生成されて
           # 既存のL1設定が無言で外れる事故(2026-09-23/25にkanameone・cocoroでpaddle→gemini回帰)の
           # 再発防止として、code-defaultは「宣言値を維持」の意味にしている。コード既定・倒れ先は
-          # paddleで、Gemini(顧客データを外部AIへ送る)は明示override(gemini)または宣言の緊急手段のみ。
+          # paddle。Gemini(顧客データを外部AIへ送る)はADR-0029で廃止したため、宣言値が'gemini'なら
+          # 下でエラー終了する(古い宣言が残ったまま気づかずデプロイしない)。
           # 恒久的な変更は<alias>.envの宣言を書き換える。paddleで動く(宣言なしを含む)のに対象環境の
           # PADDLE_OCR_URLが未設定(<TBD>)の場合は、デプロイ後にfail-loudするpaddleOcrClient.tsの
           # 挙動を待たずここで即座に検知する(新規テナント納品前にPaddleOCR基盤が要る点の検知も兼ねる)。
+          # 宣言値(<alias>.envの生の値)は、overrideとは別に先に検査する。overrideで上書きされる前に
+          # 'gemini'の宣言を拒否しないと、ocr_provider_override=paddleを選んだデプロイが、禁止された宣言を
+          # 残したまま成功し、次のcode-defaultデプロイで予期せず失敗する(codex review指摘)。
+          DECLARED_OCR_PROVIDER=$(read_declared_raw OCR_PROVIDER "$ENV_FILE")
+          if [ "$DECLARED_OCR_PROVIDER" == "gemini" ]; then
+            echo "ERROR: $ENV_FILE の OCR_PROVIDER=gemini は廃止しました(ADR-0029: Geminiは緊急用経路も含めて使いません)。宣言を paddle に直してください(overrideの選択に関わらずデプロイを止めます)。PaddleOCR障害時の手順は docs/context/delivery-and-update-guide.md を参照" >&2
+            exit 1
+          fi
           OCR_PROVIDER_EFFECTIVE="${{ github.event.inputs.ocr_provider_override }}"
           if [ "$OCR_PROVIDER_EFFECTIVE" == "code-default" ]; then
-            OCR_PROVIDER_EFFECTIVE=$(read_declared_raw OCR_PROVIDER "$ENV_FILE")
+            OCR_PROVIDER_EFFECTIVE="$DECLARED_OCR_PROVIDER"
           fi
           if [ -n "$OCR_PROVIDER_EFFECTIVE" ]; then
             case "$OCR_PROVIDER_EFFECTIVE" in
-              gemini|paddle) ;;
+              paddle) ;;
+              gemini)
+                echo "ERROR: OCR_PROVIDER=gemini は廃止しました(ADR-0029: Geminiは緊急用経路も含めて使いません)。$ENV_FILE の宣言を paddle に直してください。PaddleOCR障害時の手順は docs/context/delivery-and-update-guide.md を参照" >&2
+                exit 1
+                ;;
               *)
-                echo "ERROR: OCR_PROVIDER=$OCR_PROVIDER_EFFECTIVE は不正です(gemini|paddleのみ。$ENV_FILE の宣言を確認してください)" >&2
+                echo "ERROR: OCR_PROVIDER=$OCR_PROVIDER_EFFECTIVE は不正です(paddleのみ。$ENV_FILE の宣言を確認してください)" >&2
                 exit 1
                 ;;
             esac
@@ -183,11 +178,8 @@ jobs:
           else
             echo "OCR_PROVIDER 未設定: コード既定(paddle)で動作します(override=code-default、$ENV_FILE に宣言なし)"
           fi
-          if [ "$OCR_PROVIDER_EFFECTIVE" == "gemini" ]; then
-            echo "::warning::OCR_PROVIDER=gemini(緊急手段): この環境の顧客データ(書類の画像・PDF)がGemini(Vertex AI)へ送られます"
-            echo "- ⚠️ ${PROJECT_ALIAS}: OCR_PROVIDER=gemini(緊急手段、顧客データがGeminiへ送られる)" >> "$GITHUB_STEP_SUMMARY"
-          elif [ -z "$PADDLE_OCR_URL" ]; then
-            echo "ERROR: OCR_PROVIDER=${OCR_PROVIDER_EFFECTIVE:-(未設定=paddle)} ですが、$ENV_FILE のPADDLE_OCR_URLが未設定です。PaddleOCR基盤(setup-paddle-ocr-infra.sh、deploy-paddle-ocr.yml)を先に用意するか、緊急時のみ ocr_provider_override=gemini を明示してください" >&2
+          if [ -z "$PADDLE_OCR_URL" ]; then
+            echo "ERROR: OCR_PROVIDER=${OCR_PROVIDER_EFFECTIVE:-(未設定=paddle)} ですが、$ENV_FILE のPADDLE_OCR_URLが未設定です。PaddleOCR基盤(setup-paddle-ocr-infra.sh、deploy-paddle-ocr.yml)を先に用意してください" >&2
             exit 1
           fi
 

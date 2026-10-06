@@ -216,6 +216,8 @@ devでL2(`settings/features.sarashinaSummary`+allowlist)→L1(`SUMMARY_PROVIDER=
 
 **追記(2026-10-06、cocoroへの展開完了)**: cocoroにSarashina要約基盤を展開し、dev・kanameone・cocoroの3環境が`SUMMARY_PROVIDER=sarashina`で揃った。基盤はdev・kanameoneと同じ手順(`setup-sarashina-summary-infra.sh cocoro`でArtifact Registry repoと無権限runtime SAを作成、GHA`deploy-sarashina-summary`で初回デプロイ、`cocoro.env`で実URLとプロバイダーを宣言、`deploy-functions`で反映)で、`run.invoker`は`generateSummaryBatch`の実行SAのみ(allUsersなし)。cocoroの要約利用実績は95日間で0件だったが、環境差(cocoroのみ要約ボタンが「準備中」)の解消と、通常経路のGemini停止を3環境で同じ構成にするため、decision-makerが展開を判断した。L2のallowlistは設定せず全文書へ開放(要約は手動依頼のみで自動生成なし)。cocoroの本番画面での生成確認は行わず、devでの客観検証と、展開後の環境変数・IAMの実測で確認した。
 
+**追記(2026-10-06、ADR-0029)**: OCRの緊急用Gemini経路も含め、Geminiは完全に廃止した。本ADRの「緊急手段としてGeminiを残す」という記述は、ADR-0029で置き換えられている。
+
 ## 関連
 
 - 実装計画: `/Users/yyyhhh/.claude/plans/logical-baking-lighthouse.md`

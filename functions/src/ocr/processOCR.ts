@@ -13,7 +13,6 @@
 
 import { onSchedule } from 'firebase-functions/v2/scheduler';
 import * as admin from 'firebase-admin';
-import { trackGeminiUsage } from '../utils/rateLimiter';
 import { isQuotaErrorMessage } from '../utils/retry';
 import { logError, safeLogError } from '../utils/errorLogger';
 import {
@@ -172,20 +171,6 @@ export const processOCR = onSchedule(
           const err = error instanceof Error ? error : new Error(String(error));
           await handleProcessingError(docId, err, FUNCTION_NAME, ocrRunId);
         }
-      }
-
-      // 使用量を追跡 (PR#550レビュー指摘: thinkingTokensのみ非ゼロのレアケースも計測対象に含める)
-      if (
-        stats.totalInputTokens > 0 ||
-        stats.totalOutputTokens > 0 ||
-        stats.totalThinkingTokens > 0
-      ) {
-        await trackGeminiUsage(
-          stats.totalInputTokens,
-          stats.totalOutputTokens,
-          stats.totalThinkingTokens,
-          'ocr'
-        );
       }
 
       console.log('OCR processing (polling) completed', stats);

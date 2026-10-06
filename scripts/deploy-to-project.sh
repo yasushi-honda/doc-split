@@ -263,8 +263,8 @@ if [ "$FULL_DEPLOY" = true ]; then
     # "Bucket name not specified or invalid" で失敗する(.github/workflows/deploy-functions.yml
     # で2026-07-08に同根本原因を修正済みだが、本スクリプトには未反映で2026-07-22のDrive機能
     # E2E疎通確認で再発覚)。scripts/clients/<alias>.env (このスクリプト冒頭でsource済み)を
-    # 単一の真実源とし、既存の.env.<project-id>の他設定(GEMINI_MODEL_ID等)は保持したまま
-    # STORAGE_BUCKET行のみ更新する。
+    # 単一の真実源とし、既存の.env.<project-id>の他設定は保持したまま
+    # STORAGE_BUCKET行のみ更新する(廃止したGemini用の設定は下で除去する)。
     if [ -z "$STORAGE_BUCKET" ]; then
         log_error "STORAGE_BUCKET が未設定です ($CLIENT_ENV を確認してください)"
         exit 1
@@ -275,6 +275,14 @@ if [ "$FULL_DEPLOY" = true ]; then
     echo "STORAGE_BUCKET=${STORAGE_BUCKET}" >> "${FUNCTIONS_ENV_FILE}.tmp"
     mv "${FUNCTIONS_ENV_FILE}.tmp" "$FUNCTIONS_ENV_FILE"
     log_success "functions/.env.${PROJECT_ID} に STORAGE_BUCKET=${STORAGE_BUCKET} を設定"
+
+    # ADR-0029: Geminiは緊急用経路も含めて廃止した。ローカルに残った古い設定
+    # (GEMINI_MODEL_ID / GEMINI_OCR_THINKING_BUDGET)を、そのまま引き継いでデプロイしない。
+    if grep -qE '^(GEMINI_MODEL_ID|GEMINI_OCR_THINKING_BUDGET)=' "$FUNCTIONS_ENV_FILE"; then
+        grep -vE '^(GEMINI_MODEL_ID|GEMINI_OCR_THINKING_BUDGET)=' "$FUNCTIONS_ENV_FILE" > "${FUNCTIONS_ENV_FILE}.tmp" || true
+        mv "${FUNCTIONS_ENV_FILE}.tmp" "$FUNCTIONS_ENV_FILE"
+        log_warn "functions/.env.${PROJECT_ID} から廃止済みの GEMINI_MODEL_ID / GEMINI_OCR_THINKING_BUDGET を除去しました(ADR-0029)"
+    fi
 
     # PADDLE_OCR_URL (任意、ADR-0025): .github/workflows/deploy-functions.ymlと同じ理由。
     # scripts/clients/<alias>.env が<TBD>のまま(PaddleOCR未デプロイ環境)の場合は書き込まない
@@ -293,7 +301,7 @@ if [ "$FULL_DEPLOY" = true ]; then
     # OCR_PROVIDER / SUMMARY_PROVIDER (L1ゲート宣言): .github/workflows/deploy-functions.yml の
     # code-default時と同じく、scripts/clients/<alias>.env の宣言値を反映する(宣言があるときのみ
     # 上書き。宣言なしは既存のfunctions/.env.<project-id>の値を保持)。反映しないと、本スクリプト経由の
-    # デプロイだけ宣言と異なるプロバイダで動き、OCRが無言でGeminiへ戻りうる。
+    # デプロイだけ宣言と異なるプロバイダで動きうる(2026-09-23/25に実際にOCRが無言でGeminiへ戻った)。
     # 宣言値は呼び出し元の環境変数ではなく$CLIENT_ENVのファイル内容から直接読む(workflowと同じ
     # 読み方。direnv等のexportや.envrc.clientの上書きを拾わない、重複キーは先頭行を採用)。
     # 不正値(TODO/<TBD>等の仮置き含む)、およびpaddle/sarashina宣言なのに対応URLが未設定の場合は
@@ -324,19 +332,21 @@ if [ "$FULL_DEPLOY" = true ]; then
     DECLARED_SUMMARY_PROVIDER=$(read_declared_raw SUMMARY_PROVIDER "$CLIENT_ENV")
     if [ -n "$DECLARED_OCR_PROVIDER" ]; then
         case "$DECLARED_OCR_PROVIDER" in
-          gemini|paddle) ;;
-          *) log_error "OCR_PROVIDER=$DECLARED_OCR_PROVIDER は不正です(gemini|paddleのみ。$CLIENT_ENV を確認してください)"; exit 1 ;;
+          paddle) ;;
+          gemini) log_error "OCR_PROVIDER=gemini は廃止しました(ADR-0029: Geminiは緊急用経路も含めて使いません)。$CLIENT_ENV の宣言を paddle に直してください"; exit 1 ;;
+          *) log_error "OCR_PROVIDER=$DECLARED_OCR_PROVIDER は不正です(paddleのみ。$CLIENT_ENV を確認してください)"; exit 1 ;;
         esac
         upsert_functions_env OCR_PROVIDER "$DECLARED_OCR_PROVIDER"
     fi
     # コード既定・倒れ先はpaddle(宣言なしを含む)。paddleで動くのにPADDLE_OCR_URLが未設定なら
-    # デプロイ前に止める。geminiは緊急手段(顧客データがGemini/Vertex AIへ送られる)として
-    # 宣言した場合だけ有効なので、警告を出す。
+    # デプロイ前に止める。Geminiは廃止したため、実効値が'gemini'(宣言なしの環境でローカルに残った
+    # 古い値を含む)ならデプロイ前に止める。
     # 判定は宣言値ではなく、実際にデプロイされる functions/.env.<project-id> の実効値で行う
     # (宣言なしの環境では、ローカルに残った既存値が維持されるため。codex review指摘)。
     EFFECTIVE_OCR_PROVIDER=$(read_declared_raw OCR_PROVIDER "$FUNCTIONS_ENV_FILE")
     if [ "$EFFECTIVE_OCR_PROVIDER" = "gemini" ]; then
-        log_warn "OCR_PROVIDER=gemini(緊急手段): この環境の顧客データがGemini(Vertex AI)へ送られます"
+        log_error "functions/.env.${PROJECT_ID} の OCR_PROVIDER=gemini は廃止しました(ADR-0029)。この行を削除するか paddle にしてください"
+        exit 1
     elif [ -z "$(read_declared_url PADDLE_OCR_URL "$CLIENT_ENV")" ]; then
         log_error "OCR_PROVIDER=${EFFECTIVE_OCR_PROVIDER:-(未設定=paddle)} ですが $CLIENT_ENV の PADDLE_OCR_URL が未設定です。PaddleOCR基盤を先に用意してください"
         exit 1

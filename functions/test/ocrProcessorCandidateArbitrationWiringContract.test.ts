@@ -29,17 +29,17 @@ describe('ocrProcessor Pass2廃止後の候補(常に空)+ arbitration配線契�
     expect(source).to.not.match(/buildCandidateExtractionPrompt/, 'Pass2のプロンプトが残っている');
   });
 
-  it('Geminiへのgenerate呼出しはPass1の緊急用経路(ocrWithGemini)の1箇所だけ', () => {
+  it('Geminiへのgenerate呼出しが存在しない(緊急用経路も廃止、ADR-0029)', () => {
     const generateCount = (source.match(/\.generateContent\s*\(/g) ?? []).length;
     expect(
       generateCount,
-      'ocrProcessor.ts内のgenerateContent呼出しがPass1緊急用(ocrWithGemini)以外にも存在する(顧客データの外部AI送信経路が増えている)'
-    ).to.equal(1);
+      'ocrProcessor.tsにgenerateContent呼出しがある(顧客データの外部AI送信経路が復活している)'
+    ).to.equal(0);
   });
 
-  it('Geminiクライアントの生成・ストリーム呼出しも増えていない(generateContentの別名・別経路での回避を検知)', () => {
+  it('Geminiクライアントの生成・ストリーム呼出しも存在しない(generateContentの別名・別経路での回避を検知)', () => {
     const clientCount = (source.match(/new GoogleGenAI\(/g) ?? []).length;
-    expect(clientCount, 'new GoogleGenAI(はPass1緊急用(ocrWithGemini)の1箇所だけのはず').to.equal(1);
+    expect(clientCount, 'new GoogleGenAI(が復活している(ADR-0029でGeminiは廃止)').to.equal(0);
     expect(source).to.not.match(/generateContentStream/, 'ストリーム経由のGemini呼出しが追加されている');
   });
 

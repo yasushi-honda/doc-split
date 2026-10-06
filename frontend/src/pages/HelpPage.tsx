@@ -617,7 +617,7 @@ function AdminGuide() {
         </div>
         <p><strong>原因:</strong></p>
         <ul>
-          <li>Gemini API のレート制限</li>
+          <li>OCR処理サービスの一時的な混雑・停止</li>
           <li>画像品質の問題</li>
           <li>PDFの破損</li>
         </ul>

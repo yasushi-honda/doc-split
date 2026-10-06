@@ -132,9 +132,6 @@ on:
           - set-feature-flag --flag multiCustomerDetection --value true
           - set-feature-flag --flag multiCustomerDetection --value false --dry-run
           - set-feature-flag --flag multiCustomerDetection --value false
-          - check-gemini-cost-stats
-          - check-gemini-cost-stats --days 3 --doc-limit 30
-          - check-gemini-cost-stats --days 21 --doc-limit 500
           - measure-field-byte-sizes
           - measure-field-byte-sizes --limit 300
           - measure-split-into-length

@@ -1,13 +1,13 @@
 /**
- * Gemini SDK 利用範囲の契約テスト (ADR-0027 PR-E、GOAL「通常経路のGemini停止」)
+ * Gemini 不使用の契約テスト (ADR-0029、旧: ADR-0027 PR-E のSDK利用範囲の契約)
  *
- * 目的: 本番コード(functions/src)で `@google/genai` を import してよいのは、明示指定時だけ
- * 動くOCR緊急用経路(`src/ocr/ocrProcessor.ts`、`OCR_PROVIDER=gemini`)の1ファイルだけに
- * 限定し、要約経路からGeminiへ到達できないことをCIで固定する。要約のGemini経路
- * (旧 `SUMMARY_PROVIDER=gemini` ロールバック運用)を復活させる変更はここで落ちる。
+ * 目的: 本番コード(functions/src)に Gemini(Vertex AI)への経路が無いことをCIで固定する。
+ * 通常経路のGemini停止(ADR-0027 PR-E)に続き、緊急用OCR経路(`OCR_PROVIDER=gemini`)も
+ * 廃止した(ADR-0029)。`@google/genai` の import、`GoogleGenAI`/`generateContent` の呼び出し、
+ * Gemini REST直叩き、依存の復活は、ここで落ちる。ALLOWLIST は意図的に空(許可するファイルは無い)。
  *
  * 2つの契約を別々に守る(plan-crossreview 指摘4):
- *   A. SDK import の許可リスト: `@google/genai` を参照するファイル集合が ALLOWLIST と完全一致する。
+ *   A. SDK import の許可リスト: `@google/genai` を参照するファイル集合が ALLOWLIST(空)と完全一致する。
  *   B. 要約からGeminiへ到達しない: 要約経路のエントリから相対 import/require を推移的にたどって
  *      も ocrProcessor.ts と `@google/genai` に到達せず、'gemini' という provider 文字列リテラルも現れない。
  *
@@ -26,9 +26,12 @@ import { dirname, join, relative, resolve } from 'path';
 import * as ts from 'typescript';
 
 const GENAI_SPECIFIER = '@google/genai';
+// 旧Vertex SDK(Gemini呼び出し用)。これも使わない(ADR-0029)。
+const LEGACY_VERTEX_SPECIFIER = '@google-cloud/vertexai';
 
-// `@google/genai` を参照してよいファイル(functions/ からの相対パス)。理由: OCR緊急用経路。
-const ALLOWLIST: readonly string[] = ['src/ocr/ocrProcessor.ts'];
+// `@google/genai` を参照してよいファイル(functions/ からの相対パス)。ADR-0029で緊急用経路も
+// 廃止したため空。許可を足す変更は、ADR-0029を覆す決裁者判断が先に要る。
+const ALLOWLIST: readonly string[] = [];
 
 // 要約経路のエントリ(固定): ここから推移的にたどってGeminiへ到達しないことを確認する。
 const FIXED_SUMMARY_ENTRIES: readonly string[] = [
@@ -138,9 +141,9 @@ function resolveRelative(fromAbs: string, spec: string): string | null {
   return null;
 }
 
-describe('Gemini SDK 利用範囲の契約 (ADR-0027 PR-E)', () => {
-  describe('A. @google/genai を参照するファイルの許可リスト', () => {
-    it('src 配下で @google/genai を参照するファイルは ALLOWLIST と完全一致する', () => {
+describe('Gemini 不使用の契約 (ADR-0029)', () => {
+  describe('A. @google/genai を参照するファイルの許可リスト(空)', () => {
+    it('src 配下で @google/genai を参照するファイルは無い(ALLOWLIST=空と完全一致する)', () => {
       const detected = walkTs(resolve(ROOT, 'src'))
         .filter((f) =>
           collectModuleSpecifiers(readWithContext(f, 'sdk-scan')).some(
@@ -151,25 +154,45 @@ describe('Gemini SDK 利用範囲の契約 (ADR-0027 PR-E)', () => {
         .sort();
       expect(detected).to.deep.equal(
         [...ALLOWLIST].sort(),
-        `@google/genai を参照してよいのは OCR緊急用経路だけ。許可外の参照: ${detected.filter((f) => !ALLOWLIST.includes(f)).join(', ') || '(なし)'}`
+        `@google/genai を参照してよいファイルは無い(ADR-0029)。許可外の参照: ${detected.filter((f) => !ALLOWLIST.includes(f)).join(', ') || '(なし)'}`
       );
     });
 
-    it('許可リストのファイルが実在し、実際に @google/genai を参照している(リストの陳腐化防止)', () => {
-      for (const f of ALLOWLIST) {
-        const abs = resolve(ROOT, f);
-        expect(existsSync(abs), `${f} が存在しない`).to.equal(true);
-        const specs = collectModuleSpecifiers(readWithContext(abs, 'allowlist-check'));
-        expect(specs, `${f} は @google/genai を参照していない(許可リストから外すこと)`).to.include(GENAI_SPECIFIER);
+    it('functions/package.json に @google/genai・@google-cloud/vertexai の依存が無い(依存の復活を検知)', () => {
+      const pkg = JSON.parse(readWithContext(resolve(ROOT, 'package.json'), 'package-json')) as Record<string, Record<string, string> | undefined>;
+      for (const field of ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies']) {
+        for (const forbidden of [GENAI_SPECIFIER, LEGACY_VERTEX_SPECIFIER]) {
+          expect(Object.keys(pkg[field] ?? {}), `functions/package.json の ${field} に ${forbidden} がある(ADR-0029で廃止)`).to.not.include(forbidden);
+        }
       }
     });
 
-    it('GoogleGenAI / generateContent の呼び出しは許可リストのファイルにしか現れない', () => {
+    it('src 配下で旧Vertex SDK(@google-cloud/vertexai)を参照するファイルは無い', () => {
+      const detected = walkTs(resolve(ROOT, 'src'))
+        .filter((f) =>
+          collectModuleSpecifiers(readWithContext(f, 'legacy-sdk-scan')).some(
+            (s) => s === LEGACY_VERTEX_SPECIFIER || s.startsWith(`${LEGACY_VERTEX_SPECIFIER}/`)
+          )
+        )
+        .map(rel);
+      expect(detected, `旧Vertex SDK(Gemini呼び出し用)の参照は禁止(ADR-0029): ${detected.join(', ')}`).to.deep.equal([]);
+    });
+
+    it('GoogleGenAI / generateContent の呼び出しは src のどこにも現れない', () => {
       const offenders = walkTs(resolve(ROOT, 'src'))
         .filter((f) => !ALLOWLIST.includes(rel(f)))
         .filter((f) => /\bnew\s+GoogleGenAI\s*\(|\.generateContent(?:Stream)?\s*\(/.test(readWithContext(f, 'call-scan')))
         .map(rel);
       expect(offenders).to.deep.equal([]);
+    });
+  });
+
+  describe('A2. src 全体にGemini REST直叩きの兆候が無い', () => {
+    it('functions/src のどのファイルにもGeminiのエンドポイント文字列が無い', () => {
+      const offenders = walkTs(resolve(ROOT, 'src'))
+        .filter((f) => GEMINI_REST_HOSTS.some((h) => hasStringLiteralContaining(readWithContext(f, 'rest-scan-all'), h)))
+        .map(rel);
+      expect(offenders, `Gemini REST直叩きの兆候(ADR-0029で廃止): ${offenders.join(', ')}`).to.deep.equal([]);
     });
   });
 

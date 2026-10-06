@@ -321,7 +321,6 @@ APIS=(
     "firestore.googleapis.com"
     "storage.googleapis.com"
     "pubsub.googleapis.com"
-    "aiplatform.googleapis.com"
     "secretmanager.googleapis.com"
     "gmail.googleapis.com"
     "cloudscheduler.googleapis.com"
@@ -337,41 +336,19 @@ for api in "${APIS[@]}"; do
 done
 
 # ===========================================
-# Step 1.5: Cloud Functions SA に Vertex AI 権限付与
+# Step 1.5: Cloud Functions SA の解決(Firestore/Storage/Secret の権限付与に使う)
+#
+# ADR-0029: Gemini(Vertex AI)は緊急用経路も含めて廃止したため、aiplatform.googleapis.com の
+# 有効化と roles/aiplatform.user の付与は行わない。OCRは自前ホスティングのPaddleOCR
+# (setup-paddle-ocr-infra.sh)、要約はSarashina(setup-sarashina-summary-infra.sh)を使う。
 # ===========================================
 echo ""
-log_info "Step 1.5: Vertex AI 権限設定..."
+log_info "Step 1.5: Cloud Functions SA 権限設定..."
 
 PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format="value(projectNumber)" 2>/dev/null)
 FUNCTIONS_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
 
 log_info "Cloud Functions SA: $FUNCTIONS_SA"
-
-# Vertex AI User ロール付与
-if gcloud projects add-iam-policy-binding "$PROJECT_ID" \
-    --member="serviceAccount:$FUNCTIONS_SA" \
-    --role="roles/aiplatform.user" \
-    --condition=None 2>/dev/null; then
-    log_success "Vertex AI User 権限を付与しました"
-else
-    log_warn "Vertex AI 権限付与に失敗しました（既に設定済み、または権限不足）"
-    echo ""
-    echo -e "${YELLOW}権限不足の場合、プロジェクトオーナーで以下を実行してください:${NC}"
-    echo "  gcloud projects add-iam-policy-binding $PROJECT_ID \\"
-    echo "    --member=\"serviceAccount:$FUNCTIONS_SA\" \\"
-    echo "    --role=\"roles/aiplatform.user\""
-    echo ""
-    if [ "$ASSUME_YES" = true ]; then
-        CONTINUE_IAM="y"
-        log_info "自動承認モード: 続行します"
-    else
-        read -p "続行しますか？ (y/n): " CONTINUE_IAM
-    fi
-    if [ "$CONTINUE_IAM" != "y" ]; then
-        echo "キャンセルしました"
-        exit 1
-    fi
-fi
 
 # Firestore書き込み権限（OCR結果・メタデータ保存）
 if gcloud projects add-iam-policy-binding "$PROJECT_ID" \
@@ -883,7 +860,7 @@ else
         # 個人アカウントモード または SA + GOOGLE_APPLICATION_CREDENTIALS設定済み
         # 注意(PR-B、2026-10-03): OCRのコード既定・倒れ先はpaddle(自前Cloud Run)。本スクリプトは
         # PaddleOCR基盤を作らないため、PADDLE_OCR_URLが無い新規テナントでは、デプロイ後に処理される
-        # 全文書がエラーになる(Geminiへは黙って倒れない)。deploy-functions.yml/deploy-to-project.shと
+        # 全文書がエラーになる(外部AIへは送らない)。deploy-functions.yml/deploy-to-project.shと
         # 違い、この経路には事前検査が無いため、ここで警告する(新規テナントの予定が出たら手順へ組込む)。
         log_warn "OCRはPaddleOCR(自前Cloud Run)が既定です。PaddleOCR基盤(scripts/setup-paddle-ocr-infra.sh、deploy-paddle-ocr.yml)と<環境>.envのPADDLE_OCR_URL宣言が無い新規環境では、OCRが全件エラーになります"
         firebase deploy --only functions --project "$PROJECT_ID" 2>&1 | \
