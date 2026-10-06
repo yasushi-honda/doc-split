@@ -456,7 +456,11 @@ kanameoneから「1FAXに複数人分の書類がまとまっている場合の�
 - **未完了の確認項目**: 計画書AC-8拡張「切替時刻以後に作成された`distributionId`グループが0件であること」は、新規の複数人記載FAXが実際に到着してからでないと検証できない。次回、複数人記載FAXが到着した際にCloud Loggingで`reason: flagDisabled`になっていること・新規`distributionId`グループが作られていないことを確認する
 - **Stage 3（棚卸し記録）完了**: `audit-fax-duplication-inventory`の結果（スキャン対象3,203件・複製グループ1,016・Drive出力済みメンバーを含むグループ747）をADR-0024「ロールアウト実績」節に記録済み。「Drive出力済みメンバーを含むグループ数」は将来のPR-C（既存doc向けFE導出フォールバック）再検討の入力として残した
 
-## 現在のミッション【進行中・2026-07-23開始】
+## 現在のミッション【進行中・2026-10-06開始】Gemini完全廃止(緊急用OCR経路も含めて使わない)
+
+コード撤去と3環境への展開は2026-10-07に完了(PR #1137・#1138・#1139マージ)。**残りは、展開後24時間のERRORログ確認→GCP側の無効化(`roles/aiplatform.user`剥奪・Vertex AI API無効化、環境ごとに番号単位の承認)→kanameone・cocoroの新規書類での`ocrExtraction.version`確認**。詳細・完了の定義・証明コマンドは本ファイル冒頭の「Gemini完全廃止」節、決定記録は`docs/adr/0029-gemini-full-removal.md`。
+
+## 【完了・別件・並行トラック】Google Drive連携Phase1本番展開(2026-07-23開始)
 
 kanameone・cocoroへのGoogle Drive連携Phase1本番展開。承認済み計画: `/Users/yyyhhh/.claude/plans/witty-drifting-hoare.md`。
 
@@ -765,6 +769,8 @@ cocoro/kanameから、書類（ケアプラン・医療・介護保険証等）�
 - [ ] 【対応不要】[PLAUSIBLE、現状実害なし] useRetryDriveExportのonSuccessが`['document', docId]`クエリを無効化しておらず将来的にDrive状態を読むuseDocument(docId)呼び出しが古いキャッシュを表示しうる（frontend/src/hooks/useDriveExportErrors.ts:86。現時点でuseDocument(docId)の唯一の呼び出し元DocumentDetailModal.tsxはDrive系フィールドを読んでいないため実害なし）
 
 ## 🔄 中断点（in-flight）
+
+**Gemini完全廃止(2026-10-07時点、本ファイル冒頭「Gemini完全廃止」節)**: 実装・3環境への展開(Functions・Hosting)・devでのPaddleOCR実動確認・Cloud Runリビジョン切替の実演は完了。**再開点(2026-10-08の夕方以降)**: ①3環境の`processocr`で展開後24時間のERRORログを読み取りで確認(展開時刻: kanameone 2026-10-06 16:43 UTC、cocoro 同16:52 UTC) ②問題なければ、環境ごとに番号単位の承認を取ってVertex AI API無効化と`roles/aiplatform.user`剥奪 ③kanameone・cocoroで新規書類の`ocrExtraction.version`がPaddle系であることを確認(書類の流入待ち) ④`docs/client/client-setup.md`の文言の最終確認(decision-maker)。再開時の状態確認: `gh pr list --state open`(0件のはず) / `gcloud functions describe processOCR`の`OCR_PROVIDER`(3環境とも`paddle`)。
 
 **Geminiの通常経路停止(2026-10-03、本ファイル上部「通常経路のGemini停止」節)**: 部分着手のまま残るタスクはなし(PR-A/B/C/D0/Eはマージ・デプロイ済み、2026-10-06に完了の定義3項目を`[x]`)。残りは確認作業(PR-A cocoro・PR-B)と判断(PR-D cocoro)のみ。再開時の状態確認: `gh pr list --state open`(0件のはず) / `gcloud functions describe processOCR`の`OCR_PROVIDER`(3環境とも`paddle`) / 契約テスト`cd functions && npx mocha --require ts-node/register test/geminiSdkImportAllowlistContract.test.ts`(Node 20で実行。手元のHomebrew Nodeが26だとmochaが動かないため`PATH=/opt/homebrew/opt/node@20/bin:$PATH`)。
 
