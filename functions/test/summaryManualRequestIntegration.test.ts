@@ -161,6 +161,16 @@ describe('enqueueManualSummary (PR-C)', () => {
       expect((await get('doc-l1-none')).summaryState).to.equal(undefined);
     });
 
+    it('L1=none: L2(Firestoreフラグ)を一切読まずに拒否する(読取コストと設定依存を持ち込まない)', async () => {
+      await seed('doc-l1-none-no-gate-read');
+      const err = await rejection(
+        enqueue('doc-l1-none-no-gate-read', 'none', async () => {
+          throw new Error('L1=noneではL2を読んではならない');
+        })
+      );
+      expect(err.reason).to.equal('disabled');
+    });
+
     it('L1=sarashina かつ L2フラグ無効: 準備中として拒否する', async () => {
       await seed('doc-l2-off');
       const err = await rejection(enqueue('doc-l2-off', 'sarashina', async () => ({ enabled: false, allowlist: null, autoOnOcr: false })));

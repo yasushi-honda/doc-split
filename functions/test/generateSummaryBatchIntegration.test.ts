@@ -91,6 +91,19 @@ describe('runSummaryBatch (ADR-0027 PR4)', () => {
     await cleanupCollections(db, COLLECTIONS_TO_CLEAN);
   });
 
+  it('L1=none: L2(Firestoreフラグ)を読まずに終了する(getGateが呼ばれたらthrowするスタブで検証)', async () => {
+    await seedDocument('doc-l1-none-no-gate');
+    const stats = await runSummaryBatch({
+      firestore: db,
+      bucket: FAKE_BUCKET,
+      l1Provider: 'none',
+      getGate: async () => {
+        throw new Error('L1=noneではL2を読んではならない');
+      },
+    });
+    expect(stats.claimed).to.equal(0);
+  });
+
   it('L1=none: 新規claimは行わずrescueのみ実行する(バックフィル防止)', async () => {
     await seedDocument('doc-l1-none');
     const stats = await runSummaryBatch({ firestore: db, bucket: FAKE_BUCKET, l1Provider: 'none' });

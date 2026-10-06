@@ -30,16 +30,13 @@ const GENAI_SPECIFIER = '@google/genai';
 // `@google/genai` を参照してよいファイル(functions/ からの相対パス)。理由: OCR緊急用経路。
 const ALLOWLIST: readonly string[] = ['src/ocr/ocrProcessor.ts'];
 
-// 要約経路のエントリ。ここから推移的にたどってGeminiへ到達しないことを確認する。
-const SUMMARY_ENTRIES: readonly string[] = [
-  'src/ocr/summaryPass.ts',
+// 要約経路のエントリ(固定): ここから推移的にたどってGeminiへ到達しないことを確認する。
+const FIXED_SUMMARY_ENTRIES: readonly string[] = [
   'src/ocr/generateSummaryBatch.ts',
-  'src/ocr/summaryManualRequest.ts',
   'src/ocr/regenerateSummary.ts',
-  'src/ocr/summaryRunStore.ts',
-  'src/ocr/summaryRunGuard.ts',
-  'src/ocr/sarashinaSummaryClient.ts',
 ];
+// 要約・Sarashina関連のファイルは名前で自動的にエントリへ加える(追加し忘れで契約が素通りしないように)。
+const SUMMARY_ENTRY_NAME_PATTERN = /^(summary|sarashina)[A-Za-z0-9]*\.ts$/;
 
 const FORBIDDEN_FOR_SUMMARY = 'src/ocr/ocrProcessor.ts';
 
@@ -122,6 +119,15 @@ const ROOT = existsSync(resolve(process.cwd(), 'src/ocr/ocrProcessor.ts'))
   : resolve(process.cwd(), 'functions');
 const rel = (abs: string): string => relative(ROOT, abs);
 
+const SUMMARY_ENTRIES: readonly string[] = [
+  ...new Set([
+    ...FIXED_SUMMARY_ENTRIES,
+    ...readdirSync(resolve(ROOT, 'src/ocr'))
+      .filter((n) => SUMMARY_ENTRY_NAME_PATTERN.test(n))
+      .map((n) => `src/ocr/${n}`),
+  ]),
+].sort();
+
 /** 相対指定子を src 配下の実ファイルへ解決する(解決できなければ null)。 */
 function resolveRelative(fromAbs: string, spec: string): string | null {
   if (!spec.startsWith('.')) return null;
@@ -168,6 +174,8 @@ describe('Gemini SDK 利用範囲の契約 (ADR-0027 PR-E)', () => {
   });
 
   describe('B. 要約経路からGeminiへ到達しない', () => {
+    // 解決できなかった相対import(拡張子付き等)。黙ってスキップすると到達性の検査に穴が空くため、失敗にする。
+    const unresolved: string[] = [];
     const reachable = (entry: string): Set<string> => {
       const seen = new Set<string>();
       const stack = [resolve(ROOT, entry)];
@@ -176,8 +184,10 @@ describe('Gemini SDK 利用範囲の契約 (ADR-0027 PR-E)', () => {
         if (seen.has(cur)) continue;
         seen.add(cur);
         for (const spec of collectModuleSpecifiers(readWithContext(cur, 'reach-scan'))) {
+          if (!spec.startsWith('.')) continue;
           const next = resolveRelative(cur, spec);
-          if (next) stack.push(next);
+          if (!next) unresolved.push(`${rel(cur)} -> ${spec}`);
+          else stack.push(next);
         }
       }
       return seen;
@@ -207,6 +217,21 @@ describe('Gemini SDK 利用範囲の契約 (ADR-0027 PR-E)', () => {
         expect(offenders).to.deep.equal([]);
       });
     }
+
+    it('要約経路の相対importは全て解決できる(未解決のimportがあると到達性の検査に穴が空く)', () => {
+      for (const entry of SUMMARY_ENTRIES) reachable(entry);
+      expect(unresolved, `未解決の相対import: ${[...new Set(unresolved)].join(', ')}`).to.deep.equal([]);
+    });
+
+    it('要約エントリに主要ファイルが含まれる(自動収集が空走しない)', () => {
+      expect(SUMMARY_ENTRIES).to.include.members([
+        'src/ocr/summaryPass.ts',
+        'src/ocr/summaryManualRequest.ts',
+        'src/ocr/summaryRunStore.ts',
+        'src/ocr/sarashinaSummaryClient.ts',
+        'src/ocr/generateSummaryBatch.ts',
+      ]);
+    });
 
     it('要約生成コア(summaryGenerator.ts)が存在しない', () => {
       expect(existsSync(resolve(ROOT, 'src/ocr/summaryGenerator.ts'))).to.equal(false);
