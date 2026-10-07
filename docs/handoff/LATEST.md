@@ -1,6 +1,28 @@
 # ハンドオフメモ
 
-**更新日**: 2026-10-07（Gemini完全廃止(ADR-0029)を実装・3環境へ展開。以前: 2026-10-06（通常経路のGemini停止のPR-C・PR-Eを完了、本番2環境へ反映。以前: 2026-10-03 通常経路のGemini停止: Pass2廃止(PR #1116)・OCRの倒れ先をpaddleへ反転(PR #1117)・Sarashina canary測定スクリプト(PR #1118)をマージし3環境へデプロイ。過去セッションの内容は以下の各節を参照））
+**更新日**: 2026-10-08（Gemini廃止のGCP側無効化(3環境)まで完了。以前: 2026-10-07（Gemini完全廃止(ADR-0029)を実装・3環境へ展開。以前: 2026-10-06（通常経路のGemini停止のPR-C・PR-Eを完了、本番2環境へ反映。以前: 2026-10-03 通常経路のGemini停止: Pass2廃止(PR #1116)・OCRの倒れ先をpaddleへ反転(PR #1117)・Sarashina canary測定スクリプト(PR #1118)をマージし3環境へデプロイ。過去セッションの内容は以下の各節を参照）））
+
+## Gemini廃止の仕上げ: 24時間ERRORログ確認・GCP側の無効化(3環境)（2026-10-08、ADR-0029）
+
+### 結果
+- **24時間のERRORログ確認**: 展開時刻以降(約29時間)の`processocr`のERROR以上は、dev・kanameone・cocoroとも0件。同条件で全ログが拾えることを対照で確認。
+- **GCP側の無効化(番号単位の承認7・8・9)**: 3環境で`roles/aiplatform.user`を剥奪(devは`hy.unimail.11@gmail.com`の個人分を残した)し、`aiplatform.googleapis.com`を`--force`なしで無効化。独立に再確認し、3環境とも有効サービスに無い。devは無効化後に再投入したダミー書類が`processed`、`version`はPaddle系。kanameone・cocoroも無効化後の数分間はERRORなし。
+- **事前調査(読み取り)**: aiplatform APIの日別利用は、展開後3環境とも0件。kanameoneに`StreamGenerateContent`(v1)54件(2026-10-04〜05、展開前)があるが呼び出し元は未解明(本番コードは`generateContent`系のみ使用、判断への影響なし、調査は見送り)。
+- **peerの助言**: PaddleOCR(`wan-vpn-ipsec-setup`): paddlepaddle 3.2.2固定・mkldnn有効は適用済み。small+ONNX化・評価時の正規化・劣化画像の測定は条件待ちとしてGOAL.mdに記録(PR #1142)。返信は送信済み。Gemini(`sanwa-houkai-app-cd`): 廃止の報告は不要とのご判断で送っていない。
+- PR #1141(handoff)・#1142(助言の記録)・#1143(無効化の結果)をマージ。
+
+### 次のアクション
+**即着手**: なし(executor領分の作業ゼロ)。
+**条件待ち**: ①kanameone・cocoroで新規書類の`ocrExtraction.version`がPaddle系であることを確認(trigger=書類の流入、読み取りで確認。確認方法=`documents`の直近`done`書類の`ocrExtraction.version`が`PP-OCRv6_medium`系か)。②`docs/client/client-setup.md`の文言(「外部の生成AIサービスへ送信することはありません」)の最終確認(trigger=decision-maker)。
+**却下候補**: kanameoneの`StreamGenerateContent` 54件の呼び出し元調査(無効化済みで判断に影響しない)、small+ONNX化(速度が課題でない。triggerはOCR処理時間の問題化)。
+
+### 注意(再発防止)
+- zshでは`$P:t`が修飾子として解釈される(URLは`${P}:...`)。`set -- $VAR`は分割されない。取得失敗が「0件」と表示されることがあるため、対照(別条件で拾えること)で確認する。
+- `switch-client.sh`は`source`で読み込む(別プロセスでは切り替わらない)。kanameone用の設定は再ログイン(`gcloud auth login --configuration=kanameone`)が対話式で必要になることがある。`hy.unimail.11@gmail.com`はkanameoneで`setIamPolicy`の権限がない(API無効化はできる)。
+- 本番書類の状態確認は、OCR全文を含むJSONを`strict=False`+`mask`で取得する。
+
+## Issue Net変化(2026-10-08)
+- Close 0件、起票 0件、Net 0(openのIssueは3件)。
 
 ## Gemini(Vertex AI)の完全廃止: 緊急用OCR経路も含めて撤去し、3環境へ展開（2026-10-07、ADR-0029）
 
