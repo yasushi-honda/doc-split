@@ -64,7 +64,10 @@ Accepted (2026-10-06)。ADR-0025・ADR-0027が「明示指定時だけ使う緊�
 - dev実動確認: 12ページのダミー書類が`processed`になり、`ocrExtraction.version`は`PP-OCRv6_medium/det:…/rec:…`だった。
 - dev切替の実演: `paddle-ocr`を`00022`(最新、100%)→`00021`(直前、100%)→`--to-latest`で`00022`(100%)へ戻し、各段階のトラフィック配分を確認した。本番2環境のリビジョン履歴は読み取りで確認した(kanameone: 現在`00002-7lw`・直前`00001-dbr`、cocoro: 現在`00002-2sc`・直前`00001-xgj`、いずれもReady)。戻し先は存在してReadyだが、本番では切替を試せないため、直前のリビジョンがOCRとして正しく動くか(モデル・設定が現行と同じか)は未確認で、実際の障害時にその場で確認する。
 - HelpPageの文言は3環境のHostingの配信バンドルで確認した(旧文言なし、新文言あり)。
-- GCP側の設定(Vertex AI API無効化、`roles/aiplatform.user`剥奪)は、展開後24時間のERRORログ確認の後に、環境ごとの番号単位の承認で行う。
+- 展開後24時間のERRORログ確認(2026-10-08): 展開時刻以降(約29時間)のERROR以上は、dev・kanameone・cocoroの`processocr`で0件だった。
+- GCP側の設定(2026-10-08、環境ごとの番号単位の承認で実施): 3環境で`roles/aiplatform.user`を剥奪し(devは個人アカウント分を残した)、`aiplatform.googleapis.com`を`--force`なしで無効化した。再確認で3環境とも有効サービスに無かった。devは無効化後もダミー書類が`processed`になり、`ocrExtraction.version`はPaddle系だった。kanameone・cocoroも無効化後の数分間にERRORログは出ていない。
+- 事前調査で、aiplatform APIの日別の利用実績は、展開後(2026-10-06 16:43 UTC以降)3環境とも0件だった。kanameoneで2026-10-04〜05に`StreamGenerateContent`(v1)が54件あったが、呼び出し元は特定できていない(本番コードが使っていたのは`generateContent`系で、展開前に止まっていたため、判断への影響はない)。
+- 戻し方(必要になった場合): `gcloud services enable aiplatform.googleapis.com`と`gcloud projects add-iam-policy-binding`で再付与する。ただしGeminiの経路はコードごと撤去したため、再有効化だけでは使えない。
 
 ## Alternatives Considered
 

@@ -17,18 +17,18 @@ updated: 2026-10-07
 **完了の定義**:
 - [x] コードからGeminiが消えている(証明: `cd functions && PATH=/opt/homebrew/opt/node@20/bin:$PATH npx mocha --require ts-node/register test/geminiSdkImportAllowlistContract.test.ts` → PASS、`cd scripts && npm test` → PASS、`grep -c '"@google/genai"' functions/package.json` → `0`) (2026-10-07: PR #1137マージ、CI全PASS。functions 2547件・scripts 814件PASS)
 - [x] 3環境の`processOCR`に`GEMINI_MODEL_ID`がなく`OCR_PROVIDER=paddle`(証明: `gcloud functions describe processOCR --project=<各project> --account=hy.unimail.11@gmail.com --gen2 --region=asia-northeast1 --format="value(serviceConfig.environmentVariables)"` → `GEMINI_MODEL_ID`を含まず`OCR_PROVIDER`は`paddle`) (2026-10-07実測: dev・kanameone・cocoroとも`OCR_PROVIDER=paddle`・`SUMMARY_PROVIDER=sarashina`・`GEMINI_MODEL_ID`なし)
-- [ ] 3環境でVertex AI APIが無効(証明: `gcloud services list --enabled --project=<各project> --filter="config.name:aiplatform.googleapis.com" --format="value(config.name)"` → 出力なし)。実施は展開と検証の後、環境ごとに番号単位の承認
-- [ ] 展開後24時間、3環境の`processocr`にERROR以上のログがない(証明: `gcloud logging read 'resource.labels.service_name="processocr" AND severity>=ERROR' --project=<各project> --freshness=24h --limit=1` → 出力なし)。運用監視であり、OCR成功の証明ではない 【展開: kanameone 2026-10-06 16:43 UTC、cocoro 同16:52 UTC。展開直後の1時間はERRORログ0件。24時間後(2026-10-08夕方以降)に再確認】
+- [x] 3環境でVertex AI APIが無効(証明: `gcloud services list --enabled --project=<各project> --filter="config.name:aiplatform.googleapis.com" --format="value(config.name)"` → 出力なし)。実施は展開と検証の後、環境ごとに番号単位の承認 【2026-10-08完了: dev・kanameone・cocoroで`roles/aiplatform.user`剥奪(devは個人アカウント分を残す)+`aiplatform.googleapis.com`無効化、`--force`なし。再確認で3環境とも有効サービスに無し】
+- [x] 展開後24時間、3環境の`processocr`にERROR以上のログがない(証明: `gcloud logging read 'resource.labels.service_name="processocr" AND severity>=ERROR' --project=<各project> --freshness=24h --limit=1` → 出力なし)。運用監視であり、OCR成功の証明ではない 【展開: kanameone 2026-10-06 16:43 UTC、cocoro 同16:52 UTC。展開直後の1時間はERRORログ0件。24時間後(2026-10-08夕方以降)に再確認】 【2026-10-08確認: 展開時刻以降(約29時間)のERROR以上は3環境とも0件、対照として同条件で全ログが拾えることを確認。無効化後の数分間もERRORなし】
 - [ ] 代替OCRの実動確認(dev): 新規アップロードしたダミー書類が`done`になり`ocrExtraction.version`が`PP-OCRv6_medium`系(kanameone・cocoroは新規書類の流入後に同じ確認) 【2026-10-07 dev完了: 12ページのダミー書類が`processed`、`ocrExtraction.version`=`PP-OCRv6_medium/…`。kanameone・cocoroは新規書類の流入待ち】
 - [ ] 3環境で`status:'error'`・`pending`の滞留が増えていない(証明: 展開前後の`fix-stuck-documents --dry-run`の対象件数を比較、`run-ops-script.yml`経由)
-- [ ] PR-2(残りのdocs)がマージ済み(証明: `grep -rln 'Gemini' docs/overview.md docs/features.md docs/README.md docs/api-reference.md docs/operation-guide.md docs/health-report.md docs/context/functional-requirements.md docs/context/project-background.md docs/context/gcp-migration-scope.md`の残存が履歴・ADR・廃止の記述のみ)。README.md・docs/architecture.md・docs/context/business-logic.md・docs/security.md・セットアップ/デプロイ手順書はPR-1に含めた
+- [x] PR-2(残りのdocs)がマージ済み(証明: `grep -rln 'Gemini' docs/overview.md docs/features.md docs/README.md docs/api-reference.md docs/operation-guide.md docs/health-report.md docs/context/functional-requirements.md docs/context/project-background.md docs/context/gcp-migration-scope.md`の残存が履歴・ADR・廃止の記述のみ)。README.md・docs/architecture.md・docs/context/business-logic.md・docs/security.md・セットアップ/デプロイ手順書はPR-1に含めた 【PR #1138で2026-10-07マージ】
 
 **進行状況(2026-10-06)**:
 - [x] 計画・plan-crossreview・承認
 - [x] PR-1(コード・テスト・CI・スクリプト・UI・重要文書、ADR-0029): ローカル実装・検証済み(functions単体2546件・統合187件、scripts 810件、frontend 940件PASS)。codex review・quality-gate-evaluator・HelpPage表示確認・PR作成・マージ・展開が残り → PR #1137で2026-10-07にマージ(codex review 2回・evaluator・pr-review-toolkit反映済み)
-- [ ] PR-2(残りのdocs、docs-only)
+- [x] PR-2(残りのdocs、docs-only) → PR #1138
 - [x] 展開(dev→kanameone→cocoro、番号単位の承認) → 2026-10-07完了。Functions(3環境)・Hosting(kanameone・cocoro、devは自動)。devでPaddleOCRのCloud Runリビジョン切替(00022→00021→`--to-latest`)を実演し、100%復帰を確認
-- [ ] GCP設定(`roles/aiplatform.user`剥奪・Vertex AI API無効化、環境別に番号単位の承認)
+- [x] GCP設定(`roles/aiplatform.user`剥奪・Vertex AI API無効化、環境別に番号単位の承認) → 2026-10-08完了(承認7=dev、8=kanameone、9=cocoro)
 
 **PaddleOCRの高速化に関する助言(2026-10-08、別セッション`wan-vpn-ipsec-setup`のlocal-ai-lab実測、条件待ち)**: ①paddlepaddle 3.3.xを避け3.2.2に固定(mkldnn×新IRのクラッシュ、Issue #77340)は**適用済み**(`requirements.txt`は`paddlepaddle==3.2.2`、`enable_mkldnn=True`、ADR-0025 PR4c)。②〜④(PP-OCRv6_small+ONNX Runtime化による高速化、評価時の正規化〈「〜」と「～」、HTMLタグ除去など〉、劣化画像〈低解像度75dpi・強いスキャン劣化〉の精度測定)は**今は着手しない**: OCRは1分ごとの非同期処理で速度が課題になっておらず、要配慮個人情報を含む実書類の精度を優先するため。助言の数値はMac mini(arm64)・合成帳票のもので、本番のlinux/amd64とは環境が異なり、Intel XeonでONNX Runtimeがネイティブより遅い例もあるため、そのまま当てはめない。**trigger**=OCRの処理時間が運用上の問題になった時(`processocr`のタイムアウト、書類の滞留増加など)。**昇格後にやること**: 実書類に近い条件(スキャン書類、サンプルは決裁者が用意)でmedium/smallの精度と速度を実測し、決裁者に提示。**確認方法**: `processocr_request_timeout`アラート、`fix-stuck-documents --dry-run`の対象件数。
 
@@ -460,7 +460,7 @@ kanameoneから「1FAXに複数人分の書類がまとまっている場合の�
 
 ## 現在のミッション【進行中・2026-10-06開始】Gemini完全廃止(緊急用OCR経路も含めて使わない)
 
-コード撤去と3環境への展開は2026-10-07に完了(PR #1137・#1138・#1139マージ)。**残りは、展開後24時間のERRORログ確認→GCP側の無効化(`roles/aiplatform.user`剥奪・Vertex AI API無効化、環境ごとに番号単位の承認)→kanameone・cocoroの新規書類での`ocrExtraction.version`確認**。詳細・完了の定義・証明コマンドは本ファイル冒頭の「Gemini完全廃止」節、決定記録は`docs/adr/0029-gemini-full-removal.md`。
+コード撤去と3環境への展開は2026-10-07に完了(PR #1137・#1138・#1139マージ)。**GCP側の無効化(3環境)まで完了(2026-10-08)。残りは、kanameone・cocoroの新規書類での`ocrExtraction.version`確認(書類の流入待ち)と、クライアント向け文言の最終確認**。詳細・完了の定義・証明コマンドは本ファイル冒頭の「Gemini完全廃止」節、決定記録は`docs/adr/0029-gemini-full-removal.md`。
 
 ## 【完了・別件・並行トラック】Google Drive連携Phase1本番展開(2026-07-23開始)
 
@@ -772,7 +772,7 @@ cocoro/kanameから、書類（ケアプラン・医療・介護保険証等）�
 
 ## 🔄 中断点（in-flight）
 
-**Gemini完全廃止(2026-10-07時点、本ファイル冒頭「Gemini完全廃止」節)**: 実装・3環境への展開(Functions・Hosting)・devでのPaddleOCR実動確認・Cloud Runリビジョン切替の実演は完了。**再開点(2026-10-08の夕方以降)**: ①3環境の`processocr`で展開後24時間のERRORログを読み取りで確認(展開時刻: kanameone 2026-10-06 16:43 UTC、cocoro 同16:52 UTC) ②問題なければ、環境ごとに番号単位の承認を取ってVertex AI API無効化と`roles/aiplatform.user`剥奪 ③kanameone・cocoroで新規書類の`ocrExtraction.version`がPaddle系であることを確認(書類の流入待ち) ④`docs/client/client-setup.md`の文言の最終確認(decision-maker)。再開時の状態確認: `gh pr list --state open`(0件のはず) / `gcloud functions describe processOCR`の`OCR_PROVIDER`(3環境とも`paddle`)。
+**Gemini完全廃止(2026-10-07時点、本ファイル冒頭「Gemini完全廃止」節)**: 実装・3環境への展開(Functions・Hosting)・devでのPaddleOCR実動確認・Cloud Runリビジョン切替の実演は完了。**2026-10-08に完了**: 24時間のERRORログ確認(3環境とも0件)と、3環境のVertex AI API無効化・`roles/aiplatform.user`剥奪。**残り**: ①kanameone・cocoroで新規書類の`ocrExtraction.version`がPaddle系であることを確認(書類の流入待ち) ②`docs/client/client-setup.md`の文言の最終確認(decision-maker) ③kanameoneの`StreamGenerateContent` 54件(2026-10-04〜05、展開前)の呼び出し元は未解明(本番コードは`generateContent`系のみ使用、無効化の妨げにはならない)。再開時の状態確認: `gh pr list --state open`(0件のはず) / `gcloud functions describe processOCR`の`OCR_PROVIDER`(3環境とも`paddle`)。
 
 **Geminiの通常経路停止(2026-10-03、本ファイル上部「通常経路のGemini停止」節)**: 部分着手のまま残るタスクはなし(PR-A/B/C/D0/Eはマージ・デプロイ済み、2026-10-06に完了の定義3項目を`[x]`)。残りは確認作業(PR-A cocoro・PR-B)と判断(PR-D cocoro)のみ。再開時の状態確認: `gh pr list --state open`(0件のはず) / `gcloud functions describe processOCR`の`OCR_PROVIDER`(3環境とも`paddle`) / 契約テスト`cd functions && npx mocha --require ts-node/register test/geminiSdkImportAllowlistContract.test.ts`(Node 20で実行。手元のHomebrew Nodeが26だとmochaが動かないため`PATH=/opt/homebrew/opt/node@20/bin:$PATH`)。
 
