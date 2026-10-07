@@ -30,6 +30,8 @@ updated: 2026-10-07
 - [x] 展開(dev→kanameone→cocoro、番号単位の承認) → 2026-10-07完了。Functions(3環境)・Hosting(kanameone・cocoro、devは自動)。devでPaddleOCRのCloud Runリビジョン切替(00022→00021→`--to-latest`)を実演し、100%復帰を確認
 - [ ] GCP設定(`roles/aiplatform.user`剥奪・Vertex AI API無効化、環境別に番号単位の承認)
 
+**PaddleOCRの高速化に関する助言(2026-10-08、別セッション`wan-vpn-ipsec-setup`のlocal-ai-lab実測、条件待ち)**: ①paddlepaddle 3.3.xを避け3.2.2に固定(mkldnn×新IRのクラッシュ、Issue #77340)は**適用済み**(`requirements.txt`は`paddlepaddle==3.2.2`、`enable_mkldnn=True`、ADR-0025 PR4c)。②〜④(PP-OCRv6_small+ONNX Runtime化による高速化、評価時の正規化〈「〜」と「～」、HTMLタグ除去など〉、劣化画像〈低解像度75dpi・強いスキャン劣化〉の精度測定)は**今は着手しない**: OCRは1分ごとの非同期処理で速度が課題になっておらず、要配慮個人情報を含む実書類の精度を優先するため。助言の数値はMac mini(arm64)・合成帳票のもので、本番のlinux/amd64とは環境が異なり、Intel XeonでONNX Runtimeがネイティブより遅い例もあるため、そのまま当てはめない。**trigger**=OCRの処理時間が運用上の問題になった時(`processocr`のタイムアウト、書類の滞留増加など)。**昇格後にやること**: 実書類に近い条件(スキャン書類、サンプルは決裁者が用意)でmedium/smallの精度と速度を実測し、決裁者に提示。**確認方法**: `processocr_request_timeout`アラート、`fix-stuck-documents --dry-run`の対象件数。
+
 ## 【完了(上のミッションで置換)・2026-10-03開始】通常経路のGemini停止(緊急用のOCR経路だけ残す)。承認済み計画: `/Users/yyyhhh/.claude/plans/jiggly-giggling-pond.md`
 
 **ミッション**: 顧客データをGeminiへ送る通常経路を止める(契約書第7条の整理が発端。decision-maker: 「なるべく早くSarashinaなどに置き換えてGeminiは使わない実装にしたい」)。OCR本体のGemini経路は**明示指定時のみの緊急手段**として残す(達成するのは「通常経路のGemini停止」で「Geminiを全く使わない」ではない)。
