@@ -40,11 +40,11 @@ updated: 2026-10-07
 
 **完了の定義**:
 - [x] 3環境の`OCR_PROVIDER`がpaddle(証明: `gcloud functions describe processOCR --project=<各project> --account=hy.unimail.11@gmail.com --gen2 --region=asia-northeast1 --format="value(serviceConfig.environmentVariables.OCR_PROVIDER)"` → `paddle`。2026-10-03に3環境とも実測済みだが、最終確認はミッション完了時に再実行)
-  - **最終実測(2026-10-06 PR-E反映後、本番2環境は再デプロイ済み)**: `gcloud functions describe`で dev・kanameone・cocoro とも`OCR_PROVIDER=paddle`(kanameone 09:43Z・cocoro 09:45Z更新)。`SUMMARY_PROVIDER`は kanameone=`sarashina`・cocoro=未設定(none)・dev=`sarashina`、`GEMINI_MODEL_ID`は3環境とも未設定(コード既定)。
+  - **最終実測(2026-10-06 PR-E反映後、本番2環境は再デプロイ済み)**: `gcloud functions describe`で dev・kanameone・cocoro とも`OCR_PROVIDER=paddle`(kanameone 09:43Z・cocoro 09:45Z更新)。`SUMMARY_PROVIDER`は kanameone=`sarashina`・cocoro=未設定(none)・dev=`sarashina`、`GEMINI_MODEL_ID`は3環境とも未設定(コード既定)。【この時点の記述。cocoroはその後PR-D(#1134、2026-10-06 12:50Z展開)で`sarashina`になり、2026-10-09の実測で3環境とも`SUMMARY_PROVIDER=sarashina`】
   - 2026-10-06再実測(`gcloud functions describe processOCR`): dev・kanameone・cocoroとも`paddle`(updateTime: dev 10/4 17:46Z、kanameone 10/6 00:53Z、cocoro 10/6 01:51Z)。**ミッション完了時(PR-E後)に最終確認を再実行する**。
 - [x] 通常経路のGemini呼び出しが0件で、緊急利用の記録も0件(証明: `gcloud logging read 'textPayload:"gemini_ocr_emergency_used"' --project=<各project> --freshness=24h --limit=1 --format="value(timestamp)"` → 出力なし。2026-10-03時点は3環境とも0件)
   - **最終実測(2026-10-06 PR-E反映後、48時間)**: 3環境とも`gemini_ocr_emergency_used`が0件(要約のGemini経路はPR-Eでコードごと撤去済み)。
-  - 2026-10-06再実測(48時間): 3環境とも`gemini_ocr_emergency_used`が0件、Pass2の`candidateGeminiMs`も0件。手動要約はGemini経路を撤去済み(PR-C)で、kanameoneはSarashina、cocoroは要約無効。要約のGemini経路のコードはPR-Eで撤去し、「通常経路0件」の恒久的な担保は契約テストで行う。
+  - 2026-10-06再実測(48時間): 3環境とも`gemini_ocr_emergency_used`が0件、Pass2の`candidateGeminiMs`も0件。手動要約はGemini経路を撤去済み(PR-C)で、kanameoneはSarashina、cocoroは要約無効(この時点。cocoroはPR-D #1134で同日中にSarashina化済み)。要約のGemini経路のコードはPR-Eで撤去し、「通常経路0件」の恒久的な担保は契約テストで行う。
 - [x] 本番コードのGemini利用が緊急用経路のみ(証明: 契約テスト`cd functions && npx mocha --require ts-node/register test/geminiSdkImportAllowlistContract.test.ts`と`cd scripts && npm test`がPASS=構文解析で`@google/genai`を参照するのは`functions/src/ocr/ocrProcessor.ts`だけ。単純なgrepはコメントや過去の説明文にも当たるため、証明は構文解析の契約テストに置き換えた。PR-Eで達成)
   - 最終確認(2026-10-06、PR #1130マージ後): 構文解析の契約テストがPASS(functions 50件・scripts 3件)。`@google/genai`をimport/requireするのは`functions/src/ocr/ocrProcessor.ts`だけ(`git grep`には`utils/retry.ts`のコメント内の言及と契約テスト自身の文字列も当たるが、構文解析の対象外)。要約のGemini経路(`summaryGenerator.ts`等)と評価用の比較スクリプトは削除済み。
 
