@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseImageName, summarizeAccuracy, type AccuracyRecord } from '../paddle-ocr-downscale-accuracy';
+import { isOverBudget, pageTextFromPagesJson, parseImageName, summarizeAccuracy, type AccuracyRecord } from '../paddle-ocr-downscale-accuracy';
 
 describe('parseImageName', () => {
   it('<fixtureId>__<variant>.jpg を分解する', () => {
@@ -44,5 +44,26 @@ describe('summarizeAccuracy', () => {
 
   it('レコードが空ならfail-loud', () => {
     assert.throws(() => summarizeAccuracy([]));
+  });
+});
+
+
+describe('pageTextFromPagesJson', () => {
+  it('pages.jsonの先頭ページのテキストを返す(expected.txtのPDF用ページ見出しを含めない)', () => {
+    assert.equal(pageTextFromPagesJson(['1ページ目の本文']), '1ページ目の本文');
+  });
+
+  it('配列でない・空・文字列でない場合はfail-loud', () => {
+    assert.throws(() => pageTextFromPagesJson({}));
+    assert.throws(() => pageTextFromPagesJson([]));
+    assert.throws(() => pageTextFromPagesJson([123]));
+  });
+});
+
+describe('isOverBudget', () => {
+  it('経過時間が予算を超えたらtrue、ちょうど・未満はfalse', () => {
+    assert.equal(isOverBudget(1001, 1000), true);
+    assert.equal(isOverBudget(1000, 1000), false);
+    assert.equal(isOverBudget(0, 1000), false);
   });
 });

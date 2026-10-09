@@ -39,6 +39,20 @@ export interface VariantSummary {
 const GOLDEN_DIR = path.join(__dirname, 'fixtures', 'paddle-ocr-golden');
 const REQUEST_TIMEOUT_MS = 250_000;
 const RETRY_WAIT_MS = 30_000;
+/** 全体の実行時間の予算。超えたら残りを送らず、途中までの結果を書いて失敗終了する(ジョブ上限で強制終了され報告が残らないのを避ける)。 */
+const TOTAL_BUDGET_MS = 80 * 60 * 1000;
+
+/** `.pages.json`(配列)の先頭ページのテキスト。`.expected.txt`にはPDF用の`--- Page N ---`見出しがあり、画像のOCR結果には無いため使わない。 */
+export function pageTextFromPagesJson(json: unknown): string {
+  if (!Array.isArray(json) || json.length === 0 || typeof json[0] !== 'string') {
+    throw new Error('pages.json は文字列の配列(1ページ以上)である必要があります');
+  }
+  return json[0];
+}
+
+export function isOverBudget(elapsedMs: number, budgetMs: number): boolean {
+  return elapsedMs > budgetMs;
+}
 
 export function parseImageName(fileName: string): { fixtureId: string; variant: string } {
   const m = /^([A-Za-z0-9-]+)__([A-Za-z0-9-]+)\.jpg$/.exec(fileName);
@@ -124,11 +138,18 @@ async function main(): Promise<void> {
   if (files.length === 0) throw new Error(`画像がありません: ${values.dir}`);
 
   const records: AccuracyRecord[] = [];
+  const startedAt = Date.now();
+  let budgetExceeded = false;
   for (const f of files) {
+    if (isOverBudget(Date.now() - startedAt, TOTAL_BUDGET_MS)) {
+      budgetExceeded = true;
+      console.error(`実行時間の予算(${TOTAL_BUDGET_MS / 60000}分)を超えたため、残りの画像は送らず終了します`);
+      break;
+    }
     const { fixtureId, variant } = parseImageName(f);
-    const expectedPath = path.join(GOLDEN_DIR, `${fixtureId}.expected.txt`);
-    if (!fs.existsSync(expectedPath)) throw new Error(`期待テキストがありません: ${expectedPath}`);
-    const expected = fs.readFileSync(expectedPath, 'utf-8');
+    const pagesPath = path.join(GOLDEN_DIR, `${fixtureId}.pages.json`);
+    if (!fs.existsSync(pagesPath)) throw new Error(`期待テキスト(pages.json)がありません: ${pagesPath}`);
+    const expected = pageTextFromPagesJson(JSON.parse(fs.readFileSync(pagesPath, 'utf-8')));
 
     let r = await postImage(serviceUrl, await tokenProvider.getToken(), path.join(values.dir, f));
     if (r.status === null || r.status >= 500) {
@@ -153,7 +174,13 @@ async function main(): Promise<void> {
 
   const summary = summarizeAccuracy(records);
   console.log('summary', JSON.stringify(summary));
-  fs.writeFileSync(out, JSON.stringify({ schemaVersion: 1, label: values.label ?? null, serviceUrl, records, summary }, null, 2));
+  fs.writeFileSync(
+    out,
+    JSON.stringify({ schemaVersion: 1, label: values.label ?? null, serviceUrl, incomplete: budgetExceeded, records, summary }, null, 2)
+  );
+  if (budgetExceeded) {
+    throw new Error('実行時間の予算を超えたため、結果は一部の画像のみです(incomplete=true)');
+  }
 }
 
 if (require.main === module) {
