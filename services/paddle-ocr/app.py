@@ -47,6 +47,10 @@ RENDER_DPI = int(os.environ.get("PADDLE_PDF_RENDER_DPI", "200"))
 MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", str(20 * 1024 * 1024)))
 MAX_PAGES = int(os.environ.get("MAX_PAGES", "8"))
 MAX_PIXELS = int(os.environ.get("MAX_PIXELS", str(40_000_000)))
+# 画像(JPEG/PNG等)の長辺の上限px。超えるとOCRエンジンへ渡す前に縮小する(原本は不変)。12Mpx級のスマホ写真で
+# 4GiBのコンテナがメモリ不足(signal 9、HTTP 503)になる事象への対策。dev実測で3000x2250(6.8Mpx)は4GiBで
+# 安定して成功したため、長辺3000pxを初期値にする。0以下は起動時エラー(RasterLimitsが拒否)。
+MAX_IMAGE_LONG_SIDE = int(os.environ.get("MAX_IMAGE_LONG_SIDE", "3000"))
 MAX_PROCESSING_SECONDS = float(os.environ.get("MAX_PROCESSING_SECONDS", "240"))
 IMAGE_DIGEST = os.environ.get("IMAGE_DIGEST", "unknown")
 # ADR-0025 PR4b D-1実効性検証専用(本番では未設定=無効)。設定時、プロセス起動から
@@ -70,7 +74,7 @@ ALLOWED_CONTENT_TYPES = {
     "image/gif": "image",
 }
 
-LIMITS = RasterLimits(max_pages=MAX_PAGES, max_pixels=MAX_PIXELS)
+LIMITS = RasterLimits(max_pages=MAX_PAGES, max_pixels=MAX_PIXELS, image_max_long_side=MAX_IMAGE_LONG_SIDE)
 
 ENGINE = None  # lifespan内でセットする(モジュールimport時にpaddleocrを引かないため)
 

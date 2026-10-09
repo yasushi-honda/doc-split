@@ -29,6 +29,15 @@ class InputRejected(Exception):
 class RasterLimits:
     max_pages: int
     max_pixels: int
+    # 画像(PNG/JPEG/TIFF/GIF)の長辺の上限px。超える画像はOCRエンジンへ渡す前に、アスペクト比を保って縮小する。
+    # 12Mpx前後のスマホ写真でエンジンの推論メモリが4GiBを超え、コンテナがsignal 9で強制終了する(HTTP 503)事象
+    # への対策(devで合成JPEGの再現・メモリ8GiB化での解消を確認済み)。縮小するのはOCR入力のみで、
+    # 原本のバイト列は変更しない。None(既定)は従来どおり縮小しない。PDFには適用しない(PDFはdpi指定で決まる)。
+    image_max_long_side: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.image_max_long_side is not None and self.image_max_long_side <= 0:
+            raise ValueError(f"image_max_long_side は正の整数である必要があります: {self.image_max_long_side}")
 
 
 def pdf_pages_to_rgb(data: bytes, *, dpi: int, limits: RasterLimits) -> Iterator["object"]:
@@ -137,9 +146,25 @@ def image_to_rgb(data: bytes, *, limits: RasterLimits) -> Iterator["object"]:
                 actual=pixel_count,
             )
         try:
-            yield np.array(img.convert("RGB"))
+            rgb = img.convert("RGB")
+            if limits.image_max_long_side is not None:
+                rgb = _downscale_to_long_side(rgb, limits.image_max_long_side)
+            yield np.array(rgb)
         except (OSError, ValueError, Image.DecompressionBombError) as e:
             raise InputRejected("INVALID_IMAGE", f"フレーム{i + 1}のデコードに失敗しました: {e}") from e
+
+
+def _downscale_to_long_side(img: "object", max_long_side: int) -> "object":
+    """長辺がmax_long_sideを超える場合のみ、アスペクト比を保って縮小する(上限ちょうど以下は無変更)。"""
+    from PIL import Image
+
+    width, height = img.size
+    long_side = max(width, height)
+    if long_side <= max_long_side:
+        return img
+    scale = max_long_side / long_side
+    new_size = (max(1, round(width * scale)), max(1, round(height * scale)))
+    return img.resize(new_size, Image.Resampling.LANCZOS)
 
 
 def _bytes_io(data: bytes):

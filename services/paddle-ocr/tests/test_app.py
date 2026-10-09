@@ -26,8 +26,10 @@ class StubEngine:
     def __init__(self, texts_by_call=None):
         self._texts_by_call = list(texts_by_call or [])
         self.calls = 0
+        self.shapes = []
 
     def page_text(self, rgb_array) -> str:
+        self.shapes.append(tuple(rgb_array.shape[:2]))
         if self._texts_by_call:
             text = self._texts_by_call[self.calls % len(self._texts_by_call)]
         else:
@@ -447,3 +449,26 @@ def test_error_message_does_not_leak_input_content(client):
     )
     assert resp.status_code == 422
     assert secret_marker not in resp.text
+
+
+def test_ocr_downscales_large_jpeg_before_engine(client, monkeypatch):
+    """4000px超のJPEGは、エンジンへ渡す前に長辺が上限まで縮小される(原本は変更されない=入力バイト列のまま)。"""
+    monkeypatch.setattr(
+        app_module,
+        "LIMITS",
+        app_module.RasterLimits(max_pages=8, max_pixels=app_module.MAX_PIXELS, image_max_long_side=300),
+    )
+    engine = StubEngine(texts_by_call=["ok"])
+    app_module.ENGINE = engine
+    img = Image.new("RGB", (800, 600), color=(255, 255, 255))
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG")
+    resp = client.post("/ocr", content=buf.getvalue(), headers={"content-type": "image/jpeg"})
+    assert resp.status_code == 200
+    assert engine.shapes == [(225, 300)]
+
+
+def test_default_limits_cap_image_long_side_at_3000():
+    """本番既定: 画像の長辺上限は3000px(devプローブで4GiBでも安定した寸法に合わせた初期値)。"""
+    assert app_module.MAX_IMAGE_LONG_SIDE == 3000
+    assert app_module.LIMITS.image_max_long_side == 3000
