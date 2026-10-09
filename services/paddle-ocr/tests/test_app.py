@@ -468,7 +468,8 @@ def test_ocr_downscales_large_jpeg_before_engine(client, monkeypatch):
     assert engine.shapes == [(225, 300)]
 
 
-def test_default_limits_cap_image_long_side_at_3000():
-    """本番既定: 画像の長辺上限は3000px(devプローブで4GiBでも安定した寸法に合わせた初期値)。"""
-    assert app_module.MAX_IMAGE_LONG_SIDE == 3000
-    assert app_module.LIMITS.image_max_long_side == 3000
+def test_default_limits_cap_image_long_side_at_2500():
+    """本番既定: 画像の長辺上限は2500px。devで4GiBのまま、上限2500pxは6件すべて1回目で成功し、
+    3000pxは6件中2件が1回目503(1件は再試行でも失敗)だったため、安定した2500pxを採用した。"""
+    assert app_module.MAX_IMAGE_LONG_SIDE == 2500
+    assert app_module.LIMITS.image_max_long_side == 2500

@@ -2,7 +2,7 @@
 
 出力: <out_dir>/<fixtureId>__<variant>.jpg
 - control: goldenと同じ200dpiで描画(長辺は約2339px。縮小が働かない対照)
-- large:   長辺4000pxで描画(MAX_IMAGE_LONG_SIDE=3000のとき、サービス側で縮小される)
+- large:   長辺4000pxで描画(MAX_IMAGE_LONG_SIDEの既定(2500)を超えるため、サービス側で縮小される)
 - partial: 4000x3000の灰色キャンバスの中央に、ページを高さ1500px(画面の50%)で配置
            (手帳のように書類が写真の一部しか占めない撮影の模擬。実効解像度が下がる側のストレス)
 """

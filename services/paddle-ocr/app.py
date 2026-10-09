@@ -48,9 +48,11 @@ MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", str(20 * 1024 * 1024))
 MAX_PAGES = int(os.environ.get("MAX_PAGES", "8"))
 MAX_PIXELS = int(os.environ.get("MAX_PIXELS", str(40_000_000)))
 # 画像(JPEG/PNG等)の長辺の上限px。超えるとOCRエンジンへ渡す前に縮小する(原本は不変)。12Mpx級のスマホ写真で
-# 4GiBのコンテナがメモリ不足(signal 9、HTTP 503)になる事象への対策。dev実測で3000x2250(6.8Mpx)は4GiBで
-# 安定して成功したため、長辺3000pxを初期値にする。0以下は起動時エラー(RasterLimitsが拒否)。
-MAX_IMAGE_LONG_SIDE = int(os.environ.get("MAX_IMAGE_LONG_SIDE", "3000"))
+# 4GiBのコンテナがメモリ不足(signal 9、HTTP 503)になる事象への対策。dev実測(4GiB、上限より大きい6種類の画像を
+# 順に送信): 上限2500pxは6件すべて1回目で成功、3000pxは6件中2件が1回目503(うち1件は再試行でも失敗)。
+# 安定した2500pxを初期値にする。golden由来の画像での精度確認は上限2500pxで全件の類似度1.000
+# (判定力に限界あり)。0以下は起動時エラー(RasterLimitsが拒否)。
+MAX_IMAGE_LONG_SIDE = int(os.environ.get("MAX_IMAGE_LONG_SIDE", "2500"))
 MAX_PROCESSING_SECONDS = float(os.environ.get("MAX_PROCESSING_SECONDS", "240"))
 IMAGE_DIGEST = os.environ.get("IMAGE_DIGEST", "unknown")
 # ADR-0025 PR4b D-1実効性検証専用(本番では未設定=無効)。設定時、プロセス起動から
