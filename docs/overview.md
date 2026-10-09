@@ -68,7 +68,7 @@ flowchart LR
 - 書類種別（キーワードマッチング）
 - 書類日付（和暦対応）
 - 事業所名
-- **AI要約**（書類内容の要点を自動生成）
+- **AI要約**（書類内容の要点を、手動で依頼して生成。自前のSarashinaが非同期に処理）
 
 ### 3. PDF分割機能
 
@@ -93,7 +93,23 @@ flowchart LR
 | 書類種別 | プルダウン選択 |
 | 日付範囲 | 開始日〜終了日 |
 
-### 5. マスターデータ管理
+### 5. Google Driveエクスポート
+
+書類を「確認済み」にすると、Google Driveへ自動保存する（環境ごとにfeature flagと許可リストで有効化）。
+
+```mermaid
+flowchart LR
+    User["確認ボタン"] --> Verified["verified: true"]
+    Verified --> Trigger["onDocumentWriteDriveExport"]
+    Trigger --> Drive["Google Drive<br/>(フォルダ + ファイル)"]
+    Scheduled["driveExportScheduled<br/>(15分間隔)"] -.->|"失敗・滞留を再試行"| Trigger
+```
+
+- 保存先のフォルダ構成は、設定画面のテンプレートで編集できる
+- 失敗した書類は、エラー一覧画面の「リトライ」から再実行できる
+- 連携の認可（OAuth）は、管理者が設定画面から行う
+
+### 6. マスターデータ管理
 
 | マスター | 用途 |
 |----------|------|
@@ -115,8 +131,9 @@ flowchart LR
 
 ### 制約事項
 
-- 1ファイルあたりの最大サイズ: 50MB
-- 対応形式: PDF
+- 対応形式: PDF、画像（JPEG・PNG・TIFF・GIF）
+- 1ファイルあたりの最大サイズ: 手動アップロードは10MB（Storageのルール上限は50MB、OCRサービスへの1リクエストは20MiB）
+- 画像は、OCRへ渡す前に長辺2500pxへ自動縮小する（原本は変更しない。ADR-0030）
 - 同時処理数: PaddleOCRの処理能力に依存（processOCRは1分ごと・1件ずつ処理）
 
 ## プロジェクト構成
@@ -155,9 +172,9 @@ doc-split/
 | Phase 6 | ✅ 完了 | ビジネスロジック移行 |
 | Phase 7 | ✅ 完了 | 処理履歴・同姓同名解決 |
 | Phase 8 | ✅ 完了 | グループ化ビュー・検索機能 |
-| 追加実装 | ✅ 完了 | AI要約・モバイルUI・エイリアス学習・OCR確認ステータス・ソート改善・アプリ内ヘルプ・無限スクロール・あかさたなフィルター・期間指定フィルター・PWA対応 |
+| 追加実装 | ✅ 完了 | AI要約・モバイルUI・エイリアス学習・OCR確認ステータス・ソート改善・アプリ内ヘルプ・無限スクロール・あかさたなフィルター・期間指定フィルター・PWA対応・Google Driveエクスポート・OCR（PaddleOCR）と要約（Sarashina）の自前ホスティングへの移行・Geminiの廃止 |
 
-**本番URL**: https://doc-split-dev.web.app
+**開発環境URL（dev）**: https://doc-split-dev.web.app
 
 ## モバイル対応・PWA
 

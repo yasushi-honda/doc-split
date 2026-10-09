@@ -12,7 +12,7 @@ Gmail添付ファイルを取得してFirestoreに登録する。
 |------|-----|
 | トリガー | Cloud Scheduler (5分間隔) |
 | リージョン | asia-northeast1 |
-| タイムアウト | 540秒 |
+| タイムアウト | 300秒 |
 | メモリ | 512MB |
 
 **処理フロー:**
@@ -50,12 +50,48 @@ flowchart TD
     D --> E["PaddleOCR実行"]
     E --> F["情報抽出"]
     F --> G["マスター照合"]
-    G --> H["ステータス更新(completed)"]
+    G --> H["ステータス更新(processed)"]
 ```
 
-**レート制限:**
-- トークンバケット方式
-- OCR処理は1分ごとのスケジュール実行（processOCR、同時1件）
+**同時実行:**
+- OCR処理は1分ごとのスケジュール実行（processOCR、同時1件）。外部AIのレート制限用のトークンバケットは、Gemini廃止（ADR-0029）に伴い廃止した
+
+#### generateSummaryBatch
+
+AI要約の依頼を非同期に処理する（ADR-0027）。
+
+| 項目 | 値 |
+|------|-----|
+| トリガー | Cloud Scheduler (1分間隔) |
+| リージョン | asia-northeast1 |
+| タイムアウト | 1800秒 |
+| メモリ | 512MB |
+
+`regenerateSummary` で受け付けた依頼（`summaryState: pending`）を、自前ホスティングのSarashina（Cloud Run）で順に生成し、結果を書類へ保存する。要約は手動依頼が基本で、`settings/features.autoSummaryOnOcr` が有効な環境に限り、OCR完了後の自動依頼分も処理する。
+
+#### driveExportScheduled
+
+Google Driveエクスポートの定期リトライ（ADR-0022）。
+
+| 項目 | 値 |
+|------|-----|
+| トリガー | Cloud Scheduler (15分間隔) |
+| リージョン | asia-northeast1 |
+| タイムアウト | 540秒 |
+
+`driveExportStatus` が `error` の書類、または `exporting` のまま長時間滞留した書類を再エンキューする（outboxパターンのクラッシュ回復）。
+
+#### driveFolderClaimDivergentSweep
+
+Driveフォルダのclaimのうち、人手での解決が必要な状態（`divergent`）で滞留しているものを日次で観測する（Issue #871）。
+
+| 項目 | 値 |
+|------|-----|
+| トリガー | Cloud Scheduler (24時間間隔) |
+| リージョン | asia-northeast1 |
+| タイムアウト | 60秒 |
+
+`divergent` の件数と最古の滞留時間を構造化ログ（`event: claimDivergentBacklog`）に出力する。3日を超える滞留があれば警告ログを追加で出力し、ログベースメトリクスのアラートを発火させる。
 
 ### Callable Functions
 
@@ -73,10 +109,18 @@ flowchart TD
 | addMasterAlias | ✅ | ✅ | ✅ |
 | removeMasterAlias | ✅ | ✅ | ✅ |
 | deleteDocument | ✅ | ✅ | - |
+| exchangeGmailAuthCode | ✅ | ✅ | ✅ |
+| exchangeDriveAuthCode | ✅ | ✅ | ✅ |
+| retryDriveExport | ✅ | ✅ | ✅ |
 
 - **認証**: Firebase Authentication（`request.auth`チェック）
 - **ホワイトリスト**: `users/{uid}`ドキュメント存在確認
 - **adminロール**: `users/{uid}.role === 'admin'`確認
+
+**管理者向けの呼び出し型関数（上表で adminロール ✅ のもの）:**
+- `exchangeGmailAuthCode`: Gmail OAuthの認証コードをrefresh_tokenに交換し、Secret Managerへ保存する（設定画面のGmail連携）
+- `exchangeDriveAuthCode`: Google Driveの認証コードを同様に交換して保存する。Gmail連携とは認証情報・接続先が独立（ADR-0022）
+- `retryDriveExport`: `driveExportStatus` が `error` の書類のDriveエクスポートを手動で再実行する（エラー一覧画面の「リトライ」ボタン）
 
 #### detectSplitPoints
 
@@ -231,6 +275,32 @@ PDFページを回転する。
 **処理内容:**
 - ドキュメント作成/更新時: `search_index` コレクションの反転インデックスを更新
 - ドキュメント削除時: 該当インデックスエントリを削除
+
+#### onDocumentWriteDriveExport
+
+書類が確認済みになった時点で、Google Driveへ自動エクスポートする（ADR-0022）。
+
+| 項目 | 値 |
+|------|-----|
+| トリガー | Firestore `onDocumentWritten` (`documents/{docId}`) |
+| 認証 | 不要（内部トリガー） |
+
+**処理内容:**
+- `verified` が false→true になった時点（確認ボタン押下）で、feature flagと許可リストを確認し、対象ならエクスポートする。対象外なら何も書き込まない
+- outboxパターン（`driveExportStatus`: フィールド不在 → `exporting` → `exported` / `error`）。二重実行は、単一トランザクションでのクレームで防ぐ（確認ボタンの二重タップ等）
+- 失敗・滞留分は `driveExportScheduled` が再試行し、`error` は `retryDriveExport` で手動再実行できる
+
+#### onCustomerMasterWrite
+
+顧客マスターの担当ケアマネ名の変更を、該当顧客の書類へ反映する。
+
+| 項目 | 値 |
+|------|-----|
+| トリガー | Firestore `onDocumentWritten` (`masters/customers/items/{customerId}`) |
+| 認証 | 不要（内部トリガー） |
+
+**処理内容:**
+- 顧客マスターの `careManagerName` が変更されたとき、該当顧客の全書類の `careManager` と `careManagerKey` を更新する
 
 ### セットアップ用 HTTP Functions
 

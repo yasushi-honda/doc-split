@@ -8,7 +8,8 @@
 | ホワイトリスト認証 | P0 | ✅ | 登録ユーザーのみアクセス可 |
 | Gmail添付取得 | P0 | ✅ | 定期自動取得 |
 | AI OCR | P0 | ✅ | PaddleOCR（Cloud Run） |
-| **AI要約** | P1 | ✅ | OCR結果からAI要約を生成 |
+| **AI要約** | P1 | ✅ | OCR結果から、手動依頼でAI要約を生成（自前のSarashina、非同期） |
+| **Google Driveエクスポート** | P1 | ✅ | 確認済みの書類をGoogle Driveへ自動保存（環境ごとにfeature flagと許可リストで有効化。設定画面でOAuth連携・フォルダ構成を設定） |
 | 書類一覧表示 | P0 | ✅ | 検索・フィルター付き |
 | PDFビューアー | P0 | ✅ | react-pdf |
 | PDF分割 | P1 | ✅ | 自動検出 + 手動調整 |
@@ -53,7 +54,7 @@
 
 - PDFビューアー（ズーム、ページ送り、**回転の永続保存**）
 - メタ情報サイドバー（**モバイルでは折りたたみ可能**）
-- **AI要約表示**（OCR結果から自動生成、再生成ボタン付き）
+- **AI要約表示**（手動で依頼して生成、「AI要約を生成」ボタン。生成は非同期）
 - **OCR結果表示**（アコーディオン式）
 - **OCR確認ステータス**: 確認済み/未確認のトグル、確認者・確認日時を記録
 - **モバイル対応**: AI要約・OCR結果はポップアップ表示
@@ -78,6 +79,7 @@
 - エラー種別フィルター
 - 再処理ボタン
 - 解決済みマーク
+- Google Driveエクスポートのエラー表示と、リトライボタン
 
 ### 6. マスター管理画面
 
@@ -102,6 +104,7 @@
 ```
 
 - Gmail監視設定
+- Google Drive連携（OAuth連携、フォルダ構成のテンプレート編集）
 - ユーザー管理（追加・削除・ロール変更）
 - 通知設定
 
@@ -142,6 +145,9 @@
 |------|------|------|
 | `checkGmailAttachments` | 5分 | Gmail添付ファイル取得（MD5重複チェック付き） |
 | `processOCR` | 1分 | OCR処理実行（ポーリング一本化、ADR-0010） |
+| `generateSummaryBatch` | 1分 | AI要約の依頼を非同期に処理（ADR-0027） |
+| `driveExportScheduled` | 15分 | Driveエクスポートの定期リトライ（ADR-0022） |
+| `driveFolderClaimDivergentSweep` | 24時間 | Driveフォルダclaimの`divergent`滞留の日次観測（Issue #871） |
 
 ### Callable Functions（オンデマンド）
 
@@ -151,7 +157,10 @@
 | `splitPdf` | PDF分割実行 |
 | `rotatePdfPages` | ページ回転（永続保存） |
 | `getOcrText` | 大容量OCR結果取得 |
-| `regenerateSummary` | AI要約再生成 |
+| `regenerateSummary` | AI要約の手動依頼（受付のみ。生成は`generateSummaryBatch`） |
+| `exchangeGmailAuthCode` | Gmail OAuth認証コード交換（管理者のみ） |
+| `exchangeDriveAuthCode` | Google Drive OAuth認証コード交換（管理者のみ、ADR-0022） |
+| `retryDriveExport` | Driveエクスポートの手動リトライ（管理者のみ） |
 | `searchDocuments` | 全文検索（日付パース対応） |
 | `uploadPdf` | ローカルPDFアップロード |
 | `deleteDocument` | ドキュメント削除（ホワイトリスト登録済みユーザー） |
