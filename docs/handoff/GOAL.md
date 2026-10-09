@@ -1,5 +1,5 @@
 ---
-updated: 2026-10-07
+updated: 2026-10-09
 ---
 <!-- 前ミッション(dev/kanameone/cocoro環境監査・保守検証)は2026-07-20完遂。全文はdocs/handoff/LATEST.md参照。 -->
 <!-- Google Drive連携Phase1 (MVP)実装ミッションは2026-07-22完了(PR#700マージ)。詳細は本ファイル末尾「Google Drive連携Phase1完遂」節+docs/handoff/LATEST.md参照。 -->
@@ -29,6 +29,16 @@ updated: 2026-10-07
 - [x] PR-2(残りのdocs、docs-only) → PR #1138
 - [x] 展開(dev→kanameone→cocoro、番号単位の承認) → 2026-10-07完了。Functions(3環境)・Hosting(kanameone・cocoro、devは自動)。devでPaddleOCRのCloud Runリビジョン切替(00022→00021→`--to-latest`)を実演し、100%復帰を確認
 - [x] GCP設定(`roles/aiplatform.user`剥奪・Vertex AI API無効化、環境別に番号単位の承認) → 2026-10-08完了(承認7=dev、8=kanameone、9=cocoro)
+
+**Paddle運用上の発見: 高画素数画像でのメモリ不足(2026-10-09、Gemini廃止の副次対応、完了)**: kanameoneの`error`1件(画像書類、`PaddleOCR request failed: 503`)の調査で、`paddle-ocr`(4GiB)が12Mpx級の画像でメモリ不足(`Container terminated on signal 9`、HTTP 503)になると判明した。Gemini時代は処理できていた書類がPaddleで落ちうる、というGemini廃止の副作用。
+- **原因の確定**: devで合成JPEG(実データなし、`paddle-ocr-image-probe`、PR #1147)を送って再現。4GiBでは7Mpx以下は成功、7.7〜9.2Mpxは不安定(1回目503→再試行で成功)、9.7Mpx以上(4000x3000等)は確実に失敗。**メモリ8GiBでは同じ画像が全て1回目で成功**したため、原因は4GiBのメモリ不足と確定(使用量そのものは未計測)。処理は画素数に比例して遅くなる(6.8Mpxで約55秒、12Mpxで105〜156秒)
+- **対策(追加費用$0、メモリは4GiBのまま)**: `paddle-ocr`がOCRエンジンへ渡す前に、長辺が上限を超える画像だけをアスペクト比を保って縮小する(`MAX_IMAGE_LONG_SIDE`、既定2500px)。**縮小するのはOCR入力のみで、Storageの原本は不変**。PDFには適用しない。ピクセル数ガード(展開爆弾対策)は縮小前の画素数で判定する既存順序を維持。PR #1148(縮小処理)・#1150(既定を3000→2500pxに変更)
+- **上限の決め方**: 4GiBのまま、上限より大きい6種類の画像を順に送り「1回目に503になった件数」を比較(基準: 0件)。2500pxは6件すべて成功(最長86秒)、3000pxは6件中2件が1回目503で**うち1件は再試行でも失敗**。基準を満たす2500pxを採用。6件の測定で確率の見積もりとしては粗い
+- **精度確認**(PR #1149のツール、goldenのPDFを画像化): 縮小あり(2500px)で12件(4文書x control/large/partial)すべて文字単位の類似度1.000。**判定力に限界がある**: goldenは大きく印字された約63〜66文字の短文で、全件1.000のため「縮小しても落ちない」ではなく「落ちるとしてもこの確認では検出できない」。実際の小さい文字・ブレ・影・斜めの写真は再現していない。縮小なし(+8GiB)の比較実行は、1.000が上限のため取りやめた
+- **展開**: dev・kanameone・cocoroの3環境へ`deploy-paddle-ocr.yml`で展開済み(メモリ4Gi・min1/max3は不変、`OCR_PROVIDER=paddle`・URLも不変)。devのプローブで6件すべて1回目成功。展開後の`paddle-ocr`/`processocr`はERROR以上0件
+- **実書類での確認**: 該当の`error`1件を`fix-stuck-documents --doc-id`で`pending`に戻して再処理し、リトライなし(`retryCount` 0)で`processed`(`ocrExtraction.version`=`PP-OCRv6_medium`)。kanameoneの`error`は0件に。確認したのは`status`・`ocrExtraction.version`・件数のみで、書類の内容は参照していない
+- **公開ログの扱い(再発防止)**: `fix-stuck-documents`が書類名(`fileName`)を`console.log`しており、リポジトリは公開のため、Actions経由で実行すると顧客の書類名が公開ログに残る状態だった。実行前に気づき、書類IDとステータスのみの出力に修正し契約テストで固定(PR #1151)。**未対応**: 他の運用スクリプト(`inspect-document`・`cleanup-duplicates`等)にも書類名・顧客名を出力するものがありうる(棚卸し未実施、条件: 該当スクリプトを実行する前、または次回の運用スクリプト変更時)
+- **未解決・継続観察**: 精度は本番で今後入る画像書類の読み取り結果で確認する(trigger=画像書類の流入)。実際の画像書類がgolden画像より重い(処理が遅い)可能性があり、処理上限(`MAX_PROCESSING_SECONDS`=240秒)に近づく場合は上限の見直しを検討する。再発時(画像書類で`error`・503)は、縮小上限の引き下げ(環境変数`MAX_IMAGE_LONG_SIDE`)またはメモリ8GiB化(1環境あたり月約$26の増加、公式単価の概算、実額は請求画面で確認)を再検討する
 
 **PaddleOCRの高速化に関する助言(2026-10-08、別セッション`wan-vpn-ipsec-setup`のlocal-ai-lab実測、条件待ち)**: ①paddlepaddle 3.3.xを避け3.2.2に固定(mkldnn×新IRのクラッシュ、Issue #77340)は**適用済み**(`requirements.txt`は`paddlepaddle==3.2.2`、`enable_mkldnn=True`、ADR-0025 PR4c)。②〜④(PP-OCRv6_small+ONNX Runtime化による高速化、評価時の正規化〈「〜」と「～」、HTMLタグ除去など〉、劣化画像〈低解像度75dpi・強いスキャン劣化〉の精度測定)は**今は着手しない**: OCRは1分ごとの非同期処理で速度が課題になっておらず、要配慮個人情報を含む実書類の精度を優先するため。助言の数値はMac mini(arm64)・合成帳票のもので、本番のlinux/amd64とは環境が異なり、Intel XeonでONNX Runtimeがネイティブより遅い例もあるため、そのまま当てはめない。**trigger**=OCRの処理時間が運用上の問題になった時(`processocr`のタイムアウト、書類の滞留増加など)。**昇格後にやること**: 実書類に近い条件(スキャン書類、サンプルは決裁者が用意)でmedium/smallの精度と速度を実測し、決裁者に提示。**確認方法**: `processocr_request_timeout`アラート、`fix-stuck-documents --dry-run`の対象件数。
 
@@ -460,7 +470,7 @@ kanameoneから「1FAXに複数人分の書類がまとまっている場合の�
 
 ## 現在のミッション【進行中・2026-10-06開始】Gemini完全廃止(緊急用OCR経路も含めて使わない)
 
-コード撤去と3環境への展開は2026-10-07に完了(PR #1137・#1138・#1139マージ)。**GCP側の無効化(3環境)まで完了(2026-10-08)。残りは、kanameone・cocoroの新規書類での`ocrExtraction.version`確認(書類の流入待ち)と、クライアント向け文言の最終確認**。詳細・完了の定義・証明コマンドは本ファイル冒頭の「Gemini完全廃止」節、決定記録は`docs/adr/0029-gemini-full-removal.md`。
+コード撤去と3環境への展開は2026-10-07に完了(PR #1137・#1138・#1139マージ)。**GCP側の無効化(3環境)まで完了(2026-10-08)。2026-10-09にkanameone・cocoroの新規書類(314件・15件)が全てPaddleで処理されていることを確認済み。残りは、クライアント向け文言の最終確認(decision-maker)と、「滞留が増えていない」の展開前後比較(展開前の件数が無く未実施)**。同日、Paddleの高画素数画像でのメモリ不足(kanameoneの`error`1件)を原因確定・対策・3環境展開・実書類での再処理成功まで完了(上記「Paddle運用上の発見」)。詳細・完了の定義・証明コマンドは本ファイル冒頭の「Gemini完全廃止」節、決定記録は`docs/adr/0029-gemini-full-removal.md`。
 
 ## 【完了・別件・並行トラック】Google Drive連携Phase1本番展開(2026-07-23開始)
 
