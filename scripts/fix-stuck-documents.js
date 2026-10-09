@@ -33,7 +33,10 @@ admin.initializeApp({ projectId });
 const db = admin.firestore();
 
 async function resetDoc(docRef, data) {
-  console.log(`  - ${docRef.id}: ${data.fileName || '(no name)'} [${data.status}]`);
+  // 書類名(fileName)は出力しない: 本スクリプトはActions(run-ops-script.yml)経由で実行され、リポジトリは
+  // 公開のため、標準出力が公開ログに残る。顧客の書類名には要配慮個人情報にあたりうるものがある。
+  // 対象の特定は書類IDとステータスで足りる(scripts/lib/fixStuckDocumentsLogContract.test.ts が固定)。
+  console.log(`  - ${docRef.id} [${data.status}]`);
   if (dryRun) return;
   await docRef.update({
     status: 'pending',
