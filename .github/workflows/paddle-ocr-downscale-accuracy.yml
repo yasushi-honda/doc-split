@@ -1,0 +1,120 @@
+name: PaddleOCR Downscale Accuracy (dev only)
+
+# 画像の自動縮小(MAX_IMAGE_LONG_SIDE)が読み取り精度を落とさないかを確認する診断。
+# goldenのPDF(実データではない)を .github/scripts/render_golden_images.py で3種類の画像
+# (control/large/partial)にし、devの /ocr へ送って期待テキストと文字単位の類似度で照合する。
+# スクリプト: scripts/paddle-ocr-downscale-accuracy.ts
+#
+# 同じ画像を、devサービスの設定を変えて(縮小あり=既定3000 / 縮小なし=大きい値+メモリ8GiB)
+# 2回実行して比較する。設定の切替はこのワークフローの外(gcloud run services update)で行う。
+#
+# 設計判断(paddle-ocr-image-probe.ymlと同方針):
+# - concurrency groupはdeploy-paddle-ocr.yml/paddle-ocr-verify.ymlと同一にして排他にする。
+# - inputs.*/secrets.* は step-level env: 経由で変数化し、run: 内で ${{ }} を直接展開しない。
+# - devのみ。合成画像ではなくgoldenのPDFを画像化したものだが、実データではない。
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment(devのみ対応)'
+        required: true
+        type: choice
+        options:
+          - dev
+      label:
+        description: '実行の設定を識別する短いラベル(例: downscale3000 / no-downscale-8gi)。英数字とハイフンのみ'
+        required: true
+        type: string
+
+concurrency:
+  group: deploy-paddle-ocr-${{ github.event.inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  accuracy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate inputs
+        env:
+          ENVIRONMENT: ${{ github.event.inputs.environment }}
+          LABEL: ${{ github.event.inputs.label }}
+        run: |
+          set -euo pipefail
+          if [ "$ENVIRONMENT" != "dev" ]; then
+            echo "ERROR: devのみ対応(got: $ENVIRONMENT)" >&2
+            exit 1
+          fi
+          if ! printf '%s' "$LABEL" | grep -Eq '^[A-Za-z0-9-]{1,40}$'; then
+            echo "ERROR: label は英数字とハイフンのみ(1〜40文字)で指定してください" >&2
+            exit 1
+          fi
+
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY_DEV }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Render golden images
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet pillow pypdfium2==4.30.0
+          python3 .github/scripts/render_golden_images.py scripts/fixtures/paddle-ocr-golden golden-images
+          ls -l golden-images
+
+      - name: Run accuracy check
+        id: run_accuracy
+        env:
+          LABEL: ${{ github.event.inputs.label }}
+        run: |
+          set +e
+          npx ts-node scripts/paddle-ocr-downscale-accuracy.ts --dir=golden-images --label="$LABEL" --out=paddle-ocr-downscale-accuracy.json
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Step Summary
+        if: always()
+        run: |
+          if [ -f paddle-ocr-downscale-accuracy.json ]; then
+            {
+              echo '### PaddleOCR downscale accuracy'
+              echo '```json'
+              cat paddle-ocr-downscale-accuracy.json
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: paddle-ocr-downscale-accuracy-report
+          path: paddle-ocr-downscale-accuracy.json
+          if-no-files-found: warn
+
+      - name: Fail job if accuracy script reported non-zero exit
+        if: always()
+        env:
+          EXIT_CODE: ${{ steps.run_accuracy.outputs.exit_code }}
+        run: |
+          set -euo pipefail
+          if [ "${EXIT_CODE:-1}" != "0" ]; then
+            echo "ERROR: paddle-ocr-downscale-accuracy.ts が非ゼロ終了しました(exit_code=${EXIT_CODE:-unknown})" >&2
+            exit 1
+          fi
+          echo "OK: 精度確認は正常終了しました(結果は比較して判断)"
