@@ -63,4 +63,26 @@ describe('summarizeProbe', () => {
   it('結果が空ならfail-loud', () => {
     assert.throws(() => summarizeProbe([]));
   });
+
+  it('4000px超しか送っていない場合は、成功した対照が無いので失敗しても閾値依存とは断定しない', () => {
+    assert.equal(summarizeProbe([crash(4080, 3060)]).verdict, 'INCONCLUSIVE');
+  });
+
+  it('サービスの入力拒否(422など4xx)は処理失敗に数えず、評価対象外にする', () => {
+    const rejected: ProbeResult = { width: 9000, height: 6000, status: 422, wallMs: 50, errorCode: 'PIXEL_LIMIT_EXCEEDED' };
+    const s = summarizeProbe([ok(3000, 2250), rejected]);
+    assert.equal(s.above4000.failed, 0);
+    assert.equal(s.above4000.rejected, 1);
+    assert.equal(s.verdict, 'INCONCLUSIVE');
+  });
+
+  it('入力拒否と処理失敗が混在しても、対照成功+超側の処理失敗なら閾値依存と判定する', () => {
+    const rejected: ProbeResult = { width: 9000, height: 6000, status: 422, wallMs: 50, errorCode: 'PIXEL_LIMIT_EXCEEDED' };
+    assert.equal(summarizeProbe([ok(3000, 2250), rejected, crash(4080, 3060)]).verdict, 'FAILS_ONLY_ABOVE_4000');
+  });
+
+  it('ネットワーク断・タイムアウト(status null)は処理失敗に数える', () => {
+    const timeout: ProbeResult = { width: 4080, height: 3060, status: null, wallMs: 250000, errorCode: 'CLIENT_TIMEOUT' };
+    assert.equal(summarizeProbe([ok(3000, 2250), timeout]).verdict, 'FAILS_ONLY_ABOVE_4000');
+  });
 });

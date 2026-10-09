@@ -38,7 +38,16 @@ export interface ProbeResult {
   errorCode: string | null;
 }
 
-export type ProbeVerdict = 'NOT_REPRODUCED' | 'FAILS_ONLY_ABOVE_4000' | 'FAILS_ALSO_AT_OR_BELOW_4000';
+export type ProbeVerdict = 'NOT_REPRODUCED' | 'FAILS_ONLY_ABOVE_4000' | 'FAILS_ALSO_AT_OR_BELOW_4000' | 'INCONCLUSIVE';
+
+export interface ProbeBucket {
+  total: number;
+  ok: number;
+  /** 処理失敗(5xx・ネットワーク断・タイムアウト)。OCRが実行された/しようとして落ちたもの。 */
+  failed: number;
+  /** サービスの入力拒否(4xx、例: 422 PIXEL_LIMIT_EXCEEDED)。OCRが走っていないため評価対象外。 */
+  rejected: number;
+}
 
 const MAX_SIDE_LIMIT = 4000;
 const REQUEST_TIMEOUT_MS = 250_000;
@@ -89,33 +98,36 @@ export function parseProbeArgs(argv: string[]): ProbeArgs {
   };
 }
 
-function failed(r: ProbeResult): boolean {
-  return r.status !== 200;
+function bucketOf(results: ProbeResult[]): ProbeBucket {
+  const ok = results.filter((r) => r.status === 200).length;
+  const rejected = results.filter((r) => r.status !== null && r.status >= 400 && r.status < 500).length;
+  return { total: results.length, ok, failed: results.length - ok - rejected, rejected };
 }
 
 export function summarizeProbe(results: ProbeResult[]): {
-  atOrBelow4000: { total: number; failed: number };
-  above4000: { total: number; failed: number };
+  atOrBelow4000: ProbeBucket;
+  above4000: ProbeBucket;
   verdict: ProbeVerdict;
 } {
   if (results.length === 0) {
     throw new Error('プローブ結果が空です');
   }
-  const low = results.filter((r) => Math.max(r.width, r.height) <= MAX_SIDE_LIMIT);
-  const high = results.filter((r) => Math.max(r.width, r.height) > MAX_SIDE_LIMIT);
-  const lowFailed = low.filter(failed).length;
-  const highFailed = high.filter(failed).length;
-  let verdict: ProbeVerdict = 'NOT_REPRODUCED';
-  if (lowFailed > 0) {
+  const low = bucketOf(results.filter((r) => Math.max(r.width, r.height) <= MAX_SIDE_LIMIT));
+  const high = bucketOf(results.filter((r) => Math.max(r.width, r.height) > MAX_SIDE_LIMIT));
+
+  let verdict: ProbeVerdict;
+  if (low.failed > 0) {
     verdict = 'FAILS_ALSO_AT_OR_BELOW_4000';
-  } else if (highFailed > 0) {
-    verdict = 'FAILS_ONLY_ABOVE_4000';
+  } else if (high.failed > 0) {
+    // 閾値依存と言えるのは、4000px以下で成功した対照がある場合だけ。
+    verdict = low.ok > 0 ? 'FAILS_ONLY_ABOVE_4000' : 'INCONCLUSIVE';
+  } else if (high.ok === 0) {
+    // 4000px超でOCRが実行されていない(未送信、または全て入力拒否)ため、再現有無を言えない。
+    verdict = 'INCONCLUSIVE';
+  } else {
+    verdict = 'NOT_REPRODUCED';
   }
-  return {
-    atOrBelow4000: { total: low.length, failed: lowFailed },
-    above4000: { total: high.length, failed: highFailed },
-    verdict,
-  };
+  return { atOrBelow4000: low, above4000: high, verdict };
 }
 
 async function probeOne(serviceUrl: string, token: string, file: string, size: ProbeSize): Promise<ProbeResult> {

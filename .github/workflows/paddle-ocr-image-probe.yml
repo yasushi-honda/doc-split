@@ -100,16 +100,25 @@ jobs:
           SIZES: ${{ github.event.inputs.sizes }}
         run: |
           set +e
+          # ログ収集をこの実行の時間窓に限定するため、送信開始時刻を記録する(他のdevリクエスト由来の
+          # max_side_limit/signal 9を拾って誤って「再現した」と読めないようにする)。
+          echo "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
           npx ts-node scripts/paddle-ocr-image-probe.ts --dir=probe-images --sizes="$SIZES" --out=paddle-ocr-image-probe.json
           echo "exit_code=$?" >> "$GITHUB_OUTPUT"
           exit 0
 
       - name: Collect paddle-ocr container logs (dev)
         if: always()
+        env:
+          PROBE_STARTED_AT: ${{ steps.run_probe.outputs.started_at }}
         run: |
           set +e
-          gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="paddle-ocr" AND (textPayload:"max_side_limit" OR textPayload:"signal 9")' \
-            --project=doc-split-dev --freshness=30m --limit=50 --format="value(timestamp,textPayload)" \
+          if [ -z "$PROBE_STARTED_AT" ]; then
+            echo "probe開始時刻が記録されていないため、ログ収集をスキップします" | tee paddle-ocr-image-probe-logs.txt
+            exit 0
+          fi
+          gcloud logging read "resource.type=\"cloud_run_revision\" AND resource.labels.service_name=\"paddle-ocr\" AND timestamp>=\"${PROBE_STARTED_AT}\" AND (textPayload:\"max_side_limit\" OR textPayload:\"signal 9\")" \
+            --project=doc-split-dev --limit=50 --format="value(timestamp,textPayload)" \
             > paddle-ocr-image-probe-logs.txt 2>&1
           echo "--- max_side_limit / signal 9 lines: $(wc -l < paddle-ocr-image-probe-logs.txt)"
           cat paddle-ocr-image-probe-logs.txt | cut -c1-200
