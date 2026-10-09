@@ -154,12 +154,13 @@ sequenceDiagram
 | `seedAllMasters` | Callable | 全マスターデータ初期投入 |
 | `initTenantSettings` | Callable | テナント初期設定 |
 | `registerAdminUser` | Callable | 管理者ユーザー登録 |
-| `onCustomerMasterWrite` | Firestore Trigger | 顧客マスター変更時にドキュメント再照合 |
+| `onCustomerMasterWrite` | Firestore Trigger | 顧客マスターの担当ケアマネ名の変更を、該当顧客の全書類（`careManager`・`careManagerKey`）へ反映 |
 | `exchangeGmailAuthCode` | Callable | Gmail OAuth認証コード交換 |
 | `exchangeDriveAuthCode` | Callable | Google Drive OAuth認証コード交換（ADR-0022） |
 | `onDocumentWriteDriveExport` | Firestore Trigger | `verified`確定時にGoogle Driveへ自動エクスポート（outboxパターン、ADR-0022） |
 | `retryDriveExport` | Callable | Driveエクスポート失敗時の手動リトライ |
 | `driveExportScheduled` | Scheduled (15分) | エクスポート停滞docの定期requeue（sweep） |
+| `driveFolderClaimDivergentSweep` | Scheduled (24時間) | Driveフォルダclaimの`divergent`（人手の解決が必要な状態）の滞留を日次で観測し、3日超でアラート（Issue #871） |
 
 ### Firestore コレクション
 
