@@ -54,6 +54,35 @@ export function isOverBudget(elapsedMs: number, budgetMs: number): boolean {
   return elapsedMs > budgetMs;
 }
 
+export interface AccuracyReport {
+  schemaVersion: 1;
+  label: string | null;
+  serviceUrl: string;
+  incomplete: boolean;
+  error?: string;
+  records: AccuracyRecord[];
+  summary: Record<string, VariantSummary>;
+}
+
+/** 途中失敗でも集まった結果とエラー内容を残すための報告生成(結果0件でも例外にしない)。 */
+export function buildReport(input: {
+  label: string | null;
+  serviceUrl: string;
+  records: AccuracyRecord[];
+  incomplete: boolean;
+  error?: string;
+}): AccuracyReport {
+  return {
+    schemaVersion: 1,
+    label: input.label,
+    serviceUrl: input.serviceUrl,
+    incomplete: input.incomplete,
+    ...(input.error !== undefined ? { error: input.error } : {}),
+    records: input.records,
+    summary: input.records.length > 0 ? summarizeAccuracy(input.records) : {},
+  };
+}
+
 export function parseImageName(fileName: string): { fixtureId: string; variant: string } {
   const m = /^([A-Za-z0-9-]+)__([A-Za-z0-9-]+)\.jpg$/.exec(fileName);
   if (!m) {
@@ -140,44 +169,56 @@ async function main(): Promise<void> {
   const records: AccuracyRecord[] = [];
   const startedAt = Date.now();
   let budgetExceeded = false;
-  for (const f of files) {
-    if (isOverBudget(Date.now() - startedAt, TOTAL_BUDGET_MS)) {
-      budgetExceeded = true;
-      console.error(`実行時間の予算(${TOTAL_BUDGET_MS / 60000}分)を超えたため、残りの画像は送らず終了します`);
-      break;
-    }
-    const { fixtureId, variant } = parseImageName(f);
-    const pagesPath = path.join(GOLDEN_DIR, `${fixtureId}.pages.json`);
-    if (!fs.existsSync(pagesPath)) throw new Error(`期待テキスト(pages.json)がありません: ${pagesPath}`);
-    const expected = pageTextFromPagesJson(JSON.parse(fs.readFileSync(pagesPath, 'utf-8')));
+  let failure: string | undefined;
+  try {
+    for (const f of files) {
+      if (isOverBudget(Date.now() - startedAt, TOTAL_BUDGET_MS)) {
+        budgetExceeded = true;
+        console.error(`実行時間の予算(${TOTAL_BUDGET_MS / 60000}分)を超えたため、残りの画像は送らず終了します`);
+        break;
+      }
+      const { fixtureId, variant } = parseImageName(f);
+      const pagesPath = path.join(GOLDEN_DIR, `${fixtureId}.pages.json`);
+      if (!fs.existsSync(pagesPath)) throw new Error(`期待テキスト(pages.json)がありません: ${pagesPath}`);
+      const expected = pageTextFromPagesJson(JSON.parse(fs.readFileSync(pagesPath, 'utf-8')));
 
-    let r = await postImage(serviceUrl, await tokenProvider.getToken(), path.join(values.dir, f));
-    if (r.status === null || r.status >= 500) {
-      // コンテナ再起動を待って1回だけ再試行する(精度ではなく可用性の揺れを除くため)。
-      await new Promise((resolve) => setTimeout(resolve, RETRY_WAIT_MS));
-      r = await postImage(serviceUrl, await tokenProvider.getToken(), path.join(values.dir, f));
+      let r = await postImage(serviceUrl, await tokenProvider.getToken(), path.join(values.dir, f));
+      if (r.status === null || r.status >= 500) {
+        // コンテナ再起動を待って1回だけ再試行する(精度ではなく可用性の揺れを除くため)。
+        await new Promise((resolve) => setTimeout(resolve, RETRY_WAIT_MS));
+        r = await postImage(serviceUrl, await tokenProvider.getToken(), path.join(values.dir, f));
+      }
+      const record: AccuracyRecord = {
+        fixtureId,
+        variant,
+        status: r.status,
+        wallMs: r.wallMs,
+        similarity: r.status === 200 ? charSimilarity(expected, r.text) : 0,
+        expectedLength: Array.from(expected.replace(/\s+/g, '')).length,
+        actualLength: Array.from(r.text.replace(/\s+/g, '')).length,
+      };
+      console.log(
+        `${fixtureId} ${variant}: status=${record.status} similarity=${record.similarity.toFixed(3)} wallMs=${record.wallMs}`
+      );
+      records.push(record);
     }
-    const record: AccuracyRecord = {
-      fixtureId,
-      variant,
-      status: r.status,
-      wallMs: r.wallMs,
-      similarity: r.status === 200 ? charSimilarity(expected, r.text) : 0,
-      expectedLength: Array.from(expected.replace(/\s+/g, '')).length,
-      actualLength: Array.from(r.text.replace(/\s+/g, '')).length,
-    };
-    console.log(
-      `${fixtureId} ${variant}: status=${record.status} similarity=${record.similarity.toFixed(3)} wallMs=${record.wallMs}`
-    );
-    records.push(record);
+  } catch (err) {
+    // 途中の予期せぬ失敗(トークン更新失敗など)でも、集まった結果とエラー内容を報告に残してから失敗終了する。
+    failure = err instanceof Error ? err.message : String(err);
   }
 
-  const summary = summarizeAccuracy(records);
-  console.log('summary', JSON.stringify(summary));
-  fs.writeFileSync(
-    out,
-    JSON.stringify({ schemaVersion: 1, label: values.label ?? null, serviceUrl, incomplete: budgetExceeded, records, summary }, null, 2)
-  );
+  const report = buildReport({
+    label: values.label ?? null,
+    serviceUrl,
+    records,
+    incomplete: budgetExceeded || failure !== undefined,
+    error: failure,
+  });
+  console.log('summary', JSON.stringify(report.summary));
+  fs.writeFileSync(out, JSON.stringify(report, null, 2));
+  if (failure !== undefined) {
+    throw new Error(`精度確認が途中で失敗しました(集まった結果は${out}に保存済み): ${failure}`);
+  }
   if (budgetExceeded) {
     throw new Error('実行時間の予算を超えたため、結果は一部の画像のみです(incomplete=true)');
   }

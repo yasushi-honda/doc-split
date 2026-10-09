@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { isOverBudget, pageTextFromPagesJson, parseImageName, summarizeAccuracy, type AccuracyRecord } from '../paddle-ocr-downscale-accuracy';
+import { buildReport, isOverBudget, pageTextFromPagesJson, parseImageName, summarizeAccuracy, type AccuracyRecord } from '../paddle-ocr-downscale-accuracy';
 
 describe('parseImageName', () => {
   it('<fixtureId>__<variant>.jpg を分解する', () => {
@@ -65,5 +65,38 @@ describe('isOverBudget', () => {
     assert.equal(isOverBudget(1001, 1000), true);
     assert.equal(isOverBudget(1000, 1000), false);
     assert.equal(isOverBudget(0, 1000), false);
+  });
+});
+
+
+describe('buildReport', () => {
+  const rec = (similarity: number): AccuracyRecord => ({
+    fixtureId: 'f',
+    variant: 'large',
+    status: 200,
+    wallMs: 1,
+    similarity,
+    expectedLength: 10,
+    actualLength: 10,
+  });
+
+  it('途中で失敗しても、集まった結果とエラー内容を報告に残す(incomplete=true)', () => {
+    const r = buildReport({ label: 'x', serviceUrl: 'https://s', records: [rec(0.9)], incomplete: true, error: 'token refresh failed' });
+    assert.equal(r.incomplete, true);
+    assert.equal(r.error, 'token refresh failed');
+    assert.equal(r.records.length, 1);
+    assert.equal(r.summary.large.mean, 0.9);
+  });
+
+  it('結果が0件でも例外にせず、空のsummaryで報告を作る(最初の送信前の失敗でも原因が残る)', () => {
+    const r = buildReport({ label: null, serviceUrl: 'https://s', records: [], incomplete: true, error: 'boom' });
+    assert.deepEqual(r.summary, {});
+    assert.equal(r.error, 'boom');
+  });
+
+  it('正常終了ならincomplete=false・errorなし', () => {
+    const r = buildReport({ label: 'x', serviceUrl: 'https://s', records: [rec(1)], incomplete: false });
+    assert.equal(r.incomplete, false);
+    assert.equal(r.error, undefined);
   });
 });
