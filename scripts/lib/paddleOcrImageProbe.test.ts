@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseProbeArgs, parseSizes, summarizeProbe, type ProbeResult } from '../paddle-ocr-image-probe';
+import { MAX_SIZES, hasAccessError, parseProbeArgs, parseSizes, summarizeProbe, type ProbeResult } from '../paddle-ocr-image-probe';
 
 describe('parseSizes', () => {
   it('WxH をカンマ区切りで解釈する', () => {
@@ -20,6 +20,28 @@ describe('parseSizes', () => {
     assert.throws(() => parseSizes('0x100'));
     assert.throws(() => parseSizes('-1x100'));
     assert.throws(() => parseSizes('axb'));
+  });
+});
+
+describe('parseSizes の上限', () => {
+  it(`${MAX_SIZES}件までは許可し、超えるとジョブ時間枠を守るためfail-loudにする`, () => {
+    const ok = Array.from({ length: MAX_SIZES }, (_, i) => `${1000 + i}x1000`).join(',');
+    assert.equal(parseSizes(ok).length, MAX_SIZES);
+    assert.throws(() => parseSizes(`${ok},9000x1000`), /上限/);
+  });
+});
+
+describe('hasAccessError', () => {
+  const r = (status: number | null): ProbeResult => ({ width: 1, height: 1, status, wallMs: 1, errorCode: null });
+
+  it('401/403/404は認証・設定不備としてプローブ自体の失敗扱いにする', () => {
+    assert.equal(hasAccessError([r(200), r(401)]), true);
+    assert.equal(hasAccessError([r(403)]), true);
+    assert.equal(hasAccessError([r(404)]), true);
+  });
+
+  it('200・503・422・ネットワーク断は認証不備ではない', () => {
+    assert.equal(hasAccessError([r(200), r(503), r(422), r(null)]), false);
   });
 });
 
@@ -68,7 +90,7 @@ describe('summarizeProbe', () => {
     assert.equal(summarizeProbe([crash(4080, 3060)]).verdict, 'INCONCLUSIVE');
   });
 
-  it('サービスの入力拒否(422など4xx)は処理失敗に数えず、評価対象外にする', () => {
+  it('サービスの入力拒否(400/413/415/422)は処理失敗に数えず、評価対象外にする', () => {
     const rejected: ProbeResult = { width: 9000, height: 6000, status: 422, wallMs: 50, errorCode: 'PIXEL_LIMIT_EXCEEDED' };
     const s = summarizeProbe([ok(3000, 2250), rejected]);
     assert.equal(s.above4000.failed, 0);

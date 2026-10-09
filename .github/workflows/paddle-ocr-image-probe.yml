@@ -33,7 +33,7 @@ concurrency:
 jobs:
   probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     permissions:
       contents: read
       id-token: write
@@ -52,6 +52,11 @@ jobs:
           fi
           if ! printf '%s' "$SIZES" | grep -Eq '^[0-9]+[xX][0-9]+(,[0-9]+[xX][0-9]+)*$'; then
             echo "ERROR: sizes は WxH のカンマ区切りで指定してください(got: $SIZES)" >&2
+            exit 1
+          fi
+          # 1リクエスト最大250秒×6件=25分がジョブ時間枠(45分)に収まる上限(scripts側MAX_SIZESと同値)
+          if [ "$(printf '%s' "$SIZES" | tr ',' '\n' | wc -l)" -gt 6 ]; then
+            echo "ERROR: sizes は最大6件までです" >&2
             exit 1
           fi
 

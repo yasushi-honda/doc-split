@@ -51,6 +51,11 @@ export interface ProbeBucket {
 
 const MAX_SIDE_LIMIT = 4000;
 const REQUEST_TIMEOUT_MS = 250_000;
+/** 1リクエスト最大250秒 × MAX_SIZES がワークフローのジョブ時間枠(45分)に収まる上限。 */
+export const MAX_SIZES = 6;
+/** サービスが入力検証で返すステータス(OCR未実行)。401/403/404等の認証・設定不備は含めない。 */
+const INPUT_REJECTION_STATUSES = new Set([400, 413, 415, 422]);
+const ACCESS_ERROR_STATUSES = new Set([401, 403, 404]);
 
 export function parseSizes(raw: string): ProbeSize[] {
   const parts = raw
@@ -59,6 +64,9 @@ export function parseSizes(raw: string): ProbeSize[] {
     .filter((s) => s.length > 0);
   if (parts.length === 0) {
     throw new Error('--sizes が空です(例: 3000x2250,4080x3060)');
+  }
+  if (parts.length > MAX_SIZES) {
+    throw new Error(`--sizes は最大${MAX_SIZES}件までです(got: ${parts.length}、ジョブ時間枠の上限)`);
   }
   return parts.map((p) => {
     const m = /^(\d+)[xX](\d+)$/.exec(p);
@@ -98,9 +106,14 @@ export function parseProbeArgs(argv: string[]): ProbeArgs {
   };
 }
 
+/** 認証・設定不備(401/403/404)があれば、プローブ自体が壊れているので判定せず失敗させる。 */
+export function hasAccessError(results: ProbeResult[]): boolean {
+  return results.some((r) => r.status !== null && ACCESS_ERROR_STATUSES.has(r.status));
+}
+
 function bucketOf(results: ProbeResult[]): ProbeBucket {
   const ok = results.filter((r) => r.status === 200).length;
-  const rejected = results.filter((r) => r.status !== null && r.status >= 400 && r.status < 500).length;
+  const rejected = results.filter((r) => r.status !== null && INPUT_REJECTION_STATUSES.has(r.status)).length;
   return { total: results.length, ok, failed: results.length - ok - rejected, rejected };
 }
 
@@ -188,6 +201,10 @@ async function main(): Promise<void> {
   const summary = summarizeProbe(results);
   console.log(`verdict=${summary.verdict}`, JSON.stringify(summary));
   fs.writeFileSync(args.out, JSON.stringify({ schemaVersion: 1, serviceUrl, results, summary }, null, 2));
+  if (hasAccessError(results)) {
+    // 認証・設定不備のままINCONCLUSIVEで正常終了すると壊れたプローブを見逃すため、レポート出力後に失敗させる。
+    throw new Error('認証または設定の不備(401/403/404)を検出しました。プローブ自体が機能していないため、判定は無効です');
+  }
 }
 
 if (require.main === module) {
