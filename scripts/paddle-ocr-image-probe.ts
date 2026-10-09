@@ -32,6 +32,8 @@ export interface ProbeArgs {
 export interface ProbeResult {
   width: number;
   height: number;
+  /** 試行回数(再試行した場合は2)。単発の503等と再現性のある失敗を区別するための記録。 */
+  attempts?: number;
   /** HTTPステータス。ネットワーク断・タイムアウト時は null。 */
   status: number | null;
   wallMs: number;
@@ -51,7 +53,8 @@ export interface ProbeBucket {
 
 const MAX_SIDE_LIMIT = 4000;
 const REQUEST_TIMEOUT_MS = 250_000;
-/** 1リクエスト最大250秒 × MAX_SIZES がワークフローのジョブ時間枠(45分)に収まる上限。 */
+const RETRY_WAIT_MS = 30_000;
+/** 1件あたり最大(250秒+待機30秒+250秒)×MAX_SIZES がワークフローのジョブ時間枠に近づくが、通常は数秒〜数十秒。最悪でも約53分でジョブ上限(75分)に収まる。 */
 export const MAX_SIZES = 6;
 /** サービスが入力検証で返すステータス(OCR未実行)。401/403/404等の認証・設定不備は含めない。 */
 const INPUT_REJECTION_STATUSES = new Set([400, 413, 415, 422]);
@@ -68,7 +71,7 @@ export function parseSizes(raw: string): ProbeSize[] {
   if (parts.length > MAX_SIZES) {
     throw new Error(`--sizes は最大${MAX_SIZES}件までです(got: ${parts.length}、ジョブ時間枠の上限)`);
   }
-  return parts.map((p) => {
+  const parsed = parts.map((p) => {
     const m = /^(\d+)[xX](\d+)$/.exec(p);
     if (!m) {
       throw new Error(`--sizes の形式が不正です: "${p}"(WxH、正の整数)`);
@@ -80,6 +83,15 @@ export function parseSizes(raw: string): ProbeSize[] {
     }
     return { width, height };
   });
+  // 重複(先頭ゼロ・大文字Xの表記ゆれ含む)を除き、長辺→面積の昇順に並べる。先に大きい画像でコンテナが
+  // 落ちると、再起動中の503で後続の小さい画像が巻き添え失敗し、判定を誤読させるため。
+  const unique = new Map<string, ProbeSize>();
+  for (const sz of parsed) {
+    unique.set(`${sz.width}x${sz.height}`, sz);
+  }
+  return [...unique.values()].sort(
+    (a, b) => Math.max(a.width, a.height) - Math.max(b.width, b.height) || a.width * a.height - b.width * b.height
+  );
 }
 
 export function parseProbeArgs(argv: string[]): ProbeArgs {
@@ -106,6 +118,11 @@ export function parseProbeArgs(argv: string[]): ProbeArgs {
   };
 }
 
+/** 単発の503/429/タイムアウト(コールドスタートや再起動起因)を、再現性のある失敗と区別するための再試行判定。 */
+export function shouldRetry(r: ProbeResult): boolean {
+  return r.status === null || r.status === 429 || r.status >= 500;
+}
+
 /** 認証・設定不備(401/403/404)があれば、プローブ自体が壊れているので判定せず失敗させる。 */
 export function hasAccessError(results: ProbeResult[]): boolean {
   return results.some((r) => r.status !== null && ACCESS_ERROR_STATUSES.has(r.status));
@@ -121,6 +138,7 @@ export function summarizeProbe(results: ProbeResult[]): {
   atOrBelow4000: ProbeBucket;
   above4000: ProbeBucket;
   verdict: ProbeVerdict;
+  caveat: string;
 } {
   if (results.length === 0) {
     throw new Error('プローブ結果が空です');
@@ -140,7 +158,10 @@ export function summarizeProbe(results: ProbeResult[]): {
   } else {
     verdict = 'NOT_REPRODUCED';
   }
-  return { atOrBelow4000: low, above4000: high, verdict };
+  const caveat =
+    '合成JPEG(疎な数字列)での結果。NOT_REPRODUCEDは「この合成画像では再現せず」の意味で、サイズ起因でないことの証明ではない。' +
+    'FAILS_*は同時刻のpaddle-ocrログ(signal 9 / max_side_limit)と突き合わせて確定する。';
+  return { atOrBelow4000: low, above4000: high, verdict, caveat };
 }
 
 async function probeOne(serviceUrl: string, token: string, file: string, size: ProbeSize): Promise<ProbeResult> {
@@ -193,8 +214,16 @@ async function main(): Promise<void> {
       throw new Error(`入力JPEGがありません: ${file}`);
     }
     const token = await tokenProvider.getToken();
-    const r = await probeOne(serviceUrl, token, file, size);
-    console.log(`${size.width}x${size.height}: status=${r.status} wallMs=${r.wallMs} errorCode=${r.errorCode}`);
+    let r = await probeOne(serviceUrl, token, file, size);
+    r.attempts = 1;
+    if (shouldRetry(r)) {
+      // コンテナ再起動(startup probe含む)を待ってから1回だけ再試行する。2回とも失敗した場合だけ失敗と数える。
+      console.log(`${size.width}x${size.height}: 1回目 status=${r.status} errorCode=${r.errorCode}。${RETRY_WAIT_MS / 1000}秒待って再試行`);
+      await new Promise((resolve) => setTimeout(resolve, RETRY_WAIT_MS));
+      r = await probeOne(serviceUrl, await tokenProvider.getToken(), file, size);
+      r.attempts = 2;
+    }
+    console.log(`${size.width}x${size.height}: status=${r.status} wallMs=${r.wallMs} errorCode=${r.errorCode} attempts=${r.attempts}`);
     results.push(r);
   }
 

@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { MAX_SIZES, hasAccessError, parseProbeArgs, parseSizes, summarizeProbe, type ProbeResult } from '../paddle-ocr-image-probe';
+import { MAX_SIZES, hasAccessError, parseProbeArgs, parseSizes, shouldRetry, summarizeProbe, type ProbeResult } from '../paddle-ocr-image-probe';
 
 describe('parseSizes', () => {
   it('WxH をカンマ区切りで解釈する', () => {
@@ -20,6 +20,44 @@ describe('parseSizes', () => {
     assert.throws(() => parseSizes('0x100'));
     assert.throws(() => parseSizes('-1x100'));
     assert.throws(() => parseSizes('axb'));
+  });
+});
+
+describe('parseSizes の正規化', () => {
+  it('長辺の昇順に並べ替える(クラッシュ後の再起動で小さい画像が巻き添え失敗するのを避ける)', () => {
+    assert.deepEqual(parseSizes('4080x3060,3000x2250,4000x3000'), [
+      { width: 3000, height: 2250 },
+      { width: 4000, height: 3000 },
+      { width: 4080, height: 3060 },
+    ]);
+  });
+
+  it('同一寸法の重複と、先頭ゼロ・大文字Xによる表記ゆれの重複は1件にまとめる', () => {
+    assert.deepEqual(parseSizes('4080x3060,4080X3060,04080x3060'), [{ width: 4080, height: 3060 }]);
+  });
+
+  it('同じ長辺なら面積の小さい順に並べる', () => {
+    assert.deepEqual(parseSizes('4000x3000,4000x1000'), [
+      { width: 4000, height: 1000 },
+      { width: 4000, height: 3000 },
+    ]);
+  });
+});
+
+describe('shouldRetry', () => {
+  const r = (status: number | null): ProbeResult => ({ width: 1, height: 1, status, wallMs: 1, errorCode: null });
+
+  it('503・429・5xx・ネットワーク断/タイムアウト(null)は再試行する', () => {
+    assert.equal(shouldRetry(r(503)), true);
+    assert.equal(shouldRetry(r(429)), true);
+    assert.equal(shouldRetry(r(500)), true);
+    assert.equal(shouldRetry(r(null)), true);
+  });
+
+  it('200・入力拒否・認証不備は再試行しない', () => {
+    assert.equal(shouldRetry(r(200)), false);
+    assert.equal(shouldRetry(r(422)), false);
+    assert.equal(shouldRetry(r(401)), false);
   });
 });
 
@@ -76,6 +114,10 @@ describe('summarizeProbe', () => {
 
   it('全て成功なら再現しない', () => {
     assert.equal(summarizeProbe([ok(3000, 2250), ok(4080, 3060)]).verdict, 'NOT_REPRODUCED');
+  });
+
+  it('NOT_REPRODUCEDは「合成JPEGでは再現せず」の意味で、サイズ起因でないことの証明ではないと注記する', () => {
+    assert.match(summarizeProbe([ok(3000, 2250), ok(4080, 3060)]).caveat, /合成/);
   });
 
   it('4000px以下でも失敗するなら別原因の可能性として区別する', () => {
